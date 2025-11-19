@@ -1,0 +1,229 @@
+class Radix3Node {
+  constructor() {
+    this.prefix = '';
+    this.handler = undefined;
+    this.children = [];
+    this.paramChild = undefined;
+    this.wildcardChild = undefined;
+    this.paramName = undefined;
+  }
+}
+
+class Radix3 {
+  constructor() {
+    this.root = new Radix3Node();
+  }
+
+  longestCommonPrefix(a, b) {
+    const minLen = a.length < b.length ? a.length : b.length;
+    for (let i = 0; i < minLen; i = i + 1) {
+      if (a[i] !== b[i]) {
+        return i;
+      }
+    }
+    return minLen;
+  }
+
+  insert(path, handler) {
+    this.insertPath(this.root, path, handler, 0);
+  }
+
+  insertPath(node, path, handler, start) {
+    if (start >= path.length) {
+      node.handler = handler;
+      return;
+    }
+
+    const char = path[start];
+
+    if (char === ':') {
+      let end = start + 1;
+      for (let i = end; i < path.length; i = i + 1) {
+        if (path[i] === '/') {
+          break;
+        }
+        end = i + 1;
+      }
+
+      const paramName = path.substring(start + 1, end);
+
+      if (node.paramChild === undefined) {
+        node.paramChild = new Radix3Node();
+        node.paramChild.paramName = paramName;
+      }
+
+      this.insertPath(node.paramChild, path, handler, end);
+      return;
+    }
+
+    if (char === '*') {
+      const paramName = path.substring(start + 1, path.length);
+
+      if (node.wildcardChild === undefined) {
+        node.wildcardChild = new Radix3Node();
+        node.wildcardChild.paramName = paramName;
+      }
+
+      node.wildcardChild.handler = handler;
+      return;
+    }
+
+    let end = start;
+    for (let i = start; i < path.length; i = i + 1) {
+      if (path[i] === ':' || path[i] === '*') {
+        break;
+      }
+      end = i + 1;
+    }
+
+    const segment = path.substring(start, end);
+
+    for (let i = 0; i < node.children.length; i = i + 1) {
+      const child = node.children[i];
+      const commonLen = this.longestCommonPrefix(child.prefix, segment);
+
+      if (commonLen > 0) {
+        if (commonLen < child.prefix.length) {
+          const splitNode = new Radix3Node();
+          splitNode.prefix = child.prefix.substring(commonLen, child.prefix.length);
+          splitNode.handler = child.handler;
+          splitNode.children = child.children;
+          splitNode.paramChild = child.paramChild;
+          splitNode.wildcardChild = child.wildcardChild;
+
+          child.prefix = child.prefix.substring(0, commonLen);
+          child.handler = undefined;
+          child.children = [splitNode];
+          child.paramChild = undefined;
+          child.wildcardChild = undefined;
+        }
+
+        if (commonLen < segment.length) {
+          this.insertPath(child, path, handler, start + commonLen);
+        } else {
+          this.insertPath(child, path, handler, end);
+        }
+
+        return;
+      }
+    }
+
+    const newChild = new Radix3Node();
+    newChild.prefix = segment;
+    node.children.push(newChild);
+    this.insertPath(newChild, path, handler, end);
+  }
+
+  lookup(path) {
+    const params = {};
+    const handler = this.matchPath(this.root, path, 0, params);
+
+    if (handler !== undefined) {
+      return handler(params);
+    }
+    return undefined;
+  }
+
+  matchPath(node, path, depth, params) {
+    if (depth >= path.length) {
+      return node.handler;
+    }
+
+    const remaining = path.substring(depth, path.length);
+    for (let i = 0; i < node.children.length; i = i + 1) {
+      const child = node.children[i];
+
+      if (remaining.length >= child.prefix.length) {
+        let matches = true;
+        for (let j = 0; j < child.prefix.length; j = j + 1) {
+          if (remaining[j] !== child.prefix[j]) {
+            matches = false;
+            break;
+          }
+        }
+
+        if (matches) {
+          const result = this.matchPath(child, path, depth + child.prefix.length, params);
+          if (result !== undefined) {
+            return result;
+          }
+        }
+      }
+    }
+
+    if (node.paramChild !== undefined) {
+      let paramValue = '';
+      let offset = depth;
+
+      for (let i = depth; i < path.length; i = i + 1) {
+        if (path[i] === '/') {
+          break;
+        }
+        paramValue = paramValue + path[i];
+        offset = i + 1;
+      }
+
+      if (paramValue !== '') {
+        params[node.paramChild.paramName] = paramValue;
+        const result = this.matchPath(node.paramChild, path, offset, params);
+        if (result !== undefined) {
+          return result;
+        }
+        delete params[node.paramChild.paramName];
+      }
+    }
+
+    if (node.wildcardChild !== undefined) {
+      const wildcardValue = path.substring(depth, path.length);
+      params[node.wildcardChild.paramName] = wildcardValue;
+      return node.wildcardChild.handler;
+    }
+
+    return undefined;
+  }
+
+  printTree() {
+    this.printNode(this.root, '', true);
+  }
+
+  printNode(node, prefix, isLast) {
+    const marker = isLast ? '└─ ' : '├─ ';
+    let line = `${prefix}${marker}`;
+
+    if (node.prefix !== '') {
+      line = `${line}"${node.prefix}"`;
+    } else {
+      line = `${line}(root)`;
+    }
+
+    if (node.handler !== undefined) {
+      line = `${line} [HANDLER]`;
+    }
+
+    if (node.paramName !== undefined) {
+      line = `${line} :${node.paramName}`;
+    }
+
+    Ant.println(line);
+
+    const childPrefix = `${prefix}${isLast ? '    ' : '│   '}`;
+
+    for (let i = 0; i < node.children.length; i = i + 1) {
+      const isLastChild = i === node.children.length - 1 && node.paramChild === undefined && node.wildcardChild === undefined;
+      this.printNode(node.children[i], childPrefix, isLastChild);
+    }
+
+    if (node.paramChild !== undefined) {
+      const isLastChild = node.wildcardChild === undefined;
+      Ant.println(`${childPrefix}${isLastChild ? '└─ ' : '├─ '}:${node.paramChild.paramName}`);
+      this.printNode(node.paramChild, `${childPrefix}${isLastChild ? '    ' : '│   '}`, true);
+    }
+
+    if (node.wildcardChild !== undefined) {
+      Ant.println(`${childPrefix}└─ *${node.wildcardChild.paramName}`);
+      this.printNode(node.wildcardChild, `${childPrefix}    `, true);
+    }
+  }
+}
+
+Ant.exports = Radix3;

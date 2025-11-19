@@ -1,0 +1,10 @@
+[tasks.build]
+path = "build"
+script = "ninja"
+
+[tasks.clean]
+path = "build"
+script = "ninja clean"
+
+[tasks.run]
+script = ["maid build -q", "./build/ant %{arg.1}"]

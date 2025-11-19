@@ -1,0 +1,7 @@
+.nova
+.cache
+
+/build
+/subprojects/*/
+/subprojects/.wraplock
+!/subprojects/packagefiles
