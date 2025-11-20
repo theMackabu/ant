@@ -5,11 +5,15 @@ project('ant', 'c', default_options: [
 
 include = include_directories('include')
 
-sources = [
+module_files = run_command('sh', '-c', 
+  'cd "$MESON_SOURCE_ROOT" && ls src/modules/*.c',
+  check: true
+).stdout().strip().split()
+
+sources = files(
   'src/main.c',
   'src/ant.c',
-  'src/modules/server.c',
-]
+) + files(module_files)
 
 mongoose_proj = subproject('mongoose')
 mongoose_dep = mongoose_proj.get_variable('mongoose_dep')
