@@ -15,10 +15,14 @@ sources = files(
   'src/ant.c',
 ) + files(module_files)
 
-mongoose_proj = subproject('mongoose')
-mongoose_dep = mongoose_proj.get_variable('mongoose_dep')
+# system dependencies
+libsodium_dep = dependency('libsodium', required: true)
 
+# subprojects
+mongoose_proj = subproject('mongoose')
 argtable3_proj = subproject('argtable3')
+
+mongoose_dep = mongoose_proj.get_variable('mongoose_dep')
 argtable3_dep = argtable3_proj.get_variable('argtable3_dep')
 
 git = find_program('git', required: false)
@@ -47,6 +51,11 @@ config_h = configure_file(
 )
 
 build_include = include_directories('.')
-
 add_project_arguments('-D JS_DUMP', language: 'c')
-executable('ant', sources, include_directories: [include, build_include], dependencies: [mongoose_dep, argtable3_dep])
+
+executable(
+  'ant',
+  sources,
+  include_directories: [include, build_include],
+  dependencies: [mongoose_dep, argtable3_dep, libsodium_dep]
+)

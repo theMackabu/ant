@@ -10,6 +10,7 @@
 #include "argtable3.h"
 
 #include "modules/io.h"
+#include "modules/crypto.h"
 #include "modules/server.h"
 
 static struct {
@@ -235,6 +236,8 @@ int main(int argc, char *argv[]) {
 
   jsval_t ant_obj = js_mkobj(js);
   js_set(js, js_glob(js), "Ant", ant_obj);
+  
+  init_crypto_module(js, ant_obj);
   
   js_set(js, ant_obj, "serve", js_mkfun(js_serve));
   js_set(js, ant_obj, "println", js_mkfun(js_println));
