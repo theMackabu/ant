@@ -2,6 +2,7 @@
 url = https://github.com/cesanta/mongoose.git
 revision = head
 patch_directory = mongoose
+depth = 1
 
 [provide]
 mongoose = mongoose_dep

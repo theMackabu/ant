@@ -1,5 +1,6 @@
 #include <sodium.h>
 #include <string.h>
+#include <uuidv7.h>
 #include <uuid/uuid.h>
 
 #include "modules/crypto.h"

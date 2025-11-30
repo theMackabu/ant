@@ -19,9 +19,11 @@ sources = files(
 libsodium_dep = dependency('libsodium', required: true)
 
 # subprojects
+uuidv7_proj = subproject('uuidv7')
 mongoose_proj = subproject('mongoose')
 argtable3_proj = subproject('argtable3')
 
+uuidv7_dep = uuidv7_proj.get_variable('uuidv7_dep')
 mongoose_dep = mongoose_proj.get_variable('mongoose_dep')
 argtable3_dep = argtable3_proj.get_variable('argtable3_dep')
 
@@ -57,5 +59,10 @@ executable(
   'ant',
   sources,
   include_directories: [include, build_include],
-  dependencies: [mongoose_dep, argtable3_dep, libsodium_dep]
+  dependencies: [
+    uuidv7_dep,
+    mongoose_dep,
+    argtable3_dep,
+    libsodium_dep
+  ]
 )

@@ -1,0 +1,8 @@
+[wrap-git]
+url = https://github.com/LiosK/uuidv7-h.git
+revision = head
+patch_directory = uuidv7
+depth = 1
+
+[provide]
+uuidv7 = uuidv7_dep
