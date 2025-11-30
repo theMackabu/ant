@@ -1,10 +1,10 @@
 [tasks.build]
 path = "build"
-script = "ninja"
+script = "meson compile"
 
 [tasks.clean]
 path = "build"
-script = "ninja clean"
+script = "meson clean"
 
 [tasks.run]
 script = ["maid build -q", "./build/ant %{arg.1}"]

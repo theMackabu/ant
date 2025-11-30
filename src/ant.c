@@ -43,6 +43,7 @@ struct js {
   jsoff_t gct;            // GC threshold. if brk > gct, trigger GC
   jsoff_t maxcss;         // maximum allowed C stack size usage
   void *cstk;             // C stack pointer at the beginning of js_eval()
+  jsval_t current_func;   // currently executing function (for native closures)
 };
 
 enum {
@@ -65,13 +66,13 @@ enum {
 
 enum {
   T_OBJ, T_PROP, T_STR, T_UNDEF, T_NULL, T_NUM,
-  T_BOOL, T_FUNC, T_CODEREF, T_CFUNC, T_ERR, T_ARR
+  T_BOOL, T_FUNC, T_CODEREF, T_CFUNC, T_ERR, T_ARR, T_PROMISE
 };
 
 static const char *typestr(uint8_t t) {
   const char *names[] = { 
     "object", "prop", "string", "undefined", "null", "number",
-    "boolean", "function", "coderef", "cfunc", "err", "array" 
+    "boolean", "function", "coderef", "cfunc", "err", "array", "promise"
   };
   
   return (t < sizeof(names) / sizeof(names[0])) ? names[t] : "??";
@@ -111,6 +112,7 @@ static jsoff_t align32(jsoff_t v) { return ((v + 3) >> 2) << 2; }
 
 static bool streq(const char *buf, size_t len, const char *p, size_t n);
 static size_t tostr(struct js *js, jsval_t value, char *buf, size_t len);
+static size_t strpromise(struct js *js, jsval_t value, char *buf, size_t len);
 
 static inline jsoff_t esize(jsoff_t w);
 static jsval_t js_expr(struct js *js);
@@ -136,6 +138,13 @@ static jsval_t builtin_string_replace(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_template(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_charCodeAt(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_Object(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Promise(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Promise_resolve(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Promise_reject(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Promise_try(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_promise_then(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_promise_catch(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_promise_finally(struct js *js, jsval_t *args, int nargs);
 
 static void setlwm(struct js *js) {
   jsoff_t n = 0, css = 0;
@@ -340,6 +349,7 @@ static size_t tostr(struct js *js, jsval_t value, char *buf, size_t len) {
     case T_OBJ:   return strobj(js, value, buf, len);
     case T_STR:   return strstring(js, value, buf, len);
     case T_NUM:   return strnum(value, buf, len);
+    case T_PROMISE: return strpromise(js, value, buf, len);
     case T_FUNC:  return strfunc(js, value, buf, len);
     case T_CFUNC: return (size_t) snprintf(buf, len, "\"c_func_0x%lx\"", (unsigned long) vdata(value));
     case T_PROP:  return (size_t) snprintf(buf, len, "PROP@%lu", (unsigned long) vdata(value));
@@ -455,7 +465,7 @@ static inline jsoff_t esize(jsoff_t w) {
 }
 
 static bool is_mem_entity(uint8_t t) {
-  return t == T_OBJ || t == T_PROP || t == T_STR || t == T_FUNC || t == T_ARR;
+  return t == T_OBJ || t == T_PROP || t == T_STR || t == T_FUNC || t == T_ARR || t == T_PROMISE;
 }
 
 static void js_fixup_offsets(struct js *js, jsoff_t start, jsoff_t size) {
@@ -910,6 +920,16 @@ static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
     }
   }
   
+  if (vtype(l) == T_PROMISE) {
+    if (streq(ptr, codereflen(r), "then", 4)) {
+      return js_mkfun(builtin_promise_then);
+    } else if (streq(ptr, codereflen(r), "catch", 5)) {
+      return js_mkfun(builtin_promise_catch);
+    } else if (streq(ptr, codereflen(r), "finally", 7)) {
+      return js_mkfun(builtin_promise_finally);
+    }
+  }
+  
   if (vtype(l) == T_FUNC) {
     jsval_t func_obj = mkval(T_OBJ, vdata(l));
     jsoff_t off = lkp(js, func_obj, ptr, codereflen(r));
@@ -963,6 +983,7 @@ static void reverse(jsval_t *args, int nargs) {
 static jsval_t call_c(struct js *js,
   jsval_t (*fn)(struct js *, jsval_t *, int)) {
   int argc = 0;
+  jsval_t saved_caller_this = js->caller_this;
   
   while (js->pos < js->clen) {
     if (next(js) == TOK_RPAREN) break;
@@ -975,10 +996,11 @@ static jsval_t call_c(struct js *js,
   }
   
   jsval_t saved_this = js->this_val;
-  js->this_val = js->caller_this;
+  js->this_val = saved_caller_this;
   reverse((jsval_t *) &js->mem[js->size], argc);
   jsval_t res = fn(js, (jsval_t *) &js->mem[js->size], argc);
   js->this_val = saved_this;
+  js->caller_this = saved_caller_this;
   setlwm(js);
   
   js->size += (jsoff_t) sizeof(jsval_t) * (jsoff_t) argc;
@@ -1043,22 +1065,33 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
   
   if (vtype(func) == T_FUNC) {
     jsval_t func_obj = mkval(T_OBJ, vdata(func));
-    jsoff_t code_off = lkp(js, func_obj, "__code", 6);
-    if (code_off == 0) return js_mkerr(js, "function has no code");
-    jsval_t code_val = resolveprop(js, mkval(T_PROP, code_off));
-    if (vtype(code_val) != T_STR) return js_mkerr(js, "function code not string");
-    jsval_t closure_scope = js_mkundef();
-    jsoff_t scope_off = lkp(js, func_obj, "__scope", 7);
-    if (scope_off != 0) {
-      closure_scope = resolveprop(js, mkval(T_PROP, scope_off));
-    }
-    jsoff_t fnlen, fnoff = vstr(js, code_val, &fnlen);
-    const char *code_str = (const char *) (&js->mem[fnoff]);
-    if (fnlen == 16 && memcmp(code_str, "__builtin_Object", 16) == 0) {
-      res = call_c(js, builtin_Object);
+    jsoff_t native_off = lkp(js, func_obj, "__native_func", 13);
+    if (native_off != 0) {
+      jsval_t native_val = resolveprop(js, mkval(T_PROP, native_off));
+      if (vtype(native_val) == T_CFUNC) {
+        jsval_t saved_func = js->current_func;
+        js->current_func = func;
+        res = call_c(js, (jsval_t(*)(struct js *, jsval_t *, int)) vdata(native_val));
+        js->current_func = saved_func;
+      }
     } else {
-      js->nogc = (jsoff_t) (fnoff - sizeof(jsoff_t));
-      res = call_js(js, code_str, fnlen, closure_scope);
+      jsoff_t code_off = lkp(js, func_obj, "__code", 6);
+      if (code_off == 0) return js_mkerr(js, "function has no code");
+      jsval_t code_val = resolveprop(js, mkval(T_PROP, code_off));
+      if (vtype(code_val) != T_STR) return js_mkerr(js, "function code not string");
+      jsval_t closure_scope = js_mkundef();
+      jsoff_t scope_off = lkp(js, func_obj, "__scope", 7);
+      if (scope_off != 0) {
+        closure_scope = resolveprop(js, mkval(T_PROP, scope_off));
+      }
+      jsoff_t fnlen, fnoff = vstr(js, code_val, &fnlen);
+      const char *code_str = (const char *) (&js->mem[fnoff]);
+      if (fnlen == 16 && memcmp(code_str, "__builtin_Object", 16) == 0) {
+        res = call_c(js, builtin_Object);
+      } else {
+        js->nogc = (jsoff_t) (fnoff - sizeof(jsoff_t));
+        res = call_js(js, code_str, fnlen, closure_scope);
+      }
     }
   } else {
     res = call_c(js, (jsval_t(*)(struct js *, jsval_t *, int)) vdata(func));
@@ -1467,6 +1500,9 @@ static jsval_t js_literal(struct js *js) {
     case TOK_FALSE:       return js_mkfalse();
     case TOK_THIS:        return js->this_val;
     case TOK_IDENTIFIER:  return mkcoderef((jsoff_t) js->toff, (jsoff_t) js->tlen);
+    case TOK_CATCH:       return mkcoderef((jsoff_t) js->toff, (jsoff_t) js->tlen);
+    case TOK_TRY:         return mkcoderef((jsoff_t) js->toff, (jsoff_t) js->tlen);
+    case TOK_FINALLY:     return mkcoderef((jsoff_t) js->toff, (jsoff_t) js->tlen);
     default:              return js_mkerr(js, "bad expr");
   }
 }
@@ -1680,7 +1716,7 @@ static jsval_t js_unary(struct js *js) {
     jsval_t result = js_postfix(js);
     jsval_t constructed_obj = js->this_val;
     js->this_val = saved_this;
-    if (vtype(result) == T_OBJ || vtype(result) == T_ARR) return result;
+    if (vtype(result) == T_OBJ || vtype(result) == T_ARR || vtype(result) == T_PROMISE) return result;
     return constructed_obj;
   } else if (next(js) == TOK_DELETE) {
     js->consumed = 1;
@@ -3031,10 +3067,238 @@ static jsval_t builtin_string_charCodeAt(struct js *js, jsval_t *args, int nargs
   return tov((double) ch);
 }
 
+static jsval_t builtin_resolve_internal(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_reject_internal(struct js *js, jsval_t *args, int nargs);
+static void resolve_promise(struct js *js, jsval_t p, jsval_t val);
+static void reject_promise(struct js *js, jsval_t p, jsval_t val);
+
+static size_t strpromise(struct js *js, jsval_t value, char *buf, size_t len) {
+  jsval_t prom_obj = mkval(T_OBJ, vdata(value));
+  jsoff_t off = lkp(js, prom_obj, "__state", 7);
+  int state = 0;
+  if (off != 0) {
+    jsval_t val = resolveprop(js, mkval(T_PROP, off));
+    if (vtype(val) == T_NUM) state = (int)tod(val);
+  }
+  const char *s = (state == 0) ? "<pending>" : (state == 1) ? "<fulfilled>" : "<rejected>";
+  return (size_t)snprintf(buf, len, "Promise { %s }", s);
+}
+
+static jsval_t mkpromise(struct js *js) {
+  jsval_t obj = mkobj(js, 0);
+  if (is_err(obj)) return obj;
+  setprop(js, obj, js_mkstr(js, "__state", 7), tov(0.0));
+  setprop(js, obj, js_mkstr(js, "__value", 7), js_mkundef());
+  setprop(js, obj, js_mkstr(js, "__handlers", 10), mkarr(js));
+  return mkval(T_PROMISE, vdata(obj));
+}
+
+static void trigger_handlers(struct js *js, jsval_t p) {
+  jsval_t p_obj = mkval(T_OBJ, vdata(p));
+  jsoff_t state_off = lkp(js, p_obj, "__state", 7);
+  int state = (int)tod(resolveprop(js, mkval(T_PROP, state_off)));
+  
+  jsoff_t val_off = lkp(js, p_obj, "__value", 7);
+  jsval_t val = resolveprop(js, mkval(T_PROP, val_off));
+  
+  jsoff_t handlers_off = lkp(js, p_obj, "__handlers", 10);
+  jsval_t handlers_arr = resolveprop(js, mkval(T_PROP, handlers_off));
+  
+  jsoff_t len_off = lkp(js, handlers_arr, "length", 6);
+  int len = (int)tod(resolveprop(js, mkval(T_PROP, len_off)));
+  
+  for (int i = 0; i < len; i += 3) {
+    char idx1[16], idx2[16], idx3[16];
+    snprintf(idx1, sizeof(idx1), "%d", i);
+    snprintf(idx2, sizeof(idx2), "%d", i+1);
+    snprintf(idx3, sizeof(idx3), "%d", i+2);
+    
+    jsval_t onFulfilled = resolveprop(js, js_get(js, handlers_arr, idx1));
+    jsval_t onRejected = resolveprop(js, js_get(js, handlers_arr, idx2));
+    jsval_t nextPromise = resolveprop(js, js_get(js, handlers_arr, idx3));
+    
+    jsval_t handler = (state == 1) ? onFulfilled : onRejected;
+    
+    if (vtype(handler) == T_FUNC || vtype(handler) == T_CFUNC) {
+       jsval_t res;
+       if (vtype(handler) == T_CFUNC) {
+          jsval_t (*fn)(struct js *, jsval_t *, int) = (jsval_t(*)(struct js *, jsval_t *, int)) vdata(handler);
+          res = fn(js, &val, 1);
+       } else {
+          jsval_t args[] = { val };
+          res = js_call(js, handler, args, 1);
+       }
+       
+       if (is_err(res)) {
+          jsval_t err_str = js_mkstr(js, js->errmsg, strlen(js->errmsg));
+          reject_promise(js, nextPromise, err_str);
+       } else {
+          resolve_promise(js, nextPromise, res);
+       }
+    } else {
+       if (state == 1) resolve_promise(js, nextPromise, val);
+       else reject_promise(js, nextPromise, val);
+    }
+  }
+  setprop(js, p_obj, js_mkstr(js, "__handlers", 10), mkarr(js));
+}
+
+static void resolve_promise(struct js *js, jsval_t p, jsval_t val) {
+  jsval_t p_obj = mkval(T_OBJ, vdata(p));
+  jsoff_t state_off = lkp(js, p_obj, "__state", 7);
+  if (state_off == 0) return;
+  jsval_t state_val = resolveprop(js, mkval(T_PROP, state_off));
+  if ((int)tod(state_val) != 0) return;
+
+  if (vtype(val) == T_PROMISE) {
+     if (vdata(val) == vdata(p)) {
+        jsval_t err = js_mkerr(js, "TypeError: Chaining cycle");
+        reject_promise(js, p, err);
+        return;
+     }
+     jsval_t res_obj = mkobj(js, 0);
+     setprop(js, res_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_resolve_internal));
+     setprop(js, res_obj, js_mkstr(js, "promise", 7), p);
+     jsval_t res_fn = mkval(T_FUNC, vdata(res_obj));
+     
+     jsval_t rej_obj = mkobj(js, 0);
+     setprop(js, rej_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_reject_internal));
+     setprop(js, rej_obj, js_mkstr(js, "promise", 7), p);
+     jsval_t rej_fn = mkval(T_FUNC, vdata(rej_obj));
+     
+     jsval_t args[] = { res_fn, rej_fn };
+     jsval_t then_prop = js_get(js, val, "then");
+     if (vtype(then_prop) == T_FUNC || vtype(then_prop) == T_CFUNC) {
+         jsval_t saved_this = js->this_val;
+         js->this_val = val;
+         js_call(js, then_prop, args, 2);
+         js->this_val = saved_this;
+         return;
+     }
+  }
+
+  setprop(js, p_obj, js_mkstr(js, "__state", 7), tov(1.0));
+  setprop(js, p_obj, js_mkstr(js, "__value", 7), val);
+  trigger_handlers(js, p);
+}
+
+static void reject_promise(struct js *js, jsval_t p, jsval_t val) {
+  jsval_t p_obj = mkval(T_OBJ, vdata(p));
+  jsoff_t state_off = lkp(js, p_obj, "__state", 7);
+  if (state_off == 0) return;
+  jsval_t state_val = resolveprop(js, mkval(T_PROP, state_off));
+  if ((int)tod(state_val) != 0) return;
+
+  setprop(js, p_obj, js_mkstr(js, "__state", 7), tov(2.0));
+  setprop(js, p_obj, js_mkstr(js, "__value", 7), val);
+  trigger_handlers(js, p);
+}
+
+static jsval_t builtin_resolve_internal(struct js *js, jsval_t *args, int nargs) {
+  jsval_t me = js->current_func;
+  jsval_t p = js_get(js, me, "promise");
+  if (vtype(p) != T_PROMISE) return js_mkundef();
+  resolve_promise(js, p, nargs > 0 ? args[0] : js_mkundef());
+  return js_mkundef();
+}
+
+static jsval_t builtin_reject_internal(struct js *js, jsval_t *args, int nargs) {
+  jsval_t me = js->current_func;
+  jsval_t p = js_get(js, me, "promise");
+  if (vtype(p) != T_PROMISE) return js_mkundef();
+  reject_promise(js, p, nargs > 0 ? args[0] : js_mkundef());
+  return js_mkundef();
+}
+
+static jsval_t builtin_Promise(struct js *js, jsval_t *args, int nargs) {
+  jsval_t p = mkpromise(js);
+  jsval_t res_obj = mkobj(js, 0);
+  setprop(js, res_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_resolve_internal));
+  setprop(js, res_obj, js_mkstr(js, "promise", 7), p);
+  jsval_t res_fn = mkval(T_FUNC, vdata(res_obj));
+  jsval_t rej_obj = mkobj(js, 0);
+  setprop(js, rej_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_reject_internal));
+  setprop(js, rej_obj, js_mkstr(js, "promise", 7), p);
+  jsval_t rej_fn = mkval(T_FUNC, vdata(rej_obj));
+  if (nargs > 0) {
+     jsval_t exec_args[] = { res_fn, rej_fn };
+     js_call(js, args[0], exec_args, 2);
+  }
+  return p;
+}
+
+static jsval_t builtin_Promise_resolve(struct js *js, jsval_t *args, int nargs) {
+  jsval_t val = nargs > 0 ? args[0] : js_mkundef();
+  if (vtype(val) == T_PROMISE) return val;
+  jsval_t p = mkpromise(js);
+  resolve_promise(js, p, val);
+  return p;
+}
+
+static jsval_t builtin_Promise_reject(struct js *js, jsval_t *args, int nargs) {
+  jsval_t val = nargs > 0 ? args[0] : js_mkundef();
+  jsval_t p = mkpromise(js);
+  reject_promise(js, p, val);
+  return p;
+}
+
+static jsval_t builtin_promise_then(struct js *js, jsval_t *args, int nargs) {
+  jsval_t p = js->this_val;
+  if (vtype(p) != T_PROMISE) return js_mkerr(js, "not a promise");
+  jsval_t nextP = mkpromise(js);
+  jsval_t onFulfilled = nargs > 0 ? args[0] : js_mkundef();
+  jsval_t onRejected = nargs > 1 ? args[1] : js_mkundef();
+  jsval_t p_obj = mkval(T_OBJ, vdata(p));
+  jsval_t handlers = resolveprop(js, js_get(js, p_obj, "__handlers"));
+  jsval_t push_args[] = { onFulfilled, onRejected, nextP };
+  jsval_t saved_this = js->this_val;
+  js->this_val = handlers;
+  builtin_array_push(js, push_args, 3);
+  js->this_val = saved_this;
+  jsoff_t state_off = lkp(js, p_obj, "__state", 7);
+  int state = (int)tod(resolveprop(js, mkval(T_PROP, state_off)));
+  if (state != 0) trigger_handlers(js, p);
+  return nextP;
+}
+
+static jsval_t builtin_promise_catch(struct js *js, jsval_t *args, int nargs) {
+  jsval_t args_then[] = { js_mkundef(), nargs > 0 ? args[0] : js_mkundef() };
+  return builtin_promise_then(js, args_then, 2);
+}
+
+static jsval_t builtin_promise_finally(struct js *js, jsval_t *args, int nargs) {
+  jsval_t fn = nargs > 0 ? args[0] : js_mkundef();
+  jsval_t args_then[] = { fn, fn };
+  return builtin_promise_then(js, args_then, 2);
+}
+
+static jsval_t builtin_Promise_try(struct js *js, jsval_t *args, int nargs) {
+  if (nargs == 0) return builtin_Promise_resolve(js, args, 0);
+  jsval_t fn = args[0];
+  jsval_t res = js_call(js, fn, NULL, 0);
+  if (is_err(res)) {
+     jsval_t err_str = js_mkstr(js, js->errmsg, strlen(js->errmsg));
+     jsval_t rej_args[] = { err_str };
+     return builtin_Promise_reject(js, rej_args, 1);
+  }
+  jsval_t res_args[] = { res };
+  return builtin_Promise_resolve(js, res_args, 1);
+}
+
 static jsval_t do_instanceof(struct js *js, jsval_t l, jsval_t r) {
   uint8_t ltype = vtype(l);
   if (vtype(r) == T_FUNC) {
     jsval_t func_obj = mkval(T_OBJ, vdata(r));
+    jsoff_t native_off = lkp(js, func_obj, "__native_func", 13);
+    if (native_off != 0) {
+      jsval_t native_val = resolveprop(js, mkval(T_PROP, native_off));
+      if (vtype(native_val) == T_CFUNC) {
+        jsval_t (*fn)(struct js *, jsval_t *, int) = (jsval_t(*)(struct js *, jsval_t *, int)) vdata(native_val);
+        if (fn == builtin_Promise) {
+          return mkval(T_BOOL, ltype == T_PROMISE ? 1 : 0);
+        }
+      }
+    }
     jsoff_t code_off = lkp(js, func_obj, "__code", 6);
     if (code_off != 0) {
       jsval_t code_val = resolveprop(js, mkval(T_PROP, code_off));
@@ -3061,6 +3325,8 @@ static jsval_t do_instanceof(struct js *js, jsval_t l, jsval_t r) {
       return mkval(T_BOOL, ltype == T_BOOL ? 1 : 0);
     } else if (fn == builtin_Array) {
       return mkval(T_BOOL, ltype == T_ARR ? 1 : 0);
+    } else if (fn == builtin_Promise) {
+      return mkval(T_BOOL, ltype == T_PROMISE ? 1 : 0);
     }
   }
   return mkval(T_BOOL, 0);
@@ -3096,6 +3362,20 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, glob, js_mkstr(js, "Number", 6), js_mkfun(builtin_Number));
   setprop(js, glob, js_mkstr(js, "Boolean", 7), js_mkfun(builtin_Boolean));
   setprop(js, glob, js_mkstr(js, "Array", 5), js_mkfun(builtin_Array));
+  
+  jsval_t p_proto = js_mkobj(js);
+  setprop(js, p_proto, js_mkstr(js, "then", 4), js_mkfun(builtin_promise_then));
+  setprop(js, p_proto, js_mkstr(js, "catch", 5), js_mkfun(builtin_promise_catch));
+  setprop(js, p_proto, js_mkstr(js, "finally", 7), js_mkfun(builtin_promise_finally));
+  
+  jsval_t p_ctor_obj = mkobj(js, 0);
+  setprop(js, p_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_Promise));
+  setprop(js, p_ctor_obj, js_mkstr(js, "resolve", 7), js_mkfun(builtin_Promise_resolve));
+  setprop(js, p_ctor_obj, js_mkstr(js, "reject", 6), js_mkfun(builtin_Promise_reject));
+  setprop(js, p_ctor_obj, js_mkstr(js, "try", 3), js_mkfun(builtin_Promise_try));
+  setprop(js, p_ctor_obj, js_mkstr(js, "prototype", 9), p_proto);
+  
+  setprop(js, glob, js_mkstr(js, "Promise", 7), mkval(T_FUNC, vdata(p_ctor_obj)));
   
   return js;
 }
@@ -3209,6 +3489,18 @@ jsval_t js_call(struct js *js, jsval_t func, jsval_t *args, int nargs) {
     return fn(js, args, nargs);
   } else if (vtype(func) == T_FUNC) {
     jsval_t func_obj = mkval(T_OBJ, vdata(func));
+    jsoff_t native_off = lkp(js, func_obj, "__native_func", 13);
+    if (native_off != 0) {
+      jsval_t native_val = resolveprop(js, mkval(T_PROP, native_off));
+      if (vtype(native_val) == T_CFUNC) {
+        jsval_t saved_func = js->current_func;
+        js->current_func = func;
+        jsval_t (*fn)(struct js *, jsval_t *, int) = (jsval_t(*)(struct js *, jsval_t *, int)) vdata(native_val);
+        jsval_t res = fn(js, args, nargs);
+        js->current_func = saved_func;
+        return res;
+      }
+    }
     jsoff_t code_off = lkp(js, func_obj, "__code", 6);
     
     if (code_off == 0) return js_mkerr(js, "function has no code");
