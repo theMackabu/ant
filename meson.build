@@ -13,6 +13,7 @@ module_files = run_command('sh', '-c',
 sources = files(
   'src/main.c',
   'src/ant.c',
+  'src/runtime.c',
 ) + files(module_files)
 
 # system dependencies

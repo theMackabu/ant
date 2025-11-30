@@ -133,6 +133,7 @@ static jsval_t builtin_string_startsWith(struct js *js, jsval_t *args, int nargs
 static jsval_t builtin_string_endsWith(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_replace(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_template(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_string_charCodeAt(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_Object(struct js *js, jsval_t *args, int nargs);
 
 static void setlwm(struct js *js) {
@@ -779,6 +780,25 @@ static jsval_t do_string_op(struct js *js, uint8_t op, jsval_t l, jsval_t r) {
   } else if (op == TOK_NE) {
     bool eq = n1 == n2 && memcmp(&js->mem[off1], &js->mem[off2], n1) == 0;
     return mkval(T_BOOL, eq ? 0 : 1);
+  } else if (op == TOK_LT || op == TOK_LE || op == TOK_GT || op == TOK_GE) {
+    jsoff_t min_len = n1 < n2 ? n1 : n2;
+    int cmp = memcmp(&js->mem[off1], &js->mem[off2], min_len);
+    
+    if (cmp == 0) {
+      if (n1 == n2) {
+        return mkval(T_BOOL, (op == TOK_LE || op == TOK_GE) ? 1 : 0);
+      } else {
+        cmp = (n1 < n2) ? -1 : 1;
+      }
+    }
+    
+    switch (op) {
+      case TOK_LT: return mkval(T_BOOL, cmp < 0 ? 1 : 0);
+      case TOK_LE: return mkval(T_BOOL, cmp <= 0 ? 1 : 0);
+      case TOK_GT: return mkval(T_BOOL, cmp > 0 ? 1 : 0);
+      case TOK_GE: return mkval(T_BOOL, cmp >= 0 ? 1 : 0);
+      default:     return js_mkerr(js, "bad str op");
+    }
   } else {
     return js_mkerr(js, "bad str op");
   }
@@ -861,6 +881,8 @@ static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
       return js_mkfun(builtin_string_replace);
     } else if (streq(ptr, codereflen(r), "template", 8)) {
       return js_mkfun(builtin_string_template);
+    } else if (streq(ptr, codereflen(r), "charCodeAt", 10)) {
+      return js_mkfun(builtin_string_charCodeAt);
     }
   }
   
@@ -2754,6 +2776,25 @@ static jsval_t builtin_string_template(struct js *js, jsval_t *args, int nargs) 
     result[result_len++] = str_ptr[i++];
   }
   return js_mkstr(js, result, result_len);
+}
+
+static jsval_t builtin_string_charCodeAt(struct js *js, jsval_t *args, int nargs) {
+  jsval_t str = js->this_val;
+  if (vtype(str) != T_STR) return js_mkerr(js, "charCodeAt called on non-string");
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  
+  double idx_d = tod(args[0]);
+  if (idx_d < 0 || idx_d != (double)(long)idx_d) return tov(NAN);
+  
+  jsoff_t idx = (jsoff_t) idx_d;
+  jsoff_t str_len = offtolen(loadoff(js, (jsoff_t) vdata(str)));
+  
+  if (idx >= str_len) return tov(NAN);
+  
+  jsoff_t str_off = (jsoff_t) vdata(str) + sizeof(jsoff_t);
+  unsigned char ch = (unsigned char) js->mem[str_off + idx];
+  
+  return tov((double) ch);
 }
 
 static jsval_t do_instanceof(struct js *js, jsval_t l, jsval_t r) {
