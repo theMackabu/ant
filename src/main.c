@@ -4,6 +4,7 @@
 #include <libgen.h>
 #include <limits.h>
 #include <signal.h>
+#include <unistd.h>
 
 #include "ant.h"
 #include "config.h"
@@ -13,6 +14,7 @@
 #include "modules/io.h"
 #include "modules/crypto.h"
 #include "modules/server.h"
+#include "modules/timer.h"
 
 static struct {
   char *path;
@@ -238,6 +240,7 @@ int main(int argc, char *argv[]) {
   struct ant_runtime *rt = ant_runtime_init(js);
   
   init_crypto_module(js, rt->ant_obj);
+  init_timer_module(js, rt->ant_obj);
   
   js_set(js, rt->ant_obj, "serve", js_mkfun(js_serve));
   js_set(js, rt->ant_obj, "println", js_mkfun(js_println));
@@ -248,8 +251,20 @@ int main(int argc, char *argv[]) {
   js_set(js, rt->ant_obj, "exports", exports_obj);
 
   int result = execute_module(js, module_file);
-  if (dump) js_dump(js);
   
+  process_microtasks(js);
+  
+  while (has_pending_timers()) {
+    int64_t next_timeout_ms = get_next_timer_timeout();
+    
+    if (next_timeout_ms <= 0) {
+      process_timers(js);
+    } else {
+      usleep(next_timeout_ms > 1000000 ? 1000000 : next_timeout_ms * 1000);
+    }
+  }
+  
+  if (dump) js_dump(js);
   arg_freetable(argtable, sizeof(argtable) / sizeof(argtable[0]));
   
   return result;
