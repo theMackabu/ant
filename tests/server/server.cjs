@@ -1,7 +1,7 @@
 const Radix3 = Ant.require('./radix3.cjs');
 const router = new Radix3();
 
-router.insert('/', function () {
+router.insert('/', () => {
   return {
     status: 200,
     body: `Welcome to Ant HTTP Server with Radix3 Router!
@@ -19,35 +19,35 @@ Available routes:
   };
 });
 
-router.insert('/hello', function () {
+router.insert('/hello', () => {
   return { status: 200, body: 'Hello, World!' };
 });
 
-router.insert('/status', function () {
+router.insert('/status', () => {
   return { status: 200, body: 'Server is running with Radix3 router!' };
 });
 
-router.insert('/echo', function () {
+router.insert('/echo', () => {
   return { status: 200, body: 'Echo endpoint - returns request details' };
 });
 
-router.insert('/users/:id', function (p) {
+router.insert('/users/:id', p => {
   return { status: 200, body: 'User ID: ' + p.id };
 });
 
-router.insert('/users/:id/posts', function (p) {
+router.insert('/users/:id/posts', () => {
   return { status: 200, body: 'Posts for user: ' + p.id };
 });
 
-router.insert('/api/v1/users', function () {
+router.insert('/api/v1/users', () => {
   return { status: 200, body: 'API v1 users endpoint' };
 });
 
-router.insert('/api/v2/users', function () {
+router.insert('/api/v2/users', () => {
   return { status: 200, body: 'API v2 users endpoint' };
 });
 
-router.insert('/files/*path', function (p) {
+router.insert('/files/*path', () => {
   return { status: 200, body: 'File path: ' + p.path };
 });
 

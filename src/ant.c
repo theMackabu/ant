@@ -60,7 +60,7 @@ enum {
   TOK_COLON, TOK_Q,  TOK_ASSIGN, TOK_PLUS_ASSIGN, TOK_MINUS_ASSIGN,
   TOK_MUL_ASSIGN, TOK_DIV_ASSIGN, TOK_REM_ASSIGN, TOK_SHL_ASSIGN,
   TOK_SHR_ASSIGN, TOK_ZSHR_ASSIGN, TOK_AND_ASSIGN, TOK_XOR_ASSIGN,
-  TOK_OR_ASSIGN, TOK_COMMA, TOK_TEMPLATE,
+  TOK_OR_ASSIGN, TOK_COMMA, TOK_TEMPLATE, TOK_ARROW,
 };
 
 enum {
@@ -115,6 +115,7 @@ static size_t tostr(struct js *js, jsval_t value, char *buf, size_t len);
 static inline jsoff_t esize(jsoff_t w);
 static jsval_t js_expr(struct js *js);
 static jsval_t js_stmt(struct js *js);
+static jsval_t js_assignment(struct js *js);
 static jsval_t do_op(struct js *, uint8_t op, jsval_t l, jsval_t r);
 static jsval_t do_instanceof(struct js *js, jsval_t l, jsval_t r);
 static jsval_t resolveprop(struct js *js, jsval_t v);
@@ -626,7 +627,7 @@ static uint8_t next(struct js *js) {
     case '%': if (LOOK(1, '=')) TOK(TOK_REM_ASSIGN, 2); TOK(TOK_REM, 1);
     case '&': if (LOOK(1, '&')) TOK(TOK_LAND, 2); if (LOOK(1, '=')) TOK(TOK_AND_ASSIGN, 2); TOK(TOK_AND, 1);
     case '|': if (LOOK(1, '|')) TOK(TOK_LOR, 2); if (LOOK(1, '=')) TOK(TOK_OR_ASSIGN, 2); TOK(TOK_OR, 1);
-    case '=': if (LOOK(1, '=') && LOOK(2, '=')) TOK(TOK_EQ, 3); if (LOOK(1, '=')) TOK(TOK_EQ, 2); TOK(TOK_ASSIGN, 1);
+    case '=': if (LOOK(1, '=') && LOOK(2, '=')) TOK(TOK_EQ, 3); if (LOOK(1, '=')) TOK(TOK_EQ, 2); if (LOOK(1, '>')) TOK(TOK_ARROW, 2); TOK(TOK_ASSIGN, 1);
     case '<': if (LOOK(1, '<') && LOOK(2, '=')) TOK(TOK_SHL_ASSIGN, 3); if (LOOK(1, '<')) TOK(TOK_SHL, 2); if (LOOK(1, '=')) TOK(TOK_LE, 2); TOK(TOK_LT, 1);
     case '>': if (LOOK(1, '>') && LOOK(2, '=')) TOK(TOK_SHR_ASSIGN, 3); if (LOOK(1, '>')) TOK(TOK_SHR, 2); if (LOOK(1, '=')) TOK(TOK_GE, 2); TOK(TOK_GT, 1);
     case '^': if (LOOK(1, '=')) TOK(TOK_XOR_ASSIGN, 2); TOK(TOK_XOR, 1);
@@ -672,11 +673,14 @@ static uint8_t next(struct js *js) {
 
 static inline uint8_t lookahead(struct js *js) {
   uint8_t old = js->tok, tok = 0;
+  uint8_t old_consumed = js->consumed;
   jsoff_t pos = js->pos;
   
   js->consumed = 1;
   tok = next(js);
-  js->pos = pos, js->tok = old;
+  js->pos = pos;
+  js->tok = old;
+  js->consumed = old_consumed;
   
   return tok;
 }
@@ -1467,14 +1471,147 @@ static jsval_t js_literal(struct js *js) {
   }
 }
 
+static jsval_t js_arrow_func(struct js *js, jsoff_t params_start, jsoff_t params_end) {
+  uint8_t flags = js->flags;
+  bool is_expr = next(js) != TOK_LBRACE;
+  jsoff_t body_start, body_end_actual;
+  jsval_t body_result;
+  
+  if (is_expr) {
+    body_start = js->toff;
+    js->flags |= F_NOEXEC;
+    body_result = js_assignment(js);
+    if (is_err(body_result)) {
+      js->flags = flags;
+      return body_result;
+    }
+    uint8_t tok = next(js);
+    if (tok == TOK_RPAREN || tok == TOK_RBRACE || tok == TOK_SEMICOLON || 
+        tok == TOK_COMMA || tok == TOK_EOF) {
+      body_end_actual = js->toff;
+    } else {
+      body_end_actual = js->pos;
+    }
+  } else {
+    body_start = js->toff;
+    js->flags |= F_NOEXEC;
+    js->consumed = 1;
+    body_result = js_block(js, false);
+    if (is_err(body_result)) {
+      js->flags = flags;
+      return body_result;
+    }
+    if (next(js) == TOK_RBRACE) {
+      body_end_actual = js->toff;
+      js->consumed = 1;
+    } else {
+      body_end_actual = js->pos;
+    }
+  }
+  
+  js->flags = flags;
+  
+  size_t fn_size = (params_end - params_start) + (body_end_actual - body_start) + 32;
+  char *fn_str = (char *) malloc(fn_size);
+  if (!fn_str) return js_mkerr(js, "oom");
+  
+  jsoff_t fn_pos = 0;
+  
+  size_t param_len = params_end - params_start;
+  memcpy(fn_str + fn_pos, &js->code[params_start], param_len);
+  fn_pos += param_len;
+  
+  fn_str[fn_pos++] = '{';
+  
+  if (is_expr) {
+    memcpy(fn_str + fn_pos, "return ", 7);
+    fn_pos += 7;
+    size_t body_len = body_end_actual - body_start;
+    memcpy(fn_str + fn_pos, &js->code[body_start], body_len);
+    fn_pos += body_len;
+  } else {
+    size_t body_len = body_end_actual - body_start - 1;
+    memcpy(fn_str + fn_pos, &js->code[body_start + 1], body_len);
+    fn_pos += body_len;
+  }
+  
+  fn_str[fn_pos++] = '}';
+  
+  jsval_t str = js_mkstr(js, fn_str, fn_pos);
+  free(fn_str);
+  if (is_err(str)) return str;
+  
+  jsval_t func_obj = mkobj(js, 0);
+  if (is_err(func_obj)) return func_obj;
+  
+  jsval_t code_key = js_mkstr(js, "__code", 6);
+  if (is_err(code_key)) return code_key;
+  
+  jsval_t res = setprop(js, func_obj, code_key, str);
+  if (is_err(res)) return res;
+  
+  if (!(flags & F_NOEXEC)) {
+    jsval_t scope_key = js_mkstr(js, "__scope", 7);
+    if (is_err(scope_key)) return scope_key;
+    jsval_t res2 = setprop(js, func_obj, scope_key, js->scope);
+    if (is_err(res2)) return res2;
+  }
+  
+  return mkval(T_FUNC, (unsigned long) vdata(func_obj));
+}
+
 static jsval_t js_group(struct js *js) {
   if (next(js) == TOK_LPAREN) {
+    jsoff_t paren_start = js->pos - 1;
     js->consumed = 1;
-    jsval_t v = js_expr(js);
-    if (is_err(v)) return v;
-    if (next(js) != TOK_RPAREN) return js_mkerr(js, ") expected");
-    js->consumed = 1;
-    return v;
+    
+    jsoff_t saved_pos = js->pos;
+    uint8_t saved_tok = js->tok;
+    uint8_t saved_consumed = js->consumed;
+    uint8_t saved_flags = js->flags;
+    
+    int paren_depth = 1;
+    bool could_be_arrow = true;
+    js->flags |= F_NOEXEC;
+    
+    while (paren_depth > 0 && next(js) != TOK_EOF) {
+      if (js->tok == TOK_LPAREN) paren_depth++;
+      else if (js->tok == TOK_RPAREN) paren_depth--;
+      
+      if (paren_depth > 0) {
+        if (js->tok != TOK_IDENTIFIER && js->tok != TOK_COMMA) could_be_arrow = false;
+      }
+      js->consumed = 1;
+    }
+    
+    jsoff_t paren_end = js->pos;
+    bool is_arrow = could_be_arrow && lookahead(js) == TOK_ARROW;
+    
+    js->pos = saved_pos;
+    js->tok = saved_tok;
+    js->consumed = saved_consumed;
+    js->flags = saved_flags;
+    
+    if (is_arrow) {
+      js->flags |= F_NOEXEC;
+      while (next(js) != TOK_RPAREN && next(js) != TOK_EOF) {
+        js->consumed = 1;
+      }
+      if (next(js) != TOK_RPAREN) return js_mkerr(js, ") expected");
+      js->consumed = 1;
+      js->flags = saved_flags;
+      
+      if (next(js) != TOK_ARROW) return js_mkerr(js, "=> expected");
+      js->consumed = 1;
+      
+      return js_arrow_func(js, paren_start, paren_end);
+    } else {
+      jsval_t v = js_expr(js);
+      if (is_err(v)) return v;
+      if (next(js) != TOK_RPAREN) return js_mkerr(js, ") expected");
+      js->consumed = 1;
+      return v;
+    }
   } else {
     return js_literal(js);
   }
@@ -1485,6 +1622,7 @@ static jsval_t js_call_dot(struct js *js) {
   jsval_t obj = js_mkundef();
   if (is_err(res)) return res;
   if (vtype(res) == T_CODEREF) {
+    if (lookahead(js) == TOK_ARROW) return res;
     res = lookup(js, &js->code[coderefoff(res)], codereflen(res));
   }
   while (next(js) == TOK_LPAREN || next(js) == TOK_DOT || next(js) == TOK_LBRACKET) {
@@ -1700,13 +1838,109 @@ static jsval_t js_ternary(struct js *js) {
 }
 
 static jsval_t js_assignment(struct js *js) {
-  RTL_BINOP(js_ternary, js_assignment,
-  (next(js) == TOK_ASSIGN || js->tok == TOK_PLUS_ASSIGN ||
+  jsval_t res = js_ternary(js);
+  
+  if (!is_err(res) && vtype(res) == T_CODEREF && next(js) == TOK_ARROW) {
+    jsoff_t param_start = coderefoff(res);
+    jsoff_t param_len = codereflen(res);
+    js->consumed = 1;
+    
+    char param_buf[256];
+    if (param_len + 3 > sizeof(param_buf)) return js_mkerr(js, "param too long");
+    param_buf[0] = '(';
+    memcpy(param_buf + 1, &js->code[param_start], param_len);
+    param_buf[param_len + 1] = ')';
+    param_buf[param_len + 2] = '\0';
+    
+    uint8_t flags = js->flags;
+    bool is_expr = next(js) != TOK_LBRACE;
+    jsoff_t body_start = js->pos;
+    if (is_expr && js->tok != TOK_EOF) {
+      body_start = js->toff;
+    }
+    jsval_t body_result;
+    
+    if (is_expr) {
+      js->flags |= F_NOEXEC;
+      body_result = js_assignment(js);
+      if (is_err(body_result)) {
+        js->flags = flags;
+        return body_result;
+      }
+    } else {
+      js->flags |= F_NOEXEC;
+      js->consumed = 1;
+      body_result = js_block(js, false);
+      if (is_err(body_result)) {
+        js->flags = flags;
+        return body_result;
+      }
+      if (next(js) == TOK_RBRACE) js->consumed = 1;
+    }
+    
+    js->flags = flags;
+    jsoff_t body_end = js->pos;
+    
+    size_t fn_size = param_len + (body_end - body_start) + 64;
+    char *fn_str = (char *) malloc(fn_size);
+    if (!fn_str) return js_mkerr(js, "oom");
+    
+    jsoff_t fn_pos = 0;
+    memcpy(fn_str + fn_pos, param_buf, param_len + 2);
+    fn_pos += param_len + 2;
+    fn_str[fn_pos++] = '{';
+    
+    if (is_expr) {
+      memcpy(fn_str + fn_pos, "return ", 7);
+      fn_pos += 7;
+      size_t body_len = body_end - body_start;
+      memcpy(fn_str + fn_pos, &js->code[body_start], body_len);
+      fn_pos += body_len;
+    } else {
+      size_t body_len = body_end - body_start - 2;
+      memcpy(fn_str + fn_pos, &js->code[body_start + 1], body_len);
+      fn_pos += body_len;
+    }
+    
+    fn_str[fn_pos++] = '}';
+    
+    jsval_t str = js_mkstr(js, fn_str, fn_pos);
+    free(fn_str);
+    if (is_err(str)) return str;
+    
+    jsval_t func_obj = mkobj(js, 0);
+    if (is_err(func_obj)) return func_obj;
+    
+    jsval_t code_key = js_mkstr(js, "__code", 6);
+    if (is_err(code_key)) return code_key;
+    
+    jsval_t res2 = setprop(js, func_obj, code_key, str);
+    if (is_err(res2)) return res2;
+    
+    if (!(flags & F_NOEXEC)) {
+      jsval_t scope_key = js_mkstr(js, "__scope", 7);
+      if (is_err(scope_key)) return scope_key;
+      jsval_t res3 = setprop(js, func_obj, scope_key, js->scope);
+      if (is_err(res3)) return res3;
+    }
+    
+    return mkval(T_FUNC, (unsigned long) vdata(func_obj));
+  }
+  
+  while (!is_err(res) && (next(js) == TOK_ASSIGN || js->tok == TOK_PLUS_ASSIGN ||
    js->tok == TOK_MINUS_ASSIGN || js->tok == TOK_MUL_ASSIGN ||
    js->tok == TOK_DIV_ASSIGN || js->tok == TOK_REM_ASSIGN ||
    js->tok == TOK_SHL_ASSIGN || js->tok == TOK_SHR_ASSIGN ||
    js->tok == TOK_ZSHR_ASSIGN || js->tok == TOK_AND_ASSIGN ||
-   js->tok == TOK_XOR_ASSIGN || js->tok == TOK_OR_ASSIGN));
+   js->tok == TOK_XOR_ASSIGN || js->tok == TOK_OR_ASSIGN)) {
+    uint8_t op = js->tok;
+    js->consumed = 1;
+    jsval_t rhs = js_assignment(js);
+    if (is_err(rhs)) return rhs;
+    res = do_op(js, op, res, rhs);
+  }
+  
+  return res;
 }
 
 static jsval_t js_decl(struct js *js, bool is_const) {
