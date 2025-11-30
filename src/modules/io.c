@@ -4,6 +4,7 @@
 #include <libgen.h>
 #include <limits.h>
 
+#include "runtime.h"
 #include "modules/io.h"
 
 jsval_t js_println(struct js *js, jsval_t *args, int nargs) {

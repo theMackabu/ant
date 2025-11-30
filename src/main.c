@@ -7,6 +7,7 @@
 
 #include "ant.h"
 #include "config.h"
+#include "runtime.h"
 #include "argtable3.h"
 
 #include "modules/io.h"
@@ -233,19 +234,18 @@ int main(int argc, char *argv[]) {
   if (gct->count > 0) {
     js_setgct(js, gct->ival[0]);
   }
-
-  jsval_t ant_obj = js_mkobj(js);
-  js_set(js, js_glob(js), "Ant", ant_obj);
   
-  init_crypto_module(js, ant_obj);
+  struct ant_runtime *rt = ant_runtime_init(js);
   
-  js_set(js, ant_obj, "serve", js_mkfun(js_serve));
-  js_set(js, ant_obj, "println", js_mkfun(js_println));
-  js_set(js, ant_obj, "require", js_mkfun(js_require));
-  js_set(js, ant_obj, "signal", js_mkfun(js_signal));
+  init_crypto_module(js, rt->ant_obj);
+  
+  js_set(js, rt->ant_obj, "serve", js_mkfun(js_serve));
+  js_set(js, rt->ant_obj, "println", js_mkfun(js_println));
+  js_set(js, rt->ant_obj, "require", js_mkfun(js_require));
+  js_set(js, rt->ant_obj, "signal", js_mkfun(js_signal));
   
   jsval_t exports_obj = js_mkobj(js);
-  js_set(js, ant_obj, "exports", exports_obj);
+  js_set(js, rt->ant_obj, "exports", exports_obj);
 
   int result = execute_module(js, module_file);
   if (dump) js_dump(js);
