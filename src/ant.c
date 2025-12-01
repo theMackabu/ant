@@ -11,6 +11,7 @@
 
 #include "ant.h"
 #include "config.h"
+#include "modules/timer.h"
 
 typedef uint32_t jsoff_t;
 
@@ -49,7 +50,7 @@ struct js {
 enum {
   TOK_ERR, TOK_EOF, TOK_IDENTIFIER, TOK_NUMBER, TOK_STRING, TOK_SEMICOLON,
   TOK_LPAREN, TOK_RPAREN, TOK_LBRACE, TOK_RBRACE, TOK_LBRACKET, TOK_RBRACKET,
-  TOK_BREAK = 50, TOK_CASE, TOK_CATCH, TOK_CLASS, TOK_CONST, TOK_CONTINUE,
+  TOK_ASYNC = 50, TOK_AWAIT, TOK_BREAK, TOK_CASE, TOK_CATCH, TOK_CLASS, TOK_CONST, TOK_CONTINUE,
   TOK_DEFAULT, TOK_DELETE, TOK_DO, TOK_ELSE, TOK_FINALLY, TOK_FOR, TOK_FUNC,
   TOK_IF, TOK_IN, TOK_INSTANCEOF, TOK_LET, TOK_NEW, TOK_RETURN, TOK_SWITCH,
   TOK_THIS, TOK_THROW, TOK_TRY, TOK_VAR, TOK_VOID, TOK_WHILE, TOK_WITH,
@@ -118,6 +119,7 @@ static inline jsoff_t esize(jsoff_t w);
 static jsval_t js_expr(struct js *js);
 static jsval_t js_stmt(struct js *js);
 static jsval_t js_assignment(struct js *js);
+static jsval_t js_arrow_func(struct js *js, jsoff_t params_start, jsoff_t params_end, bool is_async);
 static jsval_t do_op(struct js *, uint8_t op, jsval_t l, jsval_t r);
 static jsval_t do_instanceof(struct js *js, jsval_t l, jsval_t r);
 static jsval_t resolveprop(struct js *js, jsval_t v);
@@ -575,6 +577,7 @@ static bool streq(const char *buf, size_t len, const char *p, size_t n) {
 
 static uint8_t parsekeyword(const char *buf, size_t len) {
   switch (buf[0]) {
+    case 'a': if (streq("async", 5, buf, len)) return TOK_ASYNC; if (streq("await", 5, buf, len)) return TOK_AWAIT; break;
     case 'b': if (streq("break", 5, buf, len)) return TOK_BREAK; break;
     case 'c': if (streq("class", 5, buf, len)) return TOK_CLASS; if (streq("case", 4, buf, len)) return TOK_CASE; if (streq("catch", 5, buf, len)) return TOK_CATCH; if (streq("const", 5, buf, len)) return TOK_CONST; if (streq("continue", 8, buf, len)) return TOK_CONTINUE; break;
     case 'd': if (streq("do", 2, buf, len)) return TOK_DO;  if (streq("default", 7, buf, len)) return TOK_DEFAULT; if (streq("delete", 6, buf, len)) return TOK_DELETE; break;
@@ -1086,11 +1089,21 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
       }
       jsoff_t fnlen, fnoff = vstr(js, code_val, &fnlen);
       const char *code_str = (const char *) (&js->mem[fnoff]);
+      bool is_async = false;
+      jsoff_t async_off = lkp(js, func_obj, "__async", 7);
+      if (async_off != 0) {
+        jsval_t async_val = resolveprop(js, mkval(T_PROP, async_off));
+        is_async = vtype(async_val) == T_BOOL && vdata(async_val) == 1;
+      }
       if (fnlen == 16 && memcmp(code_str, "__builtin_Object", 16) == 0) {
         res = call_c(js, builtin_Object);
       } else {
         js->nogc = (jsoff_t) (fnoff - sizeof(jsoff_t));
         res = call_js(js, code_str, fnlen, closure_scope);
+        if (is_async && !is_err(res)) {
+          jsval_t promise_args[] = { res };
+          res = builtin_Promise_resolve(js, promise_args, 1);
+        }
       }
     }
   } else {
@@ -1401,7 +1414,7 @@ static jsval_t js_obj_literal(struct js *js) {
   return obj;
 }
 
-static jsval_t js_func_literal(struct js *js) {
+static jsval_t js_func_literal(struct js *js, bool is_async) {
   uint8_t flags = js->flags;
   js->consumed = 1;
   jsoff_t name_off = 0, name_len = 0;
@@ -1439,6 +1452,14 @@ static jsval_t js_func_literal(struct js *js) {
   if (is_err(code_key)) return code_key;
   jsval_t res2 = setprop(js, func_obj, code_key, str);
   if (is_err(res2)) return res2;
+  
+  if (is_async) {
+    jsval_t async_key = js_mkstr(js, "__async", 7);
+    if (is_err(async_key)) return async_key;
+    jsval_t res_async = setprop(js, func_obj, async_key, js_mktrue());
+    if (is_err(res_async)) return res_async;
+  }
+  
   if (name_len > 0) {
     jsval_t name_key = js_mkstr(js, "name", 4);
     if (is_err(name_key)) return name_key;
@@ -1493,7 +1514,118 @@ static jsval_t js_literal(struct js *js) {
     case TOK_TEMPLATE:    return js_template_literal(js);
     case TOK_LBRACE:      return js_obj_literal(js);
     case TOK_LBRACKET:    return js_arr_literal(js);
-    case TOK_FUNC:        return js_func_literal(js);
+    case TOK_FUNC:        return js_func_literal(js, false);
+    case TOK_ASYNC: {
+      js->consumed = 1;
+      uint8_t next_tok = next(js);
+      if (next_tok == TOK_FUNC) {
+        return js_func_literal(js, true);
+      } else if (next_tok == TOK_LPAREN) {
+        jsoff_t paren_start = js->pos - 1;
+        js->consumed = 1;
+        jsoff_t saved_pos = js->pos;
+        uint8_t saved_tok = js->tok;
+        uint8_t saved_consumed = js->consumed;
+        uint8_t saved_flags = js->flags;
+        int paren_depth = 1;
+        js->flags |= F_NOEXEC;
+        while (paren_depth > 0 && next(js) != TOK_EOF) {
+          if (js->tok == TOK_LPAREN) paren_depth++;
+          else if (js->tok == TOK_RPAREN) paren_depth--;
+          js->consumed = 1;
+        }
+        jsoff_t paren_end = js->pos;
+        bool is_arrow = lookahead(js) == TOK_ARROW;
+        js->pos = saved_pos;
+        js->tok = saved_tok;
+        js->consumed = saved_consumed;
+        js->flags = saved_flags;
+        if (is_arrow) {
+          js->flags |= F_NOEXEC;
+          while (next(js) != TOK_RPAREN && next(js) != TOK_EOF) {
+            js->consumed = 1;
+          }
+          if (next(js) != TOK_RPAREN) return js_mkerr(js, ") expected");
+          js->consumed = 1;
+          js->flags = saved_flags;
+          if (next(js) != TOK_ARROW) return js_mkerr(js, "=> expected");
+          js->consumed = 1;
+          return js_arrow_func(js, paren_start, paren_end, true);
+        }
+        return js_mkerr(js, "async ( must be arrow function");
+      } else if (next_tok == TOK_IDENTIFIER) {
+        jsoff_t id_start = js->toff;
+        jsoff_t id_len = js->tlen;
+        js->consumed = 1;
+        if (next(js) == TOK_ARROW) {
+          js->consumed = 1;
+          char param_buf[256];
+          if (id_len + 3 > sizeof(param_buf)) return js_mkerr(js, "param too long");
+          param_buf[0] = '(';
+          memcpy(param_buf + 1, &js->code[id_start], id_len);
+          param_buf[id_len + 1] = ')';
+          param_buf[id_len + 2] = '\0';
+          uint8_t flags = js->flags;
+          bool is_expr = next(js) != TOK_LBRACE;
+          jsoff_t body_start = is_expr ? js->toff : js->pos;
+          jsval_t body_result;
+          if (is_expr) {
+            js->flags |= F_NOEXEC;
+            body_result = js_assignment(js);
+            if (is_err(body_result)) { js->flags = flags; return body_result; }
+          } else {
+            js->flags |= F_NOEXEC;
+            js->consumed = 1;
+            body_result = js_block(js, false);
+            if (is_err(body_result)) { js->flags = flags; return body_result; }
+            if (next(js) == TOK_RBRACE) js->consumed = 1;
+          }
+          js->flags = flags;
+          jsoff_t body_end = js->pos;
+          size_t fn_size = id_len + (body_end - body_start) + 64;
+          char *fn_str = (char *) malloc(fn_size);
+          if (!fn_str) return js_mkerr(js, "oom");
+          jsoff_t fn_pos = 0;
+          memcpy(fn_str + fn_pos, param_buf, id_len + 2);
+          fn_pos += id_len + 2;
+          fn_str[fn_pos++] = '{';
+          if (is_expr) {
+            memcpy(fn_str + fn_pos, "return ", 7);
+            fn_pos += 7;
+            size_t body_len = body_end - body_start;
+            memcpy(fn_str + fn_pos, &js->code[body_start], body_len);
+            fn_pos += body_len;
+          } else {
+            size_t body_len = body_end - body_start - 2;
+            memcpy(fn_str + fn_pos, &js->code[body_start + 1], body_len);
+            fn_pos += body_len;
+          }
+          fn_str[fn_pos++] = '}';
+          jsval_t str = js_mkstr(js, fn_str, fn_pos);
+          free(fn_str);
+          if (is_err(str)) return str;
+          jsval_t func_obj = mkobj(js, 0);
+          if (is_err(func_obj)) return func_obj;
+          jsval_t code_key = js_mkstr(js, "__code", 6);
+          if (is_err(code_key)) return code_key;
+          jsval_t res = setprop(js, func_obj, code_key, str);
+          if (is_err(res)) return res;
+          jsval_t async_key = js_mkstr(js, "__async", 7);
+          if (is_err(async_key)) return async_key;
+          jsval_t res_async = setprop(js, func_obj, async_key, js_mktrue());
+          if (is_err(res_async)) return res_async;
+          if (!(flags & F_NOEXEC)) {
+            jsval_t scope_key = js_mkstr(js, "__scope", 7);
+            if (is_err(scope_key)) return scope_key;
+            jsval_t res2 = setprop(js, func_obj, scope_key, js->scope);
+            if (is_err(res2)) return res2;
+          }
+          return mkval(T_FUNC, (unsigned long) vdata(func_obj));
+        }
+        return mkcoderef((jsoff_t) id_start, (jsoff_t) id_len);
+      }
+      return js_mkerr(js, "unexpected token after async");
+    }
     case TOK_NULL:        return js_mknull();
     case TOK_UNDEF:       return js_mkundef();
     case TOK_TRUE:        return js_mktrue();
@@ -1507,7 +1639,7 @@ static jsval_t js_literal(struct js *js) {
   }
 }
 
-static jsval_t js_arrow_func(struct js *js, jsoff_t params_start, jsoff_t params_end) {
+static jsval_t js_arrow_func(struct js *js, jsoff_t params_start, jsoff_t params_end, bool is_async) {
   uint8_t flags = js->flags;
   bool is_expr = next(js) != TOK_LBRACE;
   jsoff_t body_start, body_end_actual;
@@ -1586,6 +1718,13 @@ static jsval_t js_arrow_func(struct js *js, jsoff_t params_start, jsoff_t params
   jsval_t res = setprop(js, func_obj, code_key, str);
   if (is_err(res)) return res;
   
+  if (is_async) {
+    jsval_t async_key = js_mkstr(js, "__async", 7);
+    if (is_err(async_key)) return async_key;
+    jsval_t res_async = setprop(js, func_obj, async_key, js_mktrue());
+    if (is_err(res_async)) return res_async;
+  }
+  
   if (!(flags & F_NOEXEC)) {
     jsval_t scope_key = js_mkstr(js, "__scope", 7);
     if (is_err(scope_key)) return scope_key;
@@ -1640,7 +1779,7 @@ static jsval_t js_group(struct js *js) {
       if (next(js) != TOK_ARROW) return js_mkerr(js, "=> expected");
       js->consumed = 1;
       
-      return js_arrow_func(js, paren_start, paren_end);
+      return js_arrow_func(js, paren_start, paren_end, false);
     } else {
       jsval_t v = js_expr(js);
       if (is_err(v)) return v;
@@ -2074,6 +2213,67 @@ static jsval_t js_func_decl(struct js *js) {
   return js_mkundef();
 }
 
+static jsval_t js_func_decl_async(struct js *js) {
+  uint8_t exe = !(js->flags & F_NOEXEC);
+  js->consumed = 1;
+  EXPECT(TOK_IDENTIFIER, );
+  js->consumed = 0;
+  jsoff_t noff = js->toff, nlen = js->tlen;
+  char *name = (char *) &js->code[noff];
+  js->consumed = 1;
+  EXPECT(TOK_LPAREN, );
+  jsoff_t pos = js->pos - 1;
+  for (bool comma = false; next(js) != TOK_EOF; comma = true) {
+    if (!comma && next(js) == TOK_RPAREN) break;
+    EXPECT(TOK_IDENTIFIER, );
+    if (next(js) == TOK_RPAREN) break;
+    EXPECT(TOK_COMMA, );
+  }
+  EXPECT(TOK_RPAREN, );
+  EXPECT(TOK_LBRACE, );
+  js->consumed = 0;
+  uint8_t flags = js->flags;
+  js->flags |= F_NOEXEC;
+  jsval_t res = js_block(js, false);
+  if (is_err(res)) {
+    js->flags = flags;
+    return res;
+  }
+  js->flags = flags;
+  jsval_t str = js_mkstr(js, &js->code[pos], js->pos - pos);
+  jsval_t func_obj = mkobj(js, 0);
+  if (is_err(func_obj)) return func_obj;
+  jsval_t code_key = js_mkstr(js, "__code", 6);
+  if (is_err(code_key)) return code_key;
+  jsval_t res2 = setprop(js, func_obj, code_key, str);
+  if (is_err(res2)) return res2;
+  jsval_t async_key = js_mkstr(js, "__async", 7);
+  if (is_err(async_key)) return async_key;
+  jsval_t res_async = setprop(js, func_obj, async_key, js_mktrue());
+  if (is_err(res_async)) return res_async;
+  jsval_t name_key = js_mkstr(js, "name", 4);
+  if (is_err(name_key)) return name_key;
+  jsval_t name_val = js_mkstr(js, name, nlen);
+  if (is_err(name_val)) return name_val;
+  jsval_t res3 = setprop(js, func_obj, name_key, name_val);
+  if (is_err(res3)) return res3;
+  if (exe) {
+    jsval_t scope_key = js_mkstr(js, "__scope", 7);
+    if (is_err(scope_key)) return scope_key;
+    jsval_t res4 = setprop(js, func_obj, scope_key, js->scope);
+    if (is_err(res4)) return res4;
+  }
+  jsval_t func = mkval(T_FUNC, (unsigned long) vdata(func_obj));
+  if (exe) {
+    if (lkp(js, js->scope, name, nlen) > 0)
+      return js_mkerr(js, "'%.*s' already declared", (int) nlen, name);
+    jsval_t x = mkprop(js, js->scope, js_mkstr(js, name, nlen), func, false);
+    if (is_err(x)) return x;
+  }
+  
+  return js_mkundef();
+}
+
 static jsval_t js_block_or_stmt(struct js *js) {
   if (next(js) == TOK_LBRACE) return js_block(js, !(js->flags & F_NOEXEC));
   jsval_t res = resolveprop(js, js_stmt(js));
@@ -2399,6 +2599,7 @@ static jsval_t js_stmt(struct js *js) {
     case TOK_LET:       res = js_let(js); break;
     case TOK_CONST:     res = js_const(js); break;
     case TOK_FUNC:      res = js_func_decl(js); break;
+    case TOK_ASYNC:     js->consumed = 1; if (next(js) == TOK_FUNC) res = js_func_decl_async(js); else return js_mkerr(js, "async must be followed by function"); break;
     case TOK_CLASS:     res = js_class_decl(js); break;
     case TOK_IF:        res = js_if(js); break;
     case TOK_LBRACE:    res = js_block(js, !(js->flags & F_NOEXEC)); break;
@@ -3074,14 +3275,34 @@ static void reject_promise(struct js *js, jsval_t p, jsval_t val);
 
 static size_t strpromise(struct js *js, jsval_t value, char *buf, size_t len) {
   jsval_t prom_obj = mkval(T_OBJ, vdata(value));
-  jsoff_t off = lkp(js, prom_obj, "__state", 7);
+  jsoff_t state_off = lkp(js, prom_obj, "__state", 7);
   int state = 0;
-  if (off != 0) {
-    jsval_t val = resolveprop(js, mkval(T_PROP, off));
+  if (state_off != 0) {
+    jsval_t val = resolveprop(js, mkval(T_PROP, state_off));
     if (vtype(val) == T_NUM) state = (int)tod(val);
   }
-  const char *s = (state == 0) ? "<pending>" : (state == 1) ? "<fulfilled>" : "<rejected>";
-  return (size_t)snprintf(buf, len, "Promise { %s }", s);
+  
+  if (state == 0) {
+    return (size_t)snprintf(buf, len, "Promise { <pending> }");
+  }
+  
+  jsoff_t value_off = lkp(js, prom_obj, "__value", 7);
+  if (value_off == 0) {
+    const char *s = (state == 1) ? "<fulfilled>" : "<rejected>";
+    return (size_t)snprintf(buf, len, "Promise { %s }", s);
+  }
+  
+  jsval_t prom_val = resolveprop(js, mkval(T_PROP, value_off));
+  char value_buf[256];
+  size_t value_len = tostr(js, prom_val, value_buf, sizeof(value_buf));
+  if (value_len >= sizeof(value_buf)) value_len = sizeof(value_buf) - 1;
+  value_buf[value_len] = '\0';
+  
+  if (state == 1) {
+    return (size_t)snprintf(buf, len, "Promise { %s }", value_buf);
+  } else {
+    return (size_t)snprintf(buf, len, "Promise { <rejected> %s }", value_buf);
+  }
 }
 
 static jsval_t mkpromise(struct js *js) {
@@ -3093,7 +3314,21 @@ static jsval_t mkpromise(struct js *js) {
   return mkval(T_PROMISE, vdata(obj));
 }
 
+static jsval_t builtin_trigger_handler_wrapper(struct js *js, jsval_t *args, int nargs);
+
 static void trigger_handlers(struct js *js, jsval_t p) {
+  jsval_t wrapper_obj = mkobj(js, 0);
+  setprop(js, wrapper_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_trigger_handler_wrapper));
+  setprop(js, wrapper_obj, js_mkstr(js, "promise", 7), p);
+  jsval_t wrapper_fn = mkval(T_FUNC, vdata(wrapper_obj));
+  queue_microtask(js, wrapper_fn);
+}
+
+static jsval_t builtin_trigger_handler_wrapper(struct js *js, jsval_t *args, int nargs) {
+  jsval_t me = js->current_func;
+  jsval_t p = js_get(js, me, "promise");
+  if (vtype(p) != T_PROMISE) return js_mkundef();
+  
   jsval_t p_obj = mkval(T_OBJ, vdata(p));
   jsoff_t state_off = lkp(js, p_obj, "__state", 7);
   int state = (int)tod(resolveprop(js, mkval(T_PROP, state_off)));
@@ -3141,6 +3376,7 @@ static void trigger_handlers(struct js *js, jsval_t p) {
     }
   }
   setprop(js, p_obj, js_mkstr(js, "__handlers", 10), mkarr(js));
+  return js_mkundef();
 }
 
 static void resolve_promise(struct js *js, jsval_t p, jsval_t val) {
@@ -3210,6 +3446,8 @@ static jsval_t builtin_reject_internal(struct js *js, jsval_t *args, int nargs) 
   return js_mkundef();
 }
 
+static jsval_t builtin_promise_executor_wrapper(struct js *js, jsval_t *args, int nargs);
+
 static jsval_t builtin_Promise(struct js *js, jsval_t *args, int nargs) {
   jsval_t p = mkpromise(js);
   jsval_t res_obj = mkobj(js, 0);
@@ -3221,10 +3459,25 @@ static jsval_t builtin_Promise(struct js *js, jsval_t *args, int nargs) {
   setprop(js, rej_obj, js_mkstr(js, "promise", 7), p);
   jsval_t rej_fn = mkval(T_FUNC, vdata(rej_obj));
   if (nargs > 0) {
-     jsval_t exec_args[] = { res_fn, rej_fn };
-     js_call(js, args[0], exec_args, 2);
+     jsval_t wrapper_obj = mkobj(js, 0);
+     setprop(js, wrapper_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_promise_executor_wrapper));
+     setprop(js, wrapper_obj, js_mkstr(js, "executor", 8), args[0]);
+     setprop(js, wrapper_obj, js_mkstr(js, "resolve", 7), res_fn);
+     setprop(js, wrapper_obj, js_mkstr(js, "reject", 6), rej_fn);
+     jsval_t wrapper_fn = mkval(T_FUNC, vdata(wrapper_obj));
+     queue_microtask(js, wrapper_fn);
   }
   return p;
+}
+
+static jsval_t builtin_promise_executor_wrapper(struct js *js, jsval_t *args, int nargs) {
+  jsval_t me = js->current_func;
+  jsval_t executor = js_get(js, me, "executor");
+  jsval_t res_fn = js_get(js, me, "resolve");
+  jsval_t rej_fn = js_get(js, me, "reject");
+  jsval_t exec_args[] = { res_fn, rej_fn };
+  js_call(js, executor, exec_args, 2);
+  return js_mkundef();
 }
 
 static jsval_t builtin_Promise_resolve(struct js *js, jsval_t *args, int nargs) {

@@ -120,12 +120,13 @@ static jsval_t js_queue_microtask(struct js *js, jsval_t *args, int nargs) {
     return js_mkerr(js, "queueMicrotask requires 1 argument (callback)");
   }
   
-  jsval_t callback = args[0];
-  
+  queue_microtask(js, args[0]);
+  return js_mkundef();
+}
+
+void queue_microtask(struct js *js, jsval_t callback) {
   microtask_entry_t *entry = malloc(sizeof(microtask_entry_t));
-  if (entry == NULL) {
-    return js_mkerr(js, "failed to allocate microtask");
-  }
+  if (entry == NULL) return;
   
   entry->callback = callback;
   entry->next = NULL;
@@ -137,8 +138,6 @@ static jsval_t js_queue_microtask(struct js *js, jsval_t *args, int nargs) {
     timer_state.microtasks_tail->next = entry;
     timer_state.microtasks_tail = entry;
   }
-  
-  return js_mkundef();
 }
 
 void process_microtasks(struct js *js) {
@@ -197,6 +196,10 @@ int has_pending_timers(void) {
     if (entry->active) return 1;
   }
   return 0;
+}
+
+int has_pending_microtasks(void) {
+  return timer_state.microtasks != NULL ? 1 : 0;
 }
 
 int64_t get_next_timer_timeout(void) {
