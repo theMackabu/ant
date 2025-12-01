@@ -160,6 +160,7 @@ static jsval_t builtin_array_pop(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_array_slice(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_array_join(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_array_includes(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_array_every(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_Error(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_indexOf(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_substring(struct js *js, jsval_t *args, int nargs);
@@ -251,7 +252,41 @@ static size_t strarr(struct js *js, jsval_t obj, char *buf, size_t len) {
   return n + cpy(buf + n, len - n, "]", 1);
 }
 
+static size_t strdate(struct js *js, jsval_t obj, char *buf, size_t len) {
+  jsoff_t time_off = lkp(js, obj, "__time", 6);
+  if (time_off == 0) return cpy(buf, len, "Invalid Date", 12);
+  
+  jsval_t time_val = resolveprop(js, mkval(T_PROP, time_off));
+  if (vtype(time_val) != T_NUM) return cpy(buf, len, "Invalid Date", 12);
+  
+  double timestamp_ms = tod(time_val);
+  time_t timestamp_sec = (time_t)(timestamp_ms / 1000.0);
+  struct tm *tm_local = localtime(&timestamp_sec);
+  
+  if (!tm_local) return cpy(buf, len, "Invalid Date", 12);
+  
+  char date_part[64];
+  strftime(date_part, sizeof(date_part), "%a %b %d %Y %H:%M:%S", tm_local);
+  
+  time_t now = timestamp_sec;
+  struct tm *gm = gmtime(&now);
+  struct tm local_copy = *tm_local;
+  time_t local_time = mktime(&local_copy);
+  time_t gmt_time = mktime(gm);
+  long offset_sec = (long)difftime(local_time, gmt_time);
+  int offset_hours = (int)(offset_sec / 3600);
+  int offset_mins = (int)(labs(offset_sec) % 3600) / 60;
+  
+  char tz_name[64];
+  strftime(tz_name, sizeof(tz_name), "%Z", tm_local);
+  
+  return (size_t) snprintf(buf, len, "%s GMT%+03d%02d (%s)", date_part, offset_hours, offset_mins, tz_name);
+}
+
 static size_t strobj(struct js *js, jsval_t obj, char *buf, size_t len) {
+  jsoff_t time_off = lkp(js, obj, "__time", 6);
+  if (time_off != 0) return strdate(js, obj, buf, len);
+  
   size_t n = cpy(buf, len, "{", 1);
   jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK);
   
@@ -270,8 +305,16 @@ static size_t strobj(struct js *js, jsval_t obj, char *buf, size_t len) {
 
 static size_t strnum(jsval_t value, char *buf, size_t len) {
   double dv = tod(value), iv;
-  const char *fmt = modf(dv, &iv) == 0.0 ? "%.17g" : "%g";
-  return (size_t) snprintf(buf, len, fmt, dv);
+  double frac = modf(dv, &iv);
+  
+  if (dv >= -9007199254740991.0 && dv <= 9007199254740991.0) {
+    if (frac == 0.0) {
+      return (size_t) snprintf(buf, len, "%.0f", dv);
+    } else {
+      return (size_t) snprintf(buf, len, "%.17g", dv);
+    }
+  }
+  return (size_t) snprintf(buf, len, "%g", dv);
 }
 
 static jsoff_t vstr(struct js *js, jsval_t value, jsoff_t *len) {
@@ -1080,6 +1123,8 @@ static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
       return js_mkfun(builtin_array_join);
     } else if (streq(ptr, codereflen(r), "includes", 8)) {
       return js_mkfun(builtin_array_includes);
+    } else if (streq(ptr, codereflen(r), "every", 5)) {
+      return js_mkfun(builtin_array_every);
     }
   }
   
@@ -3690,7 +3735,7 @@ static jsval_t builtin_Date(struct js *js, jsval_t *args, int nargs) {
   if (nargs == 0) {
     struct timeval tv;
     gettimeofday(&tv, NULL);
-    timestamp_ms = (double)tv.tv_sec * 1000.0 + (double)tv.tv_usec / 1000.0;
+    timestamp_ms = (double)tv.tv_sec * 1000.0 + (double)(tv.tv_usec / 1000);
   } else if (nargs == 1) {
     if (vtype(args[0]) == T_NUM) {
       timestamp_ms = tod(args[0]);
@@ -3716,7 +3761,7 @@ static jsval_t builtin_Date_now(struct js *js, jsval_t *args, int nargs) {
   
   struct timeval tv;
   gettimeofday(&tv, NULL);
-  double timestamp_ms = (double)tv.tv_sec * 1000.0 + (double)tv.tv_usec / 1000.0;
+  double timestamp_ms = (double)tv.tv_sec * 1000.0 + (double)(tv.tv_usec / 1000);
   
   return tov(timestamp_ms);
 }
@@ -3977,6 +4022,48 @@ static jsval_t builtin_array_includes(struct js *js, jsval_t *args, int nargs) {
     }
   }
   return mkval(T_BOOL, 0);
+}
+
+static jsval_t builtin_array_every(struct js *js, jsval_t *args, int nargs) {
+  jsval_t arr = js->this_val;
+  if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ) {
+    return js_mkerr(js, "every called on non-array");
+  }
+  
+  if (nargs == 0 || vtype(args[0]) != T_FUNC) {
+    return js_mkerr(js, "every requires a function argument");
+  }
+  
+  jsval_t callback = args[0];
+  jsoff_t off = lkp(js, arr, "length", 6);
+  jsoff_t len = 0;
+  
+  if (off != 0) {
+    jsval_t len_val = resolveprop(js, mkval(T_PROP, off));
+    if (vtype(len_val) == T_NUM) len = (jsoff_t) tod(len_val);
+  }
+  
+  for (jsoff_t i = 0; i < len; i++) {
+    char idxstr[16];
+    snprintf(idxstr, sizeof(idxstr), "%u", (unsigned) i);
+    jsoff_t elem_off = lkp(js, arr, idxstr, strlen(idxstr));
+    
+    jsval_t elem = js_mkundef();
+    if (elem_off != 0) {
+      elem = resolveprop(js, mkval(T_PROP, elem_off));
+    }
+    
+    jsval_t call_args[3] = { elem, tov((double)i), arr };
+    jsval_t result = call_js_with_args(js, callback, call_args, 3);
+    
+    if (is_err(result)) return result;
+    
+    if (!js_truthy(js, result)) {
+      return mkval(T_BOOL, 0);
+    }
+  }
+  
+  return mkval(T_BOOL, 1);
 }
 
 static jsval_t builtin_string_indexOf(struct js *js, jsval_t *args, int nargs) {
