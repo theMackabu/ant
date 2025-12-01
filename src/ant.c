@@ -52,6 +52,7 @@ struct js {
   jsoff_t maxcss;         // maximum allowed C stack size usage
   void *cstk;             // C stack pointer at the beginning of js_eval()
   jsval_t current_func;   // currently executing function (for native closures)
+  bool var_warning_shown; // flag to show var deprecation warning only once
 };
 
 enum {
@@ -2808,12 +2809,17 @@ static jsval_t js_for(struct js *js) {
   if (!expect(js, TOK_FOR, &res)) goto done;
   if (!expect(js, TOK_LPAREN, &res)) goto done;
   
-  // Check for for-in loop: for (let/const/var x in obj)
   bool is_for_in = false;
   jsoff_t var_name_off = 0, var_name_len = 0;
   bool is_const_var = false;
   
-  if (next(js) == TOK_LET || next(js) == TOK_CONST) {
+  if (next(js) == TOK_LET || next(js) == TOK_CONST || next(js) == TOK_VAR) {
+    if (js->tok == TOK_VAR) {
+      if (!js->var_warning_shown) {
+        fprintf(stderr, "Warning: 'var' is deprecated, use 'let' or 'const' instead\n");
+        js->var_warning_shown = true;
+      }
+    }
     is_const_var = (js->tok == TOK_CONST);
     js->consumed = 1;
     if (next(js) == TOK_IDENTIFIER) {
@@ -2824,7 +2830,6 @@ static jsval_t js_for(struct js *js) {
         is_for_in = true;
         js->consumed = 1;
       } else {
-        // Not for-in, backtrack and handle as regular for loop
         js->pos = var_name_off;
         js->consumed = 1;
         if (is_const_var) {
@@ -2843,21 +2848,18 @@ static jsval_t js_for(struct js *js) {
       is_for_in = true;
       js->consumed = 1;
     } else {
-      // Not for-in, parse as expression
       js->pos = var_name_off;
       js->consumed = 1;
       v = js_expr(js);
       if (is_err2(&v, &res)) goto done;
     }
   } else if (next(js) == TOK_SEMICOLON) {
-    // Empty init in regular for loop
   } else {
     v = js_expr(js);
     if (is_err2(&v, &res)) goto done;
   }
   
   if (is_for_in) {
-    // Handle for-in loop
     jsval_t obj_expr = js_expr(js);
     if (is_err2(&obj_expr, &res)) goto done;
     if (!expect(js, TOK_RPAREN, &res)) goto done;
@@ -2880,16 +2882,13 @@ static jsval_t js_for(struct js *js) {
         iter_obj = mkval(T_OBJ, vdata(obj));
       }
       
-      // Iterate over object properties
       jsoff_t prop_off = loadoff(js, (jsoff_t) vdata(iter_obj)) & ~(3U | CONSTMASK);
       
       while (prop_off < js->brk && prop_off != 0) {
-        // Get property key
         jsoff_t koff = loadoff(js, prop_off + (jsoff_t) sizeof(prop_off));
         jsoff_t klen = offtolen(loadoff(js, koff));
         jsval_t key_str = js_mkstr(js, (char *) &js->mem[koff + sizeof(koff)], klen);
         
-        // Set loop variable to the key
         const char *var_name = &js->code[var_name_off];
         jsoff_t existing = lkp(js, js->scope, var_name, var_name_len);
         if (existing > 0) {
@@ -2902,7 +2901,6 @@ static jsval_t js_for(struct js *js) {
           }
         }
         
-        // Execute loop body
         js->pos = body_start;
         js->consumed = 1;
         js->flags = (flags & ~F_NOEXEC) | F_LOOP;
@@ -2918,7 +2916,6 @@ static jsval_t js_for(struct js *js) {
           goto done;
         }
         
-        // Move to next property
         prop_off = loadoff(js, prop_off) & ~(3U | CONSTMASK);
       }
     }
@@ -2929,7 +2926,6 @@ static jsval_t js_for(struct js *js) {
     goto done;
   }
   
-  // Regular for loop
   if (!expect(js, TOK_SEMICOLON, &res)) goto done;
   js->flags |= F_NOEXEC;
   pos1 = js->pos;
@@ -3329,9 +3325,16 @@ static jsval_t js_stmt(struct js *js) {
     case TOK_CASE: case TOK_CATCH:
     case TOK_DEFAULT: case TOK_FINALLY:
     case TOK_SWITCH:
-    case TOK_THROW: case TOK_TRY: case TOK_VAR:
+    case TOK_THROW: case TOK_TRY:
     case TOK_WITH: case TOK_YIELD:
       res = js_mkerr(js, "'%.*s' not implemented", (int) js->tlen, js->code + js->toff);
+      break;
+    case TOK_VAR:
+      if (!js->var_warning_shown) {
+        fprintf(stderr, "Warning: 'var' is deprecated, use 'let' or 'const' instead\n");
+        js->var_warning_shown = true;
+      }
+      res = js_let(js); 
       break;
     case TOK_WHILE:     res = js_while(js); break;
     case TOK_DO:        res = js_do_while(js); break;
@@ -4327,7 +4330,6 @@ static jsval_t do_instanceof(struct js *js, jsval_t l, jsval_t r) {
 }
 
 static jsval_t do_in(struct js *js, jsval_t l, jsval_t r) {
-  // l should be a string (property name), r should be an object
   if (vtype(l) != T_STR) {
     return js_mkerr(js, "left operand of 'in' must be string");
   }
@@ -4336,20 +4338,16 @@ static jsval_t do_in(struct js *js, jsval_t l, jsval_t r) {
     return js_mkerr(js, "right operand of 'in' must be object");
   }
   
-  // Get the property name
   jsoff_t prop_len;
   jsoff_t prop_off = vstr(js, l, &prop_len);
   const char *prop_name = (char *) &js->mem[prop_off];
   
-  // For functions, check the function object
   jsval_t check_obj = r;
   if (vtype(r) == T_FUNC) {
     check_obj = mkval(T_OBJ, vdata(r));
   }
   
-  // Look up the property
   jsoff_t found = lkp(js, check_obj, prop_name, prop_len);
-  
   return mkval(T_BOOL, found != 0 ? 1 : 0);
 }
 
