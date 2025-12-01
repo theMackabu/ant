@@ -1,17 +1,7 @@
 const Radix3 = Ant.require('./radix3.cjs');
-const router = new Radix3();
+const { html } = Ant.require('./html.cjs');
 
-function html(strings, ...values) {
-  let result = '';
-  for (let i = 0; i < strings.length; i++) {
-    result = result + strings[i];
-    if (i < values.length) {
-      let escaped = values[i];
-      result = result + escaped;
-    }
-  }
-  return result;
-}
+const router = new Radix3();
 
 router.insert('/', c => {
   return c.res.body(`Welcome to Ant HTTP Server with Radix3 Router!
@@ -64,7 +54,7 @@ async function handleRequest(req, res) {
 
   if (result?.handler) {
     const ctx = { req, res, params: result.params };
-    return result.handler(ctx);
+    return void result.handler(ctx);
   }
 
   return res.body('not found: ' + req.uri, 404);
