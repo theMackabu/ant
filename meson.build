@@ -20,13 +20,10 @@ sources = files(
 libsodium_dep = dependency('libsodium', required: true)
 
 # subprojects
-uuidv7_proj = subproject('uuidv7')
-mongoose_proj = subproject('mongoose')
-argtable3_proj = subproject('argtable3')
-
-uuidv7_dep = uuidv7_proj.get_variable('uuidv7_dep')
-mongoose_dep = mongoose_proj.get_variable('mongoose_dep')
-argtable3_dep = argtable3_proj.get_variable('argtable3_dep')
+curl_dep = subproject('curl').get_variable('curl_dep')
+uuidv7_dep = subproject('uuidv7').get_variable('uuidv7_dep')
+mongoose_dep = subproject('mongoose').get_variable('mongoose_dep')
+argtable3_dep = subproject('argtable3').get_variable('argtable3_dep')
 
 git = find_program('git', required: false)
 if git.found()
@@ -61,6 +58,7 @@ executable(
   sources,
   include_directories: [include, build_include],
   dependencies: [
+    curl_dep,
     uuidv7_dep,
     mongoose_dep,
     argtable3_dep,

@@ -21,7 +21,21 @@ typedef struct {
   int capacity;
 } this_stack_t;
 
+typedef struct call_frame {
+  const char *filename;
+  const char *function_name;
+  int line;
+  int col;
+} call_frame_t;
+
+typedef struct {
+  call_frame_t *frames;
+  int depth;
+  int capacity;
+} call_stack_t;
+
 static this_stack_t global_this_stack = {NULL, 0, 0};
+static call_stack_t global_call_stack = {NULL, 0, 0};
 
 struct js {
   jsoff_t css;            // max observed C stack size
@@ -37,6 +51,7 @@ struct js {
   #define F_CALL 4U       // we are inside a function call
   #define F_BREAK 8U      // exit the loop
   #define F_RETURN 16U    // return has been executed
+  #define F_THROW 32U     // throw has been executed
   jsoff_t clen;           // code snippet length
   jsoff_t pos;            // current parsing position
   jsoff_t toff;           // offset of the last parsed token
@@ -352,6 +367,47 @@ jsval_t js_mkerr(struct js *js, const char *xx, ...) {
   }
   js->errmsg[sizeof(js->errmsg) - 1] = '\0';
   js->pos = js->clen, js->tok = TOK_EOF, js->consumed = 0;
+  return mkval(T_ERR, 0);
+}
+
+static jsval_t js_throw(struct js *js, jsval_t value) {
+  int line = 0, col = 0;
+  get_line_col(js->code, js->toff > 0 ? js->toff : js->pos, &line, &col);
+  
+  size_t n = 0;
+  if (vtype(value) == T_STR) {
+    jsoff_t slen, off = vstr(js, value, &slen);
+    n = (size_t) snprintf(js->errmsg, sizeof(js->errmsg), "Uncaught: %.*s\n", (int)slen, (char *)&js->mem[off]);
+  } else {
+    const char *str = js_str(js, value);
+    n = (size_t) snprintf(js->errmsg, sizeof(js->errmsg), "Uncaught: %s\n", str);
+  }
+  
+  size_t remaining = sizeof(js->errmsg) - n;
+  if (remaining > 20) {
+    if (js->filename) {
+      n += (size_t) snprintf(js->errmsg + n, remaining, "  at %s:%d:%d\n", js->filename, line, col);
+    } else {
+      n += (size_t) snprintf(js->errmsg + n, remaining, "  at <eval>:%d:%d\n", line, col);
+    }
+  }
+  
+  remaining = sizeof(js->errmsg) - n;
+  for (int i = global_call_stack.depth - 1; i >= 0 && remaining > 20; i--) {
+    call_frame_t *frame = &global_call_stack.frames[i];
+    const char *fname = frame->function_name ? frame->function_name : "<anonymous>";
+    const char *file = frame->filename ? frame->filename : "<eval>";
+    
+    size_t added = (size_t) snprintf(js->errmsg + n, remaining, "  at %s (%s:%d:%d)\n", fname, file, frame->line, frame->col);
+    n += added;
+    remaining = sizeof(js->errmsg) - n;
+  }
+  
+  js->errmsg[sizeof(js->errmsg) - 1] = '\0';
+  js->flags |= F_THROW;
+  js->pos = js->clen;
+  js->tok = TOK_EOF;
+  js->consumed = 0;
   return mkval(T_ERR, 0);
 }
 
@@ -750,6 +806,30 @@ static inline jsval_t peek_this() {
   return js_mkundef();
 }
 
+static inline bool push_call_frame(const char *filename, const char *function_name, int line, int col) {
+  if (global_call_stack.depth >= global_call_stack.capacity) {
+    int new_capacity = global_call_stack.capacity == 0 ? 32 : global_call_stack.capacity * 2;
+    call_frame_t *new_stack = (call_frame_t *) realloc(global_call_stack.frames, new_capacity * sizeof(call_frame_t));
+    if (!new_stack) return false;
+    global_call_stack.frames = new_stack;
+    global_call_stack.capacity = new_capacity;
+  }
+  
+  global_call_stack.frames[global_call_stack.depth].filename = filename;
+  global_call_stack.frames[global_call_stack.depth].function_name = function_name;
+  global_call_stack.frames[global_call_stack.depth].line = line;
+  global_call_stack.frames[global_call_stack.depth].col = col;
+  global_call_stack.depth++;
+  
+  return true;
+}
+
+static inline void pop_call_frame() {
+  if (global_call_stack.depth > 0) {
+    global_call_stack.depth--;
+  }
+}
+
 static jsval_t js_block(struct js *js, bool create_scope) {
   jsval_t res = js_mkundef();
   if (create_scope) mkscope(js);
@@ -762,7 +842,7 @@ static jsval_t js_block(struct js *js, bool create_scope) {
       res = js_mkerr(js, "; expected");
       break;
     }
-    if (js->flags & F_RETURN) break;
+    if (js->flags & (F_RETURN | F_THROW)) break;
   }
   if (create_scope) delscope(js);
   return res;
@@ -1308,8 +1388,28 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
       if (fnlen == 16 && memcmp(code_str, "__builtin_Object", 16) == 0) {
         res = call_c(js, builtin_Object);
       } else {
+        int call_line = 0, call_col = 0;
+        get_line_col(code, pos, &call_line, &call_col);
+        
+        const char *func_name = NULL;
+        jsoff_t name_off = lkp(js, func_obj, "name", 4);
+        if (name_off != 0) {
+          jsval_t name_val = resolveprop(js, mkval(T_PROP, name_off));
+          if (vtype(name_val) == T_STR) {
+            jsoff_t name_len, name_offset = vstr(js, name_val, &name_len);
+            func_name = (const char *)&js->mem[name_offset];
+          }
+        }
+        
+        push_call_frame(js->filename, func_name ? func_name : "<anonymous>", call_line, call_col);
+        
+        jsval_t saved_func = js->current_func;
+        js->current_func = func;
         js->nogc = (jsoff_t) (fnoff - sizeof(jsoff_t));
         res = call_js(js, code_str, fnlen, closure_scope);
+        js->current_func = saved_func;
+        
+        pop_call_frame();
         if (is_async && !is_err(res)) {
           jsval_t promise_args[] = { res };
           res = builtin_Promise_resolve(js, promise_args, 1);
@@ -3325,10 +3425,25 @@ static jsval_t js_stmt(struct js *js) {
     case TOK_CASE: case TOK_CATCH:
     case TOK_DEFAULT: case TOK_FINALLY:
     case TOK_SWITCH:
-    case TOK_THROW: case TOK_TRY:
+    case TOK_TRY:
     case TOK_WITH: case TOK_YIELD:
       res = js_mkerr(js, "'%.*s' not implemented", (int) js->tlen, js->code + js->toff);
       break;
+    case TOK_THROW: {
+      js->consumed = 1;
+      jsval_t throw_val = js_expr(js);
+      if (js->flags & F_NOEXEC) {
+        res = js_mkundef();
+      } else {
+        throw_val = resolveprop(js, throw_val);
+        if (is_err(throw_val)) {
+          res = throw_val;
+        } else {
+          res = js_throw(js, throw_val);
+        }
+      }
+      break;
+    }
     case TOK_VAR:
       if (!js->var_warning_shown) {
         fprintf(stderr, "Warning: 'var' is deprecated, use 'let' or 'const' instead\n");
