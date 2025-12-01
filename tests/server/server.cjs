@@ -2,7 +2,7 @@ const Radix3 = Ant.require('./radix3.cjs');
 const router = new Radix3();
 
 router.insert('/', c => {
-  return c.body(`Welcome to Ant HTTP Server with Radix3 Router!
+  return c.res.body(`Welcome to Ant HTTP Server with Radix3 Router!
 
 Available routes:
   GET /
@@ -16,31 +16,31 @@ Available routes:
 });
 
 router.insert('/hello', async c => {
-  return c.body('Hello, World!');
+  return c.res.body('Hello, World!');
 });
 
 router.insert('/status', async c => {
-  return c.body('Server is running with Radix3 router!');
+  return c.res.body('Server is running with Radix3 router!');
 });
 
 router.insert('/users/:id', async c => {
-  return c.body(`User ID: ${c.params.id}`);
+  return c.res.body(`User ID: ${c.params.id}`);
 });
 
 router.insert('/users/:id/posts', async c => {
-  return c.body(`Posts for user: ${c.params.id}`);
+  return c.res.body(`Posts for user: ${c.params.id}`);
 });
 
 router.insert('/api/v1/users', async c => {
-  return c.json({ users: null });
+  return c.res.json({ users: null });
 });
 
 router.insert('/api/v2/users', async c => {
-  return c.json({ users: [] });
+  return c.res.json({ users: [] });
 });
 
 router.insert('/files/*path', async c => {
-  return c.html(p.params.path);
+  return c.res.html(c.params.path);
 });
 
 router.printTree();
@@ -48,9 +48,12 @@ Ant.println('');
 
 async function handleRequest(req, res) {
   Ant.println('request:', req.method, req.uri);
-
   const result = router.lookup(req.uri);
-  if (result?.handler) return result.handler(result.params);
+
+  if (result?.handler) {
+    const ctx = { req, res, params: result.params };
+    return result.handler(ctx);
+  }
 
   return res.body('not found: ' + req.uri, 404);
 }
