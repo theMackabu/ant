@@ -1519,6 +1519,41 @@ static jsval_t js_obj_literal(struct js *js) {
   return obj;
 }
 
+static bool parse_func_params(struct js *js, uint8_t *flags) {
+  for (bool comma = false; next(js) != TOK_EOF; comma = true) {
+    if (!comma && next(js) == TOK_RPAREN) break;
+    
+    bool is_rest = false;
+    if (next(js) == TOK_REST) {
+      is_rest = true;
+      js->consumed = 1;
+      next(js);
+    }
+    
+    if (next(js) != TOK_IDENTIFIER) {
+      if (flags) js->flags = *flags;
+      js_mkerr(js, "identifier expected");
+      return false;
+    }
+    js->consumed = 1;
+    
+    if (is_rest && next(js) != TOK_RPAREN) {
+      if (flags) js->flags = *flags;
+      js_mkerr(js, "rest parameter must be last");
+      return false;
+    }
+    if (next(js) == TOK_RPAREN) break;
+    
+    if (next(js) != TOK_COMMA) {
+      if (flags) js->flags = *flags;
+      js_mkerr(js, "parse error");
+      return false;
+    }
+    js->consumed = 1;
+  }
+  return true;
+}
+
 static jsval_t js_func_literal(struct js *js, bool is_async) {
   uint8_t flags = js->flags;
   js->consumed = 1;
@@ -1531,28 +1566,9 @@ static jsval_t js_func_literal(struct js *js, bool is_async) {
   
   EXPECT(TOK_LPAREN, js->flags = flags);
   jsoff_t pos = js->pos - 1;
-  for (bool comma = false; next(js) != TOK_EOF; comma = true) {
-    if (!comma && next(js) == TOK_RPAREN) break;
-    
-    bool is_rest = false;
-    if (next(js) == TOK_REST) {
-      is_rest = true;
-      js->consumed = 1;
-      next(js);
-    }
-    
-    if (next(js) != TOK_IDENTIFIER) {
-      js->flags = flags;
-      return js_mkerr(js, "identifier expected");
-    }
-    js->consumed = 1;
-    
-    if (is_rest && next(js) != TOK_RPAREN) {
-      js->flags = flags;
-      return js_mkerr(js, "rest parameter must be last");
-    }
-    if (next(js) == TOK_RPAREN) break;
-    EXPECT(TOK_COMMA, js->flags = flags);
+  if (!parse_func_params(js, &flags)) {
+    js->flags = flags;
+    return js_mkerr(js, "invalid parameters");
   }
   
   EXPECT(TOK_RPAREN, js->flags = flags);
@@ -2429,11 +2445,8 @@ static jsval_t js_func_decl_async(struct js *js) {
   js->consumed = 1;
   EXPECT(TOK_LPAREN, );
   jsoff_t pos = js->pos - 1;
-  for (bool comma = false; next(js) != TOK_EOF; comma = true) {
-    if (!comma && next(js) == TOK_RPAREN) break;
-    EXPECT(TOK_IDENTIFIER, );
-    if (next(js) == TOK_RPAREN) break;
-    EXPECT(TOK_COMMA, );
+  if (!parse_func_params(js, NULL)) {
+    return js_mkerr(js, "invalid parameters");
   }
   EXPECT(TOK_RPAREN, );
   EXPECT(TOK_LBRACE, );
