@@ -3735,6 +3735,7 @@ jsval_t js_mknum(double value) { return tov(value); }
 jsval_t js_mkobj(struct js *js) { return mkobj(js, 0); }
 jsval_t js_glob(struct js *js) { (void) js; return mkval(T_OBJ, 0); }
 jsval_t js_mkfun(jsval_t (*fn)(struct js *, jsval_t *, int)) { return mkval(T_CFUNC, (size_t) (void *) fn); }
+jsval_t js_getthis(struct js *js) { return js->this_val; }
 
 void js_set(struct js *js, jsval_t obj, const char *key, jsval_t val) {
   if (vtype(obj) == T_OBJ) {

@@ -35,10 +35,12 @@ jsval_t js_mktrue(void);
 jsval_t js_mkfalse(void);
 jsval_t js_mknum(double);
 
+jsval_t js_getthis(struct js *);
+jsval_t js_get(struct js *, jsval_t, const char *);
+
 jsval_t js_mkobj(struct js *);
 jsval_t js_mkstr(struct js *, const void *, size_t);
 jsval_t js_mkerr(struct js *js, const char *fmt, ...);
-jsval_t js_get(struct js *, jsval_t, const char *);
 jsval_t js_mkfun(jsval_t (*fn)(struct js *, jsval_t *, int));
 jsval_t js_call(struct js *js, jsval_t func, jsval_t *args, int nargs);
 

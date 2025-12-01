@@ -8,6 +8,13 @@
 #include "modules/timer.h"
 
 typedef struct {
+  int status;
+  char *body;
+  char *content_type;
+  int sent;
+} response_ctx_t;
+
+typedef struct {
   struct js *js;
   jsval_t handler;
   int port;
@@ -59,6 +66,101 @@ static jsval_t wait_for_promise(struct js *js, jsval_t promise_val) {
   return promise_val;
 }
 
+static jsval_t res_status(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkundef();
+  
+  jsval_t this_val = js_getthis(js);
+  jsval_t ctx_val = js_get(js, this_val, "__response_ctx");
+  if (js_type(ctx_val) != JS_NUM) return js_mkundef();
+  
+  response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
+  if (!ctx) return js_mkundef();
+  
+  if (js_type(args[0]) == JS_NUM) {
+    ctx->status = (int)js_getnum(args[0]);
+  }
+  
+  return js_mkundef();
+}
+
+static jsval_t res_body(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkundef();
+  
+  jsval_t this_val = js_getthis(js);
+  jsval_t ctx_val = js_get(js, this_val, "__response_ctx");
+  if (js_type(ctx_val) != JS_NUM) return js_mkundef();
+  
+  response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
+  if (!ctx) return js_mkundef();
+  
+  if (js_type(args[0]) == JS_STR) {
+    ctx->body = js_getstr(js, args[0], NULL);
+  }
+  
+  if (nargs >= 2 && js_type(args[1]) == JS_NUM) {
+    ctx->status = (int)js_getnum(args[1]);
+  }
+  
+  if (nargs >= 3 && js_type(args[2]) == JS_STR) {
+    ctx->content_type = js_getstr(js, args[2], NULL);
+  } else {
+    ctx->content_type = "text/plain";
+  }
+  
+  ctx->sent = 1;
+  
+  return js_mkundef();
+}
+
+static jsval_t res_html(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkundef();
+  
+  jsval_t this_val = js_getthis(js);
+  jsval_t ctx_val = js_get(js, this_val, "__response_ctx");
+  if (js_type(ctx_val) != JS_NUM) return js_mkundef();
+  
+  response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
+  if (!ctx) return js_mkundef();
+  
+  if (js_type(args[0]) == JS_STR) {
+    ctx->body = js_getstr(js, args[0], NULL);
+  }
+  
+  if (nargs >= 2 && js_type(args[1]) == JS_NUM) {
+    ctx->status = (int)js_getnum(args[1]);
+  }
+  
+  ctx->content_type = "text/html";
+  ctx->sent = 1;
+  
+  return js_mkundef();
+}
+
+static jsval_t res_json(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkundef();
+  
+  jsval_t this_val = js_getthis(js);
+  jsval_t ctx_val = js_get(js, this_val, "__response_ctx");
+  if (js_type(ctx_val) != JS_NUM) return js_mkundef();
+  
+  response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
+  if (!ctx) return js_mkundef();
+  
+  const char *json_str = js_str(js, args[0]);
+  if (json_str) {
+    ctx->body = (char *)json_str;
+  }
+  
+  if (nargs >= 2 && js_type(args[1]) == JS_NUM) {
+    ctx->status = (int)js_getnum(args[1]);
+  }
+  
+  ctx->content_type = "application/json";
+  ctx->sent = 1;
+  
+  return js_mkundef();
+}
+
 static void http_handler(struct mg_connection *c, int ev, void *ev_data) {
   if (ev == MG_EV_HTTP_MSG) {
     http_server_t *server = (http_server_t *)c->fn_data;
@@ -71,6 +173,13 @@ static void http_handler(struct mg_connection *c, int ev, void *ev_data) {
     
     jsval_t result = js_mkundef();
     
+    response_ctx_t res_ctx = {
+      .status = 200,
+      .body = "",
+      .content_type = "text/plain",
+      .sent = 0
+    };
+    
     if (server->handler != 0 && js_type(server->handler) != JS_UNDEF) {
       jsval_t req = js_mkobj(server->js);
       js_set(server->js, req, "method", js_mkstr(server->js, hm->method.buf, hm->method.len));
@@ -79,35 +188,32 @@ static void http_handler(struct mg_connection *c, int ev, void *ev_data) {
       js_set(server->js, req, "body", js_mkstr(server->js, hm->body.buf, hm->body.len));
       
       jsval_t res_obj = js_mkobj(server->js);
+      js_set(server->js, res_obj, "__response_ctx", js_mknum((unsigned long)&res_ctx));
+      js_set(server->js, res_obj, "status", js_mkfun(res_status));
+      js_set(server->js, res_obj, "body", js_mkfun(res_body));
+      js_set(server->js, res_obj, "html", js_mkfun(res_html));
+      js_set(server->js, res_obj, "json", js_mkfun(res_json));
+      
       jsval_t args[2] = {req, res_obj};
       
       result = js_call(server->js, server->handler, args, 2);
       result = wait_for_promise(server->js, result);
+      
+      if (res_ctx.sent) {
+        char headers[256];
+        snprintf(headers, sizeof(headers), "Content-Type: %s\r\n", 
+                 res_ctx.content_type ? res_ctx.content_type : "text/plain");
+        mg_http_reply(c, res_ctx.status, headers, "%s", res_ctx.body ? res_ctx.body : "");
+        return;
+      }
     }
     
+    // If we get here, no response was sent
     if (js_type(result) == JS_ERR) {
       fprintf(stderr, "Handler error: %s\n", js_str(server->js, result));
       mg_http_reply(c, 500, "Content-Type: text/plain\r\n", "Internal Server Error");
-    } else if (js_type(result) == JS_STR) {
-      char *response = js_getstr(server->js, result, NULL);
-      mg_http_reply(c, 200, "Content-Type: text/plain\r\n", "%s", response ? response : "");
-    } else if (js_type(result) == JS_PRIV) {
-      jsval_t status_val = js_get(server->js, result, "status");
-      jsval_t body_val = js_get(server->js, result, "body");
-      
-      int status = 200;
-      if (js_type(status_val) == JS_NUM) {
-        status = (int)js_getnum(status_val);
-      }
-      
-      char *body_str = "";
-      if (js_type(body_val) == JS_STR) {
-        body_str = js_getstr(server->js, body_val, NULL);
-      }
-      
-      mg_http_reply(c, status, "Content-Type: text/plain\r\n", "%s", body_str ? body_str : "");
     } else {
-      mg_http_reply(c, 200, "Content-Type: text/plain\r\n", "Hello from Ant HTTP Server!");
+      mg_http_reply(c, 404, "Content-Type: text/plain\r\n", "Not Found");
     }
   }
 }
