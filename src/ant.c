@@ -3998,17 +3998,56 @@ jsval_t js_call(struct js *js, jsval_t func, jsval_t *args, int nargs) {
     js->flags = saved_flags;
     int arg_idx = 0;
     
+    bool has_rest = false;
+    jsoff_t rest_param_start = 0, rest_param_len = 0;
+    
     while (fnpos < fnlen) {
       fnpos = skiptonext(fn, fnlen, fnpos);
       if (fnpos < fnlen && fn[fnpos] == ')') break;
+      
+      bool is_rest = false;
+      if (fnpos + 3 < fnlen && fn[fnpos] == '.' && fn[fnpos + 1] == '.' && fn[fnpos + 2] == '.') {
+        is_rest = true;
+        has_rest = true;
+        fnpos += 3;
+        fnpos = skiptonext(fn, fnlen, fnpos);
+      }
+      
       jsoff_t identlen = 0;
       uint8_t tok = parseident(&fn[fnpos], fnlen - fnpos, &identlen);
       if (tok != TOK_IDENTIFIER) break;
+      
+      if (is_rest) {
+        rest_param_start = fnpos;
+        rest_param_len = identlen;
+        fnpos = skiptonext(fn, fnlen, fnpos + identlen);
+        break;
+      }
+      
       jsval_t v = arg_idx < nargs ? args[arg_idx] : js_mkundef();
       setprop(js, js->scope, js_mkstr(js, &fn[fnpos], identlen), v);
       arg_idx++;
       fnpos = skiptonext(fn, fnlen, fnpos + identlen);
       if (fnpos < fnlen && fn[fnpos] == ',') fnpos++;
+    }
+    
+    if (has_rest && rest_param_len > 0) {
+      jsval_t rest_array = mkarr(js);
+      if (!is_err(rest_array)) {
+        jsoff_t idx = 0;
+        while (arg_idx < nargs) {
+          char idxstr[16];
+          snprintf(idxstr, sizeof(idxstr), "%u", (unsigned) idx);
+          jsval_t key = js_mkstr(js, idxstr, strlen(idxstr));
+          setprop(js, rest_array, key, args[arg_idx]);
+          idx++;
+          arg_idx++;
+        }
+        jsval_t len_key = js_mkstr(js, "length", 6);
+        setprop(js, rest_array, len_key, tov((double) idx));
+        rest_array = mkval(T_ARR, vdata(rest_array));
+        setprop(js, js->scope, js_mkstr(js, &fn[rest_param_start], rest_param_len), rest_array);
+      }
     }
     
     if (fnpos < fnlen && fn[fnpos] == ')') fnpos++;
