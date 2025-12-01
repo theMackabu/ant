@@ -5,6 +5,7 @@
 
 #include "mongoose.h"
 #include "modules/server.h"
+#include "modules/timer.h"
 
 typedef struct {
   struct js *js;
@@ -25,6 +26,37 @@ static void server_signal_handler(int signum) {
   }
   
   exit(0);
+}
+
+static jsval_t wait_for_promise(struct js *js, jsval_t promise_val) {
+  if (js_type(promise_val) != JS_PRIV) return promise_val;
+  
+  jsval_t state_check = js_get(js, promise_val, "__state");
+  if (js_type(state_check) == JS_UNDEF) return promise_val;
+  
+  while (has_pending_microtasks()) {
+    process_microtasks(js);
+    
+    jsval_t state_val = js_get(js, promise_val, "__state");
+    if (js_type(state_val) == JS_NUM) {
+      int state = (int)js_getnum(state_val);
+      if (state != 0) {
+        jsval_t value_val = js_get(js, promise_val, "__value");
+        return value_val;
+      }
+    }
+  }
+  
+  jsval_t state_val = js_get(js, promise_val, "__state");
+  if (js_type(state_val) == JS_NUM) {
+    int state = (int)js_getnum(state_val);
+    if (state != 0) {
+      jsval_t value_val = js_get(js, promise_val, "__value");
+      return value_val;
+    }
+  }
+  
+  return promise_val;
 }
 
 static void http_handler(struct mg_connection *c, int ev, void *ev_data) {
@@ -50,6 +82,7 @@ static void http_handler(struct mg_connection *c, int ev, void *ev_data) {
       jsval_t args[2] = {req, res_obj};
       
       result = js_call(server->js, server->handler, args, 2);
+      result = wait_for_promise(server->js, result);
     }
     
     if (js_type(result) == JS_ERR) {

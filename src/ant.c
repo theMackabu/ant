@@ -1390,7 +1390,11 @@ static jsval_t js_obj_literal(struct js *js) {
   
   while (next(js) != TOK_RBRACE) {
     jsval_t key = 0;
+    jsoff_t id_off = 0, id_len = 0;
+    
     if (js->tok == TOK_IDENTIFIER) {
+      id_off = js->toff;
+      id_len = js->tlen;
       if (exe) key = js_mkstr(js, js->code + js->toff, js->tlen);
     } else if (js->tok == TOK_STRING) {
       if (exe) key = js_str_literal(js);
@@ -1398,14 +1402,29 @@ static jsval_t js_obj_literal(struct js *js) {
       return js_mkerr(js, "parse error");
     }
     js->consumed = 1;
-    EXPECT(TOK_COLON, );
-    jsval_t val = js_expr(js);
-    if (exe) {
-      if (is_err(val)) return val;
-      if (is_err(key)) return key;
-      jsval_t res = setprop(js, obj, key, resolveprop(js, val));
-      if (is_err(res)) return res;
+    
+    // Check for shorthand property syntax
+    if (id_len > 0 && (next(js) == TOK_COMMA || next(js) == TOK_RBRACE)) {
+      // Shorthand: { handler, params } means { handler: handler, params: params }
+      jsval_t val = lookup(js, js->code + id_off, id_len);
+      if (exe) {
+        if (is_err(val)) return val;
+        if (is_err(key)) return key;
+        jsval_t res = setprop(js, obj, key, resolveprop(js, val));
+        if (is_err(res)) return res;
+      }
+    } else {
+      // Normal syntax: { key: value }
+      EXPECT(TOK_COLON, );
+      jsval_t val = js_expr(js);
+      if (exe) {
+        if (is_err(val)) return val;
+        if (is_err(key)) return key;
+        jsval_t res = setprop(js, obj, key, resolveprop(js, val));
+        if (is_err(res)) return res;
+      }
     }
+    
     if (next(js) == TOK_RBRACE) break;
     EXPECT(TOK_COMMA, );
   }
@@ -2122,22 +2141,91 @@ static jsval_t js_decl(struct js *js, bool is_const) {
   uint8_t exe = !(js->flags & F_NOEXEC);
   js->consumed = 1;
   for (;;) {
-    EXPECT(TOK_IDENTIFIER, );
-    js->consumed = 0;
-    jsoff_t noff = js->toff, nlen = js->tlen;
-    char *name = (char *) &js->code[noff];
-    jsval_t v = js_mkundef();
-    js->consumed = 1;
-    if (next(js) == TOK_ASSIGN) {
+    // Check for object destructuring pattern { a, b } or { handler, params }
+    if (next(js) == TOK_LBRACE) {
       js->consumed = 1;
-      v = js_expr(js);
-      if (is_err(v)) return v;
+      
+      // Parse destructuring pattern
+      typedef struct { jsoff_t name_off; jsoff_t name_len; } PropName;
+      PropName props[32];
+      int prop_count = 0;
+      
+      while (next(js) != TOK_RBRACE && next(js) != TOK_EOF && prop_count < 32) {
+        EXPECT(TOK_IDENTIFIER, );
+        props[prop_count].name_off = js->toff;
+        props[prop_count].name_len = js->tlen;
+        prop_count++;
+        js->consumed = 1;
+        
+        // Skip colon and alias if present (e.g., { handler: h })
+        if (next(js) == TOK_COLON) {
+          js->consumed = 1;
+          EXPECT(TOK_IDENTIFIER, );
+          js->consumed = 1;
+        }
+        
+        if (next(js) == TOK_RBRACE) break;
+        EXPECT(TOK_COMMA, );
+      }
+      
+      EXPECT(TOK_RBRACE, );
+      
+      // Expect assignment
+      jsval_t v = js_mkundef();
+      if (next(js) == TOK_ASSIGN) {
+        js->consumed = 1;
+        v = js_expr(js);
+        if (is_err(v)) return v;
+      } else {
+        return js_mkerr(js, "destructuring requires assignment");
+      }
+      
+      // Extract properties from the object
+      if (exe) {
+        jsval_t obj = resolveprop(js, v);
+        if (vtype(obj) != T_OBJ && vtype(obj) != T_ARR) {
+          return js_mkerr(js, "cannot destructure non-object");
+        }
+        
+        for (int i = 0; i < prop_count; i++) {
+          const char *prop_name = &js->code[props[i].name_off];
+          jsoff_t prop_len = props[i].name_len;
+          
+          if (lkp(js, js->scope, prop_name, prop_len) > 0) {
+            return js_mkerr(js, "'%.*s' already declared", (int) prop_len, prop_name);
+          }
+          
+          jsoff_t prop_off = lkp(js, obj, prop_name, prop_len);
+          jsval_t prop_val = js_mkundef();
+          
+          if (prop_off > 0) {
+            prop_val = resolveprop(js, mkval(T_PROP, prop_off));
+          }
+          
+          jsval_t x = mkprop(js, js->scope, js_mkstr(js, prop_name, prop_len), prop_val, is_const);
+          if (is_err(x)) return x;
+        }
+      }
+    } else {
+      // Regular identifier declaration
+      EXPECT(TOK_IDENTIFIER, );
+      js->consumed = 0;
+      jsoff_t noff = js->toff, nlen = js->tlen;
+      char *name = (char *) &js->code[noff];
+      jsval_t v = js_mkundef();
+      js->consumed = 1;
+      if (next(js) == TOK_ASSIGN) {
+        js->consumed = 1;
+        v = js_expr(js);
+        if (is_err(v)) return v;
+      }
+      if (exe) {
+        if (lkp(js, js->scope, name, nlen) > 0) return js_mkerr(js, "'%.*s' already declared", (int) nlen, name);
+        jsval_t x = mkprop(js, js->scope, js_mkstr(js, name, nlen), resolveprop(js, v), is_const);
+        if (is_err(x)) return x;
+      }
     }
-    if (exe) {
-      if (lkp(js, js->scope, name, nlen) > 0) return js_mkerr(js, "'%.*s' already declared", (int) nlen, name);
-      jsval_t x = mkprop(js, js->scope, js_mkstr(js, name, nlen), resolveprop(js, v), is_const);
-      if (is_err(x)) return x;
-    }
+    
     if (next(js) == TOK_SEMICOLON || next(js) == TOK_EOF) break;
     EXPECT(TOK_COMMA, );
   }

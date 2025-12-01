@@ -19,46 +19,46 @@ Available routes:
   };
 });
 
-router.insert('/hello', () => {
+router.insert('/hello', async () => {
   return { status: 200, body: 'Hello, World!' };
 });
 
-router.insert('/status', () => {
+router.insert('/status', async () => {
   return { status: 200, body: 'Server is running with Radix3 router!' };
 });
 
-router.insert('/echo', () => {
+router.insert('/echo', async () => {
   return { status: 200, body: 'Echo endpoint - returns request details' };
 });
 
-router.insert('/users/:id', p => {
+router.insert('/users/:id', async p => {
   return { status: 200, body: 'User ID: ' + p.id };
 });
 
-router.insert('/users/:id/posts', () => {
+router.insert('/users/:id/posts', async () => {
   return { status: 200, body: 'Posts for user: ' + p.id };
 });
 
-router.insert('/api/v1/users', () => {
+router.insert('/api/v1/users', async () => {
   return { status: 200, body: 'API v1 users endpoint' };
 });
 
-router.insert('/api/v2/users', () => {
+router.insert('/api/v2/users', async () => {
   return { status: 200, body: 'API v2 users endpoint' };
 });
 
-router.insert('/files/*path', () => {
+router.insert('/files/*path', async () => {
   return { status: 200, body: 'File path: ' + p.path };
 });
 
 router.printTree();
 Ant.println('');
 
-function handleRequest(req, _res) {
+async function handleRequest(req, _res) {
   Ant.println('request:', req.method, req.uri);
 
-  let result = router.lookup(req.uri);
-  if (result !== undefined) return result;
+  const { handler, params } = router.lookup(req.uri);
+  handler(params);
 
   return { status: 404, body: 'Not Found: ' + req.uri };
 }
