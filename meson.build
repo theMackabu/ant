@@ -19,8 +19,9 @@ sources = files(
 # system dependencies
 libsodium_dep = dependency('libsodium', required: true)
 
-# subprojects
+# dependencies
 curl_dep = subproject('curl').get_variable('curl_dep')
+yyjson_dep = subproject('yyjson').get_variable('yyjson_dep')
 uuidv7_dep = subproject('uuidv7').get_variable('uuidv7_dep')
 mongoose_dep = subproject('mongoose').get_variable('mongoose_dep')
 argtable3_dep = subproject('argtable3').get_variable('argtable3_dep')
@@ -40,7 +41,7 @@ endif
 build_date = run_command('date', '+%Y-%m-%d', check: true).stdout().strip()
 
 version_conf = configuration_data()
-version_conf.set('ANT_VERSION', '0.0.5.36')
+version_conf.set('ANT_VERSION', '0.0.5.37')
 version_conf.set('ANT_GIT_HASH', git_hash)
 version_conf.set('ANT_BUILD_DATE', build_date)
 
@@ -59,6 +60,7 @@ executable(
   include_directories: [include, build_include],
   dependencies: [
     curl_dep,
+    yyjson_dep,
     uuidv7_dep,
     mongoose_dep,
     argtable3_dep,

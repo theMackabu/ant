@@ -15,6 +15,7 @@
 #include "modules/crypto.h"
 #include "modules/server.h"
 #include "modules/timer.h"
+#include "modules/json.h"
 
 static struct {
   char *path;
@@ -240,6 +241,8 @@ int main(int argc, char *argv[]) {
   struct ant_runtime *rt = ant_runtime_init(js);
   
   init_console_module();
+  init_json_module();
+  
   init_crypto_module(js, rt->ant_obj);
   init_timer_module(js, rt->ant_obj);
   

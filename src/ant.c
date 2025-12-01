@@ -5083,6 +5083,50 @@ jsval_t js_call(struct js *js, jsval_t func, jsval_t *args, int nargs) {
   return js_mkerr(js, "not a function");
 }
 
+js_prop_iter_t js_prop_iter_begin(struct js *js, jsval_t obj) {
+  js_prop_iter_t iter = {0};
+  iter.obj = obj;
+  iter.js_internal = (void *)js;
+  
+  if (vtype(obj) == T_OBJ || vtype(obj) == T_ARR || vtype(obj) == T_FUNC) {
+    jsval_t check_obj = (vtype(obj) == T_FUNC) ? mkval(T_OBJ, vdata(obj)) : obj;
+    jsoff_t next = loadoff(js, (jsoff_t) vdata(check_obj)) & ~(3U | CONSTMASK);
+    iter.current = (void *)(uintptr_t)next;
+  }
+  
+  return iter;
+}
+
+bool js_prop_iter_next(js_prop_iter_t *iter, const char **key, size_t *key_len, jsval_t *value) {
+  if (!iter || !iter->js_internal) return false;
+  
+  struct js *js = (struct js *)iter->js_internal;
+  jsoff_t next = (jsoff_t)(uintptr_t)iter->current;
+  
+  if (next >= js->brk || next == 0) return false;
+  
+  jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
+  jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
+  
+  if (key) {
+    jsoff_t klen = offtolen(loadoff(js, koff));
+    *key = (const char *) &js->mem[koff + sizeof(koff)];
+    if (key_len) *key_len = klen;
+  }
+  
+  if (value) *value = val;
+  
+  iter->current = (void *)(uintptr_t)(loadoff(js, next) & ~(3U | CONSTMASK));
+  return true;
+}
+
+void js_prop_iter_end(js_prop_iter_t *iter) {
+  if (iter) {
+    iter->current = NULL;
+    iter->js_internal = NULL;
+  }
+}
+
 #ifdef JS_DUMP
 void js_dump(struct js *js) {
   jsoff_t off = 0, v;

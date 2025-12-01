@@ -6,6 +6,7 @@
 #include "mongoose.h"
 #include "modules/server.h"
 #include "modules/timer.h"
+#include "ant.h"
 
 typedef struct {
   int status;
