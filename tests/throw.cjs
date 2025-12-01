@@ -1,5 +1,12 @@
+class Meow extends Error {
+  constructor() {
+    super('meow');
+    this.name = 'MeowError';
+  }
+}
+
 function meow() {
-  throw 'meow';
+  throw new Meow();
 }
 
 meow();

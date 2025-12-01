@@ -157,6 +157,7 @@ static jsval_t builtin_array_pop(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_array_slice(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_array_join(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_array_includes(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Error(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_indexOf(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_substring(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_split(struct js *js, jsval_t *args, int nargs);
@@ -378,6 +379,40 @@ static jsval_t js_throw(struct js *js, jsval_t value) {
   if (vtype(value) == T_STR) {
     jsoff_t slen, off = vstr(js, value, &slen);
     n = (size_t) snprintf(js->errmsg, sizeof(js->errmsg), "Uncaught: %.*s\n", (int)slen, (char *)&js->mem[off]);
+  } else if (vtype(value) == T_OBJ) {
+    jsoff_t name_off = lkp(js, value, "name", 4);
+    jsoff_t msg_off = lkp(js, value, "message", 7);
+    
+    const char *name_str = NULL;
+    const char *msg_str = NULL;
+    jsoff_t name_len = 0, msg_len = 0;
+    
+    if (name_off > 0) {
+      jsval_t name_val = resolveprop(js, mkval(T_PROP, name_off));
+      if (vtype(name_val) == T_STR) {
+        jsoff_t off = vstr(js, name_val, &name_len);
+        name_str = (const char *)&js->mem[off];
+      }
+    }
+    
+    if (msg_off > 0) {
+      jsval_t msg_val = resolveprop(js, mkval(T_PROP, msg_off));
+      if (vtype(msg_val) == T_STR) {
+        jsoff_t off = vstr(js, msg_val, &msg_len);
+        msg_str = (const char *)&js->mem[off];
+      }
+    }
+    
+    if (name_str && msg_str) {
+      n = (size_t) snprintf(js->errmsg, sizeof(js->errmsg), "Uncaught %.*s: %.*s\n", (int)name_len, name_str, (int)msg_len, msg_str);
+    } else if (name_str) {
+      n = (size_t) snprintf(js->errmsg, sizeof(js->errmsg), "Uncaught %.*s\n", (int)name_len, name_str);
+    } else if (msg_str) {
+      n = (size_t) snprintf(js->errmsg, sizeof(js->errmsg), "Uncaught: %.*s\n", (int)msg_len, msg_str);
+    } else {
+      const char *str = js_str(js, value);
+      n = (size_t) snprintf(js->errmsg, sizeof(js->errmsg), "Uncaught: %s\n", str);
+    }
   } else {
     const char *str = js_str(js, value);
     n = (size_t) snprintf(js->errmsg, sizeof(js->errmsg), "Uncaught: %s\n", str);
@@ -3333,6 +3368,16 @@ static jsval_t js_class_decl(struct js *js) {
   js->consumed = 0;
   
   if (exe) {
+    jsval_t super_constructor = js_mkundef();
+    if (super_len > 0) {
+      jsval_t super_val = lookup(js, &js->code[super_off], super_len);
+      if (is_err(super_val)) return super_val;
+      super_constructor = resolveprop(js, super_val);
+      if (vtype(super_constructor) != T_FUNC && vtype(super_constructor) != T_CFUNC) {
+        return js_mkerr(js, "super class must be a constructor");
+      }
+    }
+    
     jsoff_t wrapper_size = 256;
     if (constructor_body_start > 0) {
       wrapper_size += constructor_body_end - constructor_body_start;
@@ -3399,10 +3444,20 @@ static jsval_t js_class_decl(struct js *js) {
     if (is_err(code_key)) return code_key;
     jsval_t res2 = setprop(js, func_obj, code_key, code_str);
     if (is_err(res2)) return res2;
+    jsval_t func_scope = mkobj(js, (jsoff_t) vdata(js->scope));
+    
+    if (super_len > 0) {
+      jsval_t super_key = js_mkstr(js, "super", 5);
+      if (is_err(super_key)) return super_key;
+      jsval_t res_super = setprop(js, func_scope, super_key, super_constructor);
+      if (is_err(res_super)) return res_super;
+    }
+    
     jsval_t scope_key = js_mkstr(js, "__scope", 7);
     if (is_err(scope_key)) return scope_key;
-    jsval_t res3 = setprop(js, func_obj, scope_key, js->scope);
+    jsval_t res3 = setprop(js, func_obj, scope_key, func_scope);
     if (is_err(res3)) return res3;
+    
     jsval_t constructor = mkval(T_FUNC, (unsigned long) vdata(func_obj));
     if (lkp(js, js->scope, class_name, class_name_len) > 0) {
       return js_mkerr(js, "'%.*s' already declared", (int) class_name_len, class_name);
@@ -3411,8 +3466,6 @@ static jsval_t js_class_decl(struct js *js) {
     if (is_err(x)) return x;
   }
   
-  (void) super_off;
-  (void) super_len;
   (void) class_body_start;
   return js_mkundef();
 }
@@ -3542,6 +3595,34 @@ static jsval_t builtin_Array(struct js *js, jsval_t *args, int nargs) {
   }
   
   return mkval(T_ARR, vdata(arr));
+}
+
+static jsval_t builtin_Error(struct js *js, jsval_t *args, int nargs) {
+  jsval_t err_obj = js->this_val;
+  bool use_this = (vtype(err_obj) == T_OBJ);
+  
+  if (!use_this) {
+    err_obj = mkobj(js, 0);
+  }
+  
+  jsval_t message = js_mkstr(js, "", 0);
+  if (nargs > 0) {
+    if (vtype(args[0]) == T_STR) {
+      message = args[0];
+    } else {
+      const char *str = js_str(js, args[0]);
+      message = js_mkstr(js, str, strlen(str));
+    }
+  }
+  
+  jsval_t message_key = js_mkstr(js, "message", 7);
+  setprop(js, err_obj, message_key, message);
+  
+  jsval_t name_key = js_mkstr(js, "name", 4);
+  jsval_t name_val = js_mkstr(js, "Error", 5);
+  setprop(js, err_obj, name_key, name_val);
+  
+  return err_obj;
 }
 
 static jsval_t builtin_object_keys(struct js *js, jsval_t *args, int nargs) {
@@ -4495,6 +4576,7 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, glob, js_mkstr(js, "Number", 6), js_mkfun(builtin_Number));
   setprop(js, glob, js_mkstr(js, "Boolean", 7), js_mkfun(builtin_Boolean));
   setprop(js, glob, js_mkstr(js, "Array", 5), js_mkfun(builtin_Array));
+  setprop(js, glob, js_mkstr(js, "Error", 5), js_mkfun(builtin_Error));
   
   jsval_t p_proto = js_mkobj(js);
   setprop(js, p_proto, js_mkstr(js, "then", 4), js_mkfun(builtin_promise_then));
