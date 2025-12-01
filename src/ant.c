@@ -2486,6 +2486,22 @@ static jsval_t js_unary(struct js *js) {
     jsval_t p_obj = mkval(T_OBJ, vdata(resolved));
     jsoff_t state_off = lkp(js, p_obj, "__state", 7);
     if (state_off == 0) return js_mkerr(js, "invalid promise state");
+    
+    int max_iterations = 10000;
+    int iterations = 0;
+    while (iterations < max_iterations) {
+      int state = (int)tod(resolveprop(js, mkval(T_PROP, state_off)));
+      if (state != 0) break;
+      if (!has_pending_microtasks()) break;
+
+      process_microtasks(js);
+      iterations++;
+      
+      if (js->flags & F_THROW) return mkval(T_ERR, 0);
+      state = (int)tod(resolveprop(js, mkval(T_PROP, state_off)));
+      if (state != 0) break;
+    }
+    
     int state = (int)tod(resolveprop(js, mkval(T_PROP, state_off)));
     jsoff_t val_off = lkp(js, p_obj, "__value", 7);
     if (val_off == 0) return js_mkerr(js, "invalid promise value");
@@ -2495,7 +2511,7 @@ static jsval_t js_unary(struct js *js) {
     } else if (state == 2) {
       return js_mkerr(js, "await: promise rejected");
     } else {
-      return js_mkerr(js, "await: promise not resolved");
+      return js_mkerr(js, "await: promise not resolved after processing microtasks");
     }
   } else if (next(js) == TOK_NOT || js->tok == TOK_TILDA || js->tok == TOK_TYPEOF ||
       js->tok == TOK_VOID || js->tok == TOK_MINUS || js->tok == TOK_PLUS) {
@@ -4891,6 +4907,7 @@ jsval_t js_mkobj(struct js *js) { return mkobj(js, 0); }
 jsval_t js_glob(struct js *js) { (void) js; return mkval(T_OBJ, 0); }
 jsval_t js_mkfun(jsval_t (*fn)(struct js *, jsval_t *, int)) { return mkval(T_CFUNC, (size_t) (void *) fn); }
 jsval_t js_getthis(struct js *js) { return js->this_val; }
+jsval_t js_getcurrentfunc(struct js *js) { return js->current_func; }
 
 void js_set(struct js *js, jsval_t obj, const char *key, jsval_t val) {
   if (vtype(obj) == T_OBJ) {
@@ -5128,6 +5145,11 @@ void js_prop_iter_end(js_prop_iter_t *iter) {
     iter->js_internal = NULL;
   }
 }
+
+jsval_t js_mkpromise(struct js *js) { return mkpromise(js); }
+
+void js_resolve_promise(struct js *js, jsval_t promise, jsval_t value) { resolve_promise(js, promise, value); }
+void js_reject_promise(struct js *js, jsval_t promise, jsval_t value) { reject_promise(js, promise, value); }
 
 #ifdef JS_DUMP
 void js_dump(struct js *js) {

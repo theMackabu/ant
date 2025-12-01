@@ -16,6 +16,7 @@
 #include "modules/server.h"
 #include "modules/timer.h"
 #include "modules/json.h"
+#include "modules/fetch.h"
 
 static struct {
   char *path;
@@ -242,6 +243,7 @@ int main(int argc, char *argv[]) {
   
   init_console_module();
   init_json_module();
+  init_fetch_module();
   
   init_crypto_module(js, rt->ant_obj);
   init_timer_module(js, rt->ant_obj);

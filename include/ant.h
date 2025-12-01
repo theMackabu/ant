@@ -36,6 +36,7 @@ jsval_t js_mkfalse(void);
 jsval_t js_mknum(double);
 
 jsval_t js_getthis(struct js *);
+jsval_t js_getcurrentfunc(struct js *);
 jsval_t js_get(struct js *, jsval_t, const char *);
 
 jsval_t js_mkobj(struct js *);
@@ -62,3 +63,7 @@ typedef struct {
 js_prop_iter_t js_prop_iter_begin(struct js *js, jsval_t obj);
 bool js_prop_iter_next(js_prop_iter_t *iter, const char **key, size_t *key_len, jsval_t *value);
 void js_prop_iter_end(js_prop_iter_t *iter);
+
+jsval_t js_mkpromise(struct js *js);
+void js_resolve_promise(struct js *js, jsval_t promise, jsval_t value);
+void js_reject_promise(struct js *js, jsval_t promise, jsval_t value);
