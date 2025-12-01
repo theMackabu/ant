@@ -15,6 +15,14 @@
 
 typedef uint32_t jsoff_t;
 
+typedef struct {
+  jsval_t *stack;
+  int depth;
+  int capacity;
+} this_stack_t;
+
+static this_stack_t global_this_stack = {NULL, 0, 0};
+
 struct js {
   jsoff_t css;            // max observed C stack size
   jsoff_t lwm;            // JS ram low watermark: min free ram observed
@@ -36,8 +44,7 @@ struct js {
   jsoff_t nogc;           // entity offset to exclude from GC
   jsval_t tval;           // holds last parsed numeric or string literal value
   jsval_t scope;          // current scope
-  jsval_t this_val;       // 'this' value for method calls
-  jsval_t caller_this;    // saved 'this' from caller during function call
+  jsval_t this_val;       // 'this' value for currently executing function
   uint8_t *mem;           // available JS memory
   jsoff_t size;           // memory size
   jsoff_t brk;            // current mem usage boundary
@@ -712,6 +719,32 @@ void js_delscope(struct js *js) {
 static void mkscope(struct js *js) { js_mkscope(js); }
 static void delscope(struct js *js) { js_delscope(js); }
 
+static inline bool push_this(jsval_t this_value) {
+  if (global_this_stack.depth >= global_this_stack.capacity) {
+    int new_capacity = global_this_stack.capacity == 0 ? 16 : global_this_stack.capacity * 2;
+    jsval_t *new_stack = (jsval_t *) realloc(global_this_stack.stack, new_capacity * sizeof(jsval_t));
+    if (!new_stack) return false;
+    global_this_stack.stack = new_stack;
+    global_this_stack.capacity = new_capacity;
+  }
+  global_this_stack.stack[global_this_stack.depth++] = this_value;
+  return true;
+}
+
+static inline jsval_t pop_this() {
+  if (global_this_stack.depth > 0) {
+    return global_this_stack.stack[--global_this_stack.depth];
+  }
+  return js_mkundef();
+}
+
+static inline jsval_t peek_this() {
+  if (global_this_stack.depth > 0) {
+    return global_this_stack.stack[global_this_stack.depth - 1];
+  }
+  return js_mkundef();
+}
+
 static jsval_t js_block(struct js *js, bool create_scope) {
   jsval_t res = js_mkundef();
   if (create_scope) mkscope(js);
@@ -994,7 +1027,7 @@ static void reverse(jsval_t *args, int nargs) {
 static jsval_t call_c(struct js *js,
   jsval_t (*fn)(struct js *, jsval_t *, int)) {
   int argc = 0;
-  jsval_t saved_caller_this = js->caller_this;
+  jsval_t target_this = peek_this();
   
   while (js->pos < js->clen) {
     if (next(js) == TOK_RPAREN) break;
@@ -1007,11 +1040,10 @@ static jsval_t call_c(struct js *js,
   }
   
   jsval_t saved_this = js->this_val;
-  js->this_val = saved_caller_this;
+  js->this_val = target_this;
   reverse((jsval_t *) &js->mem[js->size], argc);
   jsval_t res = fn(js, (jsval_t *) &js->mem[js->size], argc);
   js->this_val = saved_this;
-  js->caller_this = saved_caller_this;
   setlwm(js);
   
   js->size += (jsoff_t) sizeof(jsval_t) * (jsoff_t) argc;
@@ -1021,6 +1053,7 @@ static jsval_t call_c(struct js *js,
 static jsval_t call_js(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope) {
   jsoff_t fnpos = 1;
   jsval_t saved_scope = js->scope;
+  jsval_t target_this = peek_this();
   jsoff_t parent_scope_offset;
   
   if (vtype(closure_scope) == T_OBJ) {
@@ -1051,7 +1084,7 @@ static jsval_t call_js(struct js *js, const char *fn, jsoff_t fnlen, jsval_t clo
   fnpos = skiptonext(fn, fnlen, fnpos);
   if (fnpos < fnlen && fn[fnpos] == '{') fnpos++;
   size_t n = fnlen - fnpos - 1U;
-  js->this_val = js->caller_this;
+  js->this_val = target_this;
   js->flags = F_CALL;
   
   jsval_t res = js_eval(js, &fn[fnpos], n);
@@ -1852,13 +1885,15 @@ static jsval_t js_call_dot(struct js *js) {
       js->consumed = 1;
       res = do_op(js, TOK_BRACKET, res, idx);
     } else {
-      jsval_t params = js_call_params(js);
-      if (is_err(params)) return params;
       jsval_t func_this = (vtype(obj) != T_UNDEF) ? obj : js->this_val;
-      jsval_t saved_this = js->this_val;
-      js->caller_this = func_this;
+      push_this(func_this);
+      jsval_t params = js_call_params(js);
+      if (is_err(params)) {
+        pop_this();
+        return params;
+      }
       res = do_op(js, TOK_CALL, res, params);
-      js->this_val = saved_this;
+      pop_this();
       obj = js_mkundef();
     }
   }
@@ -2548,11 +2583,16 @@ static jsval_t js_class_decl(struct js *js) {
   uint8_t save_flags = js->flags;
   js->flags |= F_NOEXEC;
   
-  typedef struct { jsoff_t name_off, name_len, fn_start, fn_end; } MethodInfo;
+  typedef struct { jsoff_t name_off, name_len, fn_start, fn_end; bool is_async; } MethodInfo;
   MethodInfo methods[32];
   int method_count = 0;
   
   while (next(js) != TOK_RBRACE && next(js) != TOK_EOF && method_count < 32) {
+    bool is_async_method = false;
+    if (next(js) == TOK_ASYNC) {
+      is_async_method = true;
+      js->consumed = 1;
+    }
     EXPECT(TOK_IDENTIFIER, js->flags = save_flags);
     jsoff_t method_name_off = js->toff, method_name_len = js->tlen;
     js->consumed = 1;
@@ -2585,6 +2625,7 @@ static jsval_t js_class_decl(struct js *js) {
       methods[method_count].name_len = method_name_len;
       methods[method_count].fn_start = method_params_start;
       methods[method_count].fn_end = method_body_end;
+      methods[method_count].is_async = is_async_method;
       method_count++;
     }
     js->consumed = 1;
@@ -2639,6 +2680,10 @@ static jsval_t js_class_decl(struct js *js) {
       memcpy(wrapper + wp, &js->code[methods[i].name_off], methods[i].name_len);
       wp += methods[i].name_len;
       wrapper[wp++] = '=';
+      if (methods[i].is_async) {
+        memcpy(wrapper + wp, "async ", 6);
+        wp += 6;
+      }
       memcpy(wrapper + wp, "function", 8);
       wp += 8;
       jsoff_t mlen = methods[i].fn_end - methods[i].fn_start;
@@ -3691,7 +3736,6 @@ struct js *js_create(void *buf, size_t len) {
   js->lwm = js->size;
   js->gct = js->size / 2;
   js->this_val = js->scope;
-  js->caller_this = js->scope;
   
   jsval_t glob = js->scope;
   jsval_t obj_func_obj = mkobj(js, 0);
@@ -3881,10 +3925,15 @@ jsval_t js_call(struct js *js, jsval_t func, jsval_t *args, int nargs) {
     
     if (fnpos < fnlen && fn[fnpos] == '{') fnpos++;
     size_t body_len = fnlen - fnpos - 1;
+    
+    jsval_t saved_this = js->this_val;
+    js->this_val = js_glob(js);
+    
     js->flags = F_CALL;
     jsval_t res = js_eval(js, &fn[fnpos], body_len);
-    
     if (!is_err(res) && !(js->flags & F_RETURN)) res = js_mkundef();
+    
+    js->this_val = saved_this;
     delscope(js);
     
     return res;
