@@ -58,7 +58,7 @@ async function handleRequest(req, _res) {
   Ant.println('request:', req.method, req.uri);
 
   const { handler, params } = router.lookup(req.uri);
-  handler(params);
+  if (handler) return handler(params);
 
   return { status: 404, body: 'Not Found: ' + req.uri };
 }

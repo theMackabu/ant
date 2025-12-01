@@ -118,7 +118,7 @@ class Radix3 {
     const params = {};
     const handler = this.matchPath(this.root, path, 0, params);
 
-    if (!handler) return {};
+    if (!handler) return undefined;
     return { handler, params };
   }
 

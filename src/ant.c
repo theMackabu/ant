@@ -97,7 +97,7 @@ static bool is_alpha(int c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <=
 static bool is_ident_begin(int c) { return c == '_' || c == '$' || is_alpha(c); }
 static bool is_ident_continue(int c) { return c == '_' || c == '$' || is_alpha(c) || is_digit(c); }
 static bool is_err(jsval_t v) { return vtype(v) == T_ERR; }
-static bool is_unary(uint8_t tok) { return tok >= TOK_POSTINC && tok <= TOK_UMINUS; }
+static bool is_unary(uint8_t tok) { return (tok >= TOK_POSTINC && tok <= TOK_UMINUS) || tok == TOK_NOT || tok == TOK_TILDA || tok == TOK_TYPEOF || tok == TOK_VOID; }
 static bool is_assign(uint8_t tok) { return (tok >= TOK_ASSIGN && tok <= TOK_OR_ASSIGN); }
 static void saveoff(struct js *js, jsoff_t off, jsoff_t val) { memcpy(&js->mem[off], &val, sizeof(val)); }
 static void saveval(struct js *js, jsoff_t off, jsval_t val) { memcpy(&js->mem[off], &val, sizeof(val)); }
@@ -1138,7 +1138,7 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
       if (vtype(lhs) != T_PROP) return js_mkerr(js, "bad lhs for --");
       do_assign_op(js, TOK_MINUS_ASSIGN, lhs, tov(1)); return l;
     }
-    case TOK_NOT:     if (vtype(r) == T_BOOL) return mkval(T_BOOL, !vdata(r)); break;
+    case TOK_NOT:     return mkval(T_BOOL, !js_truthy(js, r));
   }
   if (is_assign(op))    return do_assign_op(js, op, lhs, r);
   if (op == TOK_EQ || op == TOK_NE) {
@@ -1189,7 +1189,6 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
     case TOK_UMINUS:  return tov(-b);
     case TOK_UPLUS:   return r;
     case TOK_TILDA:   return tov((double)(~(long) b));
-    case TOK_NOT:     return mkval(T_BOOL, b == 0);
     case TOK_SHL:     return tov((double)((long) a << (long) b));
     case TOK_SHR:     return tov((double)((long) a >> (long) b));
     case TOK_DOT:     return do_dot_op(js, l, r);
