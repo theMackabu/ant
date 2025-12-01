@@ -239,14 +239,14 @@ int main(int argc, char *argv[]) {
   
   struct ant_runtime *rt = ant_runtime_init(js);
   
+  init_console_module();
   init_crypto_module(js, rt->ant_obj);
   init_timer_module(js, rt->ant_obj);
   
   js_set(js, rt->ant_obj, "serve", js_mkfun(js_serve));
-  js_set(js, rt->ant_obj, "println", js_mkfun(js_println));
   js_set(js, rt->ant_obj, "require", js_mkfun(js_require));
   js_set(js, rt->ant_obj, "signal", js_mkfun(js_signal));
-  
+
   jsval_t exports_obj = js_mkobj(js);
   js_set(js, rt->ant_obj, "exports", exports_obj);
 

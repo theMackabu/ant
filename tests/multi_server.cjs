@@ -14,9 +14,9 @@ function handler8001(req, res) {
   };
 }
 
-Ant.println("Starting multiple HTTP servers...");
+console.log("Starting multiple HTTP servers...");
 
 // Note: Currently Ant.serve() is blocking, so you can only run one server
 // In the future, we could make it non-blocking to support truly concurrent servers
-Ant.println("Starting server on port 8000...");
+console.log("Starting server on port 8000...");
 Ant.serve(8000, handler8000);

@@ -1,10 +1,10 @@
 // Test objects in if statements
 // Tests property access and truthiness evaluation
 
-Ant.println("=== Object in If Statements Test ===\n");
+console.log("=== Object in If Statements Test ===\n");
 
 // Test 1: Basic object property truthiness
-Ant.println("Test 1: Object property truthiness");
+console.log("Test 1: Object property truthiness");
 let thing = {
   hasThing: true,
   hasOther: false,
@@ -13,23 +13,23 @@ let thing = {
 };
 
 if (thing.hasThing) {
-  Ant.println("  thing.hasThing is truthy: PASS");
+  console.log("  thing.hasThing is truthy: PASS");
 }
 
 if (!thing.hasOther) {
-  Ant.println("  !thing.hasOther is falsy: PASS");
+  console.log("  !thing.hasOther is falsy: PASS");
 }
 
 if (thing.count) {
-  Ant.println("  thing.count (5) is truthy: PASS");
+  console.log("  thing.count (5) is truthy: PASS");
 }
 
 if (thing.name) {
-  Ant.println("  thing.name ('test') is truthy: PASS");
+  console.log("  thing.name ('test') is truthy: PASS");
 }
 
 // Test 2: Undefined and null properties
-Ant.println("\nTest 2: Undefined and null properties");
+console.log("\nTest 2: Undefined and null properties");
 let obj = {
   defined: "value",
   nullValue: null,
@@ -39,31 +39,31 @@ let obj = {
 };
 
 if (!obj.nonExistent) {
-  Ant.println("  !obj.nonExistent (undefined): PASS");
+  console.log("  !obj.nonExistent (undefined): PASS");
 }
 
 if (!obj.nullValue) {
-  Ant.println("  !obj.nullValue (null): PASS");
+  console.log("  !obj.nullValue (null): PASS");
 }
 
 if (!obj.undefinedValue) {
-  Ant.println("  !obj.undefinedValue (undefined): PASS");
+  console.log("  !obj.undefinedValue (undefined): PASS");
 }
 
 if (!obj.zeroValue) {
-  Ant.println("  !obj.zeroValue (0): PASS");
+  console.log("  !obj.zeroValue (0): PASS");
 }
 
 if (!obj.emptyString) {
-  Ant.println("  !obj.emptyString (''): PASS");
+  console.log("  !obj.emptyString (''): PASS");
 }
 
 if (obj.defined) {
-  Ant.println("  obj.defined ('value'): PASS");
+  console.log("  obj.defined ('value'): PASS");
 }
 
 // Test 3: Nested object properties
-Ant.println("\nTest 3: Nested object properties");
+console.log("\nTest 3: Nested object properties");
 let config = {
   settings: {
     enabled: true,
@@ -75,27 +75,27 @@ let config = {
 };
 
 if (config.settings) {
-  Ant.println("  config.settings exists: PASS");
+  console.log("  config.settings exists: PASS");
 }
 
 if (config.settings.enabled) {
-  Ant.println("  config.settings.enabled is true: PASS");
+  console.log("  config.settings.enabled is true: PASS");
 }
 
 if (!config.settings.disabled) {
-  Ant.println("  !config.settings.disabled is false: PASS");
+  console.log("  !config.settings.disabled is false: PASS");
 }
 
 if (config.settings.nested) {
-  Ant.println("  config.settings.nested exists: PASS");
+  console.log("  config.settings.nested exists: PASS");
 }
 
 if (config.settings.nested.deep) {
-  Ant.println("  config.settings.nested.deep has value: PASS");
+  console.log("  config.settings.nested.deep has value: PASS");
 }
 
 // Test 4: Function properties
-Ant.println("\nTest 4: Function properties");
+console.log("\nTest 4: Function properties");
 let api = {
   hasMethod: function() {
     return "called";
@@ -104,15 +104,15 @@ let api = {
 };
 
 if (api.hasMethod) {
-  Ant.println("  api.hasMethod exists:", api.hasMethod());
+  console.log("  api.hasMethod exists:", api.hasMethod());
 }
 
 if (!api.noMethod) {
-  Ant.println("  !api.noMethod is null: PASS");
+  console.log("  !api.noMethod is null: PASS");
 }
 
 // Test 5: Array properties
-Ant.println("\nTest 5: Array properties");
+console.log("\nTest 5: Array properties");
 let data = {
   items: [1, 2, 3],
   emptyItems: [],
@@ -120,19 +120,19 @@ let data = {
 };
 
 if (data.items) {
-  Ant.println("  data.items exists, length:", data.items.length);
+  console.log("  data.items exists, length:", data.items.length);
 }
 
 if (data.emptyItems) {
-  Ant.println("  data.emptyItems exists but empty, length:", data.emptyItems.length);
+  console.log("  data.emptyItems exists but empty, length:", data.emptyItems.length);
 }
 
 if (!data.noItems) {
-  Ant.println("  !data.noItems is null: PASS");
+  console.log("  !data.noItems is null: PASS");
 }
 
 // Test 6: Conditional checks with property access
-Ant.println("\nTest 6: Conditional property checks");
+console.log("\nTest 6: Conditional property checks");
 let user = {
   name: "John",
   age: 30,
@@ -140,49 +140,49 @@ let user = {
 };
 
 if (user.name && user.age) {
-  Ant.println("  user.name && user.age both exist: PASS");
+  console.log("  user.name && user.age both exist: PASS");
 }
 
 if (user.active && user.name) {
-  Ant.println("  user.active && user.name both truthy: PASS");
+  console.log("  user.active && user.name both truthy: PASS");
 }
 
 if (!user.deleted || user.active) {
-  Ant.println("  !user.deleted || user.active: PASS");
+  console.log("  !user.deleted || user.active: PASS");
 }
 
 // Test 7: Return based on object property
-Ant.println("\nTest 7: Return based on property");
+console.log("\nTest 7: Return based on property");
 function checkUser(user) {
   if (!user) return { error: "no user" };
   if (!user.name) return { error: "no name" };
   return { success: true, name: user.name };
 }
 
-Ant.println("  With null:", checkUser(null));
-Ant.println("  With no name:", checkUser({ age: 25 }));
-Ant.println("  With name:", checkUser({ name: "Alice" }));
+console.log("  With null:", checkUser(null));
+console.log("  With no name:", checkUser({ age: 25 }));
+console.log("  With name:", checkUser({ name: "Alice" }));
 
 // Test 8: Object itself as condition
-Ant.println("\nTest 8: Object as condition");
+console.log("\nTest 8: Object as condition");
 let obj1 = { value: 1 };
 let obj2 = null;
 let obj3 = undefined;
 
 if (obj1) {
-  Ant.println("  obj1 (object) is truthy: PASS");
+  console.log("  obj1 (object) is truthy: PASS");
 }
 
 if (!obj2) {
-  Ant.println("  !obj2 (null) is falsy: PASS");
+  console.log("  !obj2 (null) is falsy: PASS");
 }
 
 if (!obj3) {
-  Ant.println("  !obj3 (undefined) is falsy: PASS");
+  console.log("  !obj3 (undefined) is falsy: PASS");
 }
 
 // Test 9: Boolean properties in complex conditions
-Ant.println("\nTest 9: Complex boolean property checks");
+console.log("\nTest 9: Complex boolean property checks");
 let feature = {
   enabled: true,
   experimental: false,
@@ -191,19 +191,19 @@ let feature = {
 };
 
 if (feature.enabled && feature.beta) {
-  Ant.println("  enabled && beta: PASS");
+  console.log("  enabled && beta: PASS");
 }
 
 if (feature.enabled && !feature.stable) {
-  Ant.println("  enabled && !stable: PASS");
+  console.log("  enabled && !stable: PASS");
 }
 
 if (!feature.experimental && !feature.stable) {
-  Ant.println("  !experimental && !stable: PASS");
+  console.log("  !experimental && !stable: PASS");
 }
 
 // Test 10: Property chain with guard
-Ant.println("\nTest 10: Safe property access");
+console.log("\nTest 10: Safe property access");
 function getValue(obj) {
   if (!obj) return "no object";
   if (!obj.data) return "no data";
@@ -211,38 +211,38 @@ function getValue(obj) {
   return obj.data.value;
 }
 
-Ant.println("  With null:", getValue(null));
-Ant.println("  With no data:", getValue({}));
-Ant.println("  With no value:", getValue({ data: {} }));
-Ant.println("  With value:", getValue({ data: { value: "found" } }));
+console.log("  With null:", getValue(null));
+console.log("  With no data:", getValue({}));
+console.log("  With no value:", getValue({ data: {} }));
+console.log("  With value:", getValue({ data: { value: "found" } }));
 
 // Test 11: Optional chaining with undefined/null values
-Ant.println("\nTest 11: Optional chaining (?.)");
+console.log("\nTest 11: Optional chaining (?.)");
 const value = undefined;
 const nullValue = null;
 const obj11 = { nested: { deep: "value" } };
 
-Ant.println("  value?.thing (undefined):", value?.thing);
-Ant.println("  nullValue?.thing (null):", nullValue?.thing);
-Ant.println("  obj11?.nested?.deep:", obj11?.nested?.deep);
-Ant.println("  obj11?.missing?.deep:", obj11?.missing?.deep);
+console.log("  value?.thing (undefined):", value?.thing);
+console.log("  nullValue?.thing (null):", nullValue?.thing);
+console.log("  obj11?.nested?.deep:", obj11?.nested?.deep);
+console.log("  obj11?.missing?.deep:", obj11?.missing?.deep);
 
 if (value?.thing) {
-  Ant.println("    FAIL: value?.thing should be undefined");
+  console.log("    FAIL: value?.thing should be undefined");
 } else {
-  Ant.println("    value?.thing is falsy: PASS");
+  console.log("    value?.thing is falsy: PASS");
 }
 
 if (!nullValue?.thing) {
-  Ant.println("    !nullValue?.thing is falsy: PASS");
+  console.log("    !nullValue?.thing is falsy: PASS");
 }
 
 if (obj11?.nested?.deep) {
-  Ant.println("    obj11?.nested?.deep exists: PASS");
+  console.log("    obj11?.nested?.deep exists: PASS");
 }
 
 if (!obj11?.missing?.deep) {
-  Ant.println("    !obj11?.missing?.deep is falsy: PASS");
+  console.log("    !obj11?.missing?.deep is falsy: PASS");
 }
 
-Ant.println("\n=== All tests completed ===");
+console.log("\n=== All tests completed ===");

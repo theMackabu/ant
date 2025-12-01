@@ -9,7 +9,7 @@ struct ant_runtime {
   int crypto_initialized;
 };
 
-struct ant_runtime *ant_runtime(void);
+extern struct ant_runtime *const rt;
 struct ant_runtime *ant_runtime_init(struct js *js);
 
 #endif

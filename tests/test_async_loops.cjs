@@ -1,8 +1,8 @@
 // Test async/await with loops
-Ant.println('=== Async/Await with Loops Tests ===');
+console.log('=== Async/Await with Loops Tests ===');
 
 // Test 1: Await in for loop
-Ant.println('\nTest 1: Await in for loop');
+console.log('\nTest 1: Await in for loop');
 async function test1() {
   let sum = 0;
   for (let i = 0; i < 3; i = i + 1) {
@@ -11,10 +11,10 @@ async function test1() {
   }
   return sum;
 }
-test1().then(v => Ant.println('Test 1: ' + v));
+test1().then(v => console.log('Test 1: ' + v));
 
 // Test 2: Await in while loop
-Ant.println('\nTest 2: Await in while loop');
+console.log('\nTest 2: Await in while loop');
 async function test2() {
   let i = 0;
   let sum = 0;
@@ -25,10 +25,10 @@ async function test2() {
   }
   return sum;
 }
-test2().then(v => Ant.println('Test 2: ' + v));
+test2().then(v => console.log('Test 2: ' + v));
 
 // Test 3: Await in do-while loop
-Ant.println('\nTest 3: Await in do-while loop');
+console.log('\nTest 3: Await in do-while loop');
 async function test3() {
   let i = 0;
   let sum = 0;
@@ -39,10 +39,10 @@ async function test3() {
   } while (i < 3);
   return sum;
 }
-test3().then(v => Ant.println('Test 3: ' + v));
+test3().then(v => console.log('Test 3: ' + v));
 
 // Test 4: Multiple awaits in loop
-Ant.println('\nTest 4: Multiple awaits in loop');
+console.log('\nTest 4: Multiple awaits in loop');
 async function test4() {
   let result = 0;
   for (let i = 0; i < 2; i = i + 1) {
@@ -52,10 +52,10 @@ async function test4() {
   }
   return result;
 }
-test4().then(v => Ant.println('Test 4: ' + v));
+test4().then(v => console.log('Test 4: ' + v));
 
 // Test 5: Await with break
-Ant.println('\nTest 5: Await with break');
+console.log('\nTest 5: Await with break');
 async function test5() {
   let i = 0;
   while (i < 10) {
@@ -67,10 +67,10 @@ async function test5() {
   }
   return i;
 }
-test5().then(v => Ant.println('Test 5: ' + v));
+test5().then(v => console.log('Test 5: ' + v));
 
 // Test 6: Await with continue
-Ant.println('\nTest 6: Await with continue');
+console.log('\nTest 6: Await with continue');
 async function test6() {
   let sum = 0;
   for (let i = 0; i < 5; i = i + 1) {
@@ -82,10 +82,10 @@ async function test6() {
   }
   return sum;
 }
-test6().then(v => Ant.println('Test 6: ' + v));
+test6().then(v => console.log('Test 6: ' + v));
 
 // Test 7: Nested loops with await
-Ant.println('\nTest 7: Nested loops with await');
+console.log('\nTest 7: Nested loops with await');
 async function test7() {
   let count = 0;
   for (let i = 0; i < 2; i = i + 1) {
@@ -96,10 +96,10 @@ async function test7() {
   }
   return count;
 }
-test7().then(v => Ant.println('Test 7: ' + v));
+test7().then(v => console.log('Test 7: ' + v));
 
 // Test 8: While loop with async condition check
-Ant.println('\nTest 8: While loop awaiting values');
+console.log('\nTest 8: While loop awaiting values');
 async function test8() {
   let i = 0;
   let product = 1;
@@ -110,10 +110,10 @@ async function test8() {
   }
   return product;
 }
-test8().then(v => Ant.println('Test 8: ' + v));
+test8().then(v => console.log('Test 8: ' + v));
 
 // Test 9: Do-while with await and condition
-Ant.println('\nTest 9: Do-while with await');
+console.log('\nTest 9: Do-while with await');
 async function test9() {
   let count = 0;
   let val;
@@ -123,10 +123,10 @@ async function test9() {
   } while (val < 2);
   return count;
 }
-test9().then(v => Ant.println('Test 9: ' + v));
+test9().then(v => console.log('Test 9: ' + v));
 
 // Test 10: For loop building array with await
-Ant.println('\nTest 10: Building array with await in loop');
+console.log('\nTest 10: Building array with await in loop');
 async function test10() {
   const arr = [];
   for (let i = 0; i < 3; i = i + 1) {
@@ -135,6 +135,6 @@ async function test10() {
   }
   return arr[0] + arr[1] + arr[2];
 }
-test10().then(v => Ant.println('Test 10: ' + v));
+test10().then(v => console.log('Test 10: ' + v));
 
-Ant.println('\n=== All async loop tests initiated ===');
+console.log('\n=== All async loop tests initiated ===');

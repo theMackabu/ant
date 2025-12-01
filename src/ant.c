@@ -9,6 +9,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
+#include <time.h>
 
 #include "ant.h"
 #include "config.h"
@@ -178,6 +180,8 @@ static jsval_t builtin_Promise_try(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_promise_then(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_promise_catch(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_promise_finally(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Date(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Date_now(struct js *js, jsval_t *args, int nargs);
 
 static void setlwm(struct js *js) {
   jsoff_t n = 0, css = 0;
@@ -3673,6 +3677,50 @@ static jsval_t builtin_RegExp(struct js *js, jsval_t *args, int nargs) {
   return regexp_obj;
 }
 
+static jsval_t builtin_Date(struct js *js, jsval_t *args, int nargs) {
+  jsval_t date_obj = js->this_val;
+  bool use_this = (vtype(date_obj) == T_OBJ);
+  
+  if (!use_this) {
+    date_obj = mkobj(js, 0);
+  }
+  
+  double timestamp_ms;
+  
+  if (nargs == 0) {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    timestamp_ms = (double)tv.tv_sec * 1000.0 + (double)tv.tv_usec / 1000.0;
+  } else if (nargs == 1) {
+    if (vtype(args[0]) == T_NUM) {
+      timestamp_ms = tod(args[0]);
+    } else if (vtype(args[0]) == T_STR) {
+      timestamp_ms = 0;
+    } else {
+      timestamp_ms = 0;
+    }
+  } else {
+    timestamp_ms = 0;
+  }
+  
+  jsval_t time_key = js_mkstr(js, "__time", 6);
+  jsval_t time_val = tov(timestamp_ms);
+  setprop(js, date_obj, time_key, time_val);
+  
+  return date_obj;
+}
+
+static jsval_t builtin_Date_now(struct js *js, jsval_t *args, int nargs) {
+  (void) args;
+  (void) nargs;
+  
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  double timestamp_ms = (double)tv.tv_sec * 1000.0 + (double)tv.tv_usec / 1000.0;
+  
+  return tov(timestamp_ms);
+}
+
 static jsval_t builtin_object_keys(struct js *js, jsval_t *args, int nargs) {
   if (nargs == 0) return mkarr(js);
   jsval_t obj = args[0];
@@ -4715,6 +4763,11 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, glob, js_mkstr(js, "Array", 5), js_mkfun(builtin_Array));
   setprop(js, glob, js_mkstr(js, "Error", 5), js_mkfun(builtin_Error));
   setprop(js, glob, js_mkstr(js, "RegExp", 6), js_mkfun(builtin_RegExp));
+  
+  jsval_t date_ctor_obj = mkobj(js, 0);
+  setprop(js, date_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_Date));
+  setprop(js, date_ctor_obj, js_mkstr(js, "now", 3), js_mkfun(builtin_Date_now));
+  setprop(js, glob, js_mkstr(js, "Date", 4), mkval(T_FUNC, vdata(date_ctor_obj)));
   
   jsval_t p_proto = js_mkobj(js);
   setprop(js, p_proto, js_mkstr(js, "then", 4), js_mkfun(builtin_promise_then));

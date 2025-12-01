@@ -7,7 +7,7 @@ class DeepClass {
   }
   
   method1(func) {
-    Ant.println('method1: this.name = ' + this.name + ', depth = ' + this.depth);
+    console.log('method1: this.name = ' + this.name + ', depth = ' + this.depth);
     this.depth++;
     const result = func();
     this.depth--;
@@ -15,7 +15,7 @@ class DeepClass {
   }
   
   method2(func) {
-    Ant.println('method2: this.name = ' + this.name + ', depth = ' + this.depth);
+    console.log('method2: this.name = ' + this.name + ', depth = ' + this.depth);
     this.depth++;
     const result = func();
     this.depth--;
@@ -23,7 +23,7 @@ class DeepClass {
   }
   
   method3(func) {
-    Ant.println('method3: this.name = ' + this.name + ', depth = ' + this.depth);
+    console.log('method3: this.name = ' + this.name + ', depth = ' + this.depth);
     this.depth++;
     const result = func();
     this.depth--;
@@ -31,7 +31,7 @@ class DeepClass {
   }
   
   leaf() {
-    Ant.println('leaf: this.name = ' + this.name + ', depth = ' + this.depth);
+    console.log('leaf: this.name = ' + this.name + ', depth = ' + this.depth);
     return 'done';
   }
 }
@@ -47,7 +47,7 @@ function helper2() {
 const obj1 = new DeepClass('obj1');
 const obj2 = new DeepClass('obj2');
 
-Ant.println('=== Test 1: Deeply nested calls on same object ===');
+console.log('=== Test 1: Deeply nested calls on same object ===');
 obj1.method1(() => {
   return obj1.method2(() => {
     return obj1.method3(() => {
@@ -56,7 +56,7 @@ obj1.method1(() => {
   });
 });
 
-Ant.println('\n=== Test 2: Interleaved calls on different objects ===');
+console.log('\n=== Test 2: Interleaved calls on different objects ===');
 obj1.method1(() => {
   obj2.method1(() => {
     return obj2.leaf();
@@ -66,8 +66,8 @@ obj1.method1(() => {
   });
 });
 
-Ant.println('\n=== Test 3: With helper function calls in arguments ===');
+console.log('\n=== Test 3: With helper function calls in arguments ===');
 obj1.method1(() => helper1());
 obj2.method2(() => helper2());
 
-Ant.println('\n=== All deep nesting tests passed ===');
+console.log('\n=== All deep nesting tests passed ===');

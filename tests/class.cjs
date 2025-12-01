@@ -1,6 +1,6 @@
 // Test class keyword
 
-Ant.println("=== Testing class keyword ===");
+console.log("=== Testing class keyword ===");
 
 // Test 1: Simple class with constructor
 class Person {
@@ -11,8 +11,8 @@ class Person {
 }
 
 let person1 = new Person("Alice", 30);
-Ant.println(person1.name);  // "Alice"
-Ant.println(person1.age);   // 30
+console.log(person1.name);  // "Alice"
+console.log(person1.age);   // 30
 
 // Test 2: Class with methods
 class Calculator {
@@ -36,10 +36,10 @@ class Calculator {
 }
 
 let calc = new Calculator(10);
-Ant.println(calc.value);      // 10
-Ant.println(calc.add(5));     // 15
-Ant.println(calc.subtract(3)); // 12
-Ant.println(calc.getValue()); // 12
+console.log(calc.value);      // 10
+console.log(calc.add(5));     // 15
+console.log(calc.subtract(3)); // 12
+console.log(calc.getValue()); // 12
 
 // Test 3: Class without explicit constructor
 class Point {
@@ -55,9 +55,9 @@ class Point {
 
 let p = new Point();
 p.setCoords(3, 4);
-Ant.println(p.x);  // 3
-Ant.println(p.y);  // 4
-Ant.println(p.getDistance());  // 25
+console.log(p.x);  // 3
+console.log(p.y);  // 4
+console.log(p.getDistance());  // 25
 
 // Test 4: Multiple instances
 class Counter {
@@ -73,15 +73,15 @@ class Counter {
 
 let counter1 = new Counter(0);
 let counter2 = new Counter(10);
-Ant.println(counter1.increment());  // 1
-Ant.println(counter1.increment());  // 2
-Ant.println(counter2.increment());  // 11
-Ant.println(counter2.increment());  // 12
+console.log(counter1.increment());  // 1
+console.log(counter1.increment());  // 2
+console.log(counter2.increment());  // 11
+console.log(counter2.increment());  // 12
 
 // Test 5: Class instances are objects
 let person2 = new Person("Bob", 25);
-Ant.println(typeof person2);  // object
-Ant.println(person2 instanceof Object);  // true
+console.log(typeof person2);  // object
+console.log(person2 instanceof Object);  // true
 
 // Test 6: Modify instance properties
 class Rectangle {
@@ -96,16 +96,16 @@ class Rectangle {
 }
 
 let rect = new Rectangle(5, 10);
-Ant.println(rect.area());  // 50
+console.log(rect.area());  // 50
 rect.width = 8;
-Ant.println(rect.area());  // 80
+console.log(rect.area());  // 80
 
 // Test 7: Delete class instance properties
 let person3 = new Person("Charlie", 35);
-Ant.println(person3.name);  // "Charlie"
+console.log(person3.name);  // "Charlie"
 delete person3.name;
-Ant.println(person3.name);  // undefined
-Ant.println(person3.age);   // 35
+console.log(person3.name);  // undefined
+console.log(person3.age);   // 35
 
 // Test 8: Class with property management  
 class Store {
@@ -128,12 +128,12 @@ class Store {
 }
 
 let store = new Store();
-Ant.println(store.getItemCount());  // 0
+console.log(store.getItemCount());  // 0
 store.addItem("apple", 5);
 store.addItem("banana", 3);
-Ant.println(store.getItemCount());  // 2
+console.log(store.getItemCount());  // 2
 store.removeItem("apple");
-Ant.println(store.getItemCount());  // 1
+console.log(store.getItemCount());  // 1
 
 // Test 9: Method chaining
 class ChainableCounter {
@@ -158,7 +158,7 @@ class ChainableCounter {
 
 let chain = new ChainableCounter(5);
 let result = chain.add(3).multiply(2).get();
-Ant.println(result);  // 16
+console.log(result);  // 16
 
 // Test 10: Class with boolean properties
 class Feature {
@@ -181,10 +181,10 @@ class Feature {
 }
 
 let feature = new Feature("DarkMode");
-Ant.println(feature.isEnabled());  // false
+console.log(feature.isEnabled());  // false
 feature.enable();
-Ant.println(feature.isEnabled());  // true
+console.log(feature.isEnabled());  // true
 feature.disable();
-Ant.println(feature.isEnabled());  // false
+console.log(feature.isEnabled());  // false
 
-Ant.println("=== Class tests completed ===");
+console.log("=== Class tests completed ===");

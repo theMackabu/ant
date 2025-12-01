@@ -202,7 +202,7 @@ class Radix3 {
       line = `${line} :${node.paramName}`;
     }
 
-    Ant.println(line);
+    console.log(line);
 
     const childPrefix = `${prefix}${isLast ? '    ' : '│   '}`;
 
@@ -213,12 +213,12 @@ class Radix3 {
 
     if (node.paramChild !== undefined) {
       const isLastChild = node.wildcardChild === undefined;
-      Ant.println(`${childPrefix}${isLastChild ? '└─ ' : '├─ '}:${node.paramChild.paramName}`);
+      console.log(`${childPrefix}${isLastChild ? '└─ ' : '├─ '}:${node.paramChild.paramName}`);
       this.printNode(node.paramChild, `${childPrefix}${isLastChild ? '    ' : '│   '}`, true);
     }
 
     if (node.wildcardChild !== undefined) {
-      Ant.println(`${childPrefix}└─ *${node.wildcardChild.paramName}`);
+      console.log(`${childPrefix}└─ *${node.wildcardChild.paramName}`);
       this.printNode(node.wildcardChild, `${childPrefix}    `, true);
     }
   }

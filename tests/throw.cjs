@@ -10,4 +10,4 @@ function meow() {
 }
 
 meow();
-Ant.println('This should not print');
+console.log('This should not print');

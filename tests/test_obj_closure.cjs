@@ -7,4 +7,4 @@ let obj = {
     }
 };
 
-Ant.println(obj.method()); // Should print 100
+console.log(obj.method()); // Should print 100

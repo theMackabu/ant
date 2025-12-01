@@ -6,21 +6,21 @@ class TestClass {
   }
   
   methodThatReturnsPromise() {
-    Ant.println('methodThatReturnsPromise: this.name = ' + this.name);
+    console.log('methodThatReturnsPromise: this.name = ' + this.name);
     
     // Use regular function (not arrow) in .then()
     return Promise.resolve('value').then(function(val) {
       // In standard JS, 'this' would be undefined here
       // Let's see what Ant does
-      Ant.println('In .then() regular function:');
-      Ant.println('  typeof this: ' + typeof this);
-      Ant.println('  this: ' + this);
+      console.log('In .then() regular function:');
+      console.log('  typeof this: ' + typeof this);
+      console.log('  this: ' + this);
       
       // Try to access properties
       if (typeof this.name !== 'undefined') {
-        Ant.println('  this.name: ' + this.name);
+        console.log('  this.name: ' + this.name);
       } else {
-        Ant.println('  this.name is undefined');
+        console.log('  this.name is undefined');
       }
       
       return val;
@@ -31,14 +31,14 @@ class TestClass {
 const obj1 = new TestClass('Object1');
 const obj2 = new TestClass('Object2');
 
-Ant.println('=== Calling obj1.methodThatReturnsPromise() ===');
+console.log('=== Calling obj1.methodThatReturnsPromise() ===');
 obj1.methodThatReturnsPromise().then(function(result) {
-  Ant.println('Final result: ' + result);
+  console.log('Final result: ' + result);
 });
 
-Ant.println('\n=== Calling obj2.methodThatReturnsPromise() ===');
+console.log('\n=== Calling obj2.methodThatReturnsPromise() ===');
 obj2.methodThatReturnsPromise().then(function(result) {
-  Ant.println('Final result: ' + result);
+  console.log('Final result: ' + result);
 });
 
-Ant.println('\n=== Tests queued ===');
+console.log('\n=== Tests queued ===');

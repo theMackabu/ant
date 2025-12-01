@@ -16,5 +16,5 @@ class MyClass {
 }
 
 let obj = new MyClass();
-Ant.println(obj.getX());   // Should print 100
-Ant.println(obj.getSum()); // Should print 110
+console.log(obj.getX());   // Should print 100
+console.log(obj.getSum()); // Should print 110

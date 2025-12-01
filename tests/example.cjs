@@ -4,19 +4,19 @@ const stuff = Ant.require('./stuff.cjs');
 const value = math.mul(2, 3);
 const result = math.add(value, 3);
 
-Ant.println(this);
-Ant.println();
+console.log(this);
+console.log();
 
 function main() {
-  Ant.println(result);
-  Ant.println(math.PI);
-  Ant.println(stuff.test());
+  console.log(result);
+  console.log(math.PI);
+  console.log(stuff.test());
 
-  Ant.println(Ant.__dirname);
-  Ant.println(typeof result);
+  console.log(Ant.__dirname);
+  console.log(typeof result);
 
-  Ant.println(value instanceof Number);
-  Ant.println(String(123));
+  console.log(value instanceof Number);
+  console.log(String(123));
 }
 
 void main();

@@ -11,4 +11,4 @@ function nanoid(size) {
   return id;
 }
 
-Ant.println(nanoid(21));
+console.log(nanoid(21));

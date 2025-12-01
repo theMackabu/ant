@@ -36,5 +36,5 @@ function generateUUID() {
   );
 }
 
-Ant.println('builtin:', Ant.Crypto.randomUUID());
-Ant.println('engine:', generateUUID());
+console.log('builtin:', Ant.Crypto.randomUUID());
+console.log('engine:', generateUUID());

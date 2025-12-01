@@ -2,7 +2,7 @@
 
 // Define a request handler
 function handleRequest(req, res) {
-  Ant.println("Received request:", req.method, req.uri);
+  console.log("Received request:", req.method, req.uri);
   
   // Return a response object
   return {
@@ -12,5 +12,5 @@ function handleRequest(req, res) {
 }
 
 // Start the server on port 8000
-Ant.println("Starting HTTP server...");
+console.log("Starting HTTP server...");
 Ant.serve(8000, handleRequest);

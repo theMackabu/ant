@@ -9,4 +9,4 @@ let result;
         };
     }
 }
-Ant.println(result()); // Should print 15
+console.log(result()); // Should print 15

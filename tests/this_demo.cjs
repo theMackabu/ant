@@ -1,6 +1,6 @@
 // Demonstration of 'this' keyword and 'new' operator
 
-Ant.println("=== Constructor Functions with 'new' and 'this' ===\n");
+console.log("=== Constructor Functions with 'new' and 'this' ===\n");
 
 // Basic constructor function
 function Person(name, age) {
@@ -12,26 +12,26 @@ function Person(name, age) {
 }
 
 // Create instances using 'new'
-Ant.println("Creating person1 with new Person('Alice', 30)");
+console.log("Creating person1 with new Person('Alice', 30)");
 let person1 = new Person("Alice", 30);
-Ant.println("person1.name:", person1.name);
-Ant.println("person1.age:", person1.age);
-Ant.println("person1.greet():", person1.greet());
-Ant.println();
+console.log("person1.name:", person1.name);
+console.log("person1.age:", person1.age);
+console.log("person1.greet():", person1.greet());
+console.log();
 
-Ant.println("Creating person2 with new Person('Bob', 25)");
+console.log("Creating person2 with new Person('Bob', 25)");
 let person2 = new Person("Bob", 25);
-Ant.println("person2.name:", person2.name);
-Ant.println("person2.age:", person2.age);
-Ant.println("person2.greet():", person2.greet());
-Ant.println();
+console.log("person2.name:", person2.name);
+console.log("person2.age:", person2.age);
+console.log("person2.greet():", person2.greet());
+console.log();
 
 // Each instance has its own 'this' context
-Ant.println("=== Independent 'this' contexts ===");
-Ant.println("person1.name:", person1.name);
-Ant.println("person2.name:", person2.name);
-Ant.println("They are different instances with independent 'this' values");
-Ant.println();
+console.log("=== Independent 'this' contexts ===");
+console.log("person1.name:", person1.name);
+console.log("person2.name:", person2.name);
+console.log("They are different instances with independent 'this' values");
+console.log();
 
 // Constructor with methods that use 'this'
 function Counter(start) {
@@ -49,30 +49,30 @@ function Counter(start) {
   };
 }
 
-Ant.println("=== Counter Example ===");
+console.log("=== Counter Example ===");
 let counter = new Counter(10);
-Ant.println("Initial value:", counter.getValue());
-Ant.println("After increment:", counter.increment());
-Ant.println("After increment:", counter.increment());
-Ant.println("After decrement:", counter.decrement());
-Ant.println("Final value:", counter.getValue());
-Ant.println();
+console.log("Initial value:", counter.getValue());
+console.log("After increment:", counter.increment());
+console.log("After increment:", counter.increment());
+console.log("After decrement:", counter.decrement());
+console.log("Final value:", counter.getValue());
+console.log();
 
 // Multiple counters with independent state
-Ant.println("=== Multiple Independent Counters ===");
+console.log("=== Multiple Independent Counters ===");
 let counter1 = new Counter(0);
 let counter2 = new Counter(100);
 
-Ant.println("counter1 initial:", counter1.getValue());
-Ant.println("counter2 initial:", counter2.getValue());
+console.log("counter1 initial:", counter1.getValue());
+console.log("counter2 initial:", counter2.getValue());
 
 counter1.increment();
 counter1.increment();
 counter2.decrement();
 
-Ant.println("counter1 after 2 increments:", counter1.getValue());
-Ant.println("counter2 after 1 decrement:", counter2.getValue());
-Ant.println();
+console.log("counter1 after 2 increments:", counter1.getValue());
+console.log("counter2 after 1 decrement:", counter2.getValue());
+console.log();
 
 // Constructor with computed properties
 function Rectangle(width, height) {
@@ -86,22 +86,22 @@ function Rectangle(width, height) {
   };
 }
 
-Ant.println("=== Rectangle Example ===");
+console.log("=== Rectangle Example ===");
 let rect1 = new Rectangle(5, 10);
-Ant.println("Rectangle 5x10:");
-Ant.println("  Width:", rect1.width);
-Ant.println("  Height:", rect1.height);
-Ant.println("  Area:", rect1.area());
-Ant.println("  Perimeter:", rect1.perimeter());
-Ant.println();
+console.log("Rectangle 5x10:");
+console.log("  Width:", rect1.width);
+console.log("  Height:", rect1.height);
+console.log("  Area:", rect1.area());
+console.log("  Perimeter:", rect1.perimeter());
+console.log();
 
 let rect2 = new Rectangle(3, 7);
-Ant.println("Rectangle 3x7:");
-Ant.println("  Width:", rect2.width);
-Ant.println("  Height:", rect2.height);
-Ant.println("  Area:", rect2.area());
-Ant.println("  Perimeter:", rect2.perimeter());
-Ant.println();
+console.log("Rectangle 3x7:");
+console.log("  Width:", rect2.width);
+console.log("  Height:", rect2.height);
+console.log("  Area:", rect2.area());
+console.log("  Perimeter:", rect2.perimeter());
+console.log();
 
 // 'this' refers to the object being constructed
 function Car(make, model, year) {
@@ -113,13 +113,13 @@ function Car(make, model, year) {
   };
 }
 
-Ant.println("=== Car Example ===");
+console.log("=== Car Example ===");
 let car1 = new Car("Toyota", "Camry", 2020);
 let car2 = new Car("Honda", "Civic", 2021);
 
-Ant.println("car1:", car1.displayInfo());
-Ant.println("car2:", car2.displayInfo());
-Ant.println();
+console.log("car1:", car1.displayInfo());
+console.log("car2:", car2.displayInfo());
+console.log();
 
 // 'this' in nested functions
 function Account(owner, balance) {
@@ -141,25 +141,25 @@ function Account(owner, balance) {
   };
 }
 
-Ant.println("=== Bank Account Example ===");
+console.log("=== Bank Account Example ===");
 let account1 = new Account("Alice", 1000);
-Ant.println("Initial:", account1.getInfo());
+console.log("Initial:", account1.getInfo());
 
 account1.deposit(500);
-Ant.println("After deposit 500:", account1.getInfo());
+console.log("After deposit 500:", account1.getInfo());
 
 account1.withdraw(200);
-Ant.println("After withdraw 200:", account1.getInfo());
-Ant.println();
+console.log("After withdraw 200:", account1.getInfo());
+console.log();
 
 // Multiple accounts
 let account2 = new Account("Bob", 2000);
-Ant.println("account1:", account1.getInfo());
-Ant.println("account2:", account2.getInfo());
-Ant.println();
+console.log("account1:", account1.getInfo());
+console.log("account2:", account2.getInfo());
+console.log();
 
-Ant.println("=== Summary ===");
-Ant.println("- 'new' creates a new object");
-Ant.println("- 'this' inside constructor refers to the new object");
-Ant.println("- Each instance has its own 'this' context");
-Ant.println("- Methods can access and modify 'this' properties");
+console.log("=== Summary ===");
+console.log("- 'new' creates a new object");
+console.log("- 'this' inside constructor refers to the new object");
+console.log("- Each instance has its own 'this' context");
+console.log("- Methods can access and modify 'this' properties");

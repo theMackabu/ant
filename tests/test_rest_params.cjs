@@ -9,8 +9,8 @@ function sum(...numbers) {
     return total;
 }
 
-Ant.println("Test 1 - Basic rest params:");
-Ant.println(sum(1, 2, 3, 4, 5)); // Should print 15
+console.log("Test 1 - Basic rest params:");
+console.log(sum(1, 2, 3, 4, 5)); // Should print 15
 
 // Test 2: Rest parameter with regular parameters
 function greet(greeting, ...names) {
@@ -21,24 +21,24 @@ function greet(greeting, ...names) {
     return result;
 }
 
-Ant.println("\nTest 2 - Rest params with regular params:");
-Ant.println(greet("Hello", "Alice", "Bob", "Charlie")); // Should print "Hello Alice Bob Charlie"
+console.log("\nTest 2 - Rest params with regular params:");
+console.log(greet("Hello", "Alice", "Bob", "Charlie")); // Should print "Hello Alice Bob Charlie"
 
 // Test 3: Rest parameter with no arguments passed
 function noArgs(...args) {
     return args.length;
 }
 
-Ant.println("\nTest 3 - Rest params with no args:");
-Ant.println(noArgs()); // Should print 0
+console.log("\nTest 3 - Rest params with no args:");
+console.log(noArgs()); // Should print 0
 
 // Test 4: Rest parameter with single argument
 function singleArg(...args) {
     return args[0];
 }
 
-Ant.println("\nTest 4 - Rest params with single arg:");
-Ant.println(singleArg(42)); // Should print 42
+console.log("\nTest 4 - Rest params with single arg:");
+console.log(singleArg(42)); // Should print 42
 
 // Test 5: Arrow function with rest parameters
 const multiply = (...factors) => {
@@ -49,8 +49,8 @@ const multiply = (...factors) => {
     return result;
 };
 
-Ant.println("\nTest 5 - Arrow function with rest params:");
-Ant.println(multiply(2, 3, 4)); // Should print 24
+console.log("\nTest 5 - Arrow function with rest params:");
+console.log(multiply(2, 3, 4)); // Should print 24
 
 // Test 6: Multiple regular params with rest
 function compute(operation, initial, ...values) {
@@ -68,14 +68,14 @@ function compute(operation, initial, ...values) {
     return result;
 }
 
-Ant.println("\nTest 6 - Multiple params with rest:");
-Ant.println(compute("add", 10, 5, 3, 2)); // Should print 20
-Ant.println(compute("multiply", 2, 3, 4)); // Should print 24
+console.log("\nTest 6 - Multiple params with rest:");
+console.log(compute("add", 10, 5, 3, 2)); // Should print 20
+console.log(compute("multiply", 2, 3, 4)); // Should print 24
 
 // Test 7: Rest parameter is an actual array
 function checkArray(...items) {
     return items.length;
 }
 
-Ant.println("\nTest 7 - Rest param is array:");
-Ant.println(checkArray("a", "b", "c", "d")); // Should print 4
+console.log("\nTest 7 - Rest param is array:");
+console.log(checkArray("a", "b", "c", "d")); // Should print 4

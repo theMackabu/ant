@@ -9,4 +9,4 @@ function outer() {
 }
 
 let fn = outer();
-Ant.println("Result: " + fn());
+console.log("Result: " + fn());

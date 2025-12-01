@@ -46,10 +46,10 @@ router.insert('/files/*path', async c => {
 });
 
 router.printTree();
-Ant.println('');
+console.log('');
 
 async function handleRequest(req, res) {
-  Ant.println('request:', req.method, req.uri);
+  console.log('request:', req.method, req.uri);
   const result = router.lookup(req.uri);
 
   if (result?.handler) {
@@ -60,5 +60,5 @@ async function handleRequest(req, res) {
   res.body('not found: ' + req.uri, 404);
 }
 
-Ant.println('started on http://localhost:8000');
+console.log('started on http://localhost:8000');
 Ant.serve(8000, handleRequest);

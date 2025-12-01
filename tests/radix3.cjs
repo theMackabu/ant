@@ -235,7 +235,7 @@ class Radix3 {
       line = line + " :" + node.paramName;
     }
     
-    Ant.println(line);
+    console.log(line);
     
     let childPrefix = prefix + (isLast ? "    " : "│   ");
     
@@ -250,13 +250,13 @@ class Radix3 {
     // Print param child
     if (node.paramChild !== undefined) {
       let isLastChild = node.wildcardChild === undefined;
-      Ant.println(childPrefix + (isLastChild ? "└─ " : "├─ ") + ":" + node.paramChild.paramName);
+      console.log(childPrefix + (isLastChild ? "└─ " : "├─ ") + ":" + node.paramChild.paramName);
       this.printNode(node.paramChild, childPrefix + (isLastChild ? "    " : "│   "), true);
     }
     
     // Print wildcard child
     if (node.wildcardChild !== undefined) {
-      Ant.println(childPrefix + "└─ *" + node.wildcardChild.paramName);
+      console.log(childPrefix + "└─ *" + node.wildcardChild.paramName);
       this.printNode(node.wildcardChild, childPrefix + "    ", true);
     }
   }
@@ -266,7 +266,7 @@ class Radix3 {
 // Tests
 // ============================================================================
 
-Ant.println("=== Radix3 Router Tests ===\n");
+console.log("=== Radix3 Router Tests ===\n");
 
 let router = new Radix3();
 
@@ -285,55 +285,55 @@ router.insert("/api/v2/users", function(p) { return "API v2 users"; });
 router.insert("/files/*path", function(p) { return "File: " + p.path; });
 router.insert("/docs/*rest", function(p) { return "Docs: " + p.rest; });
 
-Ant.println("Tree structure:");
-Ant.println("===============");
+console.log("Tree structure:");
+console.log("===============");
 router.printTree();
-Ant.println("");
+console.log("");
 
 // Run tests
-Ant.println("Lookup tests:");
-Ant.println("=============");
+console.log("Lookup tests:");
+console.log("=============");
 
-Ant.println("1. /");
-Ant.println("   =>", router.lookup("/"));
+console.log("1. /");
+console.log("   =>", router.lookup("/"));
 
-Ant.println("\n2. /user");
-Ant.println("   =>", router.lookup("/user"));
+console.log("\n2. /user");
+console.log("   =>", router.lookup("/user"));
 
-Ant.println("\n3. /users");
-Ant.println("   =>", router.lookup("/users"));
+console.log("\n3. /users");
+console.log("   =>", router.lookup("/users"));
 
-Ant.println("\n4. /users/list");
-Ant.println("   =>", router.lookup("/users/list"));
+console.log("\n4. /users/list");
+console.log("   =>", router.lookup("/users/list"));
 
-Ant.println("\n5. /users/123");
-Ant.println("   =>", router.lookup("/users/123"));
+console.log("\n5. /users/123");
+console.log("   =>", router.lookup("/users/123"));
 
-Ant.println("\n6. /users/456/posts");
-Ant.println("   =>", router.lookup("/users/456/posts"));
+console.log("\n6. /users/456/posts");
+console.log("   =>", router.lookup("/users/456/posts"));
 
-Ant.println("\n7. /search");
-Ant.println("   =>", router.lookup("/search"));
+console.log("\n7. /search");
+console.log("   =>", router.lookup("/search"));
 
-Ant.println("\n8. /static/home");
-Ant.println("   =>", router.lookup("/static/home"));
+console.log("\n8. /static/home");
+console.log("   =>", router.lookup("/static/home"));
 
-Ant.println("\n9. /static/about");
-Ant.println("   =>", router.lookup("/static/about"));
+console.log("\n9. /static/about");
+console.log("   =>", router.lookup("/static/about"));
 
-Ant.println("\n10. /api/v1/users");
-Ant.println("    =>", router.lookup("/api/v1/users"));
+console.log("\n10. /api/v1/users");
+console.log("    =>", router.lookup("/api/v1/users"));
 
-Ant.println("\n11. /api/v2/users");
-Ant.println("    =>", router.lookup("/api/v2/users"));
+console.log("\n11. /api/v2/users");
+console.log("    =>", router.lookup("/api/v2/users"));
 
-Ant.println("\n12. /files/images/photo.jpg");
-Ant.println("    =>", router.lookup("/files/images/photo.jpg"));
+console.log("\n12. /files/images/photo.jpg");
+console.log("    =>", router.lookup("/files/images/photo.jpg"));
 
-Ant.println("\n13. /docs/api/reference/auth");
-Ant.println("    =>", router.lookup("/docs/api/reference/auth"));
+console.log("\n13. /docs/api/reference/auth");
+console.log("    =>", router.lookup("/docs/api/reference/auth"));
 
-Ant.println("\n14. /notfound (404)");
-Ant.println("    =>", router.lookup("/notfound"));
+console.log("\n14. /notfound (404)");
+console.log("    =>", router.lookup("/notfound"));
 
-Ant.println("\n=== All Tests Complete ===");
+console.log("\n=== All Tests Complete ===");

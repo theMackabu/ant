@@ -2,9 +2,9 @@
 let x = "outer";
 {
     let x = "inner";
-    Ant.println(x); // Should print "inner"
+    console.log(x); // Should print "inner"
 }
-Ant.println(x); // Should print "outer"
+console.log(x); // Should print "outer"
 
 // Test 2: Closure capturing outer scope
 let y = 10;
@@ -16,8 +16,8 @@ function makeCounter() {
     };
 }
 let counter = makeCounter();
-Ant.println(counter()); // Should print 11
-Ant.println(counter()); // Should print 12
+console.log(counter()); // Should print 11
+console.log(counter()); // Should print 12
 
 // Test 3: Variable shadowing in function
 let z = "global";
@@ -25,8 +25,8 @@ function testShadow() {
     let z = "local";
     return z;
 }
-Ant.println(testShadow()); // Should print "local"
-Ant.println(z); // Should print "global"
+console.log(testShadow()); // Should print "local"
+console.log(z); // Should print "global"
 
 // Test 4: Nested function closures
 function outer() {
@@ -41,7 +41,7 @@ function outer() {
     }
     return middle();
 }
-Ant.println(outer()); // Should print 6
+console.log(outer()); // Should print 6
 
 // Test 5: Multiple closures sharing same outer scope
 function makeCounters() {
@@ -53,7 +53,7 @@ function makeCounters() {
     };
 }
 let counters = makeCounters();
-Ant.println(counters.inc()); // Should print 1
-Ant.println(counters.inc()); // Should print 2
-Ant.println(counters.dec()); // Should print 1
-Ant.println(counters.get()); // Should print 1
+console.log(counters.inc()); // Should print 1
+console.log(counters.inc()); // Should print 2
+console.log(counters.dec()); // Should print 1
+console.log(counters.get()); // Should print 1

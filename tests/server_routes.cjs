@@ -1,7 +1,7 @@
 // Example HTTP server with basic routing
 
 function handleRequest(req, res) {
-  Ant.println("Request:", req.method, req.uri);
+  console.log("Request:", req.method, req.uri);
   
   // Simple routing based on URI
   if (req.uri === "/") {
@@ -39,5 +39,5 @@ function handleRequest(req, res) {
   };
 }
 
-Ant.println("Starting HTTP server on port 8000...");
+console.log("Starting HTTP server on port 8000...");
 Ant.serve(8000, handleRequest);
