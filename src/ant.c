@@ -57,6 +57,7 @@ enum {
   TOK_YIELD, TOK_UNDEF, TOK_NULL, TOK_TRUE, TOK_FALSE,
   TOK_DOT = 100, TOK_CALL, TOK_BRACKET, TOK_POSTINC, TOK_POSTDEC, TOK_NOT, TOK_TILDA,
   TOK_TYPEOF, TOK_UPLUS, TOK_UMINUS, TOK_EXP, TOK_MUL, TOK_DIV, TOK_REM,
+  TOK_OPTIONAL_CHAIN,
   TOK_PLUS, TOK_MINUS, TOK_SHL, TOK_SHR, TOK_ZSHR, TOK_LT, TOK_LE, TOK_GT,
   TOK_GE, TOK_EQ, TOK_NE, TOK_AND, TOK_XOR, TOK_OR, TOK_LAND, TOK_LOR,
   TOK_COLON, TOK_Q,  TOK_ASSIGN, TOK_PLUS_ASSIGN, TOK_MINUS_ASSIGN,
@@ -620,7 +621,7 @@ static uint8_t next(struct js *js) {
   #define LOOK(OFS, CH) js->toff + OFS < js->clen && buf[OFS] == CH
   
   switch (buf[0]) {
-    case '?': TOK(TOK_Q, 1);
+    case '?': if (LOOK(1, '.')) TOK(TOK_OPTIONAL_CHAIN, 2); TOK(TOK_Q, 1);
     case ':': TOK(TOK_COLON, 1);
     case '(': TOK(TOK_LPAREN, 1);
     case ')': TOK(TOK_RPAREN, 1);
@@ -958,6 +959,13 @@ static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
   return mkval(T_PROP, off);
 }
 
+static jsval_t do_optional_chain_op(struct js *js, jsval_t l, jsval_t r) {
+  if (vtype(l) == T_NULL || vtype(l) == T_UNDEF) {
+    return js_mkundef();
+  }
+  return do_dot_op(js, l, r);
+}
+
 static jsval_t js_call_params(struct js *js) {
   jsoff_t pos = js->pos;
   uint8_t flags = js->flags;
@@ -1174,7 +1182,7 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
   }
   if (vtype(l) == T_STR && vtype(r) == T_STR) return do_string_op(js, op, l, r);
   if (is_unary(op) && vtype(r) != T_NUM) return js_mkerr(js, "type mismatch");
-  if (!is_unary(op) && op != TOK_DOT && op != TOK_INSTANCEOF && (vtype(l) != T_NUM || vtype(r) != T_NUM)) return js_mkerr(js, "type mismatch");
+  if (!is_unary(op) && op != TOK_DOT && op != TOK_OPTIONAL_CHAIN && op != TOK_INSTANCEOF && (vtype(l) != T_NUM || vtype(r) != T_NUM)) return js_mkerr(js, "type mismatch");
   
   double a = tod(l), b = tod(r);
   switch (op) {
@@ -1192,6 +1200,7 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
     case TOK_SHL:     return tov((double)((long) a << (long) b));
     case TOK_SHR:     return tov((double)((long) a >> (long) b));
     case TOK_DOT:     return do_dot_op(js, l, r);
+    case TOK_OPTIONAL_CHAIN: return do_optional_chain_op(js, l, r);
     case TOK_LT:      return mkval(T_BOOL, a < b);
     case TOK_LE:      return mkval(T_BOOL, a <= b);
     case TOK_GT:      return mkval(T_BOOL, a > b);
@@ -1402,9 +1411,7 @@ static jsval_t js_obj_literal(struct js *js) {
     }
     js->consumed = 1;
     
-    // Check for shorthand property syntax
     if (id_len > 0 && (next(js) == TOK_COMMA || next(js) == TOK_RBRACE)) {
-      // Shorthand: { handler, params } means { handler: handler, params: params }
       jsval_t val = lookup(js, js->code + id_off, id_len);
       if (exe) {
         if (is_err(val)) return val;
@@ -1413,7 +1420,6 @@ static jsval_t js_obj_literal(struct js *js) {
         if (is_err(res)) return res;
       }
     } else {
-      // Normal syntax: { key: value }
       EXPECT(TOK_COLON, );
       jsval_t val = js_expr(js);
       if (exe) {
@@ -1818,15 +1824,21 @@ static jsval_t js_call_dot(struct js *js) {
     if (lookahead(js) == TOK_ARROW) return res;
     res = lookup(js, &js->code[coderefoff(res)], codereflen(res));
   }
-  while (next(js) == TOK_LPAREN || next(js) == TOK_DOT || next(js) == TOK_LBRACKET) {
-    if (js->tok == TOK_DOT) {
+  while (next(js) == TOK_LPAREN || next(js) == TOK_DOT || next(js) == TOK_OPTIONAL_CHAIN || next(js) == TOK_LBRACKET) {
+    if (js->tok == TOK_DOT || js->tok == TOK_OPTIONAL_CHAIN) {
+      uint8_t op = js->tok;
       js->consumed = 1;
       if (vtype(res) != T_PROP) {
         obj = res;
       } else {
         obj = resolveprop(js, res);
       }
-      res = do_op(js, TOK_DOT, res, js_group(js));
+      if (op == TOK_OPTIONAL_CHAIN && (vtype(obj) == T_NULL || vtype(obj) == T_UNDEF)) {
+        js_group(js);
+        res = js_mkundef();
+      } else {
+        res = do_op(js, op, res, js_group(js));
+      }
     } else if (js->tok == TOK_LBRACKET) {
       js->consumed = 1;
       if (vtype(res) != T_PROP) {
@@ -2140,11 +2152,9 @@ static jsval_t js_decl(struct js *js, bool is_const) {
   uint8_t exe = !(js->flags & F_NOEXEC);
   js->consumed = 1;
   for (;;) {
-    // Check for object destructuring pattern { a, b } or { handler, params }
     if (next(js) == TOK_LBRACE) {
       js->consumed = 1;
       
-      // Parse destructuring pattern
       typedef struct { jsoff_t name_off; jsoff_t name_len; } PropName;
       PropName props[32];
       int prop_count = 0;
@@ -2156,7 +2166,6 @@ static jsval_t js_decl(struct js *js, bool is_const) {
         prop_count++;
         js->consumed = 1;
         
-        // Skip colon and alias if present (e.g., { handler: h })
         if (next(js) == TOK_COLON) {
           js->consumed = 1;
           EXPECT(TOK_IDENTIFIER, );
@@ -2169,7 +2178,6 @@ static jsval_t js_decl(struct js *js, bool is_const) {
       
       EXPECT(TOK_RBRACE, );
       
-      // Expect assignment
       jsval_t v = js_mkundef();
       if (next(js) == TOK_ASSIGN) {
         js->consumed = 1;
@@ -2179,7 +2187,6 @@ static jsval_t js_decl(struct js *js, bool is_const) {
         return js_mkerr(js, "destructuring requires assignment");
       }
       
-      // Extract properties from the object
       if (exe) {
         jsval_t obj = resolveprop(js, v);
         if (vtype(obj) != T_OBJ && vtype(obj) != T_ARR) {
@@ -2206,7 +2213,6 @@ static jsval_t js_decl(struct js *js, bool is_const) {
         }
       }
     } else {
-      // Regular identifier declaration
       EXPECT(TOK_IDENTIFIER, );
       js->consumed = 0;
       jsoff_t noff = js->toff, nlen = js->tlen;

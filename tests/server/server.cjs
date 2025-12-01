@@ -49,8 +49,8 @@ Ant.println('');
 async function handleRequest(req, res) {
   Ant.println('request:', req.method, req.uri);
 
-  const { handler, params } = router.lookup(req.uri);
-  if (handler) return handler({ req, res, params });
+  const result = router.lookup(req.uri);
+  if (result?.handler) return result.handler(result.params);
 
   return res.body('not found: ' + req.uri, 404);
 }
