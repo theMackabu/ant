@@ -57,7 +57,7 @@ async function handleRequest(req, res) {
     return void result.handler(ctx);
   }
 
-  return res.body('not found: ' + req.uri, 404);
+  res.body('not found: ' + req.uri, 404);
 }
 
 Ant.println('started on http://localhost:8000');

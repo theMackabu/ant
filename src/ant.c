@@ -2282,6 +2282,29 @@ static jsval_t js_unary(struct js *js) {
     (void) save_pos;
     (void) save_tok;
     return js_mktrue();
+  } else if (next(js) == TOK_AWAIT) {
+    js->consumed = 1;
+    jsval_t expr = js_unary(js);
+    if (is_err(expr)) return expr;
+    if (js->flags & F_NOEXEC) return expr;
+    jsval_t resolved = resolveprop(js, expr);
+    if (vtype(resolved) != T_PROMISE) {
+      return resolved;
+    }
+    jsval_t p_obj = mkval(T_OBJ, vdata(resolved));
+    jsoff_t state_off = lkp(js, p_obj, "__state", 7);
+    if (state_off == 0) return js_mkerr(js, "invalid promise state");
+    int state = (int)tod(resolveprop(js, mkval(T_PROP, state_off)));
+    jsoff_t val_off = lkp(js, p_obj, "__value", 7);
+    if (val_off == 0) return js_mkerr(js, "invalid promise value");
+    jsval_t val = resolveprop(js, mkval(T_PROP, val_off));
+    if (state == 1) {
+      return val;
+    } else if (state == 2) {
+      return js_mkerr(js, "await: promise rejected");
+    } else {
+      return js_mkerr(js, "await: promise not resolved");
+    }
   } else if (next(js) == TOK_NOT || js->tok == TOK_TILDA || js->tok == TOK_TYPEOF ||
       js->tok == TOK_VOID || js->tok == TOK_MINUS || js->tok == TOK_PLUS) {
     uint8_t t = js->tok;
