@@ -3735,6 +3735,7 @@ static jsval_t builtin_Date(struct js *js, jsval_t *args, int nargs) {
   if (nargs == 0) {
     struct timeval tv;
     gettimeofday(&tv, NULL);
+    // NOLINTNEXTLINE(bugprone-integer-division)
     timestamp_ms = (double)tv.tv_sec * 1000.0 + (double)(tv.tv_usec / 1000);
   } else if (nargs == 1) {
     if (vtype(args[0]) == T_NUM) {
@@ -3761,6 +3762,7 @@ static jsval_t builtin_Date_now(struct js *js, jsval_t *args, int nargs) {
   
   struct timeval tv;
   gettimeofday(&tv, NULL);
+  // NOLINTNEXTLINE(bugprone-integer-division)
   double timestamp_ms = (double)tv.tv_sec * 1000.0 + (double)(tv.tv_usec / 1000);
   
   return tov(timestamp_ms);

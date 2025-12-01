@@ -6,6 +6,7 @@
 #include "mongoose.h"
 #include "modules/server.h"
 #include "modules/timer.h"
+#include "modules/json.h"
 #include "ant.h"
 
 typedef struct {
@@ -147,9 +148,16 @@ static jsval_t res_json(struct js *js, jsval_t *args, int nargs) {
   response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
   if (!ctx) return js_mkundef();
   
-  const char *json_str = js_str(js, args[0]);
-  if (json_str) {
-    ctx->body = (char *)json_str;
+  jsval_t stringify_args[1] = { args[0] };
+  jsval_t result = js_json_stringify(js, stringify_args, 1);
+  
+  if (js_type(result) == JS_STR) {
+    ctx->body = js_getstr(js, result, NULL);
+  } else if (js_type(result) == JS_ERR) {
+    const char *json_str = js_str(js, args[0]);
+    if (json_str) {
+      ctx->body = (char *)json_str;
+    }
   }
   
   if (nargs >= 2 && js_type(args[1]) == JS_NUM) {

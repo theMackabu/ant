@@ -142,7 +142,7 @@ static yyjson_mut_val *jsval_to_yyjson(struct js *js, yyjson_mut_doc *doc, jsval
   }
 }
 
-static jsval_t js_json_parse(struct js *js, jsval_t *args, int nargs) {
+jsval_t js_json_parse(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) {
     return js_mkerr(js, "JSON.parse() requires at least 1 argument");
   }
@@ -167,7 +167,7 @@ static jsval_t js_json_parse(struct js *js, jsval_t *args, int nargs) {
   return result;
 }
 
-static jsval_t js_json_stringify(struct js *js, jsval_t *args, int nargs) {
+jsval_t js_json_stringify(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) {
     return js_mkerr(js, "JSON.stringify() requires at least 1 argument");
   }
