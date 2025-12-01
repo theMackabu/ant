@@ -54,7 +54,7 @@ withPromise().then(v => {
 // Test 6: Async function with setTimeout
 console.log('\nTest 6: Async function with setTimeout');
 async function withTimeout() {
-  Ant.setTimeout(() => {
+  setTimeout(() => {
     console.log('Timeout inside async executed');
   }, 100);
   return 'timeout scheduled';
@@ -67,7 +67,7 @@ withTimeout().then(v => {
 // Test 7: Async function with queueMicrotask
 console.log('\nTest 7: Async function with queueMicrotask');
 async function withMicrotask() {
-  Ant.queueMicrotask(() => {
+  queueMicrotask(() => {
     console.log('Microtask inside async executed');
   });
   return 'microtask queued';
@@ -84,7 +84,7 @@ async function chain1() {
 }
 
 chain1().then(v => {
-  console.log('Chained async result: ' + (v * 2));
+  console.log('Chained async result: ' + v * 2);
 });
 
 // Test 9: Async function as callback
@@ -111,7 +111,7 @@ Promise.resolve(1)
 
 // Test 11: Async function expression
 console.log('\nTest 11: Async function expression');
-const asyncExpr = async function() {
+const asyncExpr = async function () {
   return 'expression';
 };
 
@@ -150,7 +150,7 @@ withResolve().then(v => {
 console.log('\nTest 14: Async object method');
 const obj = {
   value: 100,
-  asyncMethod: async function() {
+  asyncMethod: async function () {
     return this.value;
   }
 };

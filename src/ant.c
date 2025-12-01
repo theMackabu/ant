@@ -37,8 +37,39 @@ typedef struct {
   int capacity;
 } call_stack_t;
 
+// Coroutine support for async/await and generators
+typedef enum {
+  CORO_ASYNC_AWAIT,    // Async function waiting on promise
+  CORO_GENERATOR,      // Generator function (function*)
+  CORO_ASYNC_GENERATOR // Async generator (async function*)
+} coroutine_type_t;
+
+typedef struct coroutine {
+  struct js *js;              // JS context
+  coroutine_type_t type;      // Type of coroutine
+  jsval_t scope;              // Captured scope
+  jsval_t this_val;           // Captured 'this'
+  jsval_t awaited_promise;    // Promise we're waiting on (for async)
+  jsval_t result;             // Result when resumed
+  jsval_t async_func;         // The async/generator function being executed
+  jsval_t *args;              // Function arguments
+  int nargs;                  // Number of arguments
+  bool is_settled;            // Whether the awaited promise is settled
+  bool is_error;              // Whether promise was rejected
+  bool is_done;               // Whether generator is exhausted
+  jsoff_t resume_point;       // Code position to resume at
+  jsval_t yield_value;        // Value yielded by generator
+  struct coroutine *next;     // Next in scheduler queue
+} coroutine_t;
+
+typedef struct {
+  coroutine_t *head;
+  coroutine_t *tail;
+} coroutine_queue_t;
+
 static this_stack_t global_this_stack = {NULL, 0, 0};
 static call_stack_t global_call_stack = {NULL, 0, 0};
+static coroutine_queue_t pending_coroutines = {NULL, NULL};
 
 struct js {
   jsoff_t css;            // max observed C stack size
@@ -94,13 +125,13 @@ enum {
 
 enum {
   T_OBJ, T_PROP, T_STR, T_UNDEF, T_NULL, T_NUM,
-  T_BOOL, T_FUNC, T_CODEREF, T_CFUNC, T_ERR, T_ARR, T_PROMISE
+  T_BOOL, T_FUNC, T_CODEREF, T_CFUNC, T_ERR, T_ARR, T_PROMISE, T_GENERATOR
 };
 
 static const char *typestr(uint8_t t) {
   const char *names[] = { 
     "object", "prop", "string", "undefined", "null", "number",
-    "boolean", "function", "coderef", "cfunc", "err", "array", "promise"
+    "boolean", "function", "coderef", "cfunc", "err", "array", "promise", "generator"
   };
   
   return (t < sizeof(names) / sizeof(names[0])) ? names[t] : "??";
@@ -178,11 +209,106 @@ static jsval_t builtin_Promise(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_Promise_resolve(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_Promise_reject(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_Promise_try(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Promise_all(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Promise_race(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_promise_then(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_promise_catch(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_promise_finally(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_Date(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_Date_now(struct js *js, jsval_t *args, int nargs);
+
+static coroutine_t *create_coroutine(struct js *js, jsval_t promise, jsval_t async_func) {
+  coroutine_t *coro = (coroutine_t *)malloc(sizeof(coroutine_t));
+  if (!coro) return NULL;
+  
+  coro->js = js;
+  coro->type = CORO_ASYNC_AWAIT;
+  coro->scope = js->scope;
+  coro->this_val = js->this_val;
+  coro->awaited_promise = promise;
+  coro->result = js_mkundef();
+  coro->async_func = async_func;
+  coro->args = NULL;
+  coro->nargs = 0;
+  coro->is_settled = false;
+  coro->is_error = false;
+  coro->is_done = false;
+  coro->resume_point = 0;
+  coro->yield_value = js_mkundef();
+  coro->next = NULL;
+  
+  return coro;
+}
+
+static coroutine_t *create_generator(struct js *js, jsval_t gen_func, jsval_t *args, int nargs, bool is_async) {
+  coroutine_t *coro = (coroutine_t *)malloc(sizeof(coroutine_t));
+  if (!coro) return NULL;
+  
+  coro->js = js;
+  coro->type = is_async ? CORO_ASYNC_GENERATOR : CORO_GENERATOR;
+  coro->scope = js->scope;
+  coro->this_val = js->this_val;
+  coro->awaited_promise = js_mkundef();
+  coro->result = js_mkundef();
+  coro->async_func = gen_func;
+  
+  if (nargs > 0) {
+    coro->args = (jsval_t *)malloc(sizeof(jsval_t) * nargs);
+    if (coro->args) {
+      memcpy(coro->args, args, sizeof(jsval_t) * nargs);
+    }
+  } else {
+    coro->args = NULL;
+  }
+  coro->nargs = nargs;
+  
+  coro->is_settled = false;
+  coro->is_error = false;
+  coro->is_done = false;
+  coro->resume_point = 0;
+  coro->yield_value = js_mkundef();
+  coro->next = NULL;
+  
+  return coro;
+}
+
+static void enqueue_coroutine(coroutine_t *coro) {
+  if (!coro) return;
+  
+  if (pending_coroutines.tail) {
+    pending_coroutines.tail->next = coro;
+    pending_coroutines.tail = coro;
+  } else {
+    pending_coroutines.head = coro;
+    pending_coroutines.tail = coro;
+  }
+}
+
+static coroutine_t *dequeue_coroutine(void) {
+  coroutine_t *coro = pending_coroutines.head;
+  if (coro) {
+    pending_coroutines.head = coro->next;
+    if (!pending_coroutines.head) {
+      pending_coroutines.tail = NULL;
+    }
+    coro->next = NULL;
+  }
+  return coro;
+}
+
+static bool has_pending_coroutines(void) {
+  return pending_coroutines.head != NULL;
+}
+
+static void free_coroutine(coroutine_t *coro) {
+  if (coro) {
+    if (coro->args) free(coro->args);
+    free(coro);
+  }
+}
+
+static jsval_t resume_coroutine_wrapper(struct js *js, jsval_t *args, int nargs);
+static jsval_t reject_coroutine_wrapper(struct js *js, jsval_t *args, int nargs);
 
 static void setlwm(struct js *js) {
   jsoff_t n = 0, css = 0;
@@ -2483,36 +2609,83 @@ static jsval_t js_unary(struct js *js) {
     if (vtype(resolved) != T_PROMISE) {
       return resolved;
     }
+    
     jsval_t p_obj = mkval(T_OBJ, vdata(resolved));
     jsoff_t state_off = lkp(js, p_obj, "__state", 7);
     if (state_off == 0) return js_mkerr(js, "invalid promise state");
     
-    int max_iterations = 10000;
-    int iterations = 0;
-    while (iterations < max_iterations) {
-      int state = (int)tod(resolveprop(js, mkval(T_PROP, state_off)));
-      if (state != 0) break;
-      if (!has_pending_microtasks()) break;
-
-      process_microtasks(js);
-      iterations++;
-      
-      if (js->flags & F_THROW) return mkval(T_ERR, 0);
-      state = (int)tod(resolveprop(js, mkval(T_PROP, state_off)));
-      if (state != 0) break;
+    int state = (int)tod(resolveprop(js, mkval(T_PROP, state_off)));
+    
+    if (state != 0) {
+      jsoff_t val_off = lkp(js, p_obj, "__value", 7);
+      if (val_off == 0) return js_mkerr(js, "invalid promise value");
+      jsval_t val = resolveprop(js, mkval(T_PROP, val_off));
+      if (state == 1) {
+        return val;
+      } else if (state == 2) {
+        return js_throw(js, val);
+      }
     }
     
-    int state = (int)tod(resolveprop(js, mkval(T_PROP, state_off)));
-    jsoff_t val_off = lkp(js, p_obj, "__value", 7);
-    if (val_off == 0) return js_mkerr(js, "invalid promise value");
-    jsval_t val = resolveprop(js, mkval(T_PROP, val_off));
-    if (state == 1) {
-      return val;
-    } else if (state == 2) {
-      return js_mkerr(js, "await: promise rejected");
-    } else {
-      return js_mkerr(js, "await: promise not resolved after processing microtasks");
+    coroutine_t *coro = create_coroutine(js, resolved, js->current_func);
+    if (!coro) return js_mkerr(js, "failed to create coroutine");
+    
+    jsval_t resume_obj = mkobj(js, 0);
+    setprop(js, resume_obj, js_mkstr(js, "__native_func", 13), js_mkfun(resume_coroutine_wrapper));
+    setprop(js, resume_obj, js_mkstr(js, "__coroutine", 11), tov((double)(uintptr_t)coro));
+    jsval_t resume_fn = mkval(T_FUNC, vdata(resume_obj));
+    
+    jsval_t reject_obj = mkobj(js, 0);
+    setprop(js, reject_obj, js_mkstr(js, "__native_func", 13), js_mkfun(reject_coroutine_wrapper));
+    setprop(js, reject_obj, js_mkstr(js, "__coroutine", 11), tov((double)(uintptr_t)coro));
+    jsval_t reject_fn = mkval(T_FUNC, vdata(reject_obj));
+    
+    jsval_t then_args[] = { resume_fn, reject_fn };
+    jsval_t saved_this = js->this_val;
+    js->this_val = resolved;
+    builtin_promise_then(js, then_args, 2);
+    js->this_val = saved_this;
+    
+    while (!coro->is_settled) {
+      process_microtasks(js);
+      
+      while (has_pending_coroutines()) {
+        coroutine_t *resumed = dequeue_coroutine();
+        if (resumed == coro) {
+          jsval_t result = resumed->result;
+          bool is_error = resumed->is_error;
+          free_coroutine(resumed);
+          
+          if (is_error) {
+            return js_throw(js, result);
+          }
+          return result;
+        }
+        enqueue_coroutine(resumed);
+      }
+      
+      if (!has_pending_microtasks() && has_pending_timers()) {
+        int64_t next_timeout = get_next_timer_timeout();
+        if (next_timeout <= 0) {
+          process_timers(js);
+          continue;
+        }
+      }
+      
+      if (!has_pending_microtasks() && !has_pending_coroutines() && !has_pending_timers()) {
+        free_coroutine(coro);
+        return js_mkerr(js, "await: promise never settled");
+      }
     }
+    
+    jsval_t result = coro->result;
+    bool is_error = coro->is_error;
+    free_coroutine(coro);
+    
+    if (is_error) {
+      return js_throw(js, result);
+    }
+    return result;
   } else if (next(js) == TOK_NOT || js->tok == TOK_TILDA || js->tok == TOK_TYPEOF ||
       js->tok == TOK_VOID || js->tok == TOK_MINUS || js->tok == TOK_PLUS) {
     uint8_t t = js->tok;
@@ -4768,6 +4941,194 @@ static jsval_t builtin_Promise_try(struct js *js, jsval_t *args, int nargs) {
   return builtin_Promise_resolve(js, res_args, 1);
 }
 
+static jsval_t resume_coroutine_wrapper(struct js *js, jsval_t *args, int nargs) {
+  jsval_t me = js->current_func;
+  jsval_t coro_val = js_get(js, me, "__coroutine");
+  if (vtype(coro_val) != T_NUM) return js_mkundef();
+  
+  coroutine_t *coro = (coroutine_t *)(uintptr_t)tod(coro_val);
+  if (!coro) return js_mkundef();
+  
+  coro->result = nargs > 0 ? args[0] : js_mkundef();
+  coro->is_settled = true;
+  coro->is_error = false;
+  
+  enqueue_coroutine(coro);
+  return js_mkundef();
+}
+
+static jsval_t reject_coroutine_wrapper(struct js *js, jsval_t *args, int nargs) {
+  jsval_t me = js->current_func;
+  jsval_t coro_val = js_get(js, me, "__coroutine");
+  
+  if (vtype(coro_val) != T_NUM) return js_mkundef();
+  
+  coroutine_t *coro = (coroutine_t *)(uintptr_t)tod(coro_val);
+  if (!coro) return js_mkundef();
+  
+  coro->result = nargs > 0 ? args[0] : js_mkundef();
+  coro->is_settled = true;
+  coro->is_error = true;
+  
+  enqueue_coroutine(coro);
+  return js_mkundef();
+}
+
+static jsval_t builtin_Promise_all_resolve_handler(struct js *js, jsval_t *args, int nargs) {
+  jsval_t me = js->current_func;
+  jsval_t tracker = js_get(js, me, "tracker");
+  jsval_t index_val = js_get(js, me, "index");
+  
+  int index = (int)tod(index_val);
+  jsval_t value = nargs > 0 ? args[0] : js_mkundef();
+  
+  jsval_t results = js_get(js, tracker, "results");
+  char idx[16];
+  snprintf(idx, sizeof(idx), "%d", index);
+  setprop(js, results, js_mkstr(js, idx, strlen(idx)), value);
+  
+  jsval_t remaining_val = js_get(js, tracker, "remaining");
+  int remaining = (int)tod(remaining_val) - 1;
+  setprop(js, tracker, js_mkstr(js, "remaining", 9), tov((double)remaining));
+  
+  if (remaining == 0) {
+    jsval_t result_promise = js_get(js, tracker, "promise");
+    resolve_promise(js, result_promise, mkval(T_ARR, vdata(results)));
+  }
+  
+  return js_mkundef();
+}
+
+static jsval_t builtin_Promise_all_reject_handler(struct js *js, jsval_t *args, int nargs) {
+  jsval_t me = js->current_func;
+  jsval_t tracker = js_get(js, me, "tracker");
+  jsval_t result_promise = js_get(js, tracker, "promise");
+  
+  jsval_t reason = nargs > 0 ? args[0] : js_mkundef();
+  reject_promise(js, result_promise, reason);
+  
+  return js_mkundef();
+}
+
+static jsval_t builtin_Promise_all(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "Promise.all requires an array");
+  
+  jsval_t arr = args[0];
+  if (vtype(arr) != T_ARR) return js_mkerr(js, "Promise.all requires an array");
+  
+  jsoff_t len_off = lkp(js, arr, "length", 6);
+  if (len_off == 0) return builtin_Promise_resolve(js, NULL, 0);
+  jsval_t len_val = resolveprop(js, mkval(T_PROP, len_off));
+  int len = (int)tod(len_val);
+  
+  if (len == 0) {
+    jsval_t empty_arr = mkarr(js);
+    setprop(js, empty_arr, js_mkstr(js, "length", 6), tov(0.0));
+    jsval_t resolve_args[] = { mkval(T_ARR, vdata(empty_arr)) };
+    return builtin_Promise_resolve(js, resolve_args, 1);
+  }
+  
+  jsval_t result_promise = mkpromise(js);
+  
+  jsval_t tracker = mkobj(js, 0);
+  setprop(js, tracker, js_mkstr(js, "remaining", 9), tov((double)len));
+  setprop(js, tracker, js_mkstr(js, "results", 7), mkarr(js));
+  setprop(js, tracker, js_mkstr(js, "promise", 7), result_promise);
+  
+  jsval_t results = resolveprop(js, js_get(js, tracker, "results"));
+  setprop(js, results, js_mkstr(js, "length", 6), tov((double)len));
+  
+  for (int i = 0; i < len; i++) {
+    char idx[16];
+    snprintf(idx, sizeof(idx), "%d", i);
+    jsval_t item = resolveprop(js, js_get(js, arr, idx));
+    
+    if (vtype(item) != T_PROMISE) {
+      jsval_t wrap_args[] = { item };
+      item = builtin_Promise_resolve(js, wrap_args, 1);
+    }
+    
+    jsval_t resolve_obj = mkobj(js, 0);
+    setprop(js, resolve_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_Promise_all_resolve_handler));
+    setprop(js, resolve_obj, js_mkstr(js, "index", 5), tov((double)i));
+    setprop(js, resolve_obj, js_mkstr(js, "tracker", 7), tracker);
+    jsval_t resolve_fn = mkval(T_FUNC, vdata(resolve_obj));
+    
+    jsval_t reject_obj = mkobj(js, 0);
+    setprop(js, reject_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_Promise_all_reject_handler));
+    setprop(js, reject_obj, js_mkstr(js, "tracker", 7), tracker);
+    jsval_t reject_fn = mkval(T_FUNC, vdata(reject_obj));
+    
+    jsval_t then_args[] = { resolve_fn, reject_fn };
+    jsval_t saved_this = js->this_val;
+    js->this_val = item;
+    builtin_promise_then(js, then_args, 2);
+    js->this_val = saved_this;
+  }
+  
+  return result_promise;
+}
+
+static jsval_t builtin_Promise_race(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "Promise.race requires an array");
+  
+  jsval_t arr = args[0];
+  if (vtype(arr) != T_ARR) return js_mkerr(js, "Promise.race requires an array");
+  
+  jsoff_t len_off = lkp(js, arr, "length", 6);
+  if (len_off == 0) return mkpromise(js);
+  jsval_t len_val = resolveprop(js, mkval(T_PROP, len_off));
+  int len = (int)tod(len_val);
+  
+  if (len == 0) return mkpromise(js);
+  jsval_t result_promise = mkpromise(js);
+  
+  jsval_t resolve_obj = mkobj(js, 0);
+  setprop(js, resolve_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_resolve_internal));
+  setprop(js, resolve_obj, js_mkstr(js, "promise", 7), result_promise);
+  jsval_t resolve_fn = mkval(T_FUNC, vdata(resolve_obj));
+  
+  jsval_t reject_obj = mkobj(js, 0);
+  setprop(js, reject_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_reject_internal));
+  setprop(js, reject_obj, js_mkstr(js, "promise", 7), result_promise);
+  jsval_t reject_fn = mkval(T_FUNC, vdata(reject_obj));
+  
+  for (int i = 0; i < len; i++) {
+    char idx[16];
+    snprintf(idx, sizeof(idx), "%d", i);
+    jsval_t item = resolveprop(js, js_get(js, arr, idx));
+    
+    if (vtype(item) != T_PROMISE) {
+      resolve_promise(js, result_promise, item);
+      return result_promise;
+    }
+    
+    jsval_t item_obj = mkval(T_OBJ, vdata(item));
+    jsoff_t state_off = lkp(js, item_obj, "__state", 7);
+    int state = (int)tod(resolveprop(js, mkval(T_PROP, state_off)));
+    
+    if (state == 1) {
+      jsoff_t val_off = lkp(js, item_obj, "__value", 7);
+      jsval_t val = resolveprop(js, mkval(T_PROP, val_off));
+      resolve_promise(js, result_promise, val);
+      return result_promise;
+    } else if (state == 2) {
+      jsoff_t val_off = lkp(js, item_obj, "__value", 7);
+      jsval_t val = resolveprop(js, mkval(T_PROP, val_off));
+      reject_promise(js, result_promise, val);
+      return result_promise;
+    }
+    
+    jsval_t then_args[] = { resolve_fn, reject_fn };
+    jsval_t saved_this = js->this_val;
+    js->this_val = item;
+    builtin_promise_then(js, then_args, 2);
+    js->this_val = saved_this;
+  }
+  
+  return result_promise;
+}
+
 static jsval_t do_instanceof(struct js *js, jsval_t l, jsval_t r) {
   uint8_t ltype = vtype(l);
   if (vtype(r) == T_FUNC) {
@@ -4884,6 +5245,8 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, p_ctor_obj, js_mkstr(js, "resolve", 7), js_mkfun(builtin_Promise_resolve));
   setprop(js, p_ctor_obj, js_mkstr(js, "reject", 6), js_mkfun(builtin_Promise_reject));
   setprop(js, p_ctor_obj, js_mkstr(js, "try", 3), js_mkfun(builtin_Promise_try));
+  setprop(js, p_ctor_obj, js_mkstr(js, "all", 3), js_mkfun(builtin_Promise_all));
+  setprop(js, p_ctor_obj, js_mkstr(js, "race", 4), js_mkfun(builtin_Promise_race));
   setprop(js, p_ctor_obj, js_mkstr(js, "prototype", 9), p_proto);
   
   setprop(js, glob, js_mkstr(js, "Promise", 7), mkval(T_FUNC, vdata(p_ctor_obj)));
@@ -4922,6 +5285,12 @@ jsval_t js_get(struct js *js, jsval_t obj, const char *key) {
   if (vtype(obj) == T_FUNC) {
     jsval_t func_obj = mkval(T_OBJ, vdata(obj));
     jsoff_t off = lkp(js, func_obj, key, strlen(key));
+    return off == 0 ? js_mkundef() : resolveprop(js, mkval(T_PROP, off));
+  }
+  
+  if (vtype(obj) == T_ARR) {
+    jsval_t arr_obj = mkval(T_OBJ, vdata(obj));
+    jsoff_t off = lkp(js, arr_obj, key, strlen(key));
     return off == 0 ? js_mkundef() : resolveprop(js, mkval(T_PROP, off));
   }
   
@@ -5147,7 +5516,9 @@ void js_prop_iter_end(js_prop_iter_t *iter) {
 }
 
 jsval_t js_mkpromise(struct js *js) { return mkpromise(js); }
+int js_has_pending_coroutines(void) { return has_pending_coroutines() ? 1 : 0; }
 
+void js_process_coroutines(struct js *js) { (void)js; }
 void js_resolve_promise(struct js *js, jsval_t promise, jsval_t value) { resolve_promise(js, promise, value); }
 void js_reject_promise(struct js *js, jsval_t promise, jsval_t value) { reject_promise(js, promise, value); }
 

@@ -47,8 +47,8 @@ console.log('Promise.reject("error message"): ' + p9);
 
 // Test 10: Pending promise
 console.log('\nTest 10: Pending promise');
-const p10 = new Promise((resolve) => {
-  Ant.setTimeout(() => {
+const p10 = new Promise(resolve => {
+  setTimeout(() => {
     resolve(100);
     console.log('After timeout, promise is: ' + p10);
   }, 100);

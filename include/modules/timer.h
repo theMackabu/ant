@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include "ant.h"
 
-void init_timer_module(struct js *js, jsval_t ant_obj);
+void init_timer_module(struct js *js);
 void process_timers(struct js *js);
 void process_microtasks(struct js *js);
 void queue_microtask(struct js *js, jsval_t callback);

@@ -36,7 +36,7 @@ static uint64_t get_current_time_ms(void) {
   return (uint64_t)tv.tv_sec * 1000 + (uint64_t)tv.tv_usec / 1000;
 }
 
-// Ant.setTimeout(callback, delay)
+// setTimeout(callback, delay)
 static jsval_t js_set_timeout(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 2) {
     return js_mkerr(js, "setTimeout requires 2 arguments (callback, delay)");
@@ -66,7 +66,7 @@ static jsval_t js_set_timeout(struct js *js, jsval_t *args, int nargs) {
   return js_mknum((double)entry->timer_id);
 }
 
-// Ant.setInterval(callback, delay)
+// setInterval(callback, delay)
 static jsval_t js_set_interval(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 2) {
     return js_mkerr(js, "setInterval requires 2 arguments (callback, delay)");
@@ -96,7 +96,7 @@ static jsval_t js_set_interval(struct js *js, jsval_t *args, int nargs) {
   return js_mknum((double)entry->timer_id);
 }
 
-// Ant.clearTimeout(timerId)
+// clearTimeout(timerId)
 static jsval_t js_clear_timeout(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) {
     return js_mkundef();
@@ -114,7 +114,7 @@ static jsval_t js_clear_timeout(struct js *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-// Ant.queueMicrotask(callback)
+// queueMicrotask(callback)
 static jsval_t js_queue_microtask(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) {
     return js_mkerr(js, "queueMicrotask requires 1 argument (callback)");
@@ -217,12 +217,13 @@ int64_t get_next_timer_timeout(void) {
   return min_timeout;
 }
 
-void init_timer_module(struct js *js, jsval_t ant_obj) {
+void init_timer_module(struct js *js) {
   timer_state.js = js;
+  jsval_t global = js_glob(js);
   
-  js_set(js, ant_obj, "setTimeout", js_mkfun(js_set_timeout));
-  js_set(js, ant_obj, "clearTimeout", js_mkfun(js_clear_timeout));
-  js_set(js, ant_obj, "setInterval", js_mkfun(js_set_interval));
-  js_set(js, ant_obj, "clearInterval", js_mkfun(js_clear_timeout));
-  js_set(js, ant_obj, "queueMicrotask", js_mkfun(js_queue_microtask));
+  js_set(js, global, "setTimeout", js_mkfun(js_set_timeout));
+  js_set(js, global, "clearTimeout", js_mkfun(js_clear_timeout));
+  js_set(js, global, "setInterval", js_mkfun(js_set_interval));
+  js_set(js, global, "clearInterval", js_mkfun(js_clear_timeout));
+  js_set(js, global, "queueMicrotask", js_mkfun(js_queue_microtask));
 }

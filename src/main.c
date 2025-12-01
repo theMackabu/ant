@@ -245,8 +245,8 @@ int main(int argc, char *argv[]) {
   init_json_module();
   init_fetch_module();
   
+  init_timer_module(js);
   init_crypto_module(js, rt->ant_obj);
-  init_timer_module(js, rt->ant_obj);
   
   js_set(js, rt->ant_obj, "serve", js_mkfun(js_serve));
   js_set(js, rt->ant_obj, "require", js_mkfun(js_require));
