@@ -1,6 +1,18 @@
 const Radix3 = Ant.require('./radix3.cjs');
 const router = new Radix3();
 
+function html(strings, ...values) {
+  let result = '';
+  for (let i = 0; i < strings.length; i++) {
+    result = result + strings[i];
+    if (i < values.length) {
+      let escaped = values[i];
+      result = result + escaped;
+    }
+  }
+  return result;
+}
+
 router.insert('/', c => {
   return c.res.body(`Welcome to Ant HTTP Server with Radix3 Router!
 
@@ -40,7 +52,7 @@ router.insert('/api/v2/users', async c => {
 });
 
 router.insert('/files/*path', async c => {
-  return c.res.html(c.params.path);
+  return c.res.html(html`<div>${c.params.path}</div>`);
 });
 
 router.printTree();

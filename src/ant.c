@@ -1138,6 +1138,122 @@ static jsval_t call_js(struct js *js, const char *fn, jsoff_t fnlen, jsval_t clo
   jsval_t res = js_eval(js, &fn[fnpos], n);
   if (!is_err(res) && !(js->flags & F_RETURN)) res = js_mkundef();
   js->scope = saved_scope;
+  
+  return res;
+}
+
+static jsval_t call_js_with_args(struct js *js, jsval_t func, jsval_t *args, int nargs) {
+  if (vtype(func) == T_CFUNC) {
+    jsval_t (*fn)(struct js *, jsval_t *, int) = (jsval_t(*)(struct js *, jsval_t *, int)) vdata(func);
+    return fn(js, args, nargs);
+  }
+  
+  if (vtype(func) != T_FUNC) return js_mkerr(js, "not a function");
+  jsval_t func_obj = mkval(T_OBJ, vdata(func));
+  
+  jsoff_t native_off = lkp(js, func_obj, "__native_func", 13);
+  if (native_off != 0) {
+    jsval_t native_val = resolveprop(js, mkval(T_PROP, native_off));
+    if (vtype(native_val) == T_CFUNC) {
+      jsval_t (*fn)(struct js *, jsval_t *, int) = (jsval_t(*)(struct js *, jsval_t *, int)) vdata(native_val);
+      return fn(js, args, nargs);
+    }
+  }
+  
+  jsoff_t code_off = lkp(js, func_obj, "__code", 6);
+  if (code_off == 0) return js_mkerr(js, "function has no code");
+  jsval_t code_val = resolveprop(js, mkval(T_PROP, code_off));
+  if (vtype(code_val) != T_STR) return js_mkerr(js, "function code not string");
+  
+  jsoff_t fnlen, fnoff = vstr(js, code_val, &fnlen);
+  const char *fn = (const char *) (&js->mem[fnoff]);
+  
+  jsval_t closure_scope = js_mkundef();
+  jsoff_t scope_off = lkp(js, func_obj, "__scope", 7);
+  if (scope_off != 0) {
+    closure_scope = resolveprop(js, mkval(T_PROP, scope_off));
+  }
+  
+  jsoff_t parent_scope_offset;
+  if (vtype(closure_scope) == T_OBJ) {
+    parent_scope_offset = (jsoff_t) vdata(closure_scope);
+  } else {
+    parent_scope_offset = (jsoff_t) vdata(js->scope);
+  }
+  
+  jsval_t saved_scope = js->scope;
+  jsval_t function_scope = mkobj(js, parent_scope_offset);
+  js->scope = function_scope;
+  
+  jsoff_t fnpos = 1;
+  int arg_idx = 0;
+  bool has_rest = false;
+  jsoff_t rest_param_start = 0, rest_param_len = 0;
+  
+  while (fnpos < fnlen) {
+    fnpos = skiptonext(fn, fnlen, fnpos);
+    if (fnpos < fnlen && fn[fnpos] == ')') break;
+    
+    bool is_rest = false;
+    if (fnpos + 3 < fnlen && fn[fnpos] == '.' && fn[fnpos + 1] == '.' && fn[fnpos + 2] == '.') {
+      is_rest = true;
+      has_rest = true;
+      fnpos += 3;
+      fnpos = skiptonext(fn, fnlen, fnpos);
+    }
+    
+    jsoff_t identlen = 0;
+    uint8_t tok = parseident(&fn[fnpos], fnlen - fnpos, &identlen);
+    if (tok != TOK_IDENTIFIER) break;
+    
+    if (is_rest) {
+      rest_param_start = fnpos;
+      rest_param_len = identlen;
+      fnpos = skiptonext(fn, fnlen, fnpos + identlen);
+      break;
+    }
+    
+    jsval_t v = arg_idx < nargs ? args[arg_idx] : js_mkundef();
+    setprop(js, function_scope, js_mkstr(js, &fn[fnpos], identlen), v);
+    arg_idx++;
+    fnpos = skiptonext(fn, fnlen, fnpos + identlen);
+    if (fnpos < fnlen && fn[fnpos] == ',') fnpos++;
+  }
+  
+  if (has_rest && rest_param_len > 0) {
+    jsval_t rest_array = mkarr(js);
+    if (!is_err(rest_array)) {
+      jsoff_t idx = 0;
+      while (arg_idx < nargs) {
+        char idxstr[16];
+        snprintf(idxstr, sizeof(idxstr), "%u", (unsigned) idx);
+        jsval_t key = js_mkstr(js, idxstr, strlen(idxstr));
+        setprop(js, rest_array, key, args[arg_idx]);
+        idx++;
+        arg_idx++;
+      }
+      jsval_t len_key = js_mkstr(js, "length", 6);
+      setprop(js, rest_array, len_key, tov((double) idx));
+      rest_array = mkval(T_ARR, vdata(rest_array));
+      setprop(js, function_scope, js_mkstr(js, &fn[rest_param_start], rest_param_len), rest_array);
+    }
+  }
+  
+  if (fnpos < fnlen && fn[fnpos] == ')') fnpos++;
+  fnpos = skiptonext(fn, fnlen, fnpos);
+  if (fnpos < fnlen && fn[fnpos] == '{') fnpos++;
+  size_t body_len = fnlen - fnpos - 1;
+  
+  jsval_t saved_this = js->this_val;
+  js->this_val = js_glob(js);
+  js->flags = F_CALL;
+  
+  jsval_t res = js_eval(js, &fn[fnpos], body_len);
+  if (!is_err(res) && !(js->flags & F_RETURN)) res = js_mkundef();
+  
+  js->this_val = saved_this;
+  js->scope = saved_scope;
+  
   return res;
 }
 
@@ -1403,6 +1519,108 @@ static jsval_t js_template_literal(struct js *js) {
       pos += part_len;
     }
   }
+  
+  return result;
+}
+
+static jsval_t js_tagged_template(struct js *js, jsval_t tag_func) {
+  if (js->flags & F_NOEXEC) return js_mkundef();
+  
+  const char *saved_code = js->code;
+  jsoff_t saved_clen = js->clen, saved_pos = js->pos;
+  uint8_t saved_tok = js->tok;
+  
+  uint8_t *in = (uint8_t *) &js->code[js->toff];
+  size_t template_len = js->tlen;
+  jsval_t strings[64], values[64];
+  int string_count = 0, value_count = 0;
+  size_t n = 1;
+  
+  while (n < template_len - 1) {
+    size_t part_start = n;
+    
+    while (n < template_len - 1 && !(in[n] == '$' && n + 1 < template_len - 1 && in[n + 1] == '{')) {
+      if (in[n] == '\\' && n + 1 < template_len - 1) n += 2;
+      else n++;
+    }
+    
+    uint8_t *out = &js->mem[js->brk + sizeof(jsoff_t)];
+    size_t out_len = 0;
+    if (js->brk + sizeof(jsoff_t) + (n - part_start) > js->size) return js_mkerr(js, "oom");
+    
+    for (size_t i = part_start; i < n; i++) {
+      if (in[i] == '\\' && i + 1 < n) {
+        i++;
+        if (in[i] == 'n') out[out_len++] = '\n';
+        else if (in[i] == 't') out[out_len++] = '\t';
+        else if (in[i] == 'r') out[out_len++] = '\r';
+        else if (in[i] == '\\') out[out_len++] = '\\';
+        else if (in[i] == '`') out[out_len++] = '`';
+        else out[out_len++] = in[i];
+      } else {
+        out[out_len++] = in[i];
+      }
+    }
+    strings[string_count++] = js_mkstr(js, NULL, out_len);
+    
+    if (n >= template_len - 1 || in[n] != '$') break;
+    
+    n += 2;
+    int brace_count = 1;
+    size_t expr_start = n;
+    while (n < template_len - 1 && brace_count > 0) {
+      if (in[n] == '{') brace_count++;
+      else if (in[n] == '}') brace_count--;
+      if (brace_count > 0) n++;
+    }
+    if (brace_count != 0) return js_mkerr(js, "unclosed ${");
+    
+    const char *saved_code = js->code;
+    jsoff_t saved_clen = js->clen, saved_pos = js->pos;
+    uint8_t saved_tok = js->tok, saved_consumed = js->consumed;
+    
+    js->code = (const char *)&in[expr_start];
+    js->clen = n - expr_start;
+    js->pos = 0;
+    js->consumed = 1;
+    
+    jsval_t expr_result = resolveprop(js, js_expr(js));
+    
+    js->code = saved_code;
+    js->clen = saved_clen;
+    js->pos = saved_pos;
+    js->tok = saved_tok;
+    js->consumed = saved_consumed;
+    
+    if (is_err(expr_result)) return expr_result;
+    values[value_count++] = expr_result;
+    n++;
+  }
+  
+  jsval_t strings_arr = mkarr(js);
+  for (int i = 0; i < string_count; i++) {
+    char idx[16];
+    snprintf(idx, sizeof(idx), "%d", i);
+    setprop(js, strings_arr, js_mkstr(js, idx, strlen(idx)), strings[i]);
+  }
+  setprop(js, strings_arr, js_mkstr(js, "length", 6), tov((double)string_count));
+  strings_arr = mkval(T_ARR, vdata(strings_arr));
+  
+  jsval_t args[65];
+  args[0] = strings_arr;
+  for (int i = 0; i < value_count; i++) {
+    args[i + 1] = values[i];
+  }
+  
+  uint8_t saved_flags = js->flags;
+  jsval_t result = call_js_with_args(js, tag_func, args, 1 + value_count);
+  
+  js->code = saved_code;
+  js->clen = saved_clen;
+  js->pos = saved_pos;
+  js->tok = saved_tok;
+  js->flags = saved_flags;
+  js->consumed = 1;
   
   return result;
 }
@@ -1936,10 +2154,23 @@ static jsval_t js_call_dot(struct js *js) {
   if (is_err(res)) return res;
   if (vtype(res) == T_CODEREF) {
     if (lookahead(js) == TOK_ARROW) return res;
+    if (lookahead(js) == TOK_TEMPLATE) {
+      jsval_t tag_func = lookup(js, &js->code[coderefoff(res)], codereflen(res));
+      if (!(js->flags & F_NOEXEC) && !is_err(tag_func)) tag_func = resolveprop(js, tag_func);
+      js->consumed = 1;
+      next(js);
+      js->consumed = 1;
+      jsval_t result = js_tagged_template(js, tag_func);
+      return result;
+    }
     res = lookup(js, &js->code[coderefoff(res)], codereflen(res));
   }
-  while (next(js) == TOK_LPAREN || next(js) == TOK_DOT || next(js) == TOK_OPTIONAL_CHAIN || next(js) == TOK_LBRACKET) {
-    if (js->tok == TOK_DOT || js->tok == TOK_OPTIONAL_CHAIN) {
+  while (next(js) == TOK_LPAREN || next(js) == TOK_DOT || next(js) == TOK_OPTIONAL_CHAIN || next(js) == TOK_LBRACKET || next(js) == TOK_TEMPLATE) {
+    if (js->tok == TOK_TEMPLATE) {
+      if (vtype(res) == T_PROP) res = resolveprop(js, res);
+      js->consumed = 1;
+      return js_tagged_template(js, res);
+    } else if (js->tok == TOK_DOT || js->tok == TOK_OPTIONAL_CHAIN) {
       uint8_t op = js->tok;
       js->consumed = 1;
       if (vtype(res) != T_PROP) {
