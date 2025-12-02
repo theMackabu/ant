@@ -180,6 +180,7 @@ static jsval_t js_arrow_func(struct js *js, jsoff_t params_start, jsoff_t params
 static jsval_t js_while(struct js *js);
 static jsval_t js_do_while(struct js *js);
 static jsval_t js_block_or_stmt(struct js *js);
+static jsval_t js_try(struct js *js);
 static jsval_t do_op(struct js *, uint8_t op, jsval_t l, jsval_t r);
 static jsval_t do_instanceof(struct js *js, jsval_t l, jsval_t r);
 static jsval_t do_in(struct js *js, jsval_t l, jsval_t r);
@@ -3491,6 +3492,258 @@ static jsval_t js_do_while(struct js *js) {
   return res;
 }
 
+static jsval_t js_try(struct js *js) {
+  uint8_t flags = js->flags, exe = !(flags & F_NOEXEC);
+  jsval_t res = js_mkundef();
+  jsval_t try_result = js_mkundef();
+  jsval_t catch_result = js_mkundef();
+  jsval_t finally_result = js_mkundef();
+  
+  bool had_exception = false;
+  char saved_errmsg[256] = {0};
+  jsval_t exception_value = js_mkundef();
+  
+  js->consumed = 1;
+  
+  if (next(js) != TOK_LBRACE) {
+    return js_mkerr(js, "{ expected after try");
+  }
+  
+  jsoff_t try_start = js->pos;
+  js->flags |= F_NOEXEC;
+  js->consumed = 1;
+  
+  while (next(js) != TOK_EOF && next(js) != TOK_RBRACE) {
+    jsval_t v = js_stmt(js);
+    if (is_err(v)) break;
+  }
+  if (next(js) == TOK_RBRACE) js->consumed = 1;
+  jsoff_t try_end = js->pos;
+  
+  bool has_catch = false;
+  bool has_finally = false;
+  jsoff_t catch_start = 0, catch_end = 0;
+  jsoff_t finally_start = 0, finally_end = 0;
+  jsoff_t catch_param_off = 0, catch_param_len = 0;
+  
+  if (lookahead(js) == TOK_CATCH) {
+    has_catch = true;
+    js->consumed = 1;
+    next(js);
+    js->consumed = 1;
+    
+    if (next(js) == TOK_LPAREN) {
+      js->consumed = 1;
+      if (next(js) == TOK_IDENTIFIER) {
+        catch_param_off = js->toff;
+        catch_param_len = js->tlen;
+        js->consumed = 1;
+      }
+      if (next(js) != TOK_RPAREN) {
+        return js_mkerr(js, ") expected in catch");
+      }
+      js->consumed = 1;
+    }
+    
+    if (next(js) != TOK_LBRACE) {
+      return js_mkerr(js, "{ expected after catch");
+    }
+    
+    catch_start = js->pos;
+    js->consumed = 1;
+    
+    while (next(js) != TOK_EOF && next(js) != TOK_RBRACE) {
+      jsval_t v = js_stmt(js);
+      if (is_err(v)) break;
+    }
+    if (next(js) == TOK_RBRACE) js->consumed = 1;
+    catch_end = js->pos;
+  }
+  
+  if (lookahead(js) == TOK_FINALLY) {
+    has_finally = true;
+    js->consumed = 1;
+    next(js);
+    js->consumed = 1;
+    
+    if (next(js) != TOK_LBRACE) {
+      return js_mkerr(js, "{ expected after finally");
+    }
+    
+    finally_start = js->pos;
+    js->consumed = 1;
+    
+    while (next(js) != TOK_EOF && next(js) != TOK_RBRACE) {
+      jsval_t v = js_stmt(js);
+      if (is_err(v)) break;
+    }
+    if (next(js) == TOK_RBRACE) js->consumed = 1;
+    finally_end = js->pos;
+  }
+  
+  if (!has_catch && !has_finally) {
+    return js_mkerr(js, "try requires catch or finally");
+  }
+  
+  jsoff_t end_pos = has_finally ? finally_end : (has_catch ? catch_end : try_end);
+  
+  if (exe) {
+    bool try_returned = false;
+    jsval_t try_return_value = js_mkundef();
+    
+    js->flags = flags & (uint8_t)~F_NOEXEC;
+    js->pos = try_start;
+    js->consumed = 1;
+    
+    while (next(js) != TOK_EOF && next(js) != TOK_RBRACE && !(js->flags & (F_RETURN | F_THROW | F_BREAK))) {
+      try_result = js_stmt(js);
+      if (is_err(try_result)) {
+        had_exception = true;
+        break;
+      }
+    }
+    
+    if (js->flags & F_RETURN) {
+      try_returned = true;
+      try_return_value = try_result;
+      js->flags &= (uint8_t)~(F_RETURN | F_NOEXEC);
+    }
+    
+    if (js->flags & F_THROW) {
+      had_exception = true;
+      js->flags &= (uint8_t)~F_THROW;
+      strncpy(saved_errmsg, js->errmsg, sizeof(saved_errmsg) - 1);
+      saved_errmsg[sizeof(saved_errmsg) - 1] = '\0';
+      
+      jsval_t err_obj = mkobj(js, 0);
+      jsval_t msg_key = js_mkstr(js, "message", 7);
+      jsval_t name_key = js_mkstr(js, "name", 4);
+      
+      char *colon = strchr(saved_errmsg, ':');
+      if (colon && strncmp(saved_errmsg, "Uncaught ", 9) == 0) {
+        char *type_start = saved_errmsg + 9;
+        size_t type_len = colon - type_start;
+        char *msg_start = colon + 2;
+        char *newline = strchr(msg_start, '\n');
+        size_t msg_len = newline ? (size_t)(newline - msg_start) : strlen(msg_start);
+        
+        jsval_t name_val = js_mkstr(js, type_start, type_len);
+        jsval_t msg_val = js_mkstr(js, msg_start, msg_len);
+        setprop(js, err_obj, name_key, name_val);
+        setprop(js, err_obj, msg_key, msg_val);
+      } else {
+        jsval_t msg_val = js_mkstr(js, saved_errmsg, strlen(saved_errmsg));
+        jsval_t name_val = js_mkstr(js, "Error", 5);
+        setprop(js, err_obj, name_key, name_val);
+        setprop(js, err_obj, msg_key, msg_val);
+      }
+      
+      exception_value = err_obj;
+      js->errmsg[0] = '\0';
+    }
+    
+    if (next(js) == TOK_RBRACE) js->consumed = 1;
+    
+    bool exception_handled = false;
+    bool catch_returned = false;
+    jsval_t catch_return_value = js_mkundef();
+    
+    if (had_exception && has_catch) {
+      exception_handled = true;
+      mkscope(js);
+      
+      if (catch_param_len > 0) {
+        jsval_t key = js_mkstr(js, &js->code[catch_param_off], catch_param_len);
+        mkprop(js, js->scope, key, exception_value, false);
+      }
+      
+      js->flags = flags & (uint8_t)~F_NOEXEC;
+      js->pos = catch_start;
+      js->consumed = 1;
+      
+      while (next(js) != TOK_EOF && next(js) != TOK_RBRACE && !(js->flags & (F_RETURN | F_THROW | F_BREAK))) {
+        catch_result = js_stmt(js);
+        if (is_err(catch_result)) break;
+      }
+      
+      if (js->flags & F_RETURN) {
+        catch_returned = true;
+        catch_return_value = catch_result;
+        js->flags &= (uint8_t)~(F_RETURN | F_NOEXEC);
+      }
+      
+      if (next(js) == TOK_RBRACE) js->consumed = 1;
+      delscope(js);
+      
+      if (js->flags & F_THROW) {
+        exception_handled = false;
+        strncpy(saved_errmsg, js->errmsg, sizeof(saved_errmsg) - 1);
+        saved_errmsg[sizeof(saved_errmsg) - 1] = '\0';
+      } else {
+        res = catch_result;
+      }
+    }
+    
+    if (has_finally) {
+      uint8_t pre_finally_flags = js->flags;
+      bool had_pre_finally_exception = (js->flags & F_THROW) != 0;
+      char pre_finally_errmsg[256] = {0};
+      if (had_pre_finally_exception) {
+        strncpy(pre_finally_errmsg, js->errmsg, sizeof(pre_finally_errmsg) - 1);
+        js->flags &= (uint8_t)~F_THROW;
+        js->errmsg[0] = '\0';
+      }
+      
+      js->flags = flags & (uint8_t)~F_NOEXEC;
+      js->pos = finally_start;
+      js->consumed = 1;
+      
+      while (next(js) != TOK_EOF && next(js) != TOK_RBRACE && !(js->flags & (F_RETURN | F_THROW | F_BREAK))) {
+        finally_result = js_stmt(js);
+        if (is_err(finally_result)) break;
+      }
+      
+      if (next(js) == TOK_RBRACE) js->consumed = 1;
+      
+      if (!(js->flags & (F_RETURN | F_THROW))) {
+        if (had_pre_finally_exception) {
+          js->flags = pre_finally_flags;
+          strncpy(js->errmsg, pre_finally_errmsg, sizeof(js->errmsg) - 1);
+        } else if (had_exception && !exception_handled) {
+          js->flags |= F_THROW;
+          strncpy(js->errmsg, saved_errmsg, sizeof(js->errmsg) - 1);
+        } else if (catch_returned) {
+          js->flags |= F_RETURN;
+          res = catch_return_value;
+        } else if (try_returned) {
+          js->flags |= F_RETURN;
+          res = try_return_value;
+        }
+      }
+    } else if (had_exception && !exception_handled) {
+      js->flags |= F_THROW;
+      strncpy(js->errmsg, saved_errmsg, sizeof(js->errmsg) - 1);
+      res = mkval(T_ERR, 0);
+    } else if (catch_returned) {
+      js->flags |= F_RETURN;
+      res = catch_return_value;
+    } else if (try_returned) {
+      js->flags |= F_RETURN;
+      res = try_return_value;
+    }
+    
+    if (!had_exception && !try_returned && !(js->flags & (F_RETURN | F_THROW))) {
+      res = try_result;
+    }
+  }
+  
+  js->pos = end_pos;
+  js->tok = TOK_SEMICOLON;
+  js->consumed = 0;
+  
+  return res;
+}
+
 static jsval_t js_break(struct js *js) {
   if (js->flags & F_NOEXEC) {
   } else {
@@ -3719,7 +3972,6 @@ static jsval_t js_stmt(struct js *js) {
     case TOK_CASE: case TOK_CATCH:
     case TOK_DEFAULT: case TOK_FINALLY:
     case TOK_SWITCH:
-    case TOK_TRY:
     case TOK_WITH: case TOK_YIELD:
       res = js_mkerr(js, "'%.*s' not implemented", (int) js->tlen, js->code + js->toff);
       break;
@@ -3758,6 +4010,7 @@ static jsval_t js_stmt(struct js *js) {
     case TOK_LBRACE:    res = js_block(js, !(js->flags & F_NOEXEC)); break;
     case TOK_FOR:       res = js_for(js); break;
     case TOK_RETURN:    res = js_return(js); break;
+    case TOK_TRY:       res = js_try(js); break;
     default:            res = resolveprop(js, js_expr(js)); break;
   }
   
