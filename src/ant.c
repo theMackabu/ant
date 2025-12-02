@@ -85,6 +85,7 @@ struct js {
   #define F_BREAK 8U      // exit the loop
   #define F_RETURN 16U    // return has been executed
   #define F_THROW 32U     // throw has been executed
+  #define F_YIELD 64U     // yield has been executed (for generators)
   jsoff_t clen;           // code snippet length
   jsoff_t pos;            // current parsing position
   jsoff_t toff;           // offset of the last parsed token
@@ -101,6 +102,9 @@ struct js {
   void *cstk;             // C stack pointer at the beginning of js_eval()
   jsval_t current_func;   // currently executing function (for native closures)
   bool var_warning_shown; // flag to show var deprecation warning only once
+  jsval_t yield_value;    // value from last yield (for generators)
+  int yield_skip_count;   // number of yields to skip before returning
+  int yield_current;      // current yield count during execution
 };
 
 enum {
@@ -216,6 +220,12 @@ static jsval_t builtin_promise_catch(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_promise_finally(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_Date(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_Date_now(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_generator_next(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_generator_return(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_generator_throw(struct js *js, jsval_t *args, int nargs);
+static size_t strgenerator(struct js *js, jsval_t value, char *buf, size_t len);
+static jsval_t mkgenerator(struct js *js, jsval_t func_obj, jsval_t scope, jsval_t *args, int nargs);
+static jsval_t js_func_literal_gen(struct js *js, bool is_async, bool is_generator);
 
 static coroutine_t *create_coroutine(struct js *js, jsval_t promise, jsval_t async_func) {
   coroutine_t *coro = (coroutine_t *)malloc(sizeof(coroutine_t));
@@ -633,6 +643,7 @@ static size_t tostr(struct js *js, jsval_t value, char *buf, size_t len) {
     case T_STR:   return strstring(js, value, buf, len);
     case T_NUM:   return strnum(value, buf, len);
     case T_PROMISE: return strpromise(js, value, buf, len);
+    case T_GENERATOR: return strgenerator(js, value, buf, len);
     case T_FUNC:  return strfunc(js, value, buf, len);
     case T_CFUNC: return (size_t) snprintf(buf, len, "\"c_func_0x%lx\"", (unsigned long) vdata(value));
     case T_PROP:  return (size_t) snprintf(buf, len, "PROP@%lu", (unsigned long) vdata(value));
@@ -748,7 +759,7 @@ static inline jsoff_t esize(jsoff_t w) {
 }
 
 static bool is_mem_entity(uint8_t t) {
-  return t == T_OBJ || t == T_PROP || t == T_STR || t == T_FUNC || t == T_ARR || t == T_PROMISE;
+  return t == T_OBJ || t == T_PROP || t == T_STR || t == T_FUNC || t == T_ARR || t == T_PROMISE || t == T_GENERATOR;
 }
 
 static void js_fixup_offsets(struct js *js, jsoff_t start, jsoff_t size) {
@@ -1280,8 +1291,9 @@ static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
     return mkval(T_PROP, off);
   }
   
-  if (vtype(l) != T_OBJ && vtype(l) != T_ARR) return js_mkerr(js, "lookup in non-obj");
-  jsoff_t off = lkp(js, l, ptr, codereflen(r));
+  if (vtype(l) != T_OBJ && vtype(l) != T_ARR && vtype(l) != T_GENERATOR) return js_mkerr(js, "lookup in non-obj");
+  jsval_t lookup_obj = (vtype(l) == T_GENERATOR) ? mkval(T_OBJ, vdata(l)) : l;
+  jsoff_t off = lkp(js, lookup_obj, ptr, codereflen(r));
   if (off == 0) {
     jsval_t key = js_mkstr(js, ptr, codereflen(r));
     jsval_t prop = setprop(js, l, key, js_mkundef());
@@ -1599,6 +1611,39 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
         jsval_t async_val = resolveprop(js, mkval(T_PROP, async_off));
         is_async = vtype(async_val) == T_BOOL && vdata(async_val) == 1;
       }
+      
+      bool is_generator = false;
+      jsoff_t gen_off = lkp(js, func_obj, "__generator", 11);
+      if (gen_off != 0) {
+        jsval_t gen_val = resolveprop(js, mkval(T_PROP, gen_off));
+        is_generator = vtype(gen_val) == T_BOOL && vdata(gen_val) == 1;
+      }
+      
+      if (is_generator) {
+        int argc = 0;
+        while (js->pos < js->clen) {
+          if (next(js) == TOK_RPAREN) break;
+          jsval_t arg = resolveprop(js, js_expr(js));
+          if (js->brk + sizeof(arg) > js->size) {
+            js->code = code; js->clen = clen; js->pos = pos;
+            js->flags = flags; js->tok = tok; js->nogc = nogc;
+            return js_mkerr(js, "call oom");
+          }
+          js->size -= (jsoff_t) sizeof(arg);
+          memcpy(&js->mem[js->size], &arg, sizeof(arg));
+          argc++;
+          if (next(js) == TOK_COMMA) js->consumed = 1;
+        }
+        reverse((jsval_t *) &js->mem[js->size], argc);
+        jsval_t *call_args = (jsval_t *)&js->mem[js->size];
+        res = mkgenerator(js, func_obj, closure_scope, call_args, argc);
+        js->size += (jsoff_t) sizeof(jsval_t) * (jsoff_t) argc;
+        js->code = code; js->clen = clen; js->pos = pos;
+        js->flags = flags; js->tok = tok; js->nogc = nogc;
+        js->consumed = 1;
+        return res;
+      }
+      
       if (fnlen == 16 && memcmp(code_str, "__builtin_Object", 16) == 0) {
         res = call_c(js, builtin_Object);
       } else {
@@ -2093,8 +2138,17 @@ static bool parse_func_params(struct js *js, uint8_t *flags) {
 }
 
 static jsval_t js_func_literal(struct js *js, bool is_async) {
+  return js_func_literal_gen(js, is_async, false);
+}
+
+static jsval_t js_func_literal_gen(struct js *js, bool is_async, bool is_generator) {
   uint8_t flags = js->flags;
   js->consumed = 1;
+  
+  if (is_generator && next(js) == TOK_MUL) {
+    js->consumed = 1;
+  }
+  
   jsoff_t name_off = 0, name_len = 0;
   if (next(js) == TOK_IDENTIFIER) {
     name_off = js->toff;
@@ -2134,6 +2188,13 @@ static jsval_t js_func_literal(struct js *js, bool is_async) {
     if (is_err(async_key)) return async_key;
     jsval_t res_async = setprop(js, func_obj, async_key, js_mktrue());
     if (is_err(res_async)) return res_async;
+  }
+  
+  if (is_generator) {
+    jsval_t gen_key = js_mkstr(js, "__generator", 11);
+    if (is_err(gen_key)) return gen_key;
+    jsval_t res_gen = setprop(js, func_obj, gen_key, js_mktrue());
+    if (is_err(res_gen)) return res_gen;
   }
   
   if (name_len > 0) {
@@ -2190,7 +2251,14 @@ static jsval_t js_literal(struct js *js) {
     case TOK_TEMPLATE:    return js_template_literal(js);
     case TOK_LBRACE:      return js_obj_literal(js);
     case TOK_LBRACKET:    return js_arr_literal(js);
-    case TOK_FUNC:        return js_func_literal(js, false);
+    case TOK_FUNC: {
+      js->consumed = 1;
+      if (next(js) == TOK_MUL) {
+        return js_func_literal_gen(js, false, true);
+      }
+      js->consumed = 0;
+      return js_func_literal(js, false);
+    }
     case TOK_ASYNC: {
       js->consumed = 1;
       uint8_t next_tok = next(js);
@@ -3130,6 +3198,64 @@ static jsval_t js_func_decl_async(struct js *js) {
   return js_mkundef();
 }
 
+static jsval_t js_func_decl_generator(struct js *js) {
+  uint8_t exe = !(js->flags & F_NOEXEC);
+  js->consumed = 1;
+  EXPECT(TOK_IDENTIFIER, );
+  js->consumed = 0;
+  jsoff_t noff = js->toff, nlen = js->tlen;
+  char *name = (char *) &js->code[noff];
+  js->consumed = 1;
+  EXPECT(TOK_LPAREN, );
+  jsoff_t pos = js->pos - 1;
+  if (!parse_func_params(js, NULL)) {
+    return js_mkerr(js, "invalid parameters");
+  }
+  EXPECT(TOK_RPAREN, );
+  EXPECT(TOK_LBRACE, );
+  js->consumed = 0;
+  uint8_t flags = js->flags;
+  js->flags |= F_NOEXEC;
+  jsval_t res = js_block(js, false);
+  if (is_err(res)) {
+    js->flags = flags;
+    return res;
+  }
+  js->flags = flags;
+  jsval_t str = js_mkstr(js, &js->code[pos], js->pos - pos);
+  jsval_t func_obj = mkobj(js, 0);
+  if (is_err(func_obj)) return func_obj;
+  jsval_t code_key = js_mkstr(js, "__code", 6);
+  if (is_err(code_key)) return code_key;
+  jsval_t res2 = setprop(js, func_obj, code_key, str);
+  if (is_err(res2)) return res2;
+  jsval_t gen_key = js_mkstr(js, "__generator", 11);
+  if (is_err(gen_key)) return gen_key;
+  jsval_t res_gen = setprop(js, func_obj, gen_key, js_mktrue());
+  if (is_err(res_gen)) return res_gen;
+  jsval_t name_key = js_mkstr(js, "name", 4);
+  if (is_err(name_key)) return name_key;
+  jsval_t name_val = js_mkstr(js, name, nlen);
+  if (is_err(name_val)) return name_val;
+  jsval_t res3 = setprop(js, func_obj, name_key, name_val);
+  if (is_err(res3)) return res3;
+  if (exe) {
+    jsval_t scope_key = js_mkstr(js, "__scope", 7);
+    if (is_err(scope_key)) return scope_key;
+    jsval_t res4 = setprop(js, func_obj, scope_key, js->scope);
+    if (is_err(res4)) return res4;
+  }
+  jsval_t func = mkval(T_FUNC, (unsigned long) vdata(func_obj));
+  if (exe) {
+    if (lkp(js, js->scope, name, nlen) > 0)
+      return js_mkerr(js, "'%.*s' already declared", (int) nlen, name);
+    jsval_t x = mkprop(js, js->scope, js_mkstr(js, name, nlen), func, false);
+    if (is_err(x)) return x;
+  }
+  
+  return js_mkundef();
+}
+
 static jsval_t js_block_or_stmt(struct js *js) {
   if (next(js) == TOK_LBRACE) return js_block(js, !(js->flags & F_NOEXEC));
   jsval_t res = resolveprop(js, js_stmt(js));
@@ -3404,6 +3530,11 @@ static jsval_t js_while(struct js *js) {
         res = v;
         break;
       }
+      
+      if (js->flags & F_YIELD) {
+        res = js->yield_value;
+        break;
+      }
     }
   }
   
@@ -3412,8 +3543,8 @@ static jsval_t js_while(struct js *js) {
   js->consumed = 0;
   
   uint8_t preserve = 0;
-  if (js->flags & F_RETURN) {
-    preserve = js->flags & (F_RETURN | F_NOEXEC);
+  if (js->flags & (F_RETURN | F_YIELD)) {
+    preserve = js->flags & (F_RETURN | F_YIELD | F_NOEXEC);
   }
   js->flags = flags | preserve;
   
@@ -3972,9 +4103,34 @@ static jsval_t js_stmt(struct js *js) {
     case TOK_CASE: case TOK_CATCH:
     case TOK_DEFAULT: case TOK_FINALLY:
     case TOK_SWITCH:
-    case TOK_WITH: case TOK_YIELD:
+    case TOK_WITH:
       res = js_mkerr(js, "'%.*s' not implemented", (int) js->tlen, js->code + js->toff);
       break;
+    case TOK_YIELD: {
+      js->consumed = 1;
+      if (js->flags & F_NOEXEC) {
+        uint8_t next_tok = next(js);
+        if (next_tok != TOK_SEMICOLON && next_tok != TOK_RBRACE && next_tok != TOK_EOF) {
+          js_expr(js);
+        }
+        res = js_mkundef();
+      } else {
+        uint8_t next_tok = next(js);
+        jsval_t yield_val = js_mkundef();
+        if (next_tok != TOK_SEMICOLON && next_tok != TOK_RBRACE && next_tok != TOK_EOF) {
+          yield_val = resolveprop(js, js_expr(js));
+        }
+        if (js->yield_current < js->yield_skip_count) {
+          js->yield_current++;
+          res = js_mkundef();
+        } else {
+          js->yield_value = yield_val;
+          js->flags |= F_YIELD;
+          res = yield_val;
+        }
+      }
+      break;
+    }
     case TOK_THROW: {
       js->consumed = 1;
       jsval_t throw_val = js_expr(js);
@@ -4003,7 +4159,16 @@ static jsval_t js_stmt(struct js *js) {
     case TOK_BREAK:     res = js_break(js); break;
     case TOK_LET:       res = js_let(js); break;
     case TOK_CONST:     res = js_const(js); break;
-    case TOK_FUNC:      res = js_func_decl(js); break;
+    case TOK_FUNC: {
+      js->consumed = 1;
+      if (next(js) == TOK_MUL) {
+        res = js_func_decl_generator(js);
+      } else {
+        js->consumed = 0;
+        res = js_func_decl(js);
+      }
+      break;
+    }
     case TOK_ASYNC:     js->consumed = 1; if (next(js) == TOK_FUNC) res = js_func_decl_async(js); else return js_mkerr(js, "async must be followed by function"); break;
     case TOK_CLASS:     res = js_class_decl(js); break;
     case TOK_IF:        res = js_if(js); break;
@@ -5381,6 +5546,258 @@ static jsval_t builtin_Promise_race(struct js *js, jsval_t *args, int nargs) {
   }
   
   return result_promise;
+}
+
+static size_t strgenerator(struct js *js, jsval_t value, char *buf, size_t len) {
+  jsval_t gen_obj = mkval(T_OBJ, vdata(value));
+  jsoff_t done_off = lkp(js, gen_obj, "__done", 6);
+  bool is_done = false;
+  if (done_off != 0) {
+    jsval_t done_val = resolveprop(js, mkval(T_PROP, done_off));
+    is_done = vtype(done_val) == T_BOOL && vdata(done_val) == 1;
+  }
+  
+  if (is_done) {
+    return (size_t)snprintf(buf, len, "Object [Generator] {}");
+  }
+  return (size_t)snprintf(buf, len, "Object [Generator] {}");
+}
+
+static jsval_t mkgenerator(struct js *js, jsval_t func_obj, jsval_t scope, jsval_t *args, int nargs) {
+  jsval_t gen_obj = mkobj(js, 0);
+  if (is_err(gen_obj)) return gen_obj;
+  
+  setprop(js, gen_obj, js_mkstr(js, "__func", 6), func_obj);
+  setprop(js, gen_obj, js_mkstr(js, "__scope", 7), scope);
+  setprop(js, gen_obj, js_mkstr(js, "__yield_count", 13), tov(0.0));
+  setprop(js, gen_obj, js_mkstr(js, "__done", 6), js_mkfalse());
+  
+  if (nargs > 0 && args != NULL) {
+    jsval_t args_arr = mkarr(js);
+    for (int i = 0; i < nargs; i++) {
+      char idx[16];
+      snprintf(idx, sizeof(idx), "%d", i);
+      setprop(js, args_arr, js_mkstr(js, idx, strlen(idx)), args[i]);
+    }
+    setprop(js, args_arr, js_mkstr(js, "length", 6), tov((double)nargs));
+    setprop(js, gen_obj, js_mkstr(js, "__args", 6), mkval(T_ARR, vdata(args_arr)));
+  }
+  
+  jsval_t next_fn_obj = mkobj(js, 0);
+  setprop(js, next_fn_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_generator_next));
+  setprop(js, gen_obj, js_mkstr(js, "next", 4), mkval(T_FUNC, vdata(next_fn_obj)));
+  
+  jsval_t return_fn_obj = mkobj(js, 0);
+  setprop(js, return_fn_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_generator_return));
+  setprop(js, gen_obj, js_mkstr(js, "return", 6), mkval(T_FUNC, vdata(return_fn_obj)));
+  
+  jsval_t throw_fn_obj = mkobj(js, 0);
+  setprop(js, throw_fn_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_generator_throw));
+  setprop(js, gen_obj, js_mkstr(js, "throw", 5), mkval(T_FUNC, vdata(throw_fn_obj)));
+  
+  return mkval(T_GENERATOR, vdata(gen_obj));
+}
+
+static jsval_t generator_make_result(struct js *js, jsval_t value, bool done) {
+  jsval_t result = mkobj(js, 0);
+  if (is_err(result)) return result;
+  setprop(js, result, js_mkstr(js, "value", 5), value);
+  setprop(js, result, js_mkstr(js, "done", 4), done ? js_mktrue() : js_mkfalse());
+  return result;
+}
+
+static jsval_t run_generator_body(struct js *js, jsval_t gen, jsval_t input_value, bool is_throw) {
+  jsval_t gen_obj = mkval(T_OBJ, vdata(gen));
+  
+  jsoff_t done_off = lkp(js, gen_obj, "__done", 6);
+  if (done_off != 0) {
+    jsval_t done_val = resolveprop(js, mkval(T_PROP, done_off));
+    if (vtype(done_val) == T_BOOL && vdata(done_val) == 1) {
+      return generator_make_result(js, js_mkundef(), true);
+    }
+  }
+  
+  jsoff_t func_off = lkp(js, gen_obj, "__func", 6);
+  if (func_off == 0) return js_mkerr(js, "generator has no function");
+  jsval_t func_obj = resolveprop(js, mkval(T_PROP, func_off));
+  
+  jsoff_t code_off = lkp(js, func_obj, "__code", 6);
+  if (code_off == 0) return js_mkerr(js, "generator function has no code");
+  jsval_t code_val = resolveprop(js, mkval(T_PROP, code_off));
+  if (vtype(code_val) != T_STR) return js_mkerr(js, "generator code not string");
+  
+  jsoff_t fnlen, fnoff = vstr(js, code_val, &fnlen);
+  const char *fn = (const char *)&js->mem[fnoff];
+  
+  jsoff_t yield_count_off = lkp(js, gen_obj, "__yield_count", 13);
+  int target_yield = 0;
+  if (yield_count_off != 0) {
+    jsval_t yc_val = resolveprop(js, mkval(T_PROP, yield_count_off));
+    if (vtype(yc_val) == T_NUM) target_yield = (int)tod(yc_val);
+  }
+  
+  jsval_t closure_scope = js_mkundef();
+  jsoff_t scope_off = lkp(js, gen_obj, "__scope", 7);
+  if (scope_off != 0) {
+    closure_scope = resolveprop(js, mkval(T_PROP, scope_off));
+  }
+  
+  jsval_t saved_scope = js->scope;
+  jsoff_t parent_scope_offset = vtype(closure_scope) == T_OBJ ? 
+                                 (jsoff_t)vdata(closure_scope) : 
+                                 (jsoff_t)vdata(js->scope);
+  jsval_t function_scope = mkobj(js, parent_scope_offset);
+  
+  jsoff_t fnpos = 1;
+  jsoff_t args_off = lkp(js, gen_obj, "__args", 6);
+  jsval_t args_arr = js_mkundef();
+  int nargs = 0;
+  if (args_off != 0) {
+    args_arr = resolveprop(js, mkval(T_PROP, args_off));
+    if (vtype(args_arr) == T_ARR) {
+      jsoff_t len_off = lkp(js, args_arr, "length", 6);
+      if (len_off != 0) {
+        nargs = (int)tod(resolveprop(js, mkval(T_PROP, len_off)));
+      }
+    }
+  }
+  
+  int arg_idx = 0;
+  while (fnpos < fnlen) {
+    fnpos = skiptonext(fn, fnlen, fnpos);
+    if (fnpos < fnlen && fn[fnpos] == ')') break;
+    
+    jsoff_t identlen = 0;
+    uint8_t tok = parseident(&fn[fnpos], fnlen - fnpos, &identlen);
+    if (tok != TOK_IDENTIFIER) break;
+    
+    jsval_t v = js_mkundef();
+    if (arg_idx < nargs) {
+      char idx[16];
+      snprintf(idx, sizeof(idx), "%d", arg_idx);
+      jsoff_t idx_off = lkp(js, args_arr, idx, strlen(idx));
+      if (idx_off != 0) v = resolveprop(js, mkval(T_PROP, idx_off));
+    }
+    setprop(js, function_scope, js_mkstr(js, &fn[fnpos], identlen), v);
+    arg_idx++;
+    fnpos = skiptonext(fn, fnlen, fnpos + identlen);
+    if (fnpos < fnlen && fn[fnpos] == ',') fnpos++;
+  }
+  
+  js->scope = function_scope;
+  
+  jsoff_t body_fnpos = 1;
+  while (body_fnpos < fnlen && fn[body_fnpos] != ')') body_fnpos++;
+  if (body_fnpos < fnlen && fn[body_fnpos] == ')') body_fnpos++;
+  body_fnpos = skiptonext(fn, fnlen, body_fnpos);
+  if (body_fnpos < fnlen && fn[body_fnpos] == '{') body_fnpos++;
+  
+  jsoff_t body_start = body_fnpos;
+  jsoff_t body_len = fnlen - body_fnpos - 1;
+  
+  const char *body = &fn[body_start];
+  
+  const char *saved_code = js->code;
+  jsoff_t saved_clen = js->clen;
+  jsoff_t saved_pos = js->pos;
+  uint8_t saved_tok = js->tok;
+  uint8_t saved_consumed = js->consumed;
+  uint8_t saved_flags = js->flags;
+  
+  js->code = body;
+  js->clen = body_len;
+  js->pos = 0;
+  js->tok = TOK_ERR;
+  js->consumed = 1;
+  js->flags = F_CALL;
+  js->yield_value = js_mkundef();
+  js->yield_skip_count = target_yield;
+  js->yield_current = 0;
+  
+  jsval_t result = js_mkundef();
+  
+  while (js->pos < js->clen && !is_err(result)) {
+    result = js_stmt(js);
+    
+    if (js->flags & F_RETURN) {
+      setprop(js, gen_obj, js_mkstr(js, "__done", 6), js_mktrue());
+      js->flags &= ~F_RETURN;
+      
+      js->code = saved_code;
+      js->clen = saved_clen;
+      js->pos = saved_pos;
+      js->tok = saved_tok;
+      js->consumed = saved_consumed;
+      js->flags = saved_flags;
+      js->scope = saved_scope;
+      
+      return generator_make_result(js, result, true);
+    }
+    
+    if (js->flags & F_YIELD) {
+      js->flags &= ~F_YIELD;
+      result = js->yield_value;
+      setprop(js, gen_obj, js_mkstr(js, "__yield_count", 13), tov((double)(target_yield + 1)));
+      
+      js->code = saved_code;
+      js->clen = saved_clen;
+      js->pos = saved_pos;
+      js->tok = saved_tok;
+      js->consumed = saved_consumed;
+      js->flags = saved_flags;
+      js->scope = saved_scope;
+      
+      return generator_make_result(js, result, false);
+    }
+    
+    if (next(js) == TOK_EOF) break;
+  }
+  
+  js->code = saved_code;
+  js->clen = saved_clen;
+  js->pos = saved_pos;
+  js->tok = saved_tok;
+  js->consumed = saved_consumed;
+  js->flags = saved_flags;
+  js->scope = saved_scope;
+  
+  setprop(js, gen_obj, js_mkstr(js, "__done", 6), js_mktrue());
+  return generator_make_result(js, js_mkundef(), true);
+}
+
+static jsval_t builtin_generator_next(struct js *js, jsval_t *args, int nargs) {
+  jsval_t gen = js->this_val;
+  if (vtype(gen) != T_GENERATOR) {
+    return js_mkerr(js, "next called on non-generator");
+  }
+  jsval_t input = nargs > 0 ? args[0] : js_mkundef();
+  return run_generator_body(js, gen, input, false);
+}
+
+static jsval_t builtin_generator_return(struct js *js, jsval_t *args, int nargs) {
+  jsval_t gen = js->this_val;
+  if (vtype(gen) != T_GENERATOR) {
+    return js_mkerr(js, "return called on non-generator");
+  }
+  
+  jsval_t gen_obj = mkval(T_OBJ, vdata(gen));
+  setprop(js, gen_obj, js_mkstr(js, "__done", 6), js_mktrue());
+  
+  jsval_t ret_val = nargs > 0 ? args[0] : js_mkundef();
+  return generator_make_result(js, ret_val, true);
+}
+
+static jsval_t builtin_generator_throw(struct js *js, jsval_t *args, int nargs) {
+  jsval_t gen = js->this_val;
+  if (vtype(gen) != T_GENERATOR) {
+    return js_mkerr(js, "throw called on non-generator");
+  }
+  
+  jsval_t gen_obj = mkval(T_OBJ, vdata(gen));
+  setprop(js, gen_obj, js_mkstr(js, "__done", 6), js_mktrue());
+  
+  jsval_t throw_val = nargs > 0 ? args[0] : js_mkundef();
+  return js_throw(js, throw_val);
 }
 
 static jsval_t do_instanceof(struct js *js, jsval_t l, jsval_t r) {
