@@ -37,29 +37,28 @@ typedef struct {
   int capacity;
 } call_stack_t;
 
-// Coroutine support for async/await and generators
 typedef enum {
-  CORO_ASYNC_AWAIT,    // Async function waiting on promise
-  CORO_GENERATOR,      // Generator function (function*)
-  CORO_ASYNC_GENERATOR // Async generator (async function*)
+  CORO_ASYNC_AWAIT,
+  CORO_GENERATOR,
+  CORO_ASYNC_GENERATOR
 } coroutine_type_t;
 
 typedef struct coroutine {
-  struct js *js;              // JS context
-  coroutine_type_t type;      // Type of coroutine
-  jsval_t scope;              // Captured scope
-  jsval_t this_val;           // Captured 'this'
-  jsval_t awaited_promise;    // Promise we're waiting on (for async)
-  jsval_t result;             // Result when resumed
-  jsval_t async_func;         // The async/generator function being executed
-  jsval_t *args;              // Function arguments
-  int nargs;                  // Number of arguments
-  bool is_settled;            // Whether the awaited promise is settled
-  bool is_error;              // Whether promise was rejected
-  bool is_done;               // Whether generator is exhausted
-  jsoff_t resume_point;       // Code position to resume at
-  jsval_t yield_value;        // Value yielded by generator
-  struct coroutine *next;     // Next in scheduler queue
+  struct js *js;
+  coroutine_type_t type;
+  jsval_t scope;
+  jsval_t this_val;
+  jsval_t awaited_promise;
+  jsval_t result;
+  jsval_t async_func;
+  jsval_t *args;
+  int nargs;
+  bool is_settled;
+  bool is_error;
+  bool is_done;
+  jsoff_t resume_point;
+  jsval_t yield_value;
+  struct coroutine *next;
 } coroutine_t;
 
 typedef struct {
@@ -240,6 +239,7 @@ static coroutine_t *create_coroutine(struct js *js, jsval_t promise, jsval_t asy
   return coro;
 }
 
+/* unused for now
 static coroutine_t *create_generator(struct js *js, jsval_t gen_func, jsval_t *args, int nargs, bool is_async) {
   coroutine_t *coro = (coroutine_t *)malloc(sizeof(coroutine_t));
   if (!coro) return NULL;
@@ -271,6 +271,7 @@ static coroutine_t *create_generator(struct js *js, jsval_t gen_func, jsval_t *a
   
   return coro;
 }
+*/
 
 static void enqueue_coroutine(coroutine_t *coro) {
   if (!coro) return;
