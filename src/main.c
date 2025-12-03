@@ -18,6 +18,7 @@
 #include "modules/timer.h"
 #include "modules/json.h"
 #include "modules/fetch.h"
+#include "modules/shell.h"
 
 int js_result = EXIT_SUCCESS;
 
@@ -120,6 +121,7 @@ int main(int argc, char *argv[]) {
   }
   
   if (gct->count > 0) js_setgct(js, gct->ival[0]);  
+  
   ant_runtime_init(js);
 
   init_builtin_module();
@@ -129,7 +131,9 @@ int main(int argc, char *argv[]) {
   init_json_module();
   init_server_module();
   init_timer_module();
-    
+  
+  ant_register_library("ant/shell", shell_library);
+  
   if (repl_mode) ant_repl_run(); else {
     js_result = execute_module(js, module_file);
     js_run_event_loop(js);

@@ -194,7 +194,7 @@ static jsval_t js_fetch(struct js *js, jsval_t *args, int nargs) {
   return promise;
 }
 
-void init_fetch_module(void) {
+void init_fetch_module() {
   static int curl_initialized = 0;
   if (!curl_initialized) {
     curl_global_init(CURL_GLOBAL_DEFAULT);
@@ -212,7 +212,7 @@ void init_fetch_module(void) {
   js_set(js, js_glob(js), "fetch", js_mkfun(js_fetch));
 }
 
-static void cleanup_fetch_module(void) {
+static void cleanup_fetch_module() {
   if (global_curl) {
     curl_easy_cleanup(global_curl);
     global_curl = NULL;

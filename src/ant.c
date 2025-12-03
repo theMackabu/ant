@@ -108,7 +108,24 @@ typedef struct {
   int count;
 } esm_module_cache_t;
 
+typedef struct ant_library {
+  char *name;
+  ant_library_init_fn init_fn;
+  struct ant_library *next;
+} ant_library_t;
+
+static ant_library_t *library_registry = NULL;
 static esm_module_cache_t global_module_cache = {NULL, 0};
+
+void ant_register_library(const char *name, ant_library_init_fn init_fn) {
+  ant_library_t *lib = (ant_library_t *)malloc(sizeof(ant_library_t));
+  if (!lib) return;
+  
+  lib->name = strdup(name);
+  lib->init_fn = init_fn;
+  lib->next = library_registry;
+  library_registry = lib;
+}
 
 struct js {
   jsoff_t css;            // max observed C stack size
@@ -6967,6 +6984,17 @@ static jsval_t builtin_import(struct js *js, jsval_t *args, int nargs) {
   jsoff_t spec_off = vstr(js, args[0], &spec_len);
   const char *specifier = (char *)&js->mem[spec_off];
   
+  ant_library_t *lib = library_registry;
+  while (lib) {
+    if (strlen(lib->name) == spec_len && memcmp(lib->name, specifier, spec_len) == 0) {
+      jsval_t lib_obj = lib->init_fn(js);
+      if (is_err(lib_obj)) return builtin_Promise_reject(js, &lib_obj, 1);
+      jsval_t promise_args[] = { lib_obj };
+      return builtin_Promise_resolve(js, promise_args, 1);
+    }
+    lib = lib->next;
+  }
+  
   const char *base_path = js->filename ? js->filename : ".";
   char *resolved_path = esm_resolve_path(specifier, base_path);
   if (!resolved_path) {
@@ -7231,40 +7259,54 @@ static jsval_t js_import_stmt(struct js *js) {
     EXPECT(TOK_STRING, );
     
     jsval_t spec = js_str_literal(js);
-    
     jsoff_t spec_len;
+    
     jsoff_t spec_off = vstr(js, spec, &spec_len);
     const char *specifier = (char *)&js->mem[spec_off];
     
-    const char *base_path = js->filename ? js->filename : ".";
-    char *resolved_path = esm_resolve_path(specifier, base_path);
-    if (!resolved_path) {
-      return js_mkerr(js, "Cannot resolve module: %.*s", (int)spec_len, specifier);
-    }
+    jsval_t ns = js_mkundef();
+    bool is_library = false;
     
-    esm_module_t *mod = esm_find_module(resolved_path);
-    if (!mod) {
-      mod = esm_create_module(specifier, resolved_path);
-      if (!mod) {
-        free(resolved_path);
-        return js_mkerr(js, "Cannot create module");
+    ant_library_t *lib = library_registry;
+    while (lib) {
+      if (strlen(lib->name) == spec_len && memcmp(lib->name, specifier, spec_len) == 0) {
+        ns = lib->init_fn(js);
+        is_library = true;
+        break;
       }
+      lib = lib->next;
     }
     
-    const char *saved_code = js->code;
-    jsoff_t saved_clen = js->clen;
-    jsoff_t saved_pos = js->pos;
+    if (!is_library) {
+      const char *base_path = js->filename ? js->filename : ".";
+      char *resolved_path = esm_resolve_path(specifier, base_path);
+      if (!resolved_path) return js_mkerr(js, "Cannot resolve module: %.*s", (int)spec_len, specifier);
+      
+      esm_module_t *mod = esm_find_module(resolved_path);
+      if (!mod) {
+        mod = esm_create_module(specifier, resolved_path);
+        if (!mod) {
+          free(resolved_path);
+          return js_mkerr(js, "Cannot create module");
+        }
+      }
+      
+      const char *saved_code = js->code;
+      jsoff_t saved_clen = js->clen;
+      jsoff_t saved_pos = js->pos;
+      
+      ns = esm_load_module(js, mod);
+      
+      js->code = saved_code;
+      js->clen = saved_clen;
+      js->pos = saved_pos;
+      
+      free(resolved_path);
+    }
     
-    jsval_t ns = esm_load_module(js, mod);
-    
-    js->code = saved_code;
-    js->clen = saved_clen;
-    js->pos = saved_pos;
     js->consumed = 1;
     next(js);
     js->consumed = 0;
-    
-    free(resolved_path);
     
     if (is_err(ns)) return ns;
     
