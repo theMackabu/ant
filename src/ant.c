@@ -85,6 +85,7 @@ struct js {
   #define F_BREAK 8U      // exit the loop
   #define F_RETURN 16U    // return has been executed
   #define F_THROW 32U     // throw has been executed
+  #define F_SWITCH 64U    // we are inside a switch statement
   jsoff_t clen;           // code snippet length
   jsoff_t pos;            // current parsing position
   jsoff_t toff;           // offset of the last parsed token
@@ -181,6 +182,7 @@ static jsval_t js_while(struct js *js);
 static jsval_t js_do_while(struct js *js);
 static jsval_t js_block_or_stmt(struct js *js);
 static jsval_t js_try(struct js *js);
+static jsval_t js_switch(struct js *js);
 static jsval_t do_op(struct js *, uint8_t op, jsval_t l, jsval_t r);
 static jsval_t do_instanceof(struct js *js, jsval_t l, jsval_t r);
 static jsval_t do_in(struct js *js, jsval_t l, jsval_t r);
@@ -3747,7 +3749,7 @@ static jsval_t js_try(struct js *js) {
 static jsval_t js_break(struct js *js) {
   if (js->flags & F_NOEXEC) {
   } else {
-    if (!(js->flags & F_LOOP)) return js_mkerr(js, "not in loop");
+    if (!(js->flags & (F_LOOP | F_SWITCH))) return js_mkerr(js, "not in loop or switch");
     js->flags |= F_BREAK | F_NOEXEC;
   }
   js->consumed = 1;
@@ -3778,6 +3780,204 @@ static jsval_t js_return(struct js *js) {
     js->pos = js->clen;
     js->flags |= F_RETURN | F_NOEXEC;
   }
+  
+  return res;
+}
+
+static jsval_t js_switch(struct js *js) {
+  uint8_t flags = js->flags, exe = !(flags & F_NOEXEC);
+  jsval_t res = js_mkundef();
+  
+  js->consumed = 1;
+  if (!expect(js, TOK_LPAREN, &res)) return res;
+  
+  jsoff_t switch_expr_start = js->pos;
+  uint8_t saved_flags = js->flags;
+  js->flags |= F_NOEXEC;
+  jsval_t switch_expr = js_expr(js);
+  js->flags = saved_flags;
+  
+  if (is_err(switch_expr)) return switch_expr;
+  
+  if (!expect(js, TOK_RPAREN, &res)) return res;
+  if (!expect(js, TOK_LBRACE, &res)) return res;
+  
+  typedef struct {
+    jsoff_t case_expr_start;
+    jsoff_t case_expr_end;
+    jsoff_t body_start;
+    bool is_default;
+  } CaseInfo;
+  
+  CaseInfo cases[64];
+  int case_count = 0;
+  
+  js->flags |= F_NOEXEC;
+  
+  while (next(js) != TOK_RBRACE && next(js) != TOK_EOF && case_count < 64) {
+    if (next(js) == TOK_CASE) {
+      js->consumed = 1;
+      
+      cases[case_count].is_default = false;
+      cases[case_count].case_expr_start = js->pos;
+      
+      jsval_t case_val = js_expr(js);
+      if (is_err(case_val)) {
+        js->flags = flags;
+        return case_val;
+      }
+      
+      cases[case_count].case_expr_end = js->pos;
+      
+      if (!expect(js, TOK_COLON, &res)) {
+        js->flags = flags;
+        return res;
+      }
+      
+      cases[case_count].body_start = js->pos;
+      case_count++;
+      
+      while (next(js) != TOK_EOF && next(js) != TOK_CASE && next(js) != TOK_DEFAULT && next(js) != TOK_RBRACE) {
+        jsval_t stmt = js_stmt(js);
+        if (is_err(stmt)) {
+          js->flags = flags;
+          return stmt;
+        }
+      }
+      
+    } else if (next(js) == TOK_DEFAULT) {
+      js->consumed = 1;
+      
+      cases[case_count].is_default = true;
+      cases[case_count].case_expr_start = 0;
+      cases[case_count].case_expr_end = 0;
+      
+      if (!expect(js, TOK_COLON, &res)) {
+        js->flags = flags;
+        return res;
+      }
+      
+      cases[case_count].body_start = js->pos;
+      case_count++;
+      
+      while (next(js) != TOK_EOF && next(js) != TOK_CASE && next(js) != TOK_DEFAULT && next(js) != TOK_RBRACE) {
+        jsval_t stmt = js_stmt(js);
+        if (is_err(stmt)) {
+          js->flags = flags;
+          return stmt;
+        }
+      }
+      
+    } else {
+      break;
+    }
+  }
+  
+  if (!expect(js, TOK_RBRACE, &res)) {
+    js->flags = flags;
+    return res;
+  }
+  
+  jsoff_t end_pos = js->pos;
+  
+  if (exe) {
+    js->pos = switch_expr_start;
+    js->consumed = 1;
+    js->flags = flags;
+    jsval_t switch_val = resolveprop(js, js_expr(js));
+    
+    if (is_err(switch_val)) {
+      js->pos = end_pos;
+      js->flags = flags;
+      return switch_val;
+    }
+    
+    int matching_case = -1;
+    int default_case = -1;
+    
+    for (int i = 0; i < case_count; i++) {
+      if (cases[i].is_default) {
+        default_case = i;
+        continue;
+      }
+      
+      js->pos = cases[i].case_expr_start;
+      js->consumed = 1;
+      js->flags = flags;
+      jsval_t case_val = resolveprop(js, js_expr(js));
+      
+      if (is_err(case_val)) {
+        js->pos = end_pos;
+        js->flags = flags;
+        return case_val;
+      }
+      
+      bool matches = false;
+      if (vtype(switch_val) == vtype(case_val)) {
+        if (vtype(switch_val) == T_NUM) {
+          matches = tod(switch_val) == tod(case_val);
+        } else if (vtype(switch_val) == T_STR) {
+          jsoff_t n1, off1 = vstr(js, switch_val, &n1);
+          jsoff_t n2, off2 = vstr(js, case_val, &n2);
+          matches = n1 == n2 && memcmp(&js->mem[off1], &js->mem[off2], n1) == 0;
+        } else if (vtype(switch_val) == T_BOOL) {
+          matches = vdata(switch_val) == vdata(case_val);
+        } else {
+          matches = vdata(switch_val) == vdata(case_val);
+        }
+      }
+      
+      if (matches) {
+        matching_case = i;
+        break;
+      }
+    }
+    
+    if (matching_case < 0 && default_case >= 0) matching_case = default_case;
+    
+    if (matching_case >= 0) {
+      js->flags = (flags & ~F_NOEXEC) | F_SWITCH;
+      
+      for (int i = matching_case; i < case_count; i++) {
+        js->pos = cases[i].body_start;
+        js->consumed = 1;
+        
+        while (next(js) != TOK_EOF && next(js) != TOK_CASE && 
+               next(js) != TOK_DEFAULT && next(js) != TOK_RBRACE &&
+               !(js->flags & (F_BREAK | F_RETURN | F_THROW))) {
+          res = js_stmt(js);
+          if (is_err(res)) {
+            js->pos = end_pos;
+            uint8_t preserve = 0;
+            if (js->flags & F_RETURN) {
+              preserve = js->flags & (F_RETURN | F_NOEXEC);
+            }
+            if (js->flags & F_THROW) {
+              preserve = js->flags & (F_THROW | F_NOEXEC);
+            }
+            js->flags = flags | preserve;
+            return res;
+          }
+        }
+        
+        if (js->flags & F_BREAK) js->flags &= ~F_BREAK; break;
+        if (js->flags & (F_RETURN | F_THROW)) break;
+      }
+    }
+  }
+  
+  js->pos = end_pos;
+  js->tok = TOK_SEMICOLON;
+  js->consumed = 0;
+  
+  uint8_t preserve = 0;
+  if (js->flags & F_RETURN) {
+    preserve = js->flags & (F_RETURN | F_NOEXEC);
+  }
+  if (js->flags & F_THROW) {
+    preserve = js->flags & (F_THROW | F_NOEXEC);
+  }
+  js->flags = (flags & ~F_SWITCH) | preserve;
   
   return res;
 }
@@ -3964,6 +4164,21 @@ static jsval_t js_class_decl(struct js *js) {
   return js_mkundef();
 }
 
+static void js_throw_handle(struct js *js, jsval_t *res) {
+  js->consumed = 1;
+  jsval_t throw_val = js_expr(js);
+  if (js->flags & F_NOEXEC) {
+    *res = js_mkundef();
+  } else {
+    throw_val = resolveprop(js, throw_val);
+    if (is_err(throw_val)) {
+      *res = throw_val;
+    } else {
+      *res = js_throw(js, throw_val);
+    }
+  }
+}
+
 static jsval_t js_stmt(struct js *js) {
   jsval_t res;
   if (js->brk > js->gct) js_gc(js);
@@ -3971,25 +4186,12 @@ static jsval_t js_stmt(struct js *js) {
   switch (next(js)) {
     case TOK_CASE: case TOK_CATCH:
     case TOK_DEFAULT: case TOK_FINALLY:
-    case TOK_SWITCH:
+      res = js_mkerr(js, "SyntaxError '%.*s'", (int) js->tlen, js->code + js->toff);
+      break;
     case TOK_WITH: case TOK_YIELD:
       res = js_mkerr(js, "'%.*s' not implemented", (int) js->tlen, js->code + js->toff);
       break;
-    case TOK_THROW: {
-      js->consumed = 1;
-      jsval_t throw_val = js_expr(js);
-      if (js->flags & F_NOEXEC) {
-        res = js_mkundef();
-      } else {
-        throw_val = resolveprop(js, throw_val);
-        if (is_err(throw_val)) {
-          res = throw_val;
-        } else {
-          res = js_throw(js, throw_val);
-        }
-      }
-      break;
-    }
+    case TOK_THROW: js_throw_handle(js, &res); break;
     case TOK_VAR:
       if (!js->var_warning_shown) {
         fprintf(stderr, "Warning: 'var' is deprecated, use 'let' or 'const' instead\n");
@@ -3997,6 +4199,7 @@ static jsval_t js_stmt(struct js *js) {
       }
       res = js_let(js); 
       break;
+    case TOK_SWITCH:    res = js_switch(js); break;
     case TOK_WHILE:     res = js_while(js); break;
     case TOK_DO:        res = js_do_while(js); break;
     case TOK_CONTINUE:  res = js_continue(js); break;
