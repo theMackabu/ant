@@ -4354,6 +4354,34 @@ static jsval_t builtin_Object(struct js *js, jsval_t *args, int nargs) {
   return arg;
 }
 
+static jsval_t builtin_eval(struct js *js, jsval_t *args, int nargs) {
+  if (nargs == 0) return js_mkundef();
+  
+  jsval_t code_arg = args[0];
+  if (vtype(code_arg) != T_STR) return code_arg;
+  
+  jsoff_t code_len, code_off = vstr(js, code_arg, &code_len);
+  const char *code_str = (const char *)&js->mem[code_off];
+  
+  const char *saved_code = js->code;
+  jsoff_t saved_clen = js->clen;
+  jsoff_t saved_pos = js->pos;
+  uint8_t saved_tok = js->tok;
+  uint8_t saved_consumed = js->consumed;
+  uint8_t saved_flags = js->flags;
+  
+  jsval_t result = js_eval(js, code_str, code_len);
+  
+  js->code = saved_code;
+  js->clen = saved_clen;
+  js->pos = saved_pos;
+  js->tok = saved_tok;
+  js->consumed = saved_consumed;
+  js->flags = saved_flags;
+  
+  return result;
+}
+
 static jsval_t builtin_Function(struct js *js, jsval_t *args, int nargs) {
   if (nargs == 0) {
     jsval_t code_str = js_mkstr(js, "(){}", 4);
@@ -5853,6 +5881,7 @@ struct js *js_create(void *buf, size_t len) {
   jsval_t obj_func = mkval(T_FUNC, vdata(obj_func_obj));
   
   setprop(js, glob, js_mkstr(js, "Object", 6), obj_func);
+  setprop(js, glob, js_mkstr(js, "eval", 4), js_mkfun(builtin_eval));
   setprop(js, glob, js_mkstr(js, "Function", 8), js_mkfun(builtin_Function));
   setprop(js, glob, js_mkstr(js, "String", 6), js_mkfun(builtin_String));
   setprop(js, glob, js_mkstr(js, "Number", 6), js_mkfun(builtin_Number));
