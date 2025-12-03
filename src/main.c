@@ -135,21 +135,7 @@ int main(int argc, char *argv[]) {
 
   int result = execute_module(js, module_file);
   
-  while (has_pending_microtasks() || has_pending_timers()) {
-    process_microtasks(js);
-    
-    if (has_pending_timers()) {
-      int64_t next_timeout_ms = get_next_timer_timeout();
-      
-      if (next_timeout_ms <= 0) {
-        process_timers(js);
-        continue;
-      } else {
-        usleep(next_timeout_ms > 1000000 ? 1000000 : next_timeout_ms * 1000);
-      }
-    }
-  }
-  
+  js_run_event_loop(js);
   if (dump) js_dump(js);
   
   js_destroy(js);

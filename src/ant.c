@@ -11,6 +11,7 @@
 #include <string.h>
 #include <sys/time.h>
 #include <time.h>
+#include <unistd.h>
 #include <libgen.h>
 #include <sys/stat.h>
 
@@ -343,6 +344,23 @@ static coroutine_t *dequeue_coroutine(void) {
 
 static bool has_pending_coroutines(void) {
   return pending_coroutines.head != NULL;
+}
+
+void js_run_event_loop(struct js *js) {
+  while (has_pending_microtasks() || has_pending_timers()) {
+    process_microtasks(js);
+    
+    if (has_pending_timers()) {
+      int64_t next_timeout_ms = get_next_timer_timeout();
+      
+      if (next_timeout_ms <= 0) {
+        process_timers(js);
+        continue;
+      } else {
+        usleep(next_timeout_ms > 1000000 ? 1000000 : next_timeout_ms * 1000);
+      }
+    }
+  }
 }
 
 static void free_coroutine(coroutine_t *coro) {
@@ -2839,35 +2857,70 @@ static jsval_t js_unary(struct js *js) {
     builtin_promise_then(js, then_args, 2);
     js->this_val = saved_this;
     
+    uint8_t saved_flags = js->flags;
+    const char *saved_code = js->code;
+    jsoff_t saved_clen = js->clen;
+    jsoff_t saved_pos = js->pos;
+    uint8_t saved_tok = js->tok;
+    uint8_t saved_consumed = js->consumed;
+    
     while (!coro->is_settled) {
-      process_microtasks(js);
+      if (has_pending_timers()) {
+        int64_t next_timeout = get_next_timer_timeout();
+        if (next_timeout <= 0) {
+          process_timers(js);
+          js->flags = saved_flags;
+          js->code = saved_code;
+          js->clen = saved_clen;
+          js->pos = saved_pos;
+          js->tok = saved_tok;
+          js->consumed = saved_consumed;
+        }
+      }
       
-      while (has_pending_coroutines()) {
+      process_microtasks(js);
+      js->flags = saved_flags;
+      js->code = saved_code;
+      js->clen = saved_clen;
+      js->pos = saved_pos;
+      js->tok = saved_tok;
+      js->consumed = saved_consumed;
+      
+      int coroutines_checked = 0;
+      int total_coroutines = 0;
+      
+      coroutine_t *temp = pending_coroutines.head;
+      while (temp) {
+        total_coroutines++;
+        temp = temp->next;
+      }
+      
+      while (has_pending_coroutines() && coroutines_checked < total_coroutines) {
         coroutine_t *resumed = dequeue_coroutine();
+        coroutines_checked++;
+        
         if (resumed == coro) {
           jsval_t result = resumed->result;
           bool is_error = resumed->is_error;
           free_coroutine(resumed);
           
-          if (is_error) {
-            return js_throw(js, result);
-          }
+          if (is_error) return js_throw(js, result);
           return result;
         }
         enqueue_coroutine(resumed);
       }
       
-      if (!has_pending_microtasks() && has_pending_timers()) {
-        int64_t next_timeout = get_next_timer_timeout();
-        if (next_timeout <= 0) {
-          process_timers(js);
-          continue;
-        }
-      }
-      
       if (!has_pending_microtasks() && !has_pending_coroutines() && !has_pending_timers()) {
         free_coroutine(coro);
         return js_mkerr(js, "await: promise never settled");
+      }
+      
+      if (has_pending_timers() && !has_pending_microtasks() && !has_pending_coroutines()) {
+        int64_t next_timeout = get_next_timer_timeout();
+        if (next_timeout > 0) {
+          int64_t sleep_ms = next_timeout < 1 ? 1 : (next_timeout > 1 ? 1 : next_timeout);
+          usleep(sleep_ms * 1000);
+        }
       }
     }
     
