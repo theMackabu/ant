@@ -11,6 +11,8 @@
 #include <string.h>
 #include <sys/time.h>
 #include <time.h>
+#include <libgen.h>
+#include <sys/stat.h>
 
 #include "ant.h"
 #include "config.h"
@@ -70,6 +72,26 @@ static this_stack_t global_this_stack = {NULL, 0, 0};
 static call_stack_t global_call_stack = {NULL, 0, 0};
 static coroutine_queue_t pending_coroutines = {NULL, NULL};
 
+typedef struct esm_module {
+  char *path;
+  char *resolved_path;
+  jsval_t namespace_obj;
+  jsval_t default_export;
+  bool is_loaded;
+  bool is_loading;
+  bool is_json;
+  bool is_text;
+  bool is_image;
+  struct esm_module *next;
+} esm_module_t;
+
+typedef struct {
+  esm_module_t *head;
+  int count;
+} esm_module_cache_t;
+
+static esm_module_cache_t global_module_cache = {NULL, 0};
+
 struct js {
   jsoff_t css;            // max observed C stack size
   jsoff_t lwm;            // JS ram low watermark: min free ram observed
@@ -111,10 +133,10 @@ enum {
   TOK_ERR, TOK_EOF, TOK_IDENTIFIER, TOK_NUMBER, TOK_STRING, TOK_SEMICOLON,
   TOK_LPAREN, TOK_RPAREN, TOK_LBRACE, TOK_RBRACE, TOK_LBRACKET, TOK_RBRACKET,
   TOK_ASYNC = 50, TOK_AWAIT, TOK_BREAK, TOK_CASE, TOK_CATCH, TOK_CLASS, TOK_CONST, TOK_CONTINUE,
-  TOK_DEFAULT, TOK_DELETE, TOK_DO, TOK_ELSE, TOK_FINALLY, TOK_FOR, TOK_FUNC,
-  TOK_IF, TOK_IN, TOK_INSTANCEOF, TOK_LET, TOK_NEW, TOK_RETURN, TOK_SWITCH,
+  TOK_DEFAULT, TOK_DELETE, TOK_DO, TOK_ELSE, TOK_EXPORT, TOK_FINALLY, TOK_FOR, TOK_FROM, TOK_FUNC,
+  TOK_IF, TOK_IMPORT, TOK_IN, TOK_INSTANCEOF, TOK_LET, TOK_NEW, TOK_RETURN, TOK_SWITCH,
   TOK_THIS, TOK_THROW, TOK_TRY, TOK_VAR, TOK_VOID, TOK_WHILE, TOK_WITH,
-  TOK_YIELD, TOK_UNDEF, TOK_NULL, TOK_TRUE, TOK_FALSE,
+  TOK_YIELD, TOK_UNDEF, TOK_NULL, TOK_TRUE, TOK_FALSE, TOK_AS, TOK_STATIC,
   TOK_DOT = 100, TOK_CALL, TOK_BRACKET, TOK_POSTINC, TOK_POSTDEC, TOK_NOT, TOK_TILDA,
   TOK_TYPEOF, TOK_UPLUS, TOK_UMINUS, TOK_EXP, TOK_MUL, TOK_DIV, TOK_REM,
   TOK_OPTIONAL_CHAIN, TOK_REST,
@@ -198,6 +220,9 @@ static jsval_t builtin_array_join(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_array_includes(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_array_every(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_Error(struct js *js, jsval_t *args, int nargs);
+static jsval_t js_import_stmt(struct js *js);
+static jsval_t js_export_stmt(struct js *js);
+static jsval_t builtin_import(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_indexOf(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_substring(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_split(struct js *js, jsval_t *args, int nargs);
@@ -940,17 +965,17 @@ static bool is_strict_restricted(const char *buf, size_t len) {
 
 static uint8_t parsekeyword(const char *buf, size_t len) {
   switch (buf[0]) {
-    case 'a': if (streq("async", 5, buf, len)) return TOK_ASYNC; if (streq("await", 5, buf, len)) return TOK_AWAIT; break;
+    case 'a': if (streq("async", 5, buf, len)) return TOK_ASYNC; if (streq("await", 5, buf, len)) return TOK_AWAIT; if (streq("as", 2, buf, len)) return TOK_AS; break;
     case 'b': if (streq("break", 5, buf, len)) return TOK_BREAK; break;
     case 'c': if (streq("class", 5, buf, len)) return TOK_CLASS; if (streq("case", 4, buf, len)) return TOK_CASE; if (streq("catch", 5, buf, len)) return TOK_CATCH; if (streq("const", 5, buf, len)) return TOK_CONST; if (streq("continue", 8, buf, len)) return TOK_CONTINUE; break;
     case 'd': if (streq("do", 2, buf, len)) return TOK_DO;  if (streq("default", 7, buf, len)) return TOK_DEFAULT; if (streq("delete", 6, buf, len)) return TOK_DELETE; break;
-    case 'e': if (streq("else", 4, buf, len)) return TOK_ELSE; break;
-    case 'f': if (streq("for", 3, buf, len)) return TOK_FOR; if (streq("function", 8, buf, len)) return TOK_FUNC; if (streq("finally", 7, buf, len)) return TOK_FINALLY; if (streq("false", 5, buf, len)) return TOK_FALSE; break;
-    case 'i': if (streq("if", 2, buf, len)) return TOK_IF; if (streq("in", 2, buf, len)) return TOK_IN; if (streq("instanceof", 10, buf, len)) return TOK_INSTANCEOF; break;
+    case 'e': if (streq("else", 4, buf, len)) return TOK_ELSE; if (streq("export", 6, buf, len)) return TOK_EXPORT; break;
+    case 'f': if (streq("for", 3, buf, len)) return TOK_FOR; if (streq("from", 4, buf, len)) return TOK_FROM; if (streq("function", 8, buf, len)) return TOK_FUNC; if (streq("finally", 7, buf, len)) return TOK_FINALLY; if (streq("false", 5, buf, len)) return TOK_FALSE; break;
+    case 'i': if (streq("if", 2, buf, len)) return TOK_IF; if (streq("import", 6, buf, len)) return TOK_IMPORT; if (streq("in", 2, buf, len)) return TOK_IN; if (streq("instanceof", 10, buf, len)) return TOK_INSTANCEOF; break;
     case 'l': if (streq("let", 3, buf, len)) return TOK_LET; break;
     case 'n': if (streq("new", 3, buf, len)) return TOK_NEW; if (streq("null", 4, buf, len)) return TOK_NULL; break;
     case 'r': if (streq("return", 6, buf, len)) return TOK_RETURN; break;
-    case 's': if (streq("switch", 6, buf, len)) return TOK_SWITCH; break;
+    case 's': if (streq("switch", 6, buf, len)) return TOK_SWITCH; if (streq("static", 6, buf, len)) return TOK_STATIC; break;
     case 't': if (streq("try", 3, buf, len)) return TOK_TRY; if (streq("this", 4, buf, len)) return TOK_THIS; if (streq("throw", 5, buf, len)) return TOK_THROW; if (streq("true", 4, buf, len)) return TOK_TRUE; if (streq("typeof", 6, buf, len)) return TOK_TYPEOF; break;
     case 'u': if (streq("undefined", 9, buf, len)) return TOK_UNDEF; break;
     case 'v': if (streq("var", 3, buf, len)) return TOK_VAR; if (streq("void", 4, buf, len)) return TOK_VOID; break;
@@ -1138,7 +1163,8 @@ static jsval_t js_block(struct js *js, bool create_scope) {
     uint8_t t = js->tok;
     res = js_stmt(js);
     if (!is_err(res) && t != TOK_LBRACE && t != TOK_IF && t != TOK_WHILE &&
-        t != TOK_DO && t != TOK_FUNC && t != TOK_FOR && js->tok != TOK_SEMICOLON) {
+        t != TOK_DO && t != TOK_FUNC && t != TOK_FOR && t != TOK_IMPORT && 
+        t != TOK_EXPORT && js->tok != TOK_SEMICOLON) {
       res = js_mkerr(js, "; expected");
       break;
     }
@@ -4412,12 +4438,22 @@ static jsval_t js_class_decl(struct js *js) {
     jsval_t res3 = setprop(js, func_obj, scope_key, func_scope);
     if (is_err(res3)) return res3;
     
+    jsval_t name_key = js_mkstr(js, "name", 4);
+    if (is_err(name_key)) return name_key;
+    jsval_t name_val = js_mkstr(js, class_name, class_name_len);
+    if (is_err(name_val)) return name_val;
+    jsval_t res_name = setprop(js, func_obj, name_key, name_val);
+    if (is_err(res_name)) return res_name;
+    
     jsval_t constructor = mkval(T_FUNC, (unsigned long) vdata(func_obj));
     if (lkp(js, js->scope, class_name, class_name_len) > 0) {
       return js_mkerr(js, "'%.*s' already declared", (int) class_name_len, class_name);
     }
     jsval_t x = mkprop(js, js->scope, js_mkstr(js, class_name, class_name_len), constructor, false);
     if (is_err(x)) return x;
+    
+    (void) class_body_start;
+    return constructor;
   }
   
   (void) class_body_start;
@@ -4459,8 +4495,9 @@ static void js_async(struct js *js, jsval_t *res) {
 static jsval_t js_stmt(struct js *js) {
   jsval_t res;
   if (js->brk > js->gct) js_gc(js);
+  uint8_t stmt_tok = next(js);
   
-  switch (next(js)) {
+  switch (stmt_tok) {
     case TOK_CASE: case TOK_CATCH:
     case TOK_DEFAULT: case TOK_FINALLY:
       res = js_mkerr(js, "SyntaxError '%.*s'", (int) js->tlen, js->code + js->toff);
@@ -4468,6 +4505,8 @@ static jsval_t js_stmt(struct js *js) {
     case TOK_YIELD:
       res = js_mkerr(js, " '%.*s' not implemented", (int) js->tlen, js->code + js->toff);
       break;
+    case TOK_IMPORT:    res = js_import_stmt(js); break;
+    case TOK_EXPORT:    res = js_export_stmt(js); break;
     case TOK_THROW:     js_throw_handle(js, &res); break;
     case TOK_VAR:       js_var(js, &res); break;
     case TOK_ASYNC:     js_async(js, &res); break;
@@ -4489,7 +4528,21 @@ static jsval_t js_stmt(struct js *js) {
     default:            res = resolveprop(js, js_expr(js)); break;
   }
   
-  if (next(js) != TOK_SEMICOLON && next(js) != TOK_EOF && next(js) != TOK_RBRACE) return js_mkerr(js, "; expected");
+  bool is_block_statement = (
+    stmt_tok == TOK_FUNC || stmt_tok == TOK_CLASS || 
+    stmt_tok == TOK_EXPORT || stmt_tok == TOK_IMPORT ||
+    stmt_tok == TOK_IF || stmt_tok == TOK_WHILE || 
+    stmt_tok == TOK_DO || stmt_tok == TOK_FOR || 
+    stmt_tok == TOK_SWITCH || stmt_tok == TOK_TRY || 
+    stmt_tok == TOK_LBRACE
+  );
+  
+  if (!is_block_statement) {
+    int next_tok = next(js);
+    bool missing_semicolon = next_tok != TOK_SEMICOLON && next_tok != TOK_EOF && next_tok != TOK_RBRACE;
+    if (missing_semicolon) return js_mkerr(js, "; expected");
+  }
+  
   js->consumed = 1;
   return res;
 }
@@ -6368,6 +6421,678 @@ static jsval_t do_in(struct js *js, jsval_t l, jsval_t r) {
   return mkval(T_BOOL, found != 0 ? 1 : 0);
 }
 
+static char *esm_get_extension(const char *path) {
+  const char *dot = strrchr(path, '.');
+  const char *slash = strrchr(path, '/');
+  
+  if (dot && (!slash || dot > slash)) {
+    return strdup(dot);
+  }
+  return strdup(".js");
+}
+
+static char *esm_try_resolve(const char *dir, const char *spec, const char *suffix) {
+  char path[PATH_MAX];
+  snprintf(path, PATH_MAX, "%s/%s%s", dir, spec, suffix);
+  return realpath(path, NULL);
+}
+
+static bool esm_has_extension(const char *spec) {
+  const char *dot = strrchr(spec, '.');
+  const char *slash = strrchr(spec, '/');
+  return dot && (!slash || dot > slash);
+}
+
+static char *esm_resolve_path(const char *specifier, const char *base_path) {
+  if (!(specifier[0] == '/' || 
+       (specifier[0] == '.' && specifier[1] == '/') || 
+       (specifier[0] == '.' && specifier[1] == '.' && specifier[2] == '/'))) {
+    return strdup(specifier);
+  }
+  
+  char *base_copy = strdup(base_path);
+  char *dir = dirname(base_copy);
+  char *result = NULL;
+  
+  const char *spec = (specifier[0] == '.' && specifier[1] == '/') ? specifier + 2 : specifier;
+  bool has_ext = esm_has_extension(spec);
+  
+  if ((result = esm_try_resolve(dir, spec, ""))) goto cleanup;
+  if (has_ext) goto cleanup;
+  
+  char *base_ext = esm_get_extension(base_path);
+  
+  if ((result = esm_try_resolve(dir, spec, base_ext))) goto cleanup_ext;
+  if (strcmp(base_ext, ".js") != 0 && (result = esm_try_resolve(dir, spec, ".js"))) goto cleanup_ext;
+  if ((result = esm_try_resolve(dir, spec, ".json"))) goto cleanup_ext;
+  
+  char idx[PATH_MAX];
+  snprintf(idx, PATH_MAX, "%s/index%s", spec, base_ext);
+  if ((result = esm_try_resolve(dir, idx, ""))) goto cleanup_ext;
+  
+  if (strcmp(base_ext, ".js") != 0) {
+    snprintf(idx, PATH_MAX, "%s/index.js", spec);
+    if ((result = esm_try_resolve(dir, idx, ""))) goto cleanup_ext;
+  }
+  
+cleanup_ext:
+  free(base_ext);
+cleanup:
+  free(base_copy);
+  return result;
+}
+
+static bool esm_is_json(const char *path) {
+  size_t len = strlen(path);
+  return len > 5 && strcmp(path + len - 5, ".json") == 0;
+}
+
+static bool esm_is_text(const char *path) {
+  size_t len = strlen(path);
+  return (len > 4 && strcmp(path + len - 4, ".txt") == 0) ||
+         (len > 3 && strcmp(path + len - 3, ".md") == 0) ||
+         (len > 5 && strcmp(path + len - 5, ".html") == 0) ||
+         (len > 4 && strcmp(path + len - 4, ".css") == 0);
+}
+
+static bool esm_is_image(const char *path) {
+  size_t len = strlen(path);
+  return (len > 4 && strcmp(path + len - 4, ".png") == 0) ||
+         (len > 4 && strcmp(path + len - 4, ".jpg") == 0) ||
+         (len > 5 && strcmp(path + len - 5, ".jpeg") == 0) ||
+         (len > 4 && strcmp(path + len - 4, ".gif") == 0) ||
+         (len > 4 && strcmp(path + len - 4, ".svg") == 0) ||
+         (len > 5 && strcmp(path + len - 5, ".webp") == 0);
+}
+
+static esm_module_t *esm_find_module(const char *resolved_path) {
+  esm_module_t *mod = global_module_cache.head;
+  while (mod) {
+    if (strcmp(mod->resolved_path, resolved_path) == 0) return mod;
+    mod = mod->next;
+  }
+  return NULL;
+}
+
+static esm_module_t *esm_create_module(const char *path, const char *resolved_path) {
+  esm_module_t *mod = (esm_module_t *)malloc(sizeof(esm_module_t));
+  if (!mod) return NULL;
+  
+  mod->path = strdup(path);
+  mod->resolved_path = strdup(resolved_path);
+  mod->namespace_obj = js_mkundef();
+  mod->default_export = js_mkundef();
+  mod->is_loaded = false;
+  mod->is_loading = false;
+  mod->is_json = esm_is_json(resolved_path);
+  mod->is_text = esm_is_text(resolved_path);
+  mod->is_image = esm_is_image(resolved_path);
+  mod->next = NULL;
+  
+  if (global_module_cache.head == NULL) {
+    global_module_cache.head = mod;
+  } else {
+    esm_module_t *last = global_module_cache.head;
+    while (last->next) last = last->next;
+    last->next = mod;
+  }
+  global_module_cache.count++;
+  
+  return mod;
+}
+
+static jsval_t esm_load_json(struct js *js, const char *path) {
+  FILE *fp = fopen(path, "rb");
+  if (!fp) return js_mkerr(js, "Cannot open JSON file: %s", path);
+  
+  fseek(fp, 0, SEEK_END);
+  long size = ftell(fp);
+  fseek(fp, 0, SEEK_SET);
+  
+  char *content = (char *)malloc(size + 1);
+  if (!content) {
+    fclose(fp);
+    return js_mkerr(js, "OOM loading JSON");
+  }
+  
+  fread(content, 1, size, fp);
+  fclose(fp);
+  content[size] = '\0';
+  
+  jsval_t result = js_eval(js, content, size);
+  free(content);
+  
+  return result;
+}
+
+static jsval_t esm_load_text(struct js *js, const char *path) {
+  FILE *fp = fopen(path, "rb");
+  if (!fp) return js_mkerr(js, "Cannot open text file: %s", path);
+  
+  fseek(fp, 0, SEEK_END);
+  long size = ftell(fp);
+  fseek(fp, 0, SEEK_SET);
+  
+  char *content = (char *)malloc(size + 1);
+  if (!content) {
+    fclose(fp);
+    return js_mkerr(js, "OOM loading text");
+  }
+  
+  fread(content, 1, size, fp);
+  fclose(fp);
+  content[size] = '\0';
+  
+  jsval_t result = js_mkstr(js, content, size);
+  free(content);
+  
+  return result;
+}
+
+static jsval_t esm_load_image(struct js *js, const char *path) {
+  FILE *fp = fopen(path, "rb");
+  if (!fp) return js_mkerr(js, "Cannot open image file: %s", path);
+  
+  fseek(fp, 0, SEEK_END);
+  long size = ftell(fp);
+  fseek(fp, 0, SEEK_SET);
+  
+  unsigned char *content = (unsigned char *)malloc(size);
+  if (!content) {
+    fclose(fp);
+    return js_mkerr(js, "OOM loading image");
+  }
+  
+  fread(content, 1, size, fp);
+  fclose(fp);
+  
+  jsval_t obj = mkobj(js, 0);
+  jsval_t data_arr = mkarr(js);
+  
+  for (long i = 0; i < size; i++) {
+    char idx[16];
+    snprintf(idx, sizeof(idx), "%ld", i);
+    setprop(js, data_arr, js_mkstr(js, idx, strlen(idx)), tov((double)content[i]));
+  }
+  setprop(js, data_arr, js_mkstr(js, "length", 6), tov((double)size));
+  
+  setprop(js, obj, js_mkstr(js, "data", 4), mkval(T_ARR, vdata(data_arr)));
+  setprop(js, obj, js_mkstr(js, "path", 4), js_mkstr(js, path, strlen(path)));
+  setprop(js, obj, js_mkstr(js, "size", 4), tov((double)size));
+  
+  free(content);
+  return obj;
+}
+
+static jsval_t esm_load_module(struct js *js, esm_module_t *mod) {
+  if (mod->is_loaded) return mod->namespace_obj;
+  if (mod->is_loading) return js_mkerr(js, "Circular dependency detected: %s", mod->path);
+  
+  mod->is_loading = true;
+  
+  if (mod->is_json) {
+    jsval_t json_val = esm_load_json(js, mod->resolved_path);
+    if (is_err(json_val)) {
+      mod->is_loading = false;
+      return json_val;
+    }
+    
+    jsval_t ns = mkobj(js, 0);
+    setprop(js, ns, js_mkstr(js, "default", 7), json_val);
+    mod->namespace_obj = ns;
+    mod->default_export = json_val;
+    mod->is_loaded = true;
+    mod->is_loading = false;
+    return ns;
+  }
+  
+  if (mod->is_text) {
+    jsval_t text_val = esm_load_text(js, mod->resolved_path);
+    if (is_err(text_val)) {
+      mod->is_loading = false;
+      return text_val;
+    }
+    
+    jsval_t ns = mkobj(js, 0);
+    setprop(js, ns, js_mkstr(js, "default", 7), text_val);
+    mod->namespace_obj = ns;
+    mod->default_export = text_val;
+    mod->is_loaded = true;
+    mod->is_loading = false;
+    return ns;
+  }
+  
+  if (mod->is_image) {
+    jsval_t img_val = esm_load_image(js, mod->resolved_path);
+    if (is_err(img_val)) {
+      mod->is_loading = false;
+      return img_val;
+    }
+    
+    jsval_t ns = mkobj(js, 0);
+    setprop(js, ns, js_mkstr(js, "default", 7), img_val);
+    mod->namespace_obj = ns;
+    mod->default_export = img_val;
+    mod->is_loaded = true;
+    mod->is_loading = false;
+    return ns;
+  }
+  
+  FILE *fp = fopen(mod->resolved_path, "rb");
+  if (!fp) {
+    mod->is_loading = false;
+    return js_mkerr(js, "Cannot open module: %s", mod->resolved_path);
+  }
+  
+  fseek(fp, 0, SEEK_END);
+  long size = ftell(fp);
+  fseek(fp, 0, SEEK_SET);
+  
+  char *content = (char *)malloc(size + 1);
+  if (!content) {
+    fclose(fp);
+    mod->is_loading = false;
+    return js_mkerr(js, "OOM loading module");
+  }
+  
+  fread(content, 1, size, fp);
+  fclose(fp);
+  content[size] = '\0';
+  
+  jsval_t ns = mkobj(js, 0);
+  mod->namespace_obj = ns;
+  
+  jsval_t glob = js_glob(js);
+  jsval_t module_scope = js_get(js, glob, "__esm_module_scope");
+  jsval_t prev_module = module_scope;
+  js_set(js, glob, "__esm_module_scope", ns);
+  
+  const char *prev_filename = js->filename;
+  
+  js_set_filename(js, mod->resolved_path);
+  
+  jsval_t result = js_eval(js, content, size);
+  
+  free(content);
+  
+  js_set_filename(js, prev_filename);
+  js_set(js, glob, "__esm_module_scope", prev_module);
+  
+  if (is_err(result)) {
+    mod->is_loading = false;
+    return result;
+  }
+  
+  jsoff_t default_off = lkp(js, ns, "default", 7);
+  if (default_off != 0) {
+    mod->default_export = resolveprop(js, mkval(T_PROP, default_off));
+  }
+  
+  mod->is_loaded = true;
+  mod->is_loading = false;
+  
+  return ns;
+}
+
+static jsval_t builtin_import(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1 || vtype(args[0]) != T_STR) {
+    return js_mkerr(js, "import() requires a string specifier");
+  }
+  
+  jsoff_t spec_len;
+  jsoff_t spec_off = vstr(js, args[0], &spec_len);
+  const char *specifier = (char *)&js->mem[spec_off];
+  
+  const char *base_path = js->filename ? js->filename : ".";
+  char *resolved_path = esm_resolve_path(specifier, base_path);
+  if (!resolved_path) {
+    return js_mkerr(js, "Cannot resolve module: %.*s", (int)spec_len, specifier);
+  }
+  
+  esm_module_t *mod = esm_find_module(resolved_path);
+  if (!mod) {
+    mod = esm_create_module(specifier, resolved_path);
+    if (!mod) {
+      free(resolved_path);
+      return js_mkerr(js, "Cannot create module");
+    }
+  }
+  
+  jsval_t ns = esm_load_module(js, mod);
+  free(resolved_path);
+  
+  if (is_err(ns)) return builtin_Promise_reject(js, &ns, 1);
+  
+  jsval_t promise_args[] = { ns };
+  return builtin_Promise_resolve(js, promise_args, 1);
+}
+
+static jsval_t js_import_stmt(struct js *js) {
+  js->consumed = 1;
+  
+  if (next(js) == TOK_LPAREN) {
+    js->consumed = 1;
+    jsval_t spec = js_expr(js);
+    EXPECT(TOK_RPAREN, );
+    
+    if (vtype(spec) != T_STR) {
+      return js_mkerr(js, "import() requires string");
+    }
+    
+    jsval_t args[] = { spec };
+    return builtin_import(js, args, 1);
+  }
+  
+  if (next(js) == TOK_MUL) {
+    js->consumed = 1;
+    EXPECT(TOK_AS, );
+    EXPECT(TOK_IDENTIFIER, );
+    
+    const char *namespace_name = &js->code[js->toff];
+    size_t namespace_len = js->tlen;
+    js->consumed = 1;
+    
+    EXPECT(TOK_FROM, );
+    EXPECT(TOK_STRING, );
+    
+    jsval_t spec = js_str_literal(js);
+    
+    jsoff_t spec_len;
+    jsoff_t spec_off = vstr(js, spec, &spec_len);
+    const char *specifier = (char *)&js->mem[spec_off];
+    
+    const char *base_path = js->filename ? js->filename : ".";
+    char *resolved_path = esm_resolve_path(specifier, base_path);
+    if (!resolved_path) {
+      return js_mkerr(js, "Cannot resolve module: %.*s", (int)spec_len, specifier);
+    }
+    
+    esm_module_t *mod = esm_find_module(resolved_path);
+    if (!mod) {
+      mod = esm_create_module(specifier, resolved_path);
+      if (!mod) {
+        free(resolved_path);
+        return js_mkerr(js, "Cannot create module");
+      }
+    }
+    
+    const char *saved_code = js->code;
+    jsoff_t saved_clen = js->clen;
+    jsoff_t saved_pos = js->pos;
+    
+    jsval_t ns = esm_load_module(js, mod);
+    
+    js->code = saved_code;
+    js->clen = saved_clen;
+    js->pos = saved_pos;
+    js->consumed = 1; next(js); js->consumed = 0;
+    
+    free(resolved_path);
+    
+    if (is_err(ns)) return ns;
+    
+    setprop(js, js->scope, js_mkstr(js, namespace_name, namespace_len), ns);
+    
+    return js_mkundef();
+  }
+  
+  if (next(js) == TOK_IDENTIFIER) {
+    const char *default_name = &js->code[js->toff];
+    size_t default_len = js->tlen;
+    js->consumed = 1;
+    
+    EXPECT(TOK_FROM, );
+    EXPECT(TOK_STRING, );
+    
+    jsval_t spec = js_str_literal(js);
+    
+    jsoff_t spec_len;
+    jsoff_t spec_off = vstr(js, spec, &spec_len);
+    const char *specifier = (char *)&js->mem[spec_off];
+    
+    const char *base_path = js->filename ? js->filename : ".";
+    char *resolved_path = esm_resolve_path(specifier, base_path);
+    if (!resolved_path) {
+      return js_mkerr(js, "Cannot resolve module: %.*s", (int)spec_len, specifier);
+    }
+    
+    esm_module_t *mod = esm_find_module(resolved_path);
+    if (!mod) {
+      mod = esm_create_module(specifier, resolved_path);
+      if (!mod) {
+        free(resolved_path);
+        return js_mkerr(js, "Cannot create module");
+      }
+    }
+    
+    const char *saved_code = js->code;
+    jsoff_t saved_clen = js->clen;
+    jsoff_t saved_pos = js->pos;
+    
+    jsval_t ns = esm_load_module(js, mod);
+    
+    js->code = saved_code;
+    js->clen = saved_clen;
+    js->pos = saved_pos;
+    js->consumed = 1; next(js); js->consumed = 0;
+    
+    free(resolved_path);
+    
+    if (is_err(ns)) return ns;
+    
+    jsoff_t default_off = lkp(js, ns, "default", 7);
+    jsval_t default_val = default_off != 0 ? resolveprop(js, mkval(T_PROP, default_off)) : js_mkundef();
+    
+    setprop(js, js->scope, js_mkstr(js, default_name, default_len), default_val);
+    
+    return js_mkundef();
+  }
+  
+  if (next(js) == TOK_LBRACE) {
+    js->consumed = 1;
+    
+    typedef struct {
+      const char *import_name;
+      size_t import_len;
+      const char *local_name;
+      size_t local_len;
+    } import_binding_t;
+    
+    import_binding_t bindings[64];
+    int binding_count = 0;
+    
+    while (next(js) != TOK_RBRACE && binding_count < 64) {
+      EXPECT(TOK_IDENTIFIER, );
+      const char *import_name = &js->code[js->toff];
+      size_t import_len = js->tlen;
+      js->consumed = 1;
+      
+      const char *local_name = import_name;
+      size_t local_len = import_len;
+      
+      if (next(js) == TOK_AS) {
+        js->consumed = 1;
+        EXPECT(TOK_IDENTIFIER, );
+        local_name = &js->code[js->toff];
+        local_len = js->tlen;
+        js->consumed = 1;
+      }
+      
+      bindings[binding_count].import_name = import_name;
+      bindings[binding_count].import_len = import_len;
+      bindings[binding_count].local_name = local_name;
+      bindings[binding_count].local_len = local_len;
+      binding_count++;
+      
+      if (next(js) == TOK_COMMA) js->consumed = 1;
+    }
+    
+    EXPECT(TOK_RBRACE, );
+    EXPECT(TOK_FROM, );
+    EXPECT(TOK_STRING, );
+    
+    jsval_t spec = js_str_literal(js);
+    
+    jsoff_t spec_len;
+    jsoff_t spec_off = vstr(js, spec, &spec_len);
+    const char *specifier = (char *)&js->mem[spec_off];
+    
+    const char *base_path = js->filename ? js->filename : ".";
+    char *resolved_path = esm_resolve_path(specifier, base_path);
+    if (!resolved_path) {
+      return js_mkerr(js, "Cannot resolve module: %.*s", (int)spec_len, specifier);
+    }
+    
+    esm_module_t *mod = esm_find_module(resolved_path);
+    if (!mod) {
+      mod = esm_create_module(specifier, resolved_path);
+      if (!mod) {
+        free(resolved_path);
+        return js_mkerr(js, "Cannot create module");
+      }
+    }
+    
+    const char *saved_code = js->code;
+    jsoff_t saved_clen = js->clen;
+    jsoff_t saved_pos = js->pos;
+    
+    jsval_t ns = esm_load_module(js, mod);
+    
+    js->code = saved_code;
+    js->clen = saved_clen;
+    js->pos = saved_pos;
+    js->consumed = 1;
+    next(js);
+    js->consumed = 0;
+    
+    free(resolved_path);
+    
+    if (is_err(ns)) return ns;
+    
+    for (int i = 0; i < binding_count; i++) {
+      jsoff_t prop_off = lkp(js, ns, bindings[i].import_name, bindings[i].import_len);
+      jsval_t imported_val = prop_off != 0 ? resolveprop(js, mkval(T_PROP, prop_off)) : js_mkundef();
+      
+      setprop(js, js->scope, js_mkstr(js, bindings[i].local_name, bindings[i].local_len), imported_val);
+    }
+    
+    return js_mkundef();
+  }
+  
+  return js_mkerr(js, "Invalid import statement");
+}
+
+static jsval_t js_export_stmt(struct js *js) {
+  js->consumed = 1;
+  
+  jsval_t glob = js_glob(js);
+  jsval_t module_ns = js_get(js, glob, "__esm_module_scope");
+  
+  if (vtype(module_ns) != T_OBJ) {
+    module_ns = mkobj(js, 0);
+    js_set(js, glob, "__esm_module_scope", module_ns);
+  }
+  
+  if (next(js) == TOK_DEFAULT) {
+    js->consumed = 1;
+    jsval_t value = js_assignment(js);
+    if (is_err(value)) return value;
+    
+    setprop(js, module_ns, js_mkstr(js, "default", 7), resolveprop(js, value));
+    return value;
+  }
+  
+  if (next(js) == TOK_CONST || next(js) == TOK_LET || next(js) == TOK_VAR) {
+    js->consumed = 1;
+    
+    EXPECT(TOK_IDENTIFIER, );
+    const char *name = &js->code[js->toff];
+    size_t name_len = js->tlen;
+    js->consumed = 1;
+    
+    jsval_t value = js_mkundef();
+    if (next(js) == TOK_ASSIGN) {
+      js->consumed = 1;
+      value = js_assignment(js);
+      if (is_err(value)) return value;
+    }
+    
+    jsval_t key = js_mkstr(js, name, name_len);
+    setprop(js, js->scope, key, resolveprop(js, value));
+    setprop(js, module_ns, key, resolveprop(js, value));
+    
+    return value;
+  }
+  
+  if (next(js) == TOK_FUNC) {
+    jsval_t func = js_func_literal(js, false);
+    if (is_err(func)) return func;
+    
+    jsval_t func_obj = mkval(T_OBJ, vdata(func));
+    jsoff_t name_off = lkp(js, func_obj, "name", 4);
+    if (name_off != 0) {
+      jsval_t name_val = resolveprop(js, mkval(T_PROP, name_off));
+      if (vtype(name_val) == T_STR) {
+        setprop(js, js->scope, name_val, func);
+        setprop(js, module_ns, name_val, func);
+      }
+    }
+    
+    return func;
+  }
+  
+  if (next(js) == TOK_CLASS) {
+    jsval_t cls = js_class_decl(js);
+    if (is_err(cls)) return cls;
+    
+    jsval_t cls_obj = mkval(T_OBJ, vdata(cls));
+    jsoff_t name_off = lkp(js, cls_obj, "name", 4);
+    if (name_off != 0) {
+      jsval_t name_val = resolveprop(js, mkval(T_PROP, name_off));
+      if (vtype(name_val) == T_STR) {
+        setprop(js, js->scope, name_val, cls);
+        setprop(js, module_ns, name_val, cls);
+      }
+    }
+    
+    return cls;
+  }
+  
+  if (next(js) == TOK_LBRACE) {
+    js->consumed = 1;
+    
+    while (next(js) != TOK_RBRACE) {
+      EXPECT(TOK_IDENTIFIER, );
+      const char *local_name = &js->code[js->toff];
+      size_t local_len = js->tlen;
+      js->consumed = 1;
+      
+      const char *export_name = local_name;
+      size_t export_len = local_len;
+      
+      if (next(js) == TOK_AS) {
+        js->consumed = 1;
+        EXPECT(TOK_IDENTIFIER, );
+        export_name = &js->code[js->toff];
+        export_len = js->tlen;
+        js->consumed = 1;
+      }
+      
+      jsval_t local_val = lookup(js, local_name, local_len);
+      if (is_err(local_val)) return local_val;
+      
+      setprop(js, module_ns, js_mkstr(js, export_name, export_len), resolveprop(js, local_val));
+      
+      if (next(js) == TOK_COMMA) js->consumed = 1;
+    }
+    
+    EXPECT(TOK_RBRACE, );
+    return js_mkundef();
+  }
+  
+  return js_mkerr(js, "Invalid export statement");
+}
+
 struct js *js_create(void *buf, size_t len) {
   struct js *js = NULL;
   if (len < sizeof(*js) + esize(T_OBJ)) return js;
@@ -6423,6 +7148,8 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, p_ctor_obj, js_mkstr(js, "prototype", 9), p_proto);
   
   setprop(js, glob, js_mkstr(js, "Promise", 7), mkval(T_FUNC, vdata(p_ctor_obj)));
+  setprop(js, glob, js_mkstr(js, "import", 6), js_mkfun(builtin_import));
+  setprop(js, glob, js_mkstr(js, "__esm_module_scope", 18), js_mkundef());
   
   js->owns_mem = false;
   js->max_size = 0;

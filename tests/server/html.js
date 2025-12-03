@@ -1,4 +1,4 @@
-Ant.exports.html = (strings, ...values) => {
+export function html(strings, ...values) {
   let result = '';
   for (let i = 0; i < strings.length; i++) {
     result = result + strings[i];
@@ -8,4 +8,4 @@ Ant.exports.html = (strings, ...values) => {
     }
   }
   return result;
-};
+}

@@ -9,7 +9,7 @@ class Radix3Node {
   }
 }
 
-class Radix3 {
+export class Radix3 {
   constructor() {
     this.root = new Radix3Node();
   }
@@ -223,5 +223,3 @@ class Radix3 {
     }
   }
 }
-
-Ant.exports = Radix3;

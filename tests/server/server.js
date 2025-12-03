@@ -1,5 +1,6 @@
-const Radix3 = Ant.require('./radix3.cjs');
-const { html } = Ant.require('./html.cjs');
+import { html } from './html';
+import meow from './meow.txt';
+import { Radix3 } from './radix3';
 
 const router = new Radix3();
 
@@ -8,6 +9,7 @@ router.insert('/', c => {
 
 Available routes:
   GET /
+  GET /meow
   GET /hello
   GET /status
   GET /users/:id
@@ -15,6 +17,10 @@ Available routes:
   GET /files/*path
   GET /api/v1/users
   GET /api/v2/demo`);
+});
+
+router.insert('/meow', async c => {
+  return c.res.body(meow);
 });
 
 router.insert('/hello', async c => {

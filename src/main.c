@@ -18,87 +18,11 @@
 #include "modules/json.h"
 #include "modules/fetch.h"
 
-static struct {
-  char *path;
-  jsval_t exports;
-} *module_cache = NULL;
-
-static int module_count = 0;
-static int module_capacity = 0;
-
-static jsval_t js_require(struct js *js, jsval_t *args, int nargs) {
-  if (nargs != 1) return js_mkundef();
-  
-  char data[8192];
-  char *req_path = js_getstr(js, args[0], NULL);
-  char full_path[PATH_MAX];
-  
-  jsval_t ant_obj = js_get(js, js_glob(js), "Ant");
-  jsval_t dirname_val = js_get(js, ant_obj, "__dirname");
-  char *base_path = js_getstr(js, dirname_val, NULL);
-  
-  if (base_path == NULL) base_path = ".";
-  
-  if (req_path[0] == '.') {
-    snprintf(full_path, sizeof(full_path), "%s/%s", base_path, req_path);
-  } else {
-    snprintf(full_path, sizeof(full_path), "%s", req_path);
-  }
-  
-  FILE *fp = fopen(full_path, "rb");
-  if (fp == NULL) {
-    fprintf(stderr, "Error: Could not open required file '%s'\n", full_path);
-    return js_mkundef();
-  }
-  
-  size_t len = fread(data, 1, sizeof(data), fp);
-  fclose(fp);
-  
-  for (int i = 0; i < module_count; i++) {
-    if (strcmp(module_cache[i].path, full_path) == 0) return module_cache[i].exports;
-  }
-  
-  jsval_t module_exports = js_mkobj(js);
-  jsval_t prev_exports = js_get(js, ant_obj, "exports");
-  
-  js_set(js, ant_obj, "exports", module_exports);
-  js_mkscope(js);
-  js_set_filename(js, full_path);
-  
-  jsval_t result = js_eval(js, data, len);
-  js_delscope(js);
-  
-  if (js_type(result) == JS_ERR) {
-    fprintf(stderr, "%s\n", js_str(js, result));
-    return js_mkundef();
-  }
-  
-  jsval_t final_exports = js_get(js, ant_obj, "exports");
-  js_set(js, ant_obj, "exports", prev_exports);
-  
-  if (module_count >= module_capacity) {
-    module_capacity = module_capacity == 0 ? 8 : module_capacity * 2;
-    module_cache = realloc(module_cache, module_capacity * sizeof(*module_cache));
-    if (module_cache == NULL) {
-      fprintf(stderr, "Error: Failed to allocate module cache\n");
-      return final_exports;
-    }
-  }
-  
-  module_cache[module_count].path = strdup(full_path);
-  module_cache[module_count].exports = final_exports;
-  module_count++;
-  
-  return final_exports;
-}
-
 static int execute_module(struct js *js, const char *filename) {
   char *filename_copy = strdup(filename);
   char *dir = dirname(filename_copy);
   
-  jsval_t ant_obj = js_get(js, js_glob(js), "Ant");
-  js_set(js, ant_obj, "__dirname", js_mkstr(js, dir, strlen(dir)));
-  
+  js_set(js, js_glob(js), "__dirname", js_mkstr(js, dir, strlen(dir)));
   free(filename_copy);
 
   FILE *fp = fopen(filename, "rb");
@@ -208,11 +132,6 @@ int main(int argc, char *argv[]) {
   init_json_module();
   init_server_module();
   init_timer_module();
-  
-  jsval_t exports_obj = js_mkobj(js);
-  
-  js_set(js, rt->ant_obj, "require", js_mkfun(js_require));
-  js_set(js, rt->ant_obj, "exports", exports_obj);
 
   int result = execute_module(js, module_file);
   
