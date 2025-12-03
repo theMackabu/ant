@@ -4,9 +4,6 @@
 #include <libgen.h>
 #include <limits.h>
 
-#include "ant.h"
-#include "runtime.h"
-
 typedef struct {
   char *placeholder;
   char *value;
@@ -497,31 +494,9 @@ int main(int argc, char **argv) {
   }
   free(cache.paths);
 
-  struct js *js = js_create_dynamic(1024 * 1024, 10 * 1024 * 1024);
-  if (!js) {
-    fprintf(stderr, "Error: Failed to create JS runtime\n");
-    free(js_code);
-    return 1;
-  }
-
-  ant_runtime_init(js);
-
-  jsval_t result = js_eval(js, js_code, processed_len);
-  if (js_type(result) == JS_ERR) {
-    fprintf(stderr, "Error: Failed to evaluate JS code:\n%s\n", js_str(js, result));
-    js_destroy(js);
-    free(js_code);
-    return 1;
-  }
-
-  size_t total_mem, min_free, cstack;
-  js_stats(js, &total_mem, &min_free, &cstack);
-  size_t used_mem = js_getbrk(js);
-
   FILE *out = fopen(output_file, "w");
   if (!out) {
     fprintf(stderr, "Error: Cannot open output file: %s\n", output_file);
-    js_destroy(js);
     free(js_code);
     return 1;
   }
@@ -547,14 +522,12 @@ int main(int argc, char **argv) {
   
   fprintf(out, "\n};\n\n");
   fprintf(out, "static const size_t ant_snapshot_source_len = %zu;\n\n", processed_len);
-  fprintf(out, "/* memory usage after evaluation: %zu bytes */\n", used_mem);
-  fprintf(out, "/* total memory: %zu bytes */\n", total_mem);
-  fprintf(out, "static const size_t ant_snapshot_mem_size = %zu;\n\n", used_mem);
+  fprintf(out, "/* bundled source size: %zu bytes */\n", processed_len);
+  fprintf(out, "static const size_t ant_snapshot_mem_size = %zu;\n\n", processed_len);
   
   fprintf(out, "#endif /* ANT_SNAPSHOT_DATA_H */\n");
 
   fclose(out);
-  js_destroy(js);
   free(js_code);
   
   for (int i = 0; i < num_replacements; i++) {
@@ -565,8 +538,7 @@ int main(int argc, char **argv) {
 
   printf("snapshot generated successfully: %s\n", output_file);
   printf("  original size: %ld bytes\n", file_size);
-  printf("  processed size: %zu bytes\n", processed_len);
-  printf("  memory used: %zu bytes\n", used_mem);
+  printf("  bundled size: %zu bytes\n", processed_len);
   printf("  replacements: %d\n", num_replacements);
 
   return 0;

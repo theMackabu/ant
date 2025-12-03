@@ -1,10 +1,15 @@
 async function test_get() {
-  const { origin } = (await fetch('https://httpbin.org/get')).json();
-  console.log(origin);
+  const { ip } = (await fetch('https://ifconfig.co/json')).json();
+  console.log(ip);
+}
+
+async function test_json() {
+  const test = (await fetch('https://themackabu.dev/test.json')).json();
+  console.log(test);
 }
 
 async function test_post() {
-  const response = await fetch('https://httpbin.org/post', {
+  const response = await fetch('https://httpbingo.org/post', {
     method: 'POST',
     body: JSON.stringify({ runtime: 'ant' }),
     headers: {
@@ -17,5 +22,4 @@ async function test_post() {
   console.log(`${json}\n${headers}`);
 }
 
-void test_get();
-void test_post();
+void Promise.all([test_get(), test_post(), test_json()]);

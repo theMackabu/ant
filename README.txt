@@ -11,15 +11,15 @@ RUN:
   ./build/ant script.js
 
 EXAMPLE:
-  See tests/server/server.cjs for a good server example using Ant.serve()
+  See examples/server/server.js for a good server example using Ant.serve()
   with Radix3 routing, parameter handling, and various response types.
 
 MODULES:
-  - Ant.serve()    - HTTP server (mongoose)
-  - Ant.require()  - CommonJS module loading
+  - Ant.serve()    - HTTP server
+  - import()       - ESM module loading
   - Timers         - setTimeout, setInterval, queueMicrotask
-  - fetch()        - HTTP client (curl)
-  - crypto.*       - Cryptography (libsodium)
+  - fetch()        - HTTP client
+  - crypto.*       - Cryptography
   - JSON.*         - JSON parsing
   - console.*      - Logging
 

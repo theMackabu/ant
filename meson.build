@@ -4,6 +4,7 @@ project('ant', 'c', default_options: [
   'default_library=static'
 ])
 
+cmake = import('cmake')
 include = include_directories('include')
 
 module_files = run_command('sh', '-c', 
@@ -19,22 +20,36 @@ sources = files(
   'src/snapshot.c',
 ) + files(module_files)
 
-# system dependencies
+zlib_dep = dependency('zlib', required: true)
+llhttp = dependency('llhttp', required: true)
+openssl_dep = dependency('openssl', required: true)
 libsodium_dep = dependency('libsodium', required: true)
 
-# dependencies
-libuv_dep = subproject('libuv').get_variable('libuv_dep')
+if host_machine.system() == 'darwin'
+  security_dep = dependency('appleframeworks', modules: ['Security', 'CoreFoundation'], required: true)
+endif
+
+tlsuv_opts = cmake.subproject_options()
+tlsuv_opts.append_compile_args('c', [
+  '-Wno-unused-function',
+  '-Wno-unused-variable',
+  '-Wno-bitwise-op-parentheses',
+  '-Wno-sometimes-uninitialized'
+])
+
+tlsuv_opts.add_cmake_defines({'BUILD_TESTING': 'OFF'})
+tlsuv_dep = cmake.subproject('tlsuv', options: tlsuv_opts).dependency('tlsuv')
+
 yyjson_dep = subproject('yyjson').get_variable('yyjson_dep')
 uuidv7_dep = subproject('uuidv7').get_variable('uuidv7_dep')
 mongoose_dep = subproject('mongoose').get_variable('mongoose_dep')
 argtable3_dep = subproject('argtable3').get_variable('argtable3_dep')
 minicoro_dep = subproject('minicoro').get_variable('minicoro_dep')
 
-curl_dep = subproject('curl', default_options: [
-  'tests=disabled', 
-  'tool=disabled', 
-  'unittests=disabled']
-).get_variable('curl_dep')
+libuv_dep = subproject('libuv', default_options: [
+  'build_tests=false', 
+  'build_benchmarks=false'
+]).get_variable('libuv_dep')
 
 git = find_program('git', required: false)
 if git.found()
@@ -51,7 +66,7 @@ endif
 build_date = run_command('date', '+%Y-%m-%d', check: true).stdout().strip()
 
 version_conf = configuration_data()
-version_conf.set('ANT_VERSION', '0.0.6.21')
+version_conf.set('ANT_VERSION', '0.0.6.22')
 version_conf.set('ANT_GIT_HASH', git_hash)
 version_conf.set('ANT_BUILD_DATE', build_date)
 
@@ -62,28 +77,12 @@ config_h = configure_file(
 )
 
 build_include = include_directories('.')
-add_project_arguments('-D JS_DUMP', language: 'c')
-
-gen_snapshot_sources = files(
-  'src/ant.c',
-  'src/runtime.c',
-  'src/tools/gen_snapshot.c',
-) + files(module_files)
+add_project_arguments('-D JS_DUMP', '-Wno-unused-function', language: 'c')
 
 gen_snapshot = executable(
   'gen_snapshot',
-  gen_snapshot_sources,
+  files('src/tools/gen_snapshot.c'),
   include_directories: [include, build_include],
-  dependencies: [
-    libuv_dep,
-    curl_dep,
-    yyjson_dep,
-    uuidv7_dep,
-    mongoose_dep,
-    argtable3_dep,
-    libsodium_dep,
-    minicoro_dep
-  ],
   c_args: ['-DANT_SNAPSHOT_GENERATOR'],
   native: true
 )
@@ -103,18 +102,22 @@ snapshot_h = custom_target(
   build_by_default: true
 )
 
+ant_deps = [
+  llhttp, mongoose_dep,
+  libuv_dep, argtable3_dep,
+  tlsuv_dep, libsodium_dep,
+  yyjson_dep, minicoro_dep,
+  uuidv7_dep, openssl_dep,
+  zlib_dep
+]
+
+if host_machine.system() == 'darwin'
+  ant_deps += [security_dep]
+endif
+
 executable(
   'ant',
   sources + [snapshot_h],
   include_directories: [include, build_include],
-  dependencies: [
-    libuv_dep,
-    curl_dep,
-    yyjson_dep,
-    uuidv7_dep,
-    mongoose_dep,
-    argtable3_dep,
-    libsodium_dep,
-    minicoro_dep
-  ]
+  dependencies: ant_deps
 )

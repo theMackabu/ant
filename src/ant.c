@@ -18,6 +18,7 @@
 #include "ant.h"
 #include "config.h"
 #include "modules/timer.h"
+#include "modules/fetch.h"
 
 #define MINICORO_IMPL
 #include "minicoro.h"
@@ -418,6 +419,8 @@ static bool has_ready_coroutines(void) {
 }
 
 void js_poll_events(struct js *js) {
+  fetch_poll_events();
+  
   if (has_pending_timers()) {
     int64_t next_timeout_ms = get_next_timer_timeout();
     if (next_timeout_ms <= 0) process_timers(js);
@@ -468,7 +471,7 @@ void js_poll_events(struct js *js) {
 }
 
 void js_run_event_loop(struct js *js) {
-  while (has_pending_microtasks() || has_pending_timers() || has_pending_coroutines()) {
+  while (has_pending_microtasks() || has_pending_timers() || has_pending_coroutines() || has_pending_fetches()) {
     js_poll_events(js);
     
     if (!has_pending_microtasks() && has_pending_timers() && !has_ready_coroutines()) {
@@ -476,7 +479,7 @@ void js_run_event_loop(struct js *js) {
       if (next_timeout_ms > 0) usleep(next_timeout_ms > 1000000 ? 1000000 : next_timeout_ms * 1000);
     }
     
-    if (!has_pending_microtasks() && !has_pending_timers() && !has_pending_coroutines()) break;
+    if (!has_pending_microtasks() && !has_pending_timers() && !has_pending_coroutines() && !has_pending_fetches()) break;
   }
 }
 

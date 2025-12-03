@@ -47,29 +47,8 @@ router.insert('/api/v1/users', async c => {
 });
 
 router.insert('/api/v2/demo', async c => {
-  return c.res.json({
-    slideshow: {
-      author: 'Yours Truly',
-      date: 'date of publication',
-      slides: [
-        {
-          title: 'Wake up to WonderWidgets!',
-          type: 'all'
-        },
-        {
-          items: ['Why <em>WonderWidgets</em> are great', 'Who <em>buys</em> WonderWidgets'],
-          title: 'Overview',
-          type: 'all'
-        }
-      ],
-      metadata: {
-        title: 'Sample Slide Show',
-        isFavorite: true,
-        viewCount: 105407,
-        createdAt: '2024-12-01T22:51:49.000Z'
-      }
-    }
-  });
+  const data = (await fetch('https://themackabu.dev/test.json')).json();
+  return c.res.json(data);
 });
 
 router.insert('/files/*path', async c => {
