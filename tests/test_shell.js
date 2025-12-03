@@ -35,11 +35,11 @@ if (lines2[2] !== 'line3') {
 }
 
 console.log('\n=== Test 3: ls command ===');
-const result3 = await $`ls tests/test_shell_dollar.cjs`;
+const result3 = await $`ls tests/test_shell.js`;
 const text3 = result3.text();
 console.log('Output:', text3);
-if (!text3.includes('test_shell_dollar.cjs')) {
-  throw new Error('Expected output to contain test_shell_dollar.cjs');
+if (!text3.includes('test_shell.js')) {
+  throw new Error('Expected output to contain test_shell.js');
 }
 
 console.log('\n=== Test 4: pwd command ===');

@@ -577,7 +577,6 @@ static size_t cpy(char *dst, size_t dstlen, const char *src, size_t srclen) {
   return i;
 }
 
-// Circular reference tracking for stringification
 #define MAX_STRINGIFY_DEPTH 64
 static jsval_t stringify_stack[MAX_STRINGIFY_DEPTH];
 static int stringify_depth = 0;
@@ -928,7 +927,6 @@ const char *js_str(struct js *js, jsval_t value) {
   if (is_err(value)) return js->errmsg;
   if (js->brk + sizeof(jsoff_t) >= js->size) return "";
   
-  // Reset stringify depth for each new stringification
   stringify_depth = 0;
   len = tostr(js, value, buf, available);
   js_mkstr(js, NULL, len);
@@ -2910,6 +2908,7 @@ static jsval_t js_call_dot(struct js *js) {
     if (lookahead(js) == TOK_ARROW) return res;
     if (lookahead(js) == TOK_TEMPLATE) {
       jsval_t tag_func = lookup(js, &js->code[coderefoff(res)], codereflen(res));
+      if (is_err(tag_func)) return tag_func;
       if (!(js->flags & F_NOEXEC) && !is_err(tag_func)) tag_func = resolveprop(js, tag_func);
       js->consumed = 1;
       next(js);
@@ -2922,6 +2921,7 @@ static jsval_t js_call_dot(struct js *js) {
   while (next(js) == TOK_LPAREN || next(js) == TOK_DOT || next(js) == TOK_OPTIONAL_CHAIN || next(js) == TOK_LBRACKET || next(js) == TOK_TEMPLATE) {
     if (js->tok == TOK_TEMPLATE) {
       if (vtype(res) == T_PROP) res = resolveprop(js, res);
+      if (is_err(res)) return res;
       js->consumed = 1;
       return js_tagged_template(js, res);
     } else if (js->tok == TOK_DOT || js->tok == TOK_OPTIONAL_CHAIN) {
