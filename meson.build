@@ -1,6 +1,7 @@
 project('ant', 'c', default_options: [
   'optimization=2',
-  'c_std=c23'
+  'c_std=c23',
+  'default_library=static'
 ])
 
 include = include_directories('include')
@@ -22,12 +23,17 @@ sources = files(
 libsodium_dep = dependency('libsodium', required: true)
 
 # dependencies
-curl_dep = subproject('curl').get_variable('curl_dep')
 yyjson_dep = subproject('yyjson').get_variable('yyjson_dep')
 uuidv7_dep = subproject('uuidv7').get_variable('uuidv7_dep')
 mongoose_dep = subproject('mongoose').get_variable('mongoose_dep')
 argtable3_dep = subproject('argtable3').get_variable('argtable3_dep')
 minicoro_dep = subproject('minicoro').get_variable('minicoro_dep')
+
+curl_dep = subproject('curl', default_options: [
+  'tests=disabled', 
+  'tool=disabled', 
+  'unittests=disabled']
+).get_variable('curl_dep')
 
 git = find_program('git', required: false)
 if git.found()
@@ -44,7 +50,7 @@ endif
 build_date = run_command('date', '+%Y-%m-%d', check: true).stdout().strip()
 
 version_conf = configuration_data()
-version_conf.set('ANT_VERSION', '0.0.6.18')
+version_conf.set('ANT_VERSION', '0.0.6.19')
 version_conf.set('ANT_GIT_HASH', git_hash)
 version_conf.set('ANT_BUILD_DATE', build_date)
 
