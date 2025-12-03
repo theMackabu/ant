@@ -9,6 +9,7 @@
 #include "ant.h"
 #include "config.h"
 #include "runtime.h"
+#include "repl.h"
 
 #include "modules/builtin.h"
 #include "modules/io.h"
@@ -17,6 +18,8 @@
 #include "modules/timer.h"
 #include "modules/json.h"
 #include "modules/fetch.h"
+
+int js_result = EXIT_SUCCESS;
 
 static int execute_module(struct js *js, const char *filename) {
   char *filename_copy = strdup(filename);
@@ -77,8 +80,9 @@ int main(int argc, char *argv[]) {
   
   if (help->count > 0) {
     printf("Ant sized JavaScript\n\n");
-    printf("Usage: ant");
-    arg_print_syntax(stdout, argtable, "\n\n");
+    printf("Usage: ant [options] [module.js]\n\n");
+    printf("If no module file is specified, ant starts in REPL mode.\n\n");
+    printf("Options:\n");
     arg_print_glossary(stdout, argtable, "  %-25s %s\n");
     arg_freetable(argtable, sizeof(argtable) / sizeof(argtable[0]));
     return EXIT_SUCCESS;
@@ -97,14 +101,8 @@ int main(int argc, char *argv[]) {
     return EXIT_FAILURE;
   }
   
-  if (file->count == 0) {
-    fprintf(stderr, "Error: No input file specified\n");
-    printf("Try 'ant --help' for more information.\n");
-    arg_freetable(argtable, sizeof(argtable) / sizeof(argtable[0]));
-    return EXIT_FAILURE;
-  }
-  
-  const char *module_file = file->filename[0];
+  bool repl_mode = (file->count == 0);
+  const char *module_file = repl_mode ? NULL : file->filename[0];
   dump = debug->count;
   
   size_t initial_size = 4 * 1024 * 1024;
@@ -121,12 +119,9 @@ int main(int argc, char *argv[]) {
     return EXIT_FAILURE;
   }
   
-  if (gct->count > 0) {
-    js_setgct(js, gct->ival[0]);
-  }
-  
-  struct ant_runtime *rt = ant_runtime_init(js);
-  
+  if (gct->count > 0) js_setgct(js, gct->ival[0]);  
+  ant_runtime_init(js);
+
   init_builtin_module();
   init_crypto_module();
   init_fetch_module();
@@ -134,14 +129,16 @@ int main(int argc, char *argv[]) {
   init_json_module();
   init_server_module();
   init_timer_module();
-
-  int result = execute_module(js, module_file);
+    
+  if (repl_mode) ant_repl_run(); else {
+    js_result = execute_module(js, module_file);
+    js_run_event_loop(js);
+  }
   
-  js_run_event_loop(js);
   if (dump) js_dump(js);
   
   js_destroy(js);
   arg_freetable(argtable, sizeof(argtable) / sizeof(argtable[0]));
   
-  return result;
+  return js_result;
 }

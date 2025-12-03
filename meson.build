@@ -13,6 +13,7 @@ module_files = run_command('sh', '-c',
 sources = files(
   'src/main.c',
   'src/ant.c',
+  'src/repl.c',
   'src/runtime.c',
 ) + files(module_files)
 
@@ -42,7 +43,7 @@ endif
 build_date = run_command('date', '+%Y-%m-%d', check: true).stdout().strip()
 
 version_conf = configuration_data()
-version_conf.set('ANT_VERSION', '0.0.6.11')
+version_conf.set('ANT_VERSION', '0.0.6.12')
 version_conf.set('ANT_GIT_HASH', git_hash)
 version_conf.set('ANT_BUILD_DATE', build_date)
 
