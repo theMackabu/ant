@@ -13,7 +13,8 @@ enum {
 };
 
 struct js *js_create(void *buf, size_t len);
-const char *js_str(struct js *, jsval_t val);
+struct js *js_create_dynamic(size_t initial_size, size_t max_size);
+void js_destroy(struct js *);
 
 jsval_t js_glob(struct js *);
 jsval_t js_eval(struct js *, const char *, size_t);
@@ -53,6 +54,8 @@ int js_getbool(jsval_t val);
 
 double js_getnum(jsval_t val);
 char *js_getstr(struct js *js, jsval_t val, size_t *len);
+
+const char *js_str(struct js *, jsval_t val);
 
 typedef struct {
   jsval_t obj;

@@ -189,16 +189,17 @@ static int execute_module(struct js *js, const char *filename) {
 
 int main(int argc, char *argv[]) {
   char dump = 0;
-  static char mem[64 * 1024 * 1024]; // 64mb
   
   struct arg_lit *help = arg_lit0("h", "help", "display this help and exit");
   struct arg_lit *version = arg_lit0("v", "version", "display version information and exit");
   struct arg_lit *debug = arg_litn("d", "debug", 0, 10, "dump VM state (can be repeated for more detail)");
   struct arg_int *gct = arg_int0(NULL, "gct", "<threshold>", "set garbage collection threshold");
+  struct arg_int *initial_mem = arg_int0(NULL, "initial-mem", "<size>", "initial memory size in MB (default: 4)");
+  struct arg_int *max_mem = arg_int0(NULL, "max-mem", "<size>", "maximum memory size in MB (default: 512)");
   struct arg_file *file = arg_file0(NULL, NULL, "<module.js>", "JavaScript module file to execute");
   struct arg_end *end = arg_end(20);
   
-  void *argtable[] = {help, version, debug, gct, file, end};
+  void *argtable[] = {help, version, debug, gct, initial_mem, max_mem, file, end};
   int nerrors = arg_parse(argc, argv, argtable);
   
   if (help->count > 0) {
@@ -233,7 +234,19 @@ int main(int argc, char *argv[]) {
   const char *module_file = file->filename[0];
   dump = debug->count;
   
-  struct js *js = js_create(mem, sizeof(mem));
+  size_t initial_size = 4 * 1024 * 1024;
+  size_t max_size = 512 * 1024 * 1024;
+  
+  if (initial_mem->count > 0) initial_size = (size_t)initial_mem->ival[0] * 1024 * 1024;
+  if (max_mem->count > 0) max_size = (size_t)max_mem->ival[0] * 1024 * 1024;
+  
+  struct js *js = js_create_dynamic(initial_size, max_size);
+  
+  if (js == NULL) {
+    fprintf(stderr, "Error: Failed to allocate JavaScript runtime\n");
+    arg_freetable(argtable, sizeof(argtable) / sizeof(argtable[0]));
+    return EXIT_FAILURE;
+  }
   
   if (gct->count > 0) {
     js_setgct(js, gct->ival[0]);
@@ -273,6 +286,8 @@ int main(int argc, char *argv[]) {
   }
   
   if (dump) js_dump(js);
+  
+  js_destroy(js);
   arg_freetable(argtable, sizeof(argtable) / sizeof(argtable[0]));
   
   return result;

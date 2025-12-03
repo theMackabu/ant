@@ -103,6 +103,8 @@ struct js {
   void *cstk;             // C stack pointer at the beginning of js_eval()
   jsval_t current_func;   // currently executing function (for native closures)
   bool var_warning_shown; // flag to show var deprecation warning only once
+  bool owns_mem;          // true if js owns the memory buffer (dynamic allocation)
+  jsoff_t max_size;       // maximum allowed memory size (for dynamic growth)
 };
 
 enum {
@@ -170,6 +172,7 @@ static jsoff_t align32(jsoff_t v) { return ((v + 3) >> 2) << 2; }
 #define CHECKV(_v) do { if (is_err(_v)) { res = (_v); goto done; } } while (0)
 #define EXPECT(_tok, _e) do { if (next(js) != _tok) { _e; return js_mkerr(js, "parse error"); }; js->consumed = 1; } while (0)
 
+static void js_gc(struct js *js);
 static bool streq(const char *buf, size_t len, const char *p, size_t n);
 static size_t tostr(struct js *js, jsval_t value, char *buf, size_t len);
 static size_t strpromise(struct js *js, jsval_t value, char *buf, size_t len);
@@ -674,10 +677,58 @@ bool js_truthy(struct js *js, jsval_t v) {
          (t == T_OBJ || t == T_FUNC || t == T_ARR) || (t == T_STR && vstrlen(js, v) > 0);
 }
 
+static bool js_try_grow_memory(struct js *js, size_t needed) {
+  if (!js->owns_mem) return false;
+  if (js->max_size == 0) return false;
+  
+  size_t current_total = sizeof(struct js) + js->size;
+  size_t new_size = current_total * 2;
+  
+  while (new_size < current_total + needed && new_size <= (size_t)js->max_size) new_size *= 2;
+  
+  if (new_size > (size_t)js->max_size) new_size = (size_t)js->max_size;
+  if (new_size <= current_total) return false;
+  
+  void *old_buf = (void *)((uint8_t *)js - 0);
+  void *new_buf = realloc(old_buf, new_size);
+  
+  if (new_buf == NULL) return false;
+  struct js *new_js = (struct js *)new_buf;
+  
+  new_js->mem = (uint8_t *)(new_js + 1);
+  jsoff_t old_size = new_js->size;
+  new_js->size = (jsoff_t)(new_size - sizeof(struct js));
+  new_js->size = new_js->size / 8U * 8U;
+  
+  if (old_size > 0) {
+    new_js->gct = (new_js->size * new_js->gct) / old_size;
+  } else {
+    new_js->gct = new_js->size / 2;
+  }
+  
+  return true;
+}
+
 static jsoff_t js_alloc(struct js *js, size_t size) {
   jsoff_t ofs = js->brk;
   size = align32((jsoff_t) size);
-  if (js->brk + size > js->size) return ~(jsoff_t) 0;
+  if (js->brk + size > js->size) {
+    if (js_try_grow_memory(js, size)) {
+      ofs = js->brk;
+      if (js->brk + size > js->size) return ~(jsoff_t) 0;
+    } else {
+      js_gc(js);
+      ofs = js->brk;
+      if (js->brk + size > js->size) {
+        if (js_try_grow_memory(js, size)) {
+          ofs = js->brk;
+          if (js->brk + size > js->size) return ~(jsoff_t) 0;
+        } else {
+          return ~(jsoff_t) 0;
+        }
+      }
+    }
+  }
   js->brk += (jsoff_t) size;
   return ofs;
 }
@@ -845,7 +896,7 @@ static void js_unmark_used_entities(struct js *js) {
   if (js->nogc) js_unmark_entity(js, js->nogc);
 }
 
-void js_gc(struct js *js) {
+static void js_gc(struct js *js) {
   setlwm(js);
   if (js->nogc == (jsoff_t) ~0) return;
   js_mark_all_entities_for_deletion(js);
@@ -6374,7 +6425,37 @@ struct js *js_create(void *buf, size_t len) {
   
   setprop(js, glob, js_mkstr(js, "Promise", 7), mkval(T_FUNC, vdata(p_ctor_obj)));
   
+  js->owns_mem = false;
+  js->max_size = 0;
+  
   return js;
+}
+
+struct js *js_create_dynamic(size_t initial_size, size_t max_size) {
+  if (initial_size < sizeof(struct js) + esize(T_OBJ)) initial_size = 1024 * 1024;
+  if (max_size == 0 || max_size < initial_size) max_size = 512 * 1024 * 1024;
+  
+  void *buf = malloc(initial_size);
+  if (buf == NULL) return NULL;
+  
+  struct js *js = js_create(buf, initial_size);
+  if (js == NULL) {
+    free(buf);
+    return NULL;
+  }
+  
+  js->owns_mem = true;
+  js->max_size = (jsoff_t) max_size;
+  
+  return js;
+}
+
+void js_destroy(struct js *js) {
+  if (js == NULL) return;
+  
+  if (js->owns_mem) {
+    free((void *)((uint8_t *)js - 0));
+  }
 }
 
 double js_getnum(jsval_t value) { return tod(value); }
