@@ -28,7 +28,8 @@ router.insert('/hello', async c => {
 });
 
 router.insert('/status', async c => {
-  return c.res.body('Server is running with Radix3 router!');
+  const result = (await fetch('http://localhost:8000/meow')).text();
+  return c.res.body(`server is responding with ${result}`);
 });
 
 router.insert('/users/:id', async c => {
@@ -82,7 +83,7 @@ async function handleRequest(req, res) {
 
   if (result?.handler) {
     const ctx = { req, res, params: result.params };
-    return void result.handler(ctx);
+    return await result.handler(ctx);
   }
 
   res.body('not found: ' + req.uri, 404);
