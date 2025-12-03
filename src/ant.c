@@ -117,7 +117,7 @@ enum {
   TOK_TYPEOF, TOK_UPLUS, TOK_UMINUS, TOK_EXP, TOK_MUL, TOK_DIV, TOK_REM,
   TOK_OPTIONAL_CHAIN, TOK_REST,
   TOK_PLUS, TOK_MINUS, TOK_SHL, TOK_SHR, TOK_ZSHR, TOK_LT, TOK_LE, TOK_GT,
-  TOK_GE, TOK_EQ, TOK_NE, TOK_AND, TOK_XOR, TOK_OR, TOK_LAND, TOK_LOR,
+  TOK_GE, TOK_EQ, TOK_NE, TOK_AND, TOK_XOR, TOK_OR, TOK_LAND, TOK_LOR, TOK_NULLISH,
   TOK_COLON, TOK_Q,  TOK_ASSIGN, TOK_PLUS_ASSIGN, TOK_MINUS_ASSIGN,
   TOK_MUL_ASSIGN, TOK_DIV_ASSIGN, TOK_REM_ASSIGN, TOK_SHL_ASSIGN,
   TOK_SHR_ASSIGN, TOK_ZSHR_ASSIGN, TOK_AND_ASSIGN, TOK_XOR_ASSIGN,
@@ -904,7 +904,7 @@ static uint8_t next(struct js *js) {
   #define LOOK(OFS, CH) js->toff + OFS < js->clen && buf[OFS] == CH
   
   switch (buf[0]) {
-    case '?': if (LOOK(1, '.')) TOK(TOK_OPTIONAL_CHAIN, 2); TOK(TOK_Q, 1);
+    case '?': if (LOOK(1, '?')) TOK(TOK_NULLISH, 2); if (LOOK(1, '.')) TOK(TOK_OPTIONAL_CHAIN, 2); TOK(TOK_Q, 1);
     case ':': TOK(TOK_COLON, 1);
     case '(': TOK(TOK_LPAREN, 1);
     case ')': TOK(TOK_RPAREN, 1);
@@ -2740,8 +2740,29 @@ static jsval_t js_bitwise_or(struct js *js) {
   LTR_BINOP(js_bitwise_xor, (next(js) == TOK_OR));
 }
 
-static jsval_t js_logical_and(struct js *js) {
+static jsval_t js_nullish_coalesce(struct js *js) {
   jsval_t res = js_bitwise_or(js);
+  if (is_err(res)) return res;
+  uint8_t flags = js->flags;
+  while (next(js) == TOK_NULLISH) {
+    js->consumed = 1;
+    res = resolveprop(js, res);
+    uint8_t res_type = vtype(res);
+    if (res_type != T_NULL && res_type != T_UNDEF) {
+      js->flags |= F_NOEXEC;
+    }
+    if (js->flags & F_NOEXEC) {
+      js_nullish_coalesce(js);
+    } else {
+      res = js_nullish_coalesce(js);
+    }
+  }
+  js->flags = flags;
+  return res;
+}
+
+static jsval_t js_logical_and(struct js *js) {
+  jsval_t res = js_nullish_coalesce(js);
   if (is_err(res)) return res;
   uint8_t flags = js->flags;
   while (next(js) == TOK_LAND) {
