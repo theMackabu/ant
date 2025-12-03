@@ -2,12 +2,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
+#include <mongoose.h>
 
-#include "mongoose.h"
+#include "ant.h"
+#include "runtime.h"
 #include "modules/server.h"
 #include "modules/timer.h"
 #include "modules/json.h"
-#include "ant.h"
 
 typedef struct {
   int status;
@@ -210,14 +211,12 @@ static void http_handler(struct mg_connection *c, int ev, void *ev_data) {
       
       if (res_ctx.sent) {
         char headers[256];
-        snprintf(headers, sizeof(headers), "Content-Type: %s\r\n", 
-                 res_ctx.content_type ? res_ctx.content_type : "text/plain");
+        snprintf(headers, sizeof(headers), "Content-Type: %s\r\n", res_ctx.content_type ? res_ctx.content_type : "text/plain");
         mg_http_reply(c, res_ctx.status, headers, "%s", res_ctx.body ? res_ctx.body : "");
         return;
       }
     }
     
-    // If we get here, no response was sent
     if (js_type(result) == JS_ERR) {
       fprintf(stderr, "Handler error: %s\n", js_str(server->js, result));
       mg_http_reply(c, 500, "Content-Type: text/plain\r\n", "Internal Server Error");
@@ -227,6 +226,7 @@ static void http_handler(struct mg_connection *c, int ev, void *ev_data) {
   }
 }
 
+// Ant.serve(port, handler)
 jsval_t js_serve(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) {
     fprintf(stderr, "Error: Ant.serve() requires at least 1 argument (port)\n");
@@ -272,4 +272,8 @@ jsval_t js_serve(struct js *js, jsval_t *args, int nargs) {
   }
   
   return js_mknum(1);
+}
+
+void init_server_module() {
+  js_set(rt->js, rt->ant_obj, "serve", js_mkfun(js_serve));
 }
