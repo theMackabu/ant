@@ -1,0 +1,13 @@
+[wrap-file]
+directory = uthash-2.3.0
+source_url = https://github.com/troydhanson/uthash/archive/v2.3.0.tar.gz
+source_filename = uthash-2.3.0.tar.gz
+source_hash = e10382ab75518bad8319eb922ad04f907cb20cccb451a3aa980c9d005e661acc
+source_fallback_url = https://github.com/mesonbuild/wrapdb/releases/download/uthash_2.3.0-2/uthash-2.3.0.tar.gz
+patch_filename = uthash_2.3.0-2_patch.zip
+patch_url = https://wrapdb.mesonbuild.com/v2/uthash_2.3.0-2/get_patch
+patch_hash = d66806488ebd37246a160f62779e3eb3259b8cd35a978f7499daa0390923cd99
+wrapdb_version = 2.3.0-2
+
+[provide]
+dependency_names = uthash

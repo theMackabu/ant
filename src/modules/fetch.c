@@ -4,6 +4,8 @@
 #include <string.h>
 #include <tlsuv/tlsuv.h>
 #include <tlsuv/http.h>
+#include <utarray.h>
+#include <unistd.h>
 
 #include "runtime.h"
 #include "modules/fetch.h"
@@ -26,11 +28,10 @@ typedef struct fetch_request_s {
   int failed;
   char *error_msg;
   jsval_t headers_obj;
-  struct fetch_request_s *next;
 } fetch_request_t;
 
 static uv_loop_t *fetch_loop = NULL;
-static fetch_request_t *pending_requests = NULL;
+static UT_array *pending_requests = NULL;
 
 static void free_fetch_request(fetch_request_t *req) {
   if (!req) return;
@@ -42,10 +43,14 @@ static void free_fetch_request(fetch_request_t *req) {
 }
 
 static void remove_pending_request(fetch_request_t *req) {
-  fetch_request_t **curr = &pending_requests;
-  while (*curr) {
-    if (*curr == req) *curr = req->next; break;
-    curr = &(*curr)->next;
+  if (!req || !pending_requests) return;
+  
+  fetch_request_t **p = NULL;
+  unsigned int i = 0;
+  
+  while ((p = (fetch_request_t**)utarray_next(pending_requests, p))) {
+    if (*p == req) { utarray_erase(pending_requests, i, 1); break; }
+    i++;
   }
 }
 
@@ -187,8 +192,8 @@ static jsval_t do_fetch_microtask(struct js *js, jsval_t *args, int nargs) {
     return js_mkundef();
   }
   
-  req->next = pending_requests;
-  pending_requests = req;
+  if (!pending_requests) utarray_new(pending_requests, &ut_ptr_icd);
+  utarray_push_back(pending_requests, &req);
   
   struct tlsuv_url_s parsed_url;
   if (tlsuv_parse_url(&parsed_url, url_str) != 0) {
@@ -316,9 +321,12 @@ void init_fetch_module() {
 }
 
 int has_pending_fetches(void) {
-  return pending_requests != NULL || (fetch_loop && uv_loop_alive(fetch_loop));
+  return (pending_requests && utarray_len(pending_requests) > 0) || (fetch_loop && uv_loop_alive(fetch_loop));
 }
 
 void fetch_poll_events(void) {
-  if (fetch_loop && uv_loop_alive(fetch_loop)) uv_run(fetch_loop, UV_RUN_ONCE);
+  if (fetch_loop && uv_loop_alive(fetch_loop)) {
+    uv_run(fetch_loop, UV_RUN_ONCE);
+    if (pending_requests && utarray_len(pending_requests) > 0) usleep(1000);
+  }
 }

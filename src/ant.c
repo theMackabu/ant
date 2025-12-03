@@ -481,6 +481,8 @@ void js_run_event_loop(struct js *js) {
     
     if (!has_pending_microtasks() && !has_pending_timers() && !has_pending_coroutines() && !has_pending_fetches()) break;
   }
+  
+  js_poll_events(js);
 }
 
 static jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t code_len, jsval_t closure_scope) {

@@ -40,6 +40,7 @@ tlsuv_opts.append_compile_args('c', [
 tlsuv_opts.add_cmake_defines({'BUILD_TESTING': 'OFF'})
 tlsuv_dep = cmake.subproject('tlsuv', options: tlsuv_opts).dependency('tlsuv')
 
+uthash_dep = subproject('uthash').get_variable('uthash_dep')
 yyjson_dep = subproject('yyjson').get_variable('yyjson_dep')
 uuidv7_dep = subproject('uuidv7').get_variable('uuidv7_dep')
 mongoose_dep = subproject('mongoose').get_variable('mongoose_dep')
@@ -66,7 +67,7 @@ endif
 build_date = run_command('date', '+%Y-%m-%d', check: true).stdout().strip()
 
 version_conf = configuration_data()
-version_conf.set('ANT_VERSION', '0.0.6.22')
+version_conf.set('ANT_VERSION', '0.0.6.23')
 version_conf.set('ANT_GIT_HASH', git_hash)
 version_conf.set('ANT_BUILD_DATE', build_date)
 
@@ -108,7 +109,7 @@ ant_deps = [
   tlsuv_dep, libsodium_dep,
   yyjson_dep, minicoro_dep,
   uuidv7_dep, openssl_dep,
-  zlib_dep
+  zlib_dep, uthash_dep
 ]
 
 if host_machine.system() == 'darwin'
