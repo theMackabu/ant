@@ -206,6 +206,19 @@ static jsval_t builtin_string_endsWith(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_replace(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_template(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_charCodeAt(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_string_toLowerCase(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_string_toUpperCase(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_string_trim(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_string_repeat(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_string_padStart(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_string_padEnd(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_string_charAt(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_number_toString(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_number_toFixed(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_number_toPrecision(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_number_toExponential(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_parseInt(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_parseFloat(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_Object(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_RegExp(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_Promise(struct js *js, jsval_t *args, int nargs);
@@ -1271,6 +1284,32 @@ static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
       return js_mkfun(builtin_string_template);
     } else if (streq(ptr, codereflen(r), "charCodeAt", 10)) {
       return js_mkfun(builtin_string_charCodeAt);
+    } else if (streq(ptr, codereflen(r), "toLowerCase", 11)) {
+      return js_mkfun(builtin_string_toLowerCase);
+    } else if (streq(ptr, codereflen(r), "toUpperCase", 11)) {
+      return js_mkfun(builtin_string_toUpperCase);
+    } else if (streq(ptr, codereflen(r), "trim", 4)) {
+      return js_mkfun(builtin_string_trim);
+    } else if (streq(ptr, codereflen(r), "repeat", 6)) {
+      return js_mkfun(builtin_string_repeat);
+    } else if (streq(ptr, codereflen(r), "padStart", 8)) {
+      return js_mkfun(builtin_string_padStart);
+    } else if (streq(ptr, codereflen(r), "padEnd", 6)) {
+      return js_mkfun(builtin_string_padEnd);
+    } else if (streq(ptr, codereflen(r), "charAt", 6)) {
+      return js_mkfun(builtin_string_charAt);
+    }
+  }
+  
+  if (vtype(l) == T_NUM) {
+    if (streq(ptr, codereflen(r), "toString", 8)) {
+      return js_mkfun(builtin_number_toString);
+    } else if (streq(ptr, codereflen(r), "toFixed", 7)) {
+      return js_mkfun(builtin_number_toFixed);
+    } else if (streq(ptr, codereflen(r), "toPrecision", 11)) {
+      return js_mkfun(builtin_number_toPrecision);
+    } else if (streq(ptr, codereflen(r), "toExponential", 13)) {
+      return js_mkfun(builtin_number_toExponential);
     }
   }
   
@@ -1748,6 +1787,7 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
     case TOK_MUL:     return tov(a * b);
     case TOK_PLUS:    return tov(a + b);
     case TOK_MINUS:   return tov(a - b);
+    case TOK_EXP:     return tov(pow(a, b));
     case TOK_XOR:     return tov((double)((long) a ^ (long) b));
     case TOK_AND:     return tov((double)((long) a & (long) b));
     case TOK_OR:      return tov((double)((long) a | (long) b));
@@ -2775,8 +2815,20 @@ static jsval_t js_unary(struct js *js) {
   }
 }
 
+static jsval_t js_exp(struct js *js) {
+  jsval_t base = js_unary(js);
+  if (is_err(base)) return base;
+  if (next(js) == TOK_EXP) {
+    js->consumed = 1;
+    jsval_t exponent = js_exp(js);
+    if (is_err(exponent)) return exponent;
+    return do_op(js, TOK_EXP, base, exponent);
+  }
+  return base;
+}
+
 static jsval_t js_mul_div_rem(struct js *js) {
-  LTR_BINOP(js_unary, (next(js) == TOK_MUL || js->tok == TOK_DIV || js->tok == TOK_REM));
+  LTR_BINOP(js_exp, (next(js) == TOK_MUL || js->tok == TOK_DIV || js->tok == TOK_REM));
 }
 
 static jsval_t js_plus_minus(struct js *js) {
@@ -5411,6 +5463,334 @@ static jsval_t builtin_string_charCodeAt(struct js *js, jsval_t *args, int nargs
   return tov((double) ch);
 }
 
+static jsval_t builtin_string_toLowerCase(struct js *js, jsval_t *args, int nargs) {
+  (void) args; (void) nargs;
+  jsval_t str = js->this_val;
+  if (vtype(str) != T_STR) return js_mkerr(js, "toLowerCase called on non-string");
+  
+  jsoff_t str_len, str_off = vstr(js, str, &str_len);
+  const char *str_ptr = (char *) &js->mem[str_off];
+  jsval_t result = js_mkstr(js, NULL, str_len);
+  if (is_err(result)) return result;
+  
+  jsoff_t result_len, result_off = vstr(js, result, &result_len);
+  char *result_ptr = (char *) &js->mem[result_off];
+  
+  for (jsoff_t i = 0; i < str_len; i++) {
+    char ch = str_ptr[i];
+    result_ptr[i] = (ch >= 'A' && ch <= 'Z') ? ch + 32 : ch;
+  }
+  
+  return result;
+}
+
+static jsval_t builtin_string_toUpperCase(struct js *js, jsval_t *args, int nargs) {
+  (void) args; (void) nargs;
+  jsval_t str = js->this_val;
+  if (vtype(str) != T_STR) return js_mkerr(js, "toUpperCase called on non-string");
+  
+  jsoff_t str_len, str_off = vstr(js, str, &str_len);
+  const char *str_ptr = (char *) &js->mem[str_off];
+  jsval_t result = js_mkstr(js, NULL, str_len);
+  if (is_err(result)) return result;
+  
+  jsoff_t result_len, result_off = vstr(js, result, &result_len);
+  char *result_ptr = (char *) &js->mem[result_off];
+  
+  for (jsoff_t i = 0; i < str_len; i++) {
+    char ch = str_ptr[i];
+    result_ptr[i] = (ch >= 'a' && ch <= 'z') ? ch - 32 : ch;
+  }
+  
+  return result;
+}
+
+static jsval_t builtin_string_trim(struct js *js, jsval_t *args, int nargs) {
+  (void) args; (void) nargs;
+  jsval_t str = js->this_val;
+  if (vtype(str) != T_STR) return js_mkerr(js, "trim called on non-string");
+  
+  jsoff_t str_len, str_off = vstr(js, str, &str_len);
+  const char *str_ptr = (char *) &js->mem[str_off];
+  
+  jsoff_t start = 0, end = str_len;
+  while (start < end && is_space(str_ptr[start])) start++;
+  while (end > start && is_space(str_ptr[end - 1])) end--;
+  
+  return js_mkstr(js, str_ptr + start, end - start);
+}
+
+static jsval_t builtin_string_repeat(struct js *js, jsval_t *args, int nargs) {
+  jsval_t str = js->this_val;
+  if (vtype(str) != T_STR) return js_mkerr(js, "repeat called on non-string");
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return js_mkerr(js, "repeat count required");
+  
+  double count_d = tod(args[0]);
+  if (count_d < 0 || count_d != (double)(long)count_d) return js_mkerr(js, "invalid repeat count");
+  jsoff_t count = (jsoff_t) count_d;
+  
+  jsoff_t str_len, str_off = vstr(js, str, &str_len);
+  const char *str_ptr = (char *) &js->mem[str_off];
+  
+  if (count == 0 || str_len == 0) return js_mkstr(js, "", 0);
+  
+  jsval_t result = js_mkstr(js, NULL, str_len * count);
+  if (is_err(result)) return result;
+  
+  jsoff_t result_len, result_off = vstr(js, result, &result_len);
+  char *result_ptr = (char *) &js->mem[result_off];
+  
+  for (jsoff_t i = 0; i < count; i++) {
+    memcpy(result_ptr + i * str_len, str_ptr, str_len);
+  }
+  
+  return result;
+}
+
+static jsval_t builtin_string_padStart(struct js *js, jsval_t *args, int nargs) {
+  jsval_t str = js->this_val;
+  if (vtype(str) != T_STR) return js_mkerr(js, "padStart called on non-string");
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return str;
+  
+  jsoff_t target_len = (jsoff_t) tod(args[0]);
+  jsoff_t str_len, str_off = vstr(js, str, &str_len);
+  const char *str_ptr = (char *) &js->mem[str_off];
+  
+  if (target_len <= str_len) return str;
+  
+  const char *pad_str = " ";
+  jsoff_t pad_len = 1;
+  if (nargs >= 2 && vtype(args[1]) == T_STR) {
+    pad_len = vstr(js, args[1], &pad_len);
+    pad_str = (char *) &js->mem[pad_len];
+    pad_len = offtolen(loadoff(js, (jsoff_t) vdata(args[1])));
+  }
+  
+  if (pad_len == 0) return str;
+  
+  jsoff_t fill_len = target_len - str_len;
+  jsval_t result = js_mkstr(js, NULL, target_len);
+  if (is_err(result)) return result;
+  
+  jsoff_t result_len, result_off = vstr(js, result, &result_len);
+  char *result_ptr = (char *) &js->mem[result_off];
+  
+  jsoff_t pos = 0;
+  while (pos < fill_len) {
+    jsoff_t copy_len = (fill_len - pos < pad_len) ? fill_len - pos : pad_len;
+    memcpy(result_ptr + pos, pad_str, copy_len);
+    pos += copy_len;
+  }
+  memcpy(result_ptr + fill_len, str_ptr, str_len);
+  
+  return result;
+}
+
+static jsval_t builtin_string_padEnd(struct js *js, jsval_t *args, int nargs) {
+  jsval_t str = js->this_val;
+  if (vtype(str) != T_STR) return js_mkerr(js, "padEnd called on non-string");
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return str;
+  
+  jsoff_t target_len = (jsoff_t) tod(args[0]);
+  jsoff_t str_len, str_off = vstr(js, str, &str_len);
+  const char *str_ptr = (char *) &js->mem[str_off];
+  
+  if (target_len <= str_len) return str;
+  
+  const char *pad_str = " ";
+  jsoff_t pad_len = 1;
+  if (nargs >= 2 && vtype(args[1]) == T_STR) {
+    pad_len = vstr(js, args[1], &pad_len);
+    pad_str = (char *) &js->mem[pad_len];
+    pad_len = offtolen(loadoff(js, (jsoff_t) vdata(args[1])));
+  }
+  
+  if (pad_len == 0) return str;
+  
+  jsval_t result = js_mkstr(js, NULL, target_len);
+  if (is_err(result)) return result;
+  
+  jsoff_t result_len, result_off = vstr(js, result, &result_len);
+  char *result_ptr = (char *) &js->mem[result_off];
+  
+  memcpy(result_ptr, str_ptr, str_len);
+  jsoff_t pos = str_len;
+  while (pos < target_len) {
+    jsoff_t copy_len = (target_len - pos < pad_len) ? target_len - pos : pad_len;
+    memcpy(result_ptr + pos, pad_str, copy_len);
+    pos += copy_len;
+  }
+  
+  return result;
+}
+
+static jsval_t builtin_string_charAt(struct js *js, jsval_t *args, int nargs) {
+  jsval_t str = js->this_val;
+  if (vtype(str) != T_STR) return js_mkerr(js, "charAt called on non-string");
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return js_mkstr(js, "", 0);
+  
+  double idx_d = tod(args[0]);
+  if (idx_d < 0 || idx_d != (double)(long)idx_d) return js_mkstr(js, "", 0);
+  
+  jsoff_t idx = (jsoff_t) idx_d;
+  jsoff_t str_len = offtolen(loadoff(js, (jsoff_t) vdata(str)));
+  
+  if (idx >= str_len) return js_mkstr(js, "", 0);
+  
+  jsoff_t str_off = (jsoff_t) vdata(str) + sizeof(jsoff_t);
+  char ch = js->mem[str_off + idx];
+  
+  return js_mkstr(js, &ch, 1);
+}
+
+static jsval_t builtin_number_toString(struct js *js, jsval_t *args, int nargs) {
+  (void) args; (void) nargs;
+  jsval_t num = js->this_val;
+  if (vtype(num) != T_NUM) return js_mkerr(js, "toString called on non-number");
+  
+  char buf[64];
+  size_t len = strnum(num, buf, sizeof(buf));
+  return js_mkstr(js, buf, len);
+}
+
+static jsval_t builtin_number_toFixed(struct js *js, jsval_t *args, int nargs) {
+  jsval_t num = js->this_val;
+  if (vtype(num) != T_NUM) return js_mkerr(js, "toFixed called on non-number");
+  
+  int digits = 0;
+  if (nargs >= 1 && vtype(args[0]) == T_NUM) {
+    digits = (int) tod(args[0]);
+    if (digits < 0) digits = 0;
+    if (digits > 20) digits = 20;
+  }
+  
+  char buf[64];
+  snprintf(buf, sizeof(buf), "%.*f", digits, tod(num));
+  return js_mkstr(js, buf, strlen(buf));
+}
+
+static jsval_t builtin_number_toPrecision(struct js *js, jsval_t *args, int nargs) {
+  jsval_t num = js->this_val;
+  if (vtype(num) != T_NUM) return js_mkerr(js, "toPrecision called on non-number");
+  
+  if (nargs < 1 || vtype(args[0]) != T_NUM) {
+    char buf[64];
+    size_t len = strnum(num, buf, sizeof(buf));
+    return js_mkstr(js, buf, len);
+  }
+  
+  int precision = (int) tod(args[0]);
+  if (precision < 1) precision = 1;
+  if (precision > 21) precision = 21;
+  
+  char buf[64];
+  snprintf(buf, sizeof(buf), "%.*g", precision, tod(num));
+  return js_mkstr(js, buf, strlen(buf));
+}
+
+static jsval_t builtin_number_toExponential(struct js *js, jsval_t *args, int nargs) {
+  jsval_t num = js->this_val;
+  if (vtype(num) != T_NUM) return js_mkerr(js, "toExponential called on non-number");
+  
+  int digits = 6;
+  if (nargs >= 1 && vtype(args[0]) == T_NUM) {
+    digits = (int) tod(args[0]);
+    if (digits < 0) digits = 0;
+    if (digits > 20) digits = 20;
+  }
+  
+  char buf[64];
+  snprintf(buf, sizeof(buf), "%.*e", digits, tod(num));
+  return js_mkstr(js, buf, strlen(buf));
+}
+
+static jsval_t builtin_parseInt(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return tov(NAN);
+  
+  jsval_t str_val = args[0];
+  if (vtype(str_val) != T_STR) {
+    const char *str = js_str(js, str_val);
+    str_val = js_mkstr(js, str, strlen(str));
+  }
+  
+  jsoff_t str_len, str_off = vstr(js, str_val, &str_len);
+  const char *str = (char *) &js->mem[str_off];
+  
+  int radix = 10;
+  if (nargs >= 2 && vtype(args[1]) == T_NUM) {
+    radix = (int) tod(args[1]);
+    if (radix < 2 || radix > 36) return tov(NAN);
+  }
+  
+  jsoff_t i = 0;
+  while (i < str_len && is_space(str[i])) i++;
+  
+  if (i >= str_len) return tov(NAN);
+  
+  int sign = 1;
+  if (str[i] == '-') {
+    sign = -1;
+    i++;
+  } else if (str[i] == '+') {
+    i++;
+  }
+  
+  if (radix == 16 && i + 1 < str_len && str[i] == '0' && (str[i + 1] == 'x' || str[i + 1] == 'X')) {
+    i += 2;
+  }
+  
+  double result = 0;
+  bool found_digit = false;
+  
+  while (i < str_len) {
+    char ch = str[i];
+    int digit = -1;
+    
+    if (ch >= '0' && ch <= '9') {
+      digit = ch - '0';
+    } else if (ch >= 'a' && ch <= 'z') {
+      digit = ch - 'a' + 10;
+    } else if (ch >= 'A' && ch <= 'Z') {
+      digit = ch - 'A' + 10;
+    }
+    
+    if (digit < 0 || digit >= radix) break;
+    
+    result = result * radix + digit;
+    found_digit = true;
+    i++;
+  }
+  
+  if (!found_digit) return tov(NAN);
+  
+  return tov(sign * result);
+}
+
+static jsval_t builtin_parseFloat(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return tov(NAN);
+  
+  jsval_t str_val = args[0];
+  if (vtype(str_val) != T_STR) {
+    const char *str = js_str(js, str_val);
+    str_val = js_mkstr(js, str, strlen(str));
+  }
+  
+  jsoff_t str_len, str_off = vstr(js, str_val, &str_len);
+  const char *str = (char *) &js->mem[str_off];
+  
+  jsoff_t i = 0;
+  while (i < str_len && is_space(str[i])) i++;
+  
+  if (i >= str_len) return tov(NAN);
+  
+  char *end;
+  double result = strtod(&str[i], &end);
+  
+  if (end == &str[i]) return tov(NAN);
+  
+  return tov(result);
+}
+
 static jsval_t builtin_resolve_internal(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_reject_internal(struct js *js, jsval_t *args, int nargs);
 static void resolve_promise(struct js *js, jsval_t p, jsval_t val);
@@ -5970,6 +6350,8 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, glob, js_mkstr(js, "Array", 5), js_mkfun(builtin_Array));
   setprop(js, glob, js_mkstr(js, "Error", 5), js_mkfun(builtin_Error));
   setprop(js, glob, js_mkstr(js, "RegExp", 6), js_mkfun(builtin_RegExp));
+  setprop(js, glob, js_mkstr(js, "parseInt", 8), js_mkfun(builtin_parseInt));
+  setprop(js, glob, js_mkstr(js, "parseFloat", 10), js_mkfun(builtin_parseFloat));
   
   jsval_t date_ctor_obj = mkobj(js, 0);
   setprop(js, date_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_Date));
