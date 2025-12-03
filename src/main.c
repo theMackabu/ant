@@ -202,17 +202,16 @@ int main(int argc, char *argv[]) {
   struct ant_runtime *rt = ant_runtime_init(js);
   
   init_builtin_module();
+  init_crypto_module();
+  init_fetch_module();
   init_console_module();
   init_json_module();
-  init_fetch_module();
   init_server_module();
+  init_timer_module();
   
-  init_timer_module(js);
-  init_crypto_module(js, rt->ant_obj);
+  jsval_t exports_obj = js_mkobj(js);
   
   js_set(js, rt->ant_obj, "require", js_mkfun(js_require));
-
-  jsval_t exports_obj = js_mkobj(js);
   js_set(js, rt->ant_obj, "exports", exports_obj);
 
   int result = execute_module(js, module_file);

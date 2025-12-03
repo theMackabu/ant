@@ -5,6 +5,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "runtime.h"
 #include "modules/timer.h"
 
 typedef struct timer_entry {
@@ -217,7 +218,9 @@ int64_t get_next_timer_timeout(void) {
   return min_timeout;
 }
 
-void init_timer_module(struct js *js) {
+void init_timer_module() {  
+  struct js *js = rt->js;
+
   timer_state.js = js;
   jsval_t global = js_glob(js);
   

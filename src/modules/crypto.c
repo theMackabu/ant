@@ -4,6 +4,8 @@
 #include <uuidv7.h>
 #include <uuid/uuid.h>
 
+#include "ant.h"
+#include "runtime.h"
 #include "modules/crypto.h"
 
 static int ensure_crypto_init(struct js *js) {
@@ -127,7 +129,10 @@ static jsval_t js_crypto_random_uuidv7(struct js *js, jsval_t *args, int nargs) 
   return js_mkstr(js, uuid_str, strlen(uuid_str));
 }
 
-void init_crypto_module(struct js *js, jsval_t ant_obj) {
+void init_crypto_module() {
+  struct js *js = rt->js;
+  jsval_t ant_obj = rt->ant_obj;
+
   jsval_t crypto_obj = js_mkobj(js);
   js_set(js, ant_obj, "Crypto", crypto_obj);
   
