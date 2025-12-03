@@ -2688,6 +2688,7 @@ static jsval_t js_literal(struct js *js) {
     case TOK_TRUE:        return js_mktrue();
     case TOK_FALSE:       return js_mkfalse();
     case TOK_THIS:        return js->this_val;
+    case TOK_IMPORT:      return mkcoderef((jsoff_t) js->toff, (jsoff_t) js->tlen);
     case TOK_IDENTIFIER:  return mkcoderef((jsoff_t) js->toff, (jsoff_t) js->tlen);
     case TOK_CATCH:       return mkcoderef((jsoff_t) js->toff, (jsoff_t) js->tlen);
     case TOK_TRY:         return mkcoderef((jsoff_t) js->toff, (jsoff_t) js->tlen);
