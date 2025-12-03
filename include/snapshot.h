@@ -1,9 +1,10 @@
 #ifndef ANT_SNAPSHOT_LOADER_H
 #define ANT_SNAPSHOT_LOADER_H
 
+#include <stdint.h>
 #include "ant.h"
 
 jsval_t ant_load_snapshot(struct js *js);
-const char *ant_get_snapshot_source(size_t *len);
+const uint8_t *ant_get_snapshot_source(size_t *len);
 
 #endif

@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <libgen.h>
+#include <limits.h>
 
 #include "ant.h"
 #include "runtime.h"
@@ -9,6 +11,326 @@ typedef struct {
   char *placeholder;
   char *value;
 } replacement_t;
+
+typedef struct {
+  char **paths;
+  int count;
+  int capacity;
+} module_cache_t;
+
+static char *resolve_path(const char *base_path, const char *import_path) {
+  char *resolved = malloc(PATH_MAX);
+  if (!resolved) return NULL;
+  
+  char *base_dir = strdup(base_path);
+  char *dir = dirname(base_dir);
+  
+  snprintf(resolved, PATH_MAX, "%s/%s", dir, import_path);
+  free(base_dir);
+  
+  return resolved;
+}
+
+static char *read_file(const char *path, size_t *len) {
+  FILE *f = fopen(path, "r");
+  if (!f) return NULL;
+  
+  fseek(f, 0, SEEK_END);
+  long size = ftell(f);
+  fseek(f, 0, SEEK_SET);
+  
+  char *content = malloc(size + 1);
+  if (!content) {
+    fclose(f);
+    return NULL;
+  }
+  
+  fread(content, 1, size, f);
+  content[size] = '\0';
+  fclose(f);
+  
+  if (len) *len = size;
+  return content;
+}
+
+static int module_already_processed(module_cache_t *cache, const char *path) {
+  for (int i = 0; i < cache->count; i++) {
+    if (strcmp(cache->paths[i], path) == 0) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+static void add_to_cache(module_cache_t *cache, const char *path) {
+  if (cache->count >= cache->capacity) {
+    cache->capacity = cache->capacity == 0 ? 10 : cache->capacity * 2;
+    cache->paths = realloc(cache->paths, sizeof(char *) * cache->capacity);
+  }
+  
+  cache->paths[cache->count] = strdup(path);
+  cache->count++;
+}
+
+static char *process_snapshot_includes(const char *file_path, const char *content, size_t content_len, module_cache_t *cache, size_t *output_len);
+
+static char *wrap_module(const char *content, size_t content_len, size_t *output_len) {
+  size_t output_capacity = content_len + 1024;
+  char *output = malloc(output_capacity);
+  if (!output) return NULL;
+  
+  size_t output_pos = 0;
+  const char *pos = content;
+  const char *end = content + content_len;
+  
+  const char *iife_start = "(function() {\n";
+  memcpy(output + output_pos, iife_start, strlen(iife_start));
+  output_pos += strlen(iife_start);
+  
+  char **exports = NULL;
+  int export_count = 0;
+  int export_capacity = 0;
+  
+  while (pos < end) {
+    const char *export_start = strstr(pos, "export ");
+    if (!export_start || export_start >= end) {
+      size_t remaining = end - pos;
+      if (output_pos + remaining >= output_capacity) {
+        output_capacity = (output_pos + remaining) * 2;
+        output = realloc(output, output_capacity);
+      }
+      memcpy(output + output_pos, pos, remaining);
+      output_pos += remaining;
+      break;
+    }
+    
+    memcpy(output + output_pos, pos, export_start - pos);
+    output_pos += export_start - pos;
+    
+    const char *decl_start = export_start + 7;
+    while (*decl_start == ' ') decl_start++;
+    
+    const char *const_pos = strstr(decl_start, "const ");
+    const char *let_pos = strstr(decl_start, "let ");
+    const char *var_pos = strstr(decl_start, "var ");
+    const char *function_pos = strstr(decl_start, "function ");
+    
+    const char *keyword_start = NULL;
+    const char *name_start = NULL;
+    
+    if (const_pos == decl_start) {
+      keyword_start = const_pos;
+      name_start = const_pos + 6;
+    } else if (let_pos == decl_start) {
+      keyword_start = let_pos;
+      name_start = let_pos + 4;
+    } else if (var_pos == decl_start) {
+      keyword_start = var_pos;
+      name_start = var_pos + 4;
+    } else if (function_pos == decl_start) {
+      keyword_start = function_pos;
+      name_start = function_pos + 9;
+    }
+    
+    if (keyword_start) {
+      while (*name_start == ' ') name_start++;
+      
+      const char *name_end = name_start;
+      while (*name_end && (*name_end == '_' || (*name_end >= 'a' && *name_end <= 'z') || 
+             (*name_end >= 'A' && *name_end <= 'Z') || (*name_end >= '0' && *name_end <= '9'))) {
+        name_end++;
+      }
+      
+      size_t name_len = name_end - name_start;
+      if (name_len > 0) {
+        if (export_count >= export_capacity) {
+          export_capacity = export_capacity == 0 ? 10 : export_capacity * 2;
+          exports = realloc(exports, sizeof(char *) * export_capacity);
+        }
+        
+        exports[export_count] = malloc(name_len + 1);
+        memcpy(exports[export_count], name_start, name_len);
+        exports[export_count][name_len] = '\0';
+        export_count++;
+      }
+      
+      const char *stmt_start = keyword_start;
+      const char *line_end = strchr(export_start, ';');
+      if (!line_end) line_end = strchr(export_start, '\n');
+      if (line_end) {
+        size_t stmt_len = line_end - stmt_start + 1;
+        if (output_pos + stmt_len >= output_capacity) {
+          output_capacity = (output_pos + stmt_len) * 2;
+          output = realloc(output, output_capacity);
+        }
+        memcpy(output + output_pos, stmt_start, stmt_len);
+        output_pos += stmt_len;
+        pos = line_end + 1;
+      } else {
+        pos = export_start + 7;
+      }
+    } else {
+      pos = export_start + 7;
+    }
+  }
+  
+  if (export_count > 0) {
+    const char *return_start = "\nreturn { ";
+    if (output_pos + strlen(return_start) >= output_capacity) {
+      output_capacity = (output_pos + strlen(return_start) + 1024) * 2;
+      output = realloc(output, output_capacity);
+    }
+    memcpy(output + output_pos, return_start, strlen(return_start));
+    output_pos += strlen(return_start);
+    
+    for (int i = 0; i < export_count; i++) {
+      size_t name_len = strlen(exports[i]);
+      
+      if (output_pos + name_len * 2 + 10 >= output_capacity) {
+        output_capacity = (output_pos + name_len * 2 + 10) * 2;
+        output = realloc(output, output_capacity);
+      }
+      
+      memcpy(output + output_pos, exports[i], name_len);
+      output_pos += name_len;
+      
+      if (i < export_count - 1) {
+        memcpy(output + output_pos, ", ", 2);
+        output_pos += 2;
+      }
+    }
+    
+    const char *return_end = " };\n})()";
+    memcpy(output + output_pos, return_end, strlen(return_end));
+    output_pos += strlen(return_end);
+  } else {
+    const char *iife_end = "})()";
+    memcpy(output + output_pos, iife_end, strlen(iife_end));
+    output_pos += strlen(iife_end);
+  }
+  
+  for (int i = 0; i < export_count; i++) {
+    free(exports[i]);
+  }
+  free(exports);
+  
+  output[output_pos] = '\0';
+  *output_len = output_pos;
+  return output;
+}
+
+static char *process_snapshot_includes(const char *file_path, const char *content, size_t content_len, module_cache_t *cache, size_t *output_len) {
+  size_t output_capacity = content_len * 2;
+  char *output = malloc(output_capacity);
+  if (!output) return NULL;
+  
+  size_t output_pos = 0;
+  const char *pos = content;
+  const char *end = content + content_len;
+  
+  while (pos < end) {
+    const char *include_start = strstr(pos, "snapshot_include(");
+    if (!include_start || include_start >= end) {
+      size_t remaining = end - pos;
+      if (output_pos + remaining >= output_capacity) {
+        output_capacity = (output_pos + remaining) * 2;
+        output = realloc(output, output_capacity);
+      }
+      memcpy(output + output_pos, pos, remaining);
+      output_pos += remaining;
+      break;
+    }
+    
+    memcpy(output + output_pos, pos, include_start - pos);
+    output_pos += include_start - pos;
+    
+    const char *quote_start = strchr(include_start, '\'');
+    if (!quote_start) quote_start = strchr(include_start, '"');
+    if (!quote_start) {
+      pos = include_start + 17;
+      continue;
+    }
+    
+    char quote_char = *quote_start;
+    const char *quote_end = strchr(quote_start + 1, quote_char);
+    if (!quote_end) {
+      pos = include_start + 17;
+      continue;
+    }
+    
+    size_t path_len = quote_end - quote_start - 1;
+    char *import_path = malloc(path_len + 1);
+    memcpy(import_path, quote_start + 1, path_len);
+    import_path[path_len] = '\0';
+    
+    char *resolved_path = resolve_path(file_path, import_path);
+    free(import_path);
+    
+    if (!resolved_path) {
+      pos = include_start + 17;
+      continue;
+    }
+    
+    if (module_already_processed(cache, resolved_path)) {
+      fprintf(stderr, "Warning: Circular dependency detected: %s\n", resolved_path);
+      free(resolved_path);
+      pos = quote_end + 2;
+      continue;
+    }
+    
+    add_to_cache(cache, resolved_path);
+    
+    size_t module_len;
+    char *module_content = read_file(resolved_path, &module_len);
+    
+    if (!module_content) {
+      fprintf(stderr, "Error: Cannot read module: %s\n", resolved_path);
+      free(resolved_path);
+      free(output);
+      return NULL;
+    }
+    
+    size_t processed_len;
+    char *processed = process_snapshot_includes(resolved_path, module_content, module_len, cache, &processed_len);
+    free(module_content);
+    
+    if (!processed) {
+      free(resolved_path);
+      free(output);
+      return NULL;
+    }
+    
+    size_t wrapped_len;
+    char *wrapped = wrap_module(processed, processed_len, &wrapped_len);
+    free(processed);
+    free(resolved_path);
+    
+    if (!wrapped) {
+      free(output);
+      return NULL;
+    }
+    
+    if (output_pos + wrapped_len >= output_capacity) {
+      output_capacity = (output_pos + wrapped_len) * 2;
+      output = realloc(output, output_capacity);
+    }
+    
+    memcpy(output + output_pos, wrapped, wrapped_len);
+    output_pos += wrapped_len;
+    free(wrapped);
+    
+    const char *paren_close = strchr(quote_end, ')');
+    if (paren_close) {
+      pos = paren_close + 1;
+    } else {
+      pos = quote_end + 1;
+    }
+  }
+  
+  output[output_pos] = '\0';
+  *output_len = output_pos;
+  return output;
+}
 
 static char *replace_templates(const char *input, size_t input_len, replacement_t *replacements, int num_replacements, size_t *output_len) {
   size_t output_size = input_len;
@@ -127,16 +449,53 @@ int main(int argc, char **argv) {
   js_code_original[file_size] = '\0';
   fclose(in);
   
-  size_t processed_len;
-  char *js_code = replace_templates(js_code_original, file_size, replacements, num_replacements, &processed_len);
+  module_cache_t cache = {0};
   
-  if (!js_code) {
-    fprintf(stderr, "Error: Template replacement failed\n");
+  size_t bundled_len;
+  char *bundled_code = process_snapshot_includes(input_file, js_code_original, file_size, &cache, &bundled_len);
+  
+  if (!bundled_code) {
+    fprintf(stderr, "Error: Module bundling failed\n");
     free(js_code_original);
     return 1;
   }
   
+  size_t processed_len;
+  char *js_code = replace_templates(bundled_code, bundled_len, replacements, num_replacements, &processed_len);
+  
+  if (!js_code) {
+    fprintf(stderr, "Error: Template replacement failed\n");
+    free(js_code_original);
+    free(bundled_code);
+    return 1;
+  }
+  
   free(js_code_original);
+  free(bundled_code);
+  
+  char *compacted = malloc(processed_len + 1);
+  if (!compacted) {
+    fprintf(stderr, "Error: Memory allocation failed for compaction\n");
+    free(js_code);
+    return 1;
+  }
+  
+  size_t compact_pos = 0;
+  for (size_t i = 0; i < processed_len; i++) {
+    if (js_code[i] != '\n' && js_code[i] != '\r') {
+      compacted[compact_pos++] = js_code[i];
+    }
+  }
+  compacted[compact_pos] = '\0';
+  
+  free(js_code);
+  js_code = compacted;
+  processed_len = compact_pos;
+  
+  for (int i = 0; i < cache.count; i++) {
+    free(cache.paths[i]);
+  }
+  free(cache.paths);
 
   struct js *js = js_create_dynamic(1024 * 1024, 10 * 1024 * 1024);
   if (!js) {
@@ -171,32 +530,22 @@ int main(int argc, char **argv) {
   fprintf(out, "/* DO NOT EDIT - Generated during build */\n\n");
   fprintf(out, "#ifndef ANT_SNAPSHOT_DATA_H\n");
   fprintf(out, "#define ANT_SNAPSHOT_DATA_H\n\n");
-  fprintf(out, "#include <stddef.h>\n\n");
+  fprintf(out, "#include <stddef.h>\n");
+  fprintf(out, "#include <stdint.h>\n\n");
   
-  fprintf(out, "static const char ant_snapshot_source[] = \n");
-  fprintf(out, "\"");
+  fprintf(out, "static const uint8_t ant_snapshot_source[] = {");
   
   for (size_t i = 0; i < processed_len; i++) {
-    char c = js_code[i];
-    switch (c) {
-      case '\n': fprintf(out, "\\n"); break;
-      case '\r': fprintf(out, "\\r"); break;
-      case '\t': fprintf(out, "\\t"); break;
-      case '\\': fprintf(out, "\\\\"); break;
-      case '"':  fprintf(out, "\\\""); break;
-      default:
-        if (c >= 32 && c < 127) {
-          fputc(c, out);
-        } else {
-          fprintf(out, "\\x%02x", (unsigned char)c);
-        }
-        break;
+    if (i % 16 == 0) {
+      fprintf(out, "\n  ");
     }
-    
-    if (i > 0 && i % 80 == 0) fprintf(out, "\"\n\"");
+    fprintf(out, "0x%02x", (unsigned char)js_code[i]);
+    if (i < processed_len - 1) {
+      fprintf(out, ", ");
+    }
   }
   
-  fprintf(out, "\";\n\n");
+  fprintf(out, "\n};\n\n");
   fprintf(out, "static const size_t ant_snapshot_source_len = %zu;\n\n", processed_len);
   fprintf(out, "/* memory usage after evaluation: %zu bytes */\n", used_mem);
   fprintf(out, "/* total memory: %zu bytes */\n", total_mem);
