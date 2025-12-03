@@ -75,6 +75,7 @@ void js_resolve_promise(struct js *js, jsval_t promise, jsval_t value);
 void js_reject_promise(struct js *js, jsval_t promise, jsval_t value);
 
 void js_run_event_loop(struct js *js);
+void js_poll_events(struct js *js);
 void js_setup_import_meta(struct js *js, const char *filename);
 
 typedef jsval_t (*ant_library_init_fn)(struct js *js);

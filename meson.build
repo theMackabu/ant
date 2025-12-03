@@ -51,7 +51,7 @@ endif
 build_date = run_command('date', '+%Y-%m-%d', check: true).stdout().strip()
 
 version_conf = configuration_data()
-version_conf.set('ANT_VERSION', '0.0.6.20')
+version_conf.set('ANT_VERSION', '0.0.6.21')
 version_conf.set('ANT_GIT_HASH', git_hash)
 version_conf.set('ANT_BUILD_DATE', build_date)
 
@@ -75,6 +75,7 @@ gen_snapshot = executable(
   gen_snapshot_sources,
   include_directories: [include, build_include],
   dependencies: [
+    libuv_dep,
     curl_dep,
     yyjson_dep,
     uuidv7_dep,

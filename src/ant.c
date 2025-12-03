@@ -417,55 +417,59 @@ static bool has_ready_coroutines(void) {
   return false;
 }
 
+void js_poll_events(struct js *js) {
+  if (has_pending_timers()) {
+    int64_t next_timeout_ms = get_next_timer_timeout();
+    if (next_timeout_ms <= 0) process_timers(js);
+  }
+  
+  process_microtasks(js);
+  
+  coroutine_t *temp = pending_coroutines.head;
+  coroutine_t *prev = NULL;
+  
+  while (temp) {
+    coroutine_t *next = temp->next;
+    
+    if (temp->is_ready && temp->mco && mco_status(temp->mco) == MCO_SUSPENDED) {
+      if (prev) {
+        prev->next = next;
+      } else {
+        pending_coroutines.head = next;
+      }
+      if (pending_coroutines.tail == temp) {
+        pending_coroutines.tail = prev;
+      }
+      
+      mco_result res = mco_resume(temp->mco);
+      
+      if (res == MCO_SUCCESS && mco_status(temp->mco) == MCO_DEAD) {
+        free_coroutine(temp);
+      } else if (res == MCO_SUCCESS) {
+        temp->is_ready = false;
+        if (pending_coroutines.tail) {
+          pending_coroutines.tail->next = temp;
+          pending_coroutines.tail = temp;
+        } else {
+          pending_coroutines.head = pending_coroutines.tail = temp;
+        }
+        temp->next = NULL;
+        prev = temp;
+      } else {
+        free_coroutine(temp);
+      }
+      
+      temp = next;
+    } else {
+      prev = temp;
+      temp = next;
+    }
+  }
+}
+
 void js_run_event_loop(struct js *js) {
   while (has_pending_microtasks() || has_pending_timers() || has_pending_coroutines()) {
-    if (has_pending_timers()) {
-      int64_t next_timeout_ms = get_next_timer_timeout();
-      if (next_timeout_ms <= 0) process_timers(js);
-    }
-    
-    process_microtasks(js);
-    
-    coroutine_t *temp = pending_coroutines.head;
-    coroutine_t *prev = NULL;
-    
-    while (temp) {
-      coroutine_t *next = temp->next;
-      
-      if (temp->is_ready && temp->mco && mco_status(temp->mco) == MCO_SUSPENDED) {
-        if (prev) {
-          prev->next = next;
-        } else {
-          pending_coroutines.head = next;
-        }
-        if (pending_coroutines.tail == temp) {
-          pending_coroutines.tail = prev;
-        }
-        
-        mco_result res = mco_resume(temp->mco);
-        
-        if (res == MCO_SUCCESS && mco_status(temp->mco) == MCO_DEAD) {
-          free_coroutine(temp);
-        } else if (res == MCO_SUCCESS) {
-          temp->is_ready = false;
-          if (pending_coroutines.tail) {
-            pending_coroutines.tail->next = temp;
-            pending_coroutines.tail = temp;
-          } else {
-            pending_coroutines.head = pending_coroutines.tail = temp;
-          }
-          temp->next = NULL;
-          prev = temp;
-        } else {
-          free_coroutine(temp);
-        }
-        
-        temp = next;
-      } else {
-        prev = temp;
-        temp = next;
-      }
-    }
+    js_poll_events(js);
     
     if (!has_pending_microtasks() && has_pending_timers() && !has_ready_coroutines()) {
       int64_t next_timeout_ms = get_next_timer_timeout();
