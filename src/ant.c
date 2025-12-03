@@ -2555,7 +2555,7 @@ static jsval_t js_unary(struct js *js) {
     jsval_t result = js_postfix(js);
     jsval_t constructed_obj = js->this_val;
     js->this_val = saved_this;
-    if (vtype(result) == T_OBJ || vtype(result) == T_ARR || vtype(result) == T_PROMISE) return result;
+    if (vtype(result) == T_OBJ || vtype(result) == T_ARR || vtype(result) == T_PROMISE || vtype(result) == T_FUNC) return result;
     return constructed_obj;
   } else if (next(js) == TOK_DELETE) {
     js->consumed = 1;
@@ -4355,9 +4355,94 @@ static jsval_t builtin_Object(struct js *js, jsval_t *args, int nargs) {
 }
 
 static jsval_t builtin_Function(struct js *js, jsval_t *args, int nargs) {
-  (void) args;
-  (void) nargs;
-  return js_mkundef();
+  if (nargs == 0) {
+    jsval_t code_str = js_mkstr(js, "(){}", 4);
+    if (is_err(code_str)) return code_str;
+    
+    jsval_t func_obj = mkobj(js, 0);
+    if (is_err(func_obj)) return func_obj;
+    
+    jsval_t code_key = js_mkstr(js, "__code", 6);
+    if (is_err(code_key)) return code_key;
+    
+    jsval_t res = setprop(js, func_obj, code_key, code_str);
+    if (is_err(res)) return res;
+    
+    jsval_t scope_key = js_mkstr(js, "__scope", 7);
+    if (is_err(scope_key)) return scope_key;
+    
+    res = setprop(js, func_obj, scope_key, js_glob(js));
+    if (is_err(res)) return res;
+    
+    return mkval(T_FUNC, (unsigned long) vdata(func_obj));
+  }
+  
+  size_t total_len = 1;
+  
+  for (int i = 0; i < nargs - 1; i++) {
+    if (vtype(args[i]) != T_STR) {
+      const char *str = js_str(js, args[i]);
+      args[i] = js_mkstr(js, str, strlen(str));
+      if (is_err(args[i])) return args[i];
+    }
+    total_len += vstrlen(js, args[i]);
+    if (i < nargs - 2) total_len += 1;
+  }
+  
+  total_len += 2;
+  
+  jsval_t body = args[nargs - 1];
+  if (vtype(body) != T_STR) {
+    const char *str = js_str(js, body);
+    body = js_mkstr(js, str, strlen(str));
+    if (is_err(body)) return body;
+  }
+  total_len += vstrlen(js, body);
+  total_len += 1;
+  
+  jsval_t code_str = js_mkstr(js, NULL, total_len);
+  if (is_err(code_str)) return code_str;
+  
+  jsoff_t code_len, code_off = vstr(js, code_str, &code_len);
+  char *code_ptr = (char *)&js->mem[code_off];
+  size_t pos = 0;
+  
+  code_ptr[pos++] = '(';
+  
+  for (int i = 0; i < nargs - 1; i++) {
+    jsoff_t param_len, param_off = vstr(js, args[i], &param_len);
+    memcpy(code_ptr + pos, &js->mem[param_off], param_len);
+    pos += param_len;
+    if (i < nargs - 2) {
+      code_ptr[pos++] = ',';
+    }
+  }
+  
+  code_ptr[pos++] = ')';
+  code_ptr[pos++] = '{';
+  
+  jsoff_t body_len, body_off = vstr(js, body, &body_len);
+  memcpy(code_ptr + pos, &js->mem[body_off], body_len);
+  pos += body_len;
+  
+  code_ptr[pos++] = '}';
+
+  jsval_t func_obj = mkobj(js, 0);
+  if (is_err(func_obj)) return func_obj;
+  
+  jsval_t code_key = js_mkstr(js, "__code", 6);
+  if (is_err(code_key)) return code_key;
+  
+  jsval_t res = setprop(js, func_obj, code_key, code_str);
+  if (is_err(res)) return res;
+  
+  jsval_t scope_key = js_mkstr(js, "__scope", 7);
+  if (is_err(scope_key)) return scope_key;
+  
+  res = setprop(js, func_obj, scope_key, js_glob(js));
+  if (is_err(res)) return res;
+  
+  return mkval(T_FUNC, (unsigned long) vdata(func_obj));
 }
 
 static jsval_t builtin_Array(struct js *js, jsval_t *args, int nargs) {
