@@ -7342,6 +7342,15 @@ jsval_t js_call(struct js *js, jsval_t func, jsval_t *args, int nargs) {
     const char *fn = (const char *) (&js->mem[fnoff]);
     jsoff_t fnpos = 1;
     
+    jsval_t saved_scope = js->scope;
+    jsoff_t scope_off = lkp(js, func_obj, "__scope", 7);
+    if (scope_off != 0) {
+      jsval_t closure_scope = resolveprop(js, mkval(T_PROP, scope_off));
+      if (vtype(closure_scope) == T_OBJ) {
+        js->scope = closure_scope;
+      }
+    }
+    
     uint8_t saved_flags = js->flags;
     js->flags = 0;
     mkscope(js);
@@ -7415,6 +7424,7 @@ jsval_t js_call(struct js *js, jsval_t func, jsval_t *args, int nargs) {
     
     js->this_val = saved_this;
     delscope(js);
+    js->scope = saved_scope;
     
     return res;
   }
@@ -7466,9 +7476,6 @@ void js_prop_iter_end(js_prop_iter_t *iter) {
 }
 
 jsval_t js_mkpromise(struct js *js) { return mkpromise(js); }
-int js_has_pending_coroutines(void) { return has_pending_coroutines() ? 1 : 0; }
-
-void js_process_coroutines(struct js *js) { (void)js; }
 void js_resolve_promise(struct js *js, jsval_t promise, jsval_t value) { resolve_promise(js, promise, value); }
 void js_reject_promise(struct js *js, jsval_t promise, jsval_t value) { reject_promise(js, promise, value); }
 
