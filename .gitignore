@@ -1,5 +1,6 @@
 .nova
 .cache
+.env
 
 /build
 /subprojects/*/

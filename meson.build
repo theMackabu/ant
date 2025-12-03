@@ -15,6 +15,7 @@ sources = files(
   'src/ant.c',
   'src/repl.c',
   'src/runtime.c',
+  'src/snapshot.c',
 ) + files(module_files)
 
 # system dependencies
@@ -43,7 +44,7 @@ endif
 build_date = run_command('date', '+%Y-%m-%d', check: true).stdout().strip()
 
 version_conf = configuration_data()
-version_conf.set('ANT_VERSION', '0.0.6.13')
+version_conf.set('ANT_VERSION', '0.0.6.14')
 version_conf.set('ANT_GIT_HASH', git_hash)
 version_conf.set('ANT_BUILD_DATE', build_date)
 
@@ -56,9 +57,47 @@ config_h = configure_file(
 build_include = include_directories('.')
 add_project_arguments('-D JS_DUMP', language: 'c')
 
+gen_snapshot_sources = files(
+  'src/ant.c',
+  'src/runtime.c',
+  'src/tools/gen_snapshot.c',
+) + files(module_files)
+
+gen_snapshot = executable(
+  'gen_snapshot',
+  gen_snapshot_sources,
+  include_directories: [include, build_include],
+  dependencies: [
+    curl_dep,
+    yyjson_dep,
+    uuidv7_dep,
+    mongoose_dep,
+    argtable3_dep,
+    libsodium_dep,
+    minicoro_dep
+  ],
+  c_args: ['-DANT_SNAPSHOT_GENERATOR'],
+  native: true
+)
+
+snapshot_h = custom_target(
+  'snapshot',
+  input: 'src/core/index.js',
+  output: 'snapshot_data.h',
+  command: [
+    gen_snapshot, 
+    '@INPUT@', 
+    '@OUTPUT@',
+    'VERSION=' + version_conf.get('ANT_VERSION'),
+    'GIT_HASH=' + version_conf.get('ANT_GIT_HASH'),
+    'BUILD_DATE=' + version_conf.get('ANT_BUILD_DATE')
+  ],
+  build_by_default: true
+)
+
 executable(
   'ant',
-  sources,
+  sources + [snapshot_h],
   include_directories: [include, build_include],
   dependencies: [
     curl_dep,
