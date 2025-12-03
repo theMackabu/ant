@@ -45,7 +45,9 @@ static int execute_module(struct js *js, const char *filename) {
   size_t len = fread(buffer, 1, file_size, fp);
   fclose(fp);
   buffer[len] = '\0';
+  
   js_set_filename(js, filename);
+  js_setup_import_meta(js, filename);
   
   jsval_t result = js_eval(js, buffer, len);
   free(buffer);

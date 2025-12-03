@@ -73,4 +73,6 @@ void js_prop_iter_end(js_prop_iter_t *iter);
 jsval_t js_mkpromise(struct js *js);
 void js_resolve_promise(struct js *js, jsval_t promise, jsval_t value);
 void js_reject_promise(struct js *js, jsval_t promise, jsval_t value);
+
 void js_run_event_loop(struct js *js);
+void js_setup_import_meta(struct js *js, const char *filename);

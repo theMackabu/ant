@@ -241,6 +241,7 @@ static jsval_t builtin_Error(struct js *js, jsval_t *args, int nargs);
 static jsval_t js_import_stmt(struct js *js);
 static jsval_t js_export_stmt(struct js *js);
 static jsval_t builtin_import(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_import_meta_resolve(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_indexOf(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_substring(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_split(struct js *js, jsval_t *args, int nargs);
@@ -6956,6 +6957,81 @@ static jsval_t builtin_import(struct js *js, jsval_t *args, int nargs) {
   return builtin_Promise_resolve(js, promise_args, 1);
 }
 
+static jsval_t builtin_import_meta_resolve(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1 || vtype(args[0]) != T_STR) {
+    return js_mkerr(js, "import.meta.resolve() requires a string specifier");
+  }
+  
+  jsoff_t spec_len;
+  jsoff_t spec_off = vstr(js, args[0], &spec_len);
+  const char *specifier = (char *)&js->mem[spec_off];
+  
+  const char *base_path = js->filename ? js->filename : ".";
+  char *resolved_path = esm_resolve_path(specifier, base_path);
+  if (!resolved_path) {
+    return js_mkerr(js, "Cannot resolve module: %.*s", (int)spec_len, specifier);
+  }
+  
+  size_t url_len = strlen(resolved_path) + 8;
+  char *url = malloc(url_len);
+  if (!url) {
+    free(resolved_path);
+    return js_mkerr(js, "oom");
+  }
+  
+  snprintf(url, url_len, "file://%s", resolved_path);
+  free(resolved_path);
+  
+  jsval_t result = js_mkstr(js, url, strlen(url));
+  free(url);
+  
+  return result;
+}
+
+void js_setup_import_meta(struct js *js, const char *filename) {
+  if (!filename) return;
+  
+  jsval_t import_meta = mkobj(js, 0);
+  if (is_err(import_meta)) return;
+  
+  size_t url_len = strlen(filename) + 8;
+  char *url = malloc(url_len);
+  if (url) {
+    snprintf(url, url_len, "file://%s", filename);
+    jsval_t url_val = js_mkstr(js, url, strlen(url));
+    if (!is_err(url_val)) setprop(js, import_meta, js_mkstr(js, "url", 3), url_val);
+    free(url);
+  }
+  
+  jsval_t filename_val = js_mkstr(js, filename, strlen(filename));
+  if (!is_err(filename_val)) setprop(js, import_meta, js_mkstr(js, "filename", 8), filename_val);
+  
+  char *filename_copy = strdup(filename);
+  if (filename_copy) {
+    char *dir = dirname(filename_copy);
+    if (dir) {
+      jsval_t dirname_val = js_mkstr(js, dir, strlen(dir));
+      if (!is_err(dirname_val)) setprop(js, import_meta, js_mkstr(js, "dirname", 7), dirname_val);
+    }
+    free(filename_copy);
+  }
+  
+  setprop(js, import_meta, js_mkstr(js, "main", 4), js_mktrue());
+  jsval_t resolve_fn = js_mkfun(builtin_import_meta_resolve);
+  setprop(js, import_meta, js_mkstr(js, "resolve", 7), resolve_fn);
+  
+  jsval_t glob = js_glob(js);
+  jsoff_t import_off = lkp(js, glob, "import", 6);
+  
+  if (import_off != 0) {
+    jsval_t import_fn = resolveprop(js, mkval(T_PROP, import_off));
+    if (vtype(import_fn) == T_FUNC) {
+      jsval_t import_obj = mkval(T_OBJ, vdata(import_fn));
+      setprop(js, import_obj, js_mkstr(js, "meta", 4), import_meta);
+    }
+  }
+}
+
 static jsval_t js_import_stmt(struct js *js) {
   js->consumed = 1;
   
@@ -7337,7 +7413,11 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, p_ctor_obj, js_mkstr(js, "prototype", 9), p_proto);
   
   setprop(js, glob, js_mkstr(js, "Promise", 7), mkval(T_FUNC, vdata(p_ctor_obj)));
-  setprop(js, glob, js_mkstr(js, "import", 6), js_mkfun(builtin_import));
+  
+  jsval_t import_obj = mkobj(js, 0);
+  setprop(js, import_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_import));
+  setprop(js, glob, js_mkstr(js, "import", 6), mkval(T_FUNC, vdata(import_obj)));
+  
   setprop(js, glob, js_mkstr(js, "__esm_module_scope", 18), js_mkundef());
   
   js->owns_mem = false;
