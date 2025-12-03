@@ -86,6 +86,7 @@ struct js {
   #define F_RETURN 16U    // return has been executed
   #define F_THROW 32U     // throw has been executed
   #define F_SWITCH 64U    // we are inside a switch statement
+  #define F_STRICT 128U   // strict mode is enabled
   jsoff_t clen;           // code snippet length
   jsoff_t pos;            // current parsing position
   jsoff_t toff;           // offset of the last parsed token
@@ -3982,6 +3983,61 @@ static jsval_t js_switch(struct js *js) {
   return res;
 }
 
+static jsval_t js_with(struct js *js) {
+  uint8_t flags = js->flags, exe = !(flags & F_NOEXEC);
+  jsval_t res = js_mkundef();
+  
+  if (flags & F_STRICT) {
+    return js_mkerr(js, "with statement not allowed in strict mode");
+  }
+  
+  js->consumed = 1;
+  if (!expect(js, TOK_LPAREN, &res)) return res;
+  
+  jsval_t obj_expr = js_expr(js);
+  if (is_err(obj_expr)) return obj_expr;
+  
+  if (!expect(js, TOK_RPAREN, &res)) return res;
+  
+  if (exe) {
+    jsval_t obj = resolveprop(js, obj_expr);
+    if (vtype(obj) != T_OBJ && vtype(obj) != T_ARR && vtype(obj) != T_FUNC) {
+      return js_mkerr(js, "with requires object");
+    }
+    
+    jsval_t with_obj = obj;
+    if (vtype(obj) == T_FUNC) {
+      with_obj = mkval(T_OBJ, vdata(obj));
+    }
+    
+    jsoff_t parent_scope_offset = (jsoff_t) vdata(js->scope);
+    jsval_t with_scope = mkentity(js, 0 | T_OBJ, &parent_scope_offset, sizeof(parent_scope_offset));
+    
+    jsoff_t prop_off = loadoff(js, (jsoff_t) vdata(with_obj)) & ~(3U | CONSTMASK);
+    while (prop_off < js->brk && prop_off != 0) {
+      jsoff_t koff = loadoff(js, prop_off + (jsoff_t) sizeof(prop_off));
+      jsval_t val = loadval(js, prop_off + (jsoff_t) (sizeof(prop_off) + sizeof(koff)));
+      
+      jsval_t new_prop = mkprop(js, with_scope, mkval(T_STR, koff), val, false);
+      if (is_err(new_prop)) return new_prop;
+      
+      prop_off = loadoff(js, prop_off) & ~(3U | CONSTMASK);
+    }
+    
+    jsval_t saved_scope = js->scope;
+    js->scope = with_scope;
+    
+    res = js_block_or_stmt(js);
+    
+    js->scope = saved_scope;
+  } else {
+    res = js_block_or_stmt(js);
+  }
+  
+  js->flags = flags;
+  return res;
+}
+
 static jsval_t js_class_decl(struct js *js) {
   uint8_t exe = !(js->flags & F_NOEXEC);
   js->consumed = 1;
@@ -4179,6 +4235,23 @@ static void js_throw_handle(struct js *js, jsval_t *res) {
   }
 }
 
+static void js_var(struct js *js, jsval_t *res) {
+  if (!js->var_warning_shown) {
+    fprintf(stderr, "Warning: 'var' is deprecated, use 'let' or 'const' instead\n");
+    js->var_warning_shown = true;
+  }
+  *res = js_let(js); 
+}
+
+static void js_async(struct js *js, jsval_t *res) {
+  js->consumed = 1;
+  if (next(js) == TOK_FUNC) {
+    *res = js_func_decl_async(js);
+    return;
+  }
+  *res = js_mkerr(js, "async must be followed by function");
+}
+
 static jsval_t js_stmt(struct js *js) {
   jsval_t res;
   if (js->brk > js->gct) js_gc(js);
@@ -4188,17 +4261,13 @@ static jsval_t js_stmt(struct js *js) {
     case TOK_DEFAULT: case TOK_FINALLY:
       res = js_mkerr(js, "SyntaxError '%.*s'", (int) js->tlen, js->code + js->toff);
       break;
-    case TOK_WITH: case TOK_YIELD:
-      res = js_mkerr(js, "'%.*s' not implemented", (int) js->tlen, js->code + js->toff);
+    case TOK_YIELD:
+      res = js_mkerr(js, " '%.*s' not implemented", (int) js->tlen, js->code + js->toff);
       break;
-    case TOK_THROW: js_throw_handle(js, &res); break;
-    case TOK_VAR:
-      if (!js->var_warning_shown) {
-        fprintf(stderr, "Warning: 'var' is deprecated, use 'let' or 'const' instead\n");
-        js->var_warning_shown = true;
-      }
-      res = js_let(js); 
-      break;
+    case TOK_THROW:     js_throw_handle(js, &res); break;
+    case TOK_VAR:       js_var(js, &res); break;
+    case TOK_ASYNC:     js_async(js, &res); break;
+    case TOK_WITH:      res = js_with(js); break;
     case TOK_SWITCH:    res = js_switch(js); break;
     case TOK_WHILE:     res = js_while(js); break;
     case TOK_DO:        res = js_do_while(js); break;
@@ -4207,13 +4276,12 @@ static jsval_t js_stmt(struct js *js) {
     case TOK_LET:       res = js_let(js); break;
     case TOK_CONST:     res = js_const(js); break;
     case TOK_FUNC:      res = js_func_decl(js); break;
-    case TOK_ASYNC:     js->consumed = 1; if (next(js) == TOK_FUNC) res = js_func_decl_async(js); else return js_mkerr(js, "async must be followed by function"); break;
     case TOK_CLASS:     res = js_class_decl(js); break;
     case TOK_IF:        res = js_if(js); break;
     case TOK_LBRACE:    res = js_block(js, !(js->flags & F_NOEXEC)); break;
     case TOK_FOR:       res = js_for(js); break;
     case TOK_RETURN:    res = js_return(js); break;
-    case TOK_TRY:       res = js_try(js); break;
+    case TOK_TRY:       res = js_try(js); break;    
     default:            res = resolveprop(js, js_expr(js)); break;
   }
   
@@ -5815,6 +5883,24 @@ jsval_t js_eval(struct js *js, const char *buf, size_t len) {
   js->clen = (jsoff_t) len;
   js->pos = 0;
   js->cstk = &res;
+  
+  uint8_t saved_tok = js->tok;
+  jsoff_t saved_pos = js->pos;
+  uint8_t saved_consumed = js->consumed;
+  js->consumed = 1;
+  
+  if (next(js) == TOK_STRING) {
+    const char *str = &js->code[js->toff + 1];
+    size_t str_len = js->tlen - 2;
+    if (str_len == 10 && memcmp(str, "use strict", 10) == 0) {
+      js->flags |= F_STRICT;
+    }
+  }
+  
+  js->tok = saved_tok;
+  js->pos = saved_pos;
+  js->consumed = saved_consumed;
+  
   while (next(js) != TOK_EOF && !is_err(res)) {
     res = js_stmt(js);
     if (js->flags & F_RETURN) break;
