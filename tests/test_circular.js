@@ -1,0 +1,11 @@
+const obj = {};
+obj.self = obj;
+console.log('Simple circular:', obj);
+const a = { name: 'a' };
+const b = { name: 'b' };
+a.b = b;
+b.a = a;
+console.log('Mutual circular:', a);
+const arr = [1, 2, 3];
+arr.push(arr);
+console.log('Array circular:', arr);

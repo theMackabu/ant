@@ -560,7 +560,32 @@ static size_t cpy(char *dst, size_t dstlen, const char *src, size_t srclen) {
   return i;
 }
 
+// Circular reference tracking for stringification
+#define MAX_STRINGIFY_DEPTH 64
+static jsval_t stringify_stack[MAX_STRINGIFY_DEPTH];
+static int stringify_depth = 0;
+
+static bool is_circular(jsval_t obj) {
+  for (int i = 0; i < stringify_depth; i++) {
+    if (stringify_stack[i] == obj) return true;
+  }
+  return false;
+}
+
+static void push_stringify(jsval_t obj) {
+  if (stringify_depth < MAX_STRINGIFY_DEPTH) {
+    stringify_stack[stringify_depth++] = obj;
+  }
+}
+
+static void pop_stringify(void) {
+  if (stringify_depth > 0) stringify_depth--;
+}
+
 static size_t strarr(struct js *js, jsval_t obj, char *buf, size_t len) {
+  if (is_circular(obj)) return cpy(buf, len, "[Circular]", 10);
+  
+  push_stringify(obj);
   size_t n = cpy(buf, len, "[", 1);
   jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK);
   jsoff_t length = 0;
@@ -609,7 +634,9 @@ static size_t strarr(struct js *js, jsval_t obj, char *buf, size_t len) {
     }
   }
   
-  return n + cpy(buf + n, len - n, "]", 1);
+  n += cpy(buf + n, len - n, "]", 1);
+  pop_stringify();
+  return n;
 }
 
 static size_t strdate(struct js *js, jsval_t obj, char *buf, size_t len) {
@@ -647,6 +674,9 @@ static size_t strobj(struct js *js, jsval_t obj, char *buf, size_t len) {
   jsoff_t time_off = lkp(js, obj, "__time", 6);
   if (time_off != 0) return strdate(js, obj, buf, len);
   
+  if (is_circular(obj)) return cpy(buf, len, "[Circular]", 10);
+  
+  push_stringify(obj);
   size_t n = cpy(buf, len, "{", 1);
   jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK);
   
@@ -660,7 +690,9 @@ static size_t strobj(struct js *js, jsval_t obj, char *buf, size_t len) {
     next = loadoff(js, next) & ~(3U | CONSTMASK);
   }
   
-  return n + cpy(buf + n, len - n, "}", 1);
+  n += cpy(buf + n, len - n, "}", 1);
+  pop_stringify();
+  return n;
 }
 
 static size_t strnum(jsval_t value, char *buf, size_t len) {
@@ -879,6 +911,8 @@ const char *js_str(struct js *js, jsval_t value) {
   if (is_err(value)) return js->errmsg;
   if (js->brk + sizeof(jsoff_t) >= js->size) return "";
   
+  // Reset stringify depth for each new stringification
+  stringify_depth = 0;
   len = tostr(js, value, buf, available);
   js_mkstr(js, NULL, len);
   return buf;

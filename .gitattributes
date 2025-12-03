@@ -1,0 +1,2 @@
+# hide all tests
+tests/** linguist-generated=true
