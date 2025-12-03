@@ -31,6 +31,47 @@ static struct {
   jsval_t handler;
 } signal_handlers[32] = {0};
 
+static jsval_t js_gc_trigger(struct js *js, jsval_t *args, int nargs) {
+  (void) args; (void) nargs;
+  size_t before_brk = js_getbrk(js);
+  
+  js_gc(js);
+  size_t after_brk = js_getbrk(js);
+  
+  jsval_t result = js_mkobj(js);
+  js_set(js, result, "before", js_mknum((double)before_brk));
+  js_set(js, result, "after", js_mknum((double)after_brk));
+  
+  return result;
+}
+
+static jsval_t js_alloc(struct js *js, jsval_t *args, int nargs) {
+  (void) args; (void) nargs;
+  
+  size_t total = 0, min_free = 0, cstack = 0;
+  js_stats(js, &total, &min_free, &cstack);
+  
+  jsval_t result = js_mkobj(js);
+  js_set(js, result, "used", js_mknum((double)total));
+  js_set(js, result, "minFree", js_mknum((double)min_free));
+  
+  return result;
+}
+
+static jsval_t js_stats_fn(struct js *js, jsval_t *args, int nargs) {
+  (void) args; (void) nargs;
+  
+  size_t total = 0, min_free = 0, cstack = 0;
+  js_stats(js, &total, &min_free, &cstack);
+  
+  jsval_t result = js_mkobj(js);
+  js_set(js, result, "used", js_mknum((double)total));
+  js_set(js, result, "minFree", js_mknum((double)min_free));
+  js_set(js, result, "cstack", js_mknum((double)cstack));
+  
+  return result;
+}
+
 static void general_signal_handler(int signum) {
   if (signum >= 0 && signum < 32 && signal_handlers[signum].js != NULL) {
     struct js *js = signal_handlers[signum].js;
@@ -264,6 +305,9 @@ int main(int argc, char *argv[]) {
   js_set(js, rt->ant_obj, "serve", js_mkfun(js_serve));
   js_set(js, rt->ant_obj, "require", js_mkfun(js_require));
   js_set(js, rt->ant_obj, "signal", js_mkfun(js_signal));
+  js_set(js, rt->ant_obj, "gc", js_mkfun(js_gc_trigger));
+  js_set(js, rt->ant_obj, "alloc", js_mkfun(js_alloc));
+  js_set(js, rt->ant_obj, "stats", js_mkfun(js_stats_fn));
 
   jsval_t exports_obj = js_mkobj(js);
   js_set(js, rt->ant_obj, "exports", exports_obj);

@@ -172,7 +172,6 @@ static jsoff_t align32(jsoff_t v) { return ((v + 3) >> 2) << 2; }
 #define CHECKV(_v) do { if (is_err(_v)) { res = (_v); goto done; } } while (0)
 #define EXPECT(_tok, _e) do { if (next(js) != _tok) { _e; return js_mkerr(js, "parse error"); }; js->consumed = 1; } while (0)
 
-static void js_gc(struct js *js);
 static bool streq(const char *buf, size_t len, const char *p, size_t n);
 static size_t tostr(struct js *js, jsval_t value, char *buf, size_t len);
 static size_t strpromise(struct js *js, jsval_t value, char *buf, size_t len);
@@ -896,7 +895,7 @@ static void js_unmark_used_entities(struct js *js) {
   if (js->nogc) js_unmark_entity(js, js->nogc);
 }
 
-static void js_gc(struct js *js) {
+void js_gc(struct js *js) {
   setlwm(js);
   if (js->nogc == (jsoff_t) ~0) return;
   js_mark_all_entities_for_deletion(js);
@@ -6541,6 +6540,8 @@ void js_stats(struct js *js, size_t *total, size_t *lwm, size_t *css) {
   if (lwm) *lwm = js->lwm;
   if (css) *css = js->css;
 }
+
+size_t js_getbrk(struct js *js) { return (size_t) js->brk; }
 
 bool js_chkargs(jsval_t *args, int nargs, const char *spec) {
   int i = 0, ok = 1;

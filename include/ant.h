@@ -14,6 +14,8 @@ enum {
 
 struct js *js_create(void *buf, size_t len);
 struct js *js_create_dynamic(size_t initial_size, size_t max_size);
+
+void js_gc(struct js *);
 void js_destroy(struct js *);
 
 jsval_t js_glob(struct js *);
@@ -29,6 +31,7 @@ void js_setmaxcss(struct js *, size_t);
 bool js_chkargs(jsval_t *, int, const char *);
 void js_set_filename(struct js *, const char *);
 void js_stats(struct js *, size_t *total, size_t *min, size_t *cstacksize);
+size_t js_getbrk(struct js *);
 
 jsval_t js_mkundef(void);
 jsval_t js_mknull(void);
