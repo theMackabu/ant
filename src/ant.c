@@ -520,7 +520,11 @@ static jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t 
   }
   
   coro->mco_started = true;
-  if (mco_status(mco) == MCO_DEAD) free(ctx);
+  if (mco_status(mco) == MCO_DEAD) {
+    dequeue_coroutine();
+    free_coroutine(coro);
+    free(ctx);
+  }
   
   return promise;
 }
