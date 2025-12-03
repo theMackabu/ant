@@ -298,7 +298,9 @@ static jsval_t builtin_Date(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_Date_now(struct js *js, jsval_t *args, int nargs);
 
 static jsval_t call_js(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope);
-static jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t code_len, jsval_t closure_scope);
+static jsval_t call_js_with_args(struct js *js, jsval_t func, jsval_t *args, int nargs);
+static jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *args, int nargs);
+static jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t code_len, jsval_t closure_scope, jsval_t *args, int nargs);
 
 static void free_coroutine(coroutine_t *coro);
 static bool has_ready_coroutines(void);
@@ -307,7 +309,14 @@ static void mco_async_entry(mco_coro* mco) {
   async_exec_context_t *ctx = (async_exec_context_t *)mco_get_user_data(mco);
   
   struct js *js = ctx->js;
-  jsval_t result = call_js(js, ctx->code, (jsoff_t)ctx->code_len, ctx->closure_scope);
+  coroutine_t *coro = ctx->coro;
+  jsval_t result;
+  
+  if (coro && coro->nargs > 0 && coro->args) {
+    result = call_js_code_with_args(js, ctx->code, (jsoff_t)ctx->code_len, ctx->closure_scope, coro->args, coro->nargs);
+  } else {
+    result = call_js(js, ctx->code, (jsoff_t)ctx->code_len, ctx->closure_scope);
+  }
   
   ctx->result = result;
   ctx->has_error = is_err(result);
@@ -420,8 +429,9 @@ static bool has_ready_coroutines(void) {
 
 void js_poll_events(struct js *js) {
   fetch_poll_events();
+  int has_timers = has_pending_timers();
   
-  if (has_pending_timers()) {
+  if (has_timers) {
     int64_t next_timeout_ms = get_next_timer_timeout();
     if (next_timeout_ms <= 0) process_timers(js);
   }
@@ -485,7 +495,7 @@ void js_run_event_loop(struct js *js) {
   js_poll_events(js);
 }
 
-static jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t code_len, jsval_t closure_scope) {
+static jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t code_len, jsval_t closure_scope, jsval_t *args, int nargs) {
   jsval_t promise = js_mkpromise(js);  
   async_exec_context_t *ctx = (async_exec_context_t *)malloc(sizeof(async_exec_context_t));
   if (!ctx) return js_mkerr(js, "out of memory for async context");
@@ -523,8 +533,13 @@ static jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t 
   coro->awaited_promise = js_mkundef();
   coro->result = js_mkundef();
   coro->async_func = js->current_func;
-  coro->args = NULL;
-  coro->nargs = 0;
+  if (nargs > 0) {
+    coro->args = (jsval_t *)malloc(sizeof(jsval_t) * nargs);
+    if (coro->args) memcpy(coro->args, args, sizeof(jsval_t) * nargs);
+  } else {
+    coro->args = NULL;
+  }
+  coro->nargs = nargs;
   coro->is_settled = false;
   coro->is_error = false;
   coro->is_done = false;
@@ -1946,7 +1961,93 @@ static jsval_t call_js_with_args(struct js *js, jsval_t func, jsval_t *args, int
   size_t body_len = fnlen - fnpos - 1;
   
   jsval_t saved_this = js->this_val;
-  js->this_val = js_glob(js);
+  jsval_t target_this = peek_this();
+  js->this_val = target_this;
+  js->flags = F_CALL;
+  
+  jsval_t res = js_eval(js, &fn[fnpos], body_len);
+  if (!is_err(res) && !(js->flags & F_RETURN)) res = js_mkundef();
+  
+  js->this_val = saved_this;
+  js->scope = saved_scope;
+  
+  return res;
+}
+
+static jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *args, int nargs) {
+  jsoff_t parent_scope_offset;
+  if (vtype(closure_scope) == T_OBJ) {
+    parent_scope_offset = (jsoff_t) vdata(closure_scope);
+  } else {
+    parent_scope_offset = (jsoff_t) vdata(js->scope);
+  }
+  
+  jsval_t saved_scope = js->scope;
+  jsval_t function_scope = mkobj(js, parent_scope_offset);
+  js->scope = function_scope;
+  
+  jsoff_t fnpos = 1;
+  int arg_idx = 0;
+  bool has_rest = false;
+  jsoff_t rest_param_start = 0, rest_param_len = 0;
+  
+  while (fnpos < fnlen) {
+    fnpos = skiptonext(fn, fnlen, fnpos);
+    if (fnpos < fnlen && fn[fnpos] == ')') break;
+    
+    bool is_rest = false;
+    if (fnpos + 3 < fnlen && fn[fnpos] == '.' && fn[fnpos + 1] == '.' && fn[fnpos + 2] == '.') {
+      is_rest = true;
+      has_rest = true;
+      fnpos += 3;
+      fnpos = skiptonext(fn, fnlen, fnpos);
+    }
+    
+    jsoff_t identlen = 0;
+    uint8_t tok = parseident(&fn[fnpos], fnlen - fnpos, &identlen);
+    if (tok != TOK_IDENTIFIER) break;
+    
+    if (is_rest) {
+      rest_param_start = fnpos;
+      rest_param_len = identlen;
+      fnpos = skiptonext(fn, fnlen, fnpos + identlen);
+      break;
+    }
+    
+    jsval_t v = arg_idx < nargs ? args[arg_idx] : js_mkundef();
+    setprop(js, function_scope, js_mkstr(js, &fn[fnpos], identlen), v);
+    arg_idx++;
+    fnpos = skiptonext(fn, fnlen, fnpos + identlen);
+    if (fnpos < fnlen && fn[fnpos] == ',') fnpos++;
+  }
+  
+  if (has_rest && rest_param_len > 0) {
+    jsval_t rest_array = mkarr(js);
+    if (!is_err(rest_array)) {
+      jsoff_t idx = 0;
+      while (arg_idx < nargs) {
+        char idxstr[16];
+        snprintf(idxstr, sizeof(idxstr), "%u", (unsigned) idx);
+        jsval_t key = js_mkstr(js, idxstr, strlen(idxstr));
+        setprop(js, rest_array, key, args[arg_idx]);
+        idx++;
+        arg_idx++;
+      }
+      jsval_t len_key = js_mkstr(js, "length", 6);
+      setprop(js, rest_array, len_key, tov((double) idx));
+      rest_array = mkval(T_ARR, vdata(rest_array));
+      setprop(js, function_scope, js_mkstr(js, &fn[rest_param_start], rest_param_len), rest_array);
+    }
+  }
+  
+  if (fnpos < fnlen && fn[fnpos] == ')') fnpos++;
+  fnpos = skiptonext(fn, fnlen, fnpos);
+  if (fnpos < fnlen && fn[fnpos] == '{') fnpos++;
+  size_t body_len = fnlen - fnpos - 1;
+  
+  jsval_t saved_this = js->this_val;
+  jsval_t target_this = peek_this();
+  js->this_val = target_this;
   js->flags = F_CALL;
   
   jsval_t res = js_eval(js, &fn[fnpos], body_len);
@@ -2024,7 +2125,7 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
         js->nogc = (jsoff_t) (fnoff - sizeof(jsoff_t));
         
         if (is_async) {
-          res = start_async_in_coroutine(js, code_str, fnlen, closure_scope);
+          res = start_async_in_coroutine(js, code_str, fnlen, closure_scope, NULL, 0);
           pop_call_frame();
         } else {
           res = call_js(js, code_str, fnlen, closure_scope);
@@ -3096,7 +3197,7 @@ static jsval_t js_unary(struct js *js) {
     jsval_t then_args[] = { resume_fn, reject_fn };
     jsval_t saved_this = js->this_val;
     js->this_val = resolved;
-    builtin_promise_then(js, then_args, 2);
+    (void)builtin_promise_then(js, then_args, 2);
     js->this_val = saved_this;
     
     uint8_t saved_flags = js->flags;
@@ -6257,9 +6358,13 @@ static jsval_t builtin_trigger_handler_wrapper(struct js *js, jsval_t *args, int
 static void resolve_promise(struct js *js, jsval_t p, jsval_t val) {
   jsval_t p_obj = mkval(T_OBJ, vdata(p));
   jsoff_t state_off = lkp(js, p_obj, "__state", 7);
-  if (state_off == 0) return;
+  if (state_off == 0) {
+    return;
+  }
   jsval_t state_val = resolveprop(js, mkval(T_PROP, state_off));
-  if ((int)tod(state_val) != 0) return;
+  if ((int)tod(state_val) != 0) {
+    return;
+  }
 
   if (vtype(val) == T_PROMISE) {
      if (vdata(val) == vdata(p)) {
@@ -7612,6 +7717,7 @@ int js_type(jsval_t val) {
     case T_STR:     return JS_STR;
     case T_NUM:     return JS_NUM;
     case T_ERR:     return JS_ERR;
+    case T_PROMISE: return JS_PROMISE;
     default:        return JS_PRIV;
   }
 }
@@ -7694,6 +7800,23 @@ jsval_t js_call(struct js *js, jsval_t func, jsval_t *args, int nargs) {
     if (vtype(code_val) != T_STR) return js_mkerr(js, "function code not string");
     jsoff_t fnlen, fnoff = vstr(js, code_val, &fnlen);
     const char *fn = (const char *) (&js->mem[fnoff]);
+    
+    jsoff_t async_off = lkp(js, func_obj, "__async", 7);
+    bool is_async = false;
+    if (async_off != 0) {
+      jsval_t async_val = resolveprop(js, mkval(T_PROP, async_off));
+      is_async = vtype(async_val) == T_BOOL && vdata(async_val) == 1;
+    }
+    
+    if (is_async) {
+      jsval_t closure_scope = js_mkundef();
+      jsoff_t scope_off = lkp(js, func_obj, "__scope", 7);
+      if (scope_off != 0) {
+        closure_scope = resolveprop(js, mkval(T_PROP, scope_off));
+      }
+      return start_async_in_coroutine(js, fn, fnlen, closure_scope, args, nargs);
+    }
+    
     jsoff_t fnpos = 1;
     
     jsval_t saved_scope = js->scope;

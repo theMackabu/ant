@@ -49,7 +49,6 @@ typedef struct {
 static uv_loop_t *g_loop = NULL;
 static int g_loop_initialized = 0;
 static uv_timer_t g_js_timer;
-static struct js *g_js = NULL;
 
 static void server_signal_handler(int signum) {
   (void)signum;
@@ -58,7 +57,11 @@ static void server_signal_handler(int signum) {
 }
 
 static void on_js_timer(uv_timer_t *handle) {
-  (void)handle;
+  struct js *js = (struct js*)handle->data;
+  if (js && has_pending_timers()) {
+    int64_t next_timeout = get_next_timer_timeout();
+    if (next_timeout <= 0) process_timers(js);
+  }
 }
 
 typedef struct {
@@ -129,6 +132,21 @@ static void free_http_request(http_request_t *req) {
 
 static void on_close(uv_handle_t *handle);
 static void send_response(uv_stream_t *client, response_ctx_t *res_ctx);
+
+typedef struct {
+  http_server_t *server;
+  response_ctx_t *res_ctx;
+} promise_callback_data_t;
+
+static jsval_t promise_then_callback(struct js *js, jsval_t *args, int nargs) {
+  (void)js;
+  (void)args;
+  (void)nargs;
+  // The promise resolved, response should have been sent via res.body() etc
+  // Mark as sent if not already sent (for cases where handler doesn't call res methods)
+  // This will be handled by check_pending_responses in the event loop
+  return js_mkundef();
+}
 
 static jsval_t res_status(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
@@ -319,6 +337,14 @@ static void handle_http_request(client_t *client, http_request_t *http_req) {
       res_ctx->body = "Internal Server Error";
       res_ctx->content_type = "text/plain";
       res_ctx->sent = 1;
+    } else if (js_type(result) == JS_PROMISE) {
+      jsval_t then_fn = js_get(server->js, result, "then");
+      if (js_type(then_fn) != JS_UNDEF) {
+        jsval_t callback = js_mkfun(promise_then_callback);
+        jsval_t then_args[1] = {callback};
+        js_call(server->js, then_fn, then_args, 1);
+      }
+      return;
     } else if (!res_ctx->sent) {
       res_ctx->status = 404;
       res_ctx->body = "Not Found";
@@ -515,9 +541,9 @@ jsval_t js_serve(struct js *js, jsval_t *args, int nargs) {
   }
   
   server->pending_responses = NULL;
-  g_js = js;
   
   uv_timer_init(g_loop, &g_js_timer);
+  g_js_timer.data = js;
   
   while (uv_loop_alive(g_loop)) {
     if (has_pending_timers()) {
@@ -530,7 +556,6 @@ jsval_t js_serve(struct js *js, jsval_t *args, int nargs) {
     
     uv_run(g_loop, UV_RUN_ONCE);
     js_poll_events(js);
-    
     check_pending_responses(server);
   }
   
