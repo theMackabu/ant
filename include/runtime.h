@@ -7,6 +7,7 @@ struct ant_runtime {
   struct js *js;
   jsval_t ant_obj;
   int crypto_initialized;
+  int external_event_loop_active;
 };
 
 extern struct ant_runtime *const rt;

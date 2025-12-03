@@ -29,8 +29,8 @@ router.insert('/hello', async c => {
 
 router.insert('/status', async c => {
   await new Promise(resolve => setTimeout(resolve, 1000));
-  const result = await Promise.resolve('Hello');
-  // const result = (await fetch('http://localhost:8000/meow')).text();
+  // const result = await Promise.resolve('Hello');
+  const result = (await fetch('http://localhost:8000/meow')).text();
   return c.res.body(`server is responding with ${result}`);
 });
 

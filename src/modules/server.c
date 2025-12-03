@@ -541,9 +541,10 @@ jsval_t js_serve(struct js *js, jsval_t *args, int nargs) {
   }
   
   server->pending_responses = NULL;
-  
   uv_timer_init(g_loop, &g_js_timer);
+  
   g_js_timer.data = js;
+  rt->external_event_loop_active = 1;
   
   while (uv_loop_alive(g_loop)) {
     if (has_pending_timers()) {
