@@ -859,6 +859,22 @@ static bool streq(const char *buf, size_t len, const char *p, size_t n) {
   return n == len && memcmp(buf, p, len) == 0;
 }
 
+static bool is_strict_reserved(const char *buf, size_t len) {
+  switch (len) {
+    case 3: return streq(buf, len, "let", 3);
+    case 5: return streq(buf, len, "yield", 5);
+    case 6: return streq(buf, len, "static", 6) || streq(buf, len, "public", 6);
+    case 7: return streq(buf, len, "private", 7) || streq(buf, len, "package", 7);
+    case 9: return streq(buf, len, "interface", 9) || streq(buf, len, "protected", 9);
+    case 10: return streq(buf, len, "implements", 10);
+    default: return false;
+  }
+}
+
+static bool is_strict_restricted(const char *buf, size_t len) {
+  return (len == 4 && streq(buf, len, "eval", 4)) || (len == 9 && streq(buf, len, "arguments", 9));
+}
+
 static uint8_t parsekeyword(const char *buf, size_t len) {
   switch (buf[0]) {
     case 'a': if (streq("async", 5, buf, len)) return TOK_ASYNC; if (streq("await", 5, buf, len)) return TOK_AWAIT; break;
@@ -957,6 +973,12 @@ static uint8_t next(struct js *js) {
       if (buf[0] == buf[js->tlen]) js->tok = TOK_STRING, js->tlen++;
       break;
     case '0': case '1': case '2': case '3': case '4': case '5': case '6': case '7': case '8': case '9': {
+      if ((js->flags & F_STRICT) && buf[0] == '0' && js->toff + 1 < js->clen && 
+          is_digit(buf[1]) && buf[1] != 'x' && buf[1] != 'X' && buf[1] != 'b' && buf[1] != 'B' && buf[1] != 'o' && buf[1] != 'O') {
+        js->tok = TOK_ERR;
+        js->tlen = 1;
+        break;
+      }
       char *end;
       js->tval = tov(strtod(buf, &end));
       TOK(TOK_NUMBER, (jsoff_t) (end - buf));
@@ -1085,6 +1107,10 @@ static jsval_t lookup(struct js *js, const char *buf, size_t len) {
     scope = mkval(T_OBJ, loadoff(js, (jsoff_t) (vdata(scope) + sizeof(jsoff_t))));
   }
   
+  if (js->flags & F_STRICT) {
+    return js_mkerr(js, "ReferenceError: '%.*s' is not defined", (int) len, buf);
+  }
+  
   return js_mkerr(js, "'%.*s' not found", (int) len, buf);
 }
 
@@ -1098,6 +1124,17 @@ static jsval_t assign(struct js *js, jsval_t lhs, jsval_t val) {
   if (is_const_prop(js, propoff)) {
     return js_mkerr(js, "assignment to constant");
   }
+  
+  if (js->flags & F_STRICT) {
+    jsval_t prop_val = loadval(js, (jsoff_t) (propoff + sizeof(jsoff_t) * 2));
+    uint8_t prop_type = vtype(prop_val);
+    
+    if (prop_type == T_STR || prop_type == T_NUM || prop_type == T_BOOL || 
+        prop_type == T_NULL || prop_type == T_UNDEF) {
+      return js_mkerr(js, "TypeError: cannot set property on primitive value in strict mode");
+    }
+  }
+  
   saveval(js, (jsoff_t) ((vdata(lhs) & ~3U) + sizeof(jsoff_t) * 2), val);
   return lhs;
 }
@@ -2061,6 +2098,10 @@ static jsval_t js_obj_literal(struct js *js) {
 }
 
 static bool parse_func_params(struct js *js, uint8_t *flags) {
+  const char *param_names[32];
+  size_t param_lens[32];
+  int param_count = 0;
+  
   for (bool comma = false; next(js) != TOK_EOF; comma = true) {
     if (!comma && next(js) == TOK_RPAREN) break;
     
@@ -2076,6 +2117,32 @@ static bool parse_func_params(struct js *js, uint8_t *flags) {
       js_mkerr(js, "identifier expected");
       return false;
     }
+    
+    const char *param_name = &js->code[js->toff];
+    size_t param_len = js->tlen;
+    
+    if ((js->flags & F_STRICT) && is_strict_restricted(param_name, param_len)) {
+      if (flags) js->flags = *flags;
+      js_mkerr(js, "cannot use '%.*s' as parameter name in strict mode", (int) param_len, param_name);
+      return false;
+    }
+    
+    if (js->flags & F_STRICT) {
+      for (int i = 0; i < param_count; i++) {
+        if (param_lens[i] == param_len && memcmp(param_names[i], param_name, param_len) == 0) {
+          if (flags) js->flags = *flags;
+          js_mkerr(js, "duplicate parameter name '%.*s' in strict mode", (int) param_len, param_name);
+          return false;
+        }
+      }
+    }
+    
+    if (param_count < 32) {
+      param_names[param_count] = param_name;
+      param_lens[param_count] = param_len;
+      param_count++;
+    }
+    
     js->consumed = 1;
     
     if (is_rest && next(js) != TOK_RPAREN) {
@@ -2187,7 +2254,12 @@ static jsval_t js_literal(struct js *js) {
   js->consumed = 1;
   
   switch (js->tok) {
-    case TOK_ERR:         return js_mkerr(js, "parse error");
+    case TOK_ERR:
+      if ((js->flags & F_STRICT) && js->toff < js->clen && js->code[js->toff] == '0' && 
+          js->toff + 1 < js->clen && is_digit(js->code[js->toff + 1])) {
+        return js_mkerr(js, "octal literals are not allowed in strict mode");
+      }
+      return js_mkerr(js, "parse error");
     case TOK_NUMBER:      return js->tval;
     case TOK_STRING:      return js_str_literal(js);
     case TOK_TEMPLATE:    return js_template_literal(js);
@@ -2994,6 +3066,15 @@ static jsval_t js_decl(struct js *js, bool is_const) {
       js->consumed = 0;
       jsoff_t noff = js->toff, nlen = js->tlen;
       char *name = (char *) &js->code[noff];
+      
+      if (exe && (js->flags & F_STRICT) && is_strict_restricted(name, nlen)) {
+        return js_mkerr(js, "cannot use '%.*s' as variable name in strict mode", (int) nlen, name);
+      }
+      
+      if (exe && (js->flags & F_STRICT) && is_strict_reserved(name, nlen)) {
+        return js_mkerr(js, "'%.*s' is reserved in strict mode", (int) nlen, name);
+      }
+      
       jsval_t v = js_mkundef();
       js->consumed = 1;
       if (next(js) == TOK_ASSIGN) {
