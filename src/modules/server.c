@@ -313,22 +313,26 @@ static void handle_http_request(client_t *client, http_request_t *http_req) {
     jsval_t args[2] = {req, res_obj};
     result = js_call(server->js, server->handler, args, 2);
     
+    if (js_type(result) == JS_ERR) {
+      fprintf(stderr, "Handler error: %s\n", js_str(server->js, result));
+      res_ctx->status = 500;
+      res_ctx->body = "Internal Server Error";
+      res_ctx->content_type = "text/plain";
+      res_ctx->sent = 1;
+    } else if (!res_ctx->sent) {
+      res_ctx->status = 404;
+      res_ctx->body = "Not Found";
+      res_ctx->content_type = "text/plain";
+      res_ctx->sent = 1;
+    }
+    
     return;
   }
   
-  if (js_type(result) == JS_ERR) {
-    fprintf(stderr, "Handler error: %s\n", js_str(server->js, result));
-    res_ctx->status = 500;
-    res_ctx->body = "Internal Server Error";
-    res_ctx->content_type = "text/plain";
-    res_ctx->sent = 1;
-  } else {
-    res_ctx->status = 404;
-    res_ctx->body = "Not Found";
-    res_ctx->content_type = "text/plain";
-    res_ctx->sent = 1;
-  }
-  
+  res_ctx->status = 404;
+  res_ctx->body = "Not Found";
+  res_ctx->content_type = "text/plain";
+  res_ctx->sent = 1;
 }
 
 static void on_close(uv_handle_t *handle) {
@@ -404,6 +408,7 @@ static void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
     http_request_t http_req = {0};
     if (parse_http_request(client->buffer, client->buffer_len, &http_req) == 0) {
       handle_http_request(client, &http_req);
+      check_pending_responses(client->server);
       free_http_request(&http_req);
     } else {
       response_ctx_t *res_ctx = malloc(sizeof(response_ctx_t));
@@ -416,6 +421,7 @@ static void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
         res_ctx->next = client->server->pending_responses;
         client->server->pending_responses = res_ctx;
         client->response_ctx = res_ctx;
+        check_pending_responses(client->server);
       }
     }
   }
