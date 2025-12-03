@@ -1,0 +1,8 @@
+[wrap-git]
+url = https://github.com/edubart/minicoro.git
+revision = head
+patch_directory = minicoro
+depth = 1
+
+[provide]
+minicoro = minicoro_dep

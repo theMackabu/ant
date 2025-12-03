@@ -27,8 +27,4 @@ FEATURES:
   - Async/await and Promises
   - ES6+ syntax (arrow functions, classes, template literals)
   - Signal handlers (SIGINT, SIGTERM, etc.)
-  - 64MB default memory pool
   - Embedded garbage collector
-
-DEPENDENCIES:
-  libsodium, curl, mongoose, yyjson, argtable3, uuidv7

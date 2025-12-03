@@ -19,6 +19,9 @@
 #include "config.h"
 #include "modules/timer.h"
 
+#define MINICORO_IMPL
+#include "minicoro.h"
+
 typedef uint32_t jsoff_t;
 
 typedef struct {
@@ -62,12 +65,26 @@ typedef struct coroutine {
   jsoff_t resume_point;
   jsval_t yield_value;
   struct coroutine *next;
+  mco_coro* mco;
+  bool mco_started;
+  bool is_ready;
 } coroutine_t;
 
 typedef struct {
   coroutine_t *head;
   coroutine_t *tail;
 } coroutine_queue_t;
+
+typedef struct {
+  struct js *js;
+  const char *code;
+  size_t code_len;
+  jsval_t closure_scope;
+  jsval_t result;
+  jsval_t promise;
+  bool has_error;
+  coroutine_t *coro;
+} async_exec_context_t;
 
 static this_stack_t global_this_stack = {NULL, 0, 0};
 static call_stack_t global_call_stack = {NULL, 0, 0};
@@ -261,6 +278,30 @@ static jsval_t builtin_promise_finally(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_Date(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_Date_now(struct js *js, jsval_t *args, int nargs);
 
+static jsval_t call_js(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope);
+static jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t code_len, jsval_t closure_scope);
+
+static void free_coroutine(coroutine_t *coro);
+static bool has_ready_coroutines(void);
+
+static void mco_async_entry(mco_coro* mco) {
+  async_exec_context_t *ctx = (async_exec_context_t *)mco_get_user_data(mco);
+  
+  struct js *js = ctx->js;
+  jsval_t result = call_js(js, ctx->code, (jsoff_t)ctx->code_len, ctx->closure_scope);
+  
+  ctx->result = result;
+  ctx->has_error = is_err(result);
+  
+  if (ctx->has_error) {
+    js_reject_promise(js, ctx->promise, result);
+  } else {
+    js_resolve_promise(js, ctx->promise, result);
+  }
+  
+}
+
+/* unused for now
 static coroutine_t *create_coroutine(struct js *js, jsval_t promise, jsval_t async_func) {
   coroutine_t *coro = (coroutine_t *)malloc(sizeof(coroutine_t));
   if (!coro) return NULL;
@@ -281,10 +322,13 @@ static coroutine_t *create_coroutine(struct js *js, jsval_t promise, jsval_t asy
   coro->yield_value = js_mkundef();
   coro->next = NULL;
   
+  coro->mco = NULL;
+  coro->mco_started = false;
+  coro->is_ready = false;
+  
   return coro;
 }
 
-/* unused for now
 static coroutine_t *create_generator(struct js *js, jsval_t gen_func, jsval_t *args, int nargs, bool is_async) {
   coroutine_t *coro = (coroutine_t *)malloc(sizeof(coroutine_t));
   if (!coro) return NULL;
@@ -346,25 +390,147 @@ static bool has_pending_coroutines(void) {
   return pending_coroutines.head != NULL;
 }
 
+static bool has_ready_coroutines(void) {
+  coroutine_t *temp = pending_coroutines.head;
+  while (temp) {
+    if (temp->is_ready) return true;
+    temp = temp->next;
+  }
+  return false;
+}
+
 void js_run_event_loop(struct js *js) {
-  while (has_pending_microtasks() || has_pending_timers()) {
-    process_microtasks(js);
-    
+  while (has_pending_microtasks() || has_pending_timers() || has_pending_coroutines()) {
     if (has_pending_timers()) {
       int64_t next_timeout_ms = get_next_timer_timeout();
+      if (next_timeout_ms <= 0) process_timers(js);
+    }
+    
+    process_microtasks(js);
+    
+    coroutine_t *temp = pending_coroutines.head;
+    coroutine_t *prev = NULL;
+    
+    while (temp) {
+      coroutine_t *next = temp->next;
       
-      if (next_timeout_ms <= 0) {
-        process_timers(js);
-        continue;
+      if (temp->is_ready && temp->mco && mco_status(temp->mco) == MCO_SUSPENDED) {
+        if (prev) {
+          prev->next = next;
+        } else {
+          pending_coroutines.head = next;
+        }
+        if (pending_coroutines.tail == temp) {
+          pending_coroutines.tail = prev;
+        }
+        
+        mco_result res = mco_resume(temp->mco);
+        
+        if (res == MCO_SUCCESS && mco_status(temp->mco) == MCO_DEAD) {
+          free_coroutine(temp);
+        } else if (res == MCO_SUCCESS) {
+          temp->is_ready = false;
+          if (pending_coroutines.tail) {
+            pending_coroutines.tail->next = temp;
+            pending_coroutines.tail = temp;
+          } else {
+            pending_coroutines.head = pending_coroutines.tail = temp;
+          }
+          temp->next = NULL;
+          prev = temp;
+        } else {
+          free_coroutine(temp);
+        }
+        
+        temp = next;
       } else {
-        usleep(next_timeout_ms > 1000000 ? 1000000 : next_timeout_ms * 1000);
+        prev = temp;
+        temp = next;
       }
     }
+    
+    if (!has_pending_microtasks() && has_pending_timers() && !has_ready_coroutines()) {
+      int64_t next_timeout_ms = get_next_timer_timeout();
+      if (next_timeout_ms > 0) usleep(next_timeout_ms > 1000000 ? 1000000 : next_timeout_ms * 1000);
+    }
+    
+    if (!has_pending_microtasks() && !has_pending_timers() && !has_pending_coroutines()) break;
   }
+}
+
+static jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t code_len, jsval_t closure_scope) {
+  jsval_t promise = js_mkpromise(js);  
+  async_exec_context_t *ctx = (async_exec_context_t *)malloc(sizeof(async_exec_context_t));
+  if (!ctx) return js_mkerr(js, "out of memory for async context");
+  
+  ctx->js = js;
+  ctx->code = code;
+  ctx->code_len = code_len;
+  ctx->closure_scope = closure_scope;
+  ctx->result = js_mkundef();
+  ctx->promise = promise;
+  ctx->has_error = false;
+  ctx->coro = NULL;
+  
+  mco_desc desc = mco_desc_init(mco_async_entry, 0);
+  desc.user_data = ctx;
+  
+  mco_coro* mco = NULL;
+  mco_result res = mco_create(&mco, &desc);
+  if (res != MCO_SUCCESS) {
+    free(ctx);
+    return js_mkerr(js, "failed to create minicoro coroutine");
+  }
+  
+  coroutine_t *coro = (coroutine_t *)malloc(sizeof(coroutine_t));
+  if (!coro) {
+    mco_destroy(mco);
+    free(ctx);
+    return js_mkerr(js, "out of memory for coroutine");
+  }
+  
+  coro->js = js;
+  coro->type = CORO_ASYNC_AWAIT;
+  coro->scope = closure_scope;
+  coro->this_val = js->this_val;
+  coro->awaited_promise = js_mkundef();
+  coro->result = js_mkundef();
+  coro->async_func = js->current_func;
+  coro->args = NULL;
+  coro->nargs = 0;
+  coro->is_settled = false;
+  coro->is_error = false;
+  coro->is_done = false;
+  coro->resume_point = 0;
+  coro->yield_value = js_mkundef();
+  coro->next = NULL;
+  coro->mco = mco;
+  coro->mco_started = false;
+  coro->is_ready = true;
+  
+  ctx->coro = coro;  
+  enqueue_coroutine(coro);
+  
+  res = mco_resume(mco);
+  if (res != MCO_SUCCESS && mco_status(mco) != MCO_DEAD) {
+    dequeue_coroutine();
+    free_coroutine(coro);
+    free(ctx);
+    return js_mkerr(js, "failed to start coroutine");
+  }
+  
+  coro->mco_started = true;
+  if (mco_status(mco) == MCO_DEAD) free(ctx);
+  
+  return promise;
 }
 
 static void free_coroutine(coroutine_t *coro) {
   if (coro) {
+    if (coro->mco) {
+      mco_destroy(coro->mco);
+      coro->mco = NULL;
+    }
     if (coro->args) free(coro->args);
     free(coro);
   }
@@ -1793,14 +1959,16 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
         jsval_t saved_func = js->current_func;
         js->current_func = func;
         js->nogc = (jsoff_t) (fnoff - sizeof(jsoff_t));
-        res = call_js(js, code_str, fnlen, closure_scope);
-        js->current_func = saved_func;
         
-        pop_call_frame();
-        if (is_async && !is_err(res)) {
-          jsval_t promise_args[] = { res };
-          res = builtin_Promise_resolve(js, promise_args, 1);
+        if (is_async) {
+          res = start_async_in_coroutine(js, code_str, fnlen, closure_scope);
+          pop_call_frame();
+        } else {
+          res = call_js(js, code_str, fnlen, closure_scope);
+          pop_call_frame();
         }
+        
+        js->current_func = saved_func;
       }
     }
   } else {
@@ -2838,8 +3006,16 @@ static jsval_t js_unary(struct js *js) {
       }
     }
     
-    coroutine_t *coro = create_coroutine(js, resolved, js->current_func);
-    if (!coro) return js_mkerr(js, "failed to create coroutine");
+    mco_coro* current_mco = mco_running();
+    if (!current_mco) return js_mkerr(js, "await can only be used inside async functions");
+    
+    async_exec_context_t *ctx = (async_exec_context_t *)mco_get_user_data(current_mco);
+    if (!ctx || !ctx->coro) return js_mkerr(js, "invalid async context");
+    
+    coroutine_t *coro = ctx->coro;
+    coro->awaited_promise = resolved;
+    coro->is_settled = false;
+    coro->is_ready = false;
     
     jsval_t resume_obj = mkobj(js, 0);
     setprop(js, resume_obj, js_mkstr(js, "__native_func", 13), js_mkfun(resume_coroutine_wrapper));
@@ -2864,69 +3040,23 @@ static jsval_t js_unary(struct js *js) {
     uint8_t saved_tok = js->tok;
     uint8_t saved_consumed = js->consumed;
     
-    while (!coro->is_settled) {
-      if (has_pending_timers()) {
-        int64_t next_timeout = get_next_timer_timeout();
-        if (next_timeout <= 0) {
-          process_timers(js);
-          js->flags = saved_flags;
-          js->code = saved_code;
-          js->clen = saved_clen;
-          js->pos = saved_pos;
-          js->tok = saved_tok;
-          js->consumed = saved_consumed;
-        }
-      }
-      
-      process_microtasks(js);
-      js->flags = saved_flags;
-      js->code = saved_code;
-      js->clen = saved_clen;
-      js->pos = saved_pos;
-      js->tok = saved_tok;
-      js->consumed = saved_consumed;
-      
-      int coroutines_checked = 0;
-      int total_coroutines = 0;
-      
-      coroutine_t *temp = pending_coroutines.head;
-      while (temp) {
-        total_coroutines++;
-        temp = temp->next;
-      }
-      
-      while (has_pending_coroutines() && coroutines_checked < total_coroutines) {
-        coroutine_t *resumed = dequeue_coroutine();
-        coroutines_checked++;
-        
-        if (resumed == coro) {
-          jsval_t result = resumed->result;
-          bool is_error = resumed->is_error;
-          free_coroutine(resumed);
-          
-          if (is_error) return js_throw(js, result);
-          return result;
-        }
-        enqueue_coroutine(resumed);
-      }
-      
-      if (!has_pending_microtasks() && !has_pending_coroutines() && !has_pending_timers()) {
-        free_coroutine(coro);
-        return js_mkerr(js, "await: promise never settled");
-      }
-      
-      if (has_pending_timers() && !has_pending_microtasks() && !has_pending_coroutines()) {
-        int64_t next_timeout = get_next_timer_timeout();
-        if (next_timeout > 0) {
-          int64_t sleep_ms = next_timeout < 1 ? 1 : (next_timeout > 1 ? 1 : next_timeout);
-          usleep(sleep_ms * 1000);
-        }
-      }
+    mco_result mco_res = mco_yield(current_mco);
+    js->flags = saved_flags;
+    js->code = saved_code;
+    js->clen = saved_clen;
+    js->pos = saved_pos;
+    js->tok = saved_tok;
+    js->consumed = saved_consumed;
+    
+    if (mco_res != MCO_SUCCESS) {
+      return js_mkerr(js, "failed to yield coroutine");
     }
     
     jsval_t result = coro->result;
     bool is_error = coro->is_error;
-    free_coroutine(coro);
+    
+    coro->is_settled = false;
+    coro->awaited_promise = js_mkundef();
     
     if (is_error) {
       return js_throw(js, result);
@@ -6225,11 +6355,12 @@ static jsval_t resume_coroutine_wrapper(struct js *js, jsval_t *args, int nargs)
   coroutine_t *coro = (coroutine_t *)(uintptr_t)tod(coro_val);
   if (!coro) return js_mkundef();
   
+  
   coro->result = nargs > 0 ? args[0] : js_mkundef();
   coro->is_settled = true;
   coro->is_error = false;
+  coro->is_ready = true;
   
-  enqueue_coroutine(coro);
   return js_mkundef();
 }
 
@@ -6245,8 +6376,8 @@ static jsval_t reject_coroutine_wrapper(struct js *js, jsval_t *args, int nargs)
   coro->result = nargs > 0 ? args[0] : js_mkundef();
   coro->is_settled = true;
   coro->is_error = true;
+  coro->is_ready = true;
   
-  enqueue_coroutine(coro);
   return js_mkundef();
 }
 
