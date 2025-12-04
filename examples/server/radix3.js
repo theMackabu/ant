@@ -24,8 +24,36 @@ export class Radix3 {
     return minLen;
   }
 
-  insert(path, handler) {
-    this.insertPath(this.root, path, handler, 0);
+  insert(path, handler, method = 'GET') {
+    this.insertPath(this.root, `${method}#${path}`, handler, 0);
+  }
+
+  get(path, handler) {
+    this.insert(path, handler, 'GET');
+  }
+
+  post(path, handler) {
+    this.insert(path, handler, 'POST');
+  }
+
+  put(path, handler) {
+    this.insert(path, handler, 'PUT');
+  }
+
+  delete(path, handler) {
+    this.insert(path, handler, 'DELETE');
+  }
+
+  patch(path, handler) {
+    this.insert(path, handler, 'PATCH');
+  }
+
+  head(path, handler) {
+    this.insert(path, handler, 'HEAD');
+  }
+
+  options(path, handler) {
+    this.insert(path, handler, 'OPTIONS');
   }
 
   insertPath(node, path, handler, start) {
@@ -114,9 +142,10 @@ export class Radix3 {
     this.insertPath(newChild, path, handler, end);
   }
 
-  lookup(path) {
+  lookup(path, method = 'GET') {
     const params = {};
-    const handler = this.matchPath(this.root, path, 0, params);
+    const fullPath = `${method}#${path}`;
+    const handler = this.matchPath(this.root, fullPath, 0, params);
 
     if (!handler) return undefined;
     return { handler, params };
