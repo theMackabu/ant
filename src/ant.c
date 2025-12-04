@@ -1816,19 +1816,65 @@ static jsval_t do_assign_op(struct js *js, uint8_t op, jsval_t l, jsval_t r) {
   return assign(js, l, res);
 }
 
+typedef struct {
+  char *buffer;
+  size_t capacity;
+  size_t size;
+  bool is_dynamic;
+} string_builder_t;
+
+static void string_builder_init(string_builder_t *sb, char *static_buf, size_t static_cap) {
+  sb->buffer = static_buf;
+  sb->capacity = static_cap;
+  sb->size = 0;
+  sb->is_dynamic = false;
+}
+
+static bool string_builder_append(string_builder_t *sb, const char *data, size_t len) {
+  if (sb->size + len > sb->capacity) {
+    size_t new_capacity = sb->capacity ? sb->capacity * 2 : 256;
+    while (new_capacity < sb->size + len) new_capacity *= 2;
+    
+    char *new_buffer = (char *)ANT_GC_MALLOC(new_capacity);
+    if (!new_buffer) return false;
+    
+    if (sb->size > 0) memcpy(new_buffer, sb->buffer, sb->size);
+    if (sb->is_dynamic) ANT_GC_FREE(sb->buffer);
+    
+    sb->buffer = new_buffer;
+    sb->capacity = new_capacity;
+    sb->is_dynamic = true;
+  }
+  
+  if (len > 0) {
+    memcpy(sb->buffer + sb->size, data, len);
+    sb->size += len;
+  }
+  
+  return true;
+}
+
+static jsval_t string_builder_finalize(struct js *js, string_builder_t *sb) {
+  jsval_t result = js_mkstr(js, sb->buffer, sb->size);
+  if (sb->is_dynamic && sb->buffer) ANT_GC_FREE(sb->buffer);
+  return result;
+}
+
 static jsval_t do_string_op(struct js *js, uint8_t op, jsval_t l, jsval_t r) {
   jsoff_t n1, off1 = vstr(js, l, &n1);
   jsoff_t n2, off2 = vstr(js, r, &n2);
   
   if (op == TOK_PLUS) {
-    jsval_t res = js_mkstr(js, NULL, n1 + n2);
-    if (vtype(res) == T_STR) {
-      jsoff_t n, off = vstr(js, res, &n);
-      memmove(&js->mem[off], &js->mem[off1], n1);
-      memmove(&js->mem[off + n1], &js->mem[off2], n2);
+    string_builder_t sb;
+    char static_buffer[512];
+    string_builder_init(&sb, static_buffer, sizeof(static_buffer));
+    
+    if (!string_builder_append(&sb, (char *)&js->mem[off1], n1) ||
+        !string_builder_append(&sb, (char *)&js->mem[off2], n2)) {
+      return js_mkerr(js, "string concatenation failed");
     }
     
-    return res;
+    return string_builder_finalize(js, &sb);
   } else if (op == TOK_EQ) {
     bool eq = n1 == n2 && memcmp(&js->mem[off1], &js->mem[off2], n1) == 0;
     return mkval(T_BOOL, eq ? 1 : 0);
@@ -2534,7 +2580,10 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
     }
     return do_string_op(js, op, l_str, r_str);
   }
-  if (vtype(l) == T_STR && vtype(r) == T_STR) return do_string_op(js, op, l, r);
+  if (vtype(l) == T_STR && vtype(r) == T_STR) {
+    // Fast path for string+string without type coercion
+    return do_string_op(js, op, l, r);
+  }
   
   double a = 0.0, b = 0.0;
   
