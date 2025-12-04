@@ -147,6 +147,47 @@ static jsval_t js_console_warn(struct js *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
+static jsval_t js_console_assert(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkundef();
+  
+  bool is_truthy = js_truthy(js, args[0]);
+  if (is_truthy) return js_mkundef();
+  
+  fprintf(stderr, "%sAssertion failed", ANSI_RED);
+  if (nargs > 1) {
+    fprintf(stderr, ": ");
+    for (int i = 1; i < nargs; i++) {
+      const char *space = i == 1 ? "" : " ";
+      fprintf(stderr, "%s", space);
+      
+      if (js_type(args[i]) == JS_STR) {
+        char *str = js_getstr(js, args[i], NULL);
+        fprintf(stderr, "%s", str);
+      } else {
+        const char *str = js_str(js, args[i]);
+        fprintf(stderr, "%s", str);
+      }
+    }
+  }
+  fprintf(stderr, "%s\n", ANSI_RESET);
+  
+  return js_mkundef();
+}
+
+static jsval_t js_console_trace(struct js *js, jsval_t *args, int nargs) {
+  fprintf(stderr, "Console Trace");
+  if (nargs > 0 && js_type(args[0]) == JS_STR) {
+    fprintf(stderr, ": ");
+    char *str = js_getstr(js, args[0], NULL);
+    fprintf(stderr, "%s", str);
+  }
+  fprintf(stderr, "\n");
+  
+  js_print_stack_trace(stderr);
+  
+  return js_mkundef();
+}
+
 void init_console_module() {
   struct js *js = rt->js;
   jsval_t console_obj = js_mkobj(js);
@@ -155,4 +196,6 @@ void init_console_module() {
   js_set(js, console_obj, "log", js_mkfun(js_console_log));
   js_set(js, console_obj, "error", js_mkfun(js_console_error));
   js_set(js, console_obj, "warn", js_mkfun(js_console_warn));
+  js_set(js, console_obj, "assert", js_mkfun(js_console_assert));
+  js_set(js, console_obj, "trace", js_mkfun(js_console_trace));
 }

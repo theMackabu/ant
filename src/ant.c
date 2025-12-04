@@ -137,8 +137,23 @@ typedef struct ant_library {
   UT_hash_handle hh;
 } ant_library_t;
 
+typedef struct {
+  char key[64];
+  jsoff_t offset;
+  uint32_t hash;
+  UT_hash_handle hh;
+} prop_cache_entry_t;
+
+typedef struct {
+  jsoff_t obj_offset;
+  prop_cache_entry_t *cache;
+  uint32_t hit_count;
+  UT_hash_handle hh;
+} obj_prop_cache_t;
+
 static ant_library_t *library_registry = NULL;
 static esm_module_cache_t global_module_cache = {NULL, 0};
+static obj_prop_cache_t *global_property_cache = NULL;
 
 void js_protect_init_memory(struct js *js) {
   protected_brk = js_getbrk(js);
@@ -1114,6 +1129,79 @@ static bool is_const_prop(struct js *js, jsoff_t propoff) {
   return false;
 }
 
+static inline uint32_t hash_key(const char *key, size_t len) {
+  uint32_t hash = 2166136261u;
+  for (size_t i = 0; i < len && i < 64; i++) {
+    hash ^= (uint8_t)key[i];
+    hash *= 16777619u;
+  }
+  return hash;
+}
+
+static obj_prop_cache_t* get_obj_cache(jsoff_t obj_offset) {
+  obj_prop_cache_t *cache = NULL;
+  HASH_FIND(hh, global_property_cache, &obj_offset, sizeof(jsoff_t), cache);
+  if (!cache) {
+    cache = (obj_prop_cache_t *)malloc(sizeof(obj_prop_cache_t));
+    if (!cache) return NULL;
+    cache->obj_offset = obj_offset;
+    cache->cache = NULL;
+    cache->hit_count = 0;
+    HASH_ADD(hh, global_property_cache, obj_offset, sizeof(jsoff_t), cache);
+  }
+  return cache;
+}
+
+static void cache_property(jsoff_t obj_offset, const char *key, size_t key_len, jsoff_t prop_offset) {
+  if (key_len > 63) return;
+  
+  obj_prop_cache_t *obj_cache = get_obj_cache(obj_offset);
+  if (!obj_cache) return;
+  
+  prop_cache_entry_t *entry = NULL;
+  HASH_FIND_STR(obj_cache->cache, key, entry);
+  
+  if (!entry) {
+    entry = (prop_cache_entry_t *)malloc(sizeof(prop_cache_entry_t));
+    if (!entry) return;
+    memcpy(entry->key, key, key_len);
+    entry->key[key_len] = '\0';
+    entry->hash = hash_key(key, key_len);
+    HASH_ADD_STR(obj_cache->cache, key, entry);
+  }
+  entry->offset = prop_offset;
+}
+
+static jsoff_t cache_lookup(jsoff_t obj_offset, const char *key, size_t key_len) {
+  if (key_len > 63) return 0;
+  
+  obj_prop_cache_t *obj_cache = NULL;
+  HASH_FIND(hh, global_property_cache, &obj_offset, sizeof(jsoff_t), obj_cache);
+  if (!obj_cache) return 0;
+  
+  prop_cache_entry_t *entry = NULL;
+  HASH_FIND_STR(obj_cache->cache, key, entry);
+  if (entry) {
+    obj_cache->hit_count++;
+    return entry->offset;
+  }
+  return 0;
+}
+
+static void invalidate_obj_cache(jsoff_t obj_offset) {
+  obj_prop_cache_t *obj_cache = NULL;
+  HASH_FIND(hh, global_property_cache, &obj_offset, sizeof(jsoff_t), obj_cache);
+  if (!obj_cache) return;
+  
+  prop_cache_entry_t *entry, *tmp;
+  HASH_ITER(hh, obj_cache->cache, entry, tmp) {
+    HASH_DEL(obj_cache->cache, entry);
+    free(entry);
+  }
+  HASH_DEL(global_property_cache, obj_cache);
+  free(obj_cache);
+}
+
 static jsval_t mkprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v, bool is_const) {
   jsoff_t koff = (jsoff_t) vdata(k);
   jsoff_t b, head = (jsoff_t) vdata(obj);
@@ -1124,6 +1212,10 @@ static jsval_t mkprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v, bool is_
   jsoff_t brk = js->brk | T_OBJ;
   if (is_const) brk |= CONSTMASK;
   memcpy(&js->mem[head], &brk, sizeof(brk));
+  
+  // Invalidate property cache for this object when a new property is added
+  invalidate_obj_cache(head);
+  
   return mkentity(js, (b & ~(3U | CONSTMASK)) | T_PROP, buf, sizeof(buf));
 }
 
@@ -1628,16 +1720,28 @@ static jsval_t js_block(struct js *js, bool create_scope) {
   return res;
 }
 
-static jsoff_t lkp(struct js *js, jsval_t obj, const char *buf, size_t len) {
+static inline jsoff_t lkp_inline(struct js *js, jsval_t obj, const char *buf, size_t len) {
+  if (len <= 63) {
+    jsoff_t cached = cache_lookup((jsoff_t)vdata(obj), buf, len);
+    if (cached != 0) return cached;
+  }
+  
   jsoff_t off = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK);
   while (off < js->brk && off != 0) {
     jsoff_t koff = loadoff(js, (jsoff_t) (off + sizeof(off)));
     jsoff_t klen = (loadoff(js, koff) >> 2) - 1;
     const char *p = (char *) &js->mem[koff + sizeof(koff)];
-    if (streq(buf, len, p, klen)) return off;
+    if (streq(buf, len, p, klen)) {
+      if (len <= 63) cache_property((jsoff_t)vdata(obj), buf, len, off);
+      return off;
+    }
     off = loadoff(js, off) & ~(3U | CONSTMASK);
   }
   return 0;
+}
+
+static jsoff_t lkp(struct js *js, jsval_t obj, const char *buf, size_t len) {
+  return lkp_inline(js, obj, buf, len);
 }
 
 static jsval_t try_dynamic_getter(struct js *js, jsval_t obj, const char *key, size_t key_len) {
@@ -8372,4 +8476,25 @@ void js_set_getter(struct js *js, jsval_t obj, js_getter_fn getter) {
   if (vtype(obj) != T_OBJ) return;
   jsval_t getter_val = mkval(T_CFUNC, (size_t)(void *)getter);
   js_set(js, obj, "__getter", getter_val);
+}
+
+void js_print_stack_trace(FILE *stream) {
+  if (global_call_stack.depth > 0) {
+    for (int i = global_call_stack.depth - 1; i >= 0; i--) {
+      call_frame_t *frame = &global_call_stack.frames[i];
+      fprintf(stream, "  at ");
+      
+      if (frame->function_name) {
+        fprintf(stream, "%s", frame->function_name);
+      } else fprintf(stream, "<anonymous>");
+      
+      fprintf(stream, " (\x1b[90m");
+      
+      if (frame->filename) {
+        fprintf(stream, "%s:%d:%d", frame->filename, frame->line, frame->col);
+      } else fprintf(stream, "<unknown>");
+      
+      fprintf(stream, "\x1b[0m)\n");
+    }
+  }
 }

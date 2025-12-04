@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
 struct js;
 typedef uint64_t jsval_t;
@@ -83,4 +84,6 @@ typedef jsval_t (*ant_library_init_fn)(struct js *js);
 void ant_register_library(const char *name, ant_library_init_fn init_fn);
 
 typedef jsval_t (*js_getter_fn)(struct js *js, jsval_t obj, const char *key, size_t key_len);
+
 void js_set_getter(struct js *js, jsval_t obj, js_getter_fn getter);
+void js_print_stack_trace(FILE *stream);
