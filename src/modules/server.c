@@ -6,6 +6,7 @@
 #include <uv.h>
 
 #include "ant.h"
+#include "config.h"
 #include "runtime.h"
 #include "modules/server.h"
 #include "modules/timer.h"
@@ -133,20 +134,7 @@ static void free_http_request(http_request_t *req) {
 static void on_close(uv_handle_t *handle);
 static void send_response(uv_stream_t *client, response_ctx_t *res_ctx);
 
-typedef struct {
-  http_server_t *server;
-  response_ctx_t *res_ctx;
-} promise_callback_data_t;
 
-static jsval_t promise_then_callback(struct js *js, jsval_t *args, int nargs) {
-  (void)js;
-  (void)args;
-  (void)nargs;
-  // The promise resolved, response should have been sent via res.body() etc
-  // Mark as sent if not already sent (for cases where handler doesn't call res methods)
-  // This will be handled by check_pending_responses in the event loop
-  return js_mkundef();
-}
 
 static jsval_t res_status(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
@@ -330,24 +318,17 @@ static void handle_http_request(client_t *client, http_request_t *http_req) {
     
     jsval_t args[2] = {req, res_obj};
     result = js_call(server->js, server->handler, args, 2);
+    if (js_type(result) == JS_PROMISE) return;
     
     if (js_type(result) == JS_ERR) {
       fprintf(stderr, "Handler error: %s\n", js_str(server->js, result));
       res_ctx->status = 500;
-      res_ctx->body = "Internal Server Error";
+      res_ctx->body = "internal server error\nant http v" ANT_VERSION " (" ANT_GIT_HASH ")";
       res_ctx->content_type = "text/plain";
       res_ctx->sent = 1;
-    } else if (js_type(result) == JS_PROMISE) {
-      jsval_t then_fn = js_get(server->js, result, "then");
-      if (js_type(then_fn) != JS_UNDEF) {
-        jsval_t callback = js_mkfun(promise_then_callback);
-        jsval_t then_args[1] = {callback};
-        js_call(server->js, then_fn, then_args, 1);
-      }
-      return;
     } else if (!res_ctx->sent) {
       res_ctx->status = 404;
-      res_ctx->body = "Not Found";
+      res_ctx->body = "not found\nant http v" ANT_VERSION " (" ANT_GIT_HASH ")";
       res_ctx->content_type = "text/plain";
       res_ctx->sent = 1;
     }
@@ -356,7 +337,7 @@ static void handle_http_request(client_t *client, http_request_t *http_req) {
   }
   
   res_ctx->status = 404;
-  res_ctx->body = "Not Found";
+  res_ctx->body = "not found\nant http v" ANT_VERSION " (" ANT_GIT_HASH ")";
   res_ctx->content_type = "text/plain";
   res_ctx->sent = 1;
 }
@@ -440,7 +421,7 @@ static void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
       response_ctx_t *res_ctx = malloc(sizeof(response_ctx_t));
       if (res_ctx) {
         res_ctx->status = 400;
-        res_ctx->body = "Bad Request";
+        res_ctx->body = "bad request\nant http v" ANT_VERSION " (" ANT_GIT_HASH ")";
         res_ctx->content_type = "text/plain";
         res_ctx->sent = 1;
         res_ctx->client_handle = &client->handle;
