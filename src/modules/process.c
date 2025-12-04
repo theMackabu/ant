@@ -8,6 +8,22 @@
 
 extern char **environ;
 
+static jsval_t env_getter(struct js *js, jsval_t obj, const char *key, size_t key_len) {
+  (void)obj;
+  
+  char *key_str = (char *)malloc(key_len + 1);
+  if (!key_str) return js_mkundef();
+  
+  memcpy(key_str, key, key_len);
+  key_str[key_len] = '\0';
+  
+  char *value = getenv(key_str);
+  free(key_str);
+  
+  if (value == NULL) return js_mkundef();
+  return js_mkstr(js, value, strlen(value));
+}
+
 static void load_dotenv_file(struct js *js, jsval_t env_obj) {
   FILE *fp = fopen(".env", "r");
   if (fp == NULL) return;
@@ -80,21 +96,6 @@ void init_process_module(void) {
   js_set(js, process_obj, "env", env_obj);
   js_set(js, process_obj, "exit", js_mkfun(process_exit));
   
-  for (char **env = environ; *env != NULL; env++) {
-    char *env_copy = strdup(*env);
-    if (env_copy == NULL) continue;
-    
-    char *equals = strchr(env_copy, '=');
-    if (equals != NULL) {
-      *equals = '\0';
-      char *key = env_copy;
-      char *value = equals + 1;
-      
-      js_set(js, env_obj, key, js_mkstr(js, value, strlen(value)));
-    }
-    
-    free(env_copy);
-  }
-  
   load_dotenv_file(js, env_obj);
+  js_set_getter(js, env_obj, env_getter);
 }

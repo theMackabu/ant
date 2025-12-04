@@ -80,3 +80,6 @@ void js_setup_import_meta(struct js *js, const char *filename);
 
 typedef jsval_t (*ant_library_init_fn)(struct js *js);
 void ant_register_library(const char *name, ant_library_init_fn init_fn);
+
+typedef jsval_t (*js_getter_fn)(struct js *js, jsval_t obj, const char *key, size_t key_len);
+void js_set_getter(struct js *js, jsval_t obj, js_getter_fn getter);

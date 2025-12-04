@@ -1451,6 +1451,26 @@ static jsoff_t lkp(struct js *js, jsval_t obj, const char *buf, size_t len) {
   return 0;
 }
 
+static jsval_t try_dynamic_getter(struct js *js, jsval_t obj, const char *key, size_t key_len) {
+  if (streq(key, key_len, "__getter", 8)) return js_mkundef();
+  
+  jsoff_t getter_off = lkp(js, obj, "__getter", 8);
+  if (getter_off == 0) return js_mkundef();
+  
+  jsval_t getter_val = resolveprop(js, mkval(T_PROP, getter_off));
+  if (vtype(getter_val) != T_CFUNC) return js_mkundef();
+  
+  js_getter_fn getter = (js_getter_fn)(void *)vdata(getter_val);
+  jsval_t result = getter(js, obj, key, key_len);
+  
+  if (vtype(result) != T_UNDEF) {
+    jsval_t key_str = js_mkstr(js, key, key_len);
+    setprop(js, obj, key_str, result);
+  }
+  
+  return result;
+}
+
 static jsval_t lookup(struct js *js, const char *buf, size_t len) {
   if (js->flags & F_NOEXEC) return 0;
   
@@ -1703,6 +1723,11 @@ static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
   if (vtype(l) != T_OBJ && vtype(l) != T_ARR) return js_mkerr(js, "lookup in non-obj");
   jsoff_t off = lkp(js, l, ptr, codereflen(r));
   if (off == 0) {
+    jsval_t result = try_dynamic_getter(js, l, ptr, codereflen(r));
+    if (vtype(result) != T_UNDEF) {
+      off = lkp(js, l, ptr, codereflen(r));
+      if (off != 0) return mkval(T_PROP, off);
+    }
     jsval_t key = js_mkstr(js, ptr, codereflen(r));
     jsval_t prop = setprop(js, l, key, js_mkundef());
     return prop;
@@ -7786,20 +7811,28 @@ void js_set(struct js *js, jsval_t obj, const char *key, jsval_t val) {
 }
 
 jsval_t js_get(struct js *js, jsval_t obj, const char *key) {
+  size_t key_len = strlen(key);
+  
   if (vtype(obj) == T_FUNC) {
     jsval_t func_obj = mkval(T_OBJ, vdata(obj));
-    jsoff_t off = lkp(js, func_obj, key, strlen(key));
+    jsoff_t off = lkp(js, func_obj, key, key_len);
     return off == 0 ? js_mkundef() : resolveprop(js, mkval(T_PROP, off));
   }
   
   if (vtype(obj) == T_ARR) {
     jsval_t arr_obj = mkval(T_OBJ, vdata(obj));
-    jsoff_t off = lkp(js, arr_obj, key, strlen(key));
+    jsoff_t off = lkp(js, arr_obj, key, key_len);
     return off == 0 ? js_mkundef() : resolveprop(js, mkval(T_PROP, off));
   }
   
   if (vtype(obj) != T_OBJ) return js_mkundef();
-  jsoff_t off = lkp(js, obj, key, strlen(key));
+  jsoff_t off = lkp(js, obj, key, key_len);
+  
+  if (off == 0) {
+    jsval_t result = try_dynamic_getter(js, obj, key, key_len);
+    if (vtype(result) != T_UNDEF) return result;
+  }
+  
   return off == 0 ? js_mkundef() : resolveprop(js, mkval(T_PROP, off));
 }
 
@@ -8096,3 +8129,9 @@ void js_dump(struct js *js) {
   }
 }
 #endif
+
+void js_set_getter(struct js *js, jsval_t obj, js_getter_fn getter) {
+  if (vtype(obj) != T_OBJ) return;
+  jsval_t getter_val = mkval(T_CFUNC, (size_t)(void *)getter);
+  js_set(js, obj, "__getter", getter_val);
+}
