@@ -14,6 +14,7 @@
 #include <unistd.h>
 #include <libgen.h>
 #include <sys/stat.h>
+#include <utarray.h>
 
 #include "ant.h"
 #include "config.h"
@@ -90,6 +91,23 @@ typedef struct {
   coroutine_t *coro;
 } async_exec_context_t;
 
+typedef struct {
+  jsoff_t offset;
+  jsoff_t size;
+  uint8_t type;
+  char detail[128];
+} FreeListEntry;
+
+static UT_array *global_free_list = NULL;
+static jsoff_t protected_brk = 0;
+
+static const UT_icd free_list_icd = {
+  .sz = sizeof(FreeListEntry),
+  .init = NULL,
+  .copy = NULL,
+  .dtor = NULL,
+};
+
 static this_stack_t global_this_stack = {NULL, 0, 0};
 static call_stack_t global_call_stack = {NULL, 0, 0};
 static coroutine_queue_t pending_coroutines = {NULL, NULL};
@@ -120,6 +138,11 @@ typedef struct ant_library {
 
 static ant_library_t *library_registry = NULL;
 static esm_module_cache_t global_module_cache = {NULL, 0};
+
+void js_protect_init_memory(struct js *js) {
+  protected_brk = js_getbrk(js);
+  if (protected_brk < 0x2000) protected_brk = 0x2000;
+}
 
 void ant_register_library(const char *name, ant_library_init_fn init_fn) {
   ant_library_t *lib = (ant_library_t *)ANT_GC_MALLOC(sizeof(ant_library_t));
@@ -254,6 +277,7 @@ static jsval_t do_op(struct js *, uint8_t op, jsval_t l, jsval_t r);
 static jsval_t do_instanceof(struct js *js, jsval_t l, jsval_t r);
 static jsval_t do_in(struct js *js, jsval_t l, jsval_t r);
 static jsval_t resolveprop(struct js *js, jsval_t v);
+static jsoff_t free_list_allocate(size_t size);
 static jsoff_t lkp(struct js *js, jsval_t obj, const char *buf, size_t len);
 static jsval_t builtin_array_push(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_array_pop(struct js *js, jsval_t *args, int nargs);
@@ -1005,17 +1029,20 @@ static bool js_try_grow_memory(struct js *js, size_t needed) {
   return true;
 }
 
+
 static jsoff_t js_alloc(struct js *js, size_t size) {
-  jsoff_t ofs = js->brk;
   size = align32((jsoff_t) size);
+  
+  jsoff_t ofs = free_list_allocate(size);
+  if (ofs != (jsoff_t) ~0) return ofs;
+  
+  ofs = js->brk;
   if (js->brk + size > js->size) {
     if (js_try_grow_memory(js, size)) {
       ofs = js->brk;
       if (js->brk + size > js->size) return ~(jsoff_t) 0;
     } else {
-      // Call bdwgc collector instead of custom GC
       ANT_GC_COLLECT();
-      // Also compact our arena if needed
       js_gc(js);
       ofs = js->brk;
       if (js->brk + size > js->size) {
@@ -1028,6 +1055,7 @@ static jsoff_t js_alloc(struct js *js, size_t size) {
       }
     }
   }
+  
   js->brk += (jsoff_t) size;
   return ofs;
 }
@@ -1117,56 +1145,6 @@ static bool is_mem_entity(uint8_t t) {
   return t == T_OBJ || t == T_PROP || t == T_STR || t == T_FUNC || t == T_ARR || t == T_PROMISE;
 }
 
-// DISABLED: These functions were causing memory corruption by moving offsets
-// Now we use bdwgc for C allocations and keep JS arena stable (no compacting)
-/*
-static void js_fixup_offsets(struct js *js, jsoff_t start, jsoff_t size) {
-  for (jsoff_t n, v, off = 0; off < js->brk; off += n) {
-    v = loadoff(js, off);
-    n = esize(v & ~(GCMASK | CONSTMASK));
-    if (v & GCMASK) continue;
-    
-    jsoff_t flags = v & (GCMASK | CONSTMASK);
-    jsoff_t cleaned = v & ~(GCMASK | CONSTMASK);
-    if ((cleaned & 3) != T_OBJ && (cleaned & 3) != T_PROP) continue;
-    jsoff_t adjusted = cleaned > start ? cleaned - size : cleaned;
-    if (cleaned != adjusted) saveoff(js, off, adjusted | flags);
-    if ((cleaned & 3) == T_OBJ) {
-      jsoff_t u = loadoff(js, (jsoff_t) (off + sizeof(jsoff_t)));
-      if (u > start) saveoff(js, (jsoff_t) (off + sizeof(jsoff_t)), u - size);
-    }
-    if ((cleaned & 3) == T_PROP) {
-      jsoff_t koff = loadoff(js, (jsoff_t) (off + sizeof(off)));
-      if (koff > start) saveoff(js, (jsoff_t) (off + sizeof(off)), koff - size);
-      jsval_t val = loadval(js, (jsoff_t) (off + sizeof(off) + sizeof(off)));
-      if (is_mem_entity(vtype(val)) && vdata(val) > start) {
-        saveval(js, (jsoff_t) (off + sizeof(off) + sizeof(off)), mkval(vtype(val), (unsigned long) (vdata(val) - size)));
-      }
-    }
-  }
-  
-  jsoff_t off = (jsoff_t) vdata(js->scope);
-  if (off > start) js->scope = mkval(T_OBJ, off - size);
-  if (js->nogc >= start) js->nogc -= size;
-  if (js->code > (char *) js->mem && js->code - (char *) js->mem < js->size && js->code - (char *) js->mem > start) {
-    js->code -= size;
-  }
-}
-
-static void js_delete_marked_entities(struct js *js) {
-  for (jsoff_t n, v, off = 0; off < js->brk; off += n) {
-    v = loadoff(js, off);
-    n = esize(v & ~(GCMASK | CONSTMASK));
-    if (v & GCMASK) {
-      js_fixup_offsets(js, off, n);
-      memmove(&js->mem[off], &js->mem[off + n], js->brk - off - n);
-      js->brk -= n;
-      n = 0;
-    }
-  }
-}
-*/
-
 static void js_mark_all_entities_for_deletion(struct js *js) {
   for (jsoff_t v, off = 0; off < js->brk; off += esize(v & ~(GCMASK | CONSTMASK))) {
     v = loadoff(js, off);
@@ -1199,31 +1177,153 @@ static void js_unmark_used_entities(struct js *js) {
   if (js->nogc) js_unmark_entity(js, js->nogc);
 }
 
+static void init_free_list(void) {
+  if (global_free_list == NULL) {
+    utarray_new(global_free_list, &free_list_icd);
+  } else {
+    utarray_clear(global_free_list);
+  }
+}
+
+static void free_list_clear(void) {
+  if (global_free_list != NULL) utarray_clear(global_free_list);
+}
+
+static void free_list_compact(void) {
+  unsigned int len = utarray_len(global_free_list);
+  if (len <= 1) return;
+  
+  FreeListEntry *entries = (FreeListEntry *)utarray_front(global_free_list);
+  
+  for (unsigned int i = 0; i < len - 1; i++) {
+    for (unsigned int j = 0; j < len - i - 1; j++) {
+      if (entries[j].offset > entries[j + 1].offset) {
+        FreeListEntry temp = entries[j];
+        entries[j] = entries[j + 1];
+        entries[j + 1] = temp;
+      }
+    }
+  }
+  
+  unsigned int write_pos = 0;
+  for (unsigned int i = 1; i < len; i++) {
+    if (entries[write_pos].offset + entries[write_pos].size == entries[i].offset) {
+      entries[write_pos].size += entries[i].size;
+    } else {
+      write_pos++;
+      entries[write_pos] = entries[i];
+    }
+  }
+  
+  unsigned int final_count = write_pos + 1;
+  while (utarray_len(global_free_list) > final_count) {
+    utarray_pop_back(global_free_list);
+  }
+}
+
+static jsoff_t free_list_zero_out(struct js *js) {
+  unsigned int len = utarray_len(global_free_list);
+  if (len == 0) return 0;
+  
+  jsoff_t total_freed = 0;
+  FreeListEntry *entries = (FreeListEntry *)utarray_front(global_free_list);
+  for (unsigned int i = 0; i < len; i++) {
+    if (entries[i].offset > 0 && entries[i].size > 0) {
+      if (entries[i].offset + entries[i].size > js->size) continue;      
+      memset(&js->mem[entries[i].offset], 0, entries[i].size);
+      total_freed += entries[i].size;
+    }
+  }
+  
+  return total_freed;
+}
+
+static jsoff_t free_list_allocate(size_t size) {
+  unsigned int len = utarray_len(global_free_list);
+  if (len == 0) return ~(jsoff_t) 0;
+  size = align32((jsoff_t) size);
+  
+  FreeListEntry *entries = (FreeListEntry *)utarray_front(global_free_list);
+  jsoff_t safe_reuse_threshold = protected_brk > 0 ? protected_brk + 0x8000 : 0x10000;
+  
+  for (unsigned int i = 0; i < len; i++) {
+    if (entries[i].offset >= safe_reuse_threshold && entries[i].size >= size) {
+      jsoff_t allocated_offset = entries[i].offset;
+      
+      entries[i].offset += size;
+      entries[i].size -= size;
+      
+      if (entries[i].size == 0) utarray_erase(global_free_list, i, 1);      
+      return allocated_offset;
+    }
+  }
+  
+  return ~(jsoff_t) 0;
+}
+
+static bool is_builtin_or_system(jsoff_t offset, struct js *js) {
+  jsval_t obj_val = mkval(T_OBJ, offset);
+  
+  jsoff_t native_off = lkp(js, obj_val, "__native_func", 13);
+  if (native_off != 0) return true;
+  
+  jsoff_t code_off = lkp(js, obj_val, "__code", 6);
+  if (code_off != 0) {
+    jsval_t code_val = resolveprop(js, mkval(T_PROP, code_off));
+    if (vtype(code_val) == T_STR) {
+      jsoff_t slen, str_off = vstr(js, code_val, &slen);
+      if (slen > 10 && memcmp(&js->mem[str_off], "__builtin_", 10) == 0) return true;
+    }
+  }
+  
+  return false;
+}
+
+static void free_list_add(jsoff_t offset, jsoff_t size, struct js *js) {
+  if (offset >= js->size || size == 0 || offset + size > js->size * 2) return;
+  if (protected_brk > 0) if (offset <= protected_brk) return;
+  
+  jsoff_t entity_val = loadoff(js, offset);
+  uint8_t entity_type = entity_val & 3;
+  
+  if (entity_type == T_OBJ && is_builtin_or_system(offset, js)) return;  
+  if (entity_type == T_PROP) return;  
+  if (entity_type == T_STR && offset < 0x1000) return;
+  
+  FreeListEntry entry = {0};
+  entry.offset = offset;
+  entry.size = size;
+  entry.type = entity_type;
+  entry.detail[0] = '\0';
+  
+  utarray_push_back(global_free_list, &entry);
+}
+
 static void js_clear_gc_marks(struct js *js) {
-  // Simply clear all GC marks without moving memory
   for (jsoff_t v, off = 0; off < js->brk; off += esize(v & ~(GCMASK | CONSTMASK))) {
     v = loadoff(js, off);
     if (v & GCMASK) {
-      // Keep the entity but clear the GC mark
+      jsoff_t size = esize(v & ~(GCMASK | CONSTMASK));
+      free_list_add(off, size, js);
       saveoff(js, off, v & ~GCMASK);
     }
   }
 }
 
-void js_gc(struct js *js) {
+jsoff_t js_gc(struct js *js) {
   setlwm(js);
-  if (js->nogc == (jsoff_t) ~0) return;
-  
-  // NOTE: We still do mark-and-sweep to identify live objects,
-  // but we NO LONGER compact/move memory. This prevents offset corruption.
-  // The bdwgc handles C-side allocations, and we keep the JS arena stable.
+  if (js->nogc == (jsoff_t) ~0) return 0;
   
   js_mark_all_entities_for_deletion(js);
   js_unmark_used_entities(js);
-  // REMOVED: js_delete_marked_entities(js);  // This was causing offset corruption
   
-  // Instead, we just clear the GC marks without moving anything
   js_clear_gc_marks(js);
+  free_list_compact();
+  
+  jsoff_t freed = free_list_zero_out(js);
+  if (global_free_list != NULL) utarray_clear(global_free_list);
+    
+  return freed;
 }
 
 static jsoff_t skiptonext(const char *code, jsoff_t len, jsoff_t n) {
@@ -7790,6 +7890,7 @@ static jsval_t js_export_stmt(struct js *js) {
 
 struct js *js_create(void *buf, size_t len) {
   ANT_GC_INIT();
+  init_free_list();
   
   struct js *js = NULL;
   if (len < sizeof(*js) + esize(T_OBJ)) return js;

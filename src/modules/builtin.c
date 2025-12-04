@@ -66,12 +66,13 @@ static jsval_t js_gc_trigger(struct js *js, jsval_t *args, int nargs) {
   (void) args; (void) nargs;
   size_t before_brk = js_getbrk(js);
   
-  js_gc(js);
+  uint32_t freed = js_gc(js);
   size_t after_brk = js_getbrk(js);
   
   jsval_t result = js_mkobj(js);
   js_set(js, result, "before", js_mknum((double)before_brk));
   js_set(js, result, "after", js_mknum((double)after_brk));
+  js_set(js, result, "freed", js_mknum((double)freed));
   
   return result;
 }

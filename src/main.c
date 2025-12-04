@@ -138,6 +138,8 @@ int main(int argc, char *argv[]) {
   ant_register_library("ant:fs", fs_library);
   ant_register_library("ant:shell", shell_library);
   ant_register_library("ant:path", path_library);
+  
+  js_protect_init_memory(js);
 
   if (repl_mode) ant_repl_run(); else {
     js_result = execute_module(js, module_file);

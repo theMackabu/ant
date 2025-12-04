@@ -32,9 +32,9 @@ arr = null;
 
 let gcResult = Ant.gc();
 console.log("GC result:");
-console.log("  before:", gcResult.before);
-console.log("  after:", gcResult.after);
-console.log("  freed:", gcResult.before - gcResult.after);
+console.log("  before break:", gcResult.before);
+console.log("  after break:", gcResult.after);
+console.log("  freed bytes:", gcResult.freed);
 
 console.log("\n=== Verifying memory after GC ===");
 let alloc3 = Ant.alloc();
@@ -58,7 +58,7 @@ for (let cycle = 0; cycle < 3; cycle = cycle + 1) {
     // Clear and collect
     temp = null;
     let gc = Ant.gc();
-    console.log("  After GC - used:", gc.after, "freed:", gc.before - gc.after);
+    console.log("  After GC - used:", gc.after, "freed bytes:", gc.freed);
 }
 
 console.log("\n=== Testing stats consistency ===");
