@@ -7,6 +7,7 @@
 #include <utarray.h>
 #include <unistd.h>
 
+#include "config.h"
 #include "runtime.h"
 #include "modules/fetch.h"
 #include "modules/timer.h"
@@ -59,9 +60,9 @@ static jsval_t create_response(struct js *js, int status, const char *body, size
   
   js_set(js, response_obj, "status", js_mknum(status));
   js_set(js, response_obj, "ok", status >= 200 && status < 300 ? js_mktrue() : js_mkfalse());
-  js_set(js, response_obj, "__body", js_mkstr(js, body, body_len));
+  js_set(js, response_obj, "body", js_mkstr(js, body, body_len));
   
-  const char *json_code = "(){return JSON.parse(this.__body)}";
+  const char *json_code = "(){return JSON.parse(this.body)}";
   jsval_t json_str = js_mkstr(js, json_code, strlen(json_code));
   jsval_t json_obj = js_mkobj(js);
   js_set(js, json_obj, "__code", json_str);
@@ -69,15 +70,6 @@ static jsval_t create_response(struct js *js, int status, const char *body, size
   memcpy(&json_func, &json_obj, sizeof(jsval_t));
   json_func = (json_func & 0xFFFFFFFFFFFFULL) | (0x7FF0000000000000ULL | ((uint64_t)7 << 48));
   js_set(js, response_obj, "json", json_func);
-  
-  const char *text_code = "(){return this.__body}";
-  jsval_t text_str = js_mkstr(js, text_code, strlen(text_code));
-  jsval_t text_obj = js_mkobj(js);
-  js_set(js, text_obj, "__code", text_str);
-  jsval_t text_func = js_mknum(0);
-  memcpy(&text_func, &text_obj, sizeof(jsval_t));
-  text_func = (text_func & 0xFFFFFFFFFFFFULL) | (0x7FF0000000000000ULL | ((uint64_t)7 << 48));
-  js_set(js, response_obj, "text", text_func);
   
   return response_obj;
 }
@@ -263,6 +255,10 @@ static jsval_t do_fetch_microtask(struct js *js, jsval_t *args, int nargs) {
   }
   
   req->http_req->data = req;
+  
+  char user_agent[256];
+  snprintf(user_agent, sizeof(user_agent), "ant/%s", ANT_VERSION);
+  tlsuv_http_req_header(req->http_req, "User-Agent", user_agent);
   
   if (js_type(options_val) != JS_UNDEF && js_type(options_val) != JS_NULL) {
     jsval_t headers_val = js_get(js, options_val, "headers");

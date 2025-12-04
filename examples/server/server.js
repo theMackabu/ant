@@ -29,8 +29,7 @@ router.insert('/hello', async c => {
 
 router.insert('/status', async c => {
   await new Promise(resolve => setTimeout(resolve, 1000));
-  // const result = await Promise.resolve('Hello');
-  const result = (await fetch('http://localhost:8000/meow')).text();
+  const result = await Promise.resolve('Hello');
   return c.res.body(`server is responding with ${result}`);
 });
 
@@ -46,9 +45,14 @@ router.insert('/api/v1/users', async c => {
   return c.res.json({ users: [] });
 });
 
+router.insert('/zen', async c => {
+  const response = await fetch('https://api.github.com/zen');
+  return c.res.body(response.body);
+});
+
 router.insert('/api/v2/demo', async c => {
-  const data = (await fetch('https://themackabu.dev/test.json')).json();
-  return c.res.json(data);
+  const data = await fetch('https://themackabu.dev/test.json');
+  return c.res.json(data.json());
 });
 
 router.insert('/files/*path', async c => {
