@@ -7,6 +7,7 @@
 #include <uthash.h>
 #include <utarray.h>
 #include <unistd.h>
+#include <errno.h>
 #include "modules/fs.h"
 #include "runtime.h"
 
@@ -284,6 +285,59 @@ static void ensure_fs_loop(void) {
   }
 }
 
+static jsval_t builtin_fs_readFileSync(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "readFileSync() requires a path argument");
+  
+  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "readFileSync() path must be a string");
+  
+  size_t path_len;
+  char *path = js_getstr(js, args[0], &path_len);
+  if (!path) return js_mkerr(js, "Failed to get path string");
+  
+  char *path_cstr = strndup(path, path_len);
+  if (!path_cstr) return js_mkerr(js, "Out of memory");
+  
+  FILE *file = fopen(path_cstr, "rb");
+  if (!file) {
+    char err_msg[256];
+    snprintf(err_msg, sizeof(err_msg), "Failed to open file: %s", strerror(errno));
+    free(path_cstr);
+    return js_mkerr(js, err_msg);
+  }
+  
+  fseek(file, 0, SEEK_END);
+  long file_size = ftell(file);
+  fseek(file, 0, SEEK_SET);
+  
+  if (file_size < 0) {
+    fclose(file);
+    free(path_cstr);
+    return js_mkerr(js, "Failed to get file size");
+  }
+  
+  char *data = malloc(file_size + 1);
+  if (!data) {
+    fclose(file);
+    free(path_cstr);
+    return js_mkerr(js, "Out of memory");
+  }
+  
+  size_t bytes_read = fread(data, 1, file_size, file);
+  fclose(file);
+  free(path_cstr);
+  
+  if (bytes_read != (size_t)file_size) {
+    free(data);
+    return js_mkerr(js, "Failed to read entire file");
+  }
+  
+  data[file_size] = '\0';
+  jsval_t result = js_mkstr(js, data, file_size);
+  free(data);
+  
+  return result;
+}
+
 static jsval_t builtin_fs_readFile(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "readFile() requires a path argument");
   
@@ -316,6 +370,40 @@ static jsval_t builtin_fs_readFile(struct js *js, jsval_t *args, int nargs) {
   }
   
   return req->promise;
+}
+
+static jsval_t builtin_fs_writeFileSync(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 2) return js_mkerr(js, "writeFileSync() requires path and data arguments");
+  
+  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "writeFileSync() path must be a string");
+  if (js_type(args[1]) != JS_STR) return js_mkerr(js, "writeFileSync() data must be a string");
+  
+  size_t path_len, data_len;
+  char *path = js_getstr(js, args[0], &path_len);
+  char *data = js_getstr(js, args[1], &data_len);
+  
+  if (!path || !data) return js_mkerr(js, "Failed to get arguments");
+  
+  char *path_cstr = strndup(path, path_len);
+  if (!path_cstr) return js_mkerr(js, "Out of memory");
+  
+  FILE *file = fopen(path_cstr, "wb");
+  if (!file) {
+    char err_msg[256];
+    snprintf(err_msg, sizeof(err_msg), "Failed to open file: %s", strerror(errno));
+    free(path_cstr);
+    return js_mkerr(js, err_msg);
+  }
+  
+  size_t bytes_written = fwrite(data, 1, data_len, file);
+  fclose(file);
+  free(path_cstr);
+  
+  if (bytes_written != data_len) {
+    return js_mkerr(js, "Failed to write entire file");
+  }
+  
+  return js_mkundef();
 }
 
 static jsval_t builtin_fs_writeFile(struct js *js, jsval_t *args, int nargs) {
@@ -365,6 +453,30 @@ static jsval_t builtin_fs_writeFile(struct js *js, jsval_t *args, int nargs) {
   return req->promise;
 }
 
+static jsval_t builtin_fs_unlinkSync(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "unlinkSync() requires a path argument");
+  
+  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "unlinkSync() path must be a string");
+  
+  size_t path_len;
+  char *path = js_getstr(js, args[0], &path_len);
+  if (!path) return js_mkerr(js, "Failed to get path string");
+  
+  char *path_cstr = strndup(path, path_len);
+  if (!path_cstr) return js_mkerr(js, "Out of memory");
+  
+  int result = unlink(path_cstr);
+  free(path_cstr);
+  
+  if (result != 0) {
+    char err_msg[256];
+    snprintf(err_msg, sizeof(err_msg), "Failed to unlink file: %s", strerror(errno));
+    return js_mkerr(js, err_msg);
+  }
+  
+  return js_mkundef();
+}
+
 static jsval_t builtin_fs_unlink(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "unlink() requires a path argument");
   
@@ -397,6 +509,39 @@ static jsval_t builtin_fs_unlink(struct js *js, jsval_t *args, int nargs) {
   }
   
   return req->promise;
+}
+
+static jsval_t builtin_fs_mkdirSync(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "mkdirSync() requires a path argument");
+  
+  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "mkdirSync() path must be a string");
+  
+  size_t path_len;
+  char *path = js_getstr(js, args[0], &path_len);
+  if (!path) return js_mkerr(js, "Failed to get path string");
+  
+  int mode = 0755;
+  if (nargs >= 2 && js_type(args[1]) == JS_NUM) {
+    mode = (int)js_getnum(args[1]);
+  }
+  
+  char *path_cstr = strndup(path, path_len);
+  if (!path_cstr) return js_mkerr(js, "Out of memory");
+  
+#ifdef _WIN32
+  int result = _mkdir(path_cstr);
+#else
+  int result = mkdir(path_cstr, mode);
+#endif
+  free(path_cstr);
+  
+  if (result != 0) {
+    char err_msg[256];
+    snprintf(err_msg, sizeof(err_msg), "Failed to create directory: %s", strerror(errno));
+    return js_mkerr(js, err_msg);
+  }
+  
+  return js_mkundef();
 }
 
 static jsval_t builtin_fs_mkdir(struct js *js, jsval_t *args, int nargs) {
@@ -438,6 +583,34 @@ static jsval_t builtin_fs_mkdir(struct js *js, jsval_t *args, int nargs) {
   return req->promise;
 }
 
+static jsval_t builtin_fs_rmdirSync(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "rmdirSync() requires a path argument");
+  
+  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "rmdirSync() path must be a string");
+  
+  size_t path_len;
+  char *path = js_getstr(js, args[0], &path_len);
+  if (!path) return js_mkerr(js, "Failed to get path string");
+  
+  char *path_cstr = strndup(path, path_len);
+  if (!path_cstr) return js_mkerr(js, "Out of memory");
+  
+#ifdef _WIN32
+  int result = _rmdir(path_cstr);
+#else
+  int result = rmdir(path_cstr);
+#endif
+  free(path_cstr);
+  
+  if (result != 0) {
+    char err_msg[256];
+    snprintf(err_msg, sizeof(err_msg), "Failed to remove directory: %s", strerror(errno));
+    return js_mkerr(js, err_msg);
+  }
+  
+  return js_mkundef();
+}
+
 static jsval_t builtin_fs_rmdir(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "rmdir() requires a path argument");
   
@@ -470,6 +643,37 @@ static jsval_t builtin_fs_rmdir(struct js *js, jsval_t *args, int nargs) {
   }
   
   return req->promise;
+}
+
+static jsval_t builtin_fs_statSync(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "statSync() requires a path argument");
+  
+  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "statSync() path must be a string");
+  
+  size_t path_len;
+  char *path = js_getstr(js, args[0], &path_len);
+  if (!path) return js_mkerr(js, "Failed to get path string");
+  
+  char *path_cstr = strndup(path, path_len);
+  if (!path_cstr) return js_mkerr(js, "Out of memory");
+  
+  struct stat st;
+  int result = stat(path_cstr, &st);
+  free(path_cstr);
+  
+  if (result != 0) {
+    char err_msg[256];
+    snprintf(err_msg, sizeof(err_msg), "Failed to stat file: %s", strerror(errno));
+    return js_mkerr(js, err_msg);
+  }
+  
+  jsval_t stat_obj = js_mkobj(js);
+  js_set(js, stat_obj, "size", js_mknum((double)st.st_size));
+  js_set(js, stat_obj, "mode", js_mknum((double)st.st_mode));
+  js_set(js, stat_obj, "isFile", S_ISREG(st.st_mode) ? js_mktrue() : js_mkfalse());
+  js_set(js, stat_obj, "isDirectory", S_ISDIR(st.st_mode) ? js_mktrue() : js_mkfalse());
+  
+  return stat_obj;
 }
 
 static jsval_t builtin_fs_stat(struct js *js, jsval_t *args, int nargs) {
@@ -510,11 +714,17 @@ jsval_t fs_library(struct js *js) {
   jsval_t lib = js_mkobj(js);
   
   js_set(js, lib, "readFile", js_mkfun(builtin_fs_readFile));
+  js_set(js, lib, "readFileSync", js_mkfun(builtin_fs_readFileSync));
   js_set(js, lib, "writeFile", js_mkfun(builtin_fs_writeFile));
+  js_set(js, lib, "writeFileSync", js_mkfun(builtin_fs_writeFileSync));
   js_set(js, lib, "unlink", js_mkfun(builtin_fs_unlink));
+  js_set(js, lib, "unlinkSync", js_mkfun(builtin_fs_unlinkSync));
   js_set(js, lib, "mkdir", js_mkfun(builtin_fs_mkdir));
+  js_set(js, lib, "mkdirSync", js_mkfun(builtin_fs_mkdirSync));
   js_set(js, lib, "rmdir", js_mkfun(builtin_fs_rmdir));
+  js_set(js, lib, "rmdirSync", js_mkfun(builtin_fs_rmdirSync));
   js_set(js, lib, "stat", js_mkfun(builtin_fs_stat));
+  js_set(js, lib, "statSync", js_mkfun(builtin_fs_statSync));
   
   return lib;
 }
