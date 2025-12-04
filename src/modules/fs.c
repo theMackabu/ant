@@ -215,6 +215,7 @@ static void on_unlink_complete(uv_fs_t *uv_req) {
     req->error_msg = strdup(uv_strerror(uv_req->result));
   }
   
+  uv_fs_req_cleanup(uv_req);
   req->completed = 1;
   complete_request(req);
 }
@@ -227,6 +228,7 @@ static void on_mkdir_complete(uv_fs_t *uv_req) {
     req->error_msg = strdup(uv_strerror(uv_req->result));
   }
   
+  uv_fs_req_cleanup(uv_req);
   req->completed = 1;
   complete_request(req);
 }
@@ -239,6 +241,7 @@ static void on_rmdir_complete(uv_fs_t *uv_req) {
     req->error_msg = strdup(uv_strerror(uv_req->result));
   }
   
+  uv_fs_req_cleanup(uv_req);
   req->completed = 1;
   complete_request(req);
 }
