@@ -142,6 +142,7 @@ export class Radix3 {
     this.insertPath(newChild, path, handler, end);
   }
 
+  // if the method is wrong return null instead of undefined
   lookup(path, method = 'GET') {
     const params = {};
     const fullPath = `${method}#${path}`;
