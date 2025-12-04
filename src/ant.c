@@ -15,6 +15,7 @@
 #include <libgen.h>
 #include <sys/stat.h>
 #include <utarray.h>
+#include <uthash.h>
 
 #include "ant.h"
 #include "config.h"
@@ -131,9 +132,9 @@ typedef struct {
 } esm_module_cache_t;
 
 typedef struct ant_library {
-  char *name;
+  char name[256];
   ant_library_init_fn init_fn;
-  struct ant_library *next;
+  UT_hash_handle hh;
 } ant_library_t;
 
 static ant_library_t *library_registry = NULL;
@@ -148,13 +149,23 @@ void ant_register_library(const char *name, ant_library_init_fn init_fn) {
   ant_library_t *lib = (ant_library_t *)ANT_GC_MALLOC(sizeof(ant_library_t));
   if (!lib) return;
   
-  size_t name_len = strlen(name) + 1;
-  lib->name = (char *)ANT_GC_MALLOC_ATOMIC(name_len);
-  if (lib->name) memcpy(lib->name, name, name_len);
-  
+  strncpy(lib->name, name, sizeof(lib->name) - 1);
+  lib->name[sizeof(lib->name) - 1] = '\0';
   lib->init_fn = init_fn;
-  lib->next = library_registry;
-  library_registry = lib;
+  
+  HASH_ADD_STR(library_registry, name, lib);
+}
+
+static ant_library_t* find_library(const char *specifier, size_t spec_len) {
+  ant_library_t *lib = NULL;
+  
+  char key[256];
+  if (spec_len >= sizeof(key)) return NULL;
+  memcpy(key, specifier, spec_len);
+  key[spec_len] = '\0';
+  
+  HASH_FIND_STR(library_registry, key, lib);
+  return lib;
 }
 
 struct js {
@@ -7455,15 +7466,12 @@ static jsval_t builtin_import(struct js *js, jsval_t *args, int nargs) {
   jsoff_t spec_off = vstr(js, args[0], &spec_len);
   const char *specifier = (char *)&js->mem[spec_off];
   
-  ant_library_t *lib = library_registry;
-  while (lib) {
-    if (strlen(lib->name) == spec_len && memcmp(lib->name, specifier, spec_len) == 0) {
-      jsval_t lib_obj = lib->init_fn(js);
-      if (is_err(lib_obj)) return builtin_Promise_reject(js, &lib_obj, 1);
-      jsval_t promise_args[] = { lib_obj };
-      return builtin_Promise_resolve(js, promise_args, 1);
-    }
-    lib = lib->next;
+  ant_library_t *lib = find_library(specifier, spec_len);
+  if (lib) {
+    jsval_t lib_obj = lib->init_fn(js);
+    if (is_err(lib_obj)) return builtin_Promise_reject(js, &lib_obj, 1);
+    jsval_t promise_args[] = { lib_obj };
+    return builtin_Promise_resolve(js, promise_args, 1);
   }
   
   const char *base_path = js->filename ? js->filename : ".";
@@ -7600,19 +7608,10 @@ static jsval_t js_import_stmt(struct js *js) {
     const char *specifier = (char *)&js->mem[spec_off];
     
     jsval_t ns = js_mkundef();
-    bool is_library = false;
-    
-    ant_library_t *lib = library_registry;
-    while (lib) {
-      if (strlen(lib->name) == spec_len && memcmp(lib->name, specifier, spec_len) == 0) {
-        ns = lib->init_fn(js);
-        is_library = true;
-        break;
-      }
-      lib = lib->next;
-    }
-    
-    if (!is_library) {
+    ant_library_t *lib = find_library(specifier, spec_len);
+    if (lib) {
+     ns = lib->init_fn(js);
+    } else {
       const char *base_path = js->filename ? js->filename : ".";
       char *resolved_path = esm_resolve_path(specifier, base_path);
       if (!resolved_path) {
@@ -7663,19 +7662,10 @@ static jsval_t js_import_stmt(struct js *js) {
     const char *specifier = (char *)&js->mem[spec_off];
     
     jsval_t ns = js_mkundef();
-    bool is_library = false;
-    
-    ant_library_t *lib = library_registry;
-    while (lib) {
-      if (strlen(lib->name) == spec_len && memcmp(lib->name, specifier, spec_len) == 0) {
-        ns = lib->init_fn(js);
-        is_library = true;
-        break;
-      }
-      lib = lib->next;
-    }
-    
-    if (!is_library) {
+    ant_library_t *lib = find_library(specifier, spec_len);
+    if (lib) {
+      ns = lib->init_fn(js);
+    } else {
       const char *base_path = js->filename ? js->filename : ".";
       char *resolved_path = esm_resolve_path(specifier, base_path);
       if (!resolved_path) {
@@ -7764,19 +7754,10 @@ static jsval_t js_import_stmt(struct js *js) {
     const char *specifier = (char *)&js->mem[spec_off];
     
     jsval_t ns = js_mkundef();
-    bool is_library = false;
-    
-    ant_library_t *lib = library_registry;
-    while (lib) {
-      if (strlen(lib->name) == spec_len && memcmp(lib->name, specifier, spec_len) == 0) {
-        ns = lib->init_fn(js);
-        is_library = true;
-        break;
-      }
-      lib = lib->next;
-    }
-    
-    if (!is_library) {
+    ant_library_t *lib = find_library(specifier, spec_len);
+    if (lib) {
+      ns = lib->init_fn(js);
+    } else {
       const char *base_path = js->filename ? js->filename : ".";
       char *resolved_path = esm_resolve_path(specifier, base_path);
       if (!resolved_path) return js_mkerr(js, "Cannot resolve module: %.*s", (int)spec_len, specifier);
