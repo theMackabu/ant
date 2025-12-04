@@ -68,7 +68,7 @@ endif
 build_date = run_command('date', '+%Y-%m-%d', check: true).stdout().strip()
 
 version_conf = configuration_data()
-version_conf.set('ANT_VERSION', '0.0.6.41')
+version_conf.set('ANT_VERSION', '0.0.7.1')
 version_conf.set('ANT_GIT_HASH', git_hash)
 version_conf.set('ANT_BUILD_DATE', build_date)
 
@@ -79,7 +79,12 @@ config_h = configure_file(
 )
 
 build_include = include_directories('.')
-add_project_arguments('-D JS_DUMP', '-Wno-unused-function', language: 'c')
+
+add_project_arguments(
+  '-D JS_DUMP',
+  '-Wno-unused-function',
+  '-D NO_EXECUTE_PERMISSION',
+language: 'c')
 
 gen_snapshot = executable(
   'gen_snapshot',

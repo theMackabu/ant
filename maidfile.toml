@@ -6,6 +6,9 @@ script = "meson compile"
 path = "build"
 script = "meson clean"
 
+[tasks.setup]
+script = "bash -c 'CC=/opt/homebrew/opt/llvm/bin/clang meson setup build --wipe -Dc_args=-DNO_EXECUTE_PERMISSION'"
+
 [tasks.run]
 script = ["maid build -q", "./build/ant %{arg.1}"]
 

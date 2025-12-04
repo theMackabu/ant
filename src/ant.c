@@ -17,6 +17,7 @@
 
 #include "ant.h"
 #include "config.h"
+#include "arena.h"
 
 #include "modules/fs.h"
 #include "modules/timer.h"
@@ -121,10 +122,13 @@ static ant_library_t *library_registry = NULL;
 static esm_module_cache_t global_module_cache = {NULL, 0};
 
 void ant_register_library(const char *name, ant_library_init_fn init_fn) {
-  ant_library_t *lib = (ant_library_t *)malloc(sizeof(ant_library_t));
+  ant_library_t *lib = (ant_library_t *)ANT_GC_MALLOC(sizeof(ant_library_t));
   if (!lib) return;
   
-  lib->name = strdup(name);
+  size_t name_len = strlen(name) + 1;
+  lib->name = (char *)ANT_GC_MALLOC_ATOMIC(name_len);
+  if (lib->name) memcpy(lib->name, name, name_len);
+  
   lib->init_fn = init_fn;
   lib->next = library_registry;
   library_registry = lib;
@@ -500,7 +504,7 @@ void js_run_event_loop(struct js *js) {
 
 static jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t code_len, jsval_t closure_scope, jsval_t *args, int nargs) {
   jsval_t promise = js_mkpromise(js);  
-  async_exec_context_t *ctx = (async_exec_context_t *)malloc(sizeof(async_exec_context_t));
+  async_exec_context_t *ctx = (async_exec_context_t *)ANT_GC_MALLOC(sizeof(async_exec_context_t));
   if (!ctx) return js_mkerr(js, "out of memory for async context");
   
   ctx->js = js;
@@ -518,14 +522,14 @@ static jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t 
   mco_coro* mco = NULL;
   mco_result res = mco_create(&mco, &desc);
   if (res != MCO_SUCCESS) {
-    free(ctx);
+    ANT_GC_FREE(ctx);
     return js_mkerr(js, "failed to create minicoro coroutine");
   }
   
-  coroutine_t *coro = (coroutine_t *)malloc(sizeof(coroutine_t));
+  coroutine_t *coro = (coroutine_t *)ANT_GC_MALLOC(sizeof(coroutine_t));
   if (!coro) {
     mco_destroy(mco);
-    free(ctx);
+    ANT_GC_FREE(ctx);
     return js_mkerr(js, "out of memory for coroutine");
   }
   
@@ -537,7 +541,7 @@ static jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t 
   coro->result = js_mkundef();
   coro->async_func = js->current_func;
   if (nargs > 0) {
-    coro->args = (jsval_t *)malloc(sizeof(jsval_t) * nargs);
+    coro->args = (jsval_t *)ANT_GC_MALLOC(sizeof(jsval_t) * nargs);
     if (coro->args) memcpy(coro->args, args, sizeof(jsval_t) * nargs);
   } else {
     coro->args = NULL;
@@ -560,7 +564,7 @@ static jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t 
   if (res != MCO_SUCCESS && mco_status(mco) != MCO_DEAD) {
     dequeue_coroutine();
     free_coroutine(coro);
-    free(ctx);
+    ANT_GC_FREE(ctx);
     return js_mkerr(js, "failed to start coroutine");
   }
   
@@ -568,7 +572,7 @@ static jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t 
   if (mco_status(mco) == MCO_DEAD) {
     dequeue_coroutine();
     free_coroutine(coro);
-    free(ctx);
+    ANT_GC_FREE(ctx);
   }
   
   return promise;
@@ -580,8 +584,8 @@ static void free_coroutine(coroutine_t *coro) {
       mco_destroy(coro->mco);
       coro->mco = NULL;
     }
-    if (coro->args) free(coro->args);
-    free(coro);
+    if (coro->args) ANT_GC_FREE(coro->args);
+    ANT_GC_FREE(coro);
   }
 }
 
@@ -982,7 +986,7 @@ static bool js_try_grow_memory(struct js *js, size_t needed) {
   if (new_size <= current_total) return false;
   
   void *old_buf = (void *)((uint8_t *)js - 0);
-  void *new_buf = realloc(old_buf, new_size);
+  void *new_buf = ANT_GC_REALLOC(old_buf, new_size);
   
   if (new_buf == NULL) return false;
   struct js *new_js = (struct js *)new_buf;
@@ -1009,6 +1013,9 @@ static jsoff_t js_alloc(struct js *js, size_t size) {
       ofs = js->brk;
       if (js->brk + size > js->size) return ~(jsoff_t) 0;
     } else {
+      // Call bdwgc collector instead of custom GC
+      ANT_GC_COLLECT();
+      // Also compact our arena if needed
       js_gc(js);
       ofs = js->brk;
       if (js->brk + size > js->size) {
@@ -1110,6 +1117,9 @@ static bool is_mem_entity(uint8_t t) {
   return t == T_OBJ || t == T_PROP || t == T_STR || t == T_FUNC || t == T_ARR || t == T_PROMISE;
 }
 
+// DISABLED: These functions were causing memory corruption by moving offsets
+// Now we use bdwgc for C allocations and keep JS arena stable (no compacting)
+/*
 static void js_fixup_offsets(struct js *js, jsoff_t start, jsoff_t size) {
   for (jsoff_t n, v, off = 0; off < js->brk; off += n) {
     v = loadoff(js, off);
@@ -1155,6 +1165,7 @@ static void js_delete_marked_entities(struct js *js) {
     }
   }
 }
+*/
 
 static void js_mark_all_entities_for_deletion(struct js *js) {
   for (jsoff_t v, off = 0; off < js->brk; off += esize(v & ~(GCMASK | CONSTMASK))) {
@@ -1188,12 +1199,31 @@ static void js_unmark_used_entities(struct js *js) {
   if (js->nogc) js_unmark_entity(js, js->nogc);
 }
 
+static void js_clear_gc_marks(struct js *js) {
+  // Simply clear all GC marks without moving memory
+  for (jsoff_t v, off = 0; off < js->brk; off += esize(v & ~(GCMASK | CONSTMASK))) {
+    v = loadoff(js, off);
+    if (v & GCMASK) {
+      // Keep the entity but clear the GC mark
+      saveoff(js, off, v & ~GCMASK);
+    }
+  }
+}
+
 void js_gc(struct js *js) {
   setlwm(js);
   if (js->nogc == (jsoff_t) ~0) return;
+  
+  // NOTE: We still do mark-and-sweep to identify live objects,
+  // but we NO LONGER compact/move memory. This prevents offset corruption.
+  // The bdwgc handles C-side allocations, and we keep the JS arena stable.
+  
   js_mark_all_entities_for_deletion(js);
   js_unmark_used_entities(js);
-  js_delete_marked_entities(js);
+  // REMOVED: js_delete_marked_entities(js);  // This was causing offset corruption
+  
+  // Instead, we just clear the GC marks without moving anything
+  js_clear_gc_marks(js);
 }
 
 static jsoff_t skiptonext(const char *code, jsoff_t len, jsoff_t n) {
@@ -7759,6 +7789,8 @@ static jsval_t js_export_stmt(struct js *js) {
 }
 
 struct js *js_create(void *buf, size_t len) {
+  ANT_GC_INIT();
+  
   struct js *js = NULL;
   if (len < sizeof(*js) + esize(T_OBJ)) return js;
   memset(buf, 0, len);
@@ -7839,12 +7871,12 @@ struct js *js_create_dynamic(size_t initial_size, size_t max_size) {
   if (initial_size < sizeof(struct js) + esize(T_OBJ)) initial_size = 1024 * 1024;
   if (max_size == 0 || max_size < initial_size) max_size = 512 * 1024 * 1024;
   
-  void *buf = malloc(initial_size);
+  void *buf = ANT_GC_MALLOC(initial_size);
   if (buf == NULL) return NULL;
   
   struct js *js = js_create(buf, initial_size);
   if (js == NULL) {
-    free(buf);
+    ANT_GC_FREE(buf);
     return NULL;
   }
   
@@ -7858,7 +7890,7 @@ void js_destroy(struct js *js) {
   if (js == NULL) return;
   
   if (js->owns_mem) {
-    free((void *)((uint8_t *)js - 0));
+    ANT_GC_FREE((void *)((uint8_t *)js - 0));
   }
 }
 
