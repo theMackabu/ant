@@ -736,6 +736,62 @@ static size_t strarr(struct js *js, jsval_t obj, char *buf, size_t len) {
   return n;
 }
 
+static size_t array_to_string(struct js *js, jsval_t obj, char *buf, size_t len) {
+  if (is_circular(obj)) return cpy(buf, len, "", 0);
+  
+  push_stringify(obj);
+  size_t n = 0;
+  jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK);
+  jsoff_t length = 0;
+  jsoff_t scan = next;
+  
+  while (scan < js->brk && scan != 0) {
+    jsoff_t koff = loadoff(js, scan + (jsoff_t) sizeof(scan));
+    jsoff_t klen = offtolen(loadoff(js, koff));
+    const char *key = (char *) &js->mem[koff + sizeof(koff)];
+    
+    if (streq(key, klen, "length", 6)) {
+      jsval_t val = loadval(js, scan + (jsoff_t) (sizeof(scan) + sizeof(koff)));
+      if (vtype(val) == T_NUM) length = (jsoff_t) tod(val);
+      break;
+    }
+    scan = loadoff(js, scan) & ~(3U | CONSTMASK);
+  }
+  
+  for (jsoff_t i = 0; i < length; i++) {
+    if (i > 0) n += cpy(buf + n, len - n, ",", 1);
+    char idx[16];
+    snprintf(idx, sizeof(idx), "%u", (unsigned) i);
+    
+    jsoff_t idxlen = (jsoff_t) strlen(idx);
+    jsoff_t prop = next;
+    jsval_t val = js_mkundef();
+    
+    bool found = false;
+    
+    while (prop < js->brk && prop != 0) {
+      jsoff_t koff = loadoff(js, prop + (jsoff_t) sizeof(prop));
+      jsoff_t klen = offtolen(loadoff(js, koff));
+      const char *key = (char *) &js->mem[koff + sizeof(koff)];
+      if (streq(key, klen, idx, idxlen)) {
+        val = loadval(js, prop + (jsoff_t) (sizeof(prop) + sizeof(koff)));
+        found = true;
+        break;
+      }
+      prop = loadoff(js, prop) & ~(3U | CONSTMASK);
+    }
+    
+    if (found) {
+      n += tostr(js, val, buf + n, len - n);
+    } else {
+      n += cpy(buf + n, len - n, "", 0);
+    }
+  }
+  
+  pop_stringify();
+  return n;
+}
+
 static size_t strdate(struct js *js, jsval_t obj, char *buf, size_t len) {
   jsoff_t time_off = lkp(js, obj, "__time", 6);
   if (time_off == 0) return cpy(buf, len, "Invalid Date", 12);
@@ -1210,10 +1266,9 @@ static jsval_t mkprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v, bool is_
   memcpy(buf, &koff, sizeof(koff));
   memcpy(buf + sizeof(koff), &v, sizeof(v));
   jsoff_t brk = js->brk | T_OBJ;
+  
   if (is_const) brk |= CONSTMASK;
   memcpy(&js->mem[head], &brk, sizeof(brk));
-  
-  // Invalidate property cache for this object when a new property is added
   invalidate_obj_cache(head);
   
   return mkentity(js, (b & ~(3U | CONSTMASK)) | T_PROP, buf, sizeof(buf));
@@ -2566,22 +2621,34 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
     }
     return mkval(T_BOOL, op == TOK_EQ ? eq : !eq);
   }
-  if (op == TOK_PLUS && (vtype(l) == T_STR || vtype(r) == T_STR)) {
+  if (op == TOK_PLUS && (vtype(l) == T_STR || vtype(r) == T_STR || vtype(l) == T_ARR || vtype(r) == T_ARR)) {
     jsval_t l_str = l, r_str = r;
-    if (vtype(l) != T_STR) {
+    
+    if (vtype(l) == T_ARR) {
+      char buf[1024];
+      size_t len = array_to_string(js, l, buf, sizeof(buf));
+      l_str = js_mkstr(js, buf, len);
+      if (is_err(l_str)) return l_str;
+    } else if (vtype(l) != T_STR) {
       const char *str = js_str(js, l);
       l_str = js_mkstr(js, str, strlen(str));
       if (is_err(l_str)) return l_str;
     }
-    if (vtype(r) != T_STR) {
+    
+    if (vtype(r) == T_ARR) {
+      char buf[1024];
+      size_t len = array_to_string(js, r, buf, sizeof(buf));
+      r_str = js_mkstr(js, buf, len);
+      if (is_err(r_str)) return r_str;
+    } else if (vtype(r) != T_STR) {
       const char *str = js_str(js, r);
       r_str = js_mkstr(js, str, strlen(str));
       if (is_err(r_str)) return r_str;
     }
+    
     return do_string_op(js, op, l_str, r_str);
   }
   if (vtype(l) == T_STR && vtype(r) == T_STR) {
-    // Fast path for string+string without type coercion
     return do_string_op(js, op, l, r);
   }
   
@@ -2604,6 +2671,8 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
     a = 0.0;
   } else if (vtype(l) == T_UNDEF) {
     a = NAN;
+  } else if (vtype(l) == T_ARR) {
+    a = NAN;
   } else {
     a = NAN;
   }
@@ -2624,6 +2693,8 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
   } else if (vtype(r) == T_NULL) {
     b = 0.0;
   } else if (vtype(r) == T_UNDEF) {
+    b = NAN;
+  } else if (vtype(r) == T_ARR) {
     b = NAN;
   } else {
     b = NAN;

@@ -1,0 +1,12 @@
+console.log([] + []);
+console.log([] + [1]);
+console.log([1] + [1]);
+console.log([1,2] + [3]);
+console.log([1,2,3] + []);
+console.log([1,2] + "test");
+console.log("test" + [1,2]);
+console.log([1,2] + 5);
+console.log(5 + [1,2]);
+console.log([1,2] * 3);
+console.log([1,2] - 1);
+console.log([1,2] / 2);
