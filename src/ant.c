@@ -1299,6 +1299,50 @@ static void free_list_add(jsoff_t offset, jsoff_t size, struct js *js) {
   utarray_push_back(global_free_list, &entry);
 }
 
+static void js_fixup_offsets(struct js *js, jsoff_t start, jsoff_t size) {
+  for (jsoff_t n, v, off = 0; off < js->brk; off += n) {
+    v = loadoff(js, off);
+    n = esize(v & ~(GCMASK | CONSTMASK));
+    if (v & GCMASK) continue;
+    
+    jsoff_t flags = v & (GCMASK | CONSTMASK);
+    jsoff_t cleaned = v & ~(GCMASK | CONSTMASK);
+    if ((cleaned & 3) != T_OBJ && (cleaned & 3) != T_PROP) continue;
+    jsoff_t adjusted = cleaned > start ? cleaned - size : cleaned;
+    if (cleaned != adjusted) saveoff(js, off, adjusted | flags);
+    if ((cleaned & 3) == T_OBJ) {
+      jsoff_t u = loadoff(js, (jsoff_t) (off + sizeof(jsoff_t)));
+      if (u > start) saveoff(js, (jsoff_t) (off + sizeof(jsoff_t)), u - size);
+    }
+    if ((cleaned & 3) == T_PROP) {
+      jsoff_t koff = loadoff(js, (jsoff_t) (off + sizeof(off)));
+      if (koff > start) saveoff(js, (jsoff_t) (off + sizeof(off)), koff - size);
+      jsval_t val = loadval(js, (jsoff_t) (off + sizeof(off) + sizeof(off)));
+      if (is_mem_entity(vtype(val)) && vdata(val) > start) {
+        saveval(js, (jsoff_t) (off + sizeof(off) + sizeof(off)), mkval(vtype(val), (unsigned long) (vdata(val) - size)));
+      }
+    }
+  }
+  
+  jsoff_t off = (jsoff_t) vdata(js->scope);
+  if (off > start) js->scope = mkval(T_OBJ, off - size);
+  if (js->nogc >= start) js->nogc -= size;
+  if (js->code > (char *) js->mem && js->code - (char *) js->mem < js->size && js->code - (char *) js->mem > start) {
+    js->code -= size;
+  }
+}
+
+static void js_compact_from_end(struct js *js) {
+  jsoff_t new_brk = js->brk;
+  
+  for (jsoff_t off = 0; off < js->brk; off += esize(loadoff(js, off) & ~(GCMASK | CONSTMASK))) {
+    jsoff_t v = loadoff(js, off);
+    if ((v & GCMASK) == 0) new_brk = off + esize(v & ~(GCMASK | CONSTMASK));
+  }
+  
+  js->brk = new_brk;
+}
+
 static void js_clear_gc_marks(struct js *js) {
   for (jsoff_t v, off = 0; off < js->brk; off += esize(v & ~(GCMASK | CONSTMASK))) {
     v = loadoff(js, off);
@@ -1316,6 +1360,7 @@ jsoff_t js_gc(struct js *js) {
   
   js_mark_all_entities_for_deletion(js);
   js_unmark_used_entities(js);
+  js_compact_from_end(js);
   
   js_clear_gc_marks(js);
   free_list_compact();
