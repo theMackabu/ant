@@ -3,7 +3,6 @@
 #include <string.h>
 #include <stdbool.h>
 #include <libgen.h>
-#include <limits.h>
 
 #include "runtime.h"
 #include "modules/io.h"

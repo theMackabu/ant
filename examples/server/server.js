@@ -1,26 +1,20 @@
-import { html } from './html';
 import meow from './meow.txt';
+
+import { html } from './html';
+import { readFile } from 'ant:fs';
 import { Radix3 } from './radix3';
 
 const router = new Radix3();
 
-router.insert('/', c => {
-  return c.res.body(`Welcome to Ant HTTP Server with Radix3 Router!
-
-Available routes:
-  GET /
-  GET /meow
-  GET /hello
-  GET /status
-  GET /users/:id
-  GET /users/:id/posts
-  GET /files/*path
-  GET /api/v1/users
-  GET /api/v2/demo`);
-});
+router.insert('/', c => c.res.body(`Welcome to Ant ${Ant.version}!`));
 
 router.insert('/meow', async c => {
   return c.res.body(meow);
+});
+
+router.insert('/fs/meow', async c => {
+  const file = await readFile('./meow.txt');
+  return c.res.body(file);
 });
 
 router.insert('/hello', async c => {

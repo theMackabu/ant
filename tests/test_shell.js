@@ -1,4 +1,4 @@
-import { $ } from 'ant/shell';
+import { $ } from 'ant:shell';
 
 console.log('Testing $ shell command execution...');
 

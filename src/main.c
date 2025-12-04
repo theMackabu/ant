@@ -2,7 +2,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <libgen.h>
-#include <limits.h>
 #include <unistd.h>
 #include <argtable3.h>
 
@@ -13,6 +12,7 @@
 
 #include "modules/builtin.h"
 #include "modules/io.h"
+#include "modules/fs.h"
 #include "modules/crypto.h"
 #include "modules/server.h"
 #include "modules/timer.h"
@@ -134,8 +134,9 @@ int main(int argc, char *argv[]) {
   init_timer_module();
   init_process_module();
   
-  ant_register_library("ant/shell", shell_library);
-  
+  ant_register_library("ant:fs", fs_library);
+  ant_register_library("ant:shell", shell_library);
+
   if (repl_mode) ant_repl_run(); else {
     js_result = execute_module(js, module_file);
     js_run_event_loop(js);

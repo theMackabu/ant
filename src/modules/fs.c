@@ -1,0 +1,529 @@
+#include <uv.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <uthash.h>
+#include <utarray.h>
+#include <unistd.h>
+#include "modules/fs.h"
+#include "runtime.h"
+
+typedef enum {
+  FS_OP_READ,
+  FS_OP_WRITE,
+  FS_OP_UNLINK,
+  FS_OP_MKDIR,
+  FS_OP_RMDIR,
+  FS_OP_STAT
+} fs_op_type_t;
+
+typedef struct fs_request_s {
+  struct js *js;
+  jsval_t promise;
+  uv_fs_t uv_req;
+  fs_op_type_t op_type;
+  char *path;
+  char *data;
+  size_t data_len;
+  uv_file fd;
+  int completed;
+  int failed;
+  char *error_msg;
+} fs_request_t;
+
+static uv_loop_t *fs_loop = NULL;
+static UT_array *pending_requests = NULL;
+
+static void free_fs_request(fs_request_t *req) {
+  if (!req) return;
+  
+  if (req->path) free(req->path);
+  if (req->data) free(req->data);
+  if (req->error_msg) free(req->error_msg);
+  
+  uv_fs_req_cleanup(&req->uv_req);
+  free(req);
+}
+
+static void remove_pending_request(fs_request_t *req) {
+  if (!req || !pending_requests) return;
+  
+  fs_request_t **p = NULL;
+  unsigned int i = 0;
+  
+  while ((p = (fs_request_t**)utarray_next(pending_requests, p))) {
+    if (*p == req) {
+      utarray_erase(pending_requests, i, 1);
+      break;
+    }
+    i++;
+  }
+}
+
+static void complete_request(fs_request_t *req) {
+  if (req->failed) {
+    const char *err_msg = req->error_msg ? req->error_msg : "Unknown error";
+    jsval_t err = js_mkstr(req->js, err_msg, strlen(err_msg));
+    js_reject_promise(req->js, req->promise, err);
+  } else {
+    jsval_t result;
+    if (req->op_type == FS_OP_READ && req->data) {
+      result = js_mkstr(req->js, req->data, req->data_len);
+    } else if (req->op_type == FS_OP_STAT) {
+      result = js_mkundef();
+    } else {
+      result = js_mkundef();
+    }
+    js_resolve_promise(req->js, req->promise, result);
+  }
+  
+  remove_pending_request(req);
+  free_fs_request(req);
+}
+
+static void on_read_complete(uv_fs_t *uv_req) {
+  fs_request_t *req = (fs_request_t *)uv_req->data;
+  
+  if (uv_req->result < 0) {
+    req->failed = 1;
+    req->error_msg = strdup(uv_strerror(uv_req->result));
+    req->completed = 1;
+    complete_request(req);
+    return;
+  }
+  
+  req->data_len = uv_req->result;
+  
+  uv_fs_t close_req;
+  uv_fs_close(fs_loop, &close_req, req->fd, NULL);
+  uv_fs_req_cleanup(&close_req);
+  
+  req->completed = 1;
+  complete_request(req);
+}
+
+static void on_open_for_read(uv_fs_t *uv_req) {
+  fs_request_t *req = (fs_request_t *)uv_req->data;
+  
+  if (uv_req->result < 0) {
+    req->failed = 1;
+    req->error_msg = strdup(uv_strerror(uv_req->result));
+    req->completed = 1;
+    complete_request(req);
+    return;
+  }
+  
+  req->fd = uv_req->result;
+  uv_fs_req_cleanup(uv_req);
+  
+  uv_fs_t stat_req;
+  int stat_result = uv_fs_fstat(fs_loop, &stat_req, req->fd, NULL);
+  
+  if (stat_result < 0) {
+    req->failed = 1;
+    req->error_msg = strdup(uv_strerror(stat_result));
+    req->completed = 1;
+    uv_fs_t close_req;
+    uv_fs_close(fs_loop, &close_req, req->fd, NULL);
+    uv_fs_req_cleanup(&close_req);
+    complete_request(req);
+    return;
+  }
+  
+  size_t file_size = stat_req.statbuf.st_size;
+  uv_fs_req_cleanup(&stat_req);
+  
+  req->data = malloc(file_size + 1);
+  if (!req->data) {
+    req->failed = 1;
+    req->error_msg = strdup("Out of memory");
+    req->completed = 1;
+    uv_fs_t close_req;
+    uv_fs_close(fs_loop, &close_req, req->fd, NULL);
+    uv_fs_req_cleanup(&close_req);
+    complete_request(req);
+    return;
+  }
+  
+  uv_buf_t buf = uv_buf_init(req->data, file_size);
+  int read_result = uv_fs_read(fs_loop, uv_req, req->fd, &buf, 1, 0, on_read_complete);
+  
+  if (read_result < 0) {
+    req->failed = 1;
+    req->error_msg = strdup(uv_strerror(read_result));
+    req->completed = 1;
+    uv_fs_t close_req;
+    uv_fs_close(fs_loop, &close_req, req->fd, NULL);
+    uv_fs_req_cleanup(&close_req);
+    complete_request(req);
+    return;
+  }
+}
+
+static void on_write_complete(uv_fs_t *uv_req) {
+  fs_request_t *req = (fs_request_t *)uv_req->data;
+  
+  if (uv_req->result < 0) {
+    req->failed = 1;
+    req->error_msg = strdup(uv_strerror(uv_req->result));
+  }
+  
+  uv_fs_t close_req;
+  uv_fs_close(fs_loop, &close_req, req->fd, NULL);
+  uv_fs_req_cleanup(&close_req);
+  
+  req->completed = 1;
+  complete_request(req);
+}
+
+static void on_open_for_write(uv_fs_t *uv_req) {
+  fs_request_t *req = (fs_request_t *)uv_req->data;
+  
+  if (uv_req->result < 0) {
+    req->failed = 1;
+    req->error_msg = strdup(uv_strerror(uv_req->result));
+    req->completed = 1;
+    complete_request(req);
+    return;
+  }
+  
+  req->fd = uv_req->result;
+  uv_fs_req_cleanup(uv_req);
+  
+  uv_buf_t buf = uv_buf_init(req->data, req->data_len);
+  int write_result = uv_fs_write(fs_loop, uv_req, req->fd, &buf, 1, 0, on_write_complete);
+  
+  if (write_result < 0) {
+    req->failed = 1;
+    req->error_msg = strdup(uv_strerror(write_result));
+    req->completed = 1;
+    uv_fs_t close_req;
+    uv_fs_close(fs_loop, &close_req, req->fd, NULL);
+    uv_fs_req_cleanup(&close_req);
+    complete_request(req);
+    return;
+  }
+}
+
+static void on_unlink_complete(uv_fs_t *uv_req) {
+  fs_request_t *req = (fs_request_t *)uv_req->data;
+  
+  if (uv_req->result < 0) {
+    req->failed = 1;
+    req->error_msg = strdup(uv_strerror(uv_req->result));
+  }
+  
+  req->completed = 1;
+  complete_request(req);
+}
+
+static void on_mkdir_complete(uv_fs_t *uv_req) {
+  fs_request_t *req = (fs_request_t *)uv_req->data;
+  
+  if (uv_req->result < 0) {
+    req->failed = 1;
+    req->error_msg = strdup(uv_strerror(uv_req->result));
+  }
+  
+  req->completed = 1;
+  complete_request(req);
+}
+
+static void on_rmdir_complete(uv_fs_t *uv_req) {
+  fs_request_t *req = (fs_request_t *)uv_req->data;
+  
+  if (uv_req->result < 0) {
+    req->failed = 1;
+    req->error_msg = strdup(uv_strerror(uv_req->result));
+  }
+  
+  req->completed = 1;
+  complete_request(req);
+}
+
+static void on_stat_complete(uv_fs_t *uv_req) {
+  fs_request_t *req = (fs_request_t *)uv_req->data;
+  
+  if (uv_req->result < 0) {
+    req->failed = 1;
+    req->error_msg = strdup(uv_strerror(uv_req->result));
+    req->completed = 1;
+    complete_request(req);
+    return;
+  }
+  
+  jsval_t stat_obj = js_mkobj(req->js);
+  js_set(req->js, stat_obj, "size", js_mknum((double)uv_req->statbuf.st_size));
+  js_set(req->js, stat_obj, "mode", js_mknum((double)uv_req->statbuf.st_mode));
+  js_set(req->js, stat_obj, "isFile", S_ISREG(uv_req->statbuf.st_mode) ? js_mktrue() : js_mkfalse());
+  js_set(req->js, stat_obj, "isDirectory", S_ISDIR(uv_req->statbuf.st_mode) ? js_mktrue() : js_mkfalse());
+  
+  req->completed = 1;
+  js_resolve_promise(req->js, req->promise, stat_obj);
+  remove_pending_request(req);
+  free_fs_request(req);
+}
+
+static void ensure_fs_loop(void) {
+  if (!fs_loop) {
+    if (rt->external_event_loop_active) {
+      fs_loop = uv_default_loop();
+    } else {
+      fs_loop = malloc(sizeof(uv_loop_t));
+      uv_loop_init(fs_loop);
+    }
+  }
+  
+  if (!pending_requests) {
+    utarray_new(pending_requests, &ut_ptr_icd);
+  }
+}
+
+static jsval_t builtin_fs_readFile(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "readFile() requires a path argument");
+  
+  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "readFile() path must be a string");
+  
+  size_t path_len;
+  char *path = js_getstr(js, args[0], &path_len);
+  if (!path) return js_mkerr(js, "Failed to get path string");
+  
+  ensure_fs_loop();
+  
+  fs_request_t *req = calloc(1, sizeof(fs_request_t));
+  if (!req) return js_mkerr(js, "Out of memory");
+  
+  req->js = js;
+  req->op_type = FS_OP_READ;
+  req->promise = js_mkpromise(js);
+  req->path = strndup(path, path_len);
+  req->uv_req.data = req;
+  
+  utarray_push_back(pending_requests, &req);
+  
+  int result = uv_fs_open(fs_loop, &req->uv_req, req->path, O_RDONLY, 0, on_open_for_read);
+  
+  if (result < 0) {
+    req->failed = 1;
+    req->error_msg = strdup(uv_strerror(result));
+    req->completed = 1;
+    complete_request(req);
+  }
+  
+  return req->promise;
+}
+
+static jsval_t builtin_fs_writeFile(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 2) return js_mkerr(js, "writeFile() requires path and data arguments");
+  
+  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "writeFile() path must be a string");
+  if (js_type(args[1]) != JS_STR) return js_mkerr(js, "writeFile() data must be a string");
+  
+  size_t path_len, data_len;
+  char *path = js_getstr(js, args[0], &path_len);
+  char *data = js_getstr(js, args[1], &data_len);
+  
+  if (!path || !data) return js_mkerr(js, "Failed to get arguments");
+  
+  ensure_fs_loop();
+  
+  fs_request_t *req = calloc(1, sizeof(fs_request_t));
+  if (!req) return js_mkerr(js, "Out of memory");
+  
+  req->js = js;
+  req->op_type = FS_OP_WRITE;
+  req->promise = js_mkpromise(js);
+  req->path = strndup(path, path_len);
+  req->data = malloc(data_len);
+  if (!req->data) {
+    free(req->path);
+    free(req);
+    return js_mkerr(js, "Out of memory");
+  }
+  
+  memcpy(req->data, data, data_len);
+  req->data_len = data_len;
+  req->uv_req.data = req;
+  
+  utarray_push_back(pending_requests, &req);
+  
+  int result = uv_fs_open(fs_loop, &req->uv_req, req->path, 
+                          O_WRONLY | O_CREAT | O_TRUNC, 0644, on_open_for_write);
+  
+  if (result < 0) {
+    req->failed = 1;
+    req->error_msg = strdup(uv_strerror(result));
+    req->completed = 1;
+    complete_request(req);
+  }
+  
+  return req->promise;
+}
+
+static jsval_t builtin_fs_unlink(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "unlink() requires a path argument");
+  
+  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "unlink() path must be a string");
+  
+  size_t path_len;
+  char *path = js_getstr(js, args[0], &path_len);
+  if (!path) return js_mkerr(js, "Failed to get path string");
+  
+  ensure_fs_loop();
+  
+  fs_request_t *req = calloc(1, sizeof(fs_request_t));
+  if (!req) return js_mkerr(js, "Out of memory");
+  
+  req->js = js;
+  req->op_type = FS_OP_UNLINK;
+  req->promise = js_mkpromise(js);
+  req->path = strndup(path, path_len);
+  req->uv_req.data = req;
+  
+  utarray_push_back(pending_requests, &req);
+  
+  int result = uv_fs_unlink(fs_loop, &req->uv_req, req->path, on_unlink_complete);
+  
+  if (result < 0) {
+    req->failed = 1;
+    req->error_msg = strdup(uv_strerror(result));
+    req->completed = 1;
+    complete_request(req);
+  }
+  
+  return req->promise;
+}
+
+static jsval_t builtin_fs_mkdir(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "mkdir() requires a path argument");
+  
+  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "mkdir() path must be a string");
+  
+  size_t path_len;
+  char *path = js_getstr(js, args[0], &path_len);
+  if (!path) return js_mkerr(js, "Failed to get path string");
+  
+  int mode = 0755;
+  if (nargs >= 2 && js_type(args[1]) == JS_NUM) {
+    mode = (int)js_getnum(args[1]);
+  }
+  
+  ensure_fs_loop();
+  
+  fs_request_t *req = calloc(1, sizeof(fs_request_t));
+  if (!req) return js_mkerr(js, "Out of memory");
+  
+  req->js = js;
+  req->op_type = FS_OP_MKDIR;
+  req->promise = js_mkpromise(js);
+  req->path = strndup(path, path_len);
+  req->uv_req.data = req;
+  
+  utarray_push_back(pending_requests, &req);
+  
+  int result = uv_fs_mkdir(fs_loop, &req->uv_req, req->path, mode, on_mkdir_complete);
+  
+  if (result < 0) {
+    req->failed = 1;
+    req->error_msg = strdup(uv_strerror(result));
+    req->completed = 1;
+    complete_request(req);
+  }
+  
+  return req->promise;
+}
+
+static jsval_t builtin_fs_rmdir(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "rmdir() requires a path argument");
+  
+  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "rmdir() path must be a string");
+  
+  size_t path_len;
+  char *path = js_getstr(js, args[0], &path_len);
+  if (!path) return js_mkerr(js, "Failed to get path string");
+  
+  ensure_fs_loop();
+  
+  fs_request_t *req = calloc(1, sizeof(fs_request_t));
+  if (!req) return js_mkerr(js, "Out of memory");
+  
+  req->js = js;
+  req->op_type = FS_OP_RMDIR;
+  req->promise = js_mkpromise(js);
+  req->path = strndup(path, path_len);
+  req->uv_req.data = req;
+  
+  utarray_push_back(pending_requests, &req);
+  
+  int result = uv_fs_rmdir(fs_loop, &req->uv_req, req->path, on_rmdir_complete);
+  
+  if (result < 0) {
+    req->failed = 1;
+    req->error_msg = strdup(uv_strerror(result));
+    req->completed = 1;
+    complete_request(req);
+  }
+  
+  return req->promise;
+}
+
+static jsval_t builtin_fs_stat(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "stat() requires a path argument");
+  
+  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "stat() path must be a string");
+  
+  size_t path_len;
+  char *path = js_getstr(js, args[0], &path_len);
+  if (!path) return js_mkerr(js, "Failed to get path string");
+  
+  ensure_fs_loop();
+  
+  fs_request_t *req = calloc(1, sizeof(fs_request_t));
+  if (!req) return js_mkerr(js, "Out of memory");
+  
+  req->js = js;
+  req->op_type = FS_OP_STAT;
+  req->promise = js_mkpromise(js);
+  req->path = strndup(path, path_len);
+  req->uv_req.data = req;
+  
+  utarray_push_back(pending_requests, &req);
+  
+  int result = uv_fs_stat(fs_loop, &req->uv_req, req->path, on_stat_complete);
+  
+  if (result < 0) {
+    req->failed = 1;
+    req->error_msg = strdup(uv_strerror(result));
+    req->completed = 1;
+    complete_request(req);
+  }
+  
+  return req->promise;
+}
+
+jsval_t fs_library(struct js *js) {
+  jsval_t lib = js_mkobj(js);
+  
+  js_set(js, lib, "readFile", js_mkfun(builtin_fs_readFile));
+  js_set(js, lib, "writeFile", js_mkfun(builtin_fs_writeFile));
+  js_set(js, lib, "unlink", js_mkfun(builtin_fs_unlink));
+  js_set(js, lib, "mkdir", js_mkfun(builtin_fs_mkdir));
+  js_set(js, lib, "rmdir", js_mkfun(builtin_fs_rmdir));
+  js_set(js, lib, "stat", js_mkfun(builtin_fs_stat));
+  
+  return lib;
+}
+
+int has_pending_fs_ops(void) {
+  return (pending_requests && utarray_len(pending_requests) > 0) || (fs_loop && uv_loop_alive(fs_loop));
+}
+
+void fs_poll_events(void) {
+  if (fs_loop && fs_loop == uv_default_loop() && rt->external_event_loop_active) return;
+  if (fs_loop && uv_loop_alive(fs_loop)) {
+    uv_run(fs_loop, UV_RUN_ONCE);
+    if (pending_requests && utarray_len(pending_requests) > 0) usleep(1000);
+  }
+}
