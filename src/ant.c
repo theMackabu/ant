@@ -1769,6 +1769,56 @@ static jsval_t call_c(struct js *js,
   return res;
 }
 
+static jsoff_t extract_default_param_value(const char *fn, jsoff_t fnlen, jsoff_t start_pos, jsoff_t *out_start, jsoff_t *out_len) {
+  jsoff_t after_ident = skiptonext(fn, fnlen, start_pos);
+  if (after_ident >= fnlen || fn[after_ident] != '=') {
+    *out_start = 0;
+    *out_len = 0;
+    return after_ident;
+  }
+  
+  jsoff_t default_start = skiptonext(fn, fnlen, after_ident + 1);
+  jsoff_t default_len = 0;
+  jsoff_t depth = 0;
+  bool in_string = false;
+  char string_char = 0;
+  
+  for (jsoff_t i = default_start; i < fnlen; i++) {
+    if (in_string) {
+      if (fn[i] == '\\' && i + 1 < fnlen) {
+        default_len += 2;
+        i++;
+        continue;
+      }
+      if (fn[i] == string_char) {
+        in_string = false;
+      }
+      default_len++;
+    } else {
+      if (fn[i] == '"' || fn[i] == '\'' || fn[i] == '`') {
+        in_string = true;
+        string_char = fn[i];
+        default_len++;
+      } else if (fn[i] == '(' || fn[i] == '[' || fn[i] == '{') {
+        depth++;
+        default_len++;
+      } else if (fn[i] == ')' || fn[i] == ']' || fn[i] == '}') {
+        if (depth == 0 && fn[i] == ')') break;
+        depth--;
+        default_len++;
+      } else if (depth == 0 && fn[i] == ',') {
+        break;
+      } else {
+        default_len++;
+      }
+    }
+  }
+  
+  *out_start = default_start;
+  *out_len = default_len;
+  return skiptonext(fn, fnlen, default_start + default_len);
+}
+
 static jsval_t call_js(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope) {
   jsoff_t fnpos = 1;
   jsval_t saved_scope = js->scope;
@@ -1808,13 +1858,34 @@ static jsval_t call_js(struct js *js, const char *fn, jsoff_t fnlen, jsval_t clo
       break;
     }
     
+    jsoff_t param_name_pos = fnpos;
+    jsoff_t default_start = 0, default_len = 0;
+    fnpos = extract_default_param_value(fn, fnlen, fnpos + identlen, &default_start, &default_len);
+    
     js->pos = skiptonext(js->code, js->clen, js->pos);
     js->consumed = 1;
-    jsval_t v = js->code[js->pos] == ')' ? js_mkundef() : js_expr(js);
-    setprop(js, function_scope, js_mkstr(js, &fn[fnpos], identlen), v);
+    jsval_t v;
+    if (js->code[js->pos] == ')' || js->code[js->pos] == ',') {
+      if (default_len > 0) {
+        const char *saved_code = js->code;
+        jsoff_t saved_clen = js->clen, saved_pos = js->pos;
+        js->code = &fn[default_start];
+        js->clen = default_len;
+        js->pos = 0;
+        js->consumed = 1;
+        v = js_expr(js);
+        js->code = saved_code;
+        js->clen = saved_clen;
+        js->pos = saved_pos;
+      } else {
+        v = js_mkundef();
+      }
+    } else {
+      v = js_expr(js);
+    }
+    setprop(js, function_scope, js_mkstr(js, &fn[param_name_pos], identlen), v);
     js->pos = skiptonext(js->code, js->clen, js->pos);
     if (js->pos < js->clen && js->code[js->pos] == ',') js->pos++;
-    fnpos = skiptonext(fn, fnlen, fnpos + identlen);
     if (fnpos < fnlen && fn[fnpos] == ',') fnpos++;
   }
   
@@ -1936,10 +2007,31 @@ static jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnl
       break;
     }
     
-    jsval_t v = arg_idx < nargs ? args[arg_idx] : js_mkundef();
-    setprop(js, function_scope, js_mkstr(js, &fn[fnpos], identlen), v);
+    jsoff_t param_name_pos = fnpos;
+    jsoff_t default_start = 0, default_len = 0;
+    fnpos = extract_default_param_value(fn, fnlen, fnpos + identlen, &default_start, &default_len);
+    
+    jsval_t v;
+    if (arg_idx < nargs) {
+      v = args[arg_idx];
+    } else if (default_len > 0) {
+      const char *saved_code = js->code;
+      jsoff_t saved_clen = js->clen, saved_pos = js->pos;
+      uint8_t saved_consumed = js->consumed;
+      js->code = &fn[default_start];
+      js->clen = default_len;
+      js->pos = 0;
+      js->consumed = 1;
+      v = js_expr(js);
+      js->code = saved_code;
+      js->clen = saved_clen;
+      js->pos = saved_pos;
+      js->consumed = saved_consumed;
+    } else {
+      v = js_mkundef();
+    }
+    setprop(js, function_scope, js_mkstr(js, &fn[param_name_pos], identlen), v);
     arg_idx++;
-    fnpos = skiptonext(fn, fnlen, fnpos + identlen);
     if (fnpos < fnlen && fn[fnpos] == ',') fnpos++;
   }
   
@@ -2533,6 +2625,26 @@ static bool parse_func_params(struct js *js, uint8_t *flags) {
     
     js->consumed = 1;
     
+    if (next(js) == TOK_ASSIGN) {
+      js->consumed = 1;
+      int depth = 0;
+      bool done = false;
+      while (!done && next(js) != TOK_EOF) {
+        uint8_t tok = next(js);
+        if (depth == 0 && (tok == TOK_RPAREN || tok == TOK_COMMA)) {
+          done = true;
+        } else if (tok == TOK_LPAREN || tok == TOK_LBRACKET || tok == TOK_LBRACE) {
+          depth++;
+          js->consumed = 1;
+        } else if (tok == TOK_RPAREN || tok == TOK_RBRACKET || tok == TOK_RBRACE) {
+          depth--;
+          js->consumed = 1;
+        } else {
+          js->consumed = 1;
+        }
+      }
+    }
+    
     if (is_rest && next(js) != TOK_RPAREN) {
       if (flags) js->flags = *flags;
       js_mkerr(js, "rest parameter must be last");
@@ -2894,7 +3006,14 @@ static jsval_t js_group(struct js *js) {
       else if (js->tok == TOK_RPAREN) paren_depth--;
       
       if (paren_depth > 0) {
-        if (js->tok != TOK_IDENTIFIER && js->tok != TOK_COMMA && js->tok != TOK_REST) could_be_arrow = false;
+        if (js->tok != TOK_IDENTIFIER && js->tok != TOK_COMMA && js->tok != TOK_REST &&
+            js->tok != TOK_ASSIGN && js->tok != TOK_NUMBER && js->tok != TOK_STRING &&
+            js->tok != TOK_TRUE && js->tok != TOK_FALSE && js->tok != TOK_NULL &&
+            js->tok != TOK_UNDEF && js->tok != TOK_LBRACKET && js->tok != TOK_RBRACKET &&
+            js->tok != TOK_LBRACE && js->tok != TOK_RBRACE && js->tok != TOK_DOT &&
+            js->tok != TOK_PLUS && js->tok != TOK_MINUS && js->tok != TOK_MUL && js->tok != TOK_DIV) {
+          could_be_arrow = false;
+        }
       }
       js->consumed = 1;
     }
@@ -3529,6 +3648,26 @@ static jsval_t js_func_decl(struct js *js) {
     
     if (next(js) != TOK_IDENTIFIER) return js_mkerr(js, "identifier expected");
     js->consumed = 1;
+    
+    if (next(js) == TOK_ASSIGN) {
+      js->consumed = 1;
+      int depth = 0;
+      bool done = false;
+      while (!done && next(js) != TOK_EOF) {
+        uint8_t tok = next(js);
+        if (depth == 0 && (tok == TOK_RPAREN || tok == TOK_COMMA)) {
+          done = true;
+        } else if (tok == TOK_LPAREN || tok == TOK_LBRACKET || tok == TOK_LBRACE) {
+          depth++;
+          js->consumed = 1;
+        } else if (tok == TOK_RPAREN || tok == TOK_RBRACKET || tok == TOK_RBRACE) {
+          depth--;
+          js->consumed = 1;
+        } else {
+          js->consumed = 1;
+        }
+      }
+    }
     
     if (is_rest && next(js) != TOK_RPAREN) {
       return js_mkerr(js, "rest parameter must be last");
@@ -4577,7 +4716,10 @@ static jsval_t js_class_decl(struct js *js) {
       is_async_method = true;
       js->consumed = 1;
     }
-    EXPECT(TOK_IDENTIFIER, js->flags = save_flags);
+    if (next(js) != TOK_IDENTIFIER && (next(js) < TOK_ASYNC || next(js) > TOK_STATIC)) {
+      js->flags = save_flags;
+      return js_mkerr(js, "method name expected");
+    }
     jsoff_t method_name_off = js->toff, method_name_len = js->tlen;
     js->consumed = 1;
     EXPECT(TOK_LPAREN, js->flags = save_flags);
@@ -4585,6 +4727,28 @@ static jsval_t js_class_decl(struct js *js) {
     for (bool comma = false; next(js) != TOK_EOF; comma = true) {
       if (!comma && next(js) == TOK_RPAREN) break;
       EXPECT(TOK_IDENTIFIER, js->flags = save_flags);
+      js->consumed = 1;
+      
+      if (next(js) == TOK_ASSIGN) {
+        js->consumed = 1;
+        int depth = 0;
+        bool done = false;
+        while (!done && next(js) != TOK_EOF) {
+          uint8_t tok = next(js);
+          if (depth == 0 && (tok == TOK_RPAREN || tok == TOK_COMMA)) {
+            done = true;
+          } else if (tok == TOK_LPAREN || tok == TOK_LBRACKET || tok == TOK_LBRACE) {
+            depth++;
+            js->consumed = 1;
+          } else if (tok == TOK_RPAREN || tok == TOK_RBRACKET || tok == TOK_RBRACE) {
+            depth--;
+            js->consumed = 1;
+          } else {
+            js->consumed = 1;
+          }
+        }
+      }
+      
       if (next(js) == TOK_RPAREN) break;
       EXPECT(TOK_COMMA, js->flags = save_flags);
     }
