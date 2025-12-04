@@ -27,7 +27,7 @@ router.get('/status', async c => {
   return c.res.body(`server is responding with ${result}`);
 });
 
-router.get('/users/:id', async c => {
+router.post('/users/:id', async c => {
   return c.res.body(`User ID: ${c.params.id}`);
 });
 
@@ -58,7 +58,7 @@ console.log('');
 
 async function handleRequest(req, res) {
   console.log('request:', req.method, req.uri);
-  const result = router.lookup(req.uri, 'GET');
+  const result = router.lookup(req.uri, req.method);
 
   if (result?.handler) {
     const ctx = { req, res, params: result.params };

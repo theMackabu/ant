@@ -1,5 +1,6 @@
 class Radix3Node {
-  constructor() {
+  constructor(method) {
+    this.method = method;
     this.prefix = '';
     this.handler = undefined;
     this.children = [];
@@ -11,21 +12,22 @@ class Radix3Node {
 
 export class Radix3 {
   constructor() {
-    this.root = new Radix3Node();
+    this.methods = {};
   }
 
   longestCommonPrefix(a, b) {
     const minLen = a.length < b.length ? a.length : b.length;
     for (let i = 0; i < minLen; i = i + 1) {
-      if (a[i] !== b[i]) {
-        return i;
-      }
+      if (a[i] !== b[i]) return i;
     }
     return minLen;
   }
 
   insert(path, handler, method = 'GET') {
-    this.insertPath(this.root, `${method}#${path}`, handler, 0);
+    if (this.methods[method] === undefined) {
+      this.methods[method] = new Radix3Node(method);
+    }
+    this.insertPath(this.methods[method], path, handler, 0);
   }
 
   get(path, handler) {
@@ -67,9 +69,7 @@ export class Radix3 {
     if (char === ':') {
       let end = start + 1;
       for (let i = end; i < path.length; i = i + 1) {
-        if (path[i] === '/') {
-          break;
-        }
+        if (path[i] === '/') break;
         end = i + 1;
       }
 
@@ -98,9 +98,7 @@ export class Radix3 {
 
     let end = start;
     for (let i = start; i < path.length; i = i + 1) {
-      if (path[i] === ':' || path[i] === '*') {
-        break;
-      }
+      if (path[i] === ':' || path[i] === '*') break;
       end = i + 1;
     }
 
@@ -142,14 +140,15 @@ export class Radix3 {
     this.insertPath(newChild, path, handler, end);
   }
 
-  // if the method is wrong return null instead of undefined
   lookup(path, method = 'GET') {
+    const methodRoot = this.methods[method];
+    if (methodRoot === undefined) return undefined;
+
     const params = {};
-    const fullPath = `${method}#${path}`;
-    const handler = this.matchPath(this.root, fullPath, 0, params);
+    const handler = this.matchPath(methodRoot, path, 0, params);
 
     if (!handler) return undefined;
-    return { handler, params };
+    return { handler: handler, params: params };
   }
 
   matchPath(node, path, depth, params) {
@@ -172,9 +171,7 @@ export class Radix3 {
 
         if (matches) {
           const result = this.matchPath(child, path, depth + child.prefix.length, params);
-          if (result !== undefined) {
-            return result;
-          }
+          if (result !== undefined) return result;
         }
       }
     }
@@ -184,9 +181,7 @@ export class Radix3 {
       let offset = depth;
 
       for (let i = depth; i < path.length; i = i + 1) {
-        if (path[i] === '/') {
-          break;
-        }
+        if (path[i] === '/') break;
         paramValue = paramValue + path[i];
         offset = i + 1;
       }
@@ -194,9 +189,7 @@ export class Radix3 {
       if (paramValue !== '') {
         params[node.paramChild.paramName] = paramValue;
         const result = this.matchPath(node.paramChild, path, offset, params);
-        if (result !== undefined) {
-          return result;
-        }
+        if (result !== undefined) return result;
         delete params[node.paramChild.paramName];
       }
     }
@@ -211,30 +204,35 @@ export class Radix3 {
   }
 
   printTree() {
-    this.printNode(this.root, '', true);
+    const methods = Object.keys(this.methods);
+    for (let i = 0; i < methods.length; i = i + 1) {
+      const method = methods[i];
+      console.log('[' + method + ']');
+      this.printNode(this.methods[method], '', true);
+      if (i < methods.length - 1) console.log('');
+    }
   }
 
   printNode(node, prefix, isLast) {
     const marker = isLast ? '└─ ' : '├─ ';
-    let line = `${prefix}${marker}`;
+    let line = prefix + marker;
 
     if (node.prefix !== '') {
-      line = `${line}"${node.prefix}"`;
+      line = line + '"' + node.prefix + '"';
     } else {
-      line = `${line}(root)`;
+      line = line + '(root)';
     }
 
     if (node.handler !== undefined) {
-      line = `${line} [HANDLER]`;
+      line = line + ' [HANDLER]';
     }
 
     if (node.paramName !== undefined) {
-      line = `${line} :${node.paramName}`;
+      line = line + ' :' + node.paramName;
     }
 
     console.log(line);
-
-    const childPrefix = `${prefix}${isLast ? '    ' : '│   '}`;
+    const childPrefix = prefix + (isLast ? '    ' : '│   ');
 
     for (let i = 0; i < node.children.length; i = i + 1) {
       const isLastChild = i === node.children.length - 1 && node.paramChild === undefined && node.wildcardChild === undefined;
@@ -243,13 +241,13 @@ export class Radix3 {
 
     if (node.paramChild !== undefined) {
       const isLastChild = node.wildcardChild === undefined;
-      console.log(`${childPrefix}${isLastChild ? '└─ ' : '├─ '}:${node.paramChild.paramName}`);
-      this.printNode(node.paramChild, `${childPrefix}${isLastChild ? '    ' : '│   '}`, true);
+      console.log(childPrefix + (isLastChild ? '└─ ' : '├─ ') + ':' + node.paramChild.paramName);
+      this.printNode(node.paramChild, childPrefix + (isLastChild ? '    ' : '│   '), true);
     }
 
     if (node.wildcardChild !== undefined) {
-      console.log(`${childPrefix}└─ *${node.wildcardChild.paramName}`);
-      this.printNode(node.wildcardChild, `${childPrefix}    `, true);
+      console.log(childPrefix + '└─ *' + node.wildcardChild.paramName);
+      this.printNode(node.wildcardChild, childPrefix + '    ', true);
     }
   }
 }
