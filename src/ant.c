@@ -7164,38 +7164,52 @@ static jsval_t js_import_stmt(struct js *js) {
     jsoff_t spec_off = vstr(js, spec, &spec_len);
     const char *specifier = (char *)&js->mem[spec_off];
     
-    const char *base_path = js->filename ? js->filename : ".";
-    char *resolved_path = esm_resolve_path(specifier, base_path);
-    if (!resolved_path) {
-      return js_mkerr(js, "Cannot resolve module: %.*s", (int)spec_len, specifier);
-    }
+    jsval_t ns = js_mkundef();
+    bool is_library = false;
     
-    esm_module_t *mod = esm_find_module(resolved_path);
-    if (!mod) {
-      mod = esm_create_module(specifier, resolved_path);
-      if (!mod) {
-        free(resolved_path);
-        return js_mkerr(js, "Cannot create module");
+    ant_library_t *lib = library_registry;
+    while (lib) {
+      if (strlen(lib->name) == spec_len && memcmp(lib->name, specifier, spec_len) == 0) {
+        ns = lib->init_fn(js);
+        is_library = true;
+        break;
       }
+      lib = lib->next;
     }
     
-    const char *saved_code = js->code;
-    jsoff_t saved_clen = js->clen;
-    jsoff_t saved_pos = js->pos;
+    if (!is_library) {
+      const char *base_path = js->filename ? js->filename : ".";
+      char *resolved_path = esm_resolve_path(specifier, base_path);
+      if (!resolved_path) {
+        return js_mkerr(js, "Cannot resolve module: %.*s", (int)spec_len, specifier);
+      }
+      
+      esm_module_t *mod = esm_find_module(resolved_path);
+      if (!mod) {
+        mod = esm_create_module(specifier, resolved_path);
+        if (!mod) {
+          free(resolved_path);
+          return js_mkerr(js, "Cannot create module");
+        }
+      }
+      
+      const char *saved_code = js->code;
+      jsoff_t saved_clen = js->clen;
+      jsoff_t saved_pos = js->pos;
+      
+      ns = esm_load_module(js, mod);
+      
+      js->code = saved_code;
+      js->clen = saved_clen;
+      js->pos = saved_pos;
+      
+      free(resolved_path);
+    }
     
-    jsval_t ns = esm_load_module(js, mod);
-    
-    js->code = saved_code;
-    js->clen = saved_clen;
-    js->pos = saved_pos;
     js->consumed = 1; next(js); js->consumed = 0;
-    
-    free(resolved_path);
-    
     if (is_err(ns)) return ns;
     
     setprop(js, js->scope, js_mkstr(js, namespace_name, namespace_len), ns);
-    
     return js_mkundef();
   }
   
@@ -7213,41 +7227,55 @@ static jsval_t js_import_stmt(struct js *js) {
     jsoff_t spec_off = vstr(js, spec, &spec_len);
     const char *specifier = (char *)&js->mem[spec_off];
     
-    const char *base_path = js->filename ? js->filename : ".";
-    char *resolved_path = esm_resolve_path(specifier, base_path);
-    if (!resolved_path) {
-      return js_mkerr(js, "Cannot resolve module: %.*s", (int)spec_len, specifier);
-    }
+    jsval_t ns = js_mkundef();
+    bool is_library = false;
     
-    esm_module_t *mod = esm_find_module(resolved_path);
-    if (!mod) {
-      mod = esm_create_module(specifier, resolved_path);
-      if (!mod) {
-        free(resolved_path);
-        return js_mkerr(js, "Cannot create module");
+    ant_library_t *lib = library_registry;
+    while (lib) {
+      if (strlen(lib->name) == spec_len && memcmp(lib->name, specifier, spec_len) == 0) {
+        ns = lib->init_fn(js);
+        is_library = true;
+        break;
       }
+      lib = lib->next;
     }
     
-    const char *saved_code = js->code;
-    jsoff_t saved_clen = js->clen;
-    jsoff_t saved_pos = js->pos;
+    if (!is_library) {
+      const char *base_path = js->filename ? js->filename : ".";
+      char *resolved_path = esm_resolve_path(specifier, base_path);
+      if (!resolved_path) {
+        return js_mkerr(js, "Cannot resolve module: %.*s", (int)spec_len, specifier);
+      }
+      
+      esm_module_t *mod = esm_find_module(resolved_path);
+      if (!mod) {
+        mod = esm_create_module(specifier, resolved_path);
+        if (!mod) {
+          free(resolved_path);
+          return js_mkerr(js, "Cannot create module");
+        }
+      }
+      
+      const char *saved_code = js->code;
+      jsoff_t saved_clen = js->clen;
+      jsoff_t saved_pos = js->pos;
+      
+      ns = esm_load_module(js, mod);
+      
+      js->code = saved_code;
+      js->clen = saved_clen;
+      js->pos = saved_pos;
+      
+      free(resolved_path);
+    }
     
-    jsval_t ns = esm_load_module(js, mod);
-    
-    js->code = saved_code;
-    js->clen = saved_clen;
-    js->pos = saved_pos;
     js->consumed = 1; next(js); js->consumed = 0;
-    
-    free(resolved_path);
-    
     if (is_err(ns)) return ns;
     
     jsoff_t default_off = lkp(js, ns, "default", 7);
     jsval_t default_val = default_off != 0 ? resolveprop(js, mkval(T_PROP, default_off)) : js_mkundef();
     
     setprop(js, js->scope, js_mkstr(js, default_name, default_len), default_val);
-    
     return js_mkundef();
   }
   

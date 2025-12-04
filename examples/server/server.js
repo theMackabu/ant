@@ -1,5 +1,5 @@
 import meow from './meow.txt';
-
+import { join } from 'ant:path';
 import { html } from './html';
 import { readFile } from 'ant:fs';
 import { Radix3 } from './radix3';
@@ -13,8 +13,8 @@ router.insert('/meow', async c => {
 });
 
 router.insert('/fs/meow', async c => {
-  const file = await readFile('./meow.txt');
-  return c.res.body(file);
+  const file = await readFile(join(import.meta.dirname, 'meow.txt'));
+  return c.res.body(file || 'none');
 });
 
 router.insert('/hello', async c => {

@@ -20,6 +20,7 @@
 #include "modules/fetch.h"
 #include "modules/shell.h"
 #include "modules/process.h"
+#include "modules/path.h"
 
 int js_result = EXIT_SUCCESS;
 
@@ -136,6 +137,7 @@ int main(int argc, char *argv[]) {
   
   ant_register_library("ant:fs", fs_library);
   ant_register_library("ant:shell", shell_library);
+  ant_register_library("ant:path", path_library);
 
   if (repl_mode) ant_repl_run(); else {
     js_result = execute_module(js, module_file);
