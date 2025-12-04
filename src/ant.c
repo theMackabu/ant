@@ -124,10 +124,11 @@ typedef struct esm_module {
   bool is_text;
   bool is_image;
   struct esm_module *next;
+  UT_hash_handle hh;
 } esm_module_t;
 
 typedef struct {
-  esm_module_t *head;
+  esm_module_t *modules;
   int count;
 } esm_module_cache_t;
 
@@ -7452,21 +7453,72 @@ static bool esm_is_image(const char *path) {
          (len > 5 && strcmp(path + len - 5, ".webp") == 0);
 }
 
-static esm_module_t *esm_find_module(const char *resolved_path) {
-  esm_module_t *mod = global_module_cache.head;
-  while (mod) {
-    if (strcmp(mod->resolved_path, resolved_path) == 0) return mod;
-    mod = mod->next;
+static char *esm_canonicalize_path(const char *path) {
+  if (!path) return NULL;
+  
+  char *canonical = strdup(path);
+  if (!canonical) return NULL;
+  
+  char *src = canonical, *dst = canonical;
+  
+  while (*src) {
+    if (*src == '/') {
+      *dst++ = '/';
+      while (*src == '/') src++;
+      
+      if (strncmp(src, "./", 2) == 0) {
+        src += 2;
+      } else if (strncmp(src, "../", 3) == 0) {
+        src += 3;
+        if (dst > canonical + 1) {
+          dst--;
+          while (dst > canonical && *(dst - 1) != '/') dst--;
+        }
+      }
+    } else {
+      *dst++ = *src++;
+    }
   }
-  return NULL;
+  
+  *dst = '\0';
+  
+  if (strlen(canonical) > 1 && canonical[strlen(canonical) - 1] == '/') {
+    canonical[strlen(canonical) - 1] = '\0';
+  }
+  
+  return canonical;
+}
+
+static esm_module_t *esm_find_module(const char *resolved_path) {
+  char *canonical_path = esm_canonicalize_path(resolved_path);
+  if (!canonical_path) return NULL;
+  
+  esm_module_t *mod = NULL;
+  HASH_FIND_STR(global_module_cache.modules, canonical_path, mod);
+  
+  free(canonical_path);
+  return mod;
 }
 
 static esm_module_t *esm_create_module(const char *path, const char *resolved_path) {
+  char *canonical_path = esm_canonicalize_path(resolved_path);
+  if (!canonical_path) return NULL;
+  
+  esm_module_t *existing_mod = NULL;
+  HASH_FIND_STR(global_module_cache.modules, canonical_path, existing_mod);
+  if (existing_mod) {
+    free(canonical_path);
+    return existing_mod;
+  }
+  
   esm_module_t *mod = (esm_module_t *)malloc(sizeof(esm_module_t));
-  if (!mod) return NULL;
+  if (!mod) {
+    free(canonical_path);
+    return NULL;
+  }
   
   mod->path = strdup(path);
-  mod->resolved_path = strdup(resolved_path);
+  mod->resolved_path = canonical_path;
   mod->namespace_obj = js_mkundef();
   mod->default_export = js_mkundef();
   mod->is_loaded = false;
@@ -7476,16 +7528,21 @@ static esm_module_t *esm_create_module(const char *path, const char *resolved_pa
   mod->is_image = esm_is_image(resolved_path);
   mod->next = NULL;
   
-  if (global_module_cache.head == NULL) {
-    global_module_cache.head = mod;
-  } else {
-    esm_module_t *last = global_module_cache.head;
-    while (last->next) last = last->next;
-    last->next = mod;
-  }
+  HASH_ADD_STR(global_module_cache.modules, resolved_path, mod);
   global_module_cache.count++;
   
   return mod;
+}
+
+static void esm_cleanup_module_cache(void) {
+  esm_module_t *current, *tmp;
+  HASH_ITER(hh, global_module_cache.modules, current, tmp) {
+    HASH_DEL(global_module_cache.modules, current);
+    if (current->path) free(current->path);
+    if (current->resolved_path) free(current->resolved_path);
+    free(current);
+  }
+  global_module_cache.count = 0;
 }
 
 static jsval_t esm_load_json(struct js *js, const char *path) {
@@ -8239,6 +8296,7 @@ struct js *js_create_dynamic(size_t initial_size, size_t max_size) {
 
 void js_destroy(struct js *js) {
   if (js == NULL) return;
+  esm_cleanup_module_cache();
   
   if (js->owns_mem) {
     ANT_GC_FREE((void *)((uint8_t *)js - 0));
