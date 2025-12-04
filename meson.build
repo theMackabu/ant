@@ -20,6 +20,7 @@ sources = files(
   'src/snapshot.c',
 ) + files(module_files)
 
+uuid_dep = dependency('uuid', required: true)
 zlib_dep = dependency('zlib', required: true)
 llhttp = dependency('llhttp', required: true)
 openssl_dep = dependency('openssl', required: true)
@@ -110,7 +111,7 @@ snapshot_h = custom_target(
 )
 
 ant_deps = [
-  bdwgc_dep,
+  bdwgc_dep, uuid_dep,
   llhttp, mongoose_dep,
   libuv_dep, argtable3_dep,
   tlsuv_dep, libsodium_dep,
