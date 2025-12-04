@@ -1,6 +1,6 @@
 project('ant', 'c', default_options: [
   'optimization=2',
-  'c_std=c23',
+  'c_std=c11',
   'default_library=static'
 ])
 
@@ -40,6 +40,7 @@ tlsuv_opts.append_compile_args('c', [
 tlsuv_opts.add_cmake_defines({'BUILD_TESTING': 'OFF'})
 tlsuv_dep = cmake.subproject('tlsuv', options: tlsuv_opts).dependency('tlsuv')
 
+bdwgc_dep = subproject('bdwgc').get_variable('bdwgc_dep')
 uthash_dep = subproject('uthash').get_variable('uthash_dep')
 yyjson_dep = subproject('yyjson').get_variable('yyjson_dep')
 uuidv7_dep = subproject('uuidv7').get_variable('uuidv7_dep')
@@ -67,7 +68,7 @@ endif
 build_date = run_command('date', '+%Y-%m-%d', check: true).stdout().strip()
 
 version_conf = configuration_data()
-version_conf.set('ANT_VERSION', '0.0.6.40')
+version_conf.set('ANT_VERSION', '0.0.6.41')
 version_conf.set('ANT_GIT_HASH', git_hash)
 version_conf.set('ANT_BUILD_DATE', build_date)
 
@@ -104,6 +105,7 @@ snapshot_h = custom_target(
 )
 
 ant_deps = [
+  bdwgc_dep,
   llhttp, mongoose_dep,
   libuv_dep, argtable3_dep,
   tlsuv_dep, libsodium_dep,

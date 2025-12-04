@@ -1,0 +1,13 @@
+[wrap-file]
+directory = gc-8.2.10
+source_url = https://github.com/bdwgc/bdwgc/releases/download/v8.2.10/gc-8.2.10.tar.gz
+source_filename = gc-8.2.10.tar.gz
+source_hash = 832cf4f7cf676b59582ed3b1bbd90a8d0e0ddbc3b11cb3b2096c5177ce39cc47
+source_fallback_url = https://github.com/mesonbuild/wrapdb/releases/download/bdwgc_8.2.10-1/gc-8.2.10.tar.gz
+patch_filename = bdwgc_8.2.10-1_patch.zip
+patch_url = https://wrapdb.mesonbuild.com/v2/bdwgc_8.2.10-1/get_patch
+patch_hash = 6e789989cb6c96738bb896f6167c1b6cb976a4734fc191e7fd84896a2966ab97
+wrapdb_version = 8.2.10-1
+
+[provide]
+dependency_names = bdw-gc

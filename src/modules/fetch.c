@@ -68,7 +68,7 @@ static jsval_t create_response(struct js *js, int status, const char *body, size
   js_set(js, json_obj, "__code", json_str);
   jsval_t json_func = js_mknum(0);
   memcpy(&json_func, &json_obj, sizeof(jsval_t));
-  json_func = (json_func & 0xFFFFFFFFFFFFULL) | (0x7FF0000000000000ULL | ((uint64_t)7 << 48));
+  json_func = (json_func & 0xFFFFFFFFFFFFULL) | (0x7FE0000000000000ULL | ((uint64_t)7 << 48));
   js_set(js, response_obj, "json", json_func);
   
   return response_obj;
@@ -304,7 +304,7 @@ static jsval_t js_fetch(struct js *js, jsval_t *args, int nargs) {
   
   jsval_t wrapper_func = js_mknum(0);
   memcpy(&wrapper_func, &wrapper_obj, sizeof(jsval_t));
-  wrapper_func = (wrapper_func & 0xFFFFFFFFFFFFULL) | (0x7FF0000000000000ULL | ((uint64_t)7 << 48));
+  wrapper_func = (wrapper_func & 0xFFFFFFFFFFFFULL) | (0x7FE0000000000000ULL | ((uint64_t)7 << 48));
   queue_microtask(js, wrapper_func);
   
   return promise;
