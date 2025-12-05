@@ -55,6 +55,7 @@ static int execute_module(struct js *js, const char *filename) {
   
   js_set_filename(js, filename);
   js_setup_import_meta(js, filename);
+  js_mkscope(js);
   
   jsval_t result = js_eval(js, buffer, len);
   free(buffer);
