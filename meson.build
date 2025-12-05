@@ -50,6 +50,7 @@ argtable3_dep = subproject('argtable3').get_variable('argtable3_dep')
 minicoro_dep = subproject('minicoro').get_variable('minicoro_dep')
 
 libffi_dep = subproject('libffi', default_options: [
+  'warning_level=0',
   'tests=false'
 ]).get_variable('ffi_dep')
 
@@ -73,7 +74,7 @@ endif
 build_date = run_command('date', '+%Y-%m-%d', check: true).stdout().strip()
 
 version_conf = configuration_data()
-version_conf.set('ANT_VERSION', '0.0.7.12')
+version_conf.set('ANT_VERSION', '0.0.7.13')
 version_conf.set('ANT_GIT_HASH', git_hash)
 version_conf.set('ANT_BUILD_DATE', build_date)
 
