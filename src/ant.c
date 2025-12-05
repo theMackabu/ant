@@ -7713,13 +7713,16 @@ static jsval_t esm_load_module(struct js *js, esm_module_t *mod) {
   js_set(js, glob, "__esm_module_scope", ns);
   
   const char *prev_filename = js->filename;
+  jsval_t saved_scope = js->scope;
   
   js_set_filename(js, mod->resolved_path);
+  mkscope(js);
   
   jsval_t result = js_eval(js, content, size);
   
   free(content);
   
+  js->scope = saved_scope;
   js_set_filename(js, prev_filename);
   js_set(js, glob, "__esm_module_scope", prev_module);
   
@@ -8056,12 +8059,22 @@ static jsval_t js_import_stmt(struct js *js) {
       const char *saved_code = js->code;
       jsoff_t saved_clen = js->clen;
       jsoff_t saved_pos = js->pos;
+      uint8_t saved_tok = js->tok;
+      uint8_t saved_consumed = js->consumed;
+      jsoff_t saved_toff = js->toff;
+      jsoff_t saved_tlen = js->tlen;
+      jsval_t saved_scope = js->scope;
       
       ns = esm_load_module(js, mod);
       
       js->code = saved_code;
       js->clen = saved_clen;
       js->pos = saved_pos;
+      js->tok = saved_tok;
+      js->consumed = saved_consumed;
+      js->toff = saved_toff;
+      js->tlen = saved_tlen;
+      js->scope = saved_scope;
       
       free(resolved_path);
     }
@@ -8106,6 +8119,7 @@ static jsval_t js_export_stmt(struct js *js) {
   }
   
   if (next(js) == TOK_CONST || next(js) == TOK_LET || next(js) == TOK_VAR) {
+    bool is_const = (next(js) == TOK_CONST);
     js->consumed = 1;
     
     EXPECT(TOK_IDENTIFIER, );
@@ -8121,7 +8135,7 @@ static jsval_t js_export_stmt(struct js *js) {
     }
     
     jsval_t key = js_mkstr(js, name, name_len);
-    setprop(js, js->scope, key, resolveprop(js, value));
+    mkprop(js, js->scope, key, resolveprop(js, value), is_const);
     setprop(js, module_ns, key, resolveprop(js, value));
     
     return value;
