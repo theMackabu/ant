@@ -1165,6 +1165,41 @@ static jsval_t mkarr(struct js *js) {
   return mkobj(js, 0);
 }
 
+static jsoff_t arr_length(struct js *js, jsval_t arr) {
+  if (vtype(arr) != T_ARR) return 0;
+  jsoff_t scan = loadoff(js, (jsoff_t) vdata(arr)) & ~(3U | CONSTMASK);
+  while (scan < js->brk && scan != 0) {
+    jsoff_t koff = loadoff(js, scan + (jsoff_t) sizeof(scan));
+    jsoff_t klen = offtolen(loadoff(js, koff));
+    const char *key = (char *) &js->mem[koff + sizeof(koff)];
+    if (streq(key, klen, "length", 6)) {
+      jsval_t val = loadval(js, scan + (jsoff_t) (sizeof(scan) + sizeof(koff)));
+      if (vtype(val) == T_NUM) return (jsoff_t) tod(val);
+      break;
+    }
+    scan = loadoff(js, scan) & ~(3U | CONSTMASK);
+  }
+  return 0;
+}
+
+static jsval_t arr_get(struct js *js, jsval_t arr, jsoff_t idx) {
+  if (vtype(arr) != T_ARR) return js_mkundef();
+  char idxstr[16];
+  snprintf(idxstr, sizeof(idxstr), "%u", (unsigned) idx);
+  jsoff_t idxlen = (jsoff_t) strlen(idxstr);
+  jsoff_t prop = loadoff(js, (jsoff_t) vdata(arr)) & ~(3U | CONSTMASK);
+  while (prop < js->brk && prop != 0) {
+    jsoff_t koff = loadoff(js, prop + (jsoff_t) sizeof(prop));
+    jsoff_t klen = offtolen(loadoff(js, koff));
+    const char *key = (char *) &js->mem[koff + sizeof(koff)];
+    if (streq(key, klen, idxstr, idxlen)) {
+      return loadval(js, prop + (jsoff_t) (sizeof(prop) + sizeof(koff)));
+    }
+    prop = loadoff(js, prop) & ~(3U | CONSTMASK);
+  }
+  return js_mkundef();
+}
+
 static bool is_const_prop(struct js *js, jsoff_t propoff) {
   for (jsoff_t off = 0; off < js->brk;) {
     jsoff_t v = loadoff(js, off);
@@ -2146,6 +2181,7 @@ static jsval_t js_call_params(struct js *js) {
   
   for (bool comma = false; next(js) != TOK_EOF; comma = true) {
     if (!comma && next(js) == TOK_RPAREN) break;
+    if (next(js) == TOK_REST) js->consumed = 1;
     js_expr(js);
     if (next(js) == TOK_RPAREN) break;
     EXPECT(TOK_COMMA, js->flags = flags);
@@ -2170,11 +2206,24 @@ static jsval_t call_c(struct js *js,
   
   while (js->pos < js->clen) {
     if (next(js) == TOK_RPAREN) break;
+    bool is_spread = (next(js) == TOK_REST);
+    if (is_spread) js->consumed = 1;
     jsval_t arg = resolveprop(js, js_expr(js));
-    if (js->brk + sizeof(arg) > js->size) return js_mkerr(js, "call oom");
-    js->size -= (jsoff_t) sizeof(arg);
-    memcpy(&js->mem[js->size], &arg, sizeof(arg));
-    argc++;
+    if (is_spread && vtype(arg) == T_ARR) {
+      jsoff_t len = arr_length(js, arg);
+      for (jsoff_t i = 0; i < len; i++) {
+        jsval_t elem = arr_get(js, arg, i);
+        if (js->brk + sizeof(elem) > js->size) return js_mkerr(js, "call oom");
+        js->size -= (jsoff_t) sizeof(elem);
+        memcpy(&js->mem[js->size], &elem, sizeof(elem));
+        argc++;
+      }
+    } else {
+      if (js->brk + sizeof(arg) > js->size) return js_mkerr(js, "call oom");
+      js->size -= (jsoff_t) sizeof(arg);
+      memcpy(&js->mem[js->size], &arg, sizeof(arg));
+      argc++;
+    }
     if (next(js) == TOK_COMMA) js->consumed = 1;
   }
   
@@ -2252,6 +2301,37 @@ static jsval_t call_js(struct js *js, const char *fn, jsoff_t fnlen, jsval_t clo
   }
   
   jsval_t function_scope = mkobj(js, parent_scope_offset);
+  
+  const char *caller_code = js->code;
+  jsoff_t caller_clen = js->clen;
+  jsoff_t caller_pos = js->pos;
+  
+  jsval_t args[64];
+  int argc = 0;
+  caller_pos = skiptonext(caller_code, caller_clen, caller_pos);
+  while (caller_pos < caller_clen && caller_code[caller_pos] != ')' && argc < 64) {
+    bool is_spread = (caller_code[caller_pos] == '.' && caller_pos + 2 < caller_clen &&
+                      caller_code[caller_pos + 1] == '.' && caller_code[caller_pos + 2] == '.');
+    if (is_spread) caller_pos += 3;
+    js->pos = caller_pos;
+    js->consumed = 1;
+    jsval_t arg = resolveprop(js, js_expr(js));
+    caller_pos = js->pos;
+    if (is_spread && vtype(arg) == T_ARR) {
+      jsoff_t len = arr_length(js, arg);
+      for (jsoff_t i = 0; i < len && argc < 64; i++) {
+        args[argc++] = arr_get(js, arg, i);
+      }
+    } else {
+      args[argc++] = arg;
+    }
+    caller_pos = skiptonext(caller_code, caller_clen, caller_pos);
+    if (caller_pos < caller_clen && caller_code[caller_pos] == ',') caller_pos++;
+    caller_pos = skiptonext(caller_code, caller_clen, caller_pos);
+  }
+  js->pos = caller_pos;
+  
+  int argi = 0;
   bool has_rest = false;
   jsoff_t rest_param_start = 0, rest_param_len = 0;
   
@@ -2282,30 +2362,24 @@ static jsval_t call_js(struct js *js, const char *fn, jsoff_t fnlen, jsval_t clo
     jsoff_t default_start = 0, default_len = 0;
     fnpos = extract_default_param_value(fn, fnlen, fnpos + identlen, &default_start, &default_len);
     
-    js->pos = skiptonext(js->code, js->clen, js->pos);
-    js->consumed = 1;
     jsval_t v;
-    if (js->code[js->pos] == ')' || js->code[js->pos] == ',') {
-      if (default_len > 0) {
-        const char *saved_code = js->code;
-        jsoff_t saved_clen = js->clen, saved_pos = js->pos;
-        js->code = &fn[default_start];
-        js->clen = default_len;
-        js->pos = 0;
-        js->consumed = 1;
-        v = js_expr(js);
-        js->code = saved_code;
-        js->clen = saved_clen;
-        js->pos = saved_pos;
-      } else {
-        v = js_mkundef();
-      }
-    } else {
+    if (argi < argc) {
+      v = args[argi++];
+    } else if (default_len > 0) {
+      const char *saved_code = js->code;
+      jsoff_t saved_clen = js->clen, saved_pos = js->pos;
+      js->code = &fn[default_start];
+      js->clen = default_len;
+      js->pos = 0;
+      js->consumed = 1;
       v = js_expr(js);
+      js->code = saved_code;
+      js->clen = saved_clen;
+      js->pos = saved_pos;
+    } else {
+      v = js_mkundef();
     }
     setprop(js, function_scope, js_mkstr(js, &fn[param_name_pos], identlen), v);
-    js->pos = skiptonext(js->code, js->clen, js->pos);
-    if (js->pos < js->clen && js->code[js->pos] == ',') js->pos++;
     if (fnpos < fnlen && fn[fnpos] == ',') fnpos++;
   }
   
@@ -2313,26 +2387,16 @@ static jsval_t call_js(struct js *js, const char *fn, jsoff_t fnlen, jsval_t clo
     jsval_t rest_array = mkarr(js);
     if (!is_err(rest_array)) {
       jsoff_t idx = 0;
-      js->pos = skiptonext(js->code, js->clen, js->pos);
-      
-      while (js->pos < js->clen && js->code[js->pos] != ')') {
-        js->consumed = 1;
-        jsval_t arg = js_expr(js);
-        if (!is_err(arg)) {
-          char idxstr[16];
-          snprintf(idxstr, sizeof(idxstr), "%u", (unsigned) idx);
-          jsval_t key = js_mkstr(js, idxstr, strlen(idxstr));
-          setprop(js, rest_array, key, resolveprop(js, arg));
-          idx++;
-        }
-        js->pos = skiptonext(js->code, js->clen, js->pos);
-        if (js->pos < js->clen && js->code[js->pos] == ',') js->pos++;
+      while (argi < argc) {
+        char idxstr[16];
+        snprintf(idxstr, sizeof(idxstr), "%u", (unsigned) idx);
+        jsval_t key = js_mkstr(js, idxstr, strlen(idxstr));
+        setprop(js, rest_array, key, args[argi++]);
+        idx++;
       }
-      
       jsval_t len_key = js_mkstr(js, "length", 6);
       setprop(js, rest_array, len_key, tov((double) idx));
       rest_array = mkval(T_ARR, vdata(rest_array));
-      
       setprop(js, function_scope, js_mkstr(js, &fn[rest_param_start], rest_param_len), rest_array);
     }
   }

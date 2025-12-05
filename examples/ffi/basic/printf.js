@@ -12,6 +12,7 @@ if (process.platform === 'darwin') {
 }
 
 const libc = dlopen(libcName);
+const printf = (...args) => libc.call('printf', ...args);
 
 libc.define('putchar', {
   args: [FFIType.int],
@@ -27,7 +28,7 @@ console.log('calling putchar(65):');
 libc.call('putchar', 65); // 'A'
 
 console.log('\ncalling printf:');
-libc.call('printf', 'Hello FFI! I see %d\n', 42);
+printf('Hello FFI! I see %d\n', 42);
 
 console.log('calling putchar(66):');
 libc.call('putchar', 66); // 'B'
