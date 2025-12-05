@@ -1,12 +1,12 @@
-import { dlopen, FFIType } from 'ant:ffi';
+import { dlopen, suffix, FFIType } from 'ant:ffi';
 
 let libcName;
 if (process.platform === 'darwin') {
-  libcName = 'libSystem.dylib';
+  libcName = `libSystem.${suffix}`;
 } else if (process.platform === 'linux') {
-  libcName = 'libc.so.6';
+  libcName = `libc.${suffix}`;
 } else if (process.platform === 'win32') {
-  libcName = 'msvcrt.dll';
+  libcName = `msvcrt.${suffix}`;
 } else {
   throw new Error(`Unsupported platform: ${process.platform}`);
 }
