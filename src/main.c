@@ -21,6 +21,7 @@
 #include "modules/shell.h"
 #include "modules/process.h"
 #include "modules/path.h"
+#include "modules/ffi.h"
 
 int js_result = EXIT_SUCCESS;
 
@@ -134,10 +135,12 @@ int main(int argc, char *argv[]) {
   init_server_module();
   init_timer_module();
   init_process_module();
+
   
   ant_register_library("ant:fs", fs_library);
   ant_register_library("ant:shell", shell_library);
   ant_register_library("ant:path", path_library);
+  ant_register_library("ant:ffi", ffi_library);
   
   js_protect_init_memory(js);
 

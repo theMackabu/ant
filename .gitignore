@@ -2,6 +2,10 @@
 .cache
 .env
 
+*.so
+*.dylib
+*.dll
+
 /build
 /subprojects/*/
 /subprojects/.wraplock

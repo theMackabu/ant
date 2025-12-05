@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "ant.h"
 #include "runtime.h"
@@ -95,6 +96,35 @@ void init_process_module(void) {
   js_set(js, js_glob(js), "process", process_obj);
   js_set(js, process_obj, "env", env_obj);
   js_set(js, process_obj, "exit", js_mkfun(process_exit));
+  
+  // process.pid
+  js_set(js, process_obj, "pid", js_mknum((double)getpid()));
+  
+  // process.platform
+  #if defined(__APPLE__)
+    js_set(js, process_obj, "platform", js_mkstr(js, "darwin", 6));
+  #elif defined(__linux__)
+    js_set(js, process_obj, "platform", js_mkstr(js, "linux", 5));
+  #elif defined(_WIN32) || defined(_WIN64)
+    js_set(js, process_obj, "platform", js_mkstr(js, "win32", 5));
+  #elif defined(__FreeBSD__)
+    js_set(js, process_obj, "platform", js_mkstr(js, "freebsd", 7));
+  #else
+    js_set(js, process_obj, "platform", js_mkstr(js, "unknown", 7));
+  #endif
+  
+  // process.arch
+  #if defined(__x86_64__) || defined(_M_X64)
+    js_set(js, process_obj, "arch", js_mkstr(js, "x64", 3));
+  #elif defined(__i386__) || defined(_M_IX86)
+    js_set(js, process_obj, "arch", js_mkstr(js, "ia32", 4));
+  #elif defined(__aarch64__) || defined(_M_ARM64)
+    js_set(js, process_obj, "arch", js_mkstr(js, "arm64", 5));
+  #elif defined(__arm__) || defined(_M_ARM)
+    js_set(js, process_obj, "arch", js_mkstr(js, "arm", 3));
+  #else
+    js_set(js, process_obj, "arch", js_mkstr(js, "unknown", 7));
+  #endif
   
   load_dotenv_file(js, env_obj);
   js_set_getter(js, env_obj, env_getter);
