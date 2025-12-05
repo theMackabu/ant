@@ -353,6 +353,25 @@ static jsval_t builtin_promise_catch(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_promise_finally(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_Date(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_Date_now(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Map(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Set(struct js *js, jsval_t *args, int nargs);
+static jsval_t map_set(struct js *js, jsval_t *args, int nargs);
+static jsval_t map_get(struct js *js, jsval_t *args, int nargs);
+static jsval_t map_has(struct js *js, jsval_t *args, int nargs);
+static jsval_t map_delete(struct js *js, jsval_t *args, int nargs);
+static jsval_t map_clear(struct js *js, jsval_t *args, int nargs);
+static jsval_t map_size(struct js *js, jsval_t *args, int nargs);
+static jsval_t map_entries(struct js *js, jsval_t *args, int nargs);
+static jsval_t map_keys(struct js *js, jsval_t *args, int nargs);
+static jsval_t map_values(struct js *js, jsval_t *args, int nargs);
+static jsval_t map_forEach(struct js *js, jsval_t *args, int nargs);
+static jsval_t set_add(struct js *js, jsval_t *args, int nargs);
+static jsval_t set_has(struct js *js, jsval_t *args, int nargs);
+static jsval_t set_delete(struct js *js, jsval_t *args, int nargs);
+static jsval_t set_clear(struct js *js, jsval_t *args, int nargs);
+static jsval_t set_size(struct js *js, jsval_t *args, int nargs);
+static jsval_t set_values(struct js *js, jsval_t *args, int nargs);
+static jsval_t set_forEach(struct js *js, jsval_t *args, int nargs);
 
 static jsval_t call_js(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope);
 static jsval_t call_js_with_args(struct js *js, jsval_t func, jsval_t *args, int nargs);
@@ -2123,6 +2142,40 @@ static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
       return js_mkfun(builtin_array_includes);
     } else if (streq(ptr, codereflen(r), "every", 5)) {
       return js_mkfun(builtin_array_every);
+    }
+  }
+  
+  if (vtype(l) == T_OBJ) {
+    jsoff_t map_off = lkp(js, l, "__map", 5);
+    if (map_off != 0) {
+      if (streq(ptr, codereflen(r), "set", 3)) {
+        return js_mkfun(map_set);
+      } else if (streq(ptr, codereflen(r), "get", 3)) {
+        return js_mkfun(map_get);
+      } else if (streq(ptr, codereflen(r), "has", 3)) {
+        return js_mkfun(map_has);
+      } else if (streq(ptr, codereflen(r), "delete", 6)) {
+        return js_mkfun(map_delete);
+      } else if (streq(ptr, codereflen(r), "clear", 5)) {
+        return js_mkfun(map_clear);
+      } else if (streq(ptr, codereflen(r), "size", 4)) {
+        return js_mkfun(map_size);
+      }
+    }
+    
+    jsoff_t set_off = lkp(js, l, "__set", 5);
+    if (set_off != 0) {
+      if (streq(ptr, codereflen(r), "add", 3)) {
+        return js_mkfun(set_add);
+      } else if (streq(ptr, codereflen(r), "has", 3)) {
+        return js_mkfun(set_has);
+      } else if (streq(ptr, codereflen(r), "delete", 6)) {
+        return js_mkfun(set_delete);
+      } else if (streq(ptr, codereflen(r), "clear", 5)) {
+        return js_mkfun(set_clear);
+      } else if (streq(ptr, codereflen(r), "size", 4)) {
+        return js_mkfun(set_size);
+      }
     }
   }
   
@@ -8274,6 +8327,270 @@ static jsval_t js_export_stmt(struct js *js) {
   return js_mkerr(js, "Invalid export statement");
 }
 
+typedef struct map_entry {
+    char *key;
+    jsval_t value;
+    UT_hash_handle hh;
+} map_entry_t;
+
+typedef struct set_entry {
+    jsval_t value;
+    char *key;
+    UT_hash_handle hh;
+} set_entry_t;
+
+static const char* jsval_to_key(struct js *js, jsval_t val) {
+  if (vtype(val) == T_STR) {
+    jsoff_t len;
+    jsoff_t off = vstr(js, val, &len);
+    return (char *)&js->mem[off];
+  } else return js_str(js, val);
+}
+
+static jsval_t builtin_Map(struct js *js, jsval_t *args, int nargs) {
+  jsval_t map_obj = mkobj(js, 0);
+  
+  map_entry_t **map_head = (map_entry_t **)ANT_GC_MALLOC(sizeof(map_entry_t *));
+  if (!map_head) return js_mkerr(js, "out of memory");
+  *map_head = NULL;
+  
+  jsval_t map_ptr = mkval(T_NUM, (size_t)map_head);
+  jsval_t map_key = js_mkstr(js, "__map", 5);
+  setprop(js, map_obj, map_key, map_ptr);
+  
+  return map_obj;
+}
+
+static jsval_t builtin_Set(struct js *js, jsval_t *args, int nargs) {
+  jsval_t set_obj = mkobj(js, 0);
+  
+  set_entry_t **set_head = (set_entry_t **)ANT_GC_MALLOC(sizeof(set_entry_t *));
+  if (!set_head) return js_mkerr(js, "out of memory");
+  *set_head = NULL;
+  
+  jsval_t set_ptr = mkval(T_NUM, (size_t)set_head);
+  jsval_t set_key = js_mkstr(js, "__set", 5);
+  setprop(js, set_obj, set_key, set_ptr);
+  
+  return set_obj;
+}
+
+static map_entry_t** get_map_from_obj(struct js *js, jsval_t obj) {
+  jsoff_t map_off = lkp(js, obj, "__map", 5);
+  if (map_off == 0) return NULL;
+  jsval_t map_val = resolveprop(js, mkval(T_PROP, map_off));
+  if (vtype(map_val) != T_NUM) return NULL;
+  return (map_entry_t**)(size_t)vdata(map_val);
+}
+
+static set_entry_t** get_set_from_obj(struct js *js, jsval_t obj) {
+  jsoff_t set_off = lkp(js, obj, "__set", 5);
+  if (set_off == 0) return NULL;
+  jsval_t set_val = resolveprop(js, mkval(T_PROP, set_off));
+  if (vtype(set_val) != T_NUM) return NULL;
+  return (set_entry_t**)(size_t)vdata(set_val);
+}
+
+static jsval_t map_set(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 2) return js_mkerr(js, "Map.set() requires 2 arguments");
+  
+  jsval_t this_val = js->this_val;
+  map_entry_t **map_ptr = get_map_from_obj(js, this_val);
+  if (!map_ptr) return js_mkerr(js, "Invalid Map object");
+  
+  const char *key_str;
+  if (vtype(args[0]) == T_STR) {
+    jsoff_t len;
+    jsoff_t off = vstr(js, args[0], &len);
+    key_str = (char *)&js->mem[off];
+  } else key_str = js_str(js, args[0]);
+  
+  map_entry_t *entry;
+  HASH_FIND_STR(*map_ptr, key_str, entry);
+  if (entry) {
+    entry->value = args[1];
+  } else {
+    entry = (map_entry_t *)ANT_GC_MALLOC(sizeof(map_entry_t));
+    if (!entry) return js_mkerr(js, "out of memory");
+    entry->key = strdup(key_str);
+    entry->value = args[1];
+    HASH_ADD_STR(*map_ptr, key, entry);
+  }
+  
+  return this_val;
+}
+
+static jsval_t map_get(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "Map.get() requires 1 argument");
+  
+  jsval_t this_val = js->this_val;
+  map_entry_t **map_ptr = get_map_from_obj(js, this_val);
+  if (!map_ptr) return js_mkundef();
+  
+  const char *key_str;
+  if (vtype(args[0]) == T_STR) {
+    jsoff_t len;
+    jsoff_t off = vstr(js, args[0], &len);
+    key_str = (char *)&js->mem[off];
+  } else key_str = js_str(js, args[0]);
+  
+  map_entry_t *entry;
+  HASH_FIND_STR(*map_ptr, key_str, entry);
+  return entry ? entry->value : js_mkundef();
+}
+
+static jsval_t map_has(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "Map.has() requires 1 argument");
+  
+  jsval_t this_val = js->this_val;
+  map_entry_t **map_ptr = get_map_from_obj(js, this_val);
+  if (!map_ptr) return mkval(T_BOOL, 0);
+  
+  const char *key_str;
+  if (vtype(args[0]) == T_STR) {
+    jsoff_t len;
+    jsoff_t off = vstr(js, args[0], &len);
+    key_str = (char *)&js->mem[off];
+  } else key_str = js_str(js, args[0]);
+  
+  map_entry_t *entry;
+  HASH_FIND_STR(*map_ptr, key_str, entry);
+  return mkval(T_BOOL, entry ? 1 : 0);
+}
+
+static jsval_t map_delete(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "Map.delete() requires 1 argument");
+  
+  jsval_t this_val = js->this_val;
+  map_entry_t **map_ptr = get_map_from_obj(js, this_val);
+  if (!map_ptr) return mkval(T_BOOL, 0);
+  
+  const char *key_str;
+  if (vtype(args[0]) == T_STR) {
+      jsoff_t len;
+      jsoff_t off = vstr(js, args[0], &len);
+      key_str = (char *)&js->mem[off];
+  } else key_str = js_str(js, args[0]);
+  
+  map_entry_t *entry;
+  HASH_FIND_STR(*map_ptr, key_str, entry);
+  if (entry) {
+    HASH_DEL(*map_ptr, entry);
+    free(entry->key);
+    ANT_GC_FREE(entry);
+    return mkval(T_BOOL, 1);
+  }
+  return mkval(T_BOOL, 0);
+}
+
+static jsval_t map_clear(struct js *js, jsval_t *args, int nargs) {
+  jsval_t this_val = js->this_val;
+  map_entry_t **map_ptr = get_map_from_obj(js, this_val);
+  if (!map_ptr) return js_mkundef();
+  
+  map_entry_t *entry, *tmp;
+  HASH_ITER(hh, *map_ptr, entry, tmp) {
+    HASH_DEL(*map_ptr, entry);
+    free(entry->key);
+    ANT_GC_FREE(entry);
+  }
+  *map_ptr = NULL;
+  
+  return js_mkundef();
+}
+
+static jsval_t map_size(struct js *js, jsval_t *args, int nargs) {
+  jsval_t this_val = js->this_val;
+  map_entry_t **map_ptr = get_map_from_obj(js, this_val);
+  if (!map_ptr) return tov(0);
+  
+  size_t count = HASH_COUNT(*map_ptr);
+  return tov((double)count);
+}
+
+static jsval_t set_add(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "Set.add() requires 1 argument");
+  
+  jsval_t this_val = js->this_val;
+  set_entry_t **set_ptr = get_set_from_obj(js, this_val);
+  if (!set_ptr) return js_mkerr(js, "Invalid Set object");
+  
+  const char *key_str = jsval_to_key(js, args[0]);
+  
+  set_entry_t *entry;
+  HASH_FIND_STR(*set_ptr, key_str, entry);
+  
+  if (!entry) {
+    entry = (set_entry_t *)ANT_GC_MALLOC(sizeof(set_entry_t));
+    if (!entry) return js_mkerr(js, "out of memory");
+    entry->value = args[0];
+    entry->key = strdup(key_str);
+    HASH_ADD_KEYPTR(hh, *set_ptr, entry->key, strlen(entry->key), entry);
+  }
+  
+  return this_val;
+}
+
+static jsval_t set_has(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "Set.has() requires 1 argument");
+  
+  jsval_t this_val = js->this_val;
+  set_entry_t **set_ptr = get_set_from_obj(js, this_val);
+  if (!set_ptr) return mkval(T_BOOL, 0);
+  
+  const char *key_str = jsval_to_key(js, args[0]);
+  
+  set_entry_t *entry;
+  HASH_FIND_STR(*set_ptr, key_str, entry);
+  
+  return mkval(T_BOOL, entry ? 1 : 0);
+}
+
+static jsval_t set_delete(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "Set.delete() requires 1 argument");
+  
+  jsval_t this_val = js->this_val;
+  set_entry_t **set_ptr = get_set_from_obj(js, this_val);
+  if (!set_ptr) return mkval(T_BOOL, 0);
+  
+  const char *key_str = jsval_to_key(js, args[0]);
+  set_entry_t *entry;
+  HASH_FIND_STR(*set_ptr, key_str, entry);
+  
+  if (entry) {
+    HASH_DEL(*set_ptr, entry);
+    free(entry->key);
+    ANT_GC_FREE(entry);
+    return mkval(T_BOOL, 1);
+  }
+  return mkval(T_BOOL, 0);
+}
+
+static jsval_t set_clear(struct js *js, jsval_t *args, int nargs) {
+  jsval_t this_val = js->this_val;
+  set_entry_t **set_ptr = get_set_from_obj(js, this_val);
+  if (!set_ptr) return js_mkundef();
+  
+  set_entry_t *entry, *tmp;
+  HASH_ITER(hh, *set_ptr, entry, tmp) {
+    HASH_DEL(*set_ptr, entry);
+    free(entry->key);
+    ANT_GC_FREE(entry);
+  }
+  *set_ptr = NULL;
+  
+  return js_mkundef();
+}
+
+static jsval_t set_size(struct js *js, jsval_t *args, int nargs) {
+  jsval_t this_val = js->this_val;
+  set_entry_t **set_ptr = get_set_from_obj(js, this_val);
+  if (!set_ptr) return tov(0);
+  
+  size_t count = HASH_COUNT(*set_ptr);
+  return tov((double)count);
+}
+
 struct js *js_create(void *buf, size_t len) {
   ANT_GC_INIT();
   init_free_list();
@@ -8313,6 +8630,8 @@ struct js *js_create(void *buf, size_t len) {
   
   setprop(js, glob, js_mkstr(js, "Boolean", 7), js_mkfun(builtin_Boolean));
   setprop(js, glob, js_mkstr(js, "Array", 5), js_mkfun(builtin_Array));
+  setprop(js, glob, js_mkstr(js, "Map", 3), js_mkfun(builtin_Map));
+  setprop(js, glob, js_mkstr(js, "Set", 3), js_mkfun(builtin_Set));
   setprop(js, glob, js_mkstr(js, "Error", 5), js_mkfun(builtin_Error));
   setprop(js, glob, js_mkstr(js, "RegExp", 6), js_mkfun(builtin_RegExp));
   setprop(js, glob, js_mkstr(js, "parseInt", 8), js_mkfun(builtin_parseInt));
