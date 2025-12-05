@@ -8185,11 +8185,11 @@ static jsval_t js_export_stmt(struct js *js) {
       if (is_err(local_val)) return local_val;
       
       setprop(js, module_ns, js_mkstr(js, export_name, export_len), resolveprop(js, local_val));
-      
       if (next(js) == TOK_COMMA) js->consumed = 1;
     }
     
     EXPECT(TOK_RBRACE, );
+    if (next(js) == TOK_SEMICOLON) js->consumed = 1;
     return js_mkundef();
   }
   
