@@ -1549,52 +1549,56 @@ static void js_fixup_offsets(struct js *js, jsoff_t start, jsoff_t size) {
     if ((cleaned & 3) != T_OBJ && (cleaned & 3) != T_PROP) continue;
     jsoff_t adjusted = cleaned > start ? cleaned - size : cleaned;
     if (cleaned != adjusted) saveoff(js, off, adjusted | flags);
+    
     if ((cleaned & 3) == T_OBJ) {
       jsoff_t u = loadoff(js, (jsoff_t) (off + sizeof(jsoff_t)));
       if (u > start) saveoff(js, (jsoff_t) (off + sizeof(jsoff_t)), u - size);
     }
+    
+    #define FIXUP_JSVAL(val) do { \
+      if (is_mem_entity(vtype(val)) && vdata(val) > start) \
+        (val) = mkval(vtype(val), vdata(val) - size); \
+    } while (0)
+
+    #define FIXUP_JSVAL_AT(mem_off) do { \
+      jsval_t _v = loadval(js, mem_off); \
+      if (is_mem_entity(vtype(_v)) && vdata(_v) > start) \
+        saveval(js, mem_off, mkval(vtype(_v), vdata(_v) - size)); \
+    } while (0)
+
+    #define FIXUP_OFF(off_var) do { if ((off_var) > start) (off_var) -= size; } while (0)
+
     if ((cleaned & 3) == T_PROP) {
       jsoff_t koff = loadoff(js, (jsoff_t) (off + sizeof(off)));
       if (koff > start) saveoff(js, (jsoff_t) (off + sizeof(off)), koff - size);
-      jsval_t val = loadval(js, (jsoff_t) (off + sizeof(off) + sizeof(off)));
-      if (is_mem_entity(vtype(val)) && vdata(val) > start) {
-        saveval(js, (jsoff_t) (off + sizeof(off) + sizeof(off)), mkval(vtype(val), (unsigned long) (vdata(val) - size)));
-      }
+      FIXUP_JSVAL_AT((jsoff_t) (off + sizeof(off) + sizeof(off)));
     }
   }
   
-  jsoff_t off = (jsoff_t) vdata(js->scope);
-  if (off > start) js->scope = mkval(T_OBJ, off - size);
-  if (js->nogc >= start) js->nogc -= size;
+  FIXUP_JSVAL(js->scope);
+  FIXUP_OFF(js->nogc);
   if (js->code > (char *) js->mem && js->code - (char *) js->mem < js->size && js->code - (char *) js->mem > start) {
     js->code -= size;
   }
   
   if (global_scope_stack) {
     jsoff_t *p = NULL;
-    while ((p = (jsoff_t *)utarray_next(global_scope_stack, p)) != NULL) {
-      if (*p > start) *p -= size;
-    }
+    while ((p = (jsoff_t *)utarray_next(global_scope_stack, p)) != NULL) FIXUP_OFF(*p);
   }
-  
+
   for (coroutine_t *coro = pending_coroutines.head; coro != NULL; coro = coro->next) {
-    if (is_mem_entity(vtype(coro->scope)) && vdata(coro->scope) > start)
-      coro->scope = mkval(vtype(coro->scope), vdata(coro->scope) - size);
-    if (is_mem_entity(vtype(coro->this_val)) && vdata(coro->this_val) > start)
-      coro->this_val = mkval(vtype(coro->this_val), vdata(coro->this_val) - size);
-    if (is_mem_entity(vtype(coro->awaited_promise)) && vdata(coro->awaited_promise) > start)
-      coro->awaited_promise = mkval(vtype(coro->awaited_promise), vdata(coro->awaited_promise) - size);
-    if (is_mem_entity(vtype(coro->result)) && vdata(coro->result) > start)
-      coro->result = mkval(vtype(coro->result), vdata(coro->result) - size);
-    if (is_mem_entity(vtype(coro->async_func)) && vdata(coro->async_func) > start)
-      coro->async_func = mkval(vtype(coro->async_func), vdata(coro->async_func) - size);
-    if (is_mem_entity(vtype(coro->yield_value)) && vdata(coro->yield_value) > start)
-      coro->yield_value = mkval(vtype(coro->yield_value), vdata(coro->yield_value) - size);
-    for (int i = 0; i < coro->nargs; i++) {
-      if (is_mem_entity(vtype(coro->args[i])) && vdata(coro->args[i]) > start)
-        coro->args[i] = mkval(vtype(coro->args[i]), vdata(coro->args[i]) - size);
-    }
+    FIXUP_JSVAL(coro->scope);
+    FIXUP_JSVAL(coro->this_val);
+    FIXUP_JSVAL(coro->awaited_promise);
+    FIXUP_JSVAL(coro->result);
+    FIXUP_JSVAL(coro->async_func);
+    FIXUP_JSVAL(coro->yield_value);
+    for (int i = 0; i < coro->nargs; i++) FIXUP_JSVAL(coro->args[i]);
   }
+
+  #undef FIXUP_JSVAL
+  #undef FIXUP_JSVAL_AT
+  #undef FIXUP_OFF
 }
 
 static void js_compact_from_end(struct js *js) {
