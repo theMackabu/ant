@@ -1946,11 +1946,22 @@ static jsval_t try_dynamic_getter(struct js *js, jsval_t obj, const char *key, s
 static jsval_t lookup(struct js *js, const char *buf, size_t len) {
   if (js->flags & F_NOEXEC) return 0;
   
-  for (jsval_t scope = js->scope;;) {
-    jsoff_t off = lkp(js, scope, buf, len);
-    if (off != 0) return mkval(T_PROP, off);
-    if (vdata(scope) == 0) break;
-    scope = mkval(T_OBJ, loadoff(js, (jsoff_t) (vdata(scope) + sizeof(jsoff_t))));
+  jsoff_t off = lkp(js, js->scope, buf, len);
+  if (off != 0) return mkval(T_PROP, off);
+  
+  if (global_scope_stack) {
+    int stack_len = utarray_len(global_scope_stack);
+    for (int i = stack_len - 1; i >= 0; i--) {
+      jsoff_t *scope_off = (jsoff_t *)utarray_eltptr(global_scope_stack, i);
+      jsval_t scope = mkval(T_OBJ, *scope_off);
+      off = lkp(js, scope, buf, len);
+      if (off != 0) return mkval(T_PROP, off);
+    }
+  } else {
+    for (jsval_t scope = upper(js, js->scope); vdata(scope) != 0; scope = upper(js, scope)) {
+      off = lkp(js, scope, buf, len);
+      if (off != 0) return mkval(T_PROP, off);
+    }
   }
   
   if (js->flags & F_STRICT) {
