@@ -55,7 +55,9 @@ static int execute_module(struct js *js, const char *filename) {
   
   js_set_filename(js, filename);
   js_setup_import_meta(js, filename);
+  
   js_mkscope(js);
+  js_protect_init_memory(js);
   
   jsval_t result = js_eval(js, buffer, len);
   free(buffer);
@@ -137,13 +139,10 @@ int main(int argc, char *argv[]) {
   init_timer_module();
   init_process_module();
 
-  
   ant_register_library("ant:fs", fs_library);
   ant_register_library("ant:shell", shell_library);
   ant_register_library("ant:path", path_library);
   ant_register_library("ant:ffi", ffi_library);
-  
-  js_protect_init_memory(js);
 
   if (repl_mode) ant_repl_run(); else {
     js_result = execute_module(js, module_file);

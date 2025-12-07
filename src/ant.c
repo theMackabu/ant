@@ -100,7 +100,15 @@ typedef struct {
 } FreeListEntry;
 
 static UT_array *global_free_list = NULL;
+static UT_array *global_scope_stack = NULL;
 static jsoff_t protected_brk = 0;
+
+static const UT_icd jsoff_icd = {
+  .sz = sizeof(jsoff_t),
+  .init = NULL,
+  .copy = NULL,
+  .dtor = NULL,
+};
 
 static const UT_icd free_list_icd = {
   .sz = sizeof(FreeListEntry),
@@ -1382,11 +1390,14 @@ static jsoff_t js_unmark_entity(struct js *js, jsoff_t off) {
 }
 
 static void js_unmark_used_entities(struct js *js) {
-  jsval_t scope = js->scope;
-  do {
-    js_unmark_entity(js, (jsoff_t) vdata(scope));
-    scope = upper(js, scope);
-  } while (vdata(scope) != 0);
+  js_unmark_entity(js, (jsoff_t) vdata(js->scope));
+  if (global_scope_stack) {
+    jsoff_t *p = NULL;
+    while ((p = (jsoff_t *)utarray_next(global_scope_stack, p)) != NULL) {
+      js_unmark_entity(js, *p);
+    }
+  }
+  js_unmark_entity(js, 0);
   if (js->nogc) js_unmark_entity(js, js->nogc);
 }
 
@@ -1548,11 +1559,20 @@ static void js_fixup_offsets(struct js *js, jsoff_t start, jsoff_t size) {
 static void js_compact_from_end(struct js *js) {
   jsoff_t new_brk = js->brk;
   
+  jsoff_t min_brk = (jsoff_t) vdata(js->scope) + 8;
+  if (global_scope_stack) {
+    jsoff_t *p = NULL;
+    while ((p = (jsoff_t *)utarray_next(global_scope_stack, p)) != NULL) {
+      if (*p + 8 > min_brk) min_brk = *p + 8;
+    }
+  }
+  
   for (jsoff_t off = 0; off < js->brk; off += esize(loadoff(js, off) & ~(GCMASK | CONSTMASK))) {
     jsoff_t v = loadoff(js, off);
     if ((v & GCMASK) == 0) new_brk = off + esize(v & ~(GCMASK | CONSTMASK));
   }
   
+  if (new_brk < min_brk) new_brk = min_brk;
   js->brk = new_brk;
 }
 
@@ -1750,12 +1770,20 @@ static inline uint8_t lookahead(struct js *js) {
 
 void js_mkscope(struct js *js) {
   assert((js->flags & F_NOEXEC) == 0);
+  if (global_scope_stack == NULL) utarray_new(global_scope_stack, &jsoff_icd);
   jsoff_t prev = (jsoff_t) vdata(js->scope);
+  utarray_push_back(global_scope_stack, &prev);
   js->scope = mkobj(js, prev);
 }
 
 void js_delscope(struct js *js) {
-  js->scope = upper(js, js->scope);
+  if (global_scope_stack && utarray_len(global_scope_stack) > 0) {
+    jsoff_t *prev = (jsoff_t *)utarray_back(global_scope_stack);
+    js->scope = mkval(T_OBJ, *prev);
+    utarray_pop_back(global_scope_stack);
+  } else {
+    js->scope = upper(js, js->scope);
+  }
 }
 
 static void mkscope(struct js *js) { js_mkscope(js); }
