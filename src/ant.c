@@ -1389,6 +1389,10 @@ static jsoff_t js_unmark_entity(struct js *js, jsoff_t off) {
   return v & ~(GCMASK | CONSTMASK | 3U);
 }
 
+static void js_unmark_jsval(struct js *js, jsval_t v) {
+  if (is_mem_entity(vtype(v))) js_unmark_entity(js, (jsoff_t) vdata(v));
+}
+
 static void js_unmark_used_entities(struct js *js) {
   js_unmark_entity(js, (jsoff_t) vdata(js->scope));
   if (global_scope_stack) {
@@ -1397,8 +1401,19 @@ static void js_unmark_used_entities(struct js *js) {
       js_unmark_entity(js, *p);
     }
   }
+  
   js_unmark_entity(js, 0);
   if (js->nogc) js_unmark_entity(js, js->nogc);
+  
+  for (coroutine_t *coro = pending_coroutines.head; coro != NULL; coro = coro->next) {
+    js_unmark_jsval(js, coro->scope);
+    js_unmark_jsval(js, coro->this_val);
+    js_unmark_jsval(js, coro->awaited_promise);
+    js_unmark_jsval(js, coro->result);
+    js_unmark_jsval(js, coro->async_func);
+    js_unmark_jsval(js, coro->yield_value);
+    for (int i = 0; i < coro->nargs; i++) js_unmark_jsval(js, coro->args[i]);
+  }
 }
 
 static void init_free_list(void) {
@@ -1553,6 +1568,32 @@ static void js_fixup_offsets(struct js *js, jsoff_t start, jsoff_t size) {
   if (js->nogc >= start) js->nogc -= size;
   if (js->code > (char *) js->mem && js->code - (char *) js->mem < js->size && js->code - (char *) js->mem > start) {
     js->code -= size;
+  }
+  
+  if (global_scope_stack) {
+    jsoff_t *p = NULL;
+    while ((p = (jsoff_t *)utarray_next(global_scope_stack, p)) != NULL) {
+      if (*p > start) *p -= size;
+    }
+  }
+  
+  for (coroutine_t *coro = pending_coroutines.head; coro != NULL; coro = coro->next) {
+    if (is_mem_entity(vtype(coro->scope)) && vdata(coro->scope) > start)
+      coro->scope = mkval(vtype(coro->scope), vdata(coro->scope) - size);
+    if (is_mem_entity(vtype(coro->this_val)) && vdata(coro->this_val) > start)
+      coro->this_val = mkval(vtype(coro->this_val), vdata(coro->this_val) - size);
+    if (is_mem_entity(vtype(coro->awaited_promise)) && vdata(coro->awaited_promise) > start)
+      coro->awaited_promise = mkval(vtype(coro->awaited_promise), vdata(coro->awaited_promise) - size);
+    if (is_mem_entity(vtype(coro->result)) && vdata(coro->result) > start)
+      coro->result = mkval(vtype(coro->result), vdata(coro->result) - size);
+    if (is_mem_entity(vtype(coro->async_func)) && vdata(coro->async_func) > start)
+      coro->async_func = mkval(vtype(coro->async_func), vdata(coro->async_func) - size);
+    if (is_mem_entity(vtype(coro->yield_value)) && vdata(coro->yield_value) > start)
+      coro->yield_value = mkval(vtype(coro->yield_value), vdata(coro->yield_value) - size);
+    for (int i = 0; i < coro->nargs; i++) {
+      if (is_mem_entity(vtype(coro->args[i])) && vdata(coro->args[i]) > start)
+        coro->args[i] = mkval(vtype(coro->args[i]), vdata(coro->args[i]) - size);
+    }
   }
 }
 
@@ -2381,6 +2422,8 @@ static jsval_t call_js(struct js *js, const char *fn, jsoff_t fnlen, jsval_t clo
     parent_scope_offset = (jsoff_t) vdata(js->scope);
   }
   
+  if (global_scope_stack == NULL) utarray_new(global_scope_stack, &jsoff_icd);
+  utarray_push_back(global_scope_stack, &parent_scope_offset);
   jsval_t function_scope = mkobj(js, parent_scope_offset);
   
   const char *caller_code = js->code;
@@ -2492,8 +2535,9 @@ static jsval_t call_js(struct js *js, const char *fn, jsoff_t fnlen, jsval_t clo
   
   jsval_t res = js_eval(js, &fn[fnpos], n);
   if (!is_err(res) && !(js->flags & F_RETURN)) res = js_mkundef();
-  js->scope = saved_scope;
+  if (global_scope_stack && utarray_len(global_scope_stack) > 0)  utarray_pop_back(global_scope_stack);
   
+  js->scope = saved_scope;
   return res;
 }
 
@@ -2541,6 +2585,8 @@ static jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnl
   }
   
   jsval_t saved_scope = js->scope;
+  if (global_scope_stack == NULL) utarray_new(global_scope_stack, &jsoff_icd);
+  utarray_push_back(global_scope_stack, &parent_scope_offset);
   jsval_t function_scope = mkobj(js, parent_scope_offset);
   js->scope = function_scope;
   
@@ -2633,8 +2679,9 @@ static jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnl
   if (!is_err(res) && !(js->flags & F_RETURN)) res = js_mkundef();
   
   js->this_val = saved_this;
-  js->scope = saved_scope;
+  if (global_scope_stack && utarray_len(global_scope_stack) > 0) utarray_pop_back(global_scope_stack);
   
+  js->scope = saved_scope;  
   return res;
 }
 
@@ -5279,6 +5326,8 @@ static jsval_t js_with(struct js *js) {
     }
     
     jsoff_t parent_scope_offset = (jsoff_t) vdata(js->scope);
+    if (global_scope_stack == NULL) utarray_new(global_scope_stack, &jsoff_icd);
+    utarray_push_back(global_scope_stack, &parent_scope_offset);
     jsval_t with_scope = mkentity(js, 0 | T_OBJ, &parent_scope_offset, sizeof(parent_scope_offset));
     
     jsoff_t prop_off = loadoff(js, (jsoff_t) vdata(with_obj)) & ~(3U | CONSTMASK);
@@ -5296,7 +5345,7 @@ static jsval_t js_with(struct js *js) {
     js->scope = with_scope;
     
     res = js_block_or_stmt(js);
-    
+    if (global_scope_stack && utarray_len(global_scope_stack) > 0) utarray_pop_back(global_scope_stack);
     js->scope = saved_scope;
   } else {
     res = js_block_or_stmt(js);
