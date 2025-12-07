@@ -234,7 +234,7 @@ enum {
   TOK_LPAREN, TOK_RPAREN, TOK_LBRACE, TOK_RBRACE, TOK_LBRACKET, TOK_RBRACKET,
   TOK_ASYNC = 50, TOK_AWAIT, TOK_BREAK, TOK_CASE, TOK_CATCH, TOK_CLASS, TOK_CONST, TOK_CONTINUE,
   TOK_DEFAULT, TOK_DELETE, TOK_DO, TOK_ELSE, TOK_EXPORT, TOK_FINALLY, TOK_FOR, TOK_FROM, TOK_FUNC,
-  TOK_IF, TOK_IMPORT, TOK_IN, TOK_INSTANCEOF, TOK_LET, TOK_NEW, TOK_RETURN, TOK_SWITCH,
+  TOK_IF, TOK_IMPORT, TOK_IN, TOK_INSTANCEOF, TOK_LET, TOK_NEW, TOK_OF, TOK_RETURN, TOK_SWITCH,
   TOK_THIS, TOK_THROW, TOK_TRY, TOK_VAR, TOK_VOID, TOK_WHILE, TOK_WITH,
   TOK_YIELD, TOK_UNDEF, TOK_NULL, TOK_TRUE, TOK_FALSE, TOK_AS, TOK_STATIC,
   TOK_DOT = 100, TOK_CALL, TOK_BRACKET, TOK_POSTINC, TOK_POSTDEC, TOK_NOT, TOK_TILDA,
@@ -1695,6 +1695,7 @@ static uint8_t parsekeyword(const char *buf, size_t len) {
     case 'i': if (streq("if", 2, buf, len)) return TOK_IF; if (streq("import", 6, buf, len)) return TOK_IMPORT; if (streq("in", 2, buf, len)) return TOK_IN; if (streq("instanceof", 10, buf, len)) return TOK_INSTANCEOF; break;
     case 'l': if (streq("let", 3, buf, len)) return TOK_LET; break;
     case 'n': if (streq("new", 3, buf, len)) return TOK_NEW; if (streq("null", 4, buf, len)) return TOK_NULL; break;
+    case 'o': if (streq("of", 2, buf, len)) return TOK_OF; break;
     case 'r': if (streq("return", 6, buf, len)) return TOK_RETURN; break;
     case 's': if (streq("switch", 6, buf, len)) return TOK_SWITCH; if (streq("static", 6, buf, len)) return TOK_STATIC; break;
     case 't': if (streq("try", 3, buf, len)) return TOK_TRY; if (streq("this", 4, buf, len)) return TOK_THIS; if (streq("throw", 5, buf, len)) return TOK_THROW; if (streq("true", 4, buf, len)) return TOK_TRUE; if (streq("typeof", 6, buf, len)) return TOK_TYPEOF; break;
@@ -4520,6 +4521,7 @@ static jsval_t js_for(struct js *js) {
   if (!expect(js, TOK_LPAREN, &res)) goto done;
   
   bool is_for_in = false;
+  bool is_for_of = false;
   jsoff_t var_name_off = 0, var_name_len = 0;
   bool is_const_var = false;
   
@@ -4539,6 +4541,9 @@ static jsval_t js_for(struct js *js) {
       if (next(js) == TOK_IN) {
         is_for_in = true;
         js->consumed = 1;
+      } else if (next(js) == TOK_OF) {
+        is_for_of = true;
+        js->consumed = 1;
       } else {
         js->pos = var_name_off;
         js->consumed = 1;
@@ -4556,6 +4561,9 @@ static jsval_t js_for(struct js *js) {
     js->consumed = 1;
     if (next(js) == TOK_IN) {
       is_for_in = true;
+      js->consumed = 1;
+    } else if (next(js) == TOK_OF) {
+      is_for_of = true;
       js->consumed = 1;
     } else {
       js->pos = var_name_off;
@@ -4627,6 +4635,130 @@ static jsval_t js_for(struct js *js) {
         }
         
         prop_off = loadoff(js, prop_off) & ~(3U | CONSTMASK);
+      }
+    }
+    
+    js->pos = body_end;
+    js->tok = TOK_SEMICOLON;
+    js->consumed = 0;
+    goto done;
+  }
+  
+  if (is_for_of) {
+    jsval_t iter_expr = js_expr(js);
+    if (is_err2(&iter_expr, &res)) goto done;
+    if (!expect(js, TOK_RPAREN, &res)) goto done;
+    
+    jsoff_t body_start = js->pos;
+    js->flags |= F_NOEXEC;
+    v = js_block_or_stmt(js);
+    if (is_err2(&v, &res)) goto done;
+    jsoff_t body_end = js->pos;
+    
+    if (exe) {
+      jsval_t iterable = resolveprop(js, iter_expr);
+      uint8_t itype = vtype(iterable);
+      
+      if (itype == T_ARR) {
+        jsoff_t next_prop = loadoff(js, (jsoff_t) vdata(iterable)) & ~(3U | CONSTMASK);
+        jsoff_t length = 0;
+        jsoff_t scan = next_prop;
+        
+        while (scan < js->brk && scan != 0) {
+          jsoff_t koff = loadoff(js, scan + (jsoff_t) sizeof(scan));
+          jsoff_t klen = offtolen(loadoff(js, koff));
+          const char *key = (char *) &js->mem[koff + sizeof(koff)];
+          
+          if (streq(key, klen, "length", 6)) {
+            jsval_t val = loadval(js, scan + (jsoff_t) (sizeof(scan) + sizeof(koff)));
+            if (vtype(val) == T_NUM) length = (jsoff_t) tod(val);
+            break;
+          }
+          scan = loadoff(js, scan) & ~(3U | CONSTMASK);
+        }
+        
+        for (jsoff_t i = 0; i < length; i++) {
+          char idx[16];
+          snprintf(idx, sizeof(idx), "%u", (unsigned) i);
+          jsoff_t idxlen = (jsoff_t) strlen(idx);
+          jsoff_t prop = next_prop;
+          jsval_t val = js_mkundef();
+          
+          while (prop < js->brk && prop != 0) {
+            jsoff_t koff = loadoff(js, prop + (jsoff_t) sizeof(prop));
+            jsoff_t klen = offtolen(loadoff(js, koff));
+            const char *key = (char *) &js->mem[koff + sizeof(koff)];
+            if (streq(key, klen, idx, idxlen)) {
+              val = loadval(js, prop + (jsoff_t) (sizeof(prop) + sizeof(koff)));
+              break;
+            }
+            prop = loadoff(js, prop) & ~(3U | CONSTMASK);
+          }
+          
+          const char *var_name = &js->code[var_name_off];
+          jsoff_t existing = lkp(js, js->scope, var_name, var_name_len);
+          if (existing > 0) {
+            saveval(js, existing + sizeof(jsoff_t) * 2, val);
+          } else {
+            jsval_t x = mkprop(js, js->scope, js_mkstr(js, var_name, var_name_len), val, is_const_var);
+            if (is_err(x)) {
+              res = x;
+              goto done;
+            }
+          }
+          
+          js->pos = body_start;
+          js->consumed = 1;
+          js->flags = (flags & ~F_NOEXEC) | F_LOOP;
+          v = js_block_or_stmt(js);
+          if (is_err(v)) {
+            res = v;
+            goto done;
+          }
+          
+          if (js->flags & F_BREAK) break;
+          if (js->flags & F_RETURN) {
+            res = v;
+            goto done;
+          }
+        }
+      } else if (itype == T_STR) {
+        jsoff_t slen, soff = vstr(js, iterable, &slen);
+        const char *str = (char *) &js->mem[soff];
+        
+        for (jsoff_t i = 0; i < slen; i++) {
+          jsval_t char_str = js_mkstr(js, &str[i], 1);
+          
+          const char *var_name = &js->code[var_name_off];
+          jsoff_t existing = lkp(js, js->scope, var_name, var_name_len);
+          if (existing > 0) {
+            saveval(js, existing + sizeof(jsoff_t) * 2, char_str);
+          } else {
+            jsval_t x = mkprop(js, js->scope, js_mkstr(js, var_name, var_name_len), char_str, is_const_var);
+            if (is_err(x)) {
+              res = x;
+              goto done;
+            }
+          }
+          
+          js->pos = body_start;
+          js->consumed = 1;
+          js->flags = (flags & ~F_NOEXEC) | F_LOOP;
+          v = js_block_or_stmt(js);
+          if (is_err(v)) {
+            res = v;
+            goto done;
+          }
+          
+          if (js->flags & F_BREAK) break;
+          if (js->flags & F_RETURN) {
+            res = v;
+            goto done;
+          }
+        }
+      } else {
+        res = js_mkerr(js, "for-of requires iterable");
+        goto done;
       }
     }
     

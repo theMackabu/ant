@@ -25,6 +25,27 @@
 
 int js_result = EXIT_SUCCESS;
 
+static void eval_code(struct js *js, struct arg_str *eval, struct arg_lit *print) {
+  const char *script = eval->sval[0];
+  size_t len = strlen(script);
+  
+  js_set_filename(js, "<eval>");
+  js_mkscope(js);
+  js_protect_init_memory(js);
+  
+  jsval_t result = js_eval(js, script, len);
+  
+  if (js_type(result) == JS_ERR) {
+    fprintf(stderr, "%s\n", js_str(js, result));
+    js_result = EXIT_FAILURE;
+  } else if (print->count > 0) {
+    const char *str = js_str(js, result);
+    if (str && strcmp(str, "undefined") != 0) printf("%s\n", str);
+  }
+  
+  js_run_event_loop(js);
+}
+
 static int execute_module(struct js *js, const char *filename) {
   char *filename_copy = strdup(filename);
   char *dir = dirname(filename_copy);
@@ -76,13 +97,15 @@ int main(int argc, char *argv[]) {
   struct arg_lit *help = arg_lit0("h", "help", "display this help and exit");
   struct arg_lit *version = arg_lit0("v", "version", "display version information and exit");
   struct arg_lit *debug = arg_litn("d", "debug", 0, 10, "dump VM state (can be repeated for more detail)");
+  struct arg_str *eval = arg_str0("e", "eval", "<script>", "evaluate script");
+  struct arg_lit *print = arg_lit0("p", "print", "evaluate script and print result");
   struct arg_int *gct = arg_int0(NULL, "gct", "<threshold>", "set garbage collection threshold");
   struct arg_int *initial_mem = arg_int0(NULL, "initial-mem", "<size>", "initial memory size in MB (default: 4)");
   struct arg_int *max_mem = arg_int0(NULL, "max-mem", "<size>", "maximum memory size in MB (default: 512)");
   struct arg_file *file = arg_file0(NULL, NULL, "<module.js>", "JavaScript module file to execute");
   struct arg_end *end = arg_end(20);
   
-  void *argtable[] = {help, version, debug, gct, initial_mem, max_mem, file, end};
+  void *argtable[] = {help, version, debug, eval, print, gct, initial_mem, max_mem, file, end};
   int nerrors = arg_parse(argc, argv, argtable);
   
   if (help->count > 0) {
@@ -108,8 +131,8 @@ int main(int argc, char *argv[]) {
     return EXIT_FAILURE;
   }
   
-  bool repl_mode = (file->count == 0);
-  const char *module_file = repl_mode ? NULL : file->filename[0];
+  bool repl_mode = (file->count == 0 && eval->count == 0);
+  const char *module_file = repl_mode ? NULL : (file->count > 0 ? file->filename[0] : NULL);
   dump = debug->count;
   
   size_t initial_size = 4 * 1024 * 1024;
@@ -144,7 +167,8 @@ int main(int argc, char *argv[]) {
   ant_register_library("ant:path", path_library);
   ant_register_library("ant:ffi", ffi_library);
 
-  if (repl_mode) ant_repl_run(); else {
+  if (eval->count > 0) eval_code(js, eval, print);
+  else if (repl_mode) ant_repl_run(); else {
     js_result = execute_module(js, module_file);
     js_run_event_loop(js);
   }
