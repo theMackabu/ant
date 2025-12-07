@@ -230,7 +230,7 @@ struct js {
 };
 
 enum {
-  TOK_ERR, TOK_EOF, TOK_IDENTIFIER, TOK_NUMBER, TOK_STRING, TOK_SEMICOLON,
+  TOK_ERR, TOK_EOF, TOK_IDENTIFIER, TOK_NUMBER, TOK_STRING, TOK_SEMICOLON, TOK_BIGINT,
   TOK_LPAREN, TOK_RPAREN, TOK_LBRACE, TOK_RBRACE, TOK_LBRACKET, TOK_RBRACKET,
   TOK_ASYNC = 50, TOK_AWAIT, TOK_BREAK, TOK_CASE, TOK_CATCH, TOK_CLASS, TOK_CONST, TOK_CONTINUE,
   TOK_DEFAULT, TOK_DELETE, TOK_DO, TOK_ELSE, TOK_EXPORT, TOK_FINALLY, TOK_FOR, TOK_FROM, TOK_FUNC,
@@ -250,13 +250,13 @@ enum {
 
 enum {
   T_OBJ, T_PROP, T_STR, T_UNDEF, T_NULL, T_NUM,
-  T_BOOL, T_FUNC, T_CODEREF, T_CFUNC, T_ERR, T_ARR, T_PROMISE, T_GENERATOR
+  T_BOOL, T_FUNC, T_CODEREF, T_CFUNC, T_ERR, T_ARR, T_PROMISE, T_GENERATOR, T_BIGINT
 };
 
 static const char *typestr(uint8_t t) {
   const char *names[] = { 
     "object", "prop", "string", "undefined", "null", "number",
-    "boolean", "function", "coderef", "cfunc", "err", "array", "promise", "generator"
+    "boolean", "function", "coderef", "cfunc", "err", "array", "promise", "generator", "bigint"
   };
   
   return (t < sizeof(names) / sizeof(names[0])) ? names[t] : "??";
@@ -380,6 +380,42 @@ static jsval_t set_clear(struct js *js, jsval_t *args, int nargs);
 static jsval_t set_size(struct js *js, jsval_t *args, int nargs);
 static jsval_t set_values(struct js *js, jsval_t *args, int nargs);
 static jsval_t set_forEach(struct js *js, jsval_t *args, int nargs);
+
+static jsval_t builtin_Math_abs(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Math_acos(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Math_acosh(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Math_asin(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Math_asinh(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Math_atan(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Math_atanh(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Math_atan2(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Math_cbrt(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Math_ceil(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Math_clz32(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Math_cos(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Math_cosh(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Math_exp(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Math_expm1(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Math_floor(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Math_fround(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Math_hypot(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Math_imul(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Math_log(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Math_log1p(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Math_log10(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Math_log2(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Math_max(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Math_min(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Math_pow(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Math_random(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Math_round(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Math_sign(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Math_sin(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Math_sinh(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Math_sqrt(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Math_tan(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Math_tanh(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Math_trunc(struct js *js, jsval_t *args, int nargs);
 
 static jsval_t call_js(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope);
 static jsval_t call_js_with_args(struct js *js, jsval_t func, jsval_t *args, int nargs);
@@ -706,6 +742,8 @@ static void push_stringify(jsval_t obj) {
 static void pop_stringify(void) {
   if (stringify_depth > 0) stringify_depth--;
 }
+
+static size_t strbigint(struct js *js, jsval_t value, char *buf, size_t len);
 
 static size_t strarr(struct js *js, jsval_t obj, char *buf, size_t len) {
   if (is_circular(obj)) return cpy(buf, len, "[Circular]", 10);
@@ -1080,6 +1118,7 @@ static size_t tostr(struct js *js, jsval_t value, char *buf, size_t len) {
     case T_OBJ:   return strobj(js, value, buf, len);
     case T_STR:   return strstring(js, value, buf, len);
     case T_NUM:   return strnum(value, buf, len);
+    case T_BIGINT: return strbigint(js, value, buf, len);
     case T_PROMISE: return strpromise(js, value, buf, len);
     case T_FUNC:  return strfunc(js, value, buf, len);
     case T_CFUNC: return (size_t) snprintf(buf, len, "\"c_func_0x%lx\"", (unsigned long) vdata(value));
@@ -1101,10 +1140,13 @@ const char *js_str(struct js *js, jsval_t value) {
   return buf;
 }
 
+static bool bigint_is_zero(struct js *js, jsval_t v);
+
 bool js_truthy(struct js *js, jsval_t v) {
   uint8_t t = vtype(v);
   return (t == T_BOOL && vdata(v) != 0) || (t == T_NUM && tod(v) != 0.0) ||
-         (t == T_OBJ || t == T_FUNC || t == T_ARR) || (t == T_STR && vstrlen(js, v) > 0);
+         (t == T_OBJ || t == T_FUNC || t == T_ARR) || (t == T_STR && vstrlen(js, v) > 0) ||
+         (t == T_BIGINT && !bigint_is_zero(js, v));
 }
 
 static bool js_try_grow_memory(struct js *js, size_t needed) {
@@ -1182,6 +1224,298 @@ static jsval_t mkentity(struct js *js, jsoff_t b, const void *buf, size_t len) {
 jsval_t js_mkstr(struct js *js, const void *ptr, size_t len) {
   jsoff_t n = (jsoff_t) (len + 1);
   return mkentity(js, (jsoff_t) ((n << 2) | T_STR), ptr, n);
+}
+
+static jsval_t mkbigint(struct js *js, const char *digits, size_t len, bool negative) {
+  size_t total = len + 2;
+  jsoff_t ofs = js_alloc(js, total + sizeof(jsoff_t));
+  if (ofs == (jsoff_t) ~0) return js_mkerr(js, "oom");
+  jsoff_t header = (jsoff_t) (total << 4);
+  memcpy(&js->mem[ofs], &header, sizeof(header));
+  js->mem[ofs + sizeof(header)] = negative ? 1 : 0;
+  if (digits) memcpy(&js->mem[ofs + sizeof(header) + 1], digits, len);
+  js->mem[ofs + sizeof(header) + 1 + len] = 0;
+  return mkval(T_BIGINT, ofs);
+}
+
+static bool bigint_IsNegative(struct js *js, jsval_t v) {
+  jsoff_t ofs = (jsoff_t) vdata(v);
+  return js->mem[ofs + sizeof(jsoff_t)] == 1;
+}
+
+static const char *bigint_digits(struct js *js, jsval_t v, size_t *len) {
+  jsoff_t ofs = (jsoff_t) vdata(v);
+  jsoff_t header = loadoff(js, ofs);
+  size_t total = (header >> 4) - 2;
+  if (len) *len = total;
+  return (const char *)&js->mem[ofs + sizeof(jsoff_t) + 1];
+}
+
+static int bigint_cmp_abs(const char *a, size_t alen, const char *b, size_t blen) {
+  while (alen > 1 && a[0] == '0') { a++; alen--; }
+  while (blen > 1 && b[0] == '0') { b++; blen--; }
+  if (alen != blen) return alen > blen ? 1 : -1;
+  for (size_t i = 0; i < alen; i++) {
+    if (a[i] != b[i]) return a[i] > b[i] ? 1 : -1;
+  }
+  return 0;
+}
+
+static char *bigint_add_abs(const char *a, size_t alen, const char *b, size_t blen, size_t *rlen) {
+  size_t maxlen = (alen > blen ? alen : blen) + 1;
+  char *result = (char *)malloc(maxlen + 1);
+  if (!result) return NULL;
+  int carry = 0;
+  size_t ri = 0;
+  for (size_t i = 0; i < maxlen; i++) {
+    int da = (i < alen) ? (a[alen - 1 - i] - '0') : 0;
+    int db = (i < blen) ? (b[blen - 1 - i] - '0') : 0;
+    int sum = da + db + carry;
+    carry = sum / 10;
+    result[ri++] = (char)('0' + (sum % 10));
+  }
+  while (ri > 1 && result[ri - 1] == '0') ri--;
+  for (size_t i = 0; i < ri / 2; i++) {
+    char tmp = result[i]; result[i] = result[ri - 1 - i]; result[ri - 1 - i] = tmp;
+  }
+  result[ri] = 0;
+  *rlen = ri;
+  return result;
+}
+
+static char *bigint_sub_abs(const char *a, size_t alen, const char *b, size_t blen, size_t *rlen) {
+  char *result = (char *)malloc(alen + 1);
+  if (!result) return NULL;
+  int borrow = 0;
+  size_t ri = 0;
+  for (size_t i = 0; i < alen; i++) {
+    int da = a[alen - 1 - i] - '0';
+    int db = (i < blen) ? (b[blen - 1 - i] - '0') : 0;
+    int diff = da - db - borrow;
+    if (diff < 0) { diff += 10; borrow = 1; } else { borrow = 0; }
+    result[ri++] = (char)('0' + diff);
+  }
+  while (ri > 1 && result[ri - 1] == '0') ri--;
+  for (size_t i = 0; i < ri / 2; i++) {
+    char tmp = result[i]; result[i] = result[ri - 1 - i]; result[ri - 1 - i] = tmp;
+  }
+  result[ri] = 0;
+  *rlen = ri;
+  return result;
+}
+
+static char *bigint_mul_abs(const char *a, size_t alen, const char *b, size_t blen, size_t *rlen) {
+  size_t reslen = alen + blen;
+  int *temp = (int *)calloc(reslen, sizeof(int));
+  if (!temp) return NULL;
+  for (size_t i = 0; i < alen; i++) {
+    for (size_t j = 0; j < blen; j++) {
+      temp[i + j] += (a[alen - 1 - i] - '0') * (b[blen - 1 - j] - '0');
+    }
+  }
+  for (size_t i = 0; i < reslen - 1; i++) {
+    temp[i + 1] += temp[i] / 10;
+    temp[i] %= 10;
+  }
+  size_t start = reslen - 1;
+  while (start > 0 && temp[start] == 0) start--;
+  char *result = (char *)malloc(start + 2);
+  if (!result) { free(temp); return NULL; }
+  for (size_t i = 0; i <= start; i++) result[i] = (char)('0' + temp[start - i]);
+  result[start + 1] = 0;
+  *rlen = start + 1;
+  free(temp);
+  return result;
+}
+
+static char *bigint_div_abs(const char *a, size_t alen, const char *b, size_t blen, size_t *rlen, char **rem, size_t *remlen) {
+  if (blen == 1 && b[0] == '0') return NULL;
+  if (bigint_cmp_abs(a, alen, b, blen) < 0) {
+    char *result = (char *)malloc(2); result[0] = '0'; result[1] = 0; *rlen = 1;
+    if (rem) { *rem = (char *)malloc(alen + 1); memcpy(*rem, a, alen); (*rem)[alen] = 0; *remlen = alen; }
+    return result;
+  }
+  char *current = (char *)calloc(alen + 1, 1);
+  char *result = (char *)calloc(alen + 1, 1);
+  if (!current || !result) { free(current); free(result); return NULL; }
+  size_t curlen = 0, reslen = 0;
+  for (size_t i = 0; i < alen; i++) {
+    if (curlen == 1 && current[0] == '0') curlen = 0;
+    current[curlen++] = a[i]; current[curlen] = 0;
+    int count = 0;
+    while (bigint_cmp_abs(current, curlen, b, blen) >= 0) {
+      size_t sublen;
+      char *sub = bigint_sub_abs(current, curlen, b, blen, &sublen);
+      if (!sub) break;
+      memcpy(current, sub, sublen + 1); curlen = sublen;
+      free(sub); count++;
+    }
+    result[reslen++] = (char)('0' + count);
+  }
+  size_t start = 0;
+  while (start < reslen - 1 && result[start] == '0') start++;
+  memmove(result, result + start, reslen - start + 1);
+  *rlen = reslen - start;
+  if (rem) { *rem = current; *remlen = curlen; } else free(current);
+  return result;
+}
+
+static jsval_t bigint_add(struct js *js, jsval_t a, jsval_t b) {
+  bool aneg = bigint_IsNegative(js, a), bneg = bigint_IsNegative(js, b);
+  size_t alen, blen;
+  const char *ad = bigint_digits(js, a, &alen), *bd = bigint_digits(js, b, &blen);
+  char *result; size_t rlen; bool rneg;
+  if (aneg == bneg) {
+    result = bigint_add_abs(ad, alen, bd, blen, &rlen); rneg = aneg;
+  } else {
+    int cmp = bigint_cmp_abs(ad, alen, bd, blen);
+    if (cmp >= 0) { result = bigint_sub_abs(ad, alen, bd, blen, &rlen); rneg = aneg; }
+    else { result = bigint_sub_abs(bd, blen, ad, alen, &rlen); rneg = bneg; }
+  }
+  if (!result) return js_mkerr(js, "oom");
+  if (rlen == 1 && result[0] == '0') rneg = false;
+  jsval_t r = mkbigint(js, result, rlen, rneg);
+  free(result);
+  return r;
+}
+
+static jsval_t bigint_sub(struct js *js, jsval_t a, jsval_t b) {
+  bool aneg = bigint_IsNegative(js, a), bneg = bigint_IsNegative(js, b);
+  size_t alen, blen;
+  const char *ad = bigint_digits(js, a, &alen), *bd = bigint_digits(js, b, &blen);
+  char *result; size_t rlen; bool rneg;
+  if (aneg != bneg) {
+    result = bigint_add_abs(ad, alen, bd, blen, &rlen); rneg = aneg;
+  } else {
+    int cmp = bigint_cmp_abs(ad, alen, bd, blen);
+    if (cmp >= 0) { result = bigint_sub_abs(ad, alen, bd, blen, &rlen); rneg = aneg; }
+    else { result = bigint_sub_abs(bd, blen, ad, alen, &rlen); rneg = !aneg; }
+  }
+  if (!result) return js_mkerr(js, "oom");
+  if (rlen == 1 && result[0] == '0') rneg = false;
+  jsval_t r = mkbigint(js, result, rlen, rneg);
+  free(result);
+  return r;
+}
+
+static jsval_t bigint_mul(struct js *js, jsval_t a, jsval_t b) {
+  bool aneg = bigint_IsNegative(js, a), bneg = bigint_IsNegative(js, b);
+  size_t alen, blen;
+  const char *ad = bigint_digits(js, a, &alen), *bd = bigint_digits(js, b, &blen);
+  size_t rlen;
+  char *result = bigint_mul_abs(ad, alen, bd, blen, &rlen);
+  if (!result) return js_mkerr(js, "oom");
+  bool rneg = (aneg != bneg) && !(rlen == 1 && result[0] == '0');
+  jsval_t r = mkbigint(js, result, rlen, rneg);
+  free(result);
+  return r;
+}
+
+static jsval_t bigint_div(struct js *js, jsval_t a, jsval_t b) {
+  bool aneg = bigint_IsNegative(js, a), bneg = bigint_IsNegative(js, b);
+  size_t alen, blen;
+  const char *ad = bigint_digits(js, a, &alen), *bd = bigint_digits(js, b, &blen);
+  if (blen == 1 && bd[0] == '0') return js_mkerr(js, "Division by zero");
+  size_t rlen;
+  char *result = bigint_div_abs(ad, alen, bd, blen, &rlen, NULL, NULL);
+  if (!result) return js_mkerr(js, "oom");
+  bool rneg = (aneg != bneg) && !(rlen == 1 && result[0] == '0');
+  jsval_t r = mkbigint(js, result, rlen, rneg);
+  free(result);
+  return r;
+}
+
+static jsval_t bigint_mod(struct js *js, jsval_t a, jsval_t b) {
+  bool aneg = bigint_IsNegative(js, a);
+  size_t alen, blen;
+  const char *ad = bigint_digits(js, a, &alen), *bd = bigint_digits(js, b, &blen);
+  if (blen == 1 && bd[0] == '0') return js_mkerr(js, "Division by zero");
+  size_t rlen, remlen; char *rem;
+  char *result = bigint_div_abs(ad, alen, bd, blen, &rlen, &rem, &remlen);
+  if (!result) return js_mkerr(js, "oom");
+  free(result);
+  bool rneg = aneg && !(remlen == 1 && rem[0] == '0');
+  jsval_t r = mkbigint(js, rem, remlen, rneg);
+  free(rem);
+  return r;
+}
+
+static jsval_t bigint_neg(struct js *js, jsval_t a) {
+  size_t len;
+  const char *digits = bigint_digits(js, a, &len);
+  bool neg = bigint_IsNegative(js, a);
+  if (len == 1 && digits[0] == '0') return mkbigint(js, digits, len, false);
+  return mkbigint(js, digits, len, !neg);
+}
+
+static int bigint_compare(struct js *js, jsval_t a, jsval_t b) {
+  bool aneg = bigint_IsNegative(js, a), bneg = bigint_IsNegative(js, b);
+  size_t alen, blen;
+  const char *ad = bigint_digits(js, a, &alen), *bd = bigint_digits(js, b, &blen);
+  if (aneg && !bneg) return -1;
+  if (!aneg && bneg) return 1;
+  int cmp = bigint_cmp_abs(ad, alen, bd, blen);
+  return aneg ? -cmp : cmp;
+}
+
+static bool bigint_is_zero(struct js *js, jsval_t v) {
+  size_t len;
+  const char *digits = bigint_digits(js, v, &len);
+  return len == 1 && digits[0] == '0';
+}
+
+static size_t strbigint(struct js *js, jsval_t value, char *buf, size_t len) {
+  bool neg = bigint_IsNegative(js, value);
+  size_t dlen;
+  const char *digits = bigint_digits(js, value, &dlen);
+  size_t n = 0;
+  if (neg) n += cpy(buf + n, len - n, "-", 1);
+  n += cpy(buf + n, len - n, digits, dlen);
+  return n;
+}
+
+static jsval_t builtin_BigInt(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return mkbigint(js, "0", 1, false);
+  jsval_t arg = args[0];
+  if (vtype(arg) == T_BIGINT) return arg;
+  if (vtype(arg) == T_NUM) {
+    double d = tod(arg);
+    if (!isfinite(d)) return js_mkerr(js, "Cannot convert Infinity or NaN to BigInt");
+    if (d != trunc(d)) return js_mkerr(js, "Cannot convert non-integer to BigInt");
+    bool neg = d < 0;
+    if (neg) d = -d;
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%.0f", d);
+    return mkbigint(js, buf, strlen(buf), neg);
+  }
+  if (vtype(arg) == T_STR) {
+    jsoff_t slen, off = vstr(js, arg, &slen);
+    const char *str = (const char *)&js->mem[off];
+    bool neg = false;
+    size_t i = 0;
+    if (slen > 0 && str[0] == '-') { neg = true; i++; }
+    else if (slen > 0 && str[0] == '+') { i++; }
+    while (i < slen && str[i] == '0') i++;
+    if (i >= slen) return mkbigint(js, "0", 1, false);
+    for (size_t j = i; j < slen; j++) {
+      if (!is_digit(str[j])) return js_mkerr(js, "Cannot convert string to BigInt");
+    }
+    return mkbigint(js, str + i, slen - i, neg);
+  }
+  if (vtype(arg) == T_BOOL) {
+    return mkbigint(js, vdata(arg) ? "1" : "0", 1, false);
+  }
+  return js_mkerr(js, "Cannot convert to BigInt");
+}
+
+static jsval_t builtin_BigInt_asIntN(struct js *js, jsval_t *args, int nargs) {
+  (void)js; (void)args; (void)nargs;
+  return js_mkerr(js, "BigInt.asIntN not implemented");
+}
+
+static jsval_t builtin_BigInt_asUintN(struct js *js, jsval_t *args, int nargs) {
+  (void)js; (void)args; (void)nargs;
+  return js_mkerr(js, "BigInt.asUintN not implemented");
 }
 
 static jsval_t mkobj(struct js *js, jsoff_t parent) {
@@ -1791,7 +2125,14 @@ static uint8_t next(struct js *js) {
       }
       char *end;
       js->tval = tov(strtod(buf, &end));
-      TOK(TOK_NUMBER, (jsoff_t) (end - buf));
+      jsoff_t numlen = (jsoff_t) (end - buf);
+      if (js->toff + numlen < js->clen && buf[numlen] == 'n') {
+        js->tok = TOK_BIGINT;
+        js->tlen = numlen + 1;
+      } else {
+        TOK(TOK_NUMBER, numlen);
+      }
+      break;
     }
     default: js->tok = parseident(buf, js->clen - js->toff, &js->tlen); break;
   }
@@ -2811,6 +3152,12 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
       do_assign_op(js, TOK_MINUS_ASSIGN, lhs, tov(1)); return l;
     }
     case TOK_NOT:     return mkval(T_BOOL, !js_truthy(js, r));
+    case TOK_UMINUS:
+      if (vtype(r) == T_BIGINT) return bigint_neg(js, r);
+      break;
+    case TOK_UPLUS:
+      if (vtype(r) == T_BIGINT) return js_mkerr(js, "Cannot convert BigInt to number");
+      break;
   }
   if (is_assign(op))    return do_assign_op(js, op, lhs, r);
   if (op == TOK_EQ || op == TOK_NE) {
@@ -2824,11 +3171,30 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
         eq = tod(l) == tod(r);
       } else if (vtype(l) == T_BOOL) {
         eq = vdata(l) == vdata(r);
+      } else if (vtype(l) == T_BIGINT) {
+        eq = bigint_compare(js, l, r) == 0;
       } else {
         eq = vdata(l) == vdata(r);
       }
     }
     return mkval(T_BOOL, op == TOK_EQ ? eq : !eq);
+  }
+  if (vtype(l) == T_BIGINT || vtype(r) == T_BIGINT) {
+    if (vtype(l) != T_BIGINT || vtype(r) != T_BIGINT) {
+      return js_mkerr(js, "Cannot mix BigInt and other types");
+    }
+    switch (op) {
+      case TOK_PLUS:  return bigint_add(js, l, r);
+      case TOK_MINUS: return bigint_sub(js, l, r);
+      case TOK_MUL:   return bigint_mul(js, l, r);
+      case TOK_DIV:   return bigint_div(js, l, r);
+      case TOK_REM:   return bigint_mod(js, l, r);
+      case TOK_LT:    return mkval(T_BOOL, bigint_compare(js, l, r) < 0);
+      case TOK_GT:    return mkval(T_BOOL, bigint_compare(js, l, r) > 0);
+      case TOK_LE:    return mkval(T_BOOL, bigint_compare(js, l, r) <= 0);
+      case TOK_GE:    return mkval(T_BOOL, bigint_compare(js, l, r) >= 0);
+      default: return js_mkerr(js, "unsupported BigInt operation");
+    }
   }
   if (op == TOK_PLUS && (vtype(l) == T_STR || vtype(r) == T_STR || vtype(l) == T_ARR || vtype(r) == T_ARR)) {
     jsval_t l_str = l, r_str = r;
@@ -3184,6 +3550,15 @@ static jsval_t js_str_literal(struct js *js) {
   return js_mkstr(js, NULL, n1);
 }
 
+static jsval_t js_bigint_literal(struct js *js) {
+  const char *start = &js->code[js->toff];
+  size_t len = js->tlen - 1;
+  while (len > 1 && start[0] == '0') { start++; len--; }
+  bool neg = false;
+  if (len > 0 && start[0] == '-') { neg = true; start++; len--; }
+  return mkbigint(js, start, len, neg);
+}
+
 static jsval_t js_arr_literal(struct js *js) {
   uint8_t exe = !(js->flags & F_NOEXEC);
   jsval_t arr = exe ? mkarr(js) : js_mkundef();
@@ -3449,6 +3824,7 @@ static jsval_t js_literal(struct js *js) {
       }
       return js_mkerr(js, "parse error");
     case TOK_NUMBER:      return js->tval;
+    case TOK_BIGINT:      return js_bigint_literal(js);
     case TOK_STRING:      return js_str_literal(js);
     case TOK_TEMPLATE:    return js_template_literal(js);
     case TOK_LBRACE:      return js_obj_literal(js);
@@ -6129,6 +6505,266 @@ static jsval_t builtin_Date_now(struct js *js, jsval_t *args, int nargs) {
   double timestamp_ms = (double)tv.tv_sec * 1000.0 + (double)(tv.tv_usec / 1000);
   
   return tov(timestamp_ms);
+}
+
+static jsval_t builtin_Math_abs(struct js *js, jsval_t *args, int nargs) {
+  (void) js;
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  return tov(fabs(tod(args[0])));
+}
+
+static jsval_t builtin_Math_acos(struct js *js, jsval_t *args, int nargs) {
+  (void) js;
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  return tov(acos(tod(args[0])));
+}
+
+static jsval_t builtin_Math_acosh(struct js *js, jsval_t *args, int nargs) {
+  (void) js;
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  return tov(acosh(tod(args[0])));
+}
+
+static jsval_t builtin_Math_asin(struct js *js, jsval_t *args, int nargs) {
+  (void) js;
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  return tov(asin(tod(args[0])));
+}
+
+static jsval_t builtin_Math_asinh(struct js *js, jsval_t *args, int nargs) {
+  (void) js;
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  return tov(asinh(tod(args[0])));
+}
+
+static jsval_t builtin_Math_atan(struct js *js, jsval_t *args, int nargs) {
+  (void) js;
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  return tov(atan(tod(args[0])));
+}
+
+static jsval_t builtin_Math_atanh(struct js *js, jsval_t *args, int nargs) {
+  (void) js;
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  return tov(atanh(tod(args[0])));
+}
+
+static jsval_t builtin_Math_atan2(struct js *js, jsval_t *args, int nargs) {
+  (void) js;
+  if (nargs < 2 || vtype(args[0]) != T_NUM || vtype(args[1]) != T_NUM) return tov(NAN);
+  return tov(atan2(tod(args[0]), tod(args[1])));
+}
+
+static jsval_t builtin_Math_cbrt(struct js *js, jsval_t *args, int nargs) {
+  (void) js;
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  return tov(cbrt(tod(args[0])));
+}
+
+static jsval_t builtin_Math_ceil(struct js *js, jsval_t *args, int nargs) {
+  (void) js;
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  return tov(ceil(tod(args[0])));
+}
+
+static jsval_t builtin_Math_clz32(struct js *js, jsval_t *args, int nargs) {
+  (void) js;
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(32);
+  uint32_t n = (uint32_t) tod(args[0]);
+  if (n == 0) return tov(32);
+  int count = 0;
+  while ((n & 0x80000000U) == 0) { count++; n <<= 1; }
+  return tov((double) count);
+}
+
+static jsval_t builtin_Math_cos(struct js *js, jsval_t *args, int nargs) {
+  (void) js;
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  return tov(cos(tod(args[0])));
+}
+
+static jsval_t builtin_Math_cosh(struct js *js, jsval_t *args, int nargs) {
+  (void) js;
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  return tov(cosh(tod(args[0])));
+}
+
+static jsval_t builtin_Math_exp(struct js *js, jsval_t *args, int nargs) {
+  (void) js;
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  return tov(exp(tod(args[0])));
+}
+
+static jsval_t builtin_Math_expm1(struct js *js, jsval_t *args, int nargs) {
+  (void) js;
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  return tov(expm1(tod(args[0])));
+}
+
+static jsval_t builtin_Math_floor(struct js *js, jsval_t *args, int nargs) {
+  (void) js;
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  return tov(floor(tod(args[0])));
+}
+
+static jsval_t builtin_Math_fround(struct js *js, jsval_t *args, int nargs) {
+  (void) js;
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  return tov((double)(float)tod(args[0]));
+}
+
+static jsval_t builtin_Math_hypot(struct js *js, jsval_t *args, int nargs) {
+  (void) js;
+  if (nargs == 0) return tov(0.0);
+  double sum = 0.0;
+  for (int i = 0; i < nargs; i++) {
+    if (vtype(args[i]) != T_NUM) return tov(NAN);
+    double v = tod(args[i]);
+    sum += v * v;
+  }
+  return tov(sqrt(sum));
+}
+
+static int32_t toInt32(double d) {
+  if (isnan(d) || isinf(d) || d == 0) return 0;
+  double int_val = trunc(d);
+  double two32 = (double)(1ULL << 32);
+  double two31 = (double)(1ULL << 31);
+  double mod_val = fmod(int_val, two32);
+  if (mod_val < 0) mod_val += two32;
+  if (mod_val >= two31) mod_val -= two32;
+  return (int32_t)mod_val;
+}
+
+static jsval_t builtin_Math_imul(struct js *js, jsval_t *args, int nargs) {
+  (void) js;
+  if (nargs < 2) return tov(0);
+  int32_t a = toInt32(tod(args[0]));
+  int32_t b = toInt32(tod(args[1]));
+  return tov((double)((int32_t)((uint32_t)a * (uint32_t)b)));
+}
+
+static jsval_t builtin_Math_log(struct js *js, jsval_t *args, int nargs) {
+  (void) js;
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  return tov(log(tod(args[0])));
+}
+
+static jsval_t builtin_Math_log1p(struct js *js, jsval_t *args, int nargs) {
+  (void) js;
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  return tov(log1p(tod(args[0])));
+}
+
+static jsval_t builtin_Math_log10(struct js *js, jsval_t *args, int nargs) {
+  (void) js;
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  return tov(log10(tod(args[0])));
+}
+
+static jsval_t builtin_Math_log2(struct js *js, jsval_t *args, int nargs) {
+  (void) js;
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  return tov(log2(tod(args[0])));
+}
+
+static jsval_t builtin_Math_max(struct js *js, jsval_t *args, int nargs) {
+  (void) js;
+  if (nargs == 0) return tov(-INFINITY);
+  double max_val = -INFINITY;
+  for (int i = 0; i < nargs; i++) {
+    if (vtype(args[i]) != T_NUM) return tov(NAN);
+    double v = tod(args[i]);
+    if (isnan(v)) return tov(NAN);
+    if (v > max_val) max_val = v;
+  }
+  return tov(max_val);
+}
+
+static jsval_t builtin_Math_min(struct js *js, jsval_t *args, int nargs) {
+  (void) js;
+  if (nargs == 0) return tov(INFINITY);
+  double min_val = INFINITY;
+  for (int i = 0; i < nargs; i++) {
+    if (vtype(args[i]) != T_NUM) return tov(NAN);
+    double v = tod(args[i]);
+    if (isnan(v)) return tov(NAN);
+    if (v < min_val) min_val = v;
+  }
+  return tov(min_val);
+}
+
+static jsval_t builtin_Math_pow(struct js *js, jsval_t *args, int nargs) {
+  (void) js;
+  if (nargs < 2 || vtype(args[0]) != T_NUM || vtype(args[1]) != T_NUM) return tov(NAN);
+  return tov(pow(tod(args[0]), tod(args[1])));
+}
+
+static bool random_seeded = false;
+
+static jsval_t builtin_Math_random(struct js *js, jsval_t *args, int nargs) {
+  (void) js;
+  (void) args;
+  (void) nargs;
+  if (!random_seeded) {
+    srand((unsigned int) time(NULL));
+    random_seeded = true;
+  }
+  return tov((double) rand() / ((double) RAND_MAX + 1.0));
+}
+
+static jsval_t builtin_Math_round(struct js *js, jsval_t *args, int nargs) {
+  (void) js;
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  double x = tod(args[0]);
+  if (isnan(x) || isinf(x)) return tov(x);
+  return tov(floor(x + 0.5));
+}
+
+static jsval_t builtin_Math_sign(struct js *js, jsval_t *args, int nargs) {
+  (void) js;
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  double v = tod(args[0]);
+  if (isnan(v)) return tov(NAN);
+  if (v > 0) return tov(1.0);
+  if (v < 0) return tov(-1.0);
+  return tov(v);
+}
+
+static jsval_t builtin_Math_sin(struct js *js, jsval_t *args, int nargs) {
+  (void) js;
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  return tov(sin(tod(args[0])));
+}
+
+static jsval_t builtin_Math_sinh(struct js *js, jsval_t *args, int nargs) {
+  (void) js;
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  return tov(sinh(tod(args[0])));
+}
+
+static jsval_t builtin_Math_sqrt(struct js *js, jsval_t *args, int nargs) {
+  (void) js;
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  return tov(sqrt(tod(args[0])));
+}
+
+static jsval_t builtin_Math_tan(struct js *js, jsval_t *args, int nargs) {
+  (void) js;
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  return tov(tan(tod(args[0])));
+}
+
+static jsval_t builtin_Math_tanh(struct js *js, jsval_t *args, int nargs) {
+  (void) js;
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  return tov(tanh(tod(args[0])));
+}
+
+static jsval_t builtin_Math_trunc(struct js *js, jsval_t *args, int nargs) {
+  (void) js;
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  return tov(trunc(tod(args[0])));
 }
 
 static jsval_t builtin_object_keys(struct js *js, jsval_t *args, int nargs) {
@@ -8863,6 +9499,58 @@ struct js *js_create(void *buf, size_t len) {
   
   setprop(js, glob, js_mkstr(js, "NaN", 3), tov(NAN));
   setprop(js, glob, js_mkstr(js, "Infinity", 8), tov(INFINITY));
+  
+  jsval_t bigint_ctor_obj = mkobj(js, 0);
+  setprop(js, bigint_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_BigInt));
+  setprop(js, bigint_ctor_obj, js_mkstr(js, "asIntN", 6), js_mkfun(builtin_BigInt_asIntN));
+  setprop(js, bigint_ctor_obj, js_mkstr(js, "asUintN", 7), js_mkfun(builtin_BigInt_asUintN));
+  setprop(js, glob, js_mkstr(js, "BigInt", 6), mkval(T_FUNC, vdata(bigint_ctor_obj)));
+  
+  jsval_t math_obj = mkobj(js, 0);
+  setprop(js, math_obj, js_mkstr(js, "E", 1), tov(M_E));
+  setprop(js, math_obj, js_mkstr(js, "LN10", 4), tov(M_LN10));
+  setprop(js, math_obj, js_mkstr(js, "LN2", 3), tov(M_LN2));
+  setprop(js, math_obj, js_mkstr(js, "LOG10E", 6), tov(M_LOG10E));
+  setprop(js, math_obj, js_mkstr(js, "LOG2E", 5), tov(M_LOG2E));
+  setprop(js, math_obj, js_mkstr(js, "PI", 2), tov(M_PI));
+  setprop(js, math_obj, js_mkstr(js, "SQRT1_2", 7), tov(M_SQRT1_2));
+  setprop(js, math_obj, js_mkstr(js, "SQRT2", 5), tov(M_SQRT2));
+  setprop(js, math_obj, js_mkstr(js, "abs", 3), js_mkfun(builtin_Math_abs));
+  setprop(js, math_obj, js_mkstr(js, "acos", 4), js_mkfun(builtin_Math_acos));
+  setprop(js, math_obj, js_mkstr(js, "acosh", 5), js_mkfun(builtin_Math_acosh));
+  setprop(js, math_obj, js_mkstr(js, "asin", 4), js_mkfun(builtin_Math_asin));
+  setprop(js, math_obj, js_mkstr(js, "asinh", 5), js_mkfun(builtin_Math_asinh));
+  setprop(js, math_obj, js_mkstr(js, "atan", 4), js_mkfun(builtin_Math_atan));
+  setprop(js, math_obj, js_mkstr(js, "atanh", 5), js_mkfun(builtin_Math_atanh));
+  setprop(js, math_obj, js_mkstr(js, "atan2", 5), js_mkfun(builtin_Math_atan2));
+  setprop(js, math_obj, js_mkstr(js, "cbrt", 4), js_mkfun(builtin_Math_cbrt));
+  setprop(js, math_obj, js_mkstr(js, "ceil", 4), js_mkfun(builtin_Math_ceil));
+  setprop(js, math_obj, js_mkstr(js, "clz32", 5), js_mkfun(builtin_Math_clz32));
+  setprop(js, math_obj, js_mkstr(js, "cos", 3), js_mkfun(builtin_Math_cos));
+  setprop(js, math_obj, js_mkstr(js, "cosh", 4), js_mkfun(builtin_Math_cosh));
+  setprop(js, math_obj, js_mkstr(js, "exp", 3), js_mkfun(builtin_Math_exp));
+  setprop(js, math_obj, js_mkstr(js, "expm1", 5), js_mkfun(builtin_Math_expm1));
+  setprop(js, math_obj, js_mkstr(js, "floor", 5), js_mkfun(builtin_Math_floor));
+  setprop(js, math_obj, js_mkstr(js, "fround", 6), js_mkfun(builtin_Math_fround));
+  setprop(js, math_obj, js_mkstr(js, "hypot", 5), js_mkfun(builtin_Math_hypot));
+  setprop(js, math_obj, js_mkstr(js, "imul", 4), js_mkfun(builtin_Math_imul));
+  setprop(js, math_obj, js_mkstr(js, "log", 3), js_mkfun(builtin_Math_log));
+  setprop(js, math_obj, js_mkstr(js, "log1p", 5), js_mkfun(builtin_Math_log1p));
+  setprop(js, math_obj, js_mkstr(js, "log10", 5), js_mkfun(builtin_Math_log10));
+  setprop(js, math_obj, js_mkstr(js, "log2", 4), js_mkfun(builtin_Math_log2));
+  setprop(js, math_obj, js_mkstr(js, "max", 3), js_mkfun(builtin_Math_max));
+  setprop(js, math_obj, js_mkstr(js, "min", 3), js_mkfun(builtin_Math_min));
+  setprop(js, math_obj, js_mkstr(js, "pow", 3), js_mkfun(builtin_Math_pow));
+  setprop(js, math_obj, js_mkstr(js, "random", 6), js_mkfun(builtin_Math_random));
+  setprop(js, math_obj, js_mkstr(js, "round", 5), js_mkfun(builtin_Math_round));
+  setprop(js, math_obj, js_mkstr(js, "sign", 4), js_mkfun(builtin_Math_sign));
+  setprop(js, math_obj, js_mkstr(js, "sin", 3), js_mkfun(builtin_Math_sin));
+  setprop(js, math_obj, js_mkstr(js, "sinh", 4), js_mkfun(builtin_Math_sinh));
+  setprop(js, math_obj, js_mkstr(js, "sqrt", 4), js_mkfun(builtin_Math_sqrt));
+  setprop(js, math_obj, js_mkstr(js, "tan", 3), js_mkfun(builtin_Math_tan));
+  setprop(js, math_obj, js_mkstr(js, "tanh", 4), js_mkfun(builtin_Math_tanh));
+  setprop(js, math_obj, js_mkstr(js, "trunc", 5), js_mkfun(builtin_Math_trunc));
+  setprop(js, glob, js_mkstr(js, "Math", 4), math_obj);
   
   jsval_t date_ctor_obj = mkobj(js, 0);
   setprop(js, date_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_Date));
