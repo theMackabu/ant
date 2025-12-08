@@ -470,11 +470,12 @@ static void mco_async_entry(mco_coro* mco) {
 
 static void enqueue_coroutine(coroutine_t *coro) {
   if (!coro) return;
+  coro->next = NULL;
   
-  if (pending_coroutines.tail) {
+  if (pending_coroutines.tail && pending_coroutines.tail != coro) {
     pending_coroutines.tail->next = coro;
     pending_coroutines.tail = coro;
-  } else {
+  } else if (!pending_coroutines.tail) {
     pending_coroutines.head = coro;
     pending_coroutines.tail = coro;
   }
@@ -539,14 +540,13 @@ void js_poll_events(struct js *js) {
         free_coroutine(temp);
       } else if (res == MCO_SUCCESS) {
         temp->is_ready = false;
+        temp->next = NULL;
         if (pending_coroutines.tail) {
           pending_coroutines.tail->next = temp;
-          pending_coroutines.tail = temp;
         } else {
-          pending_coroutines.head = pending_coroutines.tail = temp;
+          pending_coroutines.head = temp;
         }
-        temp->next = NULL;
-        prev = temp;
+        pending_coroutines.tail = temp;
       } else {
         free_coroutine(temp);
       }
@@ -1751,6 +1751,7 @@ static void js_mark_all_entities_for_deletion(struct js *js) {
 }
 
 static jsoff_t js_unmark_entity(struct js *js, jsoff_t off) {
+  if (off >= js->brk) return 0;
   jsoff_t v = loadoff(js, off);
   if (v & GCMASK) {
     saveoff(js, off, v & ~GCMASK);
@@ -1781,6 +1782,25 @@ static void js_unmark_used_entities(struct js *js) {
   
   js_unmark_entity(js, 0);
   if (js->nogc) js_unmark_entity(js, js->nogc);
+  
+  mco_coro *running = mco_running();
+  if (running) {
+    async_exec_context_t *ctx = (async_exec_context_t *)mco_get_user_data(running);
+    if (ctx) {
+      js_unmark_jsval(js, ctx->closure_scope);
+      js_unmark_jsval(js, ctx->result);
+      js_unmark_jsval(js, ctx->promise);
+      if (ctx->coro) {
+        js_unmark_jsval(js, ctx->coro->scope);
+        js_unmark_jsval(js, ctx->coro->this_val);
+        js_unmark_jsval(js, ctx->coro->awaited_promise);
+        js_unmark_jsval(js, ctx->coro->result);
+        js_unmark_jsval(js, ctx->coro->async_func);
+        js_unmark_jsval(js, ctx->coro->yield_value);
+        for (int i = 0; i < ctx->coro->nargs; i++) js_unmark_jsval(js, ctx->coro->args[i]);
+      }
+    }
+  }
   
   for (coroutine_t *coro = pending_coroutines.head; coro != NULL; coro = coro->next) {
     js_unmark_jsval(js, coro->scope);
@@ -1841,10 +1861,12 @@ static jsoff_t free_list_zero_out(struct js *js) {
   unsigned int len = utarray_len(global_free_list);
   if (len == 0) return 0;
   
+  jsoff_t safe_threshold = protected_brk > 0 ? protected_brk + 0x400 : 0x1000;
   jsoff_t total_freed = 0;
   FreeListEntry *entries = (FreeListEntry *)utarray_front(global_free_list);
   for (unsigned int i = 0; i < len; i++) {
     if (entries[i].offset > 0 && entries[i].size > 0) {
+      if (entries[i].offset < safe_threshold) continue;
       if (entries[i].offset + entries[i].size > js->size) continue;      
       memset(&js->mem[entries[i].offset], 0, entries[i].size);
       total_freed += entries[i].size;
@@ -1860,7 +1882,7 @@ static jsoff_t free_list_allocate(size_t size) {
   size = align32((jsoff_t) size);
   
   FreeListEntry *entries = (FreeListEntry *)utarray_front(global_free_list);
-  jsoff_t safe_reuse_threshold = protected_brk > 0 ? protected_brk + 0x8000 : 0x10000;
+  jsoff_t safe_reuse_threshold = protected_brk > 0 ? protected_brk + 0x400 : 0x1000;
   
   for (unsigned int i = 0; i < len; i++) {
     if (entries[i].offset >= safe_reuse_threshold && entries[i].size >= size) {
@@ -1897,7 +1919,8 @@ static bool is_builtin_or_system(jsoff_t offset, struct js *js) {
 
 static void free_list_add(jsoff_t offset, jsoff_t size, struct js *js) {
   if (offset >= js->size || size == 0 || offset + size > js->size * 2) return;
-  if (protected_brk > 0) if (offset <= protected_brk) return;
+  jsoff_t safe_threshold = protected_brk > 0 ? protected_brk + 0x400 : 0x1000;
+  if (offset < safe_threshold) return;
   
   jsoff_t entity_val = loadoff(js, offset);
   uint8_t entity_type = entity_val & 3;
