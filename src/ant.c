@@ -2463,20 +2463,18 @@ static jsval_t try_dynamic_getter(struct js *js, jsval_t obj, const char *key, s
 static jsval_t lookup(struct js *js, const char *buf, size_t len) {
   if (js->flags & F_NOEXEC) return 0;
   
-  jsoff_t off = lkp(js, js->scope, buf, len);
-  if (off != 0) return mkval(T_PROP, off);
+  for (jsval_t scope = js->scope;;) {
+    jsoff_t off = lkp(js, scope, buf, len);
+    if (off != 0) return mkval(T_PROP, off);
+    if (vdata(scope) == 0) break;
+    scope = upper(js, scope);
+  }
   
-  if (global_scope_stack) {
-    int stack_len = utarray_len(global_scope_stack);
-    for (int i = stack_len - 1; i >= 0; i--) {
-      jsoff_t *scope_off = (jsoff_t *)utarray_eltptr(global_scope_stack, i);
-      jsval_t scope = mkval(T_OBJ, *scope_off);
-      off = lkp(js, scope, buf, len);
-      if (off != 0) return mkval(T_PROP, off);
-    }
-  } else {
-    for (jsval_t scope = upper(js, js->scope); vdata(scope) != 0; scope = upper(js, scope)) {
-      off = lkp(js, scope, buf, len);
+  if (global_scope_stack && utarray_len(global_scope_stack) > 0) {
+    jsoff_t *root_off = (jsoff_t *)utarray_eltptr(global_scope_stack, 0);
+    if (root_off && *root_off != 0) {
+      jsval_t root_scope = mkval(T_OBJ, *root_off);
+      jsoff_t off = lkp(js, root_scope, buf, len);
       if (off != 0) return mkval(T_PROP, off);
     }
   }
