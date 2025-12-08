@@ -200,9 +200,21 @@ jsval_t js_json_stringify(struct js *js, jsval_t *args, int nargs) {
 
 void init_json_module() {
   struct js *js = rt->js;
+  jsval_t glob = js_glob(js);
+  
+  jsval_t object_proto = js_get_ctor_proto(js, "Object", 6);
   jsval_t json_obj = js_mkobj(js);
   
-  js_set(js, js_glob(js), "JSON", json_obj);
-  js_set(js, json_obj, "parse", js_mkfun(js_json_parse));
-  js_set(js, json_obj, "stringify", js_mkfun(js_json_stringify));
+  if (js_type(object_proto) == JS_PRIV) {
+    js_set_proto(js, json_obj, object_proto);
+  }
+  
+  jsval_t parse_key = js_mkstr(js, "parse", 5);
+  jsval_t stringify_key = js_mkstr(js, "stringify", 9);
+  
+  js_setprop(js, json_obj, parse_key, js_mkfun(js_json_parse));
+  js_setprop(js, json_obj, stringify_key, js_mkfun(js_json_stringify));
+  
+  jsval_t json_key = js_mkstr(js, "JSON", 4);
+  js_setprop(js, glob, json_key, json_obj);
 }

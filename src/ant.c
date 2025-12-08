@@ -442,11 +442,18 @@ static jsval_t call_js_with_args(struct js *js, jsval_t func, jsval_t *args, int
 static jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *args, int nargs);
 static jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t code_len, jsval_t closure_scope, jsval_t *args, int nargs);
 
+jsval_t js_get_proto(struct js *js, jsval_t obj);
+void js_set_proto(struct js *js, jsval_t obj, jsval_t proto);
+jsval_t js_setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v);
+static jsoff_t lkp_proto(struct js *js, jsval_t obj, const char *key, size_t len);
+jsval_t js_get_ctor_proto(struct js *js, const char *name, size_t len);
+static jsval_t get_prototype_for_type(struct js *js, uint8_t type);
+
+// Backward compat aliases (defined after implementations below)
 static jsval_t get_proto(struct js *js, jsval_t obj);
 static void set_proto(struct js *js, jsval_t obj, jsval_t proto);
-static jsoff_t lkp_proto(struct js *js, jsval_t obj, const char *key, size_t len);
 static jsval_t get_ctor_proto(struct js *js, const char *name, size_t len);
-static jsval_t get_prototype_for_type(struct js *js, uint8_t type);
+static jsval_t setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v);
 
 static void free_coroutine(coroutine_t *coro);
 static bool has_ready_coroutines(void);
@@ -1718,7 +1725,7 @@ static jsval_t mkprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v, bool is_
   return mkentity(js, (b & ~(3U | CONSTMASK)) | T_PROP, buf, sizeof(buf));
 }
 
-static jsval_t setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v) {
+jsval_t js_setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v) {
   jsoff_t koff = (jsoff_t) vdata(k);
   jsoff_t klen = offtolen(loadoff(js, koff));
   const char *key = (char *) &js->mem[koff + sizeof(jsoff_t)];
@@ -1734,6 +1741,10 @@ static jsval_t setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v) {
     return mkval(T_PROP, existing);
   }
   return mkprop(js, obj, k, v, false);
+}
+
+static jsval_t setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v) {
+  return js_setprop(js, obj, k, v);
 }
 
 static inline jsoff_t esize(jsoff_t w) {
@@ -2342,7 +2353,7 @@ static jsoff_t lkp(struct js *js, jsval_t obj, const char *buf, size_t len) {
   return lkp_inline(js, obj, buf, len);
 }
 
-static jsval_t get_proto(struct js *js, jsval_t obj) {
+jsval_t js_get_proto(struct js *js, jsval_t obj) {
   uint8_t t = vtype(obj);
 
   if (t != T_OBJ && t != T_ARR && t != T_FUNC) return js_mknull();
@@ -2360,7 +2371,11 @@ static jsval_t get_proto(struct js *js, jsval_t obj) {
   return (vt == T_OBJ || vt == T_ARR || vt == T_FUNC) ? val : js_mknull();
 }
 
-static void set_proto(struct js *js, jsval_t obj, jsval_t proto) {
+static jsval_t get_proto(struct js *js, jsval_t obj) {
+  return js_get_proto(js, obj);
+}
+
+void js_set_proto(struct js *js, jsval_t obj, jsval_t proto) {
   uint8_t t = vtype(obj);
   if (t != T_OBJ && t != T_ARR && t != T_FUNC) return;
   
@@ -2374,7 +2389,11 @@ static void set_proto(struct js *js, jsval_t obj, jsval_t proto) {
   }
 }
 
-static jsval_t get_ctor_proto(struct js *js, const char *name, size_t len) {
+static void set_proto(struct js *js, jsval_t obj, jsval_t proto) {
+  js_set_proto(js, obj, proto);
+}
+
+jsval_t js_get_ctor_proto(struct js *js, const char *name, size_t len) {
   jsoff_t ctor_off = lkp(js, js->scope, name, len);
   
   if (ctor_off == 0 && global_scope_stack) {
@@ -2398,6 +2417,10 @@ static jsval_t get_ctor_proto(struct js *js, const char *name, size_t len) {
   
   if (proto_off == 0) return js_mknull();
   return resolveprop(js, mkval(T_PROP, proto_off));
+}
+
+static jsval_t get_ctor_proto(struct js *js, const char *name, size_t len) {
+  return js_get_ctor_proto(js, name, len);
 }
 
 static jsval_t get_prototype_for_type(struct js *js, uint8_t type) {
@@ -10560,11 +10583,33 @@ jsval_t js_getthis(struct js *js) { return js->this_val; }
 jsval_t js_getcurrentfunc(struct js *js) { return js->current_func; }
 
 void js_set(struct js *js, jsval_t obj, const char *key, jsval_t val) {
+  size_t key_len = strlen(key);
+  
   if (vtype(obj) == T_OBJ) {
-    setprop(js, obj, js_mkstr(js, key, strlen(key)), val);
+    jsoff_t existing = lkp(js, obj, key, key_len);
+    if (existing > 0) {
+      if (is_const_prop(js, existing)) {
+        js_mkerr(js, "assignment to constant");
+        return;
+      }
+      saveval(js, existing + sizeof(jsoff_t) * 2, val);
+    } else {
+      jsval_t key_str = js_mkstr(js, key, key_len);
+      mkprop(js, obj, key_str, val, false);
+    }
   } else if (vtype(obj) == T_FUNC) {
     jsval_t func_obj = mkval(T_OBJ, vdata(obj));
-    setprop(js, func_obj, js_mkstr(js, key, strlen(key)), val);
+    jsoff_t existing = lkp(js, func_obj, key, key_len);
+    if (existing > 0) {
+      if (is_const_prop(js, existing)) {
+        js_mkerr(js, "assignment to constant");
+        return;
+      }
+      saveval(js, existing + sizeof(jsoff_t) * 2, val);
+    } else {
+      jsval_t key_str = js_mkstr(js, key, key_len);
+      mkprop(js, func_obj, key_str, val, false);
+    }
   }
 }
 
