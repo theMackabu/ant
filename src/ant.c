@@ -859,11 +859,15 @@ static size_t strobj(struct js *js, jsval_t obj, char *buf, size_t len) {
   
   while (next < js->brk && next != 0) {
     jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
-    jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
-    n += cpy(buf + n, len - n, ",", n == 1 ? 0 : 1);
-    n += tostr(js, mkval(T_STR, koff), buf + n, len - n);
-    n += cpy(buf + n, len - n, ":", 1);
-    n += tostr(js, val, buf + n, len - n);
+    jsoff_t klen = offtolen(loadoff(js, koff));
+    const char *key = (char *) &js->mem[koff + sizeof(koff)];
+    if (!streq(key, klen, "__proto__", 9)) {
+      jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
+      n += cpy(buf + n, len - n, ",", n == 1 ? 0 : 1);
+      n += tostr(js, mkval(T_STR, koff), buf + n, len - n);
+      n += cpy(buf + n, len - n, ":", 1);
+      n += tostr(js, val, buf + n, len - n);
+    }
     next = loadoff(js, next) & ~(3U | CONSTMASK);
   }
   
@@ -1711,6 +1715,9 @@ static jsval_t setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v) {
   jsoff_t koff = (jsoff_t) vdata(k);
   jsoff_t klen = offtolen(loadoff(js, koff));
   const char *key = (char *) &js->mem[koff + sizeof(jsoff_t)];
+  if (streq(key, klen, "__proto__", 9)) {
+    return js_mkerr(js, "cannot assign to __proto__");
+  }
   jsoff_t existing = lkp(js, obj, key, klen);
   if (existing > 0) {
     if (is_const_prop(js, existing)) {
@@ -2326,7 +2333,12 @@ static void set_proto(struct js *js, jsval_t obj, jsval_t proto) {
   
   jsval_t as_obj = (t == T_OBJ) ? obj : mkval(T_OBJ, vdata(obj));
   jsval_t key = js_mkstr(js, "__proto__", 9);
-  setprop(js, as_obj, key, proto);
+  jsoff_t existing = lkp(js, as_obj, "__proto__", 9);
+  if (existing > 0) {
+    saveval(js, existing + sizeof(jsoff_t) * 2, proto);
+  } else {
+    mkprop(js, as_obj, key, proto, false);
+  }
 }
 
 static jsval_t get_ctor_proto(struct js *js, const char *name, size_t len) {
@@ -5068,33 +5080,37 @@ static jsval_t js_for(struct js *js) {
       while (prop_off < js->brk && prop_off != 0) {
         jsoff_t koff = loadoff(js, prop_off + (jsoff_t) sizeof(prop_off));
         jsoff_t klen = offtolen(loadoff(js, koff));
-        jsval_t key_str = js_mkstr(js, (char *) &js->mem[koff + sizeof(koff)], klen);
+        const char *key = (char *) &js->mem[koff + sizeof(koff)];
         
-        const char *var_name = &js->code[var_name_off];
-        jsoff_t existing = lkp(js, js->scope, var_name, var_name_len);
-        if (existing > 0) {
-          saveval(js, existing + sizeof(jsoff_t) * 2, key_str);
-        } else {
-          jsval_t x = mkprop(js, js->scope, js_mkstr(js, var_name, var_name_len), key_str, is_const_var);
-          if (is_err(x)) {
-            res = x;
+        if (!streq(key, klen, "__proto__", 9)) {
+          jsval_t key_str = js_mkstr(js, key, klen);
+          
+          const char *var_name = &js->code[var_name_off];
+          jsoff_t existing = lkp(js, js->scope, var_name, var_name_len);
+          if (existing > 0) {
+            saveval(js, existing + sizeof(jsoff_t) * 2, key_str);
+          } else {
+            jsval_t x = mkprop(js, js->scope, js_mkstr(js, var_name, var_name_len), key_str, is_const_var);
+            if (is_err(x)) {
+              res = x;
+              goto done;
+            }
+          }
+          
+          js->pos = body_start;
+          js->consumed = 1;
+          js->flags = (flags & ~F_NOEXEC) | F_LOOP;
+          v = js_block_or_stmt(js);
+          if (is_err(v)) {
+            res = v;
             goto done;
           }
-        }
-        
-        js->pos = body_start;
-        js->consumed = 1;
-        js->flags = (flags & ~F_NOEXEC) | F_LOOP;
-        v = js_block_or_stmt(js);
-        if (is_err(v)) {
-          res = v;
-          goto done;
-        }
-        
-        if (js->flags & F_BREAK) break;
-        if (js->flags & F_RETURN) {
-          res = v;
-          goto done;
+          
+          if (js->flags & F_BREAK) break;
+          if (js->flags & F_RETURN) {
+            res = v;
+            goto done;
+          }
         }
         
         prop_off = loadoff(js, prop_off) & ~(3U | CONSTMASK);
