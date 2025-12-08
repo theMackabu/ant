@@ -10,3 +10,6 @@
 /subprojects/*/
 /subprojects/.wraplock
 !/subprojects/packagefiles
+
+*.todo
+todo.txt

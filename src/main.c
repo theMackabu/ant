@@ -11,6 +11,7 @@
 #include "repl.h"
 
 #include "modules/builtin.h"
+#include "modules/buffer.h"
 #include "modules/io.h"
 #include "modules/fs.h"
 #include "modules/crypto.h"
@@ -154,6 +155,7 @@ int main(int argc, char *argv[]) {
   ant_runtime_init(js);
 
   init_builtin_module();
+  init_buffer_module();
   init_crypto_module();
   init_fetch_module();
   init_console_module();
