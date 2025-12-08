@@ -10000,6 +10000,11 @@ static const char* jsval_to_key(struct js *js, jsval_t val) {
 static jsval_t builtin_Map(struct js *js, jsval_t *args, int nargs) {
   jsval_t map_obj = mkobj(js, 0);
   
+  jsval_t map_proto = get_ctor_proto(js, "Map", 3);
+  if (vtype(map_proto) == T_OBJ) {
+    set_proto(js, map_obj, map_proto);
+  }
+  
   map_entry_t **map_head = (map_entry_t **)ANT_GC_MALLOC(sizeof(map_entry_t *));
   if (!map_head) return js_mkerr(js, "out of memory");
   *map_head = NULL;
@@ -10013,6 +10018,11 @@ static jsval_t builtin_Map(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t builtin_Set(struct js *js, jsval_t *args, int nargs) {
   jsval_t set_obj = mkobj(js, 0);
+  
+  jsval_t set_proto_val = get_ctor_proto(js, "Set", 3);
+  if (vtype(set_proto_val) == T_OBJ) {
+    set_proto(js, set_obj, set_proto_val);
+  }
   
   set_entry_t **set_head = (set_entry_t **)ANT_GC_MALLOC(sizeof(set_entry_t *));
   if (!set_head) return js_mkerr(js, "out of memory");
