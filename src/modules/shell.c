@@ -215,7 +215,9 @@ static jsval_t builtin_shell_dollar(struct js *js, jsval_t *args, int nargs) {
 
 jsval_t shell_library(struct js *js) {
   jsval_t lib = js_mkobj(js);
+  
   js_set(js, lib, "$", js_mkfun(builtin_shell_dollar));
+  js_set(js, lib, "@@toStringTag", js_mkstr(js, "shell", 5));
   
   return lib;
 }

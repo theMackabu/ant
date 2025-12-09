@@ -750,5 +750,6 @@ void init_buffer_module() {
   jsval_t buffer_obj = js_mkobj(js);
   js_set(js, buffer_obj, "from", js_mkfun(js_buffer_from));
   js_set(js, buffer_obj, "alloc", js_mkfun(js_buffer_alloc));
+  js_set(js, buffer_obj, "@@toStringTag", js_mkstr(js, "Buffer", 6));
   js_set(js, glob, "Buffer", buffer_obj);
 }

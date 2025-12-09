@@ -134,11 +134,13 @@ void init_crypto_module() {
   jsval_t ant_obj = rt->ant_obj;
 
   jsval_t crypto_obj = js_mkobj(js);
-  js_set(js, ant_obj, "Crypto", crypto_obj);
   
   js_set(js, crypto_obj, "random", js_mkfun(js_crypto_random));
   js_set(js, crypto_obj, "randomBytes", js_mkfun(js_crypto_random_bytes));
   js_set(js, crypto_obj, "randomUUID", js_mkfun(js_crypto_random_uuid));
   js_set(js, crypto_obj, "randomUUIDv7", js_mkfun(js_crypto_random_uuidv7));
+  
+  js_set(js, crypto_obj, "@@toStringTag", js_mkstr(js, "Crypto", 6));
+  js_set(js, ant_obj, "Crypto", crypto_obj);
 }
 

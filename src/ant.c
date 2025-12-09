@@ -2533,6 +2533,14 @@ static jsoff_t lkp_proto(struct js *js, jsval_t obj, const char *key, size_t len
       if (vtype(proto) == T_NULL || vtype(proto) == T_UNDEF) break;
       cur = proto;
       depth++;
+    } else if (t == T_CFUNC) {
+      jsval_t func_proto = get_ctor_proto(js, "Function", 8);
+      if (vtype(func_proto) == T_OBJ || vtype(func_proto) == T_ARR || vtype(func_proto) == T_FUNC) {
+        jsval_t as_obj = (vtype(func_proto) == T_OBJ) ? func_proto : mkval(T_OBJ, vdata(func_proto));
+        jsoff_t off = lkp(js, as_obj, key, len);
+        if (off != 0) return off;
+      }
+      break;
     }
     else break;
   }
@@ -2819,6 +2827,13 @@ static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
     jsval_t key = js_mkstr(js, ptr, plen);
     jsval_t prop = setprop(js, func_obj, key, js_mkundef());
     return prop;
+  }
+  
+  if (t == T_CFUNC) {
+    jsoff_t off = lkp_proto(js, l, ptr, plen);
+    if (off != 0) return resolveprop(js, mkval(T_PROP, off));
+    if (streq(ptr, plen, "name", 4)) return js_mkstr(js, "", 0);
+    return js_mkundef();
   }
   
   if (t != T_OBJ && t != T_ARR) {
@@ -7781,6 +7796,50 @@ static jsval_t builtin_object_defineProperty(struct js *js, jsval_t *args, int n
   return obj;
 }
 
+static jsval_t builtin_object_toString(struct js *js, jsval_t *args, int nargs) {
+  (void)args; (void)nargs;
+  jsval_t obj = js->this_val;
+  
+  obj = resolveprop(js, obj);
+  uint8_t t = vtype(obj);
+  
+  if (t == T_OBJ || t == T_ARR || t == T_FUNC) {
+    jsval_t check_obj = (t == T_FUNC) ? mkval(T_OBJ, vdata(obj)) : obj;
+    jsoff_t tag_off = lkp(js, check_obj, "@@toStringTag", 13);
+    if (tag_off != 0) {
+      jsval_t tag_val = resolveprop(js, mkval(T_PROP, tag_off));
+      if (vtype(tag_val) == T_STR) {
+        jsoff_t tag_len, tag_str_off = vstr(js, tag_val, &tag_len);
+        const char *tag_str = (const char *)&js->mem[tag_str_off];
+        
+        char buf[256];
+        int n = snprintf(buf, sizeof(buf), "[object %.*s]", (int)tag_len, tag_str);
+        return js_mkstr(js, buf, n);
+      }
+    }
+  }
+  
+  const char *type_name = NULL;
+  
+  switch (t) {
+    case T_UNDEF: type_name = "Undefined"; break;
+    case T_NULL:  type_name = "Null"; break;
+    case T_BOOL:  type_name = "Boolean"; break;
+    case T_NUM:   type_name = "Number"; break;
+    case T_STR:   type_name = "String"; break;
+    case T_ARR:   type_name = "Array"; break;
+    case T_FUNC:  type_name = "Function"; break;
+    case T_ERR:   type_name = "Error"; break;
+    case T_BIGINT: type_name = "BigInt"; break;
+    case T_OBJ:   type_name = "Object"; break;
+    default:      type_name = "Unknown"; break;
+  }
+  
+  char buf[256];
+  int n = snprintf(buf, sizeof(buf), "[object %s]", type_name);
+  return js_mkstr(js, buf, n);
+}
+
 static jsval_t builtin_array_push(struct js *js, jsval_t *args, int nargs) {
   jsval_t arr = js->this_val;
   arr = resolveprop(js, arr);
@@ -10576,6 +10635,7 @@ struct js *js_create(void *buf, size_t len) {
   
   jsval_t glob = js->scope;
   jsval_t object_proto = js_mkobj(js);
+  setprop(js, object_proto, js_mkstr(js, "toString", 8), js_mkfun(builtin_object_toString));
   
   jsval_t function_proto = js_mkobj(js);
   set_proto(js, function_proto, object_proto);

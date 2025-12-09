@@ -411,6 +411,7 @@ jsval_t path_library(struct js *js) {
   js_set(js, lib, "sep", js_mkstr(js, PATH_SEP_STR, 1));
   char delimiter_str[2] = {PATH_DELIMITER, '\0'};
   js_set(js, lib, "delimiter", js_mkstr(js, delimiter_str, 1));
+  js_set(js, lib, "@@toStringTag", js_mkstr(js, "path", 4));
   
   return lib;
 }

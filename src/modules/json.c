@@ -215,7 +215,9 @@ void init_json_module() {
   struct js *js = rt->js;
   jsval_t json_obj = js_mkobj(js);
   
-  js_set(js, js_glob(js), "JSON", json_obj);
   js_set(js, json_obj, "parse", js_mkfun(js_json_parse));
   js_set(js, json_obj, "stringify", js_mkfun(js_json_stringify));
+  
+  js_set(js, json_obj, "@@toStringTag", js_mkstr(js, "JSON", 4));
+  js_set(js, js_glob(js), "JSON", json_obj);
 }

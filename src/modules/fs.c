@@ -725,6 +725,7 @@ jsval_t fs_library(struct js *js) {
   js_set(js, lib, "rmdirSync", js_mkfun(builtin_fs_rmdirSync));
   js_set(js, lib, "stat", js_mkfun(builtin_fs_stat));
   js_set(js, lib, "statSync", js_mkfun(builtin_fs_statSync));
+  js_set(js, lib, "@@toStringTag", js_mkstr(js, "fs", 2));
   
   return lib;
 }

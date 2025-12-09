@@ -192,10 +192,12 @@ void init_console_module() {
   struct js *js = rt->js;
   jsval_t console_obj = js_mkobj(js);
   
-  js_set(js, js_glob(js), "console", console_obj);
   js_set(js, console_obj, "log", js_mkfun(js_console_log));
   js_set(js, console_obj, "error", js_mkfun(js_console_error));
   js_set(js, console_obj, "warn", js_mkfun(js_console_warn));
   js_set(js, console_obj, "assert", js_mkfun(js_console_assert));
   js_set(js, console_obj, "trace", js_mkfun(js_console_trace));
+  
+  js_set(js, console_obj, "@@toStringTag", js_mkstr(js, "console", 7));
+  js_set(js, js_glob(js), "console", console_obj);
 }

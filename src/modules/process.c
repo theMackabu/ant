@@ -93,7 +93,6 @@ void init_process_module(void) {
   jsval_t process_obj = js_mkobj(js);
   jsval_t env_obj = js_mkobj(js);
 
-  js_set(js, js_glob(js), "process", process_obj);
   js_set(js, process_obj, "env", env_obj);
   js_set(js, process_obj, "exit", js_mkfun(process_exit));
   
@@ -128,4 +127,7 @@ void init_process_module(void) {
   
   load_dotenv_file(js, env_obj);
   js_set_getter(js, env_obj, env_getter);
+  
+  js_set(js, process_obj, "@@toStringTag", js_mkstr(js, "process", 7));
+  js_set(js, js_glob(js), "process", process_obj);
 }
