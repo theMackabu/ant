@@ -2245,9 +2245,38 @@ static uint8_t next(struct js *js) {
         js->tlen = 1;
         break;
       }
+      
       char *end;
-      js->tval = tov(strtod(buf, &end));
-      jsoff_t numlen = (jsoff_t) (end - buf);
+      double value = 0;
+      jsoff_t numlen = 0;
+      
+      if (buf[0] == '0' && js->toff + 2 < js->clen) {
+        if (buf[1] == 'b' || buf[1] == 'B') {
+          numlen = 2;
+          while (js->toff + numlen < js->clen && (buf[numlen] == '0' || buf[numlen] == '1')) {
+            value = value * 2 + (buf[numlen] - '0');
+            numlen++;
+          }
+          js->tval = tov(value);
+        } else if (buf[1] == 'o' || buf[1] == 'O') {
+          numlen = 2;
+          while (js->toff + numlen < js->clen && buf[numlen] >= '0' && buf[numlen] <= '7') {
+            value = value * 8 + (buf[numlen] - '0');
+            numlen++;
+          }
+          js->tval = tov(value);
+        } else if (buf[1] == 'x' || buf[1] == 'X') {
+          js->tval = tov(strtod(buf, &end));
+          numlen = (jsoff_t) (end - buf);
+        } else {
+          js->tval = tov(strtod(buf, &end));
+          numlen = (jsoff_t) (end - buf);
+        }
+      } else {
+        js->tval = tov(strtod(buf, &end));
+        numlen = (jsoff_t) (end - buf);
+      }
+      
       if (js->toff + numlen < js->clen && buf[numlen] == 'n') {
         js->tok = TOK_BIGINT;
         js->tlen = numlen + 1;

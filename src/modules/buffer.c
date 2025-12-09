@@ -95,6 +95,13 @@ static ArrayBufferData *create_array_buffer_data(size_t length) {
   data->length = length;
   data->capacity = length;
   data->ref_count = 1;
+  data->is_shared = 0;
+  return data;
+}
+
+static ArrayBufferData *create_shared_array_buffer_data(size_t length) {
+  ArrayBufferData *data = create_array_buffer_data(length);
+  if (data) data->is_shared = 1;
   return data;
 }
 
@@ -672,6 +679,26 @@ static jsval_t js_buffer_write(struct js *js, jsval_t *args, int nargs) {
   return js_mknum((double)to_write);
 }
 
+static jsval_t js_sharedarraybuffer_constructor(struct js *js, jsval_t *args, int nargs) {
+  size_t length = 0;
+  if (nargs > 0 && js_type(args[0]) == JS_NUM) {
+    length = (size_t)js_getnum(args[0]);
+  }
+  
+  ArrayBufferData *data = create_shared_array_buffer_data(length);
+  if (!data) {
+    return js_mkerr(js, "Failed to allocate SharedArrayBuffer");
+  }
+  
+  jsval_t obj = js_mkobj(js);
+  js_set(js, obj, "_arraybuffer_data", js_mknum((double)(uintptr_t)data));
+  js_set(js, obj, "_shared", js_mktrue());
+  js_set(js, obj, "byteLength", js_mknum((double)length));
+  js_set(js, obj, "slice", js_mkfun(js_arraybuffer_slice));
+  
+  return obj;
+}
+
 void init_buffer_module() {
   struct js *js = rt->js;
   jsval_t glob = js_glob(js);
@@ -713,6 +740,12 @@ void init_buffer_module() {
   js_set(js, dataview_proto, "getFloat32", js_mkfun(js_dataview_getFloat32));
   js_set(js, dataview_constructor, "prototype", dataview_proto);
   js_set(js, glob, "DataView", dataview_constructor);
+  
+  jsval_t sharedarraybuffer_constructor = js_mkfun(js_sharedarraybuffer_constructor);
+  jsval_t sharedarraybuffer_proto = js_mkobj(js);
+  js_set(js, sharedarraybuffer_proto, "slice", js_mkfun(js_arraybuffer_slice));
+  js_set(js, sharedarraybuffer_constructor, "prototype", sharedarraybuffer_proto);
+  js_set(js, glob, "SharedArrayBuffer", sharedarraybuffer_constructor);
   
   jsval_t buffer_obj = js_mkobj(js);
   js_set(js, buffer_obj, "from", js_mkfun(js_buffer_from));

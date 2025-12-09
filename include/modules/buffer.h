@@ -11,6 +11,7 @@ typedef struct {
   size_t length;
   size_t capacity;
   int ref_count;
+  int is_shared;
 } ArrayBufferData;
 
 typedef enum {
