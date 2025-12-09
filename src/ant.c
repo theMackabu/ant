@@ -380,6 +380,8 @@ static jsval_t builtin_Date(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_Date_now(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_Map(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_Set(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_WeakMap(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_WeakSet(struct js *js, jsval_t *args, int nargs);
 static jsval_t map_set(struct js *js, jsval_t *args, int nargs);
 static jsval_t map_get(struct js *js, jsval_t *args, int nargs);
 static jsval_t map_has(struct js *js, jsval_t *args, int nargs);
@@ -397,6 +399,13 @@ static jsval_t set_clear(struct js *js, jsval_t *args, int nargs);
 static jsval_t set_size(struct js *js, jsval_t *args, int nargs);
 static jsval_t set_values(struct js *js, jsval_t *args, int nargs);
 static jsval_t set_forEach(struct js *js, jsval_t *args, int nargs);
+static jsval_t weakmap_set(struct js *js, jsval_t *args, int nargs);
+static jsval_t weakmap_get(struct js *js, jsval_t *args, int nargs);
+static jsval_t weakmap_has(struct js *js, jsval_t *args, int nargs);
+static jsval_t weakmap_delete(struct js *js, jsval_t *args, int nargs);
+static jsval_t weakset_add(struct js *js, jsval_t *args, int nargs);
+static jsval_t weakset_has(struct js *js, jsval_t *args, int nargs);
+static jsval_t weakset_delete(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_function_call(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_function_apply(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_function_bind(struct js *js, jsval_t *args, int nargs);
@@ -10354,6 +10363,17 @@ typedef struct set_entry {
     UT_hash_handle hh;
 } set_entry_t;
 
+typedef struct weakmap_entry {
+    jsval_t key_obj;
+    jsval_t value;
+    UT_hash_handle hh;
+} weakmap_entry_t;
+
+typedef struct weakset_entry {
+    jsval_t value_obj;
+    UT_hash_handle hh;
+} weakset_entry_t;
+
 static const char* jsval_to_key(struct js *js, jsval_t val) {
   if (vtype(val) == T_STR) {
     jsoff_t len;
@@ -10616,6 +10636,201 @@ static jsval_t set_size(struct js *js, jsval_t *args, int nargs) {
   return tov((double)count);
 }
 
+static jsval_t builtin_WeakMap(struct js *js, jsval_t *args, int nargs) {
+  jsval_t wm_obj = mkobj(js, 0);
+  
+  jsval_t wm_proto = get_ctor_proto(js, "WeakMap", 7);
+  if (vtype(wm_proto) == T_OBJ) {
+    set_proto(js, wm_obj, wm_proto);
+  }
+  
+  weakmap_entry_t **wm_head = (weakmap_entry_t **)ANT_GC_MALLOC(sizeof(weakmap_entry_t *));
+  if (!wm_head) return js_mkerr(js, "out of memory");
+  *wm_head = NULL;
+  
+  jsval_t wm_ptr = mkval(T_NUM, (size_t)wm_head);
+  jsval_t wm_key = js_mkstr(js, "__weakmap", 9);
+  setprop(js, wm_obj, wm_key, wm_ptr);
+  
+  return wm_obj;
+}
+
+static jsval_t builtin_WeakSet(struct js *js, jsval_t *args, int nargs) {
+  jsval_t ws_obj = mkobj(js, 0);
+  
+  jsval_t ws_proto = get_ctor_proto(js, "WeakSet", 7);
+  if (vtype(ws_proto) == T_OBJ) {
+    set_proto(js, ws_obj, ws_proto);
+  }
+  
+  weakset_entry_t **ws_head = (weakset_entry_t **)ANT_GC_MALLOC(sizeof(weakset_entry_t *));
+  if (!ws_head) return js_mkerr(js, "out of memory");
+  *ws_head = NULL;
+  
+  jsval_t ws_ptr = mkval(T_NUM, (size_t)ws_head);
+  jsval_t ws_key = js_mkstr(js, "__weakset", 9);
+  setprop(js, ws_obj, ws_key, ws_ptr);
+  
+  return ws_obj;
+}
+
+static weakmap_entry_t** get_weakmap_from_obj(struct js *js, jsval_t obj) {
+  jsoff_t wm_off = lkp(js, obj, "__weakmap", 9);
+  if (wm_off == 0) return NULL;
+  jsval_t wm_val = resolveprop(js, mkval(T_PROP, wm_off));
+  if (vtype(wm_val) != T_NUM) return NULL;
+  return (weakmap_entry_t**)(size_t)vdata(wm_val);
+}
+
+static weakset_entry_t** get_weakset_from_obj(struct js *js, jsval_t obj) {
+  jsoff_t ws_off = lkp(js, obj, "__weakset", 9);
+  if (ws_off == 0) return NULL;
+  jsval_t ws_val = resolveprop(js, mkval(T_PROP, ws_off));
+  if (vtype(ws_val) != T_NUM) return NULL;
+  return (weakset_entry_t**)(size_t)vdata(ws_val);
+}
+
+static jsval_t weakmap_set(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 2) return js_mkerr(js, "WeakMap.set() requires 2 arguments");
+  
+  jsval_t this_val = js->this_val;
+  weakmap_entry_t **wm_ptr = get_weakmap_from_obj(js, this_val);
+  if (!wm_ptr) return js_mkerr(js, "Invalid WeakMap object");
+  
+  if (vtype(args[0]) != T_OBJ) {
+    return js_mkerr(js, "WeakMap key must be an object");
+  }
+  
+  jsval_t key_obj = args[0];
+  
+  weakmap_entry_t *entry;
+  HASH_FIND(hh, *wm_ptr, &key_obj, sizeof(jsval_t), entry);
+  if (entry) {
+    entry->value = args[1];
+  } else {
+    entry = (weakmap_entry_t *)ANT_GC_MALLOC(sizeof(weakmap_entry_t));
+    if (!entry) return js_mkerr(js, "out of memory");
+    entry->key_obj = key_obj;
+    entry->value = args[1];
+    HASH_ADD(hh, *wm_ptr, key_obj, sizeof(jsval_t), entry);
+  }
+  
+  return this_val;
+}
+
+static jsval_t weakmap_get(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "WeakMap.get() requires 1 argument");
+  
+  jsval_t this_val = js->this_val;
+  weakmap_entry_t **wm_ptr = get_weakmap_from_obj(js, this_val);
+  if (!wm_ptr) return js_mkundef();
+  
+  if (vtype(args[0]) != T_OBJ) return js_mkundef();
+  
+  jsval_t key_obj = args[0];
+  weakmap_entry_t *entry;
+  HASH_FIND(hh, *wm_ptr, &key_obj, sizeof(jsval_t), entry);
+  return entry ? entry->value : js_mkundef();
+}
+
+static jsval_t weakmap_has(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "WeakMap.has() requires 1 argument");
+  
+  jsval_t this_val = js->this_val;
+  weakmap_entry_t **wm_ptr = get_weakmap_from_obj(js, this_val);
+  if (!wm_ptr) return mkval(T_BOOL, 0);
+  
+  if (vtype(args[0]) != T_OBJ) return mkval(T_BOOL, 0);
+  
+  jsval_t key_obj = args[0];
+  weakmap_entry_t *entry;
+  HASH_FIND(hh, *wm_ptr, &key_obj, sizeof(jsval_t), entry);
+  return mkval(T_BOOL, entry ? 1 : 0);
+}
+
+static jsval_t weakmap_delete(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "WeakMap.delete() requires 1 argument");
+  
+  jsval_t this_val = js->this_val;
+  weakmap_entry_t **wm_ptr = get_weakmap_from_obj(js, this_val);
+  if (!wm_ptr) return mkval(T_BOOL, 0);
+  
+  if (vtype(args[0]) != T_OBJ) return mkval(T_BOOL, 0);
+  
+  jsval_t key_obj = args[0];
+  weakmap_entry_t *entry;
+  HASH_FIND(hh, *wm_ptr, &key_obj, sizeof(jsval_t), entry);
+  if (entry) {
+    HASH_DEL(*wm_ptr, entry);
+    ANT_GC_FREE(entry);
+    return mkval(T_BOOL, 1);
+  }
+  return mkval(T_BOOL, 0);
+}
+
+static jsval_t weakset_add(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "WeakSet.add() requires 1 argument");
+  
+  jsval_t this_val = js->this_val;
+  weakset_entry_t **ws_ptr = get_weakset_from_obj(js, this_val);
+  if (!ws_ptr) return js_mkerr(js, "Invalid WeakSet object");
+  
+  if (vtype(args[0]) != T_OBJ) {
+    return js_mkerr(js, "WeakSet value must be an object");
+  }
+  
+  jsval_t value_obj = args[0];
+  
+  weakset_entry_t *entry;
+  HASH_FIND(hh, *ws_ptr, &value_obj, sizeof(jsval_t), entry);
+  
+  if (!entry) {
+    entry = (weakset_entry_t *)ANT_GC_MALLOC(sizeof(weakset_entry_t));
+    if (!entry) return js_mkerr(js, "out of memory");
+    entry->value_obj = value_obj;
+    HASH_ADD(hh, *ws_ptr, value_obj, sizeof(jsval_t), entry);
+  }
+  
+  return this_val;
+}
+
+static jsval_t weakset_has(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "WeakSet.has() requires 1 argument");
+  
+  jsval_t this_val = js->this_val;
+  weakset_entry_t **ws_ptr = get_weakset_from_obj(js, this_val);
+  if (!ws_ptr) return mkval(T_BOOL, 0);
+  
+  if (vtype(args[0]) != T_OBJ) return mkval(T_BOOL, 0);
+  
+  jsval_t value_obj = args[0];
+  weakset_entry_t *entry;
+  HASH_FIND(hh, *ws_ptr, &value_obj, sizeof(jsval_t), entry);
+  
+  return mkval(T_BOOL, entry ? 1 : 0);
+}
+
+static jsval_t weakset_delete(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "WeakSet.delete() requires 1 argument");
+  
+  jsval_t this_val = js->this_val;
+  weakset_entry_t **ws_ptr = get_weakset_from_obj(js, this_val);
+  if (!ws_ptr) return mkval(T_BOOL, 0);
+  
+  if (vtype(args[0]) != T_OBJ) return mkval(T_BOOL, 0);
+  
+  jsval_t value_obj = args[0];
+  weakset_entry_t *entry;
+  HASH_FIND(hh, *ws_ptr, &value_obj, sizeof(jsval_t), entry);
+  
+  if (entry) {
+    HASH_DEL(*ws_ptr, entry);
+    ANT_GC_FREE(entry);
+    return mkval(T_BOOL, 1);
+  }
+  return mkval(T_BOOL, 0);
+}
+
 struct js *js_create(void *buf, size_t len) {
   ANT_GC_INIT();
   init_free_list();
@@ -10710,6 +10925,19 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, set_proto_obj, js_mkstr(js, "clear", 5), js_mkfun(set_clear));
   setprop(js, set_proto_obj, js_mkstr(js, "size", 4), js_mkfun(set_size));
   
+  jsval_t weakmap_proto = js_mkobj(js);
+  set_proto(js, weakmap_proto, object_proto);
+  setprop(js, weakmap_proto, js_mkstr(js, "set", 3), js_mkfun(weakmap_set));
+  setprop(js, weakmap_proto, js_mkstr(js, "get", 3), js_mkfun(weakmap_get));
+  setprop(js, weakmap_proto, js_mkstr(js, "has", 3), js_mkfun(weakmap_has));
+  setprop(js, weakmap_proto, js_mkstr(js, "delete", 6), js_mkfun(weakmap_delete));
+  
+  jsval_t weakset_proto = js_mkobj(js);
+  set_proto(js, weakset_proto, object_proto);
+  setprop(js, weakset_proto, js_mkstr(js, "add", 3), js_mkfun(weakset_add));
+  setprop(js, weakset_proto, js_mkstr(js, "has", 3), js_mkfun(weakset_has));
+  setprop(js, weakset_proto, js_mkstr(js, "delete", 6), js_mkfun(weakset_delete));
+  
   jsval_t promise_proto = js_mkobj(js);
   set_proto(js, promise_proto, object_proto);
   setprop(js, promise_proto, js_mkstr(js, "then", 4), js_mkfun(builtin_promise_then));
@@ -10771,6 +10999,18 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, set_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_Set));
   setprop(js, set_ctor_obj, js_mkstr(js, "prototype", 9), set_proto_obj);
   setprop(js, glob, js_mkstr(js, "Set", 3), mkval(T_FUNC, vdata(set_ctor_obj)));
+  
+  jsval_t weakmap_ctor_obj = mkobj(js, 0);
+  set_proto(js, weakmap_ctor_obj, function_proto);
+  setprop(js, weakmap_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_WeakMap));
+  setprop(js, weakmap_ctor_obj, js_mkstr(js, "prototype", 9), weakmap_proto);
+  setprop(js, glob, js_mkstr(js, "WeakMap", 7), mkval(T_FUNC, vdata(weakmap_ctor_obj)));
+  
+  jsval_t weakset_ctor_obj = mkobj(js, 0);
+  set_proto(js, weakset_ctor_obj, function_proto);
+  setprop(js, weakset_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_WeakSet));
+  setprop(js, weakset_ctor_obj, js_mkstr(js, "prototype", 9), weakset_proto);
+  setprop(js, glob, js_mkstr(js, "WeakSet", 7), mkval(T_FUNC, vdata(weakset_ctor_obj)));
   
   jsval_t err_ctor_obj = mkobj(js, 0);
   set_proto(js, err_ctor_obj, function_proto);
