@@ -4,10 +4,10 @@ async function allocateAndWait() {
     data.push({ value: 'test ' + i });
   }
   console.log('Before await, data length:', data.length);
-  
+
   await new Promise(resolve => setTimeout(resolve, 10));
-  Ant.gc();
-  
+  console.log(Ant.gc());
+
   console.log('After await+GC, data length:', data.length);
   return data.length;
 }

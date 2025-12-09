@@ -1829,6 +1829,10 @@ static void js_unmark_used_entities(struct js *js) {
     js_unmark_jsval(js, coro->yield_value);
     for (int i = 0; i < coro->nargs; i++) js_unmark_jsval(js, coro->args[i]);
   }
+  
+  for (int i = 0; i < global_this_stack.depth; i++) {
+    js_unmark_jsval(js, global_this_stack.stack[i]);
+  }
 }
 
 static void init_free_list(void) {
@@ -1886,7 +1890,7 @@ static jsoff_t free_list_zero_out(struct js *js) {
     if (entries[i].offset > 0 && entries[i].size > 0) {
       if (entries[i].offset < safe_threshold) continue;
       if (entries[i].offset + entries[i].size > js->size) continue;      
-      memset(&js->mem[entries[i].offset], 0, entries[i].size);
+      // memset(&js->mem[entries[i].offset], 0, entries[i].size);
       total_freed += entries[i].size;
     }
   }
