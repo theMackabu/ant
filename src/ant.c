@@ -449,7 +449,6 @@ static jsoff_t lkp_proto(struct js *js, jsval_t obj, const char *key, size_t len
 jsval_t js_get_ctor_proto(struct js *js, const char *name, size_t len);
 static jsval_t get_prototype_for_type(struct js *js, uint8_t type);
 
-// Backward compat aliases (defined after implementations below)
 static jsval_t get_proto(struct js *js, jsval_t obj);
 static void set_proto(struct js *js, jsval_t obj, jsval_t proto);
 static jsval_t get_ctor_proto(struct js *js, const char *name, size_t len);
@@ -1889,7 +1888,8 @@ static jsoff_t free_list_zero_out(struct js *js) {
   for (unsigned int i = 0; i < len; i++) {
     if (entries[i].offset > 0 && entries[i].size > 0) {
       if (entries[i].offset < safe_threshold) continue;
-      if (entries[i].offset + entries[i].size > js->size) continue;      
+      if (entries[i].offset + entries[i].size > js->size) continue;    
+      // ugh disable zeroing for now until a better solution is found  
       // memset(&js->mem[entries[i].offset], 0, entries[i].size);
       total_freed += entries[i].size;
     }
@@ -7443,7 +7443,6 @@ static jsval_t builtin_object_keys(struct js *js, jsval_t *args, int nargs) {
     jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
     jsoff_t klen = offtolen(loadoff(js, koff));
     const char *key = (char *) &js->mem[koff + sizeof(koff)];
-    // Skip internal __proto__ property
     if (!streq(key, klen, "__proto__", 9)) {
       char idxstr[16];
       snprintf(idxstr, sizeof(idxstr), "%u", (unsigned) idx);
