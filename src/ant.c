@@ -1943,8 +1943,7 @@ static void free_list_add(jsoff_t offset, jsoff_t size, struct js *js) {
   jsoff_t entity_val = loadoff(js, offset);
   uint8_t entity_type = entity_val & 3;
   
-  if (entity_type == T_OBJ && is_builtin_or_system(offset, js)) return;  
-  if (entity_type == T_PROP) return;  
+  if (entity_type == T_OBJ && is_builtin_or_system(offset, js)) return;
   if (entity_type == T_STR && offset < 0x1000) return;
   
   FreeListEntry entry = {0};
