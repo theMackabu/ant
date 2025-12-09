@@ -1733,9 +1733,35 @@ jsval_t js_setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v) {
   }
   jsoff_t existing = lkp(js, obj, key, klen);
   if (existing > 0) {
-    if (is_const_prop(js, existing)) {
+    char desc_key[128];
+    snprintf(desc_key, sizeof(desc_key), "__desc_%.*s", (int)klen, key);
+    jsoff_t desc_off = lkp(js, obj, desc_key, strlen(desc_key));
+    
+    if (desc_off != 0) {
+      jsval_t desc_obj = resolveprop(js, mkval(T_PROP, desc_off));
+      if (vtype(desc_obj) == T_OBJ) {
+        jsoff_t writable_off = lkp(js, desc_obj, "writable", 8);
+        if (writable_off != 0) {
+          jsval_t writable_val = resolveprop(js, mkval(T_PROP, writable_off));
+          if (!js_truthy(js, writable_val)) {
+            if (js->flags & F_STRICT) return js_mkerr(js, "assignment to read-only property");
+            return mkval(T_PROP, existing);
+          }
+        }
+        
+        jsoff_t configurable_off = lkp(js, desc_obj, "configurable", 12);
+        if (configurable_off != 0) {
+          jsval_t configurable_val = resolveprop(js, mkval(T_PROP, configurable_off));
+          if (!js_truthy(js, configurable_val)) {
+            if (js->flags & F_STRICT) return js_mkerr(js, "assignment to non-configurable property");
+            return mkval(T_PROP, existing);
+          }
+        }
+      }
+    } else if (is_const_prop(js, existing)) {
       return js_mkerr(js, "assignment to constant");
     }
+    
     saveval(js, existing + sizeof(jsoff_t) * 2, v);
     return mkval(T_PROP, existing);
   }
@@ -7443,7 +7469,29 @@ static jsval_t builtin_object_keys(struct js *js, jsval_t *args, int nargs) {
     jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
     jsoff_t klen = offtolen(loadoff(js, koff));
     const char *key = (char *) &js->mem[koff + sizeof(koff)];
-    if (!streq(key, klen, "__proto__", 9)) {
+    
+    next = loadoff(js, next) & ~(3U | CONSTMASK);
+    
+    if (streq(key, klen, "__proto__", 9)) continue;
+    if (klen > 7 && memcmp(key, "__desc_", 7) == 0) continue;
+    
+    bool should_include = true;
+    char desc_key[128];
+    snprintf(desc_key, sizeof(desc_key), "__desc_%.*s", (int)klen, key);
+    jsoff_t desc_off = lkp(js, obj, desc_key, strlen(desc_key));
+    
+    if (desc_off != 0) {
+      jsval_t desc_obj = resolveprop(js, mkval(T_PROP, desc_off));
+      if (vtype(desc_obj) == T_OBJ) {
+        jsoff_t enum_off = lkp(js, desc_obj, "enumerable", 10);
+        if (enum_off != 0) {
+          jsval_t enum_val = resolveprop(js, mkval(T_PROP, enum_off));
+          should_include = js_truthy(js, enum_val);
+        }
+      }
+    }
+    
+    if (should_include) {
       char idxstr[16];
       snprintf(idxstr, sizeof(idxstr), "%u", (unsigned) idx);
       jsval_t idx_key = js_mkstr(js, idxstr, strlen(idxstr));
@@ -7451,7 +7499,6 @@ static jsval_t builtin_object_keys(struct js *js, jsval_t *args, int nargs) {
       setprop(js, arr, idx_key, key_val);
       idx++;
     }
-    next = loadoff(js, next) & ~(3U | CONSTMASK);
   }
   
   jsval_t len_key = js_mkstr(js, "length", 6);
@@ -7559,6 +7606,139 @@ static jsval_t builtin_object_hasOwn(struct js *js, jsval_t *args, int nargs) {
   
   jsoff_t off = lkp(js, as_obj, key_str, key_len);
   return mkval(T_BOOL, off != 0 ? 1 : 0);
+}
+
+static jsval_t builtin_object_defineProperty(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 3) return js_mkerr(js, "Object.defineProperty requires 3 arguments");
+  
+  jsval_t obj = args[0];
+  jsval_t prop = args[1];
+  jsval_t descriptor = args[2];
+  
+  uint8_t t = vtype(obj);
+  if (t != T_OBJ && t != T_ARR && t != T_FUNC) {
+    return js_mkerr(js, "Object.defineProperty called on non-object");
+  }
+  
+  if (vtype(prop) != T_STR) {
+    return js_mkerr(js, "Property key must be a string");
+  }
+  
+  if (vtype(descriptor) != T_OBJ) {
+    return js_mkerr(js, "Property descriptor must be an object");
+  }
+  
+  jsval_t as_obj = (t == T_OBJ) ? obj : mkval(T_OBJ, vdata(obj));
+  
+  jsoff_t prop_len, prop_off = vstr(js, prop, &prop_len);
+  const char *prop_str = (char *) &js->mem[prop_off];
+  
+  if (streq(prop_str, prop_len, "__proto__", 9)) {
+    return js_mkerr(js, "Cannot define __proto__ property");
+  }
+  
+  bool has_value = false, has_get = false, has_set = false, has_writable = false;
+  jsval_t value = js_mkundef();
+  bool writable = true, enumerable = false, configurable = false;
+  
+  jsoff_t value_off = lkp(js, descriptor, "value", 5);
+  if (value_off != 0) {
+    has_value = true;
+    value = resolveprop(js, mkval(T_PROP, value_off));
+  }
+  
+  jsoff_t get_off = lkp(js, descriptor, "get", 3);
+  if (get_off != 0) {
+    has_get = true;
+    jsval_t getter = resolveprop(js, mkval(T_PROP, get_off));
+    if (vtype(getter) != T_FUNC && vtype(getter) != T_UNDEF) {
+      return js_mkerr(js, "Getter must be a function");
+    }
+  }
+  
+  jsoff_t set_off = lkp(js, descriptor, "set", 3);
+  if (set_off != 0) {
+    has_set = true;
+    jsval_t setter = resolveprop(js, mkval(T_PROP, set_off));
+    if (vtype(setter) != T_FUNC && vtype(setter) != T_UNDEF) {
+      return js_mkerr(js, "Setter must be a function");
+    }
+  }
+  
+  if ((has_value || has_writable) && (has_get || has_set)) {
+    return js_mkerr(js, "Invalid property descriptor. Cannot both specify accessors and a value or writable attribute");
+  }
+  
+  jsoff_t writable_off = lkp(js, descriptor, "writable", 8);
+  if (writable_off != 0) {
+    has_writable = true;
+    jsval_t w_val = resolveprop(js, mkval(T_PROP, writable_off));
+    writable = js_truthy(js, w_val);
+  }
+  
+  jsoff_t enumerable_off = lkp(js, descriptor, "enumerable", 10);
+  if (enumerable_off != 0) {
+    jsval_t e_val = resolveprop(js, mkval(T_PROP, enumerable_off));
+    enumerable = js_truthy(js, e_val);
+  }
+  
+  jsoff_t configurable_off = lkp(js, descriptor, "configurable", 12);
+  if (configurable_off != 0) {
+    jsval_t c_val = resolveprop(js, mkval(T_PROP, configurable_off));
+    configurable = js_truthy(js, c_val);
+  }
+  
+  jsoff_t existing_off = lkp(js, as_obj, prop_str, prop_len);
+  
+  if (existing_off > 0) {
+    if (is_const_prop(js, existing_off)) {
+      return js_mkerr(js, "Cannot redefine non-configurable property");
+    }
+    
+    if (has_value) {
+      saveval(js, existing_off + sizeof(jsoff_t) * 2, value);
+    }
+    
+    char desc_key[128];
+    snprintf(desc_key, sizeof(desc_key), "__desc_%.*s", (int)prop_len, prop_str);
+    jsval_t desc_key_str = js_mkstr(js, desc_key, strlen(desc_key));
+    jsval_t desc_obj = js_mkobj(js);
+    setprop(js, desc_obj, js_mkstr(js, "writable", 8), mkval(T_BOOL, writable ? 1 : 0));
+    setprop(js, desc_obj, js_mkstr(js, "enumerable", 10), mkval(T_BOOL, enumerable ? 1 : 0));
+    setprop(js, desc_obj, js_mkstr(js, "configurable", 12), mkval(T_BOOL, configurable ? 1 : 0));
+    setprop(js, as_obj, desc_key_str, desc_obj);
+    
+    if (!configurable) {
+      jsoff_t head = (jsoff_t) vdata(as_obj);
+      jsoff_t firstprop = loadoff(js, head);
+      if ((firstprop & ~(3U | CONSTMASK)) == existing_off) {
+        saveoff(js, head, firstprop | CONSTMASK);
+      }
+    }
+  } else {
+    if (has_get || has_set) {
+      return js_mkerr(js, "Accessor properties not fully supported");
+    }
+    
+    if (!has_value) {
+      value = js_mkundef();
+    }
+    
+    jsval_t prop_key = js_mkstr(js, prop_str, prop_len);
+    bool mark_const = (!writable || !configurable);
+    mkprop(js, as_obj, prop_key, value, mark_const);
+    
+    char desc_key[128];
+    snprintf(desc_key, sizeof(desc_key), "__desc_%.*s", (int)prop_len, prop_str);
+    jsval_t desc_key_str = js_mkstr(js, desc_key, strlen(desc_key));
+    jsval_t desc_obj = js_mkobj(js);
+    setprop(js, desc_obj, js_mkstr(js, "writable", 8), mkval(T_BOOL, writable ? 1 : 0));
+    setprop(js, desc_obj, js_mkstr(js, "enumerable", 10), mkval(T_BOOL, enumerable ? 1 : 0));
+    setprop(js, desc_obj, js_mkstr(js, "configurable", 12), mkval(T_BOOL, configurable ? 1 : 0));
+    setprop(js, as_obj, desc_key_str, desc_obj);
+  }
+  
+  return obj;
 }
 
 static jsval_t builtin_array_push(struct js *js, jsval_t *args, int nargs) {
@@ -10444,6 +10624,7 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, obj_func_obj, js_mkstr(js, "setPrototypeOf", 14), js_mkfun(builtin_object_setPrototypeOf));
   setprop(js, obj_func_obj, js_mkstr(js, "create", 6), js_mkfun(builtin_object_create));
   setprop(js, obj_func_obj, js_mkstr(js, "hasOwn", 6), js_mkfun(builtin_object_hasOwn));
+  setprop(js, obj_func_obj, js_mkstr(js, "defineProperty", 14), js_mkfun(builtin_object_defineProperty));
   setprop(js, obj_func_obj, js_mkstr(js, "prototype", 9), object_proto);
   setprop(js, glob, js_mkstr(js, "Object", 6), mkval(T_FUNC, vdata(obj_func_obj)));
   
