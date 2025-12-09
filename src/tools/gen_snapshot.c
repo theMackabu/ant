@@ -292,6 +292,7 @@ static char *process_snapshot_inlines(const char *file_path, const char *content
     const char *paren_close = strchr(quote_end, ')');
     if (paren_close) {
       pos = paren_close + 1;
+      if (*pos == ';') pos++;
     } else {
       pos = quote_end + 1;
     }

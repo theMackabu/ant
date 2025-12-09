@@ -3126,13 +3126,32 @@ static jsval_t call_js_with_args(struct js *js, jsval_t func, jsval_t *args, int
   
   if (vtype(func) != T_FUNC) return js_mkerr(js, "not a function");
   jsval_t func_obj = mkval(T_OBJ, vdata(func));
-  
+
   jsoff_t native_off = lkp(js, func_obj, "__native_func", 13);
   if (native_off != 0) {
     jsval_t native_val = resolveprop(js, mkval(T_PROP, native_off));
     if (vtype(native_val) == T_CFUNC) {
+      jsoff_t this_off = lkp(js, func_obj, "__this", 6);
+      jsval_t bound_this = js_mkundef();
+      if (this_off != 0) {
+        bound_this = resolveprop(js, mkval(T_PROP, this_off));
+      }
+      
+      jsval_t saved_this = js->this_val;
+      if (vtype(bound_this) != JS_UNDEF) {
+        push_this(bound_this);
+        js->this_val = bound_this;
+      }
+      
       jsval_t (*fn)(struct js *, jsval_t *, int) = (jsval_t(*)(struct js *, jsval_t *, int)) vdata(native_val);
-      return fn(js, args, nargs);
+      jsval_t result = fn(js, args, nargs);
+      
+      if (vtype(bound_this) != JS_UNDEF) {
+        pop_this();
+        js->this_val = saved_this;
+      }
+      
+      return result;
     }
   }
   
@@ -7068,50 +7087,60 @@ static jsval_t builtin_function_apply(struct js *js, jsval_t *args, int nargs) {
   
   jsval_t saved_this = js->this_val;
   push_this(this_arg);
+  
   js->this_val = this_arg;
-  
   jsval_t result = call_js_with_args(js, func, call_args, call_nargs);
-  
+
   pop_this();
   js->this_val = saved_this;
-  
+
   if (call_args) ANT_GC_FREE(call_args);
-  
+
   return result;
 }
 
 static jsval_t builtin_function_bind(struct js *js, jsval_t *args, int nargs) {
   jsval_t func = js->this_val;
-  if (vtype(func) != T_FUNC) {
+  
+  if (vtype(func) != T_FUNC && vtype(func) != T_CFUNC) {
     return js_mkerr(js, "bind requires a function");
   }
-  
+
   jsval_t this_arg = (nargs > 0) ? args[0] : js_mkundef();
-  
+
+  if (vtype(func) == T_CFUNC) {
+    jsval_t bound_func = mkobj(js, 0);
+    if (is_err(bound_func)) return bound_func;
+    
+    setprop(js, bound_func, js_mkstr(js, "__native_func", 13), func);
+    setprop(js, bound_func, js_mkstr(js, "__this", 6), this_arg);
+    
+    return mkval(T_FUNC, (unsigned long) vdata(bound_func));
+  }
+
   jsval_t func_obj = mkval(T_OBJ, vdata(func));
   jsval_t bound_func = mkobj(js, 0);
   if (is_err(bound_func)) return bound_func;
-  
+
   jsoff_t code_off = lkp(js, func_obj, "__code", 6);
   if (code_off != 0) {
     jsval_t code_val = resolveprop(js, mkval(T_PROP, code_off));
     setprop(js, bound_func, js_mkstr(js, "__code", 6), code_val);
   }
-  
+
   jsoff_t scope_off = lkp(js, func_obj, "__scope", 7);
   if (scope_off != 0) {
     jsval_t scope_val = resolveprop(js, mkval(T_PROP, scope_off));
     setprop(js, bound_func, js_mkstr(js, "__scope", 7), scope_val);
   }
-  
+
   jsoff_t async_off = lkp(js, func_obj, "__async", 7);
   if (async_off != 0) {
     jsval_t async_val = resolveprop(js, mkval(T_PROP, async_off));
     setprop(js, bound_func, js_mkstr(js, "__async", 7), async_val);
   }
-  
+
   setprop(js, bound_func, js_mkstr(js, "__this", 6), this_arg);
-  
   return mkval(T_FUNC, (unsigned long) vdata(bound_func));
 }
 
