@@ -216,6 +216,92 @@ static char *wrap_module(const char *content, size_t content_len, size_t *output
   return output;
 }
 
+static char *process_snapshot_inlines(const char *file_path, const char *content, size_t content_len, module_cache_t *cache, size_t *output_len) {
+  size_t output_capacity = content_len * 2;
+  char *output = malloc(output_capacity);
+  if (!output) return NULL;
+  
+  size_t output_pos = 0;
+  const char *pos = content;
+  const char *end = content + content_len;
+  
+  while (pos < end) {
+    const char *inline_start = strstr(pos, "snapshot_inline(");
+    if (!inline_start || inline_start >= end) {
+      size_t remaining = end - pos;
+      if (output_pos + remaining >= output_capacity) {
+        output_capacity = (output_pos + remaining) * 2;
+        output = realloc(output, output_capacity);
+      }
+      memcpy(output + output_pos, pos, remaining);
+      output_pos += remaining;
+      break;
+    }
+    
+    memcpy(output + output_pos, pos, inline_start - pos);
+    output_pos += inline_start - pos;
+    
+    const char *quote_start = strchr(inline_start, '\'');
+    if (!quote_start) quote_start = strchr(inline_start, '"');
+    if (!quote_start) {
+      pos = inline_start + 16;
+      continue;
+    }
+    
+    char quote_char = *quote_start;
+    const char *quote_end = strchr(quote_start + 1, quote_char);
+    if (!quote_end) {
+      pos = inline_start + 16;
+      continue;
+    }
+    
+    size_t path_len = quote_end - quote_start - 1;
+    char *import_path = malloc(path_len + 1);
+    memcpy(import_path, quote_start + 1, path_len);
+    import_path[path_len] = '\0';
+    
+    char *resolved_path = resolve_path(file_path, import_path);
+    free(import_path);
+    
+    if (!resolved_path) {
+      pos = inline_start + 16;
+      continue;
+    }
+    
+    size_t module_len;
+    char *module_content = read_file(resolved_path, &module_len);
+    
+    if (!module_content) {
+      fprintf(stderr, "Error: Cannot read inline file: %s\n", resolved_path);
+      free(resolved_path);
+      free(output);
+      return NULL;
+    }
+    
+    free(resolved_path);
+    
+    if (output_pos + module_len >= output_capacity) {
+      output_capacity = (output_pos + module_len) * 2;
+      output = realloc(output, output_capacity);
+    }
+    
+    memcpy(output + output_pos, module_content, module_len);
+    output_pos += module_len;
+    free(module_content);
+    
+    const char *paren_close = strchr(quote_end, ')');
+    if (paren_close) {
+      pos = paren_close + 1;
+    } else {
+      pos = quote_end + 1;
+    }
+  }
+  
+  output[output_pos] = '\0';
+  *output_len = output_pos;
+  return output;
+}
+
 static char *process_snapshot_includes(const char *file_path, const char *content, size_t content_len, module_cache_t *cache, size_t *output_len) {
   size_t output_capacity = content_len * 2;
   char *output = malloc(output_capacity);
@@ -448,8 +534,18 @@ int main(int argc, char **argv) {
   
   module_cache_t cache = {0};
   
+  size_t inlined_len;
+  char *inlined_code = process_snapshot_inlines(input_file, js_code_original, file_size, &cache, &inlined_len);
+  
+  if (!inlined_code) {
+    fprintf(stderr, "Error: Inline processing failed\n");
+    free(js_code_original);
+    return 1;
+  }
+  
   size_t bundled_len;
-  char *bundled_code = process_snapshot_includes(input_file, js_code_original, file_size, &cache, &bundled_len);
+  char *bundled_code = process_snapshot_includes(input_file, inlined_code, inlined_len, &cache, &bundled_len);
+  free(inlined_code);
   
   if (!bundled_code) {
     fprintf(stderr, "Error: Module bundling failed\n");

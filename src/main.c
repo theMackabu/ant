@@ -24,6 +24,7 @@
 #include "modules/process.h"
 #include "modules/path.h"
 #include "modules/ffi.h"
+#include "modules/events.h"
 
 int js_result = EXIT_SUCCESS;
 
@@ -165,6 +166,7 @@ int main(int argc, char *argv[]) {
   init_server_module();
   init_timer_module();
   init_process_module();
+  init_events_module();
 
   ant_register_library("ant:fs", fs_library);
   ant_register_library("ant:shell", shell_library);
