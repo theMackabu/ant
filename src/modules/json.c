@@ -87,6 +87,7 @@ static yyjson_mut_val *jsval_to_yyjson(struct js *js, yyjson_mut_doc *doc, jsval
     
     case JS_NUM: {
       double num = js_getnum(val);
+      if (num == (int64_t)num) return yyjson_mut_sint(doc, (int64_t)num);
       return yyjson_mut_real(doc, num);
     }
     
@@ -181,8 +182,20 @@ jsval_t js_json_stringify(struct js *js, jsval_t *args, int nargs) {
   yyjson_mut_doc_set_root(doc, root);
   
   size_t len;
-  yyjson_write_flag flg = YYJSON_WRITE_PRETTY;
-  if (nargs >= 3 && js_type(args[2]) == JS_UNDEF) flg = 0; 
+  yyjson_write_flag flg = 0;
+  if (nargs >= 3 && js_type(args[2]) != JS_UNDEF && js_type(args[2]) != JS_NULL) {
+    int indent = 4;
+    if (js_type(args[2]) == JS_NUM) {
+      indent = (int)js_getnum(args[2]);
+      if (indent < 0) indent = 0;
+      if (indent > 10) indent = 10;
+    }
+    if (indent == 2) {
+      flg = YYJSON_WRITE_PRETTY_TWO_SPACES;
+    } else if (indent > 0) {
+      flg = YYJSON_WRITE_PRETTY;
+    }
+  }
   
   char *json_str = yyjson_mut_write(doc, flg, &len);
   if (!json_str) {

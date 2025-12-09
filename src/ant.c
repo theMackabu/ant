@@ -914,9 +914,18 @@ static jsoff_t vstr(struct js *js, jsval_t value, jsoff_t *len) {
 
 static size_t strstring(struct js *js, jsval_t value, char *buf, size_t len) {
   jsoff_t slen, off = vstr(js, value, &slen);
+  const char *str = (const char *) &js->mem[off];
   size_t n = 0;
   n += cpy(buf + n, len - n, "\"", 1);
-  n += cpy(buf + n, len - n, (char *) &js->mem[off], slen);
+  for (jsoff_t i = 0; i < slen && n < len - 1; i++) {
+    char c = str[i];
+    if (c == '\n') { n += cpy(buf + n, len - n, "\\n", 2); }
+    else if (c == '\r') { n += cpy(buf + n, len - n, "\\r", 2); }
+    else if (c == '\t') { n += cpy(buf + n, len - n, "\\t", 2); }
+    else if (c == '\\') { n += cpy(buf + n, len - n, "\\\\", 2); }
+    else if (c == '"') { n += cpy(buf + n, len - n, "\\\"", 2); }
+    else { if (n < len) buf[n++] = c; }
+  }
   n += cpy(buf + n, len - n, "\"", 1);
   
   return n;
@@ -3806,6 +3815,8 @@ static jsval_t js_str_literal(struct js *js) {
                  is_xdigit(in[n2 + 3])) {
         out[n1++] = (uint8_t) ((unhex(in[n2 + 2]) << 4U) | unhex(in[n2 + 3]));
         n2 += 2;
+      } else if (in[n2 + 1] == '\\') {
+        out[n1++] = '\\';
       } else {
         return js_mkerr(js, "bad str literal");
       }
