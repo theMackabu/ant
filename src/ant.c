@@ -3275,6 +3275,74 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
           push_this(captured_this);
         }
         
+        jsoff_t count_off = lkp(js, func_obj, "__field_count", 13);
+        if (count_off == 0 || vtype(target_this) != T_OBJ) goto skip_fields;
+        
+        jsval_t count_val = resolveprop(js, mkval(T_PROP, count_off));
+        if (vtype(count_val) != T_NUM) goto skip_fields;
+        
+        int field_count = (int)tod(count_val);
+        jsoff_t src_off = lkp(js, func_obj, "__source", 8);
+        jsoff_t fields_off = lkp(js, func_obj, "__fields", 8);
+        if (src_off == 0 || fields_off == 0) goto skip_fields;
+        
+        jsval_t src_val = resolveprop(js, mkval(T_PROP, src_off));
+        jsval_t fields_meta = resolveprop(js, mkval(T_PROP, fields_off));
+        if (vtype(src_val) != T_STR || vtype(fields_meta) != T_STR) goto skip_fields;
+        
+        jsoff_t src_len, src_ptr_off = vstr(js, src_val, &src_len);
+        const char *source = (const char *)(&js->mem[src_ptr_off]);
+        
+        jsoff_t meta_len, meta_ptr_off = vstr(js, fields_meta, &meta_len);
+        const jsoff_t *metadata = (const jsoff_t *)(&js->mem[meta_ptr_off]);
+        
+        for (int i = 0; i < field_count; i++) {
+          jsoff_t name_off = metadata[i * 4 + 0];
+          jsoff_t name_len = metadata[i * 4 + 1];
+          jsoff_t init_start = metadata[i * 4 + 2];
+          jsoff_t init_end = metadata[i * 4 + 3];
+          
+          jsval_t fname = js_mkstr(js, &source[name_off], name_len);
+          if (is_err(fname)) {
+            js->current_func = saved_func;
+            pop_call_frame();
+            return fname;
+          }
+          
+          jsval_t field_val = js_mkundef();
+          if (init_start > 0 && init_end > init_start) {
+            jsoff_t init_len = init_end - init_start;
+            const char *init_code = &source[init_start];
+            
+            const char *saved_code = js->code;
+            jsoff_t saved_clen = js->clen;
+            jsoff_t saved_pos = js->pos;
+            uint8_t saved_tok = js->tok;
+            uint8_t saved_consumed = js->consumed;
+            
+            js->code = init_code;
+            js->clen = init_len;
+            js->pos = 0;
+            js->consumed = 1;
+            
+            field_val = js_expr(js);
+            field_val = resolveprop(js, field_val);
+            
+            js->code = saved_code;
+            js->clen = saved_clen;
+            js->pos = saved_pos;
+            js->tok = saved_tok;
+            js->consumed = saved_consumed;
+          }
+          
+          jsval_t set_res = setprop(js, target_this, fname, field_val);
+          if (is_err(set_res)) {
+            js->current_func = saved_func;
+            pop_call_frame();
+            return set_res;
+          }
+        }
+skip_fields:
         if (is_async) {
           res = start_async_in_coroutine(js, code_str, fnlen, closure_scope, NULL, 0);
           pop_call_frame();
@@ -6181,7 +6249,7 @@ static jsval_t js_class_decl(struct js *js) {
   
   EXPECT(TOK_LBRACE, );
   jsoff_t class_body_start = js->pos;
-  jsoff_t constructor_params_start = 0, constructor_params_end = 0;
+  jsoff_t constructor_params_start = 0;
   jsoff_t constructor_body_start = 0, constructor_body_end = 0;
   uint8_t save_flags = js->flags;
   js->flags |= F_NOEXEC;
@@ -6305,7 +6373,6 @@ static jsval_t js_class_decl(struct js *js) {
       EXPECT(TOK_COMMA, js->flags = save_flags);
     }
     EXPECT(TOK_RPAREN, js->flags = save_flags);
-    jsoff_t method_params_end = js->pos;
     EXPECT(TOK_LBRACE, js->flags = save_flags);
     jsoff_t method_body_start = js->pos - 1;
     js->consumed = 0;
@@ -6317,9 +6384,8 @@ static jsval_t js_class_decl(struct js *js) {
     jsoff_t method_body_end = js->pos;
     if (streq(&js->code[method_name_off], method_name_len, "constructor", 11)) {
       constructor_params_start = method_params_start;
-      constructor_params_end = method_params_end;
       constructor_body_start = method_body_start + 1;
-      constructor_body_end = method_body_end - 1;
+      constructor_body_end = method_body_end;
     } else {
       methods[method_count].name_off = method_name_off;
       methods[method_count].name_len = method_name_len;
@@ -6390,19 +6456,16 @@ static jsval_t js_class_decl(struct js *js) {
       
       jsval_t mcode_key = js_mkstr(js, "__code", 6);
       if (is_err(mcode_key)) return mcode_key;
-      
-      if (methods[i].is_async) {
-        char *async_code = malloc(mlen + 7);
-        if (!async_code) return js_mkerr(js, "oom");
-        memcpy(async_code, "async ", 6);
-        memcpy(async_code + 6, &js->code[methods[i].fn_start], mlen);
-        method_code = js_mkstr(js, async_code, mlen + 6);
-        free(async_code);
-        if (is_err(method_code)) return method_code;
-      }
-      
       jsval_t mres = setprop(js, method_obj, mcode_key, method_code);
       if (is_err(mres)) return mres;
+      
+      if (methods[i].is_async) {
+        jsval_t async_key = js_mkstr(js, "__async", 7);
+        if (is_err(async_key)) return async_key;
+        jsval_t async_val = mkval(T_BOOL, 1);
+        jsval_t res_async = setprop(js, method_obj, async_key, async_val);
+        if (is_err(res_async)) return res_async;
+      }
       
       jsval_t mscope_key = js_mkstr(js, "__scope", 7);
       if (is_err(mscope_key)) return mscope_key;
@@ -6414,79 +6477,76 @@ static jsval_t js_class_decl(struct js *js) {
       if (is_err(set_res)) return set_res;
     }
     
-    jsoff_t wrapper_size = 256;
-    if (constructor_body_start > 0) {
-      wrapper_size += constructor_body_end - constructor_body_start;
-    }
-    
-    for (int i = 0; i < method_count; i++) {
-      if (methods[i].is_static) continue;
-      if (!methods[i].is_field) continue;
-      wrapper_size += methods[i].name_len + 20;
-      wrapper_size += methods[i].field_end - methods[i].field_start;
-    }
-    
-    char *wrapper = (char *) malloc(wrapper_size);
-    if (!wrapper) return js_mkerr(js, "oom");
-    jsoff_t wp = 0;
-    
-    if (constructor_params_start > 0) {
-      jsoff_t plen = constructor_params_end - constructor_params_start;
-      memcpy(wrapper + wp, &js->code[constructor_params_start], plen);
-      wp += plen;
-    } else {
-      memcpy(wrapper + wp, "()", 2);
-      wp += 2;
-    }
-    wrapper[wp++] = '{';
-    
-    for (int i = 0; i < method_count; i++) {
-      if (methods[i].is_static) continue;
-      if (!methods[i].is_field) continue;
-      
-      if (wp > 0 && wrapper[wp - 1] != ';' && wrapper[wp - 1] != '{') {
-        wrapper[wp++] = ';';
-      }
-      memcpy(wrapper + wp, "this.", 5);
-      wp += 5;
-      memcpy(wrapper + wp, &js->code[methods[i].name_off], methods[i].name_len);
-      wp += methods[i].name_len;
-      wrapper[wp++] = '=';
-      if (methods[i].field_start > 0 && methods[i].field_end > methods[i].field_start) {
-        jsoff_t flen = methods[i].field_end - methods[i].field_start;
-        memcpy(wrapper + wp, &js->code[methods[i].field_start], flen);
-        wp += flen;
-      } else {
-        memcpy(wrapper + wp, "undefined", 9);
-        wp += 9;
-      }
-      wrapper[wp++] = ';';
-    }
-    
-    if (constructor_body_start > 0) {
-      jsoff_t blen = constructor_body_end - constructor_body_start;
-      memcpy(wrapper + wp, &js->code[constructor_body_start], blen);
-      wp += blen;
-      while (wp > 0 && (wrapper[wp - 1] == ' ' || wrapper[wp - 1] == '\t' ||
-                        wrapper[wp - 1] == '\n' || wrapper[wp - 1] == '\r')) {
-        wp--;
-      }
-      if (wp > 0 && wrapper[wp - 1] != ';' && wrapper[wp - 1] != '}') {
-        wrapper[wp++] = ';';
-      }
-    }
-    
-    wrapper[wp++] = '}';
-    jsval_t code_str = js_mkstr(js, wrapper, wp);
-    free(wrapper);
-    if (is_err(code_str)) return code_str;
-    
     jsval_t func_obj = mkobj(js, 0);
     if (is_err(func_obj)) return func_obj;
-    jsval_t code_key = js_mkstr(js, "__code", 6);
-    if (is_err(code_key)) return code_key;
-    jsval_t res2 = setprop(js, func_obj, code_key, code_str);
-    if (is_err(res2)) return res2;
+    
+    if (constructor_params_start > 0 && constructor_body_start > 0) {
+      jsoff_t code_len = constructor_body_end - constructor_params_start;
+      
+      jsval_t code_key = js_mkstr(js, "__code", 6);
+      if (is_err(code_key)) return code_key;
+      jsval_t ctor_str = js_mkstr(js, &js->code[constructor_params_start], code_len);
+      if (is_err(ctor_str)) return ctor_str;
+      
+      jsval_t res2 = setprop(js, func_obj, code_key, ctor_str);
+      if (is_err(res2)) return res2;
+    } else {
+      jsval_t code_key = js_mkstr(js, "__code", 6);
+      if (is_err(code_key)) return code_key;
+      jsval_t default_ctor = js_mkstr(js, "(){}", 4);
+      if (is_err(default_ctor)) return default_ctor;
+      jsval_t res2 = setprop(js, func_obj, code_key, default_ctor);
+      if (is_err(res2)) return res2;
+    }
+    
+    int field_count = 0;
+    for (int i = 0; i < method_count; i++) {
+      if (methods[i].is_static) continue;
+      if (methods[i].is_field) field_count++;
+    }
+    
+    if (field_count > 0) {
+      size_t metadata_size = field_count * sizeof(jsoff_t) * 4;
+      jsoff_t meta_len = (jsoff_t) (metadata_size + 1);
+      jsoff_t meta_header = (jsoff_t) ((meta_len << 2) | T_STR);
+      jsoff_t meta_off = js_alloc(js, meta_len + sizeof(meta_header));
+      if (meta_off == (jsoff_t) ~0) return js_mkerr(js, "oom");
+      
+      memcpy(&js->mem[meta_off], &meta_header, sizeof(meta_header));
+      jsoff_t *metadata = (jsoff_t *)(&js->mem[meta_off + sizeof(meta_header)]);
+      
+      int meta_idx = 0;
+      for (int i = 0; i < method_count; i++) {
+        if (methods[i].is_static) continue;
+        if (!methods[i].is_field) continue;
+        
+        metadata[meta_idx * 4 + 0] = methods[i].name_off;
+        metadata[meta_idx * 4 + 1] = methods[i].name_len;
+        metadata[meta_idx * 4 + 2] = methods[i].field_start;
+        metadata[meta_idx * 4 + 3] = methods[i].field_end;
+        meta_idx++;
+      }
+      
+      js->mem[meta_off + sizeof(meta_header) + metadata_size] = 0;
+      jsval_t fields_meta = mkval(T_STR, meta_off);
+      
+      jsval_t fields_key = js_mkstr(js, "__fields", 8);
+      if (is_err(fields_key)) return fields_key;
+      jsval_t res_fields = setprop(js, func_obj, fields_key, fields_meta);
+      if (is_err(res_fields)) return res_fields;
+      
+      jsval_t count_key = js_mkstr(js, "__field_count", 13);
+      if (is_err(count_key)) return count_key;
+      jsval_t res_count = setprop(js, func_obj, count_key, tov((double)field_count));
+      if (is_err(res_count)) return res_count;
+      
+      jsval_t src_key = js_mkstr(js, "__source", 8);
+      if (is_err(src_key)) return src_key;
+      jsval_t src_ref = js_mkstr(js, js->code, js->clen);
+      if (is_err(src_ref)) return src_ref;
+      jsval_t res_src = setprop(js, func_obj, src_key, src_ref);
+      if (is_err(res_src)) return res_src;
+    }
     
     jsval_t scope_key = js_mkstr(js, "__scope", 7);
     if (is_err(scope_key)) return scope_key;

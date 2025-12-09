@@ -17,10 +17,11 @@ class AsyncClass {
   methodWithPromise() {
     console.log('methodWithPromise called:');
     console.log('  this.name: ' + this.name);
+    const self = this;
     
-    return Promise.resolve(this.value).then((v) => {
-      console.log('  Inside .then(), this.name: ' + this.name);
-      console.log('  Inside .then(), this.value: ' + this.value);
+    return Promise.resolve(this.value).then(function(v) {
+      console.log('  Inside .then(), this.name: ' + self.name);
+      console.log('  Inside .then(), this.value: ' + self.value);
       return v * 2;
     });
   }
