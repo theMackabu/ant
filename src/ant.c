@@ -2600,7 +2600,16 @@ static jsval_t lookup(struct js *js, const char *buf, size_t len) {
     return js_mkerr(js, "ReferenceError: '%.*s' is not defined", (int) len, buf);
   }
   
-  return js_mkerr(js, "'%.*s' not found", (int) len, buf);
+  jsval_t global_scope = js->scope;
+  while (vdata(upper(js, global_scope)) != 0) {
+    global_scope = upper(js, global_scope);
+  }
+  
+  jsval_t key = js_mkstr(js, buf, len);
+  if (is_err(key)) return key;
+  
+  jsval_t undef = js_mkundef();
+  return setprop(js, global_scope, key, undef);
 }
 
 static jsval_t resolveprop(struct js *js, jsval_t v) {
