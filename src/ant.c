@@ -2581,6 +2581,25 @@ static jsval_t lookup(struct js *js, const char *buf, size_t len) {
   if (js->flags & F_NOEXEC) return 0;
   
   for (jsval_t scope = js->scope;;) {
+    jsoff_t with_marker_off = lkp(js, scope, "__with_object__", 15);
+    if (with_marker_off != 0) {
+      jsval_t with_obj_val = resolveprop(js, mkval(T_PROP, with_marker_off));
+      
+      jsval_t with_obj = (
+        vtype(with_obj_val) == T_OBJ ||
+        vtype(with_obj_val) == T_ARR || 
+        vtype(with_obj_val) == T_FUNC) ? 
+        with_obj_val : mkval(T_OBJ, vdata(with_obj_val)
+      );
+      
+      jsoff_t prop_off = lkp(js, with_obj, buf, len);
+      if (prop_off != 0) {
+        jsval_t key = js_mkstr(js, buf, len);
+        if (is_err(key)) return key;
+        return mkpropref((jsoff_t)vdata(with_obj), (jsoff_t)vdata(key));
+      }
+    }
+    
     jsoff_t off = lkp(js, scope, buf, len);
     if (off != 0) return mkval(T_PROP, off);
     if (vdata(scope) == 0) break;
@@ -2613,7 +2632,17 @@ static jsval_t lookup(struct js *js, const char *buf, size_t len) {
 }
 
 static jsval_t resolveprop(struct js *js, jsval_t v) {
-  if (vtype(v) == T_PROPREF) return js_mkundef();
+  if (vtype(v) == T_PROPREF) {
+    jsoff_t obj_off = propref_obj(v);
+    jsoff_t key_off = propref_key(v);
+    jsval_t obj = mkval(T_OBJ, obj_off);
+    jsval_t key = mkval(T_STR, key_off);
+    jsoff_t len;
+    const char *key_str = (const char *)&js->mem[vstr(js, key, &len)];
+    jsoff_t prop_off = lkp(js, obj, key_str, len);
+    if (prop_off == 0) return js_mkundef();
+    return resolveprop(js, mkval(T_PROP, prop_off));
+  }
   if (vtype(v) != T_PROP) return v;
   return resolveprop(js, loadval(js, (jsoff_t) (vdata(v) + sizeof(jsoff_t) * 2)));
 }
@@ -4623,7 +4652,7 @@ static jsval_t js_call_dot(struct js *js) {
       }
     } else if (js->tok == TOK_LBRACKET) {
       js->consumed = 1;
-      if (vtype(res) != T_PROP) {
+      if (vtype(res) != T_PROP && vtype(res) != T_PROPREF) {
         obj = res;
       } else {
         obj = resolveprop(js, res);
@@ -4634,7 +4663,13 @@ static jsval_t js_call_dot(struct js *js) {
       js->consumed = 1;
       res = do_op(js, TOK_BRACKET, res, idx);
     } else {
-      jsval_t func_this = (vtype(obj) != T_UNDEF) ? obj : js->this_val;
+      jsval_t func_this = obj;
+      if (vtype(obj) == T_UNDEF) {
+        if (vtype(res) == T_PROPREF) {
+          jsoff_t obj_off = propref_obj(res);
+          func_this = mkval(T_OBJ, obj_off);
+        } else func_this = js->this_val;
+      }
       push_this(func_this);
       jsval_t params = js_call_params(js);
       if (is_err(params)) {
@@ -6323,16 +6358,9 @@ static jsval_t js_with(struct js *js) {
     utarray_push_back(global_scope_stack, &parent_scope_offset);
     jsval_t with_scope = mkentity(js, 0 | T_OBJ, &parent_scope_offset, sizeof(parent_scope_offset));
     
-    jsoff_t prop_off = loadoff(js, (jsoff_t) vdata(with_obj)) & ~(3U | CONSTMASK);
-    while (prop_off < js->brk && prop_off != 0) {
-      jsoff_t koff = loadoff(js, prop_off + (jsoff_t) sizeof(prop_off));
-      jsval_t val = loadval(js, prop_off + (jsoff_t) (sizeof(prop_off) + sizeof(koff)));
-      
-      jsval_t new_prop = mkprop(js, with_scope, mkval(T_STR, koff), val, false);
-      if (is_err(new_prop)) return new_prop;
-      
-      prop_off = loadoff(js, prop_off) & ~(3U | CONSTMASK);
-    }
+    jsval_t with_marker = js_mkstr(js, "__with_object__", 15);
+    jsval_t with_ref = mkprop(js, with_scope, with_marker, with_obj, false);
+    if (is_err(with_ref)) return with_ref;
     
     jsval_t saved_scope = js->scope;
     js->scope = with_scope;
