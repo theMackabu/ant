@@ -319,6 +319,7 @@ static jsval_t js_arrow_func(struct js *js, jsoff_t params_start, jsoff_t params
 static jsval_t js_while(struct js *js);
 static jsval_t js_do_while(struct js *js);
 static jsval_t js_block_or_stmt(struct js *js);
+static jsval_t js_var_decl(struct js *js);
 static bool parse_func_params(struct js *js, uint8_t *flags);
 static jsval_t js_regex_literal(struct js *js);
 static jsval_t js_try(struct js *js);
@@ -5401,9 +5402,11 @@ static jsval_t js_for(struct js *js) {
   bool is_for_of = false;
   jsoff_t var_name_off = 0, var_name_len = 0;
   bool is_const_var = false;
+  bool is_var_decl = false;
   
   if (next(js) == TOK_LET || next(js) == TOK_CONST || next(js) == TOK_VAR) {
     if (js->tok == TOK_VAR) {
+      is_var_decl = true;
       if ((js->flags & F_STRICT) && !js->var_warning_shown) {
         fprintf(stderr, "Warning: 'var' is deprecated, use 'let' or 'const' instead\n");
         js->var_warning_shown = true;
@@ -5426,6 +5429,8 @@ static jsval_t js_for(struct js *js) {
         js->consumed = 1;
         if (is_const_var) {
           v = js_const(js);
+        } else if (is_var_decl) {
+          v = js_var_decl(js);
         } else {
           v = js_let(js);
         }
@@ -6804,12 +6809,72 @@ static void js_throw_handle(struct js *js, jsval_t *res) {
   }
 }
 
+static jsval_t find_var_scope(struct js *js) {
+  if ((js->flags & F_CALL) && global_scope_stack && utarray_len(global_scope_stack) > 0) {
+    jsoff_t *scope_off = (jsoff_t *)utarray_eltptr(global_scope_stack, 0);
+    if (scope_off && *scope_off != 0) return mkval(T_OBJ, *scope_off);
+  }
+  
+  jsval_t scope = js->scope;
+  while (vdata(upper(js, scope)) != 0) {
+    scope = upper(js, scope);
+  }
+  return scope;
+}
+
+static jsval_t js_var_decl(struct js *js) {
+  uint8_t exe = !(js->flags & F_NOEXEC);
+  jsval_t var_scope = find_var_scope(js);
+  
+  js->consumed = 1;
+  for (;;) {
+    EXPECT(TOK_IDENTIFIER, );
+    js->consumed = 0;
+    jsoff_t noff = js->toff, nlen = js->tlen;
+    char *name = (char *) &js->code[noff];
+    
+    if (exe && (js->flags & F_STRICT) && is_strict_restricted(name, nlen)) {
+      return js_mkerr(js, "cannot use '%.*s' as variable name in strict mode", (int) nlen, name);
+    }
+    
+    if (exe && (js->flags & F_STRICT) && is_strict_reserved(name, nlen)) {
+      return js_mkerr(js, "'%.*s' is reserved in strict mode", (int) nlen, name);
+    }
+    
+    jsval_t v = js_mkundef();
+    js->consumed = 1;
+    if (next(js) == TOK_ASSIGN) {
+      js->consumed = 1;
+      v = js_expr(js);
+      if (is_err(v)) return v;
+    }
+    
+    if (exe) {
+      jsoff_t existing_off = lkp(js, var_scope, name, nlen);
+      if (existing_off > 0) {
+        jsval_t key_val = js_mkstr(js, name, nlen);
+        if (!is_err(v) && vtype(v) != T_UNDEF) {
+          setprop(js, var_scope, key_val, resolveprop(js, v));
+        }
+      } else {
+        jsval_t x = mkprop(js, var_scope, js_mkstr(js, name, nlen), resolveprop(js, v), false);
+        if (is_err(x)) return x;
+      }
+    }
+    
+    if (next(js) == TOK_SEMICOLON || next(js) == TOK_EOF) break;
+    EXPECT(TOK_COMMA, );
+  }
+  return js_mkundef();
+}
+
 static void js_var(struct js *js, jsval_t *res) {
   if ((js->flags & F_STRICT) && !js->var_warning_shown) {
     fprintf(stderr, "Warning: 'var' is deprecated, use 'let' or 'const' instead\n");
     js->var_warning_shown = true;
   }
-  *res = js_let(js); 
+  
+  *res = js_var_decl(js);
 }
 
 static void js_async(struct js *js, jsval_t *res) {
