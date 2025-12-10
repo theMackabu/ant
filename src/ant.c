@@ -5360,7 +5360,7 @@ static jsval_t js_for(struct js *js) {
   
   if (next(js) == TOK_LET || next(js) == TOK_CONST || next(js) == TOK_VAR) {
     if (js->tok == TOK_VAR) {
-      if (!js->var_warning_shown) {
+      if ((js->flags & F_STRICT) && !js->var_warning_shown) {
         fprintf(stderr, "Warning: 'var' is deprecated, use 'let' or 'const' instead\n");
         js->var_warning_shown = true;
       }
@@ -6768,7 +6768,7 @@ static void js_throw_handle(struct js *js, jsval_t *res) {
 }
 
 static void js_var(struct js *js, jsval_t *res) {
-  if (!js->var_warning_shown) {
+  if ((js->flags & F_STRICT) && !js->var_warning_shown) {
     fprintf(stderr, "Warning: 'var' is deprecated, use 'let' or 'const' instead\n");
     js->var_warning_shown = true;
   }
