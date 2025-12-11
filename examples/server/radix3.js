@@ -148,7 +148,7 @@ export class Radix3 {
     const handler = this.matchPath(methodRoot, path, 0, params);
 
     if (!handler) return undefined;
-    return { handler: handler, params: params };
+    return { handler, params };
   }
 
   matchPath(node, path, depth, params) {

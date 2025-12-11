@@ -4604,6 +4604,11 @@ static jsval_t js_group(struct js *js) {
     } else {
       jsval_t v = js_expr(js);
       if (is_err(v)) return v;
+      while (next(js) == TOK_COMMA) {
+        js->consumed = 1;
+        v = js_expr(js);
+        if (is_err(v)) return v;
+      }
       if (next(js) != TOK_RPAREN) return js_mkerr(js, ") expected");
       js->consumed = 1;
       return v;
