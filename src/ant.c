@@ -6924,7 +6924,13 @@ static jsval_t js_stmt(struct js *js) {
     case TOK_FOR:       res = js_for(js); break;
     case TOK_RETURN:    res = js_return(js); break;
     case TOK_TRY:       res = js_try(js); break;    
-    default:            res = resolveprop(js, js_expr(js)); break;
+    default:
+      res = resolveprop(js, js_expr(js));
+      while (next(js) == TOK_COMMA) {
+        js->consumed = 1;
+        res = resolveprop(js, js_expr(js));
+      }
+      break;
   }
   
   bool is_block_statement = (
