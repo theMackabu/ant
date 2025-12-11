@@ -2391,17 +2391,20 @@ static jsval_t js_block(struct js *js, bool create_scope) {
   jsval_t res = js_mkundef();
   if (create_scope) mkscope(js);
   js->consumed = 1;
-  while (next(js) != TOK_EOF && next(js) != TOK_RBRACE && !is_err(res)) {
+  uint8_t peek;
+  while ((peek = next(js)) != TOK_EOF && peek != TOK_RBRACE && !is_err(res)) {
     uint8_t t = js->tok;
     res = js_stmt(js);
     if (!is_err(res) && t != TOK_LBRACE && t != TOK_IF && t != TOK_WHILE &&
         t != TOK_DO && t != TOK_FUNC && t != TOK_FOR && t != TOK_IMPORT && 
-        t != TOK_EXPORT && js->tok != TOK_SEMICOLON) {
+        t != TOK_EXPORT && t != TOK_SEMICOLON &&
+        js->tok != TOK_SEMICOLON && js->tok != TOK_RBRACE && js->tok != TOK_EOF) {
       res = js_mkerr(js, "; expected");
       break;
     }
     if (js->flags & (F_RETURN | F_THROW)) break;
   }
+  if (js->tok == TOK_RBRACE) js->consumed = 1;
   if (create_scope) delscope(js);
   return res;
 }
@@ -5181,7 +5184,8 @@ static jsval_t js_decl(struct js *js, bool is_const) {
       }
     }
     
-    if (next(js) == TOK_SEMICOLON || next(js) == TOK_EOF) break;
+    uint8_t decl_next = next(js);
+    if (decl_next == TOK_SEMICOLON || decl_next == TOK_EOF || decl_next == TOK_RBRACE) break;
     EXPECT(TOK_COMMA, );
   }
   return js_mkundef();
@@ -6126,7 +6130,8 @@ static jsval_t js_return(struct js *js) {
   if (exe && !(js->flags & F_CALL)) return js_mkerr(js, "not in func");
   jsval_t res = js_mkundef();
   
-  if (next(js) != TOK_SEMICOLON) {
+  uint8_t nxt = next(js);
+  if (nxt != TOK_SEMICOLON && nxt != TOK_RBRACE && nxt != TOK_EOF) {
     res = resolveprop(js, js_expr(js));
   }
   
@@ -6424,7 +6429,8 @@ static jsval_t js_class_decl(struct js *js) {
   MethodInfo methods[32];
   int method_count = 0;
   
-  while (next(js) != TOK_RBRACE && next(js) != TOK_EOF && method_count < 32) {
+  uint8_t class_tok;
+  while ((class_tok = next(js)) != TOK_RBRACE && class_tok != TOK_EOF && method_count < 32) {
     bool is_async_method = false;
     bool is_static_member = false;
     
@@ -6562,7 +6568,6 @@ static jsval_t js_class_decl(struct js *js) {
   
   EXPECT(TOK_RBRACE, js->flags = save_flags);
   js->flags = save_flags;
-  js->consumed = 0;
   
   if (exe) {
     jsval_t super_constructor = js_mkundef();
@@ -6867,7 +6872,8 @@ static jsval_t js_var_decl(struct js *js) {
       }
     }
     
-    if (next(js) == TOK_SEMICOLON || next(js) == TOK_EOF) break;
+    uint8_t var_next = next(js);
+    if (var_next == TOK_SEMICOLON || var_next == TOK_EOF || var_next == TOK_RBRACE) break;
     EXPECT(TOK_COMMA, );
   }
   return js_mkundef();
@@ -6897,6 +6903,9 @@ static jsval_t js_stmt(struct js *js) {
   uint8_t stmt_tok = next(js);
   
   switch (stmt_tok) {
+    case TOK_SEMICOLON:
+      res = js_mkundef();
+      break;
     case TOK_CASE: case TOK_CATCH:
     case TOK_DEFAULT: case TOK_FINALLY:
       res = js_mkerr(js, "SyntaxError '%.*s'", (int) js->tlen, js->code + js->toff);
@@ -6939,16 +6948,16 @@ static jsval_t js_stmt(struct js *js) {
     stmt_tok == TOK_IF || stmt_tok == TOK_WHILE || 
     stmt_tok == TOK_DO || stmt_tok == TOK_FOR || 
     stmt_tok == TOK_SWITCH || stmt_tok == TOK_TRY || 
-    stmt_tok == TOK_LBRACE
+    stmt_tok == TOK_LBRACE || stmt_tok == TOK_ASYNC
   );
   
   if (!is_block_statement) {
     int next_tok = next(js);
     bool missing_semicolon = next_tok != TOK_SEMICOLON && next_tok != TOK_EOF && next_tok != TOK_RBRACE;
     if (missing_semicolon) return js_mkerr(js, "; expected");
+    if (next_tok == TOK_SEMICOLON) js->consumed = 1;
   }
   
-  js->consumed = 1;
   return res;
 }
 
