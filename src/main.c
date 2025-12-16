@@ -32,9 +32,12 @@ static void eval_code(struct js *js, struct arg_str *eval, struct arg_lit *print
   const char *script = eval->sval[0];
   size_t len = strlen(script);
   
-  js_set_filename(js, "<eval>");
+  js_set_filename(js, "[eval]");
   js_mkscope(js);
   js_protect_init_memory(js);
+  
+  js_set(js, js_glob(js), "__dirname", js_mkstr(js, ".", 1));
+  js_set(js, js_glob(js), "__filename", js_mkstr(js, "[eval]", 6));
   
   jsval_t result = js_eval(js, script, len);
   
@@ -43,7 +46,10 @@ static void eval_code(struct js *js, struct arg_str *eval, struct arg_lit *print
     js_result = EXIT_FAILURE;
   } else if (print->count > 0) {
     const char *str = js_str(js, result);
-    if (str && strcmp(str, "undefined") != 0) printf("%s\n", str);
+    if (str && strcmp(str, "undefined") != 0) {
+      print_value_colored(str, stdout);
+      printf("\n");
+    }
   }
   
   js_run_event_loop(js);
@@ -54,6 +60,8 @@ static int execute_module(struct js *js, const char *filename) {
   char *dir = dirname(filename_copy);
   
   js_set(js, js_glob(js), "__dirname", js_mkstr(js, dir, strlen(dir)));
+  js_set(js, js_glob(js), "__filename", js_mkstr(js, filename, strlen(filename)));
+  
   free(filename_copy);
 
   FILE *fp = fopen(filename, "rb");
@@ -155,6 +163,9 @@ int main(int argc, char *argv[]) {
   if (gct->count > 0) js_setgct(js, gct->ival[0]);  
   
   ant_runtime_init(js);
+  
+  js_set(js, js_glob(js), "global", js_glob(js));
+  js_set(js, js_glob(js), "globalThis", js_glob(js));
 
   init_builtin_module();
   init_buffer_module();

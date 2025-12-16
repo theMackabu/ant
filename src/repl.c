@@ -10,6 +10,7 @@
 #include "repl.h"
 #include "config.h"
 #include "runtime.h"
+#include "modules/io.h"
 
 #define MAX_HISTORY 100
 #define MAX_LINE_LENGTH 4096
@@ -208,6 +209,8 @@ void ant_repl_run() {
   history_init(&history);
   
   js_set(js, js_glob(js), "__dirname", js_mkstr(js, ".", 1));
+  js_set(js, js_glob(js), "__filename", js_mkstr(js, "[repl]", 6));
+
   int prev_ctrl_c_count = 0;
   
   while (1) {
@@ -325,7 +328,8 @@ void ant_repl_run() {
     
     if (js_type(eval_result) == JS_ERR) fprintf(stderr, "%s\n", js_str(js, eval_result)); else {
       const char *str = js_str(js, eval_result);
-      printf("%s\n", str);
+      print_value_colored(str, stdout);
+      printf("\n");
     }
     
     free(line);

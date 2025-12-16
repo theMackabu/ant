@@ -87,6 +87,32 @@ static jsval_t process_exit(struct js *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
+static jsval_t env_to_object(struct js *js, jsval_t *args, int nargs) {
+  (void)args;
+  (void)nargs;
+  
+  jsval_t obj = js_mkobj(js);
+  
+  for (char **env = environ; *env != NULL; env++) {
+    char *entry = *env;
+    char *equals = strchr(entry, '=');
+    if (equals == NULL) continue;
+    
+    size_t key_len = (size_t)(equals - entry);
+    char *value = equals + 1;
+    
+    char *key = malloc(key_len + 1);
+    if (!key) continue;
+    memcpy(key, entry, key_len);
+    key[key_len] = '\0';
+    
+    js_set(js, obj, key, js_mkstr(js, value, strlen(value)));
+    free(key);
+  }
+  
+  return obj;
+}
+
 void init_process_module(void) {
   struct js *js = rt->js;
   
@@ -127,6 +153,7 @@ void init_process_module(void) {
   
   load_dotenv_file(js, env_obj);
   js_set_getter(js, env_obj, env_getter);
+  js_set(js, env_obj, "toObject", js_mkfun(env_to_object));
   
   js_set(js, process_obj, "@@toStringTag", js_mkstr(js, "process", 7));
   js_set(js, js_glob(js), "process", process_obj);

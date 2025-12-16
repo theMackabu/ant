@@ -704,14 +704,134 @@ static size_t cpy(char *dst, size_t dstlen, const char *src, size_t srclen) {
 }
 
 #define MAX_STRINGIFY_DEPTH 64
+#define MAX_MULTIREF_OBJS 128
+
 static jsval_t stringify_stack[MAX_STRINGIFY_DEPTH];
 static int stringify_depth = 0;
+static int stringify_indent = 0;
 
-static bool is_circular(jsval_t obj) {
+static jsval_t multiref_objs[MAX_MULTIREF_OBJS];
+static int multiref_ids[MAX_MULTIREF_OBJS];
+static int multiref_count = 0;
+static int multiref_next_id = 0;
+
+static void scan_refs(struct js *js, jsval_t value);
+
+static int find_multiref(jsval_t obj) {
+  for (int i = 0; i < multiref_count; i++) {
+    if (multiref_objs[i] == obj) return multiref_ids[i];
+  }
+  return 0;
+}
+
+static bool is_on_stack(jsval_t obj) {
   for (int i = 0; i < stringify_depth; i++) {
     if (stringify_stack[i] == obj) return true;
   }
   return false;
+}
+
+static void mark_multiref(jsval_t obj) {
+  for (int i = 0; i < multiref_count; i++) {
+    if (multiref_objs[i] == obj) {
+      if (multiref_ids[i] == 0) multiref_ids[i] = ++multiref_next_id;
+      return;
+    }
+  }
+  if (multiref_count < MAX_MULTIREF_OBJS) {
+    multiref_objs[multiref_count] = obj;
+    multiref_ids[multiref_count] = 0;
+    multiref_count++;
+  }
+}
+
+static void scan_obj_refs(struct js *js, jsval_t obj) {
+  if (is_on_stack(obj)) {
+    mark_multiref(obj);
+    return;
+  }
+  mark_multiref(obj);
+  
+  if (stringify_depth >= MAX_STRINGIFY_DEPTH) return;
+  stringify_stack[stringify_depth++] = obj;
+  
+  jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK);
+  while (next < js->brk && next != 0) {
+    jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
+    jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
+    scan_refs(js, val);
+    next = loadoff(js, next) & ~(3U | CONSTMASK);
+  }
+  
+  stringify_depth--;
+}
+
+static void scan_arr_refs(struct js *js, jsval_t obj) {
+  if (is_on_stack(obj)) {
+    mark_multiref(obj);
+    return;
+  }
+  mark_multiref(obj);
+  
+  if (stringify_depth >= MAX_STRINGIFY_DEPTH) return;
+  stringify_stack[stringify_depth++] = obj;
+  
+  jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK);
+  while (next < js->brk && next != 0) {
+    jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
+    jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
+    scan_refs(js, val);
+    next = loadoff(js, next) & ~(3U | CONSTMASK);
+  }
+  
+  stringify_depth--;
+}
+
+static void scan_func_refs(struct js *js, jsval_t value) {
+  jsval_t func_obj = mkval(T_OBJ, vdata(value));
+  
+  if (is_on_stack(func_obj)) {
+    mark_multiref(func_obj);
+    return;
+  }
+  mark_multiref(func_obj);
+  
+  if (stringify_depth >= MAX_STRINGIFY_DEPTH) return;
+  stringify_stack[stringify_depth++] = func_obj;
+  
+  jsoff_t next = loadoff(js, (jsoff_t) vdata(func_obj)) & ~(3U | CONSTMASK);
+  while (next < js->brk && next != 0) {
+    jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
+    jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
+    scan_refs(js, val);
+    next = loadoff(js, next) & ~(3U | CONSTMASK);
+  }
+  
+  stringify_depth--;
+}
+
+static void scan_refs(struct js *js, jsval_t value) {
+  switch (vtype(value)) {
+    case T_OBJ: scan_obj_refs(js, value); break;
+    case T_ARR: scan_arr_refs(js, value); break;
+    case T_FUNC: scan_func_refs(js, value); break;
+    default: break;
+  }
+}
+
+static int get_circular_ref(jsval_t obj) {
+  if (is_on_stack(obj)) {
+    return find_multiref(obj);
+  }
+  return 0;
+}
+
+static bool is_circular(jsval_t obj) {
+  return is_on_stack(obj);
+}
+
+static int get_self_ref(jsval_t obj) {
+  return find_multiref(obj);
 }
 
 static void push_stringify(jsval_t obj) {
@@ -724,13 +844,22 @@ static void pop_stringify(void) {
   if (stringify_depth > 0) stringify_depth--;
 }
 
+static size_t add_indent(char *buf, size_t len, int level) {
+  size_t n = 0;
+  for (int i = 0; i < level * 2 && n < len; i++) {
+    buf[n++] = ' ';
+  }
+  return n;
+}
+
 static size_t strbigint(struct js *js, jsval_t value, char *buf, size_t len);
 
 static size_t strarr(struct js *js, jsval_t obj, char *buf, size_t len) {
-  if (is_circular(obj)) return cpy(buf, len, "[Circular]", 10);
+  int ref = get_circular_ref(obj);
+  if (ref) return (size_t) snprintf(buf, len, "[Circular *%d]", ref);
   
   push_stringify(obj);
-  size_t n = cpy(buf, len, "[", 1);
+  size_t n = cpy(buf, len, "[ ", 2);
   jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK);
   jsoff_t length = 0;
   jsoff_t scan = next;
@@ -749,7 +878,7 @@ static size_t strarr(struct js *js, jsval_t obj, char *buf, size_t len) {
   }
   
   for (jsoff_t i = 0; i < length; i++) {
-    if (i > 0) n += cpy(buf + n, len - n, ",", 1);
+    if (i > 0) n += cpy(buf + n, len - n, ", ", 2);
     char idx[16];
     snprintf(idx, sizeof(idx), "%u", (unsigned) i);
     
@@ -778,7 +907,7 @@ static size_t strarr(struct js *js, jsval_t obj, char *buf, size_t len) {
     }
   }
   
-  n += cpy(buf + n, len - n, "]", 1);
+  n += cpy(buf + n, len - n, " ]", 2);
   pop_stringify();
   return n;
 }
@@ -870,30 +999,82 @@ static size_t strdate(struct js *js, jsval_t obj, char *buf, size_t len) {
   return (size_t) snprintf(buf, len, "%s GMT%+03d%02d (%s)", date_part, offset_hours, offset_mins, tz_name);
 }
 
+static jsoff_t vstr(struct js *js, jsval_t value, jsoff_t *len);
+static size_t strstring(struct js *js, jsval_t value, char *buf, size_t len);
+
+static bool is_valid_identifier(const char *str, jsoff_t slen) {
+  if (slen == 0) return false;
+  char c = str[0];
+  if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || c == '$')) return false;
+  for (jsoff_t i = 1; i < slen; i++) {
+    c = str[i];
+    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '$')) return false;
+  }
+  return true;
+}
+
+static size_t strkey(struct js *js, jsval_t value, char *buf, size_t len) {
+  jsoff_t slen, off = vstr(js, value, &slen);
+  const char *str = (const char *) &js->mem[off];
+  if (is_valid_identifier(str, slen)) {
+    return cpy(buf, len, str, slen);
+  }
+  return strstring(js, value, buf, len);
+}
+
 static size_t strobj(struct js *js, jsval_t obj, char *buf, size_t len) {
   jsoff_t time_off = lkp(js, obj, "__time", 6);
   if (time_off != 0) return strdate(js, obj, buf, len);
   
-  if (is_circular(obj)) return cpy(buf, len, "[Circular]", 10);
+  int ref = get_circular_ref(obj);
+  if (ref) return (size_t) snprintf(buf, len, "[Circular *%d]", ref);
   
   push_stringify(obj);
-  size_t n = cpy(buf, len, "{", 1);
+  
+  size_t n = 0;
+  int self_ref = get_self_ref(obj);
+  if (self_ref) {
+    n += (size_t) snprintf(buf + n, len - n, "<ref *%d> ", self_ref);
+  }
+  
+  jsoff_t tag_off = lkp(js, obj, "@@toStringTag", 13);
+  if (tag_off != 0) {
+    jsval_t tag_val = resolveprop(js, mkval(T_PROP, tag_off));
+    if (vtype(tag_val) == T_STR) {
+      jsoff_t tlen, toff = vstr(js, tag_val, &tlen);
+      n += cpy(buf + n, len - n, "Object [", 8);
+      n += cpy(buf + n, len - n, (const char *) &js->mem[toff], tlen);
+      n += cpy(buf + n, len - n, "] {\n", 4);
+    } else {
+      n += cpy(buf + n, len - n, "{\n", 2);
+    }
+  } else {
+    n += cpy(buf + n, len - n, "{\n", 2);
+  }
+  
+  stringify_indent++;
   jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK);
+  bool first = true;
   
   while (next < js->brk && next != 0) {
     jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
     jsoff_t klen = offtolen(loadoff(js, koff));
     const char *key = (char *) &js->mem[koff + sizeof(koff)];
-    if (!streq(key, klen, "__proto__", 9)) {
+    if (!streq(key, klen, "__proto__", 9) && !streq(key, klen, "@@toStringTag", 13) && !streq(key, klen, "__getter", 8)) {
       jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
-      n += cpy(buf + n, len - n, ",", n == 1 ? 0 : 1);
-      n += tostr(js, mkval(T_STR, koff), buf + n, len - n);
-      n += cpy(buf + n, len - n, ":", 1);
+      if (!first) n += cpy(buf + n, len - n, ",\n", 2);
+      first = false;
+      n += add_indent(buf + n, len - n, stringify_indent);
+      n += strkey(js, mkval(T_STR, koff), buf + n, len - n);
+      n += cpy(buf + n, len - n, ": ", 2);
       n += tostr(js, val, buf + n, len - n);
     }
     next = loadoff(js, next) & ~(3U | CONSTMASK);
   }
   
+  stringify_indent--;
+  if (!first) n += cpy(buf + n, len - n, "\n", 1);
+  n += add_indent(buf + n, len - n, stringify_indent);
   n += cpy(buf + n, len - n, "}", 1);
   pop_stringify();
   return n;
@@ -950,10 +1131,12 @@ static bool is_internal_prop(const char *key, jsoff_t klen) {
 }
 
 static size_t strfunc_ctor(struct js *js, jsval_t func_obj, char *buf, size_t len) {
-  if (is_circular(func_obj)) return cpy(buf, len, "[Circular]", 10);
+  int ref = get_circular_ref(func_obj);
+  if (ref) return (size_t) snprintf(buf, len, "[Circular *%d]", ref);
   push_stringify(func_obj);
   
-  size_t n = cpy(buf, len, "{", 1);
+  size_t n = cpy(buf, len, "{\n", 2);
+  stringify_indent++;
   bool first = true;
   
   jsoff_t next = loadoff(js, (jsoff_t) vdata(func_obj)) & ~(3U | CONSTMASK);
@@ -964,11 +1147,12 @@ static size_t strfunc_ctor(struct js *js, jsval_t func_obj, char *buf, size_t le
     jsoff_t klen = offtolen(loadoff(js, koff));
     const char *kstr = (const char *) &js->mem[koff + sizeof(jsoff_t)];
     
-    if (!is_internal_prop(kstr, klen)) {
-      n += cpy(buf + n, len - n, first ? "" : ",", first ? 0 : 1);
+    if (!is_internal_prop(kstr, klen) && !streq(kstr, klen, "name", 4) && !streq(kstr, klen, "@@toStringTag", 13) && !streq(kstr, klen, "__getter", 8)) {
+      if (!first) n += cpy(buf + n, len - n, ",\n", 2);
       first = false;
-      n += tostr(js, mkval(T_STR, koff), buf + n, len - n);
-      n += cpy(buf + n, len - n, ":", 1);
+      n += add_indent(buf + n, len - n, stringify_indent);
+      n += strkey(js, mkval(T_STR, koff), buf + n, len - n);
+      n += cpy(buf + n, len - n, ": ", 2);
       n += tostr(js, val, buf + n, len - n);
     }
     next = loadoff(js, next) & ~(3U | CONSTMASK);
@@ -986,11 +1170,12 @@ static size_t strfunc_ctor(struct js *js, jsval_t func_obj, char *buf, size_t le
         jsoff_t pklen = offtolen(loadoff(js, pkoff));
         const char *pkstr = (const char *) &js->mem[pkoff + sizeof(jsoff_t)];
         
-        if (!is_internal_prop(pkstr, pklen)) {
-          n += cpy(buf + n, len - n, first ? "" : ",", first ? 0 : 1);
+        if (!is_internal_prop(pkstr, pklen) && !streq(pkstr, pklen, "name", 4) && !streq(pkstr, pklen, "@@toStringTag", 13) && !streq(pkstr, pklen, "__getter", 8)) {
+          if (!first) n += cpy(buf + n, len - n, ",\n", 2);
           first = false;
-          n += tostr(js, mkval(T_STR, pkoff), buf + n, len - n);
-          n += cpy(buf + n, len - n, ":", 1);
+          n += add_indent(buf + n, len - n, stringify_indent);
+          n += strkey(js, mkval(T_STR, pkoff), buf + n, len - n);
+          n += cpy(buf + n, len - n, ": ", 2);
           n += tostr(js, pval, buf + n, len - n);
         }
         proto_next = loadoff(js, proto_next) & ~(3U | CONSTMASK);
@@ -998,6 +1183,9 @@ static size_t strfunc_ctor(struct js *js, jsval_t func_obj, char *buf, size_t le
     }
   }
   
+  stringify_indent--;
+  if (!first) n += cpy(buf + n, len - n, "\n", 1);
+  n += add_indent(buf + n, len - n, stringify_indent);
   n += cpy(buf + n, len - n, "}", 1);
   pop_stringify();
   return n;
@@ -1007,25 +1195,56 @@ static size_t strfunc(struct js *js, jsval_t value, char *buf, size_t len) {
   jsval_t func_obj = mkval(T_OBJ, vdata(value));
   jsoff_t code_off = lkp(js, func_obj, "__code", 6);
   
+  jsoff_t name_off = lkp(js, func_obj, "name", 4);
+  const char *name = NULL;
+  jsoff_t name_len = 0;
+  if (name_off != 0) {
+    jsval_t name_val = resolveprop(js, mkval(T_PROP, name_off));
+    if (vtype(name_val) == T_STR) {
+      name_len = 0;
+      jsoff_t noff = vstr(js, name_val, &name_len);
+      name = (const char *) &js->mem[noff];
+    }
+  }
+  
   if (code_off == 0) {
     jsoff_t native_off = lkp(js, func_obj, "__native_func", 13);
     if (native_off != 0) {
       jsval_t native_val = resolveprop(js, mkval(T_PROP, native_off));
       if (vtype(native_val) == T_CFUNC) return strfunc_ctor(js, func_obj, buf, len);
     }
-    return cpy(buf, len, "function()", 10);
+    if (name && name_len > 0) {
+      size_t n = cpy(buf, len, "[Function: ", 11);
+      n += cpy(buf + n, len - n, name, name_len);
+      n += cpy(buf + n, len - n, "]", 1);
+      return n;
+    }
+    return cpy(buf, len, "[Function (anonymous)]", 22);
   }
   jsval_t code_val = resolveprop(js, mkval(T_PROP, code_off));
   
-  if (vtype(code_val) != T_STR) return cpy(buf, len, "function()", 10);
+  if (vtype(code_val) != T_STR) {
+    if (name && name_len > 0) {
+      size_t n = cpy(buf, len, "[Function: ", 11);
+      n += cpy(buf + n, len - n, name, name_len);
+      n += cpy(buf + n, len - n, "]", 1);
+      return n;
+    }
+    return cpy(buf, len, "[Function (anonymous)]", 22);
+  }
   
   jsoff_t sn, off = vstr(js, code_val, &sn);
   if (sn >= 9 && memcmp(&js->mem[off], "__builtin", 9) == 0) {
     return strfunc_ctor(js, func_obj, buf, len);
   }
   
-  size_t n = cpy(buf, len, "function", 8);
-  return n + cpy(buf + n, len - n, (char *) &js->mem[off], sn);
+  if (name && name_len > 0) {
+    size_t n = cpy(buf, len, "[Function: ", 11);
+    n += cpy(buf + n, len - n, name, name_len);
+    n += cpy(buf + n, len - n, "]", 1);
+    return n;
+  }
+  return cpy(buf, len, "[Function (anonymous)]", 22);
 }
 
 static void get_line_col(const char *code, jsoff_t pos, int *line, int *col) {
@@ -1188,7 +1407,7 @@ static size_t tostr(struct js *js, jsval_t value, char *buf, size_t len) {
     case T_BIGINT: return strbigint(js, value, buf, len);
     case T_PROMISE: return strpromise(js, value, buf, len);
     case T_FUNC:  return strfunc(js, value, buf, len);
-    case T_CFUNC: return (size_t) snprintf(buf, len, "\"c_func_0x%lx\"", (unsigned long) vdata(value));
+    case T_CFUNC: return cpy(buf, len, "[Function (native)]", 19);
     case T_PROP:  return (size_t) snprintf(buf, len, "PROP@%lu", (unsigned long) vdata(value));
     default:      return (size_t) snprintf(buf, len, "VTYPE%d", vtype(value));
   }
@@ -1201,7 +1420,13 @@ const char *js_str(struct js *js, jsval_t value) {
   if (is_err(value)) return js->errmsg;
   if (js->brk + sizeof(jsoff_t) >= js->size) return "";
   
+  multiref_count = 0;
+  multiref_next_id = 0;
   stringify_depth = 0;
+  scan_refs(js, value);
+  
+  stringify_depth = 0;
+  stringify_indent = 0;
   len = tostr(js, value, buf, available);
   js_mkstr(js, NULL, len);
   return buf;

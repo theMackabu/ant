@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <ctype.h>
 #include <libgen.h>
 
 #include "runtime.h"
@@ -17,6 +18,9 @@
 #define JSON_BOOL "\x1b[35m"
 #define JSON_NULL "\x1b[90m"
 #define JSON_BRACE "\x1b[37m"
+#define JSON_FUNC "\x1b[36m"
+#define JSON_TAG "\x1b[34m"
+#define JSON_REF "\x1b[90m"
 
 static void print_json_colored(const char *json, FILE *stream) {
   bool in_string = false;
@@ -106,6 +110,161 @@ static void print_json_colored(const char *json, FILE *stream) {
   }
 }
 
+void print_value_colored(const char *str, FILE *stream) {
+  bool in_string = false;
+  bool escape_next = false;
+  bool is_key = true;
+  int bracket_depth = 0;
+  
+  for (const char *p = str; *p; p++) {
+    if (escape_next) {
+      fputc(*p, stream);
+      escape_next = false;
+      continue;
+    }
+    
+    if (*p == '\\' && in_string) {
+      fputc(*p, stream);
+      escape_next = true;
+      continue;
+    }
+    
+    if (*p == '"') {
+      if (!in_string) {
+        fprintf(stream, "%s\"", is_key ? JSON_KEY : JSON_STRING);
+        in_string = true;
+      } else {
+        fprintf(stream, "\"%s", ANSI_RESET);
+        in_string = false;
+      }
+      continue;
+    }
+    
+    if (in_string) {
+      fputc(*p, stream);
+      continue;
+    }
+    
+    if (*p == '[' && strncmp(p, "[Function", 9) == 0) {
+      fprintf(stream, "%s", JSON_FUNC);
+      while (*p && *p != ']') fputc(*p++, stream);
+      if (*p == ']') fputc(*p, stream);
+      fprintf(stream, "%s", ANSI_RESET);
+      continue;
+    }
+    
+    if (*p == '[' && strncmp(p, "[Circular", 9) == 0) {
+      fprintf(stream, "%s", JSON_REF);
+      while (*p && *p != ']') fputc(*p++, stream);
+      if (*p == ']') fputc(*p, stream);
+      fprintf(stream, "%s", ANSI_RESET);
+      continue;
+    }
+    
+    if (*p == '<' && strncmp(p, "<ref", 4) == 0) {
+      fprintf(stream, "%s", JSON_REF);
+      while (*p && *p != '>') fputc(*p++, stream);
+      if (*p == '>') fputc(*p, stream);
+      fprintf(stream, "%s", ANSI_RESET);
+      continue;
+    }
+    
+    if (strncmp(p, "Object [", 8) == 0) {
+      fprintf(stream, "%sObject [", JSON_TAG);
+      p += 7;
+      while (*p && *p != ']') fputc(*++p, stream);
+      fprintf(stream, "%s", ANSI_RESET);
+      continue;
+    }
+    
+    if (*p == ':') {
+      fputc(*p, stream);
+      is_key = false;
+      continue;
+    }
+    
+    if (*p == ',' || *p == '\n') {
+      fputc(*p, stream);
+      is_key = true;
+      continue;
+    }
+    
+    if (*p == '{' || *p == '[') {
+      fprintf(stream, "%s%c%s", JSON_BRACE, *p, ANSI_RESET);
+      bracket_depth++;
+      is_key = true;
+      continue;
+    }
+    
+    if (*p == '}' || *p == ']') {
+      fprintf(stream, "%s%c%s", JSON_BRACE, *p, ANSI_RESET);
+      bracket_depth--;
+      continue;
+    }
+    
+    if (strncmp(p, "true", 4) == 0 && !isalnum((unsigned char)p[4]) && p[4] != '_') {
+      fprintf(stream, "%strue%s", JSON_BOOL, ANSI_RESET);
+      p += 3;
+      continue;
+    }
+    
+    if (strncmp(p, "false", 5) == 0 && !isalnum((unsigned char)p[5]) && p[5] != '_') {
+      fprintf(stream, "%sfalse%s", JSON_BOOL, ANSI_RESET);
+      p += 4;
+      continue;
+    }
+    
+    if (strncmp(p, "null", 4) == 0 && !isalnum((unsigned char)p[4]) && p[4] != '_') {
+      fprintf(stream, "%snull%s", JSON_NULL, ANSI_RESET);
+      p += 3;
+      continue;
+    }
+    
+    if (strncmp(p, "undefined", 9) == 0 && !isalnum((unsigned char)p[9]) && p[9] != '_') {
+      fprintf(stream, "%sundefined%s", JSON_NULL, ANSI_RESET);
+      p += 8;
+      continue;
+    }
+    
+    if (strncmp(p, "Infinity", 8) == 0) {
+      fprintf(stream, "%sInfinity%s", JSON_NUMBER, ANSI_RESET);
+      p += 7;
+      continue;
+    }
+    
+    if (strncmp(p, "NaN", 3) == 0 && !isalnum((unsigned char)p[3]) && p[3] != '_') {
+      fprintf(stream, "%sNaN%s", JSON_NUMBER, ANSI_RESET);
+      p += 2;
+      continue;
+    }
+    
+    if ((*p >= '0' && *p <= '9') || (*p == '-' && p[1] >= '0' && p[1] <= '9')) {
+      fprintf(stream, "%s", JSON_NUMBER);
+      if (*p == '-') fputc(*p++, stream);
+      while ((*p >= '0' && *p <= '9') || *p == '.' || *p == 'e' || *p == 'E' || *p == '+' || *p == '-') {
+        fputc(*p, stream);
+        if (!((p[1] >= '0' && p[1] <= '9') || p[1] == '.' || p[1] == 'e' || p[1] == 'E' || p[1] == '+' || p[1] == '-')) break;
+        p++;
+      }
+      fprintf(stream, "%s", ANSI_RESET);
+      continue;
+    }
+    
+    if (is_key && bracket_depth > 0 && (isalpha((unsigned char)*p) || *p == '_' || *p == '$')) {
+      fprintf(stream, "%s", JSON_KEY);
+      while (isalnum((unsigned char)*p) || *p == '_' || *p == '$') {
+        fputc(*p, stream);
+        if (!(isalnum((unsigned char)p[1]) || p[1] == '_' || p[1] == '$')) break;
+        p++;
+      }
+      fprintf(stream, "%s", ANSI_RESET);
+      continue;
+    }
+    
+    fputc(*p, stream);
+  }
+}
+
 static void console_print(struct js *js, jsval_t *args, int nargs, const char *color, FILE *stream) {
   if (color) fprintf(stream, "%s", color);
   
@@ -122,9 +281,7 @@ static void console_print(struct js *js, jsval_t *args, int nargs, const char *c
         if (color) fprintf(stream, "%s", ANSI_RESET);
         print_json_colored(str, stream);
         if (color) fprintf(stream, "%s", color);
-      } else {
-        fprintf(stream, "%s", str);
-      }
+      } else print_value_colored(str, stdout);
     }
   }
   

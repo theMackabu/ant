@@ -14,3 +14,6 @@ script = ["maid build -q", "./build/ant %{arg.1}"]
 
 [tasks.debug]
 script = ["maid build -q", "./build/ant -d %{arg.1}"]
+
+[tasks.install]
+script = "bash -c 'which ant && cp ./build/ant \"$(which ant)\" || { mkdir -p ~/.local/bin && cp ./build/ant ~/.local/bin/; }'"
