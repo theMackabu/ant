@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include "modules/fs.h"
+#include "ant.h"
 #include "runtime.h"
 
 typedef enum {
@@ -18,7 +19,8 @@ typedef enum {
   FS_OP_MKDIR,
   FS_OP_RMDIR,
   FS_OP_STAT,
-  FS_OP_READ_BYTES
+  FS_OP_READ_BYTES,
+  FS_OP_EXISTS
 } fs_op_type_t;
 
 typedef struct fs_request_s {
@@ -270,6 +272,16 @@ static void on_stat_complete(uv_fs_t *uv_req) {
   
   req->completed = 1;
   js_resolve_promise(req->js, req->promise, stat_obj);
+  remove_pending_request(req);
+  free_fs_request(req);
+}
+
+static void on_exists_complete(uv_fs_t *uv_req) {
+  fs_request_t *req = (fs_request_t *)uv_req->data;
+  jsval_t result = (uv_req->result >= 0) ? js_mktrue() : js_mkfalse();
+  
+  req->completed = 1;
+  js_resolve_promise(req->js, req->promise, result);
   remove_pending_request(req);
   free_fs_request(req);
 }
@@ -800,6 +812,59 @@ static jsval_t builtin_fs_stat(struct js *js, jsval_t *args, int nargs) {
   return req->promise;
 }
 
+static jsval_t builtin_fs_existsSync(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "existsSync() requires a path argument");
+  
+  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "existsSync() path must be a string");
+  
+  size_t path_len;
+  char *path = js_getstr(js, args[0], &path_len);
+  if (!path) return js_mkerr(js, "Failed to get path string");
+  
+  char *path_cstr = strndup(path, path_len);
+  if (!path_cstr) return js_mkerr(js, "Out of memory");
+  
+  struct stat st;
+  int result = stat(path_cstr, &st);
+  free(path_cstr);
+  
+  return (result == 0) ? js_mktrue() : js_mkfalse();
+}
+
+static jsval_t builtin_fs_exists(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "exists() requires a path argument");
+  
+  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "exists() path must be a string");
+  
+  size_t path_len;
+  char *path = js_getstr(js, args[0], &path_len);
+  if (!path) return js_mkerr(js, "Failed to get path string");
+  
+  ensure_fs_loop();
+  
+  fs_request_t *req = calloc(1, sizeof(fs_request_t));
+  if (!req) return js_mkerr(js, "Out of memory");
+  
+  req->js = js;
+  req->op_type = FS_OP_EXISTS;
+  req->promise = js_mkpromise(js);
+  req->path = strndup(path, path_len);
+  req->uv_req.data = req;
+  
+  utarray_push_back(pending_requests, &req);
+  
+  int result = uv_fs_stat(fs_loop, &req->uv_req, req->path, on_exists_complete);
+  
+  if (result < 0) {
+    req->completed = 1;
+    js_resolve_promise(req->js, req->promise, js_mkfalse());
+    remove_pending_request(req);
+    free_fs_request(req);
+  }
+  
+  return req->promise;
+}
+
 jsval_t fs_library(struct js *js) {
   jsval_t lib = js_mkobj(js);
   
@@ -817,6 +882,8 @@ jsval_t fs_library(struct js *js) {
   js_set(js, lib, "rmdirSync", js_mkfun(builtin_fs_rmdirSync));
   js_set(js, lib, "stat", js_mkfun(builtin_fs_stat));
   js_set(js, lib, "statSync", js_mkfun(builtin_fs_statSync));
+  js_set(js, lib, "exists", js_mkfun(builtin_fs_exists));
+  js_set(js, lib, "existsSync", js_mkfun(builtin_fs_existsSync));
   js_set(js, lib, "@@toStringTag", js_mkstr(js, "fs", 2));
   
   return lib;

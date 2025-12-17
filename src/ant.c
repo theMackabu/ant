@@ -160,6 +160,18 @@ typedef struct {
   UT_hash_handle hh;
 } obj_prop_cache_t;
 
+typedef struct map_entry {
+    char *key;
+    jsval_t value;
+    UT_hash_handle hh;
+} map_entry_t;
+
+typedef struct set_entry {
+    jsval_t value;
+    char *key;
+    UT_hash_handle hh;
+} set_entry_t;
+
 static ant_library_t *library_registry = NULL;
 static esm_module_cache_t global_module_cache = {NULL, 0};
 static obj_prop_cache_t *global_property_cache = NULL;
@@ -1109,20 +1121,115 @@ static size_t strobj(struct js *js, jsval_t obj, char *buf, size_t len) {
     n += (size_t) snprintf(buf + n, len - n, "<ref *%d> ", self_ref);
   }
   
-  jsoff_t tag_off = lkp(js, obj, "@@toStringTag", 13);
-  if (tag_off != 0) {
-    jsval_t tag_val = resolveprop(js, mkval(T_PROP, tag_off));
-    if (vtype(tag_val) == T_STR) {
-      jsoff_t tlen, toff = vstr(js, tag_val, &tlen);
-      n += cpy(buf + n, len - n, "Object [", 8);
-      n += cpy(buf + n, len - n, (const char *) &js->mem[toff], tlen);
-      n += cpy(buf + n, len - n, "] {\n", 4);
+  jsoff_t tag_off = lkp_proto(js, obj, "@@toStringTag", 13);
+  bool is_map = false, is_set = false;
+  jsoff_t tlen = 0, toff = 0;
+  const char *tag_str = NULL;
+  
+  if (tag_off == 0) goto print_plain_object;
+  
+  jsval_t tag_val = resolveprop(js, mkval(T_PROP, tag_off));
+  if (vtype(tag_val) != T_STR) goto print_plain_object;
+  
+  toff = vstr(js, tag_val, &tlen);
+  tag_str = (const char *) &js->mem[toff];
+  is_map = (tlen == 3 && memcmp(tag_str, "Map", 3) == 0);
+  is_set = (tlen == 3 && memcmp(tag_str, "Set", 3) == 0);
+  
+  if (is_map) {
+    jsoff_t map_off = lkp(js, obj, "__map", 5);
+    if (map_off == 0) goto print_tagged_object;
+    
+    jsval_t map_val = resolveprop(js, mkval(T_PROP, map_off));
+    if (vtype(map_val) != T_NUM) goto print_tagged_object;
+    
+    map_entry_t **map_ptr = (map_entry_t**)(size_t)vdata(map_val);
+    n += cpy(buf + n, len - n, "Map(", 4);
+    
+    unsigned int count = 0;
+    if (map_ptr && *map_ptr) count = HASH_COUNT(*map_ptr);
+    n += (size_t) snprintf(buf + n, len - n, "%u", count);
+    n += cpy(buf + n, len - n, ") ", 2);
+    
+    if (count == 0) {
+      n += cpy(buf + n, len - n, "{}", 2);
     } else {
       n += cpy(buf + n, len - n, "{\n", 2);
+      stringify_indent++;
+      bool first = true;
+      if (map_ptr && *map_ptr) {
+        map_entry_t *entry, *tmp;
+        HASH_ITER(hh, *map_ptr, entry, tmp) {
+          if (!first) n += cpy(buf + n, len - n, ",\n", 2);
+          first = false;
+          n += add_indent(buf + n, len - n, stringify_indent);
+          
+          size_t key_len = strlen(entry->key);
+          n += cpy(buf + n, len - n, "'", 1);
+          n += cpy(buf + n, len - n, entry->key, key_len);
+          n += cpy(buf + n, len - n, "'", 1);
+          n += cpy(buf + n, len - n, " => ", 4);
+          n += tostr(js, entry->value, buf + n, len - n);
+        }
+      }
+      stringify_indent--;
+      n += cpy(buf + n, len - n, "\n", 1);
+      n += add_indent(buf + n, len - n, stringify_indent);
+      n += cpy(buf + n, len - n, "}", 1);
     }
-  } else {
-    n += cpy(buf + n, len - n, "{\n", 2);
+    pop_stringify();
+    return n;
   }
+  
+  if (is_set) {
+    jsoff_t set_off = lkp(js, obj, "__set", 5);
+    if (set_off == 0) goto print_tagged_object;
+    
+    jsval_t set_val = resolveprop(js, mkval(T_PROP, set_off));
+    if (vtype(set_val) != T_NUM) goto print_tagged_object;
+    
+    set_entry_t **set_ptr = (set_entry_t**)(size_t)vdata(set_val);
+    n += cpy(buf + n, len - n, "Set(", 4);
+    
+    unsigned int count = 0;
+    if (set_ptr && *set_ptr) count = HASH_COUNT(*set_ptr);
+    n += (size_t) snprintf(buf + n, len - n, "%u", count);
+    n += cpy(buf + n, len - n, ") ", 2);
+    
+    if (count == 0) {
+      n += cpy(buf + n, len - n, "{}", 2);
+    } else {
+      n += cpy(buf + n, len - n, "{\n", 2);
+      stringify_indent++;
+      bool first = true;
+      if (set_ptr && *set_ptr) {
+        set_entry_t *entry, *tmp;
+        HASH_ITER(hh, *set_ptr, entry, tmp) {
+          if (!first) n += cpy(buf + n, len - n, ",\n", 2);
+          first = false;
+          n += add_indent(buf + n, len - n, stringify_indent);
+          n += tostr(js, entry->value, buf + n, len - n);
+        }
+      }
+      stringify_indent--;
+      n += cpy(buf + n, len - n, "\n", 1);
+      n += add_indent(buf + n, len - n, stringify_indent);
+      n += cpy(buf + n, len - n, "}", 1);
+    }
+    pop_stringify();
+    return n;
+  }
+  
+print_tagged_object:
+  n += cpy(buf + n, len - n, "Object [", 8);
+  n += cpy(buf + n, len - n, (const char *) &js->mem[toff], tlen);
+  n += cpy(buf + n, len - n, "] {\n", 4);
+  goto continue_object_print;
+  
+print_plain_object:
+  n += cpy(buf + n, len - n, "{\n", 2);
+  
+continue_object_print:
   
   stringify_indent++;
   jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK);
@@ -11349,18 +11456,6 @@ static jsval_t js_export_stmt(struct js *js) {
   return js_mkerr(js, "Invalid export statement");
 }
 
-typedef struct map_entry {
-    char *key;
-    jsval_t value;
-    UT_hash_handle hh;
-} map_entry_t;
-
-typedef struct set_entry {
-    jsval_t value;
-    char *key;
-    UT_hash_handle hh;
-} set_entry_t;
-
 typedef struct weakmap_entry {
     jsval_t key_obj;
     jsval_t value;
@@ -11384,9 +11479,7 @@ static jsval_t builtin_Map(struct js *js, jsval_t *args, int nargs) {
   jsval_t map_obj = mkobj(js, 0);
   
   jsval_t map_proto = get_ctor_proto(js, "Map", 3);
-  if (vtype(map_proto) == T_OBJ) {
-    set_proto(js, map_obj, map_proto);
-  }
+  if (vtype(map_proto) == T_OBJ) set_proto(js, map_obj, map_proto);
   
   map_entry_t **map_head = (map_entry_t **)ANT_GC_MALLOC(sizeof(map_entry_t *));
   if (!map_head) return js_mkerr(js, "out of memory");
@@ -11396,6 +11489,36 @@ static jsval_t builtin_Map(struct js *js, jsval_t *args, int nargs) {
   jsval_t map_key = js_mkstr(js, "__map", 5);
   setprop(js, map_obj, map_key, map_ptr);
   
+  if (nargs == 0 || vtype(args[0]) != T_ARR) return map_obj;
+  
+  jsval_t iterable = args[0];
+  jsoff_t length = arr_length(js, iterable);
+  
+  for (jsoff_t i = 0; i < length; i++) {
+    jsval_t entry = arr_get(js, iterable, i);
+    if (vtype(entry) != T_ARR) continue;
+    
+    jsoff_t entry_len = arr_length(js, entry);
+    if (entry_len < 2) continue;
+    
+    jsval_t key = arr_get(js, entry, 0);
+    jsval_t value = arr_get(js, entry, 1);
+    const char *key_str = jsval_to_key(js, key);
+    
+    map_entry_t *map_entry;
+    HASH_FIND_STR(*map_head, key_str, map_entry);
+    if (map_entry) {
+      map_entry->value = value;
+      continue;
+    }
+    
+    map_entry = (map_entry_t *)ANT_GC_MALLOC(sizeof(map_entry_t));
+    if (!map_entry) return js_mkerr(js, "out of memory");
+    map_entry->key = strdup(key_str);
+    map_entry->value = value;
+    HASH_ADD_STR(*map_head, key, map_entry);
+  }
+  
   return map_obj;
 }
 
@@ -11403,9 +11526,7 @@ static jsval_t builtin_Set(struct js *js, jsval_t *args, int nargs) {
   jsval_t set_obj = mkobj(js, 0);
   
   jsval_t set_proto_val = get_ctor_proto(js, "Set", 3);
-  if (vtype(set_proto_val) == T_OBJ) {
-    set_proto(js, set_obj, set_proto_val);
-  }
+  if (vtype(set_proto_val) == T_OBJ) set_proto(js, set_obj, set_proto_val);
   
   set_entry_t **set_head = (set_entry_t **)ANT_GC_MALLOC(sizeof(set_entry_t *));
   if (!set_head) return js_mkerr(js, "out of memory");
@@ -11414,6 +11535,26 @@ static jsval_t builtin_Set(struct js *js, jsval_t *args, int nargs) {
   jsval_t set_ptr = mkval(T_NUM, (size_t)set_head);
   jsval_t set_key = js_mkstr(js, "__set", 5);
   setprop(js, set_obj, set_key, set_ptr);
+  
+  if (nargs == 0 || vtype(args[0]) != T_ARR) return set_obj;
+  
+  jsval_t iterable = args[0];
+  jsoff_t length = arr_length(js, iterable);
+  
+  for (jsoff_t i = 0; i < length; i++) {
+    jsval_t value = arr_get(js, iterable, i);
+    const char *key_str = jsval_to_key(js, value);
+    
+    set_entry_t *entry;
+    HASH_FIND_STR(*set_head, key_str, entry);
+    if (entry) continue;
+    
+    entry = (set_entry_t *)ANT_GC_MALLOC(sizeof(set_entry_t));
+    if (!entry) return js_mkerr(js, "out of memory");
+    entry->value = value;
+    entry->key = strdup(key_str);
+    HASH_ADD_KEYPTR(hh, *set_head, entry->key, strlen(entry->key), entry);
+  }
   
   return set_obj;
 }
@@ -11638,9 +11779,7 @@ static jsval_t builtin_WeakMap(struct js *js, jsval_t *args, int nargs) {
   jsval_t wm_obj = mkobj(js, 0);
   
   jsval_t wm_proto = get_ctor_proto(js, "WeakMap", 7);
-  if (vtype(wm_proto) == T_OBJ) {
-    set_proto(js, wm_obj, wm_proto);
-  }
+  if (vtype(wm_proto) == T_OBJ) set_proto(js, wm_obj, wm_proto);
   
   weakmap_entry_t **wm_head = (weakmap_entry_t **)ANT_GC_MALLOC(sizeof(weakmap_entry_t *));
   if (!wm_head) return js_mkerr(js, "out of memory");
@@ -11650,6 +11789,37 @@ static jsval_t builtin_WeakMap(struct js *js, jsval_t *args, int nargs) {
   jsval_t wm_key = js_mkstr(js, "__weakmap", 9);
   setprop(js, wm_obj, wm_key, wm_ptr);
   
+  if (nargs == 0 || vtype(args[0]) != T_ARR) return wm_obj;
+  
+  jsval_t iterable = args[0];
+  jsoff_t length = arr_length(js, iterable);
+  
+  for (jsoff_t i = 0; i < length; i++) {
+    jsval_t entry = arr_get(js, iterable, i);
+    if (vtype(entry) != T_ARR) continue;
+    
+    jsoff_t entry_len = arr_length(js, entry);
+    if (entry_len < 2) continue;
+    
+    jsval_t key = arr_get(js, entry, 0);
+    jsval_t value = arr_get(js, entry, 1);
+    
+    if (vtype(key) != T_OBJ) return js_mkerr(js, "WeakMap key must be an object");
+    
+    weakmap_entry_t *wm_entry;
+    HASH_FIND(hh, *wm_head, &key, sizeof(jsval_t), wm_entry);
+    if (wm_entry) {
+      wm_entry->value = value;
+      continue;
+    }
+    
+    wm_entry = (weakmap_entry_t *)ANT_GC_MALLOC(sizeof(weakmap_entry_t));
+    if (!wm_entry) return js_mkerr(js, "out of memory");
+    wm_entry->key_obj = key;
+    wm_entry->value = value;
+    HASH_ADD(hh, *wm_head, key_obj, sizeof(jsval_t), wm_entry);
+  }
+  
   return wm_obj;
 }
 
@@ -11657,9 +11827,7 @@ static jsval_t builtin_WeakSet(struct js *js, jsval_t *args, int nargs) {
   jsval_t ws_obj = mkobj(js, 0);
   
   jsval_t ws_proto = get_ctor_proto(js, "WeakSet", 7);
-  if (vtype(ws_proto) == T_OBJ) {
-    set_proto(js, ws_obj, ws_proto);
-  }
+  if (vtype(ws_proto) == T_OBJ) set_proto(js, ws_obj, ws_proto);
   
   weakset_entry_t **ws_head = (weakset_entry_t **)ANT_GC_MALLOC(sizeof(weakset_entry_t *));
   if (!ws_head) return js_mkerr(js, "out of memory");
@@ -11668,6 +11836,26 @@ static jsval_t builtin_WeakSet(struct js *js, jsval_t *args, int nargs) {
   jsval_t ws_ptr = mkval(T_NUM, (size_t)ws_head);
   jsval_t ws_key = js_mkstr(js, "__weakset", 9);
   setprop(js, ws_obj, ws_key, ws_ptr);
+  
+  if (nargs == 0 || vtype(args[0]) != T_ARR) return ws_obj;
+  
+  jsval_t iterable = args[0];
+  jsoff_t length = arr_length(js, iterable);
+  
+  for (jsoff_t i = 0; i < length; i++) {
+    jsval_t value = arr_get(js, iterable, i);
+    
+    if (vtype(value) != T_OBJ) return js_mkerr(js, "WeakSet value must be an object");
+    
+    weakset_entry_t *entry;
+    HASH_FIND(hh, *ws_head, &value, sizeof(jsval_t), entry);
+    if (entry) continue;
+    
+    entry = (weakset_entry_t *)ANT_GC_MALLOC(sizeof(weakset_entry_t));
+    if (!entry) return js_mkerr(js, "out of memory");
+    entry->value_obj = value;
+    HASH_ADD(hh, *ws_head, value_obj, sizeof(jsval_t), entry);
+  }
   
   return ws_obj;
 }
@@ -11917,6 +12105,7 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, map_proto, js_mkstr(js, "delete", 6), js_mkfun(map_delete));
   setprop(js, map_proto, js_mkstr(js, "clear", 5), js_mkfun(map_clear));
   setprop(js, map_proto, js_mkstr(js, "size", 4), js_mkfun(map_size));
+  setprop(js, map_proto, js_mkstr(js, "@@toStringTag", 13), js_mkstr(js, "Map", 3));
   
   jsval_t set_proto_obj = js_mkobj(js);
   set_proto(js, set_proto_obj, object_proto);
@@ -11925,6 +12114,7 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, set_proto_obj, js_mkstr(js, "delete", 6), js_mkfun(set_delete));
   setprop(js, set_proto_obj, js_mkstr(js, "clear", 5), js_mkfun(set_clear));
   setprop(js, set_proto_obj, js_mkstr(js, "size", 4), js_mkfun(set_size));
+  setprop(js, set_proto_obj, js_mkstr(js, "@@toStringTag", 13), js_mkstr(js, "Set", 3));
   
   jsval_t weakmap_proto = js_mkobj(js);
   set_proto(js, weakmap_proto, object_proto);

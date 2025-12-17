@@ -1,45 +1,58 @@
 import { open } from 'ant:fs';
-import { join } from 'ant:path';
+import { join, extname } from 'ant:path';
 import { Radix3 } from '../server/radix3';
 
 const router = new Radix3();
 
-router.get('*path', c => {
-  const path = c.params.path === '/' ? 'index.html' : c.params.path;
-  const file = open(join(import.meta.dirname, path));
+const validPaths = new Set();
+const invalidPaths = new Set();
 
-  if (path.endsWith('.html')) {
-    return c.res.html(file);
-  }
+const basePath = import.meta.dirname;
+const indexPath = join(basePath, 'index.html');
 
-  if (path.endsWith('.js')) {
-    return c.res.body(file, 200, 'application/javascript');
-  }
-
-  if (path.endsWith('.png')) {
-    return c.res.body(file, 200, 'image/png');
-  }
-
-  if (path.endsWith('.jpg') || path.endsWith('.jpeg')) {
-    return c.res.body(file, 200, 'image/jpeg');
-  }
-
-  if (path.endsWith('.gif')) {
-    return c.res.body(file, 200, 'image/gif');
-  }
-
-  if (path.endsWith('.svg')) {
-    return c.res.body(file, 200, 'image/svg+xml');
-  }
-
-  if (path.endsWith('.ico')) {
-    return c.res.body(file, 200, 'image/x-icon');
-  }
-
-  return c.res.body(file);
-});
+const mimeTypes = new Map([
+  ['.html', 'text/html'],
+  ['.js', 'application/javascript'],
+  ['.css', 'text/css'],
+  ['.json', 'application/json'],
+  ['.png', 'image/png'],
+  ['.jpg', 'image/jpeg'],
+  ['.jpeg', 'image/jpeg'],
+  ['.gif', 'image/gif'],
+  ['.svg', 'image/svg+xml'],
+  ['.ico', 'image/x-icon'],
+  ['.woff', 'font/woff'],
+  ['.woff2', 'font/woff2']
+]);
 
 router.get('/api/version', async c => c.res.json({ version: Ant.version }));
+
+router.get('*path', c => {
+  const reqPath = c.params.path;
+  if (reqPath === '/') return c.res.body(open(indexPath), 200, 'text/html');
+
+  const filePath = reqPath === '/' ? indexPath : join(basePath, reqPath);
+
+  if (validPaths.has(filePath)) {
+    const ext = extname(reqPath) || '.html';
+    return c.res.body(open(filePath), 200, mimeTypes.get(ext) ?? 'application/octet-stream');
+  }
+
+  if (invalidPaths.has(filePath)) {
+    return c.res.body(open(indexPath), 200, 'text/html');
+  }
+
+  try {
+    const file = open(filePath);
+    validPaths.add(filePath);
+
+    const ext = extname(reqPath) || '.html';
+    return c.res.body(file, 200, mimeTypes.get(ext) ?? 'application/octet-stream');
+  } catch {
+    invalidPaths.add(filePath);
+    return c.res.body(open(indexPath), 200, 'text/html');
+  }
+});
 
 router.printTree();
 console.log('');
