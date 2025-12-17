@@ -245,7 +245,7 @@ enum {
   TOK_DEFAULT, TOK_DELETE, TOK_DO, TOK_ELSE, TOK_EXPORT, TOK_FINALLY, TOK_FOR, TOK_FROM, TOK_FUNC,
   TOK_IF, TOK_IMPORT, TOK_IN, TOK_INSTANCEOF, TOK_LET, TOK_NEW, TOK_OF, TOK_RETURN, TOK_SWITCH,
   TOK_THIS, TOK_THROW, TOK_TRY, TOK_VAR, TOK_VOID, TOK_WHILE, TOK_WITH,
-  TOK_YIELD, TOK_UNDEF, TOK_NULL, TOK_TRUE, TOK_FALSE, TOK_AS, TOK_STATIC,
+  TOK_YIELD, TOK_UNDEF, TOK_NULL, TOK_TRUE, TOK_FALSE, TOK_AS, TOK_STATIC, TOK_WINDOW, TOK_GLOBAL_THIS,
   TOK_DOT = 100, TOK_CALL, TOK_BRACKET, TOK_POSTINC, TOK_POSTDEC, TOK_NOT, TOK_TILDA,
   TOK_TYPEOF, TOK_UPLUS, TOK_UMINUS, TOK_EXP, TOK_MUL, TOK_DIV, TOK_REM,
   TOK_OPTIONAL_CHAIN, TOK_REST,
@@ -2406,6 +2406,7 @@ static uint8_t parsekeyword(const char *buf, size_t len) {
     case 'd': if (streq("do", 2, buf, len)) return TOK_DO;  if (streq("default", 7, buf, len)) return TOK_DEFAULT; if (streq("delete", 6, buf, len)) return TOK_DELETE; break;
     case 'e': if (streq("else", 4, buf, len)) return TOK_ELSE; if (streq("export", 6, buf, len)) return TOK_EXPORT; break;
     case 'f': if (streq("for", 3, buf, len)) return TOK_FOR; if (streq("from", 4, buf, len)) return TOK_FROM; if (streq("function", 8, buf, len)) return TOK_FUNC; if (streq("finally", 7, buf, len)) return TOK_FINALLY; if (streq("false", 5, buf, len)) return TOK_FALSE; break;
+    case 'g': if (streq("globalThis", 10, buf, len)) return TOK_GLOBAL_THIS; break;
     case 'i': if (streq("if", 2, buf, len)) return TOK_IF; if (streq("import", 6, buf, len)) return TOK_IMPORT; if (streq("in", 2, buf, len)) return TOK_IN; if (streq("instanceof", 10, buf, len)) return TOK_INSTANCEOF; break;
     case 'l': if (streq("let", 3, buf, len)) return TOK_LET; break;
     case 'n': if (streq("new", 3, buf, len)) return TOK_NEW; if (streq("null", 4, buf, len)) return TOK_NULL; break;
@@ -2415,7 +2416,7 @@ static uint8_t parsekeyword(const char *buf, size_t len) {
     case 't': if (streq("try", 3, buf, len)) return TOK_TRY; if (streq("this", 4, buf, len)) return TOK_THIS; if (streq("throw", 5, buf, len)) return TOK_THROW; if (streq("true", 4, buf, len)) return TOK_TRUE; if (streq("typeof", 6, buf, len)) return TOK_TYPEOF; break;
     case 'u': if (streq("undefined", 9, buf, len)) return TOK_UNDEF; break;
     case 'v': if (streq("var", 3, buf, len)) return TOK_VAR; if (streq("void", 4, buf, len)) return TOK_VOID; break;
-    case 'w': if (streq("while", 5, buf, len)) return TOK_WHILE; if (streq("with", 4, buf, len)) return TOK_WITH; break;
+    case 'w': if (streq("while", 5, buf, len)) return TOK_WHILE; if (streq("with", 4, buf, len)) return TOK_WITH; if (streq("window", 6, buf, len)) return TOK_WINDOW; break;
     case 'y': if (streq("yield", 5, buf, len)) return TOK_YIELD; break;
   }
   return TOK_IDENTIFIER;
@@ -4715,6 +4716,9 @@ static jsval_t js_literal(struct js *js) {
     case TOK_TRUE:        return js_mktrue();
     case TOK_FALSE:       return js_mkfalse();
     case TOK_THIS:        return js->this_val;
+    
+    case TOK_WINDOW:
+    case TOK_GLOBAL_THIS: return js_glob(js);
     
     case TOK_TYPEOF:      return mkcoderef((jsoff_t) js->toff, (jsoff_t) js->tlen);
     case TOK_FROM:        return mkcoderef((jsoff_t) js->toff, (jsoff_t) js->tlen);

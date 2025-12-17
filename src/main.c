@@ -10,6 +10,10 @@
 #include "runtime.h"
 #include "repl.h"
 
+#ifndef ANT_SNAPSHOT_GENERATOR
+#include "snapshot.h"
+#endif
+
 #include "modules/builtin.h"
 #include "modules/buffer.h"
 #include "modules/atomics.h"
@@ -167,11 +171,7 @@ int main(int argc, char *argv[]) {
   }
   
   if (gct->count > 0) js_setgct(js, gct->ival[0]);  
-  
   ant_runtime_init(js);
-  
-  js_set(js, js_glob(js), "global", js_glob(js));
-  js_set(js, js_glob(js), "globalThis", js_glob(js));
 
   init_builtin_module();
   init_buffer_module();
@@ -192,6 +192,13 @@ int main(int argc, char *argv[]) {
   ant_register_library(path_library, "ant:path", "node:path", NULL);
   ant_register_library(fs_library, "ant:fs", "node:fs", NULL);
   ant_register_library(crypto_library, "ant:crypto", "node:crypto", NULL);
+  
+  #ifndef ANT_SNAPSHOT_GENERATOR
+    jsval_t snapshot_result = ant_load_snapshot(js);
+    if (js_type(snapshot_result) == JS_ERR) {
+      fprintf(stderr, "Warning: Failed to load snapshot: %s\n", js_str(js, snapshot_result));
+    }
+  #endif
 
   if (eval->count > 0) eval_code(js, eval, print);
   else if (repl_mode) ant_repl_run(); else {
