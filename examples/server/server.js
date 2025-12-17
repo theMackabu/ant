@@ -27,14 +27,9 @@ router.get('/get', c => {
   c.res.body(c.get('meow'));
 });
 
-router.get('/set/1', c => {
-  c.set('meow', '1');
-  c.res.body('meow = 1');
-});
-
-router.get('/set/2', c => {
-  c.set('meow', '2');
-  c.res.body('meow = 2');
+router.get('/set/*val', c => {
+  c.set('meow', c.params.val);
+  c.res.body(`meow = ${c.params.val}`);
 });
 
 router.get('/fs/meow', async c => {

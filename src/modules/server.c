@@ -20,6 +20,28 @@
 #define MAX_HEADER_NAME_LEN 128
 #define MAX_HEADER_VALUE_LEN 2048
 
+static char* strip_ansi(const char *str) {
+  if (!str) return NULL;
+  
+  size_t len = strlen(str);
+  char *result = (char *)malloc(len + 1);
+  if (!result) return NULL;
+  
+  size_t j = 0;
+  for (size_t i = 0; i < len; i++) {
+    if (str[i] == '\033' && i + 1 < len && str[i + 1] == '[') {
+      i += 2;
+      while (i < len && !((str[i] >= 'A' && str[i] <= 'Z') || (str[i] >= 'a' && str[i] <= 'z'))) {
+        i++;
+      }
+      continue;
+    }
+    result[j++] = str[i];
+  }
+  result[j] = '\0';
+  return result;
+}
+
 typedef struct {
   char name[MAX_HEADER_NAME_LEN];
   char value[MAX_HEADER_VALUE_LEN];
@@ -40,6 +62,7 @@ typedef struct response_ctx_s {
   char *content_type;
   int sent;
   int supports_gzip;
+  int should_free_body;
   UT_array *custom_headers;
   char *redirect_location;
   uv_tcp_t *client_handle;
@@ -49,6 +72,7 @@ typedef struct response_ctx_s {
 typedef struct http_server_s {
   struct js *js;
   jsval_t handler;
+  jsval_t store_obj;
   int port;
   uv_tcp_t server;
   uv_loop_t *loop;
@@ -317,16 +341,16 @@ static jsval_t js_set_prop(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkundef();
   
   jsval_t this_val = js_getthis(js);
-  jsval_t var_obj = js_get(js, this_val, "var");
+  jsval_t store_obj = js_get(js, this_val, "__store");
   
-  if (js_type(var_obj) == JS_UNDEF) {
+  if (js_type(store_obj) == JS_UNDEF) {
     return js_mkundef();
   }
   
   if (js_type(args[0]) == JS_STR) {
     size_t key_len;
     const char *key = js_getstr(js, args[0], &key_len);
-    js_set(js, var_obj, key, args[1]);
+    js_set(js, store_obj, key, args[1]);
   }
   
   return js_mkundef();
@@ -336,16 +360,16 @@ static jsval_t js_get_prop(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
   
   jsval_t this_val = js_getthis(js);
-  jsval_t var_obj = js_get(js, this_val, "var");
+  jsval_t store_obj = js_get(js, this_val, "__store");
   
-  if (js_type(var_obj) == JS_UNDEF) {
+  if (js_type(store_obj) == JS_UNDEF) {
     return js_mkundef();
   }
   
   if (js_type(args[0]) == JS_STR) {
     size_t key_len;
     const char *key = js_getstr(js, args[0], &key_len);
-    return js_get(js, var_obj, key);
+    return js_get(js, store_obj, key);
   }
   
   return js_mkundef();
@@ -678,6 +702,7 @@ static void handle_http_request(client_t *client, http_request_t *http_req) {
   res_ctx->content_type = "text/plain";
   res_ctx->sent = 0;
   res_ctx->supports_gzip = http_req->accepts_gzip;
+  res_ctx->should_free_body = 0;
   utarray_new(res_ctx->custom_headers, &custom_header_icd);
   res_ctx->redirect_location = NULL;
   res_ctx->client_handle = &client->handle;
@@ -710,10 +735,11 @@ static void handle_http_request(client_t *client, http_request_t *http_req) {
     
     js_set(server->js, ctx, "req", req);
     js_set(server->js, ctx, "res", res_obj);
-    js_set(server->js, ctx, "var", js_mkobj(server->js));
+    
     js_set(server->js, ctx, "set", js_mkfun(js_set_prop));
     js_set(server->js, ctx, "get", js_mkfun(js_get_prop));
-    
+    js_set(server->js, ctx, "__store", server->store_obj);
+
     jsval_t args[1] = {ctx};
     result = js_call(server->js, server->handler, args, 1);
     if (js_type(result) == JS_PROMISE) {
@@ -721,11 +747,20 @@ static void handle_http_request(client_t *client, http_request_t *http_req) {
     }
     
     if (js_type(result) == JS_ERR) {
-      fprintf(stderr, "Handler error: %s\n", js_str(server->js, result));
+      const char *error_msg = js_str(server->js, result);
+      fprintf(stderr, "Handler error: %s\n", error_msg);
+      
+      char *clean_error = strip_ansi(error_msg);
+      if (clean_error) {
+        res_ctx->body = clean_error;
+        res_ctx->body_len = strlen(clean_error);
+        res_ctx->should_free_body = 1;
+      } else {
+        res_ctx->body = (char *)error_msg;
+        res_ctx->body_len = strlen(error_msg);
+        res_ctx->should_free_body = 0;
+      }
       res_ctx->status = 500;
-      // pass error of throw in server into "internal server error" message
-      res_ctx->body = "internal server error\nant http v" ANT_VERSION " (" ANT_GIT_HASH ")";
-      res_ctx->body_len = strlen(res_ctx->body);
       res_ctx->content_type = "text/plain";
       res_ctx->sent = 1;
     } else if (!res_ctx->sent) {
@@ -770,6 +805,10 @@ static void check_pending_responses(http_server_t *server) {
       
       if (ctx->custom_headers) {
         utarray_free(ctx->custom_headers);
+      }
+      
+      if (ctx->should_free_body && ctx->body) {
+        free(ctx->body);
       }
       
       free(ctx);
@@ -834,6 +873,7 @@ static void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
         res_ctx->content_type = "text/plain";
         res_ctx->sent = 1;
         res_ctx->supports_gzip = 0;
+        res_ctx->should_free_body = 0;
         utarray_new(res_ctx->custom_headers, &custom_header_icd);
         res_ctx->redirect_location = NULL;
         res_ctx->client_handle = &client->handle;
@@ -901,7 +941,9 @@ jsval_t js_serve(struct js *js, jsval_t *args, int nargs) {
   
   server->js = js;
   server->port = port;
+  
   server->handler = (nargs >= 2) ? args[1] : js_mkundef();
+  server->store_obj = js_mkobj(js);
   
   if (!g_loop_initialized) {
     g_loop = uv_default_loop();
