@@ -137,7 +137,8 @@ void print_value_colored(const char *str, FILE *stream) {
     
     if (*p == '\'' || *p == '"') {
       if (!in_string) {
-        fprintf(stream, "%s%c", is_key ? JSON_KEY : JSON_STRING, *p);
+        bool use_key_color = is_key && bracket_depth > 0;
+        fprintf(stream, "%s%c", use_key_color ? JSON_KEY : JSON_STRING, *p);
         in_string = true;
         string_char = *p;
       } else if (*p == string_char) {
