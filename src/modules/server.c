@@ -4,6 +4,7 @@
 #include <signal.h>
 #include <unistd.h>
 #include <uv.h>
+#include <zlib.h>
 
 #include "ant.h"
 #include "config.h"
@@ -14,6 +15,7 @@
 
 #define MAX_WRITE_HANDLES 1000
 #define READ_BUFFER_SIZE 8192
+#define GZIP_MIN_SIZE 1024
 
 typedef struct response_ctx_s {
   int status;
@@ -21,6 +23,7 @@ typedef struct response_ctx_s {
   size_t body_len;
   char *content_type;
   int sent;
+  int supports_gzip;
   uv_tcp_t *client_handle;
   struct response_ctx_s *next;
 } response_ctx_t;
@@ -64,6 +67,46 @@ static void on_js_timer(uv_timer_t *handle) {
     int64_t next_timeout = get_next_timer_timeout();
     if (next_timeout <= 0) process_timers(js);
   }
+}
+
+static int parse_accept_encoding(const char *buffer, size_t len) {
+  const char *accept_encoding = strstr(buffer, "Accept-Encoding:");
+  if (!accept_encoding) accept_encoding = strstr(buffer, "accept-encoding:");
+  if (!accept_encoding) return 0;
+  
+  const char *line_end = strstr(accept_encoding, "\r\n");
+  if (!line_end) return 0;
+  
+  size_t header_len = line_end - accept_encoding;
+  if (header_len > 1024) return 0;
+  
+  char header[1024];
+  memcpy(header, accept_encoding, header_len);
+  header[header_len] = '\0';
+  
+  return (strstr(header, "gzip") != NULL);
+}
+
+static int should_compress_content_type(const char *content_type) {
+  if (!content_type) return 0;
+  
+  const char *compressible_types[] = {
+    "text/html",
+    "text/plain",
+    "text/css",
+    "text/javascript",
+    "application/javascript",
+    "application/json",
+    "application/xml",
+    "text/xml",
+    NULL
+  };
+  
+  for (int i = 0; compressible_types[i] != NULL; i++) {
+    if (strstr(content_type, compressible_types[i]) != NULL) return 1;
+  }
+  
+  return 0;
 }
 
 static const char* get_status_text(int status) {
@@ -146,6 +189,7 @@ typedef struct {
   char query[2048];
   char *body;
   size_t body_len;
+  int accepts_gzip;
 } http_request_t;
 
 static int parse_http_request(const char *buffer, size_t len, http_request_t *req) {
@@ -177,6 +221,8 @@ static int parse_http_request(const char *buffer, size_t len, http_request_t *re
     req->uri[uri_len] = '\0';
     req->query[0] = '\0';
   }
+  
+  req->accepts_gzip = parse_accept_encoding(buffer, len);
   
   const char *body_start = strstr(buffer, "\r\n\r\n");
   if (body_start) {
@@ -312,6 +358,38 @@ static jsval_t res_json(struct js *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
+static char* gzip_compress(const char *data, size_t data_len, size_t *compressed_len) {
+  z_stream stream;
+  memset(&stream, 0, sizeof(stream));
+  
+  if (deflateInit2(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
+    return NULL;
+  }
+  
+  size_t bound = deflateBound(&stream, data_len);
+  char *compressed = malloc(bound);
+  if (!compressed) {
+    deflateEnd(&stream);
+    return NULL;
+  }
+  
+  stream.next_in = (Bytef *)data;
+  stream.avail_in = data_len;
+  stream.next_out = (Bytef *)compressed;
+  stream.avail_out = bound;
+  
+  if (deflate(&stream, Z_FINISH) != Z_STREAM_END) {
+    free(compressed);
+    deflateEnd(&stream);
+    return NULL;
+  }
+  
+  *compressed_len = stream.total_out;
+  deflateEnd(&stream);
+  
+  return compressed;
+}
+
 static void on_write(uv_write_t *req, int status) {
   write_req_t *wr = (write_req_t *)req;
   if (status) fprintf(stderr, "Write error: %s\n", uv_strerror(status));
@@ -320,32 +398,62 @@ static void on_write(uv_write_t *req, int status) {
 }
 
 static void send_response(uv_stream_t *client, response_ctx_t *res_ctx) {
+  char *body_to_send = res_ctx->body;
+  size_t body_len_to_send = res_ctx->body_len;
+  char *compressed = NULL;
+  int use_gzip = 0;
+  
+  if (res_ctx->supports_gzip && 
+      res_ctx->body_len >= GZIP_MIN_SIZE &&
+      should_compress_content_type(res_ctx->content_type)) {
+    
+    size_t compressed_len;
+    compressed = gzip_compress(res_ctx->body, res_ctx->body_len, &compressed_len);
+    
+    if (compressed && compressed_len < res_ctx->body_len) {
+      body_to_send = compressed;
+      body_len_to_send = compressed_len;
+      use_gzip = 1;
+    } else if (compressed) {
+      free(compressed);
+      compressed = NULL;
+    }
+  }
+  
   char header[4096];
   int header_len = snprintf(header, sizeof(header),
     "HTTP/1.1 %d %s\r\n"
     "Content-Type: %s\r\n"
     "Content-Length: %zu\r\n"
+    "%s"
     "Connection: close\r\n"
     "\r\n",
     res_ctx->status,
     get_status_text(res_ctx->status),
     res_ctx->content_type ? res_ctx->content_type : "text/plain",
-    res_ctx->body_len
+    body_len_to_send,
+    use_gzip ? "Content-Encoding: gzip\r\n" : ""
   );
   
-  size_t total_len = header_len + res_ctx->body_len;
+  size_t total_len = header_len + body_len_to_send;
   
   write_req_t *write_req = malloc(sizeof(write_req_t));
-  if (!write_req) return;
+  if (!write_req) {
+    if (compressed) free(compressed);
+    return;
+  }
   
   char *response = malloc(total_len);
   if (!response) {
     free(write_req);
+    if (compressed) free(compressed);
     return;
   }
   
   memcpy(response, header, header_len);
-  if (res_ctx->body_len > 0) memcpy(response + header_len, res_ctx->body, res_ctx->body_len);
+  if (body_len_to_send > 0) memcpy(response + header_len, body_to_send, body_len_to_send);
+  
+  if (compressed) free(compressed);
   
   write_req->buf = uv_buf_init(response, total_len);
   uv_write((uv_write_t *)write_req, client, &write_req->buf, 1, on_write);
@@ -367,6 +475,7 @@ static void handle_http_request(client_t *client, http_request_t *http_req) {
   res_ctx->body_len = 0;
   res_ctx->content_type = "text/plain";
   res_ctx->sent = 0;
+  res_ctx->supports_gzip = http_req->accepts_gzip;
   res_ctx->client_handle = &client->handle;
   res_ctx->next = NULL;
   
@@ -501,6 +610,7 @@ static void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
         res_ctx->body_len = strlen(res_ctx->body);
         res_ctx->content_type = "text/plain";
         res_ctx->sent = 1;
+        res_ctx->supports_gzip = 0;
         res_ctx->client_handle = &client->handle;
         res_ctx->next = client->server->pending_responses;
         client->server->pending_responses = res_ctx;
