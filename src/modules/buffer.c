@@ -626,6 +626,26 @@ static jsval_t js_buffer_alloc(struct js *js, jsval_t *args, int nargs) {
   ArrayBufferData *buffer = create_array_buffer_data(size);
   if (!buffer) return js_mkerr(js, "Failed to allocate buffer");
   
+  memset(buffer->data, 0, size);
+  
+  jsval_t obj = create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, size, "Buffer");
+  js_set(js, obj, "toString", js_mkfun(js_buffer_toString));
+  js_set(js, obj, "toBase64", js_mkfun(js_buffer_toBase64));
+  js_set(js, obj, "write", js_mkfun(js_buffer_write));
+  
+  return obj;
+}
+
+// Buffer.allocUnsafe(size)
+static jsval_t js_buffer_allocUnsafe(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) {
+    return js_mkerr(js, "Buffer.allocUnsafe requires a size argument");
+  }
+  
+  size_t size = (size_t)js_getnum(args[0]);
+  ArrayBufferData *buffer = create_array_buffer_data(size);
+  if (!buffer) return js_mkerr(js, "Failed to allocate buffer");
+  
   jsval_t obj = create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, size, "Buffer");
   js_set(js, obj, "toString", js_mkfun(js_buffer_toString));
   js_set(js, obj, "toBase64", js_mkfun(js_buffer_toBase64));
@@ -794,6 +814,7 @@ void init_buffer_module() {
   jsval_t buffer_obj = js_mkobj(js);
   js_set(js, buffer_obj, "from", js_mkfun(js_buffer_from));
   js_set(js, buffer_obj, "alloc", js_mkfun(js_buffer_alloc));
+  js_set(js, buffer_obj, "allocUnsafe", js_mkfun(js_buffer_allocUnsafe));
   js_set(js, buffer_obj, "@@toStringTag", js_mkstr(js, "Buffer", 6));
   js_set(js, glob, "Buffer", buffer_obj);
 }

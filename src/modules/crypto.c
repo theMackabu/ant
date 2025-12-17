@@ -162,8 +162,7 @@ static jsval_t js_crypto_get_random_values(struct js *js, jsval_t *args, int nar
   return args[0];
 }
 
-void init_crypto_module() {
-  struct js *js = rt->js;
+static jsval_t create_crypto_obj(struct js *js) {
   jsval_t crypto_obj = js_mkobj(js);
   
   js_set(js, crypto_obj, "random", js_mkfun(js_crypto_random));
@@ -173,5 +172,24 @@ void init_crypto_module() {
   js_set(js, crypto_obj, "getRandomValues", js_mkfun(js_crypto_get_random_values));
   
   js_set(js, crypto_obj, "@@toStringTag", js_mkstr(js, "Crypto", 6));
+  return crypto_obj;
+}
+
+void init_crypto_module() {
+  struct js *js = rt->js;
+  jsval_t crypto_obj = create_crypto_obj(js);
   js_set(js, js_glob(js), "crypto", crypto_obj);
+}
+
+jsval_t crypto_library(struct js *js) {
+  jsval_t lib = js_mkobj(js);
+  jsval_t webcrypto = create_crypto_obj(js);
+  
+  js_set(js, lib, "webcrypto", webcrypto);
+  js_set(js, lib, "randomBytes", js_mkfun(js_crypto_random_bytes));
+  js_set(js, lib, "randomUUID", js_mkfun(js_crypto_random_uuid));
+  js_set(js, lib, "getRandomValues", js_mkfun(js_crypto_get_random_values));
+  js_set(js, lib, "@@toStringTag", js_mkstr(js, "crypto", 6));
+  
+  return lib;
 }

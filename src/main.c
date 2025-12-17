@@ -190,6 +190,7 @@ int main(int argc, char *argv[]) {
   ant_register_library("ant:shell", shell_library);
   ant_register_library("ant:path", path_library);
   ant_register_library("ant:ffi", ffi_library);
+  ant_register_library("node:crypto", crypto_library);
 
   if (eval->count > 0) eval_code(js, eval, print);
   else if (repl_mode) ant_repl_run(); else {
