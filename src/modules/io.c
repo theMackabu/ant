@@ -26,6 +26,7 @@ static void print_json_colored(const char *json, FILE *stream) {
   bool in_string = false;
   bool is_key = true;
   bool escape_next = false;
+  char string_char = 0;
   
   for (const char *p = json; *p; p++) {
     if (escape_next) {
@@ -40,13 +41,17 @@ static void print_json_colored(const char *json, FILE *stream) {
       continue;
     }
     
-    if (*p == '"') {
+    if (*p == '\'' || *p == '"') {
       if (!in_string) {
-        fprintf(stream, "%s\"", is_key ? JSON_KEY : JSON_STRING);
+        fprintf(stream, "%s%c", is_key ? JSON_KEY : JSON_STRING, *p);
         in_string = true;
-      } else {
-        fprintf(stream, "\"%s", ANSI_RESET);
+        string_char = *p;
+      } else if (*p == string_char) {
+        fprintf(stream, "%c%s", *p, ANSI_RESET);
         in_string = false;
+        string_char = 0;
+      } else {
+        fputc(*p, stream);
       }
       continue;
     }
@@ -115,6 +120,7 @@ void print_value_colored(const char *str, FILE *stream) {
   bool escape_next = false;
   bool is_key = true;
   int bracket_depth = 0;
+  char string_char = 0;
   
   for (const char *p = str; *p; p++) {
     if (escape_next) {
@@ -129,13 +135,17 @@ void print_value_colored(const char *str, FILE *stream) {
       continue;
     }
     
-    if (*p == '"') {
+    if (*p == '\'' || *p == '"') {
       if (!in_string) {
-        fprintf(stream, "%s\"", is_key ? JSON_KEY : JSON_STRING);
+        fprintf(stream, "%s%c", is_key ? JSON_KEY : JSON_STRING, *p);
         in_string = true;
-      } else {
-        fprintf(stream, "\"%s", ANSI_RESET);
+        string_char = *p;
+      } else if (*p == string_char) {
+        fprintf(stream, "%c%s", *p, ANSI_RESET);
         in_string = false;
+        string_char = 0;
+      } else {
+        fputc(*p, stream);
       }
       continue;
     }

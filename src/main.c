@@ -46,10 +46,15 @@ static void eval_code(struct js *js, struct arg_str *eval, struct arg_lit *print
     fprintf(stderr, "%s\n", js_str(js, result));
     js_result = EXIT_FAILURE;
   } else if (print->count > 0) {
-    const char *str = js_str(js, result);
-    if (str && strcmp(str, "undefined") != 0) {
-      print_value_colored(str, stdout);
-      printf("\n");
+    if (js_type(result) == JS_STR) {
+      char *str = js_getstr(js, result, NULL);
+      if (str) printf("%s\n", str);
+    } else {
+      const char *str = js_str(js, result);
+      if (str && strcmp(str, "undefined") != 0) {
+        print_value_colored(str, stdout);
+        printf("\n");
+      }
     }
   }
   

@@ -1115,17 +1115,17 @@ static size_t strstring(struct js *js, jsval_t value, char *buf, size_t len) {
   jsoff_t slen, off = vstr(js, value, &slen);
   const char *str = (const char *) &js->mem[off];
   size_t n = 0;
-  n += cpy(buf + n, len - n, "\"", 1);
+  n += cpy(buf + n, len - n, "'", 1);
   for (jsoff_t i = 0; i < slen && n < len - 1; i++) {
     char c = str[i];
     if (c == '\n') { n += cpy(buf + n, len - n, "\\n", 2); }
     else if (c == '\r') { n += cpy(buf + n, len - n, "\\r", 2); }
     else if (c == '\t') { n += cpy(buf + n, len - n, "\\t", 2); }
     else if (c == '\\') { n += cpy(buf + n, len - n, "\\\\", 2); }
-    else if (c == '"') { n += cpy(buf + n, len - n, "\\\"", 2); }
+    else if (c == '\'') { n += cpy(buf + n, len - n, "\\'", 2); }
     else { if (n < len) buf[n++] = c; }
   }
-  n += cpy(buf + n, len - n, "\"", 1);
+  n += cpy(buf + n, len - n, "'", 1);
   
   return n;
 }
@@ -7955,6 +7955,19 @@ static jsval_t builtin_object_keys(struct js *js, jsval_t *args, int nargs) {
     }
   }
   
+  for (jsoff_t i = 0; i < idx / 2; i++) {
+    jsoff_t j = idx - 1 - i;
+    char istr[16], jstr[16];
+    snprintf(istr, sizeof(istr), "%u", (unsigned) i);
+    snprintf(jstr, sizeof(jstr), "%u", (unsigned) j);
+    jsoff_t ioff = lkp(js, arr, istr, strlen(istr));
+    jsoff_t joff = lkp(js, arr, jstr, strlen(jstr));
+    jsval_t iv = loadval(js, ioff + sizeof(jsoff_t) * 2);
+    jsval_t jv = loadval(js, joff + sizeof(jsoff_t) * 2);
+    saveval(js, ioff + sizeof(jsoff_t) * 2, jv);
+    saveval(js, joff + sizeof(jsoff_t) * 2, iv);
+  }
+  
   jsval_t len_key = js_mkstr(js, "length", 6);
   jsval_t len_val = tov((double) idx);
   setprop(js, arr, len_key, len_val);
@@ -8006,6 +8019,91 @@ static jsval_t builtin_object_values(struct js *js, jsval_t *args, int nargs) {
       setprop(js, arr, idx_key, val);
       idx++;
     }
+  }
+  
+  for (jsoff_t i = 0; i < idx / 2; i++) {
+    jsoff_t j = idx - 1 - i;
+    char istr[16], jstr[16];
+    snprintf(istr, sizeof(istr), "%u", (unsigned) i);
+    snprintf(jstr, sizeof(jstr), "%u", (unsigned) j);
+    jsoff_t ioff = lkp(js, arr, istr, strlen(istr));
+    jsoff_t joff = lkp(js, arr, jstr, strlen(jstr));
+    jsval_t iv = loadval(js, ioff + sizeof(jsoff_t) * 2);
+    jsval_t jv = loadval(js, joff + sizeof(jsoff_t) * 2);
+    saveval(js, ioff + sizeof(jsoff_t) * 2, jv);
+    saveval(js, joff + sizeof(jsoff_t) * 2, iv);
+  }
+  
+  jsval_t len_key = js_mkstr(js, "length", 6);
+  jsval_t len_val = tov((double) idx);
+  setprop(js, arr, len_key, len_val);
+  return mkval(T_ARR, vdata(arr));
+}
+
+static jsval_t builtin_object_entries(struct js *js, jsval_t *args, int nargs) {
+  if (nargs == 0) return mkarr(js);
+  jsval_t obj = args[0];
+  
+  if (vtype(obj) != T_OBJ && vtype(obj) != T_ARR && vtype(obj) != T_FUNC) return mkarr(js);
+  if (vtype(obj) == T_FUNC) obj = mkval(T_OBJ, vdata(obj));
+  
+  jsval_t arr = mkarr(js);
+  jsoff_t idx = 0;
+  jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK);
+  
+  while (next < js->brk && next != 0) {
+    jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
+    jsoff_t klen = offtolen(loadoff(js, koff));
+    const char *key = (char *) &js->mem[koff + sizeof(koff)];
+    jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
+    
+    next = loadoff(js, next) & ~(3U | CONSTMASK);
+    
+    if (streq(key, klen, "__proto__", 9)) continue;
+    if (klen > 7 && memcmp(key, "__desc_", 7) == 0) continue;
+    
+    bool should_include = true;
+    char desc_key[128];
+    snprintf(desc_key, sizeof(desc_key), "__desc_%.*s", (int)klen, key);
+    jsoff_t desc_off = lkp(js, obj, desc_key, strlen(desc_key));
+    
+    if (desc_off != 0) {
+      jsval_t desc_obj = resolveprop(js, mkval(T_PROP, desc_off));
+      if (vtype(desc_obj) == T_OBJ) {
+        jsoff_t enum_off = lkp(js, desc_obj, "enumerable", 10);
+        if (enum_off != 0) {
+          jsval_t enum_val = resolveprop(js, mkval(T_PROP, enum_off));
+          should_include = js_truthy(js, enum_val);
+        }
+      }
+    }
+    
+    if (should_include) {
+      jsval_t pair = mkarr(js);
+      jsval_t key_val = js_mkstr(js, key, klen);
+      setprop(js, pair, js_mkstr(js, "0", 1), key_val);
+      setprop(js, pair, js_mkstr(js, "1", 1), val);
+      setprop(js, pair, js_mkstr(js, "length", 6), tov(2.0));
+      
+      char idxstr[16];
+      snprintf(idxstr, sizeof(idxstr), "%u", (unsigned) idx);
+      jsval_t idx_key = js_mkstr(js, idxstr, strlen(idxstr));
+      setprop(js, arr, idx_key, mkval(T_ARR, vdata(pair)));
+      idx++;
+    }
+  }
+  
+  for (jsoff_t i = 0; i < idx / 2; i++) {
+    jsoff_t j = idx - 1 - i;
+    char istr[16], jstr[16];
+    snprintf(istr, sizeof(istr), "%u", (unsigned) i);
+    snprintf(jstr, sizeof(jstr), "%u", (unsigned) j);
+    jsoff_t ioff = lkp(js, arr, istr, strlen(istr));
+    jsoff_t joff = lkp(js, arr, jstr, strlen(jstr));
+    jsval_t iv = loadval(js, ioff + sizeof(jsoff_t) * 2);
+    jsval_t jv = loadval(js, joff + sizeof(jsoff_t) * 2);
+    saveval(js, ioff + sizeof(jsoff_t) * 2, jv);
+    saveval(js, joff + sizeof(jsoff_t) * 2, iv);
   }
   
   jsval_t len_key = js_mkstr(js, "length", 6);
@@ -11392,6 +11490,7 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, obj_func_obj, js_mkstr(js, "__code", 6), js_mkstr(js, "__builtin_Object", 16));
   setprop(js, obj_func_obj, js_mkstr(js, "keys", 4), js_mkfun(builtin_object_keys));
   setprop(js, obj_func_obj, js_mkstr(js, "values", 6), js_mkfun(builtin_object_values));
+  setprop(js, obj_func_obj, js_mkstr(js, "entries", 7), js_mkfun(builtin_object_entries));
   setprop(js, obj_func_obj, js_mkstr(js, "getPrototypeOf", 14), js_mkfun(builtin_object_getPrototypeOf));
   setprop(js, obj_func_obj, js_mkstr(js, "setPrototypeOf", 14), js_mkfun(builtin_object_setPrototypeOf));
   setprop(js, obj_func_obj, js_mkstr(js, "create", 6), js_mkfun(builtin_object_create));
