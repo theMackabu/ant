@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <uv.h>
 #include <zlib.h>
+#include <utarray.h>
 
 #include "ant.h"
 #include "config.h"
@@ -16,6 +17,21 @@
 #define MAX_WRITE_HANDLES 1000
 #define READ_BUFFER_SIZE 8192
 #define GZIP_MIN_SIZE 1024
+#define MAX_HEADER_NAME_LEN 128
+#define MAX_HEADER_VALUE_LEN 2048
+
+typedef struct {
+  char name[MAX_HEADER_NAME_LEN];
+  char value[MAX_HEADER_VALUE_LEN];
+} http_header_t;
+
+typedef struct {
+  char *name;
+  char *value;
+} custom_header_t;
+
+UT_icd header_icd = {sizeof(http_header_t), NULL, NULL, NULL};
+UT_icd custom_header_icd = {sizeof(custom_header_t), NULL, NULL, NULL};
 
 typedef struct response_ctx_s {
   int status;
@@ -24,6 +40,8 @@ typedef struct response_ctx_s {
   char *content_type;
   int sent;
   int supports_gzip;
+  UT_array *custom_headers;
+  char *redirect_location;
   uv_tcp_t *client_handle;
   struct response_ctx_s *next;
 } response_ctx_t;
@@ -190,6 +208,7 @@ typedef struct {
   char *body;
   size_t body_len;
   int accepts_gzip;
+  UT_array *headers;
 } http_request_t;
 
 static int parse_http_request(const char *buffer, size_t len, http_request_t *req) {
@@ -222,6 +241,41 @@ static int parse_http_request(const char *buffer, size_t len, http_request_t *re
     req->query[0] = '\0';
   }
   
+  utarray_new(req->headers, &header_icd);
+  
+  const char *header_start = strstr(buffer, "\r\n");
+  if (header_start) {
+    header_start += 2;
+    
+    while (header_start && header_start < buffer + len) {
+      if (header_start[0] == '\r' && header_start[1] == '\n') break;
+      
+      const char *colon = strchr(header_start, ':');
+      const char *line_end = strstr(header_start, "\r\n");
+      
+      if (colon && line_end && colon < line_end) {
+        size_t name_len = colon - header_start;
+        if (name_len < MAX_HEADER_NAME_LEN) {
+          http_header_t header;
+          memcpy(header.name, header_start, name_len);
+          header.name[name_len] = '\0';
+          
+          const char *value_start = colon + 1;
+          while (*value_start == ' ') value_start++;
+          
+          size_t value_len = line_end - value_start;
+          if (value_len < MAX_HEADER_VALUE_LEN) {
+            memcpy(header.value, value_start, value_len);
+            header.value[value_len] = '\0';
+            utarray_push_back(req->headers, &header);
+          }
+        }
+        
+        header_start = line_end + 2;
+      } else break;
+    }
+  }
+  
   req->accepts_gzip = parse_accept_encoding(buffer, len);
   
   const char *body_start = strstr(buffer, "\r\n\r\n");
@@ -250,10 +304,96 @@ static void free_http_request(http_request_t *req) {
     free(req->body);
     req->body = NULL;
   }
+  if (req->headers) {
+    utarray_free(req->headers);
+    req->headers = NULL;
+  }
 }
 
 static void on_close(uv_handle_t *handle);
 static void send_response(uv_stream_t *client, response_ctx_t *res_ctx);
+
+static jsval_t js_set_prop(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 2) return js_mkundef();
+  
+  jsval_t this_val = js_getthis(js);
+  jsval_t var_obj = js_get(js, this_val, "var");
+  
+  if (js_type(var_obj) == JS_UNDEF) {
+    return js_mkundef();
+  }
+  
+  if (js_type(args[0]) == JS_STR) {
+    size_t key_len;
+    const char *key = js_getstr(js, args[0], &key_len);
+    js_set(js, var_obj, key, args[1]);
+  }
+  
+  return js_mkundef();
+}
+
+static jsval_t js_get_prop(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkundef();
+  
+  jsval_t this_val = js_getthis(js);
+  jsval_t var_obj = js_get(js, this_val, "var");
+  
+  if (js_type(var_obj) == JS_UNDEF) {
+    return js_mkundef();
+  }
+  
+  if (js_type(args[0]) == JS_STR) {
+    size_t key_len;
+    const char *key = js_getstr(js, args[0], &key_len);
+    return js_get(js, var_obj, key);
+  }
+  
+  return js_mkundef();
+}
+
+static jsval_t req_header(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkundef();
+  
+  jsval_t this_val = js_getthis(js);
+  jsval_t headers_val = js_get(js, this_val, "__headers");
+  if (js_type(headers_val) != JS_NUM) return js_mkundef();
+  
+  UT_array *headers = (UT_array *)(unsigned long)js_getnum(headers_val);
+  if (!headers) return js_mkundef();
+  
+  if (js_type(args[0]) != JS_STR) return js_mkundef();
+  size_t name_len;
+  const char *search_name = js_getstr(js, args[0], &name_len);
+  
+  http_header_t *header = NULL;
+  while ((header = (http_header_t*)utarray_next(headers, header))) {
+    if (strcasecmp(header->name, search_name) == 0) {
+      return js_mkstr(js, header->value, strlen(header->value));
+    }
+  }
+  
+  return js_mkundef();
+}
+
+static jsval_t res_header(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 2) return js_mkundef();
+  
+  jsval_t this_val = js_getthis(js);
+  jsval_t ctx_val = js_get(js, this_val, "__response_ctx");
+  if (js_type(ctx_val) != JS_NUM) return js_mkundef();
+  
+  response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
+  if (!ctx || !ctx->custom_headers) return js_mkundef();
+  
+  if (js_type(args[0]) == JS_STR && js_type(args[1]) == JS_STR) {
+    custom_header_t header;
+    header.name = js_getstr(js, args[0], NULL);
+    header.value = js_getstr(js, args[1], NULL);
+    utarray_push_back(ctx->custom_headers, &header);
+  }
+  
+  return js_mkundef();
+}
 
 static jsval_t res_status(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
@@ -358,6 +498,50 @@ static jsval_t res_json(struct js *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
+static jsval_t res_notFound(struct js *js, jsval_t *args, int nargs) {
+  jsval_t this_val = js_getthis(js);
+  jsval_t ctx_val = js_get(js, this_val, "__response_ctx");
+  if (js_type(ctx_val) != JS_NUM) return js_mkundef();
+  
+  response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
+  if (!ctx) return js_mkundef();
+  
+  ctx->status = 404;
+  ctx->body = "not found\nant http v" ANT_VERSION " (" ANT_GIT_HASH ")";
+  ctx->body_len = strlen(ctx->body);
+  ctx->content_type = "text/plain";
+  ctx->sent = 1;
+  
+  return js_mkundef();
+}
+
+static jsval_t res_redirect(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkundef();
+  
+  jsval_t this_val = js_getthis(js);
+  jsval_t ctx_val = js_get(js, this_val, "__response_ctx");
+  if (js_type(ctx_val) != JS_NUM) return js_mkundef();
+  
+  response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
+  if (!ctx) return js_mkundef();
+  
+  if (js_type(args[0]) == JS_STR) {
+    ctx->redirect_location = js_getstr(js, args[0], NULL);
+  }
+  
+  ctx->status = 302;
+  if (nargs >= 2 && js_type(args[1]) == JS_NUM) {
+    ctx->status = (int)js_getnum(args[1]);
+  }
+  
+  ctx->body = "";
+  ctx->body_len = 0;
+  ctx->content_type = "text/plain";
+  ctx->sent = 1;
+  
+  return js_mkundef();
+}
+
 static char* gzip_compress(const char *data, size_t data_len, size_t *compressed_len) {
   z_stream stream;
   memset(&stream, 0, sizeof(stream));
@@ -420,20 +604,38 @@ static void send_response(uv_stream_t *client, response_ctx_t *res_ctx) {
     }
   }
   
-  char header[4096];
+  char header[8192];
   int header_len = snprintf(header, sizeof(header),
     "HTTP/1.1 %d %s\r\n"
     "Content-Type: %s\r\n"
     "Content-Length: %zu\r\n"
     "%s"
-    "Connection: close\r\n"
-    "\r\n",
+    "%s",
     res_ctx->status,
     get_status_text(res_ctx->status),
     res_ctx->content_type ? res_ctx->content_type : "text/plain",
     body_len_to_send,
-    use_gzip ? "Content-Encoding: gzip\r\n" : ""
+    use_gzip ? "Content-Encoding: gzip\r\n" : "",
+    res_ctx->redirect_location ? "Location: " : ""
   );
+  
+  if (res_ctx->redirect_location) {
+    header_len += snprintf(header + header_len, sizeof(header) - header_len,
+      "%s\r\n", res_ctx->redirect_location);
+  }
+  
+  if (res_ctx->custom_headers) {
+    custom_header_t *custom_header = NULL;
+    while ((custom_header = (custom_header_t*)utarray_next(res_ctx->custom_headers, custom_header))) {
+      if (custom_header->name && custom_header->value) {
+        header_len += snprintf(header + header_len, sizeof(header) - header_len,
+          "%s: %s\r\n", custom_header->name, custom_header->value);
+      }
+    }
+  }
+  
+  header_len += snprintf(header + header_len, sizeof(header) - header_len,
+    "Connection: close\r\n\r\n");
   
   size_t total_len = header_len + body_len_to_send;
   
@@ -476,6 +678,8 @@ static void handle_http_request(client_t *client, http_request_t *http_req) {
   res_ctx->content_type = "text/plain";
   res_ctx->sent = 0;
   res_ctx->supports_gzip = http_req->accepts_gzip;
+  utarray_new(res_ctx->custom_headers, &custom_header_icd);
+  res_ctx->redirect_location = NULL;
   res_ctx->client_handle = &client->handle;
   res_ctx->next = NULL;
   
@@ -484,22 +688,37 @@ static void handle_http_request(client_t *client, http_request_t *http_req) {
   server->pending_responses = res_ctx;
   
   if (server->handler != 0 && js_type(server->handler) != JS_UNDEF) {
+    jsval_t ctx = js_mkobj(server->js);
+    
     jsval_t req = js_mkobj(server->js);
     js_set(server->js, req, "method", js_mkstr(server->js, http_req->method, strlen(http_req->method)));
     js_set(server->js, req, "uri", js_mkstr(server->js, http_req->uri, strlen(http_req->uri)));
     js_set(server->js, req, "query", js_mkstr(server->js, http_req->query, strlen(http_req->query)));
     js_set(server->js, req, "body", js_mkstr(server->js, http_req->body ? http_req->body : "", http_req->body ? http_req->body_len : 0));
+    js_set(server->js, req, "__headers", js_mknum((unsigned long)http_req->headers));
+    js_set(server->js, req, "header", js_mkfun(req_header));
     
     jsval_t res_obj = js_mkobj(server->js);
     js_set(server->js, res_obj, "__response_ctx", js_mknum((unsigned long)res_ctx));
+    js_set(server->js, res_obj, "header", js_mkfun(res_header));
     js_set(server->js, res_obj, "status", js_mkfun(res_status));
     js_set(server->js, res_obj, "body", js_mkfun(res_body));
     js_set(server->js, res_obj, "html", js_mkfun(res_html));
     js_set(server->js, res_obj, "json", js_mkfun(res_json));
+    js_set(server->js, res_obj, "notFound", js_mkfun(res_notFound));
+    js_set(server->js, res_obj, "redirect", js_mkfun(res_redirect));
     
-    jsval_t args[2] = {req, res_obj};
-    result = js_call(server->js, server->handler, args, 2);
-    if (js_type(result) == JS_PROMISE) return;
+    js_set(server->js, ctx, "req", req);
+    js_set(server->js, ctx, "res", res_obj);
+    js_set(server->js, ctx, "var", js_mkobj(server->js));
+    js_set(server->js, ctx, "set", js_mkfun(js_set_prop));
+    js_set(server->js, ctx, "get", js_mkfun(js_get_prop));
+    
+    jsval_t args[1] = {ctx};
+    result = js_call(server->js, server->handler, args, 1);
+    if (js_type(result) == JS_PROMISE) {
+      return;
+    }
     
     if (js_type(result) == JS_ERR) {
       fprintf(stderr, "Handler error: %s\n", js_str(server->js, result));
@@ -547,6 +766,10 @@ static void check_pending_responses(http_server_t *server) {
       if (!uv_is_closing((uv_handle_t *)ctx->client_handle)) {
         send_response((uv_stream_t *)ctx->client_handle, ctx);
         uv_close((uv_handle_t *)ctx->client_handle, on_close);
+      }
+      
+      if (ctx->custom_headers) {
+        utarray_free(ctx->custom_headers);
       }
       
       free(ctx);
@@ -611,6 +834,8 @@ static void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
         res_ctx->content_type = "text/plain";
         res_ctx->sent = 1;
         res_ctx->supports_gzip = 0;
+        utarray_new(res_ctx->custom_headers, &custom_header_icd);
+        res_ctx->redirect_location = NULL;
         res_ctx->client_handle = &client->handle;
         res_ctx->next = client->server->pending_responses;
         client->server->pending_responses = res_ctx;

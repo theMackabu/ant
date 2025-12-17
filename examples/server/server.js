@@ -9,7 +9,32 @@ const router = new Radix3();
 router.get('/', c => c.res.body(`Welcome to Ant ${Ant.version}!`));
 
 router.get('/meow', async c => {
-  return c.res.body(meow);
+  const userAgent = c.req.header('User-Agent');
+  c.res.header('X-Ant', 'meow');
+
+  return c.res.body(`${meow}\n\n${userAgent}`);
+});
+
+router.get('/echo', c =>
+  fetch('http://localhost:8000/meow').then(res => {
+    c.res.header('X-Ant', 'meow');
+    c.res.body(res.body);
+  })
+);
+
+router.get('/get', c => {
+  console.log(c.get('meow'));
+  c.res.body(c.get('meow'));
+});
+
+router.get('/set/1', c => {
+  c.set('meow', '1');
+  c.res.body('meow = 1');
+});
+
+router.get('/set/2', c => {
+  c.set('meow', '2');
+  c.res.body('meow = 2');
 });
 
 router.get('/fs/meow', async c => {
@@ -56,16 +81,16 @@ router.get('/files/*path', async c => {
 router.printTree();
 console.log('');
 
-async function handleRequest(req, res) {
-  console.log('request:', req.method, req.uri);
-  const result = router.lookup(req.uri, req.method);
+async function handleRequest(c) {
+  console.log('request:', c.req.method, c.req.uri);
+  const result = router.lookup(c.req.uri, c.req.method);
 
   if (result?.handler) {
-    const ctx = { req, res, params: result.params };
-    return await result.handler(ctx);
+    c.params = result.params;
+    return await result.handler(c);
   }
 
-  res.body('not found: ' + req.uri, 404);
+  c.res.body('not found: ' + c.req.uri, 404);
 }
 
 console.log('started on http://localhost:8000');

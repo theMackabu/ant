@@ -497,6 +497,16 @@ static jsval_t setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v);
 static void free_coroutine(coroutine_t *coro);
 static bool has_ready_coroutines(void);
 
+static size_t calculate_coro_stack_size(void) {
+  const char *env_stack = getenv("ANT_CORO_STACK_SIZE");
+  if (env_stack) {
+    size_t size = (size_t)atoi(env_stack) * 1024;
+    if (size >= 16 * 1024 && size <= 8 * 1024 * 1024) return size;
+  }
+  
+  return 128 * 1024;
+}
+
 static void mco_async_entry(mco_coro* mco) {
   async_exec_context_t *ctx = (async_exec_context_t *)mco_get_user_data(mco);
   
@@ -641,7 +651,8 @@ static jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t 
   ctx->has_error = false;
   ctx->coro = NULL;
   
-  mco_desc desc = mco_desc_init(mco_async_entry, 0);
+  size_t stack_size = calculate_coro_stack_size();
+  mco_desc desc = mco_desc_init(mco_async_entry, stack_size);
   desc.user_data = ctx;
   
   mco_coro* mco = NULL;
@@ -706,6 +717,7 @@ static jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t 
 static void free_coroutine(coroutine_t *coro) {
   if (coro) {
     if (coro->mco) {
+      if (mco_running() == coro->mco) fprintf(stderr, "WARNING: Attempting to free a running coroutine\n");
       mco_destroy(coro->mco);
       coro->mco = NULL;
     }

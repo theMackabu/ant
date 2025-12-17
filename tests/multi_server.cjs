@@ -1,17 +1,11 @@
 // Example: Running multiple HTTP servers on different ports
 
-function handler8000(req, res) {
-  return {
-    status: 200,
-    body: "Server on port 8000\nURI: " + req.uri
-  };
+function handler8000(c) {
+  c.res.body("Server on port 8000\nURI: " + c.req.uri);
 }
 
-function handler8001(req, res) {
-  return {
-    status: 200,
-    body: "Server on port 8001\nURI: " + req.uri
-  };
+function handler8001(c) {
+  c.res.body("Server on port 8001\nURI: " + c.req.uri);
 }
 
 console.log("Starting multiple HTTP servers...");

@@ -57,16 +57,16 @@ router.get('*path', c => {
 router.printTree();
 console.log('');
 
-async function handleRequest(req, res) {
-  console.log('request:', req.method, req.uri);
-  const result = router.lookup(req.uri, req.method);
+async function handleRequest(c) {
+  console.log('request:', c.req.method, c.req.uri);
+  const result = router.lookup(c.req.uri, c.req.method);
 
   if (result?.handler) {
-    const ctx = { req, res, params: result.params };
-    return await result.handler(ctx);
+    c.params = result.params;
+    return await result.handler(c);
   }
 
-  res.body('not found: ' + req.uri, 404);
+  c.res.body('not found: ' + c.req.uri, 404);
 }
 
 console.log('started on http://localhost:8000');
