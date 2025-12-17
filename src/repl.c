@@ -193,6 +193,9 @@ static char* read_line_with_history(history_t *hist, struct js *js) {
 void ant_repl_run() {
   struct js *js = rt->js;
   
+  js_set_filename(js, "[repl]");
+  js_setup_import_meta(js, "[repl]");
+  
   js_mkscope(js);
   js_protect_init_memory(js);
   

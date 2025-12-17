@@ -38,6 +38,8 @@ static void eval_code(struct js *js, struct arg_str *eval, struct arg_lit *print
   size_t len = strlen(script);
   
   js_set_filename(js, "[eval]");
+  js_setup_import_meta(js, "[eval]");
+
   js_mkscope(js);
   js_protect_init_memory(js);
   

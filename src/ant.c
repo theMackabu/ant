@@ -1015,6 +1015,7 @@ static size_t strdate(struct js *js, jsval_t obj, char *buf, size_t len) {
 
 static jsoff_t vstr(struct js *js, jsval_t value, jsoff_t *len);
 static size_t strstring(struct js *js, jsval_t value, char *buf, size_t len);
+static size_t strkey(struct js *js, jsval_t value, char *buf, size_t len);
 
 static bool is_valid_identifier(const char *str, jsoff_t slen) {
   if (slen == 0) return false;
@@ -1034,6 +1035,62 @@ static size_t strkey(struct js *js, jsval_t value, char *buf, size_t len) {
     return cpy(buf, len, str, slen);
   }
   return strstring(js, value, buf, len);
+}
+
+static size_t print_prototype(struct js *js, jsval_t proto_val, char *buf, size_t len, bool *first) {
+  size_t n = 0;
+  bool has_proto_props = false;
+  jsoff_t proto_next = loadoff(js, (jsoff_t) vdata(proto_val)) & ~(3U | CONSTMASK);
+  
+  while (proto_next < js->brk && proto_next != 0) {
+    jsoff_t pkoff = loadoff(js, proto_next + (jsoff_t) sizeof(proto_next));
+    jsoff_t pklen = offtolen(loadoff(js, pkoff));
+    const char *pkstr = (const char *) &js->mem[pkoff + sizeof(jsoff_t)];
+    
+    if (!streq(pkstr, pklen, "__proto__", 9) && !streq(pkstr, pklen, "constructor", 11) && !streq(pkstr, pklen, "@@toStringTag", 13) && !streq(pkstr, pklen, "__getter", 8)) {
+      has_proto_props = true;
+      break;
+    }
+    proto_next = loadoff(js, proto_next) & ~(3U | CONSTMASK);
+  }
+  
+  if (!*first) n += cpy(buf + n, len - n, ",\n", 2);
+  *first = false;
+  n += add_indent(buf + n, len - n, stringify_indent);
+  
+  if (has_proto_props) {
+    n += cpy(buf + n, len - n, "[Prototype]: {\n", 15);
+    stringify_indent++;
+    
+    bool proto_first = true;
+    proto_next = loadoff(js, (jsoff_t) vdata(proto_val)) & ~(3U | CONSTMASK);
+    while (proto_next < js->brk && proto_next != 0) {
+      jsoff_t pkoff = loadoff(js, proto_next + (jsoff_t) sizeof(proto_next));
+      jsval_t pval = loadval(js, proto_next + (jsoff_t) (sizeof(proto_next) + sizeof(pkoff)));
+      
+      jsoff_t pklen = offtolen(loadoff(js, pkoff));
+      const char *pkstr = (const char *) &js->mem[pkoff + sizeof(jsoff_t)];
+      
+      if (!streq(pkstr, pklen, "__proto__", 9) && !streq(pkstr, pklen, "constructor", 11) && !streq(pkstr, pklen, "@@toStringTag", 13) && !streq(pkstr, pklen, "__getter", 8)) {
+        if (!proto_first) n += cpy(buf + n, len - n, ",\n", 2);
+        proto_first = false;
+        n += add_indent(buf + n, len - n, stringify_indent);
+        n += strkey(js, mkval(T_STR, pkoff), buf + n, len - n);
+        n += cpy(buf + n, len - n, ": ", 2);
+        n += tostr(js, pval, buf + n, len - n);
+      }
+      proto_next = loadoff(js, proto_next) & ~(3U | CONSTMASK);
+    }
+    
+    stringify_indent--;
+    n += cpy(buf + n, len - n, "\n", 1);
+    n += add_indent(buf + n, len - n, stringify_indent);
+    n += cpy(buf + n, len - n, "}", 1);
+  } else {
+    n += cpy(buf + n, len - n, "[Prototype]: {}", 15);
+  }
+  
+  return n;
 }
 
 static size_t strobj(struct js *js, jsval_t obj, char *buf, size_t len) {
@@ -1084,6 +1141,12 @@ static size_t strobj(struct js *js, jsval_t obj, char *buf, size_t len) {
       n += tostr(js, val, buf + n, len - n);
     }
     next = loadoff(js, next) & ~(3U | CONSTMASK);
+  }
+  
+  jsoff_t proto_off = lkp(js, obj, "__proto__", 9);
+  if (proto_off != 0) {
+    jsval_t proto_val = resolveprop(js, mkval(T_PROP, proto_off));
+    if (vtype(proto_val) == T_OBJ) n += print_prototype(js, proto_val, buf + n, len - n, &first);
   }
   
   stringify_indent--;
@@ -1175,26 +1238,7 @@ static size_t strfunc_ctor(struct js *js, jsval_t func_obj, char *buf, size_t le
   jsoff_t proto_off = lkp(js, func_obj, "prototype", 9);
   if (proto_off != 0) {
     jsval_t proto_val = resolveprop(js, mkval(T_PROP, proto_off));
-    if (vtype(proto_val) == T_OBJ) {
-      jsoff_t proto_next = loadoff(js, (jsoff_t) vdata(proto_val)) & ~(3U | CONSTMASK);
-      while (proto_next < js->brk && proto_next != 0) {
-        jsoff_t pkoff = loadoff(js, proto_next + (jsoff_t) sizeof(proto_next));
-        jsval_t pval = loadval(js, proto_next + (jsoff_t) (sizeof(proto_next) + sizeof(pkoff)));
-        
-        jsoff_t pklen = offtolen(loadoff(js, pkoff));
-        const char *pkstr = (const char *) &js->mem[pkoff + sizeof(jsoff_t)];
-        
-        if (!is_internal_prop(pkstr, pklen) && !streq(pkstr, pklen, "name", 4) && !streq(pkstr, pklen, "@@toStringTag", 13) && !streq(pkstr, pklen, "__getter", 8)) {
-          if (!first) n += cpy(buf + n, len - n, ",\n", 2);
-          first = false;
-          n += add_indent(buf + n, len - n, stringify_indent);
-          n += strkey(js, mkval(T_STR, pkoff), buf + n, len - n);
-          n += cpy(buf + n, len - n, ": ", 2);
-          n += tostr(js, pval, buf + n, len - n);
-        }
-        proto_next = loadoff(js, proto_next) & ~(3U | CONSTMASK);
-      }
-    }
+    if (vtype(proto_val) == T_OBJ) n += print_prototype(js, proto_val, buf + n, len - n, &first);
   }
   
   stringify_indent--;
