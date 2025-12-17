@@ -767,7 +767,6 @@ static void scan_obj_refs(struct js *js, jsval_t obj) {
     mark_multiref(obj);
     return;
   }
-  mark_multiref(obj);
   
   if (stringify_depth >= MAX_STRINGIFY_DEPTH) return;
   stringify_stack[stringify_depth++] = obj;
@@ -788,7 +787,6 @@ static void scan_arr_refs(struct js *js, jsval_t obj) {
     mark_multiref(obj);
     return;
   }
-  mark_multiref(obj);
   
   if (stringify_depth >= MAX_STRINGIFY_DEPTH) return;
   stringify_stack[stringify_depth++] = obj;
@@ -811,7 +809,6 @@ static void scan_func_refs(struct js *js, jsval_t value) {
     mark_multiref(func_obj);
     return;
   }
-  mark_multiref(func_obj);
   
   if (stringify_depth >= MAX_STRINGIFY_DEPTH) return;
   stringify_stack[stringify_depth++] = func_obj;
@@ -4393,7 +4390,18 @@ static jsval_t js_obj_literal(struct js *js) {
       if (exe) {
         if (is_err(val)) return val;
         if (is_err(key)) return key;
-        jsval_t res = setprop(js, obj, key, resolveprop(js, val));
+        jsval_t resolved_val = resolveprop(js, val);
+        
+        if (vtype(resolved_val) == T_FUNC) {
+          jsval_t func_obj = mkval(T_OBJ, vdata(resolved_val));
+          jsoff_t name_prop = lkp(js, func_obj, "name", 4);
+          if (name_prop == 0) {
+            jsval_t name_key = js_mkstr(js, "name", 4);
+            if (!is_err(name_key)) setprop(js, func_obj, name_key, key);
+          }
+        }
+        
+        jsval_t res = setprop(js, obj, key, resolved_val);
         if (is_err(res)) return res;
       }
     }
