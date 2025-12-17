@@ -3,7 +3,6 @@
 #include <string.h>
 #include <ctype.h>
 
-#include "ant.h"
 #include "runtime.h"
 #include "modules/buffer.h"
 
@@ -194,6 +193,49 @@ static jsval_t js_arraybuffer_slice(struct js *js, jsval_t *args, int nargs) {
   return new_obj;
 }
 
+void sync_typedarray_indices(struct js *js, jsval_t obj, TypedArrayData *ta_data) {
+  uint8_t *data = ta_data->buffer->data + ta_data->byte_offset;
+  size_t element_size = get_element_size(ta_data->type);
+  
+  for (size_t i = 0; i < ta_data->length; i++) {
+    char key[16];
+    snprintf(key, sizeof(key), "%zu", i);
+    
+    double value = 0;
+    switch (ta_data->type) {
+      case TYPED_ARRAY_INT8:
+        value = (double)((int8_t*)data)[i];
+        break;
+      case TYPED_ARRAY_UINT8:
+      case TYPED_ARRAY_UINT8_CLAMPED:
+        value = (double)data[i];
+        break;
+      case TYPED_ARRAY_INT16:
+        value = (double)((int16_t*)(data))[i];
+        break;
+      case TYPED_ARRAY_UINT16:
+        value = (double)((uint16_t*)(data))[i];
+        break;
+      case TYPED_ARRAY_INT32:
+        value = (double)((int32_t*)(data))[i];
+        break;
+      case TYPED_ARRAY_UINT32:
+        value = (double)((uint32_t*)(data))[i];
+        break;
+      case TYPED_ARRAY_FLOAT32:
+        value = (double)((float*)(data))[i];
+        break;
+      case TYPED_ARRAY_FLOAT64:
+        value = ((double*)(data))[i];
+        break;
+      default:
+        value = (double)data[i * element_size];
+        break;
+    }
+    js_set(js, obj, key, js_mknum(value));
+  }
+}
+
 static jsval_t create_typed_array(struct js *js, TypedArrayType type, ArrayBufferData *buffer, size_t byte_offset, size_t length, const char *type_name) {
   TypedArrayData *ta_data = malloc(sizeof(TypedArrayData));
   if (!ta_data) return js_mkerr(js, "Failed to allocate TypedArray");
@@ -214,6 +256,8 @@ static jsval_t create_typed_array(struct js *js, TypedArrayType type, ArrayBuffe
   js_set(js, obj, "BYTES_PER_ELEMENT", js_mknum((double)element_size));
   js_set(js, obj, "slice", js_mkfun(js_typedarray_slice));
   js_set(js, obj, "subarray", js_mkfun(js_typedarray_subarray));
+  
+  sync_typedarray_indices(js, obj, ta_data);
   
   return obj;
 }

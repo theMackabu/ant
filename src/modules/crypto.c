@@ -7,6 +7,7 @@
 #include "ant.h"
 #include "runtime.h"
 #include "modules/crypto.h"
+#include "modules/buffer.h"
 
 static int ensure_crypto_init(struct js *js) {
   static int crypto_initialized = 0;
@@ -129,6 +130,38 @@ static jsval_t js_crypto_random_uuidv7(struct js *js, jsval_t *args, int nargs) 
   return js_mkstr(js, uuid_str, strlen(uuid_str));
 }
 
+// Ant.Crypto.getRandomValues(typedArray)
+static jsval_t js_crypto_get_random_values(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) {
+    return js_mkerr(js, "getRandomValues requires a TypedArray argument");
+  }
+  
+  if (ensure_crypto_init(js) < 0) {
+    return js_mkerr(js, "libsodium initialization failed");
+  }
+  
+  jsval_t ta_data_val = js_get(js, args[0], "_typedarray_data");
+  if (js_type(ta_data_val) != JS_NUM) {
+    return js_mkerr(js, "argument must be a TypedArray");
+  }
+  
+  TypedArrayData *ta_data = (TypedArrayData *)(uintptr_t)js_getnum(ta_data_val);
+  if (!ta_data || !ta_data->buffer) {
+    return js_mkerr(js, "invalid TypedArray");
+  }
+  
+  if (ta_data->byte_length > 65536) {
+    return js_mkerr(js, "TypedArray byte length exceeds 65536");
+  }
+  
+  uint8_t *ptr = ta_data->buffer->data + ta_data->byte_offset;
+  randombytes_buf(ptr, ta_data->byte_length);
+  
+  sync_typedarray_indices(js, args[0], ta_data);
+  
+  return args[0];
+}
+
 void init_crypto_module() {
   struct js *js = rt->js;
   jsval_t ant_obj = rt->ant_obj;
@@ -139,6 +172,7 @@ void init_crypto_module() {
   js_set(js, crypto_obj, "randomBytes", js_mkfun(js_crypto_random_bytes));
   js_set(js, crypto_obj, "randomUUID", js_mkfun(js_crypto_random_uuid));
   js_set(js, crypto_obj, "randomUUIDv7", js_mkfun(js_crypto_random_uuidv7));
+  js_set(js, crypto_obj, "getRandomValues", js_mkfun(js_crypto_get_random_values));
   
   js_set(js, crypto_obj, "@@toStringTag", js_mkstr(js, "Crypto", 6));
   js_set(js, ant_obj, "Crypto", crypto_obj);

@@ -8879,6 +8879,7 @@ static jsval_t builtin_string_replace(struct js *js, jsval_t *args, int nargs) {
   
   bool is_regex = false;
   bool global_flag = false;
+  bool is_func_replacement = (vtype(replacement) == T_FUNC);
   char pattern_buf[256];
   jsoff_t pattern_len = 0;
   
@@ -8909,9 +8910,14 @@ static jsval_t builtin_string_replace(struct js *js, jsval_t *args, int nargs) {
   }
   not_regex:
   
-  if (vtype(replacement) != T_STR) return str;
-  jsoff_t repl_len, repl_off = vstr(js, replacement, &repl_len);
-  const char *repl_ptr = (char *) &js->mem[repl_off];
+  jsoff_t repl_len = 0;
+  const char *repl_ptr = NULL;
+  if (!is_func_replacement) {
+    if (vtype(replacement) != T_STR) return str;
+    jsoff_t repl_off;
+    repl_off = vstr(js, replacement, &repl_len);
+    repl_ptr = (char *) &js->mem[repl_off];
+  }
   
   char result[4096];
   jsoff_t result_len = 0;
@@ -8946,19 +8952,46 @@ static jsval_t builtin_string_replace(struct js *js, jsval_t *args, int nargs) {
           result_len += before_len;
         }
         
-        if (result_len + repl_len < sizeof(result)) {
-          memcpy(result + result_len, repl_ptr, repl_len);
-          result_len += repl_len;
+        jsoff_t match_len = (jsoff_t)(match.rm_eo - match.rm_so);
+        
+        if (is_func_replacement) {
+          jsval_t match_str = js_mkstr(js, str_buf + pos + match.rm_so, match_len);
+          jsval_t cb_args[1] = { match_str };
+          jsval_t cb_result = js_call(js, replacement, cb_args, 1);
+          
+          if (vtype(cb_result) == T_ERR) {
+            regfree(&regex);
+            return cb_result;
+          }
+          
+          if (vtype(cb_result) == T_STR) {
+            jsoff_t cb_len, cb_off = vstr(js, cb_result, &cb_len);
+            if (result_len + cb_len < sizeof(result)) {
+              memcpy(result + result_len, &js->mem[cb_off], cb_len);
+              result_len += cb_len;
+            }
+          } else {
+            char numbuf[32];
+            size_t n = tostr(js, cb_result, numbuf, sizeof(numbuf));
+            if (result_len + n < sizeof(result)) {
+              memcpy(result + result_len, numbuf, n);
+              result_len += (jsoff_t)n;
+            }
+          }
+        } else {
+          if (result_len + repl_len < sizeof(result)) {
+            memcpy(result + result_len, repl_ptr, repl_len);
+            result_len += repl_len;
+          }
         }
         
-        jsoff_t match_len = (jsoff_t)match.rm_eo;
-        if (match_len == 0) {
+        if (match.rm_eo == 0) {
           if (pos < str_len && result_len < sizeof(result)) {
             result[result_len++] = str_buf[pos];
           }
           pos++;
         } else {
-          pos += match_len;
+          pos += (jsoff_t)match.rm_eo;
         }
         
         replaced = true;
@@ -8990,10 +9023,35 @@ static jsval_t builtin_string_replace(struct js *js, jsval_t *args, int nargs) {
           memcpy(result + result_len, str_ptr, i);
           result_len += i;
         }
-        if (result_len + repl_len < sizeof(result)) {
-          memcpy(result + result_len, repl_ptr, repl_len);
-          result_len += repl_len;
+        
+        if (is_func_replacement) {
+          jsval_t match_str = js_mkstr(js, search_ptr, search_len);
+          jsval_t cb_args[1] = { match_str };
+          jsval_t cb_result = js_call(js, replacement, cb_args, 1);
+          
+          if (vtype(cb_result) == T_ERR) return cb_result;
+          
+          if (vtype(cb_result) == T_STR) {
+            jsoff_t cb_len, cb_off = vstr(js, cb_result, &cb_len);
+            if (result_len + cb_len < sizeof(result)) {
+              memcpy(result + result_len, &js->mem[cb_off], cb_len);
+              result_len += cb_len;
+            }
+          } else {
+            char numbuf[32];
+            size_t n = tostr(js, cb_result, numbuf, sizeof(numbuf));
+            if (result_len + n < sizeof(result)) {
+              memcpy(result + result_len, numbuf, n);
+              result_len += (jsoff_t)n;
+            }
+          }
+        } else {
+          if (result_len + repl_len < sizeof(result)) {
+            memcpy(result + result_len, repl_ptr, repl_len);
+            result_len += repl_len;
+          }
         }
+        
         jsoff_t after_start = i + search_len;
         jsoff_t after_len = str_len - after_start;
         if (after_len > 0 && result_len + after_len < sizeof(result)) {
@@ -9266,13 +9324,73 @@ static jsval_t builtin_string_charAt(struct js *js, jsval_t *args, int nargs) {
 }
 
 static jsval_t builtin_number_toString(struct js *js, jsval_t *args, int nargs) {
-  (void) args; (void) nargs;
   jsval_t num = js->this_val;
   if (vtype(num) != T_NUM) return js_mkerr(js, "toString called on non-number");
   
-  char buf[64];
-  size_t len = strnum(num, buf, sizeof(buf));
-  return js_mkstr(js, buf, len);
+  int radix = 10;
+  if (nargs >= 1 && vtype(args[0]) == T_NUM) {
+    radix = (int)tod(args[0]);
+    if (radix < 2 || radix > 36) {
+      return js_mkerr(js, "radix must be between 2 and 36");
+    }
+  }
+  
+  if (radix == 10) {
+    char buf[64];
+    size_t len = strnum(num, buf, sizeof(buf));
+    return js_mkstr(js, buf, len);
+  }
+  
+  double val = tod(num);
+  
+  if (isnan(val)) return js_mkstr(js, "NaN", 3);
+  if (isinf(val)) return val > 0 ? js_mkstr(js, "Infinity", 8) : js_mkstr(js, "-Infinity", 9);
+  
+  char buf[128];
+  char *p = buf + sizeof(buf) - 1;
+  *p = '\0';
+  
+  bool negative = val < 0;
+  if (negative) val = -val;
+  
+  long long int_part = (long long)val;
+  double frac_part = val - (double)int_part;
+  
+  if (int_part == 0) {
+    *--p = '0';
+  } else {
+    while (int_part > 0 && p > buf) {
+      int digit = int_part % radix;
+      *--p = digit < 10 ? '0' + digit : 'a' + (digit - 10);
+      int_part /= radix;
+    }
+  }
+  
+  if (negative && p > buf) {
+    *--p = '-';
+  }
+  
+  size_t int_len = strlen(p);
+  
+  if (frac_part > 0.0000001) {
+    char frac_buf[64];
+    int frac_pos = 0;
+    frac_buf[frac_pos++] = '.';
+    
+    for (int i = 0; i < 16 && frac_part > 0.0000001 && frac_pos < 63; i++) {
+      frac_part *= radix;
+      int digit = (int)frac_part;
+      frac_buf[frac_pos++] = digit < 10 ? '0' + digit : 'a' + (digit - 10);
+      frac_part -= digit;
+    }
+    frac_buf[frac_pos] = '\0';
+    
+    char result[192];
+    snprintf(result, sizeof(result), "%s%s", p, frac_buf);
+    return js_mkstr(js, result, strlen(result));
+  }
+  
+  return js_mkstr(js, p, int_len);
 }
 
 static jsval_t builtin_number_toFixed(struct js *js, jsval_t *args, int nargs) {
