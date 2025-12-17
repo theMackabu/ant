@@ -5626,8 +5626,16 @@ static jsval_t js_func_decl_async(struct js *js) {
 
 static jsval_t js_block_or_stmt(struct js *js) {
   if (next(js) == TOK_LBRACE) return js_block(js, !(js->flags & F_NOEXEC));
+  uint8_t stmt_tok = js->tok;
   jsval_t res = resolveprop(js, js_stmt(js));
-  js->consumed = 0;
+  bool is_block_stmt = (
+    stmt_tok == TOK_FUNC || stmt_tok == TOK_CLASS || 
+    stmt_tok == TOK_IF || stmt_tok == TOK_WHILE || 
+    stmt_tok == TOK_DO || stmt_tok == TOK_FOR || 
+    stmt_tok == TOK_SWITCH || stmt_tok == TOK_TRY ||
+    stmt_tok == TOK_LBRACE || stmt_tok == TOK_ASYNC
+  );
+  if (!is_block_stmt) js->consumed = 0;
   return res;
 }
 
