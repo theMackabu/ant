@@ -1139,16 +1139,18 @@ static size_t strobj(struct js *js, jsval_t obj, char *buf, size_t len) {
       char desc_key[128];
       snprintf(desc_key, sizeof(desc_key), "__desc_%.*s", (int)klen, key);
       jsoff_t desc_off = lkp(js, obj, desc_key, strlen(desc_key));
-      if (desc_off != 0) {
-        jsval_t desc_obj = resolveprop(js, mkval(T_PROP, desc_off));
-        if (vtype(desc_obj) == T_OBJ) {
-          jsoff_t enumerable_off = lkp(js, desc_obj, "enumerable", 10);
-          if (enumerable_off != 0) {
-            jsval_t enumerable_val = resolveprop(js, mkval(T_PROP, enumerable_off));
-            if (!js_truthy(js, enumerable_val)) should_hide = true;
-          }
-        }
-      }
+      if (desc_off == 0) goto check_done;
+      
+      jsval_t desc_obj = resolveprop(js, mkval(T_PROP, desc_off));
+      if (vtype(desc_obj) != T_OBJ) goto check_done;
+      
+      jsoff_t enumerable_off = lkp(js, desc_obj, "enumerable", 10);
+      if (enumerable_off == 0) goto check_done;
+      
+      jsval_t enumerable_val = resolveprop(js, mkval(T_PROP, enumerable_off));
+      if (!js_truthy(js, enumerable_val)) should_hide = true;
+      
+      check_done:;
     }
     
     if (!should_hide) {
