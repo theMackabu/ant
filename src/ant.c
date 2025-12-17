@@ -4615,11 +4615,13 @@ static jsval_t js_literal(struct js *js) {
             body_result = js_assignment(js);
             if (is_err(body_result)) { js->flags = flags; return body_result; }
           } else {
+            body_start = js->toff;
             js->flags |= F_NOEXEC;
             js->consumed = 1;
             body_result = js_block(js, false);
             if (is_err(body_result)) { js->flags = flags; return body_result; }
-            if (next(js) == TOK_RBRACE) js->consumed = 1;
+            if (js->tok == TOK_RBRACE && js->consumed) {
+            } else if (next(js) == TOK_RBRACE) js->consumed = 1;
           }
           js->flags = flags;
           jsoff_t body_end = js->pos;
@@ -4629,19 +4631,19 @@ static jsval_t js_literal(struct js *js) {
           jsoff_t fn_pos = 0;
           memcpy(fn_str + fn_pos, param_buf, id_len + 2);
           fn_pos += id_len + 2;
-          fn_str[fn_pos++] = '{';
           if (is_expr) {
+            fn_str[fn_pos++] = '{';
             memcpy(fn_str + fn_pos, "return ", 7);
             fn_pos += 7;
             size_t body_len = body_end - body_start;
             memcpy(fn_str + fn_pos, &js->code[body_start], body_len);
             fn_pos += body_len;
+            fn_str[fn_pos++] = '}';
           } else {
-            size_t body_len = body_end - body_start - 2;
-            memcpy(fn_str + fn_pos, &js->code[body_start + 1], body_len);
+            size_t body_len = body_end - body_start;
+            memcpy(fn_str + fn_pos, &js->code[body_start], body_len);
             fn_pos += body_len;
           }
-          fn_str[fn_pos++] = '}';
           jsval_t str = js_mkstr(js, fn_str, fn_pos);
           free(fn_str);
           if (is_err(str)) return str;
@@ -4718,8 +4720,10 @@ static jsval_t js_arrow_func(struct js *js, jsoff_t params_start, jsoff_t params
       js->flags = flags;
       return body_result;
     }
-    if (next(js) == TOK_RBRACE) {
-      body_end_actual = js->toff;
+    if (js->tok == TOK_RBRACE && js->consumed) {
+      body_end_actual = js->pos;
+    } else if (next(js) == TOK_RBRACE) {
+      body_end_actual = js->pos;
       js->consumed = 1;
     } else {
       body_end_actual = js->pos;
@@ -4737,27 +4741,25 @@ static jsval_t js_arrow_func(struct js *js, jsoff_t params_start, jsoff_t params
   size_t param_len = params_end - params_start;
   memcpy(fn_str + fn_pos, &js->code[params_start], param_len);
   fn_pos += param_len;
-  
-  fn_str[fn_pos++] = '{';
-  
+
   if (is_expr) {
+    fn_str[fn_pos++] = '{';
     memcpy(fn_str + fn_pos, "return ", 7);
     fn_pos += 7;
     size_t body_len = body_end_actual - body_start;
     memcpy(fn_str + fn_pos, &js->code[body_start], body_len);
     fn_pos += body_len;
+    fn_str[fn_pos++] = '}';
   } else {
-    size_t body_len = body_end_actual - body_start - 1;
-    memcpy(fn_str + fn_pos, &js->code[body_start + 1], body_len);
+    size_t body_len = body_end_actual - body_start;
+    memcpy(fn_str + fn_pos, &js->code[body_start], body_len);
     fn_pos += body_len;
   }
-  
-  fn_str[fn_pos++] = '}';
-  
+
   jsval_t str = js_mkstr(js, fn_str, fn_pos);
   free(fn_str);
   if (is_err(str)) return str;
-  
+
   jsval_t func_obj = mkobj(js, 0);
   if (is_err(func_obj)) return func_obj;
   
@@ -5254,6 +5256,7 @@ static jsval_t js_assignment(struct js *js) {
         return body_result;
       }
     } else {
+      body_start = js->toff;
       js->flags |= F_NOEXEC;
       js->consumed = 1;
       body_result = js_block(js, false);
@@ -5261,34 +5264,36 @@ static jsval_t js_assignment(struct js *js) {
         js->flags = flags;
         return body_result;
       }
-      if (next(js) == TOK_RBRACE) js->consumed = 1;
+      if (js->tok == TOK_RBRACE && js->consumed) {
+      } else if (next(js) == TOK_RBRACE) {
+        js->consumed = 1;
+      }
     }
-    
+
     js->flags = flags;
     jsoff_t body_end = js->pos;
-    
+
     size_t fn_size = param_len + (body_end - body_start) + 64;
     char *fn_str = (char *) malloc(fn_size);
     if (!fn_str) return js_mkerr(js, "oom");
-    
+
     jsoff_t fn_pos = 0;
     memcpy(fn_str + fn_pos, param_buf, param_len + 2);
     fn_pos += param_len + 2;
-    fn_str[fn_pos++] = '{';
-    
+
     if (is_expr) {
+      fn_str[fn_pos++] = '{';
       memcpy(fn_str + fn_pos, "return ", 7);
       fn_pos += 7;
       size_t body_len = body_end - body_start;
       memcpy(fn_str + fn_pos, &js->code[body_start], body_len);
       fn_pos += body_len;
+      fn_str[fn_pos++] = '}';
     } else {
-      size_t body_len = body_end - body_start - 2;
-      memcpy(fn_str + fn_pos, &js->code[body_start + 1], body_len);
+      size_t body_len = body_end - body_start;
+      memcpy(fn_str + fn_pos, &js->code[body_start], body_len);
       fn_pos += body_len;
     }
-    
-    fn_str[fn_pos++] = '}';
     
     jsval_t str = js_mkstr(js, fn_str, fn_pos);
     free(fn_str);
