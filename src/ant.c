@@ -235,6 +235,7 @@ struct js {
   bool var_warning_shown; // flag to show var deprecation warning only once
   bool owns_mem;          // true if js owns the memory buffer (dynamic allocation)
   jsoff_t max_size;       // maximum allowed memory size (for dynamic growth)
+  bool had_newline;       // true if newline was crossed before current token
 };
 
 enum {
@@ -2356,14 +2357,20 @@ jsoff_t js_gc(struct js *js) {
   return freed;
 }
 
-static jsoff_t skiptonext(const char *code, jsoff_t len, jsoff_t n) {
+static jsoff_t skiptonext(const char *code, jsoff_t len, jsoff_t n, bool *had_newline) {
+  if (had_newline) *had_newline = false;
   while (n < len) {
     if (is_space(code[n])) {
+      if (had_newline && code[n] == '\n') *had_newline = true;
       n++;
     } else if (n + 1 < len && code[n] == '/' && code[n + 1] == '/') {
       for (n += 2; n < len && code[n] != '\n';) n++;
+      if (had_newline && n < len && code[n] == '\n') *had_newline = true;
     } else if (n + 3 < len && code[n] == '/' && code[n + 1] == '*') {
-      for (n += 4; n < len && (code[n - 2] != '*' || code[n - 1] != '/');) n++;
+      for (n += 4; n < len && (code[n - 2] != '*' || code[n - 1] != '/');) {
+        if (had_newline && code[n] == '\n') *had_newline = true;
+        n++;
+      }
     } else {
       break;
     }
@@ -2427,7 +2434,7 @@ static uint8_t next(struct js *js) {
   
   js->consumed = 0;
   js->tok = TOK_ERR;
-  js->toff = js->pos = skiptonext(js->code, js->clen, js->pos);
+  js->toff = js->pos = skiptonext(js->code, js->clen, js->pos, &js->had_newline);
   js->tlen = 0;
   
   const char *buf = js->code + js->toff;
@@ -2659,10 +2666,12 @@ static jsval_t js_block(struct js *js, bool create_scope) {
   while ((peek = next(js)) != TOK_EOF && peek != TOK_RBRACE && !is_err(res)) {
     uint8_t t = js->tok;
     res = js_stmt(js);
-    if (!is_err(res) && t != TOK_LBRACE && t != TOK_IF && t != TOK_WHILE &&
-        t != TOK_DO && t != TOK_FUNC && t != TOK_FOR && t != TOK_IMPORT && 
-        t != TOK_EXPORT && t != TOK_SEMICOLON &&
-        js->tok != TOK_SEMICOLON && js->tok != TOK_RBRACE && js->tok != TOK_EOF) {
+    bool is_block_tok = (t == TOK_LBRACE || t == TOK_IF || t == TOK_WHILE ||
+        t == TOK_DO || t == TOK_FUNC || t == TOK_FOR || t == TOK_IMPORT || 
+        t == TOK_EXPORT || t == TOK_SEMICOLON || t == TOK_SWITCH || 
+        t == TOK_TRY || t == TOK_CLASS || t == TOK_ASYNC);
+    bool asi_ok = js->had_newline || js->tok == TOK_SEMICOLON || js->tok == TOK_RBRACE || js->tok == TOK_EOF;
+    if (!is_err(res) && !is_block_tok && !asi_ok) {
       res = js_mkerr(js, "; expected");
       break;
     }
@@ -3244,14 +3253,14 @@ static jsval_t call_c(struct js *js,
 }
 
 static jsoff_t extract_default_param_value(const char *fn, jsoff_t fnlen, jsoff_t start_pos, jsoff_t *out_start, jsoff_t *out_len) {
-  jsoff_t after_ident = skiptonext(fn, fnlen, start_pos);
+  jsoff_t after_ident = skiptonext(fn, fnlen, start_pos, NULL);
   if (after_ident >= fnlen || fn[after_ident] != '=') {
     *out_start = 0;
     *out_len = 0;
     return after_ident;
   }
   
-  jsoff_t default_start = skiptonext(fn, fnlen, after_ident + 1);
+  jsoff_t default_start = skiptonext(fn, fnlen, after_ident + 1, NULL);
   jsoff_t default_len = 0;
   jsoff_t depth = 0;
   bool in_string = false;
@@ -3290,7 +3299,7 @@ static jsoff_t extract_default_param_value(const char *fn, jsoff_t fnlen, jsoff_
   
   *out_start = default_start;
   *out_len = default_len;
-  return skiptonext(fn, fnlen, default_start + default_len);
+  return skiptonext(fn, fnlen, default_start + default_len, NULL);
 }
 
 static jsval_t call_js(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope) {
@@ -3315,7 +3324,7 @@ static jsval_t call_js(struct js *js, const char *fn, jsoff_t fnlen, jsval_t clo
   
   jsval_t args[64];
   int argc = 0;
-  caller_pos = skiptonext(caller_code, caller_clen, caller_pos);
+  caller_pos = skiptonext(caller_code, caller_clen, caller_pos, NULL);
   while (caller_pos < caller_clen && caller_code[caller_pos] != ')' && argc < 64) {
     bool is_spread = (caller_code[caller_pos] == '.' && caller_pos + 2 < caller_clen &&
                       caller_code[caller_pos + 1] == '.' && caller_code[caller_pos + 2] == '.');
@@ -3332,9 +3341,9 @@ static jsval_t call_js(struct js *js, const char *fn, jsoff_t fnlen, jsval_t clo
     } else {
       args[argc++] = arg;
     }
-    caller_pos = skiptonext(caller_code, caller_clen, caller_pos);
+    caller_pos = skiptonext(caller_code, caller_clen, caller_pos, NULL);
     if (caller_pos < caller_clen && caller_code[caller_pos] == ',') caller_pos++;
-    caller_pos = skiptonext(caller_code, caller_clen, caller_pos);
+    caller_pos = skiptonext(caller_code, caller_clen, caller_pos, NULL);
   }
   js->pos = caller_pos;
   
@@ -3343,7 +3352,7 @@ static jsval_t call_js(struct js *js, const char *fn, jsoff_t fnlen, jsval_t clo
   jsoff_t rest_param_start = 0, rest_param_len = 0;
   
   while (fnpos < fnlen) {
-    fnpos = skiptonext(fn, fnlen, fnpos);
+    fnpos = skiptonext(fn, fnlen, fnpos, NULL);
     if (fnpos < fnlen && fn[fnpos] == ')') break;
     
     bool is_rest = false;
@@ -3351,7 +3360,7 @@ static jsval_t call_js(struct js *js, const char *fn, jsoff_t fnlen, jsval_t clo
       is_rest = true;
       has_rest = true;
       fnpos += 3;
-      fnpos = skiptonext(fn, fnlen, fnpos);
+      fnpos = skiptonext(fn, fnlen, fnpos, NULL);
     }
     
     jsoff_t identlen = 0;
@@ -3361,7 +3370,7 @@ static jsval_t call_js(struct js *js, const char *fn, jsoff_t fnlen, jsval_t clo
     if (is_rest) {
       rest_param_start = fnpos;
       rest_param_len = identlen;
-      fnpos = skiptonext(fn, fnlen, fnpos + identlen);
+      fnpos = skiptonext(fn, fnlen, fnpos + identlen, NULL);
       break;
     }
     
@@ -3410,7 +3419,7 @@ static jsval_t call_js(struct js *js, const char *fn, jsoff_t fnlen, jsval_t clo
   
   js->scope = function_scope;
   if (fnpos < fnlen && fn[fnpos] == ')') fnpos++;
-  fnpos = skiptonext(fn, fnlen, fnpos);
+  fnpos = skiptonext(fn, fnlen, fnpos, NULL);
   if (fnpos < fnlen && fn[fnpos] == '{') fnpos++;
   size_t n = fnlen - fnpos - 1U;
   js->this_val = target_this;
@@ -3505,7 +3514,7 @@ static jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnl
   jsoff_t rest_param_start = 0, rest_param_len = 0;
   
   while (fnpos < fnlen) {
-    fnpos = skiptonext(fn, fnlen, fnpos);
+    fnpos = skiptonext(fn, fnlen, fnpos, NULL);
     if (fnpos < fnlen && fn[fnpos] == ')') break;
     
     bool is_rest = false;
@@ -3513,7 +3522,7 @@ static jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnl
       is_rest = true;
       has_rest = true;
       fnpos += 3;
-      fnpos = skiptonext(fn, fnlen, fnpos);
+      fnpos = skiptonext(fn, fnlen, fnpos, NULL);
     }
     
     jsoff_t identlen = 0;
@@ -3523,7 +3532,7 @@ static jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnl
     if (is_rest) {
       rest_param_start = fnpos;
       rest_param_len = identlen;
-      fnpos = skiptonext(fn, fnlen, fnpos + identlen);
+      fnpos = skiptonext(fn, fnlen, fnpos + identlen, NULL);
       break;
     }
     
@@ -3575,7 +3584,7 @@ static jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnl
   }
   
   if (fnpos < fnlen && fn[fnpos] == ')') fnpos++;
-  fnpos = skiptonext(fn, fnlen, fnpos);
+  fnpos = skiptonext(fn, fnlen, fnpos, NULL);
   if (fnpos < fnlen && fn[fnpos] == '{') fnpos++;
   size_t body_len = fnlen - fnpos - 1;
   
@@ -3617,7 +3626,7 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
   
   js->code = &js->code[coderefoff(args)];
   js->clen = codereflen(args);
-  js->pos = skiptonext(js->code, js->clen, 0);
+  js->pos = skiptonext(js->code, js->clen, 0, NULL);
   uint8_t tok = js->tok, flags = js->flags;
   jsoff_t nogc = js->nogc;
   jsval_t res = js_mkundef();
@@ -5458,7 +5467,8 @@ static jsval_t js_decl(struct js *js, bool is_const) {
     }
     
     uint8_t decl_next = next(js);
-    if (decl_next == TOK_SEMICOLON || decl_next == TOK_EOF || decl_next == TOK_RBRACE) break;
+    bool asi = js->had_newline || decl_next == TOK_EOF || decl_next == TOK_RBRACE;
+    if (decl_next == TOK_SEMICOLON || asi) break;
     EXPECT(TOK_COMMA, );
   }
   return js_mkundef();
@@ -7236,7 +7246,8 @@ static jsval_t js_stmt(struct js *js) {
   
   if (!is_block_statement) {
     int next_tok = next(js);
-    bool missing_semicolon = next_tok != TOK_SEMICOLON && next_tok != TOK_EOF && next_tok != TOK_RBRACE;
+    bool asi_applies = js->had_newline || next_tok == TOK_EOF || next_tok == TOK_RBRACE;
+    bool missing_semicolon = next_tok != TOK_SEMICOLON && !asi_applies;
     if (missing_semicolon) return js_mkerr(js, "; expected");
     if (next_tok == TOK_SEMICOLON) js->consumed = 1;
   }
@@ -12077,7 +12088,7 @@ jsval_t js_call(struct js *js, jsval_t func, jsval_t *args, int nargs) {
     jsoff_t rest_param_start = 0, rest_param_len = 0;
     
     while (fnpos < fnlen) {
-      fnpos = skiptonext(fn, fnlen, fnpos);
+      fnpos = skiptonext(fn, fnlen, fnpos, NULL);
       if (fnpos < fnlen && fn[fnpos] == ')') break;
       
       bool is_rest = false;
@@ -12085,7 +12096,7 @@ jsval_t js_call(struct js *js, jsval_t func, jsval_t *args, int nargs) {
         is_rest = true;
         has_rest = true;
         fnpos += 3;
-        fnpos = skiptonext(fn, fnlen, fnpos);
+        fnpos = skiptonext(fn, fnlen, fnpos, NULL);
       }
       
       jsoff_t identlen = 0;
@@ -12095,14 +12106,14 @@ jsval_t js_call(struct js *js, jsval_t func, jsval_t *args, int nargs) {
       if (is_rest) {
         rest_param_start = fnpos;
         rest_param_len = identlen;
-        fnpos = skiptonext(fn, fnlen, fnpos + identlen);
+        fnpos = skiptonext(fn, fnlen, fnpos + identlen, NULL);
         break;
       }
       
       jsval_t v = arg_idx < nargs ? args[arg_idx] : js_mkundef();
       setprop(js, js->scope, js_mkstr(js, &fn[fnpos], identlen), v);
       arg_idx++;
-      fnpos = skiptonext(fn, fnlen, fnpos + identlen);
+      fnpos = skiptonext(fn, fnlen, fnpos + identlen, NULL);
       if (fnpos < fnlen && fn[fnpos] == ',') fnpos++;
     }
     
@@ -12126,7 +12137,7 @@ jsval_t js_call(struct js *js, jsval_t func, jsval_t *args, int nargs) {
     }
     
     if (fnpos < fnlen && fn[fnpos] == ')') fnpos++;
-    fnpos = skiptonext(fn, fnlen, fnpos);
+    fnpos = skiptonext(fn, fnlen, fnpos, NULL);
     
     if (fnpos < fnlen && fn[fnpos] == '{') fnpos++;
     size_t body_len = fnlen - fnpos - 1;
