@@ -18,6 +18,7 @@
 typedef struct response_ctx_s {
   int status;
   char *body;
+  size_t body_len;
   char *content_type;
   int sent;
   uv_tcp_t *client_handle;
@@ -236,7 +237,7 @@ static jsval_t res_body(struct js *js, jsval_t *args, int nargs) {
   if (!ctx) return js_mkundef();
   
   if (js_type(args[0]) == JS_STR) {
-    ctx->body = js_getstr(js, args[0], NULL);
+    ctx->body = js_getstr(js, args[0], &ctx->body_len);
   }
   
   if (nargs >= 2 && js_type(args[1]) == JS_NUM) {
@@ -265,7 +266,7 @@ static jsval_t res_html(struct js *js, jsval_t *args, int nargs) {
   if (!ctx) return js_mkundef();
   
   if (js_type(args[0]) == JS_STR) {
-    ctx->body = js_getstr(js, args[0], NULL);
+    ctx->body = js_getstr(js, args[0], &ctx->body_len);
   }
   
   if (nargs >= 2 && js_type(args[1]) == JS_NUM) {
@@ -292,11 +293,12 @@ static jsval_t res_json(struct js *js, jsval_t *args, int nargs) {
   jsval_t result = js_json_stringify(js, stringify_args, 1);
   
   if (js_type(result) == JS_STR) {
-    ctx->body = js_getstr(js, result, NULL);
+    ctx->body = js_getstr(js, result, &ctx->body_len);
   } else if (js_type(result) == JS_ERR) {
     const char *json_str = js_str(js, args[0]);
     if (json_str) {
       ctx->body = (char *)json_str;
+      ctx->body_len = strlen(json_str);
     }
   }
   
@@ -328,11 +330,10 @@ static void send_response(uv_stream_t *client, response_ctx_t *res_ctx) {
     res_ctx->status,
     get_status_text(res_ctx->status),
     res_ctx->content_type ? res_ctx->content_type : "text/plain",
-    res_ctx->body ? strlen(res_ctx->body) : 0
+    res_ctx->body_len
   );
   
-  size_t body_len = res_ctx->body ? strlen(res_ctx->body) : 0;
-  size_t total_len = header_len + body_len;
+  size_t total_len = header_len + res_ctx->body_len;
   
   write_req_t *write_req = malloc(sizeof(write_req_t));
   if (!write_req) return;
@@ -344,7 +345,7 @@ static void send_response(uv_stream_t *client, response_ctx_t *res_ctx) {
   }
   
   memcpy(response, header, header_len);
-  if (body_len > 0) memcpy(response + header_len, res_ctx->body, body_len);
+  if (res_ctx->body_len > 0) memcpy(response + header_len, res_ctx->body, res_ctx->body_len);
   
   write_req->buf = uv_buf_init(response, total_len);
   uv_write((uv_write_t *)write_req, client, &write_req->buf, 1, on_write);
@@ -363,6 +364,7 @@ static void handle_http_request(client_t *client, http_request_t *http_req) {
   
   res_ctx->status = 200;
   res_ctx->body = "";
+  res_ctx->body_len = 0;
   res_ctx->content_type = "text/plain";
   res_ctx->sent = 0;
   res_ctx->client_handle = &client->handle;
@@ -395,11 +397,13 @@ static void handle_http_request(client_t *client, http_request_t *http_req) {
       res_ctx->status = 500;
       // pass error of throw in server into "internal server error" message
       res_ctx->body = "internal server error\nant http v" ANT_VERSION " (" ANT_GIT_HASH ")";
+      res_ctx->body_len = strlen(res_ctx->body);
       res_ctx->content_type = "text/plain";
       res_ctx->sent = 1;
     } else if (!res_ctx->sent) {
       res_ctx->status = 404;
       res_ctx->body = "not found\nant http v" ANT_VERSION " (" ANT_GIT_HASH ")";
+      res_ctx->body_len = strlen(res_ctx->body);
       res_ctx->content_type = "text/plain";
       res_ctx->sent = 1;
     }
@@ -409,6 +413,7 @@ static void handle_http_request(client_t *client, http_request_t *http_req) {
   
   res_ctx->status = 404;
   res_ctx->body = "not found\nant http v" ANT_VERSION " (" ANT_GIT_HASH ")";
+  res_ctx->body_len = strlen(res_ctx->body);
   res_ctx->content_type = "text/plain";
   res_ctx->sent = 1;
 }
@@ -493,6 +498,7 @@ static void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
       if (res_ctx) {
         res_ctx->status = 400;
         res_ctx->body = "bad request\nant http v" ANT_VERSION " (" ANT_GIT_HASH ")";
+        res_ctx->body_len = strlen(res_ctx->body);
         res_ctx->content_type = "text/plain";
         res_ctx->sent = 1;
         res_ctx->client_handle = &client->handle;

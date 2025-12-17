@@ -17,7 +17,8 @@ typedef enum {
   FS_OP_UNLINK,
   FS_OP_MKDIR,
   FS_OP_RMDIR,
-  FS_OP_STAT
+  FS_OP_STAT,
+  FS_OP_READ_BYTES
 } fs_op_type_t;
 
 typedef struct fs_request_s {
@@ -70,7 +71,7 @@ static void complete_request(fs_request_t *req) {
     js_reject_promise(req->js, req->promise, err);
   } else {
     jsval_t result;
-    if (req->op_type == FS_OP_READ && req->data) {
+    if ((req->op_type == FS_OP_READ || req->op_type == FS_OP_READ_BYTES) && req->data) {
       result = js_mkstr(req->js, req->data, req->data_len);
     } else if (req->op_type == FS_OP_STAT) {
       result = js_mkundef();
@@ -136,7 +137,10 @@ static void on_open_for_read(uv_fs_t *uv_req) {
   size_t file_size = stat_req.statbuf.st_size;
   uv_fs_req_cleanup(&stat_req);
   
-  req->data = malloc(file_size + 1);
+  // For text reads (FS_OP_READ), allocate extra byte for null terminator
+  // For binary reads (FS_OP_READ_BYTES), allocate exact size
+  size_t alloc_size = (req->op_type == FS_OP_READ) ? file_size + 1 : file_size;
+  req->data = malloc(alloc_size);
   if (!req->data) {
     req->failed = 1;
     req->error_msg = strdup("Out of memory");
@@ -338,6 +342,58 @@ static jsval_t builtin_fs_readFileSync(struct js *js, jsval_t *args, int nargs) 
   return result;
 }
 
+static jsval_t builtin_fs_readBytesSync(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "readBytesSync() requires a path argument");
+  
+  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "readBytesSync() path must be a string");
+  
+  size_t path_len;
+  char *path = js_getstr(js, args[0], &path_len);
+  if (!path) return js_mkerr(js, "Failed to get path string");
+  
+  char *path_cstr = strndup(path, path_len);
+  if (!path_cstr) return js_mkerr(js, "Out of memory");
+  
+  FILE *file = fopen(path_cstr, "rb");
+  if (!file) {
+    char err_msg[256];
+    snprintf(err_msg, sizeof(err_msg), "Failed to open file: %s", strerror(errno));
+    free(path_cstr);
+    return js_mkerr(js, err_msg);
+  }
+  
+  fseek(file, 0, SEEK_END);
+  long file_size = ftell(file);
+  fseek(file, 0, SEEK_SET);
+  
+  if (file_size < 0) {
+    fclose(file);
+    free(path_cstr);
+    return js_mkerr(js, "Failed to get file size");
+  }
+  
+  char *data = malloc(file_size);
+  if (!data) {
+    fclose(file);
+    free(path_cstr);
+    return js_mkerr(js, "Out of memory");
+  }
+  
+  size_t bytes_read = fread(data, 1, file_size, file);
+  fclose(file);
+  free(path_cstr);
+  
+  if (bytes_read != (size_t)file_size) {
+    free(data);
+    return js_mkerr(js, "Failed to read entire file");
+  }
+  
+  jsval_t result = js_mkstr(js, data, file_size);
+  free(data);
+  
+  return result;
+}
+
 static jsval_t builtin_fs_readFile(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "readFile() requires a path argument");
   
@@ -354,6 +410,40 @@ static jsval_t builtin_fs_readFile(struct js *js, jsval_t *args, int nargs) {
   
   req->js = js;
   req->op_type = FS_OP_READ;
+  req->promise = js_mkpromise(js);
+  req->path = strndup(path, path_len);
+  req->uv_req.data = req;
+  
+  utarray_push_back(pending_requests, &req);
+  
+  int result = uv_fs_open(fs_loop, &req->uv_req, req->path, O_RDONLY, 0, on_open_for_read);
+  
+  if (result < 0) {
+    req->failed = 1;
+    req->error_msg = strdup(uv_strerror(result));
+    req->completed = 1;
+    complete_request(req);
+  }
+  
+  return req->promise;
+}
+
+static jsval_t builtin_fs_readBytes(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "readBytes() requires a path argument");
+  
+  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "readBytes() path must be a string");
+  
+  size_t path_len;
+  char *path = js_getstr(js, args[0], &path_len);
+  if (!path) return js_mkerr(js, "Failed to get path string");
+  
+  ensure_fs_loop();
+  
+  fs_request_t *req = calloc(1, sizeof(fs_request_t));
+  if (!req) return js_mkerr(js, "Out of memory");
+  
+  req->js = js;
+  req->op_type = FS_OP_READ_BYTES;
   req->promise = js_mkpromise(js);
   req->path = strndup(path, path_len);
   req->uv_req.data = req;
@@ -715,6 +805,8 @@ jsval_t fs_library(struct js *js) {
   
   js_set(js, lib, "readFile", js_mkfun(builtin_fs_readFile));
   js_set(js, lib, "readFileSync", js_mkfun(builtin_fs_readFileSync));
+  js_set(js, lib, "stream", js_mkfun(builtin_fs_readBytes));
+  js_set(js, lib, "open", js_mkfun(builtin_fs_readBytesSync));
   js_set(js, lib, "writeFile", js_mkfun(builtin_fs_writeFile));
   js_set(js, lib, "writeFileSync", js_mkfun(builtin_fs_writeFileSync));
   js_set(js, lib, "unlink", js_mkfun(builtin_fs_unlink));
