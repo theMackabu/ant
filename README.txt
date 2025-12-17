@@ -52,7 +52,7 @@ MODULES:
     - result.stdout       - Raw stdout
     - result.stderr       - Raw stderr
 
-  Cryptography (Ant.crypto):
+  Cryptography (crypto):
     - random()            - Cryptographically secure random number
     - randomBytes()       - Generate random bytes
     - randomUUID()        - Generate UUID v4

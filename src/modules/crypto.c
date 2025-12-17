@@ -40,7 +40,7 @@ int uuidv7_new(uint8_t *uuid_out) {
   return status;
 }
 
-// Ant.crypto.random()
+// crypto.random()
 static jsval_t js_crypto_random(struct js *js, jsval_t *args, int nargs) {
   (void) args;
   (void) nargs;
@@ -54,7 +54,7 @@ static jsval_t js_crypto_random(struct js *js, jsval_t *args, int nargs) {
   return js_mknum((double)value);
 }
 
-// Ant.Crypto.randomBytes(length)
+// crypto.randomBytes(length)
 static jsval_t js_crypto_random_bytes(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) {
     return js_mkerr(js, "randomBytes requires a length argument");
@@ -90,7 +90,7 @@ static jsval_t js_crypto_random_bytes(struct js *js, jsval_t *args, int nargs) {
   return array;
 }
 
-// Ant.Crypto.randomUUID()
+// crypto.randomUUID()
 static jsval_t js_crypto_random_uuid(struct js *js, jsval_t *args, int nargs) {
   (void) args;
   (void) nargs;
@@ -108,7 +108,7 @@ static jsval_t js_crypto_random_uuid(struct js *js, jsval_t *args, int nargs) {
   return js_mkstr(js, uuid_str, strlen(uuid_str));
 }
 
-// Ant.Crypto.randomUUIDv7()
+// crypto.randomUUIDv7()
 static jsval_t js_crypto_random_uuidv7(struct js *js, jsval_t *args, int nargs) {
   (void) args;
   (void) nargs;
@@ -130,7 +130,7 @@ static jsval_t js_crypto_random_uuidv7(struct js *js, jsval_t *args, int nargs) 
   return js_mkstr(js, uuid_str, strlen(uuid_str));
 }
 
-// Ant.Crypto.getRandomValues(typedArray)
+// crypto.getRandomValues(typedArray)
 static jsval_t js_crypto_get_random_values(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) {
     return js_mkerr(js, "getRandomValues requires a TypedArray argument");
@@ -164,8 +164,6 @@ static jsval_t js_crypto_get_random_values(struct js *js, jsval_t *args, int nar
 
 void init_crypto_module() {
   struct js *js = rt->js;
-  jsval_t ant_obj = rt->ant_obj;
-
   jsval_t crypto_obj = js_mkobj(js);
   
   js_set(js, crypto_obj, "random", js_mkfun(js_crypto_random));
@@ -175,6 +173,5 @@ void init_crypto_module() {
   js_set(js, crypto_obj, "getRandomValues", js_mkfun(js_crypto_get_random_values));
   
   js_set(js, crypto_obj, "@@toStringTag", js_mkstr(js, "Crypto", 6));
-  js_set(js, ant_obj, "Crypto", crypto_obj);
+  js_set(js, js_glob(js), "crypto", crypto_obj);
 }
-
