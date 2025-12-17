@@ -1131,7 +1131,27 @@ static size_t strobj(struct js *js, jsval_t obj, char *buf, size_t len) {
     jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
     jsoff_t klen = offtolen(loadoff(js, koff));
     const char *key = (char *) &js->mem[koff + sizeof(koff)];
-    if (!streq(key, klen, "__proto__", 9) && !streq(key, klen, "@@toStringTag", 13) && !streq(key, klen, "__getter", 8)) {
+    
+    bool is_desc = (klen > 7 && key[0] == '_' && key[1] == '_' && key[2] == 'd' && key[3] == 'e' && key[4] == 's' && key[5] == 'c' && key[6] == '_');
+    bool should_hide = streq(key, klen, "__proto__", 9) || streq(key, klen, "@@toStringTag", 13) || streq(key, klen, "__getter", 8) || is_desc;
+    
+    if (!should_hide) {
+      char desc_key[128];
+      snprintf(desc_key, sizeof(desc_key), "__desc_%.*s", (int)klen, key);
+      jsoff_t desc_off = lkp(js, obj, desc_key, strlen(desc_key));
+      if (desc_off != 0) {
+        jsval_t desc_obj = resolveprop(js, mkval(T_PROP, desc_off));
+        if (vtype(desc_obj) == T_OBJ) {
+          jsoff_t enumerable_off = lkp(js, desc_obj, "enumerable", 10);
+          if (enumerable_off != 0) {
+            jsval_t enumerable_val = resolveprop(js, mkval(T_PROP, enumerable_off));
+            if (!js_truthy(js, enumerable_val)) should_hide = true;
+          }
+        }
+      }
+    }
+    
+    if (!should_hide) {
       jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
       if (!first) n += cpy(buf + n, len - n, ",\n", 2);
       first = false;
@@ -2024,6 +2044,41 @@ static jsval_t mkprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v, bool is_
   invalidate_obj_cache(head);
   
   return mkentity(js, (b & ~(3U | CONSTMASK)) | T_PROP, buf, sizeof(buf));
+}
+
+static jsval_t setup_func_prototype(struct js *js, jsval_t func) {
+  jsval_t proto_obj = mkobj(js, 0);
+  if (is_err(proto_obj)) return proto_obj;
+  
+  jsval_t object_proto = get_ctor_proto(js, "Object", 6);
+  if (vtype(object_proto) == T_OBJ) {
+    set_proto(js, proto_obj, object_proto);
+  }
+  
+  jsval_t constructor_key = js_mkstr(js, "constructor", 11);
+  if (is_err(constructor_key)) return constructor_key;
+  
+  jsval_t res = mkprop(js, proto_obj, constructor_key, func, false);
+  if (is_err(res)) return res;
+  
+  jsval_t desc_key_str = js_mkstr(js, "__desc_constructor", 18);
+  if (is_err(desc_key_str)) return desc_key_str;
+  
+  jsval_t desc_obj = js_mkobj(js);
+  if (is_err(desc_obj)) return desc_obj;
+  
+  setprop(js, desc_obj, js_mkstr(js, "writable", 8), js_mktrue());
+  setprop(js, desc_obj, js_mkstr(js, "enumerable", 10), js_mkfalse());
+  setprop(js, desc_obj, js_mkstr(js, "configurable", 12), js_mktrue());
+  setprop(js, proto_obj, desc_key_str, desc_obj);
+  
+  jsval_t prototype_key = js_mkstr(js, "prototype", 9);
+  if (is_err(prototype_key)) return prototype_key;
+  
+  res = setprop(js, func, prototype_key, proto_obj);
+  if (is_err(res)) return res;
+  
+  return js_mkundef();
 }
 
 jsval_t js_setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v) {
@@ -4603,7 +4658,12 @@ static jsval_t js_func_literal(struct js *js, bool is_async) {
     if (is_err(res4)) return res4;
   }
   
-  return mkval(T_FUNC, (unsigned long) vdata(func_obj));
+  jsval_t func = mkval(T_FUNC, (unsigned long) vdata(func_obj));
+  
+  jsval_t proto_setup = setup_func_prototype(js, func);
+  if (is_err(proto_setup)) return proto_setup;
+  
+  return func;
 }
 
 #define RTL_BINOP(_f1, _f2, _cond)  \
@@ -5622,6 +5682,10 @@ static jsval_t js_func_decl(struct js *js) {
     if (is_err(res4)) return res4;
   }
   jsval_t func = mkval(T_FUNC, (unsigned long) vdata(func_obj));
+  
+  jsval_t proto_setup = setup_func_prototype(js, func);
+  if (is_err(proto_setup)) return proto_setup;
+  
   if (exe) {
     if (lkp(js, js->scope, name, nlen) > 0)
       return js_mkerr(js, "'%.*s' already declared", (int) nlen, name);
@@ -5680,6 +5744,10 @@ static jsval_t js_func_decl_async(struct js *js) {
     if (is_err(res4)) return res4;
   }
   jsval_t func = mkval(T_FUNC, (unsigned long) vdata(func_obj));
+  
+  jsval_t proto_setup = setup_func_prototype(js, func);
+  if (is_err(proto_setup)) return proto_setup;
+  
   if (exe) {
     if (lkp(js, js->scope, name, nlen) > 0)
       return js_mkerr(js, "'%.*s' already declared", (int) nlen, name);
@@ -5845,7 +5913,32 @@ static jsval_t js_for(struct js *js) {
         jsoff_t klen = offtolen(loadoff(js, koff));
         const char *key = (char *) &js->mem[koff + sizeof(koff)];
         
-        if (!streq(key, klen, "__proto__", 9)) {
+        bool should_skip = streq(key, klen, "__proto__", 9);
+        
+        if (!should_skip && klen > 7 && key[0] == '_' && key[1] == '_' && 
+            key[2] == 'd' && key[3] == 'e' && key[4] == 's' && key[5] == 'c' && key[6] == '_') {
+          should_skip = true;
+        }
+        
+        if (!should_skip) {
+          char desc_key[128];
+          snprintf(desc_key, sizeof(desc_key), "__desc_%.*s", (int)klen, key);
+          jsoff_t desc_off = lkp(js, iter_obj, desc_key, strlen(desc_key));
+          if (desc_off != 0) {
+            jsval_t desc_obj = resolveprop(js, mkval(T_PROP, desc_off));
+            if (vtype(desc_obj) == T_OBJ) {
+              jsoff_t enumerable_off = lkp(js, desc_obj, "enumerable", 10);
+              if (enumerable_off != 0) {
+                jsval_t enumerable_val = resolveprop(js, mkval(T_PROP, enumerable_off));
+                if (!js_truthy(js, enumerable_val)) {
+                  should_skip = true;
+                }
+              }
+            }
+          }
+        }
+        
+        if (!should_skip) {
           jsval_t key_str = js_mkstr(js, key, klen);
           
           const char *var_name = &js->code[var_name_off];
@@ -7422,7 +7515,12 @@ static jsval_t builtin_Function(struct js *js, jsval_t *args, int nargs) {
     res = setprop(js, func_obj, scope_key, js_glob(js));
     if (is_err(res)) return res;
     
-    return mkval(T_FUNC, (unsigned long) vdata(func_obj));
+    jsval_t func = mkval(T_FUNC, (unsigned long) vdata(func_obj));
+    
+    jsval_t proto_setup = setup_func_prototype(js, func);
+    if (is_err(proto_setup)) return proto_setup;
+    
+    return func;
   }
   
   size_t total_len = 1;
@@ -7490,7 +7588,12 @@ static jsval_t builtin_Function(struct js *js, jsval_t *args, int nargs) {
   res = setprop(js, func_obj, scope_key, js_glob(js));
   if (is_err(res)) return res;
   
-  return mkval(T_FUNC, (unsigned long) vdata(func_obj));
+  jsval_t func = mkval(T_FUNC, (unsigned long) vdata(func_obj));
+  
+  jsval_t proto_setup = setup_func_prototype(js, func);
+  if (is_err(proto_setup)) return proto_setup;
+  
+  return func;
 }
 
 static jsval_t builtin_function_call(struct js *js, jsval_t *args, int nargs) {
@@ -7587,7 +7690,12 @@ static jsval_t builtin_function_bind(struct js *js, jsval_t *args, int nargs) {
     setprop(js, bound_func, js_mkstr(js, "__native_func", 13), func);
     setprop(js, bound_func, js_mkstr(js, "__this", 6), this_arg);
     
-    return mkval(T_FUNC, (unsigned long) vdata(bound_func));
+    jsval_t bound = mkval(T_FUNC, (unsigned long) vdata(bound_func));
+    
+    jsval_t proto_setup = setup_func_prototype(js, bound);
+    if (is_err(proto_setup)) return proto_setup;
+    
+    return bound;
   }
 
   jsval_t func_obj = mkval(T_OBJ, vdata(func));
@@ -7613,7 +7721,13 @@ static jsval_t builtin_function_bind(struct js *js, jsval_t *args, int nargs) {
   }
 
   setprop(js, bound_func, js_mkstr(js, "__this", 6), this_arg);
-  return mkval(T_FUNC, (unsigned long) vdata(bound_func));
+  
+  jsval_t bound = mkval(T_FUNC, (unsigned long) vdata(bound_func));
+  
+  jsval_t proto_setup = setup_func_prototype(js, bound);
+  if (is_err(proto_setup)) return proto_setup;
+  
+  return bound;
 }
 
 static jsval_t builtin_Array(struct js *js, jsval_t *args, int nargs) {
