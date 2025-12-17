@@ -91,6 +91,13 @@ static jsval_t js_alloc(struct js *js, jsval_t *args, int nargs) {
   return result;
 }
 
+// Ant.raw.typeof()
+static jsval_t js_raw_typeof(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "Ant.raw.typeof() requires 1 argument");
+  const uint8_t type = vtype(args[0]);
+  return js_mknum((double)type);
+}
+
 // Ant.stats()
 static jsval_t js_stats_fn(struct js *js, jsval_t *args, int nargs) {
   (void) args; (void) nargs;
@@ -114,4 +121,8 @@ void init_builtin_module() {
   js_set(js, ant_obj, "alloc", js_mkfun(js_alloc));
   js_set(js, ant_obj, "stats", js_mkfun(js_stats_fn));
   js_set(js, rt->ant_obj, "signal", js_mkfun(js_signal));
+
+  jsval_t raw_obj = js_mkobj(js);
+  js_set(js, raw_obj, "typeof", js_mkfun(js_raw_typeof));
+  js_set(js, ant_obj, "raw", raw_obj);
 }

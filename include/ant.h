@@ -62,6 +62,7 @@ jsval_t js_get_ctor_proto(struct js *, const char *name, size_t len);
 
 int js_type(jsval_t val);
 int js_getbool(jsval_t val);
+uint8_t vtype(jsval_t val);
 
 double js_getnum(jsval_t val);
 char *js_getstr(struct js *js, jsval_t val, size_t *len);

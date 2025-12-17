@@ -254,10 +254,11 @@ enum {
   T_PROMISE, T_GENERATOR, T_BIGINT, T_PROPREF
 };
 
-static const char *typestr(uint8_t t) {
+static const char *typestr_raw(uint8_t t) {
   const char *names[] = { 
     "object", "prop", "string", "undefined", "null", "number",
-    "boolean", "function", "coderef", "cfunc", "err", "array", "promise", "generator", "bigint"
+    "boolean", "function", "coderef", "cfunc", "err", "array", 
+    "promise", "generator", "bigint", "propref"
   };
   
   return (t < sizeof(names) / sizeof(names[0])) ? names[t] : "??";
@@ -266,12 +267,19 @@ static const char *typestr(uint8_t t) {
 static jsval_t tov(double d) { union { double d; jsval_t v; } u = {d}; return u.v; }
 static double tod(jsval_t v) { union { jsval_t v; double d; } u = {v}; return u.d; }
 static bool is_nan(jsval_t v) { return (v >> 52U) == 0x7feU; }
-static uint8_t vtype(jsval_t v) { return is_nan(v) ? ((v >> 48U) & 15U) : (uint8_t) T_NUM; }
 static size_t vdata(jsval_t v) { return (size_t) (v & ~((jsval_t) 0x7fffUL << 48U)); }
 static jsoff_t coderefoff(jsval_t v) { return v & 0xffffffU; }
 static jsoff_t codereflen(jsval_t v) { return (v >> 24U) & 0xffffffU; }
 static jsoff_t propref_obj(jsval_t v) { return v & 0xffffffU; }
 static jsoff_t propref_key(jsval_t v) { return (v >> 24U) & 0xffffffU; }
+
+static const char *typestr(uint8_t t) {
+  return t == T_CFUNC ? "function" : typestr_raw(t);
+}
+
+uint8_t vtype(jsval_t v) { 
+  return is_nan(v) ? ((v >> 48U) & 15U) : (uint8_t) T_NUM; 
+}
 
 static jsval_t mkval(uint8_t type, uint64_t data) { 
   return ((jsval_t) 0x7fe0U << 48U) | ((jsval_t) (type) << 48) | (data & 0xffffffffffffUL); 
@@ -4659,11 +4667,14 @@ static jsval_t js_literal(struct js *js) {
       }
       return js_mkerr(js, "unexpected token after async");
     }
+    
     case TOK_NULL:        return js_mknull();
     case TOK_UNDEF:       return js_mkundef();
     case TOK_TRUE:        return js_mktrue();
     case TOK_FALSE:       return js_mkfalse();
     case TOK_THIS:        return js->this_val;
+    
+    case TOK_TYPEOF:      return mkcoderef((jsoff_t) js->toff, (jsoff_t) js->tlen);
     case TOK_FROM:        return mkcoderef((jsoff_t) js->toff, (jsoff_t) js->tlen);
     case TOK_VOID:        return mkcoderef((jsoff_t) js->toff, (jsoff_t) js->tlen);
     case TOK_DELETE:      return mkcoderef((jsoff_t) js->toff, (jsoff_t) js->tlen);
@@ -4672,6 +4683,7 @@ static jsval_t js_literal(struct js *js) {
     case TOK_CATCH:       return mkcoderef((jsoff_t) js->toff, (jsoff_t) js->tlen);
     case TOK_TRY:         return mkcoderef((jsoff_t) js->toff, (jsoff_t) js->tlen);
     case TOK_FINALLY:     return mkcoderef((jsoff_t) js->toff, (jsoff_t) js->tlen);
+    
     default:              return js_mkerr(js, "bad expr");
   }
 }
@@ -6351,14 +6363,16 @@ static jsval_t js_continue(struct js *js) {
 
 static jsval_t js_return(struct js *js) {
   uint8_t exe = !(js->flags & F_NOEXEC);
+  uint8_t in_func = js->flags & F_CALL;
   js->consumed = 1;
-  if (exe && !(js->flags & F_CALL)) return js_mkerr(js, "not in func");
   jsval_t res = js_mkundef();
   
   uint8_t nxt = next(js);
   if (nxt != TOK_SEMICOLON && nxt != TOK_RBRACE && nxt != TOK_EOF) {
     res = resolveprop(js, js_expr(js));
   }
+  
+  if (exe && !in_func) return js_mkundef();
   
   if (exe) {
     js->pos = js->clen;
@@ -7937,6 +7951,59 @@ static jsval_t builtin_object_keys(struct js *js, jsval_t *args, int nargs) {
       jsval_t idx_key = js_mkstr(js, idxstr, strlen(idxstr));
       jsval_t key_val = js_mkstr(js, key, klen);
       setprop(js, arr, idx_key, key_val);
+      idx++;
+    }
+  }
+  
+  jsval_t len_key = js_mkstr(js, "length", 6);
+  jsval_t len_val = tov((double) idx);
+  setprop(js, arr, len_key, len_val);
+  return mkval(T_ARR, vdata(arr));
+}
+
+static jsval_t builtin_object_values(struct js *js, jsval_t *args, int nargs) {
+  if (nargs == 0) return mkarr(js);
+  jsval_t obj = args[0];
+  
+  if (vtype(obj) != T_OBJ && vtype(obj) != T_ARR && vtype(obj) != T_FUNC) return mkarr(js);
+  if (vtype(obj) == T_FUNC) obj = mkval(T_OBJ, vdata(obj));
+  
+  jsval_t arr = mkarr(js);
+  jsoff_t idx = 0;
+  jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK);
+  
+  while (next < js->brk && next != 0) {
+    jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
+    jsoff_t klen = offtolen(loadoff(js, koff));
+    const char *key = (char *) &js->mem[koff + sizeof(koff)];
+    jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
+    
+    next = loadoff(js, next) & ~(3U | CONSTMASK);
+    
+    if (streq(key, klen, "__proto__", 9)) continue;
+    if (klen > 7 && memcmp(key, "__desc_", 7) == 0) continue;
+    
+    bool should_include = true;
+    char desc_key[128];
+    snprintf(desc_key, sizeof(desc_key), "__desc_%.*s", (int)klen, key);
+    jsoff_t desc_off = lkp(js, obj, desc_key, strlen(desc_key));
+    
+    if (desc_off != 0) {
+      jsval_t desc_obj = resolveprop(js, mkval(T_PROP, desc_off));
+      if (vtype(desc_obj) == T_OBJ) {
+        jsoff_t enum_off = lkp(js, desc_obj, "enumerable", 10);
+        if (enum_off != 0) {
+          jsval_t enum_val = resolveprop(js, mkval(T_PROP, enum_off));
+          should_include = js_truthy(js, enum_val);
+        }
+      }
+    }
+    
+    if (should_include) {
+      char idxstr[16];
+      snprintf(idxstr, sizeof(idxstr), "%u", (unsigned) idx);
+      jsval_t idx_key = js_mkstr(js, idxstr, strlen(idxstr));
+      setprop(js, arr, idx_key, val);
       idx++;
     }
   }
@@ -11324,6 +11391,7 @@ struct js *js_create(void *buf, size_t len) {
   set_proto(js, obj_func_obj, function_proto);
   setprop(js, obj_func_obj, js_mkstr(js, "__code", 6), js_mkstr(js, "__builtin_Object", 16));
   setprop(js, obj_func_obj, js_mkstr(js, "keys", 4), js_mkfun(builtin_object_keys));
+  setprop(js, obj_func_obj, js_mkstr(js, "values", 6), js_mkfun(builtin_object_values));
   setprop(js, obj_func_obj, js_mkstr(js, "getPrototypeOf", 14), js_mkfun(builtin_object_getPrototypeOf));
   setprop(js, obj_func_obj, js_mkstr(js, "setPrototypeOf", 14), js_mkfun(builtin_object_setPrototypeOf));
   setprop(js, obj_func_obj, js_mkstr(js, "create", 6), js_mkfun(builtin_object_create));
