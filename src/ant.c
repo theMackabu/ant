@@ -204,7 +204,8 @@ struct js {
   jsoff_t css;            // max observed C stack size
   jsoff_t lwm;            // JS ram low watermark: min free ram observed
   const char *code;       // currently parsed code snippet
-  char errmsg[256];       // error message placeholder (increased from 33)
+  char *errmsg;           // dynamic error message buffer
+  size_t errmsg_size;     // size of error message buffer
   const char *filename;   // current filename for error reporting
   uint8_t tok;            // last parsed token value
   uint8_t consumed;       // indicator that last parsed token was consumed
@@ -1359,55 +1360,133 @@ static void get_error_line(const char *code, jsoff_t clen, jsoff_t pos, char *bu
   *line_start_col = (int)(pos - line_start) + 1;
 }
 
+static void format_error_stack(struct js *js, size_t *n, int line, int col, bool include_source_line, const char *error_line, int error_col) {
+  if (!js->errmsg) {
+    js->errmsg_size = 4096;
+    js->errmsg = (char *)malloc(js->errmsg_size);
+    if (!js->errmsg) return;
+  }
+  
+  const char *dim = "\x1b[90m";
+  const char *reset = "\x1b[0m";
+  size_t remaining;
+  
+  if (include_source_line && error_line && *n < js->errmsg_size) {
+    remaining = js->errmsg_size - *n;
+    *n += (size_t) snprintf(js->errmsg + *n, remaining, "\n%s\n", error_line);
+    
+    if (*n < js->errmsg_size - 1) {
+      remaining = js->errmsg_size - *n;
+      for (int i = 1; i < error_col && remaining > 1; i++) {
+        js->errmsg[(*n)++] = ' ';
+        remaining--;
+      }
+      if (remaining > 1) {
+        js->errmsg[(*n)++] = '^';
+      }
+      js->errmsg[*n] = '\0';
+    }
+  }
+  
+  remaining = js->errmsg_size - *n;
+  if (remaining > 20) {
+    const char *file = js->filename ? js->filename : "<eval>";
+    
+    for (int i = global_call_stack.depth - 1; i >= 0 && remaining > 20; i--) {
+      call_frame_t *frame = &global_call_stack.frames[i];
+      const char *fname = frame->function_name ? frame->function_name : "<anonymous>";
+      const char *ffile = frame->filename ? frame->filename : "<eval>";
+      
+      *n += (size_t) snprintf(js->errmsg + *n, remaining, "\n    at %s %s(%s:%d:%d)%s", fname, dim, ffile, frame->line, frame->col, reset);
+      remaining = js->errmsg_size - *n;
+    }
+    
+    if (global_call_stack.depth > 0 && remaining > 60) {
+      *n += (size_t) snprintf(js->errmsg + *n, remaining, "\n    at Object.<anonymous> %s(%s:1:1)%s", dim, file, reset);
+      remaining = js->errmsg_size - *n;
+    }
+    
+    if (global_call_stack.depth == 0 && remaining > 20) {
+      *n += (size_t) snprintf(js->errmsg + *n, remaining, "\n    at %s%s:%d:%d%s", dim, file, line, col, reset);
+      remaining = js->errmsg_size - *n;
+    }
+    
+    if (remaining > 60 && js->filename && strcmp(js->filename, "[eval]") != 0) {
+      *n += (size_t) snprintf(js->errmsg + *n, remaining, "\n    at Module.executeUserEntryPoint [as runMain] %s(ant:internal/modules/run_main:70:5)%s", dim, reset);
+      remaining = js->errmsg_size - *n;
+    }
+    
+    if (remaining > 40 && js->filename && strcmp(js->filename, "[eval]") != 0) {
+      *n += (size_t) snprintf(js->errmsg + *n, remaining, "\n    at %sant:internal/main:217:5%s", dim, reset);
+    }
+  }
+  
+  js->errmsg[js->errmsg_size - 1] = '\0';
+}
+
 jsval_t js_mkerr(struct js *js, const char *xx, ...) {
   va_list ap;
   int line = 0, col = 0;
   char error_line[256] = {0};
   int error_col = 0;
+  char error_msg[256] = {0};
+  
+  if (!js->errmsg) {
+    js->errmsg_size = 4096;
+    js->errmsg = (char *)malloc(js->errmsg_size);
+    if (!js->errmsg) return mkval(T_ERR, 0);
+  }
+  
   get_line_col(js->code, js->toff > 0 ? js->toff : js->pos, &line, &col);
   get_error_line(js->code, js->clen, js->toff > 0 ? js->toff : js->pos, error_line, sizeof(error_line), &error_col);
+  
+  va_start(ap, xx);
+  vsnprintf(error_msg, sizeof(error_msg), xx, ap);
+  va_end(ap);
+  
   size_t n = 0;
   if (js->filename) {
-    n = (size_t) snprintf(js->errmsg, sizeof(js->errmsg), "Panic: %s:%d:%d\n", js->filename, line, col);
+    n = (size_t) snprintf(js->errmsg, js->errmsg_size, "%s:%d\n", js->filename, line);
   } else {
-    n = (size_t) snprintf(js->errmsg, sizeof(js->errmsg), "Panic: <eval>:%d:%d\n", line, col);
+    n = (size_t) snprintf(js->errmsg, js->errmsg_size, "<eval>:%d\n", line);
   }
-  va_start(ap, xx);
-  vsnprintf(js->errmsg + n, sizeof(js->errmsg) - n, xx, ap);
-  va_end(ap);
-  n = strlen(js->errmsg);
-  if (n < sizeof(js->errmsg) - 1) {
-    js->errmsg[n++] = '\n';
+  
+  size_t remaining = js->errmsg_size - n;
+  if (remaining > 1) {
+    n += (size_t) snprintf(js->errmsg + n, remaining, "\x1b[31mTypeError\x1b[0m: \x1b[1m%s\x1b[0m", error_msg);
   }
-  size_t remaining = sizeof(js->errmsg) - n;
-  size_t added = (size_t) snprintf(js->errmsg + n, remaining, "%s\n", error_line);
-  n += added;
-  if (n < sizeof(js->errmsg) - 1) {
-    remaining = sizeof(js->errmsg) - n;
-    for (int i = 1; i < error_col && remaining > 1; i++) {
-      js->errmsg[n++] = ' ';
-      remaining--;
-    }
-    if (remaining > 3) {
-      js->errmsg[n++] = '^';
-      js->errmsg[n++] = '^';
-      js->errmsg[n++] = '^';
-    }
-    js->errmsg[n] = '\0';
-  }
-  js->errmsg[sizeof(js->errmsg) - 1] = '\0';
+  
+  format_error_stack(js, &n, line, col, true, error_line, error_col);
+  
   js->pos = js->clen, js->tok = TOK_EOF, js->consumed = 0;
   return mkval(T_ERR, 0);
 }
 
 static jsval_t js_throw(struct js *js, jsval_t value) {
   int line = 0, col = 0;
+  char error_line[256] = {0};
+  int error_col = 0;
+  
   get_line_col(js->code, js->toff > 0 ? js->toff : js->pos, &line, &col);
+  get_error_line(js->code, js->clen, js->toff > 0 ? js->toff : js->pos, error_line, sizeof(error_line), &error_col);
+  
+  if (!js->errmsg) {
+    js->errmsg_size = 4096;
+    js->errmsg = (char *)malloc(js->errmsg_size);
+    if (!js->errmsg) return mkval(T_ERR, 0);
+  }
   
   size_t n = 0;
+  if (js->filename) {
+    n = (size_t) snprintf(js->errmsg, js->errmsg_size, "%s:%d\n", js->filename, line);
+  } else {
+    n = (size_t) snprintf(js->errmsg, js->errmsg_size, "<eval>:%d\n", line);
+  }
+  
+  size_t remaining = js->errmsg_size - n;
   if (vtype(value) == T_STR) {
     jsoff_t slen, off = vstr(js, value, &slen);
-    n = (size_t) snprintf(js->errmsg, sizeof(js->errmsg), "Uncaught: %.*s\n", (int)slen, (char *)&js->mem[off]);
+    n += (size_t) snprintf(js->errmsg + n, remaining, "\x1b[31mError\x1b[0m: \x1b[1m%.*s\x1b[0m", (int)slen, (char *)&js->mem[off]);
   } else if (vtype(value) == T_OBJ) {
     jsoff_t name_off = lkp(js, value, "name", 4);
     jsoff_t msg_off = lkp(js, value, "message", 7);
@@ -1433,41 +1512,22 @@ static jsval_t js_throw(struct js *js, jsval_t value) {
     }
     
     if (name_str && msg_str) {
-      n = (size_t) snprintf(js->errmsg, sizeof(js->errmsg), "Uncaught %.*s: %.*s\n", (int)name_len, name_str, (int)msg_len, msg_str);
+      n += (size_t) snprintf(js->errmsg + n, remaining, "\x1b[31m%.*s\x1b[0m: \x1b[1m%.*s\x1b[0m", (int)name_len, name_str, (int)msg_len, msg_str);
     } else if (name_str) {
-      n = (size_t) snprintf(js->errmsg, sizeof(js->errmsg), "Uncaught %.*s\n", (int)name_len, name_str);
+      n += (size_t) snprintf(js->errmsg + n, remaining, "\x1b[31m%.*s\x1b[0m", (int)name_len, name_str);
     } else if (msg_str) {
-      n = (size_t) snprintf(js->errmsg, sizeof(js->errmsg), "Uncaught: %.*s\n", (int)msg_len, msg_str);
+      n += (size_t) snprintf(js->errmsg + n, remaining, "\x1b[31mError\x1b[0m: \x1b[1m%.*s\x1b[0m", (int)msg_len, msg_str);
     } else {
       const char *str = js_str(js, value);
-      n = (size_t) snprintf(js->errmsg, sizeof(js->errmsg), "Uncaught: %s\n", str);
+      n += (size_t) snprintf(js->errmsg + n, remaining, "\x1b[31mError\x1b[0m: \x1b[1m%s\x1b[0m", str);
     }
   } else {
     const char *str = js_str(js, value);
-    n = (size_t) snprintf(js->errmsg, sizeof(js->errmsg), "Uncaught: %s\n", str);
+    n += (size_t) snprintf(js->errmsg + n, remaining, "\x1b[31mError\x1b[0m: \x1b[1m%s\x1b[0m", str);
   }
   
-  size_t remaining = sizeof(js->errmsg) - n;
-  if (remaining > 20) {
-    if (js->filename) {
-      n += (size_t) snprintf(js->errmsg + n, remaining, "  at %s:%d:%d\n", js->filename, line, col);
-    } else {
-      n += (size_t) snprintf(js->errmsg + n, remaining, "  at <eval>:%d:%d\n", line, col);
-    }
-  }
+  format_error_stack(js, &n, line, col, true, error_line, error_col);
   
-  remaining = sizeof(js->errmsg) - n;
-  for (int i = global_call_stack.depth - 1; i >= 0 && remaining > 20; i--) {
-    call_frame_t *frame = &global_call_stack.frames[i];
-    const char *fname = frame->function_name ? frame->function_name : "<anonymous>";
-    const char *file = frame->filename ? frame->filename : "<eval>";
-    
-    size_t added = (size_t) snprintf(js->errmsg + n, remaining, "  at %s (%s:%d:%d)\n", fname, file, frame->line, frame->col);
-    n += added;
-    remaining = sizeof(js->errmsg) - n;
-  }
-  
-  js->errmsg[sizeof(js->errmsg) - 1] = '\0';
   js->flags |= F_THROW;
   js->pos = js->clen;
   js->tok = TOK_EOF;
@@ -3260,7 +3320,18 @@ static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
   }
   
   if (t != T_OBJ && t != T_ARR) {
-    return js_mkerr(js, "lookup in non-obj");
+    char errbuf[256];
+    jsoff_t saved_toff = js->toff;
+    jsoff_t saved_tlen = js->tlen;
+    js->toff = coderefoff(r);
+    js->tlen = codereflen(r);
+    snprintf(errbuf, sizeof(errbuf), "Cannot read properties of %s (reading '%.*s')", 
+             t == T_UNDEF ? "undefined" : t == T_NULL ? "null" : typestr(t),
+             (int)plen, ptr);
+    jsval_t err = js_mkerr(js, errbuf);
+    js->toff = saved_toff;
+    js->tlen = saved_tlen;
+    return err;
   }
   
   jsoff_t own_off = lkp(js, l, ptr, plen);
@@ -3322,6 +3393,7 @@ static jsval_t call_c(struct js *js,
     bool is_spread = (next(js) == TOK_REST);
     if (is_spread) js->consumed = 1;
     jsval_t arg = resolveprop(js, js_expr(js));
+    if (is_err(arg)) return arg;
     if (is_spread && vtype(arg) == T_ARR) {
       jsoff_t len = arr_length(js, arg);
       for (jsoff_t i = 0; i < len; i++) {
@@ -3774,7 +3846,10 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
         int call_line = 0, call_col = 0;
         get_line_col(code, pos, &call_line, &call_col);
         
+        static char full_func_name[256];
         const char *func_name = NULL;
+        const char *this_name = NULL;
+        
         jsoff_t name_off = lkp(js, func_obj, "name", 4);
         if (name_off != 0) {
           jsval_t name_val = resolveprop(js, mkval(T_PROP, name_off));
@@ -3784,9 +3859,46 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
           }
         }
         
+        if (vtype(target_this) != T_OBJ) goto skip_constructor_name;
+        
+        jsoff_t ctor_off = lkp(js, target_this, "constructor", 11);
+        if (ctor_off == 0) goto default_object_name;
+        
+        jsval_t ctor_val = resolveprop(js, mkval(T_PROP, ctor_off));
+        if (vtype(ctor_val) != T_FUNC) goto default_object_name;
+        
+        jsval_t ctor_obj = mkval(T_OBJ, vdata(ctor_val));
+        jsoff_t ctor_name_off = lkp(js, ctor_obj, "name", 4);
+        if (ctor_name_off == 0) goto default_object_name;
+        
+        jsval_t ctor_name_val = resolveprop(js, mkval(T_PROP, ctor_name_off));
+        if (vtype(ctor_name_val) != T_STR) goto default_object_name;
+        
+        jsoff_t ctor_name_len, ctor_name_offset = vstr(js, ctor_name_val, &ctor_name_len);
+        this_name = (const char *)&js->mem[ctor_name_offset];
+        if (this_name && strlen(this_name) > 0) goto skip_constructor_name;
+        
+        default_object_name:
+        this_name = "Object";
+        
+        skip_constructor_name:
+        
+        const char *final_name;
+        if (this_name && func_name) {
+          snprintf(full_func_name, sizeof(full_func_name), "%s.%s", this_name, func_name);
+          final_name = full_func_name;
+        } else if (func_name) {
+          final_name = func_name;
+        } else if (this_name) {
+          snprintf(full_func_name, sizeof(full_func_name), "%s.<anonymous>", this_name);
+          final_name = full_func_name;
+        } else {
+          final_name = "<anonymous>";
+        }
+        
         push_call_frame(
           js->filename,
-          func_name ? func_name : "<anonymous>", 
+          final_name, 
           call_line, call_col
         );
         
@@ -11733,6 +11845,9 @@ struct js *js_create(void *buf, size_t len) {
   js->lwm = js->size;
   js->gct = js->size / 2;
   js->this_val = js->scope;
+  js->errmsg_size = 4096;
+  js->errmsg = (char *)malloc(js->errmsg_size);
+  if (js->errmsg) js->errmsg[0] = '\0';
   
   jsval_t glob = js->scope;
   jsval_t object_proto = js_mkobj(js);
@@ -12029,6 +12144,11 @@ struct js *js_create_dynamic(size_t initial_size, size_t max_size) {
 void js_destroy(struct js *js) {
   if (js == NULL) return;
   esm_cleanup_module_cache();
+  
+  if (js->errmsg) {
+    free(js->errmsg);
+    js->errmsg = NULL;
+  }
   
   if (js->owns_mem) {
     ANT_GC_FREE((void *)((uint8_t *)js - 0));

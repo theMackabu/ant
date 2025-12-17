@@ -4,11 +4,11 @@ const user = {
     console.log('Hello, ' + this.name);
     console.log(this);
 
-    console.log('\nexpecting error below');
-    console.log(this.crypto.randomUUID());
-
     console.log(globalThis.Ant.version);
     console.log(window.crypto.randomUUID());
+
+    console.log('\nexpecting error below');
+    console.log(this.crypto.randomUUID());
   }
 };
 
