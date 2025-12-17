@@ -2504,28 +2504,51 @@ static uint8_t next(struct js *js) {
       if (buf[0] == '0' && js->toff + 2 < js->clen) {
         if (buf[1] == 'b' || buf[1] == 'B') {
           numlen = 2;
-          while (js->toff + numlen < js->clen && (buf[numlen] == '0' || buf[numlen] == '1')) {
-            value = value * 2 + (buf[numlen] - '0');
+          while (js->toff + numlen < js->clen && (buf[numlen] == '0' || buf[numlen] == '1' || buf[numlen] == '_')) {
+            if (buf[numlen] != '_') value = value * 2 + (buf[numlen] - '0');
             numlen++;
           }
           js->tval = tov(value);
         } else if (buf[1] == 'o' || buf[1] == 'O') {
           numlen = 2;
-          while (js->toff + numlen < js->clen && buf[numlen] >= '0' && buf[numlen] <= '7') {
-            value = value * 8 + (buf[numlen] - '0');
+          while (js->toff + numlen < js->clen && ((buf[numlen] >= '0' && buf[numlen] <= '7') || buf[numlen] == '_')) {
+            if (buf[numlen] != '_') value = value * 8 + (buf[numlen] - '0');
             numlen++;
           }
           js->tval = tov(value);
         } else if (buf[1] == 'x' || buf[1] == 'X') {
-          js->tval = tov(strtod(buf, &end));
-          numlen = (jsoff_t) (end - buf);
+          char clean[64];
+          jsoff_t ci = 0;
+          numlen = 0;
+          while (js->toff + numlen < js->clen && (is_xdigit(buf[numlen]) || buf[numlen] == 'x' || buf[numlen] == 'X' || buf[numlen] == '_') && ci < 63) {
+            if (buf[numlen] != '_') clean[ci++] = buf[numlen];
+            numlen++;
+          }
+          clean[ci] = '\0';
+          js->tval = tov(strtod(clean, &end));
         } else {
-          js->tval = tov(strtod(buf, &end));
-          numlen = (jsoff_t) (end - buf);
+          char clean[64];
+          jsoff_t ci = 0;
+          numlen = 0;
+          while (js->toff + numlen < js->clen && (is_digit(buf[numlen]) || buf[numlen] == '.' || buf[numlen] == 'e' || buf[numlen] == 'E' || buf[numlen] == '+' || buf[numlen] == '-' || buf[numlen] == '_') && ci < 63) {
+            if (numlen > 0 && (buf[numlen] == '+' || buf[numlen] == '-') && buf[numlen-1] != 'e' && buf[numlen-1] != 'E') break;
+            if (buf[numlen] != '_') clean[ci++] = buf[numlen];
+            numlen++;
+          }
+          clean[ci] = '\0';
+          js->tval = tov(strtod(clean, &end));
         }
       } else {
-        js->tval = tov(strtod(buf, &end));
-        numlen = (jsoff_t) (end - buf);
+        char clean[64];
+        jsoff_t ci = 0;
+        numlen = 0;
+        while (js->toff + numlen < js->clen && (is_digit(buf[numlen]) || buf[numlen] == '.' || buf[numlen] == 'e' || buf[numlen] == 'E' || buf[numlen] == '+' || buf[numlen] == '-' || buf[numlen] == '_') && ci < 63) {
+          if (numlen > 0 && (buf[numlen] == '+' || buf[numlen] == '-') && buf[numlen-1] != 'e' && buf[numlen-1] != 'E') break;
+          if (buf[numlen] != '_') clean[ci++] = buf[numlen];
+          numlen++;
+        }
+        clean[ci] = '\0';
+        js->tval = tov(strtod(clean, &end));
       }
       
       if (js->toff + numlen < js->clen && buf[numlen] == 'n') {
