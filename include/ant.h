@@ -88,7 +88,7 @@ void js_poll_events(struct js *js);
 void js_setup_import_meta(struct js *js, const char *filename);
 
 typedef jsval_t (*ant_library_init_fn)(struct js *js);
-void ant_register_library(const char *name, ant_library_init_fn init_fn);
+void ant_register_library(ant_library_init_fn init_fn, const char *name, ...);
 
 typedef jsval_t (*js_getter_fn)(struct js *js, jsval_t obj, const char *key, size_t key_len);
 

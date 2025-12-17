@@ -185,12 +185,13 @@ int main(int argc, char *argv[]) {
   init_process_module();
   init_events_module();
   init_performance_module();
+  
+  ant_register_library(shell_library, "ant:shell", NULL);
+  ant_register_library(ffi_library, "ant:ffi", NULL);
 
-  ant_register_library("ant:fs", fs_library);
-  ant_register_library("ant:shell", shell_library);
-  ant_register_library("ant:path", path_library);
-  ant_register_library("ant:ffi", ffi_library);
-  ant_register_library("node:crypto", crypto_library);
+  ant_register_library(path_library, "ant:path", "node:path", NULL);
+  ant_register_library(fs_library, "ant:fs", "node:fs", NULL);
+  ant_register_library(crypto_library, "ant:crypto", "node:crypto", NULL);
 
   if (eval->count > 0) eval_code(js, eval, print);
   else if (repl_mode) ant_repl_run(); else {

@@ -169,15 +169,23 @@ void js_protect_init_memory(struct js *js) {
   if (protected_brk < 0x2000) protected_brk = 0x2000;
 }
 
-void ant_register_library(const char *name, ant_library_init_fn init_fn) {
-  ant_library_t *lib = (ant_library_t *)ANT_GC_MALLOC(sizeof(ant_library_t));
-  if (!lib) return;
+void ant_register_library(ant_library_init_fn init_fn, const char *name, ...) {
+  va_list args;
+  const char *alias = name;
   
-  strncpy(lib->name, name, sizeof(lib->name) - 1);
-  lib->name[sizeof(lib->name) - 1] = '\0';
-  lib->init_fn = init_fn;
-  
-  HASH_ADD_STR(library_registry, name, lib);
+  va_start(args, name);
+  while (alias != NULL) {
+    ant_library_t *lib = (ant_library_t *)ANT_GC_MALLOC(sizeof(ant_library_t));
+    if (!lib) break;
+    
+    strncpy(lib->name, alias, sizeof(lib->name) - 1);
+    lib->name[sizeof(lib->name) - 1] = '\0';
+    lib->init_fn = init_fn;
+    
+    HASH_ADD_STR(library_registry, name, lib);
+    alias = va_arg(args, const char *);
+  }
+  va_end(args);
 }
 
 static ant_library_t* find_library(const char *specifier, size_t spec_len) {
