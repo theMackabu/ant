@@ -7938,6 +7938,62 @@ static jsval_t builtin_Number_isFinite(struct js *js, jsval_t *args, int nargs) 
   return mkval(T_BOOL, isfinite(val) ? 1 : 0);
 }
 
+static double js_to_number(struct js *js, jsval_t arg) {
+  if (vtype(arg) == T_NUM) return tod(arg);
+  if (vtype(arg) == T_BOOL) return vdata(arg) ? 1.0 : 0.0;
+  if (vtype(arg) == T_NULL) return 0.0;
+  if (vtype(arg) == T_UNDEF) return NAN;
+  if (vtype(arg) == T_STR) {
+    jsoff_t len;
+    jsoff_t off = vstr(js, arg, &len);
+    const char *str = (char *) &js->mem[off];
+    while (*str == ' ' || *str == '\t' || *str == '\n' || *str == '\r') str++;
+    if (*str == '\0') return 0.0;
+    char *end;
+    double val = strtod(str, &end);
+    while (*end == ' ' || *end == '\t' || *end == '\n' || *end == '\r') end++;
+    if (end == str || *end != '\0') return NAN;
+    return val;
+  }
+  return NAN;
+}
+
+static jsval_t builtin_global_isNaN(struct js *js, jsval_t *args, int nargs) {
+  if (nargs == 0) return mkval(T_BOOL, 1);
+  double val = js_to_number(js, args[0]);
+  return mkval(T_BOOL, isnan(val) ? 1 : 0);
+}
+
+static jsval_t builtin_global_isFinite(struct js *js, jsval_t *args, int nargs) {
+  if (nargs == 0) return mkval(T_BOOL, 0);
+  double val = js_to_number(js, args[0]);
+  return mkval(T_BOOL, isfinite(val) ? 1 : 0);
+}
+
+static jsval_t builtin_Number_isInteger(struct js *js, jsval_t *args, int nargs) {
+  if (nargs == 0) return mkval(T_BOOL, 0);
+  jsval_t arg = args[0];
+  
+  if (vtype(arg) != T_NUM) return mkval(T_BOOL, 0);
+  
+  double val = tod(arg);
+  if (!isfinite(val)) return mkval(T_BOOL, 0);
+  return mkval(T_BOOL, (val == floor(val)) ? 1 : 0);
+}
+
+static jsval_t builtin_Number_isSafeInteger(struct js *js, jsval_t *args, int nargs) {
+  if (nargs == 0) return mkval(T_BOOL, 0);
+  jsval_t arg = args[0];
+  
+  if (vtype(arg) != T_NUM) return mkval(T_BOOL, 0);
+  
+  double val = tod(arg);
+  if (!isfinite(val)) return mkval(T_BOOL, 0);
+  if (val != floor(val)) return mkval(T_BOOL, 0);
+  
+  return mkval(T_BOOL, (val >= -9007199254740991.0 && val <= 9007199254740991.0) ? 1 : 0);
+}
+
 static jsval_t builtin_Number(struct js *js, jsval_t *args, int nargs) {
   if (nargs == 0) return tov(0.0);
   jsval_t arg = args[0];
@@ -7949,8 +8005,12 @@ static jsval_t builtin_Number(struct js *js, jsval_t *args, int nargs) {
     jsoff_t len;
     jsoff_t off = vstr(js, arg, &len);
     const char *str = (char *) &js->mem[off];
+    while (*str == ' ' || *str == '\t' || *str == '\n' || *str == '\r') str++;
+    if (*str == '\0') return tov(0.0);
     char *end;
     double val = strtod(str, &end);
+    while (*end == ' ' || *end == '\t' || *end == '\n' || *end == '\r') end++;
+    if (end == str || *end != '\0') return tov(NAN);
     return tov(val);
   } else if (vtype(arg) == T_NULL || vtype(arg) == T_UNDEF) {
     return tov(0.0);
@@ -14058,6 +14118,8 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, number_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_Number));
   setprop(js, number_ctor_obj, js_mkstr(js, "isNaN", 5), js_mkfun(builtin_Number_isNaN));
   setprop(js, number_ctor_obj, js_mkstr(js, "isFinite", 8), js_mkfun(builtin_Number_isFinite));
+  setprop(js, number_ctor_obj, js_mkstr(js, "isInteger", 9), js_mkfun(builtin_Number_isInteger));
+  setprop(js, number_ctor_obj, js_mkstr(js, "isSafeInteger", 13), js_mkfun(builtin_Number_isSafeInteger));
   setprop(js, number_ctor_obj, js_mkstr(js, "prototype", 9), number_proto);
   setprop(js, glob, js_mkstr(js, "Number", 6), mkval(T_FUNC, vdata(number_ctor_obj)));
   
@@ -14183,6 +14245,8 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, glob, js_mkstr(js, "eval", 4), js_mkfun(builtin_eval));
   setprop(js, glob, js_mkstr(js, "parseInt", 8), js_mkfun(builtin_parseInt));
   setprop(js, glob, js_mkstr(js, "parseFloat", 10), js_mkfun(builtin_parseFloat));
+  setprop(js, glob, js_mkstr(js, "isNaN", 5), js_mkfun(builtin_global_isNaN));
+  setprop(js, glob, js_mkstr(js, "isFinite", 8), js_mkfun(builtin_global_isFinite));
   setprop(js, glob, js_mkstr(js, "btoa", 4), js_mkfun(builtin_btoa));
   setprop(js, glob, js_mkstr(js, "atob", 4), js_mkfun(builtin_atob));
   setprop(js, glob, js_mkstr(js, "NaN", 3), tov(NAN));
