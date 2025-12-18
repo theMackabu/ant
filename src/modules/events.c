@@ -91,7 +91,7 @@ static jsval_t js_add_event_listener_method(struct js *js, jsval_t *args, int na
     return js_mkerr(js, "eventType must be a string");
   }
   
-  if (js_type(args[1]) != JS_PRIV) {
+  if (js_type(args[1]) != JS_FUNC) {
     return js_mkerr(js, "listener must be a function");
   }
   
@@ -130,7 +130,7 @@ static jsval_t js_add_event_listener(struct js *js, jsval_t *args, int nargs) {
     return js_mkerr(js, "eventType must be a string");
   }
   
-  if (js_type(args[1]) != JS_PRIV) {
+  if (js_type(args[1]) != JS_FUNC) {
     return js_mkerr(js, "listener must be a function");
   }
   

@@ -97,7 +97,7 @@ static yyjson_mut_val *jsval_to_yyjson(struct js *js, yyjson_mut_doc *doc, jsval
       return yyjson_mut_strncpy(doc, str, len);
     }
     
-    case JS_PRIV: {
+    case JS_OBJ: {
       jsval_t length_val = js_get(js, val, "length");
       
       if (js_type(length_val) == JS_NUM) {
@@ -123,7 +123,7 @@ static yyjson_mut_val *jsval_to_yyjson(struct js *js, yyjson_mut_doc *doc, jsval
         
         while (js_prop_iter_next(&iter, &key, &key_len, &prop_value)) {
           if (key_len > 2 && key[0] == '_' && key[1] == '_') continue;
-          if (js_type(prop_value) == JS_PRIV) {
+          if (js_type(prop_value) == JS_OBJ) {
             jsval_t code = js_get(js, prop_value, "__code");
             if (js_type(code) == JS_STR) continue;
           }

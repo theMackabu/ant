@@ -333,7 +333,7 @@ static jsval_t builtin_path_parse(struct js *js, jsval_t *args, int nargs) {
 // path.format(pathObject)
 static jsval_t builtin_path_format(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "format() requires a path object argument");
-  if (js_type(args[0]) != JS_PRIV) return js_mkerr(js, "format() argument must be an object");
+  if (js_type(args[0]) != JS_OBJ) return js_mkerr(js, "format() argument must be an object");
   
   jsval_t obj = args[0];
   

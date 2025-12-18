@@ -72,7 +72,7 @@ static jsval_t builtin_shell_text(struct js *js, jsval_t *args, int nargs) {
   (void)nargs;
   
   jsval_t this_val = js_getthis(js);
-  if (js_type(this_val) != JS_PRIV) {
+  if (js_type(this_val) != JS_OBJ) {
     return js_mkerr(js, "text() must be called on a shell result");
   }
   
@@ -85,7 +85,7 @@ static jsval_t builtin_shell_lines(struct js *js, jsval_t *args, int nargs) {
   (void)nargs;
   
   jsval_t this_val = js_getthis(js);
-  if (js_type(this_val) != JS_PRIV) return js_mkerr(js, "lines() must be called on a shell result");
+  if (js_type(this_val) != JS_OBJ) return js_mkerr(js, "lines() must be called on a shell result");
   
   jsval_t stdout_val = js_get(js, this_val, "stdout");
   if (js_type(stdout_val) != JS_STR) return js_mkerr(js, "No stdout available");
@@ -123,7 +123,7 @@ static jsval_t builtin_shell_lines(struct js *js, jsval_t *args, int nargs) {
 static jsval_t builtin_shell_dollar(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "$() requires at least one argument");
     
-  if (js_type(args[0]) != JS_PRIV) {
+  if (js_type(args[0]) != JS_OBJ) {
     if (js_type(args[0]) == JS_STR) {
       size_t cmd_len;
       char *cmd = js_getstr(js, args[0], &cmd_len);
