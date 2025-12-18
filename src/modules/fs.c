@@ -312,7 +312,7 @@ static void on_readdir_complete(uv_fs_t *uv_req) {
 
 static void ensure_fs_loop(void) {
   if (!fs_loop) {
-    if (rt->external_event_loop_active) {
+    if (rt->flags & ANT_RUNTIME_EXT_EVENT_LOOP) {
       fs_loop = uv_default_loop();
     } else {
       fs_loop = malloc(sizeof(uv_loop_t));
@@ -1151,7 +1151,7 @@ int has_pending_fs_ops(void) {
 }
 
 void fs_poll_events(void) {
-  if (fs_loop && fs_loop == uv_default_loop() && rt->external_event_loop_active) return;
+  if (fs_loop && fs_loop == uv_default_loop() && (rt->flags & ANT_RUNTIME_EXT_EVENT_LOOP)) return;
   if (fs_loop && uv_loop_alive(fs_loop)) {
     uv_run(fs_loop, UV_RUN_ONCE);
     if (pending_requests && utarray_len(pending_requests) > 0) usleep(1000);
