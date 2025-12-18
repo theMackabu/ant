@@ -249,6 +249,7 @@ struct js {
   bool owns_mem;          // true if js owns the memory buffer (dynamic allocation)
   jsoff_t max_size;       // maximum allowed memory size (for dynamic growth)
   bool had_newline;       // true if newline was crossed before current token
+  jsval_t thrown_value;   // stores the actual thrown value for catch blocks
 };
 
 enum {
@@ -296,7 +297,9 @@ static jsoff_t propref_obj(jsval_t v) { return v & 0xffffffU; }
 static jsoff_t propref_key(jsval_t v) { return (v >> 24U) & 0xffffffU; }
 
 static const char *typestr(uint8_t t) {
-  return t == T_CFUNC ? "function" : typestr_raw(t);
+  if (t == T_CFUNC) return "function";
+  if (t == T_ARR) return "object";
+  return typestr_raw(t);
 }
 
 uint8_t vtype(jsval_t v) { 
@@ -401,6 +404,13 @@ static jsval_t builtin_Array_isArray(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_Array_from(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_Array_of(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_Error(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_EvalError(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_RangeError(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_ReferenceError(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_SyntaxError(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_TypeError(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_URIError(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_InternalError(struct js *js, jsval_t *args, int nargs);
 static jsval_t js_import_stmt(struct js *js);
 static jsval_t js_export_stmt(struct js *js);
 static jsval_t builtin_import(struct js *js, jsval_t *args, int nargs);
@@ -1702,6 +1712,7 @@ static jsval_t js_throw(struct js *js, jsval_t value) {
   format_error_stack(js, &n, line, col, true, error_line, error_col);
   
   js->flags |= F_THROW;
+  js->thrown_value = value;
   js->pos = js->clen;
   js->tok = TOK_EOF;
   js->consumed = 0;
@@ -6927,30 +6938,8 @@ static jsval_t js_try(struct js *js) {
       strncpy(saved_errmsg, js->errmsg, sizeof(saved_errmsg) - 1);
       saved_errmsg[sizeof(saved_errmsg) - 1] = '\0';
       
-      jsval_t err_obj = mkobj(js, 0);
-      jsval_t msg_key = js_mkstr(js, "message", 7);
-      jsval_t name_key = js_mkstr(js, "name", 4);
-      
-      char *colon = strchr(saved_errmsg, ':');
-      if (colon && strncmp(saved_errmsg, "Uncaught ", 9) == 0) {
-        char *type_start = saved_errmsg + 9;
-        size_t type_len = colon - type_start;
-        char *msg_start = colon + 2;
-        char *newline = strchr(msg_start, '\n');
-        size_t msg_len = newline ? (size_t)(newline - msg_start) : strlen(msg_start);
-        
-        jsval_t name_val = js_mkstr(js, type_start, type_len);
-        jsval_t msg_val = js_mkstr(js, msg_start, msg_len);
-        setprop(js, err_obj, name_key, name_val);
-        setprop(js, err_obj, msg_key, msg_val);
-      } else {
-        jsval_t msg_val = js_mkstr(js, saved_errmsg, strlen(saved_errmsg));
-        jsval_t name_val = js_mkstr(js, "Error", 5);
-        setprop(js, err_obj, name_key, name_val);
-        setprop(js, err_obj, msg_key, msg_val);
-      }
-      
-      exception_value = err_obj;
+      exception_value = js->thrown_value;
+      js->thrown_value = js_mkundef();
       js->errmsg[0] = '\0';
     }
     
@@ -8297,6 +8286,35 @@ static jsval_t builtin_Error(struct js *js, jsval_t *args, int nargs) {
   
   return err_obj;
 }
+
+#define DEFINE_ERROR_BUILTIN(name, name_str, name_len) \
+static jsval_t builtin_##name(struct js *js, jsval_t *args, int nargs) { \
+  jsval_t err_obj = js->this_val; \
+  bool use_this = (vtype(err_obj) == T_OBJ); \
+  if (!use_this) err_obj = mkobj(js, 0); \
+  jsval_t message = js_mkstr(js, "", 0); \
+  if (nargs > 0) { \
+    if (vtype(args[0]) == T_STR) { \
+      message = args[0]; \
+    } else { \
+      const char *str = js_str(js, args[0]); \
+      message = js_mkstr(js, str, strlen(str)); \
+    } \
+  } \
+  setprop(js, err_obj, js_mkstr(js, "message", 7), message); \
+  setprop(js, err_obj, js_mkstr(js, "name", 4), js_mkstr(js, name_str, name_len)); \
+  return err_obj; \
+}
+
+DEFINE_ERROR_BUILTIN(EvalError, "EvalError", 9)
+DEFINE_ERROR_BUILTIN(RangeError, "RangeError", 10)
+DEFINE_ERROR_BUILTIN(ReferenceError, "ReferenceError", 14)
+DEFINE_ERROR_BUILTIN(SyntaxError, "SyntaxError", 11)
+DEFINE_ERROR_BUILTIN(TypeError, "TypeError", 9)
+DEFINE_ERROR_BUILTIN(URIError, "URIError", 8)
+DEFINE_ERROR_BUILTIN(InternalError, "InternalError", 13)
+
+#undef DEFINE_ERROR_BUILTIN
 
 static jsval_t builtin_RegExp(struct js *js, jsval_t *args, int nargs) {
   jsval_t regexp_obj = js->this_val;
@@ -13926,6 +13944,34 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, error_proto, js_mkstr(js, "name", 4), js_mkstr(js, "Error", 5));
   setprop(js, error_proto, js_mkstr(js, "message", 7), js_mkstr(js, "", 0));
   
+  jsval_t evalerror_proto = js_mkobj(js);
+  set_proto(js, evalerror_proto, error_proto);
+  setprop(js, evalerror_proto, js_mkstr(js, "name", 4), js_mkstr(js, "EvalError", 9));
+  
+  jsval_t rangeerror_proto = js_mkobj(js);
+  set_proto(js, rangeerror_proto, error_proto);
+  setprop(js, rangeerror_proto, js_mkstr(js, "name", 4), js_mkstr(js, "RangeError", 10));
+  
+  jsval_t referenceerror_proto = js_mkobj(js);
+  set_proto(js, referenceerror_proto, error_proto);
+  setprop(js, referenceerror_proto, js_mkstr(js, "name", 4), js_mkstr(js, "ReferenceError", 14));
+  
+  jsval_t syntaxerror_proto = js_mkobj(js);
+  set_proto(js, syntaxerror_proto, error_proto);
+  setprop(js, syntaxerror_proto, js_mkstr(js, "name", 4), js_mkstr(js, "SyntaxError", 11));
+  
+  jsval_t typeerror_proto = js_mkobj(js);
+  set_proto(js, typeerror_proto, error_proto);
+  setprop(js, typeerror_proto, js_mkstr(js, "name", 4), js_mkstr(js, "TypeError", 9));
+  
+  jsval_t urierror_proto = js_mkobj(js);
+  set_proto(js, urierror_proto, error_proto);
+  setprop(js, urierror_proto, js_mkstr(js, "name", 4), js_mkstr(js, "URIError", 8));
+  
+  jsval_t internalerror_proto = js_mkobj(js);
+  set_proto(js, internalerror_proto, error_proto);
+  setprop(js, internalerror_proto, js_mkstr(js, "name", 4), js_mkstr(js, "InternalError", 13));
+  
   jsval_t date_proto = js_mkobj(js);
   set_proto(js, date_proto, object_proto);
   setprop(js, date_proto, js_mkstr(js, "getTime", 7), js_mkfun(builtin_Date_getTime));
@@ -14059,6 +14105,48 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, err_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_Error));
   setprop(js, err_ctor_obj, js_mkstr(js, "prototype", 9), error_proto);
   setprop(js, glob, js_mkstr(js, "Error", 5), mkval(T_FUNC, vdata(err_ctor_obj)));
+  
+  jsval_t evalerr_ctor_obj = mkobj(js, 0);
+  set_proto(js, evalerr_ctor_obj, function_proto);
+  setprop(js, evalerr_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_EvalError));
+  setprop(js, evalerr_ctor_obj, js_mkstr(js, "prototype", 9), evalerror_proto);
+  setprop(js, glob, js_mkstr(js, "EvalError", 9), mkval(T_FUNC, vdata(evalerr_ctor_obj)));
+  
+  jsval_t rangeerr_ctor_obj = mkobj(js, 0);
+  set_proto(js, rangeerr_ctor_obj, function_proto);
+  setprop(js, rangeerr_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_RangeError));
+  setprop(js, rangeerr_ctor_obj, js_mkstr(js, "prototype", 9), rangeerror_proto);
+  setprop(js, glob, js_mkstr(js, "RangeError", 10), mkval(T_FUNC, vdata(rangeerr_ctor_obj)));
+  
+  jsval_t referr_ctor_obj = mkobj(js, 0);
+  set_proto(js, referr_ctor_obj, function_proto);
+  setprop(js, referr_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_ReferenceError));
+  setprop(js, referr_ctor_obj, js_mkstr(js, "prototype", 9), referenceerror_proto);
+  setprop(js, glob, js_mkstr(js, "ReferenceError", 14), mkval(T_FUNC, vdata(referr_ctor_obj)));
+  
+  jsval_t syntaxerr_ctor_obj = mkobj(js, 0);
+  set_proto(js, syntaxerr_ctor_obj, function_proto);
+  setprop(js, syntaxerr_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_SyntaxError));
+  setprop(js, syntaxerr_ctor_obj, js_mkstr(js, "prototype", 9), syntaxerror_proto);
+  setprop(js, glob, js_mkstr(js, "SyntaxError", 11), mkval(T_FUNC, vdata(syntaxerr_ctor_obj)));
+  
+  jsval_t typeerr_ctor_obj = mkobj(js, 0);
+  set_proto(js, typeerr_ctor_obj, function_proto);
+  setprop(js, typeerr_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_TypeError));
+  setprop(js, typeerr_ctor_obj, js_mkstr(js, "prototype", 9), typeerror_proto);
+  setprop(js, glob, js_mkstr(js, "TypeError", 9), mkval(T_FUNC, vdata(typeerr_ctor_obj)));
+  
+  jsval_t urierr_ctor_obj = mkobj(js, 0);
+  set_proto(js, urierr_ctor_obj, function_proto);
+  setprop(js, urierr_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_URIError));
+  setprop(js, urierr_ctor_obj, js_mkstr(js, "prototype", 9), urierror_proto);
+  setprop(js, glob, js_mkstr(js, "URIError", 8), mkval(T_FUNC, vdata(urierr_ctor_obj)));
+  
+  jsval_t internerr_ctor_obj = mkobj(js, 0);
+  set_proto(js, internerr_ctor_obj, function_proto);
+  setprop(js, internerr_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_InternalError));
+  setprop(js, internerr_ctor_obj, js_mkstr(js, "prototype", 9), internalerror_proto);
+  setprop(js, glob, js_mkstr(js, "InternalError", 13), mkval(T_FUNC, vdata(internerr_ctor_obj)));
   
   jsval_t regex_ctor_obj = mkobj(js, 0);
   set_proto(js, regex_ctor_obj, function_proto);

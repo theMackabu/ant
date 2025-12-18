@@ -113,11 +113,23 @@ static jsval_t env_to_object(struct js *js, jsval_t *args, int nargs) {
   return obj;
 }
 
-void init_process_module(void) {
+static jsval_t process_cwd(struct js *js, jsval_t *args, int nargs) {
+  (void)args;
+  (void)nargs;
+  
+  char cwd[4096];
+  if (getcwd(cwd, sizeof(cwd)) != NULL) {
+    return js_mkstr(js, cwd, strlen(cwd));
+  }
+  return js_mkundef();
+}
+
+void init_process_module() {
   struct js *js = rt->js;
   
   jsval_t process_obj = js_mkobj(js);
   jsval_t env_obj = js_mkobj(js);
+  jsval_t argv_arr = js_mkarr(js);
 
   js_set(js, process_obj, "env", env_obj);
   js_set(js, process_obj, "exit", js_mkfun(process_exit));
@@ -154,6 +166,13 @@ void init_process_module(void) {
   load_dotenv_file(js, env_obj);
   js_set_getter(js, env_obj, env_getter);
   js_set(js, env_obj, "toObject", js_mkfun(env_to_object));
+  
+  for (int i = 0; i < rt->argc; i++) {
+    js_arr_push(js, argv_arr, js_mkstr(js, rt->argv[i], strlen(rt->argv[i])));
+  }
+  
+  js_set(js, process_obj, "argv", argv_arr);
+  js_set(js, process_obj, "cwd", js_mkfun(process_cwd));
   
   js_set(js, process_obj, "@@toStringTag", js_mkstr(js, "process", 7));
   js_set(js, js_glob(js), "process", process_obj);

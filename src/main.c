@@ -182,7 +182,7 @@ int main(int argc, char *argv[]) {
   }
   
   if (gct->count > 0) js_setgct(js, gct->ival[0]);  
-  ant_runtime_init(js);
+  ant_runtime_init(js, argc, argv);
 
   init_builtin_module();
   init_buffer_module();
