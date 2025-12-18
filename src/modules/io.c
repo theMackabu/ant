@@ -4,12 +4,15 @@
 #include <stdbool.h>
 #include <ctype.h>
 #include <libgen.h>
+#include <uv.h>
 
 #include "runtime.h"
 #include "modules/io.h"
 
 #define ANSI_RED "\x1b[31m"
 #define ANSI_YELLOW "\x1b[33m"
+#define ANSI_CYAN "\x1b[36m"
+#define ANSI_MAGENTA "\x1b[35m"
 #define ANSI_RESET "\x1b[0m"
 
 #define JSON_KEY "\x1b[0m"
@@ -261,6 +264,72 @@ static jsval_t js_console_trace(struct js *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
+static jsval_t js_console_info(struct js *js, jsval_t *args, int nargs) {
+  console_print(js, args, nargs, ANSI_CYAN, stdout);
+  return js_mkundef();
+}
+
+static jsval_t js_console_debug(struct js *js, jsval_t *args, int nargs) {
+  console_print(js, args, nargs, ANSI_MAGENTA, stdout);
+  return js_mkundef();
+}
+
+static jsval_t js_console_clear(struct js *js, jsval_t *args, int nargs) {
+  (void)args;
+  (void)nargs;
+  fprintf(stdout, "\033[2J\033[H");
+  fflush(stdout);
+  return js_mkundef();
+}
+
+static struct { char *label; double start_time; } console_timers[64];
+static int console_timer_count = 0;
+
+static jsval_t js_console_time(struct js *js, jsval_t *args, int nargs) {
+  const char *label = "default";
+  if (nargs > 0 && js_type(args[0]) == JS_STR) {
+    label = js_getstr(js, args[0], NULL);
+  }
+  
+  for (int i = 0; i < console_timer_count; i++) {
+    if (strcmp(console_timers[i].label, label) == 0) {
+      fprintf(stderr, "Timer '%s' already exists\n", label);
+      return js_mkundef();
+    }
+  }
+  
+  if (console_timer_count < 64) {
+    console_timers[console_timer_count].label = strdup(label);
+    console_timers[console_timer_count].start_time = uv_hrtime() / 1e6;
+    console_timer_count++;
+  }
+  
+  return js_mkundef();
+}
+
+static jsval_t js_console_timeEnd(struct js *js, jsval_t *args, int nargs) {
+  const char *label = "default";
+  if (nargs > 0 && js_type(args[0]) == JS_STR) {
+    label = js_getstr(js, args[0], NULL);
+  }
+  
+  for (int i = 0; i < console_timer_count; i++) {
+    if (strcmp(console_timers[i].label, label) == 0) {
+      double elapsed = (uv_hrtime() / 1e6) - console_timers[i].start_time;
+      fprintf(stdout, "%s: %.3fms\n", label, elapsed);
+      free(console_timers[i].label);
+      for (int j = i; j < console_timer_count - 1; j++) {
+        console_timers[j] = console_timers[j + 1];
+      }
+      console_timer_count--;
+      return js_mkundef();
+    }
+  }
+  
+  fprintf(stderr, "Timer '%s' does not exist\n", label);
+  return js_mkundef();
+}
+
 void init_console_module() {
   struct js *js = rt->js;
   jsval_t console_obj = js_mkobj(js);
@@ -268,8 +337,13 @@ void init_console_module() {
   js_set(js, console_obj, "log", js_mkfun(js_console_log));
   js_set(js, console_obj, "error", js_mkfun(js_console_error));
   js_set(js, console_obj, "warn", js_mkfun(js_console_warn));
+  js_set(js, console_obj, "info", js_mkfun(js_console_info));
+  js_set(js, console_obj, "debug", js_mkfun(js_console_debug));
   js_set(js, console_obj, "assert", js_mkfun(js_console_assert));
   js_set(js, console_obj, "trace", js_mkfun(js_console_trace));
+  js_set(js, console_obj, "time", js_mkfun(js_console_time));
+  js_set(js, console_obj, "timeEnd", js_mkfun(js_console_timeEnd));
+  js_set(js, console_obj, "clear", js_mkfun(js_console_clear));
   
   js_set(js, console_obj, "@@toStringTag", js_mkstr(js, "console", 7));
   js_set(js, js_glob(js), "console", console_obj);
