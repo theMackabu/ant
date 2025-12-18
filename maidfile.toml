@@ -12,6 +12,9 @@ script = "bash -c 'CC=\"ccache /opt/homebrew/opt/llvm/bin/clang\" meson setup bu
 [tasks.run]
 script = ["maid build -q", "./build/ant %{arg.1}"]
 
+[tasks.spec]
+script = ["maid build -q", "./build/ant examples/spec/%{arg.1}.js"]
+
 [tasks.debug]
 script = ["maid build -q", "./build/ant -d %{arg.1}"]
 

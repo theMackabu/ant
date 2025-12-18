@@ -2053,6 +2053,32 @@ static jsval_t bigint_neg(struct js *js, jsval_t a) {
   return mkbigint(js, digits, len, !neg);
 }
 
+static jsval_t bigint_exp(struct js *js, jsval_t base, jsval_t exp) {
+  if (bigint_IsNegative(js, exp)) return js_mkerr(js, "Exponent must be positive");
+  size_t explen;
+  const char *expd = bigint_digits(js, exp, &explen);
+  if (explen == 1 && expd[0] == '0') return mkbigint(js, "1", 1, false);
+  jsval_t result = mkbigint(js, "1", 1, false);
+  jsval_t b = base;
+  jsval_t e = exp;
+  jsval_t two = mkbigint(js, "2", 1, false);
+  while (true) {
+    size_t elen;
+    const char *ed = bigint_digits(js, e, &elen);
+    if (elen == 1 && ed[0] == '0') break;
+    int last_digit = ed[elen - 1] - '0';
+    if (last_digit % 2 == 1) {
+      result = bigint_mul(js, result, b);
+      if (is_err(result)) return result;
+    }
+    b = bigint_mul(js, b, b);
+    if (is_err(b)) return b;
+    e = bigint_div(js, e, two);
+    if (is_err(e)) return e;
+  }
+  return result;
+}
+
 static int bigint_compare(struct js *js, jsval_t a, jsval_t b) {
   bool aneg = bigint_IsNegative(js, a), bneg = bigint_IsNegative(js, b);
   size_t alen, blen;
@@ -2121,6 +2147,68 @@ static jsval_t builtin_BigInt_asIntN(struct js *js, jsval_t *args, int nargs) {
 static jsval_t builtin_BigInt_asUintN(struct js *js, jsval_t *args, int nargs) {
   (void)js; (void)args; (void)nargs;
   return js_mkerr(js, "BigInt.asUintN not implemented");
+}
+
+static jsval_t builtin_bigint_toString(struct js *js, jsval_t *args, int nargs) {
+  jsval_t val = js->this_val;
+  if (vtype(val) != T_BIGINT) return js_mkerr(js, "toString called on non-BigInt");
+  
+  int radix = 10;
+  if (nargs >= 1 && vtype(args[0]) == T_NUM) {
+    radix = (int)tod(args[0]);
+    if (radix < 2 || radix > 36) {
+      return js_mkerr(js, "radix must be between 2 and 36");
+    }
+  }
+  
+  bool neg = bigint_IsNegative(js, val);
+  size_t dlen;
+  const char *digits = bigint_digits(js, val, &dlen);
+  
+  if (radix == 10) {
+    char buf[1024];
+    size_t n = 0;
+    if (neg) buf[n++] = '-';
+    memcpy(buf + n, digits, dlen);
+    n += dlen;
+    return js_mkstr(js, buf, n);
+  }
+  
+  char result[2048];
+  size_t rpos = sizeof(result) - 1;
+  result[rpos] = '\0';
+  
+  char *num = (char *)malloc(dlen + 1);
+  if (!num) return js_mkerr(js, "oom");
+  memcpy(num, digits, dlen);
+  num[dlen] = '\0';
+  size_t numlen = dlen;
+  
+  while (numlen > 0 && !(numlen == 1 && num[0] == '0')) {
+    int remainder = 0;
+    for (size_t i = 0; i < numlen; i++) {
+      int d = remainder * 10 + (num[i] - '0');
+      num[i] = '0' + (d / radix);
+      remainder = d % radix;
+    }
+    size_t start = 0;
+    while (start < numlen - 1 && num[start] == '0') start++;
+    memmove(num, num + start, numlen - start + 1);
+    numlen -= start;
+    if (numlen == 1 && num[0] == '0') numlen = 0;
+    rpos--;
+    result[rpos] = remainder < 10 ? '0' + remainder : 'a' + (remainder - 10);
+  }
+  
+  free(num);
+  
+  if (rpos == sizeof(result) - 1) {
+    result[--rpos] = '0';
+  }
+  
+  if (neg) result[--rpos] = '-';
+  
+  return js_mkstr(js, result + rpos, sizeof(result) - 1 - rpos);
 }
 
 static jsval_t mkobj(struct js *js, jsoff_t parent) {
@@ -3119,6 +3207,7 @@ static jsval_t get_prototype_for_type(struct js *js, uint8_t type) {
     case T_FUNC:    return get_ctor_proto(js, "Function", 8);
     case T_PROMISE: return get_ctor_proto(js, "Promise", 7);
     case T_OBJ:     return get_ctor_proto(js, "Object", 6);
+    case T_BIGINT:  return get_ctor_proto(js, "BigInt", 6);
     default:        return js_mknull();
   }
 }
@@ -3148,7 +3237,7 @@ static jsoff_t lkp_proto(struct js *js, jsval_t obj, const char *key, size_t len
       cur = get_proto(js, cur);
       if (vtype(cur) == T_NULL || vtype(cur) == T_UNDEF) break;
       depth++;
-    } else if (t == T_STR || t == T_NUM || t == T_BOOL) {
+    } else if (t == T_STR || t == T_NUM || t == T_BOOL || t == T_BIGINT) {
       jsval_t proto = get_prototype_for_type(js, t);
       if (vtype(proto) == T_NULL || vtype(proto) == T_UNDEF) break;
       cur = proto;
@@ -3454,7 +3543,7 @@ static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
     return resolveprop(js, mkval(T_PROP, off));
   }
   
-  if (t == T_STR || t == T_NUM || t == T_BOOL) {
+  if (t == T_STR || t == T_NUM || t == T_BOOL || t == T_BIGINT) {
     jsoff_t off = lkp_proto(js, l, ptr, plen);
     if (off != 0) {
       return resolveprop(js, mkval(T_PROP, off));
@@ -4185,13 +4274,15 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
   if (is_assign(op) && vtype(lhs) != T_PROP && vtype(lhs) != T_PROPREF) return js_mkerr(js, "bad lhs");
   
   switch (op) {
-    case TOK_TYPEOF:     return js_mkstr(js, typestr(vtype(r)), strlen(typestr(vtype(r))));
-    case TOK_VOID:       return js_mkundef();
-    case TOK_INSTANCEOF: return do_instanceof(js, l, r);
-    case TOK_IN:         return do_in(js, l, r);
-    case TOK_CALL:       return do_call_op(js, l, r);
-    case TOK_BRACKET:    return do_bracket_op(js, l, rhs);
-    case TOK_ASSIGN:     return assign(js, lhs, r);
+    case TOK_TYPEOF:         return js_mkstr(js, typestr(vtype(r)), strlen(typestr(vtype(r))));
+    case TOK_VOID:           return js_mkundef();
+    case TOK_INSTANCEOF:     return do_instanceof(js, l, r);
+    case TOK_IN:             return do_in(js, l, r);
+    case TOK_CALL:           return do_call_op(js, l, r);
+    case TOK_BRACKET:        return do_bracket_op(js, l, rhs);
+    case TOK_ASSIGN:         return assign(js, lhs, r);
+    case TOK_DOT:            return do_dot_op(js, l, r);
+    case TOK_OPTIONAL_CHAIN: return do_optional_chain_op(js, l, r);
     case TOK_POSTINC: {
       if (vtype(lhs) != T_PROP) return js_mkerr(js, "bad lhs for ++");
       do_assign_op(js, TOK_PLUS_ASSIGN, lhs, tov(1)); return l;
@@ -4225,6 +4316,18 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
       } else {
         eq = vdata(l) == vdata(r);
       }
+    } else if ((vtype(l) == T_BIGINT && vtype(r) == T_NUM) ||
+               (vtype(l) == T_NUM && vtype(r) == T_BIGINT)) {
+      double num_val = vtype(l) == T_NUM ? tod(l) : tod(r);
+      jsval_t bigint_val = vtype(l) == T_BIGINT ? l : r;
+      if (isfinite(num_val) && num_val == trunc(num_val)) {
+        bool neg = num_val < 0;
+        if (neg) num_val = -num_val;
+        char buf[64];
+        snprintf(buf, sizeof(buf), "%.0f", num_val);
+        jsval_t num_as_bigint = mkbigint(js, buf, strlen(buf), neg);
+        eq = bigint_compare(js, bigint_val, num_as_bigint) == 0;
+      }
     }
     return mkval(T_BOOL, op == TOK_EQ ? eq : !eq);
   }
@@ -4238,6 +4341,7 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
       case TOK_MUL:   return bigint_mul(js, l, r);
       case TOK_DIV:   return bigint_div(js, l, r);
       case TOK_REM:   return bigint_mod(js, l, r);
+      case TOK_EXP:   return bigint_exp(js, l, r);
       case TOK_LT:    return mkval(T_BOOL, bigint_compare(js, l, r) < 0);
       case TOK_GT:    return mkval(T_BOOL, bigint_compare(js, l, r) > 0);
       case TOK_LE:    return mkval(T_BOOL, bigint_compare(js, l, r) <= 0);
@@ -8633,7 +8737,7 @@ static jsval_t builtin_object_getPrototypeOf(struct js *js, jsval_t *args, int n
   jsval_t obj = args[0];
   uint8_t t = vtype(obj);
   
-  if (t == T_STR || t == T_NUM || t == T_BOOL) return get_prototype_for_type(js, t);
+  if (t == T_STR || t == T_NUM || t == T_BOOL || t == T_BIGINT) return get_prototype_for_type(js, t);
   if (t == T_OBJ || t == T_ARR || t == T_FUNC) return get_proto(js, obj);
   
   return js_mknull();
@@ -13571,6 +13675,10 @@ struct js *js_create(void *buf, size_t len) {
   jsval_t boolean_proto = js_mkobj(js);
   set_proto(js, boolean_proto, object_proto);
   
+  jsval_t bigint_proto = js_mkobj(js);
+  set_proto(js, bigint_proto, object_proto);
+  setprop(js, bigint_proto, js_mkstr(js, "toString", 8), js_mkfun(builtin_bigint_toString));
+  
   jsval_t error_proto = js_mkobj(js);
   set_proto(js, error_proto, object_proto);
   setprop(js, error_proto, js_mkstr(js, "name", 4), js_mkstr(js, "Error", 5));
@@ -13728,6 +13836,7 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, bigint_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_BigInt));
   setprop(js, bigint_ctor_obj, js_mkstr(js, "asIntN", 6), js_mkfun(builtin_BigInt_asIntN));
   setprop(js, bigint_ctor_obj, js_mkstr(js, "asUintN", 7), js_mkfun(builtin_BigInt_asUintN));
+  setprop(js, bigint_ctor_obj, js_mkstr(js, "prototype", 9), bigint_proto);
   setprop(js, glob, js_mkstr(js, "BigInt", 6), mkval(T_FUNC, vdata(bigint_ctor_obj)));
   
   setprop(js, glob, js_mkstr(js, "eval", 4), js_mkfun(builtin_eval));

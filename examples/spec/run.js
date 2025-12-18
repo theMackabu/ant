@@ -25,7 +25,8 @@ for (const file of files) {
   const name = path.basename(file, '.js');
 
   try {
-    const result = await $`ant ${filePath}`;
+    const result = await $`./build/ant ${filePath}`;
+    console.log(result.text());
 
     if (result.exitCode === 0) {
       console.log(`${GREEN}✓${RESET} ${name}`);
