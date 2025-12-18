@@ -2082,6 +2082,8 @@ static jsval_t mkarr(struct js *js) {
   return mkval(T_ARR, vdata(arr));
 }
 
+jsval_t js_mkarr(struct js *js) { return mkarr(js); }
+
 static jsoff_t arr_length(struct js *js, jsval_t arr) {
   if (vtype(arr) != T_ARR) return 0;
   jsoff_t scan = loadoff(js, (jsoff_t) vdata(arr)) & ~(3U | CONSTMASK);
@@ -8876,6 +8878,26 @@ static jsval_t builtin_array_push(struct js *js, jsval_t *args, int nargs) {
   
   setprop(js, arr, len_key, len_val);
   return len_val;
+}
+
+void js_arr_push(struct js *js, jsval_t arr, jsval_t val) {
+  arr = resolveprop(js, arr);
+  if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ) return;
+  
+  jsoff_t off = lkp(js, arr, "length", 6);
+  jsoff_t len = 0;
+  if (off != 0) {
+    jsval_t len_val = resolveprop(js, mkval(T_PROP, off));
+    if (vtype(len_val) == T_NUM) len = (jsoff_t) tod(len_val);
+  }
+  
+  char idxstr[16];
+  snprintf(idxstr, sizeof(idxstr), "%u", (unsigned) len);
+  jsval_t key = js_mkstr(js, idxstr, strlen(idxstr));
+  setprop(js, arr, key, val);
+  
+  jsval_t len_key = js_mkstr(js, "length", 6);
+  setprop(js, arr, len_key, tov((double)(len + 1)));
 }
 
 static jsval_t builtin_array_pop(struct js *js, jsval_t *args, int nargs) {

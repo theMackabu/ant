@@ -46,6 +46,8 @@ jsval_t js_getcurrentfunc(struct js *);
 jsval_t js_get(struct js *, jsval_t, const char *);
 
 jsval_t js_mkobj(struct js *);
+jsval_t js_mkarr(struct js *);
+void js_arr_push(struct js *, jsval_t arr, jsval_t val);
 jsval_t js_mkstr(struct js *, const void *, size_t);
 jsval_t js_mkerr(struct js *js, const char *fmt, ...);
 jsval_t js_mkfun(jsval_t (*fn)(struct js *, jsval_t *, int));
