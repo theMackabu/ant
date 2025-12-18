@@ -8326,6 +8326,126 @@ static jsval_t builtin_Date_now(struct js *js, jsval_t *args, int nargs) {
   return tov(timestamp_ms);
 }
 
+static double date_get_time(struct js *js, jsval_t this_val) {
+  jsoff_t time_off = lkp(js, this_val, "__time", 6);
+  if (time_off == 0) return NAN;
+  jsval_t time_val = resolveprop(js, mkval(T_PROP, time_off));
+  if (vtype(time_val) != T_NUM) return NAN;
+  return tod(time_val);
+}
+
+static jsval_t builtin_Date_getTime(struct js *js, jsval_t *args, int nargs) {
+  (void) args;
+  (void) nargs;
+  return tov(date_get_time(js, js->this_val));
+}
+
+static jsval_t builtin_Date_getFullYear(struct js *js, jsval_t *args, int nargs) {
+  (void) args;
+  (void) nargs;
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return tov(NAN);
+  time_t t = (time_t)(ms / 1000.0);
+  struct tm *tm = localtime(&t);
+  return tov((double)(tm->tm_year + 1900));
+}
+
+static jsval_t builtin_Date_getMonth(struct js *js, jsval_t *args, int nargs) {
+  (void) args;
+  (void) nargs;
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return tov(NAN);
+  time_t t = (time_t)(ms / 1000.0);
+  struct tm *tm = localtime(&t);
+  return tov((double)tm->tm_mon);
+}
+
+static jsval_t builtin_Date_getDate(struct js *js, jsval_t *args, int nargs) {
+  (void) args;
+  (void) nargs;
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return tov(NAN);
+  time_t t = (time_t)(ms / 1000.0);
+  struct tm *tm = localtime(&t);
+  return tov((double)tm->tm_mday);
+}
+
+static jsval_t builtin_Date_getHours(struct js *js, jsval_t *args, int nargs) {
+  (void) args;
+  (void) nargs;
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return tov(NAN);
+  time_t t = (time_t)(ms / 1000.0);
+  struct tm *tm = localtime(&t);
+  return tov((double)tm->tm_hour);
+}
+
+static jsval_t builtin_Date_getMinutes(struct js *js, jsval_t *args, int nargs) {
+  (void) args;
+  (void) nargs;
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return tov(NAN);
+  time_t t = (time_t)(ms / 1000.0);
+  struct tm *tm = localtime(&t);
+  return tov((double)tm->tm_min);
+}
+
+static jsval_t builtin_Date_getSeconds(struct js *js, jsval_t *args, int nargs) {
+  (void) args;
+  (void) nargs;
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return tov(NAN);
+  time_t t = (time_t)(ms / 1000.0);
+  struct tm *tm = localtime(&t);
+  return tov((double)tm->tm_sec);
+}
+
+static jsval_t builtin_Date_getMilliseconds(struct js *js, jsval_t *args, int nargs) {
+  (void) args;
+  (void) nargs;
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return tov(NAN);
+  return tov(fmod(ms, 1000.0));
+}
+
+static jsval_t builtin_Date_getDay(struct js *js, jsval_t *args, int nargs) {
+  (void) args;
+  (void) nargs;
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return tov(NAN);
+  time_t t = (time_t)(ms / 1000.0);
+  struct tm *tm = localtime(&t);
+  return tov((double)tm->tm_wday);
+}
+
+static jsval_t builtin_Date_toISOString(struct js *js, jsval_t *args, int nargs) {
+  (void) args;
+  (void) nargs;
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return js_mkerr(js, "Invalid Date");
+  time_t t = (time_t)(ms / 1000.0);
+  struct tm *tm = gmtime(&t);
+  int millis = (int)fmod(ms, 1000.0);
+  if (millis < 0) millis += 1000;
+  char buf[32];
+  snprintf(buf, sizeof(buf), "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ",
+           tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday,
+           tm->tm_hour, tm->tm_min, tm->tm_sec, millis);
+  return js_mkstr(js, buf, strlen(buf));
+}
+
+static jsval_t builtin_Date_toString(struct js *js, jsval_t *args, int nargs) {
+  (void) args;
+  (void) nargs;
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return js_mkstr(js, "Invalid Date", 12);
+  time_t t = (time_t)(ms / 1000.0);
+  char *s = ctime(&t);
+  size_t len = strlen(s);
+  if (len > 0 && s[len - 1] == '\n') len--;
+  return js_mkstr(js, s, len);
+}
+
 static jsval_t builtin_Math_abs(struct js *js, jsval_t *args, int nargs) {
   (void) js;
   if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
@@ -13744,6 +13864,17 @@ struct js *js_create(void *buf, size_t len) {
   
   jsval_t date_proto = js_mkobj(js);
   set_proto(js, date_proto, object_proto);
+  setprop(js, date_proto, js_mkstr(js, "getTime", 7), js_mkfun(builtin_Date_getTime));
+  setprop(js, date_proto, js_mkstr(js, "getFullYear", 11), js_mkfun(builtin_Date_getFullYear));
+  setprop(js, date_proto, js_mkstr(js, "getMonth", 8), js_mkfun(builtin_Date_getMonth));
+  setprop(js, date_proto, js_mkstr(js, "getDate", 7), js_mkfun(builtin_Date_getDate));
+  setprop(js, date_proto, js_mkstr(js, "getHours", 8), js_mkfun(builtin_Date_getHours));
+  setprop(js, date_proto, js_mkstr(js, "getMinutes", 10), js_mkfun(builtin_Date_getMinutes));
+  setprop(js, date_proto, js_mkstr(js, "getSeconds", 10), js_mkfun(builtin_Date_getSeconds));
+  setprop(js, date_proto, js_mkstr(js, "getMilliseconds", 15), js_mkfun(builtin_Date_getMilliseconds));
+  setprop(js, date_proto, js_mkstr(js, "getDay", 6), js_mkfun(builtin_Date_getDay));
+  setprop(js, date_proto, js_mkstr(js, "toISOString", 11), js_mkfun(builtin_Date_toISOString));
+  setprop(js, date_proto, js_mkstr(js, "toString", 8), js_mkfun(builtin_Date_toString));
   
   jsval_t regexp_proto = js_mkobj(js);
   set_proto(js, regexp_proto, object_proto);
