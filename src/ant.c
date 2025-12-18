@@ -350,7 +350,7 @@ static jsval_t js_while(struct js *js);
 static jsval_t js_do_while(struct js *js);
 static jsval_t js_block_or_stmt(struct js *js);
 static jsval_t js_var_decl(struct js *js);
-static bool parse_func_params(struct js *js, uint8_t *flags);
+static bool parse_func_params(struct js *js, uint8_t *flags, int *out_count);
 static jsval_t js_regex_literal(struct js *js);
 static jsval_t js_try(struct js *js);
 static jsval_t js_switch(struct js *js);
@@ -4846,7 +4846,7 @@ static jsval_t js_obj_literal(struct js *js) {
       uint8_t flags = js->flags;
       jsoff_t pos = js->pos - 1;
       js->consumed = 1;
-      if (!parse_func_params(js, &flags)) {
+      if (!parse_func_params(js, &flags, NULL)) {
         js->flags = flags;
         return js_mkerr(js, "invalid parameters");
       }
@@ -4906,7 +4906,7 @@ static jsval_t js_obj_literal(struct js *js) {
   return obj;
 }
 
-static bool parse_func_params(struct js *js, uint8_t *flags) {
+static bool parse_func_params(struct js *js, uint8_t *flags, int *out_count) {
   const char *param_names[32];
   size_t param_lens[32];
   int param_count = 0;
@@ -4988,6 +4988,7 @@ static bool parse_func_params(struct js *js, uint8_t *flags) {
     }
     js->consumed = 1;
   }
+  if (out_count) *out_count = param_count;
   return true;
 }
 
@@ -5003,7 +5004,8 @@ static jsval_t js_func_literal(struct js *js, bool is_async) {
   
   EXPECT(TOK_LPAREN, js->flags = flags);
   jsoff_t pos = js->pos - 1;
-  if (!parse_func_params(js, &flags)) {
+  int param_count = 0;
+  if (!parse_func_params(js, &flags, &param_count)) {
     js->flags = flags;
     return js_mkerr(js, "invalid parameters");
   }
@@ -5027,6 +5029,11 @@ static jsval_t js_func_literal(struct js *js, bool is_async) {
   if (is_err(code_key)) return code_key;
   jsval_t res2 = setprop(js, func_obj, code_key, str);
   if (is_err(res2)) return res2;
+  
+  jsval_t len_key = js_mkstr(js, "length", 6);
+  if (is_err(len_key)) return len_key;
+  jsval_t res_len = setprop(js, func_obj, len_key, tov(param_count));
+  if (is_err(res_len)) return res_len;
   
   if (is_async) {
     jsval_t async_key = js_mkstr(js, "__async", 7);
@@ -5689,6 +5696,19 @@ static jsval_t js_unary(struct js *js) {
       return js_throw(js, result);
     }
     return result;
+  } else if (next(js) == TOK_POSTINC || js->tok == TOK_POSTDEC) {
+    uint8_t op = js->tok;
+    js->consumed = 1;
+    jsval_t operand = js_unary(js);
+    if (is_err(operand)) return operand;
+    if (js->flags & F_NOEXEC) return operand;
+    jsval_t resolved = resolveprop(js, operand);
+    if (vtype(operand) == T_PROP || vtype(operand) == T_PROPREF) {
+      do_assign_op(js, op == TOK_POSTINC ? TOK_PLUS_ASSIGN : TOK_MINUS_ASSIGN, operand, tov(1));
+    } else {
+      return js_mkerr(js, "bad expr");
+    }
+    return do_op(js, op == TOK_POSTINC ? TOK_PLUS : TOK_MINUS, resolved, tov(1));
   } else if (next(js) == TOK_NOT || js->tok == TOK_TILDA || js->tok == TOK_TYPEOF ||
       js->tok == TOK_VOID || js->tok == TOK_MINUS || js->tok == TOK_PLUS) {
     uint8_t t = js->tok;
@@ -6060,6 +6080,7 @@ static jsval_t js_func_decl(struct js *js) {
   js->consumed = 1;
   EXPECT(TOK_LPAREN, );
   jsoff_t pos = js->pos - 1;
+  int param_count = 0;
   for (bool comma = false; next(js) != TOK_EOF; comma = true) {
     if (!comma && next(js) == TOK_RPAREN) break;
     
@@ -6071,6 +6092,7 @@ static jsval_t js_func_decl(struct js *js) {
     }
     
     if (next(js) != TOK_IDENTIFIER) return js_mkerr(js, "identifier expected");
+    param_count++;
     js->consumed = 1;
     
     if (next(js) == TOK_ASSIGN) {
@@ -6117,6 +6139,10 @@ static jsval_t js_func_decl(struct js *js) {
   if (is_err(code_key)) return code_key;
   jsval_t res2 = setprop(js, func_obj, code_key, str);
   if (is_err(res2)) return res2;
+  jsval_t len_key = js_mkstr(js, "length", 6);
+  if (is_err(len_key)) return len_key;
+  jsval_t res_len = setprop(js, func_obj, len_key, tov(param_count));
+  if (is_err(res_len)) return res_len;
   jsval_t name_key = js_mkstr(js, "name", 4);
   if (is_err(name_key)) return name_key;
   jsval_t name_val = js_mkstr(js, name, nlen);
@@ -6154,7 +6180,7 @@ static jsval_t js_func_decl_async(struct js *js) {
   js->consumed = 1;
   EXPECT(TOK_LPAREN, );
   jsoff_t pos = js->pos - 1;
-  if (!parse_func_params(js, NULL)) {
+  if (!parse_func_params(js, NULL, NULL)) {
     return js_mkerr(js, "invalid parameters");
   }
   EXPECT(TOK_RPAREN, );
@@ -6275,6 +6301,8 @@ static jsval_t js_for(struct js *js) {
   jsoff_t var_name_off = 0, var_name_len = 0;
   bool is_const_var = false;
   bool is_var_decl = false;
+  bool is_let_loop = false;
+  jsoff_t let_var_off = 0, let_var_len = 0;
   
   if (next(js) == TOK_LET || next(js) == TOK_CONST || next(js) == TOK_VAR) {
     if (js->tok == TOK_VAR) {
@@ -6283,12 +6311,18 @@ static jsval_t js_for(struct js *js) {
         fprintf(stderr, "Warning: 'var' is deprecated, use 'let' or 'const' instead\n");
         js->var_warning_shown = true;
       }
+    } else if (js->tok == TOK_LET) {
+      is_let_loop = true;
     }
     is_const_var = (js->tok == TOK_CONST);
     js->consumed = 1;
     if (next(js) == TOK_IDENTIFIER) {
       var_name_off = js->toff;
       var_name_len = js->tlen;
+      if (is_let_loop) {
+        let_var_off = var_name_off;
+        let_var_len = var_name_len;
+      }
       js->consumed = 1;
       if (next(js) == TOK_IN) {
         is_for_in = true;
@@ -6576,9 +6610,39 @@ static jsval_t js_for(struct js *js) {
       if (is_err2(&v, &res)) goto done;
       if (!js_truthy(js, v)) break;
     }
+    
+    jsval_t iter_scope = js_mkundef();
+    jsval_t loop_var_val = js_mkundef();
+    if (is_let_loop && let_var_len > 0) {
+      jsoff_t var_off = lkp(js, js->scope, &js->code[let_var_off], let_var_len);
+      if (var_off != 0) {
+        loop_var_val = resolveprop(js, mkval(T_PROP, var_off));
+      }
+      mkscope(js);
+      iter_scope = js->scope;
+      jsval_t var_key = js_mkstr(js, &js->code[let_var_off], let_var_len);
+      mkprop(js, js->scope, var_key, loop_var_val, false);
+    }
+    
     js->pos = pos3, js->consumed = 1, js->flags |= F_LOOP;
     v = js_block_or_stmt(js);
-    if (is_err2(&v, &res)) goto done;
+    if (is_err2(&v, &res)) {
+      if (vtype(iter_scope) != T_UNDEF) delscope(js);
+      goto done;
+    }
+    
+    if (is_let_loop && let_var_len > 0) {
+      jsoff_t iter_var_off = lkp(js, iter_scope, &js->code[let_var_off], let_var_len);
+      if (iter_var_off != 0) {
+        loop_var_val = resolveprop(js, mkval(T_PROP, iter_var_off));
+      }
+      delscope(js);
+      jsoff_t outer_var_off = lkp(js, js->scope, &js->code[let_var_off], let_var_len);
+      if (outer_var_off != 0) {
+        saveval(js, outer_var_off + sizeof(jsoff_t) * 2, loop_var_val);
+      }
+    }
+    
     if (js->flags & F_BREAK) break;
     if (js->flags & F_RETURN) {
       res = v;
