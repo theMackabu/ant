@@ -13897,6 +13897,18 @@ jsval_t js_get(struct js *js, jsval_t obj, const char *key) {
     return off == 0 ? js_mkundef() : resolveprop(js, mkval(T_PROP, off));
   }
   
+  if (vtype(obj) == T_PROMISE) {
+    jsval_t prom_obj = mkval(T_OBJ, vdata(obj));
+    jsoff_t off = lkp(js, prom_obj, key, key_len);
+    if (off != 0) return resolveprop(js, mkval(T_PROP, off));
+    jsval_t promise_proto = get_ctor_proto(js, "Promise", 7);
+    if (vtype(promise_proto) != T_UNDEF && vtype(promise_proto) != T_NULL) {
+      off = lkp(js, promise_proto, key, key_len);
+      if (off != 0) return resolveprop(js, mkval(T_PROP, off));
+    }
+    return js_mkundef();
+  }
+  
   if (vtype(obj) != T_OBJ) return js_mkundef();
   jsoff_t off = lkp(js, obj, key, key_len);
   
