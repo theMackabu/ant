@@ -208,46 +208,99 @@ export class Radix3 {
     for (let i = 0; i < methods.length; i = i + 1) {
       const method = methods[i];
       console.log('[' + method + ']');
-      this.printNode(this.methods[method], '', true);
+
+      const routes = [];
+      this.collectRoutes(this.methods[method], '', routes);
+
+      const tree = {};
+      for (let j = 0; j < routes.length; j = j + 1) {
+        const route = routes[j];
+        const parts = this.splitPath(route.path);
+        let current = tree;
+        for (let k = 0; k < parts.length; k = k + 1) {
+          const part = parts[k];
+          if (current[part] === undefined) {
+            current[part] = { _children: {}, _handler: false };
+          }
+          if (k === parts.length - 1) {
+            current[part]._handler = route.hasHandler;
+          }
+          current = current[part]._children;
+        }
+      }
+
+      this.printPathTree(tree, '');
       if (i < methods.length - 1) console.log('');
     }
   }
 
-  printNode(node, prefix, isLast) {
-    const marker = isLast ? '└─ ' : '├─ ';
-    let line = prefix + marker;
+  splitPath(path) {
+    const parts = [];
+    let i = 0;
 
-    if (node.prefix !== '') {
-      line = line + '"' + node.prefix + '"';
-    } else {
-      line = line + '(root)';
+    while (i < path.length) {
+      if (path[i] === '/') {
+        let segment = '/';
+        i = i + 1;
+        while (i < path.length && path[i] !== '/' && path[i] !== ':' && path[i] !== '*') {
+          segment = segment + path[i];
+          i = i + 1;
+        }
+        if (segment !== '/') {
+          parts.push(segment);
+        } else if (parts.length === 0) {
+          parts.push('/');
+        }
+      } else if (path[i] === ':' || path[i] === '*') {
+        let segment = path[i];
+        i = i + 1;
+        while (i < path.length && path[i] !== '/') {
+          segment = segment + path[i];
+          i = i + 1;
+        }
+        parts.push(segment);
+      } else {
+        i = i + 1;
+      }
     }
+
+    return parts;
+  }
+
+  printPathTree(tree, indent) {
+    const keys = Object.keys(tree);
+    for (let i = 0; i < keys.length; i = i + 1) {
+      const key = keys[i];
+      const node = tree[key];
+      const isLast = i === keys.length - 1;
+      const marker = isLast ? '└─ ' : '├─ ';
+      let line = indent + marker + key;
+      if (node._handler) {
+        line = line + ' [HANDLER]';
+      }
+      console.log(line);
+      const childIndent = indent + (isLast ? '    ' : '│   ');
+      this.printPathTree(node._children, childIndent);
+    }
+  }
+
+  collectRoutes(node, currentPath, routes) {
+    const path = currentPath + node.prefix;
 
     if (node.handler !== undefined) {
-      line = line + ' [HANDLER]';
+      routes.push({ path: path, hasHandler: true });
     }
-
-    if (node.paramName !== undefined) {
-      line = line + ' :' + node.paramName;
-    }
-
-    console.log(line);
-    const childPrefix = prefix + (isLast ? '    ' : '│   ');
 
     for (let i = 0; i < node.children.length; i = i + 1) {
-      const isLastChild = i === node.children.length - 1 && node.paramChild === undefined && node.wildcardChild === undefined;
-      this.printNode(node.children[i], childPrefix, isLastChild);
+      this.collectRoutes(node.children[i], path, routes);
     }
 
     if (node.paramChild !== undefined) {
-      const isLastChild = node.wildcardChild === undefined;
-      console.log(childPrefix + (isLastChild ? '└─ ' : '├─ ') + ':' + node.paramChild.paramName);
-      this.printNode(node.paramChild, childPrefix + (isLastChild ? '    ' : '│   '), true);
+      this.collectRoutes(node.paramChild, path + ':' + node.paramChild.paramName, routes);
     }
 
     if (node.wildcardChild !== undefined) {
-      console.log(childPrefix + '└─ *' + node.wildcardChild.paramName);
-      this.printNode(node.wildcardChild, childPrefix + '    ', true);
+      routes.push({ path: path + '*' + node.wildcardChild.paramName, hasHandler: node.wildcardChild.handler !== undefined });
     }
   }
 }
