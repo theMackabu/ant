@@ -9,8 +9,6 @@ const BOLD = '\x1b[1m';
 const DIM = '\x1b[2m';
 const RESET = '\x1b[0m';
 
-console.log(path);
-
 const specDir = path.dirname(import.meta.url.replace('file://', ''));
 const files = fs
   .readdirSync(specDir)

@@ -804,6 +804,12 @@ static void scan_obj_refs(struct js *js, jsval_t obj) {
     next = loadoff(js, next) & ~(3U | CONSTMASK);
   }
   
+  jsoff_t proto_off = lkp(js, obj, "__proto__", 9);
+  if (proto_off != 0) {
+    jsval_t proto_val = resolveprop(js, mkval(T_PROP, proto_off));
+    if (vtype(proto_val) == T_OBJ) scan_refs(js, proto_val);
+  }
+  
   stringify_depth--;
 }
 
@@ -860,7 +866,8 @@ static void scan_refs(struct js *js, jsval_t value) {
 
 static int get_circular_ref(jsval_t obj) {
   if (is_on_stack(obj)) {
-    return find_multiref(obj);
+    int ref = find_multiref(obj);
+    return ref ? ref : -1;
   }
   return 0;
 }
@@ -895,7 +902,7 @@ static size_t strbigint(struct js *js, jsval_t value, char *buf, size_t len);
 
 static size_t strarr(struct js *js, jsval_t obj, char *buf, size_t len) {
   int ref = get_circular_ref(obj);
-  if (ref) return (size_t) snprintf(buf, len, "[Circular *%d]", ref);
+  if (ref) return ref > 0 ? (size_t) snprintf(buf, len, "[Circular *%d]", ref) : cpy(buf, len, "[Circular]", 10);
   
   push_stringify(obj);
   size_t n = cpy(buf, len, "[ ", 2);
@@ -1064,6 +1071,18 @@ static size_t strkey(struct js *js, jsval_t value, char *buf, size_t len) {
 
 static size_t print_prototype(struct js *js, jsval_t proto_val, char *buf, size_t len, bool *first) {
   size_t n = 0;
+  
+  int ref = get_circular_ref(proto_val);
+  if (ref) {
+    if (!*first) n += cpy(buf + n, len - n, ",\n", 2);
+    *first = false;
+    n += add_indent(buf + n, len - n, stringify_indent);
+    n += ref > 0 ? (size_t) snprintf(buf + n, len - n, "[Prototype]: [Circular *%d]", ref) : cpy(buf + n, len - n, "[Prototype]: [Circular]", 23);
+    return n;
+  }
+  
+  push_stringify(proto_val);
+  
   bool has_proto_props = false;
   jsoff_t proto_next = loadoff(js, (jsoff_t) vdata(proto_val)) & ~(3U | CONSTMASK);
   
@@ -1115,6 +1134,7 @@ static size_t print_prototype(struct js *js, jsval_t proto_val, char *buf, size_
     n += cpy(buf + n, len - n, "[Prototype]: {}", 15);
   }
   
+  pop_stringify();
   return n;
 }
 
@@ -1123,7 +1143,7 @@ static size_t strobj(struct js *js, jsval_t obj, char *buf, size_t len) {
   if (time_off != 0) return strdate(js, obj, buf, len);
   
   int ref = get_circular_ref(obj);
-  if (ref) return (size_t) snprintf(buf, len, "[Circular *%d]", ref);
+  if (ref) return ref > 0 ? (size_t) snprintf(buf, len, "[Circular *%d]", ref) : cpy(buf, len, "[Circular]", 10);
   
   push_stringify(obj);
   
@@ -1351,7 +1371,7 @@ static bool is_internal_prop(const char *key, jsoff_t klen) {
 
 static size_t strfunc_ctor(struct js *js, jsval_t func_obj, char *buf, size_t len) {
   int ref = get_circular_ref(func_obj);
-  if (ref) return (size_t) snprintf(buf, len, "[Circular *%d]", ref);
+  if (ref) return ref > 0 ? (size_t) snprintf(buf, len, "[Circular *%d]", ref) : cpy(buf, len, "[Circular]", 10);
   push_stringify(func_obj);
   
   size_t n = cpy(buf, len, "{\n", 2);
