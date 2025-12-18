@@ -1,6 +1,6 @@
 import { test, summary } from './helpers.js';
-import fs from 'fs';
-import path from 'path';
+import fs from 'ant:fs';
+import path from 'ant:path';
 
 console.log('FS Tests\n');
 

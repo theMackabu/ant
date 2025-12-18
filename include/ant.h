@@ -10,7 +10,7 @@ typedef uint64_t jsval_t;
 
 enum { 
   JS_UNDEF, JS_NULL, JS_TRUE, JS_FALSE, 
-  JS_STR, JS_NUM, JS_ERR, JS_PRIV, JS_PROMISE
+  JS_STR, JS_NUM, JS_ERR, JS_PRIV, JS_PROMISE, JS_OBJ
 };
 
 struct js *js_create(void *buf, size_t len);

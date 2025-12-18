@@ -227,7 +227,7 @@ static jsval_t do_fetch_microtask(struct js *js, jsval_t *args, int nargs) {
   char *body = NULL;
   size_t body_len = 0;
   
-  if (js_type(options_val) != JS_UNDEF && js_type(options_val) != JS_NULL) {
+  if (js_type(options_val) == JS_OBJ) {
     jsval_t method_val = js_get(js, options_val, "method");
     if (js_type(method_val) == JS_STR) {
       char *method_str = js_getstr(js, method_val, NULL);
@@ -260,9 +260,9 @@ static jsval_t do_fetch_microtask(struct js *js, jsval_t *args, int nargs) {
   snprintf(user_agent, sizeof(user_agent), "ant/%s", ANT_VERSION);
   tlsuv_http_req_header(req->http_req, "User-Agent", user_agent);
   
-  if (js_type(options_val) != JS_UNDEF && js_type(options_val) != JS_NULL) {
+  if (js_type(options_val) == JS_OBJ) {
     jsval_t headers_val = js_get(js, options_val, "headers");
-    if (js_type(headers_val) != JS_UNDEF && js_type(headers_val) != JS_NULL) {
+    if (js_type(headers_val) == JS_OBJ) {
       js_prop_iter_t iter = js_prop_iter_begin(js, headers_val);
       const char *key;
       size_t key_len;

@@ -140,8 +140,6 @@ static void on_open_for_read(uv_fs_t *uv_req) {
   size_t file_size = stat_req.statbuf.st_size;
   uv_fs_req_cleanup(&stat_req);
   
-  // For text reads (FS_OP_READ), allocate extra byte for null terminator
-  // For binary reads (FS_OP_READ_BYTES), allocate exact size
   size_t alloc_size = (req->op_type == FS_OP_READ) ? file_size + 1 : file_size;
   req->data = malloc(alloc_size);
   if (!req->data) {
@@ -534,6 +532,132 @@ static jsval_t builtin_fs_writeFileSync(struct js *js, jsval_t *args, int nargs)
   return js_mkundef();
 }
 
+static jsval_t builtin_fs_copyFileSync(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 2) return js_mkerr(js, "copyFileSync() requires src and dest arguments");
+  
+  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "copyFileSync() src must be a string");
+  if (js_type(args[1]) != JS_STR) return js_mkerr(js, "copyFileSync() dest must be a string");
+  
+  size_t src_len, dest_len;
+  char *src = js_getstr(js, args[0], &src_len);
+  char *dest = js_getstr(js, args[1], &dest_len);
+  
+  if (!src || !dest) return js_mkerr(js, "Failed to get arguments");
+  
+  char *src_cstr = strndup(src, src_len);
+  char *dest_cstr = strndup(dest, dest_len);
+  if (!src_cstr || !dest_cstr) {
+    free(src_cstr);
+    free(dest_cstr);
+    return js_mkerr(js, "Out of memory");
+  }
+  
+  FILE *in = fopen(src_cstr, "rb");
+  if (!in) {
+    char err_msg[256];
+    snprintf(err_msg, sizeof(err_msg), "Failed to open source file: %s", strerror(errno));
+    free(src_cstr);
+    free(dest_cstr);
+    return js_mkerr(js, err_msg);
+  }
+  
+  FILE *out = fopen(dest_cstr, "wb");
+  if (!out) {
+    char err_msg[256];
+    snprintf(err_msg, sizeof(err_msg), "Failed to open dest file: %s", strerror(errno));
+    fclose(in);
+    free(src_cstr);
+    free(dest_cstr);
+    return js_mkerr(js, err_msg);
+  }
+  
+  char buf[8192];
+  size_t n;
+  while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
+    if (fwrite(buf, 1, n, out) != n) {
+      fclose(in);
+      fclose(out);
+      free(src_cstr);
+      free(dest_cstr);
+      return js_mkerr(js, "Failed to write to dest file");
+    }
+  }
+  
+  fclose(in);
+  fclose(out);
+  free(src_cstr);
+  free(dest_cstr);
+  
+  return js_mkundef();
+}
+
+static jsval_t builtin_fs_renameSync(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 2) return js_mkerr(js, "renameSync() requires oldPath and newPath arguments");
+  
+  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "renameSync() oldPath must be a string");
+  if (js_type(args[1]) != JS_STR) return js_mkerr(js, "renameSync() newPath must be a string");
+  
+  size_t old_len, new_len;
+  char *old_path = js_getstr(js, args[0], &old_len);
+  char *new_path = js_getstr(js, args[1], &new_len);
+  
+  if (!old_path || !new_path) return js_mkerr(js, "Failed to get arguments");
+  
+  char *old_cstr = strndup(old_path, old_len);
+  char *new_cstr = strndup(new_path, new_len);
+  if (!old_cstr || !new_cstr) {
+    free(old_cstr);
+    free(new_cstr);
+    return js_mkerr(js, "Out of memory");
+  }
+  
+  int result = rename(old_cstr, new_cstr);
+  free(old_cstr);
+  free(new_cstr);
+  
+  if (result != 0) {
+    char err_msg[256];
+    snprintf(err_msg, sizeof(err_msg), "Failed to rename: %s", strerror(errno));
+    return js_mkerr(js, err_msg);
+  }
+  
+  return js_mkundef();
+}
+
+static jsval_t builtin_fs_appendFileSync(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 2) return js_mkerr(js, "appendFileSync() requires path and data arguments");
+  
+  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "appendFileSync() path must be a string");
+  if (js_type(args[1]) != JS_STR) return js_mkerr(js, "appendFileSync() data must be a string");
+  
+  size_t path_len, data_len;
+  char *path = js_getstr(js, args[0], &path_len);
+  char *data = js_getstr(js, args[1], &data_len);
+  
+  if (!path || !data) return js_mkerr(js, "Failed to get arguments");
+  
+  char *path_cstr = strndup(path, path_len);
+  if (!path_cstr) return js_mkerr(js, "Out of memory");
+  
+  FILE *file = fopen(path_cstr, "ab");
+  if (!file) {
+    char err_msg[256];
+    snprintf(err_msg, sizeof(err_msg), "Failed to open file: %s", strerror(errno));
+    free(path_cstr);
+    return js_mkerr(js, err_msg);
+  }
+  
+  size_t bytes_written = fwrite(data, 1, data_len, file);
+  fclose(file);
+  free(path_cstr);
+  
+  if (bytes_written != data_len) {
+    return js_mkerr(js, "Failed to write entire file");
+  }
+  
+  return js_mkundef();
+}
+
 static jsval_t builtin_fs_writeFile(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "writeFile() requires path and data arguments");
   
@@ -649,9 +773,24 @@ static jsval_t builtin_fs_mkdirSync(struct js *js, jsval_t *args, int nargs) {
   if (!path) return js_mkerr(js, "Failed to get path string");
   
   int mode = 0755;
-  if (nargs >= 2 && js_type(args[1]) == JS_NUM) {
-    mode = (int)js_getnum(args[1]);
+  int recursive = 0;
+  
+  if (nargs < 2) goto do_mkdir;
+  
+  switch (js_type(args[1])) {
+    case JS_NUM:
+      mode = (int)js_getnum(args[1]);
+      break;
+    case JS_OBJ: {
+      jsval_t opt = args[1];
+      recursive = js_type(js_get(js, opt, "recursive")) == JS_TRUE;
+      jsval_t mode_val = js_get(js, opt, "mode");
+      if (js_type(mode_val) == JS_NUM) mode = (int)js_getnum(mode_val);
+      break;
+    }
   }
+  
+do_mkdir:
   
   char *path_cstr = strndup(path, path_len);
   if (!path_cstr) return js_mkerr(js, "Out of memory");
@@ -664,6 +803,9 @@ static jsval_t builtin_fs_mkdirSync(struct js *js, jsval_t *args, int nargs) {
   free(path_cstr);
   
   if (result != 0) {
+    if (recursive && errno == EEXIST) {
+      return js_mkundef();
+    }
     char err_msg[256];
     snprintf(err_msg, sizeof(err_msg), "Failed to create directory: %s", strerror(errno));
     return js_mkerr(js, err_msg);
@@ -773,6 +915,18 @@ static jsval_t builtin_fs_rmdir(struct js *js, jsval_t *args, int nargs) {
   return req->promise;
 }
 
+static jsval_t stat_isFile(struct js *js, jsval_t *args, int nargs) {
+  jsval_t this = js_getthis(js);
+  jsval_t val = js_get(js, this, "_isFile");
+  return js_type(val) == JS_TRUE ? js_mktrue() : js_mkfalse();
+}
+
+static jsval_t stat_isDirectory(struct js *js, jsval_t *args, int nargs) {
+  jsval_t this = js_getthis(js);
+  jsval_t val = js_get(js, this, "_isDirectory");
+  return js_type(val) == JS_TRUE ? js_mktrue() : js_mkfalse();
+}
+
 static jsval_t builtin_fs_statSync(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "statSync() requires a path argument");
   
@@ -798,8 +952,10 @@ static jsval_t builtin_fs_statSync(struct js *js, jsval_t *args, int nargs) {
   jsval_t stat_obj = js_mkobj(js);
   js_set(js, stat_obj, "size", js_mknum((double)st.st_size));
   js_set(js, stat_obj, "mode", js_mknum((double)st.st_mode));
-  js_set(js, stat_obj, "isFile", S_ISREG(st.st_mode) ? js_mktrue() : js_mkfalse());
-  js_set(js, stat_obj, "isDirectory", S_ISDIR(st.st_mode) ? js_mktrue() : js_mkfalse());
+  js_set(js, stat_obj, "_isFile", S_ISREG(st.st_mode) ? js_mktrue() : js_mkfalse());
+  js_set(js, stat_obj, "_isDirectory", S_ISDIR(st.st_mode) ? js_mktrue() : js_mkfalse());
+  js_set(js, stat_obj, "isFile", js_mkfun(stat_isFile));
+  js_set(js, stat_obj, "isDirectory", js_mkfun(stat_isDirectory));
   
   return stat_obj;
 }
@@ -969,6 +1125,9 @@ jsval_t fs_library(struct js *js) {
   js_set(js, lib, "open", js_mkfun(builtin_fs_readBytesSync));
   js_set(js, lib, "writeFile", js_mkfun(builtin_fs_writeFile));
   js_set(js, lib, "writeFileSync", js_mkfun(builtin_fs_writeFileSync));
+  js_set(js, lib, "appendFileSync", js_mkfun(builtin_fs_appendFileSync));
+  js_set(js, lib, "copyFileSync", js_mkfun(builtin_fs_copyFileSync));
+  js_set(js, lib, "renameSync", js_mkfun(builtin_fs_renameSync));
   js_set(js, lib, "unlink", js_mkfun(builtin_fs_unlink));
   js_set(js, lib, "unlinkSync", js_mkfun(builtin_fs_unlinkSync));
   js_set(js, lib, "mkdir", js_mkfun(builtin_fs_mkdir));

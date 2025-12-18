@@ -14248,6 +14248,7 @@ int js_type(jsval_t val) {
     case T_NUM:     return JS_NUM;
     case T_ERR:     return JS_ERR;
     case T_PROMISE: return JS_PROMISE;
+    case T_OBJ:     return JS_OBJ;
     default:        return JS_PRIV;
   }
 }
