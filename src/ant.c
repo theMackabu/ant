@@ -5511,6 +5511,46 @@ static jsval_t js_unary(struct js *js) {
     uint8_t save_tok = js->tok;
     jsval_t operand = js_postfix(js);
     if (js->flags & F_NOEXEC) return js_mktrue();
+    
+    if (vtype(operand) == T_PROPREF) {
+      jsoff_t obj_off = propref_obj(operand);
+      jsoff_t key_off = propref_key(operand);
+      jsval_t obj = mkval(T_OBJ, obj_off);
+      jsval_t key = mkval(T_STR, key_off);
+      jsoff_t len;
+      const char *key_str = (const char *)&js->mem[vstr(js, key, &len)];
+      jsoff_t prop_off = lkp(js, obj, key_str, len);
+      if (prop_off == 0) return js_mktrue();
+      if (is_const_prop(js, prop_off)) {
+        return js_mkerr(js, "cannot delete constant property");
+      }
+      jsoff_t first_prop = loadoff(js, obj_off) & ~(3U | CONSTMASK | GCMASK);
+      if (first_prop == prop_off) {
+        jsoff_t deleted_next = loadoff(js, prop_off) & ~(GCMASK | CONSTMASK);
+        jsoff_t current = loadoff(js, obj_off);
+        saveoff(js, obj_off, (deleted_next & ~3U) | (current & (GCMASK | CONSTMASK | 3U)));
+        saveoff(js, prop_off, loadoff(js, prop_off) | GCMASK);
+        invalidate_obj_cache(obj_off);
+        js_gc(js);
+        return js_mktrue();
+      }
+      jsoff_t prev = first_prop;
+      while (prev != 0) {
+        jsoff_t next_prop = loadoff(js, prev) & ~(3U | CONSTMASK | GCMASK);
+        if (next_prop == prop_off) {
+          jsoff_t deleted_next = loadoff(js, prop_off) & ~(GCMASK | CONSTMASK);
+          jsoff_t current = loadoff(js, prev);
+          saveoff(js, prev, (deleted_next & ~3U) | (current & (GCMASK | CONSTMASK | 3U)));
+          saveoff(js, prop_off, loadoff(js, prop_off) | GCMASK);
+          invalidate_obj_cache(obj_off);
+          js_gc(js);
+          return js_mktrue();
+        }
+        prev = next_prop;
+      }
+      return js_mktrue();
+    }
+    
     if (vtype(operand) != T_PROP) {
       return js_mktrue();
     }
@@ -5518,7 +5558,11 @@ static jsval_t js_unary(struct js *js) {
     if (is_const_prop(js, prop_off)) {
       return js_mkerr(js, "cannot delete constant property");
     }
-    jsval_t owner_obj = js_mkundef();
+    
+    jsoff_t owner_obj_off = 0;
+    jsoff_t prev_prop_off = 0;
+    bool is_first_prop = false;
+    
     for (jsoff_t off = 0; off < js->brk;) {
       jsoff_t v = loadoff(js, off);
       jsoff_t cleaned = v & ~(GCMASK | CONSTMASK);
@@ -5526,28 +5570,37 @@ static jsval_t js_unary(struct js *js) {
       if ((cleaned & 3) == T_OBJ) {
         jsoff_t first_prop = cleaned & ~3U;
         if (first_prop == prop_off) {
-          owner_obj = mkval(T_OBJ, off);
+          owner_obj_off = off;
+          is_first_prop = true;
           break;
         }
-      } else if ((cleaned & 3) == T_PROP) {
-        jsoff_t next_prop = cleaned & ~3U;
-        if (next_prop == prop_off) {
-          jsoff_t deleted_next = loadoff(js, prop_off) & ~(GCMASK | CONSTMASK);
-          jsoff_t current = loadoff(js, off);
-          saveoff(js, off, (deleted_next & ~3U) | (current & (GCMASK | CONSTMASK | 3U)));
-          saveoff(js, prop_off, loadoff(js, prop_off) | GCMASK);
-          js_gc(js);
-          return js_mktrue();
+        jsoff_t cur_prop = first_prop;
+        while (cur_prop != 0 && cur_prop < js->brk) {
+          jsoff_t next = loadoff(js, cur_prop) & ~(GCMASK | CONSTMASK | 3U);
+          if (next == prop_off) {
+            owner_obj_off = off;
+            prev_prop_off = cur_prop;
+            break;
+          }
+          cur_prop = next;
         }
+        if (owner_obj_off != 0) break;
       }
       off += n;
     }
-    if (vtype(owner_obj) == T_OBJ) {
-      jsoff_t obj_off = (jsoff_t) vdata(owner_obj);
-      jsoff_t deleted_next = loadoff(js, prop_off) & ~(GCMASK | CONSTMASK);
-      jsoff_t current = loadoff(js, obj_off);
-      saveoff(js, obj_off, (deleted_next & ~3U) | (current & (GCMASK | CONSTMASK | 3U)));
+    
+    if (owner_obj_off != 0) {
+      if (is_first_prop) {
+        jsoff_t deleted_next = loadoff(js, prop_off) & ~(GCMASK | CONSTMASK);
+        jsoff_t current = loadoff(js, owner_obj_off);
+        saveoff(js, owner_obj_off, (deleted_next & ~3U) | (current & (GCMASK | CONSTMASK | 3U)));
+      } else {
+        jsoff_t deleted_next = loadoff(js, prop_off) & ~(GCMASK | CONSTMASK);
+        jsoff_t current = loadoff(js, prev_prop_off);
+        saveoff(js, prev_prop_off, (deleted_next & ~3U) | (current & (GCMASK | CONSTMASK | 3U)));
+      }
       saveoff(js, prop_off, loadoff(js, prop_off) | GCMASK);
+      invalidate_obj_cache(owner_obj_off);
       js_gc(js);
     }
     (void) save_pos;
@@ -7494,7 +7547,12 @@ static jsval_t js_class_decl(struct js *js) {
     } else {
       jsval_t code_key = js_mkstr(js, "__code", 6);
       if (is_err(code_key)) return code_key;
-      jsval_t default_ctor = js_mkstr(js, "(){}", 4);
+      jsval_t default_ctor;
+      if (super_len > 0) {
+        default_ctor = js_mkstr(js, "(...args){super(...args);}", 26);
+      } else {
+        default_ctor = js_mkstr(js, "(){}", 4);
+      }
       if (is_err(default_ctor)) return default_ctor;
       jsval_t res2 = setprop(js, func_obj, code_key, default_ctor);
       if (is_err(res2)) return res2;
