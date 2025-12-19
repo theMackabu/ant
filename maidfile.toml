@@ -6,17 +6,26 @@ script = "meson compile"
 path = "build"
 script = "meson clean"
 
-[tasks.setup]
-script = "bash -c 'CC=\"ccache /opt/homebrew/opt/llvm/bin/clang\" meson setup build --wipe -Dc_args=-DNO_EXECUTE_PERMISSION'"
-
 [tasks.run]
 script = ["maid build -q", "./build/ant %{arg.1}"]
 
 [tasks.spec]
 script = ["maid build -q", "./build/ant examples/spec/%{arg.1}.js"]
 
-[tasks.debug]
-script = ["maid build -q", "./build/ant -d %{arg.1}"]
+[tasks.save_spec]
+script = ['rm spec.txt', '''
+   bash -c 'ant examples/spec/run.js \
+   | sed "s/\x1b\[[0-9;]*[a-zA-Z]//g" > spec.txt'
+''']
+
+[tasks.setup]
+script = '''
+   bash -c 'CC="ccache /opt/homebrew/opt/llvm/bin/clang" \
+   meson setup build --wipe -Dc_args=-DNO_EXECUTE_PERMISSION'
+'''
 
 [tasks.install]
-script = "bash -c 'which ant && cp ./build/ant \"$(which ant)\" || { mkdir -p ~/.local/bin && cp ./build/ant ~/.local/bin/; }'"
+script = '''
+   bash -c 'which ant && cp ./build/ant "$(which ant)" || 
+   { mkdir -p ~/.local/bin && cp ./build/ant ~/.local/bin/; }'
+'''
