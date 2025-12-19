@@ -1,5 +1,5 @@
 import { test, summary } from './helpers.js';
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'ant:events';
 
 console.log('EventEmitter Tests\n');
 
