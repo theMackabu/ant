@@ -335,6 +335,28 @@ static bool is_ident_continue(int c) { return c == '_' || c == '$' || is_alpha(c
 static bool is_err(jsval_t v) { return vtype(v) == T_ERR; }
 static bool is_unary(uint8_t tok) { return (tok >= TOK_POSTINC && tok <= TOK_UMINUS) || tok == TOK_NOT || tok == TOK_TILDA || tok == TOK_TYPEOF || tok == TOK_VOID; }
 static bool is_assign(uint8_t tok) { return (tok >= TOK_ASSIGN && tok <= TOK_OR_ASSIGN); }
+
+typedef struct {
+  const char *code;
+  jsoff_t clen, pos;
+  uint8_t tok, consumed;
+} js_parse_state_t;
+
+#define JS_SAVE_STATE(js, state) do { \
+  (state).code = (js)->code; \
+  (state).clen = (js)->clen; \
+  (state).pos = (js)->pos; \
+  (state).tok = (js)->tok; \
+  (state).consumed = (js)->consumed; \
+} while(0)
+
+#define JS_RESTORE_STATE(js, state) do { \
+  (js)->code = (state).code; \
+  (js)->clen = (state).clen; \
+  (js)->pos = (state).pos; \
+  (js)->tok = (state).tok; \
+  (js)->consumed = (state).consumed; \
+} while(0)
 static void saveoff(struct js *js, jsoff_t off, jsoff_t val) { memcpy(&js->mem[off], &val, sizeof(val)); }
 static void saveval(struct js *js, jsoff_t off, jsval_t val) { memcpy(&js->mem[off], &val, sizeof(val)); }
 static jsoff_t loadoff(struct js *js, jsoff_t off) { jsoff_t v = 0; assert(js->brk <= js->size); memcpy(&v, &js->mem[off], sizeof(v)); return v; }
@@ -353,6 +375,8 @@ static size_t strpromise(struct js *js, jsval_t value, char *buf, size_t len);
 
 static inline jsoff_t esize(jsoff_t w);
 static jsval_t js_expr(struct js *js);
+static jsval_t js_eval_slice(struct js *js, jsoff_t off, jsoff_t len);
+static jsval_t js_eval_str(struct js *js, const char *code, jsoff_t len);
 static jsval_t js_stmt(struct js *js);
 static jsval_t js_assignment(struct js *js);
 static jsval_t js_arrow_func(struct js *js, jsoff_t params_start, jsoff_t params_end, bool is_async);
@@ -3861,16 +3885,7 @@ static jsval_t call_js(struct js *js, const char *fn, jsoff_t fnlen, jsval_t clo
     if (argi < argc) {
       v = args[argi++];
     } else if (default_len > 0) {
-      const char *saved_code = js->code;
-      jsoff_t saved_clen = js->clen, saved_pos = js->pos;
-      js->code = &fn[default_start];
-      js->clen = default_len;
-      js->pos = 0;
-      js->consumed = 1;
-      v = js_expr(js);
-      js->code = saved_code;
-      js->clen = saved_clen;
-      js->pos = saved_pos;
+      v = js_eval_str(js, &fn[default_start], default_len);
     } else {
       v = js_mkundef();
     }
@@ -4023,18 +4038,7 @@ static jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnl
     if (arg_idx < nargs) {
       v = args[arg_idx];
     } else if (default_len > 0) {
-      const char *saved_code = js->code;
-      jsoff_t saved_clen = js->clen, saved_pos = js->pos;
-      uint8_t saved_consumed = js->consumed;
-      js->code = &fn[default_start];
-      js->clen = default_len;
-      js->pos = 0;
-      js->consumed = 1;
-      v = js_expr(js);
-      js->code = saved_code;
-      js->clen = saved_clen;
-      js->pos = saved_pos;
-      js->consumed = saved_consumed;
+      v = js_eval_str(js, &fn[default_start], default_len);
     } else {
       v = js_mkundef();
     }
@@ -4255,28 +4259,8 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
           
           jsval_t field_val = js_mkundef();
           if (init_start > 0 && init_end > init_start) {
-            jsoff_t init_len = init_end - init_start;
-            const char *init_code = &source[init_start];
-            
-            const char *saved_code = js->code;
-            jsoff_t saved_clen = js->clen;
-            jsoff_t saved_pos = js->pos;
-            uint8_t saved_tok = js->tok;
-            uint8_t saved_consumed = js->consumed;
-            
-            js->code = init_code;
-            js->clen = init_len;
-            js->pos = 0;
-            js->consumed = 1;
-            
-            field_val = js_expr(js);
+            field_val = js_eval_str(js, &source[init_start], init_end - init_start);
             field_val = resolveprop(js, field_val);
-            
-            js->code = saved_code;
-            js->clen = saved_clen;
-            js->pos = saved_pos;
-            js->tok = saved_tok;
-            js->consumed = saved_consumed;
           }
           
           jsval_t set_res = setprop(js, target_this, fname, field_val);
@@ -4555,25 +4539,7 @@ static jsval_t js_template_literal(struct js *js) {
       
       if (brace_count != 0) return js_mkerr_typed(js, JS_ERR_SYNTAX, "unclosed ${");
       
-      const char *saved_code = js->code;
-      jsoff_t saved_clen = js->clen;
-      jsoff_t saved_pos = js->pos;
-      uint8_t saved_tok = js->tok;
-      uint8_t saved_consumed = js->consumed;
-      
-      js->code = (const char *)&in[expr_start];
-      js->clen = n - expr_start;
-      js->pos = 0;
-      js->consumed = 1;
-      
-      jsval_t expr_result = js_expr(js);
-      
-      js->code = saved_code;
-      js->clen = saved_clen;
-      js->pos = saved_pos;
-      js->tok = saved_tok;
-      js->consumed = saved_consumed;
-      
+      jsval_t expr_result = js_eval_str(js, (const char *)&in[expr_start], n - expr_start);
       if (is_err(expr_result)) return expr_result;
       expr_result = resolveprop(js, expr_result);
 
@@ -4617,9 +4583,8 @@ static jsval_t js_template_literal(struct js *js) {
 static jsval_t js_tagged_template(struct js *js, jsval_t tag_func) {
   if (js->flags & F_NOEXEC) return js_mkundef();
   
-  const char *saved_code = js->code;
-  jsoff_t saved_clen = js->clen, saved_pos = js->pos;
-  uint8_t saved_tok = js->tok;
+  js_parse_state_t saved;
+  JS_SAVE_STATE(js, saved);
   
   uint8_t *in = (uint8_t *) &js->code[js->toff];
   size_t template_len = js->tlen;
@@ -4666,24 +4631,9 @@ static jsval_t js_tagged_template(struct js *js, jsval_t tag_func) {
     }
     if (brace_count != 0) return js_mkerr_typed(js, JS_ERR_SYNTAX, "unclosed ${");
     
-    const char *saved_code = js->code;
-    jsoff_t saved_clen = js->clen, saved_pos = js->pos;
-    uint8_t saved_tok = js->tok, saved_consumed = js->consumed;
-    
-    js->code = (const char *)&in[expr_start];
-    js->clen = n - expr_start;
-    js->pos = 0;
-    js->consumed = 1;
-    
-    jsval_t expr_result = resolveprop(js, js_expr(js));
-    
-    js->code = saved_code;
-    js->clen = saved_clen;
-    js->pos = saved_pos;
-    js->tok = saved_tok;
-    js->consumed = saved_consumed;
-    
+    jsval_t expr_result = js_eval_str(js, (const char *)&in[expr_start], n - expr_start);
     if (is_err(expr_result)) return expr_result;
+    expr_result = resolveprop(js, expr_result);
     values[value_count++] = expr_result;
     n++;
   }
@@ -4706,10 +4656,7 @@ static jsval_t js_tagged_template(struct js *js, jsval_t tag_func) {
   uint8_t saved_flags = js->flags;
   jsval_t result = call_js_with_args(js, tag_func, args, 1 + value_count);
   
-  js->code = saved_code;
-  js->clen = saved_clen;
-  js->pos = saved_pos;
-  js->tok = saved_tok;
+  JS_RESTORE_STATE(js, saved);
   js->flags = saved_flags;
   js->consumed = 1;
   
@@ -5767,20 +5714,14 @@ static jsval_t js_unary(struct js *js) {
     (void)builtin_promise_then(js, then_args, 2);
     js->this_val = saved_this;
     
+    js_parse_state_t saved;
+    JS_SAVE_STATE(js, saved);
     uint8_t saved_flags = js->flags;
-    const char *saved_code = js->code;
-    jsoff_t saved_clen = js->clen;
-    jsoff_t saved_pos = js->pos;
-    uint8_t saved_tok = js->tok;
-    uint8_t saved_consumed = js->consumed;
     
     mco_result mco_res = mco_yield(current_mco);
+    
+    JS_RESTORE_STATE(js, saved);
     js->flags = saved_flags;
-    js->code = saved_code;
-    js->clen = saved_clen;
-    js->pos = saved_pos;
-    js->tok = saved_tok;
-    js->consumed = saved_consumed;
     
     if (mco_res != MCO_SUCCESS) {
       return js_mkerr(js, "failed to yield coroutine");
@@ -6065,105 +6006,74 @@ static jsval_t js_decl(struct js *js, bool is_const) {
     if (next(js) == TOK_LBRACE) {
       js->consumed = 1;
       
-      typedef struct { 
-        jsoff_t src_off;
-        jsoff_t src_len;
-        jsoff_t var_off;
-        jsoff_t var_len;
-        jsoff_t default_off;
-        jsoff_t default_len;
-      } DestructProp;
-      DestructProp props[32];
-      int prop_count = 0;
+      js_parse_state_t pattern_state;
+      JS_SAVE_STATE(js, pattern_state);
       
-      while (next(js) != TOK_RBRACE && next(js) != TOK_EOF && prop_count < 32) {
+      int depth = 1;
+      while (depth > 0 && next(js) != TOK_EOF) {
+        if (js->tok == TOK_LBRACE) depth++;
+        else if (js->tok == TOK_RBRACE) depth--;
+        if (depth > 0) js->consumed = 1;
+      }
+      js->consumed = 1;
+      
+      if (next(js) != TOK_ASSIGN) {
+        return js_mkerr_typed(js, JS_ERR_SYNTAX, "destructuring requires assignment");
+      }
+      js->consumed = 1;
+      
+      jsval_t v = js_expr(js);
+      if (is_err(v)) return v;
+      
+      jsval_t obj = js_mkundef();
+      if (exe) {
+        obj = resolveprop(js, v);
+        if (vtype(obj) != T_OBJ && vtype(obj) != T_ARR) {
+          return js_mkerr(js, "cannot destructure non-object");
+        }
+      }
+      
+      js_parse_state_t end_state;
+      JS_SAVE_STATE(js, end_state);
+      JS_RESTORE_STATE(js, pattern_state);
+      
+      while (next(js) != TOK_RBRACE && next(js) != TOK_EOF) {
         EXPECT(TOK_IDENTIFIER, );
-        props[prop_count].src_off = js->toff;
-        props[prop_count].src_len = js->tlen;
-        props[prop_count].var_off = js->toff;
-        props[prop_count].var_len = js->tlen;
-        props[prop_count].default_off = 0;
-        props[prop_count].default_len = 0;
+        jsoff_t src_off = js->toff, src_len = js->tlen;
+        jsoff_t var_off = src_off, var_len = src_len;
         js->consumed = 1;
         
         if (next(js) == TOK_COLON) {
           js->consumed = 1;
           EXPECT(TOK_IDENTIFIER, );
-          props[prop_count].var_off = js->toff;
-          props[prop_count].var_len = js->tlen;
+          var_off = js->toff;
+          var_len = js->tlen;
           js->consumed = 1;
         }
         
+        jsoff_t default_off = 0, default_len = 0;
         if (next(js) == TOK_ASSIGN) {
           js->consumed = 1;
-          props[prop_count].default_off = js->pos;
-          uint8_t saved_flags = js->flags;
+          default_off = js->pos;
+          uint8_t sf = js->flags;
           js->flags |= F_NOEXEC;
-          jsval_t default_expr = js_expr(js);
-          js->flags = saved_flags;
-          if (is_err(default_expr)) return default_expr;
-          props[prop_count].default_len = js->pos - props[prop_count].default_off;
+          jsval_t r = js_expr(js);
+          js->flags = sf;
+          if (is_err(r)) return r;
+          default_len = js->pos - default_off;
         }
         
-        prop_count++;
-        
-        if (next(js) == TOK_RBRACE) break;
-        EXPECT(TOK_COMMA, );
-      }
-      
-      EXPECT(TOK_RBRACE, );
-      
-      jsval_t v = js_mkundef();
-      if (next(js) == TOK_ASSIGN) {
-        js->consumed = 1;
-        v = js_expr(js);
-        if (is_err(v)) return v;
-      } else {
-        return js_mkerr_typed(js, JS_ERR_SYNTAX, "destructuring requires assignment");
-      }
-      
-      if (exe) {
-        jsval_t obj = resolveprop(js, v);
-        if (vtype(obj) != T_OBJ && vtype(obj) != T_ARR) {
-          return js_mkerr(js, "cannot destructure non-object");
-        }
-        
-        for (int i = 0; i < prop_count; i++) {
-          const char *var_name = &js->code[props[i].var_off];
-          jsoff_t var_len = props[i].var_len;
-          
-          const char *src_name = &js->code[props[i].src_off];
-          jsoff_t src_len = props[i].src_len;
-          
+        if (exe) {
+          const char *var_name = &js->code[var_off];
           if (lkp(js, js->scope, var_name, var_len) > 0) {
-            return js_mkerr(js, "'%.*s' already declared", (int) var_len, var_name);
+            return js_mkerr(js, "'%.*s' already declared", (int)var_len, var_name);
           }
           
-          jsoff_t prop_off = lkp(js, obj, src_name, src_len);
-          jsval_t prop_val = js_mkundef();
+          jsoff_t prop_off = lkp(js, obj, &js->code[src_off], src_len);
+          jsval_t prop_val = prop_off > 0 ? resolveprop(js, mkval(T_PROP, prop_off)) : js_mkundef();
           
-          if (prop_off > 0) {
-            prop_val = resolveprop(js, mkval(T_PROP, prop_off));
-          }
-          
-          if (vtype(prop_val) == T_UNDEF && props[i].default_len > 0) {
-            const char *saved_code = js->code;
-            jsoff_t saved_clen = js->clen, saved_pos = js->pos;
-            uint8_t saved_tok = js->tok, saved_consumed = js->consumed;
-            
-            js->code = &js->code[props[i].default_off - (js->code - saved_code)];
-            js->clen = props[i].default_len;
-            js->pos = 0;
-            js->consumed = 1;
-            
-            prop_val = js_expr(js);
-            
-            js->code = saved_code;
-            js->clen = saved_clen;
-            js->pos = saved_pos;
-            js->tok = saved_tok;
-            js->consumed = saved_consumed;
-            
+          if (vtype(prop_val) == T_UNDEF && default_len > 0) {
+            prop_val = js_eval_slice(js, default_off, default_len);
             if (is_err(prop_val)) return prop_val;
             prop_val = resolveprop(js, prop_val);
           }
@@ -6171,7 +6081,12 @@ static jsval_t js_decl(struct js *js, bool is_const) {
           jsval_t x = mkprop(js, js->scope, js_mkstr(js, var_name, var_len), prop_val, is_const);
           if (is_err(x)) return x;
         }
+        
+        if (next(js) == TOK_RBRACE) break;
+        EXPECT(TOK_COMMA, );
       }
+      
+      JS_RESTORE_STATE(js, end_state);
     } else {
       EXPECT(TOK_IDENTIFIER, );
       js->consumed = 0;
@@ -6210,6 +6125,36 @@ static jsval_t js_decl(struct js *js, bool is_const) {
 
 static jsval_t js_expr(struct js *js) {
   return js_assignment(js);
+}
+
+static jsval_t js_eval_slice(struct js *js, jsoff_t off, jsoff_t len) {
+  js_parse_state_t saved;
+  JS_SAVE_STATE(js, saved);
+  
+  js->code = saved.code + off;
+  js->clen = len;
+  js->pos = 0;
+  js->consumed = 1;
+  
+  jsval_t result = js_expr(js);
+  
+  JS_RESTORE_STATE(js, saved);
+  return result;
+}
+
+static jsval_t js_eval_str(struct js *js, const char *code, jsoff_t len) {
+  js_parse_state_t saved;
+  JS_SAVE_STATE(js, saved);
+  
+  js->code = code;
+  js->clen = len;
+  js->pos = 0;
+  js->consumed = 1;
+  
+  jsval_t result = js_expr(js);
+  
+  JS_RESTORE_STATE(js, saved);
+  return result;
 }
 
 static jsval_t js_let(struct js *js) {
@@ -7832,30 +7777,8 @@ static jsval_t js_class_decl(struct js *js) {
       if (methods[i].is_field) {
         jsval_t field_val = js_mkundef();
         if (methods[i].field_start > 0 && methods[i].field_end > methods[i].field_start) {
-          const char *saved_code = js->code;
-          jsoff_t saved_clen = js->clen;
-          jsoff_t saved_pos = js->pos;
-          uint8_t saved_tok = js->tok;
-          uint8_t saved_consumed = js->consumed;
-          jsoff_t saved_toff = js->toff;
-          jsoff_t saved_tlen = js->tlen;
-          
-          jsoff_t field_len = methods[i].field_end - methods[i].field_start;
-          js->code = &saved_code[methods[i].field_start];
-          js->clen = field_len;
-          js->pos = 0;
-          js->consumed = 1;
-          
-          field_val = js_expr(js);
+          field_val = js_eval_slice(js, methods[i].field_start, methods[i].field_end - methods[i].field_start);
           field_val = resolveprop(js, field_val);
-          
-          js->code = saved_code;
-          js->clen = saved_clen;
-          js->pos = saved_pos;
-          js->tok = saved_tok;
-          js->consumed = saved_consumed;
-          js->toff = saved_toff;
-          js->tlen = saved_tlen;
         }
         jsval_t set_res = setprop(js, func_obj, member_name, field_val);
         if (is_err(set_res)) return set_res;
@@ -8181,20 +8104,13 @@ static jsval_t builtin_eval(struct js *js, jsval_t *args, int nargs) {
   jsoff_t code_len, code_off = vstr(js, code_arg, &code_len);
   const char *code_str = (const char *)&js->mem[code_off];
   
-  const char *saved_code = js->code;
-  jsoff_t saved_clen = js->clen;
-  jsoff_t saved_pos = js->pos;
-  uint8_t saved_tok = js->tok;
-  uint8_t saved_consumed = js->consumed;
+  js_parse_state_t saved;
+  JS_SAVE_STATE(js, saved);
   uint8_t saved_flags = js->flags;
   
   jsval_t result = js_eval(js, code_str, code_len);
   
-  js->code = saved_code;
-  js->clen = saved_clen;
-  js->pos = saved_pos;
-  js->tok = saved_tok;
-  js->consumed = saved_consumed;
+  JS_RESTORE_STATE(js, saved);
   js->flags = saved_flags;
   
   return result;
@@ -13466,15 +13382,12 @@ static jsval_t js_import_stmt(struct js *js) {
         }
       }
       
-      const char *saved_code = js->code;
-      jsoff_t saved_clen = js->clen;
-      jsoff_t saved_pos = js->pos;
+      js_parse_state_t saved;
+      JS_SAVE_STATE(js, saved);
       
       ns = esm_load_module(js, mod);
       
-      js->code = saved_code;
-      js->clen = saved_clen;
-      js->pos = saved_pos;
+      JS_RESTORE_STATE(js, saved);
       
       free(resolved_path);
     }
@@ -13520,15 +13433,12 @@ static jsval_t js_import_stmt(struct js *js) {
         }
       }
       
-      const char *saved_code = js->code;
-      jsoff_t saved_clen = js->clen;
-      jsoff_t saved_pos = js->pos;
+      js_parse_state_t saved;
+      JS_SAVE_STATE(js, saved);
       
       ns = esm_load_module(js, mod);
       
-      js->code = saved_code;
-      js->clen = saved_clen;
-      js->pos = saved_pos;
+      JS_RESTORE_STATE(js, saved);
       
       free(resolved_path);
     }
@@ -13610,22 +13520,14 @@ static jsval_t js_import_stmt(struct js *js) {
         }
       }
       
-      const char *saved_code = js->code;
-      jsoff_t saved_clen = js->clen;
-      jsoff_t saved_pos = js->pos;
-      uint8_t saved_tok = js->tok;
-      uint8_t saved_consumed = js->consumed;
-      jsoff_t saved_toff = js->toff;
-      jsoff_t saved_tlen = js->tlen;
+      js_parse_state_t saved;
+      JS_SAVE_STATE(js, saved);
+      jsoff_t saved_toff = js->toff, saved_tlen = js->tlen;
       jsval_t saved_scope = js->scope;
       
       ns = esm_load_module(js, mod);
       
-      js->code = saved_code;
-      js->clen = saved_clen;
-      js->pos = saved_pos;
-      js->tok = saved_tok;
-      js->consumed = saved_consumed;
+      JS_RESTORE_STATE(js, saved);
       js->toff = saved_toff;
       js->tlen = saved_tlen;
       js->scope = saved_scope;

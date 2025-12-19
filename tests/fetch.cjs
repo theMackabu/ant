@@ -19,7 +19,7 @@ async function test_post() {
   });
 
   const { json, headers } = response.json();
-  console.log(`${json}\n${headers}`);
+  console.log(`${JSON.stringify(json)}\n${JSON.stringify(headers)}`);
 }
 
 void Promise.all([test_get(), test_post(), test_json()]);
