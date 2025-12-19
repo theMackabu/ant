@@ -3565,6 +3565,53 @@ static jsval_t resolveprop(struct js *js, jsval_t v) {
   return resolveprop(js, loadval(js, (jsoff_t) (vdata(v) + sizeof(jsoff_t) * 2)));
 }
 
+static int check_prop_writable(struct js *js, jsval_t owner, const char *key, jsoff_t klen) {
+  char desc_key[128];
+  snprintf(desc_key, sizeof(desc_key), "__desc_%.*s", (int)klen, key);
+  
+  jsoff_t desc_off = lkp(js, owner, desc_key, strlen(desc_key));
+  if (desc_off == 0) return -1;
+  
+  jsval_t desc_obj = resolveprop(js, mkval(T_PROP, desc_off));
+  if (vtype(desc_obj) != T_OBJ) return -1;
+  
+  jsoff_t writable_off = lkp(js, desc_obj, "writable", 8);
+  if (writable_off == 0) return -1;
+  
+  jsval_t writable_val = resolveprop(js, mkval(T_PROP, writable_off));
+  return js_truthy(js, writable_val) ? 1 : 0;
+}
+
+static int find_and_check_writable(struct js *js, jsoff_t propoff) {
+  for (jsoff_t scan_off = 0; scan_off < js->brk; ) {
+    jsoff_t header = loadoff(js, scan_off);
+    jsoff_t cleaned = header & ~(GCMASK | CONSTMASK);
+    
+    if ((cleaned & 3) != T_OBJ) {
+      scan_off += esize(cleaned);
+      continue;
+    }
+    
+    jsval_t scan_obj = mkval(T_OBJ, scan_off);
+    jsoff_t next = loadoff(js, scan_off) & ~(3U | CONSTMASK);
+    
+    while (next < js->brk && next != 0) {
+      if (next == propoff) {
+        jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
+        jsoff_t klen = offtolen(loadoff(js, koff));
+        const char *key = (char *) &js->mem[koff + sizeof(koff)];
+        
+        int writable = check_prop_writable(js, scan_obj, key, klen);
+        return (writable == 0) ? 0 : 1;
+      }
+      next = loadoff(js, next) & ~(3U | CONSTMASK);
+    }
+    
+    scan_off += esize(cleaned);
+  }
+  return 1;
+}
+
 static jsval_t assign(struct js *js, jsval_t lhs, jsval_t val) {
   if (vtype(lhs) == T_PROPREF) {
     jsoff_t obj_off = propref_obj(lhs);
@@ -3587,6 +3634,11 @@ static jsval_t assign(struct js *js, jsval_t lhs, jsval_t val) {
         prop_type == T_NULL || prop_type == T_UNDEF) {
       return js_mkerr(js, "TypeError: cannot set property on primitive value in strict mode");
     }
+  }
+  
+  if (!find_and_check_writable(js, propoff)) {
+    if (js->flags & F_STRICT) return js_mkerr(js, "Cannot assign to read only property");
+    return lhs;
   }
   
   saveval(js, (jsoff_t) ((vdata(lhs) & ~3U) + sizeof(jsoff_t) * 2), val);
@@ -10363,6 +10415,44 @@ static jsval_t builtin_object_defineProperty(struct js *js, jsval_t *args, int n
   return obj;
 }
 
+static jsval_t builtin_object_defineProperties(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 2) return js_mkerr(js, "Object.defineProperties requires 2 arguments");
+  
+  jsval_t obj = args[0];
+  jsval_t props = args[1];
+  
+  uint8_t t = vtype(obj);
+  if (t != T_OBJ && t != T_ARR && t != T_FUNC) {
+    return js_mkerr(js, "Object.defineProperties called on non-object");
+  }
+  
+  if (vtype(props) != T_OBJ) {
+    return js_mkerr(js, "Property descriptors must be an object");
+  }
+  
+  jsval_t props_obj = props;
+  jsoff_t next = loadoff(js, (jsoff_t) vdata(props_obj)) & ~(3U | CONSTMASK);
+  
+  while (next < js->brk && next != 0) {
+    jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
+    jsoff_t klen = offtolen(loadoff(js, koff));
+    const char *key = (char *) &js->mem[koff + sizeof(koff)];
+    jsval_t descriptor = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
+    
+    next = loadoff(js, next) & ~(3U | CONSTMASK);
+    
+    if (streq(key, klen, "__proto__", 9)) continue;
+    if (klen > 7 && memcmp(key, "__desc_", 7) == 0) continue;
+    
+    jsval_t prop_key = js_mkstr(js, key, klen);
+    jsval_t define_args[3] = { obj, prop_key, descriptor };
+    jsval_t result = builtin_object_defineProperty(js, define_args, 3);
+    if (is_err(result)) return result;
+  }
+  
+  return obj;
+}
+
 static jsval_t builtin_object_assign(struct js *js, jsval_t *args, int nargs) {
   if (nargs == 0) return js_mkerr(js, "Object.assign requires at least 1 argument");
   
@@ -16211,6 +16301,7 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, obj_func_obj, js_mkstr(js, "create", 6), js_mkfun(builtin_object_create));
   setprop(js, obj_func_obj, js_mkstr(js, "hasOwn", 6), js_mkfun(builtin_object_hasOwn));
   setprop(js, obj_func_obj, js_mkstr(js, "defineProperty", 14), js_mkfun(builtin_object_defineProperty));
+  setprop(js, obj_func_obj, js_mkstr(js, "defineProperties", 16), js_mkfun(builtin_object_defineProperties));
   setprop(js, obj_func_obj, js_mkstr(js, "assign", 6), js_mkfun(builtin_object_assign));
   setprop(js, obj_func_obj, js_mkstr(js, "freeze", 6), js_mkfun(builtin_object_freeze));
   setprop(js, obj_func_obj, js_mkstr(js, "isFrozen", 8), js_mkfun(builtin_object_isFrozen));
