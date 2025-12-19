@@ -113,7 +113,7 @@ static int execute_module(struct js *js, const char *filename) {
   js_mkscope(js);
   js_protect_init_memory(js);
   
-  jsval_t result = js_eval(js, buffer, len);
+  jsval_t result = js_eval_module_async(js, buffer, len);
   free(buffer);
   
   if (js_type(result) == JS_ERR) {

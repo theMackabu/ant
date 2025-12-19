@@ -638,6 +638,22 @@ static void mco_async_entry(mco_coro* mco) {
   
 }
 
+static void mco_module_entry(mco_coro* mco) {
+  async_exec_context_t *ctx = (async_exec_context_t *)mco_get_user_data(mco);
+  struct js *js = ctx->js;
+  
+  jsval_t result = js_eval(js, ctx->code, ctx->code_len);
+  
+  ctx->result = result;
+  ctx->has_error = is_err(result);
+  
+  if (ctx->has_error) {
+    js_reject_promise(js, ctx->promise, result);
+  } else {
+    js_resolve_promise(js, ctx->promise, result);
+  }
+}
+
 static void enqueue_coroutine(coroutine_t *coro) {
   if (!coro) return;
   coro->next = NULL;
@@ -810,6 +826,86 @@ static jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t 
     free_coroutine(coro);
     ANT_GC_FREE(ctx);
     return js_mkerr(js, "failed to start coroutine");
+  }
+  
+  coro->mco_started = true;
+  if (mco_status(mco) == MCO_DEAD) {
+    dequeue_coroutine();
+    free_coroutine(coro);
+    ANT_GC_FREE(ctx);
+  }
+  
+  return promise;
+}
+
+jsval_t js_eval_module_async(struct js *js, const char *code, size_t code_len) {
+  jsval_t promise = js_mkpromise(js);
+  async_exec_context_t *ctx = (async_exec_context_t *)ANT_GC_MALLOC(sizeof(async_exec_context_t));
+  if (!ctx) return js_mkerr(js, "out of memory for module async context");
+  
+  char *code_copy = (char *)ANT_GC_MALLOC(code_len + 1);
+  if (!code_copy) {
+    ANT_GC_FREE(ctx);
+    return js_mkerr(js, "out of memory for module code");
+  }
+  memcpy(code_copy, code, code_len);
+  code_copy[code_len] = '\0';
+  
+  ctx->js = js;
+  ctx->code = code_copy;
+  ctx->code_len = code_len;
+  ctx->closure_scope = js_mkundef();
+  ctx->result = js_mkundef();
+  ctx->promise = promise;
+  ctx->has_error = false;
+  ctx->coro = NULL;
+  
+  size_t stack_size = calculate_coro_stack_size();
+  mco_desc desc = mco_desc_init(mco_module_entry, stack_size);
+  desc.user_data = ctx;
+  
+  mco_coro* mco = NULL;
+  mco_result res = mco_create(&mco, &desc);
+  if (res != MCO_SUCCESS) {
+    ANT_GC_FREE(ctx);
+    return js_mkerr(js, "failed to create module coroutine");
+  }
+  
+  coroutine_t *coro = (coroutine_t *)ANT_GC_MALLOC(sizeof(coroutine_t));
+  if (!coro) {
+    mco_destroy(mco);
+    ANT_GC_FREE(ctx);
+    return js_mkerr(js, "out of memory for module coroutine");
+  }
+  
+  coro->js = js;
+  coro->type = CORO_ASYNC_AWAIT;
+  coro->scope = js->scope;
+  coro->this_val = js->this_val;
+  coro->awaited_promise = js_mkundef();
+  coro->result = js_mkundef();
+  coro->async_func = js_mkundef();
+  coro->args = NULL;
+  coro->nargs = 0;
+  coro->is_settled = false;
+  coro->is_error = false;
+  coro->is_done = false;
+  coro->resume_point = 0;
+  coro->yield_value = js_mkundef();
+  coro->next = NULL;
+  coro->mco = mco;
+  coro->mco_started = false;
+  coro->is_ready = true;
+  
+  ctx->coro = coro;
+  enqueue_coroutine(coro);
+  
+  res = mco_resume(mco);
+  if (res != MCO_SUCCESS && mco_status(mco) != MCO_DEAD) {
+    dequeue_coroutine();
+    free_coroutine(coro);
+    ANT_GC_FREE(ctx);
+    return js_mkerr(js, "failed to start module coroutine");
   }
   
   coro->mco_started = true;

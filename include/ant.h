@@ -34,6 +34,7 @@ void js_protect_init_memory(struct js *);
 
 jsval_t js_glob(struct js *);
 jsval_t js_eval(struct js *, const char *, size_t);
+jsval_t js_eval_module_async(struct js *, const char *, size_t);
 
 void js_dump(struct js *);
 void js_mkscope(struct js *);
