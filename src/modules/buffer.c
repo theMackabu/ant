@@ -5,6 +5,7 @@
 
 #include "runtime.h"
 #include "modules/buffer.h"
+#include "modules/symbol.h"
 
 static jsval_t js_arraybuffer_slice(struct js *js, jsval_t *args, int nargs);
 static jsval_t js_typedarray_slice(struct js *js, jsval_t *args, int nargs);
@@ -815,6 +816,6 @@ void init_buffer_module() {
   js_set(js, buffer_obj, "from", js_mkfun(js_buffer_from));
   js_set(js, buffer_obj, "alloc", js_mkfun(js_buffer_alloc));
   js_set(js, buffer_obj, "allocUnsafe", js_mkfun(js_buffer_allocUnsafe));
-  js_set(js, buffer_obj, "@@toStringTag", js_mkstr(js, "Buffer", 6));
+  js_set(js, buffer_obj, get_toStringTag_sym_key(), js_mkstr(js, "Buffer", 6));
   js_set(js, glob, "Buffer", buffer_obj);
 }

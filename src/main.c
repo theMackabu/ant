@@ -187,6 +187,7 @@ int main(int argc, char *argv[]) {
   if (gct->count > 0) js_setgct(js, gct->ival[0]);  
   ant_runtime_init(js, argc, argv);
 
+  init_symbol_module();
   init_builtin_module();
   init_buffer_module();
   init_atomics_module();
@@ -202,7 +203,6 @@ int main(int argc, char *argv[]) {
   init_uri_module();
   init_url_module();
   init_reflect_module();
-  init_symbol_module();
   
   ant_register_library(shell_library, "ant:shell", NULL);
   ant_register_library(ffi_library, "ant:ffi", NULL);

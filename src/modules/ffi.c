@@ -7,6 +7,7 @@
 #include <uthash.h>
 
 #include "modules/ffi.h"
+#include "modules/symbol.h"
 
 typedef struct ffi_lib {
   char name[256];
@@ -125,7 +126,7 @@ jsval_t ffi_library(struct js *js) {
   js_set(js, ffi_types, "string", js_mkstr(js, "string", 6));
   js_set(js, ffi_types, "spread", js_mkstr(js, "...", 3));
   js_set(js, ffi_obj, "FFIType", ffi_types);
-  js_set(js, ffi_obj, "@@toStringTag", js_mkstr(js, "FFI", 3));
+  js_set(js, ffi_obj, get_toStringTag_sym_key(), js_mkstr(js, "FFI", 3));
   js_set(js, ffi_obj, "default", ffi_obj);
 
   return ffi_obj;

@@ -8,8 +8,10 @@
 
 #include "ant.h"
 #include "runtime.h"
+
 #include "modules/buffer.h"
 #include "modules/atomics.h"
+#include "modules/symbol.h"
 
 static WaitQueue global_wait_queue;
 static pthread_once_t wait_queue_init_once = PTHREAD_ONCE_INIT;
@@ -836,6 +838,6 @@ void init_atomics_module(void) {
   js_set(js, atomics, "waitAsync", js_mkfun(js_atomics_waitAsync));
   js_set(js, atomics, "xor", js_mkfun(js_atomics_xor));
   
-  js_set(js, atomics, "@@toStringTag", js_mkstr(js, "Atomics", 7));
+  js_set(js, atomics, get_toStringTag_sym_key(), js_mkstr(js, "Atomics", 7));
   js_set(js, glob, "Atomics", atomics);
 }

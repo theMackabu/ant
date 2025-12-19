@@ -29,4 +29,7 @@ test('Symbol.iterator exists', typeof Symbol.iterator, 'symbol');
 test('Symbol.toStringTag exists', typeof Symbol.toStringTag, 'symbol');
 test('Symbol.hasInstance exists', typeof Symbol.hasInstance, 'symbol');
 
+const custom = { [Symbol.toStringTag]: 'MyCustomType' };
+test('Symbol.toStringTag custom', Object.prototype.toString.call(custom), '[object MyCustomType]');
+
 summary();

@@ -5,6 +5,7 @@
 #include "ant.h"
 #include "runtime.h"
 #include "modules/json.h"
+#include "modules/symbol.h"
 
 static jsval_t yyjson_to_jsval(struct js *js, yyjson_val *val) {
   if (!val) return js_mkundef();
@@ -218,6 +219,6 @@ void init_json_module() {
   js_set(js, json_obj, "parse", js_mkfun(js_json_parse));
   js_set(js, json_obj, "stringify", js_mkfun(js_json_stringify));
   
-  js_set(js, json_obj, "@@toStringTag", js_mkstr(js, "JSON", 4));
+  js_set(js, json_obj, get_toStringTag_sym_key(), js_mkstr(js, "JSON", 4));
   js_set(js, js_glob(js), "JSON", json_obj);
 }

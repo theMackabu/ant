@@ -4,6 +4,7 @@
 #include "ant.h"
 #include "runtime.h"
 #include "modules/reflect.h"
+#include "modules/symbol.h"
 
 static jsval_t reflect_get(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkundef();
@@ -319,6 +320,6 @@ void init_reflect_module(void) {
   js_set(js, reflect_obj, "isExtensible", js_mkfun(reflect_is_extensible));
   js_set(js, reflect_obj, "preventExtensions", js_mkfun(reflect_prevent_extensions));
   
-  js_set(js, reflect_obj, "@@toStringTag", js_mkstr(js, "Reflect", 7));
+  js_set(js, reflect_obj, get_toStringTag_sym_key(), js_mkstr(js, "Reflect", 7));
   js_set(js, js_glob(js), "Reflect", reflect_obj);
 }

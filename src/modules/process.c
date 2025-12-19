@@ -6,6 +6,7 @@
 #include "ant.h"
 #include "runtime.h"
 #include "modules/process.h"
+#include "modules/symbol.h"
 
 extern char **environ;
 
@@ -174,6 +175,6 @@ void init_process_module() {
   js_set(js, process_obj, "argv", argv_arr);
   js_set(js, process_obj, "cwd", js_mkfun(process_cwd));
   
-  js_set(js, process_obj, "@@toStringTag", js_mkstr(js, "process", 7));
+  js_set(js, process_obj, get_toStringTag_sym_key(), js_mkstr(js, "process", 7));
   js_set(js, js_glob(js), "process", process_obj);
 }

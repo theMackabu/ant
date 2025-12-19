@@ -1,6 +1,6 @@
 // Test toStringTag for all modules
 
-console.log('Testing @@toStringTag for all modules:\n');
+console.log('Testing Symbol.toStringTag for all modules:\n');
 
 // Built-in modules
 console.log('Atomics:', Object.prototype.toString.call(Atomics));

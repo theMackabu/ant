@@ -8,6 +8,7 @@
 #include "runtime.h"
 #include "modules/crypto.h"
 #include "modules/buffer.h"
+#include "modules/symbol.h"
 
 static int ensure_crypto_init(struct js *js) {
   static int crypto_initialized = 0;
@@ -171,7 +172,7 @@ static jsval_t create_crypto_obj(struct js *js) {
   js_set(js, crypto_obj, "randomUUIDv7", js_mkfun(js_crypto_random_uuidv7));
   js_set(js, crypto_obj, "getRandomValues", js_mkfun(js_crypto_get_random_values));
   
-  js_set(js, crypto_obj, "@@toStringTag", js_mkstr(js, "Crypto", 6));
+  js_set(js, crypto_obj, get_toStringTag_sym_key(), js_mkstr(js, "Crypto", 6));
   return crypto_obj;
 }
 
@@ -189,7 +190,7 @@ jsval_t crypto_library(struct js *js) {
   js_set(js, lib, "randomBytes", js_mkfun(js_crypto_random_bytes));
   js_set(js, lib, "randomUUID", js_mkfun(js_crypto_random_uuid));
   js_set(js, lib, "getRandomValues", js_mkfun(js_crypto_get_random_values));
-  js_set(js, lib, "@@toStringTag", js_mkstr(js, "crypto", 6));
+  js_set(js, lib, get_toStringTag_sym_key(), js_mkstr(js, "crypto", 6));
   js_set(js, lib, "default", lib);
   
   return lib;

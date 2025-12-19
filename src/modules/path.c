@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #include "ant.h"
+#include "modules/symbol.h"
 
 #ifndef PATH_MAX
 #define PATH_MAX 4096
@@ -474,7 +475,7 @@ jsval_t path_library(struct js *js) {
   js_set(js, lib, "sep", js_mkstr(js, PATH_SEP_STR, 1));
   char delimiter_str[2] = {PATH_DELIMITER, '\0'};
   js_set(js, lib, "delimiter", js_mkstr(js, delimiter_str, 1));
-  js_set(js, lib, "@@toStringTag", js_mkstr(js, "path", 4));
+  js_set(js, lib, get_toStringTag_sym_key(), js_mkstr(js, "path", 4));
   js_set(js, lib, "default", lib);
   
   return lib;

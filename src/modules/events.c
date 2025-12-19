@@ -6,6 +6,7 @@
 #include "ant.h"
 #include "runtime.h"
 #include "modules/events.h"
+#include "modules/symbol.h"
 #include "uthash.h"
 
 #define MAX_LISTENERS_PER_EVENT 32
@@ -287,7 +288,7 @@ static jsval_t js_dispatch_event_method(struct js *js, jsval_t *args, int nargs)
   jsval_t event_obj = js_mkobj(js);
   js_set(js, event_obj, "type", args[0]);
   js_set(js, event_obj, "target", this_obj);
-  js_set(js, event_obj, "@@toStringTag", js_mkstr(js, "Event", 5));
+  js_set(js, event_obj, get_toStringTag_sym_key(), js_mkstr(js, "Event", 5));
   
   if (nargs >= 2 && js_type(args[1]) != JS_UNDEF) {
     js_set(js, event_obj, "detail", args[1]);
@@ -336,7 +337,7 @@ static jsval_t js_dispatch_event(struct js *js, jsval_t *args, int nargs) {
   
   jsval_t event_obj = js_mkobj(js);
   js_set(js, event_obj, "type", args[0]);
-  js_set(js, event_obj, "@@toStringTag", js_mkstr(js, "Event", 5));
+  js_set(js, event_obj, get_toStringTag_sym_key(), js_mkstr(js, "Event", 5));
   
   if (nargs >= 2 && js_type(args[1]) != JS_UNDEF) {
     js_set(js, event_obj, "detail", args[1]);
@@ -620,7 +621,7 @@ static jsval_t js_eventemitter_constructor(struct js *js, jsval_t *args, int nar
   js_set(js, obj, "removeAllListeners", js_mkfun(js_eventemitter_removeAllListeners));
   js_set(js, obj, "listenerCount", js_mkfun(js_eventemitter_listenerCount));
   js_set(js, obj, "eventNames", js_mkfun(js_eventemitter_eventNames));
-  js_set(js, obj, "@@toStringTag", js_mkstr(js, "EventEmitter", 12));
+  js_set(js, obj, get_toStringTag_sym_key(), js_mkstr(js, "EventEmitter", 12));
   
   return obj;
 }
@@ -629,7 +630,7 @@ jsval_t events_library(struct js *js) {
   jsval_t lib = js_mkobj(js);
   
   js_set(js, lib, "EventEmitter", js_mkfun(js_eventemitter_constructor));
-  js_set(js, lib, "@@toStringTag", js_mkstr(js, "events", 6));
+  js_set(js, lib, get_toStringTag_sym_key(), js_mkstr(js, "events", 6));
   
   return lib;
 }
@@ -647,7 +648,7 @@ void init_events_module() {
   js_set(js, event_target_proto, "addEventListener", js_mkfun(js_add_event_listener_method));
   js_set(js, event_target_proto, "removeEventListener", js_mkfun(js_remove_event_listener_method));
   js_set(js, event_target_proto, "dispatchEvent", js_mkfun(js_dispatch_event_method));
-  js_set(js, event_target_proto, "@@toStringTag", js_mkstr(js, "EventTarget", 11));
+  js_set(js, event_target_proto, get_toStringTag_sym_key(), js_mkstr(js, "EventTarget", 11));
   
   js_set(js, global, "EventTargetPrototype", event_target_proto);
 }

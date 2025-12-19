@@ -16,15 +16,13 @@ static int g_registry_count = 0;
 static jsval_t g_iterator_sym = 0;
 static jsval_t g_toStringTag_sym = 0;
 static jsval_t g_hasInstance_sym = 0;
+
 static char g_iter_sym_key[32] = {0};
+static char g_toStringTag_sym_key[32] = {0};
 
-jsval_t get_iterator_symbol(void) {
-  return g_iterator_sym;
-}
-
-const char *get_iterator_sym_key(void) {
-  return g_iter_sym_key;
-}
+jsval_t get_iterator_symbol(void) { return g_iterator_sym; }
+const char *get_iterator_sym_key(void) { return g_iter_sym_key; }
+const char *get_toStringTag_sym_key(void) { return g_toStringTag_sym_key; }
 
 static jsval_t builtin_Symbol(struct js *js, jsval_t *args, int nargs) {
   const char *desc = NULL;
@@ -186,8 +184,11 @@ void init_symbol_module(void) {
   g_toStringTag_sym = js_mksym(js, "Symbol.toStringTag");
   g_hasInstance_sym = js_mksym(js, "Symbol.hasInstance");
   
-  jsval_t sym_id = js_get(js, g_iterator_sym, "__sym_id");
-  snprintf(g_iter_sym_key, sizeof(g_iter_sym_key), "__sym_%.0f__", js_getnum(sym_id));
+  jsval_t iter_sym_id = js_get(js, g_iterator_sym, "__sym_id");
+  snprintf(g_iter_sym_key, sizeof(g_iter_sym_key), "__sym_%.0f__", js_getnum(iter_sym_id));
+  
+  jsval_t tag_sym_id = js_get(js, g_toStringTag_sym, "__sym_id");
+  snprintf(g_toStringTag_sym_key, sizeof(g_toStringTag_sym_key), "__sym_%.0f__", js_getnum(tag_sym_id));
   
   jsval_t symbol_ctor = js_mkobj(js);
   js_set(js, symbol_ctor, "__native_func", js_mkfun(builtin_Symbol));

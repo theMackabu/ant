@@ -1199,7 +1199,9 @@ static size_t print_prototype(struct js *js, jsval_t proto_val, char *buf, size_
     jsoff_t pklen = offtolen(loadoff(js, pkoff));
     const char *pkstr = (const char *) &js->mem[pkoff + sizeof(jsoff_t)];
     
-    if (!streq(pkstr, pklen, "__proto__", 9) && !streq(pkstr, pklen, "constructor", 11) && !streq(pkstr, pklen, "@@toStringTag", 13) && !streq(pkstr, pklen, "__getter", 8)) {
+    const char *tag_key = get_toStringTag_sym_key();
+    size_t tag_key_len = strlen(tag_key);
+    if (!streq(pkstr, pklen, "__proto__", 9) && !streq(pkstr, pklen, "constructor", 11) && !streq(pkstr, pklen, tag_key, tag_key_len) && !streq(pkstr, pklen, "__getter", 8)) {
       has_proto_props = true;
       break;
     }
@@ -1223,7 +1225,9 @@ static size_t print_prototype(struct js *js, jsval_t proto_val, char *buf, size_
       jsoff_t pklen = offtolen(loadoff(js, pkoff));
       const char *pkstr = (const char *) &js->mem[pkoff + sizeof(jsoff_t)];
       
-      if (!streq(pkstr, pklen, "__proto__", 9) && !streq(pkstr, pklen, "constructor", 11) && !streq(pkstr, pklen, "@@toStringTag", 13) && !streq(pkstr, pklen, "__getter", 8)) {
+      const char *tag_key2 = get_toStringTag_sym_key();
+      size_t tag_key_len2 = strlen(tag_key2);
+      if (!streq(pkstr, pklen, "__proto__", 9) && !streq(pkstr, pklen, "constructor", 11) && !streq(pkstr, pklen, tag_key2, tag_key_len2) && !streq(pkstr, pklen, "__getter", 8)) {
         if (!proto_first) n += cpy(buf + n, len - n, ",\n", 2);
         proto_first = false;
         n += add_indent(buf + n, len - n, stringify_indent);
@@ -1261,7 +1265,8 @@ static size_t strobj(struct js *js, jsval_t obj, char *buf, size_t len) {
     n += (size_t) snprintf(buf + n, len - n, "<ref *%d> ", self_ref);
   }
   
-  jsoff_t tag_off = lkp_proto(js, obj, "@@toStringTag", 13);
+  const char *tostring_tag_key = get_toStringTag_sym_key();
+  jsoff_t tag_off = lkp_proto(js, obj, tostring_tag_key, strlen(tostring_tag_key));
   bool is_map = false, is_set = false;
   jsoff_t tlen = 0, toff = 0;
   const char *tag_str = NULL;
@@ -1381,7 +1386,8 @@ continue_object_print:
     const char *key = (char *) &js->mem[koff + sizeof(koff)];
     
     bool is_desc = (klen > 7 && key[0] == '_' && key[1] == '_' && key[2] == 'd' && key[3] == 'e' && key[4] == 's' && key[5] == 'c' && key[6] == '_');
-    bool should_hide = streq(key, klen, "__proto__", 9) || streq(key, klen, "@@toStringTag", 13) || streq(key, klen, "__getter", 8) || is_desc;
+    const char *tag_sym_key = get_toStringTag_sym_key();
+    bool should_hide = streq(key, klen, "__proto__", 9) || streq(key, klen, tag_sym_key, strlen(tag_sym_key)) || streq(key, klen, "__getter", 8) || is_desc;
     
     if (!should_hide) {
       char desc_key[128];
@@ -1494,7 +1500,8 @@ static size_t strfunc_ctor(struct js *js, jsval_t func_obj, char *buf, size_t le
     jsoff_t klen = offtolen(loadoff(js, koff));
     const char *kstr = (const char *) &js->mem[koff + sizeof(jsoff_t)];
     
-    if (!is_internal_prop(kstr, klen) && !streq(kstr, klen, "name", 4) && !streq(kstr, klen, "@@toStringTag", 13) && !streq(kstr, klen, "__getter", 8)) {
+    const char *func_tag_key = get_toStringTag_sym_key();
+    if (!is_internal_prop(kstr, klen) && !streq(kstr, klen, "name", 4) && !streq(kstr, klen, func_tag_key, strlen(func_tag_key)) && !streq(kstr, klen, "__getter", 8)) {
       if (!first) n += cpy(buf + n, len - n, ",\n", 2);
       first = false;
       n += add_indent(buf + n, len - n, stringify_indent);
@@ -10527,7 +10534,8 @@ static jsval_t builtin_object_toString(struct js *js, jsval_t *args, int nargs) 
   
   if (t == T_OBJ || t == T_ARR || t == T_FUNC) {
     jsval_t check_obj = (t == T_FUNC) ? mkval(T_OBJ, vdata(obj)) : obj;
-    jsoff_t tag_off = lkp(js, check_obj, "@@toStringTag", 13);
+    const char *tostr_tag_key = get_toStringTag_sym_key();
+    jsoff_t tag_off = lkp(js, check_obj, tostr_tag_key, strlen(tostr_tag_key));
     if (tag_off != 0) {
       jsval_t tag_val = resolveprop(js, mkval(T_PROP, tag_off));
       if (vtype(tag_val) == T_STR) {
@@ -16004,7 +16012,8 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, map_proto, js_mkstr(js, "clear", 5), js_mkfun(map_clear));
   setprop(js, map_proto, js_mkstr(js, "size", 4), js_mkfun(map_size));
   setprop(js, map_proto, js_mkstr(js, "entries", 7), js_mkfun(map_entries));
-  setprop(js, map_proto, js_mkstr(js, "@@toStringTag", 13), js_mkstr(js, "Map", 3));
+  const char *map_tag_key = get_toStringTag_sym_key();
+  js_set(js, map_proto, map_tag_key, js_mkstr(js, "Map", 3));
   
   jsval_t set_proto_obj = js_mkobj(js);
   set_proto(js, set_proto_obj, object_proto);
@@ -16014,7 +16023,8 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, set_proto_obj, js_mkstr(js, "clear", 5), js_mkfun(set_clear));
   setprop(js, set_proto_obj, js_mkstr(js, "size", 4), js_mkfun(set_size));
   setprop(js, set_proto_obj, js_mkstr(js, "values", 6), js_mkfun(set_values));
-  setprop(js, set_proto_obj, js_mkstr(js, "@@toStringTag", 13), js_mkstr(js, "Set", 3));
+  const char *set_tag_key = get_toStringTag_sym_key();
+  js_set(js, set_proto_obj, set_tag_key, js_mkstr(js, "Set", 3));
   
   jsval_t weakmap_proto = js_mkobj(js);
   set_proto(js, weakmap_proto, object_proto);

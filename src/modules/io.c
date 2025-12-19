@@ -8,6 +8,7 @@
 
 #include "runtime.h"
 #include "modules/io.h"
+#include "modules/symbol.h"
 
 #define ANSI_RED "\x1b[31m"
 #define ANSI_YELLOW "\x1b[33m"
@@ -345,6 +346,6 @@ void init_console_module() {
   js_set(js, console_obj, "timeEnd", js_mkfun(js_console_timeEnd));
   js_set(js, console_obj, "clear", js_mkfun(js_console_clear));
   
-  js_set(js, console_obj, "@@toStringTag", js_mkstr(js, "console", 7));
+  js_set(js, console_obj, get_toStringTag_sym_key(), js_mkstr(js, "console", 7));
   js_set(js, js_glob(js), "console", console_obj);
 }

@@ -5,6 +5,7 @@
 #include <sys/wait.h>
 
 #include "ant.h"
+#include "modules/symbol.h"
 
 static jsval_t builtin_shell_text(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_shell_lines(struct js *js, jsval_t *args, int nargs);
@@ -217,7 +218,7 @@ jsval_t shell_library(struct js *js) {
   jsval_t lib = js_mkobj(js);
   
   js_set(js, lib, "$", js_mkfun(builtin_shell_dollar));
-  js_set(js, lib, "@@toStringTag", js_mkstr(js, "shell", 5));
+  js_set(js, lib, get_toStringTag_sym_key(), js_mkstr(js, "shell", 5));
   
   return lib;
 }
