@@ -5301,6 +5301,8 @@ static jsval_t js_func_literal(struct js *js, bool is_async) {
   }                                 \
   return res;
 
+static jsval_t js_class_expr(struct js *js, bool is_expression);
+
 static jsval_t js_literal(struct js *js) {
   next(js);
   setlwm(js);
@@ -5321,6 +5323,7 @@ static jsval_t js_literal(struct js *js) {
     case TOK_LBRACE:      return js_obj_literal(js);
     case TOK_LBRACKET:    return js_arr_literal(js);
     case TOK_DIV:         return js_regex_literal(js);
+    case TOK_CLASS:       return js_class_expr(js, true);
     case TOK_FUNC:        return js_func_literal(js, false);
     case TOK_ASYNC: {
       js->consumed = 1;
@@ -5455,7 +5458,6 @@ static jsval_t js_literal(struct js *js) {
     case TOK_IDENTIFIER:
     case TOK_CATCH:
     case TOK_TRY:
-    case TOK_CLASS:
     case TOK_FINALLY: return mkcoderef((jsoff_t) js->toff, (jsoff_t) js->tlen);
     
     default: return js_mkerr_typed(js, JS_ERR_SYNTAX, "bad expr");
@@ -7844,15 +7846,26 @@ static jsval_t js_with(struct js *js) {
   return res;
 }
 
-static jsval_t js_class_decl(struct js *js) {
+static jsval_t js_class_expr(struct js *js, bool is_expression);
+static jsval_t js_class_decl(struct js *js) { return js_class_expr(js, false); }
+
+static jsval_t js_class_expr(struct js *js, bool is_expression) {
   uint8_t exe = !(js->flags & F_NOEXEC);
   js->consumed = 1;
-  EXPECT(TOK_IDENTIFIER, );
-  js->consumed = 0;
   
-  jsoff_t class_name_off = js->toff, class_name_len = js->tlen;
-  char *class_name = (char *) &js->code[class_name_off];
-  js->consumed = 1;
+  jsoff_t class_name_off = 0, class_name_len = 0;
+  char *class_name = NULL;
+  
+  if (next(js) == TOK_IDENTIFIER) {
+    if (!(js->tlen == 7 && streq(&js->code[js->toff], js->tlen, "extends", 7))) {
+      class_name_off = js->toff;
+      class_name_len = js->tlen;
+      class_name = (char *) &js->code[class_name_off];
+      js->consumed = 1;
+    }
+  } else if (!is_expression) {
+    return js_mkerr_typed(js, JS_ERR_SYNTAX, "class name expected");
+  }
   
   jsoff_t super_off = 0, super_len = 0;
   if (next(js) == TOK_IDENTIFIER && js->tlen == 7 &&
@@ -8177,7 +8190,7 @@ static jsval_t js_class_decl(struct js *js) {
     
     jsval_t name_key = js_mkstr(js, "name", 4);
     if (is_err(name_key)) return name_key;
-    jsval_t name_val = js_mkstr(js, class_name, class_name_len);
+    jsval_t name_val = class_name_len > 0 ? js_mkstr(js, class_name, class_name_len) : js_mkstr(js, "", 0);
     if (is_err(name_val)) return name_val;
     jsval_t res_name = setprop(js, func_obj, name_key, name_val);
     if (is_err(res_name)) return res_name;
@@ -8188,11 +8201,14 @@ static jsval_t js_class_decl(struct js *js) {
     if (is_err(proto_res)) return proto_res;
     
     jsval_t constructor = mkval(T_FUNC, (unsigned long) vdata(func_obj));
-    if (lkp(js, js->scope, class_name, class_name_len) > 0) {
-      return js_mkerr(js, "'%.*s' already declared", (int) class_name_len, class_name);
+    
+    if (class_name_len > 0) {
+      if (lkp(js, js->scope, class_name, class_name_len) > 0) {
+        return js_mkerr(js, "'%.*s' already declared", (int) class_name_len, class_name);
+      }
+      jsval_t x = mkprop(js, js->scope, js_mkstr(js, class_name, class_name_len), constructor, false);
+      if (is_err(x)) return x;
     }
-    jsval_t x = mkprop(js, js->scope, js_mkstr(js, class_name, class_name_len), constructor, false);
-    if (is_err(x)) return x;
     
     for (int i = 0; i < method_count; i++) {
       if (!methods[i].is_static) continue;
