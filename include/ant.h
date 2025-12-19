@@ -53,6 +53,8 @@ jsval_t js_mkfalse(void);
 jsval_t js_mknum(double);
 
 jsval_t js_getthis(struct js *);
+void js_setthis(struct js *, jsval_t);
+
 jsval_t js_getcurrentfunc(struct js *);
 jsval_t js_get(struct js *, jsval_t, const char *);
 
@@ -64,6 +66,7 @@ jsval_t js_mkerr(struct js *js, const char *fmt, ...);
 jsval_t js_mkerr_typed(struct js *js, js_err_type_t err_type, const char *fmt, ...);
 jsval_t js_mkfun(jsval_t (*fn)(struct js *, jsval_t *, int));
 jsval_t js_call(struct js *js, jsval_t func, jsval_t *args, int nargs);
+jsval_t js_call_with_this(struct js *js, jsval_t func, jsval_t this_val, jsval_t *args, int nargs);
 
 void js_set(struct js *, jsval_t, const char *, jsval_t);
 void js_merge_obj(struct js *, jsval_t dst, jsval_t src);
