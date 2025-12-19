@@ -1,5 +1,5 @@
 import { test, summary } from './helpers.js';
-import path from 'path';
+import path from 'ant:path';
 
 console.log('Path Tests\n');
 
