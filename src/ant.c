@@ -5455,6 +5455,7 @@ static jsval_t js_literal(struct js *js) {
     case TOK_IDENTIFIER:
     case TOK_CATCH:
     case TOK_TRY:
+    case TOK_CLASS:
     case TOK_FINALLY: return mkcoderef((jsoff_t) js->toff, (jsoff_t) js->tlen);
     
     default: return js_mkerr_typed(js, JS_ERR_SYNTAX, "bad expr");
