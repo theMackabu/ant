@@ -373,6 +373,7 @@ static jsoff_t align32(jsoff_t v) { return ((v + 3) >> 2) << 2; }
 static bool streq(const char *buf, size_t len, const char *p, size_t n);
 static size_t tostr(struct js *js, jsval_t value, char *buf, size_t len);
 static size_t strpromise(struct js *js, jsval_t value, char *buf, size_t len);
+static size_t js_regex_to_posix(const char *src, size_t src_len, char *dst, size_t dst_size);
 
 static inline jsoff_t esize(jsoff_t w);
 static jsval_t js_expr(struct js *js);
@@ -482,6 +483,9 @@ static jsval_t builtin_btoa(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_atob(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_Object(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_RegExp(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_regexp_test(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_regexp_exec(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_string_search(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_Promise(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_Promise_resolve(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_Promise_reject(struct js *js, jsval_t *args, int nargs);
@@ -4954,22 +4958,29 @@ static jsval_t js_regex_literal(struct js *js) {
   jsval_t flags = js_mkstr(js, &js->code[flags_start], flags_end - flags_start);
   
   jsval_t regexp_obj = mkobj(js, 0);
+  jsval_t regexp_proto = get_ctor_proto(js, "RegExp", 6);
+  if (vtype(regexp_proto) == T_OBJ) set_proto(js, regexp_obj, regexp_proto);
+
   setprop(js, regexp_obj, js_mkstr(js, "source", 6), pattern);
   setprop(js, regexp_obj, js_mkstr(js, "flags", 5), flags);
-  
+
   jsoff_t flen = flags_end - flags_start;
   const char *fstr = &js->code[flags_start];
-  bool global = false, ignoreCase = false, multiline = false;
+  bool global = false, ignoreCase = false, multiline = false, dotAll = false, sticky = false;
   for (jsoff_t i = 0; i < flen; i++) {
     if (fstr[i] == 'g') global = true;
     if (fstr[i] == 'i') ignoreCase = true;
     if (fstr[i] == 'm') multiline = true;
+    if (fstr[i] == 's') dotAll = true;
+    if (fstr[i] == 'y') sticky = true;
   }
-  
+
   setprop(js, regexp_obj, js_mkstr(js, "global", 6), mkval(T_BOOL, global ? 1 : 0));
   setprop(js, regexp_obj, js_mkstr(js, "ignoreCase", 10), mkval(T_BOOL, ignoreCase ? 1 : 0));
   setprop(js, regexp_obj, js_mkstr(js, "multiline", 9), mkval(T_BOOL, multiline ? 1 : 0));
-  
+  setprop(js, regexp_obj, js_mkstr(js, "dotAll", 6), mkval(T_BOOL, dotAll ? 1 : 0));
+  setprop(js, regexp_obj, js_mkstr(js, "sticky", 6), mkval(T_BOOL, sticky ? 1 : 0));
+
   return regexp_obj;
 }
 
@@ -8889,7 +8900,9 @@ static jsval_t builtin_RegExp(struct js *js, jsval_t *args, int nargs) {
   if (!use_this) {
     regexp_obj = mkobj(js, 0);
   }
-  
+  jsval_t regexp_proto = get_ctor_proto(js, "RegExp", 6);
+  if (vtype(regexp_proto) == T_OBJ) set_proto(js, regexp_obj, regexp_proto);
+
   jsval_t pattern = js_mkstr(js, "", 0);
   if (nargs > 0) {
     if (vtype(args[0]) == T_STR) {
@@ -8914,18 +8927,223 @@ static jsval_t builtin_RegExp(struct js *js, jsval_t *args, int nargs) {
   jsoff_t flags_len, flags_off = vstr(js, flags, &flags_len);
   const char *flags_str = (char *) &js->mem[flags_off];
   
-  bool global = false, ignoreCase = false, multiline = false;
+  bool global = false, ignoreCase = false, multiline = false, dotAll = false, sticky = false;
   for (jsoff_t i = 0; i < flags_len; i++) {
     if (flags_str[i] == 'g') global = true;
     if (flags_str[i] == 'i') ignoreCase = true;
     if (flags_str[i] == 'm') multiline = true;
+    if (flags_str[i] == 's') dotAll = true;
+    if (flags_str[i] == 'y') sticky = true;
   }
-  
+
   setprop(js, regexp_obj, js_mkstr(js, "global", 6), mkval(T_BOOL, global ? 1 : 0));
   setprop(js, regexp_obj, js_mkstr(js, "ignoreCase", 10), mkval(T_BOOL, ignoreCase ? 1 : 0));
   setprop(js, regexp_obj, js_mkstr(js, "multiline", 9), mkval(T_BOOL, multiline ? 1 : 0));
-  
+  setprop(js, regexp_obj, js_mkstr(js, "dotAll", 6), mkval(T_BOOL, dotAll ? 1 : 0));
+  setprop(js, regexp_obj, js_mkstr(js, "sticky", 6), mkval(T_BOOL, sticky ? 1 : 0));
+
   return regexp_obj;
+}
+
+static jsval_t builtin_regexp_test(struct js *js, jsval_t *args, int nargs) {
+  jsval_t regexp = js->this_val;
+  if (vtype(regexp) != T_OBJ) return js_mkerr(js, "test called on non-regexp");
+  if (nargs < 1) return mkval(T_BOOL, 0);
+
+  jsval_t str_arg = args[0];
+  if (vtype(str_arg) != T_STR) return mkval(T_BOOL, 0);
+
+  jsoff_t source_off = lkp(js, regexp, "source", 6);
+  if (source_off == 0) return mkval(T_BOOL, 0);
+  jsval_t source_val = resolveprop(js, mkval(T_PROP, source_off));
+  if (vtype(source_val) != T_STR) return mkval(T_BOOL, 0);
+
+  jsoff_t plen, poff = vstr(js, source_val, &plen);
+  char pattern_buf[256];
+  jsoff_t pattern_len = plen < sizeof(pattern_buf) - 1 ? plen : sizeof(pattern_buf) - 1;
+  memcpy(pattern_buf, &js->mem[poff], pattern_len);
+  pattern_buf[pattern_len] = '\0';
+
+  bool ignore_case = false;
+  jsoff_t flags_off = lkp(js, regexp, "flags", 5);
+  if (flags_off != 0) {
+    jsval_t flags_val = resolveprop(js, mkval(T_PROP, flags_off));
+    if (vtype(flags_val) == T_STR) {
+      jsoff_t flen, foff = vstr(js, flags_val, &flen);
+      const char *flags_str = (char *) &js->mem[foff];
+      for (jsoff_t i = 0; i < flen; i++) {
+        if (flags_str[i] == 'i') ignore_case = true;
+      }
+    }
+  }
+
+  jsoff_t str_len, str_off = vstr(js, str_arg, &str_len);
+  char *str_buf = (char *)ANT_GC_MALLOC(str_len + 1);
+  if (!str_buf) return js_mkerr(js, "oom");
+  memcpy(str_buf, &js->mem[str_off], str_len);
+  str_buf[str_len] = '\0';
+
+  regex_t regex;
+  int cflags = REG_EXTENDED | REG_NOSUB;
+  if (ignore_case) cflags |= REG_ICASE;
+
+  char posix_pattern[512];
+  js_regex_to_posix(pattern_buf, pattern_len, posix_pattern, sizeof(posix_pattern));
+
+  int rc = regcomp(&regex, posix_pattern, cflags);
+  if (rc != 0) {
+    ANT_GC_FREE(str_buf);
+    return mkval(T_BOOL, 0);
+  }
+
+  int result = regexec(&regex, str_buf, 0, NULL, 0);
+  regfree(&regex);
+  ANT_GC_FREE(str_buf);
+
+  return mkval(T_BOOL, result == 0 ? 1 : 0);
+}
+
+static jsval_t builtin_regexp_exec(struct js *js, jsval_t *args, int nargs) {
+  jsval_t regexp = js->this_val;
+  if (vtype(regexp) != T_OBJ) return js_mkerr(js, "exec called on non-regexp");
+  if (nargs < 1) return js_mknull();
+
+  jsval_t str_arg = args[0];
+  if (vtype(str_arg) != T_STR) return js_mknull();
+
+  jsoff_t source_off = lkp(js, regexp, "source", 6);
+  if (source_off == 0) return js_mknull();
+  jsval_t source_val = resolveprop(js, mkval(T_PROP, source_off));
+  if (vtype(source_val) != T_STR) return js_mknull();
+
+  jsoff_t plen, poff = vstr(js, source_val, &plen);
+  char pattern_buf[256];
+  jsoff_t pattern_len = plen < sizeof(pattern_buf) - 1 ? plen : sizeof(pattern_buf) - 1;
+  memcpy(pattern_buf, &js->mem[poff], pattern_len);
+  pattern_buf[pattern_len] = '\0';
+
+  bool ignore_case = false;
+  jsoff_t flags_off = lkp(js, regexp, "flags", 5);
+  if (flags_off != 0) {
+    jsval_t flags_val = resolveprop(js, mkval(T_PROP, flags_off));
+    if (vtype(flags_val) == T_STR) {
+      jsoff_t flen, foff = vstr(js, flags_val, &flen);
+      const char *flags_str = (char *) &js->mem[foff];
+      for (jsoff_t i = 0; i < flen; i++) {
+        if (flags_str[i] == 'i') ignore_case = true;
+      }
+    }
+  }
+
+  jsoff_t str_len, str_off = vstr(js, str_arg, &str_len);
+  const char *str_ptr = (char *) &js->mem[str_off];
+  char *str_buf = (char *)ANT_GC_MALLOC(str_len + 1);
+  if (!str_buf) return js_mkerr(js, "oom");
+  memcpy(str_buf, str_ptr, str_len);
+  str_buf[str_len] = '\0';
+
+  char posix_pattern[512];
+  js_regex_to_posix(pattern_buf, pattern_len, posix_pattern, sizeof(posix_pattern));
+
+  regex_t regex;
+  int cflags = REG_EXTENDED;
+  if (ignore_case) cflags |= REG_ICASE;
+
+  if (regcomp(&regex, posix_pattern, cflags) != 0) {
+    ANT_GC_FREE(str_buf);
+    return js_mknull();
+  }
+
+  regmatch_t matches[10];
+  int ret = regexec(&regex, str_buf, 10, matches, 0);
+  if (ret != 0) {
+    regfree(&regex);
+    ANT_GC_FREE(str_buf);
+    return js_mknull();
+  }
+
+  jsval_t result_arr = js_mkarr(js);
+  for (int i = 0; i < 10 && matches[i].rm_so >= 0; i++) {
+    jsoff_t m_start = (jsoff_t)matches[i].rm_so;
+    jsoff_t m_len = (jsoff_t)(matches[i].rm_eo - matches[i].rm_so);
+    jsval_t match_str = js_mkstr(js, str_ptr + m_start, m_len);
+    js_arr_push(js, result_arr, match_str);
+  }
+
+  setprop(js, result_arr, js_mkstr(js, "index", 5), tov((double)matches[0].rm_so));
+  setprop(js, result_arr, js_mkstr(js, "input", 5), str_arg);
+
+  regfree(&regex);
+  ANT_GC_FREE(str_buf);
+  return result_arr;
+}
+
+static jsval_t builtin_string_search(struct js *js, jsval_t *args, int nargs) {
+  jsval_t str = js->this_val;
+  if (vtype(str) != T_STR) return js_mkerr(js, "search called on non-string");
+  if (nargs < 1) return tov(-1);
+
+  jsval_t pattern = args[0];
+  char pattern_buf[256];
+  jsoff_t pattern_len = 0;
+  bool ignore_case = false;
+
+  if (vtype(pattern) == T_OBJ) {
+    jsoff_t source_off = lkp(js, pattern, "source", 6);
+    if (source_off == 0) return tov(-1);
+    jsval_t source_val = resolveprop(js, mkval(T_PROP, source_off));
+    if (vtype(source_val) != T_STR) return tov(-1);
+
+    jsoff_t plen, poff = vstr(js, source_val, &plen);
+    pattern_len = plen < sizeof(pattern_buf) - 1 ? plen : sizeof(pattern_buf) - 1;
+    memcpy(pattern_buf, &js->mem[poff], pattern_len);
+    pattern_buf[pattern_len] = '\0';
+
+    jsoff_t flags_off = lkp(js, pattern, "flags", 5);
+    if (flags_off != 0) {
+      jsval_t flags_val = resolveprop(js, mkval(T_PROP, flags_off));
+      if (vtype(flags_val) == T_STR) {
+        jsoff_t flen, foff = vstr(js, flags_val, &flen);
+        const char *flags_str = (char *) &js->mem[foff];
+        for (jsoff_t i = 0; i < flen; i++) {
+          if (flags_str[i] == 'i') ignore_case = true;
+        }
+      }
+    }
+  } else if (vtype(pattern) == T_STR) {
+    jsoff_t plen, poff = vstr(js, pattern, &plen);
+    pattern_len = plen < sizeof(pattern_buf) - 1 ? plen : sizeof(pattern_buf) - 1;
+    memcpy(pattern_buf, &js->mem[poff], pattern_len);
+    pattern_buf[pattern_len] = '\0';
+  } else {
+    return tov(-1);
+  }
+
+  jsoff_t str_len, str_off = vstr(js, str, &str_len);
+  char *str_buf = (char *)ANT_GC_MALLOC(str_len + 1);
+  if (!str_buf) return js_mkerr(js, "oom");
+  memcpy(str_buf, &js->mem[str_off], str_len);
+  str_buf[str_len] = '\0';
+
+  char posix_pattern[512];
+  js_regex_to_posix(pattern_buf, pattern_len, posix_pattern, sizeof(posix_pattern));
+
+  regex_t regex;
+  int cflags = REG_EXTENDED;
+  if (ignore_case) cflags |= REG_ICASE;
+
+  if (regcomp(&regex, posix_pattern, cflags) != 0) {
+    ANT_GC_FREE(str_buf);
+    return tov(-1);
+  }
+
+  regmatch_t match;
+  int ret = regexec(&regex, str_buf, 1, &match, 0);
+  regfree(&regex);
+  ANT_GC_FREE(str_buf);
+
+  if (ret != 0) return tov(-1);
+  return tov((double)match.rm_so);
 }
 
 static jsval_t builtin_Date(struct js *js, jsval_t *args, int nargs) {
@@ -11838,22 +12056,70 @@ static jsval_t builtin_string_split(struct js *js, jsval_t *args, int nargs) {
   jsoff_t str_len, str_off = vstr(js, str, &str_len);
   const char *str_ptr = (char *) &js->mem[str_off];
   jsval_t arr = mkarr(js);
-  
+
   if (is_err(arr)) return arr;
-  if (nargs == 0 || vtype(args[0]) != T_STR) {
-    jsval_t key = js_mkstr(js, "0", 1);
-    setprop(js, arr, key, str);
+  if (nargs == 0) goto return_whole;
+
+  jsval_t sep_arg = args[0];
+  if (vtype(sep_arg) == T_OBJ) {
+    jsoff_t source_off = lkp(js, sep_arg, "source", 6);
+    if (source_off == 0) goto return_whole;
+    jsval_t source_val = resolveprop(js, mkval(T_PROP, source_off));
+    if (vtype(source_val) != T_STR) goto return_whole;
+
+    jsoff_t plen, poff = vstr(js, source_val, &plen);
+    char pattern_buf[256];
+    jsoff_t pattern_len = plen < sizeof(pattern_buf) - 1 ? plen : sizeof(pattern_buf) - 1;
+    memcpy(pattern_buf, &js->mem[poff], pattern_len);
+    pattern_buf[pattern_len] = '\0';
+
+    char posix_pattern[512];
+    js_regex_to_posix(pattern_buf, pattern_len, posix_pattern, sizeof(posix_pattern));
+
+    regex_t regex;
+    if (regcomp(&regex, posix_pattern, REG_EXTENDED) != 0) goto return_whole;
+
+    char *str_buf = (char *)ANT_GC_MALLOC(str_len + 1);
+    if (!str_buf) { regfree(&regex); return js_mkerr(js, "oom"); }
+    memcpy(str_buf, str_ptr, str_len);
+    str_buf[str_len] = '\0';
+
+    jsoff_t idx = 0, start = 0;
+    regmatch_t match;
+    while (regexec(&regex, str_buf + start, 1, &match, 0) == 0) {
+      jsoff_t match_start = start + (jsoff_t)match.rm_so;
+      jsoff_t match_end = start + (jsoff_t)match.rm_eo;
+      char idxstr[16];
+      snprintf(idxstr, sizeof(idxstr), "%u", (unsigned)idx);
+      jsval_t key = js_mkstr(js, idxstr, strlen(idxstr));
+      jsval_t part = js_mkstr(js, str_ptr + start, match_start - start);
+      setprop(js, arr, key, part);
+      idx++;
+      start = match_end;
+      if (match.rm_so == match.rm_eo) start++;
+      if (start >= str_len) break;
+    }
+    if (start <= str_len) {
+      char idxstr[16];
+      snprintf(idxstr, sizeof(idxstr), "%u", (unsigned)idx);
+      jsval_t key = js_mkstr(js, idxstr, strlen(idxstr));
+      jsval_t part = js_mkstr(js, str_ptr + start, str_len - start);
+      setprop(js, arr, key, part);
+      idx++;
+    }
+    regfree(&regex);
+    ANT_GC_FREE(str_buf);
     jsval_t len_key = js_mkstr(js, "length", 6);
-    setprop(js, arr, len_key, tov(1));
+    setprop(js, arr, len_key, tov((double)idx));
     return mkval(T_ARR, vdata(arr));
   }
-  
-  jsval_t sep = args[0];
-  jsoff_t sep_len, sep_off = vstr(js, sep, &sep_len);
+
+  if (vtype(sep_arg) != T_STR) goto return_whole;
+
+  jsoff_t sep_len, sep_off = vstr(js, sep_arg, &sep_len);
   const char *sep_ptr = (char *) &js->mem[sep_off];
-  jsoff_t idx = 0;
-  jsoff_t start = 0;
-  
+  jsoff_t idx = 0, start = 0;
+
   if (sep_len == 0) {
     for (jsoff_t i = 0; i < str_len; i++) {
       char idxstr[16];
@@ -11863,31 +12129,37 @@ static jsval_t builtin_string_split(struct js *js, jsval_t *args, int nargs) {
       setprop(js, arr, key, part);
       idx++;
     }
-  } else {
-    for (jsoff_t i = 0; i <= str_len - sep_len; i++) {
-      if (memcmp(str_ptr + i, sep_ptr, sep_len) == 0) {
-        char idxstr[16];
-        snprintf(idxstr, sizeof(idxstr), "%u", (unsigned) idx);
-        jsval_t key = js_mkstr(js, idxstr, strlen(idxstr));
-        jsval_t part = js_mkstr(js, str_ptr + start, i - start);
-        setprop(js, arr, key, part);
-        idx++;
-        start = i + sep_len;
-        i += sep_len - 1;
-      }
-    }
-    if (start <= str_len) {
-      char idxstr[16];
-      snprintf(idxstr, sizeof(idxstr), "%u", (unsigned) idx);
-      jsval_t key = js_mkstr(js, idxstr, strlen(idxstr));
-      jsval_t part = js_mkstr(js, str_ptr + start, str_len - start);
-      setprop(js, arr, key, part);
-      idx++;
-    }
+    goto set_length;
   }
-  
+
+  for (jsoff_t i = 0; i <= str_len - sep_len; i++) {
+    if (memcmp(str_ptr + i, sep_ptr, sep_len) != 0) continue;
+    char idxstr[16];
+    snprintf(idxstr, sizeof(idxstr), "%u", (unsigned) idx);
+    jsval_t key = js_mkstr(js, idxstr, strlen(idxstr));
+    jsval_t part = js_mkstr(js, str_ptr + start, i - start);
+    setprop(js, arr, key, part);
+    idx++;
+    start = i + sep_len;
+    i += sep_len - 1;
+  }
+  if (start <= str_len) {
+    char idxstr[16];
+    snprintf(idxstr, sizeof(idxstr), "%u", (unsigned) idx);
+    jsval_t key = js_mkstr(js, idxstr, strlen(idxstr));
+    jsval_t part = js_mkstr(js, str_ptr + start, str_len - start);
+    setprop(js, arr, key, part);
+    idx++;
+  }
+
+set_length:;
   jsval_t len_key = js_mkstr(js, "length", 6);
   setprop(js, arr, len_key, tov((double) idx));
+  return mkval(T_ARR, vdata(arr));
+
+return_whole:
+  setprop(js, arr, js_mkstr(js, "0", 1), str);
+  setprop(js, arr, js_mkstr(js, "length", 6), tov(1));
   return mkval(T_ARR, vdata(arr));
 }
 
@@ -12290,47 +12562,53 @@ static size_t js_regex_to_posix(const char *src, size_t src_len, char *dst, size
 static jsval_t do_regex_match(struct js *js, const char *pattern_str, const char *str_ptr, jsoff_t str_len, char *str_buf, bool global_flag, bool ignore_case) {
   regex_t regex;
   int cflags = REG_EXTENDED;
-  
+
   if (ignore_case) cflags |= REG_ICASE;
   if (regcomp(&regex, pattern_str, cflags) != 0) return js_mknull();
-  
+
   jsval_t result_arr = js_mkarr(js);
   if (is_err(result_arr)) {
     regfree(&regex);
     return result_arr;
   }
-  
-  regmatch_t match;
+
+  regmatch_t matches[10];
   jsoff_t pos = 0;
   int match_count = 0;
-  
+
   while (pos < str_len) {
-    int ret = regexec(&regex, str_buf + pos, 1, &match, 0);
-    if (ret != 0 || match.rm_so < 0) break;
-    
-    jsoff_t match_start = pos + (jsoff_t)match.rm_so;
-    jsoff_t match_len = (jsoff_t)(match.rm_eo - match.rm_so);
-    
-    jsval_t match_str = js_mkstr(js, str_ptr + match_start, match_len);
-    if (is_err(match_str)) {
-      regfree(&regex);
-      return match_str;
+    int nmatch = global_flag ? 1 : 10;
+    int ret = regexec(&regex, str_buf + pos, nmatch, matches, 0);
+    if (ret != 0 || matches[0].rm_so < 0) break;
+
+    if (global_flag) {
+      jsoff_t match_start = pos + (jsoff_t)matches[0].rm_so;
+      jsoff_t match_len = (jsoff_t)(matches[0].rm_eo - matches[0].rm_so);
+      jsval_t match_str = js_mkstr(js, str_ptr + match_start, match_len);
+      if (is_err(match_str)) { regfree(&regex); return match_str; }
+      js_arr_push(js, result_arr, match_str);
+    } else {
+      for (int i = 0; i < 10 && matches[i].rm_so >= 0; i++) {
+        jsoff_t m_start = pos + (jsoff_t)matches[i].rm_so;
+        jsoff_t m_len = (jsoff_t)(matches[i].rm_eo - matches[i].rm_so);
+        jsval_t match_str = js_mkstr(js, str_ptr + m_start, m_len);
+        if (is_err(match_str)) { regfree(&regex); return match_str; }
+        js_arr_push(js, result_arr, match_str);
+      }
     }
-    
-    js_arr_push(js, result_arr, match_str);
     match_count++;
-    
+
     if (!global_flag) break;
-    
-    if (match.rm_eo == 0) {
+
+    if (matches[0].rm_eo == 0) {
       pos++;
     } else {
-      pos += (jsoff_t)match.rm_eo;
+      pos += (jsoff_t)matches[0].rm_eo;
     }
   }
-  
+
   regfree(&regex);
-  
+
   if (match_count == 0) return js_mknull();
   return result_arr;
 }
@@ -15122,6 +15400,7 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, string_proto, js_mkstr(js, "at", 2), js_mkfun(builtin_string_at));
   setprop(js, string_proto, js_mkstr(js, "lastIndexOf", 11), js_mkfun(builtin_string_lastIndexOf));
   setprop(js, string_proto, js_mkstr(js, "concat", 6), js_mkfun(builtin_string_concat));
+  setprop(js, string_proto, js_mkstr(js, "search", 6), js_mkfun(builtin_string_search));
 
   jsval_t number_proto = js_mkobj(js);
   set_proto(js, number_proto, object_proto);
@@ -15186,7 +15465,9 @@ struct js *js_create(void *buf, size_t len) {
   
   jsval_t regexp_proto = js_mkobj(js);
   set_proto(js, regexp_proto, object_proto);
-  
+  setprop(js, regexp_proto, js_mkstr(js, "test", 4), js_mkfun(builtin_regexp_test));
+  setprop(js, regexp_proto, js_mkstr(js, "exec", 4), js_mkfun(builtin_regexp_exec));
+
   jsval_t map_proto = js_mkobj(js);
   set_proto(js, map_proto, object_proto);
   setprop(js, map_proto, js_mkstr(js, "set", 3), js_mkfun(map_set));
