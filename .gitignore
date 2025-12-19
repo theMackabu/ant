@@ -14,4 +14,5 @@
 !/subprojects/packagefiles
 
 *.todo
+spec.txt
 todo.txt

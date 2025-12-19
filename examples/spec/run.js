@@ -39,14 +39,14 @@ for (const file of files) {
     if (failedMatch) totalFailed += parseInt(failedMatch[1], 10);
 
     if (result.exitCode === 0) {
-      console.log(`${GREEN}✓${RESET} ${name}`);
+      console.log(`${GREEN}✓${RESET} ${name}\n`);
       filesPassed++;
     } else {
-      console.log(`${RED}✗${RESET} ${name}`);
+      console.log(`${RED}✗${RESET} ${name}\n`);
       filesFailed++;
     }
   } catch (e) {
-    console.log(`${RED}✗${RESET} ${name} ${DIM}(error)${RESET}`);
+    console.log(`${RED}✗${RESET} ${name} ${DIM}(error)${RESET}\n`);
     filesFailed++;
   }
 }
