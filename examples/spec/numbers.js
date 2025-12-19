@@ -64,6 +64,6 @@ test('unary plus', +'42', 42);
 test('unary minus', -42, -42);
 
 test('Math.floor division', Math.floor(7 / 2), 3);
-test('bitwise or floor', 7 / 2 | 0, 3);
+test('bitwise or floor', (7 / 2) | 0, 3);
 
 summary();

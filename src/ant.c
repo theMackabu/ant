@@ -289,12 +289,19 @@ static const char *typestr_raw(uint8_t t) {
 
 static jsval_t tov(double d) { union { double d; jsval_t v; } u = {d}; return u.v; }
 static double tod(jsval_t v) { union { jsval_t v; double d; } u = {v}; return u.d; }
-static bool is_nan(jsval_t v) { return (v >> 52U) == 0x7feU; }
 static size_t vdata(jsval_t v) { return (size_t) (v & ~((jsval_t) 0x7fffUL << 48U)); }
+
 static jsoff_t coderefoff(jsval_t v) { return v & 0xffffffU; }
 static jsoff_t codereflen(jsval_t v) { return (v >> 24U) & 0xffffffU; }
 static jsoff_t propref_obj(jsval_t v) { return v & 0xffffffU; }
 static jsoff_t propref_key(jsval_t v) { return (v >> 24U) & 0xffffffU; }
+
+static bool is_nan(jsval_t v) { 
+  if ((v >> 52U) != 0x7feU) return false;
+  // real doubles in 0x7FE range have large mantissa values
+  // tagged values have small memory offsets, so upper data bits are 0
+  return (v & 0xf00000000000UL) == 0;
+}
 
 static const char *typestr(uint8_t t) {
   if (t == T_CFUNC) return "function";
@@ -4450,7 +4457,7 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
     case TOK_AND:     return tov((double)((long) a & (long) b));
     case TOK_OR:      return tov((double)((long) a | (long) b));
     case TOK_UMINUS:  return tov(-b);
-    case TOK_UPLUS:   return r;
+    case TOK_UPLUS:   return tov(b);
     case TOK_TILDA:   return tov((double)(~(long) b));
     case TOK_SHL:     return tov((double)((long) a << (long) b));
     case TOK_SHR:     return tov((double)((long) a >> (long) b));
@@ -11760,6 +11767,10 @@ static jsval_t builtin_number_toExponential(struct js *js, jsval_t *args, int na
   
   char buf[64];
   snprintf(buf, sizeof(buf), "%.*e", digits, tod(num));
+  char *e = strchr(buf, 'e');
+  if (e && (e[1] == '+' || e[1] == '-') && e[2] == '0' && e[3] != '\0') {
+    memmove(e + 2, e + 3, strlen(e + 3) + 1);
+  }
   return js_mkstr(js, buf, strlen(buf));
 }
 
@@ -14115,11 +14126,22 @@ struct js *js_create(void *buf, size_t len) {
   
   jsval_t number_ctor_obj = mkobj(js, 0);
   set_proto(js, number_ctor_obj, function_proto);
+  
   setprop(js, number_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_Number));
   setprop(js, number_ctor_obj, js_mkstr(js, "isNaN", 5), js_mkfun(builtin_Number_isNaN));
   setprop(js, number_ctor_obj, js_mkstr(js, "isFinite", 8), js_mkfun(builtin_Number_isFinite));
   setprop(js, number_ctor_obj, js_mkstr(js, "isInteger", 9), js_mkfun(builtin_Number_isInteger));
   setprop(js, number_ctor_obj, js_mkstr(js, "isSafeInteger", 13), js_mkfun(builtin_Number_isSafeInteger));
+  
+  setprop(js, number_ctor_obj, js_mkstr(js, "MAX_VALUE", 9), tov(1.7976931348623157e+308));
+  setprop(js, number_ctor_obj, js_mkstr(js, "MIN_VALUE", 9), tov(5e-324));
+  setprop(js, number_ctor_obj, js_mkstr(js, "MAX_SAFE_INTEGER", 16), tov(9007199254740991.0));
+  setprop(js, number_ctor_obj, js_mkstr(js, "MIN_SAFE_INTEGER", 16), tov(-9007199254740991.0));
+  setprop(js, number_ctor_obj, js_mkstr(js, "POSITIVE_INFINITY", 17), tov(INFINITY));
+  setprop(js, number_ctor_obj, js_mkstr(js, "NEGATIVE_INFINITY", 17), tov(-INFINITY));
+  setprop(js, number_ctor_obj, js_mkstr(js, "NaN", 3), tov(NAN));
+  setprop(js, number_ctor_obj, js_mkstr(js, "EPSILON", 7), tov(2.220446049250313e-16));
+  
   setprop(js, number_ctor_obj, js_mkstr(js, "prototype", 9), number_proto);
   setprop(js, glob, js_mkstr(js, "Number", 6), mkval(T_FUNC, vdata(number_ctor_obj)));
   
