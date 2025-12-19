@@ -13,6 +13,17 @@ enum {
   JS_ERR, JS_PRIV, JS_PROMISE, JS_OBJ, JS_FUNC
 };
 
+typedef enum {
+  JS_ERR_TYPE,
+  JS_ERR_SYNTAX,
+  JS_ERR_REFERENCE,
+  JS_ERR_RANGE,
+  JS_ERR_EVAL,
+  JS_ERR_URI,
+  JS_ERR_INTERNAL,
+  JS_ERR_GENERIC
+} js_err_type_t;
+
 struct js *js_create(void *buf, size_t len);
 struct js *js_create_dynamic(size_t initial_size, size_t max_size);
 
@@ -50,6 +61,7 @@ jsval_t js_mkarr(struct js *);
 void js_arr_push(struct js *, jsval_t arr, jsval_t val);
 jsval_t js_mkstr(struct js *, const void *, size_t);
 jsval_t js_mkerr(struct js *js, const char *fmt, ...);
+jsval_t js_mkerr_typed(struct js *js, js_err_type_t err_type, const char *fmt, ...);
 jsval_t js_mkfun(jsval_t (*fn)(struct js *, jsval_t *, int));
 jsval_t js_call(struct js *js, jsval_t func, jsval_t *args, int nargs);
 
