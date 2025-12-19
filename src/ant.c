@@ -456,6 +456,7 @@ static jsval_t builtin_string_startsWith(struct js *js, jsval_t *args, int nargs
 static jsval_t builtin_string_endsWith(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_replace(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_replaceAll(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_string_match(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_template(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_charCodeAt(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_toLowerCase(struct js *js, jsval_t *args, int nargs);
@@ -12193,7 +12194,6 @@ static jsval_t builtin_string_replaceAll(struct js *js, jsval_t *args, int nargs
   const char *repl_ptr = (char *) &js->mem[repl_off];
   
   if (search_len == 0) {
-    // Empty search string: insert replacement between each character
     size_t total_len = str_len + (str_len + 1) * repl_len;
     char *result = (char *)ANT_GC_MALLOC(total_len + 1);
     if (!result) return js_mkerr(js, "oom");
@@ -12211,7 +12211,6 @@ static jsval_t builtin_string_replaceAll(struct js *js, jsval_t *args, int nargs
     return ret;
   }
   
-  // Count occurrences first
   jsoff_t count = 0;
   for (jsoff_t i = 0; i <= str_len - search_len; i++) {
     if (memcmp(str_ptr + i, search_ptr, search_len) == 0) {
@@ -12222,7 +12221,6 @@ static jsval_t builtin_string_replaceAll(struct js *js, jsval_t *args, int nargs
   
   if (count == 0) return str;
   
-  // Calculate result length
   size_t result_total = str_len - (count * search_len) + (count * repl_len);
   char *result = (char *)ANT_GC_MALLOC(result_total + 1);
   if (!result) return js_mkerr(js, "oom");
@@ -12240,7 +12238,6 @@ static jsval_t builtin_string_replaceAll(struct js *js, jsval_t *args, int nargs
     }
   }
   
-  // Copy remaining characters
   while (str_pos < str_len) {
     result[result_pos++] = str_ptr[str_pos++];
   }
@@ -12248,6 +12245,159 @@ static jsval_t builtin_string_replaceAll(struct js *js, jsval_t *args, int nargs
   jsval_t ret = js_mkstr(js, result, result_pos);
   ANT_GC_FREE(result);
   return ret;
+}
+
+static size_t js_regex_to_posix(const char *src, size_t src_len, char *dst, size_t dst_size) {
+  size_t di = 0;
+  for (size_t si = 0; si < src_len && di < dst_size - 1; si++) {
+    if (src[si] != '\\' || si + 1 >= src_len) goto copy_char;
+
+    const char *r = NULL;
+    char c = 0;
+    switch (src[si + 1]) {
+      case 'd': r = "[0-9]"; break;
+      case 'D': r = "[^0-9]"; break;
+      case 'w': r = "[a-zA-Z0-9_]"; break;
+      case 'W': r = "[^a-zA-Z0-9_]"; break;
+      case 's': r = "[ \t\n\r\f\v]"; break;
+      case 'S': r = "[^ \t\n\r\f\v]"; break;
+      case 'b': r = "[[:<:]]|[[:>:]]"; break;
+      case 'n': c = '\n'; break;
+      case 'r': c = '\r'; break;
+      case 't': c = '\t'; break;
+      default: goto copy_char;
+    }
+    si++;
+    if (c) { dst[di++] = c; continue; }
+    size_t rlen = strlen(r);
+    if (di + rlen >= dst_size - 1) continue;
+    memcpy(dst + di, r, rlen);
+    di += rlen;
+    continue;
+
+  copy_char:
+    dst[di++] = src[si];
+  }
+  dst[di] = '\0';
+  return di;
+}
+
+static jsval_t do_regex_match(struct js *js, const char *pattern_str, const char *str_ptr, jsoff_t str_len, char *str_buf, bool global_flag, bool ignore_case) {
+  regex_t regex;
+  int cflags = REG_EXTENDED;
+  
+  if (ignore_case) cflags |= REG_ICASE;
+  if (regcomp(&regex, pattern_str, cflags) != 0) return js_mknull();
+  
+  jsval_t result_arr = js_mkarr(js);
+  if (is_err(result_arr)) {
+    regfree(&regex);
+    return result_arr;
+  }
+  
+  regmatch_t match;
+  jsoff_t pos = 0;
+  int match_count = 0;
+  
+  while (pos < str_len) {
+    int ret = regexec(&regex, str_buf + pos, 1, &match, 0);
+    if (ret != 0 || match.rm_so < 0) break;
+    
+    jsoff_t match_start = pos + (jsoff_t)match.rm_so;
+    jsoff_t match_len = (jsoff_t)(match.rm_eo - match.rm_so);
+    
+    jsval_t match_str = js_mkstr(js, str_ptr + match_start, match_len);
+    if (is_err(match_str)) {
+      regfree(&regex);
+      return match_str;
+    }
+    
+    js_arr_push(js, result_arr, match_str);
+    match_count++;
+    
+    if (!global_flag) break;
+    
+    if (match.rm_eo == 0) {
+      pos++;
+    } else {
+      pos += (jsoff_t)match.rm_eo;
+    }
+  }
+  
+  regfree(&regex);
+  
+  if (match_count == 0) return js_mknull();
+  return result_arr;
+}
+
+static jsval_t builtin_string_match(struct js *js, jsval_t *args, int nargs) {
+  jsval_t str = js->this_val;
+  if (vtype(str) != T_STR) return js_mkerr(js, "match called on non-string");
+  if (nargs < 1) return js_mknull();
+
+  jsval_t pattern = args[0];
+  char pattern_buf[256];
+  jsoff_t pattern_len = 0;
+  bool global_flag = false;
+  bool ignore_case = false;
+
+  if (vtype(pattern) == T_OBJ) goto parse_regex_obj;
+  if (vtype(pattern) == T_STR) goto parse_string;
+  return js_mknull();
+
+parse_regex_obj:;
+  jsoff_t source_off = lkp(js, pattern, "source", 6);
+  if (source_off == 0) return js_mknull();
+
+  jsval_t source_val = resolveprop(js, mkval(T_PROP, source_off));
+  if (vtype(source_val) != T_STR) return js_mknull();
+
+  jsoff_t plen, poff = vstr(js, source_val, &plen);
+  pattern_len = plen < sizeof(pattern_buf) - 1 ? plen : sizeof(pattern_buf) - 1;
+  memcpy(pattern_buf, &js->mem[poff], pattern_len);
+  pattern_buf[pattern_len] = '\0';
+
+  jsoff_t flags_off = lkp(js, pattern, "flags", 5);
+  if (flags_off == 0) goto do_match;
+
+  jsval_t flags_val = resolveprop(js, mkval(T_PROP, flags_off));
+  if (vtype(flags_val) != T_STR) goto do_match;
+
+  jsoff_t flen, foff = vstr(js, flags_val, &flen);
+  const char *flags_str = (char *) &js->mem[foff];
+  for (jsoff_t i = 0; i < flen; i++) {
+    if (flags_str[i] == 'g') global_flag = true;
+    if (flags_str[i] == 'i') ignore_case = true;
+  }
+  goto do_match;
+
+parse_string:;
+  jsoff_t slen, soff = vstr(js, pattern, &slen);
+  pattern_len = slen < sizeof(pattern_buf) - 1 ? slen : sizeof(pattern_buf) - 1;
+  memcpy(pattern_buf, &js->mem[soff], pattern_len);
+  pattern_buf[pattern_len] = '\0';
+
+do_match:;
+  jsoff_t str_len, str_off = vstr(js, str, &str_len);
+  const char *str_ptr = (char *) &js->mem[str_off];
+
+  char *str_buf = (char *)ANT_GC_MALLOC(str_len + 1);
+  if (!str_buf) return js_mkerr(js, "oom");
+  memcpy(str_buf, str_ptr, str_len);
+  str_buf[str_len] = '\0';
+
+  jsval_t result = do_regex_match(js, pattern_buf, str_ptr, str_len, str_buf, global_flag, ignore_case);
+  if (vtype(result) != T_NULL) goto cleanup;
+
+  char posix_pattern[512];
+  js_regex_to_posix(pattern_buf, pattern_len, posix_pattern, sizeof(posix_pattern));
+  if (strcmp(pattern_buf, posix_pattern) == 0) goto cleanup;
+
+  result = do_regex_match(js, posix_pattern, str_ptr, str_len, str_buf, global_flag, ignore_case);
+
+cleanup:
+  ANT_GC_FREE(str_buf);
+  return result;
 }
 
 static jsval_t builtin_string_template(struct js *js, jsval_t *args, int nargs) {
@@ -14861,6 +15011,7 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, string_proto, js_mkstr(js, "endsWith", 8), js_mkfun(builtin_string_endsWith));
   setprop(js, string_proto, js_mkstr(js, "replace", 7), js_mkfun(builtin_string_replace));
   setprop(js, string_proto, js_mkstr(js, "replaceAll", 10), js_mkfun(builtin_string_replaceAll));
+  setprop(js, string_proto, js_mkstr(js, "match", 5), js_mkfun(builtin_string_match));
   setprop(js, string_proto, js_mkstr(js, "template", 8), js_mkfun(builtin_string_template));
   setprop(js, string_proto, js_mkstr(js, "charCodeAt", 10), js_mkfun(builtin_string_charCodeAt));
   setprop(js, string_proto, js_mkstr(js, "toLowerCase", 11), js_mkfun(builtin_string_toLowerCase));
