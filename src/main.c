@@ -206,6 +206,7 @@ int main(int argc, char *argv[]) {
   ant_register_library(path_library, "ant:path", "node:path", NULL);
   ant_register_library(fs_library, "ant:fs", "node:fs", NULL);
   ant_register_library(crypto_library, "ant:crypto", "node:crypto", NULL);
+  ant_register_library(events_library, "ant:events", "node:events", NULL);
   
   #ifndef ANT_SNAPSHOT_GENERATOR
     jsval_t snapshot_result = ant_load_snapshot(js);

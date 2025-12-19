@@ -7,6 +7,8 @@
 *.dll
 
 /build
+/javascript-zoo
+
 /subprojects/*/
 /subprojects/.wraplock
 !/subprojects/packagefiles
