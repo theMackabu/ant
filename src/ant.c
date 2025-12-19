@@ -455,11 +455,14 @@ static jsval_t builtin_string_includes(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_startsWith(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_endsWith(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_replace(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_string_replaceAll(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_template(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_charCodeAt(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_toLowerCase(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_toUpperCase(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_trim(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_string_trimStart(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_string_trimEnd(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_repeat(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_padStart(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_padEnd(struct js *js, jsval_t *args, int nargs);
@@ -12169,6 +12172,84 @@ static jsval_t builtin_string_replace(struct js *js, jsval_t *args, int nargs) {
   }
 }
 
+static jsval_t builtin_string_replaceAll(struct js *js, jsval_t *args, int nargs) {
+  jsval_t str = js->this_val;
+  if (vtype(str) != T_STR) return js_mkerr(js, "replaceAll called on non-string");
+  if (nargs < 2) return str;
+  
+  jsval_t search = args[0];
+  jsval_t replacement = args[1];
+  
+  if (vtype(search) != T_STR) return js_mkerr(js, "replaceAll requires string search pattern");
+  if (vtype(replacement) != T_STR) return js_mkerr(js, "replaceAll requires string replacement");
+  
+  jsoff_t str_len, str_off = vstr(js, str, &str_len);
+  const char *str_ptr = (char *) &js->mem[str_off];
+  
+  jsoff_t search_len, search_off = vstr(js, search, &search_len);
+  const char *search_ptr = (char *) &js->mem[search_off];
+  
+  jsoff_t repl_len, repl_off = vstr(js, replacement, &repl_len);
+  const char *repl_ptr = (char *) &js->mem[repl_off];
+  
+  if (search_len == 0) {
+    // Empty search string: insert replacement between each character
+    size_t total_len = str_len + (str_len + 1) * repl_len;
+    char *result = (char *)ANT_GC_MALLOC(total_len + 1);
+    if (!result) return js_mkerr(js, "oom");
+    
+    size_t pos = 0;
+    memcpy(result + pos, repl_ptr, repl_len);
+    pos += repl_len;
+    for (jsoff_t i = 0; i < str_len; i++) {
+      result[pos++] = str_ptr[i];
+      memcpy(result + pos, repl_ptr, repl_len);
+      pos += repl_len;
+    }
+    jsval_t ret = js_mkstr(js, result, pos);
+    ANT_GC_FREE(result);
+    return ret;
+  }
+  
+  // Count occurrences first
+  jsoff_t count = 0;
+  for (jsoff_t i = 0; i <= str_len - search_len; i++) {
+    if (memcmp(str_ptr + i, search_ptr, search_len) == 0) {
+      count++;
+      i += search_len - 1;
+    }
+  }
+  
+  if (count == 0) return str;
+  
+  // Calculate result length
+  size_t result_total = str_len - (count * search_len) + (count * repl_len);
+  char *result = (char *)ANT_GC_MALLOC(result_total + 1);
+  if (!result) return js_mkerr(js, "oom");
+  
+  size_t result_pos = 0;
+  jsoff_t str_pos = 0;
+  
+  while (str_pos <= str_len - search_len) {
+    if (memcmp(str_ptr + str_pos, search_ptr, search_len) == 0) {
+      memcpy(result + result_pos, repl_ptr, repl_len);
+      result_pos += repl_len;
+      str_pos += search_len;
+    } else {
+      result[result_pos++] = str_ptr[str_pos++];
+    }
+  }
+  
+  // Copy remaining characters
+  while (str_pos < str_len) {
+    result[result_pos++] = str_ptr[str_pos++];
+  }
+  
+  jsval_t ret = js_mkstr(js, result, result_pos);
+  ANT_GC_FREE(result);
+  return ret;
+}
+
 static jsval_t builtin_string_template(struct js *js, jsval_t *args, int nargs) {
   jsval_t str = js->this_val;
   if (vtype(str) != T_STR) return js_mkerr(js, "template called on non-string");
@@ -12302,6 +12383,34 @@ static jsval_t builtin_string_trim(struct js *js, jsval_t *args, int nargs) {
   while (end > start && is_space(str_ptr[end - 1])) end--;
   
   return js_mkstr(js, str_ptr + start, end - start);
+}
+
+static jsval_t builtin_string_trimStart(struct js *js, jsval_t *args, int nargs) {
+  (void) args; (void) nargs;
+  jsval_t str = js->this_val;
+  if (vtype(str) != T_STR) return js_mkerr(js, "trimStart called on non-string");
+  
+  jsoff_t str_len, str_off = vstr(js, str, &str_len);
+  const char *str_ptr = (char *) &js->mem[str_off];
+  
+  jsoff_t start = 0;
+  while (start < str_len && is_space(str_ptr[start])) start++;
+  
+  return js_mkstr(js, str_ptr + start, str_len - start);
+}
+
+static jsval_t builtin_string_trimEnd(struct js *js, jsval_t *args, int nargs) {
+  (void) args; (void) nargs;
+  jsval_t str = js->this_val;
+  if (vtype(str) != T_STR) return js_mkerr(js, "trimEnd called on non-string");
+  
+  jsoff_t str_len, str_off = vstr(js, str, &str_len);
+  const char *str_ptr = (char *) &js->mem[str_off];
+  
+  jsoff_t end = str_len;
+  while (end > 0 && is_space(str_ptr[end - 1])) end--;
+  
+  return js_mkstr(js, str_ptr, end);
 }
 
 static jsval_t builtin_string_repeat(struct js *js, jsval_t *args, int nargs) {
@@ -14751,11 +14860,14 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, string_proto, js_mkstr(js, "startsWith", 10), js_mkfun(builtin_string_startsWith));
   setprop(js, string_proto, js_mkstr(js, "endsWith", 8), js_mkfun(builtin_string_endsWith));
   setprop(js, string_proto, js_mkstr(js, "replace", 7), js_mkfun(builtin_string_replace));
+  setprop(js, string_proto, js_mkstr(js, "replaceAll", 10), js_mkfun(builtin_string_replaceAll));
   setprop(js, string_proto, js_mkstr(js, "template", 8), js_mkfun(builtin_string_template));
   setprop(js, string_proto, js_mkstr(js, "charCodeAt", 10), js_mkfun(builtin_string_charCodeAt));
   setprop(js, string_proto, js_mkstr(js, "toLowerCase", 11), js_mkfun(builtin_string_toLowerCase));
   setprop(js, string_proto, js_mkstr(js, "toUpperCase", 11), js_mkfun(builtin_string_toUpperCase));
   setprop(js, string_proto, js_mkstr(js, "trim", 4), js_mkfun(builtin_string_trim));
+  setprop(js, string_proto, js_mkstr(js, "trimStart", 9), js_mkfun(builtin_string_trimStart));
+  setprop(js, string_proto, js_mkstr(js, "trimEnd", 7), js_mkfun(builtin_string_trimEnd));
   setprop(js, string_proto, js_mkstr(js, "repeat", 6), js_mkfun(builtin_string_repeat));
   setprop(js, string_proto, js_mkstr(js, "padStart", 8), js_mkfun(builtin_string_padStart));
   setprop(js, string_proto, js_mkstr(js, "padEnd", 6), js_mkfun(builtin_string_padEnd));
