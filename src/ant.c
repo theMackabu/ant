@@ -264,7 +264,7 @@ enum {
   TOK_TYPEOF, TOK_UPLUS, TOK_UMINUS, TOK_EXP, TOK_MUL, TOK_DIV, TOK_REM,
   TOK_OPTIONAL_CHAIN, TOK_REST,
   TOK_PLUS, TOK_MINUS, TOK_SHL, TOK_SHR, TOK_ZSHR, TOK_LT, TOK_LE, TOK_GT,
-  TOK_GE, TOK_EQ, TOK_NE, TOK_AND, TOK_XOR, TOK_OR, TOK_LAND, TOK_LOR, TOK_NULLISH,
+  TOK_GE, TOK_EQ, TOK_NE, TOK_SEQ, TOK_SNE, TOK_AND, TOK_XOR, TOK_OR, TOK_LAND, TOK_LOR, TOK_NULLISH,
   TOK_COLON, TOK_Q,  TOK_ASSIGN, TOK_PLUS_ASSIGN, TOK_MINUS_ASSIGN,
   TOK_MUL_ASSIGN, TOK_DIV_ASSIGN, TOK_REM_ASSIGN, TOK_SHL_ASSIGN,
   TOK_SHR_ASSIGN, TOK_ZSHR_ASSIGN, TOK_AND_ASSIGN, TOK_XOR_ASSIGN,
@@ -306,6 +306,7 @@ static bool is_nan(jsval_t v) {
 static const char *typestr(uint8_t t) {
   if (t == T_CFUNC) return "function";
   if (t == T_ARR) return "object";
+  if (t == T_NULL) return "object";
   return typestr_raw(t);
 }
 
@@ -2944,7 +2945,7 @@ static uint8_t next(struct js *js) {
     case ']': TOK(TOK_RBRACKET, 1);
     case ';': TOK(TOK_SEMICOLON, 1);
     case ',': TOK(TOK_COMMA, 1);
-    case '!': if (LOOK(1, '=') && LOOK(2, '=')) TOK(TOK_NE, 3); if (LOOK(1, '=')) TOK(TOK_NE, 2); TOK(TOK_NOT, 1);
+    case '!': if (LOOK(1, '=') && LOOK(2, '=')) TOK(TOK_SNE, 3); if (LOOK(1, '=')) TOK(TOK_NE, 2); TOK(TOK_NOT, 1);
     case '.': if (LOOK(1, '.') && LOOK(2, '.')) TOK(TOK_REST, 3); TOK(TOK_DOT, 1);
     case '~': TOK(TOK_TILDA, 1);
     case '-': if (LOOK(1, '-')) TOK(TOK_POSTDEC, 2); if (LOOK(1, '=')) TOK(TOK_MINUS_ASSIGN, 2); TOK(TOK_MINUS, 1);
@@ -2954,9 +2955,9 @@ static uint8_t next(struct js *js) {
     case '%': if (LOOK(1, '=')) TOK(TOK_REM_ASSIGN, 2); TOK(TOK_REM, 1);
     case '&': if (LOOK(1, '&')) TOK(TOK_LAND, 2); if (LOOK(1, '=')) TOK(TOK_AND_ASSIGN, 2); TOK(TOK_AND, 1);
     case '|': if (LOOK(1, '|')) TOK(TOK_LOR, 2); if (LOOK(1, '=')) TOK(TOK_OR_ASSIGN, 2); TOK(TOK_OR, 1);
-    case '=': if (LOOK(1, '=') && LOOK(2, '=')) TOK(TOK_EQ, 3); if (LOOK(1, '=')) TOK(TOK_EQ, 2); if (LOOK(1, '>')) TOK(TOK_ARROW, 2); TOK(TOK_ASSIGN, 1);
+    case '=': if (LOOK(1, '=') && LOOK(2, '=')) TOK(TOK_SEQ, 3); if (LOOK(1, '=')) TOK(TOK_EQ, 2); if (LOOK(1, '>')) TOK(TOK_ARROW, 2); TOK(TOK_ASSIGN, 1);
     case '<': if (LOOK(1, '<') && LOOK(2, '=')) TOK(TOK_SHL_ASSIGN, 3); if (LOOK(1, '<')) TOK(TOK_SHL, 2); if (LOOK(1, '=')) TOK(TOK_LE, 2); TOK(TOK_LT, 1);
-    case '>': if (LOOK(1, '>') && LOOK(2, '=')) TOK(TOK_SHR_ASSIGN, 3); if (LOOK(1, '>')) TOK(TOK_SHR, 2); if (LOOK(1, '=')) TOK(TOK_GE, 2); TOK(TOK_GT, 1);
+    case '>': if (LOOK(1, '>') && LOOK(2, '>') && LOOK(3, '=')) TOK(TOK_ZSHR_ASSIGN, 4); if (LOOK(1, '>') && LOOK(2, '>')) TOK(TOK_ZSHR, 3); if (LOOK(1, '>') && LOOK(2, '=')) TOK(TOK_SHR_ASSIGN, 3); if (LOOK(1, '>')) TOK(TOK_SHR, 2); if (LOOK(1, '=')) TOK(TOK_GE, 2); TOK(TOK_GT, 1);
     case '^': if (LOOK(1, '=')) TOK(TOK_XOR_ASSIGN, 2); TOK(TOK_XOR, 1);
     case '`':
       js->tlen++;
@@ -4328,9 +4329,30 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
       break;
   }
   if (is_assign(op))    return do_assign_op(js, op, lhs, r);
-  if (op == TOK_EQ || op == TOK_NE) {
+  if (op == TOK_SEQ || op == TOK_SNE) {
     bool eq = false;
     if (vtype(l) == vtype(r)) {
+      if (vtype(l) == T_STR) {
+        jsoff_t n1, off1 = vstr(js, l, &n1);
+        jsoff_t n2, off2 = vstr(js, r, &n2);
+        eq = n1 == n2 && memcmp(&js->mem[off1], &js->mem[off2], n1) == 0;
+      } else if (vtype(l) == T_NUM) {
+        eq = tod(l) == tod(r);
+      } else if (vtype(l) == T_BOOL) {
+        eq = vdata(l) == vdata(r);
+      } else if (vtype(l) == T_BIGINT) {
+        eq = bigint_compare(js, l, r) == 0;
+      } else {
+        eq = vdata(l) == vdata(r);
+      }
+    }
+    return mkval(T_BOOL, op == TOK_SEQ ? eq : !eq);
+  }
+  if (op == TOK_EQ || op == TOK_NE) {
+    bool eq = false;
+    if ((vtype(l) == T_UNDEF && vtype(r) == T_NULL) || (vtype(l) == T_NULL && vtype(r) == T_UNDEF)) {
+      eq = true;
+    } else if (vtype(l) == vtype(r)) {
       if (vtype(l) == T_STR) {
         jsoff_t n1, off1 = vstr(js, l, &n1);
         jsoff_t n2, off2 = vstr(js, r, &n2);
@@ -4471,6 +4493,7 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
     case TOK_TILDA:   return tov((double)(~(long) b));
     case TOK_SHL:     return tov((double)((long) a << (long) b));
     case TOK_SHR:     return tov((double)((long) a >> (long) b));
+    case TOK_ZSHR:    return tov((double)(((uint32_t)(int32_t) a) >> ((uint32_t)(int32_t) b & 0x1f)));
     case TOK_DOT:     return do_dot_op(js, l, r);
     case TOK_OPTIONAL_CHAIN: return do_optional_chain_op(js, l, r);
     case TOK_LT:      return mkval(T_BOOL, a < b);
@@ -5796,7 +5819,7 @@ static jsval_t js_comparison(struct js *js) {
 }
 
 static jsval_t js_equality(struct js *js) {
-  LTR_BINOP(js_comparison, (next(js) == TOK_EQ || next(js) == TOK_NE));
+  LTR_BINOP(js_comparison, (next(js) == TOK_EQ || next(js) == TOK_NE || next(js) == TOK_SEQ || next(js) == TOK_SNE));
 }
 
 static jsval_t js_bitwise_and(struct js *js) {
