@@ -15999,7 +15999,7 @@ jsval_t js_eval(struct js *js, const char *buf, size_t len) {
   return res;
 }
 
-jsval_t js_call(struct js *js, jsval_t func, jsval_t *args, int nargs) {
+static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this, jsval_t *args, int nargs, bool use_bound_this) {
   if (vtype(func) == T_CFUNC) {
     jsval_t (*fn)(struct js *, jsval_t *, int) = (jsval_t(*)(struct js *, jsval_t *, int)) vdata(func);
     return fn(js, args, nargs);
@@ -16010,10 +16010,13 @@ jsval_t js_call(struct js *js, jsval_t func, jsval_t *args, int nargs) {
       jsval_t native_val = resolveprop(js, mkval(T_PROP, native_off));
       if (vtype(native_val) == T_CFUNC) {
         jsval_t saved_func = js->current_func;
+        jsval_t saved_this = js->this_val;
         js->current_func = func;
+        if (use_bound_this) js->this_val = bound_this;
         jsval_t (*fn)(struct js *, jsval_t *, int) = (jsval_t(*)(struct js *, jsval_t *, int)) vdata(native_val);
         jsval_t res = fn(js, args, nargs);
         js->current_func = saved_func;
+        js->this_val = saved_this;
         return res;
       }
     }
@@ -16117,7 +16120,7 @@ jsval_t js_call(struct js *js, jsval_t func, jsval_t *args, int nargs) {
     size_t body_len = fnlen - fnpos - 1;
     
     jsval_t saved_this = js->this_val;
-    js->this_val = js_glob(js);
+    js->this_val = use_bound_this ? bound_this : js_glob(js);
     
     js->flags = F_CALL;
     jsval_t res = js_eval(js, &fn[fnpos], body_len);
@@ -16132,79 +16135,12 @@ jsval_t js_call(struct js *js, jsval_t func, jsval_t *args, int nargs) {
   return js_mkerr(js, "not a function");
 }
 
+jsval_t js_call(struct js *js, jsval_t func, jsval_t *args, int nargs) {
+  return js_call_internal(js, func, js_mkundef(), args, nargs, false);
+}
+
 jsval_t js_call_with_this(struct js *js, jsval_t func, jsval_t bound_this, jsval_t *args, int nargs) {
-  if (vtype(func) == T_CFUNC) {
-    jsval_t (*fn)(struct js *, jsval_t *, int) = (jsval_t(*)(struct js *, jsval_t *, int)) vdata(func);
-    return fn(js, args, nargs);
-  } else if (vtype(func) == T_FUNC) {
-    jsval_t func_obj = mkval(T_OBJ, vdata(func));
-    jsoff_t native_off = lkp(js, func_obj, "__native_func", 13);
-    if (native_off != 0) {
-      jsval_t native_val = resolveprop(js, mkval(T_PROP, native_off));
-      if (vtype(native_val) == T_CFUNC) {
-        jsval_t saved_func = js->current_func;
-        jsval_t saved_this = js->this_val;
-        js->current_func = func;
-        js->this_val = bound_this;
-        jsval_t (*fn)(struct js *, jsval_t *, int) = (jsval_t(*)(struct js *, jsval_t *, int)) vdata(native_val);
-        jsval_t res = fn(js, args, nargs);
-        js->current_func = saved_func;
-        js->this_val = saved_this;
-        return res;
-      }
-    }
-    jsoff_t code_off = lkp(js, func_obj, "__code", 6);
-    if (code_off == 0) return js_mkerr(js, "function has no code");
-    jsval_t code_val = resolveprop(js, mkval(T_PROP, code_off));
-    if (vtype(code_val) != T_STR) return js_mkerr(js, "function code not string");
-    jsoff_t fnlen, fnoff = vstr(js, code_val, &fnlen);
-    const char *fn = (const char *) (&js->mem[fnoff]);
-    
-    jsoff_t fnpos = 1;
-    jsval_t saved_scope = js->scope;
-    jsoff_t scope_off = lkp(js, func_obj, "__scope", 7);
-    if (scope_off != 0) {
-      jsval_t closure_scope = resolveprop(js, mkval(T_PROP, scope_off));
-      if (vtype(closure_scope) == T_OBJ) js->scope = closure_scope;
-    }
-    
-    uint8_t saved_flags = js->flags;
-    js->flags = 0;
-    mkscope(js);
-    js->flags = saved_flags;
-    int arg_idx = 0;
-    
-    while (fnpos < fnlen) {
-      fnpos = skiptonext(fn, fnlen, fnpos, NULL);
-      if (fnpos < fnlen && fn[fnpos] == ')') break;
-      jsoff_t identlen = 0;
-      uint8_t tok = parseident(&fn[fnpos], fnlen - fnpos, &identlen);
-      if (tok != TOK_IDENTIFIER) break;
-      jsval_t v = arg_idx < nargs ? args[arg_idx] : js_mkundef();
-      setprop(js, js->scope, js_mkstr(js, &fn[fnpos], identlen), v);
-      arg_idx++;
-      fnpos = skiptonext(fn, fnlen, fnpos + identlen, NULL);
-      if (fnpos < fnlen && fn[fnpos] == ',') fnpos++;
-    }
-    
-    if (fnpos < fnlen && fn[fnpos] == ')') fnpos++;
-    fnpos = skiptonext(fn, fnlen, fnpos, NULL);
-    if (fnpos < fnlen && fn[fnpos] == '{') fnpos++;
-    size_t body_len = fnlen - fnpos - 1;
-    
-    jsval_t saved_this = js->this_val;
-    js->this_val = bound_this;
-    
-    js->flags = F_CALL;
-    jsval_t res = js_eval(js, &fn[fnpos], body_len);
-    if (!is_err(res) && !(js->flags & F_RETURN)) res = js_mkundef();
-    
-    js->this_val = saved_this;
-    delscope(js);
-    js->scope = saved_scope;
-    return res;
-  }
-  return js_mkerr(js, "not a function");
+  return js_call_internal(js, func, bound_this, args, nargs, true);
 }
 
 js_prop_iter_t js_prop_iter_begin(struct js *js, jsval_t obj) {
