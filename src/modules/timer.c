@@ -23,13 +23,23 @@ typedef struct microtask_entry {
   struct microtask_entry *next;
 } microtask_entry_t;
 
+typedef struct immediate_entry {
+  jsval_t callback;
+  int immediate_id;
+  int active;
+  struct immediate_entry *next;
+} immediate_entry_t;
+
 static struct {
   struct js *js;
   timer_entry_t *timers;
   microtask_entry_t *microtasks;
   microtask_entry_t *microtasks_tail;
+  immediate_entry_t *immediates;
+  immediate_entry_t *immediates_tail;
   int next_timer_id;
-} timer_state = {NULL, NULL, NULL, NULL, 1};
+  int next_immediate_id;
+} timer_state = {NULL, NULL, NULL, NULL, NULL, NULL, 1, 1};
 
 static uint64_t get_current_time_ms(void) {
   struct timeval tv;
@@ -115,6 +125,47 @@ static jsval_t js_clear_timeout(struct js *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
+// setImmediate(callback)
+static jsval_t js_set_immediate(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) {
+    return js_mkerr(js, "setImmediate requires 1 argument (callback)");
+  }
+  
+  jsval_t callback = args[0];
+  
+  immediate_entry_t *entry = malloc(sizeof(immediate_entry_t));
+  if (entry == NULL) {
+    return js_mkerr(js, "failed to allocate immediate");
+  }
+  
+  entry->callback = callback;
+  entry->immediate_id = timer_state.next_immediate_id++;
+  entry->active = 1;
+  entry->next = NULL;
+  
+  if (timer_state.immediates_tail == NULL) {
+    timer_state.immediates = entry;
+    timer_state.immediates_tail = entry;
+  } else {
+    timer_state.immediates_tail->next = entry;
+    timer_state.immediates_tail = entry;
+  }
+  
+  return js_mknum((double)entry->immediate_id);
+}
+
+// clearImmediate(immediateId)
+static jsval_t js_clear_immediate(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkundef();  
+  int immediate_id = (int)js_getnum(args[0]);
+  
+  for (immediate_entry_t *entry = timer_state.immediates; entry != NULL; entry = entry->next) {
+    if (entry->immediate_id == immediate_id) { entry->active = 0; break; }
+  }
+  
+  return js_mkundef();
+}
+
 // queueMicrotask(callback)
 static jsval_t js_queue_microtask(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) {
@@ -155,6 +206,33 @@ void process_microtasks(struct js *js) {
     
     free(entry);
   }
+}
+
+void process_immediates(struct js *js) {
+  while (timer_state.immediates != NULL) {
+    immediate_entry_t *entry = timer_state.immediates;
+    timer_state.immediates = entry->next;
+    
+    if (timer_state.immediates == NULL) {
+      timer_state.immediates_tail = NULL;
+    }
+    
+    if (entry->active) {
+      jsval_t args[0];
+      js_call(js, entry->callback, args, 0);
+      process_microtasks(js);
+    }
+    
+    free(entry);
+  }
+}
+
+int has_pending_immediates(void) {
+  for (
+    immediate_entry_t *entry = timer_state.immediates;
+    entry != NULL; entry = entry->next
+  ) if (entry->active) return 1;
+  return 0;
 }
 
 void process_timers(struct js *js) {
@@ -228,5 +306,7 @@ void init_timer_module() {
   js_set(js, global, "clearTimeout", js_mkfun(js_clear_timeout));
   js_set(js, global, "setInterval", js_mkfun(js_set_interval));
   js_set(js, global, "clearInterval", js_mkfun(js_clear_timeout));
+  js_set(js, global, "setImmediate", js_mkfun(js_set_immediate));
+  js_set(js, global, "clearImmediate", js_mkfun(js_clear_immediate));
   js_set(js, global, "queueMicrotask", js_mkfun(js_queue_microtask));
 }

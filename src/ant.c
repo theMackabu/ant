@@ -655,6 +655,7 @@ void js_poll_events(struct js *js) {
     if (next_timeout_ms <= 0) process_timers(js);
   }
   
+  process_immediates(js);
   process_microtasks(js);
   
   coroutine_t *temp = pending_coroutines.head;
@@ -699,15 +700,15 @@ void js_poll_events(struct js *js) {
 }
 
 void js_run_event_loop(struct js *js) {
-  while (has_pending_microtasks() || has_pending_timers() || has_pending_coroutines() || has_pending_fetches() || has_pending_fs_ops()) {
+  while (has_pending_microtasks() || has_pending_timers() || has_pending_immediates() || has_pending_coroutines() || has_pending_fetches() || has_pending_fs_ops()) {
     js_poll_events(js);
     
-    if (!has_pending_microtasks() && has_pending_timers() && !has_ready_coroutines()) {
+    if (!has_pending_microtasks() && !has_pending_immediates() && has_pending_timers() && !has_ready_coroutines()) {
       int64_t next_timeout_ms = get_next_timer_timeout();
       if (next_timeout_ms > 0) usleep(next_timeout_ms > 1000000 ? 1000000 : next_timeout_ms * 1000);
     }
     
-    if (!has_pending_microtasks() && !has_pending_timers() && !has_pending_coroutines() && !has_pending_fetches() && !has_pending_fs_ops()) break;
+    if (!has_pending_microtasks() && !has_pending_timers() && !has_pending_immediates() && !has_pending_coroutines() && !has_pending_fetches() && !has_pending_fs_ops()) break;
   }
   
   js_poll_events(js);
@@ -8384,7 +8385,7 @@ static jsval_t js_stmt(struct js *js) {
     case TOK_LBRACE:    res = js_block(js, !(js->flags & F_NOEXEC)); break;
     case TOK_FOR:       res = js_for(js); break;
     case TOK_RETURN:    res = js_return(js); break;
-    case TOK_TRY:       res = js_try(js); break;    
+    case TOK_TRY:       res = js_try(js); break;
     default:
       res = resolveprop(js, js_expr(js));
       while (next(js) == TOK_COMMA) {
