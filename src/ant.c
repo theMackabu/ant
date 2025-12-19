@@ -468,6 +468,10 @@ static jsval_t builtin_string_repeat(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_padStart(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_padEnd(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_string_charAt(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_string_at(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_string_lastIndexOf(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_string_concat(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_string_fromCharCode(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_number_toString(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_number_toFixed(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_number_toPrecision(struct js *js, jsval_t *args, int nargs);
@@ -11783,20 +11787,21 @@ static jsval_t builtin_string_indexOf(struct js *js, jsval_t *args, int nargs) {
   jsval_t str = js->this_val;
   if (vtype(str) != T_STR) return js_mkerr(js, "indexOf called on non-string");
   if (nargs == 0) return tov(-1);
+
   jsval_t search = args[0];
-  
   if (vtype(search) != T_STR) return tov(-1);
+
   jsoff_t str_len, str_off = vstr(js, str, &str_len);
   jsoff_t search_len, search_off = vstr(js, search, &search_len);
+  if (search_len == 0) return tov(0);
+  if (search_len > str_len) return tov(-1);
+
   const char *str_ptr = (char *) &js->mem[str_off];
   const char *search_ptr = (char *) &js->mem[search_off];
-  
+
   for (jsoff_t i = 0; i <= str_len - search_len; i++) {
-    if (memcmp(str_ptr + i, search_ptr, search_len) == 0) {
-      return tov((double) i);
-    }
+    if (memcmp(str_ptr + i, search_ptr, search_len) == 0) return tov((double) i);
   }
-  
   return tov(-1);
 }
 
@@ -12684,6 +12689,97 @@ static jsval_t builtin_string_charAt(struct js *js, jsval_t *args, int nargs) {
   char ch = js->mem[str_off + idx];
   
   return js_mkstr(js, &ch, 1);
+}
+
+static jsval_t builtin_string_at(struct js *js, jsval_t *args, int nargs) {
+  jsval_t str = js->this_val;
+  if (vtype(str) != T_STR) return js_mkerr(js, "at called on non-string");
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return js_mkundef();
+
+  jsoff_t str_len = offtolen(loadoff(js, (jsoff_t) vdata(str)));
+  double idx_d = tod(args[0]);
+  long idx = (long) idx_d;
+
+  if (idx < 0) idx += (long) str_len;
+  if (idx < 0 || idx >= (long) str_len) return js_mkundef();
+
+  jsoff_t str_off = (jsoff_t) vdata(str) + sizeof(jsoff_t);
+  char ch = js->mem[str_off + idx];
+  return js_mkstr(js, &ch, 1);
+}
+
+static jsval_t builtin_string_lastIndexOf(struct js *js, jsval_t *args, int nargs) {
+  jsval_t str = js->this_val;
+  if (vtype(str) != T_STR) return js_mkerr(js, "lastIndexOf called on non-string");
+  if (nargs == 0) return tov(-1);
+
+  jsval_t search = args[0];
+  if (vtype(search) != T_STR) return tov(-1);
+
+  jsoff_t str_len, str_off = vstr(js, str, &str_len);
+  jsoff_t search_len, search_off = vstr(js, search, &search_len);
+  if (search_len == 0) return tov((double) str_len);
+  if (search_len > str_len) return tov(-1);
+
+  const char *str_ptr = (char *) &js->mem[str_off];
+  const char *search_ptr = (char *) &js->mem[search_off];
+
+  for (jsoff_t i = str_len - search_len + 1; i > 0; i--) {
+    if (memcmp(str_ptr + i - 1, search_ptr, search_len) == 0) return tov((double)(i - 1));
+  }
+  return tov(-1);
+}
+
+static jsval_t builtin_string_concat(struct js *js, jsval_t *args, int nargs) {
+  jsval_t str = js->this_val;
+  if (vtype(str) != T_STR) return js_mkerr(js, "concat called on non-string");
+
+  jsoff_t total_len;
+  jsoff_t base_off = vstr(js, str, &total_len);
+  for (int i = 0; i < nargs; i++) {
+    if (vtype(args[i]) != T_STR) continue;
+    jsoff_t arg_len;
+    vstr(js, args[i], &arg_len);
+    total_len += arg_len;
+  }
+
+  char *result = (char *)ANT_GC_MALLOC(total_len + 1);
+  if (!result) return js_mkerr(js, "oom");
+
+  jsoff_t base_len;
+  base_off = vstr(js, str, &base_len);
+  memcpy(result, &js->mem[base_off], base_len);
+  jsoff_t pos = base_len;
+
+  for (int i = 0; i < nargs; i++) {
+    if (vtype(args[i]) != T_STR) continue;
+    jsoff_t arg_len, arg_off = vstr(js, args[i], &arg_len);
+    memcpy(result + pos, &js->mem[arg_off], arg_len);
+    pos += arg_len;
+  }
+  result[pos] = '\0';
+
+  jsval_t ret = js_mkstr(js, result, pos);
+  ANT_GC_FREE(result);
+  return ret;
+}
+
+static jsval_t builtin_string_fromCharCode(struct js *js, jsval_t *args, int nargs) {
+  if (nargs == 0) return js_mkstr(js, "", 0);
+
+  char *buf = (char *)ANT_GC_MALLOC(nargs + 1);
+  if (!buf) return js_mkerr(js, "oom");
+
+  for (int i = 0; i < nargs; i++) {
+    if (vtype(args[i]) != T_NUM) { buf[i] = 0; continue; }
+    int code = (int) tod(args[i]);
+    buf[i] = (char)(code & 0xFF);
+  }
+  buf[nargs] = '\0';
+
+  jsval_t ret = js_mkstr(js, buf, nargs);
+  ANT_GC_FREE(buf);
+  return ret;
 }
 
 static jsval_t builtin_number_toString(struct js *js, jsval_t *args, int nargs) {
@@ -15023,7 +15119,10 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, string_proto, js_mkstr(js, "padStart", 8), js_mkfun(builtin_string_padStart));
   setprop(js, string_proto, js_mkstr(js, "padEnd", 6), js_mkfun(builtin_string_padEnd));
   setprop(js, string_proto, js_mkstr(js, "charAt", 6), js_mkfun(builtin_string_charAt));
-  
+  setprop(js, string_proto, js_mkstr(js, "at", 2), js_mkfun(builtin_string_at));
+  setprop(js, string_proto, js_mkstr(js, "lastIndexOf", 11), js_mkfun(builtin_string_lastIndexOf));
+  setprop(js, string_proto, js_mkstr(js, "concat", 6), js_mkfun(builtin_string_concat));
+
   jsval_t number_proto = js_mkobj(js);
   set_proto(js, number_proto, object_proto);
   setprop(js, number_proto, js_mkstr(js, "toString", 8), js_mkfun(builtin_number_toString));
@@ -15156,6 +15255,7 @@ struct js *js_create(void *buf, size_t len) {
   set_proto(js, str_ctor_obj, function_proto);
   setprop(js, str_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_String));
   setprop(js, str_ctor_obj, js_mkstr(js, "prototype", 9), string_proto);
+  setprop(js, str_ctor_obj, js_mkstr(js, "fromCharCode", 12), js_mkfun(builtin_string_fromCharCode));
   setprop(js, glob, js_mkstr(js, "String", 6), mkval(T_FUNC, vdata(str_ctor_obj)));
   
   jsval_t number_ctor_obj = mkobj(js, 0);
@@ -15193,7 +15293,7 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, arr_ctor_obj, js_mkstr(js, "from", 4), js_mkfun(builtin_Array_from));
   setprop(js, arr_ctor_obj, js_mkstr(js, "of", 2), js_mkfun(builtin_Array_of));
   setprop(js, glob, js_mkstr(js, "Array", 5), mkval(T_FUNC, vdata(arr_ctor_obj)));
-  
+
   jsval_t map_ctor_obj = mkobj(js, 0);
   set_proto(js, map_ctor_obj, function_proto);
   setprop(js, map_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_Map));
