@@ -1,4 +1,5 @@
 #pragma once
+#define PRIV_SYMBOL 0x80
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -10,7 +11,7 @@ typedef uint64_t jsval_t;
 
 enum { 
   JS_UNDEF, JS_NULL, JS_TRUE, JS_FALSE, JS_STR, JS_NUM,
-  JS_ERR, JS_PRIV, JS_PROMISE, JS_OBJ, JS_FUNC
+  JS_ERR, JS_PRIV, JS_PROMISE, JS_OBJ, JS_FUNC, JS_SYMBOL
 };
 
 typedef enum {
@@ -62,6 +63,7 @@ jsval_t js_mkobj(struct js *);
 jsval_t js_mkarr(struct js *);
 void js_arr_push(struct js *, jsval_t arr, jsval_t val);
 jsval_t js_mkstr(struct js *, const void *, size_t);
+jsval_t js_mksym(struct js *, const char *desc);
 jsval_t js_mkerr(struct js *js, const char *fmt, ...);
 jsval_t js_mkerr_typed(struct js *js, js_err_type_t err_type, const char *fmt, ...);
 jsval_t js_mkfun(jsval_t (*fn)(struct js *, jsval_t *, int));
@@ -78,6 +80,8 @@ jsval_t js_get_proto(struct js *, jsval_t obj);
 jsval_t js_get_ctor_proto(struct js *, const char *name, size_t len);
 
 int js_type(jsval_t val);
+int js_type_ex(struct js *js, jsval_t val);
+
 int js_getbool(jsval_t val);
 uint8_t vtype(jsval_t val);
 
