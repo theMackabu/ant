@@ -15,8 +15,11 @@ const files = fs
   .filter(f => f.endsWith('.js') && f !== 'run.js' && f !== 'helpers.js')
   .sort();
 
-let passed = 0;
-let failed = 0;
+let totalPassed = 0;
+let totalFailed = 0;
+
+let filesPassed = 0;
+let filesFailed = 0;
 
 console.log(`\n${BOLD}${CYAN}Running ${files.length} spec files...${RESET}\n`);
 
@@ -26,23 +29,32 @@ for (const file of files) {
 
   try {
     const result = await $`./build/ant ${filePath}`;
-    console.log(result.text());
+    const output = result.text();
+    console.log(output);
+
+    const passedMatch = output.match(/Passed:\s*(\d+)/);
+    const failedMatch = output.match(/Failed:\s*(\d+)/);
+
+    if (passedMatch) totalPassed += parseInt(passedMatch[1], 10);
+    if (failedMatch) totalFailed += parseInt(failedMatch[1], 10);
 
     if (result.exitCode === 0) {
       console.log(`${GREEN}✓${RESET} ${name}`);
-      passed++;
+      filesPassed++;
     } else {
       console.log(`${RED}✗${RESET} ${name}`);
-      failed++;
+      filesFailed++;
     }
   } catch (e) {
     console.log(`${RED}✗${RESET} ${name} ${DIM}(error)${RESET}`);
-    failed++;
+    filesFailed++;
   }
 }
 
 console.log(`\n${BOLD}Results:${RESET}`);
-console.log(`  ${GREEN}${passed} passed${RESET}`);
-console.log(`  ${RED}${failed} failed${RESET}\n`);
+console.log(`  ${GREEN}${totalPassed} tests passed${RESET}`);
+console.log(`  ${RED}${totalFailed} tests failed${RESET}`);
+console.log(`  ${GREEN}${filesPassed} files passed${RESET}`);
+console.log(`  ${RED}${filesFailed} files failed${RESET}\n`);
 
 process.exit(failed > 0 ? 1 : 0);
