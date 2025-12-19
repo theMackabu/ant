@@ -3048,6 +3048,9 @@ static uint8_t next(struct js *js) {
           if (buf[js->tlen + 1] == 'x') {
             if (js->toff + js->tlen + 4 > js->clen) break;
             increment = 4;
+          } else if (buf[js->tlen + 1] == 'u') {
+            if (js->toff + js->tlen + 6 > js->clen) break;
+            increment = 6;
           }
         }
         js->tlen += increment;
@@ -4925,14 +4928,38 @@ static jsval_t js_str_literal(struct js *js) {
         out[n1++] = '\t';
       } else if (in[n2 + 1] == 'r') {
         out[n1++] = '\r';
+      } else if (in[n2 + 1] == '0') {
+        out[n1++] = '\0';
+      } else if (in[n2 + 1] == 'v') {
+        out[n1++] = '\v';
+      } else if (in[n2 + 1] == 'f') {
+        out[n1++] = '\f';
+      } else if (in[n2 + 1] == 'b') {
+        out[n1++] = '\b';
       } else if (in[n2 + 1] == 'x' && is_xdigit(in[n2 + 2]) &&
                  is_xdigit(in[n2 + 3])) {
         out[n1++] = (uint8_t) ((unhex(in[n2 + 2]) << 4U) | unhex(in[n2 + 3]));
         n2 += 2;
+      } else if (in[n2 + 1] == 'u' && is_xdigit(in[n2 + 2]) &&
+                 is_xdigit(in[n2 + 3]) && is_xdigit(in[n2 + 4]) &&
+                 is_xdigit(in[n2 + 5])) {
+        uint32_t cp = (unhex(in[n2 + 2]) << 12U) | (unhex(in[n2 + 3]) << 8U) |
+                      (unhex(in[n2 + 4]) << 4U) | unhex(in[n2 + 5]);
+        if (cp < 0x80) {
+          out[n1++] = (uint8_t) cp;
+        } else if (cp < 0x800) {
+          out[n1++] = (uint8_t) (0xC0 | (cp >> 6));
+          out[n1++] = (uint8_t) (0x80 | (cp & 0x3F));
+        } else {
+          out[n1++] = (uint8_t) (0xE0 | (cp >> 12));
+          out[n1++] = (uint8_t) (0x80 | ((cp >> 6) & 0x3F));
+          out[n1++] = (uint8_t) (0x80 | (cp & 0x3F));
+        }
+        n2 += 4;
       } else if (in[n2 + 1] == '\\') {
         out[n1++] = '\\';
       } else {
-        return js_mkerr(js, "bad str literal");
+        out[n1++] = in[n2 + 1];
       }
       n2++;
     } else {
