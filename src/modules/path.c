@@ -105,6 +105,106 @@ static jsval_t builtin_path_extname(struct js *js, jsval_t *args, int nargs) {
   return js_mkstr(js, "", 0);
 }
 
+static int is_dotdot(char *seg, size_t len) {
+  return len == 2 && seg[0] == '.' && seg[1] == '.';
+}
+
+static char* normalize_path_full(const char *path, size_t path_len) {
+  char *normalized = NULL;
+  char **segments = NULL;
+  size_t *seg_lens = NULL;
+  char *result = NULL;
+  
+  if (path_len == 0) return strdup(".");
+  
+  normalized = normalize_separators(path, path_len);
+  if (!normalized) goto fail;
+  
+  segments = malloc(path_len * sizeof(char*));
+  seg_lens = malloc(path_len * sizeof(size_t));
+  if (!segments || !seg_lens) goto fail;
+  
+  int is_absolute = (normalized[0] == PATH_SEP);
+  int seg_count = 0;
+  
+  char *start = is_absolute ? normalized + 1 : normalized;
+  char *seg_start = start;
+  
+  for (char *p = start; ; p++) {
+    if (*p != PATH_SEP && *p != '\0') continue;
+    
+    size_t len = p - seg_start;
+    if (len == 0 || (len == 1 && seg_start[0] == '.')) goto next;
+    
+    if (is_dotdot(seg_start, len)) {
+      if (seg_count > 0 && !is_dotdot(segments[seg_count-1], seg_lens[seg_count-1]))
+        seg_count--;
+      else if (!is_absolute)
+        goto add_segment;
+      goto next;
+    }
+    
+add_segment:
+    segments[seg_count] = seg_start;
+    seg_lens[seg_count] = len;
+    seg_count++;
+    
+next:
+    if (*p == '\0') break;
+    seg_start = p + 1;
+  }
+  
+  size_t result_len = is_absolute ? 1 : 0;
+  for (int i = 0; i < seg_count; i++) {
+    result_len += seg_lens[i];
+    if (i < seg_count - 1) result_len++;
+  }
+  if (result_len == 0) result_len = 1;
+  
+  result = malloc(result_len + 1);
+  if (!result) goto fail;
+  
+  size_t pos = 0;
+  if (is_absolute) result[pos++] = PATH_SEP;
+  
+  for (int i = 0; i < seg_count; i++) {
+    memcpy(result + pos, segments[i], seg_lens[i]);
+    pos += seg_lens[i];
+    if (i < seg_count - 1) result[pos++] = PATH_SEP;
+  }
+  
+  if (pos == 0) result[pos++] = '.';
+  result[pos] = '\0';
+  
+  free(segments);
+  free(seg_lens);
+  free(normalized);
+  return result;
+
+fail:
+  free(segments);
+  free(seg_lens);
+  free(normalized);
+  return NULL;
+}
+
+// path.normalize(path)
+static jsval_t builtin_path_normalize(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "normalize() requires a path argument");
+  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "normalize() path must be a string");
+  
+  size_t path_len;
+  char *path = js_getstr(js, args[0], &path_len);
+  if (!path || path_len == 0) return js_mkstr(js, ".", 1);
+  
+  char *result = normalize_path_full(path, path_len);
+  if (!result) return js_mkerr(js, "Out of memory");
+  
+  jsval_t ret = js_mkstr(js, result, strlen(result));
+  free(result);
+  return ret;
+}
+
 // path.join(...paths)
 static jsval_t builtin_path_join(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkstr(js, ".", 1);
@@ -164,52 +264,15 @@ static jsval_t builtin_path_join(struct js *js, jsval_t *args, int nargs) {
   
   result[pos] = '\0';
   
-  jsval_t ret = js_mkstr(js, result, pos);
+  char *normalized = normalize_path_full(result, pos);
   free(result);
   free(segments);
   free(lengths);
-  return ret;
-}
-
-// path.normalize(path)
-static jsval_t builtin_path_normalize(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return js_mkerr(js, "normalize() requires a path argument");
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "normalize() path must be a string");
   
-  size_t path_len;
-  char *path = js_getstr(js, args[0], &path_len);
-  if (!path || path_len == 0) return js_mkstr(js, ".", 1);
-  
-  char *normalized = normalize_separators(path, path_len);
   if (!normalized) return js_mkerr(js, "Out of memory");
   
-  char *result = malloc(path_len + 1);
-  if (!result) {
-    free(normalized);
-    return js_mkerr(js, "Out of memory");
-  }
-  
-  size_t j = 0;
-  int last_was_sep = 0;
-  
-  for (size_t i = 0; i < path_len; i++) {
-    if (normalized[i] == PATH_SEP) {
-      if (!last_was_sep) {
-        result[j++] = PATH_SEP;
-        last_was_sep = 1;
-      }
-    } else {
-      result[j++] = normalized[i];
-      last_was_sep = 0;
-    }
-  }
-  
-  if (j > 1 && result[j - 1] == PATH_SEP) j--;  
-  result[j] = '\0';
-  
-  jsval_t ret = js_mkstr(js, result, j);
+  jsval_t ret = js_mkstr(js, normalized, strlen(normalized));
   free(normalized);
-  free(result);
   return ret;
 }
 
