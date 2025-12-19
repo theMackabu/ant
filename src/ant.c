@@ -24,7 +24,6 @@
 #include "modules/fs.h"
 #include "modules/timer.h"
 #include "modules/fetch.h"
-#include "modules/symbol.h"
 
 #define MINICORO_IMPL
 #include "minicoro.h"
@@ -7190,80 +7189,6 @@ static jsval_t js_for(struct js *js) {
             res = v;
             goto done;
           }
-        }
-      } else if (itype == T_OBJ) {
-        const char *iter_sym_key = get_iterator_sym_key();
-        jsoff_t iter_off = iter_sym_key ? lkp(js, iterable, iter_sym_key, strlen(iter_sym_key)) : 0;
-        if (!iter_off) iter_off = lkp_proto(js, iterable, iter_sym_key, strlen(iter_sym_key));
-        
-        if (iter_off) {
-          jsval_t iter_fn = loadval(js, iter_off + sizeof(jsoff_t) * 2);
-          if (vtype(iter_fn) == T_FUNC) {
-            push_this(iterable);
-            jsval_t iterator = call_js_with_args(js, iter_fn, NULL, 0);
-            pop_this();
-            
-            if (is_err(iterator)) {
-              res = iterator;
-              goto done;
-            }
-            
-            while (true) {
-              jsoff_t next_off = lkp(js, iterator, "next", 4);
-              if (!next_off) {
-                res = js_mkerr(js, "iterator has no next method");
-                goto done;
-              }
-              jsval_t next_fn = loadval(js, next_off + sizeof(jsoff_t) * 2);
-              
-              push_this(iterator);
-              jsval_t result_obj = call_js_with_args(js, next_fn, NULL, 0);
-              pop_this();
-              
-              if (is_err(result_obj)) {
-                res = result_obj;
-                goto done;
-              }
-              
-              jsval_t done_val = js_get(js, result_obj, "done");
-              if (js_truthy(js, done_val)) break;
-              
-              jsval_t value = js_get(js, result_obj, "value");
-              
-              const char *var_name = &js->code[var_name_off];
-              jsoff_t existing = lkp(js, js->scope, var_name, var_name_len);
-              if (existing > 0) {
-                saveval(js, existing + sizeof(jsoff_t) * 2, value);
-              } else {
-                jsval_t x = mkprop(js, js->scope, js_mkstr(js, var_name, var_name_len), value, is_const_var);
-                if (is_err(x)) {
-                  res = x;
-                  goto done;
-                }
-              }
-              
-              js->pos = body_start;
-              js->consumed = 1;
-              js->flags = (flags & ~F_NOEXEC) | F_LOOP;
-              v = js_block_or_stmt(js);
-              if (is_err(v)) {
-                res = v;
-                goto done;
-              }
-              
-              if (js->flags & F_BREAK) break;
-              if (js->flags & F_RETURN) {
-                res = v;
-                goto done;
-              }
-            }
-          } else {
-            res = js_mkerr(js, "for-of requires iterable");
-            goto done;
-          }
-        } else {
-          res = js_mkerr(js, "for-of requires iterable");
-          goto done;
         }
       } else {
         res = js_mkerr(js, "for-of requires iterable");
