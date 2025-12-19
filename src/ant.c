@@ -3200,12 +3200,12 @@ static jsoff_t lkp(struct js *js, jsval_t obj, const char *buf, size_t len) {
 jsval_t js_get_proto(struct js *js, jsval_t obj) {
   uint8_t t = vtype(obj);
 
-  if (t != T_OBJ && t != T_ARR && t != T_FUNC) return js_mknull();
+  if (t != T_OBJ && t != T_ARR && t != T_FUNC && t != T_PROMISE) return js_mknull();
   jsval_t as_obj = (t == T_OBJ) ? obj : mkval(T_OBJ, vdata(obj));
   
   jsoff_t off = lkp(js, as_obj, "__proto__", 9);
   if (off == 0) {
-    if (t == T_FUNC || t == T_ARR) return get_prototype_for_type(js, t);
+    if (t == T_FUNC || t == T_ARR || t == T_PROMISE) return get_prototype_for_type(js, t);
     return js_mknull();
   }
   
