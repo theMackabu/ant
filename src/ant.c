@@ -6923,9 +6923,9 @@ typedef struct {
   jsoff_t var_name_len;
   bool is_const_var;
   uint8_t flags;
-} for_of_ctx_t;
+} for_iter_ctx_t;
 
-static jsval_t for_of_bind_var(struct js *js, for_of_ctx_t *ctx, jsval_t value) {
+static jsval_t for_iter_bind_var(struct js *js, for_iter_ctx_t *ctx, jsval_t value) {
   const char *var_name = &js->code[ctx->var_name_off];
   jsoff_t existing = lkp(js, js->scope, var_name, ctx->var_name_len);
   if (existing > 0) {
@@ -6935,14 +6935,66 @@ static jsval_t for_of_bind_var(struct js *js, for_of_ctx_t *ctx, jsval_t value) 
   return mkprop(js, js->scope, js_mkstr(js, var_name, ctx->var_name_len), value, ctx->is_const_var);
 }
 
-static jsval_t for_of_exec_body(struct js *js, for_of_ctx_t *ctx) {
+static jsval_t for_iter_exec_body(struct js *js, for_iter_ctx_t *ctx) {
   js->pos = ctx->body_start;
   js->consumed = 1;
   js->flags = (ctx->flags & ~F_NOEXEC) | F_LOOP;
   return js_block_or_stmt(js);
 }
 
-static jsval_t for_of_iter_array(struct js *js, for_of_ctx_t *ctx, jsval_t iterable) {
+static bool for_in_should_skip_key(struct js *js, jsval_t obj, const char *key, jsoff_t klen) {
+  if (streq(key, klen, "__proto__", 9)) return true;
+  
+  if (
+    klen > 7 && key[0] == '_' &&
+    key[1] == '_' && key[2] == 'd'
+    && key[3] == 'e' && key[4] == 's'
+    && key[5] == 'c' && key[6] == '_'
+  ) return true;
+  
+  char desc_key[128];
+  snprintf(desc_key, sizeof(desc_key), "__desc_%.*s", (int)klen, key);
+  jsoff_t desc_off = lkp(js, obj, desc_key, strlen(desc_key));
+  if (desc_off == 0) return false;
+  
+  jsval_t desc_obj = resolveprop(js, mkval(T_PROP, desc_off));
+  if (vtype(desc_obj) != T_OBJ) return false;
+  
+  jsoff_t enumerable_off = lkp(js, desc_obj, "enumerable", 10);
+  if (enumerable_off == 0) return false;
+  
+  jsval_t enumerable_val = resolveprop(js, mkval(T_PROP, enumerable_off));
+  return !js_truthy(js, enumerable_val);
+}
+
+static jsval_t for_in_iter_object(struct js *js, for_iter_ctx_t *ctx, jsval_t obj) {
+  jsval_t iter_obj = (vtype(obj) == T_FUNC) ? mkval(T_OBJ, vdata(obj)) : obj;
+  jsoff_t prop_off = loadoff(js, (jsoff_t) vdata(iter_obj)) & ~(3U | CONSTMASK);
+  
+  while (prop_off < js->brk && prop_off != 0) {
+    jsoff_t koff = loadoff(js, prop_off + (jsoff_t) sizeof(prop_off));
+    jsoff_t klen = offtolen(loadoff(js, koff));
+    const char *key = (char *) &js->mem[koff + sizeof(koff)];
+    
+    if (!for_in_should_skip_key(js, iter_obj, key, klen)) {
+      jsval_t key_str = js_mkstr(js, key, klen);
+      
+      jsval_t err = for_iter_bind_var(js, ctx, key_str);
+      if (is_err(err)) return err;
+      
+      jsval_t v = for_iter_exec_body(js, ctx);
+      if (is_err(v)) return v;
+      if (js->flags & F_BREAK) break;
+      if (js->flags & F_RETURN) return v;
+    }
+    
+    prop_off = loadoff(js, prop_off) & ~(3U | CONSTMASK);
+  }
+  
+  return js_mkundef();
+}
+
+static jsval_t for_of_iter_array(struct js *js, for_iter_ctx_t *ctx, jsval_t iterable) {
   jsoff_t next_prop = loadoff(js, (jsoff_t) vdata(iterable)) & ~(3U | CONSTMASK);
   jsoff_t length = 0, scan = next_prop;
   
@@ -6976,36 +7028,38 @@ static jsval_t for_of_iter_array(struct js *js, for_of_ctx_t *ctx, jsval_t itera
       prop = loadoff(js, prop) & ~(3U | CONSTMASK);
     }
     
-    jsval_t err = for_of_bind_var(js, ctx, val);
+    jsval_t err = for_iter_bind_var(js, ctx, val);
     if (is_err(err)) return err;
     
-    jsval_t v = for_of_exec_body(js, ctx);
+    jsval_t v = for_iter_exec_body(js, ctx);
     if (is_err(v)) return v;
     if (js->flags & F_BREAK) break;
     if (js->flags & F_RETURN) return v;
   }
+  
   return js_mkundef();
 }
 
-static jsval_t for_of_iter_string(struct js *js, for_of_ctx_t *ctx, jsval_t iterable) {
+static jsval_t for_of_iter_string(struct js *js, for_iter_ctx_t *ctx, jsval_t iterable) {
   jsoff_t slen, soff = vstr(js, iterable, &slen);
   const char *str = (char *) &js->mem[soff];
   
   for (jsoff_t i = 0; i < slen; i++) {
     jsval_t char_str = js_mkstr(js, &str[i], 1);
     
-    jsval_t err = for_of_bind_var(js, ctx, char_str);
+    jsval_t err = for_iter_bind_var(js, ctx, char_str);
     if (is_err(err)) return err;
     
-    jsval_t v = for_of_exec_body(js, ctx);
+    jsval_t v = for_iter_exec_body(js, ctx);
     if (is_err(v)) return v;
     if (js->flags & F_BREAK) break;
     if (js->flags & F_RETURN) return v;
   }
+  
   return js_mkundef();
 }
 
-static jsval_t for_of_iter_object(struct js *js, for_of_ctx_t *ctx, jsval_t iterable) {
+static jsval_t for_of_iter_object(struct js *js, for_iter_ctx_t *ctx, jsval_t iterable) {
   const char *iter_key = get_iterator_sym_key();
   jsoff_t iter_prop = iter_key ? lkp_proto(js, iterable, iter_key, strlen(iter_key)) : 0;
   if (iter_prop == 0) return js_mkerr(js, "for-of requires iterable");
@@ -7046,14 +7100,15 @@ static jsval_t for_of_iter_object(struct js *js, for_of_ctx_t *ctx, jsval_t iter
     jsoff_t value_off = lkp(js, result, "value", 5);
     jsval_t value = value_off ? loadval(js, value_off + sizeof(jsoff_t) * 2) : js_mkundef();
     
-    jsval_t err = for_of_bind_var(js, ctx, value);
+    jsval_t err = for_iter_bind_var(js, ctx, value);
     if (is_err(err)) return err;
     
-    jsval_t v = for_of_exec_body(js, ctx);
+    jsval_t v = for_iter_exec_body(js, ctx);
     if (is_err(v)) return v;
     if (js->flags & F_BREAK) break;
     if (js->flags & F_RETURN) return v;
   }
+  
   return js_mkundef();
 }
 
@@ -7244,7 +7299,7 @@ static jsval_t js_for(struct js *js) {
     if (exe) {
       jsval_t iterable = resolveprop(js, iter_expr);
       uint8_t itype = vtype(iterable);
-      for_of_ctx_t ctx = { body_start, body_end, var_name_off, var_name_len, is_const_var, flags };
+      for_iter_ctx_t ctx = { body_start, body_end, var_name_off, var_name_len, is_const_var, flags };
       
       if (itype == T_ARR) res = for_of_iter_array(js, &ctx, iterable);
       else if (itype == T_STR) res = for_of_iter_string(js, &ctx, iterable);
