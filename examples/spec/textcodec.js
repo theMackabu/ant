@@ -1,4 +1,4 @@
-import { test, testDeep, summary } from './helpers.js';
+import { test, summary } from './helpers.js';
 
 console.log('TextEncoder/TextDecoder Tests\n');
 

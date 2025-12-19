@@ -301,7 +301,7 @@ static const char *typestr_raw(uint8_t t) {
 
 static jsval_t tov(double d) { union { double d; jsval_t v; } u = {d}; return u.v; }
 static double tod(jsval_t v) { union { jsval_t v; double d; } u = {v}; return u.d; }
-static size_t vdata(jsval_t v) { return (size_t) (v & ~((jsval_t) 0x7fffUL << 48U)); }
+size_t vdata(jsval_t v) { return (size_t) (v & ~((jsval_t) 0x7fffUL << 48U)); }
 
 static jsoff_t coderefoff(jsval_t v) { return v & 0xffffffU; }
 static jsoff_t codereflen(jsval_t v) { return (v >> 24U) & 0xffffffU; }
@@ -328,6 +328,10 @@ uint8_t vtype(jsval_t v) {
 
 static jsval_t mkval(uint8_t type, uint64_t data) { 
   return ((jsval_t) 0x7fe0U << 48U) | ((jsval_t) (type) << 48) | (data & 0xffffffffffffUL); 
+}
+
+jsval_t js_obj_to_func(jsval_t obj) {
+  return mkval(T_FUNC, vdata(obj));
 }
 
 static jsval_t mkcoderef(jsval_t off, jsoff_t len) { 

@@ -84,6 +84,7 @@ int js_type_ex(struct js *js, jsval_t val);
 
 int js_getbool(jsval_t val);
 uint8_t vtype(jsval_t val);
+size_t vdata(jsval_t val);
 
 double js_getnum(jsval_t val);
 char *js_getstr(struct js *js, jsval_t val, size_t *len);
@@ -100,7 +101,9 @@ js_prop_iter_t js_prop_iter_begin(struct js *js, jsval_t obj);
 bool js_prop_iter_next(js_prop_iter_t *iter, const char **key, size_t *key_len, jsval_t *value);
 void js_prop_iter_end(js_prop_iter_t *iter);
 
+jsval_t js_obj_to_func(jsval_t obj);
 jsval_t js_mkpromise(struct js *js);
+
 void js_resolve_promise(struct js *js, jsval_t promise, jsval_t value);
 void js_reject_promise(struct js *js, jsval_t promise, jsval_t value);
 

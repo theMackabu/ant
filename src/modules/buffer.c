@@ -250,6 +250,9 @@ static jsval_t create_typed_array(struct js *js, TypedArrayType type, ArrayBuffe
   buffer->ref_count++;
   
   jsval_t obj = js_mkobj(js);
+  jsval_t proto = js_get_ctor_proto(js, type_name, strlen(type_name));
+  if (js_type(proto) == JS_OBJ) js_set_proto(js, obj, proto);
+  
   js_set(js, obj, "_typedarray_data", js_mknum((double)(uintptr_t)ta_data));
   js_set(js, obj, "length", js_mknum((double)length));
   js_set(js, obj, "byteLength", js_mknum((double)(length * element_size)));
@@ -768,20 +771,22 @@ void init_buffer_module() {
   struct js *js = rt->js;
   jsval_t glob = js_glob(js);
   
-  jsval_t arraybuffer_constructor = js_mkfun(js_arraybuffer_constructor);
+  jsval_t arraybuffer_ctor_obj = js_mkobj(js);
   jsval_t arraybuffer_proto = js_mkobj(js);
   js_set(js, arraybuffer_proto, "slice", js_mkfun(js_arraybuffer_slice));
-  js_set(js, arraybuffer_constructor, "prototype", arraybuffer_proto);
-  js_set(js, glob, "ArrayBuffer", arraybuffer_constructor);
+  js_setprop(js, arraybuffer_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(js_arraybuffer_constructor));
+  js_setprop(js, arraybuffer_ctor_obj, js_mkstr(js, "prototype", 9), arraybuffer_proto);
+  js_set(js, glob, "ArrayBuffer", js_obj_to_func(arraybuffer_ctor_obj));
   
   #define SETUP_TYPEDARRAY(name) \
     do { \
-      jsval_t name##_constructor = js_mkfun(js_##name##_constructor); \
+      jsval_t name##_ctor_obj = js_mkobj(js); \
       jsval_t name##_proto = js_mkobj(js); \
       js_set(js, name##_proto, "slice", js_mkfun(js_typedarray_slice)); \
       js_set(js, name##_proto, "subarray", js_mkfun(js_typedarray_subarray)); \
-      js_set(js, name##_constructor, "prototype", name##_proto); \
-      js_set(js, glob, #name, name##_constructor); \
+      js_setprop(js, name##_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(js_##name##_constructor)); \
+      js_setprop(js, name##_ctor_obj, js_mkstr(js, "prototype", 9), name##_proto); \
+      js_set(js, glob, #name, js_obj_to_func(name##_ctor_obj)); \
     } while(0)
   
   SETUP_TYPEDARRAY(Int8Array);
