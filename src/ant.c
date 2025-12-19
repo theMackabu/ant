@@ -1712,6 +1712,20 @@ jsval_t js_mkerr_typed(struct js *js, js_err_type_t err_type, const char *xx, ..
   vsnprintf(error_msg, sizeof(error_msg), xx, ap);
   va_end(ap);
   
+  const char *err_name = get_error_type_name(err_type);
+  size_t err_name_len = strlen(err_name);
+  size_t msg_len = strlen(error_msg);
+  
+  jsval_t err_obj = js_mkobj(js);
+  js_set(js, err_obj, "name", js_mkstr(js, err_name, err_name_len));
+  js_set(js, err_obj, "message", js_mkstr(js, error_msg, msg_len));
+  
+  jsval_t proto = js_get_ctor_proto(js, err_name, err_name_len);
+  if (vtype(proto) == T_OBJ) js_set_proto(js, err_obj, proto);
+  
+  js->flags |= F_THROW;
+  js->thrown_value = err_obj;
+  
   size_t n = 0;
   if (js->filename) {
     n = (size_t) snprintf(js->errmsg, js->errmsg_size, "%s:%d\n", js->filename, line);
@@ -1721,7 +1735,6 @@ jsval_t js_mkerr_typed(struct js *js, js_err_type_t err_type, const char *xx, ..
   
   size_t remaining = js->errmsg_size - n;
   if (remaining > 1) {
-    const char *err_name = get_error_type_name(err_type);
     n += (size_t) snprintf(js->errmsg + n, remaining, "\x1b[31m%s\x1b[0m: \x1b[1m%s\x1b[0m", err_name, error_msg);
   }
   
@@ -2529,40 +2542,94 @@ jsval_t js_setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v) {
   }
   
   jsoff_t existing = lkp(js, obj, key, klen);
-  if (existing > 0) {
-    char desc_key[128];
-    snprintf(desc_key, sizeof(desc_key), "__desc_%.*s", (int)klen, key);
-    jsoff_t desc_off = lkp(js, obj, desc_key, strlen(desc_key));
-    
-    if (desc_off != 0) {
-      jsval_t desc_obj = resolveprop(js, mkval(T_PROP, desc_off));
-      if (vtype(desc_obj) == T_OBJ) {
-        jsoff_t writable_off = lkp(js, desc_obj, "writable", 8);
-        if (writable_off != 0) {
-          jsval_t writable_val = resolveprop(js, mkval(T_PROP, writable_off));
-          if (!js_truthy(js, writable_val)) {
-            if (js->flags & F_STRICT) return js_mkerr(js, "assignment to read-only property");
-            return mkval(T_PROP, existing);
-          }
-        }
-        
-        jsoff_t configurable_off = lkp(js, desc_obj, "configurable", 12);
-        if (configurable_off != 0) {
-          jsval_t configurable_val = resolveprop(js, mkval(T_PROP, configurable_off));
-          if (!js_truthy(js, configurable_val)) {
-            if (js->flags & F_STRICT) return js_mkerr(js, "assignment to non-configurable property");
-            return mkval(T_PROP, existing);
-          }
-        }
-      }
-    } else if (is_const_prop(js, existing)) {
-      return js_mkerr(js, "assignment to constant");
-    }
-    
-    saveval(js, existing + sizeof(jsoff_t) * 2, v);
-    return mkval(T_PROP, existing);
+  if (existing <= 0) goto create_new;
+  
+  char desc_key[128];
+  snprintf(desc_key, sizeof(desc_key), "__desc_%.*s", (int)klen, key);
+  jsoff_t desc_off = lkp(js, obj, desc_key, strlen(desc_key));
+  
+  if (desc_off == 0) {
+    if (is_const_prop(js, existing)) return js_mkerr(js, "assignment to constant");
+    goto do_update;
   }
-  return mkprop(js, obj, k, v, false);
+  
+  jsval_t desc_obj = resolveprop(js, mkval(T_PROP, desc_off));
+  if (vtype(desc_obj) != T_OBJ) goto do_update;
+  
+  jsoff_t writable_off = lkp(js, desc_obj, "writable", 8);
+  if (writable_off != 0) {
+    jsval_t writable_val = resolveprop(js, mkval(T_PROP, writable_off));
+    if (!js_truthy(js, writable_val)) {
+      if (js->flags & F_STRICT) return js_mkerr(js, "assignment to read-only property");
+      return mkval(T_PROP, existing);
+    }
+  }
+  
+  jsoff_t configurable_off = lkp(js, desc_obj, "configurable", 12);
+  if (configurable_off != 0) {
+    jsval_t configurable_val = resolveprop(js, mkval(T_PROP, configurable_off));
+    if (!js_truthy(js, configurable_val)) {
+      if (js->flags & F_STRICT) return js_mkerr(js, "assignment to non-configurable property");
+      return mkval(T_PROP, existing);
+    }
+  }
+
+do_update:
+  saveval(js, existing + sizeof(jsoff_t) * 2, v);
+  
+  if (vtype(obj) != T_ARR || klen == 0 || key[0] < '0' || key[0] > '9') goto done_update;
+  
+  char *endptr;
+  unsigned long update_idx = strtoul(key, &endptr, 10);
+  if (endptr != key + klen) goto done_update;
+  
+  jsoff_t len_off = lkp(js, obj, "length", 6);
+  jsoff_t cur_len = 0;
+  if (len_off != 0) {
+    jsval_t len_val = resolveprop(js, mkval(T_PROP, len_off));
+    if (vtype(len_val) == T_NUM) cur_len = (jsoff_t) tod(len_val);
+  }
+  if (update_idx < cur_len) goto done_update;
+  
+  jsval_t len_key = js_mkstr(js, "length", 6);
+  jsval_t new_len = tov((double)(update_idx + 1));
+  if (len_off != 0) saveval(js, len_off + sizeof(jsoff_t) * 2, new_len);
+  else mkprop(js, obj, len_key, new_len, false);
+
+done_update:
+  return mkval(T_PROP, existing);
+
+create_new:
+  
+  int need_length_update = 0;
+  unsigned long idx = 0;
+  
+  if (vtype(obj) == T_ARR && klen > 0 && key[0] >= '0' && key[0] <= '9') {
+    char *endptr;
+    idx = strtoul(key, &endptr, 10);
+    if (endptr == key + klen) {
+      jsoff_t len_off = lkp(js, obj, "length", 6);
+      jsoff_t cur_len = 0;
+      if (len_off != 0) {
+        jsval_t len_val = resolveprop(js, mkval(T_PROP, len_off));
+        if (vtype(len_val) == T_NUM) cur_len = (jsoff_t) tod(len_val);
+      }
+      if (idx >= cur_len) need_length_update = 1;
+    }
+  }
+  
+  jsval_t result = mkprop(js, obj, k, v, false);
+  
+  if (need_length_update) {
+    jsoff_t len_off = lkp(js, obj, "length", 6);
+    jsval_t len_key = js_mkstr(js, "length", 6);
+    jsval_t new_len = tov((double)(idx + 1));
+    if (len_off != 0) {
+      saveval(js, len_off + sizeof(jsoff_t) * 2, new_len);
+    } else mkprop(js, obj, len_key, new_len, false);
+  }
+  
+  return result;
 }
 
 static jsval_t setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v) {
@@ -4511,8 +4578,10 @@ skip_fields:
   }
   
   js->code = code, js->clen = clen, js->pos = pos;
-  js->flags = flags, js->tok = tok, js->nogc = nogc;
+  js->flags = (flags & ~F_THROW) | (js->flags & F_THROW);
+  js->tok = tok, js->nogc = nogc;
   js->consumed = 1;
+  
   return res;
 }
 

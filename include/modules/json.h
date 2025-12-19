@@ -1,5 +1,6 @@
 #ifndef JSON_H
 #define JSON_H
+#define YYJSON_SKIP_VALUE ((yyjson_mut_val *)-1)
 
 #include "ant.h"
 
