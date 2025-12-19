@@ -4888,28 +4888,65 @@ static jsval_t js_arr_literal(struct js *js) {
   uint8_t exe = !(js->flags & F_NOEXEC);
   jsval_t arr = exe ? mkarr(js) : js_mkundef();
   if (is_err(arr)) return arr;
-  
+
   js->consumed = 1;
   jsoff_t idx = 0;
   while (next(js) != TOK_RBRACKET) {
+    bool is_spread = (next(js) == TOK_REST);
+    if (is_spread) js->consumed = 1;
+
     jsval_t val = js_expr(js);
-    if (exe) {
-      if (is_err(val)) return val;
+    if (!exe) goto next_elem;
+    if (is_err(val)) return val;
+
+    jsval_t resolved = resolveprop(js, val);
+    if (!is_spread) {
       char idxstr[16];
-      snprintf(idxstr, sizeof(idxstr), "%u", (unsigned) idx);
+      snprintf(idxstr, sizeof(idxstr), "%u", (unsigned)idx);
       jsval_t key = js_mkstr(js, idxstr, strlen(idxstr));
-      jsval_t res = setprop(js, arr, key, resolveprop(js, val));
+      jsval_t res = setprop(js, arr, key, resolved);
       if (is_err(res)) return res;
+      idx++;
+      goto next_elem;
     }
-    idx++;
+
+    uint8_t t = vtype(resolved);
+    if (t != T_ARR && t != T_STR) goto next_elem;
+
+    if (t == T_STR) {
+      jsoff_t slen, soff = vstr(js, resolved, &slen);
+      for (jsoff_t i = 0; i < slen; i++) {
+        char idxstr[16];
+        snprintf(idxstr, sizeof(idxstr), "%u", (unsigned)idx);
+        jsval_t key = js_mkstr(js, idxstr, strlen(idxstr));
+        jsval_t ch = js_mkstr(js, (char *)&js->mem[soff + i], 1);
+        setprop(js, arr, key, ch);
+        idx++;
+      }
+      goto next_elem;
+    }
+
+    jsoff_t len = arr_length(js, resolved);
+    for (jsoff_t i = 0; i < len; i++) {
+      char src_idx[16], dst_idx[16];
+      snprintf(src_idx, sizeof(src_idx), "%u", (unsigned)i);
+      snprintf(dst_idx, sizeof(dst_idx), "%u", (unsigned)idx);
+      jsval_t key = js_mkstr(js, src_idx, strlen(src_idx));
+      jsoff_t prop_off = lkp(js, resolved, (char *)&js->mem[(jsoff_t)vdata(key) + sizeof(jsoff_t)], strlen(src_idx));
+      jsval_t elem = (prop_off != 0) ? resolveprop(js, mkval(T_PROP, prop_off)) : js_mkundef();
+      setprop(js, arr, js_mkstr(js, dst_idx, strlen(dst_idx)), elem);
+      idx++;
+    }
+
+  next_elem:
     if (next(js) == TOK_RBRACKET) break;
     EXPECT(TOK_COMMA, );
   }
-  
+
   EXPECT(TOK_RBRACKET, );
   if (exe) {
     jsval_t len_key = js_mkstr(js, "length", 6);
-    jsval_t len_val = tov((double) idx);
+    jsval_t len_val = tov((double)idx);
     jsval_t res = setprop(js, arr, len_key, len_val);
     if (is_err(res)) return res;
     arr = mkval(T_ARR, vdata(arr));
