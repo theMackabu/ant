@@ -7774,7 +7774,7 @@ static jsval_t js_switch(struct js *js) {
           }
         }
         
-        if (js->flags & F_BREAK) js->flags &= ~F_BREAK; break;
+        if (js->flags & F_BREAK) { js->flags &= ~F_BREAK; break; }
         if (js->flags & (F_RETURN | F_THROW)) break;
       }
     }
