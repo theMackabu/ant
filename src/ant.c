@@ -173,9 +173,18 @@ typedef struct set_entry {
     UT_hash_handle hh;
 } set_entry_t;
 
+typedef struct proxy_data {
+    jsoff_t obj_offset;
+    jsval_t target;
+    jsval_t handler;
+    bool revoked;
+    UT_hash_handle hh;
+} proxy_data_t;
+
 static ant_library_t *library_registry = NULL;
 static esm_module_cache_t global_module_cache = {NULL, 0};
 static obj_prop_cache_t *global_property_cache = NULL;
+static proxy_data_t *proxy_registry = NULL;
 
 void js_protect_init_memory(struct js *js) {
   protected_brk = js_getbrk(js);
@@ -504,6 +513,13 @@ static jsval_t builtin_Map(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_Set(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_WeakMap(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_WeakSet(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Proxy(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_Proxy_revocable(struct js *js, jsval_t *args, int nargs);
+static bool is_proxy(struct js *js, jsval_t obj);
+static jsval_t proxy_get(struct js *js, jsval_t proxy, const char *key, size_t key_len);
+static jsval_t proxy_set(struct js *js, jsval_t proxy, const char *key, size_t key_len, jsval_t value);
+static jsval_t proxy_has(struct js *js, jsval_t proxy, const char *key, size_t key_len);
+static jsval_t proxy_delete(struct js *js, jsval_t proxy, const char *key, size_t key_len);
 static jsval_t map_set(struct js *js, jsval_t *args, int nargs);
 static jsval_t map_get(struct js *js, jsval_t *args, int nargs);
 static jsval_t map_has(struct js *js, jsval_t *args, int nargs);
@@ -2498,6 +2514,13 @@ jsval_t js_setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v) {
   if (streq(key, klen, "__proto__", 9)) {
     return js_mkerr(js, "cannot assign to __proto__");
   }
+  
+  if (is_proxy(js, obj)) {
+    jsval_t result = proxy_set(js, obj, key, klen, v);
+    if (is_err(result)) return result;
+    return v;
+  }
+  
   jsoff_t existing = lkp(js, obj, key, klen);
   if (existing > 0) {
     char desc_key[128];
@@ -3444,7 +3467,10 @@ static jsval_t resolveprop(struct js *js, jsval_t v) {
     jsval_t obj = mkval(T_OBJ, obj_off);
     jsval_t key = mkval(T_STR, key_off);
     jsoff_t len;
+    
     const char *key_str = (const char *)&js->mem[vstr(js, key, &len)];
+    if (is_proxy(js, obj)) return proxy_get(js, obj, key_str, len);
+    
     jsoff_t prop_off = lkp(js, obj, key_str, len);
     if (prop_off == 0) return js_mkundef();
     return resolveprop(js, mkval(T_PROP, prop_off));
@@ -5847,6 +5873,13 @@ static jsval_t js_unary(struct js *js) {
       jsval_t key = mkval(T_STR, key_off);
       jsoff_t len;
       const char *key_str = (const char *)&js->mem[vstr(js, key, &len)];
+      
+      if (is_proxy(js, obj)) {
+        jsval_t result = proxy_delete(js, obj, key_str, len);
+        if (is_err(result)) return result;
+        return js_truthy(js, result) ? js_mktrue() : js_mkfalse();
+      }
+      
       jsoff_t prop_off = lkp(js, obj, key_str, len);
       if (prop_off == 0) return js_mktrue();
       if (is_const_prop(js, prop_off)) {
@@ -14100,6 +14133,12 @@ static jsval_t do_in(struct js *js, jsval_t l, jsval_t r) {
   jsoff_t prop_off = vstr(js, l, &prop_len);
   const char *prop_name = (char *) &js->mem[prop_off];
   
+  if (is_proxy(js, r)) {
+    jsval_t result = proxy_has(js, r, prop_name, prop_len);
+    if (is_err(result)) return result;
+    return js_truthy(js, result) ? js_mktrue() : js_mkfalse();
+  }
+  
   jsoff_t found = lkp_proto(js, r, prop_name, prop_len);
   return mkval(T_BOOL, found != 0 ? 1 : 0);
 }
@@ -15441,6 +15480,199 @@ static jsval_t builtin_WeakSet(struct js *js, jsval_t *args, int nargs) {
   return ws_obj;
 }
 
+static proxy_data_t *get_proxy_data(jsval_t obj) {
+  if (vtype(obj) != T_OBJ) return NULL;
+  jsoff_t off = (jsoff_t)vdata(obj);
+  proxy_data_t *data = NULL;
+  HASH_FIND(hh, proxy_registry, &off, sizeof(jsoff_t), data);
+  return data;
+}
+
+static bool is_proxy(struct js *js, jsval_t obj) {
+  (void)js;
+  return get_proxy_data(obj) != NULL;
+}
+
+static jsval_t throw_proxy_error(struct js *js, const char *message) {
+  jsval_t err_obj = mkobj(js, 0);
+  setprop(js, err_obj, js_mkstr(js, "message", 7), js_mkstr(js, message, strlen(message)));
+  setprop(js, err_obj, js_mkstr(js, "name", 4), js_mkstr(js, "TypeError", 9));
+  return js_throw(js, err_obj);
+}
+
+static jsval_t proxy_get(struct js *js, jsval_t proxy, const char *key, size_t key_len) {
+  proxy_data_t *data = get_proxy_data(proxy);
+  if (!data) return js_mkundef();
+  if (data->revoked) return throw_proxy_error(js, "Cannot perform 'get' on a proxy that has been revoked");
+  
+  jsval_t target = data->target;
+  jsval_t handler = data->handler;
+  
+  jsoff_t get_trap_off = vtype(handler) == T_OBJ ? lkp(js, handler, "get", 3) : 0;
+  if (get_trap_off != 0) {
+    jsval_t get_trap = resolveprop(js, mkval(T_PROP, get_trap_off));
+    if (vtype(get_trap) == T_FUNC || vtype(get_trap) == T_CFUNC) {
+      jsval_t key_val = js_mkstr(js, key, key_len);
+      jsval_t args[3] = { target, key_val, proxy };
+      return js_call(js, get_trap, args, 3);
+    }
+  }
+  
+  char key_buf[256];
+  size_t len = key_len < sizeof(key_buf) - 1 ? key_len : sizeof(key_buf) - 1;
+  memcpy(key_buf, key, len);
+  key_buf[len] = '\0';
+  
+  jsoff_t off = lkp(js, target, key_buf, len);
+  if (off != 0) return resolveprop(js, mkval(T_PROP, off));
+  
+  jsoff_t proto_off = lkp_proto(js, target, key_buf, len);
+  if (proto_off != 0) return resolveprop(js, mkval(T_PROP, proto_off));
+  
+  return js_mkundef();
+}
+
+static jsval_t proxy_set(struct js *js, jsval_t proxy, const char *key, size_t key_len, jsval_t value) {
+  proxy_data_t *data = get_proxy_data(proxy);
+  if (!data) return js_mkundef();
+  if (data->revoked) return throw_proxy_error(js, "Cannot perform 'set' on a proxy that has been revoked");
+  
+  jsval_t target = data->target;
+  jsval_t handler = data->handler;
+  
+  jsoff_t set_trap_off = vtype(handler) == T_OBJ ? lkp(js, handler, "set", 3) : 0;
+  if (set_trap_off != 0) {
+    jsval_t set_trap = resolveprop(js, mkval(T_PROP, set_trap_off));
+    if (vtype(set_trap) == T_FUNC || vtype(set_trap) == T_CFUNC) {
+      jsval_t key_val = js_mkstr(js, key, key_len);
+      jsval_t args[4] = { target, key_val, value, proxy };
+      jsval_t result = js_call(js, set_trap, args, 4);
+      if (is_err(result)) return result;
+      return js_mktrue();
+    }
+  }
+  
+  jsval_t key_str = js_mkstr(js, key, key_len);
+  setprop(js, target, key_str, value);
+  return js_mktrue();
+}
+
+static jsval_t proxy_has(struct js *js, jsval_t proxy, const char *key, size_t key_len) {
+  proxy_data_t *data = get_proxy_data(proxy);
+  if (!data) return js_mkfalse();
+  if (data->revoked) return throw_proxy_error(js, "Cannot perform 'has' on a proxy that has been revoked");
+  
+  jsval_t target = data->target;
+  jsval_t handler = data->handler;
+  
+  jsoff_t has_trap_off = vtype(handler) == T_OBJ ? lkp(js, handler, "has", 3) : 0;
+  if (has_trap_off != 0) {
+    jsval_t has_trap = resolveprop(js, mkval(T_PROP, has_trap_off));
+    if (vtype(has_trap) == T_FUNC || vtype(has_trap) == T_CFUNC) {
+      jsval_t key_val = js_mkstr(js, key, key_len);
+      jsval_t args[2] = { target, key_val };
+      return js_call(js, has_trap, args, 2);
+    }
+  }
+  
+  char key_buf[256];
+  size_t len = key_len < sizeof(key_buf) - 1 ? key_len : sizeof(key_buf) - 1;
+  memcpy(key_buf, key, len);
+  key_buf[len] = '\0';
+  
+  jsoff_t off = lkp_proto(js, target, key_buf, len);
+  return off != 0 ? js_mktrue() : js_mkfalse();
+}
+
+static jsval_t proxy_delete(struct js *js, jsval_t proxy, const char *key, size_t key_len) {
+  proxy_data_t *data = get_proxy_data(proxy);
+  if (!data) return js_mktrue();
+  if (data->revoked) return throw_proxy_error(js, "Cannot perform 'deleteProperty' on a proxy that has been revoked");
+  
+  jsval_t target = data->target;
+  jsval_t handler = data->handler;
+  
+  jsoff_t delete_trap_off = vtype(handler) == T_OBJ ? lkp(js, handler, "deleteProperty", 14) : 0;
+  if (delete_trap_off != 0) {
+    jsval_t delete_trap = resolveprop(js, mkval(T_PROP, delete_trap_off));
+    if (vtype(delete_trap) == T_FUNC || vtype(delete_trap) == T_CFUNC) {
+      jsval_t key_val = js_mkstr(js, key, key_len);
+      jsval_t args[2] = { target, key_val };
+      return js_call(js, delete_trap, args, 2);
+    }
+  }
+  
+  jsval_t key_str = js_mkstr(js, key, key_len);
+  setprop(js, target, key_str, js_mkundef());
+  return js_mktrue();
+}
+
+static jsval_t mkproxy(struct js *js, jsval_t target, jsval_t handler) {
+  jsval_t proxy_obj = mkobj(js, 0);
+  jsoff_t off = (jsoff_t)vdata(proxy_obj);
+  
+  proxy_data_t *data = (proxy_data_t *)ANT_GC_MALLOC(sizeof(proxy_data_t));
+  if (!data) return js_mkerr(js, "out of memory");
+  
+  data->obj_offset = off;
+  data->target = target;
+  data->handler = handler;
+  data->revoked = false;
+  
+  HASH_ADD(hh, proxy_registry, obj_offset, sizeof(jsoff_t), data);
+  return proxy_obj;
+}
+
+static jsval_t builtin_Proxy(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 2) return js_mkerr(js, "Proxy requires two arguments: target and handler");
+  
+  jsval_t target = args[0];
+  jsval_t handler = args[1];
+  
+  uint8_t target_type = vtype(target);
+  if (target_type != T_OBJ && target_type != T_FUNC && target_type != T_ARR) {
+    return js_mkerr(js, "Proxy target must be an object");
+  }
+  
+  uint8_t handler_type = vtype(handler);
+  if (handler_type != T_OBJ && handler_type != T_FUNC) {
+    return js_mkerr(js, "Proxy handler must be an object");
+  }
+  
+  return mkproxy(js, target, handler);
+}
+
+static jsval_t proxy_revoke_fn(struct js *js, jsval_t *args, int nargs) {
+  (void)args; (void)nargs;
+  jsval_t func = js->current_func;
+  jsoff_t ref_off = lkp(js, func, "__proxy_ref__", 13);
+  
+  if (ref_off != 0) {
+    jsval_t proxy = resolveprop(js, mkval(T_PROP, ref_off));
+    proxy_data_t *data = get_proxy_data(proxy);
+    if (data) data->revoked = true;
+  }
+  
+  return js_mkundef();
+}
+
+static jsval_t builtin_Proxy_revocable(struct js *js, jsval_t *args, int nargs) {
+  jsval_t proxy = builtin_Proxy(js, args, nargs);
+  if (is_err(proxy)) return proxy;
+  
+  jsval_t revoke_obj = mkobj(js, 0);
+  setprop(js, revoke_obj, js_mkstr(js, "__native_func", 13), js_mkfun(proxy_revoke_fn));
+  setprop(js, revoke_obj, js_mkstr(js, "__proxy_ref__", 13), proxy);
+  
+  jsval_t revoke_func = mkval(T_FUNC, vdata(revoke_obj));
+  
+  jsval_t result = mkobj(js, 0);
+  setprop(js, result, js_mkstr(js, "proxy", 5), proxy);
+  setprop(js, result, js_mkstr(js, "revoke", 6), revoke_func);
+  
+  return result;
+}
+
 static weakmap_entry_t** get_weakmap_from_obj(struct js *js, jsval_t obj) {
   jsoff_t wm_off = lkp(js, obj, "__weakmap", 9);
   if (wm_off == 0) return NULL;
@@ -15895,6 +16127,12 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, weakset_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_WeakSet));
   setprop(js, weakset_ctor_obj, js_mkstr(js, "prototype", 9), weakset_proto);
   setprop(js, glob, js_mkstr(js, "WeakSet", 7), mkval(T_FUNC, vdata(weakset_ctor_obj)));
+  
+  jsval_t proxy_ctor_obj = mkobj(js, 0);
+  set_proto(js, proxy_ctor_obj, function_proto);
+  setprop(js, proxy_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_Proxy));
+  setprop(js, proxy_ctor_obj, js_mkstr(js, "revocable", 9), js_mkfun(builtin_Proxy_revocable));
+  setprop(js, glob, js_mkstr(js, "Proxy", 5), mkval(T_FUNC, vdata(proxy_ctor_obj)));
   
   jsval_t err_ctor_obj = mkobj(js, 0);
   set_proto(js, err_ctor_obj, function_proto);
@@ -16389,9 +16627,16 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
     jsval_t saved_this = js->this_val;
     js->this_val = use_bound_this ? bound_this : js_glob(js);
     
+    js_parse_state_t saved_state;
+    JS_SAVE_STATE(js, saved_state);
+    uint8_t caller_flags = js->flags;
+    
     js->flags = F_CALL;
     jsval_t res = js_eval(js, &fn[fnpos], body_len);
     if (!is_err(res) && !(js->flags & F_RETURN)) res = js_mkundef();
+    
+    JS_RESTORE_STATE(js, saved_state);
+    js->flags = caller_flags;
     
     js->this_val = saved_this;
     delscope(js);
