@@ -4109,6 +4109,26 @@ bind:;
   return js_mkundef();
 }
 
+static void setup_arguments(struct js *js, jsval_t scope, jsval_t *args, int nargs) {
+  if (vtype(js->current_func) == T_FUNC) {
+    jsval_t func_obj = mkval(T_OBJ, vdata(js->current_func));
+    if (lkp(js, func_obj, "__this", 6) != 0) return;
+  }
+  
+  jsval_t arguments_obj = mkobj(js, 0);
+  for (int i = 0; i < nargs; i++) {
+    char idxstr[16];
+    snprintf(idxstr, sizeof(idxstr), "%d", i);
+    setprop(js, arguments_obj, js_mkstr(js, idxstr, strlen(idxstr)), args[i]);
+  }
+  setprop(js, arguments_obj, js_mkstr(js, "length", 6), tov((double) nargs));
+  if (vtype(js->current_func) == T_FUNC) {
+    setprop(js, arguments_obj, js_mkstr(js, "callee", 6), js->current_func);
+  }
+  arguments_obj = mkval(T_ARR, vdata(arguments_obj));
+  setprop(js, scope, js_mkstr(js, "arguments", 9), arguments_obj);
+}
+
 static jsval_t call_js(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope) {
   jsoff_t fnpos = 1;
   jsval_t saved_scope = js->scope;
@@ -4241,6 +4261,8 @@ static jsval_t call_js(struct js *js, const char *fn, jsoff_t fnlen, jsval_t clo
       setprop(js, function_scope, js_mkstr(js, &fn[rest_param_start], rest_param_len), rest_array);
     }
   }
+  
+  setup_arguments(js, function_scope, args, argc);
   
   js->scope = function_scope;
   if (fnpos < fnlen && fn[fnpos] == ')') fnpos++;
@@ -4421,6 +4443,8 @@ static jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnl
       setprop(js, function_scope, js_mkstr(js, &fn[rest_param_start], rest_param_len), rest_array);
     }
   }
+  
+  setup_arguments(js, function_scope, args, nargs);
   
   if (fnpos < fnlen && fn[fnpos] == ')') fnpos++;
   fnpos = skiptonext(fn, fnlen, fnpos, NULL);
