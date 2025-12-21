@@ -9664,6 +9664,32 @@ static jsval_t builtin_Date_now(struct js *js, jsval_t *args, int nargs) {
   return tov(timestamp_ms);
 }
 
+static jsval_t builtin_Date_UTC(struct js *js, jsval_t *args, int nargs) {
+  (void) js;
+  if (nargs < 1) return tov(NAN);
+  
+  int year = (int)tod(args[0]);
+  int month = nargs >= 2 ? (int)tod(args[1]) : 0;
+  int day = nargs >= 3 ? (int)tod(args[2]) : 1;
+  int hour = nargs >= 4 ? (int)tod(args[3]) : 0;
+  int min = nargs >= 5 ? (int)tod(args[4]) : 0;
+  int sec = nargs >= 6 ? (int)tod(args[5]) : 0;
+  int ms = nargs >= 7 ? (int)tod(args[6]) : 0;
+  
+  if (year >= 0 && year <= 99) year += 1900;
+  
+  struct tm tm = {0};
+  tm.tm_year = year - 1900;
+  tm.tm_mon = month;
+  tm.tm_mday = day;
+  tm.tm_hour = hour;
+  tm.tm_min = min;
+  tm.tm_sec = sec;
+  
+  time_t t = timegm(&tm);
+  return tov((double)t * 1000.0 + ms);
+}
+
 static double date_get_time(struct js *js, jsval_t this_val) {
   jsoff_t time_off = lkp(js, this_val, "__time", 6);
   if (time_off == 0) return NAN;
@@ -9782,6 +9808,330 @@ static jsval_t builtin_Date_toString(struct js *js, jsval_t *args, int nargs) {
   size_t len = strlen(s);
   if (len > 0 && s[len - 1] == '\n') len--;
   return js_mkstr(js, s, len);
+}
+
+static jsval_t builtin_Date_valueOf(struct js *js, jsval_t *args, int nargs) {
+  (void) args;
+  (void) nargs;
+  return tov(date_get_time(js, js->this_val));
+}
+
+static jsval_t builtin_Date_getTimezoneOffset(struct js *js, jsval_t *args, int nargs) {
+  (void) args;
+  (void) nargs;
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return tov(NAN);
+  time_t t = (time_t)(ms / 1000.0);
+  struct tm *local = localtime(&t);
+  struct tm *utc = gmtime(&t);
+  int diff = (local->tm_hour - utc->tm_hour) * 60 + (local->tm_min - utc->tm_min);
+  if (local->tm_mday != utc->tm_mday) {
+    diff += (local->tm_mday > utc->tm_mday || (local->tm_mday == 1 && utc->tm_mday > 1)) ? 1440 : -1440;
+  }
+  return tov((double)(-diff));
+}
+
+static jsval_t builtin_Date_getUTCFullYear(struct js *js, jsval_t *args, int nargs) {
+  (void) args;
+  (void) nargs;
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return tov(NAN);
+  time_t t = (time_t)(ms / 1000.0);
+  struct tm *tm = gmtime(&t);
+  return tov((double)(tm->tm_year + 1900));
+}
+
+static jsval_t builtin_Date_getUTCMonth(struct js *js, jsval_t *args, int nargs) {
+  (void) args;
+  (void) nargs;
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return tov(NAN);
+  time_t t = (time_t)(ms / 1000.0);
+  struct tm *tm = gmtime(&t);
+  return tov((double)tm->tm_mon);
+}
+
+static jsval_t builtin_Date_getUTCDate(struct js *js, jsval_t *args, int nargs) {
+  (void) args;
+  (void) nargs;
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return tov(NAN);
+  time_t t = (time_t)(ms / 1000.0);
+  struct tm *tm = gmtime(&t);
+  return tov((double)tm->tm_mday);
+}
+
+static jsval_t builtin_Date_getUTCHours(struct js *js, jsval_t *args, int nargs) {
+  (void) args;
+  (void) nargs;
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return tov(NAN);
+  time_t t = (time_t)(ms / 1000.0);
+  struct tm *tm = gmtime(&t);
+  return tov((double)tm->tm_hour);
+}
+
+static jsval_t builtin_Date_getUTCMinutes(struct js *js, jsval_t *args, int nargs) {
+  (void) args;
+  (void) nargs;
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return tov(NAN);
+  time_t t = (time_t)(ms / 1000.0);
+  struct tm *tm = gmtime(&t);
+  return tov((double)tm->tm_min);
+}
+
+static jsval_t builtin_Date_getUTCSeconds(struct js *js, jsval_t *args, int nargs) {
+  (void) args;
+  (void) nargs;
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return tov(NAN);
+  time_t t = (time_t)(ms / 1000.0);
+  struct tm *tm = gmtime(&t);
+  return tov((double)tm->tm_sec);
+}
+
+static jsval_t builtin_Date_getUTCMilliseconds(struct js *js, jsval_t *args, int nargs) {
+  (void) args;
+  (void) nargs;
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return tov(NAN);
+  return tov(fmod(ms, 1000.0));
+}
+
+static jsval_t builtin_Date_getUTCDay(struct js *js, jsval_t *args, int nargs) {
+  (void) args;
+  (void) nargs;
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return tov(NAN);
+  time_t t = (time_t)(ms / 1000.0);
+  struct tm *tm = gmtime(&t);
+  return tov((double)tm->tm_wday);
+}
+
+static void date_set_time(struct js *js, jsval_t date, double ms) {
+  if (vtype(date) != T_OBJ) return;
+  jsval_t time_key = js_mkstr(js, "__time", 6);
+  setprop(js, date, time_key, tov(ms));
+}
+
+static jsval_t builtin_Date_setTime(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return tov(NAN);
+  double ms = tod(args[0]);
+  date_set_time(js, js->this_val, ms);
+  return tov(ms);
+}
+
+static jsval_t builtin_Date_setMilliseconds(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return tov(NAN);
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return tov(NAN);
+  double newMs = tod(args[0]);
+  ms = floor(ms / 1000.0) * 1000.0 + newMs;
+  date_set_time(js, js->this_val, ms);
+  return tov(ms);
+}
+
+static jsval_t builtin_Date_setSeconds(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return tov(NAN);
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return tov(NAN);
+  time_t t = (time_t)(ms / 1000.0);
+  struct tm *tm = localtime(&t);
+  tm->tm_sec = (int)tod(args[0]);
+  if (nargs >= 2) ms = floor(ms / 1000.0) * 1000.0 + tod(args[1]);
+  else ms = floor(ms / 1000.0) * 1000.0 + fmod(ms, 1000.0);
+  time_t newt = mktime(tm);
+  ms = (double)newt * 1000.0 + fmod(ms, 1000.0);
+  date_set_time(js, js->this_val, ms);
+  return tov(ms);
+}
+
+static jsval_t builtin_Date_setMinutes(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return tov(NAN);
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return tov(NAN);
+  time_t t = (time_t)(ms / 1000.0);
+  struct tm *tm = localtime(&t);
+  tm->tm_min = (int)tod(args[0]);
+  if (nargs >= 2) tm->tm_sec = (int)tod(args[1]);
+  time_t newt = mktime(tm);
+  ms = (double)newt * 1000.0 + fmod(ms, 1000.0);
+  date_set_time(js, js->this_val, ms);
+  return tov(ms);
+}
+
+static jsval_t builtin_Date_setHours(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return tov(NAN);
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return tov(NAN);
+  time_t t = (time_t)(ms / 1000.0);
+  struct tm *tm = localtime(&t);
+  tm->tm_hour = (int)tod(args[0]);
+  if (nargs >= 2) tm->tm_min = (int)tod(args[1]);
+  if (nargs >= 3) tm->tm_sec = (int)tod(args[2]);
+  time_t newt = mktime(tm);
+  ms = (double)newt * 1000.0 + fmod(ms, 1000.0);
+  date_set_time(js, js->this_val, ms);
+  return tov(ms);
+}
+
+static jsval_t builtin_Date_setDate(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return tov(NAN);
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return tov(NAN);
+  time_t t = (time_t)(ms / 1000.0);
+  struct tm *tm = localtime(&t);
+  tm->tm_mday = (int)tod(args[0]);
+  time_t newt = mktime(tm);
+  ms = (double)newt * 1000.0 + fmod(ms, 1000.0);
+  date_set_time(js, js->this_val, ms);
+  return tov(ms);
+}
+
+static jsval_t builtin_Date_setMonth(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return tov(NAN);
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return tov(NAN);
+  time_t t = (time_t)(ms / 1000.0);
+  struct tm *tm = localtime(&t);
+  tm->tm_mon = (int)tod(args[0]);
+  if (nargs >= 2) tm->tm_mday = (int)tod(args[1]);
+  time_t newt = mktime(tm);
+  ms = (double)newt * 1000.0 + fmod(ms, 1000.0);
+  date_set_time(js, js->this_val, ms);
+  return tov(ms);
+}
+
+static jsval_t builtin_Date_setFullYear(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return tov(NAN);
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) ms = 0;
+  time_t t = (time_t)(ms / 1000.0);
+  struct tm *tm = localtime(&t);
+  tm->tm_year = (int)tod(args[0]) - 1900;
+  if (nargs >= 2) tm->tm_mon = (int)tod(args[1]);
+  if (nargs >= 3) tm->tm_mday = (int)tod(args[2]);
+  time_t newt = mktime(tm);
+  ms = (double)newt * 1000.0 + fmod(ms, 1000.0);
+  date_set_time(js, js->this_val, ms);
+  return tov(ms);
+}
+
+static jsval_t builtin_Date_setUTCMilliseconds(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return tov(NAN);
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return tov(NAN);
+  double newMs = tod(args[0]);
+  ms = floor(ms / 1000.0) * 1000.0 + newMs;
+  date_set_time(js, js->this_val, ms);
+  return tov(ms);
+}
+
+static jsval_t builtin_Date_setUTCSeconds(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return tov(NAN);
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return tov(NAN);
+  time_t t = (time_t)(ms / 1000.0);
+  struct tm *tm = gmtime(&t);
+  struct tm copy = *tm;
+  copy.tm_sec = (int)tod(args[0]);
+  time_t newt = timegm(&copy);
+  ms = (double)newt * 1000.0 + fmod(ms, 1000.0);
+  date_set_time(js, js->this_val, ms);
+  return tov(ms);
+}
+
+static jsval_t builtin_Date_setUTCMinutes(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return tov(NAN);
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return tov(NAN);
+  time_t t = (time_t)(ms / 1000.0);
+  struct tm *tm = gmtime(&t);
+  struct tm copy = *tm;
+  copy.tm_min = (int)tod(args[0]);
+  if (nargs >= 2) copy.tm_sec = (int)tod(args[1]);
+  time_t newt = timegm(&copy);
+  ms = (double)newt * 1000.0 + fmod(ms, 1000.0);
+  date_set_time(js, js->this_val, ms);
+  return tov(ms);
+}
+
+static jsval_t builtin_Date_setUTCHours(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return tov(NAN);
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return tov(NAN);
+  time_t t = (time_t)(ms / 1000.0);
+  struct tm *tm = gmtime(&t);
+  struct tm copy = *tm;
+  copy.tm_hour = (int)tod(args[0]);
+  if (nargs >= 2) copy.tm_min = (int)tod(args[1]);
+  if (nargs >= 3) copy.tm_sec = (int)tod(args[2]);
+  time_t newt = timegm(&copy);
+  ms = (double)newt * 1000.0 + fmod(ms, 1000.0);
+  date_set_time(js, js->this_val, ms);
+  return tov(ms);
+}
+
+static jsval_t builtin_Date_setUTCDate(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return tov(NAN);
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return tov(NAN);
+  time_t t = (time_t)(ms / 1000.0);
+  struct tm *tm = gmtime(&t);
+  struct tm copy = *tm;
+  copy.tm_mday = (int)tod(args[0]);
+  time_t newt = timegm(&copy);
+  ms = (double)newt * 1000.0 + fmod(ms, 1000.0);
+  date_set_time(js, js->this_val, ms);
+  return tov(ms);
+}
+
+static jsval_t builtin_Date_setUTCMonth(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return tov(NAN);
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return tov(NAN);
+  time_t t = (time_t)(ms / 1000.0);
+  struct tm *tm = gmtime(&t);
+  struct tm copy = *tm;
+  copy.tm_mon = (int)tod(args[0]);
+  if (nargs >= 2) copy.tm_mday = (int)tod(args[1]);
+  time_t newt = timegm(&copy);
+  ms = (double)newt * 1000.0 + fmod(ms, 1000.0);
+  date_set_time(js, js->this_val, ms);
+  return tov(ms);
+}
+
+static jsval_t builtin_Date_setUTCFullYear(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return tov(NAN);
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) ms = 0;
+  time_t t = (time_t)(ms / 1000.0);
+  struct tm *tm = gmtime(&t);
+  struct tm copy = *tm;
+  copy.tm_year = (int)tod(args[0]) - 1900;
+  if (nargs >= 2) copy.tm_mon = (int)tod(args[1]);
+  if (nargs >= 3) copy.tm_mday = (int)tod(args[2]);
+  time_t newt = timegm(&copy);
+  ms = (double)newt * 1000.0 + fmod(ms, 1000.0);
+  date_set_time(js, js->this_val, ms);
+  return tov(ms);
+}
+
+static jsval_t builtin_Date_toUTCString(struct js *js, jsval_t *args, int nargs) {
+  (void) args;
+  (void) nargs;
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return js_mkstr(js, "Invalid Date", 12);
+  time_t t = (time_t)(ms / 1000.0);
+  struct tm *tm = gmtime(&t);
+  static const char *days[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+  static const char *months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+  char buf[64];
+  snprintf(buf, sizeof(buf), "%s, %02d %s %04d %02d:%02d:%02d GMT",
+           days[tm->tm_wday], tm->tm_mday, months[tm->tm_mon],
+           tm->tm_year + 1900, tm->tm_hour, tm->tm_min, tm->tm_sec);
+  return js_mkstr(js, buf, strlen(buf));
 }
 
 static jsval_t builtin_Math_abs(struct js *js, jsval_t *args, int nargs) {
@@ -10850,6 +11200,15 @@ static jsval_t builtin_object_toString(struct js *js, jsval_t *args, int nargs) 
   char buf[256];
   int n = snprintf(buf, sizeof(buf), "[object %s]", type_name);
   return js_mkstr(js, buf, n);
+}
+
+static jsval_t builtin_object_valueOf(struct js *js, jsval_t *args, int nargs) {
+  (void)args; (void)nargs;
+  return js->this_val;
+}
+
+static jsval_t builtin_object_toLocaleString(struct js *js, jsval_t *args, int nargs) {
+  return builtin_object_toString(js, args, nargs);
 }
 
 static jsval_t builtin_array_push(struct js *js, jsval_t *args, int nargs) {
@@ -12568,6 +12927,35 @@ static jsval_t builtin_string_substring(struct js *js, jsval_t *args, int nargs)
   
   jsoff_t sub_len = end - start;
   return js_mkstr(js, str_ptr + start, sub_len);
+}
+
+static jsval_t builtin_string_substr(struct js *js, jsval_t *args, int nargs) {
+  jsval_t str = unwrap_primitive(js, js->this_val);
+  if (vtype(str) != T_STR) return js_mkerr(js, "substr called on non-string");
+  jsoff_t str_len, str_off = vstr(js, str, &str_len);
+  const char *str_ptr = (char *) &js->mem[str_off];
+  
+  if (nargs < 1) return js_mkstr(js, str_ptr, str_len);
+  
+  double d_start = tod(args[0]);
+  jsoff_t start;
+  if (d_start < 0) {
+    start = (jsoff_t)((double)str_len + d_start);
+    if ((int)start < 0) start = 0;
+  } else {
+    start = (jsoff_t)d_start;
+  }
+  if (start > str_len) start = str_len;
+  
+  jsoff_t len = str_len - start;
+  if (nargs >= 2 && vtype(args[1]) == T_NUM) {
+    double d = tod(args[1]);
+    if (d < 0) d = 0;
+    len = (jsoff_t)d;
+  }
+  if (start + len > str_len) len = str_len - start;
+  
+  return js_mkstr(js, str_ptr + start, len);
 }
 
 static jsval_t builtin_string_split(struct js *js, jsval_t *args, int nargs) {
@@ -16190,6 +16578,8 @@ struct js *js_create(void *buf, size_t len) {
   jsval_t glob = js->scope;
   jsval_t object_proto = js_mkobj(js);
   setprop(js, object_proto, js_mkstr(js, "toString", 8), js_mkfun(builtin_object_toString));
+  setprop(js, object_proto, js_mkstr(js, "valueOf", 7), js_mkfun(builtin_object_valueOf));
+  setprop(js, object_proto, js_mkstr(js, "toLocaleString", 14), js_mkfun(builtin_object_toLocaleString));
   setprop(js, object_proto, js_mkstr(js, "hasOwnProperty", 14), js_mkfun(builtin_object_hasOwnProperty));
   
   jsval_t function_proto = js_mkobj(js);
@@ -16242,6 +16632,7 @@ struct js *js_create(void *buf, size_t len) {
   set_proto(js, string_proto, object_proto);
   setprop(js, string_proto, js_mkstr(js, "indexOf", 7), js_mkfun(builtin_string_indexOf));
   setprop(js, string_proto, js_mkstr(js, "substring", 9), js_mkfun(builtin_string_substring));
+  setprop(js, string_proto, js_mkstr(js, "substr", 6), js_mkfun(builtin_string_substr));
   setprop(js, string_proto, js_mkstr(js, "split", 5), js_mkfun(builtin_string_split));
   setprop(js, string_proto, js_mkstr(js, "slice", 5), js_mkfun(builtin_string_slice));
   setprop(js, string_proto, js_mkstr(js, "includes", 8), js_mkfun(builtin_string_includes));
@@ -16254,6 +16645,8 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, string_proto, js_mkstr(js, "charCodeAt", 10), js_mkfun(builtin_string_charCodeAt));
   setprop(js, string_proto, js_mkstr(js, "toLowerCase", 11), js_mkfun(builtin_string_toLowerCase));
   setprop(js, string_proto, js_mkstr(js, "toUpperCase", 11), js_mkfun(builtin_string_toUpperCase));
+  setprop(js, string_proto, js_mkstr(js, "toLocaleLowerCase", 17), js_mkfun(builtin_string_toLowerCase));
+  setprop(js, string_proto, js_mkstr(js, "toLocaleUpperCase", 17), js_mkfun(builtin_string_toUpperCase));
   setprop(js, string_proto, js_mkstr(js, "trim", 4), js_mkfun(builtin_string_trim));
   setprop(js, string_proto, js_mkstr(js, "trimStart", 9), js_mkfun(builtin_string_trimStart));
   setprop(js, string_proto, js_mkstr(js, "trimEnd", 7), js_mkfun(builtin_string_trimEnd));
@@ -16327,7 +16720,34 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, date_proto, js_mkstr(js, "getSeconds", 10), js_mkfun(builtin_Date_getSeconds));
   setprop(js, date_proto, js_mkstr(js, "getMilliseconds", 15), js_mkfun(builtin_Date_getMilliseconds));
   setprop(js, date_proto, js_mkstr(js, "getDay", 6), js_mkfun(builtin_Date_getDay));
+  setprop(js, date_proto, js_mkstr(js, "getTimezoneOffset", 17), js_mkfun(builtin_Date_getTimezoneOffset));
+  setprop(js, date_proto, js_mkstr(js, "getUTCFullYear", 14), js_mkfun(builtin_Date_getUTCFullYear));
+  setprop(js, date_proto, js_mkstr(js, "getUTCMonth", 11), js_mkfun(builtin_Date_getUTCMonth));
+  setprop(js, date_proto, js_mkstr(js, "getUTCDate", 10), js_mkfun(builtin_Date_getUTCDate));
+  setprop(js, date_proto, js_mkstr(js, "getUTCHours", 11), js_mkfun(builtin_Date_getUTCHours));
+  setprop(js, date_proto, js_mkstr(js, "getUTCMinutes", 13), js_mkfun(builtin_Date_getUTCMinutes));
+  setprop(js, date_proto, js_mkstr(js, "getUTCSeconds", 13), js_mkfun(builtin_Date_getUTCSeconds));
+  setprop(js, date_proto, js_mkstr(js, "getUTCMilliseconds", 18), js_mkfun(builtin_Date_getUTCMilliseconds));
+  setprop(js, date_proto, js_mkstr(js, "getUTCDay", 9), js_mkfun(builtin_Date_getUTCDay));
+  setprop(js, date_proto, js_mkstr(js, "setTime", 7), js_mkfun(builtin_Date_setTime));
+  setprop(js, date_proto, js_mkstr(js, "setMilliseconds", 15), js_mkfun(builtin_Date_setMilliseconds));
+  setprop(js, date_proto, js_mkstr(js, "setSeconds", 10), js_mkfun(builtin_Date_setSeconds));
+  setprop(js, date_proto, js_mkstr(js, "setMinutes", 10), js_mkfun(builtin_Date_setMinutes));
+  setprop(js, date_proto, js_mkstr(js, "setHours", 8), js_mkfun(builtin_Date_setHours));
+  setprop(js, date_proto, js_mkstr(js, "setDate", 7), js_mkfun(builtin_Date_setDate));
+  setprop(js, date_proto, js_mkstr(js, "setMonth", 8), js_mkfun(builtin_Date_setMonth));
+  setprop(js, date_proto, js_mkstr(js, "setFullYear", 11), js_mkfun(builtin_Date_setFullYear));
+  setprop(js, date_proto, js_mkstr(js, "setUTCMilliseconds", 18), js_mkfun(builtin_Date_setUTCMilliseconds));
+  setprop(js, date_proto, js_mkstr(js, "setUTCSeconds", 13), js_mkfun(builtin_Date_setUTCSeconds));
+  setprop(js, date_proto, js_mkstr(js, "setUTCMinutes", 13), js_mkfun(builtin_Date_setUTCMinutes));
+  setprop(js, date_proto, js_mkstr(js, "setUTCHours", 11), js_mkfun(builtin_Date_setUTCHours));
+  setprop(js, date_proto, js_mkstr(js, "setUTCDate", 10), js_mkfun(builtin_Date_setUTCDate));
+  setprop(js, date_proto, js_mkstr(js, "setUTCMonth", 11), js_mkfun(builtin_Date_setUTCMonth));
+  setprop(js, date_proto, js_mkstr(js, "setUTCFullYear", 14), js_mkfun(builtin_Date_setUTCFullYear));
+  setprop(js, date_proto, js_mkstr(js, "valueOf", 7), js_mkfun(builtin_Date_valueOf));
   setprop(js, date_proto, js_mkstr(js, "toISOString", 11), js_mkfun(builtin_Date_toISOString));
+  setprop(js, date_proto, js_mkstr(js, "toUTCString", 11), js_mkfun(builtin_Date_toUTCString));
+  setprop(js, date_proto, js_mkstr(js, "toGMTString", 11), js_mkfun(builtin_Date_toUTCString));
   setprop(js, date_proto, js_mkstr(js, "toString", 8), js_mkfun(builtin_Date_toString));
   
   jsval_t regexp_proto = js_mkobj(js);
@@ -16535,6 +16955,7 @@ struct js *js_create(void *buf, size_t len) {
   set_proto(js, date_ctor_obj, function_proto);
   setprop(js, date_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_Date));
   setprop(js, date_ctor_obj, js_mkstr(js, "now", 3), js_mkfun(builtin_Date_now));
+  setprop(js, date_ctor_obj, js_mkstr(js, "UTC", 3), js_mkfun(builtin_Date_UTC));
   setprop(js, date_ctor_obj, js_mkstr(js, "prototype", 9), date_proto);
   setprop(js, glob, js_mkstr(js, "Date", 4), mkval(T_FUNC, vdata(date_ctor_obj)));
   
