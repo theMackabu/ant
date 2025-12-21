@@ -353,6 +353,21 @@ static bool is_err(jsval_t v) { return vtype(v) == T_ERR; }
 static bool is_unary(uint8_t tok) { return (tok >= TOK_POSTINC && tok <= TOK_UMINUS) || tok == TOK_NOT || tok == TOK_TILDA || tok == TOK_TYPEOF || tok == TOK_VOID; }
 static bool is_assign(uint8_t tok) { return (tok >= TOK_ASSIGN && tok <= TOK_OR_ASSIGN); }
 
+static uint32_t js_to_uint32(double d) {
+  if (!isfinite(d) || d == 0) return 0;
+  double sign = (d < 0) ? -1.0 : 1.0;
+  double posInt = sign * floor(fabs(d));
+  double val = fmod(posInt, 4294967296.0);
+  if (val < 0) val += 4294967296.0;
+  return (uint32_t) val;
+}
+
+static int32_t js_to_int32(double d) {
+  uint32_t uint32 = js_to_uint32(d);
+  if (uint32 >= 2147483648U) return (int32_t)(uint32 - 4294967296.0);
+  return (int32_t) uint32;
+}
+
 typedef struct {
   const char *code;
   jsoff_t clen, pos;
@@ -1883,7 +1898,9 @@ static bool bigint_is_zero(struct js *js, jsval_t v);
 
 bool js_truthy(struct js *js, jsval_t v) {
   uint8_t t = vtype(v);
-  return (t == T_BOOL && vdata(v) != 0) || (t == T_NUM && tod(v) != 0.0) ||
+  double d;
+  return (t == T_BOOL && vdata(v) != 0) || 
+         (t == T_NUM && (d = tod(v), d != 0.0 && !isnan(d))) ||
          (t == T_OBJ || t == T_FUNC || t == T_ARR) || (t == T_STR && vstrlen(js, v) > 0) ||
          (t == T_BIGINT && !bigint_is_zero(js, v));
 }
@@ -4885,15 +4902,15 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
     case TOK_PLUS:    return tov(a + b);
     case TOK_MINUS:   return tov(a - b);
     case TOK_EXP:     return tov(pow(a, b));
-    case TOK_XOR:     return tov((double)((long) a ^ (long) b));
-    case TOK_AND:     return tov((double)((long) a & (long) b));
-    case TOK_OR:      return tov((double)((long) a | (long) b));
+    case TOK_XOR:     return tov((double)(js_to_int32(a) ^ js_to_int32(b)));
+    case TOK_AND:     return tov((double)(js_to_int32(a) & js_to_int32(b)));
+    case TOK_OR:      return tov((double)(js_to_int32(a) | js_to_int32(b)));
     case TOK_UMINUS:  return tov(-b);
     case TOK_UPLUS:   return tov(b);
-    case TOK_TILDA:   return tov((double)(~(long) b));
-    case TOK_SHL:     return tov((double)((long) a << (long) b));
-    case TOK_SHR:     return tov((double)((long) a >> (long) b));
-    case TOK_ZSHR:    return tov((double)(((uint32_t)(int32_t) a) >> ((uint32_t)(int32_t) b & 0x1f)));
+    case TOK_TILDA:   return tov((double)(~js_to_int32(b)));
+    case TOK_SHL:     return tov((double)(js_to_int32(a) << (js_to_uint32(b) & 0x1f)));
+    case TOK_SHR:     return tov((double)(js_to_int32(a) >> (js_to_uint32(b) & 0x1f)));
+    case TOK_ZSHR:    return tov((double)(js_to_uint32(a) >> (js_to_uint32(b) & 0x1f)));
     case TOK_DOT:     return do_dot_op(js, l, r);
     case TOK_OPTIONAL_CHAIN: return do_optional_chain_op(js, l, r);
     case TOK_LT:      return mkval(T_BOOL, a < b);
@@ -12505,13 +12522,22 @@ static jsval_t builtin_string_indexOf(struct js *js, jsval_t *args, int nargs) {
 
   jsoff_t str_len, str_off = vstr(js, str, &str_len);
   jsoff_t search_len, search_off = vstr(js, search, &search_len);
-  if (search_len == 0) return tov(0);
-  if (search_len > str_len) return tov(-1);
+  
+  jsoff_t start = 0;
+  if (nargs >= 2 && vtype(args[1]) == T_NUM) {
+    double pos = tod(args[1]);
+    if (pos < 0) pos = 0;
+    if (pos > str_len) pos = str_len;
+    start = (jsoff_t) pos;
+  }
+  
+  if (search_len == 0) return tov((double) start);
+  if (start + search_len > str_len) return tov(-1);
 
   const char *str_ptr = (char *) &js->mem[str_off];
   const char *search_ptr = (char *) &js->mem[search_off];
 
-  for (jsoff_t i = 0; i <= str_len - search_len; i++) {
+  for (jsoff_t i = start; i <= str_len - search_len; i++) {
     if (memcmp(str_ptr + i, search_ptr, search_len) == 0) return tov((double) i);
   }
   return tov(-1);
@@ -13490,13 +13516,24 @@ static jsval_t builtin_string_lastIndexOf(struct js *js, jsval_t *args, int narg
 
   jsoff_t str_len, str_off = vstr(js, str, &str_len);
   jsoff_t search_len, search_off = vstr(js, search, &search_len);
-  if (search_len == 0) return tov((double) str_len);
+  
+  jsoff_t max_start = str_len;
+  if (nargs >= 2 && vtype(args[1]) == T_NUM) {
+    double pos = tod(args[1]);
+    if (isnan(pos)) pos = (double) str_len;
+    if (pos < 0) pos = 0;
+    if (pos > str_len) pos = str_len;
+    max_start = (jsoff_t) pos;
+  }
+  
+  if (search_len == 0) return tov((double) (max_start > str_len ? str_len : max_start));
   if (search_len > str_len) return tov(-1);
 
   const char *str_ptr = (char *) &js->mem[str_off];
   const char *search_ptr = (char *) &js->mem[search_off];
 
-  for (jsoff_t i = str_len - search_len + 1; i > 0; i--) {
+  jsoff_t start = (max_start + search_len > str_len) ? str_len - search_len : max_start;
+  for (jsoff_t i = start + 1; i > 0; i--) {
     if (memcmp(str_ptr + i - 1, search_ptr, search_len) == 0) return tov((double)(i - 1));
   }
   return tov(-1);
