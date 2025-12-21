@@ -347,8 +347,8 @@ static bool is_space(int c) { return c == ' ' || c == '\r' || c == '\n' || c == 
 static bool is_digit(int c) { return c >= '0' && c <= '9'; }
 static bool is_xdigit(int c) { return is_digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); }
 static bool is_alpha(int c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }
-static bool is_ident_begin(int c) { return c == '_' || c == '$' || is_alpha(c); }
-static bool is_ident_continue(int c) { return c == '_' || c == '$' || is_alpha(c) || is_digit(c); }
+static bool is_ident_begin(int c) { return c == '_' || c == '$' || is_alpha(c) || (c & 0x80); }
+static bool is_ident_continue(int c) { return c == '_' || c == '$' || is_alpha(c) || is_digit(c) || (c & 0x80); }
 static bool is_err(jsval_t v) { return vtype(v) == T_ERR; }
 static bool is_unary(uint8_t tok) { return (tok >= TOK_POSTINC && tok <= TOK_UMINUS) || tok == TOK_NOT || tok == TOK_TILDA || tok == TOK_TYPEOF || tok == TOK_VOID; }
 static bool is_assign(uint8_t tok) { return (tok >= TOK_ASSIGN && tok <= TOK_OR_ASSIGN); }
@@ -3093,7 +3093,23 @@ static uint8_t next(struct js *js) {
     case ';': TOK(TOK_SEMICOLON, 1);
     case ',': TOK(TOK_COMMA, 1);
     case '!': if (LOOK(1, '=') && LOOK(2, '=')) TOK(TOK_SNE, 3); if (LOOK(1, '=')) TOK(TOK_NE, 2); TOK(TOK_NOT, 1);
-    case '.': if (LOOK(1, '.') && LOOK(2, '.')) TOK(TOK_REST, 3); TOK(TOK_DOT, 1);
+    
+    case '.':
+      if (LOOK(1, '.') && LOOK(2, '.')) TOK(TOK_REST, 3);
+      if (js->toff + 1 < js->clen && is_digit(buf[1])) {
+        char clean[64];
+        jsoff_t ci = 0, numlen = 0;
+        while (js->toff + numlen < js->clen && (is_digit(buf[numlen]) || buf[numlen] == '.' || buf[numlen] == 'e' || buf[numlen] == 'E' || buf[numlen] == '+' || buf[numlen] == '-' || buf[numlen] == '_') && ci < 63) {
+          if (numlen > 0 && (buf[numlen] == '+' || buf[numlen] == '-') && buf[numlen-1] != 'e' && buf[numlen-1] != 'E') break;
+          if (buf[numlen] != '_') clean[ci++] = buf[numlen];
+          numlen++;
+        }
+        clean[ci] = '\0';
+        js->tval = tov(strtod(clean, NULL));
+        TOK(TOK_NUMBER, numlen);
+      }
+      TOK(TOK_DOT, 1);
+      
     case '~': TOK(TOK_TILDA, 1);
     case '-': if (LOOK(1, '-')) TOK(TOK_POSTDEC, 2); if (LOOK(1, '=')) TOK(TOK_MINUS_ASSIGN, 2); TOK(TOK_MINUS, 1);
     case '+': if (LOOK(1, '+')) TOK(TOK_POSTINC, 2); if (LOOK(1, '=')) TOK(TOK_PLUS_ASSIGN, 2); TOK(TOK_PLUS, 1);
@@ -5144,6 +5160,12 @@ static jsval_t js_arr_literal(struct js *js) {
   js->consumed = 1;
   jsoff_t idx = 0;
   while (next(js) != TOK_RBRACKET) {
+    if (next(js) == TOK_COMMA) {
+      idx++;
+      js->consumed = 1;
+      continue;
+    }
+    
     bool is_spread = (next(js) == TOK_REST);
     if (is_spread) js->consumed = 1;
 
