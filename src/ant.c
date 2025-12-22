@@ -5250,6 +5250,19 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
     a = NAN;
   } else if (vtype(l) == T_ARR) {
     a = NAN;
+  } else if (vtype(l) == T_OBJ) {
+    jsoff_t vo_off = lkp_proto(js, l, "valueOf", 7);
+    if (vo_off != 0) {
+      jsval_t vo_fn = resolveprop(js, mkval(T_PROP, vo_off));
+      if (vtype(vo_fn) == T_FUNC || vtype(vo_fn) == T_CFUNC) {
+        jsval_t saved_this = js->this_val;
+        js->this_val = l;
+        jsval_t prim = call_js_with_args(js, vo_fn, NULL, 0);
+        js->this_val = saved_this;
+        if (vtype(prim) == T_NUM) a = tod(prim);
+        else a = NAN;
+      } else a = NAN;
+    } else a = NAN;
   } else {
     a = NAN;
   }
@@ -5280,6 +5293,19 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
     b = NAN;
   } else if (vtype(r) == T_ARR) {
     b = NAN;
+  } else if (vtype(r) == T_OBJ) {
+    jsoff_t vo_off = lkp_proto(js, r, "valueOf", 7);
+    if (vo_off != 0) {
+      jsval_t vo_fn = resolveprop(js, mkval(T_PROP, vo_off));
+      if (vtype(vo_fn) == T_FUNC || vtype(vo_fn) == T_CFUNC) {
+        jsval_t saved_this = js->this_val;
+        js->this_val = r;
+        jsval_t prim = call_js_with_args(js, vo_fn, NULL, 0);
+        js->this_val = saved_this;
+        if (vtype(prim) == T_NUM) b = tod(prim);
+        else b = NAN;
+      } else b = NAN;
+    } else b = NAN;
   } else {
     b = NAN;
   }
@@ -10569,7 +10595,7 @@ static jsval_t builtin_Date_toISOString(struct js *js, jsval_t *args, int nargs)
   (void) args;
   (void) nargs;
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return js_mkerr(js, "Invalid Date");
+  if (isnan(ms)) return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid time value");
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = gmtime(&t);
   int millis = (int)fmod(ms, 1000.0);
