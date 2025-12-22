@@ -423,6 +423,7 @@ static jsval_t js_regex_literal(struct js *js);
 static jsval_t js_try(struct js *js);
 static jsval_t js_switch(struct js *js);
 static jsval_t do_op(struct js *, uint8_t op, jsval_t l, jsval_t r);
+static double js_to_number(struct js *js, jsval_t arg);
 static jsval_t do_instanceof(struct js *js, jsval_t l, jsval_t r);
 static jsval_t do_in(struct js *js, jsval_t l, jsval_t r);
 static jsval_t resolveprop(struct js *js, jsval_t v);
@@ -5137,6 +5138,8 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
     bool eq = false;
     if ((vtype(l) == T_UNDEF && vtype(r) == T_NULL) || (vtype(l) == T_NULL && vtype(r) == T_UNDEF)) {
       eq = true;
+    } else if (vtype(l) == T_NULL || vtype(r) == T_NULL || vtype(l) == T_UNDEF || vtype(r) == T_UNDEF) {
+      eq = false;
     } else if (vtype(l) == vtype(r)) {
       if (vtype(l) == T_STR) {
         jsoff_t n1, off1 = vstr(js, l, &n1);
@@ -5163,6 +5166,19 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
         jsval_t num_as_bigint = mkbigint(js, buf, strlen(buf), neg);
         eq = bigint_compare(js, bigint_val, num_as_bigint) == 0;
       }
+    } else if (vtype(l) == T_BOOL) {
+      double lnum = vdata(l) ? 1.0 : 0.0;
+      jsval_t result = do_op(js, op, tov(lnum), r);
+      return result;
+    } else if (vtype(r) == T_BOOL) {
+      double rnum = vdata(r) ? 1.0 : 0.0;
+      jsval_t result = do_op(js, op, l, tov(rnum));
+      return result;
+    } else if ((vtype(l) == T_NUM && vtype(r) == T_STR) ||
+               (vtype(l) == T_STR && vtype(r) == T_NUM)) {
+      double lnum = js_to_number(js, l);
+      double rnum = js_to_number(js, r);
+      eq = lnum == rnum;
     }
     return mkval(T_BOOL, op == TOK_EQ ? eq : !eq);
   }
@@ -5212,7 +5228,9 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
     return do_string_op(js, op, l_str, r_str);
   }
   if (vtype(l) == T_STR && vtype(r) == T_STR) {
-    return do_string_op(js, op, l, r);
+    if (op == TOK_PLUS || op == TOK_LT || op == TOK_LE || op == TOK_GT || op == TOK_GE) {
+      return do_string_op(js, op, l, r);
+    }
   }
   
   double a = 0.0, b = 0.0;
@@ -5226,8 +5244,15 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
     size_t copy_len = slen < sizeof(temp) - 1 ? slen : sizeof(temp) - 1;
     memcpy(temp, &js->mem[off], copy_len);
     temp[copy_len] = '\0';
-    a = strtod(temp, &endptr);
-    if (endptr == temp || *endptr != '\0') a = NAN;
+    char *p = temp;
+    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+    if (*p == '\0') {
+      a = 0.0;
+    } else {
+      a = strtod(p, &endptr);
+      while (*endptr == ' ' || *endptr == '\t' || *endptr == '\n' || *endptr == '\r') endptr++;
+      if (endptr == p || *endptr != '\0') a = NAN;
+    }
   } else if (vtype(l) == T_BOOL) {
     a = vdata(l) ? 1.0 : 0.0;
   } else if (vtype(l) == T_NULL) {
@@ -5249,8 +5274,15 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
     size_t copy_len = slen < sizeof(temp) - 1 ? slen : sizeof(temp) - 1;
     memcpy(temp, &js->mem[off], copy_len);
     temp[copy_len] = '\0';
-    b = strtod(temp, &endptr);
-    if (endptr == temp || *endptr != '\0') b = NAN;
+    char *p = temp;
+    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+    if (*p == '\0') {
+      b = 0.0;
+    } else {
+      b = strtod(p, &endptr);
+      while (*endptr == ' ' || *endptr == '\t' || *endptr == '\n' || *endptr == '\r') endptr++;
+      if (endptr == p || *endptr != '\0') b = NAN;
+    }
   } else if (vtype(r) == T_BOOL) {
     b = vdata(r) ? 1.0 : 0.0;
   } else if (vtype(r) == T_NULL) {
@@ -15104,7 +15136,10 @@ static jsval_t builtin_string_charAt(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1 || vtype(args[0]) != T_NUM) return js_mkstr(js, "", 0);
   
   double idx_d = tod(args[0]);
-  if (idx_d < 0 || idx_d != (double)(long)idx_d) return js_mkstr(js, "", 0);
+  if (isnan(idx_d)) idx_d = 0;
+  else if (idx_d < 0) idx_d = -floor(-idx_d);
+  else idx_d = floor(idx_d);
+  if (idx_d < 0) return js_mkstr(js, "", 0);
   
   jsoff_t idx = (jsoff_t) idx_d;
   jsoff_t str_len = offtolen(loadoff(js, (jsoff_t) vdata(str)));
