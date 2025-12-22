@@ -3854,7 +3854,7 @@ static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
   if (t == T_ARR && streq(ptr, plen, "length", 6)) {
     jsoff_t off = lkp(js, l, "length", 6);
     if (off == 0) return tov(0);
-    return resolveprop(js, mkval(T_PROP, off));
+    return mkval(T_PROP, off);
   }
   
   if (t == T_STR || t == T_NUM || t == T_BOOL || t == T_BIGINT) {
@@ -13030,6 +13030,66 @@ static jsval_t builtin_array_toString(struct js *js, jsval_t *args, int nargs) {
   return result;
 }
 
+static jsval_t builtin_array_toLocaleString(struct js *js, jsval_t *args, int nargs) {
+  (void) args;
+  (void) nargs;
+  jsval_t arr = js->this_val;
+  if (vtype(arr) != T_ARR) return js_mkerr(js, "toLocaleString called on non-array");
+  
+  jsoff_t len_off = lkp(js, arr, "length", 6);
+  jsoff_t len = 0;
+  if (len_off != 0) {
+    jsval_t len_val = resolveprop(js, mkval(T_PROP, len_off));
+    if (vtype(len_val) == T_NUM) len = (jsoff_t)tod(len_val);
+  }
+  if (len == 0) return js_mkstr(js, "", 0);
+  
+  char *result = NULL;
+  size_t result_len = 0, result_cap = 256;
+  result = (char *)ANT_GC_MALLOC(result_cap);
+  if (!result) return js_mkerr(js, "oom");
+  
+  for (jsoff_t i = 0; i < len; i++) {
+    if (i > 0) {
+      if (result_len + 1 >= result_cap) {
+        result_cap *= 2;
+        char *new_result = (char *)ANT_GC_MALLOC(result_cap);
+        if (!new_result) { ANT_GC_FREE(result); return js_mkerr(js, "oom"); }
+        memcpy(new_result, result, result_len);
+        ANT_GC_FREE(result);
+        result = new_result;
+      }
+      result[result_len++] = ',';
+    }
+    
+    char idx_str[16];
+    snprintf(idx_str, sizeof(idx_str), "%u", (unsigned)i);
+    jsoff_t elem_off = lkp(js, arr, idx_str, strlen(idx_str));
+    if (elem_off == 0) continue;
+    
+    jsval_t elem = resolveprop(js, mkval(T_PROP, elem_off));
+    if (vtype(elem) == T_NULL || vtype(elem) == T_UNDEF) continue;
+    
+    char buf[64];
+    size_t elem_len = tostr(js, elem, buf, sizeof(buf));
+    
+    if (result_len + elem_len >= result_cap) {
+      while (result_len + elem_len >= result_cap) result_cap *= 2;
+      char *new_result = (char *)ANT_GC_MALLOC(result_cap);
+      if (!new_result) { ANT_GC_FREE(result); return js_mkerr(js, "oom"); }
+      memcpy(new_result, result, result_len);
+      ANT_GC_FREE(result);
+      result = new_result;
+    }
+    memcpy(result + result_len, buf, elem_len);
+    result_len += elem_len;
+  }
+  
+  jsval_t ret = js_mkstr(js, result, result_len);
+  ANT_GC_FREE(result);
+  return ret;
+}
+
 static jsval_t builtin_Array_isArray(struct js *js, jsval_t *args, int nargs) {
   (void) js;
   if (nargs == 0) return mkval(T_BOOL, 0);
@@ -13229,7 +13289,23 @@ static jsval_t builtin_string_split(struct js *js, jsval_t *args, int nargs) {
     js_regex_to_posix(pattern_buf, pattern_len, posix_pattern, sizeof(posix_pattern));
 
     regex_t regex;
-    if (regcomp(&regex, posix_pattern, REG_EXTENDED) != 0) goto return_whole;
+    if (regcomp(&regex, posix_pattern, REG_EXTENDED) != 0) {
+      if (pattern_len == 0 || (pattern_len == 4 && memcmp(pattern_buf, "(?:)", 4) == 0)) {
+        jsoff_t idx = 0;
+        for (jsoff_t i = 0; i < str_len && idx < limit; i++) {
+          char idxstr[16];
+          snprintf(idxstr, sizeof(idxstr), "%u", (unsigned)idx);
+          jsval_t key = js_mkstr(js, idxstr, strlen(idxstr));
+          jsval_t part = js_mkstr(js, str_ptr + i, 1);
+          setprop(js, arr, key, part);
+          idx++;
+        }
+        jsval_t len_key = js_mkstr(js, "length", 6);
+        setprop(js, arr, len_key, tov((double)idx));
+        return mkval(T_ARR, vdata(arr));
+      }
+      goto return_whole;
+    }
 
     char *str_buf = (char *)ANT_GC_MALLOC(str_len + 1);
     if (!str_buf) { regfree(&regex); return js_mkerr(js, "oom"); }
@@ -14140,6 +14216,29 @@ static jsval_t builtin_string_at(struct js *js, jsval_t *args, int nargs) {
   jsoff_t str_off = (jsoff_t) vdata(str) + sizeof(jsoff_t);
   char ch = js->mem[str_off + idx];
   return js_mkstr(js, &ch, 1);
+}
+
+static jsval_t builtin_string_localeCompare(struct js *js, jsval_t *args, int nargs) {
+  jsval_t str = unwrap_primitive(js, js->this_val);
+  if (vtype(str) != T_STR) return js_mkerr(js, "localeCompare called on non-string");
+  if (nargs < 1) return tov(0);
+  
+  jsval_t that = args[0];
+  if (vtype(that) != T_STR) {
+    char buf[64];
+    size_t n = tostr(js, that, buf, sizeof(buf));
+    that = js_mkstr(js, buf, n);
+  }
+  
+  jsoff_t str_len, str_off = vstr(js, str, &str_len);
+  jsoff_t that_len, that_off = vstr(js, that, &that_len);
+  const char *str_ptr = (char *)&js->mem[str_off];
+  const char *that_ptr = (char *)&js->mem[that_off];
+  
+  int result = strcoll(str_ptr, that_ptr);
+  if (result < 0) return tov(-1);
+  if (result > 0) return tov(1);
+  return tov(0);
 }
 
 static jsval_t builtin_string_lastIndexOf(struct js *js, jsval_t *args, int nargs) {
@@ -16900,6 +16999,7 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, array_proto, js_mkstr(js, "values", 6), js_mkfun(builtin_array_values));
   setprop(js, array_proto, js_mkstr(js, "entries", 7), js_mkfun(builtin_array_entries));
   setprop(js, array_proto, js_mkstr(js, "toString", 8), js_mkfun(builtin_array_toString));
+  setprop(js, array_proto, js_mkstr(js, "toLocaleString", 14), js_mkfun(builtin_array_toLocaleString));
   
   jsval_t string_proto = js_mkobj(js);
   set_proto(js, string_proto, object_proto);
@@ -16931,6 +17031,7 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, string_proto, js_mkstr(js, "lastIndexOf", 11), js_mkfun(builtin_string_lastIndexOf));
   setprop(js, string_proto, js_mkstr(js, "concat", 6), js_mkfun(builtin_string_concat));
   setprop(js, string_proto, js_mkstr(js, "search", 6), js_mkfun(builtin_string_search));
+  setprop(js, string_proto, js_mkstr(js, "localeCompare", 13), js_mkfun(builtin_string_localeCompare));
   setprop(js, string_proto, js_mkstr(js, "valueOf", 7), js_mkfun(builtin_string_valueOf));
   setprop(js, string_proto, js_mkstr(js, "toString", 8), js_mkfun(builtin_string_toString));
 
@@ -17147,6 +17248,7 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, arr_ctor_obj, js_mkstr(js, "isArray", 7), js_mkfun(builtin_Array_isArray));
   setprop(js, arr_ctor_obj, js_mkstr(js, "from", 4), js_mkfun(builtin_Array_from));
   setprop(js, arr_ctor_obj, js_mkstr(js, "of", 2), js_mkfun(builtin_Array_of));
+  setprop(js, arr_ctor_obj, js_mkstr(js, "length", 6), tov(1));
   setprop(js, glob, js_mkstr(js, "Array", 5), mkval(T_FUNC, vdata(arr_ctor_obj)));
 
   jsval_t map_ctor_obj = mkobj(js, 0);
