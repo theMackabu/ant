@@ -624,7 +624,7 @@ static jsval_t resolveprop(struct js *js, jsval_t v);
 
 static jsval_t unwrap_primitive(struct js *js, jsval_t val) {
   if (vtype(val) != T_OBJ) return val;
-  jsoff_t prim_off = lkp(js, val, "__primitive_value__", 18);
+  jsoff_t prim_off = lkp(js, val, "__primitive_value__", 19);
   if (prim_off == 0) return val;
   return resolveprop(js, mkval(T_PROP, prim_off));
 }
@@ -8887,11 +8887,24 @@ static jsval_t js_stmt(struct js *js) {
 }
 
 static jsval_t builtin_String(struct js *js, jsval_t *args, int nargs) {
-  if (nargs == 0) return js_mkstr(js, "", 0);
-  jsval_t arg = args[0];
-  if (vtype(arg) == T_STR) return arg;
-  const char *str = js_str(js, arg);
-  return js_mkstr(js, str, strlen(str));
+  jsval_t sval;
+  if (nargs == 0) {
+    sval = js_mkstr(js, "", 0);
+  } else {
+    jsval_t arg = args[0];
+    if (vtype(arg) == T_STR) {
+      sval = arg;
+    } else {
+      const char *str = js_str(js, arg);
+      sval = js_mkstr(js, str, strlen(str));
+    }
+  }
+  if (vtype(js->this_val) == T_OBJ && lkp(js, js->this_val, "__primitive_value__", 19) == 0) {
+    setprop(js, js->this_val, js_mkstr(js, "__primitive_value__", 19), sval);
+    jsval_t proto = get_ctor_proto(js, "String", 6);
+    if (vtype(proto) == T_OBJ) set_proto(js, js->this_val, proto);
+  }
+  return sval;
 }
 
 static jsval_t builtin_Number_isNaN(struct js *js, jsval_t *args, int nargs) {
@@ -8971,33 +8984,54 @@ static jsval_t builtin_Number_isSafeInteger(struct js *js, jsval_t *args, int na
 }
 
 static jsval_t builtin_Number(struct js *js, jsval_t *args, int nargs) {
-  if (nargs == 0) return tov(0.0);
-  jsval_t arg = args[0];
-  
-  if (vtype(arg) == T_NUM) return arg;
-  if (vtype(arg) == T_BOOL) {
-    return tov(vdata(arg) ? 1.0 : 0.0);
-  } else if (vtype(arg) == T_STR) {
-    jsoff_t len;
-    jsoff_t off = vstr(js, arg, &len);
-    const char *str = (char *) &js->mem[off];
-    while (*str == ' ' || *str == '\t' || *str == '\n' || *str == '\r') str++;
-    if (*str == '\0') return tov(0.0);
-    char *end;
-    double val = strtod(str, &end);
-    while (*end == ' ' || *end == '\t' || *end == '\n' || *end == '\r') end++;
-    if (end == str || *end != '\0') return tov(NAN);
-    return tov(val);
-  } else if (vtype(arg) == T_NULL || vtype(arg) == T_UNDEF) {
-    return tov(0.0);
+  jsval_t nval;
+  if (nargs == 0) {
+    nval = tov(0.0);
+  } else {
+    jsval_t arg = args[0];
+    if (vtype(arg) == T_NUM) {
+      nval = arg;
+    } else if (vtype(arg) == T_BOOL) {
+      nval = tov(vdata(arg) ? 1.0 : 0.0);
+    } else if (vtype(arg) == T_STR) {
+      jsoff_t len;
+      jsoff_t off = vstr(js, arg, &len);
+      const char *str = (char *) &js->mem[off];
+      while (*str == ' ' || *str == '\t' || *str == '\n' || *str == '\r') str++;
+      if (*str == '\0') {
+        nval = tov(0.0);
+      } else {
+        char *end;
+        double val = strtod(str, &end);
+        while (*end == ' ' || *end == '\t' || *end == '\n' || *end == '\r') end++;
+        if (end == str || *end != '\0') {
+          nval = tov(NAN);
+        } else {
+          nval = tov(val);
+        }
+      }
+    } else if (vtype(arg) == T_NULL || vtype(arg) == T_UNDEF) {
+      nval = tov(0.0);
+    } else {
+      nval = tov(0.0);
+    }
   }
-  
-  return tov(0.0);
+  if (vtype(js->this_val) == T_OBJ && lkp(js, js->this_val, "__primitive_value__", 19) == 0) {
+    setprop(js, js->this_val, js_mkstr(js, "__primitive_value__", 19), nval);
+    jsval_t proto = get_ctor_proto(js, "Number", 6);
+    if (vtype(proto) == T_OBJ) set_proto(js, js->this_val, proto);
+  }
+  return nval;
 }
 
 static jsval_t builtin_Boolean(struct js *js, jsval_t *args, int nargs) {
-  if (nargs == 0) return mkval(T_BOOL, 0);
-  return mkval(T_BOOL, js_truthy(js, args[0]) ? 1 : 0);
+  jsval_t bval = mkval(T_BOOL, nargs > 0 && js_truthy(js, args[0]) ? 1 : 0);
+  if (vtype(js->this_val) == T_OBJ && lkp(js, js->this_val, "__primitive_value__", 19) == 0) {
+    setprop(js, js->this_val, js_mkstr(js, "__primitive_value__", 19), bval);
+    jsval_t proto = get_ctor_proto(js, "Boolean", 7);
+    if (vtype(proto) == T_OBJ) set_proto(js, js->this_val, proto);
+  }
+  return bval;
 }
 
 static jsval_t builtin_Object(struct js *js, jsval_t *args, int nargs) {
@@ -12966,6 +13000,17 @@ static jsval_t builtin_string_split(struct js *js, jsval_t *args, int nargs) {
   jsval_t arr = mkarr(js);
 
   if (is_err(arr)) return arr;
+
+  uint32_t limit = UINT32_MAX;
+  if (nargs >= 2 && vtype(args[1]) == T_NUM) {
+    double d = tod(args[1]);
+    if (d < 0) d = 0;
+    limit = (uint32_t)(d > UINT32_MAX ? UINT32_MAX : d);
+  }
+  if (limit == 0) {
+    setprop(js, arr, js_mkstr(js, "length", 6), tov(0));
+    return mkval(T_ARR, vdata(arr));
+  }
   if (nargs == 0) goto return_whole;
 
   jsval_t sep_arg = args[0];
@@ -12994,7 +13039,7 @@ static jsval_t builtin_string_split(struct js *js, jsval_t *args, int nargs) {
 
     jsoff_t idx = 0, start = 0;
     regmatch_t match;
-    while (regexec(&regex, str_buf + start, 1, &match, 0) == 0) {
+    while (idx < limit && regexec(&regex, str_buf + start, 1, &match, 0) == 0) {
       jsoff_t match_start = start + (jsoff_t)match.rm_so;
       jsoff_t match_end = start + (jsoff_t)match.rm_eo;
       char idxstr[16];
@@ -13007,7 +13052,7 @@ static jsval_t builtin_string_split(struct js *js, jsval_t *args, int nargs) {
       if (match.rm_so == match.rm_eo) start++;
       if (start >= str_len) break;
     }
-    if (start <= str_len) {
+    if (idx < limit && start <= str_len) {
       char idxstr[16];
       snprintf(idxstr, sizeof(idxstr), "%u", (unsigned)idx);
       jsval_t key = js_mkstr(js, idxstr, strlen(idxstr));
@@ -13029,7 +13074,7 @@ static jsval_t builtin_string_split(struct js *js, jsval_t *args, int nargs) {
   jsoff_t idx = 0, start = 0;
 
   if (sep_len == 0) {
-    for (jsoff_t i = 0; i < str_len; i++) {
+    for (jsoff_t i = 0; i < str_len && idx < limit; i++) {
       char idxstr[16];
       snprintf(idxstr, sizeof(idxstr), "%u", (unsigned) idx);
       jsval_t key = js_mkstr(js, idxstr, strlen(idxstr));
@@ -13040,7 +13085,7 @@ static jsval_t builtin_string_split(struct js *js, jsval_t *args, int nargs) {
     goto set_length;
   }
 
-  for (jsoff_t i = 0; i <= str_len - sep_len; i++) {
+  for (jsoff_t i = 0; i <= str_len - sep_len && idx < limit; i++) {
     if (memcmp(str_ptr + i, sep_ptr, sep_len) != 0) continue;
     char idxstr[16];
     snprintf(idxstr, sizeof(idxstr), "%u", (unsigned) idx);
@@ -13051,7 +13096,7 @@ static jsval_t builtin_string_split(struct js *js, jsval_t *args, int nargs) {
     start = i + sep_len;
     i += sep_len - 1;
   }
-  if (start <= str_len) {
+  if (idx < limit && start <= str_len) {
     char idxstr[16];
     snprintf(idxstr, sizeof(idxstr), "%u", (unsigned) idx);
     jsval_t key = js_mkstr(js, idxstr, strlen(idxstr));
@@ -13066,8 +13111,12 @@ set_length:;
   return mkval(T_ARR, vdata(arr));
 
 return_whole:
-  setprop(js, arr, js_mkstr(js, "0", 1), str);
-  setprop(js, arr, js_mkstr(js, "length", 6), tov(1));
+  if (limit > 0) {
+    setprop(js, arr, js_mkstr(js, "0", 1), str);
+    setprop(js, arr, js_mkstr(js, "length", 6), tov(1));
+  } else {
+    setprop(js, arr, js_mkstr(js, "length", 6), tov(0));
+  }
   return mkval(T_ARR, vdata(arr));
 }
 
@@ -14118,11 +14167,22 @@ static jsval_t builtin_string_valueOf(struct js *js, jsval_t *args, int nargs) {
   return str;
 }
 
+static jsval_t builtin_string_toString(struct js *js, jsval_t *args, int nargs) {
+  return builtin_string_valueOf(js, args, nargs);
+}
+
 static jsval_t builtin_boolean_valueOf(struct js *js, jsval_t *args, int nargs) {
   (void) args; (void) nargs;
   jsval_t b = unwrap_primitive(js, js->this_val);
   if (vtype(b) != T_BOOL) return js_mkerr(js, "valueOf called on non-boolean");
   return b;
+}
+
+static jsval_t builtin_boolean_toString(struct js *js, jsval_t *args, int nargs) {
+  (void) args; (void) nargs;
+  jsval_t b = unwrap_primitive(js, js->this_val);
+  if (vtype(b) != T_BOOL) return js_mkerr(js, "toString called on non-boolean");
+  return vdata(b) ? js_mkstr(js, "true", 4) : js_mkstr(js, "false", 5);
 }
 
 static jsval_t builtin_parseInt(struct js *js, jsval_t *args, int nargs) {
@@ -16659,6 +16719,7 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, string_proto, js_mkstr(js, "concat", 6), js_mkfun(builtin_string_concat));
   setprop(js, string_proto, js_mkstr(js, "search", 6), js_mkfun(builtin_string_search));
   setprop(js, string_proto, js_mkstr(js, "valueOf", 7), js_mkfun(builtin_string_valueOf));
+  setprop(js, string_proto, js_mkstr(js, "toString", 8), js_mkfun(builtin_string_toString));
 
   jsval_t number_proto = js_mkobj(js);
   set_proto(js, number_proto, object_proto);
@@ -16671,6 +16732,7 @@ struct js *js_create(void *buf, size_t len) {
   jsval_t boolean_proto = js_mkobj(js);
   set_proto(js, boolean_proto, object_proto);
   setprop(js, boolean_proto, js_mkstr(js, "valueOf", 7), js_mkfun(builtin_boolean_valueOf));
+  setprop(js, boolean_proto, js_mkstr(js, "toString", 8), js_mkfun(builtin_boolean_toString));
   
   jsval_t bigint_proto = js_mkobj(js);
   set_proto(js, bigint_proto, object_proto);
@@ -17041,6 +17103,16 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, import_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_import));
   setprop(js, glob, js_mkstr(js, "import", 6), mkval(T_FUNC, vdata(import_obj)));
   setprop(js, glob, js_mkstr(js, "__esm_module_scope", 18), js_mkundef());
+  
+  setprop(js, object_proto, js_mkstr(js, "constructor", 11), mkval(T_FUNC, vdata(obj_func_obj)));
+  setprop(js, function_proto, js_mkstr(js, "constructor", 11), mkval(T_FUNC, vdata(func_ctor_obj)));
+  setprop(js, array_proto, js_mkstr(js, "constructor", 11), mkval(T_FUNC, vdata(arr_ctor_obj)));
+  setprop(js, string_proto, js_mkstr(js, "constructor", 11), mkval(T_FUNC, vdata(str_ctor_obj)));
+  setprop(js, number_proto, js_mkstr(js, "constructor", 11), mkval(T_FUNC, vdata(number_ctor_obj)));
+  setprop(js, boolean_proto, js_mkstr(js, "constructor", 11), mkval(T_FUNC, vdata(bool_ctor_obj)));
+  setprop(js, date_proto, js_mkstr(js, "constructor", 11), mkval(T_FUNC, vdata(date_ctor_obj)));
+  setprop(js, regexp_proto, js_mkstr(js, "constructor", 11), mkval(T_FUNC, vdata(regex_ctor_obj)));
+  setprop(js, error_proto, js_mkstr(js, "constructor", 11), mkval(T_FUNC, vdata(err_ctor_obj)));
   
   set_proto(js, glob, object_proto);
   
