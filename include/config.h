@@ -18,5 +18,6 @@
 
 #define GCMASK ~(((jsoff_t) ~0) >> 1)
 #define CONSTMASK (~(((jsoff_t) ~0) >> 1) >> 1)
+#define ARRMASK (~(((jsoff_t) ~0) >> 1) >> 2)
 
 #endif
