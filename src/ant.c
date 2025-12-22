@@ -1508,6 +1508,10 @@ static bool is_internal_prop(const char *key, jsoff_t klen) {
   if (klen == 13 && memcmp(key, "__native_func", 13) == 0) return true;
   if (klen == 9 && memcmp(key, "prototype", 9) == 0) return true;
   if (klen == 9 && memcmp(key, "__proto__", 9) == 0) return true;
+  if (klen == 10 && memcmp(key, "__sealed__", 10) == 0) return true;
+  if (klen == 10 && memcmp(key, "__frozen__", 10) == 0) return true;
+  if (klen == 14 && memcmp(key, "__extensible__", 14) == 0) return true;
+  if (klen > 7 && memcmp(key, "__desc_", 7) == 0) return true;
   return false;
 }
 
@@ -2579,7 +2583,10 @@ jsval_t js_setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v) {
   jsoff_t desc_off = lkp(js, obj, desc_key, strlen(desc_key));
   
   if (desc_off == 0) {
-    if (is_const_prop(js, existing)) return js_mkerr(js, "assignment to constant");
+    if (is_const_prop(js, existing)) {
+      if (js->flags & F_STRICT) return js_mkerr(js, "assignment to constant");
+      return mkval(T_PROP, existing);
+    }
     goto do_update;
   }
   
@@ -2630,6 +2637,33 @@ done_update:
   return mkval(T_PROP, existing);
 
 create_new:
+  
+  jsoff_t frozen_off = lkp(js, obj, "__frozen__", 10);
+  if (frozen_off != 0) {
+    jsval_t frozen_val = resolveprop(js, mkval(T_PROP, frozen_off));
+    if (js_truthy(js, frozen_val)) {
+      if (js->flags & F_STRICT) return js_mkerr(js, "cannot add property to frozen object");
+      return js_mkundef();
+    }
+  }
+  
+  jsoff_t sealed_off = lkp(js, obj, "__sealed__", 10);
+  if (sealed_off != 0) {
+    jsval_t sealed_val = resolveprop(js, mkval(T_PROP, sealed_off));
+    if (js_truthy(js, sealed_val)) {
+      if (js->flags & F_STRICT) return js_mkerr(js, "cannot add property to sealed object");
+      return js_mkundef();
+    }
+  }
+  
+  jsoff_t ext_off = lkp(js, obj, "__extensible__", 14);
+  if (ext_off != 0) {
+    jsval_t ext_val = resolveprop(js, mkval(T_PROP, ext_off));
+    if (!js_truthy(js, ext_val)) {
+      if (js->flags & F_STRICT) return js_mkerr(js, "cannot add property to non-extensible object");
+      return js_mkundef();
+    }
+  }
   
   int need_length_update = 0;
   unsigned long idx = 0;
@@ -3660,7 +3694,8 @@ static jsval_t assign(struct js *js, jsval_t lhs, jsval_t val) {
   
   jsoff_t propoff = (jsoff_t) vdata(lhs);
   if (is_const_prop(js, propoff)) {
-    return js_mkerr(js, "assignment to constant");
+    if (js->flags & F_STRICT) return js_mkerr(js, "assignment to constant");
+    return mkval(T_PROP, propoff);
   }
   
   if (js->flags & F_STRICT) {
@@ -5347,9 +5382,7 @@ static jsval_t js_obj_literal(struct js *js) {
         jsval_t prop_val = loadval(js, next_prop + (jsoff_t) (sizeof(next_prop) + sizeof(koff)));
         
         next_prop = loadoff(js, next_prop) & ~(3U | CONSTMASK);
-        
-        if (streq(prop_key, klen, "__proto__", 9)) continue;
-        if (klen > 7 && memcmp(prop_key, "__desc_", 7) == 0) continue;
+        if (is_internal_prop(prop_key, klen)) continue;
         
         jsval_t key_str = js_mkstr(js, prop_key, klen);
         setprop(js, obj, key_str, prop_val);
@@ -6111,10 +6144,29 @@ static jsval_t js_unary(struct js *js) {
         return js_truthy(js, result) ? js_mktrue() : js_mkfalse();
       }
       
+      jsoff_t frozen_off = lkp(js, obj, "__frozen__", 10);
+      if (frozen_off != 0) {
+        jsval_t frozen_val = resolveprop(js, mkval(T_PROP, frozen_off));
+        if (js_truthy(js, frozen_val)) {
+          if (js->flags & F_STRICT) return js_mkerr(js, "cannot delete property of frozen object");
+          return js_mkfalse();
+        }
+      }
+      
+      jsoff_t sealed_off = lkp(js, obj, "__sealed__", 10);
+      if (sealed_off != 0) {
+        jsval_t sealed_val = resolveprop(js, mkval(T_PROP, sealed_off));
+        if (js_truthy(js, sealed_val)) {
+          if (js->flags & F_STRICT) return js_mkerr(js, "cannot delete property of sealed object");
+          return js_mkfalse();
+        }
+      }
+      
       jsoff_t prop_off = lkp(js, obj, key_str, len);
       if (prop_off == 0) return js_mktrue();
       if (is_const_prop(js, prop_off)) {
-        return js_mkerr(js, "cannot delete constant property");
+        if (js->flags & F_STRICT) return js_mkerr(js, "cannot delete constant property");
+        return js_mkfalse();
       }
       jsoff_t first_prop = loadoff(js, obj_off) & ~(3U | CONSTMASK | GCMASK);
       if (first_prop == prop_off) {
@@ -6148,7 +6200,8 @@ static jsval_t js_unary(struct js *js) {
     }
     jsoff_t prop_off = (jsoff_t) vdata(operand);
     if (is_const_prop(js, prop_off)) {
-      return js_mkerr(js, "cannot delete constant property");
+      if (js->flags & F_STRICT) return js_mkerr(js, "cannot delete constant property");
+      return js_mkfalse();
     }
     
     jsoff_t owner_obj_off = 0;
@@ -6182,6 +6235,26 @@ static jsval_t js_unary(struct js *js) {
     }
     
     if (owner_obj_off != 0) {
+      jsval_t owner_obj = mkval(T_OBJ, owner_obj_off);
+      
+      jsoff_t frozen_off = lkp(js, owner_obj, "__frozen__", 10);
+      if (frozen_off != 0) {
+        jsval_t frozen_val = resolveprop(js, mkval(T_PROP, frozen_off));
+        if (js_truthy(js, frozen_val)) {
+          if (js->flags & F_STRICT) return js_mkerr(js, "cannot delete property of frozen object");
+          return js_mkfalse();
+        }
+      }
+      
+      jsoff_t sealed_off = lkp(js, owner_obj, "__sealed__", 10);
+      if (sealed_off != 0) {
+        jsval_t sealed_val = resolveprop(js, mkval(T_PROP, sealed_off));
+        if (js_truthy(js, sealed_val)) {
+          if (js->flags & F_STRICT) return js_mkerr(js, "cannot delete property of sealed object");
+          return js_mkfalse();
+        }
+      }
+      
       if (is_first_prop) {
         jsoff_t deleted_next = loadoff(js, prop_off) & ~(GCMASK | CONSTMASK);
         jsoff_t current = loadoff(js, owner_obj_off);
@@ -10585,9 +10658,7 @@ static jsval_t builtin_object_keys(struct js *js, jsval_t *args, int nargs) {
     const char *key = (char *) &js->mem[koff + sizeof(koff)];
     
     next = loadoff(js, next) & ~(3U | CONSTMASK);
-    
-    if (streq(key, klen, "__proto__", 9)) continue;
-    if (klen > 7 && memcmp(key, "__desc_", 7) == 0) continue;
+    if (is_internal_prop(key, klen)) continue;
     
     bool should_include = true;
     char desc_key[128];
@@ -10652,9 +10723,7 @@ static jsval_t builtin_object_values(struct js *js, jsval_t *args, int nargs) {
     jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
     
     next = loadoff(js, next) & ~(3U | CONSTMASK);
-    
-    if (streq(key, klen, "__proto__", 9)) continue;
-    if (klen > 7 && memcmp(key, "__desc_", 7) == 0) continue;
+    if (is_internal_prop(key, klen)) continue;
     
     bool should_include = true;
     char desc_key[128];
@@ -10719,8 +10788,7 @@ static jsval_t builtin_object_entries(struct js *js, jsval_t *args, int nargs) {
     
     next = loadoff(js, next) & ~(3U | CONSTMASK);
     
-    if (streq(key, klen, "__proto__", 9)) continue;
-    if (klen > 7 && memcmp(key, "__desc_", 7) == 0) continue;
+    if (is_internal_prop(key, klen)) continue;
     
     bool should_include = true;
     char desc_key[128];
@@ -11032,8 +11100,7 @@ static jsval_t builtin_object_defineProperties(struct js *js, jsval_t *args, int
     
     next = loadoff(js, next) & ~(3U | CONSTMASK);
     
-    if (streq(key, klen, "__proto__", 9)) continue;
-    if (klen > 7 && memcmp(key, "__desc_", 7) == 0) continue;
+    if (is_internal_prop(key, klen)) continue;
     
     jsval_t prop_key = js_mkstr(js, key, klen);
     jsval_t define_args[3] = { obj, prop_key, descriptor };
@@ -11077,9 +11144,7 @@ static jsval_t builtin_object_assign(struct js *js, jsval_t *args, int nargs) {
       jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
       
       next = loadoff(js, next) & ~(3U | CONSTMASK);
-      
-      if (streq(key, klen, "__proto__", 9)) continue;
-      if (klen > 7 && memcmp(key, "__desc_", 7) == 0) continue;
+      if (is_internal_prop(key, klen)) continue;
       
       bool should_copy = true;
       char desc_key[128];
@@ -11127,10 +11192,7 @@ static jsval_t builtin_object_freeze(struct js *js, jsval_t *args, int nargs) {
     jsoff_t cur_prop = next;
     next = loadoff(js, next) & ~(3U | CONSTMASK);
     
-    if (streq(key, klen, "__proto__", 9)) continue;
-    if (streq(key, klen, "__frozen__", 10)) continue;
-    if (streq(key, klen, "__sealed__", 10)) continue;
-    if (klen > 7 && memcmp(key, "__desc_", 7) == 0) continue;
+    if (is_internal_prop(key, klen)) continue;
     
     jsoff_t head = (jsoff_t) vdata(as_obj);
     jsoff_t firstprop = loadoff(js, head);
@@ -11209,10 +11271,7 @@ static jsval_t builtin_object_seal(struct js *js, jsval_t *args, int nargs) {
     
     next = loadoff(js, next) & ~(3U | CONSTMASK);
     
-    if (streq(key, klen, "__proto__", 9)) continue;
-    if (streq(key, klen, "__frozen__", 10)) continue;
-    if (streq(key, klen, "__sealed__", 10)) continue;
-    if (klen > 7 && memcmp(key, "__desc_", 7) == 0) continue;
+    if (is_internal_prop(key, klen)) continue;
     
     char desc_key[128];
     snprintf(desc_key, sizeof(desc_key), "__desc_%.*s", (int)klen, key);
@@ -11334,22 +11393,23 @@ static jsval_t builtin_object_getOwnPropertyDescriptor(struct js *js, jsval_t *a
     if (vtype(desc) == T_OBJ) {
       jsval_t result = js_mkobj(js);
       
-      jsval_t val_off = lkp(js, desc, "value", 5);
-      if (val_off != 0) {
-        setprop(js, result, js_mkstr(js, "value", 5), resolveprop(js, mkval(T_PROP, val_off)));
+      jsoff_t prop_off = lkp(js, as_obj, key_str, key_len);
+      if (prop_off != 0) {
+        jsval_t prop_val = resolveprop(js, mkval(T_PROP, prop_off));
+        setprop(js, result, js_mkstr(js, "value", 5), prop_val);
       }
       
-      jsval_t writable_off = lkp(js, desc, "writable", 8);
+      jsoff_t writable_off = lkp(js, desc, "writable", 8);
       if (writable_off != 0) {
         setprop(js, result, js_mkstr(js, "writable", 8), resolveprop(js, mkval(T_PROP, writable_off)));
       }
       
-      jsval_t enumerable_off = lkp(js, desc, "enumerable", 10);
+      jsoff_t enumerable_off = lkp(js, desc, "enumerable", 10);
       if (enumerable_off != 0) {
         setprop(js, result, js_mkstr(js, "enumerable", 10), resolveprop(js, mkval(T_PROP, enumerable_off)));
       }
       
-      jsval_t configurable_off = lkp(js, desc, "configurable", 12);
+      jsoff_t configurable_off = lkp(js, desc, "configurable", 12);
       if (configurable_off != 0) {
         setprop(js, result, js_mkstr(js, "configurable", 12), resolveprop(js, mkval(T_PROP, configurable_off)));
       }
@@ -11390,8 +11450,7 @@ static jsval_t builtin_object_getOwnPropertyNames(struct js *js, jsval_t *args, 
     
     next = loadoff(js, next) & ~(3U | CONSTMASK);
     
-    if (streq(key, klen, "__proto__", 9)) continue;
-    if (klen > 7 && memcmp(key, "__desc_", 7) == 0) continue;
+    if (is_internal_prop(key, klen)) continue;
     
     char idxstr[16];
     snprintf(idxstr, sizeof(idxstr), "%u", (unsigned) idx);
@@ -11399,6 +11458,19 @@ static jsval_t builtin_object_getOwnPropertyNames(struct js *js, jsval_t *args, 
     jsval_t key_val = js_mkstr(js, key, klen);
     setprop(js, arr, idx_key, key_val);
     idx++;
+  }
+  
+  for (jsoff_t i = 0; i < idx / 2; i++) {
+    jsoff_t j = idx - 1 - i;
+    char istr[16], jstr[16];
+    snprintf(istr, sizeof(istr), "%u", (unsigned) i);
+    snprintf(jstr, sizeof(jstr), "%u", (unsigned) j);
+    jsoff_t ioff = lkp(js, arr, istr, strlen(istr));
+    jsoff_t joff = lkp(js, arr, jstr, strlen(jstr));
+    jsval_t iv = loadval(js, ioff + sizeof(jsoff_t) * 2);
+    jsval_t jv = loadval(js, joff + sizeof(jsoff_t) * 2);
+    saveval(js, ioff + sizeof(jsoff_t) * 2, jv);
+    saveval(js, joff + sizeof(jsoff_t) * 2, iv);
   }
   
   jsval_t len_key = js_mkstr(js, "length", 6);
@@ -11415,6 +11487,18 @@ static jsval_t builtin_object_isExtensible(struct js *js, jsval_t *args, int nar
   
   if (t != T_OBJ && t != T_ARR && t != T_FUNC) return js_mktrue();
   jsval_t as_obj = (t == T_OBJ) ? obj : mkval(T_OBJ, vdata(obj));
+  
+  jsoff_t frozen_off = lkp(js, as_obj, "__frozen__", 10);
+  if (frozen_off != 0) {
+    jsval_t frozen_val = resolveprop(js, mkval(T_PROP, frozen_off));
+    if (js_truthy(js, frozen_val)) return js_mkfalse();
+  }
+  
+  jsoff_t sealed_off = lkp(js, as_obj, "__sealed__", 10);
+  if (sealed_off != 0) {
+    jsval_t sealed_val = resolveprop(js, mkval(T_PROP, sealed_off));
+    if (js_truthy(js, sealed_val)) return js_mkfalse();
+  }
   
   jsoff_t ext_off = lkp(js, as_obj, "__extensible__", 14);
   if (ext_off != 0) {
@@ -17329,10 +17413,10 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, obj_func_obj, js_mkstr(js, "seal", 4), js_mkfun(builtin_object_seal));
   setprop(js, obj_func_obj, js_mkstr(js, "isSealed", 8), js_mkfun(builtin_object_isSealed));
   setprop(js, obj_func_obj, js_mkstr(js, "fromEntries", 11), js_mkfun(builtin_object_fromEntries));
-  setprop(js, obj_func_obj, js_mkstr(js, "getOwnPropertyDescriptor", 23), js_mkfun(builtin_object_getOwnPropertyDescriptor));
-  setprop(js, obj_func_obj, js_mkstr(js, "getOwnPropertyNames", 20), js_mkfun(builtin_object_getOwnPropertyNames));
+  setprop(js, obj_func_obj, js_mkstr(js, "getOwnPropertyDescriptor", 24), js_mkfun(builtin_object_getOwnPropertyDescriptor));
+  setprop(js, obj_func_obj, js_mkstr(js, "getOwnPropertyNames", 19), js_mkfun(builtin_object_getOwnPropertyNames));
   setprop(js, obj_func_obj, js_mkstr(js, "isExtensible", 12), js_mkfun(builtin_object_isExtensible));
-  setprop(js, obj_func_obj, js_mkstr(js, "preventExtensions", 18), js_mkfun(builtin_object_preventExtensions));
+  setprop(js, obj_func_obj, js_mkstr(js, "preventExtensions", 17), js_mkfun(builtin_object_preventExtensions));
   setprop(js, obj_func_obj, js_mkstr(js, "prototype", 9), object_proto);
   setprop(js, glob, js_mkstr(js, "Object", 6), mkval(T_FUNC, vdata(obj_func_obj)));
   
@@ -17638,7 +17722,7 @@ void js_set(struct js *js, jsval_t obj, const char *key, jsval_t val) {
     jsoff_t existing = lkp(js, obj, key, key_len);
     if (existing > 0) {
       if (is_const_prop(js, existing)) {
-        js_mkerr(js, "assignment to constant");
+        if (js->flags & F_STRICT) js_mkerr(js, "assignment to constant");
         return;
       }
       saveval(js, existing + sizeof(jsoff_t) * 2, val);
@@ -17651,7 +17735,7 @@ void js_set(struct js *js, jsval_t obj, const char *key, jsval_t val) {
     jsoff_t existing = lkp(js, func_obj, key, key_len);
     if (existing > 0) {
       if (is_const_prop(js, existing)) {
-        js_mkerr(js, "assignment to constant");
+        if (js->flags & F_STRICT) js_mkerr(js, "assignment to constant");
         return;
       }
       saveval(js, existing + sizeof(jsoff_t) * 2, val);
