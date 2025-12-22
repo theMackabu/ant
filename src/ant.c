@@ -266,7 +266,7 @@ enum {
   TOK_ERR, TOK_EOF, TOK_IDENTIFIER, TOK_NUMBER, TOK_STRING, TOK_SEMICOLON, TOK_BIGINT,
   TOK_LPAREN, TOK_RPAREN, TOK_LBRACE, TOK_RBRACE, TOK_LBRACKET, TOK_RBRACKET,
   TOK_ASYNC = 50, TOK_AWAIT, TOK_BREAK, TOK_CASE, TOK_CATCH, TOK_CLASS, TOK_CONST, TOK_CONTINUE,
-  TOK_DEFAULT, TOK_DELETE, TOK_DO, TOK_ELSE, TOK_EXPORT, TOK_FINALLY, TOK_FOR, TOK_FROM, TOK_FUNC,
+  TOK_DEFAULT, TOK_DELETE, TOK_DO, TOK_DEBUGGER, TOK_ELSE, TOK_EXPORT, TOK_FINALLY, TOK_FOR, TOK_FROM, TOK_FUNC,
   TOK_IF, TOK_IMPORT, TOK_IN, TOK_INSTANCEOF, TOK_LET, TOK_NEW, TOK_OF, TOK_RETURN, TOK_SWITCH,
   TOK_THIS, TOK_THROW, TOK_TRY, TOK_VAR, TOK_VOID, TOK_WHILE, TOK_WITH,
   TOK_YIELD, TOK_UNDEF, TOK_NULL, TOK_TRUE, TOK_FALSE, TOK_AS, TOK_STATIC, TOK_WINDOW, TOK_GLOBAL_THIS,
@@ -3213,7 +3213,7 @@ static uint8_t parsekeyword(const char *buf, size_t len) {
     case 'a': if (streq("async", 5, buf, len)) return TOK_ASYNC; if (streq("await", 5, buf, len)) return TOK_AWAIT; if (streq("as", 2, buf, len)) return TOK_AS; break;
     case 'b': if (streq("break", 5, buf, len)) return TOK_BREAK; break;
     case 'c': if (streq("class", 5, buf, len)) return TOK_CLASS; if (streq("case", 4, buf, len)) return TOK_CASE; if (streq("catch", 5, buf, len)) return TOK_CATCH; if (streq("const", 5, buf, len)) return TOK_CONST; if (streq("continue", 8, buf, len)) return TOK_CONTINUE; break;
-    case 'd': if (streq("do", 2, buf, len)) return TOK_DO;  if (streq("default", 7, buf, len)) return TOK_DEFAULT; if (streq("delete", 6, buf, len)) return TOK_DELETE; break;
+    case 'd': if (streq("do", 2, buf, len)) return TOK_DO;  if (streq("default", 7, buf, len)) return TOK_DEFAULT; if (streq("delete", 6, buf, len)) return TOK_DELETE; if (streq("debugger", 8, buf, len)) return TOK_DEBUGGER; break;
     case 'e': if (streq("else", 4, buf, len)) return TOK_ELSE; if (streq("export", 6, buf, len)) return TOK_EXPORT; break;
     case 'f': if (streq("for", 3, buf, len)) return TOK_FOR; if (streq("from", 4, buf, len)) return TOK_FROM; if (streq("function", 8, buf, len)) return TOK_FUNC; if (streq("finally", 7, buf, len)) return TOK_FINALLY; if (streq("false", 5, buf, len)) return TOK_FALSE; break;
     case 'g': if (streq("globalThis", 10, buf, len)) return TOK_GLOBAL_THIS; break;
@@ -3839,20 +3839,7 @@ static jsval_t lookup(struct js *js, const char *buf, size_t len) {
     }
   }
   
-  if (js->flags & F_STRICT) {
-    return js_mkerr_typed(js, JS_ERR_REFERENCE, "'%.*s' is not defined", (int) key_len, key_str);
-  }
-  
-  jsval_t global_scope = js->scope;
-  while (vdata(upper(js, global_scope)) != 0) {
-    global_scope = upper(js, global_scope);
-  }
-  
-  jsval_t key = js_mkstr(js, key_str, key_len);
-  if (is_err(key)) return key;
-  
-  jsval_t undef = js_mkundef();
-  return setprop(js, global_scope, key, undef);
+  return js_mkerr_typed(js, JS_ERR_REFERENCE, "'%.*s' is not defined", (int) key_len, key_str);
 }
 
 static jsval_t resolveprop(struct js *js, jsval_t v) {
@@ -5136,7 +5123,9 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
   }
   if (op == TOK_EQ || op == TOK_NE) {
     bool eq = false;
-    if ((vtype(l) == T_UNDEF && vtype(r) == T_NULL) || (vtype(l) == T_NULL && vtype(r) == T_UNDEF)) {
+    if ((vtype(l) == T_NULL && vtype(r) == T_NULL) || (vtype(l) == T_UNDEF && vtype(r) == T_UNDEF)) {
+      eq = true;
+    } else if ((vtype(l) == T_UNDEF && vtype(r) == T_NULL) || (vtype(l) == T_NULL && vtype(r) == T_UNDEF)) {
       eq = true;
     } else if (vtype(l) == T_NULL || vtype(r) == T_NULL || vtype(l) == T_UNDEF || vtype(r) == T_UNDEF) {
       eq = false;
@@ -6509,7 +6498,28 @@ static jsval_t js_call_dot(struct js *js) {
         return js_mkerr_typed(js, JS_ERR_SYNTAX, "cannot modify eval or arguments in strict mode");
       }
     }
-    res = lookup(js, &js->code[coderefoff(res)], codereflen(res));
+    jsoff_t id_off = coderefoff(res);
+    jsoff_t id_len = codereflen(res);
+    jsoff_t saved_pos = js->pos;
+    uint8_t saved_tok = js->tok;
+    uint8_t saved_consumed = js->consumed;
+    res = lookup(js, &js->code[id_off], id_len);
+    if (is_err(res) && !(js->flags & F_STRICT) && !(js->flags & F_NOEXEC)) {
+      js->pos = saved_pos;
+      js->tok = saved_tok;
+      js->consumed = saved_consumed;
+      uint8_t next_tok = next(js);
+      if (next_tok == TOK_ASSIGN) {
+        jsval_t global_scope = js->scope;
+        while (vdata(upper(js, global_scope)) != 0) {
+          global_scope = upper(js, global_scope);
+        }
+        jsval_t key = js_mkstr(js, &js->code[id_off], id_len);
+        if (!is_err(key)) {
+          res = setprop(js, global_scope, key, js_mkundef());
+        }
+      }
+    }
   }
   while (next(js) == TOK_LPAREN || next(js) == TOK_DOT || next(js) == TOK_OPTIONAL_CHAIN || next(js) == TOK_LBRACKET || next(js) == TOK_TEMPLATE) {
     if (js->tok == TOK_TEMPLATE) {
@@ -6609,7 +6619,18 @@ static jsval_t js_unary(struct js *js) {
     
     jsoff_t save_pos = js->pos;
     uint8_t save_tok = js->tok;
+    js_parse_state_t saved_delete;
+    JS_SAVE_STATE(js, saved_delete);
+    uint8_t saved_delete_flags = js->flags;
     jsval_t operand = js_postfix(js);
+    if (is_err(operand)) {
+      JS_RESTORE_STATE(js, saved_delete);
+      js->flags = saved_delete_flags & ~F_THROW;
+      js->flags |= F_NOEXEC;
+      js_postfix(js);
+      js->flags = saved_delete_flags;
+      return js_mktrue();
+    }
     if (js->flags & F_NOEXEC) return js_mktrue();
     
     if (vtype(operand) == T_PROPREF) {
@@ -6887,7 +6908,21 @@ static jsval_t js_unary(struct js *js) {
     if (t == TOK_MINUS) t = TOK_UMINUS;
     if (t == TOK_PLUS) t = TOK_UPLUS;
     js->consumed = 1;
-    return do_op(js, t, js_mkundef(), js_unary(js));
+    jsoff_t saved_pos = js->pos;
+    uint8_t saved_tok = js->tok;
+    uint8_t saved_consumed = js->consumed;
+    uint8_t saved_flags = js->flags;
+    jsval_t operand = js_unary(js);
+    if (t == TOK_TYPEOF && is_err(operand)) {
+      js->pos = saved_pos;
+      js->tok = saved_tok;
+      js->consumed = saved_consumed;
+      js->flags = (saved_flags & ~F_THROW) | F_NOEXEC;
+      js_unary(js);
+      js->flags = saved_flags & ~F_THROW;
+      operand = js_mkundef();
+    }
+    return do_op(js, t, js_mkundef(), operand);
   } else {
     return js_postfix(js);
   }
@@ -9396,6 +9431,7 @@ static jsval_t js_stmt(struct js *js) {
     case TOK_SWITCH:    res = js_switch(js); break;
     case TOK_WHILE:     res = js_while(js); break;
     case TOK_DO:        res = js_do_while(js); break;
+    case TOK_DEBUGGER:  js->consumed = 1; res = js_mkundef(); break;
     case TOK_CONTINUE:  res = js_continue(js); break;
     case TOK_BREAK:     res = js_break(js); break;
     case TOK_LET:       res = js_let(js); break;
@@ -14724,7 +14760,6 @@ static size_t js_to_pcre2_pattern(const char *src, size_t src_len, char *dst, si
   return di;
 }
 
-// PCRE2-based regex match helper
 static jsval_t do_regex_match_pcre2(
   struct js *js, const char *pattern_ptr, jsoff_t pattern_len, 
   const char *str_ptr, jsoff_t str_len, 

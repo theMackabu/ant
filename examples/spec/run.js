@@ -57,4 +57,4 @@ console.log(`  ${RED}${totalFailed} tests failed${RESET}`);
 console.log(`  ${GREEN}${filesPassed} files passed${RESET}`);
 console.log(`  ${RED}${filesFailed} files failed${RESET}\n`);
 
-process.exit(failed > 0 ? 1 : 0);
+process.exit(totalFailed > 0 ? 1 : 0);
