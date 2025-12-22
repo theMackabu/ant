@@ -4031,6 +4031,10 @@ static jsval_t do_bracket_op(struct js *js, jsval_t l, jsval_t r) {
   if (vtype(obj) != T_OBJ && vtype(obj) != T_ARR) {
     return js_mkerr(js, "cannot index non-object");
   }
+  if ((streq(keystr, keylen, "callee", 6) || streq(keystr, keylen, "caller", 6)) &&
+      lkp(js, obj, "__strict_args__", 15) != 0) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "'%.*s' not allowed on strict arguments", (int)keylen, keystr);
+  }
   jsoff_t off = lkp_proto(js, obj, keystr, keylen);
   if (off == 0) {
     jsval_t key = js_mkstr(js, keystr, keylen);
@@ -4085,6 +4089,9 @@ static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
   }
   
   if (t == T_FUNC) {
+    if ((js->flags & F_STRICT) && (streq(ptr, plen, "caller", 6) || streq(ptr, plen, "arguments", 9))) {
+      return js_mkerr_typed(js, JS_ERR_TYPE, "'%.*s' not allowed on functions in strict mode", (int)plen, ptr);
+    }
     jsval_t func_obj = mkval(T_OBJ, vdata(l));
     jsoff_t off = lkp_proto(js, l, ptr, plen);
     if (off != 0) return mkval(T_PROP, off);
@@ -4095,6 +4102,9 @@ static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
   }
   
   if (t == T_CFUNC) {
+    if ((js->flags & F_STRICT) && (streq(ptr, plen, "caller", 6) || streq(ptr, plen, "arguments", 9))) {
+      return js_mkerr_typed(js, JS_ERR_TYPE, "'%.*s' not allowed on functions in strict mode", (int)plen, ptr);
+    }
     jsoff_t off = lkp_proto(js, l, ptr, plen);
     if (off != 0) return resolveprop(js, mkval(T_PROP, off));
     if (streq(ptr, plen, "name", 4)) return js_mkstr(js, "", 0);
@@ -4114,6 +4124,11 @@ static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
     js->toff = saved_toff;
     js->tlen = saved_tlen;
     return err;
+  }
+  
+  if ((streq(ptr, plen, "callee", 6) || streq(ptr, plen, "caller", 6)) &&
+      lkp(js, l, "__strict_args__", 15) != 0) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "'%.*s' not allowed on strict arguments", (int)plen, ptr);
   }
   
   jsoff_t own_off = lkp(js, l, ptr, plen);
@@ -4343,7 +4358,23 @@ bind:;
   return js_mkundef();
 }
 
-static void setup_arguments(struct js *js, jsval_t scope, jsval_t *args, int nargs) {
+static bool is_strict_function_body(const char *body, size_t len) {
+  size_t i = 0;
+  while (i < len && (body[i] == ' ' || body[i] == '\t' || body[i] == '\n' || body[i] == '\r')) i++;
+  if (i + 12 <= len && (body[i] == '\'' || body[i] == '"')) {
+    char q = body[i];
+    if (memcmp(&body[i+1], "use strict", 10) == 0 && body[i+11] == q) return true;
+  }
+  return false;
+}
+
+static bool is_eval_or_arguments(struct js *js, jsoff_t toff, jsoff_t tlen) {
+  if (tlen == 4 && memcmp(&js->code[toff], "eval", 4) == 0) return true;
+  if (tlen == 9 && memcmp(&js->code[toff], "arguments", 9) == 0) return true;
+  return false;
+}
+
+static void setup_arguments(struct js *js, jsval_t scope, jsval_t *args, int nargs, bool strict) {
   if (vtype(js->current_func) == T_FUNC) {
     jsval_t func_obj = mkval(T_OBJ, vdata(js->current_func));
     if (lkp(js, func_obj, "__this", 6) != 0) return;
@@ -4356,7 +4387,9 @@ static void setup_arguments(struct js *js, jsval_t scope, jsval_t *args, int nar
     setprop(js, arguments_obj, js_mkstr(js, idxstr, strlen(idxstr)), args[i]);
   }
   setprop(js, arguments_obj, js_mkstr(js, "length", 6), tov((double) nargs));
-  if (vtype(js->current_func) == T_FUNC) {
+  if (strict) {
+    setprop(js, arguments_obj, js_mkstr(js, "__strict_args__", 15), js_mktrue());
+  } else if (vtype(js->current_func) == T_FUNC) {
     setprop(js, arguments_obj, js_mkstr(js, "callee", 6), js->current_func);
   }
   arguments_obj = mkval(T_ARR, vdata(arguments_obj));
@@ -4496,15 +4529,22 @@ static jsval_t call_js(struct js *js, const char *fn, jsoff_t fnlen, jsval_t clo
     }
   }
   
-  setup_arguments(js, function_scope, args, argc);
-  
   js->scope = function_scope;
   if (fnpos < fnlen && fn[fnpos] == ')') fnpos++;
   fnpos = skiptonext(fn, fnlen, fnpos, NULL);
   if (fnpos < fnlen && fn[fnpos] == '{') fnpos++;
   size_t n = fnlen - fnpos - 1U;
-  js->this_val = target_this;
-  js->flags = F_CALL;
+  
+  bool func_strict = is_strict_function_body(&fn[fnpos], n);
+  setup_arguments(js, function_scope, args, argc, func_strict);
+  
+  if (func_strict && (vtype(target_this) == T_UNDEF || vtype(target_this) == T_NULL ||
+      (vtype(target_this) == T_OBJ && vdata(target_this) == 0))) {
+    js->this_val = js_mkundef();
+  } else {
+    js->this_val = target_this;
+  }
+  js->flags = F_CALL | (func_strict ? F_STRICT : 0);
   
   jsval_t res = js_eval(js, &fn[fnpos], n);
   if (!is_err(res) && !(js->flags & F_RETURN)) res = js_mkundef();
@@ -4678,17 +4718,24 @@ static jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnl
     }
   }
   
-  setup_arguments(js, function_scope, args, nargs);
-  
   if (fnpos < fnlen && fn[fnpos] == ')') fnpos++;
   fnpos = skiptonext(fn, fnlen, fnpos, NULL);
   if (fnpos < fnlen && fn[fnpos] == '{') fnpos++;
   size_t body_len = fnlen - fnpos - 1;
   
+  bool func_strict = is_strict_function_body(&fn[fnpos], body_len);
+  setup_arguments(js, function_scope, args, nargs, func_strict);
+  
   jsval_t saved_this = js->this_val;
   jsval_t target_this = peek_this();
-  js->this_val = target_this;
-  js->flags = F_CALL;
+  
+  if (func_strict && (vtype(target_this) == T_UNDEF || vtype(target_this) == T_NULL ||
+      (vtype(target_this) == T_OBJ && vdata(target_this) == 0))) {
+    js->this_val = js_mkundef();
+  } else {
+    js->this_val = target_this;
+  }
+  js->flags = F_CALL | (func_strict ? F_STRICT : 0);
   
   jsval_t res = js_eval(js, &fn[fnpos], body_len);
   if (!is_err(res) && !(js->flags & F_RETURN)) res = js_mkundef();
@@ -6350,6 +6397,16 @@ static jsval_t js_call_dot(struct js *js) {
       jsval_t result = js_tagged_template(js, tag_func);
       return result;
     }
+    if ((js->flags & F_STRICT) && is_eval_or_arguments(js, coderefoff(res), codereflen(res))) {
+      uint8_t la = lookahead(js);
+      if (la == TOK_ASSIGN || la == TOK_PLUS_ASSIGN || la == TOK_MINUS_ASSIGN ||
+          la == TOK_MUL_ASSIGN || la == TOK_DIV_ASSIGN || la == TOK_REM_ASSIGN ||
+          la == TOK_SHL_ASSIGN || la == TOK_SHR_ASSIGN || la == TOK_ZSHR_ASSIGN ||
+          la == TOK_AND_ASSIGN || la == TOK_XOR_ASSIGN || la == TOK_OR_ASSIGN ||
+          la == TOK_POSTINC || la == TOK_POSTDEC) {
+        return js_mkerr_typed(js, JS_ERR_SYNTAX, "cannot modify eval or arguments in strict mode");
+      }
+    }
     res = lookup(js, &js->code[coderefoff(res)], codereflen(res));
   }
   while (next(js) == TOK_LPAREN || next(js) == TOK_DOT || next(js) == TOK_OPTIONAL_CHAIN || next(js) == TOK_LBRACKET || next(js) == TOK_TEMPLATE) {
@@ -6430,6 +6487,18 @@ static jsval_t js_unary(struct js *js) {
     return constructed_obj;
   } else if (next(js) == TOK_DELETE) {
     js->consumed = 1;
+    
+    if ((js->flags & F_STRICT) && next(js) == TOK_IDENTIFIER) {
+      jsoff_t id_pos = js->pos;
+      js->consumed = 1;
+      uint8_t after = next(js);
+      if (after != TOK_DOT && after != TOK_LBRACKET && after != TOK_OPTIONAL_CHAIN) {
+        return js_mkerr_typed(js, JS_ERR_SYNTAX, "cannot delete unqualified identifier in strict mode");
+      }
+      js->pos = id_pos;
+      js->consumed = 0;
+    }
+    
     jsoff_t save_pos = js->pos;
     uint8_t save_tok = js->tok;
     jsval_t operand = js_postfix(js);
@@ -6470,8 +6539,25 @@ static jsval_t js_unary(struct js *js) {
       jsoff_t prop_off = lkp(js, obj, key_str, len);
       if (prop_off == 0) return js_mktrue();
       if (is_const_prop(js, prop_off)) {
-        if (js->flags & F_STRICT) return js_mkerr(js, "cannot delete constant property");
+        if (js->flags & F_STRICT) return js_mkerr_typed(js, JS_ERR_TYPE, "cannot delete non-configurable property");
         return js_mkfalse();
+      }
+      
+      char desc_key[80];
+      snprintf(desc_key, sizeof(desc_key), "__desc_%.*s", (int)len, key_str);
+      jsoff_t desc_off = lkp(js, obj, desc_key, strlen(desc_key));
+      if (desc_off != 0) {
+        jsval_t desc_obj = resolveprop(js, mkval(T_PROP, desc_off));
+        if (vtype(desc_obj) == T_OBJ) {
+          jsoff_t config_off = lkp(js, desc_obj, "configurable", 12);
+          if (config_off != 0) {
+            jsval_t config_val = resolveprop(js, mkval(T_PROP, config_off));
+            if (!js_truthy(js, config_val)) {
+              if (js->flags & F_STRICT) return js_mkerr_typed(js, JS_ERR_TYPE, "cannot delete non-configurable property");
+              return js_mkfalse();
+            }
+          }
+        }
       }
       jsoff_t first_prop = loadoff(js, obj_off) & ~(3U | CONSTMASK | GCMASK);
       if (first_prop == prop_off) {
@@ -6656,6 +6742,9 @@ static jsval_t js_unary(struct js *js) {
   } else if (next(js) == TOK_POSTINC || js->tok == TOK_POSTDEC) {
     uint8_t op = js->tok;
     js->consumed = 1;
+    if ((js->flags & F_STRICT) && next(js) == TOK_IDENTIFIER && is_eval_or_arguments(js, js->toff, js->tlen)) {
+      return js_mkerr_typed(js, JS_ERR_SYNTAX, "cannot modify eval or arguments in strict mode");
+    }
     jsval_t operand = js_unary(js);
     if (is_err(operand)) return operand;
     if (js->flags & F_NOEXEC) return operand;
@@ -7247,11 +7336,11 @@ obj_destruct_next:
       jsoff_t noff = js->toff, nlen = js->tlen;
       char *name = (char *) &js->code[noff];
       
-      if (exe && (js->flags & F_STRICT) && is_strict_restricted(name, nlen)) {
+      if ((js->flags & F_STRICT) && is_strict_restricted(name, nlen)) {
         return js_mkerr_typed(js, JS_ERR_SYNTAX, "cannot use '%.*s' as variable name in strict mode", (int) nlen, name);
       }
       
-      if (exe && (js->flags & F_STRICT) && is_strict_reserved(name, nlen)) {
+      if ((js->flags & F_STRICT) && is_strict_reserved(name, nlen)) {
         return js_mkerr_typed(js, JS_ERR_SYNTAX, "'%.*s' is reserved in strict mode", (int) nlen, name);
       }
       
@@ -8169,11 +8258,12 @@ static jsval_t js_try(struct js *js) {
       if (next(js) == TOK_IDENTIFIER) {
         catch_param_off = js->toff;
         catch_param_len = js->tlen;
+        if ((js->flags & F_STRICT) && is_strict_restricted(&js->code[catch_param_off], catch_param_len)) {
+          return js_mkerr_typed(js, JS_ERR_SYNTAX, "cannot use '%.*s' as catch parameter in strict mode", (int) catch_param_len, &js->code[catch_param_off]);
+        }
         js->consumed = 1;
       }
-      if (next(js) != TOK_RPAREN) {
-        return js_mkerr(js, ") expected in catch");
-      }
+      if (next(js) != TOK_RPAREN) return js_mkerr(js, ") expected in catch");
       js->consumed = 1;
     }
     
@@ -9075,8 +9165,14 @@ static jsval_t find_var_scope(struct js *js) {
   }
   
   jsval_t scope = js->scope;
+  jsoff_t eval_marker = lkp(js, scope, "__strict_eval_scope__", 21);
+  if (eval_marker != 0) return scope;
+  
   while (vdata(upper(js, scope)) != 0) {
-    scope = upper(js, scope);
+    jsval_t parent = upper(js, scope);
+    jsoff_t parent_eval_marker = lkp(js, parent, "__strict_eval_scope__", 21);
+    if (parent_eval_marker != 0) return scope;
+    scope = parent;
   }
   return scope;
 }
@@ -9501,6 +9597,40 @@ static jsval_t builtin_Function(struct js *js, jsval_t *args, int nargs) {
   pos += body_len;
   
   code_ptr[pos++] = '}';
+  
+  bool is_strict_body = is_strict_function_body((const char *)&js->mem[body_off], body_len);
+  if (is_strict_body && nargs > 1) {
+    int i = 0, j;
+    jsoff_t param_len_i, param_off_i;
+    const char *param_i;
+    
+check_param:
+    if (i >= nargs - 1) goto params_done;
+    
+    param_off_i = vstr(js, args[i], &param_len_i);
+    param_i = (const char *)&js->mem[param_off_i];
+    
+    if (is_strict_restricted(param_i, param_len_i)) {
+      return js_mkerr_typed(js, JS_ERR_SYNTAX, "cannot use '%.*s' as parameter name in strict mode", (int)param_len_i, param_i);
+    }
+    
+    j = i + 1;
+    
+check_dup:
+    if (j >= nargs - 1) { i++; goto check_param; }
+    
+    jsoff_t param_len_j, param_off_j = vstr(js, args[j], &param_len_j);
+    const char *param_j = (const char *)&js->mem[param_off_j];
+    
+    if (param_len_i == param_len_j && memcmp(param_i, param_j, param_len_i) == 0) {
+      return js_mkerr_typed(js, JS_ERR_SYNTAX, "duplicate parameter name '%.*s' in strict mode", (int)param_len_i, param_i);
+    }
+    
+    j++;
+    goto check_dup;
+    
+params_done:;
+  }
 
   jsval_t func_obj = mkobj(js, 0);
   if (is_err(func_obj)) return func_obj;
@@ -18321,6 +18451,7 @@ static jsval_t js_eval_inherit_strict(struct js *js, const char *buf, size_t len
   uint8_t saved_consumed = js->consumed;
   js->consumed = 1;
   
+  bool is_strict = inherit_strict;
   if (inherit_strict) js->flags |= F_STRICT;
   
   if (next(js) == TOK_STRING) {
@@ -18328,6 +18459,7 @@ static jsval_t js_eval_inherit_strict(struct js *js, const char *buf, size_t len
     size_t str_len = js->tlen - 2;
     if (str_len == 10 && memcmp(str, "use strict", 10) == 0) {
       js->flags |= F_STRICT;
+      is_strict = true;
     }
   }
   
@@ -18335,10 +18467,17 @@ static jsval_t js_eval_inherit_strict(struct js *js, const char *buf, size_t len
   js->pos = saved_pos;
   js->consumed = saved_consumed;
   
+  if (is_strict) {
+    mkscope(js);
+    setprop(js, js->scope, js_mkstr(js, "__strict_eval_scope__", 21), js_mktrue());
+  }
+  
   while (next(js) != TOK_EOF && !is_err(res)) {
     res = js_stmt(js);
     if (js->flags & F_RETURN) break;
   }
+  
+  if (is_strict) delscope(js);  
   return res;
 }
 
