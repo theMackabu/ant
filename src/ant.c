@@ -11331,6 +11331,65 @@ static jsval_t builtin_object_hasOwnProperty(struct js *js, jsval_t *args, int n
   return mkval(T_BOOL, off != 0 ? 1 : 0);
 }
 
+static jsval_t builtin_object_isPrototypeOf(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return mkval(T_BOOL, 0);
+  
+  jsval_t proto_obj = js->this_val;
+  jsval_t obj = args[0];
+  
+  uint8_t obj_type = vtype(obj);
+  if (obj_type != T_OBJ && obj_type != T_ARR && obj_type != T_FUNC) return mkval(T_BOOL, 0);
+  
+  jsval_t current = get_proto(js, obj);
+  while (vtype(current) == T_OBJ) {
+    if (vdata(current) == vdata(proto_obj)) return mkval(T_BOOL, 1);
+    current = get_proto(js, current);
+  }
+  
+  return mkval(T_BOOL, 0);
+}
+
+static jsval_t builtin_object_propertyIsEnumerable(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return mkval(T_BOOL, 0);
+  
+  jsval_t obj = js->this_val;
+  jsval_t key = args[0];
+  
+  obj = resolveprop(js, obj);
+  uint8_t t = vtype(obj);
+  
+  if (t != T_OBJ && t != T_ARR && t != T_FUNC) return mkval(T_BOOL, 0);
+  if (vtype(key) != T_STR) {
+    char buf[64];
+    size_t n = tostr(js, key, buf, sizeof(buf));
+    key = js_mkstr(js, buf, n);
+  }
+  
+  jsval_t as_obj = (t == T_OBJ) ? obj : mkval(T_OBJ, vdata(obj));
+  jsoff_t key_len, key_off = vstr(js, key, &key_len);
+  const char *key_str = (char *) &js->mem[key_off];
+  
+  jsoff_t off = lkp(js, as_obj, key_str, key_len);
+  if (off == 0) return mkval(T_BOOL, 0);
+  
+  char desc_key[128];
+  snprintf(desc_key, sizeof(desc_key), "__desc_%.*s", (int)key_len, key_str);
+  jsoff_t desc_off = lkp(js, as_obj, desc_key, strlen(desc_key));
+  if (desc_off == 0) goto enumerable;
+  
+  jsval_t desc_obj = resolveprop(js, mkval(T_PROP, desc_off));
+  if (vtype(desc_obj) != T_OBJ) goto enumerable;
+  
+  jsoff_t enumerable_off = lkp(js, desc_obj, "enumerable", 10);
+  if (enumerable_off == 0) goto enumerable;
+  
+  jsval_t enumerable_val = resolveprop(js, mkval(T_PROP, enumerable_off));
+  return mkval(T_BOOL, js_truthy(js, enumerable_val) ? 1 : 0);
+
+enumerable:
+  return mkval(T_BOOL, 1);
+}
+
 static jsval_t builtin_object_toString(struct js *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
   jsval_t obj = js->this_val;
@@ -14242,6 +14301,10 @@ static jsval_t builtin_number_toFixed(struct js *js, jsval_t *args, int nargs) {
   jsval_t num = unwrap_primitive(js, js->this_val);
   if (vtype(num) != T_NUM) return js_mkerr(js, "toFixed called on non-number");
   
+  double d = tod(num);
+  if (isnan(d)) return js_mkstr(js, "NaN", 3);
+  if (isinf(d)) return d > 0 ? js_mkstr(js, "Infinity", 8) : js_mkstr(js, "-Infinity", 9);
+  
   int digits = 0;
   if (nargs >= 1 && vtype(args[0]) == T_NUM) {
     digits = (int) tod(args[0]);
@@ -14250,13 +14313,17 @@ static jsval_t builtin_number_toFixed(struct js *js, jsval_t *args, int nargs) {
   }
   
   char buf[64];
-  snprintf(buf, sizeof(buf), "%.*f", digits, tod(num));
+  snprintf(buf, sizeof(buf), "%.*f", digits, d);
   return js_mkstr(js, buf, strlen(buf));
 }
 
 static jsval_t builtin_number_toPrecision(struct js *js, jsval_t *args, int nargs) {
   jsval_t num = unwrap_primitive(js, js->this_val);
   if (vtype(num) != T_NUM) return js_mkerr(js, "toPrecision called on non-number");
+  
+  double d = tod(num);
+  if (isnan(d)) return js_mkstr(js, "NaN", 3);
+  if (isinf(d)) return d > 0 ? js_mkstr(js, "Infinity", 8) : js_mkstr(js, "-Infinity", 9);
   
   if (nargs < 1 || vtype(args[0]) != T_NUM) {
     char buf[64];
@@ -14269,13 +14336,17 @@ static jsval_t builtin_number_toPrecision(struct js *js, jsval_t *args, int narg
   if (precision > 21) precision = 21;
   
   char buf[64];
-  snprintf(buf, sizeof(buf), "%.*g", precision, tod(num));
+  snprintf(buf, sizeof(buf), "%.*g", precision, d);
   return js_mkstr(js, buf, strlen(buf));
 }
 
 static jsval_t builtin_number_toExponential(struct js *js, jsval_t *args, int nargs) {
   jsval_t num = unwrap_primitive(js, js->this_val);
   if (vtype(num) != T_NUM) return js_mkerr(js, "toExponential called on non-number");
+  
+  double d = tod(num);
+  if (isnan(d)) return js_mkstr(js, "NaN", 3);
+  if (isinf(d)) return d > 0 ? js_mkstr(js, "Infinity", 8) : js_mkstr(js, "-Infinity", 9);
   
   int digits = 6;
   if (nargs >= 1 && vtype(args[0]) == T_NUM) {
@@ -14285,7 +14356,7 @@ static jsval_t builtin_number_toExponential(struct js *js, jsval_t *args, int na
   }
   
   char buf[64];
-  snprintf(buf, sizeof(buf), "%.*e", digits, tod(num));
+  snprintf(buf, sizeof(buf), "%.*e", digits, d);
   char *e = strchr(buf, 'e');
   if (e && (e[1] == '+' || e[1] == '-') && e[2] == '0' && e[3] != '\0') {
     memmove(e + 2, e + 3, strlen(e + 3) + 1);
@@ -16781,6 +16852,8 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, object_proto, js_mkstr(js, "valueOf", 7), js_mkfun(builtin_object_valueOf));
   setprop(js, object_proto, js_mkstr(js, "toLocaleString", 14), js_mkfun(builtin_object_toLocaleString));
   setprop(js, object_proto, js_mkstr(js, "hasOwnProperty", 14), js_mkfun(builtin_object_hasOwnProperty));
+  setprop(js, object_proto, js_mkstr(js, "isPrototypeOf", 13), js_mkfun(builtin_object_isPrototypeOf));
+  setprop(js, object_proto, js_mkstr(js, "propertyIsEnumerable", 20), js_mkfun(builtin_object_propertyIsEnumerable));
   
   jsval_t function_proto = js_mkobj(js);
   set_proto(js, function_proto, object_proto);
