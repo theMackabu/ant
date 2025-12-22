@@ -1,5 +1,7 @@
 #pragma once
+
 #define PRIV_SYMBOL 0x80
+#define PCRE2_CODE_UNIT_WIDTH 8
 
 #include <stdbool.h>
 #include <stddef.h>

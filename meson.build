@@ -40,6 +40,7 @@ tlsuv_opts.append_compile_args('c', [
 tlsuv_opts.add_cmake_defines({'BUILD_TESTING': 'OFF'})
 tlsuv_dep = cmake.subproject('tlsuv', options: tlsuv_opts).dependency('tlsuv')
 
+pcre2_dep = subproject('pcre2').get_variable('libpcre2_8')
 zlib_dep = subproject('zlib-ng').get_variable('zlib_ng_dep')
 bdwgc_dep = subproject('bdwgc').get_variable('bdwgc_dep')
 uthash_dep = subproject('uthash').get_variable('uthash_dep')
@@ -74,7 +75,7 @@ endif
 build_date = run_command('date', '+%Y-%m-%d', check: true).stdout().strip()
 
 version_conf = configuration_data()
-version_conf.set('ANT_VERSION', '0.1.3.0')
+version_conf.set('ANT_VERSION', '0.1.3.1')
 version_conf.set('ANT_GIT_HASH', git_hash)
 version_conf.set('ANT_BUILD_DATE', build_date)
 
@@ -115,7 +116,7 @@ snapshot_h = custom_target(
 )
 
 ant_deps = [
-  libffi_dep,
+  libffi_dep, pcre2_dep,
   bdwgc_dep, uuid_dep,
   llhttp, mongoose_dep,
   libuv_dep, argtable3_dep,
