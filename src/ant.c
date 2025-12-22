@@ -5598,6 +5598,169 @@ static jsval_t js_bigint_literal(struct js *js) {
   return mkbigint(js, start, len, neg);
 }
 
+static jsval_t js_arr_destruct_assign(struct js *js) {
+  uint8_t exe = !(js->flags & F_NOEXEC);
+  js->consumed = 1;
+  
+  js_parse_state_t pattern_state;
+  JS_SAVE_STATE(js, pattern_state);
+  
+  int depth = 1;
+  while (depth > 0 && next(js) != TOK_EOF) {
+    if (js->tok == TOK_LBRACKET) depth++;
+    else if (js->tok == TOK_RBRACKET) depth--;
+    if (depth > 0) js->consumed = 1;
+  }
+  js->consumed = 1;
+  
+  if (next(js) != TOK_ASSIGN) {
+    return js_mkerr_typed(js, JS_ERR_SYNTAX, "array destructuring requires assignment");
+  }
+  js->consumed = 1;
+  
+  jsval_t v = js_expr(js);
+  if (is_err(v)) return v;
+  
+  jsval_t arr = js_mkundef();
+  if (exe) {
+    arr = resolveprop(js, v);
+    if (vtype(arr) != T_ARR && vtype(arr) != T_STR) {
+      return js_mkerr(js, "cannot array destructure non-iterable");
+    }
+  }
+  
+  js_parse_state_t end_state;
+  JS_SAVE_STATE(js, end_state);
+  JS_RESTORE_STATE(js, pattern_state);
+  
+  int index = 0;
+  while (next(js) != TOK_RBRACKET && next(js) != TOK_EOF) {
+    if (next(js) == TOK_COMMA) {
+      js->consumed = 1;
+      index++;
+      continue;
+    }
+    
+    bool is_rest = false;
+    if (next(js) == TOK_REST) {
+      is_rest = true;
+      js->consumed = 1;
+    }
+    
+    if (next(js) != TOK_IDENTIFIER) {
+      return js_mkerr_typed(js, JS_ERR_SYNTAX, "identifier expected in array destructuring");
+    }
+    jsoff_t var_off = js->toff, var_len = js->tlen;
+    js->consumed = 1;
+    
+    jsoff_t default_off = 0, default_len = 0;
+    if (!is_rest && next(js) == TOK_ASSIGN) {
+      js->consumed = 1;
+      default_off = js->pos;
+      uint8_t sf = js->flags;
+      js->flags |= F_NOEXEC;
+      jsval_t r = js_expr(js);
+      js->flags = sf;
+      if (is_err(r)) return r;
+      default_len = js->pos - default_off;
+    }
+    
+    if (exe) {
+      const char *var_name = &js->code[var_off];
+      
+      jsval_t prop_val;
+      if (is_rest) {
+        jsval_t rest_arr = js_mkarr(js);
+        if (is_err(rest_arr)) return rest_arr;
+        jsoff_t total_len = vtype(arr) == T_STR ? 0 : arr_length(js, arr);
+        if (vtype(arr) == T_STR) {
+          jsoff_t slen;
+          vstr(js, arr, &slen);
+          total_len = slen;
+        }
+        for (jsoff_t i = index; i < total_len; i++) {
+          jsval_t elem;
+          if (vtype(arr) == T_STR) {
+            jsoff_t slen, soff = vstr(js, arr, &slen);
+            elem = js_mkstr(js, (char *)&js->mem[soff + i], 1);
+          } else {
+            elem = arr_get(js, arr, i);
+          }
+          js_arr_push(js, rest_arr, elem);
+        }
+        prop_val = rest_arr;
+      } else {
+        if (vtype(arr) == T_STR) {
+          jsoff_t slen, soff = vstr(js, arr, &slen);
+          if ((jsoff_t)index < slen) {
+            prop_val = js_mkstr(js, (char *)&js->mem[soff + index], 1);
+          } else {
+            prop_val = js_mkundef();
+          }
+        } else {
+          prop_val = arr_get(js, arr, index);
+        }
+        
+        if (vtype(prop_val) == T_UNDEF && default_len > 0) {
+          prop_val = js_eval_slice(js, default_off, default_len);
+          if (is_err(prop_val)) return prop_val;
+          prop_val = resolveprop(js, prop_val);
+        }
+      }
+      
+      jsoff_t existing = lkp(js, js->scope, var_name, var_len);
+      if (existing != 0) {
+        jsval_t res = setprop(js, js->scope, js_mkstr(js, var_name, var_len), prop_val);
+        if (is_err(res)) return res;
+      } else {
+        jsval_t global_scope = js->scope;
+        while (vdata(upper(js, global_scope)) != 0) {
+          global_scope = upper(js, global_scope);
+        }
+        jsval_t res = setprop(js, global_scope, js_mkstr(js, var_name, var_len), prop_val);
+        if (is_err(res)) return res;
+      }
+    }
+    
+    index++;
+    if (next(js) == TOK_RBRACKET) break;
+    EXPECT(TOK_COMMA, );
+  }
+  
+  JS_RESTORE_STATE(js, end_state);
+  return v;
+}
+
+static jsval_t js_arr_literal(struct js *js);
+
+static jsval_t js_arr_or_destruct(struct js *js) {
+  jsoff_t saved_pos = js->pos;
+  uint8_t saved_tok = js->tok;
+  uint8_t saved_consumed = js->consumed;
+  uint8_t saved_flags = js->flags;
+  
+  js->flags |= F_NOEXEC;
+  js->consumed = 1;
+  int depth = 1;
+  while (depth > 0 && next(js) != TOK_EOF) {
+    if (js->tok == TOK_LBRACKET) depth++;
+    else if (js->tok == TOK_RBRACKET) depth--;
+    if (depth > 0) js->consumed = 1;
+  }
+  js->consumed = 1;
+  bool is_destruct = (next(js) == TOK_ASSIGN);
+  
+  js->pos = saved_pos;
+  js->tok = saved_tok;
+  js->consumed = saved_consumed;
+  js->flags = saved_flags;
+  
+  if (is_destruct) {
+    return js_arr_destruct_assign(js);
+  }
+  return js_arr_literal(js);
+}
+
 static jsval_t js_arr_literal(struct js *js) {
   uint8_t exe = !(js->flags & F_NOEXEC);
   jsval_t arr = exe ? mkarr(js) : js_mkundef();
@@ -6184,7 +6347,7 @@ static jsval_t js_literal(struct js *js) {
     case TOK_STRING:      return js_str_literal(js);
     case TOK_TEMPLATE:    return js_template_literal(js);
     case TOK_LBRACE:      return js_obj_literal(js);
-    case TOK_LBRACKET:    return js_arr_literal(js);
+    case TOK_LBRACKET:    return js_arr_or_destruct(js);
     case TOK_DIV:         return js_regex_literal(js);
     case TOK_CLASS:       return js_class_expr(js, true);
     case TOK_FUNC:        return js_func_literal(js, false);
@@ -6530,21 +6693,24 @@ static jsval_t js_call_dot(struct js *js) {
     uint8_t saved_tok = js->tok;
     uint8_t saved_consumed = js->consumed;
     res = lookup(js, &js->code[id_off], id_len);
-    if (is_err(res) && !(js->flags & F_STRICT) && !(js->flags & F_NOEXEC)) {
-      js->pos = saved_pos;
-      js->tok = saved_tok;
-      js->consumed = saved_consumed;
-      uint8_t next_tok = next(js);
-      if (next_tok == TOK_ASSIGN) {
-        jsval_t global_scope = js->scope;
-        while (vdata(upper(js, global_scope)) != 0) {
-          global_scope = upper(js, global_scope);
-        }
-        jsval_t key = js_mkstr(js, &js->code[id_off], id_len);
-        if (!is_err(key)) {
-          res = setprop(js, global_scope, key, js_mkundef());
+    if (is_err(res)) {
+      if (!(js->flags & F_STRICT) && !(js->flags & F_NOEXEC)) {
+        js->pos = saved_pos;
+        js->tok = saved_tok;
+        js->consumed = saved_consumed;
+        uint8_t next_tok = next(js);
+        if (next_tok == TOK_ASSIGN) {
+          jsval_t global_scope = js->scope;
+          while (vdata(upper(js, global_scope)) != 0) {
+            global_scope = upper(js, global_scope);
+          }
+          jsval_t key = js_mkstr(js, &js->code[id_off], id_len);
+          if (!is_err(key)) {
+            res = setprop(js, global_scope, key, js_mkundef());
+          }
         }
       }
+      if (is_err(res)) return res;
     }
   }
   while (next(js) == TOK_LPAREN || next(js) == TOK_DOT || next(js) == TOK_OPTIONAL_CHAIN || next(js) == TOK_LBRACKET || next(js) == TOK_TEMPLATE) {
@@ -7128,7 +7294,18 @@ static jsval_t js_assignment(struct js *js) {
     }
 
     js->flags = flags;
-    jsoff_t body_end = js->pos;
+    jsoff_t body_end;
+    if (is_expr) {
+      uint8_t tok = next(js);
+      if (tok == TOK_RPAREN || tok == TOK_RBRACE || tok == TOK_SEMICOLON || 
+          tok == TOK_COMMA || tok == TOK_EOF) {
+        body_end = js->toff;
+      } else {
+        body_end = js->pos;
+      }
+    } else {
+      body_end = js->pos;
+    }
 
     size_t fn_size = param_len + (body_end - body_start) + 64;
     char *fn_str = (char *) malloc(fn_size);
@@ -9486,6 +9663,8 @@ static jsval_t js_stmt(struct js *js) {
     stmt_tok == TOK_SWITCH || stmt_tok == TOK_TRY || 
     stmt_tok == TOK_LBRACE || stmt_tok == TOK_ASYNC
   );
+  
+  if (is_err(res)) return res;
   
   if (!is_block_statement) {
     int next_tok = next(js);
