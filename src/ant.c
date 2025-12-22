@@ -343,7 +343,7 @@ static jsval_t mkpropref(jsoff_t obj_off, jsoff_t key_off) {
 }
 
 static uint8_t unhex(uint8_t c) { return (c >= '0' && c <= '9') ? (uint8_t) (c - '0') : (c >= 'a' && c <= 'f') ? (uint8_t) (c - 'W') : (c >= 'A' && c <= 'F') ? (uint8_t) (c - '7') : 0; }
-static bool is_space(int c) { return c == ' ' || c == '\r' || c == '\n' || c == '\t' || c == '\f' || c == '\v'; }
+static bool is_space(int c) { return c == ' ' || c == '\r' || c == '\n' || c == '\t' || c == '\f' || c == '\v' || c == 0xA0; }
 static bool is_digit(int c) { return c >= '0' && c <= '9'; }
 static bool is_xdigit(int c) { return is_digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); }
 static bool is_alpha(int c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }
@@ -3167,22 +3167,45 @@ jsoff_t js_gc(struct js *js) {
   return freed;
 }
 
+static int is_unicode_space(const unsigned char *p, jsoff_t remaining, bool *is_line_term) {
+  if (is_line_term) *is_line_term = false;
+  if (remaining >= 2 && p[0] == 0xC2 && p[1] == 0xA0) return 2;
+  if (remaining >= 3 && p[0] == 0xE2 && p[1] == 0x80) {
+    if (p[2] >= 0x80 && p[2] <= 0x8A) return 3;
+    if (p[2] == 0xAF) return 3;
+    if (p[2] == 0xA8) { if (is_line_term) *is_line_term = true; return 3; }
+    if (p[2] == 0xA9) { if (is_line_term) *is_line_term = true; return 3; }
+  }
+  if (remaining >= 3 && p[0] == 0xE1 && p[1] == 0x9A && p[2] == 0x80) return 3;
+  if (remaining >= 3 && p[0] == 0xE2 && p[1] == 0x81 && p[2] == 0x9F) return 3;
+  if (remaining >= 3 && p[0] == 0xE3 && p[1] == 0x80 && p[2] == 0x80) return 3;
+  if (remaining >= 3 && p[0] == 0xEF && p[1] == 0xBB && p[2] == 0xBF) return 3;
+  return 0;
+}
+
 static jsoff_t skiptonext(const char *code, jsoff_t len, jsoff_t n, bool *had_newline) {
   if (had_newline) *had_newline = false;
   while (n < len) {
     if (is_space(code[n])) {
       if (had_newline && code[n] == '\n') *had_newline = true;
       n++;
-    } else if (n + 1 < len && code[n] == '/' && code[n + 1] == '/') {
-      for (n += 2; n < len && code[n] != '\n';) n++;
-      if (had_newline && n < len && code[n] == '\n') *had_newline = true;
-    } else if (n + 3 < len && code[n] == '/' && code[n + 1] == '*') {
-      for (n += 4; n < len && (code[n - 2] != '*' || code[n - 1] != '/');) {
-        if (had_newline && code[n] == '\n') *had_newline = true;
-        n++;
-      }
     } else {
-      break;
+      bool is_line_term = false;
+      int ulen = is_unicode_space((const unsigned char *)&code[n], len - n, &is_line_term);
+      if (ulen > 0) {
+        if (had_newline && is_line_term) *had_newline = true;
+        n += ulen;
+      } else if (n + 1 < len && code[n] == '/' && code[n + 1] == '/') {
+        for (n += 2; n < len && code[n] != '\n';) n++;
+        if (had_newline && n < len && code[n] == '\n') *had_newline = true;
+      } else if (n + 3 < len && code[n] == '/' && code[n + 1] == '*') {
+        for (n += 4; n < len && (code[n - 2] != '*' || code[n - 1] != '/');) {
+          if (had_newline && code[n] == '\n') *had_newline = true;
+          n++;
+        }
+      } else {
+        break;
+      }
     }
   }
   return n;
@@ -3322,6 +3345,10 @@ static uint8_t parseident(const char *buf, jsoff_t len, jsoff_t *tlen) {
     if (!is_unicode_ident_begin(first_cp)) return TOK_ERR;
     *tlen = esc_len;
   } else if (is_ident_begin(buf[0])) {
+    if (buf[0] & 0x80) {
+      int ws_len = is_unicode_space((const unsigned char *)buf, len, NULL);
+      if (ws_len > 0) return TOK_ERR;
+    }
     *tlen = 1;
     while (*tlen < len && (buf[*tlen] & 0xC0) == 0x80) (*tlen)++;
   } else {
@@ -3335,6 +3362,10 @@ static uint8_t parseident(const char *buf, jsoff_t len, jsoff_t *tlen) {
       if (!is_unicode_ident_continue(cp)) break;
       *tlen += el;
     } else if (is_ident_continue(buf[*tlen])) {
+      if (buf[*tlen] & 0x80) {
+        int ws_len = is_unicode_space((const unsigned char *)&buf[*tlen], len - *tlen, NULL);
+        if (ws_len > 0) break;
+      }
       (*tlen)++;
       while (*tlen < len && (buf[*tlen] & 0xC0) == 0x80) (*tlen)++;
     } else {
@@ -5560,6 +5591,33 @@ static jsval_t js_str_literal(struct js *js) {
                  is_xdigit(in[n2 + 3])) {
         out[n1++] = (uint8_t) ((unhex(in[n2 + 2]) << 4U) | unhex(in[n2 + 3]));
         n2 += 2;
+      } else if (in[n2 + 1] == 'u' && in[n2 + 2] == '{') {
+        uint32_t cp = 0;
+        size_t i = n2 + 3;
+        while (i < js->tlen && is_xdigit(in[i])) {
+          cp = (cp << 4) | unhex(in[i]);
+          i++;
+        }
+        if (in[i] == '}') {
+          if (cp < 0x80) {
+            out[n1++] = (uint8_t) cp;
+          } else if (cp < 0x800) {
+            out[n1++] = (uint8_t) (0xC0 | (cp >> 6));
+            out[n1++] = (uint8_t) (0x80 | (cp & 0x3F));
+          } else if (cp < 0x10000) {
+            out[n1++] = (uint8_t) (0xE0 | (cp >> 12));
+            out[n1++] = (uint8_t) (0x80 | ((cp >> 6) & 0x3F));
+            out[n1++] = (uint8_t) (0x80 | (cp & 0x3F));
+          } else {
+            out[n1++] = (uint8_t) (0xF0 | (cp >> 18));
+            out[n1++] = (uint8_t) (0x80 | ((cp >> 12) & 0x3F));
+            out[n1++] = (uint8_t) (0x80 | ((cp >> 6) & 0x3F));
+            out[n1++] = (uint8_t) (0x80 | (cp & 0x3F));
+          }
+          n2 = i;
+        } else {
+          out[n1++] = in[n2 + 1];
+        }
       } else if (in[n2 + 1] == 'u' && is_xdigit(in[n2 + 2]) &&
                  is_xdigit(in[n2 + 3]) && is_xdigit(in[n2 + 4]) &&
                  is_xdigit(in[n2 + 5])) {
@@ -8835,7 +8893,7 @@ static jsval_t js_return(struct js *js) {
   jsval_t res = js_mkundef();
   
   uint8_t nxt = next(js);
-  if (nxt != TOK_SEMICOLON && nxt != TOK_RBRACE && nxt != TOK_EOF) {
+  if (nxt != TOK_SEMICOLON && nxt != TOK_RBRACE && nxt != TOK_EOF && !js->had_newline) {
     res = resolveprop(js, js_expr(js));
   }
   
