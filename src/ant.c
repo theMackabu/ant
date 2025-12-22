@@ -9654,10 +9654,33 @@ static jsval_t builtin_string_search(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t builtin_Date(struct js *js, jsval_t *args, int nargs) {
   jsval_t date_obj = js->this_val;
-  bool use_this = (vtype(date_obj) == T_OBJ);
+  jsval_t date_proto = get_ctor_proto(js, "Date", 4);
+  jsval_t this_proto = get_proto(js, date_obj);
   
-  if (!use_this) {
-    date_obj = mkobj(js, 0);
+  bool is_constructor_call = (
+    vtype(date_obj) == T_OBJ && 
+    vtype(this_proto) == T_OBJ && 
+    vdata(this_proto) == vdata(date_proto)
+  );
+  
+  if (!is_constructor_call) {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    
+    time_t t = tv.tv_sec;
+    struct tm *tm = localtime(&t);
+    
+    static const char *days[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+    static const char *months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+    char buf[64];
+    
+    snprintf(
+      buf, sizeof(buf), "%s %s %02d %04d %02d:%02d:%02d GMT%+03ld%02ld",
+      days[tm->tm_wday], months[tm->tm_mon], tm->tm_mday, tm->tm_year + 1900,
+      tm->tm_hour, tm->tm_min, tm->tm_sec, -timezone/3600, (labs(timezone)/60)%60
+    );
+    
+    return js_mkstr(js, buf, strlen(buf));
   }
   
   double timestamp_ms;
@@ -9672,11 +9695,26 @@ static jsval_t builtin_Date(struct js *js, jsval_t *args, int nargs) {
       timestamp_ms = tod(args[0]);
     } else if (vtype(args[0]) == T_STR) {
       timestamp_ms = 0;
-    } else {
-      timestamp_ms = 0;
-    }
+    } else timestamp_ms = 0;
   } else {
-    timestamp_ms = 0;
+    int year = (int)tod(args[0]);
+    int month = nargs >= 2 ? (int)tod(args[1]) : 0;
+    int day = nargs >= 3 ? (int)tod(args[2]) : 1;
+    int hour = nargs >= 4 ? (int)tod(args[3]) : 0;
+    int minute = nargs >= 5 ? (int)tod(args[4]) : 0;
+    int sec = nargs >= 6 ? (int)tod(args[5]) : 0;
+    int ms = nargs >= 7 ? (int)tod(args[6]) : 0;
+    if (year >= 0 && year <= 99) year += 1900;
+    struct tm tm_val = {0};
+    tm_val.tm_year = year - 1900;
+    tm_val.tm_mon = month;
+    tm_val.tm_mday = day;
+    tm_val.tm_hour = hour;
+    tm_val.tm_min = minute;
+    tm_val.tm_sec = sec;
+    tm_val.tm_isdst = -1;
+    time_t t = mktime(&tm_val);
+    timestamp_ms = (double)t * 1000.0 + ms;
   }
   
   jsval_t time_key = js_mkstr(js, "__time", 6);
@@ -10166,6 +10204,108 @@ static jsval_t builtin_Date_toUTCString(struct js *js, jsval_t *args, int nargs)
            days[tm->tm_wday], tm->tm_mday, months[tm->tm_mon],
            tm->tm_year + 1900, tm->tm_hour, tm->tm_min, tm->tm_sec);
   return js_mkstr(js, buf, strlen(buf));
+}
+
+static jsval_t builtin_Date_toDateString(struct js *js, jsval_t *args, int nargs) {
+  (void) args;
+  (void) nargs;
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return js_mkstr(js, "Invalid Date", 12);
+  time_t t = (time_t)(ms / 1000.0);
+  struct tm *tm = localtime(&t);
+  static const char *days[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+  static const char *months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+  char buf[32];
+  snprintf(buf, sizeof(buf), "%s %s %02d %04d",
+           days[tm->tm_wday], months[tm->tm_mon], tm->tm_mday, tm->tm_year + 1900);
+  return js_mkstr(js, buf, strlen(buf));
+}
+
+static jsval_t builtin_Date_toTimeString(struct js *js, jsval_t *args, int nargs) {
+  (void) args;
+  (void) nargs;
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return js_mkstr(js, "Invalid Date", 12);
+  time_t t = (time_t)(ms / 1000.0);
+  struct tm *tm = localtime(&t);
+  char buf[32];
+  int offset = (int)(-timezone / 60);
+  int offset_hours = offset / 60;
+  int offset_mins = abs(offset % 60);
+  snprintf(buf, sizeof(buf), "%02d:%02d:%02d GMT%+03d%02d",
+           tm->tm_hour, tm->tm_min, tm->tm_sec, offset_hours, offset_mins);
+  return js_mkstr(js, buf, strlen(buf));
+}
+
+static jsval_t builtin_Date_toLocaleDateString(struct js *js, jsval_t *args, int nargs) {
+  (void) args;
+  (void) nargs;
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return js_mkstr(js, "Invalid Date", 12);
+  time_t t = (time_t)(ms / 1000.0);
+  struct tm *tm = localtime(&t);
+  char buf[32];
+  snprintf(buf, sizeof(buf), "%d/%d/%04d", tm->tm_mon + 1, tm->tm_mday, tm->tm_year + 1900);
+  return js_mkstr(js, buf, strlen(buf));
+}
+
+static jsval_t builtin_Date_toLocaleTimeString(struct js *js, jsval_t *args, int nargs) {
+  (void) args;
+  (void) nargs;
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return js_mkstr(js, "Invalid Date", 12);
+  time_t t = (time_t)(ms / 1000.0);
+  struct tm *tm = localtime(&t);
+  char buf[16];
+  snprintf(buf, sizeof(buf), "%02d:%02d:%02d", tm->tm_hour, tm->tm_min, tm->tm_sec);
+  return js_mkstr(js, buf, strlen(buf));
+}
+
+static jsval_t builtin_Date_getYear(struct js *js, jsval_t *args, int nargs) {
+  (void) args;
+  (void) nargs;
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return tov(NAN);
+  time_t t = (time_t)(ms / 1000.0);
+  struct tm *tm = localtime(&t);
+  return tov((double)(tm->tm_year));
+}
+
+static jsval_t builtin_Date_setYear(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return tov(NAN);
+  double year_arg = tod(args[0]);
+  if (isnan(year_arg)) {
+    date_set_time(js, js->this_val, NAN);
+    return tov(NAN);
+  }
+  int year = (int)year_arg;
+  if (year >= 0 && year <= 99) year += 1900;
+  double ms = date_get_time(js, js->this_val);
+  time_t t;
+  struct tm tm_val;
+  if (isnan(ms)) {
+    t = 0;
+    tm_val = *localtime(&t);
+    tm_val.tm_mday = 1;
+    tm_val.tm_mon = 0;
+    tm_val.tm_hour = 0;
+    tm_val.tm_min = 0;
+    tm_val.tm_sec = 0;
+  } else {
+    t = (time_t)(ms / 1000.0);
+    tm_val = *localtime(&t);
+  }
+  tm_val.tm_year = year - 1900;
+  time_t new_t = mktime(&tm_val);
+  double new_ms = (double)new_t * 1000.0;
+  date_set_time(js, js->this_val, new_ms);
+  return tov(new_ms);
+}
+
+static jsval_t builtin_Date_toJSON(struct js *js, jsval_t *args, int nargs) {
+  double ms = date_get_time(js, js->this_val);
+  if (isnan(ms)) return js_mknull();
+  return builtin_Date_toISOString(js, args, nargs);
 }
 
 static jsval_t builtin_Math_abs(struct js *js, jsval_t *args, int nargs) {
@@ -16811,6 +16951,13 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, date_proto, js_mkstr(js, "toUTCString", 11), js_mkfun(builtin_Date_toUTCString));
   setprop(js, date_proto, js_mkstr(js, "toGMTString", 11), js_mkfun(builtin_Date_toUTCString));
   setprop(js, date_proto, js_mkstr(js, "toString", 8), js_mkfun(builtin_Date_toString));
+  setprop(js, date_proto, js_mkstr(js, "toDateString", 12), js_mkfun(builtin_Date_toDateString));
+  setprop(js, date_proto, js_mkstr(js, "toTimeString", 12), js_mkfun(builtin_Date_toTimeString));
+  setprop(js, date_proto, js_mkstr(js, "toLocaleDateString", 18), js_mkfun(builtin_Date_toLocaleDateString));
+  setprop(js, date_proto, js_mkstr(js, "toLocaleTimeString", 18), js_mkfun(builtin_Date_toLocaleTimeString));
+  setprop(js, date_proto, js_mkstr(js, "getYear", 7), js_mkfun(builtin_Date_getYear));
+  setprop(js, date_proto, js_mkstr(js, "setYear", 7), js_mkfun(builtin_Date_setYear));
+  setprop(js, date_proto, js_mkstr(js, "toJSON", 6), js_mkfun(builtin_Date_toJSON));
   
   jsval_t regexp_proto = js_mkobj(js);
   set_proto(js, regexp_proto, object_proto);
