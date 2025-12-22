@@ -71,6 +71,7 @@ jsval_t js_call(struct js *js, jsval_t func, jsval_t *args, int nargs);
 jsval_t js_call_with_this(struct js *js, jsval_t func, jsval_t this_val, jsval_t *args, int nargs);
 
 void js_set(struct js *, jsval_t, const char *, jsval_t);
+bool js_del(struct js *, jsval_t obj, const char *key);
 void js_merge_obj(struct js *, jsval_t dst, jsval_t src);
 
 jsval_t js_setprop(struct js *, jsval_t obj, jsval_t key, jsval_t val);

@@ -214,6 +214,57 @@ static yyjson_mut_val *jsval_to_yyjson(struct js *js, yyjson_mut_doc *doc, jsval
   return jsval_to_yyjson_impl(js, doc, val, ctx, 0);
 }
 
+static jsval_t apply_reviver(struct js *js, jsval_t holder, const char *key, jsval_t reviver) {
+  jsval_t val = js_get(js, holder, key);
+  
+  if (js_type(val) == JS_OBJ) {
+    jsval_t len_val = js_get(js, val, "length");
+    if (js_type(len_val) == JS_NUM) {
+      int length = (int)js_getnum(len_val);
+      for (int i = 0; i < length; i++) {
+        char idxstr[32];
+        snprintf(idxstr, sizeof(idxstr), "%d", i);
+        jsval_t new_elem = apply_reviver(js, val, idxstr, reviver);
+        if (js_type(new_elem) == JS_UNDEF) {
+          js_del(js, val, idxstr);
+        } else js_set(js, val, idxstr, new_elem);
+      }
+    } else {
+      const char *prop_key;
+      size_t prop_key_len;
+      jsval_t prop_value;
+      
+      jsval_t keys_arr = js_mkobj(js);
+      int key_count = 0;
+      js_prop_iter_t iter = js_prop_iter_begin(js, val);
+      while (js_prop_iter_next(&iter, &prop_key, &prop_key_len, &prop_value)) {
+        if (prop_key_len >= 2 && prop_key[0] == '_' && prop_key[1] == '_') continue;
+        char idxstr[32];
+        snprintf(idxstr, sizeof(idxstr), "%d", key_count);
+        js_set(js, keys_arr, idxstr, js_mkstr(js, prop_key, prop_key_len));
+        key_count++;
+      }
+      js_prop_iter_end(&iter);
+      
+      for (int i = 0; i < key_count; i++) {
+        char idxstr[32];
+        snprintf(idxstr, sizeof(idxstr), "%d", i);
+        jsval_t key_str = js_get(js, keys_arr, idxstr);
+        size_t klen;
+        char *kstr = js_getstr(js, key_str, &klen);
+        jsval_t new_val = apply_reviver(js, val, kstr, reviver);
+        if (js_type(new_val) == JS_UNDEF) {
+          js_del(js, val, kstr);
+        } else js_set(js, val, kstr, new_val);
+      }
+    }
+  }
+  
+  jsval_t key_str = js_mkstr(js, key, strlen(key));
+  jsval_t call_args[2] = { key_str, js_get(js, holder, key) };
+  return js_call(js, reviver, call_args, 2);
+}
+
 jsval_t js_json_parse(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "JSON.parse() requires at least 1 argument");
   if (js_type(args[0]) != JS_STR) return js_mkerr(js, "JSON.parse() argument must be a string");
@@ -222,10 +273,17 @@ jsval_t js_json_parse(struct js *js, jsval_t *args, int nargs) {
   char *json_str = js_getstr(js, args[0], &len);
   
   yyjson_doc *doc = yyjson_read(json_str, len, 0);
-  if (!doc) return js_mkerr(js, "JSON.parse() failed: invalid JSON");
+  if (!doc) return js_mkerr_typed(js, JS_ERR_SYNTAX, "JSON.parse: unexpected character");
   
   jsval_t result = yyjson_to_jsval(js, yyjson_doc_get_root(doc));
   yyjson_doc_free(doc);
+  
+  if (nargs >= 2 && js_type(args[1]) == JS_FUNC) {
+    jsval_t reviver = args[1];
+    jsval_t root = js_mkobj(js);
+    js_set(js, root, "", result);
+    result = apply_reviver(js, root, "", reviver);
+  }
   
   return result;
 }

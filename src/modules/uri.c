@@ -39,6 +39,12 @@ static int is_valid_continuation(unsigned char c) {
   return (c & 0xC0) == 0x80;
 }
 
+static int is_lone_surrogate(const unsigned char *str, int seq_len) {
+  if (seq_len != 3) return 0;
+  if (str[0] != 0xED) return 0;
+  return (str[1] >= 0xA0 && str[1] <= 0xBF);
+}
+
 static int decode_escape_sequence(const char *str, size_t len, size_t *pos, unsigned char *out_byte) {
   if (*pos + 2 >= len) return -1;
   if (str[*pos] != '%') return -1;
@@ -87,6 +93,8 @@ static jsval_t js_encodeURIComponent(struct js *js, jsval_t *args, int nargs) {
       if (!is_valid_continuation((unsigned char)str[i + j])) goto malformed;
     }
     
+    if (is_lone_surrogate((unsigned char *)&str[i], seq_len)) goto malformed;
+    
     for (int j = 0; j < seq_len; j++) {
       out_len += sprintf(out + out_len, "%%%02X", (unsigned char)str[i + j]);
     }
@@ -100,7 +108,7 @@ static jsval_t js_encodeURIComponent(struct js *js, jsval_t *args, int nargs) {
 
 malformed:
   free(out);
-  return js_mkerr(js, "URIError: URI malformed");
+  return js_mkerr_typed(js, JS_ERR_URI, "URI malformed");
 }
 
 // encodeURI()
@@ -138,6 +146,8 @@ static jsval_t js_encodeURI(struct js *js, jsval_t *args, int nargs) {
       if (!is_valid_continuation((unsigned char)str[i + j])) goto malformed;
     }
     
+    if (is_lone_surrogate((unsigned char *)&str[i], seq_len)) goto malformed;
+    
     for (int j = 0; j < seq_len; j++) {
       out_len += sprintf(out + out_len, "%%%02X", (unsigned char)str[i + j]);
     }
@@ -151,7 +161,7 @@ static jsval_t js_encodeURI(struct js *js, jsval_t *args, int nargs) {
 
 malformed:
   free(out);
-  return js_mkerr(js, "URIError: URI malformed");
+  return js_mkerr_typed(js, JS_ERR_URI, "URI malformed");
 }
 
 // decodeURIComponent()
@@ -200,7 +210,7 @@ static jsval_t js_decodeURIComponent(struct js *js, jsval_t *args, int nargs) {
 
 malformed:
   free(out);
-  return js_mkerr(js, "URIError: URI malformed");
+  return js_mkerr_typed(js, JS_ERR_URI, "URI malformed");
 }
 
 // decodeURI()
@@ -263,7 +273,7 @@ static jsval_t js_decodeURI(struct js *js, jsval_t *args, int nargs) {
 
 malformed:
   free(out);
-  return js_mkerr(js, "URIError: URI malformed");
+  return js_mkerr_typed(js, JS_ERR_URI, "URI malformed");
 }
 
 static int is_escape_unreserved(unsigned char c) {
