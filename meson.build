@@ -1,6 +1,6 @@
 project('ant', 'c', default_options: [
   'optimization=2',
-  'c_std=gnu23',
+  'c_std=gnu2x',
   'default_library=static'
 ])
 
@@ -74,7 +74,7 @@ endif
 build_date = run_command('date', '+%Y-%m-%d', check: true).stdout().strip()
 
 version_conf = configuration_data()
-version_conf.set('ANT_VERSION', '0.1.2.16')
+version_conf.set('ANT_VERSION', '0.1.2.17')
 version_conf.set('ANT_GIT_HASH', git_hash)
 version_conf.set('ANT_BUILD_DATE', build_date)
 
@@ -89,7 +89,6 @@ build_include = include_directories('.')
 add_project_arguments(
   '-D JS_DUMP',
   '-Wno-unused-function',
-  '-D NO_EXECUTE_PERMISSION',
 language: 'c')
 
 gen_snapshot = executable(

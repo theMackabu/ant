@@ -1461,21 +1461,56 @@ continue_object_print:
   return n;
 }
 
+static size_t fix_exponent(char *buf, size_t n) {
+  char *e = strchr(buf, 'e');
+  if (!e) return n;
+  
+  char *src = e + 1;
+  char *dst = src;
+  
+  if (*src == '+' || *src == '-') {
+    dst++;
+    src++;
+  }
+  
+  while (*src == '0' && src[1] != '\0') src++;
+  
+  if (src != dst) {
+    memmove(dst, src, strlen(src) + 1);
+    return strlen(buf);
+  }
+  return n;
+}
+
 static size_t strnum(jsval_t value, char *buf, size_t len) {
-  double dv = tod(value), iv;
-  double frac = modf(dv, &iv);
+  double dv = tod(value);
   
   if (isnan(dv)) return cpy(buf, len, "NaN", 3);
   if (isinf(dv)) return cpy(buf, len, dv > 0 ? "Infinity" : "-Infinity", dv > 0 ? 8 : 9);
+  if (dv == 0.0) return cpy(buf, len, "0", 1);
   
-  if (dv >= -9007199254740991.0 && dv <= 9007199254740991.0) {
-    if (frac == 0.0) {
-      return (size_t) snprintf(buf, len, "%.0f", dv);
-    } else {
-      return (size_t) snprintf(buf, len, "%.17g", dv);
-    }
+  char temp[64];
+  int sign = dv < 0 ? 1 : 0;
+  double adv = sign ? -dv : dv;
+  
+  double iv;
+  double frac = modf(adv, &iv);
+  if (frac == 0.0 && adv < 9007199254740992.0) {
+    return (size_t) snprintf(buf, len, "%.0f", dv);
   }
-  return (size_t) snprintf(buf, len, "%g", dv);
+  
+  for (int prec = 1; prec <= 17; prec++) {
+    int n = snprintf(temp, sizeof(temp), "%.*g", prec, dv);
+    double parsed = strtod(temp, NULL);
+    if (parsed == dv) {
+      size_t result = (size_t)snprintf(buf, len, "%s", temp);
+      return fix_exponent(buf, result);
+    }
+    (void)n;
+  }
+  
+  size_t result = (size_t)snprintf(buf, len, "%.17g", dv);
+  return fix_exponent(buf, result);
 }
 
 static jsoff_t vstr(struct js *js, jsval_t value, jsoff_t *len) {
@@ -1876,6 +1911,27 @@ static size_t tostr(struct js *js, jsval_t value, char *buf, size_t len) {
     case T_CFUNC: return cpy(buf, len, "[Function (native)]", 19);
     case T_PROP:  return (size_t) snprintf(buf, len, "PROP@%lu", (unsigned long) vdata(value));
     default:      return (size_t) snprintf(buf, len, "VTYPE%d", vtype(value));
+  }
+}
+
+static jsval_t js_call_toString(struct js *js, jsval_t value);
+
+static jsval_t js_tostring_val(struct js *js, jsval_t value) {
+  uint8_t t = vtype(value);
+  char buf[256];
+  size_t len;
+  
+  switch (t) {
+    case T_STR:    return value;
+    case T_UNDEF:  return js_mkstr(js, "undefined", 9);
+    case T_NULL:   return js_mkstr(js, "null", 4);
+    case T_BOOL:   return vdata(value) ? js_mkstr(js, "true", 4) : js_mkstr(js, "false", 5);
+    case T_NUM:    len = strnum(value, buf, sizeof(buf)); return js_mkstr(js, buf, len);
+    case T_BIGINT: len = strbigint(js, value, buf, sizeof(buf)); return js_mkstr(js, buf, len);
+    case T_OBJ:
+    case T_ARR:
+    case T_FUNC:   return js_call_toString(js, value);
+    default:       len = tostr(js, value, buf, sizeof(buf)); return js_mkstr(js, buf, len);
   }
 }
 
@@ -3110,12 +3166,119 @@ static uint8_t parsekeyword(const char *buf, size_t len) {
   return TOK_IDENTIFIER;
 }
 
-static uint8_t parseident(const char *buf, jsoff_t len, jsoff_t *tlen) {
-  if (is_ident_begin(buf[0])) {
-    while (*tlen < len && is_ident_continue(buf[*tlen])) (*tlen)++;
-    return parsekeyword(buf, *tlen);
+static int parse_unicode_escape(const char *buf, jsoff_t len, jsoff_t pos, uint32_t *codepoint) {
+  if (pos + 5 >= len) return 0;
+  if (buf[pos] != '\\' || buf[pos + 1] != 'u') return 0;
+  
+  uint32_t cp = 0;
+  for (int i = 0; i < 4; i++) {
+    char c = buf[pos + 2 + i];
+    cp <<= 4;
+    if (c >= '0' && c <= '9') cp |= (c - '0');
+    else if (c >= 'a' && c <= 'f') cp |= (c - 'a' + 10);
+    else if (c >= 'A' && c <= 'F') cp |= (c - 'A' + 10);
+    else return 0;
   }
-  return TOK_ERR;
+  *codepoint = cp;
+  return 6;
+}
+
+static bool is_unicode_ident_begin(uint32_t cp) {
+  return cp == '_' || cp == '$' || 
+         (cp >= 'a' && cp <= 'z') || (cp >= 'A' && cp <= 'Z') ||
+         cp >= 0x80;
+}
+
+static bool is_unicode_ident_continue(uint32_t cp) {
+  return is_unicode_ident_begin(cp) || (cp >= '0' && cp <= '9');
+}
+
+static int encode_utf8(uint32_t cp, char *out) {
+  if (cp < 0x80) {
+    out[0] = (char)cp;
+    return 1;
+  } else if (cp < 0x800) {
+    out[0] = (char)(0xC0 | (cp >> 6));
+    out[1] = (char)(0x80 | (cp & 0x3F));
+    return 2;
+  } else if (cp < 0x10000) {
+    out[0] = (char)(0xE0 | (cp >> 12));
+    out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+    out[2] = (char)(0x80 | (cp & 0x3F));
+    return 3;
+  } else {
+    out[0] = (char)(0xF0 | (cp >> 18));
+    out[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+    out[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+    out[3] = (char)(0x80 | (cp & 0x3F));
+    return 4;
+  }
+}
+
+static size_t decode_ident_escapes(const char *src, size_t srclen, char *dst, size_t dstlen) {
+  size_t si = 0, di = 0;
+  while (si < srclen && di < dstlen - 1) {
+    uint32_t cp;
+    int el = parse_unicode_escape(src, srclen, si, &cp);
+    if (el > 0) {
+      int utf8len = encode_utf8(cp, dst + di);
+      di += utf8len;
+      si += el;
+    } else {
+      dst[di++] = src[si++];
+    }
+  }
+  dst[di] = '\0';
+  return di;
+}
+
+static bool has_unicode_escape(const char *src, size_t len) {
+  for (size_t i = 0; i + 5 < len; i++) {
+    if (src[i] == '\\' && src[i + 1] == 'u') return true;
+  }
+  return false;
+}
+
+static jsval_t js_mkstr_ident(struct js *js, const char *src, size_t srclen) {
+  if (!has_unicode_escape(src, srclen)) {
+    return js_mkstr(js, src, srclen);
+  }
+  char decoded[256];
+  size_t decoded_len = decode_ident_escapes(src, srclen, decoded, sizeof(decoded));
+  return js_mkstr(js, decoded, decoded_len);
+}
+
+static uint8_t parseident(const char *buf, jsoff_t len, jsoff_t *tlen) {
+  uint32_t first_cp;
+  int esc_len = parse_unicode_escape(buf, len, 0, &first_cp);
+  
+  if (esc_len > 0) {
+    if (!is_unicode_ident_begin(first_cp)) return TOK_ERR;
+    *tlen = esc_len;
+  } else if (is_ident_begin(buf[0])) {
+    *tlen = 1;
+    while (*tlen < len && (buf[*tlen] & 0xC0) == 0x80) (*tlen)++;
+  } else {
+    return TOK_ERR;
+  }
+  
+  while (*tlen < len) {
+    uint32_t cp;
+    int el = parse_unicode_escape(buf, len, *tlen, &cp);
+    if (el > 0) {
+      if (!is_unicode_ident_continue(cp)) break;
+      *tlen += el;
+    } else if (is_ident_continue(buf[*tlen])) {
+      (*tlen)++;
+      while (*tlen < len && (buf[*tlen] & 0xC0) == 0x80) (*tlen)++;
+    } else {
+      break;
+    }
+  }
+  
+  char decoded[256];
+  size_t decoded_len = decode_ident_escapes(buf, *tlen, decoded, sizeof(decoded));
+  return parsekeyword(decoded, decoded_len);
 }
 
 static uint8_t next(struct js *js) {
@@ -3566,6 +3729,15 @@ static jsval_t try_dynamic_getter(struct js *js, jsval_t obj, const char *key, s
 static jsval_t lookup(struct js *js, const char *buf, size_t len) {
   if (js->flags & F_NOEXEC) return 0;
   
+  char decoded[256];
+  const char *key_str = buf;
+  size_t key_len = len;
+  
+  if (has_unicode_escape(buf, len)) {
+    key_len = decode_ident_escapes(buf, len, decoded, sizeof(decoded));
+    key_str = decoded;
+  }
+  
   for (jsval_t scope = js->scope;;) {
     jsoff_t with_marker_off = lkp(js, scope, "__with_object__", 15);
     if (with_marker_off != 0) {
@@ -3578,15 +3750,15 @@ static jsval_t lookup(struct js *js, const char *buf, size_t len) {
         with_obj_val : mkval(T_OBJ, vdata(with_obj_val)
       );
       
-      jsoff_t prop_off = lkp(js, with_obj, buf, len);
+      jsoff_t prop_off = lkp(js, with_obj, key_str, key_len);
       if (prop_off != 0) {
-        jsval_t key = js_mkstr(js, buf, len);
+        jsval_t key = js_mkstr(js, key_str, key_len);
         if (is_err(key)) return key;
         return mkpropref((jsoff_t)vdata(with_obj), (jsoff_t)vdata(key));
       }
     }
     
-    jsoff_t off = lkp(js, scope, buf, len);
+    jsoff_t off = lkp(js, scope, key_str, key_len);
     if (off != 0) return mkval(T_PROP, off);
     if (vdata(scope) == 0) break;
     scope = upper(js, scope);
@@ -3596,13 +3768,13 @@ static jsval_t lookup(struct js *js, const char *buf, size_t len) {
     jsoff_t *root_off = (jsoff_t *)utarray_eltptr(global_scope_stack, 0);
     if (root_off && *root_off != 0) {
       jsval_t root_scope = mkval(T_OBJ, *root_off);
-      jsoff_t off = lkp(js, root_scope, buf, len);
+      jsoff_t off = lkp(js, root_scope, key_str, key_len);
       if (off != 0) return mkval(T_PROP, off);
     }
   }
   
   if (js->flags & F_STRICT) {
-    return js_mkerr_typed(js, JS_ERR_REFERENCE, "'%.*s' is not defined", (int) len, buf);
+    return js_mkerr_typed(js, JS_ERR_REFERENCE, "'%.*s' is not defined", (int) key_len, key_str);
   }
   
   jsval_t global_scope = js->scope;
@@ -3610,7 +3782,7 @@ static jsval_t lookup(struct js *js, const char *buf, size_t len) {
     global_scope = upper(js, global_scope);
   }
   
-  jsval_t key = js_mkstr(js, buf, len);
+  jsval_t key = js_mkstr(js, key_str, key_len);
   if (is_err(key)) return key;
   
   jsval_t undef = js_mkundef();
@@ -3629,8 +3801,12 @@ static jsval_t resolveprop(struct js *js, jsval_t v) {
     if (is_proxy(js, obj)) return proxy_get(js, obj, key_str, len);
     
     jsoff_t prop_off = lkp(js, obj, key_str, len);
-    if (prop_off == 0) return js_mkundef();
-    return resolveprop(js, mkval(T_PROP, prop_off));
+    if (prop_off != 0) return resolveprop(js, mkval(T_PROP, prop_off));
+    
+    jsoff_t proto_off = lkp_proto(js, obj, key_str, len);
+    if (proto_off != 0) return resolveprop(js, mkval(T_PROP, proto_off));
+    
+    return js_mkundef();
   }
   if (vtype(v) != T_PROP) return v;
   return resolveprop(js, loadval(js, (jsoff_t) (vdata(v) + sizeof(jsoff_t) * 2)));
@@ -3823,9 +3999,8 @@ static jsval_t do_bracket_op(struct js *js, jsval_t l, jsval_t r) {
   const char *keystr;
   size_t keylen;
   if (vtype(key_val) == T_NUM) {
-    snprintf(keybuf, sizeof(keybuf), "%.0f", tod(key_val));
+    keylen = strnum(key_val, keybuf, sizeof(keybuf));
     keystr = keybuf;
-    keylen = strlen(keybuf);
   } else if (vtype(key_val) == T_STR) {
     jsoff_t slen;
     jsoff_t off = vstr(js, key_val, &slen);
@@ -3876,8 +4051,12 @@ static jsval_t do_bracket_op(struct js *js, jsval_t l, jsval_t r) {
 }
 
 static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
-  const char *ptr = (char *) &js->code[coderefoff(r)];
-  size_t plen = codereflen(r);
+  const char *raw_ptr = (char *) &js->code[coderefoff(r)];
+  size_t raw_len = codereflen(r);
+  
+  char decoded_buf[256];
+  size_t plen = decode_ident_escapes(raw_ptr, raw_len, decoded_buf, sizeof(decoded_buf));
+  const char *ptr = decoded_buf;
   
   if (vtype(r) != T_CODEREF) return js_mkerr_typed(js, JS_ERR_SYNTAX, "ident expected");
   uint8_t t = vtype(l);
@@ -3957,9 +4136,6 @@ static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
     own_off = lkp(js, l, ptr, plen);
     if (own_off != 0) return mkval(T_PROP, own_off);
   }
-  
-  jsoff_t proto_off = lkp_proto(js, l, ptr, plen);
-  if (proto_off != 0) return resolveprop(js, mkval(T_PROP, proto_off));
   
   jsval_t key = js_mkstr(js, ptr, plen);
   return mkpropref((jsoff_t)vdata(l), (jsoff_t)vdata(key));
@@ -4742,6 +4918,57 @@ skip_fields:
   return res;
 }
 
+static jsval_t js_call_toString(struct js *js, jsval_t value) {
+  jsoff_t ts_off = lkp(js, value, "toString", 8);
+  if (ts_off == 0) ts_off = lkp_proto(js, value, "toString", 8);
+  if (ts_off == 0) goto fallback;
+  
+  jsval_t ts_func = resolveprop(js, mkval(T_PROP, ts_off));
+  uint8_t ft = vtype(ts_func);
+  if (ft != T_FUNC && ft != T_CFUNC) goto fallback;
+  
+  jsval_t saved_this = js->this_val;
+  js->this_val = value;
+  jsval_t result;
+  
+  if (ft == T_CFUNC) {
+    result = ((jsval_t (*)(struct js *, jsval_t *, int))vdata(ts_func))(js, NULL, 0);
+  } else {
+    jsval_t func_obj = mkval(T_OBJ, vdata(ts_func));
+    jsoff_t code_off = lkp(js, func_obj, "__code", 6);
+    if (code_off == 0) goto restore_fallback;
+    
+    jsval_t code_val = resolveprop(js, mkval(T_PROP, code_off));
+    if (vtype(code_val) != T_STR) goto restore_fallback;
+    
+    jsoff_t scope_off = lkp(js, func_obj, "__scope", 7);
+    jsval_t closure_scope = scope_off ? resolveprop(js, mkval(T_PROP, scope_off)) : js->scope;
+    
+    jsoff_t fnlen, fnoff = vstr(js, code_val, &fnlen);
+    const char *code_str = (const char *)&js->mem[fnoff];
+    
+    result = call_js(js, code_str, fnlen, closure_scope);
+  }
+  
+  js->this_val = saved_this;
+  
+  if (vtype(result) == T_STR) return result;
+  
+  uint8_t rt = vtype(result);
+  if (rt != T_OBJ && rt != T_ARR && rt != T_FUNC) {
+    char buf[256];
+    size_t len = tostr(js, result, buf, sizeof(buf));
+    return js_mkstr(js, buf, len);
+  }
+  
+restore_fallback:
+  js->this_val = saved_this;
+fallback:;
+  char buf[4096];
+  size_t len = tostr(js, value, buf, sizeof(buf));
+  return js_mkstr(js, buf, len);
+}
+
 static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
   if (js->flags & F_NOEXEC) return 0;
   jsval_t l = resolveprop(js, lhs), r = resolveprop(js, rhs);
@@ -5397,11 +5624,16 @@ static jsval_t js_obj_literal(struct js *js) {
     if (js->tok == TOK_IDENTIFIER) {
       id_off = js->toff;
       id_len = js->tlen;
-      if (exe) key = js_mkstr(js, js->code + js->toff, js->tlen);
+      if (exe) key = js_mkstr_ident(js, js->code + js->toff, js->tlen);
     } else if (js->tok == TOK_STRING) {
       if (exe) key = js_str_literal(js);
     } else if (js->tok == TOK_NUMBER) {
-      if (exe) key = js_mkstr(js, js->code + js->toff, js->tlen);
+      if (exe) {
+        double num = strtod(js->code + js->toff, NULL);
+        char buf[64];
+        size_t n = strnum(tov(num), buf, sizeof(buf));
+        key = js_mkstr(js, buf, n);
+      }
     } else if (js->tok == TOK_LBRACKET) {
       is_computed = true;
       js->consumed = 1;
@@ -6958,8 +7190,11 @@ obj_destruct_next:
         if (is_err(v)) return v;
       }
       if (exe) {
-        if (lkp(js, js->scope, name, nlen) > 0) return js_mkerr(js, "'%.*s' already declared", (int) nlen, name);
-        jsval_t x = mkprop(js, js->scope, js_mkstr(js, name, nlen), resolveprop(js, v), is_const);
+        char decoded_name[256];
+        size_t decoded_len = decode_ident_escapes(name, nlen, decoded_name, sizeof(decoded_name));
+        
+        if (lkp(js, js->scope, decoded_name, decoded_len) > 0) return js_mkerr(js, "'%.*s' already declared", (int) decoded_len, decoded_name);
+        jsval_t x = mkprop(js, js->scope, js_mkstr(js, decoded_name, decoded_len), resolveprop(js, v), is_const);
         if (is_err(x)) return x;
       }
     }
@@ -8857,14 +9092,17 @@ static jsval_t js_var_decl(struct js *js) {
     }
     
     if (exe) {
-      jsoff_t existing_off = lkp(js, var_scope, name, nlen);
+      char decoded_name[256];
+      size_t decoded_len = decode_ident_escapes(name, nlen, decoded_name, sizeof(decoded_name));
+      
+      jsoff_t existing_off = lkp(js, var_scope, decoded_name, decoded_len);
       if (existing_off > 0) {
-        jsval_t key_val = js_mkstr(js, name, nlen);
+        jsval_t key_val = js_mkstr(js, decoded_name, decoded_len);
         if (!is_err(v) && vtype(v) != T_UNDEF) {
           setprop(js, var_scope, key_val, resolveprop(js, v));
         }
       } else {
-        jsval_t x = mkprop(js, var_scope, js_mkstr(js, name, nlen), resolveprop(js, v), false);
+        jsval_t x = mkprop(js, var_scope, js_mkstr(js, decoded_name, decoded_len), resolveprop(js, v), false);
         if (is_err(x)) return x;
       }
     }
@@ -8976,6 +9214,9 @@ static jsval_t builtin_String(struct js *js, jsval_t *args, int nargs) {
     setprop(js, js->this_val, js_mkstr(js, "__primitive_value__", 19), sval);
     jsval_t proto = get_ctor_proto(js, "String", 6);
     if (vtype(proto) == T_OBJ) set_proto(js, js->this_val, proto);
+    jsoff_t slen;
+    vstr(js, sval, &slen);
+    setprop(js, js->this_val, js_mkstr(js, "length", 6), tov((double)slen));
   }
   return sval;
 }
@@ -9658,8 +9899,9 @@ static jsval_t builtin_regexp_exec(struct js *js, jsval_t *args, int nargs) {
 }
 
 static jsval_t builtin_string_search(struct js *js, jsval_t *args, int nargs) {
-  jsval_t str = unwrap_primitive(js, js->this_val);
-  if (vtype(str) != T_STR) return js_mkerr(js, "search called on non-string");
+  jsval_t this_unwrapped = unwrap_primitive(js, js->this_val);
+  jsval_t str = js_tostring_val(js, this_unwrapped);
+  if (is_err(str)) return str;
   if (nargs < 1) return tov(-1);
 
   jsval_t pattern = args[0];
@@ -11656,7 +11898,8 @@ static jsval_t builtin_object_valueOf(struct js *js, jsval_t *args, int nargs) {
 }
 
 static jsval_t builtin_object_toLocaleString(struct js *js, jsval_t *args, int nargs) {
-  return builtin_object_toString(js, args, nargs);
+  (void)args; (void)nargs;
+  return js_call_toString(js, js->this_val);
 }
 
 static jsval_t builtin_array_push(struct js *js, jsval_t *args, int nargs) {
@@ -13611,8 +13854,9 @@ return_whole:
 }
 
 static jsval_t builtin_string_slice(struct js *js, jsval_t *args, int nargs) {
-  jsval_t str = unwrap_primitive(js, js->this_val);
-  if (vtype(str) != T_STR) return js_mkerr(js, "slice called on non-string");
+  jsval_t this_unwrapped = unwrap_primitive(js, js->this_val);
+  jsval_t str = js_tostring_val(js, this_unwrapped);
+  if (is_err(str)) return str;
   jsoff_t str_len, str_off = vstr(js, str, &str_len);
   const char *str_ptr = (char *) &js->mem[str_off];
   jsoff_t start = 0, end = str_len;
@@ -13699,8 +13943,9 @@ static jsval_t builtin_string_endsWith(struct js *js, jsval_t *args, int nargs) 
 }
 
 static jsval_t builtin_string_replace(struct js *js, jsval_t *args, int nargs) {
-  jsval_t str = unwrap_primitive(js, js->this_val);
-  if (vtype(str) != T_STR) return js_mkerr(js, "replace called on non-string");
+  jsval_t this_unwrapped = unwrap_primitive(js, js->this_val);
+  jsval_t str = js_tostring_val(js, this_unwrapped);
+  if (is_err(str)) return str;
   if (nargs < 2) return str;
   
   jsval_t search = args[0];
@@ -14061,8 +14306,9 @@ static jsval_t do_regex_match(struct js *js, const char *pattern_str, const char
 }
 
 static jsval_t builtin_string_match(struct js *js, jsval_t *args, int nargs) {
-  jsval_t str = unwrap_primitive(js, js->this_val);
-  if (vtype(str) != T_STR) return js_mkerr(js, "match called on non-string");
+  jsval_t this_unwrapped = unwrap_primitive(js, js->this_val);
+  jsval_t str = js_tostring_val(js, this_unwrapped);
+  if (is_err(str)) return str;
   if (nargs < 1) return js_mknull();
 
   jsval_t pattern = args[0];
@@ -14490,16 +14736,24 @@ static jsval_t builtin_string_lastIndexOf(struct js *js, jsval_t *args, int narg
 }
 
 static jsval_t builtin_string_concat(struct js *js, jsval_t *args, int nargs) {
-  jsval_t str = unwrap_primitive(js, js->this_val);
-  if (vtype(str) != T_STR) return js_mkerr(js, "concat called on non-string");
+  jsval_t this_unwrapped = unwrap_primitive(js, js->this_val);
+  jsval_t str = js_tostring_val(js, this_unwrapped);
+  if (is_err(str)) return str;
 
   jsoff_t total_len;
   jsoff_t base_off = vstr(js, str, &total_len);
-  for (int i = 0; i < nargs; i++) {
-    if (vtype(args[i]) != T_STR) continue;
-    jsoff_t arg_len;
-    vstr(js, args[i], &arg_len);
-    total_len += arg_len;
+  
+  jsval_t *str_args = NULL;
+  if (nargs > 0) {
+    str_args = (jsval_t *)ANT_GC_MALLOC(nargs * sizeof(jsval_t));
+    if (!str_args) return js_mkerr(js, "oom");
+    for (int i = 0; i < nargs; i++) {
+      str_args[i] = js_tostring_val(js, args[i]);
+      if (is_err(str_args[i])) return str_args[i];
+      jsoff_t arg_len;
+      vstr(js, str_args[i], &arg_len);
+      total_len += arg_len;
+    }
   }
 
   char *result = (char *)ANT_GC_MALLOC(total_len + 1);
@@ -14511,8 +14765,7 @@ static jsval_t builtin_string_concat(struct js *js, jsval_t *args, int nargs) {
   jsoff_t pos = base_len;
 
   for (int i = 0; i < nargs; i++) {
-    if (vtype(args[i]) != T_STR) continue;
-    jsoff_t arg_len, arg_off = vstr(js, args[i], &arg_len);
+    jsoff_t arg_len, arg_off = vstr(js, str_args[i], &arg_len);
     memcpy(result + pos, &js->mem[arg_off], arg_len);
     pos += arg_len;
   }
@@ -14620,15 +14873,56 @@ static jsval_t builtin_number_toFixed(struct js *js, jsval_t *args, int nargs) {
   if (isinf(d)) return d > 0 ? js_mkstr(js, "Infinity", 8) : js_mkstr(js, "-Infinity", 9);
   
   int digits = 0;
-  if (nargs >= 1 && vtype(args[0]) == T_NUM) {
+  if (nargs >= 1 && vtype(args[0]) != T_UNDEF) {
     digits = (int) tod(args[0]);
-    if (digits < 0) digits = 0;
-    if (digits > 20) digits = 20;
+    if (digits < 0 || digits > 100) {
+      return js_mkerr_typed(js, JS_ERR_RANGE, "toFixed() digits argument must be between 0 and 100");
+    }
   }
   
-  char buf[64];
-  snprintf(buf, sizeof(buf), "%.*f", digits, d);
-  return js_mkstr(js, buf, strlen(buf));
+  bool negative = d < 0;
+  if (negative) d = -d;
+  
+  if (d >= 1e21) {
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%.0f", negative ? -d : d);
+    return js_mkstr(js, buf, strlen(buf));
+  }
+  
+  double scale = pow(10, digits);
+  double scaled = d * scale;
+  double rounded = floor(scaled + 0.5);
+  
+  char digit_buf[128];
+  snprintf(digit_buf, sizeof(digit_buf), "%.0f", rounded);
+  int digit_len = strlen(digit_buf);
+  
+  while (digit_len < digits + 1) {
+    memmove(digit_buf + 1, digit_buf, digit_len + 1);
+    digit_buf[0] = '0';
+    digit_len++;
+  }
+  
+  char buf[128];
+  int pos = 0;
+  
+  if (negative && rounded != 0) buf[pos++] = '-';
+  int int_digits = digit_len - digits;
+  if (int_digits <= 0) int_digits = 1;
+  
+  for (int i = 0; i < int_digits; i++) {
+    buf[pos++] = digit_buf[i];
+  }
+  
+  if (digits > 0) {
+    buf[pos++] = '.';
+    for (int i = int_digits; i < digit_len; i++) {
+      buf[pos++] = digit_buf[i];
+    }
+  }
+  
+  buf[pos] = '\0';
+  return js_mkstr(js, buf, pos);
 }
 
 static jsval_t builtin_number_toPrecision(struct js *js, jsval_t *args, int nargs) {
@@ -14639,19 +14933,101 @@ static jsval_t builtin_number_toPrecision(struct js *js, jsval_t *args, int narg
   if (isnan(d)) return js_mkstr(js, "NaN", 3);
   if (isinf(d)) return d > 0 ? js_mkstr(js, "Infinity", 8) : js_mkstr(js, "-Infinity", 9);
   
-  if (nargs < 1 || vtype(args[0]) != T_NUM) {
+  if (nargs < 1 || vtype(args[0]) == T_UNDEF) {
     char buf[64];
     size_t len = strnum(num, buf, sizeof(buf));
     return js_mkstr(js, buf, len);
   }
   
   int precision = (int) tod(args[0]);
-  if (precision < 1) precision = 1;
-  if (precision > 21) precision = 21;
+  if (precision < 1 || precision > 100) {
+    return js_mkerr_typed(js, JS_ERR_RANGE, "toPrecision() argument must be between 1 and 100");
+  }
   
-  char buf[64];
-  snprintf(buf, sizeof(buf), "%.*g", precision, d);
-  return js_mkstr(js, buf, strlen(buf));
+  bool negative = d < 0;
+  if (negative) d = -d;
+  
+  if (d == 0) {
+    char buf[128];
+    int pos = 0;
+    if (negative) buf[pos++] = '-';
+    buf[pos++] = '0';
+    if (precision > 1) {
+      buf[pos++] = '.';
+      for (int i = 1; i < precision; i++) buf[pos++] = '0';
+    }
+    buf[pos] = '\0';
+    return js_mkstr(js, buf, pos);
+  }
+  
+  int exp = (int) floor(log10(d));
+  bool use_exp = (exp < -(precision - 1) - 1) || (exp >= precision);
+  
+  if (use_exp) {
+    double mantissa = d / pow(10, exp);
+    double scale = pow(10, precision - 1);
+    double rounded = floor(mantissa * scale + 0.5);
+    
+    if (rounded >= scale * 10) {
+      rounded /= 10;
+      exp++;
+    }
+    
+    char digit_buf[32];
+    snprintf(digit_buf, sizeof(digit_buf), "%.0f", rounded);
+    int digit_len = strlen(digit_buf);
+    
+    char buf[128];
+    int pos = 0;
+    if (negative) buf[pos++] = '-';
+    buf[pos++] = digit_buf[0];
+    if (precision > 1) {
+      buf[pos++] = '.';
+      for (int i = 1; i < precision; i++) {
+        buf[pos++] = (i < digit_len) ? digit_buf[i] : '0';
+      }
+    }
+    buf[pos++] = 'e';
+    buf[pos++] = (exp >= 0) ? '+' : '-';
+    if (exp < 0) exp = -exp;
+    snprintf(buf + pos, sizeof(buf) - pos, "%d", exp);
+    return js_mkstr(js, buf, strlen(buf));
+  } else {
+    int digits_after_point = precision - exp - 1;
+    if (digits_after_point < 0) digits_after_point = 0;
+    
+    double scale = pow(10, digits_after_point);
+    double rounded = floor(d * scale + 0.5);
+    
+    char digit_buf[64];
+    snprintf(digit_buf, sizeof(digit_buf), "%.0f", rounded);
+    int digit_len = strlen(digit_buf);
+    
+    while (digit_len < digits_after_point + 1) {
+      memmove(digit_buf + 1, digit_buf, digit_len + 1);
+      digit_buf[0] = '0';
+      digit_len++;
+    }
+    
+    char buf[128];
+    int pos = 0;
+    if (negative) buf[pos++] = '-';
+    
+    int int_digits = digit_len - digits_after_point;
+    for (int i = 0; i < int_digits; i++) {
+      buf[pos++] = digit_buf[i];
+    }
+    
+    if (digits_after_point > 0) {
+      buf[pos++] = '.';
+      for (int i = int_digits; i < digit_len; i++) {
+        buf[pos++] = digit_buf[i];
+      }
+    }
+    
+    buf[pos] = '\0';
+    return js_mkstr(js, buf, pos);
+  }
 }
 
 static jsval_t builtin_number_toExponential(struct js *js, jsval_t *args, int nargs) {
@@ -14662,19 +15038,76 @@ static jsval_t builtin_number_toExponential(struct js *js, jsval_t *args, int na
   if (isnan(d)) return js_mkstr(js, "NaN", 3);
   if (isinf(d)) return d > 0 ? js_mkstr(js, "Infinity", 8) : js_mkstr(js, "-Infinity", 9);
   
-  int digits = 6;
-  if (nargs >= 1 && vtype(args[0]) == T_NUM) {
+  int digits = -1;
+  if (nargs >= 1 && vtype(args[0]) != T_UNDEF) {
     digits = (int) tod(args[0]);
-    if (digits < 0) digits = 0;
+    if (digits < 0 || digits > 100) {
+      return js_mkerr_typed(js, JS_ERR_RANGE, "toExponential() argument must be between 0 and 100");
+    }
+  }
+  
+  bool negative = d < 0;
+  if (negative) d = -d;
+  
+  int exp = 0;
+  if (d != 0) {
+    exp = (int) floor(log10(d));
+    double test = d / pow(10, exp);
+    if (test >= 10) { exp++; test /= 10; }
+    if (test < 1) { exp--; test *= 10; }
+  }
+  
+  if (digits < 0) {
+    char temp[32];
+    snprintf(temp, sizeof(temp), "%.15g", d);
+    int sig = 0;
+    for (int i = 0; temp[i] && temp[i] != 'e' && temp[i] != 'E'; i++) {
+      if (temp[i] == '.') continue;
+      if (temp[i] >= '0' && temp[i] <= '9') if (temp[i] != '0' || sig > 0) sig++;
+    }
+    digits = sig > 0 ? sig - 1 : 0;
     if (digits > 20) digits = 20;
   }
   
-  char buf[64];
-  snprintf(buf, sizeof(buf), "%.*e", digits, d);
-  char *e = strchr(buf, 'e');
-  if (e && (e[1] == '+' || e[1] == '-') && e[2] == '0' && e[3] != '\0') {
-    memmove(e + 2, e + 3, strlen(e + 3) + 1);
+  double mantissa = d / pow(10, exp);
+  double scale = pow(10, digits);
+  double scaled = mantissa * scale;
+  double rounded = floor(scaled + 0.5);
+  
+  if (rounded >= scale * 10) {
+    rounded /= 10;
+    exp++;
   }
+  
+  char buf[64];
+  int pos = 0;
+  
+  if (negative) buf[pos++] = '-';
+  
+  char digit_buf[32];
+  snprintf(digit_buf, sizeof(digit_buf), "%.0f", rounded);
+  int digit_len = strlen(digit_buf);
+  
+  while (digit_len < digits + 1) {
+    memmove(digit_buf + 1, digit_buf, digit_len + 1);
+    digit_buf[0] = '0';
+    digit_len++;
+  }
+  
+  buf[pos++] = digit_buf[0];
+  
+  if (digits > 0) {
+    buf[pos++] = '.';
+    for (int i = 1; i <= digits; i++) {
+      buf[pos++] = (i < digit_len) ? digit_buf[i] : '0';
+    }
+  }
+  
+  buf[pos++] = 'e';
+  buf[pos++] = (exp >= 0) ? '+' : '-';
+  if (exp < 0) exp = -exp;
+  snprintf(buf + pos, sizeof(buf) - pos, "%d", exp);
+  
   return js_mkstr(js, buf, strlen(buf));
 }
 
