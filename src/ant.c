@@ -3874,16 +3874,6 @@ static jsval_t assign(struct js *js, jsval_t lhs, jsval_t val) {
     return mkval(T_PROP, propoff);
   }
   
-  if (js->flags & F_STRICT) {
-    jsval_t prop_val = loadval(js, (jsoff_t) (propoff + sizeof(jsoff_t) * 2));
-    uint8_t prop_type = vtype(prop_val);
-    
-    if (prop_type == T_STR || prop_type == T_NUM || prop_type == T_BOOL || 
-        prop_type == T_NULL || prop_type == T_UNDEF) {
-      return js_mkerr(js, "TypeError: cannot set property on primitive value in strict mode");
-    }
-  }
-  
   if (!find_and_check_writable(js, propoff)) {
     if (js->flags & F_STRICT) return js_mkerr(js, "Cannot assign to read only property");
     return lhs;
@@ -5381,8 +5371,22 @@ static jsval_t js_str_literal(struct js *js) {
         out[n1++] = '\t';
       } else if (in[n2 + 1] == 'r') {
         out[n1++] = '\r';
-      } else if (in[n2 + 1] == '0') {
+      } else if (in[n2 + 1] == '0' && !(in[n2 + 2] >= '0' && in[n2 + 2] <= '7')) {
         out[n1++] = '\0';
+      } else if (in[n2 + 1] >= '0' && in[n2 + 1] <= '7') {
+        if (js->flags & F_STRICT) {
+          return js_mkerr_typed(js, JS_ERR_SYNTAX, "octal escape sequences are not allowed in strict mode");
+        }
+        int val = in[n2 + 1] - '0';
+        if (in[n2 + 2] >= '0' && in[n2 + 2] <= '7') {
+          val = val * 8 + (in[n2 + 2] - '0');
+          n2++;
+          if (in[n2 + 1] >= '0' && in[n2 + 1] <= '7' && val * 8 + (in[n2 + 1] - '0') <= 255) {
+            val = val * 8 + (in[n2 + 1] - '0');
+            n2++;
+          }
+        }
+        out[n1++] = (uint8_t)val;
       } else if (in[n2 + 1] == 'v') {
         out[n1++] = '\v';
       } else if (in[n2 + 1] == 'f') {
@@ -5746,9 +5750,16 @@ static jsval_t js_obj_literal(struct js *js) {
 }
 
 static bool parse_func_params(struct js *js, uint8_t *flags, int *out_count) {
-  const char *param_names[32];
-  size_t param_lens[32];
   int param_count = 0;
+  int param_capacity = 16;
+  const char **param_names = (const char **)ANT_GC_MALLOC(param_capacity * sizeof(char *));
+  size_t *param_lens = (size_t *)ANT_GC_MALLOC(param_capacity * sizeof(size_t));
+  
+  if (!param_names || !param_lens) {
+    if (flags) js->flags = *flags;
+    js_mkerr_typed(js, JS_ERR_SYNTAX, "out of memory");
+    return false;
+  }
   
   for (bool comma = false; next(js) != TOK_EOF; comma = true) {
     if (!comma && next(js) == TOK_RPAREN) break;
@@ -5758,6 +5769,54 @@ static bool parse_func_params(struct js *js, uint8_t *flags, int *out_count) {
       is_rest = true;
       js->consumed = 1;
       next(js);
+    }
+    
+    if (next(js) == TOK_LBRACE || next(js) == TOK_LBRACKET) {
+      uint8_t open_tok = js->tok;
+      uint8_t close_tok = (open_tok == TOK_LBRACE) ? TOK_RBRACE : TOK_RBRACKET;
+      int depth = 1;
+      js->consumed = 1;
+      while (depth > 0 && next(js) != TOK_EOF) {
+        if (js->tok == open_tok) depth++;
+        else if (js->tok == close_tok) depth--;
+        if (depth > 0) js->consumed = 1;
+      }
+      js->consumed = 1;
+      param_count++;
+      
+      if (next(js) == TOK_ASSIGN) {
+        js->consumed = 1;
+        int ddepth = 0;
+        bool done = false;
+        while (!done && next(js) != TOK_EOF) {
+          uint8_t tok = next(js);
+          if (ddepth == 0 && (tok == TOK_RPAREN || tok == TOK_COMMA)) {
+            done = true;
+          } else if (tok == TOK_LPAREN || tok == TOK_LBRACKET || tok == TOK_LBRACE) {
+            ddepth++;
+            js->consumed = 1;
+          } else if (tok == TOK_RPAREN || tok == TOK_RBRACKET || tok == TOK_RBRACE) {
+            ddepth--;
+            js->consumed = 1;
+          } else {
+            js->consumed = 1;
+          }
+        }
+      }
+      
+      if (is_rest && next(js) != TOK_RPAREN) {
+        if (flags) js->flags = *flags;
+        js_mkerr_typed(js, JS_ERR_SYNTAX, "rest parameter must be last");
+        return false;
+      }
+      if (next(js) == TOK_RPAREN) break;
+      if (next(js) != TOK_COMMA) {
+        if (flags) js->flags = *flags;
+        js_mkerr_typed(js, JS_ERR_SYNTAX, "parse error");
+        return false;
+      }
+      js->consumed = 1;
+      continue;
     }
     
     if (next(js) != TOK_IDENTIFIER) {
@@ -5785,11 +5844,24 @@ static bool parse_func_params(struct js *js, uint8_t *flags, int *out_count) {
       }
     }
     
-    if (param_count < 32) {
-      param_names[param_count] = param_name;
-      param_lens[param_count] = param_len;
-      param_count++;
+    if (param_count >= param_capacity) {
+      param_capacity *= 2;
+      const char **new_names = (const char **)ANT_GC_MALLOC(param_capacity * sizeof(char *));
+      size_t *new_lens = (size_t *)ANT_GC_MALLOC(param_capacity * sizeof(size_t));
+      if (!new_names || !new_lens) {
+        if (flags) js->flags = *flags;
+        js_mkerr_typed(js, JS_ERR_SYNTAX, "out of memory");
+        return false;
+      }
+      memcpy(new_names, param_names, param_count * sizeof(char *));
+      memcpy(new_lens, param_lens, param_count * sizeof(size_t));
+      param_names = new_names;
+      param_lens = new_lens;
     }
+    
+    param_names[param_count] = param_name;
+    param_lens[param_count] = param_len;
+    param_count++;
     
     js->consumed = 1;
     
@@ -5827,6 +5899,7 @@ static bool parse_func_params(struct js *js, uint8_t *flags, int *out_count) {
     }
     js->consumed = 1;
   }
+  
   if (out_count) *out_count = param_count;
   return true;
 }
@@ -7251,6 +7324,7 @@ static jsval_t js_const(struct js *js) {
 
 static jsval_t js_func_decl(struct js *js) {
   uint8_t exe = !(js->flags & F_NOEXEC);
+  uint8_t saved_flags = js->flags;
   js->consumed = 1;
   EXPECT(TOK_IDENTIFIER, );
   js->consumed = 0;
@@ -7260,66 +7334,9 @@ static jsval_t js_func_decl(struct js *js) {
   EXPECT(TOK_LPAREN, );
   jsoff_t pos = js->pos - 1;
   int param_count = 0;
-  for (bool comma = false; next(js) != TOK_EOF; comma = true) {
-    if (!comma && next(js) == TOK_RPAREN) break;
-    
-    bool is_rest = false;
-    if (next(js) == TOK_REST) {
-      is_rest = true;
-      js->consumed = 1;
-      next(js);
-    }
-    
-    if (next(js) == TOK_LBRACE || next(js) == TOK_LBRACKET) {
-      uint8_t open_tok = js->tok;
-      uint8_t close_tok = (open_tok == TOK_LBRACE) ? TOK_RBRACE : TOK_RBRACKET;
-      int depth = 1;
-      js->consumed = 1;
-      while (depth > 0 && next(js) != TOK_EOF) {
-        if (js->tok == open_tok) depth++;
-        else if (js->tok == close_tok) depth--;
-        if (depth > 0) js->consumed = 1;
-      }
-      js->consumed = 1;
-      param_count++;
-      
-      if (is_rest && next(js) != TOK_RPAREN) {
-        return js_mkerr_typed(js, JS_ERR_SYNTAX, "rest parameter must be last");
-      }
-      if (next(js) == TOK_RPAREN) break;
-      EXPECT(TOK_COMMA, );
-      continue;
-    }
-    
-    if (next(js) != TOK_IDENTIFIER) return js_mkerr_typed(js, JS_ERR_SYNTAX, "identifier expected");
-    param_count++;
-    js->consumed = 1;
-    
-    if (next(js) == TOK_ASSIGN) {
-      js->consumed = 1;
-      int depth = 0;
-      bool done = false;
-      while (!done && next(js) != TOK_EOF) {
-        uint8_t tok = next(js);
-        if (depth == 0 && (tok == TOK_RPAREN || tok == TOK_COMMA)) {
-          done = true;
-        } else if (tok == TOK_LPAREN || tok == TOK_LBRACKET || tok == TOK_LBRACE) {
-          depth++;
-          js->consumed = 1;
-        } else if (tok == TOK_RPAREN || tok == TOK_RBRACKET || tok == TOK_RBRACE) {
-          depth--;
-          js->consumed = 1;
-        } else {
-          js->consumed = 1;
-        }
-      }
-    }
-    
-    if (is_rest && next(js) != TOK_RPAREN) {
-      return js_mkerr_typed(js, JS_ERR_SYNTAX, "rest parameter must be last");
-    }
-    if (next(js) == TOK_RPAREN) break;
-    EXPECT(TOK_COMMA, );
+  if (!parse_func_params(js, &saved_flags, &param_count)) {
+    js->flags = saved_flags;
+    return js_mkerr_typed(js, JS_ERR_SYNTAX, "invalid parameters");
   }
   EXPECT(TOK_RPAREN, );
   EXPECT(TOK_LBRACE, );
@@ -9377,6 +9394,8 @@ static jsval_t builtin_Object(struct js *js, jsval_t *args, int nargs) {
   return arg;
 }
 
+static jsval_t js_eval_inherit_strict(struct js *js, const char *buf, size_t len, bool inherit_strict);
+
 static jsval_t builtin_eval(struct js *js, jsval_t *args, int nargs) {
   if (nargs == 0) return js_mkundef();
   
@@ -9389,11 +9408,18 @@ static jsval_t builtin_eval(struct js *js, jsval_t *args, int nargs) {
   js_parse_state_t saved;
   JS_SAVE_STATE(js, saved);
   uint8_t saved_flags = js->flags;
+  bool caller_strict = (js->flags & F_STRICT) != 0;
   
-  jsval_t result = js_eval(js, code_str, code_len);
+  jsval_t result = js_eval_inherit_strict(js, code_str, code_len, caller_strict);
+  
+  bool had_throw = (js->flags & F_THROW) != 0;
   
   JS_RESTORE_STATE(js, saved);
   js->flags = saved_flags;
+  
+  if (is_err(result) || had_throw) {
+    js->flags |= F_THROW;
+  }
   
   return result;
 }
@@ -18280,7 +18306,7 @@ bool js_chkargs(jsval_t *args, int nargs, const char *spec) {
   return ok;
 }
 
-jsval_t js_eval(struct js *js, const char *buf, size_t len) {
+static jsval_t js_eval_inherit_strict(struct js *js, const char *buf, size_t len, bool inherit_strict) {
   jsval_t res = js_mkundef();
   if (len == (size_t) ~0U) len = strlen(buf);
   js->consumed = 1;
@@ -18294,6 +18320,8 @@ jsval_t js_eval(struct js *js, const char *buf, size_t len) {
   jsoff_t saved_pos = js->pos;
   uint8_t saved_consumed = js->consumed;
   js->consumed = 1;
+  
+  if (inherit_strict) js->flags |= F_STRICT;
   
   if (next(js) == TOK_STRING) {
     const char *str = &js->code[js->toff + 1];
@@ -18312,6 +18340,10 @@ jsval_t js_eval(struct js *js, const char *buf, size_t len) {
     if (js->flags & F_RETURN) break;
   }
   return res;
+}
+
+jsval_t js_eval(struct js *js, const char *buf, size_t len) {
+  return js_eval_inherit_strict(js, buf, len, false);
 }
 
 static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this, jsval_t *args, int nargs, bool use_bound_this) {
