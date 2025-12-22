@@ -619,6 +619,7 @@ static jsval_t get_proto(struct js *js, jsval_t obj);
 static void set_proto(struct js *js, jsval_t obj, jsval_t proto);
 static jsval_t get_ctor_proto(struct js *js, const char *name, size_t len);
 static jsval_t setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v);
+static jsval_t setprop_nonconfigurable(struct js *js, jsval_t obj, const char *key, size_t keylen, jsval_t v);
 static jsoff_t lkp(struct js *js, jsval_t obj, const char *key, size_t len);
 static jsval_t resolveprop(struct js *js, jsval_t v);
 
@@ -2754,6 +2755,26 @@ create_new:
 
 static jsval_t setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v) {
   return js_setprop(js, obj, k, v);
+}
+
+// Set a property that is non-configurable (cannot be deleted)
+static jsval_t setprop_nonconfigurable(struct js *js, jsval_t obj, const char *key, size_t keylen, jsval_t v) {
+  jsval_t k = js_mkstr(js, key, keylen);
+  if (is_err(k)) return k;
+  jsval_t result = setprop(js, obj, k, v);
+  if (is_err(result)) return result;
+  
+  // Create descriptor with configurable: false
+  char desc_key[80];
+  snprintf(desc_key, sizeof(desc_key), "__desc_%.*s", (int)keylen, key);
+  jsval_t desc_obj = mkobj(js, 0);
+  if (is_err(desc_obj)) return desc_obj;
+  setprop(js, desc_obj, js_mkstr(js, "configurable", 12), js_mkfalse());
+  setprop(js, desc_obj, js_mkstr(js, "writable", 8), js_mktrue());
+  setprop(js, desc_obj, js_mkstr(js, "enumerable", 10), js_mkfalse());
+  setprop(js, obj, js_mkstr(js, desc_key, strlen(desc_key)), desc_obj);
+  
+  return result;
 }
 
 static uint64_t g_symbol_counter = 1;
@@ -6490,12 +6511,18 @@ static jsval_t js_unary(struct js *js) {
     
     if ((js->flags & F_STRICT) && next(js) == TOK_IDENTIFIER) {
       jsoff_t id_pos = js->pos;
+      uint8_t id_tok = js->tok;
+      jsoff_t id_toff = js->toff;
+      jsoff_t id_tlen = js->tlen;
       js->consumed = 1;
       uint8_t after = next(js);
       if (after != TOK_DOT && after != TOK_LBRACKET && after != TOK_OPTIONAL_CHAIN) {
         return js_mkerr_typed(js, JS_ERR_SYNTAX, "cannot delete unqualified identifier in strict mode");
       }
       js->pos = id_pos;
+      js->tok = id_tok;
+      js->toff = id_toff;
+      js->tlen = id_tlen;
       js->consumed = 0;
     }
     
@@ -6645,6 +6672,24 @@ static jsval_t js_unary(struct js *js) {
           return js_mkfalse();
         }
       }
+      
+      jsoff_t key_str_off = loadoff(js, (jsoff_t)(prop_off + sizeof(jsoff_t)));
+      jsoff_t key_len = (loadoff(js, key_str_off) >> 2) - 1;
+      const char *key_str = (char *)&js->mem[key_str_off + sizeof(jsoff_t)];
+      char desc_key[80];
+      snprintf(desc_key, sizeof(desc_key), "__desc_%.*s", (int)key_len, key_str);
+      jsoff_t desc_off = lkp(js, owner_obj, desc_key, strlen(desc_key));
+      if (desc_off == 0) goto delete_prop;
+      jsval_t desc_obj = resolveprop(js, mkval(T_PROP, desc_off));
+      if (vtype(desc_obj) != T_OBJ) goto delete_prop;
+      jsoff_t config_off = lkp(js, desc_obj, "configurable", 12);
+      if (config_off == 0) goto delete_prop;
+      jsval_t config_val = resolveprop(js, mkval(T_PROP, config_off));
+      if (js_truthy(js, config_val)) goto delete_prop;
+      if (js->flags & F_STRICT) return js_mkerr_typed(js, JS_ERR_TYPE, "cannot delete non-configurable property");
+      return js_mkfalse();
+
+      delete_prop:
       
       if (is_first_prop) {
         jsoff_t deleted_next = loadoff(js, prop_off) & ~(GCMASK | CONSTMASK);
@@ -18006,7 +18051,7 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, obj_func_obj, js_mkstr(js, "getOwnPropertyNames", 19), js_mkfun(builtin_object_getOwnPropertyNames));
   setprop(js, obj_func_obj, js_mkstr(js, "isExtensible", 12), js_mkfun(builtin_object_isExtensible));
   setprop(js, obj_func_obj, js_mkstr(js, "preventExtensions", 17), js_mkfun(builtin_object_preventExtensions));
-  setprop(js, obj_func_obj, js_mkstr(js, "prototype", 9), object_proto);
+  setprop_nonconfigurable(js, obj_func_obj, "prototype", 9, object_proto);
   setprop(js, glob, js_mkstr(js, "Object", 6), mkval(T_FUNC, vdata(obj_func_obj)));
   
   jsval_t func_ctor_obj = mkobj(js, 0);
