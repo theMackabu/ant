@@ -641,8 +641,10 @@ static jsval_t builtin_Math_trunc(struct js *js, jsval_t *args, int nargs);
 
 static jsval_t call_js(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope);
 static jsval_t call_js_internal(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *bound_args, int bound_argc);
+static jsval_t call_js_internal_nfe(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *bound_args, int bound_argc, jsval_t func_name, jsval_t func_val);
 static jsval_t call_js_with_args(struct js *js, jsval_t func, jsval_t *args, int nargs);
 static jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *args, int nargs);
+static jsval_t call_js_code_with_args_nfe(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *args, int nargs, jsval_t func_name, jsval_t func_val);
 static jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t code_len, jsval_t closure_scope, jsval_t *args, int nargs);
 static inline bool push_this(jsval_t this_value);
 static inline jsval_t pop_this(void);
@@ -1619,6 +1621,28 @@ static bool is_internal_prop(const char *key, jsoff_t klen) {
   if (klen == 12 && memcmp(key, "__bound_this", 12) == 0) return true;
   if (klen == 12 && memcmp(key, "__bound_args", 12) == 0) return true;
   if (klen == 13 && memcmp(key, "__target_func", 13) == 0) return true;
+  if (klen == 11 && memcmp(key, "constructor", 11) == 0) return true;
+  if (klen == 8 && memcmp(key, "__getter", 8) == 0) return true;
+  if (klen == 8 && memcmp(key, "__setter", 8) == 0) return true;
+  if (klen == 8 && memcmp(key, "__strict", 8) == 0) return true;
+  if (klen == 15 && memcmp(key, "__strict_args__", 15) == 0) return true;
+  if (klen == 20 && memcmp(key, "__strict_eval_scope__", 20) == 0) return true;
+  if (klen == 19 && memcmp(key, "__primitive_value__", 19) == 0) return true;
+  if (klen == 6 && memcmp(key, "__time", 6) == 0) return true;
+  if (klen == 5 && memcmp(key, "__map", 5) == 0) return true;
+  if (klen == 5 && memcmp(key, "__set", 5) == 0) return true;
+  if (klen == 9 && memcmp(key, "__weakmap", 9) == 0) return true;
+  if (klen == 9 && memcmp(key, "__weakset", 9) == 0) return true;
+  if (klen == 15 && memcmp(key, "__with_object__", 15) == 0) return true;
+  if (klen == 18 && memcmp(key, "__esm_module_scope", 18) == 0) return true;
+  if (klen == 13 && memcmp(key, "__proxy_ref__", 13) == 0) return true;
+  if (klen == 10 && memcmp(key, "__handlers", 10) == 0) return true;
+  if (klen == 6 && memcmp(key, "__keys", 6) == 0) return true;
+  if (klen == 6 && memcmp(key, "__vals", 6) == 0) return true;
+  if (klen == 7 && memcmp(key, "__state", 7) == 0) return true;
+  if (klen == 13 && memcmp(key, "__field_count", 13) == 0) return true;
+  if (klen == 8 && memcmp(key, "__fields", 8) == 0) return true;
+  if (klen == 8 && memcmp(key, "__source", 8) == 0) return true;
   return false;
 }
 
@@ -4758,6 +4782,10 @@ static void setup_arguments(struct js *js, jsval_t scope, jsval_t *args, int nar
 }
 
 static jsval_t call_js_internal(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *bound_args, int bound_argc) {
+  return call_js_internal_nfe(js, fn, fnlen, closure_scope, bound_args, bound_argc, js_mkundef(), js_mkundef());
+}
+
+static jsval_t call_js_internal_nfe(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *bound_args, int bound_argc, jsval_t func_name, jsval_t func_val) {
   jsoff_t fnpos = 1;
   jsval_t saved_scope = js->scope;
   jsval_t target_this = peek_this();
@@ -4902,7 +4930,26 @@ static jsval_t call_js_internal(struct js *js, const char *fn, jsoff_t fnlen, js
   size_t n = fnlen - fnpos - 1U;
   
   bool func_strict = is_strict_function_body(&fn[fnpos], n);
+  
+  if (!func_strict && vtype(func_val) == T_FUNC) {
+    jsval_t func_obj = mkval(T_OBJ, vdata(func_val));
+    jsoff_t strict_off = lkp(js, func_obj, "__strict", 8);
+    if (strict_off != 0) {
+      jsval_t strict_val = resolveprop(js, mkval(T_PROP, strict_off));
+      func_strict = (vtype(strict_val) == T_BOOL && vdata(strict_val) == 1);
+    }
+  }
+  
   setup_arguments(js, function_scope, args, argc, func_strict);
+  
+  if (vtype(func_name) == T_STR && vtype(func_val) == T_FUNC) {
+    jsoff_t len;
+    (void)vstr(js, func_name, &len);
+    if (len > 0) {
+      jsval_t prop = mkprop(js, function_scope, func_name, func_val, true);
+      (void)prop;
+    }
+  }
   
   if (func_strict && (vtype(target_this) == T_UNDEF || vtype(target_this) == T_NULL ||
       (vtype(target_this) == T_OBJ && vdata(target_this) == 0))) {
@@ -5032,13 +5079,23 @@ static jsval_t call_js_with_args(struct js *js, jsval_t func, jsval_t *args, int
     push_this(bound_this);
   }
   
-  jsval_t result = call_js_code_with_args(js, fn, fnlen, closure_scope, args, nargs);
+  jsval_t func_name = js_mkundef();
+  jsoff_t name_off = lkp(js, func_obj, "name", 4);
+  if (name_off != 0) {
+    func_name = resolveprop(js, mkval(T_PROP, name_off));
+  }
+  
+  jsval_t result = call_js_code_with_args_nfe(js, fn, fnlen, closure_scope, args, nargs, func_name, func);
   
   if (combined_args) ANT_GC_FREE(combined_args);
   return result;
 }
 
 static jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *args, int nargs) {
+  return call_js_code_with_args_nfe(js, fn, fnlen, closure_scope, args, nargs, js_mkundef(), js_mkundef());
+}
+
+static jsval_t call_js_code_with_args_nfe(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *args, int nargs, jsval_t func_name, jsval_t func_val) {
   jsoff_t parent_scope_offset;
   if (vtype(closure_scope) == T_OBJ) {
     parent_scope_offset = (jsoff_t) vdata(closure_scope);
@@ -5051,6 +5108,15 @@ static jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnl
   utarray_push_back(global_scope_stack, &parent_scope_offset);
   jsval_t function_scope = mkobj(js, parent_scope_offset);
   js->scope = function_scope;
+  
+  if (vtype(func_name) == T_STR && vtype(func_val) == T_FUNC) {
+    jsoff_t len;
+    (void)vstr(js, func_name, &len);
+    if (len > 0) {
+      jsval_t prop = mkprop(js, function_scope, func_name, func_val, true);
+      (void)prop;
+    }
+  }
   
   jsoff_t fnpos = 1;
   int arg_idx = 0;
@@ -5282,6 +5348,12 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
         }
       }
       
+      jsval_t nfe_name_val = js_mkundef();
+      jsoff_t nfe_name_off = lkp(js, func_obj, "name", 4);
+      if (nfe_name_off != 0) {
+        nfe_name_val = resolveprop(js, mkval(T_PROP, nfe_name_off));
+      }
+      
       if (fnlen == 16 && memcmp(code_str, "__builtin_Object", 16) == 0) {
         res = call_c(js, builtin_Object);
       } else {
@@ -5292,13 +5364,9 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
         const char *func_name = NULL;
         const char *this_name = NULL;
         
-        jsoff_t name_off = lkp(js, func_obj, "name", 4);
-        if (name_off != 0) {
-          jsval_t name_val = resolveprop(js, mkval(T_PROP, name_off));
-          if (vtype(name_val) == T_STR) {
-            jsoff_t name_len, name_offset = vstr(js, name_val, &name_len);
-            func_name = (const char *)&js->mem[name_offset];
-          }
+        if (vtype(nfe_name_val) == T_STR) {
+          jsoff_t name_len, name_offset = vstr(js, nfe_name_val, &name_len);
+          func_name = (const char *)&js->mem[name_offset];
         }
         
         if (vtype(target_this) != T_OBJ) goto skip_constructor_name;
@@ -5405,7 +5473,7 @@ skip_fields:
           res = start_async_in_coroutine(js, code_str, fnlen, closure_scope, bound_args, bound_argc);
           pop_call_frame();
         } else {
-          res = call_js_internal(js, code_str, fnlen, closure_scope, bound_args, bound_argc);
+          res = call_js_internal_nfe(js, code_str, fnlen, closure_scope, bound_args, bound_argc, nfe_name_val, func);
           pop_call_frame();
         }
         
@@ -6870,6 +6938,13 @@ static jsval_t js_func_literal(struct js *js, bool is_async) {
     if (is_err(scope_key)) return scope_key;
     jsval_t res4 = setprop(js, func_obj, scope_key, js->scope);
     if (is_err(res4)) return res4;
+    
+    if (flags & F_STRICT) {
+      jsval_t strict_key = js_mkstr(js, "__strict", 8);
+      if (is_err(strict_key)) return strict_key;
+      jsval_t res_strict = setprop(js, func_obj, strict_key, js_mktrue());
+      if (is_err(res_strict)) return res_strict;
+    }
   }
   
   jsval_t func = mkval(T_FUNC, (unsigned long) vdata(func_obj));
