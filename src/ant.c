@@ -20,6 +20,7 @@
 #include <sys/stat.h>
 #include <utarray.h>
 #include <uthash.h>
+#include <float.h>
 
 #include "modules/fs.h"
 #include "modules/timer.h"
@@ -28,6 +29,18 @@
 
 #define MINICORO_IMPL
 #include "minicoro.h"
+
+_Static_assert(sizeof(double) == 8, "NaN-boxing requires 64-bit IEEE 754 doubles");
+_Static_assert(sizeof(uint64_t) == 8, "NaN-boxing requires 64-bit integers");
+_Static_assert(sizeof(double) == sizeof(uint64_t), "double and uint64_t must have same size");
+
+#if defined(__STDC_IEC_559__) || defined(__GCC_IEC_559)
+  /* IEEE 754 compliance guaranteed */
+#elif defined(__FAST_MATH__)
+  #error "NaN-boxing is incompatible with -ffast-math"
+#elif DBL_MANT_DIG != 53 || DBL_MAX_EXP != 1024
+  #error "NaN-boxing requires IEEE 754 binary64 doubles"
+#endif
 
 typedef uint32_t jsoff_t;
 
@@ -335,6 +348,12 @@ static jsoff_t codereflen(jsval_t v) { return (v >> 24U) & 0xffffffU; }
 static jsoff_t propref_obj(jsval_t v) { return v & 0xffffffU; }
 static jsoff_t propref_key(jsval_t v) { return (v >> 24U) & 0xffffffU; }
 
+static jsoff_t offtolen(jsoff_t off) { return (off >> 2) - 1; }
+static jsoff_t align32(jsoff_t v) { return ((v + 3) >> 2) << 2; }
+
+static void saveoff(struct js *js, jsoff_t off, jsoff_t val) { memcpy(&js->mem[off], &val, sizeof(val)); }
+static void saveval(struct js *js, jsoff_t off, jsval_t val) { memcpy(&js->mem[off], &val, sizeof(val)); }
+
 static bool is_nan(jsval_t v) { 
   if ((v >> 52U) != 0x7feU) return false;
   // real doubles in 0x7FE range have large mantissa values
@@ -369,17 +388,49 @@ static jsval_t mkpropref(jsoff_t obj_off, jsoff_t key_off) {
   return mkval(T_PROPREF, (obj_off & 0xffffffU) | ((jsval_t)(key_off & 0xffffffU) << 24U)); 
 }
 
-static uint8_t unhex(uint8_t c) { return (c >= '0' && c <= '9') ? (uint8_t) (c - '0') : (c >= 'a' && c <= 'f') ? (uint8_t) (c - 'W') : (c >= 'A' && c <= 'F') ? (uint8_t) (c - '7') : 0; }
-static bool is_space(int c) { return c == ' ' || c == '\r' || c == '\n' || c == '\t' || c == '\f' || c == '\v' || c == 0xA0; }
-static bool is_digit(int c) { return c >= '0' && c <= '9'; }
-static bool is_xdigit(int c) { return is_digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); }
-static bool is_alpha(int c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }
-static bool is_ident_begin(int c) { return c == '_' || c == '$' || is_alpha(c) || (c & 0x80); }
-static bool is_ident_continue(int c) { return c == '_' || c == '$' || is_alpha(c) || is_digit(c) || (c & 0x80); }
-static bool is_err(jsval_t v) { return vtype(v) == T_ERR; }
-static bool is_unary(uint8_t tok) { return (tok >= TOK_POSTINC && tok <= TOK_UMINUS) || tok == TOK_NOT || tok == TOK_TILDA || tok == TOK_TYPEOF || tok == TOK_VOID; }
-static bool is_assign(uint8_t tok) { return (tok >= TOK_ASSIGN && tok <= TOK_OR_ASSIGN); }
-static bool is_keyword_propname(uint8_t tok) { return (tok >= TOK_ASYNC && tok <= TOK_GLOBAL_THIS) || tok == TOK_TYPEOF; }
+static bool is_err(jsval_t v) { 
+  return vtype(v) == T_ERR; 
+}
+
+static uint8_t unhex(uint8_t c) { 
+  return (c >= '0' && c <= '9') ? (uint8_t) (c - '0') : (c >= 'a' && c <= 'f') ? (uint8_t) (c - 'W') : (c >= 'A' && c <= 'F') ? (uint8_t) (c - '7') : 0; 
+}
+
+static bool is_space(int c) { 
+  return c == ' ' || c == '\r' || c == '\n' || c == '\t' || c == '\f' || c == '\v' || c == 0xA0; 
+}
+
+static bool is_digit(int c) { 
+  return c >= '0' && c <= '9'; 
+}
+
+static bool is_xdigit(int c) { 
+  return is_digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); 
+}
+
+static bool is_alpha(int c) { 
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); 
+}
+
+static bool is_ident_begin(int c) { 
+  return c == '_' || c == '$' || is_alpha(c) || (c & 0x80); 
+}
+
+static bool is_ident_continue(int c) { 
+  return c == '_' || c == '$' || is_alpha(c) || is_digit(c) || (c & 0x80); 
+}
+
+static bool is_unary(uint8_t tok) { 
+  return (tok >= TOK_POSTINC && tok <= TOK_UMINUS) || tok == TOK_NOT || tok == TOK_TILDA || tok == TOK_TYPEOF || tok == TOK_VOID; 
+}
+
+static bool is_assign(uint8_t tok) { 
+  return (tok >= TOK_ASSIGN && tok <= TOK_OR_ASSIGN); 
+}
+
+static bool is_keyword_propname(uint8_t tok) { 
+  return (tok >= TOK_ASYNC && tok <= TOK_GLOBAL_THIS) || tok == TOK_TYPEOF; 
+}
 
 static uint32_t js_to_uint32(double d) {
   if (!isfinite(d) || d == 0) return 0;
@@ -417,31 +468,50 @@ typedef struct {
   (js)->tok = (state).tok; \
   (js)->consumed = (state).consumed; \
 } while(0)
-static void saveoff(struct js *js, jsoff_t off, jsoff_t val) { memcpy(&js->mem[off], &val, sizeof(val)); }
-static void saveval(struct js *js, jsoff_t off, jsval_t val) { memcpy(&js->mem[off], &val, sizeof(val)); }
-static jsoff_t loadoff(struct js *js, jsoff_t off) { jsoff_t v = 0; assert(js->brk <= js->size); memcpy(&v, &js->mem[off], sizeof(v)); return v; }
-static bool is_arr_off(struct js *js, jsoff_t off) { return (loadoff(js, off) & ARRMASK) != 0; }
-static jsoff_t offtolen(jsoff_t off) { return (off >> 2) - 1; }
-static jsoff_t vstrlen(struct js *js, jsval_t v) { return offtolen(loadoff(js, (jsoff_t) vdata(v))); }
-static jsval_t loadval(struct js *js, jsoff_t off) { jsval_t v = 0; memcpy(&v, &js->mem[off], sizeof(v)); return v; }
-static jsval_t upper(struct js *js, jsval_t scope) { return mkval(T_OBJ, loadoff(js, (jsoff_t) (vdata(scope) + sizeof(jsoff_t)))); }
-static jsoff_t align32(jsoff_t v) { return ((v + 3) >> 2) << 2; }
+
+static jsoff_t loadoff(struct js *js, jsoff_t off) { 
+  jsoff_t v = 0; assert(js->brk <= js->size); memcpy(&v, &js->mem[off], sizeof(v)); 
+  return v; 
+}
+
+static bool is_arr_off(struct js *js, jsoff_t off) { 
+  return (loadoff(js, off) & ARRMASK) != 0; 
+}
+
+static jsoff_t vstrlen(struct js *js, jsval_t v) { 
+  return offtolen(loadoff(js, (jsoff_t) vdata(v))); 
+}
+
+static jsval_t loadval(struct js *js, jsoff_t off) { 
+  jsval_t v = 0; memcpy(&v, &js->mem[off], sizeof(v));
+  return v; 
+}
+
+static jsval_t upper(struct js *js, jsval_t scope) { 
+  return mkval(T_OBJ, loadoff(js, (jsoff_t) (vdata(scope) + sizeof(jsoff_t)))); 
+}
 
 #define CHECKV(_v) do { if (is_err(_v)) { res = (_v); goto done; } } while (0)
 #define EXPECT(_tok, _e) do { if (next(js) != _tok) { _e; return js_mkerr_typed(js, JS_ERR_SYNTAX, "parse error"); }; js->consumed = 1; } while (0)
 
+static bool is_proxy(struct js *js, jsval_t obj);
 static bool streq(const char *buf, size_t len, const char *p, size_t n);
 static size_t tostr(struct js *js, jsval_t value, char *buf, size_t len);
 static size_t strpromise(struct js *js, jsval_t value, char *buf, size_t len);
 static size_t js_to_pcre2_pattern(const char *src, size_t src_len, char *dst, size_t dst_size);
-static jsval_t js_stmt_impl(struct js *js);
+
 static bool continue_targets_innermost_loop(void);
 static bool is_continue_target(const char *name, jsoff_t len);
 static bool is_this_loop_continue_target(int depth_at_entry);
 static void clear_continue_label(void);
 static void clear_break_label(void);
 
+static jsval_t js_stmt_impl(struct js *js);
 static inline jsoff_t esize(jsoff_t w);
+
+static bool parse_func_params(struct js *js, uint8_t *flags, int *out_count);
+static double js_to_number(struct js *js, jsval_t arg);
+
 static jsval_t js_expr(struct js *js);
 static jsval_t js_eval_slice(struct js *js, jsoff_t off, jsoff_t len);
 static jsval_t js_eval_str(struct js *js, const char *code, jsoff_t len);
@@ -452,108 +522,20 @@ static jsval_t js_while(struct js *js);
 static jsval_t js_do_while(struct js *js);
 static jsval_t js_block_or_stmt(struct js *js);
 static jsval_t js_var_decl(struct js *js);
-static bool parse_func_params(struct js *js, uint8_t *flags, int *out_count);
 static jsval_t js_regex_literal(struct js *js);
 static jsval_t js_try(struct js *js);
 static jsval_t js_switch(struct js *js);
 static jsval_t do_op(struct js *, uint8_t op, jsval_t l, jsval_t r);
-static double js_to_number(struct js *js, jsval_t arg);
 static jsval_t do_instanceof(struct js *js, jsval_t l, jsval_t r);
 static jsval_t do_in(struct js *js, jsval_t l, jsval_t r);
 static jsval_t resolveprop(struct js *js, jsval_t v);
 static jsoff_t free_list_allocate(size_t size);
 static jsoff_t lkp(struct js *js, jsval_t obj, const char *buf, size_t len);
-static jsval_t builtin_array_push(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_array_pop(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_array_slice(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_array_join(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_array_includes(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_array_every(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_array_reverse(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_array_map(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_array_filter(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_array_reduce(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_array_flat(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_array_concat(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_array_at(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_array_fill(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_array_find(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_array_findIndex(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_array_findLast(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_array_findLastIndex(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_array_flatMap(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_array_forEach(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_array_indexOf(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_array_lastIndexOf(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_array_reduceRight(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_array_shift(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_array_unshift(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_array_some(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_array_sort(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_array_splice(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_array_copyWithin(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_array_toReversed(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_array_toSorted(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_array_toSpliced(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_array_with(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_array_keys(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_array_values(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_array_entries(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_array_toString(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Array_isArray(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Array_from(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Array_of(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Error(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_EvalError(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_RangeError(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_ReferenceError(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_SyntaxError(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_TypeError(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_URIError(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_InternalError(struct js *js, jsval_t *args, int nargs);
+
 static jsval_t js_import_stmt(struct js *js);
 static jsval_t js_export_stmt(struct js *js);
-static jsval_t builtin_import(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_import_meta_resolve(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_string_indexOf(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_string_substring(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_string_split(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_string_slice(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_string_includes(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_string_startsWith(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_string_endsWith(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_string_replace(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_string_replaceAll(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_string_match(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_string_template(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_string_charCodeAt(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_string_toLowerCase(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_string_toUpperCase(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_string_trim(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_string_trimStart(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_string_trimEnd(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_string_repeat(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_string_padStart(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_string_padEnd(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_string_charAt(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_string_at(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_string_lastIndexOf(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_string_concat(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_string_fromCharCode(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_number_toString(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_number_toFixed(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_number_toPrecision(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_number_toExponential(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_parseInt(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_parseFloat(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_btoa(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_atob(struct js *js, jsval_t *args, int nargs);
+
 static jsval_t builtin_Object(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_RegExp(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_regexp_test(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_regexp_exec(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_regexp_toString(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_string_search(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_Promise(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_Promise_resolve(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_Promise_reject(struct js *js, jsval_t *args, int nargs);
@@ -563,90 +545,24 @@ static jsval_t builtin_Promise_race(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_promise_then(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_promise_catch(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_promise_finally(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Date(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Date_now(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Map(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Set(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_WeakMap(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_WeakSet(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Proxy(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Proxy_revocable(struct js *js, jsval_t *args, int nargs);
-static bool is_proxy(struct js *js, jsval_t obj);
+
 static jsval_t proxy_get(struct js *js, jsval_t proxy, const char *key, size_t key_len);
 static jsval_t proxy_set(struct js *js, jsval_t proxy, const char *key, size_t key_len, jsval_t value);
 static jsval_t proxy_has(struct js *js, jsval_t proxy, const char *key, size_t key_len);
 static jsval_t proxy_delete(struct js *js, jsval_t proxy, const char *key, size_t key_len);
-static jsval_t map_set(struct js *js, jsval_t *args, int nargs);
-static jsval_t map_get(struct js *js, jsval_t *args, int nargs);
-static jsval_t map_has(struct js *js, jsval_t *args, int nargs);
-static jsval_t map_delete(struct js *js, jsval_t *args, int nargs);
-static jsval_t map_clear(struct js *js, jsval_t *args, int nargs);
-static jsval_t map_size(struct js *js, jsval_t *args, int nargs);
-static jsval_t map_entries(struct js *js, jsval_t *args, int nargs);
-static jsval_t map_keys(struct js *js, jsval_t *args, int nargs);
-static jsval_t map_values(struct js *js, jsval_t *args, int nargs);
-static jsval_t map_forEach(struct js *js, jsval_t *args, int nargs);
-static jsval_t set_add(struct js *js, jsval_t *args, int nargs);
-static jsval_t set_has(struct js *js, jsval_t *args, int nargs);
-static jsval_t set_delete(struct js *js, jsval_t *args, int nargs);
-static jsval_t set_clear(struct js *js, jsval_t *args, int nargs);
-static jsval_t set_size(struct js *js, jsval_t *args, int nargs);
-static jsval_t set_values(struct js *js, jsval_t *args, int nargs);
-static jsval_t set_forEach(struct js *js, jsval_t *args, int nargs);
-static jsval_t weakmap_set(struct js *js, jsval_t *args, int nargs);
-static jsval_t weakmap_get(struct js *js, jsval_t *args, int nargs);
-static jsval_t weakmap_has(struct js *js, jsval_t *args, int nargs);
-static jsval_t weakmap_delete(struct js *js, jsval_t *args, int nargs);
-static jsval_t weakset_add(struct js *js, jsval_t *args, int nargs);
-static jsval_t weakset_has(struct js *js, jsval_t *args, int nargs);
-static jsval_t weakset_delete(struct js *js, jsval_t *args, int nargs);
+
 static jsval_t builtin_function_call(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_function_apply(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_function_bind(struct js *js, jsval_t *args, int nargs);
 
-static jsval_t builtin_Math_abs(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Math_acos(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Math_acosh(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Math_asin(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Math_asinh(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Math_atan(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Math_atanh(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Math_atan2(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Math_cbrt(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Math_ceil(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Math_clz32(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Math_cos(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Math_cosh(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Math_exp(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Math_expm1(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Math_floor(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Math_fround(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Math_hypot(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Math_imul(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Math_log(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Math_log1p(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Math_log10(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Math_log2(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Math_max(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Math_min(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Math_pow(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Math_random(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Math_round(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Math_sign(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Math_sin(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Math_sinh(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Math_sqrt(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Math_tan(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Math_tanh(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Math_trunc(struct js *js, jsval_t *args, int nargs);
-
 static jsval_t call_js(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope);
 static jsval_t call_js_internal(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *bound_args, int bound_argc);
 static jsval_t call_js_internal_nfe(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *bound_args, int bound_argc, jsval_t func_name, jsval_t func_val);
+
 static jsval_t call_js_with_args(struct js *js, jsval_t func, jsval_t *args, int nargs);
 static jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *args, int nargs);
 static jsval_t call_js_code_with_args_nfe(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *args, int nargs, jsval_t func_name, jsval_t func_val);
-static jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t code_len, jsval_t closure_scope, jsval_t *args, int nargs);
+
 static inline bool push_this(jsval_t this_value);
 static inline jsval_t pop_this(void);
 static inline jsval_t peek_this(void);
