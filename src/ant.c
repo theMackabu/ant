@@ -4365,7 +4365,7 @@ static jsval_t do_bracket_op(struct js *js, jsval_t l, jsval_t r) {
     return js_mkundef();
   }
   if (vtype(obj) != T_OBJ && vtype(obj) != T_ARR) {
-    return js_mkerr(js, "cannot index non-object");
+    return js_mkundef();
   }
   if ((streq(keystr, keylen, "callee", 6) || streq(keystr, keylen, "caller", 6)) &&
       lkp(js, obj, "__strict_args__", 15) != 0) {
@@ -7446,7 +7446,7 @@ static jsval_t js_postfix(struct js *js) {
   jsval_t res = js_call_dot(js);
   if (is_err(res)) return res;
   next(js);
-  if (js->tok == TOK_POSTINC || js->tok == TOK_POSTDEC) {
+  if ((js->tok == TOK_POSTINC || js->tok == TOK_POSTDEC) && !js->had_newline) {
     js->consumed = 1;
     res = do_op(js, js->tok, res, 0);
   }
@@ -10504,7 +10504,7 @@ static jsval_t js_var_decl(struct js *js) {
       jsoff_t existing_off = lkp(js, var_scope, decoded_name, decoded_len);
       if (existing_off > 0) {
         jsval_t key_val = js_mkstr(js, decoded_name, decoded_len);
-        if (!is_err(v) && vtype(v) != T_UNDEF) {
+        if (!is_err(v)) {
           setprop(js, var_scope, key_val, resolveprop(js, v));
         }
       } else {
@@ -10514,7 +10514,7 @@ static jsval_t js_var_decl(struct js *js) {
     }
     
     uint8_t var_next = next(js);
-    if (var_next == TOK_SEMICOLON || var_next == TOK_EOF || var_next == TOK_RBRACE) break;
+    if (var_next == TOK_SEMICOLON || var_next == TOK_EOF || var_next == TOK_RBRACE || js->had_newline) break;
     EXPECT(TOK_COMMA, );
   }
   return js_mkundef();
