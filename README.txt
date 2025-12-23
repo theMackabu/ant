@@ -140,23 +140,31 @@ MODULES:
     - import 'ant:ffi'      - Import built-in FFI module
 
 JAVASCRIPT FEATURES:
-  - Async/await and Promises (Promise.all, Promise.race, Promise.resolve, etc.)
-  - ES6+ syntax (arrow functions, classes, template literals, destructuring)
-  - Spread operator and rest parameters
-  - Optional chaining (?.)
-  - Nullish coalescing (??)
-  - for...of and for...in loops
+  Full ES1-ES5 compliance with ES6+ extensions:
+
+  ES1-ES5 Core:
+  - Automatic Semicolon Insertion (ASI)
+  - var hoisting and function declarations
   - try/catch/finally error handling
-  - BigInt support with arithmetic operations
-  - Number literals (binary 0b1010, octal 0o755, hex 0xFF)
+  - for...in loops and property enumeration
   - Regular expressions with full pattern matching
-  - Built-in collections: Map, Set, WeakMap, WeakSet
-  - Object.defineProperty() with property descriptors
   - Strict mode support ("use strict")
+  - Object.defineProperty() with property descriptors
   - Function.prototype.call/apply/bind
   - Array methods (map, filter, reduce, forEach, etc.)
   - String methods (split, replace, includes, startsWith, etc.)
   - Math object with all standard functions
+
+  ES6+ Extensions:
+  - Async/await and Promises (Promise.all, Promise.race, Promise.resolve, etc.)
+  - Arrow functions, classes, template literals, destructuring
+  - Spread operator and rest parameters
+  - Optional chaining (?.) and nullish coalescing (??)
+  - for...of loops with iterables
+  - let/const block scoping
+  - BigInt support with arithmetic operations
+  - Number literals (binary 0b1010, octal 0o755, hex 0xFF)
+  - Built-in collections: Map, Set, WeakMap, WeakSet
 
 CONCURRENCY:
   - Minicoro-based coroutines for async/await
