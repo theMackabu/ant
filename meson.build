@@ -91,6 +91,11 @@ add_project_arguments(
   '-Wno-unused-function',
 language: 'c')
 
+if host_machine.system() == 'linux'
+  add_project_arguments('-fno-pie', language: 'c')
+  add_project_link_arguments('-no-pie', language: 'c')
+endif
+
 gen_snapshot = executable(
   'gen_snapshot',
   files('src/tools/gen_snapshot.c'),
