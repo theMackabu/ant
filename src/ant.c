@@ -300,6 +300,7 @@ struct js {
   jsval_t thrown_value;   // stores the actual thrown value for catch blocks
   bool has_descriptors;   // true if defineProperty has ever been called
   bool is_hoisting;       // true during function declaration hoisting pass
+  uint64_t symbol_counter; // counter for generating unique symbol IDs
 };
 
 enum {
@@ -2956,11 +2957,9 @@ static jsval_t setprop_nonconfigurable(struct js *js, jsval_t obj, const char *k
   return result;
 }
 
-static uint64_t g_symbol_counter = 1;
-
 jsval_t js_mksym(struct js *js, const char *desc) {
   jsval_t sym_obj = mkobj(js, 0);
-  uint64_t id = g_symbol_counter++;
+  uint64_t id = ++js->symbol_counter;
   setprop(js, sym_obj, js_mkstr(js, "__sym__", 7), mkval(T_BOOL, 1));
   setprop(js, sym_obj, js_mkstr(js, "__sym_id", 8), tov((double)id));
   if (desc) {
