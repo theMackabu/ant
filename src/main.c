@@ -36,6 +36,7 @@
 #include "modules/reflect.h"
 #include "modules/symbol.h"
 #include "modules/textcodec.h"
+#include "modules/sessionstorage.h"
 
 int js_result = EXIT_SUCCESS;
 
@@ -206,6 +207,7 @@ int main(int argc, char *argv[]) {
   init_url_module();
   init_reflect_module();
   init_textcodec_module();
+  init_sessionstorage_module();
   
   ant_register_library(shell_library, "ant:shell", NULL);
   ant_register_library(ffi_library, "ant:ffi", NULL);
