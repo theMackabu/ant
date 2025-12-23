@@ -1,6 +1,6 @@
 project('ant', 'c', default_options: [
   'optimization=2',
-  'c_std=gnu2x',
+  'c_std=gnu23',
   'default_library=static'
 ])
 
