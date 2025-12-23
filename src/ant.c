@@ -3667,6 +3667,7 @@ static uint8_t next(struct js *js) {
     default: js->tok = parseident(buf, js->clen - js->toff, &js->tlen); break;
   }
   
+  if (js->tlen == 0) js->tlen = 1;
   js->pos = js->toff + js->tlen;
   return js->tok;
 }
