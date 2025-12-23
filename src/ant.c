@@ -2101,17 +2101,17 @@ static bool js_try_grow_memory(struct js *js, size_t needed) {
 static jsoff_t js_alloc(struct js *js, size_t size) {
   size = align32((jsoff_t) size);
   
-  jsoff_t ofs = free_list_allocate(size);
-  if (ofs != (jsoff_t) ~0) return ofs;
+  // jsoff_t ofs = free_list_allocate(size);
+  // if (ofs != (jsoff_t) ~0) return ofs;
   
-  ofs = js->brk;
+  jsoff_t ofs = js->brk;
   if (js->brk + size > js->size) {
     if (js_try_grow_memory(js, size)) {
       ofs = js->brk;
       if (js->brk + size > js->size) return ~(jsoff_t) 0;
     } else {
       ANT_GC_COLLECT();
-      js_gc(js);
+      // js_gc(js); disabled
       ofs = js->brk;
       if (js->brk + size > js->size) {
         if (js_try_grow_memory(js, size)) {
@@ -2956,8 +2956,6 @@ static jsval_t setprop_nonconfigurable(struct js *js, jsval_t obj, const char *k
   return result;
 }
 
-
-
 static uint64_t g_symbol_counter = 1;
 
 jsval_t js_mksym(struct js *js, const char *desc) {
@@ -3287,20 +3285,22 @@ static void js_clear_gc_marks(struct js *js) {
 }
 
 jsoff_t js_gc(struct js *js) {
-  setlwm(js);
-  if (js->nogc == (jsoff_t) ~0) return 0;
+  // setlwm(js);
+  // if (js->nogc == (jsoff_t) ~0) return 0;
+  // 
+  // js_mark_all_entities_for_deletion(js);
+  // js_unmark_used_entities(js);
+  // js_compact_from_end(js);
+  // 
+  // js_clear_gc_marks(js);
+  // free_list_compact();
+  // 
+  // jsoff_t freed = free_list_zero_out(js);
+  // if (global_free_list != NULL) utarray_clear(global_free_list);
+  //   
+  // return freed;
   
-  js_mark_all_entities_for_deletion(js);
-  js_unmark_used_entities(js);
-  js_compact_from_end(js);
-  
-  js_clear_gc_marks(js);
-  free_list_compact();
-  
-  jsoff_t freed = free_list_zero_out(js);
-  if (global_free_list != NULL) utarray_clear(global_free_list);
-    
-  return freed;
+  return 0;
 }
 
 static int is_unicode_space(const unsigned char *p, jsoff_t remaining, bool *is_line_term) {
@@ -7668,7 +7668,7 @@ static jsval_t js_unary(struct js *js) {
         saveoff(js, obj_off, (deleted_next & ~3U) | (current & (GCMASK | CONSTMASK | 3U)));
         saveoff(js, prop_off, loadoff(js, prop_off) | GCMASK);
         invalidate_obj_cache(obj_off);
-        js_gc(js);
+        // js_gc(js); disabled
         return js_mktrue();
       }
       jsoff_t prev = first_prop;
@@ -7680,7 +7680,7 @@ static jsval_t js_unary(struct js *js) {
           saveoff(js, prev, (deleted_next & ~3U) | (current & (GCMASK | CONSTMASK | 3U)));
           saveoff(js, prop_off, loadoff(js, prop_off) | GCMASK);
           invalidate_obj_cache(obj_off);
-          js_gc(js);
+          // js_gc(js); disabled
           return js_mktrue();
         }
         prev = next_prop;
@@ -7777,7 +7777,7 @@ static jsval_t js_unary(struct js *js) {
       }
       saveoff(js, prop_off, loadoff(js, prop_off) | GCMASK);
       invalidate_obj_cache(owner_obj_off);
-      js_gc(js);
+      // js_gc(js); disabled
     }
     (void) save_pos;
     (void) save_tok;
@@ -10819,7 +10819,7 @@ static jsval_t js_labeled_stmt(struct js *js, const char *label, jsoff_t label_l
 
 static jsval_t js_stmt_impl(struct js *js) {
   jsval_t res;
-  if (js->brk > js->gct) js_gc(js);
+  // if (js->brk > js->gct) js_gc(js); disabled
   uint8_t stmt_tok = next(js);
   
   switch (stmt_tok) {
