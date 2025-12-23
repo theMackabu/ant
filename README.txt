@@ -128,6 +128,29 @@ MODULES:
     - removeEventListener() - Remove event listener
     - dispatchEvent()       - Dispatch custom event
 
+  Web Storage:
+    localStorage (file-persistent):
+      - setFile()           - Set storage file path (required before use)
+      - setItem()           - Store key-value pair
+      - getItem()           - Retrieve value by key
+      - removeItem()        - Remove key-value pair
+      - clear()             - Clear all stored data
+      - key()               - Get key at index
+      - length              - Number of stored items
+
+    sessionStorage (in-memory, session-scoped):
+      - setItem()           - Store key-value pair
+      - getItem()           - Retrieve value by key
+      - removeItem()        - Remove key-value pair
+      - clear()             - Clear all stored data
+      - key()               - Get key at index
+      - length              - Number of stored items
+
+  Symbol:
+    - Symbol()              - Create unique symbol
+    - Symbol.iterator       - Well-known iterator symbol
+    - Symbol.toStringTag    - Well-known toStringTag symbol
+
   Module System:
     - import()              - Dynamic ESM module import
     - import.meta.url       - Current module URL
@@ -165,6 +188,9 @@ JAVASCRIPT FEATURES:
   - BigInt support with arithmetic operations
   - Number literals (binary 0b1010, octal 0o755, hex 0xFF)
   - Built-in collections: Map, Set, WeakMap, WeakSet
+  - Getter/setter methods in class expressions (get/set)
+  - Symbol with well-known symbols (iterator, toStringTag)
+  - Block-level function declaration hoisting
 
 CONCURRENCY:
   - Minicoro-based coroutines for async/await
