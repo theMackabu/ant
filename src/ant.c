@@ -285,6 +285,7 @@ struct js {
   jsoff_t max_size;       // maximum allowed memory size (for dynamic growth)
   bool had_newline;       // true if newline was crossed before current token
   jsval_t thrown_value;   // stores the actual thrown value for catch blocks
+  bool has_descriptors;   // true if defineProperty has ever been called
 };
 
 enum {
@@ -2908,23 +2909,7 @@ static jsval_t setprop_nonconfigurable(struct js *js, jsval_t obj, const char *k
   return result;
 }
 
-static jsval_t setprop_immutable(struct js *js, jsval_t obj, const char *key, size_t keylen, jsval_t v) {
-  jsval_t k = js_mkstr(js, key, keylen);
-  if (is_err(k)) return k;
-  jsval_t result = setprop(js, obj, k, v);
-  if (is_err(result)) return result;
-  
-  char desc_key[80];
-  snprintf(desc_key, sizeof(desc_key), "__desc_%.*s", (int)keylen, key);
-  jsval_t desc_obj = mkobj(js, 0);
-  if (is_err(desc_obj)) return desc_obj;
-  setprop(js, desc_obj, js_mkstr(js, "configurable", 12), js_mkfalse());
-  setprop(js, desc_obj, js_mkstr(js, "writable", 8), js_mkfalse());
-  setprop(js, desc_obj, js_mkstr(js, "enumerable", 10), js_mkfalse());
-  setprop(js, obj, js_mkstr(js, desc_key, strlen(desc_key)), desc_obj);
-  
-  return result;
-}
+
 
 static uint64_t g_symbol_counter = 1;
 
@@ -4072,34 +4057,48 @@ static int check_prop_writable(struct js *js, jsval_t owner, const char *key, js
   return js_truthy(js, writable_val) ? 1 : 0;
 }
 
-static int find_and_check_writable(struct js *js, jsoff_t propoff) {
-  for (jsoff_t scan_off = 0; scan_off < js->brk; ) {
+static int find_owner_and_check_writable(struct js *js, jsoff_t propoff, const char *key, jsoff_t klen, jsval_t *out_owner) {
+  for (jsoff_t scan_off = 0; scan_off < propoff; ) {
     jsoff_t header = loadoff(js, scan_off);
-    jsoff_t cleaned = header & ~(GCMASK | CONSTMASK);
+    jsoff_t cleaned = header & ~(GCMASK | CONSTMASK | ARRMASK);
     
     if ((cleaned & 3) != T_OBJ) {
       scan_off += esize(cleaned);
       continue;
     }
     
-    jsval_t scan_obj = mkval(T_OBJ, scan_off);
-    jsoff_t next = loadoff(js, scan_off) & ~(3U | CONSTMASK | ARRMASK);
-    
+    jsoff_t next = cleaned & ~3U;
     while (next < js->brk && next != 0) {
       if (next == propoff) {
-        jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
-        jsoff_t klen = offtolen(loadoff(js, koff));
-        const char *key = (char *) &js->mem[koff + sizeof(koff)];
+        jsval_t obj = mkval(T_OBJ, scan_off);
+        *out_owner = obj;
         
-        int writable = check_prop_writable(js, scan_obj, key, klen);
-        return (writable == 0) ? 0 : 1;
+        char desc_key[128];
+        snprintf(desc_key, sizeof(desc_key), "__desc_%.*s", (int)klen, key);
+        jsoff_t desc_off = lkp(js, obj, desc_key, strlen(desc_key));
+        if (desc_off != 0) {
+          jsval_t desc_obj = loadval(js, desc_off + sizeof(jsoff_t) * 2);
+          if (vtype(desc_obj) == T_OBJ) {
+            jsoff_t set_off = lkp(js, desc_obj, "set", 3);
+            if (set_off != 0) {
+              jsval_t setter = loadval(js, set_off + sizeof(jsoff_t) * 2);
+              if (vtype(setter) == T_FUNC || vtype(setter) == T_CFUNC) return 2;
+            }
+            jsoff_t writable_off = lkp(js, desc_obj, "writable", 8);
+            if (writable_off != 0) {
+              jsval_t writable_val = resolveprop(js, mkval(T_PROP, writable_off));
+              if (!js_truthy(js, writable_val)) return 0;
+            }
+          }
+        }
+        return 1;
       }
       next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK);
     }
     
     scan_off += esize(cleaned);
   }
-  return 1;
+  return -1;
 }
 
 static bool try_accessor_setter(struct js *js, jsval_t obj, const char *key, size_t key_len, jsval_t val, jsval_t *out) {
@@ -4155,32 +4154,31 @@ static jsval_t assign(struct js *js, jsval_t lhs, jsval_t val) {
   jsoff_t klen = offtolen(loadoff(js, koff));
   const char *key = (char *)&js->mem[koff + sizeof(jsoff_t)];
   
-  for (jsoff_t scan_off = 0; scan_off < propoff; ) {
-    jsoff_t header = loadoff(js, scan_off);
-    jsoff_t cleaned = header & ~(GCMASK | CONSTMASK | ARRMASK);
-    if ((cleaned & 3) == T_OBJ) {
-      jsoff_t next = cleaned & ~3U;
-      while (next < js->brk && next != 0) {
-        if (next == propoff) {
-          jsval_t obj = mkval(T_OBJ, scan_off);
-          jsval_t setter_result;
-          if (try_accessor_setter(js, obj, key, klen, val, &setter_result)) return setter_result;
-          break;
-        }
-        next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK);
-      }
-    }
-    scan_off += esize(cleaned);
-  }
-  
   if (is_const_prop(js, propoff)) {
     if (js->flags & F_STRICT) return js_mkerr(js, "assignment to constant");
     return mkval(T_PROP, propoff);
   }
   
-  if (!find_and_check_writable(js, propoff)) {
+  if ((klen == 9 && memcmp(key, "undefined", 9) == 0) ||
+      (klen == 3 && memcmp(key, "NaN", 3) == 0) ||
+      (klen == 8 && memcmp(key, "Infinity", 8) == 0)) {
     if (js->flags & F_STRICT) return js_mkerr(js, "Cannot assign to read only property");
     return lhs;
+  }
+  
+  if (js->has_descriptors) {
+    jsval_t owner = js_mkundef();
+    int check_result = find_owner_and_check_writable(js, propoff, key, klen, &owner);
+    
+    if (check_result == 2) {
+      jsval_t setter_result;
+      if (try_accessor_setter(js, owner, key, klen, val, &setter_result)) {
+        return setter_result;
+      }
+    } else if (check_result == 0) {
+      if (js->flags & F_STRICT) return js_mkerr(js, "Cannot assign to read only property");
+      return lhs;
+    }
   }
   
   saveval(js, (jsoff_t) ((vdata(lhs) & ~3U) + sizeof(jsoff_t) * 2), val);
@@ -8597,12 +8595,13 @@ static jsval_t js_for(struct js *js) {
   jsval_t v, res = js_mkundef();
   jsoff_t pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
   
-  if (!label_stack) {
-    utarray_new(label_stack, &label_entry_icd);
+  bool use_label_stack = label_stack && utarray_len(label_stack) > 0;
+  int marker_index = 0;
+  if (use_label_stack) {
+    label_entry_t marker = { .name = NULL, .name_len = 0, .is_loop = true, .is_block = false };
+    utarray_push_back(label_stack, &marker);
+    marker_index = utarray_len(label_stack) - 1;
   }
-  label_entry_t marker = { .name = NULL, .name_len = 0, .is_loop = true, .is_block = false };
-  utarray_push_back(label_stack, &marker);
-  int marker_index = utarray_len(label_stack) - 1;
   
   if (exe) mkscope(js);
   if (!expect(js, TOK_FOR, &res)) goto done;
@@ -8903,7 +8902,7 @@ static jsval_t js_for(struct js *js) {
   }
   js->pos = pos4, js->tok = TOK_SEMICOLON, js->consumed = 0;
 done:
-  if (label_stack && utarray_len(label_stack) > 0) {
+  if (use_label_stack && label_stack && utarray_len(label_stack) > 0) {
     utarray_pop_back(label_stack);
   }
   
@@ -8926,12 +8925,13 @@ static jsval_t js_while(struct js *js) {
   uint8_t flags = js->flags, exe = !(flags & F_NOEXEC);
   jsval_t res = js_mkundef(), v;
   
-  if (!label_stack) {
-    utarray_new(label_stack, &label_entry_icd);
+  bool use_label_stack = label_stack && utarray_len(label_stack) > 0;
+  int marker_index = 0;
+  if (use_label_stack) {
+    label_entry_t marker = { .name = NULL, .name_len = 0, .is_loop = true, .is_block = false };
+    utarray_push_back(label_stack, &marker);
+    marker_index = utarray_len(label_stack) - 1;
   }
-  label_entry_t marker = { .name = NULL, .name_len = 0, .is_loop = true, .is_block = false };
-  utarray_push_back(label_stack, &marker);
-  int marker_index = utarray_len(label_stack) - 1;
   
   js->consumed = 1;
   if (!expect(js, TOK_LPAREN, &res)) goto done;
@@ -8996,7 +8996,7 @@ static jsval_t js_while(struct js *js) {
   js->consumed = 0;
   
 done:
-  if (label_stack && utarray_len(label_stack) > 0) {
+  if (use_label_stack && label_stack && utarray_len(label_stack) > 0) {
     utarray_pop_back(label_stack);
   }
   
@@ -9019,12 +9019,13 @@ static jsval_t js_do_while(struct js *js) {
   uint8_t flags = js->flags, exe = !(flags & F_NOEXEC);
   jsval_t res = js_mkundef(), v;
   
-  if (!label_stack) {
-    utarray_new(label_stack, &label_entry_icd);
+  bool use_label_stack = label_stack && utarray_len(label_stack) > 0;
+  int marker_index = 0;
+  if (use_label_stack) {
+    label_entry_t marker = { .name = NULL, .name_len = 0, .is_loop = true, .is_block = false };
+    utarray_push_back(label_stack, &marker);
+    marker_index = utarray_len(label_stack) - 1;
   }
-  label_entry_t marker = { .name = NULL, .name_len = 0, .is_loop = true, .is_block = false };
-  utarray_push_back(label_stack, &marker);
-  int marker_index = utarray_len(label_stack) - 1;
   
   js->consumed = 1;
   
@@ -9093,7 +9094,7 @@ static jsval_t js_do_while(struct js *js) {
   js->consumed = 1;
   
 done:
-  if (label_stack && utarray_len(label_stack) > 0) {
+  if (use_label_stack && label_stack && utarray_len(label_stack) > 0) {
     utarray_pop_back(label_stack);
   }
   
@@ -12593,6 +12594,7 @@ static jsval_t builtin_object_hasOwn(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t builtin_object_defineProperty(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 3) return js_mkerr(js, "Object.defineProperty requires 3 arguments");
+  js->has_descriptors = true;
   
   jsval_t obj = args[0];
   jsval_t prop = args[1];
@@ -19244,6 +19246,7 @@ struct js *js_create(void *buf, size_t len) {
   js->lwm = js->size;
   js->gct = js->size / 2;
   js->this_val = js->scope;
+  js->has_descriptors = false;
   js->errmsg_size = 4096;
   js->errmsg = (char *)malloc(js->errmsg_size);
   if (js->errmsg) js->errmsg[0] = '\0';
@@ -19685,9 +19688,9 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, glob, js_mkstr(js, "isFinite", 8), js_mkfun(builtin_global_isFinite));
   setprop(js, glob, js_mkstr(js, "btoa", 4), js_mkfun(builtin_btoa));
   setprop(js, glob, js_mkstr(js, "atob", 4), js_mkfun(builtin_atob));
-  setprop_immutable(js, glob, "NaN", 3, tov(NAN));
-  setprop_immutable(js, glob, "Infinity", 8, tov(INFINITY));
-  setprop_immutable(js, glob, "undefined", 9, js_mkundef());
+  setprop(js, glob, js_mkstr(js, "NaN", 3), tov(NAN));
+  setprop(js, glob, js_mkstr(js, "Infinity", 8), tov(INFINITY));
+  setprop(js, glob, js_mkstr(js, "undefined", 9), js_mkundef());
   
   jsval_t math_obj = mkobj(js, 0);
   set_proto(js, math_obj, object_proto);
