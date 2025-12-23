@@ -286,6 +286,7 @@ struct js {
   bool had_newline;       // true if newline was crossed before current token
   jsval_t thrown_value;   // stores the actual thrown value for catch blocks
   bool has_descriptors;   // true if defineProperty has ever been called
+  bool is_hoisting;       // true during function declaration hoisting pass
 };
 
 enum {
@@ -3766,10 +3767,76 @@ static inline void pop_call_frame() {
   }
 }
 
+static jsval_t js_func_decl(struct js *js);
+static jsval_t js_func_decl_async(struct js *js);
+
+static void hoist_function_declarations(struct js *js) {
+  if (js->flags & F_NOEXEC) return;
+  if (js->is_hoisting) return;
+  
+  js->is_hoisting = true;
+  
+  js_parse_state_t saved;
+  JS_SAVE_STATE(js, saved);
+  jsval_t saved_scope = js->scope;
+  
+  int depth = 0;
+  uint8_t tok;
+  
+  while ((tok = next(js)) != TOK_EOF && !(tok == TOK_RBRACE && depth == 0)) {
+    if (tok == TOK_LBRACE) { depth++; js->consumed = 1; continue; }
+    if (tok == TOK_RBRACE) { depth--; js->consumed = 1; continue; }
+    
+    if (depth == 0 && tok == TOK_EXPORT) {
+      js->consumed = 1;
+      uint8_t next_tok = next(js);
+      if (next_tok != TOK_FUNC && next_tok != TOK_ASYNC && next_tok != TOK_DEFAULT)
+        goto skip_export;
+      
+      int brace_depth = 0;
+      while (next(js) != TOK_EOF) {
+        if (js->tok == TOK_LBRACE) brace_depth++;
+        else if (js->tok == TOK_RBRACE && --brace_depth <= 0) break;
+        js->consumed = 1;
+      }
+      
+skip_export:
+      continue;
+    }
+    
+    if (depth == 0 && tok == TOK_FUNC) {
+      jsoff_t after_func = js->pos;
+      js->consumed = 1;
+      if (next(js) == TOK_IDENTIFIER) {
+        js->pos = after_func;
+        js->tok = TOK_FUNC;
+        js->consumed = 1;
+        js_func_decl(js);
+      }
+      continue;
+    }
+    
+    if (depth == 0 && tok == TOK_ASYNC) {
+      js->consumed = 1;
+      if (next(js) == TOK_FUNC) {
+        js_func_decl_async(js);
+      }
+      continue;
+    }
+    
+    js->consumed = 1;
+  }
+  
+  js->is_hoisting = false;
+  JS_RESTORE_STATE(js, saved);
+  js->scope = saved_scope;
+}
+
 static jsval_t js_block(struct js *js, bool create_scope) {
   jsval_t res = js_mkundef();
   if (create_scope) mkscope(js);
   js->consumed = 1;
+  hoist_function_declarations(js);
   uint8_t peek;
   while ((peek = next(js)) != TOK_EOF && peek != TOK_RBRACE && !is_err(res)) {
     uint8_t t = js->tok;
@@ -8601,10 +8668,13 @@ static jsval_t js_func_decl(struct js *js) {
   if (is_err(proto_setup)) return proto_setup;
   
   if (exe) {
-    if (lkp(js, js->scope, name, nlen) > 0)
-      return js_mkerr(js, "'%.*s' already declared", (int) nlen, name);
-    jsval_t x = mkprop(js, js->scope, js_mkstr(js, name, nlen), func, false);
-    if (is_err(x)) return x;
+    jsoff_t existing = lkp(js, js->scope, name, nlen);
+    if (existing > 0) {
+      saveval(js, existing + sizeof(jsoff_t) * 2, func);
+    } else {
+      jsval_t x = mkprop(js, js->scope, js_mkstr(js, name, nlen), func, false);
+      if (is_err(x)) return x;
+    }
   }
   
   return js_mkundef();
@@ -8663,10 +8733,13 @@ static jsval_t js_func_decl_async(struct js *js) {
   if (is_err(proto_setup)) return proto_setup;
   
   if (exe) {
-    if (lkp(js, js->scope, name, nlen) > 0)
-      return js_mkerr(js, "'%.*s' already declared", (int) nlen, name);
-    jsval_t x = mkprop(js, js->scope, js_mkstr(js, name, nlen), func, false);
-    if (is_err(x)) return x;
+    jsoff_t existing = lkp(js, js->scope, name, nlen);
+    if (existing > 0) {
+      saveval(js, existing + sizeof(jsoff_t) * 2, func);
+    } else {
+      jsval_t x = mkprop(js, js->scope, js_mkstr(js, name, nlen), func, false);
+      if (is_err(x)) return x;
+    }
   }
   
   return js_mkundef();
@@ -20511,6 +20584,8 @@ static jsval_t js_eval_inherit_strict(struct js *js, const char *buf, size_t len
     mkscope(js);
     setprop(js, js->scope, js_mkstr(js, "__strict_eval_scope__", 21), js_mktrue());
   }
+  
+  hoist_function_declarations(js);
   
   while (next(js) != TOK_EOF && !is_err(res)) {
     res = js_stmt(js);
