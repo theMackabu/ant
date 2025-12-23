@@ -378,6 +378,7 @@ static bool is_ident_continue(int c) { return c == '_' || c == '$' || is_alpha(c
 static bool is_err(jsval_t v) { return vtype(v) == T_ERR; }
 static bool is_unary(uint8_t tok) { return (tok >= TOK_POSTINC && tok <= TOK_UMINUS) || tok == TOK_NOT || tok == TOK_TILDA || tok == TOK_TYPEOF || tok == TOK_VOID; }
 static bool is_assign(uint8_t tok) { return (tok >= TOK_ASSIGN && tok <= TOK_OR_ASSIGN); }
+static bool is_keyword_propname(uint8_t tok) { return (tok >= TOK_ASYNC && tok <= TOK_GLOBAL_THIS) || tok == TOK_TYPEOF; }
 
 static uint32_t js_to_uint32(double d) {
   if (!isfinite(d) || d == 0) return 0;
@@ -6522,6 +6523,10 @@ static jsval_t js_obj_literal(struct js *js) {
       if (next(js) != TOK_RBRACKET) {
         return js_mkerr_typed(js, JS_ERR_SYNTAX, "] expected after computed property name");
       }
+    } else if (is_keyword_propname(js->tok)) {
+      id_off = js->toff;
+      id_len = js->tlen;
+      if (exe) key = js_mkstr(js, js->code + js->toff, js->tlen);
     } else {
       return js_mkerr_typed(js, JS_ERR_SYNTAX, "parse error");
     }
@@ -6920,7 +6925,13 @@ static jsval_t js_literal(struct js *js) {
     case TOK_LBRACKET:    return js_arr_or_destruct(js);
     case TOK_DIV:         return js_regex_literal(js);
     case TOK_CLASS:       return js_class_expr(js, true);
-    case TOK_FUNC:        return js_func_literal(js, false);
+    case TOK_FUNC: {
+      uint8_t la = lookahead(js);
+      if (la != TOK_LPAREN && la != TOK_IDENTIFIER) {
+        return mkcoderef((jsoff_t) js->toff, (jsoff_t) js->tlen);
+      }
+      return js_func_literal(js, false);
+    }
     case TOK_ASYNC: {
       js->consumed = 1;
       uint8_t next_tok = next(js);
@@ -7055,7 +7066,23 @@ static jsval_t js_literal(struct js *js) {
     case TOK_IDENTIFIER:
     case TOK_CATCH:
     case TOK_TRY:
-    case TOK_FINALLY: return mkcoderef((jsoff_t) js->toff, (jsoff_t) js->tlen);
+    case TOK_FINALLY:
+    case TOK_IF:
+    case TOK_ELSE:
+    case TOK_WHILE:
+    case TOK_DO:
+    case TOK_RETURN:
+    case TOK_BREAK:
+    case TOK_CONTINUE:
+    case TOK_VAR:
+    case TOK_NEW:
+    case TOK_THROW:
+    case TOK_SWITCH:
+    case TOK_CASE:
+    case TOK_DEFAULT:
+    case TOK_INSTANCEOF:
+    case TOK_IN:
+    case TOK_DEBUGGER: return mkcoderef((jsoff_t) js->toff, (jsoff_t) js->tlen);
     
     default: return js_mkerr_typed(js, JS_ERR_SYNTAX, "bad expr");
   }
@@ -7293,11 +7320,18 @@ static jsval_t js_call_dot(struct js *js) {
       } else {
         obj = resolveprop(js, res);
       }
+      jsval_t prop_name;
+      uint8_t nxt = next(js);
+      if (nxt == TOK_IDENTIFIER || is_keyword_propname(nxt)) {
+        js->consumed = 1;
+        prop_name = mkcoderef((jsoff_t) js->toff, (jsoff_t) js->tlen);
+      } else {
+        prop_name = js_group(js);
+      }
       if (op == TOK_OPTIONAL_CHAIN && (vtype(obj) == T_NULL || vtype(obj) == T_UNDEF)) {
-        js_group(js);
         res = js_mkundef();
       } else {
-        res = do_op(js, op, res, js_group(js));
+        res = do_op(js, op, res, prop_name);
       }
     } else if (js->tok == TOK_LBRACKET) {
       js->consumed = 1;
