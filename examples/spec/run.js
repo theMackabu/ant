@@ -57,6 +57,6 @@ console.log(`  ${GREEN}${totalPassed} tests passed${RESET}`);
 console.log(`  ${RED}${totalFailed} tests failed${RESET}`);
 console.log(`  ${GREEN}${filesPassed} files passed${RESET}`);
 console.log(`  ${RED}${filesFailed} files failed${RESET}\n`);
-console.log(`${PINK}Welcome to ES6!`);
+console.log(`${PINK}Welcome to ES6!${RESET}`);
 
 process.exit(totalFailed > 0 ? 1 : 0);
