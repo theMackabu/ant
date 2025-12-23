@@ -4578,6 +4578,12 @@ static void setup_arguments(struct js *js, jsval_t scope, jsval_t *args, int nar
   } else if (vtype(js->current_func) == T_FUNC) {
     setprop(js, arguments_obj, js_mkstr(js, "callee", 6), js->current_func);
   }
+  
+  const char *toStringTag_key = get_toStringTag_sym_key();
+  if (toStringTag_key && toStringTag_key[0] != '\0') {
+    setprop(js, arguments_obj, js_mkstr(js, toStringTag_key, strlen(toStringTag_key)), js_mkstr(js, "Arguments", 9));
+  }
+  
   arguments_obj = mkval(T_ARR, vdata(arguments_obj));
   setprop(js, scope, js_mkstr(js, "arguments", 9), arguments_obj);
 }
