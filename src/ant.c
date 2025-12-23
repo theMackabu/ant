@@ -9112,12 +9112,12 @@ static jsval_t js_for(struct js *js) {
     } else {
       js->pos = var_name_off;
       js->consumed = 1;
-      v = js_expr(js);
+      v = js_expr_comma(js);
       if (is_err2(&v, &res)) goto done;
     }
   } else if (next(js) == TOK_SEMICOLON) {
   } else {
-    v = js_expr(js);
+    v = js_expr_comma(js);
     if (is_err2(&v, &res)) goto done;
   }
   
