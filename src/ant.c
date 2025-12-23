@@ -611,6 +611,9 @@ static jsval_t call_js_internal(struct js *js, const char *fn, jsoff_t fnlen, js
 static jsval_t call_js_with_args(struct js *js, jsval_t func, jsval_t *args, int nargs);
 static jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *args, int nargs);
 static jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t code_len, jsval_t closure_scope, jsval_t *args, int nargs);
+static inline bool push_this(jsval_t this_value);
+static inline jsval_t pop_this(void);
+static inline jsval_t peek_this(void);
 
 jsval_t js_get_proto(struct js *js, jsval_t obj);
 void js_set_proto(struct js *js, jsval_t obj, jsval_t proto);
@@ -2722,6 +2725,33 @@ jsval_t js_setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v) {
   jsval_t desc_obj = resolveprop(js, mkval(T_PROP, desc_off));
   if (vtype(desc_obj) != T_OBJ) goto do_update;
   
+  jsoff_t set_off = lkp(js, desc_obj, "set", 3);
+  if (set_off != 0) {
+    jsval_t setter = resolveprop(js, mkval(T_PROP, set_off));
+    if (vtype(setter) == T_FUNC || vtype(setter) == T_CFUNC) {
+      js_parse_state_t saved;
+      JS_SAVE_STATE(js, saved);
+      uint8_t saved_flags = js->flags;
+      jsoff_t saved_toff = js->toff;
+      jsoff_t saved_tlen = js->tlen;
+      
+      jsval_t saved_this = js->this_val;
+      js->this_val = obj;
+      push_this(obj);
+      jsval_t result = call_js_with_args(js, setter, &v, 1);
+      pop_this();
+      js->this_val = saved_this;
+      
+      JS_RESTORE_STATE(js, saved);
+      js->flags = saved_flags;
+      js->toff = saved_toff;
+      js->tlen = saved_tlen;
+      
+      if (is_err(result)) return result;
+      return v;
+    }
+  }
+  
   jsoff_t writable_off = lkp(js, desc_obj, "writable", 8);
   if (writable_off != 0) {
     jsval_t writable_val = resolveprop(js, mkval(T_PROP, writable_off));
@@ -4041,6 +4071,44 @@ static int find_and_check_writable(struct js *js, jsoff_t propoff) {
   return 1;
 }
 
+static bool try_accessor_setter(struct js *js, jsval_t obj, const char *key, size_t key_len, jsval_t val, jsval_t *out) {
+  char desc_key[128];
+  snprintf(desc_key, sizeof(desc_key), "__desc_%.*s", (int)key_len, key);
+  
+  jsoff_t desc_off = lkp(js, obj, desc_key, strlen(desc_key));
+  if (desc_off == 0) return false;
+  
+  jsval_t desc_obj = loadval(js, desc_off + sizeof(jsoff_t) * 2);
+  if (vtype(desc_obj) != T_OBJ) return false;
+  
+  jsoff_t set_off = lkp(js, desc_obj, "set", 3);
+  if (set_off == 0) return false;
+  
+  jsval_t setter = loadval(js, set_off + sizeof(jsoff_t) * 2);
+  if (vtype(setter) != T_FUNC && vtype(setter) != T_CFUNC) return false;
+  
+  js_parse_state_t saved;
+  JS_SAVE_STATE(js, saved);
+  uint8_t saved_flags = js->flags;
+  jsoff_t saved_toff = js->toff;
+  jsoff_t saved_tlen = js->tlen;
+  
+  jsval_t saved_this = js->this_val;
+  js->this_val = obj;
+  push_this(obj);
+  jsval_t result = call_js_with_args(js, setter, &val, 1);
+  pop_this();
+  js->this_val = saved_this;
+  
+  JS_RESTORE_STATE(js, saved);
+  js->flags = saved_flags;
+  js->toff = saved_toff;
+  js->tlen = saved_tlen;
+  
+  *out = is_err(result) ? result : val;
+  return true;
+}
+
 static jsval_t assign(struct js *js, jsval_t lhs, jsval_t val) {
   if (vtype(lhs) == T_PROPREF) {
     jsoff_t obj_off = propref_obj(lhs);
@@ -4051,6 +4119,29 @@ static jsval_t assign(struct js *js, jsval_t lhs, jsval_t val) {
   }
   
   jsoff_t propoff = (jsoff_t) vdata(lhs);
+  
+  jsoff_t koff = loadoff(js, propoff + sizeof(jsoff_t));
+  jsoff_t klen = offtolen(loadoff(js, koff));
+  const char *key = (char *)&js->mem[koff + sizeof(jsoff_t)];
+  
+  for (jsoff_t scan_off = 0; scan_off < propoff; ) {
+    jsoff_t header = loadoff(js, scan_off);
+    jsoff_t cleaned = header & ~(GCMASK | CONSTMASK | ARRMASK);
+    if ((cleaned & 3) == T_OBJ) {
+      jsoff_t next = cleaned & ~3U;
+      while (next < js->brk && next != 0) {
+        if (next == propoff) {
+          jsval_t obj = mkval(T_OBJ, scan_off);
+          jsval_t setter_result;
+          if (try_accessor_setter(js, obj, key, klen, val, &setter_result)) return setter_result;
+          break;
+        }
+        next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK);
+      }
+    }
+    scan_off += esize(cleaned);
+  }
+  
   if (is_const_prop(js, propoff)) {
     if (js->flags & F_STRICT) return js_mkerr(js, "assignment to constant");
     return mkval(T_PROP, propoff);
@@ -4312,14 +4403,28 @@ static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "'%.*s' not allowed on strict arguments", (int)plen, ptr);
   }
   
+  jsoff_t own_off = lkp(js, l, ptr, plen);
+  if (own_off != 0) {
+    char desc_key[128];
+    snprintf(desc_key, sizeof(desc_key), "__desc_%.*s", (int)plen, ptr);
+    jsoff_t desc_off = lkp(js, l, desc_key, strlen(desc_key));
+    if (desc_off != 0) {
+      jsval_t desc_obj = loadval(js, desc_off + sizeof(jsoff_t) * 2);
+      if (vtype(desc_obj) == T_OBJ) {
+        jsoff_t get_off = lkp(js, desc_obj, "get", 3);
+        jsoff_t set_off = lkp(js, desc_obj, "set", 3);
+        if (get_off != 0 || set_off != 0) {
+          jsval_t key = js_mkstr(js, ptr, plen);
+          return mkpropref((jsoff_t)vdata(l), (jsoff_t)vdata(key));
+        }
+      }
+    }
+    return mkval(T_PROP, own_off);
+  }
+  
   jsval_t accessor_result;
   if (try_accessor_getter(js, l, ptr, plen, &accessor_result)) {
     return accessor_result;
-  }
-  
-  jsoff_t own_off = lkp(js, l, ptr, plen);
-  if (own_off != 0) {
-    return mkval(T_PROP, own_off);
   }
   
   jsval_t result = try_dynamic_getter(js, l, ptr, plen);
@@ -5313,7 +5418,10 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
   
   if (is_err(l)) return l;
   if (is_err(r)) return r;
-  if (is_assign(op) && vtype(lhs) != T_PROP && vtype(lhs) != T_PROPREF) return js_mkerr(js, "bad lhs");
+  if (is_assign(op) && vtype(lhs) != T_PROP && vtype(lhs) != T_PROPREF) {
+    if (!(js->flags & F_STRICT) && vtype(lhs) == T_UNDEF) return r;
+    return js_mkerr(js, "bad lhs");
+  }
   
   switch (op) {
     case TOK_TYPEOF: {
