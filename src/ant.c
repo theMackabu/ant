@@ -2757,7 +2757,16 @@ jsval_t js_setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v) {
   jsval_t desc_obj = resolveprop(js, mkval(T_PROP, desc_off));
   if (vtype(desc_obj) != T_OBJ) goto do_update;
   
+  jsoff_t get_off = lkp(js, desc_obj, "get", 3);
   jsoff_t set_off = lkp(js, desc_obj, "set", 3);
+  
+  if (get_off != 0 && set_off == 0) {
+    if (js->flags & F_STRICT) {
+      return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot set property which has only a getter");
+    }
+    return mkval(T_PROP, existing);
+  }
+  
   if (set_off != 0) {
     jsval_t setter = resolveprop(js, mkval(T_PROP, set_off));
     if (vtype(setter) == T_FUNC || vtype(setter) == T_CFUNC) {
@@ -4337,6 +4346,31 @@ static jsval_t do_bracket_op(struct js *js, jsval_t l, jsval_t r) {
       lkp(js, obj, "__strict_args__", 15) != 0) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "'%.*s' not allowed on strict arguments", (int)keylen, keystr);
   }
+  
+  jsoff_t own_off = lkp(js, obj, keystr, keylen);
+  if (own_off != 0) {
+    char desc_key[128];
+    snprintf(desc_key, sizeof(desc_key), "__desc_%.*s", (int)keylen, keystr);
+    jsoff_t desc_off = lkp(js, obj, desc_key, strlen(desc_key));
+    if (desc_off != 0) {
+      jsval_t desc_obj = loadval(js, desc_off + sizeof(jsoff_t) * 2);
+      if (vtype(desc_obj) == T_OBJ) {
+        jsoff_t get_off = lkp(js, desc_obj, "get", 3);
+        jsoff_t set_off = lkp(js, desc_obj, "set", 3);
+        if (get_off != 0 || set_off != 0) {
+          jsval_t key = js_mkstr(js, keystr, keylen);
+          return mkpropref((jsoff_t)vdata(obj), (jsoff_t)vdata(key));
+        }
+      }
+    }
+    return mkval(T_PROP, own_off);
+  }
+  
+  jsval_t accessor_result;
+  if (try_accessor_getter(js, obj, keystr, keylen, &accessor_result)) {
+    return accessor_result;
+  }
+  
   jsoff_t off = lkp_proto(js, obj, keystr, keylen);
   if (off == 0) {
     jsval_t key = js_mkstr(js, keystr, keylen);
@@ -6361,10 +6395,80 @@ static jsval_t js_obj_literal(struct js *js) {
       continue;
     }
     
+    bool is_getter = false, is_setter = false;
     if (js->tok == TOK_IDENTIFIER) {
-      id_off = js->toff;
-      id_len = js->tlen;
-      if (exe) key = js_mkstr_ident(js, js->code + js->toff, js->tlen);
+      bool is_get = (js->tlen == 3 && memcmp(js->code + js->toff, "get", 3) == 0);
+      bool is_set = (js->tlen == 3 && memcmp(js->code + js->toff, "set", 3) == 0);
+      
+      if (is_get || is_set) {
+        jsoff_t saved_pos = js->pos;
+        uint8_t saved_tok = js->tok;
+        uint8_t saved_consumed = js->consumed;
+        jsoff_t saved_toff = js->toff;
+        jsoff_t saved_tlen = js->tlen;
+        
+        js->consumed = 1;
+        uint8_t peek = next(js);
+        
+        if (peek == TOK_IDENTIFIER || peek == TOK_STRING || peek == TOK_NUMBER || peek == TOK_LBRACKET) {
+          is_getter = is_get;
+          is_setter = is_set;
+          
+          if (peek == TOK_IDENTIFIER) {
+            id_off = js->toff;
+            id_len = js->tlen;
+            if (exe) key = js_mkstr_ident(js, js->code + js->toff, js->tlen);
+          } else if (peek == TOK_STRING) {
+            id_off = js->toff;
+            id_len = js->tlen;
+            if (exe) key = js_str_literal(js);
+          } else if (peek == TOK_NUMBER) {
+            id_off = js->toff;
+            id_len = js->tlen;
+            if (exe) {
+              double num = strtod(js->code + js->toff, NULL);
+              char buf[64];
+              size_t n = strnum(tov(num), buf, sizeof(buf));
+              key = js_mkstr(js, buf, n);
+            }
+          } else if (peek == TOK_LBRACKET) {
+            is_computed = true;
+            js->consumed = 1;
+            jsval_t key_expr = js_expr(js);
+            if (is_err(key_expr)) return key_expr;
+            
+            if (exe) {
+              jsval_t resolved_key = resolveprop(js, key_expr);
+              if (vtype(resolved_key) == T_STR) {
+                key = resolved_key;
+              } else {
+                char buf[64];
+                size_t n = tostr(js, resolved_key, buf, sizeof(buf));
+                key = js_mkstr(js, buf, n);
+              }
+              if (is_err(key)) return key;
+            }
+            
+            if (next(js) != TOK_RBRACKET) {
+              return js_mkerr_typed(js, JS_ERR_SYNTAX, "] expected after computed property name");
+            }
+          }
+        } else {
+          js->pos = saved_pos;
+          js->tok = saved_tok;
+          js->consumed = saved_consumed;
+          js->toff = saved_toff;
+          js->tlen = saved_tlen;
+          
+          id_off = saved_toff;
+          id_len = saved_tlen;
+          if (exe) key = js_mkstr_ident(js, js->code + saved_toff, saved_tlen);
+        }
+      } else {
+        id_off = js->toff;
+        id_len = js->tlen;
+        if (exe) key = js_mkstr_ident(js, js->code + js->toff, js->tlen);
+      }
     } else if (js->tok == TOK_STRING) {
       if (exe) key = js_str_literal(js);
     } else if (js->tok == TOK_NUMBER) {
@@ -6419,6 +6523,7 @@ static jsval_t js_obj_literal(struct js *js) {
         if (is_err(res)) return res;
       }
     } else if (
+        (is_getter || is_setter) ||
         (!is_computed && id_len > 0 && next(js) == TOK_LPAREN) ||
         (is_computed && next(js) == TOK_LPAREN)
       ) {
@@ -6452,8 +6557,51 @@ static jsval_t js_obj_literal(struct js *js) {
         jsval_t scope_key = js_mkstr(js, "__scope", 7);
         setprop(js, func_obj, scope_key, js->scope);
         jsval_t val = mkval(T_FUNC, (unsigned long) vdata(func_obj));
-        jsval_t res = setprop(js, obj, key, val);
-        if (is_err(res)) return res;
+        
+        if (is_getter || is_setter) {
+          js->has_descriptors = true;
+          jsoff_t key_len;
+          const char *key_str = NULL;
+          if (vtype(key) == T_STR) {
+            jsoff_t key_off = vstr(js, key, &key_len);
+            key_str = (char *)&js->mem[key_off];
+          }
+          
+          char desc_key[128];
+          if (key_str) {
+            snprintf(desc_key, sizeof(desc_key), "__desc_%.*s", (int)key_len, key_str);
+          } else {
+            snprintf(desc_key, sizeof(desc_key), "__desc_computed");
+          }
+          
+          jsoff_t existing_desc_off = lkp(js, obj, desc_key, strlen(desc_key));
+          jsval_t desc_obj;
+          if (existing_desc_off != 0) {
+            desc_obj = resolveprop(js, mkval(T_PROP, existing_desc_off));
+          } else {
+            desc_obj = mkobj(js, 0);
+            if (is_err(desc_obj)) return desc_obj;
+          }
+          
+          if (is_getter) {
+            setprop(js, desc_obj, js_mkstr(js, "get", 3), val);
+          } else {
+            setprop(js, desc_obj, js_mkstr(js, "set", 3), val);
+          }
+          setprop(js, desc_obj, js_mkstr(js, "enumerable", 10), js_mktrue());
+          setprop(js, desc_obj, js_mkstr(js, "configurable", 12), js_mktrue());
+          
+          jsval_t desc_key_str = js_mkstr(js, desc_key, strlen(desc_key));
+          setprop(js, obj, desc_key_str, desc_obj);
+          
+          jsoff_t prop_off = lkp(js, obj, key_str, key_len);
+          if (prop_off == 0) {
+            setprop(js, obj, key, js_mkundef());
+          }
+        } else {
+          jsval_t res = setprop(js, obj, key, val);
+          if (is_err(res)) return res;
+        }
       }
     } else {
       EXPECT(TOK_COLON, );
