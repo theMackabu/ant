@@ -37,6 +37,7 @@
 #include "modules/symbol.h"
 #include "modules/textcodec.h"
 #include "modules/sessionstorage.h"
+#include "modules/localstorage.h"
 
 int js_result = EXIT_SUCCESS;
 
@@ -140,10 +141,11 @@ int main(int argc, char *argv[]) {
   struct arg_int *gct = arg_int0(NULL, "gct", "<threshold>", "set garbage collection threshold");
   struct arg_int *initial_mem = arg_int0(NULL, "initial-mem", "<size>", "initial memory size in MB (default: 4)");
   struct arg_int *max_mem = arg_int0(NULL, "max-mem", "<size>", "maximum memory size in MB (default: 512)");
+  struct arg_file *localstorage_file = arg_file0(NULL, "localstorage-file", "<path>", "file path for localStorage persistence");
   struct arg_file *file = arg_file0(NULL, NULL, "<module.js>", "JavaScript module file to execute");
   struct arg_end *end = arg_end(20);
   
-  void *argtable[] = {help, version, debug, eval, print, gct, initial_mem, max_mem, file, end};
+  void *argtable[] = {help, version, debug, eval, print, gct, initial_mem, max_mem, localstorage_file, file, end};
   int nerrors = arg_parse(argc, argv, argtable);
   
   if (help->count > 0) {
@@ -188,7 +190,7 @@ int main(int argc, char *argv[]) {
   }
   
   if (gct->count > 0) js_setgct(js, gct->ival[0]);  
-  ant_runtime_init(js, argc, argv);
+  ant_runtime_init(js, argc, argv, localstorage_file);
 
   init_symbol_module();
   init_builtin_module();
@@ -208,6 +210,7 @@ int main(int argc, char *argv[]) {
   init_reflect_module();
   init_textcodec_module();
   init_sessionstorage_module();
+  init_localstorage_module();
   
   ant_register_library(shell_library, "ant:shell", NULL);
   ant_register_library(ffi_library, "ant:ffi", NULL);

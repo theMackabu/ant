@@ -511,6 +511,7 @@ static inline jsoff_t esize(jsoff_t w);
 
 static bool parse_func_params(struct js *js, uint8_t *flags, int *out_count);
 static double js_to_number(struct js *js, jsval_t arg);
+static jsval_t js_call_toString(struct js *js, jsval_t value);
 
 static jsval_t js_expr(struct js *js);
 static jsval_t js_eval_slice(struct js *js, jsoff_t off, jsoff_t len);
@@ -559,7 +560,7 @@ static jsval_t call_js(struct js *js, const char *fn, jsoff_t fnlen, jsval_t clo
 static jsval_t call_js_internal(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *bound_args, int bound_argc);
 static jsval_t call_js_internal_nfe(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *bound_args, int bound_argc, jsval_t func_name, jsval_t func_val);
 
-static jsval_t call_js_with_args(struct js *js, jsval_t func, jsval_t *args, int nargs);
+static jsval_t call_js_with_args(struct js *js, jsval_t fn, jsval_t *args, int nargs);
 static jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *args, int nargs);
 static jsval_t call_js_code_with_args_nfe(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *args, int nargs, jsval_t func_name, jsval_t func_val);
 
@@ -588,8 +589,6 @@ static jsval_t unwrap_primitive(struct js *js, jsval_t val) {
   if (prim_off == 0) return val;
   return resolveprop(js, mkval(T_PROP, prim_off));
 }
-
-static jsval_t call_js_with_args(struct js *js, jsval_t fn, jsval_t *args, int nargs);
 
 static jsval_t to_string_val(struct js *js, jsval_t val) {
   uint8_t t = vtype(val);
@@ -2017,9 +2016,7 @@ static size_t tostr(struct js *js, jsval_t value, char *buf, size_t len) {
   }
 }
 
-static jsval_t js_call_toString(struct js *js, jsval_t value);
-
-static jsval_t js_tostring_val(struct js *js, jsval_t value) {
+jsval_t js_tostring_val(struct js *js, jsval_t value) {
   uint8_t t = vtype(value);
   char buf[256];
   size_t len;

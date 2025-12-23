@@ -2,7 +2,6 @@
 #define ATOMICS_H
 
 #include <stdint.h>
-#include <stddef.h>
 #include <pthread.h>
 
 void init_atomics_module(void);

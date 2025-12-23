@@ -101,7 +101,7 @@ static jsval_t js_sessionstorage_setItem(struct js *js, jsval_t *args, int nargs
   
   size_t key_len, value_len;
   char *key = js_getstr(js, args[0], &key_len);
-  char *value = js_getstr(js, args[1], &value_len);
+  char *value = js_getstr(js, js_tostring_val(js, args[1]), &value_len);
   
   storage_set_item(key, key_len, value, value_len);
   

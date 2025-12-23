@@ -81,6 +81,7 @@ void js_set_proto(struct js *, jsval_t obj, jsval_t proto);
 
 jsval_t js_get_proto(struct js *, jsval_t obj);
 jsval_t js_get_ctor_proto(struct js *, const char *name, size_t len);
+jsval_t js_tostring_val(struct js *js, jsval_t value);
 
 int js_type(jsval_t val);
 int js_type_ex(struct js *js, jsval_t val);
