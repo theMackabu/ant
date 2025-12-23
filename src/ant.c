@@ -7116,6 +7116,11 @@ static jsval_t js_call_dot(struct js *js) {
           jsval_t key = js_mkstr(js, &js->code[id_off], id_len);
           if (!is_err(key)) {
             res = setprop(js, global_scope, key, js_mkundef());
+            if (!is_err(res)) {
+              js->flags &= (uint8_t)~F_THROW;
+              js->thrown_value = js_mkundef();
+              if (js->errmsg) js->errmsg[0] = '\0';
+            }
           }
         }
       }
