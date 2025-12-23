@@ -5,6 +5,7 @@ import { $ } from 'ant:shell';
 const GREEN = '\x1b[32m';
 const RED = '\x1b[31m';
 const CYAN = '\x1b[36m';
+const PINK = '\x1b[35m';
 const BOLD = '\x1b[1m';
 const DIM = '\x1b[2m';
 const RESET = '\x1b[0m';
@@ -56,5 +57,6 @@ console.log(`  ${GREEN}${totalPassed} tests passed${RESET}`);
 console.log(`  ${RED}${totalFailed} tests failed${RESET}`);
 console.log(`  ${GREEN}${filesPassed} files passed${RESET}`);
 console.log(`  ${RED}${filesFailed} files failed${RESET}\n`);
+console.log(`${PINK}Welcome to ES6!`);
 
 process.exit(totalFailed > 0 ? 1 : 0);
