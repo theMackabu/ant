@@ -19,10 +19,10 @@ script = ['rm spec.txt', '''
 ''']
 
 [tasks.setup]
-script = '''
+script = ['meson subprojects download', '''
    bash -c 'CC="ccache /opt/homebrew/opt/llvm/bin/clang" \
    meson setup build --wipe -Dc_args=-DNO_EXECUTE_PERMISSION'
-'''
+''']
 
 [tasks.install]
 script = '''

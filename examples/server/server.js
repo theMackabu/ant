@@ -24,7 +24,7 @@ router.get('/echo', c =>
 
 router.get('/get', c => {
   console.log(c.get('meow'));
-  c.res.body(c.get('meow'));
+  c.res.body(decodeURIComponent(c.get('meow')));
 });
 
 router.get('/set/*val', c => {
