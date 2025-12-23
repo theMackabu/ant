@@ -122,6 +122,31 @@ static this_stack_t global_this_stack = {NULL, 0, 0};
 static call_stack_t global_call_stack = {NULL, 0, 0};
 static coroutine_queue_t pending_coroutines = {NULL, NULL};
 
+typedef struct {
+  const char *name;
+  jsoff_t name_len;
+  bool is_loop;
+  bool is_block;
+} label_entry_t;
+
+static const UT_icd label_entry_icd = {
+  .sz = sizeof(label_entry_t),
+  .init = NULL,
+  .copy = NULL,
+  .dtor = NULL,
+};
+
+static UT_array *label_stack = NULL;
+
+static const char *break_target_label = NULL;
+static jsoff_t break_target_label_len = 0;
+static const char *continue_target_label = NULL;
+static jsoff_t continue_target_label_len = 0;
+
+#define F_BREAK_LABEL 1U
+#define F_CONTINUE_LABEL 2U
+static uint8_t label_flags = 0;
+
 typedef struct esm_module {
   char *path;
   char *resolved_path;
@@ -406,6 +431,12 @@ static bool streq(const char *buf, size_t len, const char *p, size_t n);
 static size_t tostr(struct js *js, jsval_t value, char *buf, size_t len);
 static size_t strpromise(struct js *js, jsval_t value, char *buf, size_t len);
 static size_t js_to_pcre2_pattern(const char *src, size_t src_len, char *dst, size_t dst_size);
+static jsval_t js_stmt_impl(struct js *js);
+static bool continue_targets_innermost_loop(void);
+static bool is_continue_target(const char *name, jsoff_t len);
+static bool is_this_loop_continue_target(int depth_at_entry);
+static void clear_continue_label(void);
+static void clear_break_label(void);
 
 static inline jsoff_t esize(jsoff_t w);
 static jsval_t js_expr(struct js *js);
@@ -8430,6 +8461,7 @@ static jsval_t for_in_iter_object(struct js *js, for_iter_ctx_t *ctx, jsval_t ob
       jsval_t v = for_iter_exec_body(js, ctx);
       if (is_err(v)) return v;
       if (js->flags & F_BREAK) break;
+      if (label_flags & F_CONTINUE_LABEL) { js->flags |= F_BREAK; break; }
       if (js->flags & F_RETURN) return v;
     }
     
@@ -8479,6 +8511,7 @@ static jsval_t for_of_iter_array(struct js *js, for_iter_ctx_t *ctx, jsval_t ite
     jsval_t v = for_iter_exec_body(js, ctx);
     if (is_err(v)) return v;
     if (js->flags & F_BREAK) break;
+    if (label_flags & F_CONTINUE_LABEL) { js->flags |= F_BREAK; break; }
     if (js->flags & F_RETURN) return v;
   }
   
@@ -8498,6 +8531,7 @@ static jsval_t for_of_iter_string(struct js *js, for_iter_ctx_t *ctx, jsval_t it
     jsval_t v = for_iter_exec_body(js, ctx);
     if (is_err(v)) return v;
     if (js->flags & F_BREAK) break;
+    if (label_flags & F_CONTINUE_LABEL) { js->flags |= F_BREAK; break; }
     if (js->flags & F_RETURN) return v;
   }
   
@@ -8551,6 +8585,7 @@ static jsval_t for_of_iter_object(struct js *js, for_iter_ctx_t *ctx, jsval_t it
     jsval_t v = for_iter_exec_body(js, ctx);
     if (is_err(v)) return v;
     if (js->flags & F_BREAK) break;
+    if (label_flags & F_CONTINUE_LABEL) { js->flags |= F_BREAK; break; }
     if (js->flags & F_RETURN) return v;
   }
   
@@ -8561,6 +8596,14 @@ static jsval_t js_for(struct js *js) {
   uint8_t flags = js->flags, exe = !(flags & F_NOEXEC);
   jsval_t v, res = js_mkundef();
   jsoff_t pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
+  
+  if (!label_stack) {
+    utarray_new(label_stack, &label_entry_icd);
+  }
+  label_entry_t marker = { .name = NULL, .name_len = 0, .is_loop = true, .is_block = false };
+  utarray_push_back(label_stack, &marker);
+  int marker_index = utarray_len(label_stack) - 1;
+  
   if (exe) mkscope(js);
   if (!expect(js, TOK_FOR, &res)) goto done;
   if (!expect(js, TOK_LPAREN, &res)) goto done;
@@ -8713,7 +8756,18 @@ static jsval_t js_for(struct js *js) {
             goto done;
           }
           
+          if (label_flags & F_CONTINUE_LABEL) {
+            if (is_this_loop_continue_target(marker_index)) {
+              clear_continue_label();
+              js->flags &= ~(F_BREAK | F_NOEXEC);
+            } else {
+              js->flags |= F_BREAK;
+              break;
+            }
+          }
+          
           if (js->flags & F_BREAK) break;
+          
           if (js->flags & F_RETURN) {
             res = v;
             goto done;
@@ -8819,7 +8873,24 @@ static jsval_t js_for(struct js *js) {
       }
     }
     
-    if (js->flags & F_BREAK) break;
+    if (label_flags & F_CONTINUE_LABEL) {
+      if (is_this_loop_continue_target(marker_index)) {
+        clear_continue_label();
+        js->flags &= ~(F_BREAK | F_NOEXEC);
+        js->flags = flags;
+        js->pos = pos2, js->consumed = 1;
+        if (next(js) != TOK_RPAREN) {
+          v = js_expr(js);
+          if (is_err2(&v, &res)) goto done;
+        }
+        continue;
+      }
+    }
+    
+    if (js->flags & F_BREAK) {
+      break;
+    }
+    
     if (js->flags & F_RETURN) {
       res = v;
       break;
@@ -8832,10 +8903,20 @@ static jsval_t js_for(struct js *js) {
   }
   js->pos = pos4, js->tok = TOK_SEMICOLON, js->consumed = 0;
 done:
+  if (label_stack && utarray_len(label_stack) > 0) {
+    utarray_pop_back(label_stack);
+  }
+  
   if (exe) delscope(js);
   uint8_t preserve = 0;
   if (js->flags & F_RETURN) {
     preserve = js->flags & (F_RETURN | F_NOEXEC);
+  }
+  if ((js->flags & F_BREAK) && (label_flags & F_BREAK_LABEL)) {
+    preserve |= (js->flags & (F_BREAK | F_NOEXEC));
+  }
+  if (label_flags & F_CONTINUE_LABEL) {
+    preserve |= F_BREAK | F_NOEXEC;
   }
   js->flags = flags | preserve;
   return res;
@@ -8845,19 +8926,26 @@ static jsval_t js_while(struct js *js) {
   uint8_t flags = js->flags, exe = !(flags & F_NOEXEC);
   jsval_t res = js_mkundef(), v;
   
+  if (!label_stack) {
+    utarray_new(label_stack, &label_entry_icd);
+  }
+  label_entry_t marker = { .name = NULL, .name_len = 0, .is_loop = true, .is_block = false };
+  utarray_push_back(label_stack, &marker);
+  int marker_index = utarray_len(label_stack) - 1;
+  
   js->consumed = 1;
-  if (!expect(js, TOK_LPAREN, &res)) return res;
+  if (!expect(js, TOK_LPAREN, &res)) goto done;
   
   jsoff_t cond_start = js->pos;
   js->flags |= F_NOEXEC;
   v = js_expr(js);
-  if (is_err(v)) return v;
+  if (is_err(v)) { res = v; goto done; }
   
-  if (!expect(js, TOK_RPAREN, &res)) return res;
+  if (!expect(js, TOK_RPAREN, &res)) goto done;
   
   jsoff_t body_start = js->pos;
   v = js_block_or_stmt(js);
-  if (is_err(v)) return v;
+  if (is_err(v)) { res = v; goto done; }
   jsoff_t body_end = js->pos;
   
   if (exe) {
@@ -8884,6 +8972,14 @@ static jsval_t js_while(struct js *js) {
         break;
       }
       
+      if (label_flags & F_CONTINUE_LABEL) {
+        if (is_this_loop_continue_target(marker_index)) {
+          clear_continue_label();
+          js->flags &= ~(F_BREAK | F_NOEXEC);
+          continue;
+        }
+      }
+      
       if (js->flags & F_BREAK) {
         break;
       }
@@ -8899,9 +8995,20 @@ static jsval_t js_while(struct js *js) {
   js->tok = TOK_SEMICOLON;
   js->consumed = 0;
   
+done:
+  if (label_stack && utarray_len(label_stack) > 0) {
+    utarray_pop_back(label_stack);
+  }
+  
   uint8_t preserve = 0;
   if (js->flags & F_RETURN) {
     preserve = js->flags & (F_RETURN | F_NOEXEC);
+  }
+  if ((js->flags & F_BREAK) && (label_flags & F_BREAK_LABEL)) {
+    preserve |= (js->flags & (F_BREAK | F_NOEXEC));
+  }
+  if (label_flags & F_CONTINUE_LABEL) {
+    preserve |= F_BREAK | F_NOEXEC;
   }
   js->flags = flags | preserve;
   
@@ -8912,27 +9019,34 @@ static jsval_t js_do_while(struct js *js) {
   uint8_t flags = js->flags, exe = !(flags & F_NOEXEC);
   jsval_t res = js_mkundef(), v;
   
+  if (!label_stack) {
+    utarray_new(label_stack, &label_entry_icd);
+  }
+  label_entry_t marker = { .name = NULL, .name_len = 0, .is_loop = true, .is_block = false };
+  utarray_push_back(label_stack, &marker);
+  int marker_index = utarray_len(label_stack) - 1;
+  
   js->consumed = 1;
   
   jsoff_t body_start = js->pos;
   bool is_block = (next(js) == TOK_LBRACE);
   js->flags |= F_NOEXEC;
   v = js_block_or_stmt(js);
-  if (is_err(v)) return v;
+  if (is_err(v)) { res = v; goto done; }
   
   if (is_block && next(js) == TOK_RBRACE) {
     js->consumed = 1;
   }
   (void) js->pos;
   
-  if (!expect(js, TOK_WHILE, &res)) return res;
-  if (!expect(js, TOK_LPAREN, &res)) return res;
+  if (!expect(js, TOK_WHILE, &res)) goto done;
+  if (!expect(js, TOK_LPAREN, &res)) goto done;
   
   jsoff_t cond_start = js->pos;
   v = js_expr(js);
-  if (is_err(v)) return v;
+  if (is_err(v)) { res = v; goto done; }
   
-  if (!expect(js, TOK_RPAREN, &res)) return res;
+  if (!expect(js, TOK_RPAREN, &res)) goto done;
   jsoff_t cond_end = js->pos;
   
   if (exe) {
@@ -8945,6 +9059,13 @@ static jsval_t js_do_while(struct js *js) {
       if (is_err(v)) {
         res = v;
         break;
+      }
+      
+      if (label_flags & F_CONTINUE_LABEL) {
+        if (is_this_loop_continue_target(marker_index)) {
+          clear_continue_label();
+          js->flags &= ~(F_BREAK | F_NOEXEC);
+        } else { break; }
       }
       
       if (js->flags & F_BREAK) {
@@ -8971,9 +9092,20 @@ static jsval_t js_do_while(struct js *js) {
   js->pos = cond_end;
   js->consumed = 1;
   
+done:
+  if (label_stack && utarray_len(label_stack) > 0) {
+    utarray_pop_back(label_stack);
+  }
+  
   uint8_t preserve = 0;
   if (js->flags & F_RETURN) {
     preserve = js->flags & (F_RETURN | F_NOEXEC);
+  }
+  if ((js->flags & F_BREAK) && (label_flags & F_BREAK_LABEL)) {
+    preserve |= (js->flags & (F_BREAK | F_NOEXEC));
+  }
+  if (label_flags & F_CONTINUE_LABEL) {
+    preserve |= F_BREAK | F_NOEXEC;
   }
   js->flags = flags | preserve;
   
@@ -9211,23 +9343,139 @@ static jsval_t js_try(struct js *js) {
   return res;
 }
 
-static jsval_t js_break(struct js *js) {
-  if (js->flags & F_NOEXEC) {
-  } else {
-    if (!(js->flags & (F_LOOP | F_SWITCH))) return js_mkerr(js, "not in loop or switch");
-    js->flags |= F_BREAK | F_NOEXEC;
+static bool label_exists(const char *name, jsoff_t len, bool check_loop) {
+  if (!label_stack) return false;
+  int depth = utarray_len(label_stack);
+  for (int i = depth - 1; i >= 0; i--) {
+    label_entry_t *entry = (label_entry_t *)utarray_eltptr(label_stack, i);
+    if (entry && entry->name_len == len && 
+        memcmp(entry->name, name, len) == 0) {
+      if (check_loop && !entry->is_loop) {
+        return false;
+      }
+      return true;
+    }
   }
+  return false;
+}
+
+static bool continue_targets_innermost_loop(void) {
+  if (!(label_flags & F_CONTINUE_LABEL)) return false;
+  if (!label_stack || !continue_target_label) return false;
+  
+  int depth = utarray_len(label_stack);
+  for (int i = depth - 1; i >= 0; i--) {
+    label_entry_t *entry = (label_entry_t *)utarray_eltptr(label_stack, i);
+    if (entry && entry->is_loop) {
+      if (entry->name_len == continue_target_label_len &&
+          memcmp(entry->name, continue_target_label, continue_target_label_len) == 0) {
+        return true;
+      }
+      return false;
+    }
+  }
+  return false;
+}
+
+static bool is_this_loop_continue_target(int marker_index) {
+  if (!(label_flags & F_CONTINUE_LABEL)) return false;
+  if (!label_stack || !continue_target_label) return false;
+  if (marker_index <= 0) return false;
+  
+  label_entry_t *entry = (label_entry_t *)utarray_eltptr(label_stack, marker_index - 1);
+  if (!entry) return false;
+  if (entry->name == NULL) return false;
+  if (!entry->is_loop) return false;
+  
+  if (entry->name_len == continue_target_label_len &&
+      memcmp(entry->name, continue_target_label, continue_target_label_len) == 0) {
+    return true;
+  }
+  return false;
+}
+
+static jsval_t js_break(struct js *js) {
   js->consumed = 1;
+  
+  uint8_t nxt = next(js);
+  if (nxt == TOK_IDENTIFIER && !js->had_newline) {
+    const char *label = &js->code[js->toff];
+    jsoff_t label_len = js->tlen;
+    js->consumed = 1;
+    
+    if (js->flags & F_NOEXEC) {
+      return js_mkundef();
+    }
+    
+    if (!label_exists(label, label_len, false)) {
+      return js_mkerr_typed(js, JS_ERR_SYNTAX, "undefined label '%.*s'", (int)label_len, label);
+    }
+    
+    break_target_label = label;
+    break_target_label_len = label_len;
+    label_flags |= F_BREAK_LABEL;
+    js->flags |= F_BREAK | F_NOEXEC;
+    return js_mkundef();
+  }
+  
+  if (js->flags & F_NOEXEC) {
+    return js_mkundef();
+  }
+  
+  if (!(js->flags & (F_LOOP | F_SWITCH))) {
+    bool in_labeled_block = false;
+    if (label_stack) {
+      int depth = utarray_len(label_stack);
+      for (int i = depth - 1; i >= 0; i--) {
+        label_entry_t *entry = (label_entry_t *)utarray_eltptr(label_stack, i);
+        if (entry && entry->is_block) {
+          in_labeled_block = true;
+          break;
+        }
+      }
+    }
+    if (!in_labeled_block) {
+      return js_mkerr(js, "not in loop or switch");
+    }
+  }
+  
+  js->flags |= F_BREAK | F_NOEXEC;
   return js_mkundef();
 }
 
 static jsval_t js_continue(struct js *js) {
-  if (js->flags & F_NOEXEC) {
-  } else {
-    if (!(js->flags & F_LOOP)) return js_mkerr(js, "not in loop");
-    js->flags |= F_NOEXEC;
-  }
   js->consumed = 1;
+  
+  uint8_t nxt = next(js);
+  if (nxt == TOK_IDENTIFIER && !js->had_newline) {
+    const char *label = &js->code[js->toff];
+    jsoff_t label_len = js->tlen;
+    js->consumed = 1;
+    
+    if (js->flags & F_NOEXEC) {
+      return js_mkundef();
+    }
+    
+    if (!label_exists(label, label_len, true)) {
+      return js_mkerr_typed(js, JS_ERR_SYNTAX, "undefined label '%.*s' or not a loop", (int)label_len, label);
+    }
+    
+    continue_target_label = label;
+    continue_target_label_len = label_len;
+    label_flags |= F_CONTINUE_LABEL;
+    js->flags |= F_BREAK | F_NOEXEC;
+    return js_mkundef();
+  }
+  
+  if (js->flags & F_NOEXEC) {
+    return js_mkundef();
+  }
+  
+  if (!(js->flags & F_LOOP)) {
+    return js_mkerr(js, "not in loop");
+  }
+  
+  js->flags |= F_NOEXEC;
   return js_mkundef();
 }
 
@@ -10012,7 +10260,85 @@ static void js_async(struct js *js, jsval_t *res) {
   *res = js_mkerr_typed(js, JS_ERR_SYNTAX, "async must be followed by function");
 }
 
-static jsval_t js_stmt(struct js *js) {
+static jsval_t js_stmt(struct js *js);
+
+static bool is_break_target(const char *name, jsoff_t len) {
+  if (!(label_flags & F_BREAK_LABEL)) return false;
+  if (break_target_label_len != len) return false;
+  return memcmp(break_target_label, name, len) == 0;
+}
+
+static bool is_continue_target(const char *name, jsoff_t len) {
+  if (!(label_flags & F_CONTINUE_LABEL)) return false;
+  if (continue_target_label_len != len) return false;
+  return memcmp(continue_target_label, name, len) == 0;
+}
+
+static void clear_break_label(void) {
+  break_target_label = NULL;
+  break_target_label_len = 0;
+  label_flags &= ~F_BREAK_LABEL;
+}
+
+static void clear_continue_label(void) {
+  continue_target_label = NULL;
+  continue_target_label_len = 0;
+  label_flags &= ~F_CONTINUE_LABEL;
+}
+
+static jsval_t js_labeled_stmt(struct js *js, const char *label, jsoff_t label_len) {
+  uint8_t flags = js->flags;
+  jsval_t res = js_mkundef();
+  
+  if (!label_stack) {
+    utarray_new(label_stack, &label_entry_icd);
+  }
+  
+  uint8_t next_tok = next(js);
+  bool is_loop = (next_tok == TOK_WHILE || next_tok == TOK_DO || next_tok == TOK_FOR);
+  bool is_block = (next_tok == TOK_LBRACE);
+  
+  label_entry_t entry = {
+    .name = label,
+    .name_len = label_len,
+    .is_loop = is_loop,
+    .is_block = is_block || !is_loop
+  };
+  utarray_push_back(label_stack, &entry);
+  
+  if (is_loop && !(flags & F_NOEXEC)) {
+    res = js_stmt_impl(js);
+    
+    if ((js->flags & F_BREAK) && is_break_target(label, label_len)) {
+      js->flags &= ~(F_BREAK | F_NOEXEC);
+      clear_break_label();
+      res = js_mkundef();
+    }
+    
+    if ((label_flags & F_CONTINUE_LABEL) && is_continue_target(label, label_len)) {
+      clear_continue_label();
+    }
+  } else if (is_loop && (flags & F_NOEXEC)) {
+    res = js_stmt_impl(js);
+  } else {
+    res = js_stmt_impl(js);
+    
+    if ((js->flags & F_BREAK) && is_break_target(label, label_len)) {
+      js->flags &= ~(F_BREAK | F_NOEXEC);
+      js->flags |= (flags & F_NOEXEC);
+      clear_break_label();
+      res = js_mkundef();
+    }
+  }
+  
+  if (label_stack && utarray_len(label_stack) > 0) {
+    utarray_pop_back(label_stack);
+  }
+  
+  return res;
+}
+
+static jsval_t js_stmt_impl(struct js *js) {
   jsval_t res;
   if (js->brk > js->gct) js_gc(js);
   uint8_t stmt_tok = next(js);
@@ -10078,6 +10404,33 @@ static jsval_t js_stmt(struct js *js) {
   }
   
   return res;
+}
+
+static jsval_t js_stmt(struct js *js) {
+  uint8_t tok = next(js);
+  
+  if (tok == TOK_IDENTIFIER) {
+    js_parse_state_t saved_state;
+    JS_SAVE_STATE(js, saved_state);
+    jsoff_t saved_toff = js->toff;
+    jsoff_t saved_tlen = js->tlen;
+    
+    const char *potential_label = &js->code[js->toff];
+    jsoff_t potential_label_len = js->tlen;
+    
+    js->consumed = 1;
+    
+    if (next(js) == TOK_COLON) {
+      js->consumed = 1;
+      return js_labeled_stmt(js, potential_label, potential_label_len);
+    }
+    
+    JS_RESTORE_STATE(js, saved_state);
+    js->toff = saved_toff;
+    js->tlen = saved_tlen;
+  }
+  
+  return js_stmt_impl(js);
 }
 
 static jsval_t builtin_String(struct js *js, jsval_t *args, int nargs) {
