@@ -4868,6 +4868,16 @@ static jsval_t call_js_internal_nfe(struct js *js, const char *fn, jsoff_t fnlen
       jsoff_t pattern_len = fnpos - pattern_start;
       
       jsval_t arg_val = (argi < argc) ? args[argi++] : js_mkundef();
+      
+      fnpos = skiptonext(fn, fnlen, fnpos, NULL);
+      if (fnpos < fnlen && fn[fnpos] == '=') {
+        jsoff_t default_start = 0, default_len = 0;
+        fnpos = extract_default_param_value(fn, fnlen, fnpos, &default_start, &default_len);
+        if (vtype(arg_val) == T_UNDEF && default_len > 0) {
+          arg_val = js_eval_str(js, &fn[default_start], default_len);
+        }
+      }
+      
       jsval_t r = bind_destruct_pattern(js, &fn[pattern_start], pattern_len, arg_val, function_scope);
       if (is_err(r)) {
         js->scope = saved_scope;
@@ -4875,7 +4885,6 @@ static jsval_t call_js_internal_nfe(struct js *js, const char *fn, jsoff_t fnlen
         return r;
       }
       
-      fnpos = skiptonext(fn, fnlen, fnpos, NULL);
       if (fnpos < fnlen && fn[fnpos] == ',') fnpos++;
       continue;
     }
@@ -10155,33 +10164,9 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
     
     EXPECT(TOK_LPAREN, js->flags = save_flags);
     jsoff_t method_params_start = js->pos - 1;
-    for (bool comma = false; next(js) != TOK_EOF; comma = true) {
-      if (!comma && next(js) == TOK_RPAREN) break;
-      EXPECT(TOK_IDENTIFIER, js->flags = save_flags);
-      js->consumed = 1;
-      
-      if (next(js) == TOK_ASSIGN) {
-        js->consumed = 1;
-        int depth = 0;
-        bool done = false;
-        while (!done && next(js) != TOK_EOF) {
-          uint8_t tok = next(js);
-          if (depth == 0 && (tok == TOK_RPAREN || tok == TOK_COMMA)) {
-            done = true;
-          } else if (tok == TOK_LPAREN || tok == TOK_LBRACKET || tok == TOK_LBRACE) {
-            depth++;
-            js->consumed = 1;
-          } else if (tok == TOK_RPAREN || tok == TOK_RBRACKET || tok == TOK_RBRACE) {
-            depth--;
-            js->consumed = 1;
-          } else {
-            js->consumed = 1;
-          }
-        }
-      }
-      
-      if (next(js) == TOK_RPAREN) break;
-      EXPECT(TOK_COMMA, js->flags = save_flags);
+    if (!parse_func_params(js, &save_flags, NULL)) {
+      js->flags = save_flags;
+      return js_mkerr_typed(js, JS_ERR_SYNTAX, "invalid method parameters");
     }
     EXPECT(TOK_RPAREN, js->flags = save_flags);
     EXPECT(TOK_LBRACE, js->flags = save_flags);
