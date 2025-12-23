@@ -13975,7 +13975,13 @@ static jsval_t builtin_array_sort(struct js *js, jsval_t *args, int nargs) {
     return js_mkerr(js, "sort called on non-array");
   }
   
-  jsval_t compareFn = (nargs >= 1 && vtype(args[0]) == T_FUNC) ? args[0] : js_mkundef();
+  jsval_t compareFn = js_mkundef();
+  if (nargs >= 1 && vtype(args[0]) != T_UNDEF) {
+    if (vtype(args[0]) != T_FUNC && vtype(args[0]) != T_CFUNC) {
+      return js_mkerr_typed(js, JS_ERR_TYPE, "compareFn must be a function or undefined");
+    }
+    compareFn = args[0];
+  }
   
   jsoff_t off = lkp(js, arr, "length", 6);
   jsoff_t len = 0;
