@@ -1186,6 +1186,16 @@ static bool is_valid_identifier(const char *str, jsoff_t slen) {
 static size_t strkey(struct js *js, jsval_t value, char *buf, size_t len) {
   jsoff_t slen, off = vstr(js, value, &slen);
   const char *str = (const char *) &js->mem[off];
+  
+  const char *sym_desc = get_symbol_description_from_key(str, slen);
+  if (sym_desc) {
+    size_t n = 0;
+    n += cpy(buf + n, len - n, "[", 1);
+    n += cpy(buf + n, len - n, sym_desc, strlen(sym_desc));
+    n += cpy(buf + n, len - n, "]", 1);
+    return n;
+  }
+  
   if (is_valid_identifier(str, slen)) {
     return cpy(buf, len, str, slen);
   }
@@ -1413,6 +1423,18 @@ continue_object_print:
       jsval_t desc_obj = resolveprop(js, mkval(T_PROP, desc_off));
       if (vtype(desc_obj) != T_OBJ) goto check_done;
       
+      jsoff_t get_off = lkp(js, desc_obj, "get", 3);
+      jsoff_t set_off = lkp(js, desc_obj, "set", 3);
+      if (get_off != 0 || set_off != 0) {
+        jsval_t get_val = get_off ? resolveprop(js, mkval(T_PROP, get_off)) : js_mkundef();
+        jsval_t set_val = set_off ? resolveprop(js, mkval(T_PROP, set_off)) : js_mkundef();
+        if ((vtype(get_val) == T_FUNC || vtype(get_val) == T_CFUNC) ||
+            (vtype(set_val) == T_FUNC || vtype(set_val) == T_CFUNC)) {
+          should_hide = true;
+          goto check_done;
+        }
+      }
+      
       jsoff_t enumerable_off = lkp(js, desc_obj, "enumerable", 10);
       if (enumerable_off == 0) goto check_done;
       
@@ -1427,17 +1449,84 @@ continue_object_print:
       if (!first) n += cpy(buf + n, len - n, ",\n", 2);
       first = false;
       n += add_indent(buf + n, len - n, stringify_indent);
-      n += strkey(js, mkval(T_STR, koff), buf + n, len - n);
-      n += cpy(buf + n, len - n, ": ", 2);
-      n += tostr(js, val, buf + n, len - n);
+      
+      bool is_special_global = false;
+      if (vtype(val) == T_UNDEF && streq(key, klen, "undefined", 9)) {
+        is_special_global = true;
+      } else if (vtype(val) == T_NUM) {
+        double d = tod(val);
+        if (isinf(d) && d > 0 && streq(key, klen, "Infinity", 8)) {
+          is_special_global = true;
+        } else if (isnan(d) && streq(key, klen, "NaN", 3)) {
+          is_special_global = true;
+        }
+      }
+      
+      if (is_special_global) {
+        n += tostr(js, val, buf + n, len - n);
+      } else {
+        n += strkey(js, mkval(T_STR, koff), buf + n, len - n);
+        n += cpy(buf + n, len - n, ": ", 2);
+        n += tostr(js, val, buf + n, len - n);
+      }
     }
     next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK);
   }
   
-  jsoff_t proto_off = lkp(js, obj, "__proto__", 9);
-  if (proto_off != 0) {
-    jsval_t proto_val = resolveprop(js, mkval(T_PROP, proto_off));
-    if (vtype(proto_val) == T_OBJ) n += print_prototype(js, proto_val, buf + n, len - n, &first);
+  next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK | ARRMASK);
+  while (next < js->brk && next != 0) {
+    jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
+    jsoff_t klen = offtolen(loadoff(js, koff));
+    const char *key = (char *) &js->mem[koff + sizeof(koff)];
+    
+    bool is_desc = (klen > 7 && key[0] == '_' && key[1] == '_' && key[2] == 'd' && key[3] == 'e' && key[4] == 's' && key[5] == 'c' && key[6] == '_');
+    if (is_desc) {
+      jsval_t desc_obj = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
+      desc_obj = resolveprop(js, desc_obj);
+      if (vtype(desc_obj) == T_OBJ) {
+        jsoff_t get_off = lkp(js, desc_obj, "get", 3);
+        jsoff_t set_off = lkp(js, desc_obj, "set", 3);
+        bool has_getter = false, has_setter = false;
+        
+        if (get_off != 0) {
+          jsval_t get_val = resolveprop(js, mkval(T_PROP, get_off));
+          has_getter = (vtype(get_val) == T_FUNC || vtype(get_val) == T_CFUNC);
+        }
+        if (set_off != 0) {
+          jsval_t set_val = resolveprop(js, mkval(T_PROP, set_off));
+          has_setter = (vtype(set_val) == T_FUNC || vtype(set_val) == T_CFUNC);
+        }
+        
+        if (has_getter || has_setter) {
+          jsoff_t enumerable_off = lkp(js, desc_obj, "enumerable", 10);
+          bool is_enumerable = true;
+          if (enumerable_off != 0) {
+            jsval_t enumerable_val = resolveprop(js, mkval(T_PROP, enumerable_off));
+            is_enumerable = js_truthy(js, enumerable_val);
+          }
+          
+          if (is_enumerable) {
+            const char *prop_name = key + 7;
+            size_t prop_len = klen - 7;
+            
+            if (!first) n += cpy(buf + n, len - n, ",\n", 2);
+            first = false;
+            n += add_indent(buf + n, len - n, stringify_indent);
+            n += cpy(buf + n, len - n, prop_name, prop_len);
+            n += cpy(buf + n, len - n, ": ", 2);
+            
+            if (has_getter && has_setter) {
+              n += cpy(buf + n, len - n, "[Getter/Setter]", 15);
+            } else if (has_getter) {
+              n += cpy(buf + n, len - n, "[Getter]", 8);
+            } else {
+              n += cpy(buf + n, len - n, "[Setter]", 8);
+            }
+          }
+        }
+      }
+    }
+    next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK);
   }
   
   stringify_indent--;
@@ -1560,6 +1649,7 @@ static bool is_internal_prop(const char *key, jsoff_t klen) {
   if (klen == 13 && memcmp(key, "__field_count", 13) == 0) return true;
   if (klen == 8 && memcmp(key, "__fields", 8) == 0) return true;
   if (klen == 8 && memcmp(key, "__source", 8) == 0) return true;
+  if (klen >= 9 && memcmp(key, "__sym_", 6) == 0 && key[klen-1] == '_' && key[klen-2] == '_') return true;
   return false;
 }
 
@@ -12710,6 +12800,16 @@ static jsval_t builtin_object_keys(struct js *js, jsval_t *args, int nargs) {
     if (desc_off != 0) {
       jsval_t desc_obj = resolveprop(js, mkval(T_PROP, desc_off));
       if (vtype(desc_obj) == T_OBJ) {
+        jsoff_t get_off = lkp(js, desc_obj, "get", 3);
+        jsoff_t set_off = lkp(js, desc_obj, "set", 3);
+        if (get_off != 0 || set_off != 0) {
+          jsval_t get_val = get_off ? resolveprop(js, mkval(T_PROP, get_off)) : js_mkundef();
+          jsval_t set_val = set_off ? resolveprop(js, mkval(T_PROP, set_off)) : js_mkundef();
+          if ((vtype(get_val) == T_FUNC || vtype(get_val) == T_CFUNC) ||
+              (vtype(set_val) == T_FUNC || vtype(set_val) == T_CFUNC)) {
+            continue;
+          }
+        }
         jsoff_t enum_off = lkp(js, desc_obj, "enumerable", 10);
         if (enum_off != 0) {
           jsval_t enum_val = resolveprop(js, mkval(T_PROP, enum_off));
@@ -12725,6 +12825,55 @@ static jsval_t builtin_object_keys(struct js *js, jsval_t *args, int nargs) {
       jsval_t key_val = js_mkstr(js, key, klen);
       setprop(js, arr, idx_key, key_val);
       idx++;
+    }
+  }
+  
+  next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK | ARRMASK);
+  while (next < js->brk && next != 0) {
+    jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
+    jsoff_t klen = offtolen(loadoff(js, koff));
+    const char *key = (char *) &js->mem[koff + sizeof(koff)];
+    
+    next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK);
+    
+    if (klen > 7 && key[0] == '_' && key[1] == '_' && key[2] == 'd' && 
+        key[3] == 'e' && key[4] == 's' && key[5] == 'c' && key[6] == '_') {
+      jsval_t desc_obj = resolveprop(js, mkval(T_PROP, lkp(js, obj, key, klen)));
+      if (vtype(desc_obj) == T_OBJ) {
+        jsoff_t get_off = lkp(js, desc_obj, "get", 3);
+        jsoff_t set_off = lkp(js, desc_obj, "set", 3);
+        bool has_accessor = false;
+        
+        if (get_off != 0) {
+          jsval_t get_val = resolveprop(js, mkval(T_PROP, get_off));
+          if (vtype(get_val) == T_FUNC || vtype(get_val) == T_CFUNC) has_accessor = true;
+        }
+        if (set_off != 0) {
+          jsval_t set_val = resolveprop(js, mkval(T_PROP, set_off));
+          if (vtype(set_val) == T_FUNC || vtype(set_val) == T_CFUNC) has_accessor = true;
+        }
+        
+        if (has_accessor) {
+          jsoff_t enum_off = lkp(js, desc_obj, "enumerable", 10);
+          bool is_enumerable = true;
+          if (enum_off != 0) {
+            jsval_t enum_val = resolveprop(js, mkval(T_PROP, enum_off));
+            is_enumerable = js_truthy(js, enum_val);
+          }
+          
+          if (is_enumerable) {
+            const char *prop_name = key + 7;
+            size_t prop_len = klen - 7;
+            
+            char idxstr[16];
+            snprintf(idxstr, sizeof(idxstr), "%u", (unsigned) idx);
+            jsval_t idx_key = js_mkstr(js, idxstr, strlen(idxstr));
+            jsval_t key_val = js_mkstr(js, prop_name, prop_len);
+            setprop(js, arr, idx_key, key_val);
+            idx++;
+          }
+        }
+      }
     }
   }
   
@@ -13443,15 +13592,36 @@ static jsval_t builtin_object_getOwnPropertyDescriptor(struct js *js, jsval_t *a
     if (vtype(desc) == T_OBJ) {
       jsval_t result = js_mkobj(js);
       
-      jsoff_t prop_off = lkp(js, as_obj, key_str, key_len);
-      if (prop_off != 0) {
-        jsval_t prop_val = resolveprop(js, mkval(T_PROP, prop_off));
-        setprop(js, result, js_mkstr(js, "value", 5), prop_val);
+      jsoff_t get_off = lkp(js, desc, "get", 3);
+      jsoff_t set_off = lkp(js, desc, "set", 3);
+      bool has_getter = false, has_setter = false;
+      
+      if (get_off != 0) {
+        jsval_t get_val = resolveprop(js, mkval(T_PROP, get_off));
+        if (vtype(get_val) == T_FUNC || vtype(get_val) == T_CFUNC) {
+          setprop(js, result, js_mkstr(js, "get", 3), get_val);
+          has_getter = true;
+        }
+      }
+      if (set_off != 0) {
+        jsval_t set_val = resolveprop(js, mkval(T_PROP, set_off));
+        if (vtype(set_val) == T_FUNC || vtype(set_val) == T_CFUNC) {
+          setprop(js, result, js_mkstr(js, "set", 3), set_val);
+          has_setter = true;
+        }
       }
       
-      jsoff_t writable_off = lkp(js, desc, "writable", 8);
-      if (writable_off != 0) {
-        setprop(js, result, js_mkstr(js, "writable", 8), resolveprop(js, mkval(T_PROP, writable_off)));
+      if (!has_getter && !has_setter) {
+        jsoff_t prop_off = lkp(js, as_obj, key_str, key_len);
+        if (prop_off != 0) {
+          jsval_t prop_val = resolveprop(js, mkval(T_PROP, prop_off));
+          setprop(js, result, js_mkstr(js, "value", 5), prop_val);
+        }
+        
+        jsoff_t writable_off = lkp(js, desc, "writable", 8);
+        if (writable_off != 0) {
+          setprop(js, result, js_mkstr(js, "writable", 8), resolveprop(js, mkval(T_PROP, writable_off)));
+        }
       }
       
       jsoff_t enumerable_off = lkp(js, desc, "enumerable", 10);
@@ -19914,8 +20084,6 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, map_proto, js_mkstr(js, "clear", 5), js_mkfun(map_clear));
   setprop(js, map_proto, js_mkstr(js, "size", 4), js_mkfun(map_size));
   setprop(js, map_proto, js_mkstr(js, "entries", 7), js_mkfun(map_entries));
-  const char *map_tag_key = get_toStringTag_sym_key();
-  js_set(js, map_proto, map_tag_key, js_mkstr(js, "Map", 3));
   
   jsval_t set_proto_obj = js_mkobj(js);
   set_proto(js, set_proto_obj, object_proto);
@@ -19925,8 +20093,6 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, set_proto_obj, js_mkstr(js, "clear", 5), js_mkfun(set_clear));
   setprop(js, set_proto_obj, js_mkstr(js, "size", 4), js_mkfun(set_size));
   setprop(js, set_proto_obj, js_mkstr(js, "values", 6), js_mkfun(set_values));
-  const char *set_tag_key = get_toStringTag_sym_key();
-  js_set(js, set_proto_obj, set_tag_key, js_mkstr(js, "Set", 3));
   
   jsval_t weakmap_proto = js_mkobj(js);
   set_proto(js, weakmap_proto, object_proto);
