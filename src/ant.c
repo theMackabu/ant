@@ -8326,6 +8326,17 @@ static jsval_t js_expr(struct js *js) {
   return js_assignment(js);
 }
 
+static jsval_t js_expr_comma(struct js *js) {
+  jsval_t res = js_assignment(js);
+  if (is_err(res)) return res;
+  while (next(js) == TOK_COMMA) {
+    js->consumed = 1;
+    res = js_assignment(js);
+    if (is_err(res)) return res;
+  }
+  return res;
+}
+
 static jsval_t js_eval_slice(struct js *js, jsoff_t off, jsoff_t len) {
   js_parse_state_t saved;
   JS_SAVE_STATE(js, saved);
@@ -9645,7 +9656,7 @@ static jsval_t js_return(struct js *js) {
   
   uint8_t nxt = next(js);
   if (nxt != TOK_SEMICOLON && nxt != TOK_RBRACE && nxt != TOK_EOF && !js->had_newline) {
-    res = resolveprop(js, js_expr(js));
+    res = resolveprop(js, js_expr_comma(js));
   }
   
   if (exe && !in_func) return js_mkundef();
