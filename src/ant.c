@@ -5483,6 +5483,19 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
   if (is_err(r)) return r;
   if (is_assign(op) && vtype(lhs) != T_PROP && vtype(lhs) != T_PROPREF) {
     if (!(js->flags & F_STRICT) && vtype(lhs) == T_UNDEF) return r;
+    if (!(js->flags & F_STRICT) && vtype(lhs) == T_CODEREF && op == TOK_ASSIGN) {
+      jsoff_t id_off = coderefoff(lhs);
+      jsoff_t id_len = codereflen(lhs);
+      jsval_t global_scope = js->scope;
+      while (vdata(upper(js, global_scope)) != 0) {
+        global_scope = upper(js, global_scope);
+      }
+      jsval_t key = js_mkstr(js, &js->code[id_off], id_len);
+      if (is_err(key)) return key;
+      jsval_t prop = setprop(js, global_scope, key, r);
+      if (is_err(prop)) return prop;
+      return r;
+    }
     return js_mkerr(js, "bad lhs");
   }
   
@@ -7257,19 +7270,10 @@ static jsval_t js_call_dot(struct js *js) {
         js->consumed = saved_consumed;
         uint8_t next_tok = next(js);
         if (next_tok == TOK_ASSIGN) {
-          jsval_t global_scope = js->scope;
-          while (vdata(upper(js, global_scope)) != 0) {
-            global_scope = upper(js, global_scope);
-          }
-          jsval_t key = js_mkstr(js, &js->code[id_off], id_len);
-          if (!is_err(key)) {
-            res = setprop(js, global_scope, key, js_mkundef());
-            if (!is_err(res)) {
-              js->flags &= (uint8_t)~F_THROW;
-              js->thrown_value = js_mkundef();
-              if (js->errmsg) js->errmsg[0] = '\0';
-            }
-          }
+          js->flags &= (uint8_t)~F_THROW;
+          js->thrown_value = js_mkundef();
+          if (js->errmsg) js->errmsg[0] = '\0';
+          return mkcoderef(id_off, id_len);
         }
       }
       if (is_err(res)) return res;
