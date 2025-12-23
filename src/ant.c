@@ -18509,6 +18509,64 @@ static jsval_t js_import_stmt(struct js *js) {
     size_t default_len = js->tlen;
     js->consumed = 1;
     
+    typedef struct {
+      const char *import_name;
+      size_t import_len;
+      const char *local_name;
+      size_t local_len;
+    } import_binding_t;
+    
+    import_binding_t bindings[64];
+    int binding_count = 0;
+    
+    if (next(js) == TOK_COMMA) {
+      js->consumed = 1;
+      
+      if (next(js) == TOK_LBRACE) {
+        js->consumed = 1;
+        
+        while (next(js) != TOK_RBRACE && binding_count < 64) {
+          EXPECT(TOK_IDENTIFIER, );
+          const char *import_name = &js->code[js->toff];
+          size_t import_len = js->tlen;
+          js->consumed = 1;
+          
+          const char *local_name = import_name;
+          size_t local_len = import_len;
+          
+          if (next(js) == TOK_AS) {
+            js->consumed = 1;
+            EXPECT(TOK_IDENTIFIER, );
+            local_name = &js->code[js->toff];
+            local_len = js->tlen;
+            js->consumed = 1;
+          }
+          
+          bindings[binding_count].import_name = import_name;
+          bindings[binding_count].import_len = import_len;
+          bindings[binding_count].local_name = local_name;
+          bindings[binding_count].local_len = local_len;
+          binding_count++;
+          
+          if (next(js) == TOK_COMMA) js->consumed = 1;
+        }
+        
+        EXPECT(TOK_RBRACE, );
+      } else if (next(js) == TOK_MUL) {
+        js->consumed = 1;
+        EXPECT(TOK_AS, );
+        EXPECT(TOK_IDENTIFIER, );
+        bindings[binding_count].import_name = NULL;
+        bindings[binding_count].import_len = 0;
+        bindings[binding_count].local_name = &js->code[js->toff];
+        bindings[binding_count].local_len = js->tlen;
+        binding_count++;
+        js->consumed = 1;
+      } else {
+        return js_mkerr(js, "Expected '{' or '*' after ',' in import");
+      }
+    }
+    
     EXPECT(TOK_FROM, );
     EXPECT(TOK_STRING, );
     
@@ -18553,8 +18611,18 @@ static jsval_t js_import_stmt(struct js *js) {
     
     jsoff_t default_off = lkp(js, ns, "default", 7);
     jsval_t default_val = default_off != 0 ? resolveprop(js, mkval(T_PROP, default_off)) : js_mkundef();
-    
     setprop(js, js->scope, js_mkstr(js, default_name, default_len), default_val);
+    
+    for (int i = 0; i < binding_count; i++) {
+      if (bindings[i].import_name == NULL) {
+        setprop(js, js->scope, js_mkstr(js, bindings[i].local_name, bindings[i].local_len), ns);
+      } else {
+        jsoff_t prop_off = lkp(js, ns, bindings[i].import_name, bindings[i].import_len);
+        jsval_t imported_val = prop_off != 0 ? resolveprop(js, mkval(T_PROP, prop_off)) : js_mkundef();
+        setprop(js, js->scope, js_mkstr(js, bindings[i].local_name, bindings[i].local_len), imported_val);
+      }
+    }
+    
     return js_mkundef();
   }
   
