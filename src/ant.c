@@ -548,9 +548,9 @@ typedef struct {
   (js)->consumed = (state).consumed; \
 } while(0)
 
-static jsoff_t loadoff(struct js *js, jsoff_t off) { 
-  jsoff_t v = 0; assert(js->brk <= js->size); memcpy(&v, &js->mem[off], sizeof(v)); 
-  return v; 
+static inline jsoff_t loadoff(struct js *js, jsoff_t off) { 
+  assert(js->brk <= js->size);
+  return *(jsoff_t *)(&js->mem[off]);
 }
 
 static bool is_arr_off(struct js *js, jsoff_t off) { 
@@ -561,9 +561,8 @@ static jsoff_t vstrlen(struct js *js, jsval_t v) {
   return offtolen(loadoff(js, (jsoff_t) vdata(v))); 
 }
 
-static jsval_t loadval(struct js *js, jsoff_t off) { 
-  jsval_t v = 0; memcpy(&v, &js->mem[off], sizeof(v));
-  return v; 
+static inline jsval_t loadval(struct js *js, jsoff_t off) { 
+  return *(jsval_t *)(&js->mem[off]);
 }
 
 static jsval_t upper(struct js *js, jsval_t scope) { 
