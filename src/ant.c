@@ -2967,15 +2967,6 @@ jsval_t js_setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v) {
       return mkval(T_PROP, existing);
     }
   }
-  
-  jsoff_t configurable_off = lkp(js, desc_obj, "configurable", 12);
-  if (configurable_off != 0) {
-    jsval_t configurable_val = resolveprop(js, mkval(T_PROP, configurable_off));
-    if (!js_truthy(js, configurable_val)) {
-      if (js->flags & F_STRICT) return js_mkerr(js, "assignment to non-configurable property");
-      return mkval(T_PROP, existing);
-    }
-  }
 
 do_update:
   saveval(js, existing + sizeof(jsoff_t) * 2, v);
@@ -13451,7 +13442,7 @@ static jsval_t builtin_object_defineProperty(struct js *js, jsval_t *args, int n
       }
       
       jsval_t prop_key = js_mkstr(js, prop_str, prop_len);
-      bool mark_const = (!writable || !configurable);
+      bool mark_const = !writable;
       mkprop(js, as_obj, prop_key, value, mark_const);
     }
   }
@@ -13566,7 +13557,7 @@ static jsval_t builtin_object_freeze(struct js *js, jsval_t *args, int nargs) {
   if (t != T_OBJ && t != T_ARR && t != T_FUNC) return obj;
   jsval_t as_obj = (t == T_OBJ) ? obj : mkval(T_OBJ, vdata(obj));
   
-  setprop(js, as_obj, js_mkstr(js, "__frozen__", 10), js_mktrue());
+  js->has_descriptors = true;
   jsoff_t next = loadoff(js, (jsoff_t) vdata(as_obj)) & ~(3U | CONSTMASK | ARRMASK);
   
   while (next < js->brk && next != 0) {
@@ -13616,6 +13607,7 @@ static jsval_t builtin_object_freeze(struct js *js, jsval_t *args, int nargs) {
     }
   }
   
+  setprop(js, as_obj, js_mkstr(js, "__frozen__", 10), js_mktrue());
   return obj;
 }
 
