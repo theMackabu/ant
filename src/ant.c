@@ -199,6 +199,21 @@ typedef struct {
   UT_hash_handle hh;
 } obj_prop_cache_t;
 
+typedef struct {
+  char str[64];
+  size_t len;
+  UT_hash_handle hh;
+} interned_string_t;
+
+typedef struct {
+  uint64_t combined_key;
+  jsoff_t prop_offset;
+  UT_hash_handle hh;
+} fast_prop_cache_t;
+
+static interned_string_t *intern_table = NULL;
+static fast_prop_cache_t *fast_cache = NULL;
+
 typedef struct map_entry {
     char *key;
     jsval_t value;
@@ -221,7 +236,6 @@ typedef struct proxy_data {
 
 static ant_library_t *library_registry = NULL;
 static esm_module_cache_t global_module_cache = {NULL, 0};
-static obj_prop_cache_t *global_property_cache = NULL;
 static proxy_data_t *proxy_registry = NULL;
 
 void js_protect_init_memory(struct js *js) {
@@ -2602,68 +2616,64 @@ static inline uint32_t hash_key(const char *key, size_t len) {
   return hash;
 }
 
-static obj_prop_cache_t* get_obj_cache(jsoff_t obj_offset) {
-  obj_prop_cache_t *cache = NULL;
-  HASH_FIND(hh, global_property_cache, &obj_offset, sizeof(jsoff_t), cache);
-  if (!cache) {
-    cache = (obj_prop_cache_t *)malloc(sizeof(obj_prop_cache_t));
-    if (!cache) return NULL;
-    cache->obj_offset = obj_offset;
-    cache->cache = NULL;
-    cache->hit_count = 0;
-    HASH_ADD(hh, global_property_cache, obj_offset, sizeof(jsoff_t), cache);
-  }
-  return cache;
+static const char *intern_string(const char *str, size_t len) {
+  if (len > 63) return NULL;
+  
+  interned_string_t *entry = NULL;
+  HASH_FIND(hh, intern_table, str, len, entry);
+  if (entry) return entry->str;
+  
+  entry = (interned_string_t *)malloc(sizeof(interned_string_t));
+  if (!entry) return NULL;
+  memcpy(entry->str, str, len);
+  entry->str[len] = '\0';
+  entry->len = len;
+  HASH_ADD(hh, intern_table, str, len, entry);
+  return entry->str;
 }
 
-static void cache_property(jsoff_t obj_offset, const char *key, size_t key_len, jsoff_t prop_offset) {
+static inline uint64_t make_cache_key(jsoff_t obj_offset, uint32_t str_hash) {
+  return ((uint64_t)obj_offset << 32) | str_hash;
+}
+
+static void fast_cache_property(jsoff_t obj_offset, const char *key, size_t key_len, jsoff_t prop_offset) {
   if (key_len > 63) return;
   
-  obj_prop_cache_t *obj_cache = get_obj_cache(obj_offset);
-  if (!obj_cache) return;
+  uint32_t str_hash = hash_key(key, key_len);
+  uint64_t combined = make_cache_key(obj_offset, str_hash);
   
-  prop_cache_entry_t *entry = NULL;
-  HASH_FIND_STR(obj_cache->cache, key, entry);
+  fast_prop_cache_t *entry = NULL;
+  HASH_FIND(hh, fast_cache, &combined, sizeof(uint64_t), entry);
   
   if (!entry) {
-    entry = (prop_cache_entry_t *)malloc(sizeof(prop_cache_entry_t));
+    entry = (fast_prop_cache_t *)malloc(sizeof(fast_prop_cache_t));
     if (!entry) return;
-    memcpy(entry->key, key, key_len);
-    entry->key[key_len] = '\0';
-    entry->hash = hash_key(key, key_len);
-    HASH_ADD_STR(obj_cache->cache, key, entry);
+    entry->combined_key = combined;
+    HASH_ADD(hh, fast_cache, combined_key, sizeof(uint64_t), entry);
   }
-  entry->offset = prop_offset;
+  entry->prop_offset = prop_offset;
 }
 
-static jsoff_t cache_lookup(jsoff_t obj_offset, const char *key, size_t key_len) {
+static jsoff_t fast_cache_lookup(jsoff_t obj_offset, const char *key, size_t key_len) {
   if (key_len > 63) return 0;
   
-  obj_prop_cache_t *obj_cache = NULL;
-  HASH_FIND(hh, global_property_cache, &obj_offset, sizeof(jsoff_t), obj_cache);
-  if (!obj_cache) return 0;
+  uint32_t str_hash = hash_key(key, key_len);
+  uint64_t combined = make_cache_key(obj_offset, str_hash);
   
-  prop_cache_entry_t *entry = NULL;
-  HASH_FIND_STR(obj_cache->cache, key, entry);
-  if (entry) {
-    obj_cache->hit_count++;
-    return entry->offset;
-  }
+  fast_prop_cache_t *entry = NULL;
+  HASH_FIND(hh, fast_cache, &combined, sizeof(uint64_t), entry);
+  if (entry) return entry->prop_offset;
   return 0;
 }
 
 static void invalidate_obj_cache(jsoff_t obj_offset) {
-  obj_prop_cache_t *obj_cache = NULL;
-  HASH_FIND(hh, global_property_cache, &obj_offset, sizeof(jsoff_t), obj_cache);
-  if (!obj_cache) return;
-  
-  prop_cache_entry_t *entry, *tmp;
-  HASH_ITER(hh, obj_cache->cache, entry, tmp) {
-    HASH_DEL(obj_cache->cache, entry);
-    free(entry);
+  fast_prop_cache_t *entry, *tmp;
+  HASH_ITER(hh, fast_cache, entry, tmp) {
+    if ((entry->combined_key >> 32) == obj_offset) {
+      HASH_DEL(fast_cache, entry);
+      free(entry);
+    }
   }
-  HASH_DEL(global_property_cache, obj_cache);
-  free(obj_cache);
 }
 
 static jsval_t mkprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v, bool is_const) {
@@ -3845,19 +3855,23 @@ static jsval_t js_block(struct js *js, bool create_scope) {
 }
 
 static inline jsoff_t lkp_inline(struct js *js, jsval_t obj, const char *buf, size_t len) {
+  jsoff_t obj_off = (jsoff_t)vdata(obj);
+  
   if (len <= 63) {
-    jsoff_t cached = cache_lookup((jsoff_t)vdata(obj), buf, len);
+    jsoff_t cached = fast_cache_lookup(obj_off, buf, len);
     if (cached != 0) return cached;
   }
   
-  jsoff_t off = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK | ARRMASK);
+  jsoff_t off = loadoff(js, obj_off) & ~(3U | CONSTMASK | ARRMASK);
   while (off < js->brk && off != 0) {
     jsoff_t koff = loadoff(js, (jsoff_t) (off + sizeof(off)));
     jsoff_t klen = (loadoff(js, koff) >> 2) - 1;
-    const char *p = (char *) &js->mem[koff + sizeof(koff)];
-    if (streq(buf, len, p, klen)) {
-      if (len <= 63) cache_property((jsoff_t)vdata(obj), buf, len, off);
-      return off;
+    if (klen == len) {
+      const char *p = (char *) &js->mem[koff + sizeof(koff)];
+      if (memcmp(buf, p, len) == 0) {
+        if (len <= 63) fast_cache_property(obj_off, buf, len, off);
+        return off;
+      }
     }
     off = loadoff(js, off) & ~(3U | CONSTMASK | ARRMASK);
   }
@@ -3953,45 +3967,55 @@ static jsval_t get_prototype_for_type(struct js *js, uint8_t type) {
 }
 
 static jsoff_t lkp_proto(struct js *js, jsval_t obj, const char *key, size_t len) {
-  if (streq(key, len, "__proto__", 9)) {
-    uint8_t t = vtype(obj);
+  uint8_t t = vtype(obj);
+  
+  if (len == 9 && memcmp(key, "__proto__", 9) == 0) {
     if (t == T_OBJ || t == T_ARR || t == T_FUNC) {
-      jsval_t as_obj = (t == T_OBJ) ? obj : mkval(T_OBJ, vdata(obj));
-      return lkp(js, as_obj, key, len);
+      return lkp(js, mkval(T_OBJ, vdata(obj)), key, len);
     }
     return 0;
   }
   
   jsval_t cur = obj;
   int depth = 0;
-  const int MAX_PROTO_DEPTH = 32;
   
-  while (depth < MAX_PROTO_DEPTH) {
-    uint8_t t = vtype(cur);
-    
+  while (depth < 32) {
     if (t == T_OBJ || t == T_ARR || t == T_FUNC) {
-      jsval_t as_obj = (t == T_OBJ) ? cur : mkval(T_OBJ, vdata(cur));
+      jsval_t as_obj = mkval(T_OBJ, vdata(cur));
       jsoff_t off = lkp(js, as_obj, key, len);
       if (off != 0) return off;
       
-      cur = get_proto(js, cur);
-      if (vtype(cur) == T_NULL || vtype(cur) == T_UNDEF) break;
+      jsoff_t proto_off = lkp(js, as_obj, "__proto__", 9);
+      if (proto_off == 0) {
+        if (t == T_FUNC || t == T_ARR) {
+          cur = get_prototype_for_type(js, t);
+          t = vtype(cur);
+          if (t == T_NULL || t == T_UNDEF) break;
+          depth++;
+          continue;
+        }
+        break;
+      }
+      cur = resolveprop(js, mkval(T_PROP, proto_off));
+      t = vtype(cur);
+      if (t == T_NULL || t == T_UNDEF) break;
       depth++;
     } else if (t == T_STR || t == T_NUM || t == T_BOOL || t == T_BIGINT) {
-      jsval_t proto = get_prototype_for_type(js, t);
-      if (vtype(proto) == T_NULL || vtype(proto) == T_UNDEF) break;
-      cur = proto;
+      cur = get_prototype_for_type(js, t);
+      t = vtype(cur);
+      if (t == T_NULL || t == T_UNDEF) break;
       depth++;
     } else if (t == T_CFUNC) {
       jsval_t func_proto = get_ctor_proto(js, "Function", 8);
-      if (vtype(func_proto) == T_OBJ || vtype(func_proto) == T_ARR || vtype(func_proto) == T_FUNC) {
-        jsval_t as_obj = (vtype(func_proto) == T_OBJ) ? func_proto : mkval(T_OBJ, vdata(func_proto));
-        jsoff_t off = lkp(js, as_obj, key, len);
+      uint8_t ft = vtype(func_proto);
+      if (ft == T_OBJ || ft == T_ARR || ft == T_FUNC) {
+        jsoff_t off = lkp(js, mkval(T_OBJ, vdata(func_proto)), key, len);
         if (off != 0) return off;
       }
       break;
+    } else {
+      break;
     }
-    else break;
   }
   
   return 0;
