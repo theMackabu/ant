@@ -2589,24 +2589,8 @@ static jsval_t arr_get(struct js *js, jsval_t arr, jsoff_t idx) {
 }
 
 static bool is_const_prop(struct js *js, jsoff_t propoff) {
-  for (jsoff_t off = 0; off < js->brk;) {
-    jsoff_t v = loadoff(js, off);
-    jsoff_t n = esize(v & ~(GCMASK | CONSTMASK));
-    jsoff_t cleaned = v & ~(GCMASK | CONSTMASK);
-    if ((cleaned & 3) == T_OBJ) {
-      jsoff_t firstprop = cleaned & ~3U;
-      if (firstprop == propoff && (v & CONSTMASK)) {
-        return true;
-      }
-    } else if ((cleaned & 3) == T_PROP) {
-      jsoff_t nextprop = cleaned & ~3U;
-      if (nextprop == propoff && (v & CONSTMASK)) {
-        return true;
-      }
-    }
-    off += n;
-  }
-  return false;
+  jsoff_t v = loadoff(js, propoff);
+  return (v & CONSTMASK) != 0;
 }
 
 static inline uint32_t hash_key(const char *key, size_t len) {
@@ -2691,12 +2675,13 @@ static jsval_t mkprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v, bool is_
   memcpy(buf + sizeof(koff), &v, sizeof(v));
   jsoff_t brk = js->brk | T_OBJ;
   
-  if (is_const) brk |= CONSTMASK;
   if (b & ARRMASK) brk |= ARRMASK;
   memcpy(&js->mem[head], &brk, sizeof(brk));
   invalidate_obj_cache(head);
   
-  return mkentity(js, (b & ~(3U | CONSTMASK | ARRMASK)) | T_PROP, buf, sizeof(buf));
+  jsoff_t prop_header = (b & ~(3U | CONSTMASK | ARRMASK)) | T_PROP;
+  if (is_const) prop_header |= CONSTMASK;
+  return mkentity(js, prop_header, buf, sizeof(buf));
 }
 
 static jsval_t setup_func_prototype(struct js *js, jsval_t func) {
