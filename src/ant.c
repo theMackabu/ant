@@ -254,6 +254,33 @@ typedef struct proxy_data {
     UT_hash_handle hh;
 } proxy_data_t;
 
+#define MAX_FUNC_PARAMS 64
+
+typedef struct parsed_param {
+  jsoff_t name_off;
+  jsoff_t name_len;
+  jsoff_t default_start;
+  jsoff_t default_len;
+  jsoff_t pattern_off;
+  jsoff_t pattern_len;
+  bool is_destruct;
+} parsed_param_t;
+
+typedef struct parsed_func {
+  uint64_t code_hash;
+  jsoff_t body_start;
+  jsoff_t body_len;
+  uint8_t param_count;
+  bool has_rest;
+  bool is_strict;
+  jsoff_t rest_param_start;
+  jsoff_t rest_param_len;
+  parsed_param_t params[MAX_FUNC_PARAMS];
+  UT_hash_handle hh;
+} parsed_func_t;
+
+static parsed_func_t *func_parse_cache = NULL;
+
 static ant_library_t *library_registry = NULL;
 static esm_module_cache_t global_module_cache = {NULL, 0};
 static proxy_data_t *proxy_registry = NULL;
@@ -2095,29 +2122,29 @@ static bool js_try_grow_memory(struct js *js, size_t needed) {
   if (!js->owns_mem) return false;
   if (js->max_size == 0) return false;
   
-  size_t current_total = sizeof(struct js) + js->size;
-  size_t new_size = current_total * 2;
+  size_t new_mem_size = (size_t)js->size * 2;
   
-  while (new_size < current_total + needed && new_size <= (size_t)js->max_size) new_size *= 2;
+  while (new_mem_size < (size_t)js->size + needed && new_mem_size <= (size_t)js->max_size) {
+    new_mem_size *= 2;
+  }
   
-  if (new_size > (size_t)js->max_size) new_size = (size_t)js->max_size;
-  if (new_size <= current_total) return false;
+  if (new_mem_size > (size_t)js->max_size) new_mem_size = (size_t)js->max_size;
+  if (new_mem_size <= (size_t)js->size) return false;
   
-  void *old_buf = (void *)((uint8_t *)js - 0);
-  void *new_buf = ANT_GC_REALLOC(old_buf, new_size);
+  uint8_t *new_mem = (uint8_t *)ANT_GC_MALLOC(new_mem_size);
+  if (new_mem == NULL) return false;
   
-  if (new_buf == NULL) return false;
-  struct js *new_js = (struct js *)new_buf;
+  memcpy(new_mem, js->mem, js->brk);
+  memset(new_mem + js->brk, 0, new_mem_size - js->brk);
   
-  new_js->mem = (uint8_t *)(new_js + 1);
-  jsoff_t old_size = new_js->size;
-  new_js->size = (jsoff_t)(new_size - sizeof(struct js));
-  new_js->size = new_js->size / 8U * 8U;
+  jsoff_t old_size = js->size;
+  js->mem = new_mem;
+  js->size = (jsoff_t)(new_mem_size / 8U * 8U);
   
   if (old_size > 0) {
-    new_js->gct = (new_js->size * new_js->gct) / old_size;
+    js->gct = (js->size * js->gct) / old_size;
   } else {
-    new_js->gct = new_js->size / 2;
+    js->gct = js->size / 2;
   }
   
   return true;
@@ -4966,6 +4993,99 @@ static bool is_strict_function_body(const char *body, size_t len) {
   return false;
 }
 
+static parsed_func_t *get_or_parse_func(const char *fn, jsoff_t fnlen) {
+  uint64_t h = hash_key(fn, fnlen);
+  parsed_func_t *cached = NULL;
+  HASH_FIND(hh, func_parse_cache, &h, sizeof(h), cached);
+  if (cached) return cached;
+  
+  parsed_func_t *pf = (parsed_func_t *)malloc(sizeof(parsed_func_t));
+  if (!pf) return NULL;
+  memset(pf, 0, sizeof(*pf));
+  pf->code_hash = h;
+  
+  jsoff_t fnpos = 1;
+  
+  while (fnpos < fnlen) {
+    fnpos = skiptonext(fn, fnlen, fnpos, NULL);
+    if (fnpos < fnlen && fn[fnpos] == ')') break;
+    
+    bool is_rest = false;
+    if (fnpos + 3 < fnlen && fn[fnpos] == '.' && fn[fnpos + 1] == '.' && fn[fnpos + 2] == '.') {
+      is_rest = true;
+      pf->has_rest = true;
+      fnpos += 3;
+      fnpos = skiptonext(fn, fnlen, fnpos, NULL);
+    }
+    
+    jsoff_t identlen = 0;
+    uint8_t tok = parseident(&fn[fnpos], fnlen - fnpos, &identlen);
+    
+    if (tok != TOK_IDENTIFIER && (fn[fnpos] == '{' || fn[fnpos] == '[')) {
+      char bracket_open = fn[fnpos];
+      char bracket_close = (bracket_open == '{') ? '}' : ']';
+      jsoff_t pattern_start = fnpos;
+      int depth = 1;
+      fnpos++;
+      while (fnpos < fnlen && depth > 0) {
+        if (fn[fnpos] == bracket_open) depth++;
+        else if (fn[fnpos] == bracket_close) depth--;
+        fnpos++;
+      }
+      jsoff_t pattern_len = fnpos - pattern_start;
+      
+      if (pf->param_count < MAX_FUNC_PARAMS) {
+        parsed_param_t *pp = &pf->params[pf->param_count];
+        pp->is_destruct = true;
+        pp->pattern_off = pattern_start;
+        pp->pattern_len = pattern_len;
+        
+        fnpos = skiptonext(fn, fnlen, fnpos, NULL);
+        if (fnpos < fnlen && fn[fnpos] == '=') {
+          fnpos = extract_default_param_value(fn, fnlen, fnpos, &pp->default_start, &pp->default_len);
+        }
+        pf->param_count++;
+      }
+      
+      if (fnpos < fnlen && fn[fnpos] == ',') fnpos++;
+      continue;
+    }
+    
+    if (tok != TOK_IDENTIFIER) break;
+    
+    if (is_rest) {
+      pf->rest_param_start = fnpos;
+      pf->rest_param_len = identlen;
+      fnpos = skiptonext(fn, fnlen, fnpos + identlen, NULL);
+      break;
+    }
+    
+    if (pf->param_count < MAX_FUNC_PARAMS) {
+      parsed_param_t *pp = &pf->params[pf->param_count];
+      pp->name_off = fnpos;
+      pp->name_len = identlen;
+      pp->is_destruct = false;
+      fnpos = extract_default_param_value(fn, fnlen, fnpos + identlen, &pp->default_start, &pp->default_len);
+      pf->param_count++;
+    } else {
+      fnpos = skiptonext(fn, fnlen, fnpos + identlen, NULL);
+    }
+    
+    if (fnpos < fnlen && fn[fnpos] == ',') fnpos++;
+  }
+  
+  if (fnpos < fnlen && fn[fnpos] == ')') fnpos++;
+  fnpos = skiptonext(fn, fnlen, fnpos, NULL);
+  if (fnpos < fnlen && fn[fnpos] == '{') fnpos++;
+  
+  pf->body_start = fnpos;
+  pf->body_len = (fnlen > fnpos + 1) ? (fnlen - fnpos - 1) : 0;
+  pf->is_strict = is_strict_function_body(&fn[fnpos], pf->body_len);
+  
+  HASH_ADD(hh, func_parse_cache, code_hash, sizeof(pf->code_hash), pf);
+  return pf;
+}
+
 static bool is_eval_or_arguments(struct js *js, jsoff_t toff, jsoff_t tlen) {
   if (tlen == 4 && memcmp(&js->code[toff], "eval", 4) == 0) return true;
   if (tlen == 9 && memcmp(&js->code[toff], "arguments", 9) == 0) return true;
@@ -5005,7 +5125,6 @@ static jsval_t call_js_internal(struct js *js, const char *fn, jsoff_t fnlen, js
 }
 
 static jsval_t call_js_internal_nfe(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *bound_args, int bound_argc, jsval_t func_name, jsval_t func_val) {
-  jsoff_t fnpos = 1;
   jsval_t saved_scope = js->scope;
   jsval_t saved_this_val = js->this_val;
   jsval_t target_this = peek_this();
@@ -5025,13 +5144,13 @@ static jsval_t call_js_internal_nfe(struct js *js, const char *fn, jsoff_t fnlen
   jsoff_t caller_clen = js->clen;
   jsoff_t caller_pos = js->pos;
   
-  jsval_t args[64];
+  jsval_t args[MAX_FUNC_PARAMS];
   int argc = 0;
   
-  for (int i = 0; i < bound_argc && argc < 64; i++) { args[argc++] = bound_args[i]; } 
+  for (int i = 0; i < bound_argc && argc < MAX_FUNC_PARAMS; i++) { args[argc++] = bound_args[i]; } 
   caller_pos = skiptonext(caller_code, caller_clen, caller_pos, NULL);
   
-  while (caller_pos < caller_clen && caller_code[caller_pos] != ')' && argc < 64) {
+  while (caller_pos < caller_clen && caller_code[caller_pos] != ')' && argc < MAX_FUNC_PARAMS) {
     bool is_spread = (
       caller_code[caller_pos] == '.' && caller_pos + 2 < caller_clen &&
       caller_code[caller_pos + 1] == '.' && caller_code[caller_pos + 2] == '.'
@@ -5043,7 +5162,7 @@ static jsval_t call_js_internal_nfe(struct js *js, const char *fn, jsoff_t fnlen
     caller_pos = js->pos;
     if (is_spread && vtype(arg) == T_ARR) {
       jsoff_t len = arr_length(js, arg);
-      for (jsoff_t i = 0; i < len && argc < 64; i++) {
+      for (jsoff_t i = 0; i < len && argc < MAX_FUNC_PARAMS; i++) {
         args[argc++] = arr_get(js, arg, i);
       }
     } else {
@@ -5057,86 +5176,42 @@ static jsval_t call_js_internal_nfe(struct js *js, const char *fn, jsoff_t fnlen
   
   js->scope = function_scope;
   
-  int argi = 0;
-  bool has_rest = false;
-  jsoff_t rest_param_start = 0, rest_param_len = 0;
+  parsed_func_t *pf = get_or_parse_func(fn, fnlen);
+  if (!pf) {
+    js->scope = saved_scope;
+    if (global_scope_stack && utarray_len(global_scope_stack) > 0) utarray_pop_back(global_scope_stack);
+    return js_mkerr(js, "failed to parse function");
+  }
   
-  while (fnpos < fnlen) {
-    fnpos = skiptonext(fn, fnlen, fnpos, NULL);
-    if (fnpos < fnlen && fn[fnpos] == ')') break;
+  int argi = 0;
+  for (int i = 0; i < pf->param_count && i < MAX_FUNC_PARAMS; i++) {
+    parsed_param_t *pp = &pf->params[i];
     
-    bool is_rest = false;
-    if (fnpos + 3 < fnlen && fn[fnpos] == '.' && fn[fnpos + 1] == '.' && fn[fnpos + 2] == '.') {
-      is_rest = true;
-      has_rest = true;
-      fnpos += 3;
-      fnpos = skiptonext(fn, fnlen, fnpos, NULL);
-    }
-    
-    jsoff_t identlen = 0;
-    uint8_t tok = parseident(&fn[fnpos], fnlen - fnpos, &identlen);
-    
-    if (tok != TOK_IDENTIFIER && (fn[fnpos] == '{' || fn[fnpos] == '[')) {
-      char bracket_open = fn[fnpos];
-      char bracket_close = (bracket_open == '{') ? '}' : ']';
-      jsoff_t pattern_start = fnpos;
-      int depth = 1;
-      fnpos++;
-      while (fnpos < fnlen && depth > 0) {
-        if (fn[fnpos] == bracket_open) depth++;
-        else if (fn[fnpos] == bracket_close) depth--;
-        fnpos++;
-      }
-      jsoff_t pattern_len = fnpos - pattern_start;
-      
+    if (pp->is_destruct) {
       jsval_t arg_val = (argi < argc) ? args[argi++] : js_mkundef();
-      
-      fnpos = skiptonext(fn, fnlen, fnpos, NULL);
-      if (fnpos < fnlen && fn[fnpos] == '=') {
-        jsoff_t default_start = 0, default_len = 0;
-        fnpos = extract_default_param_value(fn, fnlen, fnpos, &default_start, &default_len);
-        if (vtype(arg_val) == T_UNDEF && default_len > 0) {
-          arg_val = js_eval_str(js, &fn[default_start], default_len);
-        }
+      if (vtype(arg_val) == T_UNDEF && pp->default_len > 0) {
+        arg_val = js_eval_str(js, &fn[pp->default_start], pp->default_len);
       }
-      
-      jsval_t r = bind_destruct_pattern(js, &fn[pattern_start], pattern_len, arg_val, function_scope);
+      jsval_t r = bind_destruct_pattern(js, &fn[pp->pattern_off], pp->pattern_len, arg_val, function_scope);
       if (is_err(r)) {
         js->scope = saved_scope;
         if (global_scope_stack && utarray_len(global_scope_stack) > 0) utarray_pop_back(global_scope_stack);
         return r;
       }
-      
-      if (fnpos < fnlen && fn[fnpos] == ',') fnpos++;
-      continue;
-    }
-    
-    if (tok != TOK_IDENTIFIER) break;
-    
-    if (is_rest) {
-      rest_param_start = fnpos;
-      rest_param_len = identlen;
-      fnpos = skiptonext(fn, fnlen, fnpos + identlen, NULL);
-      break;
-    }
-    
-    jsoff_t param_name_pos = fnpos;
-    jsoff_t default_start = 0, default_len = 0;
-    fnpos = extract_default_param_value(fn, fnlen, fnpos + identlen, &default_start, &default_len);
-    
-    jsval_t v;
-    if (argi < argc) {
-      v = args[argi++];
-    } else if (default_len > 0) {
-      v = js_eval_str(js, &fn[default_start], default_len);
     } else {
-      v = js_mkundef();
+      jsval_t v;
+      if (argi < argc) {
+        v = args[argi++];
+      } else if (pp->default_len > 0) {
+        v = js_eval_str(js, &fn[pp->default_start], pp->default_len);
+      } else {
+        v = js_mkundef();
+      }
+      setprop(js, function_scope, js_mkstr(js, &fn[pp->name_off], pp->name_len), v);
     }
-    setprop(js, function_scope, js_mkstr(js, &fn[param_name_pos], identlen), v);
-    if (fnpos < fnlen && fn[fnpos] == ',') fnpos++;
   }
   
-  if (has_rest && rest_param_len > 0) {
+  if (pf->has_rest && pf->rest_param_len > 0) {
     jsval_t rest_array = mkarr(js);
     if (!is_err(rest_array)) {
       jsoff_t idx = 0;
@@ -5150,17 +5225,11 @@ static jsval_t call_js_internal_nfe(struct js *js, const char *fn, jsoff_t fnlen
       jsval_t len_key = js_mkstr(js, "length", 6);
       setprop(js, rest_array, len_key, tov((double) idx));
       rest_array = mkval(T_ARR, vdata(rest_array));
-      setprop(js, function_scope, js_mkstr(js, &fn[rest_param_start], rest_param_len), rest_array);
+      setprop(js, function_scope, js_mkstr(js, &fn[pf->rest_param_start], pf->rest_param_len), rest_array);
     }
   }
   
-  js->scope = function_scope;
-  if (fnpos < fnlen && fn[fnpos] == ')') fnpos++;
-  fnpos = skiptonext(fn, fnlen, fnpos, NULL);
-  if (fnpos < fnlen && fn[fnpos] == '{') fnpos++;
-  size_t n = fnlen - fnpos - 1U;
-  
-  bool func_strict = is_strict_function_body(&fn[fnpos], n);
+  bool func_strict = pf->is_strict;
   
   if (!func_strict && vtype(func_val) == T_FUNC) {
     jsval_t func_obj = mkval(T_OBJ, vdata(func_val));
@@ -5190,7 +5259,7 @@ static jsval_t call_js_internal_nfe(struct js *js, const char *fn, jsoff_t fnlen
   }
   js->flags = F_CALL | (func_strict ? F_STRICT : 0);
   
-  jsval_t res = js_eval(js, &fn[fnpos], n);
+  jsval_t res = js_eval(js, &fn[pf->body_start], pf->body_len);
   if (!is_err(res) && !(js->flags & F_RETURN)) res = js_mkundef();
   if (global_scope_stack && utarray_len(global_scope_stack) > 0)  utarray_pop_back(global_scope_stack);
   
@@ -20832,8 +20901,6 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
       return start_async_in_coroutine(js, fn, fnlen, closure_scope, args, nargs);
     }
     
-    jsoff_t fnpos = 1;
-    
     jsval_t saved_scope = js->scope;
     jsoff_t scope_off = lkp(js, func_obj, "__scope", 7);
     if (scope_off != 0) {
@@ -20847,42 +20914,34 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
     js->flags = 0;
     mkscope(js);
     js->flags = saved_flags;
-    int arg_idx = 0;
     
-    bool has_rest = false;
-    jsoff_t rest_param_start = 0, rest_param_len = 0;
-    
-    while (fnpos < fnlen) {
-      fnpos = skiptonext(fn, fnlen, fnpos, NULL);
-      if (fnpos < fnlen && fn[fnpos] == ')') break;
-      
-      bool is_rest = false;
-      if (fnpos + 3 < fnlen && fn[fnpos] == '.' && fn[fnpos + 1] == '.' && fn[fnpos + 2] == '.') {
-        is_rest = true;
-        has_rest = true;
-        fnpos += 3;
-        fnpos = skiptonext(fn, fnlen, fnpos, NULL);
-      }
-      
-      jsoff_t identlen = 0;
-      uint8_t tok = parseident(&fn[fnpos], fnlen - fnpos, &identlen);
-      if (tok != TOK_IDENTIFIER) break;
-      
-      if (is_rest) {
-        rest_param_start = fnpos;
-        rest_param_len = identlen;
-        fnpos = skiptonext(fn, fnlen, fnpos + identlen, NULL);
-        break;
-      }
-      
-      jsval_t v = arg_idx < nargs ? args[arg_idx] : js_mkundef();
-      setprop(js, js->scope, js_mkstr(js, &fn[fnpos], identlen), v);
-      arg_idx++;
-      fnpos = skiptonext(fn, fnlen, fnpos + identlen, NULL);
-      if (fnpos < fnlen && fn[fnpos] == ',') fnpos++;
+    parsed_func_t *pf = get_or_parse_func(fn, fnlen);
+    if (!pf) {
+      delscope(js);
+      js->scope = saved_scope;
+      return js_mkerr(js, "failed to parse function");
     }
     
-    if (has_rest && rest_param_len > 0) {
+    int arg_idx = 0;
+    for (int i = 0; i < pf->param_count && i < MAX_FUNC_PARAMS; i++) {
+      parsed_param_t *pp = &pf->params[i];
+      
+      if (pp->is_destruct) {
+        jsval_t arg_val = (arg_idx < nargs) ? args[arg_idx++] : js_mkundef();
+        if (vtype(arg_val) == T_UNDEF && pp->default_len > 0) {
+          arg_val = js_eval_str(js, &fn[pp->default_start], pp->default_len);
+        }
+        bind_destruct_pattern(js, &fn[pp->pattern_off], pp->pattern_len, arg_val, js->scope);
+      } else {
+        jsval_t v = arg_idx < nargs ? args[arg_idx++] : js_mkundef();
+        if (vtype(v) == T_UNDEF && pp->default_len > 0) {
+          v = js_eval_str(js, &fn[pp->default_start], pp->default_len);
+        }
+        setprop(js, js->scope, js_mkstr(js, &fn[pp->name_off], pp->name_len), v);
+      }
+    }
+    
+    if (pf->has_rest && pf->rest_param_len > 0) {
       jsval_t rest_array = mkarr(js);
       if (!is_err(rest_array)) {
         jsoff_t idx = 0;
@@ -20897,15 +20956,9 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
         jsval_t len_key = js_mkstr(js, "length", 6);
         setprop(js, rest_array, len_key, tov((double) idx));
         rest_array = mkval(T_ARR, vdata(rest_array));
-        setprop(js, js->scope, js_mkstr(js, &fn[rest_param_start], rest_param_len), rest_array);
+        setprop(js, js->scope, js_mkstr(js, &fn[pf->rest_param_start], pf->rest_param_len), rest_array);
       }
     }
-    
-    if (fnpos < fnlen && fn[fnpos] == ')') fnpos++;
-    fnpos = skiptonext(fn, fnlen, fnpos, NULL);
-    
-    if (fnpos < fnlen && fn[fnpos] == '{') fnpos++;
-    size_t body_len = fnlen - fnpos - 1;
     
     jsval_t saved_this = js->this_val;
     js->this_val = use_bound_this ? bound_this : js_glob(js);
@@ -20915,7 +20968,7 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
     uint8_t caller_flags = js->flags;
     
     js->flags = F_CALL;
-    jsval_t res = js_eval(js, &fn[fnpos], body_len);
+    jsval_t res = js_eval(js, &fn[pf->body_start], pf->body_len);
     if (!is_err(res) && !(js->flags & F_RETURN)) res = js_mkundef();
     
     JS_RESTORE_STATE(js, saved_state);
