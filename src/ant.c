@@ -334,6 +334,23 @@ enum {
   TOK_MUL_ASSIGN, TOK_DIV_ASSIGN, TOK_REM_ASSIGN, TOK_SHL_ASSIGN,
   TOK_SHR_ASSIGN, TOK_ZSHR_ASSIGN, TOK_AND_ASSIGN, TOK_XOR_ASSIGN,
   TOK_OR_ASSIGN, TOK_COMMA, TOK_TEMPLATE, TOK_ARROW,
+  TOK_MAX
+};
+
+static const uint8_t prec_table[TOK_MAX] = {
+  [TOK_LOR]        = 4,
+  [TOK_LAND]       = 5,
+  [TOK_NULLISH]    = 5,
+  [TOK_OR]         = 6,
+  [TOK_XOR]        = 7,
+  [TOK_AND]        = 8,
+  [TOK_EQ]         = 9,  [TOK_NE]  = 9,  [TOK_SEQ] = 9,  [TOK_SNE] = 9,
+  [TOK_LT]         = 10, [TOK_LE]  = 10, [TOK_GT]  = 10, [TOK_GE]  = 10,
+  [TOK_INSTANCEOF] = 10, [TOK_IN]  = 10,
+  [TOK_SHL]        = 11, [TOK_SHR] = 11, [TOK_ZSHR] = 11,
+  [TOK_PLUS]       = 12, [TOK_MINUS] = 12,
+  [TOK_MUL]        = 13, [TOK_DIV] = 13, [TOK_REM] = 13,
+  [TOK_EXP]        = 14,
 };
 
 enum {
@@ -7909,114 +7926,100 @@ static jsval_t js_unary(struct js *js) {
   }
 }
 
-static jsval_t js_exp(struct js *js) {
-  jsval_t base = js_unary(js);
-  if (is_err(base)) return base;
-  if (next(js) == TOK_EXP) {
+static jsval_t js_expr_bp(struct js *js, uint8_t min_bp) {
+  jsval_t lhs = js_unary(js);
+  if (is_err(lhs)) return lhs;
+
+  loop: {
+    uint8_t tok = next(js);
+    if (tok >= TOK_MAX) return lhs;
+    uint8_t bp = prec_table[tok];
+    if (bp == 0 || bp < min_bp) return lhs;
+
     js->consumed = 1;
-    jsval_t exponent = js_exp(js);
-    if (is_err(exponent)) return exponent;
-    return do_op(js, TOK_EXP, base, exponent);
-  }
-  return base;
-}
 
-static jsval_t js_mul_div_rem(struct js *js) {
-  LTR_BINOP(js_exp, (next(js) == TOK_MUL || js->tok == TOK_DIV || js->tok == TOK_REM));
-}
+    static const void *dispatch[] = {
+      [TOK_LOR]        = &&do_lor,
+      [TOK_LAND]       = &&do_land,
+      [TOK_NULLISH]    = &&do_nullish,
+      [TOK_EXP]        = &&do_exp,
+      [TOK_OR]         = &&do_binop,
+      [TOK_XOR]        = &&do_binop,
+      [TOK_AND]        = &&do_binop,
+      [TOK_EQ]         = &&do_binop,
+      [TOK_NE]         = &&do_binop,
+      [TOK_SEQ]        = &&do_binop,
+      [TOK_SNE]        = &&do_binop,
+      [TOK_LT]         = &&do_binop,
+      [TOK_LE]         = &&do_binop,
+      [TOK_GT]         = &&do_binop,
+      [TOK_GE]         = &&do_binop,
+      [TOK_INSTANCEOF] = &&do_binop,
+      [TOK_IN]         = &&do_binop,
+      [TOK_SHL]        = &&do_binop,
+      [TOK_SHR]        = &&do_binop,
+      [TOK_ZSHR]       = &&do_binop,
+      [TOK_PLUS]       = &&do_binop,
+      [TOK_MINUS]      = &&do_binop,
+      [TOK_MUL]        = &&do_binop,
+      [TOK_DIV]        = &&do_binop,
+      [TOK_REM]        = &&do_binop,
+    };
 
-static jsval_t js_plus_minus(struct js *js) {
-  LTR_BINOP(js_mul_div_rem, (next(js) == TOK_PLUS || js->tok == TOK_MINUS));
-}
+    goto *dispatch[tok];
 
-static jsval_t js_shifts(struct js *js) {
-  LTR_BINOP(js_plus_minus, 
-  (next(js) == TOK_SHR || next(js) == TOK_SHL ||
-   next(js) == TOK_ZSHR));
-}
-
-static jsval_t js_comparison(struct js *js) {
-  LTR_BINOP(js_shifts, 
-  (next(js) == TOK_LT || next(js) == TOK_LE ||
-   next(js) == TOK_GT || next(js) == TOK_GE ||
-   next(js) == TOK_INSTANCEOF || next(js) == TOK_IN));
-}
-
-static jsval_t js_equality(struct js *js) {
-  LTR_BINOP(js_comparison, (next(js) == TOK_EQ || next(js) == TOK_NE || next(js) == TOK_SEQ || next(js) == TOK_SNE));
-}
-
-static jsval_t js_bitwise_and(struct js *js) {
-  LTR_BINOP(js_equality, (next(js) == TOK_AND));
-}
-
-static jsval_t js_bitwise_xor(struct js *js) {
-  LTR_BINOP(js_bitwise_and, (next(js) == TOK_XOR));
-}
-
-static jsval_t js_bitwise_or(struct js *js) {
-  LTR_BINOP(js_bitwise_xor, (next(js) == TOK_OR));
-}
-
-static jsval_t js_nullish_coalesce(struct js *js) {
-  jsval_t res = js_bitwise_or(js);
-  if (is_err(res)) return res;
-  uint8_t flags = js->flags;
-  while (next(js) == TOK_NULLISH) {
-    js->consumed = 1;
-    res = resolveprop(js, res);
-    uint8_t res_type = vtype(res);
-    if (res_type != T_NULL && res_type != T_UNDEF) {
-      js->flags |= F_NOEXEC;
+    do_binop: {
+      jsval_t rhs = js_expr_bp(js, bp + 1);
+      if (is_err(rhs)) return rhs;
+      lhs = do_op(js, tok, lhs, rhs);
+      goto loop;
     }
-    if (js->flags & F_NOEXEC) {
-      js_nullish_coalesce(js);
-    } else {
-      res = js_nullish_coalesce(js);
-    }
-  }
-  js->flags = flags;
-  return res;
-}
 
-static jsval_t js_logical_and(struct js *js) {
-  jsval_t res = js_nullish_coalesce(js);
-  if (is_err(res)) return res;
-  uint8_t flags = js->flags;
-  while (next(js) == TOK_LAND) {
-    js->consumed = 1;
-    res = resolveprop(js, res);
-    if (!js_truthy(js, res)) js->flags |= F_NOEXEC;
-    if (js->flags & F_NOEXEC) {
-      js_logical_and(js);
-    } else {
-      res = js_logical_and(js);
+    do_exp: {
+      jsval_t rhs = js_expr_bp(js, bp);
+      if (is_err(rhs)) return rhs;
+      lhs = do_op(js, TOK_EXP, lhs, rhs);
+      goto loop;
     }
-  }
-  js->flags = flags;
-  return res;
-}
 
-static jsval_t js_logical_or(struct js *js) {
-  jsval_t res = js_logical_and(js);
-  if (is_err(res)) return res;
-  uint8_t flags = js->flags;
-  while (next(js) == TOK_LOR) {
-    js->consumed = 1;
-    res = resolveprop(js, res);
-    if (js_truthy(js, res)) js->flags |= F_NOEXEC;
-    if (js->flags & F_NOEXEC) {
-      js_logical_or(js);
-    } else {
-      res = js_logical_or(js);
+    do_lor: {
+      uint8_t flags = js->flags;
+      lhs = resolveprop(js, lhs);
+      if (js_truthy(js, lhs)) js->flags |= F_NOEXEC;
+      jsval_t rhs = js_expr_bp(js, bp);
+      if (!(flags & F_NOEXEC) && !js_truthy(js, lhs)) lhs = rhs;
+      js->flags = flags;
+      if (is_err(rhs)) return rhs;
+      goto loop;
+    }
+
+    do_land: {
+      uint8_t flags = js->flags;
+      lhs = resolveprop(js, lhs);
+      if (!js_truthy(js, lhs)) js->flags |= F_NOEXEC;
+      jsval_t rhs = js_expr_bp(js, bp);
+      if (!(flags & F_NOEXEC) && js_truthy(js, lhs)) lhs = rhs;
+      js->flags = flags;
+      if (is_err(rhs)) return rhs;
+      goto loop;
+    }
+
+    do_nullish: {
+      uint8_t flags = js->flags;
+      lhs = resolveprop(js, lhs);
+      uint8_t lhs_type = vtype(lhs);
+      if (lhs_type != T_NULL && lhs_type != T_UNDEF) js->flags |= F_NOEXEC;
+      jsval_t rhs = js_expr_bp(js, bp);
+      if (!(flags & F_NOEXEC) && (lhs_type == T_NULL || lhs_type == T_UNDEF)) lhs = rhs;
+      js->flags = flags;
+      if (is_err(rhs)) return rhs;
+      goto loop;
     }
   }
-  js->flags = flags;
-  return res;
 }
 
 static jsval_t js_ternary(struct js *js) {
-  jsval_t res = js_logical_or(js);
+  jsval_t res = js_expr_bp(js, 1);
   if (next(js) == TOK_Q) {
     uint8_t flags = js->flags;
     js->consumed = 1;
