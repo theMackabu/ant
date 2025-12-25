@@ -4587,9 +4587,12 @@ static jsval_t do_bracket_op(struct js *js, jsval_t l, jsval_t r) {
   } else {
     return js_mkerr(js, "invalid index type");
   }
-  if ((vtype(obj) == T_STR || vtype(obj) == T_ARR) && streq(keystr, keylen, "length", 6)) {
+  if (streq(keystr, keylen, "length", 6)) {
     if (vtype(obj) == T_STR) {
       return tov(offtolen(loadoff(js, (jsoff_t) vdata(obj))));
+    }
+    if (vtype(obj) == T_ARR) {
+      return tov(arr_length(js, obj));
     }
   }
   if (vtype(obj) == T_STR) {
@@ -4668,8 +4671,7 @@ static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
   }
   
   if (t == T_ARR && streq(ptr, plen, "length", 6)) {
-    jsval_t key = js_mkstr(js, "length", 6);
-    return mkpropref((jsoff_t) vdata(l), (jsoff_t) vdata(key));
+    return tov(arr_length(js, l));
   }
   
   if (t == T_STR || t == T_NUM || t == T_BOOL || t == T_BIGINT) {
@@ -6006,8 +6008,7 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
       l_str = js_mkstr(js, buf, len);
       if (is_err(l_str)) return l_str;
     } else if (vtype(l) != T_STR) {
-      const char *str = js_str(js, l);
-      l_str = js_mkstr(js, str, strlen(str));
+      l_str = js_tostring_val(js, l);
       if (is_err(l_str)) return l_str;
     }
     
@@ -6017,8 +6018,7 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
       r_str = js_mkstr(js, buf, len);
       if (is_err(r_str)) return r_str;
     } else if (vtype(r) != T_STR) {
-      const char *str = js_str(js, r);
-      r_str = js_mkstr(js, str, strlen(str));
+      r_str = js_tostring_val(js, r);
       if (is_err(r_str)) return r_str;
     }
     
@@ -10878,11 +10878,13 @@ static jsval_t js_var_decl(struct js *js) {
     }
     
     jsval_t v = js_mkundef();
+    bool has_initializer = false;
     js->consumed = 1;
     if (next(js) == TOK_ASSIGN) {
       js->consumed = 1;
       v = js_expr(js);
       if (is_err(v)) return v;
+      has_initializer = true;
     }
     
     if (exe) {
@@ -10891,8 +10893,8 @@ static jsval_t js_var_decl(struct js *js) {
       
       jsoff_t existing_off = lkp(js, var_scope, decoded_name, decoded_len);
       if (existing_off > 0) {
-        jsval_t key_val = js_mkstr(js, decoded_name, decoded_len);
-        if (!is_err(v)) {
+        if (has_initializer && !is_err(v)) {
+          jsval_t key_val = js_mkstr(js, decoded_name, decoded_len);
           setprop(js, var_scope, key_val, resolveprop(js, v));
         }
       } else {
