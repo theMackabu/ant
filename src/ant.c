@@ -3600,6 +3600,18 @@ static jsval_t js_mkstr_ident(struct js *js, const char *src, size_t srclen) {
 }
 
 static uint8_t parseident(const char *buf, jsoff_t len, jsoff_t *tlen) {
+  if (len == 0) return TOK_ERR;
+  
+  if (!(buf[0] & 0x80) && buf[0] != '\\' && is_ident_begin(buf[0])) {
+    *tlen = 1;
+    while (*tlen < len && !(buf[*tlen] & 0x80) && buf[*tlen] != '\\' && is_ident_continue(buf[*tlen])) {
+      (*tlen)++;
+    }
+    if (*tlen >= len || (!is_ident_continue(buf[*tlen]) && buf[*tlen] != '\\' && !(buf[*tlen] & 0x80))) {
+      return parsekeyword(buf, *tlen);
+    }
+  }
+  
   uint32_t first_cp;
   int esc_len = parse_unicode_escape(buf, len, 0, &first_cp);
   
