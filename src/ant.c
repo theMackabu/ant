@@ -20852,6 +20852,7 @@ bool js_del(struct js *js, jsval_t obj, const char *key) {
     saveoff(js, obj_off, (deleted_next & ~3U) | (current & (GCMASK | CONSTMASK | 3U)));
     saveoff(js, prop_off, loadoff(js, prop_off) | GCMASK);
     invalidate_obj_cache(obj_off);
+    invalidate_prop_cache_for_obj(obj_off);
     return true;
   }
   
@@ -20864,6 +20865,7 @@ bool js_del(struct js *js, jsval_t obj, const char *key) {
       saveoff(js, prev, deleted_next | prev_flags);
       saveoff(js, prop_off, loadoff(js, prop_off) | GCMASK);
       invalidate_obj_cache(obj_off);
+      invalidate_prop_cache_for_obj(obj_off);
       return true;
     }
     prev = next_prop;
