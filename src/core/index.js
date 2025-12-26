@@ -21,7 +21,7 @@ Ant.typeof = function (t) {
     T_ERR: 'err',
     T_ARR: 'array',
     T_PROMISE: 'promise',
-    T_GENERATOR: 'generator',
+    T_TYPEDARRAY: 'typedarray',
     T_BIGINT: 'bigint',
     T_PROPREF: 'propref'
   };

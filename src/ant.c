@@ -424,7 +424,7 @@ static const uint8_t prec_table[TOK_MAX] = {
 enum {
   T_OBJ, T_PROP, T_STR, T_UNDEF, T_NULL, T_NUM,
   T_BOOL, T_FUNC, T_CODEREF, T_CFUNC, T_ERR, T_ARR,
-  T_PROMISE, T_GENERATOR, T_BIGINT, T_PROPREF
+  T_PROMISE, T_TYPEDARRAY, T_BIGINT, T_PROPREF
 };
 
 static const char *typestr_raw(uint8_t t) {
@@ -433,7 +433,7 @@ static const char *typestr_raw(uint8_t t) {
   const char *names[] = { 
     "object", "prop", "string", "undefined", "null", "number",
     "boolean", "function", "coderef", "cfunc", "err", "array", 
-    "promise", "generator", "bigint", "propref"
+    "promise", "typedarray", "bigint", "propref"
   };
   
   return (t < sizeof(names) / sizeof(names[0])) ? names[t] : "??";
@@ -478,6 +478,15 @@ static jsval_t mkval(uint8_t type, uint64_t data) {
 
 jsval_t js_obj_to_func(jsval_t obj) {
   return mkval(T_FUNC, vdata(obj));
+}
+
+jsval_t js_mktypedarray(void *data) {
+  return mkval(T_TYPEDARRAY, (uintptr_t)data);
+}
+
+void *js_gettypedarray(jsval_t val) {
+  if (vtype(val) != T_TYPEDARRAY) return NULL;
+  return (void *)vdata(val);
 }
 
 static jsval_t mkcoderef(jsval_t off, jsoff_t len) { 

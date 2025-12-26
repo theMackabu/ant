@@ -108,6 +108,9 @@ void js_prop_iter_end(js_prop_iter_t *iter);
 jsval_t js_obj_to_func(jsval_t obj);
 jsval_t js_mkpromise(struct js *js);
 
+jsval_t js_mktypedarray(void *data);
+void *js_gettypedarray(jsval_t val);
+
 void js_resolve_promise(struct js *js, jsval_t promise, jsval_t value);
 void js_reject_promise(struct js *js, jsval_t promise, jsval_t value);
 

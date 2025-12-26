@@ -2,10 +2,39 @@
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
+#include <sys/mman.h>
 
 #include "runtime.h"
 #include "modules/buffer.h"
 #include "modules/symbol.h"
+
+#define TA_ARENA_SIZE (16 * 1024 * 1024)
+static uint8_t *ta_arena = NULL;
+static size_t ta_arena_offset = 0;
+
+static void *ta_arena_alloc(size_t size) {
+  size = (size + 7) & ~7;
+  
+  if (!ta_arena) {
+    void *hint = (void *)0x100000;
+    ta_arena = mmap(
+      hint, TA_ARENA_SIZE, PROT_READ | PROT_WRITE,
+      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    
+    if (ta_arena == MAP_FAILED) {
+      ta_arena = mmap(
+        NULL, TA_ARENA_SIZE, PROT_READ | PROT_WRITE,
+        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    }
+    if (ta_arena == MAP_FAILED) return NULL;
+  }
+  
+  if (ta_arena_offset + size > TA_ARENA_SIZE) return NULL;
+  void *ptr = ta_arena + ta_arena_offset;
+  ta_arena_offset += size;
+  
+  return ptr;
+}
 
 static jsval_t js_arraybuffer_slice(struct js *js, jsval_t *args, int nargs);
 static jsval_t js_typedarray_slice(struct js *js, jsval_t *args, int nargs);
@@ -201,10 +230,8 @@ static jsval_t typedarray_index_getter(struct js *js, jsval_t obj, const char *k
   long index = strtol(key, &endptr, 10);
   if (endptr != key + key_len || index < 0) return js_mkundef();
   
-  jsval_t ta_data_val = js_get(js, obj, "_typedarray_data");
-  if (js_type(ta_data_val) != JS_NUM) return js_mkundef();
-  
-  TypedArrayData *ta_data = (TypedArrayData *)(uintptr_t)js_getnum(ta_data_val);
+  jsval_t ta_val = js_get(js, obj, "__ta");
+  TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_val);
   if (!ta_data || (size_t)index >= ta_data->length) return js_mkundef();
   
   uint8_t *data = ta_data->buffer->data + ta_data->byte_offset;
@@ -231,7 +258,7 @@ static jsval_t typedarray_index_getter(struct js *js, jsval_t obj, const char *k
 }
 
 static jsval_t create_typed_array(struct js *js, TypedArrayType type, ArrayBufferData *buffer, size_t byte_offset, size_t length, const char *type_name) {
-  TypedArrayData *ta_data = malloc(sizeof(TypedArrayData));
+  TypedArrayData *ta_data = ta_arena_alloc(sizeof(TypedArrayData));
   if (!ta_data) return js_mkerr(js, "Failed to allocate TypedArray");
   
   size_t element_size = get_element_size(type);
@@ -246,7 +273,7 @@ static jsval_t create_typed_array(struct js *js, TypedArrayType type, ArrayBuffe
   jsval_t proto = js_get_ctor_proto(js, type_name, strlen(type_name));
   if (js_type(proto) == JS_OBJ) js_set_proto(js, obj, proto);
   
-  js_set(js, obj, "_typedarray_data", js_mknum((double)(uintptr_t)ta_data));
+  js_set(js, obj, "__ta", js_mktypedarray(ta_data));
   js_set(js, obj, "length", js_mknum((double)length));
   js_set(js, obj, "byteLength", js_mknum((double)(length * element_size)));
   js_set(js, obj, "byteOffset", js_mknum((double)byte_offset));
@@ -299,13 +326,9 @@ static jsval_t js_typedarray_constructor(struct js *js, jsval_t *args, int nargs
 // TypedArray.prototype.slice(begin, end)
 static jsval_t js_typedarray_slice(struct js *js, jsval_t *args, int nargs) {
   jsval_t this_val = js_getthis(js);
-  jsval_t ta_data_val = js_get(js, this_val, "_typedarray_data");
+  jsval_t ta_data_val = js_get(js, this_val, "__ta");
   
-  if (js_type(ta_data_val) != JS_NUM) {
-    return js_mkerr(js, "Not a TypedArray");
-  }
-  
-  TypedArrayData *ta_data = (TypedArrayData *)(uintptr_t)js_getnum(ta_data_val);
+  TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
   if (!ta_data) return js_mkerr(js, "Invalid TypedArray");
   
   int begin = 0, end = ta_data->length;
@@ -337,13 +360,9 @@ static jsval_t js_typedarray_slice(struct js *js, jsval_t *args, int nargs) {
 // TypedArray.prototype.subarray(begin, end)
 static jsval_t js_typedarray_subarray(struct js *js, jsval_t *args, int nargs) {
   jsval_t this_val = js_getthis(js);
-  jsval_t ta_data_val = js_get(js, this_val, "_typedarray_data");
+  jsval_t ta_data_val = js_get(js, this_val, "__ta");
   
-  if (js_type(ta_data_val) != JS_NUM) {
-    return js_mkerr(js, "Not a TypedArray");
-  }
-  
-  TypedArrayData *ta_data = (TypedArrayData *)(uintptr_t)js_getnum(ta_data_val);
+  TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
   if (!ta_data) return js_mkerr(js, "Invalid TypedArray");
   
   int begin = 0, end = ta_data->length;
@@ -654,13 +673,9 @@ static jsval_t js_buffer_allocUnsafe(struct js *js, jsval_t *args, int nargs) {
 // Buffer.prototype.toString(encoding)
 static jsval_t js_buffer_toString(struct js *js, jsval_t *args, int nargs) {
   jsval_t this_val = js_getthis(js);
-  jsval_t ta_data_val = js_get(js, this_val, "_typedarray_data");
+  jsval_t ta_data_val = js_get(js, this_val, "__ta");
   
-  if (js_type(ta_data_val) != JS_NUM) {
-    return js_mkerr(js, "Not a Buffer");
-  }
-  
-  TypedArrayData *ta_data = (TypedArrayData *)(uintptr_t)js_getnum(ta_data_val);
+  TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
   if (!ta_data) return js_mkerr(js, "Invalid Buffer");
   
   char *encoding = "utf8";
@@ -706,13 +721,9 @@ static jsval_t js_buffer_write(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "write requires a string");
   
   jsval_t this_val = js_getthis(js);
-  jsval_t ta_data_val = js_get(js, this_val, "_typedarray_data");
+  jsval_t ta_data_val = js_get(js, this_val, "__ta");
   
-  if (js_type(ta_data_val) != JS_NUM) {
-    return js_mkerr(js, "Not a Buffer");
-  }
-  
-  TypedArrayData *ta_data = (TypedArrayData *)(uintptr_t)js_getnum(ta_data_val);
+  TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
   if (!ta_data) return js_mkerr(js, "Invalid Buffer");
   
   size_t str_len;

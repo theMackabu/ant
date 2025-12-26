@@ -29,11 +29,9 @@ static jsval_t js_textencoder_encode(struct js *js, jsval_t *args, int nargs) {
   if (js_type(arr) == JS_ERR) return arr;
   
   if (str_len > 0) {
-    jsval_t ta_data_val = js_get(js, arr, "_typedarray_data");
-    if (js_type(ta_data_val) == JS_NUM) {
-      TypedArrayData *ta_data = (TypedArrayData *)(uintptr_t)js_getnum(ta_data_val);
-      if (ta_data && ta_data->buffer && ta_data->buffer->data) memcpy(ta_data->buffer->data, str, str_len);
-    }
+    jsval_t ta_data_val = js_get(js, arr, "__ta");
+    TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
+    if (ta_data && ta_data->buffer && ta_data->buffer->data) memcpy(ta_data->buffer->data, str, str_len);
   }
   
   return arr;
@@ -56,13 +54,9 @@ static jsval_t js_textencoder_encodeInto(struct js *js, jsval_t *args, int nargs
     }
   }
   
-  jsval_t ta_data_val = js_get(js, args[1], "_typedarray_data");
-  if (js_type(ta_data_val) != JS_NUM) {
-    return js_mkerr(js, "Second argument must be a Uint8Array");
-  }
-  
-  TypedArrayData *ta_data = (TypedArrayData *)(uintptr_t)js_getnum(ta_data_val);
-  if (!ta_data) return js_mkerr(js, "Invalid Uint8Array");
+  jsval_t ta_data_val = js_get(js, args[1], "__ta");
+  TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
+  if (!ta_data) return js_mkerr(js, "Second argument must be a Uint8Array");
   
   size_t available = ta_data->byte_length;
   size_t to_write = str_len < available ? str_len : available;
@@ -97,16 +91,12 @@ static jsval_t js_textdecoder_decode(struct js *js, jsval_t *args, int nargs) {
     return js_mkstr(js, "", 0);
   }
   
-  jsval_t ta_data_val = js_get(js, args[0], "_typedarray_data");
-  if (js_type(ta_data_val) == JS_NUM) {
-    TypedArrayData *ta_data = (TypedArrayData *)(uintptr_t)js_getnum(ta_data_val);
-    if (!ta_data || !ta_data->buffer) {
-      return js_mkstr(js, "", 0);
-    }
-    
+  jsval_t ta_data_val = js_get(js, args[0], "__ta");
+  TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
+  if (ta_data) {
+    if (!ta_data->buffer) return js_mkstr(js, "", 0);
     uint8_t *data = ta_data->buffer->data + ta_data->byte_offset;
     size_t len = ta_data->byte_length;
-    
     return js_mkstr(js, (const char *)data, len);
   }
   
