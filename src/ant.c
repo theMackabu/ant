@@ -2872,6 +2872,17 @@ static jsval_t setup_func_prototype(struct js *js, jsval_t func) {
   return js_mkundef();
 }
 
+static jsval_t validate_array_length(struct js *js, jsval_t v) {
+  if (vtype(v) != T_NUM) {
+    return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid array length");
+  }
+  double d = tod(v);
+  if (d < 0 || d != (uint32_t)d || d >= 4294967296.0) {
+    return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid array length");
+  }
+  return js_mkundef();
+}
+
 jsval_t js_setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v) {
   jsoff_t koff = (jsoff_t) vdata(k);
   jsoff_t klen = offtolen(loadoff(js, koff));
@@ -2881,13 +2892,8 @@ jsval_t js_setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v) {
   }
   
   if (vtype(obj) == T_ARR && streq(key, klen, "length", 6)) {
-    if (vtype(v) != T_NUM) {
-      return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid array length");
-    }
-    double d = tod(v);
-    if (d < 0 || d != (uint32_t)d || d >= 4294967296.0) {
-      return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid array length");
-    }
+    jsval_t err = validate_array_length(js, v);
+    if (is_err(err)) return err;
   }
   
   if (is_proxy(js, obj)) {
@@ -4426,6 +4432,30 @@ static jsval_t assign(struct js *js, jsval_t lhs, jsval_t val) {
   jsoff_t klen = offtolen(loadoff(js, koff));
   const char *key = (char *)&js->mem[koff + sizeof(jsoff_t)];
   
+  if (klen == 6 && memcmp(key, "length", 6) == 0) {
+    jsoff_t obj_off = 0;
+    for (jsoff_t scan = 0; scan < propoff; ) {
+      jsoff_t header = loadoff(js, scan);
+      jsoff_t cleaned = header & ~(GCMASK | CONSTMASK | ARRMASK);
+      if ((cleaned & 3U) == T_OBJ || (header & ARRMASK)) {
+        jsoff_t first_prop = cleaned & ~3U;
+        jsoff_t p = first_prop;
+        while (p != 0 && p < js->brk) {
+          if (p == propoff) { obj_off = scan; break; }
+          p = loadoff(js, p) & ~(3U | GCMASK | CONSTMASK);
+        }
+        if (obj_off != 0) break;
+      }
+      jsoff_t sz = esize(cleaned);
+      if (sz == (jsoff_t)~0U) break;
+      scan += sz;
+    }
+    if (obj_off != 0 && is_arr_off(js, obj_off)) {
+      jsval_t err = validate_array_length(js, val);
+      if (is_err(err)) return err;
+    }
+  }
+  
   if (is_const_prop(js, propoff)) {
     if (js->flags & F_STRICT) return js_mkerr(js, "assignment to constant");
     return mkval(T_PROP, propoff);
@@ -4583,7 +4613,14 @@ static jsval_t do_bracket_op(struct js *js, jsval_t l, jsval_t r) {
       return tov(offtolen(loadoff(js, (jsoff_t) vdata(obj))));
     }
     if (vtype(obj) == T_ARR) {
-      return tov(arr_length(js, obj));
+      jsoff_t len_off = lkp(js, obj, "length", 6);
+      if (len_off != 0) {
+        return mkval(T_PROP, len_off);
+      }
+      jsval_t key = js_mkstr(js, "length", 6);
+      jsval_t len_val = tov(arr_length(js, obj));
+      jsval_t prop = setprop(js, obj, key, len_val);
+      return prop;
     }
   }
   if (vtype(obj) == T_STR) {
@@ -4662,7 +4699,14 @@ static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
   }
   
   if (t == T_ARR && streq(ptr, plen, "length", 6)) {
-    return tov(arr_length(js, l));
+    jsoff_t len_off = lkp(js, l, "length", 6);
+    if (len_off != 0) {
+      return mkval(T_PROP, len_off);
+    }
+    jsval_t key = js_mkstr(js, "length", 6);
+    jsval_t len_val = tov(arr_length(js, l));
+    jsval_t prop = setprop(js, l, key, len_val);
+    return prop;
   }
   
   if (t == T_STR || t == T_NUM || t == T_BOOL || t == T_BIGINT) {
@@ -11626,11 +11670,9 @@ static jsval_t builtin_Array(struct js *js, jsval_t *args, int nargs) {
   jsval_t arr = mkarr(js);
   
   if (nargs == 1 && vtype(args[0]) == T_NUM) {
-    double d = tod(args[0]);
-    if (d < 0 || d != (uint32_t)d || d >= 4294967296.0) {
-      return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid array length");
-    }
-    jsoff_t len = (jsoff_t) d;
+    jsval_t err = validate_array_length(js, args[0]);
+    if (is_err(err)) return err;
+    jsoff_t len = (jsoff_t) tod(args[0]);
     jsval_t len_key = js_mkstr(js, "length", 6);
     jsval_t len_val = tov((double) len);
     setprop(js, arr, len_key, len_val);
