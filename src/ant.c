@@ -53,6 +53,8 @@ typedef struct {
 typedef struct call_frame {
   const char *filename;
   const char *function_name;
+  const char *code;
+  uint32_t pos;
   int line;
   int col;
 } call_frame_t;
@@ -233,6 +235,17 @@ static const char *INTERN_MESSAGE = NULL;
 static const char *INTERN_VALUE = NULL;
 static const char *INTERN_GET = NULL;
 static const char *INTERN_SET = NULL;
+static const char *INTERN_CODE = NULL;
+static const char *INTERN_SCOPE = NULL;
+static const char *INTERN_THIS = NULL;
+static const char *INTERN_NATIVE_FUNC = NULL;
+static const char *INTERN_ASYNC = NULL;
+static const char *INTERN_BOUND_THIS = NULL;
+static const char *INTERN_BOUND_ARGS = NULL;
+static const char *INTERN_TARGET_FUNC = NULL;
+static const char *INTERN_ARGUMENTS = NULL;
+static const char *INTERN_CALLEE = NULL;
+static const char *INTERN_IDX[10] = {NULL};
 
 #define INTERN_PROP_CACHE_SIZE 4096
 typedef struct {
@@ -1757,7 +1770,7 @@ static size_t strfunc_ctor(struct js *js, jsval_t func_obj, char *buf, size_t le
 
 static size_t strfunc(struct js *js, jsval_t value, char *buf, size_t len) {
   jsval_t func_obj = mkval(T_OBJ, vdata(value));
-  jsoff_t code_off = lkp(js, func_obj, "__code", 6);
+  jsoff_t code_off = lkp_interned(js, func_obj, INTERN_CODE, 6);
   
   jsoff_t name_off = lkp(js, func_obj, "name", 4);
   const char *name = NULL;
@@ -1772,7 +1785,7 @@ static size_t strfunc(struct js *js, jsval_t value, char *buf, size_t len) {
   }
   
   if (code_off == 0) {
-    jsoff_t native_off = lkp(js, func_obj, "__native_func", 13);
+    jsoff_t native_off = lkp_interned(js, func_obj, INTERN_NATIVE_FUNC, 13);
     if (native_off != 0) {
       jsval_t native_val = resolveprop(js, mkval(T_PROP, native_off));
       if (vtype(native_val) == T_CFUNC) return strfunc_ctor(js, func_obj, buf, len);
@@ -1880,7 +1893,13 @@ static void format_error_stack(struct js *js, size_t *n, int line, int col, bool
       const char *fname = frame->function_name ? frame->function_name : "<anonymous>";
       const char *ffile = frame->filename ? frame->filename : "<eval>";
       
-      *n += (size_t) snprintf(js->errmsg + *n, remaining, "\n    at %s %s(%s:%d:%d)%s", fname, dim, ffile, frame->line, frame->col, reset);
+      if (frame->line < 0 && frame->code) {
+        get_line_col(frame->code, frame->pos, &frame->line, &frame->col);
+      }
+      int fline = frame->line > 0 ? frame->line : 1;
+      int fcol = frame->col > 0 ? frame->col : 1;
+      
+      *n += (size_t) snprintf(js->errmsg + *n, remaining, "\n    at %s %s(%s:%d:%d)%s", fname, dim, ffile, fline, fcol, reset);
       remaining = js->errmsg_size - *n;
     }
     
@@ -2740,6 +2759,26 @@ static void intern_init(void) {
   INTERN_VALUE = intern_string("value", 5);
   INTERN_GET = intern_string("get", 3);
   INTERN_SET = intern_string("set", 3);
+  INTERN_CODE = intern_string("__code", 6);
+  INTERN_SCOPE = intern_string("__scope", 7);
+  INTERN_THIS = intern_string("__this", 6);
+  INTERN_NATIVE_FUNC = intern_string("__native_func", 13);
+  INTERN_ASYNC = intern_string("__async", 7);
+  INTERN_BOUND_THIS = intern_string("__bound_this", 12);
+  INTERN_BOUND_ARGS = intern_string("__bound_args", 12);
+  INTERN_TARGET_FUNC = intern_string("__target_func", 13);
+  INTERN_ARGUMENTS = intern_string("arguments", 9);
+  INTERN_CALLEE = intern_string("callee", 6);
+  INTERN_IDX[0] = intern_string("0", 1);
+  INTERN_IDX[1] = intern_string("1", 1);
+  INTERN_IDX[2] = intern_string("2", 1);
+  INTERN_IDX[3] = intern_string("3", 1);
+  INTERN_IDX[4] = intern_string("4", 1);
+  INTERN_IDX[5] = intern_string("5", 1);
+  INTERN_IDX[6] = intern_string("6", 1);
+  INTERN_IDX[7] = intern_string("7", 1);
+  INTERN_IDX[8] = intern_string("8", 1);
+  INTERN_IDX[9] = intern_string("9", 1);
 }
 
 static inline uint32_t koff_hash(jsoff_t koff) {
@@ -3071,6 +3110,12 @@ static jsval_t setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v) {
   return js_setprop(js, obj, k, v);
 }
 
+static jsval_t setprop_interned(struct js *js, jsval_t obj, const char *key, size_t len, jsval_t v) {
+  jsval_t k = js_mkstr(js, key, len);
+  if (is_err(k)) return k;
+  return js_setprop(js, obj, k, v);
+}
+
 static jsval_t setprop_nonconfigurable(struct js *js, jsval_t obj, const char *key, size_t keylen, jsval_t v) {
   jsval_t k = js_mkstr(js, key, keylen);
   if (is_err(k)) return k;
@@ -3286,10 +3331,10 @@ static jsoff_t free_list_allocate(size_t size) {
 static bool is_builtin_or_system(jsoff_t offset, struct js *js) {
   jsval_t obj_val = mkval(T_OBJ, offset);
   
-  jsoff_t native_off = lkp(js, obj_val, "__native_func", 13);
+  jsoff_t native_off = lkp_interned(js, obj_val, INTERN_NATIVE_FUNC, 13);
   if (native_off != 0) return true;
   
-  jsoff_t code_off = lkp(js, obj_val, "__code", 6);
+  jsoff_t code_off = lkp_interned(js, obj_val, INTERN_CODE, 6);
   if (code_off != 0) {
     jsval_t code_val = resolveprop(js, mkval(T_PROP, code_off));
     if (vtype(code_val) == T_STR) {
@@ -3889,7 +3934,7 @@ static inline jsval_t peek_this() {
   return js_mkundef();
 }
 
-static inline bool push_call_frame(const char *filename, const char *function_name, int line, int col) {
+static inline bool push_call_frame(const char *filename, const char *function_name, const char *code, uint32_t pos) {
   if (global_call_stack.depth >= global_call_stack.capacity) {
     int new_capacity = global_call_stack.capacity == 0 ? 32 : global_call_stack.capacity * 2;
     call_frame_t *new_stack = (call_frame_t *) realloc(global_call_stack.frames, new_capacity * sizeof(call_frame_t));
@@ -3900,8 +3945,10 @@ static inline bool push_call_frame(const char *filename, const char *function_na
   
   global_call_stack.frames[global_call_stack.depth].filename = filename;
   global_call_stack.frames[global_call_stack.depth].function_name = function_name;
-  global_call_stack.frames[global_call_stack.depth].line = line;
-  global_call_stack.frames[global_call_stack.depth].col = col;
+  global_call_stack.frames[global_call_stack.depth].code = code;
+  global_call_stack.frames[global_call_stack.depth].pos = pos;
+  global_call_stack.frames[global_call_stack.depth].line = -1;
+  global_call_stack.frames[global_call_stack.depth].col = -1;
   global_call_stack.depth++;
   
   return true;
@@ -5164,23 +5211,39 @@ static bool is_eval_or_arguments(struct js *js, jsoff_t toff, jsoff_t tlen) {
   return false;
 }
 
+static bool code_uses_arguments(const char *code, jsoff_t len) {
+  if (len < 9) return false;
+  for (jsoff_t i = 0; i + 8 < len; i++) {
+    if (code[i] == 'a' && memcmp(&code[i], INTERN_ARGUMENTS, 9) == 0) {
+      if (i > 0 && (is_alpha(code[i-1]) || code[i-1] == '_' || (code[i-1] >= '0' && code[i-1] <= '9'))) continue;
+      if (i + 9 < len && (is_alpha(code[i+9]) || code[i+9] == '_' || (code[i+9] >= '0' && code[i+9] <= '9'))) continue;
+      return true;
+    }
+  }
+  return false;
+}
+
 static void setup_arguments(struct js *js, jsval_t scope, jsval_t *args, int nargs, bool strict) {
   if (vtype(js->current_func) == T_FUNC) {
     jsval_t func_obj = mkval(T_OBJ, vdata(js->current_func));
-    if (lkp(js, func_obj, "__this", 6) != 0) return;
+    if (lkp_interned(js, func_obj, INTERN_THIS, 6) != 0) return;
   }
   
   jsval_t arguments_obj = mkobj(js, 0);
   for (int i = 0; i < nargs; i++) {
-    char idxstr[16];
-    snprintf(idxstr, sizeof(idxstr), "%d", i);
-    setprop(js, arguments_obj, js_mkstr(js, idxstr, strlen(idxstr)), args[i]);
+    if (i < 10) {
+      setprop(js, arguments_obj, js_mkstr(js, INTERN_IDX[i], 1), args[i]);
+    } else {
+      char idxstr[16];
+      snprintf(idxstr, sizeof(idxstr), "%d", i);
+      setprop(js, arguments_obj, js_mkstr(js, idxstr, strlen(idxstr)), args[i]);
+    }
   }
-  setprop(js, arguments_obj, js_mkstr(js, "length", 6), tov((double) nargs));
+  setprop_interned(js, arguments_obj, INTERN_LENGTH, 6, tov((double) nargs));
   if (strict) {
     setprop(js, arguments_obj, js_mkstr(js, "__strict_args__", 15), js_mktrue());
   } else if (vtype(js->current_func) == T_FUNC) {
-    setprop(js, arguments_obj, js_mkstr(js, "callee", 6), js->current_func);
+    setprop_interned(js, arguments_obj, INTERN_CALLEE, 6, js->current_func);
   }
   
   const char *toStringTag_key = get_toStringTag_sym_key();
@@ -5189,7 +5252,7 @@ static void setup_arguments(struct js *js, jsval_t scope, jsval_t *args, int nar
   }
   
   arguments_obj = mkval(T_ARR, vdata(arguments_obj));
-  setprop(js, scope, js_mkstr(js, "arguments", 9), arguments_obj);
+  setprop_interned(js, scope, INTERN_ARGUMENTS, 9, arguments_obj);
 }
 
 static jsval_t call_js_internal(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *bound_args, int bound_argc) {
@@ -5312,7 +5375,9 @@ static jsval_t call_js_internal_nfe(struct js *js, const char *fn, jsoff_t fnlen
     }
   }
   
-  setup_arguments(js, function_scope, args, argc, func_strict);
+  if (code_uses_arguments(&fn[pf->body_start], pf->body_len)) {
+    setup_arguments(js, function_scope, args, argc, func_strict);
+  }
   
   if (vtype(func_name) == T_STR && vtype(func_val) == T_FUNC) {
     jsoff_t len;
@@ -5357,7 +5422,7 @@ static jsval_t call_js_with_args(struct js *js, jsval_t func, jsval_t *args, int
   int combined_nargs = nargs;
   int bound_argc = 0;
   
-  jsoff_t bound_args_off = lkp(js, func_obj, "__bound_args", 12);
+  jsoff_t bound_args_off = lkp_interned(js, func_obj, INTERN_BOUND_ARGS, 12);
   if (bound_args_off != 0) {
     jsval_t bound_arr = resolveprop(js, mkval(T_PROP, bound_args_off));
     if (vtype(bound_arr) == T_ARR) {
@@ -5389,11 +5454,11 @@ static jsval_t call_js_with_args(struct js *js, jsval_t func, jsval_t *args, int
     }
   }
 
-  jsoff_t native_off = lkp(js, func_obj, "__native_func", 13);
+  jsoff_t native_off = lkp_interned(js, func_obj, INTERN_NATIVE_FUNC, 13);
   if (native_off != 0) {
     jsval_t native_val = resolveprop(js, mkval(T_PROP, native_off));
     if (vtype(native_val) == T_CFUNC) {
-      jsoff_t this_off = lkp(js, func_obj, "__bound_this", 12);
+      jsoff_t this_off = lkp_interned(js, func_obj, INTERN_BOUND_THIS, 12);
       jsval_t bound_this = js_mkundef();
       if (this_off != 0) {
         bound_this = resolveprop(js, mkval(T_PROP, this_off));
@@ -5418,7 +5483,7 @@ static jsval_t call_js_with_args(struct js *js, jsval_t func, jsval_t *args, int
     }
   }
   
-  jsoff_t code_off = lkp(js, func_obj, "__code", 6);
+  jsoff_t code_off = lkp_interned(js, func_obj, INTERN_CODE, 6);
   if (code_off == 0) {
     if (combined_args) ANT_GC_FREE(combined_args);
     return js_mkerr(js, "function has no code");
@@ -5433,19 +5498,19 @@ static jsval_t call_js_with_args(struct js *js, jsval_t func, jsval_t *args, int
   const char *fn = (const char *) (&js->mem[fnoff]);
   
   jsval_t closure_scope = js_mkundef();
-  jsoff_t scope_off = lkp(js, func_obj, "__scope", 7);
+  jsoff_t scope_off = lkp_interned(js, func_obj, INTERN_SCOPE, 7);
   if (scope_off != 0) {
     closure_scope = resolveprop(js, mkval(T_PROP, scope_off));
   }
   
-  jsoff_t this_off = lkp(js, func_obj, "__this", 6);
+  jsoff_t this_off = lkp_interned(js, func_obj, INTERN_THIS, 6);
   if (this_off != 0) {
     jsval_t captured_this = resolveprop(js, mkval(T_PROP, this_off));
     pop_this();
     push_this(captured_this);
   }
   
-  jsoff_t bound_this_off = lkp(js, func_obj, "__bound_this", 12);
+  jsoff_t bound_this_off = lkp_interned(js, func_obj, INTERN_BOUND_THIS, 12);
   if (bound_this_off != 0) {
     jsval_t bound_this = resolveprop(js, mkval(T_PROP, bound_this_off));
     pop_this();
@@ -5586,7 +5651,9 @@ static jsval_t call_js_code_with_args_nfe(struct js *js, const char *fn, jsoff_t
   size_t body_len = fnlen - fnpos - 1;
   
   bool func_strict = is_strict_function_body(&fn[fnpos], body_len);
-  setup_arguments(js, function_scope, args, nargs, func_strict);
+  if (code_uses_arguments(&fn[fnpos], body_len)) {
+    setup_arguments(js, function_scope, args, nargs, func_strict);
+  }
   
   jsval_t saved_this = js->this_val;
   jsval_t target_this = peek_this();
@@ -5621,7 +5688,7 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
     if (proto_check == 0) {
       jsval_t func_obj = mkval(T_OBJ, vdata(func));
       
-      jsoff_t target_func_off = lkp(js, func_obj, "__target_func", 13);
+      jsoff_t target_func_off = lkp_interned(js, func_obj, INTERN_TARGET_FUNC, 13);
       jsval_t proto_source = func_obj;
       if (target_func_off != 0) {
         jsval_t target_func = resolveprop(js, mkval(T_PROP, target_func_off));
@@ -5650,7 +5717,7 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
   
   if (vtype(func) == T_FUNC) {
     jsval_t func_obj = mkval(T_OBJ, vdata(func));
-    jsoff_t native_off = lkp(js, func_obj, "__native_func", 13);
+    jsoff_t native_off = lkp_interned(js, func_obj, INTERN_NATIVE_FUNC, 13);
     if (native_off != 0) {
       jsval_t native_val = resolveprop(js, mkval(T_PROP, native_off));
       if (vtype(native_val) == T_CFUNC) {
@@ -5660,19 +5727,19 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
         js->current_func = saved_func;
       }
     } else {
-      jsoff_t code_off = lkp(js, func_obj, "__code", 6);
+      jsoff_t code_off = lkp_interned(js, func_obj, INTERN_CODE, 6);
       if (code_off == 0) return js_mkerr(js, "function has no code");
       jsval_t code_val = resolveprop(js, mkval(T_PROP, code_off));
       if (vtype(code_val) != T_STR) return js_mkerr(js, "function code not string");
       jsval_t closure_scope = js_mkundef();
-      jsoff_t scope_off = lkp(js, func_obj, "__scope", 7);
+      jsoff_t scope_off = lkp_interned(js, func_obj, INTERN_SCOPE, 7);
       if (scope_off != 0) {
         closure_scope = resolveprop(js, mkval(T_PROP, scope_off));
       }
       jsoff_t fnlen, fnoff = vstr(js, code_val, &fnlen);
       const char *code_str = (const char *) (&js->mem[fnoff]);
       bool is_async = false;
-      jsoff_t async_off = lkp(js, func_obj, "__async", 7);
+      jsoff_t async_off = lkp_interned(js, func_obj, INTERN_ASYNC, 7);
       if (async_off != 0) {
         jsval_t async_val = resolveprop(js, mkval(T_PROP, async_off));
         is_async = vtype(async_val) == T_BOOL && vdata(async_val) == 1;
@@ -5682,13 +5749,13 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
       bool is_arrow = false;
       bool is_bound = false;
       
-      jsoff_t this_off = lkp(js, func_obj, "__this", 6);
+      jsoff_t this_off = lkp_interned(js, func_obj, INTERN_THIS, 6);
       if (this_off != 0) {
         captured_this = resolveprop(js, mkval(T_PROP, this_off));
         is_arrow = true;
       }
       
-      jsoff_t bound_this_off = lkp(js, func_obj, "__bound_this", 12);
+      jsoff_t bound_this_off = lkp_interned(js, func_obj, INTERN_BOUND_THIS, 12);
       if (bound_this_off != 0 && !is_constructor_call) {
         captured_this = resolveprop(js, mkval(T_PROP, bound_this_off));
         is_bound = true;
@@ -5697,7 +5764,7 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
       jsval_t bound_args_storage[64];
       jsval_t *bound_args = NULL;
       int bound_argc = 0;
-      jsoff_t bound_args_off = lkp(js, func_obj, "__bound_args", 12);
+      jsoff_t bound_args_off = lkp_interned(js, func_obj, INTERN_BOUND_ARGS, 12);
       if (bound_args_off != 0) {
         jsval_t bound_arr = resolveprop(js, mkval(T_PROP, bound_args_off));
         if (vtype(bound_arr) == T_ARR) {
@@ -5730,9 +5797,6 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
       if (fnlen == 16 && memcmp(code_str, "__builtin_Object", 16) == 0) {
         res = call_c(js, builtin_Object);
       } else {
-        int call_line = 0, call_col = 0;
-        get_line_col(code, pos, &call_line, &call_col);
-        
         static char full_func_name[256];
         const char *func_name = NULL;
         const char *this_name = NULL;
@@ -5782,7 +5846,7 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
         push_call_frame(
           js->filename,
           final_name, 
-          call_line, call_col
+          code, pos
         );
         
         jsval_t saved_func = js->current_func;
@@ -5882,13 +5946,13 @@ static jsval_t js_call_toString(struct js *js, jsval_t value) {
     result = ((jsval_t (*)(struct js *, jsval_t *, int))vdata(ts_func))(js, NULL, 0);
   } else {
     jsval_t func_obj = mkval(T_OBJ, vdata(ts_func));
-    jsoff_t code_off = lkp(js, func_obj, "__code", 6);
+    jsoff_t code_off = lkp_interned(js, func_obj, INTERN_CODE, 6);
     if (code_off == 0) goto restore_fallback;
     
     jsval_t code_val = resolveprop(js, mkval(T_PROP, code_off));
     if (vtype(code_val) != T_STR) goto restore_fallback;
     
-    jsoff_t scope_off = lkp(js, func_obj, "__scope", 7);
+    jsoff_t scope_off = lkp_interned(js, func_obj, INTERN_SCOPE, 7);
     jsval_t closure_scope = scope_off ? resolveprop(js, mkval(T_PROP, scope_off)) : js->scope;
     
     jsoff_t fnlen, fnoff = vstr(js, code_val, &fnlen);
@@ -11649,19 +11713,19 @@ static jsval_t builtin_function_bind(struct js *js, jsval_t *args, int nargs) {
   jsval_t bound_func = mkobj(js, 0);
   if (is_err(bound_func)) return bound_func;
 
-  jsoff_t code_off = lkp(js, func_obj, "__code", 6);
+  jsoff_t code_off = lkp_interned(js, func_obj, INTERN_CODE, 6);
   if (code_off != 0) {
     jsval_t code_val = resolveprop(js, mkval(T_PROP, code_off));
     setprop(js, bound_func, js_mkstr(js, "__code", 6), code_val);
   }
 
-  jsoff_t scope_off = lkp(js, func_obj, "__scope", 7);
+  jsoff_t scope_off = lkp_interned(js, func_obj, INTERN_SCOPE, 7);
   if (scope_off != 0) {
     jsval_t scope_val = resolveprop(js, mkval(T_PROP, scope_off));
     setprop(js, bound_func, js_mkstr(js, "__scope", 7), scope_val);
   }
 
-  jsoff_t async_off = lkp(js, func_obj, "__async", 7);
+  jsoff_t async_off = lkp_interned(js, func_obj, INTERN_ASYNC, 7);
   if (async_off != 0) {
     jsval_t async_val = resolveprop(js, mkval(T_PROP, async_off));
     setprop(js, bound_func, js_mkstr(js, "__async", 7), async_val);
@@ -20933,7 +20997,7 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
     return fn(js, args, nargs);
   } else if (vtype(func) == T_FUNC) {
     jsval_t func_obj = mkval(T_OBJ, vdata(func));
-    jsoff_t native_off = lkp(js, func_obj, "__native_func", 13);
+    jsoff_t native_off = lkp_interned(js, func_obj, INTERN_NATIVE_FUNC, 13);
     if (native_off != 0) {
       jsval_t native_val = resolveprop(js, mkval(T_PROP, native_off));
       if (vtype(native_val) == T_CFUNC) {
@@ -20948,7 +21012,7 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
         return res;
       }
     }
-    jsoff_t code_off = lkp(js, func_obj, "__code", 6);
+    jsoff_t code_off = lkp_interned(js, func_obj, INTERN_CODE, 6);
     
     if (code_off == 0) return js_mkerr(js, "function has no code");
     jsval_t code_val = resolveprop(js, mkval(T_PROP, code_off));
@@ -20956,7 +21020,7 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
     jsoff_t fnlen, fnoff = vstr(js, code_val, &fnlen);
     const char *fn = (const char *) (&js->mem[fnoff]);
     
-    jsoff_t async_off = lkp(js, func_obj, "__async", 7);
+    jsoff_t async_off = lkp_interned(js, func_obj, INTERN_ASYNC, 7);
     bool is_async = false;
     if (async_off != 0) {
       jsval_t async_val = resolveprop(js, mkval(T_PROP, async_off));
@@ -20965,7 +21029,7 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
     
     if (is_async) {
       jsval_t closure_scope = js_mkundef();
-      jsoff_t scope_off = lkp(js, func_obj, "__scope", 7);
+      jsoff_t scope_off = lkp_interned(js, func_obj, INTERN_SCOPE, 7);
       if (scope_off != 0) {
         closure_scope = resolveprop(js, mkval(T_PROP, scope_off));
       }
@@ -20973,7 +21037,7 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
     }
     
     jsval_t saved_scope = js->scope;
-    jsoff_t scope_off = lkp(js, func_obj, "__scope", 7);
+    jsoff_t scope_off = lkp_interned(js, func_obj, INTERN_SCOPE, 7);
     if (scope_off != 0) {
       jsval_t closure_scope = resolveprop(js, mkval(T_PROP, scope_off));
       if (vtype(closure_scope) == T_OBJ) {
@@ -21154,8 +21218,14 @@ void js_print_stack_trace(FILE *stream) {
       
       fprintf(stream, " (\x1b[90m");
       
+      if (frame->line < 0 && frame->code) {
+        get_line_col(frame->code, frame->pos, &frame->line, &frame->col);
+      }
+      int fline = frame->line > 0 ? frame->line : 1;
+      int fcol = frame->col > 0 ? frame->col : 1;
+      
       if (frame->filename) {
-        fprintf(stream, "%s:%d:%d", frame->filename, frame->line, frame->col);
+        fprintf(stream, "%s:%d:%d", frame->filename, fline, fcol);
       } else fprintf(stream, "<unknown>");
       
       fprintf(stream, "\x1b[0m)\n");
