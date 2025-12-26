@@ -234,6 +234,14 @@ static const char *INTERN_VALUE = NULL;
 static const char *INTERN_GET = NULL;
 static const char *INTERN_SET = NULL;
 
+#define INTERN_PROP_CACHE_SIZE 4096
+typedef struct {
+  jsoff_t obj_off;
+  const char *intern_ptr;
+  jsoff_t prop_off;
+} intern_prop_cache_entry_t;
+static intern_prop_cache_entry_t intern_prop_cache[INTERN_PROP_CACHE_SIZE];
+
 typedef struct map_entry {
     char *key;
     jsval_t value;
@@ -3998,6 +4006,12 @@ static jsval_t js_block(struct js *js, bool create_scope) {
 static inline jsoff_t lkp_interned(struct js *js, jsval_t obj, const char *search_intern, size_t len) {
   jsoff_t obj_off = (jsoff_t)vdata(obj);
   
+  uint32_t cache_slot = (((uintptr_t)search_intern >> 3) ^ obj_off) & (INTERN_PROP_CACHE_SIZE - 1);
+  intern_prop_cache_entry_t *ce = &intern_prop_cache[cache_slot];
+  if (ce->obj_off == obj_off && ce->intern_ptr == search_intern) {
+    return ce->prop_off;
+  }
+  
   jsoff_t off = loadoff(js, obj_off) & ~(3U | CONSTMASK | ARRMASK);
   while (off < js->brk && off != 0) {
     jsoff_t koff = loadoff(js, (jsoff_t) (off + sizeof(off)));
@@ -4005,12 +4019,22 @@ static inline jsoff_t lkp_interned(struct js *js, jsval_t obj, const char *searc
     if (klen == len) {
       const char *stored_intern = get_koff_intern(koff);
       if (stored_intern) {
-        if (stored_intern == search_intern) return off;
+        if (stored_intern == search_intern) {
+          ce->obj_off = obj_off;
+          ce->intern_ptr = search_intern;
+          ce->prop_off = off;
+          return off;
+        }
       } else {
         const char *p = (char *) &js->mem[koff + sizeof(koff)];
         const char *new_intern = intern_string(p, klen);
         if (new_intern) set_koff_intern(koff, new_intern);
-        if (new_intern == search_intern) return off;
+        if (new_intern == search_intern) {
+          ce->obj_off = obj_off;
+          ce->intern_ptr = search_intern;
+          ce->prop_off = off;
+          return off;
+        }
       }
     }
     off = loadoff(js, off) & ~(3U | CONSTMASK | ARRMASK);
