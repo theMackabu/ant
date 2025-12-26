@@ -632,6 +632,7 @@ static jsval_t resolveprop(struct js *js, jsval_t v);
 static jsoff_t free_list_allocate(size_t size);
 static jsoff_t lkp(struct js *js, jsval_t obj, const char *buf, size_t len);
 static jsoff_t lkp_interned(struct js *js, jsval_t obj, const char *search_intern, size_t len);
+static inline const char *get_koff_intern(jsoff_t koff);
 
 static jsval_t js_import_stmt(struct js *js);
 static jsval_t js_export_stmt(struct js *js);
@@ -1714,15 +1715,24 @@ static size_t strstring(struct js *js, jsval_t value, char *buf, size_t len) {
 }
 
 static bool is_internal_prop(const char *key, jsoff_t klen) {
-  if (klen < 5) return false;
-  if (key[0] != '_') {
-    if (klen == 9 && key == INTERN_PROTOTYPE) return true;
-    if (klen == 11 && key == INTERN_CONSTRUCTOR) return true;
-    return false;
-  }
-  if (key[1] != '_') return false;
+  if (klen < 2) return false;
+  if (key[0] != '_' || key[1] != '_') return false;
   if (klen >= 9 && key[2] == 's' && key[3] == 'y' && key[4] == 'm' && key[5] == '_' && key[klen-1] == '_' && key[klen-2] == '_') return true;
   return true;
+}
+
+static bool is_hidden_func_prop(const char *key, jsoff_t koff, jsoff_t klen) {
+  if (klen == 4 && memcmp(key, "name", 4) == 0) return true;
+  if (klen == 8 && memcmp(key, "__getter", 8) == 0) return true;
+  if (key[0] == '_' && key[1] == '_') return true;
+  
+  const char *interned = get_koff_intern(koff);
+  if (interned) {
+    if (interned == INTERN_PROTOTYPE || interned == INTERN_CONSTRUCTOR) return true;
+    if (interned == get_toStringTag_sym_key()) return true;
+  }
+  
+  return false;
 }
 
 static size_t strfunc_ctor(struct js *js, jsval_t func_obj, char *buf, size_t len) {
@@ -1737,13 +1747,11 @@ static size_t strfunc_ctor(struct js *js, jsval_t func_obj, char *buf, size_t le
   jsoff_t next = loadoff(js, (jsoff_t) vdata(func_obj)) & ~(3U | CONSTMASK | ARRMASK);
   while (next < js->brk && next != 0) {
     jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
-    jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
-    
     jsoff_t klen = offtolen(loadoff(js, koff));
     const char *kstr = (const char *) &js->mem[koff + sizeof(jsoff_t)];
     
-    const char *func_tag_key = get_toStringTag_sym_key();
-    if (!is_internal_prop(kstr, klen) && !streq(kstr, klen, "name", 4) && !streq(kstr, klen, func_tag_key, strlen(func_tag_key)) && !streq(kstr, klen, "__getter", 8)) {
+    if (!is_hidden_func_prop(kstr, koff, klen)) {
+      jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
       if (!first) n += cpy(buf + n, len - n, ",\n", 2);
       first = false;
       n += add_indent(buf + n, len - n, stringify_indent);
