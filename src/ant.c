@@ -2870,6 +2870,16 @@ static void invalidate_obj_cache(jsoff_t obj_offset) {
   }
 }
 
+static void invalidate_prop_cache_for_obj(jsoff_t obj_offset) {
+  for (uint32_t i = 0; i < INTERN_PROP_CACHE_SIZE; i++) {
+    if (intern_prop_cache[i].obj_off == obj_offset) {
+      intern_prop_cache[i].obj_off = 0;
+      intern_prop_cache[i].intern_ptr = NULL;
+      intern_prop_cache[i].prop_off = 0;
+    }
+  }
+}
+
 static jsval_t mkprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v, bool is_const) {
   jsoff_t koff = (jsoff_t) vdata(k);
   jsoff_t b, head = (jsoff_t) vdata(obj);
@@ -8012,6 +8022,7 @@ static jsval_t js_unary(struct js *js) {
         saveoff(js, obj_off, (deleted_next & ~3U) | (current & (GCMASK | CONSTMASK | 3U)));
         saveoff(js, prop_off, loadoff(js, prop_off) | GCMASK);
         invalidate_obj_cache(obj_off);
+        invalidate_prop_cache_for_obj(obj_off);
         // js_gc(js); disabled
         return js_mktrue();
       }
@@ -8024,6 +8035,7 @@ static jsval_t js_unary(struct js *js) {
           saveoff(js, prev, (deleted_next & ~3U) | (current & (GCMASK | CONSTMASK | 3U)));
           saveoff(js, prop_off, loadoff(js, prop_off) | GCMASK);
           invalidate_obj_cache(obj_off);
+          invalidate_prop_cache_for_obj(obj_off);
           // js_gc(js); disabled
           return js_mktrue();
         }
@@ -8121,6 +8133,7 @@ static jsval_t js_unary(struct js *js) {
       }
       saveoff(js, prop_off, loadoff(js, prop_off) | GCMASK);
       invalidate_obj_cache(owner_obj_off);
+      invalidate_prop_cache_for_obj(owner_obj_off);
       // js_gc(js); disabled
     }
     (void) save_pos;
