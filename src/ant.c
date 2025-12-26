@@ -2785,10 +2785,26 @@ static inline uint32_t koff_hash(jsoff_t koff) {
   return (koff >> 2) & (KOFF_BUCKETS - 1);
 }
 
+#define KOFF_CACHE_SIZE 2048
+typedef struct {
+  jsoff_t koff;
+  const char *interned;
+} koff_cache_entry_t;
+static koff_cache_entry_t koff_cache[KOFF_CACHE_SIZE];
+
 static inline const char *get_koff_intern(jsoff_t koff) {
+  uint32_t slot = (koff >> 2) & (KOFF_CACHE_SIZE - 1);
+  if (koff_cache[slot].koff == koff) {
+    return koff_cache[slot].interned;
+  }
+  
   uint32_t bucket = koff_hash(koff);
   for (koff_intern_t *e = koff_buckets[bucket]; e; e = e->next) {
-    if (e->koff == koff) return e->interned;
+    if (e->koff == koff) {
+      koff_cache[slot].koff = koff;
+      koff_cache[slot].interned = e->interned;
+      return e->interned;
+    }
   }
   return NULL;
 }
@@ -2804,6 +2820,10 @@ static inline void set_koff_intern(jsoff_t koff, const char *interned) {
   entry->interned = interned;
   entry->next = koff_buckets[bucket];
   koff_buckets[bucket] = entry;
+  
+  uint32_t slot = (koff >> 2) & (KOFF_CACHE_SIZE - 1);
+  koff_cache[slot].koff = koff;
+  koff_cache[slot].interned = interned;
 }
 
 static inline uint64_t make_cache_key(jsoff_t obj_offset, uint32_t str_hash) {
