@@ -32,10 +32,7 @@ static jsval_t js_textencoder_encode(struct js *js, jsval_t *args, int nargs) {
     jsval_t ta_data_val = js_get(js, arr, "_typedarray_data");
     if (js_type(ta_data_val) == JS_NUM) {
       TypedArrayData *ta_data = (TypedArrayData *)(uintptr_t)js_getnum(ta_data_val);
-      if (ta_data && ta_data->buffer && ta_data->buffer->data) {
-        memcpy(ta_data->buffer->data, str, str_len);
-        sync_typedarray_indices(js, arr, ta_data);
-      }
+      if (ta_data && ta_data->buffer && ta_data->buffer->data) memcpy(ta_data->buffer->data, str, str_len);
     }
   }
   
@@ -72,7 +69,6 @@ static jsval_t js_textencoder_encodeInto(struct js *js, jsval_t *args, int nargs
   
   if (to_write > 0) {
     memcpy(ta_data->buffer->data + ta_data->byte_offset, str, to_write);
-    sync_typedarray_indices(js, args[1], ta_data);
   }
   
   jsval_t result = js_mkobj(js);

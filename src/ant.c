@@ -4783,6 +4783,12 @@ static jsval_t do_bracket_op(struct js *js, jsval_t l, jsval_t r) {
     return accessor_result;
   }
   
+  jsval_t dyn_result = try_dynamic_getter(js, obj, keystr, keylen);
+  if (vtype(dyn_result) != T_UNDEF) {
+    jsoff_t dyn_off = lkp(js, obj, keystr, keylen);
+    if (dyn_off != 0) return mkval(T_PROP, dyn_off);
+  }
+  
   jsoff_t off = lkp_proto(js, obj, keystr, keylen);
   if (off == 0) {
     jsval_t key = js_mkstr(js, keystr, keylen);

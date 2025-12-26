@@ -158,8 +158,6 @@ static jsval_t js_crypto_get_random_values(struct js *js, jsval_t *args, int nar
   uint8_t *ptr = ta_data->buffer->data + ta_data->byte_offset;
   randombytes_buf(ptr, ta_data->byte_length);
   
-  sync_typedarray_indices(js, args[0], ta_data);
-  
   return args[0];
 }
 

@@ -194,47 +194,40 @@ static jsval_t js_arraybuffer_slice(struct js *js, jsval_t *args, int nargs) {
   return new_obj;
 }
 
-void sync_typedarray_indices(struct js *js, jsval_t obj, TypedArrayData *ta_data) {
-  uint8_t *data = ta_data->buffer->data + ta_data->byte_offset;
-  size_t element_size = get_element_size(ta_data->type);
+static jsval_t typedarray_index_getter(struct js *js, jsval_t obj, const char *key, size_t key_len) {
+  if (key_len == 0 || key_len > 15) return js_mkundef();
   
-  for (size_t i = 0; i < ta_data->length; i++) {
-    char key[16];
-    snprintf(key, sizeof(key), "%zu", i);
-    
-    double value = 0;
-    switch (ta_data->type) {
-      case TYPED_ARRAY_INT8:
-        value = (double)((int8_t*)data)[i];
-        break;
-      case TYPED_ARRAY_UINT8:
-      case TYPED_ARRAY_UINT8_CLAMPED:
-        value = (double)data[i];
-        break;
-      case TYPED_ARRAY_INT16:
-        value = (double)((int16_t*)(data))[i];
-        break;
-      case TYPED_ARRAY_UINT16:
-        value = (double)((uint16_t*)(data))[i];
-        break;
-      case TYPED_ARRAY_INT32:
-        value = (double)((int32_t*)(data))[i];
-        break;
-      case TYPED_ARRAY_UINT32:
-        value = (double)((uint32_t*)(data))[i];
-        break;
-      case TYPED_ARRAY_FLOAT32:
-        value = (double)((float*)(data))[i];
-        break;
-      case TYPED_ARRAY_FLOAT64:
-        value = ((double*)(data))[i];
-        break;
-      default:
-        value = (double)data[i * element_size];
-        break;
-    }
-    js_set(js, obj, key, js_mknum(value));
-  }
+  char *endptr;
+  long index = strtol(key, &endptr, 10);
+  if (endptr != key + key_len || index < 0) return js_mkundef();
+  
+  jsval_t ta_data_val = js_get(js, obj, "_typedarray_data");
+  if (js_type(ta_data_val) != JS_NUM) return js_mkundef();
+  
+  TypedArrayData *ta_data = (TypedArrayData *)(uintptr_t)js_getnum(ta_data_val);
+  if (!ta_data || (size_t)index >= ta_data->length) return js_mkundef();
+  
+  uint8_t *data = ta_data->buffer->data + ta_data->byte_offset;
+  double value;
+  
+  static const void *dispatch[] = {
+    &&L_INT8, &&L_UINT8, &&L_UINT8, &&L_INT16, &&L_UINT16,
+    &&L_INT32, &&L_UINT32, &&L_FLOAT32, &&L_FLOAT64, &&L_UNDEF, &&L_UNDEF
+  };
+  
+  if (ta_data->type > TYPED_ARRAY_BIGUINT64) goto L_UNDEF;
+  goto *dispatch[ta_data->type];
+  
+  L_INT8:    value = (double)((int8_t*)data)[index];   goto L_DONE;
+  L_UINT8:   value = (double)data[index];              goto L_DONE;
+  L_INT16:   value = (double)((int16_t*)data)[index];  goto L_DONE;
+  L_UINT16:  value = (double)((uint16_t*)data)[index]; goto L_DONE;
+  L_INT32:   value = (double)((int32_t*)data)[index];  goto L_DONE;
+  L_UINT32:  value = (double)((uint32_t*)data)[index]; goto L_DONE;
+  L_FLOAT32: value = (double)((float*)data)[index];    goto L_DONE;
+  L_FLOAT64: value = ((double*)data)[index];           goto L_DONE;
+  L_UNDEF:   return js_mkundef();
+  L_DONE:    return js_mknum(value);
 }
 
 static jsval_t create_typed_array(struct js *js, TypedArrayType type, ArrayBufferData *buffer, size_t byte_offset, size_t length, const char *type_name) {
@@ -261,7 +254,7 @@ static jsval_t create_typed_array(struct js *js, TypedArrayType type, ArrayBuffe
   js_set(js, obj, "slice", js_mkfun(js_typedarray_slice));
   js_set(js, obj, "subarray", js_mkfun(js_typedarray_subarray));
   
-  sync_typedarray_indices(js, obj, ta_data);
+  js_set_getter(js, obj, typedarray_index_getter);
   
   return obj;
 }

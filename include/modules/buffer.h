@@ -1,7 +1,6 @@
 #ifndef BUFFER_H
 #define BUFFER_H
 
-#include "ant.h"
 #include <stdint.h>
 #include <stddef.h>
 
@@ -42,7 +41,5 @@ typedef struct {
   size_t byte_offset;
   size_t byte_length;
 } DataViewData;
-
-void sync_typedarray_indices(struct js *js, jsval_t obj, TypedArrayData *ta_data);
 
 #endif
