@@ -20491,7 +20491,7 @@ struct js *js_create(void *buf, size_t len) {
   jsval_t func_ctor_obj = mkobj(js, 0);
   set_proto(js, func_ctor_obj, function_proto);
   setprop(js, func_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_Function));
-  setprop(js, func_ctor_obj, js_mkstr(js, "prototype", 9), function_proto);
+  setprop_nonconfigurable(js, func_ctor_obj, "prototype", 9, function_proto);
   setprop(js, func_ctor_obj, js_mkstr(js, "length", 6), tov(1.0));
 
   jsval_t func_len_desc = mkobj(js, 0);
@@ -20503,7 +20503,7 @@ struct js *js_create(void *buf, size_t len) {
   jsval_t str_ctor_obj = mkobj(js, 0);
   set_proto(js, str_ctor_obj, function_proto);
   setprop(js, str_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_String));
-  setprop(js, str_ctor_obj, js_mkstr(js, "prototype", 9), string_proto);
+  setprop_nonconfigurable(js, str_ctor_obj, "prototype", 9, string_proto);
   setprop(js, str_ctor_obj, js_mkstr(js, "fromCharCode", 12), js_mkfun(builtin_string_fromCharCode));
   setprop(js, str_ctor_obj, js_mkstr(js, "fromCodePoint", 13), js_mkfun(builtin_string_fromCodePoint));
   setprop(js, glob, js_mkstr(js, "String", 6), mkval(T_FUNC, vdata(str_ctor_obj)));
@@ -20526,19 +20526,19 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, number_ctor_obj, js_mkstr(js, "NaN", 3), tov(NAN));
   setprop(js, number_ctor_obj, js_mkstr(js, "EPSILON", 7), tov(2.220446049250313e-16));
   
-  setprop(js, number_ctor_obj, js_mkstr(js, "prototype", 9), number_proto);
+  setprop_nonconfigurable(js, number_ctor_obj, "prototype", 9, number_proto);
   setprop(js, glob, js_mkstr(js, "Number", 6), mkval(T_FUNC, vdata(number_ctor_obj)));
   
   jsval_t bool_ctor_obj = mkobj(js, 0);
   set_proto(js, bool_ctor_obj, function_proto);
   setprop(js, bool_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_Boolean));
-  setprop(js, bool_ctor_obj, js_mkstr(js, "prototype", 9), boolean_proto);
+  setprop_nonconfigurable(js, bool_ctor_obj, "prototype", 9, boolean_proto);
   setprop(js, glob, js_mkstr(js, "Boolean", 7), mkval(T_FUNC, vdata(bool_ctor_obj)));
   
   jsval_t arr_ctor_obj = mkobj(js, 0);
   set_proto(js, arr_ctor_obj, function_proto);
   setprop(js, arr_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_Array));
-  setprop(js, arr_ctor_obj, js_mkstr(js, "prototype", 9), array_proto);
+  setprop_nonconfigurable(js, arr_ctor_obj, "prototype", 9, array_proto);
   setprop(js, arr_ctor_obj, js_mkstr(js, "isArray", 7), js_mkfun(builtin_Array_isArray));
   setprop(js, arr_ctor_obj, js_mkstr(js, "from", 4), js_mkfun(builtin_Array_from));
   setprop(js, arr_ctor_obj, js_mkstr(js, "of", 2), js_mkfun(builtin_Array_of));
@@ -20548,25 +20548,25 @@ struct js *js_create(void *buf, size_t len) {
   jsval_t map_ctor_obj = mkobj(js, 0);
   set_proto(js, map_ctor_obj, function_proto);
   setprop(js, map_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_Map));
-  setprop(js, map_ctor_obj, js_mkstr(js, "prototype", 9), map_proto);
+  setprop_nonconfigurable(js, map_ctor_obj, "prototype", 9, map_proto);
   setprop(js, glob, js_mkstr(js, "Map", 3), mkval(T_FUNC, vdata(map_ctor_obj)));
   
   jsval_t set_ctor_obj = mkobj(js, 0);
   set_proto(js, set_ctor_obj, function_proto);
   setprop(js, set_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_Set));
-  setprop(js, set_ctor_obj, js_mkstr(js, "prototype", 9), set_proto_obj);
+  setprop_nonconfigurable(js, set_ctor_obj, "prototype", 9, set_proto_obj);
   setprop(js, glob, js_mkstr(js, "Set", 3), mkval(T_FUNC, vdata(set_ctor_obj)));
   
   jsval_t weakmap_ctor_obj = mkobj(js, 0);
   set_proto(js, weakmap_ctor_obj, function_proto);
   setprop(js, weakmap_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_WeakMap));
-  setprop(js, weakmap_ctor_obj, js_mkstr(js, "prototype", 9), weakmap_proto);
+  setprop_nonconfigurable(js, weakmap_ctor_obj, "prototype", 9, weakmap_proto);
   setprop(js, glob, js_mkstr(js, "WeakMap", 7), mkval(T_FUNC, vdata(weakmap_ctor_obj)));
   
   jsval_t weakset_ctor_obj = mkobj(js, 0);
   set_proto(js, weakset_ctor_obj, function_proto);
   setprop(js, weakset_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_WeakSet));
-  setprop(js, weakset_ctor_obj, js_mkstr(js, "prototype", 9), weakset_proto);
+  setprop_nonconfigurable(js, weakset_ctor_obj, "prototype", 9, weakset_proto);
   setprop(js, glob, js_mkstr(js, "WeakSet", 7), mkval(T_FUNC, vdata(weakset_ctor_obj)));
   
   jsval_t proxy_ctor_obj = mkobj(js, 0);
@@ -20578,55 +20578,55 @@ struct js *js_create(void *buf, size_t len) {
   jsval_t err_ctor_obj = mkobj(js, 0);
   set_proto(js, err_ctor_obj, function_proto);
   setprop(js, err_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_Error));
-  setprop(js, err_ctor_obj, js_mkstr(js, "prototype", 9), error_proto);
+  setprop_nonconfigurable(js, err_ctor_obj, "prototype", 9, error_proto);
   setprop(js, glob, js_mkstr(js, "Error", 5), mkval(T_FUNC, vdata(err_ctor_obj)));
   
   jsval_t evalerr_ctor_obj = mkobj(js, 0);
   set_proto(js, evalerr_ctor_obj, function_proto);
   setprop(js, evalerr_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_EvalError));
-  setprop(js, evalerr_ctor_obj, js_mkstr(js, "prototype", 9), evalerror_proto);
+  setprop_nonconfigurable(js, evalerr_ctor_obj, "prototype", 9, evalerror_proto);
   setprop(js, glob, js_mkstr(js, "EvalError", 9), mkval(T_FUNC, vdata(evalerr_ctor_obj)));
   
   jsval_t rangeerr_ctor_obj = mkobj(js, 0);
   set_proto(js, rangeerr_ctor_obj, function_proto);
   setprop(js, rangeerr_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_RangeError));
-  setprop(js, rangeerr_ctor_obj, js_mkstr(js, "prototype", 9), rangeerror_proto);
+  setprop_nonconfigurable(js, rangeerr_ctor_obj, "prototype", 9, rangeerror_proto);
   setprop(js, glob, js_mkstr(js, "RangeError", 10), mkval(T_FUNC, vdata(rangeerr_ctor_obj)));
   
   jsval_t referr_ctor_obj = mkobj(js, 0);
   set_proto(js, referr_ctor_obj, function_proto);
   setprop(js, referr_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_ReferenceError));
-  setprop(js, referr_ctor_obj, js_mkstr(js, "prototype", 9), referenceerror_proto);
+  setprop_nonconfigurable(js, referr_ctor_obj, "prototype", 9, referenceerror_proto);
   setprop(js, glob, js_mkstr(js, "ReferenceError", 14), mkval(T_FUNC, vdata(referr_ctor_obj)));
   
   jsval_t syntaxerr_ctor_obj = mkobj(js, 0);
   set_proto(js, syntaxerr_ctor_obj, function_proto);
   setprop(js, syntaxerr_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_SyntaxError));
-  setprop(js, syntaxerr_ctor_obj, js_mkstr(js, "prototype", 9), syntaxerror_proto);
+  setprop_nonconfigurable(js, syntaxerr_ctor_obj, "prototype", 9, syntaxerror_proto);
   setprop(js, glob, js_mkstr(js, "SyntaxError", 11), mkval(T_FUNC, vdata(syntaxerr_ctor_obj)));
   
   jsval_t typeerr_ctor_obj = mkobj(js, 0);
   set_proto(js, typeerr_ctor_obj, function_proto);
   setprop(js, typeerr_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_TypeError));
-  setprop(js, typeerr_ctor_obj, js_mkstr(js, "prototype", 9), typeerror_proto);
+  setprop_nonconfigurable(js, typeerr_ctor_obj, "prototype", 9, typeerror_proto);
   setprop(js, glob, js_mkstr(js, "TypeError", 9), mkval(T_FUNC, vdata(typeerr_ctor_obj)));
   
   jsval_t urierr_ctor_obj = mkobj(js, 0);
   set_proto(js, urierr_ctor_obj, function_proto);
   setprop(js, urierr_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_URIError));
-  setprop(js, urierr_ctor_obj, js_mkstr(js, "prototype", 9), urierror_proto);
+  setprop_nonconfigurable(js, urierr_ctor_obj, "prototype", 9, urierror_proto);
   setprop(js, glob, js_mkstr(js, "URIError", 8), mkval(T_FUNC, vdata(urierr_ctor_obj)));
   
   jsval_t internerr_ctor_obj = mkobj(js, 0);
   set_proto(js, internerr_ctor_obj, function_proto);
   setprop(js, internerr_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_InternalError));
-  setprop(js, internerr_ctor_obj, js_mkstr(js, "prototype", 9), internalerror_proto);
+  setprop_nonconfigurable(js, internerr_ctor_obj, "prototype", 9, internalerror_proto);
   setprop(js, glob, js_mkstr(js, "InternalError", 13), mkval(T_FUNC, vdata(internerr_ctor_obj)));
   
   jsval_t regex_ctor_obj = mkobj(js, 0);
   set_proto(js, regex_ctor_obj, function_proto);
   setprop(js, regex_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_RegExp));
-  setprop(js, regex_ctor_obj, js_mkstr(js, "prototype", 9), regexp_proto);
+  setprop_nonconfigurable(js, regex_ctor_obj, "prototype", 9, regexp_proto);
   setprop(js, glob, js_mkstr(js, "RegExp", 6), mkval(T_FUNC, vdata(regex_ctor_obj)));
   
   jsval_t date_ctor_obj = mkobj(js, 0);
@@ -20634,7 +20634,7 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, date_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_Date));
   setprop(js, date_ctor_obj, js_mkstr(js, "now", 3), js_mkfun(builtin_Date_now));
   setprop(js, date_ctor_obj, js_mkstr(js, "UTC", 3), js_mkfun(builtin_Date_UTC));
-  setprop(js, date_ctor_obj, js_mkstr(js, "prototype", 9), date_proto);
+  setprop_nonconfigurable(js, date_ctor_obj, "prototype", 9, date_proto);
   setprop(js, glob, js_mkstr(js, "Date", 4), mkval(T_FUNC, vdata(date_ctor_obj)));
   
   jsval_t p_ctor_obj = mkobj(js, 0);
@@ -20645,7 +20645,7 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, p_ctor_obj, js_mkstr(js, "try", 3), js_mkfun(builtin_Promise_try));
   setprop(js, p_ctor_obj, js_mkstr(js, "all", 3), js_mkfun(builtin_Promise_all));
   setprop(js, p_ctor_obj, js_mkstr(js, "race", 4), js_mkfun(builtin_Promise_race));
-  setprop(js, p_ctor_obj, js_mkstr(js, "prototype", 9), promise_proto);
+  setprop_nonconfigurable(js, p_ctor_obj, "prototype", 9, promise_proto);
   setprop(js, glob, js_mkstr(js, "Promise", 7), mkval(T_FUNC, vdata(p_ctor_obj)));
   
   jsval_t bigint_ctor_obj = mkobj(js, 0);
@@ -20653,7 +20653,7 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, bigint_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_BigInt));
   setprop(js, bigint_ctor_obj, js_mkstr(js, "asIntN", 6), js_mkfun(builtin_BigInt_asIntN));
   setprop(js, bigint_ctor_obj, js_mkstr(js, "asUintN", 7), js_mkfun(builtin_BigInt_asUintN));
-  setprop(js, bigint_ctor_obj, js_mkstr(js, "prototype", 9), bigint_proto);
+  setprop_nonconfigurable(js, bigint_ctor_obj, "prototype", 9, bigint_proto);
   setprop(js, glob, js_mkstr(js, "BigInt", 6), mkval(T_FUNC, vdata(bigint_ctor_obj)));
   
   setprop(js, glob, js_mkstr(js, "eval", 4), js_mkfun(builtin_eval));
