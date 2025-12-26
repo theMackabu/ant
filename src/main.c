@@ -136,6 +136,7 @@ int main(int argc, char *argv[]) {
   struct arg_lit *help = arg_lit0("h", "help", "display this help and exit");
   struct arg_lit *version = arg_lit0("v", "version", "display version information and exit");
   struct arg_lit *debug = arg_litn("d", "debug", 0, 10, "dump VM state (can be repeated for more detail)");
+  struct arg_lit *no_color = arg_lit0(NULL, "no-color", "disable colored output");
   struct arg_str *eval = arg_str0("e", "eval", "<script>", "evaluate script");
   struct arg_lit *print = arg_lit0("p", "print", "evaluate script and print result");
   struct arg_int *gct = arg_int0(NULL, "gct", "<threshold>", "set garbage collection threshold");
@@ -145,7 +146,12 @@ int main(int argc, char *argv[]) {
   struct arg_file *file = arg_file0(NULL, NULL, "<module.js>", "JavaScript module file to execute");
   struct arg_end *end = arg_end(20);
   
-  void *argtable[] = {help, version, debug, eval, print, gct, initial_mem, max_mem, localstorage_file, file, end};
+  void *argtable[] = {
+    help, version, debug, no_color,
+    eval, print, gct, initial_mem,
+    max_mem, localstorage_file, file, end
+  };
+  
   int nerrors = arg_parse(argc, argv, argtable);
   
   if (help->count > 0) {
@@ -180,6 +186,7 @@ int main(int argc, char *argv[]) {
   
   if (initial_mem->count > 0) initial_size = (size_t)initial_mem->ival[0] * 1024 * 1024;
   if (max_mem->count > 0) max_size = (size_t)max_mem->ival[0] * 1024 * 1024;
+  if (no_color->count > 0) io_no_color = true;
   
   struct js *js = js_create_dynamic(initial_size, max_size);
   

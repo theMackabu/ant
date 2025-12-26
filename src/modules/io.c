@@ -10,6 +10,8 @@
 #include "modules/io.h"
 #include "modules/symbol.h"
 
+bool io_no_color = false;
+
 #define ANSI_RED "\x1b[31m"
 #define ANSI_YELLOW "\x1b[33m"
 #define ANSI_CYAN "\x1b[36m"
@@ -26,7 +28,53 @@
 #define JSON_TAG "\x1b[34m"
 #define JSON_REF "\x1b[90m"
 
+static void io_putc(int c, FILE *stream) { fputc(c, stream); }
+static void io_puts(const char *s, FILE *stream) { fputs(s, stream); }
+
+static void io_print(const char *str, FILE *stream) {
+  if (!io_no_color) {
+    fputs(str, stream);
+    return;
+  }
+
+  static void *states[] = {&&normal, &&esc, &&csi, &&done};
+  const char *p = str;
+  char c;
+
+  goto *states[0];
+
+normal:
+  c = *p++;
+  if (!c) goto *states[3];
+  if (c == '\x1b') goto *states[1];
+  fputc(c, stream);
+  goto *states[0];
+
+esc:
+  c = *p++;
+  if (!c) goto *states[3];
+  if (c == '[') goto *states[2];
+  fputc('\x1b', stream);
+  fputc(c, stream);
+  goto *states[0];
+
+csi:
+  c = *p++;
+  if (!c) goto *states[3];
+  if ((c >= '0' && c <= '9') || c == ';') goto *states[2];
+  if (c != 'm') fputc(c, stream);
+  goto *states[0];
+
+done:
+  return;
+}
+
 void print_value_colored(const char *str, FILE *stream) {
+  if (io_no_color) {
+    io_print(str, stream);
+    return;
+  }
+
   bool in_string = false;
   bool escape_next = false;
   bool is_key = true;
@@ -35,13 +83,13 @@ void print_value_colored(const char *str, FILE *stream) {
   
   for (const char *p = str; *p; p++) {
     if (escape_next) {
-      fputc(*p, stream);
+      io_putc(*p, stream);
       escape_next = false;
       continue;
     }
     
     if (*p == '\\' && in_string) {
-      fputc(*p, stream);
+      io_putc(*p, stream);
       escape_next = true;
       continue;
     }
@@ -49,164 +97,183 @@ void print_value_colored(const char *str, FILE *stream) {
     if (*p == '\'' || *p == '"') {
       if (!in_string) {
         bool use_key_color = is_key && bracket_depth > 0;
-        fprintf(stream, "%s%c", use_key_color ? JSON_KEY : JSON_STRING, *p);
+        io_puts(use_key_color ? JSON_KEY : JSON_STRING, stream);
+        io_putc(*p, stream);
         in_string = true;
         string_char = *p;
       } else if (*p == string_char) {
-        fprintf(stream, "%c%s", *p, ANSI_RESET);
+        io_putc(*p, stream);
+        io_puts(ANSI_RESET, stream);
         in_string = false;
         string_char = 0;
       } else {
-        fputc(*p, stream);
+        io_putc(*p, stream);
       }
       continue;
     }
     
     if (in_string) {
-      fputc(*p, stream);
+      io_putc(*p, stream);
       continue;
     }
     
     if (*p == '[' && strncmp(p, "[Function", 9) == 0) {
-      fprintf(stream, "%s", JSON_FUNC);
-      while (*p && *p != ']') fputc(*p++, stream);
-      if (*p == ']') fputc(*p, stream);
-      fprintf(stream, "%s", ANSI_RESET);
+      io_puts(JSON_FUNC, stream);
+      while (*p && *p != ']') io_putc(*p++, stream);
+      if (*p == ']') io_putc(*p, stream);
+      io_puts(ANSI_RESET, stream);
       continue;
     }
     
     if (*p == '[' && strncmp(p, "[Circular", 9) == 0) {
-      fprintf(stream, "%s", JSON_REF);
-      while (*p && *p != ']') fputc(*p++, stream);
-      if (*p == ']') fputc(*p, stream);
-      fprintf(stream, "%s", ANSI_RESET);
+      io_puts(JSON_REF, stream);
+      while (*p && *p != ']') io_putc(*p++, stream);
+      if (*p == ']') io_putc(*p, stream);
+      io_puts(ANSI_RESET, stream);
       continue;
     }
     
     if (*p == '<' && strncmp(p, "<ref", 4) == 0) {
-      fprintf(stream, "%s", JSON_REF);
-      while (*p && *p != '>') fputc(*p++, stream);
-      if (*p == '>') fputc(*p, stream);
-      fprintf(stream, "%s", ANSI_RESET);
+      io_puts(JSON_REF, stream);
+      while (*p && *p != '>') io_putc(*p++, stream);
+      if (*p == '>') io_putc(*p, stream);
+      io_puts(ANSI_RESET, stream);
       continue;
     }
     
     if (strncmp(p, "Object [", 8) == 0) {
-      fprintf(stream, "%sObject [", JSON_TAG);
+      io_puts(JSON_TAG, stream);
+      io_puts("Object [", stream);
       p += 7;
-      while (*p && *p != ']') fputc(*++p, stream);
-      fprintf(stream, "%s", ANSI_RESET);
+      while (*p && *p != ']') io_putc(*++p, stream);
+      io_puts(ANSI_RESET, stream);
       continue;
     }
     
     if (*p == ':') {
-      fputc(*p, stream);
+      io_putc(*p, stream);
       is_key = false;
       continue;
     }
     
     if (*p == ',' || *p == '\n') {
-      fputc(*p, stream);
+      io_putc(*p, stream);
       is_key = true;
       continue;
     }
     
     if (*p == '{' || *p == '[') {
-      fprintf(stream, "%s%c%s", JSON_BRACE, *p, ANSI_RESET);
+      io_puts(JSON_BRACE, stream);
+      io_putc(*p, stream);
+      io_puts(ANSI_RESET, stream);
       bracket_depth++;
       is_key = true;
       continue;
     }
     
     if (*p == '}' || *p == ']') {
-      fprintf(stream, "%s%c%s", JSON_BRACE, *p, ANSI_RESET);
+      io_puts(JSON_BRACE, stream);
+      io_putc(*p, stream);
+      io_puts(ANSI_RESET, stream);
       bracket_depth--;
       continue;
     }
     
     if (strncmp(p, "true", 4) == 0 && !isalnum((unsigned char)p[4]) && p[4] != '_') {
-      fprintf(stream, "%strue%s", JSON_BOOL, ANSI_RESET);
+      io_puts(JSON_BOOL, stream);
+      io_puts("true", stream);
+      io_puts(ANSI_RESET, stream);
       p += 3;
       continue;
     }
     
     if (strncmp(p, "false", 5) == 0 && !isalnum((unsigned char)p[5]) && p[5] != '_') {
-      fprintf(stream, "%sfalse%s", JSON_BOOL, ANSI_RESET);
+      io_puts(JSON_BOOL, stream);
+      io_puts("false", stream);
+      io_puts(ANSI_RESET, stream);
       p += 4;
       continue;
     }
     
     if (strncmp(p, "null", 4) == 0 && !isalnum((unsigned char)p[4]) && p[4] != '_') {
-      fprintf(stream, "%snull%s", JSON_NULL, ANSI_RESET);
+      io_puts(JSON_NULL, stream);
+      io_puts("null", stream);
+      io_puts(ANSI_RESET, stream);
       p += 3;
       continue;
     }
     
     if (strncmp(p, "undefined", 9) == 0 && !isalnum((unsigned char)p[9]) && p[9] != '_') {
-      fprintf(stream, "%sundefined%s", JSON_NULL, ANSI_RESET);
+      io_puts(JSON_NULL, stream);
+      io_puts("undefined", stream);
+      io_puts(ANSI_RESET, stream);
       p += 8;
       continue;
     }
     
     if (strncmp(p, "Infinity", 8) == 0 && !is_key) {
-      fprintf(stream, "%sInfinity%s", JSON_NUMBER, ANSI_RESET);
+      io_puts(JSON_NUMBER, stream);
+      io_puts("Infinity", stream);
+      io_puts(ANSI_RESET, stream);
       p += 7;
       continue;
     }
     
     if (strncmp(p, "NaN", 3) == 0 && !isalnum((unsigned char)p[3]) && p[3] != '_' && !is_key) {
-      fprintf(stream, "%sNaN%s", JSON_NUMBER, ANSI_RESET);
+      io_puts(JSON_NUMBER, stream);
+      io_puts("NaN", stream);
+      io_puts(ANSI_RESET, stream);
       p += 2;
       continue;
     }
     
     if ((*p >= '0' && *p <= '9') || (*p == '-' && p[1] >= '0' && p[1] <= '9')) {
-      fprintf(stream, "%s", JSON_NUMBER);
-      if (*p == '-') fputc(*p++, stream);
+      io_puts(JSON_NUMBER, stream);
+      if (*p == '-') io_putc(*p++, stream);
       while ((*p >= '0' && *p <= '9') || *p == '.' || *p == 'e' || *p == 'E' || *p == '+' || *p == '-') {
-        fputc(*p, stream);
+        io_putc(*p, stream);
         if (!((p[1] >= '0' && p[1] <= '9') || p[1] == '.' || p[1] == 'e' || p[1] == 'E' || p[1] == '+' || p[1] == '-')) break;
         p++;
       }
-      fprintf(stream, "%s", ANSI_RESET);
+      io_puts(ANSI_RESET, stream);
       continue;
     }
     
     if (is_key && bracket_depth > 0 && (isalpha((unsigned char)*p) || *p == '_' || *p == '$')) {
-      fprintf(stream, "%s", JSON_KEY);
+      io_puts(JSON_KEY, stream);
       while (isalnum((unsigned char)*p) || *p == '_' || *p == '$') {
-        fputc(*p, stream);
+        io_putc(*p, stream);
         if (!(isalnum((unsigned char)p[1]) || p[1] == '_' || p[1] == '$')) break;
         p++;
       }
-      fprintf(stream, "%s", ANSI_RESET);
+      io_puts(ANSI_RESET, stream);
       continue;
     }
     
-    fputc(*p, stream);
+    io_putc(*p, stream);
   }
 }
 
 static void console_print(struct js *js, jsval_t *args, int nargs, const char *color, FILE *stream) {
-  if (color) fprintf(stream, "%s", color);
+  if (color && !io_no_color) io_puts(color, stream);
   
   for (int i = 0; i < nargs; i++) {
     const char *space = i == 0 ? "" : " ";
-    fprintf(stream, "%s", space);
+    io_puts(space, stream);
     
     if (js_type(args[i]) == JS_STR) {
       char *str = js_getstr(js, args[i], NULL);
-      fprintf(stream, "%s", str);
+      io_print(str, stream);
     } else {
       const char *str = js_str(js, args[i]);
-      if (color) fprintf(stream, "%s", ANSI_RESET);
+      if (color && !io_no_color) io_puts(ANSI_RESET, stream);
       print_value_colored(str, stream);
-      if (color) fprintf(stream, "%s", color);
+      if (color && !io_no_color) io_puts(color, stream);
     }
   }
   
-  if (color) fprintf(stream, "%s", ANSI_RESET);
-  fputc('\n', stream);
+  if (color && !io_no_color) io_puts(ANSI_RESET, stream);
+  io_putc('\n', stream);
 }
 
 static jsval_t js_console_log(struct js *js, jsval_t *args, int nargs) {
@@ -230,23 +297,25 @@ static jsval_t js_console_assert(struct js *js, jsval_t *args, int nargs) {
   bool is_truthy = js_truthy(js, args[0]);
   if (is_truthy) return js_mkundef();
   
-  fprintf(stderr, "%sAssertion failed", ANSI_RED);
+  if (!io_no_color) io_puts(ANSI_RED, stderr);
+  io_puts("Assertion failed", stderr);
   if (nargs > 1) {
-    fprintf(stderr, ": ");
+    io_puts(": ", stderr);
     for (int i = 1; i < nargs; i++) {
       const char *space = i == 1 ? "" : " ";
-      fprintf(stderr, "%s", space);
+      io_puts(space, stderr);
       
       if (js_type(args[i]) == JS_STR) {
         char *str = js_getstr(js, args[i], NULL);
-        fprintf(stderr, "%s", str);
+        io_print(str, stderr);
       } else {
         const char *str = js_str(js, args[i]);
-        fprintf(stderr, "%s", str);
+        io_print(str, stderr);
       }
     }
   }
-  fprintf(stderr, "%s\n", ANSI_RESET);
+  if (!io_no_color) io_puts(ANSI_RESET, stderr);
+  io_putc('\n', stderr);
   
   return js_mkundef();
 }
@@ -258,8 +327,8 @@ static jsval_t js_console_trace(struct js *js, jsval_t *args, int nargs) {
     char *str = js_getstr(js, args[0], NULL);
     fprintf(stderr, "%s", str);
   }
-  fprintf(stderr, "\n");
   
+  fprintf(stderr, "\n");
   js_print_stack_trace(stderr);
   
   return js_mkundef();
@@ -278,8 +347,10 @@ static jsval_t js_console_debug(struct js *js, jsval_t *args, int nargs) {
 static jsval_t js_console_clear(struct js *js, jsval_t *args, int nargs) {
   (void)args;
   (void)nargs;
-  fprintf(stdout, "\033[2J\033[H");
-  fflush(stdout);
+  if (!io_no_color) {
+    fprintf(stdout, "\033[2J\033[H");
+    fflush(stdout);
+  }
   return js_mkundef();
 }
 
