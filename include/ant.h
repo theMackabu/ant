@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include "config.h"
 
 struct js;
 typedef uint64_t jsval_t;
@@ -82,6 +83,7 @@ void js_merge_obj(struct js *, jsval_t dst, jsval_t src);
 
 jsval_t js_setprop(struct js *, jsval_t obj, jsval_t key, jsval_t val);
 void js_set_proto(struct js *, jsval_t obj, jsval_t proto);
+void set_slot(struct js *js, jsval_t obj, internal_slot_t slot, jsval_t val);
 
 jsval_t js_get_proto(struct js *, jsval_t obj);
 jsval_t js_get_ctor_proto(struct js *, const char *name, size_t len);

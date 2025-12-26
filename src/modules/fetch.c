@@ -297,7 +297,7 @@ static jsval_t js_fetch(struct js *js, jsval_t *args, int nargs) {
   jsval_t promise = js_mkpromise(js);
   jsval_t wrapper_obj = js_mkobj(js);
   
-  js_set(js, wrapper_obj, "__native_func", js_mkfun(do_fetch_microtask));
+  set_slot(js, wrapper_obj, SLOT_NATIVE_FUNC, js_mkfun(do_fetch_microtask));
   js_set(js, wrapper_obj, "url", url_val);
   js_set(js, wrapper_obj, "options", options_val);
   js_set(js, wrapper_obj, "promise", promise);

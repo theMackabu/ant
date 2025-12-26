@@ -238,7 +238,6 @@ static const char *INTERN_SET = NULL;
 static const char *INTERN_CODE = NULL;
 static const char *INTERN_SCOPE = NULL;
 static const char *INTERN_THIS = NULL;
-static const char *INTERN_NATIVE_FUNC = NULL;
 static const char *INTERN_ASYNC = NULL;
 static const char *INTERN_BOUND_THIS = NULL;
 static const char *INTERN_BOUND_ARGS = NULL;
@@ -647,6 +646,12 @@ static jsoff_t lkp(struct js *js, jsval_t obj, const char *buf, size_t len);
 static jsoff_t lkp_interned(struct js *js, jsval_t obj, const char *search_intern, size_t len);
 static inline const char *get_koff_intern(jsoff_t koff);
 
+static jsval_t mkslot(struct js *js, jsval_t obj, internal_slot_t slot, jsval_t v);
+static jsoff_t lkp_slot(struct js *js, jsval_t obj, internal_slot_t slot);
+static jsval_t get_slot(struct js *js, jsval_t obj, internal_slot_t slot);
+static bool has_slot(struct js *js, jsval_t obj, internal_slot_t slot);
+static bool is_slot_prop(struct js *js, jsoff_t prop_off);
+
 static jsval_t js_import_stmt(struct js *js);
 static jsval_t js_export_stmt(struct js *js);
 
@@ -1032,12 +1037,15 @@ static void scan_obj_refs(struct js *js, jsval_t obj) {
   if (stringify_depth >= MAX_STRINGIFY_DEPTH) return;
   stringify_stack[stringify_depth++] = obj;
   
-  jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK | ARRMASK);
+  jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   while (next < js->brk && next != 0) {
-    jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
-    jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
-    scan_refs(js, val);
-    next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK);
+    jsoff_t header = loadoff(js, next);
+    if ((header & SLOTMASK) == 0) {
+      jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
+      jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
+      scan_refs(js, val);
+    }
+    next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   }
   
   jsoff_t proto_off = lkp_interned(js, obj, INTERN_PROTO, 9);
@@ -1058,12 +1066,15 @@ static void scan_arr_refs(struct js *js, jsval_t obj) {
   if (stringify_depth >= MAX_STRINGIFY_DEPTH) return;
   stringify_stack[stringify_depth++] = obj;
   
-  jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK | ARRMASK);
+  jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   while (next < js->brk && next != 0) {
-    jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
-    jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
-    scan_refs(js, val);
-    next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK);
+    jsoff_t header = loadoff(js, next);
+    if ((header & SLOTMASK) == 0) {
+      jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
+      jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
+      scan_refs(js, val);
+    }
+    next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   }
   
   stringify_depth--;
@@ -1080,12 +1091,12 @@ static void scan_func_refs(struct js *js, jsval_t value) {
   if (stringify_depth >= MAX_STRINGIFY_DEPTH) return;
   stringify_stack[stringify_depth++] = func_obj;
   
-  jsoff_t next = loadoff(js, (jsoff_t) vdata(func_obj)) & ~(3U | CONSTMASK | ARRMASK);
+  jsoff_t next = loadoff(js, (jsoff_t) vdata(func_obj)) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   while (next < js->brk && next != 0) {
     jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
     jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
     scan_refs(js, val);
-    next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK);
+    next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   }
   
   stringify_depth--;
@@ -1142,7 +1153,7 @@ static size_t strarr(struct js *js, jsval_t obj, char *buf, size_t len) {
   
   push_stringify(obj);
   size_t n = cpy(buf, len, "[ ", 2);
-  jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK | ARRMASK);
+  jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   jsoff_t length = 0;
   jsoff_t scan = next;
   
@@ -1156,7 +1167,7 @@ static size_t strarr(struct js *js, jsval_t obj, char *buf, size_t len) {
       if (vtype(val) == T_NUM) length = (jsoff_t) tod(val);
       break;
     }
-    scan = loadoff(js, scan) & ~(3U | CONSTMASK | ARRMASK);
+    scan = loadoff(js, scan) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   }
   
   for (jsoff_t i = 0; i < length; i++) {
@@ -1179,7 +1190,7 @@ static size_t strarr(struct js *js, jsval_t obj, char *buf, size_t len) {
         found = true;
         break;
       }
-      prop = loadoff(js, prop) & ~(3U | CONSTMASK | ARRMASK);
+      prop = loadoff(js, prop) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
     }
     
     if (found) {
@@ -1199,7 +1210,7 @@ static size_t array_to_string(struct js *js, jsval_t obj, char *buf, size_t len)
   
   push_stringify(obj);
   size_t n = 0;
-  jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK | ARRMASK);
+  jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   jsoff_t length = 0;
   jsoff_t scan = next;
   
@@ -1213,7 +1224,7 @@ static size_t array_to_string(struct js *js, jsval_t obj, char *buf, size_t len)
       if (vtype(val) == T_NUM) length = (jsoff_t) tod(val);
       break;
     }
-    scan = loadoff(js, scan) & ~(3U | CONSTMASK | ARRMASK);
+    scan = loadoff(js, scan) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   }
   
   for (jsoff_t i = 0; i < length; i++) {
@@ -1236,7 +1247,7 @@ static size_t array_to_string(struct js *js, jsval_t obj, char *buf, size_t len)
         found = true;
         break;
       }
-      prop = loadoff(js, prop) & ~(3U | CONSTMASK | ARRMASK);
+      prop = loadoff(js, prop) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
     }
     
     if (found) {
@@ -1330,7 +1341,7 @@ static size_t print_prototype(struct js *js, jsval_t proto_val, char *buf, size_
   push_stringify(proto_val);
   
   bool has_proto_props = false;
-  jsoff_t proto_next = loadoff(js, (jsoff_t) vdata(proto_val)) & ~(3U | CONSTMASK | ARRMASK);
+  jsoff_t proto_next = loadoff(js, (jsoff_t) vdata(proto_val)) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   
   while (proto_next < js->brk && proto_next != 0) {
     jsoff_t pkoff = loadoff(js, proto_next + (jsoff_t) sizeof(proto_next));
@@ -1343,7 +1354,7 @@ static size_t print_prototype(struct js *js, jsval_t proto_val, char *buf, size_
       has_proto_props = true;
       break;
     }
-    proto_next = loadoff(js, proto_next) & ~(3U | CONSTMASK | ARRMASK);
+    proto_next = loadoff(js, proto_next) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   }
   
   if (!*first) n += cpy(buf + n, len - n, ",\n", 2);
@@ -1355,7 +1366,7 @@ static size_t print_prototype(struct js *js, jsval_t proto_val, char *buf, size_
     stringify_indent++;
     
     bool proto_first = true;
-    proto_next = loadoff(js, (jsoff_t) vdata(proto_val)) & ~(3U | CONSTMASK | ARRMASK);
+    proto_next = loadoff(js, (jsoff_t) vdata(proto_val)) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
     while (proto_next < js->brk && proto_next != 0) {
       jsoff_t pkoff = loadoff(js, proto_next + (jsoff_t) sizeof(proto_next));
       jsval_t pval = loadval(js, proto_next + (jsoff_t) (sizeof(proto_next) + sizeof(pkoff)));
@@ -1373,7 +1384,7 @@ static size_t print_prototype(struct js *js, jsval_t proto_val, char *buf, size_
         n += cpy(buf + n, len - n, ": ", 2);
         n += tostr(js, pval, buf + n, len - n);
       }
-      proto_next = loadoff(js, proto_next) & ~(3U | CONSTMASK | ARRMASK);
+      proto_next = loadoff(js, proto_next) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
     }
     
     stringify_indent--;
@@ -1515,7 +1526,7 @@ print_plain_object:
 continue_object_print:
   
   stringify_indent++;
-  jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK | ARRMASK);
+  jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   bool first = true;
   
   while (next < js->brk && next != 0) {
@@ -1583,10 +1594,10 @@ continue_object_print:
         n += tostr(js, val, buf + n, len - n);
       }
     }
-    next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK);
+    next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   }
   
-  next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK | ARRMASK);
+  next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   while (next < js->brk && next != 0) {
     jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
     jsoff_t klen = offtolen(loadoff(js, koff));
@@ -1639,7 +1650,7 @@ continue_object_print:
         }
       }
     }
-    next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK);
+    next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   }
   
   stringify_indent--;
@@ -1757,7 +1768,7 @@ static size_t strfunc_ctor(struct js *js, jsval_t func_obj, char *buf, size_t le
   stringify_indent++;
   bool first = true;
   
-  jsoff_t next = loadoff(js, (jsoff_t) vdata(func_obj)) & ~(3U | CONSTMASK | ARRMASK);
+  jsoff_t next = loadoff(js, (jsoff_t) vdata(func_obj)) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   while (next < js->brk && next != 0) {
     jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
     jsoff_t klen = offtolen(loadoff(js, koff));
@@ -1772,7 +1783,7 @@ static size_t strfunc_ctor(struct js *js, jsval_t func_obj, char *buf, size_t le
       n += cpy(buf + n, len - n, ": ", 2);
       n += tostr(js, val, buf + n, len - n);
     }
-    next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK);
+    next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   }
   
   jsoff_t proto_off = lkp_interned(js, func_obj, INTERN_PROTOTYPE, 9);
@@ -1806,11 +1817,8 @@ static size_t strfunc(struct js *js, jsval_t value, char *buf, size_t len) {
   }
   
   if (code_off == 0) {
-    jsoff_t native_off = lkp_interned(js, func_obj, INTERN_NATIVE_FUNC, 13);
-    if (native_off != 0) {
-      jsval_t native_val = resolveprop(js, mkval(T_PROP, native_off));
-      if (vtype(native_val) == T_CFUNC) return strfunc_ctor(js, func_obj, buf, len);
-    }
+    jsval_t native_val = get_slot(js, func_obj, SLOT_NATIVE_FUNC);
+    if (vtype(native_val) == T_CFUNC) return strfunc_ctor(js, func_obj, buf, len);
     if (name && name_len > 0) {
       size_t n = cpy(buf, len, "[Function: ", 11);
       n += cpy(buf + n, len - n, name, name_len);
@@ -2645,7 +2653,7 @@ static jsoff_t arr_length(struct js *js, jsval_t arr) {
   jsoff_t max_idx = 0;
   bool found_length_prop = false;
   jsoff_t length_prop_val = 0;
-  jsoff_t scan = loadoff(js, (jsoff_t) vdata(arr)) & ~(3U | CONSTMASK | ARRMASK);
+  jsoff_t scan = loadoff(js, (jsoff_t) vdata(arr)) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   while (scan < js->brk && scan != 0) {
     jsoff_t koff = loadoff(js, scan + (jsoff_t) sizeof(scan));
     jsoff_t klen = offtolen(loadoff(js, koff));
@@ -2663,7 +2671,7 @@ static jsoff_t arr_length(struct js *js, jsval_t arr) {
         max_idx = (jsoff_t)(idx + 1);
       }
     }
-    scan = loadoff(js, scan) & ~(3U | CONSTMASK | ARRMASK);
+    scan = loadoff(js, scan) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   }
   if (found_length_prop) return length_prop_val;
   return max_idx;
@@ -2674,7 +2682,7 @@ static jsval_t arr_get(struct js *js, jsval_t arr, jsoff_t idx) {
   char idxstr[16];
   snprintf(idxstr, sizeof(idxstr), "%u", (unsigned) idx);
   jsoff_t idxlen = (jsoff_t) strlen(idxstr);
-  jsoff_t prop = loadoff(js, (jsoff_t) vdata(arr)) & ~(3U | CONSTMASK | ARRMASK);
+  jsoff_t prop = loadoff(js, (jsoff_t) vdata(arr)) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   while (prop < js->brk && prop != 0) {
     jsoff_t koff = loadoff(js, prop + (jsoff_t) sizeof(prop));
     jsoff_t klen = offtolen(loadoff(js, koff));
@@ -2682,7 +2690,7 @@ static jsval_t arr_get(struct js *js, jsval_t arr, jsoff_t idx) {
     if (streq(key, klen, idxstr, idxlen)) {
       return loadval(js, prop + (jsoff_t) (sizeof(prop) + sizeof(koff)));
     }
-    prop = loadoff(js, prop) & ~(3U | CONSTMASK | ARRMASK);
+    prop = loadoff(js, prop) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   }
   return js_mkundef();
 }
@@ -2783,7 +2791,6 @@ static void intern_init(void) {
   INTERN_CODE = intern_string("__code", 6);
   INTERN_SCOPE = intern_string("__scope", 7);
   INTERN_THIS = intern_string("__this", 6);
-  INTERN_NATIVE_FUNC = intern_string("__native_func", 13);
   INTERN_ASYNC = intern_string("__async", 7);
   INTERN_BOUND_THIS = intern_string("__bound_this", 12);
   INTERN_BOUND_ARGS = intern_string("__bound_args", 12);
@@ -2919,9 +2926,61 @@ static jsval_t mkprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v, bool is_
   const char *interned = intern_string(p, klen);
   if (interned) set_koff_intern(koff, interned);
   
-  jsoff_t prop_header = (b & ~(3U | CONSTMASK | ARRMASK)) | T_PROP;
+  jsoff_t prop_header = (b & ~(3U | CONSTMASK | ARRMASK | SLOTMASK)) | T_PROP;
   if (is_const) prop_header |= CONSTMASK;
   return mkentity(js, prop_header, buf, sizeof(buf));
+}
+
+static jsval_t mkslot(struct js *js, jsval_t obj, internal_slot_t slot, jsval_t v) {
+  jsoff_t b, head = (jsoff_t) vdata(obj);
+  char buf[sizeof(jsoff_t) + sizeof(v)];
+  memcpy(&b, &js->mem[head], sizeof(b));
+  jsoff_t slot_key = (jsoff_t)slot;
+  memcpy(buf, &slot_key, sizeof(slot_key));
+  memcpy(buf + sizeof(slot_key), &v, sizeof(v));
+  jsoff_t brk = js->brk | T_OBJ;
+  if (b & ARRMASK) brk |= ARRMASK;
+  memcpy(&js->mem[head], &brk, sizeof(brk));
+  invalidate_obj_cache(head);
+  jsoff_t prop_header = (b & ~(3U | CONSTMASK | ARRMASK | SLOTMASK)) | T_PROP | SLOTMASK;
+  return mkentity(js, prop_header, buf, sizeof(buf));
+}
+
+static jsoff_t lkp_slot(struct js *js, jsval_t obj, internal_slot_t slot) {
+  jsoff_t off = (jsoff_t) vdata(obj);
+  jsoff_t next = loadoff(js, off) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
+  while (next != 0 && next < js->brk) {
+    jsoff_t header = loadoff(js, next);
+    if ((header & SLOTMASK) != 0) {
+      jsoff_t koff = loadoff(js, next + sizeof(jsoff_t));
+      if (koff == (jsoff_t)slot) return next;
+    }
+    next = header & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
+  }
+  return 0;
+}
+
+void set_slot(struct js *js, jsval_t obj, internal_slot_t slot, jsval_t val) {
+  jsoff_t existing = lkp_slot(js, obj, slot);
+  if (existing > 0) {
+    saveval(js, existing + sizeof(jsoff_t) * 2, val);
+  } else mkslot(js, obj, slot, val);
+}
+
+static jsval_t get_slot(struct js *js, jsval_t obj, internal_slot_t slot) {
+  jsoff_t off = lkp_slot(js, obj, slot);
+  if (off == 0) return js_mkundef();
+  return loadval(js, off + sizeof(jsoff_t) * 2);
+}
+
+static bool has_slot(struct js *js, jsval_t obj, internal_slot_t slot) {
+  return lkp_slot(js, obj, slot) != 0;
+}
+
+static bool is_slot_prop(struct js *js, jsoff_t prop_off) {
+  if (prop_off == 0 || prop_off >= js->brk) return false;
+  jsoff_t header = loadoff(js, prop_off);
+  return (header & SLOTMASK) != 0;
 }
 
 static jsval_t setup_func_prototype(struct js *js, jsval_t func) {
@@ -3415,8 +3474,7 @@ static jsoff_t free_list_allocate(size_t size) {
 static bool is_builtin_or_system(jsoff_t offset, struct js *js) {
   jsval_t obj_val = mkval(T_OBJ, offset);
   
-  jsoff_t native_off = lkp_interned(js, obj_val, INTERN_NATIVE_FUNC, 13);
-  if (native_off != 0) return true;
+  if (has_slot(js, obj_val, SLOT_NATIVE_FUNC)) return true;
   
   jsoff_t code_off = lkp_interned(js, obj_val, INTERN_CODE, 6);
   if (code_off != 0) {
@@ -4143,8 +4201,13 @@ static inline jsoff_t lkp_interned(struct js *js, jsval_t obj, const char *searc
     return ce->prop_off;
   }
   
-  jsoff_t off = loadoff(js, obj_off) & ~(3U | CONSTMASK | ARRMASK);
+  jsoff_t off = loadoff(js, obj_off) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   while (off < js->brk && off != 0) {
+    jsoff_t header = loadoff(js, off);
+    if ((header & SLOTMASK) != 0) {
+      off = header & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
+      continue;
+    }
     jsoff_t koff = loadoff(js, (jsoff_t) (off + sizeof(off)));
     jsoff_t klen = (loadoff(js, koff) >> 2) - 1;
     if (klen == len) {
@@ -4168,7 +4231,7 @@ static inline jsoff_t lkp_interned(struct js *js, jsval_t obj, const char *searc
         }
       }
     }
-    off = loadoff(js, off) & ~(3U | CONSTMASK | ARRMASK);
+    off = header & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   }
   return 0;
 }
@@ -4489,7 +4552,7 @@ static int check_prop_writable(struct js *js, jsval_t owner, const char *key, js
 static int find_owner_and_check_writable(struct js *js, jsoff_t propoff, const char *key, jsoff_t klen, jsval_t *out_owner) {
   for (jsoff_t scan_off = 0; scan_off < propoff; ) {
     jsoff_t header = loadoff(js, scan_off);
-    jsoff_t cleaned = header & ~(GCMASK | CONSTMASK | ARRMASK);
+    jsoff_t cleaned = header & ~(GCMASK | CONSTMASK | ARRMASK | SLOTMASK);
     
     if ((cleaned & 3) != T_OBJ) {
       scan_off += esize(cleaned);
@@ -4522,7 +4585,7 @@ static int find_owner_and_check_writable(struct js *js, jsoff_t propoff, const c
         }
         return 1;
       }
-      next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK);
+      next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
     }
     
     scan_off += esize(cleaned);
@@ -4591,7 +4654,7 @@ static jsval_t assign(struct js *js, jsval_t lhs, jsval_t val) {
     jsoff_t obj_off = 0;
     for (jsoff_t scan = 0; scan < propoff; ) {
       jsoff_t header = loadoff(js, scan);
-      jsoff_t cleaned = header & ~(GCMASK | CONSTMASK | ARRMASK);
+      jsoff_t cleaned = header & ~(GCMASK | CONSTMASK | ARRMASK | SLOTMASK);
       if ((cleaned & 3U) == T_OBJ || (header & ARRMASK)) {
         jsoff_t first_prop = cleaned & ~3U;
         jsoff_t p = first_prop;
@@ -5552,33 +5615,26 @@ static jsval_t call_js_with_args(struct js *js, jsval_t func, jsval_t *args, int
     }
   }
 
-  jsoff_t native_off = lkp_interned(js, func_obj, INTERN_NATIVE_FUNC, 13);
-  if (native_off != 0) {
-    jsval_t native_val = resolveprop(js, mkval(T_PROP, native_off));
-    if (vtype(native_val) == T_CFUNC) {
-      jsoff_t this_off = lkp_interned(js, func_obj, INTERN_BOUND_THIS, 12);
-      jsval_t bound_this = js_mkundef();
-      if (this_off != 0) {
-        bound_this = resolveprop(js, mkval(T_PROP, this_off));
-      }
-      
-      jsval_t saved_this = js->this_val;
-      if (vtype(bound_this) != JS_UNDEF) {
-        push_this(bound_this);
-        js->this_val = bound_this;
-      }
-      
-      jsval_t (*fn)(struct js *, jsval_t *, int) = (jsval_t(*)(struct js *, jsval_t *, int)) vdata(native_val);
-      jsval_t result = fn(js, args, nargs);
-      
-      if (vtype(bound_this) != JS_UNDEF) {
-        pop_this();
-        js->this_val = saved_this;
-      }
-      
-      if (combined_args) ANT_GC_FREE(combined_args);
-      return result;
+  jsval_t native_val = get_slot(js, func_obj, SLOT_NATIVE_FUNC);
+  if (vtype(native_val) == T_CFUNC) {
+    jsval_t bound_this = get_slot(js, func_obj, SLOT_BOUND_THIS);
+    
+    jsval_t saved_this = js->this_val;
+    if (vtype(bound_this) != T_UNDEF) {
+      push_this(bound_this);
+      js->this_val = bound_this;
     }
+    
+    jsval_t (*fn)(struct js *, jsval_t *, int) = (jsval_t(*)(struct js *, jsval_t *, int)) vdata(native_val);
+    jsval_t result = fn(js, args, nargs);
+    
+    if (vtype(bound_this) != T_UNDEF) {
+      pop_this();
+      js->this_val = saved_this;
+    }
+    
+    if (combined_args) ANT_GC_FREE(combined_args);
+    return result;
   }
   
   jsoff_t code_off = lkp_interned(js, func_obj, INTERN_CODE, 6);
@@ -5815,15 +5871,12 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
   
   if (vtype(func) == T_FUNC) {
     jsval_t func_obj = mkval(T_OBJ, vdata(func));
-    jsoff_t native_off = lkp_interned(js, func_obj, INTERN_NATIVE_FUNC, 13);
-    if (native_off != 0) {
-      jsval_t native_val = resolveprop(js, mkval(T_PROP, native_off));
-      if (vtype(native_val) == T_CFUNC) {
-        jsval_t saved_func = js->current_func;
-        js->current_func = func;
-        res = call_c(js, (jsval_t(*)(struct js *, jsval_t *, int)) vdata(native_val));
-        js->current_func = saved_func;
-      }
+    jsval_t native_val = get_slot(js, func_obj, SLOT_NATIVE_FUNC);
+    if (vtype(native_val) == T_CFUNC) {
+      jsval_t saved_func = js->current_func;
+      js->current_func = func;
+      res = call_c(js, (jsval_t(*)(struct js *, jsval_t *, int)) vdata(native_val));
+      js->current_func = saved_func;
     } else {
       jsoff_t code_off = lkp_interned(js, func_obj, INTERN_CODE, 6);
       if (code_off == 0) return js_mkerr(js, "function has no code");
@@ -6989,7 +7042,7 @@ static jsval_t js_obj_literal(struct js *js) {
       if (st != T_OBJ && st != T_ARR && st != T_FUNC) goto spread_next;
       
       jsval_t src_obj = (st == T_OBJ) ? spread_obj : mkval(T_OBJ, vdata(spread_obj));
-      jsoff_t next_prop = loadoff(js, (jsoff_t) vdata(src_obj)) & ~(3U | CONSTMASK | ARRMASK);
+      jsoff_t next_prop = loadoff(js, (jsoff_t) vdata(src_obj)) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
       
       while (next_prop < js->brk && next_prop != 0) {
         jsoff_t koff = loadoff(js, next_prop + (jsoff_t) sizeof(next_prop));
@@ -6997,7 +7050,7 @@ static jsval_t js_obj_literal(struct js *js) {
         const char *prop_key = (char *) &js->mem[koff + sizeof(koff)];
         jsval_t prop_val = loadval(js, next_prop + (jsoff_t) (sizeof(next_prop) + sizeof(koff)));
         
-        next_prop = loadoff(js, next_prop) & ~(3U | CONSTMASK | ARRMASK);
+        next_prop = loadoff(js, next_prop) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
         if (is_internal_prop(prop_key, klen)) continue;
         
         jsval_t key_str = js_mkstr(js, prop_key, klen);
@@ -8240,13 +8293,13 @@ static jsval_t js_unary(struct js *js) {
     coro->is_ready = false;
     
     jsval_t resume_obj = mkobj(js, 0);
-    setprop(js, resume_obj, js_mkstr(js, "__native_func", 13), js_mkfun(resume_coroutine_wrapper));
-    setprop(js, resume_obj, js_mkstr(js, "__coroutine", 11), tov((double)(uintptr_t)coro));
+    set_slot(js, resume_obj, SLOT_NATIVE_FUNC, js_mkfun(resume_coroutine_wrapper));
+    set_slot(js, resume_obj, SLOT_COROUTINE, tov((double)(uintptr_t)coro));
     jsval_t resume_fn = mkval(T_FUNC, vdata(resume_obj));
     
     jsval_t reject_obj = mkobj(js, 0);
-    setprop(js, reject_obj, js_mkstr(js, "__native_func", 13), js_mkfun(reject_coroutine_wrapper));
-    setprop(js, reject_obj, js_mkstr(js, "__coroutine", 11), tov((double)(uintptr_t)coro));
+    set_slot(js, reject_obj, SLOT_NATIVE_FUNC, js_mkfun(reject_coroutine_wrapper));
+    set_slot(js, reject_obj, SLOT_COROUTINE, tov((double)(uintptr_t)coro));
     jsval_t reject_fn = mkval(T_FUNC, vdata(reject_obj));
     
     jsval_t then_args[] = { resume_fn, reject_fn };
@@ -8694,7 +8747,7 @@ static jsval_t js_decl(struct js *js, bool is_const) {
 obj_destruct_rest:;
         jsval_t rest_obj = mkobj(js, 0);
         if (is_err(rest_obj)) return rest_obj;
-        jsoff_t scan = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK | ARRMASK);
+        jsoff_t scan = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
         while (scan < js->brk && scan != 0) {
           jsoff_t koff = loadoff(js, scan + (jsoff_t) sizeof(scan));
           jsoff_t klen = offtolen(loadoff(js, koff));
@@ -8714,7 +8767,7 @@ obj_destruct_rest:;
             jsval_t res = setprop(js, rest_obj, key_str, val);
             if (is_err(res)) return res;
           }
-          scan = loadoff(js, scan) & ~(3U | CONSTMASK | ARRMASK);
+          scan = loadoff(js, scan) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
         }
         {
           const char *vn = &js->code[var_off];
@@ -9268,7 +9321,7 @@ static bool for_in_should_skip_key(struct js *js, jsval_t obj, const char *key, 
 
 static jsval_t for_in_iter_object(struct js *js, for_iter_ctx_t *ctx, jsval_t obj) {
   jsval_t iter_obj = (vtype(obj) == T_FUNC) ? mkval(T_OBJ, vdata(obj)) : obj;
-  jsoff_t prop_off = loadoff(js, (jsoff_t) vdata(iter_obj)) & ~(3U | CONSTMASK | ARRMASK);
+  jsoff_t prop_off = loadoff(js, (jsoff_t) vdata(iter_obj)) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   
   while (prop_off < js->brk && prop_off != 0) {
     jsoff_t koff = loadoff(js, prop_off + (jsoff_t) sizeof(prop_off));
@@ -9288,14 +9341,14 @@ static jsval_t for_in_iter_object(struct js *js, for_iter_ctx_t *ctx, jsval_t ob
       if (js->flags & F_RETURN) return v;
     }
     
-    prop_off = loadoff(js, prop_off) & ~(3U | CONSTMASK | ARRMASK);
+    prop_off = loadoff(js, prop_off) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   }
   
   return js_mkundef();
 }
 
 static jsval_t for_of_iter_array(struct js *js, for_iter_ctx_t *ctx, jsval_t iterable) {
-  jsoff_t next_prop = loadoff(js, (jsoff_t) vdata(iterable)) & ~(3U | CONSTMASK | ARRMASK);
+  jsoff_t next_prop = loadoff(js, (jsoff_t) vdata(iterable)) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   jsoff_t length = 0, scan = next_prop;
   
   while (scan < js->brk && scan != 0) {
@@ -9307,7 +9360,7 @@ static jsval_t for_of_iter_array(struct js *js, for_iter_ctx_t *ctx, jsval_t ite
       if (vtype(val) == T_NUM) length = (jsoff_t) tod(val);
       break;
     }
-    scan = loadoff(js, scan) & ~(3U | CONSTMASK | ARRMASK);
+    scan = loadoff(js, scan) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   }
   
   for (jsoff_t i = 0; i < length; i++) {
@@ -9325,7 +9378,7 @@ static jsval_t for_of_iter_array(struct js *js, for_iter_ctx_t *ctx, jsval_t ite
         val = loadval(js, prop + (jsoff_t) (sizeof(prop) + sizeof(koff)));
         break;
       }
-      prop = loadoff(js, prop) & ~(3U | CONSTMASK | ARRMASK);
+      prop = loadoff(js, prop) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
     }
     
     jsval_t err = for_iter_bind_var(js, ctx, val);
@@ -9550,7 +9603,7 @@ static jsval_t js_for(struct js *js) {
         iter_obj = mkval(T_OBJ, vdata(obj));
       }
       
-      jsoff_t prop_off = loadoff(js, (jsoff_t) vdata(iter_obj)) & ~(3U | CONSTMASK | ARRMASK);
+      jsoff_t prop_off = loadoff(js, (jsoff_t) vdata(iter_obj)) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
       
       while (prop_off < js->brk && prop_off != 0) {
         jsoff_t koff = loadoff(js, prop_off + (jsoff_t) sizeof(prop_off));
@@ -9624,7 +9677,7 @@ static jsval_t js_for(struct js *js) {
           }
         }
         
-        prop_off = loadoff(js, prop_off) & ~(3U | CONSTMASK | ARRMASK);
+        prop_off = loadoff(js, prop_off) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
       }
     }
     
@@ -11780,7 +11833,7 @@ static jsval_t builtin_function_bind(struct js *js, jsval_t *args, int nargs) {
     jsval_t bound_func = mkobj(js, 0);
     if (is_err(bound_func)) return bound_func;
     
-    setprop(js, bound_func, js_mkstr(js, "__native_func", 13), func);
+    set_slot(js, bound_func, SLOT_NATIVE_FUNC, func);
     setprop(js, bound_func, js_mkstr(js, "__bound_this", 12), this_arg);
     
     if (bound_argc > 0) {
@@ -13184,14 +13237,14 @@ static jsval_t builtin_object_keys(struct js *js, jsval_t *args, int nargs) {
   
   jsval_t arr = mkarr(js);
   jsoff_t idx = 0;
-  jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK | ARRMASK);
+  jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   
   while (next < js->brk && next != 0) {
     jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
     jsoff_t klen = offtolen(loadoff(js, koff));
     const char *key = (char *) &js->mem[koff + sizeof(koff)];
     
-    next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK);
+    next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
     if (is_internal_prop(key, klen)) continue;
     
     bool should_include = true;
@@ -13230,13 +13283,13 @@ static jsval_t builtin_object_keys(struct js *js, jsval_t *args, int nargs) {
     }
   }
   
-  next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK | ARRMASK);
+  next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   while (next < js->brk && next != 0) {
     jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
     jsoff_t klen = offtolen(loadoff(js, koff));
     const char *key = (char *) &js->mem[koff + sizeof(koff)];
     
-    next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK);
+    next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
     
     if (klen > 7 && key[0] == '_' && key[1] == '_' && key[2] == 'd' && 
         key[3] == 'e' && key[4] == 's' && key[5] == 'c' && key[6] == '_') {
@@ -13307,7 +13360,7 @@ static jsval_t builtin_object_values(struct js *js, jsval_t *args, int nargs) {
   
   jsval_t arr = mkarr(js);
   jsoff_t idx = 0;
-  jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK | ARRMASK);
+  jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   
   while (next < js->brk && next != 0) {
     jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
@@ -13315,7 +13368,7 @@ static jsval_t builtin_object_values(struct js *js, jsval_t *args, int nargs) {
     const char *key = (char *) &js->mem[koff + sizeof(koff)];
     jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
     
-    next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK);
+    next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
     if (is_internal_prop(key, klen)) continue;
     
     bool should_include = true;
@@ -13371,7 +13424,7 @@ static jsval_t builtin_object_entries(struct js *js, jsval_t *args, int nargs) {
   
   jsval_t arr = mkarr(js);
   jsoff_t idx = 0;
-  jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK | ARRMASK);
+  jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   
   while (next < js->brk && next != 0) {
     jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
@@ -13379,7 +13432,7 @@ static jsval_t builtin_object_entries(struct js *js, jsval_t *args, int nargs) {
     const char *key = (char *) &js->mem[koff + sizeof(koff)];
     jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
     
-    next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK);
+    next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
     
     if (is_internal_prop(key, klen)) continue;
     
@@ -13491,7 +13544,7 @@ static jsval_t builtin_object_create(struct js *js, jsval_t *args, int nargs) {
   
   if (nargs >= 2 && vtype(args[1]) == T_OBJ) {
     jsval_t props = args[1];
-    jsoff_t next = loadoff(js, (jsoff_t) vdata(props)) & ~(3U | CONSTMASK | ARRMASK);
+    jsoff_t next = loadoff(js, (jsoff_t) vdata(props)) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
     
     while (next < js->brk && next != 0) {
       jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
@@ -13508,7 +13561,7 @@ static jsval_t builtin_object_create(struct js *js, jsval_t *args, int nargs) {
         }
       }
       
-      next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK);
+      next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
     }
   }
   
@@ -13657,7 +13710,7 @@ static jsval_t builtin_object_defineProperty(struct js *js, jsval_t *args, int n
       if (!configurable) {
         jsoff_t head = (jsoff_t) vdata(as_obj);
         jsoff_t firstprop = loadoff(js, head);
-        if ((firstprop & ~(3U | CONSTMASK | ARRMASK)) == existing_off) {
+        if ((firstprop & ~(3U | CONSTMASK | ARRMASK | SLOTMASK)) == existing_off) {
           saveoff(js, head, firstprop | CONSTMASK);
         }
       }
@@ -13691,7 +13744,7 @@ static jsval_t builtin_object_defineProperties(struct js *js, jsval_t *args, int
   }
   
   jsval_t props_obj = props;
-  jsoff_t next = loadoff(js, (jsoff_t) vdata(props_obj)) & ~(3U | CONSTMASK | ARRMASK);
+  jsoff_t next = loadoff(js, (jsoff_t) vdata(props_obj)) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   
   while (next < js->brk && next != 0) {
     jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
@@ -13699,7 +13752,7 @@ static jsval_t builtin_object_defineProperties(struct js *js, jsval_t *args, int
     const char *key = (char *) &js->mem[koff + sizeof(koff)];
     jsval_t descriptor = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
     
-    next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK);
+    next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
     
     if (is_internal_prop(key, klen)) continue;
     
@@ -13736,7 +13789,7 @@ static jsval_t builtin_object_assign(struct js *js, jsval_t *args, int nargs) {
     if (st != T_OBJ && st != T_ARR && st != T_FUNC) continue;
     
     jsval_t src_obj = (st == T_OBJ) ? source : mkval(T_OBJ, vdata(source));
-    jsoff_t next = loadoff(js, (jsoff_t) vdata(src_obj)) & ~(3U | CONSTMASK | ARRMASK);
+    jsoff_t next = loadoff(js, (jsoff_t) vdata(src_obj)) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
     
     while (next < js->brk && next != 0) {
       jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
@@ -13744,7 +13797,7 @@ static jsval_t builtin_object_assign(struct js *js, jsval_t *args, int nargs) {
       const char *key = (char *) &js->mem[koff + sizeof(koff)];
       jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
       
-      next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK);
+      next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
       if (is_internal_prop(key, klen)) continue;
       
       bool should_copy = true;
@@ -13783,7 +13836,7 @@ static jsval_t builtin_object_freeze(struct js *js, jsval_t *args, int nargs) {
   jsval_t as_obj = (t == T_OBJ) ? obj : mkval(T_OBJ, vdata(obj));
   
   js->has_descriptors = true;
-  jsoff_t next = loadoff(js, (jsoff_t) vdata(as_obj)) & ~(3U | CONSTMASK | ARRMASK);
+  jsoff_t next = loadoff(js, (jsoff_t) vdata(as_obj)) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   
   while (next < js->brk && next != 0) {
     jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
@@ -13791,17 +13844,17 @@ static jsval_t builtin_object_freeze(struct js *js, jsval_t *args, int nargs) {
     const char *key = (char *) &js->mem[koff + sizeof(koff)];
     
     jsoff_t cur_prop = next;
-    next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK);
+    next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
     
     if (is_internal_prop(key, klen)) continue;
     
     jsoff_t head = (jsoff_t) vdata(as_obj);
     jsoff_t firstprop = loadoff(js, head);
-    if ((firstprop & ~(3U | CONSTMASK | ARRMASK)) == cur_prop) {
+    if ((firstprop & ~(3U | CONSTMASK | ARRMASK | SLOTMASK)) == cur_prop) {
       saveoff(js, head, firstprop | CONSTMASK);
     } else {
       jsoff_t prev = head;
-      jsoff_t scan = firstprop & ~(3U | CONSTMASK | ARRMASK);
+      jsoff_t scan = firstprop & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
       while (scan < js->brk && scan != 0) {
         if (scan == cur_prop) {
           jsoff_t prev_val = loadoff(js, prev);
@@ -13809,7 +13862,7 @@ static jsval_t builtin_object_freeze(struct js *js, jsval_t *args, int nargs) {
           break;
         }
         prev = scan;
-        scan = loadoff(js, scan) & ~(3U | CONSTMASK | ARRMASK);
+        scan = loadoff(js, scan) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
       }
     }
     
@@ -13864,14 +13917,14 @@ static jsval_t builtin_object_seal(struct js *js, jsval_t *args, int nargs) {
   jsval_t as_obj = (t == T_OBJ) ? obj : mkval(T_OBJ, vdata(obj));
   
   setprop(js, as_obj, js_mkstr(js, "__sealed__", 10), js_mktrue());
-  jsoff_t next = loadoff(js, (jsoff_t) vdata(as_obj)) & ~(3U | CONSTMASK | ARRMASK);
+  jsoff_t next = loadoff(js, (jsoff_t) vdata(as_obj)) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   
   while (next < js->brk && next != 0) {
     jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
     jsoff_t klen = offtolen(loadoff(js, koff));
     const char *key = (char *) &js->mem[koff + sizeof(koff)];
     
-    next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK);
+    next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
     
     if (is_internal_prop(key, klen)) continue;
     
@@ -14064,14 +14117,14 @@ static jsval_t builtin_object_getOwnPropertyNames(struct js *js, jsval_t *args, 
   
   jsval_t arr = mkarr(js);
   jsoff_t idx = 0;
-  jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK | ARRMASK);
+  jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   
   while (next < js->brk && next != 0) {
     jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
     jsoff_t klen = offtolen(loadoff(js, koff));
     const char *key = (char *) &js->mem[koff + sizeof(koff)];
     
-    next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK);
+    next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
     
     if (is_internal_prop(key, klen)) continue;
     
@@ -18006,7 +18059,7 @@ static jsval_t builtin_trigger_handler_wrapper(struct js *js, jsval_t *args, int
 
 static void trigger_handlers(struct js *js, jsval_t p) {
   jsval_t wrapper_obj = mkobj(js, 0);
-  setprop(js, wrapper_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_trigger_handler_wrapper));
+  set_slot(js, wrapper_obj, SLOT_NATIVE_FUNC, js_mkfun(builtin_trigger_handler_wrapper));
   setprop(js, wrapper_obj, js_mkstr(js, "promise", 7), p);
   jsval_t wrapper_fn = mkval(T_FUNC, vdata(wrapper_obj));
   queue_microtask(js, wrapper_fn);
@@ -18085,12 +18138,12 @@ static void resolve_promise(struct js *js, jsval_t p, jsval_t val) {
         return;
      }
      jsval_t res_obj = mkobj(js, 0);
-     setprop(js, res_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_resolve_internal));
+     set_slot(js, res_obj, SLOT_NATIVE_FUNC, js_mkfun(builtin_resolve_internal));
      setprop(js, res_obj, js_mkstr(js, "promise", 7), p);
      jsval_t res_fn = mkval(T_FUNC, vdata(res_obj));
      
      jsval_t rej_obj = mkobj(js, 0);
-     setprop(js, rej_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_reject_internal));
+     set_slot(js, rej_obj, SLOT_NATIVE_FUNC, js_mkfun(builtin_reject_internal));
      setprop(js, rej_obj, js_mkstr(js, "promise", 7), p);
      jsval_t rej_fn = mkval(T_FUNC, vdata(rej_obj));
      
@@ -18143,16 +18196,16 @@ static jsval_t builtin_promise_executor_wrapper(struct js *js, jsval_t *args, in
 static jsval_t builtin_Promise(struct js *js, jsval_t *args, int nargs) {
   jsval_t p = mkpromise(js);
   jsval_t res_obj = mkobj(js, 0);
-  setprop(js, res_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_resolve_internal));
+  set_slot(js, res_obj, SLOT_NATIVE_FUNC, js_mkfun(builtin_resolve_internal));
   setprop(js, res_obj, js_mkstr(js, "promise", 7), p);
   jsval_t res_fn = mkval(T_FUNC, vdata(res_obj));
   jsval_t rej_obj = mkobj(js, 0);
-  setprop(js, rej_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_reject_internal));
+  set_slot(js, rej_obj, SLOT_NATIVE_FUNC, js_mkfun(builtin_reject_internal));
   setprop(js, rej_obj, js_mkstr(js, "promise", 7), p);
   jsval_t rej_fn = mkval(T_FUNC, vdata(rej_obj));
   if (nargs > 0) {
      jsval_t wrapper_obj = mkobj(js, 0);
-     setprop(js, wrapper_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_promise_executor_wrapper));
+     set_slot(js, wrapper_obj, SLOT_NATIVE_FUNC, js_mkfun(builtin_promise_executor_wrapper));
      setprop(js, wrapper_obj, js_mkstr(js, "executor", 8), args[0]);
      setprop(js, wrapper_obj, js_mkstr(js, "resolve", 7), res_fn);
      setprop(js, wrapper_obj, js_mkstr(js, "reject", 6), rej_fn);
@@ -18339,13 +18392,13 @@ static jsval_t builtin_Promise_all(struct js *js, jsval_t *args, int nargs) {
     }
     
     jsval_t resolve_obj = mkobj(js, 0);
-    setprop(js, resolve_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_Promise_all_resolve_handler));
+    set_slot(js, resolve_obj, SLOT_NATIVE_FUNC, js_mkfun(builtin_Promise_all_resolve_handler));
     setprop(js, resolve_obj, js_mkstr(js, "index", 5), tov((double)i));
     setprop(js, resolve_obj, js_mkstr(js, "tracker", 7), tracker);
     jsval_t resolve_fn = mkval(T_FUNC, vdata(resolve_obj));
     
     jsval_t reject_obj = mkobj(js, 0);
-    setprop(js, reject_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_Promise_all_reject_handler));
+    set_slot(js, reject_obj, SLOT_NATIVE_FUNC, js_mkfun(builtin_Promise_all_reject_handler));
     setprop(js, reject_obj, js_mkstr(js, "tracker", 7), tracker);
     jsval_t reject_fn = mkval(T_FUNC, vdata(reject_obj));
     
@@ -18374,12 +18427,12 @@ static jsval_t builtin_Promise_race(struct js *js, jsval_t *args, int nargs) {
   jsval_t result_promise = mkpromise(js);
   
   jsval_t resolve_obj = mkobj(js, 0);
-  setprop(js, resolve_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_resolve_internal));
+  set_slot(js, resolve_obj, SLOT_NATIVE_FUNC, js_mkfun(builtin_resolve_internal));
   setprop(js, resolve_obj, js_mkstr(js, "promise", 7), result_promise);
   jsval_t resolve_fn = mkval(T_FUNC, vdata(resolve_obj));
   
   jsval_t reject_obj = mkobj(js, 0);
-  setprop(js, reject_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_reject_internal));
+  set_slot(js, reject_obj, SLOT_NATIVE_FUNC, js_mkfun(builtin_reject_internal));
   setprop(js, reject_obj, js_mkstr(js, "promise", 7), result_promise);
   jsval_t reject_fn = mkval(T_FUNC, vdata(reject_obj));
   
@@ -20093,7 +20146,7 @@ static jsval_t builtin_Proxy_revocable(struct js *js, jsval_t *args, int nargs) 
   if (is_err(proxy)) return proxy;
   
   jsval_t revoke_obj = mkobj(js, 0);
-  setprop(js, revoke_obj, js_mkstr(js, "__native_func", 13), js_mkfun(proxy_revoke_fn));
+  set_slot(js, revoke_obj, SLOT_NATIVE_FUNC, js_mkfun(proxy_revoke_fn));
   setprop(js, revoke_obj, js_mkstr(js, "__proxy_ref__", 13), proxy);
   
   jsval_t revoke_func = mkval(T_FUNC, vdata(revoke_obj));
@@ -20544,7 +20597,7 @@ struct js *js_create(void *buf, size_t len) {
   
   jsval_t func_ctor_obj = mkobj(js, 0);
   set_proto(js, func_ctor_obj, function_proto);
-  setprop(js, func_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_Function));
+  set_slot(js, func_ctor_obj, SLOT_NATIVE_FUNC, js_mkfun(builtin_Function));
   setprop_nonconfigurable(js, func_ctor_obj, "prototype", 9, function_proto);
   setprop(js, func_ctor_obj, js_mkstr(js, "length", 6), tov(1.0));
 
@@ -20556,7 +20609,7 @@ struct js *js_create(void *buf, size_t len) {
   
   jsval_t str_ctor_obj = mkobj(js, 0);
   set_proto(js, str_ctor_obj, function_proto);
-  setprop(js, str_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_String));
+  set_slot(js, str_ctor_obj, SLOT_NATIVE_FUNC, js_mkfun(builtin_String));
   setprop_nonconfigurable(js, str_ctor_obj, "prototype", 9, string_proto);
   setprop(js, str_ctor_obj, js_mkstr(js, "fromCharCode", 12), js_mkfun(builtin_string_fromCharCode));
   setprop(js, str_ctor_obj, js_mkstr(js, "fromCodePoint", 13), js_mkfun(builtin_string_fromCodePoint));
@@ -20565,7 +20618,7 @@ struct js *js_create(void *buf, size_t len) {
   jsval_t number_ctor_obj = mkobj(js, 0);
   set_proto(js, number_ctor_obj, function_proto);
   
-  setprop(js, number_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_Number));
+  set_slot(js, number_ctor_obj, SLOT_NATIVE_FUNC, js_mkfun(builtin_Number));
   setprop(js, number_ctor_obj, js_mkstr(js, "isNaN", 5), js_mkfun(builtin_Number_isNaN));
   setprop(js, number_ctor_obj, js_mkstr(js, "isFinite", 8), js_mkfun(builtin_Number_isFinite));
   setprop(js, number_ctor_obj, js_mkstr(js, "isInteger", 9), js_mkfun(builtin_Number_isInteger));
@@ -20585,13 +20638,13 @@ struct js *js_create(void *buf, size_t len) {
   
   jsval_t bool_ctor_obj = mkobj(js, 0);
   set_proto(js, bool_ctor_obj, function_proto);
-  setprop(js, bool_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_Boolean));
+  set_slot(js, bool_ctor_obj, SLOT_NATIVE_FUNC, js_mkfun(builtin_Boolean));
   setprop_nonconfigurable(js, bool_ctor_obj, "prototype", 9, boolean_proto);
   setprop(js, glob, js_mkstr(js, "Boolean", 7), mkval(T_FUNC, vdata(bool_ctor_obj)));
   
   jsval_t arr_ctor_obj = mkobj(js, 0);
   set_proto(js, arr_ctor_obj, function_proto);
-  setprop(js, arr_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_Array));
+  set_slot(js, arr_ctor_obj, SLOT_NATIVE_FUNC, js_mkfun(builtin_Array));
   setprop_nonconfigurable(js, arr_ctor_obj, "prototype", 9, array_proto);
   setprop(js, arr_ctor_obj, js_mkstr(js, "isArray", 7), js_mkfun(builtin_Array_isArray));
   setprop(js, arr_ctor_obj, js_mkstr(js, "from", 4), js_mkfun(builtin_Array_from));
@@ -20601,91 +20654,91 @@ struct js *js_create(void *buf, size_t len) {
 
   jsval_t map_ctor_obj = mkobj(js, 0);
   set_proto(js, map_ctor_obj, function_proto);
-  setprop(js, map_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_Map));
+  set_slot(js, map_ctor_obj, SLOT_NATIVE_FUNC, js_mkfun(builtin_Map));
   setprop_nonconfigurable(js, map_ctor_obj, "prototype", 9, map_proto);
   setprop(js, glob, js_mkstr(js, "Map", 3), mkval(T_FUNC, vdata(map_ctor_obj)));
   
   jsval_t set_ctor_obj = mkobj(js, 0);
   set_proto(js, set_ctor_obj, function_proto);
-  setprop(js, set_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_Set));
+  set_slot(js, set_ctor_obj, SLOT_NATIVE_FUNC, js_mkfun(builtin_Set));
   setprop_nonconfigurable(js, set_ctor_obj, "prototype", 9, set_proto_obj);
   setprop(js, glob, js_mkstr(js, "Set", 3), mkval(T_FUNC, vdata(set_ctor_obj)));
   
   jsval_t weakmap_ctor_obj = mkobj(js, 0);
   set_proto(js, weakmap_ctor_obj, function_proto);
-  setprop(js, weakmap_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_WeakMap));
+  set_slot(js, weakmap_ctor_obj, SLOT_NATIVE_FUNC, js_mkfun(builtin_WeakMap));
   setprop_nonconfigurable(js, weakmap_ctor_obj, "prototype", 9, weakmap_proto);
   setprop(js, glob, js_mkstr(js, "WeakMap", 7), mkval(T_FUNC, vdata(weakmap_ctor_obj)));
   
   jsval_t weakset_ctor_obj = mkobj(js, 0);
   set_proto(js, weakset_ctor_obj, function_proto);
-  setprop(js, weakset_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_WeakSet));
+  set_slot(js, weakset_ctor_obj, SLOT_NATIVE_FUNC, js_mkfun(builtin_WeakSet));
   setprop_nonconfigurable(js, weakset_ctor_obj, "prototype", 9, weakset_proto);
   setprop(js, glob, js_mkstr(js, "WeakSet", 7), mkval(T_FUNC, vdata(weakset_ctor_obj)));
   
   jsval_t proxy_ctor_obj = mkobj(js, 0);
   set_proto(js, proxy_ctor_obj, function_proto);
-  setprop(js, proxy_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_Proxy));
+  set_slot(js, proxy_ctor_obj, SLOT_NATIVE_FUNC, js_mkfun(builtin_Proxy));
   setprop(js, proxy_ctor_obj, js_mkstr(js, "revocable", 9), js_mkfun(builtin_Proxy_revocable));
   setprop(js, glob, js_mkstr(js, "Proxy", 5), mkval(T_FUNC, vdata(proxy_ctor_obj)));
   
   jsval_t err_ctor_obj = mkobj(js, 0);
   set_proto(js, err_ctor_obj, function_proto);
-  setprop(js, err_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_Error));
+  set_slot(js, err_ctor_obj, SLOT_NATIVE_FUNC, js_mkfun(builtin_Error));
   setprop_nonconfigurable(js, err_ctor_obj, "prototype", 9, error_proto);
   setprop(js, glob, js_mkstr(js, "Error", 5), mkval(T_FUNC, vdata(err_ctor_obj)));
   
   jsval_t evalerr_ctor_obj = mkobj(js, 0);
   set_proto(js, evalerr_ctor_obj, function_proto);
-  setprop(js, evalerr_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_EvalError));
+  set_slot(js, evalerr_ctor_obj, SLOT_NATIVE_FUNC, js_mkfun(builtin_EvalError));
   setprop_nonconfigurable(js, evalerr_ctor_obj, "prototype", 9, evalerror_proto);
   setprop(js, glob, js_mkstr(js, "EvalError", 9), mkval(T_FUNC, vdata(evalerr_ctor_obj)));
   
   jsval_t rangeerr_ctor_obj = mkobj(js, 0);
   set_proto(js, rangeerr_ctor_obj, function_proto);
-  setprop(js, rangeerr_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_RangeError));
+  set_slot(js, rangeerr_ctor_obj, SLOT_NATIVE_FUNC, js_mkfun(builtin_RangeError));
   setprop_nonconfigurable(js, rangeerr_ctor_obj, "prototype", 9, rangeerror_proto);
   setprop(js, glob, js_mkstr(js, "RangeError", 10), mkval(T_FUNC, vdata(rangeerr_ctor_obj)));
   
   jsval_t referr_ctor_obj = mkobj(js, 0);
   set_proto(js, referr_ctor_obj, function_proto);
-  setprop(js, referr_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_ReferenceError));
+  set_slot(js, referr_ctor_obj, SLOT_NATIVE_FUNC, js_mkfun(builtin_ReferenceError));
   setprop_nonconfigurable(js, referr_ctor_obj, "prototype", 9, referenceerror_proto);
   setprop(js, glob, js_mkstr(js, "ReferenceError", 14), mkval(T_FUNC, vdata(referr_ctor_obj)));
   
   jsval_t syntaxerr_ctor_obj = mkobj(js, 0);
   set_proto(js, syntaxerr_ctor_obj, function_proto);
-  setprop(js, syntaxerr_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_SyntaxError));
+  set_slot(js, syntaxerr_ctor_obj, SLOT_NATIVE_FUNC, js_mkfun(builtin_SyntaxError));
   setprop_nonconfigurable(js, syntaxerr_ctor_obj, "prototype", 9, syntaxerror_proto);
   setprop(js, glob, js_mkstr(js, "SyntaxError", 11), mkval(T_FUNC, vdata(syntaxerr_ctor_obj)));
   
   jsval_t typeerr_ctor_obj = mkobj(js, 0);
   set_proto(js, typeerr_ctor_obj, function_proto);
-  setprop(js, typeerr_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_TypeError));
+  set_slot(js, typeerr_ctor_obj, SLOT_NATIVE_FUNC, js_mkfun(builtin_TypeError));
   setprop_nonconfigurable(js, typeerr_ctor_obj, "prototype", 9, typeerror_proto);
   setprop(js, glob, js_mkstr(js, "TypeError", 9), mkval(T_FUNC, vdata(typeerr_ctor_obj)));
   
   jsval_t urierr_ctor_obj = mkobj(js, 0);
   set_proto(js, urierr_ctor_obj, function_proto);
-  setprop(js, urierr_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_URIError));
+  set_slot(js, urierr_ctor_obj, SLOT_NATIVE_FUNC, js_mkfun(builtin_URIError));
   setprop_nonconfigurable(js, urierr_ctor_obj, "prototype", 9, urierror_proto);
   setprop(js, glob, js_mkstr(js, "URIError", 8), mkval(T_FUNC, vdata(urierr_ctor_obj)));
   
   jsval_t internerr_ctor_obj = mkobj(js, 0);
   set_proto(js, internerr_ctor_obj, function_proto);
-  setprop(js, internerr_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_InternalError));
+  set_slot(js, internerr_ctor_obj, SLOT_NATIVE_FUNC, js_mkfun(builtin_InternalError));
   setprop_nonconfigurable(js, internerr_ctor_obj, "prototype", 9, internalerror_proto);
   setprop(js, glob, js_mkstr(js, "InternalError", 13), mkval(T_FUNC, vdata(internerr_ctor_obj)));
   
   jsval_t regex_ctor_obj = mkobj(js, 0);
   set_proto(js, regex_ctor_obj, function_proto);
-  setprop(js, regex_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_RegExp));
+  set_slot(js, regex_ctor_obj, SLOT_NATIVE_FUNC, js_mkfun(builtin_RegExp));
   setprop_nonconfigurable(js, regex_ctor_obj, "prototype", 9, regexp_proto);
   setprop(js, glob, js_mkstr(js, "RegExp", 6), mkval(T_FUNC, vdata(regex_ctor_obj)));
   
   jsval_t date_ctor_obj = mkobj(js, 0);
   set_proto(js, date_ctor_obj, function_proto);
-  setprop(js, date_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_Date));
+  set_slot(js, date_ctor_obj, SLOT_NATIVE_FUNC, js_mkfun(builtin_Date));
   setprop(js, date_ctor_obj, js_mkstr(js, "now", 3), js_mkfun(builtin_Date_now));
   setprop(js, date_ctor_obj, js_mkstr(js, "UTC", 3), js_mkfun(builtin_Date_UTC));
   setprop_nonconfigurable(js, date_ctor_obj, "prototype", 9, date_proto);
@@ -20693,7 +20746,7 @@ struct js *js_create(void *buf, size_t len) {
   
   jsval_t p_ctor_obj = mkobj(js, 0);
   set_proto(js, p_ctor_obj, function_proto);
-  setprop(js, p_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_Promise));
+  set_slot(js, p_ctor_obj, SLOT_NATIVE_FUNC, js_mkfun(builtin_Promise));
   setprop(js, p_ctor_obj, js_mkstr(js, "resolve", 7), js_mkfun(builtin_Promise_resolve));
   setprop(js, p_ctor_obj, js_mkstr(js, "reject", 6), js_mkfun(builtin_Promise_reject));
   setprop(js, p_ctor_obj, js_mkstr(js, "try", 3), js_mkfun(builtin_Promise_try));
@@ -20704,7 +20757,7 @@ struct js *js_create(void *buf, size_t len) {
   
   jsval_t bigint_ctor_obj = mkobj(js, 0);
   set_proto(js, bigint_ctor_obj, function_proto);
-  setprop(js, bigint_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_BigInt));
+  set_slot(js, bigint_ctor_obj, SLOT_NATIVE_FUNC, js_mkfun(builtin_BigInt));
   setprop(js, bigint_ctor_obj, js_mkstr(js, "asIntN", 6), js_mkfun(builtin_BigInt_asIntN));
   setprop(js, bigint_ctor_obj, js_mkstr(js, "asUintN", 7), js_mkfun(builtin_BigInt_asUintN));
   setprop_nonconfigurable(js, bigint_ctor_obj, "prototype", 9, bigint_proto);
@@ -20771,7 +20824,7 @@ struct js *js_create(void *buf, size_t len) {
   jsval_t import_obj = mkobj(js, 0);
   set_proto(js, import_obj, function_proto);
   
-  setprop(js, import_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_import));
+  set_slot(js, import_obj, SLOT_NATIVE_FUNC, js_mkfun(builtin_import));
   setprop(js, glob, js_mkstr(js, "import", 6), mkval(T_FUNC, vdata(import_obj)));
   setprop(js, glob, js_mkstr(js, "__esm_module_scope", 18), js_mkundef());
   
@@ -20983,7 +21036,7 @@ char *js_getstr(struct js *js, jsval_t value, size_t *len) {
 
 void js_merge_obj(struct js *js, jsval_t dst, jsval_t src) {
   if (vtype(dst) != T_OBJ || vtype(src) != T_OBJ) return;
-  jsoff_t next = loadoff(js, (jsoff_t) vdata(src)) & ~(3U | CONSTMASK | ARRMASK);
+  jsoff_t next = loadoff(js, (jsoff_t) vdata(src)) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   while (next < js->brk && next != 0) {
     jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
     jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
@@ -20991,7 +21044,7 @@ void js_merge_obj(struct js *js, jsval_t dst, jsval_t src) {
     
     char *key = (char *) &js->mem[koff + sizeof(koff)];
     setprop(js, dst, js_mkstr(js, key, klen), val);
-    next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK);
+    next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   }
 }
 
@@ -21096,20 +21149,17 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
     return fn(js, args, nargs);
   } else if (vtype(func) == T_FUNC) {
     jsval_t func_obj = mkval(T_OBJ, vdata(func));
-    jsoff_t native_off = lkp_interned(js, func_obj, INTERN_NATIVE_FUNC, 13);
-    if (native_off != 0) {
-      jsval_t native_val = resolveprop(js, mkval(T_PROP, native_off));
-      if (vtype(native_val) == T_CFUNC) {
-        jsval_t saved_func = js->current_func;
-        jsval_t saved_this = js->this_val;
-        js->current_func = func;
-        if (use_bound_this) js->this_val = bound_this;
-        jsval_t (*fn)(struct js *, jsval_t *, int) = (jsval_t(*)(struct js *, jsval_t *, int)) vdata(native_val);
-        jsval_t res = fn(js, args, nargs);
-        js->current_func = saved_func;
-        js->this_val = saved_this;
-        return res;
-      }
+    jsval_t native_val = get_slot(js, func_obj, SLOT_NATIVE_FUNC);
+    if (vtype(native_val) == T_CFUNC) {
+      jsval_t saved_func = js->current_func;
+      jsval_t saved_this = js->this_val;
+      js->current_func = func;
+      if (use_bound_this) js->this_val = bound_this;
+      jsval_t (*fn)(struct js *, jsval_t *, int) = (jsval_t(*)(struct js *, jsval_t *, int)) vdata(native_val);
+      jsval_t res = fn(js, args, nargs);
+      js->current_func = saved_func;
+      js->this_val = saved_this;
+      return res;
     }
     jsoff_t code_off = lkp_interned(js, func_obj, INTERN_CODE, 6);
     
@@ -21232,7 +21282,7 @@ js_prop_iter_t js_prop_iter_begin(struct js *js, jsval_t obj) {
   
   if (vtype(obj) == T_OBJ || vtype(obj) == T_ARR || vtype(obj) == T_FUNC) {
     jsval_t check_obj = (vtype(obj) == T_FUNC) ? mkval(T_OBJ, vdata(obj)) : obj;
-    jsoff_t next = loadoff(js, (jsoff_t) vdata(check_obj)) & ~(3U | CONSTMASK | ARRMASK);
+    jsoff_t next = loadoff(js, (jsoff_t) vdata(check_obj)) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
     iter.current = (void *)(uintptr_t)next;
   }
   
@@ -21258,7 +21308,7 @@ bool js_prop_iter_next(js_prop_iter_t *iter, const char **key, size_t *key_len, 
   
   if (value) *value = val;
   
-  iter->current = (void *)(uintptr_t)(loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK));
+  iter->current = (void *)(uintptr_t)(loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK));
   return true;
 }
 
