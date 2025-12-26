@@ -424,16 +424,14 @@ static const uint8_t prec_table[TOK_MAX] = {
 enum {
   T_OBJ, T_PROP, T_STR, T_UNDEF, T_NULL, T_NUM,
   T_BOOL, T_FUNC, T_CODEREF, T_CFUNC, T_ERR, T_ARR,
-  T_PROMISE, T_TYPEDARRAY, T_BIGINT, T_PROPREF
+  T_PROMISE, T_TYPEDARRAY, T_BIGINT, T_PROPREF, T_SYMBOL, T_GENERATOR
 };
 
 static const char *typestr_raw(uint8_t t) {
-  if (t == PRIV_SYMBOL) return "symbol";
-  
   const char *names[] = { 
     "object", "prop", "string", "undefined", "null", "number",
     "boolean", "function", "coderef", "cfunc", "err", "array", 
-    "promise", "typedarray", "bigint", "propref"
+    "promise", "typedarray", "bigint", "propref", "symbol", "generator"
   };
   
   return (t < sizeof(names) / sizeof(names[0])) ? names[t] : "??";
@@ -441,7 +439,20 @@ static const char *typestr_raw(uint8_t t) {
 
 static jsval_t tov(double d) { union { double d; jsval_t v; } u = {d}; return u.v; }
 static double tod(jsval_t v) { union { jsval_t v; double d; } u = {v}; return u.d; }
-size_t vdata(jsval_t v) { return (size_t) (v & ~((jsval_t) 0x7fffUL << 48U)); }
+
+#define NANBOX_PREFIX     0x7FC0000000000000ULL
+#define NANBOX_PREFIX_CHK 0x3FEULL
+#define NANBOX_TYPE_SHIFT 48
+#define NANBOX_TYPE_MASK  0x1F
+#define NANBOX_DATA_MASK  0x0000FFFFFFFFFFFFULL
+
+static bool is_tagged(jsval_t v) {
+  return (v >> 53) == NANBOX_PREFIX_CHK;
+}
+
+size_t vdata(jsval_t v) { 
+  return (size_t)(v & NANBOX_DATA_MASK); 
+}
 
 static jsoff_t coderefoff(jsval_t v) { return v & 0xffffffU; }
 static jsoff_t codereflen(jsval_t v) { return (v >> 24U) & 0xffffffU; }
@@ -454,13 +465,6 @@ static jsoff_t align32(jsoff_t v) { return ((v + 3) >> 2) << 2; }
 static void saveoff(struct js *js, jsoff_t off, jsoff_t val) { memcpy(&js->mem[off], &val, sizeof(val)); }
 static void saveval(struct js *js, jsoff_t off, jsval_t val) { memcpy(&js->mem[off], &val, sizeof(val)); }
 
-static bool is_nan(jsval_t v) { 
-  if ((v >> 52U) != 0x7feU) return false;
-  // real doubles in 0x7FE range have large mantissa values
-  // tagged values have small memory offsets, so upper data bits are 0
-  return (v & 0xf00000000000UL) == 0;
-}
-
 static const char *typestr(uint8_t t) {
   if (t == T_CFUNC) return "function";
   if (t == T_ARR) return "object";
@@ -469,11 +473,11 @@ static const char *typestr(uint8_t t) {
 }
 
 uint8_t vtype(jsval_t v) { 
-  return is_nan(v) ? ((v >> 48U) & 15U) : (uint8_t) T_NUM; 
+  return is_tagged(v) ? ((v >> NANBOX_TYPE_SHIFT) & NANBOX_TYPE_MASK) : (uint8_t)T_NUM; 
 }
 
 static jsval_t mkval(uint8_t type, uint64_t data) { 
-  return ((jsval_t) 0x7fe0U << 48U) | ((jsval_t) (type) << 48) | (data & 0xffffffffffffUL); 
+  return NANBOX_PREFIX | ((jsval_t)(type & NANBOX_TYPE_MASK) << NANBOX_TYPE_SHIFT) | (data & NANBOX_DATA_MASK);
 }
 
 jsval_t js_obj_to_func(jsval_t obj) {
@@ -3182,22 +3186,55 @@ static jsval_t setprop_nonconfigurable(struct js *js, jsval_t obj, const char *k
 }
 
 jsval_t js_mksym(struct js *js, const char *desc) {
-  jsval_t sym_obj = mkobj(js, 0);
   uint64_t id = ++js->symbol_counter;
-  setprop(js, sym_obj, js_mkstr(js, "__sym__", 7), mkval(T_BOOL, 1));
-  setprop(js, sym_obj, js_mkstr(js, "__sym_id", 8), tov((double)id));
-  if (desc) {
-    setprop(js, sym_obj, js_mkstr(js, "description", 11), js_mkstr(js, desc, strlen(desc)));
-  } else {
-    setprop(js, sym_obj, js_mkstr(js, "description", 11), mkval(T_UNDEF, 0));
+  jsoff_t desc_off = 0;
+  if (desc && *desc) {
+    jsval_t desc_str = js_mkstr(js, desc, strlen(desc));
+    desc_off = (jsoff_t)vdata(desc_str);
   }
-  return sym_obj;
+  uint64_t payload = ((id & 0xFFFFFFULL) << 24) | (desc_off & 0xFFFFFFULL);
+  return mkval(T_SYMBOL, payload);
 }
 
 static bool is_symbol(struct js *js, jsval_t v) {
-  if (vtype(v) != T_OBJ) return false;
-  jsoff_t off = lkp(js, v, "__sym__", 7);
-  return off != 0;
+  (void)js;
+  return vtype(v) == T_SYMBOL;
+}
+
+static uint64_t sym_get_id(jsval_t v) {
+  return (vdata(v) >> 24) & 0xFFFFFFULL;
+}
+
+static jsoff_t sym_get_desc_off(jsval_t v) {
+  return vdata(v) & 0xFFFFFFULL;
+}
+
+static const char *sym_get_desc(struct js *js, jsval_t v) {
+  jsoff_t off = sym_get_desc_off(v);
+  if (off == 0) return NULL;
+  return (const char *)&js->mem[off + sizeof(jsoff_t)];
+}
+
+uint64_t js_sym_id(jsval_t sym) {
+  return sym_get_id(sym);
+}
+
+jsval_t js_mksym_for(struct js *js, const char *key) {
+  (void)js;
+  const char *interned = intern_string(key, strlen(key));
+  uint64_t id = (uint64_t)(uintptr_t)interned;
+  return mkval(T_SYMBOL, id | (1ULL << 47));
+}
+
+const char *js_sym_key(jsval_t sym) {
+  if (vtype(sym) != T_SYMBOL) return NULL;
+  uint64_t data = vdata(sym);
+  if (!(data & (1ULL << 47))) return NULL;
+  return (const char *)(uintptr_t)(data & ~(1ULL << 47));
+}
+
+const char *js_sym_desc(struct js *js, jsval_t sym) {
+  return sym_get_desc(js, sym);
 }
 
 static inline jsoff_t esize(jsoff_t w) {
@@ -4718,9 +4755,8 @@ static jsval_t do_bracket_op(struct js *js, jsval_t l, jsval_t r) {
     jsoff_t off = vstr(js, key_val, &slen);
     keystr = (char *) &js->mem[off];
     keylen = slen;
-  } else if (vtype(key_val) == T_OBJ && is_symbol(js, key_val)) {
-    jsval_t sym_id = resolveprop(js, mkval(T_PROP, lkp(js, key_val, "__sym_id", 8)));
-    snprintf(keybuf, sizeof(keybuf), "__sym_%.0f__", tod(sym_id));
+  } else if (vtype(key_val) == T_SYMBOL) {
+    snprintf(keybuf, sizeof(keybuf), "__sym_%llu__", (unsigned long long)sym_get_id(key_val));
     keystr = keybuf;
     keylen = strlen(keybuf);
   } else {
@@ -4876,6 +4912,15 @@ static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
     jsoff_t off = lkp_proto(js, l, ptr, plen);
     if (off != 0) return resolveprop(js, mkval(T_PROP, off));
     if (streq(ptr, plen, "name", 4)) return js_mkstr(js, "", 0);
+    return js_mkundef();
+  }
+  
+  if (t == T_SYMBOL) {
+    if (streq(ptr, plen, "description", 11)) {
+      const char *desc = sym_get_desc(js, l);
+      if (desc) return js_mkstr(js, desc, strlen(desc));
+      return js_mkundef();
+    }
     return js_mkundef();
   }
   
@@ -6060,7 +6105,7 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
   
   switch (op) {
     case TOK_TYPEOF: {
-      const char *ts = (vtype(r) == T_OBJ && is_symbol(js, r)) ? "symbol" : typestr(vtype(r));
+      const char *ts = typestr(vtype(r));
       return js_mkstr(js, ts, strlen(ts));
     }
     case TOK_VOID:           return js_mkundef();
@@ -7058,15 +7103,9 @@ static jsval_t js_obj_literal(struct js *js) {
         jsval_t resolved_key = resolveprop(js, key_expr);
         if (vtype(resolved_key) == T_STR) {
           key = resolved_key;
-        } else if (vtype(resolved_key) == T_OBJ && is_symbol(js, resolved_key)) {
+        } else if (vtype(resolved_key) == T_SYMBOL) {
           char buf[64];
-          jsoff_t sym_id_off = lkp(js, resolved_key, "__sym_id", 8);
-          if (sym_id_off) {
-            jsval_t sym_id = loadval(js, sym_id_off + sizeof(jsoff_t) * 2);
-            snprintf(buf, sizeof(buf), "__sym_%.0f__", tod(sym_id));
-          } else {
-            snprintf(buf, sizeof(buf), "__sym_0__");
-          }
+          snprintf(buf, sizeof(buf), "__sym_%llu__", (unsigned long long)sym_get_id(resolved_key));
           key = js_mkstr(js, buf, strlen(buf));
         } else {
           char buf[64];
@@ -20965,6 +21004,7 @@ int js_type(jsval_t val) {
     case T_NUM:     return JS_NUM;
     case T_ERR:     return JS_ERR;
     case T_PROMISE: return JS_PROMISE;
+    case T_SYMBOL:  return JS_SYMBOL;
     
     case T_OBJ:
     case T_ARR:     return JS_OBJ;
@@ -20975,7 +21015,8 @@ int js_type(jsval_t val) {
 }
 
 int js_type_ex(struct js *js, jsval_t val) {
-  if (vtype(val) == T_OBJ && is_symbol(js, val)) return JS_SYMBOL;
+  (void)js;
+  if (vtype(val) == T_SYMBOL) return JS_SYMBOL;
   return js_type(val);
 }
 

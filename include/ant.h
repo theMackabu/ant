@@ -1,6 +1,4 @@
 #pragma once
-
-#define PRIV_SYMBOL 0x80
 #define PCRE2_CODE_UNIT_WIDTH 8
 
 #include <stdbool.h>
@@ -60,6 +58,12 @@ void js_setthis(struct js *, jsval_t);
 
 jsval_t js_getcurrentfunc(struct js *);
 jsval_t js_get(struct js *, jsval_t, const char *);
+
+uint64_t js_sym_id(jsval_t sym);
+const char *js_sym_desc(struct js *js, jsval_t sym);
+
+jsval_t js_mksym_for(struct js *, const char *key);
+const char *js_sym_key(jsval_t sym);
 
 jsval_t js_mkobj(struct js *);
 jsval_t js_mkarr(struct js *);
