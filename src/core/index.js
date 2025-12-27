@@ -23,7 +23,9 @@ Ant.typeof = function (t) {
     T_PROMISE: 'promise',
     T_TYPEDARRAY: 'typedarray',
     T_BIGINT: 'bigint',
-    T_PROPREF: 'propref'
+    T_PROPREF: 'propref',
+    T_SYMBOL: 'symbol',
+    T_GENERATOR: 'generator'
   };
 
   const names = Object.values(types);
