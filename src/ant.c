@@ -7645,7 +7645,11 @@ static jsval_t js_literal(struct js *js) {
     case TOK_IN:
     case TOK_DEBUGGER: return mkcoderef((jsoff_t) js->toff, (jsoff_t) js->tlen);
     
-    default: return js_mkerr_typed(js, JS_ERR_SYNTAX, "bad expr");
+    default: {
+      char err_buf[64]; size_t tok_len = js->tlen > 20 ? 20 : js->tlen;
+      snprintf(err_buf, sizeof(err_buf), "Unexpected token '%.*s'", (int)tok_len, &js->code[js->toff]);
+      return js_mkerr_typed(js, JS_ERR_SYNTAX, err_buf);
+    }
   }
 }
 
@@ -8235,7 +8239,7 @@ static jsval_t js_unary(struct js *js) {
     if (vtype(operand) == T_PROP || vtype(operand) == T_PROPREF) {
       do_assign_op(js, op == TOK_POSTINC ? TOK_PLUS_ASSIGN : TOK_MINUS_ASSIGN, operand, tov(1));
     } else {
-      return js_mkerr_typed(js, JS_ERR_SYNTAX, "bad expr");
+      return js_mkerr_typed(js, JS_ERR_SYNTAX, "Invalid left-hand side in assignment");
     }
     return do_op(js, op == TOK_POSTINC ? TOK_PLUS : TOK_MINUS, resolved, tov(1));
   } else if (next(js) == TOK_NOT || js->tok == TOK_TILDA || js->tok == TOK_TYPEOF ||
