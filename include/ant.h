@@ -119,6 +119,9 @@ jsval_t js_mkpromise(struct js *js);
 jsval_t js_mktypedarray(void *data);
 void *js_gettypedarray(jsval_t val);
 
+jsval_t js_mkffi(unsigned int index);
+int js_getffi(jsval_t val);
+
 void js_resolve_promise(struct js *js, jsval_t promise, jsval_t value);
 void js_reject_promise(struct js *js, jsval_t promise, jsval_t value);
 

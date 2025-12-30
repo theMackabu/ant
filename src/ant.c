@@ -26,6 +26,7 @@
 #include "modules/timer.h"
 #include "modules/fetch.h"
 #include "modules/symbol.h"
+#include "modules/ffi.h"
 
 #define MINICORO_IMPL
 #include "minicoro.h"
@@ -451,14 +452,14 @@ static const uint8_t prec_table[TOK_MAX] = {
 enum {
   T_OBJ, T_PROP, T_STR, T_UNDEF, T_NULL, T_NUM, T_BOOL, T_FUNC,
   T_CODEREF, T_CFUNC, T_ERR, T_ARR, T_PROMISE, T_TYPEDARRAY, 
-  T_BIGINT, T_PROPREF, T_SYMBOL, T_GENERATOR
+  T_BIGINT, T_PROPREF, T_SYMBOL, T_GENERATOR, T_FFI
 };
 
 static const char *typestr_raw(uint8_t t) {
   const char *names[] = { 
     "object", "prop", "string", "undefined", "null", "number",
     "boolean", "function", "coderef", "cfunc", "err", "array", 
-    "promise", "typedarray", "bigint", "propref", "symbol", "generator"
+    "promise", "typedarray", "bigint", "propref", "symbol", "generator", "ffi"
   };
   
   return (t < sizeof(names) / sizeof(names[0])) ? names[t] : "??";
@@ -548,6 +549,15 @@ jsval_t js_mktypedarray(void *data) {
 void *js_gettypedarray(jsval_t val) {
   if (vtype(val) != T_TYPEDARRAY) return NULL;
   return (void *)vdata(val);
+}
+
+jsval_t js_mkffi(unsigned int index) {
+  return mkval(T_FFI, (uint64_t)index);
+}
+
+int js_getffi(jsval_t val) {
+  if (vtype(val) != T_FFI) return -1;
+  return (int)vdata(val);
 }
 
 static jsval_t mkcoderef(jsval_t off, jsoff_t len) { 
@@ -2192,6 +2202,7 @@ static size_t tostr(struct js *js, jsval_t value, char *buf, size_t len) {
     case T_PROMISE: return strpromise(js, value, buf, len);
     case T_FUNC:  return strfunc(js, value, buf, len);
     case T_CFUNC: return cpy(buf, len, "[Function (native)]", 19);
+    case T_FFI:   return cpy(buf, len, "[Function (native)]", 19);
     case T_PROP:  return (size_t) snprintf(buf, len, "PROP@%lu", (unsigned long) vdata(value));
     default:      return (size_t) snprintf(buf, len, "VTYPE%d", vtype(value));
   }
@@ -4945,28 +4956,26 @@ static void reverse(jsval_t *args, int nargs) {
   }
 }
 
-static jsval_t call_c(struct js *js,
-  jsval_t (*fn)(struct js *, jsval_t *, int)) {
+static int parse_call_args(struct js *js, jsval_t *err_out) {
   int argc = 0;
-  jsval_t target_this = peek_this();
   
   while (js->pos < js->clen) {
     if (next(js) == TOK_RPAREN) break;
     bool is_spread = (next(js) == TOK_REST);
     if (is_spread) js->consumed = 1;
     jsval_t arg = resolveprop(js, js_expr(js));
-    if (is_err(arg)) return arg;
+    if (is_err(arg)) { *err_out = arg; return -1; }
     if (is_spread && vtype(arg) == T_ARR) {
       jsoff_t len = arr_length(js, arg);
       for (jsoff_t i = 0; i < len; i++) {
         jsval_t elem = arr_get(js, arg, i);
-        if (js->brk + sizeof(elem) > js->size) return js_mkerr(js, "call oom");
+        if (js->brk + sizeof(elem) > js->size) { *err_out = js_mkerr(js, "call oom"); return -1; }
         js->size -= (jsoff_t) sizeof(elem);
         memcpy(&js->mem[js->size], &elem, sizeof(elem));
         argc++;
       }
     } else {
-      if (js->brk + sizeof(arg) > js->size) return js_mkerr(js, "call oom");
+      if (js->brk + sizeof(arg) > js->size) { *err_out = js_mkerr(js, "call oom"); return -1; }
       js->size -= (jsoff_t) sizeof(arg);
       memcpy(&js->mem[js->size], &arg, sizeof(arg));
       argc++;
@@ -4974,14 +4983,24 @@ static jsval_t call_c(struct js *js,
     if (next(js) == TOK_COMMA) js->consumed = 1;
   }
   
-  jsval_t saved_this = js->this_val;
-  js->this_val = target_this;
   reverse((jsval_t *) &js->mem[js->size], argc);
-  jsval_t res = fn(js, (jsval_t *) &js->mem[js->size], argc);
+  return argc;
+}
+
+static jsval_t call_c(struct js *js, jsval_t (*fn)(struct js *, jsval_t *, int)) {
+  jsoff_t saved_size = js->size;
+  jsval_t err, res;
+  
+  int argc = parse_call_args(js, &err);
+  if (argc < 0) { js->size = saved_size; return err; }
+  
+  jsval_t saved_this = js->this_val;
+  js->this_val = peek_this();
+  res = fn(js, (jsval_t *) &js->mem[js->size], argc);
   js->this_val = saved_this;
   setlwm(js);
   
-  js->size += (jsoff_t) sizeof(jsval_t) * (jsoff_t) argc;
+  js->size = saved_size;
   return res;
 }
 
@@ -5705,9 +5724,42 @@ static jsval_t call_js_code_with_args_nfe(struct js *js, const char *fn, jsoff_t
   return res;
 }
 
+static jsval_t call_ffi(struct js *js, unsigned int func_index) {
+  jsoff_t saved_size = js->size;
+  jsval_t err, res;
+  
+  int argc = parse_call_args(js, &err);
+  if (argc < 0) { js->size = saved_size; return err; }
+  
+  res = ffi_call_by_index(js, func_index, (jsval_t *) &js->mem[js->size], argc);
+  setlwm(js);
+  
+  js->size = saved_size;
+  return res;
+}
+
 static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
   if (vtype(args) != T_CODEREF) return js_mkerr(js, "bad call");
-  if (vtype(func) != T_FUNC && vtype(func) != T_CFUNC) return js_mkerr(js, "calling non-function");
+  if (vtype(func) != T_FUNC && vtype(func) != T_CFUNC && vtype(func) != T_FFI) return js_mkerr(js, "calling non-function");
+  
+  if (vtype(func) == T_FFI) {
+    const char *code = js->code;
+    jsoff_t clen = js->clen, pos = js->pos;
+    uint8_t tok = js->tok, flags = js->flags;
+    jsoff_t nogc = js->nogc;
+    
+    js->code = &js->code[coderefoff(args)];
+    js->clen = codereflen(args);
+    js->pos = skiptonext(js->code, js->clen, 0, NULL);
+    
+    jsval_t res = call_ffi(js, (unsigned int)vdata(func));
+    
+    js->code = code; js->clen = clen; js->pos = pos;
+    js->flags = (flags & ~F_THROW) | (js->flags & F_THROW);
+    js->tok = tok; js->nogc = nogc;
+    js->consumed = 1;
+    return res;
+  }
   
   jsval_t target_this = peek_this();
   bool is_constructor_call = (vtype(target_this) == T_OBJ && lkp_interned(js, target_this, INTERN_PROTO, 9) == 0);
@@ -20834,7 +20886,9 @@ jsval_t js_eval(struct js *js, const char *buf, size_t len) {
 }
 
 static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this, jsval_t *args, int nargs, bool use_bound_this) {
-  if (vtype(func) == T_CFUNC) {
+  if (vtype(func) == T_FFI) {
+    return ffi_call_by_index(js, (unsigned int)vdata(func), args, nargs);
+  } else if (vtype(func) == T_CFUNC) {
     jsval_t (*fn)(struct js *, jsval_t *, int) = (jsval_t(*)(struct js *, jsval_t *, int)) vdata(func);
     return fn(js, args, nargs);
   } else if (vtype(func) == T_FUNC) {

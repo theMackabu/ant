@@ -332,9 +332,7 @@ static jsval_t ffi_define(struct js *js, jsval_t *args, int nargs) {
   unsigned int func_index = utarray_len(ffi_functions_array) - 1;
   pthread_mutex_unlock(&ffi_functions_mutex);
 
-  char index_key[256];
-  snprintf(index_key, sizeof(index_key), "__ffi_index_%s", func_name);
-  js_set(js, this_obj, index_key, js_mknum((double)func_index));
+  js_set(js, this_obj, func_name, js_mkffi(func_index));
 
   return js_mkundef();
 }
@@ -347,30 +345,13 @@ static jsval_t ffi_lib_call(struct js *js, jsval_t *args, int nargs) {
   size_t func_name_len;
   const char *func_name = js_getstr(js, args[0], &func_name_len);
 
-  char index_key[256];
-  snprintf(index_key, sizeof(index_key), "__ffi_index_%s", func_name);
-  jsval_t index_val = js_get(js, lib_obj, index_key);
-
-  if (js_type(index_val) != JS_NUM) {
+  jsval_t ffi_val = js_get(js, lib_obj, func_name);
+  int func_index = js_getffi(ffi_val);
+  if (func_index < 0) {
     return js_mkerr(js, "Function '%s' not defined", func_name);
   }
 
-  unsigned int func_index = (unsigned int)js_getnum(index_val);
-
-  pthread_mutex_lock(&ffi_functions_mutex);
-  if (func_index >= utarray_len(ffi_functions_array)) {
-    pthread_mutex_unlock(&ffi_functions_mutex);
-    return js_mkerr(js, "Invalid function index");
-  }
-
-  ffi_func_t *func =
-      *(ffi_func_t **)utarray_eltptr(ffi_functions_array, func_index);
-  pthread_mutex_unlock(&ffi_functions_mutex);
-
-  jsval_t *call_args = args + 1;
-  int call_nargs = nargs - 1;
-
-  return ffi_call_function(js, func, call_args, call_nargs);
+  return ffi_call_by_index(js, (unsigned int)func_index, args + 1, nargs - 1);
 }
 
 static jsval_t ffi_call_function(struct js *js, ffi_func_t *func, jsval_t *args,int nargs) {
@@ -436,6 +417,19 @@ static jsval_t ffi_call_function(struct js *js, ffi_func_t *func, jsval_t *args,
   }
 
   return ffi_to_js_value(js, &result, func->ret_type, func->ret_type_str);
+}
+
+jsval_t ffi_call_by_index(struct js *js, unsigned int func_index, jsval_t *args, int nargs) {
+  pthread_mutex_lock(&ffi_functions_mutex);
+  if (func_index >= utarray_len(ffi_functions_array)) {
+    pthread_mutex_unlock(&ffi_functions_mutex);
+    return js_mkerr(js, "Invalid FFI function index");
+  }
+  
+  ffi_func_t *func = *(ffi_func_t **)utarray_eltptr(ffi_functions_array, func_index);
+  pthread_mutex_unlock(&ffi_functions_mutex);
+  
+  return ffi_call_function(js, func, args, nargs);
 }
 
 static jsval_t ffi_alloc_memory(struct js *js, jsval_t *args, int nargs) {
