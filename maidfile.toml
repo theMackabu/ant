@@ -21,7 +21,7 @@ script = ['rm spec.txt', '''
 [tasks.setup]
 script = ['meson subprojects download', '''
    bash -c 'CC="ccache $(which clang)" \
-   meson setup build --wipe -Dc_args=-DNO_EXECUTE_PERMISSION'
+   meson setup build --wipe'
 ''']
 
 [tasks.install]

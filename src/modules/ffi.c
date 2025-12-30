@@ -782,65 +782,140 @@ static jsval_t ffi_free_callback(struct js *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
+typedef enum {
+  JS_FFI_VOID = 0,
+  JS_FFI_INT8,
+  JS_FFI_INT16,
+  JS_FFI_INT,
+  JS_FFI_INT64,
+  JS_FFI_UINT8,
+  JS_FFI_UINT16,
+  JS_FFI_UINT64,
+  JS_FFI_FLOAT,
+  JS_FFI_DOUBLE,
+  JS_FFI_POINTER,
+  JS_FFI_STRING,
+  JS_FFI_UNKNOWN,
+  JS_FFI_COUNT
+} js_ffi_type_id;
+
+static js_ffi_type_id get_ffi_type_id(const char *type_str) {
+  if (!type_str) return JS_FFI_UNKNOWN;
+
+  switch (type_str[0]) {
+    case 'v': if (strcmp(type_str, "void") == 0) return JS_FFI_VOID; break;
+    case 'i':
+      if (type_str[1] == 'n' && type_str[2] == 't') {
+        if (type_str[3] == '\0') return JS_FFI_INT;
+        if (strcmp(type_str + 3, "8") == 0) return JS_FFI_INT8;
+        if (strcmp(type_str + 3, "16") == 0) return JS_FFI_INT16;
+        if (strcmp(type_str + 3, "64") == 0) return JS_FFI_INT64;
+      }
+      break;
+    case 'u':
+      if (type_str[1] == 'i' && type_str[2] == 'n' && type_str[3] == 't') {
+        if (strcmp(type_str + 4, "8") == 0) return JS_FFI_UINT8;
+        if (strcmp(type_str + 4, "16") == 0) return JS_FFI_UINT16;
+        if (strcmp(type_str + 4, "64") == 0) return JS_FFI_UINT64;
+      }
+      break;
+    case 'f': if (strcmp(type_str, "float") == 0) return JS_FFI_FLOAT; break;
+    case 'd': if (strcmp(type_str, "double") == 0) return JS_FFI_DOUBLE; break;
+    case 'p': if (strcmp(type_str, "pointer") == 0) return JS_FFI_POINTER; break;
+    case 's': if (strcmp(type_str, "string") == 0) return JS_FFI_STRING; break;
+  }
+  return JS_FFI_UNKNOWN;
+}
+
 static ffi_type *get_ffi_type(const char *type_str) {
-  if (strcmp(type_str, "void") == 0)
-    return &ffi_type_void;
-  if (strcmp(type_str, "int8") == 0)
-    return &ffi_type_sint8;
-  if (strcmp(type_str, "int16") == 0)
-    return &ffi_type_sint16;
-  if (strcmp(type_str, "int") == 0)
-    return &ffi_type_sint32;
-  if (strcmp(type_str, "int64") == 0)
-    return &ffi_type_sint64;
-  if (strcmp(type_str, "uint8") == 0)
-    return &ffi_type_uint8;
-  if (strcmp(type_str, "uint16") == 0)
-    return &ffi_type_uint16;
+  static ffi_type *type_map[] = {
+    [JS_FFI_VOID]    = &ffi_type_void,
+    [JS_FFI_INT8]    = &ffi_type_sint8,
+    [JS_FFI_INT16]   = &ffi_type_sint16,
+    [JS_FFI_INT]     = &ffi_type_sint32,
+    [JS_FFI_INT64]   = &ffi_type_sint64,
+    [JS_FFI_UINT8]   = &ffi_type_uint8,
+    [JS_FFI_UINT16]  = &ffi_type_uint16,
+    [JS_FFI_UINT64]  = &ffi_type_uint64,
+    [JS_FFI_FLOAT]   = &ffi_type_float,
+    [JS_FFI_DOUBLE]  = &ffi_type_double,
+    [JS_FFI_POINTER] = &ffi_type_pointer,
+    [JS_FFI_STRING]  = &ffi_type_pointer,
+    [JS_FFI_UNKNOWN] = NULL,
+  };
 
-  if (strcmp(type_str, "uint64") == 0)
-    return &ffi_type_uint64;
-  if (strcmp(type_str, "float") == 0)
-    return &ffi_type_float;
-  if (strcmp(type_str, "double") == 0)
-    return &ffi_type_double;
-  if (strcmp(type_str, "pointer") == 0)
-    return &ffi_type_pointer;
-  if (strcmp(type_str, "string") == 0)
-    return &ffi_type_pointer;
-
-  return NULL;
+  js_ffi_type_id id = get_ffi_type_id(type_str);
+  return type_map[id];
 }
 
 static void *js_to_ffi_value(struct js *js, jsval_t val, ffi_type *type, void *buffer) {
-  if (type == &ffi_type_sint8) {
+  static const void *dispatch[] = {
+    &&do_sint8, &&do_sint16, &&do_sint32, &&do_sint64,
+    &&do_uint8, &&do_uint16, &&do_uint64,
+    &&do_float, &&do_double, &&do_pointer, &&do_done
+  };
+
+  int idx;
+  if (type == &ffi_type_sint8)        idx = 0;
+  else if (type == &ffi_type_sint16)  idx = 1;
+  else if (type == &ffi_type_sint32)  idx = 2;
+  else if (type == &ffi_type_sint64)  idx = 3;
+  else if (type == &ffi_type_uint8)   idx = 4;
+  else if (type == &ffi_type_uint16)  idx = 5;
+  else if (type == &ffi_type_uint64)  idx = 6;
+  else if (type == &ffi_type_float)   idx = 7;
+  else if (type == &ffi_type_double)  idx = 8;
+  else if (type == &ffi_type_pointer) idx = 9;
+  else                                idx = 10;
+
+  goto *dispatch[idx];
+
+do_sint8: {
     int8_t v = (int8_t)js_getnum(val);
     memcpy(buffer, &v, sizeof(v));
-  } else if (type == &ffi_type_sint16) {
+    goto do_done;
+  }
+do_sint16: {
     int16_t v = (int16_t)js_getnum(val);
     memcpy(buffer, &v, sizeof(v));
-  } else if (type == &ffi_type_sint32) {
+    goto do_done;
+  }
+do_sint32: {
     int32_t v = (int32_t)js_getnum(val);
     memcpy(buffer, &v, sizeof(v));
-  } else if (type == &ffi_type_sint64) {
+    goto do_done;
+  }
+do_sint64: {
     int64_t v = (int64_t)js_getnum(val);
     memcpy(buffer, &v, sizeof(v));
-  } else if (type == &ffi_type_uint8) {
+    goto do_done;
+  }
+do_uint8: {
     uint8_t v = (uint8_t)js_getnum(val);
     memcpy(buffer, &v, sizeof(v));
-  } else if (type == &ffi_type_uint16) {
+    goto do_done;
+  }
+do_uint16: {
     uint16_t v = (uint16_t)js_getnum(val);
     memcpy(buffer, &v, sizeof(v));
-  } else if (type == &ffi_type_uint64) {
+    goto do_done;
+  }
+do_uint64: {
     uint64_t v = (uint64_t)js_getnum(val);
     memcpy(buffer, &v, sizeof(v));
-  } else if (type == &ffi_type_float) {
+    goto do_done;
+  }
+do_float: {
     float v = (float)js_getnum(val);
     memcpy(buffer, &v, sizeof(v));
-  } else if (type == &ffi_type_double) {
+    goto do_done;
+  }
+do_double: {
     double v = js_getnum(val);
     memcpy(buffer, &v, sizeof(v));
-  } else if (type == &ffi_type_pointer) {
+    goto do_done;
+  }
+do_pointer: {
     if (js_type(val) == JS_STR) {
       size_t str_len;
       const char *str = js_getstr(js, val, &str_len);
@@ -850,34 +925,56 @@ static void *js_to_ffi_value(struct js *js, jsval_t val, ffi_type *type, void *b
       void *ptr = (void *)(uint64_t)js_getnum(val);
       memcpy(buffer, &ptr, sizeof(ptr));
     }
+    goto do_done;
   }
-
+do_done:
   return buffer;
 }
 
 static jsval_t ffi_to_js_value(struct js *js, void *val, ffi_type *type, const char *type_str) {
-  if (type == &ffi_type_void) {
-    return js_mkundef();
-  } else if (type == &ffi_type_sint8) {
-    return js_mknum((double)(*(int8_t *)val));
-  } else if (type == &ffi_type_sint16) {
-    return js_mknum((double)(*(int16_t *)val));
-  } else if (type == &ffi_type_sint32) {
-    return js_mknum((double)(*(int32_t *)val));
-  } else if (type == &ffi_type_sint64) {
-    return js_mknum((double)(*(int64_t *)val));
-  } else if (type == &ffi_type_uint8) {
-    return js_mknum((double)(*(uint8_t *)val));
-  } else if (type == &ffi_type_uint16) {
-    return js_mknum((double)(*(uint16_t *)val));
+  static const void *dispatch[] = {
+    &&ret_void, &&ret_sint8, &&ret_sint16, &&ret_sint32, &&ret_sint64,
+    &&ret_uint8, &&ret_uint16, &&ret_uint64,
+    &&ret_float, &&ret_double, &&ret_pointer, &&ret_undef
+  };
 
-  } else if (type == &ffi_type_uint64) {
-    return js_mknum((double)(*(uint64_t *)val));
-  } else if (type == &ffi_type_float) {
-    return js_mknum((double)(*(float *)val));
-  } else if (type == &ffi_type_double) {
-    return js_mknum((double)(*(double *)val));
-  } else if (type == &ffi_type_pointer) {
+  int idx;
+  if (type == &ffi_type_void)         idx = 0;
+  else if (type == &ffi_type_sint8)   idx = 1;
+  else if (type == &ffi_type_sint16)  idx = 2;
+  else if (type == &ffi_type_sint32)  idx = 3;
+  else if (type == &ffi_type_sint64)  idx = 4;
+  else if (type == &ffi_type_uint8)   idx = 5;
+  else if (type == &ffi_type_uint16)  idx = 6;
+  else if (type == &ffi_type_uint64)  idx = 7;
+  else if (type == &ffi_type_float)   idx = 8;
+  else if (type == &ffi_type_double)  idx = 9;
+  else if (type == &ffi_type_pointer) idx = 10;
+  else                                idx = 11;
+
+  goto *dispatch[idx];
+
+ret_void:
+  return js_mkundef();
+ret_sint8:
+  return js_mknum((double)(*(int8_t *)val));
+ret_sint16:
+  return js_mknum((double)(*(int16_t *)val));
+ret_sint32:
+  return js_mknum((double)(*(int32_t *)val));
+ret_sint64:
+  return js_mknum((double)(*(int64_t *)val));
+ret_uint8:
+  return js_mknum((double)(*(uint8_t *)val));
+ret_uint16:
+  return js_mknum((double)(*(uint16_t *)val));
+ret_uint64:
+  return js_mknum((double)(*(uint64_t *)val));
+ret_float:
+  return js_mknum((double)(*(float *)val));
+ret_double:
+  return js_mknum((double)(*(double *)val));
+ret_pointer: {
     void *ptr = *(void **)val;
     if (type_str && strcmp(type_str, "string") == 0 && ptr) {
       const char *str = (const char *)ptr;
@@ -885,6 +982,6 @@ static jsval_t ffi_to_js_value(struct js *js, void *val, ffi_type *type, const c
     }
     return js_mknum((double)(uint64_t)ptr);
   }
-
+ret_undef:
   return js_mkundef();
 }

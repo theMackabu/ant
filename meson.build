@@ -79,7 +79,7 @@ endif
 build_date = run_command('date', '+%Y-%m-%d', check: true).stdout().strip()
 
 version_conf = configuration_data()
-version_conf.set('ANT_VERSION', '0.2.2.4')
+version_conf.set('ANT_VERSION', '0.2.2.5')
 version_conf.set('ANT_GIT_HASH', git_hash)
 version_conf.set('ANT_BUILD_DATE', build_date)
 
@@ -93,7 +93,9 @@ build_include = include_directories('.')
 
 add_project_arguments(
   '-D JS_DUMP',
+  '-D NO_EXECUTE_PERMISSION',
   '-Wno-unused-function',
+  '-Wno-deprecated-declarations',
 language: 'c')
 
 if host_machine.system() == 'linux'
@@ -105,7 +107,7 @@ gen_snapshot = executable(
   'gen_snapshot',
   files('src/tools/gen_snapshot.c'),
   include_directories: [include, build_include],
-  c_args: ['-DANT_SNAPSHOT_GENERATOR'],
+  c_args: ['-D ANT_SNAPSHOT_GENERATOR'],
   native: true
 )
 
