@@ -183,12 +183,7 @@ void init_sessionstorage_module(void) {
   js_set(js, storage_obj, "key", js_mkfun(js_sessionstorage_key));
   
   jsval_t length_getter = js_mkfun(js_sessionstorage_length);
-  jsval_t desc = js_mkobj(js);
-  js_set(js, desc, "get", length_getter);
-  js_set(js, desc, "enumerable", js_mktrue());
-  js_set(js, desc, "configurable", js_mkfalse());
-  js_set(js, storage_obj, "__desc_length", desc);
-  js_set(js, storage_obj, "__getter", js_mktrue());
+  js_set_getter_desc(js, storage_obj, "length", 6, length_getter, JS_DESC_E);
   
   js_set(js, storage_obj, get_toStringTag_sym_key(), js_mkstr(js, "Storage", 7));
   js_set(js, glob, "sessionStorage", storage_obj);

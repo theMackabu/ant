@@ -309,12 +309,7 @@ void init_localstorage_module() {
   js_set(js, storage_obj, "setFile", js_mkfun(js_localstorage_setFile));
   
   jsval_t length_getter = js_mkfun(js_localstorage_length);
-  jsval_t desc = js_mkobj(js);
-  js_set(js, desc, "get", length_getter);
-  js_set(js, desc, "enumerable", js_mktrue());
-  js_set(js, desc, "configurable", js_mkfalse());
-  js_set(js, storage_obj, "__desc_length", desc);
-  js_set(js, storage_obj, "__getter", js_mktrue());
+  js_set_getter_desc(js, storage_obj, "length", 6, length_getter, JS_DESC_E);
   
   js_set(js, storage_obj, get_toStringTag_sym_key(), js_mkstr(js, "Storage", 7));
   js_set(js, glob, "localStorage", storage_obj);

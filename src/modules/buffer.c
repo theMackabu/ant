@@ -39,6 +39,7 @@ static void *ta_arena_alloc(size_t size) {
 static jsval_t js_arraybuffer_slice(struct js *js, jsval_t *args, int nargs);
 static jsval_t js_typedarray_slice(struct js *js, jsval_t *args, int nargs);
 static jsval_t js_typedarray_subarray(struct js *js, jsval_t *args, int nargs);
+static jsval_t js_typedarray_fill(struct js *js, jsval_t *args, int nargs);
 static jsval_t js_dataview_getUint8(struct js *js, jsval_t *args, int nargs);
 static jsval_t js_dataview_setUint8(struct js *js, jsval_t *args, int nargs);
 static jsval_t js_dataview_getInt16(struct js *js, jsval_t *args, int nargs);
@@ -144,25 +145,18 @@ static void free_array_buffer_data(ArrayBufferData *data) {
 }
 
 static size_t get_element_size(TypedArrayType type) {
-  switch (type) {
-    case TYPED_ARRAY_INT8:
-    case TYPED_ARRAY_UINT8:
-    case TYPED_ARRAY_UINT8_CLAMPED:
-      return 1;
-    case TYPED_ARRAY_INT16:
-    case TYPED_ARRAY_UINT16:
-      return 2;
-    case TYPED_ARRAY_INT32:
-    case TYPED_ARRAY_UINT32:
-    case TYPED_ARRAY_FLOAT32:
-      return 4;
-    case TYPED_ARRAY_FLOAT64:
-    case TYPED_ARRAY_BIGINT64:
-    case TYPED_ARRAY_BIGUINT64:
-      return 8;
-    default:
-      return 1;
-  }
+  static const void *dispatch[] = {
+    &&L_1, &&L_1, &&L_1, &&L_2, &&L_2,
+    &&L_4, &&L_4, &&L_4, &&L_8, &&L_8, &&L_8
+  };
+  
+  if (type > TYPED_ARRAY_BIGUINT64) goto L_1;
+  goto *dispatch[type];
+  
+  L_1: return 1;
+  L_2: return 2;
+  L_4: return 4;
+  L_8: return 8;
 }
 
 // ArrayBuffer constructor
@@ -224,15 +218,18 @@ static jsval_t js_arraybuffer_slice(struct js *js, jsval_t *args, int nargs) {
 }
 
 static jsval_t typedarray_index_getter(struct js *js, jsval_t obj, const char *key, size_t key_len) {
-  if (key_len == 0 || key_len > 15) return js_mkundef();
+  if (key_len == 0 || key_len > 10) return js_mkundef();
   
-  char *endptr;
-  long index = strtol(key, &endptr, 10);
-  if (endptr != key + key_len || index < 0) return js_mkundef();
+  size_t index = 0;
+  for (size_t i = 0; i < key_len; i++) {
+    char c = key[i];
+    if (c < '0' || c > '9') return js_mkundef();
+    index = index * 10 + (c - '0');
+  }
   
   jsval_t ta_val = js_get(js, obj, "__ta");
   TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_val);
-  if (!ta_data || (size_t)index >= ta_data->length) return js_mkundef();
+  if (!ta_data || index >= ta_data->length) return js_mkundef();
   
   uint8_t *data = ta_data->buffer->data + ta_data->byte_offset;
   double value;
@@ -255,6 +252,38 @@ static jsval_t typedarray_index_getter(struct js *js, jsval_t obj, const char *k
   L_FLOAT64: value = ((double*)data)[index];           goto L_DONE;
   L_UNDEF:   return js_mkundef();
   L_DONE:    return js_mknum(value);
+}
+
+static bool typedarray_index_setter(struct js *js, jsval_t obj, const char *key, size_t key_len, jsval_t value) {
+  if (key_len == 0 || key_len > 10) return false;
+  
+  size_t index = 0;
+  for (size_t i = 0; i < key_len; i++) {
+    char c = key[i];
+    if (c < '0' || c > '9') return false;
+    index = index * 10 + (c - '0');
+  }
+  
+  jsval_t ta_val = js_get(js, obj, "__ta");
+  TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_val);
+  if (!ta_data || index >= ta_data->length) return false;
+  
+  double num_val = js_type(value) == JS_NUM ? js_getnum(value) : 0;
+  uint8_t *data = ta_data->buffer->data + ta_data->byte_offset;
+  
+  switch (ta_data->type) {
+    case TYPED_ARRAY_INT8:    ((int8_t*)data)[index] = (int8_t)num_val; break;
+    case TYPED_ARRAY_UINT8:
+    case TYPED_ARRAY_UINT8_CLAMPED: ((uint8_t*)data)[index] = (uint8_t)num_val; break;
+    case TYPED_ARRAY_INT16:   ((int16_t*)data)[index] = (int16_t)num_val; break;
+    case TYPED_ARRAY_UINT16:  ((uint16_t*)data)[index] = (uint16_t)num_val; break;
+    case TYPED_ARRAY_INT32:   ((int32_t*)data)[index] = (int32_t)num_val; break;
+    case TYPED_ARRAY_UINT32:  ((uint32_t*)data)[index] = (uint32_t)num_val; break;
+    case TYPED_ARRAY_FLOAT32: ((float*)data)[index] = (float)num_val; break;
+    case TYPED_ARRAY_FLOAT64: ((double*)data)[index] = num_val; break;
+    default: return false;
+  }
+  return true;
 }
 
 static jsval_t create_typed_array(struct js *js, TypedArrayType type, ArrayBufferData *buffer, size_t byte_offset, size_t length, const char *type_name) {
@@ -280,8 +309,10 @@ static jsval_t create_typed_array(struct js *js, TypedArrayType type, ArrayBuffe
   js_set(js, obj, "BYTES_PER_ELEMENT", js_mknum((double)element_size));
   js_set(js, obj, "slice", js_mkfun(js_typedarray_slice));
   js_set(js, obj, "subarray", js_mkfun(js_typedarray_subarray));
+  js_set(js, obj, "fill", js_mkfun(js_typedarray_fill));
   
   js_set_getter(js, obj, typedarray_index_getter);
+  js_set_setter(js, obj, typedarray_index_setter);
   
   return obj;
 }
@@ -382,6 +413,67 @@ static jsval_t js_typedarray_subarray(struct js *js, jsval_t *args, int nargs) {
   size_t new_offset = ta_data->byte_offset + begin * element_size;
   
   return create_typed_array(js, ta_data->type, ta_data->buffer, new_offset, new_length, "TypedArray");
+}
+
+// TypedArray.prototype.fill(value, start, end)
+static jsval_t js_typedarray_fill(struct js *js, jsval_t *args, int nargs) {
+  jsval_t this_val = js_getthis(js);
+  jsval_t ta_data_val = js_get(js, this_val, "__ta");
+  
+  TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
+  if (!ta_data) return js_mkerr(js, "Invalid TypedArray");
+  
+  double value = 0;
+  if (nargs > 0 && js_type(args[0]) == JS_NUM) value = js_getnum(args[0]);
+  
+  int start = 0, end = ta_data->length;
+  if (nargs > 1 && js_type(args[1]) == JS_NUM) start = (int)js_getnum(args[1]);
+  if (nargs > 2 && js_type(args[2]) == JS_NUM) end = (int)js_getnum(args[2]);
+  
+  if (start < 0) start = ta_data->length + start;
+  if (end < 0) end = ta_data->length + end;
+  if (start < 0) start = 0;
+  if (end < 0) end = 0;
+  if (start > (int)ta_data->length) start = ta_data->length;
+  if (end > (int)ta_data->length) end = ta_data->length;
+  if (end < start) end = start;
+  
+  uint8_t *data = ta_data->buffer->data + ta_data->byte_offset;
+  
+  static const void *dispatch[] = {
+    &&L_INT8, &&L_UINT8, &&L_UINT8, &&L_INT16, &&L_UINT16,
+    &&L_INT32, &&L_UINT32, &&L_FLOAT32, &&L_FLOAT64, &&L_DONE, &&L_DONE
+  };
+  
+  if (ta_data->type > TYPED_ARRAY_BIGUINT64) goto L_DONE;
+  goto *dispatch[ta_data->type];
+  
+  L_INT8:
+    for (int i = start; i < end; i++) ((int8_t*)data)[i] = (int8_t)value;
+    goto L_DONE;
+  L_UINT8:
+    for (int i = start; i < end; i++) data[i] = (uint8_t)value;
+    goto L_DONE;
+  L_INT16:
+    for (int i = start; i < end; i++) ((int16_t*)data)[i] = (int16_t)value;
+    goto L_DONE;
+  L_UINT16:
+    for (int i = start; i < end; i++) ((uint16_t*)data)[i] = (uint16_t)value;
+    goto L_DONE;
+  L_INT32:
+    for (int i = start; i < end; i++) ((int32_t*)data)[i] = (int32_t)value;
+    goto L_DONE;
+  L_UINT32:
+    for (int i = start; i < end; i++) ((uint32_t*)data)[i] = (uint32_t)value;
+    goto L_DONE;
+  L_FLOAT32:
+    for (int i = start; i < end; i++) ((float*)data)[i] = (float)value;
+    goto L_DONE;
+  L_FLOAT64:
+    for (int i = start; i < end; i++) ((double*)data)[i] = value;
+    goto L_DONE;
+  L_DONE:
+    return this_val;
 }
 
 #define DEFINE_TYPEDARRAY_CONSTRUCTOR(name, type) \
@@ -788,6 +880,7 @@ void init_buffer_module() {
       jsval_t name##_proto = js_mkobj(js); \
       js_set(js, name##_proto, "slice", js_mkfun(js_typedarray_slice)); \
       js_set(js, name##_proto, "subarray", js_mkfun(js_typedarray_subarray)); \
+      js_set(js, name##_proto, "fill", js_mkfun(js_typedarray_fill)); \
       js_setprop(js, name##_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(js_##name##_constructor)); \
       js_setprop(js, name##_ctor_obj, js_mkstr(js, "prototype", 9), name##_proto); \
       js_set(js, glob, #name, js_obj_to_func(name##_ctor_obj)); \

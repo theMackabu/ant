@@ -101,7 +101,6 @@ static jsval_t reflect_own_keys(struct js *js, jsval_t *args, int nargs) {
   
   while (js_prop_iter_next(&iter, &key, &key_len, &value) && count < 256) {
     if (key_len >= 9 && memcmp(key, "__proto__", 9) == 0) continue;
-    if (key_len >= 7 && memcmp(key, "__desc_", 7) == 0) continue;
     if (key_len >= 2 && key[0] == '_' && key[1] == '_') continue;
     
     temp_keys[count++] = js_mkstr(js, key, key_len);

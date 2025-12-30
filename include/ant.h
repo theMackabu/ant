@@ -25,6 +25,10 @@ typedef enum {
   JS_ERR_GENERIC
 } js_err_type_t;
 
+#define JS_DESC_W (1 << 0)
+#define JS_DESC_E (1 << 1)
+#define JS_DESC_C (1 << 2)
+
 struct js *js_create(void *buf, size_t len);
 struct js *js_create_dynamic(size_t initial_size, size_t max_size);
 
@@ -129,6 +133,14 @@ void ant_register_library(ant_library_init_fn init_fn, const char *name, ...);
   ant_register_library(lib, name, "ant:" name, "node:" name, NULL)
 
 typedef jsval_t (*js_getter_fn)(struct js *js, jsval_t obj, const char *key, size_t key_len);
+typedef bool (*js_setter_fn)(struct js *js, jsval_t obj, const char *key, size_t key_len, jsval_t value);
 
 void js_set_getter(struct js *js, jsval_t obj, js_getter_fn getter);
+void js_set_setter(struct js *js, jsval_t obj, js_setter_fn setter);
+
+void js_set_descriptor(struct js *js, jsval_t obj, const char *key, size_t klen, int flags);
+void js_set_getter_desc(struct js *js, jsval_t obj, const char *key, size_t klen, jsval_t getter, int flags);
+void js_set_setter_desc(struct js *js, jsval_t obj, const char *key, size_t klen, jsval_t setter, int flags);
+void js_set_accessor_desc(struct js *js, jsval_t obj, const char *key, size_t klen, jsval_t getter, jsval_t setter, int flags);
+
 void js_print_stack_trace(FILE *stream);
