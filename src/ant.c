@@ -10086,6 +10086,7 @@ static jsval_t js_try(struct js *js) {
         } else if (had_exception && !exception_handled) {
           js->flags |= F_THROW;
           strncpy(js->errmsg, saved_errmsg, sizeof(js->errmsg) - 1);
+          js->thrown_value = exception_value;
         } else if (catch_returned) {
           js->flags |= F_RETURN;
           res = catch_return_value;
@@ -10097,6 +10098,7 @@ static jsval_t js_try(struct js *js) {
     } else if (had_exception && !exception_handled) {
       js->flags |= F_THROW;
       strncpy(js->errmsg, saved_errmsg, sizeof(js->errmsg) - 1);
+      js->thrown_value = exception_value;
       res = mkval(T_ERR, 0);
     } else if (catch_returned) {
       js->flags |= F_RETURN;
