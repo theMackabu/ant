@@ -4169,9 +4169,15 @@ skip_export:
     
     if (depth == 0 && tok == TOK_ASYNC) {
       js->consumed = 1;
-      if (next(js) == TOK_FUNC) {
-        js_func_decl_async(js);
-      }
+      if (next(js) != TOK_FUNC) goto skip_async;
+      jsoff_t func_pos = js->pos;
+      js->consumed = 1;
+      if (next(js) != TOK_IDENTIFIER) goto skip_async;
+      js->pos = func_pos;
+      js->tok = TOK_FUNC;
+      js->consumed = 0;
+      js_func_decl_async(js);
+skip_async:
       continue;
     }
     
