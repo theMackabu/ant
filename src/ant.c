@@ -255,8 +255,6 @@ typedef struct {
 } intern_prop_cache_entry_t;
 static intern_prop_cache_entry_t intern_prop_cache[INTERN_PROP_CACHE_SIZE];
 
-
-
 typedef struct map_entry {
   char *key;
   jsval_t value;
@@ -571,8 +569,16 @@ static jsval_t mkpropref(jsoff_t obj_off, jsoff_t key_off) {
   return mkval(T_PROPREF, PROPREF_STACK_FLAG | (uint64_t)idx);
 }
 
-static bool is_err(jsval_t v) { 
+static inline bool is_err(jsval_t v) { 
   return vtype(v) == T_ERR; 
+}
+
+static inline bool is_null(jsval_t v) { 
+  return vtype(v) == T_NULL; 
+}
+
+static inline bool is_undefined(jsval_t v) { 
+  return vtype(v) == T_UNDEF; 
 }
 
 static uint8_t unhex(uint8_t c) { 
@@ -13913,15 +13919,21 @@ static jsval_t builtin_object_hasOwnProperty(struct js *js, jsval_t *args, int n
 static jsval_t builtin_object_isPrototypeOf(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return mkval(T_BOOL, 0);
   
-  jsval_t proto_obj = js->this_val;
+  jsval_t proto_obj = resolveprop(js, js->this_val);
   jsval_t obj = args[0];
   
   uint8_t obj_type = vtype(obj);
   if (obj_type != T_OBJ && obj_type != T_ARR && obj_type != T_FUNC) return mkval(T_BOOL, 0);
   
+  uint8_t proto_type = vtype(proto_obj);
+  if (proto_type != T_OBJ && proto_type != T_ARR && proto_type != T_FUNC) return mkval(T_BOOL, 0);
+  jsoff_t proto_data = vdata(proto_obj);
+  
   jsval_t current = get_proto(js, obj);
-  while (vtype(current) == T_OBJ) {
-    if (vdata(current) == vdata(proto_obj)) return mkval(T_BOOL, 1);
+  while (!is_undefined(current) && !is_null(current)) {
+    uint8_t cur_type = vtype(current);
+    if (cur_type != T_OBJ && cur_type != T_ARR && cur_type != T_FUNC) break;
+    if (vdata(current) == proto_data) return mkval(T_BOOL, 1);
     current = get_proto(js, current);
   }
   
