@@ -87,6 +87,7 @@ typedef struct coroutine {
   bool is_done;
   jsoff_t resume_point;
   jsval_t yield_value;
+  struct coroutine *prev;
   struct coroutine *next;
   mco_coro* mco;
   bool mco_started;
@@ -857,26 +858,33 @@ static void mco_async_entry(mco_coro* mco) {
 static void enqueue_coroutine(coroutine_t *coro) {
   if (!coro) return;
   coro->next = NULL;
+  coro->prev = pending_coroutines.tail;
   
-  if (pending_coroutines.tail && pending_coroutines.tail != coro) {
+  if (pending_coroutines.tail) {
     pending_coroutines.tail->next = coro;
-    pending_coroutines.tail = coro;
-  } else if (!pending_coroutines.tail) {
+  } else {
     pending_coroutines.head = coro;
-    pending_coroutines.tail = coro;
   }
+  pending_coroutines.tail = coro;
 }
 
-static coroutine_t *dequeue_coroutine(void) {
-  coroutine_t *coro = pending_coroutines.head;
-  if (coro) {
+static void remove_coroutine(coroutine_t *coro) {
+  if (!coro) return;
+  
+  if (coro->prev) {
+    coro->prev->next = coro->next;
+  } else {
     pending_coroutines.head = coro->next;
-    if (!pending_coroutines.head) {
-      pending_coroutines.tail = NULL;
-    }
-    coro->next = NULL;
   }
-  return coro;
+  
+  if (coro->next) {
+    coro->next->prev = coro->prev;
+  } else {
+    pending_coroutines.tail = coro->prev;
+  }
+  
+  coro->prev = NULL;
+  coro->next = NULL;
 }
 
 static bool has_pending_coroutines(void) {
@@ -906,20 +914,12 @@ void js_poll_events(struct js *js) {
   process_microtasks(js);
   
   coroutine_t *temp = pending_coroutines.head;
-  coroutine_t *prev = NULL;
   
   while (temp) {
     coroutine_t *next = temp->next;
     
     if (temp->is_ready && temp->mco && mco_status(temp->mco) == MCO_SUSPENDED) {
-      if (prev) {
-        prev->next = next;
-      } else {
-        pending_coroutines.head = next;
-      }
-      if (pending_coroutines.tail == temp) {
-        pending_coroutines.tail = prev;
-      }
+      remove_coroutine(temp);
       
       mco_result res = mco_resume(temp->mco);
       
@@ -927,22 +927,13 @@ void js_poll_events(struct js *js) {
         free_coroutine(temp);
       } else if (res == MCO_SUCCESS) {
         temp->is_ready = false;
-        temp->next = NULL;
-        if (pending_coroutines.tail) {
-          pending_coroutines.tail->next = temp;
-        } else {
-          pending_coroutines.head = temp;
-        }
-        pending_coroutines.tail = temp;
+        enqueue_coroutine(temp);
       } else {
         free_coroutine(temp);
       }
-      
-      temp = next;
-    } else {
-      prev = temp;
-      temp = next;
     }
+    
+    temp = next;
   }
 }
 
@@ -1022,7 +1013,7 @@ static jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t 
   
   res = mco_resume(mco);
   if (res != MCO_SUCCESS && mco_status(mco) != MCO_DEAD) {
-    dequeue_coroutine();
+    remove_coroutine(coro);
     free_coroutine(coro);
     ANT_GC_FREE(ctx);
     return js_mkerr(js, "failed to start coroutine");
@@ -1030,7 +1021,7 @@ static jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t 
   
   coro->mco_started = true;
   if (mco_status(mco) == MCO_DEAD) {
-    dequeue_coroutine();
+    remove_coroutine(coro);
     free_coroutine(coro);
     ANT_GC_FREE(ctx);
   }
@@ -17899,30 +17890,27 @@ static void resolve_promise(struct js *js, jsval_t p, jsval_t val) {
   }
 
   if (vtype(val) == T_PROMISE) {
-     if (vdata(val) == vdata(p)) {
-        jsval_t err = js_mkerr(js, "TypeError: Chaining cycle");
-        reject_promise(js, p, err);
-        return;
-     }
-     jsval_t res_obj = mkobj(js, 0);
-     setprop(js, res_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_resolve_internal));
-     setprop(js, res_obj, js_mkstr(js, "promise", 7), p);
-     jsval_t res_fn = mkval(T_FUNC, vdata(res_obj));
-     
-     jsval_t rej_obj = mkobj(js, 0);
-     setprop(js, rej_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_reject_internal));
-     setprop(js, rej_obj, js_mkstr(js, "promise", 7), p);
-     jsval_t rej_fn = mkval(T_FUNC, vdata(rej_obj));
-     
-     jsval_t args[] = { res_fn, rej_fn };
-     jsval_t then_prop = js_get(js, val, "then");
-     if (vtype(then_prop) == T_FUNC || vtype(then_prop) == T_CFUNC) {
-         jsval_t saved_this = js->this_val;
-         js->this_val = val;
-         js_call(js, then_prop, args, 2);
-         js->this_val = saved_this;
-         return;
-     }
+    if (vdata(val) == vdata(p)) {
+      jsval_t err = js_mkerr(js, "TypeError: Chaining cycle");
+      return reject_promise(js, p, err);
+    }
+    
+    jsval_t res_obj = mkobj(js, 0);
+    setprop(js, res_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_resolve_internal));
+    setprop(js, res_obj, js_mkstr(js, "promise", 7), p);
+    jsval_t res_fn = mkval(T_FUNC, vdata(res_obj));
+    
+    jsval_t rej_obj = mkobj(js, 0);
+    setprop(js, rej_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_reject_internal));
+    setprop(js, rej_obj, js_mkstr(js, "promise", 7), p);
+    jsval_t rej_fn = mkval(T_FUNC, vdata(rej_obj));
+    
+    jsval_t args[] = { res_fn, rej_fn };
+    jsval_t then_prop = js_get(js, val, "then");
+    
+    if (vtype(then_prop) == T_FUNC || vtype(then_prop) == T_CFUNC) {
+      (void)js_call_with_this(js, then_prop, val, args, 2); return;
+    }
   }
 
   setprop(js, p_obj, js_mkstr(js, "__state", 7), tov(1.0));
@@ -17958,8 +17946,6 @@ static jsval_t builtin_reject_internal(struct js *js, jsval_t *args, int nargs) 
   return js_mkundef();
 }
 
-static jsval_t builtin_promise_executor_wrapper(struct js *js, jsval_t *args, int nargs);
-
 static jsval_t builtin_Promise(struct js *js, jsval_t *args, int nargs) {
   jsval_t p = mkpromise(js);
   jsval_t res_obj = mkobj(js, 0);
@@ -17971,25 +17957,10 @@ static jsval_t builtin_Promise(struct js *js, jsval_t *args, int nargs) {
   setprop(js, rej_obj, js_mkstr(js, "promise", 7), p);
   jsval_t rej_fn = mkval(T_FUNC, vdata(rej_obj));
   if (nargs > 0) {
-     jsval_t wrapper_obj = mkobj(js, 0);
-     setprop(js, wrapper_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_promise_executor_wrapper));
-     setprop(js, wrapper_obj, js_mkstr(js, "executor", 8), args[0]);
-     setprop(js, wrapper_obj, js_mkstr(js, "resolve", 7), res_fn);
-     setprop(js, wrapper_obj, js_mkstr(js, "reject", 6), rej_fn);
-     jsval_t wrapper_fn = mkval(T_FUNC, vdata(wrapper_obj));
-     queue_microtask(js, wrapper_fn);
+    jsval_t exec_args[] = { res_fn, rej_fn };
+    js_call(js, args[0], exec_args, 2);
   }
   return p;
-}
-
-static jsval_t builtin_promise_executor_wrapper(struct js *js, jsval_t *args, int nargs) {
-  jsval_t me = js->current_func;
-  jsval_t executor = js_get(js, me, "executor");
-  jsval_t res_fn = js_get(js, me, "resolve");
-  jsval_t rej_fn = js_get(js, me, "reject");
-  jsval_t exec_args[] = { res_fn, rej_fn };
-  js_call(js, executor, exec_args, 2);
-  return js_mkundef();
 }
 
 static jsval_t builtin_Promise_resolve(struct js *js, jsval_t *args, int nargs) {
@@ -20755,25 +20726,24 @@ jsval_t js_get(struct js *js, jsval_t obj, const char *key) {
     jsoff_t off = lkp(js, arr_obj, key, key_len);
     return off == 0 ? js_mkundef() : resolveprop(js, mkval(T_PROP, off));
   }
-  
-  if (vtype(obj) == T_PROMISE) {
-    jsval_t prom_obj = mkval(T_OBJ, vdata(obj));
-    jsoff_t off = lkp(js, prom_obj, key, key_len);
-    if (off != 0) return resolveprop(js, mkval(T_PROP, off));
-    jsval_t promise_proto = get_ctor_proto(js, "Promise", 7);
-    if (vtype(promise_proto) != T_UNDEF && vtype(promise_proto) != T_NULL) {
-      off = lkp(js, promise_proto, key, key_len);
-      if (off != 0) return resolveprop(js, mkval(T_PROP, off));
-    }
-    return js_mkundef();
-  }
-  
-  if (vtype(obj) != T_OBJ) return js_mkundef();
+
+  uint8_t t = vtype(obj);
+  bool is_promise = (t == T_PROMISE);
+  if (is_promise) obj = mkval(T_OBJ, vdata(obj));
+  else if (t != T_OBJ) return js_mkundef();
   jsoff_t off = lkp(js, obj, key, key_len);
   
   if (off == 0) {
     jsval_t result = try_dynamic_getter(js, obj, key, key_len);
     if (vtype(result) != T_UNDEF) return result;
+  }
+  
+  if (off == 0 && is_promise) {
+    jsval_t promise_proto = get_ctor_proto(js, "Promise", 7);
+    if (vtype(promise_proto) != T_UNDEF && vtype(promise_proto) != T_NULL) {
+      off = lkp(js, promise_proto, key, key_len);
+      if (off != 0) return resolveprop(js, mkval(T_PROP, off));
+    }
   }
   
   return off == 0 ? js_mkundef() : resolveprop(js, mkval(T_PROP, off));
@@ -20899,8 +20869,12 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
   if (vtype(func) == T_FFI) {
     return ffi_call_by_index(js, (unsigned int)vdata(func), args, nargs);
   } else if (vtype(func) == T_CFUNC) {
+    jsval_t saved_this = js->this_val;
+    if (use_bound_this) js->this_val = bound_this;
     jsval_t (*fn)(struct js *, jsval_t *, int) = (jsval_t(*)(struct js *, jsval_t *, int)) vdata(func);
-    return fn(js, args, nargs);
+    jsval_t res = fn(js, args, nargs);
+    js->this_val = saved_this;
+    return res;
   } else if (vtype(func) == T_FUNC) {
     jsval_t func_obj = mkval(T_OBJ, vdata(func));
     jsoff_t native_off = lkp_interned(js, func_obj, INTERN_NATIVE_FUNC, 13);
