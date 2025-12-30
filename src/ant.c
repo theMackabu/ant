@@ -296,6 +296,14 @@ typedef struct descriptor_entry {
   UT_hash_handle hh;
 } descriptor_entry_t;
 
+typedef struct {
+  jsoff_t obj_off;
+  jsoff_t key_off;
+} propref_data_t;
+
+static const UT_icd propref_icd = { sizeof(propref_data_t), NULL, NULL, NULL };
+static UT_array *propref_stack = NULL;
+
 #define MAX_FUNC_PARAMS 64
 
 typedef struct parsed_param {
@@ -475,10 +483,40 @@ size_t vdata(jsval_t v) {
   return (size_t)(v & NANBOX_DATA_MASK); 
 }
 
-static jsoff_t coderefoff(jsval_t v) { return v & 0xffffffU; }
-static jsoff_t codereflen(jsval_t v) { return (v >> 24U) & 0xffffffU; }
-static jsoff_t propref_obj(jsval_t v) { return v & 0xffffffU; }
-static jsoff_t propref_key(jsval_t v) { return (v >> 24U) & 0xffffffU; }
+#define PROPREF_STACK_FLAG  0x800000000000ULL
+#define PROPREF_INDEX_MASK  0x7FFFFFFFFFFFULL
+#define PROPREF_OFF_MASK    0xFFFFFFU
+#define PROPREF_PAYLOAD     0xFFFFFFULL
+#define PROPREF_KEY_SHIFT   24U
+
+static jsoff_t coderefoff(jsval_t v) { return v & PROPREF_OFF_MASK; }
+static jsoff_t codereflen(jsval_t v) { return (v >> 24U) & PROPREF_OFF_MASK; }
+
+static inline propref_data_t *propref_get_entry(jsval_t v) {
+  uint64_t data = v & NANBOX_DATA_MASK;
+  if (!(data & PROPREF_STACK_FLAG)) return NULL;
+  
+  int idx = (int)(data & PROPREF_INDEX_MASK);
+  if (!propref_stack || idx < 0 || idx >= (int)utarray_len(propref_stack)) return NULL;
+  
+  return (propref_data_t *)utarray_eltptr(propref_stack, (unsigned)idx);
+}
+
+static jsoff_t propref_obj(jsval_t v) {
+  propref_data_t *entry = propref_get_entry(v);
+  if (entry) return entry->obj_off;
+  
+  uint64_t data = v & NANBOX_DATA_MASK;
+  return (data & PROPREF_STACK_FLAG) ? 0 : (data & PROPREF_OFF_MASK);
+}
+
+static jsoff_t propref_key(jsval_t v) {
+  propref_data_t *entry = propref_get_entry(v);
+  if (entry) return entry->key_off;
+  
+  uint64_t data = v & NANBOX_DATA_MASK;
+  return (data & PROPREF_STACK_FLAG) ? 0 : ((data >> PROPREF_KEY_SHIFT) & PROPREF_OFF_MASK);
+}
 
 static jsoff_t offtolen(jsoff_t off) { return (off >> 2) - 1; }
 static jsoff_t align32(jsoff_t v) { return ((v + 3) >> 2) << 2; }
@@ -515,11 +553,22 @@ void *js_gettypedarray(jsval_t val) {
 }
 
 static jsval_t mkcoderef(jsval_t off, jsoff_t len) { 
-  return mkval(T_CODEREF, (off & 0xffffffU) | ((jsval_t)(len & 0xffffffU) << 24U));
+  return mkval(T_CODEREF, (off & PROPREF_OFF_MASK) | ((jsval_t)(len & PROPREF_OFF_MASK) << 24U));
 }
 
-static jsval_t mkpropref(jsoff_t obj_off, jsoff_t key_off) { 
-  return mkval(T_PROPREF, (obj_off & 0xffffffU) | ((jsval_t)(key_off & 0xffffffU) << 24U)); 
+static jsval_t mkpropref(jsoff_t obj_off, jsoff_t key_off) {
+  if (obj_off <= PROPREF_OFF_MASK && key_off <= PROPREF_OFF_MASK) {
+    return mkval(T_PROPREF, (obj_off & PROPREF_OFF_MASK) | ((jsval_t)(key_off & PROPREF_OFF_MASK) << 24U));
+  }
+  
+  if (!propref_stack) utarray_new(propref_stack, &propref_icd);
+  if (utarray_len(propref_stack) > 1024) utarray_clear(propref_stack);
+  
+  propref_data_t entry = { obj_off, key_off };
+  utarray_push_back(propref_stack, &entry);
+  int idx = (int)utarray_len(propref_stack) - 1;
+
+  return mkval(T_PROPREF, PROPREF_STACK_FLAG | (uint64_t)idx);
 }
 
 static bool is_err(jsval_t v) { 
@@ -3181,7 +3230,7 @@ jsval_t js_mksym(struct js *js, const char *desc) {
     jsval_t desc_str = js_mkstr(js, desc, strlen(desc));
     desc_off = (jsoff_t)vdata(desc_str);
   }
-  uint64_t payload = ((id & 0xFFFFFFULL) << 24) | (desc_off & 0xFFFFFFULL);
+  uint64_t payload = ((id & PROPREF_PAYLOAD) << 24) | (desc_off & PROPREF_PAYLOAD);
   return mkval(T_SYMBOL, payload);
 }
 
@@ -3191,11 +3240,11 @@ static bool is_symbol(struct js *js, jsval_t v) {
 }
 
 static uint64_t sym_get_id(jsval_t v) {
-  return (vdata(v) >> 24) & 0xFFFFFFULL;
+  return (vdata(v) >> 24) & PROPREF_PAYLOAD;
 }
 
 static jsoff_t sym_get_desc_off(jsval_t v) {
-  return vdata(v) & 0xFFFFFFULL;
+  return vdata(v) & PROPREF_PAYLOAD;
 }
 
 static const char *sym_get_desc(struct js *js, jsval_t v) {
