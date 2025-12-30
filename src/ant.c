@@ -3212,6 +3212,12 @@ static jsval_t setprop_const(struct js *js, jsval_t obj, const char *key, size_t
   return mkprop(js, obj, k, v, true);
 }
 
+static inline jsval_t setprop_fast(struct js *js, jsval_t obj, const char *key, size_t len, jsval_t v) {
+  jsval_t k = js_mkstr(js, key, len);
+  if (is_err(k)) return k;
+  return mkprop(js, obj, k, v, false);
+}
+
 static jsval_t setprop_interned(struct js *js, jsval_t obj, const char *key, size_t len, jsval_t v) {
   jsval_t k = js_mkstr(js, key, len);
   if (is_err(k)) return k;
@@ -3627,23 +3633,34 @@ static int is_unicode_space(const unsigned char *p, jsoff_t remaining, bool *is_
 static jsoff_t skiptonext(const char *code, jsoff_t len, jsoff_t n, bool *had_newline) {
   if (had_newline) *had_newline = false;
   while (n < len) {
-    if (is_space(code[n])) {
-      if (had_newline && code[n] == '\n') *had_newline = true;
-      n++;
+    unsigned char c = (unsigned char)code[n];
+    if (c <= 0x7F) {
+      if (c == ' ' || c == '\t' || c == '\r' || c == '\f' || c == '\v') {
+        n++;
+      } else if (c == '\n') {
+        if (had_newline) *had_newline = true;
+        n++;
+      } else if (c == '/' && n + 1 < len) {
+        if (code[n + 1] == '/') {
+          for (n += 2; n < len && code[n] != '\n';) n++;
+          if (had_newline && n < len && code[n] == '\n') *had_newline = true;
+        } else if (code[n + 1] == '*' && n + 3 < len) {
+          for (n += 4; n < len && (code[n - 2] != '*' || code[n - 1] != '/');) {
+            if (had_newline && code[n] == '\n') *had_newline = true;
+            n++;
+          }
+        } else {
+          break;
+        }
+      } else {
+        break;
+      }
     } else {
       bool is_line_term = false;
       int ulen = is_unicode_space((const unsigned char *)&code[n], len - n, &is_line_term);
       if (ulen > 0) {
         if (had_newline && is_line_term) *had_newline = true;
         n += ulen;
-      } else if (n + 1 < len && code[n] == '/' && code[n + 1] == '/') {
-        for (n += 2; n < len && code[n] != '\n';) n++;
-        if (had_newline && n < len && code[n] == '\n') *had_newline = true;
-      } else if (n + 3 < len && code[n] == '/' && code[n + 1] == '*') {
-        for (n += 4; n < len && (code[n - 2] != '*' || code[n - 1] != '/');) {
-          if (had_newline && code[n] == '\n') *had_newline = true;
-          n++;
-        }
       } else {
         break;
       }
@@ -4398,7 +4415,12 @@ static jsval_t lookup(struct js *js, const char *buf, size_t len) {
     key_str = decoded;
   }
   
+  const char *key_intern = intern_string(key_str, key_len);
+  
   for (jsval_t scope = js->scope;;) {
+    jsoff_t off = lkp_interned(js, scope, key_intern, key_len);
+    if (off != 0) return mkval(T_PROP, off);
+    
     jsoff_t with_marker_off = lkp(js, scope, "__with_object__", 15);
     if (with_marker_off != 0) {
       jsval_t with_obj_val = resolveprop(js, mkval(T_PROP, with_marker_off));
@@ -4410,7 +4432,7 @@ static jsval_t lookup(struct js *js, const char *buf, size_t len) {
         with_obj_val : mkval(T_OBJ, vdata(with_obj_val)
       );
       
-      jsoff_t prop_off = lkp(js, with_obj, key_str, key_len);
+      jsoff_t prop_off = lkp_interned(js, with_obj, key_intern, key_len);
       if (prop_off != 0) {
         jsval_t key = js_mkstr(js, key_str, key_len);
         if (is_err(key)) return key;
@@ -4418,8 +4440,6 @@ static jsval_t lookup(struct js *js, const char *buf, size_t len) {
       }
     }
     
-    jsoff_t off = lkp(js, scope, key_str, key_len);
-    if (off != 0) return mkval(T_PROP, off);
     if (vdata(scope) == 0) break;
     scope = upper(js, scope);
   }
@@ -5346,7 +5366,7 @@ static jsval_t call_js_internal_nfe(struct js *js, const char *fn, jsoff_t fnlen
       } else {
         v = js_mkundef();
       }
-      setprop(js, function_scope, js_mkstr(js, &fn[pp->name_off], pp->name_len), v);
+      setprop_fast(js, function_scope, &fn[pp->name_off], pp->name_len, v);
     }
   }
   
