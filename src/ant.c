@@ -2769,7 +2769,7 @@ static jsval_t arr_get(struct js *js, jsval_t arr, jsoff_t idx) {
   return js_mkundef();
 }
 
-static bool is_const_prop(struct js *js, jsoff_t propoff) {
+static inline bool is_const_prop(struct js *js, jsoff_t propoff) {
   jsoff_t v = loadoff(js, propoff);
   return (v & CONSTMASK) != 0;
 }
@@ -2790,65 +2790,27 @@ static inline uint64_t hash_key(const char *key, size_t len) {
   return hash;
 }
 
-static const char *intern_string_h(const char *str, size_t len, uint64_t h) {
+static const char *intern_string(const char *str, size_t len) {
+  uint64_t h = hash_key(str, len);
   uint32_t bucket = (uint32_t)(h & (INTERN_BUCKETS - 1));
   
   for (interned_string_t *e = intern_buckets[bucket]; e; e = e->next) {
-    if (e->hash == h && e->len == len) {
-      return e->str;
-    }
+    if (e->hash == h && e->len == len && memcmp(e->str, str, len) == 0) return e->str;
   }
   
   interned_string_t *entry = (interned_string_t *)malloc(sizeof(interned_string_t));
   if (!entry) return NULL;
   entry->str = (char *)malloc(len + 1);
   if (!entry->str) { free(entry); return NULL; }
+  
   memcpy(entry->str, str, len);
   entry->str[len] = '\0';
   entry->len = len;
   entry->hash = h;
   entry->next = intern_buckets[bucket];
   intern_buckets[bucket] = entry;
+  
   return entry->str;
-}
-
-typedef struct {
-  const char *str;
-  size_t len;
-  const char *result;
-  uint64_t fingerprint;
-} intern_cache_entry_t;
-
-#define INTERN_CACHE_SIZE 1024
-static intern_cache_entry_t intern_cache[INTERN_CACHE_SIZE];
-
-static inline uint64_t make_fingerprint(const char *str, size_t len) {
-  if (len == 0) return 0;
-  uint64_t fp = len;
-  fp |= ((uint64_t)(unsigned char)str[0]) << 8;
-  if (len > 1) fp |= ((uint64_t)(unsigned char)str[1]) << 16;
-  if (len > 2) fp |= ((uint64_t)(unsigned char)str[len - 1]) << 24;
-  if (len > 4) fp |= ((uint64_t)(unsigned char)str[len >> 1]) << 32;
-  if (len > 8) fp |= ((uint64_t)(unsigned char)str[len >> 2]) << 40;
-  if (len > 16) fp |= ((uint64_t)(unsigned char)str[(len >> 1) + (len >> 2)]) << 48;
-  return fp;
-}
-
-static const char *intern_string(const char *str, size_t len) {
-  uint32_t slot = (((uintptr_t)str >> 3) ^ ((uintptr_t)str >> 11)) & (INTERN_CACHE_SIZE - 1);
-  intern_cache_entry_t *e = &intern_cache[slot];
-  
-  if (e->str == str && e->len == len) {
-    uint64_t fp = make_fingerprint(str, len);
-    if (e->fingerprint == fp) return e->result;
-  }
-  
-  const char *result = intern_string_h(str, len, hash_key(str, len));
-  e->str = str;
-  e->len = len;
-  e->result = result;
-  e->fingerprint = make_fingerprint(str, len);
-  return result;
 }
 
 static void intern_init(void) {
