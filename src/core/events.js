@@ -1,4 +1,4 @@
-globalThis.createEventTarget = function () {
+this.createEventTarget = function () {
   const obj = {};
   obj.addEventListener = EventTargetPrototype.addEventListener;
   obj.removeEventListener = EventTargetPrototype.removeEventListener;

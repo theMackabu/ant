@@ -32,8 +32,8 @@ let multi = new Function('x', 'let y = x * 2; return y + 1');
 console.log('  multi(5):', multi(5), '(expected: 11)');
 
 // Test 5: Access to global scope
-console.log('\nTest 5: Access to global scope variables');
-let factor = 10;
+console.log('\nTest 5: Access to window.global scope variables');
+window.global.factor = 10;
 let multiply = new Function('x', 'return x * factor');
 console.log('  multiply(5):', multiply(5), '(expected: 50)');
 
@@ -50,6 +50,6 @@ console.log('  add3(1, 2, 3):', add3(1, 2, 3), '(expected: 6)');
 // Test 8: String concatenation
 console.log('\nTest 8: String concatenation');
 let greet = new Function('name', 'return "Hello, " + name + "!"');
-console.log('  greet("World"):', greet("World"), '(expected: "Hello, World!")');
+console.log('  greet("World"):', greet('World'), '(expected: "Hello, World!")');
 
 console.log('\n=== All Function Constructor Tests Complete ===');

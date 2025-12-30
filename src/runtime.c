@@ -17,6 +17,8 @@ struct ant_runtime *ant_runtime_init(struct js *js, int argc, char **argv, struc
   
   js_set(js, js_glob(js), "Ant", runtime.ant_obj);
   js_set(js, js_glob(js), "global", js_glob(js));
+  js_set(js, js_glob(js), "window", js_glob(js));
+  js_set(js, js_glob(js), "globalThis", js_glob(js));
   
   return &runtime;
 }

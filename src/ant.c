@@ -3699,7 +3699,7 @@ static uint8_t parsekeyword(const char *buf, size_t len) {
     case 'd': if (streq("do", 2, buf, len)) return TOK_DO;  if (streq("default", 7, buf, len)) return TOK_DEFAULT; if (streq("delete", 6, buf, len)) return TOK_DELETE; if (streq("debugger", 8, buf, len)) return TOK_DEBUGGER; break;
     case 'e': if (streq("else", 4, buf, len)) return TOK_ELSE; if (streq("export", 6, buf, len)) return TOK_EXPORT; break;
     case 'f': if (streq("for", 3, buf, len)) return TOK_FOR; if (streq("from", 4, buf, len)) return TOK_FROM; if (streq("function", 8, buf, len)) return TOK_FUNC; if (streq("finally", 7, buf, len)) return TOK_FINALLY; if (streq("false", 5, buf, len)) return TOK_FALSE; break;
-    case 'g': if (streq("globalThis", 10, buf, len)) return TOK_GLOBAL_THIS; break;
+    case 'g': break;
     case 'i': if (streq("if", 2, buf, len)) return TOK_IF; if (streq("import", 6, buf, len)) return TOK_IMPORT; if (streq("in", 2, buf, len)) return TOK_IN; if (streq("instanceof", 10, buf, len)) return TOK_INSTANCEOF; break;
     case 'l': if (streq("let", 3, buf, len)) return TOK_LET; break;
     case 'n': if (streq("new", 3, buf, len)) return TOK_NEW; if (streq("null", 4, buf, len)) return TOK_NULL; break;
@@ -3709,7 +3709,7 @@ static uint8_t parsekeyword(const char *buf, size_t len) {
     case 't': if (streq("try", 3, buf, len)) return TOK_TRY; if (streq("this", 4, buf, len)) return TOK_THIS; if (streq("throw", 5, buf, len)) return TOK_THROW; if (streq("true", 4, buf, len)) return TOK_TRUE; if (streq("typeof", 6, buf, len)) return TOK_TYPEOF; break;
     case 'u': if (streq("undefined", 9, buf, len)) return TOK_UNDEF; break;
     case 'v': if (streq("var", 3, buf, len)) return TOK_VAR; if (streq("void", 4, buf, len)) return TOK_VOID; break;
-    case 'w': if (streq("while", 5, buf, len)) return TOK_WHILE; if (streq("with", 4, buf, len)) return TOK_WITH; if (streq("window", 6, buf, len)) return TOK_WINDOW; break;
+    case 'w': if (streq("while", 5, buf, len)) return TOK_WHILE; if (streq("with", 4, buf, len)) return TOK_WITH; break;
     case 'y': if (streq("yield", 5, buf, len)) return TOK_YIELD; break;
   }
   return TOK_IDENTIFIER;
@@ -6080,7 +6080,7 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
       if (is_err(prop)) return prop;
       return r;
     }
-    return js_mkerr(js, "bad lhs");
+    return js_mkerr_typed(js, JS_ERR_SYNTAX, "Invalid left-hand side in assignment");
   }
   
   switch (op) {
@@ -6097,11 +6097,11 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
     case TOK_DOT:            return do_dot_op(js, l, r);
     case TOK_OPTIONAL_CHAIN: return do_optional_chain_op(js, l, r);
     case TOK_POSTINC: {
-      if (vtype(lhs) != T_PROP) return js_mkerr(js, "bad lhs for ++");
+      if (vtype(lhs) != T_PROP) return js_mkerr_typed(js, JS_ERR_SYNTAX, "Invalid left-hand side expression in postfix operation");
       do_assign_op(js, TOK_PLUS_ASSIGN, lhs, tov(1)); return l;
     }
     case TOK_POSTDEC: {
-      if (vtype(lhs) != T_PROP) return js_mkerr(js, "bad lhs for --");
+      if (vtype(lhs) != T_PROP) return js_mkerr_typed(js, JS_ERR_SYNTAX, "Invalid left-hand side expression in postfix operation");
       do_assign_op(js, TOK_MINUS_ASSIGN, lhs, tov(1)); return l;
     }
     case TOK_NOT:     return mkval(T_BOOL, !js_truthy(js, r));
@@ -6109,7 +6109,7 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
       if (vtype(r) == T_BIGINT) return bigint_neg(js, r);
       break;
     case TOK_UPLUS:
-      if (vtype(r) == T_BIGINT) return js_mkerr(js, "Cannot convert BigInt to number");
+      if (vtype(r) == T_BIGINT) return js_mkerr(js, "Cannot convert a BigInt value to a number");
       break;
   }
   if (is_assign(op))    return do_assign_op(js, op, lhs, r);
@@ -6184,7 +6184,7 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
   }
   if (vtype(l) == T_BIGINT || vtype(r) == T_BIGINT) {
     if (vtype(l) != T_BIGINT || vtype(r) != T_BIGINT) {
-      return js_mkerr(js, "Cannot mix BigInt and other types");
+      return js_mkerr(js, "Cannot mix BigInt value and other types");
     }
     switch (op) {
       case TOK_PLUS:  return bigint_add(js, l, r);
@@ -6197,7 +6197,7 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
       case TOK_GT:    return mkval(T_BOOL, bigint_compare(js, l, r) > 0);
       case TOK_LE:    return mkval(T_BOOL, bigint_compare(js, l, r) <= 0);
       case TOK_GE:    return mkval(T_BOOL, bigint_compare(js, l, r) >= 0);
-      default: return js_mkerr(js, "unsupported BigInt operation");
+      default: return js_mkerr(js, "Unsupported BigInt operation");
     }
   }
   if (op == TOK_PLUS && (vtype(l) == T_STR || vtype(r) == T_STR || vtype(l) == T_ARR || vtype(r) == T_ARR)) {
@@ -7609,9 +7609,6 @@ static jsval_t js_literal(struct js *js) {
     case TOK_TRUE:        return js_mktrue();
     case TOK_FALSE:       return js_mkfalse();
     case TOK_THIS:        return js->this_val;
-    
-    case TOK_WINDOW:
-    case TOK_GLOBAL_THIS: return js_glob(js);
     
     case TOK_OF:
     case TOK_FOR: 
