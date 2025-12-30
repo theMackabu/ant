@@ -4786,14 +4786,8 @@ static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
   }
   
   if (t == T_ARR && streq(ptr, plen, "length", 6)) {
-    jsoff_t len_off = lkp(js, l, "length", 6);
-    if (len_off != 0) {
-      return mkval(T_PROP, len_off);
-    }
     jsval_t key = js_mkstr(js, "length", 6);
-    jsval_t len_val = tov(arr_length(js, l));
-    jsval_t prop = setprop(js, l, key, len_val);
-    return prop;
+    return mkpropref((jsoff_t)vdata(l), (jsoff_t)vdata(key));
   }
   
   if (t == T_STR || t == T_NUM || t == T_BOOL || t == T_BIGINT) {
