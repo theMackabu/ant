@@ -210,12 +210,6 @@ typedef struct interned_string {
   struct interned_string *next;
 } interned_string_t;
 
-typedef struct {
-  uint64_t combined_key;
-  jsoff_t prop_offset;
-  UT_hash_handle hh;
-} fast_prop_cache_t;
-
 typedef struct koff_intern {
   jsoff_t koff;
   const char *interned;
@@ -224,7 +218,7 @@ typedef struct koff_intern {
 
 #define INTERN_BUCKETS 16384
 static interned_string_t *intern_buckets[INTERN_BUCKETS];
-static fast_prop_cache_t *fast_cache = NULL;
+
 #define KOFF_BUCKETS 16384
 static koff_intern_t *koff_buckets[KOFF_BUCKETS];
 
@@ -2894,51 +2888,7 @@ static inline void set_koff_intern(jsoff_t koff, const char *interned) {
   koff_cache[slot].interned = interned;
 }
 
-static inline uint64_t make_cache_key(jsoff_t obj_offset, uint32_t str_hash) {
-  return ((uint64_t)obj_offset << 32) | str_hash;
-}
-
-static void fast_cache_property(jsoff_t obj_offset, const char *key, size_t key_len, jsoff_t prop_offset) {
-  if (key_len > 63) return;
-  
-  uint64_t str_hash = hash_key(key, key_len);
-  uint64_t combined = make_cache_key(obj_offset, (uint32_t)str_hash);
-  
-  fast_prop_cache_t *entry = NULL;
-  HASH_FIND(hh, fast_cache, &combined, sizeof(uint64_t), entry);
-  
-  if (!entry) {
-    entry = (fast_prop_cache_t *)malloc(sizeof(fast_prop_cache_t));
-    if (!entry) return;
-    entry->combined_key = combined;
-    HASH_ADD(hh, fast_cache, combined_key, sizeof(uint64_t), entry);
-  }
-  entry->prop_offset = prop_offset;
-}
-
-static jsoff_t fast_cache_lookup(jsoff_t obj_offset, const char *key, size_t key_len) {
-  if (key_len > 63) return 0;
-  
-  uint64_t str_hash = hash_key(key, key_len);
-  uint64_t combined = make_cache_key(obj_offset, (uint32_t)str_hash);
-  
-  fast_prop_cache_t *entry = NULL;
-  HASH_FIND(hh, fast_cache, &combined, sizeof(uint64_t), entry);
-  if (entry) return entry->prop_offset;
-  return 0;
-}
-
-static void invalidate_obj_cache(jsoff_t obj_offset) {
-  fast_prop_cache_t *entry, *tmp;
-  HASH_ITER(hh, fast_cache, entry, tmp) {
-    if ((entry->combined_key >> 32) == obj_offset) {
-      HASH_DEL(fast_cache, entry);
-      free(entry);
-    }
-  }
-}
-
-static void invalidate_prop_cache_for_obj(jsoff_t obj_offset) {
+static void invalidate_prop_cache(jsoff_t obj_offset) {
   for (uint32_t i = 0; i < INTERN_PROP_CACHE_SIZE; i++) {
     if (intern_prop_cache[i].obj_off == obj_offset) {
       intern_prop_cache[i].obj_off = 0;
@@ -2959,7 +2909,6 @@ static jsval_t mkprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v, bool is_
   
   if (b & ARRMASK) brk |= ARRMASK;
   memcpy(&js->mem[head], &brk, sizeof(brk));
-  invalidate_obj_cache(head);
   
   jsoff_t klen = (loadoff(js, koff) >> 2) - 1;
   const char *p = (char *) &js->mem[koff + sizeof(koff)];
@@ -8016,8 +7965,7 @@ static jsval_t js_unary(struct js *js) {
         jsoff_t current = loadoff(js, obj_off);
         saveoff(js, obj_off, (deleted_next & ~3U) | (current & (GCMASK | CONSTMASK | 3U)));
         saveoff(js, prop_off, loadoff(js, prop_off) | GCMASK);
-        invalidate_obj_cache(obj_off);
-        invalidate_prop_cache_for_obj(obj_off);
+        invalidate_prop_cache(obj_off);
         // js_gc(js); disabled
         return js_mktrue();
       }
@@ -8029,8 +7977,7 @@ static jsval_t js_unary(struct js *js) {
           jsoff_t current = loadoff(js, prev);
           saveoff(js, prev, (deleted_next & ~3U) | (current & (GCMASK | CONSTMASK | 3U)));
           saveoff(js, prop_off, loadoff(js, prop_off) | GCMASK);
-          invalidate_obj_cache(obj_off);
-          invalidate_prop_cache_for_obj(obj_off);
+          invalidate_prop_cache(obj_off);
           // js_gc(js); disabled
           return js_mktrue();
         }
@@ -8118,8 +8065,7 @@ static jsval_t js_unary(struct js *js) {
         saveoff(js, prev_prop_off, (deleted_next & ~3U) | (current & (GCMASK | CONSTMASK | 3U)));
       }
       saveoff(js, prop_off, loadoff(js, prop_off) | GCMASK);
-      invalidate_obj_cache(owner_obj_off);
-      invalidate_prop_cache_for_obj(owner_obj_off);
+      invalidate_prop_cache(owner_obj_off);
       // js_gc(js); disabled
     }
     (void) save_pos;
@@ -20674,8 +20620,7 @@ bool js_del(struct js *js, jsval_t obj, const char *key) {
     jsoff_t current = loadoff(js, obj_off);
     saveoff(js, obj_off, (deleted_next & ~3U) | (current & (GCMASK | CONSTMASK | 3U)));
     saveoff(js, prop_off, loadoff(js, prop_off) | GCMASK);
-    invalidate_obj_cache(obj_off);
-    invalidate_prop_cache_for_obj(obj_off);
+    invalidate_prop_cache(obj_off);
     return true;
   }
   
@@ -20687,8 +20632,7 @@ bool js_del(struct js *js, jsval_t obj, const char *key) {
       jsoff_t prev_flags = loadoff(js, prev) & (GCMASK | CONSTMASK);
       saveoff(js, prev, deleted_next | prev_flags);
       saveoff(js, prop_off, loadoff(js, prop_off) | GCMASK);
-      invalidate_obj_cache(obj_off);
-      invalidate_prop_cache_for_obj(obj_off);
+      invalidate_prop_cache(obj_off);
       return true;
     }
     prev = next_prop;
