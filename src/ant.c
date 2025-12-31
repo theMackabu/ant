@@ -10015,6 +10015,10 @@ static jsval_t js_try(struct js *js) {
         exception_handled = false;
         strncpy(saved_errmsg, js->errmsg, sizeof(saved_errmsg) - 1);
         saved_errmsg[sizeof(saved_errmsg) - 1] = '\0';
+        exception_value = js->thrown_value;
+        js->thrown_value = js_mkundef();
+        js->flags &= (uint8_t)~F_THROW;
+        js->errmsg[0] = '\0';
       } else {
         res = catch_result;
       }
