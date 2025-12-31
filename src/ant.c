@@ -10522,7 +10522,6 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
   }
   
   EXPECT(TOK_LBRACE, );
-  jsoff_t class_body_start = js->pos;
   jsoff_t constructor_params_start = 0;
   jsoff_t constructor_body_start = 0, constructor_body_end = 0;
   uint8_t save_flags = js->flags;
@@ -10935,12 +10934,10 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
       }
     }
     
-    (void) class_body_start;
     utarray_free(methods);
     return constructor;
   }
   
-  (void) class_body_start;
   utarray_free(methods);
   return js_mkundef();
 }
