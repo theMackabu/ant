@@ -7899,6 +7899,18 @@ static jsval_t js_call_dot(struct js *js) {
       } else if (nxt == TOK_IDENTIFIER || is_keyword_propname(nxt)) {
         js->consumed = 1;
         prop_name = mkcoderef((jsoff_t) js->toff, (jsoff_t) js->tlen);
+      } else if (nxt == TOK_LBRACKET) {
+        js->consumed = 1;
+        jsval_t idx = js_expr(js);
+        if (is_err(idx)) return idx;
+        if (next(js) != TOK_RBRACKET) return js_mkerr_typed(js, JS_ERR_SYNTAX, "] expected");
+        js->consumed = 1;
+        if (op == TOK_OPTIONAL_CHAIN && (vtype(obj) == T_NULL || vtype(obj) == T_UNDEF)) {
+          res = js_mkundef();
+        } else {
+          res = do_op(js, TOK_BRACKET, res, idx);
+        }
+        continue;
       } else {
         prop_name = js_group(js);
       }
