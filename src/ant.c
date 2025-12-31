@@ -4169,6 +4169,58 @@ static jsoff_t lkp(struct js *js, jsval_t obj, const char *buf, size_t len) {
   return lkp_inline(js, obj, buf, len);
 }
 
+static jsoff_t lkp_with_getter(struct js *js, jsval_t obj, const char *buf, size_t len, jsval_t *getter_out, bool *has_getter_out) {
+  *has_getter_out = false;
+  *getter_out = js_mkundef();
+  
+  jsval_t current = obj;
+  while (vtype(current) == T_OBJ || vtype(current) == T_FUNC) {
+    jsoff_t current_off = (jsoff_t)vdata(current);
+    descriptor_entry_t *desc = lookup_descriptor(current_off, buf, len);
+    
+    if (desc && desc->has_getter) {
+      *getter_out = desc->getter;
+      *has_getter_out = true;
+      return current_off;
+    }
+    
+    jsoff_t prop_off = lkp_interned(js, current, intern_string(buf, len), len);
+    if (prop_off != 0) return prop_off;
+    
+    jsval_t proto = get_proto(js, current);
+    if (vtype(proto) != T_OBJ && vtype(proto) != T_FUNC) break;
+    current = proto;
+  }
+  
+  return 0;
+}
+
+static jsoff_t lkp_with_setter(struct js *js, jsval_t obj, const char *buf, size_t len, jsval_t *setter_out, bool *has_setter_out) {
+  *has_setter_out = false;
+  *setter_out = js_mkundef();
+  
+  jsval_t current = obj;
+  while (vtype(current) == T_OBJ || vtype(current) == T_FUNC) {
+    jsoff_t current_off = (jsoff_t)vdata(current);
+    descriptor_entry_t *desc = lookup_descriptor(current_off, buf, len);
+    
+    if (desc && desc->has_setter) {
+      *setter_out = desc->setter;
+      *has_setter_out = true;
+      return current_off;
+    }
+    
+    jsoff_t prop_off = lkp_interned(js, current, intern_string(buf, len), len);
+    if (prop_off != 0) return prop_off;
+    
+    jsval_t proto = get_proto(js, current);
+    if (vtype(proto) != T_OBJ && vtype(proto) != T_FUNC) break;
+    current = proto;
+  }
+  
+  return 0;
+}
+
 jsval_t js_get_proto(struct js *js, jsval_t obj) {
   uint8_t t = vtype(obj);
 
@@ -4380,43 +4432,33 @@ static jsval_t lookup(struct js *js, const char *buf, size_t len) {
 }
 
 static bool try_accessor_getter(struct js *js, jsval_t obj, const char *key, size_t key_len, jsval_t *out) {
-  jsval_t current = obj;
-  while (vtype(current) == T_OBJ || vtype(current) == T_FUNC) {
-    jsoff_t current_off = (jsoff_t)vdata(current);
-    descriptor_entry_t *desc = lookup_descriptor(current_off, key, key_len);
-    
-    if (desc && desc->has_getter) {
-      jsval_t getter = desc->getter;
-      if (vtype(getter) != T_FUNC && vtype(getter) != T_CFUNC) return false;
-      
-      js_parse_state_t saved;
-      JS_SAVE_STATE(js, saved);
-      uint8_t saved_flags = js->flags;
-      jsoff_t saved_toff = js->toff;
-      jsoff_t saved_tlen = js->tlen;
-      
-      jsval_t saved_this = js->this_val;
-      js->this_val = obj;
-      push_this(obj);
-      *out = call_js_with_args(js, getter, NULL, 0);
-      
-      pop_this();
-      js->this_val = saved_this;
-      
-      JS_RESTORE_STATE(js, saved);
-      js->flags = saved_flags;
-      js->toff = saved_toff;
-      js->tlen = saved_tlen;
-      
-      return true;
-    }
-    
-    jsval_t proto = get_proto(js, current);
-    if (vtype(proto) != T_OBJ && vtype(proto) != T_FUNC) break;
-    current = proto;
-  }
+  jsval_t getter = js_mkundef();
+  bool has_getter = false;
+  lkp_with_getter(js, obj, key, key_len, &getter, &has_getter);
   
-  return false;
+  if (!has_getter) return false;
+  if (vtype(getter) != T_FUNC && vtype(getter) != T_CFUNC) return false;
+  
+  js_parse_state_t saved;
+  JS_SAVE_STATE(js, saved);
+  uint8_t saved_flags = js->flags;
+  jsoff_t saved_toff = js->toff;
+  jsoff_t saved_tlen = js->tlen;
+  
+  jsval_t saved_this = js->this_val;
+  js->this_val = obj;
+  push_this(obj);
+  *out = call_js_with_args(js, getter, NULL, 0);
+  
+  pop_this();
+  js->this_val = saved_this;
+  
+  JS_RESTORE_STATE(js, saved);
+  js->flags = saved_flags;
+  js->toff = saved_toff;
+  js->tlen = saved_tlen;
+  
+  return true;
 }
 
 static jsval_t resolveprop(struct js *js, jsval_t v) {
@@ -4463,43 +4505,33 @@ static int check_prop_writable(struct js *js, jsval_t owner, const char *key, js
 }
 
 static bool try_accessor_setter(struct js *js, jsval_t obj, const char *key, size_t key_len, jsval_t val, jsval_t *out) {
-  jsval_t current = obj;
-  while (vtype(current) == T_OBJ || vtype(current) == T_FUNC) {
-    jsoff_t current_off = (jsoff_t)vdata(current);
-    descriptor_entry_t *desc = lookup_descriptor(current_off, key, key_len);
-    
-    if (desc && desc->has_setter) {
-      jsval_t setter = desc->setter;
-      if (vtype(setter) != T_FUNC && vtype(setter) != T_CFUNC) return false;
-      
-      js_parse_state_t saved;
-      JS_SAVE_STATE(js, saved);
-      uint8_t saved_flags = js->flags;
-      jsoff_t saved_toff = js->toff;
-      jsoff_t saved_tlen = js->tlen;
-      
-      jsval_t saved_this = js->this_val;
-      js->this_val = obj;
-      push_this(obj);
-      jsval_t result = call_js_with_args(js, setter, &val, 1);
-      pop_this();
-      js->this_val = saved_this;
-      
-      JS_RESTORE_STATE(js, saved);
-      js->flags = saved_flags;
-      js->toff = saved_toff;
-      js->tlen = saved_tlen;
-      
-      *out = is_err(result) ? result : val;
-      return true;
-    }
-    
-    jsval_t proto = get_proto(js, current);
-    if (vtype(proto) != T_OBJ && vtype(proto) != T_FUNC) break;
-    current = proto;
-  }
+  jsval_t setter = js_mkundef();
+  bool has_setter = false;
+  lkp_with_setter(js, obj, key, key_len, &setter, &has_setter);
   
-  return false;
+  if (!has_setter) return false;
+  if (vtype(setter) != T_FUNC && vtype(setter) != T_CFUNC) return false;
+  
+  js_parse_state_t saved;
+  JS_SAVE_STATE(js, saved);
+  uint8_t saved_flags = js->flags;
+  jsoff_t saved_toff = js->toff;
+  jsoff_t saved_tlen = js->tlen;
+  
+  jsval_t saved_this = js->this_val;
+  js->this_val = obj;
+  push_this(obj);
+  jsval_t result = call_js_with_args(js, setter, &val, 1);
+  pop_this();
+  js->this_val = saved_this;
+  
+  JS_RESTORE_STATE(js, saved);
+  js->flags = saved_flags;
+  js->toff = saved_toff;
+  js->tlen = saved_tlen;
+  
+  *out = is_err(result) ? result : val;
+  return true;
 }
 
 static jsval_t assign(struct js *js, jsval_t lhs, jsval_t val) {
@@ -4508,6 +4540,15 @@ static jsval_t assign(struct js *js, jsval_t lhs, jsval_t val) {
     jsoff_t key_off = propref_key(lhs);
     jsval_t obj = mkval(is_arr_off(js, obj_off) ? T_ARR : T_OBJ, obj_off);
     jsval_t key = mkval(T_STR, key_off);
+    
+    jsoff_t key_len;
+    const char *key_str = (const char *)&js->mem[vstr(js, key, &key_len)];
+    
+    jsval_t setter_result;
+    if (try_accessor_setter(js, obj, key_str, key_len, val, &setter_result)) {
+      return setter_result;
+    }
+    
     return setprop(js, obj, key, val);
   }
   
@@ -4700,20 +4741,23 @@ static jsval_t do_bracket_op(struct js *js, jsval_t l, jsval_t r) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "'%.*s' not allowed on strict arguments", (int)keylen, keystr);
   }
   
-  jsoff_t own_off = lkp(js, obj, keystr, keylen);
-  if (own_off != 0) {
-    jsoff_t obj_off = (jsoff_t)vdata(obj);
-    descriptor_entry_t *desc = lookup_descriptor(obj_off, keystr, keylen);
-    if (desc && (desc->has_getter || desc->has_setter)) {
-      jsval_t key = js_mkstr(js, keystr, keylen);
-      return mkpropref((jsoff_t)vdata(obj), (jsoff_t)vdata(key));
-    }
-    return mkval(T_PROP, own_off);
+  jsval_t getter = js_mkundef();
+  bool has_getter = false;
+  jsoff_t prop_off = lkp_with_getter(js, obj, keystr, keylen, &getter, &has_getter);
+  
+  jsval_t setter = js_mkundef();
+  bool has_setter = false;
+  if (!has_getter) {
+    lkp_with_setter(js, obj, keystr, keylen, &setter, &has_setter);
   }
   
-  jsval_t accessor_result;
-  if (try_accessor_getter(js, obj, keystr, keylen, &accessor_result)) {
-    return accessor_result;
+  if (has_getter || has_setter) {
+    jsval_t key = js_mkstr(js, keystr, keylen);
+    return mkpropref((jsoff_t)vdata(obj), (jsoff_t)vdata(key));
+  }
+  
+  if (prop_off != 0) {
+    return mkval(T_PROP, prop_off);
   }
   
   jsval_t dyn_result = try_dynamic_getter(js, obj, keystr, keylen);
