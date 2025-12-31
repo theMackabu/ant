@@ -4978,13 +4978,19 @@ static jsval_t call_c(struct js *js, jsval_t (*fn)(struct js *, jsval_t *, int))
   int argc = parse_call_args(js, &err);
   if (argc < 0) { js->size = saved_size; return err; }
   
+  jsval_t stack_args[MAX_FUNC_PARAMS];
+  jsval_t *heap_args = (jsval_t *) &js->mem[js->size];
+  for (int i = 0; i < argc && i < MAX_FUNC_PARAMS; i++) {
+    stack_args[i] = heap_args[i];
+  }
+  js->size = saved_size;
+  
   jsval_t saved_this = js->this_val;
   js->this_val = peek_this();
-  res = fn(js, (jsval_t *) &js->mem[js->size], argc);
+  res = fn(js, stack_args, argc);
   js->this_val = saved_this;
   setlwm(js);
   
-  js->size = saved_size;
   return res;
 }
 
@@ -5715,10 +5721,16 @@ static jsval_t call_ffi(struct js *js, unsigned int func_index) {
   int argc = parse_call_args(js, &err);
   if (argc < 0) { js->size = saved_size; return err; }
   
-  res = ffi_call_by_index(js, func_index, (jsval_t *) &js->mem[js->size], argc);
+  jsval_t stack_args[MAX_FUNC_PARAMS];
+  jsval_t *heap_args = (jsval_t *) &js->mem[js->size];
+  for (int i = 0; i < argc && i < MAX_FUNC_PARAMS; i++) {
+    stack_args[i] = heap_args[i];
+  }
+  js->size = saved_size;
+  
+  res = ffi_call_by_index(js, func_index, stack_args, argc);
   setlwm(js);
   
-  js->size = saved_size;
   return res;
 }
 
