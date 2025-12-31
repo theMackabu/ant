@@ -235,39 +235,47 @@ int has_pending_immediates(void) {
   return 0;
 }
 
+static void remove_timer(timer_entry_t *target) {
+  timer_entry_t **ptr = &timer_state.timers;
+  
+scan:
+  if (!*ptr) return;
+  if (*ptr == target) { *ptr = target->next; free(target); return; }
+  ptr = &(*ptr)->next;
+  goto scan;
+}
+
 void process_timers(struct js *js) {
-  if (timer_state.timers == NULL) return;
-  
   uint64_t current_time = get_current_time_ms();
-  timer_entry_t **entry_ptr = &timer_state.timers;
+  timer_entry_t **ptr = &timer_state.timers;
+  timer_entry_t *entry;
+
+scan:
+  if (!*ptr) return;
+  entry = *ptr;
   
-  while (*entry_ptr != NULL) {
-    timer_entry_t *entry = *entry_ptr;
-    
-    if (!entry->active) {
-      *entry_ptr = entry->next;
-      free(entry);
-      continue;
-    }
-    
-    if (entry->active && current_time >= entry->target_time_ms) {
-      jsval_t args[0];
-      js_call(js, entry->callback, args, 0);
-      
-      process_microtasks(js);
-      
-      if (entry->is_interval) {
-        entry->target_time_ms = get_current_time_ms() + entry->interval_ms;
-        entry_ptr = &entry->next;
-      } else {
-        *entry_ptr = entry->next;
-        free(entry);
-      }
-      continue;
-    }
-    
-    entry_ptr = &entry->next;
+  if (!entry->active) {
+    *ptr = entry->next;
+    free(entry);
+    goto scan;
   }
+  
+  if (current_time < entry->target_time_ms) {
+    ptr = &entry->next;
+    goto scan;
+  }
+  
+  jsval_t args[0];
+  js_call(js, entry->callback, args, 0);
+  process_microtasks(js);
+  
+  if (entry->is_interval && entry->active) {
+    entry->target_time_ms = get_current_time_ms() + entry->interval_ms;
+  } else remove_timer(entry);
+  
+  current_time = get_current_time_ms();
+  ptr = &timer_state.timers;
+  goto scan;
 }
 
 int has_pending_timers(void) {
