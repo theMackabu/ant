@@ -7,6 +7,7 @@
 *.dll
 
 /build
+/traces
 /javascript-zoo
 
 /subprojects/*/

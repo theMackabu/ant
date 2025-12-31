@@ -106,10 +106,10 @@ static int execute_module(struct js *js, const char *filename) {
   buffer[len] = '\0';
   
   char abs_path[4096];
-  char *use_path = NULL;
+  const char *use_path = NULL;
   if (realpath(filename, abs_path) != NULL) {
-    use_path = strdup(abs_path);
-  } else use_path = strdup(filename);
+    use_path = abs_path;
+  } else use_path = filename;
 
   js_set_filename(js, use_path);
   js_setup_import_meta(js, use_path);
@@ -122,11 +122,9 @@ static int execute_module(struct js *js, const char *filename) {
   
   if (js_type(result) == JS_ERR) {
     fprintf(stderr, "%s\n", js_str(js, result));
-    free(use_path);
     return EXIT_FAILURE;
   }
   
-  free(use_path);
   return EXIT_SUCCESS;
 }
 

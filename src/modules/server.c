@@ -31,9 +31,7 @@ static char* strip_ansi(const char *str) {
   for (size_t i = 0; i < len; i++) {
     if (str[i] == '\033' && i + 1 < len && str[i + 1] == '[') {
       i += 2;
-      while (i < len && !((str[i] >= 'A' && str[i] <= 'Z') || (str[i] >= 'a' && str[i] <= 'z'))) {
-        i++;
-      }
+      while (i < len && !((str[i] >= 'A' && str[i] <= 'Z') || (str[i] >= 'a' && str[i] <= 'z'))) i++;
       continue;
     }
     result[j++] = str[i];
@@ -315,9 +313,7 @@ static int parse_http_request(const char *buffer, size_t len, http_request_t *re
         memcpy(req->body, body_start, req->body_len);
         req->body[req->body_len] = '\0';
       }
-    } else {
-      req->body = NULL;
-    }
+    } else req->body = NULL;
   } else {
     req->body = NULL;
     req->body_len = 0;
@@ -745,9 +741,7 @@ static void handle_http_request(client_t *client, http_request_t *http_req) {
 
     jsval_t args[1] = {ctx};
     result = js_call(server->js, server->handler, args, 1);
-    if (js_type(result) == JS_PROMISE) {
-      return;
-    }
+    if (js_type(result) == JS_PROMISE) return;
     
     if (js_type(result) == JS_ERR) {
       const char *error_msg = js_str(server->js, result);
@@ -806,18 +800,11 @@ static void check_pending_responses(http_server_t *server) {
         uv_close((uv_handle_t *)ctx->client_handle, on_close);
       }
       
-      if (ctx->custom_headers) {
-        utarray_free(ctx->custom_headers);
-      }
-      
-      if (ctx->should_free_body && ctx->body) {
-        free(ctx->body);
-      }
+      if (ctx->custom_headers) utarray_free(ctx->custom_headers);
+      if (ctx->should_free_body && ctx->body) free(ctx->body);
       
       free(ctx);
-    } else {
-      current = &ctx->next;
-    }
+    } else { current = &ctx->next; }
   }
 }
 
@@ -919,9 +906,7 @@ static void on_connection(uv_stream_t *server, int status) {
   
   if (uv_accept(server, (uv_stream_t *)&client->handle) == 0) {
     uv_read_start((uv_stream_t *)&client->handle, alloc_buffer, on_read);
-  } else {
-    uv_close((uv_handle_t *)&client->handle, on_close);
-  }
+  } else uv_close((uv_handle_t *)&client->handle, on_close);
 }
 
 // Ant.serve(port, handler)

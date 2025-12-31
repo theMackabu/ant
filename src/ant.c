@@ -2315,7 +2315,10 @@ static jsval_t mkentity(struct js *js, jsoff_t b, const void *buf, size_t len) {
   jsoff_t ofs = js_alloc(js, len + sizeof(b));
   if (ofs == (jsoff_t) ~0) return js_mkerr(js, "oom");
   memcpy(&js->mem[ofs], &b, sizeof(b));
-  if (buf != NULL) memmove(&js->mem[ofs + sizeof(b)], buf, len);
+  if (buf != NULL) {
+    size_t copy_len = ((b & 3) == T_STR && len > 0) ? len - 1 : len;
+    memmove(&js->mem[ofs + sizeof(b)], buf, copy_len);
+  }
   if ((b & 3) == T_STR) js->mem[ofs + sizeof(b) + len - 1] = 0;
   return mkval(b & 3, ofs);
 }
@@ -17001,9 +17004,9 @@ static jsval_t builtin_string_charAt(struct js *js, jsval_t *args, int nargs) {
   if (idx >= str_len) return js_mkstr(js, "", 0);
   
   jsoff_t str_off = (jsoff_t) vdata(str) + sizeof(jsoff_t);
-  char ch = js->mem[str_off + idx];
+  char ch[2] = { js->mem[str_off + idx], '\0' };
   
-  return js_mkstr(js, &ch, 1);
+  return js_mkstr(js, ch, 1);
 }
 
 static jsval_t builtin_string_at(struct js *js, jsval_t *args, int nargs) {
@@ -17019,8 +17022,8 @@ static jsval_t builtin_string_at(struct js *js, jsval_t *args, int nargs) {
   if (idx < 0 || idx >= (long) str_len) return js_mkundef();
 
   jsoff_t str_off = (jsoff_t) vdata(str) + sizeof(jsoff_t);
-  char ch = js->mem[str_off + idx];
-  return js_mkstr(js, &ch, 1);
+  char ch[2] = { js->mem[str_off + idx], '\0' };
+  return js_mkstr(js, ch, 1);
 }
 
 static jsval_t builtin_string_localeCompare(struct js *js, jsval_t *args, int nargs) {
