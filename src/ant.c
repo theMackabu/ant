@@ -4832,6 +4832,11 @@ static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
     if (own_off != 0) return mkval(T_PROP, own_off);
   }
   
+  jsoff_t proto_off = lkp_proto(js, l, ptr, plen);
+  if (proto_off != 0) {
+    return resolveprop(js, mkval(T_PROP, proto_off));
+  }
+  
   jsval_t key = js_mkstr(js, ptr, plen);
   return mkpropref((jsoff_t)vdata(l), (jsoff_t)vdata(key));
 }
