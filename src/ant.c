@@ -4895,11 +4895,6 @@ static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
     if (own_off != 0) return mkval(T_PROP, own_off);
   }
   
-  jsoff_t proto_off = lkp_proto(js, l, ptr, plen);
-  if (proto_off != 0) {
-    return resolveprop(js, mkval(T_PROP, proto_off));
-  }
-  
   jsval_t key = js_mkstr(js, ptr, plen);
   return mkpropref((jsoff_t)vdata(l), (jsoff_t)vdata(key));
 }
@@ -6052,7 +6047,9 @@ fallback:;
 
 static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
   if (js->flags & F_NOEXEC) return 0;
-  jsval_t l = resolveprop(js, lhs), r = resolveprop(js, rhs);
+  
+  jsval_t l = is_assign(op) ? lhs : resolveprop(js, lhs);
+  jsval_t r = resolveprop(js, rhs);
   setlwm(js);
   
   if (is_err(l)) return l;
