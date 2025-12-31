@@ -733,14 +733,7 @@ static jsval_t js_export_stmt(struct js *js);
 
 static jsval_t builtin_Object(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_Promise(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Promise_resolve(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Promise_reject(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Promise_try(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Promise_all(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Promise_race(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_promise_then(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_promise_catch(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_promise_finally(struct js *js, jsval_t *args, int nargs);
 
 static jsval_t proxy_get(struct js *js, jsval_t proxy, const char *key, size_t key_len);
 static jsval_t proxy_set(struct js *js, jsval_t proxy, const char *key, size_t key_len, jsval_t value);
@@ -18264,6 +18257,117 @@ static jsval_t builtin_Promise_race(struct js *js, jsval_t *args, int nargs) {
   return result_promise;
 }
 
+static jsval_t mk_aggregate_error(struct js *js, jsval_t errors) {
+  jsval_t agg_err = js_mkobj(js);
+  js_set(js, agg_err, "name", js_mkstr(js, "AggregateError", 14));
+  js_set(js, agg_err, "message", js_mkstr(js, "All promises were rejected", 26));
+  js_set(js, agg_err, "errors", errors);
+  return agg_err;
+}
+
+static bool promise_any_try_resolve(struct js *js, jsval_t tracker, jsval_t value) {
+  if (js_truthy(js, js_get(js, tracker, "resolved"))) return false;
+  js_set(js, tracker, "resolved", js_mktrue());
+  resolve_promise(js, js_get(js, tracker, "promise"), value);
+  return true;
+}
+
+static void promise_any_record_rejection(struct js *js, jsval_t tracker, int index, jsval_t reason) {
+  jsval_t errors = resolveprop(js, js_get(js, tracker, "errors"));
+  char idx[16];
+  snprintf(idx, sizeof(idx), "%d", index);
+  setprop(js, errors, js_mkstr(js, idx, strlen(idx)), reason);
+  
+  int remaining = (int)tod(js_get(js, tracker, "remaining")) - 1;
+  js_set(js, tracker, "remaining", tov((double)remaining));
+  
+  if (remaining == 0) {
+    reject_promise(js, js_get(js, tracker, "promise"), mk_aggregate_error(js, errors));
+  }
+}
+
+static jsval_t builtin_Promise_any_resolve_handler(struct js *js, jsval_t *args, int nargs) {
+  jsval_t tracker = js_get(js, js->this_val, "tracker");
+  promise_any_try_resolve(js, tracker, nargs > 0 ? args[0] : js_mkundef());
+  return js_mkundef();
+}
+
+static jsval_t builtin_Promise_any_reject_handler(struct js *js, jsval_t *args, int nargs) {
+  jsval_t tracker = js_get(js, js->this_val, "tracker");
+  if (js_truthy(js, js_get(js, tracker, "resolved"))) return js_mkundef();
+  
+  int index = (int)tod(js_get(js, js->this_val, "index"));
+  promise_any_record_rejection(js, tracker, index, nargs > 0 ? args[0] : js_mkundef());
+  return js_mkundef();
+}
+
+static jsval_t builtin_Promise_any(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "Promise.any requires an array");
+  
+  jsval_t arr = args[0];
+  if (vtype(arr) != T_ARR) return js_mkerr(js, "Promise.any requires an array");
+  
+  jsoff_t len_off = lkp_interned(js, arr, INTERN_LENGTH, 6);
+  int len = len_off ? (int)tod(resolveprop(js, mkval(T_PROP, len_off))) : 0;
+  
+  if (len == 0) {
+    jsval_t reject_args[] = { mk_aggregate_error(js, mkarr(js)) };
+    return builtin_Promise_reject(js, reject_args, 1);
+  }
+  
+  jsval_t result_promise = mkpromise(js);
+  jsval_t tracker = mkobj(js, 0);
+  jsval_t errors = mkarr(js);
+  
+  setprop(js, tracker, js_mkstr(js, "remaining", 9), tov((double)len));
+  setprop(js, tracker, js_mkstr(js, "errors", 6), errors);
+  setprop(js, tracker, js_mkstr(js, "promise", 7), result_promise);
+  setprop(js, tracker, js_mkstr(js, "resolved", 8), js_mkfalse());
+  setprop(js, errors, js_mkstr(js, "length", 6), tov((double)len));
+  
+  for (int i = 0; i < len; i++) {
+    char idx[16];
+    snprintf(idx, sizeof(idx), "%d", i);
+    jsval_t item = resolveprop(js, js_get(js, arr, idx));
+    
+    if (vtype(item) != T_PROMISE) {
+      promise_any_try_resolve(js, tracker, item);
+      return result_promise;
+    }
+    
+    jsval_t item_obj = mkval(T_OBJ, vdata(item));
+    jsoff_t state_off = lkp(js, item_obj, "__state", 7);
+    int state = (int)tod(resolveprop(js, mkval(T_PROP, state_off)));
+    
+    if (state == 1) {
+      jsoff_t val_off = lkp(js, item_obj, "__value", 7);
+      promise_any_try_resolve(js, tracker, resolveprop(js, mkval(T_PROP, val_off)));
+      return result_promise;
+    } else if (state == 2) {
+      jsoff_t val_off = lkp(js, item_obj, "__value", 7);
+      promise_any_record_rejection(js, tracker, i, resolveprop(js, mkval(T_PROP, val_off)));
+      continue;
+    }
+    
+    jsval_t resolve_obj = mkobj(js, 0);
+    setprop(js, resolve_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_Promise_any_resolve_handler));
+    setprop(js, resolve_obj, js_mkstr(js, "tracker", 7), tracker);
+    
+    jsval_t reject_obj = mkobj(js, 0);
+    setprop(js, reject_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_Promise_any_reject_handler));
+    setprop(js, reject_obj, js_mkstr(js, "index", 5), tov((double)i));
+    setprop(js, reject_obj, js_mkstr(js, "tracker", 7), tracker);
+    
+    jsval_t then_args[] = { mkval(T_FUNC, vdata(resolve_obj)), mkval(T_FUNC, vdata(reject_obj)) };
+    jsval_t saved_this = js->this_val;
+    js->this_val = item;
+    builtin_promise_then(js, then_args, 2);
+    js->this_val = saved_this;
+  }
+  
+  return result_promise;
+}
+
 static jsval_t do_instanceof(struct js *js, jsval_t l, jsval_t r) {
   uint8_t ltype = vtype(l);
   uint8_t rtype = vtype(r);
@@ -20540,6 +20644,7 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, p_ctor_obj, js_mkstr(js, "try", 3), js_mkfun(builtin_Promise_try));
   setprop(js, p_ctor_obj, js_mkstr(js, "all", 3), js_mkfun(builtin_Promise_all));
   setprop(js, p_ctor_obj, js_mkstr(js, "race", 4), js_mkfun(builtin_Promise_race));
+  setprop(js, p_ctor_obj, js_mkstr(js, "any", 3), js_mkfun(builtin_Promise_any));
   setprop_nonconfigurable(js, p_ctor_obj, "prototype", 9, promise_proto);
   setprop(js, glob, js_mkstr(js, "Promise", 7), mkval(T_FUNC, vdata(p_ctor_obj)));
   
