@@ -424,7 +424,7 @@ enum {
   TOK_COLON, TOK_Q,  TOK_ASSIGN, TOK_PLUS_ASSIGN, TOK_MINUS_ASSIGN,
   TOK_MUL_ASSIGN, TOK_DIV_ASSIGN, TOK_REM_ASSIGN, TOK_SHL_ASSIGN,
   TOK_SHR_ASSIGN, TOK_ZSHR_ASSIGN, TOK_AND_ASSIGN, TOK_XOR_ASSIGN,
-  TOK_OR_ASSIGN, TOK_COMMA, TOK_TEMPLATE, TOK_ARROW,
+  TOK_OR_ASSIGN, TOK_COMMA, TOK_TEMPLATE, TOK_ARROW, TOK_HASH,
   TOK_MAX
 };
 
@@ -3819,6 +3819,7 @@ static uint8_t next(struct js *js) {
     case '<': if (LOOK(1, '<') && LOOK(2, '=')) TOK(TOK_SHL_ASSIGN, 3); if (LOOK(1, '<')) TOK(TOK_SHL, 2); if (LOOK(1, '=')) TOK(TOK_LE, 2); TOK(TOK_LT, 1);
     case '>': if (LOOK(1, '>') && LOOK(2, '>') && LOOK(3, '=')) TOK(TOK_ZSHR_ASSIGN, 4); if (LOOK(1, '>') && LOOK(2, '>')) TOK(TOK_ZSHR, 3); if (LOOK(1, '>') && LOOK(2, '=')) TOK(TOK_SHR_ASSIGN, 3); if (LOOK(1, '>')) TOK(TOK_SHR, 2); if (LOOK(1, '=')) TOK(TOK_GE, 2); TOK(TOK_GT, 1);
     case '^': if (LOOK(1, '=')) TOK(TOK_XOR_ASSIGN, 2); TOK(TOK_XOR, 1);
+    case '#': TOK(TOK_HASH, 1);
     case '`':
       js->tlen++;
       while (js->toff + js->tlen < js->clen && buf[js->tlen] != '`') {
@@ -4379,34 +4380,43 @@ static jsval_t lookup(struct js *js, const char *buf, size_t len) {
 }
 
 static bool try_accessor_getter(struct js *js, jsval_t obj, const char *key, size_t key_len, jsval_t *out) {
-  jsoff_t obj_off = (jsoff_t)vdata(obj);
-  descriptor_entry_t *desc = lookup_descriptor(obj_off, key, key_len);
+  jsval_t current = obj;
+  while (vtype(current) == T_OBJ || vtype(current) == T_FUNC) {
+    jsoff_t current_off = (jsoff_t)vdata(current);
+    descriptor_entry_t *desc = lookup_descriptor(current_off, key, key_len);
+    
+    if (desc && desc->has_getter) {
+      jsval_t getter = desc->getter;
+      if (vtype(getter) != T_FUNC && vtype(getter) != T_CFUNC) return false;
+      
+      js_parse_state_t saved;
+      JS_SAVE_STATE(js, saved);
+      uint8_t saved_flags = js->flags;
+      jsoff_t saved_toff = js->toff;
+      jsoff_t saved_tlen = js->tlen;
+      
+      jsval_t saved_this = js->this_val;
+      js->this_val = obj;
+      push_this(obj);
+      *out = call_js_with_args(js, getter, NULL, 0);
+      
+      pop_this();
+      js->this_val = saved_this;
+      
+      JS_RESTORE_STATE(js, saved);
+      js->flags = saved_flags;
+      js->toff = saved_toff;
+      js->tlen = saved_tlen;
+      
+      return true;
+    }
+    
+    jsval_t proto = get_proto(js, current);
+    if (vtype(proto) != T_OBJ && vtype(proto) != T_FUNC) break;
+    current = proto;
+  }
   
-  if (!desc || !desc->has_getter) return false;
-  
-  jsval_t getter = desc->getter;
-  if (vtype(getter) != T_FUNC && vtype(getter) != T_CFUNC) return false;
-  
-  js_parse_state_t saved;
-  JS_SAVE_STATE(js, saved);
-  uint8_t saved_flags = js->flags;
-  jsoff_t saved_toff = js->toff;
-  jsoff_t saved_tlen = js->tlen;
-  
-  jsval_t saved_this = js->this_val;
-  js->this_val = obj;
-  push_this(obj);
-  *out = call_js_with_args(js, getter, NULL, 0);
-  
-  pop_this();
-  js->this_val = saved_this;
-  
-  JS_RESTORE_STATE(js, saved);
-  js->flags = saved_flags;
-  js->toff = saved_toff;
-  js->tlen = saved_tlen;
-  
-  return true;
+  return false;
 }
 
 static jsval_t resolveprop(struct js *js, jsval_t v) {
@@ -4453,34 +4463,43 @@ static int check_prop_writable(struct js *js, jsval_t owner, const char *key, js
 }
 
 static bool try_accessor_setter(struct js *js, jsval_t obj, const char *key, size_t key_len, jsval_t val, jsval_t *out) {
-  jsoff_t obj_off = (jsoff_t)vdata(obj);
-  descriptor_entry_t *desc = lookup_descriptor(obj_off, key, key_len);
+  jsval_t current = obj;
+  while (vtype(current) == T_OBJ || vtype(current) == T_FUNC) {
+    jsoff_t current_off = (jsoff_t)vdata(current);
+    descriptor_entry_t *desc = lookup_descriptor(current_off, key, key_len);
+    
+    if (desc && desc->has_setter) {
+      jsval_t setter = desc->setter;
+      if (vtype(setter) != T_FUNC && vtype(setter) != T_CFUNC) return false;
+      
+      js_parse_state_t saved;
+      JS_SAVE_STATE(js, saved);
+      uint8_t saved_flags = js->flags;
+      jsoff_t saved_toff = js->toff;
+      jsoff_t saved_tlen = js->tlen;
+      
+      jsval_t saved_this = js->this_val;
+      js->this_val = obj;
+      push_this(obj);
+      jsval_t result = call_js_with_args(js, setter, &val, 1);
+      pop_this();
+      js->this_val = saved_this;
+      
+      JS_RESTORE_STATE(js, saved);
+      js->flags = saved_flags;
+      js->toff = saved_toff;
+      js->tlen = saved_tlen;
+      
+      *out = is_err(result) ? result : val;
+      return true;
+    }
+    
+    jsval_t proto = get_proto(js, current);
+    if (vtype(proto) != T_OBJ && vtype(proto) != T_FUNC) break;
+    current = proto;
+  }
   
-  if (!desc || !desc->has_setter) return false;
-  
-  jsval_t setter = desc->setter;
-  if (vtype(setter) != T_FUNC && vtype(setter) != T_CFUNC) return false;
-  
-  js_parse_state_t saved;
-  JS_SAVE_STATE(js, saved);
-  uint8_t saved_flags = js->flags;
-  jsoff_t saved_toff = js->toff;
-  jsoff_t saved_tlen = js->tlen;
-  
-  jsval_t saved_this = js->this_val;
-  js->this_val = obj;
-  push_this(obj);
-  jsval_t result = call_js_with_args(js, setter, &val, 1);
-  pop_this();
-  js->this_val = saved_this;
-  
-  JS_RESTORE_STATE(js, saved);
-  js->flags = saved_flags;
-  js->toff = saved_toff;
-  js->tlen = saved_tlen;
-  
-  *out = is_err(result) ? result : val;
-  return true;
+  return false;
 }
 
 static jsval_t assign(struct js *js, jsval_t lhs, jsval_t val) {
@@ -7817,7 +7836,14 @@ static jsval_t js_call_dot(struct js *js) {
       }
       jsval_t prop_name;
       uint8_t nxt = next(js);
-      if (nxt == TOK_IDENTIFIER || is_keyword_propname(nxt)) {
+      if (nxt == TOK_HASH) {
+        js->consumed = 1;
+        if (next(js) != TOK_IDENTIFIER) {
+          return js_mkerr_typed(js, JS_ERR_SYNTAX, "private field name expected");
+        }
+        js->consumed = 1;
+        prop_name = mkcoderef((jsoff_t) js->toff, (jsoff_t) js->tlen);
+      } else if (nxt == TOK_IDENTIFIER || is_keyword_propname(nxt)) {
         js->consumed = 1;
         prop_name = mkcoderef((jsoff_t) js->toff, (jsoff_t) js->tlen);
       } else {
@@ -9560,7 +9586,9 @@ static jsval_t js_for(struct js *js) {
       mkprop(js, js->scope, var_key, loop_var_val, false);
     }
     
-    js->pos = pos3, js->consumed = 1, js->flags |= F_LOOP;
+    js->flags |= F_LOOP;
+    js->pos = pos3;
+    js->consumed = 1;
     v = js_block_or_stmt(js);
     if (is_err2(&v, &res)) {
       if (vtype(iter_scope) != T_UNDEF) delscope(js);
@@ -10505,16 +10533,25 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
     bool is_async;
     bool is_static;
     bool is_field;
+    bool is_private;
     bool is_getter;
     bool is_setter;
     jsoff_t field_start, field_end; 
+    jsoff_t param_start;
   } MethodInfo;
   
-  MethodInfo methods[32];
-  int method_count = 0;
+  static const UT_icd method_info_icd = {
+    .sz = sizeof(MethodInfo),
+    .init = NULL,
+    .copy = NULL,
+    .dtor = NULL,
+  };
+  
+  UT_array *methods = NULL;
+  utarray_new(methods, &method_info_icd);
   
   uint8_t class_tok;
-  while ((class_tok = next(js)) != TOK_RBRACE && class_tok != TOK_EOF && method_count < 32) {
+  while ((class_tok = next(js)) != TOK_RBRACE && class_tok != TOK_EOF) {
     bool is_async_method = false;
     bool is_static_member = false;
     bool is_getter_method = false;
@@ -10529,10 +10566,19 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
       js->consumed = 1;
     }
     
+    bool is_private_member = false;
+    if (next(js) == TOK_HASH) {
+      js->consumed = 1;
+      if (next(js) == TOK_IDENTIFIER) { is_private_member = true; } else {
+        js->flags = save_flags;
+        return js_mkerr_typed(js, JS_ERR_SYNTAX, "private field name expected");
+      }
+    }
+    
     if (next(js) == TOK_IDENTIFIER) {
       bool is_get = (js->tlen == 3 && memcmp(&js->code[js->toff], "get", 3) == 0);
       bool is_set = (js->tlen == 3 && memcmp(&js->code[js->toff], "set", 3) == 0);
-      if (is_get || is_set) {
+      if (!is_private_member && (is_get || is_set)) {
         jsoff_t saved_pos = js->pos;
         jsoff_t saved_toff = js->toff;
         jsoff_t saved_tlen = js->tlen;
@@ -10588,31 +10634,37 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
       jsoff_t field_end = js->pos;
       if (next(js) == TOK_SEMICOLON) js->consumed = 1;
       
-      methods[method_count].name_off = method_name_off;
-      methods[method_count].name_len = method_name_len;
-      methods[method_count].is_static = is_static_member;
-      methods[method_count].is_async = false;
-      methods[method_count].is_field = true;
-      methods[method_count].field_start = field_start;
-      methods[method_count].field_end = field_end;
-      methods[method_count].fn_start = 0;
-      methods[method_count].fn_end = 0;
-      method_count++;
+      MethodInfo field_method = {
+        .name_off = method_name_off,
+        .name_len = method_name_len,
+        .is_static = is_static_member,
+        .is_async = false,
+        .is_field = true,
+        .is_private = is_private_member,
+        .field_start = field_start,
+        .field_end = field_end,
+        .fn_start = 0,
+        .fn_end = 0,
+      };
+      utarray_push_back(methods, &field_method);
       continue;
     }
     
     if (next(js) == TOK_SEMICOLON || (next(js) != TOK_LPAREN && next(js) == TOK_IDENTIFIER)) {
       if (next(js) == TOK_SEMICOLON) js->consumed = 1;
-      methods[method_count].name_off = method_name_off;
-      methods[method_count].name_len = method_name_len;
-      methods[method_count].is_static = is_static_member;
-      methods[method_count].is_async = false;
-      methods[method_count].is_field = true;
-      methods[method_count].field_start = 0;
-      methods[method_count].field_end = 0;
-      methods[method_count].fn_start = 0;
-      methods[method_count].fn_end = 0;
-      method_count++;
+      MethodInfo bare_method = {
+        .name_off = method_name_off,
+        .name_len = method_name_len,
+        .is_static = is_static_member,
+        .is_async = false,
+        .is_field = true,
+        .is_private = is_private_member,
+        .field_start = 0,
+        .field_end = 0,
+        .fn_start = 0,
+        .fn_end = 0,
+      };
+      utarray_push_back(methods, &bare_method);
       continue;
     }
     
@@ -10637,19 +10689,23 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
       constructor_body_start = method_body_start + 1;
       constructor_body_end = method_body_end;
     } else {
-      methods[method_count].name_off = method_name_off;
-      methods[method_count].name_len = method_name_len;
-      methods[method_count].fn_start = method_params_start;
-      methods[method_count].fn_end = method_body_end;
-      methods[method_count].is_async = is_async_method;
-      methods[method_count].is_static = is_static_member;
-      methods[method_count].is_field = false;
-      methods[method_count].is_getter = is_getter_method;
-      methods[method_count].is_setter = is_setter_method;
-      methods[method_count].field_start = 0;
-      methods[method_count].field_end = 0;
-      method_count++;
-    }
+      MethodInfo func_method = {
+        .name_off = method_name_off,
+        .name_len = method_name_len,
+        .fn_start = method_params_start,
+        .fn_end = method_body_end,
+        .param_start = method_params_start,
+        .is_async = is_async_method,
+        .is_static = is_static_member,
+        .is_field = false,
+        .is_private = is_private_member,
+        .is_getter = is_getter_method,
+        .is_setter = is_setter_method,
+        .field_start = 0,
+        .field_end = 0,
+      };
+      utarray_push_back(methods, &func_method);
+     }
     js->consumed = 1;
   }
   
@@ -10691,15 +10747,16 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
       if (is_err(res_super)) return res_super;
     }
     
-    for (int i = 0; i < method_count; i++) {
-      if (methods[i].is_static) continue;
-      if (methods[i].is_field) continue;
+    for (unsigned int i = 0; i < utarray_len(methods); i++) {
+      MethodInfo *m = (MethodInfo *)utarray_eltptr(methods, i);
+      if (m->is_static) continue;
+      if (m->is_field) continue;
       
-      jsval_t method_name = js_mkstr(js, &js->code[methods[i].name_off], methods[i].name_len);
+      jsval_t method_name = js_mkstr(js, &js->code[m->name_off], m->name_len);
       if (is_err(method_name)) return method_name;
       
-      jsoff_t mlen = methods[i].fn_end - methods[i].fn_start;
-      jsval_t method_code = js_mkstr(js, &js->code[methods[i].fn_start], mlen);
+      jsoff_t mlen = m->fn_end - m->fn_start;
+      jsval_t method_code = js_mkstr(js, &js->code[m->fn_start], mlen);
       if (is_err(method_code)) return method_code;
       
       jsval_t method_obj = mkobj(js, 0);
@@ -10710,7 +10767,7 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
       jsval_t mres = setprop(js, method_obj, mcode_key, method_code);
       if (is_err(mres)) return mres;
       
-      if (methods[i].is_async) {
+      if (m->is_async) {
         jsval_t async_key = js_mkstr(js, "__async", 7);
         if (is_err(async_key)) return async_key;
         jsval_t async_val = mkval(T_BOOL, 1);
@@ -10725,11 +10782,11 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
       
       jsval_t method_func = mkval(T_FUNC, (unsigned long) vdata(method_obj));
       
-      if (methods[i].is_getter || methods[i].is_setter) {
+      if (m->is_getter || m->is_setter) {
         jsoff_t name_len;
         const char *name_str = (const char *)&js->mem[vstr(js, method_name, &name_len)];
         
-        if (methods[i].is_getter) {
+        if (m->is_getter) {
           js_set_getter_desc(js, proto, name_str, name_len, method_func, JS_DESC_C);
         } else {
           js_set_setter_desc(js, proto, name_str, name_len, method_func, JS_DESC_C);
@@ -10743,38 +10800,33 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
     jsval_t func_obj = mkobj(js, 0);
     if (is_err(func_obj)) return func_obj;
     
+    jsval_t code_key = js_mkstr(js, "__code", 6);
+    if (is_err(code_key)) return code_key;
+    
+    jsval_t ctor_str;
     if (constructor_params_start > 0 && constructor_body_start > 0) {
       jsoff_t code_len = constructor_body_end - constructor_params_start;
-      
-      jsval_t code_key = js_mkstr(js, "__code", 6);
-      if (is_err(code_key)) return code_key;
-      jsval_t ctor_str = js_mkstr(js, &js->code[constructor_params_start], code_len);
-      if (is_err(ctor_str)) return ctor_str;
-      
-      jsval_t res2 = setprop(js, func_obj, code_key, ctor_str);
-      if (is_err(res2)) return res2;
+      ctor_str = js_mkstr(js, &js->code[constructor_params_start], code_len);
     } else {
-      jsval_t code_key = js_mkstr(js, "__code", 6);
-      if (is_err(code_key)) return code_key;
-      jsval_t default_ctor;
       if (super_len > 0) {
-        default_ctor = js_mkstr(js, "(...args){super(...args);}", 26);
-      } else {
-        default_ctor = js_mkstr(js, "(){}", 4);
-      }
-      if (is_err(default_ctor)) return default_ctor;
-      jsval_t res2 = setprop(js, func_obj, code_key, default_ctor);
-      if (is_err(res2)) return res2;
+        ctor_str = js_mkstr(js, "(...args){super(...args);}", 26);
+      } else { ctor_str = js_mkstr(js, "(){}", 4); }
+    }
+    if (is_err(ctor_str)) return ctor_str;
+    
+    jsval_t res2 = setprop(js, func_obj, code_key, ctor_str);
+    if (is_err(res2)) return res2;
+    
+    int instance_field_count = 0;
+    for (unsigned int i = 0; i < utarray_len(methods); i++) {
+      MethodInfo *m = (MethodInfo *)utarray_eltptr(methods, i);
+      if (m->is_static) continue;
+      if (!m->is_field) continue;
+      instance_field_count++;
     }
     
-    int field_count = 0;
-    for (int i = 0; i < method_count; i++) {
-      if (methods[i].is_static) continue;
-      if (methods[i].is_field) field_count++;
-    }
-    
-    if (field_count > 0) {
-      size_t metadata_size = field_count * sizeof(jsoff_t) * 4;
+    if (instance_field_count > 0) {
+      size_t metadata_size = instance_field_count * sizeof(jsoff_t) * 4;
       jsoff_t meta_len = (jsoff_t) (metadata_size + 1);
       jsoff_t meta_header = (jsoff_t) ((meta_len << 2) | T_STR);
       jsoff_t meta_off = js_alloc(js, meta_len + sizeof(meta_header));
@@ -10784,14 +10836,15 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
       jsoff_t *metadata = (jsoff_t *)(&js->mem[meta_off + sizeof(meta_header)]);
       
       int meta_idx = 0;
-      for (int i = 0; i < method_count; i++) {
-        if (methods[i].is_static) continue;
-        if (!methods[i].is_field) continue;
+      for (unsigned int i = 0; i < utarray_len(methods); i++) {
+        MethodInfo *m = (MethodInfo *)utarray_eltptr(methods, i);
+        if (m->is_static) continue;
+        if (!m->is_field) continue;
         
-        metadata[meta_idx * 4 + 0] = methods[i].name_off;
-        metadata[meta_idx * 4 + 1] = methods[i].name_len;
-        metadata[meta_idx * 4 + 2] = methods[i].field_start;
-        metadata[meta_idx * 4 + 3] = methods[i].field_end;
+        metadata[meta_idx * 4 + 0] = m->name_off;
+        metadata[meta_idx * 4 + 1] = m->name_len;
+        metadata[meta_idx * 4 + 2] = m->field_start;
+        metadata[meta_idx * 4 + 3] = m->field_end;
         meta_idx++;
       }
       
@@ -10805,7 +10858,7 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
       
       jsval_t count_key = js_mkstr(js, "__field_count", 13);
       if (is_err(count_key)) return count_key;
-      jsval_t res_count = setprop(js, func_obj, count_key, tov((double)field_count));
+      jsval_t res_count = setprop(js, func_obj, count_key, tov((double)instance_field_count));
       if (is_err(res_count)) return res_count;
       
       jsval_t src_key = js_mkstr(js, "__source", 8);
@@ -10843,23 +10896,24 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
       if (is_err(x)) return x;
     }
     
-    for (int i = 0; i < method_count; i++) {
-      if (!methods[i].is_static) continue;
+    for (unsigned int i = 0; i < utarray_len(methods); i++) {
+      MethodInfo *m = (MethodInfo *)utarray_eltptr(methods, i);
+      if (!m->is_static) continue;
       
-      jsval_t member_name = js_mkstr(js, &js->code[methods[i].name_off], methods[i].name_len);
+      jsval_t member_name = js_mkstr(js, &js->code[m->name_off], m->name_len);
       if (is_err(member_name)) return member_name;
       
-      if (methods[i].is_field) {
+      if (m->is_field) {
         jsval_t field_val = js_mkundef();
-        if (methods[i].field_start > 0 && methods[i].field_end > methods[i].field_start) {
-          field_val = js_eval_slice(js, methods[i].field_start, methods[i].field_end - methods[i].field_start);
+        if (m->field_start > 0 && m->field_end > m->field_start) {
+          field_val = js_eval_slice(js, m->field_start, m->field_end - m->field_start);
           field_val = resolveprop(js, field_val);
         }
         jsval_t set_res = setprop(js, func_obj, member_name, field_val);
         if (is_err(set_res)) return set_res;
       } else {
-        jsoff_t mlen = methods[i].fn_end - methods[i].fn_start;
-        jsval_t method_code = js_mkstr(js, &js->code[methods[i].fn_start], mlen);
+        jsoff_t mlen = m->fn_end - m->fn_start;
+        jsval_t method_code = js_mkstr(js, &js->code[m->fn_start], mlen);
         if (is_err(method_code)) return method_code;
         
         jsval_t method_obj = mkobj(js, 0);
@@ -10882,10 +10936,12 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
     }
     
     (void) class_body_start;
+    utarray_free(methods);
     return constructor;
   }
   
   (void) class_body_start;
+  utarray_free(methods);
   return js_mkundef();
 }
 

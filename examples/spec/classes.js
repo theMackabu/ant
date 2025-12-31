@@ -151,4 +151,100 @@ class Static {
 test('static property', Static.value, 42);
 test('static method', Static.method(), 'static');
 
+class BankAccount {
+  #balance = 0;
+
+  constructor(initialBalance) {
+    this.#balance = initialBalance;
+  }
+
+  deposit(amount) {
+    this.#balance = this.#balance + amount;
+    return this.#balance;
+  }
+
+  withdraw(amount) {
+    this.#balance = this.#balance - amount;
+    return this.#balance;
+  }
+
+  getBalance() {
+    return this.#balance;
+  }
+}
+
+let account = new BankAccount(100);
+test('private field initializer', account.getBalance(), 100);
+test('private field deposit', account.deposit(50), 150);
+test('private field withdraw', account.withdraw(30), 120);
+
+class Vehicle {
+  #speed = 0;
+
+  constructor(initialSpeed) {
+    this.#speed = initialSpeed;
+  }
+
+  getSpeed() {
+    return this.#speed;
+  }
+
+  accelerate(amount) {
+    this.#speed = this.#speed + amount;
+  }
+}
+
+class Car extends Vehicle {
+  #model;
+
+  constructor(model, speed) {
+    super(speed);
+    this.#model = model;
+  }
+
+  getModel() {
+    return this.#model;
+  }
+}
+
+let car = new Car('Tesla', 0);
+test('inherited private field', car.getSpeed(), 0);
+car.accelerate(50);
+test('inherited method with private field', car.getSpeed(), 50);
+test('own private field', car.getModel(), 'Tesla');
+
+class Accumulator {
+  count = 0;
+
+  increment() {
+    this.count = this.count + 1;
+    return this.count;
+  }
+}
+
+let accumulator = new Accumulator();
+test('field initializer', accumulator.count, 0);
+test('method with initialized field', accumulator.increment(), 1);
+
+class Temperature {
+  #celsius = 0;
+
+  constructor(celsius) {
+    this.#celsius = celsius;
+  }
+
+  get fahrenheit() {
+    return (this.#celsius * 9) / 5 + 32;
+  }
+
+  set fahrenheit(f) {
+    this.#celsius = ((f - 32) * 5) / 9;
+  }
+}
+
+let temp = new Temperature(0);
+test('getter', temp.fahrenheit, 32);
+temp.fahrenheit = 212;
+test('setter', Math.round(temp.fahrenheit), 212);
+
 summary();
