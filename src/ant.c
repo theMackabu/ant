@@ -4931,13 +4931,23 @@ static int parse_call_args(struct js *js, jsval_t *err_out) {
       jsoff_t len = arr_length(js, arg);
       for (jsoff_t i = 0; i < len; i++) {
         jsval_t elem = arr_get(js, arg, i);
-        if (js->brk + sizeof(elem) > js->size) { *err_out = js_mkerr(js, "call oom"); return -1; }
+        if (js->brk + sizeof(elem) > js->size) {
+          if (!js_try_grow_memory(js, sizeof(elem))) {
+            *err_out = js_mkerr(js, "call oom");
+            return -1;
+          }
+        }
         js->size -= (jsoff_t) sizeof(elem);
         memcpy(&js->mem[js->size], &elem, sizeof(elem));
         argc++;
       }
     } else {
-      if (js->brk + sizeof(arg) > js->size) { *err_out = js_mkerr(js, "call oom"); return -1; }
+      if (js->brk + sizeof(arg) > js->size) {
+        if (!js_try_grow_memory(js, sizeof(arg))) {
+          *err_out = js_mkerr(js, "call oom");
+          return -1;
+        }
+      }
       js->size -= (jsoff_t) sizeof(arg);
       memcpy(&js->mem[js->size], &arg, sizeof(arg));
       argc++;
@@ -6429,9 +6439,14 @@ static jsval_t js_tagged_template(struct js *js, jsval_t tag_func) {
       else n++;
     }
     
-    uint8_t *out = &js->mem[js->brk + sizeof(jsoff_t)];
     size_t out_len = 0;
-    if (js->brk + sizeof(jsoff_t) + (n - part_start) > js->size) return js_mkerr(js, "oom");
+    size_t needed = sizeof(jsoff_t) + (n - part_start);
+    if (js->brk + needed > js->size) {
+      if (!js_try_grow_memory(js, needed)) {
+        return js_mkerr(js, "oom");
+      }
+    }
+    uint8_t *out = &js->mem[js->brk + sizeof(jsoff_t)];
     
     for (size_t i = part_start; i < n; i++) {
       if (in[i] == '\\' && i + 1 < n) {
@@ -6494,10 +6509,12 @@ static jsval_t js_tagged_template(struct js *js, jsval_t tag_func) {
 
 static jsval_t js_str_literal(struct js *js) {
   uint8_t *in = (uint8_t *) &js->code[js->toff];
-  uint8_t *out = &js->mem[js->brk + sizeof(jsoff_t)];
   size_t n1 = 0, n2 = 0;
-  if (js->brk + sizeof(jsoff_t) + js->tlen > js->size)
-    return js_mkerr(js, "oom");
+  size_t needed = sizeof(jsoff_t) + js->tlen;
+  if (js->brk + needed > js->size) {
+    if (!js_try_grow_memory(js, needed)) return js_mkerr(js, "oom");
+  }
+  uint8_t *out = &js->mem[js->brk + sizeof(jsoff_t)];
   while (n2++ + 2 < js->tlen) {
     if (in[n2] == '\\') {
       if (in[n2 + 1] == in[0]) {
