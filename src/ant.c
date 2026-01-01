@@ -6924,158 +6924,86 @@ static jsval_t js_obj_literal(struct js *js) {
   return obj;
 }
 
-static bool parse_func_params(struct js *js, uint8_t *flags, int *out_count) {
-  int param_count = 0;
-  int param_capacity = 16;
-  const char **param_names = (const char **)ANT_GC_MALLOC(param_capacity * sizeof(char *));
-  size_t *param_lens = (size_t *)ANT_GC_MALLOC(param_capacity * sizeof(size_t));
-  
-  if (!param_names || !param_lens) {
-    if (flags) js->flags = *flags;
-    js_mkerr_typed(js, JS_ERR_SYNTAX, "out of memory");
-    return false;
+static void skip_default_value(struct js *js) {
+  int depth = 0;
+  while (next(js) != TOK_EOF) {
+    uint8_t tok = next(js);
+    if (depth == 0 && (tok == TOK_RPAREN || tok == TOK_COMMA)) break;
+    js->consumed = 1;
+    if (tok == TOK_LPAREN || tok == TOK_LBRACKET || tok == TOK_LBRACE) depth++;
+    else if (tok == TOK_RPAREN || tok == TOK_RBRACKET || tok == TOK_RBRACE) depth--;
   }
+}
+
+static void skip_destructuring_pattern(struct js *js) {
+  uint8_t open_tok = js->tok;
+  uint8_t close_tok = (open_tok == TOK_LBRACE) ? TOK_RBRACE : TOK_RBRACKET;
+  int depth = 1;
+  js->consumed = 1;
+  while (depth > 0 && next(js) != TOK_EOF) {
+    if (js->tok == open_tok) depth++;
+    else if (js->tok == close_tok) depth--;
+    if (depth > 0) js->consumed = 1;
+  }
+  js->consumed = 1;
+}
+
+typedef struct { const char *name; size_t len; } param_entry_t;
+static const UT_icd param_entry_icd = { sizeof(param_entry_t), NULL, NULL, NULL };
+
+static bool parse_func_params(struct js *js, uint8_t *flags, int *out_count) {
+  UT_array *params;
+  utarray_new(params, &param_entry_icd);
   
-  for (bool comma = false; next(js) != TOK_EOF; comma = true) {
-    if (!comma && next(js) == TOK_RPAREN) break;
-    
-    bool is_rest = false;
-    if (next(js) == TOK_REST) {
-      is_rest = true;
-      js->consumed = 1;
-      next(js);
-    }
+  #define FAIL(msg, ...) do { \
+    if (flags) js->flags = *flags; \
+    js_mkerr_typed(js, JS_ERR_SYNTAX, msg, ##__VA_ARGS__); \
+    utarray_free(params); \
+    return false; \
+  } while(0)
+  
+  while (next(js) != TOK_EOF && next(js) != TOK_RPAREN) {
+    bool is_rest = (next(js) == TOK_REST);
+    if (is_rest) { js->consumed = 1; next(js); }
     
     if (next(js) == TOK_LBRACE || next(js) == TOK_LBRACKET) {
-      uint8_t open_tok = js->tok;
-      uint8_t close_tok = (open_tok == TOK_LBRACE) ? TOK_RBRACE : TOK_RBRACKET;
-      int depth = 1;
-      js->consumed = 1;
-      while (depth > 0 && next(js) != TOK_EOF) {
-        if (js->tok == open_tok) depth++;
-        else if (js->tok == close_tok) depth--;
-        if (depth > 0) js->consumed = 1;
-      }
-      js->consumed = 1;
-      param_count++;
+      skip_destructuring_pattern(js);
+      param_entry_t entry = {NULL, 0};
+      utarray_push_back(params, &entry);
+      if (next(js) == TOK_ASSIGN) { js->consumed = 1; skip_default_value(js); }
+    } else if (next(js) == TOK_IDENTIFIER) {
+      const char *name = &js->code[js->toff];
+      size_t len = js->tlen;
       
-      if (next(js) == TOK_ASSIGN) {
-        js->consumed = 1;
-        int ddepth = 0;
-        bool done = false;
-        while (!done && next(js) != TOK_EOF) {
-          uint8_t tok = next(js);
-          if (ddepth == 0 && (tok == TOK_RPAREN || tok == TOK_COMMA)) {
-            done = true;
-          } else if (tok == TOK_LPAREN || tok == TOK_LBRACKET || tok == TOK_LBRACE) {
-            ddepth++;
-            js->consumed = 1;
-          } else if (tok == TOK_RPAREN || tok == TOK_RBRACKET || tok == TOK_RBRACE) {
-            ddepth--;
-            js->consumed = 1;
-          } else {
-            js->consumed = 1;
-          }
+      if ((js->flags & F_STRICT) && is_strict_restricted(name, len))
+      FAIL("cannot use '%.*s' as parameter name in strict mode", (int)len, name);
+      
+      if (js->flags & F_STRICT) {
+        param_entry_t *p = NULL;
+        while ((p = (param_entry_t *)utarray_next(params, p))) {
+          if (p->len == len && p->name && memcmp(p->name, name, len) == 0)
+          FAIL("duplicate parameter name '%.*s' in strict mode", (int)len, name);
         }
       }
       
-      if (is_rest && next(js) != TOK_RPAREN) {
-        if (flags) js->flags = *flags;
-        js_mkerr_typed(js, JS_ERR_SYNTAX, "rest parameter must be last");
-        return false;
-      }
-      if (next(js) == TOK_RPAREN) break;
-      if (next(js) != TOK_COMMA) {
-        if (flags) js->flags = *flags;
-        js_mkerr_typed(js, JS_ERR_SYNTAX, "parse error");
-        return false;
-      }
+      param_entry_t entry = {name, len};
+      utarray_push_back(params, &entry);
       js->consumed = 1;
-      continue;
+      if (next(js) == TOK_ASSIGN) { js->consumed = 1; skip_default_value(js); }
+    } else {
+      FAIL("identifier expected");
     }
     
-    if (next(js) != TOK_IDENTIFIER) {
-      if (flags) js->flags = *flags;
-      js_mkerr_typed(js, JS_ERR_SYNTAX, "identifier expected");
-      return false;
-    }
-    
-    const char *param_name = &js->code[js->toff];
-    size_t param_len = js->tlen;
-    
-    if ((js->flags & F_STRICT) && is_strict_restricted(param_name, param_len)) {
-      if (flags) js->flags = *flags;
-      js_mkerr_typed(js, JS_ERR_SYNTAX, "cannot use '%.*s' as parameter name in strict mode", (int) param_len, param_name);
-      return false;
-    }
-    
-    if (js->flags & F_STRICT) {
-      for (int i = 0; i < param_count; i++) {
-        if (param_lens[i] == param_len && memcmp(param_names[i], param_name, param_len) == 0) {
-          if (flags) js->flags = *flags;
-          js_mkerr_typed(js, JS_ERR_SYNTAX, "duplicate parameter name '%.*s' in strict mode", (int) param_len, param_name);
-          return false;
-        }
-      }
-    }
-    
-    if (param_count >= param_capacity) {
-      param_capacity *= 2;
-      const char **new_names = (const char **)ANT_GC_MALLOC(param_capacity * sizeof(char *));
-      size_t *new_lens = (size_t *)ANT_GC_MALLOC(param_capacity * sizeof(size_t));
-      if (!new_names || !new_lens) {
-        if (flags) js->flags = *flags;
-        js_mkerr_typed(js, JS_ERR_SYNTAX, "out of memory");
-        return false;
-      }
-      memcpy(new_names, param_names, param_count * sizeof(char *));
-      memcpy(new_lens, param_lens, param_count * sizeof(size_t));
-      param_names = new_names;
-      param_lens = new_lens;
-    }
-    
-    param_names[param_count] = param_name;
-    param_lens[param_count] = param_len;
-    param_count++;
-    
-    js->consumed = 1;
-    
-    if (next(js) == TOK_ASSIGN) {
-      js->consumed = 1;
-      int depth = 0;
-      bool done = false;
-      while (!done && next(js) != TOK_EOF) {
-        uint8_t tok = next(js);
-        if (depth == 0 && (tok == TOK_RPAREN || tok == TOK_COMMA)) {
-          done = true;
-        } else if (tok == TOK_LPAREN || tok == TOK_LBRACKET || tok == TOK_LBRACE) {
-          depth++;
-          js->consumed = 1;
-        } else if (tok == TOK_RPAREN || tok == TOK_RBRACKET || tok == TOK_RBRACE) {
-          depth--;
-          js->consumed = 1;
-        } else {
-          js->consumed = 1;
-        }
-      }
-    }
-    
-    if (is_rest && next(js) != TOK_RPAREN) {
-      if (flags) js->flags = *flags;
-      js_mkerr_typed(js, JS_ERR_SYNTAX, "rest parameter must be last");
-      return false;
-    }
+    if (is_rest && next(js) != TOK_RPAREN) FAIL("rest parameter must be last");
     if (next(js) == TOK_RPAREN) break;
-    
-    if (next(js) != TOK_COMMA) {
-      if (flags) js->flags = *flags;
-      js_mkerr_typed(js, JS_ERR_SYNTAX, "parse error");
-      return false;
-    }
+    if (next(js) != TOK_COMMA) FAIL("parse error");
     js->consumed = 1;
   }
   
-  if (out_count) *out_count = param_count;
+  #undef FAIL
+  
+  if (out_count) *out_count = (int)utarray_len(params);
+  utarray_free(params);
   return true;
 }
 
