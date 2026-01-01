@@ -271,19 +271,24 @@ static bool typedarray_index_setter(struct js *js, jsval_t obj, const char *key,
   double num_val = js_type(value) == JS_NUM ? js_getnum(value) : 0;
   uint8_t *data = ta_data->buffer->data + ta_data->byte_offset;
   
-  switch (ta_data->type) {
-    case TYPED_ARRAY_INT8:    ((int8_t*)data)[index] = (int8_t)num_val; break;
-    case TYPED_ARRAY_UINT8:
-    case TYPED_ARRAY_UINT8_CLAMPED: ((uint8_t*)data)[index] = (uint8_t)num_val; break;
-    case TYPED_ARRAY_INT16:   ((int16_t*)data)[index] = (int16_t)num_val; break;
-    case TYPED_ARRAY_UINT16:  ((uint16_t*)data)[index] = (uint16_t)num_val; break;
-    case TYPED_ARRAY_INT32:   ((int32_t*)data)[index] = (int32_t)num_val; break;
-    case TYPED_ARRAY_UINT32:  ((uint32_t*)data)[index] = (uint32_t)num_val; break;
-    case TYPED_ARRAY_FLOAT32: ((float*)data)[index] = (float)num_val; break;
-    case TYPED_ARRAY_FLOAT64: ((double*)data)[index] = num_val; break;
-    default: return false;
-  }
-  return true;
+  static const void *dispatch[] = {
+    &&S_INT8, &&S_UINT8, &&S_UINT8, &&S_INT16, &&S_UINT16,
+    &&S_INT32, &&S_UINT32, &&S_FLOAT32, &&S_FLOAT64, &&S_FAIL, &&S_FAIL
+  };
+  
+  if (ta_data->type > TYPED_ARRAY_BIGUINT64) goto S_FAIL;
+  goto *dispatch[ta_data->type];
+  
+  S_INT8:    ((int8_t*)data)[index] = (int8_t)num_val;   goto S_DONE;
+  S_UINT8:   data[index] = (uint8_t)num_val;             goto S_DONE;
+  S_INT16:   ((int16_t*)data)[index] = (int16_t)num_val; goto S_DONE;
+  S_UINT16:  ((uint16_t*)data)[index] = (uint16_t)num_val; goto S_DONE;
+  S_INT32:   ((int32_t*)data)[index] = (int32_t)num_val; goto S_DONE;
+  S_UINT32:  ((uint32_t*)data)[index] = (uint32_t)num_val; goto S_DONE;
+  S_FLOAT32: ((float*)data)[index] = (float)num_val;     goto S_DONE;
+  S_FLOAT64: ((double*)data)[index] = num_val;           goto S_DONE;
+  S_FAIL:    return false;
+  S_DONE:    return true;
 }
 
 static jsval_t create_typed_array(struct js *js, TypedArrayType type, ArrayBufferData *buffer, size_t byte_offset, size_t length, const char *type_name) {
@@ -349,6 +354,47 @@ static jsval_t js_typedarray_constructor(struct js *js, jsval_t *args, int nargs
     }
     
     return create_typed_array(js, type, buffer, byte_offset, length, type_name);
+  }
+  
+  int arg_type = js_type(args[0]);
+  if (arg_type == JS_OBJ) {
+    jsval_t len_val = js_get(js, args[0], "length");
+    if (js_type(len_val) == JS_NUM) {
+      size_t length = (size_t)js_getnum(len_val);
+      size_t element_size = get_element_size(type);
+      ArrayBufferData *buffer = create_array_buffer_data(length * element_size);
+      if (!buffer) return js_mkerr(js, "Failed to allocate buffer");
+      
+      jsval_t result = create_typed_array(js, type, buffer, 0, length, type_name);
+      uint8_t *data = buffer->data;
+      
+      static const void *write_dispatch[] = {
+        &&W_INT8, &&W_UINT8, &&W_UINT8, &&W_INT16, &&W_UINT16,
+        &&W_INT32, &&W_UINT32, &&W_FLOAT32, &&W_FLOAT64, &&W_DONE, &&W_DONE
+      };
+      
+      for (size_t i = 0; i < length; i++) {
+        char idx_str[16];
+        snprintf(idx_str, sizeof(idx_str), "%zu", i);
+        jsval_t elem = js_get(js, args[0], idx_str);
+        double val = js_type(elem) == JS_NUM ? js_getnum(elem) : 0;
+        
+        if (type > TYPED_ARRAY_BIGUINT64) goto W_DONE;
+        goto *write_dispatch[type];
+        
+        W_INT8:    ((int8_t*)data)[i] = (int8_t)val;   goto W_NEXT;
+        W_UINT8:   data[i] = (uint8_t)val;             goto W_NEXT;
+        W_INT16:   ((int16_t*)data)[i] = (int16_t)val; goto W_NEXT;
+        W_UINT16:  ((uint16_t*)data)[i] = (uint16_t)val; goto W_NEXT;
+        W_INT32:   ((int32_t*)data)[i] = (int32_t)val; goto W_NEXT;
+        W_UINT32:  ((uint32_t*)data)[i] = (uint32_t)val; goto W_NEXT;
+        W_FLOAT32: ((float*)data)[i] = (float)val;    goto W_NEXT;
+        W_FLOAT64: ((double*)data)[i] = val;          goto W_NEXT;
+        W_NEXT:;
+      }
+      W_DONE:
+      return result;
+    }
   }
   
   return js_mkerr(js, "Invalid TypedArray constructor arguments");

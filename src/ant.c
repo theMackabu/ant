@@ -4316,6 +4316,12 @@ static jsval_t resolveprop(struct js *js, jsval_t v) {
     jsval_t obj = mkval(T_OBJ, obj_off);
     if (is_proxy(js, obj)) return proxy_get(js, obj, key_str, len);
     
+    if (len == STR_PROTO_LEN && memcmp(key_str, STR_PROTO, STR_PROTO_LEN) == 0) {
+      jsval_t proto = get_slot(js, obj, SLOT_PROTO);
+      if (vtype(proto) != T_UNDEF) return proto;
+      return get_prototype_for_type(js, vtype(obj));
+    }
+    
     jsval_t accessor_result;
     if (try_accessor_getter(js, obj, key_str, len, &accessor_result)) {
       return accessor_result;
@@ -4428,6 +4434,15 @@ static jsval_t assign(struct js *js, jsval_t lhs, jsval_t val) {
     
     jsoff_t key_len;
     const char *key_str = (const char *)&js->mem[vstr(js, key, &key_len)];
+    
+    if (key_len == STR_PROTO_LEN && memcmp(key_str, STR_PROTO, STR_PROTO_LEN) == 0) {
+      uint8_t vt = vtype(val);
+      if (vt == T_OBJ || vt == T_NULL) {
+        set_slot(js, obj, SLOT_PROTO, val);
+        return val;
+      }
+      return val;
+    }
     
     jsval_t setter_result;
     if (try_accessor_setter(js, obj, key_str, key_len, val, &setter_result)) {
@@ -4761,9 +4776,8 @@ static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
   }
   
   if (plen == STR_PROTO_LEN && memcmp(ptr, STR_PROTO, STR_PROTO_LEN) == 0) {
-    jsval_t proto = get_slot(js, l, SLOT_PROTO);
-    if (vtype(proto) != T_UNDEF) return proto;
-    return get_prototype_for_type(js, t);
+    jsval_t key = js_mkstr(js, ptr, plen);
+    return mkpropref((jsoff_t)vdata(l), (jsoff_t)vdata(key));
   }
   
   jsoff_t own_off = lkp(js, l, ptr, plen);
