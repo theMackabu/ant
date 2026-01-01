@@ -47,9 +47,7 @@ static void eval_code(struct js *js, struct arg_str *eval, struct arg_lit *print
   
   js_set_filename(js, "[eval]");
   js_setup_import_meta(js, "[eval]");
-
   js_mkscope(js);
-  js_protect_init_memory(js);
   
   js_set(js, js_glob(js), "__dirname", js_mkstr(js, ".", 1));
   js_set(js, js_glob(js), "__filename", js_mkstr(js, "[eval]", 6));
@@ -113,9 +111,7 @@ static int execute_module(struct js *js, const char *filename) {
 
   js_set_filename(js, use_path);
   js_setup_import_meta(js, use_path);
-  
   js_mkscope(js);
-  js_protect_init_memory(js);
   
   jsval_t result = js_eval(js, buffer, len);
   free(buffer);
@@ -137,7 +133,6 @@ int main(int argc, char *argv[]) {
   struct arg_lit *no_color = arg_lit0(NULL, "no-color", "disable colored output");
   struct arg_str *eval = arg_str0("e", "eval", "<script>", "evaluate script");
   struct arg_lit *print = arg_lit0("p", "print", "evaluate script and print result");
-  struct arg_int *gct = arg_int0(NULL, "gct", "<threshold>", "set garbage collection threshold");
   struct arg_int *initial_mem = arg_int0(NULL, "initial-mem", "<size>", "initial memory size in MB (default: 4)");
   struct arg_int *max_mem = arg_int0(NULL, "max-mem", "<size>", "maximum memory size in MB (default: 512)");
   struct arg_file *localstorage_file = arg_file0(NULL, "localstorage-file", "<path>", "file path for localStorage persistence");
@@ -146,8 +141,8 @@ int main(int argc, char *argv[]) {
   
   void *argtable[] = {
     help, version, debug, no_color,
-    eval, print, gct, initial_mem,
-    max_mem, localstorage_file, file, end
+    eval, print, initial_mem, max_mem,
+    localstorage_file, file, end
   };
   
   int nerrors = arg_parse(argc, argv, argtable);
@@ -194,7 +189,6 @@ int main(int argc, char *argv[]) {
     return EXIT_FAILURE;
   }
   
-  if (gct->count > 0) js_setgct(js, gct->ival[0]);  
   ant_runtime_init(js, argc, argv, localstorage_file);
 
   init_symbol_module();

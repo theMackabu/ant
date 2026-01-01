@@ -1,8 +1,9 @@
-console.log('=== Testing Ant.alloc() ===');
+console.log('=== Testing Ant.alloc() (bdwgc) ===');
 let alloc1 = Ant.alloc();
 console.log('Initial allocation:');
-console.log('  used:', alloc1.used);
-console.log('  minFree:', alloc1.minFree);
+console.log('  heapSize:', alloc1.heapSize);
+console.log('  usedBytes:', alloc1.usedBytes);
+console.log('  freeBytes:', alloc1.freeBytes);
 
 console.log('\n=== Creating objects to allocate memory ===');
 let arr = [];
@@ -13,31 +14,37 @@ console.log('Created array with 100 objects');
 
 let alloc2 = Ant.alloc();
 console.log('After allocation:');
-console.log('  used:', alloc2.used);
-console.log('  minFree:', alloc2.minFree);
-console.log('  increase:', alloc2.used - alloc1.used);
+console.log('  heapSize:', alloc2.heapSize);
+console.log('  usedBytes:', alloc2.usedBytes);
+console.log('  increase:', alloc2.usedBytes - alloc1.usedBytes);
 
 console.log('\n=== Testing Ant.stats() ===');
 let stats1 = Ant.stats();
 console.log('Memory stats:');
-console.log('  used:', stats1.used);
-console.log('  minFree:', stats1.minFree);
+console.log('  arenaUsed:', stats1.arenaUsed);
+console.log('  arenaLwm:', stats1.arenaLwm);
 console.log('  cstack:', stats1.cstack);
+console.log('  gcHeapSize:', stats1.gcHeapSize);
+console.log('  gcUsedBytes:', stats1.gcUsedBytes);
+console.log('  gcFreeBytes:', stats1.gcFreeBytes);
 
 console.log('\n=== Testing Ant.gc() ===');
 arr = null;
 
 let gcResult = Ant.gc();
 console.log('GC result:');
-console.log('  before break:', gcResult.before);
-console.log('  after break:', gcResult.after);
-console.log('  freed bytes:', gcResult.freed);
+console.log('  heapBefore:', gcResult.heapBefore);
+console.log('  heapAfter:', gcResult.heapAfter);
+console.log('  usedBefore:', gcResult.usedBefore);
+console.log('  usedAfter:', gcResult.usedAfter);
+console.log('  freed:', gcResult.freed);
 
 console.log('\n=== Verifying memory after GC ===');
 let alloc3 = Ant.alloc();
 console.log('After GC:');
-console.log('  used:', alloc3.used);
-console.log('  minFree:', alloc3.minFree);
+console.log('  heapSize:', alloc3.heapSize);
+console.log('  usedBytes:', alloc3.usedBytes);
+console.log('  freeBytes:', alloc3.freeBytes);
 
 console.log('\n=== Testing multiple GC cycles ===');
 for (let cycle = 0; cycle < 3; cycle = cycle + 1) {
@@ -48,19 +55,19 @@ for (let cycle = 0; cycle < 3; cycle = cycle + 1) {
     temp.push({ data: 'test data ' + i });
   }
   let beforeGc = Ant.alloc();
-  console.log('  Before GC - used:', beforeGc.used);
+  console.log('  Before GC - usedBytes:', beforeGc.usedBytes);
 
   temp = null;
   let gc = Ant.gc();
-  console.log('  After GC - used:', gc.after, 'freed bytes:', gc.freed);
+  console.log('  After GC - usedAfter:', gc.usedAfter, 'freed:', gc.freed);
 }
 
 console.log('\n=== Testing stats consistency ===');
 let statsA = Ant.stats();
 let allocA = Ant.alloc();
 console.log('Stats and alloc should match:');
-console.log('  stats.used:', statsA.used);
-console.log('  alloc.used:', allocA.used);
-console.log('  match:', statsA.used === allocA.used);
+console.log('  stats.gcUsedBytes:', statsA.gcUsedBytes);
+console.log('  alloc.usedBytes:', allocA.usedBytes);
+console.log('  match:', statsA.gcUsedBytes === allocA.usedBytes);
 
 console.log('\n=== Test complete ===');

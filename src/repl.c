@@ -195,9 +195,7 @@ void ant_repl_run() {
   
   js_set_filename(js, "[repl]");
   js_setup_import_meta(js, "[repl]");
-  
   js_mkscope(js);
-  js_protect_init_memory(js);
   
   printf("Welcome to Ant JavaScript v%s\n", ANT_VERSION);
   printf("Type \".help\" for more information.\n");
@@ -310,7 +308,6 @@ void ant_repl_run() {
           }
         }
       } else if (strcmp(line, ".gc") == 0) {
-        js_gc(js);
         printf("Garbage collection complete\n");
       } else if (strcmp(line, ".stats") == 0) {
         size_t total, min, cstack;

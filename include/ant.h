@@ -32,17 +32,13 @@ typedef enum {
 struct js *js_create(void *buf, size_t len);
 struct js *js_create_dynamic(size_t initial_size, size_t max_size);
 
-uint32_t js_gc(struct js *);
-void js_destroy(struct js *);
-void js_protect_init_memory(struct js *);
-
 jsval_t js_glob(struct js *);
 jsval_t js_eval(struct js *, const char *, size_t);
 
 void js_dump(struct js *);
+void js_destroy(struct js *);
 void js_mkscope(struct js *);
 void js_delscope(struct js *);
-void js_setgct(struct js *, size_t);
 bool js_truthy(struct js *, jsval_t);
 void js_setmaxcss(struct js *, size_t);
 

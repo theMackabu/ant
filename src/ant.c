@@ -22,14 +22,20 @@
 #include <uthash.h>
 #include <float.h>
 
+#define MCO_USE_VMEM_ALLOCATOR
+#define MCO_ZERO_MEMORY
+#define MCO_DEFAULT_STACK_SIZE (1024 * 1024)
+#define MINICORO_IMPL
+#include <minicoro.h>
+
 #include "modules/fs.h"
 #include "modules/timer.h"
 #include "modules/fetch.h"
 #include "modules/symbol.h"
 #include "modules/ffi.h"
 
-#define MINICORO_IMPL
-#include "minicoro.h"
+#define CORO_MALLOC(size) calloc(1, size)
+#define CORO_FREE(ptr) free(ptr)
 
 _Static_assert(sizeof(double) == 8, "NaN-boxing requires 64-bit IEEE 754 doubles");
 _Static_assert(sizeof(uint64_t) == 8, "NaN-boxing requires 64-bit integers");
@@ -110,17 +116,6 @@ typedef struct {
   coroutine_t *coro;
 } async_exec_context_t;
 
-typedef struct {
-  jsoff_t offset;
-  jsoff_t size;
-  uint8_t type;
-  char detail[128];
-} FreeListEntry;
-
-static UT_array *global_free_list = NULL;
-static UT_array *global_scope_stack = NULL;
-static jsoff_t protected_brk = 0;
-
 static const UT_icd jsoff_icd = {
   .sz = sizeof(jsoff_t),
   .init = NULL,
@@ -128,13 +123,7 @@ static const UT_icd jsoff_icd = {
   .dtor = NULL,
 };
 
-static const UT_icd free_list_icd = {
-  .sz = sizeof(FreeListEntry),
-  .init = NULL,
-  .copy = NULL,
-  .dtor = NULL,
-};
-
+static UT_array *global_scope_stack = NULL;
 static this_stack_t global_this_stack = {NULL, 0, 0};
 static call_stack_t global_call_stack = {NULL, 0, 0};
 static coroutine_queue_t pending_coroutines = {NULL, NULL};
@@ -330,11 +319,6 @@ static proxy_data_t *proxy_registry = NULL;
 static dynamic_accessors_t *accessor_registry = NULL;
 static descriptor_entry_t *desc_registry = NULL;
 
-void js_protect_init_memory(struct js *js) {
-  protected_brk = js_getbrk(js);
-  if (protected_brk < 0x2000) protected_brk = 0x2000;
-}
-
 void ant_register_library(ant_library_init_fn init_fn, const char *name, ...) {
   va_list args;
   const char *alias = name;
@@ -395,7 +379,6 @@ struct js {
   uint8_t *mem;           // available JS memory
   jsoff_t size;           // memory size
   jsoff_t brk;            // current mem usage boundary
-  jsoff_t gct;            // GC threshold. if brk > gct, trigger GC
   jsoff_t maxcss;         // maximum allowed C stack size usage
   void *cstk;             // C stack pointer at the beginning of js_eval()
   jsval_t current_func;   // currently executing function (for native closures)
@@ -723,7 +706,6 @@ static jsval_t do_op(struct js *, uint8_t op, jsval_t l, jsval_t r);
 static jsval_t do_instanceof(struct js *js, jsval_t l, jsval_t r);
 static jsval_t do_in(struct js *js, jsval_t l, jsval_t r);
 static jsval_t resolveprop(struct js *js, jsval_t v);
-static jsoff_t free_list_allocate(size_t size);
 static jsoff_t lkp(struct js *js, jsval_t obj, const char *buf, size_t len);
 static jsoff_t lkp_interned(struct js *js, jsval_t obj, const char *search_intern, size_t len);
 static inline const char *get_koff_intern(jsoff_t koff);
@@ -808,14 +790,14 @@ static jsval_t to_string_val(struct js *js, jsval_t val) {
 static void free_coroutine(coroutine_t *coro);
 static bool has_ready_coroutines(void);
 
+// reserve large virtual stack (1MB) but only ~4-8KB physical per coroutine
 static size_t calculate_coro_stack_size(void) {
   const char *env_stack = getenv("ANT_CORO_STACK_SIZE");
   if (env_stack) {
     size_t size = (size_t)atoi(env_stack) * 1024;
-    if (size >= 16 * 1024 && size <= 8 * 1024 * 1024) return size;
+    if (size >= 32 * 1024 && size <= 8 * 1024 * 1024) return size;
   }
-  
-  return 128 * 1024;
+  return 0;
 }
 
 static void mco_async_entry(mco_coro* mco) {
@@ -941,7 +923,7 @@ void js_run_event_loop(struct js *js) {
 
 static jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t code_len, jsval_t closure_scope, jsval_t *args, int nargs) {
   jsval_t promise = js_mkpromise(js);  
-  async_exec_context_t *ctx = (async_exec_context_t *)ANT_GC_MALLOC(sizeof(async_exec_context_t));
+  async_exec_context_t *ctx = (async_exec_context_t *)CORO_MALLOC(sizeof(async_exec_context_t));
   if (!ctx) return js_mkerr(js, "out of memory for async context");
   
   ctx->js = js;
@@ -960,14 +942,14 @@ static jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t 
   mco_coro* mco = NULL;
   mco_result res = mco_create(&mco, &desc);
   if (res != MCO_SUCCESS) {
-    ANT_GC_FREE(ctx);
+    CORO_FREE(ctx);
     return js_mkerr(js, "failed to create minicoro coroutine");
   }
   
-  coroutine_t *coro = (coroutine_t *)ANT_GC_MALLOC(sizeof(coroutine_t));
+  coroutine_t *coro = (coroutine_t *)CORO_MALLOC(sizeof(coroutine_t));
   if (!coro) {
     mco_destroy(mco);
-    ANT_GC_FREE(ctx);
+    CORO_FREE(ctx);
     return js_mkerr(js, "out of memory for coroutine");
   }
   
@@ -979,11 +961,9 @@ static jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t 
   coro->result = js_mkundef();
   coro->async_func = js->current_func;
   if (nargs > 0) {
-    coro->args = (jsval_t *)ANT_GC_MALLOC(sizeof(jsval_t) * nargs);
+    coro->args = (jsval_t *)CORO_MALLOC(sizeof(jsval_t) * nargs);
     if (coro->args) memcpy(coro->args, args, sizeof(jsval_t) * nargs);
-  } else {
-    coro->args = NULL;
-  }
+  } else { coro->args = NULL; }
   coro->nargs = nargs;
   coro->is_settled = false;
   coro->is_error = false;
@@ -1002,7 +982,7 @@ static jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t 
   if (res != MCO_SUCCESS && mco_status(mco) != MCO_DEAD) {
     remove_coroutine(coro);
     free_coroutine(coro);
-    ANT_GC_FREE(ctx);
+    CORO_FREE(ctx);
     return js_mkerr(js, "failed to start coroutine");
   }
   
@@ -1010,7 +990,7 @@ static jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t 
   if (mco_status(mco) == MCO_DEAD) {
     remove_coroutine(coro);
     free_coroutine(coro);
-    ANT_GC_FREE(ctx);
+    CORO_FREE(ctx);
   }
   
   return promise;
@@ -1023,8 +1003,8 @@ static void free_coroutine(coroutine_t *coro) {
       mco_destroy(coro->mco);
       coro->mco = NULL;
     }
-    if (coro->args) ANT_GC_FREE(coro->args);
-    ANT_GC_FREE(coro);
+    if (coro->args) CORO_FREE(coro->args);
+    CORO_FREE(coro);
   }
 }
 
@@ -2254,15 +2234,8 @@ static bool js_try_grow_memory(struct js *js, size_t needed) {
   memcpy(new_mem, js->mem, js->brk);
   memset(new_mem + js->brk, 0, new_mem_size - js->brk);
   
-  jsoff_t old_size = js->size;
   js->mem = new_mem;
   js->size = (jsoff_t)(new_mem_size / 8U * 8U);
-  
-  if (old_size > 0) {
-    js->gct = (js->size * js->gct) / old_size;
-  } else {
-    js->gct = js->size / 2;
-  }
   
   return true;
 }
@@ -2271,9 +2244,6 @@ static bool js_try_grow_memory(struct js *js, size_t needed) {
 static jsoff_t js_alloc(struct js *js, size_t size) {
   size = align32((jsoff_t) size);
   
-  // jsoff_t ofs = free_list_allocate(size);
-  // if (ofs != (jsoff_t) ~0) return ofs;
-  
   jsoff_t ofs = js->brk;
   if (js->brk + size > js->size) {
     if (js_try_grow_memory(js, size)) {
@@ -2281,15 +2251,12 @@ static jsoff_t js_alloc(struct js *js, size_t size) {
       if (js->brk + size > js->size) return ~(jsoff_t) 0;
     } else {
       ANT_GC_COLLECT();
-      // js_gc(js); disabled
       ofs = js->brk;
       if (js->brk + size > js->size) {
         if (js_try_grow_memory(js, size)) {
           ofs = js->brk;
           if (js->brk + size > js->size) return ~(jsoff_t) 0;
-        } else {
-          return ~(jsoff_t) 0;
-        }
+        } else return ~(jsoff_t) 0;
       }
     }
   }
@@ -3208,318 +3175,6 @@ static inline jsoff_t esize(jsoff_t w) {
 
 static bool is_mem_entity(uint8_t t) {
   return t == T_OBJ || t == T_PROP || t == T_STR || t == T_FUNC || t == T_ARR || t == T_PROMISE;
-}
-
-static void js_mark_all_entities_for_deletion(struct js *js) {
-  for (jsoff_t v, off = 0; off < js->brk; off += esize(v & ~(GCMASK | CONSTMASK))) {
-    v = loadoff(js, off);
-    saveoff(js, off, v | GCMASK);
-  }
-}
-
-static jsoff_t js_unmark_entity(struct js *js, jsoff_t off) {
-  if (off >= js->brk) return 0;
-  jsoff_t v = loadoff(js, off);
-  if (v & GCMASK) {
-    saveoff(js, off, v & ~GCMASK);
-    jsoff_t cleaned = v & ~(GCMASK | CONSTMASK);
-    if ((cleaned & 3) == T_OBJ) js_unmark_entity(js, cleaned & ~3);
-    if ((cleaned & 3) == T_PROP) {
-      js_unmark_entity(js, cleaned & ~3);
-      js_unmark_entity(js, loadoff(js, (jsoff_t) (off + sizeof(off))));
-      jsval_t val = loadval(js, (jsoff_t) (off + sizeof(off) + sizeof(off)));
-      if (is_mem_entity(vtype(val))) js_unmark_entity(js, (jsoff_t) vdata(val));
-    }
-  }
-  return v & ~(GCMASK | CONSTMASK | 3U);
-}
-
-static void js_unmark_jsval(struct js *js, jsval_t v) {
-  if (is_mem_entity(vtype(v))) js_unmark_entity(js, (jsoff_t) vdata(v));
-}
-
-static void js_unmark_used_entities(struct js *js) {
-  js_unmark_entity(js, (jsoff_t) vdata(js->scope));
-  if (global_scope_stack) {
-    jsoff_t *p = NULL;
-    while ((p = (jsoff_t *)utarray_next(global_scope_stack, p)) != NULL) {
-      js_unmark_entity(js, *p);
-    }
-  }
-  
-  js_unmark_entity(js, 0);
-  if (js->nogc) js_unmark_entity(js, js->nogc);
-  
-  mco_coro *running = mco_running();
-  if (running) {
-    async_exec_context_t *ctx = (async_exec_context_t *)mco_get_user_data(running);
-    if (ctx) {
-      js_unmark_jsval(js, ctx->closure_scope);
-      js_unmark_jsval(js, ctx->result);
-      js_unmark_jsval(js, ctx->promise);
-      if (ctx->coro) {
-        js_unmark_jsval(js, ctx->coro->scope);
-        js_unmark_jsval(js, ctx->coro->this_val);
-        js_unmark_jsval(js, ctx->coro->awaited_promise);
-        js_unmark_jsval(js, ctx->coro->result);
-        js_unmark_jsval(js, ctx->coro->async_func);
-        js_unmark_jsval(js, ctx->coro->yield_value);
-        for (int i = 0; i < ctx->coro->nargs; i++) js_unmark_jsval(js, ctx->coro->args[i]);
-      }
-    }
-  }
-  
-  for (coroutine_t *coro = pending_coroutines.head; coro != NULL; coro = coro->next) {
-    js_unmark_jsval(js, coro->scope);
-    js_unmark_jsval(js, coro->this_val);
-    js_unmark_jsval(js, coro->awaited_promise);
-    js_unmark_jsval(js, coro->result);
-    js_unmark_jsval(js, coro->async_func);
-    js_unmark_jsval(js, coro->yield_value);
-    for (int i = 0; i < coro->nargs; i++) js_unmark_jsval(js, coro->args[i]);
-  }
-  
-  for (int i = 0; i < global_this_stack.depth; i++) {
-    js_unmark_jsval(js, global_this_stack.stack[i]);
-  }
-}
-
-static void init_free_list(void) {
-  if (global_free_list == NULL) {
-    utarray_new(global_free_list, &free_list_icd);
-  } else {
-    utarray_clear(global_free_list);
-  }
-}
-
-static void free_list_clear(void) {
-  if (global_free_list != NULL) utarray_clear(global_free_list);
-}
-
-static void free_list_compact(void) {
-  unsigned int len = utarray_len(global_free_list);
-  if (len <= 1) return;
-  
-  FreeListEntry *entries = (FreeListEntry *)utarray_front(global_free_list);
-  
-  for (unsigned int i = 0; i < len - 1; i++) {
-    for (unsigned int j = 0; j < len - i - 1; j++) {
-      if (entries[j].offset > entries[j + 1].offset) {
-        FreeListEntry temp = entries[j];
-        entries[j] = entries[j + 1];
-        entries[j + 1] = temp;
-      }
-    }
-  }
-  
-  unsigned int write_pos = 0;
-  for (unsigned int i = 1; i < len; i++) {
-    if (entries[write_pos].offset + entries[write_pos].size == entries[i].offset) {
-      entries[write_pos].size += entries[i].size;
-    } else {
-      write_pos++;
-      entries[write_pos] = entries[i];
-    }
-  }
-  
-  unsigned int final_count = write_pos + 1;
-  while (utarray_len(global_free_list) > final_count) {
-    utarray_pop_back(global_free_list);
-  }
-}
-
-static jsoff_t free_list_zero_out(struct js *js) {
-  unsigned int len = utarray_len(global_free_list);
-  if (len == 0) return 0;
-  
-  jsoff_t safe_threshold = protected_brk > 0 ? protected_brk + 0x400 : 0x1000;
-  jsoff_t total_freed = 0;
-  FreeListEntry *entries = (FreeListEntry *)utarray_front(global_free_list);
-  for (unsigned int i = 0; i < len; i++) {
-    if (entries[i].offset > 0 && entries[i].size > 0) {
-      if (entries[i].offset < safe_threshold) continue;
-      if (entries[i].offset + entries[i].size > js->size) continue;    
-      // ugh disable zeroing for now until a better solution is found  
-      // memset(&js->mem[entries[i].offset], 0, entries[i].size);
-      total_freed += entries[i].size;
-    }
-  }
-  
-  return total_freed;
-}
-
-static jsoff_t free_list_allocate(size_t size) {
-  unsigned int len = utarray_len(global_free_list);
-  if (len == 0) return ~(jsoff_t) 0;
-  size = align32((jsoff_t) size);
-  
-  FreeListEntry *entries = (FreeListEntry *)utarray_front(global_free_list);
-  jsoff_t safe_reuse_threshold = protected_brk > 0 ? protected_brk + 0x400 : 0x1000;
-  
-  for (unsigned int i = 0; i < len; i++) {
-    if (entries[i].offset >= safe_reuse_threshold && entries[i].size >= size) {
-      jsoff_t allocated_offset = entries[i].offset;
-      
-      entries[i].offset += size;
-      entries[i].size -= size;
-      
-      if (entries[i].size == 0) utarray_erase(global_free_list, i, 1);      
-      return allocated_offset;
-    }
-  }
-  
-  return ~(jsoff_t) 0;
-}
-
-static bool is_builtin_or_system(jsoff_t offset, struct js *js) {
-  jsval_t obj_val = mkval(T_OBJ, offset);
-  
-  jsoff_t native_off = lkp_interned(js, obj_val, INTERN_NATIVE_FUNC, 13);
-  if (native_off != 0) return true;
-  
-  jsoff_t code_off = lkp_interned(js, obj_val, INTERN_CODE, 6);
-  if (code_off != 0) {
-    jsval_t code_val = resolveprop(js, mkval(T_PROP, code_off));
-    if (vtype(code_val) == T_STR) {
-      jsoff_t slen, str_off = vstr(js, code_val, &slen);
-      if (slen > 10 && memcmp(&js->mem[str_off], "__builtin_", 10) == 0) return true;
-    }
-  }
-  
-  return false;
-}
-
-static void free_list_add(jsoff_t offset, jsoff_t size, struct js *js) {
-  if (offset >= js->size || size == 0 || offset + size > js->size * 2) return;
-  jsoff_t safe_threshold = protected_brk > 0 ? protected_brk + 0x400 : 0x1000;
-  if (offset < safe_threshold) return;
-  
-  jsoff_t entity_val = loadoff(js, offset);
-  uint8_t entity_type = entity_val & 3;
-  
-  if (entity_type == T_OBJ && is_builtin_or_system(offset, js)) return;
-  if (entity_type == T_STR && offset < 0x1000) return;
-  
-  FreeListEntry entry = {0};
-  entry.offset = offset;
-  entry.size = size;
-  entry.type = entity_type;
-  entry.detail[0] = '\0';
-  
-  utarray_push_back(global_free_list, &entry);
-}
-
-static void js_fixup_offsets(struct js *js, jsoff_t start, jsoff_t size) {
-  for (jsoff_t n, v, off = 0; off < js->brk; off += n) {
-    v = loadoff(js, off);
-    n = esize(v & ~(GCMASK | CONSTMASK));
-    if (v & GCMASK) continue;
-    
-    jsoff_t flags = v & (GCMASK | CONSTMASK);
-    jsoff_t cleaned = v & ~(GCMASK | CONSTMASK);
-    if ((cleaned & 3) != T_OBJ && (cleaned & 3) != T_PROP) continue;
-    jsoff_t adjusted = cleaned > start ? cleaned - size : cleaned;
-    if (cleaned != adjusted) saveoff(js, off, adjusted | flags);
-    
-    if ((cleaned & 3) == T_OBJ) {
-      jsoff_t u = loadoff(js, (jsoff_t) (off + sizeof(jsoff_t)));
-      if (u > start) saveoff(js, (jsoff_t) (off + sizeof(jsoff_t)), u - size);
-    }
-    
-    #define FIXUP_JSVAL(val) do { \
-      if (is_mem_entity(vtype(val)) && vdata(val) > start) \
-        (val) = mkval(vtype(val), vdata(val) - size); \
-    } while (0)
-
-    #define FIXUP_JSVAL_AT(mem_off) do { \
-      jsval_t _v = loadval(js, mem_off); \
-      if (is_mem_entity(vtype(_v)) && vdata(_v) > start) \
-        saveval(js, mem_off, mkval(vtype(_v), vdata(_v) - size)); \
-    } while (0)
-
-    #define FIXUP_OFF(off_var) do { if ((off_var) > start) (off_var) -= size; } while (0)
-
-    if ((cleaned & 3) == T_PROP) {
-      jsoff_t koff = loadoff(js, (jsoff_t) (off + sizeof(off)));
-      if (koff > start) saveoff(js, (jsoff_t) (off + sizeof(off)), koff - size);
-      FIXUP_JSVAL_AT((jsoff_t) (off + sizeof(off) + sizeof(off)));
-    }
-  }
-  
-  FIXUP_JSVAL(js->scope);
-  FIXUP_OFF(js->nogc);
-  if (js->code > (char *) js->mem && js->code - (char *) js->mem < js->size && js->code - (char *) js->mem > start) {
-    js->code -= size;
-  }
-  
-  if (global_scope_stack) {
-    jsoff_t *p = NULL;
-    while ((p = (jsoff_t *)utarray_next(global_scope_stack, p)) != NULL) FIXUP_OFF(*p);
-  }
-
-  for (coroutine_t *coro = pending_coroutines.head; coro != NULL; coro = coro->next) {
-    FIXUP_JSVAL(coro->scope);
-    FIXUP_JSVAL(coro->this_val);
-    FIXUP_JSVAL(coro->awaited_promise);
-    FIXUP_JSVAL(coro->result);
-    FIXUP_JSVAL(coro->async_func);
-    FIXUP_JSVAL(coro->yield_value);
-    for (int i = 0; i < coro->nargs; i++) FIXUP_JSVAL(coro->args[i]);
-  }
-
-  #undef FIXUP_JSVAL
-  #undef FIXUP_JSVAL_AT
-  #undef FIXUP_OFF
-}
-
-static void js_compact_from_end(struct js *js) {
-  jsoff_t new_brk = js->brk;
-  
-  jsoff_t min_brk = (jsoff_t) vdata(js->scope) + 8;
-  if (global_scope_stack) {
-    jsoff_t *p = NULL;
-    while ((p = (jsoff_t *)utarray_next(global_scope_stack, p)) != NULL) {
-      if (*p + 8 > min_brk) min_brk = *p + 8;
-    }
-  }
-  
-  for (jsoff_t off = 0; off < js->brk; off += esize(loadoff(js, off) & ~(GCMASK | CONSTMASK))) {
-    jsoff_t v = loadoff(js, off);
-    if ((v & GCMASK) == 0) new_brk = off + esize(v & ~(GCMASK | CONSTMASK));
-  }
-  
-  if (new_brk < min_brk) new_brk = min_brk;
-  js->brk = new_brk;
-}
-
-static void js_clear_gc_marks(struct js *js) {
-  for (jsoff_t v, off = 0; off < js->brk; off += esize(v & ~(GCMASK | CONSTMASK))) {
-    v = loadoff(js, off);
-    if (v & GCMASK) {
-      jsoff_t size = esize(v & ~(GCMASK | CONSTMASK));
-      free_list_add(off, size, js);
-      saveoff(js, off, v & ~GCMASK);
-    }
-  }
-}
-
-jsoff_t js_gc(struct js *js) {
-  // setlwm(js);
-  // if (js->nogc == (jsoff_t) ~0) return 0;
-  // 
-  // js_mark_all_entities_for_deletion(js);
-  // js_unmark_used_entities(js);
-  // js_compact_from_end(js);
-  // 
-  // js_clear_gc_marks(js);
-  // free_list_compact();
-  // 
-  // jsoff_t freed = free_list_zero_out(js);
-  // if (global_free_list != NULL) utarray_clear(global_free_list);
-  //   
-  // return freed;
-  
-  return 0;
 }
 
 static int is_unicode_space(const unsigned char *p, jsoff_t remaining, bool *is_line_term) {
@@ -8055,7 +7710,6 @@ static jsval_t js_unary(struct js *js) {
         saveoff(js, obj_off, (deleted_next & ~3U) | (current & (GCMASK | CONSTMASK | 3U)));
         saveoff(js, prop_off, loadoff(js, prop_off) | GCMASK);
         invalidate_prop_cache(obj_off);
-        // js_gc(js); disabled
         return js_mktrue();
       }
       jsoff_t prev = first_prop;
@@ -8067,7 +7721,6 @@ static jsval_t js_unary(struct js *js) {
           saveoff(js, prev, (deleted_next & ~3U) | (current & (GCMASK | CONSTMASK | 3U)));
           saveoff(js, prop_off, loadoff(js, prop_off) | GCMASK);
           invalidate_prop_cache(obj_off);
-          // js_gc(js); disabled
           return js_mktrue();
         }
         prev = next_prop;
@@ -8155,7 +7808,6 @@ static jsval_t js_unary(struct js *js) {
       }
       saveoff(js, prop_off, loadoff(js, prop_off) | GCMASK);
       invalidate_prop_cache(owner_obj_off);
-      // js_gc(js); disabled
     }
     (void) save_pos;
     (void) save_tok;
@@ -11184,7 +10836,6 @@ static jsval_t js_labeled_stmt(struct js *js, const char *label, jsoff_t label_l
 
 static jsval_t js_stmt_impl(struct js *js) {
   jsval_t res;
-  // if (js->brk > js->gct) js_gc(js); disabled
   uint8_t stmt_tok = next(js);
   
   switch (stmt_tok) {
@@ -20213,7 +19864,6 @@ static jsval_t weakset_delete(struct js *js, jsval_t *args, int nargs) {
 
 struct js *js_create(void *buf, size_t len) {
   ANT_GC_INIT();
-  init_free_list();
   intern_init();
   
   struct js *js = NULL;
@@ -20226,7 +19876,6 @@ struct js *js_create(void *buf, size_t len) {
   js->scope = mkobj(js, 0);
   js->size = js->size / 8U * 8U;
   js->lwm = js->size;
-  js->gct = js->size / 2;
   js->this_val = js->scope;
   js->errmsg_size = 4096;
   js->errmsg = (char *)malloc(js->errmsg_size);
@@ -20775,7 +20424,6 @@ void js_destroy(struct js *js) {
 double js_getnum(jsval_t value) { return tod(value); }
 int js_getbool(jsval_t value) { return vdata(value) & 1 ? 1 : 0; }
 
-void js_setgct(struct js *js, size_t gct) { js->gct = (jsoff_t) gct; }
 void js_setmaxcss(struct js *js, size_t max) { js->maxcss = (jsoff_t) max; }
 void js_set_filename(struct js *js, const char *filename) { js->filename = filename; }
 

@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "ant.h"
+#include "arena.h"
 #include "runtime.h"
 #include "modules/builtin.h"
 
@@ -64,14 +65,21 @@ static jsval_t js_signal(struct js *js, jsval_t *args, int nargs) {
 // Ant.gc()
 static jsval_t js_gc_trigger(struct js *js, jsval_t *args, int nargs) {
   (void) args; (void) nargs;
-  size_t before_brk = js_getbrk(js);
   
-  uint32_t freed = js_gc(js);
-  size_t after_brk = js_getbrk(js);
+  size_t heap_before = GC_get_heap_size();
+  size_t used_before = GC_get_heap_size() - GC_get_free_bytes();
+  
+  ANT_GC_COLLECT();
+  
+  size_t heap_after = GC_get_heap_size();
+  size_t used_after = GC_get_heap_size() - GC_get_free_bytes();
+  size_t freed = (used_before > used_after) ? (used_before - used_after) : 0;
   
   jsval_t result = js_mkobj(js);
-  js_set(js, result, "before", js_mknum((double)before_brk));
-  js_set(js, result, "after", js_mknum((double)after_brk));
+  js_set(js, result, "heapBefore", js_mknum((double)heap_before));
+  js_set(js, result, "heapAfter", js_mknum((double)heap_after));
+  js_set(js, result, "usedBefore", js_mknum((double)used_before));
+  js_set(js, result, "usedAfter", js_mknum((double)used_after));
   js_set(js, result, "freed", js_mknum((double)freed));
   
   return result;
@@ -81,12 +89,11 @@ static jsval_t js_gc_trigger(struct js *js, jsval_t *args, int nargs) {
 static jsval_t js_alloc(struct js *js, jsval_t *args, int nargs) {
   (void) args; (void) nargs;
   
-  size_t total = 0, min_free = 0, cstack = 0;
-  js_stats(js, &total, &min_free, &cstack);
-  
   jsval_t result = js_mkobj(js);
-  js_set(js, result, "used", js_mknum((double)total));
-  js_set(js, result, "minFree", js_mknum((double)min_free));
+  js_set(js, result, "heapSize", js_mknum((double)GC_get_heap_size()));
+  js_set(js, result, "freeBytes", js_mknum((double)GC_get_free_bytes()));
+  js_set(js, result, "usedBytes", js_mknum((double)(GC_get_heap_size() - GC_get_free_bytes())));
+  js_set(js, result, "totalBytes", js_mknum((double)GC_get_total_bytes()));
   
   return result;
 }
@@ -102,13 +109,17 @@ static jsval_t js_raw_typeof(struct js *js, jsval_t *args, int nargs) {
 static jsval_t js_stats_fn(struct js *js, jsval_t *args, int nargs) {
   (void) args; (void) nargs;
   
-  size_t total = 0, min_free = 0, cstack = 0;
-  js_stats(js, &total, &min_free, &cstack);
-  
+  size_t arena_total = 0, arena_lwm = 0, cstack = 0;
+  js_stats(js, &arena_total, &arena_lwm, &cstack);
   jsval_t result = js_mkobj(js);
-  js_set(js, result, "used", js_mknum((double)total));
-  js_set(js, result, "minFree", js_mknum((double)min_free));
+  
+  js_set(js, result, "arenaUsed", js_mknum((double)arena_total));
+  js_set(js, result, "arenaLwm", js_mknum((double)arena_lwm));
   js_set(js, result, "cstack", js_mknum((double)cstack));
+  
+  js_set(js, result, "gcHeapSize", js_mknum((double)GC_get_heap_size()));
+  js_set(js, result, "gcFreeBytes", js_mknum((double)GC_get_free_bytes()));
+  js_set(js, result, "gcUsedBytes", js_mknum((double)(GC_get_heap_size() - GC_get_free_bytes())));
   
   return result;
 }

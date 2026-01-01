@@ -27,7 +27,7 @@ script = ['meson subprojects download', '''
 [tasks.asan]
 script = ['meson subprojects download', '''
    bash -c 'CC="ccache $(which clang)" \
-   meson setup build --wipe -Db_sanitize=address -Doptimization=0 -Db_lto=false -Dstrip=false'
+   meson setup build --wipe -Db_sanitize=address -Doptimization=0 -Db_lto=false -Dstrip=false -Db_lundef=false'
 ''']
 
 [tasks.install]
