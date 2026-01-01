@@ -280,10 +280,10 @@ static jsval_t reflect_is_extensible(struct js *js, jsval_t *args, int nargs) {
   
   if (t != JS_OBJ && t != JS_FUNC) return js_mkfalse();
   
-  jsval_t frozen = js_get(js, target, "__frozen__");
+  jsval_t frozen = js_get_slot(js, target, SLOT_FROZEN);
   if (js_type(frozen) == JS_TRUE) return js_mkfalse();
   
-  jsval_t sealed = js_get(js, target, "__sealed__");
+  jsval_t sealed = js_get_slot(js, target, SLOT_SEALED);
   if (js_type(sealed) == JS_TRUE) return js_mkfalse();
   
   return js_mktrue();
@@ -297,7 +297,7 @@ static jsval_t reflect_prevent_extensions(struct js *js, jsval_t *args, int narg
   
   if (t != JS_OBJ && t != JS_FUNC) return js_mkfalse();
   
-  js_set(js, target, "__sealed__", js_mktrue());
+  js_set_slot(js, target, SLOT_EXTENSIBLE, js_mkfalse());
   return js_mktrue();
 }
 

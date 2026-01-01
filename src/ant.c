@@ -3191,31 +3191,20 @@ done_update:
   return mkval(T_PROP, existing);
 
 create_new:
-  jsoff_t frozen_off = lkp(js, obj, "__frozen__", 10);
-  if (frozen_off != 0) {
-    jsval_t frozen_val = resolveprop(js, mkval(T_PROP, frozen_off));
-    if (js_truthy(js, frozen_val)) {
-      if (js->flags & F_STRICT) return js_mkerr(js, "cannot add property to frozen object");
-      return js_mkundef();
-    }
+  if (js_truthy(js, get_slot(js, obj, SLOT_FROZEN))) {
+    if (js->flags & F_STRICT) return js_mkerr(js, "cannot add property to frozen object");
+    return js_mkundef();
   }
   
-  jsoff_t sealed_off = lkp(js, obj, "__sealed__", 10);
-  if (sealed_off != 0) {
-    jsval_t sealed_val = resolveprop(js, mkval(T_PROP, sealed_off));
-    if (js_truthy(js, sealed_val)) {
-      if (js->flags & F_STRICT) return js_mkerr(js, "cannot add property to sealed object");
-      return js_mkundef();
-    }
+  if (js_truthy(js, get_slot(js, obj, SLOT_SEALED))) {
+    if (js->flags & F_STRICT) return js_mkerr(js, "cannot add property to sealed object");
+    return js_mkundef();
   }
   
-  jsoff_t ext_off = lkp(js, obj, "__extensible__", 14);
-  if (ext_off != 0) {
-    jsval_t ext_val = resolveprop(js, mkval(T_PROP, ext_off));
-    if (!js_truthy(js, ext_val)) {
-      if (js->flags & F_STRICT) return js_mkerr(js, "cannot add property to non-extensible object");
-      return js_mkundef();
-    }
+  jsval_t ext_slot = get_slot(js, obj, SLOT_EXTENSIBLE);
+  if (vtype(ext_slot) != T_UNDEF && !js_truthy(js, ext_slot)) {
+    if (js->flags & F_STRICT) return js_mkerr(js, "cannot add property to non-extensible object");
+    return js_mkundef();
   }
   
   int need_length_update = 0;
@@ -7786,22 +7775,14 @@ static jsval_t js_unary(struct js *js) {
         return js_truthy(js, result) ? js_mktrue() : js_mkfalse();
       }
       
-      jsoff_t frozen_off = lkp(js, obj, "__frozen__", 10);
-      if (frozen_off != 0) {
-        jsval_t frozen_val = resolveprop(js, mkval(T_PROP, frozen_off));
-        if (js_truthy(js, frozen_val)) {
-          if (js->flags & F_STRICT) return js_mkerr(js, "cannot delete property of frozen object");
-          return js_mkfalse();
-        }
+      if (js_truthy(js, get_slot(js, obj, SLOT_FROZEN))) {
+        if (js->flags & F_STRICT) return js_mkerr(js, "cannot delete property of frozen object");
+        return js_mkfalse();
       }
       
-      jsoff_t sealed_off = lkp(js, obj, "__sealed__", 10);
-      if (sealed_off != 0) {
-        jsval_t sealed_val = resolveprop(js, mkval(T_PROP, sealed_off));
-        if (js_truthy(js, sealed_val)) {
-          if (js->flags & F_STRICT) return js_mkerr(js, "cannot delete property of sealed object");
-          return js_mkfalse();
-        }
+      if (js_truthy(js, get_slot(js, obj, SLOT_SEALED))) {
+        if (js->flags & F_STRICT) return js_mkerr(js, "cannot delete property of sealed object");
+        return js_mkfalse();
       }
       
       jsoff_t prop_off = lkp(js, obj, key_str, len);
@@ -7881,22 +7862,14 @@ static jsval_t js_unary(struct js *js) {
     if (owner_obj_off != 0) {
       jsval_t owner_obj = mkval(T_OBJ, owner_obj_off);
       
-      jsoff_t frozen_off = lkp(js, owner_obj, "__frozen__", 10);
-      if (frozen_off != 0) {
-        jsval_t frozen_val = resolveprop(js, mkval(T_PROP, frozen_off));
-        if (js_truthy(js, frozen_val)) {
-          if (js->flags & F_STRICT) return js_mkerr(js, "cannot delete property of frozen object");
-          return js_mkfalse();
-        }
+      if (js_truthy(js, get_slot(js, owner_obj, SLOT_FROZEN))) {
+        if (js->flags & F_STRICT) return js_mkerr(js, "cannot delete property of frozen object");
+        return js_mkfalse();
       }
       
-      jsoff_t sealed_off = lkp(js, owner_obj, "__sealed__", 10);
-      if (sealed_off != 0) {
-        jsval_t sealed_val = resolveprop(js, mkval(T_PROP, sealed_off));
-        if (js_truthy(js, sealed_val)) {
-          if (js->flags & F_STRICT) return js_mkerr(js, "cannot delete property of sealed object");
-          return js_mkfalse();
-        }
+      if (js_truthy(js, get_slot(js, owner_obj, SLOT_SEALED))) {
+        if (js->flags & F_STRICT) return js_mkerr(js, "cannot delete property of sealed object");
+        return js_mkfalse();
       }
       
       jsoff_t key_str_off = loadoff(js, (jsoff_t)(prop_off + sizeof(jsoff_t)));
@@ -13471,7 +13444,7 @@ static jsval_t builtin_object_freeze(struct js *js, jsval_t *args, int nargs) {
     js_set_descriptor(js, as_obj, key, klen, JS_DESC_E);
   }
   
-  setprop(js, as_obj, js_mkstr(js, "__frozen__", 10), js_mktrue());
+  set_slot(js, as_obj, SLOT_FROZEN, js_mktrue());
   return obj;
 }
 
@@ -13484,13 +13457,7 @@ static jsval_t builtin_object_isFrozen(struct js *js, jsval_t *args, int nargs) 
   if (t != T_OBJ && t != T_ARR && t != T_FUNC) return js_mktrue();
   jsval_t as_obj = (t == T_OBJ) ? obj : mkval(T_OBJ, vdata(obj));
   
-  jsoff_t frozen_off = lkp(js, as_obj, "__frozen__", 10);
-  if (frozen_off != 0) {
-    jsval_t frozen_val = resolveprop(js, mkval(T_PROP, frozen_off));
-    if (js_truthy(js, frozen_val)) return js_mktrue();
-  }
-  
-  return js_mkfalse();
+  return js_truthy(js, get_slot(js, as_obj, SLOT_FROZEN)) ? js_mktrue() : js_mkfalse();
 }
 
 static jsval_t builtin_object_seal(struct js *js, jsval_t *args, int nargs) {
@@ -13502,7 +13469,7 @@ static jsval_t builtin_object_seal(struct js *js, jsval_t *args, int nargs) {
   if (t != T_OBJ && t != T_ARR && t != T_FUNC) return obj;
   jsval_t as_obj = (t == T_OBJ) ? obj : mkval(T_OBJ, vdata(obj));
   
-  setprop(js, as_obj, js_mkstr(js, "__sealed__", 10), js_mktrue());
+  set_slot(js, as_obj, SLOT_SEALED, js_mktrue());
   jsoff_t next = loadoff(js, (jsoff_t) vdata(as_obj)) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
   
   while (next < js->brk && next != 0) {
@@ -13532,17 +13499,8 @@ static jsval_t builtin_object_isSealed(struct js *js, jsval_t *args, int nargs) 
   if (t != T_OBJ && t != T_ARR && t != T_FUNC) return js_mktrue();
   jsval_t as_obj = (t == T_OBJ) ? obj : mkval(T_OBJ, vdata(obj));
   
-  jsoff_t sealed_off = lkp(js, as_obj, "__sealed__", 10);
-  if (sealed_off != 0) {
-    jsval_t sealed_val = resolveprop(js, mkval(T_PROP, sealed_off));
-    if (js_truthy(js, sealed_val)) return js_mktrue();
-  }
-  
-  jsoff_t frozen_off = lkp(js, as_obj, "__frozen__", 10);
-  if (frozen_off != 0) {
-    jsval_t frozen_val = resolveprop(js, mkval(T_PROP, frozen_off));
-    if (js_truthy(js, frozen_val)) return js_mktrue();
-  }
+  if (js_truthy(js, get_slot(js, as_obj, SLOT_SEALED))) return js_mktrue();
+  if (js_truthy(js, get_slot(js, as_obj, SLOT_FROZEN))) return js_mktrue();
   
   return js_mkfalse();
 }
@@ -13705,22 +13663,12 @@ static jsval_t builtin_object_isExtensible(struct js *js, jsval_t *args, int nar
   if (t != T_OBJ && t != T_ARR && t != T_FUNC) return js_mktrue();
   jsval_t as_obj = (t == T_OBJ) ? obj : mkval(T_OBJ, vdata(obj));
   
-  jsoff_t frozen_off = lkp(js, as_obj, "__frozen__", 10);
-  if (frozen_off != 0) {
-    jsval_t frozen_val = resolveprop(js, mkval(T_PROP, frozen_off));
-    if (js_truthy(js, frozen_val)) return js_mkfalse();
-  }
+  if (js_truthy(js, get_slot(js, as_obj, SLOT_FROZEN))) return js_mkfalse();
+  if (js_truthy(js, get_slot(js, as_obj, SLOT_SEALED))) return js_mkfalse();
   
-  jsoff_t sealed_off = lkp(js, as_obj, "__sealed__", 10);
-  if (sealed_off != 0) {
-    jsval_t sealed_val = resolveprop(js, mkval(T_PROP, sealed_off));
-    if (js_truthy(js, sealed_val)) return js_mkfalse();
-  }
-  
-  jsoff_t ext_off = lkp(js, as_obj, "__extensible__", 14);
-  if (ext_off != 0) {
-    jsval_t ext_val = resolveprop(js, mkval(T_PROP, ext_off));
-    return mkval(T_BOOL, js_truthy(js, ext_val) ? 1 : 0);
+  jsval_t ext_slot = get_slot(js, as_obj, SLOT_EXTENSIBLE);
+  if (vtype(ext_slot) != T_UNDEF) {
+    return js_truthy(js, ext_slot) ? js_mktrue() : js_mkfalse();
   }
   
   return js_mktrue();
@@ -13735,7 +13683,7 @@ static jsval_t builtin_object_preventExtensions(struct js *js, jsval_t *args, in
   if (t != T_OBJ && t != T_ARR && t != T_FUNC) return obj;
   jsval_t as_obj = (t == T_OBJ) ? obj : mkval(T_OBJ, vdata(obj));
   
-  setprop(js, as_obj, js_mkstr(js, "__extensible__", 14), js_mkfalse());
+  set_slot(js, as_obj, SLOT_EXTENSIBLE, js_mkfalse());
   return obj;
 }
 
