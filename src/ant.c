@@ -2944,17 +2944,6 @@ check:
   goto check;
 }
 
-static jsoff_t lkp_header_slot(struct js *js, jsval_t obj, internal_slot_t slot) {
-  jsoff_t off = (jsoff_t) vdata(obj);
-  if (off >= js->brk) return 0;
-  jsoff_t next = loadoff(js, off) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
-  if (next == 0 || next >= js->brk) return 0;
-  jsoff_t header = loadoff(js, next);
-  if ((header & SLOTMASK) == 0) return 0;
-  jsoff_t koff = loadoff(js, next + sizeof(jsoff_t));
-  return (koff == (jsoff_t)slot) ? next : 0;
-}
-
 static void set_slot(struct js *js, jsval_t obj, internal_slot_t slot, jsval_t val) {
   jsoff_t existing = search_slot(js, obj, slot);
   if (existing > 0) {
@@ -17580,9 +17569,8 @@ static promise_data_entry_t *get_promise_data(uint32_t promise_id, bool create) 
 
 static uint32_t get_promise_id(struct js *js, jsval_t p) {
   jsval_t p_obj = mkval(T_OBJ, vdata(p));
-  jsoff_t off = lkp_header_slot(js, p_obj, SLOT_PID);
-  if (off == 0) return 0;
-  jsval_t pid_val = loadval(js, off + sizeof(jsoff_t) * 2);
+  jsval_t pid_val = get_slot(js, p_obj, SLOT_PID);
+  if (vtype(pid_val) == T_UNDEF) return 0;
   return (uint32_t)tod(pid_val);
 }
 
