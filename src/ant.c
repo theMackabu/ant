@@ -231,8 +231,6 @@ static const char *INTERN_TARGET_FUNC = NULL;
 static const char *INTERN_ARGUMENTS = NULL;
 static const char *INTERN_CALLEE = NULL;
 static const char *INTERN_IDX[10] = {NULL};
-static const char *INTERN_STATE = NULL;
-static const char *INTERN_PVALUE = NULL;
 static const char *INTERN_PROMISE = NULL;
 
 #define INTERN_PROP_CACHE_SIZE 4096
@@ -256,13 +254,19 @@ static const UT_icd promise_handler_icd = {
   .dtor = NULL,
 };
 
-typedef struct promise_handlers_entry {
-  jsoff_t promise_off;  // key
+typedef struct promise_data_entry {
+  uint32_t promise_id;
+  int state;
+  jsval_t value;
   UT_array *handlers;
   UT_hash_handle hh;
-} promise_handlers_entry_t;
+} promise_data_entry_t;
 
-static promise_handlers_entry_t *promise_handlers_registry = NULL;
+static promise_data_entry_t *promise_registry = NULL;
+static uint32_t next_promise_id = 1;
+
+static promise_data_entry_t *get_promise_data(uint32_t promise_id, bool create);
+static uint32_t get_promise_id(struct js *js, jsval_t p);
 
 typedef struct map_entry {
   char *key;
@@ -2812,8 +2816,6 @@ static void intern_init(void) {
   INTERN_THIS = intern_string("__this", 6);
   INTERN_NATIVE_FUNC = intern_string("__native_func", 13);
   INTERN_ASYNC = intern_string("__async", 7);
-  INTERN_STATE = intern_string("__state", 7);
-  INTERN_PVALUE = intern_string("__value", 7);
   INTERN_PROMISE = intern_string("promise", 7);
   INTERN_BOUND_THIS = intern_string("__bound_this", 12);
   INTERN_BOUND_ARGS = intern_string("__bound_args", 12);
@@ -2907,6 +2909,61 @@ static jsval_t mkprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v, bool is_
   jsoff_t prop_header = (b & ~(3U | CONSTMASK | ARRMASK)) | T_PROP;
   if (is_const) prop_header |= CONSTMASK;
   return mkentity(js, prop_header, buf, sizeof(buf));
+}
+
+static jsval_t mkslot(struct js *js, jsval_t obj, internal_slot_t slot, jsval_t v) {
+  jsoff_t b, head = (jsoff_t) vdata(obj);
+  char buf[sizeof(jsoff_t) + sizeof(v)];
+  memcpy(&b, &js->mem[head], sizeof(b));
+  
+  jsoff_t slot_key = (jsoff_t)slot;
+  memcpy(buf, &slot_key, sizeof(slot_key));
+  memcpy(buf + sizeof(slot_key), &v, sizeof(v));
+  
+  jsoff_t brk = js->brk | T_OBJ;
+  if (b & ARRMASK) brk |= ARRMASK;
+  memcpy(&js->mem[head], &brk, sizeof(brk));
+  jsoff_t prop_header = (b & ~(3U | CONSTMASK | ARRMASK | SLOTMASK)) | T_PROP | SLOTMASK;
+  
+  return mkentity(js, prop_header, buf, sizeof(buf));
+}
+
+static jsoff_t search_slot(struct js *js, jsval_t obj, internal_slot_t slot) {
+  jsoff_t off = (jsoff_t) vdata(obj);
+  jsoff_t next = loadoff(js, off) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
+  jsoff_t header, koff;
+
+check:
+  if (next == 0 || next >= js->brk) return 0;
+  header = loadoff(js, next);
+  if ((header & SLOTMASK) == 0) return 0;
+  koff = loadoff(js, next + sizeof(jsoff_t));
+  if (koff == (jsoff_t)slot) return next;
+  next = header & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
+  goto check;
+}
+
+static jsoff_t lkp_header_slot(struct js *js, jsval_t obj, internal_slot_t slot) {
+  jsoff_t off = (jsoff_t) vdata(obj);
+  jsoff_t next = loadoff(js, off) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
+  if (next == 0 || next >= js->brk) return 0;
+  jsoff_t header = loadoff(js, next);
+  if ((header & SLOTMASK) == 0) return 0;
+  jsoff_t koff = loadoff(js, next + sizeof(jsoff_t));
+  return (koff == (jsoff_t)slot) ? next : 0;
+}
+
+static void set_slot(struct js *js, jsval_t obj, internal_slot_t slot, jsval_t val) {
+  jsoff_t existing = search_slot(js, obj, slot);
+  if (existing > 0) {
+    saveval(js, existing + sizeof(jsoff_t) * 2, val);
+  } else mkslot(js, obj, slot, val);
+}
+
+static jsval_t get_slot(struct js *js, jsval_t obj, internal_slot_t slot) {
+  jsoff_t off = search_slot(js, obj, slot);
+  if (off == 0) return js_mkundef();
+  return loadval(js, off + sizeof(jsoff_t) * 2);
 }
 
 static jsval_t setup_func_prototype(struct js *js, jsval_t func) {
@@ -3998,14 +4055,14 @@ static jsoff_t lkp_proto(struct js *js, jsval_t obj, const char *key, size_t len
   int depth = 0;
   
   while (depth < 32) {
-    if (t == T_OBJ || t == T_ARR || t == T_FUNC) {
+    if (t == T_OBJ || t == T_ARR || t == T_FUNC || t == T_PROMISE) {
       jsval_t as_obj = mkval(T_OBJ, vdata(cur));
       jsoff_t off = lkp_interned(js, as_obj, key_intern, len);
       if (off != 0) return off;
       
       jsoff_t proto_off = lkp_interned(js, as_obj, INTERN_PROTO, 9);
       if (proto_off == 0) {
-        if (t == T_FUNC || t == T_ARR) {
+        if (t == T_FUNC || t == T_ARR || t == T_PROMISE) {
           cur = get_prototype_for_type(js, t);
           t = vtype(cur);
           if (t == T_NULL || t == T_UNDEF) break;
@@ -7851,21 +7908,13 @@ static jsval_t js_unary(struct js *js) {
       return resolved;
     }
     
-    jsval_t p_obj = mkval(T_OBJ, vdata(resolved));
-    jsoff_t state_off = lkp(js, p_obj, "__state", 7);
-    if (state_off == 0) return js_mkerr(js, "invalid promise state");
+    uint32_t pid = get_promise_id(js, resolved);
+    promise_data_entry_t *pd = get_promise_data(pid, false);
+    if (!pd) return js_mkerr(js, "invalid promise state");
     
-    int state = (int)tod(resolveprop(js, mkval(T_PROP, state_off)));
-    
-    if (state != 0) {
-      jsoff_t val_off = lkp(js, p_obj, "__value", 7);
-      if (val_off == 0) return js_mkerr(js, "invalid promise value");
-      jsval_t val = resolveprop(js, mkval(T_PROP, val_off));
-      if (state == 1) {
-        return val;
-      } else if (state == 2) {
-        return js_throw(js, val);
-      }
+    if (pd->state != 0) {
+      if (pd->state == 1) { return pd->value;
+      } else if (pd->state == 2) return js_throw(js, pd->value);
     }
     
     mco_coro* current_mco = mco_running();
@@ -8126,9 +8175,7 @@ static jsval_t js_assignment(struct js *js) {
       if (tok == TOK_RPAREN || tok == TOK_RBRACE || tok == TOK_SEMICOLON || 
           tok == TOK_COMMA || tok == TOK_EOF) {
         body_end = js->toff;
-      } else {
-        body_end = js->pos;
-      }
+      } else body_end = js->pos;
     } else {
       body_end = js->pos;
     }
@@ -13317,7 +13364,6 @@ static jsval_t builtin_object_defineProperties(struct js *js, jsval_t *args, int
     jsval_t descriptor = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
     
     next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK);
-    
     if (is_internal_prop(key, klen)) continue;
     
     jsval_t prop_key = js_mkstr(js, key, klen);
@@ -13399,7 +13445,6 @@ static jsval_t builtin_object_freeze(struct js *js, jsval_t *args, int nargs) {
     
     jsoff_t cur_prop = next;
     next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK);
-    
     if (is_internal_prop(key, klen)) continue;
     
     jsoff_t head = (jsoff_t) vdata(as_obj);
@@ -13613,7 +13658,6 @@ static jsval_t builtin_object_getOwnPropertyNames(struct js *js, jsval_t *args, 
     const char *key = (char *) &js->mem[koff + sizeof(koff)];
     
     next = loadoff(js, next) & ~(3U | CONSTMASK | ARRMASK);
-    
     if (is_internal_prop(key, klen)) continue;
     
     char idxstr[16];
@@ -17500,59 +17544,58 @@ static void resolve_promise(struct js *js, jsval_t p, jsval_t val);
 static void reject_promise(struct js *js, jsval_t p, jsval_t val);
 
 static size_t strpromise(struct js *js, jsval_t value, char *buf, size_t len) {
-  jsval_t prom_obj = mkval(T_OBJ, vdata(value));
-  jsoff_t state_off = lkp(js, prom_obj, "__state", 7);
-  int state = 0;
-  if (state_off != 0) {
-    jsval_t val = resolveprop(js, mkval(T_PROP, state_off));
-    if (vtype(val) == T_NUM) state = (int)tod(val);
-  }
+  uint32_t pid = get_promise_id(js, value);
+  promise_data_entry_t *pd = get_promise_data(pid, false);
   
-  if (state == 0) {
+  if (!pd || pd->state == 0) {
     return (size_t)snprintf(buf, len, "Promise { <pending> }");
   }
   
-  jsoff_t value_off = lkp(js, prom_obj, "__value", 7);
-  if (value_off == 0) {
-    const char *s = (state == 1) ? "<fulfilled>" : "<rejected>";
-    return (size_t)snprintf(buf, len, "Promise { %s }", s);
-  }
-  
-  jsval_t prom_val = resolveprop(js, mkval(T_PROP, value_off));
   char value_buf[256];
-  size_t value_len = tostr(js, prom_val, value_buf, sizeof(value_buf));
+  size_t value_len = tostr(js, pd->value, value_buf, sizeof(value_buf));
   if (value_len >= sizeof(value_buf)) value_len = sizeof(value_buf) - 1;
   value_buf[value_len] = '\0';
   
-  if (state == 1) {
+  if (pd->state == 1) {
     return (size_t)snprintf(buf, len, "Promise { %s }", value_buf);
   } else {
     return (size_t)snprintf(buf, len, "Promise { <rejected> %s }", value_buf);
   }
 }
 
-static UT_array *get_promise_handlers(jsoff_t promise_off, bool create) {
-  promise_handlers_entry_t *entry = NULL;
-  HASH_FIND(hh, promise_handlers_registry, &promise_off, sizeof(jsoff_t), entry);
-  if (entry) return entry->handlers;
+static promise_data_entry_t *get_promise_data(uint32_t promise_id, bool create) {
+  promise_data_entry_t *entry = NULL;
+  HASH_FIND(hh, promise_registry, &promise_id, sizeof(uint32_t), entry);
+  if (entry) return entry;
   if (!create) return NULL;
   
-  entry = (promise_handlers_entry_t *)malloc(sizeof(promise_handlers_entry_t));
-  entry->promise_off = promise_off;
+  entry = (promise_data_entry_t *)malloc(sizeof(promise_data_entry_t));
+  entry->promise_id = promise_id;
+  entry->state = 0;
+  entry->value = js_mkundef();
   utarray_new(entry->handlers, &promise_handler_icd);
-  HASH_ADD(hh, promise_handlers_registry, promise_off, sizeof(jsoff_t), entry);
-  return entry->handlers;
+  HASH_ADD(hh, promise_registry, promise_id, sizeof(uint32_t), entry);
+  
+  return entry;
+}
+
+static uint32_t get_promise_id(struct js *js, jsval_t p) {
+  jsval_t p_obj = mkval(T_OBJ, vdata(p));
+  jsoff_t off = lkp_header_slot(js, p_obj, SLOT_PID);
+  if (off == 0) return 0;
+  jsval_t pid_val = loadval(js, off + sizeof(jsoff_t) * 2);
+  return (uint32_t)tod(pid_val);
 }
 
 static jsval_t mkpromise(struct js *js) {
   jsval_t obj = mkobj(js, 0);
   if (is_err(obj)) return obj;
-  setprop_fast(js, obj, "__state", 7, tov(0.0));
-  setprop_fast(js, obj, "__value", 7, js_mkundef());
   
-  jsoff_t obj_off = vdata(obj);
-  get_promise_handlers(obj_off, true);
-  return mkval(T_PROMISE, obj_off);
+  uint32_t pid = next_promise_id++;
+  set_slot(js, obj, SLOT_PID, tov((double)pid));
+  get_promise_data(pid, true);
+  
+  return mkval(T_PROMISE, vdata(obj));
 }
 
 static jsval_t builtin_trigger_handler_wrapper(struct js *js, jsval_t *args, int nargs);
@@ -17572,20 +17615,16 @@ static jsval_t builtin_trigger_handler_wrapper(struct js *js, jsval_t *args, int
   jsval_t p = resolveprop(js, mkval(T_PROP, promise_prop_off));
   if (vtype(p) != T_PROMISE) return js_mkundef();
   
-  jsoff_t promise_off = vdata(p);
-  jsval_t p_obj = mkval(T_OBJ, promise_off);
-  jsoff_t state_off = lkp_interned(js, p_obj, INTERN_STATE, 7);
-  int state = (int)tod(resolveprop(js, mkval(T_PROP, state_off)));
+  uint32_t pid = get_promise_id(js, p);
+  promise_data_entry_t *pd = get_promise_data(pid, false);
+  if (!pd) return js_mkundef();
   
-  jsoff_t val_off = lkp_interned(js, p_obj, INTERN_PVALUE, 7);
-  jsval_t val = resolveprop(js, mkval(T_PROP, val_off));
+  int state = pd->state;
+  jsval_t val = pd->value;
   
-  UT_array *handlers = get_promise_handlers(promise_off, false);
-  if (!handlers) return js_mkundef();
-  
-  unsigned int len = utarray_len(handlers);
+  unsigned int len = utarray_len(pd->handlers);
   for (unsigned int i = 0; i < len; i++) {
-    promise_handler_t *h = (promise_handler_t *)utarray_eltptr(handlers, i);
+    promise_handler_t *h = (promise_handler_t *)utarray_eltptr(pd->handlers, i);
     jsval_t handler = (state == 1) ? h->onFulfilled : h->onRejected;
     
     if (vtype(handler) == T_FUNC || vtype(handler) == T_CFUNC) {
@@ -17608,19 +17647,18 @@ static jsval_t builtin_trigger_handler_wrapper(struct js *js, jsval_t *args, int
     }
   }
 
-  utarray_clear(handlers);
+  utarray_clear(pd->handlers);
   return js_mkundef();
 }
 
 static void resolve_promise(struct js *js, jsval_t p, jsval_t val) {
-  jsval_t p_obj = mkval(T_OBJ, vdata(p));
-  jsoff_t state_off = lkp_interned(js, p_obj, INTERN_STATE, 7);
-  if (state_off == 0) return;
-  jsval_t state_val = resolveprop(js, mkval(T_PROP, state_off));
-  if ((int)tod(state_val) != 0) return;
+  uint32_t pid = get_promise_id(js, p);
+  promise_data_entry_t *pd = get_promise_data(pid, false);
+  if (!pd || pd->state != 0) return;
 
   if (vtype(val) == T_PROMISE) {
-    if (vdata(val) == vdata(p)) {
+    uint32_t val_pid = get_promise_id(js, val);
+    if (val_pid == pid) {
       jsval_t err = js_mkerr(js, "TypeError: Chaining cycle");
       return reject_promise(js, p, err);
     }
@@ -17635,34 +17673,26 @@ static void resolve_promise(struct js *js, jsval_t p, jsval_t val) {
     setprop_fast(js, rej_obj, "promise", 7, p);
     jsval_t rej_fn = mkval(T_FUNC, vdata(rej_obj));
     
-    jsval_t args[] = { res_fn, rej_fn };
+    jsval_t call_args[] = { res_fn, rej_fn };
     jsval_t then_prop = js_get(js, val, "then");
     
     if (vtype(then_prop) == T_FUNC || vtype(then_prop) == T_CFUNC) {
-      (void)js_call_with_this(js, then_prop, val, args, 2); return;
+      (void)js_call_with_this(js, then_prop, val, call_args, 2); return;
     }
   }
 
-  saveval(js, state_off + sizeof(jsoff_t) * 2, tov(1.0));
-  jsoff_t val_off = lkp_interned(js, p_obj, INTERN_PVALUE, 7);
-  if (val_off != 0) {
-    saveval(js, val_off + sizeof(jsoff_t) * 2, val);
-  }
+  pd->state = 1;
+  pd->value = val;
   trigger_handlers(js, p);
 }
 
 static void reject_promise(struct js *js, jsval_t p, jsval_t val) {
-  jsval_t p_obj = mkval(T_OBJ, vdata(p));
-  jsoff_t state_off = lkp_interned(js, p_obj, INTERN_STATE, 7);
-  if (state_off == 0) return;
-  jsval_t state_val = resolveprop(js, mkval(T_PROP, state_off));
-  if ((int)tod(state_val) != 0) return;
+  uint32_t pid = get_promise_id(js, p);
+  promise_data_entry_t *pd = get_promise_data(pid, false);
+  if (!pd || pd->state != 0) return;
 
-  saveval(js, state_off + sizeof(jsoff_t) * 2, tov(2.0));
-  jsoff_t val_off = lkp_interned(js, p_obj, INTERN_PVALUE, 7);
-  if (val_off != 0) {
-    saveval(js, val_off + sizeof(jsoff_t) * 2, val);
-  }
+  pd->state = 2;
+  pd->value = val;
   trigger_handlers(js, p);
 }
 
@@ -17721,17 +17751,14 @@ static jsval_t builtin_promise_then(struct js *js, jsval_t *args, int nargs) {
   jsval_t onFulfilled = nargs > 0 ? args[0] : js_mkundef();
   jsval_t onRejected = nargs > 1 ? args[1] : js_mkundef();
   
-  jsoff_t promise_off = vdata(p);
-  UT_array *handlers = get_promise_handlers(promise_off, true);
-  if (handlers) {
+  uint32_t pid = get_promise_id(js, p);
+  promise_data_entry_t *pd = get_promise_data(pid, false);
+  if (pd) {
     promise_handler_t h = { onFulfilled, onRejected, nextP };
-    utarray_push_back(handlers, &h);
+    utarray_push_back(pd->handlers, &h);
   }
   
-  jsval_t p_obj = mkval(T_OBJ, promise_off);
-  jsoff_t state_off = lkp_interned(js, p_obj, INTERN_STATE, 7);
-  int state = (int)tod(resolveprop(js, mkval(T_PROP, state_off)));
-  if (state != 0) trigger_handlers(js, p);
+  if (pd && pd->state != 0) trigger_handlers(js, p);
   return nextP;
 }
 
@@ -17922,20 +17949,16 @@ static jsval_t builtin_Promise_race(struct js *js, jsval_t *args, int nargs) {
       return result_promise;
     }
     
-    jsval_t item_obj = mkval(T_OBJ, vdata(item));
-    jsoff_t state_off = lkp(js, item_obj, "__state", 7);
-    int state = (int)tod(resolveprop(js, mkval(T_PROP, state_off)));
-    
-    if (state == 1) {
-      jsoff_t val_off = lkp(js, item_obj, "__value", 7);
-      jsval_t val = resolveprop(js, mkval(T_PROP, val_off));
-      resolve_promise(js, result_promise, val);
-      return result_promise;
-    } else if (state == 2) {
-      jsoff_t val_off = lkp(js, item_obj, "__value", 7);
-      jsval_t val = resolveprop(js, mkval(T_PROP, val_off));
-      reject_promise(js, result_promise, val);
-      return result_promise;
+    uint32_t item_pid = get_promise_id(js, item);
+    promise_data_entry_t *pd = get_promise_data(item_pid, false);
+    if (pd) {
+      if (pd->state == 1) {
+        resolve_promise(js, result_promise, pd->value);
+        return result_promise;
+      } else if (pd->state == 2) {
+        reject_promise(js, result_promise, pd->value);
+        return result_promise;
+      }
     }
     
     jsval_t then_args[] = { resolve_fn, reject_fn };
@@ -18026,18 +18049,16 @@ static jsval_t builtin_Promise_any(struct js *js, jsval_t *args, int nargs) {
       return result_promise;
     }
     
-    jsval_t item_obj = mkval(T_OBJ, vdata(item));
-    jsoff_t state_off = lkp(js, item_obj, "__state", 7);
-    int state = (int)tod(resolveprop(js, mkval(T_PROP, state_off)));
-    
-    if (state == 1) {
-      jsoff_t val_off = lkp(js, item_obj, "__value", 7);
-      promise_any_try_resolve(js, tracker, resolveprop(js, mkval(T_PROP, val_off)));
-      return result_promise;
-    } else if (state == 2) {
-      jsoff_t val_off = lkp(js, item_obj, "__value", 7);
-      promise_any_record_rejection(js, tracker, i, resolveprop(js, mkval(T_PROP, val_off)));
-      continue;
+    uint32_t item_pid = get_promise_id(js, item);
+    promise_data_entry_t *pd = get_promise_data(item_pid, false);
+    if (pd) {
+      if (pd->state == 1) {
+        promise_any_try_resolve(js, tracker, pd->value);
+        return result_promise;
+      } else if (pd->state == 2) {
+        promise_any_record_rejection(js, tracker, i, pd->value);
+        continue;
+      }
     }
     
     jsval_t resolve_obj = mkobj(js, 0);
