@@ -148,12 +148,11 @@ void js_set_getter_desc(struct js *js, jsval_t obj, const char *key, size_t klen
 void js_set_setter_desc(struct js *js, jsval_t obj, const char *key, size_t klen, jsval_t setter, int flags);
 void js_set_accessor_desc(struct js *js, jsval_t obj, const char *key, size_t klen, jsval_t getter, jsval_t setter, int flags);
 
-void js_print_stack_trace(FILE *stream);
-
 jsval_t js_get_slot(struct js *js, jsval_t obj, internal_slot_t slot);
 void js_set_slot(struct js *js, jsval_t obj, internal_slot_t slot, jsval_t value);
-
 
 bool js_is_slot_prop(jsoff_t header);
 jsoff_t js_next_prop(jsoff_t header);
 jsoff_t js_loadoff(struct js *js, jsoff_t off);
+
+void js_print_stack_trace(FILE *stream);
