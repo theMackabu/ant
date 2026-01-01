@@ -231,6 +231,9 @@ static const char *INTERN_TARGET_FUNC = NULL;
 static const char *INTERN_ARGUMENTS = NULL;
 static const char *INTERN_CALLEE = NULL;
 static const char *INTERN_IDX[10] = {NULL};
+static const char *INTERN_STATE = NULL;
+static const char *INTERN_PVALUE = NULL;
+static const char *INTERN_PROMISE = NULL;
 
 #define INTERN_PROP_CACHE_SIZE 4096
 typedef struct {
@@ -239,6 +242,27 @@ typedef struct {
   jsoff_t prop_off;
 } intern_prop_cache_entry_t;
 static intern_prop_cache_entry_t intern_prop_cache[INTERN_PROP_CACHE_SIZE];
+
+typedef struct promise_handler {
+  jsval_t onFulfilled;
+  jsval_t onRejected;
+  jsval_t nextPromise;
+} promise_handler_t;
+
+static const UT_icd promise_handler_icd = {
+  .sz = sizeof(promise_handler_t),
+  .init = NULL,
+  .copy = NULL,
+  .dtor = NULL,
+};
+
+typedef struct promise_handlers_entry {
+  jsoff_t promise_off;  // key
+  UT_array *handlers;
+  UT_hash_handle hh;
+} promise_handlers_entry_t;
+
+static promise_handlers_entry_t *promise_handlers_registry = NULL;
 
 typedef struct map_entry {
   char *key;
@@ -789,9 +813,11 @@ static jsval_t to_string_val(struct js *js, jsval_t val) {
 
 static void free_coroutine(coroutine_t *coro);
 static bool has_ready_coroutines(void);
+static bool coro_stack_size_initialized = false;
 
-// reserve large virtual stack (1MB) but only ~4-8KB physical per coroutine
 static size_t calculate_coro_stack_size(void) {
+  if (coro_stack_size_initialized) return 0;
+  coro_stack_size_initialized = true;
   const char *env_stack = getenv("ANT_CORO_STACK_SIZE");
   if (env_stack) {
     size_t size = (size_t)atoi(env_stack) * 1024;
@@ -2786,6 +2812,9 @@ static void intern_init(void) {
   INTERN_THIS = intern_string("__this", 6);
   INTERN_NATIVE_FUNC = intern_string("__native_func", 13);
   INTERN_ASYNC = intern_string("__async", 7);
+  INTERN_STATE = intern_string("__state", 7);
+  INTERN_PVALUE = intern_string("__value", 7);
+  INTERN_PROMISE = intern_string("promise", 7);
   INTERN_BOUND_THIS = intern_string("__bound_this", 12);
   INTERN_BOUND_ARGS = intern_string("__bound_args", 12);
   INTERN_TARGET_FUNC = intern_string("__target_func", 13);
@@ -17502,90 +17531,93 @@ static size_t strpromise(struct js *js, jsval_t value, char *buf, size_t len) {
   }
 }
 
+static UT_array *get_promise_handlers(jsoff_t promise_off, bool create) {
+  promise_handlers_entry_t *entry = NULL;
+  HASH_FIND(hh, promise_handlers_registry, &promise_off, sizeof(jsoff_t), entry);
+  if (entry) return entry->handlers;
+  if (!create) return NULL;
+  
+  entry = (promise_handlers_entry_t *)malloc(sizeof(promise_handlers_entry_t));
+  entry->promise_off = promise_off;
+  utarray_new(entry->handlers, &promise_handler_icd);
+  HASH_ADD(hh, promise_handlers_registry, promise_off, sizeof(jsoff_t), entry);
+  return entry->handlers;
+}
+
 static jsval_t mkpromise(struct js *js) {
   jsval_t obj = mkobj(js, 0);
   if (is_err(obj)) return obj;
-  setprop(js, obj, js_mkstr(js, "__state", 7), tov(0.0));
-  setprop(js, obj, js_mkstr(js, "__value", 7), js_mkundef());
-  setprop(js, obj, js_mkstr(js, "__handlers", 10), mkarr(js));
-  return mkval(T_PROMISE, vdata(obj));
+  setprop_fast(js, obj, "__state", 7, tov(0.0));
+  setprop_fast(js, obj, "__value", 7, js_mkundef());
+  
+  jsoff_t obj_off = vdata(obj);
+  get_promise_handlers(obj_off, true);
+  return mkval(T_PROMISE, obj_off);
 }
 
 static jsval_t builtin_trigger_handler_wrapper(struct js *js, jsval_t *args, int nargs);
 
 static void trigger_handlers(struct js *js, jsval_t p) {
   jsval_t wrapper_obj = mkobj(js, 0);
-  setprop(js, wrapper_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_trigger_handler_wrapper));
-  setprop(js, wrapper_obj, js_mkstr(js, "promise", 7), p);
+  setprop_fast(js, wrapper_obj, "__native_func", 13, js_mkfun(builtin_trigger_handler_wrapper));
+  setprop_fast(js, wrapper_obj, "promise", 7, p);
   jsval_t wrapper_fn = mkval(T_FUNC, vdata(wrapper_obj));
   queue_microtask(js, wrapper_fn);
 }
 
 static jsval_t builtin_trigger_handler_wrapper(struct js *js, jsval_t *args, int nargs) {
   jsval_t me = js->current_func;
-  jsval_t p = js_get(js, me, "promise");
+  jsoff_t promise_prop_off = lkp_interned(js, me, INTERN_PROMISE, 7);
+  if (promise_prop_off == 0) return js_mkundef();
+  jsval_t p = resolveprop(js, mkval(T_PROP, promise_prop_off));
   if (vtype(p) != T_PROMISE) return js_mkundef();
   
-  jsval_t p_obj = mkval(T_OBJ, vdata(p));
-  jsoff_t state_off = lkp(js, p_obj, "__state", 7);
+  jsoff_t promise_off = vdata(p);
+  jsval_t p_obj = mkval(T_OBJ, promise_off);
+  jsoff_t state_off = lkp_interned(js, p_obj, INTERN_STATE, 7);
   int state = (int)tod(resolveprop(js, mkval(T_PROP, state_off)));
   
-  jsoff_t val_off = lkp(js, p_obj, "__value", 7);
+  jsoff_t val_off = lkp_interned(js, p_obj, INTERN_PVALUE, 7);
   jsval_t val = resolveprop(js, mkval(T_PROP, val_off));
   
-  jsoff_t handlers_off = lkp(js, p_obj, "__handlers", 10);
-  jsval_t handlers_arr = resolveprop(js, mkval(T_PROP, handlers_off));
+  UT_array *handlers = get_promise_handlers(promise_off, false);
+  if (!handlers) return js_mkundef();
   
-  jsoff_t len_off = lkp_interned(js, handlers_arr, INTERN_LENGTH, 6);
-  int len = (int)tod(resolveprop(js, mkval(T_PROP, len_off)));
-  
-  for (int i = 0; i < len; i += 3) {
-    char idx1[16], idx2[16], idx3[16];
-    snprintf(idx1, sizeof(idx1), "%d", i);
-    snprintf(idx2, sizeof(idx2), "%d", i+1);
-    snprintf(idx3, sizeof(idx3), "%d", i+2);
-    
-    jsval_t onFulfilled = resolveprop(js, js_get(js, handlers_arr, idx1));
-    jsval_t onRejected = resolveprop(js, js_get(js, handlers_arr, idx2));
-    jsval_t nextPromise = resolveprop(js, js_get(js, handlers_arr, idx3));
-    
-    jsval_t handler = (state == 1) ? onFulfilled : onRejected;
+  unsigned int len = utarray_len(handlers);
+  for (unsigned int i = 0; i < len; i++) {
+    promise_handler_t *h = (promise_handler_t *)utarray_eltptr(handlers, i);
+    jsval_t handler = (state == 1) ? h->onFulfilled : h->onRejected;
     
     if (vtype(handler) == T_FUNC || vtype(handler) == T_CFUNC) {
-       jsval_t res;
-       if (vtype(handler) == T_CFUNC) {
-          jsval_t (*fn)(struct js *, jsval_t *, int) = (jsval_t(*)(struct js *, jsval_t *, int)) vdata(handler);
-          res = fn(js, &val, 1);
-       } else {
-          jsval_t args[] = { val };
-          res = js_call(js, handler, args, 1);
-       }
+      jsval_t res;
+      if (vtype(handler) == T_CFUNC) {
+        jsval_t (*fn)(struct js *, jsval_t *, int) = (jsval_t(*)(struct js *, jsval_t *, int)) vdata(handler);
+        res = fn(js, &val, 1);
+      } else {
+        jsval_t call_args[] = { val };
+        res = js_call(js, handler, call_args, 1);
+      }
        
-       if (is_err(res)) {
-          jsval_t err_str = js_mkstr(js, js->errmsg, strlen(js->errmsg));
-          reject_promise(js, nextPromise, err_str);
-       } else {
-          resolve_promise(js, nextPromise, res);
-       }
+      if (is_err(res)) {
+        jsval_t err_str = js_mkstr(js, js->errmsg, strlen(js->errmsg));
+        reject_promise(js, h->nextPromise, err_str);
+      } else resolve_promise(js, h->nextPromise, res);
     } else {
-       if (state == 1) resolve_promise(js, nextPromise, val);
-       else reject_promise(js, nextPromise, val);
+      if (state == 1) resolve_promise(js, h->nextPromise, val);
+      else reject_promise(js, h->nextPromise, val);
     }
   }
-  setprop(js, p_obj, js_mkstr(js, "__handlers", 10), mkarr(js));
+
+  utarray_clear(handlers);
   return js_mkundef();
 }
 
 static void resolve_promise(struct js *js, jsval_t p, jsval_t val) {
   jsval_t p_obj = mkval(T_OBJ, vdata(p));
-  jsoff_t state_off = lkp(js, p_obj, "__state", 7);
-  if (state_off == 0) {
-    return;
-  }
+  jsoff_t state_off = lkp_interned(js, p_obj, INTERN_STATE, 7);
+  if (state_off == 0) return;
   jsval_t state_val = resolveprop(js, mkval(T_PROP, state_off));
-  if ((int)tod(state_val) != 0) {
-    return;
-  }
+  if ((int)tod(state_val) != 0) return;
 
   if (vtype(val) == T_PROMISE) {
     if (vdata(val) == vdata(p)) {
@@ -17594,13 +17626,13 @@ static void resolve_promise(struct js *js, jsval_t p, jsval_t val) {
     }
     
     jsval_t res_obj = mkobj(js, 0);
-    setprop(js, res_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_resolve_internal));
-    setprop(js, res_obj, js_mkstr(js, "promise", 7), p);
+    setprop_fast(js, res_obj, "__native_func", 13, js_mkfun(builtin_resolve_internal));
+    setprop_fast(js, res_obj, "promise", 7, p);
     jsval_t res_fn = mkval(T_FUNC, vdata(res_obj));
     
     jsval_t rej_obj = mkobj(js, 0);
-    setprop(js, rej_obj, js_mkstr(js, "__native_func", 13), js_mkfun(builtin_reject_internal));
-    setprop(js, rej_obj, js_mkstr(js, "promise", 7), p);
+    setprop_fast(js, rej_obj, "__native_func", 13, js_mkfun(builtin_reject_internal));
+    setprop_fast(js, rej_obj, "promise", 7, p);
     jsval_t rej_fn = mkval(T_FUNC, vdata(rej_obj));
     
     jsval_t args[] = { res_fn, rej_fn };
@@ -17611,20 +17643,26 @@ static void resolve_promise(struct js *js, jsval_t p, jsval_t val) {
     }
   }
 
-  setprop(js, p_obj, js_mkstr(js, "__state", 7), tov(1.0));
-  setprop(js, p_obj, js_mkstr(js, "__value", 7), val);
+  saveval(js, state_off + sizeof(jsoff_t) * 2, tov(1.0));
+  jsoff_t val_off = lkp_interned(js, p_obj, INTERN_PVALUE, 7);
+  if (val_off != 0) {
+    saveval(js, val_off + sizeof(jsoff_t) * 2, val);
+  }
   trigger_handlers(js, p);
 }
 
 static void reject_promise(struct js *js, jsval_t p, jsval_t val) {
   jsval_t p_obj = mkval(T_OBJ, vdata(p));
-  jsoff_t state_off = lkp(js, p_obj, "__state", 7);
+  jsoff_t state_off = lkp_interned(js, p_obj, INTERN_STATE, 7);
   if (state_off == 0) return;
   jsval_t state_val = resolveprop(js, mkval(T_PROP, state_off));
   if ((int)tod(state_val) != 0) return;
 
-  setprop(js, p_obj, js_mkstr(js, "__state", 7), tov(2.0));
-  setprop(js, p_obj, js_mkstr(js, "__value", 7), val);
+  saveval(js, state_off + sizeof(jsoff_t) * 2, tov(2.0));
+  jsoff_t val_off = lkp_interned(js, p_obj, INTERN_PVALUE, 7);
+  if (val_off != 0) {
+    saveval(js, val_off + sizeof(jsoff_t) * 2, val);
+  }
   trigger_handlers(js, p);
 }
 
@@ -17682,14 +17720,16 @@ static jsval_t builtin_promise_then(struct js *js, jsval_t *args, int nargs) {
   jsval_t nextP = mkpromise(js);
   jsval_t onFulfilled = nargs > 0 ? args[0] : js_mkundef();
   jsval_t onRejected = nargs > 1 ? args[1] : js_mkundef();
-  jsval_t p_obj = mkval(T_OBJ, vdata(p));
-  jsval_t handlers = resolveprop(js, js_get(js, p_obj, "__handlers"));
-  jsval_t push_args[] = { onFulfilled, onRejected, nextP };
-  jsval_t saved_this = js->this_val;
-  js->this_val = handlers;
-  builtin_array_push(js, push_args, 3);
-  js->this_val = saved_this;
-  jsoff_t state_off = lkp(js, p_obj, "__state", 7);
+  
+  jsoff_t promise_off = vdata(p);
+  UT_array *handlers = get_promise_handlers(promise_off, true);
+  if (handlers) {
+    promise_handler_t h = { onFulfilled, onRejected, nextP };
+    utarray_push_back(handlers, &h);
+  }
+  
+  jsval_t p_obj = mkval(T_OBJ, promise_off);
+  jsoff_t state_off = lkp_interned(js, p_obj, INTERN_STATE, 7);
   int state = (int)tod(resolveprop(js, mkval(T_PROP, state_off)));
   if (state != 0) trigger_handlers(js, p);
   return nextP;
