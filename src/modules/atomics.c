@@ -81,7 +81,7 @@ int wait_queue_notify(WaitQueue *queue, int32_t *address, int count) {
 }
 
 static bool get_atomic_array_data(struct js *js, jsval_t this_val, TypedArrayData **out_data, uint8_t **out_ptr) {
-  jsval_t ta_data_val = js_get(js, this_val, "__ta");
+  jsval_t ta_data_val = js_get_slot(js, this_val, SLOT_BUFFER);
   TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
   if (!ta_data || !ta_data->buffer) return false;
   

@@ -29,7 +29,7 @@ static jsval_t js_textencoder_encode(struct js *js, jsval_t *args, int nargs) {
   if (js_type(arr) == JS_ERR) return arr;
   
   if (str_len > 0) {
-    jsval_t ta_data_val = js_get(js, arr, "__ta");
+    jsval_t ta_data_val = js_get_slot(js, arr, SLOT_BUFFER);
     TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
     if (ta_data && ta_data->buffer && ta_data->buffer->data) memcpy(ta_data->buffer->data, str, str_len);
   }
@@ -54,7 +54,7 @@ static jsval_t js_textencoder_encodeInto(struct js *js, jsval_t *args, int nargs
     }
   }
   
-  jsval_t ta_data_val = js_get(js, args[1], "__ta");
+  jsval_t ta_data_val = js_get_slot(js, args[1], SLOT_BUFFER);
   TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
   if (!ta_data) return js_mkerr(js, "Second argument must be a Uint8Array");
   
@@ -91,7 +91,7 @@ static jsval_t js_textdecoder_decode(struct js *js, jsval_t *args, int nargs) {
     return js_mkstr(js, "", 0);
   }
   
-  jsval_t ta_data_val = js_get(js, args[0], "__ta");
+  jsval_t ta_data_val = js_get_slot(js, args[0], SLOT_BUFFER);
   TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
   if (ta_data) {
     if (!ta_data->buffer) return js_mkstr(js, "", 0);

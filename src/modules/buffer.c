@@ -227,7 +227,7 @@ static jsval_t typedarray_index_getter(struct js *js, jsval_t obj, const char *k
     index = index * 10 + (c - '0');
   }
   
-  jsval_t ta_val = js_get(js, obj, "__ta");
+  jsval_t ta_val = js_get_slot(js, obj, SLOT_BUFFER);
   TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_val);
   if (!ta_data || index >= ta_data->length) return js_mkundef();
   
@@ -264,7 +264,7 @@ static bool typedarray_index_setter(struct js *js, jsval_t obj, const char *key,
     index = index * 10 + (c - '0');
   }
   
-  jsval_t ta_val = js_get(js, obj, "__ta");
+  jsval_t ta_val = js_get_slot(js, obj, SLOT_BUFFER);
   TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_val);
   if (!ta_data || index >= ta_data->length) return false;
   
@@ -302,7 +302,7 @@ static jsval_t create_typed_array(struct js *js, TypedArrayType type, ArrayBuffe
   jsval_t proto = js_get_ctor_proto(js, type_name, strlen(type_name));
   if (js_type(proto) == JS_OBJ) js_set_proto(js, obj, proto);
   
-  js_set(js, obj, "__ta", js_mktypedarray(ta_data));
+  js_set_slot(js, obj, SLOT_BUFFER, js_mktypedarray(ta_data));
   js_set(js, obj, "length", js_mknum((double)length));
   js_set(js, obj, "byteLength", js_mknum((double)(length * element_size)));
   js_set(js, obj, "byteOffset", js_mknum((double)byte_offset));
@@ -357,7 +357,7 @@ static jsval_t js_typedarray_constructor(struct js *js, jsval_t *args, int nargs
 // TypedArray.prototype.slice(begin, end)
 static jsval_t js_typedarray_slice(struct js *js, jsval_t *args, int nargs) {
   jsval_t this_val = js_getthis(js);
-  jsval_t ta_data_val = js_get(js, this_val, "__ta");
+  jsval_t ta_data_val = js_get_slot(js, this_val, SLOT_BUFFER);
   
   TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
   if (!ta_data) return js_mkerr(js, "Invalid TypedArray");
@@ -391,7 +391,7 @@ static jsval_t js_typedarray_slice(struct js *js, jsval_t *args, int nargs) {
 // TypedArray.prototype.subarray(begin, end)
 static jsval_t js_typedarray_subarray(struct js *js, jsval_t *args, int nargs) {
   jsval_t this_val = js_getthis(js);
-  jsval_t ta_data_val = js_get(js, this_val, "__ta");
+  jsval_t ta_data_val = js_get_slot(js, this_val, SLOT_BUFFER);
   
   TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
   if (!ta_data) return js_mkerr(js, "Invalid TypedArray");
@@ -418,7 +418,7 @@ static jsval_t js_typedarray_subarray(struct js *js, jsval_t *args, int nargs) {
 // TypedArray.prototype.fill(value, start, end)
 static jsval_t js_typedarray_fill(struct js *js, jsval_t *args, int nargs) {
   jsval_t this_val = js_getthis(js);
-  jsval_t ta_data_val = js_get(js, this_val, "__ta");
+  jsval_t ta_data_val = js_get_slot(js, this_val, SLOT_BUFFER);
   
   TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
   if (!ta_data) return js_mkerr(js, "Invalid TypedArray");
@@ -765,7 +765,7 @@ static jsval_t js_buffer_allocUnsafe(struct js *js, jsval_t *args, int nargs) {
 // Buffer.prototype.toString(encoding)
 static jsval_t js_buffer_toString(struct js *js, jsval_t *args, int nargs) {
   jsval_t this_val = js_getthis(js);
-  jsval_t ta_data_val = js_get(js, this_val, "__ta");
+  jsval_t ta_data_val = js_get_slot(js, this_val, SLOT_BUFFER);
   
   TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
   if (!ta_data) return js_mkerr(js, "Invalid Buffer");
@@ -813,7 +813,7 @@ static jsval_t js_buffer_write(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "write requires a string");
   
   jsval_t this_val = js_getthis(js);
-  jsval_t ta_data_val = js_get(js, this_val, "__ta");
+  jsval_t ta_data_val = js_get_slot(js, this_val, SLOT_BUFFER);
   
   TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
   if (!ta_data) return js_mkerr(js, "Invalid Buffer");

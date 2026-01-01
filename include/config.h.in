@@ -30,6 +30,7 @@ typedef enum {
   SLOT_FROZEN,
   SLOT_SEALED,
   SLOT_EXTENSIBLE,
+  SLOT_BUFFER,
   SLOT_MAX = 255
 } internal_slot_t;
 
