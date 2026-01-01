@@ -123,6 +123,13 @@ static const UT_icd jsoff_icd = {
   .dtor = NULL,
 };
 
+static const UT_icd jsval_icd = {
+  .sz = sizeof(jsval_t),
+  .init = NULL,
+  .copy = NULL,
+  .dtor = NULL,
+};
+
 static UT_array *global_scope_stack = NULL;
 static this_stack_t global_this_stack = {NULL, 0, 0};
 static call_stack_t global_call_stack = {NULL, 0, 0};
@@ -315,8 +322,6 @@ typedef struct {
 static const UT_icd propref_icd = { sizeof(propref_data_t), NULL, NULL, NULL };
 static UT_array *propref_stack = NULL;
 
-#define MAX_FUNC_PARAMS 64
-
 typedef struct parsed_param {
   jsoff_t name_off;
   jsoff_t name_len;
@@ -331,14 +336,21 @@ typedef struct parsed_func {
   uint64_t code_hash;
   jsoff_t body_start;
   jsoff_t body_len;
-  uint8_t param_count;
+  int param_count;
   bool has_rest;
   bool is_strict;
   jsoff_t rest_param_start;
   jsoff_t rest_param_len;
-  parsed_param_t params[MAX_FUNC_PARAMS];
+  UT_array *params;
   UT_hash_handle hh;
 } parsed_func_t;
+
+static const UT_icd parsed_param_icd = {
+  .sz = sizeof(parsed_param_t),
+  .init = NULL,
+  .copy = NULL,
+  .dtor = NULL,
+};
 
 static parsed_func_t *func_parse_cache = NULL;
 static ant_library_t *library_registry = NULL;
@@ -4655,9 +4667,7 @@ static void reverse(jsval_t *args, int nargs) {
   }
 }
 
-static int parse_call_args(struct js *js, jsval_t *err_out) {
-  int argc = 0;
-  
+static int parse_call_args(struct js *js, UT_array *args, jsval_t *err_out) {
   while (js->pos < js->clen) {
     if (next(js) == TOK_RPAREN) break;
     bool is_spread = (next(js) == TOK_REST);
@@ -4668,54 +4678,31 @@ static int parse_call_args(struct js *js, jsval_t *err_out) {
       jsoff_t len = arr_length(js, arg);
       for (jsoff_t i = 0; i < len; i++) {
         jsval_t elem = arr_get(js, arg, i);
-        if (js->brk + sizeof(elem) > js->size) {
-          if (!js_try_grow_memory(js, sizeof(elem))) {
-            *err_out = js_mkerr(js, "call oom");
-            return -1;
-          }
-        }
-        js->size -= (jsoff_t) sizeof(elem);
-        memcpy(&js->mem[js->size], &elem, sizeof(elem));
-        argc++;
+        utarray_push_back(args, &elem);
       }
-    } else {
-      if (js->brk + sizeof(arg) > js->size) {
-        if (!js_try_grow_memory(js, sizeof(arg))) {
-          *err_out = js_mkerr(js, "call oom");
-          return -1;
-        }
-      }
-      js->size -= (jsoff_t) sizeof(arg);
-      memcpy(&js->mem[js->size], &arg, sizeof(arg));
-      argc++;
-    }
+    } else utarray_push_back(args, &arg);
     if (next(js) == TOK_COMMA) js->consumed = 1;
   }
   
-  reverse((jsval_t *) &js->mem[js->size], argc);
-  return argc;
+  return (int)utarray_len(args);
 }
 
 static jsval_t call_c(struct js *js, jsval_t (*fn)(struct js *, jsval_t *, int)) {
-  jsoff_t saved_size = js->size;
+  UT_array *args;
+  utarray_new(args, &jsval_icd);
   jsval_t err, res;
   
-  int argc = parse_call_args(js, &err);
-  if (argc < 0) { js->size = saved_size; return err; }
+  int argc = parse_call_args(js, args, &err);
+  if (argc < 0) { utarray_free(args); return err; }
   
-  jsval_t stack_args[MAX_FUNC_PARAMS];
-  jsval_t *heap_args = (jsval_t *) &js->mem[js->size];
-  for (int i = 0; i < argc && i < MAX_FUNC_PARAMS; i++) {
-    stack_args[i] = heap_args[i];
-  }
-  js->size = saved_size;
-  
+  jsval_t *argv = (jsval_t *)utarray_front(args);
   jsval_t saved_this = js->this_val;
   js->this_val = peek_this();
-  res = fn(js, stack_args, argc);
+  res = fn(js, argv, argc);
   js->this_val = saved_this;
   setlwm(js);
   
+  utarray_free(args);
   return res;
 }
 
@@ -4880,6 +4867,7 @@ static parsed_func_t *get_or_parse_func(const char *fn, jsoff_t fnlen) {
   if (!pf) return NULL;
   memset(pf, 0, sizeof(*pf));
   pf->code_hash = h;
+  utarray_new(pf->params, &parsed_param_icd);
   
   jsoff_t fnpos = 1;
   
@@ -4911,16 +4899,17 @@ static parsed_func_t *get_or_parse_func(const char *fn, jsoff_t fnlen) {
       }
       jsoff_t pattern_len = fnpos - pattern_start;
       
-      if (pf->param_count < MAX_FUNC_PARAMS) {
-        parsed_param_t *pp = &pf->params[pf->param_count];
-        pp->is_destruct = true;
-        pp->pattern_off = pattern_start;
-        pp->pattern_len = pattern_len;
+      {
+        parsed_param_t pp = {0};
+        pp.is_destruct = true;
+        pp.pattern_off = pattern_start;
+        pp.pattern_len = pattern_len;
         
         fnpos = skiptonext(fn, fnlen, fnpos, NULL);
         if (fnpos < fnlen && fn[fnpos] == '=') {
-          fnpos = extract_default_param_value(fn, fnlen, fnpos, &pp->default_start, &pp->default_len);
+          fnpos = extract_default_param_value(fn, fnlen, fnpos, &pp.default_start, &pp.default_len);
         }
+        utarray_push_back(pf->params, &pp);
         pf->param_count++;
       }
       
@@ -4937,15 +4926,14 @@ static parsed_func_t *get_or_parse_func(const char *fn, jsoff_t fnlen) {
       break;
     }
     
-    if (pf->param_count < MAX_FUNC_PARAMS) {
-      parsed_param_t *pp = &pf->params[pf->param_count];
-      pp->name_off = fnpos;
-      pp->name_len = identlen;
-      pp->is_destruct = false;
-      fnpos = extract_default_param_value(fn, fnlen, fnpos + identlen, &pp->default_start, &pp->default_len);
+    {
+      parsed_param_t pp = {0};
+      pp.name_off = fnpos;
+      pp.name_len = identlen;
+      pp.is_destruct = false;
+      fnpos = extract_default_param_value(fn, fnlen, fnpos + identlen, &pp.default_start, &pp.default_len);
+      utarray_push_back(pf->params, &pp);
       pf->param_count++;
-    } else {
-      fnpos = skiptonext(fn, fnlen, fnpos + identlen, NULL);
     }
     
     if (fnpos < fnlen && fn[fnpos] == ',') fnpos++;
@@ -5037,13 +5025,13 @@ static jsval_t call_js_internal_nfe(struct js *js, const char *fn, jsoff_t fnlen
   jsoff_t caller_clen = js->clen;
   jsoff_t caller_pos = js->pos;
   
-  jsval_t args[MAX_FUNC_PARAMS];
-  int argc = 0;
+  UT_array *args_arr;
+  utarray_new(args_arr, &jsval_icd);
   
-  for (int i = 0; i < bound_argc && argc < MAX_FUNC_PARAMS; i++) { args[argc++] = bound_args[i]; } 
+  for (int i = 0; i < bound_argc; i++) { utarray_push_back(args_arr, &bound_args[i]); } 
   caller_pos = skiptonext(caller_code, caller_clen, caller_pos, NULL);
   
-  while (caller_pos < caller_clen && caller_code[caller_pos] != ')' && argc < MAX_FUNC_PARAMS) {
+  while (caller_pos < caller_clen && caller_code[caller_pos] != ')') {
     bool is_spread = (
       caller_code[caller_pos] == '.' && caller_pos + 2 < caller_clen &&
       caller_code[caller_pos + 1] == '.' && caller_code[caller_pos + 2] == '.'
@@ -5055,11 +5043,12 @@ static jsval_t call_js_internal_nfe(struct js *js, const char *fn, jsoff_t fnlen
     caller_pos = js->pos;
     if (is_spread && vtype(arg) == T_ARR) {
       jsoff_t len = arr_length(js, arg);
-      for (jsoff_t i = 0; i < len && argc < MAX_FUNC_PARAMS; i++) {
-        args[argc++] = arr_get(js, arg, i);
+      for (jsoff_t i = 0; i < len; i++) {
+        jsval_t elem = arr_get(js, arg, i);
+        utarray_push_back(args_arr, &elem);
       }
     } else {
-      args[argc++] = arg;
+      utarray_push_back(args_arr, &arg);
     }
     caller_pos = skiptonext(caller_code, caller_clen, caller_pos, NULL);
     if (caller_pos < caller_clen && caller_code[caller_pos] == ',') caller_pos++;
@@ -5067,18 +5056,21 @@ static jsval_t call_js_internal_nfe(struct js *js, const char *fn, jsoff_t fnlen
   }
   js->pos = caller_pos;
   
+  jsval_t *args = (jsval_t *)utarray_front(args_arr);
+  int argc = (int)utarray_len(args_arr);
   js->scope = function_scope;
   
   parsed_func_t *pf = get_or_parse_func(fn, fnlen);
   if (!pf) {
+    utarray_free(args_arr);
     js->scope = saved_scope;
     if (global_scope_stack && utarray_len(global_scope_stack) > 0) utarray_pop_back(global_scope_stack);
     return js_mkerr(js, "failed to parse function");
   }
   
   int argi = 0;
-  for (int i = 0; i < pf->param_count && i < MAX_FUNC_PARAMS; i++) {
-    parsed_param_t *pp = &pf->params[i];
+  for (int i = 0; i < pf->param_count; i++) {
+    parsed_param_t *pp = (parsed_param_t *)utarray_eltptr(pf->params, i);
     
     if (pp->is_destruct) {
       jsval_t arg_val = (argi < argc) ? args[argi++] : js_mkundef();
@@ -5087,6 +5079,7 @@ static jsval_t call_js_internal_nfe(struct js *js, const char *fn, jsoff_t fnlen
       }
       jsval_t r = bind_destruct_pattern(js, &fn[pp->pattern_off], pp->pattern_len, arg_val, function_scope);
       if (is_err(r)) {
+        utarray_free(args_arr);
         js->scope = saved_scope;
         if (global_scope_stack && utarray_len(global_scope_stack) > 0) utarray_pop_back(global_scope_stack);
         return r;
@@ -5163,6 +5156,7 @@ static jsval_t call_js_internal_nfe(struct js *js, const char *fn, jsoff_t fnlen
   if (!is_err(res) && !(js->flags & F_RETURN)) res = js_mkundef();
   if (global_scope_stack && utarray_len(global_scope_stack) > 0)  utarray_pop_back(global_scope_stack);
   
+  utarray_free(args_arr);
   js->scope = saved_scope;
   js->this_val = saved_this_val;
   return res;
@@ -5440,22 +5434,18 @@ static jsval_t call_js_code_with_args_nfe(struct js *js, const char *fn, jsoff_t
 }
 
 static jsval_t call_ffi(struct js *js, unsigned int func_index) {
-  jsoff_t saved_size = js->size;
+  UT_array *args;
+  utarray_new(args, &jsval_icd);
   jsval_t err, res;
   
-  int argc = parse_call_args(js, &err);
-  if (argc < 0) { js->size = saved_size; return err; }
+  int argc = parse_call_args(js, args, &err);
+  if (argc < 0) { utarray_free(args); return err; }
   
-  jsval_t stack_args[MAX_FUNC_PARAMS];
-  jsval_t *heap_args = (jsval_t *) &js->mem[js->size];
-  for (int i = 0; i < argc && i < MAX_FUNC_PARAMS; i++) {
-    stack_args[i] = heap_args[i];
-  }
-  js->size = saved_size;
-  
-  res = ffi_call_by_index(js, func_index, stack_args, argc);
+  jsval_t *argv = (jsval_t *)utarray_front(args);
+  res = ffi_call_by_index(js, func_index, argv, argc);
   setlwm(js);
   
+  utarray_free(args);
   return res;
 }
 
@@ -20789,8 +20779,8 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
     }
     
     int arg_idx = 0;
-    for (int i = 0; i < pf->param_count && i < MAX_FUNC_PARAMS; i++) {
-      parsed_param_t *pp = &pf->params[i];
+    for (int i = 0; i < pf->param_count; i++) {
+      parsed_param_t *pp = (parsed_param_t *)utarray_eltptr(pf->params, i);
       
       if (pp->is_destruct) {
         jsval_t arg_val = (arg_idx < nargs) ? args[arg_idx++] : js_mkundef();
