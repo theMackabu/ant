@@ -870,7 +870,7 @@ void init_buffer_module() {
   jsval_t arraybuffer_ctor_obj = js_mkobj(js);
   jsval_t arraybuffer_proto = js_mkobj(js);
   js_set(js, arraybuffer_proto, "slice", js_mkfun(js_arraybuffer_slice));
-  js_setprop(js, arraybuffer_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(js_arraybuffer_constructor));
+  js_set_slot(js, arraybuffer_ctor_obj, SLOT_CFUNC, js_mkfun(js_arraybuffer_constructor));
   js_setprop(js, arraybuffer_ctor_obj, js_mkstr(js, "prototype", 9), arraybuffer_proto);
   js_set(js, glob, "ArrayBuffer", js_obj_to_func(arraybuffer_ctor_obj));
   
@@ -881,7 +881,7 @@ void init_buffer_module() {
       js_set(js, name##_proto, "slice", js_mkfun(js_typedarray_slice)); \
       js_set(js, name##_proto, "subarray", js_mkfun(js_typedarray_subarray)); \
       js_set(js, name##_proto, "fill", js_mkfun(js_typedarray_fill)); \
-      js_setprop(js, name##_ctor_obj, js_mkstr(js, "__native_func", 13), js_mkfun(js_##name##_constructor)); \
+      js_set_slot(js, name##_ctor_obj, SLOT_CFUNC, js_mkfun(js_##name##_constructor)); \
       js_setprop(js, name##_ctor_obj, js_mkstr(js, "prototype", 9), name##_proto); \
       js_set(js, glob, #name, js_obj_to_func(name##_ctor_obj)); \
     } while(0)

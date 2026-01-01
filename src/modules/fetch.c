@@ -65,7 +65,7 @@ static jsval_t create_response(struct js *js, int status, const char *body, size
   const char *json_code = "(){return JSON.parse(this.body)}";
   jsval_t json_str = js_mkstr(js, json_code, strlen(json_code));
   jsval_t json_obj = js_mkobj(js);
-  js_set(js, json_obj, "__code", json_str);
+  js_set_slot(js, json_obj, SLOT_CODE, json_str);
   js_set(js, response_obj, "json", js_obj_to_func(json_obj));
   
   return response_obj;
@@ -294,7 +294,7 @@ static jsval_t js_fetch(struct js *js, jsval_t *args, int nargs) {
   jsval_t promise = js_mkpromise(js);
   jsval_t wrapper_obj = js_mkobj(js);
   
-  js_set(js, wrapper_obj, "__native_func", js_mkfun(do_fetch_microtask));
+  js_set_slot(js, wrapper_obj, SLOT_CFUNC, js_mkfun(do_fetch_microtask));
   js_set(js, wrapper_obj, "url", url_val);
   js_set(js, wrapper_obj, "options", options_val);
   js_set(js, wrapper_obj, "promise", promise);

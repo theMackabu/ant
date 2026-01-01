@@ -157,7 +157,7 @@ void init_symbol_module(void) {
   snprintf(g_toStringTag_sym_key, sizeof(g_toStringTag_sym_key), "__sym_%llu__", (unsigned long long)js_sym_id(g_toStringTag_sym));
   
   jsval_t symbol_ctor = js_mkobj(js);
-  js_set(js, symbol_ctor, "__native_func", js_mkfun(builtin_Symbol));
+  js_set_slot(js, symbol_ctor, SLOT_CFUNC, js_mkfun(builtin_Symbol));
   js_setprop(js, symbol_ctor, js_mkstr(js, "for", 3), js_mkfun(builtin_Symbol_for));
   js_set(js, symbol_ctor, "keyFor", js_mkfun(builtin_Symbol_keyFor));
   

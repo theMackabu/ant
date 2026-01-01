@@ -88,7 +88,7 @@ static int should_skip_prop(struct js *js, const char *key, size_t key_len, jsva
   if (key_len >= 2 && key[0] == '_' && key[1] == '_') return 1;
   if (js_type(value) != JS_OBJ) return 0;
   
-  jsval_t code = js_get(js, value, "__code");
+  jsval_t code = js_get_slot(js, value, SLOT_CODE);
   return js_type(code) == JS_STR;
 }
 
