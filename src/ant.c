@@ -487,6 +487,7 @@ size_t vdata(jsval_t v) {
 #define PROPREF_INDEX_MASK  0x3FFFFFFFFFFFULL
 #define PROPREF_OFF_MASK    0xFFFFFFU
 #define PROPREF_PAYLOAD     0xFFFFFFULL
+#define PROPREF_SAFE_MASK   0x3FFFFF
 #define PROPREF_KEY_SHIFT   24U
 
 typedef struct {
@@ -574,7 +575,7 @@ static jsval_t mkcoderef(jsval_t off, jsoff_t len) {
 }
 
 static jsval_t mkpropref(jsoff_t obj_off, jsoff_t key_off) {
-  if (obj_off <= PROPREF_OFF_MASK && key_off <= PROPREF_OFF_MASK) {
+  if (obj_off <= PROPREF_SAFE_MASK && key_off <= PROPREF_SAFE_MASK) {
     return mkval(T_PROPREF, (obj_off & PROPREF_OFF_MASK) | ((jsval_t)(key_off & PROPREF_OFF_MASK) << 24U));
   }
   
