@@ -35,6 +35,7 @@ MODULES:
       - unlink()          - Delete file asynchronously
       - mkdir()           - Create directory asynchronously
       - rmdir()           - Remove directory asynchronously
+      - readdir()         - Read directory contents asynchronously
       - stat()            - Get file statistics
     Sync:
       - readFileSync()    - Read file synchronously
@@ -42,6 +43,7 @@ MODULES:
       - unlinkSync()      - Delete file synchronously
       - mkdirSync()       - Create directory synchronously
       - rmdirSync()       - Remove directory synchronously
+      - readdirSync()     - Read directory contents synchronously
       - statSync()        - Get file statistics synchronously
 
   Shell Commands (import { $ } from 'ant:shell'):
@@ -72,11 +74,14 @@ MODULES:
 
   Process (Ant.process):
     - env                 - Environment variables (with .env file support)
+    - cwd                 - Current working directory
+    - argv                - Command line arguments
     - pid                 - Process ID
     - exit()              - Exit process with code
+    - cpuUsage()          - Get CPU usage statistics
 
   JSON:
-    - JSON.parse()        - Parse JSON string (using yyjson)
+    - JSON.parse()        - Parse JSON string
     - JSON.stringify()    - Stringify to JSON
     - console.log()       - Log with colored JSON output
     - console.error()     - Log errors
@@ -108,6 +113,8 @@ MODULES:
       * BigInt64Array, BigUint64Array
     - DataView            - Low-level interface to ArrayBuffer
     - Buffer              - Node.js-compatible Buffer (Uint8Array subclass)
+    - TextEncoder         - Encode strings to UTF-8 bytes
+    - TextDecoder         - Decode UTF-8 bytes to strings
 
   Atomic Operations:
     - Atomics.add()             - Atomic addition
@@ -146,10 +153,18 @@ MODULES:
       - key()               - Get key at index
       - length              - Number of stored items
 
+  URL:
+    - URL()                 - Parse and manipulate URLs
+    - URLSearchParams       - Work with query strings
+
   Symbol:
     - Symbol()              - Create unique symbol
     - Symbol.iterator       - Well-known iterator symbol
     - Symbol.toStringTag    - Well-known toStringTag symbol
+
+  Proxy & Reflect:
+    - Proxy                 - Create proxy objects with custom behavior
+    - Reflect               - Object reflection methods
 
   Module System:
     - import()              - Dynamic ESM module import
@@ -173,24 +188,35 @@ JAVASCRIPT FEATURES:
   - Regular expressions with full pattern matching
   - Strict mode support ("use strict")
   - Object.defineProperty() with property descriptors
+  - Object.defineProperties() for batch property definition
+  - Object.freeze(), Object.seal(), Object.preventExtensions()
+  - Object.isFrozen(), Object.isSealed(), Object.isExtensible()
   - Function.prototype.call/apply/bind
-  - Array methods (map, filter, reduce, forEach, etc.)
-  - String methods (split, replace, includes, startsWith, etc.)
+  - Array methods (map, filter, reduce, forEach, sort with comparator, etc.)
+  - String methods (split, replace, replaceAll, includes, startsWith, etc.)
   - Math object with all standard functions
+  - arguments object with callee support
+  - Labeled statements and labeled loops (break/continue)
 
   ES6+ Extensions:
-  - Async/await and Promises (Promise.all, Promise.race, Promise.resolve, etc.)
+  - Async/await and Promises (Promise.all, Promise.race, Promise.any, Promise.resolve, etc.)
   - Arrow functions, classes, template literals, destructuring
+  - Private fields and methods in classes (#privateField)
   - Spread operator and rest parameters
   - Optional chaining (?.) and nullish coalescing (??)
+  - Logical assignment operators (??=, &&=, ||=)
   - for...of loops with iterables
   - let/const block scoping
   - BigInt support with arithmetic operations
   - Number literals (binary 0b1010, octal 0o755, hex 0xFF)
+  - Numeric separators (1_000_000)
   - Built-in collections: Map, Set, WeakMap, WeakSet
   - Getter/setter methods in class expressions (get/set)
   - Symbol with well-known symbols (iterator, toStringTag)
   - Block-level function declaration hoisting
+  - Default parameters in functions
+  - Array and object destructuring with defaults
+  - Computed property names in object literals
 
 CONCURRENCY:
   - Minicoro-based coroutines for async/await
@@ -198,11 +224,15 @@ CONCURRENCY:
   - Atomic operations for lock-free concurrent programming
   - SharedArrayBuffer for shared memory between workers
   - Atomics.wait/notify for thread synchronization
+  - Virtual memory allocation for coroutine stacks
 
 SYSTEM:
   - Signal handlers (SIGINT, SIGTERM, etc.)
-  - Mark-and-sweep garbage collector with free list optimization
-  - Property lookup caching for performance
+  - Boehm-Demers-Weiser garbage collector (bdwgc)
+  - Internal slots for efficient object metadata storage
+  - Property lookup caching with interned strings
   - Dynamic memory growth with configurable limits
   - Native library integration via FFI
   - libuv-based async I/O for files and networking
+  - LTO (Link Time Optimization) build support
+  - Gzip compression support for HTTP responses
