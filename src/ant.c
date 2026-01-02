@@ -7664,43 +7664,78 @@ static jsval_t js_postfix(struct js *js) {
   return res;
 }
 
+static inline jsval_t resolve_coderef(struct js *js, jsval_t v) {
+  if (vtype(v) == T_CODEREF) {
+    return lookup(js, &js->code[coderefoff(v)], codereflen(v));
+  }
+  return v;
+}
+
+static void unlink_prop(struct js *js, jsoff_t obj_off, jsoff_t prop_off, jsoff_t prev_off) {
+  jsoff_t deleted_next = loadoff(js, prop_off) & ~(CONSTMASK | ARRMASK | SLOTMASK);
+  jsoff_t target = prev_off ? prev_off : obj_off;
+  jsoff_t current = loadoff(js, target);
+  saveoff(js, target, (deleted_next & ~3U) | (current & (CONSTMASK | ARRMASK | SLOTMASK | 3U)));
+  increment_version(js, obj_off);
+}
+
+static jsval_t check_frozen_sealed(struct js *js, jsval_t obj, const char *action) {
+  if (js_truthy(js, get_slot(js, obj, SLOT_FROZEN))) {
+    if (js->flags & F_STRICT) return js_mkerr(js, "cannot %s property of frozen object", action);
+    return js_mkfalse();
+  }
+  if (js_truthy(js, get_slot(js, obj, SLOT_SEALED))) {
+    if (js->flags & F_STRICT) return js_mkerr(js, "cannot %s property of sealed object", action);
+    return js_mkfalse();
+  }
+  return js_mkundef();
+}
+
 static jsval_t js_unary(struct js *js) {
-  if (next(js) == TOK_NEW) {
+  uint8_t tok = next(js);
+
+  static const void *dispatch[] = {
+    [TOK_NEW]     = &&do_new,
+    [TOK_DELETE]  = &&do_delete,
+    [TOK_AWAIT]   = &&do_await,
+    [TOK_POSTINC] = &&do_prefix_inc,
+    [TOK_POSTDEC] = &&do_prefix_inc,
+    [TOK_NOT]     = &&do_unary_op,
+    [TOK_TILDA]   = &&do_unary_op,
+    [TOK_TYPEOF]  = &&do_typeof,
+    [TOK_VOID]    = &&do_unary_op,
+    [TOK_MINUS]   = &&do_unary_op,
+    [TOK_PLUS]    = &&do_unary_op,
+  };
+
+  if (tok < sizeof(dispatch)/sizeof(dispatch[0]) && dispatch[tok]) {
+    goto *dispatch[tok];
+  }
+  return js_postfix(js);
+
+do_new: {
     js->consumed = 1;
     jsval_t obj = mkobj(js, 0);
     jsval_t saved_this = js->this_val;
     js->this_val = obj;
-    
-    // Parse constructor: can be identifier, member expression, or grouped
-    // We need to parse the constructor WITHOUT continuing to parse property access
-    // after the call, because property access should be on the constructed object.
-    jsval_t ctor = js_group(js);  // Parse identifier or (expr)
-    if (is_err(ctor)) {
-      js->this_val = saved_this;
-      return ctor;
-    }
-    
-    // Handle member access on the constructor itself: new foo.Bar(), new foo[x]()
+
+    jsval_t ctor = js_group(js);
+    if (is_err(ctor)) { js->this_val = saved_this; return ctor; }
+
     while (next(js) == TOK_DOT || next(js) == TOK_LBRACKET) {
+      ctor = resolve_coderef(js, ctor);
+      if (is_err(ctor)) { js->this_val = saved_this; return ctor; }
+
       if (js->tok == TOK_DOT) {
         js->consumed = 1;
-        if (vtype(ctor) == T_CODEREF) {
-          ctor = lookup(js, &js->code[coderefoff(ctor)], codereflen(ctor));
-          if (is_err(ctor)) { js->this_val = saved_this; return ctor; }
-        }
         if (next(js) != TOK_IDENTIFIER && !is_keyword_propname(js->tok)) {
           js->this_val = saved_this;
           return js_mkerr_typed(js, JS_ERR_SYNTAX, "identifier expected");
         }
         js->consumed = 1;
-        jsval_t prop_name = mkcoderef((jsoff_t)js->toff, (jsoff_t)js->tlen);
-        ctor = do_op(js, TOK_DOT, ctor, prop_name);
+        ctor = do_op(js, TOK_DOT, ctor, mkcoderef((jsoff_t)js->toff, (jsoff_t)js->tlen));
       } else {
         js->consumed = 1;
-        if (vtype(ctor) == T_CODEREF) {
-          ctor = lookup(js, &js->code[coderefoff(ctor)], codereflen(ctor));
-          if (is_err(ctor)) { js->this_val = saved_this; return ctor; }
-        }
         jsval_t idx = js_expr(js);
         if (is_err(idx)) { js->this_val = saved_this; return idx; }
         if (next(js) != TOK_RBRACKET) { js->this_val = saved_this; return js_mkerr_typed(js, JS_ERR_SYNTAX, "] expected"); }
@@ -7708,130 +7743,97 @@ static jsval_t js_unary(struct js *js) {
         ctor = do_op(js, TOK_BRACKET, ctor, idx);
       }
     }
-    
-    // Resolve the constructor if it's still a coderef
-    if (vtype(ctor) == T_CODEREF) {
-      ctor = lookup(js, &js->code[coderefoff(ctor)], codereflen(ctor));
-      if (is_err(ctor)) { js->this_val = saved_this; return ctor; }
-    }
-    if (vtype(ctor) == T_PROP || vtype(ctor) == T_PROPREF) {
-      ctor = resolveprop(js, ctor);
-    }
-    
-    // Now handle optional call arguments: new Foo() vs new Foo
+
+    ctor = resolve_coderef(js, ctor);
+    if (is_err(ctor)) { js->this_val = saved_this; return ctor; }
+    if (vtype(ctor) == T_PROP || vtype(ctor) == T_PROPREF) ctor = resolveprop(js, ctor);
+
     jsval_t result;
+    push_this(obj);
     if (next(js) == TOK_LPAREN) {
-      push_this(obj);
       jsval_t params = js_call_params(js);
-      if (is_err(params)) {
-        pop_this();
-        js->this_val = saved_this;
-        return params;
-      }
+      if (is_err(params)) { pop_this(); js->this_val = saved_this; return params; }
       result = do_op(js, TOK_CALL, ctor, params);
-      pop_this();
     } else {
-      // new Foo without parentheses - call with no args
-      push_this(obj);
       result = do_op(js, TOK_CALL, ctor, mkcoderef(0, 0));
-      pop_this();
-      // do_call_op set consumed=1, but we didn't consume the peeked token
-      // Reset consumed so the peeked token can be seen by caller
       js->consumed = 0;
     }
-    
+    pop_this();
+
     jsval_t constructed_obj = js->this_val;
     js->this_val = saved_this;
-    
-    jsval_t new_result;
-    if (vtype(result) == T_OBJ || vtype(result) == T_ARR || vtype(result) == T_PROMISE || vtype(result) == T_FUNC) {
-      new_result = result;
-    } else {
-      new_result = constructed_obj;
-    }
-    
-    // Continue parsing property access after 'new X()' - e.g., new A().foo
-    // Track the object for method calls (this binding)
+
+    uint8_t rtype = vtype(result);
+    jsval_t new_result = (
+      rtype == T_OBJ || rtype == T_ARR ||
+      rtype == T_PROMISE || rtype == T_FUNC
+     ) ? result : constructed_obj;
+
     jsval_t call_obj = js_mkundef();
     while (next(js) == TOK_DOT || next(js) == TOK_LBRACKET || next(js) == TOK_OPTIONAL_CHAIN || next(js) == TOK_LPAREN) {
-      if (js->tok == TOK_DOT || js->tok == TOK_OPTIONAL_CHAIN) {
-        uint8_t op = js->tok;
+      uint8_t op = js->tok;
+      if (op == TOK_DOT || op == TOK_OPTIONAL_CHAIN) {
         js->consumed = 1;
-        call_obj = new_result;  // Save object for potential method call
+        call_obj = new_result;
         if (op == TOK_OPTIONAL_CHAIN && (vtype(call_obj) == T_NULL || vtype(call_obj) == T_UNDEF)) {
-          new_result = js_mkundef();
-          call_obj = js_mkundef();
+          new_result = call_obj = js_mkundef();
         } else {
           if (next(js) != TOK_IDENTIFIER && !is_keyword_propname(js->tok)) {
             return js_mkerr_typed(js, JS_ERR_SYNTAX, "identifier expected");
           }
           js->consumed = 1;
-          jsval_t prop_name = mkcoderef((jsoff_t)js->toff, (jsoff_t)js->tlen);
-          new_result = do_op(js, op, new_result, prop_name);
+          new_result = do_op(js, op, new_result, mkcoderef((jsoff_t)js->toff, (jsoff_t)js->tlen));
         }
-      } else if (js->tok == TOK_LBRACKET) {
+      } else if (op == TOK_LBRACKET) {
         js->consumed = 1;
-        call_obj = new_result;  // Save object for potential method call
+        call_obj = new_result;
         jsval_t idx = js_expr(js);
         if (is_err(idx)) return idx;
         if (next(js) != TOK_RBRACKET) return js_mkerr_typed(js, JS_ERR_SYNTAX, "] expected");
         js->consumed = 1;
         new_result = do_op(js, TOK_BRACKET, new_result, idx);
-      } else if (js->tok == TOK_LPAREN) {
-        // Method call - use saved object as 'this'
-        jsval_t func_this = call_obj;
-        if (vtype(func_this) == T_UNDEF) {
-          // No property access before call, use global this
-          func_this = js->this_val;
-        }
+      } else {
+        jsval_t func_this = vtype(call_obj) == T_UNDEF ? js->this_val : call_obj;
         push_this(func_this);
         jsval_t params = js_call_params(js);
-        if (is_err(params)) {
-          pop_this();
-          return params;
-        }
+        if (is_err(params)) { pop_this(); return params; }
         new_result = do_op(js, TOK_CALL, new_result, params);
         pop_this();
-        call_obj = js_mkundef();  // Reset after call
+        call_obj = js_mkundef();
       }
     }
     return new_result;
-  } else if (next(js) == TOK_DELETE) {
+  }
+
+do_delete: {
     js->consumed = 1;
-    
+
     if ((js->flags & F_STRICT) && next(js) == TOK_IDENTIFIER) {
       jsoff_t id_pos = js->pos;
       uint8_t id_tok = js->tok;
-      jsoff_t id_toff = js->toff;
-      jsoff_t id_tlen = js->tlen;
+      jsoff_t id_toff = js->toff, id_tlen = js->tlen;
       js->consumed = 1;
       uint8_t after = next(js);
       if (after != TOK_DOT && after != TOK_LBRACKET && after != TOK_OPTIONAL_CHAIN) {
         return js_mkerr_typed(js, JS_ERR_SYNTAX, "cannot delete unqualified identifier in strict mode");
       }
-      js->pos = id_pos;
-      js->tok = id_tok;
-      js->toff = id_toff;
-      js->tlen = id_tlen;
-      js->consumed = 0;
+      js->pos = id_pos; js->tok = id_tok; js->toff = id_toff; js->tlen = id_tlen; js->consumed = 0;
     }
-    
-    jsoff_t save_pos = js->pos;
-    uint8_t save_tok = js->tok;
-    js_parse_state_t saved_delete;
-    JS_SAVE_STATE(js, saved_delete);
-    uint8_t saved_delete_flags = js->flags;
+
+    js_parse_state_t saved_state;
+    JS_SAVE_STATE(js, saved_state);
+    uint8_t saved_flags = js->flags;
     jsval_t operand = js_postfix(js);
+
     if (is_err(operand)) {
-      JS_RESTORE_STATE(js, saved_delete);
-      js->flags = saved_delete_flags & ~F_THROW;
-      js->flags |= F_NOEXEC;
+      JS_RESTORE_STATE(js, saved_state);
+      js->flags = (saved_flags & ~F_THROW) | F_NOEXEC;
       js_postfix(js);
-      js->flags = saved_delete_flags;
+      js->flags = saved_flags;
       return js_mktrue();
     }
     if (js->flags & F_NOEXEC) return js_mktrue();
-    
+
     if (vtype(operand) == T_PROPREF) {
       jsoff_t obj_off = propref_obj(operand);
       jsoff_t key_off = propref_key(operand);
@@ -7839,110 +7841,74 @@ static jsval_t js_unary(struct js *js) {
       jsval_t key = mkval(T_STR, key_off);
       jsoff_t len;
       const char *key_str = (const char *)&js->mem[vstr(js, key, &len)];
-      
+
       if (is_proxy(js, obj)) {
         jsval_t result = proxy_delete(js, obj, key_str, len);
-        if (is_err(result)) return result;
-        return js_truthy(js, result) ? js_mktrue() : js_mkfalse();
+        return is_err(result) ? result : (js_truthy(js, result) ? js_mktrue() : js_mkfalse());
       }
-      
-      if (js_truthy(js, get_slot(js, obj, SLOT_FROZEN))) {
-        if (js->flags & F_STRICT) return js_mkerr(js, "cannot delete property of frozen object");
-        return js_mkfalse();
-      }
-      
-      if (js_truthy(js, get_slot(js, obj, SLOT_SEALED))) {
-        if (js->flags & F_STRICT) return js_mkerr(js, "cannot delete property of sealed object");
-        return js_mkfalse();
-      }
-      
+
+      jsval_t err = check_frozen_sealed(js, obj, "delete");
+      if (vtype(err) != T_UNDEF) return err;
+
       jsoff_t prop_off = lkp(js, obj, key_str, len);
       if (prop_off == 0) return js_mktrue();
+
       if (is_const_prop(js, prop_off)) {
         if (js->flags & F_STRICT) return js_mkerr_typed(js, JS_ERR_TYPE, "cannot delete non-configurable property");
         return js_mkfalse();
       }
-      
+
       descriptor_entry_t *desc = lookup_descriptor(obj_off, key_str, len);
       if (desc && !desc->configurable) {
         if (js->flags & F_STRICT) return js_mkerr_typed(js, JS_ERR_TYPE, "cannot delete non-configurable property");
         return js_mkfalse();
       }
+
       jsoff_t first_prop = loadoff(js, obj_off) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
       if (first_prop == prop_off) {
-        jsoff_t deleted_next = loadoff(js, prop_off) & ~(CONSTMASK | ARRMASK | SLOTMASK);
-        jsoff_t current = loadoff(js, obj_off);
-        saveoff(js, obj_off, (deleted_next & ~3U) | (current & (CONSTMASK | ARRMASK | SLOTMASK | 3U)));
-        increment_version(js, obj_off);
+        unlink_prop(js, obj_off, prop_off, 0);
         return js_mktrue();
       }
-      jsoff_t prev = first_prop;
-      while (prev != 0) {
+      for (jsoff_t prev = first_prop; prev != 0; ) {
         jsoff_t next_prop = loadoff(js, prev) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
-        if (next_prop == prop_off) {
-          jsoff_t deleted_next = loadoff(js, prop_off) & ~(CONSTMASK | ARRMASK | SLOTMASK);
-          jsoff_t current = loadoff(js, prev);
-          saveoff(js, prev, (deleted_next & ~3U) | (current & (CONSTMASK | ARRMASK | SLOTMASK | 3U)));
-          increment_version(js, obj_off);
-          return js_mktrue();
-        }
+        if (next_prop == prop_off) { unlink_prop(js, obj_off, prop_off, prev); return js_mktrue(); }
         prev = next_prop;
       }
       return js_mktrue();
     }
-    
-    if (vtype(operand) != T_PROP) {
-      return js_mktrue();
-    }
-    jsoff_t prop_off = (jsoff_t) vdata(operand);
+
+    if (vtype(operand) != T_PROP) return js_mktrue();
+
+    jsoff_t prop_off = (jsoff_t)vdata(operand);
     if (is_const_prop(js, prop_off)) {
       if (js->flags & F_STRICT) return js_mkerr(js, "cannot delete constant property");
       return js_mkfalse();
     }
-    
-    jsoff_t owner_obj_off = 0;
-    jsoff_t prev_prop_off = 0;
+
+    jsoff_t owner_obj_off = 0, prev_prop_off = 0;
     bool is_first_prop = false;
-    
-    for (jsoff_t off = 0; off < js->brk;) {
+    for (jsoff_t off = 0; off < js->brk; ) {
       jsoff_t v = loadoff(js, off);
       jsoff_t cleaned = v & ~(CONSTMASK | ARRMASK | SLOTMASK);
       jsoff_t n = esize(cleaned);
       if ((cleaned & 3) == T_OBJ) {
         jsoff_t first_prop = cleaned & ~3U;
-        if (first_prop == prop_off) {
-          owner_obj_off = off;
-          is_first_prop = true;
-          break;
+        if (first_prop == prop_off) { owner_obj_off = off; is_first_prop = true; break; }
+        for (jsoff_t cur = first_prop; cur != 0 && cur < js->brk; ) {
+          jsoff_t nx = loadoff(js, cur) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
+          if (nx == prop_off) { owner_obj_off = off; prev_prop_off = cur; break; }
+          cur = nx;
         }
-        jsoff_t cur_prop = first_prop;
-        while (cur_prop != 0 && cur_prop < js->brk) {
-          jsoff_t next = loadoff(js, cur_prop) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
-          if (next == prop_off) {
-            owner_obj_off = off;
-            prev_prop_off = cur_prop;
-            break;
-          }
-          cur_prop = next;
-        }
-        if (owner_obj_off != 0) break;
+        if (owner_obj_off) break;
       }
       off += n;
     }
-    
-    if (owner_obj_off != 0) {
+
+    if (owner_obj_off) {
       jsval_t owner_obj = mkval(T_OBJ, owner_obj_off);
-      
-      if (js_truthy(js, get_slot(js, owner_obj, SLOT_FROZEN))) {
-        if (js->flags & F_STRICT) return js_mkerr(js, "cannot delete property of frozen object");
-        return js_mkfalse();
-      }
-      
-      if (js_truthy(js, get_slot(js, owner_obj, SLOT_SEALED))) {
-        if (js->flags & F_STRICT) return js_mkerr(js, "cannot delete property of sealed object");
-        return js_mkfalse();
-      }
-      
+      jsval_t err = check_frozen_sealed(js, owner_obj, "delete");
+      if (vtype(err) != T_UNDEF) return err;
+
       jsoff_t key_str_off = loadoff(js, (jsoff_t)(prop_off + sizeof(jsoff_t)));
       jsoff_t key_len = (loadoff(js, key_str_off) >> 2) - 1;
       const char *key_str = (char *)&js->mem[key_str_off + sizeof(jsoff_t)];
@@ -7951,91 +7917,71 @@ static jsval_t js_unary(struct js *js) {
         if (js->flags & F_STRICT) return js_mkerr_typed(js, JS_ERR_TYPE, "cannot delete non-configurable property");
         return js_mkfalse();
       }
-      
-      if (is_first_prop) {
-        jsoff_t deleted_next = loadoff(js, prop_off) & ~(CONSTMASK | ARRMASK | SLOTMASK);
-        jsoff_t current = loadoff(js, owner_obj_off);
-        saveoff(js, owner_obj_off, (deleted_next & ~3U) | (current & (CONSTMASK | ARRMASK | SLOTMASK | 3U)));
-      } else {
-        jsoff_t deleted_next = loadoff(js, prop_off) & ~(CONSTMASK | ARRMASK | SLOTMASK);
-        jsoff_t current = loadoff(js, prev_prop_off);
-        saveoff(js, prev_prop_off, (deleted_next & ~3U) | (current & (CONSTMASK | ARRMASK | SLOTMASK | 3U)));
-      }
-      increment_version(js, owner_obj_off);
+      unlink_prop(js, owner_obj_off, prop_off, is_first_prop ? 0 : prev_prop_off);
     }
-    (void) save_pos;
-    (void) save_tok;
     return js_mktrue();
-  } else if (next(js) == TOK_AWAIT) {
+  }
+
+do_await: {
     js->consumed = 1;
     jsval_t expr = js_unary(js);
     if (is_err(expr)) return expr;
     if (js->flags & F_NOEXEC) return expr;
+
     jsval_t resolved = resolveprop(js, expr);
-    if (vtype(resolved) != T_PROMISE) {
-      return resolved;
-    }
-    
+    if (vtype(resolved) != T_PROMISE) return resolved;
+
     uint32_t pid = get_promise_id(js, resolved);
     promise_data_entry_t *pd = get_promise_data(pid, false);
     if (!pd) return js_mkerr(js, "invalid promise state");
-    
-    if (pd->state != 0) {
-      if (pd->state == 1) { return pd->value;
-      } else if (pd->state == 2) return js_throw(js, pd->value);
-    }
-    
-    mco_coro* current_mco = mco_running();
+
+    if (pd->state == 1) return pd->value;
+    if (pd->state == 2) return js_throw(js, pd->value);
+
+    mco_coro *current_mco = mco_running();
     if (!current_mco) return js_mkerr(js, "await can only be used inside async functions");
-    
+
     async_exec_context_t *ctx = (async_exec_context_t *)mco_get_user_data(current_mco);
     if (!ctx || !ctx->coro) return js_mkerr(js, "invalid async context");
-    
+
     coroutine_t *coro = ctx->coro;
     coro->awaited_promise = resolved;
-    coro->is_settled = false;
-    coro->is_ready = false;
-    
+    coro->is_settled = coro->is_ready = false;
+
     jsval_t resume_obj = mkobj(js, 0);
     set_slot(js, resume_obj, SLOT_CFUNC, js_mkfun(resume_coroutine_wrapper));
     set_slot(js, resume_obj, SLOT_CORO, tov((double)(uintptr_t)coro));
-    jsval_t resume_fn = mkval(T_FUNC, vdata(resume_obj));
-    
+
     jsval_t reject_obj = mkobj(js, 0);
     set_slot(js, reject_obj, SLOT_CFUNC, js_mkfun(reject_coroutine_wrapper));
     set_slot(js, reject_obj, SLOT_CORO, tov((double)(uintptr_t)coro));
-    jsval_t reject_fn = mkval(T_FUNC, vdata(reject_obj));
-    
-    jsval_t then_args[] = { resume_fn, reject_fn };
+
+    jsval_t then_args[] = { mkval(T_FUNC, vdata(resume_obj)), mkval(T_FUNC, vdata(reject_obj)) };
     jsval_t saved_this = js->this_val;
     js->this_val = resolved;
     (void)builtin_promise_then(js, then_args, 2);
     js->this_val = saved_this;
-    
+
     js_parse_state_t saved;
     JS_SAVE_STATE(js, saved);
     uint8_t saved_flags = js->flags;
-    
+
     mco_result mco_res = mco_yield(current_mco);
-    
+
     JS_RESTORE_STATE(js, saved);
     js->flags = saved_flags;
-    
-    if (mco_res != MCO_SUCCESS) {
-      return js_mkerr(js, "failed to yield coroutine");
-    }
-    
+
+    if (mco_res != MCO_SUCCESS) return js_mkerr(js, "failed to yield coroutine");
+
     jsval_t result = coro->result;
     bool is_error = coro->is_error;
-    
     coro->is_settled = false;
     coro->awaited_promise = js_mkundef();
-    
-    if (is_error) {
-      return js_throw(js, result);
-    }
-    return result;
-  } else if (next(js) == TOK_POSTINC || js->tok == TOK_POSTDEC) {
+
+    return is_error ? js_throw(js, result) : result;
+  }
+
+do_prefix_inc: {
     uint8_t op = js->tok;
     js->consumed = 1;
     if ((js->flags & F_STRICT) && next(js) == TOK_IDENTIFIER && is_eval_or_arguments(js, js->toff, js->tlen)) {
@@ -8051,29 +7997,30 @@ static jsval_t js_unary(struct js *js) {
       return js_mkerr_typed(js, JS_ERR_SYNTAX, "Invalid left-hand side in assignment");
     }
     return do_op(js, op == TOK_POSTINC ? TOK_PLUS : TOK_MINUS, resolved, tov(1));
-  } else if (next(js) == TOK_NOT || js->tok == TOK_TILDA || js->tok == TOK_TYPEOF ||
-      js->tok == TOK_VOID || js->tok == TOK_MINUS || js->tok == TOK_PLUS) {
-    uint8_t t = js->tok;
-    if (t == TOK_MINUS) t = TOK_UMINUS;
-    if (t == TOK_PLUS) t = TOK_UPLUS;
+  }
+
+do_typeof: {
     js->consumed = 1;
     jsoff_t saved_pos = js->pos;
-    uint8_t saved_tok = js->tok;
-    uint8_t saved_consumed = js->consumed;
-    uint8_t saved_flags = js->flags;
+    uint8_t saved_tok = js->tok, saved_consumed = js->consumed, saved_flags = js->flags;
     jsval_t operand = js_unary(js);
-    if (t == TOK_TYPEOF && is_err(operand)) {
-      js->pos = saved_pos;
-      js->tok = saved_tok;
-      js->consumed = saved_consumed;
+    if (is_err(operand)) {
+      js->pos = saved_pos; js->tok = saved_tok; js->consumed = saved_consumed;
       js->flags = (saved_flags & ~F_THROW) | F_NOEXEC;
       js_unary(js);
       js->flags = saved_flags & ~F_THROW;
       operand = js_mkundef();
     }
+    return do_op(js, TOK_TYPEOF, js_mkundef(), operand);
+  }
+
+do_unary_op: {
+    uint8_t t = js->tok;
+    if (t == TOK_MINUS) t = TOK_UMINUS;
+    if (t == TOK_PLUS) t = TOK_UPLUS;
+    js->consumed = 1;
+    jsval_t operand = js_unary(js);
     return do_op(js, t, js_mkundef(), operand);
-  } else {
-    return js_postfix(js);
   }
 }
 
