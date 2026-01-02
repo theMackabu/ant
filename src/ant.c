@@ -254,6 +254,7 @@ static uint32_t next_promise_id = 1;
 
 static promise_data_entry_t *get_promise_data(uint32_t promise_id, bool create);
 static uint32_t get_promise_id(struct js *js, jsval_t p);
+static bool js_try_grow_memory(struct js *js, size_t needed);
 
 typedef struct map_entry {
   char *key;
@@ -2275,11 +2276,15 @@ jsval_t js_tostring_val(struct js *js, jsval_t value) {
 }
 
 const char *js_str(struct js *js, jsval_t value) {
+  if (is_err(value)) return js->errmsg;
+  
+  size_t min_needed = sizeof(jsoff_t) + 256;
+  if (js->brk + min_needed > js->size) {
+    if (!js_try_grow_memory(js, min_needed)) return "";
+  }
+  
   char *buf = (char *) &js->mem[js->brk + sizeof(jsoff_t)];
   size_t len, available = js->size - js->brk - sizeof(jsoff_t);
-  
-  if (is_err(value)) return js->errmsg;
-  if (js->brk + sizeof(jsoff_t) >= js->size) return "";
   
   multiref_count = 0;
   multiref_next_id = 0;
@@ -6151,11 +6156,12 @@ static jsval_t js_template_literal(struct js *js) {
     }
     if (n > part_start || (n == part_start && (n >= template_len - 1 || in[n] != '$'))) {
       size_t part_len = n - part_start;
+      size_t needed = sizeof(jsoff_t) + part_len;
+      if (js->brk + needed > js->size) {
+        if (!js_try_grow_memory(js, needed)) return js_mkerr(js, "oom");
+      }
       uint8_t *out = &js->mem[js->brk + sizeof(jsoff_t)];
       size_t out_len = 0;
-      
-      if (js->brk + sizeof(jsoff_t) + part_len > js->size)
-        return js_mkerr(js, "oom");
       
       for (size_t i = part_start; i < n; i++) {
         if (in[i] == '\\' && i + 1 < n) {
