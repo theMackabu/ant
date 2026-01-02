@@ -66,6 +66,12 @@ static jsval_t js_signal(struct js *js, jsval_t *args, int nargs) {
 static jsval_t js_gc_trigger(struct js *js, jsval_t *args, int nargs) {
   (void) args; (void) nargs;
   
+  if (executing_coro) {
+    jsval_t result = js_mkobj(js);
+    js_set(js, result, "skipped", js_mktrue());
+    return result;
+  }
+  
   size_t heap_before = GC_get_heap_size();
   size_t used_before = GC_get_heap_size() - GC_get_free_bytes();
   

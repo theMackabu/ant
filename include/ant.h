@@ -1,3 +1,6 @@
+#ifndef ANT_H
+#define ANT_H
+
 #pragma once
 #define PCRE2_CODE_UNIT_WIDTH 8
 
@@ -12,6 +15,7 @@
 #define ANT_LIMIT_SIZE_CACHE 16384
 
 struct js;
+extern bool executing_coro;
 
 typedef uint32_t jsoff_t;
 typedef uint64_t jsval_t;
@@ -157,3 +161,5 @@ jsoff_t js_next_prop(jsoff_t header);
 jsoff_t js_loadoff(struct js *js, jsoff_t off);
 
 void js_print_stack_trace(FILE *stream);
+
+#endif

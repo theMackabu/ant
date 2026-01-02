@@ -867,12 +867,15 @@ static size_t calculate_coro_stack_size(void) {
   return 0;
 }
 
+bool executing_coro = false;
+
 static void mco_async_entry(mco_coro* mco) {
   async_exec_context_t *ctx = (async_exec_context_t *)mco_get_user_data(mco);
   
   struct js *js = ctx->js;
   coroutine_t *coro = ctx->coro;
   jsval_t result;
+  executing_coro = true;
   
   if (coro && coro->nargs > 0 && coro->args) {
     result = call_js_code_with_args(js, ctx->code, (jsoff_t)ctx->code_len, ctx->closure_scope, coro->args, coro->nargs);
@@ -895,6 +898,7 @@ static void mco_async_entry(mco_coro* mco) {
     js_resolve_promise(js, ctx->promise, result);
   }
   
+  executing_coro = false;
 }
 
 static void enqueue_coroutine(coroutine_t *coro) {

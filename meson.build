@@ -32,6 +32,7 @@ if host_machine.system() == 'darwin'
 endif
 
 tlsuv_opts = cmake.subproject_options()
+tlsuv_opts.add_cmake_defines({'BUILD_TESTING': 'OFF'})
 tlsuv_opts.append_compile_args('c', [
   '-Wno-unused-function',
   '-Wno-unused-variable',
@@ -39,11 +40,16 @@ tlsuv_opts.append_compile_args('c', [
   '-Wno-sometimes-uninitialized'
 ])
 
-tlsuv_opts.add_cmake_defines({'BUILD_TESTING': 'OFF'})
+bdwgc_opts = cmake.subproject_options()
+tlsuv_opts.append_compile_args('c', [
+  '-DGC_NO_THREAD_REDIRECTS',
+  '-DGC_THREADS',
+])
+
 tlsuv_dep = cmake.subproject('tlsuv', options: tlsuv_opts).dependency('tlsuv')
+bdwgc_dep = cmake.subproject('bdwgc', options: bdwgc_opts).dependency('gc')
 
 pcre2_dep = subproject('pcre2').get_variable('libpcre2_8')
-bdwgc_dep = subproject('bdwgc').get_variable('bdwgc_dep')
 uthash_dep = subproject('uthash').get_variable('uthash_dep')
 yyjson_dep = subproject('yyjson').get_variable('yyjson_dep')
 uuidv7_dep = subproject('uuidv7').get_variable('uuidv7_dep')
@@ -79,7 +85,7 @@ endif
 build_date = run_command('date', '+%Y-%m-%d', check: true).stdout().strip()
 
 version_conf = configuration_data()
-version_conf.set('ANT_VERSION', '0.2.3.17')
+version_conf.set('ANT_VERSION', '0.2.3.18')
 version_conf.set('ANT_GIT_HASH', git_hash)
 version_conf.set('ANT_BUILD_DATE', build_date)
 

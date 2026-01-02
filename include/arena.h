@@ -1,9 +1,6 @@
 #ifndef ARENA_H
 #define ARENA_H
 
-#define NO_EXECUTE_PERMISSION 1
-#define GC_NO_THREAD_REDIRECTS 1
-#define GC_THREADS 1
 #include <gc.h>
 
 static inline void ant_gc_init(void) {
