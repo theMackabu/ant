@@ -13,7 +13,7 @@ async function main() {
   await server();
 }
 
-for (let i = 0; i < 40000; i++) {
+for (let i = 0; i < 100000; i++) {
   void main();
 }
 

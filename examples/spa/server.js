@@ -1,8 +1,8 @@
 import { open } from 'ant:fs';
 import { join, extname } from 'ant:path';
-import { Radix3 } from '../server/radix3';
+import { createRouter, addRoute, findRoute } from '../rou3';
 
-const router = new Radix3();
+const router = createRouter();
 
 const validPaths = new Set();
 const invalidPaths = new Set();
@@ -25,13 +25,13 @@ const mimeTypes = new Map([
   ['.woff2', 'font/woff2']
 ]);
 
-router.get('/api/version', async c => c.res.json({ version: Ant.version }));
+addRoute(router, 'GET', '/api/version', async c => c.res.json({ version: Ant.version }));
 
-router.get('*path', c => {
-  const reqPath = c.params.path;
+addRoute(router, 'GET', '**', c => {
+  const reqPath = c.req.uri;
   if (reqPath === '/') return c.res.body(open(indexPath), 200, 'text/html');
 
-  const filePath = reqPath === '/' ? indexPath : join(basePath, reqPath);
+  const filePath = join(basePath, reqPath);
 
   if (validPaths.has(filePath)) {
     const ext = extname(reqPath) || '.html';
@@ -54,20 +54,17 @@ router.get('*path', c => {
   }
 });
 
-router.printTree();
-console.log('');
-
 async function handleRequest(c) {
   console.log('request:', c.req.method, c.req.uri);
-  const result = router.lookup(c.req.uri, c.req.method);
+  const result = findRoute(router, c.req.method, c.req.uri);
 
-  if (result?.handler) {
+  if (result?.data) {
     c.params = result.params;
-    return await result.handler(c);
+    return await result.data(c);
   }
 
   c.res.body('not found: ' + c.req.uri, 404);
 }
 
-console.log('started on http://localhost:8000');
-Ant.serve(8000, handleRequest);
+console.log('started on http://localhost:6369');
+Ant.serve(6369, handleRequest);

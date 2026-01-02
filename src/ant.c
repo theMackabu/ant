@@ -37,87 +37,6 @@
 #define CORO_MALLOC(size) calloc(1, size)
 #define CORO_FREE(ptr) free(ptr)
 
-/* ========== PERFORMANCE INSTRUMENTATION ========== */
-#define PERF_INSTRUMENTATION 1
-
-#if PERF_INSTRUMENTATION
-#include <mach/mach_time.h>
-
-static uint64_t perf_call_count = 0;
-static uint64_t perf_phase4_ns = 0;
-static uint64_t perf_phase4_sub1_ns = 0;  // Parameter binding loop
-static uint64_t perf_phase4_sub2_ns = 0;  // Rest parameter handling
-static uint64_t perf_phase4_sub3_ns = 0;  // code_uses_arguments check
-static uint64_t perf_phase4_sub4_ns = 0;  // setup_arguments
-static uint64_t perf_phase4_sub5_ns = 0;  // NFE name binding
-static uint64_t perf_phase4_sub6_ns = 0;  // Strict mode lookup + this handling
-static uint64_t perf_sub5_vstr_ns = 0;    // vstr inside sub5
-static uint64_t perf_sub5_mkprop_ns = 0;  // mkprop inside sub5
-static uint64_t perf_sub5_count = 0;      // Times sub5 actually runs
-static uint64_t perf_mkprop_intern_ns = 0;    // intern_string inside mkprop
-static uint64_t perf_mkprop_setkoff_ns = 0;   // set_koff_intern inside mkprop
-static uint64_t perf_mkprop_mkentity_ns = 0;  // mkentity inside mkprop
-static uint64_t perf_mkprop_setup_ns = 0;     // setup (memcpy) inside mkprop
-static uint64_t perf_mkprop_count = 0;
-static uint64_t perf_lkp_calls = 0;
-static uint64_t perf_lkp_cache_hits = 0;
-static uint64_t perf_lkp_not_found = 0;
-static uint64_t perf_lkp_found_no_cache = 0;  /* Found but wasn't in cache */
-static uint64_t perf_lkp_trace_count = 0;
-#define PERF_LKP_TRACE 1  /* Set to 1 to trace lookups */
-static uint64_t perf_report_interval = 100000;
-static mach_timebase_info_data_t perf_timebase = {0};
-
-static inline uint64_t perf_now_ns(void) {
-  if (perf_timebase.denom == 0) mach_timebase_info(&perf_timebase);
-  return mach_absolute_time() * perf_timebase.numer / perf_timebase.denom;
-}
-
-static void perf_report(size_t heap_size) {
-  if (perf_call_count == 0) return;
-  fprintf(stderr, "\n[PERF] After %llu calls, heap=%zu KB\n", perf_call_count, heap_size / 1024);
-  fprintf(stderr, "[PERF] phase4 total: %.1f ns/call\n", (double)perf_phase4_ns / perf_call_count);
-  fprintf(stderr, "[PERF]   sub1 (param bind):     %.1f ns\n", (double)perf_phase4_sub1_ns / perf_call_count);
-  fprintf(stderr, "[PERF]   sub2 (rest params):    %.1f ns\n", (double)perf_phase4_sub2_ns / perf_call_count);
-  fprintf(stderr, "[PERF]   sub3 (uses_arguments): %.1f ns\n", (double)perf_phase4_sub3_ns / perf_call_count);
-  fprintf(stderr, "[PERF]   sub4 (setup_args):     %.1f ns\n", (double)perf_phase4_sub4_ns / perf_call_count);
-  fprintf(stderr, "[PERF]   sub5 (NFE bind):       %.1f ns (runs=%llu, %.1f%%)\n", 
-          (double)perf_phase4_sub5_ns / perf_call_count,
-          perf_sub5_count, 100.0 * perf_sub5_count / perf_call_count);
-  if (perf_sub5_count > 0) {
-    fprintf(stderr, "[PERF]     sub5.vstr:   %.1f ns/run\n", (double)perf_sub5_vstr_ns / perf_sub5_count);
-    fprintf(stderr, "[PERF]     sub5.mkprop: %.1f ns/run\n", (double)perf_sub5_mkprop_ns / perf_sub5_count);
-  }
-  fprintf(stderr, "[PERF]   sub6 (strict+this):    %.1f ns\n", (double)perf_phase4_sub6_ns / perf_call_count);
-  if (perf_mkprop_count > 0) {
-    fprintf(stderr, "[PERF] mkprop breakdown (%llu calls):\n", perf_mkprop_count);
-    fprintf(stderr, "[PERF]   setup:    %.1f ns\n", (double)perf_mkprop_setup_ns / perf_mkprop_count);
-    fprintf(stderr, "[PERF]   intern:   %.1f ns\n", (double)perf_mkprop_intern_ns / perf_mkprop_count);
-    fprintf(stderr, "[PERF]   setkoff:  %.1f ns\n", (double)perf_mkprop_setkoff_ns / perf_mkprop_count);
-    fprintf(stderr, "[PERF]   mkentity: %.1f ns\n", (double)perf_mkprop_mkentity_ns / perf_mkprop_count);
-  }
-  if (perf_lkp_calls > 0) {
-    fprintf(stderr, "[PERF] lkp_interned: %llu calls, %.1f%% cache hits, %.1f%% found (no cache), %.1f%% not found\n",
-            perf_lkp_calls,
-            100.0 * perf_lkp_cache_hits / perf_lkp_calls,
-            100.0 * perf_lkp_found_no_cache / perf_lkp_calls,
-            100.0 * perf_lkp_not_found / perf_lkp_calls);
-    fprintf(stderr, "[PERF]   per function call: %.1f lookups\n", (double)perf_lkp_calls / perf_call_count);
-  }
-}
-
-#define PERF_START(var) uint64_t var = perf_now_ns()
-#define PERF_END(var, accum) (accum) += (perf_now_ns() - (var))
-#define PERF_CALL_INC() (++perf_call_count)
-#define PERF_SHOULD_REPORT() ((perf_call_count % perf_report_interval) == 0)
-#else
-#define PERF_START(var) (void)0
-#define PERF_END(var, accum) (void)0
-#define PERF_CALL_INC() (void)0
-#define PERF_SHOULD_REPORT() (false)
-#endif
-/* ========== END PERFORMANCE INSTRUMENTATION ========== */
-
 _Static_assert(sizeof(double) == 8, "NaN-boxing requires 64-bit IEEE 754 doubles");
 _Static_assert(sizeof(uint64_t) == 8, "NaN-boxing requires 64-bit integers");
 _Static_assert(sizeof(double) == sizeof(uint64_t), "double and uint64_t must have same size");
@@ -278,16 +197,6 @@ typedef struct {
   UT_hash_handle hh;
 } obj_prop_cache_t;
 
-typedef struct interned_string {
-  uint64_t hash;
-  char *str;
-  size_t len;
-  struct interned_string *next;
-} interned_string_t;
-
-#define INTERN_BUCKETS 16384
-static interned_string_t *intern_buckets[INTERN_BUCKETS];
-
 static const char *INTERN_LENGTH = NULL;
 static const char *INTERN_PROTOTYPE = NULL;
 static const char *INTERN_CONSTRUCTOR = NULL;
@@ -296,19 +205,28 @@ static const char *INTERN_MESSAGE = NULL;
 static const char *INTERN_VALUE = NULL;
 static const char *INTERN_GET = NULL;
 static const char *INTERN_SET = NULL;
-static const char *INTERN_TARGET_FUNC = NULL;
+
 static const char *INTERN_ARGUMENTS = NULL;
 static const char *INTERN_CALLEE = NULL;
 static const char *INTERN_IDX[10] = {NULL};
 static const char *INTERN_PROMISE = NULL;
 
-#define INTERN_PROP_CACHE_SIZE 4096
+typedef struct interned_string {
+  uint64_t hash;
+  char *str;
+  size_t len;
+  struct interned_string *next;
+} interned_string_t;
+
+static interned_string_t *intern_buckets[ANT_LIMIT_SIZE_CACHE];
+
 typedef struct {
   jsoff_t obj_off;
   const char *intern_ptr;
   jsoff_t prop_off;
+  uint32_t obj_version;
 } intern_prop_cache_entry_t;
-static intern_prop_cache_entry_t intern_prop_cache[INTERN_PROP_CACHE_SIZE];
+static intern_prop_cache_entry_t intern_prop_cache[ANT_LIMIT_SIZE_CACHE];
 
 typedef struct promise_handler {
   jsval_t onFulfilled;
@@ -478,6 +396,7 @@ struct js {
   jsval_t tval;           // holds last parsed numeric or string literal value
   jsval_t scope;          // current scope
   jsval_t this_val;       // 'this' value for currently executing function
+  jsval_t module_ns;      // current ESM module namespace
   uint8_t *mem;           // available JS memory
   jsoff_t size;           // memory size
   jsoff_t brk;            // current mem usage boundary
@@ -509,7 +428,8 @@ enum {
   TOK_COLON, TOK_Q,  TOK_ASSIGN, TOK_PLUS_ASSIGN, TOK_MINUS_ASSIGN,
   TOK_MUL_ASSIGN, TOK_DIV_ASSIGN, TOK_REM_ASSIGN, TOK_SHL_ASSIGN,
   TOK_SHR_ASSIGN, TOK_ZSHR_ASSIGN, TOK_AND_ASSIGN, TOK_XOR_ASSIGN,
-  TOK_OR_ASSIGN, TOK_COMMA, TOK_TEMPLATE, TOK_ARROW, TOK_HASH,
+  TOK_OR_ASSIGN, TOK_LOR_ASSIGN, TOK_LAND_ASSIGN, TOK_NULLISH_ASSIGN,
+  TOK_COMMA, TOK_TEMPLATE, TOK_ARROW, TOK_HASH,
   TOK_MAX
 };
 
@@ -740,7 +660,8 @@ static bool is_unary(uint8_t tok) {
 }
 
 static bool is_assign(uint8_t tok) { 
-  return (tok >= TOK_ASSIGN && tok <= TOK_OR_ASSIGN); 
+  return (tok >= TOK_ASSIGN && tok <= TOK_OR_ASSIGN) ||
+         tok == TOK_LOR_ASSIGN || tok == TOK_LAND_ASSIGN || tok == TOK_NULLISH_ASSIGN; 
 }
 
 static bool is_keyword_propname(uint8_t tok) { 
@@ -845,6 +766,7 @@ static jsval_t do_instanceof(struct js *js, jsval_t l, jsval_t r);
 static jsval_t do_in(struct js *js, jsval_t l, jsval_t r);
 static jsval_t resolveprop(struct js *js, jsval_t v);
 static jsoff_t lkp(struct js *js, jsval_t obj, const char *buf, size_t len);
+static jsoff_t lkp_scope(struct js *js, jsval_t scope, const char *buf, size_t len);
 static jsoff_t lkp_interned(struct js *js, jsval_t obj, const char *search_intern, size_t len);
 static const char *intern_string(const char *str, size_t len);
 static jsval_t get_slot(struct js *js, jsval_t obj, internal_slot_t slot);
@@ -961,7 +883,13 @@ static void mco_async_entry(mco_coro* mco) {
   ctx->has_error = is_err(result);
   
   if (ctx->has_error) {
-    js_reject_promise(js, ctx->promise, result);
+    jsval_t reject_value = js->thrown_value;
+    if (vtype(reject_value) == T_UNDEF) {
+      reject_value = js_mkstr(js, js->errmsg ? js->errmsg : "Unknown error", js->errmsg ? strlen(js->errmsg) : 13);
+    }
+    js->flags &= (uint8_t)~F_THROW;
+    js->thrown_value = js_mkundef();
+    js_reject_promise(js, ctx->promise, reject_value);
   } else {
     js_resolve_promise(js, ctx->promise, result);
   }
@@ -1990,7 +1918,7 @@ static size_t strfunc_ctor(struct js *js, jsval_t func_obj, char *buf, size_t le
   jsoff_t proto_off = lkp_interned(js, func_obj, INTERN_PROTOTYPE, 9);
   if (proto_off != 0) {
     jsval_t proto_val = resolveprop(js, mkval(T_PROP, proto_off));
-    if (vtype(proto_val) == T_OBJ) n += print_prototype(js, proto_val, buf + n, len - n, &first);
+    if (vtype(proto_val) == T_OBJ && !is_on_stack(proto_val)) n += print_prototype(js, proto_val, buf + n, len - n, &first);
   }
   
   stringify_indent--;
@@ -2909,7 +2837,7 @@ static inline uint64_t hash_key(const char *key, size_t len) {
 
 static const char *intern_string(const char *str, size_t len) {
   uint64_t h = hash_key(str, len);
-  uint32_t bucket = (uint32_t)(h & (INTERN_BUCKETS - 1));
+  uint32_t bucket = (uint32_t)(h & (ANT_LIMIT_SIZE_CACHE - 1));
   
   for (interned_string_t *e = intern_buckets[bucket]; e; e = e->next) {
     if (e->hash == h && e->len == len && memcmp(e->str, str, len) == 0) return e->str;
@@ -2941,7 +2869,6 @@ static void intern_init(void) {
   INTERN_GET = intern_string("get", 3);
   INTERN_SET = intern_string("set", 3);
   INTERN_PROMISE = intern_string("promise", 7);
-  INTERN_TARGET_FUNC = intern_string("__target_func", 13);
   INTERN_ARGUMENTS = intern_string("arguments", 9);
   INTERN_CALLEE = intern_string("callee", 6);
   INTERN_IDX[0] = intern_string("0", 1);
@@ -2956,18 +2883,13 @@ static void intern_init(void) {
   INTERN_IDX[9] = intern_string("9", 1);
 }
 
-static void invalidate_prop_cache(jsoff_t obj_offset) {
-  for (uint32_t i = 0; i < INTERN_PROP_CACHE_SIZE; i++) {
-    if (intern_prop_cache[i].obj_off == obj_offset) {
-      intern_prop_cache[i].obj_off = 0;
-      intern_prop_cache[i].intern_ptr = NULL;
-      intern_prop_cache[i].prop_off = 0;
-    }
-  }
+static void increment_version(struct js *js, jsoff_t obj_off) {
+  jsval_t version_val = get_slot(js, mkval(T_OBJ, obj_off), SLOT_VERSION);
+  uint32_t new_version = (vtype(version_val) == T_NUM) ? (uint32_t)tod(version_val) + 1 : 1;
+  set_slot(js, mkval(T_OBJ, obj_off), SLOT_VERSION, tov((double)new_version));
 }
 
 static jsval_t mkprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v, bool is_const) {
-  PERF_START(_mkprop_setup);
   jsoff_t koff = (jsoff_t) vdata(k);
   jsoff_t b, head = (jsoff_t) vdata(obj);
   char buf[sizeof(koff) + sizeof(v)];
@@ -2978,22 +2900,49 @@ static jsval_t mkprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v, bool is_
   
   if (b & ARRMASK) brk |= ARRMASK;
   memcpy(&js->mem[head], &brk, sizeof(brk));
-  PERF_END(_mkprop_setup, perf_mkprop_setup_ns);
   
-  PERF_START(_mkprop_intern);
   jsoff_t klen = (loadoff(js, koff) >> 2) - 1;
   const char *p = (char *) &js->mem[koff + sizeof(koff)];
   (void)intern_string(p, klen);  /* Ensure key is interned for fast lookup later */
-  PERF_END(_mkprop_intern, perf_mkprop_intern_ns);
   
-  PERF_START(_mkprop_mkentity);
   jsoff_t prop_header = (b & ~(3U | CONSTMASK | ARRMASK | SLOTMASK)) | T_PROP;
   if (is_const) prop_header |= CONSTMASK;
   jsval_t result = mkentity(js, prop_header, buf, sizeof(buf));
-  PERF_END(_mkprop_mkentity, perf_mkprop_mkentity_ns);
   
-  perf_mkprop_count++;
+  increment_version(js, head);
   return result;
+}
+
+static inline jsval_t mkprop_fast(struct js *js, jsval_t obj, jsval_t k, jsval_t v, bool is_const) {
+  jsoff_t koff = (jsoff_t) vdata(k);
+  jsoff_t b, head = (jsoff_t) vdata(obj);
+  char buf[sizeof(koff) + sizeof(v)];
+  memcpy(&b, &js->mem[head], sizeof(b));
+  memcpy(buf, &koff, sizeof(koff));
+  memcpy(buf + sizeof(koff), &v, sizeof(v));
+  jsoff_t brk = js->brk | T_OBJ;
+  
+  if (b & ARRMASK) brk |= ARRMASK;
+  memcpy(&js->mem[head], &brk, sizeof(brk));
+  
+  jsoff_t prop_header = (b & ~(3U | CONSTMASK | ARRMASK | SLOTMASK)) | T_PROP;
+  if (is_const) prop_header |= CONSTMASK;
+  return mkentity(js, prop_header, buf, sizeof(buf));
+}
+
+static inline jsval_t mkprop_new(struct js *js, jsval_t obj, jsoff_t koff, jsval_t v) {
+  jsoff_t b = loadoff(js, (jsoff_t)vdata(obj));
+  jsoff_t brk = js->brk | T_OBJ;
+  
+  if (b & ARRMASK) brk |= ARRMASK;
+  memcpy(&js->mem[(jsoff_t)vdata(obj)], &brk, sizeof(brk));
+  
+  char buf[sizeof(koff) + sizeof(v)];
+  memcpy(buf, &koff, sizeof(koff));
+  memcpy(buf + sizeof(koff), &v, sizeof(v));
+  
+  jsoff_t prop_header = (b & ~(3U | CONSTMASK | ARRMASK | SLOTMASK)) | T_PROP;
+  return mkentity(js, prop_header, buf, sizeof(buf));
 }
 
 static jsval_t mkslot(struct js *js, jsval_t obj, internal_slot_t slot, jsval_t v) {
@@ -3168,6 +3117,7 @@ no_descriptor:
   }
 
   saveval(js, existing + sizeof(jsoff_t) * 2, v);
+  increment_version(js, (jsoff_t)vdata(obj));
   if (vtype(obj) != T_ARR || klen == 0 || key[0] < '0' || key[0] > '9') goto done_update;
   
   char *endptr;
@@ -3184,8 +3134,10 @@ no_descriptor:
   
   jsval_t len_key = js_mkstr(js, "length", 6);
   jsval_t new_len = tov((double)(update_idx + 1));
-  if (len_off != 0) saveval(js, len_off + sizeof(jsoff_t) * 2, new_len);
-  else mkprop(js, obj, len_key, new_len, false);
+  if (len_off != 0) {
+    saveval(js, len_off + sizeof(jsoff_t) * 2, new_len);
+    increment_version(js, (jsoff_t)vdata(obj));
+  } else mkprop(js, obj, len_key, new_len, false);
 
 done_update:
   return mkval(T_PROP, existing);
@@ -3232,6 +3184,7 @@ create_new:
     jsval_t new_len = tov((double)(idx + 1));
     if (len_off != 0) {
       saveval(js, len_off + sizeof(jsoff_t) * 2, new_len);
+      increment_version(js, (jsoff_t)vdata(obj));
     } else mkprop(js, obj, len_key, new_len, false);
   }
   
@@ -3587,7 +3540,7 @@ static uint8_t next(struct js *js) {
   #define LOOK(OFS, CH) js->toff + OFS < js->clen && buf[OFS] == CH
   
   switch (buf[0]) {
-    case '?': if (LOOK(1, '?')) TOK(TOK_NULLISH, 2); if (LOOK(1, '.')) TOK(TOK_OPTIONAL_CHAIN, 2); TOK(TOK_Q, 1);
+    case '?': if (LOOK(1, '?') && LOOK(2, '=')) TOK(TOK_NULLISH_ASSIGN, 3); if (LOOK(1, '?')) TOK(TOK_NULLISH, 2); if (LOOK(1, '.')) TOK(TOK_OPTIONAL_CHAIN, 2); TOK(TOK_Q, 1);
     case ':': TOK(TOK_COLON, 1);
     case '(': TOK(TOK_LPAREN, 1);
     case ')': TOK(TOK_RPAREN, 1);
@@ -3621,8 +3574,8 @@ static uint8_t next(struct js *js) {
     case '*': if (LOOK(1, '*')) TOK(TOK_EXP, 2); if (LOOK(1, '=')) TOK(TOK_MUL_ASSIGN, 2); TOK(TOK_MUL, 1);
     case '/': if (LOOK(1, '=')) TOK(TOK_DIV_ASSIGN, 2); TOK(TOK_DIV, 1);
     case '%': if (LOOK(1, '=')) TOK(TOK_REM_ASSIGN, 2); TOK(TOK_REM, 1);
-    case '&': if (LOOK(1, '&')) TOK(TOK_LAND, 2); if (LOOK(1, '=')) TOK(TOK_AND_ASSIGN, 2); TOK(TOK_AND, 1);
-    case '|': if (LOOK(1, '|')) TOK(TOK_LOR, 2); if (LOOK(1, '=')) TOK(TOK_OR_ASSIGN, 2); TOK(TOK_OR, 1);
+    case '&': if (LOOK(1, '&') && LOOK(2, '=')) TOK(TOK_LAND_ASSIGN, 3); if (LOOK(1, '&')) TOK(TOK_LAND, 2); if (LOOK(1, '=')) TOK(TOK_AND_ASSIGN, 2); TOK(TOK_AND, 1);
+    case '|': if (LOOK(1, '|') && LOOK(2, '=')) TOK(TOK_LOR_ASSIGN, 3); if (LOOK(1, '|')) TOK(TOK_LOR, 2); if (LOOK(1, '=')) TOK(TOK_OR_ASSIGN, 2); TOK(TOK_OR, 1);
     case '=': if (LOOK(1, '=') && LOOK(2, '=')) TOK(TOK_SEQ, 3); if (LOOK(1, '=')) TOK(TOK_EQ, 2); if (LOOK(1, '>')) TOK(TOK_ARROW, 2); TOK(TOK_ASSIGN, 1);
     case '<': if (LOOK(1, '<') && LOOK(2, '=')) TOK(TOK_SHL_ASSIGN, 3); if (LOOK(1, '<')) TOK(TOK_SHL, 2); if (LOOK(1, '=')) TOK(TOK_LE, 2); TOK(TOK_LT, 1);
     case '>': if (LOOK(1, '>') && LOOK(2, '>') && LOOK(3, '=')) TOK(TOK_ZSHR_ASSIGN, 4); if (LOOK(1, '>') && LOOK(2, '>')) TOK(TOK_ZSHR, 3); if (LOOK(1, '>') && LOOK(2, '=')) TOK(TOK_SHR_ASSIGN, 3); if (LOOK(1, '>')) TOK(TOK_SHR, 2); if (LOOK(1, '=')) TOK(TOK_GE, 2); TOK(TOK_GT, 1);
@@ -3929,19 +3882,14 @@ static jsval_t js_block(struct js *js, bool create_scope) {
 }
 
 static inline jsoff_t lkp_interned(struct js *js, jsval_t obj, const char *search_intern, size_t len) {
-  perf_lkp_calls++;
-#if PERF_LKP_TRACE
-  if (perf_call_count >= 1 && perf_lkp_trace_count < 300) {
-    perf_lkp_trace_count++;
-    fprintf(stderr, "[LKP] '%.*s' on obj@%lu\n", (int)len, search_intern, (unsigned long)vdata(obj));
-  }
-#endif
   jsoff_t obj_off = (jsoff_t)vdata(obj);
   
-  uint32_t cache_slot = (((uintptr_t)search_intern >> 3) ^ obj_off) & (INTERN_PROP_CACHE_SIZE - 1);
+  jsval_t version_val = get_slot(js, mkval(T_OBJ, obj_off), SLOT_VERSION);
+  uint32_t current_version = (vtype(version_val) == T_NUM) ? (uint32_t)tod(version_val) : 0;
+  
+  uint32_t cache_slot = (((uintptr_t)search_intern >> 3) ^ obj_off) & (ANT_LIMIT_SIZE_CACHE - 1);
   intern_prop_cache_entry_t *ce = &intern_prop_cache[cache_slot];
-  if (ce->obj_off == obj_off && ce->intern_ptr == search_intern) {
-    perf_lkp_cache_hits++;
+  if (ce->obj_off == obj_off && ce->intern_ptr == search_intern && ce->obj_version == current_version) {
     return ce->prop_off;
   }
   
@@ -3955,16 +3903,21 @@ static inline jsoff_t lkp_interned(struct js *js, jsval_t obj, const char *searc
     if (klen == len) {
       const char *p = (char *) &js->mem[koff + sizeof(koff)];
       if (intern_string(p, klen) == search_intern) {
-        perf_lkp_found_no_cache++;
         ce->obj_off = obj_off;
         ce->intern_ptr = search_intern;
         ce->prop_off = off;
+        ce->obj_version = current_version;
         return off;
       }
     }
     off = next_prop(header);
   }
-  perf_lkp_not_found++;
+
+  ce->obj_off = obj_off;
+  ce->intern_ptr = search_intern;
+  ce->prop_off = 0;
+  ce->obj_version = current_version;
+  
   return 0;
 }
 
@@ -3974,10 +3927,31 @@ static inline jsoff_t lkp_inline(struct js *js, jsval_t obj, const char *buf, si
   return lkp_interned(js, obj, search_intern, len);
 }
 
+static jsoff_t lkp_scope(struct js *js, jsval_t scope, const char *buf, size_t len) {
+  const char *search_intern = intern_string(buf, len);
+  if (!search_intern) return 0;
+
+  jsoff_t scope_off = (jsoff_t)vdata(scope);
+  jsoff_t off = loadoff(js, scope_off) & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
+
+  while (off < js->brk && off != 0) {
+    jsoff_t header = loadoff(js, off);
+    if (is_slot_prop(header)) { off = next_prop(header); continue; }
+
+    jsoff_t koff = loadoff(js, (jsoff_t)(off + sizeof(off)));
+    jsoff_t klen = (loadoff(js, koff) >> 2) - 1;
+    if (klen == len) {
+      const char *p = (char *)&js->mem[koff + sizeof(koff)];
+      if (intern_string(p, klen) == search_intern) return off;
+    }
+    off = next_prop(header);
+  }
+  return 0;
+}
+
 static jsoff_t lkp(struct js *js, jsval_t obj, const char *buf, size_t len) {
   return lkp_inline(js, obj, buf, len);
 }
-
 static jsoff_t lkp_with_getter(struct js *js, jsval_t obj, const char *buf, size_t len, jsval_t *getter_out, bool *has_getter_out) {
   *has_getter_out = false;
   *getter_out = js_mkundef();
@@ -4030,6 +4004,30 @@ static jsoff_t lkp_with_setter(struct js *js, jsval_t obj, const char *buf, size
   return 0;
 }
 
+static jsval_t call_proto_accessor(struct js *js, jsval_t prim, jsval_t accessor, bool has_accessor, jsval_t *arg, int arg_count, bool is_setter) {
+  if (!has_accessor || (vtype(accessor) != T_FUNC && vtype(accessor) != T_CFUNC)) {
+    return is_setter ? js_mkundef() : js_mkundef();
+  }
+  
+  js_parse_state_t saved;
+  JS_SAVE_STATE(js, saved);
+  uint8_t saved_flags = js->flags;
+  jsoff_t saved_toff = js->toff;
+  jsoff_t saved_tlen = js->tlen;
+  
+  push_this(prim);
+  jsval_t result = call_js_with_args(js, accessor, arg, arg_count);
+  pop_this();
+  
+  JS_RESTORE_STATE(js, saved);
+  js->flags = saved_flags;
+  js->toff = saved_toff;
+  js->tlen = saved_tlen;
+  
+  if (is_setter) return is_err(result) ? result : (arg ? *arg : js_mkundef());
+  return result;
+}
+
 jsval_t js_get_proto(struct js *js, jsval_t obj) {
   uint8_t t = vtype(obj);
 
@@ -4061,18 +4059,18 @@ static void set_proto(struct js *js, jsval_t obj, jsval_t proto) {
 }
 
 jsval_t js_get_ctor_proto(struct js *js, const char *name, size_t len) {
-  jsoff_t ctor_off = lkp(js, js->scope, name, len);
+  jsoff_t ctor_off = lkp_scope(js, js->scope, name, len);
   
   if (ctor_off == 0 && global_scope_stack) {
     int stack_len = utarray_len(global_scope_stack);
     for (int i = stack_len - 1; i >= 0 && ctor_off == 0; i--) {
       jsoff_t *scope_off = (jsoff_t *)utarray_eltptr(global_scope_stack, i);
       jsval_t scope = mkval(T_OBJ, *scope_off);
-      ctor_off = lkp(js, scope, name, len);
+      ctor_off = lkp_scope(js, scope, name, len);
     }
   } else if (ctor_off == 0) {
     for (jsval_t scope = upper(js, js->scope); vdata(scope) != 0 && ctor_off == 0; scope = upper(js, scope)) {
-      ctor_off = lkp(js, scope, name, len);
+      ctor_off = lkp_scope(js, scope, name, len);
     }
   }
   
@@ -4193,9 +4191,36 @@ static jsval_t lookup(struct js *js, const char *buf, size_t len) {
   
   const char *key_intern = intern_string(key_str, key_len);
   
-  for (jsval_t scope = js->scope;;) {
-    jsoff_t off = lkp_interned(js, scope, key_intern, key_len);
-    if (off != 0) return mkval(T_PROP, off);
+  jsval_t parent_scope = upper(js, js->scope);
+  
+  jsoff_t off = lkp_interned(js, js->scope, key_intern, key_len);
+  if (off != 0) {
+    return mkval(T_PROP, off);
+  }
+  
+  jsval_t with_slot = get_slot(js, js->scope, SLOT_WITH);
+  if (vtype(with_slot) != T_UNDEF) {
+    jsval_t with_obj = (
+      vtype(with_slot) == T_OBJ ||
+      vtype(with_slot) == T_ARR || 
+      vtype(with_slot) == T_FUNC) ? 
+      with_slot : mkval(T_OBJ, vdata(with_slot)
+    );
+    
+    jsoff_t prop_off = lkp_interned(js, with_obj, key_intern, key_len);
+    if (prop_off != 0) {
+      jsval_t key = js_mkstr(js, key_str, key_len);
+      if (is_err(key)) return key;
+      return mkpropref((jsoff_t)vdata(with_obj), (jsoff_t)vdata(key));
+    }
+  }
+  
+  uint8_t depth = 1;
+  for (jsval_t scope = parent_scope; depth < 255; depth++) {
+    off = lkp_interned(js, scope, key_intern, key_len);
+    if (off != 0) {
+      return mkval(T_PROP, off);
+    }
     
     jsval_t with_slot = get_slot(js, scope, SLOT_WITH);
     if (vtype(with_slot) != T_UNDEF) {
@@ -4234,30 +4259,13 @@ static bool try_accessor_getter(struct js *js, jsval_t obj, const char *key, siz
   jsval_t getter = js_mkundef();
   bool has_getter = false;
   lkp_with_getter(js, obj, key, key_len, &getter, &has_getter);
-  
-  if (!has_getter) return false;
-  if (vtype(getter) != T_FUNC && vtype(getter) != T_CFUNC) return false;
-  
-  js_parse_state_t saved;
-  JS_SAVE_STATE(js, saved);
-  uint8_t saved_flags = js->flags;
-  jsoff_t saved_toff = js->toff;
-  jsoff_t saved_tlen = js->tlen;
-  
-  jsval_t saved_this = js->this_val;
-  js->this_val = obj;
-  push_this(obj);
-  *out = call_js_with_args(js, getter, NULL, 0);
-  
-  pop_this();
-  js->this_val = saved_this;
-  
-  JS_RESTORE_STATE(js, saved);
-  js->flags = saved_flags;
-  js->toff = saved_toff;
-  js->tlen = saved_tlen;
-  
-  return true;
+
+  jsval_t result = call_proto_accessor(js, obj, getter, has_getter, NULL, 0, false);
+  if (vtype(result) != T_UNDEF) {
+    *out = result;
+    return true;
+  }
+  return false;
 }
 
 static jsval_t resolveprop(struct js *js, jsval_t v) {
@@ -4271,33 +4279,17 @@ static jsval_t resolveprop(struct js *js, jsval_t v) {
       jsoff_t key_len;
       const char *key_str = (const char *)&js->mem[vstr(js, key, &key_len)];
       
-      jsval_t proto = get_prototype_for_type(js, vtype(prim));
-      if (vtype(proto) == T_OBJ) {
-        jsval_t getter = js_mkundef();
-        bool has_getter = false;
-        lkp_with_getter(js, proto, key_str, key_len, &getter, &has_getter);
-        if (has_getter && (vtype(getter) == T_FUNC || vtype(getter) == T_CFUNC)) {
-          js_parse_state_t saved;
-          JS_SAVE_STATE(js, saved);
-          uint8_t saved_flags = js->flags;
-          jsoff_t saved_toff = js->toff;
-          jsoff_t saved_tlen = js->tlen;
-          
-          push_this(prim);
-          jsval_t result = call_js_with_args(js, getter, NULL, 0);
-          pop_this();
-          
-          JS_RESTORE_STATE(js, saved);
-          js->flags = saved_flags;
-          js->toff = saved_toff;
-          js->tlen = saved_tlen;
-          
-          return result;
-        }
-        
-        jsoff_t off = lkp_proto(js, prim, key_str, key_len);
-        if (off != 0) return resolveprop(js, mkval(T_PROP, off));
-      }
+       jsval_t proto = get_prototype_for_type(js, vtype(prim));
+       if (vtype(proto) == T_OBJ) {
+         jsval_t getter = js_mkundef();
+         bool has_getter = false;
+         lkp_with_getter(js, proto, key_str, key_len, &getter, &has_getter);
+         jsval_t result = call_proto_accessor(js, prim, getter, has_getter, NULL, 0, false);
+         if (vtype(result) != T_UNDEF) return result;
+
+         jsoff_t off = lkp_proto(js, prim, key_str, key_len);
+         if (off != 0) return resolveprop(js, mkval(T_PROP, off));
+       }
       
       return js_mkundef();
     }
@@ -4353,30 +4345,13 @@ static bool try_accessor_setter(struct js *js, jsval_t obj, const char *key, siz
   jsval_t setter = js_mkundef();
   bool has_setter = false;
   lkp_with_setter(js, obj, key, key_len, &setter, &has_setter);
-  
-  if (!has_setter) return false;
-  if (vtype(setter) != T_FUNC && vtype(setter) != T_CFUNC) return false;
-  
-  js_parse_state_t saved;
-  JS_SAVE_STATE(js, saved);
-  uint8_t saved_flags = js->flags;
-  jsoff_t saved_toff = js->toff;
-  jsoff_t saved_tlen = js->tlen;
-  
-  jsval_t saved_this = js->this_val;
-  js->this_val = obj;
-  push_this(obj);
-  jsval_t result = call_js_with_args(js, setter, &val, 1);
-  pop_this();
-  js->this_val = saved_this;
-  
-  JS_RESTORE_STATE(js, saved);
-  js->flags = saved_flags;
-  js->toff = saved_toff;
-  js->tlen = saved_tlen;
-  
-  *out = is_err(result) ? result : val;
-  return true;
+
+  jsval_t result = call_proto_accessor(js, obj, setter, has_setter, &val, 1, true);
+  if (vtype(result) != T_UNDEF) {
+    *out = result;
+    return true;
+  }
+  return false;
 }
 
 static jsval_t assign(struct js *js, jsval_t lhs, jsval_t val) {
@@ -4393,30 +4368,14 @@ static jsval_t assign(struct js *js, jsval_t lhs, jsval_t val) {
       jsoff_t key_len;
       const char *key_str = (const char *)&js->mem[vstr(js, key, &key_len)];
       
-      jsval_t proto = get_prototype_for_type(js, vtype(prim));
-      if (vtype(proto) == T_OBJ) {
-        jsval_t setter = js_mkundef();
-        bool has_setter = false;
-        lkp_with_setter(js, proto, key_str, key_len, &setter, &has_setter);
-        if (has_setter && (vtype(setter) == T_FUNC || vtype(setter) == T_CFUNC)) {
-          js_parse_state_t saved;
-          JS_SAVE_STATE(js, saved);
-          uint8_t saved_flags = js->flags;
-          jsoff_t saved_toff = js->toff;
-          jsoff_t saved_tlen = js->tlen;
-          
-          push_this(prim);
-          jsval_t result = call_js_with_args(js, setter, &val, 1);
-          pop_this();
-          
-          JS_RESTORE_STATE(js, saved);
-          js->flags = saved_flags;
-          js->toff = saved_toff;
-          js->tlen = saved_tlen;
-          
-          return is_err(result) ? result : val;
-        }
-      }
+       jsval_t proto = get_prototype_for_type(js, vtype(prim));
+       if (vtype(proto) == T_OBJ) {
+         jsval_t setter = js_mkundef();
+         bool has_setter = false;
+         lkp_with_setter(js, proto, key_str, key_len, &setter, &has_setter);
+         jsval_t result = call_proto_accessor(js, prim, setter, has_setter, &val, 1, true);
+         if (vtype(result) != T_UNDEF) return result;
+       }
       
       if (js->flags & F_STRICT) {
         return js_mkerr_typed(
@@ -5233,11 +5192,6 @@ static jsval_t call_js_internal_nfe(struct js *js, const char *fn, jsoff_t fnlen
     return js_mkerr(js, "failed to parse function");
   }
   
-  /* ===== PHASE 4: BIND PHASE (instrumented) ===== */
-  PERF_START(_p4_total);
-  
-  /* Sub1: Parameter binding loop */
-  PERF_START(_p4_sub1);
   int argi = 0;
   for (int i = 0; i < pf->param_count; i++) {
     parsed_param_t *pp = (parsed_param_t *)utarray_eltptr(pf->params, i);
@@ -5263,13 +5217,11 @@ static jsval_t call_js_internal_nfe(struct js *js, const char *fn, jsoff_t fnlen
       } else {
         v = js_mkundef();
       }
-      setprop_fast(js, function_scope, &fn[pp->name_off], pp->name_len, v);
+      jsval_t k = js_mkstr(js, &fn[pp->name_off], pp->name_len);
+      if (!is_err(k)) mkprop_fast(js, function_scope, k, v, false);
     }
   }
-  PERF_END(_p4_sub1, perf_phase4_sub1_ns);
   
-  /* Sub2: Rest parameter handling */
-  PERF_START(_p4_sub2);
   if (pf->has_rest && pf->rest_param_len > 0) {
     jsval_t rest_array = mkarr(js);
     if (!is_err(rest_array)) {
@@ -5292,15 +5244,8 @@ static jsval_t call_js_internal_nfe(struct js *js, const char *fn, jsoff_t fnlen
       setprop(js, function_scope, js_mkstr(js, &fn[pf->rest_param_start], pf->rest_param_len), rest_array);
     }
   }
-  PERF_END(_p4_sub2, perf_phase4_sub2_ns);
   
-  /* Sub3: code_uses_arguments check (THIS IS SUSPECT!) */
-  PERF_START(_p4_sub3);
   bool needs_arguments = code_uses_arguments(&fn[pf->body_start], pf->body_len);
-  PERF_END(_p4_sub3, perf_phase4_sub3_ns);
-  
-  /* Sub4: setup_arguments if needed */
-  PERF_START(_p4_sub4);
   bool func_strict = pf->is_strict;
   
   if (!func_strict && vtype(func_val) == T_FUNC) {
@@ -5312,27 +5257,14 @@ static jsval_t call_js_internal_nfe(struct js *js, const char *fn, jsoff_t fnlen
   if (needs_arguments) {
     setup_arguments(js, function_scope, args, argc, func_strict);
   }
-  PERF_END(_p4_sub4, perf_phase4_sub4_ns);
   
-  /* Sub5: NFE name binding */
-  PERF_START(_p4_sub5);
-  if (vtype(func_name) == T_STR && vtype(func_val) == T_FUNC) {
-    PERF_START(_sub5_vstr);
-    jsoff_t len;
-    (void)vstr(js, func_name, &len);
-    PERF_END(_sub5_vstr, perf_sub5_vstr_ns);
-    if (len > 0) {
-      PERF_START(_sub5_mkprop);
-      jsval_t prop = mkprop(js, function_scope, func_name, func_val, true);
-      PERF_END(_sub5_mkprop, perf_sub5_mkprop_ns);
-      (void)prop;
-      perf_sub5_count++;
-    }
-  }
-  PERF_END(_p4_sub5, perf_phase4_sub5_ns);
+   jsval_t slot_name = get_slot(js, func_val, SLOT_NAME);
+   if (vtype(func_name) == T_STR && vtype(func_val) == T_FUNC && vtype(slot_name) == T_UNDEF) {
+     jsoff_t len;
+     (void)vstr(js, func_name, &len);
+     if (len > 0) mkprop_fast(js, function_scope, func_name, func_val, true);
+   }
   
-  /* Sub6: Strict mode + this handling */
-  PERF_START(_p4_sub6);
   if (func_strict && (vtype(target_this) == T_UNDEF || vtype(target_this) == T_NULL ||
       (vtype(target_this) == T_OBJ && vdata(target_this) == 0))) {
     js->this_val = js_mkundef();
@@ -5340,12 +5272,6 @@ static jsval_t call_js_internal_nfe(struct js *js, const char *fn, jsoff_t fnlen
     js->this_val = target_this;
   }
   js->flags = F_CALL | (func_strict ? F_STRICT : 0);
-  PERF_END(_p4_sub6, perf_phase4_sub6_ns);
-  
-  PERF_END(_p4_total, perf_phase4_ns);
-  PERF_CALL_INC();
-  if (PERF_SHOULD_REPORT()) perf_report(js->brk);
-  /* ===== END PHASE 4 ===== */
   
   jsval_t res = js_eval(js, &fn[pf->body_start], pf->body_len);
   if (!is_err(res) && !(js->flags & F_RETURN)) res = js_mkundef();
@@ -5475,17 +5401,18 @@ static jsval_t call_js_code_with_args_nfe(struct js *js, const char *fn, jsoff_t
   jsval_t saved_scope = js->scope;
   if (global_scope_stack == NULL) utarray_new(global_scope_stack, &jsoff_icd);
   utarray_push_back(global_scope_stack, &parent_scope_offset);
-  jsval_t function_scope = mkobj(js, parent_scope_offset);
-  js->scope = function_scope;
-  
-  if (vtype(func_name) == T_STR && vtype(func_val) == T_FUNC) {
-    jsoff_t len;
-    (void)vstr(js, func_name, &len);
-    if (len > 0) {
-      jsval_t prop = mkprop(js, function_scope, func_name, func_val, true);
-      (void)prop;
-    }
-  }
+   jsval_t function_scope = mkobj(js, parent_scope_offset);
+   js->scope = function_scope;
+   
+   jsval_t slot_name = get_slot(js, func_val, SLOT_NAME);
+   if (vtype(func_name) == T_STR && vtype(func_val) == T_FUNC && vtype(slot_name) == T_UNDEF) {
+     jsoff_t len;
+     (void)vstr(js, func_name, &len);
+     if (len > 0) {
+       jsval_t prop = mkprop(js, function_scope, func_name, func_val, true);
+       (void)prop;
+     }
+   }
   
   jsoff_t fnpos = 1;
   int arg_idx = 0;
@@ -5654,13 +5581,10 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
     if (vtype(target_proto) == T_UNDEF) {
       jsval_t func_obj = mkval(T_OBJ, vdata(func));
       
-      jsoff_t target_func_off = lkp_interned(js, func_obj, INTERN_TARGET_FUNC, 13);
+      jsval_t target_func = get_slot(js, func_obj, SLOT_TARGET_FUNC);
       jsval_t proto_source = func_obj;
-      if (target_func_off != 0) {
-        jsval_t target_func = resolveprop(js, mkval(T_PROP, target_func_off));
-        if (vtype(target_func) == T_FUNC) {
-          proto_source = mkval(T_OBJ, vdata(target_func));
-        }
+      if (vtype(target_func) == T_FUNC) {
+        proto_source = mkval(T_OBJ, vdata(target_func));
       }
       
       jsoff_t proto_off = lkp_interned(js, proto_source, INTERN_PROTOTYPE, 9);
@@ -5739,9 +5663,14 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
       }
       
       jsval_t nfe_name_val = js_mkundef();
-      jsoff_t nfe_name_off = lkp(js, func_obj, "name", 4);
-      if (nfe_name_off != 0) {
-        nfe_name_val = resolveprop(js, mkval(T_PROP, nfe_name_off));
+      jsval_t slot_name = get_slot(js, func_obj, SLOT_NAME);
+      if (vtype(slot_name) == T_STR) {
+        nfe_name_val = slot_name;
+      } else {
+        jsoff_t nfe_name_off = lkp(js, func_obj, "name", 4);
+        if (nfe_name_off != 0) {
+          nfe_name_val = resolveprop(js, mkval(T_PROP, nfe_name_off));
+        }
       }
       
       if (fnlen == 16 && memcmp(code_str, "__builtin_Object", 16) == 0) {
@@ -5812,13 +5741,9 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
         if (vtype(count_val) != T_NUM || vtype(target_this) != T_OBJ) goto skip_fields;
         
         int field_count = (int)tod(count_val);
-        jsoff_t src_off = lkp(js, func_obj, "__source", 8);
-        jsoff_t fields_off = lkp(js, func_obj, "__fields", 8);
-        if (src_off == 0 || fields_off == 0) goto skip_fields;
-        
-        jsval_t src_val = resolveprop(js, mkval(T_PROP, src_off));
-        jsval_t fields_meta = resolveprop(js, mkval(T_PROP, fields_off));
-        if (vtype(src_val) != T_STR || vtype(fields_meta) != T_STR) goto skip_fields;
+        jsval_t src_val = get_slot(js, func_obj, SLOT_SOURCE);
+        jsval_t fields_meta = get_slot(js, func_obj, SLOT_FIELDS);
+        if (vtype(src_val) == T_UNDEF || vtype(fields_meta) == T_UNDEF) goto skip_fields;
         
         jsoff_t src_len, src_ptr_off = vstr(js, src_val, &src_len);
         const char *source = (const char *)(&js->mem[src_ptr_off]);
@@ -6624,7 +6549,7 @@ static jsval_t js_arr_destruct_assign(struct js *js) {
         }
       }
       
-      jsoff_t existing = lkp(js, js->scope, var_name, var_len);
+      jsoff_t existing = lkp_scope(js, js->scope, var_name, var_len);
       if (existing != 0) {
         jsval_t res = setprop(js, js->scope, js_mkstr(js, var_name, var_len), prop_val);
         if (is_err(res)) return res;
@@ -7209,10 +7134,11 @@ static jsval_t js_func_literal(struct js *js, bool is_async) {
   }
   
   if (name_len > 0) {
-    jsval_t name_key = js_mkstr(js, "name", 4);
-    if (is_err(name_key)) return name_key;
     jsval_t name_val = js_mkstr(js, &js->code[name_off], name_len);
     if (is_err(name_val)) return name_val;
+    set_slot(js, func_obj, SLOT_NAME, name_val);
+    jsval_t name_key = js_mkstr(js, "name", 4);
+    if (is_err(name_key)) return name_key;
     jsval_t res3 = setprop(js, func_obj, name_key, name_val);
     if (is_err(res3)) return res3;
   }
@@ -7816,7 +7742,7 @@ static jsval_t js_unary(struct js *js) {
         jsoff_t deleted_next = loadoff(js, prop_off) & ~(CONSTMASK | ARRMASK | SLOTMASK);
         jsoff_t current = loadoff(js, obj_off);
         saveoff(js, obj_off, (deleted_next & ~3U) | (current & (CONSTMASK | ARRMASK | SLOTMASK | 3U)));
-        invalidate_prop_cache(obj_off);
+        increment_version(js, obj_off);
         return js_mktrue();
       }
       jsoff_t prev = first_prop;
@@ -7826,7 +7752,7 @@ static jsval_t js_unary(struct js *js) {
           jsoff_t deleted_next = loadoff(js, prop_off) & ~(CONSTMASK | ARRMASK | SLOTMASK);
           jsoff_t current = loadoff(js, prev);
           saveoff(js, prev, (deleted_next & ~3U) | (current & (CONSTMASK | ARRMASK | SLOTMASK | 3U)));
-          invalidate_prop_cache(obj_off);
+          increment_version(js, obj_off);
           return js_mktrue();
         }
         prev = next_prop;
@@ -7904,7 +7830,7 @@ static jsval_t js_unary(struct js *js) {
         jsoff_t current = loadoff(js, prev_prop_off);
         saveoff(js, prev_prop_off, (deleted_next & ~3U) | (current & (CONSTMASK | ARRMASK | SLOTMASK | 3U)));
       }
-      invalidate_prop_cache(owner_obj_off);
+      increment_version(js, owner_obj_off);
     }
     (void) save_pos;
     (void) save_tok;
@@ -8230,14 +8156,53 @@ static jsval_t js_assignment(struct js *js) {
     return mkval(T_FUNC, (unsigned long) vdata(func_obj));
   }
   
-  while (!is_err(res) && (next(js) == TOK_ASSIGN || js->tok == TOK_PLUS_ASSIGN ||
-   js->tok == TOK_MINUS_ASSIGN || js->tok == TOK_MUL_ASSIGN ||
-   js->tok == TOK_DIV_ASSIGN || js->tok == TOK_REM_ASSIGN ||
-   js->tok == TOK_SHL_ASSIGN || js->tok == TOK_SHR_ASSIGN ||
-   js->tok == TOK_ZSHR_ASSIGN || js->tok == TOK_AND_ASSIGN ||
-   js->tok == TOK_XOR_ASSIGN || js->tok == TOK_OR_ASSIGN)) {
+  while (
+    !is_err(res) && (next(js) == TOK_ASSIGN || js->tok == TOK_PLUS_ASSIGN ||
+    js->tok == TOK_MINUS_ASSIGN || js->tok == TOK_MUL_ASSIGN ||
+    js->tok == TOK_DIV_ASSIGN || js->tok == TOK_REM_ASSIGN ||
+    js->tok == TOK_SHL_ASSIGN || js->tok == TOK_SHR_ASSIGN ||
+    js->tok == TOK_ZSHR_ASSIGN || js->tok == TOK_AND_ASSIGN ||
+    js->tok == TOK_XOR_ASSIGN || js->tok == TOK_OR_ASSIGN ||
+    js->tok == TOK_LOR_ASSIGN || js->tok == TOK_LAND_ASSIGN ||
+    js->tok == TOK_NULLISH_ASSIGN)
+  ) {
     uint8_t op = js->tok;
     js->consumed = 1;
+    
+    if (op == TOK_LOR_ASSIGN || op == TOK_LAND_ASSIGN || op == TOK_NULLISH_ASSIGN) {
+      jsval_t lhs_val = js_mkundef();
+      bool should_assign = true;
+      
+      if (!(js->flags & F_NOEXEC)) {
+        lhs_val = resolveprop(js, res);
+        if (is_err(lhs_val)) return lhs_val;
+        
+        if (op == TOK_LOR_ASSIGN) {
+          should_assign = !js_truthy(js, lhs_val);
+        } else if (op == TOK_LAND_ASSIGN) {
+          should_assign = js_truthy(js, lhs_val);
+        } else should_assign = is_null(lhs_val) || is_undefined(lhs_val);
+      }
+      
+      if (should_assign || (js->flags & F_NOEXEC)) {
+        jsval_t rhs = js_assignment(js);
+        if (is_err(rhs)) return rhs;
+        
+        if (!(js->flags & F_NOEXEC) && should_assign) {
+          jsval_t rhs_resolved = resolveprop(js, rhs);
+          if (is_err(rhs_resolved)) return rhs_resolved;
+          res = assign(js, res, rhs_resolved);
+        }
+      } else {
+        uint8_t saved_flags = js->flags;
+        js->flags |= F_NOEXEC;
+        jsval_t rhs = js_assignment(js);
+        js->flags = saved_flags;
+        if (is_err(rhs)) return rhs;
+        res = lhs_val;
+      }
+      continue;
+    }
     
     jsval_t lhs_val = js_mkundef();
     if (op != TOK_ASSIGN && !(js->flags & F_NOEXEC)) {
@@ -8408,7 +8373,7 @@ obj_destruct_rest:;
         }
         {
           const char *vn = &js->code[var_off];
-          if (lkp(js, js->scope, vn, var_len) > 0) return js_mkerr(js, "'%.*s' already declared", (int)var_len, vn);
+          if (lkp_scope(js, js->scope, vn, var_len) > 0) return js_mkerr(js, "'%.*s' already declared", (int)var_len, vn);
           jsval_t x = mkprop(js, js->scope, js_mkstr(js, vn, var_len), rest_obj, is_const);
           if (is_err(x)) return x;
         }
@@ -8448,7 +8413,7 @@ obj_destruct_nested:;
             }
             
             const char *ivn = &js->code[ivoff];
-            if (lkp(js, js->scope, ivn, ivlen) > 0) return js_mkerr(js, "'%.*s' already declared", (int)ivlen, ivn);
+            if (lkp_scope(js, js->scope, ivn, ivlen) > 0) return js_mkerr(js, "'%.*s' already declared", (int)ivlen, ivn);
             
             jsoff_t ipoff = lkp(js, nobj, &js->code[isoff], islen);
             jsval_t ival = ipoff > 0 ? resolveprop(js, mkval(T_PROP, ipoff)) : js_mkundef();
@@ -8470,7 +8435,7 @@ nested_done:
 obj_destruct_simple:;
         {
           const char *vn = &js->code[var_off];
-          if (lkp(js, js->scope, vn, var_len) > 0) return js_mkerr(js, "'%.*s' already declared", (int)var_len, vn);
+          if (lkp_scope(js, js->scope, vn, var_len) > 0) return js_mkerr(js, "'%.*s' already declared", (int)var_len, vn);
           
           jsval_t sk = js_mkstr(js, &js->code[src_off], src_len);
           if (is_err(sk)) return sk;
@@ -8564,7 +8529,7 @@ obj_destruct_next:
         
         if (exe) {
           const char *var_name = &js->code[var_off];
-          if (lkp(js, js->scope, var_name, var_len) > 0) {
+          if (lkp_scope(js, js->scope, var_name, var_len) > 0) {
             return js_mkerr(js, "'%.*s' already declared", (int)var_len, var_name);
           }
           
@@ -8643,7 +8608,7 @@ obj_destruct_next:
         char decoded_name[256];
         size_t decoded_len = decode_ident_escapes(name, nlen, decoded_name, sizeof(decoded_name));
         
-        if (lkp(js, js->scope, decoded_name, decoded_len) > 0) return js_mkerr(js, "'%.*s' already declared", (int) decoded_len, decoded_name);
+        if (lkp_scope(js, js->scope, decoded_name, decoded_len) > 0) return js_mkerr(js, "'%.*s' already declared", (int) decoded_len, decoded_name);
         jsval_t x = mkprop(js, js->scope, js_mkstr(js, decoded_name, decoded_len), resolveprop(js, v), is_const);
         if (is_err(x)) return x;
       }
@@ -8737,34 +8702,35 @@ static jsval_t js_func_decl(struct js *js) {
     return res;
   }
   js->flags = flags;
-  jsval_t str = js_mkstr(js, &js->code[pos], js->pos - pos);
-  jsval_t func_obj = mkobj(js, 0);
-  if (is_err(func_obj)) return func_obj;
-  set_slot(js, func_obj, SLOT_CODE, str);
-  jsval_t len_key = js_mkstr(js, "length", 6);
-  if (is_err(len_key)) return len_key;
-  jsval_t res_len = setprop(js, func_obj, len_key, tov(param_count));
-  if (is_err(res_len)) return res_len;
-  js_set_descriptor(js, func_obj, "length", 6, JS_DESC_C);
-  jsval_t name_key = js_mkstr(js, "name", 4);
-  if (is_err(name_key)) return name_key;
-  jsval_t name_val = js_mkstr(js, name, nlen);
-  if (is_err(name_val)) return name_val;
-  jsval_t res3 = setprop(js, func_obj, name_key, name_val);
-  if (is_err(res3)) return res3;
-  if (exe) {
-    set_slot(js, func_obj, SLOT_SCOPE, js->scope);
-    if (flags & F_STRICT) {
-      set_slot(js, func_obj, SLOT_STRICT, js_mktrue());
-    }
-  }
-  jsval_t func = mkval(T_FUNC, (unsigned long) vdata(func_obj));
+   jsval_t str = js_mkstr(js, &js->code[pos], js->pos - pos);
+   jsval_t func_obj = mkobj(js, 0);
+   if (is_err(func_obj)) return func_obj;
+   set_slot(js, func_obj, SLOT_CODE, str);
+   jsval_t len_key = js_mkstr(js, "length", 6);
+   if (is_err(len_key)) return len_key;
+   jsval_t res_len = setprop(js, func_obj, len_key, tov(param_count));
+   if (is_err(res_len)) return res_len;
+   js_set_descriptor(js, func_obj, "length", 6, JS_DESC_C);
+   jsval_t name_key = js_mkstr(js, "name", 4);
+   if (is_err(name_key)) return name_key;
+   jsval_t name_val = js_mkstr(js, name, nlen);
+   if (is_err(name_val)) return name_val;
+   set_slot(js, func_obj, SLOT_NAME, name_val);
+   jsval_t res3 = setprop(js, func_obj, name_key, name_val);
+   if (is_err(res3)) return res3;
+   if (exe) {
+     set_slot(js, func_obj, SLOT_SCOPE, js->scope);
+     if (flags & F_STRICT) {
+       set_slot(js, func_obj, SLOT_STRICT, js_mktrue());
+     }
+   }
+   jsval_t func = mkval(T_FUNC, (unsigned long) vdata(func_obj));
   
   jsval_t proto_setup = setup_func_prototype(js, func);
   if (is_err(proto_setup)) return proto_setup;
   
   if (exe) {
-    jsoff_t existing = lkp(js, js->scope, name, nlen);
+    jsoff_t existing = lkp_scope(js, js->scope, name, nlen);
     if (existing > 0) {
       saveval(js, existing + sizeof(jsoff_t) * 2, func);
     } else {
@@ -8803,19 +8769,20 @@ static jsval_t js_func_decl_async(struct js *js) {
   jsval_t str = js_mkstr(js, &js->code[pos], js->pos - pos);
   jsval_t func_obj = mkobj(js, 0);
   if (is_err(func_obj)) return func_obj;
-  set_slot(js, func_obj, SLOT_CODE, str);
-  set_slot(js, func_obj, SLOT_ASYNC, js_mktrue());
-  jsval_t len_key = js_mkstr(js, "length", 6);
-  if (is_err(len_key)) return len_key;
-  jsval_t res_len = setprop(js, func_obj, len_key, tov(0));
-  if (is_err(res_len)) return res_len;
-  js_set_descriptor(js, func_obj, "length", 6, JS_DESC_C);
-  jsval_t name_key = js_mkstr(js, "name", 4);
-  if (is_err(name_key)) return name_key;
-  jsval_t name_val = js_mkstr(js, name, nlen);
-  if (is_err(name_val)) return name_val;
-  jsval_t res3 = setprop(js, func_obj, name_key, name_val);
-  if (is_err(res3)) return res3;
+   set_slot(js, func_obj, SLOT_CODE, str);
+   set_slot(js, func_obj, SLOT_ASYNC, js_mktrue());
+   jsval_t len_key = js_mkstr(js, "length", 6);
+   if (is_err(len_key)) return len_key;
+   jsval_t res_len = setprop(js, func_obj, len_key, tov(0));
+   if (is_err(res_len)) return res_len;
+   js_set_descriptor(js, func_obj, "length", 6, JS_DESC_C);
+   jsval_t name_key = js_mkstr(js, "name", 4);
+   if (is_err(name_key)) return name_key;
+   jsval_t name_val = js_mkstr(js, name, nlen);
+   if (is_err(name_val)) return name_val;
+   set_slot(js, func_obj, SLOT_NAME, name_val);
+   jsval_t res3 = setprop(js, func_obj, name_key, name_val);
+   if (is_err(res3)) return res3;
   if (exe) {
     set_slot(js, func_obj, SLOT_SCOPE, js->scope);
     if (flags & F_STRICT) {
@@ -8828,7 +8795,7 @@ static jsval_t js_func_decl_async(struct js *js) {
   if (is_err(proto_setup)) return proto_setup;
   
   if (exe) {
-    jsoff_t existing = lkp(js, js->scope, name, nlen);
+    jsoff_t existing = lkp_scope(js, js->scope, name, nlen);
     if (existing > 0) {
       saveval(js, existing + sizeof(jsoff_t) * 2, func);
     } else {
@@ -8913,7 +8880,7 @@ static jsval_t for_iter_bind_var(struct js *js, for_iter_ctx_t *ctx, jsval_t val
     return bind_destruct_pattern(js, &js->code[ctx->destructure_off], ctx->destructure_len, value, js->scope);
   }
   const char *var_name = &js->code[ctx->var_name_off];
-  jsoff_t existing = lkp(js, js->scope, var_name, ctx->var_name_len);
+  jsoff_t existing = lkp_scope(js, js->scope, var_name, ctx->var_name_len);
   if (existing > 0) {
     saveval(js, existing + sizeof(jsoff_t) * 2, value);
     return js_mkundef();
@@ -9221,7 +9188,14 @@ static jsval_t js_for(struct js *js) {
     
     if (exe) {
       jsval_t obj = resolveprop(js, obj_expr);
-      if (vtype(obj) != T_OBJ && vtype(obj) != T_ARR && vtype(obj) != T_FUNC) {
+      uint8_t obj_type = vtype(obj);
+      
+      if (obj_type == T_NULL || obj_type == T_UNDEF) {
+        res = js_mkundef();
+        goto done;
+      }
+      
+      if (obj_type != T_OBJ && obj_type != T_ARR && obj_type != T_FUNC) {
         res = js_mkerr(js, "for-in requires object");
         goto done;
       }
@@ -9264,7 +9238,7 @@ static jsval_t js_for(struct js *js) {
           jsval_t key_str = js_mkstr(js, key, klen);
           
           const char *var_name = &js->code[var_name_off];
-          jsoff_t existing = lkp(js, js->scope, var_name, var_name_len);
+          jsoff_t existing = lkp_scope(js, js->scope, var_name, var_name_len);
           if (existing > 0) {
             saveval(js, existing + sizeof(jsoff_t) * 2, key_str);
           } else {
@@ -9372,7 +9346,7 @@ static jsval_t js_for(struct js *js) {
     jsval_t iter_scope = js_mkundef();
     jsval_t loop_var_val = js_mkundef();
     if (is_let_loop && let_var_len > 0) {
-      jsoff_t var_off = lkp(js, js->scope, &js->code[let_var_off], let_var_len);
+      jsoff_t var_off = lkp_scope(js, js->scope, &js->code[let_var_off], let_var_len);
       if (var_off != 0) {
         loop_var_val = resolveprop(js, mkval(T_PROP, var_off));
       }
@@ -9397,7 +9371,7 @@ static jsval_t js_for(struct js *js) {
         loop_var_val = resolveprop(js, mkval(T_PROP, iter_var_off));
       }
       delscope(js);
-      jsoff_t outer_var_off = lkp(js, js->scope, &js->code[let_var_off], let_var_len);
+      jsoff_t outer_var_off = lkp_scope(js, js->scope, &js->code[let_var_off], let_var_len);
       if (outer_var_off != 0) {
         saveval(js, outer_var_off + sizeof(jsoff_t) * 2, loop_var_val);
       }
@@ -10630,19 +10604,12 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
       js->mem[meta_off + sizeof(meta_header) + metadata_size] = 0;
       jsval_t fields_meta = mkval(T_STR, meta_off);
       
-      jsval_t fields_key = js_mkstr(js, "__fields", 8);
-      if (is_err(fields_key)) return fields_key;
-      jsval_t res_fields = setprop(js, func_obj, fields_key, fields_meta);
-      if (is_err(res_fields)) return res_fields;
-      
       set_slot(js, func_obj, SLOT_FIELD_COUNT, tov((double)instance_field_count));
+      set_slot(js, func_obj, SLOT_FIELDS, fields_meta);
       
-      jsval_t src_key = js_mkstr(js, "__source", 8);
-      if (is_err(src_key)) return src_key;
       jsval_t src_ref = js_mkstr(js, js->code, js->clen);
       if (is_err(src_ref)) return src_ref;
-      jsval_t res_src = setprop(js, func_obj, src_key, src_ref);
-      if (is_err(res_src)) return res_src;
+      set_slot(js, func_obj, SLOT_SOURCE, src_ref);
     }
     
     set_slot(js, func_obj, SLOT_SCOPE, func_scope);
@@ -10668,7 +10635,7 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
     js_set_descriptor(js, proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
     
     if (class_name_len > 0) {
-      if (lkp(js, js->scope, class_name, class_name_len) > 0) {
+      if (lkp_scope(js, js->scope, class_name, class_name_len) > 0) {
         return js_mkerr(js, "'%.*s' already declared", (int) class_name_len, class_name);
       }
       jsval_t x = mkprop(js, js->scope, js_mkstr(js, class_name, class_name_len), constructor, false);
@@ -11477,7 +11444,7 @@ static jsval_t builtin_function_bind(struct js *js, jsval_t *args, int nargs) {
     set_slot(js, bound_func, SLOT_ASYNC, js_mktrue());
   }
 
-  setprop(js, bound_func, js_mkstr(js, "__target_func", 13), func);
+  set_slot(js, bound_func, SLOT_TARGET_FUNC, func);
   set_slot(js, bound_func, SLOT_BOUND_THIS, this_arg);
   
   if (bound_argc > 0) {
@@ -18151,7 +18118,13 @@ static char *esm_get_extension(const char *path) {
 static char *esm_try_resolve(const char *dir, const char *spec, const char *suffix) {
   char path[PATH_MAX];
   snprintf(path, PATH_MAX, "%s/%s%s", dir, spec, suffix);
-  return realpath(path, NULL);
+  char *resolved = realpath(path, NULL);
+  if (resolved) {
+    struct stat st;
+    if (stat(resolved, &st) == 0 && S_ISREG(st.st_mode)) return resolved;
+    free(resolved);
+  }
+  return NULL;
 }
 
 static bool esm_has_extension(const char *spec) {
@@ -18475,10 +18448,8 @@ static jsval_t esm_load_module(struct js *js, esm_module_t *mod) {
   jsval_t ns = mkobj(js, 0);
   mod->namespace_obj = ns;
   
-  jsval_t glob = js_glob(js);
-  jsval_t module_scope = js_get(js, glob, "__esm_module_scope");
-  jsval_t prev_module = module_scope;
-  js_set(js, glob, "__esm_module_scope", ns);
+  jsval_t prev_module = js->module_ns;
+  js->module_ns = ns;
   
   const char *prev_filename = js->filename;
   jsval_t saved_scope = js->scope;
@@ -18492,7 +18463,7 @@ static jsval_t esm_load_module(struct js *js, esm_module_t *mod) {
   
   js->scope = saved_scope;
   js_set_filename(js, prev_filename);
-  js_set(js, glob, "__esm_module_scope", prev_module);
+  js->module_ns = prev_module;
   
   if (is_err(result)) {
     mod->is_loading = false;
@@ -18923,12 +18894,8 @@ static jsval_t js_import_stmt(struct js *js) {
 static jsval_t js_export_stmt(struct js *js) {
   js->consumed = 1;
   
-  jsval_t glob = js_glob(js);
-  jsval_t module_ns = js_get(js, glob, "__esm_module_scope");
-  
-  if (vtype(module_ns) != T_OBJ) {
-    module_ns = mkobj(js, 0);
-    js_set(js, glob, "__esm_module_scope", module_ns);
+  if (vtype(js->module_ns) != T_OBJ) {
+    js->module_ns = mkobj(js, 0);
   }
   
   if (next(js) == TOK_DEFAULT) {
@@ -18936,7 +18903,7 @@ static jsval_t js_export_stmt(struct js *js) {
     jsval_t value = js_assignment(js);
     if (is_err(value)) return value;
     
-    setprop(js, module_ns, js_mkstr(js, "default", 7), resolveprop(js, value));
+    setprop(js, js->module_ns, js_mkstr(js, "default", 7), resolveprop(js, value));
     return value;
   }
   
@@ -18958,7 +18925,7 @@ static jsval_t js_export_stmt(struct js *js) {
     
     jsval_t key = js_mkstr(js, name, name_len);
     mkprop(js, js->scope, key, resolveprop(js, value), is_const);
-    setprop(js, module_ns, key, resolveprop(js, value));
+    setprop(js, js->module_ns, key, resolveprop(js, value));
     
     return value;
   }
@@ -18973,7 +18940,7 @@ static jsval_t js_export_stmt(struct js *js) {
       jsval_t name_val = resolveprop(js, mkval(T_PROP, name_off));
       if (vtype(name_val) == T_STR) {
         setprop(js, js->scope, name_val, func);
-        setprop(js, module_ns, name_val, func);
+        setprop(js, js->module_ns, name_val, func);
       }
     }
     
@@ -18988,10 +18955,10 @@ static jsval_t js_export_stmt(struct js *js) {
     jsoff_t name_off = lkp(js, cls_obj, "name", 4);
     if (name_off != 0) {
       jsval_t name_val = resolveprop(js, mkval(T_PROP, name_off));
-      if (vtype(name_val) == T_STR) {
-        setprop(js, js->scope, name_val, cls);
-        setprop(js, module_ns, name_val, cls);
-      }
+       if (vtype(name_val) == T_STR) {
+         setprop(js, js->scope, name_val, cls);
+         setprop(js, js->module_ns, name_val, cls);
+       }
     }
     
     return cls;
@@ -19020,7 +18987,7 @@ static jsval_t js_export_stmt(struct js *js) {
       jsval_t local_val = lookup(js, local_name, local_len);
       if (is_err(local_val)) return local_val;
       
-      setprop(js, module_ns, js_mkstr(js, export_name, export_len), resolveprop(js, local_val));
+      setprop(js, js->module_ns, js_mkstr(js, export_name, export_len), resolveprop(js, local_val));
       if (next(js) == TOK_COMMA) js->consumed = 1;
     }
     
@@ -19914,6 +19881,7 @@ struct js *js_create(void *buf, size_t len) {
   
   jsval_t glob = js->scope;
   jsval_t object_proto = js_mkobj(js);
+  set_proto(js, object_proto, js_mknull());
   setprop(js, object_proto, js_mkstr(js, "toString", 8), js_mkfun(builtin_object_toString));
   setprop(js, object_proto, js_mkstr(js, "valueOf", 7), js_mkfun(builtin_object_valueOf));
   setprop(js, object_proto, js_mkstr(js, "toLocaleString", 14), js_mkfun(builtin_object_toLocaleString));
@@ -20399,7 +20367,7 @@ struct js *js_create(void *buf, size_t len) {
   
   set_slot(js, import_obj, SLOT_CFUNC, js_mkfun(builtin_import));
   setprop(js, glob, js_mkstr(js, "import", 6), mkval(T_FUNC, vdata(import_obj)));
-  setprop(js, glob, js_mkstr(js, "__esm_module_scope", 18), js_mkundef());
+  js->module_ns = js_mkundef();
   
   setprop(js, object_proto, js_mkstr(js, "constructor", 11), mkval(T_FUNC, vdata(obj_func_obj)));
   setprop(js, function_proto, js_mkstr(js, "constructor", 11), mkval(T_FUNC, vdata(func_ctor_obj)));
@@ -20526,7 +20494,7 @@ bool js_del(struct js *js, jsval_t obj, const char *key) {
     jsoff_t deleted_next = loadoff(js, prop_off) & ~(CONSTMASK | ARRMASK | SLOTMASK);
     jsoff_t current = loadoff(js, obj_off);
     saveoff(js, obj_off, (deleted_next & ~3U) | (current & (CONSTMASK | ARRMASK | SLOTMASK | 3U)));
-    invalidate_prop_cache(obj_off);
+    increment_version(js, obj_off);
     return true;
   }
   
@@ -20537,7 +20505,7 @@ bool js_del(struct js *js, jsval_t obj, const char *key) {
       jsoff_t deleted_next = loadoff(js, prop_off) & ~(CONSTMASK | ARRMASK | SLOTMASK);
       jsoff_t prev_flags = loadoff(js, prev) & (CONSTMASK | ARRMASK | SLOTMASK);
       saveoff(js, prev, deleted_next | prev_flags);
-      invalidate_prop_cache(obj_off);
+      increment_version(js, obj_off);
       return true;
     }
     prev = next_prop;

@@ -9,6 +9,7 @@
 
 #define STR_PROTO "__proto__"
 #define STR_PROTO_LEN 9
+#define ANT_LIMIT_SIZE_CACHE 16384
 
 struct js;
 
