@@ -4765,8 +4765,8 @@ static jsval_t js_call_params(struct js *js) {
   js->flags |= F_NOEXEC;
   js->consumed = 1;
   
-  for (bool comma = false; next(js) != TOK_EOF; comma = true) {
-    if (!comma && next(js) == TOK_RPAREN) break;
+  while (next(js) != TOK_EOF) {
+    if (next(js) == TOK_RPAREN) break;
     if (next(js) == TOK_REST) js->consumed = 1;
     js_expr(js);
     if (next(js) == TOK_RPAREN) break;
