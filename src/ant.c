@@ -7670,11 +7670,132 @@ static jsval_t js_unary(struct js *js) {
     jsval_t obj = mkobj(js, 0);
     jsval_t saved_this = js->this_val;
     js->this_val = obj;
-    jsval_t result = js_postfix(js);
+    
+    // Parse constructor: can be identifier, member expression, or grouped
+    // We need to parse the constructor WITHOUT continuing to parse property access
+    // after the call, because property access should be on the constructed object.
+    jsval_t ctor = js_group(js);  // Parse identifier or (expr)
+    if (is_err(ctor)) {
+      js->this_val = saved_this;
+      return ctor;
+    }
+    
+    // Handle member access on the constructor itself: new foo.Bar(), new foo[x]()
+    while (next(js) == TOK_DOT || next(js) == TOK_LBRACKET) {
+      if (js->tok == TOK_DOT) {
+        js->consumed = 1;
+        if (vtype(ctor) == T_CODEREF) {
+          ctor = lookup(js, &js->code[coderefoff(ctor)], codereflen(ctor));
+          if (is_err(ctor)) { js->this_val = saved_this; return ctor; }
+        }
+        if (next(js) != TOK_IDENTIFIER && !is_keyword_propname(js->tok)) {
+          js->this_val = saved_this;
+          return js_mkerr_typed(js, JS_ERR_SYNTAX, "identifier expected");
+        }
+        js->consumed = 1;
+        jsval_t prop_name = mkcoderef((jsoff_t)js->toff, (jsoff_t)js->tlen);
+        ctor = do_op(js, TOK_DOT, ctor, prop_name);
+      } else {
+        js->consumed = 1;
+        if (vtype(ctor) == T_CODEREF) {
+          ctor = lookup(js, &js->code[coderefoff(ctor)], codereflen(ctor));
+          if (is_err(ctor)) { js->this_val = saved_this; return ctor; }
+        }
+        jsval_t idx = js_expr(js);
+        if (is_err(idx)) { js->this_val = saved_this; return idx; }
+        if (next(js) != TOK_RBRACKET) { js->this_val = saved_this; return js_mkerr_typed(js, JS_ERR_SYNTAX, "] expected"); }
+        js->consumed = 1;
+        ctor = do_op(js, TOK_BRACKET, ctor, idx);
+      }
+    }
+    
+    // Resolve the constructor if it's still a coderef
+    if (vtype(ctor) == T_CODEREF) {
+      ctor = lookup(js, &js->code[coderefoff(ctor)], codereflen(ctor));
+      if (is_err(ctor)) { js->this_val = saved_this; return ctor; }
+    }
+    if (vtype(ctor) == T_PROP || vtype(ctor) == T_PROPREF) {
+      ctor = resolveprop(js, ctor);
+    }
+    
+    // Now handle optional call arguments: new Foo() vs new Foo
+    jsval_t result;
+    if (next(js) == TOK_LPAREN) {
+      push_this(obj);
+      jsval_t params = js_call_params(js);
+      if (is_err(params)) {
+        pop_this();
+        js->this_val = saved_this;
+        return params;
+      }
+      result = do_op(js, TOK_CALL, ctor, params);
+      pop_this();
+    } else {
+      // new Foo without parentheses - call with no args
+      push_this(obj);
+      result = do_op(js, TOK_CALL, ctor, mkcoderef(0, 0));
+      pop_this();
+      // do_call_op set consumed=1, but we didn't consume the peeked token
+      // Reset consumed so the peeked token can be seen by caller
+      js->consumed = 0;
+    }
+    
     jsval_t constructed_obj = js->this_val;
     js->this_val = saved_this;
-    if (vtype(result) == T_OBJ || vtype(result) == T_ARR || vtype(result) == T_PROMISE || vtype(result) == T_FUNC) return result;
-    return constructed_obj;
+    
+    jsval_t new_result;
+    if (vtype(result) == T_OBJ || vtype(result) == T_ARR || vtype(result) == T_PROMISE || vtype(result) == T_FUNC) {
+      new_result = result;
+    } else {
+      new_result = constructed_obj;
+    }
+    
+    // Continue parsing property access after 'new X()' - e.g., new A().foo
+    // Track the object for method calls (this binding)
+    jsval_t call_obj = js_mkundef();
+    while (next(js) == TOK_DOT || next(js) == TOK_LBRACKET || next(js) == TOK_OPTIONAL_CHAIN || next(js) == TOK_LPAREN) {
+      if (js->tok == TOK_DOT || js->tok == TOK_OPTIONAL_CHAIN) {
+        uint8_t op = js->tok;
+        js->consumed = 1;
+        call_obj = new_result;  // Save object for potential method call
+        if (op == TOK_OPTIONAL_CHAIN && (vtype(call_obj) == T_NULL || vtype(call_obj) == T_UNDEF)) {
+          new_result = js_mkundef();
+          call_obj = js_mkundef();
+        } else {
+          if (next(js) != TOK_IDENTIFIER && !is_keyword_propname(js->tok)) {
+            return js_mkerr_typed(js, JS_ERR_SYNTAX, "identifier expected");
+          }
+          js->consumed = 1;
+          jsval_t prop_name = mkcoderef((jsoff_t)js->toff, (jsoff_t)js->tlen);
+          new_result = do_op(js, op, new_result, prop_name);
+        }
+      } else if (js->tok == TOK_LBRACKET) {
+        js->consumed = 1;
+        call_obj = new_result;  // Save object for potential method call
+        jsval_t idx = js_expr(js);
+        if (is_err(idx)) return idx;
+        if (next(js) != TOK_RBRACKET) return js_mkerr_typed(js, JS_ERR_SYNTAX, "] expected");
+        js->consumed = 1;
+        new_result = do_op(js, TOK_BRACKET, new_result, idx);
+      } else if (js->tok == TOK_LPAREN) {
+        // Method call - use saved object as 'this'
+        jsval_t func_this = call_obj;
+        if (vtype(func_this) == T_UNDEF) {
+          // No property access before call, use global this
+          func_this = js->this_val;
+        }
+        push_this(func_this);
+        jsval_t params = js_call_params(js);
+        if (is_err(params)) {
+          pop_this();
+          return params;
+        }
+        new_result = do_op(js, TOK_CALL, new_result, params);
+        pop_this();
+        call_obj = js_mkundef();  // Reset after call
+      }
+    }
+    return new_result;
   } else if (next(js) == TOK_DELETE) {
     js->consumed = 1;
     
