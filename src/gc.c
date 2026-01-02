@@ -87,7 +87,7 @@ static inline void gc_saveval(uint8_t *mem, jsoff_t off, jsval_t val) {
 }
 
 static jsoff_t gc_esize(jsoff_t w) {
-  jsoff_t cleaned = w & ~(CONSTMASK | ARRMASK | SLOTMASK);
+  jsoff_t cleaned = w & ~FLAGMASK;
   switch (cleaned & 3U) {
     case JS_T_OBJ:  return (jsoff_t)(sizeof(jsoff_t) + sizeof(jsoff_t));
     case JS_T_PROP: return (jsoff_t)(sizeof(jsoff_t) + sizeof(jsoff_t) + sizeof(jsval_t));
@@ -167,10 +167,10 @@ static jsoff_t gc_copy_prop(gc_ctx_t *ctx, jsoff_t old_off) {
   fwd_add(&ctx->fwd, old_off, new_off);
   mark_set(ctx, old_off);
   
-  jsoff_t next_prop = header & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
+  jsoff_t next_prop = header & ~(3U | FLAGMASK);
   if (next_prop != 0 && next_prop < ctx->js->brk) {
     jsoff_t new_next = gc_copy_prop(ctx, next_prop);
-    jsoff_t new_header = (new_next & ~3U) | (header & (3U | CONSTMASK | ARRMASK | SLOTMASK));
+    jsoff_t new_header = (new_next & ~3U) | (header & (3U | FLAGMASK));
     gc_saveoff(ctx->new_mem, new_off, new_header);
   }
   
@@ -215,10 +215,10 @@ static jsoff_t gc_copy_object(gc_ctx_t *ctx, jsoff_t old_off) {
   fwd_add(&ctx->fwd, old_off, new_off);
   mark_set(ctx, old_off);
   
-  jsoff_t first_prop = header & ~(3U | CONSTMASK | ARRMASK | SLOTMASK);
+  jsoff_t first_prop = header & ~(3U | FLAGMASK);
   if (first_prop != 0 && first_prop < ctx->js->brk) {
     jsoff_t new_first = gc_copy_prop(ctx, first_prop);
-    jsoff_t new_header = (new_first & ~3U) | (header & (3U | CONSTMASK | ARRMASK | SLOTMASK));
+    jsoff_t new_header = (new_first & ~3U) | (header & (3U | FLAGMASK));
     gc_saveoff(ctx->new_mem, new_off, new_header);
   }
   

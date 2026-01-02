@@ -19,6 +19,8 @@
 #define SLOTMASK ~(((jsoff_t) ~0) >> 1)
 #define CONSTMASK (~(((jsoff_t) ~0) >> 1) >> 1)
 #define ARRMASK (~(((jsoff_t) ~0) >> 1) >> 2)
+#define NONCONFIGMASK (~(((jsoff_t) ~0) >> 1) >> 3)
+#define FLAGMASK (SLOTMASK | CONSTMASK | ARRMASK | NONCONFIGMASK)
 
 typedef enum {
   SLOT_NONE = 0,
