@@ -4314,19 +4314,19 @@ static jsval_t resolveprop(struct js *js, jsval_t v) {
       return get_prototype_for_type(js, vtype(obj));
     }
     
+    jsoff_t prop_off = lkp(js, obj, key_str, len);
+    if (prop_off != 0) return resolveprop(js, mkval(T_PROP, prop_off));
+    
+    jsoff_t proto_off = lkp_proto(js, obj, key_str, len);
+    if (proto_off != 0) return resolveprop(js, mkval(T_PROP, proto_off));
+    
     jsval_t accessor_result;
     if (try_accessor_getter(js, obj, key_str, len, &accessor_result)) {
       return accessor_result;
     }
     
-    jsoff_t prop_off = lkp(js, obj, key_str, len);
-    if (prop_off != 0) return resolveprop(js, mkval(T_PROP, prop_off));
-    
     jsval_t dyn_result = try_dynamic_getter(js, obj, key_str, len);
     if (vtype(dyn_result) != T_UNDEF) return dyn_result;
-    
-    jsoff_t proto_off = lkp_proto(js, obj, key_str, len);
-    if (proto_off != 0) return resolveprop(js, mkval(T_PROP, proto_off));
     
     return js_mkundef();
   }
@@ -13243,11 +13243,6 @@ static jsval_t builtin_object_defineProperty(struct js *js, jsval_t *args, int n
     } else {
       jsval_t setter = resolveprop(js, mkval(T_PROP, set_off));
       js_set_setter_desc(js, as_obj, prop_str, prop_len, setter, desc_flags);
-    }
-    
-    if (existing_off == 0) {
-      jsval_t prop_key = js_mkstr(js, prop_str, prop_len);
-      mkprop(js, as_obj, prop_key, js_mkundef(), !configurable);
     }
   } else {
     int desc_flags = 

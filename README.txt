@@ -12,7 +12,7 @@ RUN:
 
 EXAMPLE:
   See examples/server/server.js for a good server example using Ant.serve()
-  with Radix3 routing, parameter handling, and various response types.
+  with `rou3` routing, parameter handling, and various response types.
 
 MODULES:
 
