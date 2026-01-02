@@ -31,7 +31,7 @@ script = ['meson subprojects download', '''
 ''']
 
 [tasks.install]
-script = '''
+script = ["maid build -q", '''
    bash -c 'which ant && cp ./build/ant "$(which ant)" || 
    { mkdir -p ~/.local/bin && cp ./build/ant ~/.local/bin/; }'
-'''
+''']
