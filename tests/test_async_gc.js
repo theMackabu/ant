@@ -22,4 +22,7 @@ async function main() {
   console.log('Done');
 }
 
-main();
+main().then(() => {
+  console.log('=== async done, calling gc ===');
+  console.log(Ant.gc());
+});

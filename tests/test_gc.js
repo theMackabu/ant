@@ -4,6 +4,7 @@ console.log('Initial allocation:');
 console.log('  heapSize:', alloc1.heapSize);
 console.log('  usedBytes:', alloc1.usedBytes);
 console.log('  freeBytes:', alloc1.freeBytes);
+console.log('  totalBytes:', alloc1.totalBytes);
 
 console.log('\n=== Creating objects to allocate memory ===');
 let arr = [];
@@ -16,7 +17,8 @@ let alloc2 = Ant.alloc();
 console.log('After allocation:');
 console.log('  heapSize:', alloc2.heapSize);
 console.log('  usedBytes:', alloc2.usedBytes);
-console.log('  increase:', alloc2.usedBytes - alloc1.usedBytes);
+console.log('  totalBytes:', alloc2.totalBytes);
+console.log('  totalBytes increase:', alloc2.totalBytes - alloc1.totalBytes);
 
 console.log('\n=== Testing Ant.stats() ===');
 let stats1 = Ant.stats();
@@ -38,6 +40,19 @@ console.log('  heapAfter:', gcResult.heapAfter);
 console.log('  usedBefore:', gcResult.usedBefore);
 console.log('  usedAfter:', gcResult.usedAfter);
 console.log('  freed:', gcResult.freed);
+console.log('  arenaBefore:', gcResult.arenaBefore);
+console.log('  arenaAfter:', gcResult.arenaAfter);
+console.log('  arenaFreed:', gcResult.arenaFreed);
+
+console.log('\n=== Testing Ant.stats() ===');
+let stats2 = Ant.stats();
+console.log('Memory stats:');
+console.log('  arenaUsed:', stats2.arenaUsed);
+console.log('  arenaLwm:', stats2.arenaLwm);
+console.log('  cstack:', stats2.cstack);
+console.log('  gcHeapSize:', stats2.gcHeapSize);
+console.log('  gcUsedBytes:', stats2.gcUsedBytes);
+console.log('  gcFreeBytes:', stats2.gcFreeBytes);
 
 console.log('\n=== Verifying memory after GC ===');
 let alloc3 = Ant.alloc();
@@ -59,8 +74,18 @@ for (let cycle = 0; cycle < 3; cycle = cycle + 1) {
 
   temp = null;
   let gc = Ant.gc();
-  console.log('  After GC - usedAfter:', gc.usedAfter, 'freed:', gc.freed);
+  console.log('  After GC - usedAfter:', gc.usedAfter, 'freed:', gc.freed, 'arenaFreed:', gc.arenaFreed);
 }
+
+console.log('\n=== Testing Ant.stats() ===');
+let stats3 = Ant.stats();
+console.log('Memory stats:');
+console.log('  arenaUsed:', stats3.arenaUsed);
+console.log('  arenaLwm:', stats3.arenaLwm);
+console.log('  cstack:', stats3.cstack);
+console.log('  gcHeapSize:', stats3.gcHeapSize);
+console.log('  gcUsedBytes:', stats3.gcUsedBytes);
+console.log('  gcFreeBytes:', stats3.gcFreeBytes);
 
 console.log('\n=== Testing stats consistency ===');
 let statsA = Ant.stats();
