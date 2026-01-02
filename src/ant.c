@@ -13391,7 +13391,7 @@ static jsval_t builtin_object_defineProperty(struct js *js, jsval_t *args, int n
       }
       
       jsval_t prop_key = js_mkstr(js, prop_str, prop_len);
-      bool mark_const = !writable;
+      bool mark_const = !writable || !configurable;
       mkprop(js, as_obj, prop_key, value, mark_const);
     }
   }
