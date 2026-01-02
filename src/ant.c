@@ -1869,6 +1869,7 @@ static size_t strstring(struct js *js, jsval_t value, char *buf, size_t len) {
 static bool is_internal_prop(const char *key, jsoff_t klen) {
   if (klen < 2) return false;
   if (key[0] != '_' || key[1] != '_') return false;
+  if (klen == STR_PROTO_LEN && memcmp(key, STR_PROTO, STR_PROTO_LEN) == 0) return false;
   if (klen >= 9 && key[2] == 's' && key[3] == 'y' && key[4] == 'm' && key[5] == '_' && key[klen-1] == '_' && key[klen-2] == '_') return true;
   return true;
 }
@@ -3041,9 +3042,6 @@ jsval_t js_setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v) {
   jsoff_t koff = (jsoff_t) vdata(k);
   jsoff_t klen = offtolen(loadoff(js, koff));
   const char *key = (char *) &js->mem[koff + sizeof(jsoff_t)];
-  if (streq(key, klen, STR_PROTO, STR_PROTO_LEN)) {
-    return js_mkerr(js, "cannot assign to " STR_PROTO);
-  }
   
   if (vtype(obj) == T_ARR && streq(key, klen, "length", 6)) {
     jsval_t err = validate_array_length(js, v);
@@ -4005,9 +4003,7 @@ static jsoff_t lkp_with_setter(struct js *js, jsval_t obj, const char *buf, size
 }
 
 static jsval_t call_proto_accessor(struct js *js, jsval_t prim, jsval_t accessor, bool has_accessor, jsval_t *arg, int arg_count, bool is_setter) {
-  if (!has_accessor || (vtype(accessor) != T_FUNC && vtype(accessor) != T_CFUNC)) {
-    return is_setter ? js_mkundef() : js_mkundef();
-  }
+  if (!has_accessor || (vtype(accessor) != T_FUNC && vtype(accessor) != T_CFUNC)) return js_mkundef();
   
   js_parse_state_t saved;
   JS_SAVE_STATE(js, saved);
@@ -4015,9 +4011,12 @@ static jsval_t call_proto_accessor(struct js *js, jsval_t prim, jsval_t accessor
   jsoff_t saved_toff = js->toff;
   jsoff_t saved_tlen = js->tlen;
   
+  jsval_t saved_this = js->this_val;
+  js->this_val = prim;
   push_this(prim);
   jsval_t result = call_js_with_args(js, accessor, arg, arg_count);
   pop_this();
+  js->this_val = saved_this;
   
   JS_RESTORE_STATE(js, saved);
   js->flags = saved_flags;
@@ -4344,14 +4343,18 @@ static int check_prop_writable(struct js *js, jsval_t owner, const char *key, js
 static bool try_accessor_setter(struct js *js, jsval_t obj, const char *key, size_t key_len, jsval_t val, jsval_t *out) {
   jsval_t setter = js_mkundef();
   bool has_setter = false;
+  
   lkp_with_setter(js, obj, key, key_len, &setter, &has_setter);
+  if (!has_setter) return false;
 
   jsval_t result = call_proto_accessor(js, obj, setter, has_setter, &val, 1, true);
-  if (vtype(result) != T_UNDEF) {
+  if (is_err(result)) {
     *out = result;
     return true;
   }
-  return false;
+  
+  *out = val;
+  return true;
 }
 
 static jsval_t assign(struct js *js, jsval_t lhs, jsval_t val) {
@@ -4393,15 +4396,6 @@ static jsval_t assign(struct js *js, jsval_t lhs, jsval_t val) {
     
     jsoff_t key_len;
     const char *key_str = (const char *)&js->mem[vstr(js, key, &key_len)];
-    
-    if (key_len == STR_PROTO_LEN && memcmp(key_str, STR_PROTO, STR_PROTO_LEN) == 0) {
-      uint8_t vt = vtype(val);
-      if (vt == T_OBJ || vt == T_NULL) {
-        set_slot(js, obj, SLOT_PROTO, val);
-        return val;
-      }
-      return val;
-    }
     
     jsval_t setter_result;
     if (try_accessor_setter(js, obj, key_str, key_len, val, &setter_result)) {
@@ -6740,6 +6734,35 @@ static jsval_t js_regex_literal(struct js *js) {
   return regexp_obj;
 }
 
+static jsval_t set_obj_property(struct js *js, jsval_t obj, jsval_t key, jsval_t val, bool is_computed, bool *proto_set) {
+  bool is_proto = false;
+  if (!is_computed && vtype(key) == T_STR) {
+    jsoff_t klen;
+    const char *kstr = (char *)&js->mem[vstr(js, key, &klen)];
+    is_proto = (klen == STR_PROTO_LEN && memcmp(kstr, STR_PROTO, STR_PROTO_LEN) == 0);
+  }
+
+  if (is_proto) {
+    if (*proto_set) return js_mkerr_typed(js, JS_ERR_SYNTAX, "Duplicate __proto__ fields are not allowed in object literals");
+    *proto_set = true;
+    uint8_t pt = vtype(val);
+    if (pt == T_OBJ || pt == T_ARR || pt == T_FUNC || pt == T_NULL) {
+      set_proto(js, obj, pt == T_NULL ? js_mknull() : val);
+    }
+    return js_mkundef();
+  }
+
+  if (vtype(val) == T_FUNC) {
+    jsval_t func_obj = mkval(T_OBJ, vdata(val));
+    if (lkp(js, func_obj, "name", 4) == 0) {
+      jsval_t name_key = js_mkstr(js, "name", 4);
+      if (!is_err(name_key)) setprop(js, func_obj, name_key, key);
+    }
+  }
+  
+  return setprop(js, obj, key, val);
+}
+
 static jsval_t js_obj_literal(struct js *js) {
   uint8_t exe = !(js->flags & F_NOEXEC);
   jsval_t obj = exe ? mkobj(js, 0) : js_mkundef();
@@ -6749,6 +6772,7 @@ static jsval_t js_obj_literal(struct js *js) {
     if (vtype(object_proto) == T_OBJ) set_proto(js, obj, object_proto);
   }
   js->consumed = 1;
+  bool proto_set_in_literal = false;
   
   while (next(js) != TOK_RBRACE) {
     jsval_t key = 0;
@@ -6975,18 +6999,10 @@ static jsval_t js_obj_literal(struct js *js) {
       if (exe) {
         if (is_err(val)) return val;
         if (is_err(key)) return key;
-        jsval_t resolved_val = resolveprop(js, val);
-        
-        if (vtype(resolved_val) == T_FUNC) {
-          jsval_t func_obj = mkval(T_OBJ, vdata(resolved_val));
-          jsoff_t name_prop = lkp(js, func_obj, "name", 4);
-          if (name_prop == 0) {
-            jsval_t name_key = js_mkstr(js, "name", 4);
-            if (!is_err(name_key)) setprop(js, func_obj, name_key, key);
-          }
-        }
-        
-        jsval_t res = setprop(js, obj, key, resolved_val);
+        jsval_t res = set_obj_property(
+          js, obj, key, resolveprop(js, val), 
+          is_computed, &proto_set_in_literal
+        );
         if (is_err(res)) return res;
       }
     }
@@ -13057,18 +13073,56 @@ static jsval_t builtin_object_setPrototypeOf(struct js *js, jsval_t *args, int n
     return js_mkerr(js, "Object.setPrototypeOf: prototype must be an object or null");
   }
   
-  if (pt != T_NULL) {
-    jsval_t cur = proto;
-    int depth = 0;
-    while (vtype(cur) != T_NULL && depth < 32) {
-      if (vdata(cur) == vdata(obj)) return js_mkerr(js, "Cyclic __proto__ value");
-      cur = get_proto(js, cur);
-      depth++;
-    }
+  for (jsval_t cur = proto; pt != T_NULL && vtype(cur) != T_NULL; cur = get_proto(js, cur)) {
+    if (vdata(cur) == vdata(obj)) return js_mkerr(js, "Cyclic __proto__ value");
   }
   
   set_proto(js, obj, proto);
   return obj;
+}
+
+static jsval_t builtin_proto_getter(struct js *js, jsval_t *args, int nargs) {
+  jsval_t this_val = js->this_val;
+  uint8_t t = vtype(this_val);
+  
+  if (t == T_UNDEF || t == T_NULL) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot read property '__proto__' of %s", typestr(t));
+  }
+  
+  if (t == T_OBJ || t == T_ARR || t == T_FUNC) {
+    return get_proto(js, this_val);
+  }
+  
+  return get_prototype_for_type(js, t);
+}
+
+static jsval_t builtin_proto_setter(struct js *js, jsval_t *args, int nargs) {
+  jsval_t this_val = js->this_val;
+  uint8_t t = vtype(this_val);
+  
+  if (t == T_UNDEF || t == T_NULL) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot set property '__proto__' of %s", typestr(t));
+  }
+  
+  if (t != T_OBJ && t != T_ARR && t != T_FUNC) {
+    return js_mkundef();
+  }
+  
+  if (nargs == 0) return js_mkundef();
+  
+  jsval_t proto = args[0];
+  uint8_t pt = vtype(proto);
+  
+  if (pt != T_OBJ && pt != T_ARR && pt != T_FUNC && pt != T_NULL) {
+    return js_mkundef();
+  }
+  
+  for (jsval_t cur = proto; pt != T_NULL && vtype(cur) == T_OBJ; cur = get_proto(js, cur)) {
+    if (vdata(cur) == vdata(this_val)) return js_mkundef();
+  }
+  
+  set_proto(js, this_val, proto);
+  return js_mkundef();
 }
 
 static jsval_t builtin_object_create(struct js *js, jsval_t *args, int nargs) {
@@ -19877,6 +19931,11 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, object_proto, js_mkstr(js, "hasOwnProperty", 14), js_mkfun(builtin_object_hasOwnProperty));
   setprop(js, object_proto, js_mkstr(js, "isPrototypeOf", 13), js_mkfun(builtin_object_isPrototypeOf));
   setprop(js, object_proto, js_mkstr(js, "propertyIsEnumerable", 20), js_mkfun(builtin_object_propertyIsEnumerable));
+  
+  jsval_t proto_getter = js_mkfun(builtin_proto_getter);
+  jsval_t proto_setter = js_mkfun(builtin_proto_setter);
+  setprop(js, object_proto, js_mkstr(js, STR_PROTO, STR_PROTO_LEN), js_mkundef());
+  js_set_accessor_desc(js, object_proto, STR_PROTO, STR_PROTO_LEN, proto_getter, proto_setter, JS_DESC_C);
   
   jsval_t function_proto = js_mkobj(js);
   set_proto(js, function_proto, object_proto);
