@@ -10,7 +10,7 @@ static inline void ANT_GC_INIT(void) {
   GC_enable();
 }
 
-static inline void ANT_GC_COLLECT(void) {  
+static inline void ANT_GC_COLLECT(void) {
   mco_coro* running = mco_running();
   struct GC_stack_base sb;
   int in_coroutine = (running != NULL && running->stack_base != NULL);
