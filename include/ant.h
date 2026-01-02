@@ -15,7 +15,6 @@
 #define ANT_LIMIT_SIZE_CACHE 16384
 
 struct js;
-extern bool executing_coro;
 
 typedef uint32_t jsoff_t;
 typedef uint64_t jsval_t;

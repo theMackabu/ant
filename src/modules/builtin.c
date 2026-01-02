@@ -65,13 +65,7 @@ static jsval_t js_signal(struct js *js, jsval_t *args, int nargs) {
 // Ant.gc()
 static jsval_t js_gc_trigger(struct js *js, jsval_t *args, int nargs) {
   (void) args; (void) nargs;
-  
-  if (executing_coro) {
-    jsval_t result = js_mkobj(js);
-    js_set(js, result, "skipped", js_mktrue());
-    return result;
-  }
-  
+
   size_t heap_before = GC_get_heap_size();
   size_t used_before = GC_get_heap_size() - GC_get_free_bytes();
   
@@ -80,14 +74,14 @@ static jsval_t js_gc_trigger(struct js *js, jsval_t *args, int nargs) {
   size_t heap_after = GC_get_heap_size();
   size_t used_after = GC_get_heap_size() - GC_get_free_bytes();
   size_t freed = (used_before > used_after) ? (used_before - used_after) : 0;
-  
+
   jsval_t result = js_mkobj(js);
   js_set(js, result, "heapBefore", js_mknum((double)heap_before));
   js_set(js, result, "heapAfter", js_mknum((double)heap_after));
   js_set(js, result, "usedBefore", js_mknum((double)used_before));
   js_set(js, result, "usedAfter", js_mknum((double)used_after));
   js_set(js, result, "freed", js_mknum((double)freed));
-  
+
   return result;
 }
 
