@@ -793,11 +793,11 @@ static bool try_dynamic_setter(struct js *js, jsval_t obj, const char *key, size
 
 static jsval_t call_js(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope);
 static jsval_t call_js_internal(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *bound_args, int bound_argc);
-static jsval_t call_js_internal_nfe(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *bound_args, int bound_argc, jsval_t func_name, jsval_t func_val);
+static jsval_t call_js_internal_nfe(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *bound_args, int bound_argc, jsval_t func_val);
 
 static jsval_t call_js_with_args(struct js *js, jsval_t fn, jsval_t *args, int nargs);
 static jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *args, int nargs);
-static jsval_t call_js_code_with_args_nfe(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *args, int nargs, jsval_t func_name, jsval_t func_val);
+static jsval_t call_js_code_with_args_nfe(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *args, int nargs, jsval_t func_val);
 
 static inline bool push_this(jsval_t this_value);
 static inline jsval_t pop_this(void);
@@ -5126,10 +5126,10 @@ static void setup_arguments(struct js *js, jsval_t scope, jsval_t *args, int nar
 }
 
 static jsval_t call_js_internal(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *bound_args, int bound_argc) {
-  return call_js_internal_nfe(js, fn, fnlen, closure_scope, bound_args, bound_argc, js_mkundef(), js_mkundef());
+  return call_js_internal_nfe(js, fn, fnlen, closure_scope, bound_args, bound_argc, js_mkundef());
 }
 
-static jsval_t call_js_internal_nfe(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *bound_args, int bound_argc, jsval_t func_name, jsval_t func_val) {
+static jsval_t call_js_internal_nfe(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *bound_args, int bound_argc, jsval_t func_val) {
   jsval_t saved_scope = js->scope;
   jsval_t saved_this_val = js->this_val;
   jsval_t target_this = peek_this();
@@ -5374,23 +5374,17 @@ static jsval_t call_js_with_args(struct js *js, jsval_t func, jsval_t *args, int
     push_this(bound_this);
   }
   
-  jsval_t func_name = js_mkundef();
-  jsoff_t name_off = lkp(js, func_obj, "name", 4);
-  if (name_off != 0) {
-    func_name = resolveprop(js, mkval(T_PROP, name_off));
-  }
-  
-  jsval_t result = call_js_code_with_args_nfe(js, fn, fnlen, closure_scope, args, nargs, func_name, func);
+  jsval_t result = call_js_code_with_args_nfe(js, fn, fnlen, closure_scope, args, nargs, func);
   
   if (combined_args) ANT_GC_FREE(combined_args);
   return result;
 }
 
 static jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *args, int nargs) {
-  return call_js_code_with_args_nfe(js, fn, fnlen, closure_scope, args, nargs, js_mkundef(), js_mkundef());
+  return call_js_code_with_args_nfe(js, fn, fnlen, closure_scope, args, nargs, js_mkundef());
 }
 
-static jsval_t call_js_code_with_args_nfe(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *args, int nargs, jsval_t func_name, jsval_t func_val) {
+static jsval_t call_js_code_with_args_nfe(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *args, int nargs, jsval_t func_val) {
   jsoff_t parent_scope_offset;
   if (vtype(closure_scope) == T_OBJ) {
     parent_scope_offset = (jsoff_t) vdata(closure_scope);
@@ -5782,7 +5776,7 @@ skip_fields:
           res = start_async_in_coroutine(js, code_str, fnlen, closure_scope, bound_args, bound_argc);
           pop_call_frame();
         } else {
-          res = call_js_internal_nfe(js, code_str, fnlen, closure_scope, bound_args, bound_argc, nfe_name_val, func);
+          res = call_js_internal_nfe(js, code_str, fnlen, closure_scope, bound_args, bound_argc, func);
           pop_call_frame();
         }
         
