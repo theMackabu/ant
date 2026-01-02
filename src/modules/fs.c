@@ -1158,3 +1158,14 @@ void fs_poll_events(void) {
     if (pending_requests && utarray_len(pending_requests) > 0) usleep(1000);
   }
 }
+
+void fs_gc_update_roots(GC_FWD_ARGS) {
+  if (!pending_requests) return;
+  unsigned int len = utarray_len(pending_requests);
+  for (unsigned int i = 0; i < len; i++) {
+    fs_request_t **reqp = (fs_request_t **)utarray_eltptr(pending_requests, i);
+    if (reqp && *reqp) {
+      (*reqp)->promise = fwd_val(ctx, (*reqp)->promise);
+    }
+  }
+}

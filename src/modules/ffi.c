@@ -979,3 +979,12 @@ ret_pointer: {
 ret_undef:
   return js_mkundef();
 }
+
+void ffi_gc_update_roots(GC_FWD_ARGS) {
+  pthread_mutex_lock(&ffi_callbacks_mutex);
+  ffi_callback_t *cb, *tmp;
+  HASH_ITER(hh, ffi_callbacks, cb, tmp) {
+    cb->js_func = fwd_val(ctx, cb->js_func);
+  }
+  pthread_mutex_unlock(&ffi_callbacks_mutex);
+}

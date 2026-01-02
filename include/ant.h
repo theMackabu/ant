@@ -4,11 +4,11 @@
 #pragma once
 #define PCRE2_CODE_UNIT_WIDTH 8
 
+#include <config.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <config.h>
 
 #define STR_PROTO "__proto__"
 #define STR_PROTO_LEN 9
@@ -18,6 +18,9 @@ struct js;
 
 typedef uint32_t jsoff_t;
 typedef uint64_t jsval_t;
+
+#define GC_FWD_ARGS jsval_t (*fwd_val)(void *ctx, jsval_t old), void *ctx
+#define GC_UPDATE_ARGS struct js *js, jsoff_t (*fwd_off)(void *ctx, jsoff_t old), GC_FWD_ARGS
 
 enum { 
   JS_UNDEF, JS_NULL, JS_TRUE, JS_FALSE, JS_STR, JS_NUM,
@@ -160,5 +163,6 @@ jsoff_t js_next_prop(jsoff_t header);
 jsoff_t js_loadoff(struct js *js, jsoff_t off);
 
 void js_print_stack_trace(FILE *stream);
+size_t js_gc_compact(struct js *js);
 
 #endif

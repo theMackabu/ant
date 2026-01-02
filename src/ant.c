@@ -5,6 +5,8 @@
 #include "ant.h"
 #include "config.h"
 #include "arena.h"
+#include "runtime.h"
+#include "internal.h"
 
 #include <assert.h>
 #include <math.h>
@@ -340,6 +342,19 @@ static proxy_data_t *proxy_registry = NULL;
 static dynamic_accessors_t *accessor_registry = NULL;
 static descriptor_entry_t *desc_registry = NULL;
 
+typedef struct map_registry_entry {
+  map_entry_t **head;
+  UT_hash_handle hh;
+} map_registry_entry_t;
+
+typedef struct set_registry_entry {
+  set_entry_t **head;
+  UT_hash_handle hh;
+} set_registry_entry_t;
+
+static map_registry_entry_t *map_registry = NULL;
+static set_registry_entry_t *set_registry = NULL;
+
 void ant_register_library(ant_library_init_fn init_fn, const char *name, ...) {
   va_list args;
   const char *alias = name;
@@ -370,48 +385,6 @@ static ant_library_t* find_library(const char *specifier, size_t spec_len) {
   HASH_FIND_STR(library_registry, key, lib);
   return lib;
 }
-
-struct js {
-  jsoff_t css;            // max observed C stack size
-  jsoff_t lwm;            // JS ram low watermark: min free ram observed
-  const char *code;       // currently parsed code snippet
-  char *errmsg;           // dynamic error message buffer
-  size_t errmsg_size;     // size of error message buffer
-  const char *filename;   // current filename for error reporting
-  uint8_t tok;            // last parsed token value
-  uint8_t consumed;       // indicator that last parsed token was consumed
-  uint8_t flags;          // execution flags, see F_* constants below
-  #define F_NOEXEC 1U     // parse code, but not execute
-  #define F_LOOP 2U       // we are inside the loop
-  #define F_CALL 4U       // we are inside a function call
-  #define F_BREAK 8U      // exit the loop
-  #define F_RETURN 16U    // return has been executed
-  #define F_THROW 32U     // throw has been executed
-  #define F_SWITCH 64U    // we are inside a switch statement
-  #define F_STRICT 128U   // strict mode is enabled
-  jsoff_t clen;           // code snippet length
-  jsoff_t pos;            // current parsing position
-  jsoff_t toff;           // offset of the last parsed token
-  jsoff_t tlen;           // length of the last parsed token
-  jsoff_t nogc;           // entity offset to exclude from GC
-  jsval_t tval;           // holds last parsed numeric or string literal value
-  jsval_t scope;          // current scope
-  jsval_t this_val;       // 'this' value for currently executing function
-  jsval_t module_ns;      // current ESM module namespace
-  uint8_t *mem;           // available JS memory
-  jsoff_t size;           // memory size
-  jsoff_t brk;            // current mem usage boundary
-  jsoff_t maxcss;         // maximum allowed C stack size usage
-  void *cstk;             // C stack pointer at the beginning of js_eval()
-  jsval_t current_func;   // currently executing function (for native closures)
-  bool var_warning_shown; // flag to show var deprecation warning only once
-  bool owns_mem;          // true if js owns the memory buffer (dynamic allocation)
-  jsoff_t max_size;       // maximum allowed memory size (for dynamic growth)
-  bool had_newline;       // true if newline was crossed before current token
-  jsval_t thrown_value;   // stores the actual thrown value for catch blocks
-  bool is_hoisting;       // true during function declaration hoisting pass
-  uint64_t sym_counter;   // counter for generating unique symbol IDs
-};
 
 enum {
   TOK_ERR, TOK_EOF, TOK_IDENTIFIER, TOK_NUMBER, TOK_STRING, TOK_SEMICOLON, TOK_BIGINT,
@@ -469,12 +442,6 @@ static const char *typestr_raw(uint8_t t) {
 static jsval_t tov(double d) { union { double d; jsval_t v; } u = {d}; return u.v; }
 static double tod(jsval_t v) { union { jsval_t v; double d; } u = {v}; return u.d; }
 
-#define NANBOX_PREFIX     0x7FC0000000000000ULL
-#define NANBOX_PREFIX_CHK 0x3FEULL
-#define NANBOX_TYPE_SHIFT 48
-#define NANBOX_TYPE_MASK  0x1F
-#define NANBOX_DATA_MASK  0x0000FFFFFFFFFFFFULL
-
 static bool is_tagged(jsval_t v) {
   return (v >> 53) == NANBOX_PREFIX_CHK;
 }
@@ -531,8 +498,12 @@ static jsoff_t propref_key(jsval_t v) {
 static jsoff_t offtolen(jsoff_t off) { return (off >> 2) - 1; }
 static jsoff_t align32(jsoff_t v) { return ((v + 3) >> 2) << 2; }
 
-static void saveoff(struct js *js, jsoff_t off, jsoff_t val) { memcpy(&js->mem[off], &val, sizeof(val)); }
-static void saveval(struct js *js, jsoff_t off, jsval_t val) { memcpy(&js->mem[off], &val, sizeof(val)); }
+static void saveoff(struct js *js, jsoff_t off, jsoff_t val) { 
+  memcpy(&js->mem[off], &val, sizeof(val)); 
+}
+static void saveval(struct js *js, jsoff_t off, jsval_t val) { 
+  memcpy(&js->mem[off], &val, sizeof(val)); 
+}
 
 static const char *typestr(uint8_t t) {
   if (t == T_CFUNC) return "function";
@@ -615,6 +586,10 @@ static inline prim_propref_data_t *prim_propref_get(jsval_t v) {
   if (!prim_propref_stack || idx < 0 || idx >= (int)utarray_len(prim_propref_stack)) return NULL;
   
   return (prim_propref_data_t *)utarray_eltptr(prim_propref_stack, (unsigned)idx);
+}
+
+inline size_t js_getbrk(struct js *js) { 
+  return (size_t) js->brk;
 }
 
 static inline bool is_err(jsval_t v) { 
@@ -929,7 +904,7 @@ static void remove_coroutine(coroutine_t *coro) {
   coro->next = NULL;
 }
 
-static bool has_pending_coroutines(void) {
+inline bool js_has_pending_coroutines(void) {
   return pending_coroutines.head != NULL;
 }
 
@@ -980,7 +955,7 @@ void js_poll_events(struct js *js) {
 }
 
 void js_run_event_loop(struct js *js) {
-  while (has_pending_microtasks() || has_pending_timers() || has_pending_immediates() || has_pending_coroutines() || has_pending_fetches() || has_pending_fs_ops()) {
+  while (has_pending_microtasks() || has_pending_timers() || has_pending_immediates() || js_has_pending_coroutines() || has_pending_fetches() || has_pending_fs_ops()) {
     js_poll_events(js);
     
     if (!has_pending_microtasks() && !has_pending_immediates() && has_pending_timers() && !has_ready_coroutines()) {
@@ -988,7 +963,7 @@ void js_run_event_loop(struct js *js) {
       if (next_timeout_ms > 0) usleep(next_timeout_ms > 1000000 ? 1000000 : next_timeout_ms * 1000);
     }
     
-    if (!has_pending_microtasks() && !has_pending_timers() && !has_pending_immediates() && !has_pending_coroutines() && !has_pending_fetches() && !has_pending_fs_ops()) break;
+    if (!has_pending_microtasks() && !has_pending_timers() && !has_pending_immediates() && !js_has_pending_coroutines() && !has_pending_fetches() && !has_pending_fs_ops()) break;
   }
   
   js_poll_events(js);
@@ -1572,13 +1547,10 @@ static size_t strobj(struct js *js, jsval_t obj, char *buf, size_t len) {
   is_set = (tlen == 3 && memcmp(tag_str, "Set", 3) == 0);
   
   if (is_map) {
-    jsoff_t map_off = lkp(js, obj, "__map", 5);
-    if (map_off == 0) goto print_tagged_object;
+    jsval_t map_val = js_get_slot(js, obj, SLOT_MAP);
+    if (vtype(map_val) == T_UNDEF) goto print_tagged_object;
     
-    jsval_t map_val = resolveprop(js, mkval(T_PROP, map_off));
-    if (vtype(map_val) != T_NUM) goto print_tagged_object;
-    
-    map_entry_t **map_ptr = (map_entry_t**)(size_t)vdata(map_val);
+    map_entry_t **map_ptr = (map_entry_t**)(size_t)tod(map_val);
     n += cpy(buf + n, len - n, "Map(", 4);
     
     unsigned int count = 0;
@@ -1617,13 +1589,10 @@ static size_t strobj(struct js *js, jsval_t obj, char *buf, size_t len) {
   }
   
   if (is_set) {
-    jsoff_t set_off = lkp(js, obj, "__set", 5);
-    if (set_off == 0) goto print_tagged_object;
+    jsval_t set_val = js_get_slot(js, obj, SLOT_SET);
+    if (vtype(set_val) == T_UNDEF) goto print_tagged_object;
     
-    jsval_t set_val = resolveprop(js, mkval(T_PROP, set_off));
-    if (vtype(set_val) != T_NUM) goto print_tagged_object;
-    
-    set_entry_t **set_ptr = (set_entry_t**)(size_t)vdata(set_val);
+    set_entry_t **set_ptr = (set_entry_t**)(size_t)tod(set_val);
     n += cpy(buf + n, len - n, "Set(", 4);
     
     unsigned int count = 0;
@@ -2278,24 +2247,32 @@ jsval_t js_tostring_val(struct js *js, jsval_t value) {
 const char *js_str(struct js *js, jsval_t value) {
   if (is_err(value)) return js->errmsg;
   
-  size_t min_needed = sizeof(jsoff_t) + 256;
-  if (js->brk + min_needed > js->size) {
-    if (!js_try_grow_memory(js, min_needed)) return "";
-  }
-  
-  char *buf = (char *) &js->mem[js->brk + sizeof(jsoff_t)];
-  size_t len, available = js->size - js->brk - sizeof(jsoff_t);
-  
   multiref_count = 0;
   multiref_next_id = 0;
   stringify_depth = 0;
   scan_refs(js, value);
   
-  stringify_depth = 0;
-  stringify_indent = 0;
-  len = tostr(js, value, buf, available);
-  js_mkstr(js, NULL, len);
-  return buf;
+  size_t capacity = 4096;
+  char *buf = (char *)ANT_GC_MALLOC(capacity);
+  if (!buf) return "";
+  
+  size_t len;
+  for (;;) {
+    stringify_depth = 0;
+    stringify_indent = 0;
+    len = tostr(js, value, buf, capacity);
+    
+    if (len < capacity - 1) break;
+    
+    capacity *= 2;
+    buf = (char *)ANT_GC_REALLOC(buf, capacity);
+    if (!buf) return "";
+  }
+  
+  jsval_t str = js_mkstr(js, buf, len);
+  
+  if (is_err(str)) return "";
+  return (const char *)&js->mem[vdata(str) + sizeof(jsoff_t)];
 }
 
 static bool bigint_is_zero(struct js *js, jsval_t v);
@@ -4408,6 +4385,13 @@ static jsval_t assign(struct js *js, jsval_t lhs, jsval_t val) {
     }
     
     return setprop(js, obj, key, val);
+  }
+  
+  if (vtype(lhs) != T_PROP) {
+    if (js->flags & F_STRICT) {
+      return js_mkerr_typed(js, JS_ERR_SYNTAX, "Invalid left-hand side in assignment");
+    }
+    return val;
   }
   
   jsoff_t propoff = (jsoff_t) vdata(lhs);
@@ -9427,7 +9411,7 @@ static jsval_t js_for(struct js *js) {
       if (!js_truthy(js, v)) break;
     }
     
-    jsval_t iter_scope = js_mkundef();
+    bool iter_scope = false;
     jsval_t loop_var_val = js_mkundef();
     if (is_let_loop && let_var_len > 0) {
       jsoff_t var_off = lkp_scope(js, js->scope, &js->code[let_var_off], let_var_len);
@@ -9435,7 +9419,7 @@ static jsval_t js_for(struct js *js) {
         loop_var_val = resolveprop(js, mkval(T_PROP, var_off));
       }
       mkscope(js);
-      iter_scope = js->scope;
+      iter_scope = true;
       jsval_t var_key = js_mkstr(js, &js->code[let_var_off], let_var_len);
       mkprop(js, js->scope, var_key, loop_var_val, false);
     }
@@ -9445,12 +9429,12 @@ static jsval_t js_for(struct js *js) {
     js->consumed = 1;
     v = js_block_or_stmt(js);
     if (is_err2(&v, &res)) {
-      if (vtype(iter_scope) != T_UNDEF) delscope(js);
+      if (iter_scope) delscope(js);
       goto done;
     }
     
     if (is_let_loop && let_var_len > 0) {
-      jsoff_t iter_var_off = lkp(js, iter_scope, &js->code[let_var_off], let_var_len);
+      jsoff_t iter_var_off = lkp(js, js->scope, &js->code[let_var_off], let_var_len);
       if (iter_var_off != 0) {
         loop_var_val = resolveprop(js, mkval(T_PROP, iter_var_off));
       }
@@ -13396,7 +13380,7 @@ static jsval_t builtin_object_defineProperty(struct js *js, jsval_t *args, int n
       }
       
       jsval_t prop_key = js_mkstr(js, prop_str, prop_len);
-      bool mark_const = !writable || !configurable;
+      bool mark_const = !writable;
       mkprop(js, as_obj, prop_key, value, mark_const);
     }
   }
@@ -19145,9 +19129,14 @@ static jsval_t builtin_Map(struct js *js, jsval_t *args, int nargs) {
   if (!map_head) return js_mkerr(js, "out of memory");
   *map_head = NULL;
   
-  jsval_t map_ptr = mkval(T_NUM, (size_t)map_head);
-  jsval_t map_key = js_mkstr(js, "__map", 5);
-  setprop(js, map_obj, map_key, map_ptr);
+  map_registry_entry_t *reg = (map_registry_entry_t *)ANT_GC_MALLOC(sizeof(map_registry_entry_t));
+  if (reg) {
+    reg->head = map_head;
+    HASH_ADD_PTR(map_registry, head, reg);
+  }
+  
+  jsval_t map_ptr = tov((double)(size_t)map_head);
+  set_slot(js, map_obj, SLOT_MAP, map_ptr);
   
   if (nargs == 0 || vtype(args[0]) != T_ARR) return map_obj;
   
@@ -19192,9 +19181,14 @@ static jsval_t builtin_Set(struct js *js, jsval_t *args, int nargs) {
   if (!set_head) return js_mkerr(js, "out of memory");
   *set_head = NULL;
   
-  jsval_t set_ptr = mkval(T_NUM, (size_t)set_head);
-  jsval_t set_key = js_mkstr(js, "__set", 5);
-  setprop(js, set_obj, set_key, set_ptr);
+  set_registry_entry_t *reg = (set_registry_entry_t *)ANT_GC_MALLOC(sizeof(set_registry_entry_t));
+  if (reg) {
+    reg->head = set_head;
+    HASH_ADD_PTR(set_registry, head, reg);
+  }
+  
+  jsval_t set_ptr = tov((double)(size_t)set_head);
+  set_slot(js, set_obj, SLOT_SET, set_ptr);
   
   if (nargs == 0 || vtype(args[0]) != T_ARR) return set_obj;
   
@@ -19220,19 +19214,15 @@ static jsval_t builtin_Set(struct js *js, jsval_t *args, int nargs) {
 }
 
 static map_entry_t** get_map_from_obj(struct js *js, jsval_t obj) {
-  jsoff_t map_off = lkp(js, obj, "__map", 5);
-  if (map_off == 0) return NULL;
-  jsval_t map_val = resolveprop(js, mkval(T_PROP, map_off));
-  if (vtype(map_val) != T_NUM) return NULL;
-  return (map_entry_t**)(size_t)vdata(map_val);
+  jsval_t map_val = js_get_slot(js, obj, SLOT_MAP);
+  if (vtype(map_val) == T_UNDEF) return NULL;
+  return (map_entry_t**)(size_t)tod(map_val);
 }
 
 static set_entry_t** get_set_from_obj(struct js *js, jsval_t obj) {
-  jsoff_t set_off = lkp(js, obj, "__set", 5);
-  if (set_off == 0) return NULL;
-  jsval_t set_val = resolveprop(js, mkval(T_PROP, set_off));
-  if (vtype(set_val) != T_NUM) return NULL;
-  return (set_entry_t**)(size_t)vdata(set_val);
+  jsval_t set_val = js_get_slot(js, obj, SLOT_SET);
+  if (vtype(set_val) == T_UNDEF) return NULL;
+  return (set_entry_t**)(size_t)tod(set_val);
 }
 
 static jsval_t map_set(struct js *js, jsval_t *args, int nargs) {
@@ -20728,7 +20718,145 @@ void js_stats(struct js *js, size_t *total, size_t *lwm, size_t *css) {
   if (css) *css = js->css;
 }
 
-size_t js_getbrk(struct js *js) { return (size_t) js->brk; }
+void js_gc_update_roots(GC_UPDATE_ARGS) {
+  if (global_scope_stack) {
+    unsigned int len = utarray_len(global_scope_stack);
+    for (unsigned int i = 0; i < len; i++) {
+      jsoff_t *off = (jsoff_t *)utarray_eltptr(global_scope_stack, i);
+      if (off && *off != 0) *off = fwd_off(ctx, *off);
+    }
+  }
+  
+  for (int i = 0; i < global_this_stack.depth; i++) {
+    global_this_stack.stack[i] = fwd_val(ctx, global_this_stack.stack[i]);
+  }
+  
+  if (propref_stack) {
+    unsigned int len = utarray_len(propref_stack);
+    for (unsigned int i = 0; i < len; i++) {
+      propref_data_t *entry = (propref_data_t *)utarray_eltptr(propref_stack, i);
+      if (entry) {
+        if (entry->obj_off != 0) entry->obj_off = fwd_off(ctx, entry->obj_off);
+        if (entry->key_off != 0) entry->key_off = fwd_off(ctx, entry->key_off);
+      }
+    }
+  }
+  
+  if (prim_propref_stack) {
+    unsigned int len = utarray_len(prim_propref_stack);
+    for (unsigned int i = 0; i < len; i++) {
+      prim_propref_data_t *entry = (prim_propref_data_t *)utarray_eltptr(prim_propref_stack, i);
+      if (entry) {
+        entry->prim_val = fwd_val(ctx, entry->prim_val);
+        if (entry->key_off != 0) entry->key_off = fwd_off(ctx, entry->key_off);
+      }
+    }
+  }
+  
+  promise_data_entry_t *pd, *pd_tmp;
+  HASH_ITER(hh, promise_registry, pd, pd_tmp) {
+    pd->value = fwd_val(ctx, pd->value);
+    if (pd->handlers) {
+      unsigned int len = utarray_len(pd->handlers);
+      for (unsigned int i = 0; i < len; i++) {
+        promise_handler_t *h = (promise_handler_t *)utarray_eltptr(pd->handlers, i);
+        if (h) {
+          h->onFulfilled = fwd_val(ctx, h->onFulfilled);
+          h->onRejected = fwd_val(ctx, h->onRejected);
+          h->nextPromise = fwd_val(ctx, h->nextPromise);
+        }
+      }
+    }
+  }
+  
+  if (rt && rt->js == js) {
+    rt->ant_obj = fwd_val(ctx, rt->ant_obj);
+  }
+  
+  proxy_data_t *proxy, *proxy_tmp;
+  proxy_data_t *new_proxy_registry = NULL;
+  HASH_ITER(hh, proxy_registry, proxy, proxy_tmp) {
+    HASH_DEL(proxy_registry, proxy);
+    proxy->obj_offset = fwd_off(ctx, proxy->obj_offset);
+    proxy->target = fwd_val(ctx, proxy->target);
+    proxy->handler = fwd_val(ctx, proxy->handler);
+    HASH_ADD(hh, new_proxy_registry, obj_offset, sizeof(jsoff_t), proxy);
+  }
+  proxy_registry = new_proxy_registry;
+  
+  dynamic_accessors_t *acc, *acc_tmp;
+  dynamic_accessors_t *new_accessor_registry = NULL;
+  HASH_ITER(hh, accessor_registry, acc, acc_tmp) {
+    HASH_DEL(accessor_registry, acc);
+    acc->obj_offset = fwd_off(ctx, acc->obj_offset);
+    HASH_ADD(hh, new_accessor_registry, obj_offset, sizeof(jsoff_t), acc);
+  }
+  accessor_registry = new_accessor_registry;
+  
+  descriptor_entry_t *desc, *desc_tmp;
+  descriptor_entry_t *new_desc_registry = NULL;
+  HASH_ITER(hh, desc_registry, desc, desc_tmp) {
+    HASH_DEL(desc_registry, desc);
+    
+    if (desc->has_getter) desc->getter = fwd_val(ctx, desc->getter);
+    if (desc->has_setter) desc->setter = fwd_val(ctx, desc->setter);
+    
+    jsoff_t old_obj_off = (jsoff_t)(desc->key >> 32);
+    uint32_t key_hash = (uint32_t)(desc->key & 0xFFFFFFFF);
+    jsoff_t new_obj_off = fwd_off(ctx, old_obj_off);
+    desc->key = ((uint64_t)new_obj_off << 32) | key_hash;
+    
+    HASH_ADD(hh, new_desc_registry, key, sizeof(uint64_t), desc);
+  }
+  desc_registry = new_desc_registry;
+  
+  for (coroutine_t *coro = pending_coroutines.head; coro; coro = coro->next) {
+    coro->scope = fwd_val(ctx, coro->scope);
+    coro->this_val = fwd_val(ctx, coro->this_val);
+    coro->awaited_promise = fwd_val(ctx, coro->awaited_promise);
+    coro->result = fwd_val(ctx, coro->result);
+    coro->async_func = fwd_val(ctx, coro->async_func);
+    coro->yield_value = fwd_val(ctx, coro->yield_value);
+    
+    if (coro->mco) {
+      async_exec_context_t *actx = (async_exec_context_t *)mco_get_user_data(coro->mco);
+      if (actx) {
+        actx->closure_scope = fwd_val(ctx, actx->closure_scope);
+        actx->result = fwd_val(ctx, actx->result);
+        actx->promise = fwd_val(ctx, actx->promise);
+      }
+    }
+  }
+
+  esm_module_t *mod, *mod_tmp;
+  HASH_ITER(hh, global_module_cache.modules, mod, mod_tmp) {
+    mod->namespace_obj = fwd_val(ctx, mod->namespace_obj);
+    mod->default_export = fwd_val(ctx, mod->default_export);
+  }
+
+  timer_gc_update_roots(fwd_val, ctx);
+  ffi_gc_update_roots(fwd_val, ctx);
+  fetch_gc_update_roots(fwd_val, ctx);
+  fs_gc_update_roots(fwd_val, ctx);
+
+  map_registry_entry_t *map_reg, *map_reg_tmp;
+  HASH_ITER(hh, map_registry, map_reg, map_reg_tmp) {
+    if (map_reg->head && *map_reg->head) {
+      map_entry_t *entry, *entry_tmp;
+      HASH_ITER(hh, *map_reg->head, entry, entry_tmp) entry->value = fwd_val(ctx, entry->value);
+    }
+  }
+
+  set_registry_entry_t *set_reg, *set_reg_tmp;
+  HASH_ITER(hh, set_registry, set_reg, set_reg_tmp) {
+    if (set_reg->head && *set_reg->head) {
+      set_entry_t *entry, *entry_tmp;
+      HASH_ITER(hh, *set_reg->head, entry, entry_tmp) entry->value = fwd_val(ctx, entry->value);
+    }
+  }
+
+  memset(intern_prop_cache, 0, sizeof(intern_prop_cache));
+}
 
 bool js_chkargs(jsval_t *args, int nargs, const char *spec) {
   int i = 0, ok = 1;

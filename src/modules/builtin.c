@@ -4,7 +4,7 @@
 #include <string.h>
 
 #include "ant.h"
-#include "arena.h"
+#include "gc.h"
 #include "runtime.h"
 #include "modules/builtin.h"
 
@@ -68,8 +68,10 @@ static jsval_t js_gc_trigger(struct js *js, jsval_t *args, int nargs) {
 
   size_t heap_before = GC_get_heap_size();
   size_t used_before = GC_get_heap_size() - GC_get_free_bytes();
+  size_t arena_before = js_getbrk(js);
   
-  ANT_GC_COLLECT();
+  size_t arena_freed = js_gc_compact(js);
+  size_t arena_after = js_getbrk(js);
   
   size_t heap_after = GC_get_heap_size();
   size_t used_after = GC_get_heap_size() - GC_get_free_bytes();
@@ -81,6 +83,9 @@ static jsval_t js_gc_trigger(struct js *js, jsval_t *args, int nargs) {
   js_set(js, result, "usedBefore", js_mknum((double)used_before));
   js_set(js, result, "usedAfter", js_mknum((double)used_after));
   js_set(js, result, "freed", js_mknum((double)freed));
+  js_set(js, result, "arenaBefore", js_mknum((double)arena_before));
+  js_set(js, result, "arenaAfter", js_mknum((double)arena_after));
+  js_set(js, result, "arenaFreed", js_mknum((double)arena_freed));
 
   return result;
 }
@@ -90,6 +95,9 @@ static jsval_t js_alloc(struct js *js, jsval_t *args, int nargs) {
   (void) args; (void) nargs;
   
   jsval_t result = js_mkobj(js);
+  size_t arena_size = js_getbrk(js);
+  
+  js_set(js, result, "arenaSize", js_mknum((double)arena_size));
   js_set(js, result, "heapSize", js_mknum((double)GC_get_heap_size()));
   js_set(js, result, "freeBytes", js_mknum((double)GC_get_free_bytes()));
   js_set(js, result, "usedBytes", js_mknum((double)(GC_get_heap_size() - GC_get_free_bytes())));
