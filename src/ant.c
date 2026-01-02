@@ -20731,120 +20731,87 @@ void js_stats(struct js *js, size_t *total, size_t *lwm, size_t *css) {
   if (css) *css = js->css;
 }
 
+#define FWD_OFF(off) ((off) ? ((off) = fwd_off(ctx, off)) : 0)
+#define FWD_VAL(val) ((val) = fwd_val(ctx, val))
+#define UTARRAY_EACH(arr, type, var) if (arr) for (type *var = (type *)utarray_front(arr), *_end = var + utarray_len(arr); var < _end; var++)
+
+#define REHASH_REGISTRY(registry, entry, tmp, new_reg, key_field, key_size, body) \
+for (typeof(registry) new_reg = NULL, *_once = NULL; !_once; _once = (void*)1, registry = new_reg) \
+  HASH_ITER(hh, registry, entry, tmp) { \
+    HASH_DEL(registry, entry); \
+    body; \
+    HASH_ADD(hh, new_reg, key_field, key_size, entry); \
+}
+
 void js_gc_update_roots(GC_UPDATE_ARGS) {
-  if (global_scope_stack) {
-    unsigned int len = utarray_len(global_scope_stack);
-    for (unsigned int i = 0; i < len; i++) {
-      jsoff_t *off = (jsoff_t *)utarray_eltptr(global_scope_stack, i);
-      if (off && *off != 0) *off = fwd_off(ctx, *off);
-    }
+  UTARRAY_EACH(global_scope_stack, jsoff_t, off) FWD_OFF(*off);
+
+  for (int i = 0; i < global_this_stack.depth; i++)
+    FWD_VAL(global_this_stack.stack[i]);
+
+  UTARRAY_EACH(propref_stack, propref_data_t, pref) {
+    FWD_OFF(pref->obj_off);
+    FWD_OFF(pref->key_off);
   }
-  
-  for (int i = 0; i < global_this_stack.depth; i++) {
-    global_this_stack.stack[i] = fwd_val(ctx, global_this_stack.stack[i]);
+
+  UTARRAY_EACH(prim_propref_stack, prim_propref_data_t, ppref) {
+    FWD_VAL(ppref->prim_val);
+    FWD_OFF(ppref->key_off);
   }
-  
-  if (propref_stack) {
-    unsigned int len = utarray_len(propref_stack);
-    for (unsigned int i = 0; i < len; i++) {
-      propref_data_t *entry = (propref_data_t *)utarray_eltptr(propref_stack, i);
-      if (entry) {
-        if (entry->obj_off != 0) entry->obj_off = fwd_off(ctx, entry->obj_off);
-        if (entry->key_off != 0) entry->key_off = fwd_off(ctx, entry->key_off);
-      }
-    }
-  }
-  
-  if (prim_propref_stack) {
-    unsigned int len = utarray_len(prim_propref_stack);
-    for (unsigned int i = 0; i < len; i++) {
-      prim_propref_data_t *entry = (prim_propref_data_t *)utarray_eltptr(prim_propref_stack, i);
-      if (entry) {
-        entry->prim_val = fwd_val(ctx, entry->prim_val);
-        if (entry->key_off != 0) entry->key_off = fwd_off(ctx, entry->key_off);
-      }
-    }
-  }
-  
+
   promise_data_entry_t *pd, *pd_tmp;
   HASH_ITER(hh, promise_registry, pd, pd_tmp) {
-    pd->value = fwd_val(ctx, pd->value);
-    if (pd->handlers) {
-      unsigned int len = utarray_len(pd->handlers);
-      for (unsigned int i = 0; i < len; i++) {
-        promise_handler_t *h = (promise_handler_t *)utarray_eltptr(pd->handlers, i);
-        if (h) {
-          h->onFulfilled = fwd_val(ctx, h->onFulfilled);
-          h->onRejected = fwd_val(ctx, h->onRejected);
-          h->nextPromise = fwd_val(ctx, h->nextPromise);
-        }
-      }
+    FWD_VAL(pd->value);
+    UTARRAY_EACH(pd->handlers, promise_handler_t, h) {
+      FWD_VAL(h->onFulfilled);
+      FWD_VAL(h->onRejected);
+      FWD_VAL(h->nextPromise);
     }
   }
-  
-  if (rt && rt->js == js) {
-    rt->ant_obj = fwd_val(ctx, rt->ant_obj);
-  }
-  
+
+  if (rt && rt->js == js) FWD_VAL(rt->ant_obj);
+
   proxy_data_t *proxy, *proxy_tmp;
-  proxy_data_t *new_proxy_registry = NULL;
-  HASH_ITER(hh, proxy_registry, proxy, proxy_tmp) {
-    HASH_DEL(proxy_registry, proxy);
-    proxy->obj_offset = fwd_off(ctx, proxy->obj_offset);
-    proxy->target = fwd_val(ctx, proxy->target);
-    proxy->handler = fwd_val(ctx, proxy->handler);
-    HASH_ADD(hh, new_proxy_registry, obj_offset, sizeof(jsoff_t), proxy);
-  }
-  proxy_registry = new_proxy_registry;
-  
+  REHASH_REGISTRY(proxy_registry, proxy, proxy_tmp, new_proxy, obj_offset, sizeof(jsoff_t), {
+    FWD_OFF(proxy->obj_offset);
+    FWD_VAL(proxy->target);
+    FWD_VAL(proxy->handler);
+  });
+
   dynamic_accessors_t *acc, *acc_tmp;
-  dynamic_accessors_t *new_accessor_registry = NULL;
-  HASH_ITER(hh, accessor_registry, acc, acc_tmp) {
-    HASH_DEL(accessor_registry, acc);
-    acc->obj_offset = fwd_off(ctx, acc->obj_offset);
-    HASH_ADD(hh, new_accessor_registry, obj_offset, sizeof(jsoff_t), acc);
-  }
-  accessor_registry = new_accessor_registry;
-  
+  REHASH_REGISTRY(accessor_registry, acc, acc_tmp, new_acc, obj_offset, sizeof(jsoff_t), {
+    FWD_OFF(acc->obj_offset);
+  });
+
   descriptor_entry_t *desc, *desc_tmp;
-  descriptor_entry_t *new_desc_registry = NULL;
-  HASH_ITER(hh, desc_registry, desc, desc_tmp) {
-    HASH_DEL(desc_registry, desc);
-    
-    if (desc->has_getter) desc->getter = fwd_val(ctx, desc->getter);
-    if (desc->has_setter) desc->setter = fwd_val(ctx, desc->setter);
-    
-    jsoff_t old_obj_off = (jsoff_t)(desc->key >> 32);
-    uint32_t key_hash = (uint32_t)(desc->key & 0xFFFFFFFF);
-    jsoff_t new_obj_off = fwd_off(ctx, old_obj_off);
-    desc->key = ((uint64_t)new_obj_off << 32) | key_hash;
-    
-    HASH_ADD(hh, new_desc_registry, key, sizeof(uint64_t), desc);
-  }
-  desc_registry = new_desc_registry;
-  
+  REHASH_REGISTRY(desc_registry, desc, desc_tmp, new_desc, key, sizeof(uint64_t), {
+    if (desc->has_getter) FWD_VAL(desc->getter);
+    if (desc->has_setter) FWD_VAL(desc->setter);
+    jsoff_t obj_off = fwd_off(ctx, (jsoff_t)(desc->key >> 32));
+    desc->key = ((uint64_t)obj_off << 32) | (uint32_t)(desc->key & 0xFFFFFFFF);
+  });
+
   for (coroutine_t *coro = pending_coroutines.head; coro; coro = coro->next) {
-    coro->scope = fwd_val(ctx, coro->scope);
-    coro->this_val = fwd_val(ctx, coro->this_val);
-    coro->awaited_promise = fwd_val(ctx, coro->awaited_promise);
-    coro->result = fwd_val(ctx, coro->result);
-    coro->async_func = fwd_val(ctx, coro->async_func);
-    coro->yield_value = fwd_val(ctx, coro->yield_value);
-    
+    FWD_VAL(coro->scope);
+    FWD_VAL(coro->this_val);
+    FWD_VAL(coro->awaited_promise);
+    FWD_VAL(coro->result);
+    FWD_VAL(coro->async_func);
+    FWD_VAL(coro->yield_value);
     if (coro->mco) {
       async_exec_context_t *actx = (async_exec_context_t *)mco_get_user_data(coro->mco);
       if (actx) {
-        actx->closure_scope = fwd_val(ctx, actx->closure_scope);
-        actx->result = fwd_val(ctx, actx->result);
-        actx->promise = fwd_val(ctx, actx->promise);
+        FWD_VAL(actx->closure_scope);
+        FWD_VAL(actx->result);
+        FWD_VAL(actx->promise);
       }
     }
   }
 
   esm_module_t *mod, *mod_tmp;
   HASH_ITER(hh, global_module_cache.modules, mod, mod_tmp) {
-    mod->namespace_obj = fwd_val(ctx, mod->namespace_obj);
-    mod->default_export = fwd_val(ctx, mod->default_export);
+    FWD_VAL(mod->namespace_obj);
+    FWD_VAL(mod->default_export);
   }
 
   timer_gc_update_roots(fwd_val, ctx);
@@ -20855,21 +20822,26 @@ void js_gc_update_roots(GC_UPDATE_ARGS) {
   map_registry_entry_t *map_reg, *map_reg_tmp;
   HASH_ITER(hh, map_registry, map_reg, map_reg_tmp) {
     if (map_reg->head && *map_reg->head) {
-      map_entry_t *entry, *entry_tmp;
-      HASH_ITER(hh, *map_reg->head, entry, entry_tmp) entry->value = fwd_val(ctx, entry->value);
+      map_entry_t *me, *me_tmp;
+      HASH_ITER(hh, *map_reg->head, me, me_tmp) FWD_VAL(me->value);
     }
   }
 
   set_registry_entry_t *set_reg, *set_reg_tmp;
   HASH_ITER(hh, set_registry, set_reg, set_reg_tmp) {
     if (set_reg->head && *set_reg->head) {
-      set_entry_t *entry, *entry_tmp;
-      HASH_ITER(hh, *set_reg->head, entry, entry_tmp) entry->value = fwd_val(ctx, entry->value);
+      set_entry_t *se, *se_tmp;
+      HASH_ITER(hh, *set_reg->head, se, se_tmp) FWD_VAL(se->value);
     }
   }
 
   memset(intern_prop_cache, 0, sizeof(intern_prop_cache));
 }
+
+#undef FWD_OFF
+#undef FWD_VAL
+#undef UTARRAY_EACH
+#undef REHASH_REGISTRY
 
 bool js_chkargs(jsval_t *args, int nargs, const char *spec) {
   int i = 0, ok = 1;
