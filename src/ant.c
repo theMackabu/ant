@@ -5259,10 +5259,10 @@ static jsval_t call_js_internal_nfe(struct js *js, const char *fn, jsoff_t fnlen
   }
   
    jsval_t slot_name = get_slot(js, func_val, SLOT_NAME);
-   if (vtype(func_name) == T_STR && vtype(func_val) == T_FUNC && vtype(slot_name) == T_UNDEF) {
+   if (vtype(slot_name) == T_STR && vtype(func_val) == T_FUNC) {
      jsoff_t len;
-     (void)vstr(js, func_name, &len);
-     if (len > 0) mkprop_fast(js, function_scope, func_name, func_val, true);
+     (void)vstr(js, slot_name, &len);
+     if (len > 0) mkprop_fast(js, function_scope, slot_name, func_val, true);
    }
   
   if (func_strict && (vtype(target_this) == T_UNDEF || vtype(target_this) == T_NULL ||
@@ -5405,11 +5405,11 @@ static jsval_t call_js_code_with_args_nfe(struct js *js, const char *fn, jsoff_t
    js->scope = function_scope;
    
    jsval_t slot_name = get_slot(js, func_val, SLOT_NAME);
-   if (vtype(func_name) == T_STR && vtype(func_val) == T_FUNC && vtype(slot_name) == T_UNDEF) {
+   if (vtype(slot_name) == T_STR && vtype(func_val) == T_FUNC) {
      jsoff_t len;
-     (void)vstr(js, func_name, &len);
+     (void)vstr(js, slot_name, &len);
      if (len > 0) {
-       jsval_t prop = mkprop(js, function_scope, func_name, func_val, true);
+       jsval_t prop = mkprop(js, function_scope, slot_name, func_val, true);
        (void)prop;
      }
    }
