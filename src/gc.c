@@ -9,15 +9,14 @@
 #define MCO_API extern
 #include "minicoro.h"
 
-typedef struct {
+typedef struct gc_forward_node {
   jsoff_t old_off;
   jsoff_t new_off;
-} gc_forward_t;
+  struct gc_forward_node *next;
+} gc_forward_node_t;
 
 typedef struct {
-  gc_forward_t *entries;
-  size_t count;
-  size_t capacity;
+  gc_forward_node_t *buckets[JS_HASH_SIZE];
 } gc_forward_table_t;
 
 typedef struct {
@@ -37,35 +36,39 @@ static inline void mark_set(gc_ctx_t *ctx, jsoff_t off) {
   ctx->mark_bits[idx >> 3] |= (1 << (idx & 7));
 }
 
+static inline size_t fwd_hash(jsoff_t off) {
+  return (off >> 2) & (JS_HASH_SIZE - 1);
+}
+
 static void fwd_init(gc_forward_table_t *fwd) {
-  fwd->capacity = 256;
-  fwd->entries = (gc_forward_t *)malloc(fwd->capacity * sizeof(gc_forward_t));
-  fwd->count = 0;
+  memset(fwd->buckets, 0, sizeof(fwd->buckets));
 }
 
 static void fwd_add(gc_forward_table_t *fwd, jsoff_t old_off, jsoff_t new_off) {
-  if (fwd->count >= fwd->capacity) {
-    fwd->capacity *= 2;
-    fwd->entries = (gc_forward_t *)realloc(fwd->entries, fwd->capacity * sizeof(gc_forward_t));
-  }
-  fwd->entries[fwd->count].old_off = old_off;
-  fwd->entries[fwd->count].new_off = new_off;
-  fwd->count++;
+  size_t h = fwd_hash(old_off);
+  gc_forward_node_t *node = malloc(sizeof(gc_forward_node_t));
+  node->old_off = old_off;
+  node->new_off = new_off;
+  node->next = fwd->buckets[h];
+  fwd->buckets[h] = node;
 }
 
 static jsoff_t fwd_lookup(gc_forward_table_t *fwd, jsoff_t old_off) {
-  // linear search, could be optimized with hash table for large heaps
-  for (size_t i = 0; i < fwd->count; i++) {
-    if (fwd->entries[i].old_off == old_off) return fwd->entries[i].new_off;
+  size_t h = fwd_hash(old_off);
+  for (gc_forward_node_t *n = fwd->buckets[h]; n; n = n->next) {
+    if (n->old_off == old_off) return n->new_off;
   }
   return (jsoff_t)~0;
 }
 
 static void fwd_free(gc_forward_table_t *fwd) {
-  free(fwd->entries);
-  fwd->entries = NULL;
-  fwd->count = 0;
-  fwd->capacity = 0;
+  for (size_t i = 0; i < JS_HASH_SIZE; i++) {
+    gc_forward_node_t *n = fwd->buckets[i];
+    while (n) {
+      gc_forward_node_t *next = n->next;
+      free(n); n = next;
+    }
+  }
 }
 
 static inline jsoff_t gc_loadoff(uint8_t *mem, jsoff_t off) {

@@ -57,6 +57,7 @@ struct js {
 #define JS_V_PROMISE   12
 #define JS_V_BIGINT    14
 #define JS_V_GENERATOR 17
+#define JS_HASH_SIZE   512
 
 #define NANBOX_PREFIX     0x7FC0000000000000ULL
 #define NANBOX_PREFIX_CHK 0x3FEULL
