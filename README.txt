@@ -228,11 +228,17 @@ CONCURRENCY:
 
 SYSTEM:
   - Signal handlers (SIGINT, SIGTERM, etc.)
-  - Boehm-Demers-Weiser garbage collector (bdwgc)
+  - Mark-copy compacting garbage collector + Boehm-Demers-Weiser
+  - Coroutine execution tracking for proper GC
+  - Forward reference tracking for memory compaction
   - Internal slots for efficient object metadata storage
   - Property lookup caching with interned strings
   - Dynamic memory growth with configurable limits
+  - Non-configurable properties support (Object.defineProperty)
   - Native library integration via FFI
   - libuv-based async I/O for files and networking
   - LTO (Link Time Optimization) build support
   - Gzip compression support for HTTP responses
+
+LICENSE:
+  MIT License - See LICENSE.txt for details
