@@ -2321,7 +2321,7 @@ static jsoff_t js_alloc(struct js *js, size_t size) {
       ofs = js->brk;
       if (js->brk + size > js->size) return ~(jsoff_t) 0;
     } else {
-      ANT_GC_COLLECT();
+      js_gc_compact(js);
       ofs = js->brk;
       if (js->brk + size > js->size) {
         if (js_try_grow_memory(js, size)) {
@@ -4616,8 +4616,7 @@ static jsval_t do_bracket_op(struct js *js, jsval_t l, jsval_t r) {
   jsoff_t off = lkp_proto(js, obj, keystr, keylen);
   if (off == 0) {
     jsval_t key = js_mkstr(js, keystr, keylen);
-    jsval_t prop = setprop(js, obj, key, js_mkundef());
-    return prop;
+    return mkpropref((jsoff_t)vdata(obj), (jsoff_t)vdata(key));
   }
   return mkval(T_PROP, off);
 }
@@ -7670,6 +7669,7 @@ static void unlink_prop(struct js *js, jsoff_t obj_off, jsoff_t prop_off, jsoff_
   jsoff_t deleted_next = loadoff(js, prop_off) & ~FLAGMASK;
   jsoff_t target = prev_off ? prev_off : obj_off;
   jsoff_t current = loadoff(js, target);
+  
   saveoff(js, target, (deleted_next & ~3U) | (current & (FLAGMASK | 3U)));
   increment_version(js, obj_off);
 }
@@ -7862,11 +7862,14 @@ do_delete: {
       jsoff_t first_prop = loadoff(js, obj_off) & ~(3U | FLAGMASK);
       if (first_prop == prop_off) {
         unlink_prop(js, obj_off, prop_off, 0);
-        return js_mktrue();
+        js_gc_compact(js); return js_mktrue();
       }
       for (jsoff_t prev = first_prop; prev != 0; ) {
         jsoff_t next_prop = loadoff(js, prev) & ~(3U | FLAGMASK);
-        if (next_prop == prop_off) { unlink_prop(js, obj_off, prop_off, prev); return js_mktrue(); }
+        if (next_prop == prop_off) { 
+          unlink_prop(js, obj_off, prop_off, prev); 
+          js_gc_compact(js); return js_mktrue(); 
+        }
         prev = next_prop;
       }
       return js_mktrue();
@@ -20620,6 +20623,7 @@ bool js_del(struct js *js, jsval_t obj, const char *key) {
     jsoff_t current = loadoff(js, obj_off);
     saveoff(js, obj_off, (deleted_next & ~3U) | (current & (FLAGMASK | 3U)));
     increment_version(js, obj_off);
+    js_gc_compact(js);
     return true;
   }
   
@@ -20631,6 +20635,7 @@ bool js_del(struct js *js, jsval_t obj, const char *key) {
       jsoff_t prev_flags = loadoff(js, prev) & FLAGMASK;
       saveoff(js, prev, deleted_next | prev_flags);
       increment_version(js, obj_off);
+      js_gc_compact(js);
       return true;
     }
     prev = next_prop;
