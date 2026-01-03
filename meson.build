@@ -33,7 +33,17 @@ if host_machine.system() == 'darwin'
 endif
 
 tlsuv_opts = cmake.subproject_options()
-tlsuv_opts.add_cmake_defines({'BUILD_TESTING': 'OFF'})
+bdwgc_opts = cmake.subproject_options()
+
+tlsuv_opts.add_cmake_defines({
+  'BUILD_TESTING': 'OFF'
+})
+
+bdwgc_opts.add_cmake_defines({
+  'BUILD_SHARED_LIBS': 'OFF',
+  'enable_cplusplus': 'OFF',
+})
+
 tlsuv_opts.append_compile_args('c', [
   '-Wno-unused-function',
   '-Wno-unused-variable',
@@ -41,8 +51,7 @@ tlsuv_opts.append_compile_args('c', [
   '-Wno-sometimes-uninitialized'
 ])
 
-bdwgc_opts = cmake.subproject_options()
-tlsuv_opts.append_compile_args('c', [
+bdwgc_opts.append_compile_args('c', [
   '-DGC_NO_THREAD_REDIRECTS',
   '-DGC_THREADS',
 ])
@@ -86,7 +95,7 @@ endif
 build_date = run_command('date', '+%Y-%m-%d', check: true).stdout().strip()
 
 version_conf = configuration_data()
-version_conf.set('ANT_VERSION', '0.3.1.17')
+version_conf.set('ANT_VERSION', '0.3.2.6')
 version_conf.set('ANT_GIT_HASH', git_hash)
 version_conf.set('ANT_BUILD_DATE', build_date)
 
