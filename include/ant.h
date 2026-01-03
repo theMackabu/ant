@@ -163,6 +163,8 @@ jsoff_t js_next_prop(jsoff_t header);
 jsoff_t js_loadoff(struct js *js, jsoff_t off);
 
 void js_print_stack_trace(FILE *stream);
+void js_set_needs_gc(struct js *js, bool needs);
+
 size_t js_gc_compact(struct js *js);
 
 #endif

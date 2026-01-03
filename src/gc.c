@@ -367,8 +367,11 @@ size_t js_gc_compact(struct js *js) {
   js->tval = gc_update_val(&ctx, js->tval);
   js_gc_update_roots(js, gc_fwd_off_callback, gc_fwd_val_callback, &ctx);
   
+  uint8_t *old_mem = js->mem;
   js->mem = new_mem;
   js->brk = ctx.new_brk;
+  
+  ANT_GC_FREE(old_mem);
   
   jsoff_t free_space = js->size - js->brk;
   if (free_space < js->lwm || js->lwm == 0) {

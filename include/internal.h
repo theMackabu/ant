@@ -43,6 +43,8 @@ struct js {
   jsval_t thrown_value;   // stores the actual thrown value for catch blocks
   bool is_hoisting;       // true during function declaration hoisting pass
   uint64_t sym_counter;   // counter for generating unique symbol IDs
+  bool needs_gc;          // deferred GC flag, checked at statement boundaries
+  int eval_depth;         // recursion depth of js_eval calls
 };
 
 #define JS_T_OBJ   0

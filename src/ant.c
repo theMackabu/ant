@@ -512,6 +512,10 @@ static const char *typestr(uint8_t t) {
   return typestr_raw(t);
 }
 
+void js_set_needs_gc(struct js *js, bool needs) {
+  js->needs_gc = needs;
+}
+
 uint8_t vtype(jsval_t v) { 
   return is_tagged(v) ? ((v >> NANBOX_TYPE_SHIFT) & NANBOX_TYPE_MASK) : (uint8_t)T_NUM; 
 }
@@ -7672,6 +7676,7 @@ static void unlink_prop(struct js *js, jsoff_t obj_off, jsoff_t prop_off, jsoff_
   
   saveoff(js, target, (deleted_next & ~3U) | (current & (FLAGMASK | 3U)));
   increment_version(js, obj_off);
+  js->needs_gc = true;
 }
 
 static jsval_t check_frozen_sealed(struct js *js, jsval_t obj, const char *action) {
@@ -7862,13 +7867,13 @@ do_delete: {
       jsoff_t first_prop = loadoff(js, obj_off) & ~(3U | FLAGMASK);
       if (first_prop == prop_off) {
         unlink_prop(js, obj_off, prop_off, 0);
-        js_gc_compact(js); return js_mktrue();
+        return js_mktrue();
       }
       for (jsoff_t prev = first_prop; prev != 0; ) {
         jsoff_t next_prop = loadoff(js, prev) & ~(3U | FLAGMASK);
         if (next_prop == prop_off) { 
           unlink_prop(js, obj_off, prop_off, prev); 
-          js_gc_compact(js); return js_mktrue(); 
+          return js_mktrue(); 
         }
         prev = next_prop;
       }
@@ -14005,6 +14010,7 @@ static jsval_t builtin_array_pop(struct js *js, jsval_t *args, int nargs) {
   jsval_t len_key = js_mkstr(js, "length", 6);
   jsval_t len_val = tov((double) len);
   setprop(js, arr, len_key, len_val);
+  js->needs_gc = true;
   
   return result;
 }
@@ -14970,6 +14976,7 @@ static jsval_t builtin_array_shift(struct js *js, jsval_t *args, int nargs) {
   
   jsval_t len_key = js_mkstr(js, "length", 6);
   setprop(js, arr, len_key, tov((double)(len - 1)));
+  js->needs_gc = true;
   return first;
 }
 
@@ -15161,6 +15168,7 @@ static jsval_t builtin_array_splice(struct js *js, jsval_t *args, int nargs) {
   
   jsval_t len_key = js_mkstr(js, "length", 6);
   setprop(js, arr, len_key, tov((double)((int)len + shift)));
+  if (deleteCount > 0) js->needs_gc = true;
   return mkval(T_ARR, vdata(removed));
 }
 
@@ -20623,7 +20631,7 @@ bool js_del(struct js *js, jsval_t obj, const char *key) {
     jsoff_t current = loadoff(js, obj_off);
     saveoff(js, obj_off, (deleted_next & ~3U) | (current & (FLAGMASK | 3U)));
     increment_version(js, obj_off);
-    js_gc_compact(js);
+    js->needs_gc = true;
     return true;
   }
   
@@ -20635,7 +20643,7 @@ bool js_del(struct js *js, jsval_t obj, const char *key) {
       jsoff_t prev_flags = loadoff(js, prev) & FLAGMASK;
       saveoff(js, prev, deleted_next | prev_flags);
       increment_version(js, obj_off);
-      js_gc_compact(js);
+      js->needs_gc = true;
       return true;
     }
     prev = next_prop;
@@ -20862,6 +20870,7 @@ bool js_chkargs(jsval_t *args, int nargs, const char *spec) {
 static jsval_t js_eval_inherit_strict(struct js *js, const char *buf, size_t len, bool inherit_strict) {
   jsval_t res = js_mkundef();
   if (len == (size_t) ~0U) len = strlen(buf);
+  js->eval_depth++;
   js->consumed = 1;
   js->tok = TOK_ERR;
   js->code = buf;
@@ -20899,10 +20908,15 @@ static jsval_t js_eval_inherit_strict(struct js *js, const char *buf, size_t len
   
   while (next(js) != TOK_EOF && !is_err(res)) {
     res = js_stmt(js);
+    if (js->needs_gc && js->eval_depth == 1) {
+      js->needs_gc = false;
+      js_gc_compact(js);
+    }
     if (js->flags & F_RETURN) break;
   }
   
-  if (is_strict) delscope(js);  
+  if (is_strict) delscope(js);
+  js->eval_depth--;
   return res;
 }
 
