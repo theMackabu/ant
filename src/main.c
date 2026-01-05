@@ -177,7 +177,7 @@ int main(int argc, char *argv[]) {
   size_t initial_size = 16 * 1024;
   size_t max_size = 512 * 1024 * 1024;
   
-  if (initial_mem->count > 0) initial_size = (size_t)initial_mem->ival[0] * 1024 * 1024;
+  if (initial_mem->count > 0) initial_size = (size_t)initial_mem->ival[0] * 16 * 1024;
   if (max_mem->count > 0) max_size = (size_t)max_mem->ival[0] * 1024 * 1024;
   if (no_color->count > 0) io_no_color = true;
   

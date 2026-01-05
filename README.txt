@@ -3,6 +3,7 @@ ANT - Ant sized JavaScript Runtime
 
 A minimal embedded JavaScript engine with async/await, promises, modules,
 and built-in APIs for HTTP servers, timers, crypto, and JSON.
+Check about my blog post about Ant! https://s.tail.so/js-in-one-month
 
 BUILD:
   meson setup build && meson compile -C build

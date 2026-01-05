@@ -5,6 +5,7 @@
 #include "ant.h"
 #include "config.h"
 #include "arena.h"
+#include "utils.h"
 #include "runtime.h"
 #include "internal.h"
 
@@ -387,19 +388,26 @@ static ant_library_t* find_library(const char *specifier, size_t spec_len) {
 }
 
 enum {
-  TOK_ERR, TOK_EOF, TOK_IDENTIFIER, TOK_NUMBER, TOK_STRING, TOK_SEMICOLON, TOK_BIGINT,
+  TOK_ERR, TOK_EOF, TOK_NUMBER, TOK_STRING, TOK_SEMICOLON, TOK_BIGINT,
   TOK_LPAREN, TOK_RPAREN, TOK_LBRACE, TOK_RBRACE, TOK_LBRACKET, TOK_RBRACKET,
-  TOK_ASYNC = 50, TOK_AWAIT, TOK_BREAK, TOK_CASE, TOK_CATCH, TOK_CLASS, TOK_CONST, TOK_CONTINUE,
-  TOK_DEFAULT, TOK_DELETE, TOK_DO, TOK_DEBUGGER, TOK_ELSE, TOK_EXPORT, TOK_FINALLY, TOK_FOR, TOK_FROM, TOK_FUNC,
-  TOK_IF, TOK_IMPORT, TOK_IN, TOK_INSTANCEOF, TOK_LET, TOK_NEW, TOK_OF, TOK_RETURN, TOK_SWITCH,
-  TOK_THIS, TOK_THROW, TOK_TRY, TOK_VAR, TOK_VOID, TOK_WHILE, TOK_WITH,
-  TOK_YIELD, TOK_UNDEF, TOK_NULL, TOK_TRUE, TOK_FALSE, TOK_AS, TOK_STATIC, TOK_WINDOW, TOK_GLOBAL_THIS,
+  
+  // identifier-like
+  TOK_IDENTIFIER = 50,
+  TOK_ASYNC, TOK_AWAIT, TOK_BREAK, TOK_CASE, TOK_CATCH, TOK_CLASS, TOK_CONST, TOK_CONTINUE,
+  TOK_DEFAULT, TOK_DELETE, TOK_DO, TOK_DEBUGGER, TOK_ELSE, TOK_EXPORT, TOK_FINALLY, TOK_FOR, 
+  TOK_FROM, TOK_FUNC, TOK_IF, TOK_IMPORT, TOK_IN, TOK_INSTANCEOF, TOK_LET, TOK_NEW, TOK_OF, 
+  TOK_RETURN, TOK_SWITCH, TOK_THIS, TOK_THROW, TOK_TRY, TOK_VAR, TOK_VOID, TOK_WHILE, TOK_WITH,
+  TOK_YIELD, TOK_UNDEF, TOK_NULL, TOK_TRUE, TOK_FALSE, TOK_AS, TOK_STATIC, TOK_TYPEOF,
+  TOK_WINDOW, TOK_GLOBAL_THIS,
+  TOK_IDENT_LIKE_END,
+  
+  // operators
   TOK_DOT = 100, TOK_CALL, TOK_BRACKET, TOK_POSTINC, TOK_POSTDEC, TOK_NOT, TOK_TILDA,
-  TOK_TYPEOF, TOK_UPLUS, TOK_UMINUS, TOK_EXP, TOK_MUL, TOK_DIV, TOK_REM,
+  TOK_UPLUS, TOK_UMINUS, TOK_EXP, TOK_MUL, TOK_DIV, TOK_REM,
   TOK_OPTIONAL_CHAIN, TOK_REST,
   TOK_PLUS, TOK_MINUS, TOK_SHL, TOK_SHR, TOK_ZSHR, TOK_LT, TOK_LE, TOK_GT,
   TOK_GE, TOK_EQ, TOK_NE, TOK_SEQ, TOK_SNE, TOK_AND, TOK_XOR, TOK_OR, TOK_LAND, TOK_LOR, TOK_NULLISH,
-  TOK_COLON, TOK_Q,  TOK_ASSIGN, TOK_PLUS_ASSIGN, TOK_MINUS_ASSIGN,
+  TOK_COLON, TOK_Q, TOK_ASSIGN, TOK_PLUS_ASSIGN, TOK_MINUS_ASSIGN,
   TOK_MUL_ASSIGN, TOK_DIV_ASSIGN, TOK_REM_ASSIGN, TOK_SHL_ASSIGN,
   TOK_SHR_ASSIGN, TOK_ZSHR_ASSIGN, TOK_AND_ASSIGN, TOK_XOR_ASSIGN,
   TOK_OR_ASSIGN, TOK_LOR_ASSIGN, TOK_LAND_ASSIGN, TOK_NULLISH_ASSIGN,
@@ -421,6 +429,12 @@ static const uint8_t prec_table[TOK_MAX] = {
   [TOK_PLUS]       = 12, [TOK_MINUS] = 12,
   [TOK_MUL]        = 13, [TOK_DIV] = 13, [TOK_REM] = 13,
   [TOK_EXP]        = 14,
+};
+
+static const uint8_t unary_table[TOK_MAX] = {
+  [TOK_POSTINC] = 1, [TOK_POSTDEC] = 1,
+  [TOK_NOT] = 1, [TOK_TILDA] = 1, [TOK_TYPEOF] = 1,
+  [TOK_UPLUS] = 1, [TOK_UMINUS] = 1, [TOK_VOID] = 1,
 };
 
 enum {
@@ -468,6 +482,24 @@ static UT_array *prim_propref_stack = NULL;
 
 static jsoff_t coderefoff(jsval_t v) { return v & PROPREF_OFF_MASK; }
 static jsoff_t codereflen(jsval_t v) { return (v >> 24U) & PROPREF_OFF_MASK; }
+
+static jsval_t get_slot(struct js *js, jsval_t obj, internal_slot_t slot);
+static void set_slot(struct js *js, jsval_t obj, internal_slot_t slot, jsval_t value);
+
+static jsval_t get_proto(struct js *js, jsval_t obj);
+static void set_proto(struct js *js, jsval_t obj, jsval_t proto);
+
+static void clear_break_label(void) {
+  break_target_label = NULL;
+  break_target_label_len = 0;
+  label_flags &= ~F_BREAK_LABEL;
+}
+
+static void clear_continue_label(void) {
+  continue_target_label = NULL;
+  continue_target_label_len = 0;
+  label_flags &= ~F_CONTINUE_LABEL;
+}
 
 static inline propref_data_t *propref_get_entry(jsval_t v) {
   uint64_t data = v & NANBOX_DATA_MASK;
@@ -535,6 +567,14 @@ jsval_t js_mktypedarray(void *data) {
 void *js_gettypedarray(jsval_t val) {
   if (vtype(val) != T_TYPEDARRAY) return NULL;
   return (void *)vdata(val);
+}
+
+jsval_t js_get_slot(struct js *js, jsval_t obj, internal_slot_t slot) { 
+  return get_slot(js, obj, slot); 
+}
+
+void js_set_slot(struct js *js, jsval_t obj, internal_slot_t slot, jsval_t value) { 
+  set_slot(js, obj, slot, value); 
 }
 
 jsval_t js_mkffi(unsigned int index) {
@@ -636,13 +676,16 @@ static bool is_ident_continue(int c) {
   return c == '_' || c == '$' || is_alpha(c) || is_digit(c) || (c & 0x80); 
 }
 
-static bool is_unary(uint8_t tok) { 
-  return (tok >= TOK_POSTINC && tok <= TOK_UMINUS) || tok == TOK_NOT || tok == TOK_TILDA || tok == TOK_TYPEOF || tok == TOK_VOID; 
+static bool is_unary(uint8_t tok) {
+  return unary_table[tok];
 }
 
-static bool is_assign(uint8_t tok) { 
-  return (tok >= TOK_ASSIGN && tok <= TOK_OR_ASSIGN) ||
-         tok == TOK_LOR_ASSIGN || tok == TOK_LAND_ASSIGN || tok == TOK_NULLISH_ASSIGN; 
+static bool is_assign(uint8_t tok) {
+  return tok >= TOK_ASSIGN && tok <= TOK_NULLISH_ASSIGN;
+}
+
+static bool is_identifier_like(uint8_t tok) {
+  return tok >= TOK_IDENTIFIER && tok < TOK_IDENT_LIKE_END;
 }
 
 static bool is_keyword_propname(uint8_t tok) { 
@@ -712,46 +755,34 @@ static jsval_t upper(struct js *js, jsval_t scope) {
 
 static bool is_proxy(struct js *js, jsval_t obj);
 static bool streq(const char *buf, size_t len, const char *p, size_t n);
+static bool is_this_loop_continue_target(int depth_at_entry);
+static bool parse_func_params(struct js *js, uint8_t *flags, int *out_count);
+static bool try_dynamic_setter(struct js *js, jsval_t obj, const char *key, size_t key_len, jsval_t value);
+
 static size_t tostr(struct js *js, jsval_t value, char *buf, size_t len);
 static size_t strpromise(struct js *js, jsval_t value, char *buf, size_t len);
 static size_t js_to_pcre2_pattern(const char *src, size_t src_len, char *dst, size_t dst_size);
 
-static bool continue_targets_innermost_loop(void);
-static bool is_continue_target(const char *name, jsoff_t len);
-static bool is_this_loop_continue_target(int depth_at_entry);
-static void clear_continue_label(void);
-static void clear_break_label(void);
-
 static jsval_t js_stmt_impl(struct js *js);
 static inline jsoff_t esize(jsoff_t w);
 
-static bool parse_func_params(struct js *js, uint8_t *flags, int *out_count);
-static double js_to_number(struct js *js, jsval_t arg);
-static jsval_t js_call_toString(struct js *js, jsval_t value);
-
 static jsval_t js_expr(struct js *js);
+static jsval_t js_call_toString(struct js *js, jsval_t value);
 static jsval_t js_eval_slice(struct js *js, jsoff_t off, jsoff_t len);
 static jsval_t js_eval_str(struct js *js, const char *code, jsoff_t len);
 static jsval_t js_stmt(struct js *js);
 static jsval_t js_assignment(struct js *js);
 static jsval_t js_arrow_func(struct js *js, jsoff_t params_start, jsoff_t params_end, bool is_async);
-static jsval_t js_while(struct js *js);
-static jsval_t js_do_while(struct js *js);
-static jsval_t js_block_or_stmt(struct js *js);
 static jsval_t js_var_decl(struct js *js);
-static jsval_t js_regex_literal(struct js *js);
-static jsval_t js_try(struct js *js);
-static jsval_t js_switch(struct js *js);
+
 static jsval_t do_op(struct js *, uint8_t op, jsval_t l, jsval_t r);
 static jsval_t do_instanceof(struct js *js, jsval_t l, jsval_t r);
 static jsval_t do_in(struct js *js, jsval_t l, jsval_t r);
 static jsval_t resolveprop(struct js *js, jsval_t v);
+
 static jsoff_t lkp(struct js *js, jsval_t obj, const char *buf, size_t len);
-static jsoff_t lkp_scope(struct js *js, jsval_t scope, const char *buf, size_t len);
 static jsoff_t lkp_interned(struct js *js, jsval_t obj, const char *search_intern, size_t len);
-static const char *intern_string(const char *str, size_t len);
-static jsval_t get_slot(struct js *js, jsval_t obj, internal_slot_t slot);
-static void set_slot(struct js *js, jsval_t obj, internal_slot_t slot, jsval_t value);
+
 static inline bool is_slot_prop(jsoff_t header);
 static inline jsoff_t next_prop(jsoff_t header);
 
@@ -759,45 +790,25 @@ static jsval_t js_import_stmt(struct js *js);
 static jsval_t js_export_stmt(struct js *js);
 
 static jsval_t builtin_Object(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_Promise(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_promise_then(struct js *js, jsval_t *args, int nargs);
 
 static jsval_t proxy_get(struct js *js, jsval_t proxy, const char *key, size_t key_len);
 static jsval_t proxy_set(struct js *js, jsval_t proxy, const char *key, size_t key_len, jsval_t value);
 static jsval_t proxy_has(struct js *js, jsval_t proxy, const char *key, size_t key_len);
 static jsval_t proxy_delete(struct js *js, jsval_t proxy, const char *key, size_t key_len);
-
-static jsval_t builtin_function_call(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_function_apply(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_function_bind(struct js *js, jsval_t *args, int nargs);
-static bool try_dynamic_setter(struct js *js, jsval_t obj, const char *key, size_t key_len, jsval_t value);
-
 static jsval_t call_js(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope);
-static jsval_t call_js_internal(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *bound_args, int bound_argc);
-static jsval_t call_js_internal_nfe(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *bound_args, int bound_argc, jsval_t func_val);
+static jsval_t call_js_internal(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *bound_args, int bound_argc, jsval_t func_val);
 
 static jsval_t call_js_with_args(struct js *js, jsval_t fn, jsval_t *args, int nargs);
-static jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *args, int nargs);
-static jsval_t call_js_code_with_args_nfe(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *args, int nargs, jsval_t func_val);
+static jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *args, int nargs, jsval_t func_val);
 
 static inline bool push_this(jsval_t this_value);
 static inline jsval_t pop_this(void);
-static inline jsval_t peek_this(void);
 
-jsval_t js_get_proto(struct js *js, jsval_t obj);
-void js_set_proto(struct js *js, jsval_t obj, jsval_t proto);
-jsval_t js_setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v);
 static jsoff_t lkp_proto(struct js *js, jsval_t obj, const char *key, size_t len);
-jsval_t js_get_ctor_proto(struct js *js, const char *name, size_t len);
 static jsval_t get_prototype_for_type(struct js *js, uint8_t type);
-
-static jsval_t get_proto(struct js *js, jsval_t obj);
-static void set_proto(struct js *js, jsval_t obj, jsval_t proto);
 static jsval_t get_ctor_proto(struct js *js, const char *name, size_t len);
 static jsval_t setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v);
-static jsval_t setprop_nonconfigurable(struct js *js, jsval_t obj, const char *key, size_t keylen, jsval_t v);
-static jsoff_t lkp(struct js *js, jsval_t obj, const char *key, size_t len);
-static jsval_t resolveprop(struct js *js, jsval_t v);
 static descriptor_entry_t *lookup_descriptor(jsoff_t obj_off, const char *key, size_t klen);
 
 static jsval_t unwrap_primitive(struct js *js, jsval_t val) {
@@ -828,6 +839,7 @@ static jsval_t to_string_val(struct js *js, jsval_t val) {
       }
     }
   }
+  
   const char *s = js_str(js, val);
   return js_mkstr(js, s, strlen(s));
 }
@@ -855,10 +867,8 @@ static void mco_async_entry(mco_coro* mco) {
   jsval_t result;
   
   if (coro && coro->nargs > 0 && coro->args) {
-    result = call_js_code_with_args(js, ctx->code, (jsoff_t)ctx->code_len, ctx->closure_scope, coro->args, coro->nargs);
-  } else {
-    result = call_js(js, ctx->code, (jsoff_t)ctx->code_len, ctx->closure_scope);
-  }
+    result = call_js_code_with_args(js, ctx->code, (jsoff_t)ctx->code_len, ctx->closure_scope, coro->args, coro->nargs, js_mkundef());
+  } else result = call_js(js, ctx->code, (jsoff_t)ctx->code_len, ctx->closure_scope);
   
   ctx->result = result;
   ctx->has_error = is_err(result);
@@ -1840,6 +1850,29 @@ static size_t strstring(struct js *js, jsval_t value, char *buf, size_t len) {
   return n;
 }
 
+static const char *intern_string(const char *str, size_t len) {
+  uint64_t h = hash_key(str, len);
+  uint32_t bucket = (uint32_t)(h & (ANT_LIMIT_SIZE_CACHE - 1));
+  
+  for (interned_string_t *e = intern_buckets[bucket]; e; e = e->next) {
+    if (e->hash == h && e->len == len && memcmp(e->str, str, len) == 0) return e->str;
+  }
+  
+  interned_string_t *entry = (interned_string_t *)malloc(sizeof(interned_string_t));
+  if (!entry) return NULL;
+  entry->str = (char *)malloc(len + 1);
+  if (!entry->str) { free(entry); return NULL; }
+  
+  memcpy(entry->str, str, len);
+  entry->str[len] = '\0';
+  entry->len = len;
+  entry->hash = h;
+  entry->next = intern_buckets[bucket];
+  intern_buckets[bucket] = entry;
+  
+  return entry->str;
+}
+
 static bool is_internal_prop(const char *key, jsoff_t klen) {
   if (klen < 2) return false;
   if (key[0] != '_' || key[1] != '_') return false;
@@ -2811,45 +2844,6 @@ static inline bool is_nonconfig_prop(struct js *js, jsoff_t propoff) {
   return (v & NONCONFIGMASK) != 0;
 }
 
-static inline uint64_t hash_key(const char *key, size_t len) {
-  uint64_t hash = 14695981039346656037ULL;
-  size_t i = 0;
-  for (; i + 8 <= len; i += 8) {
-    uint64_t word;
-    memcpy(&word, key + i, 8);
-    hash ^= word;
-    hash *= 1099511628211ULL;
-  }
-  for (; i < len; i++) {
-    hash ^= (uint8_t)key[i];
-    hash *= 1099511628211ULL;
-  }
-  return hash;
-}
-
-static const char *intern_string(const char *str, size_t len) {
-  uint64_t h = hash_key(str, len);
-  uint32_t bucket = (uint32_t)(h & (ANT_LIMIT_SIZE_CACHE - 1));
-  
-  for (interned_string_t *e = intern_buckets[bucket]; e; e = e->next) {
-    if (e->hash == h && e->len == len && memcmp(e->str, str, len) == 0) return e->str;
-  }
-  
-  interned_string_t *entry = (interned_string_t *)malloc(sizeof(interned_string_t));
-  if (!entry) return NULL;
-  entry->str = (char *)malloc(len + 1);
-  if (!entry->str) { free(entry); return NULL; }
-  
-  memcpy(entry->str, str, len);
-  entry->str[len] = '\0';
-  entry->len = len;
-  entry->hash = h;
-  entry->next = intern_buckets[bucket];
-  intern_buckets[bucket] = entry;
-  
-  return entry->str;
-}
-
 static void intern_init(void) {
   if (INTERN_LENGTH) return;
   INTERN_LENGTH = intern_string("length", 6);
@@ -2990,6 +2984,26 @@ static inline bool is_slot_prop(jsoff_t header) {
 
 static inline jsoff_t next_prop(jsoff_t header) {
   return header & ~(3U | FLAGMASK);
+}
+
+static double js_to_number(struct js *js, jsval_t arg) {
+  if (vtype(arg) == T_NUM) return tod(arg);
+  if (vtype(arg) == T_BOOL) return vdata(arg) ? 1.0 : 0.0;
+  if (vtype(arg) == T_NULL) return 0.0;
+  if (vtype(arg) == T_UNDEF) return NAN;
+  if (vtype(arg) == T_STR) {
+    jsoff_t len;
+    jsoff_t off = vstr(js, arg, &len);
+    const char *str = (char *) &js->mem[off];
+    while (*str == ' ' || *str == '\t' || *str == '\n' || *str == '\r') str++;
+    if (*str == '\0') return 0.0;
+    char *end;
+    double val = strtod(str, &end);
+    while (*end == ' ' || *end == '\t' || *end == '\n' || *end == '\r') end++;
+    if (end == str || *end != '\0') return NAN;
+    return val;
+  }
+  return NAN;
 }
 
 static jsval_t setup_func_prototype(struct js *js, jsval_t func) {
@@ -5116,11 +5130,7 @@ static void setup_arguments(struct js *js, jsval_t scope, jsval_t *args, int nar
   setprop_interned(js, scope, INTERN_ARGUMENTS, 9, arguments_obj);
 }
 
-static jsval_t call_js_internal(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *bound_args, int bound_argc) {
-  return call_js_internal_nfe(js, fn, fnlen, closure_scope, bound_args, bound_argc, js_mkundef());
-}
-
-static jsval_t call_js_internal_nfe(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *bound_args, int bound_argc, jsval_t func_val) {
+static jsval_t call_js_internal(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *bound_args, int bound_argc, jsval_t func_val) {
   jsval_t saved_scope = js->scope;
   jsval_t saved_this_val = js->this_val;
   jsval_t target_this = peek_this();
@@ -5275,7 +5285,7 @@ static jsval_t call_js_internal_nfe(struct js *js, const char *fn, jsoff_t fnlen
 }
 
 static jsval_t call_js(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope) {
-  return call_js_internal(js, fn, fnlen, closure_scope, NULL, 0);
+  return call_js_internal(js, fn, fnlen, closure_scope, NULL, 0, js_mkundef());
 }
 
 static jsval_t call_js_with_args(struct js *js, jsval_t func, jsval_t *args, int nargs) {
@@ -5365,23 +5375,17 @@ static jsval_t call_js_with_args(struct js *js, jsval_t func, jsval_t *args, int
     push_this(bound_this);
   }
   
-  jsval_t result = call_js_code_with_args_nfe(js, fn, fnlen, closure_scope, args, nargs, func);
-  
+  jsval_t result = call_js_code_with_args(js, fn, fnlen, closure_scope, args, nargs, func);
   if (combined_args) ANT_GC_FREE(combined_args);
+  
   return result;
 }
 
-static jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *args, int nargs) {
-  return call_js_code_with_args_nfe(js, fn, fnlen, closure_scope, args, nargs, js_mkundef());
-}
-
-static jsval_t call_js_code_with_args_nfe(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *args, int nargs, jsval_t func_val) {
+static jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *args, int nargs, jsval_t func_val) {
   jsoff_t parent_scope_offset;
   if (vtype(closure_scope) == T_OBJ) {
     parent_scope_offset = (jsoff_t) vdata(closure_scope);
-  } else {
-    parent_scope_offset = (jsoff_t) vdata(js->scope);
-  }
+  } else parent_scope_offset = (jsoff_t) vdata(js->scope);
   
   jsval_t saved_scope = js->scope;
   if (global_scope_stack == NULL) utarray_new(global_scope_stack, &jsoff_icd);
@@ -5767,7 +5771,7 @@ skip_fields:
           res = start_async_in_coroutine(js, code_str, fnlen, closure_scope, bound_args, bound_argc);
           pop_call_frame();
         } else {
-          res = call_js_internal_nfe(js, code_str, fnlen, closure_scope, bound_args, bound_argc, func);
+          res = call_js_internal(js, code_str, fnlen, closure_scope, bound_args, bound_argc, func);
           pop_call_frame();
         }
         
@@ -7330,40 +7334,15 @@ static jsval_t js_literal(struct js *js) {
     case TOK_FALSE:       return js_mkfalse();
     case TOK_THIS:        return js->this_val;
     
-    case TOK_OF:
-    case TOK_FOR: 
-    case TOK_WITH:
-    case TOK_TYPEOF:
-    case TOK_FROM:
-    case TOK_VOID:
-    case TOK_DELETE:
-    case TOK_IMPORT:
-    case TOK_IDENTIFIER:
-    case TOK_CATCH:
-    case TOK_TRY:
-    case TOK_FINALLY:
-    case TOK_IF:
-    case TOK_ELSE:
-    case TOK_WHILE:
-    case TOK_DO:
-    case TOK_RETURN:
-    case TOK_BREAK:
-    case TOK_CONTINUE:
-    case TOK_VAR:
-    case TOK_NEW:
-    case TOK_THROW:
-    case TOK_SWITCH:
-    case TOK_CASE:
-    case TOK_DEFAULT:
-    case TOK_INSTANCEOF:
-    case TOK_IN:
-    case TOK_DEBUGGER: return mkcoderef((jsoff_t) js->toff, (jsoff_t) js->tlen);
-    
-    default: {
-      char err_buf[64]; size_t tok_len = js->tlen > 20 ? 20 : js->tlen;
+    default:
+      if (is_identifier_like(js->tok)) {
+        return mkcoderef((jsoff_t) js->toff, (jsoff_t) js->tlen);
+      }
+      
+      char err_buf[64]; 
+      size_t tok_len = js->tlen > 20 ? 20 : js->tlen;
       snprintf(err_buf, sizeof(err_buf), "Unexpected token '%.*s'", (int)tok_len, &js->code[js->toff]);
       return js_mkerr_typed(js, JS_ERR_SYNTAX, err_buf);
-    }
   }
 }
 
@@ -10881,18 +10860,6 @@ static bool is_continue_target(const char *name, jsoff_t len) {
   return memcmp(continue_target_label, name, len) == 0;
 }
 
-static void clear_break_label(void) {
-  break_target_label = NULL;
-  break_target_label_len = 0;
-  label_flags &= ~F_BREAK_LABEL;
-}
-
-static void clear_continue_label(void) {
-  continue_target_label = NULL;
-  continue_target_label_len = 0;
-  label_flags &= ~F_CONTINUE_LABEL;
-}
-
 static jsval_t js_labeled_stmt(struct js *js, const char *label, jsoff_t label_len) {
   uint8_t flags = js->flags;
   jsval_t res = js_mkundef();
@@ -11081,26 +11048,6 @@ static jsval_t builtin_Number_isFinite(struct js *js, jsval_t *args, int nargs) 
   
   double val = tod(arg);
   return mkval(T_BOOL, isfinite(val) ? 1 : 0);
-}
-
-static double js_to_number(struct js *js, jsval_t arg) {
-  if (vtype(arg) == T_NUM) return tod(arg);
-  if (vtype(arg) == T_BOOL) return vdata(arg) ? 1.0 : 0.0;
-  if (vtype(arg) == T_NULL) return 0.0;
-  if (vtype(arg) == T_UNDEF) return NAN;
-  if (vtype(arg) == T_STR) {
-    jsoff_t len;
-    jsoff_t off = vstr(js, arg, &len);
-    const char *str = (char *) &js->mem[off];
-    while (*str == ' ' || *str == '\t' || *str == '\n' || *str == '\r') str++;
-    if (*str == '\0') return 0.0;
-    char *end;
-    double val = strtod(str, &end);
-    while (*end == ' ' || *end == '\t' || *end == '\n' || *end == '\r') end++;
-    if (end == str || *end != '\0') return NAN;
-    return val;
-  }
-  return NAN;
 }
 
 static jsval_t builtin_global_isNaN(struct js *js, jsval_t *args, int nargs) {
@@ -20524,7 +20471,7 @@ struct js *js_create(void *buf, size_t len) {
 }
 
 struct js *js_create_dynamic(size_t initial_size, size_t max_size) {
-  if (initial_size < sizeof(struct js) + esize(T_OBJ)) initial_size = 1024 * 1024;
+  if (initial_size < sizeof(struct js) + esize(T_OBJ)) initial_size = 16 * 1024;
   if (max_size == 0 || max_size < initial_size) max_size = 512 * 1024 * 1024;
   
   void *buf = ANT_GC_MALLOC(initial_size);
@@ -21268,6 +21215,3 @@ void js_print_stack_trace(FILE *stream) {
     }
   }
 }
-
-jsval_t js_get_slot(struct js *js, jsval_t obj, internal_slot_t slot) { return get_slot(js, obj, slot); }
-void js_set_slot(struct js *js, jsval_t obj, internal_slot_t slot, jsval_t value) { set_slot(js, obj, slot, value); }
