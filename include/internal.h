@@ -45,6 +45,7 @@ struct js {
   uint64_t sym_counter;   // counter for generating unique symbol IDs
   bool needs_gc;          // deferred GC flag, checked at statement boundaries
   int eval_depth;         // recursion depth of js_eval calls
+  int parse_depth;        // recursion depth of parser (for stack overflow protection)
 };
 
 #define JS_T_OBJ   0
@@ -59,7 +60,10 @@ struct js {
 #define JS_V_PROMISE   12
 #define JS_V_BIGINT    14
 #define JS_V_GENERATOR 17
-#define JS_HASH_SIZE   512
+
+#define JS_HASH_SIZE       512
+#define JS_MAX_PARSE_DEPTH (1024 * 2)
+#define JS_ERR_NO_STACK    (1 << 8)
 
 #define NANBOX_PREFIX     0x7FC0000000000000ULL
 #define NANBOX_PREFIX_CHK 0x3FEULL

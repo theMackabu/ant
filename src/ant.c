@@ -692,6 +692,16 @@ static bool is_keyword_propname(uint8_t tok) {
   return (tok >= TOK_ASYNC && tok <= TOK_GLOBAL_THIS) || tok == TOK_TYPEOF; 
 }
 
+static bool is_valid_arrow_param_tok(uint8_t tok) {
+  static const uint64_t bits[4] = {
+    0x0004000000000F0Cull,
+    0x001CC01003C00000ull,
+    0x0000000000800100ull,
+    0x0000000000000000ull
+  };
+  return (bits[tok >> 6] >> (tok & 63)) & 1;
+}
+
 static uint32_t js_to_uint32(double d) {
   if (!isfinite(d) || d == 0) return 0;
   double sign = (d < 0) ? -1.0 : 1.0;
@@ -2098,6 +2108,9 @@ jsval_t js_mkerr_typed(struct js *js, js_err_type_t err_type, const char *xx, ..
   int error_col = 0;
   char error_msg[256] = {0};
   
+  bool no_stack = (err_type & JS_ERR_NO_STACK) != 0;
+  err_type = (js_err_type_t)(err_type & ~JS_ERR_NO_STACK);
+  
   if (!js->errmsg) {
     js->errmsg_size = 4096;
     js->errmsg = (char *)malloc(js->errmsg_size);
@@ -2137,7 +2150,9 @@ jsval_t js_mkerr_typed(struct js *js, js_err_type_t err_type, const char *xx, ..
     n += (size_t) snprintf(js->errmsg + n, remaining, "\x1b[31m%s\x1b[0m: \x1b[1m%s\x1b[0m", err_name, error_msg);
   }
   
-  format_error_stack(js, &n, line, col, true, error_line, error_col);
+  if (!no_stack) {
+    format_error_stack(js, &n, line, col, true, error_line, error_col);
+  }
   
   js->pos = js->clen, js->tok = TOK_EOF, js->consumed = 0;
   return mkval(T_ERR, 0);
@@ -7447,6 +7462,10 @@ static jsval_t js_arrow_func(struct js *js, jsoff_t params_start, jsoff_t params
 
 static jsval_t js_group(struct js *js) {
   if (next(js) == TOK_LPAREN) {
+    if (++js->parse_depth > JS_MAX_PARSE_DEPTH) {
+      js->parse_depth--;
+      return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
+    }
     jsoff_t paren_start = js->pos - 1;
     js->consumed = 1;
     
@@ -7462,17 +7481,7 @@ static jsval_t js_group(struct js *js) {
     while (paren_depth > 0 && next(js) != TOK_EOF) {
       if (js->tok == TOK_LPAREN) paren_depth++;
       else if (js->tok == TOK_RPAREN) paren_depth--;
-      
-      if (paren_depth > 0) {
-        if (js->tok != TOK_IDENTIFIER && js->tok != TOK_COMMA && js->tok != TOK_REST &&
-            js->tok != TOK_ASSIGN && js->tok != TOK_NUMBER && js->tok != TOK_STRING &&
-            js->tok != TOK_TRUE && js->tok != TOK_FALSE && js->tok != TOK_NULL &&
-            js->tok != TOK_UNDEF && js->tok != TOK_LBRACKET && js->tok != TOK_RBRACKET &&
-            js->tok != TOK_LBRACE && js->tok != TOK_RBRACE && js->tok != TOK_DOT &&
-            js->tok != TOK_PLUS && js->tok != TOK_MINUS && js->tok != TOK_MUL && js->tok != TOK_DIV) {
-          could_be_arrow = false;
-        }
-      }
+      if (paren_depth > 0 && !is_valid_arrow_param_tok(js->tok)) could_be_arrow = false;
       js->consumed = 1;
     }
     
@@ -7486,32 +7495,46 @@ static jsval_t js_group(struct js *js) {
     
     if (is_arrow) {
       js->flags |= F_NOEXEC;
-      while (next(js) != TOK_RPAREN && next(js) != TOK_EOF) {
-        js->consumed = 1;
+      while (next(js) != TOK_RPAREN && next(js) != TOK_EOF) js->consumed = 1;
+      
+      if (next(js) != TOK_RPAREN) { 
+        js->parse_depth--; 
+        return js_mkerr_typed(js, JS_ERR_SYNTAX, ") expected"); 
       }
-      if (next(js) != TOK_RPAREN) return js_mkerr_typed(js, JS_ERR_SYNTAX, ") expected");
+      
       js->consumed = 1;
       js->flags = saved_flags;
       
-      if (next(js) != TOK_ARROW) return js_mkerr_typed(js, JS_ERR_SYNTAX, "=> expected");
+      if (next(js) != TOK_ARROW) { 
+        js->parse_depth--; 
+        return js_mkerr_typed(js, JS_ERR_SYNTAX, "=> expected"); 
+      }
+      
       js->consumed = 1;
+      js->parse_depth--;
       
       return js_arrow_func(js, paren_start, paren_end, false);
     } else {
       jsval_t v = js_expr(js);
-      if (is_err(v)) return v;
+      if (is_err(v)) { js->parse_depth--; return v; }
+      
       while (next(js) == TOK_COMMA) {
         js->consumed = 1;
         v = js_expr(js);
-        if (is_err(v)) return v;
+        if (is_err(v)) { js->parse_depth--; return v; }
       }
-      if (next(js) != TOK_RPAREN) return js_mkerr_typed(js, JS_ERR_SYNTAX, ") expected");
+      
+      if (next(js) != TOK_RPAREN) { 
+        js->parse_depth--;
+        return js_mkerr_typed(js, JS_ERR_SYNTAX, ") expected"); 
+      }
+      
       js->consumed = 1;
+      js->parse_depth--;
+      
       return v;
     }
-  } else {
-    return js_literal(js);
-  }
+  } else return js_literal(js);
 }
 
 static jsval_t js_call_dot(struct js *js) {

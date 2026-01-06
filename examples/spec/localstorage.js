@@ -1,3 +1,4 @@
+import { unlinkSync } from 'ant:fs';
 import { test, testThrows, summary } from './helpers.js';
 
 console.log('localStorage Tests\n');
@@ -90,5 +91,6 @@ test('JSON storage name', retrieved.name, 'John');
 test('JSON storage age', retrieved.age, 30);
 
 localStorage.clear();
+unlinkSync('storage.json');
 
 summary();

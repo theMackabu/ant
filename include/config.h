@@ -13,9 +13,6 @@
 #define ANT_BUILD_DATE "unknown"
 #endif
 
-#define JS_EXPR_MAX 20
-#define JS_GC_THRESHOLD 0.75
-
 #define SLOTMASK ~(((jsoff_t) ~0) >> 1)
 #define CONSTMASK (~(((jsoff_t) ~0) >> 1) >> 1)
 #define ARRMASK (~(((jsoff_t) ~0) >> 1) >> 2)
