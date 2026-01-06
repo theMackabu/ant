@@ -3323,6 +3323,10 @@ static int is_unicode_space(const unsigned char *p, jsoff_t remaining, bool *is_
 
 static jsoff_t skiptonext(const char *code, jsoff_t len, jsoff_t n, bool *had_newline) {
   if (had_newline) *had_newline = false;
+  if (n == 0 && len >= 2 && code[0] == '#' && code[1] == '!') {
+    for (n = 2; n < len && code[n] != '\n'; n++);
+    if (had_newline && n < len && code[n] == '\n') *had_newline = true;
+  }
   while (n < len) {
     unsigned char c = (unsigned char)code[n];
     if (c <= 0x7F) {
@@ -4374,6 +4378,7 @@ static bool try_accessor_setter(struct js *js, jsval_t obj, const char *key, siz
 }
 
 static jsval_t assign(struct js *js, jsval_t lhs, jsval_t val) {
+  if (js->flags & F_NOEXEC) return val;
   if (vtype(lhs) == T_PROPREF) {
     if (is_prim_propref(lhs)) {
       prim_propref_data_t *prim_data = prim_propref_get(lhs);
