@@ -67,6 +67,10 @@ struct js {
 #define NANBOX_TYPE_MASK  0x1F
 #define NANBOX_DATA_MASK  0x0000FFFFFFFFFFFFULL
 
+#define TYPE_FLAG(t) (1u << (t))
+#define T_NON_NUMERIC_MASK (TYPE_FLAG(T_STR) | TYPE_FLAG(T_ARR) | TYPE_FLAG(T_FUNC) | TYPE_FLAG(T_CFUNC) | TYPE_FLAG(T_OBJ))
+#define is_non_numeric(v) ((1u << vtype(v)) & T_NON_NUMERIC_MASK)
+
 void js_gc_update_roots(GC_UPDATE_ARGS);
 bool js_has_pending_coroutines(void);
 

@@ -3003,6 +3003,11 @@ static double js_to_number(struct js *js, jsval_t arg) {
     if (end == str || *end != '\0') return NAN;
     return val;
   }
+  if (vtype(arg) == T_ARR || vtype(arg) == T_OBJ) {
+    jsval_t str_val = js_tostring_val(js, arg);
+    if (is_err(str_val) || vtype(str_val) != T_STR) return NAN;
+    return js_to_number(js, str_val);
+  }
   return NAN;
 }
 
@@ -4562,7 +4567,12 @@ static jsval_t do_bracket_op(struct js *js, jsval_t l, jsval_t r) {
     keystr = keybuf;
     keylen = strlen(keybuf);
   } else {
-    return js_mkerr(js, "invalid index type");
+    jsval_t str_val = js_tostring_val(js, key_val);
+    if (is_err(str_val)) return str_val;
+    jsoff_t slen;
+    jsoff_t off = vstr(js, str_val, &slen);
+    keystr = (char *) &js->mem[off];
+    keylen = slen;
   }
   if (streq(keystr, keylen, "length", 6)) {
     if (vtype(obj) == T_STR) {
@@ -4580,23 +4590,63 @@ static jsval_t do_bracket_op(struct js *js, jsval_t l, jsval_t r) {
     }
   }
   if (vtype(obj) == T_STR) {
+    double idx_d = NAN;
     if (vtype(key_val) == T_NUM) {
-      double idx_d = tod(key_val);
-      if (idx_d < 0 || idx_d != (double)(long)idx_d) {
-        return js_mkundef();
-      }
+      idx_d = tod(key_val);
+    } else {
+      char *endptr;
+      char temp[64];
+      size_t copy_len = keylen < sizeof(temp) - 1 ? keylen : sizeof(temp) - 1;
+      memcpy(temp, keystr, copy_len);
+      temp[copy_len] = '\0';
+      idx_d = strtod(temp, &endptr);
+      if (endptr == temp || *endptr != '\0') idx_d = NAN;
+    }
+    if (!isnan(idx_d) && idx_d >= 0 && idx_d == (double)(long)idx_d) {
       jsoff_t idx = (jsoff_t) idx_d;
       jsoff_t str_len = offtolen(loadoff(js, (jsoff_t) vdata(obj)));
-      if (idx >= str_len) {
-        return js_mkundef();
+      if (idx < str_len) {
+        jsoff_t str_off = (jsoff_t) vdata(obj) + sizeof(jsoff_t);
+        char ch[2] = {js->mem[str_off + idx], 0};
+        return js_mkstr(js, ch, 1);
       }
-      jsoff_t str_off = (jsoff_t) vdata(obj) + sizeof(jsoff_t);
-      char ch[2] = {js->mem[str_off + idx], 0};
-      return js_mkstr(js, ch, 1);
     }
     jsoff_t off = lkp_proto(js, obj, keystr, keylen);
     if (off != 0) return resolveprop(js, mkval(T_PROP, off));
     return js_mkundef();
+  }
+  if (vtype(obj) == T_FUNC) {
+    if ((js->flags & F_STRICT) && (streq(keystr, keylen, "caller", 6) || streq(keystr, keylen, "arguments", 9))) {
+      return js_mkerr_typed(js, JS_ERR_TYPE, "'%.*s' not allowed on functions in strict mode", (int)keylen, keystr);
+    }
+    jsval_t func_obj = mkval(T_OBJ, vdata(obj));
+    jsoff_t off = lkp_proto(js, obj, keystr, keylen);
+    if (off != 0) {
+      jsoff_t obj_off = (jsoff_t)vdata(obj);
+      descriptor_entry_t *desc = lookup_descriptor(obj_off, keystr, keylen);
+      if (desc) {
+        jsval_t key = js_mkstr(js, keystr, keylen);
+        return mkpropref(obj_off, (jsoff_t)vdata(key));
+      }
+      return mkval(T_PROP, off);
+    }
+    if (streq(keystr, keylen, "name", 4)) return js_mkstr(js, "", 0);
+    jsval_t key = js_mkstr(js, keystr, keylen);
+    jsval_t prop = setprop(js, func_obj, key, js_mkundef());
+    return prop;
+  }
+  if (vtype(obj) == T_CFUNC) {
+    if ((js->flags & F_STRICT) && (streq(keystr, keylen, "caller", 6) || streq(keystr, keylen, "arguments", 9))) {
+      return js_mkerr_typed(js, JS_ERR_TYPE, "'%.*s' not allowed on functions in strict mode", (int)keylen, keystr);
+    }
+    jsoff_t off = lkp_proto(js, obj, keystr, keylen);
+    if (off != 0) return resolveprop(js, mkval(T_PROP, off));
+    if (streq(keystr, keylen, "name", 4)) return js_mkstr(js, "", 0);
+    return js_mkundef();
+  }
+  if (vtype(obj) == T_NUM || vtype(obj) == T_BOOL || vtype(obj) == T_BIGINT) {
+    jsval_t key = js_mkstr(js, keystr, keylen);
+    return mkprim_propref(obj, (jsoff_t)vdata(key));
   }
   if (vtype(obj) != T_OBJ && vtype(obj) != T_ARR) {
     return js_mkundef();
@@ -5939,8 +5989,7 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
       } else {
         eq = vdata(l) == vdata(r);
       }
-    } else if ((vtype(l) == T_BIGINT && vtype(r) == T_NUM) ||
-               (vtype(l) == T_NUM && vtype(r) == T_BIGINT)) {
+    } else if ((vtype(l) == T_BIGINT && vtype(r) == T_NUM) || (vtype(l) == T_NUM && vtype(r) == T_BIGINT)) {
       double num_val = vtype(l) == T_NUM ? tod(l) : tod(r);
       jsval_t bigint_val = vtype(l) == T_BIGINT ? l : r;
       if (isfinite(num_val) && num_val == trunc(num_val)) {
@@ -5959,11 +6008,16 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
       double rnum = vdata(r) ? 1.0 : 0.0;
       jsval_t result = do_op(js, op, l, tov(rnum));
       return result;
-    } else if ((vtype(l) == T_NUM && vtype(r) == T_STR) ||
-               (vtype(l) == T_STR && vtype(r) == T_NUM)) {
+    } else if ((vtype(l) == T_NUM && vtype(r) == T_STR) || (vtype(l) == T_STR && vtype(r) == T_NUM)) {
       double lnum = js_to_number(js, l);
       double rnum = js_to_number(js, r);
       eq = lnum == rnum;
+    } else if (vtype(l) == T_ARR || vtype(l) == T_OBJ) {
+      jsval_t l_prim = js_tostring_val(js, l);
+      if (!is_err(l_prim)) return do_op(js, op, l_prim, r);
+    } else if (vtype(r) == T_ARR || vtype(r) == T_OBJ) {
+      jsval_t r_prim = js_tostring_val(js, r);
+      if (!is_err(r_prim)) return do_op(js, op, l, r_prim);
     }
     return mkval(T_BOOL, op == TOK_EQ ? eq : !eq);
   }
@@ -5985,7 +6039,8 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
       default: return js_mkerr(js, "Unsupported BigInt operation");
     }
   }
-  if (op == TOK_PLUS && (vtype(l) == T_STR || vtype(r) == T_STR || vtype(l) == T_ARR || vtype(r) == T_ARR)) {
+  
+  if (op == TOK_PLUS && (is_non_numeric(l) || is_non_numeric(r))) {
     jsval_t l_str = l, r_str = r;
     
     if (vtype(l) == T_ARR) {
@@ -6043,7 +6098,7 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
   } else if (vtype(l) == T_UNDEF) {
     a = NAN;
   } else if (vtype(l) == T_ARR) {
-    a = NAN;
+    a = js_to_number(js, l);
   } else if (vtype(l) == T_OBJ) {
     jsoff_t vo_off = lkp_proto(js, l, "valueOf", 7);
     if (vo_off != 0) {
@@ -6086,7 +6141,7 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
   } else if (vtype(r) == T_UNDEF) {
     b = NAN;
   } else if (vtype(r) == T_ARR) {
-    b = NAN;
+    b = js_to_number(js, r);
   } else if (vtype(r) == T_OBJ) {
     jsoff_t vo_off = lkp_proto(js, r, "valueOf", 7);
     if (vo_off != 0) {
