@@ -19765,7 +19765,7 @@ static jsval_t builtin_Proxy(struct js *js, jsval_t *args, int nargs) {
 static jsval_t proxy_revoke_fn(struct js *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
   jsval_t func = js->current_func;
-  jsoff_t ref_off = lkp(js, func, "__proxy_ref__", 13);
+  jsoff_t ref_off = get_slot(js, func, SLOT_PROXY_REF);
   
   if (ref_off != 0) {
     jsval_t proxy = resolveprop(js, mkval(T_PROP, ref_off));
@@ -19782,7 +19782,7 @@ static jsval_t builtin_Proxy_revocable(struct js *js, jsval_t *args, int nargs) 
   
   jsval_t revoke_obj = mkobj(js, 0);
   set_slot(js, revoke_obj, SLOT_CFUNC, js_mkfun(proxy_revoke_fn));
-  setprop(js, revoke_obj, js_mkstr(js, "__proxy_ref__", 13), proxy);
+  set_slot(js, revoke_obj, SLOT_PROXY_REF, proxy);
   
   jsval_t revoke_func = mkval(T_FUNC, vdata(revoke_obj));
   

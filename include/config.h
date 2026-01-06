@@ -49,6 +49,7 @@ typedef enum {
   SLOT_MAP,
   SLOT_SET,
   SLOT_PRIMITIVE,
+  SLOT_PROXY_REF,
   SLOT_MAX = 255
 } internal_slot_t;
 
