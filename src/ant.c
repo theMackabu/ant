@@ -767,6 +767,7 @@ static jsval_t js_stmt_impl(struct js *js);
 static inline jsoff_t esize(jsoff_t w);
 
 static jsval_t js_expr(struct js *js);
+static jsval_t js_call_valueOf(struct js *js, jsval_t value);
 static jsval_t js_call_toString(struct js *js, jsval_t value);
 static jsval_t js_eval_slice(struct js *js, jsoff_t off, jsoff_t len);
 static jsval_t js_eval_str(struct js *js, const char *code, jsoff_t len);
@@ -2991,23 +2992,29 @@ static double js_to_number(struct js *js, jsval_t arg) {
   if (vtype(arg) == T_BOOL) return vdata(arg) ? 1.0 : 0.0;
   if (vtype(arg) == T_NULL) return 0.0;
   if (vtype(arg) == T_UNDEF) return NAN;
+  
   if (vtype(arg) == T_STR) {
-    jsoff_t len;
-    jsoff_t off = vstr(js, arg, &len);
-    const char *str = (char *) &js->mem[off];
-    while (*str == ' ' || *str == '\t' || *str == '\n' || *str == '\r') str++;
-    if (*str == '\0') return 0.0;
-    char *end;
-    double val = strtod(str, &end);
+    jsoff_t len, off = vstr(js, arg, &len);
+    const char *s = (char *)&js->mem[off], *end;
+    while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r') s++;
+    if (!*s) return 0.0;
+    double val = strtod(s, (char **)&end);
     while (*end == ' ' || *end == '\t' || *end == '\n' || *end == '\r') end++;
-    if (end == str || *end != '\0') return NAN;
-    return val;
+    return (end == s || *end) ? NAN : val;
   }
-  if (vtype(arg) == T_ARR || vtype(arg) == T_OBJ) {
+  
+  if (vtype(arg) == T_OBJ || vtype(arg) == T_ARR) {
+    if (vtype(arg) == T_OBJ) {
+      jsval_t prim = js_call_valueOf(js, arg);
+      uint8_t pt = vtype(prim);
+      if (pt != T_OBJ && pt != T_ARR && pt != T_FUNC) return js_to_number(js, prim);
+    }
+    
     jsval_t str_val = js_tostring_val(js, arg);
     if (is_err(str_val) || vtype(str_val) != T_STR) return NAN;
     return js_to_number(js, str_val);
   }
+  
   return NAN;
 }
 
@@ -5870,7 +5877,6 @@ static jsval_t js_call_toString(struct js *js, jsval_t value) {
   }
   
   js->this_val = saved_this;
-  
   if (vtype(result) == T_STR) return result;
   
   uint8_t rt = vtype(result);
@@ -5888,6 +5894,59 @@ fallback:;
   return js_mkstr(js, buf, len);
 }
 
+static jsval_t js_call_valueOf(struct js *js, jsval_t value) {
+  jsoff_t off = lkp(js, value, "valueOf", 7);
+  if (off == 0) off = lkp_proto(js, value, "valueOf", 7);
+  if (off == 0) return value;
+  
+  jsval_t fn = resolveprop(js, mkval(T_PROP, off));
+  uint8_t ft = vtype(fn);
+  if (ft != T_FUNC && ft != T_CFUNC) return value;
+  
+  jsval_t saved = js->this_val;
+  js->this_val = value;
+  jsval_t result;
+  
+  if (ft == T_CFUNC) {
+    result = ((jsval_t (*)(struct js *, jsval_t *, int))vdata(fn))(js, NULL, 0);
+  } else {
+    jsval_t func_obj = mkval(T_OBJ, vdata(fn));
+    jsval_t code_val = get_slot(js, func_obj, SLOT_CODE);
+    if (vtype(code_val) != T_STR) { js->this_val = saved; return value; }
+    
+    jsval_t closure_scope = get_slot(js, func_obj, SLOT_SCOPE);
+    if (vtype(closure_scope) == T_UNDEF) closure_scope = js->scope;
+    
+    jsoff_t fnlen, fnoff = vstr(js, code_val, &fnlen);
+    result = call_js(js, (const char *)&js->mem[fnoff], fnlen, closure_scope);
+  }
+  
+  js->this_val = saved;
+  return result;
+}
+
+static inline bool strict_eq_values(struct js *js, jsval_t l, jsval_t r) {
+  uint8_t t = vtype(l);
+  if (t != vtype(r)) return false;
+  if (t == T_STR) {
+    jsoff_t n1, n2, off1 = vstr(js, l, &n1), off2 = vstr(js, r, &n2);
+    return n1 == n2 && memcmp(&js->mem[off1], &js->mem[off2], n1) == 0;
+  }
+  if (t == T_NUM) return tod(l) == tod(r);
+  if (t == T_BIGINT) return bigint_compare(js, l, r) == 0;
+  return vdata(l) == vdata(r);
+}
+
+static inline jsval_t coerce_to_str(struct js *js, jsval_t v) {
+  if (vtype(v) == T_STR) return v;
+  if (vtype(v) == T_ARR) {
+    char buf[1024];
+    size_t len = array_to_string(js, v, buf, sizeof(buf));
+    return js_mkstr(js, buf, len);
+  }
+  return js_tostring_val(js, v);
+}
+
 static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
   if (js->flags & F_NOEXEC) return 0;
   
@@ -5897,292 +5956,205 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
   
   if (is_err(l)) return l;
   if (is_err(r)) return r;
+  
   if (is_assign(op) && vtype(lhs) != T_PROP && vtype(lhs) != T_PROPREF) {
     if (!(js->flags & F_STRICT) && vtype(lhs) == T_UNDEF) return r;
     if (!(js->flags & F_STRICT) && vtype(lhs) == T_CODEREF && op == TOK_ASSIGN) {
-      jsoff_t id_off = coderefoff(lhs);
-      jsoff_t id_len = codereflen(lhs);
+      jsoff_t id_off = coderefoff(lhs), id_len = codereflen(lhs);
       jsval_t global_scope = js->scope;
-      while (vdata(upper(js, global_scope)) != 0) {
-        global_scope = upper(js, global_scope);
-      }
+      while (vdata(upper(js, global_scope)) != 0) global_scope = upper(js, global_scope);
       jsval_t key = js_mkstr(js, &js->code[id_off], id_len);
       if (is_err(key)) return key;
       jsval_t prop = setprop(js, global_scope, key, r);
-      if (is_err(prop)) return prop;
-      return r;
+      return is_err(prop) ? prop : r;
     }
-    if ((js->flags & F_STRICT) && vtype(lhs) == T_UNDEF) {
-      return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot create property on primitive value");
-    }
-    return js_mkerr_typed(js, JS_ERR_SYNTAX, "Invalid left-hand side in assignment");
+    return js_mkerr_typed(js, (js->flags & F_STRICT) && vtype(lhs) == T_UNDEF ? JS_ERR_TYPE : JS_ERR_SYNTAX,
+      (js->flags & F_STRICT) && vtype(lhs) == T_UNDEF ? "Cannot create property on primitive value" : "Invalid left-hand side in assignment");
   }
+
+#define L(tok) [tok] = &&L_##tok
+  static const void *dispatch[TOK_MAX] = {
+    L(TOK_TYPEOF), L(TOK_VOID), L(TOK_INSTANCEOF), L(TOK_IN),
+    L(TOK_CALL), L(TOK_BRACKET), L(TOK_ASSIGN), L(TOK_DOT),
+    L(TOK_OPTIONAL_CHAIN), L(TOK_POSTINC), L(TOK_POSTDEC),
+    L(TOK_NOT), L(TOK_UMINUS), L(TOK_UPLUS), L(TOK_SEQ),
+    L(TOK_SNE), L(TOK_EQ), L(TOK_NE), L(TOK_PLUS),
+    L(TOK_MINUS), L(TOK_MUL), L(TOK_DIV), L(TOK_REM),
+    L(TOK_EXP), L(TOK_LT), L(TOK_LE), L(TOK_GT), L(TOK_GE),
+    L(TOK_XOR), L(TOK_AND), L(TOK_OR), L(TOK_TILDA),
+    L(TOK_SHL), L(TOK_SHR), L(TOK_ZSHR),
+  };
+#undef L
+
+  if (op < TOK_MAX && dispatch[op]) goto *dispatch[op];
+  goto L_default;
+
+  L_TOK_TYPEOF: {
+    const char *ts = typestr(vtype(r));
+    return js_mkstr(js, ts, strlen(ts));
+  }
+  L_TOK_VOID:           return js_mkundef();
+  L_TOK_INSTANCEOF:     return do_instanceof(js, l, r);
+  L_TOK_IN:             return do_in(js, l, r);
+  L_TOK_CALL:           return do_call_op(js, l, r);
+  L_TOK_BRACKET:        return do_bracket_op(js, l, rhs);
+  L_TOK_ASSIGN:         return assign(js, lhs, r);
+  L_TOK_DOT:            return do_dot_op(js, l, r);
+  L_TOK_OPTIONAL_CHAIN: return do_optional_chain_op(js, l, r);
+
+  L_TOK_POSTINC:
+  L_TOK_POSTDEC: {
+    if (vtype(lhs) != T_PROP)
+      return js_mkerr_typed(js, JS_ERR_SYNTAX, "Invalid left-hand side expression in postfix operation");
+    do_assign_op(js, op == TOK_POSTINC ? TOK_PLUS_ASSIGN : TOK_MINUS_ASSIGN, lhs, tov(1));
+    return l;
+  }
+
+  L_TOK_NOT: return mkval(T_BOOL, !js_truthy(js, r));
   
-  switch (op) {
-    case TOK_TYPEOF: {
-      const char *ts = typestr(vtype(r));
-      return js_mkstr(js, ts, strlen(ts));
-    }
-    case TOK_VOID:           return js_mkundef();
-    case TOK_INSTANCEOF:     return do_instanceof(js, l, r);
-    case TOK_IN:             return do_in(js, l, r);
-    case TOK_CALL:           return do_call_op(js, l, r);
-    case TOK_BRACKET:        return do_bracket_op(js, l, rhs);
-    case TOK_ASSIGN:         return assign(js, lhs, r);
-    case TOK_DOT:            return do_dot_op(js, l, r);
-    case TOK_OPTIONAL_CHAIN: return do_optional_chain_op(js, l, r);
-    case TOK_POSTINC: {
-      if (vtype(lhs) != T_PROP) return js_mkerr_typed(js, JS_ERR_SYNTAX, "Invalid left-hand side expression in postfix operation");
-      do_assign_op(js, TOK_PLUS_ASSIGN, lhs, tov(1)); return l;
-    }
-    case TOK_POSTDEC: {
-      if (vtype(lhs) != T_PROP) return js_mkerr_typed(js, JS_ERR_SYNTAX, "Invalid left-hand side expression in postfix operation");
-      do_assign_op(js, TOK_MINUS_ASSIGN, lhs, tov(1)); return l;
-    }
-    case TOK_NOT:     return mkval(T_BOOL, !js_truthy(js, r));
-    case TOK_UMINUS:
-      if (vtype(r) == T_BIGINT) return bigint_neg(js, r);
-      break;
-    case TOK_UPLUS:
-      if (vtype(r) == T_BIGINT) return js_mkerr(js, "Cannot convert a BigInt value to a number");
-      break;
-  }
-  if (is_assign(op))    return do_assign_op(js, op, lhs, r);
-  if (op == TOK_SEQ || op == TOK_SNE) {
-    bool eq = false;
-    if (vtype(l) == vtype(r)) {
-      if (vtype(l) == T_STR) {
-        jsoff_t n1, off1 = vstr(js, l, &n1);
-        jsoff_t n2, off2 = vstr(js, r, &n2);
-        eq = n1 == n2 && memcmp(&js->mem[off1], &js->mem[off2], n1) == 0;
-      } else if (vtype(l) == T_NUM) {
-        eq = tod(l) == tod(r);
-      } else if (vtype(l) == T_BOOL) {
-        eq = vdata(l) == vdata(r);
-      } else if (vtype(l) == T_BIGINT) {
-        eq = bigint_compare(js, l, r) == 0;
-      } else {
-        eq = vdata(l) == vdata(r);
-      }
-    }
+  L_TOK_UMINUS:
+    if (vtype(r) == T_BIGINT) return bigint_neg(js, r);
+    return tov(-js_to_number(js, r));
+  
+  L_TOK_UPLUS:
+    if (vtype(r) == T_BIGINT) return js_mkerr(js, "Cannot convert a BigInt value to a number");
+    return tov(js_to_number(js, r));
+
+  L_TOK_TILDA: return tov((double)(~js_to_int32(js_to_number(js, r))));
+
+  L_TOK_SEQ:
+  L_TOK_SNE: {
+    bool eq = strict_eq_values(js, l, r);
     return mkval(T_BOOL, op == TOK_SEQ ? eq : !eq);
   }
-  if (op == TOK_EQ || op == TOK_NE) {
+
+  L_TOK_EQ:
+  L_TOK_NE: {
     bool eq = false;
-    if ((vtype(l) == T_NULL && vtype(r) == T_NULL) || (vtype(l) == T_UNDEF && vtype(r) == T_UNDEF)) {
+    uint8_t lt = vtype(l), rt = vtype(r);
+
+    if ((lt == T_NULL && rt == T_NULL) || (lt == T_UNDEF && rt == T_UNDEF) ||
+        (lt == T_UNDEF && rt == T_NULL) || (lt == T_NULL && rt == T_UNDEF)) {
       eq = true;
-    } else if ((vtype(l) == T_UNDEF && vtype(r) == T_NULL) || (vtype(l) == T_NULL && vtype(r) == T_UNDEF)) {
-      eq = true;
-    } else if (vtype(l) == T_NULL || vtype(r) == T_NULL || vtype(l) == T_UNDEF || vtype(r) == T_UNDEF) {
+    } else if (lt == T_NULL || rt == T_NULL || lt == T_UNDEF || rt == T_UNDEF) {
       eq = false;
-    } else if (vtype(l) == vtype(r)) {
-      if (vtype(l) == T_STR) {
-        jsoff_t n1, off1 = vstr(js, l, &n1);
-        jsoff_t n2, off2 = vstr(js, r, &n2);
-        eq = n1 == n2 && memcmp(&js->mem[off1], &js->mem[off2], n1) == 0;
-      } else if (vtype(l) == T_NUM) {
-        eq = tod(l) == tod(r);
-      } else if (vtype(l) == T_BOOL) {
-        eq = vdata(l) == vdata(r);
-      } else if (vtype(l) == T_BIGINT) {
-        eq = bigint_compare(js, l, r) == 0;
-      } else {
-        eq = vdata(l) == vdata(r);
-      }
-    } else if ((vtype(l) == T_BIGINT && vtype(r) == T_NUM) || (vtype(l) == T_NUM && vtype(r) == T_BIGINT)) {
-      double num_val = vtype(l) == T_NUM ? tod(l) : tod(r);
-      jsval_t bigint_val = vtype(l) == T_BIGINT ? l : r;
+    } else if (lt == rt) {
+      eq = strict_eq_values(js, l, r);
+    } else if ((lt == T_BIGINT && rt == T_NUM) || (lt == T_NUM && rt == T_BIGINT)) {
+      double num_val = lt == T_NUM ? tod(l) : tod(r);
+      jsval_t bigint_val = lt == T_BIGINT ? l : r;
       if (isfinite(num_val) && num_val == trunc(num_val)) {
         bool neg = num_val < 0;
         if (neg) num_val = -num_val;
         char buf[64];
         snprintf(buf, sizeof(buf), "%.0f", num_val);
-        jsval_t num_as_bigint = mkbigint(js, buf, strlen(buf), neg);
-        eq = bigint_compare(js, bigint_val, num_as_bigint) == 0;
+        eq = bigint_compare(js, bigint_val, mkbigint(js, buf, strlen(buf), neg)) == 0;
       }
-    } else if (vtype(l) == T_BOOL) {
-      double lnum = vdata(l) ? 1.0 : 0.0;
-      jsval_t result = do_op(js, op, tov(lnum), r);
-      return result;
-    } else if (vtype(r) == T_BOOL) {
-      double rnum = vdata(r) ? 1.0 : 0.0;
-      jsval_t result = do_op(js, op, l, tov(rnum));
-      return result;
-    } else if ((vtype(l) == T_NUM && vtype(r) == T_STR) || (vtype(l) == T_STR && vtype(r) == T_NUM)) {
-      double lnum = js_to_number(js, l);
-      double rnum = js_to_number(js, r);
-      eq = lnum == rnum;
-    } else if (vtype(l) == T_ARR || vtype(l) == T_OBJ) {
+    } else if (lt == T_BOOL) {
+      return do_op(js, op, tov(vdata(l) ? 1.0 : 0.0), r);
+    } else if (rt == T_BOOL) {
+      return do_op(js, op, l, tov(vdata(r) ? 1.0 : 0.0));
+    } else if ((lt == T_NUM && rt == T_STR) || (lt == T_STR && rt == T_NUM)) {
+      eq = js_to_number(js, l) == js_to_number(js, r);
+    } else if (lt == T_ARR || lt == T_OBJ) {
       jsval_t l_prim = js_tostring_val(js, l);
       if (!is_err(l_prim)) return do_op(js, op, l_prim, r);
-    } else if (vtype(r) == T_ARR || vtype(r) == T_OBJ) {
+    } else if (rt == T_ARR || rt == T_OBJ) {
       jsval_t r_prim = js_tostring_val(js, r);
       if (!is_err(r_prim)) return do_op(js, op, l, r_prim);
     }
     return mkval(T_BOOL, op == TOK_EQ ? eq : !eq);
   }
-  if (vtype(l) == T_BIGINT || vtype(r) == T_BIGINT) {
-    if (vtype(l) != T_BIGINT || vtype(r) != T_BIGINT) {
+
+  L_TOK_PLUS: {
+    if (vtype(l) == T_BIGINT && vtype(r) == T_BIGINT) return bigint_add(js, l, r);
+    if (vtype(l) == T_BIGINT || vtype(r) == T_BIGINT)
       return js_mkerr(js, "Cannot mix BigInt value and other types");
+    if (is_non_numeric(l) || is_non_numeric(r) || (vtype(l) == T_STR && vtype(r) == T_STR)) {
+      jsval_t l_str = coerce_to_str(js, l);
+      if (is_err(l_str)) return l_str;
+      jsval_t r_str = coerce_to_str(js, r);
+      if (is_err(r_str)) return r_str;
+      return do_string_op(js, op, l_str, r_str);
     }
+    return tov(js_to_number(js, l) + js_to_number(js, r));
+  }
+
+  L_TOK_MINUS:
+  L_TOK_MUL:
+  L_TOK_DIV:
+  L_TOK_REM:
+  L_TOK_EXP: {
+    if (vtype(l) == T_BIGINT && vtype(r) == T_BIGINT) {
+      switch (op) {
+        case TOK_MINUS: return bigint_sub(js, l, r);
+        case TOK_MUL:   return bigint_mul(js, l, r);
+        case TOK_DIV:   return bigint_div(js, l, r);
+        case TOK_REM:   return bigint_mod(js, l, r);
+        case TOK_EXP:   return bigint_exp(js, l, r);
+      }
+    }
+    if (vtype(l) == T_BIGINT || vtype(r) == T_BIGINT)
+      return js_mkerr(js, "Cannot mix BigInt value and other types");
+    double a = js_to_number(js, l), b = js_to_number(js, r);
     switch (op) {
-      case TOK_PLUS:  return bigint_add(js, l, r);
-      case TOK_MINUS: return bigint_sub(js, l, r);
-      case TOK_MUL:   return bigint_mul(js, l, r);
-      case TOK_DIV:   return bigint_div(js, l, r);
-      case TOK_REM:   return bigint_mod(js, l, r);
-      case TOK_EXP:   return bigint_exp(js, l, r);
-      case TOK_LT:    return mkval(T_BOOL, bigint_compare(js, l, r) < 0);
-      case TOK_GT:    return mkval(T_BOOL, bigint_compare(js, l, r) > 0);
-      case TOK_LE:    return mkval(T_BOOL, bigint_compare(js, l, r) <= 0);
-      case TOK_GE:    return mkval(T_BOOL, bigint_compare(js, l, r) >= 0);
-      default: return js_mkerr(js, "Unsupported BigInt operation");
+      case TOK_MINUS: return tov(a - b);
+      case TOK_MUL:   return tov(a * b);
+      case TOK_DIV:   return tov(a / b);
+      case TOK_REM:   return tov(a - b * ((double)(long)(a / b)));
+      case TOK_EXP:   return tov(pow(a, b));
     }
   }
-  
-  if (op == TOK_PLUS && (is_non_numeric(l) || is_non_numeric(r))) {
-    jsval_t l_str = l, r_str = r;
-    
-    if (vtype(l) == T_ARR) {
-      char buf[1024];
-      size_t len = array_to_string(js, l, buf, sizeof(buf));
-      l_str = js_mkstr(js, buf, len);
-      if (is_err(l_str)) return l_str;
-    } else if (vtype(l) != T_STR) {
-      l_str = js_tostring_val(js, l);
-      if (is_err(l_str)) return l_str;
+
+  L_TOK_LT:
+  L_TOK_LE:
+  L_TOK_GT:
+  L_TOK_GE: {
+    if (vtype(l) == T_BIGINT && vtype(r) == T_BIGINT) {
+      int cmp = bigint_compare(js, l, r);
+      switch (op) {
+        case TOK_LT: return mkval(T_BOOL, cmp < 0);
+        case TOK_LE: return mkval(T_BOOL, cmp <= 0);
+        case TOK_GT: return mkval(T_BOOL, cmp > 0);
+        case TOK_GE: return mkval(T_BOOL, cmp >= 0);
+      }
     }
-    
-    if (vtype(r) == T_ARR) {
-      char buf[1024];
-      size_t len = array_to_string(js, r, buf, sizeof(buf));
-      r_str = js_mkstr(js, buf, len);
-      if (is_err(r_str)) return r_str;
-    } else if (vtype(r) != T_STR) {
-      r_str = js_tostring_val(js, r);
-      if (is_err(r_str)) return r_str;
-    }
-    
-    return do_string_op(js, op, l_str, r_str);
-  }
-  if (vtype(l) == T_STR && vtype(r) == T_STR) {
-    if (op == TOK_PLUS || op == TOK_LT || op == TOK_LE || op == TOK_GT || op == TOK_GE) {
+    if (vtype(l) == T_BIGINT || vtype(r) == T_BIGINT)
+      return js_mkerr(js, "Cannot mix BigInt value and other types");
+    if (vtype(l) == T_STR && vtype(r) == T_STR)
       return do_string_op(js, op, l, r);
+    double a = js_to_number(js, l), b = js_to_number(js, r);
+    switch (op) {
+      case TOK_LT: return mkval(T_BOOL, a < b);
+      case TOK_LE: return mkval(T_BOOL, a <= b);
+      case TOK_GT: return mkval(T_BOOL, a > b);
+      case TOK_GE: return mkval(T_BOOL, a >= b);
     }
   }
-  
-  double a = 0.0, b = 0.0;
-  
-  if (vtype(l) == T_NUM) {
-    a = tod(l);
-  } else if (vtype(l) == T_STR) {
-    jsoff_t slen, off = vstr(js, l, &slen);
-    char *endptr;
-    char temp[256];
-    size_t copy_len = slen < sizeof(temp) - 1 ? slen : sizeof(temp) - 1;
-    memcpy(temp, &js->mem[off], copy_len);
-    temp[copy_len] = '\0';
-    char *p = temp;
-    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
-    if (*p == '\0') {
-      a = 0.0;
-    } else {
-      a = strtod(p, &endptr);
-      while (*endptr == ' ' || *endptr == '\t' || *endptr == '\n' || *endptr == '\r') endptr++;
-      if (endptr == p || *endptr != '\0') a = NAN;
+
+  L_TOK_XOR:
+  L_TOK_AND:
+  L_TOK_OR:
+  L_TOK_SHL:
+  L_TOK_SHR:
+  L_TOK_ZSHR: {
+    if (vtype(l) == T_BIGINT || vtype(r) == T_BIGINT)
+      return js_mkerr(js, "Cannot mix BigInt value and other types");
+    int32_t ai = js_to_int32(js_to_number(js, l));
+    uint32_t bi = js_to_uint32(js_to_number(js, r));
+    switch (op) {
+      case TOK_XOR:  return tov((double)(ai ^ (int32_t)bi));
+      case TOK_AND:  return tov((double)(ai & (int32_t)bi));
+      case TOK_OR:   return tov((double)(ai | (int32_t)bi));
+      case TOK_SHL:  return tov((double)(ai << (bi & 0x1f)));
+      case TOK_SHR:  return tov((double)(ai >> (bi & 0x1f)));
+      case TOK_ZSHR: return tov((double)((uint32_t)ai >> (bi & 0x1f)));
     }
-  } else if (vtype(l) == T_BOOL) {
-    a = vdata(l) ? 1.0 : 0.0;
-  } else if (vtype(l) == T_NULL) {
-    a = 0.0;
-  } else if (vtype(l) == T_UNDEF) {
-    a = NAN;
-  } else if (vtype(l) == T_ARR) {
-    a = js_to_number(js, l);
-  } else if (vtype(l) == T_OBJ) {
-    jsoff_t vo_off = lkp_proto(js, l, "valueOf", 7);
-    if (vo_off != 0) {
-      jsval_t vo_fn = resolveprop(js, mkval(T_PROP, vo_off));
-      if (vtype(vo_fn) == T_FUNC || vtype(vo_fn) == T_CFUNC) {
-        jsval_t saved_this = js->this_val;
-        js->this_val = l;
-        jsval_t prim = call_js_with_args(js, vo_fn, NULL, 0);
-        js->this_val = saved_this;
-        if (vtype(prim) == T_NUM) a = tod(prim);
-        else a = NAN;
-      } else a = NAN;
-    } else a = NAN;
-  } else {
-    a = NAN;
   }
-  
-  if (vtype(r) == T_NUM) {
-    b = tod(r);
-  } else if (vtype(r) == T_STR) {
-    jsoff_t slen, off = vstr(js, r, &slen);
-    char *endptr;
-    char temp[256];
-    size_t copy_len = slen < sizeof(temp) - 1 ? slen : sizeof(temp) - 1;
-    memcpy(temp, &js->mem[off], copy_len);
-    temp[copy_len] = '\0';
-    char *p = temp;
-    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
-    if (*p == '\0') {
-      b = 0.0;
-    } else {
-      b = strtod(p, &endptr);
-      while (*endptr == ' ' || *endptr == '\t' || *endptr == '\n' || *endptr == '\r') endptr++;
-      if (endptr == p || *endptr != '\0') b = NAN;
-    }
-  } else if (vtype(r) == T_BOOL) {
-    b = vdata(r) ? 1.0 : 0.0;
-  } else if (vtype(r) == T_NULL) {
-    b = 0.0;
-  } else if (vtype(r) == T_UNDEF) {
-    b = NAN;
-  } else if (vtype(r) == T_ARR) {
-    b = js_to_number(js, r);
-  } else if (vtype(r) == T_OBJ) {
-    jsoff_t vo_off = lkp_proto(js, r, "valueOf", 7);
-    if (vo_off != 0) {
-      jsval_t vo_fn = resolveprop(js, mkval(T_PROP, vo_off));
-      if (vtype(vo_fn) == T_FUNC || vtype(vo_fn) == T_CFUNC) {
-        jsval_t saved_this = js->this_val;
-        js->this_val = r;
-        jsval_t prim = call_js_with_args(js, vo_fn, NULL, 0);
-        js->this_val = saved_this;
-        if (vtype(prim) == T_NUM) b = tod(prim);
-        else b = NAN;
-      } else b = NAN;
-    } else b = NAN;
-  } else {
-    b = NAN;
-  }
-  
-  switch (op) {
-    case TOK_DIV:     return tov(a / b);
-    case TOK_REM:     return tov(a - b * ((double) (long) (a / b)));
-    case TOK_MUL:     return tov(a * b);
-    case TOK_PLUS:    return tov(a + b);
-    case TOK_MINUS:   return tov(a - b);
-    case TOK_EXP:     return tov(pow(a, b));
-    case TOK_XOR:     return tov((double)(js_to_int32(a) ^ js_to_int32(b)));
-    case TOK_AND:     return tov((double)(js_to_int32(a) & js_to_int32(b)));
-    case TOK_OR:      return tov((double)(js_to_int32(a) | js_to_int32(b)));
-    case TOK_UMINUS:  return tov(-b);
-    case TOK_UPLUS:   return tov(b);
-    case TOK_TILDA:   return tov((double)(~js_to_int32(b)));
-    case TOK_SHL:     return tov((double)(js_to_int32(a) << (js_to_uint32(b) & 0x1f)));
-    case TOK_SHR:     return tov((double)(js_to_int32(a) >> (js_to_uint32(b) & 0x1f)));
-    case TOK_ZSHR:    return tov((double)(js_to_uint32(a) >> (js_to_uint32(b) & 0x1f)));
-    case TOK_DOT:     return do_dot_op(js, l, r);
-    case TOK_OPTIONAL_CHAIN: return do_optional_chain_op(js, l, r);
-    case TOK_LT:      return mkval(T_BOOL, a < b);
-    case TOK_LE:      return mkval(T_BOOL, a <= b);
-    case TOK_GT:      return mkval(T_BOOL, a > b);
-    case TOK_GE:      return mkval(T_BOOL, a >= b);
-    default:          return js_mkerr(js, "unknown op %d", (int) op);
-  }
+
+  L_default:
+    if (is_assign(op)) return do_assign_op(js, op, lhs, r);
+    return js_mkerr(js, "unknown op %d", (int)op);
 }
 
 static jsval_t js_template_literal(struct js *js) {
