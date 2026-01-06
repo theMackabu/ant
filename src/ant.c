@@ -814,35 +814,19 @@ static descriptor_entry_t *lookup_descriptor(jsoff_t obj_off, const char *key, s
 
 static jsval_t unwrap_primitive(struct js *js, jsval_t val) {
   if (vtype(val) != T_OBJ) return val;
-  jsoff_t prim_off = lkp(js, val, "__primitive_value__", 19);
-  if (prim_off == 0) return val;
-  return resolveprop(js, mkval(T_PROP, prim_off));
+  jsval_t prim = get_slot(js, val, SLOT_PRIMITIVE);
+  if (vtype(prim) == T_UNDEF) return val;
+  return prim;
 }
 
 static jsval_t to_string_val(struct js *js, jsval_t val) {
   uint8_t t = vtype(val);
   if (t == T_STR) return val;
   if (t == T_OBJ) {
-    jsoff_t prim_off = lkp(js, val, "__primitive_value__", 19);
-    if (prim_off != 0) {
-      jsval_t prim = resolveprop(js, mkval(T_PROP, prim_off));
-      if (vtype(prim) == T_STR) return prim;
-    }
-    jsoff_t ts_off = lkp_proto(js, val, "toString", 8);
-    if (ts_off != 0) {
-      jsval_t ts_fn = resolveprop(js, mkval(T_PROP, ts_off));
-      if (vtype(ts_fn) == T_FUNC || vtype(ts_fn) == T_CFUNC) {
-        jsval_t saved_this = js->this_val;
-        js->this_val = val;
-        jsval_t result = call_js_with_args(js, ts_fn, NULL, 0);
-        js->this_val = saved_this;
-        if (vtype(result) == T_STR) return result;
-      }
-    }
+    jsval_t prim = get_slot(js, val, SLOT_PRIMITIVE);
+    if (vtype(prim) == T_STR) return prim;
   }
-  
-  const char *s = js_str(js, val);
-  return js_mkstr(js, s, strlen(s));
+  return js_call_toString(js, val);
 }
 
 static void free_coroutine(coroutine_t *coro);
@@ -6067,10 +6051,11 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
   }
 
   L_TOK_PLUS: {
-    if (vtype(l) == T_BIGINT && vtype(r) == T_BIGINT) return bigint_add(js, l, r);
-    if (vtype(l) == T_BIGINT || vtype(r) == T_BIGINT)
-      return js_mkerr(js, "Cannot mix BigInt value and other types");
-    if (is_non_numeric(l) || is_non_numeric(r) || (vtype(l) == T_STR && vtype(r) == T_STR)) {
+    jsval_t lu = unwrap_primitive(js, l);
+    jsval_t ru = unwrap_primitive(js, r);
+    if (vtype(lu) == T_BIGINT && vtype(ru) == T_BIGINT) return bigint_add(js, lu, ru);
+    if (vtype(lu) == T_BIGINT || vtype(ru) == T_BIGINT) return js_mkerr(js, "Cannot mix BigInt value and other types");
+    if (is_non_numeric(lu) || is_non_numeric(ru) || (vtype(lu) == T_STR && vtype(ru) == T_STR)) {
       jsval_t l_str = coerce_to_str(js, l);
       if (is_err(l_str)) return l_str;
       jsval_t r_str = coerce_to_str(js, r);
@@ -11046,8 +11031,8 @@ static jsval_t builtin_String(struct js *js, jsval_t *args, int nargs) {
       sval = js_mkstr(js, str, strlen(str));
     }
   }
-  if (vtype(js->this_val) == T_OBJ && lkp(js, js->this_val, "__primitive_value__", 19) == 0) {
-    setprop(js, js->this_val, js_mkstr(js, "__primitive_value__", 19), sval);
+  if (vtype(js->this_val) == T_OBJ && vtype(get_slot(js, js->this_val, SLOT_PRIMITIVE)) == T_UNDEF) {
+    set_slot(js, js->this_val, SLOT_PRIMITIVE, sval);
     jsval_t proto = get_ctor_proto(js, "String", 6);
     if (vtype(proto) == T_OBJ) set_proto(js, js->this_val, proto);
     jsoff_t slen;
@@ -11146,8 +11131,8 @@ static jsval_t builtin_Number(struct js *js, jsval_t *args, int nargs) {
       nval = tov(0.0);
     }
   }
-  if (vtype(js->this_val) == T_OBJ && lkp(js, js->this_val, "__primitive_value__", 19) == 0) {
-    setprop(js, js->this_val, js_mkstr(js, "__primitive_value__", 19), nval);
+  if (vtype(js->this_val) == T_OBJ && vtype(get_slot(js, js->this_val, SLOT_PRIMITIVE)) == T_UNDEF) {
+    set_slot(js, js->this_val, SLOT_PRIMITIVE, nval);
     jsval_t proto = get_ctor_proto(js, "Number", 6);
     if (vtype(proto) == T_OBJ) set_proto(js, js->this_val, proto);
   }
@@ -11156,8 +11141,8 @@ static jsval_t builtin_Number(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t builtin_Boolean(struct js *js, jsval_t *args, int nargs) {
   jsval_t bval = mkval(T_BOOL, nargs > 0 && js_truthy(js, args[0]) ? 1 : 0);
-  if (vtype(js->this_val) == T_OBJ && lkp(js, js->this_val, "__primitive_value__", 19) == 0) {
-    setprop(js, js->this_val, js_mkstr(js, "__primitive_value__", 19), bval);
+  if (vtype(js->this_val) == T_OBJ && vtype(get_slot(js, js->this_val, SLOT_PRIMITIVE)) == T_UNDEF) {
+    set_slot(js, js->this_val, SLOT_PRIMITIVE, bval);
     jsval_t proto = get_ctor_proto(js, "Boolean", 7);
     if (vtype(proto) == T_OBJ) set_proto(js, js->this_val, proto);
   }
@@ -11184,7 +11169,7 @@ static jsval_t builtin_Object(struct js *js, jsval_t *args, int nargs) {
   if (t == T_STR || t == T_NUM || t == T_BOOL || t == T_BIGINT) {
     jsval_t wrapper = js_mkobj(js);
     if (is_err(wrapper)) return wrapper;
-    setprop(js, wrapper, js_mkstr(js, "__primitive_value__", 19), arg);
+    set_slot(js, wrapper, SLOT_PRIMITIVE, arg);
     jsval_t proto = get_prototype_for_type(js, t);
     if (vtype(proto) == T_OBJ) set_proto(js, wrapper, proto);
     return wrapper;
