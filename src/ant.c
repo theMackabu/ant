@@ -3656,21 +3656,38 @@ static const uint8_t single_char_tok[128] = {
 };
 
 static inline jsoff_t parse_decimal(const char *buf, jsoff_t maxlen, double *out) {
-  double val = 0.0;
+  uint64_t int_part = 0, frac_part = 0;
+  int frac_digits = 0;
   jsoff_t i = 0;
 
   while (i < maxlen && (IS_DIGIT(buf[i]) || buf[i] == '_')) {
-    if (buf[i] != '_') val = val * 10.0 + (buf[i] - '0');
+    if (buf[i] != '_') int_part = int_part * 10 + (buf[i] - '0');
     i++;
   }
 
   if (i < maxlen && buf[i] == '.') {
     i++;
-    double frac = 0.1;
     while (i < maxlen && (IS_DIGIT(buf[i]) || buf[i] == '_')) {
-      if (buf[i] != '_') { val += (buf[i] - '0') * frac; frac *= 0.1; }
+      if (buf[i] != '_') { frac_part = frac_part * 10 + (buf[i] - '0'); frac_digits++; }
       i++;
     }
+  }
+
+  static const double neg_pow10[] = {
+    1e0,1e-1,1e-2,1e-3,1e-4,1e-5,1e-6,1e-7,1e-8,1e-9,1e-10,
+    1e-11,1e-12,1e-13,1e-14,1e-15,1e-16,1e-17,1e-18,1e-19,1e-20
+  };
+  
+  static const double pos_pow10[] = {
+    1e0,1e1,1e2,1e3,1e4,1e5,1e6,1e7,1e8,1e9,1e10,
+    1e11,1e12,1e13,1e14,1e15,1e16,1e17,1e18,1e19,1e20
+  };
+
+  double val = (double)int_part;
+  if (frac_digits > 0) {
+    val += (frac_digits <= 20) 
+      ? (double)frac_part * neg_pow10[frac_digits] 
+      : (double)frac_part * pow(10.0, -frac_digits);
   }
 
   if (i < maxlen && (buf[i] == 'e' || buf[i] == 'E')) {
@@ -3684,13 +3701,8 @@ static inline jsoff_t parse_decimal(const char *buf, jsoff_t maxlen, double *out
       if (buf[i] != '_') exp_val = exp_val * 10 + (buf[i] - '0');
       i++;
     }
-    static const double pow10[] = {
-      1e0,1e1,1e2,1e3,1e4,1e5,1e6,1e7,1e8,1e9,1e10,
-      1e11,1e12,1e13,1e14,1e15,1e16,1e17,1e18,1e19,1e20
-    };
-    
     if (exp_val <= 20) {
-      val = (exp_sign > 0) ? val * pow10[exp_val] : val / pow10[exp_val];
+      val = (exp_sign > 0) ? val * pos_pow10[exp_val] : val * neg_pow10[exp_val];
     } else val *= pow(10.0, exp_sign * exp_val);
   }
 
