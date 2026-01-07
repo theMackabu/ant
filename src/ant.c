@@ -3576,176 +3576,478 @@ static uint8_t parseident(const char *buf, jsoff_t len, jsoff_t *tlen) {
   return parsekeyword(decoded, decoded_len);
 }
 
-static uint8_t next(struct js *js) {
-  if (js->consumed == 0) return js->tok;
+#define CHAR_DIGIT  0x01
+#define CHAR_XDIGIT 0x02
+#define CHAR_ALPHA  0x04
+#define CHAR_IDENT  0x08
+#define CHAR_IDENT1 0x10
+#define CHAR_WS     0x20
+#define CHAR_OCTAL  0x40
+
+static const uint8_t char_type[256] = {
+  ['\t'] = CHAR_WS, ['\n'] = CHAR_WS, ['\r'] = CHAR_WS, [' '] = CHAR_WS,
+  ['0'] = CHAR_DIGIT | CHAR_XDIGIT | CHAR_IDENT | CHAR_OCTAL,
+  ['1'] = CHAR_DIGIT | CHAR_XDIGIT | CHAR_IDENT | CHAR_OCTAL,
+  ['2'] = CHAR_DIGIT | CHAR_XDIGIT | CHAR_IDENT | CHAR_OCTAL,
+  ['3'] = CHAR_DIGIT | CHAR_XDIGIT | CHAR_IDENT | CHAR_OCTAL,
+  ['4'] = CHAR_DIGIT | CHAR_XDIGIT | CHAR_IDENT | CHAR_OCTAL,
+  ['5'] = CHAR_DIGIT | CHAR_XDIGIT | CHAR_IDENT | CHAR_OCTAL,
+  ['6'] = CHAR_DIGIT | CHAR_XDIGIT | CHAR_IDENT | CHAR_OCTAL,
+  ['7'] = CHAR_DIGIT | CHAR_XDIGIT | CHAR_IDENT | CHAR_OCTAL,
+  ['8'] = CHAR_DIGIT | CHAR_XDIGIT | CHAR_IDENT,
+  ['9'] = CHAR_DIGIT | CHAR_XDIGIT | CHAR_IDENT,
+  ['A'] = CHAR_XDIGIT | CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1,
+  ['B'] = CHAR_XDIGIT | CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1,
+  ['C'] = CHAR_XDIGIT | CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1,
+  ['D'] = CHAR_XDIGIT | CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1,
+  ['E'] = CHAR_XDIGIT | CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1,
+  ['F'] = CHAR_XDIGIT | CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1,
+  ['a'] = CHAR_XDIGIT | CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1,
+  ['b'] = CHAR_XDIGIT | CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1,
+  ['c'] = CHAR_XDIGIT | CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1,
+  ['d'] = CHAR_XDIGIT | CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1,
+  ['e'] = CHAR_XDIGIT | CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1,
+  ['f'] = CHAR_XDIGIT | CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1,
+  ['G'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1, ['H'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1,
+  ['I'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1, ['J'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1,
+  ['K'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1, ['L'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1,
+  ['M'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1, ['N'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1,
+  ['O'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1, ['P'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1,
+  ['Q'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1, ['R'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1,
+  ['S'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1, ['T'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1,
+  ['U'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1, ['V'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1,
+  ['W'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1, ['X'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1,
+  ['Y'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1, ['Z'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1,
+  ['g'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1, ['h'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1,
+  ['i'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1, ['j'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1,
+  ['k'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1, ['l'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1,
+  ['m'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1, ['n'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1,
+  ['o'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1, ['p'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1,
+  ['q'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1, ['r'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1,
+  ['s'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1, ['t'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1,
+  ['u'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1, ['v'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1,
+  ['w'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1, ['x'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1,
+  ['y'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1, ['z'] = CHAR_ALPHA | CHAR_IDENT | CHAR_IDENT1,
+  ['_'] = CHAR_IDENT | CHAR_IDENT1,
+  ['$'] = CHAR_IDENT | CHAR_IDENT1,
+};
+
+#define IS_DIGIT(c)  (char_type[(uint8_t)(c)] & CHAR_DIGIT)
+#define IS_XDIGIT(c) (char_type[(uint8_t)(c)] & CHAR_XDIGIT)
+#define IS_IDENT(c)  (char_type[(uint8_t)(c)] & CHAR_IDENT)
+#define IS_IDENT1(c) (char_type[(uint8_t)(c)] & CHAR_IDENT1)
+#define IS_OCTAL(c)  (char_type[(uint8_t)(c)] & CHAR_OCTAL)
+
+#define likely(x)   __builtin_expect(!!(x), 1)
+#define unlikely(x) __builtin_expect(!!(x), 0)
+
+static const uint8_t single_char_tok[128] = {
+  ['('] = TOK_LPAREN,
+  [')'] = TOK_RPAREN,
+  ['{'] = TOK_LBRACE,
+  ['}'] = TOK_RBRACE,
+  ['['] = TOK_LBRACKET,
+  [']'] = TOK_RBRACKET,
+  [';'] = TOK_SEMICOLON,
+  [','] = TOK_COMMA,
+  [':'] = TOK_COLON,
+  ['~'] = TOK_TILDA,
+  ['#'] = TOK_HASH,
+};
+
+static inline jsoff_t parse_decimal(const char *buf, jsoff_t maxlen, double *out) {
+  double val = 0.0;
+  jsoff_t i = 0;
+
+  while (i < maxlen && (IS_DIGIT(buf[i]) || buf[i] == '_')) {
+    if (buf[i] != '_') val = val * 10.0 + (buf[i] - '0');
+    i++;
+  }
+
+  if (i < maxlen && buf[i] == '.') {
+    i++;
+    double frac = 0.1;
+    while (i < maxlen && (IS_DIGIT(buf[i]) || buf[i] == '_')) {
+      if (buf[i] != '_') { val += (buf[i] - '0') * frac; frac *= 0.1; }
+      i++;
+    }
+  }
+
+  if (i < maxlen && (buf[i] == 'e' || buf[i] == 'E')) {
+    i++;
+    int exp_sign = 1, exp_val = 0;
+    if (i < maxlen && (buf[i] == '+' || buf[i] == '-')) {
+      exp_sign = (buf[i] == '-') ? -1 : 1;
+      i++;
+    }
+    while (i < maxlen && (IS_DIGIT(buf[i]) || buf[i] == '_')) {
+      if (buf[i] != '_') exp_val = exp_val * 10 + (buf[i] - '0');
+      i++;
+    }
+    static const double pow10[] = {
+      1e0,1e1,1e2,1e3,1e4,1e5,1e6,1e7,1e8,1e9,1e10,
+      1e11,1e12,1e13,1e14,1e15,1e16,1e17,1e18,1e19,1e20
+    };
+    
+    if (exp_val <= 20) {
+      val = (exp_sign > 0) ? val * pow10[exp_val] : val / pow10[exp_val];
+    } else val *= pow(10.0, exp_sign * exp_val);
+  }
+
+  *out = val;
+  return i;
+}
+
+static inline jsoff_t parse_binary(const char *buf, jsoff_t maxlen, double *out) {
+  double val = 0;
+  jsoff_t i = 2;
+  while (i < maxlen && (buf[i] == '0' || buf[i] == '1' || buf[i] == '_')) {
+    if (buf[i] != '_') val = val * 2 + (buf[i] - '0');
+    i++;
+  }
+  *out = val;
+  return i;
+}
+
+static inline jsoff_t parse_octal(const char *buf, jsoff_t maxlen, double *out) {
+  double val = 0;
+  jsoff_t i = 2;
+  while (i < maxlen && (IS_OCTAL(buf[i]) || buf[i] == '_')) {
+    if (buf[i] != '_') val = val * 8 + (buf[i] - '0');
+    i++;
+  }
+  *out = val;
+  return i;
+}
+
+static inline jsoff_t parse_legacy_octal(const char *buf, jsoff_t maxlen, double *out) {
+  double val = 0;
+  jsoff_t i = 1;
+  while (i < maxlen && IS_OCTAL(buf[i])) {
+      val = val * 8 + (buf[i] - '0');
+      i++;
+  }
+  *out = val;
+  return i;
+}
+
+static inline jsoff_t parse_hex(const char *buf, jsoff_t maxlen, double *out) {
+  double val = 0;
+  jsoff_t i = 2;
+  while (i < maxlen && (IS_XDIGIT(buf[i]) || buf[i] == '_')) {
+    if (buf[i] != '_') {
+      int d = 
+        (buf[i] >= 'a') ? (buf[i] - 'a' + 10) :
+        (buf[i] >= 'A') ? (buf[i] - 'A' + 10) : (buf[i] - '0');
+      val = val * 16 + d;
+    } i++;
+  }
+  *out = val;
+  return i;
+}
+
+static inline uint8_t parse_number(struct js *js, const char *buf, jsoff_t remaining) {
+  double value = 0;
+  jsoff_t numlen = 0;
   
+  if (buf[0] == '0' && remaining > 1) {
+    char c1 = buf[1] | 0x20; 
+    if (c1 == 'b') {
+      numlen = parse_binary(buf, remaining, &value);
+    } else if (c1 == 'o') {
+      numlen = parse_octal(buf, remaining, &value);
+    } else if (c1 == 'x') {
+      numlen = parse_hex(buf, remaining, &value);
+    } else if (IS_OCTAL(buf[1])) {
+        if (js->flags & F_STRICT) {
+          js->tok = TOK_ERR;
+          js->tlen = 1;
+          return TOK_ERR;
+        }
+        numlen = parse_legacy_octal(buf, remaining, &value);
+    } else numlen = parse_decimal(buf, remaining, &value);
+  } else numlen = parse_decimal(buf, remaining, &value);
+  
+  js->tval = tov(value);
+  if (numlen < remaining && buf[numlen] == 'n') {
+    js->tok = TOK_BIGINT;
+    js->tlen = numlen + 1;
+  } else {
+    js->tok = TOK_NUMBER;
+    js->tlen = numlen;
+  }
+  
+  return js->tok;
+}
+
+static inline uint8_t scan_string(struct js *js, const char *buf, jsoff_t rem, char quote) {
+  jsoff_t i = 1;
+
+  while (i < rem) {
+    const char *p = buf + i;
+    jsoff_t search_len = rem - i;
+
+    const char *q = memchr(p, quote, search_len);
+    const char *b = memchr(p, '\\', search_len);
+
+    if (q == NULL) {
+      js->tok = TOK_ERR;
+      js->tlen = rem;
+      return TOK_ERR;
+    }
+
+    if (b == NULL || q < b) {
+      i = (q - buf) + 1;
+      js->tok = TOK_STRING;
+      js->tlen = i;
+      return TOK_STRING;
+    }
+
+    jsoff_t esc_pos = b - buf;
+    if (esc_pos + 1 >= rem) {
+      js->tok = TOK_ERR;
+      js->tlen = rem;
+      return TOK_ERR;
+    }
+
+    char esc_char = buf[esc_pos + 1];
+    jsoff_t skip = 2;
+
+    if (esc_char == 'x') { skip = 4; } else if (esc_char == 'u') {
+      skip = (esc_pos + 2 < rem && buf[esc_pos + 2] == '{') ? 0 : 6;
+      if (skip == 0) {
+        jsoff_t j = esc_pos + 3;
+        while (j < rem && buf[j] != '}') j++;
+        skip = (j < rem) ? (j - esc_pos + 1) : (rem - esc_pos);
+      }
+    }
+
+    if (esc_pos + skip > rem) {
+      js->tok = TOK_ERR;
+      js->tlen = rem;
+      return TOK_ERR;
+    }
+
+    i = esc_pos + skip;
+  }
+
+  js->tok = TOK_ERR;
+  js->tlen = rem;
+  return TOK_ERR;
+}
+
+static inline uint8_t scan_template(struct js *js, const char *buf, jsoff_t rem) {
+  jsoff_t i = 1;
+
+  while (i < rem) {
+    const char *p = buf + i;
+    jsoff_t search_len = rem - i;
+
+    const char *q = memchr(p, '`', search_len);
+    const char *b = memchr(p, '\\', search_len);
+
+    if (q == NULL) {
+      js->tok = TOK_ERR;
+      js->tlen = rem;
+      return TOK_ERR;
+    }
+
+    if (b == NULL || q < b) {
+      i = (q - buf) + 1;
+      js->tok = TOK_TEMPLATE;
+      js->tlen = i;
+      return TOK_TEMPLATE;
+    }
+
+    jsoff_t esc_pos = b - buf;
+    i = esc_pos + 2;
+    if (i > rem) {
+      js->tok = TOK_ERR;
+      js->tlen = rem;
+      return TOK_ERR;
+    }
+  }
+
+  js->tok = TOK_ERR;
+  js->tlen = rem;
+  return TOK_ERR;
+}
+
+static inline uint8_t parse_operator(struct js *js, const char *buf, jsoff_t rem) {
+  #define MATCH2(c1,c2)       (rem >= 2 && buf[1] == (c2))
+  #define MATCH3(c1,c2,c3)    (rem >= 3 && buf[1] == (c2) && buf[2] == (c3))
+  #define MATCH4(c1,c2,c3,c4) (rem >= 4 && buf[1]==(c2) && buf[2]==(c3) && buf[3]==(c4))
+
+  switch (buf[0]) {
+  case '?':
+    if (MATCH3('?','?','=')) { js->tok = TOK_NULLISH_ASSIGN; js->tlen = 3; }
+    else if (MATCH2('?','?')) { js->tok = TOK_NULLISH; js->tlen = 2; }
+    else if (MATCH2('?','.')) { js->tok = TOK_OPTIONAL_CHAIN; js->tlen = 2; }
+    else { js->tok = TOK_Q; js->tlen = 1; }
+    break;
+
+  case '!':
+    if (MATCH3('!','=','=')) { js->tok = TOK_SNE; js->tlen = 3; }
+    else if (MATCH2('!','=')) { js->tok = TOK_NE; js->tlen = 2; }
+    else { js->tok = TOK_NOT; js->tlen = 1; }
+    break;
+
+  case '=':
+    if (MATCH3('=','=','=')) { js->tok = TOK_SEQ; js->tlen = 3; }
+    else if (MATCH2('=','=')) { js->tok = TOK_EQ; js->tlen = 2; }
+    else if (MATCH2('=','>')) { js->tok = TOK_ARROW; js->tlen = 2; }
+    else { js->tok = TOK_ASSIGN; js->tlen = 1; }
+    break;
+
+  case '<':
+    if (MATCH3('<','<','=')) { js->tok = TOK_SHL_ASSIGN; js->tlen = 3; }
+    else if (MATCH2('<','<')) { js->tok = TOK_SHL; js->tlen = 2; }
+    else if (MATCH2('<','=')) { js->tok = TOK_LE; js->tlen = 2; }
+    else { js->tok = TOK_LT; js->tlen = 1; }
+    break;
+
+  case '>':
+    if (MATCH4('>','>','>','=')) { js->tok = TOK_ZSHR_ASSIGN; js->tlen = 4; }
+    else if (MATCH3('>','>','>')) { js->tok = TOK_ZSHR; js->tlen = 3; }
+    else if (MATCH3('>','>','=')) { js->tok = TOK_SHR_ASSIGN; js->tlen = 3; }
+    else if (MATCH2('>','>')) { js->tok = TOK_SHR; js->tlen = 2; }
+    else if (MATCH2('>','=')) { js->tok = TOK_GE; js->tlen = 2; }
+    else { js->tok = TOK_GT; js->tlen = 1; }
+    break;
+
+  case '&':
+    if (MATCH3('&','&','=')) { js->tok = TOK_LAND_ASSIGN; js->tlen = 3; }
+    else if (MATCH2('&','&')) { js->tok = TOK_LAND; js->tlen = 2; }
+    else if (MATCH2('&','=')) { js->tok = TOK_AND_ASSIGN; js->tlen = 2; }
+    else { js->tok = TOK_AND; js->tlen = 1; }
+    break;
+
+  case '|':
+    if (MATCH3('|','|','=')) { js->tok = TOK_LOR_ASSIGN; js->tlen = 3; }
+    else if (MATCH2('|','|')) { js->tok = TOK_LOR; js->tlen = 2; }
+    else if (MATCH2('|','=')) { js->tok = TOK_OR_ASSIGN; js->tlen = 2; }
+    else { js->tok = TOK_OR; js->tlen = 1; }
+    break;
+
+  case '+':
+    if (MATCH2('+','+')) { js->tok = TOK_POSTINC; js->tlen = 2; }
+    else if (MATCH2('+','=')) { js->tok = TOK_PLUS_ASSIGN; js->tlen = 2; }
+    else { js->tok = TOK_PLUS; js->tlen = 1; }
+    break;
+
+  case '-':
+    if (MATCH2('-','-')) { js->tok = TOK_POSTDEC; js->tlen = 2; }
+    else if (MATCH2('-','=')) { js->tok = TOK_MINUS_ASSIGN; js->tlen = 2; }
+    else { js->tok = TOK_MINUS; js->tlen = 1; }
+    break;
+
+  case '*':
+    if (MATCH2('*','*')) { js->tok = TOK_EXP; js->tlen = 2; }
+    else if (MATCH2('*','=')) { js->tok = TOK_MUL_ASSIGN; js->tlen = 2; }
+    else { js->tok = TOK_MUL; js->tlen = 1; }
+    break;
+
+  case '/':
+    if (MATCH2('/','=')) { js->tok = TOK_DIV_ASSIGN; js->tlen = 2; }
+    else { js->tok = TOK_DIV; js->tlen = 1; }
+    break;
+
+  case '%':
+    if (MATCH2('%','=')) { js->tok = TOK_REM_ASSIGN; js->tlen = 2; }
+    else { js->tok = TOK_REM; js->tlen = 1; }
+    break;
+
+  case '^':
+    if (MATCH2('^','=')) { js->tok = TOK_XOR_ASSIGN; js->tlen = 2; }
+    else { js->tok = TOK_XOR; js->tlen = 1; }
+    break;
+
+  case '.':
+    if (MATCH3('.','.', '.')) { js->tok = TOK_REST; js->tlen = 3; }
+    else if (rem > 1 && IS_DIGIT(buf[1])) {
+      double val;
+      js->tlen = parse_decimal(buf, rem, &val);
+      js->tval = tov(val);
+      js->tok = TOK_NUMBER;
+    }
+    else { js->tok = TOK_DOT; js->tlen = 1; }
+    break;
+
+  default:
+    return 0;
+  }
+
+  #undef MATCH2
+  #undef MATCH3
+  #undef MATCH4
+
+  return js->tok;
+}
+
+static uint8_t next(struct js *js) {
+  if (likely(js->consumed == 0)) return js->tok;
+
   js->consumed = 0;
   js->tok = TOK_ERR;
   js->toff = js->pos = skiptonext(js->code, js->clen, js->pos, &js->had_newline);
   js->tlen = 0;
-  
-  const char *buf = js->code + js->toff;
-  if (js->toff >= js->clen) { js->tok = TOK_EOF; return js->tok; }
-  
-  #define TOK(T, LEN) { js->tok = T; js->tlen = (LEN); break; }
-  #define LOOK(OFS, CH) js->toff + OFS < js->clen && buf[OFS] == CH
-  
-  switch (buf[0]) {
-    case '?': if (LOOK(1, '?') && LOOK(2, '=')) TOK(TOK_NULLISH_ASSIGN, 3); if (LOOK(1, '?')) TOK(TOK_NULLISH, 2); if (LOOK(1, '.')) TOK(TOK_OPTIONAL_CHAIN, 2); TOK(TOK_Q, 1);
-    case ':': TOK(TOK_COLON, 1);
-    case '(': TOK(TOK_LPAREN, 1);
-    case ')': TOK(TOK_RPAREN, 1);
-    case '{': TOK(TOK_LBRACE, 1);
-    case '}': TOK(TOK_RBRACE, 1);
-    case '[': TOK(TOK_LBRACKET, 1);
-    case ']': TOK(TOK_RBRACKET, 1);
-    case ';': TOK(TOK_SEMICOLON, 1);
-    case ',': TOK(TOK_COMMA, 1);
-    case '!': if (LOOK(1, '=') && LOOK(2, '=')) TOK(TOK_SNE, 3); if (LOOK(1, '=')) TOK(TOK_NE, 2); TOK(TOK_NOT, 1);
-    
-    case '.':
-      if (LOOK(1, '.') && LOOK(2, '.')) TOK(TOK_REST, 3);
-      if (js->toff + 1 < js->clen && is_digit(buf[1])) {
-        char clean[64];
-        jsoff_t ci = 0, numlen = 0;
-        while (js->toff + numlen < js->clen && (is_digit(buf[numlen]) || buf[numlen] == '.' || buf[numlen] == 'e' || buf[numlen] == 'E' || buf[numlen] == '+' || buf[numlen] == '-' || buf[numlen] == '_') && ci < 63) {
-          if (numlen > 0 && (buf[numlen] == '+' || buf[numlen] == '-') && buf[numlen-1] != 'e' && buf[numlen-1] != 'E') break;
-          if (buf[numlen] != '_') clean[ci++] = buf[numlen];
-          numlen++;
-        }
-        clean[ci] = '\0';
-        js->tval = tov(strtod(clean, NULL));
-        TOK(TOK_NUMBER, numlen);
-      }
-      TOK(TOK_DOT, 1);
-      
-    case '~': TOK(TOK_TILDA, 1);
-    case '-': if (LOOK(1, '-')) TOK(TOK_POSTDEC, 2); if (LOOK(1, '=')) TOK(TOK_MINUS_ASSIGN, 2); TOK(TOK_MINUS, 1);
-    case '+': if (LOOK(1, '+')) TOK(TOK_POSTINC, 2); if (LOOK(1, '=')) TOK(TOK_PLUS_ASSIGN, 2); TOK(TOK_PLUS, 1);
-    case '*': if (LOOK(1, '*')) TOK(TOK_EXP, 2); if (LOOK(1, '=')) TOK(TOK_MUL_ASSIGN, 2); TOK(TOK_MUL, 1);
-    case '/': if (LOOK(1, '=')) TOK(TOK_DIV_ASSIGN, 2); TOK(TOK_DIV, 1);
-    case '%': if (LOOK(1, '=')) TOK(TOK_REM_ASSIGN, 2); TOK(TOK_REM, 1);
-    case '&': if (LOOK(1, '&') && LOOK(2, '=')) TOK(TOK_LAND_ASSIGN, 3); if (LOOK(1, '&')) TOK(TOK_LAND, 2); if (LOOK(1, '=')) TOK(TOK_AND_ASSIGN, 2); TOK(TOK_AND, 1);
-    case '|': if (LOOK(1, '|') && LOOK(2, '=')) TOK(TOK_LOR_ASSIGN, 3); if (LOOK(1, '|')) TOK(TOK_LOR, 2); if (LOOK(1, '=')) TOK(TOK_OR_ASSIGN, 2); TOK(TOK_OR, 1);
-    case '=': if (LOOK(1, '=') && LOOK(2, '=')) TOK(TOK_SEQ, 3); if (LOOK(1, '=')) TOK(TOK_EQ, 2); if (LOOK(1, '>')) TOK(TOK_ARROW, 2); TOK(TOK_ASSIGN, 1);
-    case '<': if (LOOK(1, '<') && LOOK(2, '=')) TOK(TOK_SHL_ASSIGN, 3); if (LOOK(1, '<')) TOK(TOK_SHL, 2); if (LOOK(1, '=')) TOK(TOK_LE, 2); TOK(TOK_LT, 1);
-    case '>': if (LOOK(1, '>') && LOOK(2, '>') && LOOK(3, '=')) TOK(TOK_ZSHR_ASSIGN, 4); if (LOOK(1, '>') && LOOK(2, '>')) TOK(TOK_ZSHR, 3); if (LOOK(1, '>') && LOOK(2, '=')) TOK(TOK_SHR_ASSIGN, 3); if (LOOK(1, '>')) TOK(TOK_SHR, 2); if (LOOK(1, '=')) TOK(TOK_GE, 2); TOK(TOK_GT, 1);
-    case '^': if (LOOK(1, '=')) TOK(TOK_XOR_ASSIGN, 2); TOK(TOK_XOR, 1);
-    case '#': TOK(TOK_HASH, 1);
-    case '`':
-      js->tlen++;
-      while (js->toff + js->tlen < js->clen && buf[js->tlen] != '`') {
-        uint8_t increment = 1;
-        if (buf[js->tlen] == '\\') {
-          if (js->toff + js->tlen + 2 > js->clen) break;
-          increment = 2;
-        }
-        js->tlen += increment;
-      }
-      if (buf[js->tlen] == '`') js->tok = TOK_TEMPLATE, js->tlen++;
-      break;
-    case '"': case '\'':
-      js->tlen++;
-      while (js->toff + js->tlen < js->clen && buf[js->tlen] != buf[0]) {
-        uint8_t increment = 1;
-        if (buf[js->tlen] == '\\') {
-          if (js->toff + js->tlen + 2 > js->clen) break;
-          increment = 2;
-          if (buf[js->tlen + 1] == 'x') {
-            if (js->toff + js->tlen + 4 > js->clen) break;
-            increment = 4;
-          } else if (buf[js->tlen + 1] == 'u') {
-            if (js->toff + js->tlen + 6 > js->clen) break;
-            increment = 6;
-          }
-        }
-        js->tlen += increment;
-      }
-      if (buf[0] == buf[js->tlen]) js->tok = TOK_STRING, js->tlen++;
-      break;
-    case '0': case '1': case '2': case '3': case '4': case '5': case '6': case '7': case '8': case '9': {
-      if ((js->flags & F_STRICT) && buf[0] == '0' && js->toff + 1 < js->clen && 
-          is_digit(buf[1]) && buf[1] != 'x' && buf[1] != 'X' && buf[1] != 'b' && buf[1] != 'B' && buf[1] != 'o' && buf[1] != 'O') {
-        js->tok = TOK_ERR;
-        js->tlen = 1;
-        break;
-      }
-      
-      char *end;
-      double value = 0;
-      jsoff_t numlen = 0;
-      
-      if (buf[0] == '0' && js->toff + 2 < js->clen) {
-        if (buf[1] == 'b' || buf[1] == 'B') {
-          numlen = 2;
-          while (js->toff + numlen < js->clen && (buf[numlen] == '0' || buf[numlen] == '1' || buf[numlen] == '_')) {
-            if (buf[numlen] != '_') value = value * 2 + (buf[numlen] - '0');
-            numlen++;
-          }
-          js->tval = tov(value);
-        } else if (buf[1] == 'o' || buf[1] == 'O') {
-          numlen = 2;
-          while (js->toff + numlen < js->clen && ((buf[numlen] >= '0' && buf[numlen] <= '7') || buf[numlen] == '_')) {
-            if (buf[numlen] != '_') value = value * 8 + (buf[numlen] - '0');
-            numlen++;
-          }
-          js->tval = tov(value);
-        } else if (buf[1] == 'x' || buf[1] == 'X') {
-          char clean[64];
-          jsoff_t ci = 0;
-          numlen = 0;
-          while (js->toff + numlen < js->clen && (is_xdigit(buf[numlen]) || buf[numlen] == 'x' || buf[numlen] == 'X' || buf[numlen] == '_') && ci < 63) {
-            if (buf[numlen] != '_') clean[ci++] = buf[numlen];
-            numlen++;
-          }
-          clean[ci] = '\0';
-          js->tval = tov(strtod(clean, &end));
-        } else if (buf[1] >= '0' && buf[1] <= '7') {
-          numlen = 1;
-          while (js->toff + numlen < js->clen && buf[numlen] >= '0' && buf[numlen] <= '7') {
-            value = value * 8 + (buf[numlen] - '0');
-            numlen++;
-          }
-          js->tval = tov(value);
-        } else {
-          char clean[64];
-          jsoff_t ci = 0;
-          numlen = 0;
-          while (js->toff + numlen < js->clen && (is_digit(buf[numlen]) || buf[numlen] == '.' || buf[numlen] == 'e' || buf[numlen] == 'E' || buf[numlen] == '+' || buf[numlen] == '-' || buf[numlen] == '_') && ci < 63) {
-            if (numlen > 0 && (buf[numlen] == '+' || buf[numlen] == '-') && buf[numlen-1] != 'e' && buf[numlen-1] != 'E') break;
-            if (buf[numlen] != '_') clean[ci++] = buf[numlen];
-            numlen++;
-          }
-          clean[ci] = '\0';
-          js->tval = tov(strtod(clean, &end));
-        }
-      } else {
-        char clean[64];
-        jsoff_t ci = 0;
-        numlen = 0;
-        while (js->toff + numlen < js->clen && (is_digit(buf[numlen]) || buf[numlen] == '.' || buf[numlen] == 'e' || buf[numlen] == 'E' || buf[numlen] == '+' || buf[numlen] == '-' || buf[numlen] == '_') && ci < 63) {
-          if (numlen > 0 && (buf[numlen] == '+' || buf[numlen] == '-') && buf[numlen-1] != 'e' && buf[numlen-1] != 'E') break;
-          if (buf[numlen] != '_') clean[ci++] = buf[numlen];
-          numlen++;
-        }
-        clean[ci] = '\0';
-        js->tval = tov(strtod(clean, &end));
-      }
-      
-      if (js->toff + numlen < js->clen && buf[numlen] == 'n') {
-        js->tok = TOK_BIGINT;
-        js->tlen = numlen + 1;
-      } else {
-        TOK(TOK_NUMBER, numlen);
-      }
-      break;
-    }
-    default: js->tok = parseident(buf, js->clen - js->toff, &js->tlen); break;
+
+  if (unlikely(js->toff >= js->clen)) {
+    js->tok = TOK_EOF;
+    return TOK_EOF;
   }
-  
-  if (js->tlen == 0) js->tlen = 1;
-  js->pos = js->toff + js->tlen;
-  return js->tok;
+
+  const char *buf = js->code + js->toff;
+  jsoff_t rem = js->clen - js->toff;
+  uint8_t c = (uint8_t)buf[0];
+
+  if (likely(c < 128)) {
+    uint8_t simple_tok = single_char_tok[c];
+    if (simple_tok != 0) {
+      js->tok = simple_tok;
+      js->tlen = 1;
+      js->pos = js->toff + 1;
+      return simple_tok;
+    }
+  }
+
+  if (likely(IS_IDENT1(c))) {
+    js->tok = parseident(buf, rem, &js->tlen);
+    js->pos = js->toff + js->tlen;
+    return js->tok;
+  }
+
+  if (IS_DIGIT(c)) {
+    parse_number(js, buf, rem);
+    if (js->tlen == 0) js->tlen = 1;
+    js->pos = js->toff + js->tlen;
+    return js->tok;
+  }
+
+  if (c == '"' || c == '\'') {
+    scan_string(js, buf, rem, c);
+    if (js->tlen == 0) js->tlen = 1;
+    js->pos = js->toff + js->tlen;
+    return js->tok;
+  }
+
+  if (c == '`') {
+    scan_template(js, buf, rem);
+    if (js->tlen == 0) js->tlen = 1;
+    js->pos = js->toff + js->tlen;
+    return js->tok;
+  }
+
+  if (parse_operator(js, buf, rem)) {
+    if (js->tlen == 0) js->tlen = 1;
+    js->pos = js->toff + js->tlen;
+    return js->tok;
+  }
+
+  js->tok = TOK_ERR;
+  js->tlen = 1;
+  js->pos = js->toff + 1;
+  return TOK_ERR;
 }
 
 static inline uint8_t lookahead(struct js *js) {
