@@ -443,6 +443,9 @@ enum {
   T_BIGINT, T_PROPREF, T_SYMBOL, T_GENERATOR, T_FFI
 };
 
+#define TYPE_MASK(t) (1u << (t))
+#define T_REFTYPE (TYPE_MASK(T_FUNC) | TYPE_MASK(T_ARR) | TYPE_MASK(T_PROMISE) | TYPE_MASK(T_OBJ))
+
 static const char *typestr_raw(uint8_t t) {
   const char *names[] = { 
     "object", "prop", "string", "undefined", "null", "number",
@@ -4604,7 +4607,7 @@ static jsoff_t lkp_proto(struct js *js, jsval_t obj, const char *key, size_t len
       jsval_t proto = get_slot(js, as_obj, SLOT_PROTO);
       uint8_t pt = vtype(proto);
       if (pt != T_OBJ && pt != T_ARR && pt != T_FUNC) {
-        if (t == T_FUNC || t == T_ARR || t == T_PROMISE) {
+        if (TYPE_MASK(t) & T_REFTYPE) {
           cur = get_prototype_for_type(js, t);
           t = vtype(cur);
           if (t == T_NULL || t == T_UNDEF) break;
@@ -5285,7 +5288,7 @@ static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
     own_off = lkp(js, l, ptr, plen);
     if (own_off != 0) return mkval(T_PROP, own_off);
   }
-  
+
   jsval_t key = js_mkstr(js, ptr, plen);
   return mkpropref((jsoff_t)vdata(l), (jsoff_t)vdata(key));
 }
