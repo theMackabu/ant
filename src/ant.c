@@ -527,8 +527,8 @@ static jsoff_t propref_key(jsval_t v) {
   return (data & PROPREF_STACK_FLAG) ? 0 : ((data >> PROPREF_KEY_SHIFT) & PROPREF_OFF_MASK);
 }
 
-static jsoff_t offtolen(jsoff_t off) { return (off >> 2) - 1; }
-static jsoff_t align32(jsoff_t v) { return ((v + 3) >> 2) << 2; }
+static inline jsoff_t offtolen(jsoff_t off) { return (off >> 2) - 1; }
+static inline jsoff_t align32(jsoff_t v) { return (v + 3) & ~3U; }
 
 static void saveoff(struct js *js, jsoff_t off, jsoff_t val) { 
   memcpy(&js->mem[off], &val, sizeof(val)); 
@@ -3293,15 +3293,11 @@ const char *js_sym_desc(struct js *js, jsval_t sym) {
 static inline jsoff_t esize(jsoff_t w) {
   jsoff_t cleaned = w & ~FLAGMASK;
   switch (cleaned & 3U) {
-    case T_OBJ:   return (jsoff_t) (sizeof(jsoff_t) + sizeof(jsoff_t));
-    case T_PROP:  return (jsoff_t) (sizeof(jsoff_t) + sizeof(jsoff_t) + sizeof(jsval_t));
-    case T_STR:   return (jsoff_t) (sizeof(jsoff_t) + align32(cleaned >> 2U));
-    default:      return (jsoff_t) ~0U;
+    case T_OBJ:  return (jsoff_t) (sizeof(jsoff_t) + sizeof(jsoff_t));
+    case T_PROP: return (jsoff_t) (sizeof(jsoff_t) + sizeof(jsoff_t) + sizeof(jsval_t));
+    case T_STR:  return (jsoff_t) (sizeof(jsoff_t) + align32(cleaned >> 2U));
+    default:     return (jsoff_t) ~0U;
   }
-}
-
-static bool is_mem_entity(uint8_t t) {
-  return t == T_OBJ || t == T_PROP || t == T_STR || t == T_FUNC || t == T_ARR || t == T_PROMISE;
 }
 
 static int is_unicode_space(const unsigned char *p, jsoff_t remaining, bool *is_line_term) {
@@ -3321,47 +3317,84 @@ static int is_unicode_space(const unsigned char *p, jsoff_t remaining, bool *is_
   return 0;
 }
 
-static jsoff_t skiptonext(const char *code, jsoff_t len, jsoff_t n, bool *had_newline) {
-  if (had_newline) *had_newline = false;
-  if (n == 0 && len >= 2 && code[0] == '#' && code[1] == '!') {
-    for (n = 2; n < len && code[n] != '\n'; n++);
-    if (had_newline && n < len && code[n] == '\n') *had_newline = true;
+enum { C_0 = 0, C_SPC, C_NL, C_SL, C_HI };
+
+static const uint8_t cc[128] = {
+  0,0,0,0,0,0,0,0,0,C_SPC,C_NL,C_SPC,C_SPC,C_SPC,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  C_SPC,0,0,0,0,0,0,0,0,0,0,0,0,0,0,C_SL,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+};
+
+static jsoff_t skiptonext(const char *code, jsoff_t len, jsoff_t n, bool *nl) {
+  static const void *D[] = { &&L0, &&LS, &&LN, &&LSL, &&LH };
+  bool saw_nl = false;
+  unsigned char c;
+
+  const char *p = code + n;
+  const char *end = code + len;
+
+  if (__builtin_expect(p == code && end - p >= 2 && p[0] == '#' && p[1] == '!', 0)) {
+    for (p += 2; p < end && *p != '\n'; p++);
+    if (p < end) { saw_nl = true; p++; }
   }
-  while (n < len) {
-    unsigned char c = (unsigned char)code[n];
-    if (c <= 0x7F) {
-      if (c == ' ' || c == '\t' || c == '\r' || c == '\f' || c == '\v') {
-        n++;
-      } else if (c == '\n') {
-        if (had_newline) *had_newline = true;
-        n++;
-      } else if (c == '/' && n + 1 < len) {
-        if (code[n + 1] == '/') {
-          for (n += 2; n < len && code[n] != '\n';) n++;
-          if (had_newline && n < len && code[n] == '\n') *had_newline = true;
-        } else if (code[n + 1] == '*' && n + 3 < len) {
-          for (n += 4; n < len && (code[n - 2] != '*' || code[n - 1] != '/');) {
-            if (had_newline && code[n] == '\n') *had_newline = true;
-            n++;
-          }
-        } else {
-          break;
-        }
-      } else {
-        break;
-      }
-    } else {
-      bool is_line_term = false;
-      int ulen = is_unicode_space((const unsigned char *)&code[n], len - n, &is_line_term);
-      if (ulen > 0) {
-        if (had_newline && is_line_term) *had_newline = true;
-        n += ulen;
-      } else {
-        break;
-      }
+
+  if (__builtin_expect(p >= end, 0)) goto L0;
+  c = (unsigned char)*p;
+  goto *D[c & 0x80 ? C_HI : cc[c]];
+
+LS:
+  p++;
+  if (__builtin_expect(p >= end, 0)) goto L0;
+  c = (unsigned char)*p;
+  goto *D[c & 0x80 ? C_HI : cc[c]];
+
+LN:
+  saw_nl = true;
+  p++;
+  if (__builtin_expect(p >= end, 0)) goto L0;
+  c = (unsigned char)*p;
+  goto *D[c & 0x80 ? C_HI : cc[c]];
+
+LSL:
+  if (p + 1 >= end) goto L0;
+  if (p[1] == '/') {
+    for (p += 2; p < end && *p != '\n'; p++);
+    if (p < end) { saw_nl = true; p++; }
+    if (__builtin_expect(p >= end, 0)) goto L0;
+    c = (unsigned char)*p;
+    goto *D[c & 0x80 ? C_HI : cc[c]];
+  }
+  if (p[1] == '*') {
+    for (p += 2; p + 1 < end; p++) {
+      if (*p == '*' && p[1] == '/') { p += 2; break; }
+      if (*p == '\n') saw_nl = true;
     }
+    if (__builtin_expect(p >= end, 0)) goto L0;
+    c = (unsigned char)*p;
+    goto *D[c & 0x80 ? C_HI : cc[c]];
   }
-  return n;
+  goto L0;
+
+LH: {
+  bool lt;
+  int u = is_unicode_space((const unsigned char *)p, end - p, &lt);
+  if (u > 0) {
+    if (lt) saw_nl = true;
+    p += u;
+    if (__builtin_expect(p >= end, 0)) goto L0;
+    c = (unsigned char)*p;
+    goto *D[c & 0x80 ? C_HI : cc[c]];
+  }
+}
+
+L0:
+  if (nl) *nl = saw_nl;
+  return p - code;
 }
 
 static bool streq(const char *buf, size_t len, const char *p, size_t n) {
