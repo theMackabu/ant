@@ -692,6 +692,13 @@ static bool is_keyword_propname(uint8_t tok) {
   return (tok >= TOK_ASYNC && tok <= TOK_GLOBAL_THIS) || tok == TOK_TYPEOF; 
 }
 
+static inline bool is_unboxed_obj(struct js *js, jsval_t val, jsval_t expected_proto) {
+  if (vtype(val) != T_OBJ) return false;
+  if (vtype(get_slot(js, val, SLOT_PRIMITIVE)) != T_UNDEF) return false;
+  jsval_t proto = get_slot(js, val, SLOT_PROTO);
+  return vdata(proto) == vdata(expected_proto);
+}
+
 static bool is_valid_arrow_param_tok(uint8_t tok) {
   static const uint64_t bits[4] = {
     0x0004000000000F0Cull,
@@ -4286,7 +4293,7 @@ static inline jsoff_t lkp_interned(struct js *js, jsval_t obj, const char *searc
   return 0;
 }
 
-static inline jsoff_t lkp_inline(struct js *js, jsval_t obj, const char *buf, size_t len) {
+static inline jsoff_t lkp(struct js *js, jsval_t obj, const char *buf, size_t len) {
   const char *search_intern = intern_string(buf, len);
   if (!search_intern) return 0;
   return lkp_interned(js, obj, search_intern, len);
@@ -4314,9 +4321,6 @@ static jsoff_t lkp_scope(struct js *js, jsval_t scope, const char *buf, size_t l
   return 0;
 }
 
-static jsoff_t lkp(struct js *js, jsval_t obj, const char *buf, size_t len) {
-  return lkp_inline(js, obj, buf, len);
-}
 static jsoff_t lkp_with_getter(struct js *js, jsval_t obj, const char *buf, size_t len, jsval_t *getter_out, bool *has_getter_out) {
   *has_getter_out = false;
   *getter_out = js_mkundef();
@@ -11406,10 +11410,9 @@ static jsval_t builtin_String(struct js *js, jsval_t *args, int nargs) {
       sval = js_mkstr(js, str, strlen(str));
     }
   }
-  if (vtype(js->this_val) == T_OBJ && vtype(get_slot(js, js->this_val, SLOT_PRIMITIVE)) == T_UNDEF) {
+  jsval_t string_proto = js_get_ctor_proto(js, "String", 6);
+  if (is_unboxed_obj(js, js->this_val, string_proto)) {
     set_slot(js, js->this_val, SLOT_PRIMITIVE, sval);
-    jsval_t proto = get_ctor_proto(js, "String", 6);
-    if (vtype(proto) == T_OBJ) set_proto(js, js->this_val, proto);
     jsoff_t slen;
     vstr(js, sval, &slen);
     setprop(js, js->this_val, js_mkstr(js, "length", 6), tov((double)slen));
@@ -11474,73 +11477,34 @@ static jsval_t builtin_Number_isSafeInteger(struct js *js, jsval_t *args, int na
 }
 
 static jsval_t builtin_Number(struct js *js, jsval_t *args, int nargs) {
-  jsval_t nval;
-  if (nargs == 0) {
-    nval = tov(0.0);
-  } else {
-    jsval_t arg = args[0];
-    if (vtype(arg) == T_NUM) {
-      nval = arg;
-    } else if (vtype(arg) == T_BOOL) {
-      nval = tov(vdata(arg) ? 1.0 : 0.0);
-    } else if (vtype(arg) == T_STR) {
-      jsoff_t len;
-      jsoff_t off = vstr(js, arg, &len);
-      const char *str = (char *) &js->mem[off];
-      while (*str == ' ' || *str == '\t' || *str == '\n' || *str == '\r') str++;
-      if (*str == '\0') {
-        nval = tov(0.0);
-      } else {
-        char *end;
-        double val = strtod(str, &end);
-        while (*end == ' ' || *end == '\t' || *end == '\n' || *end == '\r') end++;
-        if (end == str || *end != '\0') {
-          nval = tov(NAN);
-        } else {
-          nval = tov(val);
-        }
-      }
-    } else if (vtype(arg) == T_NULL || vtype(arg) == T_UNDEF) {
-      nval = tov(0.0);
-    } else {
-      nval = tov(0.0);
-    }
-  }
-  if (vtype(js->this_val) == T_OBJ && vtype(get_slot(js, js->this_val, SLOT_PRIMITIVE)) == T_UNDEF) {
+  jsval_t nval = tov(nargs > 0 ? js_to_number(js, args[0]) : 0.0);
+  jsval_t number_proto = js_get_ctor_proto(js, "Number", 6);
+  if (is_unboxed_obj(js, js->this_val, number_proto)) {
     set_slot(js, js->this_val, SLOT_PRIMITIVE, nval);
-    jsval_t proto = get_ctor_proto(js, "Number", 6);
-    if (vtype(proto) == T_OBJ) set_proto(js, js->this_val, proto);
   }
   return nval;
 }
 
 static jsval_t builtin_Boolean(struct js *js, jsval_t *args, int nargs) {
   jsval_t bval = mkval(T_BOOL, nargs > 0 && js_truthy(js, args[0]) ? 1 : 0);
-  if (vtype(js->this_val) == T_OBJ && vtype(get_slot(js, js->this_val, SLOT_PRIMITIVE)) == T_UNDEF) {
+  jsval_t boolean_proto = js_get_ctor_proto(js, "Boolean", 7);
+  if (is_unboxed_obj(js, js->this_val, boolean_proto)) {
     set_slot(js, js->this_val, SLOT_PRIMITIVE, bval);
-    jsval_t proto = get_ctor_proto(js, "Boolean", 7);
-    if (vtype(proto) == T_OBJ) set_proto(js, js->this_val, proto);
   }
   return bval;
 }
 
 static jsval_t builtin_Object(struct js *js, jsval_t *args, int nargs) {
-  if (nargs == 0) {
-    if (vtype(js->this_val) == T_OBJ) return js->this_val;
+  if (nargs == 0 || vtype(args[0]) == T_NULL || vtype(args[0]) == T_UNDEF) {
+    jsval_t obj_proto = js_get_ctor_proto(js, "Object", 6);
+    if (is_unboxed_obj(js, js->this_val, obj_proto)) return js->this_val;
     return js_mkobj(js);
   }
   
   jsval_t arg = args[0];
-  if (vtype(arg) == T_NULL || vtype(arg) == T_UNDEF) {
-    if (vtype(js->this_val) == T_OBJ) return js->this_val;
-    return js_mkobj(js);
-  }
-  
   uint8_t t = vtype(arg);
-  if (t == T_OBJ || t == T_ARR || t == T_FUNC) {
-    return arg;
-  }
   
+  if (t == T_OBJ || t == T_ARR || t == T_FUNC) return arg;
   if (t == T_STR || t == T_NUM || t == T_BOOL || t == T_BIGINT) {
     jsval_t wrapper = js_mkobj(js);
     if (is_err(wrapper)) return wrapper;
