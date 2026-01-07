@@ -652,30 +652,6 @@ static uint8_t unhex(uint8_t c) {
   return (c >= '0' && c <= '9') ? (uint8_t) (c - '0') : (c >= 'a' && c <= 'f') ? (uint8_t) (c - 'W') : (c >= 'A' && c <= 'F') ? (uint8_t) (c - '7') : 0; 
 }
 
-static bool is_space(int c) { 
-  return c == ' ' || c == '\r' || c == '\n' || c == '\t' || c == '\f' || c == '\v' || c == 0xA0; 
-}
-
-static bool is_digit(int c) { 
-  return c >= '0' && c <= '9'; 
-}
-
-static bool is_xdigit(int c) { 
-  return is_digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); 
-}
-
-static bool is_alpha(int c) { 
-  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); 
-}
-
-static bool is_ident_begin(int c) { 
-  return c == '_' || c == '$' || is_alpha(c) || (c & 0x80); 
-}
-
-static bool is_ident_continue(int c) { 
-  return c == '_' || c == '$' || is_alpha(c) || is_digit(c) || (c & 0x80); 
-}
-
 static bool is_unary(uint8_t tok) {
   return unary_table[tok];
 }
@@ -770,7 +746,9 @@ static jsval_t upper(struct js *js, jsval_t scope) {
 #define CHECKV(_v) do { if (is_err(_v)) { res = (_v); goto done; } } while (0)
 #define EXPECT(_tok, _e) do { if (next(js) != _tok) { _e; return js_mkerr_typed(js, JS_ERR_SYNTAX, "parse error"); }; js->consumed = 1; } while (0)
 
+static bool is_digit(int c);
 static bool is_proxy(struct js *js, jsval_t obj);
+
 static bool streq(const char *buf, size_t len, const char *p, size_t n);
 static bool is_this_loop_continue_target(int depth_at_entry);
 static bool parse_func_params(struct js *js, uint8_t *flags, int *out_count);
@@ -3404,75 +3382,129 @@ L0:
   return p - code;
 }
 
-static bool streq(const char *buf, size_t len, const char *p, size_t n) {
-  return n == len && memcmp(buf, p, len) == 0;
-}
-
-static bool is_strict_reserved(const char *buf, size_t len) {
-  switch (len) {
-    case 3: return streq(buf, len, "let", 3);
-    case 5: return streq(buf, len, "yield", 5);
-    case 6: return streq(buf, len, "static", 6) || streq(buf, len, "public", 6);
-    case 7: return streq(buf, len, "private", 7) || streq(buf, len, "package", 7);
-    case 9: return streq(buf, len, "interface", 9) || streq(buf, len, "protected", 9);
-    case 10: return streq(buf, len, "implements", 10);
-    default: return false;
-  }
-}
-
-static bool is_strict_restricted(const char *buf, size_t len) {
-  return (len == 4 && streq(buf, len, "eval", 4)) || (len == 9 && streq(buf, len, "arguments", 9));
-}
+#define K(s, t) if (len == sizeof(s)-1 && !memcmp(buf, s, sizeof(s)-1)) return t
+#define M(s)   (len == sizeof(s)-1 && !memcmp(buf, s, sizeof(s)-1))
 
 static uint8_t parsekeyword(const char *buf, size_t len) {
   switch (buf[0]) {
-    case 'a': if (streq("async", 5, buf, len)) return TOK_ASYNC; if (streq("await", 5, buf, len)) return TOK_AWAIT; if (streq("as", 2, buf, len)) return TOK_AS; break;
-    case 'b': if (streq("break", 5, buf, len)) return TOK_BREAK; break;
-    case 'c': if (streq("class", 5, buf, len)) return TOK_CLASS; if (streq("case", 4, buf, len)) return TOK_CASE; if (streq("catch", 5, buf, len)) return TOK_CATCH; if (streq("const", 5, buf, len)) return TOK_CONST; if (streq("continue", 8, buf, len)) return TOK_CONTINUE; break;
-    case 'd': if (streq("do", 2, buf, len)) return TOK_DO;  if (streq("default", 7, buf, len)) return TOK_DEFAULT; if (streq("delete", 6, buf, len)) return TOK_DELETE; if (streq("debugger", 8, buf, len)) return TOK_DEBUGGER; break;
-    case 'e': if (streq("else", 4, buf, len)) return TOK_ELSE; if (streq("export", 6, buf, len)) return TOK_EXPORT; break;
-    case 'f': if (streq("for", 3, buf, len)) return TOK_FOR; if (streq("from", 4, buf, len)) return TOK_FROM; if (streq("function", 8, buf, len)) return TOK_FUNC; if (streq("finally", 7, buf, len)) return TOK_FINALLY; if (streq("false", 5, buf, len)) return TOK_FALSE; break;
-    case 'g': break;
-    case 'i': if (streq("if", 2, buf, len)) return TOK_IF; if (streq("import", 6, buf, len)) return TOK_IMPORT; if (streq("in", 2, buf, len)) return TOK_IN; if (streq("instanceof", 10, buf, len)) return TOK_INSTANCEOF; break;
-    case 'l': if (streq("let", 3, buf, len)) return TOK_LET; break;
-    case 'n': if (streq("new", 3, buf, len)) return TOK_NEW; if (streq("null", 4, buf, len)) return TOK_NULL; break;
-    case 'o': if (streq("of", 2, buf, len)) return TOK_OF; break;
-    case 'r': if (streq("return", 6, buf, len)) return TOK_RETURN; break;
-    case 's': if (streq("switch", 6, buf, len)) return TOK_SWITCH; if (streq("static", 6, buf, len)) return TOK_STATIC; break;
-    case 't': if (streq("try", 3, buf, len)) return TOK_TRY; if (streq("this", 4, buf, len)) return TOK_THIS; if (streq("throw", 5, buf, len)) return TOK_THROW; if (streq("true", 4, buf, len)) return TOK_TRUE; if (streq("typeof", 6, buf, len)) return TOK_TYPEOF; break;
-    case 'u': if (streq("undefined", 9, buf, len)) return TOK_UNDEF; break;
-    case 'v': if (streq("var", 3, buf, len)) return TOK_VAR; if (streq("void", 4, buf, len)) return TOK_VOID; break;
-    case 'w': if (streq("while", 5, buf, len)) return TOK_WHILE; if (streq("with", 4, buf, len)) return TOK_WITH; break;
-    case 'y': if (streq("yield", 5, buf, len)) return TOK_YIELD; break;
+    case 'a':
+      K("as", TOK_AS);
+      K("async", TOK_ASYNC);
+      K("await", TOK_AWAIT);
+      break;
+    case 'b':
+      K("break", TOK_BREAK);
+      break;
+    case 'c':
+      K("case", TOK_CASE);
+      K("catch", TOK_CATCH);
+      K("class", TOK_CLASS);
+      K("const", TOK_CONST);
+      K("continue", TOK_CONTINUE);
+      break;
+    case 'd':
+      K("do", TOK_DO);
+      K("default", TOK_DEFAULT);
+      K("delete", TOK_DELETE);
+      K("debugger", TOK_DEBUGGER);
+      break;
+    case 'e':
+      K("else", TOK_ELSE);
+      K("export", TOK_EXPORT);
+      break;
+    case 'f':
+      K("for", TOK_FOR);
+      K("from", TOK_FROM);
+      K("false", TOK_FALSE);
+      K("finally", TOK_FINALLY);
+      K("function", TOK_FUNC);
+      break;
+    case 'g':
+      K("globalThis", TOK_GLOBAL_THIS);
+      break;
+    case 'i':
+      K("if", TOK_IF);
+      K("in", TOK_IN);
+      K("import", TOK_IMPORT);
+      K("instanceof", TOK_INSTANCEOF);
+      break;
+    case 'l':
+      K("let", TOK_LET);
+      break;
+    case 'n':
+      K("new", TOK_NEW);
+      K("null", TOK_NULL);
+      break;
+    case 'o':
+      K("of", TOK_OF);
+      break;
+    case 'r':
+      K("return", TOK_RETURN);
+      break;
+    case 's':
+      K("static", TOK_STATIC);
+      K("switch", TOK_SWITCH);
+      break;
+    case 't':
+      K("try", TOK_TRY);
+      K("this", TOK_THIS);
+      K("true", TOK_TRUE);
+      K("throw", TOK_THROW);
+      K("typeof", TOK_TYPEOF);
+      break;
+    case 'u':
+      K("undefined", TOK_UNDEF);
+      break;
+    case 'v':
+      K("var", TOK_VAR);
+      K("void", TOK_VOID);
+      break;
+    case 'w':
+      K("while", TOK_WHILE);
+      K("with", TOK_WITH);
+      K("window", TOK_WINDOW);
+      break;
+    case 'y':
+      K("yield", TOK_YIELD);
+      break;
   }
   return TOK_IDENTIFIER;
 }
 
-static int parse_unicode_escape(const char *buf, jsoff_t len, jsoff_t pos, uint32_t *codepoint) {
-  if (pos + 5 >= len) return 0;
-  if (buf[pos] != '\\' || buf[pos + 1] != 'u') return 0;
-  
-  uint32_t cp = 0;
-  for (int i = 0; i < 4; i++) {
-    char c = buf[pos + 2 + i];
-    cp <<= 4;
-    if (c >= '0' && c <= '9') cp |= (c - '0');
-    else if (c >= 'a' && c <= 'f') cp |= (c - 'a' + 10);
-    else if (c >= 'A' && c <= 'F') cp |= (c - 'A' + 10);
-    else return 0;
+static bool is_strict_reserved(const char *buf, size_t len) {
+  switch (buf[0]) {
+    case 'i':
+      if M("interface") return true;
+      if M("implements") return true;
+      break;
+    case 'l':
+      if M("let") return true;
+      break;
+    case 'p':
+      if M("private") return true;
+      if M("package") return true;
+      if M("public") return true;
+      if M("protected") return true;
+      break;
+    case 's':
+      if M("static") return true;
+      break;
+    case 'y':
+      if M("yield") return true;
+      break;
   }
-  *codepoint = cp;
-  return 6;
+  return false;
 }
 
-static bool is_unicode_ident_begin(uint32_t cp) {
-  return cp == '_' || cp == '$' || 
-         (cp >= 'a' && cp <= 'z') || (cp >= 'A' && cp <= 'Z') ||
-         cp >= 0x80;
+#undef K
+#undef M
+
+static inline bool streq(const char *buf, size_t len, const char *s, size_t n) {
+  return len == n && !memcmp(buf, s, n);
 }
 
-static bool is_unicode_ident_continue(uint32_t cp) {
-  return is_unicode_ident_begin(cp) || (cp >= '0' && cp <= '9');
+static bool is_strict_restricted(const char *buf, size_t len) {
+  return streq(buf, len, "eval", 4) || streq(buf, len, "arguments", 9);
 }
 
 static int encode_utf8(uint32_t cp, char *out) {
@@ -3495,92 +3527,6 @@ static int encode_utf8(uint32_t cp, char *out) {
     out[3] = (char)(0x80 | (cp & 0x3F));
     return 4;
   }
-}
-
-static size_t decode_ident_escapes(const char *src, size_t srclen, char *dst, size_t dstlen) {
-  size_t si = 0, di = 0;
-  while (si < srclen && di < dstlen - 1) {
-    uint32_t cp;
-    int el = parse_unicode_escape(src, srclen, si, &cp);
-    if (el > 0) {
-      int utf8len = encode_utf8(cp, dst + di);
-      di += utf8len;
-      si += el;
-    } else {
-      dst[di++] = src[si++];
-    }
-  }
-  dst[di] = '\0';
-  return di;
-}
-
-static bool has_unicode_escape(const char *src, size_t len) {
-  for (size_t i = 0; i + 5 < len; i++) {
-    if (src[i] == '\\' && src[i + 1] == 'u') return true;
-  }
-  return false;
-}
-
-static jsval_t js_mkstr_ident(struct js *js, const char *src, size_t srclen) {
-  if (!has_unicode_escape(src, srclen)) {
-    return js_mkstr(js, src, srclen);
-  }
-  char decoded[256];
-  size_t decoded_len = decode_ident_escapes(src, srclen, decoded, sizeof(decoded));
-  return js_mkstr(js, decoded, decoded_len);
-}
-
-static uint8_t parseident(const char *buf, jsoff_t len, jsoff_t *tlen) {
-  if (len == 0) return TOK_ERR;
-  
-  if (!(buf[0] & 0x80) && buf[0] != '\\' && is_ident_begin(buf[0])) {
-    *tlen = 1;
-    while (*tlen < len && !(buf[*tlen] & 0x80) && buf[*tlen] != '\\' && is_ident_continue(buf[*tlen])) {
-      (*tlen)++;
-    }
-    if (*tlen >= len || (!is_ident_continue(buf[*tlen]) && buf[*tlen] != '\\' && !(buf[*tlen] & 0x80))) {
-      return parsekeyword(buf, *tlen);
-    }
-  }
-  
-  uint32_t first_cp;
-  int esc_len = parse_unicode_escape(buf, len, 0, &first_cp);
-  
-  if (esc_len > 0) {
-    if (!is_unicode_ident_begin(first_cp)) return TOK_ERR;
-    *tlen = esc_len;
-  } else if (is_ident_begin(buf[0])) {
-    if (buf[0] & 0x80) {
-      int ws_len = is_unicode_space((const unsigned char *)buf, len, NULL);
-      if (ws_len > 0) return TOK_ERR;
-    }
-    *tlen = 1;
-    while (*tlen < len && (buf[*tlen] & 0xC0) == 0x80) (*tlen)++;
-  } else {
-    return TOK_ERR;
-  }
-  
-  while (*tlen < len) {
-    uint32_t cp;
-    int el = parse_unicode_escape(buf, len, *tlen, &cp);
-    if (el > 0) {
-      if (!is_unicode_ident_continue(cp)) break;
-      *tlen += el;
-    } else if (is_ident_continue(buf[*tlen])) {
-      if (buf[*tlen] & 0x80) {
-        int ws_len = is_unicode_space((const unsigned char *)&buf[*tlen], len - *tlen, NULL);
-        if (ws_len > 0) break;
-      }
-      (*tlen)++;
-      while (*tlen < len && (buf[*tlen] & 0xC0) == 0x80) (*tlen)++;
-    } else {
-      break;
-    }
-  }
-  
-  char decoded[256];
-  size_t decoded_len = decode_ident_escapes(buf, *tlen, decoded, sizeof(decoded));
-  return parsekeyword(decoded, decoded_len);
 }
 
 #define CHAR_DIGIT  0x01
@@ -3661,6 +3607,172 @@ static const uint8_t single_char_tok[128] = {
   ['~'] = TOK_TILDA,
   ['#'] = TOK_HASH,
 };
+
+static bool is_space(int c) { 
+  if (c < 0 || c >= 256) return false;
+  return (char_type[(uint8_t)c] & CHAR_WS) != 0;
+}
+
+static bool is_digit(int c) { 
+  if (c < 0 || c >= 256) return false;
+  return (char_type[(uint8_t)c] & CHAR_DIGIT) != 0;
+}
+
+static bool is_xdigit(int c) { 
+  if (c < 0 || c >= 256) return false;
+  return (char_type[(uint8_t)c] & CHAR_XDIGIT) != 0;
+}
+
+static bool is_alpha(int c) { 
+  if (c < 0 || c >= 256) return false;
+  return (char_type[(uint8_t)c] & CHAR_ALPHA) != 0;
+}
+
+static bool is_ident_begin(int c) { 
+  if (c < 0) return false;
+  if (c < 128) return (char_type[(uint8_t)c] & CHAR_IDENT1) != 0;
+  return (c & 0x80) != 0;
+}
+
+static bool is_ident_continue(int c) { 
+  if (c < 0) return false;
+  if (c < 128) return (char_type[(uint8_t)c] & (CHAR_IDENT | CHAR_IDENT1)) != 0;
+  return (c & 0x80) != 0;
+}
+
+static int parse_unicode_escape(const char *buf, jsoff_t len, jsoff_t pos, uint32_t *codepoint) {
+  if (pos + 5 >= len) return 0;
+  if (buf[pos] != '\\' || buf[pos + 1] != 'u') return 0;
+  
+  uint32_t cp = 0;
+  for (int i = 0; i < 4; i++) {
+    int c = (unsigned char)buf[pos + 2 + i];
+    if (!is_xdigit(c)) return 0;
+    cp <<= 4;
+    cp |= (c <= '9') ? (c - '0') : ((c | 0x20) - 'a' + 10);
+  }
+  *codepoint = cp;
+  return 6;
+}
+
+static bool is_unicode_ident_begin(uint32_t cp) {
+  if (cp < 128) return (char_type[(uint8_t)cp] & CHAR_IDENT1) != 0;
+  return true;
+}
+
+static bool is_unicode_ident_continue(uint32_t cp) {
+  if (cp < 128) return (char_type[(uint8_t)cp] & (CHAR_IDENT | CHAR_IDENT1)) != 0;
+  return true;
+}
+
+static size_t decode_ident_escapes(const char *src, size_t srclen, char *dst, size_t dstlen) {
+  size_t si = 0, di = 0;
+  while (si < srclen && di + 4 < dstlen) {
+    uint32_t cp;
+    int el = parse_unicode_escape(src, srclen, si, &cp);
+    if (el > 0) {
+      di += encode_utf8(cp, dst + di);
+      si += el;
+    } else dst[di++] = src[si++];
+  }
+  dst[di] = '\0';
+  return di;
+}
+
+static bool has_unicode_escape(const char *src, size_t len) {
+  if (len < 6) return false;
+  const char *end = src + len - 5;
+  const char *p = src;
+  while ((p = memchr(p, '\\', end - p)) != NULL) {
+    if (p[1] == 'u') return true;
+    p++;
+  }
+  return false;
+}
+
+static jsval_t js_mkstr_ident(struct js *js, const char *src, size_t srclen) {
+  if (!has_unicode_escape(src, srclen)) {
+    return js_mkstr(js, src, srclen);
+  }
+  char decoded[256];
+  size_t decoded_len = decode_ident_escapes(src, srclen, decoded, sizeof(decoded));
+  return js_mkstr(js, decoded, decoded_len);
+}
+
+
+static uint8_t parseident(const char *buf, jsoff_t len, jsoff_t *tlen) {
+  if (len == 0) return TOK_ERR;
+  
+  unsigned char c = (unsigned char)buf[0];
+  jsoff_t i = 0;
+  
+  if (c < 128 && c != '\\' && is_ident_begin(c)) {
+    i = 1;
+    while (i < len) {
+      c = (unsigned char)buf[i];
+      if (c >= 128 || c == '\\') goto slow_path_continue;
+      if (!is_ident_continue(c)) break;
+      i++;
+    }
+    *tlen = i;
+    return parsekeyword(buf, i);
+  }
+  
+  if (c == '\\') {
+    uint32_t first_cp;
+    int esc_len = parse_unicode_escape(buf, len, 0, &first_cp);
+    if (esc_len <= 0 || !is_unicode_ident_begin(first_cp)) return TOK_ERR;
+    *tlen = esc_len;
+    goto slow_path_loop;
+  }
+  
+  if (c >= 128) {
+    if ((c & 0xC0) == 0x80) return TOK_ERR;
+    int ws_len = is_unicode_space((const unsigned char *)buf, len, NULL);
+    if (ws_len > 0) return TOK_ERR;
+    i = 1;
+    while (i < len && ((unsigned char)buf[i] & 0xC0) == 0x80) i++;
+    *tlen = i;
+    goto slow_path_loop;
+  }
+  
+  return TOK_ERR;
+
+slow_path_continue:
+  *tlen = i;
+  
+slow_path_loop:;
+  int has_escapes = (buf[0] == '\\');
+  
+  while (*tlen < len) {
+    c = (unsigned char)buf[*tlen];
+    
+    if (c == '\\') {
+      uint32_t cp;
+      int el = parse_unicode_escape(buf, len, *tlen, &cp);
+      if (el <= 0 || !is_unicode_ident_continue(cp)) break;
+      *tlen += el;
+      has_escapes = 1;
+    } else if (c < 128) {
+      if (!is_ident_continue(c)) break;
+      (*tlen)++;
+    } else {
+      if ((c & 0xC0) == 0x80) break;
+      int ws_len = is_unicode_space((const unsigned char *)&buf[*tlen], len - *tlen, NULL);
+      if (ws_len > 0) break;
+      (*tlen)++;
+      while (*tlen < len && ((unsigned char)buf[*tlen] & 0xC0) == 0x80) (*tlen)++;
+    }
+  }
+  
+  if (has_escapes) {
+    char decoded[256];
+    size_t decoded_len = decode_ident_escapes(buf, *tlen, decoded, sizeof(decoded));
+    return parsekeyword(decoded, decoded_len);
+  }
+  
+  return parsekeyword(buf, *tlen);
+}
 
 static inline jsoff_t parse_decimal(const char *buf, jsoff_t maxlen, double *out) {
   uint64_t int_part = 0, frac_part = 0;
@@ -4063,10 +4175,11 @@ static uint8_t next(struct js *js) {
     return js->tok;
   }
 
-  js->tok = TOK_ERR;
-  js->tlen = 1;
-  js->pos = js->toff + 1;
-  return TOK_ERR;
+  js->tok = parseident(buf, rem, &js->tlen);
+  if (js->tlen == 0) js->tlen = 1;
+  js->pos = js->toff + js->tlen;
+  
+  return js->tok;
 }
 
 static inline uint8_t lookahead(struct js *js) {
