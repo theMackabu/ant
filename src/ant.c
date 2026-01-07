@@ -9891,7 +9891,7 @@ static jsval_t js_for(struct js *js) {
   if (!expect(js, TOK_SEMICOLON, &res)) goto done;
   pos2 = js->pos;
   if (next(js) != TOK_RPAREN) {
-    v = js_expr(js);
+    v = js_expr_comma(js);
     if (is_err2(&v, &res)) goto done;
   }
   if (!expect(js, TOK_RPAREN, &res)) goto done;
@@ -9948,7 +9948,7 @@ static jsval_t js_for(struct js *js) {
         js->flags = flags;
         js->pos = pos2, js->consumed = 1;
         if (next(js) != TOK_RPAREN) {
-          v = js_expr(js);
+          v = js_expr_comma(js);
           if (is_err2(&v, &res)) goto done;
         }
         continue;
@@ -9965,7 +9965,7 @@ static jsval_t js_for(struct js *js) {
     }
     js->flags = flags, js->pos = pos2, js->consumed = 1;
     if (next(js) != TOK_RPAREN) {
-      v = js_expr(js);
+      v = js_expr_comma(js);
       if (is_err2(&v, &res)) goto done;
     }
   }

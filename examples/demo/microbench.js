@@ -1,5 +1,3 @@
-// Simple microbenchmark for function call overhead
-
 function add(a, b) {
   return a + b;
 }
@@ -9,9 +7,10 @@ console.log(`Running ${iterations} iterations...`);
 
 let start = Date.now();
 let result = 0;
+
 for (let i = 0; i < iterations; i++) {
   result += add(i, i + 1);
 }
-console.log(`Simple add: ${Date.now() - start}ms (result: ${result})`);
 
-console.log("Done!");
+console.log(`simple add: ${Date.now() - start}ms (result: ${result})`);
+console.log('Done!');
