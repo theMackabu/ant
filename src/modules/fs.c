@@ -1141,9 +1141,8 @@ jsval_t fs_library(struct js *js) {
   js_set(js, lib, "existsSync", js_mkfun(builtin_fs_existsSync));
   js_set(js, lib, "readdir", js_mkfun(builtin_fs_readdir));
   js_set(js, lib, "readdirSync", js_mkfun(builtin_fs_readdirSync));
-  js_set(js, lib, get_toStringTag_sym_key(), js_mkstr(js, "fs", 2));  
-  js_set(js, lib, "default", lib);
-  
+  js_set(js, lib, get_toStringTag_sym_key(), js_mkstr(js, "fs", 2));
+
   return lib;
 }
 

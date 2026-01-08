@@ -185,7 +185,6 @@ jsval_t crypto_library(struct js *js) {
   js_set(js, lib, "randomUUID", js_mkfun(js_crypto_random_uuid));
   js_set(js, lib, "getRandomValues", js_mkfun(js_crypto_get_random_values));
   js_set(js, lib, get_toStringTag_sym_key(), js_mkstr(js, "crypto", 6));
-  js_set(js, lib, "default", lib);
-  
+
   return lib;
 }

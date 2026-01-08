@@ -849,9 +849,7 @@ jsval_t os_library(struct js *js) {
   js_set(js, constants, "dlopen", dlopen_obj);
   js_set(js, constants, "UV_UDP_REUSEADDR", js_mknum(4));
   js_set(js, lib, "constants", constants);
-  
   js_set(js, lib, get_toStringTag_sym_key(), js_mkstr(js, "os", 2));
-  js_set(js, lib, "default", lib);
-  
+
   return lib;
 }

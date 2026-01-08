@@ -18922,13 +18922,11 @@ static jsval_t esm_load_module(struct js *js, esm_module_t *mod) {
       return json_val;
     }
     
-    jsval_t ns = mkobj(js, 0);
-    setprop(js, ns, js_mkstr(js, "default", 7), json_val);
-    mod->namespace_obj = ns;
+    mod->namespace_obj = json_val;
     mod->default_export = json_val;
     mod->is_loaded = true;
     mod->is_loading = false;
-    return ns;
+    return json_val;
   }
   
   if (mod->is_text) {
@@ -18938,13 +18936,11 @@ static jsval_t esm_load_module(struct js *js, esm_module_t *mod) {
       return text_val;
     }
     
-    jsval_t ns = mkobj(js, 0);
-    setprop(js, ns, js_mkstr(js, "default", 7), text_val);
-    mod->namespace_obj = ns;
+    mod->namespace_obj = text_val;
     mod->default_export = text_val;
     mod->is_loaded = true;
     mod->is_loading = false;
-    return ns;
+    return text_val;
   }
   
   if (mod->is_image) {
@@ -18954,13 +18950,11 @@ static jsval_t esm_load_module(struct js *js, esm_module_t *mod) {
       return img_val;
     }
     
-    jsval_t ns = mkobj(js, 0);
-    setprop(js, ns, js_mkstr(js, "default", 7), img_val);
-    mod->namespace_obj = ns;
+    mod->namespace_obj = img_val;
     mod->default_export = img_val;
     mod->is_loaded = true;
     mod->is_loading = false;
-    return ns;
+    return img_val;
   }
   
   FILE *fp = fopen(mod->resolved_path, "rb");
@@ -19010,9 +19004,7 @@ static jsval_t esm_load_module(struct js *js, esm_module_t *mod) {
   }
   
   jsoff_t default_off = lkp(js, ns, "default", 7);
-  if (default_off != 0) {
-    mod->default_export = resolveprop(js, mkval(T_PROP, default_off));
-  }
+  mod->default_export = default_off != 0 ? resolveprop(js, mkval(T_PROP, default_off)) : ns;
   
   mod->is_loaded = true;
   mod->is_loading = false;
@@ -19313,7 +19305,7 @@ static jsval_t js_import_stmt(struct js *js) {
     if (is_err(ns)) return ns;
     
     jsoff_t default_off = lkp(js, ns, "default", 7);
-    jsval_t default_val = default_off != 0 ? resolveprop(js, mkval(T_PROP, default_off)) : js_mkundef();
+    jsval_t default_val = default_off != 0 ? resolveprop(js, mkval(T_PROP, default_off)) : ns;
     setprop(js, js->scope, js_mkstr(js, default_name, default_len), default_val);
     
     for (int i = 0; i < binding_count; i++) {
