@@ -2,6 +2,9 @@
 #include <stdio.h>
 #include <signal.h>
 #include <string.h>
+#include <unistd.h>
+#include <time.h>
+#include <errno.h>
 
 #include "ant.h"
 #include "gc.h"
@@ -11,18 +14,16 @@
 static struct {
   struct js *js;
   jsval_t handler;
-} signal_handlers[32] = {0};
+} signal_handlers[NSIG] = {0};
 
 static void general_signal_handler(int signum) {
-  if (signum >= 0 && signum < 32 && signal_handlers[signum].js != NULL) {
-    struct js *js = signal_handlers[signum].js;
-    jsval_t handler = signal_handlers[signum].handler;
-    
-    if (js_type(handler) != JS_UNDEF) {
-      jsval_t sig_num = js_mknum(signum);
-      jsval_t args[1] = {sig_num};
-      js_call(js, handler, args, 1);
-    }
+  if (signum < 0 || signum >= NSIG) return;
+  struct js *js = signal_handlers[signum].js;
+  jsval_t handler = signal_handlers[signum].handler;
+  
+  if (js && js_type(handler) != JS_UNDEF) {
+    jsval_t args[] = {js_mknum(signum)};
+    js_call(js, handler, args, 1);
   }
   
   exit(0);
@@ -30,29 +31,11 @@ static void general_signal_handler(int signum) {
 
 // Ant.signal(signal, handler)
 static jsval_t js_signal(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) {
-    fprintf(stderr, "Error: Ant.signal() requires 2 arguments (signal, handler)\n");
-    return js_mkundef();
-  }
+  if (nargs < 2) return js_mkerr(js, "Ant.signal() requires 2 arguments");
   
-  char *signal_name = js_getstr(js, args[0], NULL);
-  if (signal_name == NULL) {
-    return js_mkerr(js, "signal name must be a string");
-  }
-  
-  int signum = -1;
-  if (strcmp(signal_name, "SIGINT") == 0 || strcmp(signal_name, "sigint") == 0) {
-    signum = SIGINT;
-  } else if (strcmp(signal_name, "SIGTERM") == 0 || strcmp(signal_name, "sigterm") == 0) {
-    signum = SIGTERM;
-  } else if (strcmp(signal_name, "SIGHUP") == 0 || strcmp(signal_name, "sighup") == 0) {
-    signum = SIGHUP;
-  } else if (strcmp(signal_name, "SIGUSR1") == 0 || strcmp(signal_name, "sigusr1") == 0) {
-    signum = SIGUSR1;
-  } else if (strcmp(signal_name, "SIGUSR2") == 0 || strcmp(signal_name, "sigusr2") == 0) {
-    signum = SIGUSR2;
-  } else {
-    return js_mkerr(js, "unsupported signal: %s", signal_name);
+  int signum = (int)js_getnum(args[0]);
+  if (signum <= 0 || signum >= NSIG) {
+    return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid signal number: %d", signum);
   }
   
   signal_handlers[signum].js = js;
@@ -106,11 +89,37 @@ static jsval_t js_alloc(struct js *js, jsval_t *args, int nargs) {
   return result;
 }
 
-// Ant.raw.typeof()
+// Ant.raw.typeof(jsval_t)
 static jsval_t js_raw_typeof(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "Ant.raw.typeof() requires 1 argument");
   const uint8_t type = vtype(args[0]);
   return js_mknum((double)type);
+}
+
+// Ant.sleep(seconds)
+static jsval_t js_sleep(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "Ant.sleep() requires 1 argument");
+  unsigned int seconds = (unsigned int)js_getnum(args[0]);
+  sleep(seconds);
+  return js_mkundef();
+}
+
+// Ant.msleep(milliseconds)
+static jsval_t js_msleep(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "Ant.msleep() requires 1 argument");
+  long ms = (long)js_getnum(args[0]);
+  struct timespec ts = { .tv_sec = ms / 1000, .tv_nsec = (ms % 1000) * 1000000 };
+  struct timespec rem;
+  while (nanosleep(&ts, &rem) == -1 && errno == EINTR) ts = rem;
+  return js_mkundef();
+}
+
+// Ant.usleep(microseconds)
+static jsval_t js_usleep(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "Ant.usleep() requires 1 argument");
+  useconds_t us = (useconds_t)js_getnum(args[0]);
+  usleep(us);
+  return js_mkundef();
 }
 
 // Ant.stats()
@@ -139,7 +148,10 @@ void init_builtin_module() {
   js_set(js, ant_obj, "gc", js_mkfun(js_gc_trigger));
   js_set(js, ant_obj, "alloc", js_mkfun(js_alloc));
   js_set(js, ant_obj, "stats", js_mkfun(js_stats_fn));
-  js_set(js, rt->ant_obj, "signal", js_mkfun(js_signal));
+  js_set(js, ant_obj, "signal", js_mkfun(js_signal));
+  js_set(js, ant_obj, "sleep", js_mkfun(js_sleep));
+  js_set(js, ant_obj, "msleep", js_mkfun(js_msleep));
+  js_set(js, ant_obj, "usleep", js_mkfun(js_usleep));
 
   jsval_t raw_obj = js_mkobj(js);
   js_set(js, raw_obj, "typeof", js_mkfun(js_raw_typeof));
