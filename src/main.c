@@ -39,6 +39,7 @@
 #include "modules/sessionstorage.h"
 #include "modules/localstorage.h"
 #include "modules/navigator.h"
+#include "modules/os.h"
 
 int js_result = EXIT_SUCCESS;
 
@@ -220,6 +221,7 @@ int main(int argc, char *argv[]) {
   ant_standard_library("fs", fs_library);
   ant_standard_library("crypto", crypto_library);
   ant_standard_library("events", events_library);
+  ant_standard_library("os", os_library);
   
   #ifndef ANT_SNAPSHOT_GENERATOR
     jsval_t snapshot_result = ant_load_snapshot(js);
