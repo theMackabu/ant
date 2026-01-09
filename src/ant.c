@@ -8155,8 +8155,9 @@ static jsval_t js_call_dot(struct js *js) {
       js->consumed = 1;
       next(js);
       js->consumed = 1;
-      jsval_t result = js_tagged_template(js, tag_func);
-      return result;
+      res = js_tagged_template(js, tag_func);
+      if (is_err(res)) return res;
+      goto js_call_dot_loop;
     }
     if ((js->flags & F_STRICT) && is_eval_or_arguments(js, coderefoff(res), codereflen(res))) {
       uint8_t la = lookahead(js);
@@ -8190,12 +8191,14 @@ static jsval_t js_call_dot(struct js *js) {
       if (is_err(res)) return res;
     }
   }
+  js_call_dot_loop:
   while (next(js) == TOK_LPAREN || next(js) == TOK_DOT || next(js) == TOK_OPTIONAL_CHAIN || next(js) == TOK_LBRACKET || next(js) == TOK_TEMPLATE) {
     if (js->tok == TOK_TEMPLATE) {
       if (vtype(res) == T_PROP) res = resolveprop(js, res);
       if (is_err(res)) return res;
       js->consumed = 1;
-      return js_tagged_template(js, res);
+      res = js_tagged_template(js, res);
+      if (is_err(res)) return res;
     } else if (js->tok == TOK_DOT || js->tok == TOK_OPTIONAL_CHAIN) {
       uint8_t op = js->tok;
       js->consumed = 1;

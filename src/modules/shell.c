@@ -129,12 +129,7 @@ static jsval_t builtin_shell_dollar(struct js *js, jsval_t *args, int nargs) {
       size_t cmd_len;
       char *cmd = js_getstr(js, args[0], &cmd_len);
       if (!cmd) return js_mkerr(js, "Failed to get command string");
-      
-      jsval_t result = shell_exec(js, cmd, cmd_len);
-      jsval_t promise = js_mkpromise(js);
-      js_resolve_promise(js, promise, result);
-      
-      return promise;
+      return shell_exec(js, cmd, cmd_len);
     }
     
     return js_mkerr(js, "$() requires a template string");
@@ -208,10 +203,7 @@ static jsval_t builtin_shell_dollar(struct js *js, jsval_t *args, int nargs) {
   jsval_t result = shell_exec(js, command, cmd_pos);
   free(command);
   
-  jsval_t promise = js_mkpromise(js);
-  js_resolve_promise(js, promise, result);
-  
-  return promise;
+  return result;
 }
 
 jsval_t shell_library(struct js *js) {

@@ -3,7 +3,7 @@ import { $ } from 'ant:shell';
 console.log('Testing $ shell command execution...');
 
 console.log('\n=== Test 1: Simple echo ===');
-const result1 = await $`echo "Hello, world!"`;
+const result1 = $`echo "Hello, world!"`;
 const text1 = result1.text();
 console.log('Output:', text1);
 if (text1 !== 'Hello, world!') {
@@ -14,7 +14,7 @@ if (result1.exitCode !== 0) {
 }
 
 console.log('\n=== Test 2: Multi-line output ===');
-const result2 = await $`echo "line1\nline2\nline3"`;
+const result2 = $`echo "line1\nline2\nline3"`;
 const lines2 = result2.lines();
 console.log('Line count:', lines2.length);
 console.log('Line 0:', lines2[0]);
@@ -35,7 +35,7 @@ if (lines2[2] !== 'line3') {
 }
 
 console.log('\n=== Test 3: ls command ===');
-const result3 = await $`ls tests/test_shell.js`;
+const result3 = $`ls tests/test_shell.js`;
 const text3 = result3.text();
 console.log('Output:', text3);
 if (!text3.includes('test_shell.js')) {
@@ -43,7 +43,7 @@ if (!text3.includes('test_shell.js')) {
 }
 
 console.log('\n=== Test 4: pwd command ===');
-const result4 = await $`pwd`;
+const result4 = $`pwd`;
 const text4 = result4.text();
 console.log('Current directory:', text4);
 if (text4.length === 0) {
@@ -51,7 +51,7 @@ if (text4.length === 0) {
 }
 
 console.log('\n=== Test 5: .text() method ===');
-const result5 = await $`echo "test text method"`;
+const result5 = $`echo "test text method"`;
 const text5 = result5.text();
 console.log('Text:', text5);
 if (text5 !== 'test text method') {
@@ -59,7 +59,7 @@ if (text5 !== 'test text method') {
 }
 
 console.log('\n=== Test 6: Listing files with .lines() ===');
-const result6 = await $`ls tests/*.cjs | head -5`;
+const result6 = $`ls tests/*.cjs | head -5`;
 const lines6 = result6.lines();
 console.log('Found', lines6.length, 'files');
 for (let i = 0; i < lines6.length && i < 3; i++) {
@@ -67,7 +67,7 @@ for (let i = 0; i < lines6.length && i < 3; i++) {
 }
 
 console.log('\n=== Test 7: date command ===');
-const result7 = await $`date +%Y`;
+const result7 = $`date +%Y`;
 const year = result7.text();
 console.log('Current year:', year);
 if (year.length !== 4) {

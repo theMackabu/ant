@@ -29,8 +29,7 @@ for (const file of files) {
   const name = path.basename(file, '.js');
 
   try {
-    const result = await $`./build/ant ${filePath}`;
-    const output = result.text();
+    const output = $`./build/ant ${filePath}`.text();
     console.log(output);
 
     const passedMatch = output.match(/Passed:\s*(\d+)/);
