@@ -667,6 +667,10 @@ static bool is_identifier_like(uint8_t tok) {
   return tok >= TOK_IDENTIFIER && tok < TOK_IDENT_LIKE_END;
 }
 
+static inline int is_body_end_tok(int tok) {
+  return tok == TOK_RPAREN || tok == TOK_RBRACE || tok == TOK_SEMICOLON || tok == TOK_COMMA || tok == TOK_EOF;
+}
+
 static bool is_keyword_propname(uint8_t tok) { 
   return (tok >= TOK_ASYNC && tok <= TOK_GLOBAL_THIS) || tok == TOK_TYPEOF; 
 }
@@ -680,8 +684,8 @@ static inline bool is_unboxed_obj(struct js *js, jsval_t val, jsval_t expected_p
 
 static bool is_valid_arrow_param_tok(uint8_t tok) {
   static const uint64_t bits[4] = {
-    0x0004000000000F0Cull,
-    0x001CC01003C00000ull,
+    0x0004000000000FCCull,
+    0x041CC01003C00000ull,
     0x0000000000800100ull,
     0x0000000000000000ull
   };
@@ -7989,12 +7993,7 @@ static jsval_t js_arrow_func(struct js *js, jsoff_t params_start, jsoff_t params
       return body_result;
     }
     uint8_t tok = next(js);
-    if (tok == TOK_RPAREN || tok == TOK_RBRACE || tok == TOK_SEMICOLON || 
-        tok == TOK_COMMA || tok == TOK_EOF) {
-      body_end_actual = js->toff;
-    } else {
-      body_end_actual = js->pos;
-    }
+    body_end_actual = is_body_end_tok(tok) ? js->toff : js->pos;
   } else {
     body_start = js->toff;
     js->flags |= F_NOEXEC;
@@ -8096,7 +8095,12 @@ static jsval_t js_group(struct js *js) {
     
     if (is_arrow) {
       js->flags |= F_NOEXEC;
-      while (next(js) != TOK_RPAREN && next(js) != TOK_EOF) js->consumed = 1;
+      int skip_paren_depth = 1;
+      while (skip_paren_depth > 0 && next(js) != TOK_EOF) {
+        if (js->tok == TOK_LPAREN) skip_paren_depth++;
+        else if (js->tok == TOK_RPAREN) skip_paren_depth--;
+        if (skip_paren_depth > 0) js->consumed = 1;
+      }
       
       if (next(js) != TOK_RPAREN) { 
         js->parse_depth--; 
@@ -8805,13 +8809,8 @@ static jsval_t js_assignment(struct js *js) {
     jsoff_t body_end;
     if (is_expr) {
       uint8_t tok = next(js);
-      if (tok == TOK_RPAREN || tok == TOK_RBRACE || tok == TOK_SEMICOLON || 
-          tok == TOK_COMMA || tok == TOK_EOF) {
-        body_end = js->toff;
-      } else body_end = js->pos;
-    } else {
-      body_end = js->pos;
-    }
+      body_end = is_body_end_tok(tok) ? js->toff : js->pos;
+    } else body_end = js->pos;
 
     size_t fn_size = param_len + (body_end - body_start) + 64;
     char *fn_str = (char *) malloc(fn_size);
