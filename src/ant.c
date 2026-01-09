@@ -2066,6 +2066,11 @@ static size_t strfunc(struct js *js, jsval_t value, char *buf, size_t len) {
     }
   }
   
+  jsval_t builtin_slot = get_slot(js, func_obj, SLOT_BUILTIN);
+  if (vtype(builtin_slot) == T_NUM) {
+    return cpy(buf, len, "[Function (native)]", 19);
+  }
+  
   if (vtype(code_slot) != T_STR) {
     jsval_t cfunc_slot = get_slot(js, func_obj, SLOT_CFUNC);
     if (vtype(cfunc_slot) == T_CFUNC) return cpy(buf, len, "[Function (native)]", 19);
@@ -2087,11 +2092,6 @@ static size_t strfunc(struct js *js, jsval_t value, char *buf, size_t len) {
       return n;
     }
     return cpy(buf, len, "[Function (anonymous)]", 22);
-  }
-  
-  jsoff_t sn, off = vstr(js, code_val, &sn);
-  if (sn >= 9 && memcmp(&js->mem[off], "__builtin", 9) == 0) {
-    return cpy(buf, len, "[Function (native)]", 19);
   }
   
   if (name && name_len > 0) {
@@ -6320,9 +6320,8 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
         }
       }
       
-      if (fnlen == 16 && memcmp(code_str, "__builtin_Object", 16) == 0) {
-        res = call_c(js, builtin_Object);
-      } else {
+      jsval_t builtin_slot = get_slot(js, func_obj, SLOT_BUILTIN);
+      if (vtype(builtin_slot) == T_NUM && tod(builtin_slot) == BUILTIN_OBJECT) res = call_c(js, builtin_Object); else {
         static char full_func_name[256];
         const char *func_name = NULL;
         const char *this_name = NULL;
@@ -20803,7 +20802,7 @@ struct js *js_create(void *buf, size_t len) {
   
   jsval_t obj_func_obj = mkobj(js, 0);
   set_proto(js, obj_func_obj, function_proto);
-  set_slot(js, obj_func_obj, SLOT_CODE, js_mkstr(js, "__builtin_Object", 16));
+  set_slot(js, obj_func_obj, SLOT_BUILTIN, tov(BUILTIN_OBJECT));
   setprop(js, obj_func_obj, js_mkstr(js, "keys", 4), js_mkfun(builtin_object_keys));
   setprop(js, obj_func_obj, js_mkstr(js, "values", 6), js_mkfun(builtin_object_values));
   setprop(js, obj_func_obj, js_mkstr(js, "entries", 7), js_mkfun(builtin_object_entries));

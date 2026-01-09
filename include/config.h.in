@@ -39,7 +39,13 @@ typedef enum {
   SLOT_SET,
   SLOT_PRIMITIVE,
   SLOT_PROXY_REF,
+  SLOT_BUILTIN,
   SLOT_MAX = 255
 } internal_slot_t;
+
+typedef enum {
+  BUILTIN_NONE = 0,
+  BUILTIN_OBJECT = 1
+} builtin_fn_id_t;
 
 #endif
