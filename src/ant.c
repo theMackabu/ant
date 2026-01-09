@@ -16424,8 +16424,17 @@ static jsval_t builtin_string_includes(struct js *js, jsval_t *args, int nargs) 
   const char *str_ptr = (char *) &js->mem[str_off];
   const char *search_ptr = (char *) &js->mem[search_off];
   
+  jsoff_t start = 0;
+  if (nargs >= 2) {
+    double pos = tod(args[1]);
+    if (isnan(pos) || pos < 0) pos = 0;
+    if (pos > str_len) return mkval(T_BOOL, 0);
+    start = (jsoff_t) pos;
+  }
+  
   if (search_len == 0) return mkval(T_BOOL, 1);
-  for (jsoff_t i = 0; i <= str_len - search_len; i++) {
+  if (start + search_len > str_len) return mkval(T_BOOL, 0);
+  for (jsoff_t i = start; i <= str_len - search_len; i++) {
     if (memcmp(str_ptr + i, search_ptr, search_len) == 0) {
       return mkval(T_BOOL, 1);
     }
