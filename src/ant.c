@@ -36,6 +36,7 @@
 #include "modules/fetch.h"
 #include "modules/symbol.h"
 #include "modules/ffi.h"
+#include "modules/child_process.h"
 
 #define CORO_MALLOC(size) calloc(1, size)
 #define CORO_FREE(ptr) free(ptr)
@@ -926,6 +927,7 @@ static bool has_ready_coroutines(void) {
 void js_poll_events(struct js *js) {
   fetch_poll_events();
   fs_poll_events();
+  child_process_poll_events();
   
   int has_timers = has_pending_timers();
   if (has_timers) {
@@ -943,7 +945,6 @@ void js_poll_events(struct js *js) {
     
     if (temp->is_ready && temp->mco && mco_status(temp->mco) == MCO_SUSPENDED) {
       remove_coroutine(temp);
-      
       mco_result res = mco_resume(temp->mco);
       
       if (res == MCO_SUCCESS && mco_status(temp->mco) == MCO_DEAD) {
@@ -951,25 +952,51 @@ void js_poll_events(struct js *js) {
       } else if (res == MCO_SUCCESS) {
         temp->is_ready = false;
         enqueue_coroutine(temp);
-      } else {
-        free_coroutine(temp);
-      }
+      } else free_coroutine(temp);
     }
     
     temp = next;
   }
 }
 
+typedef enum {
+  WORK_MICROTASKS       = 1 << 0,
+  WORK_TIMERS           = 1 << 1,
+  WORK_IMMEDIATES       = 1 << 2,
+  WORK_COROUTINES       = 1 << 3,
+  WORK_COROUTINES_READY = 1 << 4,
+  WORK_FETCHES          = 1 << 5,
+  WORK_FS_OPS           = 1 << 6,
+  WORK_CHILD_PROCS      = 1 << 7,
+} work_flags_t;
+
+static inline work_flags_t get_pending_work(void) {
+  work_flags_t flags = 0;
+  if (has_pending_microtasks())      flags |= WORK_MICROTASKS;
+  if (has_pending_timers())          flags |= WORK_TIMERS;
+  if (has_pending_immediates())      flags |= WORK_IMMEDIATES;
+  if (js_has_pending_coroutines())   flags |= WORK_COROUTINES;
+  if (has_ready_coroutines())        flags |= WORK_COROUTINES_READY;
+  if (has_pending_fetches())         flags |= WORK_FETCHES;
+  if (has_pending_fs_ops())          flags |= WORK_FS_OPS;
+  if (has_pending_child_processes()) flags |= WORK_CHILD_PROCS;
+  return flags;
+}
+
+#define WORK_PENDING  (WORK_MICROTASKS | WORK_TIMERS | WORK_IMMEDIATES | WORK_COROUTINES | WORK_FETCHES | WORK_FS_OPS | WORK_CHILD_PROCS)
+#define WORK_BLOCKING (WORK_MICROTASKS | WORK_IMMEDIATES | WORK_COROUTINES_READY)
+
 void js_run_event_loop(struct js *js) {
-  while (has_pending_microtasks() || has_pending_timers() || has_pending_immediates() || js_has_pending_coroutines() || has_pending_fetches() || has_pending_fs_ops()) {
+  work_flags_t work;
+  
+  while ((work = get_pending_work()) & WORK_PENDING) {
     js_poll_events(js);
+    work = get_pending_work();
     
-    if (!has_pending_microtasks() && !has_pending_immediates() && has_pending_timers() && !has_ready_coroutines()) {
-      int64_t next_timeout_ms = get_next_timer_timeout();
-      if (next_timeout_ms > 0) usleep(next_timeout_ms > 1000000 ? 1000000 : next_timeout_ms * 1000);
+    if (!(work & WORK_BLOCKING) && (work & WORK_TIMERS)) {
+      int64_t ms = get_next_timer_timeout();
+      if (ms > 0) usleep(ms > 1000 ? 1000000 : (useconds_t)(ms * 1000));
     }
-    
-    if (!has_pending_microtasks() && !has_pending_timers() && !has_pending_immediates() && !js_has_pending_coroutines() && !has_pending_fetches() && !has_pending_fs_ops()) break;
   }
   
   js_poll_events(js);
@@ -21390,6 +21417,7 @@ void js_gc_update_roots(GC_UPDATE_ARGS) {
   ffi_gc_update_roots(fwd_val, ctx);
   fetch_gc_update_roots(fwd_val, ctx);
   fs_gc_update_roots(fwd_val, ctx);
+  child_process_gc_update_roots(fwd_val, ctx);
 
   map_registry_entry_t *map_reg, *map_reg_tmp;
   HASH_ITER(hh, map_registry, map_reg, map_reg_tmp) {
