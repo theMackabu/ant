@@ -96,6 +96,7 @@ bool js_del(struct js *, jsval_t obj, const char *key);
 void js_merge_obj(struct js *, jsval_t dst, jsval_t src);
 
 jsval_t js_setprop(struct js *, jsval_t obj, jsval_t key, jsval_t val);
+jsval_t js_setprop_nonconfigurable(struct js *, jsval_t obj, const char *key, size_t keylen, jsval_t val);
 void js_set_proto(struct js *, jsval_t obj, jsval_t proto);
 
 jsval_t js_get_proto(struct js *, jsval_t obj);

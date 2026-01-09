@@ -650,7 +650,9 @@ void init_events_module() {
   js_set(js, event_target_proto, "dispatchEvent", js_mkfun(js_dispatch_event_method));
   js_set(js, event_target_proto, get_toStringTag_sym_key(), js_mkstr(js, "EventTarget", 11));
   
-  js_set(js, global, "EventTargetPrototype", event_target_proto);
+  jsval_t event_target = js_mkobj(js);
+  js_setprop_nonconfigurable(js, event_target, "prototype", 9, event_target_proto);
+  js_set(js, global, "EventTarget", event_target);
 }
 
 

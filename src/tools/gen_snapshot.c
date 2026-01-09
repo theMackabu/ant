@@ -576,12 +576,11 @@ int main(int argc, char **argv) {
   
   size_t compact_pos = 0;
   for (size_t i = 0; i < processed_len; i++) {
-    if (js_code[i] != '\n' && js_code[i] != '\r') {
-      compacted[compact_pos++] = js_code[i];
-    }
+    if (js_code[i] != '\n' && js_code[i] != '\r') compacted[compact_pos++] = js_code[i];
   }
   compacted[compact_pos] = '\0';
   
+  printf("%s", compacted);
   free(js_code);
   js_code = compacted;
   processed_len = compact_pos;
