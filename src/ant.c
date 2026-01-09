@@ -11842,6 +11842,11 @@ params_done:;
   return func;
 }
 
+static jsval_t builtin_function_empty(struct js *js, jsval_t *args, int nargs) {
+  (void)js; (void)args; (void)nargs;
+  return js_mkundef();
+}
+
 static jsval_t builtin_function_call(struct js *js, jsval_t *args, int nargs) {
   jsval_t func = js->this_val;
   if (vtype(func) != T_FUNC && vtype(func) != T_CFUNC) {
@@ -20502,11 +20507,13 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, object_proto, js_mkstr(js, STR_PROTO, STR_PROTO_LEN), js_mkundef());
   js_set_accessor_desc(js, object_proto, STR_PROTO, STR_PROTO_LEN, proto_getter, proto_setter, JS_DESC_C);
   
-  jsval_t function_proto = js_mkobj(js);
-  set_proto(js, function_proto, object_proto);
-  setprop(js, function_proto, js_mkstr(js, "call", 4), js_mkfun(builtin_function_call));
-  setprop(js, function_proto, js_mkstr(js, "apply", 5), js_mkfun(builtin_function_apply));
-  setprop(js, function_proto, js_mkstr(js, "bind", 4), js_mkfun(builtin_function_bind));
+  jsval_t function_proto_obj = js_mkobj(js);
+  set_proto(js, function_proto_obj, object_proto);
+  set_slot(js, function_proto_obj, SLOT_CFUNC, js_mkfun(builtin_function_empty));
+  setprop(js, function_proto_obj, js_mkstr(js, "call", 4), js_mkfun(builtin_function_call));
+  setprop(js, function_proto_obj, js_mkstr(js, "apply", 5), js_mkfun(builtin_function_apply));
+  setprop(js, function_proto_obj, js_mkstr(js, "bind", 4), js_mkfun(builtin_function_bind));
+  jsval_t function_proto = mkval(T_FUNC, vdata(function_proto_obj));
   
   jsval_t array_proto = js_mkobj(js);
   set_proto(js, array_proto, object_proto);
@@ -21033,23 +21040,24 @@ void js_destroy(struct js *js) {
   }
 }
 
-double js_getnum(jsval_t value) { return tod(value); }
-int js_getbool(jsval_t value) { return vdata(value) & 1 ? 1 : 0; }
+inline double js_getnum(jsval_t value) { return tod(value); }
+inline int js_getbool(jsval_t value) { return vdata(value) & 1 ? 1 : 0; }
 
-void js_setmaxcss(struct js *js, size_t max) { js->maxcss = (jsoff_t) max; }
-void js_set_filename(struct js *js, const char *filename) { js->filename = filename; }
+inline void js_setmaxcss(struct js *js, size_t max) { js->maxcss = (jsoff_t) max; }
+inline void js_set_filename(struct js *js, const char *filename) { js->filename = filename; }
 
-jsval_t js_mktrue(void) { return mkval(T_BOOL, 1); }
-jsval_t js_mkfalse(void) { return mkval(T_BOOL, 0); }
-jsval_t js_mkundef(void) { return mkval(T_UNDEF, 0); }
-jsval_t js_mknull(void) { return mkval(T_NULL, 0); }
-jsval_t js_mknum(double value) { return tov(value); }
-jsval_t js_mkobj(struct js *js) { return mkobj(js, 0); }
-jsval_t js_glob(struct js *js) { (void) js; return mkval(T_OBJ, 0); }
-jsval_t js_mkfun(jsval_t (*fn)(struct js *, jsval_t *, int)) { return mkval(T_CFUNC, (size_t) (void *) fn); }
-jsval_t js_getthis(struct js *js) { return js->this_val; }
-void js_setthis(struct js *js, jsval_t val) { js->this_val = val; }
-jsval_t js_getcurrentfunc(struct js *js) { return js->current_func; }
+inline jsval_t js_mktrue(void) { return mkval(T_BOOL, 1); }
+inline jsval_t js_mkfalse(void) { return mkval(T_BOOL, 0); }
+inline jsval_t js_mkundef(void) { return mkval(T_UNDEF, 0); }
+inline jsval_t js_mknull(void) { return mkval(T_NULL, 0); }
+inline jsval_t js_mknum(double value) { return tov(value); }
+inline jsval_t js_mkobj(struct js *js) { return mkobj(js, 0); }
+inline jsval_t js_glob(struct js *js) { (void) js; return mkval(T_OBJ, 0); }
+inline jsval_t js_mkfun(jsval_t (*fn)(struct js *, jsval_t *, int)) { return mkval(T_CFUNC, (size_t) (void *) fn); }
+
+inline jsval_t js_getthis(struct js *js) { return js->this_val; }
+inline void js_setthis(struct js *js, jsval_t val) { js->this_val = val; }
+inline jsval_t js_getcurrentfunc(struct js *js) { return js->current_func; }
 
 void js_set(struct js *js, jsval_t obj, const char *key, jsval_t val) {
   size_t key_len = strlen(key);
