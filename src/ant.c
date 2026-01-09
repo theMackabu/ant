@@ -2104,12 +2104,12 @@ static size_t strfunc(struct js *js, jsval_t value, char *buf, size_t len) {
   
   jsval_t builtin_slot = get_slot(js, func_obj, SLOT_BUILTIN);
   if (vtype(builtin_slot) == T_NUM) {
-    return cpy(buf, len, "[Function (native)]", 19);
+    return cpy(buf, len, "[native code]", 13);
   }
   
   if (vtype(code_slot) != T_STR) {
     jsval_t cfunc_slot = get_slot(js, func_obj, SLOT_CFUNC);
-    if (vtype(cfunc_slot) == T_CFUNC) return cpy(buf, len, "[Function (native)]", 19);
+    if (vtype(cfunc_slot) == T_CFUNC) return cpy(buf, len, "[native code]", 13);
     if (name && name_len > 0) {
       size_t n = cpy(buf, len, "[Function: ", 11);
       n += cpy(buf + n, len - n, name, name_len);
@@ -2409,8 +2409,8 @@ static size_t tostr(struct js *js, jsval_t value, char *buf, size_t len) {
     case T_BIGINT: return strbigint(js, value, buf, len);
     case T_PROMISE: return strpromise(js, value, buf, len);
     case T_FUNC:  return strfunc(js, value, buf, len);
-    case T_CFUNC: return cpy(buf, len, "[Function (native)]", 19);
-    case T_FFI:   return cpy(buf, len, "[Function (native)]", 19);
+    case T_CFUNC: return cpy(buf, len, "[native code]", 13);
+    case T_FFI:   return cpy(buf, len, "[native code]", 13);
     case T_PROP:  return (size_t) snprintf(buf, len, "PROP@%lu", (unsigned long) vdata(value));
     default:      return (size_t) snprintf(buf, len, "VTYPE%d", vtype(value));
   }
@@ -11997,10 +11997,25 @@ static int extract_array_args(struct js *js, jsval_t arr, jsval_t **out_args) {
   return len;
 }
 
+static jsval_t builtin_function_toString(struct js *js, jsval_t *args, int nargs) {
+  (void) args; (void) nargs;
+  jsval_t func = js->this_val;
+  uint8_t t = vtype(func);
+  
+  if (t != T_FUNC && t != T_CFUNC) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Function.prototype.toString requires that 'this' be a Function");
+  }
+  if (t == T_CFUNC) return ANT_STRING("[native code]");
+  
+  char buf[256];
+  size_t len = strfunc(js, func, buf, sizeof(buf));
+  return js_mkstr(js, buf, len);
+}
+
 static jsval_t builtin_function_apply(struct js *js, jsval_t *args, int nargs) {
   jsval_t func = js->this_val;
   if (vtype(func) != T_FUNC && vtype(func) != T_CFUNC) {
-    return js_mkerr(js, "apply requires a function");
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Function.prototype.apply requires that 'this' be a Function");
   }
   
   jsval_t this_arg = (nargs > 0) ? args[0] : js_mkundef();
@@ -20610,9 +20625,10 @@ struct js *js_create(void *buf, size_t len) {
   jsval_t function_proto_obj = js_mkobj(js);
   set_proto(js, function_proto_obj, object_proto);
   set_slot(js, function_proto_obj, SLOT_CFUNC, js_mkfun(builtin_function_empty));
-  setprop(js, function_proto_obj, js_mkstr(js, "call", 4), js_mkfun(builtin_function_call));
-  setprop(js, function_proto_obj, js_mkstr(js, "apply", 5), js_mkfun(builtin_function_apply));
-  setprop(js, function_proto_obj, js_mkstr(js, "bind", 4), js_mkfun(builtin_function_bind));
+  setprop(js, function_proto_obj, ANT_STRING("call"), js_mkfun(builtin_function_call));
+  setprop(js, function_proto_obj, ANT_STRING("apply"), js_mkfun(builtin_function_apply));
+  setprop(js, function_proto_obj, ANT_STRING("bind"), js_mkfun(builtin_function_bind));
+  setprop(js, function_proto_obj, ANT_STRING("toString"), js_mkfun(builtin_function_toString));
   jsval_t function_proto = mkval(T_FUNC, vdata(function_proto_obj));
   
   jsval_t array_proto = js_mkobj(js);

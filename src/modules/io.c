@@ -117,7 +117,7 @@ void print_value_colored(const char *str, FILE *stream) {
       continue;
     }
     
-    if (*p == '[' && strncmp(p, "[Function", 9) == 0) {
+    if (*p == '[' && (strncmp(p, "[Function", 9) == 0 || strncmp(p, "[native code]", 13) == 0)) {
       io_puts(JSON_FUNC, stream);
       while (*p && *p != ']') io_putc(*p++, stream);
       if (*p == ']') io_putc(*p, stream);
