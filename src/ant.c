@@ -1254,6 +1254,61 @@ static size_t add_indent(char *buf, size_t len, int level) {
 
 static size_t strbigint(struct js *js, jsval_t value, char *buf, size_t len);
 
+static bool is_small_array(struct js *js, jsval_t obj, int *elem_count) {
+  int count = 0;
+  bool has_nested = false;
+  jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | FLAGMASK);
+  jsoff_t length = 0;
+  jsoff_t scan = next;
+  
+  while (scan < js->brk && scan != 0) {
+    jsoff_t koff = loadoff(js, scan + (jsoff_t) sizeof(scan));
+    jsoff_t klen = offtolen(loadoff(js, koff));
+    const char *key = (char *) &js->mem[koff + sizeof(koff)];
+    
+    if (streq(key, klen, "length", 6)) {
+      jsval_t val = loadval(js, scan + (jsoff_t) (sizeof(scan) + sizeof(koff)));
+      if (vtype(val) == T_NUM) length = (jsoff_t) tod(val);
+      break;
+    }
+    scan = loadoff(js, scan) & ~(3U | FLAGMASK);
+  }
+  
+  for (jsoff_t i = 0; i < length; i++) {
+    char idx[16];
+    snprintf(idx, sizeof(idx), "%u", (unsigned) i);
+    
+    jsoff_t idxlen = (jsoff_t) strlen(idx);
+    jsoff_t prop = next;
+    jsval_t val = js_mkundef();
+    
+    bool found = false;
+    
+    while (prop < js->brk && prop != 0) {
+      jsoff_t koff = loadoff(js, prop + (jsoff_t) sizeof(prop));
+      jsoff_t klen = offtolen(loadoff(js, koff));
+      const char *key = (char *) &js->mem[koff + sizeof(koff)];
+      if (streq(key, klen, idx, idxlen)) {
+        val = loadval(js, prop + (jsoff_t) (sizeof(prop) + sizeof(koff)));
+        found = true;
+        break;
+      }
+      prop = loadoff(js, prop) & ~(3U | FLAGMASK);
+    }
+    
+    if (found) {
+      uint8_t t = vtype(val);
+      if (t == T_OBJ || t == T_ARR || t == T_FUNC) has_nested = true;
+      count++;
+    } else {
+      count++;
+    }
+  }
+  
+  if (elem_count) *elem_count = count;
+  return count <= 4 && !has_nested;
+}
+
 static size_t strarr(struct js *js, jsval_t obj, char *buf, size_t len) {
   int ref = get_circular_ref(obj);
   if (ref) return ref > 0 ? (size_t) snprintf(buf, len, "[Circular *%d]", ref) : cpy(buf, len, "[Circular]", 10);
@@ -1276,10 +1331,17 @@ static size_t strarr(struct js *js, jsval_t obj, char *buf, size_t len) {
     scan = loadoff(js, scan) & ~(3U | FLAGMASK);
   }
   
-  size_t n = cpy(buf, len, length > 0 ? "[ " : "[", length > 0 ? 2 : 1);
+  int elem_count = 0;
+  bool inline_mode = is_small_array(js, obj, &elem_count);
+  
+  size_t n = cpy(buf, len, inline_mode ? "[ " : "[\n", 2);
+  
+  if (!inline_mode) stringify_indent++;
   
   for (jsoff_t i = 0; i < length; i++) {
-    if (i > 0) n += cpy(buf + n, len - n, ", ", 2);
+    if (i > 0) n += cpy(buf + n, len - n, inline_mode ? ", " : ",\n", 2);
+    if (!inline_mode) n += add_indent(buf + n, len - n, stringify_indent);
+    
     char idx[16];
     snprintf(idx, sizeof(idx), "%u", (unsigned) i);
     
@@ -1308,7 +1370,13 @@ static size_t strarr(struct js *js, jsval_t obj, char *buf, size_t len) {
     }
   }
   
-  n += cpy(buf + n, len - n, length > 0 ? " ]" : "]", length > 0 ? 2 : 1);
+  if (!inline_mode) {
+    stringify_indent--;
+    n += cpy(buf + n, len - n, "\n", 1);
+    n += add_indent(buf + n, len - n, stringify_indent);
+  }
+  
+  n += cpy(buf + n, len - n, inline_mode ? " ]" : "]", inline_mode ? 2 : 1);
   pop_stringify();
   return n;
 }

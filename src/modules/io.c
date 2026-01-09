@@ -78,7 +78,7 @@ void print_value_colored(const char *str, FILE *stream) {
   bool in_string = false;
   bool escape_next = false;
   bool is_key = true;
-  int bracket_depth = 0;
+  int brace_depth = 0;
   char string_char = 0;
   
   for (const char *p = str; *p; p++) {
@@ -96,7 +96,7 @@ void print_value_colored(const char *str, FILE *stream) {
     
     if (*p == '\'' || *p == '"') {
       if (!in_string) {
-        bool use_key_color = is_key && bracket_depth > 0;
+        bool use_key_color = is_key && brace_depth > 0;
         io_puts(use_key_color ? JSON_KEY : JSON_STRING, stream);
         io_putc(*p, stream);
         in_string = true;
@@ -156,26 +156,49 @@ void print_value_colored(const char *str, FILE *stream) {
       continue;
     }
     
-    if (*p == ',' || *p == '\n') {
+    if (*p == ',') {
       io_putc(*p, stream);
+      is_key = (brace_depth > 0);
+      continue;
+    }
+    
+    if (*p == '\n') {
+      io_putc(*p, stream);
+      is_key = (brace_depth > 0);
+      continue;
+    }
+    
+    if (*p == '{') {
+      io_puts(JSON_BRACE, stream);
+      io_putc(*p, stream);
+      io_puts(ANSI_RESET, stream);
+      brace_depth++;
       is_key = true;
       continue;
     }
     
-    if (*p == '{' || *p == '[') {
+    if (*p == '}') {
       io_puts(JSON_BRACE, stream);
       io_putc(*p, stream);
       io_puts(ANSI_RESET, stream);
-      bracket_depth++;
-      is_key = true;
+      brace_depth--;
+      is_key = false;
       continue;
     }
     
-    if (*p == '}' || *p == ']') {
+    if (*p == '[') {
       io_puts(JSON_BRACE, stream);
       io_putc(*p, stream);
       io_puts(ANSI_RESET, stream);
-      bracket_depth--;
+      is_key = false;
+      continue;
+    }
+    
+    if (*p == ']') {
+      io_puts(JSON_BRACE, stream);
+      io_putc(*p, stream);
+      io_puts(ANSI_RESET, stream);
+      is_key = false;
       continue;
     }
     
@@ -239,7 +262,7 @@ void print_value_colored(const char *str, FILE *stream) {
       continue;
     }
     
-    if (is_key && bracket_depth > 0 && (isalpha((unsigned char)*p) || *p == '_' || *p == '$')) {
+    if (is_key && brace_depth > 0 && (isalpha((unsigned char)*p) || *p == '_' || *p == '$')) {
       io_puts(JSON_KEY, stream);
       while (isalnum((unsigned char)*p) || *p == '_' || *p == '$') {
         io_putc(*p, stream);
