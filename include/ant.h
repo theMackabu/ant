@@ -12,7 +12,9 @@
 
 #define STR_PROTO "__proto__"
 #define STR_PROTO_LEN 9
+
 #define ANT_LIMIT_SIZE_CACHE 16384
+#define ANT_STRING(s) js_mkstr(js, s, sizeof(s) - 1)
 
 struct js;
 

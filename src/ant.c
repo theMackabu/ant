@@ -1259,7 +1259,6 @@ static size_t strarr(struct js *js, jsval_t obj, char *buf, size_t len) {
   if (ref) return ref > 0 ? (size_t) snprintf(buf, len, "[Circular *%d]", ref) : cpy(buf, len, "[Circular]", 10);
   
   push_stringify(obj);
-  size_t n = cpy(buf, len, "[ ", 2);
   jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | FLAGMASK);
   jsoff_t length = 0;
   jsoff_t scan = next;
@@ -1276,6 +1275,8 @@ static size_t strarr(struct js *js, jsval_t obj, char *buf, size_t len) {
     }
     scan = loadoff(js, scan) & ~(3U | FLAGMASK);
   }
+  
+  size_t n = cpy(buf, len, length > 0 ? "[ " : "[", length > 0 ? 2 : 1);
   
   for (jsoff_t i = 0; i < length; i++) {
     if (i > 0) n += cpy(buf + n, len - n, ", ", 2);
@@ -1307,7 +1308,7 @@ static size_t strarr(struct js *js, jsval_t obj, char *buf, size_t len) {
     }
   }
   
-  n += cpy(buf + n, len - n, " ]", 2);
+  n += cpy(buf + n, len - n, length > 0 ? " ]" : "]", length > 0 ? 2 : 1);
   pop_stringify();
   return n;
 }
@@ -1512,6 +1513,36 @@ static size_t print_prototype(struct js *js, jsval_t proto_val, char *buf, size_
   return n;
 }
 
+static bool is_small_object(struct js *js, jsval_t obj, int *prop_count) {
+  int count = 0;
+  bool has_nested = false;
+  jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | FLAGMASK);
+  
+  while (next < js->brk && next != 0) {
+    jsoff_t header = loadoff(js, next);
+    if (is_slot_prop(header)) { next = next_prop(header); continue; }
+    
+    jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
+    jsoff_t klen = offtolen(loadoff(js, koff));
+    const char *key = (char *) &js->mem[koff + sizeof(koff)];
+    
+    bool is_desc = (klen > 7 && key[0] == '_' && key[1] == '_' && key[2] == 'd' && key[3] == 'e' && key[4] == 's' && key[5] == 'c' && key[6] == '_');
+    const char *tag_sym_key = get_toStringTag_sym_key();
+    bool should_hide = streq(key, klen, STR_PROTO, STR_PROTO_LEN) || streq(key, klen, tag_sym_key, strlen(tag_sym_key)) || is_desc;
+    
+    if (!should_hide) {
+      jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
+      uint8_t t = vtype(val);
+      if (t == T_OBJ || t == T_ARR || t == T_FUNC) has_nested = true;
+      count++;
+    }
+    next = next_prop(header);
+  }
+  
+  if (prop_count) *prop_count = count;
+  return count <= 4 && !has_nested;
+}
+
 static size_t strobj(struct js *js, jsval_t obj, char *buf, size_t len) {
   jsoff_t time_off = lkp(js, obj, "__time", 6);
   if (time_off != 0) return strdate(js, obj, buf, len);
@@ -1532,6 +1563,8 @@ static size_t strobj(struct js *js, jsval_t obj, char *buf, size_t len) {
   bool is_map = false, is_set = false;
   jsoff_t tlen = 0, toff = 0;
   const char *tag_str = NULL;
+  int prop_count = 0;
+  bool inline_mode = false;
   
   if (tag_off == 0) goto print_plain_object;
   
@@ -1628,13 +1661,70 @@ print_tagged_object:
   goto continue_object_print;
   
 print_plain_object:
-  n += cpy(buf + n, len - n, "{\n", 2);
+  inline_mode = is_small_object(js, obj, &prop_count);
   
-continue_object_print:
+  jsval_t proto_val = js_get_proto(js, obj);
+  bool is_null_proto = (vtype(proto_val) == T_NULL);
+  const char *class_name = NULL;
+  jsoff_t class_name_len = 0;
   
-  stringify_indent++;
+  do {
+    if (is_null_proto) break;
+    uint8_t pt = vtype(proto_val);
+    if (pt != T_OBJ && pt != T_FUNC) break;
+    
+    jsoff_t ctor_off = lkp(js, proto_val, "constructor", 11);
+    if (ctor_off == 0) break;
+    
+    jsval_t ctor_val = resolveprop(js, mkval(T_PROP, ctor_off));
+    if (vtype(ctor_val) != T_FUNC) break;
+    
+    jsoff_t name_off = lkp(js, mkval(T_OBJ, vdata(ctor_val)), "name", 4);
+    if (name_off == 0) break;
+    
+    jsval_t name_val = resolveprop(js, mkval(T_PROP, name_off));
+    if (vtype(name_val) != T_STR) break;
+    
+    jsoff_t name_str_off = vstr(js, name_val, &class_name_len);
+    class_name = (const char *) &js->mem[name_str_off];
+    
+    if (class_name_len == 6 && memcmp(class_name, "Object", 6) == 0) {
+      class_name = NULL;
+      class_name_len = 0;
+    }
+  } while (0);
+  
+  if (prop_count == 0) {
+    if (is_null_proto) {
+      n += cpy(buf + n, len - n, "[Object: null prototype] {}", 27);
+    } else if (class_name && class_name_len > 0) {
+      n += cpy(buf + n, len - n, class_name, class_name_len);
+      n += cpy(buf + n, len - n, " {}", 3);
+    } else {
+      n += cpy(buf + n, len - n, "{}", 2);
+    }
+    pop_stringify();
+    return n;
+  }
+  
+  if (is_null_proto) {
+    n += cpy(buf + n, len - n, "[Object: null prototype] ", 25);
+  } else if (class_name && class_name_len > 0) {
+    n += cpy(buf + n, len - n, class_name, class_name_len);
+    n += cpy(buf + n, len - n, " ", 1);
+  }
+  
+  n += cpy(buf + n, len - n, inline_mode ? "{ " : "{\n", 2);
+  
+continue_object_print:;
+  
+  if (!inline_mode) stringify_indent++;
   jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | FLAGMASK);
   bool first = true;
+  
+  int prop_capacity = 64;
+  jsoff_t *prop_offsets = malloc(prop_capacity * sizeof(jsoff_t));
+  int num_props = 0;
   
   while (next < js->brk && next != 0) {
     jsoff_t header = loadoff(js, next);
@@ -1661,33 +1751,45 @@ continue_object_print:
     }
     
     if (!should_hide) {
-      jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
-      if (!first) n += cpy(buf + n, len - n, ",\n", 2);
-      first = false;
-      n += add_indent(buf + n, len - n, stringify_indent);
-      
-      bool is_special_global = false;
-      if (vtype(val) == T_UNDEF && streq(key, klen, "undefined", 9)) {
-        is_special_global = true;
-      } else if (vtype(val) == T_NUM) {
-        double d = tod(val);
-        if (isinf(d) && d > 0 && streq(key, klen, "Infinity", 8)) {
-          is_special_global = true;
-        } else if (isnan(d) && streq(key, klen, "NaN", 3)) {
-          is_special_global = true;
-        }
+      if (num_props >= prop_capacity) {
+        prop_capacity *= 2;
+        prop_offsets = realloc(prop_offsets, prop_capacity * sizeof(jsoff_t));
       }
-      
-      if (is_special_global) {
-        n += tostr(js, val, buf + n, len - n);
-      } else {
-        n += strkey(js, mkval(T_STR, koff), buf + n, len - n);
-        n += cpy(buf + n, len - n, ": ", 2);
-        n += tostr(js, val, buf + n, len - n);
-      }
+      prop_offsets[num_props++] = next;
     }
     next = next_prop(header);
   }
+  
+  for (int i = num_props - 1; i >= 0; i--) {
+    jsoff_t prop = prop_offsets[i];
+    jsoff_t koff = loadoff(js, prop + (jsoff_t) sizeof(prop));
+    jsoff_t klen = offtolen(loadoff(js, koff));
+    const char *key = (char *) &js->mem[koff + sizeof(koff)];
+    jsval_t val = loadval(js, prop + (jsoff_t) (sizeof(prop) + sizeof(koff)));
+    
+    if (!first) n += cpy(buf + n, len - n, inline_mode ? ", " : ",\n", 2);
+    first = false;
+    if (!inline_mode) n += add_indent(buf + n, len - n, stringify_indent);
+    
+    bool is_special_global = false;
+    if (vtype(val) == T_UNDEF && streq(key, klen, "undefined", 9)) {
+      is_special_global = true;
+    } else if (vtype(val) == T_NUM) {
+      double d = tod(val);
+      if (isinf(d) && d > 0 && streq(key, klen, "Infinity", 8)) {
+        is_special_global = true;
+      } else if (isnan(d) && streq(key, klen, "NaN", 3)) is_special_global = true;
+    }
+    
+    if (is_special_global) {
+      n += tostr(js, val, buf + n, len - n);
+    } else {
+      n += strkey(js, mkval(T_STR, koff), buf + n, len - n);
+      n += cpy(buf + n, len - n, ": ", 2);
+      n += tostr(js, val, buf + n, len - n);
+    }
+  }
+  free(prop_offsets);
   
   next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | FLAGMASK);
   while (next < js->brk && next != 0) {
@@ -1748,10 +1850,14 @@ continue_object_print:
     next = next_prop(header);
   }
   
-  stringify_indent--;
-  if (!first) n += cpy(buf + n, len - n, "\n", 1);
-  n += add_indent(buf + n, len - n, stringify_indent);
-  n += cpy(buf + n, len - n, "}", 1);
+  if (!inline_mode) stringify_indent--;
+  if (inline_mode) {
+    n += cpy(buf + n, len - n, " }", 2);
+  } else {
+    if (!first) n += cpy(buf + n, len - n, "\n", 1);
+    n += add_indent(buf + n, len - n, stringify_indent);
+    n += cpy(buf + n, len - n, "}", 1);
+  }
   pop_stringify();
   return n;
 }
@@ -1876,50 +1982,6 @@ static bool is_hidden_func_prop(const char *key, jsoff_t koff, jsoff_t klen) {
   return false;
 }
 
-static size_t strfunc_ctor(struct js *js, jsval_t func_obj, char *buf, size_t len) {
-  int ref = get_circular_ref(func_obj);
-  if (ref) return ref > 0 ? (size_t) snprintf(buf, len, "[Circular *%d]", ref) : cpy(buf, len, "[Circular]", 10);
-  push_stringify(func_obj);
-  
-  size_t n = cpy(buf, len, "{\n", 2);
-  stringify_indent++;
-  bool first = true;
-  
-  jsoff_t next = loadoff(js, (jsoff_t) vdata(func_obj)) & ~(3U | FLAGMASK);
-  while (next < js->brk && next != 0) {
-    jsoff_t header = loadoff(js, next);
-    if (is_slot_prop(header)) { next = next_prop(header); continue; }
-    
-    jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
-    jsoff_t klen = offtolen(loadoff(js, koff));
-    const char *kstr = (const char *) &js->mem[koff + sizeof(jsoff_t)];
-    
-    if (!is_hidden_func_prop(kstr, koff, klen)) {
-      jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
-      if (!first) n += cpy(buf + n, len - n, ",\n", 2);
-      first = false;
-      n += add_indent(buf + n, len - n, stringify_indent);
-      n += strkey(js, mkval(T_STR, koff), buf + n, len - n);
-      n += cpy(buf + n, len - n, ": ", 2);
-      n += tostr(js, val, buf + n, len - n);
-    }
-    next = next_prop(header);
-  }
-  
-  jsoff_t proto_off = lkp_interned(js, func_obj, INTERN_PROTOTYPE, 9);
-  if (proto_off != 0) {
-    jsval_t proto_val = resolveprop(js, mkval(T_PROP, proto_off));
-    if (vtype(proto_val) == T_OBJ && !is_on_stack(proto_val)) n += print_prototype(js, proto_val, buf + n, len - n, &first);
-  }
-  
-  stringify_indent--;
-  if (!first) n += cpy(buf + n, len - n, "\n", 1);
-  n += add_indent(buf + n, len - n, stringify_indent);
-  n += cpy(buf + n, len - n, "}", 1);
-  pop_stringify();
-  return n;
-}
-
 static size_t strfunc(struct js *js, jsval_t value, char *buf, size_t len) {
   jsval_t func_obj = mkval(T_OBJ, vdata(value));
   jsval_t code_slot = get_slot(js, func_obj, SLOT_CODE);
@@ -1938,7 +2000,7 @@ static size_t strfunc(struct js *js, jsval_t value, char *buf, size_t len) {
   
   if (vtype(code_slot) != T_STR) {
     jsval_t cfunc_slot = get_slot(js, func_obj, SLOT_CFUNC);
-    if (vtype(cfunc_slot) == T_CFUNC) return strfunc_ctor(js, func_obj, buf, len);
+    if (vtype(cfunc_slot) == T_CFUNC) return cpy(buf, len, "[Function (native)]", 19);
     if (name && name_len > 0) {
       size_t n = cpy(buf, len, "[Function: ", 11);
       n += cpy(buf + n, len - n, name, name_len);
@@ -1961,7 +2023,7 @@ static size_t strfunc(struct js *js, jsval_t value, char *buf, size_t len) {
   
   jsoff_t sn, off = vstr(js, code_val, &sn);
   if (sn >= 9 && memcmp(&js->mem[off], "__builtin", 9) == 0) {
-    return strfunc_ctor(js, func_obj, buf, len);
+    return cpy(buf, len, "[Function (native)]", 19);
   }
   
   if (name && name_len > 0) {

@@ -1,4 +1,4 @@
-import { createRouter, addRoute, findRoute } from './';
+import { createRouter, addRoute, findRoute } from './index.js';
 
 const router = createRouter();
 

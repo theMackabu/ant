@@ -172,8 +172,8 @@ static jsval_t js_sessionstorage_length(struct js *js, jsval_t *args, int nargs)
 
 void init_sessionstorage_module(void) {
   struct js *js = rt->js;
-  jsval_t glob = js_glob(js);
   
+  jsval_t glob = js_glob(js);
   jsval_t storage_obj = js_mkobj(js);
   
   js_set(js, storage_obj, "setItem", js_mkfun(js_sessionstorage_setItem));
@@ -185,6 +185,6 @@ void init_sessionstorage_module(void) {
   jsval_t length_getter = js_mkfun(js_sessionstorage_length);
   js_set_getter_desc(js, storage_obj, "length", 6, length_getter, JS_DESC_E);
   
-  js_set(js, storage_obj, get_toStringTag_sym_key(), js_mkstr(js, "Storage", 7));
+  js_set(js, storage_obj, get_toStringTag_sym_key(), ANT_STRING("Storage"));
   js_set(js, glob, "sessionStorage", storage_obj);
 }

@@ -211,7 +211,7 @@ void print_value_colored(const char *str, FILE *stream) {
       continue;
     }
     
-    if (strncmp(p, "Infinity", 8) == 0 && !is_key) {
+    if (strncmp(p, "Infinity", 8) == 0 && !isalnum((unsigned char)p[8]) && p[8] != '_') {
       io_puts(JSON_NUMBER, stream);
       io_puts("Infinity", stream);
       io_puts(ANSI_RESET, stream);
@@ -219,7 +219,7 @@ void print_value_colored(const char *str, FILE *stream) {
       continue;
     }
     
-    if (strncmp(p, "NaN", 3) == 0 && !isalnum((unsigned char)p[3]) && p[3] != '_' && !is_key) {
+    if (strncmp(p, "NaN", 3) == 0 && !isalnum((unsigned char)p[3]) && p[3] != '_') {
       io_puts(JSON_NUMBER, stream);
       io_puts("NaN", stream);
       io_puts(ANSI_RESET, stream);
