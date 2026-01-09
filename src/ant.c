@@ -437,6 +437,11 @@ static const uint8_t unary_table[TOK_MAX] = {
   [TOK_UPLUS] = 1, [TOK_UMINUS] = 1, [TOK_VOID] = 1,
 };
 
+static const uint8_t body_end_tok[TOK_MAX] = {
+  [TOK_RPAREN] = 1, [TOK_RBRACE] = 1, [TOK_RBRACKET] = 1,
+  [TOK_SEMICOLON] = 1, [TOK_COMMA] = 1, [TOK_EOF] = 1,
+};
+
 enum {
   T_OBJ, T_PROP, T_STR, T_UNDEF, T_NULL, T_NUM, T_BOOL, T_FUNC,
   T_CODEREF, T_CFUNC, T_ERR, T_ARR, T_PROMISE, T_TYPEDARRAY, 
@@ -651,35 +656,28 @@ static inline bool is_undefined(jsval_t v) {
   return vtype(v) == T_UNDEF; 
 }
 
-static uint8_t unhex(uint8_t c) { 
-  return (c >= '0' && c <= '9') ? (uint8_t) (c - '0') : (c >= 'a' && c <= 'f') ? (uint8_t) (c - 'W') : (c >= 'A' && c <= 'F') ? (uint8_t) (c - '7') : 0; 
+static inline uint8_t unhex(uint8_t c) {
+  return (c & 0xF) + (c >> 6) * 9;
 }
 
-static bool is_unary(uint8_t tok) {
+static inline bool is_unary(uint8_t tok) {
   return unary_table[tok];
 }
 
-static bool is_assign(uint8_t tok) {
+static inline int is_body_end_tok(int tok) {
+  return body_end_tok[tok];
+}
+
+static inline bool is_assign(uint8_t tok) {
   return tok >= TOK_ASSIGN && tok <= TOK_NULLISH_ASSIGN;
 }
 
-static bool is_identifier_like(uint8_t tok) {
+static inline bool is_identifier_like(uint8_t tok) {
   return tok >= TOK_IDENTIFIER && tok < TOK_IDENT_LIKE_END;
 }
 
-static inline int is_body_end_tok(int tok) {
-  return tok == TOK_RPAREN || tok == TOK_RBRACE || tok == TOK_SEMICOLON || tok == TOK_COMMA || tok == TOK_EOF;
-}
-
-static bool is_keyword_propname(uint8_t tok) { 
+static inline bool is_keyword_propname(uint8_t tok) { 
   return (tok >= TOK_ASYNC && tok <= TOK_GLOBAL_THIS) || tok == TOK_TYPEOF; 
-}
-
-static inline bool is_unboxed_obj(struct js *js, jsval_t val, jsval_t expected_proto) {
-  if (vtype(val) != T_OBJ) return false;
-  if (vtype(get_slot(js, val, SLOT_PRIMITIVE)) != T_UNDEF) return false;
-  jsval_t proto = get_slot(js, val, SLOT_PROTO);
-  return vdata(proto) == vdata(expected_proto);
 }
 
 static bool is_valid_arrow_param_tok(uint8_t tok) {
@@ -690,6 +688,13 @@ static bool is_valid_arrow_param_tok(uint8_t tok) {
     0x0000000000000000ull
   };
   return (bits[tok >> 6] >> (tok & 63)) & 1;
+}
+
+static inline bool is_unboxed_obj(struct js *js, jsval_t val, jsval_t expected_proto) {
+  if (vtype(val) != T_OBJ) return false;
+  if (vtype(get_slot(js, val, SLOT_PRIMITIVE)) != T_UNDEF) return false;
+  jsval_t proto = get_slot(js, val, SLOT_PROTO);
+  return vdata(proto) == vdata(expected_proto);
 }
 
 static uint32_t js_to_uint32(double d) {
