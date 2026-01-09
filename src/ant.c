@@ -6297,6 +6297,8 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
       res = call_c(js, (jsval_t(*)(struct js *, jsval_t *, int)) vdata(cfunc_slot));
       js->current_func = saved_func;
     } else {
+      jsval_t builtin_slot = get_slot(js, func_obj, SLOT_BUILTIN);
+      if (vtype(builtin_slot) == T_NUM && tod(builtin_slot) == BUILTIN_OBJECT) res = call_c(js, builtin_Object); else {
       jsval_t code_val = get_slot(js, func_obj, SLOT_CODE);
       if (vtype(code_val) != T_STR) return js_mkerr(js, "function has no code");
       jsval_t closure_scope = get_slot(js, func_obj, SLOT_SCOPE);
@@ -6356,109 +6358,107 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
         }
       }
       
-      jsval_t builtin_slot = get_slot(js, func_obj, SLOT_BUILTIN);
-      if (vtype(builtin_slot) == T_NUM && tod(builtin_slot) == BUILTIN_OBJECT) res = call_c(js, builtin_Object); else {
-        static char full_func_name[256];
-        const char *func_name = NULL;
-        const char *this_name = NULL;
+      static char full_func_name[256];
+      const char *func_name = NULL;
+      const char *this_name = NULL;
+      
+      if (vtype(nfe_name_val) == T_STR) {
+        jsoff_t name_len, name_offset = vstr(js, nfe_name_val, &name_len);
+        func_name = (const char *)&js->mem[name_offset];
+      }
+      
+      if (vtype(target_this) != T_OBJ) goto skip_constructor_name;
+      
+      jsoff_t ctor_off = lkp_interned(js, target_this, INTERN_CONSTRUCTOR, 11);
+      if (ctor_off == 0) goto default_object_name;
+      
+      jsval_t ctor_val = resolveprop(js, mkval(T_PROP, ctor_off));
+      if (vtype(ctor_val) != T_FUNC) goto default_object_name;
+      
+      jsval_t ctor_obj = mkval(T_OBJ, vdata(ctor_val));
+      jsoff_t ctor_name_off = lkp(js, ctor_obj, "name", 4);
+      if (ctor_name_off == 0) goto default_object_name;
+      
+      jsval_t ctor_name_val = resolveprop(js, mkval(T_PROP, ctor_name_off));
+      if (vtype(ctor_name_val) != T_STR) goto default_object_name;
+      
+      jsoff_t ctor_name_len, ctor_name_offset = vstr(js, ctor_name_val, &ctor_name_len);
+      this_name = (const char *)&js->mem[ctor_name_offset];
+      if (this_name && strlen(this_name) > 0) goto skip_constructor_name;
+      
+      default_object_name:
+      this_name = "Object";
+      
+      skip_constructor_name:
+      
+      const char *final_name;
+      if (this_name && func_name) {
+        snprintf(full_func_name, sizeof(full_func_name), "%s.%s", this_name, func_name);
+        final_name = full_func_name;
+      } else if (func_name) {
+        final_name = func_name;
+      } else if (this_name) {
+        snprintf(full_func_name, sizeof(full_func_name), "%s.<anonymous>", this_name);
+        final_name = full_func_name;
+      } else {
+        final_name = "<anonymous>";
+      }
+      
+      push_call_frame(
+        js->filename,
+        final_name, 
+        code, pos
+      );
+      
+      jsval_t saved_func = js->current_func;
+      js->current_func = func;
+      js->nogc = (jsoff_t) (fnoff - sizeof(jsoff_t));
+      
+      if (is_arrow || is_bound) {
+        pop_this();
+        push_this(captured_this);
+      }
+      
+      jsval_t count_val = get_slot(js, func_obj, SLOT_FIELD_COUNT);
+      if (vtype(count_val) != T_NUM || vtype(target_this) != T_OBJ) goto skip_fields;
+      
+      int field_count = (int)tod(count_val);
+      jsval_t src_val = get_slot(js, func_obj, SLOT_SOURCE);
+      jsval_t fields_meta = get_slot(js, func_obj, SLOT_FIELDS);
+      if (vtype(src_val) == T_UNDEF || vtype(fields_meta) == T_UNDEF) goto skip_fields;
+      
+      jsoff_t src_len, src_ptr_off = vstr(js, src_val, &src_len);
+      const char *source = (const char *)(&js->mem[src_ptr_off]);
+      
+      jsoff_t meta_len, meta_ptr_off = vstr(js, fields_meta, &meta_len);
+      const jsoff_t *metadata = (const jsoff_t *)(&js->mem[meta_ptr_off]);
+      
+      for (int i = 0; i < field_count; i++) {
+        jsoff_t name_off = metadata[i * 4 + 0];
+        jsoff_t name_len = metadata[i * 4 + 1];
+        jsoff_t init_start = metadata[i * 4 + 2];
+        jsoff_t init_end = metadata[i * 4 + 3];
         
-        if (vtype(nfe_name_val) == T_STR) {
-          jsoff_t name_len, name_offset = vstr(js, nfe_name_val, &name_len);
-          func_name = (const char *)&js->mem[name_offset];
+        jsval_t fname = js_mkstr(js, &source[name_off], name_len);
+        if (is_err(fname)) {
+          js->current_func = saved_func;
+          pop_call_frame();
+          return fname;
         }
         
-        if (vtype(target_this) != T_OBJ) goto skip_constructor_name;
-        
-        jsoff_t ctor_off = lkp_interned(js, target_this, INTERN_CONSTRUCTOR, 11);
-        if (ctor_off == 0) goto default_object_name;
-        
-        jsval_t ctor_val = resolveprop(js, mkval(T_PROP, ctor_off));
-        if (vtype(ctor_val) != T_FUNC) goto default_object_name;
-        
-        jsval_t ctor_obj = mkval(T_OBJ, vdata(ctor_val));
-        jsoff_t ctor_name_off = lkp(js, ctor_obj, "name", 4);
-        if (ctor_name_off == 0) goto default_object_name;
-        
-        jsval_t ctor_name_val = resolveprop(js, mkval(T_PROP, ctor_name_off));
-        if (vtype(ctor_name_val) != T_STR) goto default_object_name;
-        
-        jsoff_t ctor_name_len, ctor_name_offset = vstr(js, ctor_name_val, &ctor_name_len);
-        this_name = (const char *)&js->mem[ctor_name_offset];
-        if (this_name && strlen(this_name) > 0) goto skip_constructor_name;
-        
-        default_object_name:
-        this_name = "Object";
-        
-        skip_constructor_name:
-        
-        const char *final_name;
-        if (this_name && func_name) {
-          snprintf(full_func_name, sizeof(full_func_name), "%s.%s", this_name, func_name);
-          final_name = full_func_name;
-        } else if (func_name) {
-          final_name = func_name;
-        } else if (this_name) {
-          snprintf(full_func_name, sizeof(full_func_name), "%s.<anonymous>", this_name);
-          final_name = full_func_name;
-        } else {
-          final_name = "<anonymous>";
+        jsval_t field_val = js_mkundef();
+        if (init_start > 0 && init_end > init_start) {
+          field_val = js_eval_str(js, &source[init_start], init_end - init_start);
+          field_val = resolveprop(js, field_val);
         }
         
-        push_call_frame(
-          js->filename,
-          final_name, 
-          code, pos
-        );
-        
-        jsval_t saved_func = js->current_func;
-        js->current_func = func;
-        js->nogc = (jsoff_t) (fnoff - sizeof(jsoff_t));
-        
-        if (is_arrow || is_bound) {
-          pop_this();
-          push_this(captured_this);
+        jsval_t set_res = setprop(js, target_this, fname, field_val);
+        if (is_err(set_res)) {
+          js->current_func = saved_func;
+          pop_call_frame();
+          return set_res;
         }
-        
-        jsval_t count_val = get_slot(js, func_obj, SLOT_FIELD_COUNT);
-        if (vtype(count_val) != T_NUM || vtype(target_this) != T_OBJ) goto skip_fields;
-        
-        int field_count = (int)tod(count_val);
-        jsval_t src_val = get_slot(js, func_obj, SLOT_SOURCE);
-        jsval_t fields_meta = get_slot(js, func_obj, SLOT_FIELDS);
-        if (vtype(src_val) == T_UNDEF || vtype(fields_meta) == T_UNDEF) goto skip_fields;
-        
-        jsoff_t src_len, src_ptr_off = vstr(js, src_val, &src_len);
-        const char *source = (const char *)(&js->mem[src_ptr_off]);
-        
-        jsoff_t meta_len, meta_ptr_off = vstr(js, fields_meta, &meta_len);
-        const jsoff_t *metadata = (const jsoff_t *)(&js->mem[meta_ptr_off]);
-        
-        for (int i = 0; i < field_count; i++) {
-          jsoff_t name_off = metadata[i * 4 + 0];
-          jsoff_t name_len = metadata[i * 4 + 1];
-          jsoff_t init_start = metadata[i * 4 + 2];
-          jsoff_t init_end = metadata[i * 4 + 3];
-          
-          jsval_t fname = js_mkstr(js, &source[name_off], name_len);
-          if (is_err(fname)) {
-            js->current_func = saved_func;
-            pop_call_frame();
-            return fname;
-          }
-          
-          jsval_t field_val = js_mkundef();
-          if (init_start > 0 && init_end > init_start) {
-            field_val = js_eval_str(js, &source[init_start], init_end - init_start);
-            field_val = resolveprop(js, field_val);
-          }
-          
-          jsval_t set_res = setprop(js, target_this, fname, field_val);
-          if (is_err(set_res)) {
-            js->current_func = saved_func;
-            pop_call_frame();
-            return set_res;
-          }
-        }
+      }
 skip_fields:
         if (is_async) {
           res = start_async_in_coroutine(js, code_str, fnlen, closure_scope, bound_args, bound_argc);
@@ -6467,7 +6467,6 @@ skip_fields:
           res = call_js_internal(js, code_str, fnlen, closure_scope, bound_args, bound_argc, func);
           pop_call_frame();
         }
-        
         js->current_func = saved_func;
       }
     }
