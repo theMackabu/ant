@@ -17,7 +17,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: brew install meson ninja libsodium openssl@3 llvm
+      - run: brew install meson ninja openssl@3 llvm
+      - name: Build libsodium
+        run: |
+          export LLVM_PREFIX=$(brew --prefix llvm)
+          git clone --depth 1 --branch 1.0.20-RELEASE https://github.com/jedisct1/libsodium.git /tmp/libsodium
+          cd /tmp/libsodium
+          ./configure CC=$LLVM_PREFIX/bin/clang --prefix=/usr/local --disable-shared --enable-static
+          make -j$(sysctl -n hw.ncpu)
+          sudo make install
       - name: Build llhttp
         run: |
           export LLVM_PREFIX=$(brew --prefix llvm)
