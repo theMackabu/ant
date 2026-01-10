@@ -9,8 +9,12 @@
 #define ANT_GIT_HASH "unknown"
 #endif
 
-#ifndef ANT_BUILD_DATE
-#define ANT_BUILD_DATE "unknown"
+#ifndef ANT_BUILD_TIMESTAMP
+#define ANT_BUILD_TIMESTAMP 0
+#endif
+
+#ifndef ANT_TARGET_TRIPLE
+#define ANT_TARGET_TRIPLE "unknown"
 #endif
 
 #define SLOTMASK ~(((jsoff_t) ~0) >> 1)

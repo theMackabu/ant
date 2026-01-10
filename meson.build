@@ -112,12 +112,19 @@ else
   git_hash = 'unknown'
 endif
 
-build_date = run_command('date', '+%Y-%m-%d', check: true).stdout().strip()
-
 version_conf = configuration_data()
-version_conf.set('ANT_VERSION', '0.3.4.0')
+
+git_hash = run_command('git', 'rev-parse', '--short', 'HEAD', check: false).stdout().strip()
+timestamp = run_command('date', '+%s', check: true).stdout().strip()
+
+version_conf.set('ANT_VERSION', '0.3.4.' + timestamp + '-g' + git_hash)
+version_conf.set('ANT_BUILD_TIMESTAMP', timestamp)
+
+cmd_cc = meson.get_compiler('c')
+target_triple = run_command(cmd_cc.cmd_array(), '-dumpmachine', check: true).stdout().strip()
+
 version_conf.set('ANT_GIT_HASH', git_hash)
-version_conf.set('ANT_BUILD_DATE', build_date)
+version_conf.set('ANT_TARGET_TRIPLE', target_triple)
 
 config_h = configure_file(
   input: 'include/config.h.in',
@@ -158,7 +165,8 @@ snapshot_h = custom_target(
     '@OUTPUT@',
     'VERSION=' + version_conf.get('ANT_VERSION'),
     'GIT_HASH=' + version_conf.get('ANT_GIT_HASH'),
-    'BUILD_DATE=' + version_conf.get('ANT_BUILD_DATE')
+    'BUILD_TIMESTAMP=' + version_conf.get('ANT_BUILD_TIMESTAMP'),
+    'TARGET=' + version_conf.get('ANT_TARGET_TRIPLE')
   ],
   build_by_default: true
 )

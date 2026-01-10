@@ -73,6 +73,7 @@ interface HttpContext {
 
 interface AntStatic {
   version: string;
+  target: string;
   revision: string;
   buildDate: string;
 

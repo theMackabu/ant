@@ -8,14 +8,10 @@
 #include <argtable3.h>
 
 #include "ant.h"
-#include "utils.h"
-#include "config.h"
-#include "runtime.h"
 #include "repl.h"
-
-#ifndef ANT_SNAPSHOT_GENERATOR
+#include "utils.h"
+#include "runtime.h"
 #include "snapshot.h"
-#endif
 
 #include "modules/builtin.h"
 #include "modules/buffer.h"
@@ -68,10 +64,7 @@ static void eval_code(struct js *js, struct arg_str *eval, struct arg_lit *print
       if (str) printf("%s\n", str);
     } else {
       const char *str = js_str(js, result);
-      if (str && strcmp(str, "undefined") != 0) {
-        print_value_colored(str, stdout);
-        printf("\n");
-      }
+      if (str && strcmp(str, "undefined") != 0) print_value_colored(str, stdout); printf("\n");
     }
   }
   
@@ -171,20 +164,16 @@ int main(int argc, char *argv[]) {
     printf("If no module file is specified, ant starts in REPL mode.\n\n");
     printf("Options:\n");
     arg_print_glossary(stdout, argtable, "  %-25s %s\n");
-    arg_freetable(argtable, sizeof(argtable) / sizeof(argtable[0]));
+    arg_freetable(argtable, ARGTABLE_COUNT);
     return EXIT_SUCCESS;
   }
   
-  if (version->count > 0) {
-    printf("ant %s (%s %s) [release]\n", ANT_VERSION, ANT_BUILD_DATE, ANT_GIT_HASH);
-    arg_freetable(argtable, sizeof(argtable) / sizeof(argtable[0]));
-    return EXIT_SUCCESS;
-  }
+  if (version->count > 0) return ant_version(argtable);
   
   if (nerrors > 0) {
     arg_print_errors(stdout, end, "ant");
     printf("Try 'ant --help' for more information.\n");
-    arg_freetable(argtable, sizeof(argtable) / sizeof(argtable[0]));
+    arg_freetable(argtable, ARGTABLE_COUNT);
     return EXIT_FAILURE;
   }
   
@@ -203,7 +192,7 @@ int main(int argc, char *argv[]) {
   
   if (js == NULL) {
     fprintf(stderr, "Error: Failed to allocate JavaScript runtime\n");
-    arg_freetable(argtable, sizeof(argtable) / sizeof(argtable[0]));
+    arg_freetable(argtable, ARGTABLE_COUNT);
     return EXIT_FAILURE;
   }
   
@@ -240,12 +229,10 @@ int main(int argc, char *argv[]) {
   ant_standard_library("events", events_library);
   ant_standard_library("child_process", child_process_library);
   
-  #ifndef ANT_SNAPSHOT_GENERATOR
-    jsval_t snapshot_result = ant_load_snapshot(js);
-    if (js_type(snapshot_result) == JS_ERR) {
-      fprintf(stderr, "Warning: Failed to load snapshot: %s\n", js_str(js, snapshot_result));
-    }
-  #endif
+  jsval_t snapshot_result = ant_load_snapshot(js);
+  if (js_type(snapshot_result) == JS_ERR) {
+    fprintf(stderr, "Warning: Failed to load snapshot: %s\n", js_str(js, snapshot_result));
+  }
 
   if (eval->count > 0) eval_code(js, eval, print);
   else if (repl_mode) ant_repl_run(); else {
@@ -269,7 +256,7 @@ int main(int argc, char *argv[]) {
   if (dump) js_dump(js);
   
   js_destroy(js);
-  arg_freetable(argtable, sizeof(argtable) / sizeof(argtable[0]));
+  arg_freetable(argtable, ARGTABLE_COUNT);
   
   return js_result;
 }
