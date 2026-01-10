@@ -1,10 +1,11 @@
 name: Build Linux aarch64 [musl]
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-  workflow_dispatch:
+  workflow_call:
+    inputs:
+      build_timestamp:
+        required: true
+        type: string
 
 jobs:
   linux-musl-aarch64:
@@ -47,7 +48,7 @@ jobs:
 
             cd /work
             npm ci --prefix src/tools
-            CC=clang CC_LD=lld meson setup build --prefer-static -Db_lto=true --buildtype=release -Dstatic_link=true && meson compile -C build
+            CC=clang CC_LD=lld meson setup build --prefer-static -Db_lto=true --buildtype=release -Dstatic_link=true -Dbuild_timestamp=${{ inputs.build_timestamp }} && meson compile -C build
             llvm-strip build/ant
           '
       - uses: actions/upload-artifact@v4

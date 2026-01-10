@@ -1,10 +1,11 @@
 name: Build macOS x64
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-  workflow_dispatch:
+  workflow_call:
+    inputs:
+      build_timestamp:
+        required: true
+        type: string
 
 jobs:
   macos-x64:
@@ -35,7 +36,7 @@ jobs:
           export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
           export CMAKE_PREFIX_PATH="/usr/local:$CMAKE_PREFIX_PATH"
           export LLVM_PREFIX=$(brew --prefix llvm)
-          CC=$LLVM_PREFIX/bin/clang AR=$LLVM_PREFIX/bin/llvm-ar RANLIB=$LLVM_PREFIX/bin/llvm-ranlib meson setup build -Db_lto=true --buildtype=release && meson compile -C build
+          CC=$LLVM_PREFIX/bin/clang AR=$LLVM_PREFIX/bin/llvm-ar RANLIB=$LLVM_PREFIX/bin/llvm-ranlib meson setup build -Db_lto=true --buildtype=release -Dbuild_timestamp=${{ inputs.build_timestamp }} && meson compile -C build
       - run: strip build/ant
       - uses: actions/upload-artifact@v4
         with:

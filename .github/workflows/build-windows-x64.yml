@@ -1,10 +1,11 @@
 name: Build Windows x64
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-  workflow_dispatch:
+  workflow_call:
+    inputs:
+      build_timestamp:
+        required: true
+        type: string
 
 jobs:
   windows-x64:
@@ -45,7 +46,7 @@ jobs:
           workspaces: src/strip
       - run: |
           export PATH="/c/Users/$USER/.cargo/bin:$PATH"
-          meson setup build -Dc_std=gnu2x && meson compile -C build
+          meson setup build -Dc_std=gnu2x -Dbuild_timestamp=${{ inputs.build_timestamp }} && meson compile -C build
       - uses: actions/upload-artifact@v4
         with:
           name: ant-windows-x64

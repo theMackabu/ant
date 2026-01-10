@@ -1,1 +1,2 @@
 option('static_link', type: 'boolean', value: false, description: 'statically link the binary')
+option('build_timestamp', type: 'string', value: '', description: 'build timestamp (defaults to current time if empty)')

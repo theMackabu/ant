@@ -1,0 +1,58 @@
+name: Build All Platforms
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      timestamp: ${{ steps.timestamp.outputs.value }}
+    steps:
+      - id: timestamp
+        run: echo "value=$(date +%s)" >> $GITHUB_OUTPUT
+
+  macos-aarch64:
+    needs: prepare
+    uses: ./.github/workflows/build-macos-aarch64.yml
+    with:
+      build_timestamp: ${{ needs.prepare.outputs.timestamp }}
+
+  macos-x64:
+    needs: prepare
+    uses: ./.github/workflows/build-macos-x64.yml
+    with:
+      build_timestamp: ${{ needs.prepare.outputs.timestamp }}
+
+  linux-glibc-x64:
+    needs: prepare
+    uses: ./.github/workflows/build-linux-glibc-x64.yml
+    with:
+      build_timestamp: ${{ needs.prepare.outputs.timestamp }}
+
+  linux-glibc-aarch64:
+    needs: prepare
+    uses: ./.github/workflows/build-linux-glibc-aarch64.yml
+    with:
+      build_timestamp: ${{ needs.prepare.outputs.timestamp }}
+
+  linux-musl-x64:
+    needs: prepare
+    uses: ./.github/workflows/build-linux-musl-x64.yml
+    with:
+      build_timestamp: ${{ needs.prepare.outputs.timestamp }}
+
+  linux-musl-aarch64:
+    needs: prepare
+    uses: ./.github/workflows/build-linux-musl-aarch64.yml
+    with:
+      build_timestamp: ${{ needs.prepare.outputs.timestamp }}
+
+  windows-x64:
+    needs: prepare
+    uses: ./.github/workflows/build-windows-x64.yml
+    with:
+      build_timestamp: ${{ needs.prepare.outputs.timestamp }}

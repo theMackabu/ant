@@ -143,7 +143,12 @@ endif
 version_conf = configuration_data()
 
 git_hash = run_command('git', 'rev-parse', '--short', 'HEAD', check: false).stdout().strip()
-timestamp = run_command('date', '+%s', check: true).stdout().strip()
+timestamp_opt = get_option('build_timestamp')
+if timestamp_opt == ''
+  timestamp = run_command('date', '+%s', check: true).stdout().strip()
+else
+  timestamp = timestamp_opt
+endif
 
 version_conf.set('ANT_VERSION', '0.3.4.' + timestamp + '-g' + git_hash)
 version_conf.set('ANT_BUILD_TIMESTAMP', timestamp)

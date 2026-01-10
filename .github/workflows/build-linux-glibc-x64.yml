@@ -1,10 +1,11 @@
 name: Build Linux x64 [glibc]
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-  workflow_dispatch:
+  workflow_call:
+    inputs:
+      build_timestamp:
+        required: true
+        type: string
 
 jobs:
   linux-x64:
@@ -66,7 +67,7 @@ jobs:
             build/oxc-target
           key: cargo-linux-amd64-${{ hashFiles('src/strip/Cargo.lock') }}
           restore-keys: cargo-linux-amd64-
-      - run: CC=clang-21 CC_LD=lld-21 meson setup build -Db_lto=true --buildtype=release && meson compile -C build
+      - run: CC=clang-21 CC_LD=lld-21 meson setup build -Db_lto=true --buildtype=release -Dbuild_timestamp=${{ inputs.build_timestamp }} && meson compile -C build
       - run: llvm-strip-21 build/ant
       - uses: actions/upload-artifact@v4
         with:
