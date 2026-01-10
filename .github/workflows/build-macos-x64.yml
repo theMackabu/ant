@@ -20,12 +20,9 @@ jobs:
       - name: Build llhttp
         run: |
           export LLVM_PREFIX=$(brew --prefix llvm)
-          export CFLAGS="-Os -flto"
-          export AR=$LLVM_PREFIX/bin/llvm-ar
-          export RANLIB=$LLVM_PREFIX/bin/llvm-ranlib
           git clone --depth 1 --branch release/v9.2.1 https://github.com/nodejs/llhttp.git /tmp/llhttp
           cd /tmp/llhttp
-          CC=$LLVM_PREFIX/bin/clang cmake -B build -DCMAKE_INSTALL_PREFIX=/usr/local -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON -DCMAKE_BUILD_TYPE=MinSizeRel
+          CC=$LLVM_PREFIX/bin/clang cmake -B build -DCMAKE_INSTALL_PREFIX=/usr/local -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON -DCMAKE_BUILD_TYPE=Release
           cmake --build build
           sudo cmake --install build
       - run: npm ci
