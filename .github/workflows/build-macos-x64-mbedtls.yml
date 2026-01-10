@@ -1,0 +1,67 @@
+name: Build macOS x64 [mbedtls]
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      build_timestamp:
+        required: true
+        type: string
+
+jobs:
+  macos-x64-mbedtls:
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: brew install meson ninja llvm
+      - name: Build libsodium
+        run: |
+          export LLVM_PREFIX=$(brew --prefix llvm)
+          git clone --depth 1 --branch 1.0.20-RELEASE https://github.com/jedisct1/libsodium.git /tmp/libsodium
+          cd /tmp/libsodium
+          ./configure CC=$LLVM_PREFIX/bin/clang --prefix=/usr/local --disable-shared --enable-static
+          make -j$(sysctl -n hw.ncpu)
+          sudo make install
+      - name: Build mbedTLS
+        run: |
+          export LLVM_PREFIX=$(brew --prefix llvm)
+          git clone --depth 1 --branch mbedtls-3.6.5 --recurse-submodules https://github.com/Mbed-TLS/mbedtls.git /tmp/mbedtls
+          cd /tmp/mbedtls
+          CC=$LLVM_PREFIX/bin/clang cmake -B build \
+            -DCMAKE_INSTALL_PREFIX=/usr/local \
+            -DENABLE_PROGRAMS=OFF \
+            -DENABLE_TESTING=OFF \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DUSE_STATIC_MBEDTLS_LIBRARY=ON \
+            -DUSE_SHARED_MBEDTLS_LIBRARY=OFF
+          cmake --build build -j$(sysctl -n hw.ncpu)
+          sudo cmake --install build
+      - name: Build llhttp
+        run: |
+          export LLVM_PREFIX=$(brew --prefix llvm)
+          git clone --depth 1 --branch release/v9.2.1 https://github.com/nodejs/llhttp.git /tmp/llhttp
+          cd /tmp/llhttp
+          CC=$LLVM_PREFIX/bin/clang cmake -B build -DCMAKE_INSTALL_PREFIX=/usr/local -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+          sudo cmake --install build
+      - run: npm ci
+        working-directory: src/tools
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/strip
+      - run: |
+          export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
+          export CMAKE_PREFIX_PATH="/usr/local:$CMAKE_PREFIX_PATH"
+          export LLVM_PREFIX=$(brew --prefix llvm)
+          CC=$LLVM_PREFIX/bin/clang AR=$LLVM_PREFIX/bin/llvm-ar RANLIB=$LLVM_PREFIX/bin/llvm-ranlib meson setup build -Db_lto=true --buildtype=release -Dbuild_timestamp=${{ inputs.build_timestamp }} -Dtls_library=mbedtls && meson compile -C build
+      - run: strip build/ant
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ant-darwin-x64-mbedtls
+          path: build/ant

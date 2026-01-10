@@ -24,11 +24,22 @@ sources = files(
   'src/snapshot.c',
 ) + files(module_files)
 
-openssl_dep = dependency('openssl', required: true)
+tls_lib = get_option('tls_library')
+cc = meson.get_compiler('c')
+if tls_lib == 'openssl'
+  openssl_dep = dependency('openssl', required: true)
+  mbedtls_dep = []
+else
+  openssl_dep = dependency('', required: false)
+  mbedtls_dep = [
+    cc.find_library('mbedtls', required: true),
+    cc.find_library('mbedx509', required: true),
+    cc.find_library('mbedcrypto', required: true),
+  ]
+endif
 libsodium_dep = dependency('libsodium', required: true)
 
 if host_machine.system() == 'windows'
-  cc = meson.get_compiler('c')
   uuid_dep = cc.find_library('rpcrt4', required: true)
   secur32_dep = cc.find_library('secur32', required: true)
   ntdll_dep = cc.find_library('ntdll', required: true)
@@ -46,11 +57,18 @@ if host_machine.system() == 'darwin'
   security_dep = dependency('appleframeworks', modules: ['Security', 'CoreFoundation'], required: true)
 endif
 
+libuv_sub = subproject('libuv', default_options: [
+  'build_tests=false', 
+  'build_benchmarks=false'
+])
+libuv_dep = libuv_sub.get_variable('libuv_dep')
+
 tlsuv_opts = cmake.subproject_options()
 bdwgc_opts = cmake.subproject_options()
 
 tlsuv_opts.add_cmake_defines({
-  'BUILD_TESTING': 'OFF'
+  'BUILD_TESTING': 'OFF',
+  'TLSUV_TLSLIB': tls_lib
 })
 
 bdwgc_opts.add_cmake_defines({
@@ -64,7 +82,8 @@ tlsuv_opts.append_compile_args('c', [
   '-Wno-unused-function',
   '-Wno-unused-variable',
   '-Wno-bitwise-op-parentheses',
-  '-Wno-sometimes-uninitialized'
+  '-Wno-sometimes-uninitialized',
+  '-I' + (meson.project_source_root() / 'vendor' / 'libuv-v1.51.0' / 'include')
 ])
 
 bdwgc_gc_args = ['-DGC_NO_THREAD_REDIRECTS', '-DGC_THREADS']
@@ -91,11 +110,6 @@ libffi_dep = subproject('libffi', default_options: [
   'warning_level=0',
   'tests=false'
 ]).get_variable('ffi_dep')
-
-libuv_dep = subproject('libuv', default_options: [
-  'build_tests=false', 
-  'build_benchmarks=false'
-]).get_variable('libuv_dep')
 
 cargo = find_program('cargo', required: true)
 cp = find_program('cp', required: true)
@@ -215,7 +229,7 @@ ant_deps = [
   argtable3_dep, tlsuv_dep, libsodium_dep,
   yyjson_dep, minicoro_dep, uuidv7_dep,
   openssl_dep, zlib_dep, uthash_dep,
-]
+] + mbedtls_dep
 
 if host_machine.system() == 'darwin'
   ant_deps += [security_dep]
