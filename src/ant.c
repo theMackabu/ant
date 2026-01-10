@@ -9,6 +9,7 @@
 #include "runtime.h"
 #include "internal.h"
 
+#include <oxc.h>
 #include <assert.h>
 #include <math.h>
 #include <pcre2.h>
@@ -18883,6 +18884,10 @@ static char *esm_resolve_path(const char *specifier, const char *base_path) {
   
   if ((result = esm_try_resolve(dir, spec, base_ext))) goto cleanup_ext;
   if (strcmp(base_ext, ".js") != 0 && (result = esm_try_resolve(dir, spec, ".js"))) goto cleanup_ext;
+  
+  if ((result = esm_try_resolve(dir, spec, ".ts"))) goto cleanup_ext;
+  if ((result = esm_try_resolve(dir, spec, ".mts"))) goto cleanup_ext;
+  if ((result = esm_try_resolve(dir, spec, ".cts"))) goto cleanup_ext;
   if ((result = esm_try_resolve(dir, spec, ".json"))) goto cleanup_ext;
   
   char idx[PATH_MAX];
@@ -18893,6 +18898,9 @@ static char *esm_resolve_path(const char *specifier, const char *base_path) {
     snprintf(idx, PATH_MAX, "%s/index.js", spec);
     if ((result = esm_try_resolve(dir, idx, ""))) goto cleanup_ext;
   }
+  
+  snprintf(idx, PATH_MAX, "%s/index.ts", spec);
+  if ((result = esm_try_resolve(dir, idx, ""))) goto cleanup_ext;
   
 cleanup_ext:
   free(base_ext);
@@ -19168,6 +19176,19 @@ static jsval_t esm_load_module(struct js *js, esm_module_t *mod) {
   fclose(fp);
   content[size] = '\0';
   
+  char *js_code = content;
+  size_t js_len = size;
+  
+  if (is_typescript_file(mod->resolved_path)) {
+    int result = OXC_strip_types(content, mod->resolved_path, content, size + 1);
+    if (result < 0) {
+      free(content);
+      mod->is_loading = false;
+      return js_mkerr(js, "TypeScript error: strip failed (%d)", result);
+    }
+    js_len = (size_t)result;
+  }
+  
   jsval_t ns = mkobj(js, 0);
   mod->namespace_obj = ns;
   
@@ -19180,8 +19201,7 @@ static jsval_t esm_load_module(struct js *js, esm_module_t *mod) {
   js_set_filename(js, mod->resolved_path);
   mkscope(js);
   
-  jsval_t result = js_eval(js, content, size);
-  
+  jsval_t result = js_eval(js, js_code, js_len);
   free(content);
   
   js->scope = saved_scope;

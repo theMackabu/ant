@@ -8,6 +8,7 @@
 #include <argtable3.h>
 
 #include "ant.h"
+#include "utils.h"
 #include "config.h"
 #include "runtime.h"
 #include "repl.h"
@@ -43,21 +44,7 @@
 #include "modules/navigator.h"
 #include "modules/child_process.h"
 
-
 int js_result = EXIT_SUCCESS;
-
-static int is_typescript_file(const char *filename) {
-  if (filename == NULL) return 0;
-  size_t len = strlen(filename);
-  if (len < 3) return 0;
-  
-  const char *ext = filename + len;
-  while (ext > filename && *(ext - 1) != '.' && *(ext - 1) != '/') ext--;
-  if (ext == filename || *(ext - 1) != '.') return 0;
-  ext--;
-  
-  return (strcmp(ext, ".ts") == 0 || strcmp(ext, ".mts") == 0 || strcmp(ext, ".cts") == 0);
-}
 
 static void eval_code(struct js *js, struct arg_str *eval, struct arg_lit *print) {
   const char *script = eval->sval[0];
