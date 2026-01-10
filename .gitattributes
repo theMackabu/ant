@@ -1,2 +1,2 @@
 # hide all tests
-tests/** linguist-generated=true
+tests/* linguist-generated=true
