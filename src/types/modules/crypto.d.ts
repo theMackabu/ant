@@ -13,3 +13,11 @@ declare module 'crypto' {
   function randomUUID(): string;
   function getRandomValues<T extends ArrayBufferView>(array: T): T;
 }
+
+declare module 'ant:crypto' {
+  export * from 'events';
+}
+
+declare module 'node:crypto' {
+  export * from 'events';
+}

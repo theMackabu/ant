@@ -48,3 +48,11 @@ declare module 'child_process' {
   function spawnSync(command: string, args?: string[], options?: SpawnSyncOptions): SpawnResult;
   function fork(modulePath: string, options?: ForkOptions): ChildProcess & Promise<SpawnResult>;
 }
+
+declare module 'ant:child_process' {
+  export * from 'events';
+}
+
+declare module 'node:child_process' {
+  export * from 'events';
+}

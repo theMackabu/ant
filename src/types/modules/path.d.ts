@@ -21,3 +21,11 @@ declare module 'path' {
   function parse(path: string): ParsedPath;
   function format(pathObject: Partial<ParsedPath>): string;
 }
+
+declare module 'ant:path' {
+  export * from 'path';
+}
+
+declare module 'node:path' {
+  export * from 'path';
+}

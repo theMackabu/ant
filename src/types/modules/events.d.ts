@@ -11,3 +11,11 @@ declare module 'events' {
     eventNames(): string[];
   }
 }
+
+declare module 'ant:events' {
+  export * from 'events';
+}
+
+declare module 'node:events' {
+  export * from 'events';
+}

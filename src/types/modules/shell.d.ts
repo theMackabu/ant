@@ -1,4 +1,4 @@
-declare module 'shell' {
+declare module 'ant:shell' {
   interface ShellResult {
     stdout: string;
     stderr: string;

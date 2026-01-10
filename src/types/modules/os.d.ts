@@ -106,3 +106,11 @@ declare module 'os' {
   function setPriority(priority: number): void;
   function setPriority(pid: number, priority: number): void;
 }
+
+declare module 'ant:os' {
+  export * from 'os';
+}
+
+declare module 'node:os' {
+  export * from 'os';
+}

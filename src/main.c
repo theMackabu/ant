@@ -1,3 +1,4 @@
+#include <oxc.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -42,7 +43,21 @@
 #include "modules/navigator.h"
 #include "modules/child_process.h"
 
+
 int js_result = EXIT_SUCCESS;
+
+static int is_typescript_file(const char *filename) {
+  if (filename == NULL) return 0;
+  size_t len = strlen(filename);
+  if (len < 3) return 0;
+  
+  const char *ext = filename + len;
+  while (ext > filename && *(ext - 1) != '.' && *(ext - 1) != '/') ext--;
+  if (ext == filename || *(ext - 1) != '.') return 0;
+  ext--;
+  
+  return (strcmp(ext, ".ts") == 0 || strcmp(ext, ".mts") == 0 || strcmp(ext, ".cts") == 0);
+}
 
 static void eval_code(struct js *js, struct arg_str *eval, struct arg_lit *print) {
   const char *script = eval->sval[0];
@@ -111,13 +126,26 @@ static int execute_module(struct js *js, const char *filename) {
   if (realpath(filename, abs_path) != NULL) {
     use_path = abs_path;
   } else use_path = filename;
+  
+  char *js_code = buffer;
+  size_t js_len = len;
+  
+  if (is_typescript_file(filename)) {
+    int result = OXC_strip_types(buffer, filename, buffer, len + 1);
+    if (result < 0) {
+      fprintf(stderr, "TypeScript error: strip failed (%d)\n", result);
+      free(buffer);
+      return EXIT_FAILURE;
+    }
+    js_len = (size_t)result;
+  }
 
   js_set_filename(js, use_path);
   js_setup_import_meta(js, use_path);
   js_mkscope(js);
   
-  jsval_t result = js_eval(js, buffer, len);
-  free(buffer);
+  jsval_t result = js_eval(js, js_code, js_len);
+  free(js_code);
   
   if (js_type(result) == JS_ERR) {
     fprintf(stderr, "%s\n", js_str(js, result));

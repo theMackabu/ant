@@ -81,6 +81,25 @@ libuv_dep = subproject('libuv', default_options: [
   'build_benchmarks=false'
 ]).get_variable('libuv_dep')
 
+cargo = find_program('cargo', required: true)
+cp = find_program('cp', required: true)
+strip_include = include_directories('src/strip')
+
+oxc_lib = custom_target(
+  'oxc_strip',
+  output: 'liboxc.a',
+  command: [
+    'sh', '-c',
+    cargo.full_path() + ' build --release ' +
+    '--manifest-path ' + meson.project_source_root() / 'src' / 'strip' / 'Cargo.toml' + ' ' +
+    '--target-dir ' + meson.project_build_root() / 'oxc-target' +
+    ' && ' + cp.full_path() + ' ' + meson.project_build_root() / 'oxc-target' / 'release' / 'liboxc.a' + ' @OUTPUT@'
+  ],
+  build_by_default: true
+)
+
+oxc_dep = declare_dependency(link_with: oxc_lib)
+
 git = find_program('git', required: false)
 if git.found()
   git_commit = run_command(git, 'rev-parse', '--short=10', 'HEAD', check: false)
@@ -96,7 +115,7 @@ endif
 build_date = run_command('date', '+%Y-%m-%d', check: true).stdout().strip()
 
 version_conf = configuration_data()
-version_conf.set('ANT_VERSION', '0.3.3.8')
+version_conf.set('ANT_VERSION', '0.3.3.9')
 version_conf.set('ANT_GIT_HASH', git_hash)
 version_conf.set('ANT_BUILD_DATE', build_date)
 
@@ -146,10 +165,10 @@ snapshot_h = custom_target(
 
 ant_deps = [
   libffi_dep, bdwgc_dep, uuid_dep,
-  llhttp, pcre2_dep, libuv_dep,
+  llhttp, pcre2_dep, libuv_dep, oxc_dep,
   argtable3_dep, tlsuv_dep, libsodium_dep,
   yyjson_dep, minicoro_dep, uuidv7_dep,
-  openssl_dep, zlib_dep, uthash_dep
+  openssl_dep, zlib_dep, uthash_dep,
 ]
 
 if host_machine.system() == 'darwin'
@@ -159,6 +178,6 @@ endif
 executable(
   'ant',
   sources + [snapshot_h],
-  include_directories: [include, build_include],
+  include_directories: [include, build_include, strip_include],
   dependencies: ant_deps
 )

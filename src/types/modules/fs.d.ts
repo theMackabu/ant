@@ -28,3 +28,11 @@ declare module 'fs' {
   function readdir(path: string): Promise<string[]>;
   function readdirSync(path: string): string[];
 }
+
+declare module 'ant:fs' {
+  export * from 'fs';
+}
+
+declare module 'node:fs' {
+  export * from 'fs';
+}

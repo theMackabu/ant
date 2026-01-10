@@ -1,17 +1,20 @@
 import { dlopen, suffix, FFIType } from 'ant:ffi';
 
-let libcName;
+let libcName: string;
 if (process.platform === 'darwin') {
   libcName = `libSystem.${suffix}`;
 } else if (process.platform === 'linux') {
   libcName = `libc.${suffix}`;
 } else if (process.platform === 'win32') {
   libcName = `msvcrt.${suffix}`;
-} else {
-  throw new Error(`Unsupported platform: ${process.platform}`);
+} else throw new Error(`Unsupported platform: ${process.platform}`);
+
+interface libC {
+  putchar(c: number): number;
+  printf(format: string, ...args: unknown[]): number;
 }
 
-const libc = dlopen(libcName);
+const libc = dlopen<libC>(libcName);
 
 libc.define('putchar', {
   args: [FFIType.int],
