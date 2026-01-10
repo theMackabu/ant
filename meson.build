@@ -4,7 +4,7 @@ project('ant', 'c', default_options: [
   'default_library=static',
   'b_lto=true',
   'strip=true'
-], subproject_dir: 'src/wraps')
+], subproject_dir: 'vendor')
 
 cmake = import('cmake')
 include = include_directories('include')
