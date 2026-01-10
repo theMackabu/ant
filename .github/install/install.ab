@@ -1,0 +1,276 @@
+import { replace, starts_with, text_contains } from "std/text"
+import { dir_create, dir_exists, file_append, file_chmod, file_exists } from "std/fs"
+import { bold, echo_error, echo_info, echo_success, env_var_get, is_command, printf, styled } from "std/env"
+
+fun tildify(path: Text): Text {
+  let home = env_var_get("HOME") failed {
+    return path
+  }
+  if starts_with(path, home) {
+    return replace(path, home, "~")
+  }
+  return path
+}
+
+fun get_target(): Text {
+  let platform = trust $uname -ms$
+
+  let target = ""
+
+  if {
+    text_contains(platform, "Darwin") and text_contains(platform, "x86_64"):
+      target = "darwin-x64"
+    text_contains(platform, "Darwin") and text_contains(platform, "arm64"):
+      target = "darwin-aarch64"
+    text_contains(platform, "Linux") and (text_contains(platform, "aarch64") or text_contains(platform, "arm64")):
+      target = "linux-aarch64"
+    text_contains(platform, "MINGW64"):
+      target = "windows-x64"
+    text_contains(platform, "Linux") and text_contains(platform, "riscv64"):
+      echo_error("Not supported on riscv64")
+    else:
+      target = "linux-x64"
+  }
+
+  if starts_with(target, "linux") {
+    if file_exists("/etc/alpine-release") {
+      target = "{target}-musl"
+    }
+  }
+
+  if target == "darwin-x64" {
+    let rosetta = silent $sysctl -n sysctl.proc_translated 2>/dev/null$ failed {
+      ""
+    }
+    if rosetta == "1" {
+      target = "darwin-aarch64"
+      echo_info("Your shell is running in Rosetta 2. Downloading ant for {target} instead")
+    }
+  }
+
+  return target
+}
+
+fun get_shell_config(shell_name: Text, install_env: Text, quoted_install_dir: Text, bin_env: Text): [Text] {
+  if shell_name == "fish" {
+    return [
+      "set --export {install_env} {quoted_install_dir}",
+      "set --export PATH {bin_env} \$PATH"
+    ]
+  }
+  return [
+    "export {install_env}={quoted_install_dir}",
+    "export PATH=\"{bin_env}:\$PATH\""
+  ]
+}
+
+fun configure_shell(shell_name: Text, install_env: Text, quoted_install_dir: Text, bin_env: Text, tilde_bin_dir: Text): Text {
+  let commands = get_shell_config(shell_name, install_env, quoted_install_dir, bin_env)
+  let refresh_command = ""
+  let home = env_var_get("HOME") failed {
+    return ""
+  }
+
+  if {
+    shell_name == "fish": {
+      let fish_config = "{home}/.config/fish/config.fish"
+      let tilde_fish_config = tildify(fish_config)
+
+      if file_exists(fish_config) {
+        let content = "\n# ant\n"
+        for command in commands {
+          content += "{command}\n"
+        }
+        file_append(fish_config, content) failed {
+          echo "Manually add the directory to {tilde_fish_config} (or similar):"
+          for cmd in commands {
+            printf("  %s\n", [bold(cmd)])
+          }
+          return ""
+        }
+        echo_info("Added \"{tilde_bin_dir}\" to \$PATH in \"{tilde_fish_config}\"")
+        refresh_command = "source {tilde_fish_config}"
+      } else {
+        echo "Manually add the directory to {tilde_fish_config} (or similar):"
+        for cmd in commands {
+          printf("  %s\n", [bold(cmd)])
+        }
+      }
+    }
+    shell_name == "zsh": {
+      let zsh_config = "{home}/.zshrc"
+      let tilde_zsh_config = tildify(zsh_config)
+
+      if file_exists(zsh_config) {
+        let content = "\n# ant\n"
+        for command in commands {
+          content += "{command}\n"
+        }
+        file_append(zsh_config, content) failed {
+          echo "Manually add the directory to {tilde_zsh_config} (or similar):"
+          for cmd in commands {
+            printf("  %s\n", [bold(cmd)])
+          }
+          return ""
+        }
+        echo_info("Added \"{tilde_bin_dir}\" to \$PATH in \"{tilde_zsh_config}\"")
+        refresh_command = "exec \$SHELL"
+      } else {
+        echo "Manually add the directory to {tilde_zsh_config} (or similar):"
+        for cmd in commands {
+          printf("  %s\n", [bold(cmd)])
+        }
+      }
+    }
+    shell_name == "bash": {
+      let bash_configs = [
+        "{home}/.bash_profile",
+        "{home}/.bashrc"
+      ]
+
+      let xdg_config = env_var_get("XDG_CONFIG_HOME") failed {
+        ""
+      }
+      if xdg_config != "" {
+        bash_configs += [
+          "{xdg_config}/.bash_profile",
+          "{xdg_config}/.bashrc",
+          "{xdg_config}/bash_profile",
+          "{xdg_config}/bashrc"
+        ]
+      }
+
+      let set_manually = true
+      for bash_config in bash_configs {
+        let tilde_bash_config = tildify(bash_config)
+
+        if file_exists(bash_config) {
+          let content = "\n# ant\n"
+          for command in commands {
+            content += "{command}\n"
+          }
+          file_append(bash_config, content) failed {
+            continue
+          }
+          echo_info("Added \"{tilde_bin_dir}\" to \$PATH in \"{tilde_bash_config}\"")
+          refresh_command = "source {bash_config}"
+          set_manually = false
+          break
+        }
+      }
+
+      if set_manually {
+        echo "Manually add the directory to ~/.bashrc (or similar):"
+        for cmd in commands {
+          printf("  %s\n", [bold(cmd)])
+        }
+      }
+    }
+    else: {
+      echo "Manually add the directory to ~/.bashrc (or similar):"
+      printf("  %s\n", [bold("export {install_env}={quoted_install_dir}")])
+      printf("  %s\n", [bold("export PATH=\"{bin_env}:\$PATH\"")])
+    }
+  }
+
+  return refresh_command
+}
+
+main(args) {
+  if not is_command("curl") {
+    echo_error("curl is required to install ant")
+  }
+
+  if not is_command("unzip") {
+    echo_error("unzip is required to install ant")
+  }
+
+  if len(args) > 2 {
+    echo_error("Too many arguments, only 1 is allowed. This can be a specific tag of ant to install. (e.g. \"ant-v0.1.4\")")
+  }
+
+  let target = get_target()
+
+  let github = env_var_get("GITHUB") failed {
+    "https://github.com"
+  }
+  if github == "" {
+    github = "https://github.com"
+  }
+  let github_repo = "{github}/themackabu/ant"
+
+  let ant_uri = ""
+  if len(args) <= 1 {
+    ant_uri = "{github_repo}/releases/latest/download/ant-{target}.zip"
+  } else {
+    ant_uri = "{github_repo}/releases/download/{args[1]}/ant-{target}.zip"
+  }
+
+  let install_env = "ANT_INSTALL"
+  let bin_env = "\${install_env}/bin"
+
+  let home = env_var_get("HOME") failed {
+    echo_error("HOME environment variable not set")
+    ""
+  }
+  let env_install = env_var_get("ANT_INSTALL") failed {
+    ""
+  }
+  let install_dir = env_install != "" then env_install else "{home}/.ant"
+  let bin_dir = "{install_dir}/bin"
+  let exe = "{bin_dir}/ant"
+
+  if not dir_exists(bin_dir) {
+    dir_create(bin_dir) failed {
+      echo_error("Failed to create install directory \"{bin_dir}\"")
+    }
+  }
+
+  $curl --fail --location --progress-bar --output "{exe}.zip" "{ant_uri}"$ failed {
+    echo_error("Failed to download ant from \"{ant_uri}\"")
+  }
+
+  $unzip -oqd "{bin_dir}" "{exe}.zip"$ failed {
+    echo_error("Failed to extract ant")
+  }
+
+  file_chmod(exe, "755") failed {
+    echo_error("Failed to set permissions on ant executable")
+  }
+
+  $rm "{exe}.zip"$ failed {
+    echo_error("Failed to clean up zip file")
+  }
+
+  printf("\x1b[32mant was installed successfully to \x1b[1;32m%s\x1b[0m\n", [tildify(exe)])
+
+  if is_command("ant") {
+    echo "Run 'ant --help' to get started"
+    trust $exit 0$
+  }
+
+  let tilde_bin_dir = tildify(bin_dir)
+
+  let quoted_install_dir = "\"{install_dir}\""
+  if starts_with(install_dir, home) {
+    quoted_install_dir = replace(quoted_install_dir, home, "\$HOME")
+  }
+
+  echo ""
+
+  let shell_path = env_var_get("SHELL") failed {
+    "/bin/sh"
+  }
+  let shell_name = trust $basename "{shell_path}"$
+  let refresh_command = configure_shell(shell_name, install_env, quoted_install_dir, bin_env, tilde_bin_dir)
+
+  echo ""
+  echo_info("To get started, run:")
+  echo ""
+
+  if refresh_command != "" {
+    printf("  %s\n", [bold(refresh_command)])
+  }
+
+  printf("  %s\n", [bold("ant --help")])
+}

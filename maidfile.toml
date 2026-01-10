@@ -12,6 +12,9 @@ script = ["maid build -q", "./build/ant %{arg.1}"]
 [tasks.spec]
 script = ["maid build -q", "./build/ant examples/spec/%{arg.1}.js"]
 
+[tasks.amber]
+script = "amber build .github/install/install.ab install.sh"
+
 [tasks.save_spec]
 script = ['rm spec.txt', '''
    bash -c 'ant examples/spec/run.js \
