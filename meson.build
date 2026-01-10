@@ -96,7 +96,7 @@ endif
 build_date = run_command('date', '+%Y-%m-%d', check: true).stdout().strip()
 
 version_conf = configuration_data()
-version_conf.set('ANT_VERSION', '0.3.2.43')
+version_conf.set('ANT_VERSION', '0.3.3.6')
 version_conf.set('ANT_GIT_HASH', git_hash)
 version_conf.set('ANT_BUILD_DATE', build_date)
 
@@ -120,21 +120,22 @@ if host_machine.system() == 'linux'
   add_project_link_arguments('-no-pie', language: 'c')
 endif
 
-gen_snapshot = executable(
-  'gen_snapshot',
-  files('src/tools/gen_snapshot.c'),
-  include_directories: [include, build_include],
-  c_args: ['-D ANT_SNAPSHOT_GENERATOR'],
-  native: true
-)
+node = find_program('node', required: true)
+gen_snapshot = files('src/tools/gen_snapshot.js')
+
+core_files = run_command('sh', '-c', 
+  'cd "$MESON_SOURCE_ROOT" && find src/core -name "*.js" ! -name "index.js" | sort',
+  check: true
+).stdout().strip().split()
 
 snapshot_h = custom_target(
   'snapshot',
-  input: 'src/core/index.js',
+  input: ['src/core/index.ts'] + files(core_files),
   output: 'snapshot_data.h',
   command: [
-    gen_snapshot, 
-    '@INPUT@', 
+    node,
+    gen_snapshot,
+    '@INPUT0@', 
     '@OUTPUT@',
     'VERSION=' + version_conf.get('ANT_VERSION'),
     'GIT_HASH=' + version_conf.get('ANT_GIT_HASH'),

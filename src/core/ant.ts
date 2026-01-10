@@ -1,5 +1,3 @@
-snapshot_inline('./events.js');
-
 Ant.version = '{{VERSION}}';
 Ant.revision = '{{GIT_HASH}}';
 Ant.buildDate = '{{BUILD_DATE}}';
@@ -26,7 +24,7 @@ Ant.typeof = function (t) {
     T_PROPREF: 'propref',
     T_SYMBOL: 'symbol',
     T_GENERATOR: 'generator'
-  };
+  } as const;
 
   const names = Object.values(types);
   return value < names.length ? names[value] : '??';

@@ -19,3 +19,8 @@
 
 spec.txt
 todo.txt
+
+node_modules
+bun.lock
+pnpm-lock.yaml
+package-lock.json

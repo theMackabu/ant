@@ -15,7 +15,7 @@ dispatchEvent('userLogin', {
 });
 
 console.log('\nExample 3: Object Events');
-const button = createEventTarget();
+const button = new EventTarget();
 button.name = 'MyButton';
 
 button.addEventListener('click', event => {
@@ -27,10 +27,10 @@ button.dispatchEvent('click');
 button.dispatchEvent('click');
 
 console.log('\nExample 4: Multiple Event Targets');
-const user = createEventTarget();
+const user = new EventTarget();
 user.name = 'Alice';
 
-const socket = createEventTarget();
+const socket = new EventTarget();
 socket.id = 'socket-123';
 
 user.addEventListener('statusChange', event => {
@@ -45,7 +45,7 @@ user.dispatchEvent('statusChange', { status: 'online' });
 socket.dispatchEvent('message', { data: 'Hello!' });
 
 console.log('\nExample 5: Once Listeners');
-const startup = createEventTarget();
+const startup = new EventTarget();
 let initCount = 0;
 
 startup.addEventListener(
@@ -65,7 +65,7 @@ console.log('  Total init calls:', initCount);
 console.log('\nExample 6: Event Emitter Pattern');
 class MyEmitter {
   constructor() {
-    const target = createEventTarget();
+    const target = new EventTarget();
     this.on = target.addEventListener.bind(target);
     this.off = target.removeEventListener.bind(target);
     this.emit = target.dispatchEvent.bind(target);
@@ -82,7 +82,7 @@ emitter.emit('data', { value: 42, type: 'number' });
 emitter.emit('data', { value: 'hello', type: 'string' });
 
 console.log('\nExample 7: Removing Listeners');
-const temp = createEventTarget();
+const temp = new EventTarget();
 
 function handler(event) {
   console.log('  Handler called with:', event.detail);

@@ -635,6 +635,18 @@ jsval_t events_library(struct js *js) {
   return lib;
 }
 
+static jsval_t EventTarget(struct js *js, jsval_t *args, int nargs) {
+  (void)args; (void)nargs;
+  
+  jsval_t obj = js_mkobj(js);
+  js_set(js, obj, "addEventListener", js_mkfun(js_add_event_listener_method));
+  js_set(js, obj, "removeEventListener", js_mkfun(js_remove_event_listener_method));
+  js_set(js, obj, "dispatchEvent", js_mkfun(js_dispatch_event_method));
+  js_set(js, obj, get_toStringTag_sym_key(), js_mkstr(js, "EventTarget", 11));
+  
+  return obj;
+}
+
 void init_events_module() {
   struct js *js = rt->js;
   jsval_t global = js_glob(js);
@@ -643,16 +655,5 @@ void init_events_module() {
   js_set(js, global, "removeEventListener", js_mkfun(js_remove_event_listener));
   js_set(js, global, "dispatchEvent", js_mkfun(js_dispatch_event));
   js_set(js, global, "getEventListeners", js_mkfun(js_get_event_listeners));
-  
-  jsval_t event_target_proto = js_mkobj(js);
-  js_set(js, event_target_proto, "addEventListener", js_mkfun(js_add_event_listener_method));
-  js_set(js, event_target_proto, "removeEventListener", js_mkfun(js_remove_event_listener_method));
-  js_set(js, event_target_proto, "dispatchEvent", js_mkfun(js_dispatch_event_method));
-  js_set(js, event_target_proto, get_toStringTag_sym_key(), js_mkstr(js, "EventTarget", 11));
-  
-  jsval_t event_target = js_mkobj(js);
-  js_setprop_nonconfigurable(js, event_target, "prototype", 9, event_target_proto);
-  js_set(js, global, "EventTarget", event_target);
+  js_set(js, global, "EventTarget", js_mkfun(EventTarget));
 }
-
-
