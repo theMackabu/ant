@@ -10,9 +10,9 @@
 /traces
 /javascript-zoo
 
-/subprojects/*/
-/subprojects/.wraplock
-!/subprojects/packagefiles
+/src/wraps/*/
+/src/wraps/.wraplock
+!/src/wraps/packagefiles
 
 *.todo
 *.trace
