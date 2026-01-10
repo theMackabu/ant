@@ -182,19 +182,12 @@ bold__117_v0() {
     return 0
 }
 
-echo_info__121_v0() {
-    local message=$1
-    array_10=("${message}")
-    printf__114_v0 "\\x1b[1;3;97;44m%s\\x1b[0m
-" array_10[@]
-}
-
 echo_error__124_v0() {
     local message=$1
     local exit_code=$2
-    array_11=("${message}")
+    array_10=("${message}")
     printf__114_v0 "\\x1b[1;3;97;41m%s\\x1b[0m
-" array_11[@]
+" array_10[@]
     if [ "$(( ${exit_code} > 0 ))" != 0 ]; then
         exit "${exit_code}"
     fi
@@ -221,9 +214,9 @@ tildify__134_v0() {
 }
 
 get_target__135_v0() {
-    command_12="$(uname -ms)"
+    command_11="$(uname -ms)"
     __status=$?
-    platform_4="${command_12}"
+    platform_4="${command_11}"
     target_5=""
     text_contains__17_v0 "${platform_4}" "Darwin"
     ret_text_contains17_v0__21_5="${ret_text_contains17_v0}"
@@ -268,15 +261,16 @@ get_target__135_v0() {
         fi
     fi
     if [ "$([ "_${target_5}" != "_darwin-x64" ]; echo $?)" != 0 ]; then
-        command_13="$(sysctl -n sysctl.proc_translated 2>/dev/null >/dev/null 2>&1)"
+        command_12="$(sysctl -n sysctl.proc_translated 2>/dev/null >/dev/null 2>&1)"
         __status=$?
         if [ "${__status}" != 0 ]; then
             :
         fi
-        rosetta_8="${command_13}"
+        rosetta_8="${command_12}"
         if [ "$([ "_${rosetta_8}" != "_1" ]; echo $?)" != 0 ]; then
             target_5="darwin-aarch64"
-            echo_info__121_v0 "Your shell is running in Rosetta 2. Downloading ant for ${target_5} instead"
+            echo -e "\x1b[2mYour shell is running in Rosetta 2. Downloading ant for ${target_5} instead\x1b[0m"
+            __status=$?
         fi
     fi
     ret_get_target135_v0="${target_5}"
@@ -289,10 +283,10 @@ get_shell_config__136_v0() {
     local quoted_install_dir=$3
     local bin_env=$4
     if [ "$([ "_${shell_name}" != "_fish" ]; echo $?)" != 0 ]; then
-        ret_get_shell_config136_v0=("set --export ${install_env} ${quoted_install_dir}" "set --export PATH ${bin_env} \\\$PATH")
+        ret_get_shell_config136_v0=("set --export ${install_env} ${quoted_install_dir}" "set --export PATH ${bin_env} \$PATH")
         return 0
     fi
-    ret_get_shell_config136_v0=("export ${install_env}=${quoted_install_dir}" "export PATH=\"${bin_env}:\\\$PATH\"")
+    ret_get_shell_config136_v0=("export ${install_env}=${quoted_install_dir}" "export PATH=\"${bin_env}:\$PATH\"")
     return 0
 }
 
@@ -332,20 +326,23 @@ configure_shell__137_v0() {
                 echo "Manually add the directory to ${tilde_fish_config_33} (or similar):"
                 for cmd_36 in "${commands_29[@]}"; do
                     bold__117_v0 "${cmd_36}"
-                    ret_bold117_v0__87_22="${ret_bold117_v0}"
-                    echo "  ${ret_bold117_v0__87_22}"
+                    ret_bold117_v0__87_32="${ret_bold117_v0}"
+                    echo -e "  ${ret_bold117_v0__87_32}"
+                    __status=$?
                 done
                 ret_configure_shell137_v0=""
                 return 0
             fi
-            echo_info__121_v0 "Added \"${tilde_bin_dir}\" to \\\$PATH in \"${tilde_fish_config_33}\""
+            echo -e "\x1b[2mAdded \"${tilde_bin_dir}\" to \$PATH in \"${tilde_fish_config_33}\"\x1b[0m"
+            __status=$?
             refresh_command_30="source ${tilde_fish_config_33}"
         else
             echo "Manually add the directory to ${tilde_fish_config_33} (or similar):"
             for cmd_37 in "${commands_29[@]}"; do
                 bold__117_v0 "${cmd_37}"
-                ret_bold117_v0__96_20="${ret_bold117_v0}"
-                echo "  ${ret_bold117_v0__96_20}"
+                ret_bold117_v0__96_30="${ret_bold117_v0}"
+                echo -e "  ${ret_bold117_v0__96_30}"
+                __status=$?
             done
         fi
     elif [ "$([ "_${shell_name}" != "_zsh" ]; echo $?)" != 0 ]; then
@@ -368,20 +365,23 @@ configure_shell__137_v0() {
                 echo "Manually add the directory to ${tilde_zsh_config_39} (or similar):"
                 for cmd_42 in "${commands_29[@]}"; do
                     bold__117_v0 "${cmd_42}"
-                    ret_bold117_v0__112_22="${ret_bold117_v0}"
-                    echo "  ${ret_bold117_v0__112_22}"
+                    ret_bold117_v0__112_32="${ret_bold117_v0}"
+                    echo -e "  ${ret_bold117_v0__112_32}"
+                    __status=$?
                 done
                 ret_configure_shell137_v0=""
                 return 0
             fi
-            echo_info__121_v0 "Added \"${tilde_bin_dir}\" to \\\$PATH in \"${tilde_zsh_config_39}\""
-            refresh_command_30="exec \\\$SHELL"
+            echo -e "\x1b[2mAdded \"${tilde_bin_dir}\" to \$PATH in \"${tilde_zsh_config_39}\"\x1b[0m"
+            __status=$?
+            refresh_command_30="exec \$SHELL"
         else
             echo "Manually add the directory to ${tilde_zsh_config_39} (or similar):"
             for cmd_43 in "${commands_29[@]}"; do
                 bold__117_v0 "${cmd_43}"
-                ret_bold117_v0__121_20="${ret_bold117_v0}"
-                echo "  ${ret_bold117_v0__121_20}"
+                ret_bold117_v0__121_30="${ret_bold117_v0}"
+                echo -e "  ${ret_bold117_v0__121_30}"
+                __status=$?
             done
         fi
     elif [ "$([ "_${shell_name}" != "_bash" ]; echo $?)" != 0 ]; then
@@ -414,7 +414,8 @@ configure_shell__137_v0() {
                 if [ "${__status}" != 0 ]; then
                     continue
                 fi
-                echo_info__121_v0 "Added \"${tilde_bin_dir}\" to \\\$PATH in \"${tilde_bash_config_48}\""
+                echo -e "\x1b[2mAdded \"${tilde_bin_dir}\" to \$PATH in \"${tilde_bash_config_48}\"\x1b[0m"
+                __status=$?
                 refresh_command_30="source ${bash_config_47}"
                 set_manually_46=0
                 break
@@ -424,18 +425,21 @@ configure_shell__137_v0() {
             echo "Manually add the directory to ~/.bashrc (or similar):"
             for cmd_51 in "${commands_29[@]}"; do
                 bold__117_v0 "${cmd_51}"
-                ret_bold117_v0__165_20="${ret_bold117_v0}"
-                echo "  ${ret_bold117_v0__165_20}"
+                ret_bold117_v0__165_30="${ret_bold117_v0}"
+                echo -e "  ${ret_bold117_v0__165_30}"
+                __status=$?
             done
         fi
     else
         echo "Manually add the directory to ~/.bashrc (or similar):"
         bold__117_v0 "export ${install_env}=${quoted_install_dir}"
-        ret_bold117_v0__171_16="${ret_bold117_v0}"
-        echo "  ${ret_bold117_v0__171_16}"
-        bold__117_v0 "export PATH=\"${bin_env}:\\\$PATH\""
-        ret_bold117_v0__172_16="${ret_bold117_v0}"
-        echo "  ${ret_bold117_v0__172_16}"
+        ret_bold117_v0__171_26="${ret_bold117_v0}"
+        echo -e "  ${ret_bold117_v0__171_26}"
+        __status=$?
+        bold__117_v0 "export PATH=\"${bin_env}:\$PATH\""
+        ret_bold117_v0__172_26="${ret_bold117_v0}"
+        echo -e "  ${ret_bold117_v0__172_26}"
+        __status=$?
     fi
     ret_configure_shell137_v0="${refresh_command_30}"
     return 0
@@ -452,8 +456,8 @@ ret_is_command108_v0__184_10="${ret_is_command108_v0}"
 if [ "$(( ! ${ret_is_command108_v0__184_10} ))" != 0 ]; then
     echo_error__124_v0 "unzip is required to install ant" 1
 fi
-__length_19=("${args_3[@]}")
-if [ "$(( ${#__length_19[@]} > 2 ))" != 0 ]; then
+__length_18=("${args_3[@]}")
+if [ "$(( ${#__length_18[@]} > 2 ))" != 0 ]; then
     echo_error__124_v0 "Too many arguments, only 1 is allowed. This can be a specific tag of ant to install. (e.g. \"ant-v0.1.4\")" 1
 fi
 get_target__135_v0 
@@ -469,14 +473,14 @@ if [ "$([ "_${github_10}" != "_" ]; echo $?)" != 0 ]; then
 fi
 github_repo_11="${github_10}/themackabu/ant"
 ant_uri_12=""
-__length_20=("${args_3[@]}")
-if [ "$(( ${#__length_20[@]} <= 1 ))" != 0 ]; then
+__length_19=("${args_3[@]}")
+if [ "$(( ${#__length_19[@]} <= 1 ))" != 0 ]; then
     ant_uri_12="${github_repo_11}/releases/latest/download/ant-${target_9}.zip"
 else
     ant_uri_12="${github_repo_11}/releases/download/${args_3[1]}/ant-${target_9}.zip"
 fi
 install_env_13="ANT_INSTALL"
-bin_env_14="\\\$${install_env_13}/bin"
+bin_env_14="\$${install_env_13}/bin"
 env_var_get__106_v0 "HOME"
 __status=$?
 if [ "${__status}" != 0 ]; then
@@ -523,9 +527,9 @@ if [ "${__status}" != 0 ]; then
 fi
 tildify__134_v0 "${exe_19}"
 ret_tildify134_v0__245_78="${ret_tildify134_v0}"
-array_21=("${ret_tildify134_v0__245_78}")
+array_20=("${ret_tildify134_v0__245_78}")
 printf__114_v0 "\\x1b[32mant was installed successfully to \\x1b[1;32m%s\\x1b[0m
-" array_21[@]
+" array_20[@]
 is_command__108_v0 "ant"
 ret_is_command108_v0__247_6="${ret_is_command108_v0}"
 if [ "${ret_is_command108_v0__247_6}" != 0 ]; then
@@ -539,7 +543,7 @@ quoted_install_dir_26="\"${install_dir_17}\""
 starts_with__23_v0 "${install_dir_17}" "${home_15}"
 ret_starts_with23_v0__255_6="${ret_starts_with23_v0}"
 if [ "${ret_starts_with23_v0__255_6}" != 0 ]; then
-    replace__1_v0 "${quoted_install_dir_26}" "${home_15}" "\\\$HOME"
+    replace__1_v0 "${quoted_install_dir_26}" "${home_15}" "\$HOME"
     quoted_install_dir_26="${ret_replace1_v0}"
 fi
 echo ""
@@ -549,19 +553,22 @@ if [ "${__status}" != 0 ]; then
     :
 fi
 shell_path_27="${ret_env_var_get106_v0}"
-command_22="$(basename "${shell_path_27}")"
+command_21="$(basename "${shell_path_27}")"
 __status=$?
-shell_name_28="${command_22}"
+shell_name_28="${command_21}"
 configure_shell__137_v0 "${shell_name_28}" "${install_env_13}" "${quoted_install_dir_26}" "${bin_env_14}" "${tilde_bin_dir_25}"
 refresh_command_52="${ret_configure_shell137_v0}"
 echo ""
-echo_info__121_v0 "To get started, run:"
+echo -e "\x1b[2mTo get started, run:\x1b[0m"
+__status=$?
 echo ""
 if [ "$([ "_${refresh_command_52}" == "_" ]; echo $?)" != 0 ]; then
     bold__117_v0 "${refresh_command_52}"
-    ret_bold117_v0__272_14="${ret_bold117_v0}"
-    echo "  ${ret_bold117_v0__272_14}"
+    ret_bold117_v0__272_24="${ret_bold117_v0}"
+    echo -e "  ${ret_bold117_v0__272_24}"
+    __status=$?
 fi
 bold__117_v0 "ant --help"
-ret_bold117_v0__275_12="${ret_bold117_v0}"
-echo "  ${ret_bold117_v0__275_12}"
+ret_bold117_v0__275_22="${ret_bold117_v0}"
+echo -e "  ${ret_bold117_v0__275_22}"
+__status=$?

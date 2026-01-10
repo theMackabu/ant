@@ -44,7 +44,7 @@ fun get_target(): Text {
     }
     if rosetta == "1" {
       target = "darwin-aarch64"
-      echo_info("Your shell is running in Rosetta 2. Downloading ant for {target} instead")
+      trust $echo -e "\\x1b[2mYour shell is running in Rosetta 2. Downloading ant for {target} instead\\x1b[0m"$
     }
   }
 
@@ -55,12 +55,12 @@ fun get_shell_config(shell_name: Text, install_env: Text, quoted_install_dir: Te
   if shell_name == "fish" {
     return [
       "set --export {install_env} {quoted_install_dir}",
-      "set --export PATH {bin_env} \$PATH"
+      "set --export PATH {bin_env} $PATH"
     ]
   }
   return [
     "export {install_env}={quoted_install_dir}",
-    "export PATH=\"{bin_env}:\$PATH\""
+    "export PATH=\"{bin_env}:$PATH\""
   ]
 }
 
@@ -84,16 +84,16 @@ fun configure_shell(shell_name: Text, install_env: Text, quoted_install_dir: Tex
         file_append(fish_config, content) failed {
           echo "Manually add the directory to {tilde_fish_config} (or similar):"
           for cmd in commands {
-            echo "  {bold(cmd)}"
+            trust $echo -e "  {bold(cmd)}"$
           }
           return ""
         }
-        echo_info("Added \"{tilde_bin_dir}\" to \$PATH in \"{tilde_fish_config}\"")
+        trust $echo -e "\\x1b[2mAdded \"{tilde_bin_dir}\" to \\\$PATH in \"{tilde_fish_config}\"\\x1b[0m"$
         refresh_command = "source {tilde_fish_config}"
       } else {
         echo "Manually add the directory to {tilde_fish_config} (or similar):"
         for cmd in commands {
-          echo "  {bold(cmd)}"
+          trust $echo -e "  {bold(cmd)}"$
         }
       }
     }
@@ -109,16 +109,16 @@ fun configure_shell(shell_name: Text, install_env: Text, quoted_install_dir: Tex
         file_append(zsh_config, content) failed {
           echo "Manually add the directory to {tilde_zsh_config} (or similar):"
           for cmd in commands {
-            echo "  {bold(cmd)}"
+            trust $echo -e "  {bold(cmd)}"$
           }
           return ""
         }
-        echo_info("Added \"{tilde_bin_dir}\" to \$PATH in \"{tilde_zsh_config}\"")
-        refresh_command = "exec \$SHELL"
+        trust $echo -e "\\x1b[2mAdded \"{tilde_bin_dir}\" to \\\$PATH in \"{tilde_zsh_config}\"\\x1b[0m"$
+        refresh_command = "exec $SHELL"
       } else {
         echo "Manually add the directory to {tilde_zsh_config} (or similar):"
         for cmd in commands {
-          echo "  {bold(cmd)}"
+          trust $echo -e "  {bold(cmd)}"$
         }
       }
     }
@@ -152,7 +152,7 @@ fun configure_shell(shell_name: Text, install_env: Text, quoted_install_dir: Tex
           file_append(bash_config, content) failed {
             continue
           }
-          echo_info("Added \"{tilde_bin_dir}\" to \$PATH in \"{tilde_bash_config}\"")
+          trust $echo -e "\\x1b[2mAdded \"{tilde_bin_dir}\" to \\\$PATH in \"{tilde_bash_config}\"\\x1b[0m"$
           refresh_command = "source {bash_config}"
           set_manually = false
           break
@@ -162,14 +162,14 @@ fun configure_shell(shell_name: Text, install_env: Text, quoted_install_dir: Tex
       if set_manually {
         echo "Manually add the directory to ~/.bashrc (or similar):"
         for cmd in commands {
-          echo "  {bold(cmd)}"
+          trust $echo -e "  {bold(cmd)}"$
         }
       }
     }
     else: {
       echo "Manually add the directory to ~/.bashrc (or similar):"
-      echo "  {bold("export {install_env}={quoted_install_dir}")}"
-      echo "  {bold("export PATH=\"{bin_env}:\$PATH\"")}"
+      trust $echo -e "  {bold("export {install_env}={quoted_install_dir}")}"$
+      trust $echo -e "  {bold("export PATH=\"{bin_env}:$PATH\"")}"$
     }
   }
 
@@ -207,7 +207,7 @@ main(args) {
   }
 
   let install_env = "ANT_INSTALL"
-  let bin_env = "\${install_env}/bin"
+  let bin_env = "${install_env}/bin"
 
   let home = env_var_get("HOME") failed {
     echo_error("HOME environment variable not set")
@@ -253,7 +253,7 @@ main(args) {
 
   let quoted_install_dir = "\"{install_dir}\""
   if starts_with(install_dir, home) {
-    quoted_install_dir = replace(quoted_install_dir, home, "\$HOME")
+    quoted_install_dir = replace(quoted_install_dir, home, "$HOME")
   }
 
   echo ""
@@ -265,12 +265,12 @@ main(args) {
   let refresh_command = configure_shell(shell_name, install_env, quoted_install_dir, bin_env, tilde_bin_dir)
 
   echo ""
-  echo_info("To get started, run:")
+  trust $echo -e "\\x1b[2mTo get started, run:\\x1b[0m"$
   echo ""
 
   if refresh_command != "" {
-    echo "  {bold(refresh_command)}"
+    trust $echo -e "  {bold(refresh_command)}"$
   }
 
-  echo "  {bold("ant --help")}"
+  trust $echo -e "  {bold("ant --help")}"$
 }
