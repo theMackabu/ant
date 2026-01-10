@@ -3,7 +3,6 @@ import { join, extname } from 'ant:path';
 import { createRouter, addRoute, findRoute } from '../rou3';
 
 const router = createRouter();
-
 const validPaths = new Set();
 const invalidPaths = new Set();
 
@@ -24,6 +23,10 @@ const mimeTypes = new Map([
   ['.woff', 'font/woff'],
   ['.woff2', 'font/woff2']
 ]);
+
+type Context = HttpContext & { params: Record<string, string> };
+type Handler = (ctx: Context) => void | Promise<void>;
+declare function addRoute(router: unknown, method: string, path: string, handler: Handler): void;
 
 addRoute(router, 'GET', '/api/version', async c => c.res.json({ version: Ant.version }));
 
@@ -54,7 +57,7 @@ addRoute(router, 'GET', '**', c => {
   }
 });
 
-async function handleRequest(c) {
+async function handleRequest(c: Context) {
   console.log('request:', c.req.method, c.req.uri);
   const result = findRoute(router, c.req.method, c.req.uri);
 

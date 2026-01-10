@@ -2,7 +2,7 @@
   "compilerOptions": {
     "noEmit": true,
     "strict": true,
-    "noUnusedLocals": false,
+    "noImplicitAny": true,
 
     "target": "ES2024",
     "module": "ESNext",

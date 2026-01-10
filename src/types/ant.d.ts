@@ -51,22 +51,24 @@ interface AntRaw {
 }
 
 interface HttpContext {
-  request: {
+  req: {
     method: string;
-    url: string;
-    path: string;
+    uri: string;
     query: string;
     body: string;
-    headers: Record<string, string>;
+    header(name: string): string | undefined;
   };
-  response: {
-    status(code: number): HttpContext['response'];
-    header(name: string, value: string): HttpContext['response'];
-    send(body: string): void;
-    json(data: unknown): void;
+  res: {
+    header(name: string, value: string): void;
+    status(code: number): void;
+    body(body: string, status?: number, contentType?: string): void;
+    html(body: string, status?: number): void;
+    json(data: unknown, status?: number): void;
+    notFound(): void;
     redirect(url: string, status?: number): void;
   };
-  store: Record<string, unknown>;
+  set(key: string, value: unknown): void;
+  get(key: string): unknown;
 }
 
 interface AntStatic {
@@ -81,12 +83,12 @@ interface AntStatic {
   alloc(): AntAllocResult;
   stats(): AntStatsResult;
 
-  signal(signum: number, handler: (signum: number) => void): void;
   sleep(seconds: number): void;
   msleep(milliseconds: number): void;
   usleep(microseconds: number): void;
 
-  serve(port: number, handler?: (ctx: HttpContext) => void | Promise<void>): number;
+  signal(signum: number, handler: (signum: number) => void): void;
+  serve<T extends HttpContext = HttpContext>(port: number, handler?: (ctx: T) => void | Promise<void>): number;
 }
 
 declare const Ant: AntStatic;
