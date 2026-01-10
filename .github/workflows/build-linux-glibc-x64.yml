@@ -22,6 +22,7 @@ jobs:
           curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
           apt-get update
           apt-get install -y clang-21 lld-21 llvm-21 nodejs
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - uses: actions/checkout@v4
         with:
           submodules: recursive
