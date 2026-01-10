@@ -84,7 +84,7 @@ fun configure_shell(shell_name: Text, install_env: Text, quoted_install_dir: Tex
         file_append(fish_config, content) failed {
           echo "Manually add the directory to {tilde_fish_config} (or similar):"
           for cmd in commands {
-            printf("  %s\n", [bold(cmd)])
+            echo "  {bold(cmd)}"
           }
           return ""
         }
@@ -93,7 +93,7 @@ fun configure_shell(shell_name: Text, install_env: Text, quoted_install_dir: Tex
       } else {
         echo "Manually add the directory to {tilde_fish_config} (or similar):"
         for cmd in commands {
-          printf("  %s\n", [bold(cmd)])
+          echo "  {bold(cmd)}"
         }
       }
     }
@@ -109,7 +109,7 @@ fun configure_shell(shell_name: Text, install_env: Text, quoted_install_dir: Tex
         file_append(zsh_config, content) failed {
           echo "Manually add the directory to {tilde_zsh_config} (or similar):"
           for cmd in commands {
-            printf("  %s\n", [bold(cmd)])
+            echo "  {bold(cmd)}"
           }
           return ""
         }
@@ -118,7 +118,7 @@ fun configure_shell(shell_name: Text, install_env: Text, quoted_install_dir: Tex
       } else {
         echo "Manually add the directory to {tilde_zsh_config} (or similar):"
         for cmd in commands {
-          printf("  %s\n", [bold(cmd)])
+          echo "  {bold(cmd)}"
         }
       }
     }
@@ -162,14 +162,14 @@ fun configure_shell(shell_name: Text, install_env: Text, quoted_install_dir: Tex
       if set_manually {
         echo "Manually add the directory to ~/.bashrc (or similar):"
         for cmd in commands {
-          printf("  %s\n", [bold(cmd)])
+          echo "  {bold(cmd)}"
         }
       }
     }
     else: {
       echo "Manually add the directory to ~/.bashrc (or similar):"
-      printf("  %s\n", [bold("export {install_env}={quoted_install_dir}")])
-      printf("  %s\n", [bold("export PATH=\"{bin_env}:\$PATH\"")])
+      echo "  {bold("export {install_env}={quoted_install_dir}")}"
+      echo "  {bold("export PATH=\"{bin_env}:\$PATH\"")}"
     }
   }
 
@@ -269,8 +269,8 @@ main(args) {
   echo ""
 
   if refresh_command != "" {
-    printf("  %s\n", [bold(refresh_command)])
+    echo "  {bold(refresh_command)}"
   }
 
-  printf("  %s\n", [bold("ant --help")])
+  echo "  {bold("ant --help")}"
 }

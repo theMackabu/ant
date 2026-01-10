@@ -332,10 +332,8 @@ configure_shell__137_v0() {
                 echo "Manually add the directory to ${tilde_fish_config_33} (or similar):"
                 for cmd_36 in "${commands_29[@]}"; do
                     bold__117_v0 "${cmd_36}"
-                    ret_bold117_v0__87_31="${ret_bold117_v0}"
-                    array_16=("${ret_bold117_v0__87_31}")
-                    printf__114_v0 "  %s
-" array_16[@]
+                    ret_bold117_v0__87_22="${ret_bold117_v0}"
+                    echo "  ${ret_bold117_v0__87_22}"
                 done
                 ret_configure_shell137_v0=""
                 return 0
@@ -346,10 +344,8 @@ configure_shell__137_v0() {
             echo "Manually add the directory to ${tilde_fish_config_33} (or similar):"
             for cmd_37 in "${commands_29[@]}"; do
                 bold__117_v0 "${cmd_37}"
-                ret_bold117_v0__96_29="${ret_bold117_v0}"
-                array_17=("${ret_bold117_v0__96_29}")
-                printf__114_v0 "  %s
-" array_17[@]
+                ret_bold117_v0__96_20="${ret_bold117_v0}"
+                echo "  ${ret_bold117_v0__96_20}"
             done
         fi
     elif [ "$([ "_${shell_name}" != "_zsh" ]; echo $?)" != 0 ]; then
@@ -372,10 +368,8 @@ configure_shell__137_v0() {
                 echo "Manually add the directory to ${tilde_zsh_config_39} (or similar):"
                 for cmd_42 in "${commands_29[@]}"; do
                     bold__117_v0 "${cmd_42}"
-                    ret_bold117_v0__112_31="${ret_bold117_v0}"
-                    array_18=("${ret_bold117_v0__112_31}")
-                    printf__114_v0 "  %s
-" array_18[@]
+                    ret_bold117_v0__112_22="${ret_bold117_v0}"
+                    echo "  ${ret_bold117_v0__112_22}"
                 done
                 ret_configure_shell137_v0=""
                 return 0
@@ -386,10 +380,8 @@ configure_shell__137_v0() {
             echo "Manually add the directory to ${tilde_zsh_config_39} (or similar):"
             for cmd_43 in "${commands_29[@]}"; do
                 bold__117_v0 "${cmd_43}"
-                ret_bold117_v0__121_29="${ret_bold117_v0}"
-                array_19=("${ret_bold117_v0__121_29}")
-                printf__114_v0 "  %s
-" array_19[@]
+                ret_bold117_v0__121_20="${ret_bold117_v0}"
+                echo "  ${ret_bold117_v0__121_20}"
             done
         fi
     elif [ "$([ "_${shell_name}" != "_bash" ]; echo $?)" != 0 ]; then
@@ -432,24 +424,18 @@ configure_shell__137_v0() {
             echo "Manually add the directory to ~/.bashrc (or similar):"
             for cmd_51 in "${commands_29[@]}"; do
                 bold__117_v0 "${cmd_51}"
-                ret_bold117_v0__165_29="${ret_bold117_v0}"
-                array_22=("${ret_bold117_v0__165_29}")
-                printf__114_v0 "  %s
-" array_22[@]
+                ret_bold117_v0__165_20="${ret_bold117_v0}"
+                echo "  ${ret_bold117_v0__165_20}"
             done
         fi
     else
         echo "Manually add the directory to ~/.bashrc (or similar):"
         bold__117_v0 "export ${install_env}=${quoted_install_dir}"
-        ret_bold117_v0__171_25="${ret_bold117_v0}"
-        array_23=("${ret_bold117_v0__171_25}")
-        printf__114_v0 "  %s
-" array_23[@]
+        ret_bold117_v0__171_16="${ret_bold117_v0}"
+        echo "  ${ret_bold117_v0__171_16}"
         bold__117_v0 "export PATH=\"${bin_env}:\\\$PATH\""
-        ret_bold117_v0__172_25="${ret_bold117_v0}"
-        array_24=("${ret_bold117_v0__172_25}")
-        printf__114_v0 "  %s
-" array_24[@]
+        ret_bold117_v0__172_16="${ret_bold117_v0}"
+        echo "  ${ret_bold117_v0__172_16}"
     fi
     ret_configure_shell137_v0="${refresh_command_30}"
     return 0
@@ -466,8 +452,8 @@ ret_is_command108_v0__184_10="${ret_is_command108_v0}"
 if [ "$(( ! ${ret_is_command108_v0__184_10} ))" != 0 ]; then
     echo_error__124_v0 "unzip is required to install ant" 1
 fi
-__length_26=("${args_3[@]}")
-if [ "$(( ${#__length_26[@]} > 2 ))" != 0 ]; then
+__length_19=("${args_3[@]}")
+if [ "$(( ${#__length_19[@]} > 2 ))" != 0 ]; then
     echo_error__124_v0 "Too many arguments, only 1 is allowed. This can be a specific tag of ant to install. (e.g. \"ant-v0.1.4\")" 1
 fi
 get_target__135_v0 
@@ -483,8 +469,8 @@ if [ "$([ "_${github_10}" != "_" ]; echo $?)" != 0 ]; then
 fi
 github_repo_11="${github_10}/themackabu/ant"
 ant_uri_12=""
-__length_27=("${args_3[@]}")
-if [ "$(( ${#__length_27[@]} <= 1 ))" != 0 ]; then
+__length_20=("${args_3[@]}")
+if [ "$(( ${#__length_20[@]} <= 1 ))" != 0 ]; then
     ant_uri_12="${github_repo_11}/releases/latest/download/ant-${target_9}.zip"
 else
     ant_uri_12="${github_repo_11}/releases/download/${args_3[1]}/ant-${target_9}.zip"
@@ -537,9 +523,9 @@ if [ "${__status}" != 0 ]; then
 fi
 tildify__134_v0 "${exe_19}"
 ret_tildify134_v0__245_78="${ret_tildify134_v0}"
-array_28=("${ret_tildify134_v0__245_78}")
+array_21=("${ret_tildify134_v0__245_78}")
 printf__114_v0 "\\x1b[32mant was installed successfully to \\x1b[1;32m%s\\x1b[0m
-" array_28[@]
+" array_21[@]
 is_command__108_v0 "ant"
 ret_is_command108_v0__247_6="${ret_is_command108_v0}"
 if [ "${ret_is_command108_v0__247_6}" != 0 ]; then
@@ -563,9 +549,9 @@ if [ "${__status}" != 0 ]; then
     :
 fi
 shell_path_27="${ret_env_var_get106_v0}"
-command_29="$(basename "${shell_path_27}")"
+command_22="$(basename "${shell_path_27}")"
 __status=$?
-shell_name_28="${command_29}"
+shell_name_28="${command_22}"
 configure_shell__137_v0 "${shell_name_28}" "${install_env_13}" "${quoted_install_dir_26}" "${bin_env_14}" "${tilde_bin_dir_25}"
 refresh_command_52="${ret_configure_shell137_v0}"
 echo ""
@@ -573,13 +559,9 @@ echo_info__121_v0 "To get started, run:"
 echo ""
 if [ "$([ "_${refresh_command_52}" == "_" ]; echo $?)" != 0 ]; then
     bold__117_v0 "${refresh_command_52}"
-    ret_bold117_v0__272_23="${ret_bold117_v0}"
-    array_30=("${ret_bold117_v0__272_23}")
-    printf__114_v0 "  %s
-" array_30[@]
+    ret_bold117_v0__272_14="${ret_bold117_v0}"
+    echo "  ${ret_bold117_v0__272_14}"
 fi
 bold__117_v0 "ant --help"
-ret_bold117_v0__275_21="${ret_bold117_v0}"
-array_31=("${ret_bold117_v0__275_21}")
-printf__114_v0 "  %s
-" array_31[@]
+ret_bold117_v0__275_12="${ret_bold117_v0}"
+echo "  ${ret_bold117_v0__275_12}"
