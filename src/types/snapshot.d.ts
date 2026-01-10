@@ -1,2 +1,3 @@
-declare function snapshot_inline(path: string): void;
-declare function snapshot_include(path: string): unknown;
+interface ImportMeta {
+  readonly env: { [key: string]: string };
+}

@@ -1,8 +1,13 @@
 {
   "compilerOptions": {
-    "lib": ["dom", "ES2017"],
-    "typeRoots": ["./node_modules/@types"]
-  },
+    "noEmit": true,
+    "strict": true,
 
-  "include": ["src/types/*.d.ts", "src/core/**/*"]
+    "target": "ES2024",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "typeRoots": ["./node_modules/@types", "./src/types"]
+  },
+  "include": ["src/types/**/*.d.ts", "src/core/**/*"]
 }

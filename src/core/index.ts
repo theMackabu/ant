@@ -1,1 +1,1 @@
-snapshot_inline('./ant.ts');
+import './ant.ts';

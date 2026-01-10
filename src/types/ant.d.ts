@@ -68,6 +68,3 @@ interface AntStatic {
 }
 
 declare const Ant: AntStatic;
-
-export = Ant;
-export as namespace Ant;
