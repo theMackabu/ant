@@ -1,9 +1,10 @@
+#include <compat.h> // IWYU pragma: keep
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
 #include <ctype.h>
-#include <libgen.h>
 #include <uv.h>
 
 #include "runtime.h"

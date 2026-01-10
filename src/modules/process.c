@@ -1,7 +1,8 @@
+#include <compat.h> // IWYU pragma: keep
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <unistd.h>
 
 #include "ant.h"
 #include "runtime.h"

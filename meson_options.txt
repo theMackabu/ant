@@ -1,0 +1,1 @@
+option('static_link', type: 'boolean', value: false, description: 'statically link the binary')

@@ -1,0 +1,56 @@
+name: Build Linux aarch64 [musl]
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux-musl-aarch64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Build in Alpine container
+        run: |
+          docker run --rm -v "$PWD":/work -w /work alpine:edge sh -c '
+            apk add --no-cache git clang lld llvm meson ninja cmake pkgconf curl npm nodejs \
+              musl-dev openssl-dev openssl-libs-static libsodium-dev libsodium-static \
+              util-linux-dev util-linux-static linux-headers libunwind-dev libunwind-static rust cargo
+
+            git config --global --add safe.directory /work
+
+            export CFLAGS="-Os -flto"
+            export AR=llvm-ar
+            export RANLIB=llvm-ranlib
+
+            git clone --depth 1 --branch release/v9.2.1 https://github.com/nodejs/llhttp.git /tmp/llhttp
+            cd /tmp/llhttp
+            CC=clang cmake -G Ninja -B build -DCMAKE_INSTALL_PREFIX=/usr/local -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON -DCMAKE_BUILD_TYPE=MinSizeRel
+            cmake --build build
+            cmake --install build
+
+            git clone --depth 1 --branch v1.51.0 https://github.com/libuv/libuv.git /tmp/libuv
+            cd /tmp/libuv
+            CC=clang cmake -G Ninja -B build -DCMAKE_INSTALL_PREFIX=/usr/local -DBUILD_TESTING=OFF -DLIBUV_BUILD_SHARED=OFF -DCMAKE_BUILD_TYPE=MinSizeRel
+            cmake --build build
+            cmake --install build
+
+            git clone --depth 1 --branch v1.3.1 https://github.com/madler/zlib.git /tmp/zlib
+            cd /tmp/zlib
+            CC=clang cmake -G Ninja -B build -DCMAKE_INSTALL_PREFIX=/usr/local -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=MinSizeRel
+            cmake --build build
+            cmake --install build
+            rm -f /usr/local/lib/libz.so*
+
+            cd /work
+            npm ci --prefix src/tools
+            CC=clang CC_LD=lld meson setup build --prefer-static -Db_lto=true --buildtype=release -Dstatic_link=true && meson compile -C build
+            llvm-strip build/ant
+          '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ant-linux-aarch64-musl
+          path: build/ant

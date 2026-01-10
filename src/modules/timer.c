@@ -1,9 +1,14 @@
+#include <compat.h> // IWYU pragma: keep
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/time.h>
 #include <time.h>
-#include <unistd.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <sys/time.h>
+#endif
 
 #include "runtime.h"
 #include "modules/timer.h"
@@ -42,9 +47,16 @@ static struct {
 } timer_state = {NULL, NULL, NULL, NULL, NULL, NULL, 1, 1};
 
 static uint64_t get_current_time_ms(void) {
+#ifdef _WIN32
+  LARGE_INTEGER freq, count;
+  QueryPerformanceFrequency(&freq);
+  QueryPerformanceCounter(&count);
+  return (uint64_t)(count.QuadPart * 1000 / freq.QuadPart);
+#else
   struct timeval tv;
   gettimeofday(&tv, NULL);
   return (uint64_t)tv.tv_sec * 1000 + (uint64_t)tv.tv_usec / 1000;
+#endif
 }
 
 // setTimeout(callback, delay)

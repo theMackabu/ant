@@ -1,3 +1,5 @@
+#include <compat.h> // IWYU pragma: keep
+
 #include <uv.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -6,8 +8,8 @@
 #include <fcntl.h>
 #include <uthash.h>
 #include <utarray.h>
-#include <unistd.h>
 #include <errno.h>
+
 #include "modules/fs.h"
 #include "modules/symbol.h"
 #include "ant.h"

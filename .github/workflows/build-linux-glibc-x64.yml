@@ -1,0 +1,73 @@
+name: Build Linux x64 [glibc]
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux-x64:
+    runs-on: ubuntu-24.04
+    container: ubuntu:22.04
+    steps:
+      - name: Install git and clang-21
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install -y git ca-certificates gnupg wget software-properties-common curl
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+          echo "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-21 main" > /etc/apt/sources.list.d/llvm.list
+          curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+          apt-get update
+          apt-get install -y clang-21 lld-21 llvm-21 nodejs
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get install -y python3-pip ninja-build cmake pkg-config \
+            uuid-dev libssl-dev libsodium-dev
+          pip3 install meson
+      - name: Build llhttp
+        run: |
+          export CFLAGS="-Os -flto"
+          export AR=llvm-ar-21
+          export RANLIB=llvm-ranlib-21
+          git clone --depth 1 --branch release/v9.2.1 https://github.com/nodejs/llhttp.git /tmp/llhttp
+          cd /tmp/llhttp
+          CC=clang-21 CXX=clang++-21 cmake -B build -DCMAKE_INSTALL_PREFIX=/usr/local -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON -DCMAKE_BUILD_TYPE=MinSizeRel
+          cmake --build build
+          cmake --install build
+      - name: Build libuv
+        run: |
+          export CFLAGS="-Os -flto"
+          export AR=llvm-ar-21
+          export RANLIB=llvm-ranlib-21
+          git clone --depth 1 --branch v1.51.0 https://github.com/libuv/libuv.git /tmp/libuv
+          cd /tmp/libuv
+          CC=clang-21 cmake -B build -DCMAKE_INSTALL_PREFIX=/usr/local -DBUILD_TESTING=OFF -DLIBUV_BUILD_SHARED=OFF -DCMAKE_BUILD_TYPE=MinSizeRel
+          cmake --build build
+          cmake --install build
+      - run: npm ci
+        working-directory: src/tools
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            build/oxc-target
+          key: cargo-linux-amd64-${{ hashFiles('src/strip/Cargo.lock') }}
+          restore-keys: cargo-linux-amd64-
+      - run: CC=clang-21 CC_LD=lld-21 meson setup build -Db_lto=true --buildtype=release && meson compile -C build
+      - run: llvm-strip-21 build/ant
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ant-linux-x64
+          path: build/ant

@@ -1,3 +1,5 @@
+#include <compat.h> // IWYU pragma: keep
+
 #include <uv.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -5,7 +7,6 @@
 #include <tlsuv/tlsuv.h>
 #include <tlsuv/http.h>
 #include <utarray.h>
-#include <unistd.h>
 
 #include "config.h"
 #include "runtime.h"

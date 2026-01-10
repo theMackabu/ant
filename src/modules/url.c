@@ -1,3 +1,5 @@
+#include <compat.h> // IWYU pragma: keep
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>

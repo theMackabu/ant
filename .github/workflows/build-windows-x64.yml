@@ -1,0 +1,52 @@
+name: Build Windows x64
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows-x64:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: >-
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-meson
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-openssl
+            mingw-w64-x86_64-libsodium
+            mingw-w64-x86_64-nodejs
+            git
+      - name: Build llhttp
+        run: |
+          git clone --depth 1 --branch release/v9.2.1 https://github.com/nodejs/llhttp.git /tmp/llhttp
+          cd /tmp/llhttp
+          cmake -G "MinGW Makefiles" -B build -DCMAKE_INSTALL_PREFIX=$MINGW_PREFIX -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON
+          cmake --build build
+          cmake --install build
+      - run: npm ci
+        working-directory: src/tools
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/strip
+      - run: |
+          export PATH="/c/Users/$USER/.cargo/bin:$PATH"
+          meson setup build -Dc_std=gnu2x && meson compile -C build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ant-windows-x64
+          path: build/ant.exe

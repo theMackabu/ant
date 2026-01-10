@@ -1,8 +1,19 @@
+#include <compat.h> // IWYU pragma: keep
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include <errno.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <iphlpapi.h>
+#include <lmcons.h>
+#pragma comment(lib, "iphlpapi.lib")
+#pragma comment(lib, "ws2_32.lib")
+#else
 #include <sys/resource.h>
 #include <sys/utsname.h>
 #include <pwd.h>
@@ -11,19 +22,15 @@
 #include <net/if.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
-
 #ifdef __APPLE__
 #include <net/if_dl.h>
-#elif defined(__linux__)
-#include <netpacket/packet.h>
-#endif
-
-#ifdef __APPLE__
 #include <sys/sysctl.h>
 #include <mach/mach.h>
 #include <mach/mach_host.h>
 #elif defined(__linux__)
+#include <netpacket/packet.h>
 #include <sys/sysinfo.h>
+#endif
 #endif
 
 #include "ant.h"
@@ -98,39 +105,77 @@ static jsval_t os_type(struct js *js, jsval_t *args, int nargs) {
 #elif defined(__OpenBSD__)
   return js_mkstr(js, "OpenBSD", 7);
 #else
-  struct utsname info;
-  if (uname(&info) == 0) {
-    return js_mkstr(js, info.sysname, strlen(info.sysname));
-  }
   return js_mkstr(js, "Unknown", 7);
 #endif
 }
 
 static jsval_t os_release(struct js *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
+#ifdef _WIN32
+  OSVERSIONINFOA osvi;
+  ZeroMemory(&osvi, sizeof(OSVERSIONINFOA));
+  osvi.dwOSVersionInfoSize = sizeof(OSVERSIONINFOA);
+  #pragma GCC diagnostic push
+  #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+  if (GetVersionExA(&osvi)) {
+  #pragma GCC diagnostic pop
+    char release[64];
+    snprintf(release, sizeof(release), "%lu.%lu.%lu", osvi.dwMajorVersion, osvi.dwMinorVersion, osvi.dwBuildNumber);
+    return js_mkstr(js, release, strlen(release));
+  }
+  return js_mkstr(js, "", 0);
+#else
   struct utsname info;
   if (uname(&info) == 0) {
     return js_mkstr(js, info.release, strlen(info.release));
   }
   return js_mkstr(js, "", 0);
+#endif
 }
 
 static jsval_t os_version(struct js *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
+#ifdef _WIN32
+  OSVERSIONINFOA osvi;
+  ZeroMemory(&osvi, sizeof(OSVERSIONINFOA));
+  osvi.dwOSVersionInfoSize = sizeof(OSVERSIONINFOA);
+  #pragma GCC diagnostic push
+  #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+  if (GetVersionExA(&osvi)) {
+  #pragma GCC diagnostic pop
+    char version[256];
+    snprintf(version, sizeof(version), "Windows %lu.%lu", osvi.dwMajorVersion, osvi.dwMinorVersion);
+    return js_mkstr(js, version, strlen(version));
+  }
+  return js_mkstr(js, "", 0);
+#else
   struct utsname info;
   if (uname(&info) == 0) {
     return js_mkstr(js, info.version, strlen(info.version));
   }
   return js_mkstr(js, "", 0);
+#endif
 }
 
 static jsval_t os_machine(struct js *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
+#ifdef _WIN32
+  SYSTEM_INFO sysinfo;
+  GetSystemInfo(&sysinfo);
+  switch (sysinfo.wProcessorArchitecture) {
+    case PROCESSOR_ARCHITECTURE_AMD64: return js_mkstr(js, "x86_64", 6);
+    case PROCESSOR_ARCHITECTURE_ARM64: return js_mkstr(js, "aarch64", 7);
+    case PROCESSOR_ARCHITECTURE_INTEL: return js_mkstr(js, "i686", 4);
+    case PROCESSOR_ARCHITECTURE_ARM: return js_mkstr(js, "arm", 3);
+    default: return js_mkstr(js, "unknown", 7);
+  }
+#else
   struct utsname info;
   if (uname(&info) == 0) {
     return js_mkstr(js, info.machine, strlen(info.machine));
   }
   return js_mkstr(js, "", 0);
+#endif
 }
 
 static jsval_t os_hostname(struct js *js, jsval_t *args, int nargs) {
@@ -144,6 +189,20 @@ static jsval_t os_hostname(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t os_homedir(struct js *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
+#ifdef _WIN32
+  const char *userprofile = getenv("USERPROFILE");
+  if (userprofile) {
+    return js_mkstr(js, userprofile, strlen(userprofile));
+  }
+  const char *homedrive = getenv("HOMEDRIVE");
+  const char *homepath = getenv("HOMEPATH");
+  if (homedrive && homepath) {
+    static char home[MAX_PATH];
+    snprintf(home, sizeof(home), "%s%s", homedrive, homepath);
+    return js_mkstr(js, home, strlen(home));
+  }
+  return js_mkstr(js, "", 0);
+#else
   const char *home = getenv("HOME");
   if (home) {
     return js_mkstr(js, home, strlen(home));
@@ -153,6 +212,7 @@ static jsval_t os_homedir(struct js *js, jsval_t *args, int nargs) {
     return js_mkstr(js, pw->pw_dir, strlen(pw->pw_dir));
   }
   return js_mkstr(js, "", 0);
+#endif
 }
 
 static jsval_t os_tmpdir(struct js *js, jsval_t *args, int nargs) {
@@ -175,7 +235,9 @@ static jsval_t os_endianness(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t os_uptime(struct js *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
-#ifdef __APPLE__
+#ifdef _WIN32
+  return js_mknum((double)GetTickCount64() / 1000.0);
+#elif defined(__APPLE__)
   struct timeval boottime;
   size_t len = sizeof(boottime);
   int mib[2] = { CTL_KERN, KERN_BOOTTIME };
@@ -197,7 +259,14 @@ static jsval_t os_uptime(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t os_totalmem(struct js *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
-#ifdef __APPLE__
+#ifdef _WIN32
+  MEMORYSTATUSEX memInfo;
+  memInfo.dwLength = sizeof(MEMORYSTATUSEX);
+  if (GlobalMemoryStatusEx(&memInfo)) {
+    return js_mknum((double)memInfo.ullTotalPhys);
+  }
+  return js_mknum(0);
+#elif defined(__APPLE__)
   int64_t memsize;
   size_t len = sizeof(memsize);
   if (sysctlbyname("hw.memsize", &memsize, &len, NULL, 0) == 0) {
@@ -217,7 +286,14 @@ static jsval_t os_totalmem(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t os_freemem(struct js *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
-#ifdef __APPLE__
+#ifdef _WIN32
+  MEMORYSTATUSEX memInfo;
+  memInfo.dwLength = sizeof(MEMORYSTATUSEX);
+  if (GlobalMemoryStatusEx(&memInfo)) {
+    return js_mknum((double)memInfo.ullAvailPhys);
+  }
+  return js_mknum(0);
+#elif defined(__APPLE__)
   vm_size_t page_size;
   mach_port_t mach_port = mach_host_self();
   vm_statistics64_data_t vm_stats;
@@ -241,7 +317,11 @@ static jsval_t os_freemem(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t os_availableParallelism(struct js *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
-#ifdef __APPLE__
+#ifdef _WIN32
+  SYSTEM_INFO sysinfo;
+  GetSystemInfo(&sysinfo);
+  return js_mknum((double)sysinfo.dwNumberOfProcessors);
+#elif defined(__APPLE__)
   int count;
   size_t size = sizeof(count);
   if (sysctlbyname("hw.ncpu", &count, &size, NULL, 0) == 0) {
@@ -412,6 +492,124 @@ static jsval_t os_loadavg(struct js *js, jsval_t *args, int nargs) {
   return arr;
 }
 
+#ifdef _WIN32
+
+static jsval_t os_networkInterfaces(struct js *js, jsval_t *args, int nargs) {
+  (void)args; (void)nargs;
+  jsval_t result = js_mkobj(js);
+  
+  ULONG bufLen = 15000;
+  PIP_ADAPTER_ADDRESSES pAddresses = NULL;
+  PIP_ADAPTER_ADDRESSES pCurrAddresses = NULL;
+  PIP_ADAPTER_UNICAST_ADDRESS pUnicast = NULL;
+  
+  pAddresses = (IP_ADAPTER_ADDRESSES *)malloc(bufLen);
+  if (!pAddresses) return result;
+  
+  ULONG ret = GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_INCLUDE_PREFIX, NULL, pAddresses, &bufLen);
+  if (ret == ERROR_BUFFER_OVERFLOW) {
+    free(pAddresses);
+    pAddresses = (IP_ADAPTER_ADDRESSES *)malloc(bufLen);
+    if (!pAddresses) return result;
+    ret = GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_INCLUDE_PREFIX, NULL, pAddresses, &bufLen);
+  }
+  
+  if (ret != NO_ERROR) {
+    free(pAddresses);
+    return result;
+  }
+  
+  for (pCurrAddresses = pAddresses; pCurrAddresses; pCurrAddresses = pCurrAddresses->Next) {
+    jsval_t iface_arr = js_get(js, result, pCurrAddresses->AdapterName);
+    if (js_type(iface_arr) != JS_OBJ) {
+      iface_arr = js_mkarr(js);
+      js_set(js, result, pCurrAddresses->AdapterName, iface_arr);
+    }
+    
+    char mac_str[18] = "00:00:00:00:00:00";
+    if (pCurrAddresses->PhysicalAddressLength == 6) {
+      snprintf(mac_str, sizeof(mac_str), "%02x:%02x:%02x:%02x:%02x:%02x",
+        pCurrAddresses->PhysicalAddress[0], pCurrAddresses->PhysicalAddress[1],
+        pCurrAddresses->PhysicalAddress[2], pCurrAddresses->PhysicalAddress[3],
+        pCurrAddresses->PhysicalAddress[4], pCurrAddresses->PhysicalAddress[5]);
+    }
+    
+    bool internal = (pCurrAddresses->IfType == IF_TYPE_SOFTWARE_LOOPBACK);
+    
+    for (pUnicast = pCurrAddresses->FirstUnicastAddress; pUnicast; pUnicast = pUnicast->Next) {
+      jsval_t entry = js_mkobj(js);
+      js_set(js, entry, "mac", js_mkstr(js, mac_str, strlen(mac_str)));
+      js_set(js, entry, "internal", internal ? js_mktrue() : js_mkfalse());
+      
+      char addr_str[INET6_ADDRSTRLEN] = "";
+      struct sockaddr *sa = pUnicast->Address.lpSockaddr;
+      
+      if (sa->sa_family == AF_INET) {
+        struct sockaddr_in *sa4 = (struct sockaddr_in *)sa;
+        inet_ntop(AF_INET, &sa4->sin_addr, addr_str, sizeof(addr_str));
+        js_set(js, entry, "address", js_mkstr(js, addr_str, strlen(addr_str)));
+        js_set(js, entry, "family", js_mkstr(js, "IPv4", 4));
+        js_set(js, entry, "netmask", js_mkstr(js, "", 0));
+        js_set(js, entry, "cidr", js_mkstr(js, addr_str, strlen(addr_str)));
+      } else if (sa->sa_family == AF_INET6) {
+        struct sockaddr_in6 *sa6 = (struct sockaddr_in6 *)sa;
+        inet_ntop(AF_INET6, &sa6->sin6_addr, addr_str, sizeof(addr_str));
+        js_set(js, entry, "address", js_mkstr(js, addr_str, strlen(addr_str)));
+        js_set(js, entry, "family", js_mkstr(js, "IPv6", 4));
+        js_set(js, entry, "netmask", js_mkstr(js, "", 0));
+        js_set(js, entry, "scopeid", js_mknum((double)sa6->sin6_scope_id));
+        js_set(js, entry, "cidr", js_mkstr(js, addr_str, strlen(addr_str)));
+      } else {
+        continue;
+      }
+      
+      js_arr_push(js, iface_arr, entry);
+    }
+  }
+  
+  free(pAddresses);
+  return result;
+}
+
+static jsval_t os_userInfo(struct js *js, jsval_t *args, int nargs) {
+  (void)args; (void)nargs;
+  jsval_t info = js_mkobj(js);
+  
+  js_set(js, info, "uid", js_mknum(-1));
+  js_set(js, info, "gid", js_mknum(-1));
+  
+  char username[UNLEN + 1];
+  DWORD username_len = sizeof(username);
+  if (GetUserNameA(username, &username_len)) {
+    js_set(js, info, "username", js_mkstr(js, username, strlen(username)));
+  } else {
+    js_set(js, info, "username", js_mkstr(js, "", 0));
+  }
+  
+  const char *userprofile = getenv("USERPROFILE");
+  if (userprofile) {
+    js_set(js, info, "homedir", js_mkstr(js, userprofile, strlen(userprofile)));
+  } else {
+    js_set(js, info, "homedir", js_mkstr(js, "", 0));
+  }
+  
+  js_set(js, info, "shell", js_mknull());
+  
+  return info;
+}
+
+static jsval_t os_getPriority(struct js *js, jsval_t *args, int nargs) {
+  (void)args; (void)nargs;
+  return js_mknum(0);
+}
+
+static jsval_t os_setPriority(struct js *js, jsval_t *args, int nargs) {
+  (void)args; (void)nargs;
+  return js_mkundef();
+}
+
+#else
+
 static void format_mac_address(char *buf, size_t buflen, unsigned char *addr) {
   snprintf(buf, buflen, "%02x:%02x:%02x:%02x:%02x:%02x",
            addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
@@ -491,6 +689,7 @@ static unsigned char *get_mac_bytes(struct ifaddrs *ifa) {
   struct sockaddr_ll *sll = (struct sockaddr_ll *)ifa->ifa_addr;
   return (sll->sll_halen == 6) ? sll->sll_addr : NULL;
 #else
+  (void)ifa;
   return NULL;
 #endif
 }
@@ -615,6 +814,8 @@ static jsval_t os_setPriority(struct js *js, jsval_t *args, int nargs) {
   }
   return js_mkundef();
 }
+
+#endif
 
 static void add_signal_constants(struct js *js, jsval_t signals) {
 #ifdef SIGHUP

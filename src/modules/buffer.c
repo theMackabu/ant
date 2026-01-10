@@ -2,7 +2,12 @@
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <sys/mman.h>
+#endif
 
 #include "runtime.h"
 #include "modules/buffer.h"
@@ -16,6 +21,10 @@ static void *ta_arena_alloc(size_t size) {
   size = (size + 7) & ~7;
   
   if (!ta_arena) {
+#ifdef _WIN32
+    ta_arena = VirtualAlloc(NULL, TA_ARENA_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!ta_arena) return NULL;
+#else
     void *hint = (void *)0x100000;
     ta_arena = mmap(
       hint, TA_ARENA_SIZE, PROT_READ | PROT_WRITE,
@@ -27,6 +36,7 @@ static void *ta_arena_alloc(size_t size) {
         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     }
     if (ta_arena == MAP_FAILED) return NULL;
+#endif
   }
   
   if (ta_arena_offset + size > TA_ARENA_SIZE) return NULL;

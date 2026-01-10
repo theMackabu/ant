@@ -2,6 +2,8 @@
   #pragma GCC optimize("O3,inline")
 #endif
 
+#include <compat.h> // IWYU pragma: keep
+
 #include "ant.h"
 #include "config.h"
 #include "arena.h"
@@ -17,11 +19,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/time.h>
 #include <time.h>
-#include <unistd.h>
-#include <libgen.h>
+#ifdef _WIN32
 #include <sys/stat.h>
+#else
+#include <sys/time.h>
+#include <sys/stat.h>
+#endif
 #include <utarray.h>
 #include <uthash.h>
 #include <float.h>

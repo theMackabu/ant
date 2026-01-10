@@ -1,4 +1,13 @@
+#ifdef _WIN32
+#include <windows.h>
+#define dlopen(name, flags) ((void*)LoadLibraryA(name))
+#define dlsym(handle, name) ((void*)GetProcAddress((HMODULE)(handle), (name)))
+#define dlclose(handle) FreeLibrary((HMODULE)(handle))
+#define dlerror() "LoadLibrary failed"
+#define RTLD_LAZY 0
+#else
 #include <dlfcn.h>
+#endif
 #include <ffi.h>
 #include <pthread.h>
 #include <stdlib.h>

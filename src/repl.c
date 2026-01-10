@@ -1,10 +1,18 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <termios.h>
 #include <ctype.h>
 #include <signal.h>
+
+#ifdef _WIN32
+#include <conio.h>
+#include <windows.h>
+#include <io.h>
+#define STDIN_FILENO 0
+#else
+#include <termios.h>
 #include <unistd.h>
+#endif
 
 #include "ant.h"
 #include "repl.h"
@@ -71,6 +79,109 @@ static void history_free(history_t *hist) {
   free(hist->lines);
 }
 
+#ifdef _WIN32
+static char* read_line_with_history(history_t *hist, struct js *js) {
+  (void)js;
+  char *line = malloc(MAX_LINE_LENGTH);
+  
+  int pos = 0;
+  int len = 0;
+  line[0] = '\0';
+  
+  while (1) {
+    if (ctrl_c_pressed > 0) {
+      printf("\n");
+      fflush(stdout);
+      free(line);
+      return NULL;
+    }
+    
+    int c = _getch();
+    
+    if (c == 0 || c == 0xE0) {
+      int ext = _getch();
+      if (ext == 72) { // Up arrow
+        const char *prev = history_prev(hist);
+        if (prev) {
+          printf("\r\033[K> ");
+          fflush(stdout);
+          strcpy(line, prev);
+          len = strlen(line);
+          pos = len;
+          printf("%s", line);
+          fflush(stdout);
+        }
+      } else if (ext == 80) { // Down arrow
+        const char *next = history_next(hist);
+        if (next) {
+          printf("\r\033[K> ");
+          fflush(stdout);
+          strcpy(line, next);
+          len = strlen(line);
+          pos = len;
+          printf("%s", line);
+          fflush(stdout);
+        }
+      } else if (ext == 77) { // Right arrow
+        if (pos < len) {
+          printf("\033[C");
+          fflush(stdout);
+          pos++;
+        }
+      } else if (ext == 75) { // Left arrow
+        if (pos > 0) {
+          printf("\033[D");
+          fflush(stdout);
+          pos--;
+        }
+      }
+      continue;
+    }
+    
+    if (c == 8) { // Backspace
+      if (pos > 0) {
+        memmove(line + pos - 1, line + pos, len - pos + 1);
+        pos--;
+        len--;
+        printf("\b\033[K%s", line + pos);
+        for (int i = 0; i < len - pos; i++) printf("\033[D");
+        fflush(stdout);
+      }
+      continue;
+    }
+    
+    if (c == '\r' || c == '\n') {
+      printf("\n");
+      fflush(stdout);
+      line[len] = '\0';
+      return line;
+    }
+    
+    if (c == 3) { // Ctrl+C
+      ctrl_c_pressed++;
+      printf("\n");
+      fflush(stdout);
+      free(line);
+      return NULL;
+    }
+    
+    if (c == 4 || c == 26) { // Ctrl+D or Ctrl+Z (EOF)
+      free(line);
+      return NULL;
+    }
+    
+    if (isprint(c) && len < MAX_LINE_LENGTH - 1) {
+      memmove(line + pos + 1, line + pos, len - pos + 1);
+      line[pos] = c;
+      pos++;
+      len++;
+      printf("%c%s", c, line + pos);
+      for (int i = 0; i < len - pos; i++) printf("\033[D");
+      fflush(stdout);
+    }
+  }
+}
+#else
 static char* read_line_with_history(history_t *hist, struct js *js) {
   static struct termios old_tio, new_tio;
   char *line = malloc(MAX_LINE_LENGTH);
@@ -189,6 +300,7 @@ static char* read_line_with_history(history_t *hist, struct js *js) {
     }
   }
 }
+#endif
 
 void ant_repl_run() {
   struct js *js = rt->js;
@@ -200,11 +312,15 @@ void ant_repl_run() {
   printf("Welcome to Ant JavaScript v%s\n", ANT_VERSION);
   printf("Type \".help\" for more information.\n");
   
+#ifdef _WIN32
+  signal(SIGINT, sigint_handler);
+#else
   struct sigaction sa;
   sa.sa_handler = sigint_handler;
   sigemptyset(&sa.sa_mask);
   sa.sa_flags = 0;
   sigaction(SIGINT, &sa, NULL);
+#endif
   
   history_t history;
   history_init(&history);

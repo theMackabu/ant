@@ -2,7 +2,12 @@
 #include <string.h>
 #include <time.h>
 #include <uuidv7.h>
+
+#ifdef _WIN32
+#include <rpc.h>
+#else
 #include <uuid/uuid.h>
+#endif
 
 #include "ant.h"
 #include "runtime.h"
@@ -100,11 +105,21 @@ static jsval_t js_crypto_random_uuid(struct js *js, jsval_t *args, int nargs) {
     return js_mkerr(js, "libsodium initialization failed");
   }
   
-  uuid_t uuid;
   char uuid_str[37];
   
+#ifdef _WIN32
+  UUID uuid;
+  UuidCreate(&uuid);
+  snprintf(uuid_str, sizeof(uuid_str),
+    "%08lx-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+    uuid.Data1, uuid.Data2, uuid.Data3,
+    uuid.Data4[0], uuid.Data4[1], uuid.Data4[2], uuid.Data4[3],
+    uuid.Data4[4], uuid.Data4[5], uuid.Data4[6], uuid.Data4[7]);
+#else
+  uuid_t uuid;
   uuid_generate_random(uuid);
   uuid_unparse_lower(uuid, uuid_str);
+#endif
   
   return js_mkstr(js, uuid_str, strlen(uuid_str));
 }

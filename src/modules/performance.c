@@ -1,7 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/time.h>
 #include <time.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <sys/time.h>
+#endif
 
 #include "ant.h"
 #include "runtime.h"
@@ -11,9 +15,16 @@
 static double time_origin_ms = 0;
 
 static double get_current_time_ms(void) {
+#ifdef _WIN32
+  LARGE_INTEGER freq, count;
+  QueryPerformanceFrequency(&freq);
+  QueryPerformanceCounter(&count);
+  return (double)count.QuadPart * 1000.0 / (double)freq.QuadPart;
+#else
   struct timeval tv;
   gettimeofday(&tv, NULL);
   return (double)tv.tv_sec * 1000.0 + (double)tv.tv_usec / 1000.0;
+#endif
 }
 
 // performance.now()

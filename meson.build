@@ -24,10 +24,23 @@ sources = files(
   'src/snapshot.c',
 ) + files(module_files)
 
-uuid_dep = dependency('uuid', required: true)
-llhttp = dependency('llhttp', required: true)
 openssl_dep = dependency('openssl', required: true)
 libsodium_dep = dependency('libsodium', required: true)
+
+if host_machine.system() == 'windows'
+  cc = meson.get_compiler('c')
+  uuid_dep = cc.find_library('rpcrt4', required: true)
+  secur32_dep = cc.find_library('secur32', required: true)
+  ntdll_dep = cc.find_library('ntdll', required: true)
+  crypt32_dep = cc.find_library('crypt32', required: true)
+  userenv_dep = cc.find_library('userenv', required: true)
+else
+  uuid_dep = dependency('uuid', required: true)
+endif
+llhttp = dependency('llhttp', static: true, required: false)
+if not llhttp.found()
+  llhttp = dependency('llhttp', method: 'cmake', modules: ['llhttp::llhttp_static'], required: true)
+endif
 
 if host_machine.system() == 'darwin'
   security_dep = dependency('appleframeworks', modules: ['Security', 'CoreFoundation'], required: true)
@@ -45,6 +58,8 @@ bdwgc_opts.add_cmake_defines({
   'enable_cplusplus': 'OFF',
 })
 
+
+
 tlsuv_opts.append_compile_args('c', [
   '-Wno-unused-function',
   '-Wno-unused-variable',
@@ -52,10 +67,11 @@ tlsuv_opts.append_compile_args('c', [
   '-Wno-sometimes-uninitialized'
 ])
 
-bdwgc_opts.append_compile_args('c', [
-  '-DGC_NO_THREAD_REDIRECTS',
-  '-DGC_THREADS',
-])
+bdwgc_gc_args = ['-DGC_NO_THREAD_REDIRECTS', '-DGC_THREADS']
+if host_machine.system() == 'linux'
+  bdwgc_gc_args += ['-DNO_GETCONTEXT']
+endif
+bdwgc_opts.append_compile_args('c', bdwgc_gc_args)
 
 tlsuv_dep = cmake.subproject('tlsuv', options: tlsuv_opts).dependency('tlsuv')
 bdwgc_dep = cmake.subproject('bdwgc', options: bdwgc_opts).dependency('gc')
@@ -85,15 +101,27 @@ cargo = find_program('cargo', required: true)
 cp = find_program('cp', required: true)
 strip_include = include_directories('src/strip')
 
+oxc_lib_name = 'liboxc.a'
+oxc_output_name = 'liboxc.a'
+
+if host_machine.system() == 'windows'
+  rust_target = 'x86_64-pc-windows-gnu'
+  oxc_release_dir = meson.project_build_root() / 'oxc-target' / rust_target / 'release'
+  rust_target_arg = ' --target ' + rust_target
+else
+  oxc_release_dir = meson.project_build_root() / 'oxc-target' / 'release'
+  rust_target_arg = ''
+endif
+
 oxc_lib = custom_target(
   'oxc_strip',
-  output: 'liboxc.a',
+  output: oxc_output_name,
   command: [
     'sh', '-c',
-    cargo.full_path() + ' build --release ' +
+    cargo.full_path() + ' build --release' + rust_target_arg + ' ' +
     '--manifest-path ' + meson.project_source_root() / 'src' / 'strip' / 'Cargo.toml' + ' ' +
     '--target-dir ' + meson.project_build_root() / 'oxc-target' +
-    ' && ' + cp.full_path() + ' ' + meson.project_build_root() / 'oxc-target' / 'release' / 'liboxc.a' + ' @OUTPUT@'
+    ' && ' + cp.full_path() + ' ' + oxc_release_dir / oxc_lib_name + ' @OUTPUT@'
   ],
   build_by_default: true
 )
@@ -122,6 +150,11 @@ version_conf.set('ANT_BUILD_TIMESTAMP', timestamp)
 
 cmd_cc = meson.get_compiler('c')
 target_triple = run_command(cmd_cc.cmd_array(), '-dumpmachine', check: true).stdout().strip()
+
+triple_parts = target_triple.split('-')
+if triple_parts.length() == 4 and triple_parts[1] != 'unknown' and triple_parts[1] != 'pc' and triple_parts[1] != 'apple'
+  target_triple = triple_parts[0] + '-unknown-' + triple_parts[2] + '-' + triple_parts[3]
+endif
 
 version_conf.set('ANT_GIT_HASH', git_hash)
 version_conf.set('ANT_TARGET_TRIPLE', target_triple)
@@ -181,11 +214,19 @@ ant_deps = [
 
 if host_machine.system() == 'darwin'
   ant_deps += [security_dep]
+elif host_machine.system() == 'windows'
+  ant_deps += [secur32_dep, ntdll_dep, crypt32_dep, userenv_dep]
+endif
+
+link_args = []
+if get_option('static_link')
+  link_args += ['-static']
 endif
 
 executable(
   'ant',
   sources + [snapshot_h],
   include_directories: [include, build_include, strip_include],
-  dependencies: ant_deps
+  dependencies: ant_deps,
+  link_args: link_args
 )

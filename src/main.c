@@ -1,9 +1,9 @@
+#include <compat.h> // IWYU pragma: keep
+
 #include <oxc.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <libgen.h>
-#include <unistd.h>
 #include <sys/stat.h>
 #include <argtable3.h>
 
@@ -64,7 +64,7 @@ static void eval_code(struct js *js, struct arg_str *eval, struct arg_lit *print
       if (str) printf("%s\n", str);
     } else {
       const char *str = js_str(js, result);
-      if (str && strcmp(str, "undefined") != 0) print_value_colored(str, stdout); printf("\n");
+      if (str && strcmp(str, "undefined") != 0) { print_value_colored(str, stdout); printf("\n"); }
     }
   }
   

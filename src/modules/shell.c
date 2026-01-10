@@ -1,8 +1,15 @@
+#include <compat.h> // IWYU pragma: keep
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
+
+#ifdef _WIN32
+#define popen _popen
+#define pclose _pclose
+#else
 #include <sys/wait.h>
+#endif
 
 #include "ant.h"
 #include "modules/symbol.h"
@@ -49,7 +56,11 @@ static jsval_t shell_exec(struct js *js, const char *cmd, size_t cmd_len) {
   }
   
   int status = pclose(fp);
+#ifdef _WIN32
+  int exit_code = status;
+#else
   int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+#endif
   if (output_size > 0 && output[output_size - 1] == '\n') output_size--;
   
   jsval_t stdout_val = js_mkstr(js, output, output_size);

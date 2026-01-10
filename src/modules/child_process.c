@@ -1,18 +1,25 @@
+#include <compat.h> // IWYU pragma: keep
+
 #include <uv.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <sys/wait.h>
-#include <sys/select.h>
-#include <signal.h>
 #include <errno.h>
-#include <fcntl.h>
 #include <uthash.h>
 #include <utarray.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#include <io.h>
+#include <process.h>
+#else
+#include <sys/wait.h>
+#include <sys/select.h>
+#include <signal.h>
+#include <fcntl.h>
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>
+#endif
 #endif
 
 #include "ant.h"
@@ -190,7 +197,7 @@ static void on_handle_close(uv_handle_t *handle) {
   }
 }
 
-static void on_exit(uv_process_t *proc, int64_t exit_status, int term_signal) {
+static void on_process_exit(uv_process_t *proc, int64_t exit_status, int term_signal) {
   child_process_t *cp = (child_process_t *)proc->data;
   cp->exit_code = exit_status;
   cp->term_signal = term_signal;
@@ -600,7 +607,7 @@ static jsval_t builtin_spawn(struct js *js, jsval_t *args, int nargs) {
   }
   
   uv_process_options_t options = {0};
-  options.exit_cb = on_exit;
+  options.exit_cb = on_process_exit;
   options.file = final_args[0];
   options.args = final_args;
   options.stdio_count = 3;
@@ -694,7 +701,7 @@ static jsval_t builtin_exec(struct js *js, jsval_t *args, int nargs) {
   shell_args[3] = NULL;
   
   uv_process_options_t options = {0};
-  options.exit_cb = on_exit;
+  options.exit_cb = on_process_exit;
   options.file = "/bin/sh";
   options.args = shell_args;
   options.stdio_count = 3;
@@ -763,7 +770,11 @@ static jsval_t builtin_execSync(struct js *js, jsval_t *args, int nargs) {
   }
   
   int status = pclose(fp);
+#ifdef _WIN32
+  int exit_code = status;
+#else
   int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+#endif
   
   if (output_len > 0 && output[output_len - 1] == '\n') {
     output_len--;
@@ -781,6 +792,152 @@ static jsval_t builtin_execSync(struct js *js, jsval_t *args, int nargs) {
   return result;
 }
 
+#ifdef _WIN32
+static jsval_t builtin_spawnSync(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "spawnSync() requires a command");
+  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "Command must be a string");
+  
+  size_t cmd_len;
+  char *cmd = js_getstr(js, args[0], &cmd_len);
+  char *cmd_str = strndup(cmd, cmd_len);
+  
+  char **spawn_args = NULL;
+  int spawn_argc = 0;
+  char *input = NULL;
+  size_t input_len = 0;
+  
+  if (nargs >= 2 && js_type(args[1]) == JS_OBJ) {
+    jsval_t len_val = js_get(js, args[1], "length");
+    if (js_type(len_val) == JS_NUM) {
+      spawn_args = parse_args_array(js, args[1], &spawn_argc);
+    }
+  }
+  
+  if (nargs >= 3 && js_type(args[2]) == JS_OBJ) {
+    jsval_t input_val = js_get(js, args[2], "input");
+    if (js_type(input_val) == JS_STR) {
+      input = js_getstr(js, input_val, &input_len);
+    }
+  }
+  
+  size_t cmdline_len = cmd_len + 3;
+  for (int i = 0; i < spawn_argc; i++) {
+    cmdline_len += strlen(spawn_args[i]) + 3;
+  }
+  
+  char *cmdline = malloc(cmdline_len);
+  if (!cmdline) {
+    free(cmd_str);
+    free_args_array(spawn_args, spawn_argc);
+    return js_mkerr(js, "Out of memory");
+  }
+  
+  char *p = cmdline;
+  p += sprintf(p, "%s", cmd_str);
+  for (int i = 0; i < spawn_argc; i++) {
+    p += sprintf(p, " \"%s\"", spawn_args[i]);
+  }
+  
+  SECURITY_ATTRIBUTES sa = { sizeof(SECURITY_ATTRIBUTES), NULL, TRUE };
+  HANDLE stdin_read = NULL, stdin_write = NULL;
+  HANDLE stdout_read = NULL, stdout_write = NULL;
+  HANDLE stderr_read = NULL, stderr_write = NULL;
+  
+  if (!CreatePipe(&stdin_read, &stdin_write, &sa, 0) ||
+      !CreatePipe(&stdout_read, &stdout_write, &sa, 0) ||
+      !CreatePipe(&stderr_read, &stderr_write, &sa, 0)) {
+    free(cmdline);
+    free(cmd_str);
+    free_args_array(spawn_args, spawn_argc);
+    return js_mkerr(js, "Failed to create pipes");
+  }
+  
+  SetHandleInformation(stdin_write, HANDLE_FLAG_INHERIT, 0);
+  SetHandleInformation(stdout_read, HANDLE_FLAG_INHERIT, 0);
+  SetHandleInformation(stderr_read, HANDLE_FLAG_INHERIT, 0);
+  
+  STARTUPINFOA si = {0};
+  si.cb = sizeof(si);
+  si.dwFlags = STARTF_USESTDHANDLES;
+  si.hStdInput = stdin_read;
+  si.hStdOutput = stdout_write;
+  si.hStdError = stderr_write;
+  
+  PROCESS_INFORMATION pi = {0};
+  
+  BOOL success = CreateProcessA(NULL, cmdline, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi);
+  
+  free(cmdline);
+  free(cmd_str);
+  free_args_array(spawn_args, spawn_argc);
+  
+  CloseHandle(stdin_read);
+  CloseHandle(stdout_write);
+  CloseHandle(stderr_write);
+  
+  if (!success) {
+    CloseHandle(stdin_write);
+    CloseHandle(stdout_read);
+    CloseHandle(stderr_read);
+    return js_mkerr(js, "Failed to create process");
+  }
+  
+  if (input && input_len > 0) {
+    DWORD written;
+    WriteFile(stdin_write, input, (DWORD)input_len, &written, NULL);
+  }
+  CloseHandle(stdin_write);
+  
+  char *stdout_buf = malloc(4096);
+  size_t stdout_len = 0, stdout_cap = 4096;
+  char *stderr_buf = malloc(4096);
+  size_t stderr_len = 0, stderr_cap = 4096;
+  
+  char buffer[4096];
+  DWORD n;
+  
+  while (ReadFile(stdout_read, buffer, sizeof(buffer), &n, NULL) && n > 0) {
+    if (stdout_len + n >= stdout_cap) {
+      stdout_cap *= 2;
+      stdout_buf = realloc(stdout_buf, stdout_cap);
+    }
+    memcpy(stdout_buf + stdout_len, buffer, n);
+    stdout_len += n;
+  }
+  CloseHandle(stdout_read);
+  
+  while (ReadFile(stderr_read, buffer, sizeof(buffer), &n, NULL) && n > 0) {
+    if (stderr_len + n >= stderr_cap) {
+      stderr_cap *= 2;
+      stderr_buf = realloc(stderr_buf, stderr_cap);
+    }
+    memcpy(stderr_buf + stderr_len, buffer, n);
+    stderr_len += n;
+  }
+  CloseHandle(stderr_read);
+  
+  WaitForSingleObject(pi.hProcess, INFINITE);
+  
+  DWORD exit_code = 0;
+  GetExitCodeProcess(pi.hProcess, &exit_code);
+  DWORD pid = pi.dwProcessId;
+  
+  CloseHandle(pi.hProcess);
+  CloseHandle(pi.hThread);
+  
+  jsval_t result = js_mkobj(js);
+  js_set(js, result, "stdout", js_mkstr(js, stdout_buf ? stdout_buf : "", stdout_len));
+  js_set(js, result, "stderr", js_mkstr(js, stderr_buf ? stderr_buf : "", stderr_len));
+  js_set(js, result, "status", js_mknum((double)exit_code));
+  js_set(js, result, "signal", js_mknull());
+  js_set(js, result, "pid", js_mknum((double)pid));
+  
+  if (stdout_buf) free(stdout_buf);
+  if (stderr_buf) free(stderr_buf);
+  
+  return result;
+}
+#else
 static jsval_t builtin_spawnSync(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "spawnSync() requires a command");
   if (js_type(args[0]) != JS_STR) return js_mkerr(js, "Command must be a string");
@@ -919,19 +1076,19 @@ static jsval_t builtin_spawnSync(struct js *js, jsval_t *args, int nargs) {
   
   return result;
 }
+#endif
 
 static jsval_t builtin_fork(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "fork() requires a module path");
   if (js_type(args[0]) != JS_STR) return js_mkerr(js, "Module path must be a string");
-  
   size_t path_len;
+  
   char *path = js_getstr(js, args[0], &path_len);
   char *path_str = strndup(path, path_len);
-  
   char exe_path[1024];
-  uint32_t size = sizeof(exe_path);
   
 #if defined(__APPLE__)
+  uint32_t size = sizeof(exe_path);
   if (_NSGetExecutablePath(exe_path, &size) != 0) {
     free(path_str);
     return js_mkerr(js, "Failed to get executable path");
