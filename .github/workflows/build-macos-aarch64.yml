@@ -1,6 +1,7 @@
 name: Build macOS aarch64
 
 on:
+  workflow_dispatch:
   workflow_call:
     inputs:
       build_timestamp:

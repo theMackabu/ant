@@ -1,6 +1,7 @@
 name: Build Windows x64
 
 on:
+  workflow_dispatch:
   workflow_call:
     inputs:
       build_timestamp:

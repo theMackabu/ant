@@ -1,6 +1,7 @@
 name: Build Linux aarch64 [glibc]
 
 on:
+  workflow_dispatch:
   workflow_call:
     inputs:
       build_timestamp:

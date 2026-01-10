@@ -1,6 +1,7 @@
 name: Build Linux x64 [musl]
 
 on:
+  workflow_dispatch:
   workflow_call:
     inputs:
       build_timestamp:
