@@ -2,7 +2,7 @@
 
 **Ant-sized JavaScript Runtime**
 
-A minimal embedded JavaScript engine with async/await, promises, modules, and built-in APIs for HTTP servers, timers, crypto, and JSON.
+A JavaScript runtime that fits in your pocket — Full async/await, modules, HTTP servers, crypto, and more.
 
 📖 [Read the blog post about Ant](https://s.tail.so/js-in-one-month)
 
@@ -106,22 +106,22 @@ import os from 'os';
 ### Navigator
 
 ```js
-navigator.userAgent; // User agent string
-navigator.platform; // Platform string
-navigator.hardwareConcurrency; // CPU thread count
-navigator.locks; // Web Locks API
+navigator.userAgent;            // User agent string
+navigator.platform;             // Platform string
+navigator.hardwareConcurrency;  // CPU thread count
+navigator.locks;                // Web Locks API
 ```
 
 ### Cryptography
 
 ```js
-crypto.random(); // Secure random number
-crypto.randomBytes(); // Generate random bytes
-crypto.randomUUID(); // UUID v4
-crypto.randomUUIDv7(); // UUID v7 (time-ordered)
-crypto.getRandomValues(); // Fill TypedArray with random values
-btoa(); // Base64 encoding (built-in)
-atob(); // Base64 decoding (built-in)
+crypto.random();           // Secure random number
+crypto.randomBytes();      // Generate random bytes
+crypto.randomUUID();       // UUID v4
+crypto.randomUUIDv7();     // UUID v7 (time-ordered)
+crypto.getRandomValues();  // Fill TypedArray with random values
+btoa();                    // Base64 encoding (built-in)
+atob();                    // Base64 decoding (built-in)
 ```
 
 ### Path Utilities
@@ -135,37 +135,37 @@ import { join, resolve, basename } from 'ant:path';
 ### Process
 
 ```js
-Ant.process.env; // Environment variables (with .env support)
-Ant.process.cwd; // Current working directory
-Ant.process.argv; // Command line arguments
-Ant.process.pid; // Process ID
-Ant.process.exit(); // Exit with code
-Ant.process.cpuUsage(); // CPU usage statistics
+Ant.process.env;         // Environment variables (with .env support)
+Ant.process.cwd;         // Current working directory
+Ant.process.argv;        // Command line arguments
+Ant.process.pid;         // Process ID
+Ant.process.exit();      // Exit with code
+Ant.process.cpuUsage();  // CPU usage statistics
 ```
 
 ### Performance
 
 ```js
-performance.now(); // High-resolution timestamp
-performance.timeOrigin; // Time origin for measurements
+performance.now();       // High-resolution timestamp
+performance.timeOrigin;  // Time origin for measurements
 ```
 
 ### Ant Global
 
 ```js
-Ant.version; // Runtime version
-Ant.target; // Build target
-Ant.revision; // Git revision
-Ant.buildDate; // Build date
-Ant.serve(); // Start HTTP server
-Ant.signal(); // Register signal handlers
-Ant.sleep(); // Sleep in seconds
-Ant.msleep(); // Sleep in milliseconds
-Ant.usleep(); // Sleep in microseconds
-Ant.gc(); // Trigger garbage collection
-Ant.alloc(); // Get memory allocation info
-Ant.stats(); // Get runtime statistics
-Ant.typeof(); // Get internal type name
+Ant.version;    // Runtime version
+Ant.target;     // Build target
+Ant.revision;   // Git revision
+Ant.buildDate;  // Build date
+Ant.serve();    // Start HTTP server
+Ant.signal();   // Register signal handlers
+Ant.sleep();    // Sleep in seconds
+Ant.msleep();   // Sleep in milliseconds
+Ant.usleep();   // Sleep in microseconds
+Ant.gc();       // Trigger garbage collection
+Ant.alloc();    // Get memory allocation info
+Ant.stats();    // Get runtime statistics
+Ant.typeof();   // Get internal type name
 ```
 
 ### Foreign Function Interface (FFI)
@@ -208,12 +208,12 @@ localStorage.getItem('key');
 ### Module System
 
 ```js
-import 'ant:fs'           // Built-in fs module
-import 'ant:path'         // Built-in path module
-import 'ant:shell'        // Built-in shell module
-import 'ant:ffi'          // Built-in FFI module
-import 'node:*'           // Node.js-style aliases
-import from 'https://...' // Import from URLs
+import 'ant:fs'                 // Built-in fs module
+import 'ant:path'               // Built-in path module
+import 'ant:shell'              // Built-in shell module
+import 'ant:ffi'                // Built-in FFI module
+import 'node:*'                 // Node.js-style aliases
+import from 'https://...'       // Import from URLs
 import data from './data.json'  // JSON imports
 import text from './file.txt'   // Text imports
 ```
