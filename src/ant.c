@@ -18915,27 +18915,30 @@ cleanup:
   return result;
 }
 
-static bool esm_is_json(const char *path) {
+static bool esm_has_suffix(const char *path, const char *ext) {
   size_t len = strlen(path);
-  return len > 5 && strcmp(path + len - 5, ".json") == 0;
+  size_t elen = strlen(ext);
+  return len > elen && strcmp(path + len - elen, ext) == 0;
+}
+
+static bool esm_is_json(const char *path) {
+  return esm_has_suffix(path, ".json");
 }
 
 static bool esm_is_text(const char *path) {
-  size_t len = strlen(path);
-  return (len > 4 && strcmp(path + len - 4, ".txt") == 0) ||
-         (len > 3 && strcmp(path + len - 3, ".md") == 0) ||
-         (len > 5 && strcmp(path + len - 5, ".html") == 0) ||
-         (len > 4 && strcmp(path + len - 4, ".css") == 0);
+  return esm_has_suffix(path, ".txt")  ||
+         esm_has_suffix(path, ".md")   ||
+         esm_has_suffix(path, ".html") ||
+         esm_has_suffix(path, ".css");
 }
 
 static bool esm_is_image(const char *path) {
-  size_t len = strlen(path);
-  return (len > 4 && strcmp(path + len - 4, ".png") == 0) ||
-         (len > 4 && strcmp(path + len - 4, ".jpg") == 0) ||
-         (len > 5 && strcmp(path + len - 5, ".jpeg") == 0) ||
-         (len > 4 && strcmp(path + len - 4, ".gif") == 0) ||
-         (len > 4 && strcmp(path + len - 4, ".svg") == 0) ||
-         (len > 5 && strcmp(path + len - 5, ".webp") == 0);
+  return esm_has_suffix(path, ".png")  ||
+         esm_has_suffix(path, ".jpg")  ||
+         esm_has_suffix(path, ".jpeg") ||
+         esm_has_suffix(path, ".gif")  ||
+         esm_has_suffix(path, ".svg")  ||
+         esm_has_suffix(path, ".webp");
 }
 
 static char *esm_canonicalize_path(const char *path) {
@@ -19035,77 +19038,68 @@ static void esm_cleanup_module_cache(void) {
   global_module_cache.count = 0;
 }
 
-static jsval_t esm_load_json(struct js *js, const char *path) {
+typedef struct {
+  char *data;
+  size_t size;
+} esm_file_data_t;
+
+static jsval_t esm_read_file(struct js *js, const char *path, const char *kind, esm_file_data_t *out) {
   FILE *fp = fopen(path, "rb");
-  if (!fp) return js_mkerr(js, "Cannot open JSON file: %s", path);
+  if (!fp) return js_mkerr(js, "Cannot open %s: %s", kind, path);
   
   fseek(fp, 0, SEEK_END);
-  long size = ftell(fp);
+  long fsize = ftell(fp);
   fseek(fp, 0, SEEK_SET);
   
-  char *content = (char *)malloc(size + 1);
-  if (!content) {
+  char *buf = (char *)malloc((size_t)fsize + 1);
+  if (!buf) {
     fclose(fp);
-    return js_mkerr(js, "OOM loading JSON");
+    return js_mkerr(js, "OOM loading %s", kind);
   }
   
-  fread(content, 1, size, fp);
+  fread(buf, 1, (size_t)fsize, fp);
   fclose(fp);
-  content[size] = '\0';
+  buf[fsize] = '\0';
   
-  jsval_t json_str = js_mkstr(js, content, size);
-  free(content);
+  out->data = buf;
+  out->size = (size_t)fsize;
+  return js_mkundef();
+}
+
+static jsval_t esm_load_json(struct js *js, const char *path) {
+  esm_file_data_t file;
+  jsval_t err = esm_read_file(js, path, "JSON file", &file);
+  if (is_err(err)) return err;
   
+  jsval_t json_str = js_mkstr(js, file.data, file.size);
+  free(file.data);
   return js_json_parse(js, &json_str, 1);
 }
 
 static jsval_t esm_load_text(struct js *js, const char *path) {
-  FILE *fp = fopen(path, "rb");
-  if (!fp) return js_mkerr(js, "Cannot open text file: %s", path);
+  esm_file_data_t file;
+  jsval_t err = esm_read_file(js, path, "text file", &file);
+  if (is_err(err)) return err;
   
-  fseek(fp, 0, SEEK_END);
-  long size = ftell(fp);
-  fseek(fp, 0, SEEK_SET);
-  
-  char *content = (char *)malloc(size + 1);
-  if (!content) {
-    fclose(fp);
-    return js_mkerr(js, "OOM loading text");
-  }
-  
-  fread(content, 1, size, fp);
-  fclose(fp);
-  content[size] = '\0';
-  
-  jsval_t result = js_mkstr(js, content, size);
-  free(content);
-  
+  jsval_t result = js_mkstr(js, file.data, file.size);
+  free(file.data);
   return result;
 }
 
 static jsval_t esm_load_image(struct js *js, const char *path) {
-  FILE *fp = fopen(path, "rb");
-  if (!fp) return js_mkerr(js, "Cannot open image file: %s", path);
+  esm_file_data_t file;
+  jsval_t err = esm_read_file(js, path, "image file", &file);
+  if (is_err(err)) return err;
   
-  fseek(fp, 0, SEEK_END);
-  long size = ftell(fp);
-  fseek(fp, 0, SEEK_SET);
-  
-  unsigned char *content = (unsigned char *)malloc(size);
-  if (!content) {
-    fclose(fp);
-    return js_mkerr(js, "OOM loading image");
-  }
-  
-  fread(content, 1, size, fp);
-  fclose(fp);
+  unsigned char *content = (unsigned char *)file.data;
+  size_t size = file.size;
   
   jsval_t obj = mkobj(js, 0);
   jsval_t data_arr = mkarr(js);
   
-  for (long i = 0; i < size; i++) {
+  for (size_t i = 0; i < size; i++) {
     char idx[16];
-    snprintf(idx, sizeof(idx), "%ld", i);
+    snprintf(idx, sizeof(idx), "%zu", i);
     setprop(js, data_arr, js_mkstr(js, idx, strlen(idx)), tov((double)content[i]));
   }
   setprop(js, data_arr, js_mkstr(js, "length", 6), tov((double)size));
@@ -19114,7 +19108,7 @@ static jsval_t esm_load_image(struct js *js, const char *path) {
   setprop(js, obj, js_mkstr(js, "path", 4), js_mkstr(js, path, strlen(path)));
   setprop(js, obj, js_mkstr(js, "size", 4), tov((double)size));
   
-  free(content);
+  free(file.data);
   return obj;
 }
 
@@ -19186,26 +19180,14 @@ static jsval_t esm_load_module(struct js *js, esm_module_t *mod) {
       mod->url_content_len = size;
     }
   } else {
-    FILE *fp = fopen(mod->resolved_path, "rb");
-    if (!fp) {
+    esm_file_data_t file;
+    jsval_t err = esm_read_file(js, mod->resolved_path, "module", &file);
+    if (is_err(err)) {
       mod->is_loading = false;
-      return js_mkerr(js, "Cannot open module: %s", mod->resolved_path);
+      return err;
     }
-    
-    fseek(fp, 0, SEEK_END);
-    long fsize = ftell(fp);
-    fseek(fp, 0, SEEK_SET);
-    size = (size_t)fsize;
-    
-    content = (char *)malloc(size + 1);
-    if (!content) {
-      fclose(fp);
-      mod->is_loading = false;
-      return js_mkerr(js, "OOM loading module");
-    }
-    
-    fread(content, 1, size, fp);
-    fclose(fp);
+    content = file.data;
+    size = file.size;
   }
   content[size] = '\0';
   
@@ -19264,34 +19246,85 @@ static jsval_t esm_get_or_load(struct js *js, const char *specifier, const char 
   return esm_load_module(js, mod);
 }
 
+typedef struct {
+  const char *import_name;
+  size_t import_len;
+  const char *local_name;
+  size_t local_len;
+} esm_import_binding_t;
+
+static char *esm_jsval_to_cstr(struct js *js, jsval_t str, jsoff_t *out_len) {
+  jsoff_t len;
+  jsoff_t off = vstr(js, str, &len);
+  if (out_len) *out_len = len;
+  return strndup((char *)&js->mem[off], len);
+}
+
+static jsval_t esm_resolve_and_load(struct js *js, const char *spec_str, jsoff_t spec_len) {
+  ant_library_t *lib = find_library(spec_str, spec_len);
+  if (lib) return lib->init_fn(js);
+  
+  const char *base_path = js->filename ? js->filename : ".";
+  char *resolved_path = esm_resolve(spec_str, base_path, esm_resolve_path);
+  if (!resolved_path) return js_mkerr(js, "Cannot resolve module: %s", spec_str);
+  
+  jsval_t ns = esm_get_or_load(js, spec_str, resolved_path);
+  free(resolved_path);
+  return ns;
+}
+
+static jsval_t esm_make_file_url(struct js *js, const char *path) {
+  size_t url_len = strlen(path) + 8;
+  char *url = malloc(url_len);
+  if (!url) return js_mkerr(js, "oom");
+  
+  snprintf(url, url_len, "file://%s", path);
+  jsval_t val = js_mkstr(js, url, strlen(url));
+  free(url);
+  return val;
+}
+
+static int esm_parse_named_imports(struct js *js, esm_import_binding_t *bindings, int max_bindings) {
+  int count = 0;
+  
+  while (next(js) != TOK_RBRACE && count < max_bindings) {
+    EXPECT(TOK_IDENTIFIER, (void)0);
+    const char *import_name = &js->code[js->toff];
+    size_t import_len = js->tlen;
+    js->consumed = 1;
+    
+    const char *local_name = import_name;
+    size_t local_len = import_len;
+    
+    if (next(js) == TOK_AS) {
+      js->consumed = 1;
+      EXPECT(TOK_IDENTIFIER, (void)0);
+      local_name = &js->code[js->toff];
+      local_len = js->tlen;
+      js->consumed = 1;
+    }
+    
+    bindings[count].import_name = import_name;
+    bindings[count].import_len = import_len;
+    bindings[count].local_name = local_name;
+    bindings[count].local_len = local_len;
+    count++;
+    
+    if (next(js) == TOK_COMMA) js->consumed = 1;
+  }
+  
+  EXPECT(TOK_RBRACE, (void)0);
+  return count;
+}
+
 static jsval_t builtin_import(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1 || vtype(args[0]) != T_STR) {
     return js_mkerr(js, "import() requires a string specifier");
   }
   
   jsoff_t spec_len;
-  jsoff_t spec_off = vstr(js, args[0], &spec_len);
-  char *specifier = strndup((char *)&js->mem[spec_off], spec_len);
-  
-  ant_library_t *lib = find_library(specifier, spec_len);
-  if (lib) {
-    free(specifier);
-    jsval_t lib_obj = lib->init_fn(js);
-    if (is_err(lib_obj)) return builtin_Promise_reject(js, &lib_obj, 1);
-    jsval_t promise_args[] = { lib_obj };
-    return builtin_Promise_resolve(js, promise_args, 1);
-  }
-  
-  const char *base_path = js->filename ? js->filename : ".";
-  char *resolved_path = esm_resolve(specifier, base_path, esm_resolve_path);
-  if (!resolved_path) {
-    jsval_t err = js_mkerr(js, "Cannot resolve module: %s", specifier);
-    free(specifier);
-    return err;
-  }
-  
-  jsval_t ns = esm_get_or_load(js, specifier, resolved_path);
-  free(resolved_path);
+  char *specifier = esm_jsval_to_cstr(js, args[0], &spec_len);
+  jsval_t ns = esm_resolve_and_load(js, specifier, spec_len);
   free(specifier);
   
   if (is_err(ns)) return builtin_Promise_reject(js, &ns, 1);
@@ -19305,9 +19338,7 @@ static jsval_t builtin_import_meta_resolve(struct js *js, jsval_t *args, int nar
     return js_mkerr(js, "import.meta.resolve() requires a string specifier");
   }
   
-  jsoff_t spec_len;
-  jsoff_t spec_off = vstr(js, args[0], &spec_len);
-  char *specifier = strndup((char *)&js->mem[spec_off], spec_len);
+  char *specifier = esm_jsval_to_cstr(js, args[0], NULL);
   
   const char *base_path = js->filename ? js->filename : ".";
   char *resolved_path = esm_resolve(specifier, base_path, esm_resolve_path);
@@ -19322,19 +19353,8 @@ static jsval_t builtin_import_meta_resolve(struct js *js, jsval_t *args, int nar
     free(resolved_path); return result;
   }
   
-  size_t url_len = strlen(resolved_path) + 8;
-  char *url = malloc(url_len);
-  if (!url) {
-    free(resolved_path);
-    return js_mkerr(js, "oom");
-  }
-  
-  snprintf(url, url_len, "file://%s", resolved_path);
+  jsval_t result = esm_make_file_url(js, resolved_path);
   free(resolved_path);
-  
-  jsval_t result = js_mkstr(js, url, strlen(url));
-  free(url);
-  
   return result;
 }
 
@@ -19343,21 +19363,10 @@ void js_setup_import_meta(struct js *js, const char *filename) {
   
   jsval_t import_meta = mkobj(js, 0);
   if (is_err(import_meta)) return;
-  
   bool is_url = esm_is_url(filename);
   
-  if (is_url) {
-    jsval_t url_val = js_mkstr(js, filename, strlen(filename));
-    if (!is_err(url_val)) setprop(js, import_meta, js_mkstr(js, "url", 3), url_val);
-  } else {
-    size_t url_len = strlen(filename) + 8;
-    char *url = malloc(url_len);
-    if (url) {
-      snprintf(url, url_len, "file://%s", filename);
-      jsval_t url_val = js_mkstr(js, url, strlen(url));
-      if (!is_err(url_val)) setprop(js, import_meta, js_mkstr(js, "url", 3), url_val); free(url);
-    }
-  }
+  jsval_t url_val = is_url ? js_mkstr(js, filename, strlen(filename)) : esm_make_file_url(js, filename);
+  if (!is_err(url_val)) setprop(js, import_meta, js_mkstr(js, "url", 3), url_val);
   
   jsval_t filename_val = js_mkstr(js, filename, strlen(filename));
   if (!is_err(filename_val)) setprop(js, import_meta, js_mkstr(js, "filename", 8), filename_val);
@@ -19431,29 +19440,13 @@ static jsval_t js_import_stmt(struct js *js) {
     EXPECT(TOK_STRING, );
     
     jsval_t spec = js_str_literal(js);
-    
     jsoff_t spec_len;
-    jsoff_t spec_off = vstr(js, spec, &spec_len);
-    char *spec_str = strndup((char *)&js->mem[spec_off], spec_len);
-    jsval_t ns = js_mkundef();
-    ant_library_t *lib = find_library(spec_str, spec_len);
-    if (lib) {
-     ns = lib->init_fn(js);
-    } else {
-      const char *base_path = js->filename ? js->filename : ".";
-      char *resolved_path = esm_resolve(spec_str, base_path, esm_resolve_path);
-      if (!resolved_path) {
-        free(spec_str);
-        return js_mkerr(js, "Cannot resolve module: %.*s", (int)spec_len, spec_str);
-      }
-      
-      js_parse_state_t saved;
-      JS_SAVE_STATE(js, saved);
-      ns = esm_get_or_load(js, spec_str, resolved_path);
-      JS_RESTORE_STATE(js, saved);
-      
-      free(resolved_path);
-    }
+    char *spec_str = esm_jsval_to_cstr(js, spec, &spec_len);
+    
+    js_parse_state_t saved;
+    JS_SAVE_STATE(js, saved);
+    jsval_t ns = esm_resolve_and_load(js, spec_str, spec_len);
+    JS_RESTORE_STATE(js, saved);
     free(spec_str);
     
     js->consumed = 1; next(js); js->consumed = 0;
@@ -19468,14 +19461,7 @@ static jsval_t js_import_stmt(struct js *js) {
     size_t default_len = js->tlen;
     js->consumed = 1;
     
-    typedef struct {
-      const char *import_name;
-      size_t import_len;
-      const char *local_name;
-      size_t local_len;
-    } import_binding_t;
-    
-    import_binding_t bindings[64];
+    esm_import_binding_t bindings[64];
     int binding_count = 0;
     
     if (next(js) == TOK_COMMA) {
@@ -19483,34 +19469,8 @@ static jsval_t js_import_stmt(struct js *js) {
       
       if (next(js) == TOK_LBRACE) {
         js->consumed = 1;
-        
-        while (next(js) != TOK_RBRACE && binding_count < 64) {
-          EXPECT(TOK_IDENTIFIER, );
-          const char *import_name = &js->code[js->toff];
-          size_t import_len = js->tlen;
-          js->consumed = 1;
-          
-          const char *local_name = import_name;
-          size_t local_len = import_len;
-          
-          if (next(js) == TOK_AS) {
-            js->consumed = 1;
-            EXPECT(TOK_IDENTIFIER, );
-            local_name = &js->code[js->toff];
-            local_len = js->tlen;
-            js->consumed = 1;
-          }
-          
-          bindings[binding_count].import_name = import_name;
-          bindings[binding_count].import_len = import_len;
-          bindings[binding_count].local_name = local_name;
-          bindings[binding_count].local_len = local_len;
-          binding_count++;
-          
-          if (next(js) == TOK_COMMA) js->consumed = 1;
-        }
-        
-        EXPECT(TOK_RBRACE, );
+        binding_count = esm_parse_named_imports(js, bindings, 64);
+        if (binding_count < 0) return js_mkerr(js, "Failed to parse named imports");
       } else if (next(js) == TOK_MUL) {
         js->consumed = 1;
         EXPECT(TOK_AS, );
@@ -19530,30 +19490,13 @@ static jsval_t js_import_stmt(struct js *js) {
     EXPECT(TOK_STRING, );
     
     jsval_t spec = js_str_literal(js);
-    
     jsoff_t spec_len;
-    jsoff_t spec_off = vstr(js, spec, &spec_len);
-    char *spec_str = strndup((char *)&js->mem[spec_off], spec_len);
+    char *spec_str = esm_jsval_to_cstr(js, spec, &spec_len);
     
-    jsval_t ns = js_mkundef();
-    ant_library_t *lib = find_library(spec_str, spec_len);
-    if (lib) {
-      ns = lib->init_fn(js);
-    } else {
-      const char *base_path = js->filename ? js->filename : ".";
-      char *resolved_path = esm_resolve(spec_str, base_path, esm_resolve_path);
-      if (!resolved_path) {
-        free(spec_str);
-        return js_mkerr(js, "Cannot resolve module: %s", spec_str);
-      }
-      
-      js_parse_state_t saved;
-      JS_SAVE_STATE(js, saved);
-      ns = esm_get_or_load(js, spec_str, resolved_path);
-      JS_RESTORE_STATE(js, saved);
-      
-      free(resolved_path);
-    }
+    js_parse_state_t saved;
+    JS_SAVE_STATE(js, saved);
+    jsval_t ns = esm_resolve_and_load(js, spec_str, spec_len);
+    JS_RESTORE_STATE(js, saved);
     free(spec_str);
     
     js->consumed = 1; next(js); js->consumed = 0;
@@ -19586,78 +19529,28 @@ static jsval_t js_import_stmt(struct js *js) {
   if (next(js) == TOK_LBRACE) {
     js->consumed = 1;
     
-    typedef struct {
-      const char *import_name;
-      size_t import_len;
-      const char *local_name;
-      size_t local_len;
-    } import_binding_t;
+    esm_import_binding_t bindings[64];
+    int binding_count = esm_parse_named_imports(js, bindings, 64);
+    if (binding_count < 0) return js_mkerr(js, "Failed to parse named imports");
     
-    import_binding_t bindings[64];
-    int binding_count = 0;
-    
-    while (next(js) != TOK_RBRACE && binding_count < 64) {
-      EXPECT(TOK_IDENTIFIER, );
-      const char *import_name = &js->code[js->toff];
-      size_t import_len = js->tlen;
-      js->consumed = 1;
-      
-      const char *local_name = import_name;
-      size_t local_len = import_len;
-      
-      if (next(js) == TOK_AS) {
-        js->consumed = 1;
-        EXPECT(TOK_IDENTIFIER, );
-        local_name = &js->code[js->toff];
-        local_len = js->tlen;
-        js->consumed = 1;
-      }
-      
-      bindings[binding_count].import_name = import_name;
-      bindings[binding_count].import_len = import_len;
-      bindings[binding_count].local_name = local_name;
-      bindings[binding_count].local_len = local_len;
-      binding_count++;
-      
-      if (next(js) == TOK_COMMA) js->consumed = 1;
-    }
-    
-    EXPECT(TOK_RBRACE, );
     EXPECT(TOK_FROM, );
     EXPECT(TOK_STRING, );
     
     jsval_t spec = js_str_literal(js);
     jsoff_t spec_len;
+    char *spec_str = esm_jsval_to_cstr(js, spec, &spec_len);
     
-    jsoff_t spec_off = vstr(js, spec, &spec_len);
-    char *spec_str = strndup((char *)&js->mem[spec_off], spec_len);
+    js_parse_state_t saved;
+    JS_SAVE_STATE(js, saved);
+    jsoff_t saved_toff = js->toff, saved_tlen = js->tlen;
+    jsval_t saved_scope = js->scope;
     
-    jsval_t ns = js_mkundef();
-    ant_library_t *lib = find_library(spec_str, spec_len);
-    if (lib) {
-      ns = lib->init_fn(js);
-    } else {
-      const char *base_path = js->filename ? js->filename : ".";
-      char *resolved_path = esm_resolve(spec_str, base_path, esm_resolve_path);
-      if (!resolved_path) {
-        free(spec_str);
-        return js_mkerr(js, "Cannot resolve module: %s", spec_str);
-      }
-      
-      js_parse_state_t saved;
-      JS_SAVE_STATE(js, saved);
-      jsoff_t saved_toff = js->toff, saved_tlen = js->tlen;
-      jsval_t saved_scope = js->scope;
-      
-      ns = esm_get_or_load(js, spec_str, resolved_path);
-      
-      JS_RESTORE_STATE(js, saved);
-      js->toff = saved_toff;
-      js->tlen = saved_tlen;
-      js->scope = saved_scope;
-      
-      free(resolved_path);
-    }
+    jsval_t ns = esm_resolve_and_load(js, spec_str, spec_len);
+    
+    JS_RESTORE_STATE(js, saved);
+    js->toff = saved_toff;
+    js->tlen = saved_tlen;
+    js->scope = saved_scope;
     free(spec_str);
     
     js->consumed = 1;
@@ -19775,28 +19668,12 @@ static jsval_t js_export_stmt(struct js *js) {
     
     jsval_t spec = js_str_literal(js);
     jsoff_t spec_len;
-    jsoff_t spec_off = vstr(js, spec, &spec_len);
-    char *spec_str = strndup((char *)&js->mem[spec_off], spec_len);
+    char *spec_str = esm_jsval_to_cstr(js, spec, &spec_len);
     
-    jsval_t ns = js_mkundef();
-    ant_library_t *lib = find_library(spec_str, spec_len);
-    if (lib) {
-      ns = lib->init_fn(js);
-    } else {
-      const char *base_path = js->filename ? js->filename : ".";
-      char *resolved_path = esm_resolve(spec_str, base_path, esm_resolve_path);
-      if (!resolved_path) {
-        free(spec_str);
-        return js_mkerr(js, "Cannot resolve module: %s", spec_str);
-      }
-      
-      js_parse_state_t saved;
-      JS_SAVE_STATE(js, saved);
-      ns = esm_get_or_load(js, spec_str, resolved_path);
-      JS_RESTORE_STATE(js, saved);
-      
-      free(resolved_path);
-    }
+    js_parse_state_t saved;
+    JS_SAVE_STATE(js, saved);
+    jsval_t ns = esm_resolve_and_load(js, spec_str, spec_len);
+    JS_RESTORE_STATE(js, saved);
     free(spec_str);
     
     js->consumed = 1; next(js); js->consumed = 0;
