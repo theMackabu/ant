@@ -1855,9 +1855,7 @@ continue_object_print:;
       if (desc) {
         if (desc->has_getter || desc->has_setter) {
           should_hide = true;
-        } else if (!desc->enumerable) {
-          should_hide = true;
-        }
+        } else if (!desc->enumerable) should_hide = true;
       }
     }
     
@@ -21307,9 +21305,7 @@ void js_destroy(struct js *js) {
     js->errmsg = NULL;
   }
   
-  if (js->owns_mem) {
-    ANT_GC_FREE((void *)((uint8_t *)js - 0));
-  }
+  if (js->owns_mem) ANT_GC_FREE((void *)((uint8_t *)js - 0));
 }
 
 inline double js_getnum(jsval_t value) { return tod(value); }
