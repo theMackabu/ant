@@ -77,7 +77,9 @@ static void complete_request(fetch_request_t *req) {
     jsval_t err = js_mkstr(req->js, req->error_msg ? req->error_msg : "Unknown error", req->error_msg ? strlen(req->error_msg) : 13);
     js_reject_promise(req->js, req->promise, err);
   } else {
-    jsval_t response = create_response(req->js, req->status_code, req->response_buffer.data, req->response_buffer.size);
+    const char *body = req->response_buffer.data ? req->response_buffer.data : "";
+    size_t body_len = req->response_buffer.data ? req->response_buffer.size : 0;
+    jsval_t response = create_response(req->js, req->status_code, body, body_len);
     js_resolve_promise(req->js, req->promise, response);
   }
   
@@ -185,28 +187,45 @@ static jsval_t do_fetch_microtask(struct js *js, jsval_t *args, int nargs) {
   if (!pending_requests) utarray_new(pending_requests, &ut_ptr_icd);
   utarray_push_back(pending_requests, &req);
   
-  struct tlsuv_url_s parsed_url;
-  if (tlsuv_parse_url(&parsed_url, url_str) != 0) {
-    jsval_t err = js_mkstr(js, "Failed to parse URL", 19);
+  const char *scheme_end = strstr(url_str, "://");
+  if (!scheme_end) {
+    jsval_t err = js_mkstr(js, "Invalid URL: no scheme", 22);
     js_reject_promise(js, promise, err);
     remove_pending_request(req);
     free_fetch_request(req);
     return js_mkundef();
   }
   
-  size_t host_len = (parsed_url.path - parsed_url.hostname) + parsed_url.hostname_len;
-  char *host_url = calloc(1, host_len + parsed_url.scheme_len + 4);
+  const char *host_start = scheme_end + 3;
+  const char *path_start = strchr(host_start, '/');
+  const char *at_in_host = NULL;
   
-  snprintf(
-    host_url, host_len + parsed_url.scheme_len + 4, "%.*s://%.*s", 
-    (int)parsed_url.scheme_len, parsed_url.scheme, (int)parsed_url.hostname_len, parsed_url.hostname)
-  ;
-  
-  if (parsed_url.port > 0 && !((parsed_url.port == 80 && strncmp(parsed_url.scheme, "http", 4) == 0) || (parsed_url.port == 443 && strncmp(parsed_url.scheme, "https", 5) == 0))) {
-    char port_str[16];
-    snprintf(port_str, sizeof(port_str), ":%d", parsed_url.port);
-    strcat(host_url, port_str);
+  for (const char *p = host_start; p < (path_start ? path_start : host_start + strlen(host_start)); p++) {
+    if (*p == '@') at_in_host = p;
   }
+  if (at_in_host) host_start = at_in_host + 1;
+  
+  size_t scheme_len = scheme_end - url_str;
+  size_t host_len = path_start ? (size_t)(path_start - host_start) : strlen(host_start);
+  const char *path = path_start ? path_start : "/";
+  
+  if (host_len == 0) {
+    jsval_t err = js_mkstr(js, "Invalid URL: no host", 20);
+    js_reject_promise(js, promise, err);
+    remove_pending_request(req);
+    free_fetch_request(req);
+    return js_mkundef();
+  }
+  
+  char *host_url = calloc(1, scheme_len + 3 + host_len + 1);
+  if (!host_url) {
+    jsval_t err = js_mkstr(js, "Out of memory", 13);
+    js_reject_promise(js, promise, err);
+    remove_pending_request(req);
+    free_fetch_request(req);
+    return js_mkundef();
+  }
+  snprintf(host_url, scheme_len + 3 + host_len + 1, "%.*s://%.*s", (int)scheme_len, url_str, (int)host_len, host_start);
   
   int rc = tlsuv_http_init(fetch_loop, &req->http_client, host_url);
   free(host_url);
@@ -239,9 +258,7 @@ static jsval_t do_fetch_microtask(struct js *js, jsval_t *args, int nargs) {
     }
   }
   
-  char *path = parsed_url.path_len > 0 ? strndup(parsed_url.path, parsed_url.path_len) : strdup("/");
   req->http_req = tlsuv_http_req(&req->http_client, method, path, resp_cb, req);
-  free(path);
   
   if (!req->http_req) {
     jsval_t err = js_mkstr(js, "Failed to create HTTP request", 30);
@@ -270,8 +287,7 @@ static jsval_t do_fetch_microtask(struct js *js, jsval_t *args, int nargs) {
         char *value_str = js_getstr(js, value, NULL);
         if (value_str) {
           char *key_str = strndup(key, key_len);
-          tlsuv_http_req_header(req->http_req, key_str, value_str);
-          free(key_str);
+          if (key_str) { tlsuv_http_req_header(req->http_req, key_str, value_str); free(key_str); }
         }
       }
       js_prop_iter_end(&iter);
