@@ -32,9 +32,9 @@ if tls_lib == 'openssl'
 else
   openssl_dep = dependency('', required: false)
   mbedtls_dep = [
-    cc.find_library('mbedtls', required: true),
-    cc.find_library('mbedx509', required: true),
-    cc.find_library('mbedcrypto', required: true),
+    dependency('mbedtls', required: true),
+    dependency('mbedx509', required: true),
+    dependency('mbedcrypto', required: true),
   ]
 endif
 libsodium_dep = dependency('libsodium', required: true)
