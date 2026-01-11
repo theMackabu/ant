@@ -3,12 +3,12 @@
 # Source: https://github.com/theMackabu/ant/blob/master/.github/install/install.ab
 
 bash_version__0_v0() {
-    major_26="$(echo "${BASH_VERSINFO[0]}")"
-    minor_27="$(echo "${BASH_VERSINFO[1]}")"
+    major_27="$(echo "${BASH_VERSINFO[0]}")"
+    minor_28="$(echo "${BASH_VERSINFO[1]}")"
     command_2="$(echo "${BASH_VERSINFO[2]}")"
     __status=$?
-    patch_28="${command_2}"
-    ret_bash_version0_v0=("${major_26}" "${minor_27}" "${patch_28}")
+    patch_29="${command_2}"
+    ret_bash_version0_v0=("${major_27}" "${minor_28}" "${patch_29}")
     return 0
 }
 
@@ -17,7 +17,7 @@ replace__1_v0() {
     local search=$2
     local replace=$3
     # Here we use a command to avoid #646
-    result_25=""
+    result_26=""
     bash_version__0_v0 
     left_comp=("${ret_bash_version0_v0[@]}")
     right_comp=(4 3)
@@ -38,13 +38,13 @@ replace__1_v0() {
         (( "${#left_comp[@]}" == "${#right_comp[@]}" || "${#left_comp[@]}" > "${#right_comp[@]}" )) && echo 1 || echo 0
 )"
     if [ "${comp}" != 0 ]; then
-        result_25="${source//"${search}"/"${replace}"}"
+        result_26="${source//"${search}"/"${replace}"}"
         __status=$?
     else
-        result_25="${source//"${search}"/${replace}}"
+        result_26="${source//"${search}"/${replace}}"
         __status=$?
     fi
-    ret_replace1_v0="${result_25}"
+    ret_replace1_v0="${result_26}"
     return 0
 }
 
@@ -203,11 +203,11 @@ tildify__134_v0() {
         ret_tildify134_v0="${path}"
         return 0
     fi
-    home_24="${ret_env_var_get106_v0}"
-    starts_with__23_v0 "${path}" "${home_24}"
+    home_25="${ret_env_var_get106_v0}"
+    starts_with__23_v0 "${path}" "${home_25}"
     ret_starts_with23_v0__9_6="${ret_starts_with23_v0}"
     if [ "${ret_starts_with23_v0__9_6}" != 0 ]; then
-        replace__1_v0 "${path}" "${home_24}" "~"
+        replace__1_v0 "${path}" "${home_25}" "~"
         ret_tildify134_v0="${ret_replace1_v0}"
         return 0
     fi
@@ -299,35 +299,35 @@ configure_shell__137_v0() {
     local bin_env=$4
     local tilde_bin_dir=$5
     get_shell_config__136_v0 "${shell_name}" "${install_env}" "${quoted_install_dir}" "${bin_env}"
-    commands_33=("${ret_get_shell_config136_v0[@]}")
-    refresh_command_34=""
+    commands_34=("${ret_get_shell_config136_v0[@]}")
+    refresh_command_35=""
     env_var_get__106_v0 "HOME"
     __status=$?
     if [ "${__status}" != 0 ]; then
         ret_configure_shell137_v0=""
         return 0
     fi
-    home_35="${ret_env_var_get106_v0}"
+    home_36="${ret_env_var_get106_v0}"
     if [ "$([ "_${shell_name}" != "_fish" ]; echo $?)" != 0 ]; then
-        fish_config_36="${home_35}/.config/fish/config.fish"
-        tildify__134_v0 "${fish_config_36}"
-        tilde_fish_config_37="${ret_tildify134_v0}"
-        file_exists__40_v0 "${fish_config_36}"
+        fish_config_37="${home_36}/.config/fish/config.fish"
+        tildify__134_v0 "${fish_config_37}"
+        tilde_fish_config_38="${ret_tildify134_v0}"
+        file_exists__40_v0 "${fish_config_37}"
         ret_file_exists40_v0__79_10="${ret_file_exists40_v0}"
         if [ "${ret_file_exists40_v0__79_10}" != 0 ]; then
-            content_38="
+            content_39="
 # ant
 "
-            for command_39 in "${commands_33[@]}"; do
-                content_38+="${command_39}
+            for command_40 in "${commands_34[@]}"; do
+                content_39+="${command_40}
 "
             done
-            file_append__43_v0 "${fish_config_36}" "${content_38}"
+            file_append__43_v0 "${fish_config_37}" "${content_39}"
             __status=$?
             if [ "${__status}" != 0 ]; then
-                echo "Manually add the directory to ${tilde_fish_config_37} (or similar):"
-                for cmd_40 in "${commands_33[@]}"; do
-                    bold__117_v0 "${cmd_40}"
+                echo "Manually add the directory to ${tilde_fish_config_38} (or similar):"
+                for cmd_41 in "${commands_34[@]}"; do
+                    bold__117_v0 "${cmd_41}"
                     ret_bold117_v0__87_32="${ret_bold117_v0}"
                     echo -e "  ${ret_bold117_v0__87_32}"
                     __status=$?
@@ -335,38 +335,38 @@ configure_shell__137_v0() {
                 ret_configure_shell137_v0=""
                 return 0
             fi
-            echo -e "\x1b[2mAdded \"${tilde_bin_dir}\" to \$PATH in \"${tilde_fish_config_37}\"\x1b[0m"
+            echo -e "\x1b[2mAdded \"${tilde_bin_dir}\" to \$PATH in \"${tilde_fish_config_38}\"\x1b[0m"
             __status=$?
-            refresh_command_34="source ${tilde_fish_config_37}"
+            refresh_command_35="source ${tilde_fish_config_38}"
         else
-            echo "Manually add the directory to ${tilde_fish_config_37} (or similar):"
-            for cmd_41 in "${commands_33[@]}"; do
-                bold__117_v0 "${cmd_41}"
+            echo "Manually add the directory to ${tilde_fish_config_38} (or similar):"
+            for cmd_42 in "${commands_34[@]}"; do
+                bold__117_v0 "${cmd_42}"
                 ret_bold117_v0__96_30="${ret_bold117_v0}"
                 echo -e "  ${ret_bold117_v0__96_30}"
                 __status=$?
             done
         fi
     elif [ "$([ "_${shell_name}" != "_zsh" ]; echo $?)" != 0 ]; then
-        zsh_config_42="${home_35}/.zshrc"
-        tildify__134_v0 "${zsh_config_42}"
-        tilde_zsh_config_43="${ret_tildify134_v0}"
-        file_exists__40_v0 "${zsh_config_42}"
+        zsh_config_43="${home_36}/.zshrc"
+        tildify__134_v0 "${zsh_config_43}"
+        tilde_zsh_config_44="${ret_tildify134_v0}"
+        file_exists__40_v0 "${zsh_config_43}"
         ret_file_exists40_v0__104_10="${ret_file_exists40_v0}"
         if [ "${ret_file_exists40_v0__104_10}" != 0 ]; then
-            content_44="
+            content_45="
 # ant
 "
-            for command_45 in "${commands_33[@]}"; do
-                content_44+="${command_45}
+            for command_46 in "${commands_34[@]}"; do
+                content_45+="${command_46}
 "
             done
-            file_append__43_v0 "${zsh_config_42}" "${content_44}"
+            file_append__43_v0 "${zsh_config_43}" "${content_45}"
             __status=$?
             if [ "${__status}" != 0 ]; then
-                echo "Manually add the directory to ${tilde_zsh_config_43} (or similar):"
-                for cmd_46 in "${commands_33[@]}"; do
-                    bold__117_v0 "${cmd_46}"
+                echo "Manually add the directory to ${tilde_zsh_config_44} (or similar):"
+                for cmd_47 in "${commands_34[@]}"; do
+                    bold__117_v0 "${cmd_47}"
                     ret_bold117_v0__112_32="${ret_bold117_v0}"
                     echo -e "  ${ret_bold117_v0__112_32}"
                     __status=$?
@@ -374,59 +374,59 @@ configure_shell__137_v0() {
                 ret_configure_shell137_v0=""
                 return 0
             fi
-            echo -e "\x1b[2mAdded \"${tilde_bin_dir}\" to \$PATH in \"${tilde_zsh_config_43}\"\x1b[0m"
+            echo -e "\x1b[2mAdded \"${tilde_bin_dir}\" to \$PATH in \"${tilde_zsh_config_44}\"\x1b[0m"
             __status=$?
-            refresh_command_34="source ${tilde_zsh_config_43}"
+            refresh_command_35="source ${tilde_zsh_config_44}"
         else
-            echo "Manually add the directory to ${tilde_zsh_config_43} (or similar):"
-            for cmd_47 in "${commands_33[@]}"; do
-                bold__117_v0 "${cmd_47}"
+            echo "Manually add the directory to ${tilde_zsh_config_44} (or similar):"
+            for cmd_48 in "${commands_34[@]}"; do
+                bold__117_v0 "${cmd_48}"
                 ret_bold117_v0__121_30="${ret_bold117_v0}"
                 echo -e "  ${ret_bold117_v0__121_30}"
                 __status=$?
             done
         fi
     elif [ "$([ "_${shell_name}" != "_bash" ]; echo $?)" != 0 ]; then
-        bash_configs_48=("${home_35}/.bash_profile" "${home_35}/.bashrc")
+        bash_configs_49=("${home_36}/.bash_profile" "${home_36}/.bashrc")
         env_var_get__106_v0 "XDG_CONFIG_HOME"
         __status=$?
         if [ "${__status}" != 0 ]; then
             :
         fi
-        xdg_config_49="${ret_env_var_get106_v0}"
-        if [ "$([ "_${xdg_config_49}" == "_" ]; echo $?)" != 0 ]; then
-            bash_configs_48+=("${xdg_config_49}/.bash_profile" "${xdg_config_49}/.bashrc" "${xdg_config_49}/bash_profile" "${xdg_config_49}/bashrc")
+        xdg_config_50="${ret_env_var_get106_v0}"
+        if [ "$([ "_${xdg_config_50}" == "_" ]; echo $?)" != 0 ]; then
+            bash_configs_49+=("${xdg_config_50}/.bash_profile" "${xdg_config_50}/.bashrc" "${xdg_config_50}/bash_profile" "${xdg_config_50}/bashrc")
         fi
-        set_manually_50=1
-        for bash_config_51 in "${bash_configs_48[@]}"; do
-            tildify__134_v0 "${bash_config_51}"
-            tilde_bash_config_52="${ret_tildify134_v0}"
-            file_exists__40_v0 "${bash_config_51}"
+        set_manually_51=1
+        for bash_config_52 in "${bash_configs_49[@]}"; do
+            tildify__134_v0 "${bash_config_52}"
+            tilde_bash_config_53="${ret_tildify134_v0}"
+            file_exists__40_v0 "${bash_config_52}"
             ret_file_exists40_v0__147_12="${ret_file_exists40_v0}"
             if [ "${ret_file_exists40_v0__147_12}" != 0 ]; then
-                content_53="
+                content_54="
 # ant
 "
-                for command_54 in "${commands_33[@]}"; do
-                    content_53+="${command_54}
+                for command_55 in "${commands_34[@]}"; do
+                    content_54+="${command_55}
 "
                 done
-                file_append__43_v0 "${bash_config_51}" "${content_53}"
+                file_append__43_v0 "${bash_config_52}" "${content_54}"
                 __status=$?
                 if [ "${__status}" != 0 ]; then
                     continue
                 fi
-                echo -e "\x1b[2mAdded \"${tilde_bin_dir}\" to \$PATH in \"${tilde_bash_config_52}\"\x1b[0m"
+                echo -e "\x1b[2mAdded \"${tilde_bin_dir}\" to \$PATH in \"${tilde_bash_config_53}\"\x1b[0m"
                 __status=$?
-                refresh_command_34="source ${tilde_bash_config_52}"
-                set_manually_50=0
+                refresh_command_35="source ${tilde_bash_config_53}"
+                set_manually_51=0
                 break
             fi
         done
-        if [ "${set_manually_50}" != 0 ]; then
+        if [ "${set_manually_51}" != 0 ]; then
             echo "Manually add the directory to ~/.bashrc (or similar):"
-            for cmd_55 in "${commands_33[@]}"; do
-                bold__117_v0 "${cmd_55}"
+            for cmd_56 in "${commands_34[@]}"; do
+                bold__117_v0 "${cmd_56}"
                 ret_bold117_v0__165_30="${ret_bold117_v0}"
                 echo -e "  ${ret_bold117_v0__165_30}"
                 __status=$?
@@ -443,7 +443,7 @@ configure_shell__137_v0() {
         echo -e "  ${ret_bold117_v0__172_26}"
         __status=$?
     fi
-    ret_configure_shell137_v0="${refresh_command_34}"
+    ret_configure_shell137_v0="${refresh_command_35}"
     return 0
 }
 
@@ -464,16 +464,22 @@ if [ "$(( ${#__length_18[@]} > 3 ))" != 0 ]; then
 fi
 get_target__135_v0 
 target_9="${ret_get_target135_v0}"
-use_mbedtls_10=0
-for arg_11 in "${args_3[@]}"; do
-    if [ "$([ "_${arg_11}" != "_--mbedtls" ]; echo $?)" != 0 ]; then
-        use_mbedtls_10=1
+env_var_get__106_v0 "MBEDTLS"
+__status=$?
+if [ "${__status}" != 0 ]; then
+    :
+fi
+mbedtls_env_10="${ret_env_var_get106_v0}"
+use_mbedtls_11="$([ "_${mbedtls_env_10}" == "_" ]; echo $?)"
+for arg_12 in "${args_3[@]}"; do
+    if [ "$([ "_${arg_12}" != "_--mbedtls" ]; echo $?)" != 0 ]; then
+        use_mbedtls_11=1
     fi
 done
-if [ "${use_mbedtls_10}" != 0 ]; then
+if [ "${use_mbedtls_11}" != 0 ]; then
     starts_with__23_v0 "${target_9}" "darwin"
-    ret_starts_with23_v0__200_8="${ret_starts_with23_v0}"
-    if [ "${ret_starts_with23_v0__200_8}" != 0 ]; then
+    ret_starts_with23_v0__202_8="${ret_starts_with23_v0}"
+    if [ "${ret_starts_with23_v0__202_8}" != 0 ]; then
         target_9="${target_9}-mbedtls"
     else
         echo_error__124_v0 "--mbedtls option is only supported on macOS" 1
@@ -484,89 +490,89 @@ __status=$?
 if [ "${__status}" != 0 ]; then
     :
 fi
-github_12="${ret_env_var_get106_v0}"
-if [ "$([ "_${github_12}" != "_" ]; echo $?)" != 0 ]; then
-    github_12="https://github.com"
+github_13="${ret_env_var_get106_v0}"
+if [ "$([ "_${github_13}" != "_" ]; echo $?)" != 0 ]; then
+    github_13="https://github.com"
 fi
-github_repo_13="${github_12}/themackabu/ant"
-ant_uri_14=""
-tag_15=""
-for arg_16 in "${args_3[@]}"; do
-    if [ "$(( $([ "_${arg_16}" == "_--mbedtls" ]; echo $?) && $([ "_${arg_16}" == "_${args_3[0]}" ]; echo $?) ))" != 0 ]; then
-        tag_15="${arg_16}"
+github_repo_14="${github_13}/themackabu/ant"
+ant_uri_15=""
+tag_16=""
+for arg_17 in "${args_3[@]}"; do
+    if [ "$(( $([ "_${arg_17}" == "_--mbedtls" ]; echo $?) && $([ "_${arg_17}" == "_${args_3[0]}" ]; echo $?) ))" != 0 ]; then
+        tag_16="${arg_17}"
     fi
 done
-if [ "$([ "_${tag_15}" != "_" ]; echo $?)" != 0 ]; then
-    ant_uri_14="${github_repo_13}/releases/latest/download/ant-${target_9}.zip"
+if [ "$([ "_${tag_16}" != "_" ]; echo $?)" != 0 ]; then
+    ant_uri_15="${github_repo_14}/releases/latest/download/ant-${target_9}.zip"
 else
-    ant_uri_14="${github_repo_13}/releases/download/${tag_15}/ant-${target_9}.zip"
+    ant_uri_15="${github_repo_14}/releases/download/${tag_16}/ant-${target_9}.zip"
 fi
-install_env_17="ANT_INSTALL"
-bin_env_18="\$${install_env_17}/bin"
+install_env_18="ANT_INSTALL"
+bin_env_19="\$${install_env_18}/bin"
 env_var_get__106_v0 "HOME"
 __status=$?
 if [ "${__status}" != 0 ]; then
     echo_error__124_v0 "HOME environment variable not set" 1
 fi
-home_19="${ret_env_var_get106_v0}"
+home_20="${ret_env_var_get106_v0}"
 env_var_get__106_v0 "ANT_INSTALL"
 __status=$?
 if [ "${__status}" != 0 ]; then
     :
 fi
-env_install_20="${ret_env_var_get106_v0}"
-install_dir_21="$(if [ "$([ "_${env_install_20}" == "_" ]; echo $?)" != 0 ]; then echo "${env_install_20}"; else echo "${home_19}/.ant"; fi)"
-bin_dir_22="${install_dir_21}/bin"
-exe_23="${bin_dir_22}/ant"
-dir_exists__39_v0 "${bin_dir_22}"
-ret_dir_exists39_v0__241_10="${ret_dir_exists39_v0}"
-if [ "$(( ! ${ret_dir_exists39_v0__241_10} ))" != 0 ]; then
-    dir_create__45_v0 "${bin_dir_22}"
+env_install_21="${ret_env_var_get106_v0}"
+install_dir_22="$(if [ "$([ "_${env_install_21}" == "_" ]; echo $?)" != 0 ]; then echo "${env_install_21}"; else echo "${home_20}/.ant"; fi)"
+bin_dir_23="${install_dir_22}/bin"
+exe_24="${bin_dir_23}/ant"
+dir_exists__39_v0 "${bin_dir_23}"
+ret_dir_exists39_v0__243_10="${ret_dir_exists39_v0}"
+if [ "$(( ! ${ret_dir_exists39_v0__243_10} ))" != 0 ]; then
+    dir_create__45_v0 "${bin_dir_23}"
     __status=$?
     if [ "${__status}" != 0 ]; then
-        echo_error__124_v0 "Failed to create install directory \"${bin_dir_22}\"" 1
+        echo_error__124_v0 "Failed to create install directory \"${bin_dir_23}\"" 1
     fi
 fi
-curl --fail --location --progress-bar --output "${exe_23}.zip" "${ant_uri_14}"
+curl --fail --location --progress-bar --output "${exe_24}.zip" "${ant_uri_15}"
 __status=$?
 if [ "${__status}" != 0 ]; then
-    echo_error__124_v0 "Failed to download ant from \"${ant_uri_14}\"" 1
+    echo_error__124_v0 "Failed to download ant from \"${ant_uri_15}\"" 1
 fi
-unzip -oqd "${bin_dir_22}" "${exe_23}.zip"
+unzip -oqd "${bin_dir_23}" "${exe_24}.zip"
 __status=$?
 if [ "${__status}" != 0 ]; then
     echo_error__124_v0 "Failed to extract ant" 1
 fi
-file_chmod__48_v0 "${exe_23}" "755"
+file_chmod__48_v0 "${exe_24}" "755"
 __status=$?
 if [ "${__status}" != 0 ]; then
     echo_error__124_v0 "Failed to set permissions on ant executable" 1
 fi
-rm "${exe_23}.zip"
+rm "${exe_24}.zip"
 __status=$?
 if [ "${__status}" != 0 ]; then
     echo_error__124_v0 "Failed to clean up zip file" 1
 fi
-tildify__134_v0 "${exe_23}"
-ret_tildify134_v0__263_78="${ret_tildify134_v0}"
-array_19=("${ret_tildify134_v0__263_78}")
+tildify__134_v0 "${exe_24}"
+ret_tildify134_v0__265_78="${ret_tildify134_v0}"
+array_19=("${ret_tildify134_v0__265_78}")
 printf__114_v0 "\\x1b[32mant was installed successfully to \\x1b[1;32m%s\\x1b[0m
 " array_19[@]
 is_command__108_v0 "ant"
-ret_is_command108_v0__265_6="${ret_is_command108_v0}"
-if [ "${ret_is_command108_v0__265_6}" != 0 ]; then
+ret_is_command108_v0__267_6="${ret_is_command108_v0}"
+if [ "${ret_is_command108_v0__267_6}" != 0 ]; then
     echo "Run 'ant --help' to get started"
     exit 0
     __status=$?
 fi
-tildify__134_v0 "${bin_dir_22}"
-tilde_bin_dir_29="${ret_tildify134_v0}"
-quoted_install_dir_30="\"${install_dir_21}\""
-starts_with__23_v0 "${install_dir_21}" "${home_19}"
-ret_starts_with23_v0__273_6="${ret_starts_with23_v0}"
-if [ "${ret_starts_with23_v0__273_6}" != 0 ]; then
-    replace__1_v0 "${quoted_install_dir_30}" "${home_19}" "\$HOME"
-    quoted_install_dir_30="${ret_replace1_v0}"
+tildify__134_v0 "${bin_dir_23}"
+tilde_bin_dir_30="${ret_tildify134_v0}"
+quoted_install_dir_31="\"${install_dir_22}\""
+starts_with__23_v0 "${install_dir_22}" "${home_20}"
+ret_starts_with23_v0__275_6="${ret_starts_with23_v0}"
+if [ "${ret_starts_with23_v0__275_6}" != 0 ]; then
+    replace__1_v0 "${quoted_install_dir_31}" "${home_20}" "\$HOME"
+    quoted_install_dir_31="${ret_replace1_v0}"
 fi
 echo ""
 env_var_get__106_v0 "SHELL"
@@ -574,22 +580,22 @@ __status=$?
 if [ "${__status}" != 0 ]; then
     :
 fi
-shell_path_31="${ret_env_var_get106_v0}"
-command_20="$(basename "${shell_path_31}")"
+shell_path_32="${ret_env_var_get106_v0}"
+command_20="$(basename "${shell_path_32}")"
 __status=$?
-shell_name_32="${command_20}"
-configure_shell__137_v0 "${shell_name_32}" "${install_env_17}" "${quoted_install_dir_30}" "${bin_env_18}" "${tilde_bin_dir_29}"
-refresh_command_56="${ret_configure_shell137_v0}"
+shell_name_33="${command_20}"
+configure_shell__137_v0 "${shell_name_33}" "${install_env_18}" "${quoted_install_dir_31}" "${bin_env_19}" "${tilde_bin_dir_30}"
+refresh_command_57="${ret_configure_shell137_v0}"
 echo ""
 echo -e "\x1b[2mTo get started, run:\x1b[0m"
 __status=$?
-if [ "$([ "_${refresh_command_56}" == "_" ]; echo $?)" != 0 ]; then
-    bold__117_v0 "${refresh_command_56}"
-    ret_bold117_v0__289_24="${ret_bold117_v0}"
-    echo -e "  ${ret_bold117_v0__289_24}"
+if [ "$([ "_${refresh_command_57}" == "_" ]; echo $?)" != 0 ]; then
+    bold__117_v0 "${refresh_command_57}"
+    ret_bold117_v0__291_24="${ret_bold117_v0}"
+    echo -e "  ${ret_bold117_v0__291_24}"
     __status=$?
 fi
 bold__117_v0 "ant --help"
-ret_bold117_v0__292_22="${ret_bold117_v0}"
-echo -e "  ${ret_bold117_v0__292_22}"
+ret_bold117_v0__294_22="${ret_bold117_v0}"
+echo -e "  ${ret_bold117_v0__294_22}"
 __status=$?

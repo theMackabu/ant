@@ -190,7 +190,9 @@ main(args) {
   }
 
   let target = get_target()
-  let use_mbedtls = false
+
+  let mbedtls_env = env_var_get("MBEDTLS") failed { "" }
+  let use_mbedtls = mbedtls_env != ""
 
   for arg in args {
     if arg == "--mbedtls" { use_mbedtls = true }

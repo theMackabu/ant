@@ -174,7 +174,11 @@ if triple_parts.length() == 4 and triple_parts[1] != 'unknown' and triple_parts[
 endif
 
 version_conf.set('ANT_GIT_HASH', git_hash)
-version_conf.set('ANT_TARGET_TRIPLE', target_triple)
+if tls_lib == 'mbedtls'
+  version_conf.set('ANT_TARGET_TRIPLE', target_triple + '-mbedtls')
+else
+  version_conf.set('ANT_TARGET_TRIPLE', target_triple)
+endif
 
 config_h = configure_file(
   input: 'include/config.h.in',
