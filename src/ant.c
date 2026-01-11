@@ -19540,9 +19540,13 @@ static jsval_t js_import_stmt(struct js *js) {
         setprop(js, js->scope, js_mkstr(js, bindings[i].local_name, bindings[i].local_len), ns);
       } else if (vtype(ns) == T_OBJ) {
         jsoff_t prop_off = lkp(js, ns, bindings[i].import_name, bindings[i].import_len);
-        jsval_t imported_val = prop_off != 0 ? resolveprop(js, mkval(T_PROP, prop_off)) : js_mkundef();
+        if (prop_off == 0) return js_mkerr_typed(
+          js, JS_ERR_SYNTAX, "The requested module does not provide an export named '%.*s'",
+          (int)bindings[i].import_len, bindings[i].import_name
+        );
+        jsval_t imported_val = resolveprop(js, mkval(T_PROP, prop_off));
         setprop(js, js->scope, js_mkstr(js, bindings[i].local_name, bindings[i].local_len), imported_val);
-      } else setprop(js, js->scope, js_mkstr(js, bindings[i].local_name, bindings[i].local_len), js_mkundef());
+      } else return js_mkerr_typed(js, JS_ERR_SYNTAX, "Cannot use named imports from non-object module");
     }
     
     return js_mkundef();
@@ -19639,14 +19643,18 @@ static jsval_t js_import_stmt(struct js *js) {
     
     for (int i = 0; i < binding_count; i++) {
       jsoff_t prop_off = lkp(js, ns, bindings[i].import_name, bindings[i].import_len);
-      jsval_t imported_val = prop_off != 0 ? resolveprop(js, mkval(T_PROP, prop_off)) : js_mkundef();
+      if (prop_off == 0) return js_mkerr_typed(
+        js, JS_ERR_SYNTAX, "The requested module does not provide an export named '%.*s'", 
+        (int)bindings[i].import_len, bindings[i].import_name
+      );
+      jsval_t imported_val = resolveprop(js, mkval(T_PROP, prop_off));
       setprop(js, js->scope, js_mkstr(js, bindings[i].local_name, bindings[i].local_len), imported_val);
     }
     
     return js_mkundef();
   }
   
-  return js_mkerr(js, "Invalid import statement");
+  return js_mkerr_typed(js, JS_ERR_SYNTAX, "Invalid import statement");
 }
 
 static jsval_t js_export_stmt(struct js *js) {

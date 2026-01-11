@@ -34,8 +34,7 @@ const LOGO = `
   ${c('yellow', '╚═══════════════════════════════════════════════════════════╝')}
 `;
 
-const HELP = `
-  ${c('bold', 'Commands:')}
+const HELP = `  ${c('bold', 'Commands:')}
   ${c('green', 'add')} ${c('dim', '<task>')}      Add a new task
   ${c('green', 'list')}            List all tasks  
   ${c('green', 'done')} ${c('dim', '<id>')}       Mark task as complete
@@ -43,8 +42,7 @@ const HELP = `
   ${c('green', 'clear')}           Clear all tasks
   ${c('green', 'stats')}           Show statistics
   ${c('green', 'help')}            Show this help
-  ${c('green', 'quit')}            Exit the app
-`;
+  ${c('green', 'quit')}            Exit the app`;
 
 class TaskManager {
   constructor() {
