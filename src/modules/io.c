@@ -80,6 +80,7 @@ void print_value_colored(const char *str, FILE *stream) {
   bool escape_next = false;
   bool is_key = true;
   int brace_depth = 0;
+  int array_depth = 0;
   char string_char = 0;
   
   for (const char *p = str; *p; p++) {
@@ -159,13 +160,13 @@ void print_value_colored(const char *str, FILE *stream) {
     
     if (*p == ',') {
       io_putc(*p, stream);
-      is_key = (brace_depth > 0);
+      is_key = (brace_depth > 0 && array_depth == 0);
       continue;
     }
     
     if (*p == '\n') {
       io_putc(*p, stream);
-      is_key = (brace_depth > 0);
+      is_key = (brace_depth > 0 && array_depth == 0);
       continue;
     }
     
@@ -191,6 +192,7 @@ void print_value_colored(const char *str, FILE *stream) {
       io_puts(JSON_BRACE, stream);
       io_putc(*p, stream);
       io_puts(ANSI_RESET, stream);
+      array_depth++;
       is_key = false;
       continue;
     }
@@ -199,6 +201,7 @@ void print_value_colored(const char *str, FILE *stream) {
       io_puts(JSON_BRACE, stream);
       io_putc(*p, stream);
       io_puts(ANSI_RESET, stream);
+      array_depth--;
       is_key = false;
       continue;
     }
