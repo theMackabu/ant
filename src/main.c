@@ -12,6 +12,7 @@
 #include "utils.h"
 #include "runtime.h"
 #include "snapshot.h"
+#include "esm/remote.h"
 
 #include "modules/builtin.h"
 #include "modules/buffer.h"
@@ -72,41 +73,58 @@ static void eval_code(struct js *js, struct arg_str *eval, struct arg_lit *print
   js_run_event_loop(js);
 }
 
-static int execute_module(struct js *js, const char *filename) {
-  char *filename_copy = strdup(filename);
-  char *dir = dirname(filename_copy);
-  
-  js_set(js, js_glob(js), "__dirname", js_mkstr(js, dir, strlen(dir)));
-  js_set(js, js_glob(js), "__filename", js_mkstr(js, filename, strlen(filename)));
-  
-  free(filename_copy);
-
+static char *read_file(const char *filename, size_t *len) {
   FILE *fp = fopen(filename, "rb");
-  if (fp == NULL) {
-    fprintf(stderr, "Error: Could not open file '%s'\n", filename);
-    return EXIT_FAILURE;
-  }
-
-  fseek(fp, 0, SEEK_END);
-  long file_size = ftell(fp);
-  fseek(fp, 0, SEEK_SET);
-
-  char *buffer = malloc(file_size + 1);
-  if (buffer == NULL) {
-    fprintf(stderr, "Error: Memory allocation failed\n");
-    fclose(fp);
-    return EXIT_FAILURE;
-  }
-
-  size_t len = fread(buffer, 1, file_size, fp);
-  fclose(fp);
-  buffer[len] = '\0';
+  if (!fp) return NULL;
   
-  char abs_path[4096];
-  const char *use_path = NULL;
-  if (realpath(filename, abs_path) != NULL) {
-    use_path = abs_path;
-  } else use_path = filename;
+  fseek(fp, 0, SEEK_END);
+  long size = ftell(fp);
+  fseek(fp, 0, SEEK_SET);
+  
+  char *buffer = malloc(size + 1);
+  if (!buffer) {
+    fclose(fp);
+    return NULL;
+  }
+  
+  *len = fread(buffer, 1, size, fp);
+  fclose(fp);
+  buffer[*len] = '\0';
+  
+  return buffer;
+}
+
+static int execute_module(struct js *js, const char *filename) {
+  char *buffer = NULL;
+  size_t len = 0;
+  const char *use_path = filename;
+  
+  if (esm_is_url(filename)) {
+    char *error = NULL;
+    buffer = esm_fetch_url(filename, &len, &error);
+    
+    if (!buffer) {
+      fprintf(stderr, "Error: Could not fetch '%s': %s\n", filename, error ? error : "unknown error");
+      free(error);
+      return EXIT_FAILURE;
+    }
+    
+    js_set(js, js_glob(js), "__dirname", js_mkundef());
+  } else {
+    buffer = read_file(filename, &len);
+    if (!buffer) {
+      fprintf(stderr, "Error: Could not open file '%s'\n", filename);
+      return EXIT_FAILURE;
+    }
+    
+    char *file_path = strdup(filename);
+    char *dir = dirname(file_path);
+    js_set(js, js_glob(js), "__dirname", js_mkstr(js, dir, strlen(dir)));
+    free(file_path);
+    
+    char abs_path[4096];
+    if (realpath(filename, abs_path)) use_path = abs_path;
+  }
   
   char *js_code = buffer;
   size_t js_len = len;
@@ -122,6 +140,8 @@ static int execute_module(struct js *js, const char *filename) {
   }
 
   js_set_filename(js, use_path);
+  js_set(js, js_glob(js), "__filename", js_mkstr(js, filename, strlen(filename)));
+  
   js_setup_import_meta(js, use_path);
   js_mkscope(js);
   

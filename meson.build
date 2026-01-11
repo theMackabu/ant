@@ -22,6 +22,7 @@ sources = files(
   'src/repl.c',
   'src/runtime.c',
   'src/snapshot.c',
+  'src/esm/remote.c',
 ) + files(module_files)
 
 tls_lib = get_option('tls_library')
@@ -162,7 +163,7 @@ else
   timestamp = timestamp_opt
 endif
 
-version_conf.set('ANT_VERSION', '0.3.5.' + timestamp + '-g' + git_hash)
+version_conf.set('ANT_VERSION', '0.3.6.' + timestamp + '-g' + git_hash)
 version_conf.set('ANT_BUILD_TIMESTAMP', timestamp)
 
 cmd_cc = meson.get_compiler('c')
