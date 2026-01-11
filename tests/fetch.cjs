@@ -5,7 +5,7 @@ async function test_get() {
 
 async function test_json() {
   const test = (await fetch('https://themackabu.dev/test.json')).json();
-  console.log(test);
+  console.log(JSON.stringify(test));
 }
 
 async function test_post() {

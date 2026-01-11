@@ -16,13 +16,11 @@ replace__1_v0() {
     local source=$1
     local search=$2
     local replace=$3
-    # Here we use a command to avoid #646
     result_26=""
     bash_version__0_v0 
     left_comp=("${ret_bash_version0_v0[@]}")
     right_comp=(4 3)
     comp="$(
-        # Compare if left array >= right array
         len_comp="$( (( "${#left_comp[@]}" < "${#right_comp[@]}" )) && echo "${#left_comp[@]}"|| echo "${#right_comp[@]}")"
         for (( i=0; i<len_comp; i++ )); do
             left="${left_comp[i]:-0}"
