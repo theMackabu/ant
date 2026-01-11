@@ -162,7 +162,7 @@ else
   timestamp = timestamp_opt
 endif
 
-version_conf.set('ANT_VERSION', '0.3.4.' + timestamp + '-g' + git_hash)
+version_conf.set('ANT_VERSION', '0.3.5.' + timestamp + '-g' + git_hash)
 version_conf.set('ANT_BUILD_TIMESTAMP', timestamp)
 
 cmd_cc = meson.get_compiler('c')

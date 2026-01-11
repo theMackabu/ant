@@ -29,6 +29,7 @@
 #include <utarray.h>
 #include <uthash.h>
 #include <float.h>
+#include <uv.h>
 
 #define MCO_USE_VMEM_ALLOCATOR
 #define MCO_ZERO_MEMORY
@@ -42,6 +43,8 @@
 #include "modules/symbol.h"
 #include "modules/ffi.h"
 #include "modules/child_process.h"
+#include "modules/readline.h"
+#include "modules/json.h"
 
 #define CORO_MALLOC(size) calloc(1, size)
 #define CORO_FREE(ptr) free(ptr)
@@ -973,22 +976,25 @@ typedef enum {
   WORK_FETCHES          = 1 << 5,
   WORK_FS_OPS           = 1 << 6,
   WORK_CHILD_PROCS      = 1 << 7,
+  WORK_READLINE         = 1 << 8,
 } work_flags_t;
 
 static inline work_flags_t get_pending_work(void) {
   work_flags_t flags = 0;
-  if (has_pending_microtasks())      flags |= WORK_MICROTASKS;
-  if (has_pending_timers())          flags |= WORK_TIMERS;
-  if (has_pending_immediates())      flags |= WORK_IMMEDIATES;
-  if (js_has_pending_coroutines())   flags |= WORK_COROUTINES;
-  if (has_ready_coroutines())        flags |= WORK_COROUTINES_READY;
-  if (has_pending_fetches())         flags |= WORK_FETCHES;
-  if (has_pending_fs_ops())          flags |= WORK_FS_OPS;
-  if (has_pending_child_processes()) flags |= WORK_CHILD_PROCS;
+  if (has_pending_microtasks())          flags |= WORK_MICROTASKS;
+  if (has_pending_timers())              flags |= WORK_TIMERS;
+  if (has_pending_immediates())          flags |= WORK_IMMEDIATES;
+  if (js_has_pending_coroutines())       flags |= WORK_COROUTINES;
+  if (has_ready_coroutines())            flags |= WORK_COROUTINES_READY;
+  if (has_pending_fetches())             flags |= WORK_FETCHES;
+  if (has_pending_fs_ops())              flags |= WORK_FS_OPS;
+  if (has_pending_child_processes())     flags |= WORK_CHILD_PROCS;
+  if (has_active_readline_interfaces())  flags |= WORK_READLINE;
   return flags;
 }
 
-#define WORK_PENDING  (WORK_MICROTASKS | WORK_TIMERS | WORK_IMMEDIATES | WORK_COROUTINES | WORK_FETCHES | WORK_FS_OPS | WORK_CHILD_PROCS)
+#define WORK_TASKS    (WORK_MICROTASKS | WORK_TIMERS | WORK_IMMEDIATES | WORK_COROUTINES | WORK_FETCHES)
+#define WORK_PENDING  (WORK_TASKS | WORK_FS_OPS | WORK_CHILD_PROCS | WORK_READLINE)
 #define WORK_BLOCKING (WORK_MICROTASKS | WORK_IMMEDIATES | WORK_COROUTINES_READY)
 
 void js_run_event_loop(struct js *js) {
@@ -998,10 +1004,14 @@ void js_run_event_loop(struct js *js) {
     js_poll_events(js);
     work = get_pending_work();
     
+    if (work & WORK_READLINE) {
+      uv_run(uv_default_loop(), UV_RUN_NOWAIT);
+    }
+    
     if (!(work & WORK_BLOCKING) && (work & WORK_TIMERS)) {
       int64_t ms = get_next_timer_timeout();
       if (ms > 0) usleep(ms > 1000 ? 1000000 : (useconds_t)(ms * 1000));
-    }
+    } else if ((work & WORK_READLINE) && !(work & WORK_BLOCKING)) uv_run(uv_default_loop(), UV_RUN_ONCE);
   }
   
   js_poll_events(js);
@@ -19046,10 +19056,10 @@ static jsval_t esm_load_json(struct js *js, const char *path) {
   fclose(fp);
   content[size] = '\0';
   
-  jsval_t result = js_eval(js, content, size);
+  jsval_t json_str = js_mkstr(js, content, size);
   free(content);
   
-  return result;
+  return js_json_parse(js, &json_str, 1);
 }
 
 static jsval_t esm_load_text(struct js *js, const char *path) {
@@ -19518,18 +19528,21 @@ static jsval_t js_import_stmt(struct js *js) {
     js->consumed = 1; next(js); js->consumed = 0;
     if (is_err(ns)) return ns;
     
-    jsoff_t default_off = lkp(js, ns, "default", 7);
-    jsval_t default_val = default_off != 0 ? resolveprop(js, mkval(T_PROP, default_off)) : ns;
+    jsval_t default_val;
+    if (vtype(ns) == T_OBJ) {
+      jsoff_t default_off = lkp(js, ns, "default", 7);
+      default_val = default_off != 0 ? resolveprop(js, mkval(T_PROP, default_off)) : ns;
+    } else default_val = ns;
     setprop(js, js->scope, js_mkstr(js, default_name, default_len), default_val);
     
     for (int i = 0; i < binding_count; i++) {
       if (bindings[i].import_name == NULL) {
         setprop(js, js->scope, js_mkstr(js, bindings[i].local_name, bindings[i].local_len), ns);
-      } else {
+      } else if (vtype(ns) == T_OBJ) {
         jsoff_t prop_off = lkp(js, ns, bindings[i].import_name, bindings[i].import_len);
         jsval_t imported_val = prop_off != 0 ? resolveprop(js, mkval(T_PROP, prop_off)) : js_mkundef();
         setprop(js, js->scope, js_mkstr(js, bindings[i].local_name, bindings[i].local_len), imported_val);
-      }
+      } else setprop(js, js->scope, js_mkstr(js, bindings[i].local_name, bindings[i].local_len), js_mkundef());
     }
     
     return js_mkundef();
@@ -19622,11 +19635,11 @@ static jsval_t js_import_stmt(struct js *js) {
     js->consumed = 0;
     
     if (is_err(ns)) return ns;
+    if (vtype(ns) != T_OBJ) return js_mkerr(js, "Cannot use named imports from non-object module");
     
     for (int i = 0; i < binding_count; i++) {
       jsoff_t prop_off = lkp(js, ns, bindings[i].import_name, bindings[i].import_len);
       jsval_t imported_val = prop_off != 0 ? resolveprop(js, mkval(T_PROP, prop_off)) : js_mkundef();
-      
       setprop(js, js->scope, js_mkstr(js, bindings[i].local_name, bindings[i].local_len), imported_val);
     }
     
@@ -21456,6 +21469,7 @@ void js_gc_update_roots(GC_UPDATE_ARGS) {
   fetch_gc_update_roots(fwd_val, ctx);
   fs_gc_update_roots(fwd_val, ctx);
   child_process_gc_update_roots(fwd_val, ctx);
+  readline_gc_update_roots(fwd_val, ctx);
 
   map_registry_entry_t *map_reg, *map_reg_tmp;
   HASH_ITER(hh, map_registry, map_reg, map_reg_tmp) {

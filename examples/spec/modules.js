@@ -5,6 +5,10 @@ import * as fs from 'ant:fs';
 import * as shell from 'ant:shell';
 import * as ffi from 'ant:ffi';
 
+import testJson from './test.json';
+import { name, version, count } from './test.json';
+import textContent from './test.txt';
+
 console.log('Module Tests\n');
 
 test('import.meta exists', typeof import.meta, 'object');
@@ -25,5 +29,16 @@ test('path toStringTag', Object.prototype.toString.call(path), '[object path]');
 test('fs toStringTag', Object.prototype.toString.call(fs), '[object fs]');
 test('shell toStringTag', Object.prototype.toString.call(shell), '[object shell]');
 test('ffi toStringTag', Object.prototype.toString.call(ffi), '[object FFI]');
+
+test('JSON default import', typeof testJson, 'object');
+test('JSON default import name', testJson.name, 'test-package');
+test('JSON default import version', testJson.version, '1.0.0');
+test('JSON default import count', testJson.count, 42);
+test('JSON named import name', name, 'test-package');
+test('JSON named import version', version, '1.0.0');
+test('JSON named import count', count, 42);
+
+test('text default import type', typeof textContent, 'string');
+test('text default import value', textContent, 'Hello from text file\n');
 
 summary();

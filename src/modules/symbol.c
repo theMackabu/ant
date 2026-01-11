@@ -7,14 +7,19 @@
 #include "modules/symbol.h"
 
 static jsval_t g_iterator_sym = 0;
+static jsval_t g_asyncIterator_sym = 0;
 static jsval_t g_toStringTag_sym = 0;
 static jsval_t g_hasInstance_sym = 0;
 
 static char g_iter_sym_key[32] = {0};
+static char g_asyncIter_sym_key[32] = {0};
 static char g_toStringTag_sym_key[32] = {0};
 
 jsval_t get_iterator_symbol(void) { return g_iterator_sym; }
+jsval_t get_asyncIterator_symbol(void) { return g_asyncIterator_sym; }
+
 const char *get_iterator_sym_key(void) { return g_iter_sym_key; }
+const char *get_asyncIterator_sym_key(void) { return g_asyncIter_sym_key; }
 const char *get_toStringTag_sym_key(void) { return g_toStringTag_sym_key; }
 
 static jsval_t builtin_Symbol(struct js *js, jsval_t *args, int nargs) {
@@ -150,10 +155,12 @@ void init_symbol_module(void) {
   struct js *js = rt->js;
   
   g_iterator_sym = js_mksym(js, "Symbol.iterator");
+  g_asyncIterator_sym = js_mksym(js, "Symbol.asyncIterator");
   g_toStringTag_sym = js_mksym(js, "Symbol.toStringTag");
   g_hasInstance_sym = js_mksym(js, "Symbol.hasInstance");
   
   snprintf(g_iter_sym_key, sizeof(g_iter_sym_key), "__sym_%llu__", (unsigned long long)js_sym_id(g_iterator_sym));
+  snprintf(g_asyncIter_sym_key, sizeof(g_asyncIter_sym_key), "__sym_%llu__", (unsigned long long)js_sym_id(g_asyncIterator_sym));
   snprintf(g_toStringTag_sym_key, sizeof(g_toStringTag_sym_key), "__sym_%llu__", (unsigned long long)js_sym_id(g_toStringTag_sym));
   
   jsval_t symbol_ctor = js_mkobj(js);
@@ -162,6 +169,7 @@ void init_symbol_module(void) {
   js_set(js, symbol_ctor, "keyFor", js_mkfun(builtin_Symbol_keyFor));
   
   js_set(js, symbol_ctor, "iterator", g_iterator_sym);
+  js_set(js, symbol_ctor, "asyncIterator", g_asyncIterator_sym);
   js_set(js, symbol_ctor, "toStringTag", g_toStringTag_sym);
   js_set(js, symbol_ctor, "hasInstance", g_hasInstance_sym);
   

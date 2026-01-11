@@ -39,6 +39,7 @@
 #include "modules/localstorage.h"
 #include "modules/navigator.h"
 #include "modules/child_process.h"
+#include "modules/readline.h"
 
 int js_result = EXIT_SUCCESS;
 
@@ -227,8 +228,10 @@ int main(int argc, char *argv[]) {
   ant_standard_library("os", os_library);
   ant_standard_library("crypto", crypto_library);
   ant_standard_library("events", events_library);
+  ant_standard_library("readline", readline_library);
+  ant_standard_library("readline/promises", readline_promises_library);
   ant_standard_library("child_process", child_process_library);
-  
+
   jsval_t snapshot_result = ant_load_snapshot(js);
   if (js_type(snapshot_result) == JS_ERR) {
     fprintf(stderr, "Warning: Failed to load snapshot: %s\n", js_str(js, snapshot_result));
