@@ -61,8 +61,8 @@ libuv_sub = subproject('libuv', default_options: [
   'build_tests=false', 
   'build_benchmarks=false'
 ])
-libuv_dep = libuv_sub.get_variable('libuv_dep')
 
+libuv_dep = libuv_sub.get_variable('libuv_dep')
 tlsuv_opts = cmake.subproject_options()
 bdwgc_opts = cmake.subproject_options()
 
@@ -75,8 +75,6 @@ bdwgc_opts.add_cmake_defines({
   'BUILD_SHARED_LIBS': 'OFF',
   'enable_cplusplus': 'OFF',
 })
-
-
 
 tlsuv_opts.append_compile_args('c', [
   '-Wno-unused-function',
