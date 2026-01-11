@@ -72,3 +72,32 @@ jobs:
     uses: ./.github/workflows/build-windows-x64.yml
     with:
       build_timestamp: ${{ needs.prepare.outputs.timestamp }}
+
+  bundle:
+    needs:
+      - macos-aarch64
+      - macos-x64
+      - macos-aarch64-mbedtls
+      - macos-x64-mbedtls
+      - linux-glibc-x64
+      - linux-glibc-aarch64
+      - linux-musl-x64
+      - linux-musl-aarch64
+      - windows-x64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Create combined archive
+        run: |
+          mkdir -p zipped
+          for dir in artifacts/*/; do
+            name=$(basename "$dir")
+            (cd "$dir" && zip -r "../../zipped/${name}.zip" .)
+          done
+          (cd zipped && zip -r ../ant-all-platforms.zip .)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ant-all-platforms
+          path: ant-all-platforms.zip
