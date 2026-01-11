@@ -63,7 +63,7 @@ import { readFile, writeFile } from 'ant:fs';
 ```js
 import { $ } from 'ant:shell';
 
-const result = await $`ls -la`;
+const result = $`ls -la`;
 console.log(result.text());
 ```
 
