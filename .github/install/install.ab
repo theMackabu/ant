@@ -114,7 +114,7 @@ fun configure_shell(shell_name: Text, install_env: Text, quoted_install_dir: Tex
           return ""
         }
         trust $echo -e "\\x1b[2mAdded \"{tilde_bin_dir}\" to \\\$PATH in \"{tilde_zsh_config}\"\\x1b[0m"$
-        refresh_command = "exec $SHELL"
+        refresh_command = "source {tilde_zsh_config}"
       } else {
         echo "Manually add the directory to {tilde_zsh_config} (or similar):"
         for cmd in commands {
@@ -153,7 +153,7 @@ fun configure_shell(shell_name: Text, install_env: Text, quoted_install_dir: Tex
             continue
           }
           trust $echo -e "\\x1b[2mAdded \"{tilde_bin_dir}\" to \\\$PATH in \"{tilde_bash_config}\"\\x1b[0m"$
-          refresh_command = "source {bash_config}"
+          refresh_command = "source {tilde_bash_config}"
           set_manually = false
           break
         }
@@ -185,11 +185,24 @@ main(args) {
     echo_error("unzip is required to install ant")
   }
 
-  if len(args) > 2 {
-    echo_error("Too many arguments, only 1 is allowed. This can be a specific tag of ant to install. (e.g. \"ant-v0.1.4\")")
+  if len(args) > 3 {
+    echo_error("Too many arguments. Usage: install.ab [tag] [--mbedtls]")
   }
 
   let target = get_target()
+  let use_mbedtls = false
+
+  for arg in args {
+    if arg == "--mbedtls" { use_mbedtls = true }
+  }
+
+  if use_mbedtls {
+    if starts_with(target, "darwin") {
+      target = "{target}-mbedtls"
+    } else {
+      echo_error("--mbedtls option is only supported on macOS")
+    }
+  }
 
   let github = env_var_get("GITHUB") failed {
     "https://github.com"
@@ -200,10 +213,15 @@ main(args) {
   let github_repo = "{github}/themackabu/ant"
 
   let ant_uri = ""
-  if len(args) <= 1 {
+  let tag = ""
+  for arg in args {
+    if arg != "--mbedtls" and arg != args[0] { tag = arg }
+  }
+
+  if tag == "" {
     ant_uri = "{github_repo}/releases/latest/download/ant-{target}.zip"
   } else {
-    ant_uri = "{github_repo}/releases/download/{args[1]}/ant-{target}.zip"
+    ant_uri = "{github_repo}/releases/download/{tag}/ant-{target}.zip"
   }
 
   let install_env = "ANT_INSTALL"
@@ -266,7 +284,6 @@ main(args) {
 
   echo ""
   trust $echo -e "\\x1b[2mTo get started, run:\\x1b[0m"$
-  echo ""
 
   if refresh_command != "" {
     trust $echo -e "  {bold(refresh_command)}"$
