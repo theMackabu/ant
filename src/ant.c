@@ -2886,20 +2886,26 @@ static jsval_t builtin_bigint_toString(struct js *js, jsval_t *args, int nargs) 
   const char *digits = bigint_digits(js, val, &dlen);
   
   if (radix == 10) {
-    char buf[1024];
+    size_t buflen = dlen + 2;
+    char *buf = (char *)ANT_GC_MALLOC(buflen);
+    if (!buf) return js_mkerr(js, "oom");
     size_t n = 0;
     if (neg) buf[n++] = '-';
     memcpy(buf + n, digits, dlen);
     n += dlen;
-    return js_mkstr(js, buf, n);
+    jsval_t ret = js_mkstr(js, buf, n);
+    ANT_GC_FREE(buf);
+    return ret;
   }
   
-  char result[2048];
-  size_t rpos = sizeof(result) - 1;
+  size_t result_cap = dlen * 4 + 16;
+  char *result = (char *)ANT_GC_MALLOC(result_cap);
+  if (!result) return js_mkerr(js, "oom");
+  size_t rpos = result_cap - 1;
   result[rpos] = '\0';
   
-  char *num = (char *)malloc(dlen + 1);
-  if (!num) return js_mkerr(js, "oom");
+  char *num = (char *)ANT_GC_MALLOC(dlen + 1);
+  if (!num) { ANT_GC_FREE(result); return js_mkerr(js, "oom"); }
   memcpy(num, digits, dlen);
   num[dlen] = '\0';
   size_t numlen = dlen;
@@ -2916,19 +2922,32 @@ static jsval_t builtin_bigint_toString(struct js *js, jsval_t *args, int nargs) 
     memmove(num, num + start, numlen - start + 1);
     numlen -= start;
     if (numlen == 1 && num[0] == '0') numlen = 0;
+    if (rpos == 0) {
+      size_t new_cap = result_cap * 2;
+      char *new_result = (char *)ANT_GC_MALLOC(new_cap);
+      if (!new_result) { ANT_GC_FREE(num); ANT_GC_FREE(result); return js_mkerr(js, "oom"); }
+      size_t used = result_cap - rpos;
+      memcpy(new_result + new_cap - used, result + rpos, used);
+      ANT_GC_FREE(result);
+      result = new_result;
+      rpos = new_cap - used;
+      result_cap = new_cap;
+    }
     rpos--;
     result[rpos] = remainder < 10 ? '0' + remainder : 'a' + (remainder - 10);
   }
   
-  free(num);
+  ANT_GC_FREE(num);
   
-  if (rpos == sizeof(result) - 1) {
+  if (rpos == result_cap - 1) {
     result[--rpos] = '0';
   }
   
   if (neg) result[--rpos] = '-';
   
-  return js_mkstr(js, result + rpos, sizeof(result) - 1 - rpos);
+  jsval_t ret = js_mkstr(js, result + rpos, result_cap - 1 - rpos);
+  ANT_GC_FREE(result);
+  return ret;
 }
 
 static jsval_t mkobj(struct js *js, jsoff_t parent) {
@@ -14769,15 +14788,24 @@ static jsval_t builtin_array_join(struct js *js, jsval_t *args, int nargs) {
   }
   
   if (len == 0) return js_mkstr(js, "", 0);
-  char result[1024] = "";
+  
+  size_t capacity = 1024;
   size_t result_len = 0;
+  char *result = (char *)ANT_GC_MALLOC(capacity);
+  if (!result) return js_mkerr(js, "oom");
   
   for (jsoff_t i = 0; i < len; i++) {
     char idxstr[16];
     size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)i);
     jsoff_t elem_off = lkp(js, arr, idxstr, idxlen);
     
-    if (i > 0 && result_len + sep_len < sizeof(result)) {
+    if (i > 0) {
+      if (result_len + sep_len >= capacity) {
+        capacity = (result_len + sep_len + 1) * 2;
+        char *new_result = (char *)ANT_GC_REALLOC(result, capacity);
+        if (!new_result) return js_mkerr(js, "oom");
+        result = new_result;
+      }
       memcpy(result + result_len, sep, sep_len);
       result_len += sep_len;
     }
@@ -14786,29 +14814,43 @@ static jsval_t builtin_array_join(struct js *js, jsval_t *args, int nargs) {
       jsval_t elem = resolveprop(js, mkval(T_PROP, elem_off));
       if (vtype(elem) == T_STR) {
         jsoff_t elem_len, elem_off_str = vstr(js, elem, &elem_len);
-        if (result_len + elem_len < sizeof(result)) {
-          memcpy(result + result_len, &js->mem[elem_off_str], elem_len);
-          result_len += elem_len;
+        if (result_len + elem_len >= capacity) {
+          capacity = (result_len + elem_len + 1) * 2;
+          char *new_result = (char *)ANT_GC_REALLOC(result, capacity);
+          if (!new_result) return js_mkerr(js, "oom");
+          result = new_result;
         }
+        memcpy(result + result_len, &js->mem[elem_off_str], elem_len);
+        result_len += elem_len;
       } else if (vtype(elem) == T_NUM) {
         char numstr[32];
         snprintf(numstr, sizeof(numstr), "%g", tod(elem));
         size_t num_len = strlen(numstr);
-        if (result_len + num_len < sizeof(result)) {
-          memcpy(result + result_len, numstr, num_len);
-          result_len += num_len;
+        if (result_len + num_len >= capacity) {
+          capacity = (result_len + num_len + 1) * 2;
+          char *new_result = (char *)ANT_GC_REALLOC(result, capacity);
+          if (!new_result) return js_mkerr(js, "oom");
+          result = new_result;
         }
+        memcpy(result + result_len, numstr, num_len);
+        result_len += num_len;
       } else if (vtype(elem) == T_BOOL) {
         const char *boolstr = vdata(elem) ? "true" : "false";
         size_t bool_len = strlen(boolstr);
-        if (result_len + bool_len < sizeof(result)) {
-          memcpy(result + result_len, boolstr, bool_len);
-          result_len += bool_len;
+        if (result_len + bool_len >= capacity) {
+          capacity = (result_len + bool_len + 1) * 2;
+          char *new_result = (char *)ANT_GC_REALLOC(result, capacity);
+          if (!new_result) return js_mkerr(js, "oom");
+          result = new_result;
         }
+        memcpy(result + result_len, boolstr, bool_len);
+        result_len += bool_len;
       }
     }
   }
-  return js_mkstr(js, result, result_len);
+  jsval_t ret = js_mkstr(js, result, result_len);
+  ANT_GC_FREE(result);
+  return ret;
 }
 
 static jsval_t builtin_array_includes(struct js *js, jsval_t *args, int nargs) {
@@ -16750,7 +16792,7 @@ static jsval_t builtin_string_replace(struct js *js, jsval_t *args, int nargs) {
   bool is_regex = false;
   bool global_flag = false;
   bool is_func_replacement = (vtype(replacement) == T_FUNC);
-  char pattern_buf[256];
+  char *pattern_buf = NULL;
   jsoff_t pattern_len = 0;
   
   if (vtype(search) == T_OBJ) {
@@ -16762,9 +16804,11 @@ static jsval_t builtin_string_replace(struct js *js, jsval_t *args, int nargs) {
     
     is_regex = true;
     jsoff_t plen, poff = vstr(js, pattern_val, &plen);
-    pattern_len = plen < sizeof(pattern_buf) - 1 ? plen : sizeof(pattern_buf) - 1;
-    memcpy(pattern_buf, &js->mem[poff], pattern_len);
-    pattern_buf[pattern_len] = '\0';
+    pattern_len = plen;
+    pattern_buf = (char *)ANT_GC_MALLOC(plen + 1);
+    if (!pattern_buf) return js_mkerr(js, "oom");
+    memcpy(pattern_buf, &js->mem[poff], plen);
+    pattern_buf[plen] = '\0';
     
     jsoff_t flags_off = lkp(js, search, "flags", 5);
     if (flags_off == 0) goto not_regex;
@@ -16789,17 +16833,31 @@ static jsval_t builtin_string_replace(struct js *js, jsval_t *args, int nargs) {
     repl_ptr = (char *) &js->mem[repl_off];
   }
   
-  char result[4096];
-  jsoff_t result_len = 0;
+  size_t result_cap = str_len + repl_len + 256;
+  size_t result_len = 0;
+  char *result = (char *)ANT_GC_MALLOC(result_cap);
+  if (!result) return js_mkerr(js, "oom");
+
+#define ENSURE_RESULT_CAP(need) do { \
+  if (result_len + (need) >= result_cap) { \
+    result_cap = (result_len + (need) + 1) * 2; \
+    char *nr = (char *)ANT_GC_REALLOC(result, result_cap); \
+    if (!nr) return js_mkerr(js, "oom"); \
+    result = nr; \
+  } \
+} while(0)
   
   if (is_regex) {
-    char pcre2_pattern[512];
-    size_t pcre2_len = js_to_pcre2_pattern(pattern_buf, pattern_len, pcre2_pattern, sizeof(pcre2_pattern));
+    size_t pcre2_cap = pattern_len * 2 + 16;
+    char *pcre2_pattern = (char *)ANT_GC_MALLOC(pcre2_cap);
+    if (!pcre2_pattern) return js_mkerr(js, "oom");
+    size_t pcre2_len = js_to_pcre2_pattern(pattern_buf, pattern_len, pcre2_pattern, pcre2_cap);
 
     uint32_t options = PCRE2_UTF | PCRE2_UCP | PCRE2_MATCH_UNSET_BACKREF;
     int errcode;
     PCRE2_SIZE erroffset;
     pcre2_code *re = pcre2_compile((PCRE2_SPTR)pcre2_pattern, pcre2_len, options, &errcode, &erroffset, NULL);
+    ANT_GC_FREE(pcre2_pattern);
     if (re == NULL) return js_mkerr(js, "invalid regex pattern");
 
     pcre2_match_data *match_data = pcre2_match_data_create_from_pattern(re, NULL);
@@ -16818,10 +16876,9 @@ static jsval_t builtin_string_replace(struct js *js, jsval_t *args, int nargs) {
       PCRE2_SIZE match_end = ovector[1];
 
       PCRE2_SIZE before_len = match_start - pos;
-      if (result_len + before_len < sizeof(result)) {
-        memcpy(result + result_len, str_ptr + pos, before_len);
-        result_len += (jsoff_t)before_len;
-      }
+      ENSURE_RESULT_CAP(before_len);
+      memcpy(result + result_len, str_ptr + pos, before_len);
+      result_len += before_len;
 
       if (is_func_replacement) {
         int nargs_cb = 1 + capture_count + 2;
@@ -16855,44 +16912,40 @@ static jsval_t builtin_string_replace(struct js *js, jsval_t *args, int nargs) {
 
         if (vtype(cb_result) == T_STR) {
           jsoff_t cb_len, cb_off = vstr(js, cb_result, &cb_len);
-          if (result_len + cb_len < sizeof(result)) {
-            memcpy(result + result_len, &js->mem[cb_off], cb_len);
-            result_len += cb_len;
-          }
+          ENSURE_RESULT_CAP(cb_len);
+          memcpy(result + result_len, &js->mem[cb_off], cb_len);
+          result_len += cb_len;
         } else {
           char numbuf[32];
           size_t n = tostr(js, cb_result, numbuf, sizeof(numbuf));
-          if (result_len + n < sizeof(result)) {
-            memcpy(result + result_len, numbuf, n);
-            result_len += (jsoff_t)n;
-          }
+          ENSURE_RESULT_CAP(n);
+          memcpy(result + result_len, numbuf, n);
+          result_len += n;
         }
       } else {
-        for (jsoff_t ri = 0; ri < repl_len && result_len < sizeof(result); ) {
+        for (jsoff_t ri = 0; ri < repl_len; ) {
           if (repl_ptr[ri] == '$' && ri + 1 < repl_len) {
             char next = repl_ptr[ri + 1];
             if (next == '$') {
+              ENSURE_RESULT_CAP(1);
               result[result_len++] = '$';
               ri += 2;
             } else if (next == '&') {
               PCRE2_SIZE mlen = match_end - match_start;
-              if (result_len + mlen < sizeof(result)) {
-                memcpy(result + result_len, str_ptr + match_start, mlen);
-                result_len += (jsoff_t)mlen;
-              }
+              ENSURE_RESULT_CAP(mlen);
+              memcpy(result + result_len, str_ptr + match_start, mlen);
+              result_len += mlen;
               ri += 2;
             } else if (next == '`') {
-              if (result_len + match_start < sizeof(result)) {
-                memcpy(result + result_len, str_ptr, match_start);
-                result_len += (jsoff_t)match_start;
-              }
+              ENSURE_RESULT_CAP(match_start);
+              memcpy(result + result_len, str_ptr, match_start);
+              result_len += match_start;
               ri += 2;
             } else if (next == '\'') {
               PCRE2_SIZE after_len = str_len - match_end;
-              if (result_len + after_len < sizeof(result)) {
-                memcpy(result + result_len, str_ptr + match_end, after_len);
-                result_len += (jsoff_t)after_len;
-              }
+              ENSURE_RESULT_CAP(after_len);
+              memcpy(result + result_len, str_ptr + match_end, after_len);
+              result_len += after_len;
               ri += 2;
             } else if (next >= '0' && next <= '9') {
               int group_num = next - '0';
@@ -16910,99 +16963,105 @@ static jsval_t builtin_string_replace(struct js *js, jsval_t *args, int nargs) {
                 PCRE2_SIZE cap_end = ovector[2*group_num+1];
                 if (cap_start != PCRE2_UNSET) {
                   PCRE2_SIZE cap_len = cap_end - cap_start;
-                  if (result_len + cap_len < sizeof(result)) {
-                    memcpy(result + result_len, str_ptr + cap_start, cap_len);
-                    result_len += (jsoff_t)cap_len;
-                  }
+                  ENSURE_RESULT_CAP(cap_len);
+                  memcpy(result + result_len, str_ptr + cap_start, cap_len);
+                  result_len += cap_len;
                 }
               } else {
+                ENSURE_RESULT_CAP(2);
                 result[result_len++] = '$';
-                if (result_len < sizeof(result)) result[result_len++] = next;
+                result[result_len++] = next;
               }
             } else {
+              ENSURE_RESULT_CAP(1);
               result[result_len++] = repl_ptr[ri++];
             }
           } else {
+            ENSURE_RESULT_CAP(1);
             result[result_len++] = repl_ptr[ri++];
           }
         }
       }
 
       if (match_start == match_end) {
-        if (pos < str_len && result_len < sizeof(result)) {
+        if (pos < str_len) {
+          ENSURE_RESULT_CAP(1);
           result[result_len++] = str_ptr[pos];
         }
         pos = match_end + 1;
-      } else {
-        pos = match_end;
-      }
+      } else pos = match_end;
 
       replaced = true;
       if (!global_flag) break;
     }
 
-    if (pos < str_len && result_len + (str_len - pos) < sizeof(result)) {
-      memcpy(result + result_len, str_ptr + pos, str_len - pos);
-      result_len += (jsoff_t)(str_len - pos);
+    if (pos < str_len) {
+      size_t remaining = str_len - pos;
+      ENSURE_RESULT_CAP(remaining);
+      memcpy(result + result_len, str_ptr + pos, remaining);
+      result_len += remaining;
     }
 
     pcre2_match_data_free(match_data);
     pcre2_code_free(re);
-    return replaced ? js_mkstr(js, result, result_len) : str;
+    jsval_t ret = replaced ? js_mkstr(js, result, result_len) : str;
+    ANT_GC_FREE(result);
+    return ret;
 
   } else {
-    if (vtype(search) != T_STR) return str;
+    if (vtype(search) != T_STR) { ANT_GC_FREE(result); return str; }
     jsoff_t search_len, search_off = vstr(js, search, &search_len);
     const char *search_ptr = (char *) &js->mem[search_off];
     
-    if (search_len > str_len) return str;
+    if (search_len > str_len) { ANT_GC_FREE(result); return str; }
     
     for (jsoff_t i = 0; i <= str_len - search_len; i++) {
       if (memcmp(str_ptr + i, search_ptr, search_len) == 0) {
-        if (result_len + i < sizeof(result)) {
-          memcpy(result + result_len, str_ptr, i);
-          result_len += i;
-        }
+        ENSURE_RESULT_CAP(i);
+        memcpy(result + result_len, str_ptr, i);
+        result_len += i;
         
         if (is_func_replacement) {
           jsval_t match_str = js_mkstr(js, search_ptr, search_len);
           jsval_t cb_args[1] = { match_str };
           jsval_t cb_result = js_call(js, replacement, cb_args, 1);
           
-          if (vtype(cb_result) == T_ERR) return cb_result;
+          if (vtype(cb_result) == T_ERR) { ANT_GC_FREE(result); return cb_result; }
           
           if (vtype(cb_result) == T_STR) {
             jsoff_t cb_len, cb_off = vstr(js, cb_result, &cb_len);
-            if (result_len + cb_len < sizeof(result)) {
-              memcpy(result + result_len, &js->mem[cb_off], cb_len);
-              result_len += cb_len;
-            }
+            ENSURE_RESULT_CAP(cb_len);
+            memcpy(result + result_len, &js->mem[cb_off], cb_len);
+            result_len += cb_len;
           } else {
             char numbuf[32];
             size_t n = tostr(js, cb_result, numbuf, sizeof(numbuf));
-            if (result_len + n < sizeof(result)) {
-              memcpy(result + result_len, numbuf, n);
-              result_len += (jsoff_t)n;
-            }
+            ENSURE_RESULT_CAP(n);
+            memcpy(result + result_len, numbuf, n);
+            result_len += n;
           }
         } else {
-          if (result_len + repl_len < sizeof(result)) {
-            memcpy(result + result_len, repl_ptr, repl_len);
-            result_len += repl_len;
-          }
+          ENSURE_RESULT_CAP(repl_len);
+          memcpy(result + result_len, repl_ptr, repl_len);
+          result_len += repl_len;
         }
         
         jsoff_t after_start = i + search_len;
         jsoff_t after_len = str_len - after_start;
-        if (after_len > 0 && result_len + after_len < sizeof(result)) {
+        if (after_len > 0) {
+          ENSURE_RESULT_CAP(after_len);
           memcpy(result + result_len, str_ptr + after_start, after_len);
           result_len += after_len;
         }
-        return js_mkstr(js, result, result_len);
+        jsval_t ret = js_mkstr(js, result, result_len);
+        ANT_GC_FREE(result);
+        return ret;
       }
     }
+    ANT_GC_FREE(result);
     return str;
   }
+#undef ENSURE_RESULT_CAP
 }
 
 static jsval_t builtin_string_replaceAll(struct js *js, jsval_t *args, int nargs) {
@@ -17273,11 +17332,22 @@ static jsval_t builtin_string_template(struct js *js, jsval_t *args, int nargs) 
   jsoff_t str_len, str_off = vstr(js, str, &str_len);
   const char *str_ptr = (char *) &js->mem[str_off];
   
-  char result[2048];
-  jsoff_t result_len = 0;
+  size_t result_cap = str_len + 256;
+  size_t result_len = 0;
+  char *result = (char *)ANT_GC_MALLOC(result_cap);
+  if (!result) return js_mkerr(js, "oom");
   jsoff_t i = 0;
+
+#define ENSURE_CAP(need) do { \
+  if (result_len + (need) >= result_cap) { \
+    result_cap = (result_len + (need) + 1) * 2; \
+    char *nr = (char *)ANT_GC_REALLOC(result, result_cap); \
+    if (!nr) return js_mkerr(js, "oom"); \
+    result = nr; \
+  } \
+} while(0)
   
-  while (i < str_len && result_len < sizeof(result) - 1) {
+  while (i < str_len) {
     if (i < str_len - 3 && str_ptr[i] == '{' && str_ptr[i + 1] == '{') {
       jsoff_t start = i + 2;
       jsoff_t end = start;
@@ -17292,35 +17362,35 @@ static jsval_t builtin_string_template(struct js *js, jsval_t *args, int nargs) 
           jsval_t value = resolveprop(js, mkval(T_PROP, prop_off));
           if (vtype(value) == T_STR) {
             jsoff_t val_len, val_off = vstr(js, value, &val_len);
-            if (result_len + val_len < sizeof(result)) {
-              memcpy(result + result_len, &js->mem[val_off], val_len);
-              result_len += val_len;
-            }
+            ENSURE_CAP(val_len);
+            memcpy(result + result_len, &js->mem[val_off], val_len);
+            result_len += val_len;
           } else if (vtype(value) == T_NUM) {
             char numstr[32];
             snprintf(numstr, sizeof(numstr), "%g", tod(value));
             size_t num_len = strlen(numstr);
-            if (result_len + num_len < sizeof(result)) {
-              memcpy(result + result_len, numstr, num_len);
-              result_len += num_len;
-            }
+            ENSURE_CAP(num_len);
+            memcpy(result + result_len, numstr, num_len);
+            result_len += num_len;
           } else if (vtype(value) == T_BOOL) {
             const char *boolstr = vdata(value) ? "true" : "false";
             size_t bool_len = strlen(boolstr);
-            if (result_len + bool_len < sizeof(result)) {
-              memcpy(result + result_len, boolstr, bool_len);
-              result_len += bool_len;
-            }
+            ENSURE_CAP(bool_len);
+            memcpy(result + result_len, boolstr, bool_len);
+            result_len += bool_len;
           }
-        } else {
         }
         i = end + 2;
         continue;
       }
     }
+    ENSURE_CAP(1);
     result[result_len++] = str_ptr[i++];
   }
-  return js_mkstr(js, result, result_len);
+  jsval_t ret = js_mkstr(js, result, result_len);
+  ANT_GC_FREE(result);
+  return ret;
+#undef ENSURE_CAP
 }
 
 static jsval_t builtin_string_charCodeAt(struct js *js, jsval_t *args, int nargs) {

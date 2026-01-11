@@ -5,11 +5,16 @@ A minimal embedded JavaScript engine with async/await, promises, modules,
 and built-in APIs for HTTP servers, timers, crypto, and JSON.
 Check about my blog post about Ant! https://s.tail.so/js-in-one-month
 
+INSTALL:
+```
+curl -fsSL https://ant.themackabu.com/install | bash
+
+# or with MbedTLS (darwin only)
+curl -fsSL https://ant.themackabu.com/install | MBEDTLS=1 bash
+```
+
 BUILD:
   meson setup build && meson compile -C build
-
-RUN:
-  ./build/ant script.js
 
 EXAMPLE:
   See examples/server/server.js for a good server example using Ant.serve()
@@ -20,6 +25,7 @@ MODULES:
   HTTP & Networking:
     - Ant.serve()         - HTTP server with uv_tcp (TLS support via tlsuv)
     - fetch()             - HTTP client with TLS support (GET, POST, etc.)
+    - URL module imports  - Import directly from URLs
 
   Timers & Scheduling (built-in):
     - setTimeout()        - Execute callback after delay
@@ -55,6 +61,48 @@ MODULES:
     - result.stdout       - Raw stdout
     - result.stderr       - Raw stderr
 
+  Child Process (import from 'child_process'):
+    - spawn()             - Spawn child process with async streaming
+    - exec()              - Execute command and buffer output
+    - execSync()          - Execute command synchronously
+    - spawnSync()         - Spawn synchronous child process
+    - fork()              - Fork module as child process
+    - ChildProcess events - on('exit'), on('close'), on('error'), on('data')
+    - kill()              - Send signal to child process
+
+  Readline (import from 'readline'):
+    - createInterface()   - Create readline interface
+    - question()          - Prompt for user input with promise support
+    - on('line')          - Handle line input events
+    - on('close')         - Handle interface close
+    - pause()/resume()    - Control input stream
+    - close()             - Close interface
+    - History support     - Command history with navigation
+
+  OS (import from 'os'):
+    - arch()              - CPU architecture (x64, arm64, etc.)
+    - platform()          - Operating system platform
+    - type()              - Operating system name
+    - release()           - OS release version
+    - version()           - OS version string
+    - hostname()          - System hostname
+    - homedir()           - User home directory
+    - tmpdir()            - Temporary directory path
+    - cpus()              - CPU core information
+    - totalmem()          - Total system memory
+    - freemem()           - Free system memory
+    - uptime()            - System uptime in seconds
+    - networkInterfaces() - Network interface information
+    - userInfo()          - Current user information
+    - constants           - OS signals and errno constants
+    - EOL                 - Platform-specific end-of-line marker
+
+  Navigator
+    - navigator.userAgent     - User agent string
+    - navigator.platform      - Platform string
+    - navigator.hardwareConcurrency - CPU thread count
+    - navigator.locks         - Web Locks API for coordination
+
   Cryptography (crypto):
     - random()            - Cryptographically secure random number
     - randomBytes()       - Generate random bytes
@@ -80,6 +128,25 @@ MODULES:
     - pid                 - Process ID
     - exit()              - Exit process with code
     - cpuUsage()          - Get CPU usage statistics
+
+  Performance:
+    - performance.now()       - High-resolution timestamp
+    - performance.timeOrigin  - Time origin for measurements
+
+  Ant Global
+    - Ant.version         - Runtime version
+    - Ant.target          - Build target
+    - Ant.revision        - Git revision
+    - Ant.buildDate       - Build date
+    - Ant.serve()         - Start HTTP server
+    - Ant.signal()        - Register signal handlers
+    - Ant.sleep()         - Sleep in seconds
+    - Ant.msleep()        - Sleep in milliseconds
+    - Ant.usleep()        - Sleep in microseconds
+    - Ant.gc()            - Trigger garbage collection
+    - Ant.alloc()         - Get memory allocation info
+    - Ant.stats()         - Get runtime statistics
+    - Ant.typeof()        - Get internal type name
 
   JSON:
     - JSON.parse()        - Parse JSON string
@@ -177,6 +244,16 @@ MODULES:
     - import 'ant:path'     - Import built-in path module
     - import 'ant:shell'    - Import built-in shell module ($`...`)
     - import 'ant:ffi'      - Import built-in FFI module
+    - import 'node:*'       - Node.js-style module aliases
+    - import from URL       - Import modules from HTTP/HTTPS URLs
+    - import '.json'        - Import JSON files as modules
+    - import '.txt'         - Import text files as strings
+
+TYPESCRIPT:
+  Built-in TypeScript type stripping via oxc (no type checking, strip only):
+    - Run .ts files directly: ./build/ant script.ts
+    - Type annotations are stripped at parse time
+    - Full type definitions available in src/types/
 
 JAVASCRIPT FEATURES:
   Full ES1-ES5 compliance with ES6+ extensions:
@@ -218,6 +295,7 @@ JAVASCRIPT FEATURES:
   - Default parameters in functions
   - Array and object destructuring with defaults
   - Computed property names in object literals
+  - Shebang support (#!/usr/bin/env ant)
 
 CONCURRENCY:
   - Minicoro-based coroutines for async/await
@@ -228,7 +306,7 @@ CONCURRENCY:
   - Virtual memory allocation for coroutine stacks
 
 SYSTEM:
-  - Signal handlers (SIGINT, SIGTERM, etc.)
+  - Signal handlers (SIGINT, SIGTERM, etc.) via Ant.signal()
   - Mark-copy compacting garbage collector + Boehm-Demers-Weiser
   - Coroutine execution tracking for proper GC
   - Forward reference tracking for memory compaction
@@ -238,6 +316,7 @@ SYSTEM:
   - Non-configurable properties support (Object.defineProperty)
   - Native library integration via FFI
   - libuv-based async I/O for files and networking
+  - TLS support via mbedtls or tlsuv
   - LTO (Link Time Optimization) build support
   - Gzip compression support for HTTP responses
 
