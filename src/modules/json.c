@@ -23,22 +23,18 @@ static jsval_t yyjson_to_jsval(struct js *js, yyjson_val *val) {
       return js_mkstr(js, yyjson_get_str(val), yyjson_get_len(val));
     
     case YYJSON_TYPE_ARR: {
-      jsval_t arr = js_mkobj(js);
+      jsval_t arr = js_mkarr(js);
       size_t idx, max;
       yyjson_val *item;
       
-      yyjson_arr_foreach(val, idx, max, item) {
-        char idxstr[32];
-        snprintf(idxstr, sizeof(idxstr), "%zu", idx);
-        js_set(js, arr, idxstr, yyjson_to_jsval(js, item));
-      }
+      yyjson_arr_foreach(val, idx, max, item)
+        js_arr_push(js, arr, yyjson_to_jsval(js, item));
       
-      js_set(js, arr, "length", js_mknum((double)yyjson_arr_size(val)));
       return arr;
     }
     
     case YYJSON_TYPE_OBJ: {
-      jsval_t obj = js_mkobj(js);
+      jsval_t obj = js_newobj(js);
       size_t idx, max;
       yyjson_val *key, *item;
       

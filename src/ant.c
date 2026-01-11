@@ -2966,7 +2966,16 @@ static jsval_t mkarr(struct js *js) {
   return mkval(T_ARR, vdata(arr));
 }
 
-jsval_t js_mkarr(struct js *js) { return mkarr(js); }
+jsval_t js_mkarr(struct js *js) { 
+  return mkarr(js); 
+}
+
+jsval_t js_newobj(struct js *js) {
+  jsval_t obj = mkobj(js, 0);
+  jsval_t proto = get_ctor_proto(js, "Object", 6);
+  if (vtype(proto) == T_OBJ) set_proto(js, obj, proto);
+  return obj;
+}
 
 static jsoff_t arr_length(struct js *js, jsval_t arr) {
   if (vtype(arr) != T_ARR) return 0;

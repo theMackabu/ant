@@ -82,6 +82,7 @@ jsval_t js_mksym_for(struct js *, const char *key);
 const char *js_sym_key(jsval_t sym);
 
 jsval_t js_mkobj(struct js *);
+jsval_t js_newobj(struct js *);
 jsval_t js_mkarr(struct js *);
 void js_arr_push(struct js *, jsval_t arr, jsval_t val);
 jsval_t js_mkstr(struct js *, const void *, size_t);

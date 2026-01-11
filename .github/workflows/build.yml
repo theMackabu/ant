@@ -94,9 +94,9 @@ jobs:
           mkdir -p zipped
           for dir in artifacts/*/; do
             name=$(basename "$dir")
-            (cd "$dir" && zip -r "../../zipped/${name}.zip" .)
+            (cd "$dir" && zip -rX "../../zipped/${name}.zip" .)
           done
-          (cd zipped && zip -r ../ant-all-platforms.zip .)
+          (cd zipped && zip -rX ../ant-all-platforms.zip .)
       - uses: actions/upload-artifact@v4
         with:
           name: ant-all-platforms
