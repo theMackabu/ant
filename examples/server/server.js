@@ -11,25 +11,23 @@ addRoute(router, 'GET', '/', c => c.res.body(`Welcome to Ant ${Ant.version}!`));
 addRoute(router, 'GET', '/meow', async c => {
   const userAgent = c.req.header('User-Agent');
   c.res.header('X-Ant', 'meow');
-
   return c.res.body(`${meow}\n\n${userAgent}`);
 });
 
-addRoute(router, 'GET', '/echo', c =>
-  fetch('http://localhost:8000/meow').then(res => {
-    c.res.header('X-Ant', 'meow');
-    c.res.body(res.body);
-  })
-);
-
-addRoute(router, 'GET', '/get', c => {
-  console.log(c.get('meow'));
-  c.res.body(decodeURIComponent(c.get('meow')));
+addRoute(router, 'GET', '/echo', c => {
+  c.res.header('X-Ant', 'meow');
+  fetch('http://localhost:8000/meow')
+    .then(res => res.text())
+    .then(c.res.body);
 });
 
-addRoute(router, 'GET', '/set/**:val', c => {
-  c.set('meow', c.params.val);
-  c.res.body(`meow = ${c.params.val}`);
+addRoute(router, 'GET', '/get/:id', c => {
+  c.res.body(decodeURIComponent(c.get(c.params.id)));
+});
+
+addRoute(router, 'GET', '/set/:id/**:val', c => {
+  c.set(c.params.id, c.params.val);
+  c.res.body(`${c.params.id} = ${c.params.val}`);
 });
 
 addRoute(router, 'GET', '/fs/meow', async c => {
@@ -61,12 +59,12 @@ addRoute(router, 'GET', '/api/v1/users', async c => {
 
 addRoute(router, 'GET', '/zen', async c => {
   const response = await fetch('https://api.github.com/zen');
-  return c.res.body(response.body);
+  return c.res.body(await response.text());
 });
 
 addRoute(router, 'GET', '/api/v2/demo', async c => {
   const data = await fetch('https://themackabu.dev/test.json');
-  return c.res.json(data.json());
+  return c.res.json(await data.json());
 });
 
 addRoute(router, 'GET', '/files/**:path', async c => {

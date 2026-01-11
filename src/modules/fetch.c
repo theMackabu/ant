@@ -11,6 +11,7 @@
 #include "config.h"
 #include "runtime.h"
 #include "modules/fetch.h"
+#include "modules/json.h"
 #include "modules/timer.h"
 
 typedef struct {
@@ -56,18 +57,41 @@ static void remove_pending_request(fetch_request_t *req) {
   }
 }
 
+static jsval_t response_text(struct js *js, jsval_t *args, int nargs) {
+  (void)args; (void)nargs;
+  
+  jsval_t fn = js_getcurrentfunc(js);
+  jsval_t body = js_get_slot(js, fn, SLOT_DATA);
+  jsval_t promise = js_mkpromise(js);
+  js_resolve_promise(js, promise, body);
+  
+  return promise;
+}
+
+static jsval_t response_json(struct js *js, jsval_t *args, int nargs) {
+  (void)args; (void)nargs;
+  
+  jsval_t fn = js_getcurrentfunc(js);
+  jsval_t body = js_get_slot(js, fn, SLOT_DATA);
+  jsval_t parsed = js_json_parse(js, &body, 1);
+  jsval_t promise = js_mkpromise(js);
+  
+  if (js_type(parsed) == JS_ERR) {
+    js_reject_promise(js, promise, parsed);
+  } else js_resolve_promise(js, promise, parsed);
+  
+  return promise;
+}
+
 static jsval_t create_response(struct js *js, int status, const char *body, size_t body_len) {
   jsval_t response_obj = js_mkobj(js);
-  
-  js_set(js, response_obj, "status", js_mknum(status));
+  jsval_t body_str = js_mkstr(js, body, body_len);
+
   js_set(js, response_obj, "ok", status >= 200 && status < 300 ? js_mktrue() : js_mkfalse());
-  js_set(js, response_obj, "body", js_mkstr(js, body, body_len));
+  js_set(js, response_obj, "status", js_mknum(status));
   
-  const char *json_code = "(){return JSON.parse(this.body)}";
-  jsval_t json_str = js_mkstr(js, json_code, strlen(json_code));
-  jsval_t json_obj = js_mkobj(js);
-  js_set_slot(js, json_obj, SLOT_CODE, json_str);
-  js_set(js, response_obj, "json", js_obj_to_func(json_obj));
+  js_set(js, response_obj, "text", js_heavy_mkfun(js, response_text, body_str));
+  js_set(js, response_obj, "json", js_heavy_mkfun(js, response_json, body_str));
   
   return response_obj;
 }

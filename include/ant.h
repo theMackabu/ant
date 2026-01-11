@@ -15,6 +15,7 @@
 
 #define ANT_LIMIT_SIZE_CACHE 16384
 #define ANT_STRING(s) js_mkstr(js, s, sizeof(s) - 1)
+#define ANT_PTR(ptr)  js_mknum((unsigned long)(ptr))
 
 struct js;
 
@@ -88,6 +89,8 @@ jsval_t js_mksym(struct js *, const char *desc);
 jsval_t js_mkerr(struct js *js, const char *fmt, ...);
 jsval_t js_mkerr_typed(struct js *js, js_err_type_t err_type, const char *fmt, ...);
 jsval_t js_mkfun(jsval_t (*fn)(struct js *, jsval_t *, int));
+jsval_t js_heavy_mkfun(struct js *js, jsval_t (*fn)(struct js *, jsval_t *, int), jsval_t data);
+
 jsval_t js_call(struct js *js, jsval_t func, jsval_t *args, int nargs);
 jsval_t js_call_with_this(struct js *js, jsval_t func, jsval_t this_val, jsval_t *args, int nargs);
 

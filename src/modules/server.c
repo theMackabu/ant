@@ -341,12 +341,9 @@ static void send_response(uv_stream_t *client, response_ctx_t *res_ctx);
 static jsval_t js_set_prop(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkundef();
   
-  jsval_t this_val = js_getthis(js);
-  jsval_t store_obj = js_get(js, this_val, "__store");
-  
-  if (js_type(store_obj) == JS_UNDEF) {
-    return js_mkundef();
-  }
+  jsval_t fn = js_getcurrentfunc(js);
+  jsval_t store_obj = js_get_slot(js, fn, SLOT_DATA);
+  if (js_type(store_obj) == JS_UNDEF) return js_mkundef();
   
   if (js_type(args[0]) == JS_STR) {
     size_t key_len;
@@ -360,12 +357,9 @@ static jsval_t js_set_prop(struct js *js, jsval_t *args, int nargs) {
 static jsval_t js_get_prop(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
   
-  jsval_t this_val = js_getthis(js);
-  jsval_t store_obj = js_get(js, this_val, "__store");
-  
-  if (js_type(store_obj) == JS_UNDEF) {
-    return js_mkundef();
-  }
+  jsval_t fn = js_getcurrentfunc(js);
+  jsval_t store_obj = js_get_slot(js, fn, SLOT_DATA);
+  if (js_type(store_obj) == JS_UNDEF) return js_mkundef();
   
   if (js_type(args[0]) == JS_STR) {
     size_t key_len;
@@ -379,8 +373,8 @@ static jsval_t js_get_prop(struct js *js, jsval_t *args, int nargs) {
 static jsval_t req_header(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
   
-  jsval_t this_val = js_getthis(js);
-  jsval_t headers_val = js_get(js, this_val, "__headers");
+  jsval_t fn = js_getcurrentfunc(js);
+  jsval_t headers_val = js_get_slot(js, fn, SLOT_DATA);
   if (js_type(headers_val) != JS_NUM) return js_mkundef();
   
   UT_array *headers = (UT_array *)(unsigned long)js_getnum(headers_val);
@@ -403,8 +397,8 @@ static jsval_t req_header(struct js *js, jsval_t *args, int nargs) {
 static jsval_t res_header(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkundef();
   
-  jsval_t this_val = js_getthis(js);
-  jsval_t ctx_val = js_get(js, this_val, "__response_ctx");
+  jsval_t fn = js_getcurrentfunc(js);
+  jsval_t ctx_val = js_get_slot(js, fn, SLOT_DATA);
   if (js_type(ctx_val) != JS_NUM) return js_mkundef();
   
   response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
@@ -423,8 +417,8 @@ static jsval_t res_header(struct js *js, jsval_t *args, int nargs) {
 static jsval_t res_status(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
   
-  jsval_t this_val = js_getthis(js);
-  jsval_t ctx_val = js_get(js, this_val, "__response_ctx");
+  jsval_t fn = js_getcurrentfunc(js);
+  jsval_t ctx_val = js_get_slot(js, fn, SLOT_DATA);
   if (js_type(ctx_val) != JS_NUM) return js_mkundef();
   
   response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
@@ -440,8 +434,8 @@ static jsval_t res_status(struct js *js, jsval_t *args, int nargs) {
 static jsval_t res_body(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
   
-  jsval_t this_val = js_getthis(js);
-  jsval_t ctx_val = js_get(js, this_val, "__response_ctx");
+  jsval_t fn = js_getcurrentfunc(js);
+  jsval_t ctx_val = js_get_slot(js, fn, SLOT_DATA);
   if (js_type(ctx_val) != JS_NUM) return js_mkundef();
   
   response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
@@ -469,8 +463,8 @@ static jsval_t res_body(struct js *js, jsval_t *args, int nargs) {
 static jsval_t res_html(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
   
-  jsval_t this_val = js_getthis(js);
-  jsval_t ctx_val = js_get(js, this_val, "__response_ctx");
+  jsval_t fn = js_getcurrentfunc(js);
+  jsval_t ctx_val = js_get_slot(js, fn, SLOT_DATA);
   if (js_type(ctx_val) != JS_NUM) return js_mkundef();
   
   response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
@@ -493,8 +487,8 @@ static jsval_t res_html(struct js *js, jsval_t *args, int nargs) {
 static jsval_t res_json(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
   
-  jsval_t this_val = js_getthis(js);
-  jsval_t ctx_val = js_get(js, this_val, "__response_ctx");
+  jsval_t fn = js_getcurrentfunc(js);
+  jsval_t ctx_val = js_get_slot(js, fn, SLOT_DATA);
   if (js_type(ctx_val) != JS_NUM) return js_mkundef();
   
   response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
@@ -524,8 +518,10 @@ static jsval_t res_json(struct js *js, jsval_t *args, int nargs) {
 }
 
 static jsval_t res_notFound(struct js *js, jsval_t *args, int nargs) {
-  jsval_t this_val = js_getthis(js);
-  jsval_t ctx_val = js_get(js, this_val, "__response_ctx");
+  (void)args; (void)nargs;
+  
+  jsval_t fn = js_getcurrentfunc(js);
+  jsval_t ctx_val = js_get_slot(js, fn, SLOT_DATA);
   if (js_type(ctx_val) != JS_NUM) return js_mkundef();
   
   response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
@@ -543,8 +539,8 @@ static jsval_t res_notFound(struct js *js, jsval_t *args, int nargs) {
 static jsval_t res_redirect(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
   
-  jsval_t this_val = js_getthis(js);
-  jsval_t ctx_val = js_get(js, this_val, "__response_ctx");
+  jsval_t fn = js_getcurrentfunc(js);
+  jsval_t ctx_val = js_get_slot(js, fn, SLOT_DATA);
   if (js_type(ctx_val) != JS_NUM) return js_mkundef();
   
   response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
@@ -721,26 +717,23 @@ static void handle_http_request(client_t *client, http_request_t *http_req) {
     js_set(server->js, req, "uri", js_mkstr(server->js, http_req->uri, strlen(http_req->uri)));
     js_set(server->js, req, "query", js_mkstr(server->js, http_req->query, strlen(http_req->query)));
     js_set(server->js, req, "body", js_mkstr(server->js, http_req->body ? http_req->body : "", http_req->body ? http_req->body_len : 0));
-    js_set(server->js, req, "__headers", js_mknum((unsigned long)http_req->headers));
-    js_set(server->js, req, "header", js_mkfun(req_header));
+    js_set(server->js, req, "header", js_heavy_mkfun(server->js, req_header, ANT_PTR(http_req->headers)));
     
     jsval_t res_obj = js_mkobj(server->js);
-    js_set(server->js, res_obj, "__response_ctx", js_mknum((unsigned long)res_ctx));
-    js_set(server->js, res_obj, "header", js_mkfun(res_header));
-    js_set(server->js, res_obj, "status", js_mkfun(res_status));
-    js_set(server->js, res_obj, "body", js_mkfun(res_body));
-    js_set(server->js, res_obj, "html", js_mkfun(res_html));
-    js_set(server->js, res_obj, "json", js_mkfun(res_json));
-    js_set(server->js, res_obj, "notFound", js_mkfun(res_notFound));
-    js_set(server->js, res_obj, "redirect", js_mkfun(res_redirect));
+    js_set(server->js, res_obj, "header", js_heavy_mkfun(server->js, res_header, ANT_PTR(res_ctx)));
+    js_set(server->js, res_obj, "status", js_heavy_mkfun(server->js, res_status, ANT_PTR(res_ctx)));
+    js_set(server->js, res_obj, "body", js_heavy_mkfun(server->js, res_body, ANT_PTR(res_ctx)));
+    js_set(server->js, res_obj, "html", js_heavy_mkfun(server->js, res_html, ANT_PTR(res_ctx)));
+    js_set(server->js, res_obj, "json", js_heavy_mkfun(server->js, res_json, ANT_PTR(res_ctx)));
+    js_set(server->js, res_obj, "notFound", js_heavy_mkfun(server->js, res_notFound, ANT_PTR(res_ctx)));
+    js_set(server->js, res_obj, "redirect", js_heavy_mkfun(server->js, res_redirect, ANT_PTR(res_ctx)));
     
     js_set(server->js, ctx, "req", req);
     js_set(server->js, ctx, "res", res_obj);
     
-    js_set(server->js, ctx, "set", js_mkfun(js_set_prop));
-    js_set(server->js, ctx, "get", js_mkfun(js_get_prop));
-    js_set(server->js, ctx, "__store", server->store_obj);
-
+    js_set(server->js, ctx, "set", js_heavy_mkfun(server->js, js_set_prop, server->store_obj));
+    js_set(server->js, ctx, "get", js_heavy_mkfun(server->js, js_get_prop, server->store_obj));
+  
     jsval_t args[1] = {ctx};
     result = js_call(server->js, server->handler, args, 1);
     if (js_type(result) == JS_PROMISE) return;
