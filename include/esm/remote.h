@@ -5,7 +5,11 @@
 #include <stddef.h>
 
 bool esm_is_url(const char *spec);
+
 char *esm_fetch_url(const char *url, size_t *out_len, char **out_error);
 char *esm_resolve_url(const char *specifier, const char *base_url);
+
+#define FILE_RESOLVER *(*file_resolver)(const char *, const char *)
+char *esm_resolve(const char *specifier, const char *base_path, char FILE_RESOLVER);
 
 #endif

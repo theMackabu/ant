@@ -889,9 +889,7 @@ static void mco_async_entry(mco_coro* mco) {
     js->flags &= (uint8_t)~F_THROW;
     js->thrown_value = js_mkundef();
     js_reject_promise(js, ctx->promise, reject_value);
-  } else {
-    js_resolve_promise(js, ctx->promise, result);
-  }
+  } else js_resolve_promise(js, ctx->promise, result);
 }
 
 static void enqueue_coroutine(coroutine_t *coro) {
@@ -901,9 +899,7 @@ static void enqueue_coroutine(coroutine_t *coro) {
   
   if (pending_coroutines.tail) {
     pending_coroutines.tail->next = coro;
-  } else {
-    pending_coroutines.head = coro;
-  }
+  } else pending_coroutines.head = coro;
   pending_coroutines.tail = coro;
 }
 
@@ -912,15 +908,11 @@ static void remove_coroutine(coroutine_t *coro) {
   
   if (coro->prev) {
     coro->prev->next = coro->next;
-  } else {
-    pending_coroutines.head = coro->next;
-  }
+  } else pending_coroutines.head = coro->next;
   
   if (coro->next) {
     coro->next->prev = coro->prev;
-  } else {
-    pending_coroutines.tail = coro->prev;
-  }
+  } else pending_coroutines.tail = coro->prev;
   
   coro->prev = NULL;
   coro->next = NULL;
@@ -953,24 +945,17 @@ void js_poll_events(struct js *js) {
   process_immediates(js);
   process_microtasks(js);
   
-  coroutine_t *temp = pending_coroutines.head;
-  
-  while (temp) {
-    coroutine_t *next = temp->next;
+  for (coroutine_t *temp = pending_coroutines.head, *next; temp; temp = next) {
+    next = temp->next;
+    if (!temp->is_ready || !temp->mco || mco_status(temp->mco) != MCO_SUSPENDED) continue;
     
-    if (temp->is_ready && temp->mco && mco_status(temp->mco) == MCO_SUSPENDED) {
-      remove_coroutine(temp);
-      mco_result res = mco_resume(temp->mco);
-      
-      if (res == MCO_SUCCESS && mco_status(temp->mco) == MCO_DEAD) {
-        free_coroutine(temp);
-      } else if (res == MCO_SUCCESS) {
-        temp->is_ready = false;
-        enqueue_coroutine(temp);
-      } else free_coroutine(temp);
-    }
+    remove_coroutine(temp);
+    mco_result res = mco_resume(temp->mco);
     
-    temp = next;
+    if (res == MCO_SUCCESS && mco_status(temp->mco) != MCO_DEAD) {
+      temp->is_ready = false;
+      enqueue_coroutine(temp);
+    } else free_coroutine(temp);
   }
 }
 
@@ -19270,6 +19255,15 @@ static jsval_t esm_load_module(struct js *js, esm_module_t *mod) {
   return ns;
 }
 
+static jsval_t esm_get_or_load(struct js *js, const char *specifier, const char *resolved_path) {
+  esm_module_t *mod = esm_find_module(resolved_path);
+  if (!mod) {
+    mod = esm_create_module(specifier, resolved_path);
+    if (!mod) return js_mkerr(js, "Cannot create module");
+  }
+  return esm_load_module(js, mod);
+}
+
 static jsval_t builtin_import(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1 || vtype(args[0]) != T_STR) {
     return js_mkerr(js, "import() requires a string specifier");
@@ -19289,28 +19283,14 @@ static jsval_t builtin_import(struct js *js, jsval_t *args, int nargs) {
   }
   
   const char *base_path = js->filename ? js->filename : ".";
-  char *resolved_path = NULL;
-  
-  if (esm_is_url(specifier) || esm_is_url(base_path)) {
-    resolved_path = esm_resolve_url(specifier, base_path);
-  } else resolved_path = esm_resolve_path(specifier, base_path);
-  
+  char *resolved_path = esm_resolve(specifier, base_path, esm_resolve_path);
   if (!resolved_path) {
     jsval_t err = js_mkerr(js, "Cannot resolve module: %s", specifier);
     free(specifier);
     return err;
   }
   
-  esm_module_t *mod = esm_find_module(resolved_path);
-  if (!mod) {
-    mod = esm_create_module(specifier, resolved_path);
-    if (!mod) {
-      free(resolved_path);
-      free(specifier); return js_mkerr(js, "Cannot create module");
-    }
-  }
-  
-  jsval_t ns = esm_load_module(js, mod);
+  jsval_t ns = esm_get_or_load(js, specifier, resolved_path);
   free(resolved_path);
   free(specifier);
   
@@ -19330,12 +19310,7 @@ static jsval_t builtin_import_meta_resolve(struct js *js, jsval_t *args, int nar
   char *specifier = strndup((char *)&js->mem[spec_off], spec_len);
   
   const char *base_path = js->filename ? js->filename : ".";
-  char *resolved_path = NULL;
-  
-  if (esm_is_url(specifier) || esm_is_url(base_path)) {
-    resolved_path = esm_resolve_url(specifier, base_path);
-  } else resolved_path = esm_resolve_path(specifier, base_path);
-  
+  char *resolved_path = esm_resolve(specifier, base_path, esm_resolve_path);
   if (!resolved_path) {
     jsval_t err = js_mkerr(js, "Cannot resolve module: %s", specifier);
     free(specifier); return err;
@@ -19466,30 +19441,15 @@ static jsval_t js_import_stmt(struct js *js) {
      ns = lib->init_fn(js);
     } else {
       const char *base_path = js->filename ? js->filename : ".";
-      char *resolved_path = NULL;
-      
-      if (esm_is_url(spec_str) || esm_is_url(base_path)) {
-        resolved_path = esm_resolve_url(spec_str, base_path);
-      } else resolved_path = esm_resolve_path(spec_str, base_path);
-      
+      char *resolved_path = esm_resolve(spec_str, base_path, esm_resolve_path);
       if (!resolved_path) {
         free(spec_str);
         return js_mkerr(js, "Cannot resolve module: %.*s", (int)spec_len, spec_str);
       }
       
-      esm_module_t *mod = esm_find_module(resolved_path);
-      if (!mod) {
-        mod = esm_create_module(spec_str, resolved_path);
-        if (!mod) {
-          free(resolved_path);
-          free(spec_str); return js_mkerr(js, "Cannot create module");
-        }
-      }
-      
       js_parse_state_t saved;
       JS_SAVE_STATE(js, saved);
-      
-      ns = esm_load_module(js, mod);
+      ns = esm_get_or_load(js, spec_str, resolved_path);
       JS_RESTORE_STATE(js, saved);
       
       free(resolved_path);
@@ -19581,30 +19541,15 @@ static jsval_t js_import_stmt(struct js *js) {
       ns = lib->init_fn(js);
     } else {
       const char *base_path = js->filename ? js->filename : ".";
-      char *resolved_path = NULL;
-      
-      if (esm_is_url(spec_str) || esm_is_url(base_path)) {
-        resolved_path = esm_resolve_url(spec_str, base_path);
-      } else resolved_path = esm_resolve_path(spec_str, base_path);
-      
+      char *resolved_path = esm_resolve(spec_str, base_path, esm_resolve_path);
       if (!resolved_path) {
         free(spec_str);
         return js_mkerr(js, "Cannot resolve module: %s", spec_str);
       }
       
-      esm_module_t *mod = esm_find_module(resolved_path);
-      if (!mod) {
-        mod = esm_create_module(spec_str, resolved_path);
-        if (!mod) {
-          free(resolved_path);
-          free(spec_str); return js_mkerr(js, "Cannot create module");
-        }
-      }
-      
       js_parse_state_t saved;
       JS_SAVE_STATE(js, saved);
-      
-      ns = esm_load_module(js, mod);
+      ns = esm_get_or_load(js, spec_str, resolved_path);
       JS_RESTORE_STATE(js, saved);
       
       free(resolved_path);
@@ -19693,24 +19638,10 @@ static jsval_t js_import_stmt(struct js *js) {
       ns = lib->init_fn(js);
     } else {
       const char *base_path = js->filename ? js->filename : ".";
-      char *resolved_path = NULL;
-      
-      if (esm_is_url(spec_str) || esm_is_url(base_path)) {
-        resolved_path = esm_resolve_url(spec_str, base_path);
-      } else resolved_path = esm_resolve_path(spec_str, base_path);
-      
+      char *resolved_path = esm_resolve(spec_str, base_path, esm_resolve_path);
       if (!resolved_path) {
         free(spec_str);
         return js_mkerr(js, "Cannot resolve module: %s", spec_str);
-      }
-      
-      esm_module_t *mod = esm_find_module(resolved_path);
-      if (!mod) {
-        mod = esm_create_module(spec_str, resolved_path);
-        if (!mod) {
-          free(resolved_path);
-          free(spec_str); return js_mkerr(js, "Cannot create module");
-        }
       }
       
       js_parse_state_t saved;
@@ -19718,7 +19649,7 @@ static jsval_t js_import_stmt(struct js *js) {
       jsoff_t saved_toff = js->toff, saved_tlen = js->tlen;
       jsval_t saved_scope = js->scope;
       
-      ns = esm_load_module(js, mod);
+      ns = esm_get_or_load(js, spec_str, resolved_path);
       
       JS_RESTORE_STATE(js, saved);
       js->toff = saved_toff;
@@ -19853,31 +19784,15 @@ static jsval_t js_export_stmt(struct js *js) {
       ns = lib->init_fn(js);
     } else {
       const char *base_path = js->filename ? js->filename : ".";
-      char *resolved_path = NULL;
-      
-      if (esm_is_url(spec_str) || esm_is_url(base_path)) {
-        resolved_path = esm_resolve_url(spec_str, base_path);
-      } else resolved_path = esm_resolve_path(spec_str, base_path);
-      
+      char *resolved_path = esm_resolve(spec_str, base_path, esm_resolve_path);
       if (!resolved_path) {
         free(spec_str);
         return js_mkerr(js, "Cannot resolve module: %s", spec_str);
       }
       
-      esm_module_t *mod = esm_find_module(resolved_path);
-      if (!mod) {
-        mod = esm_create_module(spec_str, resolved_path);
-        if (!mod) {
-          free(resolved_path);
-          free(spec_str);
-          return js_mkerr(js, "Cannot create module");
-        }
-      }
-      
       js_parse_state_t saved;
       JS_SAVE_STATE(js, saved);
-      
-      ns = esm_load_module(js, mod);
+      ns = esm_get_or_load(js, spec_str, resolved_path);
       JS_RESTORE_STATE(js, saved);
       
       free(resolved_path);
