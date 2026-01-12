@@ -19843,31 +19843,67 @@ static jsval_t js_export_stmt(struct js *js) {
   if (next(js) == TOK_LBRACE) {
     js->consumed = 1;
     
+    typedef struct { const char *local; size_t local_len; const char *exported; size_t export_len; } export_spec_t;
+    export_spec_t specs[64];
+    int spec_count = 0;
+    
     while (next(js) != TOK_RBRACE) {
-      EXPECT(TOK_IDENTIFIER, );
-      const char *local_name = &js->code[js->toff];
-      size_t local_len = js->tlen;
-      js->consumed = 1;
+      if (spec_count >= 64) return js_mkerr(js, "too many export specifiers");
       
-      const char *export_name = local_name;
-      size_t export_len = local_len;
+      if (next(js) != TOK_IDENTIFIER && next(js) != TOK_DEFAULT) {
+        return js_mkerr_typed(js, JS_ERR_SYNTAX, "expected identifier or 'default' in export list");
+      }
+      specs[spec_count].local = &js->code[js->toff];
+      specs[spec_count].local_len = js->tlen;
+      specs[spec_count].exported = specs[spec_count].local;
+      specs[spec_count].export_len = specs[spec_count].local_len;
+      js->consumed = 1;
       
       if (next(js) == TOK_AS) {
         js->consumed = 1;
-        EXPECT(TOK_IDENTIFIER, );
-        export_name = &js->code[js->toff];
-        export_len = js->tlen;
+        if (next(js) != TOK_IDENTIFIER && next(js) != TOK_DEFAULT) {
+          return js_mkerr_typed(js, JS_ERR_SYNTAX, "expected identifier or 'default' after 'as'");
+        }
+        specs[spec_count].exported = &js->code[js->toff];
+        specs[spec_count].export_len = js->tlen;
         js->consumed = 1;
       }
       
-      jsval_t local_val = lookup(js, local_name, local_len);
-      if (is_err(local_val)) return local_val;
-      
-      setprop(js, js->module_ns, js_mkstr(js, export_name, export_len), resolveprop(js, local_val));
+      spec_count++;
       if (next(js) == TOK_COMMA) js->consumed = 1;
     }
     
     EXPECT(TOK_RBRACE, );
+    
+    if (next(js) == TOK_FROM) {
+      js->consumed = 1;
+      EXPECT(TOK_STRING, );
+      jsval_t spec = js_str_literal(js);
+      jsoff_t spec_len;
+      char *spec_str = esm_jsval_to_cstr(js, spec, &spec_len);
+      
+      js_parse_state_t saved;
+      JS_SAVE_STATE(js, saved);
+      jsval_t ns = esm_resolve_and_load(js, spec_str, spec_len);
+      JS_RESTORE_STATE(js, saved);
+      free(spec_str);
+      
+      js->consumed = 1; next(js); js->consumed = 0;
+      if (is_err(ns)) return ns;
+      
+      for (int i = 0; i < spec_count; i++) {
+        jsoff_t prop_off = lkp(js, ns, specs[i].local, specs[i].local_len);
+        jsval_t import_val = prop_off != 0 ? resolveprop(js, mkval(T_PROP, prop_off)) : js_mkundef();
+        setprop(js, js->module_ns, js_mkstr(js, specs[i].exported, specs[i].export_len), import_val);
+      }
+    } else {
+      for (int i = 0; i < spec_count; i++) {
+        jsval_t local_val = lookup(js, specs[i].local, specs[i].local_len);
+        if (is_err(local_val)) return local_val;
+        setprop(js, js->module_ns, js_mkstr(js, specs[i].exported, specs[i].export_len), resolveprop(js, local_val));
+      }
+    }
+    
     if (next(js) == TOK_SEMICOLON) js->consumed = 1;
     return js_mkundef();
   }

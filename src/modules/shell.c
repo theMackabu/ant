@@ -66,15 +66,9 @@ static jsval_t shell_exec(struct js *js, const char *cmd, size_t cmd_len) {
   jsval_t stdout_val = js_mkstr(js, output, output_size);
   free(output);
   
-  js_set(js, result, "stdout", stdout_val);
-  js_set(js, result, "stderr", js_mkstr(js, "", 0));
   js_set(js, result, "exitCode", js_mknum(exit_code));
-  
-  jsval_t text_fn = js_mkfun(builtin_shell_text);
-  js_set(js, result, "text", text_fn);
-  
-  jsval_t lines_fn = js_mkfun(builtin_shell_lines);
-  js_set(js, result, "lines", lines_fn);
+  js_set(js, result, "text", js_heavy_mkfun(js, builtin_shell_text, stdout_val));
+  js_set(js, result, "lines", js_heavy_mkfun(js, builtin_shell_lines, stdout_val));
   
   return result;
 }
@@ -83,51 +77,32 @@ static jsval_t builtin_shell_text(struct js *js, jsval_t *args, int nargs) {
   (void)args;
   (void)nargs;
   
-  jsval_t this_val = js_getthis(js);
-  if (js_type(this_val) != JS_OBJ) {
-    return js_mkerr(js, "text() must be called on a shell result");
-  }
-  
-  jsval_t stdout_val = js_get(js, this_val, "stdout");
-  return stdout_val;
+  jsval_t fn = js_getcurrentfunc(js);
+  return js_get_slot(js, fn, SLOT_DATA);
 }
 
 static jsval_t builtin_shell_lines(struct js *js, jsval_t *args, int nargs) {
   (void)args;
   (void)nargs;
   
-  jsval_t this_val = js_getthis(js);
-  if (js_type(this_val) != JS_OBJ) return js_mkerr(js, "lines() must be called on a shell result");
-  
-  jsval_t stdout_val = js_get(js, this_val, "stdout");
-  if (js_type(stdout_val) != JS_STR) return js_mkerr(js, "No stdout available");
+  jsval_t fn = js_getcurrentfunc(js);
+  jsval_t stdout_val = js_get_slot(js, fn, SLOT_DATA);
   
   size_t text_len;
   char *text = js_getstr(js, stdout_val, &text_len);
-  if (!text) return js_mkerr(js, "Failed to get stdout");
+  if (!text) return js_mkarr(js);
   
-  jsval_t lines_array = js_mkobj(js);
-  
-  size_t line_count = 0;
+  jsval_t lines_array = js_mkarr(js);
   size_t line_start = 0;
   
   for (size_t i = 0; i <= text_len; i++) {
     if (i == text_len || text[i] == '\n') {
       size_t line_len = i - line_start;
-      if (i < text_len && text[i] == '\n') {}
-      
-      char idx_str[32];
-      snprintf(idx_str, sizeof(idx_str), "%zu", line_count);
-      
       jsval_t line_val = js_mkstr(js, text + line_start, line_len);
-      js_set(js, lines_array, idx_str, line_val);
-      
-      line_count++;
+      js_arr_push(js, lines_array, line_val);
       line_start = i + 1;
     }
   }
-  
-  js_set(js, lines_array, "length", js_mknum((double)line_count));
   
   return lines_array;
 }
