@@ -2,6 +2,7 @@ Ant.version = import.meta.env.VERSION;
 Ant.target = import.meta.env.TARGET;
 Ant.revision = import.meta.env.GIT_HASH;
 Ant.buildDate = import.meta.env.BUILD_TIMESTAMP;
+Ant.host = import.meta.env.HOST as AntHost;
 
 Ant.typeof = function (t) {
   const value = Ant.raw.typeof(t);

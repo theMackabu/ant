@@ -1,13 +1,6 @@
 import * as esbuild from 'esbuild';
 import { writeFileSync } from 'node:fs';
 
-function replaceTemplates(content, replacements) {
-  for (const [key, value] of Object.entries(replacements)) {
-    content = content.replaceAll(`{{${key}}}`, value);
-  }
-  return content;
-}
-
 function generateHeader(inputFile, bytes) {
   const lines = [];
   for (let i = 0; i < bytes.length; i += 16) {
@@ -48,9 +41,11 @@ async function main() {
   const replacements = rawArgs.reduce((acc, arg) => {
     const pivot = arg.indexOf('=');
     if (pivot === -1) return acc;
-
     const key = arg.slice(0, pivot);
-    const value = arg.slice(pivot + 1);
+    let value = arg.slice(pivot + 1);
+
+    if (value === 'true') value = true;
+    else if (value === 'false') value = false;
 
     acc[`import.meta.env.${key}`] = JSON.stringify(value);
     return acc;

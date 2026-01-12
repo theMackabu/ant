@@ -221,7 +221,9 @@ snapshot_h = custom_target(
     'VERSION=' + version_conf.get('ANT_VERSION'),
     'GIT_HASH=' + version_conf.get('ANT_GIT_HASH'),
     'BUILD_TIMESTAMP=' + version_conf.get('ANT_BUILD_TIMESTAMP'),
-    'TARGET=' + version_conf.get('ANT_TARGET_TRIPLE')
+    'TARGET=' + version_conf.get('ANT_TARGET_TRIPLE'),
+    'MBEDTLS=' + (tls_lib == 'mbedtls').to_string(),
+    'HOST=' + host_machine.system()
   ],
   build_by_default: true
 )

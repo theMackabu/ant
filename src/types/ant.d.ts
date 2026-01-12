@@ -18,6 +18,21 @@ type AntType =
   | 'symbol'
   | 'generator';
 
+type AntHost =
+  | 'cygwin'
+  | 'darwin'
+  | 'dragonfly'
+  | 'emscripten'
+  | 'freebsd'
+  | 'gnu'
+  | 'haiku'
+  | 'linux'
+  | 'netbsd'
+  | 'openbsd'
+  | 'windows'
+  | 'sunos'
+  | 'os/2';
+
 interface AntGcResult {
   heapBefore: number;
   heapAfter: number;
@@ -76,6 +91,7 @@ interface AntStatic {
   target: string;
   revision: string;
   buildDate: string;
+  host: AntHost;
 
   typeof(t: unknown): AntType | '??';
   raw: AntRaw;
