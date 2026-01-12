@@ -98,7 +98,7 @@ static int execute_module(struct js *js, const char *filename) {
   char *buffer = NULL;
   size_t len = 0;
   
-  char abs_path[4096];
+  char abs_path[PATH_MAX];
   const char *use_path = filename;
   
   if (esm_is_url(filename)) {

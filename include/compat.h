@@ -5,6 +5,14 @@
 #include <string.h>
 #include <stdlib.h>
 
+#ifndef PATH_MAX
+  #ifdef _WIN32
+  #define PATH_MAX MAX_PATH
+#else
+  #define PATH_MAX 4096
+  #endif
+#endif
+
 #ifdef _WIN32
 #include <winsock2.h>
 #include <windows.h>
