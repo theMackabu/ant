@@ -1070,7 +1070,6 @@ static jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t 
   if (res != MCO_SUCCESS && mco_status(mco) != MCO_DEAD) {
     remove_coroutine(coro);
     free_coroutine(coro);
-    CORO_FREE(ctx);
     return js_mkerr(js, "failed to start coroutine");
   }
   
@@ -1078,7 +1077,6 @@ static jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t 
   if (mco_status(mco) == MCO_DEAD) {
     remove_coroutine(coro);
     free_coroutine(coro);
-    CORO_FREE(ctx);
   }
   
   return promise;
@@ -1088,6 +1086,8 @@ static void free_coroutine(coroutine_t *coro) {
   if (coro) {
     if (coro->mco) {
       if (mco_running() == coro->mco) fprintf(stderr, "WARNING: Attempting to free a running coroutine\n");
+      async_exec_context_t *ctx = (async_exec_context_t *)mco_get_user_data(coro->mco);
+      if (ctx) CORO_FREE(ctx);
       mco_destroy(coro->mco);
       coro->mco = NULL;
     }
@@ -2234,12 +2234,12 @@ static void format_error_stack(struct js *js, size_t *n, int line, int col, bool
     }
     
     if (remaining > 60 && js->filename && strcmp(js->filename, "[eval]") != 0) {
-      *n += (size_t) snprintf(js->errmsg + *n, remaining, "\n    at Module.executeUserEntryPoint [as runMain] %s(ant:internal/modules/run_main:70:5)%s", dim, reset);
+      *n += (size_t) snprintf(js->errmsg + *n, remaining, "\n    at Module.executeUserEntryPoint [as runMain] %s(ant:internal/modules/run_main:149:5)%s", dim, reset);
       remaining = js->errmsg_size - *n;
     }
     
     if (remaining > 40 && js->filename && strcmp(js->filename, "[eval]") != 0) {
-      *n += (size_t) snprintf(js->errmsg + *n, remaining, "\n    at %sant:internal/main:217:5%s", dim, reset);
+      *n += (size_t) snprintf(js->errmsg + *n, remaining, "\n    at %sant:internal/call:21728:23%s", dim, reset);
     }
   }
   
@@ -18465,6 +18465,13 @@ static jsval_t builtin_trigger_handler_wrapper(struct js *js, jsval_t *args, int
   }
 
   utarray_clear(pd->handlers);
+  
+  if (pd->state != 0) {
+    utarray_free(pd->handlers);
+    HASH_DEL(promise_registry, pd);
+    free(pd);
+  }
+  
   return js_mkundef();
 }
 
@@ -21317,9 +21324,12 @@ struct js *js_create(void *buf, size_t len) {
   return js;
 }
 
+#define MIN_SIZE 16 * 1024
+#define MAX_SIZE 1024 * 1024 * 1024
+
 struct js *js_create_dynamic(size_t initial_size, size_t max_size) {
-  if (initial_size < sizeof(struct js) + esize(T_OBJ)) initial_size = 16 * 1024;
-  if (max_size == 0 || max_size < initial_size) max_size = 512 * 1024 * 1024;
+  if (initial_size < sizeof(struct js) + esize(T_OBJ)) initial_size = MIN_SIZE;
+  if (max_size == 0 || max_size < initial_size) max_size = MAX_SIZE;
   
   void *buf = ANT_GC_MALLOC(initial_size);
   if (buf == NULL) return NULL;

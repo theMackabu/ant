@@ -9,6 +9,9 @@
 #define MCO_API extern
 #include "minicoro.h"
 
+#define GC_MIN_HEAP_SIZE (64 * 1024)
+#define GC_SHRINK_THRESHOLD 4
+
 typedef struct gc_forward_node {
   jsoff_t old_off;
   jsoff_t new_off;
@@ -331,7 +334,8 @@ size_t js_gc_compact(struct js *js) {
   }
   
   size_t old_brk = js->brk;
-  size_t new_size = js->size;
+  size_t old_size = js->size;
+  size_t new_size = old_size;
   
   uint8_t *new_mem = (uint8_t *)ANT_GC_MALLOC(new_size);
   if (!new_mem) return 0;
@@ -372,6 +376,22 @@ size_t js_gc_compact(struct js *js) {
   js->brk = ctx.new_brk;
   
   ANT_GC_FREE(old_mem);
+  
+  size_t used = ctx.new_brk;
+  size_t shrunk_size = used * 2;
+  if (shrunk_size < GC_MIN_HEAP_SIZE) shrunk_size = GC_MIN_HEAP_SIZE;
+  shrunk_size = (shrunk_size + 7) & ~7;
+  
+  if (old_size >= GC_SHRINK_THRESHOLD * shrunk_size && shrunk_size < old_size) {
+    uint8_t *shrunk_mem = (uint8_t *)ANT_GC_MALLOC(shrunk_size);
+    if (shrunk_mem) {
+      memcpy(shrunk_mem, js->mem, used);
+      memset(shrunk_mem + used, 0, shrunk_size - used);
+      ANT_GC_FREE(js->mem);
+      js->mem = shrunk_mem;
+      js->size = (jsoff_t)shrunk_size;
+    }
+  }
   
   jsoff_t free_space = js->size - js->brk;
   if (free_space < js->lwm || js->lwm == 0) {

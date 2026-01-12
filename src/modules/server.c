@@ -96,6 +96,7 @@ typedef struct {
 static uv_loop_t *g_loop = NULL;
 static int g_loop_initialized = 0;
 static uv_timer_t g_js_timer;
+static int g_request_count = 0;
 
 static void server_signal_handler(int signum) {
   (void)signum;
@@ -686,6 +687,14 @@ static void handle_http_request(client_t *client, http_request_t *http_req) {
   http_server_t *server = client->server;
   jsval_t result = js_mkundef();
   
+  if (++g_request_count >= 1000 * 10) {
+    js_gc_compact(server->js);
+    g_request_count = 0;
+    
+    server->store_obj = js_get_slot(server->js, rt->ant_obj, SLOT_DATA);
+    server->handler = js_get_slot(server->js, server->store_obj, SLOT_DATA);
+  }
+  
   response_ctx_t *res_ctx = malloc(sizeof(response_ctx_t));
   if (!res_ctx) {
     fprintf(stderr, "Failed to allocate response context\n");
@@ -926,8 +935,11 @@ jsval_t js_serve(struct js *js, jsval_t *args, int nargs) {
   server->js = js;
   server->port = port;
   
-  server->handler = (nargs >= 2) ? args[1] : js_mkundef();
   server->store_obj = js_mkobj(js);
+  server->handler = (nargs >= 2) ? args[1] : js_mkundef();
+  
+  js_set_slot(js, server->store_obj, SLOT_DATA, server->handler);
+  js_set_slot(js, rt->ant_obj, SLOT_DATA, server->store_obj);
   
   if (!g_loop_initialized) {
     g_loop = uv_default_loop();

@@ -166,8 +166,8 @@ int main(int argc, char *argv[]) {
   struct arg_lit *no_color = arg_lit0(NULL, "no-color", "disable colored output");
   struct arg_str *eval = arg_str0("e", "eval", "<script>", "evaluate script");
   struct arg_lit *print = arg_lit0("p", "print", "evaluate script and print result");
-  struct arg_int *initial_mem = arg_int0(NULL, "initial-mem", "<size>", "initial memory size in MB (default: 4)");
-  struct arg_int *max_mem = arg_int0(NULL, "max-mem", "<size>", "maximum memory size in MB (default: 512)");
+  struct arg_int *initial_mem = arg_int0(NULL, "initial-mem", "<size>", "initial memory size in KB (default: 16kb)");
+  struct arg_int *max_mem = arg_int0(NULL, "max-mem", "<size>", "maximum memory size in MB (default: 1024mb)");
   struct arg_file *localstorage_file = arg_file0(NULL, "localstorage-file", "<path>", "file path for localStorage persistence");
   struct arg_file *file = arg_file0(NULL, NULL, "<module.js>", "JavaScript module file to execute");
   struct arg_end *end = arg_end(20);
@@ -203,14 +203,12 @@ int main(int argc, char *argv[]) {
   const char *module_file = repl_mode ? NULL : (file->count > 0 ? file->filename[0] : NULL);
   dump = debug->count;
   
-  size_t initial_size = 16 * 1024;
-  size_t max_size = 512 * 1024 * 1024;
-  
-  if (initial_mem->count > 0) initial_size = (size_t)initial_mem->ival[0] * 16 * 1024;
-  if (max_mem->count > 0) max_size = (size_t)max_mem->ival[0] * 1024 * 1024;
   if (no_color->count > 0) io_no_color = true;
   
-  struct js *js = js_create_dynamic(initial_size, max_size);
+  struct js *js = js_create_dynamic(
+    initial_mem->count > 0 ? (size_t)initial_mem->ival[0] * 1024 : 0,
+    max_mem->count > 0 ? (size_t)max_mem->ival[0] * 1024 * 1024 : 0
+  );
   
   if (js == NULL) {
     fprintf(stderr, "Error: Failed to allocate JavaScript runtime\n");
