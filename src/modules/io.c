@@ -70,216 +70,163 @@ done:
   return;
 }
 
-void print_value_colored(const char *str, FILE *stream) {
-  if (io_no_color) {
-    io_print(str, stream);
-    return;
+enum char_class {
+  CC_OTHER,  CC_NUL,    CC_QUOTE,  CC_ESCAPE, CC_LBRACE, CC_RBRACE,
+  CC_LBRACK, CC_RBRACK, CC_COLON,  CC_COMMA,  CC_NEWLINE,
+  CC_DIGIT,  CC_MINUS,  CC_ALPHA,  CC_IDENT,  CC_LT
+};
+
+static const uint8_t char_class_table[256] = {
+  [0] = CC_NUL,
+  ['\n'] = CC_NEWLINE, ['"'] = CC_QUOTE, ['\''] = CC_QUOTE, ['\\'] = CC_ESCAPE,
+  ['{'] = CC_LBRACE, ['}'] = CC_RBRACE, ['['] = CC_LBRACK, [']'] = CC_RBRACK,
+  [':'] = CC_COLON, [','] = CC_COMMA, ['-'] = CC_MINUS, ['<'] = CC_LT,
+  ['_'] = CC_IDENT, ['$'] = CC_IDENT,
+  ['0'] = CC_DIGIT, ['1'] = CC_DIGIT, ['2'] = CC_DIGIT, ['3'] = CC_DIGIT,
+  ['4'] = CC_DIGIT, ['5'] = CC_DIGIT, ['6'] = CC_DIGIT, ['7'] = CC_DIGIT,
+  ['8'] = CC_DIGIT, ['9'] = CC_DIGIT,
+  ['a'] = CC_ALPHA, ['b'] = CC_ALPHA, ['c'] = CC_ALPHA, ['d'] = CC_ALPHA,
+  ['e'] = CC_ALPHA, ['f'] = CC_ALPHA, ['g'] = CC_ALPHA, ['h'] = CC_ALPHA,
+  ['i'] = CC_ALPHA, ['j'] = CC_ALPHA, ['k'] = CC_ALPHA, ['l'] = CC_ALPHA,
+  ['m'] = CC_ALPHA, ['n'] = CC_ALPHA, ['o'] = CC_ALPHA, ['p'] = CC_ALPHA,
+  ['q'] = CC_ALPHA, ['r'] = CC_ALPHA, ['s'] = CC_ALPHA, ['t'] = CC_ALPHA,
+  ['u'] = CC_ALPHA, ['v'] = CC_ALPHA, ['w'] = CC_ALPHA, ['x'] = CC_ALPHA,
+  ['y'] = CC_ALPHA, ['z'] = CC_ALPHA,
+  ['A'] = CC_ALPHA, ['B'] = CC_ALPHA, ['C'] = CC_ALPHA, ['D'] = CC_ALPHA,
+  ['E'] = CC_ALPHA, ['F'] = CC_ALPHA, ['G'] = CC_ALPHA, ['H'] = CC_ALPHA,
+  ['I'] = CC_ALPHA, ['J'] = CC_ALPHA, ['K'] = CC_ALPHA, ['L'] = CC_ALPHA,
+  ['M'] = CC_ALPHA, ['N'] = CC_ALPHA, ['O'] = CC_ALPHA, ['P'] = CC_ALPHA,
+  ['Q'] = CC_ALPHA, ['R'] = CC_ALPHA, ['S'] = CC_ALPHA, ['T'] = CC_ALPHA,
+  ['U'] = CC_ALPHA, ['V'] = CC_ALPHA, ['W'] = CC_ALPHA, ['X'] = CC_ALPHA,
+  ['Y'] = CC_ALPHA, ['Z'] = CC_ALPHA,
+};
+
+#define KEYWORD(kw, color) \
+  if (memcmp(p, kw, sizeof(kw) - 1) == 0 && !isalnum((unsigned char)p[sizeof(kw) - 1]) && p[sizeof(kw) - 1] != '_') { \
+    io_puts(color, stream); io_puts(kw, stream); io_puts(ANSI_RESET, stream); \
+    p += sizeof(kw) - 1; goto next; \
   }
 
-  bool in_string = false;
-  bool escape_next = false;
-  bool is_key = true;
-  int brace_depth = 0;
-  int array_depth = 0;
+#define EMIT_UNTIL(end_char, color) \
+  io_puts(color, stream); \
+  while (*p && *p != end_char) io_putc(*p++, stream); \
+  if (*p == end_char) io_putc(*p++, stream); \
+  io_puts(ANSI_RESET, stream); goto next;
+
+void print_value_colored(const char *str, FILE *stream) {
+  if (io_no_color) { io_print(str, stream); return; }
+
+  static void *dispatch[] = {
+    [CC_NUL] = &&done, [CC_QUOTE] = &&quote, [CC_ESCAPE] = &&other,
+    [CC_LBRACE] = &&lbrace, [CC_RBRACE] = &&rbrace,
+    [CC_LBRACK] = &&lbrack, [CC_RBRACK] = &&rbrack,
+    [CC_COLON] = &&colon, [CC_COMMA] = &&separator, [CC_NEWLINE] = &&separator,
+    [CC_DIGIT] = &&number, [CC_MINUS] = &&minus,
+    [CC_ALPHA] = &&alpha, [CC_IDENT] = &&ident, [CC_LT] = &&lt, [CC_OTHER] = &&other
+  };
+
+  const char *p = str;
   char string_char = 0;
-  
-  for (const char *p = str; *p; p++) {
-    if (escape_next) {
-      io_putc(*p, stream);
-      escape_next = false;
-      continue;
-    }
-    
-    if (*p == '\\' && in_string) {
-      io_putc(*p, stream);
-      escape_next = true;
-      continue;
-    }
-    
-    if (*p == '\'' || *p == '"') {
-      if (!in_string) {
-        bool use_key_color = is_key && brace_depth > 0;
-        io_puts(use_key_color ? JSON_KEY : JSON_STRING, stream);
-        io_putc(*p, stream);
-        in_string = true;
-        string_char = *p;
-      } else if (*p == string_char) {
-        io_putc(*p, stream);
-        io_puts(ANSI_RESET, stream);
-        in_string = false;
-        string_char = 0;
-      } else {
-        io_putc(*p, stream);
-      }
-      continue;
-    }
-    
-    if (in_string) {
-      io_putc(*p, stream);
-      continue;
-    }
-    
-    if (*p == '[' && (strncmp(p, "[Function", 9) == 0 || strncmp(p, "[native code]", 13) == 0)) {
-      io_puts(JSON_FUNC, stream);
-      while (*p && *p != ']') io_putc(*p++, stream);
-      if (*p == ']') io_putc(*p, stream);
-      io_puts(ANSI_RESET, stream);
-      continue;
-    }
-    
-    if (*p == '[' && strncmp(p, "[Circular", 9) == 0) {
-      io_puts(JSON_REF, stream);
-      while (*p && *p != ']') io_putc(*p++, stream);
-      if (*p == ']') io_putc(*p, stream);
-      io_puts(ANSI_RESET, stream);
-      continue;
-    }
-    
-    if (*p == '<' && strncmp(p, "<ref", 4) == 0) {
-      io_puts(JSON_REF, stream);
-      while (*p && *p != '>') io_putc(*p++, stream);
-      if (*p == '>') io_putc(*p, stream);
-      io_puts(ANSI_RESET, stream);
-      continue;
-    }
-    
-    if (strncmp(p, "Object [", 8) == 0) {
-      io_puts(JSON_TAG, stream);
-      io_puts("Object [", stream);
-      p += 7;
-      while (*p && *p != ']') io_putc(*++p, stream);
-      io_puts(ANSI_RESET, stream);
-      continue;
-    }
-    
-    if (*p == ':') {
-      io_putc(*p, stream);
-      is_key = false;
-      continue;
-    }
-    
-    if (*p == ',') {
-      io_putc(*p, stream);
-      is_key = (brace_depth > 0 && array_depth == 0);
-      continue;
-    }
-    
-    if (*p == '\n') {
-      io_putc(*p, stream);
-      is_key = (brace_depth > 0 && array_depth == 0);
-      continue;
-    }
-    
-    if (*p == '{') {
-      io_puts(JSON_BRACE, stream);
-      io_putc(*p, stream);
-      io_puts(ANSI_RESET, stream);
-      brace_depth++;
-      is_key = true;
-      continue;
-    }
-    
-    if (*p == '}') {
-      io_puts(JSON_BRACE, stream);
-      io_putc(*p, stream);
-      io_puts(ANSI_RESET, stream);
-      brace_depth--;
-      is_key = false;
-      continue;
-    }
-    
-    if (*p == '[') {
-      io_puts(JSON_BRACE, stream);
-      io_putc(*p, stream);
-      io_puts(ANSI_RESET, stream);
-      array_depth++;
-      is_key = false;
-      continue;
-    }
-    
-    if (*p == ']') {
-      io_puts(JSON_BRACE, stream);
-      io_putc(*p, stream);
-      io_puts(ANSI_RESET, stream);
-      array_depth--;
-      is_key = false;
-      continue;
-    }
-    
-    if (strncmp(p, "true", 4) == 0 && !isalnum((unsigned char)p[4]) && p[4] != '_') {
-      io_puts(JSON_BOOL, stream);
-      io_puts("true", stream);
-      io_puts(ANSI_RESET, stream);
-      p += 3;
-      continue;
-    }
-    
-    if (strncmp(p, "false", 5) == 0 && !isalnum((unsigned char)p[5]) && p[5] != '_') {
-      io_puts(JSON_BOOL, stream);
-      io_puts("false", stream);
-      io_puts(ANSI_RESET, stream);
-      p += 4;
-      continue;
-    }
-    
-    if (strncmp(p, "null", 4) == 0 && !isalnum((unsigned char)p[4]) && p[4] != '_') {
-      io_puts(JSON_NULL, stream);
-      io_puts("null", stream);
-      io_puts(ANSI_RESET, stream);
-      p += 3;
-      continue;
-    }
-    
-    if (strncmp(p, "undefined", 9) == 0 && !isalnum((unsigned char)p[9]) && p[9] != '_') {
-      io_puts(JSON_NULL, stream);
-      io_puts("undefined", stream);
-      io_puts(ANSI_RESET, stream);
-      p += 8;
-      continue;
-    }
-    
-    if (strncmp(p, "Infinity", 8) == 0 && !isalnum((unsigned char)p[8]) && p[8] != '_') {
-      io_puts(JSON_NUMBER, stream);
-      io_puts("Infinity", stream);
-      io_puts(ANSI_RESET, stream);
-      p += 7;
-      continue;
-    }
-    
-    if (strncmp(p, "NaN", 3) == 0 && !isalnum((unsigned char)p[3]) && p[3] != '_') {
-      io_puts(JSON_NUMBER, stream);
-      io_puts("NaN", stream);
-      io_puts(ANSI_RESET, stream);
-      p += 2;
-      continue;
-    }
-    
-    if ((*p >= '0' && *p <= '9') || (*p == '-' && p[1] >= '0' && p[1] <= '9')) {
-      io_puts(JSON_NUMBER, stream);
-      if (*p == '-') io_putc(*p++, stream);
-      while ((*p >= '0' && *p <= '9') || *p == '.' || *p == 'e' || *p == 'E' || *p == '+' || *p == '-') {
-        io_putc(*p, stream);
-        if (!((p[1] >= '0' && p[1] <= '9') || p[1] == '.' || p[1] == 'e' || p[1] == 'E' || p[1] == '+' || p[1] == '-')) break;
-        p++;
-      }
-      io_puts(ANSI_RESET, stream);
-      continue;
-    }
-    
-    if (is_key && brace_depth > 0 && (isalpha((unsigned char)*p) || *p == '_' || *p == '$')) {
-      io_puts(JSON_KEY, stream);
-      while (isalnum((unsigned char)*p) || *p == '_' || *p == '$') {
-        io_putc(*p, stream);
-        if (!(isalnum((unsigned char)p[1]) || p[1] == '_' || p[1] == '$')) break;
-        p++;
-      }
-      io_puts(ANSI_RESET, stream);
-      continue;
-    }
-    
-    io_putc(*p, stream);
+  int brace_depth = 0, array_depth = 0;
+  bool is_key = true;
+
+  goto next;
+
+next:
+  goto *dispatch[char_class_table[(unsigned char)*p]];
+
+done:
+  return;
+
+quote:
+  string_char = *p;
+  io_puts((is_key && brace_depth > 0) ? JSON_KEY : JSON_STRING, stream);
+  io_putc(*p++, stream);
+  while (*p) {
+    if (*p == '\\' && p[1]) { io_putc(*p++, stream); io_putc(*p++, stream); continue; }
+    if (*p == string_char) { io_putc(*p++, stream); break; }
+    io_putc(*p++, stream);
   }
+  io_puts(ANSI_RESET, stream);
+  goto next;
+
+lbrace:
+  io_puts(JSON_BRACE, stream); io_putc(*p++, stream); io_puts(ANSI_RESET, stream);
+  brace_depth++; is_key = true; goto next;
+
+rbrace:
+  io_puts(JSON_BRACE, stream); io_putc(*p++, stream); io_puts(ANSI_RESET, stream);
+  brace_depth--; is_key = false; goto next;
+
+lbrack:
+  if (memcmp(p, "[Function", 9) == 0 || memcmp(p, "[native code]", 13) == 0) { EMIT_UNTIL(']', JSON_FUNC) }
+  if (memcmp(p, "[Circular", 9) == 0) { EMIT_UNTIL(']', JSON_REF) }
+  io_puts(JSON_BRACE, stream); io_putc(*p++, stream); io_puts(ANSI_RESET, stream);
+  array_depth++; is_key = false; goto next;
+
+rbrack:
+  io_puts(JSON_BRACE, stream); io_putc(*p++, stream); io_puts(ANSI_RESET, stream);
+  array_depth--; is_key = false; goto next;
+
+colon:
+  io_putc(*p++, stream); is_key = false; goto next;
+
+separator:
+  io_putc(*p++, stream);
+  is_key = (brace_depth > 0 && array_depth == 0);
+  goto next;
+
+number:
+  io_puts(JSON_NUMBER, stream);
+  while ((*p >= '0' && *p <= '9') || *p == '.' || *p == 'e' || *p == 'E' || *p == '+' || *p == '-')
+    io_putc(*p++, stream);
+  io_puts(ANSI_RESET, stream);
+  goto next;
+
+minus:
+  if (p[1] >= '0' && p[1] <= '9') {
+    io_puts(JSON_NUMBER, stream); io_putc(*p++, stream);
+    while ((*p >= '0' && *p <= '9') || *p == '.' || *p == 'e' || *p == 'E' || *p == '+' || *p == '-')
+      io_putc(*p++, stream);
+    io_puts(ANSI_RESET, stream);
+    goto next;
+  }
+  io_putc(*p++, stream); goto next;
+
+lt:
+  if (memcmp(p, "<ref", 4) == 0) { EMIT_UNTIL('>', JSON_REF) }
+  io_putc(*p++, stream); goto next;
+
+alpha:
+  if (memcmp(p, "Object [", 8) == 0) {
+    io_puts(JSON_TAG, stream); io_puts("Object [", stream);
+    p += 8;
+    while (*p && *p != ']') io_putc(*p++, stream);
+    io_puts(ANSI_RESET, stream);
+    goto next;
+  }
+  KEYWORD("true", JSON_BOOL)
+  KEYWORD("false", JSON_BOOL)
+  KEYWORD("null", JSON_NULL)
+  KEYWORD("undefined", JSON_NULL)
+  KEYWORD("Infinity", JSON_NUMBER)
+  KEYWORD("NaN", JSON_NUMBER)
+
+ident:
+  if (is_key && brace_depth > 0) {
+    io_puts(JSON_KEY, stream);
+    while (isalnum((unsigned char)*p) || *p == '_' || *p == '$') io_putc(*p++, stream);
+    io_puts(ANSI_RESET, stream);
+    goto next;
+  }
+  io_putc(*p++, stream); goto next;
+
+other:
+  io_putc(*p++, stream); goto next;
 }
+
+#undef KEYWORD
+#undef EMIT_UNTIL
 
 static void console_print(struct js *js, jsval_t *args, int nargs, const char *color, FILE *stream) {
   if (color && !io_no_color) io_puts(color, stream);
