@@ -30,11 +30,18 @@ jobs:
             mingw-w64-x86_64-libsodium
             mingw-w64-x86_64-nodejs
             git
+      - name: Cache llhttp
+        id: cache-llhttp
+        uses: actions/cache@v4
+        with:
+          path: C:/deps-cache
+          key: deps-windows-x64-llhttp-9.2.1-v1
       - name: Build llhttp
+        if: steps.cache-llhttp.outputs.cache-hit != 'true'
         run: |
           git clone --depth 1 --branch release/v9.2.1 https://github.com/nodejs/llhttp.git /tmp/llhttp
           cd /tmp/llhttp
-          cmake -G "MinGW Makefiles" -B build -DCMAKE_INSTALL_PREFIX=$MINGW_PREFIX -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON
+          cmake -G "MinGW Makefiles" -B build -DCMAKE_INSTALL_PREFIX=/c/deps-cache -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON
           cmake --build build
           cmake --install build
       - run: npm ci
@@ -47,6 +54,8 @@ jobs:
           workspaces: src/strip
       - run: |
           export PATH="/c/Users/$USER/.cargo/bin:$PATH"
+          export PKG_CONFIG_PATH="/c/deps-cache/lib/pkgconfig:$PKG_CONFIG_PATH"
+          export CMAKE_PREFIX_PATH="/c/deps-cache:$CMAKE_PREFIX_PATH"
           meson setup build -Dc_std=gnu2x -Dbuild_timestamp=${{ inputs.build_timestamp }} && meson compile -C build
       - uses: actions/upload-artifact@v4
         with:
