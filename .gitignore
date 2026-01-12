@@ -1,6 +1,7 @@
+.env
 .nova
 .cache
-.env
+.github/artifacts
 
 *.so
 *.dylib

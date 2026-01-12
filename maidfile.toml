@@ -6,6 +6,9 @@ script = "meson compile"
 path = "build"
 script = "meson clean"
 
+[tasks.download]
+script = ".github/download.sh"
+
 [tasks.run]
 script = ["maid build -q", "./build/ant %{arg.1}"]
 
