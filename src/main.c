@@ -97,6 +97,8 @@ static char *read_file(const char *filename, size_t *len) {
 static int execute_module(struct js *js, const char *filename) {
   char *buffer = NULL;
   size_t len = 0;
+  
+  char abs_path[4096];
   const char *use_path = filename;
   
   if (esm_is_url(filename)) {
@@ -122,7 +124,6 @@ static int execute_module(struct js *js, const char *filename) {
     js_set(js, js_glob(js), "__dirname", js_mkstr(js, dir, strlen(dir)));
     free(file_path);
     
-    char abs_path[4096];
     if (realpath(filename, abs_path)) use_path = abs_path;
   }
   
