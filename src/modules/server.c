@@ -824,9 +824,9 @@ static void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
   }
   
   size_t new_len = client->buffer_len + nread;
-  if (new_len > client->buffer_capacity) {
+  if (new_len + 1 > client->buffer_capacity) {
     size_t new_capacity = client->buffer_capacity * 2;
-    if (new_capacity < new_len) new_capacity = new_len;
+    if (new_capacity < new_len + 1) new_capacity = new_len + 1;
     char *new_buffer = realloc(client->buffer, new_capacity);
     if (!new_buffer) {
       free(buf->base);
@@ -839,6 +839,7 @@ static void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
   
   memcpy(client->buffer + client->buffer_len, buf->base, nread);
   client->buffer_len = new_len;
+  client->buffer[client->buffer_len] = '\0';
   free(buf->base);
   
   if (strstr(client->buffer, "\r\n\r\n")) {
