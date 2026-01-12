@@ -19596,6 +19596,10 @@ static jsval_t js_import_stmt(struct js *js) {
     js->consumed = 1; next(js); js->consumed = 0;
     if (is_err(ns)) return ns;
     
+    if (vtype(ns) != T_OBJ) {
+      return js_mkerr_typed(js, JS_ERR_SYNTAX, "Cannot re-export from non-object module");
+    }
+    
     setprop(js, js->scope, js_mkstr(js, namespace_name, namespace_len), ns);
     return js_mkundef();
   }
