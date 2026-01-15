@@ -67,10 +67,15 @@ libuv_dep = libuv_sub.get_variable('libuv_dep')
 tlsuv_opts = cmake.subproject_options()
 bdwgc_opts = cmake.subproject_options()
 
-tlsuv_opts.add_cmake_defines({
+cmake_prefix = get_option('cmake_prefix_path')
+tlsuv_cmake_defines = {
   'BUILD_TESTING': 'OFF',
   'TLSUV_TLSLIB': tls_lib
-})
+}
+if cmake_prefix != ''
+  tlsuv_cmake_defines += {'CMAKE_PREFIX_PATH': cmake_prefix}
+endif
+tlsuv_opts.add_cmake_defines(tlsuv_cmake_defines)
 
 bdwgc_opts.add_cmake_defines({
   'BUILD_SHARED_LIBS': 'OFF',
