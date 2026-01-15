@@ -4849,6 +4849,7 @@ static jsoff_t lkp_proto(struct js *js, jsval_t obj, const char *key, size_t len
       
       jsval_t proto = get_slot(js, as_obj, SLOT_PROTO);
       uint8_t pt = vtype(proto);
+      if (pt == T_NULL) break;
       if (pt != T_OBJ && pt != T_ARR && pt != T_FUNC) {
         if (TYPE_MASK(t) & T_REFTYPE) {
           cur = get_prototype_for_type(js, t);
@@ -13916,9 +13917,9 @@ static jsval_t builtin_object_create(struct js *js, jsval_t *args, int nargs) {
   }
   
   jsval_t obj = js_mkobj(js);
-  if (pt != T_NULL) {
-    set_proto(js, obj, proto);
-  }
+  if (pt == T_NULL) {
+    set_proto(js, obj, js_mknull());
+  } else set_proto(js, obj, proto);
   
   if (nargs >= 2 && vtype(args[1]) == T_OBJ) {
     jsval_t props = args[1];
