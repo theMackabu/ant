@@ -77,12 +77,15 @@ jobs:
             build/oxc-target
           key: cargo-linux-musl-amd64-${{ hashFiles('src/strip/Cargo.lock') }}
           restore-keys: cargo-linux-musl-amd64-
-      - name: Cache meson subprojects
+      - name: Cache meson build
         uses: actions/cache@v4
         with:
-          path: build/vendor
-          key: subprojects-linux-musl-x64-${{ hashFiles('vendor/*.wrap') }}
-          restore-keys: subprojects-linux-musl-x64-
+          path: |
+            vendor/*/
+            build/
+            !build/oxc-target
+          key: meson-linux-musl-x64-${{ hashFiles('vendor/*.wrap', 'meson.build', 'src/**/*.c', 'src/**/*.h') }}
+          restore-keys: meson-linux-musl-x64-
       - run: |
           export PKG_CONFIG_PATH="$HOME/deps-cache/lib/pkgconfig:$PKG_CONFIG_PATH"
           export CMAKE_PREFIX_PATH="$HOME/deps-cache:$CMAKE_PREFIX_PATH"

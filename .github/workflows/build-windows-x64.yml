@@ -60,12 +60,15 @@ jobs:
           path: build/oxc-target
           key: oxc-windows-x64-${{ hashFiles('src/strip/Cargo.lock') }}
           restore-keys: oxc-windows-x64-
-      - name: Cache meson subprojects
+      - name: Cache meson build
         uses: actions/cache@v4
         with:
-          path: build/vendor
-          key: subprojects-windows-x64-${{ hashFiles('vendor/*.wrap') }}
-          restore-keys: subprojects-windows-x64-
+          path: |
+            vendor/*/
+            build/
+            !build/oxc-target
+          key: meson-windows-x64-${{ hashFiles('vendor/*.wrap', 'meson.build', 'src/**/*.c', 'src/**/*.h') }}
+          restore-keys: meson-windows-x64-
       - run: |
           DEPS_CACHE=$(cygpath "${{ runner.temp }}/deps-cache")
           DEPS_CACHE_WIN=$(cygpath -m "${{ runner.temp }}/deps-cache")

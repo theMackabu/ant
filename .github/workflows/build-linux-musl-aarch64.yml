@@ -21,12 +21,15 @@ jobs:
         with:
           path: ~/deps-cache
           key: deps-linux-musl-aarch64-llhttp-9.2.1-libuv-1.51.0-zlib-1.3.1-v1
-      - name: Cache meson subprojects
+      - name: Cache meson build
         uses: actions/cache@v4
         with:
-          path: build/vendor
-          key: subprojects-linux-musl-aarch64-${{ hashFiles('vendor/*.wrap') }}
-          restore-keys: subprojects-linux-musl-aarch64-
+          path: |
+            vendor/*/
+            build/
+            !build/oxc-target
+          key: meson-linux-musl-aarch64-${{ hashFiles('vendor/*.wrap', 'meson.build', 'src/**/*.c', 'src/**/*.h') }}
+          restore-keys: meson-linux-musl-aarch64-
       - name: Cache cargo
         uses: actions/cache@v4
         with:
