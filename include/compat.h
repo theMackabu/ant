@@ -1,6 +1,10 @@
 #ifndef ANT_COMPAT_H
 #define ANT_COMPAT_H
 
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+  #define _GNU_SOURCE
+#endif
+
 #include <time.h>
 #include <string.h>
 #include <stdlib.h>
@@ -68,11 +72,22 @@ static inline int compat_gettimeofday(struct timeval *tv, void *tz) {
 static inline char *compat_strndup(const char *s, size_t n) {
   size_t len = strnlen(s, n);
   char *dup = malloc(len + 1);
-  if (dup) {
-    memcpy(dup, s, len);
-    dup[len] = '\0';
-  }
+  if (dup) { memcpy(dup, s, len); dup[len] = '\0'; }
   return dup;
+}
+
+static inline void *compat_memmem(const void *haystack, size_t h_len, const void *needle, size_t n_len) {
+  const char *h = haystack;
+  const char *last = h + h_len - n_len;
+  const char *n = needle;
+  char first;
+  if (n_len == 0) return (void *)h;
+  if (h_len < n_len) return NULL;
+  if (n_len == 1) return memchr(haystack, *n, h_len);
+  first = *n++;
+  for (; h <= last; h++)
+    if (*h == first && !memcmp(h + 1, n, n_len - 1)) return (void *)h;
+  return NULL;
 }
 
 static inline char *compat_basename(char *path) {
@@ -101,6 +116,7 @@ static inline char *compat_dirname(char *path) {
 #define usleep compat_usleep
 #define sleep compat_sleep
 #define strndup compat_strndup
+#define memmem compat_memmem
 #define basename compat_basename
 #define dirname compat_dirname
 

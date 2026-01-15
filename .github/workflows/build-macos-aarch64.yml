@@ -19,31 +19,51 @@ jobs:
         with:
           node-version: '22'
       - run: brew install meson ninja openssl@3 llvm
+      - name: Cache native dependencies
+        id: cache-deps
+        uses: actions/cache@v4
+        with:
+          path: ~/deps-cache
+          key: deps-macos-aarch64-libsodium-1.0.20-llhttp-9.2.1-v1
       - name: Build libsodium
+        if: steps.cache-deps.outputs.cache-hit != 'true'
         run: |
           export LLVM_PREFIX=$(brew --prefix llvm)
           git clone --depth 1 --branch 1.0.20-RELEASE https://github.com/jedisct1/libsodium.git /tmp/libsodium
           cd /tmp/libsodium
-          ./configure CC=$LLVM_PREFIX/bin/clang --prefix=/usr/local --disable-shared --enable-static
+          ./configure CC=$LLVM_PREFIX/bin/clang --prefix=$HOME/deps-cache --disable-shared --enable-static
           make -j$(sysctl -n hw.ncpu)
-          sudo make install
+          make install
       - name: Build llhttp
+        if: steps.cache-deps.outputs.cache-hit != 'true'
         run: |
           export LLVM_PREFIX=$(brew --prefix llvm)
           git clone --depth 1 --branch release/v9.2.1 https://github.com/nodejs/llhttp.git /tmp/llhttp
           cd /tmp/llhttp
-          CC=$LLVM_PREFIX/bin/clang cmake -B build -DCMAKE_INSTALL_PREFIX=/usr/local -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON -DCMAKE_BUILD_TYPE=Release
+          CC=$LLVM_PREFIX/bin/clang cmake -B build -DCMAKE_INSTALL_PREFIX=$HOME/deps-cache -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON -DCMAKE_BUILD_TYPE=Release
           cmake --build build
-          sudo cmake --install build
+          cmake --install build
       - run: npm ci
         working-directory: src/tools
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src/strip
+      - name: Cache oxc build
+        uses: actions/cache@v4
+        with:
+          path: build/oxc-target
+          key: oxc-macos-aarch64-${{ hashFiles('src/strip/Cargo.lock') }}
+          restore-keys: oxc-macos-aarch64-
+      - name: Cache meson subprojects
+        uses: actions/cache@v4
+        with:
+          path: build/vendor
+          key: subprojects-macos-aarch64-${{ hashFiles('vendor/*.wrap') }}
+          restore-keys: subprojects-macos-aarch64-
       - run: |
-          export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
-          export CMAKE_PREFIX_PATH="/usr/local:$CMAKE_PREFIX_PATH"
+          export PKG_CONFIG_PATH="$HOME/deps-cache/lib/pkgconfig:$PKG_CONFIG_PATH"
+          export CMAKE_PREFIX_PATH="$HOME/deps-cache:$CMAKE_PREFIX_PATH"
           export LLVM_PREFIX=$(brew --prefix llvm)
           CC=$LLVM_PREFIX/bin/clang AR=$LLVM_PREFIX/bin/llvm-ar RANLIB=$LLVM_PREFIX/bin/llvm-ranlib meson setup build -Db_lto=true --buildtype=release -Dbuild_timestamp=${{ inputs.build_timestamp }} && meson compile -C build
       - run: strip build/ant

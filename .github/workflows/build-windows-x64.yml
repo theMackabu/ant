@@ -30,13 +30,22 @@ jobs:
             mingw-w64-x86_64-libsodium
             mingw-w64-x86_64-nodejs
             git
+      - name: Cache native dependencies
+        id: cache-deps
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/deps-cache
+          key: deps-windows-x64-llhttp-9.2.1-v1
       - name: Build llhttp
+        if: steps.cache-deps.outputs.cache-hit != 'true'
         run: |
+          DEPS_CACHE=$(cygpath "${{ runner.temp }}/deps-cache")
           git clone --depth 1 --branch release/v9.2.1 https://github.com/nodejs/llhttp.git /tmp/llhttp
           cd /tmp/llhttp
-          cmake -G "MinGW Makefiles" -B build -DCMAKE_INSTALL_PREFIX=$MINGW_PREFIX -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON
+          cmake -G "MinGW Makefiles" -B build -DCMAKE_INSTALL_PREFIX=$DEPS_CACHE -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON
           cmake --build build
           cmake --install build
+          ln -sf $DEPS_CACHE/lib/pkgconfig/libllhttp.pc $DEPS_CACHE/lib/pkgconfig/llhttp.pc
       - run: npm ci
         working-directory: src/tools
       - uses: dtolnay/rust-toolchain@stable
@@ -45,8 +54,23 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src/strip
+      - name: Cache oxc build
+        uses: actions/cache@v4
+        with:
+          path: build/oxc-target
+          key: oxc-windows-x64-${{ hashFiles('src/strip/Cargo.lock') }}
+          restore-keys: oxc-windows-x64-
+      - name: Cache meson subprojects
+        uses: actions/cache@v4
+        with:
+          path: build/vendor
+          key: subprojects-windows-x64-${{ hashFiles('vendor/*.wrap') }}
+          restore-keys: subprojects-windows-x64-
       - run: |
+          DEPS_CACHE=$(cygpath "${{ runner.temp }}/deps-cache")
           export PATH="/c/Users/$USER/.cargo/bin:$PATH"
+          export PKG_CONFIG_PATH="$DEPS_CACHE/lib/pkgconfig:$PKG_CONFIG_PATH"
+          export CMAKE_PREFIX_PATH="$DEPS_CACHE:$CMAKE_PREFIX_PATH"
           meson setup build -Dc_std=gnu2x -Dbuild_timestamp=${{ inputs.build_timestamp }} && meson compile -C build
       - uses: actions/upload-artifact@v4
         with:
