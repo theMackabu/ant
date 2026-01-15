@@ -202,20 +202,6 @@ typedef struct ant_library {
   UT_hash_handle hh;
 } ant_library_t;
 
-typedef struct {
-  char key[64];
-  jsoff_t offset;
-  uint32_t hash;
-  UT_hash_handle hh;
-} prop_cache_entry_t;
-
-typedef struct {
-  jsoff_t obj_offset;
-  prop_cache_entry_t *cache;
-  uint32_t hit_count;
-  UT_hash_handle hh;
-} obj_prop_cache_t;
-
 static const char *INTERN_LENGTH = NULL;
 static const char *INTERN_PROTOTYPE = NULL;
 static const char *INTERN_CONSTRUCTOR = NULL;
@@ -243,7 +229,7 @@ typedef struct {
   jsoff_t obj_off;
   const char *intern_ptr;
   jsoff_t prop_off;
-  uint32_t obj_version;
+  jsoff_t first_prop;
 } intern_prop_cache_entry_t;
 static intern_prop_cache_entry_t intern_prop_cache[ANT_LIMIT_SIZE_CACHE];
 
@@ -3073,7 +3059,7 @@ static void invalidate_prop_cache(struct js *js, jsoff_t obj_off, jsoff_t prop_o
   
   if (ce->obj_off == obj_off && ce->intern_ptr == interned) {
     ce->obj_off = 0; ce->intern_ptr = NULL;
-    ce->prop_off = 0; ce->obj_version = 0;
+    ce->prop_off = 0; ce->first_prop = 0;
   }
 }
 
@@ -4678,7 +4664,7 @@ static inline jsoff_t lkp_interned(struct js *js, jsval_t obj, const char *searc
   uint32_t cache_slot = (((uintptr_t)search_intern >> 3) ^ obj_off) & (ANT_LIMIT_SIZE_CACHE - 1);
   intern_prop_cache_entry_t *ce = &intern_prop_cache[cache_slot];
   
-  if (ce->obj_off == obj_off && ce->intern_ptr == search_intern && ce->obj_version == first_prop) {
+  if (ce->obj_off == obj_off && ce->intern_ptr == search_intern && ce->first_prop == first_prop) {
     return ce->prop_off;
   }
   
@@ -4695,7 +4681,7 @@ static inline jsoff_t lkp_interned(struct js *js, jsval_t obj, const char *searc
         ce->obj_off = obj_off;
         ce->intern_ptr = search_intern;
         ce->prop_off = off;
-        ce->obj_version = first_prop;
+        ce->first_prop = first_prop;
         return off;
       }
     }
@@ -4705,7 +4691,7 @@ static inline jsoff_t lkp_interned(struct js *js, jsval_t obj, const char *searc
   ce->obj_off = obj_off;
   ce->intern_ptr = search_intern;
   ce->prop_off = 0;
-  ce->obj_version = first_prop;
+  ce->first_prop = first_prop;
   
   return 0;
 }
