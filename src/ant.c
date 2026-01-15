@@ -1603,9 +1603,13 @@ static size_t print_prototype(struct js *js, jsval_t proto_val, char *buf, size_
       jsoff_t pklen = offtolen(loadoff(js, pkoff));
       const char *pkstr = (const char *) &js->mem[pkoff + sizeof(jsoff_t)];
       
-      const char *tag_key2 = get_toStringTag_sym_key();
-      size_t tag_key_len2 = strlen(tag_key2);
-      if (!streq(pkstr, pklen, STR_PROTO, STR_PROTO_LEN) && !streq(pkstr, pklen, "constructor", 11) && !streq(pkstr, pklen, tag_key2, tag_key_len2)) {
+      const char *tag_key = get_toStringTag_sym_key();
+      size_t tag_key_len = strlen(tag_key);
+      if (
+        !streq(pkstr, pklen, STR_PROTO, STR_PROTO_LEN) && 
+        !streq(pkstr, pklen, "constructor", 11) && 
+        !streq(pkstr, pklen, tag_key, tag_key_len)
+      ) {
         if (!proto_first) n += cpy(buf + n, len - n, ",\n", 2);
         proto_first = false;
         n += add_indent(buf + n, len - n, stringify_indent);
@@ -1644,7 +1648,7 @@ static bool is_small_object(struct js *js, jsval_t obj, int *prop_count) {
     
     const char *key = (char *) &js->mem[koff + sizeof(koff)];
     const char *tag_sym_key = get_toStringTag_sym_key();
-    bool should_hide = streq(key, klen, tag_sym_key, strlen(tag_sym_key));
+    bool should_hide = streq(key, klen, STR_PROTO, STR_PROTO_LEN) || streq(key, klen, tag_sym_key, strlen(tag_sym_key));
     
     if (!should_hide) {
       descriptor_entry_t *desc = lookup_descriptor(obj_off, key, klen);
@@ -1880,7 +1884,7 @@ continue_object_print:;
     
     const char *key = (char *) &js->mem[koff + sizeof(koff)];
     const char *tag_sym_key = get_toStringTag_sym_key();
-    bool should_hide = streq(key, klen, tag_sym_key, strlen(tag_sym_key));
+    bool should_hide = streq(key, klen, STR_PROTO, STR_PROTO_LEN) || streq(key, klen, tag_sym_key, strlen(tag_sym_key));
     
     if (!should_hide) {
       descriptor_entry_t *desc = lookup_descriptor(obj_off, key, klen);
@@ -9732,6 +9736,9 @@ static jsval_t for_iter_exec_body(struct js *js, for_iter_ctx_t *ctx) {
 static bool for_in_should_skip_key(struct js *js, jsval_t obj, const char *key, jsoff_t klen) {
   if (streq(key, klen, STR_PROTO, STR_PROTO_LEN)) return true;
   
+  const char *tag_sym_key = get_toStringTag_sym_key();
+  if (streq(key, klen, tag_sym_key, strlen(tag_sym_key))) return true;
+  
   jsoff_t obj_off = (jsoff_t)vdata(obj);
   descriptor_entry_t *desc = lookup_descriptor(obj_off, key, klen);
   if (desc && !desc->enumerable) return true;
@@ -10051,63 +10058,42 @@ static jsval_t js_for(struct js *js) {
         
         jsoff_t koff = loadoff(js, prop_off + (jsoff_t) sizeof(prop_off));
         jsoff_t klen = offtolen(loadoff(js, koff));
+        
         const char *key = (char *) &js->mem[koff + sizeof(koff)];
-        
-        bool should_skip = streq(key, klen, STR_PROTO, STR_PROTO_LEN);
-        
-        if (!should_skip && klen > 7 && key[0] == '_' && key[1] == '_' && 
-            key[2] == 'd' && key[3] == 'e' && key[4] == 's' && key[5] == 'c' && key[6] == '_') {
-          should_skip = true;
-        }
+        const char *tag_sym_key = get_toStringTag_sym_key();
+        bool should_skip = streq(key, klen, STR_PROTO, STR_PROTO_LEN) || streq(key, klen, tag_sym_key, strlen(tag_sym_key));
         
         if (!should_skip) {
           jsoff_t iter_obj_off = (jsoff_t)vdata(iter_obj);
           descriptor_entry_t *desc = lookup_descriptor(iter_obj_off, key, klen);
-          if (desc && !desc->enumerable) {
-            should_skip = true;
-          }
+          if (desc && !desc->enumerable) should_skip = true;
         }
         
         if (!should_skip) {
           jsval_t key_str = js_mkstr(js, key, klen);
-          
           const char *var_name = &js->code[var_name_off];
           jsoff_t existing = lkp_scope(js, js->scope, var_name, var_name_len);
-          if (existing > 0) {
-            saveval(js, existing + sizeof(jsoff_t) * 2, key_str);
-          } else {
+          
+          if (existing > 0) saveval(js, existing + sizeof(jsoff_t) * 2, key_str); else {
             jsval_t x = mkprop(js, js->scope, js_mkstr(js, var_name, var_name_len), key_str, is_const_var ? CONSTMASK : 0);
-            if (is_err(x)) {
-              res = x;
-              goto done;
-            }
+            if (is_err(x)) { res = x; goto done; }
           }
           
           js->pos = body_start;
           js->consumed = 1;
           js->flags = (flags & ~F_NOEXEC) | F_LOOP;
           v = js_block_or_stmt(js);
-          if (is_err(v)) {
-            res = v;
-            goto done;
-          }
+          if (is_err(v)) { res = v; goto done; }
           
           if (label_flags & F_CONTINUE_LABEL) {
             if (is_this_loop_continue_target(marker_index)) {
               clear_continue_label();
               js->flags &= ~(F_BREAK | F_NOEXEC);
-            } else {
-              js->flags |= F_BREAK;
-              break;
-            }
+            } else { js->flags |= F_BREAK; break; }
           }
           
           if (js->flags & F_BREAK) break;
-          
-          if (js->flags & F_RETURN) {
-            res = v;
-            goto done;
-          }
+          if (js->flags & F_RETURN) { res = v; goto done; }
         }
         
         prop_off = loadoff(js, prop_off) & ~(3U | FLAGMASK);
