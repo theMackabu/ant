@@ -3060,10 +3060,21 @@ static void intern_init(void) {
   INTERN_IDX[9] = intern_string("9", 1);
 }
 
-static void increment_version(struct js *js, jsoff_t obj_off) {
-  jsval_t version_val = get_slot(js, mkval(T_OBJ, obj_off), SLOT_VERSION);
-  uint32_t new_version = (vtype(version_val) == T_NUM) ? (uint32_t)tod(version_val) + 1 : 1;
-  set_slot(js, mkval(T_OBJ, obj_off), SLOT_VERSION, tov((double)new_version));
+static void invalidate_prop_cache(struct js *js, jsoff_t obj_off, jsoff_t prop_off) {
+  jsoff_t koff = loadoff(js, prop_off + sizeof(jsoff_t));
+  jsoff_t klen = (loadoff(js, koff) >> 2) - 1;
+  
+  const char *key = (char *)&js->mem[koff + sizeof(jsoff_t)];
+  const char *interned = intern_string(key, klen);
+  if (!interned) return;
+  
+  uint32_t cache_slot = (((uintptr_t)interned >> 3) ^ obj_off) & (ANT_LIMIT_SIZE_CACHE - 1);
+  intern_prop_cache_entry_t *ce = &intern_prop_cache[cache_slot];
+  
+  if (ce->obj_off == obj_off && ce->intern_ptr == interned) {
+    ce->obj_off = 0; ce->intern_ptr = NULL;
+    ce->prop_off = 0; ce->obj_version = 0;
+  }
 }
 
 static jsval_t mkprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v, jsoff_t flags) {
@@ -3084,10 +3095,7 @@ static jsval_t mkprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v, jsoff_t 
   (void)intern_string(p, klen);
   
   jsoff_t prop_header = (b & ~(3U | FLAGMASK)) | T_PROP | flags;
-  jsval_t result = mkentity(js, prop_header, buf, sizeof(buf));
-  
-  increment_version(js, head);
-  return result;
+  return mkentity(js, prop_header, buf, sizeof(buf));
 }
 
 static inline jsval_t mkprop_fast(struct js *js, jsval_t obj, jsval_t k, jsval_t v, jsoff_t flags) {
@@ -3330,7 +3338,6 @@ no_descriptor:
   }
 
   saveval(js, existing + sizeof(jsoff_t) * 2, v);
-  increment_version(js, (jsoff_t)vdata(obj));
   if (vtype(obj) != T_ARR || klen == 0 || key[0] < '0' || key[0] > '9') goto done_update;
   
   char *endptr;
@@ -3349,7 +3356,6 @@ no_descriptor:
   jsval_t new_len = tov((double)(update_idx + 1));
   if (len_off != 0) {
     saveval(js, len_off + sizeof(jsoff_t) * 2, new_len);
-    increment_version(js, (jsoff_t)vdata(obj));
   } else mkprop(js, obj, len_key, new_len, 0);
 
 done_update:
@@ -3397,7 +3403,6 @@ create_new:
     jsval_t new_len = tov((double)(idx + 1));
     if (len_off != 0) {
       saveval(js, len_off + sizeof(jsoff_t) * 2, new_len);
-      increment_version(js, (jsoff_t)vdata(obj));
     } else mkprop(js, obj, len_key, new_len, 0);
   }
   
@@ -8533,7 +8538,7 @@ static void unlink_prop(struct js *js, jsoff_t obj_off, jsoff_t prop_off, jsoff_
   jsoff_t current = loadoff(js, target);
   
   saveoff(js, target, (deleted_next & ~3U) | (current & (FLAGMASK | 3U)));
-  increment_version(js, obj_off);
+  invalidate_prop_cache(js, obj_off, prop_off);
   js->needs_gc = true;
 }
 
@@ -21558,7 +21563,7 @@ bool js_del(struct js *js, jsval_t obj, const char *key) {
     jsoff_t deleted_next = loadoff(js, prop_off) & ~FLAGMASK;
     jsoff_t current = loadoff(js, obj_off);
     saveoff(js, obj_off, (deleted_next & ~3U) | (current & (FLAGMASK | 3U)));
-    increment_version(js, obj_off);
+    invalidate_prop_cache(js, obj_off, prop_off);
     js->needs_gc = true;
     return true;
   }
@@ -21570,7 +21575,7 @@ bool js_del(struct js *js, jsval_t obj, const char *key) {
       jsoff_t deleted_next = loadoff(js, prop_off) & ~FLAGMASK;
       jsoff_t prev_flags = loadoff(js, prev) & FLAGMASK;
       saveoff(js, prev, deleted_next | prev_flags);
-      increment_version(js, obj_off);
+      invalidate_prop_cache(js, obj_off, prop_off);
       js->needs_gc = true;
       return true;
     }
