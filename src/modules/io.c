@@ -73,14 +73,14 @@ done:
 enum char_class {
   CC_OTHER,  CC_NUL,    CC_QUOTE,  CC_ESCAPE, CC_LBRACE, CC_RBRACE,
   CC_LBRACK, CC_RBRACK, CC_COLON,  CC_COMMA,  CC_NEWLINE,
-  CC_DIGIT,  CC_MINUS,  CC_ALPHA,  CC_IDENT,  CC_LT
+  CC_DIGIT,  CC_MINUS,  CC_ALPHA,  CC_IDENT,  CC_LT,     CC_GT
 };
 
 static const uint8_t char_class_table[256] = {
   [0] = CC_NUL,
   ['\n'] = CC_NEWLINE, ['"'] = CC_QUOTE, ['\''] = CC_QUOTE, ['\\'] = CC_ESCAPE,
   ['{'] = CC_LBRACE, ['}'] = CC_RBRACE, ['['] = CC_LBRACK, [']'] = CC_RBRACK,
-  [':'] = CC_COLON, [','] = CC_COMMA, ['-'] = CC_MINUS, ['<'] = CC_LT,
+  [':'] = CC_COLON, [','] = CC_COMMA, ['-'] = CC_MINUS, ['<'] = CC_LT, ['>'] = CC_GT,
   ['_'] = CC_IDENT, ['$'] = CC_IDENT,
   ['0'] = CC_DIGIT, ['1'] = CC_DIGIT, ['2'] = CC_DIGIT, ['3'] = CC_DIGIT,
   ['4'] = CC_DIGIT, ['5'] = CC_DIGIT, ['6'] = CC_DIGIT, ['7'] = CC_DIGIT,
@@ -122,7 +122,7 @@ void print_value_colored(const char *str, FILE *stream) {
     [CC_LBRACK] = &&lbrack, [CC_RBRACK] = &&rbrack,
     [CC_COLON] = &&colon, [CC_COMMA] = &&separator, [CC_NEWLINE] = &&separator,
     [CC_DIGIT] = &&number, [CC_MINUS] = &&minus,
-    [CC_ALPHA] = &&alpha, [CC_IDENT] = &&ident, [CC_LT] = &&lt, [CC_OTHER] = &&other
+    [CC_ALPHA] = &&alpha, [CC_IDENT] = &&ident, [CC_LT] = &&lt, [CC_GT] = &&gt, [CC_OTHER] = &&other
   };
 
   const char *p = str;
@@ -159,8 +159,14 @@ rbrace:
   brace_depth--; is_key = false; goto next;
 
 lbrack:
-  if (memcmp(p, "[Function", 9) == 0 || memcmp(p, "[native code]", 13) == 0) { EMIT_UNTIL(']', JSON_FUNC) }
-  if (memcmp(p, "[Circular", 9) == 0) { EMIT_UNTIL(']', JSON_REF) }
+  switch (p[1]) {
+    case 'F': if (memcmp(p + 2, "unction", 7) == 0) { EMIT_UNTIL(']', JSON_FUNC) } break;
+    case 'n': if (memcmp(p + 2, "ative code]", 11) == 0) { EMIT_UNTIL(']', JSON_FUNC) } break;
+    case 'C': if (memcmp(p + 2, "ircular", 7) == 0) { EMIT_UNTIL(']', JSON_REF) } break;
+    case 'G': if (memcmp(p + 2, "etter/Setter]", 13) == 0 || memcmp(p + 2, "etter]", 6) == 0) { EMIT_UNTIL(']', JSON_FUNC) } break;
+    case 'S': if (memcmp(p + 2, "etter]", 6) == 0) { EMIT_UNTIL(']', JSON_FUNC) } break;
+    case 'O': if (memcmp(p + 2, "bject: null prototype]", 22) == 0) { EMIT_UNTIL(']', JSON_TAG) } break;
+  }
   io_puts(JSON_BRACE, stream); io_putc(*p++, stream); io_puts(ANSI_RESET, stream);
   array_depth++; is_key = false; goto next;
 
@@ -195,8 +201,11 @@ minus:
 
 lt:
   if (memcmp(p, "<ref", 4) == 0) { EMIT_UNTIL('>', JSON_REF) }
-  while (*p && *p != '>') io_putc(*p++, stream);
-  if (*p == '>') io_putc(*p++, stream);
+  io_puts(JSON_BRACE, stream); io_putc(*p++, stream); io_puts(ANSI_RESET, stream);
+  goto next;
+
+gt:
+  io_puts(JSON_BRACE, stream); io_putc(*p++, stream); io_puts(ANSI_RESET, stream);
   goto next;
 
 alpha:
@@ -204,9 +213,11 @@ alpha:
     io_puts(JSON_TAG, stream); io_puts("Object [", stream);
     p += 8;
     while (*p && *p != ']') io_putc(*p++, stream);
+    if (*p == ']') io_putc(*p++, stream);
     io_puts(ANSI_RESET, stream);
     goto next;
   }
+  
   KEYWORD("true", JSON_BOOL)
   KEYWORD("false", JSON_BOOL)
   KEYWORD("null", JSON_NULL)
