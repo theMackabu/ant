@@ -7,7 +7,7 @@ path = "build"
 script = "meson clean"
 
 [tasks.download]
-script = ".github/download.sh"
+script = [".github/download.sh", "open .github/artifacts"]
 
 [tasks.run]
 script = ["maid build -q", "./build/ant %{arg.1}"]
