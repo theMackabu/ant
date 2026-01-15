@@ -1343,9 +1343,7 @@ static bool is_small_array(struct js *js, jsval_t obj, int *elem_count) {
       uint8_t t = vtype(val);
       if (t == T_OBJ || t == T_ARR || t == T_FUNC) has_nested = true;
       count++;
-    } else {
-      count++;
-    }
+    } else count++;
   }
   
   if (elem_count) *elem_count = count;
@@ -1377,8 +1375,12 @@ static size_t strarr(struct js *js, jsval_t obj, char *buf, size_t len) {
   int elem_count = 0;
   bool inline_mode = is_small_array(js, obj, &elem_count);
   
-  size_t n = cpy(buf, len, inline_mode ? "[ " : "[\n", 2);
+  if (length == 0) {
+    pop_stringify();
+    return cpy(buf, len, "[]", 2);
+  }
   
+  size_t n = cpy(buf, len, inline_mode ? "[ " : "[\n", 2);
   if (!inline_mode) stringify_indent++;
   
   for (jsoff_t i = 0; i < length; i++) {
@@ -1408,9 +1410,7 @@ static size_t strarr(struct js *js, jsval_t obj, char *buf, size_t len) {
     
     if (found) {
       n += tostr(js, val, buf + n, len - n);
-    } else {
-      n += cpy(buf + n, len - n, "undefined", 9);
-    }
+    } else n += cpy(buf + n, len - n, "undefined", 9);
   }
   
   if (!inline_mode) {
@@ -1421,6 +1421,7 @@ static size_t strarr(struct js *js, jsval_t obj, char *buf, size_t len) {
   
   n += cpy(buf + n, len - n, inline_mode ? " ]" : "]", inline_mode ? 2 : 1);
   pop_stringify();
+  
   return n;
 }
 
@@ -1627,7 +1628,9 @@ static size_t print_prototype(struct js *js, jsval_t proto_val, char *buf, size_
 static bool is_small_object(struct js *js, jsval_t obj, int *prop_count) {
   int count = 0;
   bool has_nested = false;
-  jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | FLAGMASK);
+  
+  jsoff_t obj_off = (jsoff_t)vdata(obj);
+  jsoff_t next = loadoff(js, obj_off) & ~(3U | FLAGMASK);
   
   while (next < js->brk && next != 0) {
     jsoff_t header = loadoff(js, next);
@@ -1635,11 +1638,15 @@ static bool is_small_object(struct js *js, jsval_t obj, int *prop_count) {
     
     jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
     jsoff_t klen = offtolen(loadoff(js, koff));
-    const char *key = (char *) &js->mem[koff + sizeof(koff)];
     
-    bool is_desc = (klen > 7 && key[0] == '_' && key[1] == '_' && key[2] == 'd' && key[3] == 'e' && key[4] == 's' && key[5] == 'c' && key[6] == '_');
+    const char *key = (char *) &js->mem[koff + sizeof(koff)];
     const char *tag_sym_key = get_toStringTag_sym_key();
-    bool should_hide = streq(key, klen, STR_PROTO, STR_PROTO_LEN) || streq(key, klen, tag_sym_key, strlen(tag_sym_key)) || is_desc;
+    bool should_hide = streq(key, klen, tag_sym_key, strlen(tag_sym_key));
+    
+    if (!should_hide) {
+      descriptor_entry_t *desc = lookup_descriptor(obj_off, key, klen);
+      if (desc) if (desc->has_getter || desc->has_setter || !desc->enumerable) should_hide = true;
+    }
     
     if (!should_hide) {
       jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
@@ -1647,6 +1654,7 @@ static bool is_small_object(struct js *js, jsval_t obj, int *prop_count) {
       if (t == T_OBJ || t == T_ARR || t == T_FUNC) has_nested = true;
       count++;
     }
+    
     next = next_prop(header);
   }
   
@@ -1776,6 +1784,7 @@ print_plain_object:
   
   jsval_t proto_val = js_get_proto(js, obj);
   bool is_null_proto = (vtype(proto_val) == T_NULL);
+  bool proto_is_null_proto = false;
   const char *class_name = NULL;
   jsoff_t class_name_len = 0;
   
@@ -1784,10 +1793,16 @@ print_plain_object:
     uint8_t pt = vtype(proto_val);
     if (pt != T_OBJ && pt != T_FUNC) break;
     
-    jsoff_t ctor_off = lkp(js, proto_val, "constructor", 11);
-    if (ctor_off == 0) break;
+    jsval_t proto_proto = js_get_proto(js, proto_val);
+    jsval_t object_proto = get_ctor_proto(js, "Object", 6);
+    proto_is_null_proto = (vtype(proto_proto) == T_NULL) && 
+                          (vdata(proto_val) != vdata(object_proto));
     
-    jsval_t ctor_val = resolveprop(js, mkval(T_PROP, ctor_off));
+    jsval_t ctor_val = js_mkundef();
+    jsoff_t ctor_off = lkp(js, proto_val, "constructor", 11);
+    if (ctor_off != 0) ctor_val = resolveprop(js, mkval(T_PROP, ctor_off));
+    
+    if (vtype(ctor_val) != T_FUNC) ctor_val = get_slot(js, obj, SLOT_CTOR);
     if (vtype(ctor_val) != T_FUNC) break;
     
     jsoff_t name_off = lkp(js, mkval(T_OBJ, vdata(ctor_val)), "name", 4);
@@ -1810,10 +1825,12 @@ print_plain_object:
       n += cpy(buf + n, len - n, "[Object: null prototype] {}", 27);
     } else if (class_name && class_name_len > 0) {
       n += cpy(buf + n, len - n, class_name, class_name_len);
-      n += cpy(buf + n, len - n, " {}", 3);
-    } else {
-      n += cpy(buf + n, len - n, "{}", 2);
-    }
+      if (proto_is_null_proto) {
+        n += cpy(buf + n, len - n, " <[Object: null prototype] {}> {}", 33);
+      } else n += cpy(buf + n, len - n, " {}", 3);
+    } else if (proto_is_null_proto) {
+      n += cpy(buf + n, len - n, "<[Object: null prototype] {}> {}", 32);
+    } else n += cpy(buf + n, len - n, "{}", 2);
     pop_stringify();
     return n;
   }
@@ -1822,7 +1839,11 @@ print_plain_object:
     n += cpy(buf + n, len - n, "[Object: null prototype] ", 25);
   } else if (class_name && class_name_len > 0) {
     n += cpy(buf + n, len - n, class_name, class_name_len);
-    n += cpy(buf + n, len - n, " ", 1);
+    if (proto_is_null_proto) {
+      n += cpy(buf + n, len - n, " <[Object: null prototype] {}> ", 31);
+    } else n += cpy(buf + n, len - n, " ", 1);
+  } else if (proto_is_null_proto) {
+    n += cpy(buf + n, len - n, "<[Object: null prototype] {}> ", 30);
   }
   
   n += cpy(buf + n, len - n, inline_mode ? "{ " : "{\n", 2);
@@ -1843,20 +1864,15 @@ continue_object_print:;
     
     jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
     jsoff_t klen = offtolen(loadoff(js, koff));
-    const char *key = (char *) &js->mem[koff + sizeof(koff)];
     
-    bool is_desc = (klen > 7 && key[0] == '_' && key[1] == '_' && key[2] == 'd' && key[3] == 'e' && key[4] == 's' && key[5] == 'c' && key[6] == '_');
+    const char *key = (char *) &js->mem[koff + sizeof(koff)];
     const char *tag_sym_key = get_toStringTag_sym_key();
-    bool should_hide = streq(key, klen, STR_PROTO, STR_PROTO_LEN) || streq(key, klen, tag_sym_key, strlen(tag_sym_key)) || is_desc;
+    bool should_hide = streq(key, klen, tag_sym_key, strlen(tag_sym_key));
     
     if (!should_hide) {
       jsoff_t obj_off = (jsoff_t)vdata(obj);
       descriptor_entry_t *desc = lookup_descriptor(obj_off, key, klen);
-      if (desc) {
-        if (desc->has_getter || desc->has_setter) {
-          should_hide = true;
-        } else if (!desc->enumerable) should_hide = true;
-      }
+      if (desc) if (desc->has_getter || desc->has_setter || !desc->enumerable) should_hide = true;
     }
     
     if (!should_hide) {
@@ -3242,6 +3258,14 @@ static jsval_t setup_func_prototype(struct js *js, jsval_t func) {
   js_set_descriptor(js, func, "prototype", 9, JS_DESC_W);
   
   return js_mkundef();
+}
+
+static void infer_func_name(struct js *js, jsval_t func, const char *name, size_t len) {
+  jsval_t func_obj = mkval(T_OBJ, vdata(func));
+  if (vtype(get_slot(js, func_obj, SLOT_NAME)) != T_UNDEF) return;
+  jsval_t name_val = js_mkstr(js, name, len);
+  set_slot(js, func_obj, SLOT_NAME, name_val);
+  setprop(js, func_obj, js_mkstr(js, "name", 4), name_val);
 }
 
 static jsval_t validate_array_length(struct js *js, jsval_t v) {
@@ -8525,6 +8549,10 @@ do_new: {
       rtype == T_OBJ || rtype == T_ARR ||
       rtype == T_PROMISE || rtype == T_FUNC
      ) ? result : constructed_obj;
+    
+    if (vtype(new_result) == T_OBJ && (vtype(ctor) == T_FUNC || vtype(ctor) == T_CFUNC)) {
+      set_slot(js, new_result, SLOT_CTOR, ctor);
+    }
 
     jsval_t call_obj = js_mkundef();
     while (next(js) == TOK_DOT || next(js) == TOK_LBRACKET || next(js) == TOK_OPTIONAL_CHAIN || next(js) == TOK_LPAREN) {
@@ -9441,8 +9469,12 @@ obj_destruct_next:
         char decoded_name[256];
         size_t decoded_len = decode_ident_escapes(name, nlen, decoded_name, sizeof(decoded_name));
         
+        jsval_t resolved = resolveprop(js, v);
+        if (vtype(resolved) == T_FUNC) infer_func_name(js, resolved, decoded_name, decoded_len);
+        
         if (lkp_scope(js, js->scope, decoded_name, decoded_len) > 0) return js_mkerr(js, "'%.*s' already declared", (int) decoded_len, decoded_name);
-        jsval_t x = mkprop(js, js->scope, js_mkstr(js, decoded_name, decoded_len), resolveprop(js, v), is_const ? CONSTMASK : 0);
+        jsval_t x = mkprop(js, js->scope, js_mkstr(js, decoded_name, decoded_len), resolved, is_const ? CONSTMASK : 0);
+        
         if (is_err(x)) return x;
       }
     }
@@ -20826,12 +20858,24 @@ struct js *js_create(void *buf, size_t len) {
   jsval_t glob = js->scope;
   jsval_t object_proto = js_mkobj(js);
   set_proto(js, object_proto, js_mknull());
+  
   setprop(js, object_proto, js_mkstr(js, "toString", 8), js_mkfun(builtin_object_toString));
+  js_set_descriptor(js, object_proto, "toString", 8, JS_DESC_W | JS_DESC_C);
+  
   setprop(js, object_proto, js_mkstr(js, "valueOf", 7), js_mkfun(builtin_object_valueOf));
+  js_set_descriptor(js, object_proto, "valueOf", 7, JS_DESC_W | JS_DESC_C);
+  
   setprop(js, object_proto, js_mkstr(js, "toLocaleString", 14), js_mkfun(builtin_object_toLocaleString));
+  js_set_descriptor(js, object_proto, "toLocaleString", 14, JS_DESC_W | JS_DESC_C);
+  
   setprop(js, object_proto, js_mkstr(js, "hasOwnProperty", 14), js_mkfun(builtin_object_hasOwnProperty));
+  js_set_descriptor(js, object_proto, "hasOwnProperty", 14, JS_DESC_W | JS_DESC_C);
+  
   setprop(js, object_proto, js_mkstr(js, "isPrototypeOf", 13), js_mkfun(builtin_object_isPrototypeOf));
+  js_set_descriptor(js, object_proto, "isPrototypeOf", 13, JS_DESC_W | JS_DESC_C);
+  
   setprop(js, object_proto, js_mkstr(js, "propertyIsEnumerable", 20), js_mkfun(builtin_object_propertyIsEnumerable));
+  js_set_descriptor(js, object_proto, "propertyIsEnumerable", 20, JS_DESC_W | JS_DESC_C);
   
   jsval_t proto_getter = js_mkfun(builtin_proto_getter);
   jsval_t proto_setter = js_mkfun(builtin_proto_setter);
@@ -21345,14 +21389,31 @@ struct js *js_create(void *buf, size_t len) {
   js->module_ns = js_mkundef();
   
   setprop(js, object_proto, js_mkstr(js, "constructor", 11), mkval(T_FUNC, vdata(obj_func_obj)));
+  js_set_descriptor(js, object_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
+  
   setprop(js, function_proto, js_mkstr(js, "constructor", 11), mkval(T_FUNC, vdata(func_ctor_obj)));
+  js_set_descriptor(js, function_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
+  
   setprop(js, array_proto, js_mkstr(js, "constructor", 11), mkval(T_FUNC, vdata(arr_ctor_obj)));
+  js_set_descriptor(js, array_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
+  
   setprop(js, string_proto, js_mkstr(js, "constructor", 11), mkval(T_FUNC, vdata(str_ctor_obj)));
+  js_set_descriptor(js, string_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
+  
   setprop(js, number_proto, js_mkstr(js, "constructor", 11), mkval(T_FUNC, vdata(number_ctor_obj)));
+  js_set_descriptor(js, number_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
+  
   setprop(js, boolean_proto, js_mkstr(js, "constructor", 11), mkval(T_FUNC, vdata(bool_ctor_obj)));
+  js_set_descriptor(js, boolean_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
+  
   setprop(js, date_proto, js_mkstr(js, "constructor", 11), mkval(T_FUNC, vdata(date_ctor_obj)));
+  js_set_descriptor(js, date_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
+  
   setprop(js, regexp_proto, js_mkstr(js, "constructor", 11), mkval(T_FUNC, vdata(regex_ctor_obj)));
+  js_set_descriptor(js, regexp_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
+  
   setprop(js, error_proto, js_mkstr(js, "constructor", 11), mkval(T_FUNC, vdata(err_ctor_obj)));
+  js_set_descriptor(js, error_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
   
   set_proto(js, glob, object_proto);
   
