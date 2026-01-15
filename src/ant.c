@@ -9665,6 +9665,7 @@ typedef struct {
   bool has_destructure;
   jsoff_t destructure_off;
   jsoff_t destructure_len;
+  int marker_index;
 } for_iter_ctx_t;
 
 static jsval_t for_iter_bind_var(struct js *js, for_iter_ctx_t *ctx, jsval_t value) {
@@ -9687,22 +9688,29 @@ static jsval_t for_iter_exec_body(struct js *js, for_iter_ctx_t *ctx) {
   return js_block_or_stmt(js);
 }
 
-static bool for_in_should_skip_key(struct js *js, jsval_t obj, const char *key, jsoff_t klen) {
-  if (streq(key, klen, STR_PROTO, STR_PROTO_LEN)) return true;
-  
-  const char *tag_sym_key = get_toStringTag_sym_key();
-  if (streq(key, klen, tag_sym_key, strlen(tag_sym_key))) return true;
-  
-  jsoff_t obj_off = (jsoff_t)vdata(obj);
-  descriptor_entry_t *desc = lookup_descriptor(obj_off, key, klen);
-  if (desc && !desc->enumerable) return true;
-  
-  return false;
+static inline bool for_iter_handle_continue(struct js *js, for_iter_ctx_t *ctx) {
+  if (!(label_flags & F_CONTINUE_LABEL)) return false;
+  if (is_this_loop_continue_target(ctx->marker_index)) {
+    clear_continue_label();
+    js->flags &= ~(F_BREAK | F_NOEXEC);
+    return false;
+  }
+  js->flags |= F_BREAK;
+  return true;
 }
 
 static jsval_t for_in_iter_object(struct js *js, for_iter_ctx_t *ctx, jsval_t obj) {
-  jsval_t iter_obj = (vtype(obj) == T_FUNC) ? mkval(T_OBJ, vdata(obj)) : obj;
-  jsoff_t prop_off = loadoff(js, (jsoff_t) vdata(iter_obj)) & ~(3U | FLAGMASK);
+  uint8_t obj_type = vtype(obj);
+  
+  if (obj_type == T_NULL || obj_type == T_UNDEF) return js_mkundef();
+  if (obj_type != T_OBJ && obj_type != T_ARR && obj_type != T_FUNC) return js_mkerr(js, "for-in requires object");
+  
+  jsval_t iter_obj = (obj_type == T_FUNC) ? mkval(T_OBJ, vdata(obj)) : obj;
+  jsoff_t iter_obj_off = (jsoff_t)vdata(iter_obj);
+  jsoff_t prop_off = loadoff(js, iter_obj_off) & ~(3U | FLAGMASK);
+  
+  const char *tag_sym_key = get_toStringTag_sym_key();
+  size_t tag_sym_len = tag_sym_key ? strlen(tag_sym_key) : 0;
   
   while (prop_off < js->brk && prop_off != 0) {
     jsoff_t header = loadoff(js, prop_off);
@@ -9712,7 +9720,14 @@ static jsval_t for_in_iter_object(struct js *js, for_iter_ctx_t *ctx, jsval_t ob
     jsoff_t klen = offtolen(loadoff(js, koff));
     const char *key = (char *) &js->mem[koff + sizeof(koff)];
     
-    if (!for_in_should_skip_key(js, iter_obj, key, klen)) {
+    bool should_skip = streq(key, klen, STR_PROTO, STR_PROTO_LEN);
+    if (!should_skip && tag_sym_key) should_skip = streq(key, klen, tag_sym_key, tag_sym_len);
+    if (!should_skip) {
+      descriptor_entry_t *desc = lookup_descriptor(iter_obj_off, key, klen);
+      if (desc && !desc->enumerable) should_skip = true;
+    }
+    
+    if (!should_skip) {
       jsval_t key_str = js_mkstr(js, key, klen);
       
       jsval_t err = for_iter_bind_var(js, ctx, key_str);
@@ -9720,8 +9735,8 @@ static jsval_t for_in_iter_object(struct js *js, for_iter_ctx_t *ctx, jsval_t ob
       
       jsval_t v = for_iter_exec_body(js, ctx);
       if (is_err(v)) return v;
+      if (for_iter_handle_continue(js, ctx)) break;
       if (js->flags & F_BREAK) break;
-      if (label_flags & F_CONTINUE_LABEL) { js->flags |= F_BREAK; break; }
       if (js->flags & F_RETURN) return v;
     }
     
@@ -9776,8 +9791,8 @@ static jsval_t for_of_iter_array(struct js *js, for_iter_ctx_t *ctx, jsval_t ite
     
     jsval_t v = for_iter_exec_body(js, ctx);
     if (is_err(v)) return v;
+    if (for_iter_handle_continue(js, ctx)) break;
     if (js->flags & F_BREAK) break;
-    if (label_flags & F_CONTINUE_LABEL) { js->flags |= F_BREAK; break; }
     if (js->flags & F_RETURN) return v;
   }
   
@@ -9796,8 +9811,8 @@ static jsval_t for_of_iter_string(struct js *js, for_iter_ctx_t *ctx, jsval_t it
     
     jsval_t v = for_iter_exec_body(js, ctx);
     if (is_err(v)) return v;
+    if (for_iter_handle_continue(js, ctx)) break;
     if (js->flags & F_BREAK) break;
-    if (label_flags & F_CONTINUE_LABEL) { js->flags |= F_BREAK; break; }
     if (js->flags & F_RETURN) return v;
   }
   
@@ -9850,8 +9865,8 @@ static jsval_t for_of_iter_object(struct js *js, for_iter_ctx_t *ctx, jsval_t it
     
     jsval_t v = for_iter_exec_body(js, ctx);
     if (is_err(v)) return v;
+    if (for_iter_handle_continue(js, ctx)) break;
     if (js->flags & F_BREAK) break;
-    if (label_flags & F_CONTINUE_LABEL) { js->flags |= F_BREAK; break; }
     if (js->flags & F_RETURN) return v;
   }
   
@@ -9983,75 +9998,16 @@ static jsval_t js_for(struct js *js) {
     
     if (exe) {
       jsval_t obj = resolveprop(js, obj_expr);
-      uint8_t obj_type = vtype(obj);
-      
-      if (obj_type == T_NULL || obj_type == T_UNDEF) {
-        res = js_mkundef();
-        goto done;
-      }
-      
-      if (obj_type != T_OBJ && obj_type != T_ARR && obj_type != T_FUNC) {
-        res = js_mkerr(js, "for-in requires object");
-        goto done;
-      }
-      
-      jsval_t iter_obj = obj;
-      if (vtype(obj) == T_FUNC) {
-        iter_obj = mkval(T_OBJ, vdata(obj));
-      }
-      
-      jsoff_t prop_off = loadoff(js, (jsoff_t) vdata(iter_obj)) & ~(3U | FLAGMASK);
-      
-      while (prop_off < js->brk && prop_off != 0) {
-        jsoff_t header = loadoff(js, prop_off);
-        
-        if (is_slot_prop(header)) {
-          prop_off = next_prop(header);
-          continue;
-        }
-        
-        jsoff_t koff = loadoff(js, prop_off + (jsoff_t) sizeof(prop_off));
-        jsoff_t klen = offtolen(loadoff(js, koff));
-        
-        const char *key = (char *) &js->mem[koff + sizeof(koff)];
-        const char *tag_sym_key = get_toStringTag_sym_key();
-        bool should_skip = streq(key, klen, STR_PROTO, STR_PROTO_LEN) || streq(key, klen, tag_sym_key, strlen(tag_sym_key));
-        
-        if (!should_skip) {
-          jsoff_t iter_obj_off = (jsoff_t)vdata(iter_obj);
-          descriptor_entry_t *desc = lookup_descriptor(iter_obj_off, key, klen);
-          if (desc && !desc->enumerable) should_skip = true;
-        }
-        
-        if (!should_skip) {
-          jsval_t key_str = js_mkstr(js, key, klen);
-          const char *var_name = &js->code[var_name_off];
-          jsoff_t existing = lkp_scope(js, js->scope, var_name, var_name_len);
-          
-          if (existing > 0) saveval(js, existing + sizeof(jsoff_t) * 2, key_str); else {
-            jsval_t x = mkprop(js, js->scope, js_mkstr(js, var_name, var_name_len), key_str, is_const_var ? CONSTMASK : 0);
-            if (is_err(x)) { res = x; goto done; }
-          }
-          
-          js->pos = body_start;
-          js->consumed = 1;
-          js->flags = (flags & ~F_NOEXEC) | F_LOOP;
-          v = js_block_or_stmt(js);
-          if (is_err(v)) { res = v; goto done; }
-          
-          if (label_flags & F_CONTINUE_LABEL) {
-            if (is_this_loop_continue_target(marker_index)) {
-              clear_continue_label();
-              js->flags &= ~(F_BREAK | F_NOEXEC);
-            } else { js->flags |= F_BREAK; break; }
-          }
-          
-          if (js->flags & F_BREAK) break;
-          if (js->flags & F_RETURN) { res = v; goto done; }
-        }
-        
-        prop_off = loadoff(js, prop_off) & ~(3U | FLAGMASK);
-      }
+      for_iter_ctx_t ctx = { 
+        body_start, body_end,
+        var_name_off, var_name_len,
+        is_const_var, flags,
+        has_destructure, destructure_off,
+        destructure_len, marker_index
+      };
+      res = for_in_iter_object(js, &ctx, obj);
+      if (is_err(res)) goto done;
+      if (js->flags & F_RETURN) goto done;
     }
     
     js->pos = body_end;
@@ -10074,7 +10030,13 @@ static jsval_t js_for(struct js *js) {
     if (exe) {
       jsval_t iterable = resolveprop(js, iter_expr);
       uint8_t itype = vtype(iterable);
-      for_iter_ctx_t ctx = { body_start, body_end, var_name_off, var_name_len, is_const_var, flags, has_destructure, destructure_off, destructure_len };
+      for_iter_ctx_t ctx = { 
+        body_start, body_end,
+        var_name_off, var_name_len,
+        is_const_var, flags,
+        has_destructure, destructure_off,
+        destructure_len, marker_index
+      };
       
       if (itype == T_ARR) res = for_of_iter_array(js, &ctx, iterable);
       else if (itype == T_STR) res = for_of_iter_string(js, &ctx, iterable);
