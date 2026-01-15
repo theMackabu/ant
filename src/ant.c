@@ -436,12 +436,6 @@ static const uint8_t prec_table[TOK_MAX] = {
   [TOK_EXP]        = 14,
 };
 
-static const uint8_t unary_table[TOK_MAX] = {
-  [TOK_POSTINC] = 1, [TOK_POSTDEC] = 1,
-  [TOK_NOT] = 1, [TOK_TILDA] = 1, [TOK_TYPEOF] = 1,
-  [TOK_UPLUS] = 1, [TOK_UMINUS] = 1, [TOK_VOID] = 1,
-};
-
 static const uint8_t body_end_tok[TOK_MAX] = {
   [TOK_RPAREN] = 1, [TOK_RBRACE] = 1, [TOK_RBRACKET] = 1,
   [TOK_SEMICOLON] = 1, [TOK_COMMA] = 1, [TOK_EOF] = 1,
@@ -663,10 +657,6 @@ static inline bool is_undefined(jsval_t v) {
 
 static inline uint8_t unhex(uint8_t c) {
   return (c & 0xF) + (c >> 6) * 9;
-}
-
-static inline bool is_unary(uint8_t tok) {
-  return unary_table[tok];
 }
 
 static inline int is_body_end_tok(int tok) {
@@ -2056,17 +2046,6 @@ static bool is_internal_prop(const char *key, jsoff_t klen) {
   return true;
 }
 
-static bool is_hidden_func_prop(const char *key, jsoff_t koff, jsoff_t klen) {
-  if (klen == 4 && memcmp(key, "name", 4) == 0) return true;
-  if (key[0] == '_' && key[1] == '_') return true;
-  
-  const char *interned = intern_string(key, klen);
-  if (interned == INTERN_PROTOTYPE || interned == INTERN_CONSTRUCTOR) return true;
-  if (interned == get_toStringTag_sym_key()) return true;
-  
-  return false;
-}
-
 static size_t strfunc(struct js *js, jsval_t value, char *buf, size_t len) {
   jsval_t func_obj = mkval(T_OBJ, vdata(value));
   jsval_t code_slot = get_slot(js, func_obj, SLOT_CODE);
@@ -3101,21 +3080,6 @@ static inline jsval_t mkprop_fast(struct js *js, jsval_t obj, jsval_t k, jsval_t
   return mkentity(js, prop_header, buf, sizeof(buf));
 }
 
-static inline jsval_t mkprop_new(struct js *js, jsval_t obj, jsoff_t koff, jsval_t v) {
-  jsoff_t b = loadoff(js, (jsoff_t)vdata(obj));
-  jsoff_t brk = js->brk | T_OBJ;
-  
-  if (b & ARRMASK) brk |= ARRMASK;
-  memcpy(&js->mem[(jsoff_t)vdata(obj)], &brk, sizeof(brk));
-  
-  char buf[sizeof(koff) + sizeof(v)];
-  memcpy(buf, &koff, sizeof(koff));
-  memcpy(buf + sizeof(koff), &v, sizeof(v));
-  
-  jsoff_t prop_header = (b & ~(3U | FLAGMASK)) | T_PROP;
-  return mkentity(js, prop_header, buf, sizeof(buf));
-}
-
 static jsval_t mkslot(struct js *js, jsval_t obj, internal_slot_t slot, jsval_t v) {
   jsoff_t b, head = (jsoff_t) vdata(obj);
   char buf[sizeof(jsoff_t) + sizeof(v)];
@@ -3399,12 +3363,6 @@ static jsval_t setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v) {
   return js_setprop(js, obj, k, v);
 }
 
-static jsval_t setprop_const(struct js *js, jsval_t obj, const char *key, size_t len, jsval_t v) {
-  jsval_t k = js_mkstr(js, key, len);
-  if (is_err(k)) return k;
-  return mkprop(js, obj, k, v, CONSTMASK);
-}
-
 static inline jsval_t setprop_fast(struct js *js, jsval_t obj, const char *key, size_t len, jsval_t v) {
   jsval_t k = js_mkstr(js, key, len);
   if (is_err(k)) return k;
@@ -3436,11 +3394,6 @@ jsval_t js_mksym(struct js *js, const char *desc) {
   }
   uint64_t payload = ((id & PROPREF_PAYLOAD) << 24) | (desc_off & PROPREF_PAYLOAD);
   return mkval(T_SYMBOL, payload);
-}
-
-static bool is_symbol(struct js *js, jsval_t v) {
-  (void)js;
-  return vtype(v) == T_SYMBOL;
 }
 
 static uint64_t sym_get_id(jsval_t v) {
@@ -4556,10 +4509,6 @@ static bool block_has_function_decl(struct js *js) {
   return false;
 }
 
-static inline bool might_have_function_decl(const char *code, size_t len) {
-  return memmem(code, len, "function", 8) != NULL;
-}
-
 static void hoist_function_declarations(struct js *js) {
   if (js->flags & F_NOEXEC) return;
   if (js->is_hoisting) return;
@@ -5136,13 +5085,6 @@ static jsval_t resolveprop(struct js *js, jsval_t v) {
   }
   if (vtype(v) != T_PROP) return v;
   return resolveprop(js, loadval(js, (jsoff_t) (vdata(v) + sizeof(jsoff_t) * 2)));
-}
-
-static int check_prop_writable(struct js *js, jsval_t owner, const char *key, jsoff_t klen) {
-  jsoff_t obj_off = (jsoff_t)vdata(owner);
-  descriptor_entry_t *desc = lookup_descriptor(obj_off, key, klen);
-  if (!desc) return -1;
-  return desc->writable ? 1 : 0;
 }
 
 static bool try_accessor_setter(struct js *js, jsval_t obj, const char *key, size_t key_len, jsval_t val, jsval_t *out) {
@@ -10781,24 +10723,6 @@ static bool label_exists(const char *name, jsoff_t len, bool check_loop) {
         return false;
       }
       return true;
-    }
-  }
-  return false;
-}
-
-static bool continue_targets_innermost_loop(void) {
-  if (!(label_flags & F_CONTINUE_LABEL)) return false;
-  if (!label_stack || !continue_target_label) return false;
-  
-  int depth = utarray_len(label_stack);
-  for (int i = depth - 1; i >= 0; i--) {
-    label_entry_t *entry = (label_entry_t *)utarray_eltptr(label_stack, i);
-    if (entry && entry->is_loop) {
-      if (entry->name_len == continue_target_label_len &&
-          memcmp(entry->name, continue_target_label, continue_target_label_len) == 0) {
-        return true;
-      }
-      return false;
     }
   }
   return false;
