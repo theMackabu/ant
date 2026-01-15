@@ -304,6 +304,9 @@ typedef struct dynamic_accessors {
 
 typedef struct descriptor_entry {
   uint64_t key;
+  jsoff_t obj_off;
+  char *prop_name;
+  size_t prop_len;
   bool writable;
   bool enumerable;
   bool configurable;
@@ -1645,7 +1648,7 @@ static bool is_small_object(struct js *js, jsval_t obj, int *prop_count) {
     
     if (!should_hide) {
       descriptor_entry_t *desc = lookup_descriptor(obj_off, key, klen);
-      if (desc) if (desc->has_getter || desc->has_setter || !desc->enumerable) should_hide = true;
+      if (desc && !desc->enumerable) should_hide = true;
     }
     
     if (!should_hide) {
@@ -1656,6 +1659,14 @@ static bool is_small_object(struct js *js, jsval_t obj, int *prop_count) {
     }
     
     next = next_prop(header);
+  }
+  
+  descriptor_entry_t *desc, *tmp;
+  HASH_ITER(hh, desc_registry, desc, tmp) {
+    if (desc->obj_off != obj_off) continue;
+    if (!desc->enumerable) continue;
+    if (!desc->has_getter && !desc->has_setter) continue;
+    count++;
   }
   
   if (prop_count) *prop_count = count;
@@ -1854,7 +1865,9 @@ continue_object_print:;
   jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | FLAGMASK);
   bool first = true;
   
+  jsoff_t obj_off = (jsoff_t)vdata(obj);
   int prop_capacity = 64;
+  
   jsoff_t *prop_offsets = malloc(prop_capacity * sizeof(jsoff_t));
   int num_props = 0;
   
@@ -1870,9 +1883,8 @@ continue_object_print:;
     bool should_hide = streq(key, klen, tag_sym_key, strlen(tag_sym_key));
     
     if (!should_hide) {
-      jsoff_t obj_off = (jsoff_t)vdata(obj);
       descriptor_entry_t *desc = lookup_descriptor(obj_off, key, klen);
-      if (desc) if (desc->has_getter || desc->has_setter || !desc->enumerable) should_hide = true;
+      if (desc && !desc->enumerable) should_hide = true;
     }
     
     if (!should_hide) {
@@ -1916,63 +1928,23 @@ continue_object_print:;
   }
   free(prop_offsets);
   
-  next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | FLAGMASK);
-  while (next < js->brk && next != 0) {
-    jsoff_t header = loadoff(js, next);
-    if (is_slot_prop(header)) { next = next_prop(header); continue; }
+  descriptor_entry_t *desc, *tmp;
+  HASH_ITER(hh, desc_registry, desc, tmp) {
+    if (desc->obj_off != obj_off) continue;
+    if (!desc->enumerable) continue;
+    if (!desc->has_getter && !desc->has_setter) continue;
     
-    jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
-    jsoff_t klen = offtolen(loadoff(js, koff));
-    const char *key = (char *) &js->mem[koff + sizeof(koff)];
+    if (!first) n += cpy(buf + n, len - n, inline_mode ? ", " : ",\n", 2);
+    first = false;
+    if (!inline_mode) n += add_indent(buf + n, len - n, stringify_indent);
+    n += cpy(buf + n, len - n, desc->prop_name, desc->prop_len);
+    n += cpy(buf + n, len - n, ": ", 2);
     
-    bool is_desc = (klen > 7 && key[0] == '_' && key[1] == '_' && key[2] == 'd' && key[3] == 'e' && key[4] == 's' && key[5] == 'c' && key[6] == '_');
-    if (is_desc) {
-      jsval_t desc_obj = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
-      desc_obj = resolveprop(js, desc_obj);
-      if (vtype(desc_obj) == T_OBJ) {
-        jsoff_t get_off = lkp_interned(js, desc_obj, INTERN_GET, 3);
-        jsoff_t set_off = lkp_interned(js, desc_obj, INTERN_SET, 3);
-        bool has_getter = false, has_setter = false;
-        
-        if (get_off != 0) {
-          jsval_t get_val = resolveprop(js, mkval(T_PROP, get_off));
-          has_getter = (vtype(get_val) == T_FUNC || vtype(get_val) == T_CFUNC);
-        }
-        if (set_off != 0) {
-          jsval_t set_val = resolveprop(js, mkval(T_PROP, set_off));
-          has_setter = (vtype(set_val) == T_FUNC || vtype(set_val) == T_CFUNC);
-        }
-        
-        if (has_getter || has_setter) {
-          jsoff_t enumerable_off = lkp(js, desc_obj, "enumerable", 10);
-          bool is_enumerable = true;
-          if (enumerable_off != 0) {
-            jsval_t enumerable_val = resolveprop(js, mkval(T_PROP, enumerable_off));
-            is_enumerable = js_truthy(js, enumerable_val);
-          }
-          
-          if (is_enumerable) {
-            const char *prop_name = key + 7;
-            size_t prop_len = klen - 7;
-            
-            if (!first) n += cpy(buf + n, len - n, ",\n", 2);
-            first = false;
-            n += add_indent(buf + n, len - n, stringify_indent);
-            n += cpy(buf + n, len - n, prop_name, prop_len);
-            n += cpy(buf + n, len - n, ": ", 2);
-            
-            if (has_getter && has_setter) {
-              n += cpy(buf + n, len - n, "[Getter/Setter]", 15);
-            } else if (has_getter) {
-              n += cpy(buf + n, len - n, "[Getter]", 8);
-            } else {
-              n += cpy(buf + n, len - n, "[Setter]", 8);
-            }
-          }
-        }
-      }
-    }
-    next = next_prop(header);
+    if (desc->has_getter && desc->has_setter) {
+      n += cpy(buf + n, len - n, "[Getter/Setter]", 15);
+    } else if (desc->has_getter) {
+      n += cpy(buf + n, len - n, "[Getter]", 8);
+    } else n += cpy(buf + n, len - n, "[Setter]", 8);
   }
   
   if (!inline_mode) stringify_indent--;
@@ -8361,11 +8333,9 @@ static jsval_t js_call_dot(struct js *js) {
     } else if (js->tok == TOK_DOT || js->tok == TOK_OPTIONAL_CHAIN) {
       uint8_t op = js->tok;
       js->consumed = 1;
-      if (vtype(res) != T_PROP) {
+      if (vtype(res) != T_PROP && vtype(res) != T_PROPREF) {
         obj = res;
-      } else {
-        obj = resolveprop(js, res);
-      }
+      } else obj = resolveprop(js, res);
       jsval_t prop_name;
       uint8_t nxt = next(js);
       if (nxt == TOK_HASH) {
@@ -13631,7 +13601,9 @@ static jsval_t builtin_object_keys(struct js *js, jsval_t *args, int nargs) {
   
   jsval_t arr = mkarr(js);
   jsoff_t idx = 0;
-  jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | FLAGMASK);
+  
+  jsoff_t obj_off = (jsoff_t)vdata(obj);
+  jsoff_t next = loadoff(js, obj_off) & ~(3U | FLAGMASK);
   
   while (next < js->brk && next != 0) {
     jsoff_t header = loadoff(js, next);
@@ -13645,15 +13617,8 @@ static jsval_t builtin_object_keys(struct js *js, jsval_t *args, int nargs) {
     if (is_internal_prop(key, klen)) continue;
     
     bool should_include = true;
-    jsoff_t obj_off = (jsoff_t)vdata(obj);
     descriptor_entry_t *desc = lookup_descriptor(obj_off, key, klen);
-    
-    if (desc) {
-      if (desc->has_getter || desc->has_setter) {
-        continue;
-      }
-      should_include = desc->enumerable;
-    }
+    if (desc) should_include = desc->enumerable;
     
     if (should_include) {
       char idxstr[16];
@@ -13665,56 +13630,18 @@ static jsval_t builtin_object_keys(struct js *js, jsval_t *args, int nargs) {
     }
   }
   
-  next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | FLAGMASK);
-  while (next < js->brk && next != 0) {
-    jsoff_t header = loadoff(js, next);
-    if (is_slot_prop(header)) { next = next_prop(header); continue; }
+  descriptor_entry_t *desc, *tmp;
+  HASH_ITER(hh, desc_registry, desc, tmp) {
+    if (desc->obj_off != obj_off) continue;
+    if (!desc->enumerable) continue;
+    if (!desc->has_getter && !desc->has_setter) continue;
     
-    jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
-    jsoff_t klen = offtolen(loadoff(js, koff));
-    const char *key = (char *) &js->mem[koff + sizeof(koff)];
-    
-    next = next_prop(header);
-    
-    if (klen > 7 && key[0] == '_' && key[1] == '_' && key[2] == 'd' && 
-        key[3] == 'e' && key[4] == 's' && key[5] == 'c' && key[6] == '_') {
-      jsval_t desc_obj = resolveprop(js, mkval(T_PROP, lkp(js, obj, key, klen)));
-      if (vtype(desc_obj) == T_OBJ) {
-        jsoff_t get_off = lkp_interned(js, desc_obj, INTERN_GET, 3);
-        jsoff_t set_off = lkp_interned(js, desc_obj, INTERN_SET, 3);
-        bool has_accessor = false;
-        
-        if (get_off != 0) {
-          jsval_t get_val = resolveprop(js, mkval(T_PROP, get_off));
-          if (vtype(get_val) == T_FUNC || vtype(get_val) == T_CFUNC) has_accessor = true;
-        }
-        if (set_off != 0) {
-          jsval_t set_val = resolveprop(js, mkval(T_PROP, set_off));
-          if (vtype(set_val) == T_FUNC || vtype(set_val) == T_CFUNC) has_accessor = true;
-        }
-        
-        if (has_accessor) {
-          jsoff_t enum_off = lkp(js, desc_obj, "enumerable", 10);
-          bool is_enumerable = true;
-          if (enum_off != 0) {
-            jsval_t enum_val = resolveprop(js, mkval(T_PROP, enum_off));
-            is_enumerable = js_truthy(js, enum_val);
-          }
-          
-          if (is_enumerable) {
-            const char *prop_name = key + 7;
-            size_t prop_len = klen - 7;
-            
-            char idxstr[16];
-            size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)idx);
-            jsval_t idx_key = js_mkstr(js, idxstr, idxlen);
-            jsval_t key_val = js_mkstr(js, prop_name, prop_len);
-            setprop(js, arr, idx_key, key_val);
-            idx++;
-          }
-        }
-      }
-    }
+    char idxstr[16];
+    size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)idx);
+    jsval_t idx_key = js_mkstr(js, idxstr, idxlen);
+    jsval_t key_val = js_mkstr(js, desc->prop_name, desc->prop_len);
+    setprop(js, arr, idx_key, key_val);
+    idx++;
   }
   
   for (jsoff_t i = 0; i < idx / 2; i++) {
@@ -21714,6 +21641,7 @@ void js_gc_update_roots(GC_UPDATE_ARGS) {
     if (desc->has_setter) FWD_VAL(desc->setter);
     jsoff_t obj_off = fwd_off(ctx, (jsoff_t)(desc->key >> 32));
     desc->key = ((uint64_t)obj_off << 32) | (uint32_t)(desc->key & 0xFFFFFFFF);
+    desc->obj_off = obj_off;
   });
 
   for (coroutine_t *coro = pending_coroutines.head; coro; coro = coro->next) {
@@ -22135,6 +22063,13 @@ static descriptor_entry_t *get_or_create_desc(struct js *js, jsval_t obj, const 
     entry = (descriptor_entry_t *)malloc(sizeof(descriptor_entry_t));
     if (!entry) return NULL;
     entry->key = desc_key;
+    entry->obj_off = obj_off;
+    entry->prop_name = (char *)malloc(klen + 1);
+    if (entry->prop_name) {
+      memcpy(entry->prop_name, key, klen);
+      entry->prop_name[klen] = '\0';
+    }
+    entry->prop_len = klen;
     entry->writable = true;
     entry->enumerable = true;
     entry->configurable = true;

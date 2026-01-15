@@ -195,7 +195,9 @@ minus:
 
 lt:
   if (memcmp(p, "<ref", 4) == 0) { EMIT_UNTIL('>', JSON_REF) }
-  io_putc(*p++, stream); goto next;
+  while (*p && *p != '>') io_putc(*p++, stream);
+  if (*p == '>') io_putc(*p++, stream);
+  goto next;
 
 alpha:
   if (memcmp(p, "Object [", 8) == 0) {
