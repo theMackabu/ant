@@ -2072,7 +2072,6 @@ static bool is_internal_prop(const char *key, jsoff_t klen) {
 
 static bool is_hidden_func_prop(const char *key, jsoff_t koff, jsoff_t klen) {
   if (klen == 4 && memcmp(key, "name", 4) == 0) return true;
-
   if (key[0] == '_' && key[1] == '_') return true;
   
   const char *interned = intern_string(key, klen);
@@ -4486,9 +4485,96 @@ static inline void pop_call_frame() {
 static jsval_t js_func_decl(struct js *js);
 static jsval_t js_func_decl_async(struct js *js);
 
+static inline bool is_function_keyword(const char *code, jsoff_t pos, jsoff_t end) {
+  if (pos + 8 > end) return false;
+  uint64_t word;
+  memcpy(&word, code + pos, 8);
+  
+  if (word != 0x6e6f6974636e7566ULL) return false;
+  return (pos + 8 >= end) || !IS_IDENT(code[pos + 8]);
+}
+
+static inline bool is_async_function(const char *code, jsoff_t pos, jsoff_t end) {
+  if (pos + 5 > end) return false;
+  
+  uint32_t word4;
+  memcpy(&word4, code + pos, 4);
+  
+  if (word4 != 0x6e797361U || code[pos + 4] != 'c') return false;
+  if (pos + 5 < end && IS_IDENT(code[pos + 5])) return false;
+  
+  jsoff_t scan = pos + 5;
+  while (scan < end && (
+    code[scan] == ' ' || 
+    code[scan] == '\t' || 
+    code[scan] == '\n' || 
+    code[scan] == '\r'
+  )) scan++;
+  
+  return is_function_keyword(code, scan, end);
+}
+
+static bool block_has_function_decl(struct js *js) {
+  const char *code = js->code;
+  jsoff_t pos = js->pos;
+  jsoff_t end = js->clen;
+  int depth = 0;
+  
+  while (pos < end) {
+    uint8_t c = (uint8_t)code[pos];
+    
+    if (c == '"' || c == '\'' || c == '`') {
+      uint8_t quote = c;
+      pos++;
+      while (pos < end && (uint8_t)code[pos] != quote) {
+        if (code[pos] == '\\' && pos + 1 < end) pos++;
+        pos++;
+      }
+      if (pos < end) pos++;
+      continue;
+    }
+    
+    if (c == '/' && pos + 1 < end) {
+      if (code[pos + 1] == '/') {
+        pos += 2;
+        while (pos < end && code[pos] != '\n') pos++;
+        continue;
+      }
+      if (code[pos + 1] == '*') {
+        pos += 2;
+        while (pos + 1 < end && !(code[pos] == '*' && code[pos + 1] == '/')) pos++;
+        if (pos + 1 < end) pos += 2;
+        continue;
+      }
+    }
+    
+    if (c == '{') { depth++; pos++; continue; }
+    if (c == '}') {
+      if (depth == 0) break;
+      depth--; pos++; continue;
+    }
+    
+    if (depth == 0) {
+      if (c == 'f' && is_function_keyword(code, pos, end)) return true;
+      if (c == 'a' && is_async_function(code, pos, end)) return true;
+    }
+    
+    pos++;
+  }
+  
+  return false;
+}
+
+static inline bool might_have_function_decl(const char *code, size_t len) {
+  return memmem(code, len, "function", 8) != NULL;
+}
+
 static void hoist_function_declarations(struct js *js) {
   if (js->flags & F_NOEXEC) return;
   if (js->is_hoisting) return;
+  
+  if (!memmem(js->code + js->pos, js->clen - js->pos, "function", 8)) return;
+  if (!block_has_function_decl(js)) return;
   
   js->is_hoisting = true;
   
@@ -4582,17 +4668,16 @@ static jsval_t js_block(struct js *js, bool create_scope) {
 
 static inline jsoff_t lkp_interned(struct js *js, jsval_t obj, const char *search_intern, size_t len) {
   jsoff_t obj_off = (jsoff_t)vdata(obj);
-  
-  jsval_t version_val = get_slot(js, mkval(T_OBJ, obj_off), SLOT_VERSION);
-  uint32_t current_version = (vtype(version_val) == T_NUM) ? (uint32_t)tod(version_val) : 0;
+  jsoff_t first_prop = loadoff(js, obj_off) & ~(3U | FLAGMASK);
   
   uint32_t cache_slot = (((uintptr_t)search_intern >> 3) ^ obj_off) & (ANT_LIMIT_SIZE_CACHE - 1);
   intern_prop_cache_entry_t *ce = &intern_prop_cache[cache_slot];
-  if (ce->obj_off == obj_off && ce->intern_ptr == search_intern && ce->obj_version == current_version) {
+  
+  if (ce->obj_off == obj_off && ce->intern_ptr == search_intern && ce->obj_version == first_prop) {
     return ce->prop_off;
   }
   
-  jsoff_t off = loadoff(js, obj_off) & ~(3U | FLAGMASK);
+  jsoff_t off = first_prop;
   while (off < js->brk && off != 0) {
     jsoff_t header = loadoff(js, off);
     if (is_slot_prop(header)) { off = next_prop(header); continue; }
@@ -4605,7 +4690,7 @@ static inline jsoff_t lkp_interned(struct js *js, jsval_t obj, const char *searc
         ce->obj_off = obj_off;
         ce->intern_ptr = search_intern;
         ce->prop_off = off;
-        ce->obj_version = current_version;
+        ce->obj_version = first_prop;
         return off;
       }
     }
@@ -4615,7 +4700,7 @@ static inline jsoff_t lkp_interned(struct js *js, jsval_t obj, const char *searc
   ce->obj_off = obj_off;
   ce->intern_ptr = search_intern;
   ce->prop_off = 0;
-  ce->obj_version = current_version;
+  ce->obj_version = first_prop;
   
   return 0;
 }
@@ -6805,6 +6890,7 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
   }
 
   L_TOK_PLUS: {
+    if (vtype(l) == T_NUM && vtype(r) == T_NUM) return tov(tod(l) + tod(r));
     jsval_t lu = unwrap_primitive(js, l);
     jsval_t ru = unwrap_primitive(js, r);
     if (vtype(lu) == T_BIGINT && vtype(ru) == T_BIGINT) return bigint_add(js, lu, ru);
@@ -6824,7 +6910,18 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
   L_TOK_DIV:
   L_TOK_REM:
   L_TOK_EXP: {
-    if (vtype(l) == T_BIGINT && vtype(r) == T_BIGINT) {
+    uint8_t lt = vtype(l), rt = vtype(r);
+    if (lt == T_NUM && rt == T_NUM) {
+      double a = tod(l), b = tod(r);
+      switch (op) {
+        case TOK_MINUS: return tov(a - b);
+        case TOK_MUL:   return tov(a * b);
+        case TOK_DIV:   return tov(a / b);
+        case TOK_REM:   return tov(a - b * ((double)(long)(a / b)));
+        case TOK_EXP:   return tov(pow(a, b));
+      }
+    }
+    if (lt == T_BIGINT && rt == T_BIGINT) {
       switch (op) {
         case TOK_MINUS: return bigint_sub(js, l, r);
         case TOK_MUL:   return bigint_mul(js, l, r);
@@ -6833,7 +6930,7 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
         case TOK_EXP:   return bigint_exp(js, l, r);
       }
     }
-    if (vtype(l) == T_BIGINT || vtype(r) == T_BIGINT)
+    if (lt == T_BIGINT || rt == T_BIGINT)
       return js_mkerr(js, "Cannot mix BigInt value and other types");
     double a = js_to_number(js, l), b = js_to_number(js, r);
     switch (op) {
@@ -6849,7 +6946,17 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
   L_TOK_LE:
   L_TOK_GT:
   L_TOK_GE: {
-    if (vtype(l) == T_BIGINT && vtype(r) == T_BIGINT) {
+    uint8_t lt = vtype(l), rt = vtype(r);
+    if (lt == T_NUM && rt == T_NUM) {
+      double a = tod(l), b = tod(r);
+      switch (op) {
+        case TOK_LT: return mkval(T_BOOL, a < b);
+        case TOK_LE: return mkval(T_BOOL, a <= b);
+        case TOK_GT: return mkval(T_BOOL, a > b);
+        case TOK_GE: return mkval(T_BOOL, a >= b);
+      }
+    }
+    if (lt == T_BIGINT && rt == T_BIGINT) {
       int cmp = bigint_compare(js, l, r);
       switch (op) {
         case TOK_LT: return mkval(T_BOOL, cmp < 0);
@@ -6858,9 +6965,9 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
         case TOK_GE: return mkval(T_BOOL, cmp >= 0);
       }
     }
-    if (vtype(l) == T_BIGINT || vtype(r) == T_BIGINT)
+    if (lt == T_BIGINT || rt == T_BIGINT)
       return js_mkerr(js, "Cannot mix BigInt value and other types");
-    if (vtype(l) == T_STR && vtype(r) == T_STR)
+    if (lt == T_STR && rt == T_STR)
       return do_string_op(js, op, l, r);
     double a = js_to_number(js, l), b = js_to_number(js, r);
     switch (op) {
@@ -6877,10 +6984,11 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
   L_TOK_SHL:
   L_TOK_SHR:
   L_TOK_ZSHR: {
-    if (vtype(l) == T_BIGINT || vtype(r) == T_BIGINT)
+    uint8_t lt = vtype(l), rt = vtype(r);
+    if (lt == T_BIGINT || rt == T_BIGINT)
       return js_mkerr(js, "Cannot mix BigInt value and other types");
-    int32_t ai = js_to_int32(js_to_number(js, l));
-    uint32_t bi = js_to_uint32(js_to_number(js, r));
+    int32_t ai = (lt == T_NUM) ? js_to_int32(tod(l)) : js_to_int32(js_to_number(js, l));
+    uint32_t bi = (rt == T_NUM) ? js_to_uint32(tod(r)) : js_to_uint32(js_to_number(js, r));
     switch (op) {
       case TOK_XOR:  return tov((double)(ai ^ (int32_t)bi));
       case TOK_AND:  return tov((double)(ai & (int32_t)bi));
@@ -7923,10 +8031,7 @@ static jsval_t js_func_literal(struct js *js, bool is_async) {
   
   if (!(flags & F_NOEXEC)) {
     set_slot(js, func_obj, SLOT_SCOPE, js->scope);
-    
-    if (flags & F_STRICT) {
-      set_slot(js, func_obj, SLOT_STRICT, js_mktrue());
-    }
+    if (flags & F_STRICT) set_slot(js, func_obj, SLOT_STRICT, js_mktrue());
   }
   
   jsval_t func = mkval(T_FUNC, (unsigned long) vdata(func_obj));
