@@ -62,8 +62,8 @@ jobs:
             vendor/*/
             build/
             !build/oxc-target
-          key: meson-macos-aarch64-${{ hashFiles('vendor/*.wrap', 'meson.build', 'src/**/*.c', 'src/**/*.h') }}
-          restore-keys: meson-macos-aarch64-
+          key: meson-macos-aarch64-openssl-${{ hashFiles('vendor/*.wrap', 'meson.build', 'src/**/*.c', 'src/**/*.h') }}
+          restore-keys: meson-macos-aarch64-openssl-
       - run: |
           export PKG_CONFIG_PATH="$HOME/deps-cache/lib/pkgconfig:$PKG_CONFIG_PATH"
           export CMAKE_PREFIX_PATH="$HOME/deps-cache:$CMAKE_PREFIX_PATH"
