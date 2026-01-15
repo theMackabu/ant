@@ -2290,20 +2290,20 @@ static jsval_t js_throw(struct js *js, jsval_t value) {
 
 static size_t tostr(struct js *js, jsval_t value, char *buf, size_t len) {
   switch (vtype(value)) {
-    case T_UNDEF: return cpy(buf, len, "undefined", 9);
-    case T_NULL:  return cpy(buf, len, "null", 4);
-    case T_BOOL:  return cpy(buf, len, vdata(value) & 1 ? "true" : "false", vdata(value) & 1 ? 4 : 5);
-    case T_ARR:   return strarr(js, value, buf, len);
-    case T_OBJ:   return strobj(js, value, buf, len);
-    case T_STR:   return strstring(js, value, buf, len);
-    case T_NUM:   return strnum(value, buf, len);
-    case T_BIGINT: return strbigint(js, value, buf, len);
+    case T_UNDEF:   return cpy(buf, len, "undefined", 9);
+    case T_NULL:    return cpy(buf, len, "null", 4);
+    case T_BOOL:    return cpy(buf, len, vdata(value) & 1 ? "true" : "false", vdata(value) & 1 ? 4 : 5);
+    case T_ARR:     return strarr(js, value, buf, len);
+    case T_OBJ:     return strobj(js, value, buf, len);
+    case T_STR:     return strstring(js, value, buf, len);
+    case T_NUM:     return strnum(value, buf, len);
+    case T_BIGINT:  return strbigint(js, value, buf, len);
     case T_PROMISE: return strpromise(js, value, buf, len);
-    case T_FUNC:  return strfunc(js, value, buf, len);
-    case T_CFUNC: return cpy(buf, len, "[native code]", 13);
-    case T_FFI:   return cpy(buf, len, "[native code]", 13);
-    case T_PROP:  return (size_t) snprintf(buf, len, "PROP@%lu", (unsigned long) vdata(value));
-    default:      return (size_t) snprintf(buf, len, "VTYPE%d", vtype(value));
+    case T_FUNC:    return strfunc(js, value, buf, len);
+    case T_CFUNC:   return cpy(buf, len, "[native code]", 13);
+    case T_FFI:     return cpy(buf, len, "[native code]", 13);
+    case T_PROP:    return (size_t) snprintf(buf, len, "PROP@%lu", (unsigned long) vdata(value));
+    default:        return (size_t) snprintf(buf, len, "VTYPE%d", vtype(value));
   }
 }
 
