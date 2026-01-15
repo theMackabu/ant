@@ -1,4 +1,4 @@
 option('static_link', type: 'boolean', value: false, description: 'statically link the binary')
 option('build_timestamp', type: 'string', value: '', description: 'build timestamp (defaults to current time if empty)')
 option('tls_library', type: 'combo', choices: ['openssl', 'mbedtls'], value: 'openssl', description: 'TLS library to use')
-option('cmake_prefix_path', type: 'string', value: '', description: 'CMAKE_PREFIX_PATH for cmake subprojects')
+option('deps_prefix_cmake', type: 'string', value: '', description: 'prefix path for finding dependencies in cmake subprojects')
