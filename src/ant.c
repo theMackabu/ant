@@ -2109,12 +2109,26 @@ static size_t strfunc(struct js *js, jsval_t value, char *buf, size_t len) {
   
   jsval_t builtin_slot = get_slot(js, func_obj, SLOT_BUILTIN);
   if (vtype(builtin_slot) == T_NUM) {
+    if (name && name_len > 0) {
+      size_t n = cpy(buf, len, "[Function: ", 11);
+      n += cpy(buf + n, len - n, name, name_len);
+      n += cpy(buf + n, len - n, "]", 1);
+      return n;
+    }
     return cpy(buf, len, "[native code]", 13);
   }
   
   if (vtype(code_slot) != T_STR) {
     jsval_t cfunc_slot = get_slot(js, func_obj, SLOT_CFUNC);
-    if (vtype(cfunc_slot) == T_CFUNC) return cpy(buf, len, "[native code]", 13);
+    if (vtype(cfunc_slot) == T_CFUNC) {
+      if (name && name_len > 0) {
+        size_t n = cpy(buf, len, "[Function: ", 11);
+        n += cpy(buf + n, len - n, name, name_len);
+        n += cpy(buf + n, len - n, "]", 1);
+        return n;
+      }
+      return cpy(buf, len, "[native code]", 13);
+    }
     if (name && name_len > 0) {
       size_t n = cpy(buf, len, "[Function: ", 11);
       n += cpy(buf + n, len - n, name, name_len);
@@ -21072,6 +21086,7 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, obj_func_obj, js_mkstr(js, "getOwnPropertyNames", 19), js_mkfun(builtin_object_getOwnPropertyNames));
   setprop(js, obj_func_obj, js_mkstr(js, "isExtensible", 12), js_mkfun(builtin_object_isExtensible));
   setprop(js, obj_func_obj, js_mkstr(js, "preventExtensions", 17), js_mkfun(builtin_object_preventExtensions));
+  setprop(js, obj_func_obj, ANT_STRING("name"), ANT_STRING("Object"));
   js_setprop_nonconfigurable(js, obj_func_obj, "prototype", 9, object_proto);
   setprop(js, glob, js_mkstr(js, "Object", 6), mkval(T_FUNC, vdata(obj_func_obj)));
   
@@ -21081,6 +21096,7 @@ struct js *js_create(void *buf, size_t len) {
   js_setprop_nonconfigurable(js, func_ctor_obj, "prototype", 9, function_proto);
   setprop(js, func_ctor_obj, js_mkstr(js, "length", 6), tov(1.0));
   js_set_descriptor(js, func_ctor_obj, "length", 6, JS_DESC_C);
+  setprop(js, func_ctor_obj, ANT_STRING("name"), ANT_STRING("Function"));
   setprop(js, glob, js_mkstr(js, "Function", 8), mkval(T_FUNC, vdata(func_ctor_obj)));
   
   jsval_t str_ctor_obj = mkobj(js, 0);
@@ -21089,6 +21105,7 @@ struct js *js_create(void *buf, size_t len) {
   js_setprop_nonconfigurable(js, str_ctor_obj, "prototype", 9, string_proto);
   setprop(js, str_ctor_obj, js_mkstr(js, "fromCharCode", 12), js_mkfun(builtin_string_fromCharCode));
   setprop(js, str_ctor_obj, js_mkstr(js, "fromCodePoint", 13), js_mkfun(builtin_string_fromCodePoint));
+  setprop(js, str_ctor_obj, ANT_STRING("name"), ANT_STRING("String"));
   setprop(js, glob, js_mkstr(js, "String", 6), mkval(T_FUNC, vdata(str_ctor_obj)));
   
   jsval_t number_ctor_obj = mkobj(js, 0);
@@ -21110,12 +21127,14 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, number_ctor_obj, js_mkstr(js, "EPSILON", 7), tov(2.220446049250313e-16));
   
   js_setprop_nonconfigurable(js, number_ctor_obj, "prototype", 9, number_proto);
+  setprop(js, number_ctor_obj, ANT_STRING("name"), ANT_STRING("Number"));
   setprop(js, glob, js_mkstr(js, "Number", 6), mkval(T_FUNC, vdata(number_ctor_obj)));
   
   jsval_t bool_ctor_obj = mkobj(js, 0);
   set_proto(js, bool_ctor_obj, function_proto);
   set_slot(js, bool_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_Boolean));
   js_setprop_nonconfigurable(js, bool_ctor_obj, "prototype", 9, boolean_proto);
+  setprop(js, bool_ctor_obj, ANT_STRING("name"), ANT_STRING("Boolean"));
   setprop(js, glob, js_mkstr(js, "Boolean", 7), mkval(T_FUNC, vdata(bool_ctor_obj)));
   
   jsval_t arr_ctor_obj = mkobj(js, 0);
@@ -21127,90 +21146,105 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, arr_ctor_obj, js_mkstr(js, "of", 2), js_mkfun(builtin_Array_of));
   setprop(js, arr_ctor_obj, js_mkstr(js, "length", 6), tov(1.0));
   js_set_descriptor(js, arr_ctor_obj, "length", 6, JS_DESC_C);
+  setprop(js, arr_ctor_obj, ANT_STRING("name"), ANT_STRING("Array"));
   setprop(js, glob, js_mkstr(js, "Array", 5), mkval(T_FUNC, vdata(arr_ctor_obj)));
 
   jsval_t map_ctor_obj = mkobj(js, 0);
   set_proto(js, map_ctor_obj, function_proto);
   set_slot(js, map_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_Map));
   js_setprop_nonconfigurable(js, map_ctor_obj, "prototype", 9, map_proto);
+  setprop(js, map_ctor_obj, ANT_STRING("name"), ANT_STRING("Map"));
   setprop(js, glob, js_mkstr(js, "Map", 3), mkval(T_FUNC, vdata(map_ctor_obj)));
   
   jsval_t set_ctor_obj = mkobj(js, 0);
   set_proto(js, set_ctor_obj, function_proto);
   set_slot(js, set_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_Set));
   js_setprop_nonconfigurable(js, set_ctor_obj, "prototype", 9, set_proto_obj);
+  setprop(js, set_ctor_obj, ANT_STRING("name"), ANT_STRING("Set"));
   setprop(js, glob, js_mkstr(js, "Set", 3), mkval(T_FUNC, vdata(set_ctor_obj)));
   
   jsval_t weakmap_ctor_obj = mkobj(js, 0);
   set_proto(js, weakmap_ctor_obj, function_proto);
   set_slot(js, weakmap_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_WeakMap));
   js_setprop_nonconfigurable(js, weakmap_ctor_obj, "prototype", 9, weakmap_proto);
+  setprop(js, weakmap_ctor_obj, ANT_STRING("name"), ANT_STRING("WeakMap"));
   setprop(js, glob, js_mkstr(js, "WeakMap", 7), mkval(T_FUNC, vdata(weakmap_ctor_obj)));
   
   jsval_t weakset_ctor_obj = mkobj(js, 0);
   set_proto(js, weakset_ctor_obj, function_proto);
   set_slot(js, weakset_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_WeakSet));
   js_setprop_nonconfigurable(js, weakset_ctor_obj, "prototype", 9, weakset_proto);
+  setprop(js, weakset_ctor_obj, ANT_STRING("name"), ANT_STRING("WeakSet"));
   setprop(js, glob, js_mkstr(js, "WeakSet", 7), mkval(T_FUNC, vdata(weakset_ctor_obj)));
   
   jsval_t proxy_ctor_obj = mkobj(js, 0);
   set_proto(js, proxy_ctor_obj, function_proto);
   set_slot(js, proxy_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_Proxy));
   setprop(js, proxy_ctor_obj, js_mkstr(js, "revocable", 9), js_mkfun(builtin_Proxy_revocable));
+  setprop(js, proxy_ctor_obj, ANT_STRING("name"), ANT_STRING("Proxy"));
   setprop(js, glob, js_mkstr(js, "Proxy", 5), mkval(T_FUNC, vdata(proxy_ctor_obj)));
   
   jsval_t err_ctor_obj = mkobj(js, 0);
   set_proto(js, err_ctor_obj, function_proto);
   set_slot(js, err_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_Error));
   js_setprop_nonconfigurable(js, err_ctor_obj, "prototype", 9, error_proto);
+  setprop(js, err_ctor_obj, ANT_STRING("name"), ANT_STRING("Error"));
   setprop(js, glob, js_mkstr(js, "Error", 5), mkval(T_FUNC, vdata(err_ctor_obj)));
   
   jsval_t evalerr_ctor_obj = mkobj(js, 0);
   set_proto(js, evalerr_ctor_obj, function_proto);
   set_slot(js, evalerr_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_EvalError));
   js_setprop_nonconfigurable(js, evalerr_ctor_obj, "prototype", 9, evalerror_proto);
+  setprop(js, evalerr_ctor_obj, ANT_STRING("name"), ANT_STRING("EvalError"));
   setprop(js, glob, js_mkstr(js, "EvalError", 9), mkval(T_FUNC, vdata(evalerr_ctor_obj)));
   
   jsval_t rangeerr_ctor_obj = mkobj(js, 0);
   set_proto(js, rangeerr_ctor_obj, function_proto);
   set_slot(js, rangeerr_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_RangeError));
   js_setprop_nonconfigurable(js, rangeerr_ctor_obj, "prototype", 9, rangeerror_proto);
+  setprop(js, rangeerr_ctor_obj, ANT_STRING("name"), ANT_STRING("RangeError"));
   setprop(js, glob, js_mkstr(js, "RangeError", 10), mkval(T_FUNC, vdata(rangeerr_ctor_obj)));
   
   jsval_t referr_ctor_obj = mkobj(js, 0);
   set_proto(js, referr_ctor_obj, function_proto);
   set_slot(js, referr_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_ReferenceError));
   js_setprop_nonconfigurable(js, referr_ctor_obj, "prototype", 9, referenceerror_proto);
+  setprop(js, referr_ctor_obj, ANT_STRING("name"), ANT_STRING("ReferenceError"));
   setprop(js, glob, js_mkstr(js, "ReferenceError", 14), mkval(T_FUNC, vdata(referr_ctor_obj)));
   
   jsval_t syntaxerr_ctor_obj = mkobj(js, 0);
   set_proto(js, syntaxerr_ctor_obj, function_proto);
   set_slot(js, syntaxerr_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_SyntaxError));
   js_setprop_nonconfigurable(js, syntaxerr_ctor_obj, "prototype", 9, syntaxerror_proto);
+  setprop(js, syntaxerr_ctor_obj, ANT_STRING("name"), ANT_STRING("SyntaxError"));
   setprop(js, glob, js_mkstr(js, "SyntaxError", 11), mkval(T_FUNC, vdata(syntaxerr_ctor_obj)));
   
   jsval_t typeerr_ctor_obj = mkobj(js, 0);
   set_proto(js, typeerr_ctor_obj, function_proto);
   set_slot(js, typeerr_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_TypeError));
   js_setprop_nonconfigurable(js, typeerr_ctor_obj, "prototype", 9, typeerror_proto);
+  setprop(js, typeerr_ctor_obj, ANT_STRING("name"), ANT_STRING("TypeError"));
   setprop(js, glob, js_mkstr(js, "TypeError", 9), mkval(T_FUNC, vdata(typeerr_ctor_obj)));
   
   jsval_t urierr_ctor_obj = mkobj(js, 0);
   set_proto(js, urierr_ctor_obj, function_proto);
   set_slot(js, urierr_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_URIError));
   js_setprop_nonconfigurable(js, urierr_ctor_obj, "prototype", 9, urierror_proto);
+  setprop(js, urierr_ctor_obj, ANT_STRING("name"), ANT_STRING("URIError"));
   setprop(js, glob, js_mkstr(js, "URIError", 8), mkval(T_FUNC, vdata(urierr_ctor_obj)));
   
   jsval_t internerr_ctor_obj = mkobj(js, 0);
   set_proto(js, internerr_ctor_obj, function_proto);
   set_slot(js, internerr_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_InternalError));
   js_setprop_nonconfigurable(js, internerr_ctor_obj, "prototype", 9, internalerror_proto);
+  setprop(js, internerr_ctor_obj, ANT_STRING("name"), ANT_STRING("InternalError"));
   setprop(js, glob, js_mkstr(js, "InternalError", 13), mkval(T_FUNC, vdata(internerr_ctor_obj)));
   
   jsval_t regex_ctor_obj = mkobj(js, 0);
   set_proto(js, regex_ctor_obj, function_proto);
   set_slot(js, regex_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_RegExp));
   js_setprop_nonconfigurable(js, regex_ctor_obj, "prototype", 9, regexp_proto);
+  setprop(js, regex_ctor_obj, ANT_STRING("name"), ANT_STRING("RegExp"));
   setprop(js, glob, js_mkstr(js, "RegExp", 6), mkval(T_FUNC, vdata(regex_ctor_obj)));
   
   jsval_t date_ctor_obj = mkobj(js, 0);
@@ -21219,6 +21253,7 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, date_ctor_obj, js_mkstr(js, "now", 3), js_mkfun(builtin_Date_now));
   setprop(js, date_ctor_obj, js_mkstr(js, "UTC", 3), js_mkfun(builtin_Date_UTC));
   js_setprop_nonconfigurable(js, date_ctor_obj, "prototype", 9, date_proto);
+  setprop(js, date_ctor_obj, ANT_STRING("name"), ANT_STRING("Date"));
   setprop(js, glob, js_mkstr(js, "Date", 4), mkval(T_FUNC, vdata(date_ctor_obj)));
   
   jsval_t p_ctor_obj = mkobj(js, 0);
@@ -21231,6 +21266,7 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, p_ctor_obj, js_mkstr(js, "race", 4), js_mkfun(builtin_Promise_race));
   setprop(js, p_ctor_obj, js_mkstr(js, "any", 3), js_mkfun(builtin_Promise_any));
   js_setprop_nonconfigurable(js, p_ctor_obj, "prototype", 9, promise_proto);
+  setprop(js, p_ctor_obj, ANT_STRING("name"), ANT_STRING("Promise"));
   setprop(js, glob, js_mkstr(js, "Promise", 7), mkval(T_FUNC, vdata(p_ctor_obj)));
   
   jsval_t bigint_ctor_obj = mkobj(js, 0);
@@ -21239,6 +21275,7 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, bigint_ctor_obj, js_mkstr(js, "asIntN", 6), js_mkfun(builtin_BigInt_asIntN));
   setprop(js, bigint_ctor_obj, js_mkstr(js, "asUintN", 7), js_mkfun(builtin_BigInt_asUintN));
   js_setprop_nonconfigurable(js, bigint_ctor_obj, "prototype", 9, bigint_proto);
+  setprop(js, bigint_ctor_obj, ANT_STRING("name"), ANT_STRING("BigInt"));
   setprop(js, glob, js_mkstr(js, "BigInt", 6), mkval(T_FUNC, vdata(bigint_ctor_obj)));
   
   setprop(js, glob, js_mkstr(js, "eval", 4), js_mkfun(builtin_eval));
