@@ -2044,11 +2044,10 @@ static const char *intern_string(const char *str, size_t len) {
     if (e->hash == h && e->len == len && memcmp(e->str, str, len) == 0) return e->str;
   }
   
-  interned_string_t *entry = (interned_string_t *)malloc(sizeof(interned_string_t));
+  interned_string_t *entry = (interned_string_t *)ANT_GC_MALLOC(sizeof(interned_string_t) + len + 1);
   if (!entry) return NULL;
-  entry->str = (char *)malloc(len + 1);
-  if (!entry->str) { free(entry); return NULL; }
   
+  entry->str = (char *)(entry + 1);
   memcpy(entry->str, str, len);
   entry->str[len] = '\0';
   entry->len = len;
@@ -22060,15 +22059,14 @@ static descriptor_entry_t *get_or_create_desc(struct js *js, jsval_t obj, const 
   descriptor_entry_t *entry = NULL;
   HASH_FIND(hh, desc_registry, &desc_key, sizeof(uint64_t), entry);
   if (!entry) {
-    entry = (descriptor_entry_t *)malloc(sizeof(descriptor_entry_t));
+    entry = (descriptor_entry_t *)ANT_GC_MALLOC(sizeof(descriptor_entry_t) + klen + 1);
     if (!entry) return NULL;
+    
     entry->key = desc_key;
     entry->obj_off = obj_off;
-    entry->prop_name = (char *)malloc(klen + 1);
-    if (entry->prop_name) {
-      memcpy(entry->prop_name, key, klen);
-      entry->prop_name[klen] = '\0';
-    }
+    entry->prop_name = (char *)(entry + 1);
+    memcpy(entry->prop_name, key, klen);
+    entry->prop_name[klen] = '\0';
     entry->prop_len = klen;
     entry->writable = true;
     entry->enumerable = true;
@@ -22077,6 +22075,7 @@ static descriptor_entry_t *get_or_create_desc(struct js *js, jsval_t obj, const 
     entry->has_setter = false;
     entry->getter = js_mkundef();
     entry->setter = js_mkundef();
+    
     HASH_ADD(hh, desc_registry, key, sizeof(uint64_t), entry);
   }
   return entry;

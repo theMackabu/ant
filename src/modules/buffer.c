@@ -9,7 +9,10 @@
 #include <sys/mman.h>
 #endif
 
+#include "ant.h"
+#include "arena.h"
 #include "runtime.h"
+
 #include "modules/buffer.h"
 #include "modules/symbol.h"
 
@@ -123,14 +126,11 @@ static uint8_t *base64_decode(const char *data, size_t len, size_t *out_len) {
 }
 
 static ArrayBufferData *create_array_buffer_data(size_t length) {
-  ArrayBufferData *data = malloc(sizeof(ArrayBufferData));
+  ArrayBufferData *data = ANT_GC_MALLOC(sizeof(ArrayBufferData) + length);
   if (!data) return NULL;
   
-  data->data = calloc(length, 1);
-  if (!data->data && length > 0) {
-    free(data);
-    return NULL;
-  }
+  data->data = (uint8_t *)(data + 1);
+  memset(data->data, 0, length);
   
   data->length = length;
   data->capacity = length;
@@ -148,10 +148,7 @@ static ArrayBufferData *create_shared_array_buffer_data(size_t length) {
 static void free_array_buffer_data(ArrayBufferData *data) {
   if (!data) return;
   data->ref_count--;
-  if (data->ref_count <= 0) {
-    free(data->data);
-    free(data);
-  }
+  if (data->ref_count <= 0) ANT_GC_FREE(data);
 }
 
 static size_t get_element_size(TypedArrayType type) {
@@ -573,7 +570,7 @@ static jsval_t js_dataview_constructor(struct js *js, jsval_t *args, int nargs) 
     byte_length = buffer->length - byte_offset;
   }
   
-  DataViewData *dv_data = malloc(sizeof(DataViewData));
+  DataViewData *dv_data = ANT_GC_MALLOC(sizeof(DataViewData));
   if (!dv_data) return js_mkerr(js, "Failed to allocate DataView");
   
   dv_data->buffer = buffer;

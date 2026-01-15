@@ -2,12 +2,14 @@
 #include <stdio.h>
 #include <string.h>
 #include <inttypes.h>
+#include <uthash.h>
 
 #include "ant.h"
+#include "arena.h"
 #include "runtime.h"
+
 #include "modules/events.h"
 #include "modules/symbol.h"
-#include "uthash.h"
 
 #define MAX_LISTENERS_PER_EVENT 32
 
@@ -39,7 +41,7 @@ static TargetEvents *get_or_create_target_events(jsval_t target) {
   HASH_FIND(hh, target_events_map, &target_id, sizeof(uint64_t), te);
   
   if (te == NULL) {
-    te = malloc(sizeof(TargetEvents));
+    te = ANT_GC_MALLOC(sizeof(TargetEvents));
     te->target_id = target_id;
     te->events = NULL;
     HASH_ADD(hh, target_events_map, target_id, sizeof(uint64_t), te);
@@ -57,7 +59,7 @@ static TargetEvents *get_or_create_emitter_events(struct js *js, jsval_t this_ob
     emitter_id = next_emitter_id++;
     js_set(js, this_obj, "_emitter_id", js_mknum((double)emitter_id));
     
-    te = malloc(sizeof(TargetEvents));
+    te = ANT_GC_MALLOC(sizeof(TargetEvents));
     te->target_id = emitter_id;
     te->events = NULL;
     HASH_ADD(hh, target_events_map, target_id, sizeof(uint64_t), te);
@@ -86,10 +88,12 @@ static EventType *find_or_create_emitter_event_type(struct js *js, jsval_t this_
   HASH_FIND_STR(te->events, event_type, evt);
   
   if (evt == NULL) {
-    evt = malloc(sizeof(EventType));
-    evt->event_type = strdup(event_type);
+    size_t etlen = strlen(event_type);
+    evt = ANT_GC_MALLOC(sizeof(EventType) + etlen + 1);
+    evt->event_type = (char *)(evt + 1);
+    memcpy(evt->event_type, event_type, etlen + 1);
     evt->listener_count = 0;
-    HASH_ADD_KEYPTR(hh, te->events, evt->event_type, strlen(evt->event_type), evt);
+    HASH_ADD_KEYPTR(hh, te->events, evt->event_type, etlen, evt);
   }
   
   return evt;
@@ -102,10 +106,12 @@ static EventType *find_or_create_event_type(jsval_t target, const char *event_ty
   HASH_FIND_STR(te->events, event_type, evt);
   
   if (evt == NULL) {
-    evt = malloc(sizeof(EventType));
-    evt->event_type = strdup(event_type);
+    size_t etlen = strlen(event_type);
+    evt = ANT_GC_MALLOC(sizeof(EventType) + etlen + 1);
+    evt->event_type = (char *)(evt + 1);
+    memcpy(evt->event_type, event_type, etlen + 1);
     evt->listener_count = 0;
-    HASH_ADD_KEYPTR(hh, te->events, evt->event_type, strlen(evt->event_type), evt);
+    HASH_ADD_KEYPTR(hh, te->events, evt->event_type, etlen, evt);
   }
   
   return evt;

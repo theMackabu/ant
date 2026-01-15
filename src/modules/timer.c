@@ -4,12 +4,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+
 #ifdef _WIN32
 #include <windows.h>
 #else
 #include <sys/time.h>
 #endif
 
+#include "arena.h"
 #include "runtime.h"
 #include "modules/timer.h"
 
@@ -72,7 +74,7 @@ static jsval_t js_set_timeout(struct js *js, jsval_t *args, int nargs) {
     return js_mkerr(js, "setTimeout delay must be non-negative");
   }
   
-  timer_entry_t *entry = malloc(sizeof(timer_entry_t));
+  timer_entry_t *entry = ANT_GC_MALLOC(sizeof(timer_entry_t));
   if (entry == NULL) {
     return js_mkerr(js, "failed to allocate timer");
   }
@@ -102,7 +104,7 @@ static jsval_t js_set_interval(struct js *js, jsval_t *args, int nargs) {
     return js_mkerr(js, "setInterval delay must be non-negative");
   }
   
-  timer_entry_t *entry = malloc(sizeof(timer_entry_t));
+  timer_entry_t *entry = ANT_GC_MALLOC(sizeof(timer_entry_t));
   if (entry == NULL) {
     return js_mkerr(js, "failed to allocate timer");
   }
@@ -145,7 +147,7 @@ static jsval_t js_set_immediate(struct js *js, jsval_t *args, int nargs) {
   
   jsval_t callback = args[0];
   
-  immediate_entry_t *entry = malloc(sizeof(immediate_entry_t));
+  immediate_entry_t *entry = ANT_GC_MALLOC(sizeof(immediate_entry_t));
   if (entry == NULL) {
     return js_mkerr(js, "failed to allocate immediate");
   }
@@ -189,7 +191,7 @@ static jsval_t js_queue_microtask(struct js *js, jsval_t *args, int nargs) {
 }
 
 void queue_microtask(struct js *js, jsval_t callback) {
-  microtask_entry_t *entry = malloc(sizeof(microtask_entry_t));
+  microtask_entry_t *entry = ANT_GC_MALLOC(sizeof(microtask_entry_t));
   if (entry == NULL) return;
   
   entry->callback = callback;
@@ -216,7 +218,7 @@ void process_microtasks(struct js *js) {
     jsval_t args[0];
     js_call(js, entry->callback, args, 0);
     
-    free(entry);
+    ANT_GC_FREE(entry);
   }
 }
 
@@ -235,7 +237,7 @@ void process_immediates(struct js *js) {
       process_microtasks(js);
     }
     
-    free(entry);
+    ANT_GC_FREE(entry);
   }
 }
 
@@ -252,7 +254,10 @@ static void remove_timer(timer_entry_t *target) {
   
 scan:
   if (!*ptr) return;
-  if (*ptr == target) { *ptr = target->next; free(target); return; }
+  if (*ptr == target) { 
+    *ptr = target->next; 
+    ANT_GC_FREE(target); return; 
+  }
   ptr = &(*ptr)->next;
   goto scan;
 }
@@ -268,7 +273,7 @@ scan:
   
   if (!entry->active) {
     *ptr = entry->next;
-    free(entry);
+    ANT_GC_FREE(entry);
     goto scan;
   }
   

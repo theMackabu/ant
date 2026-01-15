@@ -2,9 +2,12 @@
 #include <string.h>
 #include <uthash.h>
 
+#include "ant.h"
+#include "arena.h"
 #include "runtime.h"
-#include "modules/sessionstorage.h"
+
 #include "modules/symbol.h"
+#include "modules/sessionstorage.h"
 
 typedef struct storage_entry {
   char *key;
@@ -14,49 +17,28 @@ typedef struct storage_entry {
 
 static storage_entry_t *session_storage = NULL;
 
-static void storage_clear(void) {
-  storage_entry_t *entry, *tmp;
-  HASH_ITER(hh, session_storage, entry, tmp) {
-    HASH_DEL(session_storage, entry);
-    free(entry->key);
-    free(entry->value);
-    free(entry);
-  }
-}
-
 static void storage_set_item(const char *key, size_t key_len, const char *value, size_t value_len) {
   storage_entry_t *entry = NULL;
   
   HASH_FIND(hh, session_storage, key, key_len, entry);
   
   if (entry) {
-    free(entry->value);
-    entry->value = malloc(value_len + 1);
-    if (entry->value) {
-      memcpy(entry->value, value, value_len);
-      entry->value[value_len] = '\0';
-    }
-  } else {
-    entry = malloc(sizeof(storage_entry_t));
-    if (!entry) return;
-    
-    entry->key = malloc(key_len + 1);
-    entry->value = malloc(value_len + 1);
-    
-    if (!entry->key || !entry->value) {
-      free(entry->key);
-      free(entry->value);
-      free(entry);
-      return;
-    }
-    
-    memcpy(entry->key, key, key_len);
-    entry->key[key_len] = '\0';
-    memcpy(entry->value, value, value_len);
-    entry->value[value_len] = '\0';
-    
-    HASH_ADD_KEYPTR(hh, session_storage, entry->key, key_len, entry);
+    HASH_DEL(session_storage, entry);
+    ANT_GC_FREE(entry);
   }
+  
+  entry = ANT_GC_MALLOC(sizeof(storage_entry_t) + key_len + 1 + value_len + 1);
+  if (!entry) return;
+  
+  entry->key = (char *)(entry + 1);
+  entry->value = entry->key + key_len + 1;
+  
+  memcpy(entry->key, key, key_len);
+  entry->key[key_len] = '\0';
+  memcpy(entry->value, value, value_len);
+  entry->value[value_len] = '\0';
+  
+  HASH_ADD_KEYPTR(hh, session_storage, entry->key, key_len, entry);
 }
 
 static char *storage_get_item(const char *key, size_t key_len) {
@@ -71,9 +53,15 @@ static void storage_remove_item(const char *key, size_t key_len) {
   
   if (entry) {
     HASH_DEL(session_storage, entry);
-    free(entry->key);
-    free(entry->value);
-    free(entry);
+    ANT_GC_FREE(entry);
+  }
+}
+
+static void storage_clear(void) {
+  storage_entry_t *entry, *tmp;
+  HASH_ITER(hh, session_storage, entry, tmp) {
+    HASH_DEL(session_storage, entry);
+    ANT_GC_FREE(entry);
   }
 }
 

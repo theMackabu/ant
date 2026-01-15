@@ -49,7 +49,7 @@ static void fwd_init(gc_forward_table_t *fwd) {
 
 static void fwd_add(gc_forward_table_t *fwd, jsoff_t old_off, jsoff_t new_off) {
   size_t h = fwd_hash(old_off);
-  gc_forward_node_t *node = malloc(sizeof(gc_forward_node_t));
+  gc_forward_node_t *node = ANT_GC_MALLOC(sizeof(gc_forward_node_t));
   node->old_off = old_off;
   node->new_off = new_off;
   node->next = fwd->buckets[h];
@@ -69,8 +69,10 @@ static void fwd_free(gc_forward_table_t *fwd) {
     gc_forward_node_t *n = fwd->buckets[i];
     while (n) {
       gc_forward_node_t *next = n->next;
-      free(n); n = next;
+      ANT_GC_FREE(n);
+      n = next;
     }
+    fwd->buckets[i] = NULL;
   }
 }
 
