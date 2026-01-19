@@ -698,6 +698,21 @@ static bool is_valid_arrow_param_tok(uint8_t tok) {
   return (bits[tok >> 6] >> (tok & 63)) & 1;
 }
 
+static inline bool is_block_tok(uint8_t tok) {
+  static const uint64_t bits[4] = {
+    0x2108000000000110ull, 
+    0x0000000000124075ull, 0, 0
+  };
+  return (bits[tok >> 6] >> (tok & 63)) & 1;
+}
+
+static inline bool is_asi_ok_tok(uint8_t tok) {
+  static const uint64_t bits[4] = {
+    0x0000000000000212ull, 0, 0, 0
+  };
+  return (bits[tok >> 6] >> (tok & 63)) & 1;
+}
+
 static inline bool is_unboxed_obj(struct js *js, jsval_t val, jsval_t expected_proto) {
   if (vtype(val) != T_OBJ) return false;
   if (vtype(get_slot(js, val, SLOT_PRIMITIVE)) != T_UNDEF) return false;
@@ -4352,6 +4367,28 @@ static inline uint8_t lookahead(struct js *js) {
   return tok;
 }
 
+static bool is_typeof_bare_ident(struct js *js) {
+  jsoff_t pos = js->pos, toff = js->toff, tlen = js->tlen;
+  uint8_t tok = js->tok, consumed = js->consumed;
+  bool had_newline = js->had_newline;
+  
+  int depth = 0;
+  uint8_t t = next(js);
+  while (t == TOK_LPAREN) { js->consumed = 1; t = next(js); depth++; }
+  
+  bool bare = (t == TOK_IDENTIFIER);
+  if (bare) {
+    js->consumed = 1;
+    t = next(js);
+    while (depth > 0 && t == TOK_RPAREN) { js->consumed = 1; t = next(js); depth--; }
+    if (t == TOK_DOT || t == TOK_LBRACKET || t == TOK_LPAREN || t == TOK_OPTIONAL_CHAIN) bare = false;
+  }
+  
+  js->pos = pos; js->toff = toff; js->tlen = tlen;
+  js->tok = tok; js->consumed = consumed; js->had_newline = had_newline;
+  return bare;
+}
+
 void js_mkscope(struct js *js) {
   assert((js->flags & F_NOEXEC) == 0);
   if (global_scope_stack == NULL) utarray_new(global_scope_stack, &jsoff_icd);
@@ -4583,25 +4620,23 @@ skip_async:
 static jsval_t js_block(struct js *js, bool create_scope) {
   jsval_t res = js_mkundef();
   if (create_scope) mkscope(js);
+  
   js->consumed = 1;
   hoist_function_declarations(js);
+  
   uint8_t peek;
   while ((peek = next(js)) != TOK_EOF && peek != TOK_RBRACE && !is_err(res)) {
     uint8_t t = js->tok;
     res = js_stmt(js);
-    bool is_block_tok = (t == TOK_LBRACE || t == TOK_IF || t == TOK_WHILE ||
-        t == TOK_DO || t == TOK_FUNC || t == TOK_FOR || t == TOK_IMPORT || 
-        t == TOK_EXPORT || t == TOK_SEMICOLON || t == TOK_SWITCH || 
-        t == TOK_TRY || t == TOK_CLASS || t == TOK_ASYNC);
-    bool asi_ok = js->had_newline || js->tok == TOK_SEMICOLON || js->tok == TOK_RBRACE || js->tok == TOK_EOF;
-    if (!is_err(res) && !is_block_tok && !asi_ok) {
-      res = js_mkerr_typed(js, JS_ERR_SYNTAX, "; expected");
-      break;
+    if (!is_err(res) && !is_block_tok(t) && !(js->had_newline || is_asi_ok_tok(js->tok))) {
+      res = js_mkerr_typed(js, JS_ERR_SYNTAX, "; expected"); break;
     }
     if (js->flags & (F_RETURN | F_THROW)) break;
   }
+  
   if (js->tok == TOK_RBRACE) js->consumed = 1;
   if (create_scope) delscope(js);
+  
   return res;
 }
 
@@ -8568,7 +8603,7 @@ static jsval_t js_unary(struct js *js) {
   }
   return js_postfix(js);
 
-do_new: {
+  do_new: {
     js->consumed = 1;
     jsval_t obj = mkobj(js, 0);
     jsval_t saved_this = js->this_val;
@@ -8672,7 +8707,7 @@ do_new: {
     return new_result;
   }
 
-do_delete: {
+  do_delete: {
     js->consumed = 1;
 
     if ((js->flags & F_STRICT) && next(js) == TOK_IDENTIFIER) {
@@ -8792,7 +8827,7 @@ do_delete: {
     return js_mktrue();
   }
 
-do_await: {
+  do_await: {
     js->consumed = 1;
     jsval_t expr = js_unary(js);
     if (is_err(expr)) return expr;
@@ -8851,7 +8886,7 @@ do_await: {
     return is_error ? js_throw(js, result) : result;
   }
 
-do_prefix_inc: {
+  do_prefix_inc: {
     uint8_t op = js->tok;
     js->consumed = 1;
     if ((js->flags & F_STRICT) && next(js) == TOK_IDENTIFIER && is_eval_or_arguments(js, js->toff, js->tlen)) {
@@ -8868,23 +8903,17 @@ do_prefix_inc: {
     }
     return do_op(js, op == TOK_POSTINC ? TOK_PLUS : TOK_MINUS, resolved, tov(1));
   }
-
-do_typeof: {
+  
+  do_typeof: {
     js->consumed = 1;
-    jsoff_t saved_pos = js->pos;
-    uint8_t saved_tok = js->tok, saved_consumed = js->consumed, saved_flags = js->flags;
+    bool bare = is_typeof_bare_ident(js);
     jsval_t operand = js_unary(js);
-    if (is_err(operand)) {
-      js->pos = saved_pos; js->tok = saved_tok; js->consumed = saved_consumed;
-      js->flags = (saved_flags & ~F_THROW) | F_NOEXEC;
-      js_unary(js);
-      js->flags = saved_flags & ~F_THROW;
-      operand = js_mkundef();
-    }
+    if (is_err(operand) && bare) operand = js_mkundef();
+    else if (is_err(operand)) return operand;
     return do_op(js, TOK_TYPEOF, js_mkundef(), operand);
   }
 
-do_unary_op: {
+  do_unary_op: {
     uint8_t t = js->tok;
     if (t == TOK_MINUS) t = TOK_UMINUS;
     if (t == TOK_PLUS) t = TOK_UPLUS;
