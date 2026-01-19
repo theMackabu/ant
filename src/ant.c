@@ -1398,7 +1398,7 @@ static jsval_t get_obj_ctor(struct js *js, jsval_t obj) {
   if (vtype(ctor) == T_FUNC) return ctor;
   jsval_t proto = get_slot(js, obj, SLOT_PROTO);
   if (vtype(proto) != T_OBJ) return js_mkundef();
-  jsoff_t off = lkp(js, proto, "constructor", 11);
+  jsoff_t off = lkp_interned(js, proto, INTERN_CONSTRUCTOR, 11);
   return off ? resolveprop(js, mkval(T_PROP, off)) : js_mkundef();
 }
 
