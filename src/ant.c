@@ -772,6 +772,7 @@ static jsval_t upper(struct js *js, jsval_t scope) {
 
 static bool is_digit(int c);
 static bool is_proxy(struct js *js, jsval_t obj);
+static bool bigint_is_zero(struct js *js, jsval_t v);
 
 static bool streq(const char *buf, size_t len, const char *p, size_t n);
 static bool is_this_loop_continue_target(int depth_at_entry);
@@ -830,7 +831,9 @@ static jsoff_t lkp_proto(struct js *js, jsval_t obj, const char *key, size_t len
 static jsval_t get_prototype_for_type(struct js *js, uint8_t type);
 static jsval_t get_ctor_proto(struct js *js, const char *name, size_t len);
 static jsval_t setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v);
+
 static descriptor_entry_t *lookup_descriptor(jsoff_t obj_off, const char *key, size_t klen);
+static const char *bigint_digits(struct js *js, jsval_t v, size_t *len);
 
 typedef struct { jsval_t handle; bool is_new; } ctor_t;
 
@@ -858,6 +861,32 @@ static jsval_t to_string_val(struct js *js, jsval_t val) {
     if (vtype(prim) == T_STR) return prim;
   }
   return js_call_toString(js, val);
+}
+
+bool js_truthy(struct js *js, jsval_t v) {
+  static const void *dispatch[] = {
+    [T_OBJ]    = &&l_true,
+    [T_FUNC]   = &&l_true,
+    [T_ARR]    = &&l_true,
+    [T_BOOL]   = &&l_bool,
+    [T_STR]    = &&l_str,
+    [T_BIGINT] = &&l_bigint,
+    [T_NUM]    = &&l_num,
+  };
+
+  uint8_t t = vtype(v);
+  if (t < sizeof(dispatch) / sizeof(*dispatch) && dispatch[t])
+    goto *dispatch[t];
+  return false;
+
+  l_true:   return true;
+  l_bool:   return vdata(v) != 0;
+  l_str:    return vstrlen(js, v) > 0;
+  l_bigint: return !bigint_is_zero(js, v);
+  l_num: {
+    double d = tod(v);
+    return d != 0.0 && !isnan(d);
+  }
 }
 
 static void free_coroutine(coroutine_t *coro);
@@ -2340,9 +2369,14 @@ static jsval_t js_throw(struct js *js, jsval_t value) {
 
 static size_t tostr(struct js *js, jsval_t value, char *buf, size_t len) {
   switch (vtype(value)) {
-    case T_UNDEF:   return cpy(buf, len, "undefined", 9);
-    case T_NULL:    return cpy(buf, len, "null", 4);
-    case T_BOOL:    return cpy(buf, len, vdata(value) & 1 ? "true" : "false", vdata(value) & 1 ? 4 : 5);
+    case T_UNDEF:   return ANT_COPY(buf, len, "undefined");
+    case T_NULL:    return ANT_COPY(buf, len, "null");
+    
+    case T_BOOL: {
+      bool b = vdata(value) & 1;
+      return b ? ANT_COPY(buf, len, "true") : ANT_COPY(buf, len, "false");
+    }
+    
     case T_ARR:     return strarr(js, value, buf, len);
     case T_OBJ:     return strobj(js, value, buf, len);
     case T_STR:     return strstring(js, value, buf, len);
@@ -2350,30 +2384,53 @@ static size_t tostr(struct js *js, jsval_t value, char *buf, size_t len) {
     case T_BIGINT:  return strbigint(js, value, buf, len);
     case T_PROMISE: return strpromise(js, value, buf, len);
     case T_FUNC:    return strfunc(js, value, buf, len);
-    case T_CFUNC:   return cpy(buf, len, "[native code]", 13);
-    case T_FFI:     return cpy(buf, len, "[native code]", 13);
-    case T_PROP:    return (size_t) snprintf(buf, len, "PROP@%lu", (unsigned long) vdata(value));
+    
+    case T_CFUNC:   return ANT_COPY(buf, len, "[native code]");
+    case T_FFI:     return ANT_COPY(buf, len, "[native code (ffi)]");
+    
+    case T_PROP:    return (size_t) snprintf(buf, len, "PROP@%lu", (unsigned long) vdata(value)); 
     default:        return (size_t) snprintf(buf, len, "VTYPE%d", vtype(value));
   }
 }
 
 jsval_t js_tostring_val(struct js *js, jsval_t value) {
   uint8_t t = vtype(value);
-  char buf[256];
-  size_t len;
+  char *buf; size_t len, buflen;
   
-  switch (t) {
-    case T_STR:    return value;
-    case T_UNDEF:  return js_mkstr(js, "undefined", 9);
-    case T_NULL:   return js_mkstr(js, "null", 4);
-    case T_BOOL:   return vdata(value) ? js_mkstr(js, "true", 4) : js_mkstr(js, "false", 5);
-    case T_NUM:    len = strnum(value, buf, sizeof(buf)); return js_mkstr(js, buf, len);
-    case T_BIGINT: len = strbigint(js, value, buf, sizeof(buf)); return js_mkstr(js, buf, len);
-    case T_OBJ:
-    case T_ARR:
-    case T_FUNC:   return js_call_toString(js, value);
-    default:       len = tostr(js, value, buf, sizeof(buf)); return js_mkstr(js, buf, len);
-  }
+  static const void *jump_table[] = {
+    [T_OBJ] = &&L_OBJ, [T_PROP] = &&L_DEFAULT, [T_STR] = &&L_STR,
+    [T_UNDEF] = &&L_UNDEF, [T_NULL] = &&L_NULL, [T_NUM] = &&L_NUM,
+    [T_BOOL] = &&L_BOOL, [T_FUNC] = &&L_OBJ, [T_CODEREF] = &&L_DEFAULT,
+    [T_CFUNC] = &&L_DEFAULT, [T_ERR] = &&L_DEFAULT, [T_ARR] = &&L_OBJ,
+    [T_PROMISE] = &&L_DEFAULT, [T_TYPEDARRAY] = &&L_DEFAULT,
+    [T_BIGINT] = &&L_BIGINT, [T_PROPREF] = &&L_DEFAULT,
+    [T_SYMBOL] = &&L_DEFAULT, [T_GENERATOR] = &&L_DEFAULT, [T_FFI] = &&L_DEFAULT
+  };
+  
+  if (t < sizeof(jump_table) / sizeof(jump_table[0])) goto *jump_table[t];
+  goto L_DEFAULT;
+
+  L_STR:   return value;
+  L_UNDEF: return js_mkstr(js, "undefined", 9);
+  L_NULL:  return js_mkstr(js, "null", 4);
+  L_BOOL:  return vdata(value) ? js_mkstr(js, "true", 4) : js_mkstr(js, "false", 5);
+  L_OBJ:   return js_call_toString(js, value);
+  
+  L_NUM:
+    buf = (char *)ANT_GC_MALLOC(32);
+    len = strnum(value, buf, 32);
+    return js_mkstr(js, buf, len);
+    
+  L_BIGINT:
+    bigint_digits(js, value, &buflen);
+    buf = (char *)ANT_GC_MALLOC(buflen + 2);
+    len = strbigint(js, value, buf, buflen + 2);
+    return js_mkstr(js, buf, len);
+    
+  L_DEFAULT:
+    buf = (char *)ANT_GC_MALLOC(64);
+    len = tostr(js, value, buf, 64);
+    return js_mkstr(js, buf, len);
 }
 
 const char *js_str(struct js *js, jsval_t value) {
@@ -2405,17 +2462,6 @@ const char *js_str(struct js *js, jsval_t value) {
   
   if (is_err(str)) return "";
   return (const char *)&js->mem[vdata(str) + sizeof(jsoff_t)];
-}
-
-static bool bigint_is_zero(struct js *js, jsval_t v);
-
-bool js_truthy(struct js *js, jsval_t v) {
-  uint8_t t = vtype(v);
-  double d;
-  return (t == T_BOOL && vdata(v) != 0) || 
-         (t == T_NUM && (d = tod(v), d != 0.0 && !isnan(d))) ||
-         (t == T_OBJ || t == T_FUNC || t == T_ARR) || (t == T_STR && vstrlen(js, v) > 0) ||
-         (t == T_BIGINT && !bigint_is_zero(js, v));
 }
 
 static bool js_try_grow_memory(struct js *js, size_t needed) {

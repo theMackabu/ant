@@ -13,15 +13,16 @@
 #define STR_PROTO "__proto__"
 #define STR_PROTO_LEN 9
 
-#define ANT_LIMIT_SIZE_CACHE 16384
-#define ANT_STRING(s) js_mkstr(js, s, sizeof(s) - 1)
-#define ANT_PTR(ptr)  js_mknum((unsigned long)(ptr))
+#define ANT_STRING(s)         js_mkstr(js, s, sizeof(s) - 1)
+#define ANT_PTR(ptr)          js_mknum((unsigned long)(ptr))
+#define ANT_COPY(buf, len, s) cpy(buf, len, s, sizeof(s) - 1)
 
 struct js;
 
 typedef uint32_t jsoff_t;
 typedef uint64_t jsval_t;
 
+#define ANT_LIMIT_SIZE_CACHE 16384
 #define GC_FWD_ARGS jsval_t (*fwd_val)(void *ctx, jsval_t old), void *ctx
 #define GC_UPDATE_ARGS struct js *js, jsoff_t (*fwd_off)(void *ctx, jsoff_t old), GC_FWD_ARGS
 
