@@ -2231,6 +2231,13 @@ static const char *get_error_type_name(js_err_type_t err_type) {
   }
 }
 
+static inline js_err_type_t get_error_type(struct js *js) {
+  if (!(js->flags & F_THROW)) return JS_ERR_GENERIC;
+  jsval_t err_type = get_slot(js, js->thrown_value, SLOT_ERR_TYPE);
+  if (vtype(err_type) != T_NUM) return JS_ERR_GENERIC;
+  return (js_err_type_t)(int)js_getnum(err_type);
+}
+
 jsval_t js_mkerr_typed(struct js *js, js_err_type_t err_type, const char *xx, ...) {
   va_list ap;
   int line = 0, col = 0;
@@ -2261,6 +2268,7 @@ jsval_t js_mkerr_typed(struct js *js, js_err_type_t err_type, const char *xx, ..
   jsval_t err_obj = js_mkobj(js);
   js_set(js, err_obj, "name", js_mkstr(js, err_name, err_name_len));
   js_set(js, err_obj, "message", js_mkstr(js, error_msg, msg_len));
+  set_slot(js, err_obj, SLOT_ERR_TYPE, js_mknum((double)err_type));
   
   jsval_t proto = js_get_ctor_proto(js, err_name, err_name_len);
   if (vtype(proto) == T_OBJ) js_set_proto(js, err_obj, proto);
@@ -4381,11 +4389,12 @@ static bool is_typeof_bare_ident(struct js *js) {
     js->consumed = 1;
     t = next(js);
     while (depth > 0 && t == TOK_RPAREN) { js->consumed = 1; t = next(js); depth--; }
-    if (t == TOK_DOT || t == TOK_LBRACKET || t == TOK_LPAREN || t == TOK_OPTIONAL_CHAIN) bare = false;
+    if (depth != 0 || t == TOK_DOT || t == TOK_LBRACKET || t == TOK_LPAREN || t == TOK_OPTIONAL_CHAIN) bare = false;
   }
   
   js->pos = pos; js->toff = toff; js->tlen = tlen;
   js->tok = tok; js->consumed = consumed; js->had_newline = had_newline;
+  
   return bare;
 }
 
@@ -8906,10 +8915,18 @@ static jsval_t js_unary(struct js *js) {
   
   do_typeof: {
     js->consumed = 1;
+    jsoff_t saved_pos = js->pos;
+    uint8_t saved_tok = js->tok, saved_consumed = js->consumed, saved_flags = js->flags;
     bool bare = is_typeof_bare_ident(js);
     jsval_t operand = js_unary(js);
-    if (is_err(operand) && bare) operand = js_mkundef();
-    else if (is_err(operand)) return operand;
+    if (is_err(operand)) {
+      if (!bare || get_error_type(js) != JS_ERR_REFERENCE) return operand;
+      js->pos = saved_pos; js->tok = saved_tok; js->consumed = saved_consumed;
+      js->flags = (saved_flags & ~F_THROW) | F_NOEXEC;
+      js_unary(js);
+      js->flags = saved_flags & ~F_THROW;
+      operand = js_mkundef();
+    }
     return do_op(js, TOK_TYPEOF, js_mkundef(), operand);
   }
 
