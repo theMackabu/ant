@@ -814,6 +814,17 @@ static jsval_t get_ctor_proto(struct js *js, const char *name, size_t len);
 static jsval_t setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v);
 static descriptor_entry_t *lookup_descriptor(jsoff_t obj_off, const char *key, size_t klen);
 
+typedef struct { jsval_t handle; bool is_new; } ctor_t;
+
+static ctor_t get_constructor(struct js *js, const char *name, size_t len) {
+  ctor_t ctor;
+  
+  ctor.handle = get_ctor_proto(js, name, len);
+  ctor.is_new = (vtype(js->new_target) != T_UNDEF);
+  
+  return ctor;
+}
+
 static jsval_t unwrap_primitive(struct js *js, jsval_t val) {
   if (vtype(val) != T_OBJ) return val;
   jsval_t prim = get_slot(js, val, SLOT_PRIMITIVE);
@@ -4754,7 +4765,7 @@ jsval_t js_get_ctor_proto(struct js *js, const char *name, size_t len) {
   return resolveprop(js, mkval(T_PROP, proto_off));
 }
 
-static jsval_t get_ctor_proto(struct js *js, const char *name, size_t len) {
+static inline jsval_t get_ctor_proto(struct js *js, const char *name, size_t len) {
   return js_get_ctor_proto(js, name, len);
 }
 
@@ -6273,7 +6284,6 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
   
   jsval_t target_this = peek_this();
   jsval_t target_proto = (vtype(target_this) == T_OBJ) ? get_slot(js, target_this, SLOT_PROTO) : js_mkundef();
-  bool is_constructor_call = (vtype(target_this) == T_OBJ && vtype(target_proto) == T_UNDEF);
   
   if (vtype(func) == T_FUNC && vtype(target_this) == T_OBJ) {
     if (vtype(target_proto) == T_UNDEF) {
@@ -6371,14 +6381,12 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
       
       jsval_t this_slot = get_slot(js, func_obj, SLOT_THIS);
       if (vtype(this_slot) != T_UNDEF) {
-        captured_this = this_slot;
-        is_arrow = true;
+        captured_this = this_slot; is_arrow = true;
       }
       
       jsval_t bound_this_slot = get_slot(js, func_obj, SLOT_BOUND_THIS);
-      if (vtype(bound_this_slot) != T_UNDEF && !is_constructor_call) {
-        captured_this = bound_this_slot;
-        is_bound = true;
+      if (vtype(bound_this_slot) != T_UNDEF && vtype(js->new_target) == T_UNDEF) {
+        captured_this = bound_this_slot; is_bound = true;
       }
       
       int bound_argc;
@@ -6386,13 +6394,10 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
       
       jsval_t nfe_name_val = js_mkundef();
       jsval_t slot_name = get_slot(js, func_obj, SLOT_NAME);
-      if (vtype(slot_name) == T_STR) {
-        nfe_name_val = slot_name;
-      } else {
+      
+      if (vtype(slot_name) == T_STR) nfe_name_val = slot_name; else {
         jsoff_t nfe_name_off = lkp(js, func_obj, "name", 4);
-        if (nfe_name_off != 0) {
-          nfe_name_val = resolveprop(js, mkval(T_PROP, nfe_name_off));
-        }
+        if (nfe_name_off != 0) nfe_name_val = resolveprop(js, mkval(T_PROP, nfe_name_off));
       }
       
       static char full_func_name[256];
@@ -8425,6 +8430,7 @@ do_new: {
     js->consumed = 1;
     jsval_t obj = mkobj(js, 0);
     jsval_t saved_this = js->this_val;
+    jsval_t saved_new_target = js->new_target;
     js->this_val = obj;
 
     jsval_t ctor = js_group(js);
@@ -8456,11 +8462,16 @@ do_new: {
     if (is_err(ctor)) { js->this_val = saved_this; return ctor; }
     if (vtype(ctor) == T_PROP || vtype(ctor) == T_PROPREF) ctor = resolveprop(js, ctor);
 
+    js->new_target = ctor;
+
     jsval_t result;
     push_this(obj);
     if (next(js) == TOK_LPAREN) {
       jsval_t params = js_call_params(js);
-      if (is_err(params)) { pop_this(); js->this_val = saved_this; return params; }
+      if (is_err(params)) { 
+        pop_this(); js->this_val = saved_this; 
+        js->new_target = saved_new_target; return params; 
+      }
       result = do_op(js, TOK_CALL, ctor, params);
     } else {
       result = do_op(js, TOK_CALL, ctor, mkcoderef(0, 0));
@@ -8470,6 +8481,7 @@ do_new: {
 
     jsval_t constructed_obj = js->this_val;
     js->this_val = saved_this;
+    js->new_target = saved_new_target;
 
     uint8_t rtype = vtype(result);
     jsval_t new_result = (
@@ -12169,67 +12181,36 @@ static jsval_t builtin_Array(struct js *js, jsval_t *args, int nargs) {
 }
 
 static jsval_t builtin_Error(struct js *js, jsval_t *args, int nargs) {
-  jsval_t err_obj = js->this_val;
-  jsval_t error_proto = get_ctor_proto(js, "Error", 5);
-  bool is_constructor_call = (vtype(err_obj) == T_OBJ);
+  bool is_new = (vtype(js->new_target) != T_UNDEF);
+  jsval_t this_val = js->this_val;
   
-  if (!is_constructor_call) {
-    err_obj = mkobj(js, 0);
-    set_proto(js, err_obj, error_proto);
+  jsval_t target = is_new ? js->new_target : js->current_func;
+  jsval_t name = ANT_STRING("Error");
+  
+  if (vtype(target) == T_FUNC) {
+    jsoff_t off = lkp(js, mkval(T_OBJ, vdata(target)), "name", 4);
+    if (off) name = resolveprop(js, mkval(T_PROP, off));
+  }
+
+  if (!is_new) {
+    this_val = js_mkobj(js);
+    jsoff_t proto_off = lkp_interned(js, mkval(T_OBJ, vdata(js->current_func)), INTERN_PROTOTYPE, 9);
+    if (proto_off) set_proto(js, this_val, resolveprop(js, mkval(T_PROP, proto_off)));
+    else set_proto(js, this_val, get_ctor_proto(js, "Error", 5));
   }
   
-  jsval_t message = js_mkstr(js, "", 0);
   if (nargs > 0) {
-    if (vtype(args[0]) == T_STR) {
-      message = args[0];
-    } else {
-      const char *str = js_str(js, args[0]);
-      message = js_mkstr(js, str, strlen(str));
+    jsval_t msg = args[0];
+    if (vtype(msg) != T_STR) {
+      const char *str = js_str(js, msg);
+      msg = js_mkstr(js, str, strlen(str));
     }
+    setprop_fast(js, this_val, "message", 7, msg);
   }
   
-  jsval_t message_key = js_mkstr(js, "message", 7);
-  setprop(js, err_obj, message_key, message);
-  
-  jsval_t name_key = js_mkstr(js, "name", 4);
-  jsval_t name_val = js_mkstr(js, "Error", 5);
-  setprop(js, err_obj, name_key, name_val);
-  
-  return err_obj;
+  setprop_fast(js, this_val, "name", 4, name);
+  return this_val;
 }
-
-#define DEFINE_ERROR_BUILTIN(name, name_str, name_len) \
-static jsval_t builtin_##name(struct js *js, jsval_t *args, int nargs) { \
-  jsval_t err_obj = js->this_val; \
-  jsval_t error_proto = get_ctor_proto(js, name_str, name_len); \
-  bool is_constructor_call = (vtype(err_obj) == T_OBJ); \
-  if (!is_constructor_call) { \
-    err_obj = mkobj(js, 0); \
-    set_proto(js, err_obj, error_proto); \
-  } \
-  jsval_t message = js_mkstr(js, "", 0); \
-  if (nargs > 0) { \
-    if (vtype(args[0]) == T_STR) { \
-      message = args[0]; \
-    } else { \
-      const char *str = js_str(js, args[0]); \
-      message = js_mkstr(js, str, strlen(str)); \
-    } \
-  } \
-  setprop(js, err_obj, js_mkstr(js, "message", 7), message); \
-  setprop(js, err_obj, js_mkstr(js, "name", 4), js_mkstr(js, name_str, name_len)); \
-  return err_obj; \
-}
-
-DEFINE_ERROR_BUILTIN(EvalError, "EvalError", 9)
-DEFINE_ERROR_BUILTIN(RangeError, "RangeError", 10)
-DEFINE_ERROR_BUILTIN(ReferenceError, "ReferenceError", 14)
-DEFINE_ERROR_BUILTIN(SyntaxError, "SyntaxError", 11)
-DEFINE_ERROR_BUILTIN(TypeError, "TypeError", 9)
-DEFINE_ERROR_BUILTIN(URIError, "URIError", 8)
-DEFINE_ERROR_BUILTIN(InternalError, "InternalError", 13)
-
-#undef DEFINE_ERROR_BUILTIN
 
 static jsval_t builtin_RegExp(struct js *js, jsval_t *args, int nargs) {
   jsval_t regexp_obj = js->this_val;
@@ -12561,16 +12542,8 @@ static jsval_t builtin_string_search(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t builtin_Date(struct js *js, jsval_t *args, int nargs) {
   jsval_t date_obj = js->this_val;
-  jsval_t date_proto = get_ctor_proto(js, "Date", 4);
-  jsval_t this_proto = get_proto(js, date_obj);
   
-  bool is_constructor_call = (
-    vtype(date_obj) == T_OBJ && 
-    vtype(this_proto) == T_OBJ && 
-    vdata(this_proto) == vdata(date_proto)
-  );
-  
-  if (!is_constructor_call) {
+  if (vtype(js->new_target) == T_UNDEF) {
     struct timeval tv;
     gettimeofday(&tv, NULL);
     
@@ -20661,6 +20634,7 @@ struct js *js_create(void *buf, size_t len) {
   js->size = js->size / 8U * 8U;
   js->lwm = js->size;
   js->this_val = js->scope;
+  js->new_target = js_mkundef();
   js->errmsg_size = 4096;
   js->errmsg = (char *)malloc(js->errmsg_size);
   if (js->errmsg) js->errmsg[0] = '\0';
@@ -20796,36 +20770,41 @@ struct js *js_create(void *buf, size_t len) {
   
   jsval_t error_proto = js_mkobj(js);
   set_proto(js, error_proto, object_proto);
-  setprop(js, error_proto, js_mkstr(js, "name", 4), js_mkstr(js, "Error", 5));
-  setprop(js, error_proto, js_mkstr(js, "message", 7), js_mkstr(js, "", 0));
+  setprop(js, error_proto, ANT_STRING("name"), ANT_STRING("Error"));
+  setprop(js, error_proto, ANT_STRING("message"), js_mkstr(js, "", 0));
   
-  jsval_t evalerror_proto = js_mkobj(js);
-  set_proto(js, evalerror_proto, error_proto);
-  setprop(js, evalerror_proto, js_mkstr(js, "name", 4), js_mkstr(js, "EvalError", 9));
+  jsval_t err_ctor_obj = mkobj(js, 0);
+  set_proto(js, err_ctor_obj, function_proto);
+  set_slot(js, err_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_Error));
+  js_setprop_nonconfigurable(js, err_ctor_obj, "prototype", 9, error_proto);
+  setprop(js, err_ctor_obj, ANT_STRING("name"), ANT_STRING("Error"));
+  setprop(js, glob, ANT_STRING("Error"), mkval(T_FUNC, vdata(err_ctor_obj)));
+  setprop(js, error_proto, js_mkstr(js, "constructor", 11), mkval(T_FUNC, vdata(err_ctor_obj)));
+  js_set_descriptor(js, error_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
   
-  jsval_t rangeerror_proto = js_mkobj(js);
-  set_proto(js, rangeerror_proto, error_proto);
-  setprop(js, rangeerror_proto, js_mkstr(js, "name", 4), js_mkstr(js, "RangeError", 10));
+  #define REGISTER_ERROR_SUBTYPE(name_str) do { \
+    jsval_t proto = js_mkobj(js); \
+    set_proto(js, proto, error_proto); \
+    setprop(js, proto, ANT_STRING("name"), ANT_STRING(name_str)); \
+    jsval_t ctor = mkobj(js, 0); \
+    set_proto(js, ctor, function_proto); \
+    set_slot(js, ctor, SLOT_CFUNC, js_mkfun(builtin_Error)); \
+    js_setprop_nonconfigurable(js, ctor, "prototype", 9, proto); \
+    setprop(js, ctor, ANT_STRING("name"), ANT_STRING(name_str)); \
+    setprop(js, proto, ANT_STRING("constructor"), mkval(T_FUNC, vdata(ctor))); \
+    js_set_descriptor(js, proto, "constructor", 11, JS_DESC_W | JS_DESC_C); \
+    setprop(js, glob, ANT_STRING(name_str), mkval(T_FUNC, vdata(ctor))); \
+  } while(0)
   
-  jsval_t referenceerror_proto = js_mkobj(js);
-  set_proto(js, referenceerror_proto, error_proto);
-  setprop(js, referenceerror_proto, js_mkstr(js, "name", 4), js_mkstr(js, "ReferenceError", 14));
+  REGISTER_ERROR_SUBTYPE("EvalError");
+  REGISTER_ERROR_SUBTYPE("RangeError");
+  REGISTER_ERROR_SUBTYPE("ReferenceError");
+  REGISTER_ERROR_SUBTYPE("SyntaxError");
+  REGISTER_ERROR_SUBTYPE("TypeError");
+  REGISTER_ERROR_SUBTYPE("URIError");
+  REGISTER_ERROR_SUBTYPE("InternalError");
   
-  jsval_t syntaxerror_proto = js_mkobj(js);
-  set_proto(js, syntaxerror_proto, error_proto);
-  setprop(js, syntaxerror_proto, js_mkstr(js, "name", 4), js_mkstr(js, "SyntaxError", 11));
-  
-  jsval_t typeerror_proto = js_mkobj(js);
-  set_proto(js, typeerror_proto, error_proto);
-  setprop(js, typeerror_proto, js_mkstr(js, "name", 4), js_mkstr(js, "TypeError", 9));
-  
-  jsval_t urierror_proto = js_mkobj(js);
-  set_proto(js, urierror_proto, error_proto);
-  setprop(js, urierror_proto, js_mkstr(js, "name", 4), js_mkstr(js, "URIError", 8));
-  
-  jsval_t internalerror_proto = js_mkobj(js);
-  set_proto(js, internalerror_proto, error_proto);
-  setprop(js, internalerror_proto, js_mkstr(js, "name", 4), js_mkstr(js, "InternalError", 13));
+  #undef REGISTER_ERROR_SUBTYPE
   
   jsval_t date_proto = js_mkobj(js);
   set_proto(js, date_proto, object_proto);
@@ -21039,61 +21018,7 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, proxy_ctor_obj, ANT_STRING("name"), ANT_STRING("Proxy"));
   setprop(js, glob, js_mkstr(js, "Proxy", 5), mkval(T_FUNC, vdata(proxy_ctor_obj)));
   
-  jsval_t err_ctor_obj = mkobj(js, 0);
-  set_proto(js, err_ctor_obj, function_proto);
-  set_slot(js, err_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_Error));
-  js_setprop_nonconfigurable(js, err_ctor_obj, "prototype", 9, error_proto);
-  setprop(js, err_ctor_obj, ANT_STRING("name"), ANT_STRING("Error"));
-  setprop(js, glob, js_mkstr(js, "Error", 5), mkval(T_FUNC, vdata(err_ctor_obj)));
-  
-  jsval_t evalerr_ctor_obj = mkobj(js, 0);
-  set_proto(js, evalerr_ctor_obj, function_proto);
-  set_slot(js, evalerr_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_EvalError));
-  js_setprop_nonconfigurable(js, evalerr_ctor_obj, "prototype", 9, evalerror_proto);
-  setprop(js, evalerr_ctor_obj, ANT_STRING("name"), ANT_STRING("EvalError"));
-  setprop(js, glob, js_mkstr(js, "EvalError", 9), mkval(T_FUNC, vdata(evalerr_ctor_obj)));
-  
-  jsval_t rangeerr_ctor_obj = mkobj(js, 0);
-  set_proto(js, rangeerr_ctor_obj, function_proto);
-  set_slot(js, rangeerr_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_RangeError));
-  js_setprop_nonconfigurable(js, rangeerr_ctor_obj, "prototype", 9, rangeerror_proto);
-  setprop(js, rangeerr_ctor_obj, ANT_STRING("name"), ANT_STRING("RangeError"));
-  setprop(js, glob, js_mkstr(js, "RangeError", 10), mkval(T_FUNC, vdata(rangeerr_ctor_obj)));
-  
-  jsval_t referr_ctor_obj = mkobj(js, 0);
-  set_proto(js, referr_ctor_obj, function_proto);
-  set_slot(js, referr_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_ReferenceError));
-  js_setprop_nonconfigurable(js, referr_ctor_obj, "prototype", 9, referenceerror_proto);
-  setprop(js, referr_ctor_obj, ANT_STRING("name"), ANT_STRING("ReferenceError"));
-  setprop(js, glob, js_mkstr(js, "ReferenceError", 14), mkval(T_FUNC, vdata(referr_ctor_obj)));
-  
-  jsval_t syntaxerr_ctor_obj = mkobj(js, 0);
-  set_proto(js, syntaxerr_ctor_obj, function_proto);
-  set_slot(js, syntaxerr_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_SyntaxError));
-  js_setprop_nonconfigurable(js, syntaxerr_ctor_obj, "prototype", 9, syntaxerror_proto);
-  setprop(js, syntaxerr_ctor_obj, ANT_STRING("name"), ANT_STRING("SyntaxError"));
-  setprop(js, glob, js_mkstr(js, "SyntaxError", 11), mkval(T_FUNC, vdata(syntaxerr_ctor_obj)));
-  
-  jsval_t typeerr_ctor_obj = mkobj(js, 0);
-  set_proto(js, typeerr_ctor_obj, function_proto);
-  set_slot(js, typeerr_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_TypeError));
-  js_setprop_nonconfigurable(js, typeerr_ctor_obj, "prototype", 9, typeerror_proto);
-  setprop(js, typeerr_ctor_obj, ANT_STRING("name"), ANT_STRING("TypeError"));
-  setprop(js, glob, js_mkstr(js, "TypeError", 9), mkval(T_FUNC, vdata(typeerr_ctor_obj)));
-  
-  jsval_t urierr_ctor_obj = mkobj(js, 0);
-  set_proto(js, urierr_ctor_obj, function_proto);
-  set_slot(js, urierr_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_URIError));
-  js_setprop_nonconfigurable(js, urierr_ctor_obj, "prototype", 9, urierror_proto);
-  setprop(js, urierr_ctor_obj, ANT_STRING("name"), ANT_STRING("URIError"));
-  setprop(js, glob, js_mkstr(js, "URIError", 8), mkval(T_FUNC, vdata(urierr_ctor_obj)));
-  
-  jsval_t internerr_ctor_obj = mkobj(js, 0);
-  set_proto(js, internerr_ctor_obj, function_proto);
-  set_slot(js, internerr_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_InternalError));
-  js_setprop_nonconfigurable(js, internerr_ctor_obj, "prototype", 9, internalerror_proto);
-  setprop(js, internerr_ctor_obj, ANT_STRING("name"), ANT_STRING("InternalError"));
-  setprop(js, glob, js_mkstr(js, "InternalError", 13), mkval(T_FUNC, vdata(internerr_ctor_obj)));
+
   
   jsval_t regex_ctor_obj = mkobj(js, 0);
   set_proto(js, regex_ctor_obj, function_proto);
@@ -21221,9 +21146,6 @@ struct js *js_create(void *buf, size_t len) {
   
   setprop(js, regexp_proto, js_mkstr(js, "constructor", 11), mkval(T_FUNC, vdata(regex_ctor_obj)));
   js_set_descriptor(js, regexp_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
-  
-  setprop(js, error_proto, js_mkstr(js, "constructor", 11), mkval(T_FUNC, vdata(err_ctor_obj)));
-  js_set_descriptor(js, error_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
   
   set_proto(js, glob, object_proto);
   

@@ -29,6 +29,7 @@ struct js {
   jsval_t tval;           // holds last parsed numeric or string literal value
   jsval_t scope;          // current scope
   jsval_t this_val;       // 'this' value for currently executing function
+  jsval_t new_target;     // constructor called with 'new', undefined otherwise
   jsval_t module_ns;      // current ESM module namespace
   uint8_t *mem;           // available JS memory
   jsoff_t size;           // memory size
