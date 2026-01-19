@@ -657,6 +657,14 @@ static inline bool is_undefined(jsval_t v) {
   return vtype(v) == T_UNDEF; 
 }
 
+static inline bool is_true(jsval_t v) {
+  return vtype(v) == T_BOOL && vdata(v) != 0;
+}
+
+static inline bool is_false(jsval_t v) {
+  return vtype(v) == T_BOOL && vdata(v) == 0;
+}
+
 static inline uint8_t unhex(uint8_t c) {
   return (c & 0xF) + (c >> 6) * 9;
 }
@@ -6485,6 +6493,18 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
         push_this(captured_this);
       }
       
+      if (is_true(get_slot(js, func_obj, SLOT_DEFAULT_CTOR))) {
+        jsval_t super_ctor = js->super_val;
+        uint8_t st = vtype(super_ctor);
+        if (st == T_FUNC || st == T_CFUNC) {
+          js->code = code; js->clen = clen; js->pos = pos;
+          res = do_call_op(js, super_ctor, args);
+          js->super_val = saved_super;
+          js->current_func = saved_func;
+          pop_call_frame(); goto restore_state;
+        }
+      }
+      
       jsval_t count_val = get_slot(js, func_obj, SLOT_FIELD_COUNT);
       if (vtype(count_val) != T_NUM || vtype(target_this) != T_OBJ) goto skip_fields;
       
@@ -6541,6 +6561,7 @@ skip_fields:
     res = call_c(js, (jsval_t(*)(struct js *, jsval_t *, int)) vdata(func));
   }
   
+restore_state:
   js->code = code, js->clen = clen, js->pos = pos;
   js->flags = (flags & ~F_THROW) | (js->flags & F_THROW);
   js->tok = tok, js->nogc = nogc;
@@ -11355,9 +11376,8 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
       jsoff_t code_len = constructor_body_end - constructor_params_start;
       ctor_str = js_mkstr(js, &js->code[constructor_params_start], code_len);
     } else {
-      if (super_len > 0) {
-        ctor_str = js_mkstr(js, "(...args){super(...args);}", 26);
-      } else ctor_str = js_mkstr(js, "(){}", 4);
+      ctor_str = js_mkstr(js, "(){}", 4);
+      if (super_len > 0) set_slot(js, func_obj, SLOT_DEFAULT_CTOR, js_mktrue());
     }
     if (is_err(ctor_str)) return ctor_str;
     set_slot(js, func_obj, SLOT_CODE, ctor_str);
