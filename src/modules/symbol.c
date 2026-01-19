@@ -177,6 +177,8 @@ void init_symbol_module(void) {
   js_set(js, js_glob(js), "Symbol", func_symbol);
   
   // set internal types before module ready
+  js_set(js, rt->ant_obj, get_toStringTag_sym_key(), js_mkstr(js, "Ant", 3));
+  
   jsval_t array_ctor = js_get(js, js_glob(js), "Array");
   jsval_t array_proto = js_get(js, array_ctor, "prototype");
   js_set(js, array_proto, g_iter_sym_key, js_mkfun(array_iterator));
