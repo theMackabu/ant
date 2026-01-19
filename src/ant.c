@@ -778,6 +778,7 @@ static bool is_this_loop_continue_target(int depth_at_entry);
 static bool parse_func_params(struct js *js, uint8_t *flags, int *out_count);
 static bool try_dynamic_setter(struct js *js, jsval_t obj, const char *key, size_t key_len, jsval_t value);
 
+static size_t strbigint(struct js *js, jsval_t value, char *buf, size_t len);
 static size_t tostr(struct js *js, jsval_t value, char *buf, size_t len);
 static size_t strpromise(struct js *js, jsval_t value, char *buf, size_t len);
 static size_t js_to_pcre2_pattern(const char *src, size_t src_len, char *dst, size_t dst_size);
@@ -1314,7 +1315,20 @@ static size_t add_indent(char *buf, size_t len, int level) {
   return n;
 }
 
-static size_t strbigint(struct js *js, jsval_t value, char *buf, size_t len);
+static inline jsoff_t get_prop_koff(struct js *js, jsoff_t prop) {
+  return loadoff(js, prop + (jsoff_t) sizeof(prop));
+}
+
+static void get_prop_key(struct js *js, jsoff_t prop, const char **key, jsoff_t *klen) {
+  jsoff_t koff = get_prop_koff(js, prop);
+  *klen = offtolen(loadoff(js, koff));
+  *key = (char *) &js->mem[koff + sizeof(koff)];
+}
+
+static jsval_t get_prop_val(struct js *js, jsoff_t prop) {
+  jsoff_t koff = get_prop_koff(js, prop);
+  return loadval(js, prop + (jsoff_t) (sizeof(prop) + sizeof(koff)));
+}
 
 static bool is_small_array(struct js *js, jsval_t obj, int *elem_count) {
   int count = 0;
@@ -1324,12 +1338,10 @@ static bool is_small_array(struct js *js, jsval_t obj, int *elem_count) {
   jsoff_t scan = next;
   
   while (scan < js->brk && scan != 0) {
-    jsoff_t koff = loadoff(js, scan + (jsoff_t) sizeof(scan));
-    jsoff_t klen = offtolen(loadoff(js, koff));
-    const char *key = (char *) &js->mem[koff + sizeof(koff)];
-    
+    const char *key; jsoff_t klen;
+    get_prop_key(js, scan, &key, &klen);
     if (streq(key, klen, "length", 6)) {
-      jsval_t val = loadval(js, scan + (jsoff_t) (sizeof(scan) + sizeof(koff)));
+      jsval_t val = get_prop_val(js, scan);
       if (vtype(val) == T_NUM) length = (jsoff_t) tod(val);
       break;
     }
@@ -1339,19 +1351,16 @@ static bool is_small_array(struct js *js, jsval_t obj, int *elem_count) {
   for (jsoff_t i = 0; i < length; i++) {
     char idx[16];
     snprintf(idx, sizeof(idx), "%u", (unsigned) i);
-    
     jsoff_t idxlen = (jsoff_t) strlen(idx);
     jsoff_t prop = next;
     jsval_t val = js_mkundef();
-    
     bool found = false;
     
     while (prop < js->brk && prop != 0) {
-      jsoff_t koff = loadoff(js, prop + (jsoff_t) sizeof(prop));
-      jsoff_t klen = offtolen(loadoff(js, koff));
-      const char *key = (char *) &js->mem[koff + sizeof(koff)];
+      const char *key; jsoff_t klen;
+      get_prop_key(js, prop, &key, &klen);
       if (streq(key, klen, idx, idxlen)) {
-        val = loadval(js, prop + (jsoff_t) (sizeof(prop) + sizeof(koff)));
+        val = get_prop_val(js, prop);
         found = true;
         break;
       }
@@ -1375,17 +1384,6 @@ static bool is_array_index(const char *key, jsoff_t klen) {
     if (key[i] < '0' || key[i] > '9') return false;
   }
   return true;
-}
-
-static void get_prop_key(struct js *js, jsoff_t prop, const char **key, jsoff_t *klen) {
-  jsoff_t koff = loadoff(js, prop + (jsoff_t) sizeof(prop));
-  *klen = offtolen(loadoff(js, koff));
-  *key = (char *) &js->mem[koff + sizeof(koff)];
-}
-
-static jsval_t get_prop_val(struct js *js, jsoff_t prop) {
-  jsoff_t koff = loadoff(js, prop + (jsoff_t) sizeof(prop));
-  return loadval(js, prop + (jsoff_t) (sizeof(prop) + sizeof(koff)));
 }
 
 static jsoff_t get_array_length(struct js *js, jsval_t arr) {
@@ -1507,12 +1505,10 @@ static size_t array_to_string(struct js *js, jsval_t obj, char *buf, size_t len)
   jsoff_t scan = next;
   
   while (scan < js->brk && scan != 0) {
-    jsoff_t koff = loadoff(js, scan + (jsoff_t) sizeof(scan));
-    jsoff_t klen = offtolen(loadoff(js, koff));
-    const char *key = (char *) &js->mem[koff + sizeof(koff)];
-    
+    const char *key; jsoff_t klen;
+    get_prop_key(js, scan, &key, &klen);
     if (streq(key, klen, "length", 6)) {
-      jsval_t val = loadval(js, scan + (jsoff_t) (sizeof(scan) + sizeof(koff)));
+      jsval_t val = get_prop_val(js, scan);
       if (vtype(val) == T_NUM) length = (jsoff_t) tod(val);
       break;
     }
@@ -1523,19 +1519,16 @@ static size_t array_to_string(struct js *js, jsval_t obj, char *buf, size_t len)
     if (i > 0) n += cpy(buf + n, len - n, ",", 1);
     char idx[16];
     snprintf(idx, sizeof(idx), "%u", (unsigned) i);
-    
     jsoff_t idxlen = (jsoff_t) strlen(idx);
     jsoff_t prop = next;
     jsval_t val = js_mkundef();
-    
     bool found = false;
     
     while (prop < js->brk && prop != 0) {
-      jsoff_t koff = loadoff(js, prop + (jsoff_t) sizeof(prop));
-      jsoff_t klen = offtolen(loadoff(js, koff));
-      const char *key = (char *) &js->mem[koff + sizeof(koff)];
+      const char *key; jsoff_t klen;
+      get_prop_key(js, prop, &key, &klen);
       if (streq(key, klen, idx, idxlen)) {
-        val = loadval(js, prop + (jsoff_t) (sizeof(prop) + sizeof(koff)));
+        val = get_prop_val(js, prop);
         found = true;
         break;
       }
@@ -1625,10 +1618,8 @@ static bool is_small_object(struct js *js, jsval_t obj, int *prop_count) {
     jsoff_t header = loadoff(js, next);
     if (is_slot_prop(header)) { next = next_prop(header); continue; }
     
-    jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
-    jsoff_t klen = offtolen(loadoff(js, koff));
-    
-    const char *key = (char *) &js->mem[koff + sizeof(koff)];
+    const char *key; jsoff_t klen;
+    get_prop_key(js, next, &key, &klen);
     const char *tag_sym_key = get_toStringTag_sym_key();
     bool should_hide = streq(key, klen, STR_PROTO, STR_PROTO_LEN) || streq(key, klen, tag_sym_key, strlen(tag_sym_key));
     
@@ -1638,7 +1629,7 @@ static bool is_small_object(struct js *js, jsval_t obj, int *prop_count) {
     }
     
     if (!should_hide) {
-      jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
+      jsval_t val = get_prop_val(js, next);
       uint8_t t = vtype(val);
       if (t == T_OBJ || t == T_ARR || t == T_FUNC) has_nested = true;
       count++;
@@ -2927,11 +2918,10 @@ static jsoff_t arr_length(struct js *js, jsval_t arr) {
   jsoff_t length_prop_val = 0;
   jsoff_t scan = loadoff(js, (jsoff_t) vdata(arr)) & ~(3U | FLAGMASK);
   while (scan < js->brk && scan != 0) {
-    jsoff_t koff = loadoff(js, scan + (jsoff_t) sizeof(scan));
-    jsoff_t klen = offtolen(loadoff(js, koff));
-    const char *key = (char *) &js->mem[koff + sizeof(koff)];
+    const char *key; jsoff_t klen;
+    get_prop_key(js, scan, &key, &klen);
     if (streq(key, klen, "length", 6)) {
-      jsval_t val = loadval(js, scan + (jsoff_t) (sizeof(scan) + sizeof(koff)));
+      jsval_t val = get_prop_val(js, scan);
       if (vtype(val) == T_NUM) {
         found_length_prop = true;
         length_prop_val = (jsoff_t) tod(val);
@@ -2939,9 +2929,7 @@ static jsoff_t arr_length(struct js *js, jsval_t arr) {
     } else if (klen > 0 && key[0] >= '0' && key[0] <= '9') {
       char *endptr;
       unsigned long idx = strtoul(key, &endptr, 10);
-      if (endptr == key + klen && idx + 1 > max_idx) {
-        max_idx = (jsoff_t)(idx + 1);
-      }
+      if (endptr == key + klen && idx + 1 > max_idx) max_idx = (jsoff_t)(idx + 1);
     }
     scan = loadoff(js, scan) & ~(3U | FLAGMASK);
   }
@@ -2955,12 +2943,9 @@ static jsval_t arr_get(struct js *js, jsval_t arr, jsoff_t idx) {
   size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)idx);
   jsoff_t prop = loadoff(js, (jsoff_t) vdata(arr)) & ~(3U | FLAGMASK);
   while (prop < js->brk && prop != 0) {
-    jsoff_t koff = loadoff(js, prop + (jsoff_t) sizeof(prop));
-    jsoff_t klen = offtolen(loadoff(js, koff));
-    const char *key = (char *) &js->mem[koff + sizeof(koff)];
-    if (streq(key, klen, idxstr, idxlen)) {
-      return loadval(js, prop + (jsoff_t) (sizeof(prop) + sizeof(koff)));
-    }
+    const char *key; jsoff_t klen;
+    get_prop_key(js, prop, &key, &klen);
+    if (streq(key, klen, idxstr, idxlen)) return get_prop_val(js, prop);
     prop = loadoff(js, prop) & ~(3U | FLAGMASK);
   }
   return js_mkundef();
@@ -9277,9 +9262,8 @@ obj_destruct_rest:;
           jsoff_t header = loadoff(js, scan);
           if (is_slot_prop(header)) { scan = next_prop(header); continue; }
           
-          jsoff_t koff = loadoff(js, scan + (jsoff_t) sizeof(scan));
-          jsoff_t klen = offtolen(loadoff(js, koff));
-          const char *key = (char *) &js->mem[koff + sizeof(koff)];
+          const char *key; jsoff_t klen;
+          get_prop_key(js, scan, &key, &klen);
           bool is_picked = false;
           jsoff_t picked_len = arr_length(js, picked_keys);
           for (jsoff_t i = 0; i < picked_len; i++) {
@@ -9289,7 +9273,7 @@ obj_destruct_rest:;
             if (klen == pklen && memcmp(key, &js->mem[pkoff], klen) == 0) { is_picked = true; break; }
           }
           if (!is_picked && !(klen == STR_PROTO_LEN && memcmp(key, STR_PROTO, STR_PROTO_LEN) == 0)) {
-            jsval_t val = loadval(js, scan + (jsoff_t) (sizeof(scan) + sizeof(koff)));
+            jsval_t val = get_prop_val(js, scan);
             jsval_t key_str = js_mkstr(js, key, klen);
             if (is_err(key_str)) return key_str;
             jsval_t res = setprop(js, rest_obj, key_str, val);
@@ -9891,12 +9875,10 @@ static jsval_t for_of_iter_array(struct js *js, for_iter_ctx_t *ctx, jsval_t ite
   while (scan < js->brk && scan != 0) {
     jsoff_t header = loadoff(js, scan);
     if (is_slot_prop(header)) { scan = next_prop(header); continue; }
-    
-    jsoff_t koff = loadoff(js, scan + (jsoff_t) sizeof(scan));
-    jsoff_t klen = offtolen(loadoff(js, koff));
-    const char *key = (char *) &js->mem[koff + sizeof(koff)];
+    const char *key; jsoff_t klen;
+    get_prop_key(js, scan, &key, &klen);
     if (streq(key, klen, "length", 6)) {
-      jsval_t val = loadval(js, scan + (jsoff_t) (sizeof(scan) + sizeof(koff)));
+      jsval_t val = get_prop_val(js, scan);
       if (vtype(val) == T_NUM) length = (jsoff_t) tod(val);
       break;
     }
@@ -9913,14 +9895,9 @@ static jsval_t for_of_iter_array(struct js *js, for_iter_ctx_t *ctx, jsval_t ite
     while (prop < js->brk && prop != 0) {
       jsoff_t header = loadoff(js, prop);
       if (is_slot_prop(header)) { prop = next_prop(header); continue; }
-      
-      jsoff_t koff = loadoff(js, prop + (jsoff_t) sizeof(prop));
-      jsoff_t klen = offtolen(loadoff(js, koff));
-      const char *key = (char *) &js->mem[koff + sizeof(koff)];
-      if (streq(key, klen, idx, idxlen)) {
-        val = loadval(js, prop + (jsoff_t) (sizeof(prop) + sizeof(koff)));
-        break;
-      }
+      const char *key; jsoff_t klen;
+      get_prop_key(js, prop, &key, &klen);
+      if (streq(key, klen, idx, idxlen)) { val = get_prop_val(js, prop); break; }
       prop = next_prop(header);
     }
     
