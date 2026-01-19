@@ -97,6 +97,8 @@ typedef struct coroutine {
   coroutine_type_t type;
   jsval_t scope;
   jsval_t this_val;
+  jsval_t super_val;
+  jsval_t new_target;
   jsval_t awaited_promise;
   jsval_t result;
   jsval_t async_func;
@@ -401,7 +403,7 @@ enum {
   TOK_ASYNC, TOK_AWAIT, TOK_BREAK, TOK_CASE, TOK_CATCH, TOK_CLASS, TOK_CONST, TOK_CONTINUE,
   TOK_DEFAULT, TOK_DELETE, TOK_DO, TOK_DEBUGGER, TOK_ELSE, TOK_EXPORT, TOK_FINALLY, TOK_FOR, 
   TOK_FROM, TOK_FUNC, TOK_IF, TOK_IMPORT, TOK_IN, TOK_INSTANCEOF, TOK_LET, TOK_NEW, TOK_OF, 
-  TOK_RETURN, TOK_SWITCH, TOK_THIS, TOK_THROW, TOK_TRY, TOK_VAR, TOK_VOID, TOK_WHILE, TOK_WITH,
+  TOK_RETURN, TOK_SUPER, TOK_SWITCH, TOK_THIS, TOK_THROW, TOK_TRY, TOK_VAR, TOK_VOID, TOK_WHILE, TOK_WITH,
   TOK_YIELD, TOK_UNDEF, TOK_NULL, TOK_TRUE, TOK_FALSE, TOK_AS, TOK_STATIC, TOK_TYPEOF,
   TOK_WINDOW, TOK_GLOBAL_THIS,
   TOK_IDENT_LIKE_END,
@@ -864,9 +866,19 @@ static void mco_async_entry(mco_coro* mco) {
   coroutine_t *coro = ctx->coro;
   jsval_t result;
   
+  jsval_t saved_super = js->super_val;
+  jsval_t saved_new_target = js->new_target;
+  if (coro) {
+    js->super_val = coro->super_val;
+    js->new_target = coro->new_target;
+  }
+  
   if (coro && coro->nargs > 0 && coro->args) {
     result = call_js_code_with_args(js, ctx->code, (jsoff_t)ctx->code_len, ctx->closure_scope, coro->args, coro->nargs, js_mkundef());
   } else result = call_js(js, ctx->code, (jsoff_t)ctx->code_len, ctx->closure_scope);
+  
+  js->super_val = saved_super;
+  js->new_target = saved_new_target;
   
   ctx->result = result;
   ctx->has_error = is_err(result);
@@ -1035,6 +1047,8 @@ static jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t 
   coro->type = CORO_ASYNC_AWAIT;
   coro->scope = closure_scope;
   coro->this_val = js->this_val;
+  coro->super_val = js->super_val;
+  coro->new_target = js->new_target;
   coro->awaited_promise = js_mkundef();
   coro->result = js_mkundef();
   coro->async_func = js->current_func;
@@ -3527,6 +3541,7 @@ static uint8_t parsekeyword(const char *buf, size_t len) {
       K("return", TOK_RETURN);
       break;
     case 's':
+      K("super", TOK_SUPER);
       K("static", TOK_STATIC);
       K("switch", TOK_SWITCH);
       break;
@@ -6082,6 +6097,10 @@ static jsval_t call_js_with_args(struct js *js, jsval_t func, jsval_t *args, int
   const char *fn = (const char *) (&js->mem[fnoff]);
   
   jsval_t closure_scope = get_slot(js, func_obj, SLOT_SCOPE);
+  jsval_t saved_super = js->super_val;
+  
+  jsval_t func_super = get_slot(js, func_obj, SLOT_SUPER);
+  if (vtype(func_super) != T_UNDEF) js->super_val = func_super;
   
   jsval_t captured_this = get_slot(js, func_obj, SLOT_THIS);
   if (vtype(captured_this) != T_UNDEF) {
@@ -6096,6 +6115,7 @@ static jsval_t call_js_with_args(struct js *js, jsval_t func, jsval_t *args, int
   }
   
   jsval_t result = call_js_code_with_args(js, fn, fnlen, closure_scope, args, nargs, func);
+  js->super_val = saved_super;
   if (combined_args) ANT_GC_FREE(combined_args);
   
   return result;
@@ -6456,6 +6476,10 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
       js->current_func = func;
       js->nogc = (jsoff_t) (fnoff - sizeof(jsoff_t));
       
+      jsval_t saved_super = js->super_val;
+      jsval_t func_super = get_slot(js, func_obj, SLOT_SUPER);
+      if (vtype(func_super) != T_UNDEF) js->super_val = func_super;
+      
       if (is_arrow || is_bound) {
         pop_this();
         push_this(captured_this);
@@ -6509,6 +6533,7 @@ skip_fields:
         }
         pop_call_frame();
         if (bound_args) ANT_GC_FREE(bound_args);
+        js->super_val = saved_super;
         js->current_func = saved_func;
       }
     }
@@ -8051,6 +8076,52 @@ static jsval_t js_literal(struct js *js) {
         return mkcoderef((jsoff_t) id_start, (jsoff_t) id_len);
       }
       return js_mkerr_typed(js, JS_ERR_SYNTAX, "unexpected token after async");
+    }
+    
+    case TOK_SUPER: {
+      jsval_t super_ctor = js->super_val;
+      uint8_t la = lookahead(js);
+      if ((la == TOK_DOT || la == TOK_LBRACKET) && vtype(super_ctor) == T_FUNC) {
+        jsval_t ctor_obj = mkval(T_OBJ, vdata(super_ctor));
+        jsoff_t proto_off = lkp_interned(js, ctor_obj, INTERN_PROTOTYPE, 9);
+        if (proto_off == 0) return js_mkundef();
+        jsval_t proto = resolveprop(js, mkval(T_PROP, proto_off));
+        
+        next(js); js->consumed = 1;
+        const char *prop; jsoff_t prop_len;
+        if (la == TOK_DOT) {
+          if (next(js) != TOK_IDENTIFIER && !is_keyword_propname(js->tok))
+            return js_mkerr_typed(js, JS_ERR_SYNTAX, "identifier expected");
+          prop = &js->code[js->toff]; prop_len = js->tlen;
+          js->consumed = 1;
+        } else {
+          jsval_t idx = js_expr(js);
+          if (is_err(idx)) return idx;
+          if (next(js) != TOK_RBRACKET) return js_mkerr_typed(js, JS_ERR_SYNTAX, "] expected");
+          js->consumed = 1;
+          idx = resolveprop(js, idx);
+          if (vtype(idx) == T_STR) {
+            prop_len = 0; prop = (const char *)&js->mem[vstr(js, idx, &prop_len)];
+          } else {
+            char buf[32]; prop_len = tostr(js, idx, buf, sizeof(buf));
+            prop = buf;
+          }
+        }
+        
+        jsoff_t off = lkp(js, proto, prop, prop_len);
+        if (off == 0) off = lkp_proto(js, proto, prop, prop_len);
+        if (off == 0) return js_mkundef();
+        
+        jsval_t method = resolveprop(js, mkval(T_PROP, off));
+        if (vtype(method) != T_FUNC) return method;
+        
+        jsval_t bound = mkobj(js, 0);
+        set_slot(js, bound, SLOT_CODE, get_slot(js, mkval(T_OBJ, vdata(method)), SLOT_CODE));
+        set_slot(js, bound, SLOT_SCOPE, get_slot(js, mkval(T_OBJ, vdata(method)), SLOT_SCOPE));
+        set_slot(js, bound, SLOT_BOUND_THIS, js->this_val);
+        return mkval(T_FUNC, vdata(bound));
+      }
+      return super_ctor;
     }
     
     case TOK_NULL:        return js_mknull();
@@ -11237,12 +11308,6 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
     }
     
     jsval_t func_scope = mkobj(js, (jsoff_t) vdata(js->scope));
-    if (super_len > 0) {
-      jsval_t super_key = js_mkstr(js, "super", 5);
-      if (is_err(super_key)) return super_key;
-      jsval_t res_super = setprop(js, func_scope, super_key, super_constructor);
-      if (is_err(res_super)) return res_super;
-    }
     
     for (unsigned int i = 0; i < utarray_len(methods); i++) {
       MethodInfo *m = (MethodInfo *)utarray_eltptr(methods, i);
@@ -11260,12 +11325,10 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
       if (is_err(method_obj)) return method_obj;
       
       set_slot(js, method_obj, SLOT_CODE, method_code);
-      
-      if (m->is_async) {
-        set_slot(js, method_obj, SLOT_ASYNC, js_mktrue());
-      }
-      
       set_slot(js, method_obj, SLOT_SCOPE, func_scope);
+      
+      if (m->is_async) set_slot(js, method_obj, SLOT_ASYNC, js_mktrue());
+      if (super_len > 0) set_slot(js, method_obj, SLOT_SUPER, super_constructor);
       
       jsval_t method_func = mkval(T_FUNC, (unsigned long) vdata(method_obj));
       
@@ -11294,10 +11357,9 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
     } else {
       if (super_len > 0) {
         ctor_str = js_mkstr(js, "(...args){super(...args);}", 26);
-      } else { ctor_str = js_mkstr(js, "(){}", 4); }
+      } else ctor_str = js_mkstr(js, "(){}", 4);
     }
     if (is_err(ctor_str)) return ctor_str;
-    
     set_slot(js, func_obj, SLOT_CODE, ctor_str);
     
     int instance_field_count = 0;
@@ -11343,6 +11405,7 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
     }
     
     set_slot(js, func_obj, SLOT_SCOPE, func_scope);
+    if (super_len > 0) set_slot(js, func_obj, SLOT_SUPER, super_constructor);
     
     jsval_t name_key = js_mkstr(js, "name", 4);
     if (is_err(name_key)) return name_key;
@@ -11397,6 +11460,7 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
         
         set_slot(js, method_obj, SLOT_CODE, method_code);
         set_slot(js, method_obj, SLOT_SCOPE, func_scope);
+        if (super_len > 0) set_slot(js, method_obj, SLOT_SUPER, super_constructor);
         
         jsval_t method_func = mkval(T_FUNC, (unsigned long) vdata(method_obj));
         jsval_t set_res = setprop(js, func_obj, member_name, method_func);
@@ -11415,15 +11479,10 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
 static void js_throw_handle(struct js *js, jsval_t *res) {
   js->consumed = 1;
   jsval_t throw_val = js_expr(js);
-  if (js->flags & F_NOEXEC) {
-    *res = js_mkundef();
-  } else {
+  if (js->flags & F_NOEXEC) *res = js_mkundef(); else {
     throw_val = resolveprop(js, throw_val);
-    if (is_err(throw_val)) {
-      *res = throw_val;
-    } else {
-      *res = js_throw(js, throw_val);
-    }
+    if (is_err(throw_val)) *res = throw_val;
+    else *res = js_throw(js, throw_val);
   }
 }
 
@@ -20634,6 +20693,7 @@ struct js *js_create(void *buf, size_t len) {
   js->size = js->size / 8U * 8U;
   js->lwm = js->size;
   js->this_val = js->scope;
+  js->super_val = js_mkundef();
   js->new_target = js_mkundef();
   js->errmsg_size = 4096;
   js->errmsg = (char *)malloc(js->errmsg_size);
@@ -21452,6 +21512,8 @@ void js_gc_update_roots(GC_UPDATE_ARGS) {
   for (coroutine_t *coro = pending_coroutines.head; coro; coro = coro->next) {
     FWD_VAL(coro->scope);
     FWD_VAL(coro->this_val);
+    FWD_VAL(coro->super_val);
+    FWD_VAL(coro->new_target);
     FWD_VAL(coro->awaited_promise);
     FWD_VAL(coro->result);
     FWD_VAL(coro->async_func);

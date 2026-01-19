@@ -19,7 +19,7 @@
 *.todo
 *.trace
 
-spec.txt
+zoo.sh
 todo.txt
 
 node_modules

@@ -141,6 +141,25 @@ test('inheritance', dog.speak(), 'Rex barks');
 test('instanceof parent', dog instanceof Animal, true);
 test('instanceof child', dog instanceof Dog, true);
 
+class Cat extends Animal {
+  speak() {
+    return super.speak() + ' - meow!';
+  }
+}
+
+let cat = new Cat('Whiskers');
+test('super.method()', cat.speak(), 'Whiskers makes a sound - meow!');
+
+class Bird extends Animal {
+  speak() {
+    let method = 'speak';
+    return super[method]() + ' - chirp!';
+  }
+}
+
+let bird = new Bird('Tweety');
+test('super[method]()', bird.speak(), 'Tweety makes a sound - chirp!');
+
 class Static {
   static value = 42;
   static method() {

@@ -53,6 +53,8 @@ typedef enum {
   SLOT_BUILTIN,
   SLOT_DATA,
   SLOT_CTOR,
+  SLOT_SUPER,
+  SLOT_DEFAULT_CTOR,
   SLOT_MAX = 255
 } internal_slot_t;
 
