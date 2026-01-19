@@ -5,7 +5,6 @@
 
 struct js {
   jsoff_t css;            // max observed C stack size
-  jsoff_t lwm;            // JS ram low watermark: min free ram observed
   const char *code;       // currently parsed code snippet
   char *errmsg;           // dynamic error message buffer
   size_t errmsg_size;     // size of error message buffer

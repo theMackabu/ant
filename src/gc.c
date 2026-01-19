@@ -395,11 +395,6 @@ size_t js_gc_compact(struct js *js) {
     }
   }
   
-  jsoff_t free_space = js->size - js->brk;
-  if (free_space < js->lwm || js->lwm == 0) {
-    js->lwm = free_space;
-  }
-  
   free(mark_bits);
   fwd_free(&ctx.fwd);
   ANT_GC_COLLECT();

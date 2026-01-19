@@ -8,17 +8,17 @@ struct ant_runtime *const rt = &runtime;
 
 struct ant_runtime *ant_runtime_init(struct js *js, int argc, char **argv, struct arg_file *ls_p) {
   runtime.js = js;
-  runtime.ant_obj = js_mkobj(js);
+  runtime.ant_obj = js_newobj(js);
   runtime.flags = 0;
   
   runtime.argc = argc;
   runtime.argv = argv;
   runtime.ls_fp = ls_p->count > 0 ? ls_p->filename[0] : NULL;
   
-  js_set(js, js_glob(js), "Ant", runtime.ant_obj);
   js_set(js, js_glob(js), "global", js_glob(js));
   js_set(js, js_glob(js), "window", js_glob(js));
   js_set(js, js_glob(js), "globalThis", js_glob(js));
-  
+  js_set(js, js_glob(js), "Ant", runtime.ant_obj);
+
   return &runtime;
 }

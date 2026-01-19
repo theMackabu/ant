@@ -1148,20 +1148,11 @@ static void free_coroutine(coroutine_t *coro) {
 static jsval_t resume_coroutine_wrapper(struct js *js, jsval_t *args, int nargs);
 static jsval_t reject_coroutine_wrapper(struct js *js, jsval_t *args, int nargs);
 
-static void setlwm(struct js *js) {
-  jsoff_t n = 0, css = 0;
-  if (js->brk < js->size) n = js->size - js->brk;
-  if (js->lwm > n) js->lwm = n;
-  if ((char *) js->cstk > (char *) &n)
-    css = (jsoff_t) ((char *) js->cstk - (char *) &n);
-  if (css > js->css) js->css = css;
-}
-
 static size_t cpy(char *dst, size_t dstlen, const char *src, size_t srclen) {
-  size_t i = 0;
-  for (i = 0; i < dstlen && i < srclen && src[i] != 0; i++) dst[i] = src[i];
-  if (dstlen > 0) dst[i < dstlen ? i : dstlen - 1] = '\0';
-  return i;
+  if (dstlen == 0) return 0;
+  size_t len = srclen < dstlen - 1 ? srclen : dstlen - 1;
+  memcpy(dst, src, len); dst[len] = '\0';
+  return len;
 }
 
 static inline size_t uint_to_str(char *buf, size_t bufsize, unsigned int val) {
@@ -5625,7 +5616,6 @@ static jsval_t call_c(struct js *js, jsval_t (*fn)(struct js *, jsval_t *, int))
   js->this_val = peek_this();
   res = fn(js, argv, argc);
   js->this_val = saved_this;
-  setlwm(js);
   
   utarray_free(args);
   return res;
@@ -6338,7 +6328,6 @@ static jsval_t call_ffi(struct js *js, unsigned int func_index) {
   
   jsval_t *argv = (jsval_t *)utarray_front(args);
   res = ffi_call_by_index(js, func_index, argv, argc);
-  setlwm(js);
   
   utarray_free(args);
   return res;
@@ -6439,7 +6428,6 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
         js->this_val = peek_this();
         res = ((jsval_t(*)(struct js *, jsval_t *, int)) vdata(cfunc_slot))(js, argv, total_argc);
         js->this_val = saved_this;
-        setlwm(js);
         utarray_free(args_arr);
       }
       
@@ -6732,7 +6720,6 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
   
   jsval_t l = is_assign(op) ? lhs : resolveprop(js, lhs);
   jsval_t r = resolveprop(js, rhs);
-  setlwm(js);
   
   if (is_err(l)) return l;
   if (is_err(r)) return r;
@@ -8025,7 +8012,6 @@ static jsval_t js_class_expr(struct js *js, bool is_expression);
 
 static jsval_t js_literal(struct js *js) {
   next(js);
-  setlwm(js);
   if (js->maxcss > 0 && js->css > js->maxcss) return js_mkerr(js, "C stack");
   js->consumed = 1;
   
@@ -20762,7 +20748,6 @@ struct js *js_create(void *buf, size_t len) {
   js->size = (jsoff_t) (len - sizeof(*js));
   js->scope = mkobj(js, 0);
   js->size = js->size / 8U * 8U;
-  js->lwm = js->size;
   js->this_val = js->scope;
   js->super_val = js_mkundef();
   js->new_target = js_mkundef();
@@ -21513,12 +21498,6 @@ int js_type_ex(struct js *js, jsval_t val) {
   return js_type(val);
 }
 
-void js_stats(struct js *js, size_t *total, size_t *lwm, size_t *css) {
-  if (total) *total = js->size;
-  if (lwm) *lwm = js->lwm;
-  if (css) *css = js->css;
-}
-
 #define FWD_OFF(off) ((off) ? ((off) = fwd_off(ctx, off)) : 0)
 #define FWD_VAL(val) ((val) = fwd_val(ctx, val))
 #define UTARRAY_EACH(arr, type, var) if (arr) for (type *var = (type *)utarray_front(arr), *_end = var + utarray_len(arr); var < _end; var++)
@@ -21919,32 +21898,6 @@ void js_reject_promise(struct js *js, jsval_t promise, jsval_t value) { reject_p
 bool js_is_slot_prop(jsoff_t header) { return is_slot_prop(header); }
 jsoff_t js_next_prop(jsoff_t header) { return next_prop(header); }
 jsoff_t js_loadoff(struct js *js, jsoff_t off) { return loadoff(js, off); }
-
-#ifdef JS_DUMP
-void js_dump(struct js *js) {
-  jsoff_t off = 0, v;
-  printf("JS size %u, brk %u, lwm %u, css %u, nogc %u\n", js->size, js->brk, js->lwm, (unsigned) js->css, js->nogc);
-  while (off < js->brk) {
-    memcpy(&v, &js->mem[off], sizeof(v));
-    printf(" %5u: ", off);
-    jsoff_t cleaned = v & ~FLAGMASK;
-    if ((cleaned & 3U) == T_OBJ) {
-      printf("OBJ %u %u%s\n", cleaned & ~3U, loadoff(js, (jsoff_t) (off + sizeof(off))), (v & CONSTMASK) ? " [CONST]" : "");
-    } else if ((cleaned & 3U) == T_PROP) {
-      jsoff_t koff = loadoff(js, (jsoff_t) (off + sizeof(v)));
-      jsval_t val = loadval(js, (jsoff_t) (off + sizeof(v) + sizeof(v)));
-      printf("PROP next %u, koff %u vtype %d vdata %lu%s%s\n", cleaned & ~3U, koff, vtype(val), (unsigned long) vdata(val), (v & CONSTMASK) ? " [CONST]" : "", (v & SLOTMASK) ? " [SLOT]" : "");
-    } else if ((cleaned & 3) == T_STR) {
-      jsoff_t len = offtolen(cleaned);
-      printf("STR %u [%.*s]\n", len, (int) len, js->mem + off + sizeof(v));
-    } else {
-      printf("???\n");
-      break;
-    }
-    off += esize(v & ~FLAGMASK);
-  }
-}
-#endif
 
 void js_set_getter(struct js *js, jsval_t obj, js_getter_fn getter) {
   if (vtype(obj) != T_OBJ) return;

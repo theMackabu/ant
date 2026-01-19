@@ -7,9 +7,9 @@
 #include <time.h>
 #include <errno.h>
 
-#include "ant.h"
 #include "gc.h"
 #include "runtime.h"
+#include "internal.h"
 #include "modules/builtin.h"
 
 static struct {
@@ -61,7 +61,7 @@ static jsval_t js_gc_trigger(struct js *js, jsval_t *args, int nargs) {
   size_t used_after = GC_get_heap_size() - GC_get_free_bytes();
   size_t freed = (used_before > used_after) ? (used_before - used_after) : 0;
 
-  jsval_t result = js_mkobj(js);
+  jsval_t result = js_newobj(js);
   js_set(js, result, "heapBefore", js_mknum((double)heap_before));
   js_set(js, result, "heapAfter", js_mknum((double)heap_after));
   js_set(js, result, "usedBefore", js_mknum((double)used_before));
@@ -78,7 +78,7 @@ static jsval_t js_gc_trigger(struct js *js, jsval_t *args, int nargs) {
 static jsval_t js_alloc(struct js *js, jsval_t *args, int nargs) {
   (void) args; (void) nargs;
   
-  jsval_t result = js_mkobj(js);
+  jsval_t result = js_newobj(js);
   size_t arena_size = js_getbrk(js);
   
   js_set(js, result, "arenaSize", js_mknum((double)arena_size));
@@ -126,14 +126,10 @@ static jsval_t js_usleep(struct js *js, jsval_t *args, int nargs) {
 // Ant.stats()
 static jsval_t js_stats_fn(struct js *js, jsval_t *args, int nargs) {
   (void) args; (void) nargs;
+  jsval_t result = js_newobj(js);
   
-  size_t arena_total = 0, arena_lwm = 0, cstack = 0;
-  js_stats(js, &arena_total, &arena_lwm, &cstack);
-  jsval_t result = js_mkobj(js);
-  
-  js_set(js, result, "arenaUsed", js_mknum((double)arena_total));
-  js_set(js, result, "arenaLwm", js_mknum((double)arena_lwm));
-  js_set(js, result, "cstack", js_mknum((double)cstack));
+  js_set(js, result, "arenaUsed", js_mknum((double)js->size));
+  js_set(js, result, "cstack", js_mknum((double)js->css));
   
   js_set(js, result, "gcHeapSize", js_mknum((double)GC_get_heap_size()));
   js_set(js, result, "gcFreeBytes", js_mknum((double)GC_get_free_bytes()));
@@ -154,7 +150,7 @@ void init_builtin_module() {
   js_set(js, ant_obj, "msleep", js_mkfun(js_msleep));
   js_set(js, ant_obj, "usleep", js_mkfun(js_usleep));
 
-  jsval_t raw_obj = js_mkobj(js);
+  jsval_t raw_obj = js_newobj(js);
   js_set(js, raw_obj, "typeof", js_mkfun(js_raw_typeof));
   js_set(js, ant_obj, "raw", raw_obj);
 }

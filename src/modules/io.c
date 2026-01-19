@@ -241,7 +241,7 @@ other:
 #undef KEYWORD
 #undef EMIT_UNTIL
 
-static void console_print(struct js *js, jsval_t *args, int nargs, const char *color, FILE *stream) {
+void console_print(struct js *js, jsval_t *args, int nargs, const char *color, FILE *stream) {
   if (color && !io_no_color) io_puts(color, stream);
   
   for (int i = 0; i < nargs; i++) {

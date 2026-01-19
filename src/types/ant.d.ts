@@ -55,7 +55,6 @@ interface AntAllocResult {
 
 interface AntStatsResult {
   arenaUsed: number;
-  arenaLwm: number;
   cstack: number;
   gcHeapSize: number;
   gcFreeBytes: number;

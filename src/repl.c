@@ -146,19 +146,16 @@ static cmd_result_t cmd_save(struct js *js, history_t *history, const char *arg)
 }
 
 static cmd_result_t cmd_gc(struct js *js, history_t *history, const char *arg) {
-  (void)js; (void)history; (void)arg;
-  printf("Garbage collection complete\n");
+  jsval_t gc_fn = js_get(js, rt->ant_obj, "gc");
+  jsval_t result = js_call(js, gc_fn, NULL, 0);
+  console_print(js, &result, 1, NULL, stdout);
   return CMD_OK;
 }
 
 static cmd_result_t cmd_stats(struct js *js, history_t *history, const char *arg) {
-  (void)history; (void)arg;
-  size_t total, min, cstack;
-  js_stats(js, &total, &min, &cstack);
-  printf("Memory stats:\n");
-  printf("  Total: %zu bytes\n", total);
-  printf("  Free: %zu bytes\n", min);
-  printf("  C Stack: %zu bytes\n", cstack);
+  jsval_t stats_fn = js_get(js, rt->ant_obj, "stats");
+  jsval_t result = js_call(js, stats_fn, NULL, 0);
+  console_print(js, &result, 1, NULL, stdout);
   return CMD_OK;
 }
 

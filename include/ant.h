@@ -52,7 +52,6 @@ struct js *js_create_dynamic(size_t initial_size, size_t max_size);
 jsval_t js_glob(struct js *);
 jsval_t js_eval(struct js *, const char *, size_t);
 
-void js_dump(struct js *);
 void js_destroy(struct js *);
 void js_mkscope(struct js *);
 void js_delscope(struct js *);

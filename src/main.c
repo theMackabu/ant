@@ -157,12 +157,9 @@ static int execute_module(struct js *js, const char *filename) {
   return EXIT_SUCCESS;
 }
 
-int main(int argc, char *argv[]) {
-  char dump = 0;
-  
+int main(int argc, char *argv[]) {  
   struct arg_lit *help = arg_lit0("h", "help", "display this help and exit");
   struct arg_lit *version = arg_lit0("v", "version", "display version information and exit");
-  struct arg_lit *debug = arg_litn("d", "debug", 0, 10, "dump VM state (can be repeated for more detail)");
   struct arg_lit *no_color = arg_lit0(NULL, "no-color", "disable colored output");
   struct arg_str *eval = arg_str0("e", "eval", "<script>", "evaluate script");
   struct arg_lit *print = arg_lit0("p", "print", "evaluate script and print result");
@@ -173,8 +170,8 @@ int main(int argc, char *argv[]) {
   struct arg_end *end = arg_end(20);
   
   void *argtable[] = {
-    help, version, debug, no_color,
-    eval, print, initial_mem, max_mem,
+    help, version, no_color, eval,
+    print, initial_mem, max_mem,
     localstorage_file, file, end
   };
   
@@ -201,7 +198,6 @@ int main(int argc, char *argv[]) {
   
   bool repl_mode = (file->count == 0 && eval->count == 0);
   const char *module_file = repl_mode ? NULL : (file->count > 0 ? file->filename[0] : NULL);
-  dump = debug->count;
   
   if (no_color->count > 0) io_no_color = true;
   
@@ -274,9 +270,7 @@ int main(int argc, char *argv[]) {
     
     if (resolved_file) free(resolved_file);
   }
-  
-  if (dump) js_dump(js);
-  
+    
   js_destroy(js);
   arg_freetable(argtable, ARGTABLE_COUNT);
   

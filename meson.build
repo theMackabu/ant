@@ -195,7 +195,6 @@ config_h = configure_file(
 build_include = include_directories('.')
 
 add_project_arguments(
-  '-D JS_DUMP',
   '-D NO_EXECUTE_PERMISSION',
   '-Wno-unused-function',
   '-Wno-deprecated-declarations',
