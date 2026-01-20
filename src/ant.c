@@ -1585,10 +1585,7 @@ static size_t array_to_string(struct js *js, jsval_t obj, char *buf, size_t len)
 }
 
 static size_t strdate(struct js *js, jsval_t obj, char *buf, size_t len) {
-  jsoff_t time_off = lkp(js, obj, "__time", 6);
-  if (time_off == 0) return cpy(buf, len, "Invalid Date", 12);
-  
-  jsval_t time_val = resolveprop(js, mkval(T_PROP, time_off));
+  jsval_t time_val = js_get_slot(js, obj, SLOT_DATA);
   if (vtype(time_val) != T_NUM) return cpy(buf, len, "Invalid Date", 12);
   
   double timestamp_ms = tod(time_val);
@@ -1690,8 +1687,9 @@ static bool is_small_object(struct js *js, jsval_t obj, int *prop_count) {
 
 // todo: split into smaller functions
 static size_t strobj(struct js *js, jsval_t obj, char *buf, size_t len) {
-  jsoff_t time_off = lkp(js, obj, "__time", 6);
-  if (time_off != 0) return strdate(js, obj, buf, len);
+  jsval_t obj_proto = js_get_proto(js, obj);
+  jsval_t date_proto = js_get_ctor_proto(js, "Date", 4);
+  if (obj_proto == date_proto) return strdate(js, obj, buf, len);
   
   int ref = get_circular_ref(obj);
   if (ref) return ref > 0 ? (size_t) snprintf(buf, len, "[Circular *%d]", ref) : cpy(buf, len, "[Circular]", 10);
@@ -12950,9 +12948,7 @@ static jsval_t builtin_Date(struct js *js, jsval_t *args, int nargs) {
     timestamp_ms = (double)t * 1000.0 + ms;
   }
   
-  jsval_t time_key = js_mkstr(js, "__time", 6);
-  jsval_t time_val = tov(timestamp_ms);
-  setprop(js, date_obj, time_key, time_val);
+  js_set_slot(js, date_obj, SLOT_DATA, tov(timestamp_ms));
   
   return date_obj;
 }
@@ -12996,9 +12992,7 @@ static jsval_t builtin_Date_UTC(struct js *js, jsval_t *args, int nargs) {
 }
 
 static double date_get_time(struct js *js, jsval_t this_val) {
-  jsoff_t time_off = lkp(js, this_val, "__time", 6);
-  if (time_off == 0) return NAN;
-  jsval_t time_val = resolveprop(js, mkval(T_PROP, time_off));
+  jsval_t time_val = js_get_slot(js, this_val, SLOT_DATA);
   if (vtype(time_val) != T_NUM) return NAN;
   return tod(time_val);
 }
@@ -13216,8 +13210,7 @@ static jsval_t builtin_Date_getUTCDay(struct js *js, jsval_t *args, int nargs) {
 
 static void date_set_time(struct js *js, jsval_t date, double ms) {
   if (vtype(date) != T_OBJ) return;
-  jsval_t time_key = js_mkstr(js, "__time", 6);
-  setprop(js, date, time_key, tov(ms));
+  js_set_slot(js, date, SLOT_DATA, tov(ms));
 }
 
 static jsval_t builtin_Date_setTime(struct js *js, jsval_t *args, int nargs) {
