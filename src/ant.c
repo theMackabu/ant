@@ -6152,6 +6152,11 @@ static void setup_arguments(struct js *js, jsval_t scope, jsval_t *args, int nar
   
   arguments_obj = mkval(T_ARR, vdata(arguments_obj));
   setprop_interned(js, scope, INTERN_ARGUMENTS, 9, arguments_obj);
+  
+  if (!strict && vtype(js->current_func) == T_FUNC) {
+    jsval_t func_obj = mkval(T_OBJ, vdata(js->current_func));
+    setprop_interned(js, func_obj, INTERN_ARGUMENTS, 9, arguments_obj);
+  }
 }
 
 static jsval_t call_js_internal(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *bound_args, int bound_argc, jsval_t func_val) {
