@@ -112,6 +112,12 @@ static const uint8_t char_class_table[256] = {
   while (*p && *p != end_char) io_putc(*p++, stream); \
   if (*p == end_char) io_putc(*p++, stream); \
   io_puts(ANSI_RESET, stream); goto next;
+  
+#define EMIT_TYPE(tag, len, color) \
+  if (memcmp(p, tag, len) == 0) { \
+    io_puts(color, stream); io_puts(tag, stream); io_puts(ANSI_RESET, stream); \
+    p += len; goto next; \
+  }
 
 void print_value_colored(const char *str, FILE *stream) {
   if (io_no_color) { io_print(str, stream); return; }
@@ -167,6 +173,8 @@ lbrack:
     case 'G': if (memcmp(p + 2, "etter/Setter]", 13) == 0 || memcmp(p + 2, "etter]", 6) == 0) { EMIT_UNTIL(']', JSON_FUNC) } break;
     case 'S': if (memcmp(p + 2, "etter]", 6) == 0) { EMIT_UNTIL(']', JSON_FUNC) } break;
     case 'O': if (memcmp(p + 2, "bject: null prototype]", 22) == 0) { EMIT_UNTIL(']', JSON_TAG) } break;
+    case 'M': if (memcmp(p + 2, "odule]", 6) == 0) { EMIT_UNTIL(']', JSON_TAG) } break;
+    case 'P': if (memcmp(p + 2, "romise]", 7) == 0) { EMIT_UNTIL(']', JSON_TAG) } break;
   }
   io_puts(JSON_BRACE, stream); io_putc(*p++, stream); io_puts(ANSI_RESET, stream);
   array_depth++; is_key = false; goto next;
@@ -202,8 +210,8 @@ minus:
 
 lt:
   if (memcmp(p, "<ref", 4) == 0) { EMIT_UNTIL('>', JSON_REF) }
-  if (memcmp(p, "<pen", 4) == 0) { EMIT_UNTIL('>', JSON_REF) }
-  if (memcmp(p, "<rej", 4) == 0) { EMIT_UNTIL('>', JSON_REF) }
+  if (memcmp(p, "<pen", 4) == 0) { is_key = false; EMIT_UNTIL('>', ANSI_CYAN) }
+  if (memcmp(p, "<rej", 4) == 0) { is_key = false; EMIT_UNTIL('>', ANSI_CYAN) }
   io_puts(JSON_BRACE, stream); io_putc(*p++, stream); io_puts(ANSI_RESET, stream);
   goto next;
 
@@ -212,22 +220,12 @@ gt:
   goto next;
 
 alpha:
-  if (memcmp(p, "Object [", 8) == 0) {
-    io_puts(JSON_TAG, stream); io_puts("Object [", stream);
-    p += 8;
-    while (*p && *p != ']') io_putc(*p++, stream);
-    if (*p == ']') io_putc(*p++, stream);
-    io_puts(ANSI_RESET, stream);
-    goto next;
-  }
+  if (memcmp(p, "Object [", 8) == 0) { EMIT_UNTIL(']', JSON_TAG) }
+  if (memcmp(p, "Symbol(", 7) == 0) { EMIT_UNTIL(')', JSON_STRING) }
   
-  if (memcmp(p, "Promise { ", 10) == 0) {
-    io_puts(JSON_FUNC, stream); io_puts("Promise", stream);
-    io_puts(JSON_BRACE, stream); io_puts(" { ", stream);
-    p += 10;
-    
-    goto next;
-  }
+  EMIT_TYPE("Map", 3, JSON_STRING)
+  EMIT_TYPE("Set", 3, JSON_STRING)
+  EMIT_TYPE("ArrayBuffer", 11, JSON_STRING)
   
   KEYWORD("true", JSON_BOOL)
   KEYWORD("false", JSON_BOOL)

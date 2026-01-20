@@ -251,6 +251,7 @@ typedef struct promise_data_entry {
   jsval_t value;
   UT_array *handlers;
   uint32_t promise_id;
+  uint32_t trigger_pid;
   jsoff_t obj_offset;
   int state;
   UT_hash_handle hh;
@@ -2425,6 +2426,18 @@ static size_t tostr(struct js *js, jsval_t value, char *buf, size_t len) {
   }
 }
 
+static char *tostr_alloc(struct js *js, jsval_t value) {
+  size_t cap = 64;
+  char *buf = ANT_GC_MALLOC(cap);
+  size_t n = tostr(js, value, buf, cap);
+  if (n >= cap) {
+    ANT_GC_FREE(buf);
+    buf = ANT_GC_MALLOC(n + 1);
+    tostr(js, value, buf, n + 1);
+  }
+  return buf;
+}
+
 jsval_t js_tostring_val(struct js *js, jsval_t value) {
   uint8_t t = vtype(value);
   char *buf; size_t len, buflen;
@@ -2838,7 +2851,9 @@ static size_t strbigint(struct js *js, jsval_t value, char *buf, size_t len) {
 }
 
 static jsval_t builtin_BigInt(struct js *js, jsval_t *args, int nargs) {
+  if (vtype(js->new_target) != T_UNDEF) return js_mkerr_typed(js, JS_ERR_TYPE, "BigInt is not a constructor");
   if (nargs < 1) return mkbigint(js, "0", 1, false);
+  
   jsval_t arg = args[0];
   if (vtype(arg) == T_BIGINT) return arg;
   if (vtype(arg) == T_NUM) {
@@ -18383,20 +18398,25 @@ static size_t strpromise(struct js *js, jsval_t value, char *buf, size_t len) {
   uint32_t pid = get_promise_id(js, value);
   promise_data_entry_t *pd = get_promise_data(pid, false);
   
+  const char *content;
+  char *allocated = NULL;
+  
   if (!pd || pd->state == 0) {
-    return (size_t)snprintf(buf, len, "Promise { <pending> }");
-  }
+    content = "<pending>";
+  } else if (pd->state == 2) {
+    char *val = tostr_alloc(js, pd->value);
+    allocated = ANT_GC_MALLOC(strlen(val) + 12);
+    sprintf(allocated, "<rejected> %s", val);
+    ANT_GC_FREE(val);
+    content = allocated;
+  } else { content = allocated = tostr_alloc(js, pd->value); }
   
-  char value_buf[256];
-  size_t value_len = tostr(js, pd->value, value_buf, sizeof(value_buf));
-  if (value_len >= sizeof(value_buf)) value_len = sizeof(value_buf) - 1;
-  value_buf[value_len] = '\0';
+  size_t result = (pd && pd->trigger_pid)
+    ? (size_t)snprintf(buf, len, "Promise {\n  %s,\n  Symbol(async_id): %u,\n  Symbol(trigger_async_id): %u\n}", content, pid, pd->trigger_pid)
+    : (size_t)snprintf(buf, len, "Promise {\n  %s,\n  Symbol(async_id): %u\n}", content, pid);
   
-  if (pd->state == 1) {
-    return (size_t)snprintf(buf, len, "Promise { %s }", value_buf);
-  } else {
-    return (size_t)snprintf(buf, len, "Promise { <rejected> %s }", value_buf);
-  }
+  if (allocated) ANT_GC_FREE(allocated);
+  return result;
 }
 
 static promise_data_entry_t *get_promise_data(uint32_t promise_id, bool create) {
@@ -18407,6 +18427,7 @@ static promise_data_entry_t *get_promise_data(uint32_t promise_id, bool create) 
   
   entry = (promise_data_entry_t *)malloc(sizeof(promise_data_entry_t));
   entry->promise_id = promise_id;
+  entry->trigger_pid = 0;
   entry->obj_offset = 0;
   entry->state = 0;
   entry->value = js_mkundef();
@@ -18594,11 +18615,17 @@ static jsval_t builtin_Promise_reject(struct js *js, jsval_t *args, int nargs) {
 static jsval_t builtin_promise_then(struct js *js, jsval_t *args, int nargs) {
   jsval_t p = js->this_val;
   if (vtype(p) != T_PROMISE) return js_mkerr(js, "not a promise");
+  
   jsval_t nextP = mkpromise(js);
   jsval_t onFulfilled = nargs > 0 ? args[0] : js_mkundef();
   jsval_t onRejected = nargs > 1 ? args[1] : js_mkundef();
   
   uint32_t pid = get_promise_id(js, p);
+  uint32_t next_pid = get_promise_id(js, nextP);
+  
+  promise_data_entry_t *next_pd = get_promise_data(next_pid, false);
+  if (next_pd) next_pd->trigger_pid = pid;
+  
   promise_data_entry_t *pd = get_promise_data(pid, false);
   if (pd) {
     promise_handler_t h = { onFulfilled, onRejected, nextP };

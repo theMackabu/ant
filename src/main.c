@@ -56,6 +56,7 @@ static void eval_code(struct js *js, struct arg_str *eval, struct arg_lit *print
   js_set(js, js_glob(js), "__filename", js_mkstr(js, "[eval]", 6));
   
   jsval_t result = js_eval(js, script, len);
+  js_run_event_loop(js);
   
   if (js_type(result) == JS_ERR) {
     fprintf(stderr, "%s\n", js_str(js, result));
@@ -69,8 +70,6 @@ static void eval_code(struct js *js, struct arg_str *eval, struct arg_lit *print
       if (str && strcmp(str, "undefined") != 0) { print_value_colored(str, stdout); printf("\n"); }
     }
   }
-  
-  js_run_event_loop(js);
 }
 
 static char *read_file(const char *filename, size_t *len) {
