@@ -179,9 +179,11 @@ static jsval_t js_arraybuffer_constructor(struct js *js, jsval_t *args, int narg
   }
   
   jsval_t obj = js_mkobj(js);
-  js_set(js, obj, "_arraybuffer_data", js_mknum((double)(uintptr_t)data));
-  js_set(js, obj, "byteLength", js_mknum((double)length));
-  js_set(js, obj, "slice", js_mkfun(js_arraybuffer_slice));
+  jsval_t proto = js_get_ctor_proto(js, "ArrayBuffer", 11);
+  
+  if (js_type(proto) == JS_OBJ) js_set_proto(js, obj, proto);
+  js_set_slot(js, obj, SLOT_BUFFER, ANT_PTR(data));
+  js_set(js, obj, "byteLength", js_mknum(length));
   
   return obj;
 }
@@ -189,7 +191,7 @@ static jsval_t js_arraybuffer_constructor(struct js *js, jsval_t *args, int narg
 // ArrayBuffer.prototype.slice(begin, end)
 static jsval_t js_arraybuffer_slice(struct js *js, jsval_t *args, int nargs) {
   jsval_t this_val = js_getthis(js);
-  jsval_t data_val = js_get(js, this_val, "_arraybuffer_data");
+  jsval_t data_val = js_get_slot(js, this_val, SLOT_BUFFER);
   
   if (js_type(data_val) != JS_NUM) {
     return js_mkerr(js, "Not an ArrayBuffer");
@@ -217,9 +219,11 @@ static jsval_t js_arraybuffer_slice(struct js *js, jsval_t *args, int nargs) {
   memcpy(new_data->data, data->data + begin, new_length);
   
   jsval_t new_obj = js_mkobj(js);
-  js_set(js, new_obj, "_arraybuffer_data", js_mknum((double)(uintptr_t)new_data));
-  js_set(js, new_obj, "byteLength", js_mknum((double)new_length));
-  js_set(js, new_obj, "slice", js_mkfun(js_arraybuffer_slice));
+  jsval_t proto = js_get_ctor_proto(js, "ArrayBuffer", 11);
+  
+  if (js_type(proto) == JS_OBJ) js_set_proto(js, new_obj, proto);
+  js_set_slot(js, new_obj, SLOT_BUFFER, ANT_PTR(new_data));
+  js_set(js, new_obj, "byteLength", js_mknum(new_length));
   
   return new_obj;
 }
@@ -343,7 +347,7 @@ static jsval_t js_typedarray_constructor(struct js *js, jsval_t *args, int nargs
     return create_typed_array(js, type, buffer, 0, length, type_name);
   }
   
-  jsval_t buffer_data_val = js_get(js, args[0], "_arraybuffer_data");
+  jsval_t buffer_data_val = js_get_slot(js, args[0], SLOT_BUFFER);
   if (js_type(buffer_data_val) == JS_NUM) {
     ArrayBufferData *buffer = (ArrayBufferData *)(uintptr_t)js_getnum(buffer_data_val);
     size_t byte_offset = 0;
@@ -551,7 +555,7 @@ static jsval_t js_dataview_constructor(struct js *js, jsval_t *args, int nargs) 
     return js_mkerr(js, "DataView requires an ArrayBuffer");
   }
   
-  jsval_t buffer_data_val = js_get(js, args[0], "_arraybuffer_data");
+  jsval_t buffer_data_val = js_get_slot(js, args[0], SLOT_BUFFER);
   if (js_type(buffer_data_val) != JS_NUM) {
     return js_mkerr(js, "First argument must be an ArrayBuffer");
   }
@@ -908,10 +912,11 @@ static jsval_t js_sharedarraybuffer_constructor(struct js *js, jsval_t *args, in
   }
   
   jsval_t obj = js_mkobj(js);
-  js_set(js, obj, "_arraybuffer_data", js_mknum((double)(uintptr_t)data));
-  js_set(js, obj, "_shared", js_mktrue());
-  js_set(js, obj, "byteLength", js_mknum((double)length));
-  js_set(js, obj, "slice", js_mkfun(js_arraybuffer_slice));
+  jsval_t proto = js_get_ctor_proto(js, "SharedArrayBuffer", 17);
+  
+  if (js_type(proto) == JS_OBJ) js_set_proto(js, obj, proto);
+  js_set_slot(js, obj, SLOT_BUFFER, ANT_PTR(data));
+  js_set(js, obj, "byteLength", js_mknum(length));
   
   return obj;
 }
@@ -922,7 +927,10 @@ void init_buffer_module() {
   
   jsval_t arraybuffer_ctor_obj = js_mkobj(js);
   jsval_t arraybuffer_proto = js_mkobj(js);
+  
   js_set(js, arraybuffer_proto, "slice", js_mkfun(js_arraybuffer_slice));
+  js_set(js, arraybuffer_proto, get_toStringTag_sym_key(), js_mkstr(js, "ArrayBuffer", 11));
+  
   js_set_slot(js, arraybuffer_ctor_obj, SLOT_CFUNC, js_mkfun(js_arraybuffer_constructor));
   js_setprop(js, arraybuffer_ctor_obj, js_mkstr(js, "prototype", 9), arraybuffer_proto);
   js_set(js, glob, "ArrayBuffer", js_obj_to_func(arraybuffer_ctor_obj));
@@ -961,11 +969,15 @@ void init_buffer_module() {
   js_set(js, dataview_constructor, "prototype", dataview_proto);
   js_set(js, glob, "DataView", dataview_constructor);
   
-  jsval_t sharedarraybuffer_constructor = js_mkfun(js_sharedarraybuffer_constructor);
+  jsval_t sharedarraybuffer_ctor_obj = js_mkobj(js);
   jsval_t sharedarraybuffer_proto = js_mkobj(js);
+  
   js_set(js, sharedarraybuffer_proto, "slice", js_mkfun(js_arraybuffer_slice));
-  js_set(js, sharedarraybuffer_constructor, "prototype", sharedarraybuffer_proto);
-  js_set(js, glob, "SharedArrayBuffer", sharedarraybuffer_constructor);
+  js_set(js, sharedarraybuffer_proto, get_toStringTag_sym_key(), js_mkstr(js, "SharedArrayBuffer", 17));
+  
+  js_set_slot(js, sharedarraybuffer_ctor_obj, SLOT_CFUNC, js_mkfun(js_sharedarraybuffer_constructor));
+  js_setprop(js, sharedarraybuffer_ctor_obj, js_mkstr(js, "prototype", 9), sharedarraybuffer_proto);
+  js_set(js, glob, "SharedArrayBuffer", js_obj_to_func(sharedarraybuffer_ctor_obj));
   
   jsval_t buffer_obj = js_mkobj(js);
   js_set(js, buffer_obj, "from", js_mkfun(js_buffer_from));

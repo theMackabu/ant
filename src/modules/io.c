@@ -28,6 +28,7 @@ bool io_no_color = false;
 #define JSON_FUNC "\x1b[36m"
 #define JSON_TAG "\x1b[34m"
 #define JSON_REF "\x1b[90m"
+#define JSON_WHITE "\x1b[97m"
 
 static void io_putc(int c, FILE *stream) { fputc(c, stream); }
 static void io_puts(const char *s, FILE *stream) { fputs(s, stream); }
@@ -114,7 +115,7 @@ static const uint8_t char_class_table[256] = {
   io_puts(ANSI_RESET, stream); goto next;
   
 #define EMIT_TYPE(tag, len, color) \
-  if (memcmp(p, tag, len) == 0) { \
+  if (!(is_key && brace_depth > 0) && memcmp(p, tag, len) == 0) { \
     io_puts(color, stream); io_puts(tag, stream); io_puts(ANSI_RESET, stream); \
     p += len; goto next; \
   }
@@ -167,6 +168,7 @@ rbrace:
 lbrack:
   switch (p[1]) {
     case 'A': if (memcmp(p + 2, "syncFunction", 7) == 0) { EMIT_UNTIL(']', JSON_FUNC) } break;
+    case 'b': if (memcmp(p + 2, "yteLength]", 10) == 0) { EMIT_UNTIL(']', JSON_STRING) } break;
     case 'F': if (memcmp(p + 2, "unction", 7) == 0) { EMIT_UNTIL(']', JSON_FUNC) } break;
     case 'n': if (memcmp(p + 2, "ative code]", 11) == 0) { EMIT_UNTIL(']', JSON_FUNC) } break;
     case 'C': if (memcmp(p + 2, "ircular", 7) == 0) { EMIT_UNTIL(']', JSON_REF) } break;
@@ -174,6 +176,7 @@ lbrack:
     case 'S': if (memcmp(p + 2, "etter]", 6) == 0) { EMIT_UNTIL(']', JSON_FUNC) } break;
     case 'O': if (memcmp(p + 2, "bject: null prototype]", 22) == 0) { EMIT_UNTIL(']', JSON_TAG) } break;
     case 'M': if (memcmp(p + 2, "odule]", 6) == 0) { EMIT_UNTIL(']', JSON_TAG) } break;
+    case 'U': if (memcmp(p + 2, "int8Contents]", 13) == 0) { EMIT_UNTIL(']', JSON_FUNC) } break;
     case 'P': if (memcmp(p + 2, "romise]", 7) == 0) { EMIT_UNTIL(']', JSON_TAG) } break;
   }
   io_puts(JSON_BRACE, stream); io_putc(*p++, stream); io_puts(ANSI_RESET, stream);
@@ -212,6 +215,16 @@ lt:
   if (memcmp(p, "<ref", 4) == 0) { EMIT_UNTIL('>', JSON_REF) }
   if (memcmp(p, "<pen", 4) == 0) { is_key = false; EMIT_UNTIL('>', ANSI_CYAN) }
   if (memcmp(p, "<rej", 4) == 0) { is_key = false; EMIT_UNTIL('>', ANSI_CYAN) }
+  
+  if (p[1] == '>' || (isxdigit((unsigned char)p[1]) && isxdigit((unsigned char)p[2]))) {
+    io_puts(JSON_BRACE, stream); io_putc(*p++, stream);
+    io_puts(JSON_WHITE, stream);
+    while (*p && *p != '>') io_putc(*p++, stream);
+    io_puts(ANSI_RESET, stream);
+    if (*p == '>') { io_puts(JSON_BRACE, stream); io_putc(*p++, stream); io_puts(ANSI_RESET, stream); }
+    goto next;
+  }
+  
   io_puts(JSON_BRACE, stream); io_putc(*p++, stream); io_puts(ANSI_RESET, stream);
   goto next;
 
@@ -225,8 +238,7 @@ alpha:
   
   EMIT_TYPE("Map", 3, JSON_STRING)
   EMIT_TYPE("Set", 3, JSON_STRING)
-  EMIT_TYPE("ArrayBuffer", 11, JSON_STRING)
-  
+
   KEYWORD("true", JSON_BOOL)
   KEYWORD("false", JSON_BOOL)
   KEYWORD("null", JSON_NULL)

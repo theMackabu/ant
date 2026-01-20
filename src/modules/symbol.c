@@ -189,13 +189,9 @@ void init_symbol_module(void) {
   
   jsval_t map_ctor = js_get(js, js_glob(js), "Map");
   jsval_t map_proto = js_get(js, map_ctor, "prototype");
-  if (js_type(map_proto) == JS_OBJ) {
-    js_set(js, map_proto, g_toStringTag_sym_key, js_mkstr(js, "Map", 3));
-  }
+  js_set(js, map_proto, g_toStringTag_sym_key, js_mkstr(js, "Map", 3));
   
   jsval_t set_ctor = js_get(js, js_glob(js), "Set");
   jsval_t set_proto = js_get(js, set_ctor, "prototype");
-  if (js_type(set_proto) == JS_OBJ) {
-    js_set(js, set_proto, g_toStringTag_sym_key, js_mkstr(js, "Set", 3));
-  }
+  js_set(js, set_proto, g_toStringTag_sym_key, js_mkstr(js, "Set", 3));
 }

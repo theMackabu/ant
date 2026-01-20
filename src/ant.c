@@ -48,6 +48,7 @@
 #include "modules/child_process.h"
 #include "modules/readline.h"
 #include "modules/json.h"
+#include "modules/buffer.h"
 #include "esm/remote.h"
 
 #define CORO_MALLOC(size) calloc(1, size)
@@ -1703,7 +1704,7 @@ static size_t strobj(struct js *js, jsval_t obj, char *buf, size_t len) {
   
   const char *tostring_tag_key = get_toStringTag_sym_key();
   jsoff_t tag_off = lkp_proto(js, obj, tostring_tag_key, strlen(tostring_tag_key));
-  bool is_map = false, is_set = false;
+  bool is_map = false, is_set = false, is_arraybuffer = false;
   jsoff_t tlen = 0, toff = 0;
   const char *tag_str = NULL;
   int prop_count = 0;
@@ -1718,6 +1719,33 @@ static size_t strobj(struct js *js, jsval_t obj, char *buf, size_t len) {
   tag_str = (const char *) &js->mem[toff];
   is_map = (tlen == 3 && memcmp(tag_str, "Map", 3) == 0);
   is_set = (tlen == 3 && memcmp(tag_str, "Set", 3) == 0);
+  is_arraybuffer = (tlen >= 11 && memcmp(tag_str + tlen - 11, "ArrayBuffer", 11) == 0);
+  
+  if (is_arraybuffer) {
+    jsval_t buf_val = js_get_slot(js, obj, SLOT_BUFFER);
+    if (vtype(buf_val) == T_NUM) {
+      ArrayBufferData *ab_data = (ArrayBufferData *)(uintptr_t)tod(buf_val);
+      size_t bytelen = ab_data ? ab_data->length : 0;
+      
+      n += cpy(buf + n, len - n, tag_str, tlen);
+      n += cpy(buf + n, len - n, " {\n", 3);
+      n += cpy(buf + n, len - n, "  [Uint8Contents]: <", 20);
+      
+      if (ab_data && ab_data->data && bytelen > 0) {
+        for (size_t i = 0; i < bytelen; i++) {
+          if (i > 0) n += cpy(buf + n, len - n, " ", 1);
+          n += (size_t) snprintf(buf + n, len - n, "%02x", ab_data->data[i]);
+        }
+      }
+      
+      n += cpy(buf + n, len - n, ">,\n", 3);
+      n += cpy(buf + n, len - n, "  [byteLength]: ", 16);
+      n += (size_t) snprintf(buf + n, len - n, "%zu", bytelen);
+      n += cpy(buf + n, len - n, "\n}", 2);
+      pop_stringify();
+      return n;
+    }
+  }
   
   if (is_map) {
     jsval_t map_val = js_get_slot(js, obj, SLOT_MAP);

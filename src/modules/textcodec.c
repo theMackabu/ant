@@ -100,7 +100,7 @@ static jsval_t js_textdecoder_decode(struct js *js, jsval_t *args, int nargs) {
     return js_mkstr(js, (const char *)data, len);
   }
   
-  jsval_t ab_data_val = js_get(js, args[0], "_arraybuffer_data");
+  jsval_t ab_data_val = js_get_slot(js, args[0], SLOT_BUFFER);
   if (js_type(ab_data_val) == JS_NUM) {
     ArrayBufferData *ab_data = (ArrayBufferData *)(uintptr_t)js_getnum(ab_data_val);
     if (!ab_data || !ab_data->data) return js_mkstr(js, "", 0);    
