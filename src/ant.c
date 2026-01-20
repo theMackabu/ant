@@ -206,6 +206,7 @@ typedef struct ant_library {
 } ant_library_t;
 
 static const char *INTERN_LENGTH = NULL;
+static const char *INTERN_BUFFER = NULL;
 static const char *INTERN_PROTOTYPE = NULL;
 static const char *INTERN_CONSTRUCTOR = NULL;
 static const char *INTERN_NAME = NULL;
@@ -1687,6 +1688,7 @@ static bool is_small_object(struct js *js, jsval_t obj, int *prop_count) {
   return count <= 4 && !has_nested;
 }
 
+// todo: split into smaller functions
 static size_t strobj(struct js *js, jsval_t obj, char *buf, size_t len) {
   jsoff_t time_off = lkp(js, obj, "__time", 6);
   if (time_off != 0) return strdate(js, obj, buf, len);
@@ -1721,6 +1723,86 @@ static size_t strobj(struct js *js, jsval_t obj, char *buf, size_t len) {
   is_set = (tlen == 3 && memcmp(tag_str, "Set", 3) == 0);
   is_arraybuffer = (tlen >= 11 && memcmp(tag_str + tlen - 11, "ArrayBuffer", 11) == 0);
   
+  jsval_t ta_slot = js_get_slot(js, obj, SLOT_BUFFER);
+  if (vtype(ta_slot) == T_TYPEDARRAY) {
+    TypedArrayData *ta = (TypedArrayData *)vdata(ta_slot);
+    if (ta && ta->buffer) {
+      static const char *ta_type_names[] = {
+        "Int8Array", "Uint8Array", "Uint8ClampedArray",
+        "Int16Array", "Uint16Array", "Int32Array", "Uint32Array",
+        "Float32Array", "Float64Array", "BigInt64Array", "BigUint64Array"
+      };
+      
+      const char *type_name = NULL;
+      size_t type_len = 0;
+      
+      jsval_t proto = js_get_proto(js, obj);
+      jsval_t buffer_proto = get_ctor_proto(js, "Buffer", 6);
+      if (vtype(proto) == T_OBJ && vtype(buffer_proto) == T_OBJ && vdata(proto) == vdata(buffer_proto)) {
+        type_name = "Buffer";
+        type_len = 6;
+      } else if (ta->type <= TYPED_ARRAY_BIGUINT64) {
+        type_name = ta_type_names[ta->type];
+        type_len = strlen(type_name);
+      } else {
+        type_name = "TypedArray";
+        type_len = 10;
+      }
+      
+      n += cpy(buf + n, len - n, type_name, type_len);
+      n += (size_t) snprintf(buf + n, len - n, "(%zu) ", ta->length);
+      n += cpy(buf + n, len - n, "[ ", 2);
+      
+      uint8_t *data = ta->buffer->data + ta->byte_offset;
+      
+      for (size_t i = 0; i < ta->length && i < 100; i++) {
+        if (i > 0) n += cpy(buf + n, len - n, ", ", 2);
+        
+        switch (ta->type) {
+          case TYPED_ARRAY_INT8:
+            n += (size_t) snprintf(buf + n, len - n, "%d", (int)((int8_t*)data)[i]);
+            break;
+          case TYPED_ARRAY_UINT8:
+          case TYPED_ARRAY_UINT8_CLAMPED:
+            n += (size_t) snprintf(buf + n, len - n, "%u", (unsigned)data[i]);
+            break;
+          case TYPED_ARRAY_INT16:
+            n += (size_t) snprintf(buf + n, len - n, "%d", (int)((int16_t*)data)[i]);
+            break;
+          case TYPED_ARRAY_UINT16:
+            n += (size_t) snprintf(buf + n, len - n, "%u", (unsigned)((uint16_t*)data)[i]);
+            break;
+          case TYPED_ARRAY_INT32:
+            n += (size_t) snprintf(buf + n, len - n, "%d", ((int32_t*)data)[i]);
+            break;
+          case TYPED_ARRAY_UINT32:
+            n += (size_t) snprintf(buf + n, len - n, "%u", ((uint32_t*)data)[i]);
+            break;
+          case TYPED_ARRAY_FLOAT32:
+            n += (size_t) snprintf(buf + n, len - n, "%g", (double)((float*)data)[i]);
+            break;
+          case TYPED_ARRAY_FLOAT64:
+            n += (size_t) snprintf(buf + n, len - n, "%g", ((double*)data)[i]);
+            break;
+          case TYPED_ARRAY_BIGINT64:
+            n += (size_t) snprintf(buf + n, len - n, "%lldn", (long long)((int64_t*)data)[i]);
+            break;
+          case TYPED_ARRAY_BIGUINT64:
+            n += (size_t) snprintf(buf + n, len - n, "%llun", (unsigned long long)((uint64_t*)data)[i]);
+            break;
+          default:
+            n += (size_t) snprintf(buf + n, len - n, "%u", (unsigned)data[i]);
+            break;
+        }
+      }
+      
+      if (ta->length > 100) n += cpy(buf + n, len - n, ", ...", 5);
+      n += cpy(buf + n, len - n, " ]", 2);
+      pop_stringify();
+      return n;
+    }
+  }
+  
   if (is_arraybuffer) {
     jsval_t buf_val = js_get_slot(js, obj, SLOT_BUFFER);
     if (vtype(buf_val) == T_NUM) {
@@ -1744,6 +1826,39 @@ static size_t strobj(struct js *js, jsval_t obj, char *buf, size_t len) {
       n += cpy(buf + n, len - n, "\n}", 2);
       pop_stringify();
       return n;
+    }
+  }
+  
+  bool is_dataview = (tlen == 8 && memcmp(tag_str, "DataView", 8) == 0);
+  if (is_dataview) {
+    jsval_t dv_data_val = js_get_slot(js, obj, SLOT_DATA);
+    if (js_type(dv_data_val) == JS_NUM) {
+      DataViewData *dv = (DataViewData *)(uintptr_t)tod(dv_data_val);
+      if (dv && dv->buffer) {
+        n += cpy(buf + n, len - n, "DataView {\n", 11);
+        n += cpy(buf + n, len - n, "  [byteLength]: ", 16);
+        n += (size_t) snprintf(buf + n, len - n, "%zu", dv->byte_length);
+        n += cpy(buf + n, len - n, ",\n", 2);
+        n += cpy(buf + n, len - n, "  [byteOffset]: ", 16);
+        n += (size_t) snprintf(buf + n, len - n, "%zu", dv->byte_offset);
+        n += cpy(buf + n, len - n, ",\n", 2);
+        n += cpy(buf + n, len - n, "  [buffer]: ArrayBuffer {\n", 26);
+        n += cpy(buf + n, len - n, "    [Uint8Contents]: <", 22);
+        
+        if (dv->buffer->data && dv->buffer->length > 0) {
+          for (size_t i = 0; i < dv->buffer->length; i++) {
+            if (i > 0) n += cpy(buf + n, len - n, " ", 1);
+            n += (size_t) snprintf(buf + n, len - n, "%02x", dv->buffer->data[i]);
+          }
+        }
+        
+        n += cpy(buf + n, len - n, ">,\n", 3);
+        n += cpy(buf + n, len - n, "    [byteLength]: ", 18);
+        n += (size_t) snprintf(buf + n, len - n, "%zu", dv->buffer->length);
+        n += cpy(buf + n, len - n, "\n  }\n}", 6);
+        pop_stringify();
+        return n;
+      }
     }
   }
   
@@ -3085,6 +3200,7 @@ static inline bool is_nonconfig_prop(struct js *js, jsoff_t propoff) {
 static void intern_init(void) {
   if (INTERN_LENGTH) return;
   INTERN_LENGTH = intern_string("length", 6);
+  INTERN_BUFFER = intern_string("buffer", 6);
   INTERN_PROTOTYPE = intern_string("prototype", 9);
   INTERN_CONSTRUCTOR = intern_string("constructor", 11);
   INTERN_NAME = intern_string("name", 4);

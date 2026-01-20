@@ -318,7 +318,7 @@ static jsval_t child_on(struct js *js, jsval_t *args, int nargs) {
   if (js_type(args[0]) != JS_STR) return js_mkerr(js, "Event name must be a string");
   if (js_type(args[1]) != JS_FUNC) return js_mkerr(js, "Callback must be a function");
   
-  jsval_t cp_ptr = js_get(js, this_obj, "_cp_ptr");
+  jsval_t cp_ptr = js_get_slot(js, this_obj, SLOT_DATA);
   if (js_type(cp_ptr) == JS_UNDEF) return js_mkerr(js, "Invalid child process object");
   
   child_process_t *cp = (child_process_t *)(uintptr_t)js_getnum(cp_ptr);
@@ -347,7 +347,7 @@ static jsval_t child_once(struct js *js, jsval_t *args, int nargs) {
   if (js_type(args[0]) != JS_STR) return js_mkerr(js, "Event name must be a string");
   if (js_type(args[1]) != JS_FUNC) return js_mkerr(js, "Callback must be a function");
   
-  jsval_t cp_ptr = js_get(js, this_obj, "_cp_ptr");
+  jsval_t cp_ptr = js_get_slot(js, this_obj, SLOT_DATA);
   if (js_type(cp_ptr) == JS_UNDEF) return js_mkerr(js, "Invalid child process object");
   
   child_process_t *cp = (child_process_t *)(uintptr_t)js_getnum(cp_ptr);
@@ -373,7 +373,7 @@ static jsval_t child_once(struct js *js, jsval_t *args, int nargs) {
 static jsval_t child_kill(struct js *js, jsval_t *args, int nargs) {
   jsval_t this_obj = js_getthis(js);
   
-  jsval_t cp_ptr = js_get(js, this_obj, "_cp_ptr");
+  jsval_t cp_ptr = js_get_slot(js, this_obj, SLOT_DATA);
   if (js_type(cp_ptr) == JS_UNDEF) return js_mkfalse();
   
   child_process_t *cp = (child_process_t *)(uintptr_t)js_getnum(cp_ptr);
@@ -402,7 +402,7 @@ static jsval_t child_write(struct js *js, jsval_t *args, int nargs) {
   jsval_t this_obj = js_getthis(js);
   if (nargs < 1) return js_mkerr(js, "write() requires data argument");
   
-  jsval_t cp_ptr = js_get(js, this_obj, "_cp_ptr");
+  jsval_t cp_ptr = js_get_slot(js, this_obj, SLOT_DATA);
   if (js_type(cp_ptr) == JS_UNDEF) return js_mkerr(js, "Invalid child process object");
   
   child_process_t *cp = (child_process_t *)(uintptr_t)js_getnum(cp_ptr);
@@ -433,7 +433,7 @@ static jsval_t child_end(struct js *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
   jsval_t this_obj = js_getthis(js);
   
-  jsval_t cp_ptr = js_get(js, this_obj, "_cp_ptr");
+  jsval_t cp_ptr = js_get_slot(js, this_obj, SLOT_DATA);
   if (js_type(cp_ptr) == JS_UNDEF) return js_mkundef();
   
   child_process_t *cp = (child_process_t *)(uintptr_t)js_getnum(cp_ptr);
@@ -448,7 +448,7 @@ static jsval_t child_end(struct js *js, jsval_t *args, int nargs) {
 static jsval_t create_child_object(struct js *js, child_process_t *cp) {
   jsval_t obj = js_mkobj(js);
   
-  js_set(js, obj, "_cp_ptr", js_mknum((double)(uintptr_t)cp));
+  js_set_slot(js, obj, SLOT_DATA, ANT_PTR(cp));
   js_set(js, obj, "pid", js_mknum((double)cp->process.pid));
   js_set(js, obj, "exitCode", js_mknull());
   js_set(js, obj, "signalCode", js_mknull());

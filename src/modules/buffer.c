@@ -307,7 +307,22 @@ static bool typedarray_index_setter(struct js *js, jsval_t obj, const char *key,
   S_DONE:    return true;
 }
 
-static jsval_t create_typed_array(struct js *js, TypedArrayType type, ArrayBufferData *buffer, size_t byte_offset, size_t length, const char *type_name) {
+static jsval_t create_arraybuffer_obj(struct js *js, ArrayBufferData *buffer) {
+  jsval_t ab_obj = js_mkobj(js);
+  jsval_t ab_proto = js_get_ctor_proto(js, "ArrayBuffer", 11);
+  if (js_type(ab_proto) == JS_OBJ) js_set_proto(js, ab_obj, ab_proto);
+  
+  js_set_slot(js, ab_obj, SLOT_BUFFER, js_mknum((double)(uintptr_t)buffer));
+  js_set(js, ab_obj, "byteLength", js_mknum((double)buffer->length));
+  buffer->ref_count++;
+  
+  return ab_obj;
+}
+
+static jsval_t create_typed_array_with_buffer(
+  struct js *js, TypedArrayType type, ArrayBufferData *buffer,
+  size_t byte_offset, size_t length, const char *type_name, jsval_t arraybuffer_obj
+) {
   TypedArrayData *ta_data = ta_arena_alloc(sizeof(TypedArrayData));
   if (!ta_data) return js_mkerr(js, "Failed to allocate TypedArray");
   
@@ -328,11 +343,20 @@ static jsval_t create_typed_array(struct js *js, TypedArrayType type, ArrayBuffe
   js_set(js, obj, "byteLength", js_mknum((double)(length * element_size)));
   js_set(js, obj, "byteOffset", js_mknum((double)byte_offset));
   js_set(js, obj, "BYTES_PER_ELEMENT", js_mknum((double)element_size));
+  js_set(js, obj, "buffer", arraybuffer_obj);
   
   js_set_getter(js, obj, typedarray_index_getter);
   js_set_setter(js, obj, typedarray_index_setter);
   
   return obj;
+}
+
+static jsval_t create_typed_array(
+  struct js *js, TypedArrayType type, ArrayBufferData *buffer,
+  size_t byte_offset, size_t length, const char *type_name
+) {
+  jsval_t ab_obj = create_arraybuffer_obj(js, buffer);
+  return create_typed_array_with_buffer(js, type, buffer, byte_offset, length, type_name, ab_obj);
 }
 
 static jsval_t js_typedarray_constructor(struct js *js, jsval_t *args, int nargs, TypedArrayType type, const char *type_name) {
@@ -366,7 +390,7 @@ static jsval_t js_typedarray_constructor(struct js *js, jsval_t *args, int nargs
       length = (buffer->length - byte_offset) / element_size;
     }
     
-    return create_typed_array(js, type, buffer, byte_offset, length, type_name);
+    return create_typed_array_with_buffer(js, type, buffer, byte_offset, length, type_name, args[0]);
   }
   
   int arg_type = js_type(args[0]);
@@ -588,9 +612,12 @@ static jsval_t js_dataview_constructor(struct js *js, jsval_t *args, int nargs) 
   jsval_t proto = js_get_ctor_proto(js, "DataView", 8);
   if (js_type(proto) == JS_OBJ) js_set_proto(js, obj, proto);
   
-  js_set_slot(js, obj, SLOT_DATA, js_mknum((double)(uintptr_t)dv_data));
+  js_set_slot(js, obj, SLOT_DATA, ANT_PTR(dv_data));
+  js_mkprop_fast(js, obj, "buffer", 6, args[0]);
+  js_set_descriptor(js, obj, "buffer", 6, 0);
+
   js_set(js, obj, "byteLength", js_mknum((double)byte_length));
-  js_set(js, obj, "byteOffset", js_mknum((double)byte_offset));
+  js_set(js, obj, "byteOffset", js_mknum((double)byte_offset)); 
   
   return obj;
 }
@@ -930,13 +957,13 @@ static uint8_t *hex_decode(const char *data, size_t len, size_t *out_len) {
   if (len % 2 != 0) return NULL;
   
   size_t decoded_len = len / 2;
-  uint8_t *decoded = ANT_GC_MALLOC(decoded_len);
+  uint8_t *decoded = malloc(decoded_len);
   if (!decoded) return NULL;
   
   for (size_t i = 0; i < decoded_len; i++) {
     unsigned int byte;
     if (sscanf(data + i * 2, "%2x", &byte) != 1) {
-      ANT_GC_FREE(decoded); return NULL;
+      free(decoded); return NULL;
     }
     decoded[i] = (uint8_t)byte;
   }

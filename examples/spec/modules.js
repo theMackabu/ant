@@ -22,7 +22,7 @@ test('Atomics toStringTag', Object.prototype.toString.call(Atomics), '[object At
 test('console toStringTag', Object.prototype.toString.call(console), '[object console]');
 test('JSON toStringTag', Object.prototype.toString.call(JSON), '[object JSON]');
 test('process toStringTag', Object.prototype.toString.call(process), '[object process]');
-test('Buffer toStringTag', Object.prototype.toString.call(Buffer), '[object Buffer]');
+test('Buffer toStringTag', Object.prototype.toString.call(Buffer.alloc(0)), '[object Buffer]');
 test('crypto toStringTag', Object.prototype.toString.call(crypto), '[object Crypto]');
 
 test('path toStringTag', Object.prototype.toString.call(path), '[object path]');
