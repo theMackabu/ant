@@ -14647,6 +14647,7 @@ static jsval_t builtin_object_toString(struct js *js, jsval_t *args, int nargs) 
     jsval_t check_obj = (t == T_FUNC) ? mkval(T_OBJ, vdata(obj)) : obj;
     const char *tostr_tag_key = get_toStringTag_sym_key();
     jsoff_t tag_off = lkp(js, check_obj, tostr_tag_key, strlen(tostr_tag_key));
+    if (tag_off == 0) tag_off = lkp_proto(js, check_obj, tostr_tag_key, strlen(tostr_tag_key));
     if (tag_off != 0) {
       jsval_t tag_val = resolveprop(js, mkval(T_PROP, tag_off));
       if (vtype(tag_val) == T_STR) {

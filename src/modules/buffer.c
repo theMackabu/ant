@@ -328,9 +328,6 @@ static jsval_t create_typed_array(struct js *js, TypedArrayType type, ArrayBuffe
   js_set(js, obj, "byteLength", js_mknum((double)(length * element_size)));
   js_set(js, obj, "byteOffset", js_mknum((double)byte_offset));
   js_set(js, obj, "BYTES_PER_ELEMENT", js_mknum((double)element_size));
-  js_set(js, obj, "slice", js_mkfun(js_typedarray_slice));
-  js_set(js, obj, "subarray", js_mkfun(js_typedarray_subarray));
-  js_set(js, obj, "fill", js_mkfun(js_typedarray_fill));
   
   js_set_getter(js, obj, typedarray_index_getter);
   js_set_setter(js, obj, typedarray_index_setter);
@@ -929,25 +926,107 @@ static jsval_t js_dataview_setFloat64(struct js *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-// Buffer.from(array/string/buffer)
-static jsval_t js_buffer_from(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) {
-    return js_mkerr(js, "Buffer.from requires at least one argument");
+static uint8_t *hex_decode(const char *data, size_t len, size_t *out_len) {
+  if (len % 2 != 0) return NULL;
+  
+  size_t decoded_len = len / 2;
+  uint8_t *decoded = ANT_GC_MALLOC(decoded_len);
+  if (!decoded) return NULL;
+  
+  for (size_t i = 0; i < decoded_len; i++) {
+    unsigned int byte;
+    if (sscanf(data + i * 2, "%2x", &byte) != 1) {
+      ANT_GC_FREE(decoded); return NULL;
+    }
+    decoded[i] = (uint8_t)byte;
   }
+  
+  *out_len = decoded_len;
+  return decoded;
+}
+
+typedef enum {
+  ENC_UTF8,
+  ENC_HEX,
+  ENC_BASE64,
+  ENC_ASCII,
+  ENC_LATIN1,
+  ENC_UCS2,
+  ENC_UNKNOWN
+} BufferEncoding;
+
+static BufferEncoding parse_encoding(const char *enc, size_t len) {
+  if (len == 3 && strncasecmp(enc, "hex", 3) == 0) return ENC_HEX;
+  if (len == 5 && strncasecmp(enc, "ascii", 5) == 0) return ENC_ASCII;
+  if (len == 6 && strncasecmp(enc, "base64", 6) == 0) return ENC_BASE64;
+  if ((len == 4 && strncasecmp(enc, "utf8", 4) == 0) || (len == 5 && strncasecmp(enc, "utf-8", 5) == 0)) return ENC_UTF8;
+  if ((len == 6 && strncasecmp(enc, "latin1", 6) == 0) || (len == 6 && strncasecmp(enc, "binary", 6) == 0)) return ENC_LATIN1;
+  
+  if (
+    (len == 4 && strncasecmp(enc, "ucs2", 4) == 0) ||
+    (len == 5 && strncasecmp(enc, "ucs-2", 5) == 0) ||
+    (len == 7 && strncasecmp(enc, "utf16le", 7) == 0) ||
+    (len == 8 && strncasecmp(enc, "utf-16le", 8) == 0)
+  ) return ENC_UCS2;
+  
+  return ENC_UNKNOWN;
+}
+
+// Buffer.from(array/string/buffer, encoding)
+static jsval_t js_buffer_from(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "Buffer.from requires at least one argument");
   
   if (js_type(args[0]) == JS_STR) {
     size_t len;
     char *str = js_getstr(js, args[0], &len);
     
-    ArrayBufferData *buffer = create_array_buffer_data(len);
-    if (!buffer) return js_mkerr(js, "Failed to allocate buffer");
+    BufferEncoding encoding = ENC_UTF8;
+    if (nargs >= 2 && js_type(args[1]) == JS_STR) {
+      size_t enc_len;
+      char *enc_str = js_getstr(js, args[1], &enc_len);
+      encoding = parse_encoding(enc_str, enc_len);
+      if (encoding == ENC_UNKNOWN) encoding = ENC_UTF8;
+    }
     
-    memcpy(buffer->data, str, len);
-    jsval_t obj = create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, len, "Buffer");
-    js_set(js, obj, "toString", js_mkfun(js_buffer_toString));
-    js_set(js, obj, "toBase64", js_mkfun(js_buffer_toBase64));
-    js_set(js, obj, "write", js_mkfun(js_buffer_write));
-    return obj;
+    if (encoding == ENC_BASE64) {
+      size_t decoded_len;
+      uint8_t *decoded = base64_decode(str, len, &decoded_len);
+      if (!decoded) return js_mkerr(js, "Failed to decode base64");
+      
+      ArrayBufferData *buffer = create_array_buffer_data(decoded_len);
+      if (!buffer) { free(decoded); return js_mkerr(js, "Failed to allocate buffer"); }
+      
+      memcpy(buffer->data, decoded, decoded_len);
+      free(decoded);
+      return create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, decoded_len, "Buffer");
+    } else if (encoding == ENC_HEX) {
+      size_t decoded_len;
+      uint8_t *decoded = hex_decode(str, len, &decoded_len);
+      if (!decoded) return js_mkerr(js, "Failed to decode hex");
+      
+      ArrayBufferData *buffer = create_array_buffer_data(decoded_len);
+      if (!buffer) { free(decoded); return js_mkerr(js, "Failed to allocate buffer"); }
+      
+      memcpy(buffer->data, decoded, decoded_len);
+      free(decoded);
+      return create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, decoded_len, "Buffer");
+    } else if (encoding == ENC_UCS2) {
+      size_t decoded_len = len * 2;
+      ArrayBufferData *buffer = create_array_buffer_data(decoded_len);
+      if (!buffer) return js_mkerr(js, "Failed to allocate buffer");
+      
+      for (size_t i = 0; i < len; i++) {
+        buffer->data[i * 2] = (uint8_t)str[i];
+        buffer->data[i * 2 + 1] = 0;
+      }
+      return create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, decoded_len, "Buffer");
+    } else {
+      ArrayBufferData *buffer = create_array_buffer_data(len);
+      if (!buffer) return js_mkerr(js, "Failed to allocate buffer");
+      
+      memcpy(buffer->data, str, len);
+      return create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, len, "Buffer");
+    }
   }
   
   jsval_t length_val = js_get(js, args[0], "length");
@@ -965,11 +1044,7 @@ static jsval_t js_buffer_from(struct js *js, jsval_t *args, int nargs) {
       }
     }
     
-    jsval_t obj = create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, len, "Buffer");
-    js_set(js, obj, "toString", js_mkfun(js_buffer_toString));
-    js_set(js, obj, "toBase64", js_mkfun(js_buffer_toBase64));
-    js_set(js, obj, "write", js_mkfun(js_buffer_write));
-    return obj;
+    return create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, len, "Buffer");
   }
   
   return js_mkerr(js, "Invalid argument to Buffer.from");
@@ -986,13 +1061,7 @@ static jsval_t js_buffer_alloc(struct js *js, jsval_t *args, int nargs) {
   if (!buffer) return js_mkerr(js, "Failed to allocate buffer");
   
   memset(buffer->data, 0, size);
-  
-  jsval_t obj = create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, size, "Buffer");
-  js_set(js, obj, "toString", js_mkfun(js_buffer_toString));
-  js_set(js, obj, "toBase64", js_mkfun(js_buffer_toBase64));
-  js_set(js, obj, "write", js_mkfun(js_buffer_write));
-  
-  return obj;
+  return create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, size, "Buffer");
 }
 
 // Buffer.allocUnsafe(size)
@@ -1004,13 +1073,7 @@ static jsval_t js_buffer_allocUnsafe(struct js *js, jsval_t *args, int nargs) {
   size_t size = (size_t)js_getnum(args[0]);
   ArrayBufferData *buffer = create_array_buffer_data(size);
   if (!buffer) return js_mkerr(js, "Failed to allocate buffer");
-  
-  jsval_t obj = create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, size, "Buffer");
-  js_set(js, obj, "toString", js_mkfun(js_buffer_toString));
-  js_set(js, obj, "toBase64", js_mkfun(js_buffer_toBase64));
-  js_set(js, obj, "write", js_mkfun(js_buffer_write));
-  
-  return obj;
+  return create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, size, "Buffer");
 }
 
 // Buffer.prototype.toString(encoding)
@@ -1021,15 +1084,18 @@ static jsval_t js_buffer_toString(struct js *js, jsval_t *args, int nargs) {
   TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
   if (!ta_data) return js_mkerr(js, "Invalid Buffer");
   
-  char *encoding = "utf8";
+  BufferEncoding encoding = ENC_UTF8;
   if (nargs > 0 && js_type(args[0]) == JS_STR) {
-    encoding = js_getstr(js, args[0], NULL);
+    size_t enc_len;
+    char *enc_str = js_getstr(js, args[0], &enc_len);
+    encoding = parse_encoding(enc_str, enc_len);
+    if (encoding == ENC_UNKNOWN) encoding = ENC_UTF8;
   }
   
   uint8_t *data = ta_data->buffer->data + ta_data->byte_offset;
   size_t len = ta_data->byte_length;
   
-  if (strcmp(encoding, "base64") == 0) {
+  if (encoding == ENC_BASE64) {
     size_t out_len;
     char *encoded = base64_encode(data, len, &out_len);
     if (!encoded) return js_mkerr(js, "Failed to encode base64");
@@ -1037,7 +1103,7 @@ static jsval_t js_buffer_toString(struct js *js, jsval_t *args, int nargs) {
     jsval_t result = js_mkstr(js, encoded, out_len);
     free(encoded);
     return result;
-  } else if (strcmp(encoding, "hex") == 0) {
+  } else if (encoding == ENC_HEX) {
     char *hex = malloc(len * 2 + 1);
     if (!hex) return js_mkerr(js, "Failed to allocate hex string");
     
@@ -1048,7 +1114,18 @@ static jsval_t js_buffer_toString(struct js *js, jsval_t *args, int nargs) {
     jsval_t result = js_mkstr(js, hex, len * 2);
     free(hex);
     return result;
-  } else return js_mkstr(js, data, len);
+  } else if (encoding == ENC_UCS2) {
+    size_t char_count = len / 2;
+    char *str = malloc(char_count + 1);
+    if (!str) return js_mkerr(js, "Failed to allocate string");
+    
+    for (size_t i = 0; i < char_count; i++) str[i] = (char)data[i * 2];
+    str[char_count] = '\0';
+    
+    jsval_t result = js_mkstr(js, str, char_count);
+    free(str);
+    return result;
+  } else return js_mkstr(js, (char *)data, len);
 }
 
 // Buffer.prototype.toBase64()
@@ -1094,6 +1171,145 @@ static jsval_t js_buffer_write(struct js *js, jsval_t *args, int nargs) {
   return js_mknum((double)to_write);
 }
 
+// Buffer.isBuffer(obj)
+static jsval_t js_buffer_isBuffer(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkfalse();
+  if (js_type(args[0]) != JS_OBJ) return js_mkfalse();
+  
+  jsval_t proto = js_get_proto(js, args[0]);
+  jsval_t buffer_proto = js_get_ctor_proto(js, "Buffer", 6);
+  
+  return (proto == buffer_proto) ? js_mktrue() : js_mkfalse();
+}
+
+// Buffer.isEncoding(encoding)
+static jsval_t js_buffer_isEncoding(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1 || js_type(args[0]) != JS_STR) return js_mkfalse();
+  
+  size_t len;
+  char *enc = js_getstr(js, args[0], &len);
+  
+  if ((len == 4 && strncasecmp(enc, "utf8", 4) == 0) ||
+      (len == 5 && strncasecmp(enc, "utf-8", 5) == 0) ||
+      (len == 3 && strncasecmp(enc, "hex", 3) == 0) ||
+      (len == 6 && strncasecmp(enc, "base64", 6) == 0) ||
+      (len == 5 && strncasecmp(enc, "ascii", 5) == 0) ||
+      (len == 6 && strncasecmp(enc, "latin1", 6) == 0) ||
+      (len == 6 && strncasecmp(enc, "binary", 6) == 0) ||
+      (len == 4 && strncasecmp(enc, "ucs2", 4) == 0) ||
+      (len == 5 && strncasecmp(enc, "ucs-2", 5) == 0) ||
+      (len == 7 && strncasecmp(enc, "utf16le", 7) == 0) ||
+      (len == 8 && strncasecmp(enc, "utf-16le", 8) == 0)) {
+    return js_mktrue();
+  }
+  
+  return js_mkfalse();
+}
+
+// Buffer.byteLength(string, encoding)
+static jsval_t js_buffer_byteLength(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mknum(0);
+  
+  jsval_t arg = args[0];
+  
+  if (js_type(arg) == JS_OBJ) {
+    jsval_t bytelen = js_get(js, arg, "byteLength");
+    if (js_type(bytelen) == JS_NUM) return bytelen;
+    
+    jsval_t len = js_get(js, arg, "length");
+    if (js_type(len) == JS_NUM) return len;
+  }
+  
+  if (js_type(arg) == JS_STR) {
+    size_t len;
+    js_getstr(js, arg, &len);
+    return js_mknum((double)len);
+  }
+  
+  return js_mknum(0);
+}
+
+// Buffer.concat(list, totalLength)
+static jsval_t js_buffer_concat(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1 || js_type(args[0]) != JS_OBJ) {
+    return js_mkerr(js, "First argument must be an array");
+  }
+  
+  jsval_t list = args[0];
+  jsval_t len_val = js_get(js, list, "length");
+  if (js_type(len_val) != JS_NUM) {
+    return js_mkerr(js, "First argument must be an array");
+  }
+  
+  size_t list_len = (size_t)js_getnum(len_val);
+  size_t total_length = 0;
+  
+  if (nargs > 1 && js_type(args[1]) == JS_NUM) {
+    total_length = (size_t)js_getnum(args[1]);
+  } else {
+    for (size_t i = 0; i < list_len; i++) {
+      char idx[16];
+      snprintf(idx, sizeof(idx), "%zu", i);
+      jsval_t buf = js_get(js, list, idx);
+      jsval_t buf_len = js_get(js, buf, "length");
+      if (js_type(buf_len) == JS_NUM) total_length += (size_t)js_getnum(buf_len);
+    }
+  }
+  
+  ArrayBufferData *buffer = create_array_buffer_data(total_length);
+  if (!buffer) return js_mkerr(js, "Failed to allocate buffer");
+  
+  size_t offset = 0;
+  for (size_t i = 0; i < list_len && offset < total_length; i++) {
+    char idx[16];
+    snprintf(idx, sizeof(idx), "%zu", i);
+    jsval_t buf = js_get(js, list, idx);
+    
+    jsval_t ta_data_val = js_get_slot(js, buf, SLOT_BUFFER);
+    TypedArrayData *ta = js_gettypedarray(ta_data_val);
+    if (!ta || !ta->buffer) continue;
+    
+    size_t copy_len = ta->byte_length;
+    if (offset + copy_len > total_length) {
+      copy_len = total_length - offset;
+    }
+    
+    memcpy(buffer->data + offset, ta->buffer->data + ta->byte_offset, copy_len);
+    offset += copy_len;
+  }
+  
+  return create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, total_length, "Buffer");
+}
+
+// Buffer.compare(buf1, buf2)
+static jsval_t js_buffer_compare(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 2) return js_mkerr(js, "Buffer.compare requires two arguments");
+  
+  jsval_t ta1_val = js_get_slot(js, args[0], SLOT_BUFFER);
+  jsval_t ta2_val = js_get_slot(js, args[1], SLOT_BUFFER);
+  
+  TypedArrayData *ta1 = js_gettypedarray(ta1_val);
+  TypedArrayData *ta2 = js_gettypedarray(ta2_val);
+  
+  if (!ta1 || !ta2) {
+    return js_mkerr(js, "Arguments must be Buffers");
+  }
+  
+  if (!ta1 || !ta1->buffer || !ta2 || !ta2->buffer) {
+    return js_mkerr(js, "Invalid buffer");
+  }
+  
+  size_t len = ta1->byte_length < ta2->byte_length ? ta1->byte_length : ta2->byte_length;
+  int cmp = memcmp(ta1->buffer->data + ta1->byte_offset, ta2->buffer->data + ta2->byte_offset, len);
+  
+  if (cmp == 0) {
+    if (ta1->byte_length < ta2->byte_length) cmp = -1;
+    else if (ta1->byte_length > ta2->byte_length) cmp = 1;
+  } else cmp = cmp < 0 ? -1 : 1;
+  
+  return js_mknum((double)cmp);
+}
+
 static jsval_t js_sharedarraybuffer_constructor(struct js *js, jsval_t *args, int nargs) {
   size_t length = 0;
   if (nargs > 0 && js_type(args[0]) == JS_NUM) {
@@ -1131,13 +1347,17 @@ void init_buffer_module() {
   js_set_descriptor(js, arraybuffer_ctor_obj, "name", 4, 0);
   js_set(js, glob, "ArrayBuffer", js_obj_to_func(arraybuffer_ctor_obj));
   
+  jsval_t typedarray_proto = js_mkobj(js);
+  js_set(js, typedarray_proto, "slice", js_mkfun(js_typedarray_slice));
+  js_set(js, typedarray_proto, "subarray", js_mkfun(js_typedarray_subarray));
+  js_set(js, typedarray_proto, "fill", js_mkfun(js_typedarray_fill));
+  js_set(js, typedarray_proto, get_toStringTag_sym_key(), js_mkstr(js, "TypedArray", 10));
+  
   #define SETUP_TYPEDARRAY(name) \
     do { \
       jsval_t name##_ctor_obj = js_mkobj(js); \
       jsval_t name##_proto = js_mkobj(js); \
-      js_set(js, name##_proto, "slice", js_mkfun(js_typedarray_slice)); \
-      js_set(js, name##_proto, "subarray", js_mkfun(js_typedarray_subarray)); \
-      js_set(js, name##_proto, "fill", js_mkfun(js_typedarray_fill)); \
+      js_set_proto(js, name##_proto, typedarray_proto); \
       js_set_slot(js, name##_ctor_obj, SLOT_CFUNC, js_mkfun(js_##name##_constructor)); \
       js_setprop(js, name##_ctor_obj, js_mkstr(js, "prototype", 9), name##_proto); \
       js_set(js, glob, #name, js_obj_to_func(name##_ctor_obj)); \
@@ -1188,10 +1408,26 @@ void init_buffer_module() {
   js_set_descriptor(js, sharedarraybuffer_ctor_obj, "name", 4, 0);
   js_set(js, glob, "SharedArrayBuffer", js_obj_to_func(sharedarraybuffer_ctor_obj));
   
-  jsval_t buffer_obj = js_mkobj(js);
-  js_set(js, buffer_obj, "from", js_mkfun(js_buffer_from));
-  js_set(js, buffer_obj, "alloc", js_mkfun(js_buffer_alloc));
-  js_set(js, buffer_obj, "allocUnsafe", js_mkfun(js_buffer_allocUnsafe));
-  js_set(js, buffer_obj, get_toStringTag_sym_key(), js_mkstr(js, "Buffer", 6));
-  js_set(js, glob, "Buffer", buffer_obj);
+  jsval_t buffer_ctor_obj = js_mkobj(js);
+  jsval_t buffer_proto = js_mkobj(js);
+  
+  js_set(js, buffer_proto, "toString", js_mkfun(js_buffer_toString));
+  js_set(js, buffer_proto, "toBase64", js_mkfun(js_buffer_toBase64));
+  js_set(js, buffer_proto, "write", js_mkfun(js_buffer_write));
+  js_set(js, buffer_proto, get_toStringTag_sym_key(), js_mkstr(js, "Buffer", 6));
+  
+  js_set(js, buffer_ctor_obj, "from", js_mkfun(js_buffer_from));
+  js_set(js, buffer_ctor_obj, "alloc", js_mkfun(js_buffer_alloc));
+  js_set(js, buffer_ctor_obj, "allocUnsafe", js_mkfun(js_buffer_allocUnsafe));
+  js_set(js, buffer_ctor_obj, "isBuffer", js_mkfun(js_buffer_isBuffer));
+  js_set(js, buffer_ctor_obj, "isEncoding", js_mkfun(js_buffer_isEncoding));
+  js_set(js, buffer_ctor_obj, "byteLength", js_mkfun(js_buffer_byteLength));
+  js_set(js, buffer_ctor_obj, "concat", js_mkfun(js_buffer_concat));
+  js_set(js, buffer_ctor_obj, "compare", js_mkfun(js_buffer_compare));
+
+  js_set_slot(js, buffer_ctor_obj, SLOT_CFUNC, js_mkfun(js_buffer_from));
+  js_mkprop_fast(js, buffer_ctor_obj, "prototype", 9, buffer_proto);
+  js_mkprop_fast(js, buffer_ctor_obj, "name", 4, ANT_STRING("Buffer"));
+  js_set_descriptor(js, buffer_ctor_obj, "name", 4, 0);
+  js_set(js, glob, "Buffer", js_obj_to_func(buffer_ctor_obj));
 }

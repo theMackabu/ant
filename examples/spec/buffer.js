@@ -120,4 +120,131 @@ const subarrayed = original.subarray(2, 8);
 test('TypedArray subarray length', subarrayed.length, 6);
 test('TypedArray subarray byteOffset', subarrayed.byteOffset, 2);
 
+test('Buffer.isBuffer with Buffer', Buffer.isBuffer(Buffer.from('test')), true);
+test('Buffer.isBuffer with string', Buffer.isBuffer('test'), false);
+test('Buffer.isBuffer with number', Buffer.isBuffer(123), false);
+test('Buffer.isBuffer with object', Buffer.isBuffer({}), false);
+test('Buffer.isBuffer with Uint8Array', Buffer.isBuffer(new Uint8Array(4)), false);
+
+test('Buffer.isEncoding utf8', Buffer.isEncoding('utf8'), true);
+test('Buffer.isEncoding utf-8', Buffer.isEncoding('utf-8'), true);
+test('Buffer.isEncoding hex', Buffer.isEncoding('hex'), true);
+test('Buffer.isEncoding base64', Buffer.isEncoding('base64'), true);
+test('Buffer.isEncoding ascii', Buffer.isEncoding('ascii'), true);
+test('Buffer.isEncoding latin1', Buffer.isEncoding('latin1'), true);
+test('Buffer.isEncoding binary', Buffer.isEncoding('binary'), true);
+test('Buffer.isEncoding invalid', Buffer.isEncoding('invalid'), false);
+test('Buffer.isEncoding empty', Buffer.isEncoding(''), false);
+
+test('Buffer.byteLength string', Buffer.byteLength('Hello'), 5);
+test('Buffer.byteLength buffer', Buffer.byteLength(Buffer.from('Hello')), 5);
+test('Buffer.byteLength empty', Buffer.byteLength(''), 0);
+
+const concatBuf1 = Buffer.from('Hello');
+const concatBuf2 = Buffer.from(' ');
+const concatBuf3 = Buffer.from('World');
+const concatenated = Buffer.concat([concatBuf1, concatBuf2, concatBuf3]);
+test('Buffer.concat length', concatenated.length, 11);
+test('Buffer.concat toString', concatenated.toString(), 'Hello World');
+
+const emptyConcat = Buffer.concat([]);
+test('Buffer.concat empty array', emptyConcat.length, 0);
+
+const singleConcat = Buffer.concat([Buffer.from('Only')]);
+test('Buffer.concat single buffer', singleConcat.toString(), 'Only');
+
+const limitedConcat = Buffer.concat([concatBuf1, concatBuf2, concatBuf3], 5);
+test('Buffer.concat with totalLength', limitedConcat.length, 5);
+test('Buffer.concat with totalLength content', limitedConcat.toString(), 'Hello');
+
+const cmpA = Buffer.from('abc');
+const cmpB = Buffer.from('abc');
+const cmpC = Buffer.from('abd');
+const cmpD = Buffer.from('ab');
+test('Buffer.compare equal', Buffer.compare(cmpA, cmpB), 0);
+test('Buffer.compare less', Buffer.compare(cmpA, cmpC), -1);
+test('Buffer.compare greater', Buffer.compare(cmpC, cmpA), 1);
+test('Buffer.compare shorter', Buffer.compare(cmpD, cmpA), -1);
+test('Buffer.compare longer', Buffer.compare(cmpA, cmpD), 1);
+
+console.log('\nBuffer Encoding Tests\n');
+
+const b64Buf = Buffer.from('Hello, World!');
+test('Buffer.toString base64', b64Buf.toString('base64'), 'SGVsbG8sIFdvcmxkIQ==');
+test('Buffer.toString BASE64 (case insensitive)', b64Buf.toString('BASE64'), 'SGVsbG8sIFdvcmxkIQ==');
+
+const b64Decoded = Buffer.from('SGVsbG8sIFdvcmxkIQ==', 'base64');
+test('Buffer.from base64', b64Decoded.toString(), 'Hello, World!');
+test('Buffer.from BASE64 (case insensitive)', Buffer.from('SGVsbG8=', 'BASE64').toString(), 'Hello');
+
+const b64Roundtrip = Buffer.from(Buffer.from('hello').toString('base64'), 'base64').toString();
+test('Buffer base64 roundtrip', b64Roundtrip, 'hello');
+
+const hexBuf = Buffer.from('Hello');
+test('Buffer.toString hex', hexBuf.toString('hex'), '48656c6c6f');
+test('Buffer.toString HEX (case insensitive)', hexBuf.toString('HEX'), '48656c6c6f');
+
+const hexDecoded = Buffer.from('48656c6c6f', 'hex');
+test('Buffer.from hex', hexDecoded.toString(), 'Hello');
+test('Buffer.from HEX (case insensitive)', Buffer.from('48656C6C6F', 'HEX').toString(), 'Hello');
+
+const hexRoundtrip = Buffer.from(Buffer.from('world').toString('hex'), 'hex').toString();
+test('Buffer hex roundtrip', hexRoundtrip, 'world');
+
+const utf8Buf = Buffer.from('Hello', 'utf8');
+test('Buffer.from utf8', utf8Buf.toString(), 'Hello');
+test('Buffer.from utf-8', Buffer.from('Hello', 'utf-8').toString(), 'Hello');
+test('Buffer.from UTF8 (case insensitive)', Buffer.from('Hello', 'UTF8').toString(), 'Hello');
+test('Buffer.from UTF-8 (case insensitive)', Buffer.from('Hello', 'UTF-8').toString(), 'Hello');
+
+test('Buffer.toString utf8', utf8Buf.toString('utf8'), 'Hello');
+test('Buffer.toString utf-8', utf8Buf.toString('utf-8'), 'Hello');
+
+const asciiBuf = Buffer.from('Hello', 'ascii');
+test('Buffer.from ascii', asciiBuf.toString(), 'Hello');
+test('Buffer.from ASCII (case insensitive)', Buffer.from('Hello', 'ASCII').toString(), 'Hello');
+test('Buffer.toString ascii', asciiBuf.toString('ascii'), 'Hello');
+
+const latin1Buf = Buffer.from('Hello', 'latin1');
+test('Buffer.from latin1', latin1Buf.toString(), 'Hello');
+test('Buffer.from LATIN1 (case insensitive)', Buffer.from('Hello', 'LATIN1').toString(), 'Hello');
+test('Buffer.from binary', Buffer.from('Hello', 'binary').toString(), 'Hello');
+test('Buffer.from BINARY (case insensitive)', Buffer.from('Hello', 'BINARY').toString(), 'Hello');
+
+test('Buffer.toString latin1', latin1Buf.toString('latin1'), 'Hello');
+test('Buffer.toString binary', latin1Buf.toString('binary'), 'Hello');
+
+const ucs2Buf = Buffer.from('Hi', 'ucs2');
+test('Buffer.from ucs2 length', ucs2Buf.length, 4); // 2 chars * 2 bytes
+test('Buffer.from ucs-2 length', Buffer.from('Hi', 'ucs-2').length, 4);
+test('Buffer.from utf16le length', Buffer.from('Hi', 'utf16le').length, 4);
+test('Buffer.from utf-16le length', Buffer.from('Hi', 'utf-16le').length, 4);
+test('Buffer.from UCS2 (case insensitive)', Buffer.from('Hi', 'UCS2').length, 4);
+
+test('Buffer.from ucs2 byte 0', ucs2Buf[0], 0x48);
+test('Buffer.from ucs2 byte 1', ucs2Buf[1], 0x00);
+test('Buffer.from ucs2 byte 2', ucs2Buf[2], 0x69);
+test('Buffer.from ucs2 byte 3', ucs2Buf[3], 0x00);
+
+test('Buffer.toString ucs2', ucs2Buf.toString('ucs2'), 'Hi');
+test('Buffer.toString ucs-2', ucs2Buf.toString('ucs-2'), 'Hi');
+test('Buffer.toString utf16le', ucs2Buf.toString('utf16le'), 'Hi');
+test('Buffer.toString utf-16le', ucs2Buf.toString('utf-16le'), 'Hi');
+
+const binaryBuf = Buffer.from([0x00, 0x01, 0x02, 0xff]);
+test('Buffer binary toString base64', binaryBuf.toString('base64'), 'AAEC/w==');
+test('Buffer binary toString hex', binaryBuf.toString('hex'), '000102ff');
+
+const binaryFromB64 = Buffer.from('AAEC/w==', 'base64');
+test('Buffer binary from base64 byte 0', binaryFromB64[0], 0x00);
+test('Buffer binary from base64 byte 1', binaryFromB64[1], 0x01);
+test('Buffer binary from base64 byte 2', binaryFromB64[2], 0x02);
+test('Buffer binary from base64 byte 3', binaryFromB64[3], 0xff);
+
+const binaryFromHex = Buffer.from('000102ff', 'hex');
+test('Buffer binary from hex byte 0', binaryFromHex[0], 0x00);
+test('Buffer binary from hex byte 1', binaryFromHex[1], 0x01);
+test('Buffer binary from hex byte 2', binaryFromHex[2], 0x02);
+test('Buffer binary from hex byte 3', binaryFromHex[3], 0xff);
+
 summary();
