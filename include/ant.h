@@ -39,6 +39,7 @@ typedef enum {
   JS_ERR_EVAL,
   JS_ERR_URI,
   JS_ERR_INTERNAL,
+  JS_ERR_AGGREGATE,
   JS_ERR_GENERIC
 } js_err_type_t;
 

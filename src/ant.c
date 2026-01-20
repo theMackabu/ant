@@ -2390,6 +2390,7 @@ static const char *get_error_type_name(js_err_type_t err_type) {
     case JS_ERR_EVAL:      return "EvalError";
     case JS_ERR_URI:       return "URIError";
     case JS_ERR_INTERNAL:  return "InternalError";
+    case JS_ERR_AGGREGATE: return "AggregateError";
     case JS_ERR_GENERIC:   return "Error";
     default:               return "Error";
   }
@@ -12723,6 +12724,34 @@ static jsval_t builtin_Error(struct js *js, jsval_t *args, int nargs) {
   return this_val;
 }
 
+static jsval_t builtin_AggregateError(struct js *js, jsval_t *args, int nargs) {
+  bool is_new = (vtype(js->new_target) != T_UNDEF);
+  jsval_t this_val = js->this_val;
+  
+  if (!is_new) {
+    this_val = js_mkobj(js);
+    jsoff_t proto_off = lkp_interned(js, mkval(T_OBJ, vdata(js->current_func)), INTERN_PROTOTYPE, 9);
+    if (proto_off) set_proto(js, this_val, resolveprop(js, mkval(T_PROP, proto_off)));
+    else set_proto(js, this_val, get_ctor_proto(js, "AggregateError", 14));
+  }
+  
+  jsval_t errors = nargs > 0 ? args[0] : mkarr(js);
+  if (vtype(errors) != T_ARR) errors = mkarr(js);
+  setprop_fast(js, this_val, "errors", 6, errors);
+  
+  if (nargs > 1 && vtype(args[1]) != T_UNDEF) {
+    jsval_t msg = args[1];
+    if (vtype(msg) != T_STR) {
+      const char *str = js_str(js, msg);
+      msg = js_mkstr(js, str, strlen(str));
+    }
+    setprop_fast(js, this_val, "message", 7, msg);
+  }
+  
+  setprop_fast(js, this_val, "name", 4, ANT_STRING("AggregateError"));
+  return this_val;
+}
+
 static jsval_t builtin_RegExp(struct js *js, jsval_t *args, int nargs) {
   jsval_t regexp_obj = js->this_val;
   bool use_this = (vtype(regexp_obj) == T_OBJ);
@@ -18859,7 +18888,6 @@ static void reject_promise(struct js *js, jsval_t p, jsval_t val) {
   pd->state = 2;
   pd->value = val;
   
-  // Track unhandled rejection if no handler attached yet
   if (!pd->has_rejection_handler) {
     promise_data_entry_t *existing = NULL;
     HASH_FIND(hh_unhandled, unhandled_rejections, &pd->promise_id, sizeof(uint32_t), existing);
@@ -18898,6 +18926,19 @@ static jsval_t builtin_Promise(struct js *js, jsval_t *args, int nargs) {
   }
   
   jsval_t p = mkpromise(js);
+  jsval_t new_target = js->new_target;
+  
+  if (vtype(new_target) == T_FUNC) {
+    jsoff_t proto_off = lkp_interned(js, mkval(T_OBJ, vdata(new_target)), INTERN_PROTOTYPE, 9);
+    jsval_t subclass_proto = proto_off ? resolveprop(js, mkval(T_PROP, proto_off)) : js_mkundef();
+    
+    if (vtype(subclass_proto) == T_OBJ) {
+      jsval_t p_obj = mkval(T_OBJ, vdata(p));
+      set_slot(js, p_obj, SLOT_PROTO, subclass_proto);
+      set_slot(js, p_obj, SLOT_CTOR, new_target);
+    }
+  }
+  
   jsval_t res_obj = mkobj(js, 0);
   
   set_slot(js, res_obj, SLOT_CFUNC, js_mkfun(builtin_resolve_internal));
@@ -18936,6 +18977,14 @@ static jsval_t builtin_promise_then(struct js *js, jsval_t *args, int nargs) {
   if (vtype(p) != T_PROMISE) return js_mkerr(js, "not a promise");
   
   jsval_t nextP = mkpromise(js);
+  
+  jsval_t p_proto = get_slot(js, mkval(T_OBJ, vdata(p)), SLOT_PROTO);
+  if (vtype(p_proto) == T_OBJ) {
+    set_slot(js, mkval(T_OBJ, vdata(nextP)), SLOT_PROTO, p_proto);
+    jsval_t p_ctor = get_slot(js, mkval(T_OBJ, vdata(p)), SLOT_CTOR);
+    if (vtype(p_ctor) == T_FUNC) set_slot(js, mkval(T_OBJ, vdata(nextP)), SLOT_CTOR, p_ctor);
+  }
+  
   jsval_t onFulfilled = nargs > 0 ? args[0] : js_mkundef();
   jsval_t onRejected = nargs > 1 ? args[1] : js_mkundef();
   
@@ -19064,10 +19113,16 @@ static jsval_t builtin_promise_finally(struct js *js, jsval_t *args, int nargs) 
 static jsval_t builtin_Promise_try(struct js *js, jsval_t *args, int nargs) {
   if (nargs == 0) return builtin_Promise_resolve(js, args, 0);
   jsval_t fn = args[0];
-  jsval_t res = js_call(js, fn, NULL, 0);
+  jsval_t *call_args = nargs > 1 ? &args[1] : NULL;
+  int call_nargs = nargs > 1 ? nargs - 1 : 0;
+  jsval_t res = js_call_with_this(js, fn, js_mkundef(), call_args, call_nargs);
   if (is_err(res)) {
-    jsval_t err_str = js_mkstr(js, js->errmsg, strlen(js->errmsg));
-    jsval_t rej_args[] = { err_str };
+    jsval_t reject_val = js->thrown_value;
+    if (vtype(reject_val) == T_UNDEF) {
+      reject_val = js_mkstr(js, js->errmsg, strlen(js->errmsg));
+    }
+    js->thrown_value = js_mkundef();
+    jsval_t rej_args[] = { reject_val };
     return builtin_Promise_reject(js, rej_args, 1);
   }
   jsval_t res_args[] = { res };
@@ -19259,11 +19314,10 @@ static jsval_t builtin_Promise_race(struct js *js, jsval_t *args, int nargs) {
 }
 
 static jsval_t mk_aggregate_error(struct js *js, jsval_t errors) {
-  jsval_t agg_err = js_mkobj(js);
-  js_set(js, agg_err, "name", js_mkstr(js, "AggregateError", 14));
-  js_set(js, agg_err, "message", js_mkstr(js, "All promises were rejected", 26));
-  js_set(js, agg_err, "errors", errors);
-  return agg_err;
+  jsval_t args[] = { errors, js_mkstr(js, "All promises were rejected", 26) };
+  jsoff_t off = lkp(js, js_glob(js), "AggregateError", 14);
+  jsval_t ctor = off ? resolveprop(js, mkval(T_PROP, off)) : js_mkundef();
+  return js_call(js, ctor, args, 2);
 }
 
 static bool promise_any_try_resolve(struct js *js, jsval_t tracker, jsval_t value) {
@@ -19338,6 +19392,11 @@ static jsval_t builtin_Promise_any(struct js *js, jsval_t *args, int nargs) {
     uint32_t item_pid = get_promise_id(js, item);
     promise_data_entry_t *pd = get_promise_data(item_pid, false);
     if (pd) {
+      pd->has_rejection_handler = true;
+      promise_data_entry_t *in_unhandled = NULL;
+      HASH_FIND(hh_unhandled, unhandled_rejections, &pd->promise_id, sizeof(uint32_t), in_unhandled);
+      if (in_unhandled) HASH_DELETE(hh_unhandled, unhandled_rejections, pd);
+      
       if (pd->state == 1) {
         promise_any_try_resolve(js, tracker, pd->value);
         return result_promise;
@@ -21438,6 +21497,18 @@ struct js *js_create(void *buf, size_t len) {
   
   #undef REGISTER_ERROR_SUBTYPE
   
+  jsval_t proto = js_mkobj(js);
+  set_proto(js, proto, error_proto);
+  setprop(js, proto, ANT_STRING("name"), ANT_STRING("AggregateError"));
+  jsval_t ctor = mkobj(js, 0);
+  set_proto(js, ctor, function_proto);
+  set_slot(js, ctor, SLOT_CFUNC, js_mkfun(builtin_AggregateError));
+  js_setprop_nonconfigurable(js, ctor, "prototype", 9, proto);
+  setprop(js, ctor, ANT_STRING("name"), ANT_STRING("AggregateError"));
+  setprop(js, proto, ANT_STRING("constructor"), mkval(T_FUNC, vdata(ctor)));
+  js_set_descriptor(js, proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
+  setprop(js, glob, ANT_STRING("AggregateError"), mkval(T_FUNC, vdata(ctor)));
+  
   jsval_t date_proto = js_mkobj(js);
   set_proto(js, date_proto, object_proto);
   setprop(js, date_proto, js_mkstr(js, "getTime", 7), js_mkfun(builtin_Date_getTime));
@@ -22370,6 +22441,10 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
       }
     }
     
+    if (code_uses_arguments(&fn[pf->body_start], pf->body_len)) {
+      setup_arguments(js, js->scope, final_args, final_nargs, pf->is_strict);
+    }
+    
     jsval_t saved_this = js->this_val;
     if (has_slot_bound_this) {
       js->this_val = slot_bound_this;
@@ -22381,7 +22456,7 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
     JS_SAVE_STATE(js, saved_state);
     uint8_t caller_flags = js->flags;
     
-    js->flags = F_CALL;
+    js->flags = F_CALL | (pf->is_strict ? F_STRICT : 0);
     jsval_t res = js_eval(js, &fn[pf->body_start], pf->body_len);
     if (!is_err(res) && !(js->flags & F_RETURN)) res = js_mkundef();
     
