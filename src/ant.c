@@ -216,7 +216,6 @@ static const char *INTERN_SET = NULL;
 static const char *INTERN_ARGUMENTS = NULL;
 static const char *INTERN_CALLEE = NULL;
 static const char *INTERN_IDX[10] = {NULL};
-static const char *INTERN_PROMISE = NULL;
 
 typedef struct interned_string {
   uint64_t hash;
@@ -3049,7 +3048,6 @@ static void intern_init(void) {
   INTERN_VALUE = intern_string("value", 5);
   INTERN_GET = intern_string("get", 3);
   INTERN_SET = intern_string("set", 3);
-  INTERN_PROMISE = intern_string("promise", 7);
   INTERN_ARGUMENTS = intern_string("arguments", 9);
   INTERN_CALLEE = intern_string("callee", 6);
   INTERN_IDX[0] = intern_string("0", 1);
@@ -18437,16 +18435,14 @@ static jsval_t builtin_trigger_handler_wrapper(struct js *js, jsval_t *args, int
 static void trigger_handlers(struct js *js, jsval_t p) {
   jsval_t wrapper_obj = mkobj(js, 0);
   set_slot(js, wrapper_obj, SLOT_CFUNC, js_mkfun(builtin_trigger_handler_wrapper));
-  setprop_fast(js, wrapper_obj, "promise", 7, p);
+  set_slot(js, wrapper_obj, SLOT_DATA, p);
   jsval_t wrapper_fn = mkval(T_FUNC, vdata(wrapper_obj));
   queue_microtask(js, wrapper_fn);
 }
 
 static jsval_t builtin_trigger_handler_wrapper(struct js *js, jsval_t *args, int nargs) {
   jsval_t me = js->current_func;
-  jsoff_t promise_prop_off = lkp_interned(js, me, INTERN_PROMISE, 7);
-  if (promise_prop_off == 0) return js_mkundef();
-  jsval_t p = resolveprop(js, mkval(T_PROP, promise_prop_off));
+  jsval_t p = get_slot(js, me, SLOT_DATA);
   if (vtype(p) != T_PROMISE) return js_mkundef();
   
   uint32_t pid = get_promise_id(js, p);
@@ -18506,12 +18502,12 @@ static void resolve_promise(struct js *js, jsval_t p, jsval_t val) {
     
     jsval_t res_obj = mkobj(js, 0);
     set_slot(js, res_obj, SLOT_CFUNC, js_mkfun(builtin_resolve_internal));
-    setprop_fast(js, res_obj, "promise", 7, p);
+    set_slot(js, res_obj, SLOT_DATA, p);
     jsval_t res_fn = mkval(T_FUNC, vdata(res_obj));
     
     jsval_t rej_obj = mkobj(js, 0);
     set_slot(js, rej_obj, SLOT_CFUNC, js_mkfun(builtin_reject_internal));
-    setprop_fast(js, rej_obj, "promise", 7, p);
+    set_slot(js, rej_obj, SLOT_DATA, p);
     jsval_t rej_fn = mkval(T_FUNC, vdata(rej_obj));
     
     jsval_t call_args[] = { res_fn, rej_fn };
@@ -18539,7 +18535,7 @@ static void reject_promise(struct js *js, jsval_t p, jsval_t val) {
 
 static jsval_t builtin_resolve_internal(struct js *js, jsval_t *args, int nargs) {
   jsval_t me = js->current_func;
-  jsval_t p = js_get(js, me, "promise");
+  jsval_t p = get_slot(js, me, SLOT_DATA);
   if (vtype(p) != T_PROMISE) return js_mkundef();
   resolve_promise(js, p, nargs > 0 ? args[0] : js_mkundef());
   return js_mkundef();
@@ -18547,26 +18543,37 @@ static jsval_t builtin_resolve_internal(struct js *js, jsval_t *args, int nargs)
 
 static jsval_t builtin_reject_internal(struct js *js, jsval_t *args, int nargs) {
   jsval_t me = js->current_func;
-  jsval_t p = js_get(js, me, "promise");
+  jsval_t p = get_slot(js, me, SLOT_DATA);
   if (vtype(p) != T_PROMISE) return js_mkundef();
   reject_promise(js, p, nargs > 0 ? args[0] : js_mkundef());
   return js_mkundef();
 }
 
 static jsval_t builtin_Promise(struct js *js, jsval_t *args, int nargs) {
+  if (vtype(js->new_target) == T_UNDEF) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Promise constructor cannot be invoked without 'new'");
+  }
+  
+  if (nargs == 0 || (vtype(args[0]) != T_FUNC && vtype(args[0]) != T_CFUNC)) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Promise resolver undefined is not a function");
+  }
+  
   jsval_t p = mkpromise(js);
   jsval_t res_obj = mkobj(js, 0);
+  
   set_slot(js, res_obj, SLOT_CFUNC, js_mkfun(builtin_resolve_internal));
-  setprop(js, res_obj, js_mkstr(js, "promise", 7), p);
+  set_slot(js, res_obj, SLOT_DATA, p);
+  
   jsval_t res_fn = mkval(T_FUNC, vdata(res_obj));
   jsval_t rej_obj = mkobj(js, 0);
+  
   set_slot(js, rej_obj, SLOT_CFUNC, js_mkfun(builtin_reject_internal));
-  setprop(js, rej_obj, js_mkstr(js, "promise", 7), p);
+  set_slot(js, rej_obj, SLOT_DATA, p);
+  
   jsval_t rej_fn = mkval(T_FUNC, vdata(rej_obj));
-  if (nargs > 0) {
-    jsval_t exec_args[] = { res_fn, rej_fn };
-    js_call(js, args[0], exec_args, 2);
-  }
+  jsval_t exec_args[] = { res_fn, rej_fn };
+  js_call(js, args[0], exec_args, 2);
+  
   return p;
 }
 
@@ -18679,7 +18686,7 @@ static jsval_t builtin_Promise_all_resolve_handler(struct js *js, jsval_t *args,
   setprop(js, tracker, js_mkstr(js, "remaining", 9), tov((double)remaining));
   
   if (remaining == 0) {
-    jsval_t result_promise = js_get(js, tracker, "promise");
+    jsval_t result_promise = get_slot(js, tracker, SLOT_DATA);
     resolve_promise(js, result_promise, mkval(T_ARR, vdata(results)));
   }
   
@@ -18689,7 +18696,7 @@ static jsval_t builtin_Promise_all_resolve_handler(struct js *js, jsval_t *args,
 static jsval_t builtin_Promise_all_reject_handler(struct js *js, jsval_t *args, int nargs) {
   jsval_t me = js->current_func;
   jsval_t tracker = js_get(js, me, "tracker");
-  jsval_t result_promise = js_get(js, tracker, "promise");
+  jsval_t result_promise = get_slot(js, tracker, SLOT_DATA);
   
   jsval_t reason = nargs > 0 ? args[0] : js_mkundef();
   reject_promise(js, result_promise, reason);
@@ -18716,11 +18723,11 @@ static jsval_t builtin_Promise_all(struct js *js, jsval_t *args, int nargs) {
   }
   
   jsval_t result_promise = mkpromise(js);
-  
   jsval_t tracker = mkobj(js, 0);
+  
   setprop(js, tracker, js_mkstr(js, "remaining", 9), tov((double)len));
   setprop(js, tracker, js_mkstr(js, "results", 7), mkarr(js));
-  setprop(js, tracker, js_mkstr(js, "promise", 7), result_promise);
+  set_slot(js, tracker, SLOT_DATA, result_promise);
   
   jsval_t results = resolveprop(js, js_get(js, tracker, "results"));
   setprop(js, results, js_mkstr(js, "length", 6), tov((double)len));
@@ -18772,12 +18779,12 @@ static jsval_t builtin_Promise_race(struct js *js, jsval_t *args, int nargs) {
   
   jsval_t resolve_obj = mkobj(js, 0);
   set_slot(js, resolve_obj, SLOT_CFUNC, js_mkfun(builtin_resolve_internal));
-  setprop(js, resolve_obj, js_mkstr(js, "promise", 7), result_promise);
+  set_slot(js, resolve_obj, SLOT_DATA, result_promise);
   jsval_t resolve_fn = mkval(T_FUNC, vdata(resolve_obj));
   
   jsval_t reject_obj = mkobj(js, 0);
   set_slot(js, reject_obj, SLOT_CFUNC, js_mkfun(builtin_reject_internal));
-  setprop(js, reject_obj, js_mkstr(js, "promise", 7), result_promise);
+  set_slot(js, reject_obj, SLOT_DATA, result_promise);
   jsval_t reject_fn = mkval(T_FUNC, vdata(reject_obj));
   
   for (int i = 0; i < len; i++) {
@@ -18823,7 +18830,7 @@ static jsval_t mk_aggregate_error(struct js *js, jsval_t errors) {
 static bool promise_any_try_resolve(struct js *js, jsval_t tracker, jsval_t value) {
   if (js_truthy(js, js_get(js, tracker, "resolved"))) return false;
   js_set(js, tracker, "resolved", js_mktrue());
-  resolve_promise(js, js_get(js, tracker, "promise"), value);
+  resolve_promise(js, get_slot(js, tracker, SLOT_DATA), value);
   return true;
 }
 
@@ -18836,9 +18843,7 @@ static void promise_any_record_rejection(struct js *js, jsval_t tracker, int ind
   int remaining = (int)tod(js_get(js, tracker, "remaining")) - 1;
   js_set(js, tracker, "remaining", tov((double)remaining));
   
-  if (remaining == 0) {
-    reject_promise(js, js_get(js, tracker, "promise"), mk_aggregate_error(js, errors));
-  }
+  if (remaining == 0) reject_promise(js, get_slot(js, tracker, SLOT_DATA), mk_aggregate_error(js, errors));
 }
 
 static jsval_t builtin_Promise_any_resolve_handler(struct js *js, jsval_t *args, int nargs) {
@@ -18874,9 +18879,10 @@ static jsval_t builtin_Promise_any(struct js *js, jsval_t *args, int nargs) {
   jsval_t tracker = mkobj(js, 0);
   jsval_t errors = mkarr(js);
   
+  set_slot(js, tracker, SLOT_DATA, result_promise);
+
   setprop(js, tracker, js_mkstr(js, "remaining", 9), tov((double)len));
   setprop(js, tracker, js_mkstr(js, "errors", 6), errors);
-  setprop(js, tracker, js_mkstr(js, "promise", 7), result_promise);
   setprop(js, tracker, js_mkstr(js, "resolved", 8), js_mkfalse());
   setprop(js, errors, js_mkstr(js, "length", 6), tov((double)len));
   

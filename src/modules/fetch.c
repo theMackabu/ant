@@ -177,7 +177,7 @@ static jsval_t do_fetch_microtask(struct js *js, jsval_t *args, int nargs) {
   jsval_t current_func = js_getcurrentfunc(js);
   jsval_t url_val = js_get(js, current_func, "url");
   jsval_t options_val = js_get(js, current_func, "options");
-  jsval_t promise = js_get(js, current_func, "promise");
+  jsval_t promise = js_get_slot(js, current_func, SLOT_DATA);
   
   char *url_str = js_getstr(js, url_val, NULL);
   if (!url_str) {
@@ -336,9 +336,10 @@ static jsval_t js_fetch(struct js *js, jsval_t *args, int nargs) {
   jsval_t wrapper_obj = js_mkobj(js);
   
   js_set_slot(js, wrapper_obj, SLOT_CFUNC, js_mkfun(do_fetch_microtask));
+  js_set_slot(js, wrapper_obj, SLOT_DATA, promise);
+  
   js_set(js, wrapper_obj, "url", url_val);
   js_set(js, wrapper_obj, "options", options_val);
-  js_set(js, wrapper_obj, "promise", promise);
   
   queue_microtask(js, js_obj_to_func(wrapper_obj));
   
