@@ -20965,6 +20965,112 @@ static jsval_t builtin_WeakSet(struct js *js, jsval_t *args, int nargs) {
   return ws_obj;
 }
 
+static jsval_t builtin_WeakRef(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1 || vtype(args[0]) != T_OBJ) {
+    return js_mkerr(js, "WeakRef target must be an object");
+  }
+  
+  jsval_t wr_obj = mkobj(js, 0);
+  jsval_t wr_proto = get_ctor_proto(js, "WeakRef", 7);
+  if (vtype(wr_proto) == T_OBJ) set_proto(js, wr_obj, wr_proto);
+  set_slot(js, wr_obj, SLOT_DATA, args[0]);
+  
+  return wr_obj;
+}
+
+static jsval_t weakref_deref(struct js *js, jsval_t *args, int nargs) {
+  (void)args; (void)nargs;
+  jsval_t this_val = js->this_val;
+  if (vtype(this_val) != T_OBJ) return js_mkundef();
+  
+  jsval_t target = get_slot(js, this_val, SLOT_DATA);
+  if (vtype(target) != T_OBJ) return js_mkundef();
+  
+  return target;
+}
+
+static jsval_t builtin_FinalizationRegistry(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1 || (vtype(args[0]) != T_FUNC && vtype(args[0]) != T_CFUNC)) {
+    return js_mkerr(js, "FinalizationRegistry callback must be a function");
+  }
+  
+  jsval_t fr_obj = mkobj(js, 0);
+  jsval_t fr_proto = get_ctor_proto(js, "FinalizationRegistry", 20);
+  if (vtype(fr_proto) == T_OBJ) set_proto(js, fr_obj, fr_proto);
+  
+  set_slot(js, fr_obj, SLOT_DATA, args[0]);
+  set_slot(js, fr_obj, SLOT_MAP, mkarr(js));
+  
+  return fr_obj;
+}
+
+static jsval_t finreg_register(struct js *js, jsval_t *args, int nargs) {
+  jsval_t this_val = js->this_val;
+  if (vtype(this_val) != T_OBJ) return js_mkundef();
+  
+  if (nargs < 1 || vtype(args[0]) != T_OBJ) {
+    return js_mkerr(js, "FinalizationRegistry.register target must be an object");
+  }
+  
+  jsval_t target = args[0];
+  jsval_t held_value = nargs > 1 ? args[1] : js_mkundef();
+  jsval_t unregister_token = nargs > 2 ? args[2] : js_mkundef();
+  
+  if (vdata(target) == vdata(held_value) && vtype(held_value) == T_OBJ) {
+    return js_mkerr(js, "target and held value must not be the same");
+  }
+  
+  jsval_t registrations = get_slot(js, this_val, SLOT_MAP);
+  if (vtype(registrations) != T_ARR) return js_mkundef();
+  
+  jsval_t entry = mkarr(js);
+  jsoff_t len = arr_length(js, registrations);
+  
+  char idx[16];
+  size_t idx_len = uint_to_str(idx, sizeof(idx), 0);
+  setprop(js, entry, js_mkstr(js, idx, idx_len), target);
+  idx_len = uint_to_str(idx, sizeof(idx), 1);
+  setprop(js, entry, js_mkstr(js, idx, idx_len), held_value);
+  idx_len = uint_to_str(idx, sizeof(idx), 2);
+  setprop(js, entry, js_mkstr(js, idx, idx_len), unregister_token);
+  setprop(js, entry, js_mkstr(js, "length", 6), tov(3.0));
+  
+  idx_len = uint_to_str(idx, sizeof(idx), len);
+  setprop(js, registrations, js_mkstr(js, idx, idx_len), entry);
+  setprop(js, registrations, js_mkstr(js, "length", 6), tov((double)(len + 1)));
+  
+  return js_mkundef();
+}
+
+static jsval_t finreg_unregister(struct js *js, jsval_t *args, int nargs) {
+  jsval_t this_val = js->this_val;
+  if (vtype(this_val) != T_OBJ) return js_mkfalse();
+  
+  if (nargs < 1 || vtype(args[0]) != T_OBJ) {
+    return js_mkerr(js, "FinalizationRegistry.unregister token must be an object");
+  }
+  
+  jsval_t token = args[0];
+  jsval_t registrations = get_slot(js, this_val, SLOT_MAP);
+  if (vtype(registrations) != T_ARR) return js_mkfalse();
+  
+  jsoff_t len = arr_length(js, registrations);
+  bool removed = false;
+  
+  for (jsoff_t i = 0; i < len; i++) {
+    jsval_t entry = arr_get(js, registrations, i);
+    if (vtype(entry) != T_ARR) continue;
+    jsval_t entry_token = arr_get(js, entry, 2);
+    if (vtype(entry_token) == T_OBJ && vdata(entry_token) == vdata(token)) {
+      char idx[16]; size_t idx_len = uint_to_str(idx, sizeof(idx), i);
+      setprop(js, registrations, js_mkstr(js, idx, idx_len), js_mkundef());
+      removed = true;
+    }
+  }
+  
+  return removed ? js_mktrue() : js_mkfalse();
+}
+
 static proxy_data_t *get_proxy_data(jsval_t obj) {
   if (vtype(obj) != T_OBJ) return NULL;
   jsoff_t off = (jsoff_t)vdata(obj);
@@ -21600,6 +21706,15 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, weakset_proto, js_mkstr(js, "has", 3), js_mkfun(weakset_has));
   setprop(js, weakset_proto, js_mkstr(js, "delete", 6), js_mkfun(weakset_delete));
   
+  jsval_t weakref_proto = js_mkobj(js);
+  set_proto(js, weakref_proto, object_proto);
+  setprop(js, weakref_proto, js_mkstr(js, "deref", 5), js_mkfun(weakref_deref));
+  
+  jsval_t finreg_proto = js_mkobj(js);
+  set_proto(js, finreg_proto, object_proto);
+  setprop(js, finreg_proto, js_mkstr(js, "register", 8), js_mkfun(finreg_register));
+  setprop(js, finreg_proto, js_mkstr(js, "unregister", 10), js_mkfun(finreg_unregister));
+  
   jsval_t promise_proto = js_mkobj(js);
   set_proto(js, promise_proto, object_proto);
   setprop(js, promise_proto, js_mkstr(js, "then", 4), js_mkfun(builtin_promise_then));
@@ -21735,6 +21850,20 @@ struct js *js_create(void *buf, size_t len) {
   js_setprop_nonconfigurable(js, weakset_ctor_obj, "prototype", 9, weakset_proto);
   setprop(js, weakset_ctor_obj, ANT_STRING("name"), ANT_STRING("WeakSet"));
   setprop(js, glob, js_mkstr(js, "WeakSet", 7), mkval(T_FUNC, vdata(weakset_ctor_obj)));
+  
+  jsval_t weakref_ctor_obj = mkobj(js, 0);
+  set_proto(js, weakref_ctor_obj, function_proto);
+  set_slot(js, weakref_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_WeakRef));
+  js_setprop_nonconfigurable(js, weakref_ctor_obj, "prototype", 9, weakref_proto);
+  setprop(js, weakref_ctor_obj, ANT_STRING("name"), ANT_STRING("WeakRef"));
+  setprop(js, glob, js_mkstr(js, "WeakRef", 7), mkval(T_FUNC, vdata(weakref_ctor_obj)));
+  
+  jsval_t finreg_ctor_obj = mkobj(js, 0);
+  set_proto(js, finreg_ctor_obj, function_proto);
+  set_slot(js, finreg_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_FinalizationRegistry));
+  js_setprop_nonconfigurable(js, finreg_ctor_obj, "prototype", 9, finreg_proto);
+  setprop(js, finreg_ctor_obj, ANT_STRING("name"), ANT_STRING("FinalizationRegistry"));
+  setprop(js, glob, js_mkstr(js, "FinalizationRegistry", 20), mkval(T_FUNC, vdata(finreg_ctor_obj)));
   
   jsval_t proxy_ctor_obj = mkobj(js, 0);
   set_proto(js, proxy_ctor_obj, function_proto);
