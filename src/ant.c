@@ -8245,7 +8245,9 @@ static jsval_t js_literal(struct js *js) {
       
       char err_buf[64]; 
       size_t tok_len = js->tlen > 20 ? 20 : js->tlen;
-      snprintf(err_buf, sizeof(err_buf), "Unexpected token '%.*s'", (int)tok_len, &js->code[js->toff]);
+      if (tok_len == 0) snprintf(err_buf, sizeof(err_buf), "Unexpected token 'EOF'"); else {
+        snprintf(err_buf, sizeof(err_buf), "Unexpected token '%.*s'", (int)tok_len, &js->code[js->toff]);
+      }
       return js_mkerr_typed(js, JS_ERR_SYNTAX, err_buf);
   }
 }
@@ -8392,6 +8394,11 @@ static jsval_t js_group(struct js *js) {
       
       return js_arrow_func(js, paren_start, paren_end, false);
     } else {
+      if (next(js) == TOK_RPAREN) {
+        js->parse_depth--;
+        return js_mkerr_typed(js, JS_ERR_SYNTAX, "Parenthesized expression cannot be empty");
+      }
+      
       jsval_t v = js_expr(js);
       if (is_err(v)) { js->parse_depth--; return v; }
       
