@@ -53,6 +53,9 @@ static jsval_t js_arraybuffer_slice(struct js *js, jsval_t *args, int nargs);
 static jsval_t js_typedarray_slice(struct js *js, jsval_t *args, int nargs);
 static jsval_t js_typedarray_subarray(struct js *js, jsval_t *args, int nargs);
 static jsval_t js_typedarray_fill(struct js *js, jsval_t *args, int nargs);
+static jsval_t js_typedarray_toReversed(struct js *js, jsval_t *args, int nargs);
+static jsval_t js_typedarray_toSorted(struct js *js, jsval_t *args, int nargs);
+static jsval_t js_typedarray_with(struct js *js, jsval_t *args, int nargs);
 static jsval_t js_dataview_getUint8(struct js *js, jsval_t *args, int nargs);
 static jsval_t js_dataview_setUint8(struct js *js, jsval_t *args, int nargs);
 static jsval_t js_dataview_getInt16(struct js *js, jsval_t *args, int nargs);
@@ -594,6 +597,159 @@ static jsval_t js_typedarray_fill(struct js *js, jsval_t *args, int nargs) {
     goto L_DONE;
   L_DONE:
     return this_val;
+}
+
+// TypedArray.prototype.toReversed()
+static jsval_t js_typedarray_toReversed(struct js *js, jsval_t *args, int nargs) {
+  (void)args; (void)nargs;
+  jsval_t this_val = js_getthis(js);
+  jsval_t ta_data_val = js_get_slot(js, this_val, SLOT_BUFFER);
+  
+  TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
+  if (!ta_data) return js_mkerr(js, "Invalid TypedArray");
+  
+  size_t length = ta_data->length;
+  size_t element_size = get_element_size(ta_data->type);
+  ArrayBufferData *new_buffer = create_array_buffer_data(length * element_size);
+  if (!new_buffer) return js_mkerr(js, "Failed to allocate new buffer");
+  
+  uint8_t *src = ta_data->buffer->data + ta_data->byte_offset;
+  uint8_t *dst = new_buffer->data;
+  
+  for (size_t i = 0; i < length; i++) {
+    memcpy(dst + i * element_size, src + (length - 1 - i) * element_size, element_size);
+  }
+  
+  return create_typed_array(js, ta_data->type, new_buffer, 0, length, "TypedArray");
+}
+
+// TypedArray.prototype.toSorted(comparefn)
+static jsval_t js_typedarray_toSorted(struct js *js, jsval_t *args, int nargs) {
+  jsval_t this_val = js_getthis(js);
+  jsval_t ta_data_val = js_get_slot(js, this_val, SLOT_BUFFER);
+  
+  TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
+  if (!ta_data) return js_mkerr(js, "Invalid TypedArray");
+  
+  size_t length = ta_data->length;
+  size_t element_size = get_element_size(ta_data->type);
+  ArrayBufferData *new_buffer = create_array_buffer_data(length * element_size);
+  if (!new_buffer) return js_mkerr(js, "Failed to allocate new buffer");
+  
+  memcpy(new_buffer->data, ta_data->buffer->data + ta_data->byte_offset, length * element_size);
+  
+  jsval_t result = create_typed_array(js, ta_data->type, new_buffer, 0, length, "TypedArray");
+  jsval_t result_ta_val = js_get_slot(js, result, SLOT_BUFFER);
+  TypedArrayData *result_ta = (TypedArrayData *)js_gettypedarray(result_ta_val);
+  uint8_t *data = result_ta->buffer->data;
+  
+  jsval_t comparefn = (nargs > 0 && js_type(args[0]) == JS_FUNC) ? args[0] : js_mkundef();
+  bool has_comparefn = js_type(comparefn) == JS_FUNC;
+  
+  for (size_t i = 1; i < length; i++) {
+    for (size_t j = i; j > 0; j--) {
+      double a_val, b_val;
+      int cmp;
+      
+      static const void *read_dispatch[] = {
+        &&R_INT8, &&R_UINT8, &&R_UINT8, &&R_INT16, &&R_UINT16,
+        &&R_INT32, &&R_UINT32, &&R_FLOAT32, &&R_FLOAT64, &&R_DONE, &&R_DONE
+      };
+      
+      if (ta_data->type > TYPED_ARRAY_BIGUINT64) goto R_DONE;
+      goto *read_dispatch[ta_data->type];
+      
+      R_INT8:    a_val = (double)((int8_t*)data)[j-1]; b_val = (double)((int8_t*)data)[j]; goto R_COMPARE;
+      R_UINT8:   a_val = (double)data[j-1]; b_val = (double)data[j]; goto R_COMPARE;
+      R_INT16:   a_val = (double)((int16_t*)data)[j-1]; b_val = (double)((int16_t*)data)[j]; goto R_COMPARE;
+      R_UINT16:  a_val = (double)((uint16_t*)data)[j-1]; b_val = (double)((uint16_t*)data)[j]; goto R_COMPARE;
+      R_INT32:   a_val = (double)((int32_t*)data)[j-1]; b_val = (double)((int32_t*)data)[j]; goto R_COMPARE;
+      R_UINT32:  a_val = (double)((uint32_t*)data)[j-1]; b_val = (double)((uint32_t*)data)[j]; goto R_COMPARE;
+      R_FLOAT32: a_val = (double)((float*)data)[j-1]; b_val = (double)((float*)data)[j]; goto R_COMPARE;
+      R_FLOAT64: a_val = ((double*)data)[j-1]; b_val = ((double*)data)[j]; goto R_COMPARE;
+      R_DONE:    goto SORT_DONE;
+      
+      R_COMPARE:
+      if (has_comparefn) {
+        jsval_t cmp_args[2] = { js_mknum(a_val), js_mknum(b_val) };
+        jsval_t cmp_result = js_call(js, comparefn, cmp_args, 2);
+        cmp = (int)js_getnum(cmp_result);
+      } else {
+        cmp = (a_val > b_val) ? 1 : ((a_val < b_val) ? -1 : 0);
+      }
+      
+      if (cmp <= 0) break;
+      
+      static const void *swap_dispatch[] = {
+        &&S_INT8, &&S_UINT8, &&S_UINT8, &&S_INT16, &&S_UINT16,
+        &&S_INT32, &&S_UINT32, &&S_FLOAT32, &&S_FLOAT64, &&S_DONE, &&S_DONE
+      };
+      
+      if (ta_data->type > TYPED_ARRAY_BIGUINT64) goto S_DONE;
+      goto *swap_dispatch[ta_data->type];
+      
+      S_INT8:    { int8_t tmp = ((int8_t*)data)[j-1]; ((int8_t*)data)[j-1] = ((int8_t*)data)[j]; ((int8_t*)data)[j] = tmp; goto S_DONE; }
+      S_UINT8:   { uint8_t tmp = data[j-1]; data[j-1] = data[j]; data[j] = tmp; goto S_DONE; }
+      S_INT16:   { int16_t tmp = ((int16_t*)data)[j-1]; ((int16_t*)data)[j-1] = ((int16_t*)data)[j]; ((int16_t*)data)[j] = tmp; goto S_DONE; }
+      S_UINT16:  { uint16_t tmp = ((uint16_t*)data)[j-1]; ((uint16_t*)data)[j-1] = ((uint16_t*)data)[j]; ((uint16_t*)data)[j] = tmp; goto S_DONE; }
+      S_INT32:   { int32_t tmp = ((int32_t*)data)[j-1]; ((int32_t*)data)[j-1] = ((int32_t*)data)[j]; ((int32_t*)data)[j] = tmp; goto S_DONE; }
+      S_UINT32:  { uint32_t tmp = ((uint32_t*)data)[j-1]; ((uint32_t*)data)[j-1] = ((uint32_t*)data)[j]; ((uint32_t*)data)[j] = tmp; goto S_DONE; }
+      S_FLOAT32: { float tmp = ((float*)data)[j-1]; ((float*)data)[j-1] = ((float*)data)[j]; ((float*)data)[j] = tmp; goto S_DONE; }
+      S_FLOAT64: { double tmp = ((double*)data)[j-1]; ((double*)data)[j-1] = ((double*)data)[j]; ((double*)data)[j] = tmp; goto S_DONE; }
+      S_DONE:;
+    }
+  }
+  
+  SORT_DONE:
+  return result;
+}
+
+// TypedArray.prototype.with(index, value)
+static jsval_t js_typedarray_with(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 2) return js_mkerr(js, "with requires index and value");
+  
+  jsval_t this_val = js_getthis(js);
+  jsval_t ta_data_val = js_get_slot(js, this_val, SLOT_BUFFER);
+  
+  TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
+  if (!ta_data) return js_mkerr(js, "Invalid TypedArray");
+  
+  int index = (int)js_getnum(args[0]);
+  double value = js_getnum(args[1]);
+  size_t length = ta_data->length;
+  
+  if (index < 0) index = length + index;
+  if (index < 0 || (size_t)index >= length) {
+    return js_mkerr(js, "Index out of bounds");
+  }
+  
+  size_t element_size = get_element_size(ta_data->type);
+  ArrayBufferData *new_buffer = create_array_buffer_data(length * element_size);
+  if (!new_buffer) return js_mkerr(js, "Failed to allocate new buffer");
+  
+  memcpy(new_buffer->data, ta_data->buffer->data + ta_data->byte_offset, length * element_size);
+  
+  uint8_t *data = new_buffer->data;
+  
+  static const void *dispatch[] = {
+    &&W_INT8, &&W_UINT8, &&W_UINT8, &&W_INT16, &&W_UINT16,
+    &&W_INT32, &&W_UINT32, &&W_FLOAT32, &&W_FLOAT64, &&W_DONE, &&W_DONE
+  };
+  
+  if (ta_data->type > TYPED_ARRAY_BIGUINT64) goto W_DONE;
+  goto *dispatch[ta_data->type];
+  
+  W_INT8:    ((int8_t*)data)[index] = (int8_t)value; goto W_DONE;
+  W_UINT8:   data[index] = (uint8_t)value; goto W_DONE;
+  W_INT16:   ((int16_t*)data)[index] = (int16_t)value; goto W_DONE;
+  W_UINT16:  ((uint16_t*)data)[index] = (uint16_t)value; goto W_DONE;
+  W_INT32:   ((int32_t*)data)[index] = (int32_t)value; goto W_DONE;
+  W_UINT32:  ((uint32_t*)data)[index] = (uint32_t)value; goto W_DONE;
+  W_FLOAT32: ((float*)data)[index] = (float)value; goto W_DONE;
+  W_FLOAT64: ((double*)data)[index] = value; goto W_DONE;
+  W_DONE:
+  
+  return create_typed_array(js, ta_data->type, new_buffer, 0, length, "TypedArray");
 }
 
 #define DEFINE_TYPEDARRAY_CONSTRUCTOR(name, type) \
@@ -1415,6 +1571,9 @@ void init_buffer_module() {
   js_set(js, typedarray_proto, "slice", js_mkfun(js_typedarray_slice));
   js_set(js, typedarray_proto, "subarray", js_mkfun(js_typedarray_subarray));
   js_set(js, typedarray_proto, "fill", js_mkfun(js_typedarray_fill));
+  js_set(js, typedarray_proto, "toReversed", js_mkfun(js_typedarray_toReversed));
+  js_set(js, typedarray_proto, "toSorted", js_mkfun(js_typedarray_toSorted));
+  js_set(js, typedarray_proto, "with", js_mkfun(js_typedarray_with));
   js_set(js, typedarray_proto, get_toStringTag_sym_key(), js_mkstr(js, "TypedArray", 10));
   
   #define SETUP_TYPEDARRAY(name) \
