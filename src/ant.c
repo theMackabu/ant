@@ -8693,6 +8693,8 @@ static jsval_t js_unary(struct js *js) {
     js->this_val = saved_this;
     js->new_target = saved_new_target;
     
+    if (is_err(result)) return result;
+    
     uint8_t rtype = vtype(result);
     jsval_t new_result = (
       rtype == T_OBJ || rtype == T_ARR ||
@@ -18555,7 +18557,8 @@ static jsval_t builtin_Promise(struct js *js, jsval_t *args, int nargs) {
   }
   
   if (nargs == 0 || (vtype(args[0]) != T_FUNC && vtype(args[0]) != T_CFUNC)) {
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Promise resolver undefined is not a function");
+    const char *val_str = nargs == 0 ? "undefined" : js_str(js, args[0]);
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Promise resolver %s is not a function", val_str);
   }
   
   jsval_t p = mkpromise(js);
