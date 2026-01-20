@@ -58,6 +58,9 @@ void js_delscope(struct js *);
 bool js_truthy(struct js *, jsval_t);
 void js_setmaxcss(struct js *, size_t);
 
+uint32_t js_to_uint32(double d);
+int32_t js_to_int32(double d);
+
 bool js_chkargs(jsval_t *, int, const char *);
 void js_set_filename(struct js *, const char *);
 void js_stats(struct js *, size_t *total, size_t *min, size_t *cstacksize);
@@ -91,6 +94,7 @@ jsval_t js_mkerr(struct js *js, const char *fmt, ...);
 jsval_t js_mkerr_typed(struct js *js, js_err_type_t err_type, const char *fmt, ...);
 jsval_t js_mkfun(jsval_t (*fn)(struct js *, jsval_t *, int));
 jsval_t js_heavy_mkfun(struct js *js, jsval_t (*fn)(struct js *, jsval_t *, int), jsval_t data);
+jsval_t js_mkprop_fast(struct js *js, jsval_t obj, const char *key, size_t len, jsval_t v);
 
 jsval_t js_call(struct js *js, jsval_t func, jsval_t *args, int nargs);
 jsval_t js_call_with_this(struct js *js, jsval_t func, jsval_t this_val, jsval_t *args, int nargs);

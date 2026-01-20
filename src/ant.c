@@ -722,7 +722,7 @@ static inline bool is_unboxed_obj(struct js *js, jsval_t val, jsval_t expected_p
   return vdata(proto) == vdata(expected_proto);
 }
 
-static uint32_t js_to_uint32(double d) {
+uint32_t js_to_uint32(double d) {
   if (!isfinite(d) || d == 0) return 0;
   double sign = (d < 0) ? -1.0 : 1.0;
   double posInt = sign * floor(fabs(d));
@@ -731,7 +731,7 @@ static uint32_t js_to_uint32(double d) {
   return (uint32_t) val;
 }
 
-static int32_t js_to_int32(double d) {
+int32_t js_to_int32(double d) {
   uint32_t uint32 = js_to_uint32(d);
   if (uint32 >= 2147483648U) return (int32_t)(uint32 - 4294967296.0);
   return (int32_t) uint32;
@@ -3159,6 +3159,12 @@ static inline jsval_t mkprop_fast(struct js *js, jsval_t obj, jsval_t k, jsval_t
   
   jsoff_t prop_header = (b & ~(3U | FLAGMASK)) | T_PROP | flags;
   return mkentity(js, prop_header, buf, sizeof(buf));
+}
+
+jsval_t js_mkprop_fast(struct js *js, jsval_t obj, const char *key, size_t len, jsval_t v) {
+  jsval_t k = js_mkstr(js, key, len);
+  if (is_err(k)) return k;
+  return mkprop_fast(js, obj, k, v, 0);
 }
 
 static jsval_t mkslot(struct js *js, jsval_t obj, internal_slot_t slot, jsval_t v) {

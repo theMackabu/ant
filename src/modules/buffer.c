@@ -56,8 +56,13 @@ static jsval_t js_typedarray_fill(struct js *js, jsval_t *args, int nargs);
 static jsval_t js_dataview_getUint8(struct js *js, jsval_t *args, int nargs);
 static jsval_t js_dataview_setUint8(struct js *js, jsval_t *args, int nargs);
 static jsval_t js_dataview_getInt16(struct js *js, jsval_t *args, int nargs);
+static jsval_t js_dataview_setInt16(struct js *js, jsval_t *args, int nargs);
 static jsval_t js_dataview_getInt32(struct js *js, jsval_t *args, int nargs);
+static jsval_t js_dataview_setInt32(struct js *js, jsval_t *args, int nargs);
 static jsval_t js_dataview_getFloat32(struct js *js, jsval_t *args, int nargs);
+static jsval_t js_dataview_setFloat32(struct js *js, jsval_t *args, int nargs);
+static jsval_t js_dataview_getFloat64(struct js *js, jsval_t *args, int nargs);
+static jsval_t js_dataview_setFloat64(struct js *js, jsval_t *args, int nargs);
 static jsval_t js_buffer_toString(struct js *js, jsval_t *args, int nargs);
 static jsval_t js_buffer_toBase64(struct js *js, jsval_t *args, int nargs);
 static jsval_t js_buffer_write(struct js *js, jsval_t *args, int nargs);
@@ -583,14 +588,12 @@ static jsval_t js_dataview_constructor(struct js *js, jsval_t *args, int nargs) 
   buffer->ref_count++;
   
   jsval_t obj = js_mkobj(js);
-  js_set(js, obj, "_dataview_data", js_mknum((double)(uintptr_t)dv_data));
+  jsval_t proto = js_get_ctor_proto(js, "DataView", 8);
+  if (js_type(proto) == JS_OBJ) js_set_proto(js, obj, proto);
+  
+  js_set_slot(js, obj, SLOT_DATA, js_mknum((double)(uintptr_t)dv_data));
   js_set(js, obj, "byteLength", js_mknum((double)byte_length));
   js_set(js, obj, "byteOffset", js_mknum((double)byte_offset));
-  js_set(js, obj, "getUint8", js_mkfun(js_dataview_getUint8));
-  js_set(js, obj, "setUint8", js_mkfun(js_dataview_setUint8));
-  js_set(js, obj, "getInt16", js_mkfun(js_dataview_getInt16));
-  js_set(js, obj, "getInt32", js_mkfun(js_dataview_getInt32));
-  js_set(js, obj, "getFloat32", js_mkfun(js_dataview_getFloat32));
   
   return obj;
 }
@@ -600,7 +603,7 @@ static jsval_t js_dataview_getUint8(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "getUint8 requires byteOffset");
   
   jsval_t this_val = js_getthis(js);
-  jsval_t dv_data_val = js_get(js, this_val, "_dataview_data");
+  jsval_t dv_data_val = js_get_slot(js, this_val, SLOT_DATA);
   
   if (js_type(dv_data_val) != JS_NUM) {
     return js_mkerr(js, "Not a DataView");
@@ -622,7 +625,7 @@ static jsval_t js_dataview_setUint8(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "setUint8 requires byteOffset and value");
   
   jsval_t this_val = js_getthis(js);
-  jsval_t dv_data_val = js_get(js, this_val, "_dataview_data");
+  jsval_t dv_data_val = js_get_slot(js, this_val, SLOT_DATA);
   
   if (js_type(dv_data_val) != JS_NUM) {
     return js_mkerr(js, "Not a DataView");
@@ -630,7 +633,7 @@ static jsval_t js_dataview_setUint8(struct js *js, jsval_t *args, int nargs) {
   
   DataViewData *dv = (DataViewData *)(uintptr_t)js_getnum(dv_data_val);
   size_t offset = (size_t)js_getnum(args[0]);
-  uint8_t value = (uint8_t)js_getnum(args[1]);
+  uint8_t value = (uint8_t)js_to_uint32(js_getnum(args[1]));
   
   if (offset >= dv->byte_length) {
     return js_mkerr(js, "Offset out of bounds");
@@ -645,7 +648,7 @@ static jsval_t js_dataview_getInt16(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "getInt16 requires byteOffset");
   
   jsval_t this_val = js_getthis(js);
-  jsval_t dv_data_val = js_get(js, this_val, "_dataview_data");
+  jsval_t dv_data_val = js_get_slot(js, this_val, SLOT_DATA);
   
   if (js_type(dv_data_val) != JS_NUM) {
     return js_mkerr(js, "Not a DataView");
@@ -676,7 +679,7 @@ static jsval_t js_dataview_getInt32(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "getInt32 requires byteOffset");
   
   jsval_t this_val = js_getthis(js);
-  jsval_t dv_data_val = js_get(js, this_val, "_dataview_data");
+  jsval_t dv_data_val = js_get_slot(js, this_val, SLOT_DATA);
   
   if (js_type(dv_data_val) != JS_NUM) {
     return js_mkerr(js, "Not a DataView");
@@ -707,7 +710,7 @@ static jsval_t js_dataview_getFloat32(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "getFloat32 requires byteOffset");
   
   jsval_t this_val = js_getthis(js);
-  jsval_t dv_data_val = js_get(js, this_val, "_dataview_data");
+  jsval_t dv_data_val = js_get_slot(js, this_val, SLOT_DATA);
   
   if (js_type(dv_data_val) != JS_NUM) {
     return js_mkerr(js, "Not a DataView");
@@ -733,6 +736,197 @@ static jsval_t js_dataview_getFloat32(struct js *js, jsval_t *args, int nargs) {
   float value;
   memcpy(&value, &bits, 4);
   return js_mknum((double)value);
+}
+
+// DataView.prototype.setInt16(byteOffset, value, littleEndian)
+static jsval_t js_dataview_setInt16(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 2) return js_mkerr(js, "setInt16 requires byteOffset and value");
+  
+  jsval_t this_val = js_getthis(js);
+  jsval_t dv_data_val = js_get_slot(js, this_val, SLOT_DATA);
+  
+  if (js_type(dv_data_val) != JS_NUM) {
+    return js_mkerr(js, "Not a DataView");
+  }
+  
+  DataViewData *dv = (DataViewData *)(uintptr_t)js_getnum(dv_data_val);
+  size_t offset = (size_t)js_getnum(args[0]);
+  int16_t value = (int16_t)js_to_int32(js_getnum(args[1]));
+  bool little_endian = (nargs > 2 && js_truthy(js, args[2]));
+  
+  if (offset + 2 > dv->byte_length) {
+    return js_mkerr(js, "Offset out of bounds");
+  }
+  
+  uint8_t *ptr = dv->buffer->data + dv->byte_offset + offset;
+  
+  if (little_endian) {
+    ptr[0] = (uint8_t)(value & 0xFF);
+    ptr[1] = (uint8_t)((value >> 8) & 0xFF);
+  } else {
+    ptr[0] = (uint8_t)((value >> 8) & 0xFF);
+    ptr[1] = (uint8_t)(value & 0xFF);
+  }
+  
+  return js_mkundef();
+}
+
+// DataView.prototype.setInt32(byteOffset, value, littleEndian)
+static jsval_t js_dataview_setInt32(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 2) return js_mkerr(js, "setInt32 requires byteOffset and value");
+  
+  jsval_t this_val = js_getthis(js);
+  jsval_t dv_data_val = js_get_slot(js, this_val, SLOT_DATA);
+  
+  if (js_type(dv_data_val) != JS_NUM) {
+    return js_mkerr(js, "Not a DataView");
+  }
+  
+  DataViewData *dv = (DataViewData *)(uintptr_t)js_getnum(dv_data_val);
+  size_t offset = (size_t)js_getnum(args[0]);
+  int32_t value = js_to_int32(js_getnum(args[1]));
+  bool little_endian = (nargs > 2 && js_truthy(js, args[2]));
+  
+  if (offset + 4 > dv->byte_length) {
+    return js_mkerr(js, "Offset out of bounds");
+  }
+  
+  uint8_t *ptr = dv->buffer->data + dv->byte_offset + offset;
+  
+  if (little_endian) {
+    ptr[0] = (uint8_t)(value & 0xFF);
+    ptr[1] = (uint8_t)((value >> 8) & 0xFF);
+    ptr[2] = (uint8_t)((value >> 16) & 0xFF);
+    ptr[3] = (uint8_t)((value >> 24) & 0xFF);
+  } else {
+    ptr[0] = (uint8_t)((value >> 24) & 0xFF);
+    ptr[1] = (uint8_t)((value >> 16) & 0xFF);
+    ptr[2] = (uint8_t)((value >> 8) & 0xFF);
+    ptr[3] = (uint8_t)(value & 0xFF);
+  }
+  
+  return js_mkundef();
+}
+
+// DataView.prototype.setFloat32(byteOffset, value, littleEndian)
+static jsval_t js_dataview_setFloat32(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 2) return js_mkerr(js, "setFloat32 requires byteOffset and value");
+  
+  jsval_t this_val = js_getthis(js);
+  jsval_t dv_data_val = js_get_slot(js, this_val, SLOT_DATA);
+  
+  if (js_type(dv_data_val) != JS_NUM) {
+    return js_mkerr(js, "Not a DataView");
+  }
+  
+  DataViewData *dv = (DataViewData *)(uintptr_t)js_getnum(dv_data_val);
+  size_t offset = (size_t)js_getnum(args[0]);
+  float value = (float)js_getnum(args[1]);
+  bool little_endian = (nargs > 2 && js_truthy(js, args[2]));
+  
+  if (offset + 4 > dv->byte_length) {
+    return js_mkerr(js, "Offset out of bounds");
+  }
+  
+  uint8_t *ptr = dv->buffer->data + dv->byte_offset + offset;
+  uint32_t bits;
+  memcpy(&bits, &value, 4);
+  
+  if (little_endian) {
+    ptr[0] = (uint8_t)(bits & 0xFF);
+    ptr[1] = (uint8_t)((bits >> 8) & 0xFF);
+    ptr[2] = (uint8_t)((bits >> 16) & 0xFF);
+    ptr[3] = (uint8_t)((bits >> 24) & 0xFF);
+  } else {
+    ptr[0] = (uint8_t)((bits >> 24) & 0xFF);
+    ptr[1] = (uint8_t)((bits >> 16) & 0xFF);
+    ptr[2] = (uint8_t)((bits >> 8) & 0xFF);
+    ptr[3] = (uint8_t)(bits & 0xFF);
+  }
+  
+  return js_mkundef();
+}
+
+// DataView.prototype.getFloat64(byteOffset, littleEndian)
+static jsval_t js_dataview_getFloat64(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "getFloat64 requires byteOffset");
+  
+  jsval_t this_val = js_getthis(js);
+  jsval_t dv_data_val = js_get_slot(js, this_val, SLOT_DATA);
+  
+  if (js_type(dv_data_val) != JS_NUM) {
+    return js_mkerr(js, "Not a DataView");
+  }
+  
+  DataViewData *dv = (DataViewData *)(uintptr_t)js_getnum(dv_data_val);
+  size_t offset = (size_t)js_getnum(args[0]);
+  bool little_endian = (nargs > 1 && js_truthy(js, args[1]));
+  
+  if (offset + 8 > dv->byte_length) {
+    return js_mkerr(js, "Offset out of bounds");
+  }
+  
+  uint8_t *ptr = dv->buffer->data + dv->byte_offset + offset;
+  uint64_t bits;
+  
+  if (little_endian) {
+    bits = (uint64_t)ptr[0] | ((uint64_t)ptr[1] << 8) | ((uint64_t)ptr[2] << 16) | ((uint64_t)ptr[3] << 24) |
+           ((uint64_t)ptr[4] << 32) | ((uint64_t)ptr[5] << 40) | ((uint64_t)ptr[6] << 48) | ((uint64_t)ptr[7] << 56);
+  } else {
+    bits = ((uint64_t)ptr[0] << 56) | ((uint64_t)ptr[1] << 48) | ((uint64_t)ptr[2] << 40) | ((uint64_t)ptr[3] << 32) |
+           ((uint64_t)ptr[4] << 24) | ((uint64_t)ptr[5] << 16) | ((uint64_t)ptr[6] << 8) | (uint64_t)ptr[7];
+  }
+  
+  double value;
+  memcpy(&value, &bits, 8);
+  return js_mknum(value);
+}
+
+// DataView.prototype.setFloat64(byteOffset, value, littleEndian)
+static jsval_t js_dataview_setFloat64(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 2) return js_mkerr(js, "setFloat64 requires byteOffset and value");
+  
+  jsval_t this_val = js_getthis(js);
+  jsval_t dv_data_val = js_get_slot(js, this_val, SLOT_DATA);
+  
+  if (js_type(dv_data_val) != JS_NUM) {
+    return js_mkerr(js, "Not a DataView");
+  }
+  
+  DataViewData *dv = (DataViewData *)(uintptr_t)js_getnum(dv_data_val);
+  size_t offset = (size_t)js_getnum(args[0]);
+  double value = js_getnum(args[1]);
+  bool little_endian = (nargs > 2 && js_truthy(js, args[2]));
+  
+  if (offset + 8 > dv->byte_length) {
+    return js_mkerr(js, "Offset out of bounds");
+  }
+  
+  uint8_t *ptr = dv->buffer->data + dv->byte_offset + offset;
+  uint64_t bits;
+  memcpy(&bits, &value, 8);
+  
+  if (little_endian) {
+    ptr[0] = (uint8_t)(bits & 0xFF);
+    ptr[1] = (uint8_t)((bits >> 8) & 0xFF);
+    ptr[2] = (uint8_t)((bits >> 16) & 0xFF);
+    ptr[3] = (uint8_t)((bits >> 24) & 0xFF);
+    ptr[4] = (uint8_t)((bits >> 32) & 0xFF);
+    ptr[5] = (uint8_t)((bits >> 40) & 0xFF);
+    ptr[6] = (uint8_t)((bits >> 48) & 0xFF);
+    ptr[7] = (uint8_t)((bits >> 56) & 0xFF);
+  } else {
+    ptr[0] = (uint8_t)((bits >> 56) & 0xFF);
+    ptr[1] = (uint8_t)((bits >> 48) & 0xFF);
+    ptr[2] = (uint8_t)((bits >> 40) & 0xFF);
+    ptr[3] = (uint8_t)((bits >> 32) & 0xFF);
+    ptr[4] = (uint8_t)((bits >> 24) & 0xFF);
+    ptr[5] = (uint8_t)((bits >> 16) & 0xFF);
+    ptr[6] = (uint8_t)((bits >> 8) & 0xFF);
+    ptr[7] = (uint8_t)(bits & 0xFF);
+  }
+  
+  return js_mkundef();
 }
 
 // Buffer.from(array/string/buffer)
@@ -932,7 +1126,9 @@ void init_buffer_module() {
   js_set(js, arraybuffer_proto, get_toStringTag_sym_key(), js_mkstr(js, "ArrayBuffer", 11));
   
   js_set_slot(js, arraybuffer_ctor_obj, SLOT_CFUNC, js_mkfun(js_arraybuffer_constructor));
-  js_setprop(js, arraybuffer_ctor_obj, js_mkstr(js, "prototype", 9), arraybuffer_proto);
+  js_mkprop_fast(js, arraybuffer_ctor_obj, "prototype", 9, arraybuffer_proto);
+  js_mkprop_fast(js, arraybuffer_ctor_obj, "name", 4, ANT_STRING("ArrayBuffer"));
+  js_set_descriptor(js, arraybuffer_ctor_obj, "name", 4, 0);
   js_set(js, glob, "ArrayBuffer", js_obj_to_func(arraybuffer_ctor_obj));
   
   #define SETUP_TYPEDARRAY(name) \
@@ -959,15 +1155,26 @@ void init_buffer_module() {
   SETUP_TYPEDARRAY(BigInt64Array);
   SETUP_TYPEDARRAY(BigUint64Array);
   
-  jsval_t dataview_constructor = js_mkfun(js_dataview_constructor);
+  jsval_t dataview_ctor_obj = js_mkobj(js);
   jsval_t dataview_proto = js_mkobj(js);
+  
   js_set(js, dataview_proto, "getUint8", js_mkfun(js_dataview_getUint8));
   js_set(js, dataview_proto, "setUint8", js_mkfun(js_dataview_setUint8));
   js_set(js, dataview_proto, "getInt16", js_mkfun(js_dataview_getInt16));
+  js_set(js, dataview_proto, "setInt16", js_mkfun(js_dataview_setInt16));
   js_set(js, dataview_proto, "getInt32", js_mkfun(js_dataview_getInt32));
+  js_set(js, dataview_proto, "setInt32", js_mkfun(js_dataview_setInt32));
   js_set(js, dataview_proto, "getFloat32", js_mkfun(js_dataview_getFloat32));
-  js_set(js, dataview_constructor, "prototype", dataview_proto);
-  js_set(js, glob, "DataView", dataview_constructor);
+  js_set(js, dataview_proto, "setFloat32", js_mkfun(js_dataview_setFloat32));
+  js_set(js, dataview_proto, "getFloat64", js_mkfun(js_dataview_getFloat64));
+  js_set(js, dataview_proto, "setFloat64", js_mkfun(js_dataview_setFloat64));
+  js_set(js, dataview_proto, get_toStringTag_sym_key(), js_mkstr(js, "DataView", 8));
+
+  js_set_slot(js, dataview_ctor_obj, SLOT_CFUNC, js_mkfun(js_dataview_constructor));
+  js_mkprop_fast(js, dataview_ctor_obj, "prototype", 9, dataview_proto);
+  js_mkprop_fast(js, dataview_ctor_obj, "name", 4, ANT_STRING("DataView"));
+  js_set_descriptor(js, dataview_ctor_obj, "name", 4, 0);
+  js_set(js, glob, "DataView", js_obj_to_func(dataview_ctor_obj));
   
   jsval_t sharedarraybuffer_ctor_obj = js_mkobj(js);
   jsval_t sharedarraybuffer_proto = js_mkobj(js);
@@ -976,7 +1183,9 @@ void init_buffer_module() {
   js_set(js, sharedarraybuffer_proto, get_toStringTag_sym_key(), js_mkstr(js, "SharedArrayBuffer", 17));
   
   js_set_slot(js, sharedarraybuffer_ctor_obj, SLOT_CFUNC, js_mkfun(js_sharedarraybuffer_constructor));
-  js_setprop(js, sharedarraybuffer_ctor_obj, js_mkstr(js, "prototype", 9), sharedarraybuffer_proto);
+  js_mkprop_fast(js, sharedarraybuffer_ctor_obj, "prototype", 9, sharedarraybuffer_proto);
+  js_mkprop_fast(js, sharedarraybuffer_ctor_obj, "name", 4, ANT_STRING("SharedArrayBuffer"));
+  js_set_descriptor(js, sharedarraybuffer_ctor_obj, "name", 4, 0);
   js_set(js, glob, "SharedArrayBuffer", js_obj_to_func(sharedarraybuffer_ctor_obj));
   
   jsval_t buffer_obj = js_mkobj(js);
