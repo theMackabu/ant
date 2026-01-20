@@ -248,10 +248,11 @@ static const UT_icd promise_handler_icd = {
 };
 
 typedef struct promise_data_entry {
-  uint32_t promise_id;
-  int state;
   jsval_t value;
   UT_array *handlers;
+  uint32_t promise_id;
+  jsoff_t obj_offset;
+  int state;
   UT_hash_handle hh;
 } promise_data_entry_t;
 
@@ -18406,6 +18407,7 @@ static promise_data_entry_t *get_promise_data(uint32_t promise_id, bool create) 
   
   entry = (promise_data_entry_t *)malloc(sizeof(promise_data_entry_t));
   entry->promise_id = promise_id;
+  entry->obj_offset = 0;
   entry->state = 0;
   entry->value = js_mkundef();
   utarray_new(entry->handlers, &promise_handler_icd);
@@ -18427,7 +18429,8 @@ static jsval_t mkpromise(struct js *js) {
   
   uint32_t pid = next_promise_id++;
   set_slot(js, obj, SLOT_PID, tov((double)pid));
-  get_promise_data(pid, true);
+  promise_data_entry_t *pd = get_promise_data(pid, true);
+  if (pd) pd->obj_offset = (jsoff_t)vdata(obj);
   
   return mkval(T_PROMISE, vdata(obj));
 }
@@ -18479,14 +18482,7 @@ static jsval_t builtin_trigger_handler_wrapper(struct js *js, jsval_t *args, int
     }
   }
 
-  utarray_clear(pd->handlers);
-  
-  if (pd->state != 0) {
-    utarray_free(pd->handlers);
-    HASH_DEL(promise_registry, pd);
-    free(pd);
-  }
-  
+  utarray_clear(pd->handlers);  
   return js_mkundef();
 }
 
@@ -21607,14 +21603,25 @@ void js_gc_update_roots(GC_UPDATE_ARGS) {
   }
 
   promise_data_entry_t *pd, *pd_tmp;
-  HASH_ITER(hh, promise_registry, pd, pd_tmp) {
-    FWD_VAL(pd->value);
-    UTARRAY_EACH(pd->handlers, promise_handler_t, h) {
-      FWD_VAL(h->onFulfilled);
-      FWD_VAL(h->onRejected);
-      FWD_VAL(h->nextPromise);
+  for (promise_data_entry_t *new_promise_registry = NULL, *_once = NULL; !_once; _once = (void*)1, promise_registry = new_promise_registry)
+    HASH_ITER(hh, promise_registry, pd, pd_tmp) {
+      HASH_DEL(promise_registry, pd);
+      jsoff_t new_off = fwd_off(ctx, pd->obj_offset);
+      if (new_off == pd->obj_offset && pd->obj_offset != 0) {
+        // Object not forwarded means it's dead - free the entry
+        utarray_free(pd->handlers);
+        free(pd);
+        continue;
+      }
+      pd->obj_offset = new_off;
+      FWD_VAL(pd->value);
+      UTARRAY_EACH(pd->handlers, promise_handler_t, h) {
+        FWD_VAL(h->onFulfilled);
+        FWD_VAL(h->onRejected);
+        FWD_VAL(h->nextPromise);
+      }
+      HASH_ADD(hh, new_promise_registry, promise_id, sizeof(uint32_t), pd);
     }
-  }
 
   if (rt && rt->js == js) FWD_VAL(rt->ant_obj);
 

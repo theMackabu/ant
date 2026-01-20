@@ -26,7 +26,7 @@ typedef uint64_t jsval_t;
 #define GC_FWD_ARGS jsval_t (*fwd_val)(void *ctx, jsval_t old), void *ctx
 #define GC_UPDATE_ARGS struct js *js, jsoff_t (*fwd_off)(void *ctx, jsoff_t old), GC_FWD_ARGS
 
-enum { 
+enum {
   JS_UNDEF, JS_NULL, JS_TRUE, JS_FALSE, JS_STR, JS_NUM,
   JS_ERR, JS_PRIV, JS_PROMISE, JS_OBJ, JS_FUNC, JS_SYMBOL
 };
