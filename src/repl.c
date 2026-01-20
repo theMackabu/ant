@@ -26,6 +26,8 @@
 
 #define MAX_HISTORY 512
 #define MAX_LINE_LENGTH 4096
+#define MAX_MULTILINE_LENGTH 65536
+#define INPUT char *line, int *pos, int *len, key_event_t *key, history_t *hist, const char *prompt
 
 static volatile sig_atomic_t ctrl_c_pressed = 0;
 
@@ -48,6 +50,11 @@ typedef struct {
   bool has_arg;
   cmd_result_t (*handler)(struct js *js, history_t *history, const char *arg);
 } repl_command_t;
+
+static void sigint_handler(int sig) {
+  (void)sig;
+  ctrl_c_pressed++;
+}
 
 static cmd_result_t cmd_help(struct js *js, history_t *history, const char *arg);
 static cmd_result_t cmd_exit(struct js *js, history_t *history, const char *arg);
@@ -163,28 +170,19 @@ static cmd_result_t execute_command(struct js *js, history_t *history, const cha
   const char *cmd_start = line + 1;
   
   for (const repl_command_t *cmd = commands; cmd->name; cmd++) {
-    size_t name_len = strlen(cmd->name);
+    size_t n = strlen(cmd->name);
+    if (strncmp(cmd_start, cmd->name, n) != 0) continue;
     
-    if (cmd->has_arg) {
-      if (
-        strncmp(cmd_start, cmd->name, name_len) == 0 &&
-        (cmd_start[name_len] == ' ' || cmd_start[name_len] == '\0')
-      ) {
-        const char *arg = cmd_start + name_len;
-        while (*arg == ' ') arg++;
-        return cmd->handler(js, history, arg);
-      }
-    } else {
-      if (strcmp(cmd_start, cmd->name) == 0) return cmd->handler(js, history, NULL);
+    char next = cmd_start[n];
+    if (cmd->has_arg && (next == ' ' || next == '\0')) {
+      const char *arg = cmd_start + n;
+      while (*arg == ' ') arg++;
+      return cmd->handler(js, history, arg);
     }
+    if (!cmd->has_arg && next == '\0') return cmd->handler(js, history, NULL);
   }
   
   return CMD_NOT_FOUND;
-}
-
-static void sigint_handler(int sig) {
-  (void)sig;
-  ctrl_c_pressed++;
 }
 
 static void history_init(history_t *hist) {
@@ -273,41 +271,44 @@ static void history_save(history_t *hist) {
   fclose(fp);
 }
 
-typedef enum { KEY_NONE, KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_BACKSPACE, KEY_ENTER, KEY_EOF, KEY_CHAR } key_type_t;
+typedef enum { 
+  KEY_NONE, KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT, 
+  KEY_BACKSPACE, KEY_ENTER, KEY_EOF, KEY_CHAR 
+} key_type_t;
+
 typedef struct { key_type_t type; int ch; } key_event_t;
-
-static void line_set(char *line, int *pos, int *len, const char *str) {
-  printf("\r\033[K> %s", str);
-  fflush(stdout);
-  strcpy(line, str);
-  *len = strlen(line);
-  *pos = *len;
-}
-
-static void line_backspace(char *line, int *pos, int *len) {
-  if (*pos > 0) {
-    memmove(line + *pos - 1, line + *pos, *len - *pos + 1);
-    (*pos)--; (*len)--;
-    printf("\b\033[K%s", line + *pos);
-    for (int i = 0; i < *len - *pos; i++) printf("\033[D");
-    fflush(stdout);
-  }
-}
-
-static void line_insert(char *line, int *pos, int *len, int c) {
-  if (*len < MAX_LINE_LENGTH - 1) {
-    memmove(line + *pos + 1, line + *pos, *len - *pos + 1);
-    line[*pos] = c;
-    (*pos)++; (*len)++;
-    printf("%c%s", c, line + *pos);
-    for (int i = 0; i < *len - *pos; i++) printf("\033[D");
-    fflush(stdout);
-  }
-}
+typedef void (*key_handler_t)(INPUT);
 
 static void cursor_move(int *pos, int len, int dir) {
   if (dir < 0 && *pos > 0) { printf("\033[D"); fflush(stdout); (*pos)--; }
   else if (dir > 0 && *pos < len) { printf("\033[C"); fflush(stdout); (*pos)++; }
+}
+
+static void line_set(char *line, int *pos, int *len, const char *str, const char *prompt) {
+  printf("\r\033[K%s%s", prompt, str);
+  fflush(stdout); strcpy(line, str);
+  *len = strlen(line); *pos = *len;
+}
+
+static void line_backspace(char *line, int *pos, int *len) {
+  if (*pos <= 0) return;
+  
+  memmove(line + *pos - 1, line + *pos, *len - *pos + 1);
+  (*pos)--; (*len)--;
+  printf("\b\033[K%s", line + *pos);
+  for (int i = 0; i < *len - *pos; i++) printf("\033[D");
+  fflush(stdout);
+}
+
+static void line_insert(char *line, int *pos, int *len, int c) {
+  if (*len >= MAX_LINE_LENGTH - 1) return;
+  
+  memmove(line + *pos + 1, line + *pos, *len - *pos + 1);
+  line[*pos] = c;
+  (*pos)++; (*len)++;
+  printf("%c%s", c, line + *pos);
+  for (int i = 0; i < *len - *pos; i++) printf("\033[D");
+  fflush(stdout);
 }
 
 #ifdef _WIN32
@@ -338,6 +339,7 @@ static struct termios saved_tio;
 static key_event_t read_key(void) {
   if (ctrl_c_pressed > 0) return (key_event_t){ KEY_EOF, 0 };
   int c = getchar();
+  if (c == EOF && !feof(stdin)) { clearerr(stdin); return (key_event_t){ KEY_EOF, 0 }; }
   if (c == EOF) return (key_event_t){ KEY_EOF, 0 };
   if (c == 27) {
     if (getchar() == '[') {
@@ -365,42 +367,121 @@ static key_event_t read_key(void) {
 #define TERM_RESTORE() tcsetattr(STDIN_FILENO, TCSANOW, &saved_tio)
 #endif
 
-static char* read_line_with_history(history_t *hist, struct js *js) {
-  (void)js;
+static void handle_up(INPUT) {
+  const char *h = history_prev(hist);
+  if (h) line_set(line, pos, len, h, prompt);
+}
+
+static void handle_down(INPUT) {
+  const char *h = history_next(hist);
+  if (h) line_set(line, pos, len, h, prompt);
+}
+
+static void handle_left(INPUT) { cursor_move(pos, *len, -1); }
+static void handle_right(INPUT) { cursor_move(pos, *len, 1); }
+static void handle_backspace(INPUT) { line_backspace(line, pos, len); }
+static void handle_char(INPUT) { line_insert(line, pos, len, key->ch); }
+
+static key_handler_t handlers[] = {
+  [KEY_UP] = handle_up, [KEY_DOWN] = handle_down,
+  [KEY_LEFT] = handle_left, [KEY_RIGHT] = handle_right,
+  [KEY_BACKSPACE] = handle_backspace, [KEY_CHAR] = handle_char,
+};
+
+static char* read_line_with_history(history_t *hist, struct js *js, const char *prompt) {
   char *line = malloc(MAX_LINE_LENGTH);
-  int pos = 0, len = 0;
-  line[0] = '\0';
+  int pos = 0, len = 0; line[0] = '\0';
   
   TERM_INIT();
   
-  while (1) {
+  do {
     key_event_t key = read_key();
-    const char *hist_line;
     
-    switch (key.type) {
-      case KEY_UP:
-        if ((hist_line = history_prev(hist))) line_set(line, &pos, &len, hist_line);
+    if (key.type == KEY_ENTER) {
+      printf("\n"); fflush(stdout);
+      TERM_RESTORE(); return line;
+    }
+    
+    if (key.type == KEY_EOF) {
+      printf("\n"); fflush(stdout);
+      TERM_RESTORE();
+      free(line); return NULL;
+    }
+    
+    if (handlers[key.type]) {
+      handlers[key.type](line, &pos, &len, &key, hist, prompt);
+    }
+  } while (1);
+}
+
+static bool is_incomplete_input(const char *code, size_t len) {
+  int paren_depth = 0;
+  int bracket_depth = 0;
+  int brace_depth = 0;
+  
+  bool in_string = false;
+  bool in_template = false;
+  char string_char = 0;
+  bool escape_next = false;
+  
+  for (size_t i = 0; i < len; i++) {
+    char c = code[i];
+    
+    if (escape_next) {
+      escape_next = false;
+      continue;
+    }
+    
+    if (c == '\\' && (in_string || in_template)) {
+      escape_next = true;
+      continue;
+    }
+    
+    if (in_string) {
+      if (c == string_char) in_string = false;
+      continue;
+    }
+    
+    if (in_template) {
+      if (c == '`') {
+        in_template = false;
+      } else if (c == '$' && i + 1 < len && code[i + 1] == '{') {
+        brace_depth++; i++;
+      }
+      continue;
+    }
+    
+    if (c == '/' && i + 1 < len && code[i + 1] == '/') {
+      while (i < len && code[i] != '\n') i++;
+      continue;
+    }
+    
+    if (c == '/' && i + 1 < len && code[i + 1] == '*') {
+      i += 2;
+      while (i + 1 < len && !(code[i] == '*' && code[i + 1] == '/')) i++;
+      if (i + 1 >= len) return true;
+      i++; continue;
+    }
+    
+    switch (c) {
+      case '"':
+      case '\'':
+        in_string = true;
+        string_char = c;
         break;
-      case KEY_DOWN:
-        if ((hist_line = history_next(hist))) line_set(line, &pos, &len, hist_line);
+      case '`':
+        in_template = true;
         break;
-      case KEY_LEFT:      cursor_move(&pos, len, -1); break;
-      case KEY_RIGHT:     cursor_move(&pos, len, 1); break;
-      case KEY_BACKSPACE: line_backspace(line, &pos, &len); break;
-      case KEY_CHAR:      line_insert(line, &pos, &len, key.ch); break;
-      case KEY_ENTER:
-        printf("\n"); fflush(stdout);
-        TERM_RESTORE();
-        line[len] = '\0';
-        return line;
-      case KEY_EOF:
-        printf("\n"); fflush(stdout);
-        TERM_RESTORE();
-        free(line);
-        return NULL;
-      case KEY_NONE: break;
+      case '(': paren_depth++; break;
+      case ')': paren_depth--; break;
+      case '[': bracket_depth++; break;
+      case ']': bracket_depth--; break;
+      case '{': brace_depth++; break;
+      case '}': brace_depth--; break;
     }
   }
+  
+  return in_string || in_template || paren_depth > 0 || bracket_depth > 0 || brace_depth > 0;
 }
 
 void ant_repl_run() {
@@ -431,17 +512,29 @@ void ant_repl_run() {
   js_set(js, js_glob(js), "__filename", js_mkstr(js, "[repl]", 6));
 
   int prev_ctrl_c_count = 0;
+  char *multiline_buf = NULL;
+  size_t multiline_len = 0;
+  size_t multiline_cap = 0;
   
   while (1) {
-    printf("> ");
+    const char *prompt = multiline_buf ? "| " : "> ";
+    printf("%s", prompt);
     fflush(stdout);
     
     ctrl_c_pressed = 0;
-    char *line = read_line_with_history(&history, js);
+    char *line = read_line_with_history(&history, js, prompt);
     
     if (ctrl_c_pressed > 0) {
+      if (multiline_buf) {
+        free(multiline_buf);
+        multiline_buf = NULL;
+        multiline_len = 0;
+        multiline_cap = 0;
+        prev_ctrl_c_count = 0;
+        if (line) free(line);
+        continue;
+      }
       if (prev_ctrl_c_count > 0) {
-        printf("\n");
         if (line) free(line);
         break;
       }
@@ -451,18 +544,37 @@ void ant_repl_run() {
       continue;
     }
     
-    if (line == NULL) break;      
+    if (line == NULL) {
+      if (multiline_buf) {
+        free(multiline_buf);
+        multiline_buf = NULL;
+        multiline_len = 0;
+        multiline_cap = 0;
+        continue;
+      }
+      break;
+    }
+    
     prev_ctrl_c_count = 0;
     size_t line_len = strlen(line);
+    
+    if (line_len == 0 && multiline_buf) {
+      if (multiline_len + 1 >= multiline_cap) {
+        multiline_cap = multiline_cap ? multiline_cap * 2 : 256;
+        multiline_buf = realloc(multiline_buf, multiline_cap);
+      }
+      multiline_buf[multiline_len++] = '\n';
+      multiline_buf[multiline_len] = '\0';
+      free(line);
+      continue;
+    }
     
     if (line_len == 0) {
       free(line);
       continue;
     }
     
-    history_add(&history, line);
-    
-    if (line[0] == '.') {
+    if (!multiline_buf && line[0] == '.') {
       cmd_result_t result = execute_command(js, &history, line);
       if (result == CMD_EXIT) {
         free(line);
@@ -475,18 +587,43 @@ void ant_repl_run() {
       continue;
     }
     
-    jsval_t eval_result = js_eval(js, line, line_len);
+    size_t new_len = multiline_len + line_len + 1;
+    if (new_len >= multiline_cap || !multiline_buf) {
+      multiline_cap = multiline_cap ? multiline_cap * 2 : 256;
+      if (multiline_cap < new_len + 1) multiline_cap = new_len + 1;
+      multiline_buf = realloc(multiline_buf, multiline_cap);
+    }
+    
+    if (multiline_len > 0) {
+      multiline_buf[multiline_len++] = '\n';
+    }
+    memcpy(multiline_buf + multiline_len, line, line_len);
+    multiline_len += line_len;
+    multiline_buf[multiline_len] = '\0';
+    
+    free(line);
+    
+    if (is_incomplete_input(multiline_buf, multiline_len)) continue;
+    history_add(&history, multiline_buf);
+    
+    jsval_t eval_result = js_eval(js, multiline_buf, multiline_len);
     js_run_event_loop(js);
     
-    if (js_type(eval_result) == JS_ERR) fprintf(stderr, "%s\n", js_str(js, eval_result)); else {
+    if (js_type(eval_result) == JS_ERR) {
+      fprintf(stderr, "%s\n", js_str(js, eval_result));
+    } else {
       const char *str = js_str(js, eval_result);
       print_value_colored(str, stdout);
       printf("\n");
     }
     
-    free(line);
+    free(multiline_buf);
+    multiline_buf = NULL;
+    multiline_len = 0;
+    multiline_cap = 0;
   }
   
+  if (multiline_buf) free(multiline_buf);
   history_save(&history);
   history_free(&history);
 }
