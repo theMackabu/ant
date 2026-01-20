@@ -886,6 +886,7 @@ bool js_truthy(struct js *js, jsval_t v) {
     [T_OBJ]    = &&l_true,
     [T_FUNC]   = &&l_true,
     [T_ARR]    = &&l_true,
+    [T_SYMBOL] = &&l_true,
     [T_BOOL]   = &&l_bool,
     [T_STR]    = &&l_str,
     [T_BIGINT] = &&l_bigint,
@@ -2561,6 +2562,12 @@ static size_t tostr(struct js *js, jsval_t value, char *buf, size_t len) {
     
     case T_CFUNC:   return ANT_COPY(buf, len, "[native code]");
     case T_FFI:     return ANT_COPY(buf, len, "[native code (ffi)]");
+    
+    case T_SYMBOL: {
+      const char *desc = js_sym_desc(js, value);
+      if (desc) return (size_t) snprintf(buf, len, "Symbol(%s)", desc);
+      return ANT_COPY(buf, len, "Symbol()");
+    }
     
     case T_PROP:    return (size_t) snprintf(buf, len, "PROP@%lu", (unsigned long) vdata(value)); 
     default:        return (size_t) snprintf(buf, len, "VTYPE%d", vtype(value));
@@ -6995,7 +7002,8 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
 
   L_TOK_POSTINC:
   L_TOK_POSTDEC: {
-    if (vtype(lhs) != T_PROP)
+    uint8_t lhs_type = vtype(lhs);
+    if (lhs_type != T_PROP && lhs_type != T_PROPREF)
       return js_mkerr_typed(js, JS_ERR_SYNTAX, "Invalid left-hand side expression in postfix operation");
     do_assign_op(js, op == TOK_POSTINC ? TOK_PLUS_ASSIGN : TOK_MINUS_ASSIGN, lhs, tov(1));
     return l;
@@ -10201,10 +10209,13 @@ static jsval_t for_of_iter_string(struct js *js, for_iter_ctx_t *ctx, jsval_t it
   return js_mkundef();
 }
 
-static jsval_t for_of_iter_object(struct js *js, for_iter_ctx_t *ctx, jsval_t iterable) {
+typedef enum { ITER_CONTINUE, ITER_BREAK, ITER_ERROR } iter_action_t;
+typedef iter_action_t (*iter_callback_t)(struct js *js, jsval_t value, void *ctx, jsval_t *out);
+
+static jsval_t iter_foreach(struct js *js, jsval_t iterable, iter_callback_t cb, void *ctx) {
   const char *iter_key = get_iterator_sym_key();
   jsoff_t iter_prop = iter_key ? lkp_proto(js, iterable, iter_key, strlen(iter_key)) : 0;
-  if (iter_prop == 0) return js_mkerr(js, "for-of requires iterable");
+  if (iter_prop == 0) return js_mkerr(js, "not iterable");
   
   js_parse_state_t saved_state;
   JS_SAVE_STATE(js, saved_state);
@@ -10219,6 +10230,7 @@ static jsval_t for_of_iter_object(struct js *js, for_iter_ctx_t *ctx, jsval_t it
   
   if (is_err(iterator)) return iterator;
   
+  jsval_t out = js_mkundef();
   while (true) {
     jsoff_t next_off = lkp_proto(js, iterator, "next", 4);
     if (next_off == 0) return js_mkerr(js, "iterator.next is not a function");
@@ -10242,17 +10254,35 @@ static jsval_t for_of_iter_object(struct js *js, for_iter_ctx_t *ctx, jsval_t it
     jsoff_t value_off = lkp(js, result, "value", 5);
     jsval_t value = value_off ? loadval(js, value_off + sizeof(jsoff_t) * 2) : js_mkundef();
     
-    jsval_t err = for_iter_bind_var(js, ctx, value);
-    if (is_err(err)) return err;
-    
-    jsval_t v = for_iter_exec_body(js, ctx);
-    if (is_err(v)) return v;
-    if (for_iter_handle_continue(js, ctx)) break;
-    if (js->flags & F_BREAK) break;
-    if (js->flags & F_RETURN) return v;
+    iter_action_t action = cb(js, value, ctx, &out);
+    if (action == ITER_BREAK) break;
+    if (action == ITER_ERROR) return out;
   }
   
-  return js_mkundef();
+  return out;
+}
+
+static iter_action_t for_of_iter_cb(struct js *js, jsval_t value, void *ctx, jsval_t *out) {
+  for_iter_ctx_t *fctx = (for_iter_ctx_t *)ctx;
+  
+  jsval_t err = for_iter_bind_var(js, fctx, value);
+  if (is_err(err)) { *out = err; return ITER_ERROR; }
+  
+  jsval_t v = for_iter_exec_body(js, fctx);
+  if (is_err(v)) { *out = v; return ITER_ERROR; }
+  if (for_iter_handle_continue(js, fctx)) return ITER_BREAK;
+  if (js->flags & F_BREAK) return ITER_BREAK;
+  if (js->flags & F_RETURN) { *out = v; return ITER_BREAK; }
+  
+  return ITER_CONTINUE;
+}
+
+static jsval_t for_of_iter_object(struct js *js, for_iter_ctx_t *ctx, jsval_t iterable) {
+  jsval_t result = iter_foreach(js, iterable, for_of_iter_cb, ctx);
+  if (is_err(result) && strcmp(js->errmsg, "not iterable") == 0) {
+    return js_mkerr(js, "for-of requires iterable");
+  }
+  return result;
 }
 
 static jsval_t js_for(struct js *js) {
@@ -10274,13 +10304,19 @@ static jsval_t js_for(struct js *js) {
   
   bool is_for_in = false;
   bool is_for_of = false;
-  jsoff_t var_name_off = 0, var_name_len = 0;
-  bool is_const_var = false;
+  
   bool is_var_decl = false;
+  bool is_const_var = false;
   bool is_let_loop = false;
-  jsoff_t let_var_off = 0, let_var_len = 0;
+  
+  jsoff_t var_name_off = 0;
+  jsoff_t var_name_len = 0;
+  jsoff_t let_var_off = 0;
+  jsoff_t let_var_len = 0;
+  
   bool has_destructure = false;
-  jsoff_t destructure_off = 0, destructure_len = 0;
+  jsoff_t destructure_off = 0;
+  jsoff_t destructure_len = 0;
   
   if (next(js) == TOK_LET || next(js) == TOK_CONST || next(js) == TOK_VAR) {
     if (js->tok == TOK_VAR) {
@@ -21694,6 +21730,23 @@ jsval_t js_get(struct js *js, jsval_t obj, const char *key) {
   }
   
   return off == 0 ? js_mkundef() : resolveprop(js, mkval(T_PROP, off));
+}
+
+typedef struct {
+  bool (*callback)(struct js *js, jsval_t value, void *udata);
+  void *udata;
+} js_iter_ctx_t;
+
+static iter_action_t js_iter_cb(struct js *js, jsval_t value, void *ctx, jsval_t *out) {
+  (void)out;
+  js_iter_ctx_t *ictx = (js_iter_ctx_t *)ctx;
+  return ictx->callback(js, value, ictx->udata) ? ITER_CONTINUE : ITER_BREAK;
+}
+
+bool js_iter(struct js *js, jsval_t iterable, bool (*callback)(struct js *js, jsval_t value, void *udata), void *udata) {
+  js_iter_ctx_t ctx = { .callback = callback, .udata = udata };
+  jsval_t result = iter_foreach(js, iterable, js_iter_cb, &ctx);
+  return !is_err(result);
 }
 
 char *js_getstr(struct js *js, jsval_t value, size_t *len) {

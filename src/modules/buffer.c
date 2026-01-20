@@ -359,6 +359,25 @@ static jsval_t create_typed_array(
   return create_typed_array_with_buffer(js, type, buffer, byte_offset, length, type_name, ab_obj);
 }
 
+typedef struct {
+  jsval_t *values;
+  size_t length;
+  size_t capacity;
+} iter_collect_ctx_t;
+
+static bool iter_collect_callback(struct js *js, jsval_t value, void *udata) {
+  (void)js;
+  iter_collect_ctx_t *ctx = (iter_collect_ctx_t *)udata;
+  if (ctx->length >= ctx->capacity) {
+    ctx->capacity *= 2;
+    jsval_t *new_values = realloc(ctx->values, ctx->capacity * sizeof(jsval_t));
+    if (!new_values) return false;
+    ctx->values = new_values;
+  }
+  ctx->values[ctx->length++] = value;
+  return true;
+}
+
 static jsval_t js_typedarray_constructor(struct js *js, jsval_t *args, int nargs, TypedArrayType type, const char *type_name) {
   if (nargs == 0) {
     ArrayBufferData *buffer = create_array_buffer_data(0);
@@ -396,11 +415,25 @@ static jsval_t js_typedarray_constructor(struct js *js, jsval_t *args, int nargs
   int arg_type = js_type(args[0]);
   if (arg_type == JS_OBJ) {
     jsval_t len_val = js_get(js, args[0], "length");
-    if (js_type(len_val) == JS_NUM) {
-      size_t length = (size_t)js_getnum(len_val);
+    size_t length = 0; jsval_t *values = NULL;
+    bool is_iterable = false;
+    
+    if (js_type(len_val) == JS_NUM) length = (size_t)js_getnum(len_val); else {
+      iter_collect_ctx_t ctx = { .values = NULL, .length = 0, .capacity = 16 };
+      ctx.values = malloc(ctx.capacity * sizeof(jsval_t));
+      if (!ctx.values) return js_mkerr(js, "Failed to allocate memory");
+      is_iterable = js_iter(js, args[0], iter_collect_callback, &ctx);
+      
+      if (is_iterable) {
+        values = ctx.values;
+        length = ctx.length;
+      } else free(ctx.values);
+    }
+    
+    if (length > 0 || is_iterable || js_type(len_val) == JS_NUM) {
       size_t element_size = get_element_size(type);
       ArrayBufferData *buffer = create_array_buffer_data(length * element_size);
-      if (!buffer) return js_mkerr(js, "Failed to allocate buffer");
+      if (!buffer) { if (values) free(values); return js_mkerr(js, "Failed to allocate buffer"); }
       
       jsval_t result = create_typed_array(js, type, buffer, 0, length, type_name);
       uint8_t *data = buffer->data;
@@ -411,9 +444,12 @@ static jsval_t js_typedarray_constructor(struct js *js, jsval_t *args, int nargs
       };
       
       for (size_t i = 0; i < length; i++) {
-        char idx_str[16];
-        snprintf(idx_str, sizeof(idx_str), "%zu", i);
-        jsval_t elem = js_get(js, args[0], idx_str);
+        jsval_t elem;
+        if (values) elem = values[i]; else {
+          char idx_str[16];
+          snprintf(idx_str, sizeof(idx_str), "%zu", i);
+          elem = js_get(js, args[0], idx_str);
+        }
         double val = js_type(elem) == JS_NUM ? js_getnum(elem) : 0;
         
         if (type > TYPED_ARRAY_BIGUINT64) goto W_DONE;
@@ -430,6 +466,7 @@ static jsval_t js_typedarray_constructor(struct js *js, jsval_t *args, int nargs
         W_NEXT:;
       }
       W_DONE:
+      if (values) free(values);
       return result;
     }
   }

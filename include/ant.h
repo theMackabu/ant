@@ -77,6 +77,7 @@ void js_setthis(struct js *, jsval_t);
 
 jsval_t js_getcurrentfunc(struct js *);
 jsval_t js_get(struct js *, jsval_t, const char *);
+bool js_iter(struct js *js, jsval_t iterable, bool (*callback)(struct js *js, jsval_t value, void *udata), void *udata);
 
 uint64_t js_sym_id(jsval_t sym);
 const char *js_sym_desc(struct js *js, jsval_t sym);
