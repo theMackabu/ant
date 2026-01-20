@@ -145,6 +145,7 @@ int js_getffi(jsval_t val);
 
 void js_resolve_promise(struct js *js, jsval_t promise, jsval_t value);
 void js_reject_promise(struct js *js, jsval_t promise, jsval_t value);
+void js_check_unhandled_rejections(struct js *js);
 
 void js_run_event_loop(struct js *js);
 void js_poll_events(struct js *js);

@@ -256,10 +256,13 @@ typedef struct promise_data_entry {
   uint32_t trigger_pid;
   jsoff_t obj_offset;
   int state;
+  bool has_rejection_handler;
   UT_hash_handle hh;
+  UT_hash_handle hh_unhandled;
 } promise_data_entry_t;
 
 static promise_data_entry_t *promise_registry = NULL;
+static promise_data_entry_t *unhandled_rejections = NULL;
 static uint32_t next_promise_id = 1;
 
 static promise_data_entry_t *get_promise_data(uint32_t promise_id, bool create);
@@ -18611,6 +18614,7 @@ static promise_data_entry_t *get_promise_data(uint32_t promise_id, bool create) 
   entry->obj_offset = 0;
   entry->state = 0;
   entry->value = js_mkundef();
+  entry->has_rejection_handler = false;
   utarray_new(entry->handlers, &promise_handler_icd);
   HASH_ADD(hh, promise_registry, promise_id, sizeof(uint32_t), entry);
   
@@ -18729,6 +18733,16 @@ static void reject_promise(struct js *js, jsval_t p, jsval_t val) {
 
   pd->state = 2;
   pd->value = val;
+  
+  // Track unhandled rejection if no handler attached yet
+  if (!pd->has_rejection_handler) {
+    promise_data_entry_t *existing = NULL;
+    HASH_FIND(hh_unhandled, unhandled_rejections, &pd->promise_id, sizeof(uint32_t), existing);
+    if (!existing) {
+      HASH_ADD(hh_unhandled, unhandled_rejections, promise_id, sizeof(uint32_t), pd);
+    }
+  }
+  
   trigger_handlers(js, p);
 }
 
@@ -18810,6 +18824,11 @@ static jsval_t builtin_promise_then(struct js *js, jsval_t *args, int nargs) {
   if (pd) {
     promise_handler_t h = { onFulfilled, onRejected, nextP };
     utarray_push_back(pd->handlers, &h);
+    
+    if (vtype(onRejected) == T_FUNC || vtype(onRejected) == T_CFUNC) {
+      pd->has_rejection_handler = true;
+      HASH_DELETE(hh_unhandled, unhandled_rejections, pd);
+    }
   }
   
   if (pd && pd->state != 0) trigger_handlers(js, p);
@@ -21827,16 +21846,24 @@ void js_gc_update_roots(GC_UPDATE_ARGS) {
   }
 
   promise_data_entry_t *pd, *pd_tmp;
-  for (promise_data_entry_t *new_promise_registry = NULL, *_once = NULL; !_once; _once = (void*)1, promise_registry = new_promise_registry)
+  promise_data_entry_t *new_unhandled = NULL;
+  
+  for (
+    promise_data_entry_t *new_promise_registry = NULL, *_once = NULL; !_once; _once = (void*)1, 
+    promise_registry = new_promise_registry, unhandled_rejections = new_unhandled
+  )
     HASH_ITER(hh, promise_registry, pd, pd_tmp) {
       HASH_DEL(promise_registry, pd);
+      promise_data_entry_t *in_unhandled = NULL;
+      HASH_FIND(hh_unhandled, unhandled_rejections, &pd->promise_id, sizeof(uint32_t), in_unhandled);
+      if (in_unhandled) HASH_DELETE(hh_unhandled, unhandled_rejections, pd);
+      
       jsoff_t new_off = fwd_off(ctx, pd->obj_offset);
       if (new_off == pd->obj_offset && pd->obj_offset != 0) {
-        // Object not forwarded means it's dead - free the entry
         utarray_free(pd->handlers);
-        free(pd);
-        continue;
+        free(pd); continue;
       }
+      
       pd->obj_offset = new_off;
       FWD_VAL(pd->value);
       UTARRAY_EACH(pd->handlers, promise_handler_t, h) {
@@ -21844,7 +21871,9 @@ void js_gc_update_roots(GC_UPDATE_ARGS) {
         FWD_VAL(h->onRejected);
         FWD_VAL(h->nextPromise);
       }
+      
       HASH_ADD(hh, new_promise_registry, promise_id, sizeof(uint32_t), pd);
+      if (in_unhandled) HASH_ADD(hh_unhandled, new_unhandled, promise_id, sizeof(uint32_t), pd);
     }
 
   if (rt && rt->js == js) FWD_VAL(rt->ant_obj);
@@ -22205,6 +22234,31 @@ void js_prop_iter_end(js_prop_iter_t *iter) {
 jsval_t js_mkpromise(struct js *js) { return mkpromise(js); }
 void js_resolve_promise(struct js *js, jsval_t promise, jsval_t value) { resolve_promise(js, promise, value); }
 void js_reject_promise(struct js *js, jsval_t promise, jsval_t value) { reject_promise(js, promise, value); }
+
+void js_check_unhandled_rejections(struct js *js) {
+  promise_data_entry_t *pd, *tmp;
+  
+  HASH_ITER(hh_unhandled, unhandled_rejections, pd, tmp) {
+    if (pd->has_rejection_handler) {
+      HASH_DELETE(hh_unhandled, unhandled_rejections, pd); continue;
+    }
+    
+    if (pd->trigger_pid != 0) {
+      promise_data_entry_t *parent;
+      HASH_FIND(hh, promise_registry, &pd->trigger_pid, sizeof(uint32_t), parent);
+      if (parent && parent->has_rejection_handler) {
+        HASH_DELETE(hh_unhandled, unhandled_rejections, pd); continue;
+      }
+    }
+    
+    char buf[1024];
+    buf[tostr(js, pd->value, buf, sizeof(buf) - 1)] = '\0';
+    fprintf(stderr, "Uncaught (in promise) %s\n", buf);
+    
+    pd->has_rejection_handler = true;
+    HASH_DELETE(hh_unhandled, unhandled_rejections, pd);
+  }
+}
 
 bool js_is_slot_prop(jsoff_t header) { return is_slot_prop(header); }
 jsoff_t js_next_prop(jsoff_t header) { return next_prop(header); }

@@ -220,6 +220,8 @@ void process_microtasks(struct js *js) {
     
     ANT_GC_FREE(entry);
   }
+  
+  js_check_unhandled_rejections(js);
 }
 
 void process_immediates(struct js *js) {
