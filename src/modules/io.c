@@ -160,6 +160,7 @@ rbrace:
 
 lbrack:
   switch (p[1]) {
+    case 'A': if (memcmp(p + 2, "syncFunction", 7) == 0) { EMIT_UNTIL(']', JSON_FUNC) } break;
     case 'F': if (memcmp(p + 2, "unction", 7) == 0) { EMIT_UNTIL(']', JSON_FUNC) } break;
     case 'n': if (memcmp(p + 2, "ative code]", 11) == 0) { EMIT_UNTIL(']', JSON_FUNC) } break;
     case 'C': if (memcmp(p + 2, "ircular", 7) == 0) { EMIT_UNTIL(']', JSON_REF) } break;
@@ -201,6 +202,8 @@ minus:
 
 lt:
   if (memcmp(p, "<ref", 4) == 0) { EMIT_UNTIL('>', JSON_REF) }
+  if (memcmp(p, "<pen", 4) == 0) { EMIT_UNTIL('>', JSON_REF) }
+  if (memcmp(p, "<rej", 4) == 0) { EMIT_UNTIL('>', JSON_REF) }
   io_puts(JSON_BRACE, stream); io_putc(*p++, stream); io_puts(ANSI_RESET, stream);
   goto next;
 
@@ -215,6 +218,14 @@ alpha:
     while (*p && *p != ']') io_putc(*p++, stream);
     if (*p == ']') io_putc(*p++, stream);
     io_puts(ANSI_RESET, stream);
+    goto next;
+  }
+  
+  if (memcmp(p, "Promise { ", 10) == 0) {
+    io_puts(JSON_FUNC, stream); io_puts("Promise", stream);
+    io_puts(JSON_BRACE, stream); io_puts(" { ", stream);
+    p += 10;
+    
     goto next;
   }
   

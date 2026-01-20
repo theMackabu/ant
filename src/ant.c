@@ -2059,15 +2059,33 @@ static bool is_internal_prop(const char *key, jsoff_t klen) {
   return true;
 }
 
+struct func_format {
+  const char *prefix;
+  size_t prefix_len;
+  const char *anon;
+  size_t anon_len;
+};
+
+static const struct func_format formats[] = {
+  [0] = { "[Function: ",      11, "[Function (anonymous)]",      22 },
+  [1] = { "[AsyncFunction: ", 16, "[AsyncFunction (anonymous)]", 27 },
+};
+
 static size_t strfunc(struct js *js, jsval_t value, char *buf, size_t len) {
   jsoff_t name_len = 0;
   const char *name = get_func_name(js, value, &name_len);
+  
   jsval_t func_obj = mkval(T_OBJ, vdata(value));
   jsval_t code_slot = get_slot(js, func_obj, SLOT_CODE);
   jsval_t builtin_slot = get_slot(js, func_obj, SLOT_BUILTIN);
+  jsval_t async_slot = get_slot(js, func_obj, SLOT_ASYNC);
+  
+  bool is_async = is_true(async_slot);
+  const struct func_format *fmt = &formats[is_async];
+  
   if (vtype(builtin_slot) == T_NUM) {
     if (name && name_len > 0) {
-      size_t n = cpy(buf, len, "[Function: ", 11);
+      size_t n = cpy(buf, len, fmt->prefix, fmt->prefix_len);
       n += cpy(buf + n, len - n, name, name_len);
       n += cpy(buf + n, len - n, "]", 1);
       return n;
@@ -2079,7 +2097,7 @@ static size_t strfunc(struct js *js, jsval_t value, char *buf, size_t len) {
     jsval_t cfunc_slot = get_slot(js, func_obj, SLOT_CFUNC);
     if (vtype(cfunc_slot) == T_CFUNC) {
       if (name && name_len > 0) {
-        size_t n = cpy(buf, len, "[Function: ", 11);
+        size_t n = cpy(buf, len, fmt->prefix, fmt->prefix_len);
         n += cpy(buf + n, len - n, name, name_len);
         n += cpy(buf + n, len - n, "]", 1);
         return n;
@@ -2087,32 +2105,32 @@ static size_t strfunc(struct js *js, jsval_t value, char *buf, size_t len) {
       return cpy(buf, len, "[native code]", 13);
     }
     if (name && name_len > 0) {
-      size_t n = cpy(buf, len, "[Function: ", 11);
+      size_t n = cpy(buf, len, fmt->prefix, fmt->prefix_len);
       n += cpy(buf + n, len - n, name, name_len);
       n += cpy(buf + n, len - n, "]", 1);
       return n;
     }
-    return cpy(buf, len, "[Function (anonymous)]", 22);
+    return cpy(buf, len, fmt->anon, fmt->anon_len);
   }
   jsval_t code_val = code_slot;
   
   if (vtype(code_val) != T_STR) {
     if (name && name_len > 0) {
-      size_t n = cpy(buf, len, "[Function: ", 11);
+      size_t n = cpy(buf, len, fmt->prefix, fmt->prefix_len);
       n += cpy(buf + n, len - n, name, name_len);
       n += cpy(buf + n, len - n, "]", 1);
       return n;
     }
-    return cpy(buf, len, "[Function (anonymous)]", 22);
+    return cpy(buf, len, fmt->anon, fmt->anon_len);
   }
   
   if (name && name_len > 0) {
-    size_t n = cpy(buf, len, "[Function: ", 11);
+    size_t n = cpy(buf, len, fmt->prefix, fmt->prefix_len);
     n += cpy(buf + n, len - n, name, name_len);
     n += cpy(buf + n, len - n, "]", 1);
     return n;
   }
-  return cpy(buf, len, "[Function (anonymous)]", 22);
+  return cpy(buf, len, fmt->anon, fmt->anon_len);
 }
 
 static void get_line_col(const char *code, jsoff_t pos, int *line, int *col) {
