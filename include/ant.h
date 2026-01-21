@@ -51,10 +51,11 @@ struct js *js_create(void *buf, size_t len);
 struct js *js_create_dynamic(size_t initial_size, size_t max_size);
 
 jsval_t js_glob(struct js *);
+jsval_t js_mkscope(struct js *);
+jsval_t js_getscope(struct js *);
 jsval_t js_eval(struct js *, const char *, size_t);
 
 void js_destroy(struct js *);
-void js_mkscope(struct js *);
 void js_delscope(struct js *);
 bool js_truthy(struct js *, jsval_t);
 void js_setmaxcss(struct js *, size_t);

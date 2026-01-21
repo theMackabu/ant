@@ -14,8 +14,7 @@ module_files = run_command('sh', '-c',
   check: true
 ).stdout().strip().split()
 
-sources = files(
-  'src/main.c',
+lib_sources = files(
   'src/utils.c',
   'src/ant.c',
   'src/gc.c',
@@ -234,7 +233,7 @@ snapshot_h = custom_target(
 
 ant_deps = [
   libffi_dep, bdwgc_dep, uuid_dep,
-  llhttp, pcre2_dep, libuv_dep, oxc_dep,
+  llhttp, pcre2_dep, libuv_dep,
   argtable3_dep, tlsuv_dep, libsodium_dep,
   yyjson_dep, minicoro_dep, uuidv7_dep,
   openssl_dep, zlib_dep, uthash_dep,
@@ -251,10 +250,35 @@ if get_option('static_link')
   link_args += ['-static']
 endif
 
-executable(
+libant = static_library(
   'ant',
-  sources + [snapshot_h],
+  lib_sources + [snapshot_h],
   include_directories: [include, build_include, strip_include],
   dependencies: ant_deps,
+  install: true
+)
+
+libant_dep = declare_dependency(
+  link_with: libant,
+  include_directories: [include, build_include],
+  dependencies: ant_deps + [oxc_dep]
+)
+
+executable(
+  'ant',
+  files('src/main.c') + [snapshot_h],
+  include_directories: [include, build_include, strip_include],
+  link_with: libant,
+  dependencies: ant_deps + [oxc_dep],
   link_args: link_args
 )
+
+if get_option('build_examples')
+  executable(
+    'embed_example',
+    files('examples/embed/embed.c'),
+    include_directories: [include, build_include],
+    link_with: libant,
+    dependencies: ant_deps + [oxc_dep]
+  )
+endif

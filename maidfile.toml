@@ -47,3 +47,9 @@ script = ['meson subprojects download', '''
    bash -c 'CC="ccache $(which clang)" \
    meson setup build --wipe -Doptimization=0 -Db_lto=false -Dstrip=false -Db_lundef=false -Dunity=off -Ddebug=true'
 ''']
+
+[tasks.embed_example]
+script = ['''
+   bash -c 'CC="ccache $(which clang)" \
+   meson setup build -Dbuild_examples=true 2>/dev/null || true'
+''', "meson compile -C build", "./build/embed_example"]

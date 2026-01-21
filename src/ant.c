@@ -4583,12 +4583,14 @@ static bool is_typeof_bare_ident(struct js *js) {
   return bare;
 }
 
-void js_mkscope(struct js *js) {
+jsval_t js_mkscope(struct js *js) {
   assert((js->flags & F_NOEXEC) == 0);
   if (global_scope_stack == NULL) utarray_new(global_scope_stack, &jsoff_icd);
   jsoff_t prev = (jsoff_t) vdata(js->scope);
   utarray_push_back(global_scope_stack, &prev);
   js->scope = mkobj(js, prev);
+  
+  return js->scope;
 }
 
 void js_delscope(struct js *js) {
@@ -4596,13 +4598,11 @@ void js_delscope(struct js *js) {
     jsoff_t *prev = (jsoff_t *)utarray_back(global_scope_stack);
     js->scope = mkval(T_OBJ, *prev);
     utarray_pop_back(global_scope_stack);
-  } else {
-    js->scope = upper(js, js->scope);
-  }
+  } else js->scope = upper(js, js->scope);
 }
 
-static void mkscope(struct js *js) { js_mkscope(js); }
-static void delscope(struct js *js) { js_delscope(js); }
+static void mkscope(struct js *js) { (void)js_mkscope(js); }
+static void delscope(struct js *js) { (void)js_delscope(js); }
 
 static inline bool push_this(jsval_t this_value) {
   if (global_this_stack.depth >= global_this_stack.capacity) {
@@ -22047,6 +22047,7 @@ inline jsval_t js_mknull(void) { return mkval(T_NULL, 0); }
 inline jsval_t js_mknum(double value) { return tov(value); }
 inline jsval_t js_mkobj(struct js *js) { return mkobj(js, 0); }
 inline jsval_t js_glob(struct js *js) { (void) js; return mkval(T_OBJ, 0); }
+inline jsval_t js_getscope(struct js *js) { return js->scope; }
 inline jsval_t js_mkfun(jsval_t (*fn)(struct js *, jsval_t *, int)) { return mkval(T_CFUNC, (size_t) (void *) fn); }
 
 inline jsval_t js_getthis(struct js *js) { return js->this_val; }
