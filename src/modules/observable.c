@@ -298,11 +298,11 @@ static jsval_t js_observable_constructor(struct js *js, jsval_t *args, int nargs
     return js_mkerr_typed(js, JS_ERR_TYPE, "Observable subscriber must be a function");
   }
   
+  jsval_t proto = js_get_ctor_proto(js, "Observable", 10);
   jsval_t observable = js_mkobj(js);
+  
+  js_set_proto(js, observable, proto);
   js_set_slot(js, observable, SLOT_OBSERVABLE_SUBSCRIBER, subscriber);
-  js_set(js, observable, "subscribe", js_mkfun(js_observable_subscribe));
-  js_set(js, observable, get_observable_sym_key(), js_mkfun(js_observable_symbol_observable));
-  js_set(js, observable, get_toStringTag_sym_key(), js_mkstr(js, "Observable", 10));
   
   return observable;
 }
@@ -423,7 +423,7 @@ static jsval_t js_observable_from(struct js *js, jsval_t *args, int nargs) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert null or undefined to observable");
   }
   
-  jsval_t observableMethod = js_get(js, x, get_observable_sym_key());
+  jsval_t observableMethod = js_getprop_proto(js, x, get_observable_sym_key());
   
   if (is_callable(observableMethod)) {
     jsval_t observable = js_call_with_this(js, observableMethod, x, NULL, 0);
@@ -468,19 +468,20 @@ void init_observable_module(void) {
   jsval_t global = js_glob(js);
   
   jsval_t observable_ctor = js_mkobj(js);
+  jsval_t observable_proto = js_mkobj(js);
+  
+  js_set(js, observable_proto, "subscribe", js_mkfun(js_observable_subscribe));
+  js_set(js, observable_proto, get_observable_sym_key(), js_mkfun(js_observable_symbol_observable));
+  js_set(js, observable_proto, get_toStringTag_sym_key(), js_mkstr(js, "Observable", 10));
+  
   js_set_slot(js, observable_ctor, SLOT_CFUNC, js_mkfun(js_observable_constructor));
+  js_mkprop_fast(js, observable_ctor, "prototype", 9, observable_proto);
+  js_mkprop_fast(js, observable_ctor, "name", 4, ANT_STRING("Observable"));
+  js_set_descriptor(js, observable_ctor, "name", 4, 0);
   js_set(js, observable_ctor, "of", js_mkfun(js_observable_of));
   js_set(js, observable_ctor, "from", js_mkfun(js_observable_from));
   
-  jsval_t observable_proto = js_mkobj(js);
-  js_set(js, observable_proto, "subscribe", js_mkfun(js_observable_subscribe));
-  js_set(js, observable_proto, get_observable_sym_key(), js_mkfun(js_observable_symbol_observable));
-  js_set(js, observable_proto, "constructor", js_obj_to_func(observable_ctor));
-  js_set(js, observable_proto, get_toStringTag_sym_key(), js_mkstr(js, "Observable", 10));
-  
-  js_set(js, observable_ctor, "prototype", observable_proto);
-  js_setprop_nonconfigurable(js, observable_ctor, "prototype", 9, observable_proto);
-  
   jsval_t Observable = js_obj_to_func(observable_ctor);
+  js_set(js, observable_proto, "constructor", Observable);
   js_set(js, global, "Observable", Observable);
 }

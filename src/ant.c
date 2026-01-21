@@ -22178,6 +22178,12 @@ jsval_t js_get(struct js *js, jsval_t obj, const char *key) {
   return off == 0 ? js_mkundef() : resolveprop(js, mkval(T_PROP, off));
 }
 
+jsval_t js_getprop_proto(struct js *js, jsval_t obj, const char *key) {
+  size_t key_len = strlen(key);
+  jsoff_t off = lkp_proto(js, obj, key, key_len);
+  return off == 0 ? js_mkundef() : resolveprop(js, mkval(T_PROP, off));
+}
+
 typedef struct {
   bool (*callback)(struct js *js, jsval_t value, void *udata);
   void *udata;
