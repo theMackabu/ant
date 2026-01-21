@@ -449,15 +449,6 @@ static const uint8_t body_end_tok[TOK_MAX] = {
   [TOK_SEMICOLON] = 1, [TOK_COMMA] = 1, [TOK_EOF] = 1,
 };
 
-enum {
-  T_OBJ, T_PROP, T_STR, T_UNDEF, T_NULL, T_NUM, T_BOOL, T_FUNC,
-  T_CODEREF, T_CFUNC, T_ERR, T_ARR, T_PROMISE, T_TYPEDARRAY, 
-  T_BIGINT, T_PROPREF, T_SYMBOL, T_GENERATOR, T_FFI
-};
-
-#define TYPE_MASK(t) (1u << (t))
-#define T_NEEDS_PROTO_FALLBACK (TYPE_MASK(T_FUNC) | TYPE_MASK(T_ARR) | TYPE_MASK(T_PROMISE))
-
 static const char *typestr_raw(uint8_t t) {
   const char *names[] = { 
     "object", "prop", "string", "undefined", "null", "number",
@@ -5112,7 +5103,7 @@ static jsoff_t lkp_proto(struct js *js, jsval_t obj, const char *key, size_t len
       uint8_t pt = vtype(proto);
       if (pt == T_NULL) break;
       if (pt != T_OBJ && pt != T_ARR && pt != T_FUNC) {
-        if (TYPE_MASK(t) & T_NEEDS_PROTO_FALLBACK) {
+        if (TYPE_FLAG(t) & T_NEEDS_PROTO_FALLBACK) {
           cur = get_prototype_for_type(js, t);
           t = vtype(cur);
           if (t == T_NULL || t == T_UNDEF) break;

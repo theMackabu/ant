@@ -49,18 +49,11 @@ struct js {
   int parse_depth;        // recursion depth of parser (for stack overflow protection)
 };
 
-#define JS_T_OBJ   0
-#define JS_T_PROP  1
-#define JS_T_STR   2
-
-#define JS_V_OBJ       0
-#define JS_V_PROP      1
-#define JS_V_STR       2
-#define JS_V_FUNC      7
-#define JS_V_ARR       11
-#define JS_V_PROMISE   12
-#define JS_V_BIGINT    14
-#define JS_V_GENERATOR 17
+enum {
+  T_OBJ, T_PROP, T_STR, T_UNDEF, T_NULL, T_NUM, T_BOOL, T_FUNC,
+  T_CODEREF, T_CFUNC, T_ERR, T_ARR, T_PROMISE, T_TYPEDARRAY, 
+  T_BIGINT, T_PROPREF, T_SYMBOL, T_GENERATOR, T_FFI
+};
 
 #define JS_HASH_SIZE       512
 #define JS_MAX_PARSE_DEPTH (1024 * 2)
@@ -73,10 +66,12 @@ struct js {
 #define NANBOX_DATA_MASK  0x0000FFFFFFFFFFFFULL
 
 #define TYPE_FLAG(t) (1u << (t))
+#define T_NEEDS_PROTO_FALLBACK (TYPE_FLAG(T_FUNC) | TYPE_FLAG(T_ARR) | TYPE_FLAG(T_PROMISE))
 #define T_NON_NUMERIC_MASK (TYPE_FLAG(T_STR) | TYPE_FLAG(T_ARR) | TYPE_FLAG(T_FUNC) | TYPE_FLAG(T_CFUNC) | TYPE_FLAG(T_OBJ))
-#define is_non_numeric(v) ((1u << vtype(v)) & T_NON_NUMERIC_MASK)
 
 void js_gc_update_roots(GC_UPDATE_ARGS);
 bool js_has_pending_coroutines(void);
+
+#define is_non_numeric(v) ((1u << vtype(v)) & T_NON_NUMERIC_MASK)
 
 #endif

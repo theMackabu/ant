@@ -97,10 +97,10 @@ static inline void gc_saveval(uint8_t *mem, jsoff_t off, jsval_t val) {
 static jsoff_t gc_esize(jsoff_t w) {
   jsoff_t cleaned = w & ~FLAGMASK;
   switch (cleaned & 3U) {
-    case JS_T_OBJ:  return (jsoff_t)(sizeof(jsoff_t) + sizeof(jsoff_t));
-    case JS_T_PROP: return (jsoff_t)(sizeof(jsoff_t) + sizeof(jsoff_t) + sizeof(jsval_t));
-    case JS_T_STR:  return (jsoff_t)(sizeof(jsoff_t) + ((cleaned >> 2) + 3) / 4 * 4);
-    default:        return (jsoff_t)~0U;
+    case T_OBJ:  return (jsoff_t)(sizeof(jsoff_t) + sizeof(jsoff_t));
+    case T_PROP: return (jsoff_t)(sizeof(jsoff_t) + sizeof(jsoff_t) + sizeof(jsval_t));
+    case T_STR:  return (jsoff_t)(sizeof(jsoff_t) + ((cleaned >> 2) + 3) / 4 * 4);
+    default:     return (jsoff_t)~0U;
   }
 }
 
@@ -137,7 +137,7 @@ static jsoff_t gc_copy_string(gc_ctx_t *ctx, jsoff_t old_off) {
   if (new_off != (jsoff_t)~0) return new_off;
   
   jsoff_t header = gc_loadoff(ctx->js->mem, old_off);
-  if ((header & 3) != JS_T_STR) return old_off;
+  if ((header & 3) != T_STR) return old_off;
   
   jsoff_t size = gc_esize(header);
   if (size == (jsoff_t)~0) return old_off;
@@ -160,7 +160,7 @@ static jsoff_t gc_copy_prop(gc_ctx_t *ctx, jsoff_t old_off) {
   if (new_off != (jsoff_t)~0) return new_off;
   
   jsoff_t header = gc_loadoff(ctx->js->mem, old_off);
-  if ((header & 3) != JS_T_PROP) {
+  if ((header & 3) != T_PROP) {
     return old_off;
   }
   
@@ -210,7 +210,7 @@ static jsoff_t gc_copy_object(gc_ctx_t *ctx, jsoff_t old_off) {
   if (new_off != (jsoff_t)~0) return new_off;
   
   jsoff_t header = gc_loadoff(ctx->js->mem, old_off);
-  if ((header & 3) != JS_T_OBJ) return old_off;
+  if ((header & 3) != T_OBJ) return old_off;
   
   jsoff_t size = gc_esize(header);
   if (size == (jsoff_t)~0) return old_off;
@@ -244,10 +244,10 @@ static jsoff_t gc_copy_entity(gc_ctx_t *ctx, jsoff_t old_off) {
   
   jsoff_t header = gc_loadoff(ctx->js->mem, old_off);
   switch (header & 3) {
-    case JS_T_OBJ:  return gc_copy_object(ctx, old_off);
-    case JS_T_PROP: return gc_copy_prop(ctx, old_off);
-    case JS_T_STR:  return gc_copy_string(ctx, old_off);
-    default:        return old_off;
+    case T_OBJ:  return gc_copy_object(ctx, old_off);
+    case T_PROP: return gc_copy_prop(ctx, old_off);
+    case T_STR:  return gc_copy_string(ctx, old_off);
+    default:     return old_off;
   }
 }
 
@@ -258,17 +258,17 @@ static jsval_t gc_update_val(gc_ctx_t *ctx, jsval_t val) {
   jsoff_t old_off = (jsoff_t)gc_vdata(val);
   
   switch (type) {
-    case JS_V_OBJ:
-    case JS_V_FUNC:
-    case JS_V_ARR:
-    case JS_V_PROMISE:
-    case JS_V_GENERATOR: {
+    case T_OBJ:
+    case T_FUNC:
+    case T_ARR:
+    case T_PROMISE:
+    case T_GENERATOR: {
       if (old_off >= ctx->js->brk) return val;
       jsoff_t new_off = gc_copy_object(ctx, old_off);
       if (new_off != (jsoff_t)~0) return gc_mkval(type, new_off);
       break;
     }
-    case JS_V_STR: {
+    case T_STR: {
       if (old_off >= ctx->js->brk) return val;
       jsoff_t new_off = gc_copy_string(ctx, old_off);
       if (new_off != (jsoff_t)~0) {
@@ -276,7 +276,7 @@ static jsval_t gc_update_val(gc_ctx_t *ctx, jsval_t val) {
       }
       break;
     }
-    case JS_V_PROP: {
+    case T_PROP: {
       if (old_off >= ctx->js->brk) return val;
       jsoff_t new_off = gc_copy_prop(ctx, old_off);
       if (new_off != (jsoff_t)~0) {
@@ -284,7 +284,7 @@ static jsval_t gc_update_val(gc_ctx_t *ctx, jsval_t val) {
       }
       break;
     }
-    case JS_V_BIGINT: {
+    case T_BIGINT: {
       if (old_off >= ctx->js->brk) return val;
       jsoff_t new_off = fwd_lookup(&ctx->fwd, old_off);
       if (new_off != (jsoff_t)~0) {
@@ -357,13 +357,13 @@ size_t js_gc_compact(struct js *js) {
   
   if (js->brk > 0) {
     jsoff_t header_at_0 = gc_loadoff(js->mem, 0);
-    if ((header_at_0 & 3) == JS_T_OBJ) gc_copy_object(&ctx, 0);
+    if ((header_at_0 & 3) == T_OBJ) gc_copy_object(&ctx, 0);
   }
   
   jsoff_t scope_off = (jsoff_t)gc_vdata(js->scope);
   if (scope_off < js->brk) {
     jsoff_t new_scope = gc_copy_object(&ctx, scope_off);
-    js->scope = gc_mkval(JS_V_OBJ, new_scope);
+    js->scope = gc_mkval(T_OBJ, new_scope);
   }
   
   js->this_val = gc_update_val(&ctx, js->this_val);
