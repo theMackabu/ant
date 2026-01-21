@@ -554,6 +554,10 @@ void js_set_needs_gc(struct js *js, bool needs) {
   js->needs_gc = needs;
 }
 
+void js_set_gc_suppress(struct js *js, bool suppress) {
+  js->gc_suppress = suppress;
+}
+
 uint8_t vtype(jsval_t v) { 
   return is_tagged(v) ? ((v >> NANBOX_TYPE_SHIFT) & NANBOX_TYPE_MASK) : (uint8_t)T_NUM; 
 }
@@ -18883,24 +18887,14 @@ static jsval_t mkpromise(struct js *js) {
   return mkval(T_PROMISE, vdata(obj));
 }
 
-static jsval_t builtin_trigger_handler_wrapper(struct js *js, jsval_t *args, int nargs);
-
-static void trigger_handlers(struct js *js, jsval_t p) {
-  jsval_t wrapper_obj = mkobj(js, 0);
-  set_slot(js, wrapper_obj, SLOT_CFUNC, js_mkfun(builtin_trigger_handler_wrapper));
-  set_slot(js, wrapper_obj, SLOT_DATA, p);
-  jsval_t wrapper_fn = mkval(T_FUNC, vdata(wrapper_obj));
-  queue_microtask(js, wrapper_fn);
+static inline void trigger_handlers(struct js *js, jsval_t p) {
+  uint32_t pid = get_promise_id(js, p);
+  queue_promise_trigger(pid);
 }
 
-static jsval_t builtin_trigger_handler_wrapper(struct js *js, jsval_t *args, int nargs) {
-  jsval_t me = js->current_func;
-  jsval_t p = get_slot(js, me, SLOT_DATA);
-  if (vtype(p) != T_PROMISE) return js_mkundef();
-  
-  uint32_t pid = get_promise_id(js, p);
+void js_process_promise_handlers(struct js *js, uint32_t pid) {
   promise_data_entry_t *pd = get_promise_data(pid, false);
-  if (!pd) return js_mkundef();
+  if (!pd) return;
   
   int state = pd->state;
   jsval_t val = pd->value;
@@ -18934,8 +18928,7 @@ static jsval_t builtin_trigger_handler_wrapper(struct js *js, jsval_t *args, int
     }
   }
 
-  utarray_clear(pd->handlers);  
-  return js_mkundef();
+  utarray_clear(pd->handlers);
 }
 
 static void resolve_promise(struct js *js, jsval_t p, jsval_t val) {
@@ -22538,7 +22531,7 @@ static jsval_t js_eval_inherit_strict(struct js *js, const char *buf, size_t len
   
   while (next(js) != TOK_EOF && !is_err(res)) {
     res = js_stmt(js);
-    if (js->needs_gc && js->eval_depth == 1) {
+    if (js->needs_gc && js->eval_depth == 1 && !js->gc_suppress) {
       js->needs_gc = false;
       js_gc_compact(js);
     }

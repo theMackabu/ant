@@ -27,6 +27,7 @@ typedef struct timer_entry {
 
 typedef struct microtask_entry {
   jsval_t callback;
+  uint32_t promise_id;
   struct microtask_entry *next;
 } microtask_entry_t;
 
@@ -195,6 +196,24 @@ void queue_microtask(struct js *js, jsval_t callback) {
   if (entry == NULL) return;
   
   entry->callback = callback;
+  entry->promise_id = 0;
+  entry->next = NULL;
+  
+  if (timer_state.microtasks_tail == NULL) {
+    timer_state.microtasks = entry;
+    timer_state.microtasks_tail = entry;
+  } else {
+    timer_state.microtasks_tail->next = entry;
+    timer_state.microtasks_tail = entry;
+  }
+}
+
+void queue_promise_trigger(uint32_t promise_id) {
+  microtask_entry_t *entry = ANT_GC_MALLOC(sizeof(microtask_entry_t));
+  if (entry == NULL) return;
+  
+  entry->callback = 0;
+  entry->promise_id = promise_id;
   entry->next = NULL;
   
   if (timer_state.microtasks_tail == NULL) {
@@ -207,6 +226,8 @@ void queue_microtask(struct js *js, jsval_t callback) {
 }
 
 void process_microtasks(struct js *js) {
+  js_set_gc_suppress(js, true);
+  
   while (timer_state.microtasks != NULL) {
     microtask_entry_t *entry = timer_state.microtasks;
     timer_state.microtasks = entry->next;
@@ -215,12 +236,17 @@ void process_microtasks(struct js *js) {
       timer_state.microtasks_tail = NULL;
     }
     
-    jsval_t args[0];
-    js_call(js, entry->callback, args, 0);
+    if (entry->promise_id != 0) {
+      js_process_promise_handlers(js, entry->promise_id);
+    } else {
+      jsval_t args[0];
+      js_call(js, entry->callback, args, 0);
+    }
     
     ANT_GC_FREE(entry);
   }
   
+  js_set_gc_suppress(js, false);
   js_check_unhandled_rejections(js);
 }
 
@@ -343,7 +369,7 @@ void timer_gc_update_roots(GC_FWD_ARGS) {
     t->callback = fwd_val(ctx, t->callback);
   }
   for (microtask_entry_t *m = timer_state.microtasks; m; m = m->next) {
-    m->callback = fwd_val(ctx, m->callback);
+    if (m->promise_id == 0) m->callback = fwd_val(ctx, m->callback);
   }
   for (immediate_entry_t *i = timer_state.immediates; i; i = i->next) {
     i->callback = fwd_val(ctx, i->callback);

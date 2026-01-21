@@ -45,6 +45,7 @@ struct js {
   bool is_hoisting;       // true during function declaration hoisting pass
   uint64_t sym_counter;   // counter for generating unique symbol IDs
   bool needs_gc;          // deferred GC flag, checked at statement boundaries
+  bool gc_suppress;       // suppress GC during microtask batch processing
   int eval_depth;         // recursion depth of js_eval calls
   int parse_depth;        // recursion depth of parser (for stack overflow protection)
 };

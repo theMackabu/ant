@@ -149,6 +149,7 @@ int js_getffi(jsval_t val);
 void js_resolve_promise(struct js *js, jsval_t promise, jsval_t value);
 void js_reject_promise(struct js *js, jsval_t promise, jsval_t value);
 void js_check_unhandled_rejections(struct js *js);
+void js_process_promise_handlers(struct js *js, uint32_t promise_id);
 
 void js_run_event_loop(struct js *js);
 void js_poll_events(struct js *js);
@@ -180,6 +181,7 @@ jsoff_t js_loadoff(struct js *js, jsoff_t off);
 
 void js_print_stack_trace(FILE *stream);
 void js_set_needs_gc(struct js *js, bool needs);
+void js_set_gc_suppress(struct js *js, bool suppress);
 
 size_t js_gc_compact(struct js *js);
 
