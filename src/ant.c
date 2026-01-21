@@ -10106,6 +10106,12 @@ static void loop_block_init(struct js *js, loop_block_ctx_t *ctx) {
 
 static inline jsval_t loop_block_exec(struct js *js, loop_block_ctx_t *ctx) {
   if (ctx->needs_scope) scope_clear_props(js, ctx->loop_scope);
+  
+  if (ctx->is_block) {
+    next(js);
+    return js_block(js, false);
+  }
+  
   return js_block_or_stmt(js);
 }
 
@@ -10161,6 +10167,7 @@ typedef struct {
   jsoff_t destructure_off;
   jsoff_t destructure_len;
   int marker_index;
+  loop_block_ctx_t loop_ctx;
 } for_iter_ctx_t;
 
 static jsval_t for_iter_bind_var(struct js *js, for_iter_ctx_t *ctx, jsval_t value) {
@@ -10180,7 +10187,7 @@ static jsval_t for_iter_exec_body(struct js *js, for_iter_ctx_t *ctx) {
   js->pos = ctx->body_start;
   js->consumed = 1;
   js->flags = (ctx->flags & ~F_NOEXEC) | F_LOOP;
-  return js_block_or_stmt(js);
+  return loop_block_exec(js, &ctx->loop_ctx);
 }
 
 static inline bool for_iter_handle_continue(struct js *js, for_iter_ctx_t *ctx) {
@@ -10532,6 +10539,8 @@ static jsval_t js_for(struct js *js) {
     if (!expect(js, TOK_RPAREN, &res)) goto done;
     
     jsoff_t body_start = js->pos;
+    loop_block_ctx_t forin_loop_ctx = {0};
+    if (exe) loop_block_init(js, &forin_loop_ctx);
     js->flags |= F_NOEXEC;
     v = js_block_or_stmt(js);
     if (is_err2(&v, &res)) goto done;
@@ -10544,9 +10553,11 @@ static jsval_t js_for(struct js *js) {
         var_name_off, var_name_len,
         is_const_var, flags,
         has_destructure, destructure_off,
-        destructure_len, marker_index
+        destructure_len, marker_index,
+        forin_loop_ctx
       };
       res = for_in_iter_object(js, &ctx, obj);
+      loop_block_cleanup(js, &forin_loop_ctx);
       if (is_err(res)) goto done;
       if (js->flags & F_RETURN) goto done;
     }
@@ -10563,6 +10574,8 @@ static jsval_t js_for(struct js *js) {
     if (!expect(js, TOK_RPAREN, &res)) goto done;
     
     jsoff_t body_start = js->pos;
+    loop_block_ctx_t forof_loop_ctx = {0};
+    if (exe) loop_block_init(js, &forof_loop_ctx);
     js->flags |= F_NOEXEC;
     v = js_block_or_stmt(js);
     if (is_err2(&v, &res)) goto done;
@@ -10576,7 +10589,8 @@ static jsval_t js_for(struct js *js) {
         var_name_off, var_name_len,
         is_const_var, flags,
         has_destructure, destructure_off,
-        destructure_len, marker_index
+        destructure_len, marker_index,
+        forof_loop_ctx
       };
       
       if (itype == T_ARR) res = for_of_iter_array(js, &ctx, iterable);
@@ -10584,6 +10598,7 @@ static jsval_t js_for(struct js *js) {
       else if (itype == T_OBJ) res = for_of_iter_object(js, &ctx, iterable);
       else res = js_mkerr(js, "for-of requires iterable");
       
+      loop_block_cleanup(js, &forof_loop_ctx);
       if (is_err(res)) goto done;
       if (js->flags & F_RETURN) goto done;
     }
@@ -10609,6 +10624,8 @@ static jsval_t js_for(struct js *js) {
   }
   if (!expect(js, TOK_RPAREN, &res)) goto done;
   pos3 = js->pos;
+  loop_block_ctx_t loop_ctx = {0};
+  if (exe) loop_block_init(js, &loop_ctx);
   v = js_block_or_stmt(js);
   if (is_err2(&v, &res)) goto done;
   pos4 = js->pos;
@@ -10636,9 +10653,10 @@ static jsval_t js_for(struct js *js) {
     js->flags |= F_LOOP;
     js->pos = pos3;
     js->consumed = 1;
-    v = js_block_or_stmt(js);
+    v = loop_block_exec(js, &loop_ctx);
     if (is_err2(&v, &res)) {
       if (iter_scope) delscope(js);
+      loop_block_cleanup(js, &loop_ctx);
       goto done;
     }
     
@@ -10682,6 +10700,7 @@ static jsval_t js_for(struct js *js) {
       if (is_err2(&v, &res)) goto done;
     }
   }
+  if (exe) loop_block_cleanup(js, &loop_ctx);
   js->pos = pos4, js->tok = TOK_SEMICOLON, js->consumed = 0;
 done:
   if (use_label_stack && label_stack && utarray_len(label_stack) > 0) {

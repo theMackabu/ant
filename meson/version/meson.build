@@ -1,6 +1,3 @@
-# Version and build configuration
-# Include with: subdir('meson') or subdir('../meson')
-
 git_hash = run_command('git', 'rev-parse', '--short', 'HEAD', check: false).stdout().strip()
 if git_hash == ''
   git_hash = 'unknown'

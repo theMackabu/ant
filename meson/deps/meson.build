@@ -16,7 +16,6 @@ endif
 
 libsodium_dep = dependency('libsodium', required: true, static: is_static)
 
-# Platform-specific dependencies
 if host_machine.system() == 'windows'
   uuid_dep = cc.find_library('rpcrt4', required: true)
   secur32_dep = cc.find_library('secur32', required: true)
@@ -33,20 +32,17 @@ else
   win_deps = []
 endif
 
-# llhttp
 llhttp = dependency('llhttp', static: true, required: false)
 if not llhttp.found()
   llhttp = dependency('llhttp', method: 'cmake', modules: ['llhttp::llhttp_static'], required: true)
 endif
 
-# libuv subproject
 libuv_sub = subproject('libuv', default_options: [
   'build_tests=false', 
   'build_benchmarks=false'
 ])
 libuv_dep = libuv_sub.get_variable('libuv_dep')
 
-# CMake subproject options
 tlsuv_opts = cmake.subproject_options()
 bdwgc_opts = cmake.subproject_options()
 
@@ -86,7 +82,6 @@ bdwgc_opts.append_compile_args('c', bdwgc_gc_args)
 tlsuv_dep = cmake.subproject('tlsuv', options: tlsuv_opts).dependency('tlsuv')
 bdwgc_dep = cmake.subproject('bdwgc', options: bdwgc_opts).dependency('gc')
 
-# Meson subprojects
 pcre2_dep = subproject('pcre2').get_variable('libpcre2_8')
 uthash_dep = subproject('uthash').get_variable('uthash_dep')
 yyjson_dep = subproject('yyjson').get_variable('yyjson_dep')
@@ -103,7 +98,6 @@ libffi_dep = subproject('libffi', default_options: [
   'tests=false'
 ]).get_variable('ffi_dep')
 
-# Rust oxc parser
 cargo = find_program('cargo', required: true)
 cp = find_program('cp', required: true)
 
@@ -134,7 +128,6 @@ oxc_lib = custom_target(
 
 oxc_dep = declare_dependency(link_with: oxc_lib)
 
-# Collect all dependencies
 ant_deps = [
   libffi_dep, bdwgc_dep, uuid_dep,
   llhttp, pcre2_dep, libuv_dep,

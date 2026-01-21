@@ -1,6 +1,3 @@
-# Snapshot generation
-# Include with: subdir('meson') or subdir('../meson')
-
 node = find_program('node', required: true)
 
 core_files = run_command('sh', '-c', 

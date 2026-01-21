@@ -2,9 +2,9 @@
 path = "build"
 script = "meson compile"
 
-[tasks.clean]
+[tasks.strip]
 path = "build"
-script = "meson clean"
+script = "strip ant"
 
 [tasks.download]
 script = [".github/download.sh", "open .github/artifacts"]
@@ -37,7 +37,7 @@ script = ['meson subprojects download', '''
 ''']
 
 [tasks.install]
-script = ["maid build -q", '''
+script = ["maid build -q", "maid strip", '''
    bash -c 'which ant && cp ./build/ant "$(which ant)" || 
    { mkdir -p ~/.local/bin && cp ./build/ant ~/.local/bin/; }'
 ''']
@@ -45,7 +45,7 @@ script = ["maid build -q", '''
 [tasks.debug]
 script = ['meson subprojects download', '''
    bash -c 'CC="ccache $(which clang)" \
-   meson setup build --wipe -Doptimization=0 -Db_lto=false -Dstrip=false -Db_lundef=false -Dunity=off -Ddebug=true'
+   meson setup build --wipe --buildtype=debug -Doptimization=0 -Db_lto=false -Dstrip=false -Db_lundef=false -Dunity=off'
 ''']
 
 [tasks.embed_example]
