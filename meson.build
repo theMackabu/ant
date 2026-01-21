@@ -10,7 +10,7 @@ project('ant', 'c', default_options: [
 
 src_root = meson.project_source_root()
 vendor_dir = 'vendor'
-is_static = false
+is_static = get_option('static_link')
 
 subdir('meson')
 
