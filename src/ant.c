@@ -59,7 +59,6 @@ _Static_assert(sizeof(uint64_t) == 8, "NaN-boxing requires 64-bit integers");
 _Static_assert(sizeof(double) == sizeof(uint64_t), "double and uint64_t must have same size");
 
 #if defined(__STDC_IEC_559__) || defined(__GCC_IEC_559)
-  /* IEEE 754 compliance guaranteed */
 #elif defined(__FAST_MATH__)
   #error "NaN-boxing is incompatible with -ffast-math"
 #elif DBL_MANT_DIG != 53 || DBL_MAX_EXP != 1024
@@ -115,6 +114,9 @@ typedef struct coroutine {
   mco_coro* mco;
   bool mco_started;
   bool is_ready;
+  struct for_let_ctx *for_let_stack;
+  int for_let_stack_len;
+  int for_let_stack_cap;
 } coroutine_t;
 
 typedef struct {
@@ -906,9 +908,11 @@ bool js_truthy(struct js *js, jsval_t v) {
   }
 }
 
-static void free_coroutine(coroutine_t *coro);
 static bool has_ready_coroutines(void);
 static bool coro_stack_size_initialized = false;
+
+static void free_coroutine(coroutine_t *coro);
+static void for_let_swap_with_coro(struct js *js, coroutine_t *coro);
 
 static size_t calculate_coro_stack_size(void) {
   if (coro_stack_size_initialized) return 0;
@@ -1012,9 +1016,17 @@ void js_poll_events(struct js *js) {
   for (coroutine_t *temp = pending_coroutines.head, *next; temp; temp = next) {
     next = temp->next;
     if (!temp->is_ready || !temp->mco || mco_status(temp->mco) != MCO_SUSPENDED) continue;
-    
     remove_coroutine(temp);
+    
+    jsval_t saved_scope = temp->js->scope;
+    temp->js->scope = temp->scope;
+    
+    for_let_swap_with_coro(temp->js, temp);
     mco_result res = mco_resume(temp->mco);
+    
+    temp->scope = temp->js->scope;
+    temp->js->scope = saved_scope;
+    for_let_swap_with_coro(temp->js, temp);
     
     if (res == MCO_SUCCESS && mco_status(temp->mco) != MCO_DEAD) {
       temp->is_ready = false;
@@ -1128,11 +1140,22 @@ static jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t 
   coro->mco = mco;
   coro->mco_started = false;
   coro->is_ready = true;
+  coro->for_let_stack = NULL;
+  coro->for_let_stack_len = 0;
+  coro->for_let_stack_cap = 0;
   
   ctx->coro = coro;  
   enqueue_coroutine(coro);
   
+  jsval_t saved_scope = js->scope;
+  js->scope = coro->scope;
+  for_let_swap_with_coro(js, coro);
   res = mco_resume(mco);
+  
+  coro->scope = js->scope;
+  js->scope = saved_scope;
+  for_let_swap_with_coro(js, coro);
+  
   if (res != MCO_SUCCESS && mco_status(mco) != MCO_DEAD) {
     remove_coroutine(coro);
     free_coroutine(coro);
@@ -1158,6 +1181,7 @@ static void free_coroutine(coroutine_t *coro) {
       coro->mco = NULL;
     }
     if (coro->args) CORO_FREE(coro->args);
+    if (coro->for_let_stack) free(coro->for_let_stack);
     CORO_FREE(coro);
   }
 }
@@ -4609,6 +4633,81 @@ void js_delscope(struct js *js) {
 
 static void mkscope(struct js *js) { (void)js_mkscope(js); }
 static void delscope(struct js *js) { (void)js_delscope(js); }
+
+static void for_let_push(struct js *js, const char *var_name, jsoff_t var_len, jsoff_t prop_off, jsval_t body_scope) {
+  if (js->for_let_stack_len >= js->for_let_stack_cap) {
+    int new_cap = js->for_let_stack_cap ? js->for_let_stack_cap * 2 : 4;
+    js->for_let_stack = realloc(js->for_let_stack, new_cap * sizeof(struct for_let_ctx));
+    js->for_let_stack_cap = new_cap;
+  }
+  js->for_let_stack[js->for_let_stack_len++] = (struct for_let_ctx){var_name, var_len, prop_off, body_scope};
+}
+
+static inline void for_let_set_body_scope(struct js *js, jsval_t body_scope) {
+  if (js->for_let_stack_len > 0) js->for_let_stack[js->for_let_stack_len - 1].body_scope = body_scope;
+}
+
+static inline void for_let_pop(struct js *js) {
+  if (js->for_let_stack_len > 0) js->for_let_stack_len--;
+}
+
+static inline struct for_let_ctx *for_let_current(struct js *js) {
+  return js->for_let_stack_len > 0 ? &js->for_let_stack[js->for_let_stack_len - 1] : NULL;
+}
+
+static void for_let_swap_with_coro(struct js *js, coroutine_t *coro) {
+  struct for_let_ctx *tmp_stack = js->for_let_stack;
+  int tmp_len = js->for_let_stack_len;
+  int tmp_cap = js->for_let_stack_cap;
+  
+  js->for_let_stack = coro->for_let_stack;
+  js->for_let_stack_len = coro->for_let_stack_len;
+  js->for_let_stack_cap = coro->for_let_stack_cap;
+  
+  coro->for_let_stack = tmp_stack;
+  coro->for_let_stack_len = tmp_len;
+  coro->for_let_stack_cap = tmp_cap;
+}
+
+static void copy_body_scope_props(struct js *js, jsval_t body_scope, jsval_t closure_scope, const char *skip_var, jsoff_t skip_len) {
+  if (vtype(body_scope) != T_OBJ) return;
+  jsoff_t prop_off = loadoff(js, (jsoff_t)vdata(body_scope)) & ~(3U | FLAGMASK);
+  
+  while (prop_off < js->brk && prop_off != 0) {
+    jsoff_t header = loadoff(js, prop_off);
+    if (is_slot_prop(header)) { prop_off = next_prop(header); continue; }
+    
+    jsoff_t koff = loadoff(js, prop_off + (jsoff_t)sizeof(prop_off));
+    jsoff_t klen = offtolen(loadoff(js, koff));
+    const char *key = (char *)&js->mem[koff + sizeof(koff)];
+    jsval_t val = loadval(js, prop_off + (jsoff_t)(sizeof(prop_off) + sizeof(koff)));
+    
+    prop_off = next_prop(header);
+    if (is_internal_prop(key, klen)) continue;
+    if (skip_var && klen == skip_len && memcmp(key, skip_var, klen) == 0) continue;
+    
+    jsval_t key_str = js_mkstr(js, key, klen);
+    mkprop(js, closure_scope, key_str, val, 0);
+  }
+}
+
+static jsval_t for_let_capture_scope(struct js *js) {
+  struct for_let_ctx *flc = for_let_current(js);
+  if (!flc || flc->prop_off == 0) return js->scope;
+  
+  jsval_t loop_var_val = resolveprop(js, mkval(T_PROP, flc->prop_off));
+  jsval_t closure_scope = js_mkscope(js);
+  if (is_err(closure_scope)) return closure_scope;
+  
+  jsval_t var_key = js_mkstr(js, flc->var_name, flc->var_len);
+  mkprop(js, closure_scope, var_key, loop_var_val, 0);
+  
+  if (vtype(flc->body_scope) == T_OBJ) {
+    copy_body_scope_props(js, flc->body_scope, closure_scope, flc->var_name, flc->var_len);
+  }
+  delscope(js);
+  return closure_scope;
+}
 
 static void scope_clear_props(struct js *js, jsval_t scope) {
   jsoff_t off = (jsoff_t)vdata(scope);
@@ -8076,7 +8175,10 @@ static jsval_t js_obj_literal(struct js *js) {
         set_slot(js, func_obj, SLOT_CODE, str);
         jsval_t name_key = js_mkstr(js, "name", 4);
         setprop(js, func_obj, name_key, key);
-        set_slot(js, func_obj, SLOT_SCOPE, js->scope);
+        
+        jsval_t closure_scope = for_let_capture_scope(js);
+        if (is_err(closure_scope)) return closure_scope;
+        set_slot(js, func_obj, SLOT_SCOPE, closure_scope);
         jsval_t val = mkval(T_FUNC, (unsigned long) vdata(func_obj));
         
         if (is_getter || is_setter) {
@@ -8262,7 +8364,9 @@ static jsval_t js_func_literal(struct js *js, bool is_async) {
   }
   
   if (!(flags & F_NOEXEC)) {
-    set_slot(js, func_obj, SLOT_SCOPE, js->scope);
+    jsval_t closure_scope = for_let_capture_scope(js);
+    if (is_err(closure_scope)) return closure_scope;
+    set_slot(js, func_obj, SLOT_SCOPE, closure_scope);
     if (flags & F_STRICT) set_slot(js, func_obj, SLOT_STRICT, js_mktrue());
   }
   
@@ -8422,7 +8526,11 @@ static jsval_t js_literal(struct js *js) {
           set_slot(js, func_obj, SLOT_ASYNC, js_mktrue());
           jsval_t async_proto = get_slot(js, js_glob(js), SLOT_ASYNC_PROTO);
           if (vtype(async_proto) == T_FUNC) set_proto(js, func_obj, async_proto);
-          if (!(flags & F_NOEXEC)) set_slot(js, func_obj, SLOT_SCOPE, js->scope);
+          if (!(flags & F_NOEXEC)) {
+            jsval_t closure_scope = for_let_capture_scope(js);
+            if (is_err(closure_scope)) return closure_scope;
+            set_slot(js, func_obj, SLOT_SCOPE, closure_scope);
+          }
           return mkval(T_FUNC, (unsigned long) vdata(func_obj));
         }
         return mkcoderef((jsoff_t) id_start, (jsoff_t) id_len);
@@ -8573,7 +8681,9 @@ static jsval_t js_arrow_func(struct js *js, jsoff_t params_start, jsoff_t params
   }
   
   if (!(flags & F_NOEXEC)) {
-    set_slot(js, func_obj, SLOT_SCOPE, js->scope);
+    jsval_t closure_scope = for_let_capture_scope(js);
+    if (is_err(closure_scope)) return closure_scope;
+    set_slot(js, func_obj, SLOT_SCOPE, closure_scope);
     set_slot(js, func_obj, SLOT_THIS, js->this_val);
   }
   
@@ -9132,9 +9242,8 @@ static jsval_t js_unary(struct js *js) {
     js_parse_state_t saved;
     JS_SAVE_STATE(js, saved);
     uint8_t saved_flags = js->flags;
-
     mco_result mco_res = mco_yield(current_mco);
-
+    
     JS_RESTORE_STATE(js, saved);
     js->flags = saved_flags;
 
@@ -9394,11 +9503,12 @@ static jsval_t js_assignment(struct js *js) {
     
     jsval_t func_obj = mkobj(js, 0);
     if (is_err(func_obj)) return func_obj;
-    
     set_slot(js, func_obj, SLOT_CODE, str);
     
     if (!(flags & F_NOEXEC)) {
-      set_slot(js, func_obj, SLOT_SCOPE, js->scope);
+      jsval_t closure_scope = for_let_capture_scope(js);
+      if (is_err(closure_scope)) return closure_scope;
+      set_slot(js, func_obj, SLOT_SCOPE, closure_scope);
       set_slot(js, func_obj, SLOT_THIS, js->this_val);
     }
     
@@ -9971,25 +10081,27 @@ static jsval_t js_func_decl(struct js *js) {
    jsval_t res3 = setprop(js, func_obj, name_key, name_val);
    if (is_err(res3)) return res3;
    if (exe) {
-     set_slot(js, func_obj, SLOT_SCOPE, js->scope);
+     jsval_t closure_scope = for_let_capture_scope(js);
+     if (is_err(closure_scope)) return closure_scope;
+     set_slot(js, func_obj, SLOT_SCOPE, closure_scope);
      if (flags & F_STRICT) {
        set_slot(js, func_obj, SLOT_STRICT, js_mktrue());
      }
    }
+   
    jsval_t func = mkval(T_FUNC, (unsigned long) vdata(func_obj));
+   jsval_t proto_setup = setup_func_prototype(js, func);
+   if (is_err(proto_setup)) return proto_setup;
   
-  jsval_t proto_setup = setup_func_prototype(js, func);
-  if (is_err(proto_setup)) return proto_setup;
-  
-  if (exe) {
-    jsoff_t existing = lkp_scope(js, js->scope, name, nlen);
-    if (existing > 0) {
-      saveval(js, existing + sizeof(jsoff_t) * 2, func);
-    } else {
-      jsval_t x = mkprop(js, js->scope, js_mkstr(js, name, nlen), func, 0);
-      if (is_err(x)) return x;
-    }
-  }
+   if (exe) {
+     jsoff_t existing = lkp_scope(js, js->scope, name, nlen);
+     if (existing > 0) {
+       saveval(js, existing + sizeof(jsoff_t) * 2, func);
+     } else {
+       jsval_t x = mkprop(js, js->scope, js_mkstr(js, name, nlen), func, 0);
+       if (is_err(x)) return x;
+     }
+   }
   
   return js_mkundef();
 }
@@ -10038,10 +10150,10 @@ static jsval_t js_func_decl_async(struct js *js) {
    jsval_t res3 = setprop(js, func_obj, name_key, name_val);
    if (is_err(res3)) return res3;
   if (exe) {
-    set_slot(js, func_obj, SLOT_SCOPE, js->scope);
-    if (flags & F_STRICT) {
-      set_slot(js, func_obj, SLOT_STRICT, js_mktrue());
-    }
+    jsval_t closure_scope = for_let_capture_scope(js);
+    if (is_err(closure_scope)) return closure_scope;
+    set_slot(js, func_obj, SLOT_SCOPE, closure_scope);
+    if (flags & F_STRICT) set_slot(js, func_obj, SLOT_STRICT, js_mktrue());
   }
   jsval_t func = mkval(T_FUNC, (unsigned long) vdata(func_obj));
   
@@ -10622,11 +10734,32 @@ static jsval_t js_for(struct js *js) {
   }
   if (!expect(js, TOK_RPAREN, &res)) goto done;
   pos3 = js->pos;
+  
+  jsoff_t iter_var_prop_off = 0;
+  if (is_let_loop && let_var_len > 0 && exe) {
+    js->flags = flags;
+    mkscope(js);
+    jsval_t let_var_key = js_mkstr(js, &js->code[let_var_off], let_var_len);
+    jsoff_t outer_off = lkp_scope(js, upper(js, js->scope), &js->code[let_var_off], let_var_len);
+    jsval_t init_val = outer_off ? resolveprop(js, mkval(T_PROP, outer_off)) : js_mkundef();
+    mkprop(js, js->scope, let_var_key, init_val, 0);
+    iter_var_prop_off = lkp(js, js->scope, &js->code[let_var_off], let_var_len);
+    const char *var_interned = intern_string(&js->code[let_var_off], let_var_len);
+    for_let_push(js, var_interned, let_var_len, iter_var_prop_off, js_mkundef());
+  }
+  
   loop_block_ctx_t loop_ctx = {0};
-  if (exe) loop_block_init(js, &loop_ctx);
+  if (exe) {
+    loop_block_init(js, &loop_ctx);
+    if (is_let_loop && let_var_len > 0 && loop_ctx.needs_scope) for_let_set_body_scope(js, loop_ctx.loop_scope);
+  }
+  
+  js->flags |= F_NOEXEC;
   v = js_block_or_stmt(js);
+  if (exe) js->flags = flags;
   if (is_err2(&v, &res)) goto done;
   pos4 = js->pos;
+  
   while (!(flags & F_NOEXEC)) {
     js->flags = flags, js->pos = pos1, js->consumed = 1;
     if (next(js) != TOK_SEMICOLON) {
@@ -10635,40 +10768,17 @@ static jsval_t js_for(struct js *js) {
       if (!js_truthy(js, v)) break;
     }
     
-    bool iter_scope = false;
-    jsval_t loop_var_val = js_mkundef();
-    if (is_let_loop && let_var_len > 0) {
-      jsoff_t var_off = lkp_scope(js, js->scope, &js->code[let_var_off], let_var_len);
-      if (var_off != 0) {
-        loop_var_val = resolveprop(js, mkval(T_PROP, var_off));
-      }
-      mkscope(js);
-      iter_scope = true;
-      jsval_t var_key = js_mkstr(js, &js->code[let_var_off], let_var_len);
-      mkprop(js, js->scope, var_key, loop_var_val, 0);
-    }
-    
     js->flags |= F_LOOP;
     js->pos = pos3;
     js->consumed = 1;
     loop_block_clear(js, &loop_ctx);
     v = loop_block_exec(js, &loop_ctx);
     if (is_err2(&v, &res)) {
-      if (iter_scope) delscope(js);
       loop_block_cleanup(js, &loop_ctx);
+      if (is_let_loop && let_var_len > 0) {
+        for_let_pop(js); delscope(js);
+      }
       goto done;
-    }
-    
-    if (is_let_loop && let_var_len > 0) {
-      jsoff_t iter_var_off = lkp(js, js->scope, &js->code[let_var_off], let_var_len);
-      if (iter_var_off != 0) {
-        loop_var_val = resolveprop(js, mkval(T_PROP, iter_var_off));
-      }
-      delscope(js);
-      jsoff_t outer_var_off = lkp_scope(js, js->scope, &js->code[let_var_off], let_var_len);
-      if (outer_var_off != 0) {
-        saveval(js, outer_var_off + sizeof(jsoff_t) * 2, loop_var_val);
-      }
     }
     
     if (label_flags & F_CONTINUE_LABEL) {
@@ -10680,19 +10790,13 @@ static jsval_t js_for(struct js *js) {
         if (next(js) != TOK_RPAREN) {
           v = js_expr_comma(js);
           if (is_err2(&v, &res)) goto done;
-        }
-        continue;
+        } continue;
       }
     }
     
-    if (js->flags & F_BREAK) {
-      break;
-    }
+    if (js->flags & F_BREAK) break;
+    if (js->flags & F_RETURN) { res = v; break; }
     
-    if (js->flags & F_RETURN) {
-      res = v;
-      break;
-    }
     js->flags = flags, js->pos = pos2, js->consumed = 1;
     if (next(js) != TOK_RPAREN) {
       v = js_expr_comma(js);
@@ -10700,6 +10804,9 @@ static jsval_t js_for(struct js *js) {
     }
   }
   if (exe) loop_block_cleanup(js, &loop_ctx);
+  if (is_let_loop && let_var_len > 0 && exe) {
+    for_let_pop(js); delscope(js);
+  }
   js->pos = pos4, js->tok = TOK_SEMICOLON, js->consumed = 0;
 done:
   if (use_label_stack && label_stack && utarray_len(label_stack) > 0) {
@@ -10745,7 +10852,11 @@ static jsval_t js_while(struct js *js) {
   if (!expect(js, TOK_RPAREN, &res)) goto done;
   
   jsoff_t body_start = js->pos;
-  if (exe) loop_block_init(js, &loop_ctx);
+  if (exe) {
+    js->flags = flags;
+    loop_block_init(js, &loop_ctx);
+    js->flags |= F_NOEXEC;
+  }
   
   v = js_block_or_stmt(js);
   if (is_err(v)) { res = v; goto done; }
@@ -22141,6 +22252,11 @@ void js_destroy(struct js *js) {
     js->errmsg = NULL;
   }
   
+  if (js->for_let_stack) {
+    free(js->for_let_stack);
+    js->for_let_stack = NULL;
+  }
+  
   if (js->owns_mem) ANT_GC_FREE((void *)((uint8_t *)js - 0));
 }
 
@@ -22452,6 +22568,10 @@ void js_gc_update_roots(GC_UPDATE_ARGS) {
     FWD_VAL(coro->result);
     FWD_VAL(coro->async_func);
     FWD_VAL(coro->yield_value);
+    for (int i = 0; i < coro->for_let_stack_len; i++) {
+      FWD_VAL(coro->for_let_stack[i].body_scope);
+      FWD_OFF(coro->for_let_stack[i].prop_off);
+    }
     if (coro->mco) {
       async_exec_context_t *actx = (async_exec_context_t *)mco_get_user_data(coro->mco);
       if (actx) {
@@ -22489,6 +22609,11 @@ void js_gc_update_roots(GC_UPDATE_ARGS) {
       set_entry_t *se, *se_tmp;
       HASH_ITER(hh, *set_reg->head, se, se_tmp) FWD_VAL(se->value);
     }
+  }
+
+  for (int i = 0; i < js->for_let_stack_len; i++) {
+    FWD_VAL(js->for_let_stack[i].body_scope);
+    FWD_OFF(js->for_let_stack[i].prop_off);
   }
 
   memset(intern_prop_cache, 0, sizeof(intern_prop_cache));

@@ -3,6 +3,13 @@
 
 #include "ant.h"
 
+struct for_let_ctx {
+  const char *var_name;   // interned variable name
+  jsoff_t var_len;        // length of var name
+  jsoff_t prop_off;       // offset of var property in loop scope
+  jsval_t body_scope;     // loop body scope for capturing block-scoped vars
+};
+
 struct js {
   jsoff_t css;            // max observed C stack size
   const char *code;       // currently parsed code snippet
@@ -48,6 +55,11 @@ struct js {
   bool gc_suppress;       // suppress GC during microtask batch processing
   int eval_depth;         // recursion depth of js_eval calls
   int parse_depth;        // recursion depth of parser (for stack overflow protection)
+  
+  // for-let loop context stack
+  struct for_let_ctx *for_let_stack;
+  int for_let_stack_len;
+  int for_let_stack_cap;
 };
 
 enum {
