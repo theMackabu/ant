@@ -117,7 +117,7 @@ typedef struct coroutine {
   struct for_let_ctx *for_let_stack;
   int for_let_stack_len;
   int for_let_stack_cap;
-  UT_array *scope_stack;  // coroutine's own scope stack
+  UT_array *scope_stack;
 } coroutine_t;
 
 typedef struct {
@@ -151,6 +151,8 @@ static const UT_icd jsval_icd = {
 };
 
 static UT_array *global_scope_stack = NULL;
+static UT_array *saved_scope_stack = NULL;
+
 static this_stack_t global_this_stack = {NULL, 0, 0};
 static call_stack_t global_call_stack = {NULL, 0, 0};
 static coroutine_queue_t pending_coroutines = {NULL, NULL};
@@ -2267,6 +2269,8 @@ static size_t strfunc(struct js *js, jsval_t value, char *buf, size_t len) {
   jsval_t async_slot = get_slot(js, func_obj, SLOT_ASYNC);
   
   bool is_async = is_true(async_slot);
+  bool has_code = (vtype(code_slot) == T_CFUNC);
+  
   const struct func_format *fmt = &formats[is_async];
   
   if (vtype(builtin_slot) == T_NUM) {
@@ -2279,7 +2283,7 @@ static size_t strfunc(struct js *js, jsval_t value, char *buf, size_t len) {
     return cpy(buf, len, "[native code]", 13);
   }
   
-  if (vtype(code_slot) != T_STR) {
+  if (!has_code) {
     jsval_t cfunc_slot = get_slot(js, func_obj, SLOT_CFUNC);
     if (vtype(cfunc_slot) == T_CFUNC) {
       if (name && name_len > 0) {
@@ -2298,9 +2302,8 @@ static size_t strfunc(struct js *js, jsval_t value, char *buf, size_t len) {
     }
     return cpy(buf, len, fmt->anon, fmt->anon_len);
   }
-  jsval_t code_val = code_slot;
   
-  if (vtype(code_val) != T_STR) {
+  if (!has_code) {
     if (name && name_len > 0) {
       size_t n = cpy(buf, len, fmt->prefix, fmt->prefix_len);
       n += cpy(buf + n, len - n, name, name_len);
@@ -3380,6 +3383,30 @@ static jsval_t get_slot(struct js *js, jsval_t obj, internal_slot_t slot) {
   jsoff_t off = search_slot(js, obj, slot);
   if (off == 0) return js_mkundef();
   return loadval(js, off + sizeof(jsoff_t) * 2);
+}
+
+static void set_func_code_ptr(struct js *js, jsval_t func_obj, const char *code, size_t len) {
+  set_slot(js, func_obj, SLOT_CODE, mkval(T_CFUNC, (size_t)code));
+  set_slot(js, func_obj, SLOT_CODE_LEN, tov((double)len));
+}
+
+static void set_func_code(struct js *js, jsval_t func_obj, const char *code, size_t len) {
+  const char *arena_code = code_arena_alloc(code, len);
+  if (!arena_code) return;
+  set_func_code_ptr(js, func_obj, arena_code, len);
+}
+
+static const char *get_func_code(struct js *js, jsval_t func_obj, jsoff_t *len) {
+  jsval_t code_val = get_slot(js, func_obj, SLOT_CODE);
+  jsval_t len_val = get_slot(js, func_obj, SLOT_CODE_LEN);
+  
+  if (vtype(code_val) != T_CFUNC) {
+    if (len) *len = 0;
+    return NULL;
+  }
+  
+  if (len) *len = (jsoff_t)tod(len_val);
+  return (const char *)vdata(code_val);
 }
 
 static inline bool is_slot_prop(jsoff_t header) {
@@ -6318,9 +6345,26 @@ static void setup_arguments(struct js *js, jsval_t scope, jsval_t *args, int nar
   }
 }
 
-static jsval_t call_js_internal(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *bound_args, int bound_argc, jsval_t func_val) {
-  jsval_t saved_scope = js->scope;
-  jsval_t saved_this_val = js->this_val;
+static inline void restore_saved_scope(struct js *js) {
+  if (saved_scope_stack && utarray_len(saved_scope_stack) >= 2) {
+    jsval_t *saved_this_ptr = (jsval_t *)utarray_back(saved_scope_stack);
+    js->this_val = *saved_this_ptr;
+    utarray_pop_back(saved_scope_stack);
+    
+    jsval_t *saved_scope_ptr = (jsval_t *)utarray_back(saved_scope_stack);
+    js->scope = *saved_scope_ptr;
+    utarray_pop_back(saved_scope_stack);
+  }
+}
+
+static jsval_t call_js_internal(
+  struct js *js, const char *fn, jsoff_t fnlen,
+  jsval_t closure_scope, jsval_t *bound_args, int bound_argc, jsval_t func_val
+) {
+  if (saved_scope_stack == NULL) utarray_new(saved_scope_stack, &jsval_icd);
+  utarray_push_back(saved_scope_stack, &js->scope);
+  utarray_push_back(saved_scope_stack, &js->this_val);
+  
   jsval_t target_this = peek_this();
   jsoff_t parent_scope_offset;
   
@@ -6376,7 +6420,7 @@ static jsval_t call_js_internal(struct js *js, const char *fn, jsoff_t fnlen, js
   parsed_func_t *pf = get_or_parse_func(fn, fnlen);
   if (!pf) {
     utarray_free(args_arr);
-    js->scope = saved_scope;
+    restore_saved_scope(js);
     if (global_scope_stack && utarray_len(global_scope_stack) > 0) utarray_pop_back(global_scope_stack);
     return js_mkerr(js, "failed to parse function");
   }
@@ -6393,7 +6437,7 @@ static jsval_t call_js_internal(struct js *js, const char *fn, jsoff_t fnlen, js
       jsval_t r = bind_destruct_pattern(js, &fn[pp->pattern_off], pp->pattern_len, arg_val, function_scope);
       if (is_err(r)) {
         utarray_free(args_arr);
-        js->scope = saved_scope;
+        restore_saved_scope(js);
         if (global_scope_stack && utarray_len(global_scope_stack) > 0) utarray_pop_back(global_scope_stack);
         return r;
       }
@@ -6467,8 +6511,7 @@ static jsval_t call_js_internal(struct js *js, const char *fn, jsoff_t fnlen, js
   if (global_scope_stack && utarray_len(global_scope_stack) > 0)  utarray_pop_back(global_scope_stack);
   
   utarray_free(args_arr);
-  js->scope = saved_scope;
-  js->this_val = saved_this_val;
+  restore_saved_scope(js);
   return res;
 }
 
@@ -6544,14 +6587,12 @@ static jsval_t call_js_with_args(struct js *js, jsval_t func, jsval_t *args, int
     return result;
   }
   
-  jsval_t code_val = get_slot(js, func_obj, SLOT_CODE);
-  if (vtype(code_val) != T_STR) {
+  jsoff_t fnlen;
+  const char *fn = get_func_code(js, func_obj, &fnlen);
+  if (!fn) {
     if (combined_args) ANT_GC_FREE(combined_args);
     return js_mkerr(js, "function has no code");
   }
-  
-  jsoff_t fnlen, fnoff = vstr(js, code_val, &fnlen);
-  const char *fn = (const char *) (&js->mem[fnoff]);
   
   jsval_t closure_scope = get_slot(js, func_obj, SLOT_SCOPE);
   jsval_t saved_super = js->super_val;
@@ -6743,7 +6784,6 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
     const char *code = js->code;
     jsoff_t clen = js->clen, pos = js->pos;
     uint8_t tok = js->tok, flags = js->flags;
-    jsoff_t nogc = js->nogc;
     
     js->code = &js->code[coderefoff(args)];
     js->clen = codereflen(args);
@@ -6753,7 +6793,7 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
     
     js->code = code; js->clen = clen; js->pos = pos;
     js->flags = (flags & ~F_THROW) | (js->flags & F_THROW);
-    js->tok = tok; js->nogc = nogc;
+    js->tok = tok;
     js->consumed = 1;
     return res;
   }
@@ -6785,8 +6825,8 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
   js->code = &js->code[coderefoff(args)];
   js->clen = codereflen(args);
   js->pos = skiptonext(js->code, js->clen, 0, NULL);
+  
   uint8_t tok = js->tok, flags = js->flags;
-  jsoff_t nogc = js->nogc;
   jsval_t res = js_mkundef();
   
   if (vtype(func) == T_FUNC) {
@@ -6842,11 +6882,12 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
     } else {
       jsval_t builtin_slot = get_slot(js, func_obj, SLOT_BUILTIN);
       if (vtype(builtin_slot) == T_NUM && tod(builtin_slot) == BUILTIN_OBJECT) res = call_c(js, builtin_Object); else {
-      jsval_t code_val = get_slot(js, func_obj, SLOT_CODE);
-      if (vtype(code_val) != T_STR) return js_mkerr(js, "function has no code");
+      jsoff_t fnlen;
+      
+      const char *code_str = get_func_code(js, func_obj, &fnlen);
+      if (!code_str) return js_mkerr(js, "function has no code");
+      
       jsval_t closure_scope = get_slot(js, func_obj, SLOT_SCOPE);
-      jsoff_t fnlen, fnoff = vstr(js, code_val, &fnlen);
-      const char *code_str = (const char *) (&js->mem[fnoff]);
       jsval_t async_slot = get_slot(js, func_obj, SLOT_ASYNC);
       bool is_async = vtype(async_slot) == T_BOOL && vdata(async_slot) == 1;
       
@@ -6929,7 +6970,6 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
       
       jsval_t saved_func = js->current_func;
       js->current_func = func;
-      js->nogc = (jsoff_t) (fnoff - sizeof(jsoff_t));
       
       jsval_t saved_super = js->super_val;
       jsval_t func_super = get_slot(js, func_obj, SLOT_SUPER);
@@ -6960,8 +7000,8 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
       jsval_t fields_meta = get_slot(js, func_obj, SLOT_FIELDS);
       if (vtype(src_val) == T_UNDEF || vtype(fields_meta) == T_UNDEF) goto skip_fields;
       
-      jsoff_t src_len, src_ptr_off = vstr(js, src_val, &src_len);
-      const char *source = (const char *)(&js->mem[src_ptr_off]);
+      if (vtype(src_val) != T_CFUNC) goto skip_fields;
+      const char *source = (const char *)vdata(src_val);
       
       jsoff_t meta_len, meta_ptr_off = vstr(js, fields_meta, &meta_len);
       const jsoff_t *metadata = (const jsoff_t *)(&js->mem[meta_ptr_off]);
@@ -7025,7 +7065,7 @@ skip_fields:
 restore_state:
   js->code = code, js->clen = clen, js->pos = pos;
   js->flags = (flags & ~F_THROW) | (js->flags & F_THROW);
-  js->tok = tok, js->nogc = nogc;
+  js->tok = tok;
   js->consumed = 1;
   
   return res;
@@ -7048,14 +7088,12 @@ static jsval_t js_call_toString(struct js *js, jsval_t value) {
     result = ((jsval_t (*)(struct js *, jsval_t *, int))vdata(ts_func))(js, NULL, 0);
   } else {
     jsval_t func_obj = mkval(T_OBJ, vdata(ts_func));
-    jsval_t code_val = get_slot(js, func_obj, SLOT_CODE);
-    if (vtype(code_val) != T_STR) goto restore_fallback;
+    jsoff_t fnlen;
+    const char *code_str = get_func_code(js, func_obj, &fnlen);
+    if (!code_str) goto restore_fallback;
     
     jsval_t closure_scope = get_slot(js, func_obj, SLOT_SCOPE);
     if (vtype(closure_scope) == T_UNDEF) closure_scope = js->scope;
-    
-    jsoff_t fnlen, fnoff = vstr(js, code_val, &fnlen);
-    const char *code_str = (const char *)&js->mem[fnoff];
     
     result = call_js(js, code_str, fnlen, closure_scope);
   }
@@ -7095,14 +7133,14 @@ static jsval_t js_call_valueOf(struct js *js, jsval_t value) {
     result = ((jsval_t (*)(struct js *, jsval_t *, int))vdata(fn))(js, NULL, 0);
   } else {
     jsval_t func_obj = mkval(T_OBJ, vdata(fn));
-    jsval_t code_val = get_slot(js, func_obj, SLOT_CODE);
-    if (vtype(code_val) != T_STR) { js->this_val = saved; return value; }
+    jsoff_t fnlen;
+    const char *code_str = get_func_code(js, func_obj, &fnlen);
+    if (!code_str) { js->this_val = saved; return value; }
     
     jsval_t closure_scope = get_slot(js, func_obj, SLOT_SCOPE);
     if (vtype(closure_scope) == T_UNDEF) closure_scope = js->scope;
     
-    jsoff_t fnlen, fnoff = vstr(js, code_val, &fnlen);
-    result = call_js(js, (const char *)&js->mem[fnoff], fnlen, closure_scope);
+    result = call_js(js, code_str, fnlen, closure_scope);
   }
   
   js->this_val = saved;
@@ -8201,10 +8239,9 @@ static jsval_t js_obj_literal(struct js *js) {
       js->consumed = 1;
       
       if (exe) {
-        jsval_t str = js_mkstr(js, &js->code[pos], js->pos - pos);
         jsval_t func_obj = mkobj(js, 0);
         if (is_err(func_obj)) return func_obj;
-        set_slot(js, func_obj, SLOT_CODE, str);
+        set_func_code(js, func_obj, &js->code[pos], js->pos - pos);
         jsval_t name_key = js_mkstr(js, "name", 4);
         setprop(js, func_obj, name_key, key);
         
@@ -8367,11 +8404,10 @@ static jsval_t js_func_literal(struct js *js, bool is_async) {
     return res;
   }
   js->flags = flags;
-  jsval_t str = js_mkstr(js, &js->code[pos], js->pos - pos);
   js->consumed = 1;
   jsval_t func_obj = mkobj(js, 0);
   if (is_err(func_obj)) return func_obj;
-  set_slot(js, func_obj, SLOT_CODE, str);
+  set_func_code(js, func_obj, &js->code[pos], js->pos - pos);
   
   jsval_t len_key = js_mkstr(js, "length", 6);
   if (is_err(len_key)) return len_key;
@@ -8549,12 +8585,10 @@ static jsval_t js_literal(struct js *js) {
             memcpy(fn_str + fn_pos, &js->code[body_start], body_len);
             fn_pos += body_len;
           }
-          jsval_t str = js_mkstr(js, fn_str, fn_pos);
-          free(fn_str);
-          if (is_err(str)) return str;
           jsval_t func_obj = mkobj(js, 0);
-          if (is_err(func_obj)) return func_obj;
-          set_slot(js, func_obj, SLOT_CODE, str);
+          if (is_err(func_obj)) { free(fn_str); return func_obj; }
+          set_func_code(js, func_obj, fn_str, fn_pos);
+          free(fn_str);
           set_slot(js, func_obj, SLOT_ASYNC, js_mktrue());
           jsval_t async_proto = get_slot(js, js_glob(js), SLOT_ASYNC_PROTO);
           if (vtype(async_proto) == T_FUNC) set_proto(js, func_obj, async_proto);
@@ -8608,8 +8642,10 @@ static jsval_t js_literal(struct js *js) {
         if (vtype(method) != T_FUNC) return method;
         
         jsval_t bound = mkobj(js, 0);
-        set_slot(js, bound, SLOT_CODE, get_slot(js, mkval(T_OBJ, vdata(method)), SLOT_CODE));
-        set_slot(js, bound, SLOT_SCOPE, get_slot(js, mkval(T_OBJ, vdata(method)), SLOT_SCOPE));
+        jsval_t method_obj = mkval(T_OBJ, vdata(method));
+        set_slot(js, bound, SLOT_CODE, get_slot(js, method_obj, SLOT_CODE));
+        set_slot(js, bound, SLOT_CODE_LEN, get_slot(js, method_obj, SLOT_CODE_LEN));
+        set_slot(js, bound, SLOT_SCOPE, get_slot(js, method_obj, SLOT_SCOPE));
         set_slot(js, bound, SLOT_BOUND_THIS, js->this_val);
         return mkval(T_FUNC, vdata(bound));
       }
@@ -8697,14 +8733,11 @@ static jsval_t js_arrow_func(struct js *js, jsoff_t params_start, jsoff_t params
     fn_pos += body_len;
   }
 
-  jsval_t str = js_mkstr(js, fn_str, fn_pos);
-  free(fn_str);
-  if (is_err(str)) return str;
-
   jsval_t func_obj = mkobj(js, 0);
-  if (is_err(func_obj)) return func_obj;
+  if (is_err(func_obj)) { free(fn_str); return func_obj; }
   
-  set_slot(js, func_obj, SLOT_CODE, str);
+  set_func_code(js, func_obj, fn_str, fn_pos);
+  free(fn_str);
   
   if (is_async) {
     set_slot(js, func_obj, SLOT_ASYNC, js_mktrue());
@@ -9529,13 +9562,10 @@ static jsval_t js_assignment(struct js *js) {
       fn_pos += body_len;
     }
     
-    jsval_t str = js_mkstr(js, fn_str, fn_pos);
-    free(fn_str);
-    if (is_err(str)) return str;
-    
     jsval_t func_obj = mkobj(js, 0);
-    if (is_err(func_obj)) return func_obj;
-    set_slot(js, func_obj, SLOT_CODE, str);
+    if (is_err(func_obj)) { free(fn_str); return func_obj; }
+    set_func_code(js, func_obj, fn_str, fn_pos);
+    free(fn_str);
     
     if (!(flags & F_NOEXEC)) {
       jsval_t closure_scope = for_let_capture_scope(js);
@@ -10096,10 +10126,9 @@ static jsval_t js_func_decl(struct js *js) {
     return res;
   }
   js->flags = flags;
-   jsval_t str = js_mkstr(js, &js->code[pos], js->pos - pos);
    jsval_t func_obj = mkobj(js, 0);
    if (is_err(func_obj)) return func_obj;
-   set_slot(js, func_obj, SLOT_CODE, str);
+   set_func_code(js, func_obj, &js->code[pos], js->pos - pos);
    jsval_t len_key = js_mkstr(js, "length", 6);
    if (is_err(len_key)) return len_key;
    jsval_t res_len = setprop(js, func_obj, len_key, tov(param_count));
@@ -10162,10 +10191,9 @@ static jsval_t js_func_decl_async(struct js *js) {
     return res;
   }
   js->flags = flags;
-  jsval_t str = js_mkstr(js, &js->code[pos], js->pos - pos);
   jsval_t func_obj = mkobj(js, 0);
   if (is_err(func_obj)) return func_obj;
-   set_slot(js, func_obj, SLOT_CODE, str);
+   set_func_code(js, func_obj, &js->code[pos], js->pos - pos);
    set_slot(js, func_obj, SLOT_ASYNC, js_mktrue());
    jsval_t async_proto = get_slot(js, js_glob(js), SLOT_ASYNC_PROTO);
    if (vtype(async_proto) == T_FUNC) set_proto(js, func_obj, async_proto);
@@ -11942,13 +11970,11 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
       if (is_err(method_name)) return method_name;
       
       jsoff_t mlen = m->fn_end - m->fn_start;
-      jsval_t method_code = js_mkstr(js, &js->code[m->fn_start], mlen);
-      if (is_err(method_code)) return method_code;
       
       jsval_t method_obj = mkobj(js, 0);
       if (is_err(method_obj)) return method_obj;
       
-      set_slot(js, method_obj, SLOT_CODE, method_code);
+      set_func_code(js, method_obj, &js->code[m->fn_start], mlen);
       set_slot(js, method_obj, SLOT_SCOPE, func_scope);
       
       if (m->is_async) {
@@ -11978,16 +12004,13 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
     jsval_t func_obj = mkobj(js, 0);
     if (is_err(func_obj)) return func_obj;
     
-    jsval_t ctor_str;
     if (constructor_params_start > 0 && constructor_body_start > 0) {
       jsoff_t code_len = constructor_body_end - constructor_params_start;
-      ctor_str = js_mkstr(js, &js->code[constructor_params_start], code_len);
+      set_func_code(js, func_obj, &js->code[constructor_params_start], code_len);
     } else {
-      ctor_str = js_mkstr(js, "(){}", 4);
+      set_func_code_ptr(js, func_obj, "(){}", 4);
       if (super_len > 0) set_slot(js, func_obj, SLOT_DEFAULT_CTOR, js_mktrue());
     }
-    if (is_err(ctor_str)) return ctor_str;
-    set_slot(js, func_obj, SLOT_CODE, ctor_str);
     
     int instance_field_count = 0;
     for (unsigned int i = 0; i < utarray_len(methods); i++) {
@@ -12026,9 +12049,8 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
       set_slot(js, func_obj, SLOT_FIELD_COUNT, tov((double)instance_field_count));
       set_slot(js, func_obj, SLOT_FIELDS, fields_meta);
       
-      jsval_t src_ref = js_mkstr(js, js->code, js->clen);
-      if (is_err(src_ref)) return src_ref;
-      set_slot(js, func_obj, SLOT_SOURCE, src_ref);
+      const char *arena_src = code_arena_alloc(js->code, js->clen);
+      if (arena_src) set_slot(js, func_obj, SLOT_SOURCE, mkval(T_CFUNC, (size_t)arena_src));
     }
     
     set_slot(js, func_obj, SLOT_SCOPE, func_scope);
@@ -12079,13 +12101,11 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
         if (is_err(set_res)) return set_res;
       } else {
         jsoff_t mlen = m->fn_end - m->fn_start;
-        jsval_t method_code = js_mkstr(js, &js->code[m->fn_start], mlen);
-        if (is_err(method_code)) return method_code;
         
         jsval_t method_obj = mkobj(js, 0);
         if (is_err(method_obj)) return method_obj;
         
-        set_slot(js, method_obj, SLOT_CODE, method_code);
+        set_func_code(js, method_obj, &js->code[m->fn_start], mlen);
         set_slot(js, method_obj, SLOT_SCOPE, func_scope);
         if (super_len > 0) set_slot(js, method_obj, SLOT_SUPER, super_constructor);
         
@@ -12515,13 +12535,10 @@ static jsval_t builtin_eval(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t builtin_Function(struct js *js, jsval_t *args, int nargs) {
   if (nargs == 0) {
-    jsval_t code_str = js_mkstr(js, "(){}", 4);
-    if (is_err(code_str)) return code_str;
-    
     jsval_t func_obj = mkobj(js, 0);
     if (is_err(func_obj)) return func_obj;
     
-    set_slot(js, func_obj, SLOT_CODE, code_str);
+    set_func_code_ptr(js, func_obj, "(){}", 4);
     set_slot(js, func_obj, SLOT_SCOPE, js_glob(js));
     
     jsval_t func = mkval(T_FUNC, (unsigned long) vdata(func_obj));
@@ -12555,32 +12572,30 @@ static jsval_t builtin_Function(struct js *js, jsval_t *args, int nargs) {
   total_len += vstrlen(js, body);
   total_len += 1;
   
-  jsval_t code_str = js_mkstr(js, NULL, total_len);
-  if (is_err(code_str)) return code_str;
-  
-  jsoff_t code_len, code_off = vstr(js, code_str, &code_len);
-  char *code_ptr = (char *)&js->mem[code_off];
+  char *code_buf = (char *)malloc(total_len + 1);
+  if (!code_buf) return js_mkerr(js, "oom");
   size_t pos = 0;
   
-  code_ptr[pos++] = '(';
+  code_buf[pos++] = '(';
   
   for (int i = 0; i < nargs - 1; i++) {
     jsoff_t param_len, param_off = vstr(js, args[i], &param_len);
-    memcpy(code_ptr + pos, &js->mem[param_off], param_len);
+    memcpy(code_buf + pos, &js->mem[param_off], param_len);
     pos += param_len;
     if (i < nargs - 2) {
-      code_ptr[pos++] = ',';
+      code_buf[pos++] = ',';
     }
   }
   
-  code_ptr[pos++] = ')';
-  code_ptr[pos++] = '{';
+  code_buf[pos++] = ')';
+  code_buf[pos++] = '{';
   
   jsoff_t body_len, body_off = vstr(js, body, &body_len);
-  memcpy(code_ptr + pos, &js->mem[body_off], body_len);
+  memcpy(code_buf + pos, &js->mem[body_off], body_len);
   pos += body_len;
   
-  code_ptr[pos++] = '}';
+  code_buf[pos++] = '}';
+  code_buf[pos] = '\0';
   
   bool is_strict_body = is_strict_function_body((const char *)&js->mem[body_off], body_len);
   if (is_strict_body && nargs > 1) {
@@ -12595,6 +12610,7 @@ check_param:
     param_i = (const char *)&js->mem[param_off_i];
     
     if (is_strict_restricted(param_i, param_len_i)) {
+      free(code_buf);
       return js_mkerr_typed(js, JS_ERR_SYNTAX, "cannot use '%.*s' as parameter name in strict mode", (int)param_len_i, param_i);
     }
     
@@ -12607,6 +12623,7 @@ check_dup:
     const char *param_j = (const char *)&js->mem[param_off_j];
     
     if (param_len_i == param_len_j && memcmp(param_i, param_j, param_len_i) == 0) {
+      free(code_buf);
       return js_mkerr_typed(js, JS_ERR_SYNTAX, "duplicate parameter name '%.*s' in strict mode", (int)param_len_i, param_i);
     }
     
@@ -12617,13 +12634,13 @@ params_done:;
   }
 
   jsval_t func_obj = mkobj(js, 0);
-  if (is_err(func_obj)) return func_obj;
+  if (is_err(func_obj)) { free(code_buf); return func_obj; }
   
-  set_slot(js, func_obj, SLOT_CODE, code_str);
+  set_func_code(js, func_obj, code_buf, pos);
+  free(code_buf);
   set_slot(js, func_obj, SLOT_SCOPE, js_glob(js));
   
   jsval_t func = mkval(T_FUNC, (unsigned long) vdata(func_obj));
-  
   jsval_t proto_setup = setup_func_prototype(js, func);
   if (is_err(proto_setup)) return proto_setup;
   
@@ -12632,13 +12649,10 @@ params_done:;
 
 static jsval_t builtin_AsyncFunction(struct js *js, jsval_t *args, int nargs) {
   if (nargs == 0) {
-    jsval_t code_str = js_mkstr(js, "(){}", 4);
-    if (is_err(code_str)) return code_str;
-    
     jsval_t func_obj = mkobj(js, 0);
     if (is_err(func_obj)) return func_obj;
     
-    set_slot(js, func_obj, SLOT_CODE, code_str);
+    set_func_code_ptr(js, func_obj, "(){}", 4);
     set_slot(js, func_obj, SLOT_SCOPE, js_glob(js));
     set_slot(js, func_obj, SLOT_ASYNC, js_mktrue());
     
@@ -12675,34 +12689,33 @@ static jsval_t builtin_AsyncFunction(struct js *js, jsval_t *args, int nargs) {
   total_len += vstrlen(js, body);
   total_len += 1;
   
-  jsval_t code_str = js_mkstr(js, NULL, total_len);
-  if (is_err(code_str)) return code_str;
-  
-  jsoff_t code_len, code_off = vstr(js, code_str, &code_len);
-  char *code_ptr = (char *)&js->mem[code_off];
+  char *code_buf = (char *)malloc(total_len + 1);
+  if (!code_buf) return js_mkerr(js, "oom");
   size_t pos = 0;
   
-  code_ptr[pos++] = '(';
+  code_buf[pos++] = '(';
   
   for (int i = 0; i < nargs - 1; i++) {
     jsoff_t param_len, param_off = vstr(js, args[i], &param_len);
-    memcpy(code_ptr + pos, &js->mem[param_off], param_len);
+    memcpy(code_buf + pos, &js->mem[param_off], param_len);
     pos += param_len;
-    if (i < nargs - 2) code_ptr[pos++] = ',';
+    if (i < nargs - 2) code_buf[pos++] = ',';
   }
   
-  code_ptr[pos++] = ')';
-  code_ptr[pos++] = '{';
+  code_buf[pos++] = ')';
+  code_buf[pos++] = '{';
   
   jsoff_t body_len, body_off = vstr(js, body, &body_len);
-  memcpy(code_ptr + pos, &js->mem[body_off], body_len);
+  memcpy(code_buf + pos, &js->mem[body_off], body_len);
   pos += body_len;
-  code_ptr[pos++] = '}';
+  code_buf[pos++] = '}';
+  code_buf[pos] = '\0';
 
   jsval_t func_obj = mkobj(js, 0);
-  if (is_err(func_obj)) return func_obj;
+  if (is_err(func_obj)) { free(code_buf); return func_obj; }
   
-  set_slot(js, func_obj, SLOT_CODE, code_str);
+  set_func_code(js, func_obj, code_buf, pos);
+  free(code_buf);
   set_slot(js, func_obj, SLOT_SCOPE, js_glob(js));
   set_slot(js, func_obj, SLOT_ASYNC, js_mktrue());
   
@@ -12881,8 +12894,9 @@ static jsval_t builtin_function_bind(struct js *js, jsval_t *args, int nargs) {
   if (is_err(bound_func)) return bound_func;
 
   jsval_t code_val = get_slot(js, func_obj, SLOT_CODE);
-  if (vtype(code_val) == T_STR) {
+  if (vtype(code_val) == T_STR || vtype(code_val) == T_CFUNC) {
     set_slot(js, bound_func, SLOT_CODE, code_val);
+    set_slot(js, bound_func, SLOT_CODE_LEN, get_slot(js, func_obj, SLOT_CODE_LEN));
   }
 
   jsval_t cfunc_slot = get_slot(js, func_obj, SLOT_CFUNC);
@@ -22520,6 +22534,7 @@ for (typeof(registry) new_reg = NULL, *_once = NULL; !_once; _once = (void*)1, r
 
 void js_gc_update_roots(GC_UPDATE_ARGS) {
   UTARRAY_EACH(global_scope_stack, jsoff_t, off) FWD_OFF(*off);
+  UTARRAY_EACH(saved_scope_stack, jsval_t, val) FWD_VAL(*val);
 
   for (int i = 0; i < global_this_stack.depth; i++)
     FWD_VAL(global_this_stack.stack[i]);
@@ -22757,10 +22772,9 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
       return res;
     }
     
-    jsval_t code_val = get_slot(js, func_obj, SLOT_CODE);
-    if (vtype(code_val) != T_STR) return js_mkerr(js, "function has no code");
-    jsoff_t fnlen, fnoff = vstr(js, code_val, &fnlen);
-    const char *fn = (const char *) (&js->mem[fnoff]);
+    jsoff_t fnlen;
+    const char *fn = get_func_code(js, func_obj, &fnlen);
+    if (!fn) return js_mkerr(js, "function has no code");
     
     jsval_t slot_bound_this = get_slot(js, func_obj, SLOT_BOUND_THIS);
     bool has_slot_bound_this = vtype(slot_bound_this) != T_UNDEF;

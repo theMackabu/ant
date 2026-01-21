@@ -31,7 +31,6 @@ struct js {
   jsoff_t pos;            // current parsing position
   jsoff_t toff;           // offset of the last parsed token
   jsoff_t tlen;           // length of the last parsed token
-  jsoff_t nogc;           // entity offset to exclude from GC
   jsval_t tval;           // holds last parsed numeric or string literal value
   jsval_t scope;          // current scope
   jsval_t this_val;       // 'this' value for currently executing function

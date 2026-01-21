@@ -4,6 +4,7 @@
 #include <yyjson.h>
 
 #include "runtime.h"
+#include "internal.h"
 #include "modules/json.h"
 #include "modules/symbol.h"
 
@@ -85,7 +86,7 @@ static int should_skip_prop(struct js *js, const char *key, size_t key_len, jsva
   if (js_type(value) != JS_OBJ) return 0;
   
   jsval_t code = js_get_slot(js, value, SLOT_CODE);
-  return js_type(code) == JS_STR;
+  return js_type(code) == T_CFUNC;
 }
 
 static prop_entry *collect_props(struct js *js, jsval_t val, int *out_count) {
