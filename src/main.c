@@ -41,6 +41,7 @@
 #include "modules/navigator.h"
 #include "modules/child_process.h"
 #include "modules/readline.h"
+#include "modules/observable.h"
 
 int js_result = EXIT_SUCCESS;
 
@@ -233,6 +234,7 @@ int main(int argc, char *argv[]) {
   init_sessionstorage_module();
   init_localstorage_module();
   init_navigator_module();
+  init_observable_module();
   
   ant_register_library(shell_library, "ant:shell", NULL);
   ant_register_library(ffi_library, "ant:ffi", NULL);

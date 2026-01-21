@@ -10,17 +10,21 @@ static jsval_t g_iterator_sym = 0;
 static jsval_t g_asyncIterator_sym = 0;
 static jsval_t g_toStringTag_sym = 0;
 static jsval_t g_hasInstance_sym = 0;
+static jsval_t g_observable_sym = 0;
 
 static char g_iter_sym_key[32] = {0};
 static char g_asyncIter_sym_key[32] = {0};
 static char g_toStringTag_sym_key[32] = {0};
+static char g_observable_sym_key[32] = {0};
 
 jsval_t get_iterator_symbol(void) { return g_iterator_sym; }
 jsval_t get_asyncIterator_symbol(void) { return g_asyncIterator_sym; }
+jsval_t get_observable_symbol(void) { return g_observable_sym; }
 
 const char *get_iterator_sym_key(void) { return g_iter_sym_key; }
 const char *get_asyncIterator_sym_key(void) { return g_asyncIter_sym_key; }
 const char *get_toStringTag_sym_key(void) { return g_toStringTag_sym_key; }
+const char *get_observable_sym_key(void) { return g_observable_sym_key; }
 
 static jsval_t builtin_Symbol(struct js *js, jsval_t *args, int nargs) {
   const char *desc = NULL;
@@ -158,10 +162,12 @@ void init_symbol_module(void) {
   g_asyncIterator_sym = js_mksym(js, "Symbol.asyncIterator");
   g_toStringTag_sym = js_mksym(js, "Symbol.toStringTag");
   g_hasInstance_sym = js_mksym(js, "Symbol.hasInstance");
+  g_observable_sym = js_mksym(js, "Symbol.observable");
   
   snprintf(g_iter_sym_key, sizeof(g_iter_sym_key), "__sym_%llu__", (unsigned long long)js_sym_id(g_iterator_sym));
   snprintf(g_asyncIter_sym_key, sizeof(g_asyncIter_sym_key), "__sym_%llu__", (unsigned long long)js_sym_id(g_asyncIterator_sym));
   snprintf(g_toStringTag_sym_key, sizeof(g_toStringTag_sym_key), "__sym_%llu__", (unsigned long long)js_sym_id(g_toStringTag_sym));
+  snprintf(g_observable_sym_key, sizeof(g_observable_sym_key), "__sym_%llu__", (unsigned long long)js_sym_id(g_observable_sym));
   
   jsval_t symbol_ctor = js_mkobj(js);
   js_set_slot(js, symbol_ctor, SLOT_CFUNC, js_mkfun(builtin_Symbol));
@@ -172,6 +178,7 @@ void init_symbol_module(void) {
   js_set(js, symbol_ctor, "asyncIterator", g_asyncIterator_sym);
   js_set(js, symbol_ctor, "toStringTag", g_toStringTag_sym);
   js_set(js, symbol_ctor, "hasInstance", g_hasInstance_sym);
+  js_set(js, symbol_ctor, "observable", g_observable_sym);
   
   jsval_t func_symbol = js_obj_to_func(symbol_ctor);
   js_set(js, js_glob(js), "Symbol", func_symbol);

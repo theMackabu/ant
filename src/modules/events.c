@@ -16,76 +16,53 @@
 typedef struct {
   jsval_t listener;
   bool once;
-} EventListener;
+} __attribute__((packed)) EventListener;
 
 typedef struct {
-  char *event_type;
   EventListener listeners[MAX_LISTENERS_PER_EVENT];
-  int listener_count;
+  char *event_type;
   UT_hash_handle hh;
+  int listener_count;
 } EventType;
 
-typedef struct {
-  uint64_t target_id;
-  EventType *events;
-  UT_hash_handle hh;
-} TargetEvents;
+static EventType *global_events = NULL;
 
-static TargetEvents *target_events_map = NULL;
-static uint64_t next_emitter_id = 1;
-
-static TargetEvents *get_or_create_target_events(jsval_t target) {
-  uint64_t target_id = target;
-  TargetEvents *te = NULL;
-  
-  HASH_FIND(hh, target_events_map, &target_id, sizeof(uint64_t), te);
-  
-  if (te == NULL) {
-    te = ANT_GC_MALLOC(sizeof(TargetEvents));
-    te->target_id = target_id;
-    te->events = NULL;
-    HASH_ADD(hh, target_events_map, target_id, sizeof(uint64_t), te);
+static inline void remove_listener_at(EventType *evt, int i) {
+  int remaining = evt->listener_count - i - 1;
+  if (remaining > 0) {
+    memmove(&evt->listeners[i], &evt->listeners[i + 1], remaining * sizeof(EventListener));
   }
-  
-  return te;
+  evt->listener_count--;
 }
 
-static TargetEvents *get_or_create_emitter_events(struct js *js, jsval_t this_obj) {
-  jsval_t id_val = js_get(js, this_obj, "_emitter_id");
-  uint64_t emitter_id;
-  TargetEvents *te = NULL;
+static EventType **get_or_create_emitter_events(struct js *js, jsval_t this_obj) {
+  jsval_t slot = js_get_slot(js, this_obj, SLOT_DATA);
   
-  if (js_type(id_val) != JS_NUM) {
-    emitter_id = next_emitter_id++;
-    js_set(js, this_obj, "_emitter_id", js_mknum((double)emitter_id));
-    
-    te = ANT_GC_MALLOC(sizeof(TargetEvents));
-    te->target_id = emitter_id;
-    te->events = NULL;
-    HASH_ADD(hh, target_events_map, target_id, sizeof(uint64_t), te);
-    return te;
+  if (js_type(slot) == JS_UNDEF) {
+    EventType **events = ANT_GC_MALLOC(sizeof(EventType *));
+    *events = NULL;
+    js_set_slot(js, this_obj, SLOT_DATA, ANT_PTR(events));
+    return events;
   }
   
-  emitter_id = (uint64_t)js_getnum(id_val);
-  HASH_FIND(hh, target_events_map, &emitter_id, sizeof(uint64_t), te);
-  return te;
+  return (EventType **)(uintptr_t)js_getnum(slot);
 }
 
 static EventType *find_emitter_event_type(struct js *js, jsval_t this_obj, const char *event_type) {
-  TargetEvents *te = get_or_create_emitter_events(js, this_obj);
-  if (te == NULL) return NULL;
+  EventType **events = get_or_create_emitter_events(js, this_obj);
+  if (events == NULL) return NULL;
   
   EventType *evt = NULL;
-  HASH_FIND_STR(te->events, event_type, evt);
+  HASH_FIND_STR(*events, event_type, evt);
   return evt;
 }
 
 static EventType *find_or_create_emitter_event_type(struct js *js, jsval_t this_obj, const char *event_type) {
-  TargetEvents *te = get_or_create_emitter_events(js, this_obj);
-  if (te == NULL) return NULL;
+  EventType **events = get_or_create_emitter_events(js, this_obj);
+  if (events == NULL) return NULL;
   
   EventType *evt = NULL;
-  HASH_FIND_STR(te->events, event_type, evt);
+  HASH_FIND_STR(*events, event_type, evt);
   
   if (evt == NULL) {
     size_t etlen = strlen(event_type);
@@ -93,17 +70,15 @@ static EventType *find_or_create_emitter_event_type(struct js *js, jsval_t this_
     evt->event_type = (char *)(evt + 1);
     memcpy(evt->event_type, event_type, etlen + 1);
     evt->listener_count = 0;
-    HASH_ADD_KEYPTR(hh, te->events, evt->event_type, etlen, evt);
+    HASH_ADD_KEYPTR(hh, *events, evt->event_type, etlen, evt);
   }
   
   return evt;
 }
 
-static EventType *find_or_create_event_type(jsval_t target, const char *event_type) {
-  TargetEvents *te = get_or_create_target_events(target);
+static EventType *find_or_create_global_event_type(const char *event_type) {
   EventType *evt = NULL;
-  
-  HASH_FIND_STR(te->events, event_type, evt);
+  HASH_FIND_STR(global_events, event_type, evt);
   
   if (evt == NULL) {
     size_t etlen = strlen(event_type);
@@ -111,25 +86,15 @@ static EventType *find_or_create_event_type(jsval_t target, const char *event_ty
     evt->event_type = (char *)(evt + 1);
     memcpy(evt->event_type, event_type, etlen + 1);
     evt->listener_count = 0;
-    HASH_ADD_KEYPTR(hh, te->events, evt->event_type, etlen, evt);
+    HASH_ADD_KEYPTR(hh, global_events, evt->event_type, etlen, evt);
   }
   
   return evt;
 }
 
-static EventType *find_event_type(jsval_t target, const char *event_type) {
-  uint64_t target_id = target;
-  TargetEvents *te = NULL;
-  
-  HASH_FIND(hh, target_events_map, &target_id, sizeof(uint64_t), te);
-  
-  if (te == NULL) {
-    return NULL;
-  }
-  
+static inline EventType *find_global_event_type(const char *event_type) {
   EventType *evt = NULL;
-  HASH_FIND_STR(te->events, event_type, evt);
-  
+  HASH_FIND_STR(global_events, event_type, evt);
   return evt;
 }
 
@@ -142,18 +107,11 @@ static jsval_t js_add_event_listener_method(struct js *js, jsval_t *args, int na
   }
   
   char *event_type = js_getstr(js, args[0], NULL);
-  if (event_type == NULL) {
-    return js_mkerr(js, "eventType must be a string");
-  }
+  if (event_type == NULL) return js_mkerr(js, "eventType must be a string");
+  if (js_type(args[1]) != JS_FUNC) return js_mkerr(js, "listener must be a function");
   
-  if (js_type(args[1]) != JS_FUNC) {
-    return js_mkerr(js, "listener must be a function");
-  }
-  
-  EventType *evt = find_or_create_event_type(this_obj, event_type);
-  if (evt == NULL) {
-    return js_mkerr(js, "failed to create event type");
-  }
+  EventType *evt = find_or_create_emitter_event_type(js, this_obj, event_type);
+  if (evt == NULL) return js_mkerr(js, "failed to create event type");
   
   if (evt->listener_count >= MAX_LISTENERS_PER_EVENT) {
     return js_mkerr(js, "maximum number of listeners for event type '%s' reached", event_type);
@@ -174,8 +132,6 @@ static jsval_t js_add_event_listener_method(struct js *js, jsval_t *args, int na
 
 // addEventListener(eventType, listener, options)
 static jsval_t js_add_event_listener(struct js *js, jsval_t *args, int nargs) {
-  jsval_t global = js_glob(js);
-  
   if (nargs < 2) {
     return js_mkerr(js, "addEventListener requires at least 2 arguments (eventType, listener)");
   }
@@ -189,7 +145,7 @@ static jsval_t js_add_event_listener(struct js *js, jsval_t *args, int nargs) {
     return js_mkerr(js, "listener must be a function");
   }
   
-  EventType *evt = find_or_create_event_type(global, event_type);
+  EventType *evt = find_or_create_global_event_type(event_type);
   if (evt == NULL) {
     return js_mkerr(js, "failed to create event type");
   }
@@ -220,22 +176,14 @@ static jsval_t js_remove_event_listener_method(struct js *js, jsval_t *args, int
   }
   
   char *event_type = js_getstr(js, args[0], NULL);
-  if (event_type == NULL) {
-    return js_mkerr(js, "eventType must be a string");
-  }
+  if (event_type == NULL) return js_mkerr(js, "eventType must be a string");
   
-  EventType *evt = find_event_type(this_obj, event_type);
-  if (evt == NULL) {
-    return js_mkundef();
-  }
+  EventType *evt = find_emitter_event_type(js, this_obj, event_type);
+  if (evt == NULL) return js_mkundef();
   
   for (int i = 0; i < evt->listener_count; i++) {
     if (evt->listeners[i].listener == args[1]) {
-      for (int j = i; j < evt->listener_count - 1; j++) {
-        evt->listeners[j] = evt->listeners[j + 1];
-      }
-      evt->listener_count--;
-      break;
+      remove_listener_at(evt, i); break;
     }
   }
   
@@ -244,29 +192,19 @@ static jsval_t js_remove_event_listener_method(struct js *js, jsval_t *args, int
 
 // removeEventListener(eventType, listener)
 static jsval_t js_remove_event_listener(struct js *js, jsval_t *args, int nargs) {
-  jsval_t global = js_glob(js);
-  
   if (nargs < 2) {
     return js_mkerr(js, "removeEventListener requires 2 arguments (eventType, listener)");
   }
   
   char *event_type = js_getstr(js, args[0], NULL);
-  if (event_type == NULL) {
-    return js_mkerr(js, "eventType must be a string");
-  }
+  if (event_type == NULL) return js_mkerr(js, "eventType must be a string");
   
-  EventType *evt = find_event_type(global, event_type);
-  if (evt == NULL) {
-    return js_mkundef();
-  }
+  EventType *evt = find_global_event_type(event_type);
+  if (evt == NULL) return js_mkundef();
   
   for (int i = 0; i < evt->listener_count; i++) {
     if (evt->listeners[i].listener == args[1]) {
-      for (int j = i; j < evt->listener_count - 1; j++) {
-        evt->listeners[j] = evt->listeners[j + 1];
-      }
-      evt->listener_count--;
-      break;
+      remove_listener_at(evt, i); break;
     }
   }
   
@@ -282,14 +220,10 @@ static jsval_t js_dispatch_event_method(struct js *js, jsval_t *args, int nargs)
   }
   
   char *event_type = js_getstr(js, args[0], NULL);
-  if (event_type == NULL) {
-    return js_mkerr(js, "eventType must be a string");
-  }
+  if (event_type == NULL) return js_mkerr(js, "eventType must be a string");
   
-  EventType *evt = find_event_type(this_obj, event_type);
-  if (evt == NULL || evt->listener_count == 0) {
-    return js_mktrue();
-  }
+  EventType *evt = find_emitter_event_type(js, this_obj, event_type);
+  if (evt == NULL || evt->listener_count == 0) return js_mktrue();
   
   jsval_t event_obj = js_mkobj(js);
   js_set(js, event_obj, "type", args[0]);
@@ -311,13 +245,8 @@ static jsval_t js_dispatch_event_method(struct js *js, jsval_t *args, int nargs)
     }
     
     if (listener->once) {
-      for (int j = i; j < evt->listener_count - 1; j++) {
-        evt->listeners[j] = evt->listeners[j + 1];
-      }
-      evt->listener_count--;
-    } else {
-      i++;
-    }
+      remove_listener_at(evt, i);
+    } else i++;
   }
   
   return js_mktrue();
@@ -325,18 +254,14 @@ static jsval_t js_dispatch_event_method(struct js *js, jsval_t *args, int nargs)
 
 // dispatchEvent(eventType, eventData)
 static jsval_t js_dispatch_event(struct js *js, jsval_t *args, int nargs) {
-  jsval_t global = js_glob(js);
-  
   if (nargs < 1) {
     return js_mkerr(js, "dispatchEvent requires at least 1 argument (eventType)");
   }
   
   char *event_type = js_getstr(js, args[0], NULL);
-  if (event_type == NULL) {
-    return js_mkerr(js, "eventType must be a string");
-  }
+  if (event_type == NULL) return js_mkerr(js, "eventType must be a string");
   
-  EventType *evt = find_event_type(global, event_type);
+  EventType *evt = find_global_event_type(event_type);
   if (evt == NULL || evt->listener_count == 0) {
     return js_mktrue();
   }
@@ -360,34 +285,20 @@ static jsval_t js_dispatch_event(struct js *js, jsval_t *args, int nargs) {
     }
     
     if (listener->once) {
-      for (int j = i; j < evt->listener_count - 1; j++) {
-        evt->listeners[j] = evt->listeners[j + 1];
-      }
-      evt->listener_count--;
-    } else {
-      i++;
-    }
+      remove_listener_at(evt, i);
+    } else i++;
   }
   
   return js_mktrue();
 }
 
 static jsval_t js_get_event_listeners(struct js *js, jsval_t *args, int nargs) {
-  jsval_t target = (nargs > 0) ? args[0] : js_glob(js);
+  (void)args; (void)nargs;
   
   EventType *evt, *tmp;
   jsval_t result = js_mkobj(js);
   
-  uint64_t target_id = target;
-  TargetEvents *te = NULL;
-  
-  HASH_FIND(hh, target_events_map, &target_id, sizeof(uint64_t), te);
-  
-  if (te == NULL) {
-    return result;
-  }
-  
-  HASH_ITER(hh, te->events, evt, tmp) {
+  HASH_ITER(hh, global_events, evt, tmp) {
     jsval_t listeners_array = js_mkobj(js);
     
     for (int j = 0; j < evt->listener_count; j++) {
@@ -494,11 +405,7 @@ static jsval_t js_eventemitter_off(struct js *js, jsval_t *args, int nargs) {
   
   for (int i = 0; i < evt->listener_count; i++) {
     if (evt->listeners[i].listener == args[1]) {
-      for (int j = i; j < evt->listener_count - 1; j++) {
-        evt->listeners[j] = evt->listeners[j + 1];
-      }
-      evt->listener_count--;
-      break;
+      remove_listener_at(evt, i); break;
     }
   }
   
@@ -536,13 +443,8 @@ static jsval_t js_eventemitter_emit(struct js *js, jsval_t *args, int nargs) {
     }
     
     if (listener->once) {
-      for (int j = i; j < evt->listener_count - 1; j++) {
-        evt->listeners[j] = evt->listeners[j + 1];
-      }
-      evt->listener_count--;
-    } else {
-      i++;
-    }
+      remove_listener_at(evt, i);
+    } else i++;
   }
   
   return js_mktrue();
@@ -593,15 +495,15 @@ static jsval_t js_eventemitter_listenerCount(struct js *js, jsval_t *args, int n
 // EventEmitter.prototype.eventNames()
 static jsval_t js_eventemitter_eventNames(struct js *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
-  jsval_t this_obj = js_getthis(js);
   
+  jsval_t this_obj = js_getthis(js);
   jsval_t result = js_mkarr(js);
   
-  TargetEvents *te = get_or_create_emitter_events(js, this_obj);
+  EventType **events = get_or_create_emitter_events(js, this_obj);
   
-  if (te != NULL && te->events != NULL) {
+  if (events != NULL && *events != NULL) {
     EventType *evt, *tmp;
-    HASH_ITER(hh, te->events, evt, tmp) {
+    HASH_ITER(hh, *events, evt, tmp) {
       if (evt->listener_count > 0) {
         jsval_t name = js_mkstr(js, evt->event_type, strlen(evt->event_type));
         js_arr_push(js, result, name);
