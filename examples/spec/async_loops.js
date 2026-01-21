@@ -159,6 +159,31 @@ testConditionalAwait().then(v => {
   results.conditionalAwait = v;
 });
 
+async function inner(id, val) {
+  const arr = [];
+  for (let i = 0; i < 2; i++) {
+    await delay(1);
+    arr.push(`${id}:${val}:${i}`);
+  }
+  return arr;
+}
+
+async function outer(id) {
+  const taskResults = [];
+  for (let j = 0; j < 2; j++) {
+    await delay(1);
+    const r = await inner(id, j);
+    taskResults.push(...r);
+  }
+  return taskResults;
+}
+
+Promise.all([outer('A'), outer('B'), outer('C')]).then(([a, b, c]) => {
+  results.nestedAsyncA = a.join(',');
+  results.nestedAsyncB = b.join(',');
+  results.nestedAsyncC = c.join(',');
+});
+
 setTimeout(() => {
   test('for-let with async closure', results.forLetClosure, '0,1,2');
   test('block-scoped capture', results.blockScopedCapture, '0,10,20');
@@ -171,5 +196,8 @@ setTimeout(() => {
   test('try-catch in loop', results.tryCatchInLoop, '0,1,2');
   test('do-while with const', results.doWhile, '0,1,2');
   test('conditional await', results.conditionalAwait, '0,1,2');
+  test('nested async calls A', results.nestedAsyncA, 'A:0:0,A:0:1,A:1:0,A:1:1');
+  test('nested async calls B', results.nestedAsyncB, 'B:0:0,B:0:1,B:1:0,B:1:1');
+  test('nested async calls C', results.nestedAsyncC, 'C:0:0,C:0:1,C:1:0,C:1:1');
   summary();
 }, 200);

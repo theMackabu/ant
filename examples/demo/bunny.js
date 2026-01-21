@@ -340,9 +340,9 @@ fn add(a, b) {
 }
 bunny.squeak();
 std.io.println(add(5, 10));
-`;
+`.trim();
 
-console.log('Source:');
+console.log('Source:\n');
 console.log(source);
 console.log('\n' + '='.repeat(40) + '\n');
 

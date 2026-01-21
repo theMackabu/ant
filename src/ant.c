@@ -117,6 +117,7 @@ typedef struct coroutine {
   struct for_let_ctx *for_let_stack;
   int for_let_stack_len;
   int for_let_stack_cap;
+  UT_array *scope_stack;  // coroutine's own scope stack
 } coroutine_t;
 
 typedef struct {
@@ -914,6 +915,29 @@ static bool coro_stack_size_initialized = false;
 static void free_coroutine(coroutine_t *coro);
 static void for_let_swap_with_coro(struct js *js, coroutine_t *coro);
 
+typedef struct {
+  jsval_t scope;
+  UT_array *scope_stack;
+} coro_saved_state_t;
+
+static inline coro_saved_state_t coro_enter(struct js *js, coroutine_t *coro) {
+  extern UT_array *global_scope_stack;
+  coro_saved_state_t saved = { js->scope, global_scope_stack };
+  js->scope = coro->scope;
+  global_scope_stack = coro->scope_stack;
+  for_let_swap_with_coro(js, coro);
+  return saved;
+}
+
+static inline void coro_leave(struct js *js, coroutine_t *coro, coro_saved_state_t saved) {
+  extern UT_array *global_scope_stack;
+  coro->scope = js->scope;
+  coro->scope_stack = global_scope_stack;
+  js->scope = saved.scope;
+  global_scope_stack = saved.scope_stack;
+  for_let_swap_with_coro(js, coro);
+}
+
 static size_t calculate_coro_stack_size(void) {
   if (coro_stack_size_initialized) return 0;
   coro_stack_size_initialized = true;
@@ -1018,15 +1042,9 @@ void js_poll_events(struct js *js) {
     if (!temp->is_ready || !temp->mco || mco_status(temp->mco) != MCO_SUSPENDED) continue;
     remove_coroutine(temp);
     
-    jsval_t saved_scope = temp->js->scope;
-    temp->js->scope = temp->scope;
-    
-    for_let_swap_with_coro(temp->js, temp);
+    coro_saved_state_t saved = coro_enter(temp->js, temp);
     mco_result res = mco_resume(temp->mco);
-    
-    temp->scope = temp->js->scope;
-    temp->js->scope = saved_scope;
-    for_let_swap_with_coro(temp->js, temp);
+    coro_leave(temp->js, temp, saved);
     
     if (res == MCO_SUCCESS && mco_status(temp->mco) != MCO_DEAD) {
       temp->is_ready = false;
@@ -1144,17 +1162,17 @@ static jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t 
   coro->for_let_stack_len = 0;
   coro->for_let_stack_cap = 0;
   
+  extern UT_array *global_scope_stack;
+  utarray_new(coro->scope_stack, &jsoff_icd);
+  jsoff_t glob_off = (jsoff_t)vdata(js_glob(js));
+  utarray_push_back(coro->scope_stack, &glob_off);
+  
   ctx->coro = coro;  
   enqueue_coroutine(coro);
   
-  jsval_t saved_scope = js->scope;
-  js->scope = coro->scope;
-  for_let_swap_with_coro(js, coro);
+  coro_saved_state_t saved = coro_enter(js, coro);
   res = mco_resume(mco);
-  
-  coro->scope = js->scope;
-  js->scope = saved_scope;
-  for_let_swap_with_coro(js, coro);
+  coro_leave(js, coro, saved);
   
   if (res != MCO_SUCCESS && mco_status(mco) != MCO_DEAD) {
     remove_coroutine(coro);
@@ -1182,6 +1200,7 @@ static void free_coroutine(coroutine_t *coro) {
     }
     if (coro->args) CORO_FREE(coro->args);
     if (coro->for_let_stack) free(coro->for_let_stack);
+    if (coro->scope_stack) utarray_free(coro->scope_stack);
     CORO_FREE(coro);
   }
 }
@@ -4619,7 +4638,6 @@ jsval_t js_mkscope(struct js *js) {
   jsoff_t prev = (jsoff_t) vdata(js->scope);
   utarray_push_back(global_scope_stack, &prev);
   js->scope = mkobj(js, prev);
-  
   return js->scope;
 }
 
@@ -6976,10 +6994,24 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
       }
 skip_fields:
         if (is_async) {
-          res = start_async_in_coroutine(js, code_str, fnlen, closure_scope, bound_args, bound_argc);
-        } else {
-          res = call_js_internal(js, code_str, fnlen, closure_scope, bound_args, bound_argc, func);
-        }
+          UT_array *call_args;
+          utarray_new(call_args, &jsval_icd);
+          for (int i = 0; i < bound_argc; i++) utarray_push_back(call_args, &bound_args[i]);
+          jsval_t err;
+          int call_argc = parse_call_args(js, call_args, &err);
+          if (call_argc < 0) {
+            utarray_free(call_args);
+            pop_call_frame();
+            if (bound_args) ANT_GC_FREE(bound_args);
+            js->super_val = saved_super;
+            js->current_func = saved_func;
+            return err;
+          }
+          jsval_t *argv = (jsval_t *)utarray_front(call_args);
+          int argc = (int)utarray_len(call_args);
+          res = start_async_in_coroutine(js, code_str, fnlen, closure_scope, argv, argc);
+          utarray_free(call_args);
+        } else res = call_js_internal(js, code_str, fnlen, closure_scope, bound_args, bound_argc, func);
         pop_call_frame();
         if (bound_args) ANT_GC_FREE(bound_args);
         js->super_val = saved_super;
@@ -22572,13 +22604,10 @@ void js_gc_update_roots(GC_UPDATE_ARGS) {
       FWD_VAL(coro->for_let_stack[i].body_scope);
       FWD_OFF(coro->for_let_stack[i].prop_off);
     }
+    if (coro->scope_stack) UTARRAY_EACH(coro->scope_stack, jsoff_t, off) FWD_OFF(*off);
     if (coro->mco) {
       async_exec_context_t *actx = (async_exec_context_t *)mco_get_user_data(coro->mco);
-      if (actx) {
-        FWD_VAL(actx->closure_scope);
-        FWD_VAL(actx->result);
-        FWD_VAL(actx->promise);
-      }
+      if (actx) { FWD_VAL(actx->closure_scope); FWD_VAL(actx->result); FWD_VAL(actx->promise); }
     }
   }
 
