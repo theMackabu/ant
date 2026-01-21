@@ -10257,6 +10257,11 @@ static inline jsval_t loop_block_exec(struct js *js, loop_block_ctx_t *ctx) {
   return js_block_or_stmt(js);
 }
 
+static inline void loop_block_sync_scope(struct js *js, loop_block_ctx_t *ctx) {
+  struct for_let_ctx *flc = for_let_current(js);
+  if (flc && vtype(flc->body_scope) == T_OBJ) ctx->loop_scope = flc->body_scope;
+}
+
 #define loop_block_clear(js, ctx) if ((ctx)->needs_scope) scope_clear_props(js, (ctx)->loop_scope)
 #define loop_block_cleanup(js, ctx) if ((ctx)->needs_scope) delscope(js)
 
@@ -10803,13 +10808,16 @@ static jsval_t js_for(struct js *js) {
     js->flags |= F_LOOP;
     js->pos = pos3;
     js->consumed = 1;
+    
+    if (is_let_loop && let_var_len > 0 && loop_ctx.needs_scope) {
+      loop_block_sync_scope(js, &loop_ctx);
+    }
+    
     loop_block_clear(js, &loop_ctx);
     v = loop_block_exec(js, &loop_ctx);
     if (is_err2(&v, &res)) {
       loop_block_cleanup(js, &loop_ctx);
-      if (is_let_loop && let_var_len > 0) {
-        for_let_pop(js); delscope(js);
-      }
+      if (is_let_loop && let_var_len > 0) for_let_pop(js); delscope(js);
       goto done;
     }
     
@@ -10901,10 +10909,7 @@ static jsval_t js_while(struct js *js) {
       js->consumed = 1;
       
       v = resolveprop(js, js_expr(js));
-      if (is_err(v)) {
-        res = v;
-        break;
-      }
+      if (is_err(v)) { res = v; break; }
       
       if (!js_truthy(js, v)) break;
       
@@ -10914,9 +10919,7 @@ static jsval_t js_while(struct js *js) {
       
       loop_block_clear(js, &loop_ctx);
       v = loop_block_exec(js, &loop_ctx);
-      if (is_err(v)) {
-        res = v; break;
-      }
+      if (is_err(v)) res = v; break;
       
       if (label_flags & F_CONTINUE_LABEL) {
         if (is_this_loop_continue_target(marker_index)) {
@@ -10926,14 +10929,8 @@ static jsval_t js_while(struct js *js) {
         }
       }
       
-      if (js->flags & F_BREAK) {
-        break;
-      }
-      
-      if (js->flags & F_RETURN) {
-        res = v;
-        break;
-      }
+      if (js->flags & F_BREAK) break;
+      if (js->flags & F_RETURN) { res = v; break; }
     }
     loop_block_cleanup(js, &loop_ctx);
   }
