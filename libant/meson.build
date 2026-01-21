@@ -1,6 +1,6 @@
 project('libant', 'c', default_options: [
   'buildtype=release',
-  'optimization=2',
+  'optimization=3',
   'c_std=gnu23',
   'default_library=static',
   'b_lto=false',

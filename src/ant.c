@@ -10105,8 +10105,6 @@ static void loop_block_init(struct js *js, loop_block_ctx_t *ctx) {
 }
 
 static inline jsval_t loop_block_exec(struct js *js, loop_block_ctx_t *ctx) {
-  if (ctx->needs_scope) scope_clear_props(js, ctx->loop_scope);
-  
   if (ctx->is_block) {
     next(js);
     return js_block(js, false);
@@ -10115,9 +10113,8 @@ static inline jsval_t loop_block_exec(struct js *js, loop_block_ctx_t *ctx) {
   return js_block_or_stmt(js);
 }
 
-static inline void loop_block_cleanup(struct js *js, loop_block_ctx_t *ctx) {
-  if (ctx->needs_scope) delscope(js);
-}
+#define loop_block_clear(js, ctx) if ((ctx)->needs_scope) scope_clear_props(js, (ctx)->loop_scope)
+#define loop_block_cleanup(js, ctx) if ((ctx)->needs_scope) delscope(js)
 
 static jsval_t js_if(struct js *js) {
   js->consumed = 1;
@@ -10171,6 +10168,7 @@ typedef struct {
 } for_iter_ctx_t;
 
 static jsval_t for_iter_bind_var(struct js *js, for_iter_ctx_t *ctx, jsval_t value) {
+  loop_block_clear(js, &ctx->loop_ctx);
   if (ctx->has_destructure) {
     return bind_destruct_pattern(js, &js->code[ctx->destructure_off], ctx->destructure_len, value, js->scope);
   }
@@ -10653,6 +10651,7 @@ static jsval_t js_for(struct js *js) {
     js->flags |= F_LOOP;
     js->pos = pos3;
     js->consumed = 1;
+    loop_block_clear(js, &loop_ctx);
     v = loop_block_exec(js, &loop_ctx);
     if (is_err2(&v, &res)) {
       if (iter_scope) delscope(js);
@@ -10770,6 +10769,7 @@ static jsval_t js_while(struct js *js) {
       js->consumed = 1;
       js->flags = (flags & ~F_NOEXEC) | F_LOOP;
       
+      loop_block_clear(js, &loop_ctx);
       v = loop_block_exec(js, &loop_ctx);
       if (is_err(v)) {
         res = v; break;
@@ -10863,6 +10863,7 @@ static jsval_t js_do_while(struct js *js) {
       js->consumed = 1;
       js->flags = (flags & ~F_NOEXEC) | F_LOOP;
       
+      loop_block_clear(js, &loop_ctx);
       v = loop_block_exec(js, &loop_ctx);
       if (is_err(v)) {
         res = v; break;
