@@ -518,18 +518,19 @@ static jsval_t js_eventemitter_eventNames(struct js *js, jsval_t *args, int narg
 static jsval_t js_eventemitter_constructor(struct js *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
   
+  jsval_t proto = js_get_ctor_proto(js, "EventEmitter", 12);
   jsval_t obj = js_mkobj(js);
+  js_set_proto(js, obj, proto);
   
-  js_set(js, obj, "on", js_mkfun(js_eventemitter_on));
-  js_set(js, obj, "addListener", js_mkfun(js_eventemitter_on));
-  js_set(js, obj, "once", js_mkfun(js_eventemitter_once));
-  js_set(js, obj, "off", js_mkfun(js_eventemitter_off));
-  js_set(js, obj, "removeListener", js_mkfun(js_eventemitter_off));
-  js_set(js, obj, "emit", js_mkfun(js_eventemitter_emit));
-  js_set(js, obj, "removeAllListeners", js_mkfun(js_eventemitter_removeAllListeners));
-  js_set(js, obj, "listenerCount", js_mkfun(js_eventemitter_listenerCount));
-  js_set(js, obj, "eventNames", js_mkfun(js_eventemitter_eventNames));
-  js_set(js, obj, get_toStringTag_sym_key(), js_mkstr(js, "EventEmitter", 12));
+  return obj;
+}
+
+static jsval_t js_eventtarget_constructor(struct js *js, jsval_t *args, int nargs) {
+  (void)args; (void)nargs;
+  
+  jsval_t proto = js_get_ctor_proto(js, "EventTarget", 11);
+  jsval_t obj = js_mkobj(js);
+  js_set_proto(js, obj, proto);
   
   return obj;
 }
@@ -537,31 +538,51 @@ static jsval_t js_eventemitter_constructor(struct js *js, jsval_t *args, int nar
 jsval_t events_library(struct js *js) {
   jsval_t lib = js_mkobj(js);
   
-  js_set(js, lib, "EventEmitter", js_mkfun(js_eventemitter_constructor));
+  jsval_t eventemitter_ctor = js_mkobj(js);
+  jsval_t eventemitter_proto = js_mkobj(js);
+  
+  js_set(js, eventemitter_proto, "on", js_mkfun(js_eventemitter_on));
+  js_set(js, eventemitter_proto, "addListener", js_mkfun(js_eventemitter_on));
+  js_set(js, eventemitter_proto, "once", js_mkfun(js_eventemitter_once));
+  js_set(js, eventemitter_proto, "off", js_mkfun(js_eventemitter_off));
+  js_set(js, eventemitter_proto, "removeListener", js_mkfun(js_eventemitter_off));
+  js_set(js, eventemitter_proto, "emit", js_mkfun(js_eventemitter_emit));
+  js_set(js, eventemitter_proto, "removeAllListeners", js_mkfun(js_eventemitter_removeAllListeners));
+  js_set(js, eventemitter_proto, "listenerCount", js_mkfun(js_eventemitter_listenerCount));
+  js_set(js, eventemitter_proto, "eventNames", js_mkfun(js_eventemitter_eventNames));
+  js_set(js, eventemitter_proto, get_toStringTag_sym_key(), js_mkstr(js, "EventEmitter", 12));
+  
+  js_set_slot(js, eventemitter_ctor, SLOT_CFUNC, js_mkfun(js_eventemitter_constructor));
+  js_mkprop_fast(js, eventemitter_ctor, "prototype", 9, eventemitter_proto);
+  js_mkprop_fast(js, eventemitter_ctor, "name", 4, ANT_STRING("EventEmitter"));
+  js_set_descriptor(js, eventemitter_ctor, "name", 4, 0);
+  
+  js_set(js, lib, "EventEmitter", js_obj_to_func(eventemitter_ctor));
   js_set(js, lib, get_toStringTag_sym_key(), js_mkstr(js, "events", 6));
   
   return lib;
-}
-
-static jsval_t EventTarget(struct js *js, jsval_t *args, int nargs) {
-  (void)args; (void)nargs;
-  
-  jsval_t obj = js_mkobj(js);
-  js_set(js, obj, "addEventListener", js_mkfun(js_add_event_listener_method));
-  js_set(js, obj, "removeEventListener", js_mkfun(js_remove_event_listener_method));
-  js_set(js, obj, "dispatchEvent", js_mkfun(js_dispatch_event_method));
-  js_set(js, obj, get_toStringTag_sym_key(), js_mkstr(js, "EventTarget", 11));
-  
-  return obj;
 }
 
 void init_events_module() {
   struct js *js = rt->js;
   jsval_t global = js_glob(js);
   
+  jsval_t eventtarget_ctor = js_mkobj(js);
+  jsval_t eventtarget_proto = js_mkobj(js);
+  
+  js_set(js, eventtarget_proto, "addEventListener", js_mkfun(js_add_event_listener_method));
+  js_set(js, eventtarget_proto, "removeEventListener", js_mkfun(js_remove_event_listener_method));
+  js_set(js, eventtarget_proto, "dispatchEvent", js_mkfun(js_dispatch_event_method));
+  js_set(js, eventtarget_proto, get_toStringTag_sym_key(), js_mkstr(js, "EventTarget", 11));
+  
+  js_set_slot(js, eventtarget_ctor, SLOT_CFUNC, js_mkfun(js_eventtarget_constructor));
+  js_mkprop_fast(js, eventtarget_ctor, "prototype", 9, eventtarget_proto);
+  js_mkprop_fast(js, eventtarget_ctor, "name", 4, ANT_STRING("EventTarget"));
+  js_set_descriptor(js, eventtarget_ctor, "name", 4, 0);
+  
   js_set(js, global, "addEventListener", js_mkfun(js_add_event_listener));
   js_set(js, global, "removeEventListener", js_mkfun(js_remove_event_listener));
   js_set(js, global, "dispatchEvent", js_mkfun(js_dispatch_event));
   js_set(js, global, "getEventListeners", js_mkfun(js_get_event_listeners));
-  js_set(js, global, "EventTarget", js_mkfun(EventTarget));
+  js_set(js, global, "EventTarget", js_obj_to_func(eventtarget_ctor));
 }
