@@ -4604,6 +4604,39 @@ void js_delscope(struct js *js) {
 static void mkscope(struct js *js) { (void)js_mkscope(js); }
 static void delscope(struct js *js) { (void)js_delscope(js); }
 
+static void scope_clear_props(struct js *js, jsval_t scope) {
+  jsoff_t off = (jsoff_t)vdata(scope);
+  jsoff_t header = loadoff(js, off);
+  jsoff_t parent = loadoff(js, off + sizeof(jsoff_t));
+  
+  saveoff(js, off, (header & FLAGMASK) | T_OBJ);
+  saveoff(js, off + sizeof(jsoff_t), parent);
+}
+
+static bool block_needs_scope(struct js *js) {
+  jsoff_t pos = js->pos, toff = js->toff, tlen = js->tlen;
+  uint8_t tok = js->tok, consumed = js->consumed;
+  bool had_newline = js->had_newline;
+  
+  bool needs = false;
+  int depth = 1;
+  js->consumed = 1;
+  
+  while (depth > 0) {
+    uint8_t t = next(js);
+    if (t == TOK_EOF) break;
+    if (t == TOK_LBRACE) { depth++; js->consumed = 1; continue; }
+    if (t == TOK_RBRACE) { depth--; js->consumed = 1; continue; }
+    if (depth == 1 && (t == TOK_LET || t == TOK_CONST || t == TOK_CLASS)) { needs = true; break; }
+    js->consumed = 1;
+  }
+  
+  js->pos = pos; js->toff = toff; js->tlen = tlen;
+  js->tok = tok; js->consumed = consumed; js->had_newline = had_newline;
+  
+  return needs;
+}
+
 static inline bool push_this(jsval_t this_value) {
   if (global_this_stack.depth >= global_this_stack.capacity) {
     int new_capacity = global_this_stack.capacity == 0 ? 16 : global_this_stack.capacity * 2;
@@ -4813,7 +4846,12 @@ skip_async:
 
 static jsval_t js_block(struct js *js, bool create_scope) {
   jsval_t res = js_mkundef();
-  if (create_scope) mkscope(js);
+  bool scope_created = false;
+  
+  if (create_scope && lookahead(js) != TOK_RBRACE && block_needs_scope(js)) {
+    mkscope(js);
+    scope_created = true;
+  }
   
   js->consumed = 1;
   hoist_function_declarations(js);
@@ -4829,7 +4867,7 @@ static jsval_t js_block(struct js *js, bool create_scope) {
   }
   
   if (js->tok == TOK_RBRACE) js->consumed = 1;
-  if (create_scope) delscope(js);
+  if (scope_created) delscope(js);
   
   return res;
 }
@@ -10018,6 +10056,43 @@ static jsval_t js_block_or_stmt(struct js *js) {
   return res;
 }
 
+typedef struct {
+  bool is_block;
+  bool needs_scope;
+  jsval_t loop_scope;
+} loop_block_ctx_t;
+
+static void loop_block_init(struct js *js, loop_block_ctx_t *ctx) {
+  ctx->is_block = (lookahead(js) == TOK_LBRACE);
+  ctx->needs_scope = false;
+  ctx->loop_scope = js_mkundef();
+  
+  if (ctx->is_block && !(js->flags & F_NOEXEC)) {
+    jsoff_t saved_pos = js->pos;
+    uint8_t saved_tok = js->tok;
+    uint8_t saved_consumed = js->consumed;
+    
+    js->consumed = 1;
+    next(js);
+    ctx->needs_scope = block_needs_scope(js);
+    
+    js->pos = saved_pos;
+    js->tok = saved_tok;
+    js->consumed = saved_consumed;
+    
+    if (ctx->needs_scope) ctx->loop_scope = js_mkscope(js);
+  }
+}
+
+static inline jsval_t loop_block_exec(struct js *js, loop_block_ctx_t *ctx) {
+  if (ctx->needs_scope) scope_clear_props(js, ctx->loop_scope);
+  return js_block_or_stmt(js);
+}
+
+static inline void loop_block_cleanup(struct js *js, loop_block_ctx_t *ctx) {
+  if (ctx->needs_scope) delscope(js);
+}
+
 static jsval_t js_if(struct js *js) {
   js->consumed = 1;
   EXPECT(TOK_LPAREN, );
@@ -10611,6 +10686,7 @@ done:
 static jsval_t js_while(struct js *js) {
   uint8_t flags = js->flags, exe = !(flags & F_NOEXEC);
   jsval_t res = js_mkundef(), v;
+  loop_block_ctx_t loop_ctx = {0};
   
   bool use_label_stack = label_stack && utarray_len(label_stack) > 0;
   int marker_index = 0;
@@ -10631,6 +10707,8 @@ static jsval_t js_while(struct js *js) {
   if (!expect(js, TOK_RPAREN, &res)) goto done;
   
   jsoff_t body_start = js->pos;
+  if (exe) loop_block_init(js, &loop_ctx);
+  
   v = js_block_or_stmt(js);
   if (is_err(v)) { res = v; goto done; }
   jsoff_t body_end = js->pos;
@@ -10653,10 +10731,9 @@ static jsval_t js_while(struct js *js) {
       js->consumed = 1;
       js->flags = (flags & ~F_NOEXEC) | F_LOOP;
       
-      v = js_block_or_stmt(js);
+      v = loop_block_exec(js, &loop_ctx);
       if (is_err(v)) {
-        res = v;
-        break;
+        res = v; break;
       }
       
       if (label_flags & F_CONTINUE_LABEL) {
@@ -10676,6 +10753,7 @@ static jsval_t js_while(struct js *js) {
         break;
       }
     }
+    loop_block_cleanup(js, &loop_ctx);
   }
   
   js->pos = body_end;
@@ -10705,6 +10783,7 @@ done:
 static jsval_t js_do_while(struct js *js) {
   uint8_t flags = js->flags, exe = !(flags & F_NOEXEC);
   jsval_t res = js_mkundef(), v;
+  loop_block_ctx_t loop_ctx = {0};
   
   bool use_label_stack = label_stack && utarray_len(label_stack) > 0;
   int marker_index = 0;
@@ -10718,6 +10797,8 @@ static jsval_t js_do_while(struct js *js) {
   
   jsoff_t body_start = js->pos;
   bool is_block = (next(js) == TOK_LBRACE);
+  if (exe) loop_block_init(js, &loop_ctx);
+  
   js->flags |= F_NOEXEC;
   v = js_block_or_stmt(js);
   if (is_err(v)) { res = v; goto done; }
@@ -10743,10 +10824,9 @@ static jsval_t js_do_while(struct js *js) {
       js->consumed = 1;
       js->flags = (flags & ~F_NOEXEC) | F_LOOP;
       
-      v = js_block_or_stmt(js);
+      v = loop_block_exec(js, &loop_ctx);
       if (is_err(v)) {
-        res = v;
-        break;
+        res = v; break;
       }
       
       if (label_flags & F_CONTINUE_LABEL) {
@@ -10775,6 +10855,7 @@ static jsval_t js_do_while(struct js *js) {
         break;
       }
     } while (js_truthy(js, v));
+    loop_block_cleanup(js, &loop_ctx);
   }
   
   js->pos = cond_end;
