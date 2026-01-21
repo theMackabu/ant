@@ -1569,9 +1569,11 @@ static size_t array_to_string(struct js *js, jsval_t obj, char *buf, size_t len)
     }
     
     if (found) {
-      n += tostr(js, val, buf + n, len - n);
-    } else {
-      n += cpy(buf + n, len - n, "", 0);
+      uint8_t vt = vtype(val);
+      if (vt == T_STR) {
+        jsoff_t slen, soff = vstr(js, val, &slen);
+        n += cpy(buf + n, len - n, (const char *)&js->mem[soff], slen);
+      } else if (vt != T_UNDEF && vt != T_NULL) n += tostr(js, val, buf + n, len - n);
     }
   }
   
