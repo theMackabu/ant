@@ -9176,6 +9176,13 @@ static jsval_t js_unary(struct js *js) {
     if (t == TOK_PLUS) t = TOK_UPLUS;
     js->consumed = 1;
     jsval_t operand = js_unary(js);
+    if (is_err(operand)) return operand;
+    if (next(js) == TOK_EXP) {
+      return js_mkerr_typed(
+        js, JS_ERR_SYNTAX, 
+        "Unary operator used immediately before exponentiation expression. Parenthesis must be used to disambiguate operator precedence"
+      );
+    }
     return do_op(js, t, js_mkundef(), operand);
   }
 }
