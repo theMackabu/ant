@@ -10919,7 +10919,7 @@ static jsval_t js_while(struct js *js) {
       
       loop_block_clear(js, &loop_ctx);
       v = loop_block_exec(js, &loop_ctx);
-      if (is_err(v)) res = v; break;
+      if (is_err(v)) { res = v; break; }
       
       if (label_flags & F_CONTINUE_LABEL) {
         if (is_this_loop_continue_target(marker_index)) {
