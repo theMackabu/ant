@@ -4627,7 +4627,14 @@ static bool block_needs_scope(struct js *js) {
     if (t == TOK_EOF) break;
     if (t == TOK_LBRACE) { depth++; js->consumed = 1; continue; }
     if (t == TOK_RBRACE) { depth--; js->consumed = 1; continue; }
-    if (depth == 1 && (t == TOK_LET || t == TOK_CONST || t == TOK_CLASS)) { needs = true; break; }
+    
+    if (depth == 1 && (
+      t == TOK_LET ||
+      t == TOK_CONST ||
+      t == TOK_CLASS ||
+      t == TOK_FUNC
+    )) { needs = true; break; }
+    
     js->consumed = 1;
   }
   
