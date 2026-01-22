@@ -5970,6 +5970,11 @@ static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
     if ((js->flags & F_STRICT) && (streq(ptr, plen, "caller", 6) || streq(ptr, plen, "arguments", 9))) {
       return js_mkerr_typed(js, JS_ERR_TYPE, "'%.*s' not allowed on functions in strict mode", (int)plen, ptr);
     }
+    if (plen == STR_PROTO_LEN && memcmp(ptr, STR_PROTO, STR_PROTO_LEN) == 0) {
+      jsval_t proto = get_slot(js, mkval(T_OBJ, vdata(l)), SLOT_PROTO);
+      if (vtype(proto) != T_UNDEF) return proto;
+      return get_prototype_for_type(js, T_FUNC);
+    }
     jsval_t func_obj = mkval(T_OBJ, vdata(l));
     jsoff_t off = lkp_proto(js, l, ptr, plen);
     if (off != 0) {
@@ -8332,6 +8337,9 @@ static jsval_t js_obj_literal(struct js *js) {
         jsval_t closure_scope = for_let_capture_scope(js);
         if (is_err(closure_scope)) return closure_scope;
         set_slot(js, func_obj, SLOT_SCOPE, closure_scope);
+        
+        jsval_t func_proto = get_slot(js, js_glob(js), SLOT_FUNC_PROTO);
+        if (vtype(func_proto) == T_FUNC) set_proto(js, func_obj, func_proto);
         jsval_t val = mkval(T_FUNC, (unsigned long) vdata(func_obj));
         
         if (is_getter || is_setter) {
@@ -8345,9 +8353,7 @@ static jsval_t js_obj_literal(struct js *js) {
           if (key_str) {
             if (is_getter) {
               js_set_getter_desc(js, obj, key_str, key_len, val, JS_DESC_E | JS_DESC_C);
-            } else {
-              js_set_setter_desc(js, obj, key_str, key_len, val, JS_DESC_E | JS_DESC_C);
-            }
+            } else js_set_setter_desc(js, obj, key_str, key_len, val, JS_DESC_E | JS_DESC_C);
           }
         } else {
           jsval_t res = setprop(js, obj, key, val);
@@ -8503,6 +8509,9 @@ static jsval_t js_func_literal(struct js *js, bool is_async) {
     set_slot(js, func_obj, SLOT_ASYNC, js_mktrue());
     jsval_t async_proto = get_slot(js, js_glob(js), SLOT_ASYNC_PROTO);
     if (vtype(async_proto) == T_FUNC) set_proto(js, func_obj, async_proto);
+  } else {
+    jsval_t func_proto = get_slot(js, js_glob(js), SLOT_FUNC_PROTO);
+    if (vtype(func_proto) == T_FUNC) set_proto(js, func_obj, func_proto);
   }
   
   if (name_len > 0) {
@@ -8727,10 +8736,15 @@ static jsval_t js_literal(struct js *js) {
         
         jsval_t bound = mkobj(js, 0);
         jsval_t method_obj = mkval(T_OBJ, vdata(method));
+        
         set_slot(js, bound, SLOT_CODE, get_slot(js, method_obj, SLOT_CODE));
         set_slot(js, bound, SLOT_CODE_LEN, get_slot(js, method_obj, SLOT_CODE_LEN));
         set_slot(js, bound, SLOT_SCOPE, get_slot(js, method_obj, SLOT_SCOPE));
         set_slot(js, bound, SLOT_BOUND_THIS, js->this_val);
+        
+        jsval_t func_proto = get_slot(js, js_glob(js), SLOT_FUNC_PROTO);
+        if (vtype(func_proto) == T_FUNC) set_proto(js, bound, func_proto);
+        
         return mkval(T_FUNC, vdata(bound));
       }
       return super_ctor;
@@ -8827,6 +8841,9 @@ static jsval_t js_arrow_func(struct js *js, jsoff_t params_start, jsoff_t params
     set_slot(js, func_obj, SLOT_ASYNC, js_mktrue());
     jsval_t async_proto = get_slot(js, js_glob(js), SLOT_ASYNC_PROTO);
     if (vtype(async_proto) == T_FUNC) set_proto(js, func_obj, async_proto);
+  } else {
+    jsval_t func_proto = get_slot(js, js_glob(js), SLOT_FUNC_PROTO);
+    if (vtype(func_proto) == T_FUNC) set_proto(js, func_obj, func_proto);
   }
   
   if (!(flags & F_NOEXEC)) {
@@ -9651,6 +9668,9 @@ static jsval_t js_assignment(struct js *js) {
     set_func_code(js, func_obj, fn_str, fn_pos);
     free(fn_str);
     
+    jsval_t func_proto = get_slot(js, js_glob(js), SLOT_FUNC_PROTO);
+    if (vtype(func_proto) == T_FUNC) set_proto(js, func_obj, func_proto);
+    
     if (!(flags & F_NOEXEC)) {
       jsval_t closure_scope = for_let_capture_scope(js);
       if (is_err(closure_scope)) return closure_scope;
@@ -10213,6 +10233,10 @@ static jsval_t js_func_decl(struct js *js) {
    jsval_t func_obj = mkobj(js, 0);
    if (is_err(func_obj)) return func_obj;
    set_func_code(js, func_obj, &js->code[pos], js->pos - pos);
+   
+   jsval_t func_proto = get_slot(js, js_glob(js), SLOT_FUNC_PROTO);
+   if (vtype(func_proto) == T_FUNC) set_proto(js, func_obj, func_proto);
+   
    jsval_t len_key = js_mkstr(js, "length", 6);
    if (is_err(len_key)) return len_key;
    jsval_t res_len = setprop(js, func_obj, len_key, tov(param_count));
@@ -12065,9 +12089,12 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
         set_slot(js, method_obj, SLOT_ASYNC, js_mktrue());
         jsval_t async_proto = get_slot(js, js_glob(js), SLOT_ASYNC_PROTO);
         if (vtype(async_proto) == T_FUNC) set_proto(js, method_obj, async_proto);
+      } else {
+        jsval_t func_proto = get_slot(js, js_glob(js), SLOT_FUNC_PROTO);
+        if (vtype(func_proto) == T_FUNC) set_proto(js, method_obj, func_proto);
       }
-      if (super_len > 0) set_slot(js, method_obj, SLOT_SUPER, super_constructor);
       
+      if (super_len > 0) set_slot(js, method_obj, SLOT_SUPER, super_constructor);
       jsval_t method_func = mkval(T_FUNC, (unsigned long) vdata(method_obj));
       
       if (m->is_getter || m->is_setter) {
@@ -12140,6 +12167,9 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
     set_slot(js, func_obj, SLOT_SCOPE, func_scope);
     if (super_len > 0) set_slot(js, func_obj, SLOT_SUPER, super_constructor);
     
+    jsval_t func_proto = get_slot(js, js_glob(js), SLOT_FUNC_PROTO);
+    if (vtype(func_proto) == T_FUNC) set_proto(js, func_obj, func_proto);
+    
     jsval_t name_key = js_mkstr(js, "name", 4);
     if (is_err(name_key)) return name_key;
     jsval_t name_val = class_name_len > 0 ? js_mkstr(js, class_name, class_name_len) : js_mkstr(js, "", 0);
@@ -12192,6 +12222,9 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
         set_func_code(js, method_obj, &js->code[m->fn_start], mlen);
         set_slot(js, method_obj, SLOT_SCOPE, func_scope);
         if (super_len > 0) set_slot(js, method_obj, SLOT_SUPER, super_constructor);
+        
+        jsval_t func_proto = get_slot(js, js_glob(js), SLOT_FUNC_PROTO);
+        if (vtype(func_proto) == T_FUNC) set_proto(js, method_obj, func_proto);
         
         jsval_t method_func = mkval(T_FUNC, (unsigned long) vdata(method_obj));
         jsval_t set_res = setprop(js, func_obj, member_name, method_func);
@@ -12604,7 +12637,6 @@ static jsval_t builtin_eval(struct js *js, jsval_t *args, int nargs) {
   bool caller_strict = (js->flags & F_STRICT) != 0;
   
   jsval_t result = js_eval_inherit_strict(js, code_str, code_len, caller_strict);
-  
   bool had_throw = (js->flags & F_THROW) != 0;
   
   JS_RESTORE_STATE(js, saved);
@@ -12963,8 +12995,10 @@ static jsval_t builtin_function_bind(struct js *js, jsval_t *args, int nargs) {
       set_slot(js, bound_func, SLOT_BOUND_ARGS, bound_arr);
     }
     
-    jsval_t bound = mkval(T_FUNC, (unsigned long) vdata(bound_func));
+    jsval_t func_proto = get_slot(js, js_glob(js), SLOT_FUNC_PROTO);
+    if (vtype(func_proto) == T_FUNC) set_proto(js, bound_func, func_proto);
     
+    jsval_t bound = mkval(T_FUNC, (unsigned long) vdata(bound_func));
     setprop(js, bound_func, js_mkstr(js, "length", 6), tov((double) bound_length));
     
     jsval_t proto_setup = setup_func_prototype(js, bound);
@@ -12998,6 +13032,9 @@ static jsval_t builtin_function_bind(struct js *js, jsval_t *args, int nargs) {
     set_slot(js, bound_func, SLOT_ASYNC, js_mktrue());
     jsval_t async_proto = get_slot(js, js_glob(js), SLOT_ASYNC_PROTO);
     if (vtype(async_proto) == T_FUNC) set_proto(js, bound_func, async_proto);
+  } else {
+    jsval_t func_proto = get_slot(js, js_glob(js), SLOT_FUNC_PROTO);
+    if (vtype(func_proto) == T_FUNC) set_proto(js, bound_func, func_proto);
   }
 
   jsval_t data_slot = get_slot(js, func_obj, SLOT_DATA);
@@ -21815,6 +21852,7 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, function_proto_obj, ANT_STRING("bind"), js_mkfun(builtin_function_bind));
   setprop(js, function_proto_obj, ANT_STRING("toString"), js_mkfun(builtin_function_toString));
   jsval_t function_proto = mkval(T_FUNC, vdata(function_proto_obj));
+  set_slot(js, glob, SLOT_FUNC_PROTO, function_proto);
   
   jsval_t array_proto = js_mkobj(js);
   set_proto(js, array_proto, object_proto);
@@ -22097,6 +22135,7 @@ struct js *js_create(void *buf, size_t len) {
   
   jsval_t async_func_proto_obj = js_mkobj(js);
   set_proto(js, async_func_proto_obj, function_proto);
+  set_slot(js, async_func_proto_obj, SLOT_ASYNC, js_mktrue());
   jsval_t async_func_proto = mkval(T_FUNC, vdata(async_func_proto_obj));
   set_slot(js, glob, SLOT_ASYNC_PROTO, async_func_proto);
   
