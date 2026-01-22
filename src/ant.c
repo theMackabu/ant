@@ -4089,6 +4089,9 @@ static bool code_has_function_decl(const char *code, size_t len) {
   if (!memmem(code, len, "function", 8)) return false;
   
   size_t pos = 0;
+  
+  int target_depth = 0;
+  if (len > 0 && code[0] == '(') target_depth = 1;
   int depth = 0;
   
   while (pos < len) {
@@ -4121,11 +4124,11 @@ static bool code_has_function_decl(const char *code, size_t len) {
     
     if (c == '{') { depth++; pos++; continue; }
     if (c == '}') {
-      if (depth == 0) break;
+      if (depth <= target_depth) break;
       depth--; pos++; continue;
     }
     
-    if (depth == 0) {
+    if (depth == target_depth) {
       if (c == 'f' && is_function_keyword(code, pos, len)) return true;
       if (c == 'a' && is_async_function(code, pos, len)) return true;
     }
