@@ -10099,7 +10099,7 @@ obj_destruct_next:
         js->consumed = 1;
         v = js_expr(js);
         if (is_err(v)) return v;
-      }
+      } else if (is_const) return js_mkerr_typed(js, JS_ERR_SYNTAX, "Missing initializer in const declaration");
       if (exe) {
         char decoded_name[256];
         size_t decoded_len = decode_ident_escapes(name, nlen, decoded_name, sizeof(decoded_name));
