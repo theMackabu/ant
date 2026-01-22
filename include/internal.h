@@ -54,6 +54,7 @@ struct js {
   bool gc_suppress;       // suppress GC during microtask batch processing
   int eval_depth;         // recursion depth of js_eval calls
   int parse_depth;        // recursion depth of parser (for stack overflow protection)
+  bool skip_func_hoist;   // skip function declaration hoisting (pre-computed)
   
   // for-let loop context stack
   struct for_let_ctx *for_let_stack;

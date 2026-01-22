@@ -806,6 +806,7 @@ static bool bigint_is_zero(struct js *js, jsval_t v);
 
 static bool streq(const char *buf, size_t len, const char *p, size_t n);
 static bool is_this_loop_continue_target(int depth_at_entry);
+static bool code_has_function_decl(const char *code, size_t len);
 static bool parse_func_params(struct js *js, uint8_t *flags, int *out_count);
 static bool try_dynamic_setter(struct js *js, jsval_t obj, const char *key, size_t key_len, jsval_t value);
 
@@ -3404,6 +3405,8 @@ static void set_func_code(struct js *js, jsval_t func_obj, const char *code, siz
   if (!arena_code) return;
   
   set_func_code_ptr(js, func_obj, arena_code, len);
+  if (!code_has_function_decl(code, len)) set_slot(js, func_obj, SLOT_NO_FUNC_DECLS, js_mktrue());
+  
   if (!memmem(code, len, "var", 3)) return;
   
   size_t vars_buf_len;
@@ -4052,6 +4055,86 @@ static const uint8_t char_type[256] = {
 
 #define likely(x)   __builtin_expect(!!(x), 1)
 #define unlikely(x) __builtin_expect(!!(x), 0)
+
+static inline bool is_function_keyword(const char *code, jsoff_t pos, jsoff_t end) {
+  if (pos + 8 > end) return false;
+  uint64_t word;
+  memcpy(&word, code + pos, 8);
+  
+  if (word != 0x6e6f6974636e7566ULL) return false;
+  return (pos + 8 >= end) || !IS_IDENT(code[pos + 8]);
+}
+
+static inline bool is_async_function(const char *code, jsoff_t pos, jsoff_t end) {
+  if (pos + 5 > end) return false;
+  
+  uint32_t word4;
+  memcpy(&word4, code + pos, 4);
+  
+  if (word4 != 0x6e797361U || code[pos + 4] != 'c') return false;
+  if (pos + 5 < end && IS_IDENT(code[pos + 5])) return false;
+  
+  jsoff_t scan = pos + 5;
+  while (scan < end && (
+    code[scan] == ' ' || 
+    code[scan] == '\t' || 
+    code[scan] == '\n' || 
+    code[scan] == '\r'
+  )) scan++;
+  
+  return is_function_keyword(code, scan, end);
+}
+
+static bool code_has_function_decl(const char *code, size_t len) {
+  if (!memmem(code, len, "function", 8)) return false;
+  
+  size_t pos = 0;
+  int depth = 0;
+  
+  while (pos < len) {
+    uint8_t c = (uint8_t)code[pos];
+    
+    if (c == '"' || c == '\'' || c == '`') {
+      uint8_t quote = c;
+      pos++;
+      while (pos < len && (uint8_t)code[pos] != quote) {
+        if (code[pos] == '\\' && pos + 1 < len) pos++;
+        pos++;
+      }
+      if (pos < len) pos++;
+      continue;
+    }
+    
+    if (c == '/' && pos + 1 < len) {
+      if (code[pos + 1] == '/') {
+        pos += 2;
+        while (pos < len && code[pos] != '\n') pos++;
+        continue;
+      }
+      if (code[pos + 1] == '*') {
+        pos += 2;
+        while (pos + 1 < len && !(code[pos] == '*' && code[pos + 1] == '/')) pos++;
+        if (pos + 1 < len) pos += 2;
+        continue;
+      }
+    }
+    
+    if (c == '{') { depth++; pos++; continue; }
+    if (c == '}') {
+      if (depth == 0) break;
+      depth--; pos++; continue;
+    }
+    
+    if (depth == 0) {
+      if (c == 'f' && is_function_keyword(code, pos, len)) return true;
+      if (c == 'a' && is_async_function(code, pos, len)) return true;
+    }
+    
+    pos++;
+  }
+  
+  return false;
+}
 
 static const uint8_t single_char_tok[128] = {
   ['('] = TOK_LPAREN,
@@ -4868,95 +4951,14 @@ static inline void pop_call_frame() {
 static jsval_t js_func_decl(struct js *js);
 static jsval_t js_func_decl_async(struct js *js);
 
-static inline bool is_function_keyword(const char *code, jsoff_t pos, jsoff_t end) {
-  if (pos + 8 > end) return false;
-  uint64_t word;
-  memcpy(&word, code + pos, 8);
-  
-  if (word != 0x6e6f6974636e7566ULL) return false;
-  return (pos + 8 >= end) || !IS_IDENT(code[pos + 8]);
-}
-
-static inline bool is_async_function(const char *code, jsoff_t pos, jsoff_t end) {
-  if (pos + 5 > end) return false;
-  
-  uint32_t word4;
-  memcpy(&word4, code + pos, 4);
-  
-  if (word4 != 0x6e797361U || code[pos + 4] != 'c') return false;
-  if (pos + 5 < end && IS_IDENT(code[pos + 5])) return false;
-  
-  jsoff_t scan = pos + 5;
-  while (scan < end && (
-    code[scan] == ' ' || 
-    code[scan] == '\t' || 
-    code[scan] == '\n' || 
-    code[scan] == '\r'
-  )) scan++;
-  
-  return is_function_keyword(code, scan, end);
-}
-
-static bool block_has_function_decl(struct js *js) {
-  const char *code = js->code;
-  jsoff_t pos = js->pos;
-  jsoff_t end = js->clen;
-  int depth = 0;
-  
-  while (pos < end) {
-    uint8_t c = (uint8_t)code[pos];
-    
-    if (c == '"' || c == '\'' || c == '`') {
-      uint8_t quote = c;
-      pos++;
-      while (pos < end && (uint8_t)code[pos] != quote) {
-        if (code[pos] == '\\' && pos + 1 < end) pos++;
-        pos++;
-      }
-      if (pos < end) pos++;
-      continue;
-    }
-    
-    if (c == '/' && pos + 1 < end) {
-      if (code[pos + 1] == '/') {
-        pos += 2;
-        while (pos < end && code[pos] != '\n') pos++;
-        continue;
-      }
-      if (code[pos + 1] == '*') {
-        pos += 2;
-        while (pos + 1 < end && !(code[pos] == '*' && code[pos + 1] == '/')) pos++;
-        if (pos + 1 < end) pos += 2;
-        continue;
-      }
-    }
-    
-    if (c == '{') { depth++; pos++; continue; }
-    if (c == '}') {
-      if (depth == 0) break;
-      depth--; pos++; continue;
-    }
-    
-    if (depth == 0) {
-      if (c == 'f' && is_function_keyword(code, pos, end)) return true;
-      if (c == 'a' && is_async_function(code, pos, end)) return true;
-    }
-    
-    pos++;
-  }
-  
-  return false;
-}
-
 static void hoist_function_declarations(struct js *js) {
   if (js->flags & F_NOEXEC) return;
   if (js->is_hoisting) return;
   
-  if (!memmem(js->code + js->pos, js->clen - js->pos, "function", 8)) return;
-  if (!block_has_function_decl(js)) return;
+  if (js->skip_func_hoist) return;
+  if (!code_has_function_decl(js->code + js->pos, js->clen - js->pos)) return;
   
   js->is_hoisting = true;
-  
   js_parse_state_t saved;
   JS_SAVE_STATE(js, saved);
   jsval_t saved_scope = js->scope;
@@ -6573,22 +6575,25 @@ static jsval_t call_js_internal(
   if (vtype(func_val) == T_FUNC) {
     jsval_t func_obj = mkval(T_OBJ, vdata(func_val));
     hoist_var_declarations_from_slot(js, function_scope, func_obj);
-  }
+    jsval_t no_func_decls = get_slot(js, func_obj, SLOT_NO_FUNC_DECLS);
+    js->skip_func_hoist = (vtype(no_func_decls) == T_BOOL && vdata(no_func_decls) == 1);
+  } else js->skip_func_hoist = false;
   
   if (func_strict && (vtype(target_this) == T_UNDEF || vtype(target_this) == T_NULL ||
       (vtype(target_this) == T_OBJ && vdata(target_this) == 0))) {
     js->this_val = js_mkundef();
-  } else {
-    js->this_val = target_this;
-  }
-  js->flags = F_CALL | (func_strict ? F_STRICT : 0);
+  } else js->this_val = target_this;
   
+  js->flags = F_CALL | (func_strict ? F_STRICT : 0);
   jsval_t res = js_eval(js, &fn[pf->body_start], pf->body_len);
+  js->skip_func_hoist = false;
+  
   if (!is_err(res) && !(js->flags & F_RETURN)) res = js_mkundef();
   if (global_scope_stack && utarray_len(global_scope_stack) > 0)  utarray_pop_back(global_scope_stack);
   
   utarray_free(args_arr);
   restore_saved_scope(js);
+  
   return res;
 }
 
