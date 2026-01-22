@@ -6446,8 +6446,9 @@ static jsval_t call_js_internal(
   }
   
   if (global_scope_stack == NULL) utarray_new(global_scope_stack, &jsoff_icd);
-  utarray_push_back(global_scope_stack, &parent_scope_offset);
   jsval_t function_scope = mkobj(js, parent_scope_offset);
+  jsoff_t function_scope_offset = (jsoff_t)vdata(function_scope);
+  utarray_push_back(global_scope_stack, &function_scope_offset);
   
   const char *caller_code = js->code;
   jsoff_t caller_clen = js->clen;
@@ -6568,6 +6569,11 @@ static jsval_t call_js_internal(
      (void)vstr(js, slot_name, &len);
      if (len > 0) mkprop_fast(js, function_scope, slot_name, func_val, CONSTMASK);
    }
+  
+  if (vtype(func_val) == T_FUNC) {
+    jsval_t func_obj = mkval(T_OBJ, vdata(func_val));
+    hoist_var_declarations_from_slot(js, function_scope, func_obj);
+  }
   
   if (func_strict && (vtype(target_this) == T_UNDEF || vtype(target_this) == T_NULL ||
       (vtype(target_this) == T_OBJ && vdata(target_this) == 0))) {
@@ -12204,19 +12210,19 @@ static void js_throw_handle(struct js *js, jsval_t *res) {
 }
 
 static jsval_t find_var_scope(struct js *js) {
+  jsval_t scope = js->scope;
+  jsval_t eval_marker = get_slot(js, scope, SLOT_STRICT_EVAL_SCOPE);
+  if (vtype(eval_marker) == T_BOOL) return scope;
+  
   if ((js->flags & F_CALL) && global_scope_stack && utarray_len(global_scope_stack) > 0) {
-    jsoff_t *scope_off = (jsoff_t *)utarray_eltptr(global_scope_stack, 0);
+    jsoff_t *scope_off = (jsoff_t *)utarray_back(global_scope_stack);
     if (scope_off && *scope_off != 0) return mkval(T_OBJ, *scope_off);
   }
   
-  jsval_t scope = js->scope;
-  jsoff_t eval_marker = lkp(js, scope, "__strict_eval_scope__", 21);
-  if (eval_marker != 0) return scope;
-  
   while (vdata(upper(js, scope)) != 0) {
     jsval_t parent = upper(js, scope);
-    jsoff_t parent_eval_marker = lkp(js, parent, "__strict_eval_scope__", 21);
-    if (parent_eval_marker != 0) return scope;
+    jsval_t parent_eval_marker = get_slot(js, parent, SLOT_STRICT_EVAL_SCOPE);
+    if (vtype(parent_eval_marker) == T_BOOL) return scope;
     scope = parent;
   }
   return scope;
@@ -22780,7 +22786,7 @@ static jsval_t js_eval_inherit_strict(struct js *js, const char *buf, size_t len
   
   if (is_strict) {
     mkscope(js);
-    setprop(js, js->scope, js_mkstr(js, "__strict_eval_scope__", 21), js_mktrue());
+    set_slot(js, js->scope, SLOT_STRICT_EVAL_SCOPE, js_mktrue());
   }
   
   hoist_function_declarations(js);
