@@ -19,6 +19,7 @@
 *.todo
 *.trace
 
+ant.txt
 zoo.sh
 todo.txt
 
