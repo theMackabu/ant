@@ -7,12 +7,14 @@ path = "oxc.rs"
 crate-type = ["staticlib", "cdylib"]
 
 [dependencies]
-oxc_allocator = "0.107.0"
-oxc_parser = "0.107.0"
-oxc_span = "0.107.0"
-oxc_codegen = "0.107.0"
-oxc_transformer = "0.107.0"
-oxc_semantic = "0.107.0"
+oxc_allocator = "0.110.0"
+oxc_parser = "0.110.0"
+oxc_span = "0.110.0"
+oxc_codegen = "0.110.0"
+oxc_transformer = "0.110.0"
+oxc_semantic = "0.110.0"
+oxc_ast = "0.110.0"
+oxc_ast_visit = "0.110.0"
 
 [profile.release]
 lto = true

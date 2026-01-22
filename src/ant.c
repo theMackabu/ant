@@ -454,6 +454,15 @@ static const uint8_t body_end_tok[TOK_MAX] = {
   [TOK_SEMICOLON] = 1, [TOK_COMMA] = 1, [TOK_EOF] = 1,
 };
 
+static const uint8_t expr_context_tok[TOK_MAX] = {
+  [TOK_ASSIGN] = 1, [TOK_LPAREN] = 1, [TOK_COLON] = 1, [TOK_LBRACKET] = 1,
+  [TOK_COMMA] = 1, [TOK_NOT] = 1, [TOK_Q] = 1, [TOK_OR] = 1, [TOK_AND] = 1,
+  [TOK_RETURN] = 1, [TOK_ARROW] = 1, [TOK_LAND] = 1, [TOK_LOR] = 1,
+  [TOK_PLUS_ASSIGN] = 1, [TOK_MINUS_ASSIGN] = 1, [TOK_MUL_ASSIGN] = 1,
+  [TOK_DIV_ASSIGN] = 1, [TOK_REM_ASSIGN] = 1, [TOK_AND_ASSIGN] = 1,
+  [TOK_OR_ASSIGN] = 1, [TOK_XOR_ASSIGN] = 1, [TOK_NULLISH] = 1,
+};
+
 static const char *typestr_raw(uint8_t t) {
   const char *names[] = { 
     "object", "prop", "string", "undefined", "null", "number",
@@ -3393,7 +3402,17 @@ static void set_func_code_ptr(struct js *js, jsval_t func_obj, const char *code,
 static void set_func_code(struct js *js, jsval_t func_obj, const char *code, size_t len) {
   const char *arena_code = code_arena_alloc(code, len);
   if (!arena_code) return;
+  
   set_func_code_ptr(js, func_obj, arena_code, len);
+  if (!memmem(code, len, "var", 3)) return;
+  
+  size_t vars_buf_len;
+  char *vars = OXC_get_func_hoisted_vars(code, len, &vars_buf_len);
+  
+  if (vars) {
+    set_slot(js, func_obj, SLOT_HOISTED_VARS, mkval(T_CFUNC, (size_t)vars));
+    set_slot(js, func_obj, SLOT_HOISTED_VARS_LEN, tov((double)vars_buf_len));
+  }
 }
 
 static const char *get_func_code(struct js *js, jsval_t func_obj, jsoff_t *len) {
@@ -4943,12 +4962,12 @@ static void hoist_function_declarations(struct js *js) {
   jsval_t saved_scope = js->scope;
   
   int depth = 0;
-  uint8_t tok;
+  uint8_t tok, prev_tok = TOK_EOF;
   
   while ((tok = next(js)) != TOK_EOF && !(tok == TOK_RBRACE && depth == 0)) {
-    if (tok == TOK_LBRACE) { depth++; js->consumed = 1; continue; }
-    if (tok == TOK_RBRACE) { depth--; js->consumed = 1; continue; }
-    if (depth > 0) { js->consumed = 1; continue; }
+    if (tok == TOK_LBRACE) { depth++; prev_tok = tok; js->consumed = 1; continue; }
+    if (tok == TOK_RBRACE) { depth--; prev_tok = tok; js->consumed = 1; continue; }
+    if (depth > 0) { prev_tok = tok; js->consumed = 1; continue; }
     
     if (tok == TOK_EXPORT) {
       js->consumed = 1;
@@ -4963,23 +4982,40 @@ static void hoist_function_declarations(struct js *js) {
         js->consumed = 1;
       }
       
-skip_export:
-      continue;
+      skip_export: {
+        prev_tok = tok;
+        continue;
+      }
     }
     
     if (depth == 0 && tok == TOK_FUNC) {
+      if (expr_context_tok[prev_tok]) {
+        prev_tok = tok;
+        js->consumed = 1;
+        continue;
+      }
+      
       jsoff_t after_func = js->pos;
       js->consumed = 1;
+      
       if (next(js) == TOK_IDENTIFIER) {
         js->pos = after_func;
         js->tok = TOK_FUNC;
         js->consumed = 1;
         js_func_decl(js);
       }
+      
+      prev_tok = tok;
       continue;
     }
     
     if (depth == 0 && tok == TOK_ASYNC) {
+      if (expr_context_tok[prev_tok]) {
+        prev_tok = tok;
+        js->consumed = 1;
+        continue;
+      }
+      
       js->consumed = 1;
       if (next(js) != TOK_FUNC) goto skip_async;
       jsoff_t func_pos = js->pos;
@@ -4989,16 +5025,51 @@ skip_export:
       js->tok = TOK_FUNC;
       js->consumed = 0;
       js_func_decl_async(js);
-skip_async:
-      continue;
+      
+      skip_async: {
+        prev_tok = tok;
+        continue;
+      }
     }
     
+    prev_tok = tok;
     js->consumed = 1;
   }
   
   js->is_hoisting = false;
   JS_RESTORE_STATE(js, saved);
   js->scope = saved_scope;
+}
+
+static void declare_hoisted_vars(struct js *js, jsval_t var_scope, const char *var_names) {
+  const char *ptr = var_names;
+  while (*ptr) {
+    size_t len = strlen(ptr);
+    jsoff_t existing = lkp(js, var_scope, ptr, len);
+    if (existing == 0) mkprop(js, var_scope, js_mkstr(js, ptr, len), js_mkundef(), 0);
+    ptr += len + 1;
+  }
+}
+
+static void hoist_var_declarations_from_slot(struct js *js, jsval_t var_scope, jsval_t func_obj) {
+  jsval_t vars_val = get_slot(js, func_obj, SLOT_HOISTED_VARS);
+  if (vtype(vars_val) != T_CFUNC) return;
+  const char *var_names = (const char *)vdata(vars_val);
+  if (!var_names) return;
+  declare_hoisted_vars(js, var_scope, var_names);
+}
+
+static void hoist_var_declarations(struct js *js, jsval_t var_scope) {
+  if (js->flags & F_NOEXEC) return;
+  if (js->clen == 0) return;
+  if (!memmem(js->code, js->clen, "var", 3)) return;
+  
+  size_t buf_len;
+  char *var_names = OXC_get_hoisted_vars(js->code, (size_t)js->clen, &buf_len);
+  if (!var_names) return;
+  
+  declare_hoisted_vars(js, var_scope, var_names);
+  OXC_free_hoisted_vars(var_names, buf_len);
 }
 
 static jsval_t js_block(struct js *js, bool create_scope) {
@@ -6633,13 +6704,12 @@ static jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnl
    
    jsval_t slot_name = get_slot(js, func_val, SLOT_NAME);
    if (vtype(slot_name) == T_STR && vtype(func_val) == T_FUNC) {
-     jsoff_t len;
-     (void)vstr(js, slot_name, &len);
-     if (len > 0) {
-        jsval_t prop = mkprop(js, function_scope, slot_name, func_val, CONSTMASK);
-        (void)prop;
-      }
+     jsoff_t len; vstr(js, slot_name, &len);
+     if (len > 0) mkprop(js, function_scope, slot_name, func_val, CONSTMASK);
    }
+   
+  jsval_t func_obj = mkval(T_OBJ, vdata(func_val));
+  hoist_var_declarations_from_slot(js, function_scope, func_obj);
   
   jsoff_t fnpos = 1;
   int arg_idx = 0;
@@ -22714,7 +22784,8 @@ static jsval_t js_eval_inherit_strict(struct js *js, const char *buf, size_t len
   }
   
   hoist_function_declarations(js);
-  
+  if (!(js->flags & F_CALL)) hoist_var_declarations(js, js->scope);
+
   while (next(js) != TOK_EOF && !is_err(res)) {
     res = js_stmt(js);
     if (js->needs_gc && js->eval_depth == 1 && !js->gc_suppress) {
