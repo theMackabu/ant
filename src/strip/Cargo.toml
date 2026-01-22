@@ -3,7 +3,6 @@ name = "oxc"
 edition = "2024"
 
 [lib]
-path = "oxc.rs"
 crate-type = ["staticlib", "cdylib"]
 
 [dependencies]
