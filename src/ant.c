@@ -703,10 +703,18 @@ static inline bool is_keyword_propname(uint8_t tok) {
   return (tok >= TOK_ASYNC && tok <= TOK_GLOBAL_THIS) || tok == TOK_TYPEOF; 
 }
 
+static inline bool is_contextual_keyword(uint8_t tok) {
+  return tok == TOK_FROM || tok == TOK_OF || tok == TOK_AS || tok == TOK_ASYNC;
+}
+
+static inline bool is_valid_param_name(uint8_t tok) {
+  return tok == TOK_IDENTIFIER || is_contextual_keyword(tok);
+}
+
 static bool is_valid_arrow_param_tok(uint8_t tok) {
   static const uint64_t bits[4] = {
-    0x0004000000000FCCull,
-    0x041CC01003C00000ull,
+    0x000C000000000FCCull,
+    0x041CC0100BC00808ull,
     0x0000000000800100ull,
     0x0000000000000000ull
   };
@@ -797,8 +805,23 @@ static jsval_t upper(struct js *js, jsval_t scope) {
   return mkval(T_OBJ, loadoff(js, (jsoff_t) (vdata(scope) + sizeof(jsoff_t)))); 
 }
 
-#define CHECKV(_v) do { if (is_err(_v)) { res = (_v); goto done; } } while (0)
-#define EXPECT(_tok, _e) do { if (next(js) != _tok) { _e; return js_mkerr_typed(js, JS_ERR_SYNTAX, "parse error"); }; js->consumed = 1; } while (0)
+#define CHECKV(_v)        \
+  if (is_err(_v)) {       \
+    res = (_v);           \
+    goto done;            \
+  }
+
+#define EXPECT(_tok, _e)  \
+  if (next(js) != _tok) { \
+    _e;                   \
+    return js_mkerr_typed(js, JS_ERR_SYNTAX, "parse error"); \
+  } else js->consumed = 1
+
+#define EXPECT_IDENT(...) \
+  if (!is_valid_param_name(next(js))) { \
+    __VA_ARGS__;          \
+    return js_mkerr_typed(js, JS_ERR_SYNTAX, "identifier expected"); \
+  } else js->consumed = 1
 
 static bool is_digit(int c);
 static bool is_proxy(struct js *js, jsval_t obj);
@@ -6304,14 +6327,17 @@ static parsed_func_t *get_or_parse_func(const char *fn, jsoff_t fnlen) {
     }
     
     jsoff_t identlen = 0;
-    uint8_t tok = parseident(&fn[fnpos], fnlen - fnpos, &identlen);
     
-    if (tok != TOK_IDENTIFIER && (fn[fnpos] == '{' || fn[fnpos] == '[')) {
+    uint8_t tok = parseident(&fn[fnpos], fnlen - fnpos, &identlen);
+    bool is_valid_ident = (tok == TOK_IDENTIFIER || is_contextual_keyword(tok));
+    
+    if (!is_valid_ident && (fn[fnpos] == '{' || fn[fnpos] == '[')) {
       char bracket_open = fn[fnpos];
       char bracket_close = (bracket_open == '{') ? '}' : ']';
+      
       jsoff_t pattern_start = fnpos;
-      int depth = 1;
-      fnpos++;
+      int depth = 1; fnpos++;
+      
       while (fnpos < fnlen && depth > 0) {
         if (fn[fnpos] == bracket_open) depth++;
         else if (fn[fnpos] == bracket_close) depth--;
@@ -6337,7 +6363,7 @@ static parsed_func_t *get_or_parse_func(const char *fn, jsoff_t fnlen) {
       continue;
     }
     
-    if (tok != TOK_IDENTIFIER) break;
+    if (!is_valid_ident) break;
     
     if (is_rest) {
       pf->rest_param_start = fnpos;
@@ -8429,7 +8455,7 @@ static bool parse_func_params(struct js *js, uint8_t *flags, int *out_count) {
       param_entry_t entry = {NULL, 0};
       utarray_push_back(params, &entry);
       if (next(js) == TOK_ASSIGN) { js->consumed = 1; skip_default_value(js); }
-    } else if (next(js) == TOK_IDENTIFIER) {
+    } else if (is_valid_param_name(next(js))) {
       const char *name = &js->code[js->toff];
       size_t len = js->tlen;
       
@@ -8591,6 +8617,7 @@ static jsval_t js_literal(struct js *js) {
       return js_func_literal(js, false);
     }
     case TOK_ASYNC: {
+      jsoff_t async_off = js->toff, async_len = js->tlen;
       js->consumed = 1;
       uint8_t next_tok = next(js);
       if (next_tok == TOK_FUNC) {
@@ -8694,7 +8721,7 @@ static jsval_t js_literal(struct js *js) {
         }
         return mkcoderef((jsoff_t) id_start, (jsoff_t) id_len);
       }
-      return js_mkerr_typed(js, JS_ERR_SYNTAX, "unexpected token after async");
+      return mkcoderef(async_off, async_len);
     }
     
     case TOK_SUPER: {
@@ -9843,7 +9870,7 @@ static jsval_t js_decl(struct js *js, bool is_const) {
             }
             js->consumed = 1;
           } else {
-            EXPECT(TOK_IDENTIFIER, );
+            EXPECT_IDENT();
             var_off = js->toff;
             var_len = js->tlen;
             js->consumed = 1;
@@ -9931,7 +9958,7 @@ obj_destruct_nested:;
             
             if (next(js) == TOK_COLON) {
               js->consumed = 1;
-              EXPECT(TOK_IDENTIFIER, );
+              EXPECT_IDENT();
               ivoff = js->toff; ivlen = js->tlen;
               js->consumed = 1;
             }
@@ -10108,7 +10135,7 @@ obj_destruct_next:
       
       JS_RESTORE_STATE(js, end_state);
     } else {
-      EXPECT(TOK_IDENTIFIER, );
+      EXPECT_IDENT();
       js->consumed = 0;
       jsoff_t noff = js->toff, nlen = js->tlen;
       char *name = (char *) &js->code[noff];
@@ -10207,7 +10234,7 @@ static jsval_t js_func_decl(struct js *js) {
   uint8_t exe = !(js->flags & F_NOEXEC);
   uint8_t saved_flags = js->flags;
   js->consumed = 1;
-  EXPECT(TOK_IDENTIFIER, );
+  EXPECT_IDENT();
   js->consumed = 0;
   jsoff_t noff = js->toff, nlen = js->tlen;
   char *name = (char *) &js->code[noff];
@@ -10278,7 +10305,7 @@ static jsval_t js_func_decl(struct js *js) {
 static jsval_t js_func_decl_async(struct js *js) {
   uint8_t exe = !(js->flags & F_NOEXEC);
   js->consumed = 1;
-  EXPECT(TOK_IDENTIFIER, );
+  EXPECT_IDENT();
   js->consumed = 0;
   jsoff_t noff = js->toff, nlen = js->tlen;
   char *name = (char *) &js->code[noff];
@@ -11844,7 +11871,7 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
   if (next(js) == TOK_IDENTIFIER && js->tlen == 7 &&
       streq(&js->code[js->toff], js->tlen, "extends", 7)) {
     js->consumed = 1;
-    EXPECT(TOK_IDENTIFIER, );
+    EXPECT_IDENT();
     super_off = js->toff;
     super_len = js->tlen;
     js->consumed = 1;
@@ -12275,7 +12302,7 @@ static jsval_t js_var_decl(struct js *js) {
   
   js->consumed = 1;
   for (;;) {
-    EXPECT(TOK_IDENTIFIER, );
+    EXPECT_IDENT();
     js->consumed = 0;
     jsoff_t noff = js->toff, nlen = js->tlen;
     char *name = (char *) &js->code[noff];
