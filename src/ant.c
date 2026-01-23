@@ -5,7 +5,7 @@
 #include <compat.h> // IWYU pragma: keep
 
 #include "ant.h"
-#include "config.h"
+#include "common.h"
 #include "arena.h"
 #include "utils.h"
 #include "runtime.h"

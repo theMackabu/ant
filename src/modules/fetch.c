@@ -9,6 +9,7 @@
 #include <utarray.h>
 
 #include "config.h"
+#include "common.h"
 #include "runtime.h"
 #include "modules/fetch.h"
 #include "modules/json.h"

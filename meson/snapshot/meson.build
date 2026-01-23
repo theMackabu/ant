@@ -14,12 +14,11 @@ snapshot_h = custom_target(
     src_root / 'src' / 'tools' / 'gen_snapshot.js',
     '@INPUT0@', 
     '@OUTPUT@',
-    'VERSION=' + version_conf.get('ANT_VERSION'),
-    'GIT_HASH=' + version_conf.get('ANT_GIT_HASH'),
-    'BUILD_TIMESTAMP=' + version_conf.get('ANT_BUILD_TIMESTAMP'),
-    'TARGET=' + version_conf.get('ANT_TARGET_TRIPLE'),
+    'VERSION=' + ant_version,
+    'GIT_HASH=' + git_hash,
+    'BUILD_TIMESTAMP=' + timestamp,
+    'TARGET=' + target_triple,
     'MBEDTLS=' + (tls_lib == 'mbedtls').to_string(),
-    'HOST=' + host_machine.system()
+    'HOST=' + host_machine.system(),
   ],
-  build_by_default: true
 )

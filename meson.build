@@ -47,14 +47,19 @@ endif
 libant = static_library(
   'ant',
   lib_sources + [snapshot_h],
-  include_directories: [include, build_include, strip_include],
+  include_directories: [
+    include, version_include, 
+    build_include, strip_include
+  ],
   dependencies: ant_deps,
   install: true
 )
 
 libant_dep = declare_dependency(
   link_with: libant,
-  include_directories: [include, build_include],
+  include_directories: [
+    include, version_include, build_include
+  ],
   dependencies: ant_deps + [oxc_dep]
 )
 
@@ -66,9 +71,8 @@ endif
 executable(
   'ant',
   files('src/main.c') + [snapshot_h],
-  include_directories: [include, build_include, strip_include],
-  link_with: libant,
-  dependencies: ant_deps + [oxc_dep],
+  include_directories: [strip_include],
+  dependencies: libant_dep,
   link_args: link_args
 )
 

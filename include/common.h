@@ -1,10 +1,5 @@
-#ifndef JS_CONFIG_H
-#define JS_CONFIG_H
-
-#define ANT_VERSION "@ANT_VERSION@"
-#define ANT_GIT_HASH "@ANT_GIT_HASH@"
-#define ANT_BUILD_TIMESTAMP @ANT_BUILD_TIMESTAMP@
-#define ANT_TARGET_TRIPLE "@ANT_TARGET_TRIPLE@"
+#ifndef COMMON_H
+#define COMMON_H
 
 #define SLOTMASK ~(((jsoff_t) ~0) >> 1)
 #define CONSTMASK (~(((jsoff_t) ~0) >> 1) >> 1)
