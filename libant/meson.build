@@ -13,7 +13,7 @@ src_root = meson.project_source_root() / '..'
 vendor_dir = 'vendor'
 is_static = true
 
-subdir('../meson')
+subdir('meson')
 
 module_files = run_command('sh', '-c', 
   'ls ' + src_root / 'src' / 'modules' / '*.c',
@@ -48,7 +48,12 @@ endif
 libant_core = static_library(
   'ant_core',
   lib_sources + [snapshot_h],
-  include_directories: [include, build_include, strip_include],
+  include_directories: [
+    include,
+    build_include,
+    version_include,
+    strip_include
+  ],
   dependencies: ant_deps + [oxc_dep],
 )
 
@@ -56,7 +61,12 @@ if use_lto
   libant_core_lto = static_library(
     'ant_core_lto',
     lib_sources + [snapshot_h],
-    include_directories: [include, build_include, strip_include],
+    include_directories: [
+      include,
+      build_include,
+      version_include,
+      strip_include
+    ],
     dependencies: ant_deps + [oxc_dep],
     c_args: ['-flto'],
   )
@@ -82,7 +92,7 @@ pkg.generate(
   libraries: ['-L${libdir}', '-lant'] + pkg_libs
 )
 
-gen_header = custom_target(
+custom_target(
   'ant_header',
   input: [config_h],
   output: 'libant.h',
@@ -90,5 +100,6 @@ gen_header = custom_target(
     'bash', meson.project_source_root() / 'scripts' / 'header.sh',
     '@INPUT0@', '@OUTPUT@'
   ],
-  build_by_default: true
+  build_by_default: true,
+  build_always_stale: true
 )

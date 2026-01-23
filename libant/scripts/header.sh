@@ -16,16 +16,14 @@ VENDOR_DIR="$SCRIPT_DIR/vendor"
 
 HEADERS=(
   "config.h:$CONFIG_H"
+  "common.h:$INCLUDE_DIR/common.h"
   "compat.h:$INCLUDE_DIR/compat.h"
   "ant.h:$INCLUDE_DIR/ant.h"
   "utils.h:$INCLUDE_DIR/utils.h"
-  "gc_version.h:$VENDOR_DIR/gc-8.2.10/include/gc_version.h"
-  "gc_config_macros.h:$VENDOR_DIR/gc-8.2.10/include/gc_config_macros.h"
-  "gc.h:$VENDOR_DIR/gc-8.2.10/include/gc.h"
   "minicoro.h:$VENDOR_DIR/minicoro/minicoro.h"
-  "arena.h:$INCLUDE_DIR/arena.h"
   "runtime.h:$INCLUDE_DIR/runtime.h"
   "esm/remote.h:$INCLUDE_DIR/esm/remote.h"
+  "argtable3.h:$VENDOR_DIR/argtable-v3.3.0.116da6c/src/argtable3.h"
 )
 
 for f in "$INCLUDE_DIR"/modules/*.h; do
@@ -71,6 +69,9 @@ cat > "$OUTPUT" << 'EOF'
 #ifndef LIBANT_H
 #define LIBANT_H
 
+/* forward declarations */
+struct arg_file;
+
 EOF
 
 for entry in "${HEADERS[@]}"; do
@@ -99,7 +100,7 @@ for entry in "${HEADERS[@]}"; do
       continue
     fi
     
-    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\<config\.h\> ]]; then
+    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\<(config|common|argtable3)\.h\> ]]; then
       continue
     fi
     
