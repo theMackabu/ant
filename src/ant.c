@@ -805,21 +805,15 @@ static jsval_t upper(struct js *js, jsval_t scope) {
   return mkval(T_OBJ, loadoff(js, (jsoff_t) (vdata(scope) + sizeof(jsoff_t)))); 
 }
 
-#define CHECKV(_v)        \
-  if (is_err(_v)) {       \
-    res = (_v);           \
-    goto done;            \
-  }
-
-#define EXPECT(_tok, _e)  \
-  if (next(js) != _tok) { \
-    _e;                   \
+#define EXPECT(_tok, ...)                                    \
+  if (next(js) != _tok) {                                    \
+    __VA_ARGS__;                                             \
     return js_mkerr_typed(js, JS_ERR_SYNTAX, "parse error"); \
   } else js->consumed = 1
 
 #define EXPECT_IDENT(...) \
-  if (!is_valid_param_name(next(js))) { \
-    __VA_ARGS__;          \
+  if (!is_valid_param_name(next(js))) {                              \
+    __VA_ARGS__;                                                     \
     return js_mkerr_typed(js, JS_ERR_SYNTAX, "identifier expected"); \
   } else js->consumed = 1
 
@@ -7945,7 +7939,7 @@ static jsval_t js_arr_destruct_assign(struct js *js) {
     
     index++;
     if (next(js) == TOK_RBRACKET) break;
-    EXPECT(TOK_COMMA, );
+    EXPECT(TOK_COMMA);
   }
   
   JS_RESTORE_STATE(js, end_state);
@@ -8044,10 +8038,10 @@ static jsval_t js_arr_literal(struct js *js) {
 
   next_elem:
     if (next(js) == TOK_RBRACKET) break;
-    EXPECT(TOK_COMMA, );
+    EXPECT(TOK_COMMA);
   }
 
-  EXPECT(TOK_RBRACKET, );
+  EXPECT(TOK_RBRACKET);
   if (exe) {
     jsval_t len_key = js_mkstr(js, "length", 6);
     jsval_t len_val = tov((double)idx);
@@ -8202,7 +8196,7 @@ static jsval_t js_obj_literal(struct js *js) {
       
     spread_next:
       if (next(js) == TOK_RBRACE) break;
-      EXPECT(TOK_COMMA, );
+      EXPECT(TOK_COMMA);
       continue;
     }
     
@@ -8389,7 +8383,7 @@ static jsval_t js_obj_literal(struct js *js) {
         }
       }
     } else {
-      EXPECT(TOK_COLON, );
+      EXPECT(TOK_COLON);
       jsval_t val = js_expr(js);
       if (exe) {
         if (is_err(val)) return val;
@@ -8403,10 +8397,10 @@ static jsval_t js_obj_literal(struct js *js) {
     }
     
     if (next(js) == TOK_RBRACE) break;
-    EXPECT(TOK_COMMA, );
+    EXPECT(TOK_COMMA);
   }
   
-  EXPECT(TOK_RBRACE, );
+  EXPECT(TOK_RBRACE);
   return obj;
 }
 
@@ -9987,7 +9981,7 @@ obj_destruct_nested:;
             if (is_err(ix)) return ix;
             
             if (next(js) == TOK_RBRACE) break;
-            EXPECT(TOK_COMMA, );
+            EXPECT(TOK_COMMA);
           }
           js->consumed = 1;
           
@@ -10023,7 +10017,7 @@ obj_destruct_simple:;
 obj_destruct_next:
         
         if (next(js) == TOK_RBRACE) break;
-        EXPECT(TOK_COMMA, );
+        EXPECT(TOK_COMMA);
       }
       
       JS_RESTORE_STATE(js, end_state);
@@ -10145,7 +10139,7 @@ obj_destruct_next:
         
         index++;
         if (next(js) == TOK_RBRACKET) break;
-        EXPECT(TOK_COMMA, );
+        EXPECT(TOK_COMMA);
       }
       
       JS_RESTORE_STATE(js, end_state);
@@ -10187,7 +10181,7 @@ obj_destruct_next:
     uint8_t decl_next = next(js);
     bool asi = js->had_newline || decl_next == TOK_EOF || decl_next == TOK_RBRACE;
     if (decl_next == TOK_SEMICOLON || asi) break;
-    EXPECT(TOK_COMMA, );
+    EXPECT(TOK_COMMA);
   }
   return js_mkundef();
 }
@@ -10254,15 +10248,15 @@ static jsval_t js_func_decl(struct js *js) {
   jsoff_t noff = js->toff, nlen = js->tlen;
   char *name = (char *) &js->code[noff];
   js->consumed = 1;
-  EXPECT(TOK_LPAREN, );
+  EXPECT(TOK_LPAREN);
   jsoff_t pos = js->pos - 1;
   int param_count = 0;
   if (!parse_func_params(js, &saved_flags, &param_count)) {
     js->flags = saved_flags;
     return js_mkerr_typed(js, JS_ERR_SYNTAX, "invalid parameters");
   }
-  EXPECT(TOK_RPAREN, );
-  EXPECT(TOK_LBRACE, );
+  EXPECT(TOK_RPAREN);
+  EXPECT(TOK_LBRACE);
   js->consumed = 0;
   uint8_t flags = js->flags;
   js->flags |= F_NOEXEC;
@@ -10325,13 +10319,13 @@ static jsval_t js_func_decl_async(struct js *js) {
   jsoff_t noff = js->toff, nlen = js->tlen;
   char *name = (char *) &js->code[noff];
   js->consumed = 1;
-  EXPECT(TOK_LPAREN, );
+  EXPECT(TOK_LPAREN);
   jsoff_t pos = js->pos - 1;
   if (!parse_func_params(js, NULL, NULL)) {
     return js_mkerr_typed(js, JS_ERR_SYNTAX, "invalid parameters");
   }
-  EXPECT(TOK_RPAREN, );
-  EXPECT(TOK_LBRACE, );
+  EXPECT(TOK_RPAREN);
+  EXPECT(TOK_LBRACE);
   js->consumed = 0;
   uint8_t flags = js->flags;
   js->flags |= F_NOEXEC;
@@ -10445,9 +10439,14 @@ static inline void loop_block_sync_scope(struct js *js, loop_block_ctx_t *ctx) {
 
 static jsval_t js_if(struct js *js) {
   js->consumed = 1;
-  EXPECT(TOK_LPAREN, );
-  jsval_t res = js_mkundef(), cond = resolveprop(js, js_expr(js));
-  EXPECT(TOK_RPAREN, );
+  EXPECT(TOK_LPAREN);
+  
+  jsval_t res = js_mkundef(), cond_expr = js_expr(js);
+  if (is_err(cond_expr)) return cond_expr;
+  jsval_t cond = resolveprop(js, cond_expr);
+  if (is_err(cond)) return cond;
+  
+  EXPECT(TOK_RPAREN);
   
   bool cond_true = js_truthy(js, cond), exe = !(js->flags & F_NOEXEC);
   if (!cond_true) js->flags |= F_NOEXEC;
@@ -11892,7 +11891,7 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
     js->consumed = 1;
   }
   
-  EXPECT(TOK_LBRACE, );
+  EXPECT(TOK_LBRACE);
   jsoff_t constructor_params_start = 0;
   jsoff_t constructor_body_start = 0, constructor_body_end = 0;
   uint8_t save_flags = js->flags;
@@ -12358,7 +12357,7 @@ static jsval_t js_var_decl(struct js *js) {
     
     uint8_t var_next = next(js);
     if (var_next == TOK_SEMICOLON || var_next == TOK_EOF || var_next == TOK_RBRACE || js->had_newline) break;
-    EXPECT(TOK_COMMA, );
+    EXPECT(TOK_COMMA);
   }
   return js_mkundef();
 }
@@ -20583,7 +20582,7 @@ static jsval_t js_import_stmt(struct js *js) {
   if (next(js) == TOK_LPAREN) {
     js->consumed = 1;
     jsval_t spec = js_expr(js);
-    EXPECT(TOK_RPAREN, );
+    EXPECT(TOK_RPAREN);
     
     if (vtype(spec) != T_STR) {
       return js_mkerr(js, "import() requires string");
@@ -20595,15 +20594,15 @@ static jsval_t js_import_stmt(struct js *js) {
   
   if (next(js) == TOK_MUL) {
     js->consumed = 1;
-    EXPECT(TOK_AS, );
-    EXPECT(TOK_IDENTIFIER, );
+    EXPECT(TOK_AS);
+    EXPECT(TOK_IDENTIFIER);
     
     const char *namespace_name = &js->code[js->toff];
     size_t namespace_len = js->tlen;
     js->consumed = 1;
     
-    EXPECT(TOK_FROM, );
-    EXPECT(TOK_STRING, );
+    EXPECT(TOK_FROM);
+    EXPECT(TOK_STRING);
     
     jsval_t spec = js_str_literal(js);
     jsoff_t spec_len;
@@ -20643,8 +20642,8 @@ static jsval_t js_import_stmt(struct js *js) {
         if (binding_count < 0) return js_mkerr(js, "Failed to parse named imports");
       } else if (next(js) == TOK_MUL) {
         js->consumed = 1;
-        EXPECT(TOK_AS, );
-        EXPECT(TOK_IDENTIFIER, );
+        EXPECT(TOK_AS);
+        EXPECT(TOK_IDENTIFIER);
         bindings[binding_count].import_name = NULL;
         bindings[binding_count].import_len = 0;
         bindings[binding_count].local_name = &js->code[js->toff];
@@ -20656,8 +20655,8 @@ static jsval_t js_import_stmt(struct js *js) {
       }
     }
     
-    EXPECT(TOK_FROM, );
-    EXPECT(TOK_STRING, );
+    EXPECT(TOK_FROM);
+    EXPECT(TOK_STRING);
     
     jsval_t spec = js_str_literal(js);
     jsoff_t spec_len;
@@ -20703,8 +20702,8 @@ static jsval_t js_import_stmt(struct js *js) {
     int binding_count = esm_parse_named_imports(js, bindings, 64);
     if (binding_count < 0) return js_mkerr(js, "Failed to parse named imports");
     
-    EXPECT(TOK_FROM, );
-    EXPECT(TOK_STRING, );
+    EXPECT(TOK_FROM);
+    EXPECT(TOK_STRING);
     
     jsval_t spec = js_str_literal(js);
     jsoff_t spec_len;
@@ -20766,7 +20765,7 @@ static jsval_t js_export_stmt(struct js *js) {
     bool is_const = (next(js) == TOK_CONST);
     js->consumed = 1;
     
-    EXPECT(TOK_IDENTIFIER, );
+    EXPECT(TOK_IDENTIFIER);
     const char *name = &js->code[js->toff];
     size_t name_len = js->tlen;
     js->consumed = 1;
@@ -20827,14 +20826,14 @@ static jsval_t js_export_stmt(struct js *js) {
     
     if (next(js) == TOK_AS) {
       js->consumed = 1;
-      EXPECT(TOK_IDENTIFIER, );
+      EXPECT(TOK_IDENTIFIER);
       alias_name = &js->code[js->toff];
       alias_len = js->tlen;
       js->consumed = 1;
     }
     
-    EXPECT(TOK_FROM, );
-    EXPECT(TOK_STRING, );
+    EXPECT(TOK_FROM);
+    EXPECT(TOK_STRING);
     
     jsval_t spec = js_str_literal(js);
     jsoff_t spec_len;
@@ -20899,11 +20898,11 @@ static jsval_t js_export_stmt(struct js *js) {
       if (next(js) == TOK_COMMA) js->consumed = 1;
     }
     
-    EXPECT(TOK_RBRACE, );
+    EXPECT(TOK_RBRACE);
     
     if (next(js) == TOK_FROM) {
       js->consumed = 1;
-      EXPECT(TOK_STRING, );
+      EXPECT(TOK_STRING);
       jsval_t spec = js_str_literal(js);
       jsoff_t spec_len;
       char *spec_str = esm_jsval_to_cstr(js, spec, &spec_len);
