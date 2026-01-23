@@ -11,7 +11,7 @@ else
 endif
 
 version_conf = configuration_data()
-version_conf.set('ANT_VERSION', '0.3.13.' + timestamp + '-g' + git_hash)
+version_conf.set('ANT_VERSION', '0.4.0.' + timestamp + '-g' + git_hash)
 version_conf.set('ANT_BUILD_TIMESTAMP', timestamp)
 version_conf.set('ANT_GIT_HASH', git_hash)
 

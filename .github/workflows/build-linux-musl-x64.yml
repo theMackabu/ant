@@ -84,7 +84,9 @@ jobs:
             vendor/*/
             build/
             !build/oxc-target
-          key: meson-linux-musl-x64-${{ hashFiles('vendor/*.wrap', 'meson.build', 'src/**/*.c', 'src/**/*.h', 'include/*.h.in') }}
+            !build/meson
+            !build/liboxc.h
+          key: meson-linux-musl-x64-${{ hashFiles('vendor/*.wrap', 'meson.build', 'meson/**/*.build', 'src/**/*.c', 'include/**/*.h') }}
           restore-keys: meson-linux-musl-x64-
       - run: |
           export PKG_CONFIG_PATH="$HOME/deps-cache/lib/pkgconfig:$PKG_CONFIG_PATH"

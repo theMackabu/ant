@@ -77,7 +77,9 @@ jobs:
             vendor/*/
             build/
             !build/oxc-target
-          key: meson-macos-x64-mbedtls-${{ hashFiles('vendor/*.wrap', 'meson.build', 'src/**/*.c', 'src/**/*.h', 'include/*.h.in') }}
+            !build/meson
+            !build/liboxc.h
+          key: meson-macos-x64-mbedtls-${{ hashFiles('vendor/*.wrap', 'meson.build', 'meson/**/*.build', 'src/**/*.c', 'include/**/*.h') }}
           restore-keys: meson-macos-x64-mbedtls-
       - run: |
           export PKG_CONFIG_PATH="$HOME/deps-cache/lib/pkgconfig:$PKG_CONFIG_PATH"

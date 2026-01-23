@@ -28,7 +28,9 @@ jobs:
             vendor/*/
             build/
             !build/oxc-target
-          key: meson-linux-musl-aarch64-${{ hashFiles('vendor/*.wrap', 'meson.build', 'src/**/*.c', 'src/**/*.h', 'include/*.h.in') }}
+            !build/meson
+            !build/liboxc.h
+          key: meson-linux-musl-aarch64-${{ hashFiles('vendor/*.wrap', 'meson.build', 'meson/**/*.build', 'src/**/*.c', 'include/**/*.h') }}
           restore-keys: meson-linux-musl-aarch64-
       - name: Cache cargo
         uses: actions/cache@v4
