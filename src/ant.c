@@ -849,6 +849,7 @@ static jsval_t js_eval_str(struct js *js, const char *code, jsoff_t len);
 static jsval_t js_stmt(struct js *js);
 static jsval_t js_assignment(struct js *js);
 static jsval_t js_arrow_func(struct js *js, jsoff_t params_start, jsoff_t params_end, bool is_async);
+static jsval_t js_async_arrow_paren(struct js *js);
 static jsval_t js_var_decl(struct js *js);
 
 static jsval_t do_op(struct js *, uint8_t op, jsval_t l, jsval_t r);
@@ -8624,38 +8625,7 @@ static jsval_t js_literal(struct js *js) {
       if (next_tok == TOK_FUNC) {
         return js_func_literal(js, true);
       } else if (next_tok == TOK_LPAREN) {
-        jsoff_t paren_start = js->pos - 1;
-        js->consumed = 1;
-        jsoff_t saved_pos = js->pos;
-        uint8_t saved_tok = js->tok;
-        uint8_t saved_consumed = js->consumed;
-        uint8_t saved_flags = js->flags;
-        int paren_depth = 1;
-        js->flags |= F_NOEXEC;
-        while (paren_depth > 0 && next(js) != TOK_EOF) {
-          if (js->tok == TOK_LPAREN) paren_depth++;
-          else if (js->tok == TOK_RPAREN) paren_depth--;
-          js->consumed = 1;
-        }
-        jsoff_t paren_end = js->pos;
-        bool is_arrow = lookahead(js) == TOK_ARROW;
-        js->pos = saved_pos;
-        js->tok = saved_tok;
-        js->consumed = saved_consumed;
-        js->flags = saved_flags;
-        if (is_arrow) {
-          js->flags |= F_NOEXEC;
-          while (next(js) != TOK_RPAREN && next(js) != TOK_EOF) {
-            js->consumed = 1;
-          }
-          if (next(js) != TOK_RPAREN) return js_mkerr_typed(js, JS_ERR_SYNTAX, ") expected");
-          js->consumed = 1;
-          js->flags = saved_flags;
-          if (next(js) != TOK_ARROW) return js_mkerr_typed(js, JS_ERR_SYNTAX, "=> expected");
-          js->consumed = 1;
-          return js_arrow_func(js, paren_start, paren_end, true);
-        }
-        return js_mkerr_typed(js, JS_ERR_SYNTAX, "async ( must be arrow function");
+        return js_async_arrow_paren(js);
       } else if (next_tok == TOK_IDENTIFIER) {
         jsoff_t id_start = js->toff;
         jsoff_t id_len = js->tlen;
@@ -8891,6 +8861,41 @@ static jsval_t js_arrow_func(struct js *js, jsoff_t params_start, jsoff_t params
   
   set_slot(js, func_obj, SLOT_ARROW, tov(1));
   return mkval(T_FUNC, (unsigned long) vdata(func_obj));
+}
+
+static jsval_t js_async_arrow_paren(struct js *js) {
+  jsoff_t paren_start = js->pos - 1;
+  js->consumed = 1;
+  jsoff_t saved_pos = js->pos;
+  uint8_t saved_tok = js->tok;
+  uint8_t saved_consumed = js->consumed;
+  uint8_t saved_flags = js->flags;
+  int paren_depth = 1;
+  js->flags |= F_NOEXEC;
+  while (paren_depth > 0 && next(js) != TOK_EOF) {
+    if (js->tok == TOK_LPAREN) paren_depth++;
+    else if (js->tok == TOK_RPAREN) paren_depth--;
+    js->consumed = 1;
+  }
+  jsoff_t paren_end = js->pos;
+  bool is_arrow = lookahead(js) == TOK_ARROW;
+  js->pos = saved_pos;
+  js->tok = saved_tok;
+  js->consumed = saved_consumed;
+  js->flags = saved_flags;
+  if (is_arrow) {
+    js->flags |= F_NOEXEC;
+    while (next(js) != TOK_RPAREN && next(js) != TOK_EOF) {
+      js->consumed = 1;
+    }
+    if (next(js) != TOK_RPAREN) return js_mkerr_typed(js, JS_ERR_SYNTAX, ") expected");
+    js->consumed = 1;
+    js->flags = saved_flags;
+    if (next(js) != TOK_ARROW) return js_mkerr_typed(js, JS_ERR_SYNTAX, "=> expected");
+    js->consumed = 1;
+    return js_arrow_func(js, paren_start, paren_end, true);
+  }
+  return js_mkerr_typed(js, JS_ERR_SYNTAX, "async ( must be arrow function");
 }
 
 static jsval_t js_group(struct js *js) {
@@ -12369,8 +12374,13 @@ static void js_var(struct js *js, jsval_t *res) {
 
 static void js_async(struct js *js, jsval_t *res) {
   js->consumed = 1;
-  if (next(js) == TOK_FUNC) {
+  uint8_t next_tok = next(js);
+  if (next_tok == TOK_FUNC) {
     *res = js_func_decl_async(js);
+    return;
+  }
+  if (next_tok == TOK_LPAREN) {
+    *res = js_async_arrow_paren(js);
     return;
   }
   *res = js_mkerr_typed(js, JS_ERR_SYNTAX, "async must be followed by function");
