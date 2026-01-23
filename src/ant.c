@@ -2313,37 +2313,42 @@ static size_t strfunc(struct js *js, jsval_t value, char *buf, size_t len) {
       n += cpy(buf + n, len - n, "]", 1);
       return n;
     }
-    return cpy(buf, len, "[native code]", 13);
+    return cpy(buf, len, fmt->anon, fmt->anon_len);
   }
   
   if (!has_code) {
     jsval_t cfunc_slot = get_slot(js, func_obj, SLOT_CFUNC);
-    if (vtype(cfunc_slot) == T_CFUNC) {
-      if (name && name_len > 0) {
-        size_t n = cpy(buf, len, fmt->prefix, fmt->prefix_len);
-        n += cpy(buf + n, len - n, name, name_len);
-        n += cpy(buf + n, len - n, "]", 1);
-        return n;
-      }
-      return cpy(buf, len, "[native code]", 13);
-    }
+    bool is_native = (vtype(cfunc_slot) == T_CFUNC);
+    size_t n;
+    
     if (name && name_len > 0) {
-      size_t n = cpy(buf, len, fmt->prefix, fmt->prefix_len);
+      n = cpy(buf, len, fmt->prefix, fmt->prefix_len);
       n += cpy(buf + n, len - n, name, name_len);
       n += cpy(buf + n, len - n, "]", 1);
-      return n;
+    } else {
+      n = cpy(buf, len, fmt->anon, fmt->anon_len);
     }
-    return cpy(buf, len, fmt->anon, fmt->anon_len);
-  }
-  
-  if (!has_code) {
-    if (name && name_len > 0) {
-      size_t n = cpy(buf, len, fmt->prefix, fmt->prefix_len);
-      n += cpy(buf + n, len - n, name, name_len);
-      n += cpy(buf + n, len - n, "]", 1);
-      return n;
+    
+    if (!is_native) return n;
+    
+    jsval_t proto = get_slot(js, func_obj, SLOT_PROTO);
+    uint8_t pt = vtype(proto);
+    if (pt != T_OBJ && pt != T_FUNC) return n;
+    
+    jsoff_t ctor_off = lkp(js, proto, "constructor", 11);
+    if (ctor_off == 0) return n;
+    
+    jsval_t ctor = resolveprop(js, mkval(T_PROP, ctor_off));
+    uint8_t ct = vtype(ctor);
+    if (ct != T_FUNC && ct != T_CFUNC) return n;
+    
+    jsoff_t ctor_name_len = 0;
+    const char *ctor_name = get_func_name(js, ctor, &ctor_name_len);
+    if (ctor_name && ctor_name_len > 0) {
+      n += cpy(buf + n, len - n, " ", 1);
+      n += cpy(buf + n, len - n, ctor_name, ctor_name_len);
     }
-    return cpy(buf, len, fmt->anon, fmt->anon_len);
+    return n;
   }
   
   if (name && name_len > 0) {
@@ -2352,20 +2357,16 @@ static size_t strfunc(struct js *js, jsval_t value, char *buf, size_t len) {
     n += cpy(buf + n, len - n, "]", 1);
     return n;
   }
+  
   return cpy(buf, len, fmt->anon, fmt->anon_len);
 }
 
 static void get_line_col(const char *code, jsoff_t pos, int *line, int *col) {
-  *line = 1;
-  *col = 1;
-  for (jsoff_t i = 0; i < pos && code[i] != '\0'; i++) {
-    if (code[i] == '\n') {
-      (*line)++;
-      *col = 1;
-    } else {
-      (*col)++;
-    }
-  }
+  int l = 1, c = 1;
+  for (jsoff_t i = 0; i < pos && code[i]; i++)
+    code[i] == '\n' ? (l++, c = 1) : c++;
+  *line = l;
+  *col = c;
 }
 
 static void get_error_line(const char *code, jsoff_t clen, jsoff_t pos, char *buf, size_t bufsize, int *line_start_col) {
@@ -8670,11 +8671,14 @@ static jsval_t js_literal(struct js *js) {
           uint8_t flags = js->flags;
           bool is_expr = next(js) != TOK_LBRACE;
           jsoff_t body_start = is_expr ? js->toff : js->pos;
+          jsoff_t body_end = 0;
           jsval_t body_result;
           if (is_expr) {
             js->flags |= F_NOEXEC;
             body_result = js_assignment(js);
             if (is_err(body_result)) { js->flags = flags; return body_result; }
+            uint8_t tok = next(js);
+            body_end = is_body_end_tok(tok) ? js->toff : js->pos;
           } else {
             body_start = js->toff;
             js->flags |= F_NOEXEC;
@@ -8682,10 +8686,13 @@ static jsval_t js_literal(struct js *js) {
             body_result = js_block(js, false);
             if (is_err(body_result)) { js->flags = flags; return body_result; }
             if (js->tok == TOK_RBRACE && js->consumed) {
-            } else if (next(js) == TOK_RBRACE) js->consumed = 1;
+              body_end = js->pos;
+            } else if (next(js) == TOK_RBRACE) {
+              body_end = js->pos;
+              js->consumed = 1;
+            } else body_end = js->pos;
           }
           js->flags = flags;
-          jsoff_t body_end = js->pos;
           size_t fn_size = id_len + (body_end - body_start) + 64;
           char *fn_str = (char *) malloc(fn_size);
           if (!fn_str) return js_mkerr(js, "oom");
@@ -8710,12 +8717,14 @@ static jsval_t js_literal(struct js *js) {
           set_func_code(js, func_obj, fn_str, fn_pos);
           free(fn_str);
           set_slot(js, func_obj, SLOT_ASYNC, js_mktrue());
+          set_slot(js, func_obj, SLOT_ARROW, tov(1));
           jsval_t async_proto = get_slot(js, js_glob(js), SLOT_ASYNC_PROTO);
           if (vtype(async_proto) == T_FUNC) set_proto(js, func_obj, async_proto);
           if (!(flags & F_NOEXEC)) {
             jsval_t closure_scope = for_let_capture_scope(js);
             if (is_err(closure_scope)) return closure_scope;
             set_slot(js, func_obj, SLOT_SCOPE, closure_scope);
+            set_slot(js, func_obj, SLOT_THIS, js->this_val);
           }
           return mkval(T_FUNC, (unsigned long) vdata(func_obj));
         }
@@ -8880,6 +8889,7 @@ static jsval_t js_arrow_func(struct js *js, jsoff_t params_start, jsoff_t params
     set_slot(js, func_obj, SLOT_THIS, js->this_val);
   }
   
+  set_slot(js, func_obj, SLOT_ARROW, tov(1));
   return mkval(T_FUNC, (unsigned long) vdata(func_obj));
 }
 
@@ -12928,14 +12938,80 @@ static int extract_array_args(struct js *js, jsval_t arr, jsval_t **out_args) {
 }
 
 static jsval_t builtin_function_toString(struct js *js, jsval_t *args, int nargs) {
-  (void) args; (void) nargs;
   jsval_t func = js->this_val;
   uint8_t t = vtype(func);
   
   if (t != T_FUNC && t != T_CFUNC) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Function.prototype.toString requires that 'this' be a Function");
   }
-  if (t == T_CFUNC) return ANT_STRING("[native code]");
+  
+  if (t == T_CFUNC) return ANT_STRING("function() { [native code] }");
+  
+  jsval_t func_obj = mkval(T_OBJ, vdata(func));
+  jsval_t code_val = get_slot(js, func_obj, SLOT_CODE);
+  jsval_t len_val = get_slot(js, func_obj, SLOT_CODE_LEN);
+  
+  if (vtype(code_val) == T_CFUNC && vtype(len_val) == T_NUM) {
+    const char *code = (const char *)(uintptr_t)vdata(code_val);
+    size_t code_len = (size_t)tod(len_val);
+    
+    if (code && code_len > 0) {
+      jsval_t async_slot = get_slot(js, func_obj, SLOT_ASYNC);
+      bool is_async = is_true(async_slot);
+      bool is_arrow = vtype(get_slot(js, func_obj, SLOT_ARROW)) != T_UNDEF;
+      
+      if (is_arrow) {
+        const char *brace = memchr(code, '{', code_len);
+        if (!brace) goto fallback_arrow;
+        
+        size_t params_len = brace - code;
+        const char *body_start = brace + 1;
+        size_t body_len = code_len - params_len - 1;
+        bool is_expr = (body_len >= 7 && memcmp(body_start, "return ", 7) == 0);
+        
+        size_t total = (is_async ? 6 : 0) + params_len + 4 + body_len + 2;
+        char *buf = ANT_GC_MALLOC(total + 1);
+        size_t n = 0;
+        
+        if (is_async) n += cpy(buf + n, total - n, "async ", 6);
+        n += cpy(buf + n, total - n, code, params_len);
+        n += cpy(buf + n, total - n, " => ", 4);
+        
+        if (is_expr) {
+          const char *expr = body_start + 7;
+          size_t expr_len = body_len - 7;
+          while (expr_len > 0 && (expr[expr_len-1] == ' ' || expr[expr_len-1] == '}' || expr[expr_len-1] == ')')) expr_len--;
+          n += cpy(buf + n, total - n, expr, expr_len);
+        } else {
+          size_t block_len = code_len - params_len;
+          while (block_len > 0 && brace[block_len-1] == ')') block_len--;
+          n += cpy(buf + n, total - n, brace, block_len);
+        }
+        
+        jsval_t result = js_mkstr(js, buf, n);
+        ANT_GC_FREE(buf);
+        return result;
+        fallback_arrow:;
+      }
+      
+      jsoff_t name_len = 0;
+      const char *name = get_func_name(js, func, &name_len);
+      size_t total = (is_async ? 6 : 0) + 9 + name_len + code_len + 1;
+      char *buf = ANT_GC_MALLOC(total + 1);
+      size_t n = 0;
+      
+      if (is_async) n += cpy(buf + n, total - n, "async ", 6);
+      n += cpy(buf + n, total - n, "function ", 9);
+      if (name && name_len > 0) n += cpy(buf + n, total - n, name, name_len);
+      n += cpy(buf + n, total - n, code, code_len);
+      n += cpy(buf + n, total - n, "}", 1);
+      
+      jsval_t result = js_mkstr(js, buf, n);
+      ANT_GC_FREE(buf);
+      
+      return result;
+    }
+  }
   
   char buf[256];
   size_t len = strfunc(js, func, buf, sizeof(buf));
