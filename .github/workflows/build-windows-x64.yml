@@ -67,7 +67,7 @@ jobs:
             vendor/*/
             build/
             !build/oxc-target
-          key: meson-windows-x64-${{ hashFiles('vendor/*.wrap', 'meson.build', 'src/**/*.c', 'src/**/*.h') }}
+          key: meson-windows-x64-${{ hashFiles('vendor/*.wrap', 'meson.build', 'src/**/*.c', 'src/**/*.h', 'include/*.h.in') }}
           restore-keys: meson-windows-x64-
       - run: |
           DEPS_CACHE=$(cygpath "${{ runner.temp }}/deps-cache")
