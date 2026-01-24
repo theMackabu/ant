@@ -5908,7 +5908,7 @@ static jsval_t do_bracket_op(struct js *js, jsval_t l, jsval_t r) {
     return js_mkundef();
   }
   if ((streq(keystr, keylen, "callee", 6) || streq(keystr, keylen, "caller", 6)) &&
-      lkp(js, obj, "__strict_args__", 15) != 0) {
+      vtype(get_slot(js, obj, SLOT_STRICT_ARGS)) != T_UNDEF) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "'%.*s' not allowed on strict arguments", (int)keylen, keystr);
   }
   
@@ -6046,7 +6046,7 @@ static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
   }
   
   if ((streq(ptr, plen, "callee", 6) || streq(ptr, plen, "caller", 6)) &&
-      lkp(js, l, "__strict_args__", 15) != 0) {
+      vtype(get_slot(js, l, SLOT_STRICT_ARGS)) != T_UNDEF) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "'%.*s' not allowed on strict arguments", (int)plen, ptr);
   }
   
@@ -6429,7 +6429,7 @@ static void setup_arguments(struct js *js, jsval_t scope, jsval_t *args, int nar
   }
   setprop_interned(js, arguments_obj, INTERN_LENGTH, 6, tov((double) nargs));
   if (strict) {
-    setprop(js, arguments_obj, js_mkstr(js, "__strict_args__", 15), js_mktrue());
+    set_slot(js, arguments_obj, SLOT_STRICT_ARGS, tov(1));
   } else if (vtype(js->current_func) == T_FUNC) {
     setprop_interned(js, arguments_obj, INTERN_CALLEE, 6, js->current_func);
   }
