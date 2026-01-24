@@ -405,7 +405,6 @@ static jsval_t builtin_fs_readFileSync(struct js *js, jsval_t *args, int nargs) 
 
 static jsval_t builtin_fs_readBytesSync(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "readBytesSync() requires a path argument");
-  
   if (js_type(args[0]) != JS_STR) return js_mkerr(js, "readBytesSync() path must be a string");
   
   size_t path_len;
@@ -1012,15 +1011,17 @@ static jsval_t builtin_fs_statSync(struct js *js, jsval_t *args, int nargs) {
   
   struct stat st;
   int result = stat(path_cstr, &st);
-  free(path_cstr);
   
   if (result != 0) {
     const char *code = errno_to_code(errno);
-    jsval_t err = js_mkerr(js, "Failed to stat file: %s", strerror(errno));
+    jsval_t err = js_mkerr(js, "%s: %s, stat '%s'", code, strerror(errno), path_cstr);
     js_set(js, js->thrown_value, "code", js_mkstr(js, code, strlen(code)));
+    free(path_cstr);
+    
     return err;
   }
   
+  free(path_cstr);
   return create_stats_object(js, &st);
 }
 
@@ -1127,15 +1128,17 @@ static jsval_t builtin_fs_accessSync(struct js *js, jsval_t *args, int nargs) {
   if (!path_cstr) return js_mkerr(js, "Out of memory");
   
   int result = access(path_cstr, mode);
-  free(path_cstr);
   
   if (result != 0) {
     const char *code = errno_to_code(errno);
-    jsval_t err = js_mkerr(js, "Access denied: %s", strerror(errno));
+    jsval_t err = js_mkerr(js, "%s: %s, access '%s'", code, strerror(errno), path_cstr);
     js_set(js, js->thrown_value, "code", js_mkstr(js, code, strlen(code)));
+    free(path_cstr);
+    
     return err;
   }
   
+  free(path_cstr);
   return js_mkundef();
 }
 
