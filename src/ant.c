@@ -10468,7 +10468,7 @@ static inline bool expect(struct js *js, uint8_t tok, jsval_t *res) {
 
 static inline bool is_err2(jsval_t *v, jsval_t *res) {
   bool r = is_err(*v);
-  if (r) *res = *v; return r;
+  if (r) { *res = *v; } return r;
 }
 
 typedef struct {
@@ -10986,7 +10986,9 @@ static jsval_t js_for(struct js *js) {
     v = loop_block_exec(js, &loop_ctx);
     if (is_err2(&v, &res)) {
       loop_block_cleanup(js, &loop_ctx);
-      if (is_let_loop && let_var_len > 0) for_let_pop(js); delscope(js);
+      if (is_let_loop && let_var_len > 0) {
+        for_let_pop(js); delscope(js);
+      }
       goto done;
     }
     
