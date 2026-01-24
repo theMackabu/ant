@@ -133,7 +133,7 @@ static char *esm_get_cache_path(const char *url) {
   return cache_path;
 }
 
-static char *esm_read_cache(const char *cache_path, const char *url, size_t *out_len) {
+static char *esm_read_cache(const char *cache_path, size_t *out_len) {
   FILE *fp = fopen(cache_path, "rb");
   if (!fp) return NULL;
 
@@ -151,33 +151,8 @@ static char *esm_read_cache(const char *cache_path, const char *url, size_t *out
   fclose(fp);
   content[size] = '\0';
 
-  char *newline = strchr(content, '\n');
-  if (!newline) {
-    free(content);
-    return NULL;
-  }
-
-  size_t url_len = newline - content;
-  if (strncmp(content, url, url_len) != 0 || strlen(url) != url_len) {
-    free(content);
-    return NULL;
-  }
-
-  char *body = newline + 1;
-  size_t body_len = size - (body - content);
-
-  char *result = malloc(body_len + 1);
-  if (!result) {
-    free(content);
-    return NULL;
-  }
-
-  memcpy(result, body, body_len);
-  result[body_len] = '\0';
-  free(content);
-
-  if (out_len) *out_len = body_len;
-  return result;
+  if (out_len) *out_len = (size_t)size;
+  return content;
 }
 
 static void esm_mkdir_recursive(char *path) {
@@ -203,20 +178,35 @@ static void esm_write_cache(const char *cache_path, const char *url, const char 
   }
 
   esm_mkdir_recursive(dir);
-  free(dir);
 
   FILE *fp = fopen(cache_path, "wb");
-  if (!fp) return;
-
-  fprintf(fp, "%s\n", url);
+  if (!fp) { free(dir); return; }
   fwrite(content, 1, len, fp);
   fclose(fp);
+
+  size_t meta_len = strlen(dir) + 16;
+  char *meta_path = malloc(meta_len);
+  if (meta_path) {
+    snprintf(meta_path, meta_len, "%s/metadata.bin", dir);
+    FILE *mfp = fopen(meta_path, "ab");
+    if (mfp) {
+      uint64_t hash = hash_key(url, strlen(url));
+      uint16_t url_len = (uint16_t)strlen(url);
+      fwrite(&url_len, sizeof(url_len), 1, mfp);
+      fwrite(url, 1, url_len, mfp);
+      fwrite(&hash, sizeof(hash), 1, mfp);
+      fclose(mfp);
+    }
+    free(meta_path);
+  }
+
+  free(dir);
 }
 
 char *esm_fetch_url(const char *url, size_t *out_len, char **out_error) {
   char *cache_path = esm_get_cache_path(url);
   if (cache_path) {
-    char *cached = esm_read_cache(cache_path, url, out_len);
+    char *cached = esm_read_cache(cache_path, out_len);
     if (cached) { free(cache_path); return cached; }
   }
 
