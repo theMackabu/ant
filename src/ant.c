@@ -12284,8 +12284,12 @@ static void js_throw_handle(struct js *js, jsval_t *res) {
 
 static jsval_t find_var_scope(struct js *js) {
   jsval_t scope = js->scope;
+  
   jsval_t eval_marker = get_slot(js, scope, SLOT_STRICT_EVAL_SCOPE);
-  if (vtype(eval_marker) == T_BOOL) return scope;
+  if (vtype(eval_marker) != T_UNDEF) return scope;
+  
+  jsval_t module_marker = get_slot(js, scope, SLOT_MODULE_SCOPE);
+  if (vtype(module_marker) != T_UNDEF) return scope;
   
   if ((js->flags & F_CALL) && global_scope_stack && utarray_len(global_scope_stack) > 0) {
     jsoff_t *scope_off = (jsoff_t *)utarray_back(global_scope_stack);
@@ -12294,10 +12298,16 @@ static jsval_t find_var_scope(struct js *js) {
   
   while (vdata(upper(js, scope)) != 0) {
     jsval_t parent = upper(js, scope);
+    
     jsval_t parent_eval_marker = get_slot(js, parent, SLOT_STRICT_EVAL_SCOPE);
-    if (vtype(parent_eval_marker) == T_BOOL) return scope;
+    if (vtype(parent_eval_marker) != T_UNDEF) return scope;
+    
+    jsval_t parent_module_marker = get_slot(js, parent, SLOT_MODULE_SCOPE);
+    if (vtype(parent_module_marker) != T_UNDEF) return scope;
+    
     scope = parent;
   }
+  
   return scope;
 }
 
@@ -20370,7 +20380,7 @@ static jsval_t esm_load_module(struct js *js, esm_module_t *mod) {
   jsval_t saved_scope = js->scope;
   
   js_set_filename(js, mod->resolved_path);
-  mkscope(js);
+  mkscope(js); set_slot(js, js->scope, SLOT_MODULE_SCOPE, tov(1));
   
   jsval_t result = js_eval(js, js_code, js_len);
   free(content);
@@ -22943,7 +22953,7 @@ static jsval_t js_eval_inherit_strict(struct js *js, const char *buf, size_t len
   
   if (is_strict) {
     mkscope(js);
-    set_slot(js, js->scope, SLOT_STRICT_EVAL_SCOPE, js_mktrue());
+    set_slot(js, js->scope, SLOT_STRICT_EVAL_SCOPE, tov(1));
   }
   
   hoist_function_declarations(js);
