@@ -821,6 +821,7 @@ do_mkdir:
   if (!path_cstr) return js_mkerr(js, "Out of memory");
   
 #ifdef _WIN32
+  (void)mode;
   int result = _mkdir(path_cstr);
 #else
   int result = mkdir(path_cstr, mode);

@@ -124,6 +124,14 @@ typedef unsigned int useconds_t;
 typedef unsigned int uid_t;
 typedef unsigned int gid_t;
 
+#ifndef S_IFLNK
+#define S_IFLNK 0120000
+#endif
+
+#ifndef S_ISLNK
+#define S_ISLNK(m) (((m) & S_IFMT) == S_IFLNK)
+#endif
+
 #else
 #include <unistd.h>
 #include <libgen.h>

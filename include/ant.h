@@ -14,7 +14,7 @@
 #define STR_PROTO_LEN 9
 
 #define ANT_STRING(s)         js_mkstr(js, s, sizeof(s) - 1)
-#define ANT_PTR(ptr)          js_mknum((unsigned long)(ptr))
+#define ANT_PTR(ptr)          js_mknum((uintptr_t)(ptr))
 #define ANT_COPY(buf, len, s) cpy(buf, len, s, sizeof(s) - 1)
 
 struct js;
