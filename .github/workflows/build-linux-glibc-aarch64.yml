@@ -76,17 +76,13 @@ jobs:
             build/oxc-target
           key: cargo-linux-arm64-${{ hashFiles('src/strip/Cargo.lock') }}
           restore-keys: cargo-linux-arm64-
-      - name: Cache meson build
+      - name: Cache vendor dependencies
         uses: actions/cache@v4
         with:
           path: |
             vendor/*/
-            build/
-            !build/oxc-target
-            !build/meson
-            !build/liboxc.h
-          key: meson-linux-glibc-aarch64-${{ hashFiles('vendor/*.wrap', 'meson.build', 'meson/**/*.build', 'src/**/*.c', 'include/**/*.h') }}
-          restore-keys: meson-linux-glibc-aarch64-
+            build/vendor
+          key: vendor-linux-glibc-aarch64-${{ hashFiles('vendor/*.wrap') }}
       - run: |
           export PKG_CONFIG_PATH="$HOME/deps-cache/lib/pkgconfig:$PKG_CONFIG_PATH"
           export CMAKE_PREFIX_PATH="$HOME/deps-cache:$CMAKE_PREFIX_PATH"

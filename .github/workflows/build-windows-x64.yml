@@ -60,17 +60,13 @@ jobs:
           path: build/oxc-target
           key: oxc-windows-x64-${{ hashFiles('src/strip/Cargo.lock') }}
           restore-keys: oxc-windows-x64-
-      - name: Cache meson build
+      - name: Cache vendor dependencies
         uses: actions/cache@v4
         with:
           path: |
             vendor/*/
-            build/
-            !build/oxc-target
-            !build/meson
-            !build/liboxc.h
-          key: meson-windows-x64-${{ hashFiles('vendor/*.wrap', 'meson.build', 'meson/**/*.build', 'src/**/*.c', 'include/**/*.h') }}
-          restore-keys: meson-windows-x64-
+            build/vendor
+          key: vendor-windows-x64-${{ hashFiles('vendor/*.wrap') }}
       - run: |
           DEPS_CACHE=$(cygpath "${{ runner.temp }}/deps-cache")
           DEPS_CACHE_WIN=$(cygpath -m "${{ runner.temp }}/deps-cache")
