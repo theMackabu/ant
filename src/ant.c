@@ -2475,7 +2475,7 @@ static inline js_err_type_t get_error_type(struct js *js) {
   return (js_err_type_t)(int)js_getnum(err_type);
 }
 
-jsval_t js_mkerr_typed(struct js *js, js_err_type_t err_type, const char *xx, ...) {
+jsval_t js_create_error(struct js *js, js_err_type_t err_type, jsval_t props, const char *xx, ...) {
   va_list ap;
   int line = 0, col = 0;
   char error_line[256] = {0};
@@ -2507,6 +2507,7 @@ jsval_t js_mkerr_typed(struct js *js, js_err_type_t err_type, const char *xx, ..
   js_set(js, err_obj, "message", js_mkstr(js, error_msg, msg_len));
   set_slot(js, err_obj, SLOT_ERR_TYPE, js_mknum((double)err_type));
   
+  if (vtype(props) == T_OBJ) js_merge_obj(js, err_obj, props);
   jsval_t proto = js_get_ctor_proto(js, err_name, err_name_len);
   if (vtype(proto) == T_OBJ) js_set_proto(js, err_obj, proto);
   
@@ -22730,10 +22731,8 @@ void js_merge_obj(struct js *js, jsval_t dst, jsval_t src) {
     
     jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
     jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
-    jsoff_t klen = offtolen(loadoff(js, koff));
     
-    char *key = (char *) &js->mem[koff + sizeof(koff)];
-    setprop(js, dst, js_mkstr(js, key, klen), val);
+    setprop(js, dst, mkval(T_STR, koff), val);
     next = next_prop(header);
   }
 }

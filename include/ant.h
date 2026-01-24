@@ -47,7 +47,10 @@ typedef enum {
 #define JS_DESC_E (1 << 1)
 #define JS_DESC_C (1 << 2)
 
-#define js_mkerr(js, ...) js_mkerr_typed(js, JS_ERR_TYPE, __VA_ARGS__) 
+#define js_mkerr(js, ...) js_create_error(js, JS_ERR_TYPE, js_mkundef(), __VA_ARGS__)
+#define js_mkerr_typed(js, err_type, ...) js_create_error(js, err_type, js_mkundef(), __VA_ARGS__)
+#define js_mkerr_props(js, err_type, props, ...) js_create_error(js, err_type, props, __VA_ARGS__)
+jsval_t js_create_error(struct js *js, js_err_type_t err_type, jsval_t props, const char *fmt, ...);
 
 struct js *js_create(void *buf, size_t len);
 struct js *js_create_dynamic(size_t initial_size, size_t max_size);
@@ -96,7 +99,6 @@ jsval_t js_mkarr(struct js *);
 void js_arr_push(struct js *, jsval_t arr, jsval_t val);
 jsval_t js_mkstr(struct js *, const void *, size_t);
 jsval_t js_mksym(struct js *, const char *desc);
-jsval_t js_mkerr_typed(struct js *js, js_err_type_t err_type, const char *fmt, ...);
 jsval_t js_mkfun(jsval_t (*fn)(struct js *, jsval_t *, int));
 jsval_t js_heavy_mkfun(struct js *js, jsval_t (*fn)(struct js *, jsval_t *, int), jsval_t data);
 jsval_t js_mkprop_fast(struct js *js, jsval_t obj, const char *key, size_t len, jsval_t v);

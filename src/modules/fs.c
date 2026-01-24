@@ -17,6 +17,12 @@
 #include "modules/fs.h"
 #include "modules/symbol.h"
 
+#define fs_err_code(js, code, op, path) ({ \
+  jsval_t _props = js_mkobj(js); \
+  js_set(js, _props, "code", js_mkstr(js, code, strlen(code))); \
+  js_mkerr_props(js, JS_ERR_TYPE, _props, "%s: %s, %s '%s'", code, strerror(errno), op, path); \
+})
+
 typedef enum {
   FS_OP_READ,
   FS_OP_WRITE,
@@ -1014,11 +1020,8 @@ static jsval_t builtin_fs_statSync(struct js *js, jsval_t *args, int nargs) {
   
   if (result != 0) {
     const char *code = errno_to_code(errno);
-    jsval_t err = js_mkerr(js, "%s: %s, stat '%s'", code, strerror(errno), path_cstr);
-    js_set(js, js->thrown_value, "code", js_mkstr(js, code, strlen(code)));
-    free(path_cstr);
-    
-    return err;
+    jsval_t err = fs_err_code(js, code, "stat", path_cstr);
+    free(path_cstr); return err;
   }
   
   free(path_cstr);
@@ -1126,16 +1129,12 @@ static jsval_t builtin_fs_accessSync(struct js *js, jsval_t *args, int nargs) {
   
   char *path_cstr = strndup(path, path_len);
   if (!path_cstr) return js_mkerr(js, "Out of memory");
-  
   int result = access(path_cstr, mode);
   
   if (result != 0) {
     const char *code = errno_to_code(errno);
-    jsval_t err = js_mkerr(js, "%s: %s, access '%s'", code, strerror(errno), path_cstr);
-    js_set(js, js->thrown_value, "code", js_mkstr(js, code, strlen(code)));
-    free(path_cstr);
-    
-    return err;
+    jsval_t err = fs_err_code(js, code, "access", path_cstr);
+    free(path_cstr); return err;
   }
   
   free(path_cstr);
