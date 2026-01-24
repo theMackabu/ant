@@ -2377,7 +2377,7 @@ static void get_error_line(const char *code, jsoff_t clen, jsoff_t pos, char *bu
   }
   
   jsoff_t line_len = line_end - line_start;
-  if (line_len >= bufsize) line_len = bufsize - 1;
+  if (line_len >= bufsize) line_len = (jsoff_t)(bufsize - 1);
   
   memcpy(buf, &code[line_start], line_len);
   buf[line_len] = '\0';
@@ -2496,7 +2496,10 @@ jsval_t js_create_error(struct js *js, js_err_type_t err_type, jsval_t props, co
   get_error_line(js->code, js->clen, js->toff > 0 ? js->toff : js->pos, error_line, sizeof(error_line), &error_col);
   
   va_start(ap, xx);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
   vsnprintf(error_msg, sizeof(error_msg), xx, ap);
+#pragma GCC diagnostic pop
   va_end(ap);
   
   const char *err_name = get_error_type_name(err_type);
@@ -3156,7 +3159,7 @@ static jsval_t builtin_bigint_toString(struct js *js, jsval_t *args, int nargs) 
     int remainder = 0;
     for (size_t i = 0; i < numlen; i++) {
       int d = remainder * 10 + (num[i] - '0');
-      num[i] = '0' + (d / radix);
+      num[i] = (char)('0' + (d / radix));
       remainder = d % radix;
     }
     size_t start = 0;
@@ -3176,7 +3179,7 @@ static jsval_t builtin_bigint_toString(struct js *js, jsval_t *args, int nargs) 
       result_cap = new_cap;
     }
     rpos--;
-    result[rpos] = remainder < 10 ? '0' + remainder : 'a' + (remainder - 10);
+    result[rpos] = (char)(remainder < 10 ? '0' + remainder : 'a' + (remainder - 10));
   }
   
   ANT_GC_FREE(num);
@@ -3453,7 +3456,7 @@ static double js_to_number(struct js *js, jsval_t arg) {
   if (vtype(arg) == T_NUM) return tod(arg);
   if (vtype(arg) == T_BOOL) return vdata(arg) ? 1.0 : 0.0;
   if (vtype(arg) == T_NULL) return 0.0;
-  if (vtype(arg) == T_UNDEF) return NAN;
+  if (vtype(arg) == T_UNDEF) return JS_NAN;
   
   if (vtype(arg) == T_STR) {
     jsoff_t len, off = vstr(js, arg, &len);
@@ -3462,7 +3465,7 @@ static double js_to_number(struct js *js, jsval_t arg) {
     if (!*s) return 0.0;
     double val = strtod(s, (char **)&end);
     while (*end == ' ' || *end == '\t' || *end == '\n' || *end == '\r') end++;
-    return (end == s || *end) ? NAN : val;
+    return (end == s || *end) ? JS_NAN : val;
   }
   
   if (vtype(arg) == T_OBJ || vtype(arg) == T_ARR) {
@@ -3473,11 +3476,11 @@ static double js_to_number(struct js *js, jsval_t arg) {
     }
     
     jsval_t str_val = js_tostring_val(js, arg);
-    if (is_err(str_val) || vtype(str_val) != T_STR) return NAN;
+    if (is_err(str_val) || vtype(str_val) != T_STR) return JS_NAN;
     return js_to_number(js, str_val);
   }
   
-  return NAN;
+  return JS_NAN;
 }
 
 static jsval_t setup_func_prototype(struct js *js, jsval_t func) {
@@ -3646,28 +3649,28 @@ create_new:
   unsigned long idx = 0;
   
   if (vtype(obj) == T_ARR && klen > 0 && key[0] >= '0' && key[0] <= '9') {
-    char *endptr;
-    idx = strtoul(key, &endptr, 10);
-    if (endptr == key + klen) {
-      jsoff_t len_off = lkp_interned(js, obj, INTERN_LENGTH, 6);
-      jsoff_t cur_len = 0;
-      if (len_off != 0) {
-        jsval_t len_val = resolveprop(js, mkval(T_PROP, len_off));
-        if (vtype(len_val) == T_NUM) cur_len = (jsoff_t) tod(len_val);
+    char *inner_endptr;
+    idx = strtoul(key, &inner_endptr, 10);
+    if (inner_endptr == key + klen) {
+      jsoff_t inner_len_off = lkp_interned(js, obj, INTERN_LENGTH, 6);
+      jsoff_t inner_cur_len = 0;
+      if (inner_len_off != 0) {
+        jsval_t len_val = resolveprop(js, mkval(T_PROP, inner_len_off));
+        if (vtype(len_val) == T_NUM) inner_cur_len = (jsoff_t) tod(len_val);
       }
-      if (idx >= cur_len) need_length_update = 1;
+      if (idx >= inner_cur_len) need_length_update = 1;
     }
   }
   
   jsval_t result = mkprop(js, obj, k, v, 0);
   
   if (need_length_update) {
-    jsoff_t len_off = lkp_interned(js, obj, INTERN_LENGTH, 6);
-    jsval_t len_key = js_mkstr(js, "length", 6);
-    jsval_t new_len = tov((double)(idx + 1));
-    if (len_off != 0) {
-      saveval(js, len_off + sizeof(jsoff_t) * 2, new_len);
-    } else mkprop(js, obj, len_key, new_len, 0);
+    jsoff_t inner_len_off = lkp_interned(js, obj, INTERN_LENGTH, 6);
+    jsval_t inner_len_key = js_mkstr(js, "length", 6);
+    jsval_t inner_new_len = tov((double)(idx + 1));
+    if (inner_len_off != 0) {
+      saveval(js, inner_len_off + sizeof(jsoff_t) * 2, inner_new_len);
+    } else mkprop(js, obj, inner_len_key, inner_new_len, 0);
   }
   
   return result;
@@ -3838,7 +3841,7 @@ LSL:
 
 LH: {
   bool lt;
-  int u = is_unicode_space((const unsigned char *)p, end - p, &lt);
+  int u = is_unicode_space((const unsigned char *)p, (jsoff_t)(end - p), &lt);
   if (u > 0) {
     if (lt) saw_nl = true;
     p += u;
@@ -3850,7 +3853,7 @@ LH: {
 
 L0:
   if (nl) *nl = saw_nl;
-  return p - code;
+  return (jsoff_t)(p - code);
 }
 
 #define K(s, t) if (len == sizeof(s)-1 && !memcmp(buf, s, sizeof(s)-1)) return t
@@ -4141,8 +4144,8 @@ static bool code_has_function_decl(const char *code, size_t len) {
     }
     
     if (depth == target_depth) {
-      if (c == 'f' && is_function_keyword(code, pos, len)) return true;
-      if (c == 'a' && is_async_function(code, pos, len)) return true;
+      if (c == 'f' && is_function_keyword(code, (jsoff_t)pos, (jsoff_t)len)) return true;
+      if (c == 'a' && is_async_function(code, (jsoff_t)pos, (jsoff_t)len)) return true;
     }
     
     pos++;
@@ -4226,7 +4229,7 @@ static size_t decode_ident_escapes(const char *src, size_t srclen, char *dst, si
   size_t si = 0, di = 0;
   while (si < srclen && di + 4 < dstlen) {
     uint32_t cp;
-    int el = parse_unicode_escape(src, srclen, si, &cp);
+    int el = parse_unicode_escape(src, (jsoff_t)srclen, (jsoff_t)si, &cp);
     if (el > 0) {
       di += encode_utf8(cp, dst + di);
       si += el;
@@ -4485,13 +4488,13 @@ static inline uint8_t scan_string(struct js *js, const char *buf, jsoff_t rem, c
     }
 
     if (b == NULL || q < b) {
-      i = (q - buf) + 1;
+      i = (jsoff_t)((q - buf) + 1);
       js->tok = TOK_STRING;
       js->tlen = i;
       return TOK_STRING;
     }
 
-    jsoff_t esc_pos = b - buf;
+    jsoff_t esc_pos = (jsoff_t)(b - buf);
     if (esc_pos + 1 >= rem) {
       js->tok = TOK_ERR;
       js->tlen = rem;
@@ -4541,13 +4544,13 @@ static inline uint8_t scan_template(struct js *js, const char *buf, jsoff_t rem)
     }
 
     if (b == NULL || q < b) {
-      i = (q - buf) + 1;
+      i = (jsoff_t)((q - buf) + 1);
       js->tok = TOK_TEMPLATE;
       js->tlen = i;
       return TOK_TEMPLATE;
     }
 
-    jsoff_t esc_pos = b - buf;
+    jsoff_t esc_pos = (jsoff_t)(b - buf);
     i = esc_pos + 2;
     if (i > rem) {
       js->tok = TOK_ERR;
@@ -5326,9 +5329,9 @@ jsval_t js_get_ctor_proto(struct js *js, const char *name, size_t len) {
   jsoff_t ctor_off = lkp_scope(js, js->scope, name, len);
   
   if (ctor_off == 0 && global_scope_stack) {
-    int stack_len = utarray_len(global_scope_stack);
-    for (int i = stack_len - 1; i >= 0 && ctor_off == 0; i--) {
-      jsoff_t *scope_off = (jsoff_t *)utarray_eltptr(global_scope_stack, i);
+    unsigned int stack_len = utarray_len(global_scope_stack);
+    for (int i = (int)stack_len - 1; i >= 0 && ctor_off == 0; i--) {
+      jsoff_t *scope_off = (jsoff_t *)utarray_eltptr(global_scope_stack, (unsigned int)i);
       jsval_t scope = mkval(T_OBJ, *scope_off);
       ctor_off = lkp_scope(js, scope, name, len);
     }
@@ -5486,13 +5489,13 @@ static jsval_t lookup(struct js *js, const char *buf, size_t len) {
       return mkval(T_PROP, off);
     }
     
-    jsval_t with_slot = get_slot(js, scope, SLOT_WITH);
-    if (vtype(with_slot) != T_UNDEF) {
+    jsval_t scope_with_slot = get_slot(js, scope, SLOT_WITH);
+    if (vtype(scope_with_slot) != T_UNDEF) {
       jsval_t with_obj = (
-        vtype(with_slot) == T_OBJ ||
-        vtype(with_slot) == T_ARR || 
-        vtype(with_slot) == T_FUNC) ? 
-        with_slot : mkval(T_OBJ, vdata(with_slot)
+        vtype(scope_with_slot) == T_OBJ ||
+        vtype(scope_with_slot) == T_ARR || 
+        vtype(scope_with_slot) == T_FUNC) ? 
+        scope_with_slot : mkval(T_OBJ, vdata(scope_with_slot)
       );
       
       jsoff_t prop_off = lkp_interned(js, with_obj, key_intern, key_len);
@@ -5511,8 +5514,8 @@ static jsval_t lookup(struct js *js, const char *buf, size_t len) {
     jsoff_t *root_off = (jsoff_t *)utarray_eltptr(global_scope_stack, 0);
     if (root_off && *root_off != 0) {
       jsval_t root_scope = mkval(T_OBJ, *root_off);
-      jsoff_t off = lkp(js, root_scope, key_str, key_len);
-      if (off != 0) return mkval(T_PROP, off);
+      jsoff_t root_lkp_off = lkp(js, root_scope, key_str, key_len);
+      if (root_lkp_off != 0) return mkval(T_PROP, root_lkp_off);
     }
   }
   
@@ -5839,7 +5842,7 @@ static jsval_t do_bracket_op(struct js *js, jsval_t l, jsval_t r) {
     }
   }
   if (vtype(obj) == T_STR) {
-    double idx_d = NAN;
+    double idx_d = JS_NAN;
     if (vtype(key_val) == T_NUM) {
       idx_d = tod(key_val);
     } else {
@@ -5849,7 +5852,7 @@ static jsval_t do_bracket_op(struct js *js, jsval_t l, jsval_t r) {
       memcpy(temp, keystr, copy_len);
       temp[copy_len] = '\0';
       idx_d = strtod(temp, &endptr);
-      if (endptr == temp || *endptr != '\0') idx_d = NAN;
+      if (endptr == temp || *endptr != '\0') idx_d = JS_NAN;
     }
     if (!isnan(idx_d) && idx_d >= 0 && idx_d == (double)(long)idx_d) {
       jsoff_t idx = (jsoff_t) idx_d;
@@ -6524,7 +6527,7 @@ static jsval_t call_js_internal(
   
   int argi = 0;
   for (int i = 0; i < pf->param_count; i++) {
-    parsed_param_t *pp = (parsed_param_t *)utarray_eltptr(pf->params, i);
+    parsed_param_t *pp = (parsed_param_t *)utarray_eltptr(pf->params, (unsigned int)i);
     
     if (pp->is_destruct) {
       jsval_t arg_val = (argi < argc) ? args[argi++] : js_mkundef();
@@ -6837,7 +6840,7 @@ static jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnl
   if (fnpos < fnlen && fn[fnpos] == ')') fnpos++;
   fnpos = skiptonext(fn, fnlen, fnpos, NULL);
   if (fnpos < fnlen && fn[fnpos] == '{') fnpos++;
-  size_t body_len = fnlen - fnpos - 1;
+  jsoff_t body_len = fnlen - fnpos - 1;
   
   bool func_strict = is_strict_function_body(&fn[fnpos], body_len);
   if (code_uses_arguments(&fn[fnpos], body_len)) {
@@ -6985,7 +6988,7 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
       }
     } else {
       jsval_t builtin_slot = get_slot(js, func_obj, SLOT_BUILTIN);
-      if (vtype(builtin_slot) == T_NUM && tod(builtin_slot) == BUILTIN_OBJECT) res = call_c(js, builtin_Object); else {
+      if (vtype(builtin_slot) == T_NUM && (int)tod(builtin_slot) == BUILTIN_OBJECT) res = call_c(js, builtin_Object); else {
       jsoff_t fnlen;
       
       const char *code_str = get_func_code(js, func_obj, &fnlen);
@@ -7205,8 +7208,8 @@ static jsval_t js_call_toString(struct js *js, jsval_t value) {
   js->this_val = saved_this;
   if (vtype(result) == T_STR) return result;
   
-  uint8_t rt = vtype(result);
-  if (rt != T_OBJ && rt != T_ARR && rt != T_FUNC) {
+  uint8_t rtype = vtype(result);
+  if (rtype != T_OBJ && rtype != T_ARR && rtype != T_FUNC) {
     char buf[256];
     size_t len = tostr(js, result, buf, sizeof(buf));
     return js_mkstr(js, buf, len);
@@ -7357,16 +7360,16 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
   L_TOK_EQ:
   L_TOK_NE: {
     bool eq = false;
-    uint8_t lt = vtype(l), rt = vtype(r);
+    uint8_t lt = vtype(l), rtype = vtype(r);
 
-    if ((lt == T_NULL && rt == T_NULL) || (lt == T_UNDEF && rt == T_UNDEF) ||
-        (lt == T_UNDEF && rt == T_NULL) || (lt == T_NULL && rt == T_UNDEF)) {
+    if ((lt == T_NULL && rtype == T_NULL) || (lt == T_UNDEF && rtype == T_UNDEF) ||
+        (lt == T_UNDEF && rtype == T_NULL) || (lt == T_NULL && rtype == T_UNDEF)) {
       eq = true;
-    } else if (lt == T_NULL || rt == T_NULL || lt == T_UNDEF || rt == T_UNDEF) {
+    } else if (lt == T_NULL || rtype == T_NULL || lt == T_UNDEF || rtype == T_UNDEF) {
       eq = false;
-    } else if (lt == rt) {
+    } else if (lt == rtype) {
       eq = strict_eq_values(js, l, r);
-    } else if ((lt == T_BIGINT && rt == T_NUM) || (lt == T_NUM && rt == T_BIGINT)) {
+    } else if ((lt == T_BIGINT && rtype == T_NUM) || (lt == T_NUM && rtype == T_BIGINT)) {
       double num_val = lt == T_NUM ? tod(l) : tod(r);
       jsval_t bigint_val = lt == T_BIGINT ? l : r;
       if (isfinite(num_val) && num_val == trunc(num_val)) {
@@ -7378,14 +7381,14 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
       }
     } else if (lt == T_BOOL) {
       return do_op(js, op, tov(vdata(l) ? 1.0 : 0.0), r);
-    } else if (rt == T_BOOL) {
+    } else if (rtype == T_BOOL) {
       return do_op(js, op, l, tov(vdata(r) ? 1.0 : 0.0));
-    } else if ((lt == T_NUM && rt == T_STR) || (lt == T_STR && rt == T_NUM)) {
+    } else if ((lt == T_NUM && rtype == T_STR) || (lt == T_STR && rtype == T_NUM)) {
       eq = js_to_number(js, l) == js_to_number(js, r);
     } else if (lt == T_ARR || lt == T_OBJ) {
       jsval_t l_prim = js_tostring_val(js, l);
       if (!is_err(l_prim)) return do_op(js, op, l_prim, r);
-    } else if (rt == T_ARR || rt == T_OBJ) {
+    } else if (rtype == T_ARR || rtype == T_OBJ) {
       jsval_t r_prim = js_tostring_val(js, r);
       if (!is_err(r_prim)) return do_op(js, op, l, r_prim);
     }
@@ -7413,8 +7416,8 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
   L_TOK_DIV:
   L_TOK_REM:
   L_TOK_EXP: {
-    uint8_t lt = vtype(l), rt = vtype(r);
-    if (lt == T_NUM && rt == T_NUM) {
+    uint8_t lt = vtype(l), rtype = vtype(r);
+    if (lt == T_NUM && rtype == T_NUM) {
       double a = tod(l), b = tod(r);
       switch (op) {
         case TOK_MINUS: return tov(a - b);
@@ -7424,7 +7427,7 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
         case TOK_EXP:   return tov(pow(a, b));
       }
     }
-    if (lt == T_BIGINT && rt == T_BIGINT) {
+    if (lt == T_BIGINT && rtype == T_BIGINT) {
       switch (op) {
         case TOK_MINUS: return bigint_sub(js, l, r);
         case TOK_MUL:   return bigint_mul(js, l, r);
@@ -7433,7 +7436,7 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
         case TOK_EXP:   return bigint_exp(js, l, r);
       }
     }
-    if (lt == T_BIGINT || rt == T_BIGINT)
+    if (lt == T_BIGINT || rtype == T_BIGINT)
       return js_mkerr(js, "Cannot mix BigInt value and other types");
     double a = js_to_number(js, l), b = js_to_number(js, r);
     switch (op) {
@@ -7449,8 +7452,8 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
   L_TOK_LE:
   L_TOK_GT:
   L_TOK_GE: {
-    uint8_t lt = vtype(l), rt = vtype(r);
-    if (lt == T_NUM && rt == T_NUM) {
+    uint8_t lt = vtype(l), rtype = vtype(r);
+    if (lt == T_NUM && rtype == T_NUM) {
       double a = tod(l), b = tod(r);
       switch (op) {
         case TOK_LT: return mkval(T_BOOL, a < b);
@@ -7459,7 +7462,7 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
         case TOK_GE: return mkval(T_BOOL, a >= b);
       }
     }
-    if (lt == T_BIGINT && rt == T_BIGINT) {
+    if (lt == T_BIGINT && rtype == T_BIGINT) {
       int cmp = bigint_compare(js, l, r);
       switch (op) {
         case TOK_LT: return mkval(T_BOOL, cmp < 0);
@@ -7468,9 +7471,9 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
         case TOK_GE: return mkval(T_BOOL, cmp >= 0);
       }
     }
-    if (lt == T_BIGINT || rt == T_BIGINT)
+    if (lt == T_BIGINT || rtype == T_BIGINT)
       return js_mkerr(js, "Cannot mix BigInt value and other types");
-    if (lt == T_STR && rt == T_STR)
+    if (lt == T_STR && rtype == T_STR)
       return do_string_op(js, op, l, r);
     double a = js_to_number(js, l), b = js_to_number(js, r);
     switch (op) {
@@ -7487,11 +7490,11 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
   L_TOK_SHL:
   L_TOK_SHR:
   L_TOK_ZSHR: {
-    uint8_t lt = vtype(l), rt = vtype(r);
-    if (lt == T_BIGINT || rt == T_BIGINT)
+    uint8_t lt = vtype(l), rtype = vtype(r);
+    if (lt == T_BIGINT || rtype == T_BIGINT)
       return js_mkerr(js, "Cannot mix BigInt value and other types");
     int32_t ai = (lt == T_NUM) ? js_to_int32(tod(l)) : js_to_int32(js_to_number(js, l));
-    uint32_t bi = (rt == T_NUM) ? js_to_uint32(tod(r)) : js_to_uint32(js_to_number(js, r));
+    uint32_t bi = (rtype == T_NUM) ? js_to_uint32(tod(r)) : js_to_uint32(js_to_number(js, r));
     switch (op) {
       case TOK_XOR:  return tov((double)(ai ^ (int32_t)bi));
       case TOK_AND:  return tov((double)(ai & (int32_t)bi));
@@ -7566,7 +7569,7 @@ static jsval_t js_template_literal(struct js *js) {
       
       if (brace_count != 0) return js_mkerr_typed(js, JS_ERR_SYNTAX, "unclosed ${");
       
-      jsval_t expr_result = js_eval_str(js, (const char *)&in[expr_start], n - expr_start);
+      jsval_t expr_result = js_eval_str(js, (const char *)&in[expr_start], (jsoff_t)(n - expr_start));
       if (is_err(expr_result)) return expr_result;
       expr_result = resolveprop(js, expr_result);
 
@@ -7663,7 +7666,7 @@ static jsval_t js_tagged_template(struct js *js, jsval_t tag_func) {
     }
     if (brace_count != 0) return js_mkerr_typed(js, JS_ERR_SYNTAX, "unclosed ${");
     
-    jsval_t expr_result = js_eval_str(js, (const char *)&in[expr_start], n - expr_start);
+    jsval_t expr_result = js_eval_str(js, (const char *)&in[expr_start], (jsoff_t)(n - expr_start));
     if (is_err(expr_result)) return expr_result;
     expr_result = resolveprop(js, expr_result);
     values[value_count++] = expr_result;
@@ -8715,7 +8718,7 @@ static jsval_t js_literal(struct js *js) {
           if (vtype(idx) == T_STR) {
             prop_len = 0; prop = (const char *)&js->mem[vstr(js, idx, &prop_len)];
           } else {
-            char buf[32]; prop_len = tostr(js, idx, buf, sizeof(buf));
+            char buf[32]; prop_len = (jsoff_t)tostr(js, idx, buf, sizeof(buf));
             prop = buf;
           }
         }
@@ -9852,23 +9855,23 @@ static jsval_t js_decl(struct js *js, bool is_const) {
           if (next(js) == TOK_LBRACE) {
             is_nested_obj = true;
             nested_pattern_start = js->toff;
-            int depth = 1;
+            int inner_depth = 1;
             js->consumed = 1;
-            while (depth > 0 && next(js) != TOK_EOF) {
-              if (js->tok == TOK_LBRACE) depth++;
-              else if (js->tok == TOK_RBRACE) depth--;
-              if (depth > 0) js->consumed = 1;
+            while (inner_depth > 0 && next(js) != TOK_EOF) {
+              if (js->tok == TOK_LBRACE) inner_depth++;
+              else if (js->tok == TOK_RBRACE) inner_depth--;
+              if (inner_depth > 0) js->consumed = 1;
             }
             js->consumed = 1;
           } else if (next(js) == TOK_LBRACKET) {
             is_nested_arr = true;
             nested_pattern_start = js->toff;
-            int depth = 1;
+            int inner_depth = 1;
             js->consumed = 1;
-            while (depth > 0 && next(js) != TOK_EOF) {
-              if (js->tok == TOK_LBRACKET) depth++;
-              else if (js->tok == TOK_RBRACKET) depth--;
-              if (depth > 0) js->consumed = 1;
+            while (inner_depth > 0 && next(js) != TOK_EOF) {
+              if (js->tok == TOK_LBRACKET) inner_depth++;
+              else if (js->tok == TOK_RBRACKET) inner_depth--;
+              if (inner_depth > 0) js->consumed = 1;
             }
             js->consumed = 1;
           } else {
@@ -11472,9 +11475,9 @@ static jsval_t js_try(struct js *js) {
 
 static bool label_exists(const char *name, jsoff_t len, bool check_loop) {
   if (!label_stack) return false;
-  int depth = utarray_len(label_stack);
-  for (int i = depth - 1; i >= 0; i--) {
-    label_entry_t *entry = (label_entry_t *)utarray_eltptr(label_stack, i);
+  unsigned int depth = utarray_len(label_stack);
+  for (int i = (int)depth - 1; i >= 0; i--) {
+    label_entry_t *entry = (label_entry_t *)utarray_eltptr(label_stack, (unsigned int)i);
     if (entry && entry->name_len == len && 
         memcmp(entry->name, name, len) == 0) {
       if (check_loop && !entry->is_loop) {
@@ -11491,7 +11494,7 @@ static bool is_this_loop_continue_target(int marker_index) {
   if (!label_stack || !continue_target_label) return false;
   if (marker_index <= 0) return false;
   
-  label_entry_t *entry = (label_entry_t *)utarray_eltptr(label_stack, marker_index - 1);
+  label_entry_t *entry = (label_entry_t *)utarray_eltptr(label_stack, (unsigned int)(marker_index - 1));
   if (!entry) return false;
   if (entry->name == NULL) return false;
   if (!entry->is_loop) return false;
@@ -11534,9 +11537,9 @@ static jsval_t js_break(struct js *js) {
   if (!(js->flags & (F_LOOP | F_SWITCH))) {
     bool in_labeled_block = false;
     if (label_stack) {
-      int depth = utarray_len(label_stack);
-      for (int i = depth - 1; i >= 0; i--) {
-        label_entry_t *entry = (label_entry_t *)utarray_eltptr(label_stack, i);
+      unsigned int depth = utarray_len(label_stack);
+      for (int i = (int)depth - 1; i >= 0; i--) {
+        label_entry_t *entry = (label_entry_t *)utarray_eltptr(label_stack, (unsigned int)i);
         if (entry && entry->is_block) {
           in_labeled_block = true;
           break;
@@ -12259,8 +12262,8 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
         set_slot(js, method_obj, SLOT_SCOPE, func_scope);
         if (super_len > 0) set_slot(js, method_obj, SLOT_SUPER, super_constructor);
         
-        jsval_t func_proto = get_slot(js, js_glob(js), SLOT_FUNC_PROTO);
-        if (vtype(func_proto) == T_FUNC) set_proto(js, method_obj, func_proto);
+        jsval_t method_func_proto = get_slot(js, js_glob(js), SLOT_FUNC_PROTO);
+        if (vtype(method_func_proto) == T_FUNC) set_proto(js, method_obj, method_func_proto);
         
         jsval_t method_func = mkval(T_FUNC, (unsigned long) vdata(method_obj));
         jsval_t set_res = setprop(js, func_obj, member_name, method_func);
@@ -13665,7 +13668,7 @@ static jsval_t builtin_Date_now(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t builtin_Date_UTC(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1) return tov(NAN);
+  if (nargs < 1) return tov(JS_NAN);
   
   int year = (int)tod(args[0]);
   int month = nargs >= 2 ? (int)tod(args[1]) : 0;
@@ -13691,7 +13694,7 @@ static jsval_t builtin_Date_UTC(struct js *js, jsval_t *args, int nargs) {
 
 static double date_get_time(struct js *js, jsval_t this_val) {
   jsval_t time_val = js_get_slot(js, this_val, SLOT_DATA);
-  if (vtype(time_val) != T_NUM) return NAN;
+  if (vtype(time_val) != T_NUM) return JS_NAN;
   return tod(time_val);
 }
 
@@ -13705,7 +13708,7 @@ static jsval_t builtin_Date_getFullYear(struct js *js, jsval_t *args, int nargs)
   (void) args;
   (void) nargs;
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(NAN);
+  if (isnan(ms)) return tov(JS_NAN);
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = localtime(&t);
   return tov((double)(tm->tm_year + 1900));
@@ -13715,7 +13718,7 @@ static jsval_t builtin_Date_getMonth(struct js *js, jsval_t *args, int nargs) {
   (void) args;
   (void) nargs;
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(NAN);
+  if (isnan(ms)) return tov(JS_NAN);
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = localtime(&t);
   return tov((double)tm->tm_mon);
@@ -13725,7 +13728,7 @@ static jsval_t builtin_Date_getDate(struct js *js, jsval_t *args, int nargs) {
   (void) args;
   (void) nargs;
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(NAN);
+  if (isnan(ms)) return tov(JS_NAN);
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = localtime(&t);
   return tov((double)tm->tm_mday);
@@ -13735,7 +13738,7 @@ static jsval_t builtin_Date_getHours(struct js *js, jsval_t *args, int nargs) {
   (void) args;
   (void) nargs;
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(NAN);
+  if (isnan(ms)) return tov(JS_NAN);
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = localtime(&t);
   return tov((double)tm->tm_hour);
@@ -13745,7 +13748,7 @@ static jsval_t builtin_Date_getMinutes(struct js *js, jsval_t *args, int nargs) 
   (void) args;
   (void) nargs;
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(NAN);
+  if (isnan(ms)) return tov(JS_NAN);
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = localtime(&t);
   return tov((double)tm->tm_min);
@@ -13755,7 +13758,7 @@ static jsval_t builtin_Date_getSeconds(struct js *js, jsval_t *args, int nargs) 
   (void) args;
   (void) nargs;
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(NAN);
+  if (isnan(ms)) return tov(JS_NAN);
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = localtime(&t);
   return tov((double)tm->tm_sec);
@@ -13765,7 +13768,7 @@ static jsval_t builtin_Date_getMilliseconds(struct js *js, jsval_t *args, int na
   (void) args;
   (void) nargs;
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(NAN);
+  if (isnan(ms)) return tov(JS_NAN);
   return tov(fmod(ms, 1000.0));
 }
 
@@ -13773,7 +13776,7 @@ static jsval_t builtin_Date_getDay(struct js *js, jsval_t *args, int nargs) {
   (void) args;
   (void) nargs;
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(NAN);
+  if (isnan(ms)) return tov(JS_NAN);
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = localtime(&t);
   return tov((double)tm->tm_wday);
@@ -13817,7 +13820,7 @@ static jsval_t builtin_Date_getTimezoneOffset(struct js *js, jsval_t *args, int 
   (void) args;
   (void) nargs;
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(NAN);
+  if (isnan(ms)) return tov(JS_NAN);
   time_t t = (time_t)(ms / 1000.0);
   struct tm *local = localtime(&t);
   struct tm *utc = gmtime(&t);
@@ -13832,7 +13835,7 @@ static jsval_t builtin_Date_getUTCFullYear(struct js *js, jsval_t *args, int nar
   (void) args;
   (void) nargs;
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(NAN);
+  if (isnan(ms)) return tov(JS_NAN);
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = gmtime(&t);
   return tov((double)(tm->tm_year + 1900));
@@ -13842,7 +13845,7 @@ static jsval_t builtin_Date_getUTCMonth(struct js *js, jsval_t *args, int nargs)
   (void) args;
   (void) nargs;
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(NAN);
+  if (isnan(ms)) return tov(JS_NAN);
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = gmtime(&t);
   return tov((double)tm->tm_mon);
@@ -13852,7 +13855,7 @@ static jsval_t builtin_Date_getUTCDate(struct js *js, jsval_t *args, int nargs) 
   (void) args;
   (void) nargs;
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(NAN);
+  if (isnan(ms)) return tov(JS_NAN);
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = gmtime(&t);
   return tov((double)tm->tm_mday);
@@ -13862,7 +13865,7 @@ static jsval_t builtin_Date_getUTCHours(struct js *js, jsval_t *args, int nargs)
   (void) args;
   (void) nargs;
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(NAN);
+  if (isnan(ms)) return tov(JS_NAN);
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = gmtime(&t);
   return tov((double)tm->tm_hour);
@@ -13872,7 +13875,7 @@ static jsval_t builtin_Date_getUTCMinutes(struct js *js, jsval_t *args, int narg
   (void) args;
   (void) nargs;
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(NAN);
+  if (isnan(ms)) return tov(JS_NAN);
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = gmtime(&t);
   return tov((double)tm->tm_min);
@@ -13882,7 +13885,7 @@ static jsval_t builtin_Date_getUTCSeconds(struct js *js, jsval_t *args, int narg
   (void) args;
   (void) nargs;
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(NAN);
+  if (isnan(ms)) return tov(JS_NAN);
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = gmtime(&t);
   return tov((double)tm->tm_sec);
@@ -13892,7 +13895,7 @@ static jsval_t builtin_Date_getUTCMilliseconds(struct js *js, jsval_t *args, int
   (void) args;
   (void) nargs;
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(NAN);
+  if (isnan(ms)) return tov(JS_NAN);
   return tov(fmod(ms, 1000.0));
 }
 
@@ -13900,7 +13903,7 @@ static jsval_t builtin_Date_getUTCDay(struct js *js, jsval_t *args, int nargs) {
   (void) args;
   (void) nargs;
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(NAN);
+  if (isnan(ms)) return tov(JS_NAN);
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = gmtime(&t);
   return tov((double)tm->tm_wday);
@@ -13912,16 +13915,16 @@ static void date_set_time(struct js *js, jsval_t date, double ms) {
 }
 
 static jsval_t builtin_Date_setTime(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return tov(NAN);
+  if (nargs < 1) return tov(JS_NAN);
   double ms = tod(args[0]);
   date_set_time(js, js->this_val, ms);
   return tov(ms);
 }
 
 static jsval_t builtin_Date_setMilliseconds(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return tov(NAN);
+  if (nargs < 1) return tov(JS_NAN);
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(NAN);
+  if (isnan(ms)) return tov(JS_NAN);
   double newMs = tod(args[0]);
   ms = floor(ms / 1000.0) * 1000.0 + newMs;
   date_set_time(js, js->this_val, ms);
@@ -13929,9 +13932,9 @@ static jsval_t builtin_Date_setMilliseconds(struct js *js, jsval_t *args, int na
 }
 
 static jsval_t builtin_Date_setSeconds(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return tov(NAN);
+  if (nargs < 1) return tov(JS_NAN);
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(NAN);
+  if (isnan(ms)) return tov(JS_NAN);
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = localtime(&t);
   tm->tm_sec = (int)tod(args[0]);
@@ -13944,9 +13947,9 @@ static jsval_t builtin_Date_setSeconds(struct js *js, jsval_t *args, int nargs) 
 }
 
 static jsval_t builtin_Date_setMinutes(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return tov(NAN);
+  if (nargs < 1) return tov(JS_NAN);
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(NAN);
+  if (isnan(ms)) return tov(JS_NAN);
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = localtime(&t);
   tm->tm_min = (int)tod(args[0]);
@@ -13958,9 +13961,9 @@ static jsval_t builtin_Date_setMinutes(struct js *js, jsval_t *args, int nargs) 
 }
 
 static jsval_t builtin_Date_setHours(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return tov(NAN);
+  if (nargs < 1) return tov(JS_NAN);
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(NAN);
+  if (isnan(ms)) return tov(JS_NAN);
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = localtime(&t);
   tm->tm_hour = (int)tod(args[0]);
@@ -13973,9 +13976,9 @@ static jsval_t builtin_Date_setHours(struct js *js, jsval_t *args, int nargs) {
 }
 
 static jsval_t builtin_Date_setDate(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return tov(NAN);
+  if (nargs < 1) return tov(JS_NAN);
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(NAN);
+  if (isnan(ms)) return tov(JS_NAN);
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = localtime(&t);
   tm->tm_mday = (int)tod(args[0]);
@@ -13986,9 +13989,9 @@ static jsval_t builtin_Date_setDate(struct js *js, jsval_t *args, int nargs) {
 }
 
 static jsval_t builtin_Date_setMonth(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return tov(NAN);
+  if (nargs < 1) return tov(JS_NAN);
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(NAN);
+  if (isnan(ms)) return tov(JS_NAN);
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = localtime(&t);
   tm->tm_mon = (int)tod(args[0]);
@@ -14000,7 +14003,7 @@ static jsval_t builtin_Date_setMonth(struct js *js, jsval_t *args, int nargs) {
 }
 
 static jsval_t builtin_Date_setFullYear(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return tov(NAN);
+  if (nargs < 1) return tov(JS_NAN);
   double ms = date_get_time(js, js->this_val);
   if (isnan(ms)) ms = 0;
   time_t t = (time_t)(ms / 1000.0);
@@ -14015,9 +14018,9 @@ static jsval_t builtin_Date_setFullYear(struct js *js, jsval_t *args, int nargs)
 }
 
 static jsval_t builtin_Date_setUTCMilliseconds(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return tov(NAN);
+  if (nargs < 1) return tov(JS_NAN);
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(NAN);
+  if (isnan(ms)) return tov(JS_NAN);
   double newMs = tod(args[0]);
   ms = floor(ms / 1000.0) * 1000.0 + newMs;
   date_set_time(js, js->this_val, ms);
@@ -14025,9 +14028,9 @@ static jsval_t builtin_Date_setUTCMilliseconds(struct js *js, jsval_t *args, int
 }
 
 static jsval_t builtin_Date_setUTCSeconds(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return tov(NAN);
+  if (nargs < 1) return tov(JS_NAN);
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(NAN);
+  if (isnan(ms)) return tov(JS_NAN);
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = gmtime(&t);
   struct tm copy = *tm;
@@ -14039,9 +14042,9 @@ static jsval_t builtin_Date_setUTCSeconds(struct js *js, jsval_t *args, int narg
 }
 
 static jsval_t builtin_Date_setUTCMinutes(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return tov(NAN);
+  if (nargs < 1) return tov(JS_NAN);
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(NAN);
+  if (isnan(ms)) return tov(JS_NAN);
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = gmtime(&t);
   struct tm copy = *tm;
@@ -14054,9 +14057,9 @@ static jsval_t builtin_Date_setUTCMinutes(struct js *js, jsval_t *args, int narg
 }
 
 static jsval_t builtin_Date_setUTCHours(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return tov(NAN);
+  if (nargs < 1) return tov(JS_NAN);
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(NAN);
+  if (isnan(ms)) return tov(JS_NAN);
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = gmtime(&t);
   struct tm copy = *tm;
@@ -14070,9 +14073,9 @@ static jsval_t builtin_Date_setUTCHours(struct js *js, jsval_t *args, int nargs)
 }
 
 static jsval_t builtin_Date_setUTCDate(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return tov(NAN);
+  if (nargs < 1) return tov(JS_NAN);
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(NAN);
+  if (isnan(ms)) return tov(JS_NAN);
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = gmtime(&t);
   struct tm copy = *tm;
@@ -14084,9 +14087,9 @@ static jsval_t builtin_Date_setUTCDate(struct js *js, jsval_t *args, int nargs) 
 }
 
 static jsval_t builtin_Date_setUTCMonth(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return tov(NAN);
+  if (nargs < 1) return tov(JS_NAN);
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(NAN);
+  if (isnan(ms)) return tov(JS_NAN);
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = gmtime(&t);
   struct tm copy = *tm;
@@ -14099,7 +14102,7 @@ static jsval_t builtin_Date_setUTCMonth(struct js *js, jsval_t *args, int nargs)
 }
 
 static jsval_t builtin_Date_setUTCFullYear(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return tov(NAN);
+  if (nargs < 1) return tov(JS_NAN);
   double ms = date_get_time(js, js->this_val);
   if (isnan(ms)) ms = 0;
   time_t t = (time_t)(ms / 1000.0);
@@ -14189,18 +14192,18 @@ static jsval_t builtin_Date_getYear(struct js *js, jsval_t *args, int nargs) {
   (void) args;
   (void) nargs;
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(NAN);
+  if (isnan(ms)) return tov(JS_NAN);
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = localtime(&t);
   return tov((double)(tm->tm_year));
 }
 
 static jsval_t builtin_Date_setYear(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return tov(NAN);
+  if (nargs < 1) return tov(JS_NAN);
   double year_arg = tod(args[0]);
   if (isnan(year_arg)) {
-    date_set_time(js, js->this_val, NAN);
-    return tov(NAN);
+    date_set_time(js, js->this_val, JS_NAN);
+    return tov(JS_NAN);
   }
   int year = (int)year_arg;
   if (year >= 0 && year <= 99) year += 1900;
@@ -14234,61 +14237,61 @@ static jsval_t builtin_Date_toJSON(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t builtin_Math_abs(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
   return tov(fabs(tod(args[0])));
 }
 
 static jsval_t builtin_Math_acos(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
   return tov(acos(tod(args[0])));
 }
 
 static jsval_t builtin_Math_acosh(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
   return tov(acosh(tod(args[0])));
 }
 
 static jsval_t builtin_Math_asin(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
   return tov(asin(tod(args[0])));
 }
 
 static jsval_t builtin_Math_asinh(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
   return tov(asinh(tod(args[0])));
 }
 
 static jsval_t builtin_Math_atan(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
   return tov(atan(tod(args[0])));
 }
 
 static jsval_t builtin_Math_atanh(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
   return tov(atanh(tod(args[0])));
 }
 
 static jsval_t builtin_Math_atan2(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 2 || vtype(args[0]) != T_NUM || vtype(args[1]) != T_NUM) return tov(NAN);
+  if (nargs < 2 || vtype(args[0]) != T_NUM || vtype(args[1]) != T_NUM) return tov(JS_NAN);
   return tov(atan2(tod(args[0]), tod(args[1])));
 }
 
 static jsval_t builtin_Math_cbrt(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
   return tov(cbrt(tod(args[0])));
 }
 
 static jsval_t builtin_Math_ceil(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
   return tov(ceil(tod(args[0])));
 }
 
@@ -14304,37 +14307,37 @@ static jsval_t builtin_Math_clz32(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t builtin_Math_cos(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
   return tov(cos(tod(args[0])));
 }
 
 static jsval_t builtin_Math_cosh(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
   return tov(cosh(tod(args[0])));
 }
 
 static jsval_t builtin_Math_exp(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
   return tov(exp(tod(args[0])));
 }
 
 static jsval_t builtin_Math_expm1(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
   return tov(expm1(tod(args[0])));
 }
 
 static jsval_t builtin_Math_floor(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
   return tov(floor(tod(args[0])));
 }
 
 static jsval_t builtin_Math_fround(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
   return tov((double)(float)tod(args[0]));
 }
 
@@ -14343,7 +14346,7 @@ static jsval_t builtin_Math_hypot(struct js *js, jsval_t *args, int nargs) {
   if (nargs == 0) return tov(0.0);
   double sum = 0.0;
   for (int i = 0; i < nargs; i++) {
-    if (vtype(args[i]) != T_NUM) return tov(NAN);
+    if (vtype(args[i]) != T_NUM) return tov(JS_NAN);
     double v = tod(args[i]);
     sum += v * v;
   }
@@ -14371,36 +14374,36 @@ static jsval_t builtin_Math_imul(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t builtin_Math_log(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
   return tov(log(tod(args[0])));
 }
 
 static jsval_t builtin_Math_log1p(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
   return tov(log1p(tod(args[0])));
 }
 
 static jsval_t builtin_Math_log10(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
   return tov(log10(tod(args[0])));
 }
 
 static jsval_t builtin_Math_log2(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
   return tov(log2(tod(args[0])));
 }
 
 static jsval_t builtin_Math_max(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs == 0) return tov(-INFINITY);
-  double max_val = -INFINITY;
+  if (nargs == 0) return tov(JS_NEG_INF);
+  double max_val = JS_NEG_INF;
   for (int i = 0; i < nargs; i++) {
-    if (vtype(args[i]) != T_NUM) return tov(NAN);
+    if (vtype(args[i]) != T_NUM) return tov(JS_NAN);
     double v = tod(args[i]);
-    if (isnan(v)) return tov(NAN);
+    if (isnan(v)) return tov(JS_NAN);
     if (v > max_val) max_val = v;
   }
   return tov(max_val);
@@ -14408,12 +14411,12 @@ static jsval_t builtin_Math_max(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t builtin_Math_min(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs == 0) return tov(INFINITY);
-  double min_val = INFINITY;
+  if (nargs == 0) return tov(JS_INF);
+  double min_val = JS_INF;
   for (int i = 0; i < nargs; i++) {
-    if (vtype(args[i]) != T_NUM) return tov(NAN);
+    if (vtype(args[i]) != T_NUM) return tov(JS_NAN);
     double v = tod(args[i]);
-    if (isnan(v)) return tov(NAN);
+    if (isnan(v)) return tov(JS_NAN);
     if (v < min_val) min_val = v;
   }
   return tov(min_val);
@@ -14421,7 +14424,7 @@ static jsval_t builtin_Math_min(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t builtin_Math_pow(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 2 || vtype(args[0]) != T_NUM || vtype(args[1]) != T_NUM) return tov(NAN);
+  if (nargs < 2 || vtype(args[0]) != T_NUM || vtype(args[1]) != T_NUM) return tov(JS_NAN);
   return tov(pow(tod(args[0]), tod(args[1])));
 }
 
@@ -14440,7 +14443,7 @@ static jsval_t builtin_Math_random(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t builtin_Math_round(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
   double x = tod(args[0]);
   if (isnan(x) || isinf(x)) return tov(x);
   return tov(floor(x + 0.5));
@@ -14448,9 +14451,9 @@ static jsval_t builtin_Math_round(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t builtin_Math_sign(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
   double v = tod(args[0]);
-  if (isnan(v)) return tov(NAN);
+  if (isnan(v)) return tov(JS_NAN);
   if (v > 0) return tov(1.0);
   if (v < 0) return tov(-1.0);
   return tov(v);
@@ -14458,37 +14461,37 @@ static jsval_t builtin_Math_sign(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t builtin_Math_sin(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
   return tov(sin(tod(args[0])));
 }
 
 static jsval_t builtin_Math_sinh(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
   return tov(sinh(tod(args[0])));
 }
 
 static jsval_t builtin_Math_sqrt(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
   return tov(sqrt(tod(args[0])));
 }
 
 static jsval_t builtin_Math_tan(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
   return tov(tan(tod(args[0])));
 }
 
 static jsval_t builtin_Math_tanh(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
   return tov(tanh(tod(args[0])));
 }
 
 static jsval_t builtin_Math_trunc(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(NAN);
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
   return tov(trunc(tod(args[0])));
 }
 
@@ -15394,7 +15397,7 @@ static jsval_t builtin_object_isPrototypeOf(struct js *js, jsval_t *args, int na
   
   uint8_t proto_type = vtype(proto_obj);
   if (proto_type != T_OBJ && proto_type != T_ARR && proto_type != T_FUNC) return mkval(T_BOOL, 0);
-  jsoff_t proto_data = vdata(proto_obj);
+  jsoff_t proto_data = (jsoff_t)vdata(proto_obj);
   
   jsval_t current = get_proto(js, obj);
   while (!is_undefined(current) && !is_null(current)) {
@@ -15629,8 +15632,8 @@ static jsval_t builtin_array_slice(struct js *js, jsval_t *args, int nargs) {
     jsoff_t elem_off = lkp(js, arr, idxstr, idxlen);
     if (elem_off != 0) {
       jsval_t elem = resolveprop(js, mkval(T_PROP, elem_off));
-      size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)result_idx);
-      jsval_t key = js_mkstr(js, idxstr, idxlen);
+      size_t result_idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)result_idx);
+      jsval_t key = js_mkstr(js, idxstr, result_idxlen);
       setprop(js, result, key, elem);
     }
     result_idx++;
@@ -17464,8 +17467,8 @@ static jsval_t builtin_string_split(struct js *js, jsval_t *args, int nargs) {
       for (uint32_t i = 1; i <= capture_count && idx < limit; i++) {
         PCRE2_SIZE cap_start = ovector[2*i];
         PCRE2_SIZE cap_end = ovector[2*i+1];
-        size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)idx);
-        key = js_mkstr(js, idxstr, idxlen);
+        size_t cap_idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)idx);
+        key = js_mkstr(js, idxstr, cap_idxlen);
         if (cap_start == PCRE2_UNSET) {
           setprop(js, arr, key, js_mkundef());
         } else {
@@ -18278,15 +18281,15 @@ static jsval_t builtin_string_template(struct js *js, jsval_t *args, int nargs) 
 static jsval_t builtin_string_charCodeAt(struct js *js, jsval_t *args, int nargs) {
   jsval_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "charCodeAt called on non-string");
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(-NAN);
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
   
   double idx_d = tod(args[0]);
-  if (idx_d < 0 || idx_d != (double)(long)idx_d) return tov(-NAN);
+  if (idx_d < 0 || idx_d != (double)(long)idx_d) return tov(JS_NAN);
   
   jsoff_t idx = (jsoff_t) idx_d;
   jsoff_t str_len = offtolen(loadoff(js, (jsoff_t) vdata(str)));
   
-  if (idx >= str_len) return tov(-NAN);
+  if (idx >= str_len) return tov(JS_NAN);
   
   jsoff_t str_off = (jsoff_t) vdata(str) + sizeof(jsoff_t);
   unsigned char ch = (unsigned char) js->mem[str_off + idx];
@@ -18713,7 +18716,7 @@ static jsval_t builtin_number_toString(struct js *js, jsval_t *args, int nargs) 
   } else {
     while (int_part > 0 && p > buf) {
       int digit = int_part % radix;
-      *--p = digit < 10 ? '0' + digit : 'a' + (digit - 10);
+      *--p = (char)(digit < 10 ? '0' + digit : 'a' + (digit - 10));
       int_part /= radix;
     }
   }
@@ -18732,7 +18735,7 @@ static jsval_t builtin_number_toString(struct js *js, jsval_t *args, int nargs) 
     for (int i = 0; i < 16 && frac_part > 0.0000001 && frac_pos < 63; i++) {
       frac_part *= radix;
       int digit = (int)frac_part;
-      frac_buf[frac_pos++] = digit < 10 ? '0' + digit : 'a' + (digit - 10);
+      frac_buf[frac_pos++] = (char)(digit < 10 ? '0' + digit : 'a' + (digit - 10));
       frac_part -= digit;
     }
     frac_buf[frac_pos] = '\0';
@@ -18776,7 +18779,7 @@ static jsval_t builtin_number_toFixed(struct js *js, jsval_t *args, int nargs) {
   
   char digit_buf[128];
   snprintf(digit_buf, sizeof(digit_buf), "%.0f", rounded);
-  int digit_len = strlen(digit_buf);
+  int digit_len = (int)strlen(digit_buf);
   
   while (digit_len < digits + 1) {
     memmove(digit_buf + 1, digit_buf, digit_len + 1);
@@ -18856,7 +18859,7 @@ static jsval_t builtin_number_toPrecision(struct js *js, jsval_t *args, int narg
     
     char digit_buf[32];
     snprintf(digit_buf, sizeof(digit_buf), "%.0f", rounded);
-    int digit_len = strlen(digit_buf);
+    int digit_len = (int)strlen(digit_buf);
     
     char buf[128];
     int pos = 0;
@@ -18882,7 +18885,7 @@ static jsval_t builtin_number_toPrecision(struct js *js, jsval_t *args, int narg
     
     char digit_buf[64];
     snprintf(digit_buf, sizeof(digit_buf), "%.0f", rounded);
-    int digit_len = strlen(digit_buf);
+    int digit_len = (int)strlen(digit_buf);
     
     while (digit_len < digits_after_point + 1) {
       memmove(digit_buf + 1, digit_buf, digit_len + 1);
@@ -18967,7 +18970,7 @@ static jsval_t builtin_number_toExponential(struct js *js, jsval_t *args, int na
   
   char digit_buf[32];
   snprintf(digit_buf, sizeof(digit_buf), "%.0f", rounded);
-  int digit_len = strlen(digit_buf);
+  int digit_len = (int)strlen(digit_buf);
   
   while (digit_len < digits + 1) {
     memmove(digit_buf + 1, digit_buf, digit_len + 1);
@@ -19034,7 +19037,7 @@ static jsval_t builtin_boolean_toString(struct js *js, jsval_t *args, int nargs)
 }
 
 static jsval_t builtin_parseInt(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return tov(-NAN);
+  if (nargs < 1) return tov(JS_NAN);
   
   jsval_t str_val = args[0];
   if (vtype(str_val) != T_STR) {
@@ -19048,13 +19051,13 @@ static jsval_t builtin_parseInt(struct js *js, jsval_t *args, int nargs) {
   int radix = 0;
   if (nargs >= 2 && vtype(args[1]) == T_NUM) {
     radix = (int) tod(args[1]);
-    if (radix != 0 && (radix < 2 || radix > 36)) return tov(-NAN);
+    if (radix != 0 && (radix < 2 || radix > 36)) return tov(JS_NAN);
   }
   
   jsoff_t i = 0;
   while (i < str_len && is_space(str[i])) i++;
   
-  if (i >= str_len) return tov(-NAN);
+  if (i >= str_len) return tov(JS_NAN);
   
   int sign = 1;
   if (str[i] == '-') {
@@ -19093,13 +19096,13 @@ static jsval_t builtin_parseInt(struct js *js, jsval_t *args, int nargs) {
     i++;
   }
   
-  if (!found_digit) return tov(-NAN);
+  if (!found_digit) return tov(JS_NAN);
   
   return tov(sign * result);
 }
 
 static jsval_t builtin_parseFloat(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return tov(-NAN);
+  if (nargs < 1) return tov(JS_NAN);
   
   jsval_t str_val = args[0];
   if (vtype(str_val) != T_STR) {
@@ -19113,12 +19116,12 @@ static jsval_t builtin_parseFloat(struct js *js, jsval_t *args, int nargs) {
   jsoff_t i = 0;
   while (i < str_len && is_space(str[i])) i++;
   
-  if (i >= str_len) return tov(-NAN);
+  if (i >= str_len) return tov(JS_NAN);
   
   char *end;
   double result = strtod(&str[i], &end);
   
-  if (end == &str[i]) return tov(-NAN);
+  if (end == &str[i]) return tov(JS_NAN);
   
   return tov(result);
 }
@@ -20459,7 +20462,7 @@ static int esm_parse_named_imports(struct js *js, esm_import_binding_t *bindings
   
   while (next(js) != TOK_RBRACE && count < max_bindings) {
     if (next(js) != TOK_IDENTIFIER && next(js) != TOK_DEFAULT) {
-      return js_mkerr_typed(js, JS_ERR_SYNTAX, "expected identifier or 'default' in import list");
+      return -1;
     }
     const char *import_name = &js->code[js->toff];
     size_t import_len = js->tlen;
@@ -20471,7 +20474,7 @@ static int esm_parse_named_imports(struct js *js, esm_import_binding_t *bindings
     if (next(js) == TOK_AS) {
       js->consumed = 1;
       if (next(js) != TOK_IDENTIFIER && next(js) != TOK_DEFAULT) {
-        return js_mkerr_typed(js, JS_ERR_SYNTAX, "expected identifier or 'default' after 'as'");
+        return -1;
       }
       local_name = &js->code[js->toff];
       local_len = js->tlen;
@@ -20487,7 +20490,8 @@ static int esm_parse_named_imports(struct js *js, esm_import_binding_t *bindings
     if (next(js) == TOK_COMMA) js->consumed = 1;
   }
   
-  EXPECT(TOK_RBRACE, (void)0);
+  if (next(js) != TOK_RBRACE) return -1;
+  js->consumed = 1;
   return count;
 }
 
@@ -21736,10 +21740,10 @@ static jsval_t builtin_Proxy(struct js *js, jsval_t *args, int nargs) {
 static jsval_t proxy_revoke_fn(struct js *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
   jsval_t func = js->current_func;
-  jsoff_t ref_off = get_slot(js, func, SLOT_PROXY_REF);
+  jsval_t ref_slot = get_slot(js, func, SLOT_PROXY_REF);
   
-  if (ref_off != 0) {
-    jsval_t proxy = resolveprop(js, mkval(T_PROP, ref_off));
+  if (vtype(ref_slot) != T_UNDEF && vdata(ref_slot) != 0) {
+    jsval_t proxy = resolveprop(js, mkval(T_PROP, (jsoff_t)vdata(ref_slot)));
     proxy_data_t *data = get_proxy_data(proxy);
     if (data) data->revoked = true;
   }
@@ -22297,9 +22301,9 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, number_ctor_obj, js_mkstr(js, "MIN_VALUE", 9), tov(5e-324));
   setprop(js, number_ctor_obj, js_mkstr(js, "MAX_SAFE_INTEGER", 16), tov(9007199254740991.0));
   setprop(js, number_ctor_obj, js_mkstr(js, "MIN_SAFE_INTEGER", 16), tov(-9007199254740991.0));
-  setprop(js, number_ctor_obj, js_mkstr(js, "POSITIVE_INFINITY", 17), tov(INFINITY));
-  setprop(js, number_ctor_obj, js_mkstr(js, "NEGATIVE_INFINITY", 17), tov(-INFINITY));
-  setprop(js, number_ctor_obj, js_mkstr(js, "NaN", 3), tov(NAN));
+  setprop(js, number_ctor_obj, js_mkstr(js, "POSITIVE_INFINITY", 17), tov(JS_INF));
+  setprop(js, number_ctor_obj, js_mkstr(js, "NEGATIVE_INFINITY", 17), tov(JS_NEG_INF));
+  setprop(js, number_ctor_obj, js_mkstr(js, "NaN", 3), tov(JS_NAN));
   setprop(js, number_ctor_obj, js_mkstr(js, "EPSILON", 7), tov(2.220446049250313e-16));
   
   js_setprop_nonconfigurable(js, number_ctor_obj, "prototype", 9, number_proto);
@@ -22421,8 +22425,8 @@ struct js *js_create(void *buf, size_t len) {
   setprop(js, glob, js_mkstr(js, "isFinite", 8), js_mkfun(builtin_global_isFinite));
   setprop(js, glob, js_mkstr(js, "btoa", 4), js_mkfun(builtin_btoa));
   setprop(js, glob, js_mkstr(js, "atob", 4), js_mkfun(builtin_atob));
-  setprop(js, glob, js_mkstr(js, "NaN", 3), tov(NAN));
-  setprop(js, glob, js_mkstr(js, "Infinity", 8), tov(INFINITY));
+  setprop(js, glob, js_mkstr(js, "NaN", 3), tov(JS_NAN));
+  setprop(js, glob, js_mkstr(js, "Infinity", 8), tov(JS_INF));
   setprop(js, glob, js_mkstr(js, "undefined", 9), js_mkundef());
   
   jsval_t math_obj = mkobj(js, 0);
@@ -22616,9 +22620,9 @@ bool js_del(struct js *js, jsval_t obj, const char *key) {
   jsoff_t obj_off;
   
   if (vtype(obj) == T_OBJ) {
-    obj_off = vdata(obj);
+    obj_off = (jsoff_t)vdata(obj);
   } else if (vtype(obj) == T_ARR || vtype(obj) == T_FUNC) {
-    obj_off = vdata(obj);
+    obj_off = (jsoff_t)vdata(obj);
     obj = mkval(T_OBJ, obj_off);
   } else {
     return false;
@@ -23057,7 +23061,7 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
     }
     
     int arg_idx = 0;
-    for (int i = 0; i < pf->param_count; i++) {
+    for (unsigned int i = 0; i < (unsigned int)pf->param_count; i++) {
       parsed_param_t *pp = (parsed_param_t *)utarray_eltptr(pf->params, i);
       
       if (pp->is_destruct) {

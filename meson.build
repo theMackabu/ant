@@ -5,7 +5,8 @@ project('ant', 'c', default_options: [
   'default_library=static',
   'b_lto=true',
   'b_lto_threads=8',
-  'strip=true'
+  'strip=true',
+  'warning_level=2'
 ], subproject_dir: 'vendor')
 
 src_root = meson.project_source_root()
@@ -32,26 +33,6 @@ lib_sources = files(
 include = include_directories('include')
 build_include = include_directories('.')
 strip_include = include_directories('src/strip')
-
-add_project_arguments(
-  '-D NO_EXECUTE_PERMISSION',
-  '-Wall',
-  '-Wextra',
-  '-Wshadow',
-  '-Wdouble-promotion',
-  '-Wformat=2',
-  '-Wundef',
-  '-Wconversion',
-  '-Wno-sign-conversion',
-  '-Wno-unused-function',
-  '-Wno-unused-parameter',
-  '-Wno-deprecated-declarations',
-language: 'c')
-
-if host_machine.system() == 'linux'
-  add_project_arguments('-fno-pie', language: 'c')
-  add_project_link_arguments('-no-pie', language: 'c')
-endif
 
 libant = static_library(
   'ant',
