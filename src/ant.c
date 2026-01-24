@@ -2533,17 +2533,6 @@ jsval_t js_mkerr_typed(struct js *js, js_err_type_t err_type, const char *xx, ..
   return mkval(T_ERR, 0);
 }
 
-jsval_t js_mkerr(struct js *js, const char *xx, ...) {
-  va_list ap;
-  char error_msg[256] = {0};
-  
-  va_start(ap, xx);
-  vsnprintf(error_msg, sizeof(error_msg), xx, ap);
-  va_end(ap);
-  
-  return js_mkerr_typed(js, JS_ERR_TYPE, "%s", error_msg);
-}
-
 static jsval_t js_throw(struct js *js, jsval_t value) {
   int line = 0, col = 0;
   char error_line[256] = {0};

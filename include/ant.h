@@ -47,6 +47,8 @@ typedef enum {
 #define JS_DESC_E (1 << 1)
 #define JS_DESC_C (1 << 2)
 
+#define js_mkerr(js, ...) js_mkerr_typed(js, JS_ERR_TYPE, __VA_ARGS__) 
+
 struct js *js_create(void *buf, size_t len);
 struct js *js_create_dynamic(size_t initial_size, size_t max_size);
 
@@ -94,7 +96,6 @@ jsval_t js_mkarr(struct js *);
 void js_arr_push(struct js *, jsval_t arr, jsval_t val);
 jsval_t js_mkstr(struct js *, const void *, size_t);
 jsval_t js_mksym(struct js *, const char *desc);
-jsval_t js_mkerr(struct js *js, const char *fmt, ...);
 jsval_t js_mkerr_typed(struct js *js, js_err_type_t err_type, const char *fmt, ...);
 jsval_t js_mkfun(jsval_t (*fn)(struct js *, jsval_t *, int));
 jsval_t js_heavy_mkfun(struct js *js, jsval_t (*fn)(struct js *, jsval_t *, int), jsval_t data);
