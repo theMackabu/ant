@@ -258,7 +258,7 @@ static void handle_history_up(rl_interface_t *iface) {
   const char *hist_line = rl_history_prev(&iface->history);
   if (hist_line) {
     strcpy(iface->line_buffer, hist_line);
-    iface->line_len = strlen(iface->line_buffer);
+    iface->line_len = (int)strlen(iface->line_buffer);
     iface->line_pos = iface->line_len;
     refresh_line(iface);
   }
@@ -268,7 +268,7 @@ static void handle_history_down(rl_interface_t *iface) {
   const char *hist_line = rl_history_next(&iface->history);
   if (hist_line) {
     strcpy(iface->line_buffer, hist_line);
-    iface->line_len = strlen(iface->line_buffer);
+    iface->line_len = (int)strlen(iface->line_buffer);
     iface->line_pos = iface->line_len;
     refresh_line(iface);
   }

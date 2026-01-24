@@ -35,7 +35,16 @@ strip_include = include_directories('src/strip')
 
 add_project_arguments(
   '-D NO_EXECUTE_PERMISSION',
+  '-Wall',
+  '-Wextra',
+  '-Wshadow',
+  '-Wdouble-promotion',
+  '-Wformat=2',
+  '-Wundef',
+  '-Wconversion',
+  '-Wno-sign-conversion',
   '-Wno-unused-function',
+  '-Wno-unused-parameter',
   '-Wno-deprecated-declarations',
 language: 'c')
 

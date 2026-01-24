@@ -102,7 +102,7 @@ static void on_read_complete(uv_fs_t *uv_req) {
   
   if (uv_req->result < 0) {
     req->failed = 1;
-    req->error_msg = strdup(uv_strerror(uv_req->result));
+    req->error_msg = strdup(uv_strerror((int)uv_req->result));
     req->completed = 1;
     complete_request(req);
     return;
@@ -123,13 +123,13 @@ static void on_open_for_read(uv_fs_t *uv_req) {
   
   if (uv_req->result < 0) {
     req->failed = 1;
-    req->error_msg = strdup(uv_strerror(uv_req->result));
+    req->error_msg = strdup(uv_strerror((int)uv_req->result));
     req->completed = 1;
     complete_request(req);
     return;
   }
   
-  req->fd = uv_req->result;
+  req->fd = (int)uv_req->result;
   uv_fs_req_cleanup(uv_req);
   
   uv_fs_t stat_req;
@@ -162,7 +162,7 @@ static void on_open_for_read(uv_fs_t *uv_req) {
     return;
   }
   
-  uv_buf_t buf = uv_buf_init(req->data, file_size);
+  uv_buf_t buf = uv_buf_init(req->data, (unsigned int)file_size);
   int read_result = uv_fs_read(fs_loop, uv_req, req->fd, &buf, 1, 0, on_read_complete);
   
   if (read_result < 0) {
@@ -182,7 +182,7 @@ static void on_write_complete(uv_fs_t *uv_req) {
   
   if (uv_req->result < 0) {
     req->failed = 1;
-    req->error_msg = strdup(uv_strerror(uv_req->result));
+    req->error_msg = strdup(uv_strerror((int)uv_req->result));
   }
   
   uv_fs_t close_req;
@@ -198,16 +198,16 @@ static void on_open_for_write(uv_fs_t *uv_req) {
   
   if (uv_req->result < 0) {
     req->failed = 1;
-    req->error_msg = strdup(uv_strerror(uv_req->result));
+    req->error_msg = strdup(uv_strerror((int)uv_req->result));
     req->completed = 1;
     complete_request(req);
     return;
   }
   
-  req->fd = uv_req->result;
+  req->fd = (int)uv_req->result;
   uv_fs_req_cleanup(uv_req);
   
-  uv_buf_t buf = uv_buf_init(req->data, req->data_len);
+  uv_buf_t buf = uv_buf_init(req->data, (unsigned int)req->data_len);
   int write_result = uv_fs_write(fs_loop, uv_req, req->fd, &buf, 1, 0, on_write_complete);
   
   if (write_result < 0) {
@@ -227,7 +227,7 @@ static void on_unlink_complete(uv_fs_t *uv_req) {
   
   if (uv_req->result < 0) {
     req->failed = 1;
-    req->error_msg = strdup(uv_strerror(uv_req->result));
+    req->error_msg = strdup(uv_strerror((int)uv_req->result));
   }
   
   uv_fs_req_cleanup(uv_req);
@@ -240,7 +240,7 @@ static void on_mkdir_complete(uv_fs_t *uv_req) {
   
   if (uv_req->result < 0) {
     req->failed = 1;
-    req->error_msg = strdup(uv_strerror(uv_req->result));
+    req->error_msg = strdup(uv_strerror((int)uv_req->result));
   }
   
   uv_fs_req_cleanup(uv_req);
@@ -253,7 +253,7 @@ static void on_rmdir_complete(uv_fs_t *uv_req) {
   
   if (uv_req->result < 0) {
     req->failed = 1;
-    req->error_msg = strdup(uv_strerror(uv_req->result));
+    req->error_msg = strdup(uv_strerror((int)uv_req->result));
   }
   
   uv_fs_req_cleanup(uv_req);
@@ -266,7 +266,7 @@ static void on_stat_complete(uv_fs_t *uv_req) {
   
   if (uv_req->result < 0) {
     req->failed = 1;
-    req->error_msg = strdup(uv_strerror(uv_req->result));
+    req->error_msg = strdup(uv_strerror((int)uv_req->result));
     req->completed = 1;
     complete_request(req);
     return;
@@ -304,7 +304,7 @@ static void on_access_complete(uv_fs_t *uv_req) {
   
   if (uv_req->result < 0) {
     req->failed = 1;
-    req->error_msg = strdup(uv_strerror(uv_req->result));
+    req->error_msg = strdup(uv_strerror((int)uv_req->result));
     req->completed = 1;
     complete_request(req);
     return;
@@ -321,7 +321,7 @@ static void on_readdir_complete(uv_fs_t *uv_req) {
   
   if (uv_req->result < 0) {
     req->failed = 1;
-    req->error_msg = strdup(uv_strerror(uv_req->result));
+    req->error_msg = strdup(uv_strerror((int)uv_req->result));
     req->completed = 1;
     complete_request(req);
     return;
@@ -824,7 +824,7 @@ do_mkdir:
   (void)mode;
   int result = _mkdir(path_cstr);
 #else
-  int result = mkdir(path_cstr, mode);
+  int result = mkdir(path_cstr, (mode_t)mode);
 #endif
   free(path_cstr);
   

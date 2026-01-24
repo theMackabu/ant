@@ -301,7 +301,7 @@ static jsval_t os_freemem(struct js *js, jsval_t *args, int nargs) {
   
   if (host_page_size(mach_port, &page_size) == KERN_SUCCESS &&
       host_statistics64(mach_port, HOST_VM_INFO64, (host_info64_t)&vm_stats, &count) == KERN_SUCCESS) {
-    return js_mknum((double)vm_stats.free_count * page_size);
+    return js_mknum((double)vm_stats.free_count * (double)page_size);
   }
   return js_mknum(0);
 #elif defined(__linux__)
@@ -375,7 +375,7 @@ static jsval_t os_cpus_darwin(struct js *js) {
   len = sizeof(freq);
   if (sysctlbyname("hw.cpufrequency", &freq, &len, NULL, 0) != 0)
     freq = 2400000000;
-  double speed = freq / 1000000.0;
+  double speed = (double)freq / 1000000.0;
   
   processor_cpu_load_info_data_t *load = (processor_cpu_load_info_data_t *)cpu_info;
   

@@ -287,7 +287,7 @@ static void cursor_move(int *pos, int len, int dir) {
 static void line_set(char *line, int *pos, int *len, const char *str, const char *prompt) {
   printf("\r\033[K%s%s", prompt, str);
   fflush(stdout); strcpy(line, str);
-  *len = strlen(line); *pos = *len;
+  *len = (int)strlen(line); *pos = *len;
 }
 
 static void line_backspace(char *line, int *pos, int *len) {
@@ -304,7 +304,7 @@ static void line_insert(char *line, int *pos, int *len, int c) {
   if (*len >= MAX_LINE_LENGTH - 1) return;
   
   memmove(line + *pos + 1, line + *pos, *len - *pos + 1);
-  line[*pos] = c;
+  line[*pos] = (char)c;
   (*pos)++; (*len)++;
   printf("%c%s", c, line + *pos);
   for (int i = 0; i < *len - *pos; i++) printf("\033[D");

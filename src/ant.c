@@ -57,6 +57,7 @@
 _Static_assert(sizeof(double) == 8, "NaN-boxing requires 64-bit IEEE 754 doubles");
 _Static_assert(sizeof(uint64_t) == 8, "NaN-boxing requires 64-bit integers");
 _Static_assert(sizeof(double) == sizeof(uint64_t), "double and uint64_t must have same size");
+_Static_assert(sizeof(void*) <= 8 && (sizeof(void*) < 8 || 1), "ANT_PTR: pointers must fit in 53-bit double mantissa");
 
 #if defined(__STDC_IEC_559__) || defined(__GCC_IEC_559)
 #elif defined(__FAST_MATH__)

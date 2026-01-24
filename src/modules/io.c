@@ -380,7 +380,7 @@ static jsval_t js_console_time(struct js *js, jsval_t *args, int nargs) {
   
   if (console_timer_count < 64) {
     console_timers[console_timer_count].label = strdup(label);
-    console_timers[console_timer_count].start_time = uv_hrtime() / 1e6;
+    console_timers[console_timer_count].start_time = (double)uv_hrtime() / 1e6;
     console_timer_count++;
   }
   
@@ -395,7 +395,7 @@ static jsval_t js_console_timeEnd(struct js *js, jsval_t *args, int nargs) {
   
   for (int i = 0; i < console_timer_count; i++) {
     if (strcmp(console_timers[i].label, label) == 0) {
-      double elapsed = (uv_hrtime() / 1e6) - console_timers[i].start_time;
+      double elapsed = ((double)uv_hrtime() / 1e6) - console_timers[i].start_time;
       fprintf(stdout, "%s: %.3fms\n", label, elapsed);
       free(console_timers[i].label);
       for (int j = i; j < console_timer_count - 1; j++) {

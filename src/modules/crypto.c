@@ -1,7 +1,11 @@
 #include <sodium.h>
 #include <string.h>
 #include <time.h>
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wimplicit-int-conversion"
 #include <uuidv7.h>
+#pragma GCC diagnostic pop
 
 #ifdef _WIN32
 #include <rpc.h>
