@@ -20442,7 +20442,9 @@ static int esm_parse_named_imports(struct js *js, esm_import_binding_t *bindings
   int count = 0;
   
   while (next(js) != TOK_RBRACE && count < max_bindings) {
-    EXPECT(TOK_IDENTIFIER, (void)0);
+    if (next(js) != TOK_IDENTIFIER && next(js) != TOK_DEFAULT) {
+      return js_mkerr_typed(js, JS_ERR_SYNTAX, "expected identifier or 'default' in import list");
+    }
     const char *import_name = &js->code[js->toff];
     size_t import_len = js->tlen;
     js->consumed = 1;
@@ -20452,7 +20454,9 @@ static int esm_parse_named_imports(struct js *js, esm_import_binding_t *bindings
     
     if (next(js) == TOK_AS) {
       js->consumed = 1;
-      EXPECT(TOK_IDENTIFIER, (void)0);
+      if (next(js) != TOK_IDENTIFIER && next(js) != TOK_DEFAULT) {
+        return js_mkerr_typed(js, JS_ERR_SYNTAX, "expected identifier or 'default' after 'as'");
+      }
       local_name = &js->code[js->toff];
       local_len = js->tlen;
       js->consumed = 1;
