@@ -168,7 +168,7 @@ static yyjson_mut_val *jsval_to_yyjson_impl(struct js *js, yyjson_mut_doc *doc, 
     case JS_NUM: {
       double num = js_getnum(val);
       if (isnan(num) || isinf(num)) return yyjson_mut_null(doc);
-      if (num == (int64_t)num) return yyjson_mut_sint(doc, (int64_t)num);
+      if (num == (double)(int64_t)num) return yyjson_mut_sint(doc, (int64_t)num);
       return yyjson_mut_real(doc, num);
     }
     

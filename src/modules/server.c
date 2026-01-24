@@ -241,7 +241,7 @@ typedef struct {
 
 static int parse_http_request(const char *buffer, size_t len, http_request_t *req) {
   const char *method_end = strchr(buffer, ' ');
-  if (!method_end || method_end - buffer >= sizeof(req->method)) return -1;
+  if (!method_end || (size_t)(method_end - buffer) >= sizeof(req->method)) return -1;
   
   memcpy(req->method, buffer, method_end - buffer);
   req->method[method_end - buffer] = '\0';
@@ -580,9 +580,9 @@ static char* gzip_compress(const char *data, size_t data_len, size_t *compressed
   }
   
   stream.next_in = (Bytef *)data;
-  stream.avail_in = data_len;
+  stream.avail_in = (uInt)data_len;
   stream.next_out = (Bytef *)compressed;
-  stream.avail_out = bound;
+  stream.avail_out = (uInt)bound;
   
   if (deflate(&stream, Z_FINISH) != Z_STREAM_END) {
     free(compressed);
@@ -679,7 +679,7 @@ static void send_response(uv_stream_t *client, response_ctx_t *res_ctx) {
   
   if (compressed) free(compressed);
   
-  write_req->buf = uv_buf_init(response, total_len);
+  write_req->buf = uv_buf_init(response, (unsigned int)total_len);
   uv_write((uv_write_t *)write_req, client, &write_req->buf, 1, on_write);
 }
 
@@ -821,7 +821,7 @@ static void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
   client_t *client = (client_t *)stream->data;
   
   if (nread < 0) {
-    if (nread != UV_EOF) fprintf(stderr, "Read error: %s\n", uv_strerror(nread));
+    if (nread != UV_EOF) fprintf(stderr, "Read error: %s\n", uv_strerror((int)nread));
     uv_close((uv_handle_t *)stream, on_close);
     free(buf->base);
     return;

@@ -128,7 +128,7 @@ static void body_cb(tlsuv_http_req_t *http_req, char *body, ssize_t len) {
   
   if (len < 0) {
     req->failed = 1;
-    req->error_msg = strdup(uv_strerror(len));
+    req->error_msg = strdup(uv_strerror((int)len));
     req->completed = 1;
     tlsuv_http_close(&req->http_client, on_http_close);
     return;

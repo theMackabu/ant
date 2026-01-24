@@ -269,7 +269,7 @@ static void on_stdout_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *b
   
   if (nread < 0) {
     if (nread != UV_EOF) {
-      jsval_t err_args[1] = { js_mkstr(cp->js, uv_strerror(nread), strlen(uv_strerror(nread))) };
+      jsval_t err_args[1] = { js_mkstr(cp->js, uv_strerror((int)nread), (int)strlen(uv_strerror((int)nread))) };
       emit_event(cp, "error", err_args, 1);
     }
     cp->pending_closes++;
@@ -416,7 +416,7 @@ static jsval_t child_write(struct js *js, jsval_t *args, int nargs) {
   char *buf_data = malloc(data_len);
   memcpy(buf_data, data, data_len);
   
-  uv_buf_t buf = uv_buf_init(buf_data, data_len);
+  uv_buf_t buf = uv_buf_init(buf_data, (unsigned int)data_len);
   write_req->data = buf_data;
   
   int result = uv_write(write_req, (uv_stream_t *)&cp->stdin_pipe, &buf, 1, NULL);
