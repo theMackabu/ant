@@ -17,6 +17,11 @@
 #define ANT_PTR(ptr)          js_mknum((double)(uintptr_t)(ptr))
 #define ANT_COPY(buf, len, s) cpy(buf, len, s, sizeof(s) - 1)
 
+#define JS_NAN     ((double)NAN)
+#define JS_NEG_NAN ((double)(-NAN))
+#define JS_INF     ((double)INFINITY)
+#define JS_NEG_INF ((double)(-INFINITY))
+
 struct js;
 
 typedef uint32_t jsoff_t;

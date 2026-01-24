@@ -39,7 +39,8 @@ endif
 
 libuv_sub = subproject('libuv', default_options: [
   'build_tests=false', 
-  'build_benchmarks=false'
+  'build_benchmarks=false',
+  'warning_level=0'
 ])
 libuv_dep = libuv_sub.get_variable('libuv_dep')
 
@@ -64,8 +65,12 @@ bdwgc_opts.add_cmake_defines({
 tlsuv_compile_args = [
   '-Wno-unused-function',
   '-Wno-unused-variable',
+  '-Wno-unused-parameter',
+  '-Wno-sign-compare',
   '-Wno-bitwise-op-parentheses',
   '-Wno-sometimes-uninitialized',
+  '-Wno-cast-function-type-mismatch',
+  '-Wno-missing-field-initializers',
   '-I' + meson.project_source_root() / vendor_dir / 'libuv-v1.51.0' / 'include'
 ]
 if cmake_prefix != ''
@@ -82,7 +87,7 @@ bdwgc_opts.append_compile_args('c', bdwgc_gc_args)
 tlsuv_dep = cmake.subproject('tlsuv', options: tlsuv_opts).dependency('tlsuv')
 bdwgc_dep = cmake.subproject('bdwgc', options: bdwgc_opts).dependency('gc')
 
-pcre2_dep = subproject('pcre2').get_variable('libpcre2_8')
+pcre2_dep = subproject('pcre2', default_options: ['warning_level=0']).get_variable('libpcre2_8')
 uthash_dep = subproject('uthash').get_variable('uthash_dep')
 yyjson_dep = subproject('yyjson').get_variable('yyjson_dep')
 uuidv7_dep = subproject('uuidv7').get_variable('uuidv7_dep')
@@ -90,7 +95,7 @@ argtable3_dep = subproject('argtable3').get_variable('argtable3_dep')
 minicoro_dep = subproject('minicoro').get_variable('minicoro_dep')
 
 zlib_dep = subproject('zlib-ng',
-  default_options: ['b_lto=false']
+  default_options: ['b_lto=false', 'warning_level=0']
 ).get_variable('zlib_ng_dep')
 
 libffi_dep = subproject('libffi', default_options: [

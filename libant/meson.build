@@ -4,7 +4,8 @@ project('libant', 'c', default_options: [
   'c_std=gnu23',
   'default_library=static',
   'b_lto=false',
-  'strip=true'
+  'strip=true',
+  'warning_level=2'
 ], subproject_dir: 'vendor')
 
 use_lto = get_option('lto')
@@ -33,17 +34,6 @@ lib_sources = files(
 include = include_directories('../include')
 build_include = include_directories('.')
 strip_include = include_directories('../src/strip')
-
-add_project_arguments(
-  '-D NO_EXECUTE_PERMISSION',
-  '-Wno-unused-function',
-  '-Wno-deprecated-declarations',
-language: 'c')
-
-if host_machine.system() == 'linux'
-  add_project_arguments('-fno-pie', language: 'c')
-  add_project_link_arguments('-no-pie', language: 'c')
-endif
 
 libant_core = static_library(
   'ant_core',
