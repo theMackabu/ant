@@ -217,6 +217,7 @@ int main(int argc, char *argv[]) {
   init_symbol_module();
   init_builtin_module();
   init_buffer_module();
+  init_fs_module();
   init_atomics_module();
   init_crypto_module();
   init_fetch_module();

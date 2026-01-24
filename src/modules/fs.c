@@ -10,10 +10,12 @@
 #include <utarray.h>
 #include <errno.h>
 
+#include "ant.h"
+#include "internal.h"
+#include "runtime.h"
+
 #include "modules/fs.h"
 #include "modules/symbol.h"
-#include "ant.h"
-#include "runtime.h"
 
 typedef enum {
   FS_OP_READ,
@@ -24,7 +26,8 @@ typedef enum {
   FS_OP_STAT,
   FS_OP_READ_BYTES,
   FS_OP_EXISTS,
-  FS_OP_READDIR
+  FS_OP_READDIR,
+  FS_OP_ACCESS
 } fs_op_type_t;
 
 typedef struct fs_request_s {
@@ -65,8 +68,7 @@ static void remove_pending_request(fs_request_t *req) {
     if (*p == req) {
       utarray_erase(pending_requests, i, 1);
       break;
-    }
-    i++;
+    } i++;
   }
 }
 
@@ -81,9 +83,7 @@ static void complete_request(fs_request_t *req) {
       result = js_mkstr(req->js, req->data, req->data_len);
     } else if (req->op_type == FS_OP_STAT) {
       result = js_mkundef();
-    } else {
-      result = js_mkundef();
-    }
+    } else result = js_mkundef();
     js_resolve_promise(req->js, req->promise, result);
   }
   
@@ -267,10 +267,15 @@ static void on_stat_complete(uv_fs_t *uv_req) {
   }
   
   jsval_t stat_obj = js_mkobj(req->js);
-  js_set(req->js, stat_obj, "size", js_mknum((double)uv_req->statbuf.st_size));
-  js_set(req->js, stat_obj, "mode", js_mknum((double)uv_req->statbuf.st_mode));
-  js_set(req->js, stat_obj, "isFile", S_ISREG(uv_req->statbuf.st_mode) ? js_mktrue() : js_mkfalse());
-  js_set(req->js, stat_obj, "isDirectory", S_ISDIR(uv_req->statbuf.st_mode) ? js_mktrue() : js_mkfalse());
+  jsval_t proto = js_get_ctor_proto(req->js, "Stats", 5);
+  if (js_type(proto) == JS_OBJ) js_set_proto(req->js, stat_obj, proto);
+  
+  uv_stat_t *st = &uv_req->statbuf;
+  js_set_slot(req->js, stat_obj, SLOT_DATA, js_mknum((double)st->st_mode));
+  js_set(req->js, stat_obj, "size", js_mknum((double)st->st_size));
+  js_set(req->js, stat_obj, "mode", js_mknum((double)st->st_mode));
+  js_set(req->js, stat_obj, "uid", js_mknum((double)st->st_uid));
+  js_set(req->js, stat_obj, "gid", js_mknum((double)st->st_gid));
   
   req->completed = 1;
   js_resolve_promise(req->js, req->promise, stat_obj);
@@ -284,6 +289,23 @@ static void on_exists_complete(uv_fs_t *uv_req) {
   
   req->completed = 1;
   js_resolve_promise(req->js, req->promise, result);
+  remove_pending_request(req);
+  free_fs_request(req);
+}
+
+static void on_access_complete(uv_fs_t *uv_req) {
+  fs_request_t *req = (fs_request_t *)uv_req->data;
+  
+  if (uv_req->result < 0) {
+    req->failed = 1;
+    req->error_msg = strdup(uv_strerror(uv_req->result));
+    req->completed = 1;
+    complete_request(req);
+    return;
+  }
+  
+  req->completed = 1;
+  js_resolve_promise(req->js, req->promise, js_mkundef());
   remove_pending_request(req);
   free_fs_request(req);
 }
@@ -454,7 +476,6 @@ static jsval_t builtin_fs_readFile(struct js *js, jsval_t *args, int nargs) {
   req->uv_req.data = req;
   
   utarray_push_back(pending_requests, &req);
-  
   int result = uv_fs_open(fs_loop, &req->uv_req, req->path, O_RDONLY, 0, on_open_for_read);
   
   if (result < 0) {
@@ -488,7 +509,6 @@ static jsval_t builtin_fs_readBytes(struct js *js, jsval_t *args, int nargs) {
   req->uv_req.data = req;
   
   utarray_push_back(pending_requests, &req);
-  
   int result = uv_fs_open(fs_loop, &req->uv_req, req->path, O_RDONLY, 0, on_open_for_read);
   
   if (result < 0) {
@@ -694,9 +714,7 @@ static jsval_t builtin_fs_writeFile(struct js *js, jsval_t *args, int nargs) {
   req->uv_req.data = req;
   
   utarray_push_back(pending_requests, &req);
-  
-  int result = uv_fs_open(fs_loop, &req->uv_req, req->path, 
-                          O_WRONLY | O_CREAT | O_TRUNC, 0644, on_open_for_write);
+  int result = uv_fs_open(fs_loop, &req->uv_req, req->path, O_WRONLY | O_CREAT | O_TRUNC, 0644, on_open_for_write);
   
   if (result < 0) {
     req->failed = 1;
@@ -753,7 +771,6 @@ static jsval_t builtin_fs_unlink(struct js *js, jsval_t *args, int nargs) {
   req->uv_req.data = req;
   
   utarray_push_back(pending_requests, &req);
-  
   int result = uv_fs_unlink(fs_loop, &req->uv_req, req->path, on_unlink_complete);
   
   if (result < 0) {
@@ -843,7 +860,6 @@ static jsval_t builtin_fs_mkdir(struct js *js, jsval_t *args, int nargs) {
   req->uv_req.data = req;
   
   utarray_push_back(pending_requests, &req);
-  
   int result = uv_fs_mkdir(fs_loop, &req->uv_req, req->path, mode, on_mkdir_complete);
   
   if (result < 0) {
@@ -905,7 +921,6 @@ static jsval_t builtin_fs_rmdir(struct js *js, jsval_t *args, int nargs) {
   req->uv_req.data = req;
   
   utarray_push_back(pending_requests, &req);
-  
   int result = uv_fs_rmdir(fs_loop, &req->uv_req, req->path, on_rmdir_complete);
   
   if (result < 0) {
@@ -920,14 +935,67 @@ static jsval_t builtin_fs_rmdir(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t stat_isFile(struct js *js, jsval_t *args, int nargs) {
   jsval_t this = js_getthis(js);
-  jsval_t val = js_get(js, this, "_isFile");
-  return js_type(val) == JS_TRUE ? js_mktrue() : js_mkfalse();
+  jsval_t mode_val = js_get_slot(js, this, SLOT_DATA);
+  
+  if (js_type(mode_val) != JS_NUM) return js_mkfalse();
+  mode_t mode = (mode_t)js_getnum(mode_val);
+  
+  return S_ISREG(mode) ? js_mktrue() : js_mkfalse();
 }
 
 static jsval_t stat_isDirectory(struct js *js, jsval_t *args, int nargs) {
   jsval_t this = js_getthis(js);
-  jsval_t val = js_get(js, this, "_isDirectory");
-  return js_type(val) == JS_TRUE ? js_mktrue() : js_mkfalse();
+  jsval_t mode_val = js_get_slot(js, this, SLOT_DATA);
+  
+  if (js_type(mode_val) != JS_NUM) return js_mkfalse();
+  mode_t mode = (mode_t)js_getnum(mode_val);
+  
+  return S_ISDIR(mode) ? js_mktrue() : js_mkfalse();
+}
+
+static jsval_t stat_isSymbolicLink(struct js *js, jsval_t *args, int nargs) {
+  jsval_t this = js_getthis(js);
+  jsval_t mode_val = js_get_slot(js, this, SLOT_DATA);
+  
+  if (js_type(mode_val) != JS_NUM) return js_mkfalse();
+  mode_t mode = (mode_t)js_getnum(mode_val);
+  
+  return S_ISLNK(mode) ? js_mktrue() : js_mkfalse();
+}
+
+static jsval_t create_stats_object(struct js *js, struct stat *st) {
+  jsval_t stat_obj = js_mkobj(js);
+  jsval_t proto = js_get_ctor_proto(js, "Stats", 5);
+  if (js_type(proto) == JS_OBJ) js_set_proto(js, stat_obj, proto);
+  
+  js_set_slot(js, stat_obj, SLOT_DATA, js_mknum((double)st->st_mode));
+  js_set(js, stat_obj, "size", js_mknum((double)st->st_size));
+  js_set(js, stat_obj, "mode", js_mknum((double)st->st_mode));
+  js_set(js, stat_obj, "uid", js_mknum((double)st->st_uid));
+  js_set(js, stat_obj, "gid", js_mknum((double)st->st_gid));
+  
+  return stat_obj;
+}
+
+static const char *errno_to_code(int err_num) {
+  switch (err_num) {
+    case ENOENT: return "ENOENT";
+    case EACCES: return "EACCES";
+    case ENOTDIR: return "ENOTDIR";
+    case ELOOP: return "ELOOP";
+    case ENAMETOOLONG: return "ENAMETOOLONG";
+    case EOVERFLOW: return "EOVERFLOW";
+    case EROFS: return "EROFS";
+    case ETXTBSY: return "ETXTBSY";
+    case EEXIST: return "EEXIST";
+    case ENOTEMPTY: return "ENOTEMPTY";
+    case EISDIR: return "EISDIR";
+    case EBUSY: return "EBUSY";
+    case EINVAL: return "EINVAL";
+    case EPERM: return "EPERM";
+    case EIO: return "EIO";
+    default: return "UNKNOWN";
+  }
 }
 
 static jsval_t builtin_fs_statSync(struct js *js, jsval_t *args, int nargs) {
@@ -947,20 +1015,13 @@ static jsval_t builtin_fs_statSync(struct js *js, jsval_t *args, int nargs) {
   free(path_cstr);
   
   if (result != 0) {
-    char err_msg[256];
-    snprintf(err_msg, sizeof(err_msg), "Failed to stat file: %s", strerror(errno));
-    return js_mkerr(js, err_msg);
+    const char *code = errno_to_code(errno);
+    jsval_t err = js_mkerr(js, "Failed to stat file: %s", strerror(errno));
+    js_set(js, js->thrown_value, "code", js_mkstr(js, code, strlen(code)));
+    return err;
   }
   
-  jsval_t stat_obj = js_mkobj(js);
-  js_set(js, stat_obj, "size", js_mknum((double)st.st_size));
-  js_set(js, stat_obj, "mode", js_mknum((double)st.st_mode));
-  js_set(js, stat_obj, "_isFile", S_ISREG(st.st_mode) ? js_mktrue() : js_mkfalse());
-  js_set(js, stat_obj, "_isDirectory", S_ISDIR(st.st_mode) ? js_mktrue() : js_mkfalse());
-  js_set(js, stat_obj, "isFile", js_mkfun(stat_isFile));
-  js_set(js, stat_obj, "isDirectory", js_mkfun(stat_isDirectory));
-  
-  return stat_obj;
+  return create_stats_object(js, &st);
 }
 
 static jsval_t builtin_fs_stat(struct js *js, jsval_t *args, int nargs) {
@@ -984,7 +1045,6 @@ static jsval_t builtin_fs_stat(struct js *js, jsval_t *args, int nargs) {
   req->uv_req.data = req;
   
   utarray_push_back(pending_requests, &req);
-  
   int result = uv_fs_stat(fs_loop, &req->uv_req, req->path, on_stat_complete);
   
   if (result < 0) {
@@ -1037,7 +1097,6 @@ static jsval_t builtin_fs_exists(struct js *js, jsval_t *args, int nargs) {
   req->uv_req.data = req;
   
   utarray_push_back(pending_requests, &req);
-  
   int result = uv_fs_stat(fs_loop, &req->uv_req, req->path, on_exists_complete);
   
   if (result < 0) {
@@ -1045,6 +1104,74 @@ static jsval_t builtin_fs_exists(struct js *js, jsval_t *args, int nargs) {
     js_resolve_promise(req->js, req->promise, js_mkfalse());
     remove_pending_request(req);
     free_fs_request(req);
+  }
+  
+  return req->promise;
+}
+
+static jsval_t builtin_fs_accessSync(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "accessSync() requires a path argument");
+  
+  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "accessSync() path must be a string");
+  
+  size_t path_len;
+  char *path = js_getstr(js, args[0], &path_len);
+  if (!path) return js_mkerr(js, "Failed to get path string");
+  
+  int mode = F_OK;
+  if (nargs >= 2 && js_type(args[1]) == JS_NUM) {
+    mode = (int)js_getnum(args[1]);
+  }
+  
+  char *path_cstr = strndup(path, path_len);
+  if (!path_cstr) return js_mkerr(js, "Out of memory");
+  
+  int result = access(path_cstr, mode);
+  free(path_cstr);
+  
+  if (result != 0) {
+    const char *code = errno_to_code(errno);
+    jsval_t err = js_mkerr(js, "Access denied: %s", strerror(errno));
+    js_set(js, js->thrown_value, "code", js_mkstr(js, code, strlen(code)));
+    return err;
+  }
+  
+  return js_mkundef();
+}
+
+static jsval_t builtin_fs_access(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "access() requires a path argument");
+  
+  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "access() path must be a string");
+  
+  size_t path_len;
+  char *path = js_getstr(js, args[0], &path_len);
+  if (!path) return js_mkerr(js, "Failed to get path string");
+  
+  int mode = F_OK;
+  if (nargs >= 2 && js_type(args[1]) == JS_NUM) {
+    mode = (int)js_getnum(args[1]);
+  }
+  
+  ensure_fs_loop();
+  
+  fs_request_t *req = calloc(1, sizeof(fs_request_t));
+  if (!req) return js_mkerr(js, "Out of memory");
+  
+  req->js = js;
+  req->op_type = FS_OP_ACCESS;
+  req->promise = js_mkpromise(js);
+  req->path = strndup(path, path_len);
+  req->uv_req.data = req;
+  
+  utarray_push_back(pending_requests, &req);
+  int result = uv_fs_access(fs_loop, &req->uv_req, req->path, mode, on_access_complete);
+  
+  if (result < 0) {
+    req->failed = 1;
+    req->error_msg = strdup(uv_strerror(result));
+    req->completed = 1;
+    complete_request(req);
   }
   
   return req->promise;
@@ -1106,7 +1233,6 @@ static jsval_t builtin_fs_readdir(struct js *js, jsval_t *args, int nargs) {
   req->uv_req.data = req;
   
   utarray_push_back(pending_requests, &req);
-  
   int result = uv_fs_scandir(fs_loop, &req->uv_req, req->path, 0, on_readdir_complete);
   
   if (result < 0) {
@@ -1117,6 +1243,25 @@ static jsval_t builtin_fs_readdir(struct js *js, jsval_t *args, int nargs) {
   }
   
   return req->promise;
+}
+
+void init_fs_module(void) {
+  struct js *js = rt->js;
+  jsval_t glob = js_glob(js);
+  
+  jsval_t stats_ctor = js_mkobj(js);
+  jsval_t stats_proto = js_mkobj(js);
+  
+  js_set(js, stats_proto, "isFile", js_mkfun(stat_isFile));
+  js_set(js, stats_proto, "isDirectory", js_mkfun(stat_isDirectory));
+  js_set(js, stats_proto, "isSymbolicLink", js_mkfun(stat_isSymbolicLink));
+  js_set(js, stats_proto, get_toStringTag_sym_key(), js_mkstr(js, "Stats", 5));
+  
+  js_mkprop_fast(js, stats_ctor, "prototype", 9, stats_proto);
+  js_mkprop_fast(js, stats_ctor, "name", 4, js_mkstr(js, "Stats", 5));
+  js_set_descriptor(js, stats_ctor, "name", 4, 0);
+  
+  js_set(js, glob, "Stats", js_obj_to_func(stats_ctor));
 }
 
 jsval_t fs_library(struct js *js) {
@@ -1141,9 +1286,18 @@ jsval_t fs_library(struct js *js) {
   js_set(js, lib, "statSync", js_mkfun(builtin_fs_statSync));
   js_set(js, lib, "exists", js_mkfun(builtin_fs_exists));
   js_set(js, lib, "existsSync", js_mkfun(builtin_fs_existsSync));
+  js_set(js, lib, "access", js_mkfun(builtin_fs_access));
+  js_set(js, lib, "accessSync", js_mkfun(builtin_fs_accessSync));
   js_set(js, lib, "readdir", js_mkfun(builtin_fs_readdir));
   js_set(js, lib, "readdirSync", js_mkfun(builtin_fs_readdirSync));
   js_set(js, lib, get_toStringTag_sym_key(), js_mkstr(js, "fs", 2));
+  
+  jsval_t constants = js_mkobj(js);
+  js_set(js, constants, "F_OK", js_mknum(F_OK));
+  js_set(js, constants, "R_OK", js_mknum(R_OK));
+  js_set(js, constants, "W_OK", js_mknum(W_OK));
+  js_set(js, constants, "X_OK", js_mknum(X_OK));
+  js_set(js, lib, "constants", constants);
 
   return lib;
 }
@@ -1165,8 +1319,6 @@ void fs_gc_update_roots(GC_FWD_ARGS) {
   unsigned int len = utarray_len(pending_requests);
   for (unsigned int i = 0; i < len; i++) {
     fs_request_t **reqp = (fs_request_t **)utarray_eltptr(pending_requests, i);
-    if (reqp && *reqp) {
-      (*reqp)->promise = fwd_val(ctx, (*reqp)->promise);
-    }
+    if (reqp && *reqp) { (*reqp)->promise = fwd_val(ctx, (*reqp)->promise); }
   }
 }

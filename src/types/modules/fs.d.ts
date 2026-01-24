@@ -2,9 +2,19 @@ declare module 'fs' {
   interface Stats {
     size: number;
     mode: number;
+    uid: number;
+    gid: number;
     isFile(): boolean;
     isDirectory(): boolean;
+    isSymbolicLink(): boolean;
   }
+
+  const constants: {
+    F_OK: number;
+    R_OK: number;
+    W_OK: number;
+    X_OK: number;
+  };
 
   function readFile(path: string): Promise<string>;
   function readFileSync(path: string): string;
@@ -25,6 +35,8 @@ declare module 'fs' {
   function statSync(path: string): Stats;
   function exists(path: string): Promise<boolean>;
   function existsSync(path: string): boolean;
+  function access(path: string, mode?: number): Promise<void>;
+  function accessSync(path: string, mode?: number): void;
   function readdir(path: string): Promise<string[]>;
   function readdirSync(path: string): string[];
 }
