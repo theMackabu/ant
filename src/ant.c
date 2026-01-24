@@ -3671,11 +3671,11 @@ create_new:
   return result;
 }
 
-static jsval_t setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v) {
+static inline jsval_t setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v) {
   return js_setprop(js, obj, k, v);
 }
 
-static inline jsval_t setprop_fast(struct js *js, jsval_t obj, const char *key, size_t len, jsval_t v) {
+static inline jsval_t setprop_cstr(struct js *js, jsval_t obj, const char *key, size_t len, jsval_t v) {
   jsval_t k = js_mkstr(js, key, len);
   if (is_err(k)) return k;
   return mkprop(js, obj, k, v, 0);
@@ -3708,11 +3708,11 @@ jsval_t js_mksym(struct js *js, const char *desc) {
   return mkval(T_SYMBOL, payload);
 }
 
-static uint64_t sym_get_id(jsval_t v) {
+static inline uint64_t sym_get_id(jsval_t v) {
   return (vdata(v) >> 24) & PROPREF_PAYLOAD;
 }
 
-static jsoff_t sym_get_desc_off(jsval_t v) {
+static inline jsoff_t sym_get_desc_off(jsval_t v) {
   return vdata(v) & PROPREF_PAYLOAD;
 }
 
@@ -3722,7 +3722,7 @@ static const char *sym_get_desc(struct js *js, jsval_t v) {
   return (const char *)&js->mem[off + sizeof(jsoff_t)];
 }
 
-uint64_t js_sym_id(jsval_t sym) {
+uint64_t inline js_sym_id(jsval_t sym) {
   return sym_get_id(sym);
 }
 
@@ -3740,7 +3740,7 @@ const char *js_sym_key(jsval_t sym) {
   return (const char *)(uintptr_t)(data & ~(1ULL << 47));
 }
 
-const char *js_sym_desc(struct js *js, jsval_t sym) {
+const inline char *js_sym_desc(struct js *js, jsval_t sym) {
   return sym_get_desc(js, sym);
 }
 
@@ -3973,8 +3973,10 @@ static inline bool streq(const char *buf, size_t len, const char *s, size_t n) {
   return len == n && !memcmp(buf, s, n);
 }
 
-static bool is_strict_restricted(const char *buf, size_t len) {
-  return streq(buf, len, "eval", 4) || streq(buf, len, "arguments", 9);
+static inline bool is_strict_restricted(const char *buf, size_t len) {
+  if (len == 4) return streq(buf, len, "eval", 4);
+  if (len == 9) return streq(buf, len, "arguments", 9);
+  return false;
 }
 
 static int encode_utf8(uint32_t cp, char *out) {
@@ -13210,10 +13212,10 @@ static jsval_t builtin_Error(struct js *js, jsval_t *args, int nargs) {
       const char *str = js_str(js, msg);
       msg = js_mkstr(js, str, strlen(str));
     }
-    setprop_fast(js, this_val, "message", 7, msg);
+    js_mkprop_fast(js, this_val, "message", 7, msg);
   }
   
-  setprop_fast(js, this_val, "name", 4, name);
+  js_mkprop_fast(js, this_val, "name", 4, name);
   return this_val;
 }
 
@@ -13230,7 +13232,7 @@ static jsval_t builtin_AggregateError(struct js *js, jsval_t *args, int nargs) {
   
   jsval_t errors = nargs > 0 ? args[0] : mkarr(js);
   if (vtype(errors) != T_ARR) errors = mkarr(js);
-  setprop_fast(js, this_val, "errors", 6, errors);
+  js_mkprop_fast(js, this_val, "errors", 6, errors);
   
   if (nargs > 1 && vtype(args[1]) != T_UNDEF) {
     jsval_t msg = args[1];
@@ -13238,10 +13240,10 @@ static jsval_t builtin_AggregateError(struct js *js, jsval_t *args, int nargs) {
       const char *str = js_str(js, msg);
       msg = js_mkstr(js, str, strlen(str));
     }
-    setprop_fast(js, this_val, "message", 7, msg);
+    js_mkprop_fast(js, this_val, "message", 7, msg);
   }
   
-  setprop_fast(js, this_val, "name", 4, ANT_STRING("AggregateError"));
+  js_mkprop_fast(js, this_val, "name", 4, ANT_STRING("AggregateError"));
   return this_val;
 }
 
@@ -20382,8 +20384,8 @@ static jsval_t esm_load_module(struct js *js, esm_module_t *mod) {
     return result;
   }
   
-  jsoff_t default_off = lkp(js, ns, "default", 7);
-  mod->default_export = default_off != 0 ? resolveprop(js, mkval(T_PROP, default_off)) : ns;
+  jsval_t default_val = js_get_slot(js, ns, SLOT_DEFAULT);
+  mod->default_export = js_type(default_val) != JS_UNDEF ? default_val : ns;
   
   mod->is_loaded = true;
   mod->is_loading = false;
@@ -20666,8 +20668,8 @@ static jsval_t js_import_stmt(struct js *js) {
     
     jsval_t default_val;
     if (vtype(ns) == T_OBJ) {
-      jsoff_t default_off = lkp(js, ns, "default", 7);
-      default_val = default_off != 0 ? resolveprop(js, mkval(T_PROP, default_off)) : ns;
+      jsval_t slot_val = js_get_slot(js, ns, SLOT_DEFAULT);
+      default_val = js_type(slot_val) != JS_UNDEF ? slot_val : ns;
     } else default_val = ns;
     setprop(js, js->scope, js_mkstr(js, default_name, default_len), default_val);
     
@@ -20750,7 +20752,10 @@ static jsval_t js_export_stmt(struct js *js) {
     jsval_t value = js_assignment(js);
     if (is_err(value)) return value;
     
-    setprop(js, js->module_ns, js_mkstr(js, "default", 7), resolveprop(js, value));
+    jsval_t resolved = resolveprop(js, value);
+    js_set_slot(js, js->module_ns, SLOT_DEFAULT, resolved);
+    js_mkprop_fast(js, js->module_ns, "default", 7, resolved);
+    
     return value;
   }
   
