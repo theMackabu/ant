@@ -56,7 +56,6 @@
 _Static_assert(sizeof(double) == 8, "NaN-boxing requires 64-bit IEEE 754 doubles");
 _Static_assert(sizeof(uint64_t) == 8, "NaN-boxing requires 64-bit integers");
 _Static_assert(sizeof(double) == sizeof(uint64_t), "double and uint64_t must have same size");
-_Static_assert(sizeof(void*) <= 8 && (sizeof(void*) < 8 || 1), "ANT_PTR: pointers must fit in 53-bit double mantissa");
 
 #if defined(__STDC_IEC_559__) || defined(__GCC_IEC_559)
 #elif defined(__FAST_MATH__)
@@ -21924,11 +21923,16 @@ static jsval_t weakset_delete(struct js *js, jsval_t *args, int nargs) {
   return mkval(T_BOOL, 0);
 }
 
-struct js *js_create(void *buf, size_t len) {
+ant_t *js_create(void *buf, size_t len) {
+  assert(
+    (uintptr_t)buf <= ((1ULL << 53) - 1) &&
+    "ANT_PTR: pointer exceeds 53-bit NaN-boxing limit"
+  );
+  
   ANT_GC_INIT();
   intern_init();
-  
-  struct js *js = NULL;
+    
+  ant_t *js = NULL;
   if (len < sizeof(*js) + esize(T_OBJ)) return js;
   memset(buf, 0, len);
   
