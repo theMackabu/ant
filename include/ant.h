@@ -4,6 +4,7 @@
 #pragma once
 #define PCRE2_CODE_UNIT_WIDTH 8
 
+#include <math.h>
 #include <common.h>
 #include <stdbool.h>
 #include <stddef.h>
