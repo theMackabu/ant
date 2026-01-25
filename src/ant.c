@@ -13913,29 +13913,27 @@ static void date_set_time(struct js *js, jsval_t date, double ms) {
 }
 
 static jsval_t builtin_Date_setTime(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return tov(JS_NAN);
-  double ms = tod(args[0]);
+  double ms = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   date_set_time(js, js->this_val, ms);
   return tov(ms);
 }
 
 static jsval_t builtin_Date_setMilliseconds(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return tov(JS_NAN);
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(JS_NAN);
-  double newMs = tod(args[0]);
+  double newMs = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(ms) || isnan(newMs)) { date_set_time(js, js->this_val, JS_NAN); return tov(JS_NAN); }
   ms = floor(ms / 1000.0) * 1000.0 + newMs;
   date_set_time(js, js->this_val, ms);
   return tov(ms);
 }
 
 static jsval_t builtin_Date_setSeconds(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return tov(JS_NAN);
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(JS_NAN);
+  double sec = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(ms) || isnan(sec)) { date_set_time(js, js->this_val, JS_NAN); return tov(JS_NAN); }
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = localtime(&t);
-  tm->tm_sec = (int)tod(args[0]);
+  tm->tm_sec = (int)sec;
   if (nargs >= 2) ms = floor(ms / 1000.0) * 1000.0 + tod(args[1]);
   else ms = floor(ms / 1000.0) * 1000.0 + fmod(ms, 1000.0);
   time_t newt = mktime(tm);
@@ -13945,12 +13943,12 @@ static jsval_t builtin_Date_setSeconds(struct js *js, jsval_t *args, int nargs) 
 }
 
 static jsval_t builtin_Date_setMinutes(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return tov(JS_NAN);
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(JS_NAN);
+  double min = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(ms) || isnan(min)) { date_set_time(js, js->this_val, JS_NAN); return tov(JS_NAN); }
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = localtime(&t);
-  tm->tm_min = (int)tod(args[0]);
+  tm->tm_min = (int)min;
   if (nargs >= 2) tm->tm_sec = (int)tod(args[1]);
   time_t newt = mktime(tm);
   ms = (double)newt * 1000.0 + fmod(ms, 1000.0);
@@ -13959,12 +13957,12 @@ static jsval_t builtin_Date_setMinutes(struct js *js, jsval_t *args, int nargs) 
 }
 
 static jsval_t builtin_Date_setHours(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return tov(JS_NAN);
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(JS_NAN);
+  double hour = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(ms) || isnan(hour)) { date_set_time(js, js->this_val, JS_NAN); return tov(JS_NAN); }
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = localtime(&t);
-  tm->tm_hour = (int)tod(args[0]);
+  tm->tm_hour = (int)hour;
   if (nargs >= 2) tm->tm_min = (int)tod(args[1]);
   if (nargs >= 3) tm->tm_sec = (int)tod(args[2]);
   time_t newt = mktime(tm);
@@ -13974,12 +13972,12 @@ static jsval_t builtin_Date_setHours(struct js *js, jsval_t *args, int nargs) {
 }
 
 static jsval_t builtin_Date_setDate(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return tov(JS_NAN);
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(JS_NAN);
+  double day = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(ms) || isnan(day)) { date_set_time(js, js->this_val, JS_NAN); return tov(JS_NAN); }
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = localtime(&t);
-  tm->tm_mday = (int)tod(args[0]);
+  tm->tm_mday = (int)day;
   time_t newt = mktime(tm);
   ms = (double)newt * 1000.0 + fmod(ms, 1000.0);
   date_set_time(js, js->this_val, ms);
@@ -13987,12 +13985,12 @@ static jsval_t builtin_Date_setDate(struct js *js, jsval_t *args, int nargs) {
 }
 
 static jsval_t builtin_Date_setMonth(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return tov(JS_NAN);
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(JS_NAN);
+  double mon = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(ms) || isnan(mon)) { date_set_time(js, js->this_val, JS_NAN); return tov(JS_NAN); }
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = localtime(&t);
-  tm->tm_mon = (int)tod(args[0]);
+  tm->tm_mon = (int)mon;
   if (nargs >= 2) tm->tm_mday = (int)tod(args[1]);
   time_t newt = mktime(tm);
   ms = (double)newt * 1000.0 + fmod(ms, 1000.0);
@@ -14001,12 +13999,13 @@ static jsval_t builtin_Date_setMonth(struct js *js, jsval_t *args, int nargs) {
 }
 
 static jsval_t builtin_Date_setFullYear(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return tov(JS_NAN);
   double ms = date_get_time(js, js->this_val);
+  double year = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(year)) { date_set_time(js, js->this_val, JS_NAN); return tov(JS_NAN); }
   if (isnan(ms)) ms = 0;
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = localtime(&t);
-  tm->tm_year = (int)tod(args[0]) - 1900;
+  tm->tm_year = (int)year - 1900;
   if (nargs >= 2) tm->tm_mon = (int)tod(args[1]);
   if (nargs >= 3) tm->tm_mday = (int)tod(args[2]);
   time_t newt = mktime(tm);
@@ -14016,23 +14015,22 @@ static jsval_t builtin_Date_setFullYear(struct js *js, jsval_t *args, int nargs)
 }
 
 static jsval_t builtin_Date_setUTCMilliseconds(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return tov(JS_NAN);
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(JS_NAN);
-  double newMs = tod(args[0]);
+  double newMs = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(ms) || isnan(newMs)) { date_set_time(js, js->this_val, JS_NAN); return tov(JS_NAN); }
   ms = floor(ms / 1000.0) * 1000.0 + newMs;
   date_set_time(js, js->this_val, ms);
   return tov(ms);
 }
 
 static jsval_t builtin_Date_setUTCSeconds(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return tov(JS_NAN);
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(JS_NAN);
+  double sec = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(ms) || isnan(sec)) { date_set_time(js, js->this_val, JS_NAN); return tov(JS_NAN); }
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = gmtime(&t);
   struct tm copy = *tm;
-  copy.tm_sec = (int)tod(args[0]);
+  copy.tm_sec = (int)sec;
   time_t newt = timegm(&copy);
   ms = (double)newt * 1000.0 + fmod(ms, 1000.0);
   date_set_time(js, js->this_val, ms);
@@ -14040,13 +14038,13 @@ static jsval_t builtin_Date_setUTCSeconds(struct js *js, jsval_t *args, int narg
 }
 
 static jsval_t builtin_Date_setUTCMinutes(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return tov(JS_NAN);
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(JS_NAN);
+  double min = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(ms) || isnan(min)) { date_set_time(js, js->this_val, JS_NAN); return tov(JS_NAN); }
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = gmtime(&t);
   struct tm copy = *tm;
-  copy.tm_min = (int)tod(args[0]);
+  copy.tm_min = (int)min;
   if (nargs >= 2) copy.tm_sec = (int)tod(args[1]);
   time_t newt = timegm(&copy);
   ms = (double)newt * 1000.0 + fmod(ms, 1000.0);
@@ -14055,13 +14053,13 @@ static jsval_t builtin_Date_setUTCMinutes(struct js *js, jsval_t *args, int narg
 }
 
 static jsval_t builtin_Date_setUTCHours(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return tov(JS_NAN);
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(JS_NAN);
+  double hour = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(ms) || isnan(hour)) { date_set_time(js, js->this_val, JS_NAN); return tov(JS_NAN); }
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = gmtime(&t);
   struct tm copy = *tm;
-  copy.tm_hour = (int)tod(args[0]);
+  copy.tm_hour = (int)hour;
   if (nargs >= 2) copy.tm_min = (int)tod(args[1]);
   if (nargs >= 3) copy.tm_sec = (int)tod(args[2]);
   time_t newt = timegm(&copy);
@@ -14071,13 +14069,13 @@ static jsval_t builtin_Date_setUTCHours(struct js *js, jsval_t *args, int nargs)
 }
 
 static jsval_t builtin_Date_setUTCDate(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return tov(JS_NAN);
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(JS_NAN);
+  double day = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(ms) || isnan(day)) { date_set_time(js, js->this_val, JS_NAN); return tov(JS_NAN); }
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = gmtime(&t);
   struct tm copy = *tm;
-  copy.tm_mday = (int)tod(args[0]);
+  copy.tm_mday = (int)day;
   time_t newt = timegm(&copy);
   ms = (double)newt * 1000.0 + fmod(ms, 1000.0);
   date_set_time(js, js->this_val, ms);
@@ -14085,13 +14083,13 @@ static jsval_t builtin_Date_setUTCDate(struct js *js, jsval_t *args, int nargs) 
 }
 
 static jsval_t builtin_Date_setUTCMonth(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return tov(JS_NAN);
   double ms = date_get_time(js, js->this_val);
-  if (isnan(ms)) return tov(JS_NAN);
+  double mon = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(ms) || isnan(mon)) { date_set_time(js, js->this_val, JS_NAN); return tov(JS_NAN); }
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = gmtime(&t);
   struct tm copy = *tm;
-  copy.tm_mon = (int)tod(args[0]);
+  copy.tm_mon = (int)mon;
   if (nargs >= 2) copy.tm_mday = (int)tod(args[1]);
   time_t newt = timegm(&copy);
   ms = (double)newt * 1000.0 + fmod(ms, 1000.0);
@@ -14100,13 +14098,14 @@ static jsval_t builtin_Date_setUTCMonth(struct js *js, jsval_t *args, int nargs)
 }
 
 static jsval_t builtin_Date_setUTCFullYear(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return tov(JS_NAN);
   double ms = date_get_time(js, js->this_val);
+  double year = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(year)) { date_set_time(js, js->this_val, JS_NAN); return tov(JS_NAN); }
   if (isnan(ms)) ms = 0;
   time_t t = (time_t)(ms / 1000.0);
   struct tm *tm = gmtime(&t);
   struct tm copy = *tm;
-  copy.tm_year = (int)tod(args[0]) - 1900;
+  copy.tm_year = (int)year - 1900;
   if (nargs >= 2) copy.tm_mon = (int)tod(args[1]);
   if (nargs >= 3) copy.tm_mday = (int)tod(args[2]);
   time_t newt = timegm(&copy);
