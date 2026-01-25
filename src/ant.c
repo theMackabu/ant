@@ -14,7 +14,6 @@
 #include <uv.h>
 #include <oxc.h>
 #include <assert.h>
-#include <math.h>
 #include <pcre2.h>
 #include <stdarg.h>
 #include <stdio.h>
