@@ -14234,68 +14234,81 @@ static jsval_t builtin_Date_toJSON(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t builtin_Math_abs(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
-  return tov(fabs(tod(args[0])));
+  double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(x)) return tov(JS_NAN);
+  return tov(fabs(x));
 }
 
 static jsval_t builtin_Math_acos(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
-  return tov(acos(tod(args[0])));
+  double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(x)) return tov(JS_NAN);
+  return tov(acos(x));
 }
 
 static jsval_t builtin_Math_acosh(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
-  return tov(acosh(tod(args[0])));
+  double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(x)) return tov(JS_NAN);
+  return tov(acosh(x));
 }
 
 static jsval_t builtin_Math_asin(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
-  return tov(asin(tod(args[0])));
+  double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(x)) return tov(JS_NAN);
+  return tov(asin(x));
 }
 
 static jsval_t builtin_Math_asinh(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
-  return tov(asinh(tod(args[0])));
+  double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(x)) return tov(JS_NAN);
+  return tov(asinh(x));
 }
 
 static jsval_t builtin_Math_atan(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
-  return tov(atan(tod(args[0])));
+  double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(x)) return tov(JS_NAN);
+  return tov(atan(x));
 }
 
 static jsval_t builtin_Math_atanh(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
-  return tov(atanh(tod(args[0])));
+  double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(x)) return tov(JS_NAN);
+  return tov(atanh(x));
 }
 
 static jsval_t builtin_Math_atan2(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 2 || vtype(args[0]) != T_NUM || vtype(args[1]) != T_NUM) return tov(JS_NAN);
-  return tov(atan2(tod(args[0]), tod(args[1])));
+  double y = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  double x = (nargs < 2) ? JS_NAN : js_to_number(js, args[1]);
+  if (isnan(y) || isnan(x)) return tov(JS_NAN);
+  return tov(atan2(y, x));
 }
 
 static jsval_t builtin_Math_cbrt(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
-  return tov(cbrt(tod(args[0])));
+  double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(x)) return tov(JS_NAN);
+  return tov(cbrt(x));
 }
 
 static jsval_t builtin_Math_ceil(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
-  return tov(ceil(tod(args[0])));
+  double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(x)) return tov(JS_NAN);
+  return tov(ceil(x));
 }
 
 static jsval_t builtin_Math_clz32(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(32);
-  uint32_t n = (uint32_t) tod(args[0]);
+  if (nargs < 1) return tov(32);
+  double x = js_to_number(js, args[0]);
+  if (isnan(x) || isinf(x)) return tov(32);
+  uint32_t n = (uint32_t) x;
   if (n == 0) return tov(32);
   int count = 0;
   while ((n & 0x80000000U) == 0) { count++; n <<= 1; }
@@ -14304,38 +14317,44 @@ static jsval_t builtin_Math_clz32(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t builtin_Math_cos(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
-  return tov(cos(tod(args[0])));
+  double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(x)) return tov(JS_NAN);
+  return tov(cos(x));
 }
 
 static jsval_t builtin_Math_cosh(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
-  return tov(cosh(tod(args[0])));
+  double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(x)) return tov(JS_NAN);
+  return tov(cosh(x));
 }
 
 static jsval_t builtin_Math_exp(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
-  return tov(exp(tod(args[0])));
+  double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(x)) return tov(JS_NAN);
+  return tov(exp(x));
 }
 
 static jsval_t builtin_Math_expm1(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
-  return tov(expm1(tod(args[0])));
+  double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(x)) return tov(JS_NAN);
+  return tov(expm1(x));
 }
 
 static jsval_t builtin_Math_floor(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
-  return tov(floor(tod(args[0])));
+  double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(x)) return tov(JS_NAN);
+  return tov(floor(x));
 }
 
 static jsval_t builtin_Math_fround(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
-  return tov((double)(float)tod(args[0]));
+  double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(x)) return tov(JS_NAN);
+  return tov((double)(float)x);
 }
 
 static jsval_t builtin_Math_hypot(struct js *js, jsval_t *args, int nargs) {
@@ -14343,8 +14362,8 @@ static jsval_t builtin_Math_hypot(struct js *js, jsval_t *args, int nargs) {
   if (nargs == 0) return tov(0.0);
   double sum = 0.0;
   for (int i = 0; i < nargs; i++) {
-    if (vtype(args[i]) != T_NUM) return tov(JS_NAN);
-    double v = tod(args[i]);
+    double v = js_to_number(js, args[i]);
+    if (isnan(v)) return tov(JS_NAN);
     sum += v * v;
   }
   return tov(sqrt(sum));
@@ -14364,33 +14383,37 @@ static int32_t toInt32(double d) {
 static jsval_t builtin_Math_imul(struct js *js, jsval_t *args, int nargs) {
   (void) js;
   if (nargs < 2) return tov(0);
-  int32_t a = toInt32(tod(args[0]));
-  int32_t b = toInt32(tod(args[1]));
+  int32_t a = toInt32(js_to_number(js, args[0]));
+  int32_t b = toInt32(js_to_number(js, args[1]));
   return tov((double)((int32_t)((uint32_t)a * (uint32_t)b)));
 }
 
 static jsval_t builtin_Math_log(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
-  return tov(log(tod(args[0])));
+  double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(x)) return tov(JS_NAN);
+  return tov(log(x));
 }
 
 static jsval_t builtin_Math_log1p(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
-  return tov(log1p(tod(args[0])));
+  double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(x)) return tov(JS_NAN);
+  return tov(log1p(x));
 }
 
 static jsval_t builtin_Math_log10(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
-  return tov(log10(tod(args[0])));
+  double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(x)) return tov(JS_NAN);
+  return tov(log10(x));
 }
 
 static jsval_t builtin_Math_log2(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
-  return tov(log2(tod(args[0])));
+  double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(x)) return tov(JS_NAN);
+  return tov(log2(x));
 }
 
 static jsval_t builtin_Math_max(struct js *js, jsval_t *args, int nargs) {
@@ -14398,8 +14421,7 @@ static jsval_t builtin_Math_max(struct js *js, jsval_t *args, int nargs) {
   if (nargs == 0) return tov(JS_NEG_INF);
   double max_val = JS_NEG_INF;
   for (int i = 0; i < nargs; i++) {
-    if (vtype(args[i]) != T_NUM) return tov(JS_NAN);
-    double v = tod(args[i]);
+    double v = js_to_number(js, args[i]);
     if (isnan(v)) return tov(JS_NAN);
     if (v > max_val) max_val = v;
   }
@@ -14411,8 +14433,7 @@ static jsval_t builtin_Math_min(struct js *js, jsval_t *args, int nargs) {
   if (nargs == 0) return tov(JS_INF);
   double min_val = JS_INF;
   for (int i = 0; i < nargs; i++) {
-    if (vtype(args[i]) != T_NUM) return tov(JS_NAN);
-    double v = tod(args[i]);
+    double v = js_to_number(js, args[i]);
     if (isnan(v)) return tov(JS_NAN);
     if (v < min_val) min_val = v;
   }
@@ -14421,8 +14442,10 @@ static jsval_t builtin_Math_min(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t builtin_Math_pow(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 2 || vtype(args[0]) != T_NUM || vtype(args[1]) != T_NUM) return tov(JS_NAN);
-  return tov(pow(tod(args[0]), tod(args[1])));
+  double base = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  double exp = (nargs < 2) ? JS_NAN : js_to_number(js, args[1]);
+  if (isnan(base) || isnan(exp)) return tov(JS_NAN);
+  return tov(pow(base, exp));
 }
 
 static bool random_seeded = false;
@@ -14440,16 +14463,14 @@ static jsval_t builtin_Math_random(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t builtin_Math_round(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
-  double x = tod(args[0]);
+  double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   if (isnan(x) || isinf(x)) return tov(x);
   return tov(floor(x + 0.5));
 }
 
 static jsval_t builtin_Math_sign(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
-  double v = tod(args[0]);
+  double v = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   if (isnan(v)) return tov(JS_NAN);
   if (v > 0) return tov(1.0);
   if (v < 0) return tov(-1.0);
@@ -14458,38 +14479,44 @@ static jsval_t builtin_Math_sign(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t builtin_Math_sin(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
-  return tov(sin(tod(args[0])));
+  double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(x)) return tov(JS_NAN);
+  return tov(sin(x));
 }
 
 static jsval_t builtin_Math_sinh(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
-  return tov(sinh(tod(args[0])));
+  double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(x)) return tov(JS_NAN);
+  return tov(sinh(x));
 }
 
 static jsval_t builtin_Math_sqrt(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
-  return tov(sqrt(tod(args[0])));
+  double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(x)) return tov(JS_NAN);
+  return tov(sqrt(x));
 }
 
 static jsval_t builtin_Math_tan(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
-  return tov(tan(tod(args[0])));
+  double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(x)) return tov(JS_NAN);
+  return tov(tan(x));
 }
 
 static jsval_t builtin_Math_tanh(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
-  return tov(tanh(tod(args[0])));
+  double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(x)) return tov(JS_NAN);
+  return tov(tanh(x));
 }
 
 static jsval_t builtin_Math_trunc(struct js *js, jsval_t *args, int nargs) {
   (void) js;
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
-  return tov(trunc(tod(args[0])));
+  double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
+  if (isnan(x)) return tov(JS_NAN);
+  return tov(trunc(x));
 }
 
 static jsval_t builtin_object_keys(struct js *js, jsval_t *args, int nargs) {
