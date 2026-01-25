@@ -33,7 +33,7 @@ static inline void ANT_GC_COLLECT(void) {
   }
 }
 
-static inline void *ant_gc_check_ptr(void *p, const char *func) {
+static inline void *mantissa_chk(void *p, const char *func) {
   if (p && ((uintptr_t)p >> 48) != 0) {
     fprintf(stderr, 
       "FATAL: %s returned pointer %p outside 48-bit NaN-boxing range\n"
@@ -44,15 +44,11 @@ static inline void *ant_gc_check_ptr(void *p, const char *func) {
   return p;
 }
 
-#define ANT_GC_MALLOC(size) \
-  ant_gc_check_ptr(GC_MALLOC_IGNORE_OFF_PAGE(size), "GC_MALLOC")
-#define ANT_GC_MALLOC_ATOMIC(size) \
-  ant_gc_check_ptr(GC_MALLOC_ATOMIC_IGNORE_OFF_PAGE(size), "GC_MALLOC_ATOMIC")
-#define ANT_GC_REALLOC(ptr, size) \
-  ant_gc_check_ptr(GC_REALLOC(ptr, size), "GC_REALLOC")
-  
-#define ANT_GC_FREE(ptr) GC_FREE(ptr)
+#define ANT_GC_MALLOC(size) mantissa_chk(GC_MALLOC_IGNORE_OFF_PAGE(size), "GC_MALLOC")
+#define ANT_GC_REALLOC(ptr, size) mantissa_chk(GC_REALLOC(ptr, size), "GC_REALLOC")
+#define ANT_GC_MALLOC_ATOMIC(size) mantissa_chk(GC_MALLOC_ATOMIC_IGNORE_OFF_PAGE(size), "GC_MALLOC_ATOMIC")
 
+#define ANT_GC_FREE(ptr) GC_FREE(ptr)
 #define ANT_GC_REGISTER_ROOT(ptr)
 #define ANT_GC_UNREGISTER_ROOT(ptr)
 
