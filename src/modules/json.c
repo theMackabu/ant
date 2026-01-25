@@ -18,7 +18,6 @@ static jsval_t yyjson_to_jsval(struct js *js, yyjson_val *val) {
     case YYJSON_TYPE_STR:  return js_mkstr(js, yyjson_get_str(val), yyjson_get_len(val));
     
     case YYJSON_TYPE_NUM: {
-      if (yyjson_is_int(val)) return js_mknum((double)yyjson_get_int(val));
       if (yyjson_is_sint(val)) return js_mknum((double)yyjson_get_sint(val));
       if (yyjson_is_uint(val)) return js_mknum((double)yyjson_get_uint(val));
       return js_mknum(yyjson_get_real(val));
