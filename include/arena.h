@@ -2,6 +2,8 @@
 #define ARENA_H
 
 #include <gc.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <minicoro.h>
 
@@ -30,9 +32,24 @@ static inline void ANT_GC_COLLECT(void) {
   }
 }
 
-#define ANT_GC_MALLOC(size) GC_MALLOC_IGNORE_OFF_PAGE(size)
-#define ANT_GC_MALLOC_ATOMIC(size) GC_MALLOC_ATOMIC_IGNORE_OFF_PAGE(size)
-#define ANT_GC_REALLOC(ptr, size) GC_REALLOC(ptr, size)
+static inline void *ant_gc_check_ptr(void *p, const char *func) {
+  if (p && ((uintptr_t)p >> 48) != 0) {
+    fprintf(stderr, 
+      "FATAL: %s returned pointer %p outside 48-bit NaN-boxing range\n"
+      "Please report this issue with your OS/architecture details.\n", func, p
+    ); abort();
+  }
+  
+  return p;
+}
+
+#define ANT_GC_MALLOC(size) \
+  ant_gc_check_ptr(GC_MALLOC_IGNORE_OFF_PAGE(size), "GC_MALLOC")
+#define ANT_GC_MALLOC_ATOMIC(size) \
+  ant_gc_check_ptr(GC_MALLOC_ATOMIC_IGNORE_OFF_PAGE(size), "GC_MALLOC_ATOMIC")
+#define ANT_GC_REALLOC(ptr, size) \
+  ant_gc_check_ptr(GC_REALLOC(ptr, size), "GC_REALLOC")
+  
 #define ANT_GC_FREE(ptr) GC_FREE(ptr)
 
 #define ANT_GC_REGISTER_ROOT(ptr)
