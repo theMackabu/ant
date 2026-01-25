@@ -6023,17 +6023,21 @@ static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
   }
   
   if (t != T_OBJ && t != T_ARR) {
-    char errbuf[256];
     jsoff_t saved_toff = js->toff;
     jsoff_t saved_tlen = js->tlen;
+    
     js->toff = coderefoff(r);
     js->tlen = codereflen(r);
-    snprintf(errbuf, sizeof(errbuf), "Cannot read properties of %s (reading '%.*s')", 
-             t == T_UNDEF ? "undefined" : t == T_NULL ? "null" : typestr(t),
-             (int)plen, ptr);
-    jsval_t err = js_mkerr(js, errbuf);
+    
+    jsval_t err = js_mkerr(
+      js, "Cannot read properties of %s (reading '%.*s')",
+      t == T_UNDEF ? "undefined" : t == T_NULL ? "null" : typestr(t),
+      (int)plen, ptr
+    );
+    
     js->toff = saved_toff;
     js->tlen = saved_tlen;
+    
     return err;
   }
   
@@ -8750,16 +8754,10 @@ static jsval_t js_literal(struct js *js) {
     case TOK_THIS:        return js->this_val;
     
     default:
-      if (is_identifier_like(js->tok)) {
-        return mkcoderef((jsoff_t) js->toff, (jsoff_t) js->tlen);
-      }
-      
-      char err_buf[64]; 
+      if (is_identifier_like(js->tok)) return mkcoderef((jsoff_t) js->toff, (jsoff_t) js->tlen);
       size_t tok_len = js->tlen > 20 ? 20 : js->tlen;
-      if (tok_len == 0) snprintf(err_buf, sizeof(err_buf), "Unexpected token 'EOF'"); else {
-        snprintf(err_buf, sizeof(err_buf), "Unexpected token '%.*s'", (int)tok_len, &js->code[js->toff]);
-      }
-      return js_mkerr_typed(js, JS_ERR_SYNTAX, err_buf);
+      if (tok_len == 0) return js_mkerr_typed(js, JS_ERR_SYNTAX, "Unexpected token 'EOF'");
+      return js_mkerr_typed(js, JS_ERR_SYNTAX, "Unexpected token '%.*s'", (int)tok_len, &js->code[js->toff]);
   }
 }
 
