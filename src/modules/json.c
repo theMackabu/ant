@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <math.h>
 #include <yyjson.h>
@@ -14,14 +15,14 @@ static jsval_t yyjson_to_jsval(struct js *js, yyjson_val *val) {
   switch (yyjson_get_type(val)) {
     case YYJSON_TYPE_NULL: return js_mknull();
     case YYJSON_TYPE_BOOL: return yyjson_get_bool(val) ? js_mktrue() : js_mkfalse();
+    case YYJSON_TYPE_STR:  return js_mkstr(js, yyjson_get_str(val), yyjson_get_len(val));
     
-    case YYJSON_TYPE_NUM:
+    case YYJSON_TYPE_NUM: {
       if (yyjson_is_int(val)) return js_mknum((double)yyjson_get_int(val));
+      if (yyjson_is_sint(val)) return js_mknum((double)yyjson_get_sint(val));
       if (yyjson_is_uint(val)) return js_mknum((double)yyjson_get_uint(val));
       return js_mknum(yyjson_get_real(val));
-    
-    case YYJSON_TYPE_STR:
-      return js_mkstr(js, yyjson_get_str(val), yyjson_get_len(val));
+    }
     
     case YYJSON_TYPE_ARR: {
       jsval_t arr = js_mkarr(js);
@@ -168,7 +169,11 @@ static yyjson_mut_val *jsval_to_yyjson_impl(struct js *js, yyjson_mut_doc *doc, 
     case JS_NUM: {
       double num = js_getnum(val);
       if (isnan(num) || isinf(num)) return yyjson_mut_null(doc);
-      if (num == (double)(int64_t)num) return yyjson_mut_sint(doc, (int64_t)num);
+      if (
+        num >= (double)INT64_MIN && 
+        num < (double)INT64_MAX && 
+        num == (double)(int64_t)num
+      ) return yyjson_mut_sint(doc, (int64_t)num);
       return yyjson_mut_real(doc, num);
     }
     
