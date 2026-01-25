@@ -52,7 +52,18 @@ test('padEnd', '5'.padEnd(3, '0'), '500');
 test('repeat', 'ab'.repeat(3), 'ababab');
 
 test('charAt', 'hello'.charAt(1), 'e');
+test('charAt default index', 'hello'.charAt(), 'h');
+test('charAt coercion', 'hello'.charAt('1'), 'e');
 test('charCodeAt', 'ABC'.charCodeAt(0), 65);
+test('charCodeAt default index', 'ABC'.charCodeAt(), 65);
+test('charCodeAt coercion', 'ABC'.charCodeAt('1'), 66);
+test('codePointAt ascii', 'ABC'.codePointAt(0), 65);
+test('codePointAt default index', 'ABC'.codePointAt(), 65);
+test('codePointAt coercion', 'ABC'.codePointAt('1'), 66);
+test('codePointAt out of bounds', 'ABC'.codePointAt(10), undefined);
+test('codePointAt utf8 2-byte', 'é'.codePointAt(0), 233);
+test('codePointAt utf8 3-byte', '中'.codePointAt(0), 20013);
+test('codePointAt utf8 4-byte', '😀'.codePointAt(0), 128512);
 
 test('replace', 'hello world'.replace('world', 'there'), 'hello there');
 test('replaceAll', 'a-b-c'.replaceAll('-', '_'), 'a_b_c');
