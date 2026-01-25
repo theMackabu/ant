@@ -8,6 +8,7 @@
 #include <tlsuv/http.h>
 #include <utarray.h>
 
+#include "ant.h"
 #include "config.h"
 #include "common.h"
 #include "runtime.h"
@@ -303,7 +304,7 @@ static jsval_t do_fetch_microtask(struct js *js, jsval_t *args, int nargs) {
   if (js_type(options_val) == JS_OBJ) {
     jsval_t headers_val = js_get(js, options_val, "headers");
     if (js_type(headers_val) == JS_OBJ) {
-      js_prop_iter_t iter = js_prop_iter_begin(js, headers_val);
+      ant_iter_t iter = js_prop_iter_begin(js, headers_val);
       const char *key;
       size_t key_len;
       jsval_t value;

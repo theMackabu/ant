@@ -91,27 +91,17 @@ static jsval_t reflect_own_keys(struct js *js, jsval_t *args, int nargs) {
     return js_mkerr(js, "Reflect.ownKeys called on non-object");
   }
   
-  jsval_t temp_keys[256];
-  int count = 0;
+  jsval_t keys_arr = js_mkarr(js);
+  ant_iter_t iter = js_prop_iter_begin(js, target);
+  const char *key; size_t key_len; jsval_t value;
   
-  js_prop_iter_t iter = js_prop_iter_begin(js, target);
-  const char *key;
-  size_t key_len;
-  jsval_t value;
-  
-  while (js_prop_iter_next(&iter, &key, &key_len, &value) && count < 256) {
+  while (js_prop_iter_next(&iter, &key, &key_len, &value)) {
     if (key_len >= 9 && memcmp(key, STR_PROTO, STR_PROTO_LEN) == 0) continue;
     if (key_len >= 2 && key[0] == '_' && key[1] == '_') continue;
-    
-    temp_keys[count++] = js_mkstr(js, key, key_len);
+    js_arr_push(js, keys_arr, js_mkstr(js, key, key_len));
   }
+  
   js_prop_iter_end(&iter);
-  
-  jsval_t keys_arr = js_mkarr(js);
-  for (int i = count - 1; i >= 0; i--) {
-    js_arr_push(js, keys_arr, temp_keys[i]);
-  }
-  
   return keys_arr;
 }
 

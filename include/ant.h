@@ -108,12 +108,15 @@ jsval_t js_mkstr(ant_t *, const void *, size_t);
 jsval_t js_mksym(ant_t *, const char *desc);
 jsval_t js_mkfun(jsval_t (*fn)(ant_t *, jsval_t *, int));
 jsval_t js_heavy_mkfun(ant_t *js, jsval_t (*fn)(ant_t *, jsval_t *, int), jsval_t data);
+
 jsval_t js_mkprop_fast(ant_t *js, jsval_t obj, const char *key, size_t len, jsval_t v);
+jsoff_t js_mkprop_fast_off(ant_t *js, jsval_t obj, const char *key, size_t len, jsval_t v);
 
 jsval_t js_call(ant_t *js, jsval_t func, jsval_t *args, int nargs);
 jsval_t js_call_with_this(ant_t *js, jsval_t func, jsval_t this_val, jsval_t *args, int nargs);
 
 void js_set(ant_t *, jsval_t, const char *, jsval_t);
+void js_saveval(ant_t *js, jsoff_t off, jsval_t v);
 bool js_del(ant_t *, jsval_t obj, const char *key);
 void js_merge_obj(ant_t *, jsval_t dst, jsval_t src);
 
@@ -138,14 +141,14 @@ char *js_getstr(ant_t *js, jsval_t val, size_t *len);
 const char *js_str(ant_t *, jsval_t val);
 
 typedef struct {
-  jsval_t obj;
-  void *current;
-  void *js_internal;
-} js_prop_iter_t;
+  void *ctx;
+  jsoff_t off;
+} ant_iter_t;
 
-js_prop_iter_t js_prop_iter_begin(ant_t *js, jsval_t obj);
-bool js_prop_iter_next(js_prop_iter_t *iter, const char **key, size_t *key_len, jsval_t *value);
-void js_prop_iter_end(js_prop_iter_t *iter);
+ant_iter_t js_prop_iter_begin(ant_t *js, jsval_t obj);
+
+bool js_prop_iter_next(ant_iter_t *iter, const char **key, size_t *key_len, jsval_t *value);
+void js_prop_iter_end(ant_iter_t *iter);
 
 jsval_t js_obj_to_func(jsval_t obj);
 jsval_t js_mkpromise(ant_t *js);

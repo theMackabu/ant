@@ -31,13 +31,14 @@ typedef struct {
 } gc_work_queue_t;
 
 typedef struct {
-  struct js *js;
+  ant_t *js;
   uint8_t *new_mem;
-  jsoff_t new_brk;
-  jsoff_t new_size;
   uint8_t *mark_bits;
   gc_forward_table_t fwd;
   gc_work_queue_t work;
+  jsoff_t new_brk;
+  jsoff_t new_size;
+  bool failed;
 } gc_ctx_t;
 
 static jsval_t gc_update_val(gc_ctx_t *ctx, jsval_t val);
@@ -195,19 +196,12 @@ static inline void gc_saveval(uint8_t *mem, jsoff_t off, jsval_t val) {
   memcpy(&mem[off], &val, sizeof(val));
 }
 
-static jsoff_t gc_esize(jsoff_t w) {
-  jsoff_t cleaned = w & ~FLAGMASK;
-  switch (cleaned & 3U) {
-    case T_OBJ:  return (jsoff_t)(sizeof(jsoff_t) + sizeof(jsoff_t));
-    case T_PROP: return (jsoff_t)(sizeof(jsoff_t) + sizeof(jsoff_t) + sizeof(jsval_t));
-    case T_STR:  return (jsoff_t)(sizeof(jsoff_t) + ((cleaned >> 2) + 3) / 4 * 4);
-    default:     return (jsoff_t)~0U;
-  }
-}
-
 static jsoff_t gc_alloc(gc_ctx_t *ctx, size_t size) {
   size = (size + 3) / 4 * 4;
-  if (ctx->new_brk + size > ctx->new_size) return (jsoff_t)~0;
+  if (ctx->new_brk + size > ctx->new_size) {
+    ctx->failed = true;
+    return (jsoff_t)~0;
+  }
   jsoff_t off = ctx->new_brk;
   ctx->new_brk += (jsoff_t)size;
   return off;
@@ -238,14 +232,14 @@ static jsoff_t gc_copy_string(gc_ctx_t *ctx, jsoff_t old_off) {
   jsoff_t header = gc_loadoff(ctx->js->mem, old_off);
   if ((header & 3) != T_STR) return old_off;
   
-  jsoff_t size = gc_esize(header);
+  jsoff_t size = esize(header);
   if (size == (jsoff_t)~0) return old_off;
   
   new_off = gc_alloc(ctx, size);
   if (new_off == (jsoff_t)~0) return old_off;
   
   memcpy(&ctx->new_mem[new_off], &ctx->js->mem[old_off], size);
-  fwd_add(&ctx->fwd, old_off, new_off);
+  if (!fwd_add(&ctx->fwd, old_off, new_off)) ctx->failed = true;
   mark_set(ctx, old_off);
   
   return new_off;
@@ -265,7 +259,7 @@ static jsoff_t gc_copy_bigint(gc_ctx_t *ctx, jsoff_t old_off) {
   if (new_off == (jsoff_t)~0) return old_off;
   
   memcpy(&ctx->new_mem[new_off], &ctx->js->mem[old_off], total);
-  fwd_add(&ctx->fwd, old_off, new_off);
+  if (!fwd_add(&ctx->fwd, old_off, new_off)) ctx->failed = true;
   mark_set(ctx, old_off);
   
   return new_off;
@@ -280,16 +274,16 @@ static jsoff_t gc_reserve_object(gc_ctx_t *ctx, jsoff_t old_off) {
   jsoff_t header = gc_loadoff(ctx->js->mem, old_off);
   if ((header & 3) != T_OBJ) return old_off;
   
-  jsoff_t size = gc_esize(header);
+  jsoff_t size = esize(header);
   if (size == (jsoff_t)~0) return old_off;
   
   new_off = gc_alloc(ctx, size);
   if (new_off == (jsoff_t)~0) return old_off;
   
   memcpy(&ctx->new_mem[new_off], &ctx->js->mem[old_off], size);
-  fwd_add(&ctx->fwd, old_off, new_off);
+  if (!fwd_add(&ctx->fwd, old_off, new_off)) ctx->failed = true;
   mark_set(ctx, old_off);
-  work_push(&ctx->work, old_off);
+  if (!work_push(&ctx->work, old_off)) ctx->failed = true;
   
   return new_off;
 }
@@ -303,16 +297,16 @@ static jsoff_t gc_reserve_prop(gc_ctx_t *ctx, jsoff_t old_off) {
   jsoff_t header = gc_loadoff(ctx->js->mem, old_off);
   if ((header & 3) != T_PROP) return old_off;
   
-  jsoff_t size = gc_esize(header);
+  jsoff_t size = esize(header);
   if (size == (jsoff_t)~0) return old_off;
   
   new_off = gc_alloc(ctx, size);
   if (new_off == (jsoff_t)~0) return old_off;
   
   memcpy(&ctx->new_mem[new_off], &ctx->js->mem[old_off], size);
-  fwd_add(&ctx->fwd, old_off, new_off);
+  if (!fwd_add(&ctx->fwd, old_off, new_off)) ctx->failed = true;
   mark_set(ctx, old_off);
-  work_push(&ctx->work, old_off);
+  if (!work_push(&ctx->work, old_off)) ctx->failed = true;
   
   return new_off;
 }
@@ -362,6 +356,13 @@ static void gc_process_object(gc_ctx_t *ctx, jsoff_t old_off) {
   if (parent_off != 0 && parent_off < ctx->js->brk) {
     jsoff_t new_parent = gc_reserve_object(ctx, parent_off);
     gc_saveoff(ctx->new_mem, new_off + sizeof(jsoff_t), new_parent);
+  }
+  
+  jsoff_t tail_off = gc_loadoff(ctx->js->mem, old_off + sizeof(jsoff_t) + sizeof(jsoff_t));
+  if (tail_off != 0 && tail_off < ctx->js->brk) {
+    jsoff_t new_tail = fwd_lookup(&ctx->fwd, tail_off);
+    if (new_tail == (jsoff_t)~0) new_tail = gc_reserve_prop(ctx, tail_off);
+    gc_saveoff(ctx->new_mem, new_off + sizeof(jsoff_t) + sizeof(jsoff_t), new_tail);
   }
 }
 
@@ -435,7 +436,7 @@ static jsval_t gc_fwd_val_callback(void *ctx_ptr, jsval_t val) {
   return gc_update_val(ctx, val);
 }
 
-size_t js_gc_compact(struct js *js) {
+size_t js_gc_compact(ant_t *js) {
   if (!js || js->brk == 0) return 0;
   
   mco_coro *running = mco_running();
@@ -483,6 +484,8 @@ size_t js_gc_compact(struct js *js) {
     return 0;
   }
   
+  ctx.failed = false;
+  
   if (js->brk > 0) {
     jsoff_t header_at_0 = gc_loadoff(js->mem, 0);
     if ((header_at_0 & 3) == T_OBJ) gc_reserve_object(&ctx, 0);
@@ -502,6 +505,14 @@ size_t js_gc_compact(struct js *js) {
   js_gc_update_roots(js, gc_fwd_off_callback, gc_fwd_val_callback, &ctx);
   
   gc_drain_work_queue(&ctx);
+  
+  if (ctx.failed) {
+    free(mark_bits);
+    work_free(&ctx.work);
+    fwd_free(&ctx.fwd);
+    ANT_GC_FREE(new_mem);
+    return 0;
+  }
   
   uint8_t *old_mem = js->mem;
   js->mem = new_mem;

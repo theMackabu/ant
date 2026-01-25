@@ -1,6 +1,6 @@
 // GC Benchmark - tests forwarding table and compaction performance
 
-function formatBytes(bytes) {
+function fmt(bytes) {
   if (bytes < 1024) return bytes + ' B';
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(2) + ' KB';
   return (bytes / 1024 / 1024).toFixed(2) + ' MB';
@@ -27,7 +27,7 @@ function bench(name, fn, iterations = 1) {
 
   console.log(`${name}:`);
   console.log(`  Time: ${totalTime}ms (${iterations} iterations, avg ${(totalTime / iterations).toFixed(2)}ms)`);
-  console.log(`  Freed: ${formatBytes(totalFreed)} total`);
+  console.log(`  Freed: ${fmt(totalFreed)} total`);
   console.log('');
 }
 
@@ -104,7 +104,13 @@ function repeatedGcCycles() {
 }
 
 console.log('=== GC Benchmark ===\n');
-console.log('Initial state:', Ant.alloc(), '\n');
+
+let initial = Ant.alloc();
+console.log('Initial state:');
+console.log('  heapSize:', fmt(initial.heapSize));
+console.log('  usedBytes:', fmt(initial.usedBytes));
+console.log('  totalBytes:', fmt(initial.totalBytes));
+console.log('');
 
 bench('Many small objects (10k objects, 5k garbage)', manySmallObjects, 5);
 bench('Deep object graph (1000 levels)', deepObjectGraph, 5);
@@ -113,4 +119,8 @@ bench('String array (5000 strings, 2500 garbage)', stringArray, 5);
 bench('Mixed workload', mixedWorkload, 5);
 bench('Repeated GC cycles (10 cycles x 1000 objects)', repeatedGcCycles, 3);
 
-console.log('Final state:', Ant.alloc());
+let final = Ant.alloc();
+console.log('Final state:');
+console.log('  heapSize:', fmt(final.heapSize));
+console.log('  usedBytes:', fmt(final.usedBytes));
+console.log('  totalBytes:', fmt(final.totalBytes));
