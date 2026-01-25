@@ -6837,7 +6837,8 @@ static jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnl
   
   if (fnpos < fnlen && fn[fnpos] == ')') fnpos++;
   fnpos = skiptonext(fn, fnlen, fnpos, NULL);
-  if (fnpos < fnlen && fn[fnpos] == '{') fnpos++;
+  if (fnpos >= fnlen) return js_mkerr(js, "unexpected end of function");
+  if (fn[fnpos] == '{') fnpos++;
   jsoff_t body_len = fnlen - fnpos - 1;
   
   bool func_strict = is_strict_function_body(&fn[fnpos], body_len);
@@ -14196,7 +14197,10 @@ static jsval_t builtin_Date_getYear(struct js *js, jsval_t *args, int nargs) {
 }
 
 static jsval_t builtin_Date_setYear(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return tov(JS_NAN);
+  if (nargs < 1) {
+    date_set_time(js, js->this_val, JS_NAN);
+    return tov(JS_NAN);
+  }
   double year_arg = tod(args[0]);
   if (isnan(year_arg)) {
     date_set_time(js, js->this_val, JS_NAN);
