@@ -18279,12 +18279,14 @@ static jsval_t builtin_string_template(struct js *js, jsval_t *args, int nargs) 
 static jsval_t builtin_string_charCodeAt(struct js *js, jsval_t *args, int nargs) {
   jsval_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "charCodeAt called on non-string");
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return tov(JS_NAN);
   
-  double idx_d = tod(args[0]);
-  if (idx_d < 0 || idx_d != (double)(long)idx_d) return tov(JS_NAN);
+  double idx_d = nargs < 1 ? 0.0 : js_to_number(js, args[0]);
+  if (isnan(idx_d) || isinf(idx_d)) return tov(JS_NAN);
   
-  jsoff_t idx = (jsoff_t) idx_d;
+  long idx_l = (long) idx_d;
+  if (idx_l < 0) return tov(JS_NAN);
+  
+  jsoff_t idx = (jsoff_t) idx_l;
   jsoff_t str_len = offtolen(loadoff(js, (jsoff_t) vdata(str)));
   
   if (idx >= str_len) return tov(JS_NAN);
@@ -18293,6 +18295,46 @@ static jsval_t builtin_string_charCodeAt(struct js *js, jsval_t *args, int nargs
   unsigned char ch = (unsigned char) js->mem[str_off + idx];
   
   return tov((double) ch);
+}
+
+static jsval_t builtin_string_codePointAt(struct js *js, jsval_t *args, int nargs) {
+  jsval_t str = to_string_val(js, js->this_val);
+  if (vtype(str) != T_STR) return js_mkerr(js, "codePointAt called on non-string");
+  
+  double idx_d = nargs < 1 ? 0.0 : js_to_number(js, args[0]);
+  if (isnan(idx_d) || isinf(idx_d)) return js_mkundef();
+  
+  long idx_l = (long) idx_d;
+  if (idx_l < 0) return js_mkundef();
+  
+  jsoff_t idx = (jsoff_t) idx_l;
+  jsoff_t str_len = offtolen(loadoff(js, (jsoff_t) vdata(str)));
+  
+  if (idx >= str_len) return js_mkundef();
+  
+  jsoff_t str_off = (jsoff_t) vdata(str) + sizeof(jsoff_t);
+  const unsigned char *s = &js->mem[str_off + idx];
+  jsoff_t remaining = str_len - idx;
+  
+  unsigned char c0 = s[0];
+  if (c0 < 0x80) return tov((double) c0);
+  
+  if ((c0 & 0xE0) == 0xC0 && remaining >= 2 && (s[1] & 0xC0) == 0x80) {
+    uint32_t cp = ((c0 & 0x1F) << 6) | (s[1] & 0x3F);
+    return tov((double) cp);
+  }
+  
+  if ((c0 & 0xF0) == 0xE0 && remaining >= 3 && (s[1] & 0xC0) == 0x80 && (s[2] & 0xC0) == 0x80) {
+    uint32_t cp = ((c0 & 0x0F) << 12) | ((s[1] & 0x3F) << 6) | (s[2] & 0x3F);
+    return tov((double) cp);
+  }
+  
+  if ((c0 & 0xF8) == 0xF0 && remaining >= 4 && (s[1] & 0xC0) == 0x80 && (s[2] & 0xC0) == 0x80 && (s[3] & 0xC0) == 0x80) {
+    uint32_t cp = ((c0 & 0x07) << 18) | ((s[1] & 0x3F) << 12) | ((s[2] & 0x3F) << 6) | (s[3] & 0x3F);
+    return tov((double) cp);
+  }
+  
+  return tov((double) c0);
 }
 
 static jsval_t builtin_string_toLowerCase(struct js *js, jsval_t *args, int nargs) {
@@ -18487,9 +18529,8 @@ static jsval_t builtin_string_padEnd(struct js *js, jsval_t *args, int nargs) {
 static jsval_t builtin_string_charAt(struct js *js, jsval_t *args, int nargs) {
   jsval_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "charAt called on non-string");
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return js_mkstr(js, "", 0);
   
-  double idx_d = tod(args[0]);
+  double idx_d = nargs < 1 ? 0.0 : js_to_number(js, args[0]);
   if (isnan(idx_d)) idx_d = 0;
   else if (idx_d < 0) idx_d = -floor(-idx_d);
   else idx_d = floor(idx_d);
@@ -18509,10 +18550,11 @@ static jsval_t builtin_string_charAt(struct js *js, jsval_t *args, int nargs) {
 static jsval_t builtin_string_at(struct js *js, jsval_t *args, int nargs) {
   jsval_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "at called on non-string");
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return js_mkundef();
+  
+  double idx_d = nargs < 1 ? 0.0 : js_to_number(js, args[0]);
+  if (isnan(idx_d) || isinf(idx_d)) return js_mkundef();
 
   jsoff_t str_len = offtolen(loadoff(js, (jsoff_t) vdata(str)));
-  double idx_d = tod(args[0]);
   long idx = (long) idx_d;
 
   if (idx < 0) idx += (long) str_len;
@@ -22041,6 +22083,7 @@ ant_t *js_create(void *buf, size_t len) {
   setprop(js, string_proto, js_mkstr(js, "match", 5), js_mkfun(builtin_string_match));
   setprop(js, string_proto, js_mkstr(js, "template", 8), js_mkfun(builtin_string_template));
   setprop(js, string_proto, js_mkstr(js, "charCodeAt", 10), js_mkfun(builtin_string_charCodeAt));
+  setprop(js, string_proto, js_mkstr(js, "codePointAt", 11), js_mkfun(builtin_string_codePointAt));
   setprop(js, string_proto, js_mkstr(js, "toLowerCase", 11), js_mkfun(builtin_string_toLowerCase));
   setprop(js, string_proto, js_mkstr(js, "toUpperCase", 11), js_mkfun(builtin_string_toUpperCase));
   setprop(js, string_proto, js_mkstr(js, "toLocaleLowerCase", 17), js_mkfun(builtin_string_toLowerCase));
