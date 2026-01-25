@@ -2,6 +2,13 @@ import { test, summary } from './helpers.js';
 
 console.log('Date Tests\n');
 
+const BASE_TS = 1234567890000;
+const expectInvalid = (label, mutator) => {
+  const dt = new Date(BASE_TS);
+  mutator(dt);
+  test(label, Number.isNaN(dt.getTime()), true);
+};
+
 const now1 = Date.now();
 test('Date.now() is number', typeof now1, 'number');
 test('Date.now() > 1970', now1 > 1000000000000, true);
@@ -9,7 +16,7 @@ test('Date.now() > 1970', now1 > 1000000000000, true);
 const d1 = new Date();
 test('new Date() is object', typeof d1, 'object');
 
-const d2 = new Date(1234567890000);
+const d2 = new Date(BASE_TS);
 test('new Date(ts) is object', typeof d2, 'object');
 
 const t1 = Date.now();
@@ -20,8 +27,8 @@ const times = [];
 for (let i = 0; i < 3; i++) times.push(Date.now());
 test('multiple calls are numbers', times.every(t => typeof t === 'number'), true);
 
-const d = new Date(1234567890000);
-test('getTime returns timestamp', d.getTime(), 1234567890000);
+const d = new Date(BASE_TS);
+test('getTime returns timestamp', d.getTime(), BASE_TS);
 test('getFullYear is number', typeof d.getFullYear(), 'number');
 test('getMonth is number', typeof d.getMonth(), 'number');
 test('getDate is number', typeof d.getDate(), 'number');
@@ -35,100 +42,61 @@ test('toISOString is string', typeof d.toISOString(), 'string');
 test('toISOString contains T', d.toISOString().includes('T'), true);
 test('toString is string', typeof d.toString(), 'string');
 
-const d3 = new Date(1234567890000);
+const d3 = new Date(BASE_TS);
 d3.setTime(555555555555);
 test('setTime updates time', d3.getTime(), 555555555555);
 
-const d4 = new Date(1234567890000);
-d4.setTime();
-test('setTime() with no args returns NaN', isNaN(d4.getTime()), true);
+expectInvalid('setTime() with no args invalidates', d => d.setTime());
 
-const d5 = new Date(1234567890000);
-d5.setMilliseconds();
-test('setMilliseconds() with no args invalidates', isNaN(d5.getTime()), true);
+expectInvalid('setMilliseconds() with no args invalidates', d => d.setMilliseconds());
 
-const d6 = new Date(1234567890000);
-d6.setSeconds();
-test('setSeconds() with no args invalidates', isNaN(d6.getTime()), true);
+expectInvalid('setSeconds() with no args invalidates', d => d.setSeconds());
 
-const d7 = new Date(1234567890000);
-d7.setMinutes();
-test('setMinutes() with no args invalidates', isNaN(d7.getTime()), true);
+expectInvalid('setMinutes() with no args invalidates', d => d.setMinutes());
 
-const d8 = new Date(1234567890000);
-d8.setHours();
-test('setHours() with no args invalidates', isNaN(d8.getTime()), true);
+expectInvalid('setHours() with no args invalidates', d => d.setHours());
 
-const d9 = new Date(1234567890000);
-d9.setDate();
-test('setDate() with no args invalidates', isNaN(d9.getTime()), true);
+expectInvalid('setDate() with no args invalidates', d => d.setDate());
 
-const d10 = new Date(1234567890000);
-d10.setMonth();
-test('setMonth() with no args invalidates', isNaN(d10.getTime()), true);
+expectInvalid('setMonth() with no args invalidates', d => d.setMonth());
 
-const d11 = new Date(1234567890000);
-d11.setFullYear();
-test('setFullYear() with no args invalidates', isNaN(d11.getTime()), true);
+expectInvalid('setFullYear() with no args invalidates', d => d.setFullYear());
 
-const d12 = new Date(1234567890000);
+const d12 = new Date(BASE_TS);
 d12.setFullYear(2025);
 test('setFullYear(2025) works', d12.getFullYear(), 2025);
 
-const d13 = new Date(1234567890000);
+const d13 = new Date(BASE_TS);
 d13.setMonth(0);
 test('setMonth(0) sets January', d13.getMonth(), 0);
 
-const d14 = new Date(1234567890000);
+const d14 = new Date(BASE_TS);
 d14.setDate(15);
 test('setDate(15) sets day', d14.getDate(), 15);
 
-const d15 = new Date(1234567890000);
+const d15 = new Date(BASE_TS);
 d15.setHours(10);
 test('setHours(10) sets hour', d15.getHours(), 10);
 
-const d16 = new Date(1234567890000);
+const d16 = new Date(BASE_TS);
 d16.setMinutes(30);
 test('setMinutes(30) sets minutes', d16.getMinutes(), 30);
 
-const d17 = new Date(1234567890000);
+const d17 = new Date(BASE_TS);
 d17.setSeconds(45);
 test('setSeconds(45) sets seconds', d17.getSeconds(), 45);
 
-const d18 = new Date(1234567890000);
+const d18 = new Date(BASE_TS);
 d18.setMilliseconds(500);
 test('setMilliseconds(500) sets ms', d18.getMilliseconds(), 500);
 
-const d19 = new Date(1234567890000);
-d19.setTime(NaN);
-test('setTime(NaN) invalidates', isNaN(d19.getTime()), true);
-
-const d20 = new Date(1234567890000);
-d20.setFullYear(NaN);
-test('setFullYear(NaN) invalidates', isNaN(d20.getTime()), true);
-
-const d21 = new Date(1234567890000);
-d21.setMonth(NaN);
-test('setMonth(NaN) invalidates', isNaN(d21.getTime()), true);
-
-const d22 = new Date(1234567890000);
-d22.setDate(NaN);
-test('setDate(NaN) invalidates', isNaN(d22.getTime()), true);
-
-const d23 = new Date(1234567890000);
-d23.setHours(NaN);
-test('setHours(NaN) invalidates', isNaN(d23.getTime()), true);
-
-const d24 = new Date(1234567890000);
-d24.setMinutes(NaN);
-test('setMinutes(NaN) invalidates', isNaN(d24.getTime()), true);
-
-const d25 = new Date(1234567890000);
-d25.setSeconds(NaN);
-test('setSeconds(NaN) invalidates', isNaN(d25.getTime()), true);
-
-const d26 = new Date(1234567890000);
-d26.setMilliseconds(NaN);
-test('setMilliseconds(NaN) invalidates', isNaN(d26.getTime()), true);
+expectInvalid('setTime(NaN) invalidates', d => d.setTime(NaN));
+expectInvalid('setFullYear(NaN) invalidates', d => d.setFullYear(NaN));
+expectInvalid('setMonth(NaN) invalidates', d => d.setMonth(NaN));
+expectInvalid('setDate(NaN) invalidates', d => d.setDate(NaN));
+expectInvalid('setHours(NaN) invalidates', d => d.setHours(NaN));
+expectInvalid('setMinutes(NaN) invalidates', d => d.setMinutes(NaN));
+expectInvalid('setSeconds(NaN) invalidates', d => d.setSeconds(NaN));
+expectInvalid('setMilliseconds(NaN) invalidates', d => d.setMilliseconds(NaN));
 
 summary();
