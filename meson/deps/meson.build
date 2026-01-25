@@ -56,6 +56,10 @@ cmake_prefix = get_option('deps_prefix_cmake')
 tlsuv_cmake_defines = {
   'BUILD_TESTING': 'OFF',
   'TLSUV_TLSLIB': tls_lib,
+  'CMAKE_WARN_DEV': 'OFF',
+  'CMAKE_POLICY_DEFAULT_CMP0200': 'NEW',
+  'CMAKE_POLICY_DEFAULT_CMP0156': 'NEW',
+  'CMAKE_POLICY_DEFAULT_CMP0179': 'NEW',
 }
 if cmake_prefix != ''
   tlsuv_cmake_defines += {'MBEDTLS_DIR': cmake_prefix, 'CMAKE_PREFIX_PATH': cmake_prefix}
@@ -65,6 +69,10 @@ tlsuv_opts.add_cmake_defines(tlsuv_cmake_defines)
 bdwgc_opts.add_cmake_defines({
   'BUILD_SHARED_LIBS': 'OFF',
   'enable_cplusplus': 'OFF',
+  'CMAKE_WARN_DEV': 'OFF',
+  'CMAKE_POLICY_DEFAULT_CMP0200': 'NEW',
+  'CMAKE_POLICY_DEFAULT_CMP0156': 'NEW',
+  'CMAKE_POLICY_DEFAULT_CMP0179': 'NEW',
 })
 
 tlsuv_compile_args = [
