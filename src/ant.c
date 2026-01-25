@@ -15496,6 +15496,37 @@ static jsval_t builtin_object_toLocaleString(struct js *js, jsval_t *args, int n
   return js_call_toString(js, js->this_val);
 }
 
+static inline bool parse_array_index(const char *key, size_t key_len, jsoff_t len, unsigned *out_idx) {
+  if (key_len == 0 || key[0] > '9' || key[0] < '0') return false;
+  unsigned parsed_idx = 0;
+  for (size_t i = 0; i < key_len; i++) {
+    if (key[i] < '0' || key[i] > '9') return false;
+    parsed_idx = parsed_idx * 10 + (key[i] - '0');
+  }
+  if (parsed_idx >= len) return false;
+  *out_idx = parsed_idx;
+  return true;
+}
+
+static jsval_t array_shallow_copy(struct js *js, jsval_t arr, jsoff_t len) {
+  jsval_t result = mkarr(js);
+  if (is_err(result)) return result;
+  
+  ant_iter_t iter = js_prop_iter_begin(js, arr);
+  const char *key;
+  size_t key_len;
+  jsval_t val;
+  
+  while (js_prop_iter_next(&iter, &key, &key_len, &val)) {
+    if (key_len == 0 || key[0] > '9' || key[0] < '0') continue;
+    js_mkprop_fast(js, result, key, key_len, val);
+  }
+  
+  js_prop_iter_end(&iter);
+  js_mkprop_fast(js, result, "length", 6, tov((double)len));
+  return result;
+}
+
 static jsval_t builtin_array_push(struct js *js, jsval_t *args, int nargs) {
   jsval_t arr = js->this_val;
   arr = resolveprop(js, arr);
@@ -15810,15 +15841,8 @@ static jsval_t builtin_array_every(struct js *js, jsval_t *args, int nargs) {
   jsval_t val;
   
   while (js_prop_iter_next(&iter, &key, &key_len, &val)) {
-    if (key_len == 0 || key[0] > '9' || key[0] < '0') continue;
-    
-    unsigned parsed_idx = 0;
-    bool valid = true;
-    for (size_t i = 0; i < key_len && valid; i++) {
-      if (key[i] < '0' || key[i] > '9') valid = false;
-      else parsed_idx = parsed_idx * 10 + (key[i] - '0');
-    }
-    if (!valid || parsed_idx >= len) continue;
+    unsigned parsed_idx;
+    if (!parse_array_index(key, key_len, len, &parsed_idx)) continue;
     
     jsval_t call_args[3] = { val, tov((double)parsed_idx), arr };
     jsval_t result = call_js_with_args(js, callback, call_args, 3);
@@ -15862,15 +15886,8 @@ static jsval_t builtin_array_forEach(struct js *js, jsval_t *args, int nargs) {
   jsval_t val;
   
   while (js_prop_iter_next(&iter, &key, &key_len, &val)) {
-    if (key_len == 0 || key[0] > '9' || key[0] < '0') continue;
-    
-    unsigned parsed_idx = 0;
-    bool valid = true;
-    for (size_t i = 0; i < key_len && valid; i++) {
-      if (key[i] < '0' || key[i] > '9') valid = false;
-      else parsed_idx = parsed_idx * 10 + (key[i] - '0');
-    }
-    if (!valid || parsed_idx >= len) continue;
+    unsigned parsed_idx;
+    if (!parse_array_index(key, key_len, len, &parsed_idx)) continue;
     
     jsval_t call_args[3] = { val, tov((double)parsed_idx), arr };
     jsval_t result = call_js_with_args(js, callback, call_args, 3);
@@ -15911,15 +15928,8 @@ static jsval_t builtin_array_reverse(struct js *js, jsval_t *args, int nargs) {
   jsval_t val;
   
   while (js_prop_iter_next(&iter, &key, &key_len, &val)) {
-    if (key_len == 0 || key[0] > '9' || key[0] < '0') continue;
-    
-    unsigned parsed_idx = 0;
-    bool valid = true;
-    for (size_t i = 0; i < key_len && valid; i++) {
-      if (key[i] < '0' || key[i] > '9') valid = false;
-      else parsed_idx = parsed_idx * 10 + (key[i] - '0');
-    }
-    if (!valid || parsed_idx >= len || count >= len) continue;
+    unsigned parsed_idx;
+    if (!parse_array_index(key, key_len, len, &parsed_idx) || count >= len) continue;
     
     vals[count] = val;
     offs[count] = iter.off;
@@ -15974,15 +15984,8 @@ static jsval_t builtin_array_map(struct js *js, jsval_t *args, int nargs) {
   jsval_t val;
   
   while (js_prop_iter_next(&iter, &key, &key_len, &val)) {
-    if (key_len == 0 || key[0] > '9' || key[0] < '0') continue;
-    
-    unsigned parsed_idx = 0;
-    bool valid = true;
-    for (size_t i = 0; i < key_len && valid; i++) {
-      if (key[i] < '0' || key[i] > '9') valid = false;
-      else parsed_idx = parsed_idx * 10 + (key[i] - '0');
-    }
-    if (!valid || parsed_idx >= len) continue;
+    unsigned parsed_idx;
+    if (!parse_array_index(key, key_len, len, &parsed_idx)) continue;
     
     jsval_t call_args[3] = { val, tov((double)parsed_idx), arr };
     jsval_t mapped = call_js_with_args(js, callback, call_args, 3);
@@ -16035,15 +16038,8 @@ static jsval_t builtin_array_filter(struct js *js, jsval_t *args, int nargs) {
   jsval_t val;
   
   while (js_prop_iter_next(&iter, &key, &key_len, &val)) {
-    if (key_len == 0 || key[0] > '9' || key[0] < '0') continue;
-    
-    unsigned parsed_idx = 0;
-    bool valid = true;
-    for (size_t i = 0; i < key_len && valid; i++) {
-      if (key[i] < '0' || key[i] > '9') valid = false;
-      else parsed_idx = parsed_idx * 10 + (key[i] - '0');
-    }
-    if (!valid || parsed_idx >= len) continue;
+    unsigned parsed_idx;
+    if (!parse_array_index(key, key_len, len, &parsed_idx)) continue;
     
     jsval_t call_args[3] = { val, tov((double)parsed_idx), arr };
     jsval_t test = call_js_with_args(js, callback, call_args, 3);
@@ -16099,15 +16095,8 @@ static jsval_t builtin_array_reduce(struct js *js, jsval_t *args, int nargs) {
   jsval_t val;
   
   while (js_prop_iter_next(&iter, &key, &key_len, &val)) {
-    if (key_len == 0 || key[0] > '9' || key[0] < '0') continue;
-    
-    unsigned parsed_idx = 0;
-    bool valid = true;
-    for (size_t i = 0; i < key_len && valid; i++) {
-      if (key[i] < '0' || key[i] > '9') valid = false;
-      else parsed_idx = parsed_idx * 10 + (key[i] - '0');
-    }
-    if (!valid || parsed_idx >= len) continue;
+    unsigned parsed_idx;
+    if (!parse_array_index(key, key_len, len, &parsed_idx)) continue;
     
     if (first) {
       accumulator = val;
@@ -16145,15 +16134,8 @@ static void flat_helper(struct js *js, jsval_t arr, jsval_t result, jsoff_t *res
   jsval_t val;
   
   while (js_prop_iter_next(&iter, &key, &key_len, &val)) {
-    if (key_len == 0 || key[0] > '9' || key[0] < '0') continue;
-    
-    unsigned parsed_idx = 0;
-    bool valid = true;
-    for (size_t i = 0; i < key_len && valid; i++) {
-      if (key[i] < '0' || key[i] > '9') valid = false;
-      else parsed_idx = parsed_idx * 10 + (key[i] - '0');
-    }
-    if (!valid || parsed_idx >= len) continue;
+    unsigned parsed_idx;
+    if (!parse_array_index(key, key_len, len, &parsed_idx)) continue;
     
     if (depth > 0 && (vtype(val) == T_ARR || vtype(val) == T_OBJ)) {
       flat_helper(js, val, result, result_idx, depth - 1);
@@ -16215,9 +16197,8 @@ static jsval_t builtin_array_concat(struct js *js, jsval_t *args, int nargs) {
     if (elem_off != 0) {
       jsval_t elem = resolveprop(js, mkval(T_PROP, elem_off));
       char res_idx[16];
-      snprintf(res_idx, sizeof(res_idx), "%u", (unsigned) result_idx);
-      jsval_t key = js_mkstr(js, res_idx, strlen(res_idx));
-      setprop(js, result, key, elem);
+      size_t res_idx_len = uint_to_str(res_idx, sizeof(res_idx), (unsigned)result_idx);
+      js_mkprop_fast(js, result, res_idx, res_idx_len, elem);
     }
     result_idx++;
   }
@@ -16240,22 +16221,19 @@ static jsval_t builtin_array_concat(struct js *js, jsval_t *args, int nargs) {
           jsval_t elem = resolveprop(js, mkval(T_PROP, elem_off));
           char res_idx[16];
           size_t res_idx_len = uint_to_str(res_idx, sizeof(res_idx), (unsigned)result_idx);
-          jsval_t key = js_mkstr(js, res_idx, res_idx_len);
-          setprop(js, result, key, elem);
+          js_mkprop_fast(js, result, res_idx, res_idx_len, elem);
         }
         result_idx++;
       }
     } else {
       char res_idx[16];
-      snprintf(res_idx, sizeof(res_idx), "%u", (unsigned) result_idx);
-      jsval_t key = js_mkstr(js, res_idx, strlen(res_idx));
-      setprop(js, result, key, arg);
+      size_t res_idx_len = uint_to_str(res_idx, sizeof(res_idx), (unsigned)result_idx);
+      js_mkprop_fast(js, result, res_idx, res_idx_len, arg);
       result_idx++;
     }
   }
   
-  jsval_t len_key = js_mkstr(js, "length", 6);
-  setprop(js, result, len_key, tov((double) result_idx));
+  js_mkprop_fast(js, result, "length", 6, tov((double)result_idx));
   return mkval(T_ARR, vdata(result));
 }
 
@@ -16325,14 +16303,14 @@ static jsval_t builtin_array_fill(struct js *js, jsval_t *args, int nargs) {
   return arr;
 }
 
-static jsval_t builtin_array_find(struct js *js, jsval_t *args, int nargs) {
+static jsval_t array_find_impl(struct js *js, jsval_t *args, int nargs, bool return_index, const char *name) {
   jsval_t arr = js->this_val;
   
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ)
-    return js_mkerr(js, "find called on non-array");
+    return js_mkerr(js, "%s called on non-array", name);
   
   if (nargs == 0 || (vtype(args[0]) != T_FUNC && vtype(args[0]) != T_CFUNC))
-    return js_mkerr(js, "find requires a function argument");
+    return js_mkerr(js, "%s requires a function argument", name);
   
   jsval_t callback = args[0];
   
@@ -16342,7 +16320,7 @@ static jsval_t builtin_array_find(struct js *js, jsval_t *args, int nargs) {
     jsval_t len_val = resolveprop(js, mkval(T_PROP, len_off));
     if (vtype(len_val) == T_NUM) len = (jsoff_t)tod(len_val);
   }
-  if (len == 0) return js_mkundef();
+  if (len == 0) return return_index ? tov(-1) : js_mkundef();
   
   ant_iter_t iter = js_prop_iter_begin(js, arr);
   const char *key;
@@ -16350,15 +16328,8 @@ static jsval_t builtin_array_find(struct js *js, jsval_t *args, int nargs) {
   jsval_t val;
   
   while (js_prop_iter_next(&iter, &key, &key_len, &val)) {
-    if (key_len == 0 || key[0] > '9' || key[0] < '0') continue;
-    
-    unsigned parsed_idx = 0;
-    bool valid = true;
-    for (size_t i = 0; i < key_len && valid; i++) {
-      if (key[i] < '0' || key[i] > '9') valid = false;
-      else parsed_idx = parsed_idx * 10 + (key[i] - '0');
-    }
-    if (!valid || parsed_idx >= len) continue;
+    unsigned parsed_idx;
+    if (!parse_array_index(key, key_len, len, &parsed_idx)) continue;
     
     jsval_t call_args[3] = { val, tov((double)parsed_idx), arr };
     jsval_t result = call_js_with_args(js, callback, call_args, 3);
@@ -16369,74 +16340,30 @@ static jsval_t builtin_array_find(struct js *js, jsval_t *args, int nargs) {
     }
     if (js_truthy(js, result)) {
       js_prop_iter_end(&iter);
-      return val;
+      return return_index ? tov((double)parsed_idx) : val;
     }
   }
   js_prop_iter_end(&iter);
   
-  return js_mkundef();
+  return return_index ? tov(-1) : js_mkundef();
+}
+
+static jsval_t builtin_array_find(struct js *js, jsval_t *args, int nargs) {
+  return array_find_impl(js, args, nargs, false, "find");
 }
 
 static jsval_t builtin_array_findIndex(struct js *js, jsval_t *args, int nargs) {
-  jsval_t arr = js->this_val;
-  
-  if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ)
-    return js_mkerr(js, "findIndex called on non-array");
-  
-  if (nargs == 0 || (vtype(args[0]) != T_FUNC && vtype(args[0]) != T_CFUNC))
-    return js_mkerr(js, "findIndex requires a function argument");
-  
-  jsval_t callback = args[0];
-  
-  jsoff_t len_off = lkp_interned(js, arr, INTERN_LENGTH, 6);
-  jsoff_t len = 0;
-  if (len_off != 0) {
-    jsval_t len_val = resolveprop(js, mkval(T_PROP, len_off));
-    if (vtype(len_val) == T_NUM) len = (jsoff_t)tod(len_val);
-  }
-  if (len == 0) return tov(-1);
-  
-  ant_iter_t iter = js_prop_iter_begin(js, arr);
-  const char *key;
-  size_t key_len;
-  jsval_t val;
-  
-  while (js_prop_iter_next(&iter, &key, &key_len, &val)) {
-    if (key_len == 0 || key[0] > '9' || key[0] < '0') continue;
-    
-    unsigned parsed_idx = 0;
-    bool valid = true;
-    for (size_t i = 0; i < key_len && valid; i++) {
-      if (key[i] < '0' || key[i] > '9') valid = false;
-      else parsed_idx = parsed_idx * 10 + (key[i] - '0');
-    }
-    if (!valid || parsed_idx >= len) continue;
-    
-    jsval_t call_args[3] = { val, tov((double)parsed_idx), arr };
-    jsval_t result = call_js_with_args(js, callback, call_args, 3);
-    
-    if (is_err(result)) {
-      js_prop_iter_end(&iter);
-      return result;
-    }
-    if (js_truthy(js, result)) {
-      js_prop_iter_end(&iter);
-      return tov((double)parsed_idx);
-    }
-  }
-  js_prop_iter_end(&iter);
-  
-  return tov(-1);
+  return array_find_impl(js, args, nargs, true, "findIndex");
 }
 
-static jsval_t builtin_array_findLast(struct js *js, jsval_t *args, int nargs) {
+static jsval_t array_find_last_impl(struct js *js, jsval_t *args, int nargs, bool return_index, const char *name) {
   jsval_t arr = js->this_val;
   
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ)
-    return js_mkerr(js, "findLast called on non-array");
+    return js_mkerr(js, "%s called on non-array", name);
   
   if (nargs == 0 || (vtype(args[0]) != T_FUNC && vtype(args[0]) != T_CFUNC))
-    return js_mkerr(js, "findLast requires a function argument");
+    return js_mkerr(js, "%s requires a function argument", name);
   
   jsval_t callback = args[0];
   
@@ -16446,7 +16373,7 @@ static jsval_t builtin_array_findLast(struct js *js, jsval_t *args, int nargs) {
     jsval_t len_val = resolveprop(js, mkval(T_PROP, len_off));
     if (vtype(len_val) == T_NUM) len = (jsoff_t)tod(len_val);
   }
-  if (len == 0) return js_mkundef();
+  if (len == 0) return return_index ? tov(-1) : js_mkundef();
   
   jsval_t *vals = malloc(len * sizeof(jsval_t));
   unsigned *idxs = malloc(len * sizeof(unsigned));
@@ -16457,15 +16384,8 @@ static jsval_t builtin_array_findLast(struct js *js, jsval_t *args, int nargs) {
   const char *key; size_t key_len; jsval_t val;
   
   while (js_prop_iter_next(&iter, &key, &key_len, &val)) {
-    if (key_len == 0 || key[0] > '9' || key[0] < '0') continue;
-    
-    unsigned parsed_idx = 0;
-    bool valid = true;
-    for (size_t i = 0; i < key_len && valid; i++) {
-      if (key[i] < '0' || key[i] > '9') valid = false;
-      else parsed_idx = parsed_idx * 10 + (key[i] - '0');
-    }
-    if (!valid || parsed_idx >= len || count >= len) continue;
+    unsigned parsed_idx;
+    if (!parse_array_index(key, key_len, len, &parsed_idx) || count >= len) continue;
     
     vals[count] = val;
     idxs[count] = parsed_idx;
@@ -16482,79 +16402,23 @@ static jsval_t builtin_array_findLast(struct js *js, jsval_t *args, int nargs) {
       return result;
     }
     if (js_truthy(js, result)) {
-      jsval_t found = vals[i-1];
+      jsval_t found_val = vals[i-1];
+      unsigned found_idx = idxs[i-1];
       free(vals); free(idxs);
-      return found;
+      return return_index ? tov((double)found_idx) : found_val;
     }
   }
   
   free(vals); free(idxs);
-  return js_mkundef();
+  return return_index ? tov(-1) : js_mkundef();
+}
+
+static jsval_t builtin_array_findLast(struct js *js, jsval_t *args, int nargs) {
+  return array_find_last_impl(js, args, nargs, false, "findLast");
 }
 
 static jsval_t builtin_array_findLastIndex(struct js *js, jsval_t *args, int nargs) {
-  jsval_t arr = js->this_val;
-  
-  if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ)
-    return js_mkerr(js, "findLastIndex called on non-array");
-  
-  if (nargs == 0 || (vtype(args[0]) != T_FUNC && vtype(args[0]) != T_CFUNC))
-    return js_mkerr(js, "findLastIndex requires a function argument");
-  
-  jsval_t callback = args[0];
-  
-  jsoff_t len_off = lkp_interned(js, arr, INTERN_LENGTH, 6);
-  jsoff_t len = 0;
-  if (len_off != 0) {
-    jsval_t len_val = resolveprop(js, mkval(T_PROP, len_off));
-    if (vtype(len_val) == T_NUM) len = (jsoff_t)tod(len_val);
-  }
-  if (len == 0) return tov(-1);
-  
-  jsval_t *vals = malloc(len * sizeof(jsval_t));
-  unsigned *idxs = malloc(len * sizeof(unsigned));
-  if (!vals || !idxs) { free(vals); free(idxs); return js_mkerr(js, "out of memory"); }
-  
-  jsoff_t count = 0;
-  ant_iter_t iter = js_prop_iter_begin(js, arr);
-  const char *key;
-  size_t key_len;
-  jsval_t val;
-  
-  while (js_prop_iter_next(&iter, &key, &key_len, &val)) {
-    if (key_len == 0 || key[0] > '9' || key[0] < '0') continue;
-    
-    unsigned parsed_idx = 0;
-    bool valid = true;
-    for (size_t i = 0; i < key_len && valid; i++) {
-      if (key[i] < '0' || key[i] > '9') valid = false;
-      else parsed_idx = parsed_idx * 10 + (key[i] - '0');
-    }
-    if (!valid || parsed_idx >= len || count >= len) continue;
-    
-    vals[count] = val;
-    idxs[count] = parsed_idx;
-    count++;
-  }
-  js_prop_iter_end(&iter);
-  
-  for (jsoff_t i = count; i > 0; i--) {
-    jsval_t call_args[3] = { vals[i-1], tov((double)idxs[i-1]), arr };
-    jsval_t result = call_js_with_args(js, callback, call_args, 3);
-    
-    if (is_err(result)) {
-      free(vals); free(idxs);
-      return result;
-    }
-    if (js_truthy(js, result)) {
-      unsigned found_idx = idxs[i-1];
-      free(vals); free(idxs);
-      return tov((double)found_idx);
-    }
-  }
-  
-  free(vals); free(idxs);
-  return tov(-1);
+  return array_find_last_impl(js, args, nargs, true, "findLastIndex");
 }
 
 static jsval_t builtin_array_flatMap(struct js *js, jsval_t *args, int nargs) {
@@ -17177,32 +17041,11 @@ static jsval_t builtin_array_copyWithin(struct js *js, jsval_t *args, int nargs)
 
 static jsval_t builtin_array_toSorted(struct js *js, jsval_t *args, int nargs) {
   jsval_t arr = js->this_val;
-  
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ)
     return js_mkerr(js, "toSorted called on non-array");
   
-  jsoff_t len_off = lkp_interned(js, arr, INTERN_LENGTH, 6);
-  jsoff_t len = 0;
-  if (len_off != 0) {
-    jsval_t len_val = resolveprop(js, mkval(T_PROP, len_off));
-    if (vtype(len_val) == T_NUM) len = (jsoff_t)tod(len_val);
-  }
-  
-  jsval_t result = mkarr(js);
+  jsval_t result = array_shallow_copy(js, arr, get_array_length(js, arr));
   if (is_err(result)) return result;
-  
-  ant_iter_t iter = js_prop_iter_begin(js, arr);
-  const char *key;
-  size_t key_len;
-  jsval_t val;
-  
-  while (js_prop_iter_next(&iter, &key, &key_len, &val)) {
-    if (key_len == 0 || key[0] > '9' || key[0] < '0') continue;
-    js_mkprop_fast(js, result, key, key_len, val);
-  }
-  
-  js_prop_iter_end(&iter);
-  js_mkprop_fast(js, result, "length", 6, tov((double)len));
   
   jsval_t saved_this = js->this_val;
   js->this_val = result;
@@ -17216,32 +17059,11 @@ static jsval_t builtin_array_toSorted(struct js *js, jsval_t *args, int nargs) {
 static jsval_t builtin_array_toReversed(struct js *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
   jsval_t arr = js->this_val;
-  
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ)
     return js_mkerr(js, "toReversed called on non-array");
   
-  jsoff_t len_off = lkp_interned(js, arr, INTERN_LENGTH, 6);
-  jsoff_t len = 0;
-  if (len_off != 0) {
-    jsval_t len_val = resolveprop(js, mkval(T_PROP, len_off));
-    if (vtype(len_val) == T_NUM) len = (jsoff_t)tod(len_val);
-  }
-  
-  jsval_t result = mkarr(js);
+  jsval_t result = array_shallow_copy(js, arr, get_array_length(js, arr));
   if (is_err(result)) return result;
-  
-  ant_iter_t iter = js_prop_iter_begin(js, arr);
-  const char *key;
-  size_t key_len;
-  jsval_t val;
-  
-  while (js_prop_iter_next(&iter, &key, &key_len, &val)) {
-    if (key_len == 0 || key[0] > '9' || key[0] < '0') continue;
-    js_mkprop_fast(js, result, key, key_len, val);
-  }
-  
-  js_prop_iter_end(&iter);
-  js_mkprop_fast(js, result, "length", 6, tov((double)len));
   
   jsval_t saved_this = js->this_val;
   js->this_val = result;
@@ -17254,32 +17076,11 @@ static jsval_t builtin_array_toReversed(struct js *js, jsval_t *args, int nargs)
 
 static jsval_t builtin_array_toSpliced(struct js *js, jsval_t *args, int nargs) {
   jsval_t arr = js->this_val;
-  
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ)
     return js_mkerr(js, "toSpliced called on non-array");
   
-  jsoff_t len_off = lkp_interned(js, arr, INTERN_LENGTH, 6);
-  jsoff_t len = 0;
-  if (len_off != 0) {
-    jsval_t len_val = resolveprop(js, mkval(T_PROP, len_off));
-    if (vtype(len_val) == T_NUM) len = (jsoff_t)tod(len_val);
-  }
-  
-  jsval_t result = mkarr(js);
+  jsval_t result = array_shallow_copy(js, arr, get_array_length(js, arr));
   if (is_err(result)) return result;
-  
-  ant_iter_t iter = js_prop_iter_begin(js, arr);
-  const char *key;
-  size_t key_len;
-  jsval_t val;
-  
-  while (js_prop_iter_next(&iter, &key, &key_len, &val)) {
-    if (key_len == 0 || key[0] > '9' || key[0] < '0') continue;
-    js_mkprop_fast(js, result, key, key_len, val);
-  }
-  
-  js_prop_iter_end(&iter);
-  js_mkprop_fast(js, result, "length", 6, tov((double)len));
   
   jsval_t saved_this = js->this_val;
   js->this_val = result;
