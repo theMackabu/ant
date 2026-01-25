@@ -18311,7 +18311,8 @@ static jsval_t builtin_string_charCodeAt(struct js *js, jsval_t *args, int nargs
   if (vtype(str) != T_STR) return js_mkerr(js, "charCodeAt called on non-string");
   
   double idx_d = nargs < 1 ? 0.0 : js_to_number(js, args[0]);
-  if (isnan(idx_d) || isinf(idx_d)) return tov(JS_NAN);
+  if (isnan(idx_d)) idx_d = 0.0;
+  if (isinf(idx_d) || idx_d > (double)LONG_MAX) return tov(JS_NAN);
   
   long idx_l = (long) idx_d;
   if (idx_l < 0) return tov(JS_NAN);
@@ -18332,7 +18333,8 @@ static jsval_t builtin_string_codePointAt(struct js *js, jsval_t *args, int narg
   if (vtype(str) != T_STR) return js_mkerr(js, "codePointAt called on non-string");
   
   double idx_d = nargs < 1 ? 0.0 : js_to_number(js, args[0]);
-  if (isnan(idx_d) || isinf(idx_d)) return js_mkundef();
+  if (isnan(idx_d)) idx_d = 0.0;
+  if (isinf(idx_d) || idx_d > (double)LONG_MAX) return js_mkundef();
   
   long idx_l = (long) idx_d;
   if (idx_l < 0) return js_mkundef();
@@ -18564,7 +18566,7 @@ static jsval_t builtin_string_charAt(struct js *js, jsval_t *args, int nargs) {
   if (isnan(idx_d)) idx_d = 0;
   else if (idx_d < 0) idx_d = -floor(-idx_d);
   else idx_d = floor(idx_d);
-  if (idx_d < 0) return js_mkstr(js, "", 0);
+  if (idx_d < 0 || isinf(idx_d)) return js_mkstr(js, "", 0);
   
   jsoff_t idx = (jsoff_t) idx_d;
   jsoff_t str_len = offtolen(loadoff(js, (jsoff_t) vdata(str)));
