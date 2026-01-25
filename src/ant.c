@@ -2474,6 +2474,7 @@ static inline js_err_type_t get_error_type(struct js *js) {
   return (js_err_type_t)(int)js_getnum(err_type);
 }
 
+__attribute__((format(printf, 4, 5)))
 jsval_t js_create_error(struct js *js, js_err_type_t err_type, jsval_t props, const char *xx, ...) {
   va_list ap;
   int line = 0, col = 0;
@@ -2494,10 +2495,7 @@ jsval_t js_create_error(struct js *js, js_err_type_t err_type, jsval_t props, co
   get_error_line(js->code, js->clen, js->toff > 0 ? js->toff : js->pos, error_line, sizeof(error_line), &error_col);
   
   va_start(ap, xx);
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wformat-nonliteral"
   vsnprintf(error_msg, sizeof(error_msg), xx, ap);
-#pragma GCC diagnostic pop
   va_end(ap);
   
   const char *err_name = get_error_type_name(err_type);
