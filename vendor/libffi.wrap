@@ -8,6 +8,7 @@ patch_filename = libffi_3.5.2-2_patch.zip
 patch_url = https://wrapdb.mesonbuild.com/v2/libffi_3.5.2-2/get_patch
 patch_hash = 74ed624f74cd860be3bdf6d473b70ab88707bdf2f940191fbcb577e2a49a9710
 wrapdb_version = 3.5.2-2
+diff_files = patches/libffi-silence-warnings.patch
 
 [provide]
 dependency_names = libffi

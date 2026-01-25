@@ -1,0 +1,19 @@
+--- a/meson.build
++++ b/meson.build
+@@ -4,7 +4,7 @@ project(
+   version: '3.5.2',
+   license: 'MIT',
+   meson_version: '>= 0.56.0',
+-  default_options: ['warning_level=1'],
++  default_options: ['warning_level=0', 'werror=false'],
+ )
+ 
+ fs = import('fs')
+@@ -42,6 +42,7 @@ is_gnu_like = cc.get_argument_syntax() == 'gcc'
+ if is_gnu_like
+   add_project_arguments(
+     '-fexceptions',
++    '-w',
+     language: 'c',
+   )
+ endif
