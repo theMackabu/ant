@@ -45,7 +45,12 @@ libuv_sub = subproject('libuv', default_options: [
 libuv_dep = libuv_sub.get_variable('libuv_dep')
 
 tlsuv_opts = cmake.subproject_options()
+tlsuv_opts.set_override_option('warning_level', '0')
+tlsuv_opts.append_compile_args('c', ['-w'])
+
 bdwgc_opts = cmake.subproject_options()
+bdwgc_opts.set_override_option('warning_level', '0')
+bdwgc_opts.append_compile_args('c', ['-w'])
 
 cmake_prefix = get_option('deps_prefix_cmake')
 tlsuv_cmake_defines = {
