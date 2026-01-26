@@ -24,6 +24,7 @@
 ant.txt
 zoo.sh
 todo.txt
+AGENTS.md
 
 node_modules
 bun.lock

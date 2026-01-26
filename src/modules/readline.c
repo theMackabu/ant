@@ -92,6 +92,15 @@ typedef struct rl_interface {
 
 static rl_interface_t *interfaces = NULL;
 static uint64_t next_interface_id = 1;
+static RLEventType *process_stdin_events = NULL;
+static RLEventType *process_stdout_events = NULL;
+static uv_tty_t process_tty_in;
+static uv_signal_t process_sigwinch;
+static bool process_tty_initialized = false;
+static bool process_tty_reading = false;
+static bool process_sigwinch_initialized = false;
+static struct js *process_stdin_js = NULL;
+static struct js *process_stdout_js = NULL;
 
 static void rl_history_init(rl_history_t *hist, int capacity) {
   hist->capacity = capacity > 0 ? capacity : DEFAULT_HISTORY_SIZE;
@@ -200,6 +209,426 @@ static jsval_t get_history_array(struct js *js, rl_interface_t *iface) {
 static void emit_history_event(struct js *js, rl_interface_t *iface) {
   jsval_t history_arr = get_history_array(js, iface);
   emit_event(js, iface, "history", &history_arr, 1);
+}
+
+static void alloc_buffer(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf);
+static void on_stdin_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf);
+static void process_stdout_get_size(int *rows, int *cols);
+
+static RLEventType *find_or_create_process_event_type(const char *event_type) {
+  RLEventType *evt = NULL;
+  HASH_FIND_STR(process_stdin_events, event_type, evt);
+
+  if (evt == NULL) {
+    evt = malloc(sizeof(RLEventType));
+    evt->event_type = strdup(event_type);
+    evt->listener_count = 0;
+    HASH_ADD_KEYPTR(hh, process_stdin_events, evt->event_type, strlen(evt->event_type), evt);
+  }
+
+  return evt;
+}
+
+static void emit_process_event(struct js *js, const char *event_type, jsval_t *args, int nargs) {
+  RLEventType *evt = NULL;
+  HASH_FIND_STR(process_stdin_events, event_type, evt);
+
+  if (evt == NULL || evt->listener_count == 0) return;
+
+  int i = 0;
+  while (i < evt->listener_count) {
+    RLEventListener *listener = &evt->listeners[i];
+    js_call(js, listener->listener, args, nargs);
+
+    if (listener->once) {
+      for (int j = i; j < evt->listener_count - 1; j++) {
+        evt->listeners[j] = evt->listeners[j + 1];
+      }
+      evt->listener_count--;
+    } else i++;
+  }
+}
+
+static RLEventType *find_or_create_process_stdout_event_type(const char *event_type) {
+  RLEventType *evt = NULL;
+  HASH_FIND_STR(process_stdout_events, event_type, evt);
+
+  if (evt == NULL) {
+    evt = malloc(sizeof(RLEventType));
+    evt->event_type = strdup(event_type);
+    evt->listener_count = 0;
+    HASH_ADD_KEYPTR(hh, process_stdout_events, evt->event_type, strlen(evt->event_type), evt);
+  }
+
+  return evt;
+}
+
+static void emit_process_stdout_event(struct js *js, const char *event_type, jsval_t *args, int nargs) {
+  RLEventType *evt = NULL;
+  HASH_FIND_STR(process_stdout_events, event_type, evt);
+
+  if (evt == NULL || evt->listener_count == 0) return;
+
+  int i = 0;
+  while (i < evt->listener_count) {
+    RLEventListener *listener = &evt->listeners[i];
+    js_call(js, listener->listener, args, nargs);
+
+    if (listener->once) {
+      for (int j = i; j < evt->listener_count - 1; j++) {
+        evt->listeners[j] = evt->listeners[j + 1];
+      }
+      evt->listener_count--;
+    } else i++;
+  }
+}
+
+#ifndef _WIN32
+static void on_sigwinch(uv_signal_t *handle, int signum) {
+  (void)handle;
+  (void)signum;
+
+  if (!process_stdout_js) return;
+
+  struct js *js = process_stdout_js;
+  jsval_t process_obj = js_get(js, js_glob(js), "process");
+  if (js_type(process_obj) != JS_OBJ) return;
+
+  jsval_t stdout_obj = js_get(js, process_obj, "stdout");
+  if (js_type(stdout_obj) != JS_OBJ) return;
+
+  int rows = 0, cols = 0;
+  process_stdout_get_size(&rows, &cols);
+  js_set(js, stdout_obj, "rows", js_mknum(rows));
+  js_set(js, stdout_obj, "columns", js_mknum(cols));
+
+  emit_process_stdout_event(js, "resize", NULL, 0);
+}
+#endif
+
+static void start_sigwinch_handler(struct js *js) {
+#ifndef _WIN32
+  if (process_sigwinch_initialized) return;
+
+  uv_loop_t *loop = uv_default_loop();
+  if (uv_signal_init(loop, &process_sigwinch) != 0) return;
+  if (uv_signal_start(&process_sigwinch, on_sigwinch, SIGWINCH) != 0) {
+    uv_close((uv_handle_t *)&process_sigwinch, NULL);
+    return;
+  }
+  uv_unref((uv_handle_t *)&process_sigwinch);
+  process_sigwinch_initialized = true;
+  process_stdout_js = js;
+#else
+  (void)js;
+#endif
+}
+
+#ifndef _WIN32
+static struct termios process_saved_termios;
+static bool process_raw_mode = false;
+#endif
+
+static bool process_stdin_is_tty(void) {
+  return uv_guess_handle(STDIN_FILENO) == UV_TTY;
+}
+
+static bool process_stdout_is_tty(void) {
+  return uv_guess_handle(STDOUT_FILENO) == UV_TTY;
+}
+
+static void process_stdout_get_size(int *rows, int *cols) {
+  int out_rows = 24;
+  int out_cols = 80;
+#ifndef _WIN32
+  struct winsize ws;
+  if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
+    if (ws.ws_row > 0) out_rows = ws.ws_row;
+    if (ws.ws_col > 0) out_cols = ws.ws_col;
+  }
+#else
+  CONSOLE_SCREEN_BUFFER_INFO csbi;
+  if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
+    int width = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+    int height = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+    if (height > 0) out_rows = height;
+    if (width > 0) out_cols = width;
+  }
+#endif
+
+  if (rows) *rows = out_rows;
+  if (cols) *cols = out_cols;
+}
+
+static void process_stdin_get_size(int *rows, int *cols) {
+  int out_rows = 24;
+  int out_cols = 80;
+#ifndef _WIN32
+  struct winsize ws;
+  if (ioctl(STDIN_FILENO, TIOCGWINSZ, &ws) == 0) {
+    if (ws.ws_row > 0) out_rows = ws.ws_row;
+    if (ws.ws_col > 0) out_cols = ws.ws_col;
+  }
+#else
+  CONSOLE_SCREEN_BUFFER_INFO csbi;
+  if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
+    int width = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+    int height = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+    if (height > 0) out_rows = height;
+    if (width > 0) out_cols = width;
+  }
+#endif
+
+  if (rows) *rows = out_rows;
+  if (cols) *cols = out_cols;
+}
+
+#ifndef _WIN32
+static bool process_set_raw_mode(bool enable) {
+  if (!process_stdin_is_tty()) return false;
+  if (enable) {
+    if (process_raw_mode) return true;
+    if (tcgetattr(STDIN_FILENO, &process_saved_termios) == -1) return false;
+
+    struct termios raw = process_saved_termios;
+    raw.c_lflag &= ~(ICANON | ECHO | ISIG);
+    raw.c_cc[VMIN] = 1;
+    raw.c_cc[VTIME] = 0;
+
+    if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) == -1) return false;
+    process_raw_mode = true;
+    return true;
+  }
+
+  if (!process_raw_mode) return true;
+  if (tcsetattr(STDIN_FILENO, TCSANOW, &process_saved_termios) == -1) return false;
+  process_raw_mode = false;
+  return true;
+}
+#else
+static bool process_set_raw_mode(bool enable) {
+  (void)enable;
+  return false;
+}
+#endif
+
+static jsval_t js_process_stdin_set_raw_mode(struct js *js, jsval_t *args, int nargs) {
+  bool enable = true;
+  if (nargs > 0) enable = js_truthy(js, args[0]);
+  return process_set_raw_mode(enable) ? js_mktrue() : js_mkfalse();
+}
+
+static jsval_t js_process_stdout_write(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkfalse();
+  size_t len = 0;
+  char *data = js_getstr(js, args[0], &len);
+  if (!data) return js_mkfalse();
+  fwrite(data, 1, len, stdout);
+  fflush(stdout);
+  return js_mktrue();
+}
+
+static void process_stdin_start_reading(void) {
+  if (process_tty_reading) return;
+  if (!process_tty_initialized) {
+    uv_loop_t *loop = uv_default_loop();
+    if (uv_tty_init(loop, &process_tty_in, STDIN_FILENO, 1) != 0) return;
+    uv_tty_set_mode(&process_tty_in, process_raw_mode ? UV_TTY_MODE_RAW : UV_TTY_MODE_NORMAL);
+    process_tty_in.data = NULL;
+    process_tty_initialized = true;
+  } else {
+    uv_tty_set_mode(&process_tty_in, process_raw_mode ? UV_TTY_MODE_RAW : UV_TTY_MODE_NORMAL);
+  }
+
+  process_tty_reading = true;
+  uv_read_start((uv_stream_t *)&process_tty_in, alloc_buffer, on_stdin_read);
+}
+
+static void process_stdin_stop_reading(void) {
+  if (!process_tty_reading) return;
+  uv_read_stop((uv_stream_t *)&process_tty_in);
+  process_tty_reading = false;
+}
+
+static jsval_t js_process_stdin_resume(struct js *js, jsval_t *args, int nargs) {
+  (void)args;
+  (void)nargs;
+  process_stdin_js = js;
+  process_stdin_start_reading();
+  return js_getthis(js);
+}
+
+static jsval_t js_process_stdin_pause(struct js *js, jsval_t *args, int nargs) {
+  (void)args;
+  (void)nargs;
+  process_stdin_stop_reading();
+  return js_getthis(js);
+}
+
+static jsval_t js_process_stdin_on(struct js *js, jsval_t *args, int nargs) {
+  jsval_t this_obj = js_getthis(js);
+
+  if (nargs < 2) return this_obj;
+  char *event_type = js_getstr(js, args[0], NULL);
+  if (event_type == NULL) return this_obj;
+  if (js_type(args[1]) != JS_FUNC) return this_obj;
+
+  RLEventType *evt = find_or_create_process_event_type(event_type);
+  if (evt->listener_count < MAX_LISTENERS_PER_EVENT) {
+    evt->listeners[evt->listener_count].listener = args[1];
+    evt->listeners[evt->listener_count].once = false;
+    evt->listener_count++;
+  }
+
+  if (strcmp(event_type, "data") == 0) {
+    process_stdin_js = js;
+    process_stdin_start_reading();
+  }
+
+  return this_obj;
+}
+
+static jsval_t js_process_stdin_remove_all_listeners(struct js *js, jsval_t *args, int nargs) {
+  jsval_t this_obj = js_getthis(js);
+  if (nargs < 1) {
+    RLEventType *evt, *tmp;
+    HASH_ITER(hh, process_stdin_events, evt, tmp) {
+      evt->listener_count = 0;
+    }
+    process_stdin_stop_reading();
+    return this_obj;
+  }
+
+  char *event_type = js_getstr(js, args[0], NULL);
+  if (!event_type) return this_obj;
+  RLEventType *evt = NULL;
+  HASH_FIND_STR(process_stdin_events, event_type, evt);
+  if (evt != NULL) {
+    evt->listener_count = 0;
+  }
+  if (strcmp(event_type, "data") == 0) {
+    process_stdin_stop_reading();
+  }
+  return this_obj;
+}
+
+static jsval_t js_process_stdout_on(struct js *js, jsval_t *args, int nargs) {
+  jsval_t this_obj = js_getthis(js);
+
+  if (nargs < 2) return this_obj;
+  char *event_type = js_getstr(js, args[0], NULL);
+  if (event_type == NULL) return this_obj;
+  if (js_type(args[1]) != JS_FUNC) return this_obj;
+
+  RLEventType *evt = find_or_create_process_stdout_event_type(event_type);
+  if (evt->listener_count < MAX_LISTENERS_PER_EVENT) {
+    evt->listeners[evt->listener_count].listener = args[1];
+    evt->listeners[evt->listener_count].once = false;
+    evt->listener_count++;
+  }
+
+  if (strcmp(event_type, "resize") == 0) {
+    start_sigwinch_handler(js);
+  }
+
+  return this_obj;
+}
+
+static jsval_t js_process_stdout_once(struct js *js, jsval_t *args, int nargs) {
+  jsval_t this_obj = js_getthis(js);
+
+  if (nargs < 2) return this_obj;
+  char *event_type = js_getstr(js, args[0], NULL);
+  if (event_type == NULL) return this_obj;
+  if (js_type(args[1]) != JS_FUNC) return this_obj;
+
+  RLEventType *evt = find_or_create_process_stdout_event_type(event_type);
+  if (evt->listener_count < MAX_LISTENERS_PER_EVENT) {
+    evt->listeners[evt->listener_count].listener = args[1];
+    evt->listeners[evt->listener_count].once = true;
+    evt->listener_count++;
+  }
+
+  if (strcmp(event_type, "resize") == 0) {
+    start_sigwinch_handler(js);
+  }
+
+  return this_obj;
+}
+
+static jsval_t js_process_stdout_remove_all_listeners(struct js *js, jsval_t *args, int nargs) {
+  jsval_t this_obj = js_getthis(js);
+  if (nargs < 1) {
+    RLEventType *evt, *tmp;
+    HASH_ITER(hh, process_stdout_events, evt, tmp) {
+      evt->listener_count = 0;
+    }
+    return this_obj;
+  }
+
+  char *event_type = js_getstr(js, args[0], NULL);
+  if (!event_type) return this_obj;
+  RLEventType *evt = NULL;
+  HASH_FIND_STR(process_stdout_events, event_type, evt);
+  if (evt != NULL) {
+    evt->listener_count = 0;
+  }
+  return this_obj;
+}
+
+static jsval_t js_process_stdout_get_window_size(struct js *js, jsval_t *args, int nargs) {
+  (void)args;
+  (void)nargs;
+
+  int rows = 0, cols = 0;
+  process_stdout_get_size(&rows, &cols);
+
+  jsval_t arr = js_mkarr(js);
+  js_arr_push(js, arr, js_mknum(cols));
+  js_arr_push(js, arr, js_mknum(rows));
+  return arr;
+}
+
+static void ensure_process_stdio(struct js *js) {
+  jsval_t process_obj = js_get(js, js_glob(js), "process");
+  if (js_type(process_obj) != JS_OBJ) return;
+
+  bool stdin_tty = process_stdin_is_tty();
+  bool stdout_tty = process_stdout_is_tty();
+
+  jsval_t stdin_obj = js_get(js, process_obj, "stdin");
+  if (js_type(stdin_obj) != JS_OBJ) {
+    stdin_obj = js_mkobj(js);
+    js_set(js, process_obj, "stdin", stdin_obj);
+  }
+  int stdin_rows = 0;
+  int stdin_cols = 0;
+  process_stdin_get_size(&stdin_rows, &stdin_cols);
+  js_set(js, stdin_obj, "isTTY", stdin_tty ? js_mktrue() : js_mkfalse());
+  js_set(js, stdin_obj, "rows", js_mknum(stdin_rows));
+  js_set(js, stdin_obj, "columns", js_mknum(stdin_cols));
+  js_set(js, stdin_obj, "setRawMode", js_mkfun(js_process_stdin_set_raw_mode));
+  js_set(js, stdin_obj, "resume", js_mkfun(js_process_stdin_resume));
+  js_set(js, stdin_obj, "pause", js_mkfun(js_process_stdin_pause));
+  js_set(js, stdin_obj, "on", js_mkfun(js_process_stdin_on));
+  js_set(js, stdin_obj, "removeAllListeners", js_mkfun(js_process_stdin_remove_all_listeners));
+
+  jsval_t stdout_obj = js_get(js, process_obj, "stdout");
+  if (js_type(stdout_obj) != JS_OBJ) {
+    stdout_obj = js_mkobj(js);
+    js_set(js, process_obj, "stdout", stdout_obj);
+  }
+  int stdout_rows = 0;
+  int stdout_cols = 0;
+  process_stdout_get_size(&stdout_rows, &stdout_cols);
+  js_set(js, stdout_obj, "isTTY", stdout_tty ? js_mktrue() : js_mkfalse());
+  js_set(js, stdout_obj, "rows", js_mknum(stdout_rows));
+  js_set(js, stdout_obj, "columns", js_mknum(stdout_cols));
+  js_set(js, stdout_obj, "write", js_mkfun(js_process_stdout_write));
+  js_set(js, stdout_obj, "on", js_mkfun(js_process_stdout_on));
+  js_set(js, stdout_obj, "once", js_mkfun(js_process_stdout_once));
+  js_set(js, stdout_obj, "removeAllListeners", js_mkfun(js_process_stdout_remove_all_listeners));
+  js_set(js, stdout_obj, "getWindowSize", js_mkfun(js_process_stdout_get_window_size));
 }
 
 #ifndef _WIN32
@@ -362,8 +791,17 @@ static void alloc_buffer(uv_handle_t *handle, size_t suggested_size, uv_buf_t *b
 static void on_stdin_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
   rl_interface_t *iface = (rl_interface_t *)stream->data;
   struct js *js = rt->js;
-  
-  if (!iface || iface->closed || iface->paused) {
+
+  if (!iface) {
+    if (nread > 0 && process_stdin_js) {
+      jsval_t data_val = js_mkstr(process_stdin_js, buf->base, (size_t)nread);
+      emit_process_event(process_stdin_js, "data", &data_val, 1);
+    }
+    if (buf->base) free(buf->base);
+    return;
+  }
+
+  if (iface->closed || iface->paused) {
     if (buf->base) free(buf->base);
     return;
   }
@@ -1195,7 +1633,9 @@ void readline_gc_update_roots(GC_FWD_ARGS) {
 
 jsval_t readline_library(struct js *js) {
   jsval_t lib = js_mkobj(js);
-  
+
+  ensure_process_stdio(js);
+
   js_set(js, lib, "createInterface", js_mkfun(rl_create_interface));
   js_set(js, lib, "clearLine", js_mkfun(rl_clear_line));
   js_set(js, lib, "clearScreenDown", js_mkfun(rl_clear_screen_down));
@@ -1209,7 +1649,9 @@ jsval_t readline_library(struct js *js) {
 
 jsval_t readline_promises_library(struct js *js) {
   jsval_t lib = js_mkobj(js);
-  
+
+  ensure_process_stdio(js);
+
   js_set(js, lib, "createInterface", js_mkfun(rl_create_interface_promises));
   js_set(js, lib, "clearLine", js_mkfun(rl_clear_line));
   js_set(js, lib, "clearScreenDown", js_mkfun(rl_clear_screen_down));
@@ -1220,4 +1662,3 @@ jsval_t readline_promises_library(struct js *js) {
   
   return lib;
 }
-
