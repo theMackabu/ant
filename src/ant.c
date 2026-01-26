@@ -23131,19 +23131,20 @@ void js_gc_reserve_roots(GC_UPDATE_ARGS) {
     }
   }
 
+  // accessor registry is a weak reference
+  // objects only survive if reachable from other roots
+  (void)accessor_registry;
+
   proxy_data_t *proxy, *proxy_tmp;
   HASH_ITER(hh, proxy_registry, proxy, proxy_tmp) {
-    (void)fwd_off(ctx, proxy->obj_offset); RSV_VAL(proxy->target); RSV_VAL(proxy->handler);
+    RSV_VAL(proxy->target);
+    RSV_VAL(proxy->handler);
   }
-
-  dynamic_accessors_t *acc, *acc_tmp;
-  HASH_ITER(hh, accessor_registry, acc, acc_tmp) { (void)fwd_off(ctx, acc->obj_offset); }
 
   descriptor_entry_t *desc, *desc_tmp;
   HASH_ITER(hh, desc_registry, desc, desc_tmp) {
     if (desc->has_getter) RSV_VAL(desc->getter);
     if (desc->has_setter) RSV_VAL(desc->setter);
-    (void)fwd_off(ctx, (jsoff_t)(desc->key >> 32));
   }
   
   #undef RSV_OFF
@@ -23185,23 +23186,41 @@ void js_gc_update_roots(GC_UPDATE_ARGS) {
     }
 
   proxy_data_t *proxy, *proxy_tmp;
-  REHASH_REGISTRY(proxy_registry, proxy, proxy_tmp, new_proxy, obj_offset, sizeof(jsoff_t), {
-    FWD_OFF(proxy->obj_offset); FWD_VAL(proxy->target); FWD_VAL(proxy->handler);
-  });
+  for (proxy_data_t *new_proxy_registry = NULL, *_once = NULL; !_once; _once = (void*)1, proxy_registry = new_proxy_registry)
+    HASH_ITER(hh, proxy_registry, proxy, proxy_tmp) {
+      HASH_DEL(proxy_registry, proxy);
+      jsoff_t old_off = proxy->obj_offset;
+      jsoff_t new_off = fwd_off(ctx, old_off);
+      if (new_off == old_off && old_off != 0) { ANT_GC_FREE(proxy); continue; }
+      proxy->obj_offset = new_off;
+      FWD_VAL(proxy->target); FWD_VAL(proxy->handler);
+      HASH_ADD(hh, new_proxy_registry, obj_offset, sizeof(jsoff_t), proxy);
+    }
 
   dynamic_accessors_t *acc, *acc_tmp;
-  REHASH_REGISTRY(accessor_registry, acc, acc_tmp, new_acc, obj_offset, sizeof(jsoff_t), {
-    FWD_OFF(acc->obj_offset);
-  });
+  for (dynamic_accessors_t *new_acc_registry = NULL, *_once = NULL; !_once; _once = (void*)1, accessor_registry = new_acc_registry)
+    HASH_ITER(hh, accessor_registry, acc, acc_tmp) {
+      HASH_DEL(accessor_registry, acc);
+      jsoff_t old_off = acc->obj_offset;
+      jsoff_t new_off = fwd_off(ctx, old_off);
+      if (new_off == old_off && old_off != 0) { free(acc); continue; }
+      acc->obj_offset = new_off;
+      HASH_ADD(hh, new_acc_registry, obj_offset, sizeof(jsoff_t), acc);
+    }
 
   descriptor_entry_t *desc, *desc_tmp;
-  REHASH_REGISTRY(desc_registry, desc, desc_tmp, new_desc, key, sizeof(uint64_t), {
-    if (desc->has_getter) FWD_VAL(desc->getter);
-    if (desc->has_setter) FWD_VAL(desc->setter);
-    jsoff_t obj_off = fwd_off(ctx, (jsoff_t)(desc->key >> 32));
-    desc->key = ((uint64_t)obj_off << 32) | (uint32_t)(desc->key & 0xFFFFFFFF);
-    desc->obj_off = obj_off;
-  });
+  for (descriptor_entry_t *new_desc_registry = NULL, *_once = NULL; !_once; _once = (void*)1, desc_registry = new_desc_registry)
+    HASH_ITER(hh, desc_registry, desc, desc_tmp) {
+      HASH_DEL(desc_registry, desc);
+      jsoff_t old_off = (jsoff_t)(desc->key >> 32);
+      jsoff_t new_off = fwd_off(ctx, old_off);
+      if (new_off == old_off && old_off != 0) { ANT_GC_FREE(desc); continue; }
+      if (desc->has_getter) FWD_VAL(desc->getter);
+      if (desc->has_setter) FWD_VAL(desc->setter);
+      desc->key = ((uint64_t)new_off << 32) | (uint32_t)(desc->key & 0xFFFFFFFF);
+      desc->obj_off = new_off;
+      HASH_ADD(hh, new_desc_registry, key, sizeof(uint64_t), desc);
+    }
 
   memset(intern_prop_cache, 0, sizeof(intern_prop_cache));
   
