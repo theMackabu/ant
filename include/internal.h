@@ -84,7 +84,9 @@ enum {
 
 jsoff_t esize(jsoff_t w);
 
+void js_gc_reserve_roots(GC_UPDATE_ARGS);
 void js_gc_update_roots(GC_UPDATE_ARGS);
+
 bool js_has_pending_coroutines(void);
 bool is_internal_prop(const char *key, jsoff_t klen);
 

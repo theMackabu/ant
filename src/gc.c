@@ -436,6 +436,46 @@ static jsval_t gc_fwd_val_callback(void *ctx_ptr, jsval_t val) {
   return gc_update_val(ctx, val);
 }
 
+static jsoff_t gc_apply_off_callback(void *ctx_ptr, jsoff_t old_off) {
+  gc_ctx_t *ctx = (gc_ctx_t *)ctx_ptr;
+  if (old_off == 0) return 0;
+  if (old_off >= ctx->js->brk) return old_off;
+  
+  jsoff_t new_off = fwd_lookup(&ctx->fwd, old_off);
+  return (new_off != (jsoff_t)~0) ? new_off : old_off;
+}
+
+static jsval_t gc_apply_val(gc_ctx_t *ctx, jsval_t val) {
+  if (!gc_is_tagged(val)) return val;
+  
+  uint8_t type = gc_vtype(val);
+  jsoff_t old_off = (jsoff_t)gc_vdata(val);
+  if (old_off >= ctx->js->brk) return val;
+  
+  switch (type) {
+    case T_OBJ:
+    case T_FUNC:
+    case T_ARR:
+    case T_PROMISE:
+    case T_GENERATOR:
+    case T_STR:
+    case T_PROP:
+    case T_BIGINT: {
+      jsoff_t new_off = fwd_lookup(&ctx->fwd, old_off);
+      if (new_off != (jsoff_t)~0) return gc_mkval(type, new_off);
+      break;
+    }
+    default: break;
+  }
+  
+  return val;
+}
+
+static jsval_t gc_apply_val_callback(void *ctx_ptr, jsval_t val) {
+  gc_ctx_t *ctx = (gc_ctx_t *)ctx_ptr;
+  return gc_apply_val(ctx, val);
+}
+
 size_t js_gc_compact(ant_t *js) {
   if (!js || js->brk == 0) return 0;
   
@@ -485,7 +525,7 @@ size_t js_gc_compact(ant_t *js) {
   }
   
   ctx.failed = false;
-  
+    
   if (js->brk > 0) {
     jsoff_t header_at_0 = gc_loadoff(js->mem, 0);
     if ((header_at_0 & 3) == T_OBJ) gc_reserve_object(&ctx, 0);
@@ -493,16 +533,15 @@ size_t js_gc_compact(ant_t *js) {
   
   jsoff_t scope_off = (jsoff_t)gc_vdata(js->scope);
   if (scope_off < js->brk) {
-    jsoff_t new_scope = gc_reserve_object(&ctx, scope_off);
-    js->scope = gc_mkval(T_OBJ, new_scope);
+    (void)gc_reserve_object(&ctx, scope_off);
   }
   
-  js->this_val = gc_update_val(&ctx, js->this_val);
-  js->module_ns = gc_update_val(&ctx, js->module_ns);
-  js->current_func = gc_update_val(&ctx, js->current_func);
-  js->thrown_value = gc_update_val(&ctx, js->thrown_value);
-  js->tval = gc_update_val(&ctx, js->tval);
-  js_gc_update_roots(js, gc_fwd_off_callback, gc_fwd_val_callback, &ctx);
+  (void)gc_update_val(&ctx, js->this_val);
+  (void)gc_update_val(&ctx, js->module_ns);
+  (void)gc_update_val(&ctx, js->current_func);
+  (void)gc_update_val(&ctx, js->thrown_value);
+  (void)gc_update_val(&ctx, js->tval);
+  js_gc_reserve_roots(js, gc_fwd_off_callback, gc_fwd_val_callback, &ctx);
   
   gc_drain_work_queue(&ctx);
   
@@ -513,6 +552,14 @@ size_t js_gc_compact(ant_t *js) {
     ANT_GC_FREE(new_mem);
     return 0;
   }
+    
+  js->scope = gc_apply_val(&ctx, js->scope);
+  js->this_val = gc_apply_val(&ctx, js->this_val);
+  js->module_ns = gc_apply_val(&ctx, js->module_ns);
+  js->current_func = gc_apply_val(&ctx, js->current_func);
+  js->thrown_value = gc_apply_val(&ctx, js->thrown_value);
+  js->tval = gc_apply_val(&ctx, js->tval);
+  js_gc_update_roots(js, gc_apply_off_callback, gc_apply_val_callback, &ctx);
   
   uint8_t *old_mem = js->mem;
   js->mem = new_mem;

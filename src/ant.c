@@ -22924,9 +22924,8 @@ int js_type_ex(struct js *js, jsval_t val) {
   return js_type(val);
 }
 
-#define FWD_OFF(off) ((off) ? ((off) = fwd_off(ctx, off)) : 0)
-#define FWD_VAL(val) ((val) = fwd_val(ctx, val))
-#define UTARRAY_EACH(arr, type, var) if (arr) for (type *var = (type *)utarray_front(arr), *_end = var + utarray_len(arr); var < _end; var++)
+#define UTARRAY_EACH(arr, type, var) \
+  if (arr) for (type *var = (type *)utarray_front(arr), *_end = var + utarray_len(arr); var < _end; var++)
 
 #define REHASH_REGISTRY(registry, entry, tmp, new_reg, key_field, key_size, body) \
 for (typeof(registry) new_reg = NULL, *_once = NULL; !_once; _once = (void*)1, registry = new_reg) \
@@ -22936,26 +22935,72 @@ for (typeof(registry) new_reg = NULL, *_once = NULL; !_once; _once = (void*)1, r
     HASH_ADD(hh, new_reg, key_field, key_size, entry); \
 }
 
+#define GC_ROOTS_COMMON(OP_OFF, OP_VAL) \
+  UTARRAY_EACH(global_scope_stack, jsoff_t, off) OP_OFF(*off); \
+  UTARRAY_EACH(saved_scope_stack, jsval_t, val) OP_VAL(*val); \
+  for (int i = 0; i < global_this_stack.depth; i++) OP_VAL(global_this_stack.stack[i]); \
+  UTARRAY_EACH(propref_stack, propref_data_t, pref) { OP_OFF(pref->obj_off); OP_OFF(pref->key_off); } \
+  UTARRAY_EACH(prim_propref_stack, prim_propref_data_t, ppref) { OP_VAL(ppref->prim_val); OP_OFF(ppref->key_off); } \
+  if (rt && rt->js == js) OP_VAL(rt->ant_obj); \
+  for (coroutine_t *coro = pending_coroutines.head; coro; coro = coro->next) { \
+    OP_VAL(coro->scope); OP_VAL(coro->this_val); OP_VAL(coro->super_val); OP_VAL(coro->new_target); \
+    OP_VAL(coro->awaited_promise); OP_VAL(coro->result); OP_VAL(coro->async_func); OP_VAL(coro->yield_value); \
+    for (int i = 0; i < coro->for_let_stack_len; i++) { OP_VAL(coro->for_let_stack[i].body_scope); OP_OFF(coro->for_let_stack[i].prop_off); } \
+    if (coro->scope_stack) UTARRAY_EACH(coro->scope_stack, jsoff_t, off) OP_OFF(*off); \
+    if (coro->mco) { async_exec_context_t *actx = (async_exec_context_t *)mco_get_user_data(coro->mco); \
+      if (actx) { OP_VAL(actx->closure_scope); OP_VAL(actx->result); OP_VAL(actx->promise); } } \
+  } \
+  { esm_module_t *mod, *mod_tmp; HASH_ITER(hh, global_module_cache.modules, mod, mod_tmp) { OP_VAL(mod->namespace_obj); OP_VAL(mod->default_export); } } \
+  timer_gc_update_roots(fwd_val, ctx); ffi_gc_update_roots(fwd_val, ctx); fetch_gc_update_roots(fwd_val, ctx); \
+  fs_gc_update_roots(fwd_val, ctx); child_process_gc_update_roots(fwd_val, ctx); readline_gc_update_roots(fwd_val, ctx); \
+  { map_registry_entry_t *map_reg, *map_reg_tmp; HASH_ITER(hh, map_registry, map_reg, map_reg_tmp) { \
+    if (map_reg->head && *map_reg->head) { map_entry_t *me, *me_tmp; HASH_ITER(hh, *map_reg->head, me, me_tmp) OP_VAL(me->value); } } } \
+  { set_registry_entry_t *set_reg, *set_reg_tmp; HASH_ITER(hh, set_registry, set_reg, set_reg_tmp) { \
+    if (set_reg->head && *set_reg->head) { set_entry_t *se, *se_tmp; HASH_ITER(hh, *set_reg->head, se, se_tmp) OP_VAL(se->value); } } } \
+  for (int i = 0; i < js->for_let_stack_len; i++) { OP_VAL(js->for_let_stack[i].body_scope); OP_OFF(js->for_let_stack[i].prop_off); }
+
+void js_gc_reserve_roots(GC_UPDATE_ARGS) {
+  #define RSV_OFF(x) ((x) ? (void)fwd_off(ctx, x) : (void)0)
+  #define RSV_VAL(x) (void)fwd_val(ctx, x)
+  
+  GC_ROOTS_COMMON(RSV_OFF, RSV_VAL)
+  
+  promise_data_entry_t *pd, *pd_tmp;
+  HASH_ITER(hh, promise_registry, pd, pd_tmp) {
+    (void)fwd_off(ctx, pd->obj_offset);
+    RSV_VAL(pd->value);
+    UTARRAY_EACH(pd->handlers, promise_handler_t, h) {
+      RSV_VAL(h->onFulfilled); RSV_VAL(h->onRejected); RSV_VAL(h->nextPromise);
+    }
+  }
+
+  proxy_data_t *proxy, *proxy_tmp;
+  HASH_ITER(hh, proxy_registry, proxy, proxy_tmp) {
+    (void)fwd_off(ctx, proxy->obj_offset); RSV_VAL(proxy->target); RSV_VAL(proxy->handler);
+  }
+
+  dynamic_accessors_t *acc, *acc_tmp;
+  HASH_ITER(hh, accessor_registry, acc, acc_tmp) { (void)fwd_off(ctx, acc->obj_offset); }
+
+  descriptor_entry_t *desc, *desc_tmp;
+  HASH_ITER(hh, desc_registry, desc, desc_tmp) {
+    if (desc->has_getter) RSV_VAL(desc->getter);
+    if (desc->has_setter) RSV_VAL(desc->setter);
+    (void)fwd_off(ctx, (jsoff_t)(desc->key >> 32));
+  }
+  
+  #undef RSV_OFF
+  #undef RSV_VAL
+}
+
 void js_gc_update_roots(GC_UPDATE_ARGS) {
-  UTARRAY_EACH(global_scope_stack, jsoff_t, off) FWD_OFF(*off);
-  UTARRAY_EACH(saved_scope_stack, jsval_t, val) FWD_VAL(*val);
-
-  for (int i = 0; i < global_this_stack.depth; i++)
-    FWD_VAL(global_this_stack.stack[i]);
-
-  UTARRAY_EACH(propref_stack, propref_data_t, pref) {
-    FWD_OFF(pref->obj_off);
-    FWD_OFF(pref->key_off);
-  }
-
-  UTARRAY_EACH(prim_propref_stack, prim_propref_data_t, ppref) {
-    FWD_VAL(ppref->prim_val);
-    FWD_OFF(ppref->key_off);
-  }
-
+  #define FWD_OFF(x) ((x) ? ((x) = fwd_off(ctx, x)) : 0)
+  #define FWD_VAL(x) ((x) = fwd_val(ctx, x))
+  
+  GC_ROOTS_COMMON(FWD_OFF, FWD_VAL)
+  
   promise_data_entry_t *pd, *pd_tmp;
   promise_data_entry_t *new_unhandled = NULL;
-  
   for (
     promise_data_entry_t *new_promise_registry = NULL, *_once = NULL; !_once; _once = (void*)1, 
     promise_registry = new_promise_registry, unhandled_rejections = new_unhandled
@@ -22968,29 +23013,22 @@ void js_gc_update_roots(GC_UPDATE_ARGS) {
       
       jsoff_t new_off = fwd_off(ctx, pd->obj_offset);
       if (new_off == pd->obj_offset && pd->obj_offset != 0) {
-        utarray_free(pd->handlers);
-        free(pd); continue;
+        utarray_free(pd->handlers); free(pd); continue;
       }
       
       pd->obj_offset = new_off;
       FWD_VAL(pd->value);
       UTARRAY_EACH(pd->handlers, promise_handler_t, h) {
-        FWD_VAL(h->onFulfilled);
-        FWD_VAL(h->onRejected);
-        FWD_VAL(h->nextPromise);
+        FWD_VAL(h->onFulfilled); FWD_VAL(h->onRejected); FWD_VAL(h->nextPromise);
       }
       
       HASH_ADD(hh, new_promise_registry, promise_id, sizeof(uint32_t), pd);
       if (in_unhandled) HASH_ADD(hh_unhandled, new_unhandled, promise_id, sizeof(uint32_t), pd);
     }
 
-  if (rt && rt->js == js) FWD_VAL(rt->ant_obj);
-
   proxy_data_t *proxy, *proxy_tmp;
   REHASH_REGISTRY(proxy_registry, proxy, proxy_tmp, new_proxy, obj_offset, sizeof(jsoff_t), {
-    FWD_OFF(proxy->obj_offset);
-    FWD_VAL(proxy->target);
-    FWD_VAL(proxy->handler);
+    FWD_OFF(proxy->obj_offset); FWD_VAL(proxy->target); FWD_VAL(proxy->handler);
   });
 
   dynamic_accessors_t *acc, *acc_tmp;
@@ -23007,67 +23045,15 @@ void js_gc_update_roots(GC_UPDATE_ARGS) {
     desc->obj_off = obj_off;
   });
 
-  for (coroutine_t *coro = pending_coroutines.head; coro; coro = coro->next) {
-    FWD_VAL(coro->scope);
-    FWD_VAL(coro->this_val);
-    FWD_VAL(coro->super_val);
-    FWD_VAL(coro->new_target);
-    FWD_VAL(coro->awaited_promise);
-    FWD_VAL(coro->result);
-    FWD_VAL(coro->async_func);
-    FWD_VAL(coro->yield_value);
-    for (int i = 0; i < coro->for_let_stack_len; i++) {
-      FWD_VAL(coro->for_let_stack[i].body_scope);
-      FWD_OFF(coro->for_let_stack[i].prop_off);
-    }
-    if (coro->scope_stack) UTARRAY_EACH(coro->scope_stack, jsoff_t, off) FWD_OFF(*off);
-    if (coro->mco) {
-      async_exec_context_t *actx = (async_exec_context_t *)mco_get_user_data(coro->mco);
-      if (actx) { FWD_VAL(actx->closure_scope); FWD_VAL(actx->result); FWD_VAL(actx->promise); }
-    }
-  }
-
-  esm_module_t *mod, *mod_tmp;
-  HASH_ITER(hh, global_module_cache.modules, mod, mod_tmp) {
-    FWD_VAL(mod->namespace_obj);
-    FWD_VAL(mod->default_export);
-  }
-
-  timer_gc_update_roots(fwd_val, ctx);
-  ffi_gc_update_roots(fwd_val, ctx);
-  fetch_gc_update_roots(fwd_val, ctx);
-  fs_gc_update_roots(fwd_val, ctx);
-  child_process_gc_update_roots(fwd_val, ctx);
-  readline_gc_update_roots(fwd_val, ctx);
-
-  map_registry_entry_t *map_reg, *map_reg_tmp;
-  HASH_ITER(hh, map_registry, map_reg, map_reg_tmp) {
-    if (map_reg->head && *map_reg->head) {
-      map_entry_t *me, *me_tmp;
-      HASH_ITER(hh, *map_reg->head, me, me_tmp) FWD_VAL(me->value);
-    }
-  }
-
-  set_registry_entry_t *set_reg, *set_reg_tmp;
-  HASH_ITER(hh, set_registry, set_reg, set_reg_tmp) {
-    if (set_reg->head && *set_reg->head) {
-      set_entry_t *se, *se_tmp;
-      HASH_ITER(hh, *set_reg->head, se, se_tmp) FWD_VAL(se->value);
-    }
-  }
-
-  for (int i = 0; i < js->for_let_stack_len; i++) {
-    FWD_VAL(js->for_let_stack[i].body_scope);
-    FWD_OFF(js->for_let_stack[i].prop_off);
-  }
-
   memset(intern_prop_cache, 0, sizeof(intern_prop_cache));
+  
+  #undef FWD_OFF
+  #undef FWD_VAL
 }
 
-#undef FWD_OFF
-#undef FWD_VAL
 #undef UTARRAY_EACH
 #undef REHASH_REGISTRY
+#undef GC_ROOTS_COMMON
 
 bool js_chkargs(jsval_t *args, int nargs, const char *spec) {
   int i = 0, ok = 1;
