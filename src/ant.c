@@ -15508,6 +15508,17 @@ static inline bool parse_array_index(const char *key, size_t key_len, jsoff_t le
   return true;
 }
 
+static inline bool is_callable(jsval_t v) {
+  uint8_t t = vtype(v);
+  return t == T_FUNC || t == T_CFUNC;
+}
+
+static inline jsval_t require_callback(struct js *js, jsval_t *args, int nargs, const char *name) {
+  if (nargs == 0 || !is_callable(args[0]))
+    return js_mkerr(js, "%s requires a function argument", name);
+  return args[0];
+}
+
 static jsval_t array_shallow_copy(struct js *js, jsval_t arr, jsoff_t len) {
   jsval_t result = mkarr(js);
   if (is_err(result)) return result;
@@ -15815,10 +15826,8 @@ static jsval_t builtin_array_every(struct js *js, jsval_t *args, int nargs) {
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ)
     return js_mkerr(js, "every called on non-array");
   
-  if (nargs == 0 || (vtype(args[0]) != T_FUNC && vtype(args[0]) != T_CFUNC))
-    return js_mkerr(js, "every requires a function argument");
-  
-  jsval_t callback = args[0];
+  jsval_t callback = require_callback(js, args, nargs, "every");
+  if (is_err(callback)) return callback;
   
   jsoff_t len_off = lkp_interned(js, arr, INTERN_LENGTH, 6);
   jsoff_t len = 0;
@@ -15860,10 +15869,8 @@ static jsval_t builtin_array_forEach(struct js *js, jsval_t *args, int nargs) {
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ)
     return js_mkerr(js, "forEach called on non-array");
   
-  if (nargs == 0 || (vtype(args[0]) != T_FUNC && vtype(args[0]) != T_CFUNC))
-    return js_mkerr(js, "forEach requires a function argument");
-  
-  jsval_t callback = args[0];
+  jsval_t callback = require_callback(js, args, nargs, "forEach");
+  if (is_err(callback)) return callback;
   
   jsoff_t len_off = lkp_interned(js, arr, INTERN_LENGTH, 6);
   jsoff_t len = 0;
@@ -15951,10 +15958,8 @@ static jsval_t builtin_array_map(struct js *js, jsval_t *args, int nargs) {
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ)
     return js_mkerr(js, "map called on non-array");
   
-  if (nargs == 0 || (vtype(args[0]) != T_FUNC && vtype(args[0]) != T_CFUNC))
-    return js_mkerr(js, "map requires a function argument");
-  
-  jsval_t callback = args[0];
+  jsval_t callback = require_callback(js, args, nargs, "map");
+  if (is_err(callback)) return callback;
   
   jsoff_t len_off = lkp_interned(js, arr, INTERN_LENGTH, 6);
   jsoff_t len = 0;
@@ -16004,10 +16009,8 @@ static jsval_t builtin_array_filter(struct js *js, jsval_t *args, int nargs) {
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ)
     return js_mkerr(js, "filter called on non-array");
   
-  if (nargs == 0 || (vtype(args[0]) != T_FUNC && vtype(args[0]) != T_CFUNC))
-    return js_mkerr(js, "filter requires a function argument");
-  
-  jsval_t callback = args[0];
+  jsval_t callback = require_callback(js, args, nargs, "filter");
+  if (is_err(callback)) return callback;
   
   jsoff_t len_off = lkp_interned(js, arr, INTERN_LENGTH, 6);
   jsoff_t len = 0;
@@ -16061,10 +16064,8 @@ static jsval_t builtin_array_reduce(struct js *js, jsval_t *args, int nargs) {
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ)
     return js_mkerr(js, "reduce called on non-array");
   
-  if (nargs == 0 || (vtype(args[0]) != T_FUNC && vtype(args[0]) != T_CFUNC))
-    return js_mkerr(js, "reduce requires a function argument");
-  
-  jsval_t callback = args[0];
+  jsval_t callback = require_callback(js, args, nargs, "reduce");
+  if (is_err(callback)) return callback;
   bool has_initial = (nargs >= 2);
   
   jsoff_t len_off = lkp_interned(js, arr, INTERN_LENGTH, 6);
@@ -16302,10 +16303,8 @@ static jsval_t array_find_impl(struct js *js, jsval_t *args, int nargs, bool ret
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ)
     return js_mkerr(js, "%s called on non-array", name);
   
-  if (nargs == 0 || (vtype(args[0]) != T_FUNC && vtype(args[0]) != T_CFUNC))
-    return js_mkerr(js, "%s requires a function argument", name);
-  
-  jsval_t callback = args[0];
+  jsval_t callback = require_callback(js, args, nargs, name);
+  if (is_err(callback)) return callback;
   
   jsoff_t len_off = lkp_interned(js, arr, INTERN_LENGTH, 6);
   jsoff_t len = 0;
@@ -16355,10 +16354,8 @@ static jsval_t array_find_last_impl(struct js *js, jsval_t *args, int nargs, boo
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ)
     return js_mkerr(js, "%s called on non-array", name);
   
-  if (nargs == 0 || (vtype(args[0]) != T_FUNC && vtype(args[0]) != T_CFUNC))
-    return js_mkerr(js, "%s requires a function argument", name);
-  
-  jsval_t callback = args[0];
+  jsval_t callback = require_callback(js, args, nargs, name);
+  if (is_err(callback)) return callback;
   
   jsoff_t len_off = lkp_interned(js, arr, INTERN_LENGTH, 6);
   jsoff_t len = 0;
@@ -16720,10 +16717,8 @@ static jsval_t builtin_array_some(struct js *js, jsval_t *args, int nargs) {
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ)
     return js_mkerr(js, "some called on non-array");
   
-  if (nargs == 0 || (vtype(args[0]) != T_FUNC && vtype(args[0]) != T_CFUNC))
-    return js_mkerr(js, "some requires a function argument");
-  
-  jsval_t callback = args[0];
+  jsval_t callback = require_callback(js, args, nargs, "some");
+  if (is_err(callback)) return callback;
   
   jsoff_t len_off = lkp_interned(js, arr, INTERN_LENGTH, 6);
   jsoff_t len = 0;
