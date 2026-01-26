@@ -2790,7 +2790,7 @@ jsval_t js_mkstr(struct js *js, const void *ptr, size_t len) {
   return mkentity(js, (jsoff_t) ((n << 2) | T_STR), ptr, n);
 }
 
-static jsval_t mkbigint(struct js *js, const char *digits, size_t len, bool negative) {
+jsval_t js_mkbigint(struct js *js, const char *digits, size_t len, bool negative) {
   size_t total = len + 2;
   jsoff_t ofs = js_alloc(js, total + sizeof(jsoff_t));
   if (ofs == (jsoff_t) ~0) return js_mkerr(js, "oom");
@@ -2938,7 +2938,7 @@ static jsval_t bigint_add(struct js *js, jsval_t a, jsval_t b) {
   }
   if (!result) return js_mkerr(js, "oom");
   if (rlen == 1 && result[0] == '0') rneg = false;
-  jsval_t r = mkbigint(js, result, rlen, rneg);
+  jsval_t r = js_mkbigint(js, result, rlen, rneg);
   free(result);
   return r;
 }
@@ -2957,7 +2957,7 @@ static jsval_t bigint_sub(struct js *js, jsval_t a, jsval_t b) {
   }
   if (!result) return js_mkerr(js, "oom");
   if (rlen == 1 && result[0] == '0') rneg = false;
-  jsval_t r = mkbigint(js, result, rlen, rneg);
+  jsval_t r = js_mkbigint(js, result, rlen, rneg);
   free(result);
   return r;
 }
@@ -2970,7 +2970,7 @@ static jsval_t bigint_mul(struct js *js, jsval_t a, jsval_t b) {
   char *result = bigint_mul_abs(ad, alen, bd, blen, &rlen);
   if (!result) return js_mkerr(js, "oom");
   bool rneg = (aneg != bneg) && !(rlen == 1 && result[0] == '0');
-  jsval_t r = mkbigint(js, result, rlen, rneg);
+  jsval_t r = js_mkbigint(js, result, rlen, rneg);
   free(result);
   return r;
 }
@@ -2984,7 +2984,7 @@ static jsval_t bigint_div(struct js *js, jsval_t a, jsval_t b) {
   char *result = bigint_div_abs(ad, alen, bd, blen, &rlen, NULL, NULL);
   if (!result) return js_mkerr(js, "oom");
   bool rneg = (aneg != bneg) && !(rlen == 1 && result[0] == '0');
-  jsval_t r = mkbigint(js, result, rlen, rneg);
+  jsval_t r = js_mkbigint(js, result, rlen, rneg);
   free(result);
   return r;
 }
@@ -2999,7 +2999,7 @@ static jsval_t bigint_mod(struct js *js, jsval_t a, jsval_t b) {
   if (!result) return js_mkerr(js, "oom");
   free(result);
   bool rneg = aneg && !(remlen == 1 && rem[0] == '0');
-  jsval_t r = mkbigint(js, rem, remlen, rneg);
+  jsval_t r = js_mkbigint(js, rem, remlen, rneg);
   free(rem);
   return r;
 }
@@ -3008,19 +3008,19 @@ static jsval_t bigint_neg(struct js *js, jsval_t a) {
   size_t len;
   const char *digits = bigint_digits(js, a, &len);
   bool neg = bigint_IsNegative(js, a);
-  if (len == 1 && digits[0] == '0') return mkbigint(js, digits, len, false);
-  return mkbigint(js, digits, len, !neg);
+  if (len == 1 && digits[0] == '0') return js_mkbigint(js, digits, len, false);
+  return js_mkbigint(js, digits, len, !neg);
 }
 
 static jsval_t bigint_exp(struct js *js, jsval_t base, jsval_t exp) {
   if (bigint_IsNegative(js, exp)) return js_mkerr(js, "Exponent must be positive");
   size_t explen;
   const char *expd = bigint_digits(js, exp, &explen);
-  if (explen == 1 && expd[0] == '0') return mkbigint(js, "1", 1, false);
-  jsval_t result = mkbigint(js, "1", 1, false);
+  if (explen == 1 && expd[0] == '0') return js_mkbigint(js, "1", 1, false);
+  jsval_t result = js_mkbigint(js, "1", 1, false);
   jsval_t b = base;
   jsval_t e = exp;
-  jsval_t two = mkbigint(js, "2", 1, false);
+  jsval_t two = js_mkbigint(js, "2", 1, false);
   while (true) {
     size_t elen;
     const char *ed = bigint_digits(js, e, &elen);
@@ -3066,7 +3066,7 @@ static size_t strbigint(struct js *js, jsval_t value, char *buf, size_t len) {
 
 static jsval_t builtin_BigInt(struct js *js, jsval_t *args, int nargs) {
   if (vtype(js->new_target) != T_UNDEF) return js_mkerr_typed(js, JS_ERR_TYPE, "BigInt is not a constructor");
-  if (nargs < 1) return mkbigint(js, "0", 1, false);
+  if (nargs < 1) return js_mkbigint(js, "0", 1, false);
   
   jsval_t arg = args[0];
   if (vtype(arg) == T_BIGINT) return arg;
@@ -3078,7 +3078,7 @@ static jsval_t builtin_BigInt(struct js *js, jsval_t *args, int nargs) {
     if (neg) d = -d;
     char buf[64];
     snprintf(buf, sizeof(buf), "%.0f", d);
-    return mkbigint(js, buf, strlen(buf), neg);
+    return js_mkbigint(js, buf, strlen(buf), neg);
   }
   if (vtype(arg) == T_STR) {
     jsoff_t slen, off = vstr(js, arg, &slen);
@@ -3088,14 +3088,14 @@ static jsval_t builtin_BigInt(struct js *js, jsval_t *args, int nargs) {
     if (slen > 0 && str[0] == '-') { neg = true; i++; }
     else if (slen > 0 && str[0] == '+') { i++; }
     while (i < slen && str[i] == '0') i++;
-    if (i >= slen) return mkbigint(js, "0", 1, false);
+    if (i >= slen) return js_mkbigint(js, "0", 1, false);
     for (size_t j = i; j < slen; j++) {
       if (!is_digit(str[j])) return js_mkerr(js, "Cannot convert string to BigInt");
     }
-    return mkbigint(js, str + i, slen - i, neg);
+    return js_mkbigint(js, str + i, slen - i, neg);
   }
   if (vtype(arg) == T_BOOL) {
-    return mkbigint(js, vdata(arg) ? "1" : "0", 1, false);
+    return js_mkbigint(js, vdata(arg) ? "1" : "0", 1, false);
   }
   return js_mkerr(js, "Cannot convert to BigInt");
 }
@@ -7464,7 +7464,7 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
         if (neg) num_val = -num_val;
         char buf[64];
         snprintf(buf, sizeof(buf), "%.0f", num_val);
-        eq = bigint_compare(js, bigint_val, mkbigint(js, buf, strlen(buf), neg)) == 0;
+        eq = bigint_compare(js, bigint_val, js_mkbigint(js, buf, strlen(buf), neg)) == 0;
       }
     } else if (lt == T_BOOL) {
       return do_op(js, op, tov(vdata(l) ? 1.0 : 0.0), r);
@@ -7893,7 +7893,7 @@ static jsval_t js_bigint_literal(struct js *js) {
   while (len > 1 && start[0] == '0') { start++; len--; }
   bool neg = false;
   if (len > 0 && start[0] == '-') { neg = true; start++; len--; }
-  return mkbigint(js, start, len, neg);
+  return js_mkbigint(js, start, len, neg);
 }
 
 static jsval_t js_arr_destruct_assign(struct js *js) {
@@ -19355,6 +19355,25 @@ static jsval_t builtin_btoa(struct js *js, jsval_t *args, int nargs) {
   return result;
 }
 
+static const int8_t decode_table[256] = {
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,62,-1,-1,-1,63,
+  52,53,54,55,56,57,58,59,60,61,-1,-1,-1,-1,-1,-1,
+  -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9,10,11,12,13,14,
+  15,16,17,18,19,20,21,22,23,24,25,-1,-1,-1,-1,-1,
+  -1,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,
+  41,42,43,44,45,46,47,48,49,50,51,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1
+};
+
 static jsval_t builtin_atob(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "atob requires 1 argument");
   
@@ -19376,25 +19395,6 @@ static jsval_t builtin_atob(struct js *js, jsval_t *args, int nargs) {
   
   char *out = (char *)ANT_GC_MALLOC(out_len + 1);
   if (!out) return js_mkerr(js, "out of memory");
-  
-  static const int8_t decode_table[256] = {
-    -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-    -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-    -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,62,-1,-1,-1,63,
-    52,53,54,55,56,57,58,59,60,61,-1,-1,-1,-1,-1,-1,
-    -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9,10,11,12,13,14,
-    15,16,17,18,19,20,21,22,23,24,25,-1,-1,-1,-1,-1,
-    -1,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,
-    41,42,43,44,45,46,47,48,49,50,51,-1,-1,-1,-1,-1,
-    -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-    -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-    -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-    -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-    -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-    -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-    -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-    -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1
-  };
   
   size_t i = 0, j = 0;
   while (i < str_len) {

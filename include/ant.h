@@ -105,6 +105,7 @@ jsval_t js_newobj(ant_t *);
 jsval_t js_mkarr(ant_t *);
 void js_arr_push(ant_t *, jsval_t arr, jsval_t val);
 jsval_t js_mkstr(ant_t *, const void *, size_t);
+jsval_t js_mkbigint(ant_t *, const char *digits, size_t len, bool negative);
 jsval_t js_mksym(ant_t *, const char *desc);
 jsval_t js_mkfun(jsval_t (*fn)(ant_t *, jsval_t *, int));
 jsval_t js_heavy_mkfun(ant_t *js, jsval_t (*fn)(ant_t *, jsval_t *, int), jsval_t data);

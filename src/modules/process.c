@@ -4,9 +4,31 @@
 #include <stdio.h>
 #include <string.h>
 #include <signal.h>
+#include <time.h>
 #include <uthash.h>
+#include <uv.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#include <io.h>
+#include <psapi.h>
+#define STDIN_FILENO 0
+#define STDOUT_FILENO 1
+#define STDERR_FILENO 2
+#else
+#include <termios.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
+#include <sys/time.h>
+#include <sys/resource.h>
+#include <sys/stat.h>
+#include <grp.h>
+#include <pwd.h>
+#endif
 
 #include "ant.h"
+#include "config.h"
+#include "internal.h"
 #include "runtime.h"
 #include "modules/process.h"
 #include "modules/symbol.h"
@@ -31,6 +53,21 @@ typedef struct {
 
 static int max_listeners = DEFAULT_MAX_LISTENERS;
 static ProcessEventType *process_events = NULL;
+
+static ProcessEventType *stdin_events = NULL;
+static ProcessEventType *stdout_events = NULL;
+static ProcessEventType *stderr_events = NULL;
+static uv_tty_t stdin_tty;
+static uv_signal_t sigwinch_handle;
+static bool stdin_tty_initialized = false;
+static bool stdin_reading = false;
+static bool sigwinch_initialized = false;
+static uint64_t process_start_time = 0;
+
+#ifndef _WIN32
+static struct termios stdin_saved_termios;
+static bool stdin_raw_mode = false;
+#endif
 
 #define SIGNAL_LIST \
   X(SIGHUP) X(SIGINT) X(SIGQUIT) X(SIGILL) X(SIGTRAP) X(SIGABRT) \
@@ -146,6 +183,752 @@ static void process_signal_handler(int signum) {
     emit_process_event(name, &sig_arg, 1);
   }
 }
+
+static ProcessEventType *find_or_create_stdin_event(const char *event_type) {
+  ProcessEventType *evt = NULL;
+  HASH_FIND_STR(stdin_events, event_type, evt);
+  if (evt == NULL) {
+    evt = malloc(sizeof(ProcessEventType));
+    evt->event_type = strdup(event_type);
+    evt->listener_count = 0;
+    evt->listener_capacity = INITIAL_LISTENER_CAPACITY;
+    evt->listeners = malloc(sizeof(ProcessEventListener) * evt->listener_capacity);
+    HASH_ADD_KEYPTR(hh, stdin_events, evt->event_type, strlen(evt->event_type), evt);
+  }
+  return evt;
+}
+
+static ProcessEventType *find_or_create_stdout_event(const char *event_type) {
+  ProcessEventType *evt = NULL;
+  HASH_FIND_STR(stdout_events, event_type, evt);
+  if (evt == NULL) {
+    evt = malloc(sizeof(ProcessEventType));
+    evt->event_type = strdup(event_type);
+    evt->listener_count = 0;
+    evt->listener_capacity = INITIAL_LISTENER_CAPACITY;
+    evt->listeners = malloc(sizeof(ProcessEventListener) * evt->listener_capacity);
+    HASH_ADD_KEYPTR(hh, stdout_events, evt->event_type, strlen(evt->event_type), evt);
+  }
+  return evt;
+}
+
+static void emit_stdio_event(ProcessEventType *events, const char *event_type, jsval_t *args, int nargs) {
+  if (!rt->js) return;
+  ProcessEventType *evt = NULL;
+  HASH_FIND_STR(events, event_type, evt);
+  if (evt == NULL || evt->listener_count == 0) return;
+  
+  int i = 0;
+  while (i < evt->listener_count) {
+    ProcessEventListener *listener = &evt->listeners[i];
+    js_call(rt->js, listener->listener, args, nargs);
+    if (listener->once) {
+      for (int j = i; j < evt->listener_count - 1; j++) {
+        evt->listeners[j] = evt->listeners[j + 1];
+      }
+      evt->listener_count--;
+    } else i++;
+  }
+}
+
+static bool stdin_is_tty(void) {
+  return uv_guess_handle(STDIN_FILENO) == UV_TTY;
+}
+
+static bool stdout_is_tty(void) {
+  return uv_guess_handle(STDOUT_FILENO) == UV_TTY;
+}
+
+static bool stderr_is_tty(void) {
+  return uv_guess_handle(STDERR_FILENO) == UV_TTY;
+}
+
+static void get_tty_size(int fd, int *rows, int *cols) {
+  int out_rows = 24, out_cols = 80;
+#ifndef _WIN32
+  struct winsize ws;
+  if (ioctl(fd, TIOCGWINSZ, &ws) == 0) {
+    if (ws.ws_row > 0) out_rows = ws.ws_row;
+    if (ws.ws_col > 0) out_cols = ws.ws_col;
+  }
+#else
+  CONSOLE_SCREEN_BUFFER_INFO csbi;
+  if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
+    int width = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+    int height = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+    if (height > 0) out_rows = height;
+    if (width > 0) out_cols = width;
+  }
+#endif
+  if (rows) *rows = out_rows;
+  if (cols) *cols = out_cols;
+}
+
+#ifndef _WIN32
+static bool stdin_set_raw_mode(bool enable) {
+  if (!stdin_is_tty()) return false;
+  if (enable) {
+    if (stdin_raw_mode) return true;
+    if (tcgetattr(STDIN_FILENO, &stdin_saved_termios) == -1) return false;
+    struct termios raw = stdin_saved_termios;
+    raw.c_lflag &= ~(ICANON | ECHO | ISIG);
+    raw.c_cc[VMIN] = 1;
+    raw.c_cc[VTIME] = 0;
+    if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) == -1) return false;
+    stdin_raw_mode = true;
+    return true;
+  }
+  if (!stdin_raw_mode) return true;
+  if (tcsetattr(STDIN_FILENO, TCSANOW, &stdin_saved_termios) == -1) return false;
+  stdin_raw_mode = false;
+  return true;
+}
+#else
+static bool stdin_set_raw_mode(bool enable) {
+  (void)enable;
+  return false;
+}
+#endif
+
+static void stdin_alloc_buffer(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
+  (void)handle;
+  buf->base = malloc(suggested_size);
+  buf->len = suggested_size;
+}
+
+static void on_stdin_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
+  (void)stream;
+  if (nread > 0 && rt->js) {
+    jsval_t data_val = js_mkstr(rt->js, buf->base, (size_t)nread);
+    emit_stdio_event(stdin_events, "data", &data_val, 1);
+  }
+  if (buf->base) free(buf->base);
+}
+
+static void stdin_start_reading(void) {
+  if (stdin_reading) return;
+  if (!stdin_tty_initialized) {
+    uv_loop_t *loop = uv_default_loop();
+    if (uv_tty_init(loop, &stdin_tty, STDIN_FILENO, 1) != 0) return;
+#ifndef _WIN32
+    uv_tty_set_mode(&stdin_tty, stdin_raw_mode ? UV_TTY_MODE_RAW : UV_TTY_MODE_NORMAL);
+#endif
+    stdin_tty.data = NULL;
+    stdin_tty_initialized = true;
+  } else {
+#ifndef _WIN32
+    uv_tty_set_mode(&stdin_tty, stdin_raw_mode ? UV_TTY_MODE_RAW : UV_TTY_MODE_NORMAL);
+#endif
+  }
+  stdin_reading = true;
+  uv_read_start((uv_stream_t *)&stdin_tty, stdin_alloc_buffer, on_stdin_read);
+}
+
+static void stdin_stop_reading(void) {
+  if (!stdin_reading) return;
+  uv_read_stop((uv_stream_t *)&stdin_tty);
+  stdin_reading = false;
+}
+
+#ifndef _WIN32
+static void on_sigwinch(uv_signal_t *handle, int signum) {
+  (void)handle; (void)signum;
+  if (!rt->js) return;
+  
+  jsval_t process_obj = js_get(rt->js, js_glob(rt->js), "process");
+  if (js_type(process_obj) != JS_OBJ) return;
+  
+  jsval_t stdout_obj = js_get(rt->js, process_obj, "stdout");
+  if (js_type(stdout_obj) != JS_OBJ) return;
+  
+  int rows = 0, cols = 0;
+  get_tty_size(STDOUT_FILENO, &rows, &cols);
+  js_set(rt->js, stdout_obj, "rows", js_mknum(rows));
+  js_set(rt->js, stdout_obj, "columns", js_mknum(cols));
+  
+  emit_stdio_event(stdout_events, "resize", NULL, 0);
+}
+#endif
+
+static void start_sigwinch_handler(void) {
+#ifndef _WIN32
+  if (sigwinch_initialized) return;
+  uv_loop_t *loop = uv_default_loop();
+  if (uv_signal_init(loop, &sigwinch_handle) != 0) return;
+  if (uv_signal_start(&sigwinch_handle, on_sigwinch, SIGWINCH) != 0) {
+    uv_close((uv_handle_t *)&sigwinch_handle, NULL);
+    return;
+  }
+  uv_unref((uv_handle_t *)&sigwinch_handle);
+  sigwinch_initialized = true;
+#endif
+}
+
+static jsval_t js_stdin_set_raw_mode(ant_t *js, jsval_t *args, int nargs) {
+  bool enable = nargs > 0 ? js_truthy(js, args[0]) : true;
+  return stdin_set_raw_mode(enable) ? js_mktrue() : js_mkfalse();
+}
+
+static jsval_t js_stdin_resume(ant_t *js, jsval_t *args, int nargs) {
+  (void)args; (void)nargs;
+  stdin_start_reading();
+  return js_getthis(js);
+}
+
+static jsval_t js_stdin_pause(ant_t *js, jsval_t *args, int nargs) {
+  (void)args; (void)nargs;
+  stdin_stop_reading();
+  return js_getthis(js);
+}
+
+static jsval_t js_stdin_on(ant_t *js, jsval_t *args, int nargs) {
+  jsval_t this_obj = js_getthis(js);
+  if (nargs < 2) return this_obj;
+  
+  char *event = js_getstr(js, args[0], NULL);
+  if (!event || js_type(args[1]) != JS_FUNC) return this_obj;
+  
+  ProcessEventType *evt = find_or_create_stdin_event(event);
+  if (!ensure_listener_capacity(evt)) return this_obj;
+  
+  evt->listeners[evt->listener_count].listener = args[1];
+  evt->listeners[evt->listener_count].once = false;
+  evt->listener_count++;
+  
+  if (strcmp(event, "data") == 0) stdin_start_reading();
+  
+  return this_obj;
+}
+
+static jsval_t js_stdin_remove_all_listeners(ant_t *js, jsval_t *args, int nargs) {
+  jsval_t this_obj = js_getthis(js);
+  
+  if (nargs < 1) {
+    ProcessEventType *evt, *tmp;
+    HASH_ITER(hh, stdin_events, evt, tmp) {
+      evt->listener_count = 0;
+    }
+    stdin_stop_reading();
+    return this_obj;
+  }
+  
+  char *event = js_getstr(js, args[0], NULL);
+  if (!event) return this_obj;
+  
+  ProcessEventType *evt = NULL;
+  HASH_FIND_STR(stdin_events, event, evt);
+  if (evt) evt->listener_count = 0;
+  if (strcmp(event, "data") == 0) stdin_stop_reading();
+  
+  return this_obj;
+}
+
+static jsval_t js_stdout_write(ant_t *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkfalse();
+  size_t len = 0;
+  char *data = js_getstr(js, args[0], &len);
+  if (!data) return js_mkfalse();
+  fwrite(data, 1, len, stdout);
+  fflush(stdout);
+  return js_mktrue();
+}
+
+static jsval_t js_stdout_on(ant_t *js, jsval_t *args, int nargs) {
+  jsval_t this_obj = js_getthis(js);
+  if (nargs < 2) return this_obj;
+  
+  char *event = js_getstr(js, args[0], NULL);
+  if (!event || js_type(args[1]) != JS_FUNC) return this_obj;
+  
+  ProcessEventType *evt = find_or_create_stdout_event(event);
+  if (!ensure_listener_capacity(evt)) return this_obj;
+  
+  evt->listeners[evt->listener_count].listener = args[1];
+  evt->listeners[evt->listener_count].once = false;
+  evt->listener_count++;
+  
+  if (strcmp(event, "resize") == 0) start_sigwinch_handler();
+  
+  return this_obj;
+}
+
+static jsval_t js_stdout_once(ant_t *js, jsval_t *args, int nargs) {
+  jsval_t this_obj = js_getthis(js);
+  if (nargs < 2) return this_obj;
+  
+  char *event = js_getstr(js, args[0], NULL);
+  if (!event || js_type(args[1]) != JS_FUNC) return this_obj;
+  
+  ProcessEventType *evt = find_or_create_stdout_event(event);
+  if (!ensure_listener_capacity(evt)) return this_obj;
+  
+  evt->listeners[evt->listener_count].listener = args[1];
+  evt->listeners[evt->listener_count].once = true;
+  evt->listener_count++;
+  
+  if (strcmp(event, "resize") == 0) start_sigwinch_handler();
+  
+  return this_obj;
+}
+
+static jsval_t js_stdout_remove_all_listeners(ant_t *js, jsval_t *args, int nargs) {
+  jsval_t this_obj = js_getthis(js);
+  
+  if (nargs < 1) {
+    ProcessEventType *evt, *tmp;
+    HASH_ITER(hh, stdout_events, evt, tmp) {
+      evt->listener_count = 0;
+    }
+    return this_obj;
+  }
+  
+  char *event = js_getstr(js, args[0], NULL);
+  if (!event) return this_obj;
+  
+  ProcessEventType *evt = NULL;
+  HASH_FIND_STR(stdout_events, event, evt);
+  if (evt) evt->listener_count = 0;
+  
+  return this_obj;
+}
+
+static jsval_t js_stdout_get_window_size(ant_t *js, jsval_t *args, int nargs) {
+  (void)args; (void)nargs;
+  int rows = 0, cols = 0;
+  get_tty_size(STDOUT_FILENO, &rows, &cols);
+  jsval_t arr = js_mkarr(js);
+  js_arr_push(js, arr, js_mknum(cols));
+  js_arr_push(js, arr, js_mknum(rows));
+  return arr;
+}
+
+static jsval_t js_stdout_rows_getter(ant_t *js, jsval_t *args, int nargs) {
+  (void)args; (void)nargs;
+  int rows = 0, cols = 0;
+  get_tty_size(STDOUT_FILENO, &rows, &cols);
+  return js_mknum(rows);
+}
+
+static jsval_t js_stdout_columns_getter(ant_t *js, jsval_t *args, int nargs) {
+  (void)args; (void)nargs;
+  int rows = 0, cols = 0;
+  get_tty_size(STDOUT_FILENO, &rows, &cols);
+  return js_mknum(cols);
+}
+
+static ProcessEventType *find_or_create_stderr_event(const char *event_type) {
+  ProcessEventType *evt = NULL;
+  HASH_FIND_STR(stderr_events, event_type, evt);
+  if (evt == NULL) {
+    evt = malloc(sizeof(ProcessEventType));
+    evt->event_type = strdup(event_type);
+    evt->listener_count = 0;
+    evt->listener_capacity = INITIAL_LISTENER_CAPACITY;
+    evt->listeners = malloc(sizeof(ProcessEventListener) * evt->listener_capacity);
+    HASH_ADD_KEYPTR(hh, stderr_events, evt->event_type, strlen(evt->event_type), evt);
+  }
+  return evt;
+}
+
+static jsval_t js_stderr_write(ant_t *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkfalse();
+  size_t len = 0;
+  char *data = js_getstr(js, args[0], &len);
+  if (!data) return js_mkfalse();
+  fwrite(data, 1, len, stderr);
+  fflush(stderr);
+  return js_mktrue();
+}
+
+static jsval_t js_stderr_on(ant_t *js, jsval_t *args, int nargs) {
+  jsval_t this_obj = js_getthis(js);
+  if (nargs < 2) return this_obj;
+  
+  char *event = js_getstr(js, args[0], NULL);
+  if (!event || js_type(args[1]) != JS_FUNC) return this_obj;
+  
+  ProcessEventType *evt = find_or_create_stderr_event(event);
+  if (!ensure_listener_capacity(evt)) return this_obj;
+  
+  evt->listeners[evt->listener_count].listener = args[1];
+  evt->listeners[evt->listener_count].once = false;
+  evt->listener_count++;
+  
+  return this_obj;
+}
+
+static jsval_t js_stderr_once(ant_t *js, jsval_t *args, int nargs) {
+  jsval_t this_obj = js_getthis(js);
+  if (nargs < 2) return this_obj;
+  
+  char *event = js_getstr(js, args[0], NULL);
+  if (!event || js_type(args[1]) != JS_FUNC) return this_obj;
+  
+  ProcessEventType *evt = find_or_create_stderr_event(event);
+  if (!ensure_listener_capacity(evt)) return this_obj;
+  
+  evt->listeners[evt->listener_count].listener = args[1];
+  evt->listeners[evt->listener_count].once = true;
+  evt->listener_count++;
+  
+  return this_obj;
+}
+
+static jsval_t js_stderr_remove_all_listeners(ant_t *js, jsval_t *args, int nargs) {
+  jsval_t this_obj = js_getthis(js);
+  
+  if (nargs < 1) {
+    ProcessEventType *evt, *tmp;
+    HASH_ITER(hh, stderr_events, evt, tmp) {
+      evt->listener_count = 0;
+    }
+    return this_obj;
+  }
+  
+  char *event = js_getstr(js, args[0], NULL);
+  if (!event) return this_obj;
+  
+  ProcessEventType *evt = NULL;
+  HASH_FIND_STR(stderr_events, event, evt);
+  if (evt) evt->listener_count = 0;
+  
+  return this_obj;
+}
+
+static jsval_t process_uptime(ant_t *js, jsval_t *args, int nargs) {
+  (void)args; (void)nargs;
+  uint64_t now = uv_hrtime();
+  double seconds = (double)(now - process_start_time) / 1e9;
+  return js_mknum(seconds);
+}
+
+static jsval_t process_hrtime(ant_t *js, jsval_t *args, int nargs) {
+  uint64_t now = uv_hrtime();
+  
+  if (nargs > 0 && js_type(args[0]) == T_ARR) {
+    jsval_t prev_sec = js_get(js, args[0], "0");
+    jsval_t prev_nsec = js_get(js, args[0], "1");
+    if (js_type(prev_sec) == JS_NUM && js_type(prev_nsec) == JS_NUM) {
+      uint64_t prev = (uint64_t)js_getnum(prev_sec) * 1000000000ULL + (uint64_t)js_getnum(prev_nsec);
+      now = now - prev;
+    }
+  }
+  
+  jsval_t arr = js_mkarr(js);
+  
+  uint64_t secs = now / 1000000000ULL;
+  uint64_t nsecs = now % 1000000000ULL;
+  
+  js_arr_push(js, arr, js_mknum((double)secs));
+  js_arr_push(js, arr, js_mknum((double)nsecs));
+  
+  return arr;
+}
+
+static jsval_t process_hrtime_bigint(ant_t *js, jsval_t *args, int nargs) {
+  (void)args; (void)nargs;
+  uint64_t now = uv_hrtime();
+  char buf[32];
+  snprintf(buf, sizeof(buf), "%llu", (unsigned long long)now);
+  return js_mkbigint(js, buf, strlen(buf), false);
+}
+
+static jsval_t process_memory_usage(ant_t *js, jsval_t *args, int nargs) {
+  (void)args; (void)nargs;
+  jsval_t obj = js_mkobj(js);
+  
+  size_t rss = 0;
+  uv_resident_set_memory(&rss);
+  js_set(js, obj, "rss", js_mknum((double)rss));
+  
+#ifdef _WIN32
+  PROCESS_MEMORY_COUNTERS_EX pmc;
+  if (GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pmc, sizeof(pmc))) {
+    js_set(js, obj, "heapTotal", js_mknum((double)pmc.WorkingSetSize));
+    js_set(js, obj, "heapUsed", js_mknum((double)pmc.PrivateUsage));
+  } else {
+    js_set(js, obj, "heapTotal", js_mknum(0));
+    js_set(js, obj, "heapUsed", js_mknum(0));
+  }
+#else
+  struct rusage usage;
+  if (getrusage(RUSAGE_SELF, &usage) == 0) {
+    js_set(js, obj, "heapTotal", js_mknum((double)rss));
+    js_set(js, obj, "heapUsed", js_mknum((double)rss));
+  } else {
+    js_set(js, obj, "heapTotal", js_mknum(0));
+    js_set(js, obj, "heapUsed", js_mknum(0));
+  }
+#endif
+  
+  js_set(js, obj, "external", js_mknum(0));
+  js_set(js, obj, "arrayBuffers", js_mknum(0));
+  
+  return obj;
+}
+
+static jsval_t process_memory_usage_rss(ant_t *js, jsval_t *args, int nargs) {
+  (void)args; (void)nargs;
+  size_t rss = 0;
+  uv_resident_set_memory(&rss);
+  return js_mknum((double)rss);
+}
+
+static jsval_t process_cpu_usage(ant_t *js, jsval_t *args, int nargs) {
+  jsval_t obj = js_mkobj(js);
+  uv_rusage_t rusage;
+  
+  if (uv_getrusage(&rusage) == 0) {
+    int64_t user_usec = rusage.ru_utime.tv_sec * 1000000LL + rusage.ru_utime.tv_usec;
+    int64_t sys_usec = rusage.ru_stime.tv_sec * 1000000LL + rusage.ru_stime.tv_usec;
+    
+    if (nargs > 0 && js_type(args[0]) == JS_OBJ) {
+      jsval_t prev_user = js_get(js, args[0], "user");
+      jsval_t prev_system = js_get(js, args[0], "system");
+      if (js_type(prev_user) == JS_NUM) user_usec -= (int64_t)js_getnum(prev_user);
+      if (js_type(prev_system) == JS_NUM) sys_usec -= (int64_t)js_getnum(prev_system);
+    }
+    
+    js_set(js, obj, "user", js_mknum((double)user_usec));
+    js_set(js, obj, "system", js_mknum((double)sys_usec));
+  } else {
+    js_set(js, obj, "user", js_mknum(0));
+    js_set(js, obj, "system", js_mknum(0));
+  }
+  
+  return obj;
+}
+
+static jsval_t process_kill(ant_t *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "process.kill requires at least 1 argument");
+  if (js_type(args[0]) != JS_NUM) return js_mkerr(js, "pid must be a number");
+  
+  int pid = (int)js_getnum(args[0]);
+  int sig = SIGTERM;
+  
+  if (nargs > 1) {
+    if (js_type(args[1]) == JS_NUM) {
+      sig = (int)js_getnum(args[1]);
+    } else if (js_type(args[1]) == JS_STR) {
+      char *sig_name = js_getstr(js, args[1], NULL);
+      if (sig_name) {
+        int signum = get_signal_number(sig_name);
+        if (signum > 0) sig = signum;
+        else return js_mkerr(js, "Unknown signal");
+      }
+    }
+  }
+  
+  int result = uv_kill(pid, sig);
+  if (result != 0) return js_mkerr(js, "Failed to send signal");
+  return js_mktrue();
+}
+
+static jsval_t process_abort(ant_t *js, jsval_t *args, int nargs) {
+  (void)js; (void)args; (void)nargs;
+  abort();
+  return js_mkundef();
+}
+
+static jsval_t process_chdir(ant_t *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "process.chdir requires 1 argument");
+  
+  char *dir = js_getstr(js, args[0], NULL);
+  if (!dir) return js_mkerr(js, "directory must be a string");
+  
+  int result = uv_chdir(dir);
+  if (result != 0) return js_mkerr(js, "ENOENT: no such file or directory, chdir");
+  return js_mkundef();
+}
+
+static jsval_t process_umask(ant_t *js, jsval_t *args, int nargs) {
+#ifdef _WIN32
+  (void)args; (void)nargs;
+  return js_mknum(0);
+#else
+  if (nargs > 0 && js_type(args[0]) == JS_NUM) {
+    int new_mask = (int)js_getnum(args[0]);
+    int old_mask = umask((mode_t)new_mask);
+    return js_mknum(old_mask);
+  }
+  int cur = umask(0);
+  umask((mode_t)cur);
+  return js_mknum(cur);
+#endif
+}
+
+#ifndef _WIN32
+static jsval_t process_getuid(ant_t *js, jsval_t *args, int nargs) {
+  (void)args; (void)nargs;
+  return js_mknum((double)getuid());
+}
+
+static jsval_t process_geteuid(ant_t *js, jsval_t *args, int nargs) {
+  (void)args; (void)nargs;
+  return js_mknum((double)geteuid());
+}
+
+static jsval_t process_getgid(ant_t *js, jsval_t *args, int nargs) {
+  (void)args; (void)nargs;
+  return js_mknum((double)getgid());
+}
+
+static jsval_t process_getegid(ant_t *js, jsval_t *args, int nargs) {
+  (void)args; (void)nargs;
+  return js_mknum((double)getegid());
+}
+
+static jsval_t process_getgroups(ant_t *js, jsval_t *args, int nargs) {
+  (void)args; (void)nargs;
+  int ngroups = getgroups(0, NULL);
+  if (ngroups < 0) return js_mkarr(js);
+  
+  gid_t *groups = malloc(sizeof(gid_t) * (size_t)ngroups);
+  if (!groups) return js_mkarr(js);
+  
+  ngroups = getgroups(ngroups, groups);
+  jsval_t arr = js_mkarr(js);
+  for (int i = 0; i < ngroups; i++) {
+    js_arr_push(js, arr, js_mknum((double)groups[i]));
+  }
+  free(groups);
+  return arr;
+}
+
+static jsval_t process_setuid(ant_t *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "process.setuid requires 1 argument");
+  
+  uid_t uid;
+  if (js_type(args[0]) == JS_NUM) {
+    uid = (uid_t)js_getnum(args[0]);
+  } else if (js_type(args[0]) == JS_STR) {
+    char *name = js_getstr(js, args[0], NULL);
+    struct passwd *pwd = getpwnam(name);
+    if (!pwd) return js_mkerr(js, "setuid user not found");
+    uid = pwd->pw_uid;
+  } else {
+    return js_mkerr(js, "uid must be a number or string");
+  }
+  
+  if (setuid(uid) != 0) return js_mkerr(js, "setuid failed");
+  return js_mkundef();
+}
+
+static jsval_t process_setgid(ant_t *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "process.setgid requires 1 argument");
+  
+  gid_t gid;
+  if (js_type(args[0]) == JS_NUM) {
+    gid = (gid_t)js_getnum(args[0]);
+  } else if (js_type(args[0]) == JS_STR) {
+    char *name = js_getstr(js, args[0], NULL);
+    struct group *grp = getgrnam(name);
+    if (!grp) return js_mkerr(js, "setgid group not found");
+    gid = grp->gr_gid;
+  } else {
+    return js_mkerr(js, "gid must be a number or string");
+  }
+  
+  if (setgid(gid) != 0) return js_mkerr(js, "setgid failed");
+  return js_mkundef();
+}
+
+static jsval_t process_seteuid(ant_t *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "process.seteuid requires 1 argument");
+  
+  uid_t uid;
+  if (js_type(args[0]) == JS_NUM) {
+    uid = (uid_t)js_getnum(args[0]);
+  } else if (js_type(args[0]) == JS_STR) {
+    char *name = js_getstr(js, args[0], NULL);
+    struct passwd *pwd = getpwnam(name);
+    if (!pwd) return js_mkerr(js, "seteuid user not found");
+    uid = pwd->pw_uid;
+  } else {
+    return js_mkerr(js, "uid must be a number or string");
+  }
+  
+  if (seteuid(uid) != 0) return js_mkerr(js, "seteuid failed");
+  return js_mkundef();
+}
+
+static jsval_t process_setegid(ant_t *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "process.setegid requires 1 argument");
+  
+  gid_t gid;
+  if (js_type(args[0]) == JS_NUM) {
+    gid = (gid_t)js_getnum(args[0]);
+  } else if (js_type(args[0]) == JS_STR) {
+    char *name = js_getstr(js, args[0], NULL);
+    struct group *grp = getgrnam(name);
+    if (!grp) return js_mkerr(js, "setegid group not found");
+    gid = grp->gr_gid;
+  } else {
+    return js_mkerr(js, "gid must be a number or string");
+  }
+  
+  if (setegid(gid) != 0) return js_mkerr(js, "setegid failed");
+  return js_mkundef();
+}
+
+static jsval_t process_setgroups(ant_t *js, jsval_t *args, int nargs) {
+  if (nargs < 1 || js_type(args[0]) != T_ARR) {
+    return js_mkerr(js, "process.setgroups requires an array");
+  }
+  
+  jsval_t len_val = js_get(js, args[0], "length");
+  int len = (int)js_getnum(len_val);
+  
+  gid_t *groups = malloc(sizeof(gid_t) * (size_t)len);
+  if (!groups) return js_mkerr(js, "allocation failed");
+  
+  for (int i = 0; i < len; i++) {
+    char idx[16];
+    snprintf(idx, sizeof(idx), "%d", i);
+    jsval_t val = js_get(js, args[0], idx);
+    if (js_type(val) == JS_NUM) {
+      groups[i] = (gid_t)js_getnum(val);
+    } else if (js_type(val) == JS_STR) {
+      char *name = js_getstr(js, val, NULL);
+      struct group *grp = getgrnam(name);
+      if (!grp) { free(groups); return js_mkerr(js, "group not found"); }
+      groups[i] = grp->gr_gid;
+    } else {
+      free(groups);
+      return js_mkerr(js, "group id must be number or string");
+    }
+  }
+  
+  if (setgroups(len, groups) != 0) {
+    free(groups);
+    return js_mkerr(js, "setgroups failed");
+  }
+  free(groups);
+  return js_mkundef();
+}
+
+static jsval_t process_initgroups(ant_t *js, jsval_t *args, int nargs) {
+  if (nargs < 2) return js_mkerr(js, "process.initgroups requires 2 arguments");
+  
+  char *user = js_getstr(js, args[0], NULL);
+  if (!user) return js_mkerr(js, "user must be a string");
+  
+  gid_t gid;
+  if (js_type(args[1]) == JS_NUM) {
+    gid = (gid_t)js_getnum(args[1]);
+  } else if (js_type(args[1]) == JS_STR) {
+    char *name = js_getstr(js, args[1], NULL);
+    struct group *grp = getgrnam(name);
+    if (!grp) return js_mkerr(js, "group not found");
+    gid = grp->gr_gid;
+  } else {
+    return js_mkerr(js, "gid must be a number or string");
+  }
+  
+  if (initgroups(user, gid) != 0) return js_mkerr(js, "initgroups failed");
+  return js_mkundef();
+}
+#endif
 
 static jsval_t env_getter(ant_t *js, jsval_t obj, const char *key, size_t key_len) {  
   char *key_str = (char *)malloc(key_len + 1);
@@ -400,6 +1183,8 @@ static jsval_t process_get_max_listeners(ant_t *js, jsval_t *args, int nargs) {
 void init_process_module() {
   ant_t *js = rt->js;
   
+  process_start_time = uv_hrtime();
+  
   jsval_t process_obj = js_mkobj(js);
   jsval_t env_obj = js_mkobj(js);
   jsval_t argv_arr = js_mkarr(js);
@@ -419,6 +1204,22 @@ void init_process_module() {
   js_set(js, process_obj, "getMaxListeners", js_mkfun(process_get_max_listeners));
   
   js_set(js, process_obj, "pid", js_mknum((double)getpid()));
+  js_set(js, process_obj, "ppid", js_mknum((double)getppid()));
+  
+  char version_str[128];
+  snprintf(version_str, sizeof(version_str), "v%s", ANT_VERSION);
+  js_set(js, process_obj, "version", js_mkstr(js, version_str, strlen(version_str)));
+  
+  jsval_t versions_obj = js_mkobj(js);
+  js_set(js, versions_obj, "ant", js_mkstr(js, ANT_VERSION, strlen(ANT_VERSION)));
+  char uv_ver[32];
+  snprintf(uv_ver, sizeof(uv_ver), "%d.%d.%d", UV_VERSION_MAJOR, UV_VERSION_MINOR, UV_VERSION_PATCH);
+  js_set(js, versions_obj, "uv", js_mkstr(js, uv_ver, strlen(uv_ver)));
+  js_set(js, process_obj, "versions", versions_obj);
+  
+  jsval_t release_obj = js_mkobj(js);
+  js_set(js, release_obj, "name", js_mkstr(js, "ant", 3));
+  js_set(js, process_obj, "release", release_obj);
   
   // process.platform
   #if defined(__APPLE__)
@@ -455,16 +1256,86 @@ void init_process_module() {
   }
   
   js_set(js, process_obj, "argv", argv_arr);
+  js_set(js, process_obj, "execArgv", js_mkarr(js));
   js_set(js, process_obj, "cwd", js_mkfun(process_cwd));
+  js_set(js, process_obj, "chdir", js_mkfun(process_chdir));
+  
+  js_set(js, process_obj, "argv0", rt->argc > 0 ? js_mkstr(js, rt->argv[0], strlen(rt->argv[0])) : js_mkstr(js, "ant", 3));
+  js_set(js, process_obj, "execPath", rt->argc > 0 ? js_mkstr(js, rt->argv[0], strlen(rt->argv[0])) : js_mkundef());
+  
+  js_set(js, process_obj, "uptime", js_mkfun(process_uptime));
+  jsval_t mem_usage_fn = js_heavy_mkfun(js, process_memory_usage, js_mkundef());
+  js_set(js, mem_usage_fn, "rss", js_mkfun(process_memory_usage_rss));
+  js_set(js, process_obj, "memoryUsage", mem_usage_fn);
+  js_set(js, process_obj, "cpuUsage", js_mkfun(process_cpu_usage));
+  
+  jsval_t hrtime_fn = js_heavy_mkfun(js, process_hrtime, js_mkundef());
+  js_set(js, hrtime_fn, "bigint", js_mkfun(process_hrtime_bigint));
+  js_set(js, process_obj, "hrtime", hrtime_fn);
+  
+  js_set(js, process_obj, "kill", js_mkfun(process_kill));
+  js_set(js, process_obj, "abort", js_mkfun(process_abort));
+  js_set(js, process_obj, "umask", js_mkfun(process_umask));
+  
+#ifndef _WIN32
+  js_set(js, process_obj, "getuid", js_mkfun(process_getuid));
+  js_set(js, process_obj, "geteuid", js_mkfun(process_geteuid));
+  js_set(js, process_obj, "getgid", js_mkfun(process_getgid));
+  js_set(js, process_obj, "getegid", js_mkfun(process_getegid));
+  js_set(js, process_obj, "getgroups", js_mkfun(process_getgroups));
+  js_set(js, process_obj, "setuid", js_mkfun(process_setuid));
+  js_set(js, process_obj, "setgid", js_mkfun(process_setgid));
+  js_set(js, process_obj, "seteuid", js_mkfun(process_seteuid));
+  js_set(js, process_obj, "setegid", js_mkfun(process_setegid));
+  js_set(js, process_obj, "setgroups", js_mkfun(process_setgroups));
+  js_set(js, process_obj, "initgroups", js_mkfun(process_initgroups));
+#endif
+  
+  jsval_t stdin_obj = js_mkobj(js);
+  js_set(js, stdin_obj, "isTTY", stdin_is_tty() ? js_mktrue() : js_mkfalse());
+  js_set(js, stdin_obj, "setRawMode", js_mkfun(js_stdin_set_raw_mode));
+  js_set(js, stdin_obj, "resume", js_mkfun(js_stdin_resume));
+  js_set(js, stdin_obj, "pause", js_mkfun(js_stdin_pause));
+  js_set(js, stdin_obj, "on", js_mkfun(js_stdin_on));
+  js_set(js, stdin_obj, "removeAllListeners", js_mkfun(js_stdin_remove_all_listeners));
+  js_set(js, process_obj, "stdin", stdin_obj);
+  
+  jsval_t stdout_obj = js_mkobj(js);
+  js_set(js, stdout_obj, "isTTY", stdout_is_tty() ? js_mktrue() : js_mkfalse());
+  js_set(js, stdout_obj, "write", js_mkfun(js_stdout_write));
+  js_set(js, stdout_obj, "on", js_mkfun(js_stdout_on));
+  js_set(js, stdout_obj, "once", js_mkfun(js_stdout_once));
+  js_set(js, stdout_obj, "removeAllListeners", js_mkfun(js_stdout_remove_all_listeners));
+  js_set(js, stdout_obj, "getWindowSize", js_mkfun(js_stdout_get_window_size));
+  js_set_getter_desc(js, stdout_obj, "rows", 4, js_mkfun(js_stdout_rows_getter), JS_DESC_E | JS_DESC_C);
+  js_set_getter_desc(js, stdout_obj, "columns", 7, js_mkfun(js_stdout_columns_getter), JS_DESC_E | JS_DESC_C);
+  js_set(js, process_obj, "stdout", stdout_obj);
+  
+  jsval_t stderr_obj = js_mkobj(js);
+  js_set(js, stderr_obj, "isTTY", stderr_is_tty() ? js_mktrue() : js_mkfalse());
+  js_set(js, stderr_obj, "write", js_mkfun(js_stderr_write));
+  js_set(js, stderr_obj, "on", js_mkfun(js_stderr_on));
+  js_set(js, stderr_obj, "once", js_mkfun(js_stderr_once));
+  js_set(js, stderr_obj, "removeAllListeners", js_mkfun(js_stderr_remove_all_listeners));
+  js_set(js, process_obj, "stderr", stderr_obj);
   
   js_set(js, process_obj, get_toStringTag_sym_key(), js_mkstr(js, "process", 7));
   js_set(js, js_glob(js), "process", process_obj);
 }
 
+#define GC_FWD_EVENTS(events) do { \
+  ProcessEventType *evt, *tmp; \
+  HASH_ITER(hh, events, evt, tmp) { \
+    for (int i = 0; i < evt->listener_count; i++) \
+      evt->listeners[i].listener = fwd_val(ctx, evt->listeners[i].listener); \
+  } \
+} while(0)
+
 void process_gc_update_roots(GC_FWD_ARGS) {
-  ProcessEventType *evt, *tmp;
-  HASH_ITER(hh, process_events, evt, tmp) {
-    for (int i = 0; i < evt->listener_count; i++)
-      evt->listeners[i].listener = fwd_val(ctx, evt->listeners[i].listener);
-  }
+  GC_FWD_EVENTS(process_events);
+  GC_FWD_EVENTS(stdin_events);
+  GC_FWD_EVENTS(stdout_events);
+  GC_FWD_EVENTS(stderr_events);
 }
+
+#undef GC_FWD_EVENTS

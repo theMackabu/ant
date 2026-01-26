@@ -1,5 +1,3 @@
-import 'readline';
-
 import fs from 'fs';
 import { join } from 'ant:path';
 
