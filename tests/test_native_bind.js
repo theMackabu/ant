@@ -4,7 +4,7 @@ console.log('Testing .bind() with native functions...\n');
 
 // Test 1: Bind addEventListener
 console.log('Test 1: Bind addEventListener');
-const target = createEventTarget();
+const target = new EventTarget();
 const boundAdd = target.addEventListener.bind(target);
 
 console.log('  boundAdd type:', typeof boundAdd);
@@ -21,7 +21,7 @@ try {
 
 // Test 2: Store bound method in object
 console.log('\nTest 2: Store bound methods in object');
-const target2 = createEventTarget();
+const target2 = new EventTarget();
 const wrapper = {};
 wrapper.on = target2.addEventListener.bind(target2);
 wrapper.emit = target2.dispatchEvent.bind(target2);
@@ -40,7 +40,7 @@ try {
 console.log('\nTest 3: Use bound methods in class');
 class MyEmitter {
   constructor() {
-    const target = createEventTarget();
+    const target = new EventTarget();
     this.on = target.addEventListener.bind(target);
     this.emit = target.dispatchEvent.bind(target);
   }

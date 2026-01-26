@@ -1,6 +1,6 @@
 // Debug native function binding
 
-const target = createEventTarget();
+const target = new EventTarget();
 
 console.log('target:', target);
 console.log('typeof target:', typeof target);

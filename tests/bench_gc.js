@@ -107,6 +107,7 @@ console.log('=== GC Benchmark ===\n');
 
 let initial = Ant.alloc();
 console.log('Initial state:');
+console.log('  arenaSize:', fmt(initial.arenaSize));
 console.log('  heapSize:', fmt(initial.heapSize));
 console.log('  usedBytes:', fmt(initial.usedBytes));
 console.log('  totalBytes:', fmt(initial.totalBytes));
@@ -121,6 +122,7 @@ bench('Repeated GC cycles (10 cycles x 1000 objects)', repeatedGcCycles, 3);
 
 let final = Ant.alloc();
 console.log('Final state:');
+console.log('  arenaSize:', fmt(final.arenaSize));
 console.log('  heapSize:', fmt(final.heapSize));
 console.log('  usedBytes:', fmt(final.usedBytes));
 console.log('  totalBytes:', fmt(final.totalBytes));

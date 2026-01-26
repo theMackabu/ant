@@ -82,8 +82,8 @@ console.log('  Result:', (event1Called && event2Called) ? 'PASS' : 'FAIL');
 // Test 7: Object-specific event listeners
 console.log('\nTest 7: Object-specific event listeners');
 
-const emitter1 = createEventTarget();
-const emitter2 = createEventTarget();
+const emitter1 = new EventTarget();
+const emitter2 = new EventTarget();
 
 let emitter1Count = 0;
 let emitter2Count = 0;
@@ -110,7 +110,7 @@ console.log('  Result:', (emitter1Count === 2 && emitter2Count === 1) ? 'PASS' :
 
 // Test 8: Object events with custom data
 console.log('\nTest 8: Object events with custom data');
-const dataEmitter = createEventTarget();
+const dataEmitter = new EventTarget();
 
 dataEmitter.addEventListener('message', (event) => {
   console.log('  Message received:', event.detail.text);
@@ -122,7 +122,7 @@ dataEmitter.dispatchEvent('message', { text: 'Hello Object!', sender: 'test' });
 
 // Test 9: Object event with once option
 console.log('\nTest 9: Object event with once option');
-const onceEmitter = createEventTarget();
+const onceEmitter = new EventTarget();
 let objOnceCount = 0;
 
 onceEmitter.addEventListener('onceEvent', () => {
@@ -136,7 +136,7 @@ console.log('  Result:', objOnceCount === 1 ? 'PASS' : 'FAIL');
 
 // Test 10: Object removeEventListener
 console.log('\nTest 10: Object removeEventListener');
-const removeEmitter = createEventTarget();
+const removeEmitter = new EventTarget();
 let objRemoveCount = 0;
 
 function objRemovableListener() {
@@ -154,8 +154,8 @@ console.log('  Result:', objRemoveCount === 1 ? 'PASS' : 'FAIL');
 
 // Test 11: Multiple objects don't interfere
 console.log('\nTest 11: Multiple objects event isolation');
-const objA = createEventTarget();
-const objB = createEventTarget();
+const objA = new EventTarget();
+const objB = new EventTarget();
 
 let objACalled = false;
 let objBCalled = false;
@@ -177,13 +177,12 @@ objB.dispatchEvent('test');
 console.log('  After objB dispatch - A:', objACalled, 'B:', objBCalled);
 console.log('  Result:', (objACalled && objBCalled) ? 'PASS' : 'FAIL');
 
-// Test 12: getEventListeners with objects
-console.log('\nTest 12: getEventListeners for objects');
-const debugObj = createEventTarget();
-debugObj.addEventListener('debugEvent', () => {});
-debugObj.addEventListener('debugEvent', () => {});
+// Test 12: getEventListeners with global events
+console.log('\nTest 12: getEventListeners for global events');
+addEventListener('debugEvent', () => {});
+addEventListener('debugEvent', () => {});
 
-const listeners = getEventListeners(debugObj);
+const listeners = getEventListeners();
 console.log('  Has debugEvent listeners:', listeners.debugEvent !== undefined);
 console.log('  Number of debugEvent listeners:', listeners.debugEvent?.length || 0);
 console.log('  Result:', listeners.debugEvent?.length === 2 ? 'PASS' : 'FAIL');
