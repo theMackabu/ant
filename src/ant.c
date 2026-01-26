@@ -15784,15 +15784,8 @@ static jsval_t builtin_array_includes(struct js *js, jsval_t *args, int nargs) {
   const char *key; size_t key_len; jsval_t val;
   
   while (js_prop_iter_next(&iter, &key, &key_len, &val)) {
-    if (key_len == 0 || key[0] > '9' || key[0] < '0') continue;
-    
-    unsigned parsed_idx = 0;
-    bool valid = true;
-    for (size_t i = 0; i < key_len && valid; i++) {
-      if (key[i] < '0' || key[i] > '9') valid = false;
-      else parsed_idx = parsed_idx * 10 + (key[i] - '0');
-    }
-    if (!valid || parsed_idx >= len) continue;
+    unsigned parsed_idx;
+    if (!parse_array_index(key, key_len, len, &parsed_idx)) continue;
     
     if (vtype(val) == vtype(search)) {
       bool match = false;
@@ -16746,15 +16739,8 @@ static jsval_t builtin_array_some(struct js *js, jsval_t *args, int nargs) {
   jsval_t val;
   
   while (js_prop_iter_next(&iter, &key, &key_len, &val)) {
-    if (key_len == 0 || key[0] > '9' || key[0] < '0') continue;
-    
-    unsigned parsed_idx = 0;
-    bool valid = true;
-    for (size_t i = 0; i < key_len && valid; i++) {
-      if (key[i] < '0' || key[i] > '9') valid = false;
-      else parsed_idx = parsed_idx * 10 + (key[i] - '0');
-    }
-    if (!valid || parsed_idx >= len) continue;
+    unsigned parsed_idx;
+    if (!parse_array_index(key, key_len, len, &parsed_idx)) continue;
     
     jsval_t call_args[3] = { val, tov((double)parsed_idx), arr };
     jsval_t result = call_js_with_args(js, callback, call_args, 3);
