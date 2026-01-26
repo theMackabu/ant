@@ -427,8 +427,16 @@ static jsoff_t gc_fwd_off_callback(void *ctx_ptr, jsoff_t old_off) {
   jsoff_t new_off = fwd_lookup(&ctx->fwd, old_off);
   if (new_off != (jsoff_t)~0) return new_off;
   
-  new_off = gc_reserve_object(ctx, old_off);
-  return (new_off != (jsoff_t)~0) ? new_off : old_off;
+  static const void *dispatch[] = { &&l_obj, &&l_prop, &&l_str, &&l_default };
+  jsoff_t header = gc_loadoff(ctx->js->mem, old_off);
+  goto *dispatch[header & 3];
+  
+  l_obj:     new_off = gc_reserve_object(ctx, old_off); goto l_done;
+  l_prop:    new_off = gc_reserve_prop(ctx, old_off);   goto l_done;
+  l_str:     new_off = gc_copy_string(ctx, old_off);    goto l_done;
+  l_default: return old_off;
+  
+  l_done: return (new_off != (jsoff_t)~0) ? new_off : old_off;
 }
 
 static jsval_t gc_fwd_val_callback(void *ctx_ptr, jsval_t val) {
