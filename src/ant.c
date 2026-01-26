@@ -4569,41 +4569,84 @@ static inline uint8_t scan_string(struct js *js, const char *buf, jsoff_t rem, c
   return TOK_ERR;
 }
 
-static inline uint8_t scan_template(struct js *js, const char *buf, jsoff_t rem) {
-  jsoff_t i = 1;
+static inline jsoff_t skip_string_literal(const char *buf, jsoff_t rem, jsoff_t start, char quote) {
+  jsoff_t i = start + 1;
+  while (i < rem) {
+    if (buf[i] == '\\') { i += 2; continue; }
+    if (buf[i] == quote) { return i + 1; } i++;
+  }
+  return rem;
+}
+
+static inline jsoff_t skip_line_comment(const char *buf, jsoff_t rem, jsoff_t start) {
+  jsoff_t i = start + 2;
+  while (i < rem && buf[i] != '\n') i++;
+  return i;
+}
+
+static inline jsoff_t skip_block_comment(const char *buf, jsoff_t rem, jsoff_t start) {
+  jsoff_t i = start + 2;
+  while (i + 1 < rem && !(buf[i] == '*' && buf[i + 1] == '/')) i++;
+  return (i + 1 < rem) ? (i + 2) : rem;
+}
+
+static jsoff_t skip_template_literal(const char *buf, jsoff_t rem, jsoff_t start) {
+  jsoff_t i = start + 1;
+  int expr_depth = 0;
 
   while (i < rem) {
-    const char *p = buf + i;
-    jsoff_t search_len = rem - i;
+    char c = buf[i];
 
-    const char *q = memchr(p, '`', search_len);
-    const char *b = memchr(p, '\\', search_len);
-
-    if (q == NULL) {
-      js->tok = TOK_ERR;
-      js->tlen = rem;
-      return TOK_ERR;
+    if (c == '\\') {
+      i += 2;
+      continue;
     }
 
-    if (b == NULL || q < b) {
-      i = (jsoff_t)((q - buf) + 1);
-      js->tok = TOK_TEMPLATE;
-      js->tlen = i;
-      return TOK_TEMPLATE;
+    if (expr_depth == 0) {
+      if (c == '`') return i + 1;
+      if (c == '$' && i + 1 < rem && buf[i + 1] == '{') {
+        expr_depth = 1;
+        i += 2;
+        continue;
+      } i++; continue;
     }
 
-    jsoff_t esc_pos = (jsoff_t)(b - buf);
-    i = esc_pos + 2;
-    if (i > rem) {
-      js->tok = TOK_ERR;
-      js->tlen = rem;
-      return TOK_ERR;
+    if (c == '\'' || c == '"') {
+      i = skip_string_literal(buf, rem, i, c);
+      continue;
     }
+
+    if (c == '`') {
+      jsoff_t next = skip_template_literal(buf, rem, i);
+      if (next <= i) return rem;
+      i = next; continue;
+    }
+
+    if (c == '/' && i + 1 < rem) {
+      if (buf[i + 1] == '/') { i = skip_line_comment(buf, rem, i); continue; }
+      if (buf[i + 1] == '*') { i = skip_block_comment(buf, rem, i); continue; }
+    }
+
+    if (c == '{') { expr_depth++; i++; continue; }
+    if (c == '}') { expr_depth--; i++; continue; }
+
+    i++;
   }
 
-  js->tok = TOK_ERR;
-  js->tlen = rem;
-  return TOK_ERR;
+  return rem;
+}
+
+static inline uint8_t scan_template(struct js *js, const char *buf, jsoff_t rem) {
+  jsoff_t end = skip_template_literal(buf, rem, 0);
+  if (end <= 1 || end > rem) {
+    js->tok = TOK_ERR;
+    js->tlen = rem;
+    return TOK_ERR;
+  }
+
+  js->tok = TOK_TEMPLATE;
+  js->tlen = end;
+  return TOK_TEMPLATE;
 }
 
 static inline uint8_t parse_operator(struct js *js, const char *buf, jsoff_t rem) {
