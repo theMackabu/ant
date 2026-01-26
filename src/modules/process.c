@@ -33,7 +33,11 @@
 #include "modules/process.h"
 #include "modules/symbol.h"
 
+#ifndef _WIN32
 extern char **environ;
+#else
+#define environ _environ
+#endif
 
 #define DEFAULT_MAX_LISTENERS 10
 #define INITIAL_LISTENER_CAPACITY 4
@@ -58,23 +62,17 @@ static ProcessEventType *stdin_events = NULL;
 static ProcessEventType *stdout_events = NULL;
 static ProcessEventType *stderr_events = NULL;
 static uv_tty_t stdin_tty;
-static uv_signal_t sigwinch_handle;
 static bool stdin_tty_initialized = false;
 static bool stdin_reading = false;
-static bool sigwinch_initialized = false;
 static uint64_t process_start_time = 0;
 
 #ifndef _WIN32
 static struct termios stdin_saved_termios;
 static bool stdin_raw_mode = false;
+static uv_signal_t sigwinch_handle;
+static bool sigwinch_initialized = false;
 #endif
 
-#define SIGNAL_LIST \
-  X(SIGHUP) X(SIGINT) X(SIGQUIT) X(SIGILL) X(SIGTRAP) X(SIGABRT) \
-  X(SIGBUS) X(SIGFPE) X(SIGUSR1) X(SIGUSR2) X(SIGSEGV) X(SIGPIPE) \
-  X(SIGALRM) X(SIGTERM) X(SIGCHLD) X(SIGCONT) X(SIGTSTP) X(SIGTTIN) \
-  X(SIGTTOU) X(SIGURG) X(SIGXCPU) X(SIGXFSZ) X(SIGVTALRM) X(SIGPROF) \
-  X(SIGWINCH) X(SIGIO) X(SIGSYS)
 
 typedef struct {
   const char *name;
@@ -91,9 +89,87 @@ static void init_signal_map(void) {
   if (initialized) return;
   
   static SignalEntry entries[] = {
-#define X(sig) { #sig, sig, {0}, {0} },
-    SIGNAL_LIST
-#undef X
+#ifdef SIGHUP
+    { "SIGHUP", SIGHUP, {0}, {0} },
+#endif
+#ifdef SIGINT
+    { "SIGINT", SIGINT, {0}, {0} },
+#endif
+#ifdef SIGQUIT
+    { "SIGQUIT", SIGQUIT, {0}, {0} },
+#endif
+#ifdef SIGILL
+    { "SIGILL", SIGILL, {0}, {0} },
+#endif
+#ifdef SIGTRAP
+    { "SIGTRAP", SIGTRAP, {0}, {0} },
+#endif
+#ifdef SIGABRT
+    { "SIGABRT", SIGABRT, {0}, {0} },
+#endif
+#ifdef SIGBUS
+    { "SIGBUS", SIGBUS, {0}, {0} },
+#endif
+#ifdef SIGFPE
+    { "SIGFPE", SIGFPE, {0}, {0} },
+#endif
+#ifdef SIGUSR1
+    { "SIGUSR1", SIGUSR1, {0}, {0} },
+#endif
+#ifdef SIGUSR2
+    { "SIGUSR2", SIGUSR2, {0}, {0} },
+#endif
+#ifdef SIGSEGV
+    { "SIGSEGV", SIGSEGV, {0}, {0} },
+#endif
+#ifdef SIGPIPE
+    { "SIGPIPE", SIGPIPE, {0}, {0} },
+#endif
+#ifdef SIGALRM
+    { "SIGALRM", SIGALRM, {0}, {0} },
+#endif
+#ifdef SIGTERM
+    { "SIGTERM", SIGTERM, {0}, {0} },
+#endif
+#ifdef SIGCHLD
+    { "SIGCHLD", SIGCHLD, {0}, {0} },
+#endif
+#ifdef SIGCONT
+    { "SIGCONT", SIGCONT, {0}, {0} },
+#endif
+#ifdef SIGTSTP
+    { "SIGTSTP", SIGTSTP, {0}, {0} },
+#endif
+#ifdef SIGTTIN
+    { "SIGTTIN", SIGTTIN, {0}, {0} },
+#endif
+#ifdef SIGTTOU
+    { "SIGTTOU", SIGTTOU, {0}, {0} },
+#endif
+#ifdef SIGURG
+    { "SIGURG", SIGURG, {0}, {0} },
+#endif
+#ifdef SIGXCPU
+    { "SIGXCPU", SIGXCPU, {0}, {0} },
+#endif
+#ifdef SIGXFSZ
+    { "SIGXFSZ", SIGXFSZ, {0}, {0} },
+#endif
+#ifdef SIGVTALRM
+    { "SIGVTALRM", SIGVTALRM, {0}, {0} },
+#endif
+#ifdef SIGPROF
+    { "SIGPROF", SIGPROF, {0}, {0} },
+#endif
+#ifdef SIGWINCH
+    { "SIGWINCH", SIGWINCH, {0}, {0} },
+#endif
+#ifdef SIGIO
+    { "SIGIO", SIGIO, {0}, {0} },
+#endif
+#ifdef SIGSYS
+    { "SIGSYS", SIGSYS, {0}, {0} },
+#endif
   };
   
   for (size_t i = 0; i < sizeof(entries) / sizeof(entries[0]); i++) {

@@ -1114,8 +1114,8 @@ static jsval_t builtin_fork(struct js *js, jsval_t *args, int nargs) {
     jsval_t exec_args = js_get(js, args[1], "execArgv");
     if (js_type(exec_args) == JS_OBJ) {
       jsval_t len_val = js_get(js, exec_args, "length");
-      int len = (int)js_getnum(len_val);
-      for (int i = 0; i < len; i++) {
+      int arr_len = (int)js_getnum(len_val);
+      for (int i = 0; i < arr_len; i++) {
         char idx[16];
         snprintf(idx, sizeof(idx), "%d", i);
         jsval_t arg = js_get(js, exec_args, idx);

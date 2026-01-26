@@ -49,6 +49,9 @@ static inline unsigned int compat_sleep(unsigned int seconds) { Sleep(seconds * 
 
 #include <process.h>
 #define getpid _getpid
+#ifndef getppid
+#define getppid _getpid
+#endif
 
 struct timeval {
   long tv_sec;
