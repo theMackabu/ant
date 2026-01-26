@@ -1182,26 +1182,72 @@ static jsval_t process_get_max_listeners(ant_t *js, jsval_t *args, int nargs) {
 
 void init_process_module() {
   ant_t *js = rt->js;
+  jsval_t global = js_glob(js);
   
   process_start_time = uv_hrtime();
+  jsval_t process_proto = js_mkobj(js);
+  
+  js_set(js, process_proto, "exit", js_mkfun(process_exit));
+  js_set(js, process_proto, "on", js_mkfun(process_on));
+  js_set(js, process_proto, "addListener", js_mkfun(process_on));
+  js_set(js, process_proto, "once", js_mkfun(process_once));
+  js_set(js, process_proto, "off", js_mkfun(process_off));
+  js_set(js, process_proto, "removeListener", js_mkfun(process_off));
+  js_set(js, process_proto, "removeAllListeners", js_mkfun(process_remove_all_listeners));
+  js_set(js, process_proto, "emit", js_mkfun(process_emit));
+  js_set(js, process_proto, "listenerCount", js_mkfun(process_listener_count));
+  js_set(js, process_proto, "setMaxListeners", js_mkfun(process_set_max_listeners));
+  js_set(js, process_proto, "getMaxListeners", js_mkfun(process_get_max_listeners));
+  js_set(js, process_proto, "cwd", js_mkfun(process_cwd));
+  js_set(js, process_proto, "chdir", js_mkfun(process_chdir));
+  js_set(js, process_proto, "uptime", js_mkfun(process_uptime));
+  js_set(js, process_proto, "cpuUsage", js_mkfun(process_cpu_usage));
+  js_set(js, process_proto, "kill", js_mkfun(process_kill));
+  js_set(js, process_proto, "abort", js_mkfun(process_abort));
+  js_set(js, process_proto, "umask", js_mkfun(process_umask));
+  
+  jsval_t mem_usage_fn = js_heavy_mkfun(js, process_memory_usage, js_mkundef());
+  js_set(js, mem_usage_fn, "rss", js_mkfun(process_memory_usage_rss));
+  js_set(js, process_proto, "memoryUsage", mem_usage_fn);
+  
+  jsval_t hrtime_fn = js_heavy_mkfun(js, process_hrtime, js_mkundef());
+  js_set(js, hrtime_fn, "bigint", js_mkfun(process_hrtime_bigint));
+  js_set(js, process_proto, "hrtime", hrtime_fn);
+  
+#ifndef _WIN32
+  js_set(js, process_proto, "getuid", js_mkfun(process_getuid));
+  js_set(js, process_proto, "geteuid", js_mkfun(process_geteuid));
+  js_set(js, process_proto, "getgid", js_mkfun(process_getgid));
+  js_set(js, process_proto, "getegid", js_mkfun(process_getegid));
+  js_set(js, process_proto, "getgroups", js_mkfun(process_getgroups));
+  js_set(js, process_proto, "setuid", js_mkfun(process_setuid));
+  js_set(js, process_proto, "setgid", js_mkfun(process_setgid));
+  js_set(js, process_proto, "seteuid", js_mkfun(process_seteuid));
+  js_set(js, process_proto, "setegid", js_mkfun(process_setegid));
+  js_set(js, process_proto, "setgroups", js_mkfun(process_setgroups));
+  js_set(js, process_proto, "initgroups", js_mkfun(process_initgroups));
+#endif
+  
+  js_set(js, process_proto, get_toStringTag_sym_key(), js_mkstr(js, "process", 7));
   
   jsval_t process_obj = js_mkobj(js);
-  jsval_t env_obj = js_mkobj(js);
-  jsval_t argv_arr = js_mkarr(js);
-
-  js_set(js, process_obj, "env", env_obj);
-  js_set(js, process_obj, "exit", js_mkfun(process_exit));
+  js_set_proto(js, process_obj, process_proto);
   
-  js_set(js, process_obj, "on", js_mkfun(process_on));
-  js_set(js, process_obj, "addListener", js_mkfun(process_on));
-  js_set(js, process_obj, "once", js_mkfun(process_once));
-  js_set(js, process_obj, "off", js_mkfun(process_off));
-  js_set(js, process_obj, "removeListener", js_mkfun(process_off));
-  js_set(js, process_obj, "removeAllListeners", js_mkfun(process_remove_all_listeners));
-  js_set(js, process_obj, "emit", js_mkfun(process_emit));
-  js_set(js, process_obj, "listenerCount", js_mkfun(process_listener_count));
-  js_set(js, process_obj, "setMaxListeners", js_mkfun(process_set_max_listeners));
-  js_set(js, process_obj, "getMaxListeners", js_mkfun(process_get_max_listeners));
+  jsval_t env_obj = js_mkobj(js);
+  load_dotenv_file(js, env_obj);
+  js_set_getter(js, env_obj, env_getter);
+  js_set(js, env_obj, "toObject", js_mkfun(env_to_object));
+  js_set(js, process_obj, "env", env_obj);
+  
+  jsval_t argv_arr = js_mkarr(js);
+  for (int i = 0; i < rt->argc; i++) {
+    js_arr_push(js, argv_arr, js_mkstr(js, rt->argv[i], strlen(rt->argv[i])));
+  }
+  
+  js_set(js, process_obj, "argv", argv_arr);
+  js_set(js, process_obj, "execArgv", js_mkarr(js));
+  js_set(js, process_obj, "argv0", rt->argc > 0 ? js_mkstr(js, rt->argv[0], strlen(rt->argv[0])) : js_mkstr(js, "ant", 3));
+  js_set(js, process_obj, "execPath", rt->argc > 0 ? js_mkstr(js, rt->argv[0], strlen(rt->argv[0])) : js_mkundef());
   
   js_set(js, process_obj, "pid", js_mknum((double)getpid()));
   js_set(js, process_obj, "ppid", js_mknum((double)getppid()));
@@ -1247,80 +1293,47 @@ void init_process_module() {
     js_set(js, process_obj, "arch", js_mkstr(js, "unknown", 7));
   #endif
   
-  load_dotenv_file(js, env_obj);
-  js_set_getter(js, env_obj, env_getter);
-  js_set(js, env_obj, "toObject", js_mkfun(env_to_object));
-  
-  for (int i = 0; i < rt->argc; i++) {
-    js_arr_push(js, argv_arr, js_mkstr(js, rt->argv[i], strlen(rt->argv[i])));
-  }
-  
-  js_set(js, process_obj, "argv", argv_arr);
-  js_set(js, process_obj, "execArgv", js_mkarr(js));
-  js_set(js, process_obj, "cwd", js_mkfun(process_cwd));
-  js_set(js, process_obj, "chdir", js_mkfun(process_chdir));
-  
-  js_set(js, process_obj, "argv0", rt->argc > 0 ? js_mkstr(js, rt->argv[0], strlen(rt->argv[0])) : js_mkstr(js, "ant", 3));
-  js_set(js, process_obj, "execPath", rt->argc > 0 ? js_mkstr(js, rt->argv[0], strlen(rt->argv[0])) : js_mkundef());
-  
-  js_set(js, process_obj, "uptime", js_mkfun(process_uptime));
-  jsval_t mem_usage_fn = js_heavy_mkfun(js, process_memory_usage, js_mkundef());
-  js_set(js, mem_usage_fn, "rss", js_mkfun(process_memory_usage_rss));
-  js_set(js, process_obj, "memoryUsage", mem_usage_fn);
-  js_set(js, process_obj, "cpuUsage", js_mkfun(process_cpu_usage));
-  
-  jsval_t hrtime_fn = js_heavy_mkfun(js, process_hrtime, js_mkundef());
-  js_set(js, hrtime_fn, "bigint", js_mkfun(process_hrtime_bigint));
-  js_set(js, process_obj, "hrtime", hrtime_fn);
-  
-  js_set(js, process_obj, "kill", js_mkfun(process_kill));
-  js_set(js, process_obj, "abort", js_mkfun(process_abort));
-  js_set(js, process_obj, "umask", js_mkfun(process_umask));
-  
-#ifndef _WIN32
-  js_set(js, process_obj, "getuid", js_mkfun(process_getuid));
-  js_set(js, process_obj, "geteuid", js_mkfun(process_geteuid));
-  js_set(js, process_obj, "getgid", js_mkfun(process_getgid));
-  js_set(js, process_obj, "getegid", js_mkfun(process_getegid));
-  js_set(js, process_obj, "getgroups", js_mkfun(process_getgroups));
-  js_set(js, process_obj, "setuid", js_mkfun(process_setuid));
-  js_set(js, process_obj, "setgid", js_mkfun(process_setgid));
-  js_set(js, process_obj, "seteuid", js_mkfun(process_seteuid));
-  js_set(js, process_obj, "setegid", js_mkfun(process_setegid));
-  js_set(js, process_obj, "setgroups", js_mkfun(process_setgroups));
-  js_set(js, process_obj, "initgroups", js_mkfun(process_initgroups));
-#endif
+  jsval_t stdin_proto = js_mkobj(js);
+  js_set(js, stdin_proto, "setRawMode", js_mkfun(js_stdin_set_raw_mode));
+  js_set(js, stdin_proto, "resume", js_mkfun(js_stdin_resume));
+  js_set(js, stdin_proto, "pause", js_mkfun(js_stdin_pause));
+  js_set(js, stdin_proto, "on", js_mkfun(js_stdin_on));
+  js_set(js, stdin_proto, "removeAllListeners", js_mkfun(js_stdin_remove_all_listeners));
+  js_set(js, stdin_proto, get_toStringTag_sym_key(), js_mkstr(js, "ReadStream", 10));
   
   jsval_t stdin_obj = js_mkobj(js);
+  js_set_proto(js, stdin_obj, stdin_proto);
   js_set(js, stdin_obj, "isTTY", stdin_is_tty() ? js_mktrue() : js_mkfalse());
-  js_set(js, stdin_obj, "setRawMode", js_mkfun(js_stdin_set_raw_mode));
-  js_set(js, stdin_obj, "resume", js_mkfun(js_stdin_resume));
-  js_set(js, stdin_obj, "pause", js_mkfun(js_stdin_pause));
-  js_set(js, stdin_obj, "on", js_mkfun(js_stdin_on));
-  js_set(js, stdin_obj, "removeAllListeners", js_mkfun(js_stdin_remove_all_listeners));
   js_set(js, process_obj, "stdin", stdin_obj);
   
+  jsval_t stdout_proto = js_mkobj(js);
+  js_set(js, stdout_proto, "write", js_mkfun(js_stdout_write));
+  js_set(js, stdout_proto, "on", js_mkfun(js_stdout_on));
+  js_set(js, stdout_proto, "once", js_mkfun(js_stdout_once));
+  js_set(js, stdout_proto, "removeAllListeners", js_mkfun(js_stdout_remove_all_listeners));
+  js_set(js, stdout_proto, "getWindowSize", js_mkfun(js_stdout_get_window_size));
+  js_set(js, stdout_proto, get_toStringTag_sym_key(), js_mkstr(js, "WriteStream", 11));
+  
   jsval_t stdout_obj = js_mkobj(js);
+  js_set_proto(js, stdout_obj, stdout_proto);
   js_set(js, stdout_obj, "isTTY", stdout_is_tty() ? js_mktrue() : js_mkfalse());
-  js_set(js, stdout_obj, "write", js_mkfun(js_stdout_write));
-  js_set(js, stdout_obj, "on", js_mkfun(js_stdout_on));
-  js_set(js, stdout_obj, "once", js_mkfun(js_stdout_once));
-  js_set(js, stdout_obj, "removeAllListeners", js_mkfun(js_stdout_remove_all_listeners));
-  js_set(js, stdout_obj, "getWindowSize", js_mkfun(js_stdout_get_window_size));
   js_set_getter_desc(js, stdout_obj, "rows", 4, js_mkfun(js_stdout_rows_getter), JS_DESC_E | JS_DESC_C);
   js_set_getter_desc(js, stdout_obj, "columns", 7, js_mkfun(js_stdout_columns_getter), JS_DESC_E | JS_DESC_C);
   js_set(js, process_obj, "stdout", stdout_obj);
   
+  jsval_t stderr_proto = js_mkobj(js);
+  js_set(js, stderr_proto, "write", js_mkfun(js_stderr_write));
+  js_set(js, stderr_proto, "on", js_mkfun(js_stderr_on));
+  js_set(js, stderr_proto, "once", js_mkfun(js_stderr_once));
+  js_set(js, stderr_proto, "removeAllListeners", js_mkfun(js_stderr_remove_all_listeners));
+  js_set(js, stderr_proto, get_toStringTag_sym_key(), js_mkstr(js, "WriteStream", 11));
+  
   jsval_t stderr_obj = js_mkobj(js);
+  js_set_proto(js, stderr_obj, stderr_proto);
   js_set(js, stderr_obj, "isTTY", stderr_is_tty() ? js_mktrue() : js_mkfalse());
-  js_set(js, stderr_obj, "write", js_mkfun(js_stderr_write));
-  js_set(js, stderr_obj, "on", js_mkfun(js_stderr_on));
-  js_set(js, stderr_obj, "once", js_mkfun(js_stderr_once));
-  js_set(js, stderr_obj, "removeAllListeners", js_mkfun(js_stderr_remove_all_listeners));
   js_set(js, process_obj, "stderr", stderr_obj);
   
-  js_set(js, process_obj, get_toStringTag_sym_key(), js_mkstr(js, "process", 7));
-  js_set(js, js_glob(js), "process", process_obj);
+  js_set(js, global, "process", process_obj);
 }
 
 #define GC_FWD_EVENTS(events) do { \

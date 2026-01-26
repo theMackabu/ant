@@ -5,8 +5,11 @@
 #include <string.h>
 #include <stdbool.h>
 #include <ctype.h>
+#include <inttypes.h>
 #include <uv.h>
 
+#include "common.h"
+#include "internal.h"
 #include "runtime.h"
 #include "modules/io.h"
 #include "modules/symbol.h"
@@ -30,8 +33,15 @@ bool io_no_color = false;
 #define JSON_REF "\x1b[90m"
 #define JSON_WHITE "\x1b[97m"
 
+typedef struct {
+  jsoff_t *visited;
+  int count;
+  int capacity;
+} inspect_visited_t;
+
 static void io_putc(int c, FILE *stream) { fputc(c, stream); }
 static void io_puts(const char *s, FILE *stream) { fputs(s, stream); }
+static void inspect_object_full(struct js *js, jsval_t obj, FILE *stream, int depth, inspect_visited_t *visited);
 
 static void io_print(const char *str, FILE *stream) {
   if (!io_no_color) {
@@ -410,6 +420,240 @@ static jsval_t js_console_timeEnd(struct js *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
+static const char *get_slot_name(internal_slot_t slot) {
+  static const char *slot_names[] = {
+    [SLOT_NONE] = "NONE",
+    [SLOT_PID] = "PID",
+    [SLOT_ASYNC] = "ASYNC",
+    [SLOT_WITH] = "WITH",
+    [SLOT_SCOPE] = "SCOPE",
+    [SLOT_THIS] = "THIS",
+    [SLOT_BOUND_THIS] = "BOUND_THIS",
+    [SLOT_BOUND_ARGS] = "BOUND_ARGS",
+    [SLOT_FIELD_COUNT] = "FIELD_COUNT",
+    [SLOT_SOURCE] = "SOURCE",
+    [SLOT_FIELDS] = "FIELDS",
+    [SLOT_STRICT] = "STRICT",
+    [SLOT_CODE] = "CODE",
+    [SLOT_CODE_LEN] = "CODE_LEN",
+    [SLOT_CFUNC] = "CFUNC",
+    [SLOT_CORO] = "CORO",
+    [SLOT_ARROW] = "ARROW",
+    [SLOT_PROTO] = "PROTO",
+    [SLOT_FUNC_PROTO] = "FUNC_PROTO",
+    [SLOT_ASYNC_PROTO] = "ASYNC_PROTO",
+    [SLOT_FROZEN] = "FROZEN",
+    [SLOT_SEALED] = "SEALED",
+    [SLOT_EXTENSIBLE] = "EXTENSIBLE",
+    [SLOT_BUFFER] = "BUFFER",
+    [SLOT_TARGET_FUNC] = "TARGET_FUNC",
+    [SLOT_NAME] = "NAME",
+    [SLOT_MAP] = "MAP",
+    [SLOT_SET] = "SET",
+    [SLOT_PRIMITIVE] = "PRIMITIVE",
+    [SLOT_PROXY_REF] = "PROXY_REF",
+    [SLOT_BUILTIN] = "BUILTIN",
+    [SLOT_DATA] = "DATA",
+    [SLOT_CTOR] = "CTOR",
+    [SLOT_SUPER] = "SUPER",
+    [SLOT_DEFAULT_CTOR] = "DEFAULT_CTOR",
+    [SLOT_DEFAULT] = "DEFAULT",
+    [SLOT_ERR_TYPE] = "ERR_TYPE",
+    [SLOT_OBSERVABLE_SUBSCRIBER] = "OBSERVABLE_SUBSCRIBER",
+    [SLOT_SUBSCRIPTION_OBSERVER] = "SUBSCRIPTION_OBSERVER",
+    [SLOT_SUBSCRIPTION_CLEANUP] = "SUBSCRIPTION_CLEANUP",
+    [SLOT_HOISTED_VARS] = "HOISTED_VARS",
+    [SLOT_HOISTED_VARS_LEN] = "HOISTED_VARS_LEN",
+    [SLOT_STRICT_EVAL_SCOPE] = "STRICT_EVAL_SCOPE",
+    [SLOT_MODULE_SCOPE] = "MODULE_SCOPE",
+    [SLOT_STRICT_ARGS] = "STRICT_ARGS",
+    [SLOT_NO_FUNC_DECLS] = "NO_FUNC_DECLS",
+  };
+  
+  if (slot < sizeof(slot_names) / sizeof(slot_names[0]) && slot_names[slot]) {
+    return slot_names[slot];
+  }
+  return "UNKNOWN";
+}
+
+static const char *get_type_name(int type) {
+  static const char *type_names[] = {
+    [T_OBJ]        = "object",
+    [T_PROP]       = "property",
+    [T_STR]        = "string",
+    [T_UNDEF]      = "undefined",
+    [T_NULL]       = "null",
+    [T_NUM]        = "number",
+    [T_BOOL]       = "boolean",
+    [T_FUNC]       = "function",
+    [T_CODEREF]    = "coderef",
+    [T_CFUNC]      = "function",
+    [T_ERR]        = "error",
+    [T_ARR]        = "array",
+    [T_PROMISE]    = "Promise",
+    [T_TYPEDARRAY] = "TypedArray",
+    [T_BIGINT]     = "bigint",
+    [T_PROPREF]    = "propref",
+    [T_SYMBOL]     = "symbol",
+    [T_GENERATOR]  = "Generator",
+    [T_FFI]        = "ffi"
+  };
+  
+  size_t num_types = sizeof(type_names) / sizeof(type_names[0]);
+  if (type < 0 || (size_t)type >= num_types) return "unknown";
+  
+  return type_names[type] ? type_names[type] : "unknown";
+}
+
+static bool inspect_was_visited(inspect_visited_t *v, jsoff_t off) {
+  for (int i = 0; i < v->count; i++) if (v->visited[i] == off) return true;
+  return false;
+}
+
+static void inspect_print_indent(FILE *stream, int depth) {
+  for (int i = 0; i < depth; i++) fprintf(stream, "  ");
+}
+
+static void inspect_mark_visited(inspect_visited_t *v, jsoff_t off) {
+  if (v->count >= v->capacity) {
+    v->capacity = v->capacity ? v->capacity * 2 : 32;
+    v->visited = realloc(v->visited, v->capacity * sizeof(jsoff_t));
+  }
+  v->visited[v->count++] = off;
+}
+
+static void inspect_value(struct js *js, jsval_t val, FILE *stream, int depth, inspect_visited_t *visited) {
+  int t = js_type(val);
+  
+  if (t == T_UNDEF) { fprintf(stream, "undefined"); return; }
+  if (t == T_NULL)  { fprintf(stream, "null"); return; }
+  if (t == T_BOOL)  { fprintf(stream, js_getbool(val) ? "true" : "false"); return; }
+  if (t == T_NUM)   { fprintf(stream, "%g", js_getnum(val)); return; }
+  if (t == T_ERR)   { fprintf(stream, "[Error]"); return; }
+  
+  if (t == T_STR) {
+    size_t len;
+    char *str = js_getstr(js, val, &len);
+    fprintf(stream, "\"%.*s\"", (int)len, str ? str : "");
+    return;
+  }
+  
+  if (t == T_SYMBOL) {
+    const char *desc = js_sym_desc(js, val);
+    fprintf(stream, "Symbol(%s)", desc ? desc : "");
+    return;
+  }
+  
+  if (t == T_OBJ || t == T_FUNC || t == T_PROMISE || t == T_ARR) {
+    if (depth > 10) fprintf(stream, "<%s @%" PRIu64 " ...>", get_type_name(t), (uint64_t)vdata(val));
+    else inspect_object_full(js, val, stream, depth, visited);
+    return;
+  }
+  
+  fprintf(stream, "<%s rawtype=%d data=%" PRIu64 ">", get_type_name(t), vtype(val), (uint64_t)vdata(val));
+}
+
+static void inspect_object_full(struct js *js, jsval_t obj, FILE *stream, int depth, inspect_visited_t *visited) {
+  int type = js_type(obj);
+  jsoff_t obj_off = (jsoff_t)vdata(obj);
+  
+  if (inspect_was_visited(visited, obj_off)) {
+    fprintf(stream, "[Circular *%u]", obj_off);
+    return;
+  }
+  
+  inspect_mark_visited(visited, obj_off);
+  fprintf(stream, "<%s @%u> {\n", type == JS_FUNC ? "Function" : (type == JS_PROMISE ? "Promise" : "Object"), obj_off);
+  
+  int inner_depth = depth + 1;
+  
+  inspect_print_indent(stream, inner_depth);
+  fprintf(stream, "[[Slots]]: {\n");
+  
+  for (int slot = SLOT_NONE + 1; slot < SLOT_MAX; slot++) {
+    jsval_t slot_val = js_get_slot(js, obj, (internal_slot_t)slot);
+    int t = js_type(slot_val);
+    if (t == T_UNDEF) continue;
+    
+    inspect_print_indent(stream, inner_depth + 1);
+    fprintf(stream, "[[%s]]: ", get_slot_name((internal_slot_t)slot));
+    
+    switch (slot) {
+      case SLOT_CODE:
+      case SLOT_CFUNC:
+      case SLOT_HOISTED_VARS:
+        fprintf(stream, "<native ptr 0x%" PRIx64 ">", (uint64_t)vdata(slot_val));
+        break;
+      case SLOT_CODE_LEN:
+      case SLOT_HOISTED_VARS_LEN:
+        fprintf(stream, "%.0f", js_getnum(slot_val));
+        break;
+      default:
+        if ((t == T_OBJ || t == T_FUNC || t == T_PROMISE) && inspect_was_visited(visited, (jsoff_t)vdata(slot_val)))
+          fprintf(stream, "[Circular *%u]", (jsoff_t)vdata(slot_val));
+        else if (t == T_OBJ || t == T_FUNC || t == T_PROMISE)
+          fprintf(stream, "<%s @%u>", get_type_name(t), (jsoff_t)vdata(slot_val));
+        else
+          inspect_value(js, slot_val, stream, inner_depth + 1, visited);
+        break;
+    }
+    
+    fprintf(stream, "\n");
+  }
+  
+  inspect_print_indent(stream, inner_depth);
+  fprintf(stream, "}\n");
+  
+  inspect_print_indent(stream, inner_depth);
+  fprintf(stream, "[[Properties]]: {\n");
+  
+  ant_iter_t iter = js_prop_iter_begin(js, obj);
+  const char *key;
+  size_t key_len;
+  jsval_t value;
+  
+  while (js_prop_iter_next(&iter, &key, &key_len, &value)) {
+    inspect_print_indent(stream, inner_depth + 1);
+    fprintf(stream, "\"%.*s\": ", (int)key_len, key);
+    inspect_value(js, value, stream, inner_depth + 1, visited);
+    fprintf(stream, "\n");
+  }
+  
+  js_prop_iter_end(&iter);
+  inspect_print_indent(stream, inner_depth);
+  fprintf(stream, "}\n");
+  
+  jsval_t proto = js_get_proto(js, obj);
+  inspect_print_indent(stream, inner_depth);
+  fprintf(stream, "[[Prototype]]: ");
+  if (js_type(proto) == JS_NULL) {
+    fprintf(stream, "null\n");
+  } else {
+    fprintf(stream, "\n");
+    inspect_print_indent(stream, inner_depth);
+    inspect_value(js, proto, stream, inner_depth, visited);
+    fprintf(stream, "\n");
+  }
+  
+  inspect_print_indent(stream, depth);
+  fprintf(stream, "}");
+}
+
+static jsval_t js_console_inspect(struct js *js, jsval_t *args, int nargs) {
+  FILE *stream = stdout;
+  inspect_visited_t visited = {0};
+  
+  for (int i = 0; i < nargs; i++) {
+    if (i > 0) fprintf(stream, " ");
+    inspect_value(js, args[i], stream, 0, &visited);
+  }
+  
+  fprintf(stream, "\n");
+  if (visited.visited) free(visited.visited);
+  
+  return js_mkundef();
+}
+
 void init_console_module() {
   struct js *js = rt->js;
   jsval_t console_obj = js_mkobj(js);
@@ -424,6 +668,7 @@ void init_console_module() {
   js_set(js, console_obj, "time", js_mkfun(js_console_time));
   js_set(js, console_obj, "timeEnd", js_mkfun(js_console_timeEnd));
   js_set(js, console_obj, "clear", js_mkfun(js_console_clear));
+  js_set(js, console_obj, "inspect", js_mkfun(js_console_inspect));
   
   js_set(js, console_obj, get_toStringTag_sym_key(), js_mkstr(js, "console", 7));
   js_set(js, js_glob(js), "console", console_obj);
