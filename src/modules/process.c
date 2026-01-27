@@ -683,7 +683,7 @@ static jsval_t process_uptime(ant_t *js, jsval_t *args, int nargs) {
 static jsval_t process_hrtime(ant_t *js, jsval_t *args, int nargs) {
   uint64_t now = uv_hrtime();
   
-  if (nargs > 0 && js_type(args[0]) == T_ARR) {
+  if (nargs > 0 && vtype(args[0]) == T_ARR) {
     jsval_t prev_sec = js_get(js, args[0], "0");
     jsval_t prev_nsec = js_get(js, args[0], "1");
     if (js_type(prev_sec) == JS_NUM && js_type(prev_nsec) == JS_NUM) {
@@ -950,7 +950,7 @@ static jsval_t process_setegid(ant_t *js, jsval_t *args, int nargs) {
 }
 
 static jsval_t process_setgroups(ant_t *js, jsval_t *args, int nargs) {
-  if (nargs < 1 || js_type(args[0]) != T_ARR) {
+  if (nargs < 1 || vtype(args[0]) != T_ARR) {
     return js_mkerr(js, "process.setgroups requires an array");
   }
   

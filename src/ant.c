@@ -6475,7 +6475,7 @@ static jsval_t call_js_with_args(struct js *js, jsval_t func, jsval_t *args, int
     jsval_t bound_this = get_slot(js, func_obj, SLOT_BOUND_THIS);
     
     jsval_t saved_this = js->this_val;
-    if (vtype(bound_this) != JS_UNDEF) {
+    if (vtype(bound_this) != T_UNDEF) {
       push_this(bound_this);
       js->this_val = bound_this;
     }
@@ -6487,7 +6487,7 @@ static jsval_t call_js_with_args(struct js *js, jsval_t func, jsval_t *args, int
     jsval_t result = fn(js, args, nargs);
     
     js->current_func = saved_func;
-    if (vtype(bound_this) != JS_UNDEF) {
+    if (vtype(bound_this) != T_UNDEF) {
       pop_this();
       js->this_val = saved_this;
     }

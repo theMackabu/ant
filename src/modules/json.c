@@ -109,7 +109,7 @@ typedef struct { char *key; size_t key_len; jsval_t value; } prop_entry;
 static int should_skip_prop(struct js *js, const char *key, size_t key_len, jsval_t value) {
   if (is_internal_prop(key, (jsoff_t)key_len)) return 1;
   if (js_type(value) != JS_OBJ) return 0;
-  return js_type(js_get_slot(js, value, SLOT_CODE)) == T_CFUNC;
+  return vtype(js_get_slot(js, value, SLOT_CODE)) == T_CFUNC;
 }
 
 static prop_entry *collect_props(struct js *js, jsval_t val, int *out_count) {
