@@ -11,7 +11,6 @@ struct for_let_ctx {
 };
 
 struct js {
-  jsoff_t css;            // max observed C stack size
   const char *code;       // currently parsed code snippet
   char *errmsg;           // dynamic error message buffer
   size_t errmsg_size;     // size of error message buffer
@@ -40,8 +39,8 @@ struct js {
   uint8_t *mem;           // available JS memory
   jsoff_t size;           // memory size
   jsoff_t brk;            // current mem usage boundary
-  jsoff_t maxcss;         // maximum allowed C stack size usage
   void *cstk;             // C stack pointer at the beginning of js_eval()
+  size_t stack_limit;     // max stack bytes allowed (0 = no limit)
   jsval_t current_func;   // currently executing function (for native closures)
   bool var_warning_shown; // flag to show var deprecation warning only once
   bool owns_mem;          // true if js owns the memory buffer (dynamic allocation)

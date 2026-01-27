@@ -7,6 +7,11 @@
 #include <time.h>
 #include <errno.h>
 
+#ifdef __APPLE__
+#include <mach/mach.h>
+#elif defined(__linux__)
+#include <sys/resource.h>
+#endif
 
 #include "runtime.h"
 #include "internal.h"
@@ -46,38 +51,19 @@ static jsval_t js_signal(struct js *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-// Ant.gc() - no-op with bdwgc removed
+// Ant.gc()
 static jsval_t js_gc_trigger(struct js *js, jsval_t *args, int nargs) {
   (void) args; (void) nargs;
 
   size_t arena_before = js_getbrk(js);
+  size_t arena_freed = js_gc_compact(js);
+  size_t arena_after = js_getbrk(js);
 
   jsval_t result = js_newobj(js);
-  js_set(js, result, "heapBefore", js_mknum(0));
-  js_set(js, result, "heapAfter", js_mknum(0));
-  js_set(js, result, "usedBefore", js_mknum(0));
-  js_set(js, result, "usedAfter", js_mknum(0));
-  js_set(js, result, "freed", js_mknum(0));
   js_set(js, result, "arenaBefore", js_mknum((double)arena_before));
-  js_set(js, result, "arenaAfter", js_mknum((double)arena_before));
-  js_set(js, result, "arenaFreed", js_mknum(0));
+  js_set(js, result, "arenaAfter", js_mknum((double)arena_after));
+  js_set(js, result, "arenaFreed", js_mknum((double)arena_freed));
 
-  return result;
-}
-
-// Ant.alloc()
-static jsval_t js_alloc(struct js *js, jsval_t *args, int nargs) {
-  (void) args; (void) nargs;
-  
-  jsval_t result = js_newobj(js);
-  size_t arena_size = js_getbrk(js);
-  
-  js_set(js, result, "arenaSize", js_mknum((double)arena_size));
-  js_set(js, result, "heapSize", js_mknum(0));
-  js_set(js, result, "freeBytes", js_mknum(0));
-  js_set(js, result, "usedBytes", js_mknum(0));
-  js_set(js, result, "totalBytes", js_mknum(0));
-  
   return result;
 }
 
@@ -119,12 +105,30 @@ static jsval_t js_stats_fn(struct js *js, jsval_t *args, int nargs) {
   (void) args; (void) nargs;
   jsval_t result = js_newobj(js);
   
-  js_set(js, result, "arenaUsed", js_mknum((double)js->size));
-  js_set(js, result, "cstack", js_mknum((double)js->css));
+  js_set(js, result, "arenaUsed", js_mknum((double)js_getbrk(js)));
+  js_set(js, result, "arenaSize", js_mknum((double)js->size));
   
-  js_set(js, result, "gcHeapSize", js_mknum(0));
-  js_set(js, result, "gcFreeBytes", js_mknum(0));
-  js_set(js, result, "gcUsedBytes", js_mknum(0));
+  if (js->cstk != NULL) {
+    volatile char marker;
+    uintptr_t base = (uintptr_t)js->cstk;
+    uintptr_t curr = (uintptr_t)&marker;
+    size_t used = (base > curr) ? (base - curr) : (curr - base);
+    js_set(js, result, "cstack", js_mknum((double)used));
+  } else js_set(js, result, "cstack", js_mknum(0));
+  
+#ifdef __APPLE__
+  struct mach_task_basic_info info;
+  mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+  if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t)&info, &count) == KERN_SUCCESS) {
+    js_set(js, result, "rss", js_mknum((double)info.resident_size));
+    js_set(js, result, "virtualSize", js_mknum((double)info.virtual_size));
+  }
+#elif defined(__linux__)
+  struct rusage usage;
+  if (getrusage(RUSAGE_SELF, &usage) == 0) {
+    js_set(js, result, "rss", js_mknum((double)usage.ru_maxrss * 1024));
+  }
+#endif
   
   return result;
 }
@@ -134,7 +138,6 @@ void init_builtin_module() {
   jsval_t ant_obj = rt->ant_obj;
 
   js_set(js, ant_obj, "gc", js_mkfun(js_gc_trigger));
-  js_set(js, ant_obj, "alloc", js_mkfun(js_alloc));
   js_set(js, ant_obj, "stats", js_mkfun(js_stats_fn));
   js_set(js, ant_obj, "signal", js_mkfun(js_signal));
   js_set(js, ant_obj, "sleep", js_mkfun(js_sleep));

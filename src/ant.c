@@ -31,6 +31,7 @@
 #else
 #include <sys/time.h>
 #include <sys/stat.h>
+#include <sys/resource.h>
 #endif
 
 #define MCO_USE_VMEM_ALLOCATOR
@@ -708,6 +709,15 @@ static inline bool is_keyword_propname(uint8_t tok) {
 
 static inline bool is_contextual_keyword(uint8_t tok) {
   return tok == TOK_FROM || tok == TOK_OF || tok == TOK_AS || tok == TOK_ASYNC;
+}
+
+static inline bool js_stack_overflow(struct js *js) {
+  if (js->stack_limit == 0 || js->cstk == NULL) return false;
+  volatile char marker;
+  uintptr_t base = (uintptr_t)js->cstk;
+  uintptr_t curr = (uintptr_t)&marker;
+  size_t used = (base > curr) ? (base - curr) : (curr - base);
+  return used > js->stack_limit;
 }
 
 static inline bool is_valid_param_name(uint8_t tok) {
@@ -6971,6 +6981,8 @@ static jsval_t call_ffi(struct js *js, unsigned int func_index) {
 }
 
 static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
+  if (js_stack_overflow(js)) return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "stack overflow");
+  
   if (vtype(args) != T_CODEREF) return js_mkerr(js, "bad call");
   if (vtype(func) != T_FUNC && vtype(func) != T_CFUNC && vtype(func) != T_FFI) return js_mkerr(js, "calling non-function");
   
@@ -8670,7 +8682,6 @@ static jsval_t js_class_expr(struct js *js, bool is_expression);
 
 static jsval_t js_literal(struct js *js) {
   next(js);
-  if (js->maxcss > 0 && js->css > js->maxcss) return js_mkerr(js, "C stack");
   js->consumed = 1;
   
   switch (js->tok) {
@@ -22162,6 +22173,17 @@ ant_t *js_create(void *buf, size_t len) {
   js->errmsg = (char *)malloc(js->errmsg_size);
   if (js->errmsg) js->errmsg[0] = '\0';
   
+#ifdef _WIN32
+  js->stack_limit = 512 * 1024;
+#else
+  struct rlimit rl;
+  if (getrlimit(RLIMIT_STACK, &rl) == 0 && rl.rlim_cur != RLIM_INFINITY) {
+    js->stack_limit = rl.rlim_cur / 2;
+  } else {
+    js->stack_limit = 512 * 1024;
+  }
+#endif
+  
   jsval_t glob = js->scope;
   jsval_t object_proto = js_mkobj(js);
   set_proto(js, object_proto, js_mknull());
@@ -22757,6 +22779,9 @@ struct js *js_create_dynamic(size_t initial_size, size_t max_size) {
   js->owns_mem = true;
   js->max_size = (jsoff_t) max_size;
   
+  volatile char stack_base;
+  js->cstk = (void *)&stack_base;
+  
   return js;
 }
 
@@ -22782,7 +22807,8 @@ void js_destroy(struct js *js) {
 inline double js_getnum(jsval_t value) { return tod(value); }
 inline int js_getbool(jsval_t value) { return vdata(value) & 1 ? 1 : 0; }
 
-inline void js_setmaxcss(struct js *js, size_t max) { js->maxcss = (jsoff_t) max; }
+inline void js_setstacklimit(struct js *js, size_t max) { js->stack_limit = max; }
+inline void js_setstackbase(struct js *js, void *base) { js->cstk = base; }
 inline void js_set_filename(struct js *js, const char *filename) { js->filename = filename; }
 
 inline jsval_t js_mktrue(void) { return mkval(T_BOOL, 1); }
@@ -23268,7 +23294,6 @@ static jsval_t js_eval_inherit_strict(struct js *js, const char *buf, size_t len
   js->code = buf;
   js->clen = (jsoff_t) len;
   js->pos = 0;
-  js->cstk = &res;
   
   uint8_t saved_tok = js->tok;
   jsoff_t saved_pos = js->pos;

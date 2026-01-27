@@ -73,7 +73,8 @@ jsval_t js_eval(ant_t *, const char *, size_t);
 void js_destroy(ant_t *);
 void js_delscope(ant_t *);
 bool js_truthy(ant_t *, jsval_t);
-void js_setmaxcss(ant_t *, size_t);
+void js_setstacklimit(ant_t *, size_t);
+void js_setstackbase(ant_t *, void *);
 
 uint32_t js_to_uint32(double d);
 int32_t js_to_int32(double d);
