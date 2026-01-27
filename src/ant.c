@@ -1282,11 +1282,13 @@ static jsval_t resume_coroutine_wrapper(struct js *js, jsval_t *args, int nargs)
 static jsval_t reject_coroutine_wrapper(struct js *js, jsval_t *args, int nargs);
 
 static size_t cpy(char *dst, size_t dstlen, const char *src, size_t srclen) {
-  if (dstlen == 0) return 0;
+  if (dstlen == 0) return srclen;
   size_t len = srclen < dstlen - 1 ? srclen : dstlen - 1;
   memcpy(dst, src, len); dst[len] = '\0';
-  return len;
+  return srclen;
 }
+
+#define REMAIN(n, len) ((n) >= (len) ? 0 : (len) - (n))
 
 static inline size_t uint_to_str(char *buf, size_t bufsize, uint64_t val) {
   if (bufsize == 0) return 0;
@@ -1461,11 +1463,12 @@ static void pop_stringify(void) {
 }
 
 static size_t add_indent(char *buf, size_t len, int level) {
+  size_t wanted = (size_t)(level * 2);
   size_t n = 0;
   for (int i = 0; i < level * 2 && n < len; i++) {
     buf[n++] = ' ';
   }
-  return n;
+  return wanted;
 }
 
 static inline jsoff_t get_prop_koff(struct js *js, jsoff_t prop) {
@@ -1588,22 +1591,22 @@ static size_t strarr(struct js *js, jsval_t obj, char *buf, size_t len) {
   size_t n = 0;
   
   if (class_name) {
-    n += cpy(buf + n, len - n, class_name, class_len);
-    n += (size_t) snprintf(buf + n, len - n, "(%u) ", (unsigned) length);
+    n += cpy(buf + n, REMAIN(n, len), class_name, class_len);
+    n += (size_t) snprintf(buf + n, REMAIN(n, len), "(%u) ", (unsigned) length);
   }
   
   if (length == 0) {
-    n += cpy(buf + n, len - n, "[]", 2);
+    n += cpy(buf + n, REMAIN(n, len), "[]", 2);
     pop_stringify();
     return n;
   }
   
-  n += cpy(buf + n, len - n, inline_mode ? "[ " : "[\n", 2);
+  n += cpy(buf + n, REMAIN(n, len), inline_mode ? "[ " : "[\n", 2);
   if (!inline_mode) stringify_indent++;
   
   for (jsoff_t i = 0; i < length; i++) {
-    if (i > 0) n += cpy(buf + n, len - n, inline_mode ? ", " : ",\n", 2);
-    if (!inline_mode) n += add_indent(buf + n, len - n, stringify_indent);
+    if (i > 0) n += cpy(buf + n, REMAIN(n, len), inline_mode ? ", " : ",\n", 2);
+    if (!inline_mode) n += add_indent(buf + n, REMAIN(n, len), stringify_indent);
     
     char idx[16];
     snprintf(idx, sizeof(idx), "%u", (unsigned) i);
@@ -1619,7 +1622,7 @@ static size_t strarr(struct js *js, jsval_t obj, char *buf, size_t len) {
         found = true; break;
       }
     }
-    n += found ? tostr(js, val, buf + n, len - n) : cpy(buf + n, len - n, "undefined", 9);
+    n += found ? tostr(js, val, buf + n, REMAIN(n, len)) : cpy(buf + n, REMAIN(n, len), "undefined", 9);
   }
   
   for (jsoff_t p = first; p < js->brk && p != 0; p = next_prop(loadoff(js, p))) {
@@ -1630,20 +1633,20 @@ static size_t strarr(struct js *js, jsval_t obj, char *buf, size_t len) {
     get_prop_key(js, p, &key, &klen);
     if (streq(key, klen, "length", 6) || is_array_index(key, klen)) continue;
     
-    n += cpy(buf + n, len - n, inline_mode ? ", " : ",\n", 2);
-    if (!inline_mode) n += add_indent(buf + n, len - n, stringify_indent);
-    n += cpy(buf + n, len - n, key, klen);
-    n += cpy(buf + n, len - n, ": ", 2);
-    n += tostr(js, get_prop_val(js, p), buf + n, len - n);
+    n += cpy(buf + n, REMAIN(n, len), inline_mode ? ", " : ",\n", 2);
+    if (!inline_mode) n += add_indent(buf + n, REMAIN(n, len), stringify_indent);
+    n += cpy(buf + n, REMAIN(n, len), key, klen);
+    n += cpy(buf + n, REMAIN(n, len), ": ", 2);
+    n += tostr(js, get_prop_val(js, p), buf + n, REMAIN(n, len));
   }
   
   if (!inline_mode) {
     stringify_indent--;
-    n += cpy(buf + n, len - n, "\n", 1);
-    n += add_indent(buf + n, len - n, stringify_indent);
+    n += cpy(buf + n, REMAIN(n, len), "\n", 1);
+    n += add_indent(buf + n, REMAIN(n, len), stringify_indent);
   }
   
-  n += cpy(buf + n, len - n, inline_mode ? " ]" : "]", inline_mode ? 2 : 1);
+  n += cpy(buf + n, REMAIN(n, len), inline_mode ? " ]" : "]", inline_mode ? 2 : 1);
   pop_stringify();
   return n;
 }
@@ -1669,7 +1672,7 @@ static size_t array_to_string(struct js *js, jsval_t obj, char *buf, size_t len)
   }
   
   for (jsoff_t i = 0; i < length; i++) {
-    if (i > 0) n += cpy(buf + n, len - n, ",", 1);
+    if (i > 0) n += cpy(buf + n, REMAIN(n, len), ",", 1);
     char idx[16];
     snprintf(idx, sizeof(idx), "%u", (unsigned) i);
     jsoff_t idxlen = (jsoff_t) strlen(idx);
@@ -1692,8 +1695,8 @@ static size_t array_to_string(struct js *js, jsval_t obj, char *buf, size_t len)
       uint8_t vt = vtype(val);
       if (vt == T_STR) {
         jsoff_t slen, soff = vstr(js, val, &slen);
-        n += cpy(buf + n, len - n, (const char *)&js->mem[soff], slen);
-      } else if (vt != T_UNDEF && vt != T_NULL) n += tostr(js, val, buf + n, len - n);
+        n += cpy(buf + n, REMAIN(n, len), (const char *)&js->mem[soff], slen);
+      } else if (vt != T_UNDEF && vt != T_NULL) n += tostr(js, val, buf + n, REMAIN(n, len));
     }
   }
   
@@ -1747,9 +1750,9 @@ static size_t strkey(struct js *js, jsval_t value, char *buf, size_t len) {
   const char *sym_desc = get_symbol_description_from_key(str, slen);
   if (sym_desc) {
     size_t n = 0;
-    n += cpy(buf + n, len - n, "[", 1);
-    n += cpy(buf + n, len - n, sym_desc, strlen(sym_desc));
-    n += cpy(buf + n, len - n, "]", 1);
+    n += cpy(buf + n, REMAIN(n, len), "[", 1);
+    n += cpy(buf + n, REMAIN(n, len), sym_desc, strlen(sym_desc));
+    n += cpy(buf + n, REMAIN(n, len), "]", 1);
     return n;
   }
   
@@ -1816,7 +1819,7 @@ static size_t strobj(struct js *js, jsval_t obj, char *buf, size_t len) {
   size_t n = 0;
   int self_ref = get_self_ref(obj);
   if (self_ref) {
-    n += (size_t) snprintf(buf + n, len - n, "<ref *%d> ", self_ref);
+    n += (size_t) snprintf(buf + n, REMAIN(n, len), "<ref *%d> ", self_ref);
   }
   
   const char *tostring_tag_key = get_toStringTag_sym_key();
@@ -1864,55 +1867,55 @@ static size_t strobj(struct js *js, jsval_t obj, char *buf, size_t len) {
         type_len = 10;
       }
       
-      n += cpy(buf + n, len - n, type_name, type_len);
-      n += (size_t) snprintf(buf + n, len - n, "(%zu) ", ta->length);
-      n += cpy(buf + n, len - n, "[ ", 2);
+      n += cpy(buf + n, REMAIN(n, len), type_name, type_len);
+      n += (size_t) snprintf(buf + n, REMAIN(n, len), "(%zu) ", ta->length);
+      n += cpy(buf + n, REMAIN(n, len), "[ ", 2);
       
       uint8_t *data = ta->buffer->data + ta->byte_offset;
       
       for (size_t i = 0; i < ta->length && i < 100; i++) {
-        if (i > 0) n += cpy(buf + n, len - n, ", ", 2);
+        if (i > 0) n += cpy(buf + n, REMAIN(n, len), ", ", 2);
         
         switch (ta->type) {
           case TYPED_ARRAY_INT8:
-            n += (size_t) snprintf(buf + n, len - n, "%d", (int)((int8_t*)data)[i]);
+            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%d", (int)((int8_t*)data)[i]);
             break;
           case TYPED_ARRAY_UINT8:
           case TYPED_ARRAY_UINT8_CLAMPED:
-            n += (size_t) snprintf(buf + n, len - n, "%u", (unsigned)data[i]);
+            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%u", (unsigned)data[i]);
             break;
           case TYPED_ARRAY_INT16:
-            n += (size_t) snprintf(buf + n, len - n, "%d", (int)((int16_t*)data)[i]);
+            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%d", (int)((int16_t*)data)[i]);
             break;
           case TYPED_ARRAY_UINT16:
-            n += (size_t) snprintf(buf + n, len - n, "%u", (unsigned)((uint16_t*)data)[i]);
+            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%u", (unsigned)((uint16_t*)data)[i]);
             break;
           case TYPED_ARRAY_INT32:
-            n += (size_t) snprintf(buf + n, len - n, "%d", ((int32_t*)data)[i]);
+            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%d", ((int32_t*)data)[i]);
             break;
           case TYPED_ARRAY_UINT32:
-            n += (size_t) snprintf(buf + n, len - n, "%u", ((uint32_t*)data)[i]);
+            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%u", ((uint32_t*)data)[i]);
             break;
           case TYPED_ARRAY_FLOAT32:
-            n += (size_t) snprintf(buf + n, len - n, "%g", (double)((float*)data)[i]);
+            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%g", (double)((float*)data)[i]);
             break;
           case TYPED_ARRAY_FLOAT64:
-            n += (size_t) snprintf(buf + n, len - n, "%g", ((double*)data)[i]);
+            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%g", ((double*)data)[i]);
             break;
           case TYPED_ARRAY_BIGINT64:
-            n += (size_t) snprintf(buf + n, len - n, "%lldn", (long long)((int64_t*)data)[i]);
+            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%lldn", (long long)((int64_t*)data)[i]);
             break;
           case TYPED_ARRAY_BIGUINT64:
-            n += (size_t) snprintf(buf + n, len - n, "%llun", (unsigned long long)((uint64_t*)data)[i]);
+            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%llun", (unsigned long long)((uint64_t*)data)[i]);
             break;
           default:
-            n += (size_t) snprintf(buf + n, len - n, "%u", (unsigned)data[i]);
+            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%u", (unsigned)data[i]);
             break;
         }
       }
       
-      if (ta->length > 100) n += cpy(buf + n, len - n, ", ...", 5);
-      n += cpy(buf + n, len - n, " ]", 2);
+      if (ta->length > 100) n += cpy(buf + n, REMAIN(n, len), ", ...", 5);
+      n += cpy(buf + n, REMAIN(n, len), " ]", 2);
       pop_stringify();
       return n;
     }
@@ -1924,21 +1927,21 @@ static size_t strobj(struct js *js, jsval_t obj, char *buf, size_t len) {
       ArrayBufferData *ab_data = (ArrayBufferData *)(uintptr_t)tod(buf_val);
       size_t bytelen = ab_data ? ab_data->length : 0;
       
-      n += cpy(buf + n, len - n, tag_str, tlen);
-      n += cpy(buf + n, len - n, " {\n", 3);
-      n += cpy(buf + n, len - n, "  [Uint8Contents]: <", 20);
+      n += cpy(buf + n, REMAIN(n, len), tag_str, tlen);
+      n += cpy(buf + n, REMAIN(n, len), " {\n", 3);
+      n += cpy(buf + n, REMAIN(n, len), "  [Uint8Contents]: <", 20);
       
       if (ab_data && ab_data->data && bytelen > 0) {
         for (size_t i = 0; i < bytelen; i++) {
-          if (i > 0) n += cpy(buf + n, len - n, " ", 1);
-          n += (size_t) snprintf(buf + n, len - n, "%02x", ab_data->data[i]);
+          if (i > 0) n += cpy(buf + n, REMAIN(n, len), " ", 1);
+          n += (size_t) snprintf(buf + n, REMAIN(n, len), "%02x", ab_data->data[i]);
         }
       }
       
-      n += cpy(buf + n, len - n, ">,\n", 3);
-      n += cpy(buf + n, len - n, "  [byteLength]: ", 16);
-      n += (size_t) snprintf(buf + n, len - n, "%zu", bytelen);
-      n += cpy(buf + n, len - n, "\n}", 2);
+      n += cpy(buf + n, REMAIN(n, len), ">,\n", 3);
+      n += cpy(buf + n, REMAIN(n, len), "  [byteLength]: ", 16);
+      n += (size_t) snprintf(buf + n, REMAIN(n, len), "%zu", bytelen);
+      n += cpy(buf + n, REMAIN(n, len), "\n}", 2);
       pop_stringify();
       return n;
     }
@@ -1950,27 +1953,27 @@ static size_t strobj(struct js *js, jsval_t obj, char *buf, size_t len) {
     if (js_type(dv_data_val) == JS_NUM) {
       DataViewData *dv = (DataViewData *)(uintptr_t)tod(dv_data_val);
       if (dv && dv->buffer) {
-        n += cpy(buf + n, len - n, "DataView {\n", 11);
-        n += cpy(buf + n, len - n, "  [byteLength]: ", 16);
-        n += (size_t) snprintf(buf + n, len - n, "%zu", dv->byte_length);
-        n += cpy(buf + n, len - n, ",\n", 2);
-        n += cpy(buf + n, len - n, "  [byteOffset]: ", 16);
-        n += (size_t) snprintf(buf + n, len - n, "%zu", dv->byte_offset);
-        n += cpy(buf + n, len - n, ",\n", 2);
-        n += cpy(buf + n, len - n, "  [buffer]: ArrayBuffer {\n", 26);
-        n += cpy(buf + n, len - n, "    [Uint8Contents]: <", 22);
+        n += cpy(buf + n, REMAIN(n, len), "DataView {\n", 11);
+        n += cpy(buf + n, REMAIN(n, len), "  [byteLength]: ", 16);
+        n += (size_t) snprintf(buf + n, REMAIN(n, len), "%zu", dv->byte_length);
+        n += cpy(buf + n, REMAIN(n, len), ",\n", 2);
+        n += cpy(buf + n, REMAIN(n, len), "  [byteOffset]: ", 16);
+        n += (size_t) snprintf(buf + n, REMAIN(n, len), "%zu", dv->byte_offset);
+        n += cpy(buf + n, REMAIN(n, len), ",\n", 2);
+        n += cpy(buf + n, REMAIN(n, len), "  [buffer]: ArrayBuffer {\n", 26);
+        n += cpy(buf + n, REMAIN(n, len), "    [Uint8Contents]: <", 22);
         
         if (dv->buffer->data && dv->buffer->length > 0) {
           for (size_t i = 0; i < dv->buffer->length; i++) {
-            if (i > 0) n += cpy(buf + n, len - n, " ", 1);
-            n += (size_t) snprintf(buf + n, len - n, "%02x", dv->buffer->data[i]);
+            if (i > 0) n += cpy(buf + n, REMAIN(n, len), " ", 1);
+            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%02x", dv->buffer->data[i]);
           }
         }
         
-        n += cpy(buf + n, len - n, ">,\n", 3);
-        n += cpy(buf + n, len - n, "    [byteLength]: ", 18);
-        n += (size_t) snprintf(buf + n, len - n, "%zu", dv->buffer->length);
-        n += cpy(buf + n, len - n, "\n  }\n}", 6);
+        n += cpy(buf + n, REMAIN(n, len), ">,\n", 3);
+        n += cpy(buf + n, REMAIN(n, len), "    [byteLength]: ", 18);
+        n += (size_t) snprintf(buf + n, REMAIN(n, len), "%zu", dv->buffer->length);
+        n += cpy(buf + n, REMAIN(n, len), "\n  }\n}", 6);
         pop_stringify();
         return n;
       }
@@ -1982,38 +1985,38 @@ static size_t strobj(struct js *js, jsval_t obj, char *buf, size_t len) {
     if (vtype(map_val) == T_UNDEF) goto print_tagged_object;
     
     map_entry_t **map_ptr = (map_entry_t**)(size_t)tod(map_val);
-    n += cpy(buf + n, len - n, "Map(", 4);
+    n += cpy(buf + n, REMAIN(n, len), "Map(", 4);
     
     unsigned int count = 0;
     if (map_ptr && *map_ptr) count = HASH_COUNT(*map_ptr);
-    n += (size_t) snprintf(buf + n, len - n, "%u", count);
-    n += cpy(buf + n, len - n, ") ", 2);
+    n += (size_t) snprintf(buf + n, REMAIN(n, len), "%u", count);
+    n += cpy(buf + n, REMAIN(n, len), ") ", 2);
     
     if (count == 0) {
-      n += cpy(buf + n, len - n, "{}", 2);
+      n += cpy(buf + n, REMAIN(n, len), "{}", 2);
     } else {
-      n += cpy(buf + n, len - n, "{\n", 2);
+      n += cpy(buf + n, REMAIN(n, len), "{\n", 2);
       stringify_indent++;
       bool first = true;
       if (map_ptr && *map_ptr) {
         map_entry_t *entry, *tmp;
         HASH_ITER(hh, *map_ptr, entry, tmp) {
-          if (!first) n += cpy(buf + n, len - n, ",\n", 2);
+          if (!first) n += cpy(buf + n, REMAIN(n, len), ",\n", 2);
           first = false;
-          n += add_indent(buf + n, len - n, stringify_indent);
+          n += add_indent(buf + n, REMAIN(n, len), stringify_indent);
           
           size_t key_len = strlen(entry->key);
-          n += cpy(buf + n, len - n, "'", 1);
-          n += cpy(buf + n, len - n, entry->key, key_len);
-          n += cpy(buf + n, len - n, "'", 1);
-          n += cpy(buf + n, len - n, " => ", 4);
-          n += tostr(js, entry->value, buf + n, len - n);
+          n += cpy(buf + n, REMAIN(n, len), "'", 1);
+          n += cpy(buf + n, REMAIN(n, len), entry->key, key_len);
+          n += cpy(buf + n, REMAIN(n, len), "'", 1);
+          n += cpy(buf + n, REMAIN(n, len), " => ", 4);
+          n += tostr(js, entry->value, buf + n, REMAIN(n, len));
         }
       }
       stringify_indent--;
-      n += cpy(buf + n, len - n, "\n", 1);
-      n += add_indent(buf + n, len - n, stringify_indent);
-      n += cpy(buf + n, len - n, "}", 1);
+      n += cpy(buf + n, REMAIN(n, len), "\n", 1);
+      n += add_indent(buf + n, REMAIN(n, len), stringify_indent);
+      n += cpy(buf + n, REMAIN(n, len), "}", 1);
     }
     pop_stringify();
     return n;
@@ -2024,41 +2027,41 @@ static size_t strobj(struct js *js, jsval_t obj, char *buf, size_t len) {
     if (vtype(set_val) == T_UNDEF) goto print_tagged_object;
     
     set_entry_t **set_ptr = (set_entry_t**)(size_t)tod(set_val);
-    n += cpy(buf + n, len - n, "Set(", 4);
+    n += cpy(buf + n, REMAIN(n, len), "Set(", 4);
     
     unsigned int count = 0;
     if (set_ptr && *set_ptr) count = HASH_COUNT(*set_ptr);
-    n += (size_t) snprintf(buf + n, len - n, "%u", count);
-    n += cpy(buf + n, len - n, ") ", 2);
+    n += (size_t) snprintf(buf + n, REMAIN(n, len), "%u", count);
+    n += cpy(buf + n, REMAIN(n, len), ") ", 2);
     
     if (count == 0) {
-      n += cpy(buf + n, len - n, "{}", 2);
+      n += cpy(buf + n, REMAIN(n, len), "{}", 2);
     } else {
-      n += cpy(buf + n, len - n, "{\n", 2);
+      n += cpy(buf + n, REMAIN(n, len), "{\n", 2);
       stringify_indent++;
       bool first = true;
       if (set_ptr && *set_ptr) {
         set_entry_t *entry, *tmp;
         HASH_ITER(hh, *set_ptr, entry, tmp) {
-          if (!first) n += cpy(buf + n, len - n, ",\n", 2);
+          if (!first) n += cpy(buf + n, REMAIN(n, len), ",\n", 2);
           first = false;
-          n += add_indent(buf + n, len - n, stringify_indent);
-          n += tostr(js, entry->value, buf + n, len - n);
+          n += add_indent(buf + n, REMAIN(n, len), stringify_indent);
+          n += tostr(js, entry->value, buf + n, REMAIN(n, len));
         }
       }
       stringify_indent--;
-      n += cpy(buf + n, len - n, "\n", 1);
-      n += add_indent(buf + n, len - n, stringify_indent);
-      n += cpy(buf + n, len - n, "}", 1);
+      n += cpy(buf + n, REMAIN(n, len), "\n", 1);
+      n += add_indent(buf + n, REMAIN(n, len), stringify_indent);
+      n += cpy(buf + n, REMAIN(n, len), "}", 1);
     }
     pop_stringify();
     return n;
   }
   
 print_tagged_object:
-  n += cpy(buf + n, len - n, "Object [", 8);
-  n += cpy(buf + n, len - n, (const char *) &js->mem[toff], tlen);
-  n += cpy(buf + n, len - n, "] {\n", 4);
+  n += cpy(buf + n, REMAIN(n, len), "Object [", 8);
+  n += cpy(buf + n, REMAIN(n, len), (const char *) &js->mem[toff], tlen);
+  n += cpy(buf + n, REMAIN(n, len), "] {\n", 4);
   goto continue_object_print;
   
 print_plain_object:
@@ -2085,31 +2088,31 @@ print_plain_object:
   
   if (prop_count == 0) {
     if (is_null_proto) {
-      n += cpy(buf + n, len - n, "[Object: null prototype] {}", 27);
+      n += cpy(buf + n, REMAIN(n, len), "[Object: null prototype] {}", 27);
     } else if (class_name && class_name_len > 0) {
-      n += cpy(buf + n, len - n, class_name, class_name_len);
+      n += cpy(buf + n, REMAIN(n, len), class_name, class_name_len);
       if (proto_is_null_proto) {
-        n += cpy(buf + n, len - n, " <[Object: null prototype] {}> {}", 33);
-      } else n += cpy(buf + n, len - n, " {}", 3);
+        n += cpy(buf + n, REMAIN(n, len), " <[Object: null prototype] {}> {}", 33);
+      } else n += cpy(buf + n, REMAIN(n, len), " {}", 3);
     } else if (proto_is_null_proto) {
-      n += cpy(buf + n, len - n, "<[Object: null prototype] {}> {}", 32);
-    } else n += cpy(buf + n, len - n, "{}", 2);
+      n += cpy(buf + n, REMAIN(n, len), "<[Object: null prototype] {}> {}", 32);
+    } else n += cpy(buf + n, REMAIN(n, len), "{}", 2);
     pop_stringify();
     return n;
   }
   
   if (is_null_proto) {
-    n += cpy(buf + n, len - n, "[Object: null prototype] ", 25);
+    n += cpy(buf + n, REMAIN(n, len), "[Object: null prototype] ", 25);
   } else if (class_name && class_name_len > 0) {
-    n += cpy(buf + n, len - n, class_name, class_name_len);
+    n += cpy(buf + n, REMAIN(n, len), class_name, class_name_len);
     if (proto_is_null_proto) {
-      n += cpy(buf + n, len - n, " <[Object: null prototype] {}> ", 31);
-    } else n += cpy(buf + n, len - n, " ", 1);
+      n += cpy(buf + n, REMAIN(n, len), " <[Object: null prototype] {}> ", 31);
+    } else n += cpy(buf + n, REMAIN(n, len), " ", 1);
   } else if (proto_is_null_proto) {
-    n += cpy(buf + n, len - n, "<[Object: null prototype] {}> ", 30);
+    n += cpy(buf + n, REMAIN(n, len), "<[Object: null prototype] {}> ", 30);
   }
   
-  n += cpy(buf + n, len - n, inline_mode ? "{ " : "{\n", 2);
+  n += cpy(buf + n, REMAIN(n, len), inline_mode ? "{ " : "{\n", 2);
   
 continue_object_print:;
   
@@ -2156,9 +2159,9 @@ continue_object_print:;
     const char *key = (char *) &js->mem[koff + sizeof(koff)];
     jsval_t val = loadval(js, prop + (jsoff_t) (sizeof(prop) + sizeof(koff)));
     
-    if (!first) n += cpy(buf + n, len - n, inline_mode ? ", " : ",\n", 2);
+    if (!first) n += cpy(buf + n, REMAIN(n, len), inline_mode ? ", " : ",\n", 2);
     first = false;
-    if (!inline_mode) n += add_indent(buf + n, len - n, stringify_indent);
+    if (!inline_mode) n += add_indent(buf + n, REMAIN(n, len), stringify_indent);
     
     bool is_special_global = false;
     if (vtype(val) == T_UNDEF && streq(key, klen, "undefined", 9)) {
@@ -2171,11 +2174,11 @@ continue_object_print:;
     }
     
     if (is_special_global) {
-      n += tostr(js, val, buf + n, len - n);
+      n += tostr(js, val, buf + n, REMAIN(n, len));
     } else {
-      n += strkey(js, mkval(T_STR, koff), buf + n, len - n);
-      n += cpy(buf + n, len - n, ": ", 2);
-      n += tostr(js, val, buf + n, len - n);
+      n += strkey(js, mkval(T_STR, koff), buf + n, REMAIN(n, len));
+      n += cpy(buf + n, REMAIN(n, len), ": ", 2);
+      n += tostr(js, val, buf + n, REMAIN(n, len));
     }
   }
   free(prop_offsets);
@@ -2186,26 +2189,26 @@ continue_object_print:;
     if (!desc->enumerable) continue;
     if (!desc->has_getter && !desc->has_setter) continue;
     
-    if (!first) n += cpy(buf + n, len - n, inline_mode ? ", " : ",\n", 2);
+    if (!first) n += cpy(buf + n, REMAIN(n, len), inline_mode ? ", " : ",\n", 2);
     first = false;
-    if (!inline_mode) n += add_indent(buf + n, len - n, stringify_indent);
-    n += cpy(buf + n, len - n, desc->prop_name, desc->prop_len);
-    n += cpy(buf + n, len - n, ": ", 2);
+    if (!inline_mode) n += add_indent(buf + n, REMAIN(n, len), stringify_indent);
+    n += cpy(buf + n, REMAIN(n, len), desc->prop_name, desc->prop_len);
+    n += cpy(buf + n, REMAIN(n, len), ": ", 2);
     
     if (desc->has_getter && desc->has_setter) {
-      n += cpy(buf + n, len - n, "[Getter/Setter]", 15);
+      n += cpy(buf + n, REMAIN(n, len), "[Getter/Setter]", 15);
     } else if (desc->has_getter) {
-      n += cpy(buf + n, len - n, "[Getter]", 8);
-    } else n += cpy(buf + n, len - n, "[Setter]", 8);
+      n += cpy(buf + n, REMAIN(n, len), "[Getter]", 8);
+    } else n += cpy(buf + n, REMAIN(n, len), "[Setter]", 8);
   }
   
   if (!inline_mode) stringify_indent--;
   if (inline_mode) {
-    n += cpy(buf + n, len - n, " }", 2);
+    n += cpy(buf + n, REMAIN(n, len), " }", 2);
   } else {
-    if (!first) n += cpy(buf + n, len - n, "\n", 1);
-    n += add_indent(buf + n, len - n, stringify_indent);
-    n += cpy(buf + n, len - n, "}", 1);
+    if (!first) n += cpy(buf + n, REMAIN(n, len), "\n", 1);
+    n += add_indent(buf + n, REMAIN(n, len), stringify_indent);
+    n += cpy(buf + n, REMAIN(n, len), "}", 1);
   }
   pop_stringify();
   return n;
@@ -2246,21 +2249,24 @@ static size_t strnum(jsval_t value, char *buf, size_t len) {
   double iv;
   double frac = modf(adv, &iv);
   if (frac == 0.0 && adv < 9007199254740992.0) {
-    return (size_t) snprintf(buf, len, "%.0f", dv);
+    int result = snprintf(temp, sizeof(temp), "%.0f", dv);
+    fix_exponent(temp, (size_t)result);
+    return cpy(buf, len, temp, strlen(temp));
   }
   
   for (int prec = 1; prec <= 17; prec++) {
     int n = snprintf(temp, sizeof(temp), "%.*g", prec, dv);
     double parsed = strtod(temp, NULL);
     if (parsed == dv) {
-      size_t result = (size_t)snprintf(buf, len, "%s", temp);
-      return fix_exponent(buf, result);
+      fix_exponent(temp, (size_t)n);
+      return cpy(buf, len, temp, strlen(temp));
     }
     (void)n;
   }
   
-  size_t result = (size_t)snprintf(buf, len, "%.17g", dv);
-  return fix_exponent(buf, result);
+  int result = snprintf(temp, sizeof(temp), "%.17g", dv);
+  fix_exponent(temp, (size_t)result);
+  return cpy(buf, len, temp, strlen(temp));
 }
 
 static jsoff_t vstr(struct js *js, jsval_t value, jsoff_t *len) {
@@ -2273,17 +2279,17 @@ static size_t strstring(struct js *js, jsval_t value, char *buf, size_t len) {
   jsoff_t slen, off = vstr(js, value, &slen);
   const char *str = (const char *) &js->mem[off];
   size_t n = 0;
-  n += cpy(buf + n, len - n, "'", 1);
+  n += cpy(buf + n, REMAIN(n, len), "'", 1);
   for (jsoff_t i = 0; i < slen && n < len - 1; i++) {
     char c = str[i];
-    if (c == '\n') { n += cpy(buf + n, len - n, "\\n", 2); }
-    else if (c == '\r') { n += cpy(buf + n, len - n, "\\r", 2); }
-    else if (c == '\t') { n += cpy(buf + n, len - n, "\\t", 2); }
-    else if (c == '\\') { n += cpy(buf + n, len - n, "\\\\", 2); }
-    else if (c == '\'') { n += cpy(buf + n, len - n, "\\'", 2); }
+    if (c == '\n') { n += cpy(buf + n, REMAIN(n, len), "\\n", 2); }
+    else if (c == '\r') { n += cpy(buf + n, REMAIN(n, len), "\\r", 2); }
+    else if (c == '\t') { n += cpy(buf + n, REMAIN(n, len), "\\t", 2); }
+    else if (c == '\\') { n += cpy(buf + n, REMAIN(n, len), "\\\\", 2); }
+    else if (c == '\'') { n += cpy(buf + n, REMAIN(n, len), "\\'", 2); }
     else { if (n < len) buf[n++] = c; }
   }
-  n += cpy(buf + n, len - n, "'", 1);
+  n += cpy(buf + n, REMAIN(n, len), "'", 1);
   
   return n;
 }
@@ -2347,8 +2353,8 @@ static size_t strfunc(struct js *js, jsval_t value, char *buf, size_t len) {
   if (vtype(builtin_slot) == T_NUM) {
     if (name && name_len > 0) {
       size_t n = cpy(buf, len, fmt->prefix, fmt->prefix_len);
-      n += cpy(buf + n, len - n, name, name_len);
-      n += cpy(buf + n, len - n, "]", 1);
+      n += cpy(buf + n, REMAIN(n, len), name, name_len);
+      n += cpy(buf + n, REMAIN(n, len), "]", 1);
       return n;
     }
     return cpy(buf, len, fmt->anon, fmt->anon_len);
@@ -2361,8 +2367,8 @@ static size_t strfunc(struct js *js, jsval_t value, char *buf, size_t len) {
     
     if (name && name_len > 0) {
       n = cpy(buf, len, fmt->prefix, fmt->prefix_len);
-      n += cpy(buf + n, len - n, name, name_len);
-      n += cpy(buf + n, len - n, "]", 1);
+      n += cpy(buf + n, REMAIN(n, len), name, name_len);
+      n += cpy(buf + n, REMAIN(n, len), "]", 1);
     } else {
       n = cpy(buf, len, fmt->anon, fmt->anon_len);
     }
@@ -2383,16 +2389,16 @@ static size_t strfunc(struct js *js, jsval_t value, char *buf, size_t len) {
     jsoff_t ctor_name_len = 0;
     const char *ctor_name = get_func_name(js, ctor, &ctor_name_len);
     if (ctor_name && ctor_name_len > 0) {
-      n += cpy(buf + n, len - n, " ", 1);
-      n += cpy(buf + n, len - n, ctor_name, ctor_name_len);
+      n += cpy(buf + n, REMAIN(n, len), " ", 1);
+      n += cpy(buf + n, REMAIN(n, len), ctor_name, ctor_name_len);
     }
     return n;
   }
   
   if (name && name_len > 0) {
     size_t n = cpy(buf, len, fmt->prefix, fmt->prefix_len);
-    n += cpy(buf + n, len - n, name, name_len);
-    n += cpy(buf + n, len - n, "]", 1);
+    n += cpy(buf + n, REMAIN(n, len), name, name_len);
+    n += cpy(buf + n, REMAIN(n, len), "]", 1);
     return n;
   }
   
@@ -2408,6 +2414,20 @@ static void get_line_col(const char *code, jsoff_t pos, int *line, int *col) {
 }
 
 static void get_error_line(const char *code, jsoff_t clen, jsoff_t pos, char *buf, size_t bufsize, int *line_start_col) {
+  if (!code || bufsize == 0) {
+    if (bufsize > 0) buf[0] = '\0';
+    if (line_start_col) *line_start_col = 1;
+    return;
+  }
+
+  if (pos > clen) pos = clen;
+
+  if (clen == 0) {
+    buf[0] = '\0';
+    if (line_start_col) *line_start_col = 1;
+    return;
+  }
+
   jsoff_t line_start = pos;
   while (line_start > 0 && code[line_start - 1] != '\n') {
     line_start--;
@@ -3110,8 +3130,8 @@ static size_t strbigint(struct js *js, jsval_t value, char *buf, size_t len) {
   size_t dlen;
   const char *digits = bigint_digits(js, value, &dlen);
   size_t n = 0;
-  if (neg) n += cpy(buf + n, len - n, "-", 1);
-  n += cpy(buf + n, len - n, digits, dlen);
+  if (neg) n += cpy(buf + n, REMAIN(n, len), "-", 1);
+  n += cpy(buf + n, REMAIN(n, len), digits, dlen);
   return n;
 }
 
