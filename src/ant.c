@@ -22747,7 +22747,9 @@ struct js *js_create_dynamic(size_t initial_size, size_t max_size) {
 
 void js_destroy(struct js *js) {
   if (js == NULL) return;
+  
   esm_cleanup_module_cache();
+  code_arena_reset();
   
   if (js->errmsg) {
     free(js->errmsg);

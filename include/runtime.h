@@ -17,13 +17,6 @@ struct ant_runtime {
   const char *ls_fp;
 };
 
-typedef struct code_block {
-  struct code_block *next;
-  size_t used;
-  size_t capacity;
-  char data[];
-} code_block_t;
-
 extern struct ant_runtime *const rt;
 struct ant_runtime *ant_runtime_init(struct js *js, int argc, char **argv, struct arg_file *ls_p);
 
