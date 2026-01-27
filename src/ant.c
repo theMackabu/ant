@@ -54,6 +54,8 @@
 #define CORO_MALLOC(size) calloc(1, size)
 #define CORO_FREE(ptr) free(ptr)
 
+#define D(x) ((double)(x))
+
 _Static_assert(sizeof(double) == 8, "NaN-boxing requires 64-bit IEEE 754 doubles");
 _Static_assert(sizeof(uint64_t) == 8, "NaN-boxing requires 64-bit integers");
 _Static_assert(sizeof(double) == sizeof(uint64_t), "double and uint64_t must have same size");
@@ -5651,7 +5653,7 @@ static jsval_t resolveprop(struct js *js, jsval_t v) {
     
     if (is_arr_off(js, obj_off) && streq(key_str, len, "length", 6)) {
       jsval_t arr = mkval(T_ARR, obj_off);
-      return tov(arr_length(js, arr));
+      return tov(D(arr_length(js, arr)));
     }
     
     jsval_t obj = mkval(T_OBJ, obj_off);
@@ -5910,7 +5912,7 @@ static jsval_t do_bracket_op(struct js *js, jsval_t l, jsval_t r) {
   }
   if (streq(keystr, keylen, "length", 6)) {
     if (vtype(obj) == T_STR) {
-      return tov(offtolen(loadoff(js, (jsoff_t) vdata(obj))));
+      return tov(D(offtolen(loadoff(js, (jsoff_t) vdata(obj)))));
     }
     if (vtype(obj) == T_ARR) {
       jsoff_t len_off = lkp(js, obj, "length", 6);
@@ -5918,7 +5920,7 @@ static jsval_t do_bracket_op(struct js *js, jsval_t l, jsval_t r) {
         return mkval(T_PROP, len_off);
       }
       jsval_t key = js_mkstr(js, "length", 6);
-      jsval_t len_val = tov(arr_length(js, obj));
+      jsval_t len_val = tov(D(arr_length(js, obj)));
       jsval_t prop = setprop(js, obj, key, len_val);
       return prop;
     }
@@ -6035,7 +6037,7 @@ static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
   uint8_t t = vtype(l);
   
   if (t == T_STR && streq(ptr, plen, "length", 6)) {
-    return tov(offtolen(loadoff(js, (jsoff_t) vdata(l))));
+    return tov(D(offtolen(loadoff(js, (jsoff_t) vdata(l)))));
   }
   
   if (t == T_ARR && streq(ptr, plen, "length", 6)) {
@@ -7159,7 +7161,7 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
       push_call_frame(
         js->filename,
         final_name, 
-        code, pos
+        code, (uint32_t) pos
       );
       
       jsval_t saved_func = js->current_func;
@@ -13497,7 +13499,7 @@ static jsval_t builtin_regexp_exec(struct js *js, jsval_t *args, int nargs) {
       jsval_t li_val = resolveprop(js, mkval(T_PROP, lastindex_off));
       if (vtype(li_val) == T_NUM) {
         double li = tod(li_val);
-        if (li >= 0 && li <= str_len) start_offset = (PCRE2_SIZE)li;
+        if (li >= 0 && li <= D(str_len)) start_offset = (PCRE2_SIZE)li;
       }
     }
   }
@@ -15682,21 +15684,22 @@ static jsval_t builtin_array_slice(struct js *js, jsval_t *args, int nargs) {
   }
   
   jsoff_t start = 0, end = len;
+  double dlen = D(len);
   if (nargs >= 1 && vtype(args[0]) == T_NUM) {
     double d = tod(args[0]);
     if (d < 0) {
-      start = (jsoff_t) (d + len < 0 ? 0 : d + len);
+      start = (jsoff_t) (d + dlen < 0 ? 0 : d + dlen);
     } else {
-      start = (jsoff_t) (d > len ? len : d);
+      start = (jsoff_t) (d > dlen ? dlen : d);
     }
   }
   
   if (nargs >= 2 && vtype(args[1]) == T_NUM) {
     double d = tod(args[1]);
     if (d < 0) {
-      end = (jsoff_t) (d + len < 0 ? 0 : d + len);
+      end = (jsoff_t) (d + dlen < 0 ? 0 : d + dlen);
     } else {
-      end = (jsoff_t) (d > len ? len : d);
+      end = (jsoff_t) (d > dlen ? dlen : d);
     }
   }
   
@@ -17416,21 +17419,22 @@ static jsval_t builtin_string_indexOf(struct js *js, jsval_t *args, int nargs) {
   jsoff_t search_len, search_off = vstr(js, search, &search_len);
   
   jsoff_t start = 0;
+  double dstr_len = D(str_len);
   if (nargs >= 2 && vtype(args[1]) == T_NUM) {
     double pos = tod(args[1]);
     if (pos < 0) pos = 0;
-    if (pos > str_len) pos = str_len;
+    if (pos > dstr_len) pos = dstr_len;
     start = (jsoff_t) pos;
   }
   
-  if (search_len == 0) return tov((double) start);
+  if (search_len == 0) return tov(D(start));
   if (start + search_len > str_len) return tov(-1);
 
   const char *str_ptr = (char *) &js->mem[str_off];
   const char *search_ptr = (char *) &js->mem[search_off];
 
   for (jsoff_t i = start; i <= str_len - search_len; i++) {
-    if (memcmp(str_ptr + i, search_ptr, search_len) == 0) return tov((double) i);
+    if (memcmp(str_ptr + i, search_ptr, search_len) == 0) return tov(D(i));
   }
   return tov(-1);
 }
@@ -17441,15 +17445,16 @@ static jsval_t builtin_string_substring(struct js *js, jsval_t *args, int nargs)
   jsoff_t str_len, str_off = vstr(js, str, &str_len);
   const char *str_ptr = (char *) &js->mem[str_off];
   jsoff_t start = 0, end = str_len;
+  double dstr_len2 = D(str_len);
   
   if (nargs >= 1 && vtype(args[0]) == T_NUM) {
     double d = tod(args[0]);
-    start = (jsoff_t) (d < 0 ? 0 : (d > str_len ? str_len : d));
+    start = (jsoff_t) (d < 0 ? 0 : (d > dstr_len2 ? dstr_len2 : d));
   }
   
   if (nargs >= 2 && vtype(args[1]) == T_NUM) {
     double d = tod(args[1]);
-    end = (jsoff_t) (d < 0 ? 0 : (d > str_len ? str_len : d));
+    end = (jsoff_t) (d < 0 ? 0 : (d > dstr_len2 ? dstr_len2 : d));
   }
   
   if (start > end) {
@@ -17712,21 +17717,22 @@ static jsval_t builtin_string_slice(struct js *js, jsval_t *args, int nargs) {
   jsoff_t str_len, str_off = vstr(js, str, &str_len);
   const char *str_ptr = (char *) &js->mem[str_off];
   jsoff_t start = 0, end = str_len;
+  double dstr_len = D(str_len);
   
   if (nargs >= 1 && vtype(args[0]) == T_NUM) {
     double d = tod(args[0]);
     if (d < 0) {
-      start = (jsoff_t) (d + str_len < 0 ? 0 : d + str_len);
+      start = (jsoff_t) (d + dstr_len < 0 ? 0 : d + dstr_len);
     } else {
-      start = (jsoff_t) (d > str_len ? str_len : d);
+      start = (jsoff_t) (d > dstr_len ? dstr_len : d);
     }
   }
   if (nargs >= 2 && vtype(args[1]) == T_NUM) {
     double d = tod(args[1]);
     if (d < 0) {
-      end = (jsoff_t) (d + str_len < 0 ? 0 : d + str_len);
+      end = (jsoff_t) (d + dstr_len < 0 ? 0 : d + dstr_len);
     } else {
-      end = (jsoff_t) (d > str_len ? str_len : d);
+      end = (jsoff_t) (d > dstr_len ? dstr_len : d);
     }
   }
   
@@ -17751,7 +17757,7 @@ static jsval_t builtin_string_includes(struct js *js, jsval_t *args, int nargs) 
   if (nargs >= 2) {
     double pos = tod(args[1]);
     if (isnan(pos) || pos < 0) pos = 0;
-    if (pos > str_len) return mkval(T_BOOL, 0);
+    if (pos > D(str_len)) return mkval(T_BOOL, 0);
     start = (jsoff_t) pos;
   }
   
@@ -18745,11 +18751,12 @@ static jsval_t builtin_string_lastIndexOf(struct js *js, jsval_t *args, int narg
   jsoff_t search_len, search_off = vstr(js, search, &search_len);
   
   jsoff_t max_start = str_len;
+  double dstr_len = D(str_len);
   if (nargs >= 2 && vtype(args[1]) == T_NUM) {
     double pos = tod(args[1]);
-    if (isnan(pos)) pos = (double) str_len;
+    if (isnan(pos)) pos = dstr_len;
     if (pos < 0) pos = 0;
-    if (pos > str_len) pos = str_len;
+    if (pos > dstr_len) pos = dstr_len;
     max_start = (jsoff_t) pos;
   }
   
