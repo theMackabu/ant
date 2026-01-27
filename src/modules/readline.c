@@ -297,10 +297,10 @@ static void refresh_line(rl_interface_t *iface) {
 
   int prompt_len = (int)strlen(iface->prompt);
   int end_cols = prompt_len + iface->line_len;
-  int end_row = end_cols > 0 ? (end_cols - 1) / cols : 0;
+  int end_row = end_cols > 0 ? end_cols / cols : 0;
   int cursor_cols = prompt_len + iface->line_pos;
-  int cursor_row = cursor_cols > 0 ? (cursor_cols - 1) / cols : 0;
-  int cursor_col = cursor_cols > 0 ? (cursor_cols - 1) % cols : 0;
+  int cursor_row = cursor_cols > 0 ? cursor_cols / cols : 0;
+  int cursor_col = cursor_cols > 0 ? cursor_cols % cols : 0;
   int up_rows = end_row - cursor_row;
 
   if (up_rows > 0) {
@@ -315,7 +315,7 @@ static void refresh_line(rl_interface_t *iface) {
     write_output(iface, move_buf);
   }
 
-  iface->last_render_rows = end_cols > 0 ? (end_cols - 1) / cols + 1 : 1;
+  iface->last_render_rows = end_cols > 0 ? end_cols / cols + 1 : 1;
 }
 
 static rl_interface_t *find_interface_by_id(uint64_t id) {
@@ -1120,7 +1120,7 @@ static jsval_t rl_create_interface(struct js *js, jsval_t *args, int nargs) {
   iface->completer = (vtype(completer_val) == T_FUNC) ? completer_val : js_mkundef();
   
   jsval_t history_val = js_get(js, options, "history");
-  if (vtype(history_val) == T_OBJ) {
+  if (is_special_object(history_val)) {
     jsval_t len_val = js_get(js, history_val, "length");
     int len = (vtype(len_val) == T_NUM) ? (int)js_getnum(len_val) : 0;
     

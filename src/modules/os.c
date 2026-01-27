@@ -523,7 +523,7 @@ static jsval_t os_networkInterfaces(struct js *js, jsval_t *args, int nargs) {
   
   for (pCurrAddresses = pAddresses; pCurrAddresses; pCurrAddresses = pCurrAddresses->Next) {
     jsval_t iface_arr = js_get(js, result, pCurrAddresses->AdapterName);
-    if (vtype(iface_arr) != T_OBJ) {
+    if (!is_special_object(iface_arr)) {
       iface_arr = js_mkarr(js);
       js_set(js, result, pCurrAddresses->AdapterName, iface_arr);
     }
@@ -701,7 +701,7 @@ static void apply_mac_to_iface(struct js *js, jsval_t result, const char *name, 
   format_mac_address(mac_str, sizeof(mac_str), mac_bytes);
   
   jsval_t iface_arr = js_get(js, result, name);
-  if (vtype(iface_arr) != T_OBJ) return;
+  if (!is_special_object(iface_arr)) return;
   
   jsval_t len_val = js_get(js, iface_arr, "length");
   int len = (vtype(len_val) == T_NUM) ? (int)js_getnum(len_val) : 0;
@@ -729,7 +729,7 @@ static jsval_t os_networkInterfaces(struct js *js, jsval_t *args, int nargs) {
     if (family != AF_INET && family != AF_INET6) continue;
     
     jsval_t iface_arr = js_get(js, result, ifa->ifa_name);
-    if (vtype(iface_arr) != T_OBJ) {
+    if (!is_special_object(iface_arr)) {
       iface_arr = js_mkarr(js);
       js_set(js, result, ifa->ifa_name, iface_arr);
     }

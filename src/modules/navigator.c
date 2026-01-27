@@ -169,8 +169,9 @@ static void execute_lock_callback(struct js *js, const char *name, lock_mode_t m
   
   if (vtype(result) == T_PROMISE) {
     jsval_t then_fn = js_get(js, result, "then");
+    int fn_type = vtype(then_fn);
     
-    if (vtype(then_fn) == T_FUNC) {
+    if (fn_type == T_FUNC || fn_type == T_CFUNC) {
       jsval_t name_str = js_mkstr(js, name, strlen(name));
       
       jsval_t on_resolve = js_mkfun(lock_then_handler);
@@ -272,7 +273,8 @@ static jsval_t locks_request(struct js *js, jsval_t *args, int nargs) {
     
     if (vtype(result) == T_PROMISE) {
       jsval_t then_fn = js_get(js, result, "then");
-      if (vtype(then_fn) == T_FUNC) {
+      int fn_type = vtype(then_fn);
+      if (fn_type == T_FUNC || fn_type == T_CFUNC) {
         jsval_t on_resolve = js_mkfun(lock_then_handler);
         js_set(js, on_resolve, "_lockName", js_mkstr(js, "", 0));
         js_set(js, on_resolve, "_outerPromise", promise);

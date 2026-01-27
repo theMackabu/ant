@@ -421,8 +421,7 @@ static jsval_t js_typedarray_constructor(struct js *js, jsval_t *args, int nargs
     return create_typed_array_with_buffer(js, type, buffer, byte_offset, length, type_name, args[0]);
   }
   
-  int arg_type = vtype(args[0]);
-  if (arg_type == T_OBJ) {
+  if (is_special_object(args[0])) {
     jsval_t len_val = js_get(js, args[0], "length");
     size_t length = 0; jsval_t *values = NULL;
     bool is_iterable = false;
