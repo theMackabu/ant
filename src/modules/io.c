@@ -524,7 +524,7 @@ static void inspect_mark_visited(inspect_visited_t *v, jsoff_t off) {
 }
 
 static void inspect_value(struct js *js, jsval_t val, FILE *stream, int depth, inspect_visited_t *visited) {
-  int t = js_type(val);
+  int t = vtype(val);
   
   if (t == T_UNDEF) { fprintf(stream, "undefined"); return; }
   if (t == T_NULL)  { fprintf(stream, "null"); return; }
@@ -551,11 +551,16 @@ static void inspect_value(struct js *js, jsval_t val, FILE *stream, int depth, i
     return;
   }
   
+  if (t == T_CFUNC) {
+    fprintf(stream, "<native function 0x%" PRIx64 ">", (uint64_t)vdata(val));
+    return;
+  }
+  
   fprintf(stream, "<%s rawtype=%d data=%" PRIu64 ">", get_type_name(t), vtype(val), (uint64_t)vdata(val));
 }
 
 static void inspect_object_full(struct js *js, jsval_t obj, FILE *stream, int depth, inspect_visited_t *visited) {
-  int type = js_type(obj);
+  int type = vtype(obj);
   jsoff_t obj_off = (jsoff_t)vdata(obj);
   
   if (inspect_was_visited(visited, obj_off)) {
@@ -564,7 +569,7 @@ static void inspect_object_full(struct js *js, jsval_t obj, FILE *stream, int de
   }
   
   inspect_mark_visited(visited, obj_off);
-  fprintf(stream, "<%s @%llu> {\n", type == JS_FUNC ? "Function" : (type == JS_PROMISE ? "Promise" : "Object"), (u64)obj_off);
+  fprintf(stream, "<%s @%llu> {\n", type == T_FUNC ? "Function" : (type == T_PROMISE ? "Promise" : "Object"), (u64)obj_off);
   
   int inner_depth = depth + 1;
   
@@ -573,7 +578,7 @@ static void inspect_object_full(struct js *js, jsval_t obj, FILE *stream, int de
   
   for (int slot = SLOT_NONE + 1; slot < SLOT_MAX; slot++) {
     jsval_t slot_val = js_get_slot(js, obj, (internal_slot_t)slot);
-    int t = js_type(slot_val);
+    int t = vtype(slot_val);
     if (t == T_UNDEF) continue;
     
     inspect_print_indent(stream, inner_depth + 1);
