@@ -48,10 +48,6 @@ tlsuv_opts = cmake.subproject_options()
 tlsuv_opts.set_override_option('warning_level', '0')
 tlsuv_opts.append_compile_args('c', ['-w'])
 
-bdwgc_opts = cmake.subproject_options()
-bdwgc_opts.set_override_option('warning_level', '0')
-bdwgc_opts.append_compile_args('c', ['-w'])
-
 cmake_prefix = get_option('deps_prefix_cmake')
 tlsuv_cmake_defines = {
   'BUILD_TESTING': 'OFF',
@@ -65,15 +61,6 @@ if cmake_prefix != ''
   tlsuv_cmake_defines += {'MBEDTLS_DIR': cmake_prefix, 'CMAKE_PREFIX_PATH': cmake_prefix}
 endif
 tlsuv_opts.add_cmake_defines(tlsuv_cmake_defines)
-
-bdwgc_opts.add_cmake_defines({
-  'BUILD_SHARED_LIBS': 'OFF',
-  'enable_cplusplus': 'OFF',
-  'CMAKE_WARN_DEV': 'OFF',
-  'CMAKE_POLICY_DEFAULT_CMP0200': 'NEW',
-  'CMAKE_POLICY_DEFAULT_CMP0156': 'NEW',
-  'CMAKE_POLICY_DEFAULT_CMP0179': 'NEW',
-})
 
 tlsuv_compile_args = [
   '-Wno-unused-function',
@@ -89,16 +76,9 @@ tlsuv_compile_args = [
 if cmake_prefix != ''
   tlsuv_compile_args += ['-I' + cmake_prefix / 'include']
 endif
+
 tlsuv_opts.append_compile_args('c', tlsuv_compile_args)
-
-bdwgc_gc_args = ['-DGC_NO_THREAD_REDIRECTS', '-DGC_THREADS']
-if host_machine.system() == 'linux'
-  bdwgc_gc_args += ['-DNO_GETCONTEXT']
-endif
-bdwgc_opts.append_compile_args('c', bdwgc_gc_args)
-
 tlsuv_dep = cmake.subproject('tlsuv', options: tlsuv_opts).dependency('tlsuv')
-bdwgc_dep = cmake.subproject('bdwgc', options: bdwgc_opts).dependency('gc')
 
 pcre2_dep = subproject('pcre2', default_options: ['warning_level=0']).get_variable('libpcre2_8')
 uthash_dep = subproject('uthash').get_variable('uthash_dep')
@@ -147,7 +127,7 @@ oxc_lib = custom_target(
 oxc_dep = declare_dependency(link_with: oxc_lib)
 
 ant_deps = [
-  libffi_dep, bdwgc_dep, uuid_dep,
+  libffi_dep, uuid_dep,
   llhttp, pcre2_dep, libuv_dep,
   argtable3_dep, tlsuv_dep, libsodium_dep,
   yyjson_dep, minicoro_dep, uuidv7_dep,

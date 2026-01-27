@@ -1,4 +1,5 @@
 #include <compat.h> // IWYU pragma: keep
+#include <arena.h>
 
 #include <oxc.h>
 #include <stdio.h>

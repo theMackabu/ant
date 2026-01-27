@@ -1,5 +1,5 @@
 import fs from 'fs';
-import { join } from 'ant:path';
+import { join } from 'path';
 
 const basePath = import.meta.dirname;
 const indexPath = join(basePath, 'ant.json');
@@ -57,6 +57,12 @@ let state = {
   searchQuery: ''
 };
 
+function fmt(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(2) + ' KB';
+  return (bytes / 1024 / 1024).toFixed(2) + ' MB';
+}
+
 function getRows() {
   return process.stdout.rows || 24;
 }
@@ -98,7 +104,7 @@ function buildScreen() {
     if (state.searchMode) {
       lines.push(`${c.cyan}Search: ${state.searchQuery}█${c.reset}`);
     } else {
-      lines.push(`${c.dim}↑↓ nav · p/f/a filter · s stats · / search · q quit${c.reset}`);
+      lines.push(`${c.dim}↑↓ nav · p/f/a filter · s stats · m memory · / search · q quit${c.reset}`);
     }
     lines.push('');
 
@@ -170,6 +176,38 @@ function buildScreen() {
 
     lines.push('');
     lines.push(`${c.dim}s browse · q quit${c.reset}`);
+  } else if (state.mode === 'memory') {
+    const mem = Ant.stats();
+    const headerWidth = Math.min(cols, 68);
+    lines.push(`${c.bold}${c.blue}${'═'.repeat(headerWidth)}${c.reset}`);
+    lines.push(`${c.bold}  Memory Usage${c.reset}`);
+    lines.push(`${c.bold}${c.blue}${'═'.repeat(headerWidth)}${c.reset}`);
+    lines.push('');
+
+    lines.push(`${c.cyan}Arena${c.reset}`);
+    lines.push(`  Used:     ${c.bold}${fmt(mem.arenaUsed)}${c.reset}`);
+    lines.push(`  Size:     ${c.bold}${fmt(mem.arenaSize)}${c.reset}`);
+    lines.push('');
+
+    lines.push(`${c.cyan}Process${c.reset}`);
+    lines.push(`  RSS:      ${c.bold}${fmt(mem.rss)}${c.reset}`);
+    if (mem.virtualSize) {
+      lines.push(`  Virtual:  ${c.bold}${fmt(mem.virtualSize)}${c.reset}`);
+    }
+    lines.push('');
+
+    lines.push(`${c.cyan}C Stack${c.reset}`);
+    lines.push(`  Max:      ${c.bold}${fmt(mem.cstack)}${c.reset}`);
+    lines.push('');
+
+    lines.push(`${c.dim}Press 'g' to run GC${c.reset}`);
+
+    while (lines.length < rows - 2) {
+      lines.push('');
+    }
+
+    lines.push('');
+    lines.push(`${c.dim}m browse · g gc · q quit${c.reset}`);
   }
 
   return lines.map(l => pad(l, cols)).join('\n');
@@ -203,20 +241,24 @@ function applySearch(query) {
 }
 
 function handleKey(key) {
+  let needsRender = false;
   if (state.searchMode) {
     if (key === '\r' || key === '\n') {
       state.searchMode = false;
       applySearch(state.searchQuery);
+      needsRender = true;
     } else if (key === '\x1b') {
       state.searchMode = false;
       state.searchQuery = '';
+      needsRender = true;
     } else if (key === '\x7f' || key === '\b') {
       state.searchQuery = state.searchQuery.slice(0, -1);
+      needsRender = true;
     } else if (key.length === 1 && key >= ' ') {
       state.searchQuery += key;
+      needsRender = true;
     }
-    render();
-    return;
+    return needsRender;
   }
 
   switch (key) {
@@ -227,59 +269,71 @@ function handleKey(key) {
     case '\x1b[A':
     case 'k':
       state.index = Math.max(0, state.index - 1);
-      render();
+      needsRender = true;
       break;
     case '\x1b[B':
     case 'j':
       state.index = Math.min(state.filtered.length - 1, state.index + 1);
-      render();
+      needsRender = true;
       break;
     case '\x1b[5~':
       state.index = Math.max(0, state.index - 10);
-      render();
+      needsRender = true;
       break;
     case '\x1b[6~':
       state.index = Math.min(state.filtered.length - 1, state.index + 10);
-      render();
+      needsRender = true;
       break;
     case 'g':
       state.index = 0;
-      render();
+      needsRender = true;
       break;
     case 'G':
       state.index = state.filtered.length - 1;
-      render();
+      needsRender = true;
       break;
     case 'p':
       if (state.mode === 'browse') {
         applyFilter('pass');
-        render();
+        needsRender = true;
       }
       break;
     case 'f':
       if (state.mode === 'browse') {
         applyFilter('fail');
-        render();
+        needsRender = true;
       }
       break;
     case 'a':
       if (state.mode === 'browse') {
         applyFilter('');
-        render();
+        needsRender = true;
       }
       break;
     case 's':
       state.mode = state.mode === 'browse' ? 'stats' : 'browse';
-      render();
+      needsRender = true;
+      break;
+    case 'm':
+      state.mode = state.mode === 'memory' ? 'browse' : 'memory';
+      needsRender = true;
+      break;
+    case 'g':
+      if (state.mode === 'memory') {
+        Ant.gc();
+        needsRender = true;
+      }
       break;
     case '/':
       if (state.mode === 'browse') {
         state.searchMode = true;
         state.searchQuery = '';
-        render();
+        needsRender = true;
       }
       break;
   }
+
+  return needsRender;
 }
 
 function cleanup() {
@@ -301,19 +355,24 @@ process.stdout.write(`${term.altScreenOn}${term.hideCursor}`);
 let inputBuf = '';
 process.stdin.on('data', chunk => {
   const str = chunk.toString();
+  let needsRender = false;
 
   for (const ch of str) {
     if (inputBuf.length > 0) {
       inputBuf += ch;
       if (inputBuf.length >= 3 && /[A-Za-z~]/.test(ch)) {
-        handleKey(inputBuf);
+        needsRender = handleKey(inputBuf) || needsRender;
         inputBuf = '';
       }
     } else if (ch === '\x1b') {
       inputBuf = ch;
     } else {
-      handleKey(ch);
+      needsRender = handleKey(ch) || needsRender;
     }
+  }
+
+  if (needsRender) {
+    render();
   }
 });
 

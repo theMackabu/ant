@@ -75,7 +75,7 @@ static jsval_t js_set_timeout(struct js *js, jsval_t *args, int nargs) {
     return js_mkerr(js, "setTimeout delay must be non-negative");
   }
   
-  timer_entry_t *entry = ANT_GC_MALLOC(sizeof(timer_entry_t));
+  timer_entry_t *entry = ant_calloc(sizeof(timer_entry_t));
   if (entry == NULL) {
     return js_mkerr(js, "failed to allocate timer");
   }
@@ -105,7 +105,7 @@ static jsval_t js_set_interval(struct js *js, jsval_t *args, int nargs) {
     return js_mkerr(js, "setInterval delay must be non-negative");
   }
   
-  timer_entry_t *entry = ANT_GC_MALLOC(sizeof(timer_entry_t));
+  timer_entry_t *entry = ant_calloc(sizeof(timer_entry_t));
   if (entry == NULL) {
     return js_mkerr(js, "failed to allocate timer");
   }
@@ -148,7 +148,7 @@ static jsval_t js_set_immediate(struct js *js, jsval_t *args, int nargs) {
   
   jsval_t callback = args[0];
   
-  immediate_entry_t *entry = ANT_GC_MALLOC(sizeof(immediate_entry_t));
+  immediate_entry_t *entry = ant_calloc(sizeof(immediate_entry_t));
   if (entry == NULL) {
     return js_mkerr(js, "failed to allocate immediate");
   }
@@ -192,7 +192,7 @@ static jsval_t js_queue_microtask(struct js *js, jsval_t *args, int nargs) {
 }
 
 void queue_microtask(struct js *js, jsval_t callback) {
-  microtask_entry_t *entry = ANT_GC_MALLOC(sizeof(microtask_entry_t));
+  microtask_entry_t *entry = ant_calloc(sizeof(microtask_entry_t));
   if (entry == NULL) return;
   
   entry->callback = callback;
@@ -209,7 +209,7 @@ void queue_microtask(struct js *js, jsval_t callback) {
 }
 
 void queue_promise_trigger(uint32_t promise_id) {
-  microtask_entry_t *entry = ANT_GC_MALLOC(sizeof(microtask_entry_t));
+  microtask_entry_t *entry = ant_calloc(sizeof(microtask_entry_t));
   if (entry == NULL) return;
   
   entry->callback = 0;
@@ -243,7 +243,7 @@ void process_microtasks(struct js *js) {
       js_call(js, entry->callback, args, 0);
     }
     
-    ANT_GC_FREE(entry);
+    free(entry);
   }
   
   js_set_gc_suppress(js, false);
@@ -265,7 +265,7 @@ void process_immediates(struct js *js) {
       process_microtasks(js);
     }
     
-    ANT_GC_FREE(entry);
+    free(entry);
   }
 }
 
@@ -284,7 +284,7 @@ scan:
   if (!*ptr) return;
   if (*ptr == target) { 
     *ptr = target->next; 
-    ANT_GC_FREE(target); return; 
+    free(target); return; 
   }
   ptr = &(*ptr)->next;
   goto scan;
@@ -301,7 +301,7 @@ scan:
   
   if (!entry->active) {
     *ptr = entry->next;
-    ANT_GC_FREE(entry);
+    free(entry);
     goto scan;
   }
   

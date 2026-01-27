@@ -83,6 +83,7 @@ typedef struct rl_interface {
   int escape_state;
   char escape_buf[16];
   int escape_len;
+  int last_render_rows;
   UT_hash_handle hh;
 #ifndef _WIN32
   struct termios saved_termios;
@@ -234,21 +235,84 @@ static void write_output(rl_interface_t *iface, const char *str) {
   fflush(stdout);
 }
 
+static int get_terminal_cols(void) {
+  int cols = 80;
+#ifndef _WIN32
+  struct winsize ws;
+  if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) {
+    cols = ws.ws_col;
+  }
+#else
+  CONSOLE_SCREEN_BUFFER_INFO csbi;
+  if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
+    cols = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+  }
+#endif
+  return cols > 0 ? cols : 80;
+}
+
+static void move_cursor_to_line_start(rl_interface_t *iface, int cols) {
+  int prompt_len = (int)strlen(iface->prompt);
+  int cursor_cols = prompt_len + iface->line_pos;
+  int cursor_row = cursor_cols > 0 ? (cursor_cols - 1) / cols : 0;
+
+  if (cursor_row > 0) {
+    char move_buf[32];
+    snprintf(move_buf, sizeof(move_buf), "\033[%dA", cursor_row);
+    write_output(iface, move_buf);
+  }
+  write_output(iface, "\r");
+}
+
 static void clear_line_display(rl_interface_t *iface) {
-  write_output(iface, "\r\033[K");
+  int cols = get_terminal_cols();
+  int prompt_len = (int)strlen(iface->prompt);
+  int line_cols = prompt_len + iface->line_len;
+  int current_rows = line_cols > 0 ? (line_cols - 1) / cols + 1 : 1;
+  int rows = iface->last_render_rows > current_rows ? iface->last_render_rows : current_rows;
+
+  move_cursor_to_line_start(iface, cols);
+  for (int i = 0; i < rows; i++) {
+    write_output(iface, "\033[K");
+    if (i < rows - 1) {
+      write_output(iface, "\033[B\r");
+    }
+  }
+  for (int i = 0; i < rows - 1; i++) {
+    write_output(iface, "\033[A");
+  }
+  write_output(iface, "\r");
 }
 
 static void refresh_line(rl_interface_t *iface) {
   char buf[MAX_LINE_LENGTH + 256];
-  snprintf(buf, sizeof(buf), "\r\033[K%s%s", iface->prompt, iface->line_buffer);
+  int cols = get_terminal_cols();
+
+  clear_line_display(iface);
+  snprintf(buf, sizeof(buf), "%s%s", iface->prompt, iface->line_buffer);
   write_output(iface, buf);
-  
-  int cursor_offset = iface->line_len - iface->line_pos;
-  if (cursor_offset > 0) {
+
+  int prompt_len = (int)strlen(iface->prompt);
+  int end_cols = prompt_len + iface->line_len;
+  int end_row = end_cols > 0 ? (end_cols - 1) / cols : 0;
+  int cursor_cols = prompt_len + iface->line_pos;
+  int cursor_row = cursor_cols > 0 ? (cursor_cols - 1) / cols : 0;
+  int cursor_col = cursor_cols > 0 ? (cursor_cols - 1) % cols : 0;
+  int up_rows = end_row - cursor_row;
+
+  if (up_rows > 0) {
     char move_buf[32];
-    snprintf(move_buf, sizeof(move_buf), "\033[%dD", cursor_offset);
+    snprintf(move_buf, sizeof(move_buf), "\033[%dA", up_rows);
     write_output(iface, move_buf);
   }
+  write_output(iface, "\r");
+  if (cursor_col > 0) {
+    char move_buf[32];
+    snprintf(move_buf, sizeof(move_buf), "\033[%dC", cursor_col);
+    write_output(iface, move_buf);
+  }
+
+  iface->last_render_rows = end_cols > 0 ? (end_cols - 1) / cols + 1 : 1;
 }
 
 static rl_interface_t *find_interface_by_id(uint64_t id) {
@@ -1011,6 +1075,7 @@ static jsval_t rl_create_interface(struct js *js, jsval_t *args, int nargs) {
   iface->tty_initialized = false;
   iface->escape_state = 0;
   iface->escape_len = 0;
+  iface->last_render_rows = 1;
   iface->js_obj = js_mkundef();
 #ifndef _WIN32
   iface->raw_mode = false;

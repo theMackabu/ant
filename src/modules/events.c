@@ -39,7 +39,7 @@ static EventType **get_or_create_emitter_events(struct js *js, jsval_t this_obj)
   jsval_t slot = js_get_slot(js, this_obj, SLOT_DATA);
   
   if (js_type(slot) == JS_UNDEF) {
-    EventType **events = ANT_GC_MALLOC(sizeof(EventType *));
+    EventType **events = ant_calloc(sizeof(EventType *));
     *events = NULL;
     js_set_slot(js, this_obj, SLOT_DATA, ANT_PTR(events));
     return events;
@@ -66,7 +66,7 @@ static EventType *find_or_create_emitter_event_type(struct js *js, jsval_t this_
   
   if (evt == NULL) {
     size_t etlen = strlen(event_type);
-    evt = ANT_GC_MALLOC(sizeof(EventType) + etlen + 1);
+    evt = ant_calloc(sizeof(EventType) + etlen + 1);
     evt->event_type = (char *)(evt + 1);
     memcpy(evt->event_type, event_type, etlen + 1);
     evt->listener_count = 0;
@@ -82,7 +82,7 @@ static EventType *find_or_create_global_event_type(const char *event_type) {
   
   if (evt == NULL) {
     size_t etlen = strlen(event_type);
-    evt = ANT_GC_MALLOC(sizeof(EventType) + etlen + 1);
+    evt = ant_calloc(sizeof(EventType) + etlen + 1);
     evt->event_type = (char *)(evt + 1);
     memcpy(evt->event_type, event_type, etlen + 1);
     evt->listener_count = 0;

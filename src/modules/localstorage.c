@@ -64,7 +64,7 @@ static void storage_load(void) {
       size_t klen = yyjson_get_len(key);
       size_t vlen = yyjson_get_len(val);
       
-      storage_entry_t *entry = ANT_GC_MALLOC(sizeof(storage_entry_t) + klen + 1 + vlen + 1);
+      storage_entry_t *entry = ant_calloc(sizeof(storage_entry_t) + klen + 1 + vlen + 1);
       if (!entry) continue;
       
       entry->key = (char *)(entry + 1);
@@ -86,7 +86,7 @@ static void storage_clear(void) {
   storage_entry_t *entry, *tmp;
   HASH_ITER(hh, local_storage, entry, tmp) {
     HASH_DEL(local_storage, entry);
-    ANT_GC_FREE(entry);
+    free(entry);
   }
 }
 
@@ -97,10 +97,10 @@ static void storage_set_item(const char *key, size_t key_len, const char *value,
   
   if (entry) {
     HASH_DEL(local_storage, entry);
-    ANT_GC_FREE(entry);
+    free(entry);
   }
   
-  entry = ANT_GC_MALLOC(sizeof(storage_entry_t) + key_len + 1 + value_len + 1);
+  entry = ant_calloc(sizeof(storage_entry_t) + key_len + 1 + value_len + 1);
   if (!entry) return;
   
   entry->key = (char *)(entry + 1);
@@ -128,7 +128,7 @@ static void storage_remove_item(const char *key, size_t key_len) {
   
   if (entry) {
     HASH_DEL(local_storage, entry);
-    ANT_GC_FREE(entry);
+    free(entry);
     storage_save();
   }
 }

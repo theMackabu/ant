@@ -7,7 +7,7 @@
 #include <time.h>
 #include <errno.h>
 
-#include "gc.h"
+
 #include "runtime.h"
 #include "internal.h"
 #include "modules/builtin.h"
@@ -46,30 +46,21 @@ static jsval_t js_signal(struct js *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-// Ant.gc()
+// Ant.gc() - no-op with bdwgc removed
 static jsval_t js_gc_trigger(struct js *js, jsval_t *args, int nargs) {
   (void) args; (void) nargs;
 
-  size_t heap_before = GC_get_heap_size();
-  size_t used_before = GC_get_heap_size() - GC_get_free_bytes();
   size_t arena_before = js_getbrk(js);
-  
-  size_t arena_freed = js_gc_compact(js);
-  size_t arena_after = js_getbrk(js);
-  
-  size_t heap_after = GC_get_heap_size();
-  size_t used_after = GC_get_heap_size() - GC_get_free_bytes();
-  size_t freed = (used_before > used_after) ? (used_before - used_after) : 0;
 
   jsval_t result = js_newobj(js);
-  js_set(js, result, "heapBefore", js_mknum((double)heap_before));
-  js_set(js, result, "heapAfter", js_mknum((double)heap_after));
-  js_set(js, result, "usedBefore", js_mknum((double)used_before));
-  js_set(js, result, "usedAfter", js_mknum((double)used_after));
-  js_set(js, result, "freed", js_mknum((double)freed));
+  js_set(js, result, "heapBefore", js_mknum(0));
+  js_set(js, result, "heapAfter", js_mknum(0));
+  js_set(js, result, "usedBefore", js_mknum(0));
+  js_set(js, result, "usedAfter", js_mknum(0));
+  js_set(js, result, "freed", js_mknum(0));
   js_set(js, result, "arenaBefore", js_mknum((double)arena_before));
-  js_set(js, result, "arenaAfter", js_mknum((double)arena_after));
-  js_set(js, result, "arenaFreed", js_mknum((double)arena_freed));
+  js_set(js, result, "arenaAfter", js_mknum((double)arena_before));
+  js_set(js, result, "arenaFreed", js_mknum(0));
 
   return result;
 }
@@ -82,10 +73,10 @@ static jsval_t js_alloc(struct js *js, jsval_t *args, int nargs) {
   size_t arena_size = js_getbrk(js);
   
   js_set(js, result, "arenaSize", js_mknum((double)arena_size));
-  js_set(js, result, "heapSize", js_mknum((double)GC_get_heap_size()));
-  js_set(js, result, "freeBytes", js_mknum((double)GC_get_free_bytes()));
-  js_set(js, result, "usedBytes", js_mknum((double)(GC_get_heap_size() - GC_get_free_bytes())));
-  js_set(js, result, "totalBytes", js_mknum((double)GC_get_total_bytes()));
+  js_set(js, result, "heapSize", js_mknum(0));
+  js_set(js, result, "freeBytes", js_mknum(0));
+  js_set(js, result, "usedBytes", js_mknum(0));
+  js_set(js, result, "totalBytes", js_mknum(0));
   
   return result;
 }
@@ -131,9 +122,9 @@ static jsval_t js_stats_fn(struct js *js, jsval_t *args, int nargs) {
   js_set(js, result, "arenaUsed", js_mknum((double)js->size));
   js_set(js, result, "cstack", js_mknum((double)js->css));
   
-  js_set(js, result, "gcHeapSize", js_mknum((double)GC_get_heap_size()));
-  js_set(js, result, "gcFreeBytes", js_mknum((double)GC_get_free_bytes()));
-  js_set(js, result, "gcUsedBytes", js_mknum((double)(GC_get_heap_size() - GC_get_free_bytes())));
+  js_set(js, result, "gcHeapSize", js_mknum(0));
+  js_set(js, result, "gcFreeBytes", js_mknum(0));
+  js_set(js, result, "gcUsedBytes", js_mknum(0));
   
   return result;
 }

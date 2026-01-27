@@ -60,11 +60,11 @@ static inline size_t next_pow2(size_t n) {
 
 static bool fwd_init(gc_forward_table_t *fwd, size_t estimated) {
   size_t cap = next_pow2(estimated < 64 ? 64 : estimated);
-  fwd->old_offs = (jsoff_t *)ANT_GC_MALLOC(cap * sizeof(jsoff_t));
-  fwd->new_offs = (jsoff_t *)ANT_GC_MALLOC(cap * sizeof(jsoff_t));
+  fwd->old_offs = (jsoff_t *)ant_calloc(cap * sizeof(jsoff_t));
+  fwd->new_offs = (jsoff_t *)ant_calloc(cap * sizeof(jsoff_t));
   if (!fwd->old_offs || !fwd->new_offs) {
-    if (fwd->old_offs) ANT_GC_FREE(fwd->old_offs);
-    if (fwd->new_offs) ANT_GC_FREE(fwd->new_offs);
+    if (fwd->old_offs) free(fwd->old_offs);
+    if (fwd->new_offs) free(fwd->new_offs);
     return false;
   }
   for (size_t i = 0; i < cap; i++) fwd->old_offs[i] = FWD_EMPTY;
@@ -77,11 +77,11 @@ static bool fwd_init(gc_forward_table_t *fwd, size_t estimated) {
 static bool fwd_grow(gc_forward_table_t *fwd) {
   size_t new_cap = fwd->capacity * 2;
   size_t new_mask = new_cap - 1;
-  jsoff_t *new_old = (jsoff_t *)ANT_GC_MALLOC(new_cap * sizeof(jsoff_t));
-  jsoff_t *new_new = (jsoff_t *)ANT_GC_MALLOC(new_cap * sizeof(jsoff_t));
+  jsoff_t *new_old = (jsoff_t *)ant_calloc(new_cap * sizeof(jsoff_t));
+  jsoff_t *new_new = (jsoff_t *)ant_calloc(new_cap * sizeof(jsoff_t));
   if (!new_old || !new_new) {
-    if (new_old) ANT_GC_FREE(new_old);
-    if (new_new) ANT_GC_FREE(new_new);
+    if (new_old) free(new_old);
+    if (new_new) free(new_new);
     return false;
   }
   for (size_t i = 0; i < new_cap; i++) new_old[i] = FWD_EMPTY;
@@ -95,8 +95,8 @@ static bool fwd_grow(gc_forward_table_t *fwd) {
     new_new[h] = fwd->new_offs[i];
   }
   
-  ANT_GC_FREE(fwd->old_offs);
-  ANT_GC_FREE(fwd->new_offs);
+  free(fwd->old_offs);
+  free(fwd->new_offs);
   fwd->old_offs = new_old;
   fwd->new_offs = new_new;
   fwd->capacity = new_cap;
@@ -134,8 +134,8 @@ static inline jsoff_t fwd_lookup(gc_forward_table_t *fwd, jsoff_t old_off) {
 }
 
 static void fwd_free(gc_forward_table_t *fwd) {
-  if (fwd->old_offs) ANT_GC_FREE(fwd->old_offs);
-  if (fwd->new_offs) ANT_GC_FREE(fwd->new_offs);
+  if (fwd->old_offs) free(fwd->old_offs);
+  if (fwd->new_offs) free(fwd->new_offs);
   fwd->old_offs = NULL;
   fwd->new_offs = NULL;
   fwd->count = 0;
@@ -143,7 +143,7 @@ static void fwd_free(gc_forward_table_t *fwd) {
 }
 
 static bool work_init(gc_work_queue_t *work, size_t initial) {
-  work->items = (jsoff_t *)ANT_GC_MALLOC(initial * sizeof(jsoff_t));
+  work->items = (jsoff_t *)ant_calloc(initial * sizeof(jsoff_t));
   if (!work->items) return false;
   work->count = 0;
   work->capacity = initial;
@@ -153,10 +153,10 @@ static bool work_init(gc_work_queue_t *work, size_t initial) {
 static inline bool work_push(gc_work_queue_t *work, jsoff_t off) {
   if (work->count >= work->capacity) {
     size_t new_cap = work->capacity * 2;
-    jsoff_t *new_items = (jsoff_t *)ANT_GC_MALLOC(new_cap * sizeof(jsoff_t));
+    jsoff_t *new_items = (jsoff_t *)ant_calloc(new_cap * sizeof(jsoff_t));
     if (!new_items) return false;
     memcpy(new_items, work->items, work->count * sizeof(jsoff_t));
-    ANT_GC_FREE(work->items);
+    free(work->items);
     work->items = new_items;
     work->capacity = new_cap;
   }
@@ -170,7 +170,7 @@ static inline jsoff_t work_pop(gc_work_queue_t *work) {
 }
 
 static void work_free(gc_work_queue_t *work) {
-  if (work->items) ANT_GC_FREE(work->items);
+  if (work->items) free(work->items);
   work->items = NULL;
   work->count = 0;
   work->capacity = 0;
@@ -489,23 +489,20 @@ size_t js_gc_compact(ant_t *js) {
   
   mco_coro *running = mco_running();
   int in_coroutine = (running != NULL && running->stack_base != NULL);
-  if (in_coroutine || js_has_pending_coroutines()) {
-    ANT_GC_COLLECT();
-    return 0;
-  }
+  if (in_coroutine || js_has_pending_coroutines()) return 0;
   
   size_t old_brk = js->brk;
   size_t old_size = js->size;
   size_t new_size = old_size;
   
-  uint8_t *new_mem = (uint8_t *)ANT_GC_MALLOC(new_size);
+  uint8_t *new_mem = (uint8_t *)ant_calloc(new_size);
   if (!new_mem) return 0;
   memset(new_mem, 0, new_size);
   
   size_t bitmap_size = (js->brk / 4 + 7) / 8 + 1;
   uint8_t *mark_bits = (uint8_t *)calloc(1, bitmap_size);
   if (!mark_bits) {
-    ANT_GC_FREE(new_mem);
+    free(new_mem);
     return 0;
   }
   
@@ -520,14 +517,14 @@ size_t js_gc_compact(ant_t *js) {
   ctx.mark_bits = mark_bits;
   
   if (!fwd_init(&ctx.fwd, estimated_objs)) {
-    ANT_GC_FREE(new_mem);
+    free(new_mem);
     free(mark_bits);
     return 0;
   }
   
   if (!work_init(&ctx.work, estimated_objs / 4 < 64 ? 64 : estimated_objs / 4)) {
     fwd_free(&ctx.fwd);
-    ANT_GC_FREE(new_mem);
+    free(new_mem);
     free(mark_bits);
     return 0;
   }
@@ -557,7 +554,7 @@ size_t js_gc_compact(ant_t *js) {
     free(mark_bits);
     work_free(&ctx.work);
     fwd_free(&ctx.fwd);
-    ANT_GC_FREE(new_mem);
+    free(new_mem);
     return 0;
   }
     
@@ -573,7 +570,7 @@ size_t js_gc_compact(ant_t *js) {
   js->mem = new_mem;
   js->brk = ctx.new_brk;
   
-  ANT_GC_FREE(old_mem);
+  free(old_mem);
   
   size_t used = ctx.new_brk;
   size_t shrunk_size = used * 2;
@@ -581,11 +578,11 @@ size_t js_gc_compact(ant_t *js) {
   shrunk_size = (shrunk_size + 7) & ~7;
   
   if (old_size >= GC_SHRINK_THRESHOLD * shrunk_size && shrunk_size < old_size) {
-    uint8_t *shrunk_mem = (uint8_t *)ANT_GC_MALLOC(shrunk_size);
+    uint8_t *shrunk_mem = (uint8_t *)ant_calloc(shrunk_size);
     if (shrunk_mem) {
       memcpy(shrunk_mem, js->mem, used);
       memset(shrunk_mem + used, 0, shrunk_size - used);
-      ANT_GC_FREE(js->mem);
+      free(js->mem);
       js->mem = shrunk_mem;
       js->size = (jsoff_t)shrunk_size;
     }
@@ -594,7 +591,6 @@ size_t js_gc_compact(ant_t *js) {
   free(mark_bits);
   work_free(&ctx.work);
   fwd_free(&ctx.fwd);
-  ANT_GC_COLLECT();
   
   return (old_brk > ctx.new_brk ? old_brk - ctx.new_brk : 0);
 }

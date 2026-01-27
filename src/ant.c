@@ -382,7 +382,7 @@ void ant_register_library(ant_library_init_fn init_fn, const char *name, ...) {
   
   va_start(args, name);
   while (alias != NULL) {
-    ant_library_t *lib = (ant_library_t *)ANT_GC_MALLOC(sizeof(ant_library_t));
+    ant_library_t *lib = (ant_library_t *)ant_calloc(sizeof(ant_library_t));
     if (!lib) break;
     
     strncpy(lib->name, alias, sizeof(lib->name) - 1);
@@ -2254,7 +2254,7 @@ static const char *intern_string(const char *str, size_t len) {
     if (e->hash == h && e->len == len && memcmp(e->str, str, len) == 0) return e->str;
   }
   
-  interned_string_t *entry = (interned_string_t *)ANT_GC_MALLOC(sizeof(interned_string_t) + len + 1);
+  interned_string_t *entry = (interned_string_t *)ant_calloc(sizeof(interned_string_t) + len + 1);
   if (!entry) return NULL;
   
   entry->str = (char *)(entry + 1);
@@ -2644,11 +2644,11 @@ static size_t tostr(struct js *js, jsval_t value, char *buf, size_t len) {
 
 static char *tostr_alloc(struct js *js, jsval_t value) {
   size_t cap = 64;
-  char *buf = ANT_GC_MALLOC(cap);
+  char *buf = ant_calloc(cap);
   size_t n = tostr(js, value, buf, cap);
   if (n >= cap) {
-    ANT_GC_FREE(buf);
-    buf = ANT_GC_MALLOC(n + 1);
+    free(buf);
+    buf = ant_calloc(n + 1);
     tostr(js, value, buf, n + 1);
   }
   return buf;
@@ -2677,21 +2677,27 @@ jsval_t js_tostring_val(struct js *js, jsval_t value) {
   L_BOOL:  return vdata(value) ? js_mkstr(js, "true", 4) : js_mkstr(js, "false", 5);
   L_OBJ:   return js_call_toString(js, value);
   
-  L_NUM:
-    buf = (char *)ANT_GC_MALLOC(32);
+  L_NUM: {
+    buf = (char *)ant_calloc(32);
     len = strnum(value, buf, 32);
-    return js_mkstr(js, buf, len);
+    jsval_t result = js_mkstr(js, buf, len);
+    free(buf); return result;
+  }
     
-  L_BIGINT:
+  L_BIGINT: {
     bigint_digits(js, value, &buflen);
-    buf = (char *)ANT_GC_MALLOC(buflen + 2);
+    buf = (char *)ant_calloc(buflen + 2);
     len = strbigint(js, value, buf, buflen + 2);
-    return js_mkstr(js, buf, len);
+    jsval_t result = js_mkstr(js, buf, len);
+    free(buf); return result;
+  }
     
-  L_DEFAULT:
-    buf = (char *)ANT_GC_MALLOC(64);
+  L_DEFAULT: {
+    buf = (char *)ant_calloc(64);
     len = tostr(js, value, buf, 64);
-    return js_mkstr(js, buf, len);
+    jsval_t result = js_mkstr(js, buf, len);
+    free(buf); return result;
+  }
 }
 
 const char *js_str(struct js *js, jsval_t value) {
@@ -2703,7 +2709,7 @@ const char *js_str(struct js *js, jsval_t value) {
   scan_refs(js, value);
   
   size_t capacity = 4096;
-  char *buf = (char *)ANT_GC_MALLOC(capacity);
+  char *buf = (char *)ant_calloc(capacity);
   if (!buf) return "";
   
   size_t len;
@@ -2715,11 +2721,12 @@ const char *js_str(struct js *js, jsval_t value) {
     if (len < capacity - 1) break;
     
     capacity *= 2;
-    buf = (char *)ANT_GC_REALLOC(buf, capacity);
+    buf = (char *)ant_realloc(buf, capacity);
     if (!buf) return "";
   }
   
   jsval_t str = js_mkstr(js, buf, len);
+  free(buf);
   
   if (is_err(str)) return "";
   return (const char *)&js->mem[vdata(str) + sizeof(jsoff_t)];
@@ -2729,27 +2736,18 @@ static bool js_try_grow_memory(struct js *js, size_t needed) {
   if (!js->owns_mem) return false;
   if (js->max_size == 0) return false;
   
-  size_t new_mem_size = (size_t)js->size * 2;
-  
-  while (new_mem_size < (size_t)js->size + needed && new_mem_size <= (size_t)js->max_size) {
-    new_mem_size *= 2;
-  }
+  size_t current = (size_t)js->size;
+  size_t required = current + needed;
+  size_t new_mem_size = ((required + ARENA_GROW_INCREMENT - 1) / ARENA_GROW_INCREMENT) * ARENA_GROW_INCREMENT;
   
   if (new_mem_size > (size_t)js->max_size) new_mem_size = (size_t)js->max_size;
-  if (new_mem_size <= (size_t)js->size) return false;
+  if (new_mem_size <= current) return false;
   
-  uint8_t *new_mem = (uint8_t *)ANT_GC_MALLOC(new_mem_size);
-  if (new_mem == NULL) return false;
-  
-  memcpy(new_mem, js->mem, js->brk);
-  memset(new_mem + js->brk, 0, new_mem_size - js->brk);
-  
-  js->mem = new_mem;
+  if (ant_arena_commit(js->mem, js->size, new_mem_size) != 0) return false;
   js->size = (jsoff_t)(new_mem_size / 8U * 8U);
   
   return true;
 }
-
 
 static jsoff_t js_alloc(struct js *js, size_t size) {
   size = align64((jsoff_t) size);
@@ -2760,7 +2758,7 @@ static jsoff_t js_alloc(struct js *js, size_t size) {
       ofs = js->brk;
       if (js->brk + size > js->size) return ~(jsoff_t) 0;
     } else {
-      js_gc_compact(js);
+      // js_gc_compact(js);
       ofs = js->brk;
       if (js->brk + size > js->size) {
         if (js_try_grow_memory(js, size)) {
@@ -3130,25 +3128,25 @@ static jsval_t builtin_bigint_toString(struct js *js, jsval_t *args, int nargs) 
   
   if (radix == 10) {
     size_t buflen = dlen + 2;
-    char *buf = (char *)ANT_GC_MALLOC(buflen);
+    char *buf = (char *)ant_calloc(buflen);
     if (!buf) return js_mkerr(js, "oom");
     size_t n = 0;
     if (neg) buf[n++] = '-';
     memcpy(buf + n, digits, dlen);
     n += dlen;
     jsval_t ret = js_mkstr(js, buf, n);
-    ANT_GC_FREE(buf);
+    free(buf);
     return ret;
   }
   
   size_t result_cap = dlen * 4 + 16;
-  char *result = (char *)ANT_GC_MALLOC(result_cap);
+  char *result = (char *)ant_calloc(result_cap);
   if (!result) return js_mkerr(js, "oom");
   size_t rpos = result_cap - 1;
   result[rpos] = '\0';
   
-  char *num = (char *)ANT_GC_MALLOC(dlen + 1);
-  if (!num) { ANT_GC_FREE(result); return js_mkerr(js, "oom"); }
+  char *num = (char *)ant_calloc(dlen + 1);
+  if (!num) { free(result); return js_mkerr(js, "oom"); }
   memcpy(num, digits, dlen);
   num[dlen] = '\0';
   size_t numlen = dlen;
@@ -3167,11 +3165,11 @@ static jsval_t builtin_bigint_toString(struct js *js, jsval_t *args, int nargs) 
     if (numlen == 1 && num[0] == '0') numlen = 0;
     if (rpos == 0) {
       size_t new_cap = result_cap * 2;
-      char *new_result = (char *)ANT_GC_MALLOC(new_cap);
-      if (!new_result) { ANT_GC_FREE(num); ANT_GC_FREE(result); return js_mkerr(js, "oom"); }
+      char *new_result = (char *)ant_calloc(new_cap);
+      if (!new_result) { free(num); free(result); return js_mkerr(js, "oom"); }
       size_t used = result_cap - rpos;
       memcpy(new_result + new_cap - used, result + rpos, used);
-      ANT_GC_FREE(result);
+      free(result);
       result = new_result;
       rpos = new_cap - used;
       result_cap = new_cap;
@@ -3180,7 +3178,7 @@ static jsval_t builtin_bigint_toString(struct js *js, jsval_t *args, int nargs) 
     result[rpos] = (char)(remainder < 10 ? '0' + remainder : 'a' + (remainder - 10));
   }
   
-  ANT_GC_FREE(num);
+  free(num);
   
   if (rpos == result_cap - 1) {
     result[--rpos] = '0';
@@ -3189,7 +3187,7 @@ static jsval_t builtin_bigint_toString(struct js *js, jsval_t *args, int nargs) 
   if (neg) result[--rpos] = '-';
   
   jsval_t ret = js_mkstr(js, result + rpos, result_cap - 1 - rpos);
-  ANT_GC_FREE(result);
+  free(result);
   return ret;
 }
 
@@ -5266,7 +5264,7 @@ static jsval_t *resolve_bound_args(struct js *js, jsval_t func_obj, jsval_t *arg
   if (bound_argc <= 0) return NULL;
   
   *out_nargs = bound_argc + nargs;
-  jsval_t *combined = (jsval_t *)ANT_GC_MALLOC(sizeof(jsval_t) * (*out_nargs));
+  jsval_t *combined = (jsval_t *)ant_calloc(sizeof(jsval_t) * (*out_nargs));
   if (!combined) return NULL;
   
   for (int i = 0; i < bound_argc; i++) {
@@ -5809,11 +5807,11 @@ static bool string_builder_append(string_builder_t *sb, const char *data, size_t
     size_t new_capacity = sb->capacity ? sb->capacity * 2 : 256;
     while (new_capacity < sb->size + len) new_capacity *= 2;
     
-    char *new_buffer = (char *)ANT_GC_MALLOC(new_capacity);
+    char *new_buffer = (char *)ant_calloc(new_capacity);
     if (!new_buffer) return false;
     
     if (sb->size > 0) memcpy(new_buffer, sb->buffer, sb->size);
-    if (sb->is_dynamic) ANT_GC_FREE(sb->buffer);
+    if (sb->is_dynamic) free(sb->buffer);
     
     sb->buffer = new_buffer;
     sb->capacity = new_capacity;
@@ -5830,7 +5828,7 @@ static bool string_builder_append(string_builder_t *sb, const char *data, size_t
 
 static jsval_t string_builder_finalize(struct js *js, string_builder_t *sb) {
   jsval_t result = js_mkstr(js, sb->buffer, sb->size);
-  if (sb->is_dynamic && sb->buffer) ANT_GC_FREE(sb->buffer);
+  if (sb->is_dynamic && sb->buffer) free(sb->buffer);
   return result;
 }
 
@@ -6740,7 +6738,7 @@ static jsval_t call_js_with_args(struct js *js, jsval_t func, jsval_t *args, int
     
     if (bound_argc > 0) {
       combined_nargs = bound_argc + nargs;
-      combined_args = (jsval_t *)ANT_GC_MALLOC(sizeof(jsval_t) * combined_nargs);
+      combined_args = (jsval_t *)ant_calloc(sizeof(jsval_t) * combined_nargs);
       if (combined_args) {
         for (int i = 0; i < bound_argc; i++) {
           char idx[16];
@@ -6779,14 +6777,14 @@ static jsval_t call_js_with_args(struct js *js, jsval_t func, jsval_t *args, int
       js->this_val = saved_this;
     }
     
-    if (combined_args) ANT_GC_FREE(combined_args);
+    if (combined_args) free(combined_args);
     return result;
   }
   
   jsoff_t fnlen;
   const char *fn = get_func_code(js, func_obj, &fnlen);
   if (!fn) {
-    if (combined_args) ANT_GC_FREE(combined_args);
+    if (combined_args) free(combined_args);
     return js_mkerr(js, "function has no code");
   }
   
@@ -6810,7 +6808,7 @@ static jsval_t call_js_with_args(struct js *js, jsval_t func, jsval_t *args, int
   
   jsval_t result = call_js_code_with_args(js, fn, fnlen, closure_scope, args, nargs, func);
   js->super_val = saved_super;
-  if (combined_args) ANT_GC_FREE(combined_args);
+  if (combined_args) free(combined_args);
   
   return result;
 }
@@ -7049,7 +7047,7 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
         UT_array *args_arr;
         utarray_new(args_arr, &jsval_icd);
         for (int i = 0; i < bound_argc; i++) utarray_push_back(args_arr, &bound_args[i]);
-        ANT_GC_FREE(bound_args);
+        free(bound_args);
         
         jsval_t err;
         int call_argc = parse_call_args(js, args_arr, &err);
@@ -7238,7 +7236,7 @@ skip_fields:
           if (call_argc < 0) {
             utarray_free(call_args);
             pop_call_frame();
-            if (bound_args) ANT_GC_FREE(bound_args);
+            if (bound_args) free(bound_args);
             js->super_val = saved_super;
             js->current_func = saved_func;
             return err;
@@ -7249,7 +7247,7 @@ skip_fields:
           utarray_free(call_args);
         } else res = call_js_internal(js, code_str, fnlen, closure_scope, bound_args, bound_argc, func);
         pop_call_frame();
-        if (bound_args) ANT_GC_FREE(bound_args);
+        if (bound_args) free(bound_args);
         js->super_val = saved_super;
         js->current_func = saved_func;
       }
@@ -13027,7 +13025,7 @@ static int extract_array_args(struct js *js, jsval_t arr, jsval_t **out_args) {
   int len = (int) tod(len_val);
   if (len <= 0) return 0;
   
-  jsval_t *args_out = (jsval_t *)ANT_GC_MALLOC(sizeof(jsval_t) * len);
+  jsval_t *args_out = (jsval_t *)ant_calloc(sizeof(jsval_t) * len);
   if (!args_out) return 0;
   
   for (int i = 0; i < len; i++) {
@@ -13074,7 +13072,7 @@ static jsval_t builtin_function_toString(struct js *js, jsval_t *args, int nargs
         bool is_expr = (body_len >= 7 && memcmp(body_start, "return ", 7) == 0);
         
         size_t total = (is_async ? 6 : 0) + params_len + 4 + body_len + 2;
-        char *buf = ANT_GC_MALLOC(total + 1);
+        char *buf = ant_calloc(total + 1);
         size_t n = 0;
         
         if (is_async) n += cpy(buf + n, total - n, "async ", 6);
@@ -13093,7 +13091,7 @@ static jsval_t builtin_function_toString(struct js *js, jsval_t *args, int nargs
         }
         
         jsval_t result = js_mkstr(js, buf, n);
-        ANT_GC_FREE(buf);
+        free(buf);
         return result;
         fallback_arrow:;
       }
@@ -13101,7 +13099,7 @@ static jsval_t builtin_function_toString(struct js *js, jsval_t *args, int nargs
       jsoff_t name_len = 0;
       const char *name = get_func_name(js, func, &name_len);
       size_t total = (is_async ? 6 : 0) + 9 + name_len + code_len + 1;
-      char *buf = ANT_GC_MALLOC(total + 1);
+      char *buf = ant_calloc(total + 1);
       size_t n = 0;
       
       if (is_async) n += cpy(buf + n, total - n, "async ", 6);
@@ -13111,7 +13109,7 @@ static jsval_t builtin_function_toString(struct js *js, jsval_t *args, int nargs
       n += cpy(buf + n, total - n, "}", 1);
       
       jsval_t result = js_mkstr(js, buf, n);
-      ANT_GC_FREE(buf);
+      free(buf);
       
       return result;
     }
@@ -13149,7 +13147,7 @@ static jsval_t builtin_function_apply(struct js *js, jsval_t *args, int nargs) {
   pop_this();
   js->this_val = saved_this;
 
-  if (call_args) ANT_GC_FREE(call_args);
+  if (call_args) free(call_args);
 
   return result;
 }
@@ -15758,7 +15756,7 @@ static jsval_t builtin_array_join(struct js *js, jsval_t *args, int nargs) {
   
   size_t capacity = 1024;
   size_t result_len = 0;
-  char *result = (char *)ANT_GC_MALLOC(capacity);
+  char *result = (char *)ant_calloc(capacity);
   if (!result) return js_mkerr(js, "oom");
   
   for (jsoff_t i = 0; i < len; i++) {
@@ -15769,7 +15767,7 @@ static jsval_t builtin_array_join(struct js *js, jsval_t *args, int nargs) {
     if (i > 0) {
       if (result_len + sep_len >= capacity) {
         capacity = (result_len + sep_len + 1) * 2;
-        char *new_result = (char *)ANT_GC_REALLOC(result, capacity);
+        char *new_result = (char *)ant_realloc(result, capacity);
         if (!new_result) return js_mkerr(js, "oom");
         result = new_result;
       }
@@ -15783,7 +15781,7 @@ static jsval_t builtin_array_join(struct js *js, jsval_t *args, int nargs) {
         jsoff_t elem_len, elem_off_str = vstr(js, elem, &elem_len);
         if (result_len + elem_len >= capacity) {
           capacity = (result_len + elem_len + 1) * 2;
-          char *new_result = (char *)ANT_GC_REALLOC(result, capacity);
+          char *new_result = (char *)ant_realloc(result, capacity);
           if (!new_result) return js_mkerr(js, "oom");
           result = new_result;
         }
@@ -15795,7 +15793,7 @@ static jsval_t builtin_array_join(struct js *js, jsval_t *args, int nargs) {
         size_t num_len = strlen(numstr);
         if (result_len + num_len >= capacity) {
           capacity = (result_len + num_len + 1) * 2;
-          char *new_result = (char *)ANT_GC_REALLOC(result, capacity);
+          char *new_result = (char *)ant_realloc(result, capacity);
           if (!new_result) return js_mkerr(js, "oom");
           result = new_result;
         }
@@ -15806,7 +15804,7 @@ static jsval_t builtin_array_join(struct js *js, jsval_t *args, int nargs) {
         size_t bool_len = strlen(boolstr);
         if (result_len + bool_len >= capacity) {
           capacity = (result_len + bool_len + 1) * 2;
-          char *new_result = (char *)ANT_GC_REALLOC(result, capacity);
+          char *new_result = (char *)ant_realloc(result, capacity);
           if (!new_result) return js_mkerr(js, "oom");
           result = new_result;
         }
@@ -15816,7 +15814,7 @@ static jsval_t builtin_array_join(struct js *js, jsval_t *args, int nargs) {
     }
   }
   jsval_t ret = js_mkstr(js, result, result_len);
-  ANT_GC_FREE(result);
+  free(result);
   return ret;
 }
 
@@ -17289,17 +17287,17 @@ static jsval_t builtin_array_toLocaleString(struct js *js, jsval_t *args, int na
   
   char *result = NULL;
   size_t result_len = 0, result_cap = 256;
-  result = (char *)ANT_GC_MALLOC(result_cap);
+  result = (char *)ant_calloc(result_cap);
   if (!result) return js_mkerr(js, "oom");
   
   for (jsoff_t i = 0; i < len; i++) {
     if (i > 0) {
       if (result_len + 1 >= result_cap) {
         result_cap *= 2;
-        char *new_result = (char *)ANT_GC_MALLOC(result_cap);
-        if (!new_result) { ANT_GC_FREE(result); return js_mkerr(js, "oom"); }
+        char *new_result = (char *)ant_calloc(result_cap);
+        if (!new_result) { free(result); return js_mkerr(js, "oom"); }
         memcpy(new_result, result, result_len);
-        ANT_GC_FREE(result);
+        free(result);
         result = new_result;
       }
       result[result_len++] = ',';
@@ -17318,10 +17316,10 @@ static jsval_t builtin_array_toLocaleString(struct js *js, jsval_t *args, int na
     
     if (result_len + elem_len >= result_cap) {
       while (result_len + elem_len >= result_cap) result_cap *= 2;
-      char *new_result = (char *)ANT_GC_MALLOC(result_cap);
-      if (!new_result) { ANT_GC_FREE(result); return js_mkerr(js, "oom"); }
+      char *new_result = (char *)ant_calloc(result_cap);
+      if (!new_result) { free(result); return js_mkerr(js, "oom"); }
       memcpy(new_result, result, result_len);
-      ANT_GC_FREE(result);
+      free(result);
       result = new_result;
     }
     memcpy(result + result_len, buf, elem_len);
@@ -17329,7 +17327,7 @@ static jsval_t builtin_array_toLocaleString(struct js *js, jsval_t *args, int na
   }
   
   jsval_t ret = js_mkstr(js, result, result_len);
-  ANT_GC_FREE(result);
+  free(result);
   return ret;
 }
 
@@ -17837,16 +17835,16 @@ static jsval_t builtin_string_replace(struct js *js, jsval_t *args, int nargs) {
     is_regex = true;
     jsoff_t plen, poff = vstr(js, pattern_val, &plen);
     pattern_len = plen;
-    pattern_buf = (char *)ANT_GC_MALLOC(plen + 1);
+    pattern_buf = (char *)ant_calloc(plen + 1);
     if (!pattern_buf) return js_mkerr(js, "oom");
     memcpy(pattern_buf, &js->mem[poff], plen);
     pattern_buf[plen] = '\0';
     
     jsoff_t flags_off = lkp(js, search, "flags", 5);
-    if (flags_off == 0) goto not_regex;
+    if (flags_off == 0) { free(pattern_buf); pattern_buf = NULL; goto not_regex; }
     
     jsval_t flags_val = resolveprop(js, mkval(T_PROP, flags_off));
-    if (vtype(flags_val) != T_STR) goto not_regex;
+    if (vtype(flags_val) != T_STR) { free(pattern_buf); pattern_buf = NULL; goto not_regex; }
     
     jsoff_t flen, foff = vstr(js, flags_val, &flen);
     const char *flags_str = (char *) &js->mem[foff];
@@ -17859,7 +17857,7 @@ static jsval_t builtin_string_replace(struct js *js, jsval_t *args, int nargs) {
   jsoff_t repl_len = 0;
   const char *repl_ptr = NULL;
   if (!is_func_replacement) {
-    if (vtype(replacement) != T_STR) return str;
+    if (vtype(replacement) != T_STR) { if (pattern_buf) free(pattern_buf); return str; }
     jsoff_t repl_off;
     repl_off = vstr(js, replacement, &repl_len);
     repl_ptr = (char *) &js->mem[repl_off];
@@ -17867,13 +17865,13 @@ static jsval_t builtin_string_replace(struct js *js, jsval_t *args, int nargs) {
   
   size_t result_cap = str_len + repl_len + 256;
   size_t result_len = 0;
-  char *result = (char *)ANT_GC_MALLOC(result_cap);
+  char *result = (char *)ant_calloc(result_cap);
   if (!result) return js_mkerr(js, "oom");
 
 #define ENSURE_RESULT_CAP(need) do { \
   if (result_len + (need) >= result_cap) { \
     result_cap = (result_len + (need) + 1) * 2; \
-    char *nr = (char *)ANT_GC_REALLOC(result, result_cap); \
+    char *nr = (char *)ant_realloc(result, result_cap); \
     if (!nr) return js_mkerr(js, "oom"); \
     result = nr; \
   } \
@@ -17881,7 +17879,7 @@ static jsval_t builtin_string_replace(struct js *js, jsval_t *args, int nargs) {
   
   if (is_regex) {
     size_t pcre2_cap = pattern_len * 2 + 16;
-    char *pcre2_pattern = (char *)ANT_GC_MALLOC(pcre2_cap);
+    char *pcre2_pattern = (char *)ant_calloc(pcre2_cap);
     if (!pcre2_pattern) return js_mkerr(js, "oom");
     size_t pcre2_len = js_to_pcre2_pattern(pattern_buf, pattern_len, pcre2_pattern, pcre2_cap);
 
@@ -17889,7 +17887,7 @@ static jsval_t builtin_string_replace(struct js *js, jsval_t *args, int nargs) {
     int errcode;
     PCRE2_SIZE erroffset;
     pcre2_code *re = pcre2_compile((PCRE2_SPTR)pcre2_pattern, pcre2_len, options, &errcode, &erroffset, NULL);
-    ANT_GC_FREE(pcre2_pattern);
+    free(pcre2_pattern);
     if (re == NULL) return js_mkerr(js, "invalid regex pattern");
 
     pcre2_match_data *match_data = pcre2_match_data_create_from_pattern(re, NULL);
@@ -17914,7 +17912,7 @@ static jsval_t builtin_string_replace(struct js *js, jsval_t *args, int nargs) {
 
       if (is_func_replacement) {
         int nargs_cb = 1 + capture_count + 2;
-        jsval_t *cb_args = (jsval_t *)ANT_GC_MALLOC(nargs_cb * sizeof(jsval_t));
+        jsval_t *cb_args = (jsval_t *)ant_calloc(nargs_cb * sizeof(jsval_t));
         if (!cb_args) {
           pcre2_match_data_free(match_data);
           pcre2_code_free(re);
@@ -17934,7 +17932,7 @@ static jsval_t builtin_string_replace(struct js *js, jsval_t *args, int nargs) {
         cb_args[2 + capture_count] = str;
 
         jsval_t cb_result = js_call(js, replacement, cb_args, nargs_cb);
-        ANT_GC_FREE(cb_args);
+        free(cb_args);
 
         if (vtype(cb_result) == T_ERR) {
           pcre2_match_data_free(match_data);
@@ -18034,18 +18032,17 @@ static jsval_t builtin_string_replace(struct js *js, jsval_t *args, int nargs) {
       result_len += remaining;
     }
 
-    pcre2_match_data_free(match_data);
-    pcre2_code_free(re);
+    pcre2_match_data_free(match_data); pcre2_code_free(re);
+    if (pattern_buf) free(pattern_buf);
+    
     jsval_t ret = replaced ? js_mkstr(js, result, result_len) : str;
-    ANT_GC_FREE(result);
-    return ret;
-
+    free(result); return ret;
   } else {
-    if (vtype(search) != T_STR) { ANT_GC_FREE(result); return str; }
+    if (vtype(search) != T_STR) { free(result); return str; }
     jsoff_t search_len, search_off = vstr(js, search, &search_len);
     const char *search_ptr = (char *) &js->mem[search_off];
     
-    if (search_len > str_len) { ANT_GC_FREE(result); return str; }
+    if (search_len > str_len) { free(result); return str; }
     
     for (jsoff_t i = 0; i <= str_len - search_len; i++) {
       if (memcmp(str_ptr + i, search_ptr, search_len) == 0) {
@@ -18058,7 +18055,7 @@ static jsval_t builtin_string_replace(struct js *js, jsval_t *args, int nargs) {
           jsval_t cb_args[1] = { match_str };
           jsval_t cb_result = js_call(js, replacement, cb_args, 1);
           
-          if (vtype(cb_result) == T_ERR) { ANT_GC_FREE(result); return cb_result; }
+          if (vtype(cb_result) == T_ERR) { free(result); return cb_result; }
           
           if (vtype(cb_result) == T_STR) {
             jsoff_t cb_len, cb_off = vstr(js, cb_result, &cb_len);
@@ -18086,11 +18083,11 @@ static jsval_t builtin_string_replace(struct js *js, jsval_t *args, int nargs) {
           result_len += after_len;
         }
         jsval_t ret = js_mkstr(js, result, result_len);
-        ANT_GC_FREE(result);
+        free(result);
         return ret;
       }
     }
-    ANT_GC_FREE(result);
+    free(result);
     return str;
   }
 #undef ENSURE_RESULT_CAP
@@ -18118,7 +18115,7 @@ static jsval_t builtin_string_replaceAll(struct js *js, jsval_t *args, int nargs
   
   if (search_len == 0) {
     size_t total_len = str_len + (str_len + 1) * repl_len;
-    char *result = (char *)ANT_GC_MALLOC(total_len + 1);
+    char *result = (char *)ant_calloc(total_len + 1);
     if (!result) return js_mkerr(js, "oom");
     
     size_t pos = 0;
@@ -18130,7 +18127,7 @@ static jsval_t builtin_string_replaceAll(struct js *js, jsval_t *args, int nargs
       pos += repl_len;
     }
     jsval_t ret = js_mkstr(js, result, pos);
-    ANT_GC_FREE(result);
+    free(result);
     return ret;
   }
   
@@ -18145,7 +18142,7 @@ static jsval_t builtin_string_replaceAll(struct js *js, jsval_t *args, int nargs
   if (count == 0) return str;
   
   size_t result_total = str_len - (count * search_len) + (count * repl_len);
-  char *result = (char *)ANT_GC_MALLOC(result_total + 1);
+  char *result = (char *)ant_calloc(result_total + 1);
   if (!result) return js_mkerr(js, "oom");
   
   size_t result_pos = 0;
@@ -18166,7 +18163,7 @@ static jsval_t builtin_string_replaceAll(struct js *js, jsval_t *args, int nargs
   }
   
   jsval_t ret = js_mkstr(js, result, result_pos);
-  ANT_GC_FREE(result);
+  free(result);
   return ret;
 }
 
@@ -18366,14 +18363,14 @@ static jsval_t builtin_string_template(struct js *js, jsval_t *args, int nargs) 
   
   size_t result_cap = str_len + 256;
   size_t result_len = 0;
-  char *result = (char *)ANT_GC_MALLOC(result_cap);
+  char *result = (char *)ant_calloc(result_cap);
   if (!result) return js_mkerr(js, "oom");
   jsoff_t i = 0;
 
 #define ENSURE_CAP(need) do { \
   if (result_len + (need) >= result_cap) { \
     result_cap = (result_len + (need) + 1) * 2; \
-    char *nr = (char *)ANT_GC_REALLOC(result, result_cap); \
+    char *nr = (char *)ant_realloc(result, result_cap); \
     if (!nr) return js_mkerr(js, "oom"); \
     result = nr; \
   } \
@@ -18420,7 +18417,7 @@ static jsval_t builtin_string_template(struct js *js, jsval_t *args, int nargs) 
     result[result_len++] = str_ptr[i++];
   }
   jsval_t ret = js_mkstr(js, result, result_len);
-  ANT_GC_FREE(result);
+  free(result);
   return ret;
 #undef ENSURE_CAP
 }
@@ -18783,19 +18780,25 @@ static jsval_t builtin_string_concat(struct js *js, jsval_t *args, int nargs) {
   
   jsval_t *str_args = NULL;
   if (nargs > 0) {
-    str_args = (jsval_t *)ANT_GC_MALLOC(nargs * sizeof(jsval_t));
+    str_args = (jsval_t *)ant_calloc(nargs * sizeof(jsval_t));
     if (!str_args) return js_mkerr(js, "oom");
     for (int i = 0; i < nargs; i++) {
       str_args[i] = js_tostring_val(js, args[i]);
-      if (is_err(str_args[i])) return str_args[i];
+      if (is_err(str_args[i])) { 
+        free(str_args);
+        return str_args[i];
+      }
       jsoff_t arg_len;
       vstr(js, str_args[i], &arg_len);
       total_len += arg_len;
     }
   }
 
-  char *result = (char *)ANT_GC_MALLOC(total_len + 1);
-  if (!result) return js_mkerr(js, "oom");
+  char *result = (char *)ant_calloc(total_len + 1);
+  if (!result) { 
+    if (str_args) free(str_args);
+    return js_mkerr(js, "oom");
+  }
 
   jsoff_t base_len;
   base_off = vstr(js, str, &base_len);
@@ -18810,14 +18813,15 @@ static jsval_t builtin_string_concat(struct js *js, jsval_t *args, int nargs) {
   result[pos] = '\0';
 
   jsval_t ret = js_mkstr(js, result, pos);
-  ANT_GC_FREE(result);
+  free(result); if (str_args) free(str_args);
+  
   return ret;
 }
 
 static jsval_t builtin_string_fromCharCode(struct js *js, jsval_t *args, int nargs) {
   if (nargs == 0) return js_mkstr(js, "", 0);
 
-  char *buf = (char *)ANT_GC_MALLOC(nargs + 1);
+  char *buf = (char *)ant_calloc(nargs + 1);
   if (!buf) return js_mkerr(js, "oom");
 
   for (int i = 0; i < nargs; i++) {
@@ -18828,14 +18832,14 @@ static jsval_t builtin_string_fromCharCode(struct js *js, jsval_t *args, int nar
   buf[nargs] = '\0';
 
   jsval_t ret = js_mkstr(js, buf, nargs);
-  ANT_GC_FREE(buf);
+  free(buf);
   return ret;
 }
 
 static jsval_t builtin_string_fromCodePoint(struct js *js, jsval_t *args, int nargs) {
   if (nargs == 0) return js_mkstr(js, "", 0);
 
-  char *buf = (char *)ANT_GC_MALLOC(nargs * 4 + 1);
+  char *buf = (char *)ant_calloc(nargs * 4 + 1);
   if (!buf) return js_mkerr(js, "oom");
 
   size_t len = 0;
@@ -18843,7 +18847,7 @@ static jsval_t builtin_string_fromCodePoint(struct js *js, jsval_t *args, int na
     if (vtype(args[i]) != T_NUM) continue;
     double d = tod(args[i]);
     if (d < 0 || d > 0x10FFFF || d != floor(d)) {
-      ANT_GC_FREE(buf);
+      free(buf);
       return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid code point");
     }
     uint32_t cp = (uint32_t)d;
@@ -18866,7 +18870,7 @@ static jsval_t builtin_string_fromCodePoint(struct js *js, jsval_t *args, int na
   buf[len] = '\0';
 
   jsval_t ret = js_mkstr(js, buf, len);
-  ANT_GC_FREE(buf);
+  free(buf);
   return ret;
 }
 
@@ -19339,7 +19343,7 @@ static jsval_t builtin_btoa(struct js *js, jsval_t *args, int nargs) {
   }
   
   size_t out_len = ((str_len + 2) / 3) * 4;
-  char *out = (char *)ANT_GC_MALLOC(out_len + 1);
+  char *out = (char *)ant_calloc(out_len + 1);
   if (!out) return js_mkerr(js, "out of memory");
   
   size_t i = 0, j = 0;
@@ -19358,7 +19362,7 @@ static jsval_t builtin_btoa(struct js *js, jsval_t *args, int nargs) {
   out[j] = '\0';
   
   jsval_t result = js_mkstr(js, out, j);
-  ANT_GC_FREE(out);
+  free(out);
   return result;
 }
 
@@ -19400,7 +19404,7 @@ static jsval_t builtin_atob(struct js *js, jsval_t *args, int nargs) {
   if (str_len > 0 && str[str_len - 1] == '=') out_len--;
   if (str_len > 1 && str[str_len - 2] == '=') out_len--;
   
-  char *out = (char *)ANT_GC_MALLOC(out_len + 1);
+  char *out = (char *)ant_calloc(out_len + 1);
   if (!out) return js_mkerr(js, "out of memory");
   
   size_t i = 0, j = 0;
@@ -19411,7 +19415,7 @@ static jsval_t builtin_atob(struct js *js, jsval_t *args, int nargs) {
     int8_t d = (str[i] == '=') ? 0 : decode_table[(unsigned char)str[i]]; i++;
     
     if (a < 0 || b < 0 || (str[i-2] != '=' && c < 0) || (str[i-1] != '=' && d < 0)) {
-      ANT_GC_FREE(out);
+      free(out);
       return js_mkerr(js, "atob: invalid character in base64 string");
     }
     
@@ -19422,7 +19426,7 @@ static jsval_t builtin_atob(struct js *js, jsval_t *args, int nargs) {
   }
   
   jsval_t result = js_mkstr(js, out, out_len);
-  ANT_GC_FREE(out);
+  free(out);
   return result;
 }
 
@@ -19442,9 +19446,9 @@ static size_t strpromise(struct js *js, jsval_t value, char *buf, size_t len) {
     content = "<pending>";
   } else if (pd->state == 2) {
     char *val = tostr_alloc(js, pd->value);
-    allocated = ANT_GC_MALLOC(strlen(val) + 12);
+    allocated = ant_calloc(strlen(val) + 12);
     sprintf(allocated, "<rejected> %s", val);
-    ANT_GC_FREE(val);
+    free(val);
     content = allocated;
   } else { content = allocated = tostr_alloc(js, pd->value); }
   
@@ -19452,7 +19456,7 @@ static size_t strpromise(struct js *js, jsval_t value, char *buf, size_t len) {
     ? (size_t)snprintf(buf, len, "Promise {\n  %s,\n  Symbol(async_id): %u,\n  Symbol(trigger_async_id): %u\n}", content, pid, pd->trigger_pid)
     : (size_t)snprintf(buf, len, "Promise {\n  %s,\n  Symbol(async_id): %u\n}", content, pid);
   
-  if (allocated) ANT_GC_FREE(allocated);
+  if (allocated) free(allocated);
   return result;
 }
 
@@ -21186,11 +21190,11 @@ static jsval_t builtin_Map(struct js *js, jsval_t *args, int nargs) {
   jsval_t map_proto = get_ctor_proto(js, "Map", 3);
   if (vtype(map_proto) == T_OBJ) set_proto(js, map_obj, map_proto);
   
-  map_entry_t **map_head = (map_entry_t **)ANT_GC_MALLOC(sizeof(map_entry_t *));
+  map_entry_t **map_head = (map_entry_t **)ant_calloc(sizeof(map_entry_t *));
   if (!map_head) return js_mkerr(js, "out of memory");
   *map_head = NULL;
   
-  map_registry_entry_t *reg = (map_registry_entry_t *)ANT_GC_MALLOC(sizeof(map_registry_entry_t));
+  map_registry_entry_t *reg = (map_registry_entry_t *)ant_calloc(sizeof(map_registry_entry_t));
   if (reg) {
     reg->head = map_head;
     HASH_ADD_PTR(map_registry, head, reg);
@@ -21222,7 +21226,7 @@ static jsval_t builtin_Map(struct js *js, jsval_t *args, int nargs) {
       continue;
     }
     
-    map_entry = (map_entry_t *)ANT_GC_MALLOC(sizeof(map_entry_t));
+    map_entry = (map_entry_t *)ant_calloc(sizeof(map_entry_t));
     if (!map_entry) return js_mkerr(js, "out of memory");
     map_entry->key = strdup(key_str);
     map_entry->value = value;
@@ -21238,11 +21242,11 @@ static jsval_t builtin_Set(struct js *js, jsval_t *args, int nargs) {
   jsval_t set_proto_val = get_ctor_proto(js, "Set", 3);
   if (vtype(set_proto_val) == T_OBJ) set_proto(js, set_obj, set_proto_val);
   
-  set_entry_t **set_head = (set_entry_t **)ANT_GC_MALLOC(sizeof(set_entry_t *));
+  set_entry_t **set_head = (set_entry_t **)ant_calloc(sizeof(set_entry_t *));
   if (!set_head) return js_mkerr(js, "out of memory");
   *set_head = NULL;
   
-  set_registry_entry_t *reg = (set_registry_entry_t *)ANT_GC_MALLOC(sizeof(set_registry_entry_t));
+  set_registry_entry_t *reg = (set_registry_entry_t *)ant_calloc(sizeof(set_registry_entry_t));
   if (reg) {
     reg->head = set_head;
     HASH_ADD_PTR(set_registry, head, reg);
@@ -21264,7 +21268,7 @@ static jsval_t builtin_Set(struct js *js, jsval_t *args, int nargs) {
     HASH_FIND_STR(*set_head, key_str, entry);
     if (entry) continue;
     
-    entry = (set_entry_t *)ANT_GC_MALLOC(sizeof(set_entry_t));
+    entry = (set_entry_t *)ant_calloc(sizeof(set_entry_t));
     if (!entry) return js_mkerr(js, "out of memory");
     entry->value = value;
     entry->key = strdup(key_str);
@@ -21305,7 +21309,7 @@ static jsval_t map_set(struct js *js, jsval_t *args, int nargs) {
   if (entry) {
     entry->value = args[1];
   } else {
-    entry = (map_entry_t *)ANT_GC_MALLOC(sizeof(map_entry_t));
+    entry = (map_entry_t *)ant_calloc(sizeof(map_entry_t));
     if (!entry) return js_mkerr(js, "out of memory");
     entry->key = strdup(key_str);
     entry->value = args[1];
@@ -21372,7 +21376,7 @@ static jsval_t map_delete(struct js *js, jsval_t *args, int nargs) {
   if (entry) {
     HASH_DEL(*map_ptr, entry);
     free(entry->key);
-    ANT_GC_FREE(entry);
+    free(entry);
     return mkval(T_BOOL, 1);
   }
   return mkval(T_BOOL, 0);
@@ -21387,7 +21391,7 @@ static jsval_t map_clear(struct js *js, jsval_t *args, int nargs) {
   HASH_ITER(hh, *map_ptr, entry, tmp) {
     HASH_DEL(*map_ptr, entry);
     free(entry->key);
-    ANT_GC_FREE(entry);
+    free(entry);
   }
   *map_ptr = NULL;
   
@@ -21523,7 +21527,7 @@ static jsval_t set_add(struct js *js, jsval_t *args, int nargs) {
   HASH_FIND_STR(*set_ptr, key_str, entry);
   
   if (!entry) {
-    entry = (set_entry_t *)ANT_GC_MALLOC(sizeof(set_entry_t));
+    entry = (set_entry_t *)ant_calloc(sizeof(set_entry_t));
     if (!entry) return js_mkerr(js, "out of memory");
     entry->value = args[0];
     entry->key = strdup(key_str);
@@ -21562,7 +21566,7 @@ static jsval_t set_delete(struct js *js, jsval_t *args, int nargs) {
   if (entry) {
     HASH_DEL(*set_ptr, entry);
     free(entry->key);
-    ANT_GC_FREE(entry);
+    free(entry);
     return mkval(T_BOOL, 1);
   }
   return mkval(T_BOOL, 0);
@@ -21577,7 +21581,7 @@ static jsval_t set_clear(struct js *js, jsval_t *args, int nargs) {
   HASH_ITER(hh, *set_ptr, entry, tmp) {
     HASH_DEL(*set_ptr, entry);
     free(entry->key);
-    ANT_GC_FREE(entry);
+    free(entry);
   }
   *set_ptr = NULL;
   
@@ -21599,7 +21603,7 @@ static jsval_t builtin_WeakMap(struct js *js, jsval_t *args, int nargs) {
   jsval_t wm_proto = get_ctor_proto(js, "WeakMap", 7);
   if (vtype(wm_proto) == T_OBJ) set_proto(js, wm_obj, wm_proto);
   
-  weakmap_entry_t **wm_head = (weakmap_entry_t **)ANT_GC_MALLOC(sizeof(weakmap_entry_t *));
+  weakmap_entry_t **wm_head = (weakmap_entry_t **)ant_calloc(sizeof(weakmap_entry_t *));
   if (!wm_head) return js_mkerr(js, "out of memory");
   *wm_head = NULL;
   
@@ -21631,7 +21635,7 @@ static jsval_t builtin_WeakMap(struct js *js, jsval_t *args, int nargs) {
       continue;
     }
     
-    wm_entry = (weakmap_entry_t *)ANT_GC_MALLOC(sizeof(weakmap_entry_t));
+    wm_entry = (weakmap_entry_t *)ant_calloc(sizeof(weakmap_entry_t));
     if (!wm_entry) return js_mkerr(js, "out of memory");
     wm_entry->key_obj = key;
     wm_entry->value = value;
@@ -21647,7 +21651,7 @@ static jsval_t builtin_WeakSet(struct js *js, jsval_t *args, int nargs) {
   jsval_t ws_proto = get_ctor_proto(js, "WeakSet", 7);
   if (vtype(ws_proto) == T_OBJ) set_proto(js, ws_obj, ws_proto);
   
-  weakset_entry_t **ws_head = (weakset_entry_t **)ANT_GC_MALLOC(sizeof(weakset_entry_t *));
+  weakset_entry_t **ws_head = (weakset_entry_t **)ant_calloc(sizeof(weakset_entry_t *));
   if (!ws_head) return js_mkerr(js, "out of memory");
   *ws_head = NULL;
   
@@ -21669,7 +21673,7 @@ static jsval_t builtin_WeakSet(struct js *js, jsval_t *args, int nargs) {
     HASH_FIND(hh, *ws_head, &value, sizeof(jsval_t), entry);
     if (entry) continue;
     
-    entry = (weakset_entry_t *)ANT_GC_MALLOC(sizeof(weakset_entry_t));
+    entry = (weakset_entry_t *)ant_calloc(sizeof(weakset_entry_t));
     if (!entry) return js_mkerr(js, "out of memory");
     entry->value_obj = value;
     HASH_ADD(hh, *ws_head, value_obj, sizeof(jsval_t), entry);
@@ -21915,7 +21919,7 @@ static jsval_t mkproxy(struct js *js, jsval_t target, jsval_t handler) {
   jsval_t proxy_obj = mkobj(js, 0);
   jsoff_t off = (jsoff_t)vdata(proxy_obj);
   
-  proxy_data_t *data = (proxy_data_t *)ANT_GC_MALLOC(sizeof(proxy_data_t));
+  proxy_data_t *data = (proxy_data_t *)ant_calloc(sizeof(proxy_data_t));
   if (!data) return js_mkerr(js, "out of memory");
   
   data->obj_offset = off;
@@ -22011,7 +22015,7 @@ static jsval_t weakmap_set(struct js *js, jsval_t *args, int nargs) {
   if (entry) {
     entry->value = args[1];
   } else {
-    entry = (weakmap_entry_t *)ANT_GC_MALLOC(sizeof(weakmap_entry_t));
+    entry = (weakmap_entry_t *)ant_calloc(sizeof(weakmap_entry_t));
     if (!entry) return js_mkerr(js, "out of memory");
     entry->key_obj = key_obj;
     entry->value = args[1];
@@ -22065,7 +22069,7 @@ static jsval_t weakmap_delete(struct js *js, jsval_t *args, int nargs) {
   HASH_FIND(hh, *wm_ptr, &key_obj, sizeof(jsval_t), entry);
   if (entry) {
     HASH_DEL(*wm_ptr, entry);
-    ANT_GC_FREE(entry);
+    free(entry);
     return mkval(T_BOOL, 1);
   }
   return mkval(T_BOOL, 0);
@@ -22088,7 +22092,7 @@ static jsval_t weakset_add(struct js *js, jsval_t *args, int nargs) {
   HASH_FIND(hh, *ws_ptr, &value_obj, sizeof(jsval_t), entry);
   
   if (!entry) {
-    entry = (weakset_entry_t *)ANT_GC_MALLOC(sizeof(weakset_entry_t));
+    entry = (weakset_entry_t *)ant_calloc(sizeof(weakset_entry_t));
     if (!entry) return js_mkerr(js, "out of memory");
     entry->value_obj = value_obj;
     HASH_ADD(hh, *ws_ptr, value_obj, sizeof(jsval_t), entry);
@@ -22128,7 +22132,7 @@ static jsval_t weakset_delete(struct js *js, jsval_t *args, int nargs) {
   
   if (entry) {
     HASH_DEL(*ws_ptr, entry);
-    ANT_GC_FREE(entry);
+    free(entry);
     return mkval(T_BOOL, 1);
   }
   return mkval(T_BOOL, 0);
@@ -22140,10 +22144,9 @@ ant_t *js_create(void *buf, size_t len) {
     "ANT_PTR: pointer exceeds 53-bit NaN-boxing limit"
   );
   
-  ANT_GC_INIT();
   intern_init();
-    
   ant_t *js = NULL;
+  
   if (len < sizeof(*js) + esize(T_OBJ)) return js;
   memset(buf, 0, len);
   
@@ -22730,21 +22733,26 @@ ant_t *js_create(void *buf, size_t len) {
   return js;
 }
 
-#define MIN_SIZE 32 * 1024
-#define MAX_SIZE 1024 * 1024 * 1024
-
 struct js *js_create_dynamic(size_t initial_size, size_t max_size) {
-  if (initial_size < sizeof(struct js) + esize(T_OBJ)) initial_size = MIN_SIZE;
-  if (max_size == 0 || max_size < initial_size) max_size = MAX_SIZE;
+  if (initial_size < sizeof(struct js) + esize(T_OBJ)) initial_size = ANT_ARENA_MIN;
+  if (max_size == 0 || max_size < initial_size) max_size = ANT_ARENA_MAX;
   
-  void *buf = ANT_GC_MALLOC(initial_size);
-  if (buf == NULL) return NULL;
+  void *init_buf = ant_calloc(initial_size);
+  if (init_buf == NULL) return NULL;
   
-  struct js *js = js_create(buf, initial_size);
-  if (js == NULL) {
-    ANT_GC_FREE(buf);
-    return NULL;
+  struct js *js = js_create(init_buf, initial_size);
+  if (js == NULL) { free(init_buf); return NULL; }
+  
+  uint8_t *arena = (uint8_t *)ant_arena_reserve(max_size);
+  if (arena == NULL) { free(init_buf); return NULL; }
+  
+  if (ant_arena_commit(arena, 0, js->size) != 0) {
+    ant_arena_free(arena, max_size);
+    free(init_buf); return NULL;
   }
+  
+  memcpy(arena, js->mem, js->brk);
+  js->mem = arena;
   
   js->owns_mem = true;
   js->max_size = (jsoff_t) max_size;
@@ -22768,7 +22776,7 @@ void js_destroy(struct js *js) {
     js->for_let_stack = NULL;
   }
   
-  if (js->owns_mem) ANT_GC_FREE((void *)((uint8_t *)js - 0));
+  if (js->owns_mem) ant_arena_free(js->mem, js->max_size);
 }
 
 inline double js_getnum(jsval_t value) { return tod(value); }
@@ -23200,7 +23208,7 @@ void js_gc_update_roots(GC_UPDATE_ARGS) {
       HASH_DEL(proxy_registry, proxy);
       jsoff_t old_off = proxy->obj_offset;
       jsoff_t new_off = fwd_off(ctx, old_off);
-      if (new_off == old_off && old_off != 0) { ANT_GC_FREE(proxy); continue; }
+      if (new_off == old_off && old_off != 0) { free(proxy); continue; }
       proxy->obj_offset = new_off;
       FWD_VAL(proxy->target); FWD_VAL(proxy->handler);
       HASH_ADD(hh, new_proxy_registry, obj_offset, sizeof(jsoff_t), proxy);
@@ -23223,7 +23231,7 @@ void js_gc_update_roots(GC_UPDATE_ARGS) {
       HASH_DEL(desc_registry, desc);
       jsoff_t old_off = (jsoff_t)(desc->key >> 32);
       jsoff_t new_off = fwd_off(ctx, old_off);
-      if (new_off == old_off && old_off != 0) { ANT_GC_FREE(desc); continue; }
+      if (new_off == old_off && old_off != 0) { free(desc); continue; }
       if (desc->has_getter) FWD_VAL(desc->getter);
       if (desc->has_setter) FWD_VAL(desc->setter);
       desc->key = ((uint64_t)new_off << 32) | (uint32_t)(desc->key & 0xFFFFFFFF);
@@ -23295,7 +23303,7 @@ static jsval_t js_eval_inherit_strict(struct js *js, const char *buf, size_t len
     res = js_stmt(js);
     if (js->needs_gc && js->eval_depth == 1 && !js->gc_suppress) {
       js->needs_gc = false;
-      js_gc_compact(js);
+      // js_gc_compact(js);
     }
     if (js->flags & F_RETURN) break;
   }
@@ -23344,7 +23352,7 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
       js->current_func = saved_func;
       js->this_val = saved_this;
       
-      if (combined_args) ANT_GC_FREE(combined_args);
+      if (combined_args) free(combined_args);
       return res;
     }
     
@@ -23365,7 +23373,7 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
     if (is_async) {
       jsval_t closure_scope = get_slot(js, func_obj, SLOT_SCOPE);
       jsval_t res = start_async_in_coroutine(js, fn, fnlen, closure_scope, final_args, final_nargs);
-      if (combined_args) ANT_GC_FREE(combined_args);
+      if (combined_args) free(combined_args);
       return res;
     }
     
@@ -23382,7 +23390,7 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
     if (!pf) {
       delscope(js);
       js->scope = saved_scope;
-      if (combined_args) ANT_GC_FREE(combined_args);
+      if (combined_args) free(combined_args);
       return js_mkerr(js, "failed to parse function");
     }
     
@@ -23449,7 +23457,7 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
     js->this_val = saved_this;
     delscope(js);
     js->scope = saved_scope;
-    if (combined_args) ANT_GC_FREE(combined_args);
+    if (combined_args) free(combined_args);
     
     return res;
   }
@@ -23592,7 +23600,7 @@ static descriptor_entry_t *get_or_create_desc(struct js *js, jsval_t obj, const 
   descriptor_entry_t *entry = NULL;
   HASH_FIND(hh, desc_registry, &desc_key, sizeof(uint64_t), entry);
   if (!entry) {
-    entry = (descriptor_entry_t *)ANT_GC_MALLOC(sizeof(descriptor_entry_t) + klen + 1);
+    entry = (descriptor_entry_t *)ant_calloc(sizeof(descriptor_entry_t) + klen + 1);
     if (!entry) return NULL;
     
     entry->key = desc_key;

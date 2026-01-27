@@ -1,37 +1,23 @@
 #ifndef ARENA_H
 #define ARENA_H
 
-#include <gc.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <minicoro.h>
 
-static inline void ANT_GC_INIT(void) {
-  GC_INIT();
-  GC_enable();
-}
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
 
-static inline void ANT_GC_COLLECT(void) {
-  mco_coro* running = mco_running();
-  struct GC_stack_base sb;
-  int in_coroutine = (running != NULL && running->stack_base != NULL);
-  
-  if (in_coroutine) {
-    memset(&sb, 0, sizeof(sb));
-    sb.mem_base = running->stack_base;
-    GC_set_stackbottom(NULL, &sb);
-  }
-  
-  GC_gcollect();
-  
-  if (in_coroutine) {
-    memset(&sb, 0, sizeof(sb));
-    GC_get_stack_base(&sb);
-    GC_set_stackbottom(NULL, &sb);
-  }
-}
+#define ANT_ARENA_MIN (32 * 1024)
+#define ANT_ARENA_MAX (256ULL * 1024 * 1024 * 1024)
+
+#define ANT_ARENA_THRESHOLD (256ULL * 1024 * 1024)
+#define ARENA_GROW_INCREMENT (8ULL * 1024 * 1024)
 
 static inline void *mantissa_chk(void *p, const char *func) {
   if (p && ((uintptr_t)p >> 48) != 0) {
@@ -44,12 +30,47 @@ static inline void *mantissa_chk(void *p, const char *func) {
   return p;
 }
 
-#define ANT_GC_MALLOC(size) mantissa_chk(GC_MALLOC_IGNORE_OFF_PAGE(size), "GC_MALLOC")
-#define ANT_GC_REALLOC(ptr, size) mantissa_chk(GC_REALLOC(ptr, size), "GC_REALLOC")
-#define ANT_GC_MALLOC_ATOMIC(size) mantissa_chk(GC_MALLOC_ATOMIC_IGNORE_OFF_PAGE(size), "GC_MALLOC_ATOMIC")
+#define ant_calloc(size) mantissa_chk(calloc(1, size), "calloc")
+#define ant_realloc(ptr, size) mantissa_chk(realloc(ptr, size), "realloc")
 
-#define ANT_GC_FREE(ptr) GC_FREE(ptr)
-#define ANT_GC_REGISTER_ROOT(ptr)
-#define ANT_GC_UNREGISTER_ROOT(ptr)
+#ifdef _WIN32
 
+static inline void *ant_arena_reserve(size_t max_size) {
+  void *p = VirtualAlloc(NULL, max_size, MEM_RESERVE, PAGE_NOACCESS);
+  return mantissa_chk(p, "VirtualAlloc");
+}
+
+static inline int ant_arena_commit(void *base, size_t old_size, size_t new_size) {
+  if (new_size <= old_size) return 0;
+  void *p = VirtualAlloc((char *)base + old_size, new_size - old_size, MEM_COMMIT, PAGE_READWRITE);
+  return p ? 0 : -1;
+}
+
+static inline void ant_arena_free(void *base, size_t reserved_size) {
+  (void)reserved_size;
+  if (base) VirtualFree(base, 0, MEM_RELEASE);
+}
+
+#else
+
+static inline void *ant_arena_reserve(size_t max_size) {
+  void *p = mmap(NULL, max_size, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
+  if (p == MAP_FAILED) return NULL;
+  return mantissa_chk(p, "mmap");
+}
+
+static inline int ant_arena_commit(void *base, size_t old_size, size_t new_size) {
+  if (new_size <= old_size) return 0;
+  size_t page_size = (size_t)sysconf(_SC_PAGESIZE);
+  size_t old_pages = (old_size + page_size - 1) & ~(page_size - 1);
+  size_t new_pages = (new_size + page_size - 1) & ~(page_size - 1);
+  if (new_pages <= old_pages) return 0;
+  return mprotect((char *)base + old_pages, new_pages - old_pages, PROT_READ | PROT_WRITE);
+}
+
+static inline void ant_arena_free(void *base, size_t reserved_size) {
+  if (base) munmap(base, reserved_size);
+}
+
+#endif
 #endif
