@@ -5,6 +5,7 @@
 #include <yyjson.h>
 #include <uthash.h>
 
+#include "errors.h"
 #include "runtime.h"
 #include "internal.h"
 #include "modules/json.h"

@@ -4,8 +4,10 @@
 #pragma once
 #define PCRE2_CODE_UNIT_WIDTH 8
 
+#include "types.h"
+#include "common.h"
+
 #include <math.h>
-#include <common.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -25,15 +27,6 @@
 #define JS_INF     ((double)INFINITY)
 #define JS_NEG_INF ((double)(-INFINITY))
 
-struct js;
-
-typedef struct js ant_t;
-typedef unsigned long long u64;
-
-typedef int      jshdl_t;
-typedef uint64_t jsoff_t;
-typedef uint64_t jsval_t;
-
 #define ANT_LIMIT_SIZE_CACHE 16384
 #define CORO_PER_TICK_LIMIT 10000
 
@@ -45,26 +38,9 @@ enum {
   JS_ERR, JS_PRIV, JS_PROMISE, JS_OBJ, JS_FUNC, JS_SYMBOL
 };
 
-typedef enum {
-  JS_ERR_TYPE,
-  JS_ERR_SYNTAX,
-  JS_ERR_REFERENCE,
-  JS_ERR_RANGE,
-  JS_ERR_EVAL,
-  JS_ERR_URI,
-  JS_ERR_INTERNAL,
-  JS_ERR_AGGREGATE,
-  JS_ERR_GENERIC
-} js_err_type_t;
-
 #define JS_DESC_W (1 << 0)
 #define JS_DESC_E (1 << 1)
 #define JS_DESC_C (1 << 2)
-
-#define js_mkerr(js, ...) js_create_error(js, JS_ERR_TYPE, js_mkundef(), __VA_ARGS__)
-#define js_mkerr_typed(js, err_type, ...) js_create_error(js, err_type, js_mkundef(), __VA_ARGS__)
-#define js_mkerr_props(js, err_type, props, ...) js_create_error(js, err_type, props, __VA_ARGS__)
-jsval_t js_create_error(ant_t *js, js_err_type_t err_type, jsval_t props, const char *fmt, ...);
 
 ant_t *js_create(void *buf, size_t len);
 ant_t *js_create_dynamic(size_t initial_size, size_t max_size);
@@ -154,6 +130,7 @@ double js_getnum(jsval_t val);
 char *js_getstr(ant_t *js, jsval_t val, size_t *len);
 
 const char *js_str(ant_t *, jsval_t val);
+const char *get_str_prop(struct js *js, jsval_t obj, const char *key, jsoff_t klen, jsoff_t *out_len);
 
 typedef struct {
   void *ctx;

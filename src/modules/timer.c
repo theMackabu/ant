@@ -12,6 +12,7 @@
 #endif
 
 #include "arena.h"
+#include "errors.h"
 #include "runtime.h"
 #include "modules/timer.h"
 

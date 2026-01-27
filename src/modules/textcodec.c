@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "runtime.h"
+#include "errors.h"
 #include "modules/textcodec.h"
 #include "modules/buffer.h"
 #include "modules/symbol.h"

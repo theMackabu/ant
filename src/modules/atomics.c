@@ -7,6 +7,7 @@
 #include <errno.h>
 
 #include "ant.h"
+#include "errors.h"
 #include "runtime.h"
 
 #include "modules/buffer.h"

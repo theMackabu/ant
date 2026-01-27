@@ -27,9 +27,11 @@
 #endif
 
 #include "ant.h"
+#include "errors.h"
 #include "config.h"
 #include "internal.h"
 #include "runtime.h"
+
 #include "modules/process.h"
 #include "modules/symbol.h"
 

@@ -11,6 +11,7 @@
 #include <errno.h>
 
 #include "ant.h"
+#include "errors.h"
 #include "internal.h"
 #include "runtime.h"
 
@@ -372,8 +373,7 @@ static jsval_t builtin_fs_readFileSync(struct js *js, jsval_t *args, int nargs) 
   if (!file) {
     char err_msg[256];
     snprintf(err_msg, sizeof(err_msg), "Failed to open file: %s", strerror(errno));
-    free(path_cstr);
-    return js_mkerr(js, err_msg);
+    free(path_cstr); return js_mkerr(js, "%s", err_msg);
   }
   
   fseek(file, 0, SEEK_END);
@@ -424,8 +424,7 @@ static jsval_t builtin_fs_readBytesSync(struct js *js, jsval_t *args, int nargs)
   if (!file) {
     char err_msg[256];
     snprintf(err_msg, sizeof(err_msg), "Failed to open file: %s", strerror(errno));
-    free(path_cstr);
-    return js_mkerr(js, err_msg);
+    free(path_cstr); return js_mkerr(js, "%s", err_msg);
   }
   
   fseek(file, 0, SEEK_END);
@@ -545,8 +544,7 @@ static jsval_t builtin_fs_writeFileSync(struct js *js, jsval_t *args, int nargs)
   if (!file) {
     char err_msg[256];
     snprintf(err_msg, sizeof(err_msg), "Failed to open file: %s", strerror(errno));
-    free(path_cstr);
-    return js_mkerr(js, err_msg);
+    free(path_cstr); return js_mkerr(js, "%s", err_msg);
   }
   
   size_t bytes_written = fwrite(data, 1, data_len, file);
@@ -584,9 +582,8 @@ static jsval_t builtin_fs_copyFileSync(struct js *js, jsval_t *args, int nargs) 
   if (!in) {
     char err_msg[256];
     snprintf(err_msg, sizeof(err_msg), "Failed to open source file: %s", strerror(errno));
-    free(src_cstr);
-    free(dest_cstr);
-    return js_mkerr(js, err_msg);
+    free(src_cstr); free(dest_cstr);
+    return js_mkerr(js, "%s", err_msg);  
   }
   
   FILE *out = fopen(dest_cstr, "wb");
@@ -594,9 +591,8 @@ static jsval_t builtin_fs_copyFileSync(struct js *js, jsval_t *args, int nargs) 
     char err_msg[256];
     snprintf(err_msg, sizeof(err_msg), "Failed to open dest file: %s", strerror(errno));
     fclose(in);
-    free(src_cstr);
-    free(dest_cstr);
-    return js_mkerr(js, err_msg);
+    free(src_cstr); free(dest_cstr);
+    return js_mkerr(js, "%s", err_msg);
   }
   
   char buf[8192];
@@ -646,7 +642,7 @@ static jsval_t builtin_fs_renameSync(struct js *js, jsval_t *args, int nargs) {
   if (result != 0) {
     char err_msg[256];
     snprintf(err_msg, sizeof(err_msg), "Failed to rename: %s", strerror(errno));
-    return js_mkerr(js, err_msg);
+    return js_mkerr(js, "%s", err_msg);
   }
   
   return js_mkundef();
@@ -671,8 +667,7 @@ static jsval_t builtin_fs_appendFileSync(struct js *js, jsval_t *args, int nargs
   if (!file) {
     char err_msg[256];
     snprintf(err_msg, sizeof(err_msg), "Failed to open file: %s", strerror(errno));
-    free(path_cstr);
-    return js_mkerr(js, err_msg);
+    free(path_cstr); return js_mkerr(js, "%s", err_msg);
   }
   
   size_t bytes_written = fwrite(data, 1, data_len, file);
@@ -749,7 +744,7 @@ static jsval_t builtin_fs_unlinkSync(struct js *js, jsval_t *args, int nargs) {
   if (result != 0) {
     char err_msg[256];
     snprintf(err_msg, sizeof(err_msg), "Failed to unlink file: %s", strerror(errno));
-    return js_mkerr(js, err_msg);
+    return js_mkerr(js, "%s", err_msg);
   }
   
   return js_mkundef();
@@ -834,7 +829,7 @@ do_mkdir:
     }
     char err_msg[256];
     snprintf(err_msg, sizeof(err_msg), "Failed to create directory: %s", strerror(errno));
-    return js_mkerr(js, err_msg);
+    return js_mkerr(js, "%s", err_msg);
   }
   
   return js_mkundef();
@@ -900,7 +895,7 @@ static jsval_t builtin_fs_rmdirSync(struct js *js, jsval_t *args, int nargs) {
   if (result != 0) {
     char err_msg[256];
     snprintf(err_msg, sizeof(err_msg), "Failed to remove directory: %s", strerror(errno));
-    return js_mkerr(js, err_msg);
+    return js_mkerr(js, "%s", err_msg);
   }
   
   return js_mkundef();
@@ -1199,8 +1194,7 @@ static jsval_t builtin_fs_readdirSync(struct js *js, jsval_t *args, int nargs) {
   if (result < 0) {
     char err_msg[256];
     snprintf(err_msg, sizeof(err_msg), "Failed to read directory: %s", uv_strerror(result));
-    uv_fs_req_cleanup(&req);
-    return js_mkerr(js, err_msg);
+    uv_fs_req_cleanup(&req); return js_mkerr(js, "%s", err_msg);
   }
   
   jsval_t arr = js_mkarr(js);

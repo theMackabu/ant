@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "ant.h"
+#include "errors.h"
 #include "runtime.h"
 #include "modules/reflect.h"
 #include "modules/symbol.h"

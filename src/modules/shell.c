@@ -12,6 +12,7 @@
 #endif
 
 #include "ant.h"
+#include "errors.h"
 #include "modules/symbol.h"
 
 static jsval_t builtin_shell_text(struct js *js, jsval_t *args, int nargs);

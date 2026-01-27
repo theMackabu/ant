@@ -5,6 +5,7 @@
 #include <uthash.h>
 
 #include "ant.h"
+#include "errors.h"
 #include "arena.h"
 #include "runtime.h"
 

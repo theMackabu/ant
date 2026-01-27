@@ -6,6 +6,7 @@
 #include <ctype.h>
 
 #include "ant.h"
+#include "errors.h"
 #include "runtime.h"
 #include "modules/url.h"
 

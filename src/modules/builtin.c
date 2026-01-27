@@ -1,4 +1,3 @@
-#include "ant.h"
 #include <compat.h> // IWYU pragma: keep
 
 #include <stdlib.h>
@@ -14,6 +13,8 @@
 #include <sys/resource.h>
 #endif
 
+#include "ant.h"
+#include "errors.h"
 #include "runtime.h"
 #include "internal.h"
 #include "modules/builtin.h"

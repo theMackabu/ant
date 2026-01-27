@@ -34,6 +34,7 @@
 #endif
 
 #include "ant.h"
+#include "errors.h"
 #include "modules/symbol.h"
 
 #ifdef _WIN32

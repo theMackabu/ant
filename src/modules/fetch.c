@@ -9,6 +9,7 @@
 #include <utarray.h>
 
 #include "ant.h"
+#include "errors.h"
 #include "config.h"
 #include "common.h"
 #include "runtime.h"

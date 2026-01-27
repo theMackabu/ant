@@ -95,6 +95,12 @@ void js_gc_update_roots(GC_UPDATE_ARGS);
 bool js_has_pending_coroutines(void);
 bool is_internal_prop(const char *key, jsoff_t klen);
 
+jsoff_t lkp(struct js *js, jsval_t obj, const char *buf, size_t len);
+jsoff_t vstr(struct js *js, jsval_t value, jsoff_t *len);
+
+jsval_t mkval(uint8_t type, uint64_t data);
+jsval_t resolveprop(struct js *js, jsval_t v);
+
 #define is_non_numeric(v) ((1u << vtype(v)) & T_NON_NUMERIC_MASK)
 
 #endif

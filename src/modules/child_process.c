@@ -23,6 +23,7 @@
 #endif
 
 #include "ant.h"
+#include "errors.h"
 #include "modules/child_process.h"
 #include "modules/symbol.h"
 
@@ -783,8 +784,7 @@ static jsval_t builtin_execSync(struct js *js, jsval_t *args, int nargs) {
   if (exit_code != 0) {
     char err_msg[256];
     snprintf(err_msg, sizeof(err_msg), "Command failed with exit code %d", exit_code);
-    free(output);
-    return js_mkerr(js, err_msg);
+    free(output); return js_mkerr(js, "%s", err_msg);
   }
   
   jsval_t result = js_mkstr(js, output, output_len);

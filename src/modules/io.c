@@ -9,6 +9,7 @@
 #include <uv.h>
 
 #include "common.h"
+#include "errors.h"
 #include "internal.h"
 #include "runtime.h"
 #include "modules/io.h"

@@ -1,6 +1,7 @@
 #include <string.h>
 
 #include "ant.h"
+#include "errors.h"
 #include "snapshot.h"
 #include "snapshot_data.h"
 

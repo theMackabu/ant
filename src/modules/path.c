@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "ant.h"
+#include "errors.h"
 #include "modules/symbol.h"
 
 #ifndef PATH_MAX

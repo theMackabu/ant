@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "errors.h"
 #include "internal.h"
 #include "runtime.h"
 

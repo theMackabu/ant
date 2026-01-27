@@ -12,6 +12,7 @@
 #endif
 
 #include "ant.h"
+#include "errors.h"
 #include "config.h"
 #include "runtime.h"
 #include "modules/navigator.h"

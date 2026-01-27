@@ -22,6 +22,7 @@
 #endif
 
 #include "ant.h"
+#include "errors.h"
 #include "runtime.h"
 #include "modules/readline.h"
 #include "modules/symbol.h"

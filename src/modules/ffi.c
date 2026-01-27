@@ -15,6 +15,7 @@
 #include <utarray.h>
 #include <uthash.h>
 
+#include "errors.h"
 #include "modules/ffi.h"
 #include "modules/symbol.h"
 
