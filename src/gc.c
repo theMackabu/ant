@@ -6,12 +6,33 @@
 #include <stdlib.h>
 #include <stdio.h>
 
+#ifdef _WIN32
+#include <windows.h>
+static inline void *gc_mmap(size_t size) {
+  return VirtualAlloc(NULL, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+}
+static inline void gc_munmap(void *ptr, size_t size) {
+  (void)size;
+  VirtualFree(ptr, 0, MEM_RELEASE);
+}
+#else
+#include <sys/mman.h>
+static inline void *gc_mmap(size_t size) {
+  void *p = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+  return (p == MAP_FAILED) ? NULL : p;
+}
+static inline void gc_munmap(void *ptr, size_t size) {
+  munmap(ptr, size);
+}
+#endif
+
 #define MCO_API extern
 #include "minicoro.h"
 
-#define GC_MIN_HEAP_SIZE (64 * 1024)
-#define GC_SHRINK_THRESHOLD 4
 #define GC_FWD_LOAD_FACTOR 70
+
+static uint8_t *gc_scratch_buf = NULL;
+static size_t gc_scratch_size = 0;
 
 #define FWD_EMPTY ((jsoff_t)~0)
 #define FWD_TOMBSTONE ((jsoff_t)~1)
@@ -492,19 +513,20 @@ size_t js_gc_compact(ant_t *js) {
   if (in_coroutine || js_has_pending_coroutines()) return 0;
   
   size_t old_brk = js->brk;
-  size_t old_size = js->size;
-  size_t new_size = old_size;
+  size_t new_size = js->size;
   
-  uint8_t *new_mem = (uint8_t *)ant_calloc(new_size);
-  if (!new_mem) return 0;
+  if (new_size > gc_scratch_size) {
+    if (gc_scratch_buf) gc_munmap(gc_scratch_buf, gc_scratch_size);
+    gc_scratch_buf = (uint8_t *)gc_mmap(new_size);
+    gc_scratch_size = gc_scratch_buf ? new_size : 0;
+  }
+  if (!gc_scratch_buf) return 0;
+  uint8_t *new_mem = gc_scratch_buf;
   memset(new_mem, 0, new_size);
   
-  size_t bitmap_size = (js->brk / 4 + 7) / 8 + 1;
+  size_t bitmap_size = (js->brk / 8 + 7) / 8 + 1;
   uint8_t *mark_bits = (uint8_t *)calloc(1, bitmap_size);
-  if (!mark_bits) {
-    free(new_mem);
-    return 0;
-  }
+  if (!mark_bits) return 0;
   
   size_t estimated_objs = js->brk / 64;
   if (estimated_objs < 256) estimated_objs = 256;
@@ -517,14 +539,12 @@ size_t js_gc_compact(ant_t *js) {
   ctx.mark_bits = mark_bits;
   
   if (!fwd_init(&ctx.fwd, estimated_objs)) {
-    free(new_mem);
     free(mark_bits);
     return 0;
   }
   
   if (!work_init(&ctx.work, estimated_objs / 4 < 64 ? 64 : estimated_objs / 4)) {
     fwd_free(&ctx.fwd);
-    free(new_mem);
     free(mark_bits);
     return 0;
   }
@@ -554,7 +574,6 @@ size_t js_gc_compact(ant_t *js) {
     free(mark_bits);
     work_free(&ctx.work);
     fwd_free(&ctx.fwd);
-    free(new_mem);
     return 0;
   }
     
@@ -566,27 +585,8 @@ size_t js_gc_compact(ant_t *js) {
   js->tval = gc_apply_val(&ctx, js->tval);
   js_gc_update_roots(js, gc_apply_off_callback, gc_apply_val_callback, &ctx);
   
-  uint8_t *old_mem = js->mem;
-  js->mem = new_mem;
+  memcpy(js->mem, new_mem, ctx.new_brk);
   js->brk = ctx.new_brk;
-  
-  free(old_mem);
-  
-  size_t used = ctx.new_brk;
-  size_t shrunk_size = used * 2;
-  if (shrunk_size < GC_MIN_HEAP_SIZE) shrunk_size = GC_MIN_HEAP_SIZE;
-  shrunk_size = (shrunk_size + 7) & ~7;
-  
-  if (old_size >= GC_SHRINK_THRESHOLD * shrunk_size && shrunk_size < old_size) {
-    uint8_t *shrunk_mem = (uint8_t *)ant_calloc(shrunk_size);
-    if (shrunk_mem) {
-      memcpy(shrunk_mem, js->mem, used);
-      memset(shrunk_mem + used, 0, shrunk_size - used);
-      free(js->mem);
-      js->mem = shrunk_mem;
-      js->size = (jsoff_t)shrunk_size;
-    }
-  }
   
   free(mark_bits);
   work_free(&ctx.work);

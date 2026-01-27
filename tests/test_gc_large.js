@@ -6,10 +6,11 @@ function fmt(bytes) {
   return (bytes / 1024 / 1024).toFixed(2) + ' MB';
 }
 
-let alloc1 = Ant.alloc();
+let stats1 = Ant.stats();
 console.log('Initial:');
-console.log('  heapSize:', fmt(alloc1.heapSize));
-console.log('  totalBytes:', fmt(alloc1.totalBytes));
+console.log('  arenaUsed:', fmt(stats1.arenaUsed));
+console.log('  arenaSize:', fmt(stats1.arenaSize));
+console.log('  rss:', fmt(stats1.rss));
 console.log('');
 
 // Allocate large objects
@@ -22,29 +23,31 @@ for (let i = 0; i < 5; i++) {
   largeObjects.push(arr);
 }
 
-let alloc2 = Ant.alloc();
-console.log('After allocating 5MB:');
-console.log('  heapSize:', fmt(alloc2.heapSize));
-console.log('  totalBytes:', fmt(alloc2.totalBytes));
+let stats2 = Ant.stats();
+console.log('After allocating large arrays:');
+console.log('  arenaUsed:', fmt(stats2.arenaUsed));
+console.log('  arenaSize:', fmt(stats2.arenaSize));
+console.log('  rss:', fmt(stats2.rss));
 console.log('');
 
 // Free the objects
 largeObjects = null;
 
 let gc1 = Ant.gc();
-console.log('GC 1: freed:', fmt(gc1.freed), 'arenaFreed:', fmt(gc1.arenaFreed));
+console.log('GC 1: arenaFreed:', fmt(gc1.arenaFreed));
 let gc2 = Ant.gc();
-console.log('GC 2: freed:', fmt(gc2.freed), 'arenaFreed:', fmt(gc2.arenaFreed));
+console.log('GC 2: arenaFreed:', fmt(gc2.arenaFreed));
 let gc3 = Ant.gc();
-console.log('GC 3: freed:', fmt(gc3.freed), 'arenaFreed:', fmt(gc3.arenaFreed));
+console.log('GC 3: arenaFreed:', fmt(gc3.arenaFreed));
 
-let alloc3 = Ant.alloc();
-console.log('After 3x GC:');
-console.log('  heapSize:', fmt(alloc3.heapSize));
-console.log('  totalBytes:', fmt(alloc3.totalBytes));
+let stats3 = Ant.stats();
+console.log('\nAfter 3x GC:');
+console.log('  arenaUsed:', fmt(stats3.arenaUsed));
+console.log('  arenaSize:', fmt(stats3.arenaSize));
+console.log('  rss:', fmt(stats3.rss));
 console.log('');
 
-// Allocate again - if GC worked, heap shouldn't grow much
+// Allocate again - if GC worked, arena shouldn't grow much
 let moreObjects = [];
 for (let i = 0; i < 5; i++) {
   let arr = new Array(1024 * 128);
@@ -54,12 +57,13 @@ for (let i = 0; i < 5; i++) {
   moreObjects.push(arr);
 }
 
-let alloc4 = Ant.alloc();
-console.log('After allocating another 5MB:');
-console.log('  heapSize:', fmt(alloc4.heapSize));
-console.log('  totalBytes:', fmt(alloc4.totalBytes));
-console.log('  heap increase from GC point:', fmt(alloc4.heapSize - alloc3.heapSize));
+let stats4 = Ant.stats();
+console.log('After allocating another batch:');
+console.log('  arenaUsed:', fmt(stats4.arenaUsed));
+console.log('  arenaSize:', fmt(stats4.arenaSize));
+console.log('  rss:', fmt(stats4.rss));
+console.log('  arenaUsed increase from GC point:', fmt(stats4.arenaUsed - stats3.arenaUsed));
 console.log('');
 
-console.log('If heapSize stayed same, GC reclaimed memory for reuse!');
+console.log('If arenaSize stayed same, GC reclaimed memory for reuse!');
 console.log('=== Test Complete ===');

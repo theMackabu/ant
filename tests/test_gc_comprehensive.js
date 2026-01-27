@@ -1,6 +1,12 @@
 console.log('=== Comprehensive GC Test ===');
 console.log('Starting...\n');
 
+function fmt(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(2) + ' KB';
+  return (bytes / 1024 / 1024).toFixed(2) + ' MB';
+}
+
 let failures = 0;
 function assert(condition, msg) {
   if (!condition) {
@@ -51,8 +57,12 @@ console.log('Test 4: Property Descriptors');
 let descObj = {};
 let _hidden = 'initial';
 Object.defineProperty(descObj, 'prop', {
-  get: function() { return _hidden; },
-  set: function(v) { _hidden = v; },
+  get: function () {
+    return _hidden;
+  },
+  set: function (v) {
+    _hidden = v;
+  },
   enumerable: true,
   configurable: true
 });
@@ -67,22 +77,21 @@ console.log('  Property descriptors: OK\n');
 console.log('Test 5: Promises');
 let promiseResolved = false;
 let promiseValue = null;
-let p = new Promise((resolve) => {
+let p = new Promise(resolve => {
   resolve({ result: 'success' });
 });
-p.then((val) => {
+p.then(val => {
   promiseResolved = true;
   promiseValue = val;
 });
 Ant.gc();
-// Run microtasks
 console.log('  Waiting for promise...');
 
 // Test 6: Proxy survives GC
 console.log('Test 6: Proxy');
 let proxyTarget = { x: 10, y: 20 };
 let proxyHandler = {
-  get: function(target, prop) {
+  get: function (target, prop) {
     if (prop === 'sum') return target.x + target.y;
     return target[prop];
   }
@@ -99,8 +108,13 @@ console.log('Test 7: Closures');
 function makeCounter() {
   let count = 0;
   return {
-    inc: function() { count = count + 1; return count; },
-    get: function() { return count; }
+    inc: function () {
+      count = count + 1;
+      return count;
+    },
+    get: function () {
+      return count;
+    }
   };
 }
 let counter = makeCounter();
@@ -130,13 +144,14 @@ let largeArr = [];
 for (let i = 0; i < 1000; i = i + 1) {
   largeArr.push({ index: i, data: 'item ' + i });
 }
-let allocBefore = Ant.alloc();
+let statsBefore = Ant.stats();
 Ant.gc();
-let allocAfter = Ant.alloc();
+let statsAfter = Ant.stats();
 assert(largeArr.length === 1000, 'large array should have 1000 elements');
 assert(largeArr[500].index === 500, 'element 500 should be correct');
 assert(largeArr[999].data === 'item 999', 'last element should be correct');
-console.log('  Large allocations: OK\n');
+console.log('  Large allocations: OK');
+console.log('  arenaUsed before:', fmt(statsBefore.arenaUsed), 'after:', fmt(statsAfter.arenaUsed), '\n');
 
 // Test 10: Nested structures
 console.log('Test 10: Nested Structures');
@@ -169,23 +184,23 @@ if (failures === 0) {
 console.log('\n=== Async GC Test ===');
 async function testAsyncGC() {
   let asyncData = { value: 'before await' };
-  
+
   await new Promise(resolve => setTimeout(resolve, 10));
-  
+
   // GC inside coroutine (should skip compaction)
   Ant.gc();
-  
+
   asyncData.value = 'after first await';
-  
+
   await new Promise(resolve => setTimeout(resolve, 10));
-  
+
   assert(asyncData.value === 'after first await', 'async data should survive await');
-  
+
   console.log('  Async GC: OK');
   return 'async complete';
 }
 
-testAsyncGC().then((result) => {
+testAsyncGC().then(result => {
   console.log('  Result:', result);
   console.log('\n=== All Tests Complete ===');
 });

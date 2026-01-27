@@ -105,12 +105,10 @@ function repeatedGcCycles() {
 
 console.log('=== GC Benchmark ===\n');
 
-let initial = Ant.alloc();
+let initial = Ant.stats();
 console.log('Initial state:');
-console.log('  arenaSize:', fmt(initial.arenaSize));
-console.log('  heapSize:', fmt(initial.heapSize));
-console.log('  usedBytes:', fmt(initial.usedBytes));
-console.log('  totalBytes:', fmt(initial.totalBytes));
+console.log('  arenaUsed:', fmt(initial.arenaUsed));
+console.log('  rss:', fmt(initial.rss));
 console.log('');
 
 bench('Many small objects (10k objects, 5k garbage)', manySmallObjects, 5);
@@ -120,9 +118,7 @@ bench('String array (5000 strings, 2500 garbage)', stringArray, 5);
 bench('Mixed workload', mixedWorkload, 5);
 bench('Repeated GC cycles (10 cycles x 1000 objects)', repeatedGcCycles, 3);
 
-let final = Ant.alloc();
+let final = Ant.stats();
 console.log('Final state:');
-console.log('  arenaSize:', fmt(final.arenaSize));
-console.log('  heapSize:', fmt(final.heapSize));
-console.log('  usedBytes:', fmt(final.usedBytes));
-console.log('  totalBytes:', fmt(final.totalBytes));
+console.log('  arenaUsed:', fmt(final.arenaUsed));
+console.log('  rss:', fmt(final.rss));

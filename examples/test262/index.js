@@ -285,7 +285,11 @@ function handleKey(key) {
       needsRender = true;
       break;
     case 'g':
-      state.index = 0;
+      if (state.mode === 'memory') {
+        Ant.gc();
+      } else {
+        state.index = 0;
+      }
       needsRender = true;
       break;
     case 'G':
@@ -317,12 +321,6 @@ function handleKey(key) {
     case 'm':
       state.mode = state.mode === 'memory' ? 'browse' : 'memory';
       needsRender = true;
-      break;
-    case 'g':
-      if (state.mode === 'memory') {
-        Ant.gc();
-        needsRender = true;
-      }
       break;
     case '/':
       if (state.mode === 'browse') {
