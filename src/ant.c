@@ -22184,7 +22184,8 @@ ant_t *js_create(void *buf, size_t len) {
   js = (struct js *) buf;
   js->mem = (uint8_t *) (js + 1);
   js->size = (jsoff_t) (len - sizeof(*js));
-  js->scope = mkobj(js, 0);
+  js->global = mkobj(js, 0);
+  js->scope = js->global;
   js->size = js->size / 8U * 8U;
   js->this_val = js->scope;
   js->super_val = js_mkundef();
@@ -22834,7 +22835,7 @@ inline jsval_t js_mkundef(void) { return mkval(T_UNDEF, 0); }
 inline jsval_t js_mknull(void) { return mkval(T_NULL, 0); }
 inline jsval_t js_mknum(double value) { return tov(value); }
 inline jsval_t js_mkobj(struct js *js) { return mkobj(js, 0); }
-inline jsval_t js_glob(struct js *js) { (void) js; return mkval(T_OBJ, 0); }
+inline jsval_t js_glob(struct js *js) { return js->global; }
 inline jsval_t js_getscope(struct js *js) { return js->scope; }
 inline jsval_t js_mkfun(jsval_t (*fn)(struct js *, jsval_t *, int)) { return mkval(T_CFUNC, (size_t) (void *) fn); }
 
