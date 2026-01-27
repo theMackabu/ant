@@ -10,6 +10,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <inttypes.h>
 
 #define STR_PROTO "__proto__"
 #define STR_PROTO_LEN 9
@@ -26,8 +27,9 @@
 struct js;
 
 typedef struct js ant_t;
-typedef uint32_t jsoff_t;
+typedef uint64_t jsoff_t;
 typedef uint64_t jsval_t;
+#define jsoff_fmt PRIu64
 
 #define ANT_LIMIT_SIZE_CACHE 16384
 #define GC_FWD_ARGS jsval_t (*fwd_val)(void *ctx, jsval_t old), void *ctx

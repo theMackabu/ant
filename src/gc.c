@@ -44,7 +44,7 @@ typedef struct {
 static jsval_t gc_update_val(gc_ctx_t *ctx, jsval_t val);
 
 static inline void mark_set(gc_ctx_t *ctx, jsoff_t off) {
-  jsoff_t idx = off >> 2;
+  jsoff_t idx = off >> 3;
   ctx->mark_bits[idx >> 3] |= (1 << (idx & 7));
 }
 
@@ -89,7 +89,7 @@ static bool fwd_grow(gc_forward_table_t *fwd) {
   for (size_t i = 0; i < fwd->capacity; i++) {
     jsoff_t key = fwd->old_offs[i];
     if (key == FWD_EMPTY || key == FWD_TOMBSTONE) continue;
-    size_t h = (key >> 2) & new_mask;
+    size_t h = (key >> 3) & new_mask;
     while (new_old[h] != FWD_EMPTY) h = (h + 1) & new_mask;
     new_old[h] = key;
     new_new[h] = fwd->new_offs[i];
@@ -108,7 +108,7 @@ static inline bool fwd_add(gc_forward_table_t *fwd, jsoff_t old_off, jsoff_t new
   if (fwd->count * 100 >= fwd->capacity * GC_FWD_LOAD_FACTOR) {
     if (!fwd_grow(fwd)) return false;
   }
-  size_t h = (old_off >> 2) & fwd->mask;
+  size_t h = (old_off >> 3) & fwd->mask;
   while (fwd->old_offs[h] != FWD_EMPTY && fwd->old_offs[h] != FWD_TOMBSTONE) {
     if (fwd->old_offs[h] == old_off) {
       fwd->new_offs[h] = new_off;
@@ -123,7 +123,7 @@ static inline bool fwd_add(gc_forward_table_t *fwd, jsoff_t old_off, jsoff_t new
 }
 
 static inline jsoff_t fwd_lookup(gc_forward_table_t *fwd, jsoff_t old_off) {
-  size_t h = (old_off >> 2) & fwd->mask;
+  size_t h = (old_off >> 3) & fwd->mask;
   for (size_t i = 0; i < fwd->capacity; i++) {
     jsoff_t key = fwd->old_offs[h];
     if (key == FWD_EMPTY) return (jsoff_t)~0;
@@ -197,7 +197,7 @@ static inline void gc_saveval(uint8_t *mem, jsoff_t off, jsval_t val) {
 }
 
 static jsoff_t gc_alloc(gc_ctx_t *ctx, size_t size) {
-  size = (size + 3) / 4 * 4;
+  size = (size + 7) / 8 * 8;
   if (ctx->new_brk + size > ctx->new_size) {
     ctx->failed = true;
     return (jsoff_t)~0;
@@ -253,7 +253,7 @@ static jsoff_t gc_copy_bigint(gc_ctx_t *ctx, jsoff_t old_off) {
   
   jsoff_t header = gc_loadoff(ctx->js->mem, old_off);
   size_t total = (header >> 4) + sizeof(jsoff_t);
-  total = (total + 3) / 4 * 4;
+  total = (total + 7) / 8 * 8;
   
   new_off = gc_alloc(ctx, total);
   if (new_off == (jsoff_t)~0) return old_off;
@@ -320,7 +320,7 @@ static void gc_process_prop(gc_ctx_t *ctx, jsoff_t old_off) {
   jsoff_t next_prop = header & ~(3U | FLAGMASK);
   if (next_prop != 0 && next_prop < ctx->js->brk) {
     jsoff_t new_next = gc_reserve_prop(ctx, next_prop);
-    jsoff_t new_header = (new_next & ~3U) | (header & (3U | FLAGMASK));
+    jsoff_t new_header = (new_next & ~3ULL) | (header & (3ULL | FLAGMASK));
     gc_saveoff(ctx->new_mem, new_off, new_header);
   }
   
@@ -348,7 +348,7 @@ static void gc_process_object(gc_ctx_t *ctx, jsoff_t old_off) {
   jsoff_t first_prop = header & ~(3U | FLAGMASK);
   if (first_prop != 0 && first_prop < ctx->js->brk) {
     jsoff_t new_first = gc_reserve_prop(ctx, first_prop);
-    jsoff_t new_header = (new_first & ~3U) | (header & (3U | FLAGMASK));
+    jsoff_t new_header = (new_first & ~3ULL) | (header & (3ULL | FLAGMASK));
     gc_saveoff(ctx->new_mem, new_off, new_header);
   }
   
