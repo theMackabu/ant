@@ -109,7 +109,7 @@ typedef struct { char *key; size_t key_len; jsval_t value; } prop_entry;
 
 static int should_skip_prop(struct js *js, const char *key, size_t key_len, jsval_t value) {
   if (is_internal_prop(key, (jsoff_t)key_len)) return 1;
-  if (vtype(value) != T_OBJ) return 0;
+  if (!is_special_object(value)) return 0;
   return vtype(js_get_slot(js, value, SLOT_CODE)) == T_CFUNC;
 }
 
@@ -152,7 +152,7 @@ static inline int key_matches(const char *a, size_t a_len, const char *b, size_t
 }
 
 static int is_key_in_replacer_arr(struct js *js, json_cycle_ctx *ctx, const char *key, size_t key_len) {
-  if (vtype(ctx->replacer_arr) != T_OBJ) return 1;
+  if (!is_special_object(ctx->replacer_arr)) return 1;
   
   for (int i = 0; i < ctx->replacer_arr_len; i++) {
     char idxstr[32];
@@ -179,7 +179,7 @@ static yyjson_mut_val *jsval_to_yyjson_impl(struct js *js, yyjson_mut_doc *doc, 
   int type = vtype(val);
   yyjson_mut_val *result = NULL;
   
-  if (type == T_OBJ) {
+  if (is_special_object(val)) {
     jsval_t toJSON = js_get(js, val, "toJSON");
     if (vtype(toJSON) == T_FUNC) {
       jsval_t r = js_call(js, toJSON, &val, 1);
@@ -212,7 +212,8 @@ static yyjson_mut_val *jsval_to_yyjson_impl(struct js *js, yyjson_mut_doc *doc, 
       return yyjson_mut_strncpy(doc, str, len);
     }
     
-    case T_OBJ: break;
+    case T_OBJ:
+    case T_ARR: break;
     default: return yyjson_mut_null(doc);
   }
   
@@ -298,7 +299,7 @@ static yyjson_mut_val *jsval_to_yyjson(struct js *js, yyjson_mut_doc *doc, jsval
 static jsval_t apply_reviver(struct js *js, jsval_t holder, const char *key, jsval_t reviver) {
   jsval_t val = js_get(js, holder, key);
   
-  if (vtype(val) == T_OBJ) {
+  if (is_special_object(val)) {
     jsval_t len_val = js_get(js, val, "length");
     if (vtype(len_val) == T_NUM) {
       int length = (int)js_getnum(len_val);
@@ -403,11 +404,9 @@ jsval_t js_json_stringify(struct js *js, jsval_t *args, int nargs) {
   
   if (nargs >= 2) {
     jsval_t replacer = args[1];
-    int replacer_type = vtype(replacer);
-    
-    if (replacer_type == T_FUNC) {
+    if (vtype(replacer) == T_FUNC) {
       ctx.replacer_func = replacer;
-    } else if (replacer_type == T_OBJ) {
+    } else if (is_special_object(replacer)) {
       jsval_t len_val = js_get(js, replacer, "length");
       if (vtype(len_val) == T_NUM) {
         ctx.replacer_arr = replacer;

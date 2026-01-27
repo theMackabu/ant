@@ -85,6 +85,7 @@ enum {
 
 #define TYPE_FLAG(t) (1u << (t))
 
+#define T_SPECIAL_OBJECT_MASK  (TYPE_FLAG(T_OBJ) | TYPE_FLAG(T_ARR))
 #define T_NEEDS_PROTO_FALLBACK (TYPE_FLAG(T_FUNC) | TYPE_FLAG(T_ARR) | TYPE_FLAG(T_PROMISE))
 #define T_OBJECT_MASK          (TYPE_FLAG(T_OBJ) | TYPE_FLAG(T_ARR) | TYPE_FLAG(T_FUNC) | TYPE_FLAG(T_PROMISE))
 #define T_NON_NUMERIC_MASK     (TYPE_FLAG(T_STR) | TYPE_FLAG(T_ARR) | TYPE_FLAG(T_FUNC) | TYPE_FLAG(T_CFUNC) | TYPE_FLAG(T_OBJ))
@@ -103,8 +104,9 @@ jsoff_t vstr(struct js *js, jsval_t value, jsoff_t *len);
 jsval_t mkval(uint8_t type, uint64_t data);
 jsval_t resolveprop(struct js *js, jsval_t v);
 
-#define is_non_numeric(v) ((1u << vtype(v)) & T_NON_NUMERIC_MASK)
-#define is_object_type(v) ((1u << vtype(v)) & T_OBJECT_MASK)
+#define is_non_numeric(v)    ((1u << vtype(v)) & T_NON_NUMERIC_MASK)
+#define is_object_type(v)    ((1u << vtype(v)) & T_OBJECT_MASK)
+#define is_special_object(v) ((1u << vtype(v)) & T_SPECIAL_OBJECT_MASK)
 
 static inline bool is_err(jsval_t v) { 
   return vtype(v) == T_ERR; 
