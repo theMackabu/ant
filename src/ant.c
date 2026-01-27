@@ -1288,8 +1288,6 @@ static size_t cpy(char *dst, size_t dstlen, const char *src, size_t srclen) {
   return srclen;
 }
 
-#define REMAIN(n, len) ((n) >= (len) ? 0 : (len) - (n))
-
 static inline size_t uint_to_str(char *buf, size_t bufsize, uint64_t val) {
   if (bufsize == 0) return 0;
   if (val == 0) {
@@ -2446,35 +2444,170 @@ static void get_error_line(const char *code, jsoff_t clen, jsoff_t pos, char *bu
   *line_start_col = (int)(pos - line_start) + 1;
 }
 
-static void format_error_stack(struct js *js, size_t *n, int line, int col, bool include_source_line, const char *error_line, int error_col) {
+static bool ensure_errmsg_capacity(struct js *js, size_t needed) {
+  if (js->errmsg_size == 0) js->errmsg_size = 4096;
+
   if (!js->errmsg) {
-    js->errmsg_size = 4096;
     js->errmsg = (char *)malloc(js->errmsg_size);
-    if (!js->errmsg) return;
+    if (!js->errmsg) return false;
+    js->errmsg[0] = '\0';
   }
+
+  if (needed <= js->errmsg_size) return true;
+
+  size_t new_size = js->errmsg_size;
+  while (new_size < needed) {
+    size_t next = new_size * 2;
+    if (next < new_size) return false;
+    new_size = next;
+  }
+
+  char *next_buf = (char *)realloc(js->errmsg, new_size);
+  if (!next_buf) return false;
+  js->errmsg = next_buf;
+  js->errmsg_size = new_size;
+  return true;
+}
+
+__attribute__((format(printf, 3, 4)))
+static size_t append_errmsg_fmt(struct js *js, size_t used, const char *fmt, ...) {
+  for (;;) {
+    if (!ensure_errmsg_capacity(js, used + 1)) return used;
+
+    size_t remaining = js->errmsg_size - used;
+    va_list ap;
+    va_start(ap, fmt);
+    int written = vsnprintf(js->errmsg + used, remaining, fmt, ap);
+    va_end(ap);
+
+    if (written < 0) return used;
+    if ((size_t)written < remaining) return used + (size_t)written;
+
+    if (!ensure_errmsg_capacity(js, used + (size_t)written + 1)) {
+      return js->errmsg_size ? js->errmsg_size - 1 : used;
+    }
+  }
+}
+
+#define ERR_FMT "\x1b[31m%.*s\x1b[0m: \x1b[1m%.*s\x1b[0m"
+#define ERR_NAME_ONLY "\x1b[31m%.*s\x1b[0m"
+
+static inline size_t remaining_capacity(size_t used, size_t total) {
+  return used >= total ? 0 : total - used;
+}
+
+static size_t append_error_header(struct js *js, size_t used, int line) {
+  if (js->filename) return append_errmsg_fmt(js, used, "%s:%d\n", js->filename, line);
+  return append_errmsg_fmt(js, used, "<eval>:%d\n", line);
+}
+
+static const char *get_str_prop(struct js *js, jsval_t obj, const char *key, jsoff_t klen, jsoff_t *out_len) {
+  jsoff_t off = lkp(js, obj, key, klen);
+  if (off <= 0) return NULL;
+  jsval_t v = resolveprop(js, mkval(T_PROP, off));
+  if (vtype(v) != T_STR) return NULL;
+  return (const char *)&js->mem[vstr(js, v, out_len)];
+}
+
+static size_t append_error_value(struct js *js, size_t used, jsval_t value) {
+  const char *name = "Error";
+  const char *msg = NULL;
+  
+  jsoff_t name_len = 5;
+  jsoff_t msg_len = 0;
+
+  static const void *type_dispatch[] = {
+    [T_STR] = &&l_type_str,
+    [T_OBJ] = &&l_type_obj,
+    [T_FUNC] = &&l_type_default,
+    [T_ARR] = &&l_type_default,
+    [T_PROMISE] = &&l_type_default,
+    [T_GENERATOR] = &&l_type_default,
+    [T_PROP] = &&l_type_default,
+    [T_BIGINT] = &&l_type_default,
+    [T_NUM] = &&l_type_default,
+    [T_BOOL] = &&l_type_default,
+    [T_SYMBOL] = &&l_type_default,
+    [T_CFUNC] = &&l_type_default,
+    [T_FFI] = &&l_type_default,
+    [T_TYPEDARRAY] = &&l_type_default,
+    [T_CODEREF] = &&l_type_default,
+    [T_PROPREF] = &&l_type_default,
+    [T_ERR] = &&l_type_default,
+    [T_UNDEF] = &&l_type_default,
+    [T_NULL] = &&l_type_default,
+  };
+
+  uint8_t t = vtype(value);
+  if (t < sizeof(type_dispatch) / sizeof(type_dispatch[0]) && type_dispatch[t]) {
+    goto *type_dispatch[t];
+  }
+  goto l_type_default;
+
+  l_type_str:
+    msg = (const char *)&js->mem[vstr(js, value, &msg_len)];
+    goto l_type_done;
+
+  l_type_obj:
+    name = get_str_prop(js, value, "name", 4, &name_len);
+    if (!name) {
+      name = "Error";
+      name_len = 5;
+    }
+    msg = get_str_prop(js, value, "message", 7, &msg_len);
+    goto l_type_done;
+
+  l_type_default:
+    msg = js_str(js, value);
+    msg_len = msg ? (jsoff_t)strlen(msg) : 0;
+    goto l_type_done;
+
+  l_type_done:
+
+  static const void *dispatch[] = { &&l_with_msg, &&l_name_only };
+  int key = msg ? 0 : 1;
+  goto *dispatch[key];
+
+  l_with_msg:
+    return append_errmsg_fmt(js, used,
+      ERR_FMT,
+      (int)name_len, name, (int)msg_len, msg
+    );
+
+  l_name_only:
+    return append_errmsg_fmt(js, used,
+      ERR_NAME_ONLY,
+      (int)name_len, name
+    );
+}
+
+static void append_error_caret(struct js *js, size_t *n, int error_col) {
+  if (!ensure_errmsg_capacity(js, *n + (size_t)error_col + 2)) return;
+  if (*n >= js->errmsg_size - 1) return;
+
+  size_t remaining = js->errmsg_size - *n;
+  for (int i = 1; i < error_col && remaining > 1; i++) {
+    js->errmsg[(*n)++] = ' ';
+    remaining--;
+  }
+  if (remaining > 1) {
+    js->errmsg[(*n)++] = '^';
+  }
+  js->errmsg[*n] = '\0';
+}
+
+static void format_error_stack(struct js *js, size_t *n, int line, int col, bool include_source_line, const char *error_line, int error_col) {
+  if (!ensure_errmsg_capacity(js, *n + 1)) return;
   
   const char *dim = "\x1b[90m";
   const char *reset = "\x1b[0m";
-  size_t remaining;
   
   if (include_source_line && error_line && *n < js->errmsg_size) {
-    remaining = js->errmsg_size - *n;
-    *n += (size_t) snprintf(js->errmsg + *n, remaining, "\n%s\n", error_line);
-    
-    if (*n < js->errmsg_size - 1) {
-      remaining = js->errmsg_size - *n;
-      for (int i = 1; i < error_col && remaining > 1; i++) {
-        js->errmsg[(*n)++] = ' ';
-        remaining--;
-      }
-      if (remaining > 1) {
-        js->errmsg[(*n)++] = '^';
-      }
-      js->errmsg[*n] = '\0';
-    }
+    *n = append_errmsg_fmt(js, *n, "\n%s\n", error_line);
+    append_error_caret(js, n, error_col);
   }
   
-  remaining = js->errmsg_size - *n;
+  size_t remaining = remaining_capacity(*n, js->errmsg_size);
   if (remaining > 20) {
     const char *file = js->filename ? js->filename : "<eval>";
     
@@ -2489,27 +2622,42 @@ static void format_error_stack(struct js *js, size_t *n, int line, int col, bool
       int fline = frame->line > 0 ? frame->line : 1;
       int fcol = frame->col > 0 ? frame->col : 1;
       
-      *n += (size_t) snprintf(js->errmsg + *n, remaining, "\n    at %s %s(%s:%d:%d)%s", fname, dim, ffile, fline, fcol, reset);
-      remaining = js->errmsg_size - *n;
+      *n = append_errmsg_fmt(js, *n,
+        "\n    at %s %s(%s:%d:%d)%s",
+        fname, dim, ffile, fline, fcol, reset
+      );
+      remaining = remaining_capacity(*n, js->errmsg_size);
     }
     
     if (global_call_stack.depth > 0 && remaining > 60) {
-      *n += (size_t) snprintf(js->errmsg + *n, remaining, "\n    at Object.<anonymous> %s(%s:1:1)%s", dim, file, reset);
-      remaining = js->errmsg_size - *n;
+      *n = append_errmsg_fmt(js, *n,
+        "\n    at Object.<anonymous> %s(%s:1:1)%s",
+        dim, file, reset
+      );
+      remaining = remaining_capacity(*n, js->errmsg_size);
     }
     
     if (global_call_stack.depth == 0 && remaining > 20) {
-      *n += (size_t) snprintf(js->errmsg + *n, remaining, "\n    at %s%s:%d:%d%s", dim, file, line, col, reset);
-      remaining = js->errmsg_size - *n;
+      *n = append_errmsg_fmt(js, *n,
+        "\n    at %s%s:%d:%d%s",
+        dim, file, line, col, reset
+      );
+      remaining = remaining_capacity(*n, js->errmsg_size);
     }
     
     if (remaining > 60 && js->filename && strcmp(js->filename, "[eval]") != 0) {
-      *n += (size_t) snprintf(js->errmsg + *n, remaining, "\n    at Module.executeUserEntryPoint [as runMain] %s(ant:internal/modules/run_main:149:5)%s", dim, reset);
-      remaining = js->errmsg_size - *n;
+      *n = append_errmsg_fmt(js, *n,
+        "\n    at Module.executeUserEntryPoint [as runMain] %s(ant:internal/modules/run_main:149:5)%s",
+        dim, reset
+      );
+      remaining = remaining_capacity(*n, js->errmsg_size);
     }
     
     if (remaining > 40 && js->filename && strcmp(js->filename, "[eval]") != 0) {
-      *n += (size_t) snprintf(js->errmsg + *n, remaining, "\n    at %sant:internal/call:21728:23%s", dim, reset);
+      *n = append_errmsg_fmt(js, *n,
+        "\n    at %sant:internal/call:21728:23%s",
+        dim, reset
+      );
     }
   }
   
@@ -2579,16 +2727,13 @@ jsval_t js_create_error(struct js *js, js_err_type_t err_type, jsval_t props, co
   js->thrown_value = err_obj;
   
   size_t n = 0;
-  if (js->filename) {
-    n = (size_t) snprintf(js->errmsg, js->errmsg_size, "%s:%d\n", js->filename, line);
-  } else {
-    n = (size_t) snprintf(js->errmsg, js->errmsg_size, "<eval>:%d\n", line);
-  }
+  n = append_error_header(js, 0, line);
   
-  size_t remaining = js->errmsg_size - n;
-  if (remaining > 1) {
-    n += (size_t) snprintf(js->errmsg + n, remaining, "\x1b[31m%s\x1b[0m: \x1b[1m%s\x1b[0m", err_name, error_msg);
-  }
+  if (n < js->errmsg_size - 1) n = append_errmsg_fmt(
+    js, n,
+    "\x1b[31m%s\x1b[0m: \x1b[1m%s\x1b[0m",
+    err_name, error_msg
+  );
   
   if (!no_stack) {
     format_error_stack(js, &n, line, col, true, error_line, error_col);
@@ -2613,54 +2758,9 @@ static jsval_t js_throw(struct js *js, jsval_t value) {
   }
   
   size_t n = 0;
-  if (js->filename) {
-    n = (size_t) snprintf(js->errmsg, js->errmsg_size, "%s:%d\n", js->filename, line);
-  } else {
-    n = (size_t) snprintf(js->errmsg, js->errmsg_size, "<eval>:%d\n", line);
-  }
   
-  size_t remaining = js->errmsg_size - n;
-  if (vtype(value) == T_STR) {
-    jsoff_t slen, off = vstr(js, value, &slen);
-    n += (size_t) snprintf(js->errmsg + n, remaining, "\x1b[31mError\x1b[0m: \x1b[1m%.*s\x1b[0m", (int)slen, (char *)&js->mem[off]);
-  } else if (vtype(value) == T_OBJ) {
-    jsoff_t name_off = lkp(js, value, "name", 4);
-    jsoff_t msg_off = lkp(js, value, "message", 7);
-    
-    const char *name_str = NULL;
-    const char *msg_str = NULL;
-    jsoff_t name_len = 0, msg_len = 0;
-    
-    if (name_off > 0) {
-      jsval_t name_val = resolveprop(js, mkval(T_PROP, name_off));
-      if (vtype(name_val) == T_STR) {
-        jsoff_t off = vstr(js, name_val, &name_len);
-        name_str = (const char *)&js->mem[off];
-      }
-    }
-    
-    if (msg_off > 0) {
-      jsval_t msg_val = resolveprop(js, mkval(T_PROP, msg_off));
-      if (vtype(msg_val) == T_STR) {
-        jsoff_t off = vstr(js, msg_val, &msg_len);
-        msg_str = (const char *)&js->mem[off];
-      }
-    }
-    
-    if (name_str && msg_str) {
-      n += (size_t) snprintf(js->errmsg + n, remaining, "\x1b[31m%.*s\x1b[0m: \x1b[1m%.*s\x1b[0m", (int)name_len, name_str, (int)msg_len, msg_str);
-    } else if (name_str) {
-      n += (size_t) snprintf(js->errmsg + n, remaining, "\x1b[31m%.*s\x1b[0m", (int)name_len, name_str);
-    } else if (msg_str) {
-      n += (size_t) snprintf(js->errmsg + n, remaining, "\x1b[31mError\x1b[0m: \x1b[1m%.*s\x1b[0m", (int)msg_len, msg_str);
-    } else {
-      const char *str = js_str(js, value);
-      n += (size_t) snprintf(js->errmsg + n, remaining, "\x1b[31mError\x1b[0m: \x1b[1m%s\x1b[0m", str);
-    }
-  } else {
-    const char *str = js_str(js, value);
-    n += (size_t) snprintf(js->errmsg + n, remaining, "\x1b[31mError\x1b[0m: \x1b[1m%s\x1b[0m", str);
-  }
+  n = append_error_header(js, 0, line);
+  n = append_error_value(js, n, value);
   
   format_error_stack(js, &n, line, col, true, error_line, error_col);
   
