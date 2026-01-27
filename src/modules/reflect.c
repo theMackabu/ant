@@ -240,9 +240,8 @@ static jsval_t reflect_get_prototype_of(struct js *js, jsval_t *args, int nargs)
   }
   
   jsval_t target = args[0];
-  int t = vtype(target);
   
-  if (t != T_OBJ && t != T_FUNC) {
+  if (!is_object_type(target)) {
     return js_mkerr(js, "Reflect.getPrototypeOf: argument must be an object");
   }
   

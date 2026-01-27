@@ -1432,7 +1432,7 @@ static jsval_t js_buffer_byteLength(struct js *js, jsval_t *args, int nargs) {
   
   jsval_t arg = args[0];
   
-  if (vtype(arg) == T_OBJ) {
+  if (is_special_object(arg)) {
     jsval_t bytelen = js_get(js, arg, "byteLength");
     if (vtype(bytelen) == T_NUM) return bytelen;
     
@@ -1451,7 +1451,7 @@ static jsval_t js_buffer_byteLength(struct js *js, jsval_t *args, int nargs) {
 
 // Buffer.concat(list, totalLength)
 static jsval_t js_buffer_concat(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1 || vtype(args[0]) != T_OBJ) {
+  if (nargs < 1 || !is_special_object(args[0])) {
     return js_mkerr(js, "First argument must be an array");
   }
   

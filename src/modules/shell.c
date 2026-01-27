@@ -112,7 +112,7 @@ static jsval_t builtin_shell_lines(struct js *js, jsval_t *args, int nargs) {
 static jsval_t builtin_shell_dollar(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "$() requires at least one argument");
     
-  if (vtype(args[0]) != T_OBJ) {
+  if (!is_special_object(args[0])) {
     if (vtype(args[0]) == T_STR) {
       size_t cmd_len;
       char *cmd = js_getstr(js, args[0], &cmd_len);

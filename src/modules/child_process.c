@@ -519,14 +519,14 @@ static jsval_t builtin_spawn(struct js *js, jsval_t *args, int nargs) {
   bool use_shell = false;
   bool detached = false;
   
-  if (nargs >= 2 && vtype(args[1]) == T_OBJ) {
+  if (nargs >= 2 && is_special_object(args[1])) {
     jsval_t len_val = js_get(js, args[1], "length");
     if (vtype(len_val) == T_NUM) {
       spawn_args = parse_args_array(js, args[1], &spawn_argc);
     }
   }
   
-  if (nargs >= 3 && vtype(args[2]) == T_OBJ) {
+  if (nargs >= 3 && is_special_object(args[2])) {
     jsval_t cwd_val = js_get(js, args[2], "cwd");
     if (vtype(cwd_val) == T_STR) {
       size_t cwd_len;
@@ -659,7 +659,7 @@ static jsval_t builtin_exec(struct js *js, jsval_t *args, int nargs) {
   char *cmd_str = strndup(cmd, cmd_len);
   
   char *cwd = NULL;
-  if (nargs >= 2 && vtype(args[1]) == T_OBJ) {
+  if (nargs >= 2 && is_special_object(args[1])) {
     jsval_t cwd_val = js_get(js, args[1], "cwd");
     if (vtype(cwd_val) == T_STR) {
       size_t cwd_len;
@@ -808,14 +808,14 @@ static jsval_t builtin_spawnSync(struct js *js, jsval_t *args, int nargs) {
   char *input = NULL;
   size_t input_len = 0;
   
-  if (nargs >= 2 && vtype(args[1]) == T_OBJ) {
+  if (nargs >= 2 && is_special_object(args[1])) {
     jsval_t len_val = js_get(js, args[1], "length");
     if (vtype(len_val) == T_NUM) {
       spawn_args = parse_args_array(js, args[1], &spawn_argc);
     }
   }
   
-  if (nargs >= 3 && vtype(args[2]) == T_OBJ) {
+  if (nargs >= 3 && is_special_object(args[2])) {
     jsval_t input_val = js_get(js, args[2], "input");
     if (vtype(input_val) == T_STR) {
       input = js_getstr(js, input_val, &input_len);
@@ -953,14 +953,14 @@ static jsval_t builtin_spawnSync(struct js *js, jsval_t *args, int nargs) {
   char *input = NULL;
   size_t input_len = 0;
   
-  if (nargs >= 2 && vtype(args[1]) == T_OBJ) {
+  if (nargs >= 2 && is_special_object(args[1])) {
     jsval_t len_val = js_get(js, args[1], "length");
     if (vtype(len_val) == T_NUM) {
       spawn_args = parse_args_array(js, args[1], &spawn_argc);
     }
   }
   
-  if (nargs >= 3 && vtype(args[2]) == T_OBJ) {
+  if (nargs >= 3 && is_special_object(args[2])) {
     jsval_t input_val = js_get(js, args[2], "input");
     if (vtype(input_val) == T_STR) {
       input = js_getstr(js, input_val, &input_len);
@@ -1112,9 +1112,9 @@ static jsval_t builtin_fork(struct js *js, jsval_t *args, int nargs) {
   jsval_t args_arr = js_mkarr(js);
   js_arr_push(js, args_arr, js_mkstr(js, path_str, path_len));
   
-  if (nargs >= 2 && vtype(args[1]) == T_OBJ) {
+  if (nargs >= 2 && is_special_object(args[1])) {
     jsval_t exec_args = js_get(js, args[1], "execArgv");
-    if (vtype(exec_args) == T_OBJ) {
+    if (is_special_object(exec_args)) {
       jsval_t len_val = js_get(js, exec_args, "length");
       int arr_len = (int)js_getnum(len_val);
       for (int i = 0; i < arr_len; i++) {

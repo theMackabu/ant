@@ -354,7 +354,7 @@ static jsval_t usp_get(struct js *js, jsval_t *args, int nargs) {
   if (!key) return js_mknull();
 
   jsval_t entries = js_get(js, this_val, "_entries");
-  if (vtype(entries) != T_OBJ) return js_mknull();
+  if (!is_special_object(entries)) return js_mknull();
 
   jsval_t len_val = js_get(js, entries, "length");
   int len = (vtype(len_val) == T_NUM) ? (int)js_getnum(len_val) : 0;
@@ -380,7 +380,7 @@ static jsval_t usp_getAll(struct js *js, jsval_t *args, int nargs) {
 
   jsval_t result = js_mkarr(js);
   jsval_t entries = js_get(js, this_val, "_entries");
-  if (vtype(entries) != T_OBJ) return result;
+  if (!is_special_object(entries)) return result;
 
   jsval_t len_val = js_get(js, entries, "length");
   int len = (vtype(len_val) == T_NUM) ? (int)js_getnum(len_val) : 0;
@@ -405,7 +405,7 @@ static jsval_t usp_has(struct js *js, jsval_t *args, int nargs) {
   if (!key) return js_mkfalse();
 
   jsval_t entries = js_get(js, this_val, "_entries");
-  if (vtype(entries) != T_OBJ) return js_mkfalse();
+  if (!is_special_object(entries)) return js_mkfalse();
 
   jsval_t len_val = js_get(js, entries, "length");
   int len = (vtype(len_val) == T_NUM) ? (int)js_getnum(len_val) : 0;
@@ -423,7 +423,7 @@ static jsval_t usp_has(struct js *js, jsval_t *args, int nargs) {
 
 static void usp_sync_url(struct js *js, jsval_t this_val) {
   jsval_t url_obj = js_get(js, this_val, "_url");
-  if (vtype(url_obj) != T_OBJ) return;
+  if (!is_special_object(url_obj)) return;
 
   jsval_t entries = js_get(js, this_val, "_entries");
   jsval_t len_val = js_get(js, entries, "length");
