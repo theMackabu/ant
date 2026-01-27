@@ -2,6 +2,7 @@
 #define ANT_INTERNAL_H
 
 #include "ant.h"
+#include "slab.h"
 
 struct for_let_ctx {
   const char *var_name;   // interned variable name
@@ -32,6 +33,7 @@ struct js {
   jsoff_t tlen;           // length of the last parsed token
   jsval_t tval;           // holds last parsed numeric or string literal value
   jsval_t scope;          // current scope
+  jsval_t global;         // global object (root scope)
   jsval_t this_val;       // 'this' value for currently executing function
   jsval_t super_val;      // 'super' value for class methods
   jsval_t new_target;     // constructor called with 'new', undefined otherwise
@@ -89,6 +91,8 @@ void js_gc_update_roots(GC_UPDATE_ARGS);
 
 bool js_has_pending_coroutines(void);
 bool is_internal_prop(const char *key, jsoff_t klen);
+
+slab_state_t *js_get_slab_state(void);
 
 #define is_non_numeric(v) ((1u << vtype(v)) & T_NON_NUMERIC_MASK)
 

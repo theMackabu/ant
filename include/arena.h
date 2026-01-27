@@ -13,7 +13,7 @@
 #include <unistd.h>
 #endif
 
-#define ANT_ARENA_MIN (32 * 1024)
+#define ANT_ARENA_MIN (64 * 1024)
 #define ANT_ARENA_MAX (256ULL * 1024 * 1024 * 1024)
 
 #define ANT_ARENA_THRESHOLD (256ULL * 1024 * 1024)
