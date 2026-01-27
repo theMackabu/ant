@@ -603,6 +603,21 @@ static void on_write(uv_write_t *req, int status) {
   free(wr);
 }
 
+__attribute__((format(printf, 4, 5)))
+static size_t append_header(char *buf, size_t size, size_t used, const char *fmt, ...) {
+  if (!buf || size == 0 || used >= size) return used;
+
+  size_t remaining = size - used;
+  va_list ap;
+  va_start(ap, fmt);
+  int written = vsnprintf(buf + used, remaining, fmt, ap);
+  va_end(ap);
+
+  if (written < 0) return used;
+  if ((size_t)written >= remaining) return size - 1;
+  return used + (size_t)written;
+}
+
 static void send_response(uv_stream_t *client, response_ctx_t *res_ctx) {
   char *body_to_send = res_ctx->body;
   size_t body_len_to_send = res_ctx->body_len;
@@ -627,7 +642,7 @@ static void send_response(uv_stream_t *client, response_ctx_t *res_ctx) {
   }
   
   char header[8192];
-  int header_len = snprintf(header, sizeof(header),
+  size_t header_len = append_header(header, sizeof(header), 0,
     "HTTP/1.1 %d %s\r\n"
     "Content-Type: %s\r\n"
     "Content-Length: %zu\r\n"
@@ -642,7 +657,7 @@ static void send_response(uv_stream_t *client, response_ctx_t *res_ctx) {
   );
   
   if (res_ctx->redirect_location) {
-    header_len += snprintf(header + header_len, sizeof(header) - header_len,
+    header_len = append_header(header, sizeof(header), header_len,
       "%s\r\n", res_ctx->redirect_location);
   }
   
@@ -650,13 +665,13 @@ static void send_response(uv_stream_t *client, response_ctx_t *res_ctx) {
     custom_header_t *custom_header = NULL;
     while ((custom_header = (custom_header_t*)utarray_next(res_ctx->custom_headers, custom_header))) {
       if (custom_header->name && custom_header->value) {
-        header_len += snprintf(header + header_len, sizeof(header) - header_len,
+        header_len = append_header(header, sizeof(header), header_len,
           "%s: %s\r\n", custom_header->name, custom_header->value);
       }
     }
   }
   
-  header_len += snprintf(header + header_len, sizeof(header) - header_len,
+  header_len = append_header(header, sizeof(header), header_len,
     "Connection: close\r\n\r\n");
   
   size_t total_len = header_len + body_len_to_send;

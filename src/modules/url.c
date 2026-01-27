@@ -199,16 +199,55 @@ static char *build_href(
   char *href = malloc(len);
   if (!href) return NULL;
 
-  char *w = href;
-  w += sprintf(w, "%s//", protocol);
+  size_t used = 0;
+  size_t remaining = len;
+
+  int written = snprintf(href + used, remaining, "%s//", protocol);
+  if (written < 0) { href[0] = '\0'; return href; }
+  if ((size_t)written >= remaining) { href[len - 1] = '\0'; return href; }
+  used += (size_t)written;
+  remaining -= (size_t)written;
+
   if (username && *username) {
-    w += sprintf(w, "%s", username);
-    if (password && *password) w += sprintf(w, ":%s", password);
-    w += sprintf(w, "@");
+    written = snprintf(href + used, remaining, "%s", username);
+    if (written < 0) { href[0] = '\0'; return href; }
+    if ((size_t)written >= remaining) { href[len - 1] = '\0'; return href; }
+    used += (size_t)written;
+    remaining -= (size_t)written;
+
+    if (password && *password) {
+      written = snprintf(href + used, remaining, ":%s", password);
+      if (written < 0) { href[0] = '\0'; return href; }
+      if ((size_t)written >= remaining) { href[len - 1] = '\0'; return href; }
+      used += (size_t)written;
+      remaining -= (size_t)written;
+    }
+
+    written = snprintf(href + used, remaining, "@");
+    if (written < 0) { href[0] = '\0'; return href; }
+    if ((size_t)written >= remaining) { href[len - 1] = '\0'; return href; }
+    used += (size_t)written;
+    remaining -= (size_t)written;
   }
-  w += sprintf(w, "%s", hostname);
-  if (port && *port) w += sprintf(w, ":%s", port);
-  w += sprintf(w, "%s%s%s", pathname, search, hash);
+
+  written = snprintf(href + used, remaining, "%s", hostname);
+  if (written < 0) { href[0] = '\0'; return href; }
+  if ((size_t)written >= remaining) { href[len - 1] = '\0'; return href; }
+  used += (size_t)written;
+  remaining -= (size_t)written;
+
+  if (port && *port) {
+    written = snprintf(href + used, remaining, ":%s", port);
+    if (written < 0) { href[0] = '\0'; return href; }
+    if ((size_t)written >= remaining) { href[len - 1] = '\0'; return href; }
+    used += (size_t)written;
+    remaining -= (size_t)written;
+  }
+
+  written = snprintf(href + used, remaining, "%s%s%s", pathname, search, hash);
+  if (written < 0) { href[0] = '\0'; return href; }
+  if ((size_t)written >= remaining) { href[len - 1] = '\0'; return href; }
+
   return href;
 }
 

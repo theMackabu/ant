@@ -96,7 +96,7 @@ static jsval_t js_encodeURIComponent(struct js *js, jsval_t *args, int nargs) {
     if (is_lone_surrogate((unsigned char *)&str[i], seq_len)) goto malformed;
     
     for (int j = 0; j < seq_len; j++) {
-      out_len += sprintf(out + out_len, "%%%02X", (unsigned char)str[i + j]);
+      out_len += (size_t)snprintf(out + out_len, out_cap - out_len, "%%%02X", (unsigned char)str[i + j]);
     }
     i += seq_len;
   }
@@ -149,7 +149,7 @@ static jsval_t js_encodeURI(struct js *js, jsval_t *args, int nargs) {
     if (is_lone_surrogate((unsigned char *)&str[i], seq_len)) goto malformed;
     
     for (int j = 0; j < seq_len; j++) {
-      out_len += sprintf(out + out_len, "%%%02X", (unsigned char)str[i + j]);
+      out_len += (size_t)snprintf(out + out_len, out_cap - out_len, "%%%02X", (unsigned char)str[i + j]);
     }
     i += seq_len;
   }
