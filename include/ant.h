@@ -33,6 +33,8 @@ typedef uint64_t jsoff_t;
 typedef uint64_t jsval_t;
 
 #define ANT_LIMIT_SIZE_CACHE 16384
+#define CORO_PER_TICK_LIMIT 10000
+
 #define GC_FWD_ARGS jsval_t (*fwd_val)(void *ctx, jsval_t old), void *ctx
 #define GC_UPDATE_ARGS ant_t *js, jsoff_t (*fwd_off)(void *ctx, jsoff_t old), GC_FWD_ARGS
 

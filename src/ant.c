@@ -158,6 +158,8 @@ static UT_array *saved_scope_stack = NULL;
 
 static this_stack_t global_this_stack = {NULL, 0, 0};
 static call_stack_t global_call_stack = {NULL, 0, 0};
+
+static uint32_t coros_this_tick = 0;
 static coroutine_queue_t pending_coroutines = {NULL, NULL};
 
 typedef struct {
@@ -1074,6 +1076,8 @@ static bool has_ready_coroutines(void) {
 }
 
 void js_poll_events(struct js *js) {
+  coros_this_tick = 0;
+  
   fetch_poll_events();
   fs_poll_events();
   child_process_poll_events();
@@ -1154,6 +1158,11 @@ void js_run_event_loop(struct js *js) {
 }
 
 static jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t code_len, jsval_t closure_scope, jsval_t *args, int nargs) {
+  if (++coros_this_tick > CORO_PER_TICK_LIMIT) {
+    js->fatal_error = true;
+    return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum async operations per tick exceeded");
+  }
+  
   jsval_t promise = js_mkpromise(js);  
   async_exec_context_t *ctx = (async_exec_context_t *)CORO_MALLOC(sizeof(async_exec_context_t));
   if (!ctx) return js_mkerr(js, "out of memory for async context");
@@ -23566,6 +23575,11 @@ void js_check_unhandled_rejections(struct js *js) {
       if (parent && parent->has_rejection_handler) {
         HASH_DELETE(hh_unhandled, unhandled_rejections, pd); continue;
       }
+    }
+    
+    if (js->fatal_error) {
+      fprintf(stderr, "%s\n", js->errmsg ? js->errmsg : js_str(js, pd->value));
+      js_destroy(js); exit(1);
     }
     
     char buf[1024];

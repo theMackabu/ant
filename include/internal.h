@@ -54,6 +54,7 @@ struct js {
   int eval_depth;         // recursion depth of js_eval calls
   int parse_depth;        // recursion depth of parser (for stack overflow protection)
   bool skip_func_hoist;   // skip function declaration hoisting (pre-computed)
+  bool fatal_error;       // fatal error that should bypass promise rejection handling
   
   // for-let loop context stack
   struct for_let_ctx *for_let_stack;
