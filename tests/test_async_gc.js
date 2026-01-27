@@ -6,7 +6,7 @@ async function allocateAndWait() {
   console.log('Before await, data length:', data.length);
 
   await new Promise(resolve => setTimeout(resolve, 10));
-  console.log(Ant.gc());
+  Ant.gc();
 
   console.log('After await+GC, data length:', data.length);
   return data.length;
@@ -24,5 +24,5 @@ async function main() {
 
 main().then(() => {
   console.log('=== async done, calling gc ===');
-  console.log(Ant.gc());
+  Ant.gc();
 });

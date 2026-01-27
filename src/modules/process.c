@@ -1428,3 +1428,5 @@ void process_gc_update_roots(GC_FWD_ARGS) {
 }
 
 #undef GC_FWD_EVENTS
+
+bool has_active_stdin(void) { return stdin_reading; }

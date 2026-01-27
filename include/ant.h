@@ -29,6 +29,7 @@ struct js;
 typedef struct js ant_t;
 typedef unsigned long long u64;
 
+typedef int      jshdl_t;
 typedef uint64_t jsoff_t;
 typedef uint64_t jsval_t;
 
@@ -85,6 +86,12 @@ bool js_chkargs(jsval_t *, int, const char *);
 void js_set_filename(ant_t *, const char *);
 void js_stats(ant_t *, size_t *total, size_t *min, size_t *cstacksize);
 size_t js_getbrk(ant_t *);
+
+jshdl_t js_root(ant_t *, jsval_t);
+jsval_t js_deref(ant_t *, jshdl_t);
+
+void js_unroot(ant_t *, jshdl_t);
+void js_root_update(ant_t *, jshdl_t, jsval_t);
 
 jsval_t js_mkundef(void);
 jsval_t js_mknull(void);

@@ -52,15 +52,19 @@ struct js {
   uint64_t sym_counter;   // counter for generating unique symbol IDs
   bool needs_gc;          // deferred GC flag, checked at statement boundaries
   bool gc_suppress;       // suppress GC during microtask batch processing
+  jsoff_t gc_alloc_since; // bytes allocated since last GC
   int eval_depth;         // recursion depth of js_eval calls
   int parse_depth;        // recursion depth of parser (for stack overflow protection)
   bool skip_func_hoist;   // skip function declaration hoisting (pre-computed)
   bool fatal_error;       // fatal error that should bypass promise rejection handling
   
-  // for-let loop context stack
   struct for_let_ctx *for_let_stack;
   int for_let_stack_len;
   int for_let_stack_cap;
+  
+  jsval_t *gc_roots;
+  int gc_roots_len;
+  int gc_roots_cap;
 };
 
 enum {

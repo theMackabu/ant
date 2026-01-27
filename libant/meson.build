@@ -22,6 +22,7 @@ module_files = run_command('sh', '-c',
 ).stdout().strip().split()
 
 lib_sources = files(
+  '../src/roots.c',
   '../src/utils.c',
   '../src/ant.c',
   '../src/gc.c',

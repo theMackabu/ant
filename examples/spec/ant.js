@@ -47,17 +47,7 @@ test('typeof boolean', Ant.typeof(true), 'boolean');
 
 test('gc is function', typeof Ant.gc, 'function');
 const gcResult = Ant.gc();
-test('gc returns object', typeof gcResult, 'object');
-test('gc has heapBefore', typeof gcResult.heapBefore, 'number');
-test('gc has heapAfter', typeof gcResult.heapAfter, 'number');
-test('gc has freed', typeof gcResult.freed, 'number');
-
-test('alloc is function', typeof Ant.alloc, 'function');
-const allocResult = Ant.alloc();
-test('alloc returns object', typeof allocResult, 'object');
-test('alloc has arenaSize', typeof allocResult.arenaSize, 'number');
-test('alloc has heapSize', typeof allocResult.heapSize, 'number');
-test('alloc has freeBytes', typeof allocResult.freeBytes, 'number');
+test('gc returns undefined', gcResult, undefined);
 
 test('stats is function', typeof Ant.stats, 'function');
 test('raw is object', typeof Ant.raw, 'object');

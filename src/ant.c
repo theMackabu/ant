@@ -1105,6 +1105,12 @@ void js_poll_events(struct js *js) {
       enqueue_coroutine(temp);
     } else free_coroutine(temp);
   }
+  
+  if (js->needs_gc && !js->gc_suppress) {
+    js->needs_gc = false;
+    js_gc_compact(js);
+    js->gc_alloc_since = 0;
+  }
 }
 
 typedef enum {
@@ -1117,6 +1123,7 @@ typedef enum {
   WORK_FS_OPS           = 1 << 6,
   WORK_CHILD_PROCS      = 1 << 7,
   WORK_READLINE         = 1 << 8,
+  WORK_STDIN            = 1 << 9,
 } work_flags_t;
 
 static inline work_flags_t get_pending_work(void) {
@@ -1130,11 +1137,12 @@ static inline work_flags_t get_pending_work(void) {
   if (has_pending_fs_ops())              flags |= WORK_FS_OPS;
   if (has_pending_child_processes())     flags |= WORK_CHILD_PROCS;
   if (has_active_readline_interfaces())  flags |= WORK_READLINE;
+  if (has_active_stdin())                flags |= WORK_STDIN;
   return flags;
 }
 
 #define WORK_TASKS    (WORK_MICROTASKS | WORK_TIMERS | WORK_IMMEDIATES | WORK_COROUTINES | WORK_FETCHES)
-#define WORK_PENDING  (WORK_TASKS | WORK_FS_OPS | WORK_CHILD_PROCS | WORK_READLINE)
+#define WORK_PENDING  (WORK_TASKS | WORK_FS_OPS | WORK_CHILD_PROCS | WORK_READLINE | WORK_STDIN)
 #define WORK_BLOCKING (WORK_MICROTASKS | WORK_IMMEDIATES | WORK_COROUTINES_READY)
 
 void js_run_event_loop(struct js *js) {
@@ -1144,14 +1152,21 @@ void js_run_event_loop(struct js *js) {
     js_poll_events(js);
     work = get_pending_work();
     
-    if (work & WORK_READLINE) {
+    if (work & (WORK_READLINE | WORK_STDIN)) {
       uv_run(uv_default_loop(), UV_RUN_NOWAIT);
     }
     
     if (!(work & WORK_BLOCKING) && (work & WORK_TIMERS)) {
+      if (js->gc_alloc_since > 256 * 1024 * 1024 || js->needs_gc) {
+        js->needs_gc = false;
+        js_gc_compact(js);
+        js->gc_alloc_since = 0;
+      }
       int64_t ms = get_next_timer_timeout();
       if (ms > 0) usleep(ms > 1000 ? 1000000 : (useconds_t)(ms * 1000));
-    } else if ((work & WORK_READLINE) && !(work & WORK_BLOCKING)) uv_run(uv_default_loop(), UV_RUN_ONCE);
+    } else if (
+      (work & (WORK_READLINE | WORK_STDIN)) && !(work & WORK_BLOCKING)
+    ) uv_run(uv_default_loop(), UV_RUN_ONCE);
   }
   
   js_poll_events(js);
@@ -2777,27 +2792,36 @@ static bool js_try_grow_memory(struct js *js, size_t needed) {
   return true;
 }
 
-static jsoff_t js_alloc(struct js *js, size_t size) {
-  size = align64((jsoff_t) size);
-  
-  jsoff_t ofs = js->brk;
-  if (js->brk + size > js->size) {
-    if (js_try_grow_memory(js, size)) {
-      ofs = js->brk;
-      if (js->brk + size > js->size) return ~(jsoff_t) 0;
-    } else {
-      // js_gc_compact(js);
-      ofs = js->brk;
-      if (js->brk + size > js->size) {
-        if (js_try_grow_memory(js, size)) {
-          ofs = js->brk;
-          if (js->brk + size > js->size) return ~(jsoff_t) 0;
-        } else return ~(jsoff_t) 0;
-      }
-    }
-  }
-  
+static inline bool js_has_space(struct js *js, size_t size) {
+  return js->brk + size <= js->size;
+}
+
+static bool js_ensure_space(struct js *js, size_t size) {
+  if (js_has_space(js, size)) return true;
+  if (js_try_grow_memory(js, size) && js_has_space(js, size)) return true;
+
+  js->needs_gc = true;
+
+  if (js_has_space(js, size)) return true;
+  if (js_try_grow_memory(js, size) && js_has_space(js, size)) return true;
+
+  return false;
+}
+
+static void js_track_allocation(struct js *js, size_t size) {
   js->brk += (jsoff_t) size;
+  js->gc_alloc_since += (jsoff_t) size;
+  
+  if (js->gc_alloc_since > 256 * 1024 * 1024) js->needs_gc = true;
+}
+
+static inline jsoff_t js_alloc(struct js *js, size_t size) {
+  size = align64((jsoff_t) size);
+  if (!js_ensure_space(js, size)) return ~(jsoff_t) 0;
+
+  jsoff_t ofs = js->brk;
+  js_track_allocation(js, size);
+  
   return ofs;
 }
 
@@ -10712,23 +10736,30 @@ static jsval_t for_in_iter_object(struct js *js, for_iter_ctx_t *ctx, jsval_t ob
 }
 
 static jsval_t for_of_iter_array(struct js *js, for_iter_ctx_t *ctx, jsval_t iterable) {
-  jsoff_t next_prop_off = loadoff(js, (jsoff_t) vdata(iterable)) & ~(3U | FLAGMASK);
-  jsoff_t length = 0, scan = next_prop_off;
+  jshdl_t h_iterable = js_root(js, iterable);
   
-  while (scan < js->brk && scan != 0) {
-    jsoff_t header = loadoff(js, scan);
-    if (is_slot_prop(header)) { scan = next_prop(header); continue; }
-    const char *key; jsoff_t klen;
-    get_prop_key(js, scan, &key, &klen);
-    if (streq(key, klen, "length", 6)) {
-      jsval_t val = get_prop_val(js, scan);
-      if (vtype(val) == T_NUM) length = (jsoff_t) tod(val);
-      break;
+  jsoff_t length = 0; {
+    jsval_t arr = js_deref(js, h_iterable);
+    jsoff_t next_prop_off = loadoff(js, (jsoff_t) vdata(arr)) & ~(3U | FLAGMASK);
+    jsoff_t scan = next_prop_off;
+    while (scan < js->brk && scan != 0) {
+      jsoff_t header = loadoff(js, scan);
+      if (is_slot_prop(header)) { scan = next_prop(header); continue; }
+      const char *key; jsoff_t klen;
+      get_prop_key(js, scan, &key, &klen);
+      if (streq(key, klen, "length", 6)) {
+        jsval_t val = get_prop_val(js, scan);
+        if (vtype(val) == T_NUM) length = (jsoff_t) tod(val);
+        break;
+      }
+      scan = next_prop(header);
     }
-    scan = next_prop(header);
   }
   
   for (jsoff_t i = 0; i < length; i++) {
+    jsval_t arr = js_deref(js, h_iterable);
+    jsoff_t next_prop_off = loadoff(js, (jsoff_t) vdata(arr)) & ~(3U | FLAGMASK);
+    
     char idx[16];
     snprintf(idx, sizeof(idx), "%u", (unsigned) i);
     jsoff_t idxlen = (jsoff_t) strlen(idx);
@@ -10745,35 +10776,41 @@ static jsval_t for_of_iter_array(struct js *js, for_iter_ctx_t *ctx, jsval_t ite
     }
     
     jsval_t err = for_iter_bind_var(js, ctx, val);
-    if (is_err(err)) return err;
+    if (is_err(err)) { js_unroot(js, h_iterable); return err; }
     
     jsval_t v = for_iter_exec_body(js, ctx);
-    if (is_err(v)) return v;
+    if (is_err(v)) { js_unroot(js, h_iterable); return v; }
     if (for_iter_handle_continue(js, ctx)) break;
     if (js->flags & F_BREAK) break;
-    if (js->flags & F_RETURN) return v;
+    if (js->flags & F_RETURN) { js_unroot(js, h_iterable); return v; }
   }
   
+  js_unroot(js, h_iterable);
   return js_mkundef();
 }
 
 static jsval_t for_of_iter_string(struct js *js, for_iter_ctx_t *ctx, jsval_t iterable) {
-  jsoff_t slen, soff = vstr(js, iterable, &slen);
-  const char *str = (char *) &js->mem[soff];
+  jshdl_t h_iterable = js_root(js, iterable);
+  jsoff_t slen;
+  (void) vstr(js, iterable, &slen);
   
   for (jsoff_t i = 0; i < slen; i++) {
+    jsval_t cur = js_deref(js, h_iterable);
+    jsoff_t soff = vstr(js, cur, NULL);
+    const char *str = (char *) &js->mem[soff];
     jsval_t char_str = js_mkstr(js, &str[i], 1);
     
     jsval_t err = for_iter_bind_var(js, ctx, char_str);
-    if (is_err(err)) return err;
+    if (is_err(err)) { js_unroot(js, h_iterable); return err; }
     
     jsval_t v = for_iter_exec_body(js, ctx);
-    if (is_err(v)) return v;
+    if (is_err(v)) { js_unroot(js, h_iterable); return v; }
     if (for_iter_handle_continue(js, ctx)) break;
     if (js->flags & F_BREAK) break;
-    if (js->flags & F_RETURN) return v;
+    if (js->flags & F_RETURN) { js_unroot(js, h_iterable); return v; }
   }
   
+  js_unroot(js, h_iterable);
   return js_mkundef();
 }
 
@@ -10798,22 +10835,28 @@ static jsval_t iter_foreach(struct js *js, jsval_t iterable, iter_callback_t cb,
   
   if (is_err(iterator)) return iterator;
   
+  jshdl_t h_iterator = js_root(js, iterator);
   jsval_t out = js_mkundef();
+  
   while (true) {
-    jsoff_t next_off = lkp_proto(js, iterator, "next", 4);
-    if (next_off == 0) return js_mkerr(js, "iterator.next is not a function");
+    jsval_t cur_iter = js_deref(js, h_iterator);
+    jsoff_t next_off = lkp_proto(js, cur_iter, "next", 4);
+    if (next_off == 0) { js_unroot(js, h_iterator); return js_mkerr(js, "iterator.next is not a function"); }
     
     jsval_t next_method = loadval(js, next_off + sizeof(jsoff_t) * 2);
-    if (vtype(next_method) != T_FUNC && vtype(next_method) != T_CFUNC)
+    if (vtype(next_method) != T_FUNC && vtype(next_method) != T_CFUNC) {
+      js_unroot(js, h_iterator);
       return js_mkerr(js, "iterator.next is not a function");
+    }
     
-    push_this(iterator);
+    cur_iter = js_deref(js, h_iterator);
+    push_this(cur_iter);
     jsval_t result = call_js_with_args(js, next_method, NULL, 0);
     pop_this();
     JS_RESTORE_STATE(js, saved_state);
     js->flags = saved_flags;
     
-    if (is_err(result)) return result;
+    if (is_err(result)) { js_unroot(js, h_iterator); return result; }
     
     jsoff_t done_off = lkp(js, result, "done", 4);
     jsval_t done_val = done_off ? loadval(js, done_off + sizeof(jsoff_t) * 2) : js_mkundef();
@@ -10824,9 +10867,10 @@ static jsval_t iter_foreach(struct js *js, jsval_t iterable, iter_callback_t cb,
     
     iter_action_t action = cb(js, value, ctx, &out);
     if (action == ITER_BREAK) break;
-    if (action == ITER_ERROR) return out;
+    if (action == ITER_ERROR) { js_unroot(js, h_iterator); return out; }
   }
   
+  js_unroot(js, h_iterator);
   return out;
 }
 
@@ -23174,6 +23218,8 @@ static void gc_roots_common(gc_off_op_t op_off, gc_val_op_t op_val, gc_cb_ctx_t 
     op_val(c, &c->js->for_let_stack[i].body_scope);
     op_off(c, &c->js->for_let_stack[i].prop_off);
   }
+  
+  for (int i = 0; i < c->js->gc_roots_len; i++) op_val(c, &c->js->gc_roots[i]);
 }
 
 void js_gc_reserve_roots(GC_UPDATE_ARGS) {
@@ -23346,7 +23392,7 @@ static jsval_t js_eval_inherit_strict(struct js *js, const char *buf, size_t len
     res = js_stmt(js);
     if (js->needs_gc && js->eval_depth == 1 && !js->gc_suppress) {
       js->needs_gc = false;
-      // js_gc_compact(js);
+      js_gc_compact(js);
     }
     if (js->flags & F_RETURN) break;
   }
@@ -23356,19 +23402,25 @@ static jsval_t js_eval_inherit_strict(struct js *js, const char *buf, size_t len
   return res;
 }
 
-jsval_t js_eval(struct js *js, const char *buf, size_t len) {
+inline jsval_t js_eval(struct js *js, const char *buf, size_t len) {
   return js_eval_inherit_strict(js, buf, len, false);
 }
 
 static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this, jsval_t *args, int nargs, bool use_bound_this) {
+  bool saved_gc_suppress = js->gc_suppress;
+  js->gc_suppress = true;
+
   if (vtype(func) == T_FFI) {
-    return ffi_call_by_index(js, (unsigned int)vdata(func), args, nargs);
+    jsval_t res = ffi_call_by_index(js, (unsigned int)vdata(func), args, nargs);
+    js->gc_suppress = saved_gc_suppress;
+    return res;
   } else if (vtype(func) == T_CFUNC) {
     jsval_t saved_this = js->this_val;
     if (use_bound_this) js->this_val = bound_this;
     jsval_t (*fn)(struct js *, jsval_t *, int) = (jsval_t(*)(struct js *, jsval_t *, int)) vdata(func);
     jsval_t res = fn(js, args, nargs);
     js->this_val = saved_this;
+    js->gc_suppress = saved_gc_suppress;
     return res;
   } else if (vtype(func) == T_FUNC) {
     jsval_t func_obj = mkval(T_OBJ, vdata(func));
@@ -23396,6 +23448,7 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
       js->this_val = saved_this;
       
       if (combined_args) free(combined_args);
+      js->gc_suppress = saved_gc_suppress;
       return res;
     }
     
@@ -23417,6 +23470,7 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
       jsval_t closure_scope = get_slot(js, func_obj, SLOT_SCOPE);
       jsval_t res = start_async_in_coroutine(js, fn, fnlen, closure_scope, final_args, final_nargs);
       if (combined_args) free(combined_args);
+      js->gc_suppress = saved_gc_suppress;
       return res;
     }
     
@@ -23434,6 +23488,7 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
       delscope(js);
       js->scope = saved_scope;
       if (combined_args) free(combined_args);
+      js->gc_suppress = saved_gc_suppress;
       return js_mkerr(js, "failed to parse function");
     }
     
@@ -23502,8 +23557,11 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
     js->scope = saved_scope;
     if (combined_args) free(combined_args);
     
+    js->gc_suppress = saved_gc_suppress;
     return res;
   }
+  
+  js->gc_suppress = saved_gc_suppress;
   return js_mkerr(js, "not a function");
 }
 

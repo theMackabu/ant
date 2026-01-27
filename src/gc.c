@@ -1,3 +1,4 @@
+#include "gc.h"
 #include "arena.h"
 #include "internal.h"
 #include "common.h"
@@ -5,6 +6,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <time.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -29,10 +31,9 @@ static inline void gc_munmap(void *ptr, size_t size) {
 #define MCO_API extern
 #include "minicoro.h"
 
-#define GC_FWD_LOAD_FACTOR 70
-
 static uint8_t *gc_scratch_buf = NULL;
 static size_t gc_scratch_size = 0;
+static time_t gc_last_run_time = 0;
 
 #define FWD_EMPTY ((jsoff_t)~0)
 #define FWD_TOMBSTONE ((jsoff_t)~1)
@@ -507,10 +508,19 @@ static jsval_t gc_apply_val_callback(void *ctx_ptr, jsval_t val) {
 
 size_t js_gc_compact(ant_t *js) {
   if (!js || js->brk == 0) return 0;
+  if (js->brk < 2 * 1024 * 1024) return 0;
+
+  time_t now = time(NULL);
+  if (now != (time_t)-1 && gc_last_run_time != 0) {
+    double elapsed = difftime(now, gc_last_run_time);
+    if (elapsed >= 0.0 && elapsed < 5.0) return 0;
+  }
   
   mco_coro *running = mco_running();
   int in_coroutine = (running != NULL && running->stack_base != NULL);
+  
   if (in_coroutine || js_has_pending_coroutines()) return 0;
+  if (now != (time_t)-1) gc_last_run_time = now;
   
   size_t old_brk = js->brk;
   size_t new_size = js->size;
@@ -566,7 +576,13 @@ size_t js_gc_compact(ant_t *js) {
   (void)gc_update_val(&ctx, js->current_func);
   (void)gc_update_val(&ctx, js->thrown_value);
   (void)gc_update_val(&ctx, js->tval);
-  js_gc_reserve_roots(js, gc_fwd_off_callback, gc_fwd_val_callback, &ctx);
+  
+  js_gc_reserve_roots(
+    js, 
+    gc_fwd_off_callback, 
+    gc_fwd_val_callback, 
+    &ctx
+  );
   
   gc_drain_work_queue(&ctx);
   

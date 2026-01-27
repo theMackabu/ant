@@ -1,3 +1,4 @@
+#include "ant.h"
 #include <compat.h> // IWYU pragma: keep
 
 #include <stdlib.h>
@@ -53,18 +54,8 @@ static jsval_t js_signal(struct js *js, jsval_t *args, int nargs) {
 
 // Ant.gc()
 static jsval_t js_gc_trigger(struct js *js, jsval_t *args, int nargs) {
-  (void) args; (void) nargs;
-
-  size_t arena_before = js_getbrk(js);
-  size_t arena_freed = js_gc_compact(js);
-  size_t arena_after = js_getbrk(js);
-
-  jsval_t result = js_newobj(js);
-  js_set(js, result, "arenaBefore", js_mknum((double)arena_before));
-  js_set(js, result, "arenaAfter", js_mknum((double)arena_after));
-  js_set(js, result, "arenaFreed", js_mknum((double)arena_freed));
-
-  return result;
+  js->needs_gc = true;
+  return js_mkundef();
 }
 
 // Ant.raw.typeof(jsval_t)
