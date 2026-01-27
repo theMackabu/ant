@@ -12,6 +12,8 @@
 #include "ant.h"
 #include "config.h"
 #include "runtime.h"
+#include "internal.h"
+
 #include "modules/server.h"
 #include "modules/timer.h"
 #include "modules/json.h"
@@ -344,9 +346,9 @@ static jsval_t js_set_prop(struct js *js, jsval_t *args, int nargs) {
   
   jsval_t fn = js_getcurrentfunc(js);
   jsval_t store_obj = js_get_slot(js, fn, SLOT_DATA);
-  if (js_type(store_obj) == JS_UNDEF) return js_mkundef();
+  if (vtype(store_obj) == T_UNDEF) return js_mkundef();
   
-  if (js_type(args[0]) == JS_STR) {
+  if (vtype(args[0]) == T_STR) {
     size_t key_len;
     const char *key = js_getstr(js, args[0], &key_len);
     js_set(js, store_obj, key, args[1]);
@@ -360,9 +362,9 @@ static jsval_t js_get_prop(struct js *js, jsval_t *args, int nargs) {
   
   jsval_t fn = js_getcurrentfunc(js);
   jsval_t store_obj = js_get_slot(js, fn, SLOT_DATA);
-  if (js_type(store_obj) == JS_UNDEF) return js_mkundef();
+  if (vtype(store_obj) == T_UNDEF) return js_mkundef();
   
-  if (js_type(args[0]) == JS_STR) {
+  if (vtype(args[0]) == T_STR) {
     size_t key_len;
     const char *key = js_getstr(js, args[0], &key_len);
     return js_get(js, store_obj, key);
@@ -376,12 +378,12 @@ static jsval_t req_header(struct js *js, jsval_t *args, int nargs) {
   
   jsval_t fn = js_getcurrentfunc(js);
   jsval_t headers_val = js_get_slot(js, fn, SLOT_DATA);
-  if (js_type(headers_val) != JS_NUM) return js_mkundef();
+  if (vtype(headers_val) != T_NUM) return js_mkundef();
   
   UT_array *headers = (UT_array *)(unsigned long)js_getnum(headers_val);
   if (!headers) return js_mkundef();
   
-  if (js_type(args[0]) != JS_STR) return js_mkundef();
+  if (vtype(args[0]) != T_STR) return js_mkundef();
   size_t name_len;
   const char *search_name = js_getstr(js, args[0], &name_len);
   
@@ -400,12 +402,12 @@ static jsval_t res_header(struct js *js, jsval_t *args, int nargs) {
   
   jsval_t fn = js_getcurrentfunc(js);
   jsval_t ctx_val = js_get_slot(js, fn, SLOT_DATA);
-  if (js_type(ctx_val) != JS_NUM) return js_mkundef();
+  if (vtype(ctx_val) != T_NUM) return js_mkundef();
   
   response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
   if (!ctx || !ctx->custom_headers) return js_mkundef();
   
-  if (js_type(args[0]) == JS_STR && js_type(args[1]) == JS_STR) {
+  if (vtype(args[0]) == T_STR && vtype(args[1]) == T_STR) {
     custom_header_t header;
     header.name = js_getstr(js, args[0], NULL);
     header.value = js_getstr(js, args[1], NULL);
@@ -420,12 +422,12 @@ static jsval_t res_status(struct js *js, jsval_t *args, int nargs) {
   
   jsval_t fn = js_getcurrentfunc(js);
   jsval_t ctx_val = js_get_slot(js, fn, SLOT_DATA);
-  if (js_type(ctx_val) != JS_NUM) return js_mkundef();
+  if (vtype(ctx_val) != T_NUM) return js_mkundef();
   
   response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
   if (!ctx) return js_mkundef();
   
-  if (js_type(args[0]) == JS_NUM) {
+  if (vtype(args[0]) == T_NUM) {
     ctx->status = (int)js_getnum(args[0]);
   }
   
@@ -437,20 +439,20 @@ static jsval_t res_body(struct js *js, jsval_t *args, int nargs) {
   
   jsval_t fn = js_getcurrentfunc(js);
   jsval_t ctx_val = js_get_slot(js, fn, SLOT_DATA);
-  if (js_type(ctx_val) != JS_NUM) return js_mkundef();
+  if (vtype(ctx_val) != T_NUM) return js_mkundef();
   
   response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
   if (!ctx) return js_mkundef();
   
-  if (js_type(args[0]) == JS_STR) {
+  if (vtype(args[0]) == T_STR) {
     ctx->body = js_getstr(js, args[0], &ctx->body_len);
   }
   
-  if (nargs >= 2 && js_type(args[1]) == JS_NUM) {
+  if (nargs >= 2 && vtype(args[1]) == T_NUM) {
     ctx->status = (int)js_getnum(args[1]);
   }
   
-  if (nargs >= 3 && js_type(args[2]) == JS_STR) {
+  if (nargs >= 3 && vtype(args[2]) == T_STR) {
     ctx->content_type = js_getstr(js, args[2], NULL);
   } else {
     ctx->content_type = "text/plain";
@@ -466,16 +468,16 @@ static jsval_t res_html(struct js *js, jsval_t *args, int nargs) {
   
   jsval_t fn = js_getcurrentfunc(js);
   jsval_t ctx_val = js_get_slot(js, fn, SLOT_DATA);
-  if (js_type(ctx_val) != JS_NUM) return js_mkundef();
+  if (vtype(ctx_val) != T_NUM) return js_mkundef();
   
   response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
   if (!ctx) return js_mkundef();
   
-  if (js_type(args[0]) == JS_STR) {
+  if (vtype(args[0]) == T_STR) {
     ctx->body = js_getstr(js, args[0], &ctx->body_len);
   }
   
-  if (nargs >= 2 && js_type(args[1]) == JS_NUM) {
+  if (nargs >= 2 && vtype(args[1]) == T_NUM) {
     ctx->status = (int)js_getnum(args[1]);
   }
   
@@ -490,7 +492,7 @@ static jsval_t res_json(struct js *js, jsval_t *args, int nargs) {
   
   jsval_t fn = js_getcurrentfunc(js);
   jsval_t ctx_val = js_get_slot(js, fn, SLOT_DATA);
-  if (js_type(ctx_val) != JS_NUM) return js_mkundef();
+  if (vtype(ctx_val) != T_NUM) return js_mkundef();
   
   response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
   if (!ctx) return js_mkundef();
@@ -498,9 +500,9 @@ static jsval_t res_json(struct js *js, jsval_t *args, int nargs) {
   jsval_t stringify_args[1] = { args[0] };
   jsval_t result = js_json_stringify(js, stringify_args, 1);
   
-  if (js_type(result) == JS_STR) {
+  if (vtype(result) == T_STR) {
     ctx->body = js_getstr(js, result, &ctx->body_len);
-  } else if (js_type(result) == JS_ERR) {
+  } else if (vtype(result) == T_ERR) {
     const char *json_str = js_str(js, args[0]);
     if (json_str) {
       ctx->body = (char *)json_str;
@@ -508,7 +510,7 @@ static jsval_t res_json(struct js *js, jsval_t *args, int nargs) {
     }
   }
   
-  if (nargs >= 2 && js_type(args[1]) == JS_NUM) {
+  if (nargs >= 2 && vtype(args[1]) == T_NUM) {
     ctx->status = (int)js_getnum(args[1]);
   }
   
@@ -523,7 +525,7 @@ static jsval_t res_notFound(struct js *js, jsval_t *args, int nargs) {
   
   jsval_t fn = js_getcurrentfunc(js);
   jsval_t ctx_val = js_get_slot(js, fn, SLOT_DATA);
-  if (js_type(ctx_val) != JS_NUM) return js_mkundef();
+  if (vtype(ctx_val) != T_NUM) return js_mkundef();
   
   response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
   if (!ctx) return js_mkundef();
@@ -542,17 +544,17 @@ static jsval_t res_redirect(struct js *js, jsval_t *args, int nargs) {
   
   jsval_t fn = js_getcurrentfunc(js);
   jsval_t ctx_val = js_get_slot(js, fn, SLOT_DATA);
-  if (js_type(ctx_val) != JS_NUM) return js_mkundef();
+  if (vtype(ctx_val) != T_NUM) return js_mkundef();
   
   response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
   if (!ctx) return js_mkundef();
   
-  if (js_type(args[0]) == JS_STR) {
+  if (vtype(args[0]) == T_STR) {
     ctx->redirect_location = js_getstr(js, args[0], NULL);
   }
   
   ctx->status = 302;
-  if (nargs >= 2 && js_type(args[1]) == JS_NUM) {
+  if (nargs >= 2 && vtype(args[1]) == T_NUM) {
     ctx->status = (int)js_getnum(args[1]);
   }
   
@@ -733,7 +735,7 @@ static void handle_http_request(client_t *client, http_request_t *http_req) {
   res_ctx->next = server->pending_responses;
   server->pending_responses = res_ctx;
   
-  if (server->handler != 0 && js_type(server->handler) != JS_UNDEF) {
+  if (server->handler != 0 && vtype(server->handler) != T_UNDEF) {
     jsval_t ctx = js_mkobj(server->js);
     
     jsval_t req = js_mkobj(server->js);
@@ -760,9 +762,9 @@ static void handle_http_request(client_t *client, http_request_t *http_req) {
   
     jsval_t args[1] = {ctx};
     result = js_call(server->js, server->handler, args, 1);
-    if (js_type(result) == JS_PROMISE) return;
+    if (vtype(result) == T_PROMISE) return;
     
-    if (js_type(result) == JS_ERR) {
+    if (vtype(result) == T_ERR) {
       const char *error_msg = js_str(server->js, result);
       fprintf(stderr, "Handler error: %s\n", error_msg);
       
@@ -937,7 +939,7 @@ jsval_t js_serve(struct js *js, jsval_t *args, int nargs) {
   }
   
   int port = 8000;
-  if (js_type(args[0]) == JS_NUM) {
+  if (vtype(args[0]) == T_NUM) {
     port = (int)js_getnum(args[0]);
   }
   

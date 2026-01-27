@@ -24,6 +24,8 @@
 
 #include "ant.h"
 #include "errors.h"
+#include "internal.h"
+
 #include "modules/child_process.h"
 #include "modules/symbol.h"
 
@@ -135,7 +137,7 @@ static void emit_event(child_process_t *cp, const char *name, jsval_t *args, int
   while (i < evt->count) {
     child_listener_t *l = &evt->listeners[i];
     jsval_t result = js_call(cp->js, l->callback, args, nargs);
-    if (js_type(result) == JS_ERR) {
+    if (vtype(result) == T_ERR) {
       fprintf(stderr, "Error in child_process '%s' listener: %s\n", name, js_str(cp->js, result));
     }
     if (l->once) {
@@ -169,7 +171,7 @@ static void check_completion(child_process_t *cp) {
     jsval_t close_args[2] = { js_mknum((double)cp->exit_code), cp->term_signal ? js_mknum((double)cp->term_signal) : js_mknull() };
     emit_event(cp, "close", close_args, 2);
     
-    if (js_type(cp->promise) != JS_UNDEF) {
+    if (vtype(cp->promise) != T_UNDEF) {
       jsval_t result = js_mkobj(cp->js);
       js_set(cp->js, result, "stdout", stdout_val);
       js_set(cp->js, result, "stderr", stderr_val);
@@ -316,11 +318,11 @@ static void on_stderr_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *b
 static jsval_t child_on(struct js *js, jsval_t *args, int nargs) {
   jsval_t this_obj = js_getthis(js);
   if (nargs < 2) return js_mkerr(js, "on() requires event name and callback");
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "Event name must be a string");
-  if (js_type(args[1]) != JS_FUNC) return js_mkerr(js, "Callback must be a function");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "Event name must be a string");
+  if (vtype(args[1]) != T_FUNC) return js_mkerr(js, "Callback must be a function");
   
   jsval_t cp_ptr = js_get_slot(js, this_obj, SLOT_DATA);
-  if (js_type(cp_ptr) == JS_UNDEF) return js_mkerr(js, "Invalid child process object");
+  if (vtype(cp_ptr) == T_UNDEF) return js_mkerr(js, "Invalid child process object");
   
   child_process_t *cp = (child_process_t *)(uintptr_t)js_getnum(cp_ptr);
   
@@ -345,11 +347,11 @@ static jsval_t child_on(struct js *js, jsval_t *args, int nargs) {
 static jsval_t child_once(struct js *js, jsval_t *args, int nargs) {
   jsval_t this_obj = js_getthis(js);
   if (nargs < 2) return js_mkerr(js, "once() requires event name and callback");
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "Event name must be a string");
-  if (js_type(args[1]) != JS_FUNC) return js_mkerr(js, "Callback must be a function");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "Event name must be a string");
+  if (vtype(args[1]) != T_FUNC) return js_mkerr(js, "Callback must be a function");
   
   jsval_t cp_ptr = js_get_slot(js, this_obj, SLOT_DATA);
-  if (js_type(cp_ptr) == JS_UNDEF) return js_mkerr(js, "Invalid child process object");
+  if (vtype(cp_ptr) == T_UNDEF) return js_mkerr(js, "Invalid child process object");
   
   child_process_t *cp = (child_process_t *)(uintptr_t)js_getnum(cp_ptr);
   
@@ -375,16 +377,16 @@ static jsval_t child_kill(struct js *js, jsval_t *args, int nargs) {
   jsval_t this_obj = js_getthis(js);
   
   jsval_t cp_ptr = js_get_slot(js, this_obj, SLOT_DATA);
-  if (js_type(cp_ptr) == JS_UNDEF) return js_mkfalse();
+  if (vtype(cp_ptr) == T_UNDEF) return js_mkfalse();
   
   child_process_t *cp = (child_process_t *)(uintptr_t)js_getnum(cp_ptr);
   if (cp->exited) return js_mkfalse();
   
   int sig = SIGTERM;
   if (nargs > 0) {
-    if (js_type(args[0]) == JS_NUM) {
+    if (vtype(args[0]) == T_NUM) {
       sig = (int)js_getnum(args[0]);
-    } else if (js_type(args[0]) == JS_STR) {
+    } else if (vtype(args[0]) == T_STR) {
       size_t sig_len;
       char *sig_str = js_getstr(js, args[0], &sig_len);
       if (strncmp(sig_str, "SIGTERM", sig_len) == 0) sig = SIGTERM;
@@ -404,7 +406,7 @@ static jsval_t child_write(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "write() requires data argument");
   
   jsval_t cp_ptr = js_get_slot(js, this_obj, SLOT_DATA);
-  if (js_type(cp_ptr) == JS_UNDEF) return js_mkerr(js, "Invalid child process object");
+  if (vtype(cp_ptr) == T_UNDEF) return js_mkerr(js, "Invalid child process object");
   
   child_process_t *cp = (child_process_t *)(uintptr_t)js_getnum(cp_ptr);
   if (cp->stdin_closed) return js_mkfalse();
@@ -435,7 +437,7 @@ static jsval_t child_end(struct js *js, jsval_t *args, int nargs) {
   jsval_t this_obj = js_getthis(js);
   
   jsval_t cp_ptr = js_get_slot(js, this_obj, SLOT_DATA);
-  if (js_type(cp_ptr) == JS_UNDEF) return js_mkundef();
+  if (vtype(cp_ptr) == T_UNDEF) return js_mkundef();
   
   child_process_t *cp = (child_process_t *)(uintptr_t)js_getnum(cp_ptr);
   if (!cp->stdin_closed) {
@@ -481,7 +483,7 @@ static char **parse_args_array(struct js *js, jsval_t arr, int *count) {
     char idx[16];
     snprintf(idx, sizeof(idx), "%d", i);
     jsval_t val = js_get(js, arr, idx);
-    if (js_type(val) == JS_STR) {
+    if (vtype(val) == T_STR) {
       size_t arg_len;
       char *arg = js_getstr(js, val, &arg_len);
       args[i] = strndup(arg, arg_len);
@@ -503,7 +505,7 @@ static void free_args_array(char **args, int count) {
 
 static jsval_t builtin_spawn(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "spawn() requires a command");
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "Command must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "Command must be a string");
   
   ensure_cp_loop();
   
@@ -517,16 +519,16 @@ static jsval_t builtin_spawn(struct js *js, jsval_t *args, int nargs) {
   bool use_shell = false;
   bool detached = false;
   
-  if (nargs >= 2 && js_type(args[1]) == JS_OBJ) {
+  if (nargs >= 2 && vtype(args[1]) == T_OBJ) {
     jsval_t len_val = js_get(js, args[1], "length");
-    if (js_type(len_val) == JS_NUM) {
+    if (vtype(len_val) == T_NUM) {
       spawn_args = parse_args_array(js, args[1], &spawn_argc);
     }
   }
   
-  if (nargs >= 3 && js_type(args[2]) == JS_OBJ) {
+  if (nargs >= 3 && vtype(args[2]) == T_OBJ) {
     jsval_t cwd_val = js_get(js, args[2], "cwd");
-    if (js_type(cwd_val) == JS_STR) {
+    if (vtype(cwd_val) == T_STR) {
       size_t cwd_len;
       char *cwd_str = js_getstr(js, cwd_val, &cwd_len);
       cwd = strndup(cwd_str, cwd_len);
@@ -648,7 +650,7 @@ static jsval_t builtin_spawn(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t builtin_exec(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "exec() requires a command");
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "Command must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "Command must be a string");
   
   ensure_cp_loop();
   
@@ -657,9 +659,9 @@ static jsval_t builtin_exec(struct js *js, jsval_t *args, int nargs) {
   char *cmd_str = strndup(cmd, cmd_len);
   
   char *cwd = NULL;
-  if (nargs >= 2 && js_type(args[1]) == JS_OBJ) {
+  if (nargs >= 2 && vtype(args[1]) == T_OBJ) {
     jsval_t cwd_val = js_get(js, args[1], "cwd");
-    if (js_type(cwd_val) == JS_STR) {
+    if (vtype(cwd_val) == T_STR) {
       size_t cwd_len;
       char *cwd_s = js_getstr(js, cwd_val, &cwd_len);
       cwd = strndup(cwd_s, cwd_len);
@@ -730,7 +732,7 @@ static jsval_t builtin_exec(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t builtin_execSync(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "execSync() requires a command");
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "Command must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "Command must be a string");
   
   size_t cmd_len;
   char *cmd = js_getstr(js, args[0], &cmd_len);
@@ -795,7 +797,7 @@ static jsval_t builtin_execSync(struct js *js, jsval_t *args, int nargs) {
 #ifdef _WIN32
 static jsval_t builtin_spawnSync(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "spawnSync() requires a command");
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "Command must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "Command must be a string");
   
   size_t cmd_len;
   char *cmd = js_getstr(js, args[0], &cmd_len);
@@ -806,16 +808,16 @@ static jsval_t builtin_spawnSync(struct js *js, jsval_t *args, int nargs) {
   char *input = NULL;
   size_t input_len = 0;
   
-  if (nargs >= 2 && js_type(args[1]) == JS_OBJ) {
+  if (nargs >= 2 && vtype(args[1]) == T_OBJ) {
     jsval_t len_val = js_get(js, args[1], "length");
-    if (js_type(len_val) == JS_NUM) {
+    if (vtype(len_val) == T_NUM) {
       spawn_args = parse_args_array(js, args[1], &spawn_argc);
     }
   }
   
-  if (nargs >= 3 && js_type(args[2]) == JS_OBJ) {
+  if (nargs >= 3 && vtype(args[2]) == T_OBJ) {
     jsval_t input_val = js_get(js, args[2], "input");
-    if (js_type(input_val) == JS_STR) {
+    if (vtype(input_val) == T_STR) {
       input = js_getstr(js, input_val, &input_len);
     }
   }
@@ -940,7 +942,7 @@ static jsval_t builtin_spawnSync(struct js *js, jsval_t *args, int nargs) {
 #else
 static jsval_t builtin_spawnSync(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "spawnSync() requires a command");
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "Command must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "Command must be a string");
   
   size_t cmd_len;
   char *cmd = js_getstr(js, args[0], &cmd_len);
@@ -951,16 +953,16 @@ static jsval_t builtin_spawnSync(struct js *js, jsval_t *args, int nargs) {
   char *input = NULL;
   size_t input_len = 0;
   
-  if (nargs >= 2 && js_type(args[1]) == JS_OBJ) {
+  if (nargs >= 2 && vtype(args[1]) == T_OBJ) {
     jsval_t len_val = js_get(js, args[1], "length");
-    if (js_type(len_val) == JS_NUM) {
+    if (vtype(len_val) == T_NUM) {
       spawn_args = parse_args_array(js, args[1], &spawn_argc);
     }
   }
   
-  if (nargs >= 3 && js_type(args[2]) == JS_OBJ) {
+  if (nargs >= 3 && vtype(args[2]) == T_OBJ) {
     jsval_t input_val = js_get(js, args[2], "input");
-    if (js_type(input_val) == JS_STR) {
+    if (vtype(input_val) == T_STR) {
       input = js_getstr(js, input_val, &input_len);
     }
   }
@@ -1080,7 +1082,7 @@ static jsval_t builtin_spawnSync(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t builtin_fork(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "fork() requires a module path");
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "Module path must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "Module path must be a string");
   size_t path_len;
   
   char *path = js_getstr(js, args[0], &path_len);
@@ -1110,9 +1112,9 @@ static jsval_t builtin_fork(struct js *js, jsval_t *args, int nargs) {
   jsval_t args_arr = js_mkarr(js);
   js_arr_push(js, args_arr, js_mkstr(js, path_str, path_len));
   
-  if (nargs >= 2 && js_type(args[1]) == JS_OBJ) {
+  if (nargs >= 2 && vtype(args[1]) == T_OBJ) {
     jsval_t exec_args = js_get(js, args[1], "execArgv");
-    if (js_type(exec_args) == JS_OBJ) {
+    if (vtype(exec_args) == T_OBJ) {
       jsval_t len_val = js_get(js, exec_args, "length");
       int arr_len = (int)js_getnum(len_val);
       for (int i = 0; i < arr_len; i++) {

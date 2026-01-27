@@ -17,8 +17,14 @@ VENDOR_DIR="$SCRIPT_DIR/vendor"
 HEADERS=(
   "config.h:$CONFIG_H"
   "common.h:$INCLUDE_DIR/common.h"
-  "compat.h:$INCLUDE_DIR/compat.h"
+  "types.h:$INCLUDE_DIR/types.h"
   "ant.h:$INCLUDE_DIR/ant.h"
+  "internal.h:$INCLUDE_DIR/internal.h"
+  "roots.h:$INCLUDE_DIR/roots.h"
+  "tokens.h:$INCLUDE_DIR/tokens.h"
+  "stack.h:$INCLUDE_DIR/stack.h"
+  "errors.h:$INCLUDE_DIR/errors.h"
+  "compat.h:$INCLUDE_DIR/compat.h"
   "utils.h:$INCLUDE_DIR/utils.h"
   "minicoro.h:$VENDOR_DIR/minicoro/minicoro.h"
   "runtime.h:$INCLUDE_DIR/runtime.h"
@@ -90,7 +96,7 @@ for entry in "${HEADERS[@]}"; do
       continue
     fi
     
-    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\"(config\.h|compat\.h|ant\.h|utils\.h|arena\.h|runtime\.h|internal\.h)\" ]]; then
+    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\"(config\.h|common\.h|types\.h|compat\.h|ant\.h|utils\.h|arena\.h|runtime\.h|internal\.h)\" ]]; then
       continue
     fi
     if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\"esm/ ]]; then

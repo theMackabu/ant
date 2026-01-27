@@ -8,6 +8,7 @@
 
 #include "ant.h"
 #include "errors.h"
+#include "internal.h"
 #include "runtime.h"
 
 #include "modules/buffer.h"
@@ -676,7 +677,7 @@ static jsval_t js_atomics_wait(struct js *js, jsval_t *args, int nargs) {
   int32_t expected_value = (int32_t)js_getnum(args[2]);
   int64_t timeout_ms = -1;
   
-  if (nargs > 3 && js_type(args[3]) == JS_NUM) {
+  if (nargs > 3 && vtype(args[3]) == T_NUM) {
     timeout_ms = (int64_t)js_getnum(args[3]);
   }
   
@@ -747,7 +748,7 @@ static jsval_t js_atomics_notify(struct js *js, jsval_t *args, int nargs) {
   }
   
   int count = -1;
-  if (nargs > 2 && js_type(args[2]) == JS_NUM) {
+  if (nargs > 2 && vtype(args[2]) == T_NUM) {
     count = (int)js_getnum(args[2]);
   }
   

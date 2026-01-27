@@ -15,6 +15,7 @@
 #include "errors.h"
 #include "config.h"
 #include "runtime.h"
+#include "internal.h"
 #include "modules/navigator.h"
 #include "modules/symbol.h"
 
@@ -159,17 +160,17 @@ static void execute_lock_callback(struct js *js, const char *name, lock_mode_t m
   
   jsval_t result = js_call(js, callback, &lock_obj, 1);
   
-  if (js_type(result) == JS_ERR) {
+  if (vtype(result) == T_ERR) {
     release_lock(name);
     js_reject_promise(js, outer_promise, result);
     process_pending_requests(js);
     return;
   }
   
-  if (js_type(result) == JS_PROMISE) {
+  if (vtype(result) == T_PROMISE) {
     jsval_t then_fn = js_get(js, result, "then");
     
-    if (js_type(then_fn) == JS_FUNC) {
+    if (vtype(then_fn) == T_FUNC) {
       jsval_t name_str = js_mkstr(js, name, strlen(name));
       
       jsval_t on_resolve = js_mkfun(lock_then_handler);
@@ -247,20 +248,19 @@ static jsval_t locks_request(struct js *js, jsval_t *args, int nargs) {
     options = args[1];
     callback = args[2];
     
-    if (js_type(options) == JS_OBJ) {
+    if (vtype(options) == T_OBJ) {
       jsval_t mode_val = js_get(js, options, "mode");
-      if (js_type(mode_val) == JS_STR) {
+      if (vtype(mode_val) == T_STR) {
         size_t mode_len;
         char *mode_str = js_getstr(js, mode_val, &mode_len);
         if (mode_str && strcmp(mode_str, "shared") == 0) mode = LOCK_MODE_SHARED;
       }
       
-      jsval_t if_avail_val = js_get(js, options, "ifAvailable");
-      if (js_type(if_avail_val) == JS_TRUE) if_available = true;
+      if (js_get(js, options, "ifAvailable") == js_true) if_available = true;
     }
   }
   
-  if (js_type(callback) != JS_FUNC) {
+  if (vtype(callback) != T_FUNC) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Callback must be a function");
   }
   
@@ -270,9 +270,9 @@ static jsval_t locks_request(struct js *js, jsval_t *args, int nargs) {
     jsval_t null_val = js_mknull();
     jsval_t result = js_call(js, callback, &null_val, 1);
     
-    if (js_type(result) == JS_PROMISE) {
+    if (vtype(result) == T_PROMISE) {
       jsval_t then_fn = js_get(js, result, "then");
-      if (js_type(then_fn) == JS_FUNC) {
+      if (vtype(then_fn) == T_FUNC) {
         jsval_t on_resolve = js_mkfun(lock_then_handler);
         js_set(js, on_resolve, "_lockName", js_mkstr(js, "", 0));
         js_set(js, on_resolve, "_outerPromise", promise);

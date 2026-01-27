@@ -275,7 +275,7 @@ static void on_stat_complete(uv_fs_t *uv_req) {
   
   jsval_t stat_obj = js_mkobj(req->js);
   jsval_t proto = js_get_ctor_proto(req->js, "Stats", 5);
-  if (js_type(proto) == JS_OBJ) js_set_proto(req->js, stat_obj, proto);
+  if (vtype(proto) == T_OBJ) js_set_proto(req->js, stat_obj, proto);
   
   uv_stat_t *st = &uv_req->statbuf;
   js_set_slot(req->js, stat_obj, SLOT_DATA, js_mknum((double)st->st_mode));
@@ -360,7 +360,7 @@ static void ensure_fs_loop(void) {
 static jsval_t builtin_fs_readFileSync(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "readFileSync() requires a path argument");
   
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "readFileSync() path must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "readFileSync() path must be a string");
   
   size_t path_len;
   char *path = js_getstr(js, args[0], &path_len);
@@ -411,7 +411,7 @@ static jsval_t builtin_fs_readFileSync(struct js *js, jsval_t *args, int nargs) 
 
 static jsval_t builtin_fs_readBytesSync(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "readBytesSync() requires a path argument");
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "readBytesSync() path must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "readBytesSync() path must be a string");
   
   size_t path_len;
   char *path = js_getstr(js, args[0], &path_len);
@@ -462,7 +462,7 @@ static jsval_t builtin_fs_readBytesSync(struct js *js, jsval_t *args, int nargs)
 static jsval_t builtin_fs_readFile(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "readFile() requires a path argument");
   
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "readFile() path must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "readFile() path must be a string");
   
   size_t path_len;
   char *path = js_getstr(js, args[0], &path_len);
@@ -495,7 +495,7 @@ static jsval_t builtin_fs_readFile(struct js *js, jsval_t *args, int nargs) {
 static jsval_t builtin_fs_readBytes(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "readBytes() requires a path argument");
   
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "readBytes() path must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "readBytes() path must be a string");
   
   size_t path_len;
   char *path = js_getstr(js, args[0], &path_len);
@@ -528,8 +528,8 @@ static jsval_t builtin_fs_readBytes(struct js *js, jsval_t *args, int nargs) {
 static jsval_t builtin_fs_writeFileSync(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "writeFileSync() requires path and data arguments");
   
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "writeFileSync() path must be a string");
-  if (js_type(args[1]) != JS_STR) return js_mkerr(js, "writeFileSync() data must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "writeFileSync() path must be a string");
+  if (vtype(args[1]) != T_STR) return js_mkerr(js, "writeFileSync() data must be a string");
   
   size_t path_len, data_len;
   char *path = js_getstr(js, args[0], &path_len);
@@ -561,8 +561,8 @@ static jsval_t builtin_fs_writeFileSync(struct js *js, jsval_t *args, int nargs)
 static jsval_t builtin_fs_copyFileSync(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "copyFileSync() requires src and dest arguments");
   
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "copyFileSync() src must be a string");
-  if (js_type(args[1]) != JS_STR) return js_mkerr(js, "copyFileSync() dest must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "copyFileSync() src must be a string");
+  if (vtype(args[1]) != T_STR) return js_mkerr(js, "copyFileSync() dest must be a string");
   
   size_t src_len, dest_len;
   char *src = js_getstr(js, args[0], &src_len);
@@ -618,8 +618,8 @@ static jsval_t builtin_fs_copyFileSync(struct js *js, jsval_t *args, int nargs) 
 static jsval_t builtin_fs_renameSync(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "renameSync() requires oldPath and newPath arguments");
   
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "renameSync() oldPath must be a string");
-  if (js_type(args[1]) != JS_STR) return js_mkerr(js, "renameSync() newPath must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "renameSync() oldPath must be a string");
+  if (vtype(args[1]) != T_STR) return js_mkerr(js, "renameSync() newPath must be a string");
   
   size_t old_len, new_len;
   char *old_path = js_getstr(js, args[0], &old_len);
@@ -651,8 +651,8 @@ static jsval_t builtin_fs_renameSync(struct js *js, jsval_t *args, int nargs) {
 static jsval_t builtin_fs_appendFileSync(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "appendFileSync() requires path and data arguments");
   
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "appendFileSync() path must be a string");
-  if (js_type(args[1]) != JS_STR) return js_mkerr(js, "appendFileSync() data must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "appendFileSync() path must be a string");
+  if (vtype(args[1]) != T_STR) return js_mkerr(js, "appendFileSync() data must be a string");
   
   size_t path_len, data_len;
   char *path = js_getstr(js, args[0], &path_len);
@@ -684,8 +684,8 @@ static jsval_t builtin_fs_appendFileSync(struct js *js, jsval_t *args, int nargs
 static jsval_t builtin_fs_writeFile(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "writeFile() requires path and data arguments");
   
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "writeFile() path must be a string");
-  if (js_type(args[1]) != JS_STR) return js_mkerr(js, "writeFile() data must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "writeFile() path must be a string");
+  if (vtype(args[1]) != T_STR) return js_mkerr(js, "writeFile() data must be a string");
   
   size_t path_len, data_len;
   char *path = js_getstr(js, args[0], &path_len);
@@ -729,7 +729,7 @@ static jsval_t builtin_fs_writeFile(struct js *js, jsval_t *args, int nargs) {
 static jsval_t builtin_fs_unlinkSync(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "unlinkSync() requires a path argument");
   
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "unlinkSync() path must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "unlinkSync() path must be a string");
   
   size_t path_len;
   char *path = js_getstr(js, args[0], &path_len);
@@ -753,7 +753,7 @@ static jsval_t builtin_fs_unlinkSync(struct js *js, jsval_t *args, int nargs) {
 static jsval_t builtin_fs_unlink(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "unlink() requires a path argument");
   
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "unlink() path must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "unlink() path must be a string");
   
   size_t path_len;
   char *path = js_getstr(js, args[0], &path_len);
@@ -786,7 +786,7 @@ static jsval_t builtin_fs_unlink(struct js *js, jsval_t *args, int nargs) {
 static jsval_t builtin_fs_mkdirSync(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "mkdirSync() requires a path argument");
   
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "mkdirSync() path must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "mkdirSync() path must be a string");
   
   size_t path_len;
   char *path = js_getstr(js, args[0], &path_len);
@@ -797,15 +797,15 @@ static jsval_t builtin_fs_mkdirSync(struct js *js, jsval_t *args, int nargs) {
   
   if (nargs < 2) goto do_mkdir;
   
-  switch (js_type(args[1])) {
-    case JS_NUM:
+  switch (vtype(args[1])) {
+    case T_NUM:
       mode = (int)js_getnum(args[1]);
       break;
-    case JS_OBJ: {
+    case T_OBJ: {
       jsval_t opt = args[1];
-      recursive = js_type(js_get(js, opt, "recursive")) == JS_TRUE;
+      recursive = js_get(js, opt, "recursive") == js_true;
       jsval_t mode_val = js_get(js, opt, "mode");
-      if (js_type(mode_val) == JS_NUM) mode = (int)js_getnum(mode_val);
+      if (vtype(mode_val) == T_NUM) mode = (int)js_getnum(mode_val);
       break;
     }
   }
@@ -838,14 +838,14 @@ do_mkdir:
 static jsval_t builtin_fs_mkdir(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "mkdir() requires a path argument");
   
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "mkdir() path must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "mkdir() path must be a string");
   
   size_t path_len;
   char *path = js_getstr(js, args[0], &path_len);
   if (!path) return js_mkerr(js, "Failed to get path string");
   
   int mode = 0755;
-  if (nargs >= 2 && js_type(args[1]) == JS_NUM) {
+  if (nargs >= 2 && vtype(args[1]) == T_NUM) {
     mode = (int)js_getnum(args[1]);
   }
   
@@ -876,7 +876,7 @@ static jsval_t builtin_fs_mkdir(struct js *js, jsval_t *args, int nargs) {
 static jsval_t builtin_fs_rmdirSync(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "rmdirSync() requires a path argument");
   
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "rmdirSync() path must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "rmdirSync() path must be a string");
   
   size_t path_len;
   char *path = js_getstr(js, args[0], &path_len);
@@ -904,7 +904,7 @@ static jsval_t builtin_fs_rmdirSync(struct js *js, jsval_t *args, int nargs) {
 static jsval_t builtin_fs_rmdir(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "rmdir() requires a path argument");
   
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "rmdir() path must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "rmdir() path must be a string");
   
   size_t path_len;
   char *path = js_getstr(js, args[0], &path_len);
@@ -938,7 +938,7 @@ static jsval_t stat_isFile(struct js *js, jsval_t *args, int nargs) {
   jsval_t this = js_getthis(js);
   jsval_t mode_val = js_get_slot(js, this, SLOT_DATA);
   
-  if (js_type(mode_val) != JS_NUM) return js_mkfalse();
+  if (vtype(mode_val) != T_NUM) return js_mkfalse();
   mode_t mode = (mode_t)js_getnum(mode_val);
   
   return S_ISREG(mode) ? js_mktrue() : js_mkfalse();
@@ -948,7 +948,7 @@ static jsval_t stat_isDirectory(struct js *js, jsval_t *args, int nargs) {
   jsval_t this = js_getthis(js);
   jsval_t mode_val = js_get_slot(js, this, SLOT_DATA);
   
-  if (js_type(mode_val) != JS_NUM) return js_mkfalse();
+  if (vtype(mode_val) != T_NUM) return js_mkfalse();
   mode_t mode = (mode_t)js_getnum(mode_val);
   
   return S_ISDIR(mode) ? js_mktrue() : js_mkfalse();
@@ -958,7 +958,7 @@ static jsval_t stat_isSymbolicLink(struct js *js, jsval_t *args, int nargs) {
   jsval_t this = js_getthis(js);
   jsval_t mode_val = js_get_slot(js, this, SLOT_DATA);
   
-  if (js_type(mode_val) != JS_NUM) return js_mkfalse();
+  if (vtype(mode_val) != T_NUM) return js_mkfalse();
   mode_t mode = (mode_t)js_getnum(mode_val);
   
   return S_ISLNK(mode) ? js_mktrue() : js_mkfalse();
@@ -967,7 +967,7 @@ static jsval_t stat_isSymbolicLink(struct js *js, jsval_t *args, int nargs) {
 static jsval_t create_stats_object(struct js *js, struct stat *st) {
   jsval_t stat_obj = js_mkobj(js);
   jsval_t proto = js_get_ctor_proto(js, "Stats", 5);
-  if (js_type(proto) == JS_OBJ) js_set_proto(js, stat_obj, proto);
+  if (vtype(proto) == T_OBJ) js_set_proto(js, stat_obj, proto);
   
   js_set_slot(js, stat_obj, SLOT_DATA, js_mknum((double)st->st_mode));
   js_set(js, stat_obj, "size", js_mknum((double)st->st_size));
@@ -1002,7 +1002,7 @@ static const char *errno_to_code(int err_num) {
 static jsval_t builtin_fs_statSync(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "statSync() requires a path argument");
   
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "statSync() path must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "statSync() path must be a string");
   
   size_t path_len;
   char *path = js_getstr(js, args[0], &path_len);
@@ -1027,7 +1027,7 @@ static jsval_t builtin_fs_statSync(struct js *js, jsval_t *args, int nargs) {
 static jsval_t builtin_fs_stat(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "stat() requires a path argument");
   
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "stat() path must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "stat() path must be a string");
   
   size_t path_len;
   char *path = js_getstr(js, args[0], &path_len);
@@ -1060,7 +1060,7 @@ static jsval_t builtin_fs_stat(struct js *js, jsval_t *args, int nargs) {
 static jsval_t builtin_fs_existsSync(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "existsSync() requires a path argument");
   
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "existsSync() path must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "existsSync() path must be a string");
   
   size_t path_len;
   char *path = js_getstr(js, args[0], &path_len);
@@ -1079,7 +1079,7 @@ static jsval_t builtin_fs_existsSync(struct js *js, jsval_t *args, int nargs) {
 static jsval_t builtin_fs_exists(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "exists() requires a path argument");
   
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "exists() path must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "exists() path must be a string");
   
   size_t path_len;
   char *path = js_getstr(js, args[0], &path_len);
@@ -1112,14 +1112,14 @@ static jsval_t builtin_fs_exists(struct js *js, jsval_t *args, int nargs) {
 static jsval_t builtin_fs_accessSync(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "accessSync() requires a path argument");
   
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "accessSync() path must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "accessSync() path must be a string");
   
   size_t path_len;
   char *path = js_getstr(js, args[0], &path_len);
   if (!path) return js_mkerr(js, "Failed to get path string");
   
   int mode = F_OK;
-  if (nargs >= 2 && js_type(args[1]) == JS_NUM) {
+  if (nargs >= 2 && vtype(args[1]) == T_NUM) {
     mode = (int)js_getnum(args[1]);
   }
   
@@ -1140,14 +1140,14 @@ static jsval_t builtin_fs_accessSync(struct js *js, jsval_t *args, int nargs) {
 static jsval_t builtin_fs_access(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "access() requires a path argument");
   
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "access() path must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "access() path must be a string");
   
   size_t path_len;
   char *path = js_getstr(js, args[0], &path_len);
   if (!path) return js_mkerr(js, "Failed to get path string");
   
   int mode = F_OK;
-  if (nargs >= 2 && js_type(args[1]) == JS_NUM) {
+  if (nargs >= 2 && vtype(args[1]) == T_NUM) {
     mode = (int)js_getnum(args[1]);
   }
   
@@ -1178,7 +1178,7 @@ static jsval_t builtin_fs_access(struct js *js, jsval_t *args, int nargs) {
 static jsval_t builtin_fs_readdirSync(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "readdirSync() requires a path argument");
   
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "readdirSync() path must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "readdirSync() path must be a string");
   
   size_t path_len;
   char *path = js_getstr(js, args[0], &path_len);
@@ -1212,7 +1212,7 @@ static jsval_t builtin_fs_readdirSync(struct js *js, jsval_t *args, int nargs) {
 static jsval_t builtin_fs_readdir(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "readdir() requires a path argument");
   
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "readdir() path must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "readdir() path must be a string");
   
   size_t path_len;
   char *path = js_getstr(js, args[0], &path_len);

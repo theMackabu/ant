@@ -33,11 +33,6 @@
 #define GC_FWD_ARGS jsval_t (*fwd_val)(void *ctx, jsval_t old), void *ctx
 #define GC_UPDATE_ARGS ant_t *js, jsoff_t (*fwd_off)(void *ctx, jsoff_t old), GC_FWD_ARGS
 
-enum {
-  JS_UNDEF, JS_NULL, JS_TRUE, JS_FALSE, JS_STR, JS_NUM,
-  JS_ERR, JS_PRIV, JS_PROMISE, JS_OBJ, JS_FUNC, JS_SYMBOL
-};
-
 #define JS_DESC_W (1 << 0)
 #define JS_DESC_E (1 << 1)
 #define JS_DESC_C (1 << 2)
@@ -82,7 +77,20 @@ void js_setthis(ant_t *, jsval_t);
 jsval_t js_getcurrentfunc(ant_t *);
 jsval_t js_get(ant_t *, jsval_t, const char *);
 jsval_t js_getprop_proto(ant_t *, jsval_t, const char *);
-bool js_iter(ant_t *js, jsval_t iterable, bool (*callback)(ant_t *js, jsval_t value, void *udata), void *udata);
+
+jsoff_t js_arr_len(struct js *js, jsval_t arr);
+jsval_t js_arr_get(struct js *js, jsval_t arr, jsoff_t idx);
+
+bool js_iter(
+  ant_t *js, 
+  jsval_t iterable,
+  bool (*callback)(
+    ant_t *js,
+    jsval_t value,
+    void *udata
+  ), 
+  void *udata
+);
 
 uint64_t js_sym_id(jsval_t sym);
 const char *js_sym_desc(ant_t *js, jsval_t sym);
@@ -93,7 +101,6 @@ const char *js_sym_key(jsval_t sym);
 jsval_t js_mkobj(ant_t *);
 jsval_t js_newobj(ant_t *);
 jsval_t js_mkarr(ant_t *);
-void js_arr_push(ant_t *, jsval_t arr, jsval_t val);
 jsval_t js_mkstr(ant_t *, const void *, size_t);
 jsval_t js_mkbigint(ant_t *, const char *digits, size_t len, bool negative);
 jsval_t js_mksym(ant_t *, const char *desc);
@@ -110,6 +117,7 @@ void js_set(ant_t *, jsval_t, const char *, jsval_t);
 void js_saveval(ant_t *js, jsoff_t off, jsval_t v);
 bool js_del(ant_t *, jsval_t obj, const char *key);
 void js_merge_obj(ant_t *, jsval_t dst, jsval_t src);
+void js_arr_push(ant_t *, jsval_t arr, jsval_t val);
 
 jsval_t js_setprop(ant_t *, jsval_t obj, jsval_t key, jsval_t val);
 jsval_t js_setprop_nonconfigurable(ant_t *, jsval_t obj, const char *key, size_t keylen, jsval_t val);
@@ -119,10 +127,6 @@ jsval_t js_get_proto(ant_t *, jsval_t obj);
 jsval_t js_get_ctor_proto(ant_t *, const char *name, size_t len);
 jsval_t js_tostring_val(ant_t *js, jsval_t value);
 
-int js_type(jsval_t val);
-int js_type_ex(ant_t *js, jsval_t val);
-
-int js_getbool(jsval_t val);
 uint8_t vtype(jsval_t val);
 size_t vdata(jsval_t val);
 

@@ -35,6 +35,7 @@
 
 #include "ant.h"
 #include "errors.h"
+#include "internal.h"
 #include "modules/symbol.h"
 
 #ifdef _WIN32
@@ -522,7 +523,7 @@ static jsval_t os_networkInterfaces(struct js *js, jsval_t *args, int nargs) {
   
   for (pCurrAddresses = pAddresses; pCurrAddresses; pCurrAddresses = pCurrAddresses->Next) {
     jsval_t iface_arr = js_get(js, result, pCurrAddresses->AdapterName);
-    if (js_type(iface_arr) != JS_OBJ) {
+    if (vtype(iface_arr) != T_OBJ) {
       iface_arr = js_mkarr(js);
       js_set(js, result, pCurrAddresses->AdapterName, iface_arr);
     }
@@ -700,16 +701,16 @@ static void apply_mac_to_iface(struct js *js, jsval_t result, const char *name, 
   format_mac_address(mac_str, sizeof(mac_str), mac_bytes);
   
   jsval_t iface_arr = js_get(js, result, name);
-  if (js_type(iface_arr) != JS_OBJ) return;
+  if (vtype(iface_arr) != T_OBJ) return;
   
   jsval_t len_val = js_get(js, iface_arr, "length");
-  int len = (js_type(len_val) == JS_NUM) ? (int)js_getnum(len_val) : 0;
+  int len = (vtype(len_val) == T_NUM) ? (int)js_getnum(len_val) : 0;
   
   for (int i = 0; i < len; i++) {
     char idx[16];
     snprintf(idx, sizeof(idx), "%d", i);
     jsval_t entry = js_get(js, iface_arr, idx);
-    if (js_type(entry) == JS_OBJ)
+    if (vtype(entry) == T_OBJ)
       js_set(js, entry, "mac", js_mkstr(js, mac_str, strlen(mac_str)));
   }
 }
@@ -728,7 +729,7 @@ static jsval_t os_networkInterfaces(struct js *js, jsval_t *args, int nargs) {
     if (family != AF_INET && family != AF_INET6) continue;
     
     jsval_t iface_arr = js_get(js, result, ifa->ifa_name);
-    if (js_type(iface_arr) != JS_OBJ) {
+    if (vtype(iface_arr) != T_OBJ) {
       iface_arr = js_mkarr(js);
       js_set(js, result, ifa->ifa_name, iface_arr);
     }
@@ -779,7 +780,7 @@ static jsval_t os_userInfo(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t os_getPriority(struct js *js, jsval_t *args, int nargs) {
   int pid = 0;
-  if (nargs > 0 && js_type(args[0]) == JS_NUM) {
+  if (nargs > 0 && vtype(args[0]) == T_NUM) {
     pid = (int)js_getnum(args[0]);
   }
   
@@ -796,12 +797,12 @@ static jsval_t os_setPriority(struct js *js, jsval_t *args, int nargs) {
   int priority = 0;
   
   if (nargs == 1) {
-    if (js_type(args[0]) != JS_NUM) {
+    if (vtype(args[0]) != T_NUM) {
       return js_mkerr_typed(js, JS_ERR_TYPE, "priority must be a number");
     }
     priority = (int)js_getnum(args[0]);
   } else if (nargs >= 2) {
-    if (js_type(args[0]) != JS_NUM || js_type(args[1]) != JS_NUM) {
+    if (vtype(args[0]) != T_NUM || vtype(args[1]) != T_NUM) {
       return js_mkerr_typed(js, JS_ERR_TYPE, "pid and priority must be numbers");
     }
     pid = (int)js_getnum(args[0]);

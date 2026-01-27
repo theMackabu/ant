@@ -6,6 +6,7 @@
 #include "errors.h"
 #include "arena.h"
 #include "runtime.h"
+#include "internal.h"
 
 #include "modules/symbol.h"
 #include "modules/sessionstorage.h"
@@ -138,7 +139,7 @@ static jsval_t js_sessionstorage_key(struct js *js, jsval_t *args, int nargs) {
     return js_mkerr(js, "Failed to execute 'key' on 'Storage': 1 argument required");
   }
   
-  if (js_type(args[0]) != JS_NUM) {
+  if (vtype(args[0]) != T_NUM) {
     return js_mknull();
   }
   

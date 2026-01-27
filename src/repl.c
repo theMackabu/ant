@@ -22,6 +22,7 @@
 #include "repl.h"
 #include "config.h"
 #include "runtime.h"
+#include "internal.h"
 #include "modules/io.h"
 
 #define MAX_HISTORY 512
@@ -119,9 +120,9 @@ static cmd_result_t cmd_load(struct js *js, history_t *history, const char *arg)
     
     jsval_t result = js_eval(js, file_buffer, len);
     js_run_event_loop(js);
-    if (js_type(result) == JS_ERR) {
+    if (vtype(result) == T_ERR) {
       fprintf(stderr, "%s\n", js_str(js, result));
-    } else if (js_type(result) != JS_UNDEF) {
+    } else if (vtype(result) != T_UNDEF) {
       printf("%s\n", js_str(js, result));
     }
     
@@ -609,7 +610,7 @@ void ant_repl_run() {
     jsval_t eval_result = js_eval(js, multiline_buf, multiline_len);
     js_run_event_loop(js);
     
-    if (js_type(eval_result) == JS_ERR) {
+    if (vtype(eval_result) == T_ERR) {
       fprintf(stderr, "%s\n", js_str(js, eval_result));
     } else {
       const char *str = js_str(js, eval_result);

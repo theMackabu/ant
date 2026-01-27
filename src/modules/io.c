@@ -280,7 +280,7 @@ void console_print(struct js *js, jsval_t *args, int nargs, const char *color, F
     const char *space = i == 0 ? "" : " ";
     io_puts(space, stream);
     
-    if (js_type(args[i]) == JS_STR) {
+    if (vtype(args[i]) == T_STR) {
       char *str = js_getstr(js, args[i], NULL);
       io_print(str, stream);
     } else {
@@ -324,7 +324,7 @@ static jsval_t js_console_assert(struct js *js, jsval_t *args, int nargs) {
       const char *space = i == 1 ? "" : " ";
       io_puts(space, stderr);
       
-      if (js_type(args[i]) == JS_STR) {
+      if (vtype(args[i]) == T_STR) {
         char *str = js_getstr(js, args[i], NULL);
         io_print(str, stderr);
       } else {
@@ -341,7 +341,7 @@ static jsval_t js_console_assert(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t js_console_trace(struct js *js, jsval_t *args, int nargs) {
   fprintf(stderr, "Console Trace");
-  if (nargs > 0 && js_type(args[0]) == JS_STR) {
+  if (nargs > 0 && vtype(args[0]) == T_STR) {
     fprintf(stderr, ": ");
     char *str = js_getstr(js, args[0], NULL);
     fprintf(stderr, "%s", str);
@@ -378,7 +378,7 @@ static int console_timer_count = 0;
 
 static jsval_t js_console_time(struct js *js, jsval_t *args, int nargs) {
   const char *label = "default";
-  if (nargs > 0 && js_type(args[0]) == JS_STR) {
+  if (nargs > 0 && vtype(args[0]) == T_STR) {
     label = js_getstr(js, args[0], NULL);
   }
   
@@ -400,7 +400,7 @@ static jsval_t js_console_time(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t js_console_timeEnd(struct js *js, jsval_t *args, int nargs) {
   const char *label = "default";
-  if (nargs > 0 && js_type(args[0]) == JS_STR) {
+  if (nargs > 0 && vtype(args[0]) == T_STR) {
     label = js_getstr(js, args[0], NULL);
   }
   
@@ -528,7 +528,7 @@ static void inspect_value(struct js *js, jsval_t val, FILE *stream, int depth, i
   
   if (t == T_UNDEF) { fprintf(stream, "undefined"); return; }
   if (t == T_NULL)  { fprintf(stream, "null"); return; }
-  if (t == T_BOOL)  { fprintf(stream, js_getbool(val) ? "true" : "false"); return; }
+  if (t == T_BOOL)  { fprintf(stream, val == js_true ? "true" : "false"); return; }
   if (t == T_NUM)   { fprintf(stream, "%g", js_getnum(val)); return; }
   if (t == T_ERR)   { fprintf(stream, "[Error]"); return; }
   
@@ -632,7 +632,7 @@ static void inspect_object_full(struct js *js, jsval_t obj, FILE *stream, int de
   jsval_t proto = js_get_proto(js, obj);
   inspect_print_indent(stream, inner_depth);
   fprintf(stream, "[[Prototype]]: ");
-  if (js_type(proto) == JS_NULL) {
+  if (vtype(proto) == T_NULL) {
     fprintf(stream, "null\n");
   } else {
     fprintf(stream, "\n");

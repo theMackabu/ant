@@ -12,6 +12,7 @@
 #include "errors.h"
 #include "config.h"
 #include "common.h"
+#include "internal.h"
 #include "runtime.h"
 #include "modules/fetch.h"
 #include "modules/json.h"
@@ -76,7 +77,7 @@ static jsval_t response_json(struct js *js, jsval_t *args, int nargs) {
   jsval_t parsed = js_json_parse(js, &body, 1);
   jsval_t promise = js_mkpromise(js);
   
-  if (js_type(parsed) == JS_ERR) {
+  if (vtype(parsed) == T_ERR) {
     js_reject_promise(js, promise, parsed);
   } else js_resolve_promise(js, promise, parsed);
   
@@ -270,15 +271,15 @@ static jsval_t do_fetch_microtask(struct js *js, jsval_t *args, int nargs) {
   char *body = NULL;
   size_t body_len = 0;
   
-  if (js_type(options_val) == JS_OBJ) {
+  if (vtype(options_val) == T_OBJ) {
     jsval_t method_val = js_get(js, options_val, "method");
-    if (js_type(method_val) == JS_STR) {
+    if (vtype(method_val) == T_STR) {
       char *method_str = js_getstr(js, method_val, NULL);
       if (method_str) method = method_str;
     }
     
     jsval_t body_val = js_get(js, options_val, "body");
-    if (js_type(body_val) == JS_STR) {
+    if (vtype(body_val) == T_STR) {
       body = js_getstr(js, body_val, NULL);
       if (body) body_len = strlen(body);
     }
@@ -301,9 +302,9 @@ static jsval_t do_fetch_microtask(struct js *js, jsval_t *args, int nargs) {
   snprintf(user_agent, sizeof(user_agent), "ant/%s", ANT_VERSION);
   tlsuv_http_req_header(req->http_req, "User-Agent", user_agent);
   
-  if (js_type(options_val) == JS_OBJ) {
+  if (vtype(options_val) == T_OBJ) {
     jsval_t headers_val = js_get(js, options_val, "headers");
-    if (js_type(headers_val) == JS_OBJ) {
+    if (vtype(headers_val) == T_OBJ) {
       ant_iter_t iter = js_prop_iter_begin(js, headers_val);
       const char *key;
       size_t key_len;
@@ -329,7 +330,7 @@ static jsval_t do_fetch_microtask(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t js_fetch(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "fetch requires at least 1 argument");
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "fetch URL must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "fetch URL must be a string");
   
   jsval_t url_val = args[0];
   jsval_t options_val = nargs > 1 ? args[1] : js_mkundef();

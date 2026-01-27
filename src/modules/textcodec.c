@@ -2,8 +2,11 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "internal.h"
 #include "runtime.h"
 #include "errors.h"
+#include "internal.h"
+
 #include "modules/textcodec.h"
 #include "modules/buffer.h"
 #include "modules/symbol.h"
@@ -13,7 +16,7 @@ static jsval_t js_textencoder_encode(struct js *js, jsval_t *args, int nargs) {
   size_t str_len = 0;
   const char *str = "";
   
-  if (nargs > 0 && js_type(args[0]) == JS_STR) {
+  if (nargs > 0 && vtype(args[0]) == T_STR) {
     str = js_getstr(js, args[0], &str_len);
     if (!str) {
       str = "";
@@ -27,7 +30,7 @@ static jsval_t js_textencoder_encode(struct js *js, jsval_t *args, int nargs) {
   jsval_t len_arg = js_mknum((double)str_len);
   jsval_t arr = js_call(js, uint8array_ctor, &len_arg, 1);
   
-  if (js_type(arr) == JS_ERR) return arr;
+  if (vtype(arr) == T_ERR) return arr;
   
   if (str_len > 0) {
     jsval_t ta_data_val = js_get_slot(js, arr, SLOT_BUFFER);
@@ -47,7 +50,7 @@ static jsval_t js_textencoder_encodeInto(struct js *js, jsval_t *args, int nargs
   size_t str_len = 0;
   const char *str = "";
   
-  if (js_type(args[0]) == JS_STR) {
+  if (vtype(args[0]) == T_STR) {
     str = js_getstr(js, args[0], &str_len);
     if (!str) {
       str = "";
@@ -102,7 +105,7 @@ static jsval_t js_textdecoder_decode(struct js *js, jsval_t *args, int nargs) {
   }
   
   jsval_t ab_data_val = js_get_slot(js, args[0], SLOT_BUFFER);
-  if (js_type(ab_data_val) == JS_NUM) {
+  if (vtype(ab_data_val) == T_NUM) {
     ArrayBufferData *ab_data = (ArrayBufferData *)(uintptr_t)js_getnum(ab_data_val);
     if (!ab_data || !ab_data->data) return js_mkstr(js, "", 0);    
     return js_mkstr(js, (const char *)ab_data->data, ab_data->length);
@@ -115,7 +118,7 @@ static jsval_t js_textdecoder_constructor(struct js *js, jsval_t *args, int narg
   const char *encoding = "utf-8";
   size_t encoding_len = 5;
   
-  if (nargs > 0 && js_type(args[0]) == JS_STR) {
+  if (nargs > 0 && vtype(args[0]) == T_STR) {
     encoding = js_getstr(js, args[0], &encoding_len);
     if (encoding && (
         strcasecmp(encoding, "utf-8") == 0 || 

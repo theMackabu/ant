@@ -91,18 +91,20 @@ void code_arena_reset(void) {
 }
 
 struct ant_runtime *ant_runtime_init(struct js *js, int argc, char **argv, struct arg_file *ls_p) {
-  runtime.js = js;
-  runtime.ant_obj = js_newobj(js);
-  runtime.flags = 0;
+  runtime = (struct ant_runtime){
+    .js = js,
+    .ant_obj = js_newobj(js),
+    .flags = 0,
+    .argc = argc,
+    .argv = argv,
+    .ls_fp = (ls_p && ls_p->count > 0) ? ls_p->filename[0] : NULL,
+  };
 
-  runtime.argc = argc;
-  runtime.argv = argv;
-  runtime.ls_fp = ls_p->count > 0 ? ls_p->filename[0] : NULL;
-
-  js_set(js, js_glob(js), "global", js_glob(js));
-  js_set(js, js_glob(js), "window", js_glob(js));
-  js_set(js, js_glob(js), "globalThis", js_glob(js));
-  js_set(js, js_glob(js), "Ant", runtime.ant_obj);
+  jsval_t global = js_glob(js);
+  js_set(js, global, "global", global);
+  js_set(js, global, "window", global);
+  js_set(js, global, "globalThis", global);
+  js_set(js, global, "Ant", runtime.ant_obj);
 
   return &runtime;
 }

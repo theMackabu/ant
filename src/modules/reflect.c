@@ -4,6 +4,8 @@
 #include "ant.h"
 #include "errors.h"
 #include "runtime.h"
+#include "internal.h"
+
 #include "modules/reflect.h"
 #include "modules/symbol.h"
 
@@ -13,10 +15,10 @@ static jsval_t reflect_get(struct js *js, jsval_t *args, int nargs) {
   jsval_t target = args[0];
   jsval_t key = args[1];
   
-  int t = js_type(target);
-  if (t != JS_OBJ && t != JS_FUNC) return js_mkundef();
+  int t = vtype(target);
+  if (t != T_OBJ && t != T_FUNC) return js_mkundef();
   
-  if (js_type(key) != JS_STR) return js_mkundef();
+  if (vtype(key) != T_STR) return js_mkundef();
   
   char *key_str = js_getstr(js, key, NULL);
   if (!key_str) return js_mkundef();
@@ -31,10 +33,10 @@ static jsval_t reflect_set(struct js *js, jsval_t *args, int nargs) {
   jsval_t key = args[1];
   jsval_t value = args[2];
   
-  int t = js_type(target);
-  if (t != JS_OBJ && t != JS_FUNC) return js_mkfalse();
+  int t = vtype(target);
+  if (t != T_OBJ && t != T_FUNC) return js_mkfalse();
   
-  if (js_type(key) != JS_STR) return js_mkfalse();
+  if (vtype(key) != T_STR) return js_mkfalse();
   
   char *key_str = js_getstr(js, key, NULL);
   if (!key_str) return js_mkfalse();
@@ -49,16 +51,16 @@ static jsval_t reflect_has(struct js *js, jsval_t *args, int nargs) {
   jsval_t target = args[0];
   jsval_t key = args[1];
   
-  int t = js_type(target);
-  if (t != JS_OBJ && t != JS_FUNC) return js_mkfalse();
+  int t = vtype(target);
+  if (t != T_OBJ && t != T_FUNC) return js_mkfalse();
   
-  if (js_type(key) != JS_STR) return js_mkfalse();
+  if (vtype(key) != T_STR) return js_mkfalse();
   
   char *key_str = js_getstr(js, key, NULL);
   if (!key_str) return js_mkfalse();
   
   jsval_t val = js_get(js, target, key_str);
-  return js_type(val) != JS_UNDEF ? js_mktrue() : js_mkfalse();
+  return vtype(val) != T_UNDEF ? js_mktrue() : js_mkfalse();
 }
 
 static jsval_t reflect_delete_property(struct js *js, jsval_t *args, int nargs) {
@@ -67,10 +69,10 @@ static jsval_t reflect_delete_property(struct js *js, jsval_t *args, int nargs) 
   jsval_t target = args[0];
   jsval_t key = args[1];
   
-  int t = js_type(target);
-  if (t != JS_OBJ && t != JS_FUNC) return js_mkfalse();
+  int t = vtype(target);
+  if (t != T_OBJ && t != T_FUNC) return js_mkfalse();
   
-  if (js_type(key) != JS_STR) return js_mkfalse();
+  if (vtype(key) != T_STR) return js_mkfalse();
   
   size_t key_len;
   char *key_str = js_getstr(js, key, &key_len);
@@ -87,8 +89,8 @@ static jsval_t reflect_own_keys(struct js *js, jsval_t *args, int nargs) {
   
   jsval_t target = args[0];
   
-  int t = js_type(target);
-  if (t != JS_OBJ && t != JS_FUNC) {
+  int t = vtype(target);
+  if (t != T_OBJ && t != T_FUNC) {
     return js_mkerr(js, "Reflect.ownKeys called on non-object");
   }
   
@@ -114,13 +116,13 @@ static jsval_t reflect_construct(struct js *js, jsval_t *args, int nargs) {
   jsval_t target = args[0];
   jsval_t args_arr = args[1];
   
-  if (js_type(target) != JS_FUNC) {
+  if (vtype(target) != T_FUNC) {
     return js_mkerr(js, "Reflect.construct: first argument must be a constructor");
   }
   
   jsval_t length_val = js_get(js, args_arr, "length");
   int arg_count = 0;
-  if (js_type(length_val) == JS_NUM) {
+  if (vtype(length_val) == T_NUM) {
     arg_count = (int)js_getnum(length_val);
   }
   
@@ -141,7 +143,7 @@ static jsval_t reflect_construct(struct js *js, jsval_t *args, int nargs) {
   
   if (call_args) free(call_args);
   
-  if (js_type(result) == JS_OBJ || js_type(result) == JS_FUNC) {
+  if (vtype(result) == T_OBJ || vtype(result) == T_FUNC) {
     return result;
   }
   return new_obj;
@@ -156,13 +158,13 @@ static jsval_t reflect_apply(struct js *js, jsval_t *args, int nargs) {
   jsval_t this_arg = args[1];
   jsval_t args_arr = args[2];
   
-  if (js_type(target) != JS_FUNC) {
+  if (vtype(target) != T_FUNC) {
     return js_mkerr(js, "Reflect.apply: first argument must be a function");
   }
   
   jsval_t length_val = js_get(js, args_arr, "length");
   int arg_count = 0;
-  if (js_type(length_val) == JS_NUM) {
+  if (vtype(length_val) == T_NUM) {
     arg_count = (int)js_getnum(length_val);
   }
   
@@ -190,16 +192,16 @@ static jsval_t reflect_get_own_property_descriptor(struct js *js, jsval_t *args,
   jsval_t target = args[0];
   jsval_t key = args[1];
   
-  int t = js_type(target);
-  if (t != JS_OBJ && t != JS_FUNC) return js_mkundef();
+  int t = vtype(target);
+  if (t != T_OBJ && t != T_FUNC) return js_mkundef();
   
-  if (js_type(key) != JS_STR) return js_mkundef();
+  if (vtype(key) != T_STR) return js_mkundef();
   
   char *key_str = js_getstr(js, key, NULL);
   if (!key_str) return js_mkundef();
   
   jsval_t value = js_get(js, target, key_str);
-  if (js_type(value) == JS_UNDEF) return js_mkundef();
+  if (vtype(value) == T_UNDEF) return js_mkundef();
   
   jsval_t desc = js_mkobj(js);
   js_set(js, desc, "value", value);
@@ -217,11 +219,11 @@ static jsval_t reflect_define_property(struct js *js, jsval_t *args, int nargs) 
   jsval_t key = args[1];
   jsval_t descriptor = args[2];
   
-  int t = js_type(target);
-  if (t != JS_OBJ && t != JS_FUNC) return js_mkfalse();
+  int t = vtype(target);
+  if (t != T_OBJ && t != T_FUNC) return js_mkfalse();
   
-  if (js_type(key) != JS_STR) return js_mkfalse();
-  if (js_type(descriptor) != JS_OBJ) return js_mkfalse();
+  if (vtype(key) != T_STR) return js_mkfalse();
+  if (vtype(descriptor) != T_OBJ) return js_mkfalse();
   
   char *key_str = js_getstr(js, key, NULL);
   if (!key_str) return js_mkfalse();
@@ -238,9 +240,9 @@ static jsval_t reflect_get_prototype_of(struct js *js, jsval_t *args, int nargs)
   }
   
   jsval_t target = args[0];
-  int t = js_type(target);
+  int t = vtype(target);
   
-  if (t != JS_OBJ && t != JS_FUNC) {
+  if (t != T_OBJ && t != T_FUNC) {
     return js_mkerr(js, "Reflect.getPrototypeOf: argument must be an object");
   }
   
@@ -253,11 +255,11 @@ static jsval_t reflect_set_prototype_of(struct js *js, jsval_t *args, int nargs)
   jsval_t target = args[0];
   jsval_t proto = args[1];
   
-  int t = js_type(target);
-  if (t != JS_OBJ && t != JS_FUNC) return js_mkfalse();
+  int t = vtype(target);
+  if (t != T_OBJ && t != T_FUNC) return js_mkfalse();
   
-  int pt = js_type(proto);
-  if (pt != JS_OBJ && pt != JS_FUNC && pt != JS_NULL) return js_mkfalse();
+  int pt = vtype(proto);
+  if (pt != T_OBJ && pt != T_FUNC && pt != T_NULL) return js_mkfalse();
   
   js_set_proto(js, target, proto);
   return js_mktrue();
@@ -267,15 +269,12 @@ static jsval_t reflect_is_extensible(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkfalse();
   
   jsval_t target = args[0];
-  int t = js_type(target);
+  int t = vtype(target);
   
-  if (t != JS_OBJ && t != JS_FUNC) return js_mkfalse();
+  if (t != T_OBJ && t != T_FUNC) return js_mkfalse();
   
-  jsval_t frozen = js_get_slot(js, target, SLOT_FROZEN);
-  if (js_type(frozen) == JS_TRUE) return js_mkfalse();
-  
-  jsval_t sealed = js_get_slot(js, target, SLOT_SEALED);
-  if (js_type(sealed) == JS_TRUE) return js_mkfalse();
+  if (js_get_slot(js, target, SLOT_FROZEN) == js_true) return js_false;
+  if (js_get_slot(js, target, SLOT_SEALED) == js_true) return js_false;
   
   return js_mktrue();
 }
@@ -284,9 +283,9 @@ static jsval_t reflect_prevent_extensions(struct js *js, jsval_t *args, int narg
   if (nargs < 1) return js_mkfalse();
   
   jsval_t target = args[0];
-  int t = js_type(target);
+  int t = vtype(target);
   
-  if (t != JS_OBJ && t != JS_FUNC) return js_mkfalse();
+  if (t != T_OBJ && t != T_FUNC) return js_mkfalse();
   
   js_set_slot(js, target, SLOT_EXTENSIBLE, js_mkfalse());
   return js_mktrue();

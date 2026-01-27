@@ -16,6 +16,8 @@
 #include <uthash.h>
 
 #include "errors.h"
+#include "internal.h"
+
 #include "modules/ffi.h"
 #include "modules/symbol.h"
 
@@ -151,7 +153,7 @@ static void ffi_init_array(void) {
 }
 
 static jsval_t ffi_dlopen(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1 || js_type(args[0]) != JS_STR) {
+  if (nargs < 1 || vtype(args[0]) != T_STR) {
     return js_mkerr(js, "dlopen() requires library name string");
   }
 
@@ -200,13 +202,13 @@ static jsval_t ffi_dlopen(struct js *js, jsval_t *args, int nargs) {
 }
 
 static jsval_t ffi_define(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2 || js_type(args[0]) != JS_STR) {
+  if (nargs < 2 || vtype(args[0]) != T_STR) {
     return js_mkerr(js, "define() requires function name string and signature");
   }
 
   jsval_t this_obj = js_getthis(js);
   jsval_t lib_ptr_val = js_get(js, this_obj, "__lib_ptr");
-  if (js_type(lib_ptr_val) != JS_NUM) {
+  if (vtype(lib_ptr_val) != T_NUM) {
     return js_mkerr(js, "Invalid library object");
   }
 
@@ -214,9 +216,9 @@ static jsval_t ffi_define(struct js *js, jsval_t *args, int nargs) {
   const char *func_name = js_getstr(js, args[0], &func_name_len);
 
   jsval_t sig = args[1];
-  int sig_type = js_type(sig);
-  if (sig_type == JS_STR || sig_type == JS_NUM || sig_type == JS_NULL ||
-      sig_type == JS_UNDEF) {
+  int sig_type = vtype(sig);
+  if (sig_type == T_STR || sig_type == T_NUM || sig_type == T_NULL ||
+      sig_type == T_UNDEF) {
     return js_mkerr(js,
                     "Signature must be an array [returnType, [argTypes...]] or "
                     "an object {args: [...], returns: type}");
@@ -229,16 +231,16 @@ static jsval_t ffi_define(struct js *js, jsval_t *args, int nargs) {
   jsval_t returns_val = js_get(js, sig, "returns");
   jsval_t args_val = js_get(js, sig, "args");
 
-  if (js_type(returns_val) != JS_UNDEF && js_type(args_val) != JS_UNDEF) {
-    if (js_type(returns_val) != JS_STR) {
+  if (vtype(returns_val) != T_UNDEF && vtype(args_val) != T_UNDEF) {
+    if (vtype(returns_val) != T_STR) {
       return js_mkerr(js, "Return type must be a string");
     }
     ret_type_str = js_getstr(js, returns_val, NULL);
     arg_types_arr = args_val;
 
-    if (js_type(arg_types_arr) == JS_STR || js_type(arg_types_arr) == JS_NUM ||
-        js_type(arg_types_arr) == JS_NULL ||
-        js_type(arg_types_arr) == JS_UNDEF) {
+    if (vtype(arg_types_arr) == T_STR || vtype(arg_types_arr) == T_NUM ||
+        vtype(arg_types_arr) == T_NULL ||
+        vtype(arg_types_arr) == T_UNDEF) {
       return js_mkerr(js, "Argument types must be an array");
     }
 
@@ -246,16 +248,16 @@ static jsval_t ffi_define(struct js *js, jsval_t *args, int nargs) {
     arg_count = (int)js_getnum(length_val);
   } else {
     jsval_t ret_type_val = js_get(js, sig, "0");
-    if (js_type(ret_type_val) != JS_STR) {
+    if (vtype(ret_type_val) != T_STR) {
       return js_mkerr(js, "Return type must be a string");
     }
 
     ret_type_str = js_getstr(js, ret_type_val, NULL);
     arg_types_arr = js_get(js, sig, "1");
 
-    int arg_arr_type = js_type(arg_types_arr);
-    if (arg_arr_type == JS_STR || arg_arr_type == JS_NUM ||
-        arg_arr_type == JS_NULL || arg_arr_type == JS_UNDEF) {
+    int arg_arr_type = vtype(arg_types_arr);
+    if (arg_arr_type == T_STR || arg_arr_type == T_NUM ||
+        arg_arr_type == T_NULL || arg_arr_type == T_UNDEF) {
       return js_mkerr(js, "Argument types must be an array");
     }
 
@@ -300,7 +302,7 @@ static jsval_t ffi_define(struct js *js, jsval_t *args, int nargs) {
       snprintf(idx_str, sizeof(idx_str), "%d", i);
       jsval_t arg_type_val = js_get(js, arg_types_arr, idx_str);
 
-      if (js_type(arg_type_val) != JS_STR) {
+      if (vtype(arg_type_val) != T_STR) {
         free(func->arg_types);
         free(func);
         return js_mkerr(js, "Argument type must be a string");
@@ -348,7 +350,7 @@ static jsval_t ffi_define(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t ffi_lib_call(struct js *js, jsval_t *args, int nargs) {
   jsval_t lib_obj = js_getthis(js);
-  if (nargs < 1 || js_type(args[0]) != JS_STR)
+  if (nargs < 1 || vtype(args[0]) != T_STR)
     return js_mkerr(js, "call() requires function name string");
 
   size_t func_name_len;
@@ -442,7 +444,7 @@ jsval_t ffi_call_by_index(struct js *js, unsigned int func_index, jsval_t *args,
 }
 
 static jsval_t ffi_alloc_memory(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1 || js_type(args[0]) != JS_NUM) {
+  if (nargs < 1 || vtype(args[0]) != T_NUM) {
     return js_mkerr(js, "alloc() requires size");
   }
 
@@ -475,7 +477,7 @@ static jsval_t ffi_alloc_memory(struct js *js, jsval_t *args, int nargs) {
 }
 
 static jsval_t ffi_free_memory(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1 || js_type(args[0]) != JS_NUM) {
+  if (nargs < 1 || vtype(args[0]) != T_NUM) {
     return js_mkerr(js, "free() requires pointer");
   }
 
@@ -502,7 +504,7 @@ static jsval_t ffi_free_memory(struct js *js, jsval_t *args, int nargs) {
 }
 
 static jsval_t ffi_read_memory(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2 || js_type(args[0]) != JS_NUM || js_type(args[1]) != JS_STR) {
+  if (nargs < 2 || vtype(args[0]) != T_NUM || vtype(args[1]) != T_STR) {
     return js_mkerr(js, "read() requires pointer and type");
   }
 
@@ -530,7 +532,7 @@ static jsval_t ffi_read_memory(struct js *js, jsval_t *args, int nargs) {
 }
 
 static jsval_t ffi_write_memory(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 3 || js_type(args[0]) != JS_NUM || js_type(args[1]) != JS_STR) {
+  if (nargs < 3 || vtype(args[0]) != T_NUM || vtype(args[1]) != T_STR) {
     return js_mkerr(js, "write() requires pointer, type, and value");
   }
 
@@ -560,7 +562,7 @@ static jsval_t ffi_write_memory(struct js *js, jsval_t *args, int nargs) {
 }
 
 static jsval_t ffi_get_pointer(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1 || js_type(args[0]) != JS_NUM) return js_mkerr(js, "pointer() requires pointer");
+  if (nargs < 1 || vtype(args[0]) != T_NUM) return js_mkerr(js, "pointer() requires pointer");
   uint64_t ptr_key = (uint64_t)js_getnum(args[0]);
 
   pthread_mutex_lock(&ffi_pointers_mutex);
@@ -573,7 +575,7 @@ static jsval_t ffi_get_pointer(struct js *js, jsval_t *args, int nargs) {
 }
 
 static jsval_t ffi_read_ptr(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2 || js_type(args[0]) != JS_NUM || js_type(args[1]) != JS_STR) {
+  if (nargs < 2 || vtype(args[0]) != T_NUM || vtype(args[1]) != T_STR) {
     return js_mkerr(js, "readPtr() requires pointer and type");
   }
 
@@ -627,7 +629,7 @@ static void ffi_callback_handler(ffi_cif *cif, void *ret, void **args, void *use
     } else if (cb->ret_type == &ffi_type_double) {
       *(double *)ret = js_getnum(result);
     } else if (cb->ret_type == &ffi_type_pointer) {
-      if (js_type(result) == JS_NUM) {
+      if (vtype(result) == T_NUM) {
         *(void **)ret = (void *)(uint64_t)js_getnum(result);
       } else {
         *(void **)ret = NULL;
@@ -641,8 +643,8 @@ static jsval_t ffi_create_callback(struct js *js, jsval_t *args, int nargs) {
 
   jsval_t js_func = args[0];
   jsval_t sig = args[1];
-  int sig_type = js_type(sig);
-  if (sig_type == JS_STR || sig_type == JS_NUM || sig_type == JS_NULL || sig_type == JS_UNDEF) {
+  int sig_type = vtype(sig);
+  if (sig_type == T_STR || sig_type == T_NUM || sig_type == T_NULL || sig_type == T_UNDEF) {
     return js_mkerr(js, "Signature must be an object {args: [...], returns: type}");
   }
 
@@ -653,15 +655,15 @@ static jsval_t ffi_create_callback(struct js *js, jsval_t *args, int nargs) {
   jsval_t returns_val = js_get(js, sig, "returns");
   jsval_t args_val = js_get(js, sig, "args");
 
-  if (js_type(returns_val) != JS_UNDEF && js_type(args_val) != JS_UNDEF) {
-    if (js_type(returns_val) != JS_STR) return js_mkerr(js, "Return type must be a string");
+  if (vtype(returns_val) != T_UNDEF && vtype(args_val) != T_UNDEF) {
+    if (vtype(returns_val) != T_STR) return js_mkerr(js, "Return type must be a string");
     ret_type_str = js_getstr(js, returns_val, NULL);
     arg_types_arr = args_val;
     jsval_t length_val = js_get(js, arg_types_arr, "length");
     arg_count = (int)js_getnum(length_val);
   } else {
     jsval_t ret_type_val = js_get(js, sig, "0");
-    if (js_type(ret_type_val) != JS_STR) return js_mkerr(js, "Return type must be a string");
+    if (vtype(ret_type_val) != T_STR) return js_mkerr(js, "Return type must be a string");
     ret_type_str = js_getstr(js, ret_type_val, NULL);
     arg_types_arr = js_get(js, sig, "1");
     jsval_t length_val = js_get(js, arg_types_arr, "length");
@@ -696,7 +698,7 @@ static jsval_t ffi_create_callback(struct js *js, jsval_t *args, int nargs) {
       snprintf(idx_str, sizeof(idx_str), "%d", i);
       jsval_t arg_type_val = js_get(js, arg_types_arr, idx_str);
 
-      if (js_type(arg_type_val) != JS_STR) {
+      if (vtype(arg_type_val) != T_STR) {
         for (int j = 0; j < i; j++) free(cb->arg_type_strs[j]);
         free(cb->arg_types);
         free(cb->arg_type_strs);
@@ -758,7 +760,7 @@ static jsval_t ffi_create_callback(struct js *js, jsval_t *args, int nargs) {
 }
 
 static jsval_t ffi_free_callback(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1 || js_type(args[0]) != JS_NUM) {
+  if (nargs < 1 || vtype(args[0]) != T_NUM) {
     return js_mkerr(js, "freeCallback() requires callback pointer");
   }
 
@@ -919,7 +921,7 @@ do_double: {
     goto do_done;
   }
 do_pointer: {
-    if (js_type(val) == JS_STR) {
+    if (vtype(val) == T_STR) {
       size_t str_len;
       const char *str = js_getstr(js, val, &str_len);
       void *ptr = (void *)str;

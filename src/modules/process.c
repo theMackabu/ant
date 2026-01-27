@@ -414,10 +414,10 @@ static void on_sigwinch(uv_signal_t *handle, int signum) {
   if (!rt->js) return;
   
   jsval_t process_obj = js_get(rt->js, js_glob(rt->js), "process");
-  if (js_type(process_obj) != JS_OBJ) return;
+  if (vtype(process_obj) != T_OBJ) return;
   
   jsval_t stdout_obj = js_get(rt->js, process_obj, "stdout");
-  if (js_type(stdout_obj) != JS_OBJ) return;
+  if (vtype(stdout_obj) != T_OBJ) return;
   
   int rows = 0, cols = 0;
   get_tty_size(STDOUT_FILENO, &rows, &cols);
@@ -464,7 +464,7 @@ static jsval_t js_stdin_on(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) return this_obj;
   
   char *event = js_getstr(js, args[0], NULL);
-  if (!event || js_type(args[1]) != JS_FUNC) return this_obj;
+  if (!event || vtype(args[1]) != T_FUNC) return this_obj;
   
   ProcessEventType *evt = find_or_create_stdin_event(event);
   if (!ensure_listener_capacity(evt)) return this_obj;
@@ -516,7 +516,7 @@ static jsval_t js_stdout_on(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) return this_obj;
   
   char *event = js_getstr(js, args[0], NULL);
-  if (!event || js_type(args[1]) != JS_FUNC) return this_obj;
+  if (!event || vtype(args[1]) != T_FUNC) return this_obj;
   
   ProcessEventType *evt = find_or_create_stdout_event(event);
   if (!ensure_listener_capacity(evt)) return this_obj;
@@ -535,7 +535,7 @@ static jsval_t js_stdout_once(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) return this_obj;
   
   char *event = js_getstr(js, args[0], NULL);
-  if (!event || js_type(args[1]) != JS_FUNC) return this_obj;
+  if (!event || vtype(args[1]) != T_FUNC) return this_obj;
   
   ProcessEventType *evt = find_or_create_stdout_event(event);
   if (!ensure_listener_capacity(evt)) return this_obj;
@@ -623,7 +623,7 @@ static jsval_t js_stderr_on(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) return this_obj;
   
   char *event = js_getstr(js, args[0], NULL);
-  if (!event || js_type(args[1]) != JS_FUNC) return this_obj;
+  if (!event || vtype(args[1]) != T_FUNC) return this_obj;
   
   ProcessEventType *evt = find_or_create_stderr_event(event);
   if (!ensure_listener_capacity(evt)) return this_obj;
@@ -640,7 +640,7 @@ static jsval_t js_stderr_once(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) return this_obj;
   
   char *event = js_getstr(js, args[0], NULL);
-  if (!event || js_type(args[1]) != JS_FUNC) return this_obj;
+  if (!event || vtype(args[1]) != T_FUNC) return this_obj;
   
   ProcessEventType *evt = find_or_create_stderr_event(event);
   if (!ensure_listener_capacity(evt)) return this_obj;
@@ -686,7 +686,7 @@ static jsval_t process_hrtime(ant_t *js, jsval_t *args, int nargs) {
   if (nargs > 0 && vtype(args[0]) == T_ARR) {
     jsval_t prev_sec = js_get(js, args[0], "0");
     jsval_t prev_nsec = js_get(js, args[0], "1");
-    if (js_type(prev_sec) == JS_NUM && js_type(prev_nsec) == JS_NUM) {
+    if (vtype(prev_sec) == T_NUM && vtype(prev_nsec) == T_NUM) {
       uint64_t prev = (uint64_t)js_getnum(prev_sec) * 1000000000ULL + (uint64_t)js_getnum(prev_nsec);
       now = now - prev;
     }
@@ -760,11 +760,11 @@ static jsval_t process_cpu_usage(ant_t *js, jsval_t *args, int nargs) {
     int64_t user_usec = rusage.ru_utime.tv_sec * 1000000LL + rusage.ru_utime.tv_usec;
     int64_t sys_usec = rusage.ru_stime.tv_sec * 1000000LL + rusage.ru_stime.tv_usec;
     
-    if (nargs > 0 && js_type(args[0]) == JS_OBJ) {
+    if (nargs > 0 && vtype(args[0]) == T_OBJ) {
       jsval_t prev_user = js_get(js, args[0], "user");
       jsval_t prev_system = js_get(js, args[0], "system");
-      if (js_type(prev_user) == JS_NUM) user_usec -= (int64_t)js_getnum(prev_user);
-      if (js_type(prev_system) == JS_NUM) sys_usec -= (int64_t)js_getnum(prev_system);
+      if (vtype(prev_user) == T_NUM) user_usec -= (int64_t)js_getnum(prev_user);
+      if (vtype(prev_system) == T_NUM) sys_usec -= (int64_t)js_getnum(prev_system);
     }
     
     js_set(js, obj, "user", js_mknum((double)user_usec));
@@ -779,15 +779,15 @@ static jsval_t process_cpu_usage(ant_t *js, jsval_t *args, int nargs) {
 
 static jsval_t process_kill(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "process.kill requires at least 1 argument");
-  if (js_type(args[0]) != JS_NUM) return js_mkerr(js, "pid must be a number");
+  if (vtype(args[0]) != T_NUM) return js_mkerr(js, "pid must be a number");
   
   int pid = (int)js_getnum(args[0]);
   int sig = SIGTERM;
   
   if (nargs > 1) {
-    if (js_type(args[1]) == JS_NUM) {
+    if (vtype(args[1]) == T_NUM) {
       sig = (int)js_getnum(args[1]);
-    } else if (js_type(args[1]) == JS_STR) {
+    } else if (vtype(args[1]) == T_STR) {
       char *sig_name = js_getstr(js, args[1], NULL);
       if (sig_name) {
         int signum = get_signal_number(sig_name);
@@ -824,7 +824,7 @@ static jsval_t process_umask(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
   return js_mknum(0);
 #else
-  if (nargs > 0 && js_type(args[0]) == JS_NUM) {
+  if (nargs > 0 && vtype(args[0]) == T_NUM) {
     int new_mask = (int)js_getnum(args[0]);
     int old_mask = umask((mode_t)new_mask);
     return js_mknum(old_mask);
@@ -877,9 +877,9 @@ static jsval_t process_setuid(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "process.setuid requires 1 argument");
   
   uid_t uid;
-  if (js_type(args[0]) == JS_NUM) {
+  if (vtype(args[0]) == T_NUM) {
     uid = (uid_t)js_getnum(args[0]);
-  } else if (js_type(args[0]) == JS_STR) {
+  } else if (vtype(args[0]) == T_STR) {
     char *name = js_getstr(js, args[0], NULL);
     struct passwd *pwd = getpwnam(name);
     if (!pwd) return js_mkerr(js, "setuid user not found");
@@ -896,9 +896,9 @@ static jsval_t process_setgid(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "process.setgid requires 1 argument");
   
   gid_t gid;
-  if (js_type(args[0]) == JS_NUM) {
+  if (vtype(args[0]) == T_NUM) {
     gid = (gid_t)js_getnum(args[0]);
-  } else if (js_type(args[0]) == JS_STR) {
+  } else if (vtype(args[0]) == T_STR) {
     char *name = js_getstr(js, args[0], NULL);
     struct group *grp = getgrnam(name);
     if (!grp) return js_mkerr(js, "setgid group not found");
@@ -915,9 +915,9 @@ static jsval_t process_seteuid(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "process.seteuid requires 1 argument");
   
   uid_t uid;
-  if (js_type(args[0]) == JS_NUM) {
+  if (vtype(args[0]) == T_NUM) {
     uid = (uid_t)js_getnum(args[0]);
-  } else if (js_type(args[0]) == JS_STR) {
+  } else if (vtype(args[0]) == T_STR) {
     char *name = js_getstr(js, args[0], NULL);
     struct passwd *pwd = getpwnam(name);
     if (!pwd) return js_mkerr(js, "seteuid user not found");
@@ -934,9 +934,9 @@ static jsval_t process_setegid(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "process.setegid requires 1 argument");
   
   gid_t gid;
-  if (js_type(args[0]) == JS_NUM) {
+  if (vtype(args[0]) == T_NUM) {
     gid = (gid_t)js_getnum(args[0]);
-  } else if (js_type(args[0]) == JS_STR) {
+  } else if (vtype(args[0]) == T_STR) {
     char *name = js_getstr(js, args[0], NULL);
     struct group *grp = getgrnam(name);
     if (!grp) return js_mkerr(js, "setegid group not found");
@@ -964,9 +964,9 @@ static jsval_t process_setgroups(ant_t *js, jsval_t *args, int nargs) {
     char idx[16];
     snprintf(idx, sizeof(idx), "%d", i);
     jsval_t val = js_get(js, args[0], idx);
-    if (js_type(val) == JS_NUM) {
+    if (vtype(val) == T_NUM) {
       groups[i] = (gid_t)js_getnum(val);
-    } else if (js_type(val) == JS_STR) {
+    } else if (vtype(val) == T_STR) {
       char *name = js_getstr(js, val, NULL);
       struct group *grp = getgrnam(name);
       if (!grp) { free(groups); return js_mkerr(js, "group not found"); }
@@ -992,9 +992,9 @@ static jsval_t process_initgroups(ant_t *js, jsval_t *args, int nargs) {
   if (!user) return js_mkerr(js, "user must be a string");
   
   gid_t gid;
-  if (js_type(args[1]) == JS_NUM) {
+  if (vtype(args[1]) == T_NUM) {
     gid = (gid_t)js_getnum(args[1]);
-  } else if (js_type(args[1]) == JS_STR) {
+  } else if (vtype(args[1]) == T_STR) {
     char *name = js_getstr(js, args[1], NULL);
     struct group *grp = getgrnam(name);
     if (!grp) return js_mkerr(js, "group not found");
@@ -1076,7 +1076,7 @@ static void load_dotenv_file(ant_t *js, jsval_t env_obj) {
 static jsval_t process_exit(ant_t *js, jsval_t *args, int nargs) {
   int code = 0;
   
-  if (nargs > 0 && js_type(args[0]) == JS_NUM) {
+  if (nargs > 0 && vtype(args[0]) == T_NUM) {
     code = (int)js_getnum(args[0]);
   }
   
@@ -1120,7 +1120,7 @@ static jsval_t process_on(ant_t *js, jsval_t *args, int nargs) {
   
   char *event = js_getstr(js, args[0], NULL);
   if (!event) return js_mkerr(js, "event must be a string");
-  if (js_type(args[1]) != JS_FUNC) return js_mkerr(js, "listener must be a function");
+  if (vtype(args[1]) != T_FUNC) return js_mkerr(js, "listener must be a function");
   
   int signum = get_signal_number(event);
   if (signum > 0) {
@@ -1146,7 +1146,7 @@ static jsval_t process_once(ant_t *js, jsval_t *args, int nargs) {
   
   char *event = js_getstr(js, args[0], NULL);
   if (!event) return js_mkerr(js, "event must be a string");
-  if (js_type(args[1]) != JS_FUNC) return js_mkerr(js, "listener must be a function");
+  if (vtype(args[1]) != T_FUNC) return js_mkerr(js, "listener must be a function");
   
   int signum = get_signal_number(event);
   if (signum > 0) {
@@ -1198,7 +1198,7 @@ static jsval_t process_off(ant_t *js, jsval_t *args, int nargs) {
 static jsval_t process_remove_all_listeners(ant_t *js, jsval_t *args, int nargs) {
   jsval_t process_obj = js_get(js, js_glob(js), "process");
   
-  if (nargs > 0 && js_type(args[0]) == JS_STR) {
+  if (nargs > 0 && vtype(args[0]) == T_STR) {
     char *event = js_getstr(js, args[0], NULL);
     if (event) {
       ProcessEventType *evt = NULL;
@@ -1245,7 +1245,7 @@ static jsval_t process_listener_count(ant_t *js, jsval_t *args, int nargs) {
 
 static jsval_t process_set_max_listeners(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "setMaxListeners requires 1 argument");
-  if (js_type(args[0]) != JS_NUM) return js_mkerr(js, "n must be a number");
+  if (vtype(args[0]) != T_NUM) return js_mkerr(js, "n must be a number");
   
   int n = (int)js_getnum(args[0]);
   if (n < 0) return js_mkerr(js, "n must be non-negative");

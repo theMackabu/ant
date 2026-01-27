@@ -14,6 +14,7 @@
 #include "runtime.h"
 #include "snapshot.h"
 #include "esm/remote.h"
+#include "internal.h"
 
 #include "modules/builtin.h"
 #include "modules/buffer.h"
@@ -60,11 +61,11 @@ static void eval_code(struct js *js, struct arg_str *eval, struct arg_lit *print
   jsval_t result = js_eval(js, script, len);
   js_run_event_loop(js);
   
-  if (js_type(result) == JS_ERR) {
+  if (vtype(result) == T_ERR) {
     fprintf(stderr, "%s\n", js_str(js, result));
     js_result = EXIT_FAILURE;
   } else if (print->count > 0) {
-    if (js_type(result) == JS_STR) {
+    if (vtype(result) == T_STR) {
       char *str = js_getstr(js, result, NULL);
       if (str) printf("%s\n", str);
     } else {
@@ -150,7 +151,7 @@ static int execute_module(struct js *js, const char *filename) {
   jsval_t result = js_eval(js, js_code, js_len);
   free(js_code);
   
-  if (js_type(result) == JS_ERR) {
+  if (vtype(result) == T_ERR) {
     fprintf(stderr, "%s\n", js_str(js, result));
     return EXIT_FAILURE;
   }
@@ -254,7 +255,7 @@ int main(int argc, char *argv[]) {
   ant_standard_library("child_process", child_process_library);
 
   jsval_t snapshot_result = ant_load_snapshot(js);
-  if (js_type(snapshot_result) == JS_ERR) {
+  if (vtype(snapshot_result) == T_ERR) {
     fprintf(stderr, "Warning: Failed to load snapshot: %s\n", js_str(js, snapshot_result));
   }
 

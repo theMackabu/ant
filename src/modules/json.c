@@ -8,6 +8,7 @@
 #include "errors.h"
 #include "runtime.h"
 #include "internal.h"
+
 #include "modules/json.h"
 #include "modules/symbol.h"
 
@@ -108,7 +109,7 @@ typedef struct { char *key; size_t key_len; jsval_t value; } prop_entry;
 
 static int should_skip_prop(struct js *js, const char *key, size_t key_len, jsval_t value) {
   if (is_internal_prop(key, (jsoff_t)key_len)) return 1;
-  if (js_type(value) != JS_OBJ) return 0;
+  if (vtype(value) != T_OBJ) return 0;
   return vtype(js_get_slot(js, value, SLOT_CODE)) == T_CFUNC;
 }
 
@@ -151,19 +152,19 @@ static inline int key_matches(const char *a, size_t a_len, const char *b, size_t
 }
 
 static int is_key_in_replacer_arr(struct js *js, json_cycle_ctx *ctx, const char *key, size_t key_len) {
-  if (js_type(ctx->replacer_arr) != JS_OBJ) return 1;
+  if (vtype(ctx->replacer_arr) != T_OBJ) return 1;
   
   for (int i = 0; i < ctx->replacer_arr_len; i++) {
     char idxstr[32];
     snprintf(idxstr, sizeof(idxstr), "%d", i);
     jsval_t item = js_get(js, ctx->replacer_arr, idxstr);
-    int type = js_type(item);
+    int type = vtype(item);
     
-    if (type == JS_STR) {
+    if (type == T_STR) {
       size_t item_len;
       char *item_str = js_getstr(js, item, &item_len);
       if (key_matches(item_str, item_len, key, key_len)) return 1;
-    } else if (type == JS_NUM) {
+    } else if (type == T_NUM) {
       char numstr[32];
       snprintf(numstr, sizeof(numstr), "%.0f", js_getnum(item));
       if (key_matches(numstr, strlen(numstr), key, key_len)) return 1;
@@ -175,26 +176,26 @@ static int is_key_in_replacer_arr(struct js *js, json_cycle_ctx *ctx, const char
 static yyjson_mut_val *jsval_to_yyjson_with_key(struct js *js, yyjson_mut_doc *doc, const char *key, jsval_t val, json_cycle_ctx *ctx, int in_array);
 
 static yyjson_mut_val *jsval_to_yyjson_impl(struct js *js, yyjson_mut_doc *doc, jsval_t val, json_cycle_ctx *ctx, int in_array) {
-  int type = js_type(val);
+  int type = vtype(val);
   yyjson_mut_val *result = NULL;
   
-  if (type == JS_OBJ) {
+  if (type == T_OBJ) {
     jsval_t toJSON = js_get(js, val, "toJSON");
-    if (js_type(toJSON) == JS_FUNC) {
+    if (vtype(toJSON) == T_FUNC) {
       jsval_t r = js_call(js, toJSON, &val, 1);
-      if (js_type(r) == JS_ERR) { ctx->has_cycle = 1; return NULL; }
+      if (vtype(r) == T_ERR) { ctx->has_cycle = 1; return NULL; }
       return jsval_to_yyjson_impl(js, doc, r, ctx, in_array);
     }
   }
   
   switch (type) {
-    case JS_UNDEF:  return in_array ? yyjson_mut_null(doc) : YYJSON_SKIP_VALUE;
-    case JS_NULL:   return yyjson_mut_null(doc);
-    case JS_TRUE:   return yyjson_mut_bool(doc, true);
-    case JS_FALSE:  return yyjson_mut_bool(doc, false);
-    case JS_FUNC:   return in_array ? yyjson_mut_null(doc) : YYJSON_SKIP_VALUE;
+    case T_NULL:   return yyjson_mut_null(doc);
+    case T_BOOL:   return yyjson_mut_bool(doc, val == js_true);
     
-    case JS_NUM: {
+    case T_UNDEF:  return in_array ? yyjson_mut_null(doc) : YYJSON_SKIP_VALUE;
+    case T_FUNC:   return in_array ? yyjson_mut_null(doc) : YYJSON_SKIP_VALUE;
+    
+    case T_NUM: {
       double num = js_getnum(val);
       if (isnan(num) || isinf(num)) return yyjson_mut_null(doc);
       if (
@@ -205,13 +206,13 @@ static yyjson_mut_val *jsval_to_yyjson_impl(struct js *js, yyjson_mut_doc *doc, 
       return yyjson_mut_real(doc, num);
     }
     
-    case JS_STR: {
+    case T_STR: {
       size_t len;
       char *str = js_getstr(js, val, &len);
       return yyjson_mut_strncpy(doc, str, len);
     }
     
-    case JS_OBJ: break;
+    case T_OBJ: break;
     default: return yyjson_mut_null(doc);
   }
   
@@ -220,7 +221,7 @@ static yyjson_mut_val *jsval_to_yyjson_impl(struct js *js, yyjson_mut_doc *doc, 
   
   jsval_t length_val = js_get(js, val, "length");
   
-  if (js_type(length_val) == JS_NUM) {
+  if (vtype(length_val) == T_NUM) {
     yyjson_mut_val *arr = yyjson_mut_arr(doc);
     int length = (int)js_getnum(length_val);
     
@@ -254,8 +255,8 @@ static yyjson_mut_val *jsval_to_yyjson_impl(struct js *js, yyjson_mut_doc *doc, 
       free(p->key); continue;
     }
     
-    int ptype = js_type(p->value);
-    if (ptype == JS_UNDEF || ptype == JS_FUNC) { free(p->key); continue; }
+    int ptype = vtype(p->value);
+    if (ptype == T_UNDEF || ptype == T_FUNC) { free(p->key); continue; }
     
     yyjson_mut_val *jval = jsval_to_yyjson_with_key(js, doc, p->key, p->value, ctx, 0);
     if (ctx->has_cycle) { free_props(props, 0, i); ctx->holder = saved_holder; goto done; }
@@ -275,14 +276,14 @@ done:
 }
 
 static yyjson_mut_val *jsval_to_yyjson_with_key(struct js *js, yyjson_mut_doc *doc, const char *key, jsval_t val, json_cycle_ctx *ctx, int in_array) {
-  if (js_type(ctx->replacer_func) != JS_FUNC)
+  if (vtype(ctx->replacer_func) != T_FUNC)
     return jsval_to_yyjson_impl(js, doc, val, ctx, in_array);
   
   jsval_t key_str = js_mkstr(js, key, strlen(key));
   jsval_t call_args[2] = { key_str, val };
   jsval_t transformed = js_call(js, ctx->replacer_func, call_args, 2);
   
-  if (js_type(transformed) == JS_ERR) {
+  if (vtype(transformed) == T_ERR) {
     ctx->has_cycle = 1;
     return NULL;
   }
@@ -297,15 +298,15 @@ static yyjson_mut_val *jsval_to_yyjson(struct js *js, yyjson_mut_doc *doc, jsval
 static jsval_t apply_reviver(struct js *js, jsval_t holder, const char *key, jsval_t reviver) {
   jsval_t val = js_get(js, holder, key);
   
-  if (js_type(val) == JS_OBJ) {
+  if (vtype(val) == T_OBJ) {
     jsval_t len_val = js_get(js, val, "length");
-    if (js_type(len_val) == JS_NUM) {
+    if (vtype(len_val) == T_NUM) {
       int length = (int)js_getnum(len_val);
       for (int i = 0; i < length; i++) {
         char idxstr[32];
         snprintf(idxstr, sizeof(idxstr), "%d", i);
         jsval_t new_elem = apply_reviver(js, val, idxstr, reviver);
-        if (js_type(new_elem) == JS_UNDEF) js_del(js, val, idxstr);
+        if (vtype(new_elem) == T_UNDEF) js_del(js, val, idxstr);
         else js_set(js, val, idxstr, new_elem);
       }
     } else {
@@ -332,7 +333,7 @@ static jsval_t apply_reviver(struct js *js, jsval_t holder, const char *key, jsv
         size_t klen;
         char *kstr = js_getstr(js, key_str, &klen);
         jsval_t new_val = apply_reviver(js, val, kstr, reviver);
-        if (js_type(new_val) == JS_UNDEF) js_del(js, val, kstr);
+        if (vtype(new_val) == T_UNDEF) js_del(js, val, kstr);
         else js_set(js, val, kstr, new_val);
       }
     }
@@ -346,7 +347,7 @@ static jsval_t apply_reviver(struct js *js, jsval_t holder, const char *key, jsv
 
 jsval_t js_json_parse(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "JSON.parse() requires at least 1 argument");
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "JSON.parse() argument must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "JSON.parse() argument must be a string");
   
   size_t len;
   char *json_str = js_getstr(js, args[0], &len);
@@ -357,7 +358,7 @@ jsval_t js_json_parse(struct js *js, jsval_t *args, int nargs) {
   jsval_t result = yyjson_to_jsval(js, yyjson_doc_get_root(doc));
   yyjson_doc_free(doc);
   
-  if (nargs >= 2 && js_type(args[1]) == JS_FUNC) {
+  if (nargs >= 2 && vtype(args[1]) == T_FUNC) {
     jsval_t reviver = args[1];
     jsval_t root = js_mkobj(js);
     js_set(js, root, "", result);
@@ -370,9 +371,9 @@ jsval_t js_json_parse(struct js *js, jsval_t *args, int nargs) {
 static yyjson_write_flag get_write_flags(jsval_t *args, int nargs) {
   if (nargs < 3) return 0;
   
-  int type = js_type(args[2]);
-  if (type == JS_UNDEF || type == JS_NULL) return 0;
-  if (type != JS_NUM) return YYJSON_WRITE_PRETTY;
+  int type = vtype(args[2]);
+  if (type == T_UNDEF || type == T_NULL) return 0;
+  if (type != T_NUM) return YYJSON_WRITE_PRETTY;
   
   int indent = (int)js_getnum(args[2]);
   if (indent <= 0) return 0;
@@ -390,8 +391,8 @@ jsval_t js_json_stringify(struct js *js, jsval_t *args, int nargs) {
   
   if (nargs < 1) return js_mkerr(js, "JSON.stringify() requires at least 1 argument");
   
-  int top_type = js_type(args[0]);
-  if (top_type == JS_UNDEF || top_type == JS_FUNC || top_type == JS_SYMBOL)
+  int top_type = vtype(args[0]);
+  if (top_type == T_UNDEF || top_type == T_FUNC || top_type == T_SYMBOL)
     return js_mkundef();
   
   ctx.js = js;
@@ -402,13 +403,13 @@ jsval_t js_json_stringify(struct js *js, jsval_t *args, int nargs) {
   
   if (nargs >= 2) {
     jsval_t replacer = args[1];
-    int replacer_type = js_type(replacer);
+    int replacer_type = vtype(replacer);
     
-    if (replacer_type == JS_FUNC) {
+    if (replacer_type == T_FUNC) {
       ctx.replacer_func = replacer;
-    } else if (replacer_type == JS_OBJ) {
+    } else if (replacer_type == T_OBJ) {
       jsval_t len_val = js_get(js, replacer, "length");
-      if (js_type(len_val) == JS_NUM) {
+      if (vtype(len_val) == T_NUM) {
         ctx.replacer_arr = replacer;
         ctx.replacer_arr_len = (int)js_getnum(len_val);
       }

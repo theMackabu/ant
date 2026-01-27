@@ -5,6 +5,7 @@
 #include "ant.h"
 #include "errors.h"
 #include "runtime.h"
+#include "internal.h"
 #include "modules/symbol.h"
 
 static jsval_t g_iterator_sym = 0;
@@ -29,14 +30,14 @@ const char *get_observable_sym_key(void) { return g_observable_sym_key; }
 
 static jsval_t builtin_Symbol(struct js *js, jsval_t *args, int nargs) {
   const char *desc = NULL;
-  if (nargs > 0 && js_type(args[0]) == JS_STR) {
+  if (nargs > 0 && vtype(args[0]) == T_STR) {
     desc = js_getstr(js, args[0], NULL);
   }
   return js_mksym(js, desc);
 }
 
 static jsval_t builtin_Symbol_for(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1 || js_type(args[0]) != JS_STR) {
+  if (nargs < 1 || vtype(args[0]) != T_STR) {
     return js_mkerr(js, "Symbol.for requires a string argument");
   }
   
@@ -47,7 +48,7 @@ static jsval_t builtin_Symbol_for(struct js *js, jsval_t *args, int nargs) {
 }
 
 static jsval_t builtin_Symbol_keyFor(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1 || js_type(args[0]) != JS_SYMBOL) {
+  if (nargs < 1 || vtype(args[0]) != T_SYMBOL) {
     return js_mkundef();
   }
   
@@ -90,7 +91,7 @@ static jsval_t array_iterator(struct js *js, jsval_t *args, int nargs) {
   jsval_t arr = js_getthis(js);
   
   jsval_t len_val = js_get(js, arr, "length");
-  int len = js_type(len_val) == JS_NUM ? (int)js_getnum(len_val) : 0;
+  int len = vtype(len_val) == T_NUM ? (int)js_getnum(len_val) : 0;
   
   jsval_t iter = js_mkobj(js);
   js_set(js, iter, "__arr", arr);

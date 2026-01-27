@@ -8,6 +8,7 @@
 #include "errors.h"
 #include "arena.h"
 #include "runtime.h"
+#include "internal.h"
 
 #include "modules/events.h"
 #include "modules/symbol.h"
@@ -39,7 +40,7 @@ static inline void remove_listener_at(EventType *evt, int i) {
 static EventType **get_or_create_emitter_events(struct js *js, jsval_t this_obj) {
   jsval_t slot = js_get_slot(js, this_obj, SLOT_DATA);
   
-  if (js_type(slot) == JS_UNDEF) {
+  if (vtype(slot) == T_UNDEF) {
     EventType **events = ant_calloc(sizeof(EventType *));
     *events = NULL;
     js_set_slot(js, this_obj, SLOT_DATA, ANT_PTR(events));
@@ -109,7 +110,7 @@ static jsval_t js_add_event_listener_method(struct js *js, jsval_t *args, int na
   
   char *event_type = js_getstr(js, args[0], NULL);
   if (event_type == NULL) return js_mkerr(js, "eventType must be a string");
-  if (js_type(args[1]) != JS_FUNC) return js_mkerr(js, "listener must be a function");
+  if (vtype(args[1]) != T_FUNC) return js_mkerr(js, "listener must be a function");
   
   EventType *evt = find_or_create_emitter_event_type(js, this_obj, event_type);
   if (evt == NULL) return js_mkerr(js, "failed to create event type");
@@ -119,9 +120,9 @@ static jsval_t js_add_event_listener_method(struct js *js, jsval_t *args, int na
   }
   
   bool once = false;
-  if (nargs >= 3 && js_type(args[2]) != JS_UNDEF) {
+  if (nargs >= 3 && vtype(args[2]) != T_UNDEF) {
     jsval_t once_val = js_get(js, args[2], "once");
-    if (js_type(once_val) != JS_UNDEF) once = js_truthy(js, once_val);
+    if (vtype(once_val) != T_UNDEF) once = js_truthy(js, once_val);
   }
   
   EventListener *listener = &evt->listeners[evt->listener_count++];
@@ -142,7 +143,7 @@ static jsval_t js_add_event_listener(struct js *js, jsval_t *args, int nargs) {
     return js_mkerr(js, "eventType must be a string");
   }
   
-  if (js_type(args[1]) != JS_FUNC) {
+  if (vtype(args[1]) != T_FUNC) {
     return js_mkerr(js, "listener must be a function");
   }
   
@@ -156,9 +157,9 @@ static jsval_t js_add_event_listener(struct js *js, jsval_t *args, int nargs) {
   }
   
   bool once = false;
-  if (nargs >= 3 && js_type(args[2]) != JS_UNDEF) {
+  if (nargs >= 3 && vtype(args[2]) != T_UNDEF) {
     jsval_t once_val = js_get(js, args[2], "once");
-    if (js_type(once_val) != JS_UNDEF) once = js_truthy(js, once_val);
+    if (vtype(once_val) != T_UNDEF) once = js_truthy(js, once_val);
   }
   
   EventListener *listener = &evt->listeners[evt->listener_count++];
@@ -231,7 +232,7 @@ static jsval_t js_dispatch_event_method(struct js *js, jsval_t *args, int nargs)
   js_set(js, event_obj, "target", this_obj);
   js_set(js, event_obj, get_toStringTag_sym_key(), js_mkstr(js, "Event", 5));
   
-  if (nargs >= 2 && js_type(args[1]) != JS_UNDEF) {
+  if (nargs >= 2 && vtype(args[1]) != T_UNDEF) {
     js_set(js, event_obj, "detail", args[1]);
   }
   
@@ -241,7 +242,7 @@ static jsval_t js_dispatch_event_method(struct js *js, jsval_t *args, int nargs)
     EventListener *listener = &evt->listeners[i];
     jsval_t result = js_call(js, listener->listener, listener_args, 1);
     
-    if (js_type(result) == JS_ERR) {
+    if (vtype(result) == T_ERR) {
       fprintf(stderr, "Error in event listener for '%s': %s\n", event_type, js_str(js, result));
     }
     
@@ -271,7 +272,7 @@ static jsval_t js_dispatch_event(struct js *js, jsval_t *args, int nargs) {
   js_set(js, event_obj, "type", args[0]);
   js_set(js, event_obj, get_toStringTag_sym_key(), js_mkstr(js, "Event", 5));
   
-  if (nargs >= 2 && js_type(args[1]) != JS_UNDEF) {
+  if (nargs >= 2 && vtype(args[1]) != T_UNDEF) {
     js_set(js, event_obj, "detail", args[1]);
   }
   
@@ -281,7 +282,7 @@ static jsval_t js_dispatch_event(struct js *js, jsval_t *args, int nargs) {
     EventListener *listener = &evt->listeners[i];
     jsval_t result = js_call(js, listener->listener, listener_args, 1);
     
-    if (js_type(result) == JS_ERR) {
+    if (vtype(result) == T_ERR) {
       fprintf(stderr, "Error in event listener for '%s': %s\n", event_type, js_str(js, result));
     }
     
@@ -333,7 +334,7 @@ static jsval_t js_eventemitter_on(struct js *js, jsval_t *args, int nargs) {
     return js_mkerr(js, "event must be a string");
   }
   
-  if (js_type(args[1]) != JS_FUNC) {
+  if (vtype(args[1]) != T_FUNC) {
     return js_mkerr(js, "listener must be a function");
   }
   
@@ -366,7 +367,7 @@ static jsval_t js_eventemitter_once(struct js *js, jsval_t *args, int nargs) {
     return js_mkerr(js, "event must be a string");
   }
   
-  if (js_type(args[1]) != JS_FUNC) {
+  if (vtype(args[1]) != T_FUNC) {
     return js_mkerr(js, "listener must be a function");
   }
   
@@ -439,7 +440,7 @@ static jsval_t js_eventemitter_emit(struct js *js, jsval_t *args, int nargs) {
     EventListener *listener = &evt->listeners[i];
     jsval_t result = js_call(js, listener->listener, listener_args, listener_nargs);
     
-    if (js_type(result) == JS_ERR) {
+    if (vtype(result) == T_ERR) {
       fprintf(stderr, "Error in event listener for '%s': %s\n", event_type, js_str(js, result));
     }
     

@@ -7,6 +7,7 @@
 
 #include "ant.h"
 #include "errors.h"
+#include "internal.h"
 #include "runtime.h"
 #include "modules/url.h"
 
@@ -353,10 +354,10 @@ static jsval_t usp_get(struct js *js, jsval_t *args, int nargs) {
   if (!key) return js_mknull();
 
   jsval_t entries = js_get(js, this_val, "_entries");
-  if (js_type(entries) != JS_OBJ) return js_mknull();
+  if (vtype(entries) != T_OBJ) return js_mknull();
 
   jsval_t len_val = js_get(js, entries, "length");
-  int len = (js_type(len_val) == JS_NUM) ? (int)js_getnum(len_val) : 0;
+  int len = (vtype(len_val) == T_NUM) ? (int)js_getnum(len_val) : 0;
 
   for (int i = 0; i < len; i++) {
     char idx[16];
@@ -379,10 +380,10 @@ static jsval_t usp_getAll(struct js *js, jsval_t *args, int nargs) {
 
   jsval_t result = js_mkarr(js);
   jsval_t entries = js_get(js, this_val, "_entries");
-  if (js_type(entries) != JS_OBJ) return result;
+  if (vtype(entries) != T_OBJ) return result;
 
   jsval_t len_val = js_get(js, entries, "length");
-  int len = (js_type(len_val) == JS_NUM) ? (int)js_getnum(len_val) : 0;
+  int len = (vtype(len_val) == T_NUM) ? (int)js_getnum(len_val) : 0;
 
   for (int i = 0; i < len; i++) {
     char idx[16];
@@ -404,10 +405,10 @@ static jsval_t usp_has(struct js *js, jsval_t *args, int nargs) {
   if (!key) return js_mkfalse();
 
   jsval_t entries = js_get(js, this_val, "_entries");
-  if (js_type(entries) != JS_OBJ) return js_mkfalse();
+  if (vtype(entries) != T_OBJ) return js_mkfalse();
 
   jsval_t len_val = js_get(js, entries, "length");
-  int len = (js_type(len_val) == JS_NUM) ? (int)js_getnum(len_val) : 0;
+  int len = (vtype(len_val) == T_NUM) ? (int)js_getnum(len_val) : 0;
 
   for (int i = 0; i < len; i++) {
     char idx[16];
@@ -422,11 +423,11 @@ static jsval_t usp_has(struct js *js, jsval_t *args, int nargs) {
 
 static void usp_sync_url(struct js *js, jsval_t this_val) {
   jsval_t url_obj = js_get(js, this_val, "_url");
-  if (js_type(url_obj) != JS_OBJ) return;
+  if (vtype(url_obj) != T_OBJ) return;
 
   jsval_t entries = js_get(js, this_val, "_entries");
   jsval_t len_val = js_get(js, entries, "length");
-  int len = (js_type(len_val) == JS_NUM) ? (int)js_getnum(len_val) : 0;
+  int len = (vtype(len_val) == T_NUM) ? (int)js_getnum(len_val) : 0;
 
   size_t buf_size = 1024;
   char *buf = malloc(buf_size);
@@ -467,7 +468,7 @@ static jsval_t usp_set(struct js *js, jsval_t *args, int nargs) {
 
   jsval_t entries = js_get(js, this_val, "_entries");
   jsval_t len_val = js_get(js, entries, "length");
-  int len = (js_type(len_val) == JS_NUM) ? (int)js_getnum(len_val) : 0;
+  int len = (vtype(len_val) == T_NUM) ? (int)js_getnum(len_val) : 0;
 
   jsval_t new_entries = js_mkarr(js);
   int found = 0;
@@ -524,7 +525,7 @@ static jsval_t usp_delete(struct js *js, jsval_t *args, int nargs) {
 
   jsval_t entries = js_get(js, this_val, "_entries");
   jsval_t len_val = js_get(js, entries, "length");
-  int len = (js_type(len_val) == JS_NUM) ? (int)js_getnum(len_val) : 0;
+  int len = (vtype(len_val) == T_NUM) ? (int)js_getnum(len_val) : 0;
 
   jsval_t new_entries = js_mkarr(js);
   for (int i = 0; i < len; i++) {
@@ -548,7 +549,7 @@ static jsval_t usp_toString(struct js *js, jsval_t *args, int nargs) {
   jsval_t this_val = js_getthis(js);
   jsval_t entries = js_get(js, this_val, "_entries");
   jsval_t len_val = js_get(js, entries, "length");
-  int len = (js_type(len_val) == JS_NUM) ? (int)js_getnum(len_val) : 0;
+  int len = (vtype(len_val) == T_NUM) ? (int)js_getnum(len_val) : 0;
 
   size_t buf_size = 1024;
   char *buf = malloc(buf_size);
@@ -584,7 +585,7 @@ static jsval_t js_URLSearchParams(struct js *js, jsval_t *args, int nargs) {
   jsval_t entries = js_mkarr(js);
   js_set(js, usp, "_entries", entries);
 
-  if (nargs < 1 || js_type(args[0]) != JS_STR) goto done_parse;
+  if (nargs < 1 || vtype(args[0]) != T_STR) goto done_parse;
   char *init = js_getstr(js, args[0], NULL);
   if (!init) goto done_parse;
 

@@ -6,6 +6,7 @@
 
 #include "ant.h"
 #include "errors.h"
+#include "internal.h"
 #include "modules/symbol.h"
 
 #ifndef PATH_MAX
@@ -39,7 +40,7 @@ static char* normalize_separators(const char *path, size_t len) {
 
 static jsval_t builtin_path_basename(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "basename() requires a path argument");
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "basename() path must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "basename() path must be a string");
   
   size_t path_len;
   char *path = js_getstr(js, args[0], &path_len);
@@ -49,7 +50,7 @@ static jsval_t builtin_path_basename(struct js *js, jsval_t *args, int nargs) {
   if (!path_copy) return js_mkerr(js, "Out of memory");
   char *base = basename(path_copy);
   
-  if (nargs >= 2 && js_type(args[1]) == JS_STR) {
+  if (nargs >= 2 && vtype(args[1]) == T_STR) {
     size_t ext_len;
     char *ext = js_getstr(js, args[1], &ext_len);
     
@@ -67,7 +68,7 @@ static jsval_t builtin_path_basename(struct js *js, jsval_t *args, int nargs) {
 // path.dirname(path)
 static jsval_t builtin_path_dirname(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "dirname() requires a path argument");
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "dirname() path must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "dirname() path must be a string");
   
   size_t path_len;
   char *path = js_getstr(js, args[0], &path_len);
@@ -85,7 +86,7 @@ static jsval_t builtin_path_dirname(struct js *js, jsval_t *args, int nargs) {
 // path.extname(path)
 static jsval_t builtin_path_extname(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "extname() requires a path argument");
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "extname() path must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "extname() path must be a string");
   
   size_t path_len;
   char *path = js_getstr(js, args[0], &path_len);
@@ -193,7 +194,7 @@ fail:
 // path.normalize(path)
 static jsval_t builtin_path_normalize(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "normalize() requires a path argument");
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "normalize() path must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "normalize() path must be a string");
   
   size_t path_len;
   char *path = js_getstr(js, args[0], &path_len);
@@ -224,7 +225,7 @@ static jsval_t builtin_path_join(struct js *js, jsval_t *args, int nargs) {
   int valid_segments = 0;
   
   for (int i = 0; i < nargs; i++) {
-    if (js_type(args[i]) == JS_STR) {
+    if (vtype(args[i]) == T_STR) {
       segments[valid_segments] = js_getstr(js, args[i], &lengths[valid_segments]);
       if (segments[valid_segments] && lengths[valid_segments] > 0) {
         total_len += lengths[valid_segments] + 1; // +1 for separator
@@ -289,7 +290,7 @@ static jsval_t builtin_path_resolve(struct js *js, jsval_t *args, int nargs) {
   if (!result) return js_mkerr(js, "Out of memory");
   
   for (int i = 0; i < nargs; i++) {
-    if (js_type(args[i]) != JS_STR) continue;
+    if (vtype(args[i]) != T_STR) continue;
     
     size_t seg_len;
     char *segment = js_getstr(js, args[i], &seg_len);
@@ -322,8 +323,8 @@ static jsval_t builtin_path_resolve(struct js *js, jsval_t *args, int nargs) {
 // path.relative(from, to)
 static jsval_t builtin_path_relative(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "relative() requires from and to arguments");
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "relative() from must be a string");
-  if (js_type(args[1]) != JS_STR) return js_mkerr(js, "relative() to must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "relative() from must be a string");
+  if (vtype(args[1]) != T_STR) return js_mkerr(js, "relative() to must be a string");
   
   size_t from_len, to_len;
   char *from = js_getstr(js, args[0], &from_len);
@@ -338,7 +339,7 @@ static jsval_t builtin_path_relative(struct js *js, jsval_t *args, int nargs) {
 // path.isAbsolute(path)
 static jsval_t builtin_path_isAbsolute(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "isAbsolute() requires a path argument");
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "isAbsolute() path must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "isAbsolute() path must be a string");
   
   size_t path_len;
   char *path = js_getstr(js, args[0], &path_len);
@@ -356,7 +357,7 @@ static jsval_t builtin_path_isAbsolute(struct js *js, jsval_t *args, int nargs) 
 // path.parse(path)
 static jsval_t builtin_path_parse(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "parse() requires a path argument");
-  if (js_type(args[0]) != JS_STR) return js_mkerr(js, "parse() path must be a string");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "parse() path must be a string");
   
   size_t path_len;
   char *path = js_getstr(js, args[0], &path_len);
@@ -398,7 +399,7 @@ static jsval_t builtin_path_parse(struct js *js, jsval_t *args, int nargs) {
 // path.format(pathObject)
 static jsval_t builtin_path_format(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "format() requires a path object argument");
-  if (js_type(args[0]) != JS_OBJ) return js_mkerr(js, "format() argument must be an object");
+  if (vtype(args[0]) != T_OBJ) return js_mkerr(js, "format() argument must be an object");
   
   jsval_t obj = args[0];
   
@@ -411,7 +412,7 @@ static jsval_t builtin_path_format(struct js *js, jsval_t *args, int nargs) {
   char result[PATH_MAX] = {0};
   size_t pos = 0;
   
-  if (js_type(dir_val) == JS_STR) {
+  if (vtype(dir_val) == T_STR) {
     size_t len;
     char *str = js_getstr(js, dir_val, &len);
     if (str && len > 0 && pos + len < PATH_MAX) {
@@ -421,7 +422,7 @@ static jsval_t builtin_path_format(struct js *js, jsval_t *args, int nargs) {
         result[pos++] = PATH_SEP;
       }
     }
-  } else if (js_type(root_val) == JS_STR) {
+  } else if (vtype(root_val) == T_STR) {
     size_t len;
     char *str = js_getstr(js, root_val, &len);
     if (str && len > 0 && pos + len < PATH_MAX) {
@@ -430,7 +431,7 @@ static jsval_t builtin_path_format(struct js *js, jsval_t *args, int nargs) {
     }
   }
   
-  if (js_type(base_val) == JS_STR) {
+  if (vtype(base_val) == T_STR) {
     size_t len;
     char *str = js_getstr(js, base_val, &len);
     if (str && len > 0 && pos + len < PATH_MAX) {
@@ -438,7 +439,7 @@ static jsval_t builtin_path_format(struct js *js, jsval_t *args, int nargs) {
       pos += len;
     }
   } else {
-    if (js_type(name_val) == JS_STR) {
+    if (vtype(name_val) == T_STR) {
       size_t len;
       char *str = js_getstr(js, name_val, &len);
       if (str && len > 0 && pos + len < PATH_MAX) {
@@ -446,7 +447,7 @@ static jsval_t builtin_path_format(struct js *js, jsval_t *args, int nargs) {
         pos += len;
       }
     }
-    if (js_type(ext_val) == JS_STR) {
+    if (vtype(ext_val) == T_STR) {
       size_t len;
       char *str = js_getstr(js, ext_val, &len);
       if (str && len > 0 && pos + len < PATH_MAX) {

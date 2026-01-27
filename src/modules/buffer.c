@@ -12,6 +12,7 @@
 #include "ant.h"
 #include "errors.h"
 #include "arena.h"
+#include "internal.h"
 #include "runtime.h"
 
 #include "modules/buffer.h"
@@ -185,7 +186,7 @@ static size_t get_element_size(TypedArrayType type) {
 // ArrayBuffer constructor
 static jsval_t js_arraybuffer_constructor(struct js *js, jsval_t *args, int nargs) {
   size_t length = 0;
-  if (nargs > 0 && js_type(args[0]) == JS_NUM) {
+  if (nargs > 0 && vtype(args[0]) == T_NUM) {
     length = (size_t)js_getnum(args[0]);
   }
   
@@ -197,7 +198,7 @@ static jsval_t js_arraybuffer_constructor(struct js *js, jsval_t *args, int narg
   jsval_t obj = js_mkobj(js);
   jsval_t proto = js_get_ctor_proto(js, "ArrayBuffer", 11);
   
-  if (js_type(proto) == JS_OBJ) js_set_proto(js, obj, proto);
+  if (vtype(proto) == T_OBJ) js_set_proto(js, obj, proto);
   js_set_slot(js, obj, SLOT_BUFFER, ANT_PTR(data));
   js_set(js, obj, "byteLength", js_mknum((double)length));
   
@@ -209,7 +210,7 @@ static jsval_t js_arraybuffer_slice(struct js *js, jsval_t *args, int nargs) {
   jsval_t this_val = js_getthis(js);
   jsval_t data_val = js_get_slot(js, this_val, SLOT_BUFFER);
   
-  if (js_type(data_val) != JS_NUM) {
+  if (vtype(data_val) != T_NUM) {
     return js_mkerr(js, "Not an ArrayBuffer");
   }
   
@@ -218,8 +219,8 @@ static jsval_t js_arraybuffer_slice(struct js *js, jsval_t *args, int nargs) {
   
   ssize_t len = (ssize_t)data->length;
   ssize_t begin = 0, end = len;
-  if (nargs > 0 && js_type(args[0]) == JS_NUM) begin = (ssize_t)js_getnum(args[0]);
-  if (nargs > 1 && js_type(args[1]) == JS_NUM) end = (ssize_t)js_getnum(args[1]);
+  if (nargs > 0 && vtype(args[0]) == T_NUM) begin = (ssize_t)js_getnum(args[0]);
+  if (nargs > 1 && vtype(args[1]) == T_NUM) end = (ssize_t)js_getnum(args[1]);
   
   begin = normalize_index(begin, len);
   end = normalize_index(end, len);
@@ -234,7 +235,7 @@ static jsval_t js_arraybuffer_slice(struct js *js, jsval_t *args, int nargs) {
   jsval_t new_obj = js_mkobj(js);
   jsval_t proto = js_get_ctor_proto(js, "ArrayBuffer", 11);
   
-  if (js_type(proto) == JS_OBJ) js_set_proto(js, new_obj, proto);
+  if (vtype(proto) == T_OBJ) js_set_proto(js, new_obj, proto);
   js_set_slot(js, new_obj, SLOT_BUFFER, ANT_PTR(new_data));
   js_set(js, new_obj, "byteLength", js_mknum((double)new_length));
   
@@ -292,7 +293,7 @@ static bool typedarray_index_setter(struct js *js, jsval_t obj, const char *key,
   TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_val);
   if (!ta_data || index >= ta_data->length) return false;
   
-  double num_val = js_type(value) == JS_NUM ? js_getnum(value) : 0;
+  double num_val = vtype(value) == T_NUM ? js_getnum(value) : 0;
   uint8_t *data = ta_data->buffer->data + ta_data->byte_offset;
   
   static const void *dispatch[] = {
@@ -318,7 +319,7 @@ static bool typedarray_index_setter(struct js *js, jsval_t obj, const char *key,
 static jsval_t create_arraybuffer_obj(struct js *js, ArrayBufferData *buffer) {
   jsval_t ab_obj = js_mkobj(js);
   jsval_t ab_proto = js_get_ctor_proto(js, "ArrayBuffer", 11);
-  if (js_type(ab_proto) == JS_OBJ) js_set_proto(js, ab_obj, ab_proto);
+  if (vtype(ab_proto) == T_OBJ) js_set_proto(js, ab_obj, ab_proto);
   
   js_set_slot(js, ab_obj, SLOT_BUFFER, js_mknum((double)(uintptr_t)buffer));
   js_set(js, ab_obj, "byteLength", js_mknum((double)buffer->length));
@@ -344,7 +345,7 @@ static jsval_t create_typed_array_with_buffer(
   
   jsval_t obj = js_mkobj(js);
   jsval_t proto = js_get_ctor_proto(js, type_name, strlen(type_name));
-  if (js_type(proto) == JS_OBJ) js_set_proto(js, obj, proto);
+  if (vtype(proto) == T_OBJ) js_set_proto(js, obj, proto);
   
   js_set_slot(js, obj, SLOT_BUFFER, js_mktypedarray(ta_data));
   js_set(js, obj, "length", js_mknum((double)length));
@@ -392,7 +393,7 @@ static jsval_t js_typedarray_constructor(struct js *js, jsval_t *args, int nargs
     return create_typed_array(js, type, buffer, 0, 0, type_name);
   }
   
-  if (js_type(args[0]) == JS_NUM) {
+  if (vtype(args[0]) == T_NUM) {
     size_t length = (size_t)js_getnum(args[0]);
     size_t element_size = get_element_size(type);
     ArrayBufferData *buffer = create_array_buffer_data(length * element_size);
@@ -401,17 +402,17 @@ static jsval_t js_typedarray_constructor(struct js *js, jsval_t *args, int nargs
   }
   
   jsval_t buffer_data_val = js_get_slot(js, args[0], SLOT_BUFFER);
-  if (js_type(buffer_data_val) == JS_NUM) {
+  if (vtype(buffer_data_val) == T_NUM) {
     ArrayBufferData *buffer = (ArrayBufferData *)(uintptr_t)js_getnum(buffer_data_val);
     size_t byte_offset = 0;
     size_t length = buffer->length;
     
-    if (nargs > 1 && js_type(args[1]) == JS_NUM) {
+    if (nargs > 1 && vtype(args[1]) == T_NUM) {
       byte_offset = (size_t)js_getnum(args[1]);
     }
     
     size_t element_size = get_element_size(type);
-    if (nargs > 2 && js_type(args[2]) == JS_NUM) {
+    if (nargs > 2 && vtype(args[2]) == T_NUM) {
       length = (size_t)js_getnum(args[2]);
     } else {
       length = (buffer->length - byte_offset) / element_size;
@@ -420,13 +421,13 @@ static jsval_t js_typedarray_constructor(struct js *js, jsval_t *args, int nargs
     return create_typed_array_with_buffer(js, type, buffer, byte_offset, length, type_name, args[0]);
   }
   
-  int arg_type = js_type(args[0]);
-  if (arg_type == JS_OBJ) {
+  int arg_type = vtype(args[0]);
+  if (arg_type == T_OBJ) {
     jsval_t len_val = js_get(js, args[0], "length");
     size_t length = 0; jsval_t *values = NULL;
     bool is_iterable = false;
     
-    if (js_type(len_val) == JS_NUM) length = (size_t)js_getnum(len_val); else {
+    if (vtype(len_val) == T_NUM) length = (size_t)js_getnum(len_val); else {
       iter_collect_ctx_t ctx = { .values = NULL, .length = 0, .capacity = 16 };
       ctx.values = malloc(ctx.capacity * sizeof(jsval_t));
       if (!ctx.values) return js_mkerr(js, "Failed to allocate memory");
@@ -438,7 +439,7 @@ static jsval_t js_typedarray_constructor(struct js *js, jsval_t *args, int nargs
       } else free(ctx.values);
     }
     
-    if (length > 0 || is_iterable || js_type(len_val) == JS_NUM) {
+    if (length > 0 || is_iterable || vtype(len_val) == T_NUM) {
       size_t element_size = get_element_size(type);
       ArrayBufferData *buffer = create_array_buffer_data(length * element_size);
       if (!buffer) { if (values) free(values); return js_mkerr(js, "Failed to allocate buffer"); }
@@ -458,7 +459,7 @@ static jsval_t js_typedarray_constructor(struct js *js, jsval_t *args, int nargs
           snprintf(idx_str, sizeof(idx_str), "%zu", i);
           elem = js_get(js, args[0], idx_str);
         }
-        double val = js_type(elem) == JS_NUM ? js_getnum(elem) : 0;
+        double val = vtype(elem) == T_NUM ? js_getnum(elem) : 0;
         
         if (type > TYPED_ARRAY_BIGUINT64) goto W_DONE;
         goto *write_dispatch[type];
@@ -493,8 +494,8 @@ static jsval_t js_typedarray_slice(struct js *js, jsval_t *args, int nargs) {
   ssize_t len = (ssize_t)ta_data->length;
   ssize_t begin = 0, end = len;
   
-  if (nargs > 0 && js_type(args[0]) == JS_NUM) begin = (ssize_t)js_getnum(args[0]);
-  if (nargs > 1 && js_type(args[1]) == JS_NUM) end = (ssize_t)js_getnum(args[1]);
+  if (nargs > 0 && vtype(args[0]) == T_NUM) begin = (ssize_t)js_getnum(args[0]);
+  if (nargs > 1 && vtype(args[1]) == T_NUM) end = (ssize_t)js_getnum(args[1]);
   
   begin = normalize_index(begin, len);
   end = normalize_index(end, len);
@@ -525,8 +526,8 @@ static jsval_t js_typedarray_subarray(struct js *js, jsval_t *args, int nargs) {
   ssize_t len = (ssize_t)ta_data->length;
   ssize_t begin = 0, end = len;
   
-  if (nargs > 0 && js_type(args[0]) == JS_NUM) begin = (ssize_t)js_getnum(args[0]);
-  if (nargs > 1 && js_type(args[1]) == JS_NUM) end = (ssize_t)js_getnum(args[1]);
+  if (nargs > 0 && vtype(args[0]) == T_NUM) begin = (ssize_t)js_getnum(args[0]);
+  if (nargs > 1 && vtype(args[1]) == T_NUM) end = (ssize_t)js_getnum(args[1]);
   
   begin = normalize_index(begin, len);
   end = normalize_index(end, len);
@@ -548,13 +549,13 @@ static jsval_t js_typedarray_fill(struct js *js, jsval_t *args, int nargs) {
   if (!ta_data) return js_mkerr(js, "Invalid TypedArray");
   
   double value = 0;
-  if (nargs > 0 && js_type(args[0]) == JS_NUM) value = js_getnum(args[0]);
+  if (nargs > 0 && vtype(args[0]) == T_NUM) value = js_getnum(args[0]);
   
   ssize_t len = (ssize_t)ta_data->length;
   ssize_t start = 0, end = len;
   
-  if (nargs > 1 && js_type(args[1]) == JS_NUM) start = (ssize_t)js_getnum(args[1]);
-  if (nargs > 2 && js_type(args[2]) == JS_NUM) end = (ssize_t)js_getnum(args[2]);
+  if (nargs > 1 && vtype(args[1]) == T_NUM) start = (ssize_t)js_getnum(args[1]);
+  if (nargs > 2 && vtype(args[2]) == T_NUM) end = (ssize_t)js_getnum(args[2]);
   
   start = normalize_index(start, len);
   end = normalize_index(end, len);
@@ -642,8 +643,8 @@ static jsval_t js_typedarray_toSorted(struct js *js, jsval_t *args, int nargs) {
   TypedArrayData *result_ta = (TypedArrayData *)js_gettypedarray(result_ta_val);
   uint8_t *data = result_ta->buffer->data;
   
-  jsval_t comparefn = (nargs > 0 && js_type(args[0]) == JS_FUNC) ? args[0] : js_mkundef();
-  bool has_comparefn = js_type(comparefn) == JS_FUNC;
+  jsval_t comparefn = (nargs > 0 && vtype(args[0]) == T_FUNC) ? args[0] : js_mkundef();
+  bool has_comparefn = vtype(comparefn) == T_FUNC;
   
   for (size_t i = 1; i < length; i++) {
     for (size_t j = i; j > 0; j--) {
@@ -774,7 +775,7 @@ static jsval_t js_dataview_constructor(struct js *js, jsval_t *args, int nargs) 
   }
   
   jsval_t buffer_data_val = js_get_slot(js, args[0], SLOT_BUFFER);
-  if (js_type(buffer_data_val) != JS_NUM) {
+  if (vtype(buffer_data_val) != T_NUM) {
     return js_mkerr(js, "First argument must be an ArrayBuffer");
   }
   
@@ -782,11 +783,11 @@ static jsval_t js_dataview_constructor(struct js *js, jsval_t *args, int nargs) 
   size_t byte_offset = 0;
   size_t byte_length = buffer->length;
   
-  if (nargs > 1 && js_type(args[1]) == JS_NUM) {
+  if (nargs > 1 && vtype(args[1]) == T_NUM) {
     byte_offset = (size_t)js_getnum(args[1]);
   }
   
-  if (nargs > 2 && js_type(args[2]) == JS_NUM) {
+  if (nargs > 2 && vtype(args[2]) == T_NUM) {
     byte_length = (size_t)js_getnum(args[2]);
   } else {
     byte_length = buffer->length - byte_offset;
@@ -802,7 +803,7 @@ static jsval_t js_dataview_constructor(struct js *js, jsval_t *args, int nargs) 
   
   jsval_t obj = js_mkobj(js);
   jsval_t proto = js_get_ctor_proto(js, "DataView", 8);
-  if (js_type(proto) == JS_OBJ) js_set_proto(js, obj, proto);
+  if (vtype(proto) == T_OBJ) js_set_proto(js, obj, proto);
   
   js_set_slot(js, obj, SLOT_DATA, ANT_PTR(dv_data));
   js_mkprop_fast(js, obj, "buffer", 6, args[0]);
@@ -821,7 +822,7 @@ static jsval_t js_dataview_getUint8(struct js *js, jsval_t *args, int nargs) {
   jsval_t this_val = js_getthis(js);
   jsval_t dv_data_val = js_get_slot(js, this_val, SLOT_DATA);
   
-  if (js_type(dv_data_val) != JS_NUM) {
+  if (vtype(dv_data_val) != T_NUM) {
     return js_mkerr(js, "Not a DataView");
   }
   
@@ -843,7 +844,7 @@ static jsval_t js_dataview_setUint8(struct js *js, jsval_t *args, int nargs) {
   jsval_t this_val = js_getthis(js);
   jsval_t dv_data_val = js_get_slot(js, this_val, SLOT_DATA);
   
-  if (js_type(dv_data_val) != JS_NUM) {
+  if (vtype(dv_data_val) != T_NUM) {
     return js_mkerr(js, "Not a DataView");
   }
   
@@ -866,7 +867,7 @@ static jsval_t js_dataview_getInt16(struct js *js, jsval_t *args, int nargs) {
   jsval_t this_val = js_getthis(js);
   jsval_t dv_data_val = js_get_slot(js, this_val, SLOT_DATA);
   
-  if (js_type(dv_data_val) != JS_NUM) {
+  if (vtype(dv_data_val) != T_NUM) {
     return js_mkerr(js, "Not a DataView");
   }
   
@@ -897,7 +898,7 @@ static jsval_t js_dataview_getInt32(struct js *js, jsval_t *args, int nargs) {
   jsval_t this_val = js_getthis(js);
   jsval_t dv_data_val = js_get_slot(js, this_val, SLOT_DATA);
   
-  if (js_type(dv_data_val) != JS_NUM) {
+  if (vtype(dv_data_val) != T_NUM) {
     return js_mkerr(js, "Not a DataView");
   }
   
@@ -928,7 +929,7 @@ static jsval_t js_dataview_getFloat32(struct js *js, jsval_t *args, int nargs) {
   jsval_t this_val = js_getthis(js);
   jsval_t dv_data_val = js_get_slot(js, this_val, SLOT_DATA);
   
-  if (js_type(dv_data_val) != JS_NUM) {
+  if (vtype(dv_data_val) != T_NUM) {
     return js_mkerr(js, "Not a DataView");
   }
   
@@ -961,7 +962,7 @@ static jsval_t js_dataview_setInt16(struct js *js, jsval_t *args, int nargs) {
   jsval_t this_val = js_getthis(js);
   jsval_t dv_data_val = js_get_slot(js, this_val, SLOT_DATA);
   
-  if (js_type(dv_data_val) != JS_NUM) {
+  if (vtype(dv_data_val) != T_NUM) {
     return js_mkerr(js, "Not a DataView");
   }
   
@@ -994,7 +995,7 @@ static jsval_t js_dataview_setInt32(struct js *js, jsval_t *args, int nargs) {
   jsval_t this_val = js_getthis(js);
   jsval_t dv_data_val = js_get_slot(js, this_val, SLOT_DATA);
   
-  if (js_type(dv_data_val) != JS_NUM) {
+  if (vtype(dv_data_val) != T_NUM) {
     return js_mkerr(js, "Not a DataView");
   }
   
@@ -1031,7 +1032,7 @@ static jsval_t js_dataview_setFloat32(struct js *js, jsval_t *args, int nargs) {
   jsval_t this_val = js_getthis(js);
   jsval_t dv_data_val = js_get_slot(js, this_val, SLOT_DATA);
   
-  if (js_type(dv_data_val) != JS_NUM) {
+  if (vtype(dv_data_val) != T_NUM) {
     return js_mkerr(js, "Not a DataView");
   }
   
@@ -1070,7 +1071,7 @@ static jsval_t js_dataview_getFloat64(struct js *js, jsval_t *args, int nargs) {
   jsval_t this_val = js_getthis(js);
   jsval_t dv_data_val = js_get_slot(js, this_val, SLOT_DATA);
   
-  if (js_type(dv_data_val) != JS_NUM) {
+  if (vtype(dv_data_val) != T_NUM) {
     return js_mkerr(js, "Not a DataView");
   }
   
@@ -1105,7 +1106,7 @@ static jsval_t js_dataview_setFloat64(struct js *js, jsval_t *args, int nargs) {
   jsval_t this_val = js_getthis(js);
   jsval_t dv_data_val = js_get_slot(js, this_val, SLOT_DATA);
   
-  if (js_type(dv_data_val) != JS_NUM) {
+  if (vtype(dv_data_val) != T_NUM) {
     return js_mkerr(js, "Not a DataView");
   }
   
@@ -1195,12 +1196,12 @@ static BufferEncoding parse_encoding(const char *enc, size_t len) {
 static jsval_t js_buffer_from(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "Buffer.from requires at least one argument");
   
-  if (js_type(args[0]) == JS_STR) {
+  if (vtype(args[0]) == T_STR) {
     size_t len;
     char *str = js_getstr(js, args[0], &len);
     
     BufferEncoding encoding = ENC_UTF8;
-    if (nargs >= 2 && js_type(args[1]) == JS_STR) {
+    if (nargs >= 2 && vtype(args[1]) == T_STR) {
       size_t enc_len;
       char *enc_str = js_getstr(js, args[1], &enc_len);
       encoding = parse_encoding(enc_str, enc_len);
@@ -1249,7 +1250,7 @@ static jsval_t js_buffer_from(struct js *js, jsval_t *args, int nargs) {
   }
   
   jsval_t length_val = js_get(js, args[0], "length");
-  if (js_type(length_val) == JS_NUM) {
+  if (vtype(length_val) == T_NUM) {
     size_t len = (size_t)js_getnum(length_val);
     ArrayBufferData *buffer = create_array_buffer_data(len);
     if (!buffer) return js_mkerr(js, "Failed to allocate buffer");
@@ -1258,7 +1259,7 @@ static jsval_t js_buffer_from(struct js *js, jsval_t *args, int nargs) {
       char idx_str[32];
       snprintf(idx_str, sizeof(idx_str), "%zu", i);
       jsval_t elem = js_get(js, args[0], idx_str);
-      if (js_type(elem) == JS_NUM) {
+      if (vtype(elem) == T_NUM) {
         buffer->data[i] = (uint8_t)js_getnum(elem);
       }
     }
@@ -1304,7 +1305,7 @@ static jsval_t js_buffer_toString(struct js *js, jsval_t *args, int nargs) {
   if (!ta_data) return js_mkerr(js, "Invalid Buffer");
   
   BufferEncoding encoding = ENC_UTF8;
-  if (nargs > 0 && js_type(args[0]) == JS_STR) {
+  if (nargs > 0 && vtype(args[0]) == T_STR) {
     size_t enc_len;
     char *enc_str = js_getstr(js, args[0], &enc_len);
     encoding = parse_encoding(enc_str, enc_len);
@@ -1370,11 +1371,11 @@ static jsval_t js_buffer_write(struct js *js, jsval_t *args, int nargs) {
   size_t offset = 0;
   size_t length = ta_data->byte_length;
   
-  if (nargs > 1 && js_type(args[1]) == JS_NUM) {
+  if (nargs > 1 && vtype(args[1]) == T_NUM) {
     offset = (size_t)js_getnum(args[1]);
   }
   
-  if (nargs > 2 && js_type(args[2]) == JS_NUM) {
+  if (nargs > 2 && vtype(args[2]) == T_NUM) {
     length = (size_t)js_getnum(args[2]);
   }
   
@@ -1393,7 +1394,7 @@ static jsval_t js_buffer_write(struct js *js, jsval_t *args, int nargs) {
 // Buffer.isBuffer(obj)
 static jsval_t js_buffer_isBuffer(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkfalse();
-  if (js_type(args[0]) != JS_OBJ) return js_mkfalse();
+  if (vtype(args[0]) != T_OBJ) return js_mkfalse();
   
   jsval_t proto = js_get_proto(js, args[0]);
   jsval_t buffer_proto = js_get_ctor_proto(js, "Buffer", 6);
@@ -1403,7 +1404,7 @@ static jsval_t js_buffer_isBuffer(struct js *js, jsval_t *args, int nargs) {
 
 // Buffer.isEncoding(encoding)
 static jsval_t js_buffer_isEncoding(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1 || js_type(args[0]) != JS_STR) return js_mkfalse();
+  if (nargs < 1 || vtype(args[0]) != T_STR) return js_mkfalse();
   
   size_t len;
   char *enc = js_getstr(js, args[0], &len);
@@ -1431,15 +1432,15 @@ static jsval_t js_buffer_byteLength(struct js *js, jsval_t *args, int nargs) {
   
   jsval_t arg = args[0];
   
-  if (js_type(arg) == JS_OBJ) {
+  if (vtype(arg) == T_OBJ) {
     jsval_t bytelen = js_get(js, arg, "byteLength");
-    if (js_type(bytelen) == JS_NUM) return bytelen;
+    if (vtype(bytelen) == T_NUM) return bytelen;
     
     jsval_t len = js_get(js, arg, "length");
-    if (js_type(len) == JS_NUM) return len;
+    if (vtype(len) == T_NUM) return len;
   }
   
-  if (js_type(arg) == JS_STR) {
+  if (vtype(arg) == T_STR) {
     size_t len;
     js_getstr(js, arg, &len);
     return js_mknum((double)len);
@@ -1450,20 +1451,20 @@ static jsval_t js_buffer_byteLength(struct js *js, jsval_t *args, int nargs) {
 
 // Buffer.concat(list, totalLength)
 static jsval_t js_buffer_concat(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1 || js_type(args[0]) != JS_OBJ) {
+  if (nargs < 1 || vtype(args[0]) != T_OBJ) {
     return js_mkerr(js, "First argument must be an array");
   }
   
   jsval_t list = args[0];
   jsval_t len_val = js_get(js, list, "length");
-  if (js_type(len_val) != JS_NUM) {
+  if (vtype(len_val) != T_NUM) {
     return js_mkerr(js, "First argument must be an array");
   }
   
   size_t list_len = (size_t)js_getnum(len_val);
   size_t total_length = 0;
   
-  if (nargs > 1 && js_type(args[1]) == JS_NUM) {
+  if (nargs > 1 && vtype(args[1]) == T_NUM) {
     total_length = (size_t)js_getnum(args[1]);
   } else {
     for (size_t i = 0; i < list_len; i++) {
@@ -1471,7 +1472,7 @@ static jsval_t js_buffer_concat(struct js *js, jsval_t *args, int nargs) {
       snprintf(idx, sizeof(idx), "%zu", i);
       jsval_t buf = js_get(js, list, idx);
       jsval_t buf_len = js_get(js, buf, "length");
-      if (js_type(buf_len) == JS_NUM) total_length += (size_t)js_getnum(buf_len);
+      if (vtype(buf_len) == T_NUM) total_length += (size_t)js_getnum(buf_len);
     }
   }
   
@@ -1531,7 +1532,7 @@ static jsval_t js_buffer_compare(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t js_sharedarraybuffer_constructor(struct js *js, jsval_t *args, int nargs) {
   size_t length = 0;
-  if (nargs > 0 && js_type(args[0]) == JS_NUM) {
+  if (nargs > 0 && vtype(args[0]) == T_NUM) {
     length = (size_t)js_getnum(args[0]);
   }
   
@@ -1543,7 +1544,7 @@ static jsval_t js_sharedarraybuffer_constructor(struct js *js, jsval_t *args, in
   jsval_t obj = js_mkobj(js);
   jsval_t proto = js_get_ctor_proto(js, "SharedArrayBuffer", 17);
   
-  if (js_type(proto) == JS_OBJ) js_set_proto(js, obj, proto);
+  if (vtype(proto) == T_OBJ) js_set_proto(js, obj, proto);
   js_set_slot(js, obj, SLOT_BUFFER, ANT_PTR(data));
   js_set(js, obj, "byteLength", js_mknum((double)length));
   

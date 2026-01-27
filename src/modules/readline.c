@@ -24,6 +24,8 @@
 #include "ant.h"
 #include "errors.h"
 #include "runtime.h"
+#include "internal.h"
+
 #include "modules/readline.h"
 #include "modules/symbol.h"
 
@@ -493,7 +495,7 @@ static void on_stdin_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *bu
       jsval_t line_val = js_mkstr(js, line, strlen(line));
       emit_event(js, iface, "line", &line_val, 1);
       
-      if (js_type(iface->pending_question_resolve) == JS_FUNC) {
+      if (vtype(iface->pending_question_resolve) == T_FUNC) {
         js_call(js, iface->pending_question_resolve, &line_val, 1);
         iface->pending_question_resolve = js_mkundef();
         iface->pending_question_reject = js_mkundef();
@@ -586,7 +588,7 @@ static void process_line(struct js *js, rl_interface_t *iface) {
   jsval_t line_val = js_mkstr(js, line, strlen(line));
   emit_event(js, iface, "line", &line_val, 1);
   
-  if (js_type(iface->pending_question_resolve) == JS_FUNC) {
+  if (vtype(iface->pending_question_resolve) == T_FUNC) {
     js_call(js, iface->pending_question_resolve, &line_val, 1);
     iface->pending_question_resolve = js_mkundef();
     iface->pending_question_reject = js_mkundef();
@@ -601,7 +603,7 @@ static void process_line(struct js *js, rl_interface_t *iface) {
 
 static rl_interface_t *get_interface(struct js *js, jsval_t this_obj) {
   jsval_t id_val = js_get(js, this_obj, "_rl_id");
-  if (js_type(id_val) != JS_NUM) return NULL;
+  if (vtype(id_val) != T_NUM) return NULL;
   
   uint64_t id = (uint64_t)js_getnum(id_val);
   rl_interface_t *iface = NULL;
@@ -618,7 +620,7 @@ static jsval_t rl_interface_on(struct js *js, jsval_t *args, int nargs) {
   
   char *event = js_getstr(js, args[0], NULL);
   if (!event) return js_mkerr(js, "event must be a string");
-  if (js_type(args[1]) != JS_FUNC) return js_mkerr(js, "listener must be a function");
+  if (vtype(args[1]) != T_FUNC) return js_mkerr(js, "listener must be a function");
   
   RLEventType *evt = find_or_create_event_type(iface, event);
   if (evt->listener_count >= MAX_LISTENERS_PER_EVENT) {
@@ -641,7 +643,7 @@ static jsval_t rl_interface_once(struct js *js, jsval_t *args, int nargs) {
   
   char *event = js_getstr(js, args[0], NULL);
   if (!event) return js_mkerr(js, "event must be a string");
-  if (js_type(args[1]) != JS_FUNC) return js_mkerr(js, "listener must be a function");
+  if (vtype(args[1]) != T_FUNC) return js_mkerr(js, "listener must be a function");
   
   RLEventType *evt = find_or_create_event_type(iface, event);
   if (evt->listener_count >= MAX_LISTENERS_PER_EVENT) {
@@ -861,14 +863,14 @@ static jsval_t rl_interface_write(struct js *js, jsval_t *args, int nargs) {
     emit_event(js, iface, "resume", NULL, 0);
   }
   
-  if (nargs >= 2 && js_type(args[1]) == JS_OBJ) {
+  if (nargs >= 2 && vtype(args[1]) == T_OBJ) {
     jsval_t key = args[1];
     jsval_t name_val = js_get(js, key, "name");
     jsval_t ctrl_val = js_get(js, key, "ctrl");
     jsval_t meta_val = js_get(js, key, "meta");
     jsval_t shift_val = js_get(js, key, "shift");
     
-    char *name = (js_type(name_val) == JS_STR) ? js_getstr(js, name_val, NULL) : NULL;
+    char *name = (vtype(name_val) == T_STR) ? js_getstr(js, name_val, NULL) : NULL;
     bool ctrl = js_truthy(js, ctrl_val);
     bool meta = js_truthy(js, meta_val);
     bool shift = js_truthy(js, shift_val);
@@ -879,7 +881,7 @@ static jsval_t rl_interface_write(struct js *js, jsval_t *args, int nargs) {
     }
   }
   
-  if (nargs < 1 || js_type(args[0]) == JS_NULL || js_type(args[0]) == JS_UNDEF) {
+  if (nargs < 1 || vtype(args[0]) == T_NULL || vtype(args[0]) == T_UNDEF) {
     return js_mkundef();
   }
   
@@ -934,7 +936,7 @@ static jsval_t rl_interface_question_callback(struct js *js, jsval_t *args, int 
   char *query = js_getstr(js, args[0], &query_len);
   if (!query) return js_mkerr(js, "query must be a string");
   
-  if (js_type(args[1]) != JS_FUNC) {
+  if (vtype(args[1]) != T_FUNC) {
     return js_mkerr(js, "callback must be a function");
   }
   
@@ -1057,7 +1059,7 @@ static jsval_t rl_create_interface(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "createInterface requires options");
   
   jsval_t options = args[0];
-  if (js_type(options) != JS_OBJ) return js_mkerr(js, "options must be an object");
+  if (vtype(options) != T_OBJ) return js_mkerr(js, "options must be an object");
   
   rl_interface_t *iface = calloc(1, sizeof(rl_interface_t));
   if (!iface) return js_mkerr(js, "out of memory");
@@ -1086,11 +1088,10 @@ static jsval_t rl_create_interface(struct js *js, jsval_t *args, int nargs) {
   iface->output_stream = js_get(js, options, "output");
   
   jsval_t terminal_val = js_get(js, options, "terminal");
-  iface->terminal = (js_type(terminal_val) == JS_TRUE) || 
-                    (js_type(terminal_val) == JS_UNDEF);
+  iface->terminal = terminal_val == js_true || vtype(terminal_val) == T_UNDEF;
   
   jsval_t history_size_val = js_get(js, options, "historySize");
-  iface->history_size = (js_type(history_size_val) == JS_NUM) 
+  iface->history_size = (vtype(history_size_val) == T_NUM) 
     ? (int)js_getnum(history_size_val) 
     : DEFAULT_HISTORY_SIZE;
   
@@ -1098,30 +1099,30 @@ static jsval_t rl_create_interface(struct js *js, jsval_t *args, int nargs) {
   iface->remove_history_duplicates = js_truthy(js, remove_dup_val);
   
   jsval_t prompt_val = js_get(js, options, "prompt");
-  if (js_type(prompt_val) == JS_STR) {
+  if (vtype(prompt_val) == T_STR) {
     free(iface->prompt);
     iface->prompt = strdup(js_getstr(js, prompt_val, NULL));
   }
   
   jsval_t crlf_delay_val = js_get(js, options, "crlfDelay");
-  iface->crlf_delay = (js_type(crlf_delay_val) == JS_NUM) 
+  iface->crlf_delay = (vtype(crlf_delay_val) == T_NUM) 
     ? (int)js_getnum(crlf_delay_val) 
     : 100;
   if (iface->crlf_delay < 100) iface->crlf_delay = 100;
   
   jsval_t tab_size_val = js_get(js, options, "tabSize");
-  iface->tab_size = (js_type(tab_size_val) == JS_NUM) 
+  iface->tab_size = (vtype(tab_size_val) == T_NUM) 
     ? (int)js_getnum(tab_size_val) 
     : DEFAULT_TAB_SIZE;
   if (iface->tab_size < 1) iface->tab_size = 1;
   
   jsval_t completer_val = js_get(js, options, "completer");
-  iface->completer = (js_type(completer_val) == JS_FUNC) ? completer_val : js_mkundef();
+  iface->completer = (vtype(completer_val) == T_FUNC) ? completer_val : js_mkundef();
   
   jsval_t history_val = js_get(js, options, "history");
-  if (js_type(history_val) == JS_OBJ) {
+  if (vtype(history_val) == T_OBJ) {
     jsval_t len_val = js_get(js, history_val, "length");
-    int len = (js_type(len_val) == JS_NUM) ? (int)js_getnum(len_val) : 0;
+    int len = (vtype(len_val) == T_NUM) ? (int)js_getnum(len_val) : 0;
     
     rl_history_init(&iface->history, iface->history_size);
     
@@ -1129,7 +1130,7 @@ static jsval_t rl_create_interface(struct js *js, jsval_t *args, int nargs) {
       char key[16];
       snprintf(key, sizeof(key), "%d", i);
       jsval_t item = js_get(js, history_val, key);
-      if (js_type(item) == JS_STR) {
+      if (vtype(item) == T_STR) {
         char *line = js_getstr(js, item, NULL);
         if (line) rl_history_add(&iface->history, line, false);
       }
@@ -1173,7 +1174,7 @@ static jsval_t rl_create_interface(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t rl_create_interface_promises(struct js *js, jsval_t *args, int nargs) {
   jsval_t iface_obj = rl_create_interface(js, args, nargs);
-  if (js_type(iface_obj) == JS_ERR) return iface_obj;
+  if (vtype(iface_obj) == T_ERR) return iface_obj;
   js_set(js, iface_obj, "question", js_mkfun(rl_interface_question_promise));
   
   return iface_obj;
@@ -1210,7 +1211,7 @@ static jsval_t rl_cursor_to(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkfalse();
   int x = (int)js_getnum(args[1]);
   
-  if (nargs >= 3 && js_type(args[2]) == JS_NUM) {
+  if (nargs >= 3 && vtype(args[2]) == T_NUM) {
     int y = (int)js_getnum(args[2]);
     printf("\033[%d;%dH", y + 1, x + 1);
   } else {

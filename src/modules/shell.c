@@ -13,6 +13,7 @@
 
 #include "ant.h"
 #include "errors.h"
+#include "internal.h"
 #include "modules/symbol.h"
 
 static jsval_t builtin_shell_text(struct js *js, jsval_t *args, int nargs);
@@ -111,8 +112,8 @@ static jsval_t builtin_shell_lines(struct js *js, jsval_t *args, int nargs) {
 static jsval_t builtin_shell_dollar(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "$() requires at least one argument");
     
-  if (js_type(args[0]) != JS_OBJ) {
-    if (js_type(args[0]) == JS_STR) {
+  if (vtype(args[0]) != T_OBJ) {
+    if (vtype(args[0]) == T_STR) {
       size_t cmd_len;
       char *cmd = js_getstr(js, args[0], &cmd_len);
       if (!cmd) return js_mkerr(js, "Failed to get command string");
@@ -138,7 +139,7 @@ static jsval_t builtin_shell_dollar(struct js *js, jsval_t *args, int nargs) {
     snprintf(idx_str, sizeof(idx_str), "%d", i);
     
     jsval_t str_val = js_get(js, strings_array, idx_str);
-    if (js_type(str_val) == JS_STR) {
+    if (vtype(str_val) == T_STR) {
       size_t str_len;
       char *str = js_getstr(js, str_val, &str_len);
       
@@ -161,12 +162,12 @@ static jsval_t builtin_shell_dollar(struct js *js, jsval_t *args, int nargs) {
       char val_str[256];
       size_t val_len = 0;
       
-      if (js_type(val) == JS_STR) {
+      if (vtype(val) == T_STR) {
         size_t len;
         char *s = js_getstr(js, val, &len);
         val_len = len < sizeof(val_str) - 1 ? len : sizeof(val_str) - 1;
         memcpy(val_str, s, val_len);
-      } else if (js_type(val) == JS_NUM) {
+      } else if (vtype(val) == T_NUM) {
         val_len = snprintf(val_str, sizeof(val_str), "%g", js_getnum(val));
       }
       

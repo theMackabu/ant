@@ -84,8 +84,10 @@ enum {
 #define NANBOX_DATA_MASK  0x0000FFFFFFFFFFFFULL
 
 #define TYPE_FLAG(t) (1u << (t))
+
 #define T_NEEDS_PROTO_FALLBACK (TYPE_FLAG(T_FUNC) | TYPE_FLAG(T_ARR) | TYPE_FLAG(T_PROMISE))
-#define T_NON_NUMERIC_MASK (TYPE_FLAG(T_STR) | TYPE_FLAG(T_ARR) | TYPE_FLAG(T_FUNC) | TYPE_FLAG(T_CFUNC) | TYPE_FLAG(T_OBJ))
+#define T_OBJECT_MASK          (TYPE_FLAG(T_OBJ) | TYPE_FLAG(T_ARR) | TYPE_FLAG(T_FUNC) | TYPE_FLAG(T_PROMISE))
+#define T_NON_NUMERIC_MASK     (TYPE_FLAG(T_STR) | TYPE_FLAG(T_ARR) | TYPE_FLAG(T_FUNC) | TYPE_FLAG(T_CFUNC) | TYPE_FLAG(T_OBJ))
 
 jsoff_t esize(jsoff_t w);
 
@@ -102,5 +104,21 @@ jsval_t mkval(uint8_t type, uint64_t data);
 jsval_t resolveprop(struct js *js, jsval_t v);
 
 #define is_non_numeric(v) ((1u << vtype(v)) & T_NON_NUMERIC_MASK)
+#define is_object_type(v) ((1u << vtype(v)) & T_OBJECT_MASK)
+
+static inline bool is_err(jsval_t v) { 
+  return vtype(v) == T_ERR; 
+}
+
+static inline bool is_null(jsval_t v) { 
+  return vtype(v) == T_NULL; 
+}
+
+static inline bool is_undefined(jsval_t v) { 
+  return vtype(v) == T_UNDEF; 
+}
+
+#define js_true  (NANBOX_PREFIX | ((jsval_t)T_BOOL << NANBOX_TYPE_SHIFT) | 1)
+#define js_false (NANBOX_PREFIX | ((jsval_t)T_BOOL << NANBOX_TYPE_SHIFT))
 
 #endif

@@ -29,7 +29,7 @@ static void general_signal_handler(int signum) {
   struct js *js = signal_handlers[signum].js;
   jsval_t handler = signal_handlers[signum].handler;
   
-  if (js && js_type(handler) != JS_UNDEF) {
+  if (js && vtype(handler) != T_UNDEF) {
     jsval_t args[] = {js_mknum(signum)};
     js_call(js, handler, args, 1);
   }
