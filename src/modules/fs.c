@@ -275,7 +275,7 @@ static void on_stat_complete(uv_fs_t *uv_req) {
   
   jsval_t stat_obj = js_mkobj(req->js);
   jsval_t proto = js_get_ctor_proto(req->js, "Stats", 5);
-  if (vtype(proto) == T_OBJ) js_set_proto(req->js, stat_obj, proto);
+  if (is_special_object(proto)) js_set_proto(req->js, stat_obj, proto);
   
   uv_stat_t *st = &uv_req->statbuf;
   js_set_slot(req->js, stat_obj, SLOT_DATA, js_mknum((double)st->st_mode));
@@ -967,7 +967,7 @@ static jsval_t stat_isSymbolicLink(struct js *js, jsval_t *args, int nargs) {
 static jsval_t create_stats_object(struct js *js, struct stat *st) {
   jsval_t stat_obj = js_mkobj(js);
   jsval_t proto = js_get_ctor_proto(js, "Stats", 5);
-  if (vtype(proto) == T_OBJ) js_set_proto(js, stat_obj, proto);
+  if (is_special_object(proto)) js_set_proto(js, stat_obj, proto);
   
   js_set_slot(js, stat_obj, SLOT_DATA, js_mknum((double)st->st_mode));
   js_set(js, stat_obj, "size", js_mknum((double)st->st_size));

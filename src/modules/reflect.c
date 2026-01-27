@@ -143,7 +143,8 @@ static jsval_t reflect_construct(struct js *js, jsval_t *args, int nargs) {
   
   if (call_args) free(call_args);
   
-  if (vtype(result) == T_OBJ || vtype(result) == T_FUNC) {
+  int result_type = vtype(result);
+  if (result_type == T_FUNC || is_special_object(result)) {
     return result;
   }
   return new_obj;
@@ -223,7 +224,7 @@ static jsval_t reflect_define_property(struct js *js, jsval_t *args, int nargs) 
   if (t != T_OBJ && t != T_FUNC) return js_mkfalse();
   
   if (vtype(key) != T_STR) return js_mkfalse();
-  if (vtype(descriptor) != T_OBJ) return js_mkfalse();
+  if (!is_special_object(descriptor)) return js_mkfalse();
   
   char *key_str = js_getstr(js, key, NULL);
   if (!key_str) return js_mkfalse();

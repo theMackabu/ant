@@ -414,10 +414,10 @@ static void on_sigwinch(uv_signal_t *handle, int signum) {
   if (!rt->js) return;
   
   jsval_t process_obj = js_get(rt->js, js_glob(rt->js), "process");
-  if (vtype(process_obj) != T_OBJ) return;
+  if (!is_special_object(process_obj)) return;
   
   jsval_t stdout_obj = js_get(rt->js, process_obj, "stdout");
-  if (vtype(stdout_obj) != T_OBJ) return;
+  if (!is_special_object(stdout_obj)) return;
   
   int rows = 0, cols = 0;
   get_tty_size(STDOUT_FILENO, &rows, &cols);
@@ -760,7 +760,7 @@ static jsval_t process_cpu_usage(ant_t *js, jsval_t *args, int nargs) {
     int64_t user_usec = rusage.ru_utime.tv_sec * 1000000LL + rusage.ru_utime.tv_usec;
     int64_t sys_usec = rusage.ru_stime.tv_sec * 1000000LL + rusage.ru_stime.tv_usec;
     
-    if (nargs > 0 && vtype(args[0]) == T_OBJ) {
+    if (nargs > 0 && is_special_object(args[0])) {
       jsval_t prev_user = js_get(js, args[0], "user");
       jsval_t prev_system = js_get(js, args[0], "system");
       if (vtype(prev_user) == T_NUM) user_usec -= (int64_t)js_getnum(prev_user);

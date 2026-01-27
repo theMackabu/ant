@@ -8958,19 +8958,17 @@ static jsval_t js_unary(struct js *js) {
     jsval_t obj = mkobj(js, 0);
     jsval_t saved_this = js->this_val;
     jsval_t saved_new_target = js->new_target;
-    js->this_val = obj;
 
     jsval_t ctor = js_group(js);
-    if (is_err(ctor)) { js->this_val = saved_this; return ctor; }
+    if (is_err(ctor)) { return ctor; }
 
     while (next(js) == TOK_DOT || next(js) == TOK_LBRACKET) {
       ctor = resolve_coderef(js, ctor);
-      if (is_err(ctor)) { js->this_val = saved_this; return ctor; }
+      if (is_err(ctor)) { return ctor; }
 
       if (js->tok == TOK_DOT) {
         js->consumed = 1;
         if (next(js) != TOK_IDENTIFIER && !is_keyword_propname(js->tok)) {
-          js->this_val = saved_this;
           return js_mkerr_typed(js, JS_ERR_SYNTAX, "identifier expected");
         }
         js->consumed = 1;
@@ -8978,15 +8976,15 @@ static jsval_t js_unary(struct js *js) {
       } else {
         js->consumed = 1;
         jsval_t idx = js_expr(js);
-        if (is_err(idx)) { js->this_val = saved_this; return idx; }
-        if (next(js) != TOK_RBRACKET) { js->this_val = saved_this; return js_mkerr_typed(js, JS_ERR_SYNTAX, "] expected"); }
+        if (is_err(idx)) { return idx; }
+        if (next(js) != TOK_RBRACKET) { return js_mkerr_typed(js, JS_ERR_SYNTAX, "] expected"); }
         js->consumed = 1;
         ctor = do_op(js, TOK_BRACKET, ctor, idx);
       }
     }
 
     ctor = resolve_coderef(js, ctor);
-    if (is_err(ctor)) { js->this_val = saved_this; return ctor; }
+    if (is_err(ctor)) { return ctor; }
     if (vtype(ctor) == T_PROP || vtype(ctor) == T_PROPREF) ctor = resolveprop(js, ctor);
 
     js->new_target = ctor;
@@ -8996,7 +8994,7 @@ static jsval_t js_unary(struct js *js) {
     if (next(js) == TOK_LPAREN) {
       jsval_t params = js_call_params(js);
       if (is_err(params)) { 
-        pop_this(); js->this_val = saved_this; 
+        pop_this(); 
         js->new_target = saved_new_target; return params; 
       }
       result = do_op(js, TOK_CALL, ctor, params);

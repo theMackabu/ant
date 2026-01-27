@@ -863,7 +863,7 @@ static jsval_t rl_interface_write(struct js *js, jsval_t *args, int nargs) {
     emit_event(js, iface, "resume", NULL, 0);
   }
   
-  if (nargs >= 2 && vtype(args[1]) == T_OBJ) {
+  if (nargs >= 2 && is_special_object(args[1])) {
     jsval_t key = args[1];
     jsval_t name_val = js_get(js, key, "name");
     jsval_t ctrl_val = js_get(js, key, "ctrl");
@@ -1059,7 +1059,7 @@ static jsval_t rl_create_interface(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "createInterface requires options");
   
   jsval_t options = args[0];
-  if (vtype(options) != T_OBJ) return js_mkerr(js, "options must be an object");
+  if (!is_special_object(options)) return js_mkerr(js, "options must be an object");
   
   rl_interface_t *iface = calloc(1, sizeof(rl_interface_t));
   if (!iface) return js_mkerr(js, "out of memory");

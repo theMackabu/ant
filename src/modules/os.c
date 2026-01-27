@@ -710,8 +710,9 @@ static void apply_mac_to_iface(struct js *js, jsval_t result, const char *name, 
     char idx[16];
     snprintf(idx, sizeof(idx), "%d", i);
     jsval_t entry = js_get(js, iface_arr, idx);
-    if (vtype(entry) == T_OBJ)
+    if (is_special_object(entry)) {
       js_set(js, entry, "mac", js_mkstr(js, mac_str, strlen(mac_str)));
+    }
   }
 }
 

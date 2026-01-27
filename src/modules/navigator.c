@@ -249,7 +249,7 @@ static jsval_t locks_request(struct js *js, jsval_t *args, int nargs) {
     options = args[1];
     callback = args[2];
     
-    if (vtype(options) == T_OBJ) {
+    if (is_special_object(options)) {
       jsval_t mode_val = js_get(js, options, "mode");
       if (vtype(mode_val) == T_STR) {
         size_t mode_len;

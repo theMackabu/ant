@@ -311,9 +311,15 @@ jsval_t js_create_error(struct js *js, js_err_type_t err_type, jsval_t props, co
   js_set(js, err_obj, "message", js_mkstr(js, error_msg, msg_len));
   js_set_slot(js, err_obj, SLOT_ERR_TYPE, js_mknum((double)err_type));
   
-  if (vtype(props) == T_OBJ) js_merge_obj(js, err_obj, props);
+  int props_type = vtype(props);
+  if ((TYPE_FLAG(props_type) & T_SPECIAL_OBJECT_MASK) != 0) {
+    js_merge_obj(js, err_obj, props);
+  }
   jsval_t proto = js_get_ctor_proto(js, err_name, err_name_len);
-  if (vtype(proto) == T_OBJ) js_set_proto(js, err_obj, proto);
+  int proto_type = vtype(proto);
+  if ((TYPE_FLAG(proto_type) & T_SPECIAL_OBJECT_MASK) != 0) {
+    js_set_proto(js, err_obj, proto);
+  }
   
   js->flags |= F_THROW;
   js->thrown_value = err_obj;

@@ -198,7 +198,7 @@ static jsval_t js_arraybuffer_constructor(struct js *js, jsval_t *args, int narg
   jsval_t obj = js_mkobj(js);
   jsval_t proto = js_get_ctor_proto(js, "ArrayBuffer", 11);
   
-  if (vtype(proto) == T_OBJ) js_set_proto(js, obj, proto);
+  if (is_special_object(proto)) js_set_proto(js, obj, proto);
   js_set_slot(js, obj, SLOT_BUFFER, ANT_PTR(data));
   js_set(js, obj, "byteLength", js_mknum((double)length));
   
@@ -235,7 +235,7 @@ static jsval_t js_arraybuffer_slice(struct js *js, jsval_t *args, int nargs) {
   jsval_t new_obj = js_mkobj(js);
   jsval_t proto = js_get_ctor_proto(js, "ArrayBuffer", 11);
   
-  if (vtype(proto) == T_OBJ) js_set_proto(js, new_obj, proto);
+  if (is_special_object(proto)) js_set_proto(js, new_obj, proto);
   js_set_slot(js, new_obj, SLOT_BUFFER, ANT_PTR(new_data));
   js_set(js, new_obj, "byteLength", js_mknum((double)new_length));
   
@@ -319,7 +319,7 @@ static bool typedarray_index_setter(struct js *js, jsval_t obj, const char *key,
 static jsval_t create_arraybuffer_obj(struct js *js, ArrayBufferData *buffer) {
   jsval_t ab_obj = js_mkobj(js);
   jsval_t ab_proto = js_get_ctor_proto(js, "ArrayBuffer", 11);
-  if (vtype(ab_proto) == T_OBJ) js_set_proto(js, ab_obj, ab_proto);
+  if (is_special_object(ab_proto)) js_set_proto(js, ab_obj, ab_proto);
   
   js_set_slot(js, ab_obj, SLOT_BUFFER, js_mknum((double)(uintptr_t)buffer));
   js_set(js, ab_obj, "byteLength", js_mknum((double)buffer->length));
@@ -345,7 +345,7 @@ static jsval_t create_typed_array_with_buffer(
   
   jsval_t obj = js_mkobj(js);
   jsval_t proto = js_get_ctor_proto(js, type_name, strlen(type_name));
-  if (vtype(proto) == T_OBJ) js_set_proto(js, obj, proto);
+  if (is_special_object(proto)) js_set_proto(js, obj, proto);
   
   js_set_slot(js, obj, SLOT_BUFFER, js_mktypedarray(ta_data));
   js_set(js, obj, "length", js_mknum((double)length));
@@ -802,7 +802,7 @@ static jsval_t js_dataview_constructor(struct js *js, jsval_t *args, int nargs) 
   
   jsval_t obj = js_mkobj(js);
   jsval_t proto = js_get_ctor_proto(js, "DataView", 8);
-  if (vtype(proto) == T_OBJ) js_set_proto(js, obj, proto);
+  if (is_special_object(proto)) js_set_proto(js, obj, proto);
   
   js_set_slot(js, obj, SLOT_DATA, ANT_PTR(dv_data));
   js_mkprop_fast(js, obj, "buffer", 6, args[0]);
@@ -1393,7 +1393,7 @@ static jsval_t js_buffer_write(struct js *js, jsval_t *args, int nargs) {
 // Buffer.isBuffer(obj)
 static jsval_t js_buffer_isBuffer(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkfalse();
-  if (vtype(args[0]) != T_OBJ) return js_mkfalse();
+  if (!is_special_object(args[0])) return js_mkfalse();
   
   jsval_t proto = js_get_proto(js, args[0]);
   jsval_t buffer_proto = js_get_ctor_proto(js, "Buffer", 6);
@@ -1543,7 +1543,7 @@ static jsval_t js_sharedarraybuffer_constructor(struct js *js, jsval_t *args, in
   jsval_t obj = js_mkobj(js);
   jsval_t proto = js_get_ctor_proto(js, "SharedArrayBuffer", 17);
   
-  if (vtype(proto) == T_OBJ) js_set_proto(js, obj, proto);
+  if (is_special_object(proto)) js_set_proto(js, obj, proto);
   js_set_slot(js, obj, SLOT_BUFFER, ANT_PTR(data));
   js_set(js, obj, "byteLength", js_mknum((double)length));
   

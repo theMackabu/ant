@@ -42,7 +42,9 @@ static jsval_t js_subscription_get_closed(struct js *js, jsval_t *args, int narg
   (void)args; (void)nargs;
   jsval_t subscription = js_getthis(js);
   
-  if (vtype(subscription) != T_OBJ) return js_mkerr_typed(js, JS_ERR_TYPE, "Subscription.closed getter called on non-object");
+  if (!is_special_object(subscription)) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Subscription.closed getter called on non-object");
+  }
   return subscription_closed(js, subscription) ? js_mktrue() : js_mkfalse();
 }
 
@@ -50,7 +52,7 @@ static jsval_t js_subscription_unsubscribe(struct js *js, jsval_t *args, int nar
   (void)args; (void)nargs;
   jsval_t subscription = js_getthis(js);
   
-  if (vtype(subscription) != T_OBJ) {
+  if (!is_special_object(subscription)) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Subscription.unsubscribe called on non-object");
   }
   
@@ -72,12 +74,12 @@ static jsval_t js_subobs_get_closed(struct js *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
   jsval_t O = js_getthis(js);
   
-  if (vtype(O) != T_OBJ) {
+  if (!is_special_object(O)) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "SubscriptionObserver.closed getter called on non-object");
   }
   
   jsval_t subscription = js_get_slot(js, O, SLOT_DATA);
-  if (vtype(subscription) != T_OBJ) {
+  if (!is_special_object(subscription)) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid SubscriptionObserver");
   }
   
@@ -87,19 +89,19 @@ static jsval_t js_subobs_get_closed(struct js *js, jsval_t *args, int nargs) {
 static jsval_t js_subobs_next(struct js *js, jsval_t *args, int nargs) {
   jsval_t O = js_getthis(js);
   
-  if (vtype(O) != T_OBJ) {
+  if (!is_special_object(O)) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "SubscriptionObserver.next called on non-object");
   }
   
   jsval_t subscription = js_get_slot(js, O, SLOT_DATA);
-  if (vtype(subscription) != T_OBJ) {
+  if (!is_special_object(subscription)) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid SubscriptionObserver");
   }
   
   if (subscription_closed(js, subscription)) return js_mkundef();
   
   jsval_t observer = js_get_slot(js, subscription, SLOT_SUBSCRIPTION_OBSERVER);
-  if (vtype(observer) != T_OBJ) return js_mkundef();
+  if (!is_special_object(observer)) return js_mkundef();
   
   jsval_t nextMethod = js_get(js, observer, "next");
   if (is_callable(nextMethod)) {
@@ -115,12 +117,12 @@ static jsval_t js_subobs_next(struct js *js, jsval_t *args, int nargs) {
 static jsval_t js_subobs_error(struct js *js, jsval_t *args, int nargs) {
   jsval_t O = js_getthis(js);
   
-  if (vtype(O) != T_OBJ) {
+  if (!is_special_object(O)) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "SubscriptionObserver.error called on non-object");
   }
   
   jsval_t subscription = js_get_slot(js, O, SLOT_DATA);
-  if (vtype(subscription) != T_OBJ) {
+  if (!is_special_object(subscription)) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid SubscriptionObserver");
   }
   
@@ -129,7 +131,7 @@ static jsval_t js_subobs_error(struct js *js, jsval_t *args, int nargs) {
   jsval_t observer = js_get_slot(js, subscription, SLOT_SUBSCRIPTION_OBSERVER);
   js_set_slot(js, subscription, SLOT_SUBSCRIPTION_OBSERVER, js_mkundef());
   
-  if (vtype(observer) == T_OBJ) {
+  if (is_special_object(observer)) {
     jsval_t errorMethod = js_get(js, observer, "error");
     if (is_callable(errorMethod)) {
       jsval_t exception = (nargs > 0) ? args[0] : js_mkundef();
@@ -147,12 +149,12 @@ static jsval_t js_subobs_complete(struct js *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
   jsval_t O = js_getthis(js);
   
-  if (vtype(O) != T_OBJ) {
+  if (!is_special_object(O)) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "SubscriptionObserver.complete called on non-object");
   }
   
   jsval_t subscription = js_get_slot(js, O, SLOT_DATA);
-  if (vtype(subscription) != T_OBJ) {
+  if (!is_special_object(subscription)) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid SubscriptionObserver");
   }
   
@@ -161,7 +163,7 @@ static jsval_t js_subobs_complete(struct js *js, jsval_t *args, int nargs) {
   jsval_t observer = js_get_slot(js, subscription, SLOT_SUBSCRIPTION_OBSERVER);
   js_set_slot(js, subscription, SLOT_SUBSCRIPTION_OBSERVER, js_mkundef());
   
-  if (vtype(observer) == T_OBJ) {
+  if (is_special_object(observer)) {
     jsval_t completeMethod = js_get(js, observer, "complete");
     if (is_callable(completeMethod)) {
       jsval_t result = js_call_with_this(js, completeMethod, observer, NULL, 0);
@@ -193,7 +195,7 @@ static jsval_t js_cleanup_fn(struct js *js, jsval_t *args, int nargs) {
   jsval_t F = js_getcurrentfunc(js);
   jsval_t subscription = js_get_slot(js, F, SLOT_DATA);
   
-  if (vtype(subscription) != T_OBJ) return js_mkundef();
+  if (!is_special_object(subscription)) return js_mkundef();
   
   jsval_t unsubscribe = js_get(js, subscription, "unsubscribe");
   if (is_callable(unsubscribe)) {
@@ -211,7 +213,7 @@ static jsval_t execute_subscriber(struct js *js, jsval_t subscriber, jsval_t obs
   if (vtype(subscriberResult) == T_NULL || vtype(subscriberResult) == T_UNDEF) return js_mkundef();
   if (is_callable(subscriberResult)) return subscriberResult;
   
-  if (vtype(subscriberResult) == T_OBJ) {
+  if (is_special_object(subscriberResult)) {
     jsval_t result = js_get(js, subscriberResult, "unsubscribe");
     if (vtype(result) == T_UNDEF) {
       return js_mkerr_typed(js, JS_ERR_TYPE, "Subscriber return value must have an unsubscribe method");
@@ -229,7 +231,7 @@ static jsval_t execute_subscriber(struct js *js, jsval_t subscriber, jsval_t obs
 static jsval_t js_observable_subscribe(struct js *js, jsval_t *args, int nargs) {
   jsval_t O = js_getthis(js);
   
-  if (vtype(O) != T_OBJ) {
+  if (!is_special_object(O)) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Observable.prototype.subscribe called on non-object");
   }
   
@@ -249,7 +251,7 @@ static jsval_t js_observable_subscribe(struct js *js, jsval_t *args, int nargs) 
     js_set(js, observer, "next", nextCallback);
     js_set(js, observer, "error", errorCallback);
     js_set(js, observer, "complete", completeCallback);
-  } else if (nargs > 0 && vtype(args[0]) == T_OBJ) {
+  } else if (nargs > 0 && is_special_object(args[0])) {
     observer = args[0];
   } else observer = js_mkobj(js);
   
@@ -331,7 +333,7 @@ static jsval_t js_of_subscriber(struct js *js, jsval_t *args, int nargs) {
       js_call_with_this(js, next, observer, next_args, 1);
     }
     
-    if (vtype(subscription) == T_OBJ && subscription_closed(js, subscription)) return js_mkundef();
+    if (is_special_object(subscription) && subscription_closed(js, subscription)) return js_mkundef();
   }
   
   jsval_t complete = js_get(js, observer, "complete");
@@ -354,7 +356,7 @@ static jsval_t js_from_delegating(struct js *js, jsval_t *args, int nargs) {
   jsval_t F = js_getcurrentfunc(js);
   
   jsval_t observable = js_get_slot(js, F, SLOT_DATA);
-  if (vtype(observable) != T_OBJ) return js_mkundef();
+  if (!is_special_object(observable)) return js_mkundef();
   
   jsval_t subscribe = js_get(js, observable, "subscribe");
   if (is_callable(subscribe)) {
@@ -381,7 +383,7 @@ static jsval_t js_from_iteration(struct js *js, jsval_t *args, int nargs) {
   }
   
   jsval_t iterator = js_call_with_this(js, iteratorMethod, iterable, NULL, 0);
-  if (vtype(iterator) != T_OBJ) {
+  if (!is_special_object(iterator)) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Iterator must return an object");
   }
   
@@ -408,7 +410,7 @@ static jsval_t js_from_iteration(struct js *js, jsval_t *args, int nargs) {
       js_call_with_this(js, obs_next, observer, next_args, 1);
     }
     
-    if (vtype(subscription) == T_OBJ && subscription_closed(js, subscription)) {
+    if (is_special_object(subscription) && subscription_closed(js, subscription)) {
       jsval_t returnMethod = js_get(js, iterator, "return");
       if (is_callable(returnMethod)) js_call_with_this(js, returnMethod, iterator, NULL, 0);
       return js_mkundef();
@@ -429,7 +431,7 @@ static jsval_t js_observable_from(struct js *js, jsval_t *args, int nargs) {
   if (is_callable(observableMethod)) {
     jsval_t observable = js_call_with_this(js, observableMethod, x, NULL, 0);
     
-    if (vtype(observable) != T_OBJ) {
+    if (!is_special_object(observable)) {
       return js_mkerr_typed(js, JS_ERR_TYPE, "@@observable must return an object");
     }
     
