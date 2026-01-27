@@ -881,7 +881,6 @@ static inline jsoff_t next_prop(jsoff_t header);
 
 static jsval_t js_import_stmt(struct js *js);
 static jsval_t js_export_stmt(struct js *js);
-
 static jsval_t builtin_Object(struct js *js, jsval_t *args, int nargs);
 static jsval_t builtin_promise_then(struct js *js, jsval_t *args, int nargs);
 
@@ -3773,6 +3772,12 @@ create_new:
 
 static inline jsval_t setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v) {
   return js_setprop(js, obj, k, v);
+}
+
+static inline void esm_export_binding(struct js *js, const char *exported, size_t exported_len, jsval_t value) {
+  jsval_t export_key = js_mkstr(js, exported, exported_len);
+  setprop(js, js->module_ns, export_key, value);
+  if (exported_len == 7 && strncmp(exported, "default", 7) == 0) js_set_slot(js, js->module_ns, SLOT_DEFAULT, value);
 }
 
 static inline jsval_t setprop_cstr(struct js *js, jsval_t obj, const char *key, size_t len, jsval_t v) {
@@ -21223,13 +21228,14 @@ static jsval_t js_export_stmt(struct js *js) {
       for (int i = 0; i < spec_count; i++) {
         jsoff_t prop_off = lkp(js, ns, specs[i].local, specs[i].local_len);
         jsval_t import_val = prop_off != 0 ? resolveprop(js, mkval(T_PROP, prop_off)) : js_mkundef();
-        setprop(js, js->module_ns, js_mkstr(js, specs[i].exported, specs[i].export_len), import_val);
+        esm_export_binding(js, specs[i].exported, specs[i].export_len, import_val);
       }
     } else {
       for (int i = 0; i < spec_count; i++) {
         jsval_t local_val = lookup(js, specs[i].local, specs[i].local_len);
         if (is_err(local_val)) return local_val;
-        setprop(js, js->module_ns, js_mkstr(js, specs[i].exported, specs[i].export_len), resolveprop(js, local_val));
+        jsval_t export_val = resolveprop(js, local_val);
+        esm_export_binding(js, specs[i].exported, specs[i].export_len, export_val);
       }
     }
     
