@@ -60,22 +60,19 @@ static void remove_pending_request(fetch_request_t *req) {
   }
 }
 
-static jsval_t response_text(struct js *js, jsval_t *args, int nargs) {
-  (void)args; (void)nargs;
+static jsval_t response_text(struct js *js, jsval_t *args, int nargs) {  
+  jsval_t this = js_getthis(js);
+  jsval_t body = js_get_slot(js, this, SLOT_DATA);
   
-  jsval_t fn = js_getcurrentfunc(js);
-  jsval_t body = js_get_slot(js, fn, SLOT_DATA);
   jsval_t promise = js_mkpromise(js);
   js_resolve_promise(js, promise, body);
   
   return promise;
 }
 
-static jsval_t response_json(struct js *js, jsval_t *args, int nargs) {
-  (void)args; (void)nargs;
-  
-  jsval_t fn = js_getcurrentfunc(js);
-  jsval_t body = js_get_slot(js, fn, SLOT_DATA);
+static jsval_t response_json(struct js *js, jsval_t *args, int nargs) {  
+  jsval_t this = js_getthis(js);
+  jsval_t body = js_get_slot(js, this, SLOT_DATA);
   jsval_t parsed = js_json_parse(js, &body, 1);
   jsval_t promise = js_mkpromise(js);
   
@@ -93,8 +90,10 @@ static jsval_t create_response(struct js *js, int status, const char *body, size
   js_set(js, response_obj, "ok", status >= 200 && status < 300 ? js_mktrue() : js_mkfalse());
   js_set(js, response_obj, "status", js_mknum(status));
   
-  js_set(js, response_obj, "text", js_heavy_mkfun(js, response_text, body_str));
-  js_set(js, response_obj, "json", js_heavy_mkfun(js, response_json, body_str));
+  js_set_slot(js, response_obj, SLOT_DATA, body_str);
+  
+  js_set(js, response_obj, "text", js_mkfun(response_text));
+  js_set(js, response_obj, "json", js_mkfun(response_json));
   
   return response_obj;
 }
