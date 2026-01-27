@@ -558,12 +558,12 @@ static void inspect_object_full(struct js *js, jsval_t obj, FILE *stream, int de
   jsoff_t obj_off = (jsoff_t)vdata(obj);
   
   if (inspect_was_visited(visited, obj_off)) {
-    fprintf(stream, "[Circular *%u]", obj_off);
+    fprintf(stream, "[Circular *%llu]", (u64)obj_off);
     return;
   }
   
   inspect_mark_visited(visited, obj_off);
-  fprintf(stream, "<%s @%u> {\n", type == JS_FUNC ? "Function" : (type == JS_PROMISE ? "Promise" : "Object"), obj_off);
+  fprintf(stream, "<%s @%llu> {\n", type == JS_FUNC ? "Function" : (type == JS_PROMISE ? "Promise" : "Object"), (u64)obj_off);
   
   int inner_depth = depth + 1;
   
@@ -590,9 +590,9 @@ static void inspect_object_full(struct js *js, jsval_t obj, FILE *stream, int de
         break;
       default:
         if ((t == T_OBJ || t == T_FUNC || t == T_PROMISE) && inspect_was_visited(visited, (jsoff_t)vdata(slot_val)))
-          fprintf(stream, "[Circular *%u]", (jsoff_t)vdata(slot_val));
+          fprintf(stream, "[Circular *%llu]", (u64)vdata(slot_val));
         else if (t == T_OBJ || t == T_FUNC || t == T_PROMISE)
-          fprintf(stream, "<%s @%u>", get_type_name(t), (jsoff_t)vdata(slot_val));
+          fprintf(stream, "<%s @%llu>", get_type_name(t), (u64)vdata(slot_val));
         else
           inspect_value(js, slot_val, stream, inner_depth + 1, visited);
         break;

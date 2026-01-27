@@ -27,9 +27,10 @@
 struct js;
 
 typedef struct js ant_t;
+typedef unsigned long long u64;
+
 typedef uint64_t jsoff_t;
 typedef uint64_t jsval_t;
-#define jsoff_fmt PRIu64
 
 #define ANT_LIMIT_SIZE_CACHE 16384
 #define GC_FWD_ARGS jsval_t (*fwd_val)(void *ctx, jsval_t old), void *ctx
