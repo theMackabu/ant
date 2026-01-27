@@ -712,10 +712,19 @@ static inline bool is_contextual_keyword(uint8_t tok) {
 }
 
 static inline bool js_stack_overflow(struct js *js) {
-  if (js->stack_limit == 0 || js->cstk == NULL) return false;
   volatile char marker;
-  uintptr_t base = (uintptr_t)js->cstk;
   uintptr_t curr = (uintptr_t)&marker;
+  
+  mco_coro *coro = mco_running();
+  if (coro != NULL) {
+    uintptr_t stack_top = (uintptr_t)coro->stack_base + coro->stack_size;
+    size_t limit = coro->stack_size / 2;
+    size_t used = (stack_top > curr) ? (stack_top - curr) : (curr - stack_top);
+    return used > limit;
+  }
+  
+  if (js->stack_limit == 0 || js->cstk == NULL) return false;
+  uintptr_t base = (uintptr_t)js->cstk;
   size_t used = (base > curr) ? (base - curr) : (curr - base);
   return used > js->stack_limit;
 }
@@ -6981,7 +6990,9 @@ static jsval_t call_ffi(struct js *js, unsigned int func_index) {
 }
 
 static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
-  if (js_stack_overflow(js)) return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "stack overflow");
+  if (js_stack_overflow(js)) {
+    return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
+  }
   
   if (vtype(args) != T_CODEREF) return js_mkerr(js, "bad call");
   if (vtype(func) != T_FUNC && vtype(func) != T_CFUNC && vtype(func) != T_FFI) return js_mkerr(js, "calling non-function");
@@ -22778,10 +22789,7 @@ struct js *js_create_dynamic(size_t initial_size, size_t max_size) {
   
   js->owns_mem = true;
   js->max_size = (jsoff_t) max_size;
-  
-  volatile char stack_base;
-  js->cstk = (void *)&stack_base;
-  
+
   return js;
 }
 

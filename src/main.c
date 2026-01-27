@@ -212,7 +212,10 @@ int main(int argc, char *argv[]) {
     arg_freetable(argtable, ARGTABLE_COUNT);
     return EXIT_FAILURE;
   }
+
+  volatile char stack_base;
   
+  js_setstackbase(js, (void *)&stack_base);
   ant_runtime_init(js, argc, argv, localstorage_file);
 
   init_symbol_module();
