@@ -1056,9 +1056,9 @@ void js_run_event_loop(struct js *js) {
     
     if (work & (WORK_READLINE | WORK_STDIN)) {
       uv_run(uv_default_loop(), UV_RUN_NOWAIT);
-    }
-    
-    if (!(work & WORK_BLOCKING) && (work & WORK_TIMERS)) {
+      int64_t ms = has_pending_timers() ? get_next_timer_timeout() : 20;
+      if (ms > 20) ms = 20; if (ms > 0) usleep((useconds_t)(ms * 1000));
+    } else if (!(work & WORK_BLOCKING) && (work & WORK_TIMERS)) {
       jsoff_t gc_thresh = js->brk / 2;
       if (gc_thresh < 4 * 1024 * 1024) gc_thresh = 4 * 1024 * 1024;
       if (js->gc_alloc_since > gc_thresh || js->needs_gc) {
@@ -1066,11 +1066,10 @@ void js_run_event_loop(struct js *js) {
         js_gc_compact(js);
         js->gc_alloc_since = 0;
       }
+      
       int64_t ms = get_next_timer_timeout();
       if (ms > 0) usleep(ms > 1000 ? 1000000 : (useconds_t)(ms * 1000));
-    } else if (
-      (work & (WORK_READLINE | WORK_STDIN)) && !(work & WORK_BLOCKING)
-    ) uv_run(uv_default_loop(), UV_RUN_ONCE);
+    }
   }
   
   js_poll_events(js);

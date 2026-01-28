@@ -363,7 +363,7 @@ int has_pending_fetches(void) {
 void fetch_poll_events(void) {
   if (fetch_loop && fetch_loop == uv_default_loop() && (rt->flags & ANT_RUNTIME_EXT_EVENT_LOOP)) return;
   if (fetch_loop && uv_loop_alive(fetch_loop)) {
-    uv_run(fetch_loop, UV_RUN_ONCE);
+    uv_run(fetch_loop, fetch_loop == uv_default_loop() ? UV_RUN_NOWAIT : UV_RUN_ONCE);
     if (pending_requests && utarray_len(pending_requests) > 0) usleep(1000);
   }
 }
