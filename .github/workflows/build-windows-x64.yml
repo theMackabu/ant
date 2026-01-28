@@ -73,6 +73,8 @@ jobs:
           export PATH="/c/Users/$USER/.cargo/bin:$PATH"
           export PKG_CONFIG_PATH="$DEPS_CACHE/lib/pkgconfig:$PKG_CONFIG_PATH"
           meson setup build -Dc_std=gnu2x -Dbuild_timestamp=${{ inputs.build_timestamp }} -Ddeps_prefix_cmake="$DEPS_CACHE_WIN" && meson compile -C build
+      - run: ant --version
+        working-directory: build
       - uses: actions/upload-artifact@v4
         with:
           name: ant-windows-x64

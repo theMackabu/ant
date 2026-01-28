@@ -83,6 +83,8 @@ jobs:
             CC=clang CC_LD=lld meson setup build --prefer-static -Db_lto=true --buildtype=release -Dstatic_link=true -Dbuild_timestamp=${{ inputs.build_timestamp }} && meson compile -C build
             llvm-strip build/ant
           '
+      - run: ant --version
+        working-directory: build
       - uses: actions/upload-artifact@v4
         with:
           name: ant-linux-aarch64-musl

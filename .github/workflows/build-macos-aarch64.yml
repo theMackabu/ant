@@ -73,6 +73,8 @@ jobs:
           export CMAKE_AR=$AR
           export CMAKE_RANLIB=$RANLIB
           meson setup build -Db_lto=true --buildtype=release -Dbuild_timestamp=${{ inputs.build_timestamp }} && meson compile -C build
+      - run: ant --version
+        working-directory: build
       - run: strip build/ant
       - uses: actions/upload-artifact@v4
         with:

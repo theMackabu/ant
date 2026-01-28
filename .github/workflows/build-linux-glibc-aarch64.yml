@@ -87,6 +87,8 @@ jobs:
           export PKG_CONFIG_PATH="$HOME/deps-cache/lib/pkgconfig:$PKG_CONFIG_PATH"
           export CMAKE_PREFIX_PATH="$HOME/deps-cache:$CMAKE_PREFIX_PATH"
           CC=clang-21 CC_LD=lld-21 meson setup build -Db_lto=true --buildtype=release -Dbuild_timestamp=${{ inputs.build_timestamp }} && meson compile -C build
+      - run: ant --version
+        working-directory: build
       - run: llvm-strip-21 build/ant
       - uses: actions/upload-artifact@v4
         with:
