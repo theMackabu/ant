@@ -1,3 +1,5 @@
+import * as readline from 'node:readline';
+
 const ESC = '\x1b';
 const CSI = `${ESC}[`;
 
@@ -307,13 +309,11 @@ export class Screen {
     this._buffer = new Buffer(this._width, this._height);
     this._prevBuffer = null;
     this._running = false;
-    this._inputBuf = '';
     this._keyHandlers = [];
     this._resizeHandlers = [];
     this._modalStack = [];
-    this._escapeTimer = null;
 
-    this._onData = this._onData.bind(this);
+    this._onKeypress = this._onKeypress.bind(this);
     this._onResize = this._onResize.bind(this);
     this._cleanup = this._cleanup.bind(this);
   }
@@ -330,7 +330,8 @@ export class Screen {
       this.stdin.setRawMode(true);
     }
     this.stdin.resume();
-    this.stdin.on('data', this._onData);
+    readline.emitKeypressEvents(this.stdin);
+    this.stdin.on('keypress', this._onKeypress);
     this.stdout.on('resize', this._onResize);
     process.on('SIGINT', this._cleanup);
     process.on('SIGTERM', this._cleanup);
@@ -350,7 +351,7 @@ export class Screen {
     if (!this._running) return;
     this._running = false;
 
-    this.stdin.removeListener('data', this._onData);
+    this.stdin.removeListener('keypress', this._onKeypress);
     this.stdout.removeListener('resize', this._onResize);
     process.removeListener('SIGINT', this._cleanup);
     process.removeListener('SIGTERM', this._cleanup);
@@ -376,50 +377,10 @@ export class Screen {
     }
   }
 
-  _onData(chunk) {
-    const str = chunk.toString();
-
-    if (this._escapeTimer) {
-      clearTimeout(this._escapeTimer);
-      this._escapeTimer = null;
-    }
-
-    if (this._modalStack.length > 0 && str === '\x1b') {
-      this._emitKey('\x1b');
-      return;
-    }
-
-    for (const ch of str) {
-      if (this._inputBuf.length > 0) {
-        this._inputBuf += ch;
-        if (this._inputBuf.length >= 2) {
-          if (this._inputBuf.length >= 3 && /[A-Za-z~]/.test(ch)) {
-            this._emitKey(this._inputBuf);
-            this._inputBuf = '';
-          } else if (this._inputBuf.length === 2 && /[A-Z]/.test(ch)) {
-            this._emitKey(this._inputBuf);
-            this._inputBuf = '';
-          } else if (this._inputBuf.length > 6) {
-            this._emitKey(this._inputBuf);
-            this._inputBuf = '';
-          }
-        }
-      } else if (ch === '\x1b') {
-        this._inputBuf = ch;
-      } else {
-        this._emitKey(ch);
-      }
-    }
-
-    if (this._inputBuf === '\x1b') {
-      this._escapeTimer = setTimeout(() => {
-        if (this._inputBuf === '\x1b') {
-          this._emitKey('\x1b');
-          this._inputBuf = '';
-        }
-        this._escapeTimer = null;
-      }, 50);
-    }
+  _onKeypress(str, key) {
+    const sequence = key && key.sequence ? key.sequence : str;
+    if (!sequence) return;
+    this._emitKey(sequence);
   }
 
   _emitKey(key) {

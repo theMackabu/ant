@@ -63,9 +63,18 @@ static ProcessEventType *process_events = NULL;
 static ProcessEventType *stdin_events = NULL;
 static ProcessEventType *stdout_events = NULL;
 static ProcessEventType *stderr_events = NULL;
-static uv_tty_t stdin_tty;
-static bool stdin_tty_initialized = false;
-static bool stdin_reading = false;
+
+typedef struct {
+  uv_tty_t tty;
+  bool tty_initialized;
+  bool reading;
+  bool keypress_enabled;
+  int escape_state;
+  int escape_len;
+  char escape_buf[16];
+} stdin_state_t;
+
+static stdin_state_t stdin_state = {0};
 static uint64_t process_start_time = 0;
 
 #ifndef _WIN32
@@ -74,7 +83,6 @@ static bool stdin_raw_mode = false;
 static uv_signal_t sigwinch_handle;
 static bool sigwinch_initialized = false;
 #endif
-
 
 typedef struct {
   const char *name;
@@ -309,6 +317,201 @@ static void emit_stdio_event(ProcessEventType *events, const char *event_type, j
   }
 }
 
+static const char *stdin_escape_name(const char *seq, int len) {
+  if (len < 2) return NULL;
+
+  if (seq[0] == '[') {
+    if (seq[1] >= '0' && seq[1] <= '9') {
+      int num = 0;
+      int idx = 1;
+
+      while (idx < len && seq[idx] >= '0' && seq[idx] <= '9') {
+        num = num * 10 + (seq[idx] - '0');
+        idx++;
+      }
+
+      if (idx < len && seq[idx] == '~') {
+        typedef struct {
+          int code;
+          const char *name;
+        } esc_num_map_t;
+
+        static const esc_num_map_t esc_num_map[] = {
+          { 1, "home" },
+          { 2, "insert" },
+          { 3, "delete" },
+          { 4, "end" },
+          { 5, "pageup" },
+          { 6, "pagedown" },
+          { 7, "home" },
+          { 8, "end" },
+          { 15, "f5" },
+          { 17, "f6" },
+          { 18, "f7" },
+          { 19, "f8" },
+          { 20, "f9" },
+          { 21, "f10" },
+          { 23, "f11" },
+          { 24, "f12" },
+        };
+
+        for (size_t i = 0; i < sizeof(esc_num_map) / sizeof(esc_num_map[0]); i++) {
+          if (esc_num_map[i].code == num) return esc_num_map[i].name;
+        }
+      }
+      return NULL;
+    }
+
+    typedef struct {
+      char code;
+      bool needs_tilde;
+      const char *name;
+    } esc_map_t;
+
+    static const esc_map_t esc_map[] = {
+      { 'A', false, "up" },
+      { 'B', false, "down" },
+      { 'C', false, "right" },
+      { 'D', false, "left" },
+      { 'H', false, "home" },
+      { 'F', false, "end" },
+      { 'Z', false, "tab" },
+      { '2', true, "insert" },
+      { '3', true, "delete" },
+      { '5', true, "pageup" },
+      { '6', true, "pagedown" },
+    };
+
+    for (size_t i = 0; i < sizeof(esc_map) / sizeof(esc_map[0]); i++) {
+      if (seq[1] != esc_map[i].code) continue;
+      if (esc_map[i].needs_tilde) {
+        return (len >= 3 && seq[2] == '~') ? esc_map[i].name : NULL;
+      }
+      return esc_map[i].name;
+    }
+    return NULL;
+  }
+
+  if (seq[0] == 'O') {
+    switch (seq[1]) {
+      case 'P': return "f1";
+      case 'Q': return "f2";
+      case 'R': return "f3";
+      case 'S': return "f4";
+      default: return NULL;
+    }
+  }
+
+  return NULL;
+}
+
+static void emit_keypress_event(
+  struct js *js,
+  const char *str,
+  size_t str_len,
+  const char *name,
+  bool ctrl,
+  bool meta,
+  bool shift,
+  const char *sequence,
+  size_t sequence_len
+) {
+  jsval_t str_val = js_mkstr(js, str ? str : "", str ? str_len : 0);
+  jsval_t key_obj = js_mkobj(js);
+
+  if (name) {
+    js_set(js, key_obj, "name", js_mkstr(js, name, strlen(name)));
+  } else {
+    js_set(js, key_obj, "name", js_mkundef());
+  }
+
+  js_set(js, key_obj, "ctrl", ctrl ? js_mktrue() : js_mkfalse());
+  js_set(js, key_obj, "meta", meta ? js_mktrue() : js_mkfalse());
+  js_set(js, key_obj, "shift", shift ? js_mktrue() : js_mkfalse());
+
+  if (sequence) {
+    js_set(js, key_obj, "sequence", js_mkstr(js, sequence, sequence_len));
+  }
+
+  jsval_t args[2] = { str_val, key_obj };
+  emit_stdio_event(stdin_events, "keypress", args, 2);
+}
+
+static void process_keypress_data(struct js *js, const char *data, size_t len) {
+  for (size_t i = 0; i < len; i++) {
+    unsigned char c = (unsigned char)data[i];
+
+    if (stdin_state.escape_state == 1) {
+      stdin_state.escape_buf[stdin_state.escape_len++] = (char)c;
+      if (c == '[' || c == 'O') {
+        stdin_state.escape_state = 2;
+        continue;
+      }
+
+      emit_keypress_event(js, "\x1b", 1, "escape", false, false, false, "\x1b", 1);
+      stdin_state.escape_state = 0;
+      stdin_state.escape_len = 0;
+    }
+
+    if (stdin_state.escape_state == 2) {
+      stdin_state.escape_buf[stdin_state.escape_len++] = (char)c;
+      if ((c >= 'A' && c <= 'Z') || c == '~' || stdin_state.escape_len >= 15) {
+        char sequence[18];
+        size_t seq_len = 0;
+        sequence[seq_len++] = '\x1b';
+        memcpy(sequence + seq_len, stdin_state.escape_buf, (size_t)stdin_state.escape_len);
+        seq_len += (size_t)stdin_state.escape_len;
+
+        const char *name = stdin_escape_name(stdin_state.escape_buf, stdin_state.escape_len);
+        if (!name) name = "escape";
+
+        emit_keypress_event(js, "", 0, name, false, false, false, sequence, seq_len);
+        stdin_state.escape_state = 0;
+        stdin_state.escape_len = 0;
+      }
+      continue;
+    }
+
+    if (c == 27) {
+      stdin_state.escape_state = 1;
+      stdin_state.escape_len = 0;
+      continue;
+    }
+
+    if (c == '\r' || c == '\n') {
+      emit_keypress_event(js, "\n", 1, "return", false, false, false, "\n", 1);
+      continue;
+    }
+
+    if (c == 127 || c == 8) {
+      emit_keypress_event(js, "", 0, "backspace", false, false, false, NULL, 0);
+      continue;
+    }
+
+    if (c == '\t') {
+      emit_keypress_event(js, "\t", 1, "tab", false, false, false, "\t", 1);
+      continue;
+    }
+
+    if (c < 32) {
+      char name_buf[2] = { (char)('a' + c - 1), '\0' };
+      char seq = (char)c;
+      emit_keypress_event(js, &seq, 1, name_buf, true, false, false, &seq, 1);
+      continue;
+    }
+
+    char ch = (char)c;
+    char name_buf[2] = { ch, '\0' };
+    emit_keypress_event(js, &ch, 1, name_buf, false, false, false, &ch, 1);
+  }
+
+  if (stdin_state.escape_state == 1) {
+    emit_keypress_event(js, "\x1b", 1, "escape", false, false, false, "\x1b", 1);
+    stdin_state.escape_state = 0;
+    stdin_state.escape_len = 0;
+  }
+}
+
 static bool remove_listener_from_events(ProcessEventType *events, const char *event, jsval_t listener) {
   ProcessEventType *evt = NULL;
   HASH_FIND_STR(events, event, evt);
@@ -396,33 +599,34 @@ static void on_stdin_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *bu
   if (nread > 0 && rt->js) {
     jsval_t data_val = js_mkstr(rt->js, buf->base, (size_t)nread);
     emit_stdio_event(stdin_events, "data", &data_val, 1);
+    if (stdin_state.keypress_enabled) process_keypress_data(rt->js, buf->base, (size_t)nread);
   }
   if (buf->base) free(buf->base);
 }
 
 static void stdin_start_reading(void) {
-  if (stdin_reading) return;
-  if (!stdin_tty_initialized) {
+  if (stdin_state.reading) return;
+  if (!stdin_state.tty_initialized) {
     uv_loop_t *loop = uv_default_loop();
-    if (uv_tty_init(loop, &stdin_tty, STDIN_FILENO, 1) != 0) return;
+    if (uv_tty_init(loop, &stdin_state.tty, STDIN_FILENO, 1) != 0) return;
 #ifndef _WIN32
-    uv_tty_set_mode(&stdin_tty, stdin_raw_mode ? UV_TTY_MODE_RAW : UV_TTY_MODE_NORMAL);
+    uv_tty_set_mode(&stdin_state.tty, stdin_raw_mode ? UV_TTY_MODE_RAW : UV_TTY_MODE_NORMAL);
 #endif
-    stdin_tty.data = NULL;
-    stdin_tty_initialized = true;
+    stdin_state.tty.data = NULL;
+    stdin_state.tty_initialized = true;
   } else {
 #ifndef _WIN32
-    uv_tty_set_mode(&stdin_tty, stdin_raw_mode ? UV_TTY_MODE_RAW : UV_TTY_MODE_NORMAL);
+    uv_tty_set_mode(&stdin_state.tty, stdin_raw_mode ? UV_TTY_MODE_RAW : UV_TTY_MODE_NORMAL);
 #endif
   }
-  stdin_reading = true;
-  uv_read_start((uv_stream_t *)&stdin_tty, stdin_alloc_buffer, on_stdin_read);
+  stdin_state.reading = true;
+  uv_read_start((uv_stream_t *)&stdin_state.tty, stdin_alloc_buffer, on_stdin_read);
 }
 
 static void stdin_stop_reading(void) {
-  if (!stdin_reading) return;
-  uv_read_stop((uv_stream_t *)&stdin_tty);
-  stdin_reading = false;
+  if (!stdin_state.reading) return;
+  uv_read_stop((uv_stream_t *)&stdin_state.tty);
+  stdin_state.reading = false;
 }
 
 #ifndef _WIN32
@@ -1489,4 +1693,12 @@ void process_gc_update_roots(GC_FWD_ARGS) {
 
 #undef GC_FWD_EVENTS
 
-bool has_active_stdin(void) { return stdin_reading; }
+bool has_active_stdin(void) { 
+  return stdin_state.reading; 
+}
+
+void process_enable_keypress_events(void) {
+  stdin_state.keypress_enabled = true;
+  stdin_state.escape_state = 0;
+  stdin_state.escape_len = 0;
+}

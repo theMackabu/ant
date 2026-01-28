@@ -27,6 +27,7 @@
 #include "internal.h"
 
 #include "modules/readline.h"
+#include "modules/process.h"
 #include "modules/symbol.h"
 
 #define MAX_LINE_LENGTH 4096
@@ -1239,7 +1240,13 @@ static jsval_t rl_move_cursor(struct js *js, jsval_t *args, int nargs) {
 }
 
 static jsval_t rl_emit_keypress_events(struct js *js, jsval_t *args, int nargs) {
-  (void)args; (void)nargs;
+  if (nargs > 0) {
+    jsval_t stdin_obj = js_get(js, js_get(js, js_glob(js), "process"), "stdin");
+    if (stdin_obj != args[0]) {
+      return js_mkerr(js, "emitKeypressEvents only supports process.stdin");
+    }
+  }
+  process_enable_keypress_events();
   return js_mkundef();
 }
 
