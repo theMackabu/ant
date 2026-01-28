@@ -56,11 +56,12 @@ static jsval_t reflect_has(struct js *js, jsval_t *args, int nargs) {
   
   if (vtype(key) != T_STR) return js_mkfalse();
   
-  char *key_str = js_getstr(js, key, NULL);
+  size_t key_len;
+  char *key_str = js_getstr(js, key, &key_len);
   if (!key_str) return js_mkfalse();
   
-  jsval_t val = js_get(js, target, key_str);
-  return vtype(val) != T_UNDEF ? js_mktrue() : js_mkfalse();
+  jsoff_t off = lkp(js, target, key_str, key_len);
+  return off > 0 ? js_mktrue() : js_mkfalse();
 }
 
 static jsval_t reflect_delete_property(struct js *js, jsval_t *args, int nargs) {
@@ -198,12 +199,14 @@ static jsval_t reflect_get_own_property_descriptor(struct js *js, jsval_t *args,
   
   if (vtype(key) != T_STR) return js_mkundef();
   
-  char *key_str = js_getstr(js, key, NULL);
+  size_t key_len;
+  char *key_str = js_getstr(js, key, &key_len);
   if (!key_str) return js_mkundef();
   
-  jsval_t value = js_get(js, target, key_str);
-  if (vtype(value) == T_UNDEF) return js_mkundef();
+  jsoff_t off = lkp(js, target, key_str, key_len);
+  if (off <= 0) return js_mkundef();
   
+  jsval_t value = js_get(js, target, key_str);
   jsval_t desc = js_mkobj(js);
   js_set(js, desc, "value", value);
   js_set(js, desc, "writable", js_mktrue());

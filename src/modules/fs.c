@@ -275,7 +275,7 @@ static void on_stat_complete(uv_fs_t *uv_req) {
   
   jsval_t stat_obj = js_mkobj(req->js);
   jsval_t proto = js_get_ctor_proto(req->js, "Stats", 5);
-  if (is_special_object(proto)) js_set_proto(req->js, stat_obj, proto);
+  if (is_object_type(proto)) js_set_proto(req->js, stat_obj, proto);
   
   uv_stat_t *st = &uv_req->statbuf;
   js_set_slot(req->js, stat_obj, SLOT_DATA, js_mknum((double)st->st_mode));

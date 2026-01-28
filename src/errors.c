@@ -68,10 +68,8 @@ static size_t append_errmsg_fmt(struct js *js, size_t used, const char *fmt, ...
     if ((size_t)written < remaining) return used + (size_t)written;
 
     if (!ensure_errmsg_capacity(js, used + (size_t)written + 1)) {
-      if (++attempt >= max_attempts) {
-        return js->errmsg_size ? js->errmsg_size - 1 : used;
-      }
-    } else attempt = 0;
+      if (++attempt >= max_attempts) return js->errmsg_size ? js->errmsg_size - 1 : used;
+    }
   }
 }
 
