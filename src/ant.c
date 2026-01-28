@@ -5612,11 +5612,13 @@ static jsval_t do_bracket_op(struct js *js, jsval_t l, jsval_t r) {
     }
     if (!isnan(idx_d) && idx_d >= 0 && idx_d == (double)(long)idx_d) {
       jsoff_t idx = (jsoff_t) idx_d;
-      jsoff_t str_len = offtolen(loadoff(js, (jsoff_t) vdata(obj)));
-      if (idx < str_len) {
-        jsoff_t str_off = (jsoff_t) vdata(obj) + sizeof(jsoff_t);
-        char ch[2] = {js->mem[str_off + idx], 0};
-        return js_mkstr(js, ch, 1);
+      jsoff_t byte_len = offtolen(loadoff(js, (jsoff_t) vdata(obj)));
+      jsoff_t str_off = (jsoff_t) vdata(obj) + sizeof(jsoff_t);
+      const char *str_data = (const char *)&js->mem[str_off];
+      size_t char_bytes;
+      int byte_offset = utf16_index_to_byte_offset(str_data, byte_len, idx, &char_bytes);
+      if (byte_offset >= 0) {
+        return js_mkstr(js, str_data + byte_offset, char_bytes);
       }
     }
     jsoff_t off = lkp_proto(js, obj, keystr, keylen);
@@ -17137,10 +17139,11 @@ static jsval_t builtin_string_indexOf(struct js *js, jsval_t *args, int nargs) {
 static jsval_t builtin_string_substring(struct js *js, jsval_t *args, int nargs) {
   jsval_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "substring called on non-string");
-  jsoff_t str_len, str_off = vstr(js, str, &str_len);
+  jsoff_t byte_len, str_off = vstr(js, str, &byte_len);
   const char *str_ptr = (char *) &js->mem[str_off];
-  jsoff_t start = 0, end = str_len;
-  double dstr_len2 = D(str_len);
+  size_t utf16_len = utf16_strlen(str_ptr, byte_len);
+  jsoff_t start = 0, end = (jsoff_t)utf16_len;
+  double dstr_len2 = D(utf16_len);
   
   if (nargs >= 1 && vtype(args[0]) == T_NUM) {
     double d = tod(args[0]);
@@ -17158,37 +17161,41 @@ static jsval_t builtin_string_substring(struct js *js, jsval_t *args, int nargs)
     end = tmp;
   }
   
-  jsoff_t sub_len = end - start;
-  return js_mkstr(js, str_ptr + start, sub_len);
+  size_t byte_start, byte_end;
+  utf16_range_to_byte_range(str_ptr, byte_len, start, end, &byte_start, &byte_end);
+  return js_mkstr(js, str_ptr + byte_start, byte_end - byte_start);
 }
 
 static jsval_t builtin_string_substr(struct js *js, jsval_t *args, int nargs) {
   jsval_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "substr called on non-string");
-  jsoff_t str_len, str_off = vstr(js, str, &str_len);
+  jsoff_t byte_len, str_off = vstr(js, str, &byte_len);
   const char *str_ptr = (char *) &js->mem[str_off];
+  size_t utf16_len = utf16_strlen(str_ptr, byte_len);
   
-  if (nargs < 1) return js_mkstr(js, str_ptr, str_len);
+  if (nargs < 1) return js_mkstr(js, str_ptr, byte_len);
   
   double d_start = tod(args[0]);
   jsoff_t start;
   if (d_start < 0) {
-    start = (jsoff_t)((double)str_len + d_start);
+    start = (jsoff_t)((double)utf16_len + d_start);
     if ((int)start < 0) start = 0;
   } else {
     start = (jsoff_t)d_start;
   }
-  if (start > str_len) start = str_len;
+  if (start > (jsoff_t)utf16_len) start = (jsoff_t)utf16_len;
   
-  jsoff_t len = str_len - start;
+  jsoff_t len = (jsoff_t)utf16_len - start;
   if (nargs >= 2 && vtype(args[1]) == T_NUM) {
     double d = tod(args[1]);
     if (d < 0) d = 0;
     len = (jsoff_t)d;
   }
-  if (start + len > str_len) len = str_len - start;
+  if (start + len > (jsoff_t)utf16_len) len = (jsoff_t)utf16_len - start;
   
-  return js_mkstr(js, str_ptr + start, len);
+  size_t byte_start, byte_end;
+  utf16_range_to_byte_range(str_ptr, byte_len, start, start + len, &byte_start, &byte_end);
+  return js_mkstr(js, str_ptr + byte_start, byte_end - byte_start);
 }
 
 static jsval_t builtin_string_split(struct js *js, jsval_t *args, int nargs) {
@@ -17409,10 +17416,11 @@ static jsval_t builtin_string_slice(struct js *js, jsval_t *args, int nargs) {
   jsval_t this_unwrapped = unwrap_primitive(js, js->this_val);
   jsval_t str = js_tostring_val(js, this_unwrapped);
   if (is_err(str)) return str;
-  jsoff_t str_len, str_off = vstr(js, str, &str_len);
+  jsoff_t byte_len, str_off = vstr(js, str, &byte_len);
   const char *str_ptr = (char *) &js->mem[str_off];
-  jsoff_t start = 0, end = str_len;
-  double dstr_len = D(str_len);
+  size_t utf16_len = utf16_strlen(str_ptr, byte_len);
+  jsoff_t start = 0, end = (jsoff_t)utf16_len;
+  double dstr_len = D(utf16_len);
   
   if (nargs >= 1 && vtype(args[0]) == T_NUM) {
     double d = tod(args[0]);
@@ -17432,8 +17440,9 @@ static jsval_t builtin_string_slice(struct js *js, jsval_t *args, int nargs) {
   }
   
   if (start > end) start = end;
-  jsoff_t sub_len = end - start;
-  return js_mkstr(js, str_ptr + start, sub_len);
+  size_t byte_start, byte_end;
+  utf16_range_to_byte_range(str_ptr, byte_len, start, end, &byte_start, &byte_end);
+  return js_mkstr(js, str_ptr + byte_start, byte_end - byte_start);
 }
 
 static jsval_t builtin_string_includes(struct js *js, jsval_t *args, int nargs) {
@@ -18130,15 +18139,14 @@ static jsval_t builtin_string_charCodeAt(struct js *js, jsval_t *args, int nargs
   long idx_l = (long) idx_d;
   if (idx_l < 0) return tov(JS_NAN);
   
-  jsoff_t idx = (jsoff_t) idx_l;
-  jsoff_t str_len = offtolen(loadoff(js, (jsoff_t) vdata(str)));
-  
-  if (idx >= str_len) return tov(JS_NAN);
-  
+  jsoff_t byte_len = offtolen(loadoff(js, (jsoff_t) vdata(str)));
   jsoff_t str_off = (jsoff_t) vdata(str) + sizeof(jsoff_t);
-  unsigned char ch = (unsigned char) js->mem[str_off + idx];
+  const char *str_data = (const char *)&js->mem[str_off];
   
-  return tov((double) ch);
+  uint32_t code_unit = utf16_code_unit_at(str_data, byte_len, idx_l);
+  if (code_unit == 0xFFFFFFFF) return tov(JS_NAN);
+  
+  return tov((double) code_unit);
 }
 
 static jsval_t builtin_string_codePointAt(struct js *js, jsval_t *args, int nargs) {
@@ -18152,34 +18160,14 @@ static jsval_t builtin_string_codePointAt(struct js *js, jsval_t *args, int narg
   long idx_l = (long) idx_d;
   if (idx_l < 0) return js_mkundef();
   
-  jsoff_t idx = (jsoff_t) idx_l;
-  jsoff_t str_len = offtolen(loadoff(js, (jsoff_t) vdata(str)));
-  
-  if (idx >= str_len) return js_mkundef();
-  
+  jsoff_t byte_len = offtolen(loadoff(js, (jsoff_t) vdata(str)));
   jsoff_t str_off = (jsoff_t) vdata(str) + sizeof(jsoff_t);
-  const unsigned char *s = &js->mem[str_off + idx];
-  jsoff_t remaining = str_len - idx;
+  const char *str_data = (const char *)&js->mem[str_off];
   
-  unsigned char c0 = s[0];
-  if (c0 < 0x80) return tov((double) c0);
+  uint32_t cp = utf16_codepoint_at(str_data, byte_len, idx_l);
+  if (cp == 0xFFFFFFFF) return js_mkundef();
   
-  if ((c0 & 0xE0) == 0xC0 && remaining >= 2 && (s[1] & 0xC0) == 0x80) {
-    uint32_t cp = ((c0 & 0x1F) << 6) | (s[1] & 0x3F);
-    return tov((double) cp);
-  }
-  
-  if ((c0 & 0xF0) == 0xE0 && remaining >= 3 && (s[1] & 0xC0) == 0x80 && (s[2] & 0xC0) == 0x80) {
-    uint32_t cp = ((c0 & 0x0F) << 12) | ((s[1] & 0x3F) << 6) | (s[2] & 0x3F);
-    return tov((double) cp);
-  }
-  
-  if ((c0 & 0xF8) == 0xF0 && remaining >= 4 && (s[1] & 0xC0) == 0x80 && (s[2] & 0xC0) == 0x80 && (s[3] & 0xC0) == 0x80) {
-    uint32_t cp = ((c0 & 0x07) << 18) | ((s[1] & 0x3F) << 12) | ((s[2] & 0x3F) << 6) | (s[3] & 0x3F);
-    return tov((double) cp);
-  }
-  
-  return tov((double) c0);
+  return tov((double) cp);
 }
 
 static jsval_t builtin_string_toLowerCase(struct js *js, jsval_t *args, int nargs) {
@@ -18382,14 +18370,15 @@ static jsval_t builtin_string_charAt(struct js *js, jsval_t *args, int nargs) {
   if (idx_d < 0 || isinf(idx_d)) return js_mkstr(js, "", 0);
   
   jsoff_t idx = (jsoff_t) idx_d;
-  jsoff_t str_len = offtolen(loadoff(js, (jsoff_t) vdata(str)));
-  
-  if (idx >= str_len) return js_mkstr(js, "", 0);
-  
+  jsoff_t byte_len = offtolen(loadoff(js, (jsoff_t) vdata(str)));
   jsoff_t str_off = (jsoff_t) vdata(str) + sizeof(jsoff_t);
-  char ch[2] = { js->mem[str_off + idx], '\0' };
+  const char *str_data = (const char *)&js->mem[str_off];
   
-  return js_mkstr(js, ch, 1);
+  size_t char_bytes;
+  int byte_offset = utf16_index_to_byte_offset(str_data, byte_len, idx, &char_bytes);
+  if (byte_offset < 0) return js_mkstr(js, "", 0);
+  
+  return js_mkstr(js, str_data + byte_offset, char_bytes);
 }
 
 static jsval_t builtin_string_at(struct js *js, jsval_t *args, int nargs) {
@@ -18399,15 +18388,20 @@ static jsval_t builtin_string_at(struct js *js, jsval_t *args, int nargs) {
   double idx_d = nargs < 1 ? 0.0 : js_to_number(js, args[0]);
   if (isnan(idx_d) || isinf(idx_d)) return js_mkundef();
 
-  jsoff_t str_len = offtolen(loadoff(js, (jsoff_t) vdata(str)));
-  long idx = (long) idx_d;
-
-  if (idx < 0) idx += (long) str_len;
-  if (idx < 0 || idx >= (long) str_len) return js_mkundef();
-
+  jsoff_t byte_len = offtolen(loadoff(js, (jsoff_t) vdata(str)));
   jsoff_t str_off = (jsoff_t) vdata(str) + sizeof(jsoff_t);
-  char ch[2] = { js->mem[str_off + idx], '\0' };
-  return js_mkstr(js, ch, 1);
+  const char *str_data = (const char *)&js->mem[str_off];
+  size_t utf16_len = utf16_strlen(str_data, byte_len);
+  
+  long idx = (long) idx_d;
+  if (idx < 0) idx += (long) utf16_len;
+  if (idx < 0 || idx >= (long) utf16_len) return js_mkundef();
+
+  size_t char_bytes;
+  int byte_offset = utf16_index_to_byte_offset(str_data, byte_len, idx, &char_bytes);
+  if (byte_offset < 0) return js_mkundef();
+  
+  return js_mkstr(js, str_data + byte_offset, char_bytes);
 }
 
 static jsval_t builtin_string_localeCompare(struct js *js, jsval_t *args, int nargs) {
