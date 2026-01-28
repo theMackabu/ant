@@ -792,7 +792,7 @@ static jsval_t js_dataview_constructor(struct js *js, jsval_t *args, int nargs) 
     byte_length = buffer->length - byte_offset;
   }
   
-  DataViewData *dv_data = ant_calloc(sizeof(DataViewData));
+  DataViewData *dv_data = ta_arena_alloc(sizeof(DataViewData));
   if (!dv_data) return js_mkerr(js, "Failed to allocate DataView");
   
   dv_data->buffer = buffer;
