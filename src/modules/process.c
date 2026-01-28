@@ -309,6 +309,23 @@ static void emit_stdio_event(ProcessEventType *events, const char *event_type, j
   }
 }
 
+static bool remove_listener_from_events(ProcessEventType *events, const char *event, jsval_t listener) {
+  ProcessEventType *evt = NULL;
+  HASH_FIND_STR(events, event, evt);
+  if (!evt) return false;
+  
+  for (int i = 0; i < evt->listener_count; i++) {
+    if (evt->listeners[i].listener != listener) continue;
+    memmove(
+      &evt->listeners[i], &evt->listeners[i + 1], 
+      (size_t)(evt->listener_count - i - 1) * sizeof(ProcessEventListener)
+    );
+    return --evt->listener_count == 0;
+  }
+  
+  return false;
+}
+
 static bool stdin_is_tty(void) {
   return uv_guess_handle(STDIN_FILENO) == UV_TTY;
 }
@@ -501,6 +518,19 @@ static jsval_t js_stdin_remove_all_listeners(ant_t *js, jsval_t *args, int nargs
   return this_obj;
 }
 
+static jsval_t js_stdin_remove_listener(ant_t *js, jsval_t *args, int nargs) {
+  jsval_t this_obj = js_getthis(js);
+  if (nargs < 2) return this_obj;
+  
+  char *event = js_getstr(js, args[0], NULL);
+  if (!event) return this_obj;
+  
+  bool now_empty = remove_listener_from_events(stdin_events, event, args[1]);
+  if (now_empty && strcmp(event, "data") == 0) stdin_stop_reading();
+  
+  return this_obj;
+}
+
 static jsval_t js_stdout_write(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkfalse();
   size_t len = 0;
@@ -567,6 +597,17 @@ static jsval_t js_stdout_remove_all_listeners(ant_t *js, jsval_t *args, int narg
   HASH_FIND_STR(stdout_events, event, evt);
   if (evt) evt->listener_count = 0;
   
+  return this_obj;
+}
+
+static jsval_t js_stdout_remove_listener(ant_t *js, jsval_t *args, int nargs) {
+  jsval_t this_obj = js_getthis(js);
+  if (nargs < 2) return this_obj;
+  
+  char *event = js_getstr(js, args[0], NULL);
+  if (!event) return this_obj;
+  
+  remove_listener_from_events(stdout_events, event, args[1]);
   return this_obj;
 }
 
@@ -670,6 +711,17 @@ static jsval_t js_stderr_remove_all_listeners(ant_t *js, jsval_t *args, int narg
   HASH_FIND_STR(stderr_events, event, evt);
   if (evt) evt->listener_count = 0;
   
+  return this_obj;
+}
+
+static jsval_t js_stderr_remove_listener(ant_t *js, jsval_t *args, int nargs) {
+  jsval_t this_obj = js_getthis(js);
+  if (nargs < 2) return this_obj;
+  
+  char *event = js_getstr(js, args[0], NULL);
+  if (!event) return this_obj;
+  
+  remove_listener_from_events(stderr_events, event, args[1]);
   return this_obj;
 }
 
@@ -1376,6 +1428,8 @@ void init_process_module() {
   js_set(js, stdin_proto, "resume", js_mkfun(js_stdin_resume));
   js_set(js, stdin_proto, "pause", js_mkfun(js_stdin_pause));
   js_set(js, stdin_proto, "on", js_mkfun(js_stdin_on));
+  js_set(js, stdin_proto, "removeListener", js_mkfun(js_stdin_remove_listener));
+  js_set(js, stdin_proto, "off", js_mkfun(js_stdin_remove_listener));
   js_set(js, stdin_proto, "removeAllListeners", js_mkfun(js_stdin_remove_all_listeners));
   js_set(js, stdin_proto, get_toStringTag_sym_key(), js_mkstr(js, "ReadStream", 10));
   
@@ -1388,6 +1442,8 @@ void init_process_module() {
   js_set(js, stdout_proto, "write", js_mkfun(js_stdout_write));
   js_set(js, stdout_proto, "on", js_mkfun(js_stdout_on));
   js_set(js, stdout_proto, "once", js_mkfun(js_stdout_once));
+  js_set(js, stdout_proto, "removeListener", js_mkfun(js_stdout_remove_listener));
+  js_set(js, stdout_proto, "off", js_mkfun(js_stdout_remove_listener));
   js_set(js, stdout_proto, "removeAllListeners", js_mkfun(js_stdout_remove_all_listeners));
   js_set(js, stdout_proto, "getWindowSize", js_mkfun(js_stdout_get_window_size));
   js_set(js, stdout_proto, get_toStringTag_sym_key(), js_mkstr(js, "WriteStream", 11));
@@ -1403,6 +1459,8 @@ void init_process_module() {
   js_set(js, stderr_proto, "write", js_mkfun(js_stderr_write));
   js_set(js, stderr_proto, "on", js_mkfun(js_stderr_on));
   js_set(js, stderr_proto, "once", js_mkfun(js_stderr_once));
+  js_set(js, stderr_proto, "removeListener", js_mkfun(js_stderr_remove_listener));
+  js_set(js, stderr_proto, "off", js_mkfun(js_stderr_remove_listener));
   js_set(js, stderr_proto, "removeAllListeners", js_mkfun(js_stderr_remove_all_listeners));
   js_set(js, stderr_proto, get_toStringTag_sym_key(), js_mkstr(js, "WriteStream", 11));
   

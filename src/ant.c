@@ -11140,13 +11140,11 @@ static jsval_t js_try(struct js *js) {
     js->pos = try_start;
     js->consumed = 1;
     
+    mkscope(js);
     while (next(js) != TOK_EOF && next(js) != TOK_RBRACE && !(js->flags & (F_RETURN | F_THROW | F_BREAK))) {
       try_result = js_stmt(js);
-      if (is_err(try_result)) {
-        had_exception = true;
-        break;
-      }
-    }
+      if (is_err(try_result)) { had_exception = true; break; }
+    } delscope(js);
     
     if (js->flags & F_RETURN) {
       try_returned = true;
