@@ -6796,57 +6796,15 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
         if (nfe_name_off != 0) nfe_name_val = resolveprop(js, mkval(T_PROP, nfe_name_off));
       }
       
-      static char full_func_name[256];
       const char *func_name = NULL;
-      const char *this_name = NULL;
       
       if (vtype(nfe_name_val) == T_STR) {
         jsoff_t name_len, name_offset = vstr(js, nfe_name_val, &name_len);
         func_name = (const char *)&js->mem[name_offset];
       }
       
-      if (vtype(target_this) != T_OBJ) goto skip_constructor_name;
-      
-      jsoff_t ctor_off = lkp_interned(js, target_this, INTERN_CONSTRUCTOR, 11);
-      if (ctor_off == 0) goto default_object_name;
-      
-      jsval_t ctor_val = resolveprop(js, mkval(T_PROP, ctor_off));
-      if (vtype(ctor_val) != T_FUNC) goto default_object_name;
-      
-      jsval_t ctor_obj = mkval(T_OBJ, vdata(ctor_val));
-      jsoff_t ctor_name_off = lkp(js, ctor_obj, "name", 4);
-      if (ctor_name_off == 0) goto default_object_name;
-      
-      jsval_t ctor_name_val = resolveprop(js, mkval(T_PROP, ctor_name_off));
-      if (vtype(ctor_name_val) != T_STR) goto default_object_name;
-      
-      jsoff_t ctor_name_len, ctor_name_offset = vstr(js, ctor_name_val, &ctor_name_len);
-      this_name = (const char *)&js->mem[ctor_name_offset];
-      if (this_name && strlen(this_name) > 0) goto skip_constructor_name;
-      
-      default_object_name:
-      this_name = "Object";
-      
-      skip_constructor_name:
-      
-      const char *final_name;
-      if (this_name && func_name) {
-        snprintf(full_func_name, sizeof(full_func_name), "%s.%s", this_name, func_name);
-        final_name = full_func_name;
-      } else if (func_name) {
-        final_name = func_name;
-      } else if (this_name) {
-        snprintf(full_func_name, sizeof(full_func_name), "%s.<anonymous>", this_name);
-        final_name = full_func_name;
-      } else {
-        final_name = "<anonymous>";
-      }
-      
-      push_call_frame(
-        js->filename,
-        final_name, 
-        code, (uint32_t) pos
-      );
+      const char *final_name = func_name ? func_name : "<anonymous>";
+      push_call_frame(js->filename, final_name,  code, (uint32_t) pos);
       
       jsval_t saved_func = js->current_func;
       js->current_func = func;

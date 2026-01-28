@@ -9,8 +9,7 @@ call_stack_t global_call_stack = {NULL, 0, 0};
 
 void pop_call_frame(void) {
   if (global_call_stack.depth == 0) return;
-  call_frame_t *frame = &global_call_stack.frames[--global_call_stack.depth];
-  free((void *)frame->function_name);
+  global_call_stack.depth--;
 }
 
 bool push_call_frame(const char *filename, const char *function_name, const char *code, uint32_t pos) {
@@ -26,20 +25,12 @@ bool push_call_frame(const char *filename, const char *function_name, const char
     global_call_stack.capacity = (int)new_capacity;
   }
 
-  char *func_name_copy = NULL;
-  if (function_name) {
-    size_t len = strlen(function_name) + 1;
-    func_name_copy = (char *)ant_realloc(NULL, len);
-    if (!func_name_copy) abort();
-    memcpy(func_name_copy, function_name, len);
-  }
-  
   call_frame_t *frame = 
     &global_call_stack.frames[global_call_stack.depth++];
   
   *frame = (call_frame_t) {
     .filename = filename,
-    .function_name = func_name_copy,
+    .function_name = function_name,
     .code = code,
     .pos = pos, .line = -1, .col = -1,
   };
