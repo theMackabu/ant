@@ -118,17 +118,30 @@ static void release_lock(const char *name) {
 
 static void process_pending_requests(struct js *js);
 
+static jsval_t make_lock_handler(struct js *js, jsval_t cfunc, jsval_t lock_name, jsval_t outer_promise) {
+  jsval_t fn_obj = js_mkobj(js);
+  js_set_slot(js, fn_obj, SLOT_CFUNC, cfunc);
+  
+  jsval_t data_obj = js_mkobj(js);
+  js_set(js, data_obj, "lockName", lock_name);
+  js_set(js, data_obj, "outerPromise", outer_promise);
+  js_set_slot(js, fn_obj, SLOT_DATA, data_obj);
+  
+  return js_obj_to_func(fn_obj);
+}
+
 static jsval_t lock_then_handler(struct js *js, jsval_t *args, int nargs) {
   jsval_t current_func = js_getcurrentfunc(js);
-  jsval_t lock_name_val = js_get(js, current_func, "_lockName");
-  jsval_t outer_promise = js_get(js, current_func, "_outerPromise");
+  jsval_t data_obj = js_get_slot(js, current_func, SLOT_DATA);
+  
+  jsval_t lock_name_val = js_get(js, data_obj, "lockName");
+  jsval_t outer_promise = js_get(js, data_obj, "outerPromise");
   jsval_t result_val = (nargs > 0) ? args[0] : js_mkundef();
   
   size_t name_len;
   char *name = js_getstr(js, lock_name_val, &name_len);
   
   if (name) release_lock(name);
-  
   js_resolve_promise(js, outer_promise, result_val);
   process_pending_requests(js);
   
@@ -137,8 +150,10 @@ static jsval_t lock_then_handler(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t lock_catch_handler(struct js *js, jsval_t *args, int nargs) {
   jsval_t current_func = js_getcurrentfunc(js);
-  jsval_t lock_name_val = js_get(js, current_func, "_lockName");
-  jsval_t outer_promise = js_get(js, current_func, "_outerPromise");
+  jsval_t data_obj = js_get_slot(js, current_func, SLOT_DATA);
+  
+  jsval_t lock_name_val = js_get(js, data_obj, "lockName");
+  jsval_t outer_promise = js_get(js, data_obj, "outerPromise");
   jsval_t error_val = (nargs > 0) ? args[0] : js_mkundef();
   
   size_t name_len;
@@ -174,13 +189,8 @@ static void execute_lock_callback(struct js *js, const char *name, lock_mode_t m
     if (fn_type == T_FUNC || fn_type == T_CFUNC) {
       jsval_t name_str = js_mkstr(js, name, strlen(name));
       
-      jsval_t on_resolve = js_mkfun(lock_then_handler);
-      js_set(js, on_resolve, "_lockName", name_str);
-      js_set(js, on_resolve, "_outerPromise", outer_promise);
-      
-      jsval_t on_reject = js_mkfun(lock_catch_handler);
-      js_set(js, on_reject, "_lockName", name_str);
-      js_set(js, on_reject, "_outerPromise", outer_promise);
+      jsval_t on_resolve = make_lock_handler(js, js_mkfun(lock_then_handler), name_str, outer_promise);
+      jsval_t on_reject = make_lock_handler(js, js_mkfun(lock_catch_handler), name_str, outer_promise);
       
       jsval_t then_args[2] = { on_resolve, on_reject };
       js_call_with_this(js, then_fn, result, then_args, 2);
@@ -275,9 +285,10 @@ static jsval_t locks_request(struct js *js, jsval_t *args, int nargs) {
       jsval_t then_fn = js_get(js, result, "then");
       int fn_type = vtype(then_fn);
       if (fn_type == T_FUNC || fn_type == T_CFUNC) {
-        jsval_t on_resolve = js_mkfun(lock_then_handler);
-        js_set(js, on_resolve, "_lockName", js_mkstr(js, "", 0));
-        js_set(js, on_resolve, "_outerPromise", promise);
+        jsval_t on_resolve = make_lock_handler(
+          js, js_mkfun(lock_then_handler), 
+          js_mkstr(js, "", 0), promise
+        );
         js_call_with_this(js, then_fn, result, &on_resolve, 1);
         return promise;
       }
