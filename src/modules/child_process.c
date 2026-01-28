@@ -389,11 +389,11 @@ static jsval_t child_kill(struct js *js, jsval_t *args, int nargs) {
     } else if (vtype(args[0]) == T_STR) {
       size_t sig_len;
       char *sig_str = js_getstr(js, args[0], &sig_len);
-      if (strncmp(sig_str, "SIGTERM", sig_len) == 0) sig = SIGTERM;
-      else if (strncmp(sig_str, "SIGKILL", sig_len) == 0) sig = SIGKILL;
-      else if (strncmp(sig_str, "SIGINT", sig_len) == 0) sig = SIGINT;
-      else if (strncmp(sig_str, "SIGHUP", sig_len) == 0) sig = SIGHUP;
-      else if (strncmp(sig_str, "SIGQUIT", sig_len) == 0) sig = SIGQUIT;
+      if (sig_len == 7 && strncmp(sig_str, "SIGTERM", 7) == 0) sig = SIGTERM;
+      else if (sig_len == 7 && strncmp(sig_str, "SIGKILL", 7) == 0) sig = SIGKILL;
+      else if (sig_len == 6 && strncmp(sig_str, "SIGINT", 6) == 0) sig = SIGINT;
+      else if (sig_len == 6 && strncmp(sig_str, "SIGHUP", 6) == 0) sig = SIGHUP;
+      else if (sig_len == 7 && strncmp(sig_str, "SIGQUIT", 7) == 0) sig = SIGQUIT;
     }
   }
   

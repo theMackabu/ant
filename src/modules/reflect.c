@@ -273,8 +273,9 @@ static jsval_t reflect_is_extensible(struct js *js, jsval_t *args, int nargs) {
   
   if (t != T_OBJ && t != T_FUNC) return js_mkfalse();
   
-  if (js_get_slot(js, target, SLOT_FROZEN) == js_true) return js_false;
-  if (js_get_slot(js, target, SLOT_SEALED) == js_true) return js_false;
+  if (js_get_slot(js, target, SLOT_EXTENSIBLE) == js_false) return js_false;
+  if (js_get_slot(js, target, SLOT_FROZEN) == js_true)      return js_false;
+  if (js_get_slot(js, target, SLOT_SEALED) == js_true)      return js_false;
   
   return js_mktrue();
 }
