@@ -11,6 +11,7 @@
 #include "utils.h"
 #include "runtime.h"
 #include "internal.h"
+#include "sugar.h"
 #include "stack.h"
 #include "errors.h"
 #include "utf8.h"
@@ -29,6 +30,7 @@
 #include <float.h>
 #include <tlsuv/tlsuv.h>
 #include <tlsuv/http.h>
+#include <minicoro.h>
 
 #ifdef _WIN32
 #include <sys/stat.h>
@@ -37,12 +39,6 @@
 #include <sys/stat.h>
 #include <sys/resource.h>
 #endif
-
-#define MCO_USE_VMEM_ALLOCATOR
-#define MCO_ZERO_MEMORY
-#define MCO_DEFAULT_STACK_SIZE (1024 * 1024)
-#define MINICORO_IMPL
-#include <minicoro.h>
 
 #include "modules/fs.h"
 #include "modules/timer.h"
@@ -55,9 +51,6 @@
 #include "modules/json.h"
 #include "modules/buffer.h"
 #include "esm/remote.h"
-
-#define CORO_MALLOC(size) calloc(1, size)
-#define CORO_FREE(ptr) free(ptr)
 
 #define D(x) ((double)(x))
 
@@ -78,76 +71,24 @@ typedef struct {
   int capacity;
 } this_stack_t;
 
-typedef enum {
-  CORO_ASYNC_AWAIT,
-  CORO_GENERATOR,
-  CORO_ASYNC_GENERATOR
-} coroutine_type_t;
+static this_stack_t global_this_stack = {NULL, 0, 0};
 
-typedef struct coroutine {
-  struct js *js;
-  coroutine_type_t type;
-  jsval_t scope;
-  jsval_t this_val;
-  jsval_t super_val;
-  jsval_t new_target;
-  jsval_t awaited_promise;
-  jsval_t result;
-  jsval_t async_func;
-  jsval_t *args;
-  int nargs;
-  bool is_settled;
-  bool is_error;
-  bool is_done;
-  jsoff_t resume_point;
-  jsval_t yield_value;
-  struct coroutine *prev;
-  struct coroutine *next;
-  mco_coro* mco;
-  bool mco_started;
-  bool is_ready;
-  struct for_let_ctx *for_let_stack;
-  int for_let_stack_len;
-  int for_let_stack_cap;
-  UT_array *scope_stack;
-} coroutine_t;
-
-typedef struct {
-  coroutine_t *head;
-  coroutine_t *tail;
-} coroutine_queue_t;
-
-typedef struct {
-  struct js *js;
-  const char *code;
-  size_t code_len;
-  jsval_t closure_scope;
-  jsval_t result;
-  jsval_t promise;
-  bool has_error;
-  coroutine_t *coro;
-} async_exec_context_t;
-
-static const UT_icd jsoff_icd = {
+const UT_icd jsoff_icd = {
   .sz = sizeof(jsoff_t),
   .init = NULL,
   .copy = NULL,
   .dtor = NULL,
 };
 
-static const UT_icd jsval_icd = {
+const UT_icd jsval_icd = {
   .sz = sizeof(jsval_t),
   .init = NULL,
   .copy = NULL,
   .dtor = NULL,
 };
 
-static UT_array *global_scope_stack = NULL;
-static UT_array *saved_scope_stack = NULL;
-static this_stack_t global_this_stack = {NULL, 0, 0};
-
-static uint32_t coros_this_tick = 0;
-static coroutine_queue_t pending_coroutines = {NULL, NULL};
+UT_array *global_scope_stack = NULL;
+UT_array *saved_scope_stack = NULL;
 
 typedef struct {
   const char *name;
@@ -164,7 +105,6 @@ static const UT_icd label_entry_icd = {
 };
 
 static UT_array *label_stack = NULL;
-
 static const char *break_target_label = NULL;
 static jsoff_t break_target_label_len = 0;
 static const char *continue_target_label = NULL;
@@ -407,8 +347,13 @@ static const char *typestr_raw(uint8_t t) {
   return (t < sizeof(names) / sizeof(names[0])) ? names[t] : "??";
 }
 
-static jsval_t tov(double d) { union { double d; jsval_t v; } u = {d}; return u.v; }
-static double tod(jsval_t v) { union { jsval_t v; double d; } u = {v}; return u.d; }
+jsval_t tov(double d) { 
+  union { double d; jsval_t v; } u = {d}; return u.v; 
+}
+
+double tod(jsval_t v) { 
+  union { jsval_t v; double d; } u = {v}; return u.d; 
+}
 
 static bool is_tagged(jsval_t v) {
   return (v >> 53) == NANBOX_PREFIX_CHK;
@@ -789,11 +734,6 @@ static jsval_t proxy_get(struct js *js, jsval_t proxy, const char *key, size_t k
 static jsval_t proxy_set(struct js *js, jsval_t proxy, const char *key, size_t key_len, jsval_t value);
 static jsval_t proxy_has(struct js *js, jsval_t proxy, const char *key, size_t key_len);
 static jsval_t proxy_delete(struct js *js, jsval_t proxy, const char *key, size_t key_len);
-static jsval_t call_js(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope);
-static jsval_t call_js_internal(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *bound_args, int bound_argc, jsval_t func_val);
-
-static jsval_t call_js_with_args(struct js *js, jsval_t fn, jsval_t *args, int nargs);
-static jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *args, int nargs, jsval_t func_val);
 
 static inline bool push_this(jsval_t this_value);
 static inline jsval_t pop_this(void);
@@ -862,330 +802,6 @@ bool js_truthy(struct js *js, jsval_t v) {
     return d != 0.0 && !isnan(d);
   }
 }
-
-static bool has_ready_coroutines(void);
-static bool coro_stack_size_initialized = false;
-
-static void free_coroutine(coroutine_t *coro);
-static void for_let_swap_with_coro(struct js *js, coroutine_t *coro);
-
-typedef struct {
-  jsval_t scope;
-  UT_array *scope_stack;
-} coro_saved_state_t;
-
-static inline coro_saved_state_t coro_enter(struct js *js, coroutine_t *coro) {
-  extern UT_array *global_scope_stack;
-  coro_saved_state_t saved = { js->scope, global_scope_stack };
-  js->scope = coro->scope;
-  global_scope_stack = coro->scope_stack;
-  for_let_swap_with_coro(js, coro);
-  return saved;
-}
-
-static inline void coro_leave(struct js *js, coroutine_t *coro, coro_saved_state_t saved) {
-  extern UT_array *global_scope_stack;
-  coro->scope = js->scope;
-  coro->scope_stack = global_scope_stack;
-  js->scope = saved.scope;
-  global_scope_stack = saved.scope_stack;
-  for_let_swap_with_coro(js, coro);
-}
-
-static size_t calculate_coro_stack_size(void) {
-  if (coro_stack_size_initialized) return 0;
-  coro_stack_size_initialized = true;
-  const char *env_stack = getenv("ANT_CORO_STACK_SIZE");
-  if (env_stack) {
-    size_t size = (size_t)atoi(env_stack) * 1024;
-    if (size >= 32 * 1024 && size <= 8 * 1024 * 1024) return size;
-  }
-  return 0;
-}
-
-static void mco_async_entry(mco_coro* mco) {
-  async_exec_context_t *ctx = (async_exec_context_t *)mco_get_user_data(mco);
-  
-  struct js *js = ctx->js;
-  coroutine_t *coro = ctx->coro;
-  jsval_t result;
-  
-  jsval_t saved_super = js->super_val;
-  jsval_t saved_new_target = js->new_target;
-  if (coro) {
-    js->super_val = coro->super_val;
-    js->new_target = coro->new_target;
-  }
-  
-  if (coro && coro->nargs > 0 && coro->args) {
-    result = call_js_code_with_args(js, ctx->code, (jsoff_t)ctx->code_len, ctx->closure_scope, coro->args, coro->nargs, js_mkundef());
-  } else result = call_js(js, ctx->code, (jsoff_t)ctx->code_len, ctx->closure_scope);
-  
-  js->super_val = saved_super;
-  js->new_target = saved_new_target;
-  
-  ctx->result = result;
-  ctx->has_error = is_err(result);
-  
-  if (ctx->has_error) {
-    jsval_t reject_value = js->thrown_value;
-    if (vtype(reject_value) == T_UNDEF) {
-      reject_value = js_mkstr(js, js->errmsg ? js->errmsg : "Unknown error", js->errmsg ? strlen(js->errmsg) : 13);
-    }
-    js->flags &= (uint8_t)~F_THROW;
-    js->thrown_value = js_mkundef();
-    js_reject_promise(js, ctx->promise, reject_value);
-  } else js_resolve_promise(js, ctx->promise, result);
-}
-
-static void enqueue_coroutine(coroutine_t *coro) {
-  if (!coro) return;
-  coro->next = NULL;
-  coro->prev = pending_coroutines.tail;
-  
-  if (pending_coroutines.tail) {
-    pending_coroutines.tail->next = coro;
-  } else pending_coroutines.head = coro;
-  pending_coroutines.tail = coro;
-}
-
-static void remove_coroutine(coroutine_t *coro) {
-  if (!coro) return;
-  
-  if (coro->prev) {
-    coro->prev->next = coro->next;
-  } else pending_coroutines.head = coro->next;
-  
-  if (coro->next) {
-    coro->next->prev = coro->prev;
-  } else pending_coroutines.tail = coro->prev;
-  
-  coro->prev = NULL;
-  coro->next = NULL;
-}
-
-inline bool js_has_pending_coroutines(void) {
-  return pending_coroutines.head != NULL;
-}
-
-static bool has_ready_coroutines(void) {
-  coroutine_t *temp = pending_coroutines.head;
-  while (temp) {
-    if (temp->is_ready) return true;
-    temp = temp->next;
-  }
-  return false;
-}
-
-void js_poll_events(struct js *js) {
-  coros_this_tick = 0;
-  
-  fetch_poll_events();
-  fs_poll_events();
-  child_process_poll_events();
-  
-  int has_timers = has_pending_timers();
-  if (has_timers) {
-    int64_t next_timeout_ms = get_next_timer_timeout();
-    if (next_timeout_ms <= 0) process_timers(js);
-  }
-  
-  process_immediates(js);
-  process_microtasks(js);
-  
-  for (coroutine_t *temp = pending_coroutines.head, *next; temp; temp = next) {
-    next = temp->next;
-    if (!temp->is_ready || !temp->mco || mco_status(temp->mco) != MCO_SUSPENDED) continue;
-    remove_coroutine(temp);
-    
-    coro_saved_state_t saved = coro_enter(temp->js, temp);
-    mco_result res = mco_resume(temp->mco);
-    coro_leave(temp->js, temp, saved);
-    
-    if (res == MCO_SUCCESS && mco_status(temp->mco) != MCO_DEAD) {
-      temp->is_ready = false;
-      enqueue_coroutine(temp);
-    } else free_coroutine(temp);
-  }
-  
-  if (js->needs_gc && !js->gc_suppress) {
-    js->needs_gc = false;
-    js_gc_compact(js);
-    js->gc_alloc_since = 0;
-  }
-}
-
-typedef enum {
-  WORK_MICROTASKS       = 1 << 0,
-  WORK_TIMERS           = 1 << 1,
-  WORK_IMMEDIATES       = 1 << 2,
-  WORK_COROUTINES       = 1 << 3,
-  WORK_COROUTINES_READY = 1 << 4,
-  WORK_FETCHES          = 1 << 5,
-  WORK_FS_OPS           = 1 << 6,
-  WORK_CHILD_PROCS      = 1 << 7,
-  WORK_READLINE         = 1 << 8,
-  WORK_STDIN            = 1 << 9,
-} work_flags_t;
-
-static inline work_flags_t get_pending_work(void) {
-  work_flags_t flags = 0;
-  if (has_pending_microtasks())          flags |= WORK_MICROTASKS;
-  if (has_pending_timers())              flags |= WORK_TIMERS;
-  if (has_pending_immediates())          flags |= WORK_IMMEDIATES;
-  if (js_has_pending_coroutines())       flags |= WORK_COROUTINES;
-  if (has_ready_coroutines())            flags |= WORK_COROUTINES_READY;
-  if (has_pending_fetches())             flags |= WORK_FETCHES;
-  if (has_pending_fs_ops())              flags |= WORK_FS_OPS;
-  if (has_pending_child_processes())     flags |= WORK_CHILD_PROCS;
-  if (has_active_readline_interfaces())  flags |= WORK_READLINE;
-  if (has_active_stdin())                flags |= WORK_STDIN;
-  return flags;
-}
-
-#define WORK_TASKS    (WORK_MICROTASKS | WORK_TIMERS | WORK_IMMEDIATES | WORK_COROUTINES | WORK_FETCHES)
-#define WORK_PENDING  (WORK_TASKS | WORK_FS_OPS | WORK_CHILD_PROCS | WORK_READLINE | WORK_STDIN)
-#define WORK_BLOCKING (WORK_MICROTASKS | WORK_IMMEDIATES | WORK_COROUTINES_READY)
-
-void js_run_event_loop(struct js *js) {
-  work_flags_t work;
-  
-  while ((work = get_pending_work()) & WORK_PENDING) {
-    js_poll_events(js);
-    work = get_pending_work();
-    
-    if (work & (WORK_READLINE | WORK_STDIN)) {
-      if (work & WORK_BLOCKING) uv_run(uv_default_loop(), UV_RUN_NOWAIT); else {
-        int64_t ms = has_pending_timers() ? get_next_timer_timeout() : 100;
-        if (ms > 100) ms = 100;
-        uv_run(uv_default_loop(), ms > 0 ? UV_RUN_ONCE : UV_RUN_NOWAIT);
-      }
-    } else if (!(work & WORK_BLOCKING) && (work & WORK_TIMERS)) {
-      jsoff_t gc_thresh = js->brk / 2;
-      if (gc_thresh < 4 * 1024 * 1024) gc_thresh = 4 * 1024 * 1024;
-      if (js->gc_alloc_since > gc_thresh || js->needs_gc) {
-        js->needs_gc = false;
-        js_gc_compact(js);
-        js->gc_alloc_since = 0;
-      }
-      
-      int64_t ms = get_next_timer_timeout();
-      if (ms > 0) usleep(ms > 1000 ? 1000000 : (useconds_t)(ms * 1000));
-    }
-  }
-  
-  js_poll_events(js);
-}
-
-static jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t code_len, jsval_t closure_scope, jsval_t *args, int nargs) {
-  if (++coros_this_tick > CORO_PER_TICK_LIMIT) {
-    js->fatal_error = true;
-    return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum async operations per tick exceeded");
-  }
-  
-  jsval_t promise = js_mkpromise(js);  
-  async_exec_context_t *ctx = (async_exec_context_t *)CORO_MALLOC(sizeof(async_exec_context_t));
-  if (!ctx) return js_mkerr(js, "out of memory for async context");
-  
-  ctx->js = js;
-  ctx->code = code;
-  ctx->code_len = code_len;
-  ctx->closure_scope = closure_scope;
-  ctx->result = js_mkundef();
-  ctx->promise = promise;
-  ctx->has_error = false;
-  ctx->coro = NULL;
-  
-  size_t stack_size = calculate_coro_stack_size();
-  mco_desc desc = mco_desc_init(mco_async_entry, stack_size);
-  desc.user_data = ctx;
-  
-  mco_coro* mco = NULL;
-  mco_result res = mco_create(&mco, &desc);
-  if (res != MCO_SUCCESS) {
-    CORO_FREE(ctx);
-    return js_mkerr(js, "failed to create minicoro coroutine");
-  }
-  
-  coroutine_t *coro = (coroutine_t *)CORO_MALLOC(sizeof(coroutine_t));
-  if (!coro) {
-    mco_destroy(mco);
-    CORO_FREE(ctx);
-    return js_mkerr(js, "out of memory for coroutine");
-  }
-  
-  coro->js = js;
-  coro->type = CORO_ASYNC_AWAIT;
-  coro->scope = closure_scope;
-  coro->this_val = js->this_val;
-  coro->super_val = js->super_val;
-  coro->new_target = js->new_target;
-  coro->awaited_promise = js_mkundef();
-  coro->result = js_mkundef();
-  coro->async_func = js->current_func;
-  if (nargs > 0) {
-    coro->args = (jsval_t *)CORO_MALLOC(sizeof(jsval_t) * nargs);
-    if (coro->args) memcpy(coro->args, args, sizeof(jsval_t) * nargs);
-  } else { coro->args = NULL; }
-  coro->nargs = nargs;
-  coro->is_settled = false;
-  coro->is_error = false;
-  coro->is_done = false;
-  coro->resume_point = 0;
-  coro->yield_value = js_mkundef();
-  coro->next = NULL;
-  coro->mco = mco;
-  coro->mco_started = false;
-  coro->is_ready = true;
-  coro->for_let_stack = NULL;
-  coro->for_let_stack_len = 0;
-  coro->for_let_stack_cap = 0;
-  
-  extern UT_array *global_scope_stack;
-  utarray_new(coro->scope_stack, &jsoff_icd);
-  jsoff_t glob_off = (jsoff_t)vdata(js_glob(js));
-  utarray_push_back(coro->scope_stack, &glob_off);
-  
-  ctx->coro = coro;  
-  enqueue_coroutine(coro);
-  
-  coro_saved_state_t saved = coro_enter(js, coro);
-  res = mco_resume(mco);
-  coro_leave(js, coro, saved);
-  
-  if (res != MCO_SUCCESS && mco_status(mco) != MCO_DEAD) {
-    remove_coroutine(coro);
-    free_coroutine(coro);
-    return js_mkerr(js, "failed to start coroutine");
-  }
-  
-  coro->mco_started = true;
-  if (mco_status(mco) == MCO_DEAD) {
-    remove_coroutine(coro);
-    free_coroutine(coro);
-  }
-  
-  return promise;
-}
-
-static void free_coroutine(coroutine_t *coro) {
-  if (coro) {
-    if (coro->mco) {
-      if (mco_running() == coro->mco) fprintf(stderr, "WARNING: Attempting to free a running coroutine\n");
-      async_exec_context_t *ctx = (async_exec_context_t *)mco_get_user_data(coro->mco);
-      if (ctx) CORO_FREE(ctx);
-      mco_destroy(coro->mco);
-      coro->mco = NULL;
-    }
-    if (coro->args) CORO_FREE(coro->args);
-    if (coro->for_let_stack) free(coro->for_let_stack);
-    if (coro->scope_stack) utarray_free(coro->scope_stack);
-    CORO_FREE(coro);
-  }
-}
-
-static jsval_t resume_coroutine_wrapper(struct js *js, jsval_t *args, int nargs);
-static jsval_t reject_coroutine_wrapper(struct js *js, jsval_t *args, int nargs);
 
 static size_t cpy(char *dst, size_t dstlen, const char *src, size_t srclen) {
   if (dstlen == 0) return srclen;
@@ -4608,20 +4224,6 @@ static inline struct for_let_ctx *for_let_current(struct js *js) {
   return js->for_let_stack_len > 0 ? &js->for_let_stack[js->for_let_stack_len - 1] : NULL;
 }
 
-static void for_let_swap_with_coro(struct js *js, coroutine_t *coro) {
-  struct for_let_ctx *tmp_stack = js->for_let_stack;
-  int tmp_len = js->for_let_stack_len;
-  int tmp_cap = js->for_let_stack_cap;
-  
-  js->for_let_stack = coro->for_let_stack;
-  js->for_let_stack_len = coro->for_let_stack_len;
-  js->for_let_stack_cap = coro->for_let_stack_cap;
-  
-  coro->for_let_stack = tmp_stack;
-  coro->for_let_stack_len = tmp_len;
-  coro->for_let_stack_cap = tmp_cap;
-}
-
 static void copy_body_scope_props(struct js *js, jsval_t body_scope, jsval_t closure_scope, const char *skip_var, jsoff_t skip_len) {
   if (vtype(body_scope) != T_OBJ) return;
   jsoff_t prop_off = loadoff(js, (jsoff_t)vdata(body_scope)) & ~(3U | FLAGMASK);
@@ -6226,7 +5828,7 @@ static inline void restore_saved_scope(struct js *js) {
   }
 }
 
-static jsval_t call_js_internal(
+jsval_t call_js_internal(
   struct js *js, const char *fn, jsoff_t fnlen,
   jsval_t closure_scope, jsval_t *bound_args, int bound_argc, jsval_t func_val
 ) {
@@ -6393,11 +5995,11 @@ static jsval_t call_js_internal(
   return res;
 }
 
-static jsval_t call_js(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope) {
+jsval_t call_js(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope) {
   return call_js_internal(js, fn, fnlen, closure_scope, NULL, 0, js_mkundef());
 }
 
-static jsval_t call_js_with_args(struct js *js, jsval_t func, jsval_t *args, int nargs) {
+jsval_t call_js_with_args(struct js *js, jsval_t func, jsval_t *args, int nargs) {
   if (vtype(func) == T_CFUNC) {
     jsval_t (*fn)(struct js *, jsval_t *, int) = (jsval_t(*)(struct js *, jsval_t *, int)) vdata(func);
     return fn(js, args, nargs);
@@ -6497,7 +6099,7 @@ static jsval_t call_js_with_args(struct js *js, jsval_t func, jsval_t *args, int
   return result;
 }
 
-static jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *args, int nargs, jsval_t func_val) {
+jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *args, int nargs, jsval_t func_val) {
   jsoff_t parent_scope_offset;
   if (vtype(closure_scope) == T_OBJ) {
     parent_scope_offset = (jsoff_t) vdata(closure_scope);
@@ -19503,39 +19105,6 @@ static jsval_t builtin_Promise_try(struct js *js, jsval_t *args, int nargs) {
   }
   jsval_t res_args[] = { res };
   return builtin_Promise_resolve(js, res_args, 1);
-}
-
-static jsval_t resume_coroutine_wrapper(struct js *js, jsval_t *args, int nargs) {
-  jsval_t me = js->current_func;
-  jsval_t coro_val = get_slot(js, me, SLOT_CORO);
-  if (vtype(coro_val) != T_NUM) return js_mkundef();
-  
-  coroutine_t *coro = (coroutine_t *)(uintptr_t)tod(coro_val);
-  if (!coro) return js_mkundef();
-  
-  coro->result = nargs > 0 ? args[0] : js_mkundef();
-  coro->is_settled = true;
-  coro->is_error = false;
-  coro->is_ready = true;
-  
-  return js_mkundef();
-}
-
-static jsval_t reject_coroutine_wrapper(struct js *js, jsval_t *args, int nargs) {
-  jsval_t me = js->current_func;
-  jsval_t coro_val = get_slot(js, me, SLOT_CORO);
-  
-  if (vtype(coro_val) != T_NUM) return js_mkundef();
-  
-  coroutine_t *coro = (coroutine_t *)(uintptr_t)tod(coro_val);
-  if (!coro) return js_mkundef();
-  
-  coro->result = nargs > 0 ? args[0] : js_mkundef();
-  coro->is_settled = true;
-  coro->is_error = true;
-  coro->is_ready = true;
-  
-  return js_mkundef();
 }
 
 static jsval_t builtin_Promise_all_resolve_handler(struct js *js, jsval_t *args, int nargs) {

@@ -1,7 +1,7 @@
 #ifndef ANT_SHELL_MODULE_H
 #define ANT_SHELL_MODULE_H
 
-#include "ant.h"
+#include "types.h"
 
 jsval_t shell_library(struct js *js);
 

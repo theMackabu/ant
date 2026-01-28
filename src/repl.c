@@ -20,6 +20,7 @@
 
 #include "ant.h"
 #include "repl.h"
+#include "reactor.h"
 #include "config.h"
 #include "runtime.h"
 #include "internal.h"

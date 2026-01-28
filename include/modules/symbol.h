@@ -1,7 +1,8 @@
 #ifndef SYMBOL_H
 #define SYMBOL_H
 
-#include "ant.h"
+#include "types.h"
+#include <stddef.h>
 
 void init_symbol_module(void);
 

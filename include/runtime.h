@@ -1,7 +1,7 @@
 #ifndef RUNTIME_H
 #define RUNTIME_H
 
-#include "ant.h"
+#include "types.h"
 #include <argtable3.h>
 
 #define ANT_RUNTIME_CRYPTO_INIT      (1u << 0)

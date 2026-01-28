@@ -24,6 +24,8 @@ lib_sources = files(
   'src/roots.c',
   'src/utils.c',
   'src/utf8.c',
+  'src/reactor.c',
+  'src/sugar.c',
   'src/ant.c',
   'src/errors.c',
   'src/stack.c',

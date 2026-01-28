@@ -28,7 +28,6 @@
 #define JS_NEG_INF ((double)(-INFINITY))
 
 #define ANT_LIMIT_SIZE_CACHE 16384
-#define CORO_PER_TICK_LIMIT 10000
 
 #define JS_DESC_W (1 << 0)
 #define JS_DESC_E (1 << 1)
@@ -156,9 +155,6 @@ void js_resolve_promise(ant_t *js, jsval_t promise, jsval_t value);
 void js_reject_promise(ant_t *js, jsval_t promise, jsval_t value);
 void js_check_unhandled_rejections(ant_t *js);
 void js_process_promise_handlers(ant_t *js, uint32_t promise_id);
-
-void js_run_event_loop(ant_t *js);
-void js_poll_events(ant_t *js);
 void js_setup_import_meta(ant_t *js, const char *filename);
 
 typedef jsval_t (*ant_library_init_fn)(ant_t *js);
@@ -188,7 +184,5 @@ jsoff_t js_loadoff(ant_t *js, jsoff_t off);
 void js_print_stack_trace(FILE *stream);
 void js_set_needs_gc(ant_t *js, bool needs);
 void js_set_gc_suppress(ant_t *js, bool suppress);
-
-size_t js_gc_compact(ant_t *js);
 
 #endif

@@ -1,7 +1,7 @@
 #ifndef IO_H
 #define IO_H
 
-#include "ant.h"
+#include "types.h"
 #include <stdio.h>
 #include <stdbool.h>
 

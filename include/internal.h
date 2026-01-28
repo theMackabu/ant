@@ -3,6 +3,13 @@
 
 #include "ant.h"
 #include "gc.h"
+#include <utarray.h>
+
+extern const UT_icd jsoff_icd;
+extern const UT_icd jsval_icd;
+
+extern UT_array *global_scope_stack;
+extern UT_array *saved_scope_stack;
 
 struct for_let_ctx {
   const char *var_name;   // interned variable name
@@ -94,19 +101,26 @@ enum {
 #define T_OBJECT_MASK          (TYPE_FLAG(T_OBJ) | TYPE_FLAG(T_ARR) | TYPE_FLAG(T_FUNC) | TYPE_FLAG(T_PROMISE))
 #define T_NON_NUMERIC_MASK     (TYPE_FLAG(T_STR) | TYPE_FLAG(T_ARR) | TYPE_FLAG(T_FUNC) | TYPE_FLAG(T_CFUNC) | TYPE_FLAG(T_OBJ))
 
-jsoff_t esize(jsoff_t w);
+bool is_internal_prop(const char *key, jsoff_t klen);
 
 void js_gc_reserve_roots(GC_UPDATE_ARGS);
 void js_gc_update_roots(GC_UPDATE_ARGS);
 
-bool js_has_pending_coroutines(void);
-bool is_internal_prop(const char *key, jsoff_t klen);
+jsoff_t esize(jsoff_t w);
+jsval_t tov(double d);
+double tod(jsval_t v);
 
 jsoff_t lkp(struct js *js, jsval_t obj, const char *buf, size_t len);
 jsoff_t vstr(struct js *js, jsval_t value, jsoff_t *len);
 
 jsval_t mkval(uint8_t type, uint64_t data);
 jsval_t resolveprop(struct js *js, jsval_t v);
+
+jsval_t call_js(ant_t *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope);
+jsval_t call_js_internal(ant_t *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *bound_args, int bound_argc, jsval_t func_val);
+
+jsval_t call_js_with_args(ant_t *js, jsval_t fn, jsval_t *args, int nargs);
+jsval_t call_js_code_with_args(ant_t *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *args, int nargs, jsval_t func_val);
 
 #define is_non_numeric(v)    ((1u << vtype(v)) & T_NON_NUMERIC_MASK)
 #define is_object_type(v)    ((1u << vtype(v)) & T_OBJECT_MASK)

@@ -10,6 +10,8 @@
 #include <utarray.h>
 
 #include "ant.h"
+#include "gc.h"
+#include "reactor.h"
 #include "config.h"
 #include "runtime.h"
 #include "internal.h"
@@ -108,13 +110,7 @@ static void server_signal_handler(int signum) {
 
 static void on_js_timer(uv_timer_t *handle) {
   struct js *js = (struct js*)handle->data;
-  if (js) {
-    if (has_pending_immediates()) process_immediates(js);
-    if (has_pending_timers()) {
-      int64_t next_timeout = get_next_timer_timeout();
-      if (next_timeout <= 0) process_timers(js);
-    }
-  }
+  if (js) if (has_pending_immediates()) process_immediates(js);
 }
 
 static int parse_accept_encoding(const char *buffer, size_t len) {
@@ -995,12 +991,8 @@ jsval_t js_serve(struct js *js, jsval_t *args, int nargs) {
   rt->flags |= ANT_RUNTIME_EXT_EVENT_LOOP;
   
   while (uv_loop_alive(g_loop)) {
-    if (has_pending_timers() || has_pending_immediates()) {
-      int64_t next_timeout_ms = get_next_timer_timeout();
-      if (next_timeout_ms >= 0) {
-        uint64_t timeout = has_pending_immediates() ? 0 : (next_timeout_ms > 0 ? (uint64_t)next_timeout_ms : 0);
-        uv_timer_start(&g_js_timer, on_js_timer, timeout, 0);
-      }
+    if (has_pending_immediates()) {
+      uv_timer_start(&g_js_timer, on_js_timer, 0, 0);
     } else uv_timer_stop(&g_js_timer);
     
     uv_run(g_loop, UV_RUN_ONCE);

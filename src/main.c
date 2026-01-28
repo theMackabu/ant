@@ -11,6 +11,7 @@
 #include "ant.h"
 #include "repl.h"
 #include "utils.h"
+#include "reactor.h"
 #include "runtime.h"
 #include "snapshot.h"
 #include "esm/remote.h"

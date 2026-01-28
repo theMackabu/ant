@@ -18,15 +18,19 @@ HEADERS=(
   "config.h:$CONFIG_H"
   "common.h:$INCLUDE_DIR/common.h"
   "types.h:$INCLUDE_DIR/types.h"
+  "gc.h:$INCLUDE_DIR/gc.h"
   "ant.h:$INCLUDE_DIR/ant.h"
-  "internal.h:$INCLUDE_DIR/internal.h"
   "roots.h:$INCLUDE_DIR/roots.h"
+  "utarray.h:$VENDOR_DIR/uthash-2.3.0/src/utarray.h"
+  "internal.h:$INCLUDE_DIR/internal.h"
+  "minicoro.h:$VENDOR_DIR/minicoro/minicoro.h"
+  "sugar.h:$INCLUDE_DIR/sugar.h"
+  "reactor.h:$INCLUDE_DIR/reactor.h"
   "tokens.h:$INCLUDE_DIR/tokens.h"
   "stack.h:$INCLUDE_DIR/stack.h"
   "errors.h:$INCLUDE_DIR/errors.h"
   "compat.h:$INCLUDE_DIR/compat.h"
   "utils.h:$INCLUDE_DIR/utils.h"
-  "minicoro.h:$VENDOR_DIR/minicoro/minicoro.h"
   "runtime.h:$INCLUDE_DIR/runtime.h"
   "esm/remote.h:$INCLUDE_DIR/esm/remote.h"
   "argtable3.h:$VENDOR_DIR/argtable-v3.3.0.116da6c/src/argtable3.h"
@@ -96,7 +100,7 @@ for entry in "${HEADERS[@]}"; do
       continue
     fi
     
-    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\"(config\.h|common\.h|types\.h|compat\.h|ant\.h|utils\.h|arena\.h|runtime\.h|internal\.h)\" ]]; then
+    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\"(config\.h|common\.h|gc.\h|types\.h|compat\.h|ant\.h|utils\.h|arena\.h|runtime\.h|internal\.h)\" ]]; then
       continue
     fi
     if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\"esm/ ]]; then
@@ -106,7 +110,7 @@ for entry in "${HEADERS[@]}"; do
       continue
     fi
     
-    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\<(config|common|argtable3)\.h\> ]]; then
+    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\<(config|common|argtable3|types|utarray|minicoro)\.h\> ]]; then
       continue
     fi
     
