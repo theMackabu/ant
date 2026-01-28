@@ -50,8 +50,13 @@ static bool ensure_errmsg_capacity(struct js *js, size_t needed) {
 
 __attribute__((format(printf, 3, 4)))
 static size_t append_errmsg_fmt(struct js *js, size_t used, const char *fmt, ...) {
+  int max_attempts = 3;
+  int attempt = 0;
+
   for (;;) {
-    if (!ensure_errmsg_capacity(js, used + 1)) return used;
+    if (!ensure_errmsg_capacity(js, used + 1)) {
+      return js->errmsg_size ? js->errmsg_size - 1 : used;
+    }
 
     size_t remaining = js->errmsg_size - used;
     va_list ap;
@@ -63,8 +68,10 @@ static size_t append_errmsg_fmt(struct js *js, size_t used, const char *fmt, ...
     if ((size_t)written < remaining) return used + (size_t)written;
 
     if (!ensure_errmsg_capacity(js, used + (size_t)written + 1)) {
-      return js->errmsg_size ? js->errmsg_size - 1 : used;
-    }
+      if (++attempt >= max_attempts) {
+        return js->errmsg_size ? js->errmsg_size - 1 : used;
+      }
+    } else attempt = 0;
   }
 }
 

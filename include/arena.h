@@ -11,6 +11,7 @@
 #else
 #include <sys/mman.h>
 #include <unistd.h>
+#include <errno.h>
 #endif
 
 #define ANT_ARENA_MIN (32 * 1024)
@@ -61,9 +62,17 @@ static inline void *ant_arena_reserve(size_t max_size) {
 
 static inline int ant_arena_commit(void *base, size_t old_size, size_t new_size) {
   if (new_size <= old_size) return 0;
-  size_t page_size = (size_t)sysconf(_SC_PAGESIZE);
-  size_t old_pages = (old_size + page_size - 1) & ~(page_size - 1);
-  size_t new_pages = (new_size + page_size - 1) & ~(page_size - 1);
+  
+  long page_size_long = sysconf(_SC_PAGESIZE);
+  if (page_size_long <= 0) {
+    errno = (page_size_long == -1 && errno == 0) ? EINVAL : errno;
+    return -1;
+  }
+  
+  size_t page_size = (size_t)page_size_long;
+  size_t old_pages = ((old_size + page_size - 1) / page_size) * page_size;
+  size_t new_pages = ((new_size + page_size - 1) / page_size) * page_size;
+  
   if (new_pages <= old_pages) return 0;
   return mprotect((char *)base + old_pages, new_pages - old_pages, PROT_READ | PROT_WRITE);
 }
