@@ -24,6 +24,7 @@ module_files = run_command('sh', '-c',
 lib_sources = files(
   '../src/roots.c',
   '../src/utils.c',
+  '../src/utf8.c',
   '../src/ant.c',
   '../src/errors.c',
   '../src/stack.c',

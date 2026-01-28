@@ -5,39 +5,59 @@
 #include "ant.h"
 #include "errors.h"
 #include "runtime.h"
+#include "utf8.h"
 #include "modules/uri.h"
+
+static const unsigned char uri_unreserved[256] = {
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,1,0,0,0,0,0,1,1,1,1,0,0,1,1,0,
+  1,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,
+  0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,0,0,0,0,1,
+  0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,1,1,1,1,1,0,0,0,1,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+};
+
+static const unsigned char uri_reserved[256] = {
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,1,1,0,1,0,0,0,0,1,1,0,0,1,
+  0,0,0,0,0,0,0,0,0,0,1,1,0,1,0,1,
+  1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+};
+
+#define is_uri_unreserved(c) (uri_unreserved[(unsigned char)(c)])
+#define is_uri_reserved(c) (uri_reserved[(unsigned char)(c)])
+
+static int is_valid_continuation(unsigned char c) {
+  return (c & 0xC0) == 0x80;
+}
 
 static int hex_digit(char c) {
   if (c >= '0' && c <= '9') return c - '0';
   if (c >= 'A' && c <= 'F') return c - 'A' + 10;
   if (c >= 'a' && c <= 'f') return c - 'a' + 10;
   return -1;
-}
-
-static int is_uri_unreserved(unsigned char c) {
-  return (c >= 'A' && c <= 'Z') ||
-         (c >= 'a' && c <= 'z') ||
-         (c >= '0' && c <= '9') ||
-         c == '-' || c == '_' || c == '.' || c == '!' ||
-         c == '~' || c == '*' || c == '\'' || c == '(' || c == ')';
-}
-
-static int is_uri_reserved(unsigned char c) {
-  return c == ';' || c == '/' || c == '?' || c == ':' ||
-         c == '@' || c == '&' || c == '=' || c == '+' ||
-         c == '$' || c == ',' || c == '#';
-}
-
-static int utf8_sequence_length(unsigned char first_byte) {
-  if ((first_byte & 0x80) == 0) return 1;
-  if ((first_byte & 0xE0) == 0xC0) return 2;
-  if ((first_byte & 0xF0) == 0xE0) return 3;
-  if ((first_byte & 0xF8) == 0xF0) return 4;
-  return -1;
-}
-
-static int is_valid_continuation(unsigned char c) {
-  return (c & 0xC0) == 0x80;
 }
 
 static int is_lone_surrogate(const unsigned char *str, int seq_len) {

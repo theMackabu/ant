@@ -13,6 +13,7 @@
 #include "internal.h"
 #include "stack.h"
 #include "errors.h"
+#include "utf8.h"
 
 #include <uv.h>
 #include <oxc.h>
@@ -3745,28 +3746,6 @@ static inline bool is_strict_restricted(const char *buf, size_t len) {
   return false;
 }
 
-static int encode_utf8(uint32_t cp, char *out) {
-  if (cp < 0x80) {
-    out[0] = (char)cp;
-    return 1;
-  } else if (cp < 0x800) {
-    out[0] = (char)(0xC0 | (cp >> 6));
-    out[1] = (char)(0x80 | (cp & 0x3F));
-    return 2;
-  } else if (cp < 0x10000) {
-    out[0] = (char)(0xE0 | (cp >> 12));
-    out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
-    out[2] = (char)(0x80 | (cp & 0x3F));
-    return 3;
-  } else {
-    out[0] = (char)(0xF0 | (cp >> 18));
-    out[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
-    out[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
-    out[3] = (char)(0x80 | (cp & 0x3F));
-    return 4;
-  }
-}
-
 #define CHAR_DIGIT  0x01
 #define CHAR_XDIGIT 0x02
 #define CHAR_ALPHA  0x04
@@ -3992,7 +3971,7 @@ static size_t decode_ident_escapes(const char *src, size_t srclen, char *dst, si
     uint32_t cp;
     int el = parse_unicode_escape(src, (jsoff_t)srclen, (jsoff_t)si, &cp);
     if (el > 0) {
-      di += encode_utf8(cp, dst + di);
+      di += utf8_encode(cp, dst + di);
       si += el;
     } else dst[di++] = src[si++];
   }
@@ -5602,7 +5581,10 @@ static jsval_t do_bracket_op(struct js *js, jsval_t l, jsval_t r) {
   }
   if (streq(keystr, keylen, "length", 6)) {
     if (vtype(obj) == T_STR) {
-      return tov(D(offtolen(loadoff(js, (jsoff_t) vdata(obj)))));
+      jsoff_t byte_len;
+      jsoff_t str_off = vstr(js, obj, &byte_len);
+      const char *str_data = (const char *)&js->mem[str_off];
+      return tov(D(utf16_strlen(str_data, byte_len)));
     }
     if (vtype(obj) == T_ARR) {
       jsoff_t len_off = lkp(js, obj, "length", 6);
@@ -5727,7 +5709,10 @@ static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
   uint8_t t = vtype(l);
   
   if (t == T_STR && streq(ptr, plen, "length", 6)) {
-    return tov(D(offtolen(loadoff(js, (jsoff_t) vdata(l)))));
+    jsoff_t byte_len;
+    jsoff_t str_off = vstr(js, l, &byte_len);
+    const char *str_data = (const char *)&js->mem[str_off];
+    return tov(D(utf16_strlen(str_data, byte_len)));
   }
   
   if (t == T_ARR && streq(ptr, plen, "length", 6)) {
