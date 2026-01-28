@@ -1,12 +1,11 @@
 #include <string.h>
 
 #include "ant.h"
-#include "errors.h"
 #include "snapshot.h"
 #include "internal.h"
 #include "snapshot_data.h"
 
-jsval_t ant_load_snapshot(struct js *js) {
+jsval_t ant_load_snapshot(ant_t *js) {
   if (!js) return js_mkundef();
   jsval_t result = js_eval(js, (const char *)ant_snapshot_source, ant_snapshot_source_len);
   

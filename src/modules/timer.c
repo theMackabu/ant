@@ -47,22 +47,6 @@ static struct {
   int active_timer_count;
 } timer_state = {NULL, NULL, NULL, NULL, NULL, NULL, 1, 1, 0};
 
-static void timer_callback(uv_timer_t *handle) {
-  timer_entry_t *entry = (timer_entry_t *)handle->data;
-  if (!entry || !entry->active) return;
-  
-  struct js *js = timer_state.js;
-  jsval_t args[0];
-  js_call(js, entry->callback, args, 0);
-  process_microtasks(js);
-  
-  if (!entry->is_interval) {
-    entry->active = 0;
-    uv_timer_stop(&entry->handle);
-    timer_state.active_timer_count--;
-  }
-}
-
 static void add_timer_entry(timer_entry_t *entry) {
   entry->next = timer_state.timers;
   entry->prev = NULL;
@@ -76,6 +60,35 @@ static void remove_timer_entry(timer_entry_t *entry) {
   if (entry->prev) entry->prev->next = entry->next;
   else timer_state.timers = entry->next;
   if (entry->next) entry->next->prev = entry->prev;
+}
+
+static void timer_close_cb(uv_handle_t *h) {
+  timer_entry_t *entry = (timer_entry_t *)h->data;
+  if (!entry) return;
+  
+  remove_timer_entry(entry);
+  entry->callback = 0;
+  entry->next = NULL;
+  entry->prev = NULL;
+  h->data = NULL;
+  
+  free(entry);
+}
+
+static void timer_callback(uv_timer_t *handle) {
+  timer_entry_t *entry = (timer_entry_t *)handle->data;
+  if (!entry || !entry->active) return;
+  
+  struct js *js = timer_state.js;
+  jsval_t args[0];
+  js_call(js, entry->callback, args, 0);
+  process_microtasks(js);
+  
+  if (!entry->is_interval) {
+    entry->active = 0;
+    timer_state.active_timer_count--;
+    uv_close((uv_handle_t *)&entry->handle, timer_close_cb);
+  }
 }
 
 // setTimeout(callback, delay)
@@ -139,9 +152,8 @@ static jsval_t js_clear_timeout(struct js *js, jsval_t *args, int nargs) {
   
   for (timer_entry_t *entry = timer_state.timers; entry != NULL; entry = entry->next) {
     if (entry->timer_id == timer_id && entry->active) {
-      entry->active = 0;
-      uv_timer_stop(&entry->handle);
-      timer_state.active_timer_count--; break;
+      entry->active = 0; timer_state.active_timer_count--;
+      uv_close((uv_handle_t *)&entry->handle, timer_close_cb); break;
     }
   }
   

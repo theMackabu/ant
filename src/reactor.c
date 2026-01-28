@@ -79,6 +79,7 @@ void js_run_event_loop(ant_t *js) {
   
     if (work & WORK_BLOCKING) uv_run(uv_default_loop(), UV_RUN_NOWAIT);
     else if (work & WORK_ASYNC) { maybe_gc(js); uv_run(uv_default_loop(), UV_RUN_ONCE); }
+    else if (work & WORK_COROUTINES) break;
   }
   
   js_poll_events(js);

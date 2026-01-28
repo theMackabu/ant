@@ -102,14 +102,17 @@ void coro_leave(struct js *js, coroutine_t *coro, coro_saved_state_t saved) {
 }
 
 static size_t calculate_coro_stack_size(void) {
-  if (coro_stack_size_initialized) return 0;
+  static size_t cached_size = 0;
+  if (coro_stack_size_initialized) return cached_size;
   coro_stack_size_initialized = true;
   const char *env_stack = getenv("ANT_CORO_STACK_SIZE");
   if (env_stack) {
     size_t size = (size_t)atoi(env_stack) * 1024;
-    if (size >= 32 * 1024 && size <= 8 * 1024 * 1024) return size;
+    if (size >= 32 * 1024 && size <= 8 * 1024 * 1024) { 
+      cached_size = size; return cached_size; 
+    }
   }
-  return 0;
+  return cached_size;
 }
 
 static void mco_async_entry(mco_coro* mco) {
@@ -212,11 +215,21 @@ jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t code_le
   
   if (nargs > 0) {
     coro->args = (jsval_t *)CORO_MALLOC(sizeof(jsval_t) * nargs);
-    if (coro->args) memcpy(coro->args, args, sizeof(jsval_t) * nargs);
+    if (!coro->args) {
+      mco_destroy(mco); CORO_FREE(coro); CORO_FREE(ctx);
+      return js_mkerr(js, "out of memory for coroutine args");
+    }
+    memcpy(coro->args, args, sizeof(jsval_t) * nargs);
   }
   
   extern UT_array *global_scope_stack;
   utarray_new(coro->scope_stack, &jsoff_icd);
+  
+  if (!coro->scope_stack) {
+    mco_destroy(mco); CORO_FREE(coro); CORO_FREE(ctx);
+    return js_mkerr(js, "out of memory for coroutine scope stack");
+  }
+  
   jsoff_t glob_off = (jsoff_t)vdata(js_glob(js));
   utarray_push_back(coro->scope_stack, &glob_off);
   

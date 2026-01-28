@@ -110,7 +110,7 @@ static void server_signal_handler(int signum) {
 
 static void on_js_timer(uv_timer_t *handle) {
   struct js *js = (struct js*)handle->data;
-  if (js) if (has_pending_immediates()) process_immediates(js);
+  if (js && has_pending_immediates()) process_immediates(js);
 }
 
 static int parse_accept_encoding(const char *buffer, size_t len) {
