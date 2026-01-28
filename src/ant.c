@@ -10416,14 +10416,22 @@ static jsval_t for_of_iter_array(struct js *js, for_iter_ctx_t *ctx, jsval_t ite
 
 static jsval_t for_of_iter_string(struct js *js, for_iter_ctx_t *ctx, jsval_t iterable) {
   jshdl_t h_iterable = js_root(js, iterable);
-  jsoff_t slen;
-  (void) vstr(js, iterable, &slen);
+  jsoff_t byte_len;
+  jsoff_t soff = vstr(js, iterable, &byte_len);
   
-  for (jsoff_t i = 0; i < slen; i++) {
+  const char *str = (char *) &js->mem[soff];
+  size_t utf16_len = utf16_strlen(str, byte_len);
+  
+  for (size_t i = 0; i < utf16_len; i++) {
     jsval_t cur = js_deref(js, h_iterable);
-    jsoff_t soff = vstr(js, cur, NULL);
-    const char *str = (char *) &js->mem[soff];
-    jsval_t char_str = js_mkstr(js, &str[i], 1);
+    jsoff_t cur_byte_len;
+    jsoff_t cur_soff = vstr(js, cur, &cur_byte_len);
+    const char *cur_str = (char *) &js->mem[cur_soff];
+    
+    size_t char_bytes;
+    int byte_offset = utf16_index_to_byte_offset(cur_str, cur_byte_len, i, &char_bytes);
+    if (byte_offset < 0) break;
+    jsval_t char_str = js_mkstr(js, cur_str + byte_offset, char_bytes);
     
     jsval_t err = for_iter_bind_var(js, ctx, char_str);
     if (is_err(err)) { js_unroot(js, h_iterable); return err; }
