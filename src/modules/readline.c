@@ -348,19 +348,25 @@ static void handle_history_down(rl_interface_t *iface) {
 
 static void handle_char_input(rl_interface_t *iface, char c) {
   if (iface->line_len < MAX_LINE_LENGTH - 1) {
-    memmove(iface->line_buffer + iface->line_pos + 1,
-            iface->line_buffer + iface->line_pos,
-            iface->line_len - iface->line_pos + 1);
+    memmove(
+      iface->line_buffer + iface->line_pos + 1,
+      iface->line_buffer + iface->line_pos,
+      iface->line_len - iface->line_pos + 1
+    );
+    
     iface->line_buffer[iface->line_pos] = c;
     iface->line_pos++;
     iface->line_len++;
     
     if (iface->line_pos == iface->line_len) {
+      int cols = get_terminal_cols();
+      int prompt_len = (int)strlen(iface->prompt);
+      int total_cols = prompt_len + iface->line_len;
+      int rows = total_cols > 0 ? total_cols / cols + 1 : 1;
+      if (rows > iface->last_render_rows) iface->last_render_rows = rows;
       printf("%c", c);
       fflush(stdout);
-    } else {
-      refresh_line(iface);
-    }
+    } else refresh_line(iface);
   }
 }
 
@@ -1122,7 +1128,8 @@ static jsval_t rl_create_interface(struct js *js, jsval_t *args, int nargs) {
   if (iface->tab_size < 1) iface->tab_size = 1;
   
   jsval_t completer_val = js_get(js, options, "completer");
-  iface->completer = (vtype(completer_val) == T_FUNC) ? completer_val : js_mkundef();
+  int ctype = vtype(completer_val);
+  iface->completer = (ctype == T_FUNC || ctype == T_CFUNC) ? completer_val : js_mkundef();
   
   jsval_t history_val = js_get(js, options, "history");
   if (is_special_object(history_val)) {
@@ -1140,10 +1147,7 @@ static jsval_t rl_create_interface(struct js *js, jsval_t *args, int nargs) {
         if (line) rl_history_add(&iface->history, line, false);
       }
     }
-  } else {
-    rl_history_init(&iface->history, iface->history_size);
-  }
-  
+  } else rl_history_init(&iface->history, iface->history_size);
   HASH_ADD(hh, interfaces, id, sizeof(uint64_t), iface);
   
   jsval_t obj = js_mkobj(js);

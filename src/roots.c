@@ -5,7 +5,7 @@
 
 jshdl_t js_root(struct js *js, jsval_t val) {
   if (js->gc_roots_len >= js->gc_roots_cap) {
-    int new_cap = js->gc_roots_cap ? js->gc_roots_cap * 2 : GC_ROOTS_INITIAL_CAP;
+    jshdl_t new_cap = js->gc_roots_cap ? js->gc_roots_cap * 2 : GC_ROOTS_INITIAL_CAP;
     jsval_t *new_roots = ant_realloc(js->gc_roots, new_cap * sizeof(jsval_t));
     if (!new_roots) {
       fprintf(stderr, "FATAL: Out of memory allocating GC roots\n");
@@ -14,7 +14,7 @@ jshdl_t js_root(struct js *js, jsval_t val) {
     js->gc_roots = new_roots;
     js->gc_roots_cap = new_cap;
   }
-  int idx = js->gc_roots_len++;
+  jshdl_t idx = js->gc_roots_len++;
   js->gc_roots[idx] = val;
   return idx;
 }

@@ -60,7 +60,7 @@ static jsval_t reflect_has(struct js *js, jsval_t *args, int nargs) {
   char *key_str = js_getstr(js, key, &key_len);
   if (!key_str) return js_mkfalse();
   
-  jsoff_t off = lkp(js, target, key_str, key_len);
+  jsoff_t off = lkp_proto(js, target, key_str, key_len);
   return off > 0 ? js_mktrue() : js_mkfalse();
 }
 
@@ -75,14 +75,11 @@ static jsval_t reflect_delete_property(struct js *js, jsval_t *args, int nargs) 
   
   if (vtype(key) != T_STR) return js_mkfalse();
   
-  size_t key_len;
-  char *key_str = js_getstr(js, key, &key_len);
+  char *key_str = js_getstr(js, key, NULL);
   if (!key_str) return js_mkfalse();
   
-  jsval_t result = js_setprop(js, target, key, js_mkundef());
-  (void)result;
-  
-  return js_mktrue();
+  bool deleted = js_del(js, target, key_str);
+  return deleted ? js_mktrue() : js_mkfalse();
 }
 
 static jsval_t reflect_own_keys(struct js *js, jsval_t *args, int nargs) {

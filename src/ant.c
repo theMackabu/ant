@@ -738,12 +738,11 @@ static jsval_t proxy_delete(struct js *js, jsval_t proxy, const char *key, size_
 static inline bool push_this(jsval_t this_value);
 static inline jsval_t pop_this(void);
 
-static jsoff_t lkp_proto(struct js *js, jsval_t obj, const char *key, size_t len);
-static jsoff_t lkp_interned(struct js *js, jsval_t obj, const char *search_intern, size_t len);
-
 static jsval_t get_prototype_for_type(struct js *js, uint8_t type);
 static jsval_t get_ctor_proto(struct js *js, const char *name, size_t len);
+
 static jsval_t setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v);
+static jsoff_t lkp_interned(struct js *js, jsval_t obj, const char *search_intern, size_t len);
 
 static descriptor_entry_t *lookup_descriptor(jsoff_t obj_off, const char *key, size_t klen);
 static const char *bigint_digits(struct js *js, jsval_t v, size_t *len);
@@ -4729,7 +4728,7 @@ static jsval_t get_prototype_for_type(struct js *js, uint8_t type) {
   }
 }
 
-static jsoff_t lkp_proto(struct js *js, jsval_t obj, const char *key, size_t len) {
+jsoff_t lkp_proto(struct js *js, jsval_t obj, const char *key, size_t len) {
   uint8_t t = vtype(obj);
   const char *key_intern = intern_string(key, len);
   
@@ -22379,7 +22378,7 @@ static void gc_roots_common(gc_off_op_t op_off, gc_val_op_t op_val, gc_cb_ctx_t 
     op_off(c, &c->js->for_let_stack[i].prop_off);
   }
   
-  for (int i = 0; i < c->js->gc_roots_len; i++) op_val(c, &c->js->gc_roots[i]);
+  for (jshdl_t i = 0; i < c->js->gc_roots_len; i++) op_val(c, &c->js->gc_roots[i]);
   if (c->js->ascii_cache_init) for (int i = 0; i < 128; i++) op_val(c, &c->js->ascii_char_cache[i]);
 }
 

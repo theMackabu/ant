@@ -71,8 +71,8 @@ struct js {
   int for_let_stack_cap;
   
   jsval_t *gc_roots;
-  int gc_roots_len;
-  int gc_roots_cap;
+  jshdl_t gc_roots_len;
+  jshdl_t gc_roots_cap;
   
   jsval_t ascii_char_cache[128];
   bool ascii_cache_init;
@@ -111,6 +111,7 @@ jsval_t tov(double d);
 double tod(jsval_t v);
 
 jsoff_t lkp(struct js *js, jsval_t obj, const char *buf, size_t len);
+jsoff_t lkp_proto(struct js *js, jsval_t obj, const char *buf, size_t len);
 jsoff_t vstr(struct js *js, jsval_t value, jsoff_t *len);
 
 jsval_t mkval(uint8_t type, uint64_t data);

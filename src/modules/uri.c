@@ -323,7 +323,7 @@ static jsval_t js_escape(struct js *js, jsval_t *args, int nargs) {
     
     if (is_escape_unreserved(c)) {
       out[out_len++] = (char)c;
-    } else out_len += sprintf(out + out_len, "%%%02X", c);
+    } else out_len += (size_t)snprintf(out + out_len, out_cap - out_len, "%%%02X", c);
   }
   
   out[out_len] = '\0';

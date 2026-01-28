@@ -66,6 +66,14 @@ static void remove_pending_request(fetch_request_t *req) {
   }
 }
 
+static jsval_t fetch_fail_oom(struct js *js, jsval_t promise, fetch_request_t *req, bool close_http, const char *msg, size_t len) {
+  jsval_t err = js_mkstr(js, msg, len);
+  js_reject_promise(js, promise, err);
+  if (close_http) tlsuv_http_close(&req->http_client, NULL);
+  remove_pending_request(req); free_fetch_request(req);
+  return js_mkundef();
+}
+
 static jsval_t response_text(struct js *js, jsval_t *args, int nargs) {  
   jsval_t this = js_getthis(js);
   jsval_t body = js_get_slot(js, this, SLOT_DATA);
@@ -220,13 +228,7 @@ static jsval_t do_fetch_microtask(struct js *js, jsval_t *args, int nargs) {
   utarray_push_back(pending_requests, &req);
   
   const char *scheme_end = strstr(url_str, "://");
-  if (!scheme_end) {
-    jsval_t err = js_mkstr(js, "Invalid URL: no scheme", 22);
-    js_reject_promise(js, promise, err);
-    remove_pending_request(req);
-    free_fetch_request(req);
-    return js_mkundef();
-  }
+  if (!scheme_end) return fetch_fail_oom(js, promise, req, false, "Invalid URL: no scheme", 22);
   
   const char *host_start = scheme_end + 3;
   const char *path_start = strchr(host_start, '/');
@@ -234,44 +236,22 @@ static jsval_t do_fetch_microtask(struct js *js, jsval_t *args, int nargs) {
   
   for (const char *p = host_start; p < (path_start ? path_start : host_start + strlen(host_start)); p++) {
     if (*p == '@') at_in_host = p;
-  }
-  if (at_in_host) host_start = at_in_host + 1;
+  } if (at_in_host) host_start = at_in_host + 1;
   
   size_t scheme_len = scheme_end - url_str;
   size_t host_len = path_start ? (size_t)(path_start - host_start) : strlen(host_start);
-  const char *path = path_start ? path_start : "/";
   
-  if (host_len == 0) {
-    jsval_t err = js_mkstr(js, "Invalid URL: no host", 20);
-    js_reject_promise(js, promise, err);
-    remove_pending_request(req);
-    free_fetch_request(req);
-    return js_mkundef();
-  }
+  const char *path = path_start ? path_start : "/";
+  if (host_len == 0) return fetch_fail_oom(js, promise, req, false, "Invalid URL: no host", 20);
   
   char *host_url = calloc(1, scheme_len + 3 + host_len + 1);
-  if (!host_url) {
-    jsval_t err = js_mkstr(js, "Out of memory", 13);
-    js_reject_promise(js, promise, err);
-    remove_pending_request(req);
-    free_fetch_request(req);
-    return js_mkundef();
-  }
+  if (!host_url) return fetch_fail_oom(js, promise, req, false, "Out of memory", 13);
   snprintf(host_url, scheme_len + 3 + host_len + 1, "%.*s://%.*s", (int)scheme_len, url_str, (int)host_len, host_start);
   
-  int rc = tlsuv_http_init(fetch_loop, &req->http_client, host_url);
-  free(host_url);
-  
-  if (rc != 0) {
-    jsval_t err = js_mkstr(js, "Failed to initialize HTTP client", 33);
-    js_reject_promise(js, promise, err);
-    remove_pending_request(req);
-    free_fetch_request(req);
-    return js_mkundef();
-  }
+  int rc = tlsuv_http_init(fetch_loop, &req->http_client, host_url); free(host_url);
+  if (rc != 0) return fetch_fail_oom(js, promise, req, false, "Failed to initialize HTTP client", 33);
   
   req->http_client.data = req;
-  
   req->method = NULL;
   req->body = NULL;
   req->body_len = 0;
@@ -280,32 +260,32 @@ static jsval_t do_fetch_microtask(struct js *js, jsval_t *args, int nargs) {
     jsval_t method_val = js_get(js, options_val, "method");
     if (vtype(method_val) == T_STR) {
       char *str = js_getstr(js, method_val, NULL);
-      if (str) req->method = strdup(str);
+      if (str) {
+        req->method = strdup(str);
+        if (!req->method) return fetch_fail_oom(js, promise, req, true, "Out of memory", 13);
+      }
     }
     
     jsval_t body_val = js_get(js, options_val, "body");
     if (vtype(body_val) == T_STR) {
       size_t len;
       char *str = js_getstr(js, body_val, &len);
-      if (str) {
-        req->body = memcpy(malloc(len), str, len);
+      if (str && len > 0) {
+        req->body = malloc(len);
+        if (!req->body) return fetch_fail_oom(js, promise, req, true, "Out of memory", 13);
+        memcpy(req->body, str, len);
         req->body_len = len;
       }
     }
   }
   
-  if (!req->method) req->method = strdup("GET");
-  req->http_req = tlsuv_http_req(&req->http_client, req->method, path, resp_cb, req);
-  
-  if (!req->http_req) {
-    jsval_t err = js_mkstr(js, "Failed to create HTTP request", 30);
-    js_reject_promise(js, promise, err);
-    tlsuv_http_close(&req->http_client, NULL);
-    remove_pending_request(req);
-    free_fetch_request(req);
-    return js_mkundef();
+  if (!req->method) {
+    req->method = strdup("GET");
+    if (!req->method) return fetch_fail_oom(js, promise, req, true, "Out of memory", 13);
   }
   
+  req->http_req = tlsuv_http_req(&req->http_client, req->method, path, resp_cb, req);
+  if (!req->http_req) return fetch_fail_oom(js, promise, req, true, "Failed to create HTTP request", 30);
   req->http_req->data = req;
   
   char user_agent[256];
