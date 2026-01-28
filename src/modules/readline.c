@@ -258,7 +258,8 @@ static int get_terminal_cols(void) {
 static void move_cursor_to_line_start(rl_interface_t *iface, int cols) {
   int prompt_len = (int)strlen(iface->prompt);
   int cursor_cols = prompt_len + iface->line_pos;
-  int cursor_row = cursor_cols > 0 ? (cursor_cols - 1) / cols : 0;
+  int cursor_row = cursor_cols / cols;
+  if (cursor_cols > 0 && cursor_cols % cols == 0) cursor_row--;
 
   if (cursor_row > 0) {
     char move_buf[32];
@@ -621,7 +622,8 @@ static jsval_t rl_interface_on(struct js *js, jsval_t *args, int nargs) {
   
   char *event = js_getstr(js, args[0], NULL);
   if (!event) return js_mkerr(js, "event must be a string");
-  if (vtype(args[1]) != T_FUNC) return js_mkerr(js, "listener must be a function");
+  int t = vtype(args[1]);
+  if (t != T_FUNC && t != T_CFUNC) return js_mkerr(js, "listener must be a function");
   
   RLEventType *evt = find_or_create_event_type(iface, event);
   if (evt->listener_count >= MAX_LISTENERS_PER_EVENT) {
@@ -644,7 +646,8 @@ static jsval_t rl_interface_once(struct js *js, jsval_t *args, int nargs) {
   
   char *event = js_getstr(js, args[0], NULL);
   if (!event) return js_mkerr(js, "event must be a string");
-  if (vtype(args[1]) != T_FUNC) return js_mkerr(js, "listener must be a function");
+  int t = vtype(args[1]);
+  if (t != T_FUNC && t != T_CFUNC) return js_mkerr(js, "listener must be a function");
   
   RLEventType *evt = find_or_create_event_type(iface, event);
   if (evt->listener_count >= MAX_LISTENERS_PER_EVENT) {
@@ -937,7 +940,8 @@ static jsval_t rl_interface_question_callback(struct js *js, jsval_t *args, int 
   char *query = js_getstr(js, args[0], &query_len);
   if (!query) return js_mkerr(js, "query must be a string");
   
-  if (vtype(args[1]) != T_FUNC) {
+  int t = vtype(args[1]);
+  if (t != T_FUNC && t != T_CFUNC) {
     return js_mkerr(js, "callback must be a function");
   }
   
