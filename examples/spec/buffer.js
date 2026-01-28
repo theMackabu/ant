@@ -247,4 +247,62 @@ test('Buffer binary from hex byte 1', binaryFromHex[1], 0x01);
 test('Buffer binary from hex byte 2', binaryFromHex[2], 0x02);
 test('Buffer binary from hex byte 3', binaryFromHex[3], 0xff);
 
+console.log('\nArrayBuffer Transfer Tests\n');
+
+const transferBuf = new ArrayBuffer(16);
+const transferView = new Uint8Array(transferBuf);
+transferView[0] = 42;
+transferView[1] = 123;
+test('ArrayBuffer detached initial', transferBuf.detached, false);
+
+const newBuf = transferBuf.transfer(32);
+test('ArrayBuffer transfer - old detached', transferBuf.detached, true);
+test('ArrayBuffer transfer - old byteLength', transferBuf.byteLength, 0);
+test('ArrayBuffer transfer - new detached', newBuf.detached, false);
+test('ArrayBuffer transfer - new byteLength', newBuf.byteLength, 32);
+
+const newView = new Uint8Array(newBuf);
+test('ArrayBuffer transfer - data preserved [0]', newView[0], 42);
+test('ArrayBuffer transfer - data preserved [1]', newView[1], 123);
+
+test('TypedArray on detached buffer read', transferView[0], undefined);
+transferView[0] = 99;
+test('TypedArray on detached buffer write ignored', transferView[0], undefined);
+
+const shrinkBuf = new ArrayBuffer(100);
+const shrunkBuf = shrinkBuf.transfer(50);
+test('ArrayBuffer transfer shrink - old detached', shrinkBuf.detached, true);
+test('ArrayBuffer transfer shrink - new byteLength', shrunkBuf.byteLength, 50);
+
+const sameSizeBuf = new ArrayBuffer(64);
+const sameSizeView = new Uint8Array(sameSizeBuf);
+sameSizeView[0] = 255;
+const transferredSame = sameSizeBuf.transfer();
+test('ArrayBuffer transfer no arg - uses same size', transferredSame.byteLength, 64);
+test('ArrayBuffer transfer no arg - data preserved', new Uint8Array(transferredSame)[0], 255);
+
+const fixedBuf = new ArrayBuffer(32);
+const fixedTransferred = fixedBuf.transferToFixedLength(16);
+test('ArrayBuffer transferToFixedLength - old detached', fixedBuf.detached, true);
+test('ArrayBuffer transferToFixedLength - new byteLength', fixedTransferred.byteLength, 16);
+
+let transferError = null;
+try {
+  transferBuf.transfer();
+} catch (e) {
+  transferError = e.message;
+}
+test('ArrayBuffer transfer detached throws', transferError, 'Cannot transfer a detached ArrayBuffer');
+
+let sliceError = null;
+try {
+  transferBuf.slice(0, 10);
+} catch (e) {
+  sliceError = e.message;
+}
+test('ArrayBuffer slice detached throws', sliceError, 'Cannot slice a detached ArrayBuffer');
+
+const sharedBuf = new SharedArrayBuffer(16);
+test('SharedArrayBuffer detached', sharedBuf.detached, undefined);
+
 summary();

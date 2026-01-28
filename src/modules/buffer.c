@@ -19,8 +19,45 @@
 #include "modules/symbol.h"
 
 #define TA_ARENA_SIZE (16 * 1024 * 1024)
+#define BUFFER_REGISTRY_INITIAL_CAP 64
+
 static uint8_t *ta_arena = NULL;
 static size_t ta_arena_offset = 0;
+
+static ArrayBufferData **buffer_registry = NULL;
+static size_t buffer_registry_count = 0;
+static size_t buffer_registry_cap = 0;
+
+static void register_buffer(ArrayBufferData *data) {
+  if (!data) return;
+  
+  if (!buffer_registry) {
+    buffer_registry = calloc(BUFFER_REGISTRY_INITIAL_CAP, sizeof(ArrayBufferData *));
+    if (!buffer_registry) return;
+    buffer_registry_cap = BUFFER_REGISTRY_INITIAL_CAP;
+  }
+  
+  if (buffer_registry_count >= buffer_registry_cap) {
+    size_t new_cap = buffer_registry_cap * 2;
+    ArrayBufferData **new_reg = realloc(buffer_registry, new_cap * sizeof(ArrayBufferData *));
+    if (!new_reg) return;
+    buffer_registry = new_reg;
+    buffer_registry_cap = new_cap;
+  }
+  
+  buffer_registry[buffer_registry_count++] = data;
+}
+
+static void unregister_buffer(ArrayBufferData *data) {
+  if (!data || !buffer_registry) return;
+  
+  for (size_t i = 0; i < buffer_registry_count; i++) {
+    if (buffer_registry[i] == data) { 
+      buffer_registry[i] = buffer_registry[--buffer_registry_count]; 
+      return; 
+    }
+  }
+}
 
 static inline ssize_t normalize_index(ssize_t idx, ssize_t len) {
   if (idx < 0) idx += len;
@@ -153,6 +190,9 @@ static ArrayBufferData *create_array_buffer_data(size_t length) {
   data->capacity = length;
   data->ref_count = 1;
   data->is_shared = 0;
+  data->is_detached = 0;
+  
+  register_buffer(data);
   return data;
 }
 
@@ -165,7 +205,10 @@ static ArrayBufferData *create_shared_array_buffer_data(size_t length) {
 static void free_array_buffer_data(ArrayBufferData *data) {
   if (!data) return;
   data->ref_count--;
-  if (data->ref_count <= 0) free(data);
+  if (data->ref_count <= 0) {
+    unregister_buffer(data);
+    free(data);
+  }
 }
 
 static size_t get_element_size(TypedArrayType type) {
@@ -216,6 +259,7 @@ static jsval_t js_arraybuffer_slice(struct js *js, jsval_t *args, int nargs) {
   
   ArrayBufferData *data = (ArrayBufferData *)(uintptr_t)js_getnum(data_val);
   if (!data) return js_mkerr(js, "Invalid ArrayBuffer");
+  if (data->is_detached) return js_mkerr(js, "Cannot slice a detached ArrayBuffer");
   
   ssize_t len = (ssize_t)data->length;
   ssize_t begin = 0, end = len;
@@ -242,6 +286,71 @@ static jsval_t js_arraybuffer_slice(struct js *js, jsval_t *args, int nargs) {
   return new_obj;
 }
 
+// ArrayBuffer.prototype.transfer(newLength)
+static jsval_t js_arraybuffer_transfer(struct js *js, jsval_t *args, int nargs) {
+  jsval_t this_val = js_getthis(js);
+  jsval_t data_val = js_get_slot(js, this_val, SLOT_BUFFER);
+  
+  if (vtype(data_val) != T_NUM) {
+    return js_mkerr(js, "Not an ArrayBuffer");
+  }
+  
+  ArrayBufferData *data = (ArrayBufferData *)(uintptr_t)js_getnum(data_val);
+  if (!data) return js_mkerr(js, "Invalid ArrayBuffer");
+  
+  if (data->is_detached) {
+    return js_mkerr(js, "Cannot transfer a detached ArrayBuffer");
+  }
+  
+  if (data->is_shared) {
+    return js_mkerr(js, "Cannot transfer a SharedArrayBuffer");
+  }
+  
+  size_t new_length = data->length;
+  if (nargs > 0 && vtype(args[0]) == T_NUM) {
+    new_length = (size_t)js_getnum(args[0]);
+  }
+  
+  ArrayBufferData *new_data = create_array_buffer_data(new_length);
+  if (!new_data) return js_mkerr(js, "Failed to allocate new ArrayBuffer");
+  
+  size_t copy_length = data->length < new_length ? data->length : new_length;
+  memcpy(new_data->data, data->data, copy_length);
+  
+  data->is_detached = 1;
+  data->length = 0;
+  js_set(js, this_val, "byteLength", js_mknum(0));
+  
+  jsval_t new_obj = js_mkobj(js);
+  jsval_t proto = js_get_ctor_proto(js, "ArrayBuffer", 11);
+  
+  if (is_special_object(proto)) js_set_proto(js, new_obj, proto);
+  js_set_slot(js, new_obj, SLOT_BUFFER, ANT_PTR(new_data));
+  js_set(js, new_obj, "byteLength", js_mknum((double)new_length));
+  
+  return new_obj;
+}
+
+// ArrayBuffer.prototype.transferToFixedLength(newLength)
+static jsval_t js_arraybuffer_transferToFixedLength(struct js *js, jsval_t *args, int nargs) {
+  return js_arraybuffer_transfer(js, args, nargs);
+}
+
+// ArrayBuffer.prototype.detached getter
+static jsval_t js_arraybuffer_detached_getter(struct js *js, jsval_t *args, int nargs) {
+  jsval_t this_val = js_getthis(js);
+  jsval_t data_val = js_get_slot(js, this_val, SLOT_BUFFER);
+  
+  if (vtype(data_val) != T_NUM) {
+    return js_mkfalse();
+  }
+  
+  ArrayBufferData *data = (ArrayBufferData *)(uintptr_t)js_getnum(data_val);
+  if (!data) return js_mktrue();
+  
+  return data->is_detached ? js_mktrue() : js_mkfalse();
+}
+
 static jsval_t typedarray_index_getter(struct js *js, jsval_t obj, const char *key, size_t key_len) {
   if (key_len == 0 || key_len > 10) return js_mkundef();
   
@@ -255,6 +364,7 @@ static jsval_t typedarray_index_getter(struct js *js, jsval_t obj, const char *k
   jsval_t ta_val = js_get_slot(js, obj, SLOT_BUFFER);
   TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_val);
   if (!ta_data || index >= ta_data->length) return js_mkundef();
+  if (!ta_data->buffer || ta_data->buffer->is_detached) return js_mkundef();
   
   uint8_t *data = ta_data->buffer->data + ta_data->byte_offset;
   double value;
@@ -291,7 +401,8 @@ static bool typedarray_index_setter(struct js *js, jsval_t obj, const char *key,
   
   jsval_t ta_val = js_get_slot(js, obj, SLOT_BUFFER);
   TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_val);
-  if (!ta_data || index >= ta_data->length) return false;
+  if (!ta_data || index >= ta_data->length) return true;
+  if (!ta_data->buffer || ta_data->buffer->is_detached) return true;
   
   double num_val = vtype(value) == T_NUM ? js_getnum(value) : 0;
   uint8_t *data = ta_data->buffer->data + ta_data->byte_offset;
@@ -1558,6 +1669,9 @@ void init_buffer_module() {
   jsval_t arraybuffer_proto = js_mkobj(js);
   
   js_set(js, arraybuffer_proto, "slice", js_mkfun(js_arraybuffer_slice));
+  js_set(js, arraybuffer_proto, "transfer", js_mkfun(js_arraybuffer_transfer));
+  js_set(js, arraybuffer_proto, "transferToFixedLength", js_mkfun(js_arraybuffer_transferToFixedLength));
+  js_set_getter_desc(js, arraybuffer_proto, "detached", 8, js_mkfun(js_arraybuffer_detached_getter), JS_DESC_E);
   js_set(js, arraybuffer_proto, get_toStringTag_sym_key(), js_mkstr(js, "ArrayBuffer", 11));
   
   js_set_slot(js, arraybuffer_ctor_obj, SLOT_CFUNC, js_mkfun(js_arraybuffer_constructor));
@@ -1652,4 +1766,18 @@ void init_buffer_module() {
   js_mkprop_fast(js, buffer_ctor_obj, "name", 4, ANT_STRING("Buffer"));
   js_set_descriptor(js, buffer_ctor_obj, "name", 4, 0);
   js_set(js, glob, "Buffer", js_obj_to_func(buffer_ctor_obj));
+}
+
+void cleanup_buffer_module(void) {
+  if (buffer_registry) {
+    for (size_t i = 0; i < buffer_registry_count; i++) {
+      if (buffer_registry[i]) free(buffer_registry[i]);
+    }
+    free(buffer_registry);
+    buffer_registry = NULL;
+    buffer_registry_count = 0;
+    buffer_registry_cap = 0;
+  }
+  
+  ta_arena_offset = 0;
 }

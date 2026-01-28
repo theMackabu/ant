@@ -14237,6 +14237,15 @@ static jsval_t builtin_object_defineProperty(struct js *js, jsval_t *args, int n
   
   jsoff_t existing_off = lkp(js, as_obj, prop_str, prop_len);
   
+  if (existing_off == 0) {
+    if (js_truthy(js, get_slot(js, as_obj, SLOT_FROZEN))) 
+      return js_mkerr(js, "Cannot define property %.*s, object is not extensible", (int)prop_len, prop_str);
+    if (js_truthy(js, get_slot(js, as_obj, SLOT_SEALED)))
+      return js_mkerr(js, "Cannot define property %.*s, object is not extensible", (int)prop_len, prop_str);
+    if (get_slot(js, as_obj, SLOT_EXTENSIBLE) == js_mkfalse())
+      return js_mkerr(js, "Cannot define property %.*s, object is not extensible", (int)prop_len, prop_str);
+  }
+  
   if (has_get || has_set) {
     int desc_flags = 
       (enumerable ? JS_DESC_E : 0) |
@@ -14262,13 +14271,24 @@ static jsval_t builtin_object_defineProperty(struct js *js, jsval_t *args, int n
     js_set_descriptor(js, as_obj, prop_str, prop_len, desc_flags);
     
     if (existing_off > 0) {
-      if (is_nonconfig_prop(js, existing_off)) {
-        return js_mkerr(js, "Cannot redefine non-configurable property");
+      bool is_frozen = js_truthy(js, get_slot(js, as_obj, SLOT_FROZEN));
+      bool is_nonconfig = is_nonconfig_prop(js, existing_off) || is_frozen;
+      bool is_readonly = is_const_prop(js, existing_off) || is_frozen;
+      
+      if (is_nonconfig) {
+        if (configurable) return js_mkerr(js,
+          "Cannot redefine property %.*s: cannot change configurable from false to true", 
+          (int)prop_len, prop_str
+        );
+        
+        if (is_readonly && has_writable && writable) return js_mkerr(js, 
+          "Cannot redefine property %.*s: cannot change writable from false to true", 
+          (int)prop_len, prop_str
+        );
       }
       
-      if (has_value) {
-        saveval(js, existing_off + sizeof(jsoff_t) * 2, value);
-      }
+      if (is_readonly && has_value) return js_mkerr(js, "Cannot assign to read-only property '%.*s'", (int)prop_len, prop_str);
+      if (has_value) saveval(js, existing_off + sizeof(jsoff_t) * 2, value);
       
       if (!writable || !configurable) {
         jsoff_t head = (jsoff_t) vdata(as_obj);
@@ -22035,6 +22055,7 @@ void js_destroy(struct js *js) {
   
   esm_cleanup_module_cache();
   code_arena_reset();
+  cleanup_buffer_module();
   
   if (js->errmsg) {
     free(js->errmsg);

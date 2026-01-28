@@ -5,6 +5,7 @@
 #include <stddef.h>
 
 void init_buffer_module(void);
+void cleanup_buffer_module(void);
 
 typedef struct {
   uint8_t *data;
@@ -12,6 +13,7 @@ typedef struct {
   size_t capacity;
   int ref_count;
   int is_shared;
+  int is_detached;
 } ArrayBufferData;
 
 typedef enum {
