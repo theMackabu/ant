@@ -513,13 +513,18 @@ size_t js_gc_compact(ant_t *js) {
   time_t now = time(NULL);
   if (now != (time_t)-1 && gc_last_run_time != 0) {
     double elapsed = difftime(now, gc_last_run_time);
-    if (elapsed >= 0.0 && elapsed < 5.0) return 0;
+    double cooldown;
+    if (js->brk > 128 * 1024 * 1024) cooldown = 5.0;
+    else if (js->brk > 64 * 1024 * 1024) cooldown = 10.0;
+    else if (js->brk > 16 * 1024 * 1024) cooldown = 15.0;
+    else cooldown = 30.0;
+    if (elapsed >= 0.0 && elapsed < cooldown) return 0;
   }
   
   mco_coro *running = mco_running();
   int in_coroutine = (running != NULL && running->stack_base != NULL);
   
-  if (in_coroutine || js_has_pending_coroutines()) return 0;
+  if (in_coroutine) return 0;
   if (now != (time_t)-1) gc_last_run_time = now;
   
   size_t old_brk = js->brk;
@@ -607,6 +612,28 @@ size_t js_gc_compact(ant_t *js) {
   free(mark_bits);
   work_free(&ctx.work);
   fwd_free(&ctx.fwd);
+  
+  if (gc_scratch_buf) {
+    gc_munmap(gc_scratch_buf, gc_scratch_size);
+    gc_scratch_buf = NULL;
+    gc_scratch_size = 0;
+  }
+  
+  size_t page_size = 4096;
+  size_t used_pages = (ctx.new_brk + page_size - 1) & ~(page_size - 1);
+  
+  if (js->size > used_pages) {
+    size_t release_size = js->size - used_pages;
+    void *release_start = js->mem + used_pages;
+    
+#ifdef _WIN32
+    VirtualFree(release_start, release_size, MEM_DECOMMIT);
+    VirtualAlloc(release_start, release_size, MEM_COMMIT, PAGE_READWRITE);
+#else
+    void *p = mmap(release_start, release_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0);
+    if (p == MAP_FAILED) madvise(release_start, release_size, MADV_DONTNEED);
+#endif
+  }
   
   return (old_brk > ctx.new_brk ? old_brk - ctx.new_brk : 0);
 }

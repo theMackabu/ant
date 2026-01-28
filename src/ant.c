@@ -1059,7 +1059,9 @@ void js_run_event_loop(struct js *js) {
     }
     
     if (!(work & WORK_BLOCKING) && (work & WORK_TIMERS)) {
-      if (js->gc_alloc_since > 256 * 1024 * 1024 || js->needs_gc) {
+      jsoff_t gc_thresh = js->brk / 2;
+      if (gc_thresh < 4 * 1024 * 1024) gc_thresh = 4 * 1024 * 1024;
+      if (js->gc_alloc_since > gc_thresh || js->needs_gc) {
         js->needs_gc = false;
         js_gc_compact(js);
         js->gc_alloc_since = 0;
@@ -2473,7 +2475,9 @@ static void js_track_allocation(struct js *js, size_t size) {
   js->brk += (jsoff_t) size;
   js->gc_alloc_since += (jsoff_t) size;
   
-  if (js->gc_alloc_since > 256 * 1024 * 1024) js->needs_gc = true;
+  jsoff_t threshold = js->brk / 2;
+  if (threshold < 4 * 1024 * 1024) threshold = 4 * 1024 * 1024;
+  if (js->gc_alloc_since > threshold) js->needs_gc = true;
 }
 
 static inline jsoff_t js_alloc(struct js *js, size_t size) {
@@ -22485,8 +22489,18 @@ struct js *js_create_dynamic(size_t initial_size, size_t max_size) {
   
   js->owns_mem = true;
   js->max_size = (jsoff_t) max_size;
+  
+  struct js *new_js = (struct js *)malloc(sizeof(struct js));
+  if (new_js == NULL) {
+    ant_arena_free(arena, max_size);
+    free(init_buf);
+    return NULL;
+  }
+  
+  memcpy(new_js, js, sizeof(struct js));
+  free(init_buf);
 
-  return js;
+  return new_js;
 }
 
 void js_destroy(struct js *js) {
@@ -22505,7 +22519,10 @@ void js_destroy(struct js *js) {
     js->for_let_stack = NULL;
   }
   
-  if (js->owns_mem) ant_arena_free(js->mem, js->max_size);
+  if (js->owns_mem) {
+    ant_arena_free(js->mem, js->max_size);
+    free(js);
+  }
 }
 
 inline double js_getnum(jsval_t value) { return tod(value); }
