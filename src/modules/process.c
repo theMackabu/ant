@@ -1676,22 +1676,22 @@ void init_process_module() {
   js_set(js, global, "process", process_obj);
 }
 
-#define GC_FWD_EVENTS(events) do { \
+#define GC_OP_EVENTS(events) do { \
   ProcessEventType *evt, *tmp; \
   HASH_ITER(hh, events, evt, tmp) { \
     for (int i = 0; i < evt->listener_count; i++) \
-      evt->listeners[i].listener = fwd_val(ctx, evt->listeners[i].listener); \
+      op_val(ctx, &evt->listeners[i].listener); \
   } \
 } while(0)
 
-void process_gc_update_roots(GC_FWD_ARGS) {
-  GC_FWD_EVENTS(process_events);
-  GC_FWD_EVENTS(stdin_events);
-  GC_FWD_EVENTS(stdout_events);
-  GC_FWD_EVENTS(stderr_events);
+void process_gc_update_roots(GC_OP_VAL_ARGS) {
+  GC_OP_EVENTS(process_events);
+  GC_OP_EVENTS(stdin_events);
+  GC_OP_EVENTS(stdout_events);
+  GC_OP_EVENTS(stderr_events);
 }
 
-#undef GC_FWD_EVENTS
+#undef GC_OP_EVENTS
 
 bool has_active_stdin(void) { 
   return stdin_state.reading; 

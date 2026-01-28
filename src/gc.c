@@ -339,7 +339,7 @@ static void gc_process_prop(gc_ctx_t *ctx, jsoff_t old_off) {
   
   jsoff_t header = gc_loadoff(ctx->js->mem, old_off);
   
-  jsoff_t next_prop = header & ~(3U | FLAGMASK);
+  jsoff_t next_prop = header & ~(3ULL | FLAGMASK);
   if (next_prop != 0 && next_prop < ctx->js->brk) {
     jsoff_t new_next = gc_reserve_prop(ctx, next_prop);
     jsoff_t new_header = (new_next & ~3ULL) | (header & (3ULL | FLAGMASK));
@@ -367,7 +367,7 @@ static void gc_process_object(gc_ctx_t *ctx, jsoff_t old_off) {
   
   jsoff_t header = gc_loadoff(ctx->js->mem, old_off);
   
-  jsoff_t first_prop = header & ~(3U | FLAGMASK);
+  jsoff_t first_prop = header & ~(3ULL | FLAGMASK);
   if (first_prop != 0 && first_prop < ctx->js->brk) {
     jsoff_t new_first = gc_reserve_prop(ctx, first_prop);
     jsoff_t new_header = (new_first & ~3ULL) | (header & (3ULL | FLAGMASK));

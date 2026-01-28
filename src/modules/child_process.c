@@ -1157,14 +1157,14 @@ void child_process_poll_events(void) {
   }
 }
 
-void child_process_gc_update_roots(GC_FWD_ARGS) {
+void child_process_gc_update_roots(GC_OP_VAL_ARGS) {
   for (child_process_t *cp = pending_children_head; cp; cp = cp->next) {
-    cp->child_obj = fwd_val(ctx, cp->child_obj);
-    cp->promise = fwd_val(ctx, cp->promise);
+    op_val(ctx, &cp->child_obj);
+    op_val(ctx, &cp->promise);
     
     child_event_t *evt, *tmp;
     HASH_ITER(hh, cp->events, evt, tmp) {
-      for (int i = 0; i < evt->count; i++) evt->listeners[i].callback = fwd_val(ctx, evt->listeners[i].callback);
+      for (int i = 0; i < evt->count; i++) op_val(ctx, &evt->listeners[i].callback);
     }
   }
 }

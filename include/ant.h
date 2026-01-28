@@ -30,9 +30,6 @@
 #define ANT_LIMIT_SIZE_CACHE 16384
 #define CORO_PER_TICK_LIMIT 10000
 
-#define GC_FWD_ARGS jsval_t (*fwd_val)(void *ctx, jsval_t old), void *ctx
-#define GC_UPDATE_ARGS ant_t *js, jsoff_t (*fwd_off)(void *ctx, jsoff_t old), GC_FWD_ARGS
-
 #define JS_DESC_W (1 << 0)
 #define JS_DESC_E (1 << 1)
 #define JS_DESC_C (1 << 2)

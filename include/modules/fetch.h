@@ -1,11 +1,11 @@
 #ifndef FETCH_H
 #define FETCH_H
 
-#include "ant.h"
+#include "gc.h"
 
 void init_fetch_module(void);
 void fetch_poll_events(void);
-void fetch_gc_update_roots(GC_FWD_ARGS);
+void fetch_gc_update_roots(GC_OP_VAL_ARGS);
 
 int has_pending_fetches(void);
 

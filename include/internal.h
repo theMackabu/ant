@@ -2,6 +2,7 @@
 #define ANT_INTERNAL_H
 
 #include "ant.h"
+#include "gc.h"
 
 struct for_let_ctx {
   const char *var_name;   // interned variable name

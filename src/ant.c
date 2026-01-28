@@ -22779,13 +22779,13 @@ static void gc_roots_common(gc_off_op_t op_off, gc_val_op_t op_val, gc_cb_ctx_t 
     op_val(c, &mod->default_export);
   }
 
-  timer_gc_update_roots(c->fwd_val, c->ctx);
-  ffi_gc_update_roots(c->fwd_val, c->ctx);
-  fetch_gc_update_roots(c->fwd_val, c->ctx);
-  fs_gc_update_roots(c->fwd_val, c->ctx);
-  child_process_gc_update_roots(c->fwd_val, c->ctx);
-  readline_gc_update_roots(c->fwd_val, c->ctx);
-  process_gc_update_roots(c->fwd_val, c->ctx);
+  timer_gc_update_roots(op_val, c);
+  ffi_gc_update_roots(op_val, c);
+  fetch_gc_update_roots(op_val, c);
+  fs_gc_update_roots(op_val, c);
+  child_process_gc_update_roots(op_val, c);
+  readline_gc_update_roots(op_val, c);
+  process_gc_update_roots(op_val, c);
 
   map_registry_entry_t *map_reg, *map_reg_tmp;
   HASH_ITER(hh, map_registry, map_reg, map_reg_tmp) {

@@ -13,6 +13,7 @@
 
 #include "arena.h"
 #include "errors.h"
+#include "internal.h"
 #include "runtime.h"
 #include "modules/timer.h"
 
@@ -365,14 +366,14 @@ void init_timer_module() {
   js_set(js, global, "queueMicrotask", js_mkfun(js_queue_microtask));
 }
 
-void timer_gc_update_roots(GC_FWD_ARGS) {
+void timer_gc_update_roots(GC_OP_VAL_ARGS) {
   for (timer_entry_t *t = timer_state.timers; t; t = t->next) {
-    t->callback = fwd_val(ctx, t->callback);
+    op_val(ctx, &t->callback);
   }
   for (microtask_entry_t *m = timer_state.microtasks; m; m = m->next) {
-    if (m->promise_id == 0) m->callback = fwd_val(ctx, m->callback);
+    if (m->promise_id == 0) op_val(ctx, &m->callback);
   }
   for (immediate_entry_t *i = timer_state.immediates; i; i = i->next) {
-    i->callback = fwd_val(ctx, i->callback);
+    op_val(ctx, &i->callback);
   }
 }

@@ -1258,19 +1258,19 @@ bool has_active_readline_interfaces(void) {
   return false;
 }
 
-void readline_gc_update_roots(GC_FWD_ARGS) {
+void readline_gc_update_roots(GC_OP_VAL_ARGS) {
   rl_interface_t *iface, *tmp;
   HASH_ITER(hh, interfaces, iface, tmp) {
-    iface->input_stream = fwd_val(ctx, iface->input_stream);
-    iface->output_stream = fwd_val(ctx, iface->output_stream);
-    iface->completer = fwd_val(ctx, iface->completer);
-    iface->js_obj = fwd_val(ctx, iface->js_obj);
-    iface->pending_question_resolve = fwd_val(ctx, iface->pending_question_resolve);
-    iface->pending_question_reject = fwd_val(ctx, iface->pending_question_reject);
+    op_val(ctx, &iface->input_stream);
+    op_val(ctx, &iface->output_stream);
+    op_val(ctx, &iface->completer);
+    op_val(ctx, &iface->js_obj);
+    op_val(ctx, &iface->pending_question_resolve);
+    op_val(ctx, &iface->pending_question_reject);
     
     RLEventType *evt, *evt_tmp;
     HASH_ITER(hh, iface->events, evt, evt_tmp) {
-      for (int i = 0; i < evt->listener_count; i++) evt->listeners[i].listener = fwd_val(ctx, evt->listeners[i].listener);
+      for (int i = 0; i < evt->listener_count; i++) op_val(ctx, &evt->listeners[i].listener);
     }
   }
 }

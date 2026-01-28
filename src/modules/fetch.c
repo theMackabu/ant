@@ -368,14 +368,14 @@ void fetch_poll_events(void) {
   }
 }
 
-void fetch_gc_update_roots(GC_FWD_ARGS) {
+void fetch_gc_update_roots(GC_OP_VAL_ARGS) {
   if (!pending_requests) return;
   unsigned int len = utarray_len(pending_requests);
   for (unsigned int i = 0; i < len; i++) {
     fetch_request_t **reqp = (fetch_request_t **)utarray_eltptr(pending_requests, i);
     if (reqp && *reqp) {
-      (*reqp)->promise = fwd_val(ctx, (*reqp)->promise);
-      (*reqp)->headers_obj = fwd_val(ctx, (*reqp)->headers_obj);
+      op_val(ctx, &(*reqp)->promise);
+      op_val(ctx, &(*reqp)->headers_obj);
     }
   }
 }
