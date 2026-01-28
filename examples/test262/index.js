@@ -57,6 +57,22 @@ let state = {
   searchQuery: ''
 };
 
+let fps = {
+  frames: 0,
+  lastTime: performance.now(),
+  current: 0,
+  update() {
+    this.frames++;
+    const now = performance.now();
+    const delta = now - this.lastTime;
+    if (delta >= 1000) {
+      this.current = Math.round((this.frames * 1000) / delta);
+      this.frames = 0;
+      this.lastTime = now;
+    }
+  }
+};
+
 function fmt(bytes) {
   if (bytes < 1024) return bytes + ' B';
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(2) + ' KB';
@@ -139,7 +155,7 @@ function buildScreen() {
     }
 
     lines.push('');
-    lines.push(`${c.dim}[${idx + 1}/${total}]${c.reset}`);
+    lines.push(`${c.dim}[${idx + 1}/${total}]${c.reset}  ${c.cyan}${fps.current} fps${c.reset}`);
   } else if (state.mode === 'stats') {
     const headerWidth = Math.min(cols, 68);
     lines.push(`${c.bold}${c.blue}${'═'.repeat(headerWidth)}${c.reset}`);
@@ -214,6 +230,7 @@ function buildScreen() {
 }
 
 function render() {
+  fps.update();
   const screen = buildScreen();
   process.stdout.write(`${term.syncStart}${term.hideCursor}${term.home}${screen}${term.syncEnd}`);
 }

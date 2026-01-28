@@ -1055,9 +1055,11 @@ void js_run_event_loop(struct js *js) {
     work = get_pending_work();
     
     if (work & (WORK_READLINE | WORK_STDIN)) {
-      uv_run(uv_default_loop(), UV_RUN_NOWAIT);
-      int64_t ms = has_pending_timers() ? get_next_timer_timeout() : 20;
-      if (ms > 20) ms = 20; if (ms > 0) usleep((useconds_t)(ms * 1000));
+      if (work & WORK_BLOCKING) uv_run(uv_default_loop(), UV_RUN_NOWAIT); else {
+        int64_t ms = has_pending_timers() ? get_next_timer_timeout() : 100;
+        if (ms > 100) ms = 100;
+        uv_run(uv_default_loop(), ms > 0 ? UV_RUN_ONCE : UV_RUN_NOWAIT);
+      }
     } else if (!(work & WORK_BLOCKING) && (work & WORK_TIMERS)) {
       jsoff_t gc_thresh = js->brk / 2;
       if (gc_thresh < 4 * 1024 * 1024) gc_thresh = 4 * 1024 * 1024;
