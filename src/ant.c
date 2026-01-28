@@ -21430,6 +21430,7 @@ ant_t *js_create(void *buf, size_t len) {
   js->errmsg_size = 4096;
   js->errmsg = (char *)malloc(js->errmsg_size);
   if (js->errmsg) js->errmsg[0] = '\0';
+  js->gc_suppress = true;
   
 #ifdef _WIN32
   js->stack_limit = 512 * 1024;

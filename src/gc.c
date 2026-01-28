@@ -514,11 +514,11 @@ size_t js_gc_compact(ant_t *js) {
   if (now != (time_t)-1 && gc_last_run_time != 0) {
     double elapsed = difftime(now, gc_last_run_time);
     double cooldown;
-    if (js->brk > 128 * 1024 * 1024) cooldown = 5.0;
-    else if (js->brk > 64 * 1024 * 1024) cooldown = 10.0;
-    else if (js->brk > 16 * 1024 * 1024) cooldown = 15.0;
-    else cooldown = 30.0;
-    if (elapsed >= 0.0 && elapsed < cooldown) return 0;
+    if (js->brk > 128 * 1024 * 1024) cooldown = 2.0;
+    else if (js->brk > 64 * 1024 * 1024) cooldown = 4.0;
+    else if (js->brk > 16 * 1024 * 1024) cooldown = 6.0;
+    else cooldown = 8.0;
+    if (elapsed >= 0.0 && elapsed < cooldown && js->gc_alloc_since < js->brk) return 0;
   }
   
   mco_coro *running = mco_running();
