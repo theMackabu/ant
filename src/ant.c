@@ -10416,22 +10416,27 @@ static jsval_t for_of_iter_array(struct js *js, for_iter_ctx_t *ctx, jsval_t ite
 
 static jsval_t for_of_iter_string(struct js *js, for_iter_ctx_t *ctx, jsval_t iterable) {
   jshdl_t h_iterable = js_root(js, iterable);
-  jsoff_t byte_len;
-  jsoff_t soff = vstr(js, iterable, &byte_len);
+  size_t byte_pos = 0;
   
-  const char *str = (char *) &js->mem[soff];
-  size_t utf16_len = utf16_strlen(str, byte_len);
-  
-  for (size_t i = 0; i < utf16_len; i++) {
+  for (;;) {
     jsval_t cur = js_deref(js, h_iterable);
     jsoff_t cur_byte_len;
     jsoff_t cur_soff = vstr(js, cur, &cur_byte_len);
-    const char *cur_str = (char *) &js->mem[cur_soff];
     
+    if (byte_pos >= cur_byte_len) break;
+    
+    const char *cur_str = (char *) &js->mem[cur_soff];
+    unsigned char c = (unsigned char)cur_str[byte_pos];
     size_t char_bytes;
-    int byte_offset = utf16_index_to_byte_offset(cur_str, cur_byte_len, i, &char_bytes);
-    if (byte_offset < 0) break;
-    jsval_t char_str = js_mkstr(js, cur_str + byte_offset, char_bytes);
+    if (c < 0x80) char_bytes = 1;
+    else if ((c & 0xE0) == 0xC0) char_bytes = 2;
+    else if ((c & 0xF0) == 0xE0) char_bytes = 3;
+    else if ((c & 0xF8) == 0xF0) char_bytes = 4;
+    else char_bytes = 1;
+    
+    if (byte_pos + char_bytes > cur_byte_len) char_bytes = cur_byte_len - byte_pos;
+    jsval_t char_str = js_mkstr(js, cur_str + byte_pos, char_bytes);
+    byte_pos += char_bytes;
     
     jsval_t err = for_iter_bind_var(js, ctx, char_str);
     if (is_err(err)) { js_unroot(js, h_iterable); return err; }

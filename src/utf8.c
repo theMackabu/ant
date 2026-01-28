@@ -37,14 +37,17 @@ uint32_t utf8_decode(const unsigned char *buf, size_t len, int *seq_len) {
   
   if (first < 0x80) { *seq_len = 1; return first; }
   if ((first & 0xE0) == 0xC0 && len >= 2) {
+    if ((buf[1] & 0xC0) != 0x80) { *seq_len = 1; return 0xFFFD; }
     *seq_len = 2;
     return ((first & 0x1F) << 6) | (buf[1] & 0x3F);
   }
   if ((first & 0xF0) == 0xE0 && len >= 3) {
+    if ((buf[1] & 0xC0) != 0x80 || (buf[2] & 0xC0) != 0x80) { *seq_len = 1; return 0xFFFD; }
     *seq_len = 3;
     return ((first & 0x0F) << 12) | ((buf[1] & 0x3F) << 6) | (buf[2] & 0x3F);
   }
   if ((first & 0xF8) == 0xF0 && len >= 4) {
+    if ((buf[1] & 0xC0) != 0x80 || (buf[2] & 0xC0) != 0x80 || (buf[3] & 0xC0) != 0x80) { *seq_len = 1; return 0xFFFD; }
     *seq_len = 4;
     return ((first & 0x07) << 18) | ((buf[1] & 0x3F) << 12) | ((buf[2] & 0x3F) << 6) | (buf[3] & 0x3F);
   }
@@ -58,8 +61,10 @@ size_t utf8_strlen(const char *str, size_t byte_len) {
   const unsigned char *p = (const unsigned char *)str;
   const unsigned char *end = p + byte_len;
   while (p < end) {
-    if ((*p & 0xC0) != 0x80) count++;
-    p++;
+    int seq_len = utf8_sequence_length(*p);
+    if (seq_len <= 0 || (size_t)seq_len > (size_t)(end - p)) {
+      count++; p++;
+    } else { count++; p += seq_len; }
   }
   return count;
 }
@@ -71,10 +76,8 @@ size_t utf16_strlen(const char *str, size_t byte_len) {
   while (p < end) {
     unsigned char c = *p;
     if ((c & 0xC0) != 0x80) {
-      count++;
-      if ((c & 0xF8) == 0xF0) count++;
-    }
-    p++;
+      count++; if ((c & 0xF8) == 0xF0) count++;
+    } p++;
   }
   return count;
 }
@@ -99,7 +102,13 @@ int utf16_index_to_byte_offset(
     if (p > end) p = end;
   }
   
-  if (p >= end) return -1;
+  if (p >= end) {
+    if (utf16_pos == utf16_idx) {
+      if (out_char_bytes) *out_char_bytes = 0;
+      return (int)byte_len;
+    }
+    return -1;
+  }
   
   unsigned char c = *p;
   size_t slen = (c < 0x80) ? 1 : ((c & 0xE0) == 0xC0) ? 2 : ((c & 0xF0) == 0xE0) ? 3 : ((c & 0xF8) == 0xF0) ? 4 : 1;
