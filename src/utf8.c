@@ -1,4 +1,5 @@
 #include "utf8.h"
+#include <string.h>
 
 int utf8_sequence_length(unsigned char first_byte) {
   if ((first_byte & 0x80) == 0) return 1;
@@ -70,14 +71,31 @@ size_t utf8_strlen(const char *str, size_t byte_len) {
 }
 
 size_t utf16_strlen(const char *str, size_t byte_len) {
-  size_t count = 0;
   const unsigned char *p = (const unsigned char *)str;
   const unsigned char *end = p + byte_len;
+  
+  // Fast path: check if string is ASCII-only (very common case)
+  size_t i = 0;
+  for (; i + 8 <= byte_len; i += 8) {
+    uint64_t chunk;
+    memcpy(&chunk, p + i, 8);
+    if (chunk & 0x8080808080808080ULL) goto slow_path;
+  }
+  for (; i < byte_len; i++) {
+    if (p[i] & 0x80) goto slow_path;
+  }
+  return byte_len;  // All ASCII: UTF-16 length == byte length
+  
+slow_path:;
+  size_t count = i;  // ASCII chars counted before first non-ASCII
+  p += i;
   while (p < end) {
     unsigned char c = *p;
     if ((c & 0xC0) != 0x80) {
-      count++; if ((c & 0xF8) == 0xF0) count++;
-    } p++;
+      count++;
+      if ((c & 0xF8) == 0xF0) count++;  // 4-byte UTF-8 = 2 UTF-16 units
+    }
+    p++;
   }
   return count;
 }

@@ -65,6 +65,9 @@ struct js {
   jsval_t *gc_roots;
   int gc_roots_len;
   int gc_roots_cap;
+  
+  jsval_t ascii_char_cache[128];
+  bool ascii_cache_init;
 };
 
 enum {

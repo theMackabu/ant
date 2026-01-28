@@ -10414,9 +10414,20 @@ static jsval_t for_of_iter_array(struct js *js, for_iter_ctx_t *ctx, jsval_t ite
   return js_mkundef();
 }
 
+static void init_ascii_cache(struct js *js) {
+  if (js->ascii_cache_init) return;
+  for (int i = 0; i < 128; i++) {
+    char c = (char)i;
+    js->ascii_char_cache[i] = js_mkstr(js, &c, 1);
+  }
+  js->ascii_cache_init = true;
+}
+
 static jsval_t for_of_iter_string(struct js *js, for_iter_ctx_t *ctx, jsval_t iterable) {
   jshdl_t h_iterable = js_root(js, iterable);
   size_t byte_pos = 0;
+  
+  if (!js->ascii_cache_init) init_ascii_cache(js);
   
   for (;;) {
     jsval_t cur = js_deref(js, h_iterable);
@@ -10428,15 +10439,16 @@ static jsval_t for_of_iter_string(struct js *js, for_iter_ctx_t *ctx, jsval_t it
     const char *cur_str = (char *) &js->mem[cur_soff];
     unsigned char c = (unsigned char)cur_str[byte_pos];
     size_t char_bytes;
-    if (c < 0x80) char_bytes = 1;
-    else if ((c & 0xE0) == 0xC0) char_bytes = 2;
-    else if ((c & 0xF0) == 0xE0) char_bytes = 3;
-    else if ((c & 0xF8) == 0xF0) char_bytes = 4;
-    else char_bytes = 1;
+    jsval_t char_str;
     
-    if (byte_pos + char_bytes > cur_byte_len) char_bytes = cur_byte_len - byte_pos;
-    jsval_t char_str = js_mkstr(js, cur_str + byte_pos, char_bytes);
-    byte_pos += char_bytes;
+    if (c < 0x80) { char_bytes = 1; char_str = js->ascii_char_cache[c]; } else {
+      if ((c & 0xE0) == 0xC0) char_bytes = 2;
+      else if ((c & 0xF0) == 0xE0) char_bytes = 3;
+      else if ((c & 0xF8) == 0xF0) char_bytes = 4;
+      else char_bytes = 1;
+      if (byte_pos + char_bytes > cur_byte_len) char_bytes = cur_byte_len - byte_pos;
+      char_str = js_mkstr(js, cur_str + byte_pos, char_bytes);
+    } byte_pos += char_bytes;
     
     jsval_t err = for_iter_bind_var(js, ctx, char_str);
     if (is_err(err)) { js_unroot(js, h_iterable); return err; }
@@ -22823,6 +22835,7 @@ static void gc_roots_common(gc_off_op_t op_off, gc_val_op_t op_val, gc_cb_ctx_t 
   }
   
   for (int i = 0; i < c->js->gc_roots_len; i++) op_val(c, &c->js->gc_roots[i]);
+  if (c->js->ascii_cache_init) for (int i = 0; i < 128; i++) op_val(c, &c->js->ascii_char_cache[i]);
 }
 
 void js_gc_reserve_roots(GC_UPDATE_ARGS) {
