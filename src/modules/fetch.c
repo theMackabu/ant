@@ -35,6 +35,9 @@ typedef struct fetch_request_s {
   int failed;
   char *error_msg;
   jsval_t headers_obj;
+  char *method;
+  char *body;
+  size_t body_len;
 } fetch_request_t;
 
 static uv_loop_t *fetch_loop = NULL;
@@ -45,6 +48,8 @@ static void free_fetch_request(fetch_request_t *req) {
   
   if (req->response_buffer.data) free(req->response_buffer.data);
   if (req->error_msg) free(req->error_msg);
+  if (req->method) free(req->method);
+  if (req->body) free(req->body);
   
   free(req);
 }
@@ -267,26 +272,30 @@ static jsval_t do_fetch_microtask(struct js *js, jsval_t *args, int nargs) {
   
   req->http_client.data = req;
   
-  char *method = "GET";
-  char *body = NULL;
-  size_t body_len = 0;
+  req->method = NULL;
+  req->body = NULL;
+  req->body_len = 0;
   
-  int options_type = vtype(options_val);
   if (is_special_object(options_val)) {
     jsval_t method_val = js_get(js, options_val, "method");
     if (vtype(method_val) == T_STR) {
-      char *method_str = js_getstr(js, method_val, NULL);
-      if (method_str) method = method_str;
+      char *str = js_getstr(js, method_val, NULL);
+      if (str) req->method = strdup(str);
     }
     
     jsval_t body_val = js_get(js, options_val, "body");
     if (vtype(body_val) == T_STR) {
-      body = js_getstr(js, body_val, NULL);
-      if (body) body_len = strlen(body);
+      size_t len;
+      char *str = js_getstr(js, body_val, &len);
+      if (str) {
+        req->body = memcpy(malloc(len), str, len);
+        req->body_len = len;
+      }
     }
   }
   
-  req->http_req = tlsuv_http_req(&req->http_client, method, path, resp_cb, req);
+  if (!req->method) req->method = strdup("GET");
+  req->http_req = tlsuv_http_req(&req->http_client, req->method, path, resp_cb, req);
   
   if (!req->http_req) {
     jsval_t err = js_mkstr(js, "Failed to create HTTP request", 30);
@@ -303,7 +312,7 @@ static jsval_t do_fetch_microtask(struct js *js, jsval_t *args, int nargs) {
   snprintf(user_agent, sizeof(user_agent), "ant/%s", ANT_VERSION);
   tlsuv_http_req_header(req->http_req, "User-Agent", user_agent);
   
-  if ((TYPE_FLAG(options_type) & T_SPECIAL_OBJECT_MASK) != 0) {
+  if (is_special_object(options_val)) {
     jsval_t headers_val = js_get(js, options_val, "headers");
     if (is_special_object(headers_val)) {
       ant_iter_t iter = js_prop_iter_begin(js, headers_val);
@@ -322,8 +331,8 @@ static jsval_t do_fetch_microtask(struct js *js, jsval_t *args, int nargs) {
     }
   }
   
-  if (body && body_len > 0) {
-    tlsuv_http_req_data(req->http_req, body, body_len, body_cb);
+  if (req->body && req->body_len > 0) {
+    tlsuv_http_req_data(req->http_req, req->body, req->body_len, body_cb);
   }
   
   return js_mkundef();
