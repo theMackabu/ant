@@ -255,6 +255,27 @@ jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t code_le
   return promise;
 }
 
+static inline void settle_coroutine(coroutine_t *coro, jsval_t *args, int nargs, bool is_error) {
+  coro->result = nargs > 0 ? args[0] : js_mkundef();
+  coro->is_settled = true;
+  coro->is_error = is_error;
+  coro->is_ready = true;
+}
+
+static void resume_coroutine_if_suspended(struct js *js, coroutine_t *coro) {
+  if (!coro || !coro->mco || mco_status(coro->mco) != MCO_SUSPENDED) return;
+
+  remove_coroutine(coro);
+  coro_saved_state_t saved = coro_enter(js, coro);
+  mco_result res = mco_resume(coro->mco);
+  coro_leave(js, coro, saved);
+
+  if (res == MCO_SUCCESS && mco_status(coro->mco) != MCO_DEAD) {
+    coro->is_ready = false;
+    enqueue_coroutine(coro);
+  } else free_coroutine(coro);
+}
+
 jsval_t resume_coroutine_wrapper(struct js *js, jsval_t *args, int nargs) {
   jsval_t me = js->current_func;
   jsval_t coro_val = js_get_slot(js, me, SLOT_CORO);
@@ -262,12 +283,10 @@ jsval_t resume_coroutine_wrapper(struct js *js, jsval_t *args, int nargs) {
   
   coroutine_t *coro = (coroutine_t *)(uintptr_t)tod(coro_val);
   if (!coro) return js_mkundef();
-  
-  coro->result = nargs > 0 ? args[0] : js_mkundef();
-  coro->is_settled = true;
-  coro->is_error = false;
-  coro->is_ready = true;
-  
+
+  settle_coroutine(coro, args, nargs, false);
+  resume_coroutine_if_suspended(js, coro);
+
   return js_mkundef();
 }
 
@@ -279,11 +298,9 @@ jsval_t reject_coroutine_wrapper(struct js *js, jsval_t *args, int nargs) {
   
   coroutine_t *coro = (coroutine_t *)(uintptr_t)tod(coro_val);
   if (!coro) return js_mkundef();
-  
-  coro->result = nargs > 0 ? args[0] : js_mkundef();
-  coro->is_settled = true;
-  coro->is_error = true;
-  coro->is_ready = true;
-  
+
+  settle_coroutine(coro, args, nargs, true);
+  resume_coroutine_if_suspended(js, coro);
+
   return js_mkundef();
 }
