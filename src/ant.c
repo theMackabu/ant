@@ -273,6 +273,7 @@ typedef struct parsed_func {
   int param_count;
   bool has_rest;
   bool is_strict;
+  bool is_expr;
   jsoff_t rest_param_start;
   jsoff_t rest_param_len;
   UT_array *params;
@@ -5749,10 +5750,12 @@ static parsed_func_t *get_or_parse_func(const char *fn, jsoff_t fnlen) {
   
   if (fnpos < fnlen && fn[fnpos] == ')') fnpos++;
   fnpos = skiptonext(fn, fnlen, fnpos, NULL);
-  if (fnpos < fnlen && fn[fnpos] == '{') fnpos++;
+  bool is_block = (fnpos < fnlen && fn[fnpos] == '{');
+  if (is_block) fnpos++;
   
   pf->body_start = fnpos;
-  pf->body_len = (fnlen > fnpos + 1) ? (fnlen - fnpos - 1) : 0;
+  pf->body_len = (fnlen > fnpos) ? (fnlen - fnpos - (is_block ? 1 : 0)) : 0;
+  pf->is_expr = !is_block;
   pf->is_strict = is_strict_function_body(&fn[fnpos], pf->body_len);
   
   HASH_ADD(hh, func_parse_cache, code_hash, sizeof(pf->code_hash), pf);
@@ -5981,10 +5984,15 @@ jsval_t call_js_internal(
   } else js->this_val = target_this;
   
   js->flags = F_CALL | (func_strict ? F_STRICT : 0);
-  jsval_t res = js_eval(js, &fn[pf->body_start], pf->body_len);
+  jsval_t res;
+  if (pf->is_expr) {
+    res = js_eval_str(js, &fn[pf->body_start], pf->body_len);
+    res = resolveprop(js, res);
+  } else {
+    res = js_eval(js, &fn[pf->body_start], pf->body_len);
+    if (!is_err(res) && !(js->flags & F_RETURN)) res = js_mkundef();
+  }
   js->skip_func_hoist = false;
-  
-  if (!is_err(res) && !(js->flags & F_RETURN)) res = js_mkundef();
   if (global_scope_stack && utarray_len(global_scope_stack) > 0)  utarray_pop_back(global_scope_stack);
   
   utarray_free(args_arr);
@@ -6209,9 +6217,12 @@ jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnlen, jsv
   
   if (fnpos < fnlen && fn[fnpos] == ')') fnpos++;
   fnpos = skiptonext(fn, fnlen, fnpos, NULL);
+  
   if (fnpos >= fnlen) return js_mkerr(js, "unexpected end of function");
-  if (fn[fnpos] == '{') fnpos++;
-  jsoff_t body_len = fnlen - fnpos - 1;
+  bool is_block = (fn[fnpos] == '{');
+  
+  if (is_block) fnpos++;
+  jsoff_t body_len = fnlen - fnpos - (is_block ? 1 : 0);
   
   bool func_strict = is_strict_function_body(&fn[fnpos], body_len);
   if (code_uses_arguments(&fn[fnpos], body_len)) {
@@ -6229,8 +6240,14 @@ jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnlen, jsv
   }
   js->flags = F_CALL | (func_strict ? F_STRICT : 0);
   
-  jsval_t res = js_eval(js, &fn[fnpos], body_len);
-  if (!is_err(res) && !(js->flags & F_RETURN)) res = js_mkundef();
+  jsval_t res;
+  if (!is_block) {
+    res = js_eval_str(js, &fn[fnpos], body_len);
+    res = resolveprop(js, res);
+  } else {
+    res = js_eval(js, &fn[fnpos], body_len);
+    if (!is_err(res) && !(js->flags & F_RETURN)) res = js_mkundef();
+  }
   
   js->this_val = saved_this;
   if (global_scope_stack && utarray_len(global_scope_stack) > 0) utarray_pop_back(global_scope_stack);
@@ -7985,28 +8002,16 @@ static jsval_t js_literal(struct js *js) {
             } else body_end = js->pos;
           }
           js->flags = flags;
-          size_t fn_size = id_len + (body_end - body_start) + 64;
-          char *fn_str = (char *) malloc(fn_size);
+          size_t body_len = body_end - body_start;
+          size_t param_len = id_len + 2;
+          size_t fn_len = param_len + body_len;
+          char *fn_str = (char *) malloc(fn_len + 1);
           if (!fn_str) return js_mkerr(js, "oom");
-          jsoff_t fn_pos = 0;
-          memcpy(fn_str + fn_pos, param_buf, id_len + 2);
-          fn_pos += id_len + 2;
-          if (is_expr) {
-            fn_str[fn_pos++] = '{';
-            memcpy(fn_str + fn_pos, "return ", 7);
-            fn_pos += 7;
-            size_t body_len = body_end - body_start;
-            memcpy(fn_str + fn_pos, &js->code[body_start], body_len);
-            fn_pos += body_len;
-            fn_str[fn_pos++] = '}';
-          } else {
-            size_t body_len = body_end - body_start;
-            memcpy(fn_str + fn_pos, &js->code[body_start], body_len);
-            fn_pos += body_len;
-          }
+          memcpy(fn_str, param_buf, param_len);
+          memcpy(fn_str + param_len, &js->code[body_start], body_len);
           jsval_t func_obj = mkobj(js, 0);
           if (is_err(func_obj)) { free(fn_str); return func_obj; }
-          set_func_code(js, func_obj, fn_str, fn_pos);
+          set_func_code(js, func_obj, fn_str, fn_len);
           free(fn_str);
           set_slot(js, func_obj, SLOT_ASYNC, js_true);
           set_slot(js, func_obj, SLOT_ARROW, js_true);
@@ -8130,34 +8135,20 @@ static jsval_t js_arrow_func(struct js *js, jsoff_t params_start, jsoff_t params
   
   js->flags = flags;
   
-  size_t fn_size = (params_end - params_start) + (body_end_actual - body_start) + 32;
-  char *fn_str = (char *) malloc(fn_size);
+  size_t param_len = params_end - params_start;
+  size_t body_len = body_end_actual - body_start;
+  size_t fn_len = param_len + body_len;
+  
+  char *fn_str = (char *) malloc(fn_len + 1);
   if (!fn_str) return js_mkerr(js, "oom");
   
-  jsoff_t fn_pos = 0;
-  
-  size_t param_len = params_end - params_start;
-  memcpy(fn_str + fn_pos, &js->code[params_start], param_len);
-  fn_pos += param_len;
-
-  if (is_expr) {
-    fn_str[fn_pos++] = '{';
-    memcpy(fn_str + fn_pos, "return ", 7);
-    fn_pos += 7;
-    size_t body_len = body_end_actual - body_start;
-    memcpy(fn_str + fn_pos, &js->code[body_start], body_len);
-    fn_pos += body_len;
-    fn_str[fn_pos++] = '}';
-  } else {
-    size_t body_len = body_end_actual - body_start;
-    memcpy(fn_str + fn_pos, &js->code[body_start], body_len);
-    fn_pos += body_len;
-  }
+  memcpy(fn_str, &js->code[params_start], param_len);
+  memcpy(fn_str + param_len, &js->code[body_start], body_len);
 
   jsval_t func_obj = mkobj(js, 0);
   if (is_err(func_obj)) { free(fn_str); return func_obj; }
   
-  set_func_code(js, func_obj, fn_str, fn_pos);
+  set_func_code(js, func_obj, fn_str, fn_len);
   free(fn_str);
   
   if (is_async) {
@@ -8765,7 +8756,8 @@ static jsval_t js_unary(struct js *js) {
     jsval_t then_args[] = { mkval(T_FUNC, vdata(resume_obj)), mkval(T_FUNC, vdata(reject_obj)) };
     jsval_t saved_this = js->this_val;
     js->this_val = resolved;
-    (void)builtin_promise_then(js, then_args, 2);
+    
+    builtin_promise_then(js, then_args, 2);
     js->this_val = saved_this;
 
     js_parse_state_t saved;
@@ -9004,31 +8996,20 @@ static jsval_t js_assignment(struct js *js) {
       body_end = is_body_end_tok(tok) ? js->toff : js->pos;
     } else body_end = js->pos;
 
-    size_t fn_size = param_len + (body_end - body_start) + 64;
-    char *fn_str = (char *) malloc(fn_size);
+    size_t params_len = param_len + 2;
+    size_t body_len = body_end - body_start;
+    size_t fn_len = params_len + body_len;
+    
+    char *fn_str = (char *) malloc(fn_len + 1);
     if (!fn_str) return js_mkerr(js, "oom");
-
-    jsoff_t fn_pos = 0;
-    memcpy(fn_str + fn_pos, param_buf, param_len + 2);
-    fn_pos += param_len + 2;
-
-    if (is_expr) {
-      fn_str[fn_pos++] = '{';
-      memcpy(fn_str + fn_pos, "return ", 7);
-      fn_pos += 7;
-      size_t body_len = body_end - body_start;
-      memcpy(fn_str + fn_pos, &js->code[body_start], body_len);
-      fn_pos += body_len;
-      fn_str[fn_pos++] = '}';
-    } else {
-      size_t body_len = body_end - body_start;
-      memcpy(fn_str + fn_pos, &js->code[body_start], body_len);
-      fn_pos += body_len;
-    }
+    
+    memcpy(fn_str, param_buf, params_len);
+    memcpy(fn_str + params_len, &js->code[body_start], body_len);
     
     jsval_t func_obj = mkobj(js, 0);
     if (is_err(func_obj)) { free(fn_str); return func_obj; }
-    set_func_code(js, func_obj, fn_str, fn_pos);
+    
+    set_func_code(js, func_obj, fn_str, fn_len);
     free(fn_str);
     
     jsval_t func_proto = get_slot(js, js_glob(js), SLOT_FUNC_PROTO);
@@ -9041,6 +9022,7 @@ static jsval_t js_assignment(struct js *js) {
       set_slot(js, func_obj, SLOT_THIS, js->this_val);
     }
     
+    set_slot(js, func_obj, SLOT_ARROW, js_true);
     return mkval(T_FUNC, (unsigned long) vdata(func_obj));
   }
   
@@ -12352,32 +12334,21 @@ static jsval_t builtin_function_toString(struct js *js, jsval_t *args, int nargs
       bool is_arrow = (arrow_slot == js_true);
       
       if (is_arrow) {
-        const char *brace = memchr(code, '{', code_len);
-        if (!brace) goto fallback_arrow;
+        const char *paren_end = memchr(code, ')', code_len);
+        if (!paren_end) goto fallback_arrow;
         
-        size_t params_len = brace - code;
-        const char *body_start = brace + 1;
-        size_t body_len = code_len - params_len - 1;
-        bool is_expr = (body_len >= 7 && memcmp(body_start, "return ", 7) == 0);
+        size_t params_len = paren_end - code + 1;
+        const char *body = paren_end + 1;
+        size_t body_len = code_len - params_len;
         
-        size_t total = (is_async ? 6 : 0) + params_len + 4 + body_len + 2;
-        char *buf = ant_calloc(total + 1);
+        size_t len = (is_async ? 6 : 0) + params_len + 4 + body_len + 1;
+        char *buf = ant_calloc(len);
         size_t n = 0;
         
-        if (is_async) n += cpy(buf + n, total - n, "async ", 6);
-        n += cpy(buf + n, total - n, code, params_len);
-        n += cpy(buf + n, total - n, " => ", 4);
-        
-        if (is_expr) {
-          const char *expr = body_start + 7;
-          size_t expr_len = body_len - 7;
-          while (expr_len > 0 && (expr[expr_len-1] == ' ' || expr[expr_len-1] == '}' || expr[expr_len-1] == ')')) expr_len--;
-          n += cpy(buf + n, total - n, expr, expr_len);
-        } else {
-          size_t block_len = code_len - params_len;
-          while (block_len > 0 && brace[block_len-1] == ')') block_len--;
-          n += cpy(buf + n, total - n, brace, block_len);
-        }
+        if (is_async) n += cpy(buf + n, REMAIN(n, len), "async ", 6);
+        n += cpy(buf + n, REMAIN(n, len), code, params_len);
+        n += cpy(buf + n, REMAIN(n, len), " => ", 4);
+        n += cpy(buf + n, REMAIN(n, len), body, body_len);
         
         jsval_t result = js_mkstr(js, buf, n);
         free(buf);
@@ -22725,8 +22696,15 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
     uint8_t caller_flags = js->flags;
     
     js->flags = F_CALL | (pf->is_strict ? F_STRICT : 0);
-    jsval_t res = js_eval(js, &fn[pf->body_start], pf->body_len);
-    if (!is_err(res) && !(js->flags & F_RETURN)) res = js_mkundef();
+    jsval_t res;
+    
+    if (pf->is_expr) {
+      res = js_eval_str(js, &fn[pf->body_start], pf->body_len);
+      res = resolveprop(js, res);
+    } else {
+      res = js_eval(js, &fn[pf->body_start], pf->body_len);
+      if (!is_err(res) && !(js->flags & F_RETURN)) res = js_mkundef();
+    }
     
     JS_RESTORE_STATE(js, saved_state);
     js->flags = caller_flags;

@@ -15,6 +15,8 @@
 typedef struct timer_entry {
   uv_timer_t handle;
   jsval_t callback;
+  jsval_t *args;
+  int nargs;
   int timer_id;
   int active;
   int is_interval;
@@ -62,6 +64,16 @@ static void remove_timer_entry(timer_entry_t *entry) {
   if (entry->next) entry->next->prev = entry->prev;
 }
 
+static int timer_copy_args(timer_entry_t *entry, jsval_t *args, int nargs) {
+  entry->nargs = nargs > 2 ? nargs - 2 : 0;
+  if (entry->nargs > 0) {
+    entry->args = ant_calloc(sizeof(jsval_t) * entry->nargs);
+    if (!entry->args) return -1;
+    memcpy(entry->args, args + 2, sizeof(jsval_t) * entry->nargs);
+  } else entry->args = NULL;
+  return 0;
+}
+
 static void timer_close_cb(uv_handle_t *h) {
   timer_entry_t *entry = (timer_entry_t *)h->data;
   if (!entry) return;
@@ -72,6 +84,7 @@ static void timer_close_cb(uv_handle_t *h) {
   entry->prev = NULL;
   h->data = NULL;
   
+  if (entry->args) free(entry->args);
   free(entry);
 }
 
@@ -80,8 +93,7 @@ static void timer_callback(uv_timer_t *handle) {
   if (!entry || !entry->active) return;
   
   struct js *js = timer_state.js;
-  jsval_t args[0];
-  js_call(js, entry->callback, args, 0);
+  js_call(js, entry->callback, entry->args, entry->nargs);
   process_microtasks(js);
   
   if (!entry->is_interval) {
@@ -91,7 +103,7 @@ static void timer_callback(uv_timer_t *handle) {
   }
 }
 
-// setTimeout(callback, delay)
+// setTimeout(callback, delay, ...args)
 static jsval_t js_set_timeout(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 2) {
     return js_mkerr(js, "setTimeout requires 2 arguments (callback, delay)");
@@ -103,6 +115,11 @@ static jsval_t js_set_timeout(struct js *js, jsval_t *args, int nargs) {
   
   timer_entry_t *entry = ant_calloc(sizeof(timer_entry_t));
   if (entry == NULL) return js_mkerr(js, "failed to allocate timer");
+  
+  if (timer_copy_args(entry, args, nargs) < 0) {
+    free(entry);
+    return js_mkerr(js, "failed to allocate timer args");
+  }
   
   uv_timer_init(uv_default_loop(), &entry->handle);
   entry->handle.data = entry;
@@ -118,7 +135,7 @@ static jsval_t js_set_timeout(struct js *js, jsval_t *args, int nargs) {
   return js_mknum((double)entry->timer_id);
 }
 
-// setInterval(callback, delay)
+// setInterval(callback, delay, ...args)
 static jsval_t js_set_interval(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 2) {
     return js_mkerr(js, "setInterval requires 2 arguments (callback, delay)");
@@ -130,6 +147,11 @@ static jsval_t js_set_interval(struct js *js, jsval_t *args, int nargs) {
   
   timer_entry_t *entry = ant_calloc(sizeof(timer_entry_t));
   if (entry == NULL) return js_mkerr(js, "failed to allocate timer");
+  
+  if (timer_copy_args(entry, args, nargs) < 0) {
+    free(entry);
+    return js_mkerr(js, "failed to allocate timer args");
+  }
   
   uv_timer_init(uv_default_loop(), &entry->handle);
   entry->handle.data = entry;
