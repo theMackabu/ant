@@ -72,14 +72,14 @@ static jsval_t iterator_next(struct js *js, jsval_t *args, int nargs) {
   jsval_t result = js_mkobj(js);
   
   if (idx >= len) {
-    js_set(js, result, "done", js_mktrue());
+    js_set(js, result, "done", js_true);
     js_set(js, result, "value", js_mkundef());
   } else {
     char idxstr[16];
     snprintf(idxstr, sizeof(idxstr), "%d", idx);
     jsval_t value = js_get(js, arr, idxstr);
     js_set(js, result, "value", value);
-    js_set(js, result, "done", js_mkfalse());
+    js_set(js, result, "done", js_false);
     js_set(js, this_val, "__idx", js_mknum(idx + 1));
   }
   
@@ -116,13 +116,13 @@ static jsval_t string_iterator_next(struct js *js, jsval_t *args, int nargs) {
   jsval_t result = js_mkobj(js);
   
   if (idx >= len) {
-    js_set(js, result, "done", js_mktrue());
+    js_set(js, result, "done", js_true);
     js_set(js, result, "value", js_mkundef());
   } else {
     char *s = js_getstr(js, str, NULL);
     char ch[2] = {s[idx], 0};
     js_set(js, result, "value", js_mkstr(js, ch, 1));
-    js_set(js, result, "done", js_mkfalse());
+    js_set(js, result, "done", js_false);
     js_set(js, this_val, "__idx", js_mknum(idx + 1));
   }
   

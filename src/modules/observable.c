@@ -45,7 +45,7 @@ static jsval_t js_subscription_get_closed(struct js *js, jsval_t *args, int narg
   if (!is_special_object(subscription)) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Subscription.closed getter called on non-object");
   }
-  return subscription_closed(js, subscription) ? js_mktrue() : js_mkfalse();
+  return js_bool(subscription_closed(js, subscription));
 }
 
 static jsval_t js_subscription_unsubscribe(struct js *js, jsval_t *args, int nargs) {
@@ -83,7 +83,7 @@ static jsval_t js_subobs_get_closed(struct js *js, jsval_t *args, int nargs) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid SubscriptionObserver");
   }
   
-  return subscription_closed(js, subscription) ? js_mktrue() : js_mkfalse();
+  return js_bool(subscription_closed(js, subscription));
 }
 
 static jsval_t js_subobs_next(struct js *js, jsval_t *args, int nargs) {

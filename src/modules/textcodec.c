@@ -127,8 +127,8 @@ static jsval_t js_textdecoder_constructor(struct js *js, jsval_t *args, int narg
   
   jsval_t obj = js_mkobj(js);
   js_set(js, obj, "encoding", js_mkstr(js, encoding, encoding_len));
-  js_set(js, obj, "fatal", js_mkfalse());
-  js_set(js, obj, "ignoreBOM", js_mkfalse());
+  js_set(js, obj, "fatal", js_false);
+  js_set(js, obj, "ignoreBOM", js_false);
   js_set(js, obj, "decode", js_mkfun(js_textdecoder_decode));
   js_set(js, obj, get_toStringTag_sym_key(), js_mkstr(js, "TextDecoder", 11));
   
@@ -153,8 +153,8 @@ void init_textcodec_module(void) {
   
   js_set(js, textdecoder_proto, "decode", js_mkfun(js_textdecoder_decode));
   js_set(js, textdecoder_proto, "encoding", js_mkstr(js, "utf-8", 5));
-  js_set(js, textdecoder_proto, "fatal", js_mkfalse());
-  js_set(js, textdecoder_proto, "ignoreBOM", js_mkfalse());
+  js_set(js, textdecoder_proto, "fatal", js_false);
+  js_set(js, textdecoder_proto, "ignoreBOM", js_false);
   js_set(js, textdecoder_constructor, "prototype", textdecoder_proto);
   js_set(js, glob, "TextDecoder", textdecoder_constructor);
 }

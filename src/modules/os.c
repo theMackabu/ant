@@ -541,7 +541,7 @@ static jsval_t os_networkInterfaces(struct js *js, jsval_t *args, int nargs) {
     for (pUnicast = pCurrAddresses->FirstUnicastAddress; pUnicast; pUnicast = pUnicast->Next) {
       jsval_t entry = js_mkobj(js);
       js_set(js, entry, "mac", js_mkstr(js, mac_str, strlen(mac_str)));
-      js_set(js, entry, "internal", internal ? js_mktrue() : js_mkfalse());
+      js_set(js, entry, "internal", js_bool(internal));
       
       char addr_str[INET6_ADDRSTRLEN] = "";
       struct sockaddr *sa = pUnicast->Address.lpSockaddr;
@@ -641,7 +641,7 @@ static void add_iface_entry(struct js *js, jsval_t iface_arr, struct ifaddrs *if
   
   jsval_t entry = js_mkobj(js);
   js_set(js, entry, "mac", js_mkstr(js, "00:00:00:00:00:00", 17));
-  js_set(js, entry, "internal", internal ? js_mktrue() : js_mkfalse());
+  js_set(js, entry, "internal", js_bool(internal));
   
   if (family == AF_INET) {
     struct sockaddr_in *sa = (struct sockaddr_in *)ifa->ifa_addr;

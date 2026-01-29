@@ -24,7 +24,7 @@ static jsval_t yyjson_to_jsval(struct js *js, yyjson_val *val) {
   
   switch (yyjson_get_type(val)) {
     case YYJSON_TYPE_NULL: return js_mknull();
-    case YYJSON_TYPE_BOOL: return yyjson_get_bool(val) ? js_mktrue() : js_mkfalse();
+    case YYJSON_TYPE_BOOL: return js_bool(yyjson_get_bool(val));
     case YYJSON_TYPE_STR:  return js_mkstr(js, yyjson_get_str(val), yyjson_get_len(val));
     
     case YYJSON_TYPE_NUM: {

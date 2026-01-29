@@ -10,7 +10,7 @@ jsval_t ant_load_snapshot(ant_t *js) {
   jsval_t result = js_eval(js, (const char *)ant_snapshot_source, ant_snapshot_source_len);
   
   if (vtype(result) == T_ERR) return result;
-  return js_mktrue();
+  return js_true;
 }
 
 const uint8_t *ant_get_snapshot_source(size_t *len) {

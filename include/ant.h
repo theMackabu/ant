@@ -17,6 +17,8 @@
 #define STR_PROTO "__proto__"
 #define STR_PROTO_LEN 9
 
+#define ANT_LIMIT_SIZE_CACHE 16384
+
 #define ANT_STRING(s)         js_mkstr(js, s, sizeof(s) - 1)
 #define ANT_PTR(ptr)          js_mknum((double)(uintptr_t)(ptr))
 #define ANT_COPY(buf, len, s) cpy(buf, len, s, sizeof(s) - 1)
@@ -27,7 +29,9 @@
 #define JS_INF     ((double)INFINITY)
 #define JS_NEG_INF ((double)(-INFINITY))
 
-#define ANT_LIMIT_SIZE_CACHE 16384
+#define js_true    (NANBOX_PREFIX | ((jsval_t)T_BOOL << NANBOX_TYPE_SHIFT) | 1)
+#define js_false   (NANBOX_PREFIX | ((jsval_t)T_BOOL << NANBOX_TYPE_SHIFT))
+#define js_bool(x) (js_false | (jsval_t)!!(x))
 
 #define JS_DESC_W (1 << 0)
 #define JS_DESC_E (1 << 1)
@@ -63,8 +67,6 @@ void js_root_update(ant_t *, jshdl_t, jsval_t);
 
 jsval_t js_mkundef(void);
 jsval_t js_mknull(void);
-jsval_t js_mktrue(void);
-jsval_t js_mkfalse(void);
 jsval_t js_mknum(double);
 
 jsval_t js_getthis(ant_t *);

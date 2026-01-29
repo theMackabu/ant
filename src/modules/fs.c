@@ -292,7 +292,7 @@ static void on_stat_complete(uv_fs_t *uv_req) {
 
 static void on_exists_complete(uv_fs_t *uv_req) {
   fs_request_t *req = (fs_request_t *)uv_req->data;
-  jsval_t result = (uv_req->result >= 0) ? js_mktrue() : js_mkfalse();
+  jsval_t result = js_bool(uv_req->result >= 0);
   
   req->completed = 1;
   js_resolve_promise(req->js, req->promise, result);
@@ -938,30 +938,30 @@ static jsval_t stat_isFile(struct js *js, jsval_t *args, int nargs) {
   jsval_t this = js_getthis(js);
   jsval_t mode_val = js_get_slot(js, this, SLOT_DATA);
   
-  if (vtype(mode_val) != T_NUM) return js_mkfalse();
+  if (vtype(mode_val) != T_NUM) return js_false;
   mode_t mode = (mode_t)js_getnum(mode_val);
   
-  return S_ISREG(mode) ? js_mktrue() : js_mkfalse();
+  return js_bool(S_ISREG(mode));
 }
 
 static jsval_t stat_isDirectory(struct js *js, jsval_t *args, int nargs) {
   jsval_t this = js_getthis(js);
   jsval_t mode_val = js_get_slot(js, this, SLOT_DATA);
   
-  if (vtype(mode_val) != T_NUM) return js_mkfalse();
+  if (vtype(mode_val) != T_NUM) return js_false;
   mode_t mode = (mode_t)js_getnum(mode_val);
   
-  return S_ISDIR(mode) ? js_mktrue() : js_mkfalse();
+  return js_bool(S_ISDIR(mode));
 }
 
 static jsval_t stat_isSymbolicLink(struct js *js, jsval_t *args, int nargs) {
   jsval_t this = js_getthis(js);
   jsval_t mode_val = js_get_slot(js, this, SLOT_DATA);
   
-  if (vtype(mode_val) != T_NUM) return js_mkfalse();
+  if (vtype(mode_val) != T_NUM) return js_false;
   mode_t mode = (mode_t)js_getnum(mode_val);
   
-  return S_ISLNK(mode) ? js_mktrue() : js_mkfalse();
+  return js_bool(S_ISLNK(mode));
 }
 
 static jsval_t create_stats_object(struct js *js, struct stat *st) {
@@ -1073,7 +1073,7 @@ static jsval_t builtin_fs_existsSync(struct js *js, jsval_t *args, int nargs) {
   int result = stat(path_cstr, &st);
   free(path_cstr);
   
-  return (result == 0) ? js_mktrue() : js_mkfalse();
+  return js_bool(result == 0);
 }
 
 static jsval_t builtin_fs_exists(struct js *js, jsval_t *args, int nargs) {
@@ -1101,7 +1101,7 @@ static jsval_t builtin_fs_exists(struct js *js, jsval_t *args, int nargs) {
   
   if (result < 0) {
     req->completed = 1;
-    js_resolve_promise(req->js, req->promise, js_mkfalse());
+    js_resolve_promise(req->js, req->promise, js_false);
     remove_pending_request(req);
     free_fs_request(req);
   }

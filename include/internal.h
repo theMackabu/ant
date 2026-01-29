@@ -139,7 +139,4 @@ static inline bool is_undefined(jsval_t v) {
   return vtype(v) == T_UNDEF; 
 }
 
-#define js_true  (NANBOX_PREFIX | ((jsval_t)T_BOOL << NANBOX_TYPE_SHIFT) | 1)
-#define js_false (NANBOX_PREFIX | ((jsval_t)T_BOOL << NANBOX_TYPE_SHIFT))
-
 #endif

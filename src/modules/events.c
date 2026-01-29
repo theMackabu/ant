@@ -228,7 +228,7 @@ static jsval_t js_dispatch_event_method(struct js *js, jsval_t *args, int nargs)
   if (event_type == NULL) return js_mkerr(js, "eventType must be a string");
   
   EventType *evt = find_emitter_event_type(js, this_obj, event_type);
-  if (evt == NULL || evt->listener_count == 0) return js_mktrue();
+  if (evt == NULL || evt->listener_count == 0) return js_true;
   
   jsval_t event_obj = js_mkobj(js);
   js_set(js, event_obj, "type", args[0]);
@@ -254,7 +254,7 @@ static jsval_t js_dispatch_event_method(struct js *js, jsval_t *args, int nargs)
     } else i++;
   }
   
-  return js_mktrue();
+  return js_true;
 }
 
 // dispatchEvent(eventType, eventData)
@@ -268,7 +268,7 @@ static jsval_t js_dispatch_event(struct js *js, jsval_t *args, int nargs) {
   
   EventType *evt = find_global_event_type(event_type);
   if (evt == NULL || evt->listener_count == 0) {
-    return js_mktrue();
+    return js_true;
   }
   
   jsval_t event_obj = js_mkobj(js);
@@ -294,7 +294,7 @@ static jsval_t js_dispatch_event(struct js *js, jsval_t *args, int nargs) {
     } else i++;
   }
   
-  return js_mktrue();
+  return js_true;
 }
 
 static jsval_t js_get_event_listeners(struct js *js, jsval_t *args, int nargs) {
@@ -312,7 +312,7 @@ static jsval_t js_get_event_listeners(struct js *js, jsval_t *args, int nargs) {
       
       jsval_t listener_info = js_mkobj(js);
       js_set(js, listener_info, "listener", evt->listeners[j].listener);
-      js_set(js, listener_info, "once", evt->listeners[j].once ? js_mktrue() : js_mkfalse());
+      js_set(js, listener_info, "once", js_bool(evt->listeners[j].once));
       
       js_set(js, listeners_array, key, listener_info);
     }
@@ -432,7 +432,7 @@ static jsval_t js_eventemitter_emit(struct js *js, jsval_t *args, int nargs) {
   
   EventType *evt = find_emitter_event_type(js, this_obj, event_type);
   if (evt == NULL || evt->listener_count == 0) {
-    return js_mkfalse();
+    return js_false;
   }
   
   int listener_nargs = nargs - 1;
@@ -452,7 +452,7 @@ static jsval_t js_eventemitter_emit(struct js *js, jsval_t *args, int nargs) {
     } else i++;
   }
   
-  return js_mktrue();
+  return js_true;
 }
 
 // EventEmitter.prototype.removeAllListeners(event)

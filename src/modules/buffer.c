@@ -340,15 +340,12 @@ static jsval_t js_arraybuffer_transferToFixedLength(struct js *js, jsval_t *args
 static jsval_t js_arraybuffer_detached_getter(struct js *js, jsval_t *args, int nargs) {
   jsval_t this_val = js_getthis(js);
   jsval_t data_val = js_get_slot(js, this_val, SLOT_BUFFER);
-  
-  if (vtype(data_val) != T_NUM) {
-    return js_mkfalse();
-  }
+  if (vtype(data_val) != T_NUM) return js_false;
   
   ArrayBufferData *data = (ArrayBufferData *)(uintptr_t)js_getnum(data_val);
-  if (!data) return js_mktrue();
+  if (!data) return js_true;
   
-  return data->is_detached ? js_mktrue() : js_mkfalse();
+  return js_bool(data->is_detached);
 }
 
 static jsval_t typedarray_index_getter(struct js *js, jsval_t obj, const char *key, size_t key_len) {
@@ -1503,18 +1500,18 @@ static jsval_t js_buffer_write(struct js *js, jsval_t *args, int nargs) {
 
 // Buffer.isBuffer(obj)
 static jsval_t js_buffer_isBuffer(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return js_mkfalse();
-  if (!is_special_object(args[0])) return js_mkfalse();
+  if (nargs < 1) return js_false;
+  if (!is_special_object(args[0])) return js_false;
   
   jsval_t proto = js_get_proto(js, args[0]);
   jsval_t buffer_proto = js_get_ctor_proto(js, "Buffer", 6);
   
-  return (proto == buffer_proto) ? js_mktrue() : js_mkfalse();
+  return js_bool(proto == buffer_proto);
 }
 
 // Buffer.isEncoding(encoding)
 static jsval_t js_buffer_isEncoding(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1 || vtype(args[0]) != T_STR) return js_mkfalse();
+  if (nargs < 1 || vtype(args[0]) != T_STR) return js_false;
   
   size_t len;
   char *enc = js_getstr(js, args[0], &len);
@@ -1530,10 +1527,10 @@ static jsval_t js_buffer_isEncoding(struct js *js, jsval_t *args, int nargs) {
       (len == 5 && strncasecmp(enc, "ucs-2", 5) == 0) ||
       (len == 7 && strncasecmp(enc, "utf16le", 7) == 0) ||
       (len == 8 && strncasecmp(enc, "utf-16le", 8) == 0)) {
-    return js_mktrue();
+    return js_true;
   }
   
-  return js_mkfalse();
+  return js_false;
 }
 
 // Buffer.byteLength(string, encoding)

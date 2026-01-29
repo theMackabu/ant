@@ -209,7 +209,7 @@ static void on_process_exit(uv_process_t *proc, int64_t exit_status, int term_si
   js_set(cp->js, cp->child_obj, "exitCode", js_mknum((double)exit_status));
   if (term_signal) {
     js_set(cp->js, cp->child_obj, "signalCode", js_mknum((double)term_signal));
-    js_set(cp->js, cp->child_obj, "killed", js_mktrue());
+    js_set(cp->js, cp->child_obj, "killed", js_true);
   }
   
   jsval_t exit_args[2] = { js_mknum((double)exit_status), term_signal ? js_mknum((double)term_signal) : js_mknull() };
@@ -377,10 +377,10 @@ static jsval_t child_kill(struct js *js, jsval_t *args, int nargs) {
   jsval_t this_obj = js_getthis(js);
   
   jsval_t cp_ptr = js_get_slot(js, this_obj, SLOT_DATA);
-  if (vtype(cp_ptr) == T_UNDEF) return js_mkfalse();
+  if (vtype(cp_ptr) == T_UNDEF) return js_false;
   
   child_process_t *cp = (child_process_t *)(uintptr_t)js_getnum(cp_ptr);
-  if (cp->exited) return js_mkfalse();
+  if (cp->exited) return js_false;
   
   int sig = SIGTERM;
   if (nargs > 0) {
@@ -398,7 +398,7 @@ static jsval_t child_kill(struct js *js, jsval_t *args, int nargs) {
   }
   
   int result = uv_process_kill(&cp->process, sig);
-  return result == 0 ? js_mktrue() : js_mkfalse();
+  return js_bool(result == 0);
 }
 
 static jsval_t child_write(struct js *js, jsval_t *args, int nargs) {
@@ -409,7 +409,7 @@ static jsval_t child_write(struct js *js, jsval_t *args, int nargs) {
   if (vtype(cp_ptr) == T_UNDEF) return js_mkerr(js, "Invalid child process object");
   
   child_process_t *cp = (child_process_t *)(uintptr_t)js_getnum(cp_ptr);
-  if (cp->stdin_closed) return js_mkfalse();
+  if (cp->stdin_closed) return js_false;
   
   size_t data_len;
   char *data = js_getstr(js, args[0], &data_len);
@@ -426,10 +426,10 @@ static jsval_t child_write(struct js *js, jsval_t *args, int nargs) {
   if (result < 0) {
     free(buf_data);
     free(write_req);
-    return js_mkfalse();
+    return js_false;
   }
   
-  return js_mktrue();
+  return js_true;
 }
 
 static jsval_t child_end(struct js *js, jsval_t *args, int nargs) {
@@ -455,8 +455,8 @@ static jsval_t create_child_object(struct js *js, child_process_t *cp) {
   js_set(js, obj, "pid", js_mknum((double)cp->process.pid));
   js_set(js, obj, "exitCode", js_mknull());
   js_set(js, obj, "signalCode", js_mknull());
-  js_set(js, obj, "killed", js_mkfalse());
-  js_set(js, obj, "connected", js_mktrue());
+  js_set(js, obj, "killed", js_false);
+  js_set(js, obj, "connected", js_true);
   
   js_set(js, obj, "on", js_mkfun(child_on));
   js_set(js, obj, "once", js_mkfun(child_once));

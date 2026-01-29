@@ -360,7 +360,7 @@ static jsval_t js_atomics_isLockFree(struct js *js, jsval_t *args, int nargs) {
       is_lock_free = false;
   }
   
-  return is_lock_free ? js_mktrue() : js_mkfalse();
+  return js_bool(is_lock_free);
 }
 
 // Atomics.load(typedArray, index)
@@ -785,13 +785,13 @@ static jsval_t js_atomics_waitAsync(struct js *js, jsval_t *args, int nargs) {
   
   jsval_t result_obj = js_mkobj(js);
   if (current_value != expected_value) {
-    js_set(js, result_obj, "async", js_mkfalse());
+    js_set(js, result_obj, "async", js_false);
     js_set(js, result_obj, "value", js_mkstr(js, "not-equal", 9));
     return result_obj;
   }
   
   jsval_t promise = js_mkpromise(js);
-  js_set(js, result_obj, "async", js_mktrue());
+  js_set(js, result_obj, "async", js_true);
   js_set(js, result_obj, "value", promise);
   js_resolve_promise(js, promise, js_mkstr(js, "ok", 2));
   

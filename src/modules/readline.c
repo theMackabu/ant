@@ -699,13 +699,13 @@ static jsval_t rl_interface_emit(struct js *js, jsval_t *args, int nargs) {
   rl_interface_t *iface = get_interface(js, this_obj);
   
   if (!iface) return js_mkerr(js, "Invalid Interface");
-  if (nargs < 1) return js_mkfalse();
+  if (nargs < 1) return js_false;
   
   char *event = js_getstr(js, args[0], NULL);
-  if (!event) return js_mkfalse();
+  if (!event) return js_false;
   
   emit_event(js, iface, event, nargs > 1 ? &args[1] : NULL, nargs - 1);
-  return js_mktrue();
+  return js_true;
 }
 
 static jsval_t rl_interface_close(struct js *js, jsval_t *args, int nargs) {
@@ -1028,8 +1028,8 @@ static jsval_t rl_interface_closed_getter(struct js *js, jsval_t *args, int narg
   jsval_t this_obj = js_getthis(js);
   rl_interface_t *iface = get_interface(js, this_obj);
   
-  if (!iface) return js_mktrue();
-  return iface->closed ? js_mktrue() : js_mkfalse();
+  if (!iface) return js_true;
+  return js_bool(iface->closed);
 }
 
 static jsval_t rl_interface_async_iterator(struct js *js, jsval_t *args, int nargs) {
@@ -1042,7 +1042,7 @@ static jsval_t rl_interface_async_iterator(struct js *js, jsval_t *args, int nar
   jsval_t iterator = js_mkobj(js);
   js_set(js, iterator, "_rl_id", js_mknum((double)iface->id));
   js_set(js, iterator, "_lines", js_mkarr(js));
-  js_set(js, iterator, "_done", js_mkfalse());
+  js_set(js, iterator, "_done", js_false);
   
   return iterator;
 }
@@ -1174,7 +1174,7 @@ static jsval_t rl_create_interface(struct js *js, jsval_t *args, int nargs) {
   js_set_getter_desc(js, obj, "cursor", 6, js_mkfun(rl_interface_cursor_getter), JS_DESC_E | JS_DESC_C);
   js_set_getter_desc(js, obj, "closed", 6, js_mkfun(rl_interface_closed_getter), JS_DESC_E | JS_DESC_C);
   
-  js_set(js, obj, "terminal", iface->terminal ? js_mktrue() : js_mkfalse());
+  js_set(js, obj, "terminal", js_bool(iface->terminal));
   js_set(js, obj, get_asyncIterator_sym_key(), js_mkfun(rl_interface_async_iterator));
   js_set(js, obj, get_toStringTag_sym_key(), js_mkstr(js, "Interface", 9));
   
@@ -1190,7 +1190,7 @@ static jsval_t rl_create_interface_promises(struct js *js, jsval_t *args, int na
 }
 
 static jsval_t rl_clear_line(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mkfalse();
+  if (nargs < 2) return js_false;
   int dir = (int)js_getnum(args[1]);
   
   const char *seq;
@@ -1204,7 +1204,7 @@ static jsval_t rl_clear_line(struct js *js, jsval_t *args, int nargs) {
   printf("%s", seq);
   fflush(stdout);
   
-  return js_mktrue();
+  return js_true;
 }
 
 static jsval_t rl_clear_screen_down(struct js *js, jsval_t *args, int nargs) {
@@ -1213,11 +1213,11 @@ static jsval_t rl_clear_screen_down(struct js *js, jsval_t *args, int nargs) {
   printf("\033[J");
   fflush(stdout);
   
-  return js_mktrue();
+  return js_true;
 }
 
 static jsval_t rl_cursor_to(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 2) return js_mkfalse();
+  if (nargs < 2) return js_false;
   int x = (int)js_getnum(args[1]);
   
   if (nargs >= 3 && vtype(args[2]) == T_NUM) {
@@ -1228,11 +1228,11 @@ static jsval_t rl_cursor_to(struct js *js, jsval_t *args, int nargs) {
   }
   fflush(stdout);
   
-  return js_mktrue();
+  return js_true;
 }
 
 static jsval_t rl_move_cursor(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 3) return js_mkfalse();
+  if (nargs < 3) return js_false;
   
   int dx = (int)js_getnum(args[1]);
   int dy = (int)js_getnum(args[2]);
@@ -1244,7 +1244,7 @@ static jsval_t rl_move_cursor(struct js *js, jsval_t *args, int nargs) {
   else if (dy < 0) printf("\033[%dA", -dy);
   
   fflush(stdout);
-  return js_mktrue();
+  return js_true;
 }
 
 static jsval_t rl_emit_keypress_events(struct js *js, jsval_t *args, int nargs) {

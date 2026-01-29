@@ -101,7 +101,7 @@ static jsval_t create_response(struct js *js, int status, const char *body, size
   jsval_t response_obj = js_mkobj(js);
   jsval_t body_str = js_mkstr(js, body, body_len);
 
-  js_set(js, response_obj, "ok", status >= 200 && status < 300 ? js_mktrue() : js_mkfalse());
+  js_set(js, response_obj, "ok", js_bool(status >= 200 && status < 300));
   js_set(js, response_obj, "status", js_mknum(status));
   
   js_set_slot(js, response_obj, SLOT_DATA, body_str);

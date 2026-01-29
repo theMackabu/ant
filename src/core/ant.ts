@@ -32,3 +32,5 @@ Ant.typeof = function (t) {
   const names = Object.values(types);
   return value < names.length ? names[value] : '??';
 };
+
+Ant.inspect = (...args) => console.inspect(...args);

@@ -425,9 +425,9 @@ static void emit_keypress_event(
     js_set(js, key_obj, "name", js_mkundef());
   }
 
-  js_set(js, key_obj, "ctrl", ctrl ? js_mktrue() : js_mkfalse());
-  js_set(js, key_obj, "meta", meta ? js_mktrue() : js_mkfalse());
-  js_set(js, key_obj, "shift", shift ? js_mktrue() : js_mkfalse());
+  js_set(js, key_obj, "ctrl", js_bool(ctrl));
+  js_set(js, key_obj, "meta", js_bool(meta));
+  js_set(js, key_obj, "shift", js_bool(shift));
 
   if (sequence) {
     js_set(js, key_obj, "sequence", js_mkstr(js, sequence, sequence_len));
@@ -665,7 +665,7 @@ static void start_sigwinch_handler(void) {
 
 static jsval_t js_stdin_set_raw_mode(ant_t *js, jsval_t *args, int nargs) {
   bool enable = nargs > 0 ? js_truthy(js, args[0]) : true;
-  return stdin_set_raw_mode(enable) ? js_mktrue() : js_mkfalse();
+  return js_bool(stdin_set_raw_mode(enable));
 }
 
 static jsval_t js_stdin_resume(ant_t *js, jsval_t *args, int nargs) {
@@ -736,13 +736,13 @@ static jsval_t js_stdin_remove_listener(ant_t *js, jsval_t *args, int nargs) {
 }
 
 static jsval_t js_stdout_write(ant_t *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return js_mkfalse();
+  if (nargs < 1) return js_false;
   size_t len = 0;
   char *data = js_getstr(js, args[0], &len);
-  if (!data) return js_mkfalse();
+  if (!data) return js_false;
   fwrite(data, 1, len, stdout);
   fflush(stdout);
-  return js_mktrue();
+  return js_true;
 }
 
 static jsval_t js_stdout_on(ant_t *js, jsval_t *args, int nargs) {
@@ -854,13 +854,13 @@ static ProcessEventType *find_or_create_stderr_event(const char *event_type) {
 }
 
 static jsval_t js_stderr_write(ant_t *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return js_mkfalse();
+  if (nargs < 1) return js_false;
   size_t len = 0;
   char *data = js_getstr(js, args[0], &len);
-  if (!data) return js_mkfalse();
+  if (!data) return js_false;
   fwrite(data, 1, len, stderr);
   fflush(stderr);
-  return js_mktrue();
+  return js_true;
 }
 
 static jsval_t js_stderr_on(ant_t *js, jsval_t *args, int nargs) {
@@ -1055,7 +1055,7 @@ static jsval_t process_kill(ant_t *js, jsval_t *args, int nargs) {
   
   int result = uv_kill(pid, sig);
   if (result != 0) return js_mkerr(js, "Failed to send signal");
-  return js_mktrue();
+  return js_true;
 }
 
 static jsval_t process_abort(ant_t *js, jsval_t *args, int nargs) {
@@ -1478,13 +1478,13 @@ static jsval_t process_remove_all_listeners(ant_t *js, jsval_t *args, int nargs)
 }
 
 static jsval_t process_emit(ant_t *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return js_mkfalse();
+  if (nargs < 1) return js_false;
   
   char *event = js_getstr(js, args[0], NULL);
-  if (!event) return js_mkfalse();
+  if (!event) return js_false;
   
   emit_process_event(event, nargs > 1 ? &args[1] : NULL, nargs - 1);
-  return js_mktrue();
+  return js_true;
 }
 
 static jsval_t process_listener_count(ant_t *js, jsval_t *args, int nargs) {
@@ -1639,7 +1639,7 @@ void init_process_module() {
   
   jsval_t stdin_obj = js_mkobj(js);
   js_set_proto(js, stdin_obj, stdin_proto);
-  js_set(js, stdin_obj, "isTTY", stdin_is_tty() ? js_mktrue() : js_mkfalse());
+  js_set(js, stdin_obj, "isTTY", js_bool(stdin_is_tty()));
   js_set(js, process_obj, "stdin", stdin_obj);
   
   jsval_t stdout_proto = js_mkobj(js);
@@ -1654,7 +1654,7 @@ void init_process_module() {
   
   jsval_t stdout_obj = js_mkobj(js);
   js_set_proto(js, stdout_obj, stdout_proto);
-  js_set(js, stdout_obj, "isTTY", stdout_is_tty() ? js_mktrue() : js_mkfalse());
+  js_set(js, stdout_obj, "isTTY", js_bool(stdout_is_tty()));
   js_set_getter_desc(js, stdout_obj, "rows", 4, js_mkfun(js_stdout_rows_getter), JS_DESC_E | JS_DESC_C);
   js_set_getter_desc(js, stdout_obj, "columns", 7, js_mkfun(js_stdout_columns_getter), JS_DESC_E | JS_DESC_C);
   js_set(js, process_obj, "stdout", stdout_obj);
@@ -1670,7 +1670,7 @@ void init_process_module() {
   
   jsval_t stderr_obj = js_mkobj(js);
   js_set_proto(js, stderr_obj, stderr_proto);
-  js_set(js, stderr_obj, "isTTY", stderr_is_tty() ? js_mktrue() : js_mkfalse());
+  js_set(js, stderr_obj, "isTTY", js_bool(stderr_is_tty()));
   js_set(js, process_obj, "stderr", stderr_obj);
   
   js_set(js, global, "process", process_obj);

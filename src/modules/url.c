@@ -399,13 +399,13 @@ static jsval_t usp_getAll(struct js *js, jsval_t *args, int nargs) {
 }
 
 static jsval_t usp_has(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return js_mkfalse();
+  if (nargs < 1) return js_false;
   jsval_t this_val = js_getthis(js);
   char *key = js_getstr(js, args[0], NULL);
-  if (!key) return js_mkfalse();
+  if (!key) return js_false;
 
   jsval_t entries = js_get(js, this_val, "_entries");
-  if (!is_special_object(entries)) return js_mkfalse();
+  if (!is_special_object(entries)) return js_false;
 
   jsval_t len_val = js_get(js, entries, "length");
   int len = (vtype(len_val) == T_NUM) ? (int)js_getnum(len_val) : 0;
@@ -416,9 +416,9 @@ static jsval_t usp_has(struct js *js, jsval_t *args, int nargs) {
     jsval_t entry = js_get(js, entries, idx);
     jsval_t k = js_get(js, entry, "0");
     char *ks = js_getstr(js, k, NULL);
-    if (ks && strcmp(ks, key) == 0) return js_mktrue();
+    if (ks && strcmp(ks, key) == 0) return js_true;
   }
-  return js_mkfalse();
+  return js_false;
 }
 
 static void usp_sync_url(struct js *js, jsval_t this_val) {

@@ -571,7 +571,7 @@ static jsval_t ffi_get_pointer(struct js *js, jsval_t *args, int nargs) {
   bool exists = ffi_ptr != NULL;
   pthread_mutex_unlock(&ffi_pointers_mutex);
 
-  return exists ? js_mktrue() : js_mkfalse();
+  return js_bool(exists);
 }
 
 static jsval_t ffi_read_ptr(struct js *js, jsval_t *args, int nargs) {

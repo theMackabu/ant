@@ -137,7 +137,7 @@ static void example_objects_arrays(void) {
   jsval_t global = js_glob(js);
 
   jsval_t config = js_mkobj(js);
-  js_set(js, config, "debug", js_mktrue());
+  js_set(js, config, "debug", js_true);
   js_set(js, config, "version", js_mknum(1.0));
   js_set(js, config, "name", js_mkstr(js, "MyApp", 5));
   js_set(js, global, "config", config);
@@ -153,7 +153,10 @@ static void example_objects_arrays(void) {
   printf("  Result: %s\n", js_str(js, result));
 
   jsval_t name_val = js_get(js, config, "name");
-  printf("  config.name from C: %s\n", js_str(js, name_val));
+  printf("  config.name: %s\n", js_str(js, name_val));
+  
+  jsval_t debug_val = js_get(js, config, "debug");
+  printf("  config.debug: %s\n", js_str(js, debug_val));
 
   js_destroy(js);
 }
@@ -421,7 +424,7 @@ static void example_global_this(void) {
   jsval_t global = js_glob(js);
   js_set(js, global, "myNumber", js_mknum(42));
   js_set(js, global, "myString", js_mkstr(js, "hello from C", 12));
-  js_set(js, global, "myBool", js_mktrue());
+  js_set(js, global, "myBool", js_true);
 
   jsval_t myObj = js_mkobj(js);
   js_set(js, myObj, "a", js_mknum(1));

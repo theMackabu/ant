@@ -93,6 +93,7 @@ interface AntStatic {
   buildDate: string;
   host: AntHost;
 
+  inspect(...args: unknown[]): void;
   typeof(t: unknown): AntType | '??';
   raw: AntRaw;
 

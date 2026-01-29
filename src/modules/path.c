@@ -343,14 +343,14 @@ static jsval_t builtin_path_isAbsolute(struct js *js, jsval_t *args, int nargs) 
   
   size_t path_len;
   char *path = js_getstr(js, args[0], &path_len);
-  if (!path || path_len == 0) return js_mkfalse();
+  if (!path || path_len == 0) return js_false;
   
 #ifdef _WIN32
-  if (path_len >= 2 && path[1] == ':') return js_mktrue();
-  if (path_len >= 2 && path[0] == '\\' && path[1] == '\\') return js_mktrue();
-  return js_mkfalse();
+  if (path_len >= 2 && path[1] == ':') return js_true;
+  if (path_len >= 2 && path[0] == '\\' && path[1] == '\\') return js_true;
+  return js_false;
 #else
-  return path[0] == '/' ? js_mktrue() : js_mkfalse();
+  return js_bool(path[0] == '/');
 #endif
 }
 
