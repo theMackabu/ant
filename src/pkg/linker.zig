@@ -1,6 +1,10 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const json = @import("json.zig");
+const debug = @import("debug.zig");
+
+const PARALLEL_LINK_THRESHOLD = 500;
+const LINK_THREAD_COUNT = 8;
 
 pub const LinkError = error{
   IoError,
@@ -68,6 +72,7 @@ pub const PackageLink = struct {
   node_modules_path: []const u8,
   name: []const u8,
   parent_path: ?[]const u8 = null,
+  file_count: u32 = 0,
 };
 
 pub const Linker = struct {
@@ -146,7 +151,7 @@ pub const Linker = struct {
     var dest_dir = node_modules.openDir(install_path, .{}) catch return error.IoError;
     defer dest_dir.close();
 
-    self.linkDirectory(source_dir, dest_dir) catch |err| return err;
+    self.linkDirectoryWithHint(source_dir, dest_dir, pkg.file_count, pkg.name) catch |err| return err;
 
     if (pkg.parent_path == null) try self.linkBinaries(pkg.name);
     _ = self.stats.packages_installed.fetchAdd(1, .release);
@@ -200,7 +205,25 @@ pub const Linker = struct {
     _ = self.stats.bins_linked.fetchAdd(1, .release);
   }
 
+  const FileWorkItem = struct {
+    source_path: []const u8,
+    dest_path: []const u8,
+    kind: std.fs.Dir.Entry.Kind,
+    link_target: ?[]const u8,
+  };
+
   fn linkDirectory(self: *Linker, source: std.fs.Dir, dest: std.fs.Dir) !void {
+    try self.linkDirectorySequential(source, dest);
+  }
+
+  pub fn linkDirectoryWithHint(self: *Linker, source: std.fs.Dir, dest: std.fs.Dir, file_count: u32, name: []const u8) !void {
+    if (file_count >= PARALLEL_LINK_THRESHOLD) {
+      debug.log("    parallel link: {s} ({d} files)", .{ name, file_count });
+      try self.linkDirectoryParallel(source, dest);
+    } else try self.linkDirectorySequential(source, dest);
+  }
+
+  fn linkDirectorySequential(self: *Linker, source: std.fs.Dir, dest: std.fs.Dir) !void {
     var iter = source.iterate();
     while (try iter.next()) |entry| {
       switch (entry.kind) {
@@ -217,7 +240,7 @@ pub const Linker = struct {
           var child_dest = dest.openDir(entry.name, .{}) catch continue;
           defer child_dest.close();
 
-          try self.linkDirectory(child_source, child_dest);
+          try self.linkDirectorySequential(child_source, child_dest);
         },
         .file => try self.linkFile(source, dest, entry.name),
         .sym_link => {
@@ -226,6 +249,152 @@ pub const Linker = struct {
           dest.symLink(target, entry.name, .{}) catch {};
         },
         else => {},
+      }
+    }
+  }
+
+  const ParallelThreadContext = struct {
+    linker: *Linker,
+    items: []const FileWorkItem,
+    source_base: std.fs.Dir,
+    dest_base: std.fs.Dir,
+  };
+
+  fn linkDirectoryParallel(self: *Linker, source: std.fs.Dir, dest: std.fs.Dir) !void {
+    var work_items = std.ArrayListUnmanaged(FileWorkItem){};
+    defer {
+      for (work_items.items) |item| {
+        self.allocator.free(item.source_path);
+        self.allocator.free(item.dest_path);
+        if (item.link_target) |t| self.allocator.free(t);
+      }
+      work_items.deinit(self.allocator);
+    }
+
+    try self.collectWorkItems(source, dest, "", &work_items);
+    if (work_items.items.len == 0) return;
+
+    const items_slice = work_items.items;
+    const chunk_size = (items_slice.len + LINK_THREAD_COUNT - 1) / LINK_THREAD_COUNT;
+
+    var threads: [LINK_THREAD_COUNT]?std.Thread = undefined;
+    for (&threads) |*t| t.* = null;
+
+    var contexts: [LINK_THREAD_COUNT]ParallelThreadContext = undefined;
+    var thread_count: usize = 0;
+
+    var offset: usize = 0;
+    for (0..LINK_THREAD_COUNT) |i| {
+      if (offset >= items_slice.len) break;
+      const end = @min(offset + chunk_size, items_slice.len);
+
+      contexts[i] = .{
+        .linker = self,
+        .items = items_slice[offset..end],
+        .source_base = source,
+        .dest_base = dest,
+      };
+
+      threads[i] = std.Thread.spawn(.{}, processWorkItems, .{&contexts[i]}) catch null;
+      if (threads[i] != null) thread_count += 1;
+      offset = end;
+    }
+
+    for (&threads) |*t| if (t.*) |thread| thread.join();
+  }
+
+  fn processWorkItems(ctx: *const ParallelThreadContext) void {
+    for (ctx.items) |item| {
+      switch (item.kind) {
+        .file => {
+          const src_dir_path = std.fs.path.dirname(item.source_path) orelse "";
+          const dst_dir_path = std.fs.path.dirname(item.dest_path) orelse "";
+          const filename = std.fs.path.basename(item.source_path);
+
+          var src_dir = if (src_dir_path.len > 0)
+            ctx.source_base.openDir(src_dir_path, .{}) catch continue
+          else
+            ctx.source_base;
+          defer if (src_dir_path.len > 0) src_dir.close();
+
+          var dst_dir = if (dst_dir_path.len > 0)
+            ctx.dest_base.openDir(dst_dir_path, .{}) catch continue
+          else
+            ctx.dest_base;
+          defer if (dst_dir_path.len > 0) dst_dir.close();
+
+          ctx.linker.linkFile(src_dir, dst_dir, filename) catch {};
+        },
+        .sym_link => {
+          if (item.link_target) |target| {
+            const dst_dir_path = std.fs.path.dirname(item.dest_path) orelse "";
+            const filename = std.fs.path.basename(item.dest_path);
+
+            var dst_dir = if (dst_dir_path.len > 0)
+              ctx.dest_base.openDir(dst_dir_path, .{}) catch continue
+            else
+              ctx.dest_base;
+            defer if (dst_dir_path.len > 0) dst_dir.close();
+
+            dst_dir.symLink(target, filename, .{}) catch {};
+          }
+        },
+        else => {},
+      }
+    }
+  }
+
+  fn collectWorkItems(self: *Linker, source: std.fs.Dir, dest: std.fs.Dir, prefix: []const u8, work_items: *std.ArrayListUnmanaged(FileWorkItem)) !void {
+    var iter = source.iterate();
+    while (try iter.next()) |entry| {
+      const rel_path = if (prefix.len > 0)
+        try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ prefix, entry.name })
+      else
+        try self.allocator.dupe(u8, entry.name);
+      errdefer self.allocator.free(rel_path);
+
+      switch (entry.kind) {
+        .directory => {
+          dest.makePath(rel_path) catch |err| switch (err) {
+            error.PathAlreadyExists => {},
+            else => {
+              self.allocator.free(rel_path);
+              return error.IoError;
+            },
+          };
+          _ = self.stats.dirs_created.fetchAdd(1, .release);
+
+          var child_source = source.openDir(entry.name, .{ .iterate = true }) catch {
+            self.allocator.free(rel_path);
+            continue;
+          };
+          defer child_source.close();
+
+          try self.collectWorkItems(child_source, dest, rel_path, work_items);
+          self.allocator.free(rel_path);
+        },
+        .file => {
+          try work_items.append(self.allocator, .{
+            .source_path = rel_path,
+            .dest_path = try self.allocator.dupe(u8, rel_path),
+            .kind = .file,
+            .link_target = null,
+          });
+        },
+        .sym_link => {
+          var link_buf: [std.fs.max_path_bytes]u8 = undefined;
+          const target = source.readLink(entry.name, &link_buf) catch {
+            self.allocator.free(rel_path);
+            continue;
+          };
+          try work_items.append(self.allocator, .{
+            .source_path = rel_path,
+            .dest_path = try self.allocator.dupe(u8, rel_path),
+            .kind = .sym_link,
+            .link_target = try self.allocator.dupe(u8, target),
+          });
+        },
+        else => self.allocator.free(rel_path),
       }
     }
   }
