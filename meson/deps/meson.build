@@ -152,8 +152,8 @@ deps_info = {
   },
 }
 
-subprojects_src = src_root / 'subprojects'
-subprojects_build = meson.project_build_root() / 'subprojects'
+subprojects_src = src_root / 'vendor'
+subprojects_build = meson.project_build_root() / 'vendor'
 
 lmdb_include_path = subprojects_src / deps_info['lmdb']['dir'] / deps_info['lmdb']['inc']
 yyjson_include_path = subprojects_src / deps_info['yyjson']['dir'] / deps_info['yyjson']['inc']
@@ -168,7 +168,7 @@ pkg_lib = custom_target(
   output: 'libpkg.a',
   command: [
     'sh', '-c',
-    '"$ZIG" build --build-file "$PKG_ZIG_DIR/build.zig" --cache-dir "$PKG_BUILD_DIR/.zig-cache" --global-cache-dir "$PKG_BUILD_DIR/.zig-cache" -Doptimize=ReleaseFast --prefix "$PKG_BUILD_DIR" -p "$PKG_BUILD_DIR" && cp "$PKG_BUILD_DIR/lib/libpkg.a" "@OUTPUT@"'
+    '"$ZIG" build --build-file "$PKG_ZIG_DIR/build.zig" --prefix "$PKG_BUILD_DIR" && cp "$PKG_BUILD_DIR/lib/libpkg.a" "@OUTPUT@"'
   ],
   env: {
     'ZIG': zig.full_path(),
