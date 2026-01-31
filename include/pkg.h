@@ -54,6 +54,7 @@ pkg_context_t *pkg_init(const pkg_options_t *options);
 
 pkg_error_t pkg_install(
   pkg_context_t *ctx,
+  const char *package_json_path,
   const char *lockfile_path,
   const char *node_modules_path
 );
@@ -112,7 +113,41 @@ typedef struct {
   bool direct;
 } pkg_added_package_t;
 
+typedef struct {
+  const char *name;
+  const char *script;
+} pkg_lifecycle_script_t;
+
 uint32_t pkg_get_added_count(const pkg_context_t *ctx);
+
+// Discover packages with lifecycle scripts that haven't run yet
+pkg_error_t pkg_discover_lifecycle_scripts(
+  pkg_context_t *ctx,
+  const char *node_modules_path
+);
+
+uint32_t pkg_get_lifecycle_script_count(const pkg_context_t *ctx);
+
+pkg_error_t pkg_get_lifecycle_script(
+  const pkg_context_t *ctx,
+  uint32_t index,
+  pkg_lifecycle_script_t *out
+);
+
+// Run postinstall for specific packages
+pkg_error_t pkg_run_postinstall(
+  pkg_context_t *ctx,
+  const char *node_modules_path,
+  const char **package_names,
+  uint32_t count
+);
+
+// Add packages to trustedDependencies in package.json
+pkg_error_t pkg_add_trusted_dependencies(
+  const char *package_json_path,
+  const char **package_names,
+  uint32_t count
+);
 
 pkg_error_t pkg_get_install_result(
   pkg_context_t *ctx,
@@ -186,6 +221,43 @@ typedef void (*pkg_script_callback)(
 int pkg_list_scripts(
   const char *package_json_path,
   pkg_script_callback callback,
+  void *user_data
+);
+
+typedef struct {
+  uint8_t peer: 1;
+  uint8_t dev: 1;
+  uint8_t optional: 1;
+  uint8_t direct: 1;
+  uint8_t _reserved: 4;
+} pkg_dep_type_t;
+
+typedef void (*pkg_why_callback)(
+  const char *name,
+  const char *version,
+  const char *constraint,
+  pkg_dep_type_t dep_type,
+  void *user_data
+);
+
+typedef struct {
+  char target_version[64];
+  bool found;
+  bool is_peer;
+  bool is_dev;
+  bool is_direct;
+} pkg_why_info_t;
+
+int pkg_why_info(
+  const char *lockfile_path,
+  const char *package_name,
+  pkg_why_info_t *out
+);
+
+int pkg_why(
+  const char *lockfile_path,
+  const char *package_name,
+  pkg_why_callback callback,
   void *user_data
 );
 

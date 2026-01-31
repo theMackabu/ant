@@ -27,6 +27,7 @@ script = ['rm spec.txt', '''
 [tasks.setup]
 script = ['meson subprojects download', '''
    bash -c 'CC="ccache $(which clang)" \
+   CC_LD="$(which ld64.lld)" \
    meson setup build --wipe'
 ''']
 

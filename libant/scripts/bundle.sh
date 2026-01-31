@@ -18,9 +18,10 @@ bundle_lib() {
   LIBS=$(find "$BUILD_DIR" -name '*.a' \
     ! -name 'libant.a' \
     ! -name 'libant-lto.a' \
+    ! -name 'libpkg.a' \
     ! -path '*/oxc-target/release/deps/*' \
     ! -path '*/.external/*' \
-    2>/dev/null | grep -v "$EXCLUDE" | sort -u)
+    2>/dev/null | grep -E -v "$EXCLUDE" | sort -u)
   
   cd "$TMPDIR"
   for lib in $LIBS; do
@@ -60,6 +61,17 @@ fi
 if [ -f "$BUILD_DIR/libant.h" ]; then
   cp "$BUILD_DIR/libant.h" "$DIST_DIR/ant.h"
   echo "Created: $DIST_DIR/ant.h"
+fi
+
+pkg_lib_path=$(find "$BUILD_DIR" -name 'libpkg.a' -print | head -n 1)
+if [ -n "$pkg_lib_path" ] && [ -f "$pkg_lib_path" ]; then
+  cp "$pkg_lib_path" "$DIST_DIR/libpkg.a"
+  echo "Created: $DIST_DIR/libpkg.a ($(du -h "$pkg_lib_path" | cut -f1))"
+fi
+
+if [ -f "$ROOT_DIR/include/pkg.h" ]; then
+  cp "$ROOT_DIR/include/pkg.h" "$DIST_DIR/pkg.h"
+  echo "Created: $DIST_DIR/pkg.h"
 fi
 
 echo ""

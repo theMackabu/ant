@@ -5,7 +5,7 @@ const c = @cImport({
 });
 
 pub const CacheEntry = struct {
-  integrity: [32]u8,
+  integrity: [64]u8,
   path: []const u8,
   unpacked_size: u64,
   file_count: u32,
@@ -106,11 +106,10 @@ pub const CacheDB = struct {
     self.allocator.destroy(self);
   }
 
-  fn makeIntegrityKey(integrity: *const [32]u8) [34]u8 {
-    var key: [34]u8 = undefined;
-    key[0] = 'i';
-    key[1] = ':';
-    @memcpy(key[2..34], integrity);
+  fn makeIntegrityKey(integrity: *const [64]u8) [66]u8 {
+    var key: [66]u8 = undefined;
+    key[0] = 'i'; key[1] = ':';
+    @memcpy(key[2..66], integrity);
     return key;
   }
 
@@ -118,7 +117,7 @@ pub const CacheDB = struct {
     return std.fmt.allocPrint(allocator, "n:{s}@{s}", .{ name, version });
   }
 
-  pub fn lookup(self: *CacheDB, integrity: *const [32]u8) ?CacheEntry {
+  pub fn lookup(self: *CacheDB, integrity: *const [64]u8) ?CacheEntry {
     var txn: ?*c.MDB_txn = null;
     if (c.mdb_txn_begin(self.env, null, c.MDB_RDONLY, &txn) != 0) {
       return null;
@@ -135,7 +134,7 @@ pub const CacheDB = struct {
     return deserializeEntry(integrity, value);
   }
 
-  pub fn hasIntegrity(self: *CacheDB, integrity: *const [32]u8) bool {
+  pub fn hasIntegrity(self: *CacheDB, integrity: *const [64]u8) bool {
     var txn: ?*c.MDB_txn = null;
     if (c.mdb_txn_begin(self.env, null, c.MDB_RDONLY, &txn) != 0) {
       return false;
@@ -151,7 +150,7 @@ pub const CacheDB = struct {
     return c.mdb_get(txn, self.dbi_primary, &key, &value) == 0;
   }
 
-  fn deserializeEntry(integrity: *const [32]u8, value: c.MDB_val) ?CacheEntry {
+  fn deserializeEntry(integrity: *const [64]u8, value: c.MDB_val) ?CacheEntry {
     if (value.mv_size < @sizeOf(SerializedEntry)) return null;
 
     const data: [*]const u8 = @ptrCast(value.mv_data);
@@ -185,24 +184,29 @@ pub const CacheDB = struct {
     var value: c.MDB_val = undefined;
 
     if (c.mdb_get(txn, self.dbi_secondary, &key, &value) != 0) return null;
-    if (value.mv_size != 32) return null;
+    if (value.mv_size != 64) return null;
 
-    const integrity: *const [32]u8 = @ptrCast(value.mv_data);
+    const integrity: *const [64]u8 = @ptrCast(value.mv_data);
     return self.lookup(integrity);
   }
 
+  pub const BatchHit = struct {
+    index: u32,
+    file_count: u32,
+  };
+
   pub fn batchLookup(
     self: *CacheDB,
-    integrities: []const [32]u8,
+    integrities: []const [64]u8,
     allocator: std.mem.Allocator,
   ) !struct {
-    items: []u32,
+    items: []BatchHit,
     allocator: std.mem.Allocator,
     pub fn deinit(s: *@This()) void {
       s.allocator.free(s.items);
     }
   } {
-    var hits = std.ArrayListUnmanaged(u32){};
+    var hits = std.ArrayListUnmanaged(BatchHit){};
     errdefer hits.deinit(allocator);
 
     var txn: ?*c.MDB_txn = null;
@@ -217,7 +221,15 @@ pub const CacheDB = struct {
         .mv_data = @constCast(&key_bytes),
       };
       var value: c.MDB_val = undefined;
-      if (c.mdb_get(txn, self.dbi_primary, &key, &value) == 0) try hits.append(allocator, @intCast(i));
+      if (c.mdb_get(txn, self.dbi_primary, &key, &value) == 0) {
+        var file_count: u32 = 0;
+        if (value.mv_size >= @sizeOf(SerializedEntry)) {
+          const data: [*]const u8 = @ptrCast(value.mv_data);
+          const header: *const SerializedEntry = @ptrCast(@alignCast(data));
+          file_count = header.file_count;
+        }
+        try hits.append(allocator, .{ .index = @intCast(i), .file_count = file_count });
+      }
     }
 
     return .{ .items = hits.toOwnedSlice(allocator) catch &.{}, .allocator = allocator };
@@ -312,7 +324,7 @@ pub const CacheDB = struct {
     } if (c.mdb_txn_commit(txn) != 0) return error.InsertError;
   }
 
-  pub fn delete(self: *CacheDB, integrity: *const [32]u8) !void {
+  pub fn delete(self: *CacheDB, integrity: *const [64]u8) !void {
     var txn: ?*c.MDB_txn = null;
     if (c.mdb_txn_begin(self.env, null, 0, &txn) != 0) {
       return error.DeleteError;
@@ -328,7 +340,7 @@ pub const CacheDB = struct {
     if (c.mdb_txn_commit(txn) != 0) return error.DeleteError;
   }
 
-  pub fn getPackagePath(self: *CacheDB, integrity: *const [32]u8, allocator: std.mem.Allocator) ![]u8 {
+  pub fn getPackagePath(self: *CacheDB, integrity: *const [64]u8, allocator: std.mem.Allocator) ![]u8 {
     const hex = std.fmt.bytesToHex(integrity.*, .lower);
     return std.fmt.allocPrint(allocator, "{s}/packages/{s}", .{ self.cache_dir, hex });
   }

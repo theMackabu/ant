@@ -5,6 +5,20 @@
 #include <stdint.h>
 #include <argtable3.h>
 
+const char *ant_semver(void) {
+  static char buf[32]; static int done;
+  if (!done) {
+    const char *s = ANT_VERSION;
+    int d = 0, i = 0;
+    while (s[i] && d < 3 && i < 31) {
+      if (s[i] == '.') d++;
+      buf[i] = s[i]; i++;
+    }
+    buf[i - (d == 3)] = '\0'; done = 1;
+  }
+  return buf;
+}
+
 uint64_t hash_key(const char *key, size_t len) {
   uint64_t hash = 14695981039346656037ULL;
   size_t i = 0;

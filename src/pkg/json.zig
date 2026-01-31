@@ -198,7 +198,7 @@ pub const JsonWriter = struct {
 
   pub fn write(self: *JsonWriter, allocator: std.mem.Allocator) ![]u8 {
     var len: usize = 0;
-    const ptr = yyjson.yyjson_mut_write(self.doc, yyjson.YYJSON_WRITE_PRETTY, &len);
+    const ptr = yyjson.yyjson_mut_write(self.doc, yyjson.YYJSON_WRITE_PRETTY_TWO_SPACES, &len);
     if (ptr == null) return error.OutOfMemory;
     defer std.c.free(ptr);
 
@@ -208,7 +208,7 @@ pub const JsonWriter = struct {
   }
 
   pub fn writeToFile(self: *JsonWriter, path: [:0]const u8) !void {
-    const success = yyjson.yyjson_mut_write_file(path.ptr, self.doc, yyjson.YYJSON_WRITE_PRETTY, null, null);
+    const success = yyjson.yyjson_mut_write_file(path.ptr, self.doc, yyjson.YYJSON_WRITE_PRETTY_TWO_SPACES, null, null);
     if (!success) return error.IoError;
   }
 };
