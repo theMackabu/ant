@@ -9,6 +9,8 @@
 
 /build
 /traces
+
+/src/pkg/.zig-cache
 /src/strip/target
 
 /test262

@@ -86,10 +86,15 @@ yyjson_dep = subproject('yyjson').get_variable('yyjson_dep')
 uuidv7_dep = subproject('uuidv7').get_variable('uuidv7_dep')
 argtable3_dep = subproject('argtable3').get_variable('argtable3_dep')
 minicoro_dep = subproject('minicoro').get_variable('minicoro_dep')
+lmdb_dep = subproject('lmdb').get_variable('lmdb_dep')
 
 zlib_dep = subproject('zlib-ng',
   default_options: ['b_lto=false', 'warning_level=0']
 ).get_variable('zlib_ng_dep')
+
+nghttp2_dep = subproject('nghttp2', default_options: [
+  'warning_level=0'
+]).get_variable('libnghttp2_dep')
 
 libffi_dep = subproject('libffi', default_options: [
   'warning_level=0',
@@ -125,6 +130,64 @@ oxc_lib = custom_target(
 )
 
 oxc_dep = declare_dependency(link_with: oxc_lib)
+zig = find_program('zig', required: true)
+
+deps_info = {
+  'lmdb': {
+    'dir': 'openldap-LMDB_0.9.33',
+    'inc': 'libraries/liblmdb',
+  },
+  'yyjson': {
+    'dir': 'yyjson-0.12.0',
+    'inc': 'src',
+  },
+  'libuv': {
+    'dir': 'libuv-v1.51.0',
+    'inc': 'include',
+  },
+  'zlib-ng': {
+    'dir': 'zlib-ng-2.3.2',
+    'inc': '',
+    'build_dir': true,
+  },
+}
+
+subprojects_src = src_root / 'subprojects'
+subprojects_build = meson.project_build_root() / 'subprojects'
+
+lmdb_include_path = subprojects_src / deps_info['lmdb']['dir'] / deps_info['lmdb']['inc']
+yyjson_include_path = subprojects_src / deps_info['yyjson']['dir'] / deps_info['yyjson']['inc']
+libuv_include_path = subprojects_src / deps_info['libuv']['dir'] / deps_info['libuv']['inc']
+zlib_include_path = subprojects_build / deps_info['zlib-ng']['dir'] / deps_info['zlib-ng']['inc']
+
+pkg_zig_dir = src_root / 'src' / 'pkg'
+pkg_build_dir = meson.current_build_dir()
+
+pkg_lib = custom_target(
+  'pkg_zig',
+  output: 'libpkg.a',
+  command: [
+    'sh', '-c',
+    '"$ZIG" build --build-file "$PKG_ZIG_DIR/build.zig" --cache-dir "$PKG_BUILD_DIR/.zig-cache" --global-cache-dir "$PKG_BUILD_DIR/.zig-cache" -Doptimize=ReleaseFast --prefix "$PKG_BUILD_DIR" -p "$PKG_BUILD_DIR" && cp "$PKG_BUILD_DIR/lib/libpkg.a" "@OUTPUT@"'
+  ],
+  env: {
+    'ZIG': zig.full_path(),
+    'PKG_ZIG_DIR': pkg_zig_dir,
+    'PKG_BUILD_DIR': pkg_build_dir,
+    'LMDB_INCLUDE': lmdb_include_path,
+    'ZLIB_INCLUDE': zlib_include_path,
+    'LIBUV_INCLUDE': libuv_include_path,
+    'YYJSON_INCLUDE': yyjson_include_path,
+  },
+  build_by_default: true,
+  build_always_stale: true
+)
+
+pkg_dep = declare_dependency(
+  link_with: [pkg_lib],
+  include_directories: include_directories('../../include'),
+  dependencies: [lmdb_dep, tlsuv_dep, libuv_dep, nghttp2_dep]
+)
 
 ant_deps = [
   libffi_dep, uuid_dep,

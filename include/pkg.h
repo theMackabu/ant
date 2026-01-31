@@ -1,0 +1,192 @@
+#ifndef PKG_H
+#define PKG_H
+
+#include <stdint.h>
+#include <stddef.h>
+#include <stdbool.h>
+
+typedef enum {
+  PKG_OK = 0,
+  PKG_OUT_OF_MEMORY = -1,
+  PKG_INVALID_LOCKFILE = -2,
+  PKG_IO_ERROR = -3,
+  PKG_NETWORK_ERROR = -4,
+  PKG_CACHE_ERROR = -5,
+  PKG_EXTRACT_ERROR = -6,
+  PKG_RESOLVE_ERROR = -7,
+  PKG_INVALID_ARGUMENT = -8,
+  PKG_NOT_FOUND = -9,
+  PKG_INTEGRITY_MISMATCH = -10,
+} pkg_error_t;
+
+typedef enum {
+  PKG_PHASE_RESOLVING = 0,
+  PKG_PHASE_FETCHING = 1,
+  PKG_PHASE_EXTRACTING = 2,
+  PKG_PHASE_LINKING = 3,
+  PKG_PHASE_CACHING = 4,
+  PKG_PHASE_POSTINSTALL = 5,
+} pkg_phase_t;
+
+typedef void (*pkg_progress_cb)(
+  void *user_data,
+  pkg_phase_t phase,
+  uint32_t current,
+  uint32_t total,
+  const char *message
+);
+
+// Options for context creation
+typedef struct {
+  const char *cache_dir;
+  const char *registry_url;
+  uint32_t max_connections;
+  pkg_progress_cb progress_callback;
+  void *user_data;
+  bool verbose;
+} pkg_options_t;
+
+typedef struct pkg_context pkg_context_t;
+
+const char *pkg_error_string(const pkg_context_t *ctx);
+
+pkg_context_t *pkg_init(const pkg_options_t *options);
+
+pkg_error_t pkg_install(
+  pkg_context_t *ctx,
+  const char *lockfile_path,
+  const char *node_modules_path
+);
+
+pkg_error_t pkg_resolve(
+  pkg_context_t *ctx,
+  const char *package_json_path,
+  const char *lockfile_out_path
+);
+
+pkg_error_t pkg_resolve_and_install(
+  pkg_context_t *ctx,
+  const char *package_json_path,
+  const char *lockfile_path,
+  const char *node_modules_path
+);
+
+pkg_error_t pkg_add(
+  pkg_context_t *ctx,
+  const char *package_json_path,
+  const char *package_spec
+);
+
+pkg_error_t pkg_remove(
+  pkg_context_t *ctx,
+  const char *package_json_path,
+  const char *package_name
+);
+
+void pkg_free(pkg_context_t *ctx);
+void pkg_cache_sync(pkg_context_t *ctx);
+
+typedef struct {
+  uint64_t total_size;
+  uint32_t package_count;
+} pkg_cache_stats_t;
+
+pkg_error_t pkg_cache_stats(pkg_context_t *ctx, pkg_cache_stats_t *out);
+
+int32_t pkg_cache_prune(pkg_context_t *ctx, uint32_t max_age_days);
+
+typedef struct {
+  uint32_t package_count;
+  uint32_t cache_hits;
+  uint32_t cache_misses;
+  uint32_t files_linked;
+  uint32_t files_copied;
+  uint32_t packages_installed;
+  uint32_t packages_skipped;
+  uint64_t elapsed_ms;
+} pkg_install_result_t;
+
+typedef struct {
+  const char *name;
+  const char *version;
+  bool direct;
+} pkg_added_package_t;
+
+uint32_t pkg_get_added_count(const pkg_context_t *ctx);
+
+pkg_error_t pkg_get_install_result(
+  pkg_context_t *ctx,
+  pkg_install_result_t *out
+);
+
+pkg_error_t pkg_get_added_package(
+  const pkg_context_t *ctx,
+  uint32_t index,
+  pkg_added_package_t *out
+);
+
+int pkg_get_bin_path(
+  const char *node_modules_path,
+  const char *bin_name,
+  char *out_path,
+  size_t out_path_len
+);
+
+typedef void (*pkg_bin_callback)(
+  const char *name, 
+  void *user_data
+);
+
+int pkg_list_bins(
+  const char *node_modules_path,
+  pkg_bin_callback callback,
+  void *user_data
+);
+
+int pkg_list_package_bins(
+  const char *node_modules_path,
+  const char *package_name,
+  pkg_bin_callback callback,
+  void *user_data
+);
+
+int pkg_get_script(
+  const char *package_json_path,
+  const char *script_name,
+  char *out_script,
+  size_t out_script_len
+);
+
+typedef struct {
+  int exit_code;
+  int signal;
+} pkg_script_result_t;
+
+pkg_error_t pkg_run_script(
+  const char *package_json_path,
+  const char *script_name,
+  const char *node_modules_path,
+  pkg_script_result_t *result
+);
+
+pkg_error_t pkg_run_script_with_args(
+  const char *package_json_path,
+  const char *script_name,
+  const char *node_modules_path,
+  const char *extra_args,
+  pkg_script_result_t *result
+);
+
+typedef void (*pkg_script_callback)(
+  const char *name,
+  const char *command,
+  void *user_data
+);
+
+int pkg_list_scripts(
+  const char *package_json_path,
+  pkg_script_callback callback,
+  void *user_data
+);
+
+#endif

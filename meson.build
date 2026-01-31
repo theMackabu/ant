@@ -56,7 +56,7 @@ libant_dep = declare_dependency(
   include_directories: [
     include, version_include, build_include
   ],
-  dependencies: ant_deps + [oxc_dep]
+  dependencies: ant_deps + [oxc_dep, pkg_dep]
 )
 
 link_args = []
@@ -71,13 +71,3 @@ executable(
   dependencies: libant_dep,
   link_args: link_args
 )
-
-if get_option('build_examples')
-  executable(
-    'embed_example',
-    files('examples/embed/embed.c'),
-    include_directories: [include, build_include],
-    link_with: libant,
-    dependencies: ant_deps + [oxc_dep]
-  )
-endif

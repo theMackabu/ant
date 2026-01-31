@@ -2,4 +2,3 @@ option('static_link', type: 'boolean', value: false, description: 'statically li
 option('build_timestamp', type: 'string', value: '', description: 'build timestamp (defaults to current time if empty)')
 option('tls_library', type: 'combo', choices: ['openssl', 'mbedtls'], value: 'openssl', description: 'TLS library to use')
 option('deps_prefix_cmake', type: 'string', value: '', description: 'prefix path for finding dependencies in cmake subprojects')
-option('build_examples', type: 'boolean', value: false, description: 'build embedding examples')
