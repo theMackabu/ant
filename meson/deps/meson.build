@@ -163,32 +163,6 @@ zlib_include_path = subprojects_build / deps_info['zlib-ng']['dir'] / deps_info[
 pkg_zig_dir = src_root / 'src' / 'pkg'
 pkg_build_dir = meson.current_build_dir()
 
-pkg_lib = custom_target(
-  'pkg_zig',
-  output: 'libpkg.a',
-  command: [
-    'sh', '-c',
-    '"$ZIG" build --build-file "$PKG_ZIG_DIR/build.zig" --prefix "$PKG_BUILD_DIR" && cp "$PKG_BUILD_DIR/lib/libpkg.a" "@OUTPUT@"'
-  ],
-  env: {
-    'ZIG': zig.full_path(),
-    'PKG_ZIG_DIR': pkg_zig_dir,
-    'PKG_BUILD_DIR': pkg_build_dir,
-    'LMDB_INCLUDE': lmdb_include_path,
-    'ZLIB_INCLUDE': zlib_include_path,
-    'LIBUV_INCLUDE': libuv_include_path,
-    'YYJSON_INCLUDE': yyjson_include_path,
-  },
-  build_by_default: true,
-  build_always_stale: true
-)
-
-pkg_dep = declare_dependency(
-  link_with: [pkg_lib],
-  include_directories: include_directories('../../include'),
-  dependencies: [lmdb_dep, tlsuv_dep, libuv_dep, nghttp2_dep]
-)
-
 ant_deps = [
   libffi_dep, uuid_dep,
   llhttp, pcre2_dep, libuv_dep,
