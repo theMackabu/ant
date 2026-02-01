@@ -9,11 +9,12 @@ pub fn build(b: *std.Build) void {
     if (getEnv("PKG_TARGET")) |target_str| {
       defer std.heap.page_allocator.free(target_str);
       var query: std.Target.Query = .{};
-
+      
       var it = std.mem.splitScalar(u8, target_str, '-');
       if (it.next()) |arch| query.cpu_arch = std.meta.stringToEnum(std.Target.Cpu.Arch, arch);
       if (it.next()) |os| query.os_tag = std.meta.stringToEnum(std.Target.Os.Tag, os);
-
+      if (query.os_tag == .macos) query.os_version_min = .{ .semver = .{ .major = 15, .minor = 0, .patch = 0 } };
+      
       query.cpu_model = .baseline;
       break :blk b.resolveTargetQuery(query);
     } else break :blk b.standardTargetOptions(.{});
@@ -39,7 +40,7 @@ pub fn build(b: *std.Build) void {
   });
 
   lib.use_llvm = true;
-  lib.use_lld = true;
+  if (resolved_target.result.os.tag != .macos) lib.use_lld = true;
   
   const version = std.posix.getenv("ANT_VERSION") orelse "unknown";
   const options = b.addOptions();
