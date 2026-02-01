@@ -23,6 +23,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+      - name: Setup Zig
+        run: |
+          cd /tmp
+          wget https://ziglang.org/download/0.15.2/zig-linux-x86_64-0.15.2.tar.xz
+          tar -xf zig-linux-x86_64-0.15.2.tar.xz
+          mv zig-linux-x86_64-0.15.2 /usr/local/zig
+          ln -sf /usr/local/zig/zig /usr/local/bin/zig
       - name: Cache native dependencies
         id: cache-deps
         uses: actions/cache@v4
@@ -88,7 +95,7 @@ jobs:
           export PKG_CONFIG_PATH="$HOME/deps-cache/lib/pkgconfig:$PKG_CONFIG_PATH"
           export CMAKE_PREFIX_PATH="$HOME/deps-cache:$CMAKE_PREFIX_PATH"
           CC=clang CC_LD=lld meson setup build --prefer-static -Db_lto=true --buildtype=release -Dstatic_link=true -Dbuild_timestamp=${{ inputs.build_timestamp }} && meson compile -C build
-      - run: ./build/ant --version
+      - run: ./build/ant --version-raw
       - run: llvm-strip build/ant
       - uses: actions/upload-artifact@v4
         with:

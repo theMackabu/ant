@@ -87,7 +87,7 @@ int ant_version(void *argtable[]) {
     "                                                             /_/" RESET "   by @themackabu\n"
     RESET;
   
-  printf("%s", logo);
+  fputs(logo, stdout);
   
   printf("%s (released %s, %ld%s ago)\n", 
     ANT_VERSION, 

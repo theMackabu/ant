@@ -30,6 +30,13 @@ jobs:
             mingw-w64-x86_64-libsodium
             mingw-w64-x86_64-nodejs
             git
+      - name: Setup Zig
+        run: |
+          cd /tmp
+          curl -L -o zig-windows-x86_64-0.15.2.zip https://ziglang.org/download/0.15.2/zig-windows-x86_64-0.15.2.zip
+          unzip -q zig-windows-x86_64-0.15.2.zip
+          mv zig-windows-x86_64-0.15.2 /usr/local/zig
+          export PATH="/usr/local/zig:$PATH"
       - name: Cache native dependencies
         id: cache-deps
         uses: actions/cache@v4
@@ -73,7 +80,7 @@ jobs:
           export PATH="/c/Users/$USER/.cargo/bin:$PATH"
           export PKG_CONFIG_PATH="$DEPS_CACHE/lib/pkgconfig:$PKG_CONFIG_PATH"
           meson setup build -Dc_std=gnu2x -Dbuild_timestamp=${{ inputs.build_timestamp }} -Ddeps_prefix_cmake="$DEPS_CACHE_WIN" && meson compile -C build
-      - run: ./build/ant --version
+      - run: ./build/ant --version-raw
       - uses: actions/upload-artifact@v4
         with:
           name: ant-windows-x64

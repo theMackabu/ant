@@ -18,7 +18,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: brew install meson ninja llvm
+      - name: Install dependencies
+        run: |
+          brew install meson ninja llvm
+          # Install Zig 0.15.2
+          cd /tmp
+          curl -L -o zig-macos-aarch64-0.15.2.tar.xz https://ziglang.org/download/0.15.2/zig-macos-aarch64-0.15.2.tar.xz
+          tar -xf zig-macos-aarch64-0.15.2.tar.xz
+          sudo mv zig-macos-aarch64-0.15.2 /usr/local/zig
+          sudo ln -sf /usr/local/zig/zig /usr/local/bin/zig
       - name: Cache native dependencies
         id: cache-deps
         uses: actions/cache@v4
@@ -88,7 +96,7 @@ jobs:
           export CMAKE_AR=$AR
           export CMAKE_RANLIB=$RANLIB
           meson setup build -Db_lto=true --buildtype=release -Dbuild_timestamp=${{ inputs.build_timestamp }} -Dtls_library=mbedtls && meson compile -C build
-      - run: ./build/ant --version
+      - run: ./build/ant --version-raw
       - run: strip build/ant
       - uses: actions/upload-artifact@v4
         with:

@@ -11,6 +11,7 @@
 #include <argtable3.h>
 
 #include "ant.h"
+#include "config.h"
 #include "repl.h"
 #include "utils.h"
 #include "reactor.h"
@@ -245,6 +246,7 @@ int main(int argc, char *argv[]) {
 
   struct arg_lit *help = arg_lit0("h", "help", "display this help and exit");
   struct arg_lit *version = arg_lit0("v", "version", "display version information and exit");
+  struct arg_lit *version_raw = arg_lit0(NULL, "version-raw", "raw version number for scripts");
   struct arg_str *eval = arg_str0("e", "eval", "<script>", "evaluate script");
   struct arg_lit *print = arg_lit0("p", "print", "evaluate script and print result");
   struct arg_int *initial_mem = arg_int0(NULL, "initial-mem", "<size>", "initial memory size in KB (default: 16kb)");
@@ -254,8 +256,8 @@ int main(int argc, char *argv[]) {
   struct arg_end *end = arg_end(20);
   
   void *argtable[] = {
-    help, version, eval, print,
-    initial_mem, max_mem,
+    help, version, version_raw,
+    eval, print, initial_mem, max_mem,
     localstorage_file, file, end
   };
 
@@ -272,6 +274,12 @@ int main(int argc, char *argv[]) {
     printf("  %-28s %s\n", "--no-color", "disable colored output");
     arg_print_glossary(stdout, argtable, "  %-28s %s\n");
     arg_freetable(argtable, ARGTABLE_COUNT);
+    free(filtered_argv);
+    return EXIT_SUCCESS;
+  }
+  
+  if (version_raw->count > 0) {
+    fputs(ANT_VERSION "\n", stdout);
     free(filtered_argv);
     return EXIT_SUCCESS;
   }

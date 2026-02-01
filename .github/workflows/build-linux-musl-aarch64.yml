@@ -15,6 +15,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+
       - name: Cache native dependencies
         id: cache-deps
         uses: actions/cache@v4
@@ -46,6 +47,13 @@ jobs:
               util-linux-dev util-linux-static linux-headers libunwind-dev libunwind-static rust cargo
 
             git config --global --add safe.directory /work
+
+            # Install Zig 0.15.2
+            cd /tmp
+            wget -q https://ziglang.org/download/0.15.2/zig-linux-aarch64-0.15.2.tar.xz
+            tar -xf zig-linux-aarch64-0.15.2.tar.xz
+            mv zig-linux-aarch64-0.15.2 /usr/local/zig
+            export PATH="/usr/local/zig:$PATH"
 
             export CFLAGS="-Os -flto"
             export AR=llvm-ar
@@ -83,7 +91,7 @@ jobs:
             CC=clang CC_LD=lld meson setup build --prefer-static -Db_lto=true --buildtype=release -Dstatic_link=true -Dbuild_timestamp=${{ inputs.build_timestamp }} && meson compile -C build
             llvm-strip build/ant
           '
-      - run: ./build/ant --version
+      - run: ./build/ant --version-raw
       - uses: actions/upload-artifact@v4
         with:
           name: ant-linux-aarch64-musl

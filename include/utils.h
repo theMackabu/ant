@@ -1,6 +1,6 @@
 #ifndef ANT_UTILS_H
 #define ANT_UTILS_H
-#define ARGTABLE_COUNT 9
+#define ARGTABLE_COUNT 10
 
 #include <stdlib.h>
 #include <stdint.h>

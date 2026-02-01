@@ -83,11 +83,11 @@ static uint64_t timespec_diff_ms(struct timespec *start, struct timespec *end) {
 }
 
 static void print_elapsed(uint64_t elapsed_ms) {
-  printf("%s", C_BOLD);
+  fputs(C_BOLD, stdout);
   if (elapsed_ms < 1000) {
     printf("%llums", (unsigned long long)elapsed_ms);
   } else printf("%.2fs", (double)elapsed_ms / 1000.0);
-  printf("%s", C_RESET);
+  fputs(C_RESET, stdout);
 }
 
 static void print_install_header(const char *cmd) {

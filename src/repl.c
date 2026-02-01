@@ -520,7 +520,7 @@ void ant_repl_run() {
   
   while (1) {
     const char *prompt = multiline_buf ? "| " : "> ";
-    printf("%s", prompt);
+    fputs(prompt, stdout);
     fflush(stdout);
     
     ctrl_c_pressed = 0;
