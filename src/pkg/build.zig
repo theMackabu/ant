@@ -34,7 +34,12 @@ pub fn build(b: *std.Build) void {
       .strip = true,
     }),
   });
-
+  
+  const version = std.posix.getenv("ANT_VERSION") orelse "unknown";
+  const options = b.addOptions();
+  options.addOption([]const u8, "version", version);
+  
+  lib.root_module.addOptions("config", options);
   lib.root_module.addCMacro("NDEBUG", "1");
 
   if (lmdb_include) |p| lib.root_module.addIncludePath(.{ .cwd_relative = p });
