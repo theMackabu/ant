@@ -1,0 +1,35 @@
+name: Build Single Platform
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: 'Target platform'
+        required: true
+        type: choice
+        options:
+          - linux-glibc-x64
+          - linux-glibc-aarch64
+          - linux-musl-x64
+          - linux-musl-aarch64
+          - macos-x64
+          - macos-aarch64
+          - macos-x64-mbedtls
+          - macos-aarch64-mbedtls
+          - windows-x64
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      timestamp: ${{ steps.timestamp.outputs.value }}
+    steps:
+      - id: timestamp
+        run: echo "value=$(date +%s)" >> $GITHUB_OUTPUT
+
+  build:
+    needs: prepare
+    uses: ./.github/workflows/build-platform.yml
+    with:
+      platform: ${{ inputs.platform }}
+      build_timestamp: ${{ needs.prepare.outputs.timestamp }}

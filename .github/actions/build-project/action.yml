@@ -1,0 +1,114 @@
+name: Build Project
+description: Run meson build with appropriate settings
+
+inputs:
+  cc:
+    description: C compiler
+    required: true
+  cxx:
+    description: C++ compiler
+    required: false
+    default: ''
+  ar:
+    description: AR tool
+    required: false
+    default: ''
+  ranlib:
+    description: RANLIB tool
+    required: false
+    default: ''
+  ld:
+    description: Linker
+    required: false
+    default: ''
+  strip:
+    description: Strip tool
+    required: false
+    default: strip
+  deps_prefix:
+    description: Prefix where deps are installed
+    required: true
+  build_timestamp:
+    description: Build timestamp
+    required: true
+  tls_library:
+    description: TLS library (openssl or mbedtls)
+    required: false
+    default: 'openssl'
+  static_link:
+    description: Enable static linking
+    required: false
+    default: 'false'
+  extra_meson_args:
+    description: Additional meson arguments
+    required: false
+    default: ''
+  binary_name:
+    description: Output binary name (ant or ant.exe)
+    required: false
+    default: 'ant'
+
+runs:
+  using: composite
+  steps:
+    - name: npm install
+      shell: bash
+      run: npm ci
+      working-directory: src/tools
+
+    - name: Cache vendor deps
+      uses: actions/cache@v4
+      with:
+        path: |
+          vendor/*/
+          build/vendor
+        key: vendor-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vendor/*.wrap') }}
+
+    - name: Configure and build
+      shell: bash
+      run: |
+        export PKG_CONFIG_PATH="${{ inputs.deps_prefix }}/lib/pkgconfig:$PKG_CONFIG_PATH"
+        export CMAKE_PREFIX_PATH="${{ inputs.deps_prefix }}:$CMAKE_PREFIX_PATH"
+        export CC="${{ inputs.cc }}"
+
+        if [[ -n "${{ inputs.cxx }}" ]]; then
+          export CXX="${{ inputs.cxx }}"
+        fi
+        if [[ -n "${{ inputs.ar }}" ]]; then
+          export AR="${{ inputs.ar }}"
+          export CMAKE_AR="${{ inputs.ar }}"
+        fi
+        if [[ -n "${{ inputs.ranlib }}" ]]; then
+          export RANLIB="${{ inputs.ranlib }}"
+          export CMAKE_RANLIB="${{ inputs.ranlib }}"
+        fi
+        if [[ -n "${{ inputs.ld }}" ]]; then
+          export CC_LD="${{ inputs.ld }}"
+        fi
+
+        MESON_ARGS="-Db_lto=true --buildtype=release"
+        MESON_ARGS="$MESON_ARGS -Dbuild_timestamp=${{ inputs.build_timestamp }}"
+
+        if [[ "${{ inputs.tls_library }}" == "mbedtls" ]]; then
+          MESON_ARGS="$MESON_ARGS -Dtls_library=mbedtls"
+        fi
+
+        if [[ "${{ inputs.static_link }}" == "true" ]]; then
+          MESON_ARGS="$MESON_ARGS --prefer-static -Dstatic_link=true"
+        fi
+
+        if [[ -n "${{ inputs.extra_meson_args }}" ]]; then
+          MESON_ARGS="$MESON_ARGS ${{ inputs.extra_meson_args }}"
+        fi
+
+        echo "Running: meson setup build $MESON_ARGS"
+        meson setup build $MESON_ARGS
+        meson compile -C build
+
+    - name: Verify build
+      shell: bash
+      run: ./build/${{ inputs.binary_name }} --version-raw
+
+    - name: Strip binary
+      shell: bash
+      run: ${{ inputs.strip }} build/${{ inputs.binary_name }}

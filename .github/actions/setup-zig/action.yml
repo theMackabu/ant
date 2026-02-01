@@ -1,0 +1,48 @@
+name: Setup Zig
+description: Install Zig compiler
+
+inputs:
+  version:
+    description: Zig version
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Determine platform
+      id: platform
+      shell: bash
+      run: |
+        case "${{ runner.os }}-${{ runner.arch }}" in
+          Linux-X64)   echo "slug=linux-x86_64" >> $GITHUB_OUTPUT; echo "ext=tar.xz" >> $GITHUB_OUTPUT ;;
+          Linux-ARM64) echo "slug=linux-aarch64" >> $GITHUB_OUTPUT; echo "ext=tar.xz" >> $GITHUB_OUTPUT ;;
+          macOS-X64)   echo "slug=macos-x86_64" >> $GITHUB_OUTPUT; echo "ext=tar.xz" >> $GITHUB_OUTPUT ;;
+          macOS-ARM64) echo "slug=macos-aarch64" >> $GITHUB_OUTPUT; echo "ext=tar.xz" >> $GITHUB_OUTPUT ;;
+          Windows-X64) echo "slug=windows-x86_64" >> $GITHUB_OUTPUT; echo "ext=zip" >> $GITHUB_OUTPUT ;;
+        esac
+
+    - name: Cache Zig
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: /usr/local/zig
+        key: zig-${{ steps.platform.outputs.slug }}-${{ inputs.version }}
+
+    - name: Download and install Zig
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        cd /tmp
+        curl -L -o zig.${{ steps.platform.outputs.ext }} \
+          "https://ziglang.org/download/${{ inputs.version }}/zig-${{ steps.platform.outputs.slug }}-${{ inputs.version }}.${{ steps.platform.outputs.ext }}"
+        if [[ "${{ steps.platform.outputs.ext }}" == "zip" ]]; then
+          unzip -q zig.zip
+        else
+          tar -xf zig.tar.xz
+        fi
+        sudo mv zig-${{ steps.platform.outputs.slug }}-${{ inputs.version }} /usr/local/zig || \
+          mv zig-${{ steps.platform.outputs.slug }}-${{ inputs.version }} /usr/local/zig
+
+    - name: Add to PATH
+      shell: bash
+      run: echo "/usr/local/zig" >> $GITHUB_PATH
