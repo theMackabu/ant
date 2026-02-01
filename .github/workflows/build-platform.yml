@@ -69,16 +69,18 @@ jobs:
           apk add --no-cache git clang lld llvm meson ninja cmake pkgconf curl npm nodejs \
             musl-dev openssl-dev openssl-libs-static libsodium-dev libsodium-static \
             util-linux-dev util-linux-static linux-headers libunwind-dev libunwind-static \
-            tar zstd jq rust cargo bash
+            tar xz zstd jq rust cargo bash
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       # === MACOS SETUP ===
       - name: Setup macOS environment
         if: startsWith(inputs.platform, 'macos')
         run: |
-          brew install meson ninja llvm jq
+          for pkg in meson ninja llvm jq; do
+            brew list "$pkg" &>/dev/null || brew install "$pkg"
+          done
           if [[ "${{ inputs.platform }}" != *"mbedtls"* ]]; then
-            brew install openssl@3
+            brew list openssl@3 &>/dev/null || brew install openssl@3
           fi
 
       # === WINDOWS SETUP ===

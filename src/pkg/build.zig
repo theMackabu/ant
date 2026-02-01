@@ -11,7 +11,7 @@ pub fn build(b: *std.Build) void {
     query.cpu_arch = .aarch64;
     query.os_tag = .macos;
     query.os_version_min = .{ .semver = .{ .major = 15, .minor = 0, .patch = 0 } };
-    query.cpu_model = .native;
+    query.cpu_model = .baseline;
 
     break :blk b.resolveTargetQuery(query);
   };
