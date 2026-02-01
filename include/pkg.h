@@ -201,13 +201,6 @@ pkg_error_t pkg_run_script(
   const char *package_json_path,
   const char *script_name,
   const char *node_modules_path,
-  pkg_script_result_t *result
-);
-
-pkg_error_t pkg_run_script_with_args(
-  const char *package_json_path,
-  const char *script_name,
-  const char *node_modules_path,
   const char *extra_args,
   pkg_script_result_t *result
 );
