@@ -80,6 +80,37 @@ pub const LifecycleScript = extern struct {
   script: [*:0]const u8,
 };
 
+const PkgInfo = extern struct {
+  name: [*:0]const u8,
+  version: [*:0]const u8,
+  description: [*:0]const u8,
+  license: [*:0]const u8,
+  homepage: [*:0]const u8,
+  tarball: [*:0]const u8,
+  shasum: [*:0]const u8,
+  integrity: [*:0]const u8,
+  keywords: [*:0]const u8,
+  published: [*:0]const u8,
+  dep_count: u32,
+  version_count: u32,
+  unpacked_size: u64,
+};
+
+const DistTag = extern struct {
+  tag: [*:0]const u8,
+  version: [*:0]const u8,
+};
+
+const Maintainer = extern struct {
+  name: [*:0]const u8,
+  email: [*:0]const u8,
+};
+
+const Dependency = extern struct {
+  name: [*:0]const u8,
+  version: [*:0]const u8,
+};
+
 pub const PkgContext = struct {
   allocator: std.mem.Allocator,
   arena_state: std.heap.ArenaAllocator,
@@ -95,6 +126,10 @@ pub const PkgContext = struct {
   added_packages_storage: std.ArrayListUnmanaged([:0]u8),
   lifecycle_scripts: std.ArrayListUnmanaged(LifecycleScript),
   lifecycle_scripts_storage: std.ArrayListUnmanaged([:0]u8),
+  info_dist_tags: std.ArrayListUnmanaged(DistTag),
+  info_maintainers: std.ArrayListUnmanaged(Maintainer),
+  info_dependencies: std.ArrayListUnmanaged(Dependency),
+  info_storage: std.ArrayListUnmanaged([:0]u8),
 
   pub fn init(allocator: std.mem.Allocator, options: PkgOptions) !*PkgContext {
     const ctx = try allocator.create(PkgContext);
@@ -127,6 +162,10 @@ pub const PkgContext = struct {
       .added_packages_storage = .{},
       .lifecycle_scripts = .{},
       .lifecycle_scripts_storage = .{},
+      .info_dist_tags = .{},
+      .info_maintainers = .{},
+      .info_dependencies = .{},
+      .info_storage = .{},
     };
 
     debug.enabled = options.verbose;
@@ -166,6 +205,11 @@ pub const PkgContext = struct {
     for (self.lifecycle_scripts_storage.items) |s| self.allocator.free(s);
     self.lifecycle_scripts_storage.deinit(self.allocator);
     self.lifecycle_scripts.deinit(self.allocator);
+    for (self.info_storage.items) |s| self.allocator.free(s);
+    self.info_storage.deinit(self.allocator);
+    self.info_dist_tags.deinit(self.allocator);
+    self.info_maintainers.deinit(self.allocator);
+    self.info_dependencies.deinit(self.allocator);
     self.allocator.free(self.cache_dir);
     self.allocator.destroy(self);
   }
@@ -203,6 +247,20 @@ pub const PkgContext = struct {
     for (self.lifecycle_scripts_storage.items) |s| self.allocator.free(s);
     self.lifecycle_scripts_storage.clearRetainingCapacity();
     self.lifecycle_scripts.clearRetainingCapacity();
+  }
+
+  fn clearInfo(self: *PkgContext) void {
+    for (self.info_storage.items) |s| self.allocator.free(s);
+    self.info_storage.clearRetainingCapacity();
+    self.info_dist_tags.clearRetainingCapacity();
+    self.info_maintainers.clearRetainingCapacity();
+    self.info_dependencies.clearRetainingCapacity();
+  }
+
+  fn storeInfoString(self: *PkgContext, str: []const u8) ![*:0]const u8 {
+    const z = try self.allocator.dupeZ(u8, str);
+    try self.info_storage.append(self.allocator, z);
+    return z.ptr;
   }
 
   fn addLifecycleScript(self: *PkgContext, name: []const u8, script: []const u8) !void {
@@ -718,48 +776,6 @@ export fn pkg_add_trusted_dependencies(
   return .ok;
 }
 
-export fn pkg_resolve(
-  ctx: ?*PkgContext,
-  package_json_path: [*:0]const u8,
-  lockfile_out_path: [*:0]const u8,
-) PkgError {
-  const c = ctx orelse return .invalid_argument;
-  _ = c.arena_state.reset(.retain_capacity);
-  const arena_alloc = c.arena_state.allocator();
-
-  var stage_start: u64 = @intCast(std.time.nanoTimestamp());
-  debug.log("resolve: package_json={s} lockfile={s}", .{ std.mem.span(package_json_path), std.mem.span(lockfile_out_path) });
-
-  const http = c.http orelse return .network_error;
-
-  var res = resolver.Resolver.init(
-    arena_alloc,
-    c.allocator,
-    &c.string_pool,
-    http,
-    c.cache_db,
-    if (c.options.registry_url) |url| std.mem.span(url) else "https://registry.npmjs.org",
-    &c.metadata_cache,
-  );
-  defer res.deinit();
-
-  res.resolveFromPackageJson(std.mem.span(package_json_path)) catch |err| {
-    c.setErrorFmt("Failed to resolve dependencies: {}", .{err});
-    return .resolve_error;
-  };
-  
-  stage_start = debug.timer("resolve dependencies", stage_start);
-  debug.log("  resolved {d} packages", .{res.resolved.count()});
-
-  res.writeLockfile(std.mem.span(lockfile_out_path)) catch |err| {
-    c.setErrorFmt("Failed to write lockfile: {}", .{err});
-    return .io_error;
-  };
-  _ = debug.timer("write lockfile", stage_start);
-
-  return .ok;
-}
-
 const InterleavedExtractCtx = struct {
   ext: *extractor.Extractor,
   integrity: [64]u8,
@@ -914,6 +930,7 @@ export fn pkg_resolve_and_install(
   });
 
   const http = c.http orelse return .network_error;
+  http.resetMetaClients();
   const db = c.cache_db orelse return .cache_error;
 
   const pkg_json_path_z = arena_alloc.dupeZ(u8, std.mem.span(package_json_path)) catch return .out_of_memory;
@@ -1376,6 +1393,7 @@ export fn pkg_add(
   ctx: ?*PkgContext,
   package_json_path: [*:0]const u8,
   package_spec: [*:0]const u8,
+  dev: bool,
 ) PkgError {
   const c = ctx orelse return .invalid_argument;
   _ = c.arena_state.reset(.retain_capacity);
@@ -1446,7 +1464,9 @@ export fn pkg_add(
     return .out_of_memory;
   };
 
-  var deps = if (parsed.value.object.get("dependencies")) |d|
+  const target_key = if (dev) "devDependencies" else "dependencies";
+  
+  var deps = if (parsed.value.object.get(target_key)) |d|
     if (d == .object) d.object else std.json.ObjectMap.init(arena_alloc)
   else std.json.ObjectMap.init(arena_alloc);
 
@@ -1461,8 +1481,10 @@ export fn pkg_add(
   const root_obj = writer.createObject();
   writer.setRoot(root_obj);
 
+  var found_target = false;
   for (parsed.value.object.keys(), parsed.value.object.values()) |key, value| {
-    if (std.mem.eql(u8, key, "dependencies")) {
+    if (std.mem.eql(u8, key, target_key)) {
+      found_target = true;
       const deps_obj = writer.createObject();
       var dep_iter = deps.iterator();
       while (dep_iter.next()) |entry| {
@@ -1476,10 +1498,10 @@ export fn pkg_add(
     }
   }
 
-  if (parsed.value.object.get("dependencies") == null) {
+  if (!found_target) {
     const deps_obj = writer.createObject();
     writer.objectAdd(deps_obj, pkg_name, writer.createString(version_with_caret));
-    writer.objectAdd(root_obj, "dependencies", deps_obj);
+    writer.objectAdd(root_obj, target_key, deps_obj);
   }
 
   const pkg_json_z = arena_alloc.dupeZ(u8, pkg_json_str) catch {
@@ -2118,4 +2140,575 @@ export fn pkg_list_scripts(
   }
 
   return count;
+}
+
+export fn pkg_info(
+  ctx: ?*PkgContext,
+  package_spec: [*:0]const u8,
+  out: *PkgInfo,
+) PkgError {
+  const c = ctx orelse return .invalid_argument;
+  c.clearInfo();
+  _ = c.arena_state.reset(.retain_capacity);
+  const arena = c.arena_state.allocator();
+
+  const http = c.http orelse return .network_error;
+  const spec = std.mem.span(package_spec);
+  
+  var name: []const u8 = spec;
+  var requested_version: ?[]const u8 = null;
+  if (std.mem.lastIndexOf(u8, spec, "@")) |at_idx| {
+    if (at_idx > 0) {
+      name = spec[0..at_idx];
+      requested_version = spec[at_idx + 1..];
+    }
+  }
+
+  const data = http.fetchMetadataFull(name, true, c.allocator) catch |err| {
+    c.setErrorFmt("Failed to fetch package info: {}", .{err});
+    return .network_error;
+  }; defer c.allocator.free(data);
+
+  var doc = json.JsonDoc.parse(data) catch {
+    c.setError("Failed to parse package metadata");
+    return .resolve_error;
+  };
+  
+  defer doc.deinit();
+  const root = doc.root();
+  
+  const versions_obj = root.getObject("versions") orelse {
+    c.setError("No versions found");
+    return .not_found;
+  };
+
+  var versions_iter = versions_obj.objectIterator() orelse return .resolve_error;
+  defer versions_iter.deinit();
+  var version_count: u32 = 0;
+  while (versions_iter.next()) |_| version_count += 1;
+
+  var version_str: []const u8 = "";
+  if (requested_version) |rv| {
+    version_str = rv;
+  } else if (root.getObject("dist-tags")) |tags| {
+    version_str = tags.getString("latest") orelse "";
+  }
+
+  const version_z = arena.dupeZ(u8, version_str) catch return .out_of_memory;
+
+  const version_obj = versions_obj.getObject(version_z) orelse {
+    c.setErrorFmt("Version {s} not found", .{version_str});
+    return .not_found;
+  };
+
+  var dep_count: u32 = 0;
+  if (version_obj.getObject("dependencies")) |deps| {
+    var deps_iter = deps.objectIterator() orelse return .resolve_error;
+    defer deps_iter.deinit();
+    while (deps_iter.next()) |entry| {
+      dep_count += 1;
+      if (entry.value.asString()) |ver| {
+        c.info_dependencies.append(c.allocator, .{
+          .name = c.storeInfoString(entry.key) catch continue,
+          .version = c.storeInfoString(ver) catch continue,
+        }) catch continue;
+      }
+    }
+  }
+
+  const dist = version_obj.getObject("dist");
+  const unpacked_size: u64 = if (dist) |d| @as(u64, @intCast(d.getInt("unpackedSize") orelse 0)) else 0;
+
+  var keywords_buf = std.ArrayListUnmanaged(u8){};
+  defer keywords_buf.deinit(c.allocator);
+  if (version_obj.getArray("keywords")) |kw_arr| {
+    var kw_iter = kw_arr.arrayIterator() orelse return .resolve_error;
+    defer kw_iter.deinit();
+    var first = true;
+    while (kw_iter.next()) |kw_val| {
+      if (kw_val.asString()) |kw| {
+        if (!first) keywords_buf.appendSlice(c.allocator, ", ") catch {};
+        keywords_buf.appendSlice(c.allocator, kw) catch {};
+        first = false;
+      }
+    }
+  }
+
+  out.* = .{
+    .name = c.storeInfoString(root.getString("name") orelse name) catch return .out_of_memory,
+    .version = c.storeInfoString(version_str) catch return .out_of_memory,
+    .description = c.storeInfoString(version_obj.getString("description") orelse "") catch return .out_of_memory,
+    .license = c.storeInfoString(version_obj.getString("license") orelse "") catch return .out_of_memory,
+    .homepage = c.storeInfoString(version_obj.getString("homepage") orelse "") catch return .out_of_memory,
+    .tarball = c.storeInfoString(if (dist) |d| d.getString("tarball") orelse "" else "") catch return .out_of_memory,
+    .shasum = c.storeInfoString(if (dist) |d| d.getString("shasum") orelse "" else "") catch return .out_of_memory,
+    .integrity = c.storeInfoString(if (dist) |d| d.getString("integrity") orelse "" else "") catch return .out_of_memory,
+    .keywords = c.storeInfoString(keywords_buf.items) catch return .out_of_memory,
+    .published = c.storeInfoString(if (root.getObject("time")) |t| t.getString(version_z) orelse "" else "") catch return .out_of_memory,
+    .dep_count = dep_count,
+    .version_count = version_count,
+    .unpacked_size = unpacked_size,
+  };
+
+  if (root.getObject("dist-tags")) |tags| {
+    var tags_iter = tags.objectIterator() orelse return .ok;
+    defer tags_iter.deinit();
+    while (tags_iter.next()) |entry| {
+      if (entry.value.asString()) |ver| {
+        c.info_dist_tags.append(c.allocator, .{
+          .tag = c.storeInfoString(entry.key) catch continue,
+          .version = c.storeInfoString(ver) catch continue,
+        }) catch continue;
+      }
+    }
+  }
+
+  if (root.getArray("maintainers")) |maint_arr| {
+    var maint_iter = maint_arr.arrayIterator() orelse return .ok;
+    defer maint_iter.deinit();
+    while (maint_iter.next()) |maint_val| {
+      const maint_name = maint_val.getString("name") orelse continue;
+      const maint_email = maint_val.getString("email") orelse "";
+      c.info_maintainers.append(c.allocator, .{
+        .name = c.storeInfoString(maint_name) catch continue,
+        .email = c.storeInfoString(maint_email) catch continue,
+      }) catch continue;
+    }
+  }
+
+  return .ok;
+}
+
+export fn pkg_info_dist_tag_count(ctx: ?*const PkgContext) u32 {
+  const c = ctx orelse return 0;
+  return @intCast(c.info_dist_tags.items.len);
+}
+
+export fn pkg_info_get_dist_tag(ctx: ?*const PkgContext, index: u32, out: *DistTag) PkgError {
+  const c = ctx orelse return .invalid_argument;
+  if (index >= c.info_dist_tags.items.len) return .invalid_argument;
+  out.* = c.info_dist_tags.items[index];
+  return .ok;
+}
+
+export fn pkg_info_maintainer_count(ctx: ?*const PkgContext) u32 {
+  const c = ctx orelse return 0;
+  return @intCast(c.info_maintainers.items.len);
+}
+
+export fn pkg_info_get_maintainer(ctx: ?*const PkgContext, index: u32, out: *Maintainer) PkgError {
+  const c = ctx orelse return .invalid_argument;
+  if (index >= c.info_maintainers.items.len) return .invalid_argument;
+  out.* = c.info_maintainers.items[index];
+  return .ok;
+}
+
+export fn pkg_info_dependency_count(ctx: ?*const PkgContext) u32 {
+  const c = ctx orelse return 0;
+  return @intCast(c.info_dependencies.items.len);
+}
+
+export fn pkg_info_get_dependency(ctx: ?*const PkgContext, index: u32, out: *Dependency) PkgError {
+  const c = ctx orelse return .invalid_argument;
+  if (index >= c.info_dependencies.items.len) return .invalid_argument;
+  out.* = c.info_dependencies.items[index];
+  return .ok;
+}
+
+export fn pkg_exec_temp(
+  ctx: ?*PkgContext,
+  package_spec: [*:0]const u8,
+  out_bin_path: [*]u8,
+  out_bin_path_len: usize,
+) PkgError {
+  const c = ctx orelse return .invalid_argument;
+  _ = c.arena_state.reset(.retain_capacity);
+  const arena_alloc = c.arena_state.allocator();
+
+  const spec_str = std.mem.span(package_spec);
+  
+  var pkg_name: []const u8 = spec_str;
+  var bin_name: []const u8 = spec_str;
+  var version_constraint: []const u8 = "latest";
+
+  if (std.mem.indexOf(u8, spec_str, "@")) |at_idx| {
+    if (at_idx == 0) {
+      if (std.mem.indexOfPos(u8, spec_str, 1, "@")) |second_at| {
+        pkg_name = spec_str[0..second_at];
+        version_constraint = spec_str[second_at + 1 ..];
+      }
+    } else {
+      pkg_name = spec_str[0..at_idx];
+      version_constraint = spec_str[at_idx + 1 ..];
+    }
+  }
+
+  if (std.mem.lastIndexOfScalar(u8, pkg_name, '/')) |slash| {
+    bin_name = pkg_name[slash + 1 ..];
+  } else {
+    bin_name = pkg_name;
+  }
+
+  const exec_base = std.fmt.allocPrint(arena_alloc, "{s}/exec", .{c.cache_dir}) catch return .out_of_memory;
+  const temp_nm_path = std.fmt.allocPrint(arena_alloc, "{s}/{s}", .{exec_base, pkg_name}) catch return .out_of_memory;
+  const temp_pkg_json = std.fmt.allocPrint(arena_alloc, "{s}/package.json", .{temp_nm_path}) catch return .out_of_memory;
+  const temp_nm_dir = std.fmt.allocPrint(arena_alloc, "{s}/node_modules", .{temp_nm_path}) catch return .out_of_memory;
+  const temp_lockfile = std.fmt.allocPrint(arena_alloc, "{s}/ant.lockb", .{temp_nm_path}) catch return .out_of_memory;
+
+  if (std.fs.cwd().openDir(exec_base, .{ .iterate = true })) |dir| {
+    var d = dir;
+    defer d.close();
+    
+    const stat = d.statFile(pkg_name) catch null;
+    if (stat) |s| {
+      const now: i128 = std.time.nanoTimestamp();
+      const mtime: i128 = s.mtime;
+      const age_ns = now - mtime;
+      const hours_24_ns: i128 = 24 * 60 * 60 * 1_000_000_000;
+      
+      if (age_ns > hours_24_ns) {
+        debug.log("exec: cleaning stale cache for {s} (age: {d}h)", .{
+          pkg_name, @divFloor(age_ns, 60 * 60 * 1_000_000_000),
+        });
+        d.deleteTree(pkg_name) catch {};
+      }
+    }
+  } else |_| {}
+
+  std.fs.cwd().makePath(temp_nm_path) catch {};
+
+  const pkg_json_content = std.fmt.allocPrint(arena_alloc, 
+    \\{{"dependencies":{{"{s}":"{s}"}}}}
+  , .{pkg_name, version_constraint}) catch return .out_of_memory;
+
+  const pkg_json_file = std.fs.cwd().createFile(temp_pkg_json, .{}) catch {
+    c.setError("Failed to create temp package.json");
+    return .io_error;
+  };
+  pkg_json_file.writeAll(pkg_json_content) catch {
+    pkg_json_file.close();
+    c.setError("Failed to write temp package.json");
+    return .io_error;
+  };
+  pkg_json_file.close();
+
+  const http = c.http orelse return .network_error;
+  const db = c.cache_db orelse return .cache_error;
+
+  var interleaved = InterleavedContext.init(c.allocator, arena_alloc, db, http, c);
+  defer interleaved.deinit();
+
+  var res = resolver.Resolver.init(
+    arena_alloc,
+    c.allocator,
+    &c.string_pool,
+    http,
+    db,
+    if (c.options.registry_url) |url| std.mem.span(url) else "https://registry.npmjs.org",
+    &c.metadata_cache,
+  ); defer res.deinit();
+
+  res.setOnPackageResolved(InterleavedContext.onPackageResolved, &interleaved);
+  res.resolveFromPackageJson(temp_pkg_json) catch |err| {
+    c.setErrorFmt("Failed to resolve {s}: {}", .{ pkg_name, err });
+    return .resolve_error;
+  };
+
+  debug.log("exec: resolved {d} packages, queued {d} tarballs", .{
+    interleaved.callbacks_received, interleaved.tarballs_queued,
+  });
+
+  http.run() catch {};
+
+  var pkg_linker = linker.Linker.init(c.allocator);
+  defer pkg_linker.deinit();
+
+  pkg_linker.setNodeModulesPath(temp_nm_dir) catch |err| {
+    c.setErrorFmt("Failed to set up exec directory: {}", .{err});
+    return .io_error;
+  };
+
+  for (interleaved.extract_contexts.items) |ectx| {
+    defer ectx.ext.deinit();
+    if (ectx.has_error) continue;
+
+    const stats = ectx.ext.stats();
+    db.insert(&.{
+      .integrity = ectx.integrity,
+      .path = ectx.cache_path,
+      .unpacked_size = stats.bytes,
+      .file_count = stats.files,
+      .cached_at = std.time.timestamp(),
+    }, ectx.pkg_name, ectx.version_str) catch continue;
+
+    pkg_linker.linkPackage(.{
+      .cache_path = ectx.cache_path,
+      .node_modules_path = temp_nm_dir,
+      .name = ectx.pkg_name,
+      .parent_path = ectx.parent_path,
+      .file_count = stats.files,
+    }) catch continue;
+  }
+
+  var resolved_iter = res.resolved.valueIterator();
+  while (resolved_iter.next()) |pkg_ptr| {
+    const pkg = pkg_ptr.*;
+    if (db.hasIntegrity(&pkg.integrity)) {
+      const pkg_cache_path = db.getPackagePath(&pkg.integrity, arena_alloc) catch continue;
+      pkg_linker.linkPackage(.{
+        .cache_path = pkg_cache_path,
+        .node_modules_path = temp_nm_dir,
+        .name = pkg.name.slice(),
+        .parent_path = pkg.parent_path,
+        .file_count = 0,
+      }) catch continue;
+    }
+  }
+
+  res.writeLockfile(temp_lockfile) catch {};
+
+  var trusted = std.StringHashMap(void).init(arena_alloc);
+  var resolved_iter2 = res.resolved.valueIterator();
+  while (resolved_iter2.next()) |pkg_ptr| {
+    trusted.put(pkg_ptr.*.name.slice(), {}) catch continue;
+  }
+  runTrustedPostinstall(c, &trusted, temp_nm_dir, arena_alloc);
+
+  var bin_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+  const bin_link_path = std.fmt.bufPrint(&bin_path_buf, "{s}/.bin/{s}", .{ temp_nm_dir, bin_name }) catch return .io_error;
+
+  debug.log("exec: looking for bin at {s}", .{bin_link_path});
+
+  std.fs.cwd().access(bin_link_path, .{}) catch {
+    c.setErrorFmt("Binary '{s}' not found in package", .{bin_name});
+    return .not_found;
+  };
+
+  var real_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+  const real_path = std.fs.cwd().realpath(bin_link_path, &real_path_buf) catch return .io_error;
+
+  if (real_path.len >= out_bin_path_len) return .io_error;
+
+  @memcpy(out_bin_path[0..real_path.len], real_path);
+  out_bin_path[real_path.len] = 0;
+
+  return .ok;
+}
+
+fn getGlobalDir(allocator: std.mem.Allocator) ![]const u8 {
+  const home = std.posix.getenv("HOME") orelse return error.NoHomeDir;
+  return std.fmt.allocPrint(allocator, "{s}/.ant/pkg/global", .{home});
+}
+
+fn getGlobalBinDir(allocator: std.mem.Allocator) ![]const u8 {
+  const home = std.posix.getenv("HOME") orelse return error.NoHomeDir;
+  return std.fmt.allocPrint(allocator, "{s}/.ant/bin", .{home});
+}
+
+fn ensureGlobalPackageJson(allocator: std.mem.Allocator, global_dir: []const u8) !void {
+  const pkg_json_path = try std.fmt.allocPrint(allocator, "{s}/package.json", .{global_dir});
+  defer allocator.free(pkg_json_path);
+  
+  std.fs.cwd().access(pkg_json_path, .{}) catch {
+    std.fs.cwd().makePath(global_dir) catch {};
+    const file = try std.fs.cwd().createFile(pkg_json_path, .{});
+    defer file.close();
+    try file.writeAll("{\"dependencies\":{}}\n");
+  };
+}
+
+fn linkGlobalBins(allocator: std.mem.Allocator, nm_path: []const u8, pkg_name: []const u8) void {
+  const bin_dir = getGlobalBinDir(allocator) catch return;
+  defer allocator.free(bin_dir);
+  
+  std.fs.cwd().makePath(bin_dir) catch return;
+  
+  const pkg_bin_dir = std.fmt.allocPrint(allocator, "{s}/{s}", .{nm_path, pkg_name}) catch return;
+  defer allocator.free(pkg_bin_dir);
+  
+  const pkg_json_path = std.fmt.allocPrint(allocator, "{s}/package.json", .{pkg_bin_dir}) catch return;
+  defer allocator.free(pkg_json_path);
+  
+  const content = std.fs.cwd().readFileAlloc(allocator, pkg_json_path, 1024 * 1024) catch return;
+  defer allocator.free(content);
+  
+  const parsed = std.json.parseFromSlice(std.json.Value, allocator, content, .{}) catch return;
+  defer parsed.deinit();
+  
+  const bin_val = parsed.value.object.get("bin") orelse return;
+  
+  switch (bin_val) {
+    .string => |s| {
+      const base_name = if (std.mem.lastIndexOfScalar(u8, pkg_name, '/')) |idx|
+        pkg_name[idx + 1..] else pkg_name;
+      linkSingleBin(allocator, bin_dir, nm_path, pkg_name, base_name, s);
+    },
+    .object => |obj| {
+      for (obj.keys(), obj.values()) |bin_name, path_val| {
+        if (path_val == .string) {
+          linkSingleBin(allocator, bin_dir, nm_path, pkg_name, bin_name, path_val.string);
+        }
+      }
+    },
+    else => {},
+  }
+}
+
+fn linkSingleBin(allocator: std.mem.Allocator, bin_dir: []const u8, nm_path: []const u8, pkg_name: []const u8, bin_name: []const u8, bin_rel_path: []const u8) void {
+  const target = std.fmt.allocPrintSentinel(allocator, "{s}/{s}/{s}", .{nm_path, pkg_name, bin_rel_path}, 0) catch return;
+  defer allocator.free(target);
+  
+  const link_path = std.fmt.allocPrintSentinel(allocator, "{s}/{s}", .{bin_dir, bin_name}, 0) catch return;
+  defer allocator.free(link_path);
+  
+  std.fs.cwd().deleteFile(link_path) catch {};
+  std.posix.symlink(target, link_path) catch {};
+  
+  debug.log("linked global bin: {s} -> {s}", .{link_path, target});
+}
+
+fn unlinkGlobalBins(allocator: std.mem.Allocator, pkg_name: []const u8) void {
+  const bin_dir = getGlobalBinDir(allocator) catch return;
+  defer allocator.free(bin_dir);
+  
+  var dir = std.fs.cwd().openDir(bin_dir, .{ .iterate = true }) catch return;
+  defer dir.close();
+  
+  var iter = dir.iterate();
+  while (iter.next() catch null) |entry| {
+    if (entry.kind != .sym_link) continue;
+    
+    var target_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const target = dir.readLink(entry.name, &target_buf) catch continue;
+    
+    if (std.mem.indexOf(u8, target, pkg_name) != null) {
+      dir.deleteFile(entry.name) catch continue;
+      debug.log("unlinked global bin: {s}", .{entry.name});
+    }
+  }
+}
+
+export fn pkg_add_global(
+  ctx: ?*PkgContext,
+  package_spec: [*:0]const u8,
+) PkgError {
+  const c = ctx orelse return .invalid_argument;
+  const allocator = c.allocator;
+
+  const global_dir = getGlobalDir(allocator) catch {
+    c.setError("HOME not set");
+    return .invalid_argument;
+  };
+  defer allocator.free(global_dir);
+  
+  ensureGlobalPackageJson(allocator, global_dir) catch {
+    c.setError("Failed to create global package.json");
+    return .io_error;
+  };
+  
+  const pkg_json_path = std.fmt.allocPrintSentinel(allocator, "{s}/package.json", .{global_dir}, 0) catch return .out_of_memory;
+  defer allocator.free(pkg_json_path);
+  const lockfile_path = std.fmt.allocPrintSentinel(allocator, "{s}/ant.lockb", .{global_dir}, 0) catch return .out_of_memory;
+  defer allocator.free(lockfile_path);
+  const nm_path = std.fmt.allocPrintSentinel(allocator, "{s}/node_modules", .{global_dir}, 0) catch return .out_of_memory;
+  defer allocator.free(nm_path);
+  
+  const spec_str = std.mem.span(package_spec);
+  var pkg_name: []const u8 = spec_str;
+  
+  if (std.mem.indexOf(u8, spec_str, "@")) |at_idx| {
+    if (at_idx == 0) {
+      if (std.mem.indexOfPos(u8, spec_str, 1, "@")) |second_at| {
+        pkg_name = spec_str[0..second_at];
+      }
+    } else {
+      pkg_name = spec_str[0..at_idx];
+    }
+  }
+  
+  const add_result = pkg_add(c, pkg_json_path.ptr, package_spec, false);
+  if (add_result != .ok) return add_result;
+  
+  const install_result = pkg_resolve_and_install(c, pkg_json_path.ptr, lockfile_path.ptr, nm_path.ptr);
+  if (install_result != .ok) return install_result;
+  
+  linkGlobalBins(allocator, nm_path, pkg_name);
+  
+  return .ok;
+}
+
+export fn pkg_remove_global(
+  ctx: ?*PkgContext,
+  package_name: [*:0]const u8,
+) PkgError {
+  const c = ctx orelse return .invalid_argument;
+  const allocator = c.allocator;
+
+  const global_dir = getGlobalDir(allocator) catch {
+    c.setError("HOME not set");
+    return .invalid_argument;
+  };
+  defer allocator.free(global_dir);
+  
+  const pkg_json_path = std.fmt.allocPrintSentinel(allocator, "{s}/package.json", .{global_dir}, 0) catch return .out_of_memory;
+  defer allocator.free(pkg_json_path);
+  const lockfile_path = std.fmt.allocPrintSentinel(allocator, "{s}/ant.lockb", .{global_dir}, 0) catch return .out_of_memory;
+  defer allocator.free(lockfile_path);
+  const nm_path = std.fmt.allocPrintSentinel(allocator, "{s}/node_modules", .{global_dir}, 0) catch return .out_of_memory;
+  defer allocator.free(nm_path);
+  
+  const name_str = std.mem.span(package_name);
+  
+  unlinkGlobalBins(allocator, name_str);
+  
+  const remove_result = pkg_remove(c, pkg_json_path.ptr, package_name);
+  if (remove_result != .ok and remove_result != .not_found) return remove_result;
+  if (remove_result == .not_found) return .not_found;
+  
+  const install_result = pkg_resolve_and_install(c, pkg_json_path.ptr, lockfile_path.ptr, nm_path.ptr);
+  if (install_result != .ok) return install_result;
+  
+  return .ok;
+}
+
+export fn pkg_list_global(
+  ctx: ?*PkgContext,
+  callback: ?*const fn (name: [*:0]const u8, version: [*:0]const u8, user_data: ?*anyopaque) callconv(.c) void,
+  user_data: ?*anyopaque,
+) PkgError {
+  const c = ctx orelse return .invalid_argument;
+  _ = c.arena_state.reset(.retain_capacity);
+  const arena_alloc = c.arena_state.allocator();
+
+  const global_dir = getGlobalDir(arena_alloc) catch return .invalid_argument;
+  const pkg_json_path = std.fmt.allocPrint(arena_alloc, "{s}/package.json", .{global_dir}) catch return .out_of_memory;
+  const nm_path = std.fmt.allocPrint(arena_alloc, "{s}/node_modules", .{global_dir}) catch return .out_of_memory;
+  
+  const content = std.fs.cwd().readFileAlloc(arena_alloc, pkg_json_path, 1024 * 1024) catch return .not_found;
+  
+  const parsed = std.json.parseFromSlice(std.json.Value, arena_alloc, content, .{}) catch return .invalid_argument;
+  defer parsed.deinit();
+  
+  const deps = parsed.value.object.get("dependencies") orelse return .ok;
+  if (deps != .object) return .ok;
+  
+  const cb = callback orelse return .ok;
+  
+  for (deps.object.keys()) |dep_name| {
+    const dep_pkg_json = std.fmt.allocPrint(arena_alloc, "{s}/{s}/package.json", .{nm_path, dep_name}) catch continue;
+    
+    const dep_content = std.fs.cwd().readFileAlloc(arena_alloc, dep_pkg_json, 256 * 1024) catch continue;
+    const dep_parsed = std.json.parseFromSlice(std.json.Value, arena_alloc, dep_content, .{}) catch continue;
+    defer dep_parsed.deinit();
+    
+    const version = if (dep_parsed.value.object.get("version")) |v|
+      if (v == .string) v.string else "?" else "?";
+    
+    const name_z = arena_alloc.dupeZ(u8, dep_name) catch continue;
+    const version_z = arena_alloc.dupeZ(u8, version) catch continue;
+    
+    cb(name_z.ptr, version_z.ptr, user_data);
+  }
+  
+  return .ok;
 }

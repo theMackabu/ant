@@ -36,7 +36,6 @@ typedef void (*pkg_progress_cb)(
   const char *message
 );
 
-// Options for context creation
 typedef struct {
   const char *cache_dir;
   const char *registry_url;
@@ -59,12 +58,6 @@ pkg_error_t pkg_install(
   const char *node_modules_path
 );
 
-pkg_error_t pkg_resolve(
-  pkg_context_t *ctx,
-  const char *package_json_path,
-  const char *lockfile_out_path
-);
-
 pkg_error_t pkg_resolve_and_install(
   pkg_context_t *ctx,
   const char *package_json_path,
@@ -75,7 +68,8 @@ pkg_error_t pkg_resolve_and_install(
 pkg_error_t pkg_add(
   pkg_context_t *ctx,
   const char *package_json_path,
-  const char *package_spec
+  const char *package_spec,
+  bool dev
 );
 
 pkg_error_t pkg_remove(
@@ -120,7 +114,6 @@ typedef struct {
 
 uint32_t pkg_get_added_count(const pkg_context_t *ctx);
 
-// Discover packages with lifecycle scripts that haven't run yet
 pkg_error_t pkg_discover_lifecycle_scripts(
   pkg_context_t *ctx,
   const char *node_modules_path
@@ -134,7 +127,6 @@ pkg_error_t pkg_get_lifecycle_script(
   pkg_lifecycle_script_t *out
 );
 
-// Run postinstall for specific packages
 pkg_error_t pkg_run_postinstall(
   pkg_context_t *ctx,
   const char *node_modules_path,
@@ -142,7 +134,6 @@ pkg_error_t pkg_run_postinstall(
   uint32_t count
 );
 
-// Add packages to trustedDependencies in package.json
 pkg_error_t pkg_add_trusted_dependencies(
   const char *package_json_path,
   const char **package_names,
@@ -251,6 +242,81 @@ int pkg_why(
   const char *lockfile_path,
   const char *package_name,
   pkg_why_callback callback,
+  void *user_data
+);
+
+typedef struct {
+  const char *name;
+  const char *version;
+  const char *description;
+  const char *license;
+  const char *homepage;
+  const char *tarball;
+  const char *shasum;
+  const char *integrity;
+  const char *keywords;
+  const char *published;
+  uint32_t dep_count;
+  uint32_t version_count;
+  uint64_t unpacked_size;
+} pkg_info_t;
+
+typedef struct {
+  const char *tag;
+  const char *version;
+} pkg_dist_tag_t;
+
+typedef struct {
+  const char *name;
+  const char *email;
+} pkg_maintainer_t;
+
+pkg_error_t pkg_info(
+  pkg_context_t *ctx,
+  const char *package_spec,
+  pkg_info_t *out
+);
+
+uint32_t pkg_info_dist_tag_count(const pkg_context_t *ctx);
+pkg_error_t pkg_info_get_dist_tag(const pkg_context_t *ctx, uint32_t index, pkg_dist_tag_t *out);
+
+uint32_t pkg_info_maintainer_count(const pkg_context_t *ctx);
+pkg_error_t pkg_info_get_maintainer(const pkg_context_t *ctx, uint32_t index, pkg_maintainer_t *out);
+
+typedef struct {
+  const char *name;
+  const char *version;
+} pkg_dependency_t;
+
+uint32_t pkg_info_dependency_count(const pkg_context_t *ctx);
+pkg_error_t pkg_info_get_dependency(const pkg_context_t *ctx, uint32_t index, pkg_dependency_t *out);
+
+pkg_error_t pkg_exec_temp(
+  pkg_context_t *ctx,
+  const char *package_spec,
+  char *out_bin_path,
+  size_t out_bin_path_len
+);
+
+pkg_error_t pkg_add_global(
+  pkg_context_t *ctx,
+  const char *package_spec
+);
+
+pkg_error_t pkg_remove_global(
+  pkg_context_t *ctx,
+  const char *package_name
+);
+
+typedef void (*pkg_global_list_callback)(
+  const char *name,
+  const char *version,
+  void *user_data
+);
+
+pkg_error_t pkg_list_global(
+  pkg_context_t *ctx,
+  pkg_global_list_callback callback,
   void *user_data
 );
 

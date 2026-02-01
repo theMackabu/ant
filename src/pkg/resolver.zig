@@ -73,7 +73,10 @@ pub const Version = struct {
 
     if (a.prerelease == null and b.prerelease != null) return .gt;
     if (a.prerelease != null and b.prerelease == null) return .lt;
-
+    
+    if (a.prerelease != null and b.prerelease != null) 
+      return std.mem.order(u8, a.prerelease.?, b.prerelease.?);
+    
     return .eq;
   }
 
@@ -169,9 +172,12 @@ pub const Constraint = struct {
   pub fn satisfies(self: Constraint, v: Version) bool {
     switch (self.kind) {
       .any => return true,
-      .exact => return v.major == self.version.major and
-        v.minor == self.version.minor and
-        v.patch == self.version.patch,
+      .exact => {
+        if (v.major != self.version.major or v.minor != self.version.minor or v.patch != self.version.patch) return false;
+        if (self.version.prerelease == null and v.prerelease == null) return true;
+        if (self.version.prerelease == null or v.prerelease == null) return false;
+        return std.mem.eql(u8, self.version.prerelease.?, v.prerelease.?);
+      },
       .caret => {
         // ^1.2.3 means >=1.2.3 <2.0.0 (for major > 0)
         // ^0.2.3 means >=0.2.3 <0.3.0 (for major = 0)
@@ -213,6 +219,8 @@ pub const VersionInfo = struct {
   pub fn deinit(self: *VersionInfo) void {
     self.allocator.free(self.version_str);
     self.allocator.free(self.tarball_url);
+    if (self.version.prerelease) |pre| self.allocator.free(pre);
+    if (self.version.build) |bld| self.allocator.free(bld);
     var iter = self.dependencies.iterator();
     while (iter.next()) |entry| {
       self.allocator.free(entry.key_ptr.*);
@@ -377,7 +385,13 @@ pub const PackageMetadata = struct {
     for (versions_obj.object.keys(), versions_obj.object.values()) |version_str, version_data| {
       if (version_data != .object) continue;
 
-      const version = Version.parse(version_str) catch continue;
+      var version = Version.parse(version_str) catch continue;
+      if (version.prerelease) |pre| {
+        version.prerelease = allocator.dupe(u8, pre) catch null;
+      }
+      if (version.build) |bld| {
+        version.build = allocator.dupe(u8, bld) catch null;
+      }
       const dist = version_data.object.get("dist") orelse continue;
       if (dist != .object) continue;
 
@@ -850,14 +864,17 @@ pub const Resolver = struct {
         } else {
           const best = self.selectVersionSatisfyingMost(&metadata, constraint_list);
           if (best) |b| {
-            debug.log("  {s}: optimal={d}.{d}.{d} (satisfies {d}/{d} constraints)", .{
-              pkg_name,
-              b.version.major,
-              b.version.minor,
-              b.version.patch,
-              self.countSatisfied(&metadata, b, constraint_list),
-              constraint_list.len,
-            });
+            if (b.version.prerelease) |pre| {
+              debug.log("  {s}: optimal={d}.{d}.{d}-{s} (satisfies {d}/{d} constraints)", .{
+                pkg_name, b.version.major, b.version.minor, b.version.patch, pre,
+                self.countSatisfied(&metadata, b, constraint_list), constraint_list.len,
+              });
+            } else {
+              debug.log("  {s}: optimal={d}.{d}.{d} (satisfies {d}/{d} constraints)", .{
+                pkg_name, b.version.major, b.version.minor, b.version.patch,
+                self.countSatisfied(&metadata, b, constraint_list), constraint_list.len,
+              });
+            }
             try optimal_versions.put(pkg_name, b);
           }
         }
@@ -971,10 +988,7 @@ pub const Resolver = struct {
 
     var want_prerelease = false;
     for (constraint_list) |info| {
-      if (info.constraint.version.prerelease != null) {
-        want_prerelease = true;
-        break;
-      }
+      if (info.constraint.version.prerelease != null) { want_prerelease = true; break; }
     }
 
     for (metadata.versions.items) |*v| {
@@ -1535,6 +1549,13 @@ pub const Resolver = struct {
       }
     }
 
+    if (best != null or constraint.kind != .any) return best;
+
+    for (metadata.versions.items) |*v| {
+      if (!constraint.satisfies(v.version)) continue;
+      if (best == null or v.version.order(best.?.version) == .gt) best = v;
+    }
+
     return best;
   }
 
@@ -1542,11 +1563,10 @@ pub const Resolver = struct {
     var best: ?*const VersionInfo = null;
 
     var want_prerelease = false;
+    var all_any = true;
     for (all_constraints) |c| {
-      if (c.version.prerelease != null) {
-        want_prerelease = true;
-        break;
-      }
+      if (c.version.prerelease != null) want_prerelease = true;
+      if (c.kind != .any) all_any = false;
     }
 
     for (metadata.versions.items) |*v| {
@@ -1562,6 +1582,16 @@ pub const Resolver = struct {
       if (satisfies_all) {
         if (best == null or v.version.order(best.?.version) == .gt) best = v;
       }
+    }
+
+    if (best != null or !all_any) return best;
+
+    for (metadata.versions.items) |*v| {
+      var satisfies_all = true;
+      for (all_constraints) |c| {
+        if (!c.satisfies(v.version)) { satisfies_all = false; break; }
+      }
+      if (satisfies_all and (best == null or v.version.order(best.?.version) == .gt)) best = v;
     }
 
     return best;

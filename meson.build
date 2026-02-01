@@ -34,6 +34,7 @@ lib_sources = files(
   'src/runtime.c',
   'src/snapshot.c',
   'src/esm/remote.c',
+  'src/cli/pkg.c',
 ) + files(module_files)
 
 include = include_directories('include')

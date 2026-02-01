@@ -487,6 +487,8 @@ const Http2Client = struct {
       .content_encoding = .identity,
     };
     
+    const session = self.h2_session orelse return error.Http2Error;
+    
     var hdrs = [_]nghttp2.nv{ 
       makeNv(":method", "GET"),
       makeNv(":path", req.path.?),
@@ -496,7 +498,7 @@ const Http2Client = struct {
       makeNv("user-agent", user_agent) 
     };
     
-    const sid = nghttp2.nghttp2_submit_request(self.h2_session.?, null, &hdrs, hdrs.len, null, req);
+    const sid = nghttp2.nghttp2_submit_request(session, null, &hdrs, hdrs.len, null, req);
     if (sid < 0) {
       self.request_count -= 1;
       if (req.path) |p| self.allocator.free(p);
@@ -535,6 +537,8 @@ const Http2Client = struct {
       .content_encoding = .identity 
     };
 
+    const session = self.h2_session orelse return error.Http2Error;
+    
     var hdrs = [_]nghttp2.nv{ 
       makeNv(":method", "GET"),
       makeNv(":path", req.path.?),
@@ -544,7 +548,7 @@ const Http2Client = struct {
       makeNv("user-agent", user_agent)
     };
     
-    const sid = nghttp2.nghttp2_submit_request(self.h2_session.?, null, &hdrs, hdrs.len, null, req);
+    const sid = nghttp2.nghttp2_submit_request(session, null, &hdrs, hdrs.len, null, req);
     if (sid < 0) {
       if (req.path) |p| self.allocator.free(p);
       req.stream_id = -1;
@@ -696,6 +700,13 @@ pub const Fetcher = struct {
       slot.* = client;
     }
     self.meta_clients_initialized = true;
+  }
+
+  pub fn resetMetaClients(self: *Fetcher) void {
+    for (&self.meta_clients) |*slot| {
+      if (slot.*) |client| { client.deinit(); slot.* = null; }
+    }
+    self.meta_clients_initialized = false;
   }
 
   fn ensureTarballClients(self: *Fetcher) !void {
@@ -1142,19 +1153,20 @@ pub const Fetcher = struct {
         var attempts: usize = 0;
         while (attempts < NUM_META_CONNECTIONS) : (attempts += 1) {
           if (self.meta_clients[conn_idx]) |c| {
-            if (c.request_count < MAX_PENDING_REQUESTS - 1) {
-              client = c; break;
-            }
+            if (c.h2_session != null and c.connected == 1 and c.request_count < MAX_PENDING_REQUESTS - 1) client = c; break;
           }
           conn_idx = (conn_idx + 1) % NUM_META_CONNECTIONS;
         }
 
         if (client == null) {
-          result.has_error = true;
-          continue;
+          result.has_error = true; continue;
         }
 
         const c = client.?;
+        const session = c.h2_session orelse {
+          result.has_error = true; continue;
+        };
+        
         var path_buf: [512]u8 = undefined;
         const path = std.fmt.bufPrint(&path_buf, "/{s}", .{name}) catch {
           result.has_error = true;
@@ -1192,7 +1204,7 @@ pub const Fetcher = struct {
           .content_encoding = .identity,
         };
 
-        const sid = nghttp2.nghttp2_submit_request(c.h2_session.?, null, &hdrs, hdrs.len, null, req);
+        const sid = nghttp2.nghttp2_submit_request(session, null, &hdrs, hdrs.len, null, req);
         if (sid < 0) {
           c.request_count -= 1;
           if (req.path) |p| c.allocator.free(p);
@@ -1372,11 +1384,13 @@ pub const Fetcher = struct {
         var attempts: usize = 0;
         while (attempts < NUM_META_CONNECTIONS) : (attempts += 1) {
           if (self.meta_clients[conn_idx]) |c| {
-            if (c.request_count < MAX_PENDING_REQUESTS - 1) { client = c; break; }
+            if (c.h2_session != null and c.connected == 1 and c.request_count < MAX_PENDING_REQUESTS - 1) client = c; break;
           } conn_idx = (conn_idx + 1) % NUM_META_CONNECTIONS;
         } if (client == null) continue;
 
         const c = client.?;
+        const session = c.h2_session orelse continue;
+        
         var path_buf: [512]u8 = undefined;
         const path = std.fmt.bufPrint(&path_buf, "/{s}", .{name}) catch continue;
 
@@ -1410,7 +1424,7 @@ pub const Fetcher = struct {
         };
         req.start_ns = @intCast(std.time.nanoTimestamp());
 
-        const sid = nghttp2.nghttp2_submit_request(c.h2_session.?, null, &hdrs, hdrs.len, null, req);
+        const sid = nghttp2.nghttp2_submit_request(session, null, &hdrs, hdrs.len, null, req);
         if (sid < 0) {
           c.request_count -= 1;
           if (req.path) |p| c.allocator.free(p);

@@ -136,6 +136,24 @@ pub const JsonValue = struct {
     if (!yyjson.yyjson_obj_iter_init(self.val, &iter)) return null;
     return ObjectIterator{ .iter = iter };
   }
+
+  pub const ArrayIterator = struct {
+    iter: yyjson.yyjson_arr_iter,
+
+    pub fn next(self: *ArrayIterator) ?JsonValue {
+      const val = yyjson.yyjson_arr_iter_next(&self.iter) orelse return null;
+      return JsonValue{ .val = val };
+    }
+
+    pub fn deinit(_: *ArrayIterator) void {}
+  };
+
+  pub fn arrayIterator(self: JsonValue) ?ArrayIterator {
+    if (!yyjson.yyjson_is_arr(self.val)) return null;
+    var iter: yyjson.yyjson_arr_iter = undefined;
+    if (!yyjson.yyjson_arr_iter_init(self.val, &iter)) return null;
+    return ArrayIterator{ .iter = iter };
+  }
 };
 
 pub const JsonWriter = struct {
