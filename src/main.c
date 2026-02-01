@@ -68,8 +68,9 @@ static const subcommand_t subcommands[] = {
   {"run",     NULL,      "Run a script from package.json",         pkg_cmd_run},
   {"exec",    "x",       "Run a command from node_modules/.bin",   pkg_cmd_exec},
   {"why",     "explain", "Show why a package is installed",        pkg_cmd_why},
-  {"info",    NULL,      "Show package information from registry",  pkg_cmd_info},
-  {"ls",      "list",    "List installed packages",                 pkg_cmd_ls},
+  {"info",    NULL,      "Show package information from registry", pkg_cmd_info},
+  {"ls",      "list",    "List installed packages",                pkg_cmd_ls},
+  {"cache",   NULL,      "Manage the package cache",               pkg_cmd_cache},
   {NULL, NULL, NULL, NULL}
 };
 
@@ -202,6 +203,8 @@ static int execute_module(struct js *js, const char *filename) {
 }
 
 int main(int argc, char *argv[]) {
+  int filtered_argc = 0;
+  
   const char *binary_name = strrchr(argv[0], '/');
   binary_name = binary_name ? binary_name + 1 : argv[0];
   
@@ -215,15 +218,13 @@ int main(int argc, char *argv[]) {
     free(exec_argv); return exitcode;
   }
   
-  bool verbose = false;
-  int filtered_argc = 0;
-  
   char **filtered_argv = malloc(sizeof(char*) * argc);
   for (int i = 0; i < argc; i++) {
-    if (strcmp(argv[i], "--verbose") == 0) verbose = true;
+    if (strcmp(argv[i], "--verbose") == 0) pkg_verbose = true;
+    else if (strcmp(argv[i], "--no-color") == 0) io_no_color = true;
     else filtered_argv[filtered_argc++] = argv[i];
-  } pkg_cmds_set_verbose(verbose);
-
+  }
+  
   if (filtered_argc >= 2 && filtered_argv[1][0] != '-') {
     const subcommand_t *cmd = find_subcommand(filtered_argv[1]);
     if (cmd) {
@@ -244,7 +245,6 @@ int main(int argc, char *argv[]) {
 
   struct arg_lit *help = arg_lit0("h", "help", "display this help and exit");
   struct arg_lit *version = arg_lit0("v", "version", "display version information and exit");
-  struct arg_lit *no_color = arg_lit0(NULL, "no-color", "disable colored output");
   struct arg_str *eval = arg_str0("e", "eval", "<script>", "evaluate script");
   struct arg_lit *print = arg_lit0("p", "print", "evaluate script and print result");
   struct arg_int *initial_mem = arg_int0(NULL, "initial-mem", "<size>", "initial memory size in KB (default: 16kb)");
@@ -254,8 +254,8 @@ int main(int argc, char *argv[]) {
   struct arg_end *end = arg_end(20);
   
   void *argtable[] = {
-    help, version, no_color, eval,
-    print, initial_mem, max_mem,
+    help, version, eval, print,
+    initial_mem, max_mem,
     localstorage_file, file, end
   };
 
@@ -268,7 +268,9 @@ int main(int argc, char *argv[]) {
     print_subcommands();
     printf("If no module file is specified, ant starts in REPL mode.\n\n");
     printf("Options:\n");
-    arg_print_glossary(stdout, argtable, "  %-25s %s\n");
+    printf("  %-28s %s\n", "--verbose", "enable verbose output");
+    printf("  %-28s %s\n", "--no-color", "disable colored output");
+    arg_print_glossary(stdout, argtable, "  %-28s %s\n");
     arg_freetable(argtable, ARGTABLE_COUNT);
     free(filtered_argv);
     return EXIT_SUCCESS;
@@ -290,8 +292,6 @@ int main(int argc, char *argv[]) {
   
   bool repl_mode = (file->count == 0 && eval->count == 0);
   const char *module_file = repl_mode ? NULL : (file->count > 0 ? file->filename[0] : NULL);
-  
-  if (no_color->count > 0) io_no_color = true;
   
   struct js *js = js_create_dynamic(
     initial_mem->count > 0 ? (size_t)initial_mem->ival[0] * 1024 : 0,

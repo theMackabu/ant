@@ -431,4 +431,70 @@ pub const CacheDB = struct {
     if (c.mdb_put(txn, self.dbi_metadata, &key, &value, 0) != 0) return error.InsertError;
     if (c.mdb_txn_commit(txn) != 0)return error.InsertError;
   }
+
+  pub fn prune(self: *CacheDB, max_age_days: u32) !u32 {
+    const now = std.time.timestamp();
+    const max_age_secs: i64 = @as(i64, max_age_days) * 24 * 60 * 60;
+    const cutoff = now - max_age_secs;
+    
+    var txn: ?*c.MDB_txn = null;
+    if (c.mdb_txn_begin(self.env, null, 0, &txn) != 0) {
+      return error.DatabaseError;
+    }
+    errdefer c.mdb_txn_abort(txn);
+    
+    var cursor: ?*c.MDB_cursor = null;
+    if (c.mdb_cursor_open(txn, self.dbi_primary, &cursor) != 0) {
+      return error.DatabaseError;
+    }
+    defer c.mdb_cursor_close(cursor);
+    
+    var key: c.MDB_val = undefined;
+    var value: c.MDB_val = undefined;
+    var pruned: u32 = 0;
+    var to_delete = std.ArrayListUnmanaged([66]u8){};
+    defer to_delete.deinit(self.allocator);
+    var paths_to_delete = std.ArrayListUnmanaged([]const u8){};
+    defer {
+      for (paths_to_delete.items) |p| self.allocator.free(p);
+      paths_to_delete.deinit(self.allocator);
+    }
+    
+    var rc = c.mdb_cursor_get(cursor, &key, &value, c.MDB_FIRST);
+    while (rc == 0) {
+      if (value.mv_size >= @sizeOf(SerializedEntry)) {
+        const data: [*]const u8 = @ptrCast(value.mv_data);
+        const header: *const SerializedEntry = @ptrCast(@alignCast(data));
+        
+        if (header.cached_at < cutoff) {
+          const key_data: [*]const u8 = @ptrCast(key.mv_data);
+          var key_copy: [66]u8 = undefined;
+          if (key.mv_size == 66) {
+            @memcpy(&key_copy, key_data[0..66]);
+            to_delete.append(self.allocator, key_copy) catch {};
+            
+            const path_start = @sizeOf(SerializedEntry);
+            if (value.mv_size >= path_start + header.path_len) {
+              const path = self.allocator.dupe(u8, data[path_start..][0..header.path_len]) catch continue;
+              paths_to_delete.append(self.allocator, path) catch self.allocator.free(path);
+            }
+          }
+        }
+      }
+      rc = c.mdb_cursor_get(cursor, &key, &value, c.MDB_NEXT);
+    }
+    
+    c.mdb_cursor_close(cursor);
+    cursor = null;
+    
+    for (to_delete.items) |*key_bytes| {
+      var del_key = c.MDB_val{ .mv_size = 66, .mv_data = key_bytes };
+      if (c.mdb_del(txn, self.dbi_primary, &del_key, null) == 0) pruned += 1;
+    }
+    
+    if (c.mdb_txn_commit(txn) != 0) return error.DatabaseError;
+    for (paths_to_delete.items) |path| std.fs.cwd().deleteTree(path) catch {};
+    
+    return pruned;
+  }
 };

@@ -1651,11 +1651,10 @@ export fn pkg_cache_stats(ctx: ?*PkgContext, out: *CacheStats) PkgError {
 
 export fn pkg_cache_prune(ctx: ?*PkgContext, max_age_days: u32) i32 {
   const c = ctx orelse return @intFromEnum(PkgError.invalid_argument);
-  _ = c;
-  _ = max_age_days;
-
-  // todo: implement cache pruning
-  return 0;
+  const db = c.cache_db orelse return @intFromEnum(PkgError.cache_error);
+  
+  const pruned = db.prune(max_age_days) catch return @intFromEnum(PkgError.cache_error);
+  return @intCast(pruned);
 }
 
 export fn pkg_get_bin_path(
