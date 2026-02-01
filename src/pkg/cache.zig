@@ -42,7 +42,7 @@ pub const CacheDB = struct {
       else => return error.CacheError,
     };
 
-    const packages_path = try std.fmt.allocPrintSentinel(allocator, "{s}/packages", .{cache_dir}, 0);
+    const packages_path = try std.fmt.allocPrintSentinel(allocator, "{s}/cache", .{cache_dir}, 0);
     defer allocator.free(packages_path);
     std.fs.cwd().makePath(packages_path) catch |err| switch (err) {
       error.PathAlreadyExists => {},
@@ -342,7 +342,7 @@ pub const CacheDB = struct {
 
   pub fn getPackagePath(self: *CacheDB, integrity: *const [64]u8, allocator: std.mem.Allocator) ![]u8 {
     const hex = std.fmt.bytesToHex(integrity.*, .lower);
-    return std.fmt.allocPrint(allocator, "{s}/packages/{s}", .{ self.cache_dir, hex });
+    return std.fmt.allocPrint(allocator, "{s}/cache/{s}", .{ self.cache_dir, hex });
   }
 
   pub fn sync(self: *CacheDB) void {
