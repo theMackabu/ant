@@ -102,6 +102,7 @@ enum {
 #define T_NON_NUMERIC_MASK     (TYPE_FLAG(T_STR) | TYPE_FLAG(T_ARR) | TYPE_FLAG(T_FUNC) | TYPE_FLAG(T_CFUNC) | TYPE_FLAG(T_OBJ))
 
 bool is_internal_prop(const char *key, jsoff_t klen);
+size_t uint_to_str(char *buf, size_t bufsize, uint64_t val);
 
 void js_gc_reserve_roots(GC_UPDATE_ARGS);
 void js_gc_update_roots(GC_UPDATE_ARGS);
@@ -110,12 +111,15 @@ jsoff_t esize(jsoff_t w);
 jsval_t tov(double d);
 double tod(jsval_t v);
 
+jsval_t resolveprop(struct js *js, jsval_t v);
+jsval_t setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v);
+
 jsoff_t lkp(struct js *js, jsval_t obj, const char *buf, size_t len);
 jsoff_t lkp_proto(struct js *js, jsval_t obj, const char *buf, size_t len);
 jsoff_t vstr(struct js *js, jsval_t value, jsoff_t *len);
 
+jsval_t mkarr(struct js *js);
 jsval_t mkval(uint8_t type, uint64_t data);
-jsval_t resolveprop(struct js *js, jsval_t v);
 
 jsval_t call_js(ant_t *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope);
 jsval_t call_js_internal(ant_t *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *bound_args, int bound_argc, jsval_t func_val);

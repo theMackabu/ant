@@ -45,6 +45,7 @@
 #include "modules/child_process.h"
 #include "modules/readline.h"
 #include "modules/observable.h"
+#include "modules/collections.h"
 
 int js_result = EXIT_SUCCESS;
 
@@ -221,6 +222,7 @@ int main(int argc, char *argv[]) {
   ant_runtime_init(js, argc, argv, localstorage_file);
 
   init_symbol_module();
+  init_collections_module();
   init_builtin_module();
   init_buffer_module();
   init_fs_module();
