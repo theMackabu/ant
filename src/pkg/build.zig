@@ -6,14 +6,17 @@ fn getEnv(key: []const u8) ?[]const u8 {
 
 pub fn build(b: *std.Build) void {
   const resolved_target = blk: {
-    var query: std.Target.Query = .{};
+    if (getEnv("PKG_TARGET")) |target_str| {
+      defer std.heap.page_allocator.free(target_str);
+      var query: std.Target.Query = .{};
 
-    query.cpu_arch = .aarch64;
-    query.os_tag = .macos;
-    query.os_version_min = .{ .semver = .{ .major = 15, .minor = 0, .patch = 0 } };
-    query.cpu_model = .baseline;
+      var it = std.mem.splitScalar(u8, target_str, '-');
+      if (it.next()) |arch| query.cpu_arch = std.meta.stringToEnum(std.Target.Cpu.Arch, arch);
+      if (it.next()) |os| query.os_tag = std.meta.stringToEnum(std.Target.Os.Tag, os);
 
-    break :blk b.resolveTargetQuery(query);
+      query.cpu_model = .baseline;
+      break :blk b.resolveTargetQuery(query);
+    } else break :blk b.standardTargetOptions(.{});
   };
 
   const lmdb_include = getEnv("LMDB_INCLUDE");
@@ -34,6 +37,9 @@ pub fn build(b: *std.Build) void {
       .strip = true,
     }),
   });
+
+  lib.use_llvm = true;
+  lib.use_lld = true;
   
   const version = std.posix.getenv("ANT_VERSION") orelse "unknown";
   const options = b.addOptions();
