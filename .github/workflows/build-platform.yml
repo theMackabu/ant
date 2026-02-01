@@ -15,43 +15,37 @@ jobs:
   build:
     # runs-on/container/shell must be hardcoded
     # keep in sync with versions.json targets
-    runs-on: ${{ fromJson('{
-      "linux-glibc-x64": "ubuntu-24.04",
-      "linux-glibc-aarch64": "ubuntu-24.04-arm",
-      "linux-musl-x64": "ubuntu-24.04",
-      "linux-musl-aarch64": "ubuntu-24.04-arm",
-      "macos-x64": "macos-15-intel",
-      "macos-x64-mbedtls": "macos-15-intel",
-      "macos-aarch64": "macos-15",
-      "macos-aarch64-mbedtls": "macos-15",
-      "windows-x64": "windows-latest"
-    }')[inputs.platform] }}
+    runs-on: |-
+      ${{ case(
+        inputs.platform == 'linux-glibc-x64', 'ubuntu-24.04',
+        inputs.platform == 'linux-glibc-aarch64', 'ubuntu-24.04-arm',
+        inputs.platform == 'linux-musl-x64', 'ubuntu-24.04',
+        inputs.platform == 'linux-musl-aarch64', 'ubuntu-24.04-arm',
+        inputs.platform == 'macos-x64', 'macos-15-intel',
+        inputs.platform == 'macos-x64-mbedtls', 'macos-15-intel',
+        inputs.platform == 'macos-aarch64', 'macos-15',
+        inputs.platform == 'macos-aarch64-mbedtls', 'macos-15',
+        inputs.platform == 'windows-x64', 'windows-latest',
+        'ubuntu-24.04'
+      ) }}
 
-    container: ${{ fromJson('{
-      "linux-glibc-x64": "ubuntu:22.04",
-      "linux-glibc-aarch64": "ubuntu:22.04",
-      "linux-musl-x64": "alpine:edge",
-      "linux-musl-aarch64": "alpine:edge",
-      "macos-x64": null,
-      "macos-x64-mbedtls": null,
-      "macos-aarch64": null,
-      "macos-aarch64-mbedtls": null,
-      "windows-x64": null
-    }')[inputs.platform] }}
+    container: |-
+      ${{ case(
+        startsWith(inputs.platform, 'linux-glibc'), 'ubuntu:22.04',
+        startsWith(inputs.platform, 'linux-musl'), 'alpine:edge',
+        ''
+      ) }}
 
     defaults:
       run:
-        shell: ${{ fromJson('{
-          "linux-glibc-x64": "bash",
-          "linux-glibc-aarch64": "bash",
-          "linux-musl-x64": "sh",
-          "linux-musl-aarch64": "sh",
-          "macos-x64": "bash",
-          "macos-x64-mbedtls": "bash",
-          "macos-aarch64": "bash",
-          "macos-aarch64-mbedtls": "bash",
-          "windows-x64": "msys2 {0}"
-        }')[inputs.platform] }}
+        shell: |-
+          ${{ case(
+            startsWith(inputs.platform, 'linux-glibc'), 'bash',
+            startsWith(inputs.platform, 'linux-musl'), 'sh',
+            startsWith(inputs.platform, 'macos'), 'bash',
+            inputs.platform == 'windows-x64', 'msys2 {0}',
+            'bash'
+          ) }}
 
     steps:
       # === LINUX GLIBC SETUP ===
@@ -81,7 +75,6 @@ jobs:
       # === MACOS SETUP ===
       - name: Setup macOS environment
         if: startsWith(inputs.platform, 'macos')
-        shell: bash
         run: |
           brew install meson ninja llvm jq
           if [[ "${{ inputs.platform }}" != *"mbedtls"* ]]; then
@@ -112,12 +105,12 @@ jobs:
           CONFIG=$(jq -r '.targets["${{ inputs.platform }}"]' .github/versions.json)
           TOOLS=$(jq -r '.tools' .github/versions.json)
           DEPS=$(jq -r '.dependencies' .github/versions.json)
-          
+
           # Tools
           echo "zig_version=$(echo $TOOLS | jq -r '.zig')" >> $GITHUB_OUTPUT
           echo "llvm_version=$(echo $TOOLS | jq -r '.llvm')" >> $GITHUB_OUTPUT
           echo "node_version=$(echo $TOOLS | jq -r '.node')" >> $GITHUB_OUTPUT
-          
+
           # Target config
           echo "os_type=$(echo $CONFIG | jq -r '.os_type')" >> $GITHUB_OUTPUT
           echo "arch=$(echo $CONFIG | jq -r '.arch')" >> $GITHUB_OUTPUT
@@ -129,10 +122,10 @@ jobs:
           echo "static_link=$(echo $CONFIG | jq -r '.static_link')" >> $GITHUB_OUTPUT
           echo "cmake_generator=$(echo $CONFIG | jq -r '.cmake_generator // empty')" >> $GITHUB_OUTPUT
           echo "extra_meson_args=$(echo $CONFIG | jq -r '.extra_meson_args // empty')" >> $GITHUB_OUTPUT
-          
+
           # Deps as space-separated string
           echo "deps=$(echo $CONFIG | jq -r '.deps | join(" ")')" >> $GITHUB_OUTPUT
-          
+
           # Dep versions
           echo "llhttp_version=$(echo $DEPS | jq -r '.llhttp')" >> $GITHUB_OUTPUT
           echo "libuv_version=$(echo $DEPS | jq -r '.libuv')" >> $GITHUB_OUTPUT
