@@ -162,7 +162,9 @@ pub const CacheDB = struct {
     if (value.mv_size < @sizeOf(SerializedEntry)) return null;
 
     const data: [*]const u8 = @ptrCast(value.mv_data);
-    const header: *const SerializedEntry = @ptrCast(@alignCast(data));
+
+    var header: SerializedEntry = undefined;
+    @memcpy(std.mem.asBytes(&header), data[0..@sizeOf(SerializedEntry)]);
 
     const path_start = @sizeOf(SerializedEntry);
     if (value.mv_size < path_start + header.path_len) return null;
@@ -236,7 +238,8 @@ pub const CacheDB = struct {
         var file_count: u32 = 0;
         if (value.mv_size >= @sizeOf(SerializedEntry)) {
           const data: [*]const u8 = @ptrCast(value.mv_data);
-          const header: *const SerializedEntry = @ptrCast(@alignCast(data));
+          var header: SerializedEntry = undefined;
+          @memcpy(std.mem.asBytes(&header), data[0..@sizeOf(SerializedEntry)]);
           file_count = header.file_count;
         }
         try hits.append(allocator, .{ .index = @intCast(i), .file_count = file_count });
@@ -295,7 +298,7 @@ pub const CacheDB = struct {
         .mv_data = @constCast(name_key.ptr),
       };
       var sec_value = c.MDB_val{
-        .mv_size = 32,
+        .mv_size = 64,
         .mv_data = @constCast(&entry.integrity),
       };
 
@@ -481,7 +484,8 @@ pub const CacheDB = struct {
     while (rc == 0) {
       if (value.mv_size >= @sizeOf(SerializedEntry)) {
         const data: [*]const u8 = @ptrCast(value.mv_data);
-        const header: *const SerializedEntry = @ptrCast(@alignCast(data));
+        var header: SerializedEntry = undefined;
+        @memcpy(std.mem.asBytes(&header), data[0..@sizeOf(SerializedEntry)]);
         
         if (header.cached_at < cutoff) {
           const key_data: [*]const u8 = @ptrCast(key.mv_data);
