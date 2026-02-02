@@ -4,7 +4,7 @@ git_hash = git_hash != '' ? git_hash : 'unknown'
 timestamp_opt = get_option('build_timestamp')
 timestamp = timestamp_opt != '' ? timestamp_opt : run_command('date', '+%s', check: true).stdout().strip()
 
-ant_version = '0.5.0.' + timestamp + '-g' + git_hash
+ant_version = '0.5.1.' + timestamp + '-g' + git_hash
 cmd_cc = meson.get_compiler('c')
 
 target_triple = run_command(cmd_cc.cmd_array(), '-dumpmachine', check: true).stdout().strip()
