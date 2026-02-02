@@ -765,7 +765,6 @@ pub const Fetcher = struct {
       try self.pending.append(self.allocator, .{
         .url = try self.allocator.dupe(u8, url),
         .handler = handler,
-        .priority = 0,
       }); return;
     };
     

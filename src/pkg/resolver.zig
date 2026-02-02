@@ -73,11 +73,58 @@ pub const Version = struct {
 
     if (a.prerelease == null and b.prerelease != null) return .gt;
     if (a.prerelease != null and b.prerelease == null) return .lt;
-    
-    if (a.prerelease != null and b.prerelease != null) 
-      return std.mem.order(u8, a.prerelease.?, b.prerelease.?);
-    
-    return .eq;
+    if (a.prerelease == null and b.prerelease == null) return .eq;
+
+    return orderPrerelease(a.prerelease.?, b.prerelease.?);
+  }
+
+  fn orderPrerelease(a: []const u8, b: []const u8) std.math.Order {
+    var a_rest: []const u8 = a;
+    var b_rest: []const u8 = b;
+
+    while (true) {
+      const a_end = std.mem.indexOfScalar(u8, a_rest, '.') orelse a_rest.len;
+      const b_end = std.mem.indexOfScalar(u8, b_rest, '.') orelse b_rest.len;
+
+      const a_id = a_rest[0..a_end];
+      const b_id = b_rest[0..b_end];
+
+      const cmp = compareIdentifier(a_id, b_id);
+      if (cmp != .eq) return cmp;
+
+      const a_done = a_end >= a_rest.len;
+      const b_done = b_end >= b_rest.len;
+      if (a_done and b_done) return .eq;
+      if (a_done) return .lt;
+      if (b_done) return .gt;
+
+      a_rest = a_rest[a_end + 1 ..];
+      b_rest = b_rest[b_end + 1 ..];
+    }
+  }
+
+  fn compareIdentifier(a: []const u8, b: []const u8) std.math.Order {
+    const a_num = parseNumeric(a);
+    const b_num = parseNumeric(b);
+
+    if (a_num != null and b_num != null) {
+      return std.math.order(a_num.?, b_num.?);
+    }
+
+    if (a_num != null) return .lt;
+    if (b_num != null) return .gt;
+
+    return std.mem.order(u8, a, b);
+  }
+
+  fn parseNumeric(s: []const u8) ?u64 {
+    if (s.len == 0) return null;
+    var val: u64 = 0;
+    for (s) |c| {
+      if (c < '0' or c > '9') return null;
+      val = val * 10 + (c - '0');
+    }
+    return val;
   }
 
   pub fn format(self: Version, allocator: std.mem.Allocator) ![]u8 {
