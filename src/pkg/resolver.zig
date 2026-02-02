@@ -992,7 +992,10 @@ pub const Resolver = struct {
     };
 
     var queue = std.ArrayListUnmanaged(WorkItem){};
-    defer queue.deinit(self.allocator);
+    defer {
+      for (queue.items) |item| if (item.parent_name) |p| self.allocator.free(p);
+      queue.deinit(self.allocator);
+    }
 
     dep_iter = pkg_json.dependencies.iterator();
     while (dep_iter.next()) |entry| {
@@ -1067,6 +1070,7 @@ pub const Resolver = struct {
         debug.log("  tarballs: {d} completed, {d} in flight", .{ completed, self.http.pendingTarballCount() });
       }
 
+      for (queue.items) |item| if (item.parent_name) |p| self.allocator.free(p);
       queue.deinit(self.allocator);
       queue = next_queue;
       level += 1;

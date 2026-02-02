@@ -258,6 +258,8 @@ pub const Lockfile = struct {
 
   pub fn getPackageDeps(self: *const Lockfile, pkg: *const Package) []const Dependency {
     if (pkg.deps_count == 0) return &[_]Dependency{};
+    if (pkg.deps_start >= self.dependencies.len or
+        pkg.deps_start + pkg.deps_count > self.dependencies.len) return &[_]Dependency{};
     return self.dependencies[pkg.deps_start..][0..pkg.deps_count];
   }
 };
@@ -293,6 +295,9 @@ pub const LockfileWriter = struct {
   pub fn internString(self: *LockfileWriter, str: []const u8) !StringRef {
     if (str.len == 0) return StringRef.empty;
     if (self.string_offsets.get(str)) |ref| return ref;
+
+    if (self.string_builder.items.len > std.math.maxInt(u32)) return error.StringTableTooLarge;
+    if (str.len > std.math.maxInt(u32)) return error.StringTooLarge;
 
     const offset: u32 = @intCast(self.string_builder.items.len);
     try self.string_builder.appendSlice(self.allocator, str);
