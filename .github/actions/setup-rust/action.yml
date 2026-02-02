@@ -1,0 +1,41 @@
+name: Setup Rust
+description: Install Rust toolchain with caching
+
+inputs:
+  target:
+    description: Rust target triple
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Install Rust (Unix)
+      if: runner.os != 'Windows'
+      shell: bash
+      run: |
+        if ! command -v rustup &> /dev/null; then
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+        fi
+
+    - name: Install Rust (Windows)
+      if: runner.os == 'Windows'
+      shell: bash
+      run: |
+        if ! command -v rustup &> /dev/null; then
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-host ${{ inputs.target }}
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+        fi
+
+    - name: Add target
+      if: inputs.target != ''
+      shell: bash
+      run: |
+        export PATH="$HOME/.cargo/bin:$PATH"
+        rustup target add ${{ inputs.target }} || true
+
+    - name: Cache Rust
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: src/strip -> ../../build/oxc-target

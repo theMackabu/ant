@@ -1,0 +1,161 @@
+name: Build Project
+description: Run meson build with appropriate settings
+
+outputs:
+  version:
+    description: Build version string
+    value: ${{ steps.version.outputs.version }}
+
+inputs:
+  cc:
+    description: C compiler
+    required: true
+  cxx:
+    description: C++ compiler
+    required: false
+    default: ''
+  ar:
+    description: AR tool
+    required: false
+    default: ''
+  ranlib:
+    description: RANLIB tool
+    required: false
+    default: ''
+  ld:
+    description: Linker
+    required: false
+    default: ''
+  strip:
+    description: Strip tool
+    required: false
+    default: strip
+  deps_prefix:
+    description: Prefix where deps are installed
+    required: true
+  build_timestamp:
+    description: Build timestamp
+    required: true
+  tls_library:
+    description: TLS library (openssl or mbedtls)
+    required: false
+    default: 'openssl'
+  static_link:
+    description: Enable static linking
+    required: false
+    default: 'false'
+  extra_meson_args:
+    description: Additional meson arguments
+    required: false
+    default: ''
+  binary_name:
+    description: Output binary name (ant or ant.exe)
+    required: false
+    default: 'ant'
+
+runs:
+  using: composite
+  steps:
+    - name: npm install
+      shell: bash
+      run: npm ci
+      working-directory: src/tools
+
+    - name: Cache vendor deps
+      uses: actions/cache@v4
+      with:
+        path: |
+          vendor/*/
+          build/vendor
+        key: vendor-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vendor/*.wrap') }}
+
+    - name: Configure and build
+      shell: bash
+      run: |
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          MSYS2_PATH=$(cygpath "$RUNNER_TEMP/msys64/mingw64/bin")
+          export PATH="$MSYS2_PATH:$PATH"
+          DEPS_PREFIX=$(cygpath -m "${{ inputs.deps_prefix }}")
+          export PKG_CONFIG_PATH="$DEPS_PREFIX/lib/pkgconfig;$PKG_CONFIG_PATH"
+          export CMAKE_PREFIX_PATH="$DEPS_PREFIX;$CMAKE_PREFIX_PATH"
+        else
+          DEPS_PREFIX="${{ inputs.deps_prefix }}"
+          export PKG_CONFIG_PATH="$DEPS_PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH"
+          export CMAKE_PREFIX_PATH="$DEPS_PREFIX:$CMAKE_PREFIX_PATH"
+        fi
+        export CC="${{ inputs.cc }}"
+
+        echo "=== Debug: PKG_CONFIG_PATH ==="
+        echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH"
+        echo "=== Debug: Contents of $DEPS_PREFIX/lib/pkgconfig ==="
+        ls -la "$DEPS_PREFIX/lib/pkgconfig/" 2>/dev/null || echo "Directory not found"
+        echo "=== Debug: pkg-config --variable pc_path pkg-config ==="
+        pkg-config --variable pc_path pkg-config || true
+        echo "=== Debug: pkg-config --modversion llhttp ==="
+        pkg-config --modversion llhttp || echo "llhttp not found by pkg-config"
+
+        if [[ -n "${{ inputs.cxx }}" ]]; then
+          export CXX="${{ inputs.cxx }}"
+        fi
+        if [[ -n "${{ inputs.ar }}" ]]; then
+          export AR="${{ inputs.ar }}"
+          export CMAKE_AR="${{ inputs.ar }}"
+        fi
+        if [[ -n "${{ inputs.ranlib }}" ]]; then
+          export RANLIB="${{ inputs.ranlib }}"
+          export CMAKE_RANLIB="${{ inputs.ranlib }}"
+        fi
+        if [[ -n "${{ inputs.ld }}" ]]; then
+          export CC_LD="${{ inputs.ld }}"
+        fi
+
+        MESON_ARGS="-Db_lto=true --buildtype=release"
+        MESON_ARGS="$MESON_ARGS -Dbuild_timestamp=${{ inputs.build_timestamp }}"
+
+        if [[ "${{ inputs.tls_library }}" == "mbedtls" ]]; then
+          MESON_ARGS="$MESON_ARGS -Dtls_library=mbedtls"
+        fi
+
+        if [[ "${{ inputs.static_link }}" == "true" ]]; then
+          MESON_ARGS="$MESON_ARGS --prefer-static -Dstatic_link=true"
+        fi
+
+        if [[ -n "${{ inputs.extra_meson_args }}" ]]; then
+          MESON_ARGS="$MESON_ARGS ${{ inputs.extra_meson_args }}"
+        fi
+
+        echo "Running: meson setup build $MESON_ARGS"
+        meson setup build $MESON_ARGS
+        meson compile -C build
+
+    - name: Verify build
+      id: version
+      shell: bash
+      run: |
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          MSYS2_PATH=$(cygpath "$RUNNER_TEMP/msys64/mingw64/bin")
+          export PATH="$MSYS2_PATH:$PATH"
+        fi
+        VERSION=$(./build/${{ inputs.binary_name }} --version-raw)
+        echo "Version: $VERSION"
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+    - name: Strip binary
+      shell: bash
+      run: |
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          MSYS2_PATH=$(cygpath "$RUNNER_TEMP/msys64/mingw64/bin")
+          export PATH="$MSYS2_PATH:$PATH"
+        fi
+        ${{ inputs.strip }} build/${{ inputs.binary_name }}
+
+    - name: Bundle Windows DLLs
+      if: runner.os == 'Windows'
+      shell: bash
+      run: |
+        MINGW_BIN=$(cygpath "$RUNNER_TEMP/msys64/mingw64/bin")
+        cp "$MINGW_BIN/libssl-3-x64.dll" build/
+        cp "$MINGW_BIN/libcrypto-3-x64.dll" build/
+        cp "$MINGW_BIN/libsodium-26.dll" build/
+        echo "Bundled DLLs:"
+        ls -la build/*.dll

@@ -127,7 +127,9 @@ pub fn djb2Hash(str: []const u8) u32 {
 }
 
 pub const Lockfile = struct {
-  data: []align(std.heap.page_size_min) const u8,
+  data: 
+    if (builtin.os.tag == .windows) []align(@alignOf(Header)) u8 
+    else []align(std.heap.page_size_min) const u8,
   header: *const Header,
   string_table: []const u8,
   packages: []const Package,
@@ -137,20 +139,55 @@ pub const Lockfile = struct {
   pub fn open(path: []const u8) !Lockfile {
     const file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
-
+    
     const stat = try file.stat();
     if (stat.size < @sizeOf(Header)) {
       return error.InvalidLockfile;
     }
+    
+    if (comptime builtin.os.tag == .windows) {
+      const data = try std.heap.c_allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(Header)), stat.size);
+      errdefer std.heap.c_allocator.free(data);
+      
+      const bytes_read = try file.readAll(data);
+      if (bytes_read != stat.size) {
+        std.heap.c_allocator.free(data);
+        return error.InvalidLockfile;
+      }
+      
+      return initFromDataWindows(data);
+    } else {
+      const data = try std.posix.mmap(
+        null, stat.size,
+        std.posix.PROT.READ,
+        .{ .TYPE = .PRIVATE },
+        file.handle, 0,
+      );
+      
+      return initFromData(data);
+    }
+  }
 
-    const data = try std.posix.mmap(
-      null, stat.size,
-      std.posix.PROT.READ,
-      .{ .TYPE = .PRIVATE },
-      file.handle, 0,
-    );
+  fn initFromDataWindows(data: []align(@alignOf(Header)) u8) !Lockfile {
+    if (data.len < @sizeOf(Header)) return error.InvalidLockfile;
 
-    return initFromData(data);
+    const header: *const Header = @ptrCast(@alignCast(data.ptr));
+    if (!header.validate()) return error.InvalidLockfile;
+
+    if (header.string_table_offset + header.string_table_size > data.len or
+      header.package_array_offset + header.package_count * @sizeOf(Package) > data.len or
+      header.dependency_array_offset + header.dependency_count * @sizeOf(Dependency) > data.len or
+      header.hash_table_offset + header.hash_table_size * @sizeOf(HashBucket) > data.len)
+    { return error.InvalidLockfile; }
+
+    return .{
+      .data = data,
+      .header = header,
+      .string_table = data[header.string_table_offset..][0..header.string_table_size],
+      .packages = @as([*]const Package, @ptrCast(@alignCast(data.ptr + header.package_array_offset)))[0..header.package_count],
+      .dependencies = @as([*]const Dependency, @ptrCast(@alignCast(data.ptr + header.dependency_array_offset)))[0..header.dependency_count],
+      .hash_table = @as([*]const HashBucket, @ptrCast(@alignCast(data.ptr + header.hash_table_offset)))[0..header.hash_table_size],
+    };
   }
 
   pub fn initFromData(data: []align(std.heap.page_size_min) const u8) !Lockfile {
@@ -191,7 +228,9 @@ pub const Lockfile = struct {
   }
 
   pub fn close(self: *Lockfile) void {
-    std.posix.munmap(self.data);
+    if (comptime builtin.os.tag == .windows) {
+      std.heap.c_allocator.free(self.data);
+    } else std.posix.munmap(self.data);
     self.* = undefined;
   }
 

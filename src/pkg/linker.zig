@@ -6,6 +6,46 @@ const debug = @import("debug.zig");
 const PARALLEL_LINK_THRESHOLD = 500;
 const LINK_THREAD_COUNT = 8;
 
+pub fn createSymlinkOrCopy(dir: std.fs.Dir, target: []const u8, link_name: []const u8) void {
+  if (comptime builtin.os.tag == .windows) {
+    createSymlinkWindows(dir, target, link_name);
+  } else dir.symLink(target, link_name, .{}) catch {};
+}
+
+pub fn createSymlinkAbsolute(target: []const u8, link_path: []const u8) void {
+  if (comptime builtin.os.tag == .windows) {
+    createSymlinkAbsoluteWindows(target, link_path);
+  } else std.posix.symlink(target, link_path) catch {};
+}
+
+fn createSymlinkWindows(dir: std.fs.Dir, target: []const u8, link_name: []const u8) void {
+  if (comptime builtin.os.tag != .windows) return;
+  var target_utf16: [std.fs.max_path_bytes]u16 = undefined;
+  var link_utf16: [std.fs.max_path_bytes]u16 = undefined;
+  const target_len = std.unicode.utf8ToUtf16Le(&target_utf16, target) catch return;
+  const link_len = std.unicode.utf8ToUtf16Le(&link_utf16, link_name) catch return;
+  target_utf16[target_len] = 0;
+  
+  _ = std.os.windows.CreateSymbolicLink(
+    dir.fd, link_utf16[0..link_len],
+    target_utf16[0..target_len :0], false,
+  ) catch {};
+}
+
+fn createSymlinkAbsoluteWindows(target: []const u8, link_path: []const u8) void {
+  if (comptime builtin.os.tag != .windows) return;
+  var target_utf16: [std.fs.max_path_bytes]u16 = undefined;
+  var link_utf16: [std.fs.max_path_bytes]u16 = undefined;
+  const target_len = std.unicode.utf8ToUtf16Le(&target_utf16, target) catch return;
+  const link_len = std.unicode.utf8ToUtf16Le(&link_utf16, link_path) catch return;
+  target_utf16[target_len] = 0;
+  
+  _ = std.os.windows.CreateSymbolicLink(
+    null, link_utf16[0..link_len],
+    target_utf16[0..target_len :0], false,
+  ) catch {};
+}
+
 pub const LinkError = error{
   IoError,
   PathNotFound,
@@ -200,7 +240,7 @@ pub const Linker = struct {
     defer self.allocator.free(target);
 
     bin_dir.deleteFile(cmd_name) catch {};
-    bin_dir.symLink(target, cmd_name, .{}) catch return;
+    createSymlinkOrCopy(bin_dir, target, cmd_name);
 
     _ = self.stats.bins_linked.fetchAdd(1, .release);
   }
@@ -246,7 +286,7 @@ pub const Linker = struct {
         .sym_link => {
           var link_buf: [std.fs.max_path_bytes]u8 = undefined;
           const target = source.readLink(entry.name, &link_buf) catch continue;
-          dest.symLink(target, entry.name, .{}) catch {};
+          createSymlinkOrCopy(dest, target, entry.name);
         },
         else => {},
       }
@@ -335,8 +375,7 @@ pub const Linker = struct {
             else
               ctx.dest_base;
             defer if (dst_dir_path.len > 0) dst_dir.close();
-
-            dst_dir.symLink(target, filename, .{}) catch {};
+            createSymlinkOrCopy(dst_dir, target, filename);
           }
         },
         else => {},
@@ -402,14 +441,16 @@ pub const Linker = struct {
   fn linkFile(self: *Linker, source_dir: std.fs.Dir, dest_dir: std.fs.Dir, name: []const u8) !void {
     dest_dir.deleteFile(name) catch {};
 
-    if (!self.cross_device) {
-      if (linkAt(source_dir, name, dest_dir, name)) {
-        _ = self.stats.files_linked.fetchAdd(1, .release);
-        return;
-      } else |err| {
-        if (err == error.CrossDevice) {
-          self.cross_device = true;
-        } else if (err != error.IoError) return err;
+    if (comptime builtin.os.tag != .windows) {
+      if (!self.cross_device) {
+        if (linkAt(source_dir, name, dest_dir, name)) {
+          _ = self.stats.files_linked.fetchAdd(1, .release);
+          return;
+        } else |err| {
+          if (err == error.CrossDevice) {
+            self.cross_device = true;
+          } else if (err != error.IoError) return err;
+        }
       }
     }
 
@@ -425,6 +466,8 @@ pub const Linker = struct {
   }
 
   fn linkAt(source_dir: std.fs.Dir, source_name: []const u8, dest_dir: std.fs.Dir, dest_name: []const u8) !void {
+    if (comptime builtin.os.tag == .windows) return error.IoError;
+    
     var source_buf: [256]u8 = undefined;
     var dest_buf: [256]u8 = undefined;
 

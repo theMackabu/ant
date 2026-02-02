@@ -1,0 +1,227 @@
+name: Build Platform
+
+on:
+  workflow_call:
+    inputs:
+      platform:
+        description: 'Platform key from versions.json targets'
+        required: true
+        type: string
+      build_timestamp:
+        required: true
+        type: string
+    outputs:
+      version:
+        description: Build version
+        value: ${{ jobs.build.outputs.version }}
+
+jobs:
+  build:
+    outputs:
+      version: ${{ steps.build.outputs.version }}
+    # runs-on/container/shell must be hardcoded
+    runs-on: |-
+      ${{ case(
+        inputs.platform == 'linux-glibc-x64', 'ubuntu-24.04',
+        inputs.platform == 'linux-glibc-aarch64', 'ubuntu-24.04-arm',
+        inputs.platform == 'linux-musl-x64', 'ubuntu-24.04',
+        inputs.platform == 'linux-musl-aarch64', 'ubuntu-24.04-arm',
+        inputs.platform == 'macos-x64', 'macos-15-intel',
+        inputs.platform == 'macos-x64-mbedtls', 'macos-15-intel',
+        inputs.platform == 'macos-aarch64', 'macos-15',
+        inputs.platform == 'macos-aarch64-mbedtls', 'macos-15',
+        inputs.platform == 'windows-x64', 'windows-latest',
+        'ubuntu-24.04'
+      ) }}
+
+    container: |-
+      ${{ case(
+        startsWith(inputs.platform, 'linux-glibc'), 'ubuntu:22.04',
+        startsWith(inputs.platform, 'linux-musl'), 'alpine:edge',
+        ''
+      ) }}
+
+    defaults:
+      run:
+        shell: |-
+          ${{ case(
+            startsWith(inputs.platform, 'linux-glibc'), 'bash',
+            startsWith(inputs.platform, 'linux-musl'), 'sh',
+            startsWith(inputs.platform, 'macos'), 'bash',
+            inputs.platform == 'windows-x64', 'msys2 {0}',
+            'bash'
+          ) }}
+
+    steps:
+      # === ALPINE ARM64 WORKAROUND (must be first) ===
+      - name: Setup Alpine ARM64 support
+        uses: laverdet/alpine-arm64@v1
+        if: startsWith(inputs.platform, 'linux-musl')
+
+      # === LINUX GLIBC SETUP ===
+      - name: Setup Linux glibc environment
+        if: startsWith(inputs.platform, 'linux-glibc')
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install -y git ca-certificates gnupg wget software-properties-common curl \
+            python3-pip ninja-build cmake pkg-config uuid-dev libssl-dev libsodium-dev jq
+          curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+          apt-get install -y nodejs
+          pip3 install meson
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      # === LINUX MUSL SETUP ===
+      - name: Setup Linux musl environment
+        if: startsWith(inputs.platform, 'linux-musl')
+        run: |
+          apk add --no-cache git clang lld llvm meson ninja cmake pkgconf curl npm nodejs \
+            musl-dev openssl-dev openssl-libs-static libsodium-dev libsodium-static \
+            util-linux-dev util-linux-static linux-headers libunwind-dev libunwind-static \
+            tar xz zstd jq bash
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      # === MACOS SETUP ===
+      - name: Setup macOS environment
+        if: startsWith(inputs.platform, 'macos')
+        run: |
+          for pkg in meson ninja llvm jq; do
+            brew list "$pkg" &>/dev/null || brew install "$pkg"
+          done
+          if [[ "${{ inputs.platform }}" != *"mbedtls"* ]]; then
+            brew list openssl@3 &>/dev/null || brew install openssl@3
+          fi
+
+      # === WINDOWS SETUP ===
+      - name: Disable Windows Defender real-time monitoring
+        if: inputs.platform == 'windows-x64'
+        shell: pwsh
+        run: Set-MpPreference -DisableRealtimeMonitoring $true
+
+      - name: Setup Windows MSYS2
+        if: inputs.platform == 'windows-x64'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          cache: true
+          install: >-
+            mingw-w64-x86_64-toolchain mingw-w64-x86_64-meson mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-cmake mingw-w64-x86_64-openssl mingw-w64-x86_64-libsodium
+            mingw-w64-x86_64-lld mingw-w64-x86_64-nodejs git jq
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # === LOAD TARGET CONFIG ===
+      - name: Load target configuration
+        id: config
+        shell: bash
+        run: |
+          CONFIG=$(jq -r '.targets["${{ inputs.platform }}"]' .github/versions.json)
+          TOOLS=$(jq -r '.tools' .github/versions.json)
+          DEPS=$(jq -r '.dependencies' .github/versions.json)
+
+          # Tools
+          echo "zig_version=$(echo $TOOLS | jq -r '.zig')" >> $GITHUB_OUTPUT
+          echo "llvm_version=$(echo $TOOLS | jq -r '.llvm')" >> $GITHUB_OUTPUT
+          echo "node_version=$(echo $TOOLS | jq -r '.node')" >> $GITHUB_OUTPUT
+
+          # Target config
+          echo "os_type=$(echo $CONFIG | jq -r '.os_type')" >> $GITHUB_OUTPUT
+          echo "arch=$(echo $CONFIG | jq -r '.arch')" >> $GITHUB_OUTPUT
+          echo "zig_target=$(echo $CONFIG | jq -r '.zig_target')" >> $GITHUB_OUTPUT
+          echo "rust_target=$(echo $CONFIG | jq -r '.rust_target')" >> $GITHUB_OUTPUT
+          echo "artifact_name=$(echo $CONFIG | jq -r '.artifact_name')" >> $GITHUB_OUTPUT
+          echo "binary_name=$(echo $CONFIG | jq -r '.binary_name')" >> $GITHUB_OUTPUT
+          echo "tls_library=$(echo $CONFIG | jq -r '.tls_library')" >> $GITHUB_OUTPUT
+          echo "static_link=$(echo $CONFIG | jq -r '.static_link')" >> $GITHUB_OUTPUT
+          echo "cmake_generator=$(echo $CONFIG | jq -r '.cmake_generator // empty')" >> $GITHUB_OUTPUT
+          echo "extra_meson_args=$(echo $CONFIG | jq -r '.extra_meson_args // empty')" >> $GITHUB_OUTPUT
+
+          # Deps as space-separated string
+          echo "deps=$(echo $CONFIG | jq -r '.deps | join(" ")')" >> $GITHUB_OUTPUT
+
+          # Dep versions
+          echo "llhttp_version=$(echo $DEPS | jq -r '.llhttp')" >> $GITHUB_OUTPUT
+          echo "libuv_version=$(echo $DEPS | jq -r '.libuv')" >> $GITHUB_OUTPUT
+          echo "libsodium_version=$(echo $DEPS | jq -r '.libsodium')" >> $GITHUB_OUTPUT
+          echo "mbedtls_version=$(echo $DEPS | jq -r '.mbedtls')" >> $GITHUB_OUTPUT
+          echo "zlib_version=$(echo $DEPS | jq -r '.zlib')" >> $GITHUB_OUTPUT
+
+      # === SETUP ZIG ===
+      - name: Setup Zig
+        uses: ./.github/actions/setup-zig
+        with:
+          version: ${{ steps.config.outputs.zig_version }}
+
+      # === SETUP LLVM ===
+      - name: Setup LLVM
+        id: llvm
+        uses: ./.github/actions/setup-llvm
+        with:
+          version: ${{ steps.config.outputs.llvm_version }}
+          os_type: ${{ steps.config.outputs.os_type }}
+
+      # === SETUP RUST ===
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          target: ${{ steps.config.outputs.rust_target }}
+
+      # === BUILD NATIVE DEPS ===
+      - name: Build native dependencies
+        uses: ./.github/actions/build-native-deps
+        with:
+          deps: ${{ steps.config.outputs.deps }}
+          prefix: ${{ runner.temp }}/deps-cache
+          cc: ${{ steps.llvm.outputs.cc }}
+          cxx: ${{ steps.llvm.outputs.cxx }}
+          ar: ${{ steps.llvm.outputs.ar }}
+          ranlib: ${{ steps.llvm.outputs.ranlib }}
+          cmake_generator: ${{ steps.config.outputs.cmake_generator }}
+          llhttp_version: ${{ steps.config.outputs.llhttp_version }}
+          libuv_version: ${{ steps.config.outputs.libuv_version }}
+          libsodium_version: ${{ steps.config.outputs.libsodium_version }}
+          mbedtls_version: ${{ steps.config.outputs.mbedtls_version }}
+          zlib_version: ${{ steps.config.outputs.zlib_version }}
+
+      # === BUILD PROJECT ===
+      - name: Build project
+        id: build
+        uses: ./.github/actions/build-project
+        with:
+          cc: ${{ steps.llvm.outputs.cc }}
+          cxx: ${{ steps.llvm.outputs.cxx }}
+          ar: ${{ steps.llvm.outputs.ar }}
+          ranlib: ${{ steps.llvm.outputs.ranlib }}
+          ld: ${{ steps.llvm.outputs.ld }}
+          strip: ${{ steps.llvm.outputs.strip }}
+          deps_prefix: ${{ runner.temp }}/deps-cache
+          build_timestamp: ${{ inputs.build_timestamp }}
+          tls_library: ${{ steps.config.outputs.tls_library }}
+          static_link: ${{ steps.config.outputs.static_link }}
+          extra_meson_args: ${{ steps.config.outputs.extra_meson_args }}
+          binary_name: ${{ steps.config.outputs.binary_name }}
+
+      # === UPLOAD ARTIFACTS ===
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.config.outputs.artifact_name }}
+          path: |
+            build/${{ steps.config.outputs.binary_name }}
+            build/*.dll
+
+      - name: Save version info
+        shell: bash
+        run: echo "${{ steps.build.outputs.version }}" > version.txt
+
+      - name: Upload version info
+        uses: actions/upload-artifact@v4
+        with:
+          name: version-${{ inputs.platform }}
+          path: version.txt
+          retention-days: 1

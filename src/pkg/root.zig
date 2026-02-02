@@ -13,6 +13,17 @@ pub const debug = @import("debug.zig");
 
 const global_allocator: std.mem.Allocator = std.heap.c_allocator;
 
+fn getHomeDir(allocator: std.mem.Allocator) ![]const u8 {
+  if (builtin.os.tag == .windows) {
+    const home_w = std.process.getenvW(
+      std.unicode.utf8ToUtf16LeStringLiteral("USERPROFILE")
+    ) orelse return error.NoHomeDir;
+    return std.unicode.utf16LeToUtf8Alloc(allocator, home_w) catch error.NoHomeDir;
+  }
+  const home = std.posix.getenv("HOME") orelse return error.NoHomeDir;
+  return allocator.dupe(u8, home);
+}
+
 pub const PkgError = enum(c_int) {
   ok = 0,
   out_of_memory = -1,
@@ -225,10 +236,9 @@ pub const PkgContext = struct {
   }
 
   fn getDefaultCacheDir(allocator: std.mem.Allocator) ![]const u8 {
-    if (std.posix.getenv("HOME")) |home| {
-      return std.fmt.allocPrint(allocator, "{s}/.ant/pkg", .{home});
-    }
-    return error.NoHomeDir;
+    const home = try getHomeDir(allocator);
+    defer allocator.free(home);
+    return std.fmt.allocPrint(allocator, "{s}/.ant/pkg", .{home});
   }
 
   fn reportProgress(self: *PkgContext, phase: Phase, current: u32, total: u32, message: [:0]const u8) void {
@@ -2495,12 +2505,14 @@ export fn pkg_exec_temp(
 }
 
 fn getGlobalDir(allocator: std.mem.Allocator) ![]const u8 {
-  const home = std.posix.getenv("HOME") orelse return error.NoHomeDir;
+  const home = try getHomeDir(allocator);
+  defer allocator.free(home);
   return std.fmt.allocPrint(allocator, "{s}/.ant/pkg/global", .{home});
 }
 
 fn getGlobalBinDir(allocator: std.mem.Allocator) ![]const u8 {
-  const home = std.posix.getenv("HOME") orelse return error.NoHomeDir;
+  const home = try getHomeDir(allocator);
+  defer allocator.free(home);
   return std.fmt.allocPrint(allocator, "{s}/.ant/bin", .{home});
 }
 
@@ -2544,9 +2556,7 @@ fn linkGlobalBins(allocator: std.mem.Allocator, nm_path: []const u8, pkg_name: [
     },
     .object => |obj| {
       for (obj.keys(), obj.values()) |bin_name, path_val| {
-        if (path_val == .string) {
-          linkSingleBin(allocator, bin_dir, nm_path, pkg_name, bin_name, path_val.string);
-        }
+        if (path_val == .string) linkSingleBin(allocator, bin_dir, nm_path, pkg_name, bin_name, path_val.string);
       }
     },
     else => {},
@@ -2554,14 +2564,14 @@ fn linkGlobalBins(allocator: std.mem.Allocator, nm_path: []const u8, pkg_name: [
 }
 
 fn linkSingleBin(allocator: std.mem.Allocator, bin_dir: []const u8, nm_path: []const u8, pkg_name: []const u8, bin_name: []const u8, bin_rel_path: []const u8) void {
-  const target = std.fmt.allocPrintSentinel(allocator, "{s}/{s}/{s}", .{nm_path, pkg_name, bin_rel_path}, 0) catch return;
+  const target = std.fmt.allocPrint(allocator, "{s}/{s}/{s}", .{nm_path, pkg_name, bin_rel_path}) catch return;
   defer allocator.free(target);
   
-  const link_path = std.fmt.allocPrintSentinel(allocator, "{s}/{s}", .{bin_dir, bin_name}, 0) catch return;
+  const link_path = std.fmt.allocPrint(allocator, "{s}/{s}", .{bin_dir, bin_name}) catch return;
   defer allocator.free(link_path);
   
   std.fs.cwd().deleteFile(link_path) catch {};
-  std.posix.symlink(target, link_path) catch {};
+  linker.createSymlinkAbsolute(target, link_path);
   
   debug.log("linked global bin: {s} -> {s}", .{link_path, target});
 }
