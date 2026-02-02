@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const linker = @import("linker.zig");
 
 const c = @cImport({
   @cInclude("zlib-ng.h");
@@ -411,7 +412,7 @@ pub const Extractor = struct {
       self.output_dir.makePath(dir) catch {};
     }
     self.output_dir.deleteFile(entry.path) catch {};
-    self.output_dir.symLink(target, entry.path, .{}) catch {};
+    linker.createSymlinkOrCopy(self.output_dir, target, entry.path);
   }
   
   inline fn writeFileData(self: *Extractor, data: []const u8) void {

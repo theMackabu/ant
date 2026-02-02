@@ -2556,9 +2556,7 @@ fn linkGlobalBins(allocator: std.mem.Allocator, nm_path: []const u8, pkg_name: [
     },
     .object => |obj| {
       for (obj.keys(), obj.values()) |bin_name, path_val| {
-        if (path_val == .string) {
-          linkSingleBin(allocator, bin_dir, nm_path, pkg_name, bin_name, path_val.string);
-        }
+        if (path_val == .string) linkSingleBin(allocator, bin_dir, nm_path, pkg_name, bin_name, path_val.string);
       }
     },
     else => {},
@@ -2566,14 +2564,14 @@ fn linkGlobalBins(allocator: std.mem.Allocator, nm_path: []const u8, pkg_name: [
 }
 
 fn linkSingleBin(allocator: std.mem.Allocator, bin_dir: []const u8, nm_path: []const u8, pkg_name: []const u8, bin_name: []const u8, bin_rel_path: []const u8) void {
-  const target = std.fmt.allocPrintSentinel(allocator, "{s}/{s}/{s}", .{nm_path, pkg_name, bin_rel_path}, 0) catch return;
+  const target = std.fmt.allocPrint(allocator, "{s}/{s}/{s}", .{nm_path, pkg_name, bin_rel_path}) catch return;
   defer allocator.free(target);
   
-  const link_path = std.fmt.allocPrintSentinel(allocator, "{s}/{s}", .{bin_dir, bin_name}, 0) catch return;
+  const link_path = std.fmt.allocPrint(allocator, "{s}/{s}", .{bin_dir, bin_name}) catch return;
   defer allocator.free(link_path);
   
   std.fs.cwd().deleteFile(link_path) catch {};
-  std.posix.symlink(target, link_path) catch {};
+  linker.createSymlinkAbsolute(target, link_path);
   
   debug.log("linked global bin: {s} -> {s}", .{link_path, target});
 }

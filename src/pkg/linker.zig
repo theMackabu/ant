@@ -6,6 +6,47 @@ const debug = @import("debug.zig");
 const PARALLEL_LINK_THRESHOLD = 500;
 const LINK_THREAD_COUNT = 8;
 
+pub fn createSymlinkOrCopy(dir: std.fs.Dir, target: []const u8, link_name: []const u8) void {
+  if (comptime builtin.os.tag == .windows) {
+    createSymlinkWindows(dir, target, link_name);
+  } else dir.symLink(target, link_name, .{}) catch {};
+}
+
+pub fn createSymlinkAbsolute(target: []const u8, link_path: []const u8) void {
+  if (comptime builtin.os.tag == .windows) {
+    createSymlinkAbsoluteWindows(target, link_path);
+  } else std.posix.symlink(target, link_path) catch {};
+}
+
+fn createSymlinkWindows(dir: std.fs.Dir, target: []const u8, link_name: []const u8) void {
+  if (comptime builtin.os.tag != .windows) return;
+  var target_buf: [std.fs.max_path_bytes]u8 = undefined;
+  var link_buf: [std.fs.max_path_bytes]u8 = undefined;
+  @memcpy(target_buf[0..target.len], target);
+  target_buf[target.len] = 0;
+  @memcpy(link_buf[0..link_name.len], link_name);
+  link_buf[link_name.len] = 0;
+  const target_z: [*:0]const u8 = target_buf[0..target.len :0];
+  const link_z: [*:0]const u8 = link_buf[0..link_name.len :0];
+  _ = std.os.windows.CreateSymbolicLink(dir.fd, link_z, target_z, .{ .is_directory = false }) catch {};
+}
+
+fn createSymlinkAbsoluteWindows(target: []const u8, link_path: []const u8) void {
+  if (comptime builtin.os.tag != .windows) return;
+  var target_buf: [std.fs.max_path_bytes]u8 = undefined;
+  var link_buf: [std.fs.max_path_bytes]u8 = undefined;
+  @memcpy(target_buf[0..target.len], target);
+  target_buf[target.len] = 0;
+  @memcpy(link_buf[0..link_path.len], link_path);
+  link_buf[link_path.len] = 0;
+  var target_utf16: [std.fs.max_path_bytes]u16 = undefined;
+  var link_utf16: [std.fs.max_path_bytes]u16 = undefined;
+  const target_len = std.unicode.utf8ToUtf16Le(&target_utf16, target_buf[0..target.len]) catch return;
+  const link_len = std.unicode.utf8ToUtf16Le(&link_utf16, link_buf[0..link_path.len]) catch return;
+  target_utf16[target_len] = 0; link_utf16[link_len] = 0;
+  _ = std.os.windows.kernel32.CreateSymbolicLinkW(link_utf16[0..link_len :0], target_utf16[0..target_len :0], 0);
+}
+
 pub const LinkError = error{
   IoError,
   PathNotFound,
@@ -200,7 +241,7 @@ pub const Linker = struct {
     defer self.allocator.free(target);
 
     bin_dir.deleteFile(cmd_name) catch {};
-    bin_dir.symLink(target, cmd_name, .{}) catch return;
+    createSymlinkOrCopy(bin_dir, target, cmd_name);
 
     _ = self.stats.bins_linked.fetchAdd(1, .release);
   }
@@ -246,7 +287,7 @@ pub const Linker = struct {
         .sym_link => {
           var link_buf: [std.fs.max_path_bytes]u8 = undefined;
           const target = source.readLink(entry.name, &link_buf) catch continue;
-          dest.symLink(target, entry.name, .{}) catch {};
+          createSymlinkOrCopy(dest, target, entry.name);
         },
         else => {},
       }
@@ -335,8 +376,7 @@ pub const Linker = struct {
             else
               ctx.dest_base;
             defer if (dst_dir_path.len > 0) dst_dir.close();
-
-            dst_dir.symLink(target, filename, .{}) catch {};
+            createSymlinkOrCopy(dst_dir, target, filename);
           }
         },
         else => {},

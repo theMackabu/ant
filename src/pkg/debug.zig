@@ -9,9 +9,9 @@ pub fn log(comptime fmt: []const u8, args: anytype) void {
   var buf: [2048]u8 = undefined;
   const msg = std.fmt.bufPrint(&buf, "[pkg] " ++ fmt ++ "\n", args) catch return;
   
-  if (builtin.os.tag == .windows) {
-    const stderr = std.io.getStdErr();
-    stderr.writeAll(msg) catch {};
+  if (comptime builtin.os.tag == .windows) {
+    const handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch return;
+    _ = std.os.windows.WriteFile(handle, msg, null) catch {};
   } else _ = std.c.write(2, msg.ptr, msg.len);
 }
 

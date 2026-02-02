@@ -85,11 +85,16 @@ yyjson_dep = subproject('yyjson').get_variable('yyjson_dep')
 uuidv7_dep = subproject('uuidv7').get_variable('uuidv7_dep')
 argtable3_dep = subproject('argtable3').get_variable('argtable3_dep')
 minicoro_dep = subproject('minicoro').get_variable('minicoro_dep')
-lmdb_dep = subproject('lmdb').get_variable('lmdb_dep')
 
-zlib_dep = subproject('zlib-ng',
-  default_options: ['b_lto=false', 'warning_level=0']
-).get_variable('zlib_ng_dep')
+lmdb_dep = subproject('lmdb', default_options: [
+  'warning_level=0',
+  'programs=disabled'
+]).get_variable('lmdb_dep')
+
+zlib_dep = subproject('zlib-ng', default_options: [
+  'b_lto=false',
+  'warning_level=0'
+]).get_variable('zlib_ng_dep')
 
 nghttp2_dep = subproject('nghttp2', default_options: [
   'warning_level=0'
