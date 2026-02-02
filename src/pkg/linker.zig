@@ -441,14 +441,16 @@ pub const Linker = struct {
   fn linkFile(self: *Linker, source_dir: std.fs.Dir, dest_dir: std.fs.Dir, name: []const u8) !void {
     dest_dir.deleteFile(name) catch {};
 
-    if (!self.cross_device) {
-      if (linkAt(source_dir, name, dest_dir, name)) {
-        _ = self.stats.files_linked.fetchAdd(1, .release);
-        return;
-      } else |err| {
-        if (err == error.CrossDevice) {
-          self.cross_device = true;
-        } else if (err != error.IoError) return err;
+    if (comptime builtin.os.tag != .windows) {
+      if (!self.cross_device) {
+        if (linkAt(source_dir, name, dest_dir, name)) {
+          _ = self.stats.files_linked.fetchAdd(1, .release);
+          return;
+        } else |err| {
+          if (err == error.CrossDevice) {
+            self.cross_device = true;
+          } else if (err != error.IoError) return err;
+        }
       }
     }
 
@@ -464,6 +466,8 @@ pub const Linker = struct {
   }
 
   fn linkAt(source_dir: std.fs.Dir, source_name: []const u8, dest_dir: std.fs.Dir, dest_name: []const u8) !void {
+    if (comptime builtin.os.tag == .windows) return error.IoError;
+    
     var source_buf: [256]u8 = undefined;
     var dest_buf: [256]u8 = undefined;
 

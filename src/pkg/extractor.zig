@@ -348,13 +348,15 @@ pub const Extractor = struct {
   fn applyFileMode(self: *Extractor) void {
     if (self.current_file_path_len == 0) return;
 
-    if (self.current_file_mode & 0o111 != 0) {
-      const path = self.current_file_path[0..self.current_file_path_len];
-      var path_buf: [257]u8 = undefined;
-      @memcpy(path_buf[0..path.len], path);
-      path_buf[path.len] = 0;
-      const path_z: [*:0]const u8 = path_buf[0..path.len :0];
-      _ = std.c.fchmodat(self.output_dir.fd, path_z, @intCast(self.current_file_mode & 0o777), 0);
+    if (comptime builtin.os.tag != .windows) {
+      if (self.current_file_mode & 0o111 != 0) {
+        const path = self.current_file_path[0..self.current_file_path_len];
+        var path_buf: [257]u8 = undefined;
+        @memcpy(path_buf[0..path.len], path);
+        path_buf[path.len] = 0;
+        const path_z: [*:0]const u8 = path_buf[0..path.len :0];
+        _ = std.c.fchmodat(self.output_dir.fd, path_z, @intCast(self.current_file_mode & 0o777), 0);
+      }
     }
     self.current_file_path_len = 0;
   }
