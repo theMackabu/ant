@@ -555,7 +555,7 @@ static int cmd_trust(const char **pkgs, int count, bool all) {
   uint32_t to_run_count = 0;
 
   if (all) {
-    to_run = malloc(script_count * sizeof(char *));
+    to_run = try_oom(script_count * sizeof(char *));
     if (to_run) {
       for (uint32_t i = 0; i < script_count; i++) {
         pkg_lifecycle_script_t script;
@@ -565,7 +565,7 @@ static int cmd_trust(const char **pkgs, int count, bool all) {
       }
     }
   } else if (count > 0) {
-    to_run = malloc(count * sizeof(char *));
+    to_run = try_oom(count * sizeof(char *));
     if (to_run) {
       for (int i = 0; i < count; i++) {
         bool found = false;
@@ -1052,7 +1052,7 @@ int pkg_cmd_exec(int argc, char **argv) {
   int arg_offset = cmd_idx + 1;
   int new_argc = argc - arg_offset + 2;
   
-  char **exec_argv = malloc(sizeof(char*) * (new_argc + 1));
+  char **exec_argv = try_oom(sizeof(char*) * (new_argc + 1));
   if (!exec_argv) {
     fprintf(stderr, "Error: out of memory\n");
     return EXIT_FAILURE;

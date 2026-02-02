@@ -160,7 +160,7 @@ pub const Linker = struct {
       else => return error.IoError,
     };
 
-    var new_bin_dir = try std.fs.cwd().openDir(bin_path, .{});
+    const new_bin_dir = try std.fs.cwd().openDir(bin_path, .{});
 
     if (self.bin_dir) |*d| d.close();
     if (self.node_modules_dir) |*d| d.close();
@@ -253,7 +253,7 @@ pub const Linker = struct {
     defer self.allocator.free(target);
 
     bin_dir.deleteFile(cmd_name) catch {};
-    createSymlinkOrCopy(bin_dir, target, cmd_name);
+    try createSymlinkOrCopy(bin_dir, target, cmd_name);
 
     _ = self.stats.bins_linked.fetchAdd(1, .release);
   }
@@ -299,7 +299,7 @@ pub const Linker = struct {
         .sym_link => {
           var link_buf: [std.fs.max_path_bytes]u8 = undefined;
           const target = source.readLink(entry.name, &link_buf) catch continue;
-          createSymlinkOrCopy(dest, target, entry.name);
+          createSymlinkOrCopy(dest, target, entry.name) catch {};
         },
         else => {},
       }
@@ -388,7 +388,7 @@ pub const Linker = struct {
             else
               ctx.dest_base;
             defer if (dst_dir_path.len > 0) dst_dir.close();
-            createSymlinkOrCopy(dst_dir, target, filename);
+            createSymlinkOrCopy(dst_dir, target, filename) catch {};
           }
         },
         else => {},

@@ -45,7 +45,6 @@ typedef struct {
   bool is_windows_terminal;
   bool supports_ansi;
   bool dont_print_on_dumb;
-  _Atomic(const char *) message;
   uint64_t start_time_ns;
   uint64_t prev_refresh_ns;
   uint64_t refresh_rate_ns;
@@ -55,6 +54,7 @@ typedef struct {
   size_t columns_written;
   progress_mutex_t mutex;
   char buffer[PROGRESS_MSG_SIZE];
+  char msg_buffer[PROGRESS_MSG_SIZE];
 } progress_t;
 
 static inline void progress_mutex_init(progress_mutex_t *m) {
@@ -176,7 +176,10 @@ static inline void progress_start(progress_t *p, const char *message) {
     p->is_windows_terminal = false;
   }
   
-  atomic_store(&p->message, message);
+  if (message) {
+    strncpy(p->msg_buffer, message, PROGRESS_MSG_SIZE - 1);
+    p->msg_buffer[PROGRESS_MSG_SIZE - 1] = '\0';
+  } else p->msg_buffer[0] = '\0';
   
   p->refresh_rate_ns = 50 * 1000000ULL;
   p->initial_delay_ns = 500 * 1000000ULL;
@@ -212,7 +215,13 @@ static inline void progress_maybe_refresh(progress_t *p) {
 }
 
 static inline void progress_update(progress_t *p, const char *message) {
-  atomic_store(&p->message, message);
+  progress_mutex_lock(&p->mutex);
+  if (message) {
+    strncpy(p->msg_buffer, message, PROGRESS_MSG_SIZE - 1);
+    p->msg_buffer[PROGRESS_MSG_SIZE - 1] = '\0';
+  } else p->msg_buffer[0] = '\0';
+
+  progress_mutex_unlock(&p->mutex);
   progress_maybe_refresh(p);
 }
 
@@ -267,9 +276,8 @@ static void progress_refresh_locked(progress_t *p) {
   progress_clear_locked(p, &end);
   
   if (!p->done) {
-    const char *msg = atomic_load(&p->message);
-    if (msg && msg[0]) {
-      int written = snprintf(p->buffer + end, sizeof(p->buffer) - end, "  %s", msg);
+    if (p->msg_buffer[0]) {
+      int written = snprintf(p->buffer + end, sizeof(p->buffer) - end, "  %s", p->msg_buffer);
       if (written > 0) {
         size_t amt = (
           (size_t)written < sizeof(p->buffer) - end) 
