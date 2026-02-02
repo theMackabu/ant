@@ -52,10 +52,6 @@ libant = static_library(
   install: true
 )
 
-pkg_lib_name = host_machine.system() == 'windows' 
-  ? 'pkg.lib' 
-  : 'libpkg.a'
-
 pkg_lib = custom_target(
   'pkg_zig',
   output: 'libpkg.a',
@@ -65,15 +61,14 @@ pkg_lib = custom_target(
   ],
   env: {
     'ZIG': zig.full_path(),
-    'PKG_TARGET': host_machine.cpu_family() + '-' + host_machine.system(),
     'ANT_VERSION': ant_version,
-    'PKG_ZIG_DIR': pkg_zig_dir,
-    'PKG_BUILD_DIR': pkg_build_dir,
-    'PKG_LIB_NAME': pkg_lib_name,
-    'LMDB_INCLUDE': lmdb_include_path,
-    'ZLIB_INCLUDE': zlib_include_path,
-    'LIBUV_INCLUDE': libuv_include_path,
-    'YYJSON_INCLUDE': yyjson_include_path,
+    
+    'PKG_ZIG_DIR': pkg_zig_dir, 'PKG_BUILD_DIR': pkg_build_dir,
+    'LMDB_INCLUDE': lmdb_include_path, 'ZLIB_INCLUDE': zlib_include_path,
+    'LIBUV_INCLUDE': libuv_include_path, 'YYJSON_INCLUDE': yyjson_include_path,
+    
+    'PKG_TARGET': host_machine.cpu_family() + '-' + host_machine.system(),
+    'PKG_LIB_NAME': host_machine.system() == 'windows' ? 'pkg.lib' : 'libpkg.a',
   },
   build_by_default: true,
   build_always_stale: true
