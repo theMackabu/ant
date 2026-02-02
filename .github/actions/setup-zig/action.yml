@@ -13,7 +13,6 @@ runs:
       id: platform
       shell: bash
       run: |
-        # Zig 0.15+ uses format: zig-{arch}-{os}-{version}
         case "${{ runner.os }}-${{ runner.arch }}" in
           Linux-X64)   echo "slug=x86_64-linux" >> $GITHUB_OUTPUT; echo "ext=tar.xz" >> $GITHUB_OUTPUT ;;
           Linux-ARM64) echo "slug=aarch64-linux" >> $GITHUB_OUTPUT; echo "ext=tar.xz" >> $GITHUB_OUTPUT ;;
@@ -21,12 +20,7 @@ runs:
           macOS-ARM64) echo "slug=aarch64-macos" >> $GITHUB_OUTPUT; echo "ext=tar.xz" >> $GITHUB_OUTPUT ;;
           Windows-X64) echo "slug=x86_64-windows" >> $GITHUB_OUTPUT; echo "ext=zip" >> $GITHUB_OUTPUT ;;
         esac
-
-        if [[ "${{ runner.os }}" == "Windows" ]]; then
-          echo "install_path=$RUNNER_TEMP/zig" >> $GITHUB_OUTPUT
-        else
-          echo "install_path=/usr/local/zig" >> $GITHUB_OUTPUT
-        fi
+        echo "install_path=$RUNNER_TEMP/zig" >> $GITHUB_OUTPUT
 
     - name: Cache Zig
       id: cache
@@ -52,12 +46,7 @@ runs:
 
         INSTALL_PATH="${{ steps.platform.outputs.install_path }}"
         mkdir -p "$(dirname "$INSTALL_PATH")"
-        if [[ "${{ runner.os }}" == "Windows" ]]; then
-          mv zig-${{ steps.platform.outputs.slug }}-${{ inputs.version }} "$INSTALL_PATH"
-        else
-          sudo mv zig-${{ steps.platform.outputs.slug }}-${{ inputs.version }} "$INSTALL_PATH" || \
-            mv zig-${{ steps.platform.outputs.slug }}-${{ inputs.version }} "$INSTALL_PATH"
-        fi
+        mv zig-${{ steps.platform.outputs.slug }}-${{ inputs.version }} "$INSTALL_PATH"
 
     - name: Add to PATH
       shell: bash
