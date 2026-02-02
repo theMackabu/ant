@@ -39,7 +39,7 @@ pub const CacheDB = struct {
   cache_dir: []const u8,
   allocator: std.mem.Allocator,
 
-  const MAP_SIZE: usize = 1024 * 1024 * 1024;
+  const MAP_SIZE: usize = 8 * 1024 * 1024 * 1024;
   const METADATA_TTL_SECS: i64 = 24 * 60 * 60;
 
   pub fn open(cache_dir: []const u8) !*CacheDB {
@@ -453,67 +453,122 @@ pub const CacheDB = struct {
     if (c.mdb_txn_commit(txn) != 0) return error.InsertError;
   }
 
+  const PruneCollections = struct {
+    keys: std.ArrayListUnmanaged([66]u8) = .{},
+    paths: std.ArrayListUnmanaged([]const u8) = .{},
+    
+    fn deinit(self: *PruneCollections, allocator: std.mem.Allocator) void {
+      for (self.paths.items) |p| allocator.free(p);
+      self.paths.deinit(allocator);
+      self.keys.deinit(allocator);
+    }
+  };
+
+  inline fn collectExpiredEntries(
+    self: *CacheDB,
+    txn: *c.MDB_txn,
+    cutoff: i64,
+    collections: *PruneCollections,
+  ) !void {
+    var cursor: ?*c.MDB_cursor = null;
+    if (c.mdb_cursor_open(txn, self.dbi_primary, &cursor) != 0) return error.DatabaseError;
+    defer c.mdb_cursor_close(cursor);
+
+    var key: c.MDB_val = undefined;
+    var value: c.MDB_val = undefined;
+    var rc = c.mdb_cursor_get(cursor, &key, &value, c.MDB_FIRST);
+
+    while (rc == 0) : (rc = c.mdb_cursor_get(cursor, &key, &value, c.MDB_NEXT)) {
+      if (value.mv_size < @sizeOf(SerializedEntry)) continue;
+
+      const data: [*]const u8 = @ptrCast(value.mv_data);
+      var header: SerializedEntry = undefined;
+      @memcpy(std.mem.asBytes(&header), data[0..@sizeOf(SerializedEntry)]);
+
+      if (header.cached_at >= cutoff) continue;
+      if (key.mv_size != 66) continue;
+
+      const key_data: [*]const u8 = @ptrCast(key.mv_data);
+      var key_copy: [66]u8 = undefined;
+      @memcpy(&key_copy, key_data[0..66]);
+      collections.keys.append(self.allocator, key_copy) catch continue;
+
+      const path_start = @sizeOf(SerializedEntry);
+      if (value.mv_size >= path_start + header.path_len) {
+        const path = self.allocator.dupe(u8, data[path_start..][0..header.path_len]) catch continue;
+        collections.paths.append(self.allocator, path) catch self.allocator.free(path);
+      }
+    }
+  }
+
+  inline fn deletePrimaryEntries(self: *CacheDB, txn: *c.MDB_txn, keys: []const [66]u8) u32 {
+    var pruned: u32 = 0;
+    for (keys) |*key_bytes| {
+      var del_key = c.MDB_val{ .mv_size = 66, .mv_data = @constCast(key_bytes) };
+      if (c.mdb_del(txn, self.dbi_primary, &del_key, null) == 0) pruned += 1;
+    }
+    return pruned;
+  }
+
+  inline fn pruneStaleSecondaryEntries(self: *CacheDB, txn: *c.MDB_txn) void {
+    var cursor: ?*c.MDB_cursor = null;
+    if (c.mdb_cursor_open(txn, self.dbi_secondary, &cursor) != 0) return;
+    defer c.mdb_cursor_close(cursor);
+
+    var to_delete = std.ArrayListUnmanaged([]u8){};
+    defer {
+      for (to_delete.items) |k| self.allocator.free(k);
+      to_delete.deinit(self.allocator);
+    }
+
+    var key: c.MDB_val = undefined;
+    var value: c.MDB_val = undefined;
+    var rc = c.mdb_cursor_get(cursor, &key, &value, c.MDB_FIRST);
+
+    while (rc == 0) : (rc = c.mdb_cursor_get(cursor, &key, &value, c.MDB_NEXT)) {
+      if (value.mv_size != 64) continue;
+
+      const integrity: *const [64]u8 = @ptrCast(value.mv_data);
+      const int_key = makeIntegrityKey(integrity);
+      var check_key = c.MDB_val{ .mv_size = int_key.len, .mv_data = @constCast(&int_key) };
+      var check_val: c.MDB_val = undefined;
+
+      if (c.mdb_get(txn, self.dbi_primary, &check_key, &check_val) == 0) continue;
+
+      const key_data: [*]const u8 = @ptrCast(key.mv_data);
+      const key_copy = self.allocator.dupe(u8, key_data[0..key.mv_size]) catch continue;
+      to_delete.append(self.allocator, key_copy) catch self.allocator.free(key_copy);
+    }
+
+    for (to_delete.items) |sec_key| {
+      var del_key = c.MDB_val{ .mv_size = sec_key.len, .mv_data = @ptrCast(sec_key.ptr) };
+      _ = c.mdb_del(txn, self.dbi_secondary, &del_key, null);
+    }
+  }
+
+  inline fn deletePackageFiles(paths: []const []const u8) void {
+    for (paths) |path| std.fs.cwd().deleteTree(path) catch {};
+  }
+
   pub fn prune(self: *CacheDB, max_age_days: u32) !u32 {
     const now = std.time.timestamp();
     const max_age_secs: i64 = @as(i64, max_age_days) * 24 * 60 * 60;
     const cutoff = now - max_age_secs;
-    
+
     var txn: ?*c.MDB_txn = null;
-    if (c.mdb_txn_begin(self.env, null, 0, &txn) != 0) {
-      return error.DatabaseError;
-    }
+    if (c.mdb_txn_begin(self.env, null, 0, &txn) != 0) return error.DatabaseError;
     errdefer c.mdb_txn_abort(txn);
-    
-    var cursor: ?*c.MDB_cursor = null;
-    if (c.mdb_cursor_open(txn, self.dbi_primary, &cursor) != 0) {
-      return error.DatabaseError;
-    }
-    defer c.mdb_cursor_close(cursor);
-    
-    var key: c.MDB_val = undefined;
-    var value: c.MDB_val = undefined;
-    var pruned: u32 = 0;
-    var to_delete = std.ArrayListUnmanaged([66]u8){};
-    defer to_delete.deinit(self.allocator);
-    var paths_to_delete = std.ArrayListUnmanaged([]const u8){};
-    defer {
-      for (paths_to_delete.items) |p| self.allocator.free(p);
-      paths_to_delete.deinit(self.allocator);
-    }
-    
-    var rc = c.mdb_cursor_get(cursor, &key, &value, c.MDB_FIRST);
-    while (rc == 0) {
-      if (value.mv_size >= @sizeOf(SerializedEntry)) {
-        const data: [*]const u8 = @ptrCast(value.mv_data);
-        var header: SerializedEntry = undefined;
-        @memcpy(std.mem.asBytes(&header), data[0..@sizeOf(SerializedEntry)]);
-        
-        if (header.cached_at < cutoff) {
-          const key_data: [*]const u8 = @ptrCast(key.mv_data);
-          var key_copy: [66]u8 = undefined;
-          if (key.mv_size == 66) {
-            @memcpy(&key_copy, key_data[0..66]);
-            to_delete.append(self.allocator, key_copy) catch {};
-            
-            const path_start = @sizeOf(SerializedEntry);
-            if (value.mv_size >= path_start + header.path_len) {
-              const path = self.allocator.dupe(u8, data[path_start..][0..header.path_len]) catch continue;
-              paths_to_delete.append(self.allocator, path) catch self.allocator.free(path);
-            }
-          }
-        }
-      }
-      rc = c.mdb_cursor_get(cursor, &key, &value, c.MDB_NEXT);
-    }
-    
-    for (to_delete.items) |*key_bytes| {
-      var del_key = c.MDB_val{ .mv_size = 66, .mv_data = key_bytes };
-      if (c.mdb_del(txn, self.dbi_primary, &del_key, null) == 0) pruned += 1;
-    }
-    
+
+    var collections = PruneCollections{};
+    defer collections.deinit(self.allocator);
+
+    try self.collectExpiredEntries(txn.?, cutoff, &collections);
+    const pruned = self.deletePrimaryEntries(txn.?, collections.keys.items);
+    self.pruneStaleSecondaryEntries(txn.?);
+
     if (c.mdb_txn_commit(txn) != 0) return error.DatabaseError;
-    for (paths_to_delete.items) |path| std.fs.cwd().deleteTree(path) catch {};
-    
+    deletePackageFiles(collections.paths.items);
+
     return pruned;
   }
 };
