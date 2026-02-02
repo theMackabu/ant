@@ -76,12 +76,13 @@ runs:
           MSYS2_PATH=$(cygpath "$RUNNER_TEMP/msys64/mingw64/bin")
           export PATH="$MSYS2_PATH:$PATH"
           DEPS_PREFIX=$(cygpath -m "${{ inputs.deps_prefix }}")
+          export PKG_CONFIG_PATH="$DEPS_PREFIX/lib/pkgconfig;$PKG_CONFIG_PATH"
+          export CMAKE_PREFIX_PATH="$DEPS_PREFIX;$CMAKE_PREFIX_PATH"
         else
           DEPS_PREFIX="${{ inputs.deps_prefix }}"
+          export PKG_CONFIG_PATH="$DEPS_PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH"
+          export CMAKE_PREFIX_PATH="$DEPS_PREFIX:$CMAKE_PREFIX_PATH"
         fi
-
-        export PKG_CONFIG_PATH="$DEPS_PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH"
-        export CMAKE_PREFIX_PATH="$DEPS_PREFIX:$CMAKE_PREFIX_PATH"
         export CC="${{ inputs.cc }}"
 
         echo "=== Debug: PKG_CONFIG_PATH ==="
