@@ -733,8 +733,11 @@ export fn pkg_add_trusted_dependencies(
     debug.log("[trust] trustedDependencies array already exists", .{});
   }
 
-  var string_copies: [64][:0]u8 = undefined;
-  var string_count: usize = 0;
+  var string_copies = std.ArrayListUnmanaged([:0]u8){};
+  defer {
+    for (string_copies.items) |s| allocator.free(s);
+    string_copies.deinit(allocator);
+  }
 
   var added: u32 = 0;
   for (0..count) |i| {
@@ -747,18 +750,17 @@ export fn pkg_add_trusted_dependencies(
       if (json.yyjson.yyjson_mut_is_str(val)) {
         const existing = json.yyjson.yyjson_mut_get_str(val);
         if (existing != null and std.mem.eql(u8, std.mem.span(existing.?), pkg_name)) {
-          exists = true;
-          break;
+          exists = true; break;
         }
       }
     }
 
     if (!exists) {
       const name_copy = allocator.dupeZ(u8, pkg_name) catch continue;
-      if (string_count < string_copies.len) {
-        string_copies[string_count] = name_copy;
-        string_count += 1;
-      }
+      string_copies.append(allocator, name_copy) catch {
+        allocator.free(name_copy);
+        continue;
+      };
       const val = json.yyjson.yyjson_mut_str(mdoc, name_copy.ptr);
       if (val != null) {
         _ = json.yyjson.yyjson_mut_arr_append(trusted_arr, val);
@@ -769,8 +771,6 @@ export fn pkg_add_trusted_dependencies(
       debug.log("[trust] {s} already in trustedDependencies", .{pkg_name});
     }
   }
-  
-  defer for (0..string_count) |i| allocator.free(string_copies[i]);
   debug.log("[trust] added {d} packages, writing file", .{added});
 
   var write_err: json.yyjson.yyjson_write_err = undefined;
