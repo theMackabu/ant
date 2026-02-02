@@ -146,7 +146,7 @@ pub const Lockfile = struct {
     }
     
     if (comptime builtin.os.tag == .windows) {
-      const data = try std.heap.c_allocator.alignedAlloc(u8, @alignOf(Header), stat.size);
+      const data = try std.heap.c_allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(Header)), stat.size);
       errdefer std.heap.c_allocator.free(data);
       
       const bytes_read = try file.readAll(data);

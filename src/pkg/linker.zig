@@ -20,31 +20,34 @@ pub fn createSymlinkAbsolute(target: []const u8, link_path: []const u8) void {
 
 fn createSymlinkWindows(dir: std.fs.Dir, target: []const u8, link_name: []const u8) void {
   if (comptime builtin.os.tag != .windows) return;
-  var target_buf: [std.fs.max_path_bytes]u8 = undefined;
-  var link_buf: [std.fs.max_path_bytes]u8 = undefined;
-  @memcpy(target_buf[0..target.len], target);
-  target_buf[target.len] = 0;
-  @memcpy(link_buf[0..link_name.len], link_name);
-  link_buf[link_name.len] = 0;
-  const target_z: [*:0]const u8 = target_buf[0..target.len :0];
-  const link_z: [*:0]const u8 = link_buf[0..link_name.len :0];
-  _ = std.os.windows.CreateSymbolicLink(dir.fd, link_z, target_z, .{ .is_directory = false }) catch {};
+  var target_utf16: [std.fs.max_path_bytes]u16 = undefined;
+  var link_utf16: [std.fs.max_path_bytes]u16 = undefined;
+  const target_len = std.unicode.utf8ToUtf16Le(&target_utf16, target) catch return;
+  const link_len = std.unicode.utf8ToUtf16Le(&link_utf16, link_name) catch return;
+  target_utf16[target_len] = 0;
+  
+  _ = std.os.windows.CreateSymbolicLink(
+    dir.fd,
+    link_utf16[0..link_len],
+    target_utf16[0..target_len :0],
+    .{ .is_directory = false }
+  ) catch {};
 }
 
 fn createSymlinkAbsoluteWindows(target: []const u8, link_path: []const u8) void {
   if (comptime builtin.os.tag != .windows) return;
-  var target_buf: [std.fs.max_path_bytes]u8 = undefined;
-  var link_buf: [std.fs.max_path_bytes]u8 = undefined;
-  @memcpy(target_buf[0..target.len], target);
-  target_buf[target.len] = 0;
-  @memcpy(link_buf[0..link_path.len], link_path);
-  link_buf[link_path.len] = 0;
   var target_utf16: [std.fs.max_path_bytes]u16 = undefined;
   var link_utf16: [std.fs.max_path_bytes]u16 = undefined;
-  const target_len = std.unicode.utf8ToUtf16Le(&target_utf16, target_buf[0..target.len]) catch return;
-  const link_len = std.unicode.utf8ToUtf16Le(&link_utf16, link_buf[0..link_path.len]) catch return;
-  target_utf16[target_len] = 0; link_utf16[link_len] = 0;
-  _ = std.os.windows.kernel32.CreateSymbolicLinkW(link_utf16[0..link_len :0], target_utf16[0..target_len :0], 0);
+  const target_len = std.unicode.utf8ToUtf16Le(&target_utf16, target) catch return;
+  const link_len = std.unicode.utf8ToUtf16Le(&link_utf16, link_path) catch return;
+  target_utf16[target_len] = 0;
+  
+  _ = std.os.windows.CreateSymbolicLink(
+    null,
+    link_utf16[0..link_len],
+    target_utf16[0..target_len :0],
+    .{ .is_directory = false }
+  ) catch {};
 }
 
 pub const LinkError = error{
