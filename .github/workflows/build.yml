@@ -43,3 +43,26 @@ jobs:
     with:
       platform: ${{ matrix.platform }}
       build_timestamp: ${{ needs.prepare.outputs.timestamp }}
+
+  summary:
+    needs: build
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Download version artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: version-*
+          path: versions
+
+      - name: Generate summary
+        run: |
+          echo "## Build Versions" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Platform | Version |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|---------|" >> $GITHUB_STEP_SUMMARY
+          for dir in versions/version-*; do
+            platform=$(basename "$dir" | sed 's/version-//')
+            version=$(cat "$dir/version.txt" 2>/dev/null || echo "N/A")
+            echo "| $platform | \`$version\` |" >> $GITHUB_STEP_SUMMARY
+          done

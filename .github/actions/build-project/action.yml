@@ -72,6 +72,10 @@ runs:
     - name: Configure and build
       shell: bash
       run: |
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          export PATH="/mingw64/bin:$PATH"
+        fi
+
         export PKG_CONFIG_PATH="${{ inputs.deps_prefix }}/lib/pkgconfig:$PKG_CONFIG_PATH"
         export CMAKE_PREFIX_PATH="${{ inputs.deps_prefix }}:$CMAKE_PREFIX_PATH"
         export CC="${{ inputs.cc }}"
@@ -114,13 +118,20 @@ runs:
       id: version
       shell: bash
       run: |
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          export PATH="/mingw64/bin:$PATH"
+        fi
         VERSION=$(./build/${{ inputs.binary_name }} --version-raw)
         echo "Version: $VERSION"
         echo "version=$VERSION" >> $GITHUB_OUTPUT
 
     - name: Strip binary
       shell: bash
-      run: ${{ inputs.strip }} build/${{ inputs.binary_name }}
+      run: |
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          export PATH="/mingw64/bin:$PATH"
+        fi
+        ${{ inputs.strip }} build/${{ inputs.binary_name }}
 
     - name: Bundle Windows DLLs
       if: runner.os == 'Windows'

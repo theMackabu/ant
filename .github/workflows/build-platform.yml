@@ -10,9 +10,15 @@ on:
       build_timestamp:
         required: true
         type: string
+    outputs:
+      version:
+        description: Build version
+        value: ${{ jobs.build.outputs.version }}
 
 jobs:
   build:
+    outputs:
+      version: ${{ steps.build.outputs.version }}
     # runs-on/container/shell must be hardcoded
     # keep in sync with versions.json targets
     runs-on: |-
@@ -48,6 +54,11 @@ jobs:
           ) }}
 
     steps:
+      # === ALPINE ARM64 WORKAROUND (must be first) ===
+      - name: Setup Alpine ARM64 support
+        uses: laverdet/alpine-arm64@v1
+        if: startsWith(inputs.platform, 'linux-musl')
+
       # === LINUX GLIBC SETUP ===
       - name: Setup Linux glibc environment
         if: startsWith(inputs.platform, 'linux-glibc')
@@ -191,17 +202,22 @@ jobs:
           extra_meson_args: ${{ steps.config.outputs.extra_meson_args }}
           binary_name: ${{ steps.config.outputs.binary_name }}
 
-      - name: Write job summary
-        shell: bash
-        run: |
-          echo "### Build: ${{ inputs.platform }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Version:** \`${{ steps.build.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
-
-      # === UPLOAD ARTIFACT ===
-      - name: Upload artifact
+      # === UPLOAD ARTIFACTS ===
+      - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.config.outputs.artifact_name }}
           path: |
             build/${{ steps.config.outputs.binary_name }}
             build/*.dll
+
+      - name: Save version info
+        shell: bash
+        run: echo "${{ steps.build.outputs.version }}" > version.txt
+
+      - name: Upload version info
+        uses: actions/upload-artifact@v4
+        with:
+          name: version-${{ inputs.platform }}
+          path: version.txt
+          retention-days: 1
