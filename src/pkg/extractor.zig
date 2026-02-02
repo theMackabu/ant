@@ -13,7 +13,69 @@ pub const ExtractError = error{
   OutOfMemory,
   PathTooLong,
   UnsupportedFormat,
+  InvalidPath,
 };
+
+inline fn validateBasic(path: []const u8) ExtractError!void {
+  if (path.len == 0 or path.len > 4096) return error.InvalidPath;
+  if (path[0] == '/') return error.InvalidPath;
+}
+
+inline fn validateBadCharsAndTraversal(path: []const u8) ExtractError!void {
+  const len = path.len;
+  var i: usize = 0; var segment_start: usize = 0;
+
+  while (i < len) : (i += 1) {
+    const ch = path[i];
+    if (ch == 0 or ch == '\\' or ch < 0x20) return error.InvalidPath;
+    if (ch == '/') {
+      const seg_len = i - segment_start; if (seg_len == 2) {
+        const seg = path[segment_start..i];
+        if (seg[0] == '.' and seg[1] == '.') return error.InvalidPath;
+      } segment_start = i + 1;
+    }
+  }
+
+  const final_len = len - segment_start; if (final_len == 2) {
+    const seg = path[segment_start..];
+    if (seg[0] == '.' and seg[1] == '.') return error.InvalidPath;
+  }
+}
+
+inline fn isWindowsReserved(name: []const u8) bool {
+  const reserved = [_][]const u8{
+    "CON", "PRN", "AUX", "NUL",
+    "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+    "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+  };
+
+  for (reserved) |r| {
+    if (name.len < r.len) continue;
+    const prefix = name[0..r.len];
+    if (!std.ascii.eqlIgnoreCase(prefix, r)) continue;
+    return name.len == r.len or name[r.len] == '.';
+  }
+  
+  return false;
+}
+
+inline fn validateWindowsReserved(path: []const u8) ExtractError!void {
+  if (comptime builtin.os.tag != .windows) return;
+
+  const slash_idx = std.mem.lastIndexOfScalar(u8, path, '/');
+  const basename = if (slash_idx) |i| path[i + 1 ..] else path;
+  if (basename.len == 0) return error.InvalidPath;
+
+  const first = std.ascii.toUpper(basename[0]);
+  const should_check = first == 'C' or first == 'P' or first == 'A' or first == 'N' or first == 'L';
+  if (should_check and isWindowsReserved(basename)) return error.InvalidPath;
+}
+
+fn validatePath(path: []const u8) ExtractError!void {
+  try validateBasic(path);
+  try validateBadCharsAndTraversal(path);
+  try validateWindowsReserved(path);
+}
 
 pub const TarHeader = extern struct {
   name: [100]u8,
@@ -232,15 +294,16 @@ pub const TarParser = struct {
           path = path[self.strip_prefix_len..];
         }
 
+        validatePath(path) catch {
+          return .{ .kind = .{ .err = ExtractError.InvalidPath }, .consumed = to_copy };
+        };
+
         const size = self.header.getSize() catch return .{ .kind = .{ .err = ExtractError.InvalidTarHeader }, .consumed = to_copy };
         const mode = self.header.getMode() catch return .{ .kind = .{ .err = ExtractError.InvalidTarHeader }, .consumed = to_copy };
 
-        const entry_type: Entry.Type = if (self.header.isDirectory())
-          .directory
-        else if (self.header.isSymlink())
-          .symlink
-        else
-          .file;
+        const entry_type: Entry.Type = if (self.header.isDirectory()) .directory
+        else if (self.header.isSymlink()) .symlink
+        else .file;
 
         self.current_file_remaining = size;
         if (size > 0) {
@@ -290,9 +353,7 @@ pub const TarParser = struct {
     }
   }
 
-  pub fn reset(self: *TarParser) void {
-    self.* = TarParser.init(self.strip_prefix);
-  }
+  pub fn reset(self: *TarParser) void { self.* = TarParser.init(self.strip_prefix[0..self.strip_prefix_len]); }
 };
 
 pub const Extractor = struct {
@@ -409,10 +470,14 @@ pub const Extractor = struct {
   inline fn createSymlink(self: *Extractor, entry: TarParser.Entry) void {
     const linkname_len = std.mem.indexOfScalar(u8, &self.parser.header.linkname, 0) orelse self.parser.header.linkname.len;
     const target = self.parser.header.linkname[0..linkname_len];
+    
     if (entry.path.len == 0 or target.len == 0) return;
+    validatePath(target) catch return;
+    
     if (std.fs.path.dirname(entry.path)) |dir| {
       self.output_dir.makePath(dir) catch {};
     }
+    
     self.output_dir.deleteFile(entry.path) catch {};
     linker.createSymlinkOrCopy(self.output_dir, target, entry.path);
   }
