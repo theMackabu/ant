@@ -84,6 +84,15 @@ runs:
         export CMAKE_PREFIX_PATH="$DEPS_PREFIX:$CMAKE_PREFIX_PATH"
         export CC="${{ inputs.cc }}"
 
+        echo "=== Debug: PKG_CONFIG_PATH ==="
+        echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH"
+        echo "=== Debug: Contents of $DEPS_PREFIX/lib/pkgconfig ==="
+        ls -la "$DEPS_PREFIX/lib/pkgconfig/" 2>/dev/null || echo "Directory not found"
+        echo "=== Debug: pkg-config --variable pc_path pkg-config ==="
+        pkg-config --variable pc_path pkg-config || true
+        echo "=== Debug: pkg-config --modversion llhttp ==="
+        pkg-config --modversion llhttp || echo "llhttp not found by pkg-config"
+
         if [[ -n "${{ inputs.cxx }}" ]]; then
           export CXX="${{ inputs.cxx }}"
         fi

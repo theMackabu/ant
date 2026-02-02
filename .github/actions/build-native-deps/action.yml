@@ -65,7 +65,7 @@ runs:
       run: |
         if [[ "$RUNNER_OS" == "Windows" ]]; then
           export PATH="$(cygpath "$RUNNER_TEMP/msys64/mingw64/bin"):$PATH"
-          PREFIX=$(cygpath "${{ inputs.prefix }}")
+          PREFIX=$(cygpath -m "${{ inputs.prefix }}")
         else
           PREFIX="${{ inputs.prefix }}"
         fi
@@ -87,6 +87,8 @@ runs:
         echo "=== PKG_CONFIG files in $PREFIX/lib/pkgconfig ==="
         ls -la "$PREFIX/lib/pkgconfig/" || echo "pkgconfig dir not found"
         cp "$PREFIX/lib/pkgconfig/libllhttp.pc" "$PREFIX/lib/pkgconfig/llhttp.pc"
+        echo "=== llhttp.pc contents ==="
+        cat "$PREFIX/lib/pkgconfig/llhttp.pc"
         echo "=== After copy ==="
         ls -la "$PREFIX/lib/pkgconfig/"
 
