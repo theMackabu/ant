@@ -72,7 +72,6 @@ runs:
     - name: Configure and build
       shell: bash
       run: |
-        # Add MSYS2 to PATH on Windows (installed by setup-msys2 to RUNNER_TEMP)
         if [[ "$RUNNER_OS" == "Windows" ]]; then
           MSYS2_PATH=$(cygpath "$RUNNER_TEMP/msys64/mingw64/bin")
           export PATH="$MSYS2_PATH:$PATH"

@@ -63,6 +63,13 @@ runs:
       if: steps.cache.outputs.cache-hit != 'true' && contains(inputs.deps, 'llhttp')
       shell: bash
       run: |
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          export PATH="$(cygpath "$RUNNER_TEMP/msys64/mingw64/bin"):$PATH"
+          PREFIX=$(cygpath "${{ inputs.prefix }}")
+        else
+          PREFIX="${{ inputs.prefix }}"
+        fi
+
         git clone --depth 1 --branch release/v${{ inputs.llhttp_version }} https://github.com/nodejs/llhttp.git /tmp/llhttp
         cd /tmp/llhttp
         CMAKE_GENERATOR="${{ inputs.cmake_generator }}"
@@ -72,12 +79,13 @@ runs:
         fi
         CC=${{ inputs.cc }} CXX=${{ inputs.cxx || inputs.cc }} cmake -B build \
           ${CMAKE_GENERATOR:+-G "$CMAKE_GENERATOR"} \
-          -DCMAKE_INSTALL_PREFIX=${{ inputs.prefix }} \
+          -DCMAKE_INSTALL_PREFIX="$PREFIX" \
           -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON \
           -DCMAKE_BUILD_TYPE=MinSizeRel
         cmake --build build
         cmake --install build
-        ln -sf ${{ inputs.prefix }}/lib/pkgconfig/libllhttp.pc ${{ inputs.prefix }}/lib/pkgconfig/llhttp.pc 2>/dev/null || true
+        # Create symlink for pkgconfig (llhttp installs as libllhttp.pc)
+        ln -sf "$PREFIX/lib/pkgconfig/libllhttp.pc" "$PREFIX/lib/pkgconfig/llhttp.pc" 2>/dev/null || true
 
     - name: Build libuv
       if: steps.cache.outputs.cache-hit != 'true' && contains(inputs.deps, 'libuv')
