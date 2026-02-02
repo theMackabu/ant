@@ -6,7 +6,7 @@ fn getEnv(key: []const u8) ?[]const u8 {
 
 fn darwinMinVersion(os_tag: ?std.Target.Os.Tag) ?std.Target.Query.OsVersion {
   const tag = os_tag orelse return null;
-  if (!tag.isDarwin()) return null;
+  if (tag != .macos) return null;
   return .{ .semver = .{ .major = 15, .minor = 0, .patch = 0 } };
 }
 

@@ -1960,7 +1960,9 @@ export fn pkg_run_script(
   if (root_val.getString("version")) |pkg_version| env_map.put("npm_package_version", pkg_version) catch {};
 
   if (pre_script) |pre| {
-    env_map.put("npm_lifecycle_event", std.fmt.allocPrint(allocator, "pre{s}", .{name}) catch name) catch {};
+    const pre_event = std.fmt.allocPrint(allocator, "pre{s}", .{name}) catch name;
+    defer if (pre_event.ptr != name.ptr) allocator.free(pre_event);
+    env_map.put("npm_lifecycle_event", pre_event) catch {};
     const pre_result = runScriptCommand(allocator, pre, null, &env_map) catch return .io_error;
     if (pre_result.exit_code != 0) {
       if (result) |r| r.* = pre_result;
@@ -1977,7 +1979,9 @@ export fn pkg_run_script(
   }
 
   if (post_script) |post| {
-    env_map.put("npm_lifecycle_event", std.fmt.allocPrint(allocator, "post{s}", .{name}) catch name) catch {};
+    const post_event = std.fmt.allocPrint(allocator, "post{s}", .{name}) catch name;
+    defer if (post_event.ptr != name.ptr) allocator.free(post_event);
+    env_map.put("npm_lifecycle_event", post_event) catch {};
     const post_result = runScriptCommand(allocator, post, null, &env_map) catch return .io_error;
     if (result) |r| r.* = post_result;
     return .ok;
