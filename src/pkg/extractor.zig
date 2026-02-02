@@ -447,8 +447,9 @@ pub const Extractor = struct {
   }
   
   inline fn handleEntry(self: *Extractor, entry: TarParser.Entry) !void {
+    if (entry.path.len == 0) return;
     switch (entry.entry_type) {
-      .directory => try self.output_dir.makePath(entry.path),
+      .directory => self.output_dir.makePath(entry.path) catch {},
       .file => try self.createFile(entry),
       .symlink => try self.createSymlink(entry),
     }
