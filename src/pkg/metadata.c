@@ -2,17 +2,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-static inline void copy_string_field(yyjson_mut_doc *doc, yyjson_mut_val *dest,
-                                      yyjson_val *src, const char *key) {
+static inline void copy_string_field(yyjson_mut_doc *doc, yyjson_mut_val *dest, yyjson_val *src, const char *key) {
   yyjson_val *val = yyjson_obj_get(src, key);
   if (val && yyjson_is_str(val)) {
-    yyjson_mut_obj_add_strncpy(doc, dest, key,
-                               yyjson_get_str(val), yyjson_get_len(val));
+    yyjson_mut_obj_add_strncpy(doc, dest, key, yyjson_get_str(val), yyjson_get_len(val));
   }
 }
 
-static inline void copy_string_array(yyjson_mut_doc *doc, yyjson_mut_val *dest,
-                                      yyjson_val *src, const char *key) {
+static inline void copy_string_array(yyjson_mut_doc *doc, yyjson_mut_val *dest, yyjson_val *src, const char *key) {
   yyjson_val *arr = yyjson_obj_get(src, key);
   if (!arr || !yyjson_is_arr(arr)) return;
 
@@ -21,15 +18,13 @@ static inline void copy_string_array(yyjson_mut_doc *doc, yyjson_mut_val *dest,
   size_t idx, max;
   yyjson_arr_foreach(arr, idx, max, elem) {
     if (yyjson_is_str(elem)) {
-      yyjson_mut_arr_add_strncpy(doc, out_arr,
-                                 yyjson_get_str(elem), yyjson_get_len(elem));
+      yyjson_mut_arr_add_strncpy(doc, out_arr, yyjson_get_str(elem), yyjson_get_len(elem));
     }
   }
   yyjson_mut_obj_add_val(doc, dest, key, out_arr);
 }
 
-static inline void copy_deps_object(yyjson_mut_doc *doc, yyjson_mut_val *dest,
-                                     yyjson_val *src, const char *key) {
+static inline void copy_deps_object(yyjson_mut_doc *doc, yyjson_mut_val *dest, yyjson_val *src, const char *key) {
   yyjson_val *deps = yyjson_obj_get(src, key);
   if (!deps || !yyjson_is_obj(deps)) return;
 
@@ -42,8 +37,7 @@ static inline void copy_deps_object(yyjson_mut_doc *doc, yyjson_mut_val *dest,
 
     if (yyjson_is_str(dep_val)) {
       yyjson_mut_val *mk = yyjson_mut_strncpy(doc, k, klen);
-      yyjson_mut_val *mv = yyjson_mut_strncpy(doc, yyjson_get_str(dep_val),
-                                              yyjson_get_len(dep_val));
+      yyjson_mut_val *mv = yyjson_mut_strncpy(doc, yyjson_get_str(dep_val), yyjson_get_len(dep_val));
       yyjson_mut_obj_add(out_deps, mk, mv);
     } else if (yyjson_is_obj(dep_val)) {
       yyjson_mut_val *nested = yyjson_mut_obj(doc);
@@ -57,8 +51,7 @@ static inline void copy_deps_object(yyjson_mut_doc *doc, yyjson_mut_val *dest,
         size_t nkl = yyjson_get_len(nk);
         if (yyjson_is_str(nv)) {
           yyjson_mut_val *nmk = yyjson_mut_strncpy(doc, nks, nkl);
-          yyjson_mut_val *nmv = yyjson_mut_strncpy(doc, yyjson_get_str(nv),
-                                                   yyjson_get_len(nv));
+          yyjson_mut_val *nmv = yyjson_mut_strncpy(doc, yyjson_get_str(nv), yyjson_get_len(nv));
           yyjson_mut_obj_add(nested, nmk, nmv);
         } else if (yyjson_is_bool(nv)) {
           yyjson_mut_val *nmk = yyjson_mut_strncpy(doc, nks, nkl);
@@ -70,24 +63,20 @@ static inline void copy_deps_object(yyjson_mut_doc *doc, yyjson_mut_val *dest,
   yyjson_mut_obj_add_val(doc, dest, key, out_deps);
 }
 
-static inline void copy_bin_field(yyjson_mut_doc *doc, yyjson_mut_val *dest,
-                                   yyjson_val *src) {
+static inline void copy_bin_field(yyjson_mut_doc *doc, yyjson_mut_val *dest, yyjson_val *src) {
   yyjson_val *bin = yyjson_obj_get(src, "bin");
   if (!bin) return;
 
   if (yyjson_is_str(bin)) {
-    yyjson_mut_obj_add_strncpy(doc, dest, "bin",
-                               yyjson_get_str(bin), yyjson_get_len(bin));
+    yyjson_mut_obj_add_strncpy(doc, dest, "bin", yyjson_get_str(bin), yyjson_get_len(bin));
   } else if (yyjson_is_obj(bin)) {
     yyjson_mut_val *out_bin = yyjson_mut_obj(doc);
     yyjson_val *bk, *bv;
     size_t idx, max;
     yyjson_obj_foreach(bin, idx, max, bk, bv) {
       if (yyjson_is_str(bv)) {
-        yyjson_mut_val *mk = yyjson_mut_strncpy(doc, yyjson_get_str(bk),
-                                                yyjson_get_len(bk));
-        yyjson_mut_val *mv = yyjson_mut_strncpy(doc, yyjson_get_str(bv),
-                                                yyjson_get_len(bv));
+        yyjson_mut_val *mk = yyjson_mut_strncpy(doc, yyjson_get_str(bk), yyjson_get_len(bk));
+        yyjson_mut_val *mv = yyjson_mut_strncpy(doc, yyjson_get_str(bv), yyjson_get_len(bv));
         yyjson_mut_obj_add(out_bin, mk, mv);
       }
     }
@@ -95,8 +84,7 @@ static inline void copy_bin_field(yyjson_mut_doc *doc, yyjson_mut_val *dest,
   }
 }
 
-static inline void copy_dist(yyjson_mut_doc *doc, yyjson_mut_val *dest,
-                              yyjson_val *src) {
+static inline void copy_dist(yyjson_mut_doc *doc, yyjson_mut_val *dest, yyjson_val *src) {
   yyjson_val *dist = yyjson_obj_get(src, "dist");
   if (!dist || !yyjson_is_obj(dist)) return;
 
@@ -138,8 +126,7 @@ char *strip_npm_metadata(const char *json_data, size_t json_len, size_t *out_len
       if (!yyjson_is_obj(vval)) continue;
 
       yyjson_mut_val *out_ver = yyjson_mut_obj(mut_doc);
-      yyjson_mut_val *mk = yyjson_mut_strncpy(mut_doc, yyjson_get_str(vkey),
-                                              yyjson_get_len(vkey));
+      yyjson_mut_val *mk = yyjson_mut_strncpy(mut_doc, yyjson_get_str(vkey), yyjson_get_len(vkey));
       yyjson_mut_obj_add(out_versions, mk, out_ver);
 
       copy_string_field(mut_doc, out_ver, vval, "version");
@@ -161,8 +148,7 @@ char *strip_npm_metadata(const char *json_data, size_t json_len, size_t *out_len
     yyjson_val *latest = yyjson_obj_get(dist_tags, "latest");
     if (latest && yyjson_is_str(latest)) {
       yyjson_mut_val *out_tags = yyjson_mut_obj(mut_doc);
-      yyjson_mut_obj_add_strncpy(mut_doc, out_tags, "latest",
-                                 yyjson_get_str(latest), yyjson_get_len(latest));
+      yyjson_mut_obj_add_strncpy(mut_doc, out_tags, "latest", yyjson_get_str(latest), yyjson_get_len(latest));
       yyjson_mut_obj_add_val(mut_doc, out_root, "dist-tags", out_tags);
     }
   }
