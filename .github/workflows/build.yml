@@ -47,7 +47,7 @@ jobs:
   summary:
     needs: build
     runs-on: ubuntu-latest
-    if: always()
+    if: ${{ !cancelled() && needs.build.result != 'skipped' }}
     steps:
       - name: Download version artifacts
         uses: actions/download-artifact@v4

@@ -72,8 +72,9 @@ runs:
     - name: Configure and build
       shell: bash
       run: |
+        # Add MSYS2 to PATH on Windows (Git Bash needs full path)
         if [[ "$RUNNER_OS" == "Windows" ]]; then
-          export PATH="/mingw64/bin:$PATH"
+          export PATH="/c/msys64/mingw64/bin:$PATH"
         fi
 
         export PKG_CONFIG_PATH="${{ inputs.deps_prefix }}/lib/pkgconfig:$PKG_CONFIG_PATH"
@@ -119,7 +120,7 @@ runs:
       shell: bash
       run: |
         if [[ "$RUNNER_OS" == "Windows" ]]; then
-          export PATH="/mingw64/bin:$PATH"
+          export PATH="/c/msys64/mingw64/bin:$PATH"
         fi
         VERSION=$(./build/${{ inputs.binary_name }} --version-raw)
         echo "Version: $VERSION"
@@ -129,7 +130,7 @@ runs:
       shell: bash
       run: |
         if [[ "$RUNNER_OS" == "Windows" ]]; then
-          export PATH="/mingw64/bin:$PATH"
+          export PATH="/c/msys64/mingw64/bin:$PATH"
         fi
         ${{ inputs.strip }} build/${{ inputs.binary_name }}
 
@@ -137,7 +138,7 @@ runs:
       if: runner.os == 'Windows'
       shell: bash
       run: |
-        MINGW_BIN="/mingw64/bin"
+        MINGW_BIN="/c/msys64/mingw64/bin"
         cp "$MINGW_BIN/libssl-3-x64.dll" build/
         cp "$MINGW_BIN/libcrypto-3-x64.dll" build/
         cp "$MINGW_BIN/libsodium-26.dll" build/

@@ -41,12 +41,17 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Compute deps hash
+      id: deps-hash
+      shell: bash
+      run: echo "hash=$(echo '${{ inputs.deps }}' | tr ' ' '-')" >> $GITHUB_OUTPUT
+
     - name: Cache native deps
       id: cache
       uses: actions/cache@v4
       with:
         path: ${{ inputs.prefix }}
-        key: deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/versions.json') }}-v1
+        key: deps-${{ runner.os }}-${{ runner.arch }}-${{ steps.deps-hash.outputs.hash }}-${{ hashFiles('.github/versions.json') }}-v1
 
     - name: Prepare build environment
       if: steps.cache.outputs.cache-hit != 'true'
