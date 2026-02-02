@@ -84,7 +84,11 @@ runs:
           -DCMAKE_BUILD_TYPE=MinSizeRel
         cmake --build build
         cmake --install build
-        cp "$PREFIX/lib/pkgconfig/libllhttp.pc" "$PREFIX/lib/pkgconfig/llhttp.pc" 2>/dev/null || true
+        echo "=== PKG_CONFIG files in $PREFIX/lib/pkgconfig ==="
+        ls -la "$PREFIX/lib/pkgconfig/" || echo "pkgconfig dir not found"
+        cp "$PREFIX/lib/pkgconfig/libllhttp.pc" "$PREFIX/lib/pkgconfig/llhttp.pc"
+        echo "=== After copy ==="
+        ls -la "$PREFIX/lib/pkgconfig/"
 
     - name: Build libuv
       if: steps.cache.outputs.cache-hit != 'true' && contains(inputs.deps, 'libuv')
