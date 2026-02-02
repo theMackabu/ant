@@ -27,10 +27,8 @@ fn createSymlinkWindows(dir: std.fs.Dir, target: []const u8, link_name: []const 
   target_utf16[target_len] = 0;
   
   _ = std.os.windows.CreateSymbolicLink(
-    dir.fd,
-    link_utf16[0..link_len],
-    target_utf16[0..target_len :0],
-    .{ .is_directory = false }
+    dir.fd, link_utf16[0..link_len],
+    target_utf16[0..target_len :0], false,
   ) catch {};
 }
 
@@ -43,10 +41,8 @@ fn createSymlinkAbsoluteWindows(target: []const u8, link_path: []const u8) void 
   target_utf16[target_len] = 0;
   
   _ = std.os.windows.CreateSymbolicLink(
-    null,
-    link_utf16[0..link_len],
-    target_utf16[0..target_len :0],
-    .{ .is_directory = false }
+    null, link_utf16[0..link_len],
+    target_utf16[0..target_len :0], false,
   ) catch {};
 }
 

@@ -131,10 +131,10 @@ oxc_lib = custom_target(
   output: oxc_output_name,
   command: [
     'sh', '-c',
-    cargo.full_path() + ' build --release' + rust_target_arg + ' ' +
-    '--manifest-path ' + src_root / 'src' / 'strip' / 'Cargo.toml' + ' ' +
-    '--target-dir ' + meson.project_build_root() / 'oxc-target' +
-    ' && ' + cp.full_path() + ' ' + oxc_release_dir / oxc_lib_name + ' @OUTPUT@'
+    '"' + cargo.full_path() + '"' + ' build --release' + rust_target_arg + ' ' +
+    '--manifest-path "' + src_root / 'src' / 'strip' / 'Cargo.toml' + '" ' +
+    '--target-dir "' + meson.project_build_root() / 'oxc-target' + '"' +
+    ' && "' + cp.full_path() + '" "' + oxc_release_dir / oxc_lib_name + '" @OUTPUT@'
   ],
   build_by_default: true
 )
