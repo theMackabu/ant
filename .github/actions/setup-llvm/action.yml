@@ -83,6 +83,6 @@ runs:
             echo "ar=ar" >> $GITHUB_OUTPUT
             echo "ranlib=ranlib" >> $GITHUB_OUTPUT
             echo "strip=strip" >> $GITHUB_OUTPUT
-            echo "ld=ld" >> $GITHUB_OUTPUT
+            echo "ld=lld" >> $GITHUB_OUTPUT
             ;;
         esac
