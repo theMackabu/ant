@@ -13,6 +13,17 @@ pub const debug = @import("debug.zig");
 
 const global_allocator: std.mem.Allocator = std.heap.c_allocator;
 
+fn getHomeDir(allocator: std.mem.Allocator) ![]const u8 {
+  if (builtin.os.tag == .windows) {
+    const home_w = std.process.getenvW(
+      std.unicode.utf8ToUtf16LeStringLiteral("USERPROFILE")
+    ) orelse return error.NoHomeDir;
+    return std.unicode.utf16LeToUtf8Alloc(allocator, home_w) catch error.NoHomeDir;
+  }
+  const home = std.posix.getenv("HOME") orelse return error.NoHomeDir;
+  return allocator.dupe(u8, home);
+}
+
 pub const PkgError = enum(c_int) {
   ok = 0,
   out_of_memory = -1,
@@ -225,10 +236,9 @@ pub const PkgContext = struct {
   }
 
   fn getDefaultCacheDir(allocator: std.mem.Allocator) ![]const u8 {
-    if (std.posix.getenv("HOME")) |home| {
-      return std.fmt.allocPrint(allocator, "{s}/.ant/pkg", .{home});
-    }
-    return error.NoHomeDir;
+    const home = try getHomeDir(allocator);
+    defer allocator.free(home);
+    return std.fmt.allocPrint(allocator, "{s}/.ant/pkg", .{home});
   }
 
   fn reportProgress(self: *PkgContext, phase: Phase, current: u32, total: u32, message: [:0]const u8) void {
@@ -2495,12 +2505,14 @@ export fn pkg_exec_temp(
 }
 
 fn getGlobalDir(allocator: std.mem.Allocator) ![]const u8 {
-  const home = std.posix.getenv("HOME") orelse return error.NoHomeDir;
+  const home = try getHomeDir(allocator);
+  defer allocator.free(home);
   return std.fmt.allocPrint(allocator, "{s}/.ant/pkg/global", .{home});
 }
 
 fn getGlobalBinDir(allocator: std.mem.Allocator) ![]const u8 {
-  const home = std.posix.getenv("HOME") orelse return error.NoHomeDir;
+  const home = try getHomeDir(allocator);
+  defer allocator.free(home);
   return std.fmt.allocPrint(allocator, "{s}/.ant/bin", .{home});
 }
 
