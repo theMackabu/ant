@@ -366,7 +366,11 @@ const Http2Client = struct {
     }
   }
 
-  fn onWrite(_: *uv.write_t, _: c_int) callconv(.c) void {}
+  fn onWrite(wr: *uv.write_t, _: c_int) callconv(.c) void {
+    const data_ptr: [*]u8 = @ptrCast(wr.data);
+    std.c.free(data_ptr);
+    std.c.free(@ptrCast(wr));
+  }
 
   fn allocBuf(_: *uv.handle_t, size: usize, buf: *uv.buf_t) callconv(.c) void {
     buf.base = @ptrCast(std.c.malloc(size) orelse return);
@@ -618,6 +622,7 @@ const TarballStats = struct {
 const TarballCallbacks = struct {
   fn onData(data: []const u8, ud: ?*anyopaque) void {
     const ctx: *TarballCtx = @ptrCast(@alignCast(ud));
+    ctx.bytes += data.len;
     ctx.handler.on_data(data, ctx.handler.user_data);
   }
   
@@ -699,6 +704,13 @@ pub const Fetcher = struct {
       };
       slot.* = client;
     }
+
+    var any_connected = false;
+    for (self.meta_clients) |slot| {
+      if (slot != null) { any_connected = true; break; }
+    }
+    
+    if (!any_connected) return error.ConnectionFailed;
     self.meta_clients_initialized = true;
   }
 
