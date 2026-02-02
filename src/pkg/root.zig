@@ -1374,19 +1374,32 @@ fn runTrustedPostinstall(
         }
       } stdout_buf.deinit(allocator);
 
-      if (term.Exited != 0) {
-        job.exit_code = term.Exited;
-        job.stderr = if (stderr_buf.items.len > 0) stderr_buf.toOwnedSlice(allocator) catch null else null;
-        debug.log("  postinstall failed for {s}: exit code {d}", .{ job.pkg_name, term.Exited });
-        if (job.stderr) |s| {
-          if (s.len > 0) debug.log("  stderr: {s}", .{s});
-        }
-      } else {
-        stderr_buf.deinit(allocator);
-        scripts_run += 1;
-        const marker_path = std.fmt.allocPrint(allocator, "{s}/.postinstall", .{job.pkg_dir}) catch continue;
-        defer allocator.free(marker_path);
-        if (std.fs.cwd().createFile(marker_path, .{})) |f| f.close() else |_| {}
+      switch (term) {
+        .Exited => |code| {
+          if (code != 0) {
+            job.exit_code = code;
+            job.stderr = if (stderr_buf.items.len > 0) stderr_buf.toOwnedSlice(allocator) catch null else null;
+            debug.log("  postinstall failed for {s}: exit code {d}", .{ job.pkg_name, code });
+            if (job.stderr) |s| {
+              if (s.len > 0) debug.log("  stderr: {s}", .{s});
+            }
+          } else {
+            stderr_buf.deinit(allocator);
+            scripts_run += 1;
+            const marker_path = std.fmt.allocPrint(allocator, "{s}/.postinstall", .{job.pkg_dir}) catch continue;
+            defer allocator.free(marker_path);
+            if (std.fs.cwd().createFile(marker_path, .{})) |f| f.close() else |_| {}
+          }
+        },
+        .Signal => |sig| {
+          job.failed = true;
+          debug.log("  postinstall killed by signal {d}: {s}", .{ sig, job.pkg_name });
+          stderr_buf.deinit(allocator);
+        },
+        else => {
+          job.failed = true;
+          stderr_buf.deinit(allocator);
+        },
       }
     }
   }
