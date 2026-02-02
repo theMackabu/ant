@@ -1016,7 +1016,8 @@ export fn pkg_resolve_and_install(
       if (is_download) continue;
     }
 
-    const cache_entry = db.lookup(&pkg.integrity) orelse continue;
+    var cache_entry = db.lookup(&pkg.integrity) orelse continue;
+    defer cache_entry.deinit();
     const cache_path = arena_alloc.dupe(u8, cache_entry.path) catch continue;
     
     cache_hit_jobs.append(arena_alloc, .{

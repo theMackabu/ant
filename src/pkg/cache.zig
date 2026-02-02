@@ -13,6 +13,11 @@ pub const CacheEntry = struct {
   unpacked_size: u64,
   file_count: u32,
   cached_at: i64,
+  allocator: ?std.mem.Allocator = null,
+
+  pub fn deinit(self: *CacheEntry) void {
+    if (self.allocator) |alloc| alloc.free(self.path);
+  }
 };
 
 const SerializedEntry = extern struct {
@@ -134,7 +139,7 @@ pub const CacheDB = struct {
     var value: c.MDB_val = undefined;
 
     if (c.mdb_get(txn, self.dbi_primary, &key, &value) != 0) return null;
-    return deserializeEntry(integrity, value);
+    return deserializeEntry(integrity, value, self.allocator);
   }
 
   pub fn hasIntegrity(self: *CacheDB, integrity: *const [64]u8) bool {
@@ -153,7 +158,7 @@ pub const CacheDB = struct {
     return c.mdb_get(txn, self.dbi_primary, &key, &value) == 0;
   }
 
-  fn deserializeEntry(integrity: *const [64]u8, value: c.MDB_val) ?CacheEntry {
+  fn deserializeEntry(integrity: *const [64]u8, value: c.MDB_val, allocator: std.mem.Allocator) ?CacheEntry {
     if (value.mv_size < @sizeOf(SerializedEntry)) return null;
 
     const data: [*]const u8 = @ptrCast(value.mv_data);
@@ -162,12 +167,15 @@ pub const CacheDB = struct {
     const path_start = @sizeOf(SerializedEntry);
     if (value.mv_size < path_start + header.path_len) return null;
 
+    const path = allocator.dupe(u8, data[path_start..][0..header.path_len]) catch return null;
+
     return CacheEntry{
       .integrity = integrity.*,
-      .path = data[path_start..][0..header.path_len],
+      .path = path,
       .unpacked_size = header.unpacked_size,
       .file_count = header.file_count,
       .cached_at = header.cached_at,
+      .allocator = allocator,
     };
   }
 
