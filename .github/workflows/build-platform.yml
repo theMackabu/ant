@@ -175,6 +175,7 @@ jobs:
 
       # === BUILD PROJECT ===
       - name: Build project
+        id: build
         uses: ./.github/actions/build-project
         with:
           cc: ${{ steps.llvm.outputs.cc }}
@@ -189,6 +190,12 @@ jobs:
           static_link: ${{ steps.config.outputs.static_link }}
           extra_meson_args: ${{ steps.config.outputs.extra_meson_args }}
           binary_name: ${{ steps.config.outputs.binary_name }}
+
+      - name: Write job summary
+        shell: bash
+        run: |
+          echo "### Build: ${{ inputs.platform }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** \`${{ steps.build.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
 
       # === UPLOAD ARTIFACT ===
       - name: Upload artifact

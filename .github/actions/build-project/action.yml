@@ -1,6 +1,11 @@
 name: Build Project
 description: Run meson build with appropriate settings
 
+outputs:
+  version:
+    description: Build version string
+    value: ${{ steps.version.outputs.version }}
+
 inputs:
   cc:
     description: C compiler
@@ -106,8 +111,12 @@ runs:
         meson compile -C build
 
     - name: Verify build
+      id: version
       shell: bash
-      run: ./build/${{ inputs.binary_name }} --version-raw
+      run: |
+        VERSION=$(./build/${{ inputs.binary_name }} --version-raw)
+        echo "Version: $VERSION"
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
 
     - name: Strip binary
       shell: bash
