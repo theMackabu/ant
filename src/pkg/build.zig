@@ -4,20 +4,36 @@ fn getEnv(key: []const u8) ?[]const u8 {
   return std.process.getEnvVarOwned(std.heap.page_allocator, key) catch null;
 }
 
+fn darwinMinVersion(os_tag: ?std.Target.Os.Tag) ?std.Target.Query.OsVersion {
+  const tag = os_tag orelse return null;
+  if (!tag.isDarwin()) return null;
+  return .{ .semver = .{ .major = 15, .minor = 0, .patch = 0 } };
+}
+
 pub fn build(b: *std.Build) void {
   const resolved_target = blk: {
-    if (getEnv("PKG_TARGET")) |target_str| {
-      defer std.heap.page_allocator.free(target_str);
-      var query: std.Target.Query = .{};
-      
-      var it = std.mem.splitScalar(u8, target_str, '-');
-      if (it.next()) |arch| query.cpu_arch = std.meta.stringToEnum(std.Target.Cpu.Arch, arch);
-      if (it.next()) |os| query.os_tag = std.meta.stringToEnum(std.Target.Os.Tag, os);
-      if (query.os_tag == .macos) query.os_version_min = .{ .semver = .{ .major = 15, .minor = 0, .patch = 0 } };
-      
-      query.cpu_model = .baseline;
-      break :blk b.resolveTargetQuery(query);
-    } else break :blk b.standardTargetOptions(.{});
+    const target_str = getEnv("PKG_TARGET") orelse break :blk b.standardTargetOptions(.{});
+    defer std.heap.page_allocator.free(target_str);
+    var it = std.mem.splitScalar(u8, target_str, '-');
+    
+    const cpu_arch = if (it.next()) |a| 
+      std.meta.stringToEnum(std.Target.Cpu.Arch, a) else null;
+    
+    const os_tag = if (it.next()) |o| blk2: {
+      if (std.mem.eql(u8, o, "darwin")) break :blk2 std.Target.Os.Tag.macos;
+      break :blk2 std.meta.stringToEnum(std.Target.Os.Tag, o);
+    } else null;
+
+    std.debug.print("PKG_TARGET: {s}\n", .{target_str});
+    std.debug.print("cpu_arch: {?}\n", .{cpu_arch});
+    std.debug.print("os_tag: {?}\n", .{os_tag});
+
+    break :blk b.resolveTargetQuery(.{
+      .cpu_arch = cpu_arch,
+      .os_tag = os_tag,
+      .os_version_min = darwinMinVersion(os_tag),
+      .cpu_model = .baseline,
+    });
   };
 
   const lmdb_include = getEnv("LMDB_INCLUDE");
@@ -40,7 +56,7 @@ pub fn build(b: *std.Build) void {
   });
 
   lib.use_llvm = true;
-  if (resolved_target.result.os.tag != .macos) lib.use_lld = true;
+  if (!resolved_target.result.os.tag.isDarwin()) lib.use_lld = true;
   
   const version = std.posix.getenv("ANT_VERSION") orelse "unknown";
   const options = b.addOptions();
