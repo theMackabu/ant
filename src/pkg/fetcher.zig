@@ -740,7 +740,14 @@ pub const Fetcher = struct {
       slot.* = client;
     }
 
+    var any_connected = false;
+    for (self.tarball_clients) |slot| {
+      if (slot != null) { any_connected = true; break; }
+    }
+
+    if (!any_connected) return error.ConnectionFailed;
     self.tarball_clients_initialized = true;
+    
     _ = debug.timer("fetcher: connection pool init", init_start);
   }
   
@@ -766,7 +773,13 @@ pub const Fetcher = struct {
       };
       slot.* = client; _ = i;
     }
-    self.tarball_clients_initialized = true;
+
+    var any_connected = false;
+    for (self.tarball_clients) |slot| {
+      if (slot != null) { any_connected = true; break; }
+    }
+
+    if (any_connected) self.tarball_clients_initialized = true;
   }
 
   pub fn queueTarballAsync(self: *Fetcher, url: []const u8, handler: StreamHandler) !void {

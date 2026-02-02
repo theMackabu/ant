@@ -405,7 +405,8 @@ pub const CacheDB = struct {
     if (value.mv_size < @sizeOf(i64)) return null;
 
     const data: [*]const u8 = @ptrCast(value.mv_data);
-    const cached_at: i64 = @bitCast(data[0..@sizeOf(i64)].*);
+    var cached_at: i64 = undefined;
+    @memcpy(std.mem.asBytes(&cached_at), data[0..@sizeOf(i64)]);
 
     const now = std.time.timestamp();
     if (now - cached_at > METADATA_TTL_SECS) return null;
@@ -504,9 +505,6 @@ pub const CacheDB = struct {
       }
       rc = c.mdb_cursor_get(cursor, &key, &value, c.MDB_NEXT);
     }
-    
-    c.mdb_cursor_close(cursor);
-    cursor = null;
     
     for (to_delete.items) |*key_bytes| {
       var del_key = c.MDB_val{ .mv_size = 66, .mv_data = key_bytes };
