@@ -35,18 +35,7 @@ runs:
         export PATH="$HOME/.cargo/bin:$PATH"
         rustup target add ${{ inputs.target }} || true
 
-    - name: Cache cargo registry
-      uses: actions/cache@v4
+    - name: Cache Rust
+      uses: Swatinem/rust-cache@v2
       with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-        key: cargo-registry-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: cargo-registry-${{ runner.os }}-${{ runner.arch }}-
-
-    - name: Cache oxc build
-      uses: actions/cache@v4
-      with:
-        path: build/oxc-target
-        key: oxc-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('src/strip/Cargo.lock') }}
-        restore-keys: oxc-${{ runner.os }}-${{ runner.arch }}-
+        workspaces: src/strip -> ../../build/oxc-target

@@ -80,7 +80,7 @@ jobs:
           apk add --no-cache git clang lld llvm meson ninja cmake pkgconf curl npm nodejs \
             musl-dev openssl-dev openssl-libs-static libsodium-dev libsodium-static \
             util-linux-dev util-linux-static linux-headers libunwind-dev libunwind-static \
-            tar xz zstd jq rust cargo bash
+            tar xz zstd jq bash
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       # === MACOS SETUP ===
@@ -95,6 +95,11 @@ jobs:
           fi
 
       # === WINDOWS SETUP ===
+      - name: Disable Windows Defender real-time monitoring
+        if: inputs.platform == 'windows-x64'
+        shell: pwsh
+        run: Set-MpPreference -DisableRealtimeMonitoring $true
+
       - name: Setup Windows MSYS2
         if: inputs.platform == 'windows-x64'
         uses: msys2/setup-msys2@v2

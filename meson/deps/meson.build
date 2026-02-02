@@ -80,7 +80,6 @@ endif
 tlsuv_opts.append_compile_args('c', tlsuv_compile_args)
 tlsuv_dep = cmake.subproject('tlsuv', options: tlsuv_opts).dependency('tlsuv')
 
-pcre2_dep = subproject('pcre2', default_options: ['warning_level=0']).get_variable('libpcre2_8')
 uthash_dep = subproject('uthash').get_variable('uthash_dep')
 yyjson_dep = subproject('yyjson').get_variable('yyjson_dep')
 uuidv7_dep = subproject('uuidv7').get_variable('uuidv7_dep')
@@ -100,6 +99,12 @@ libffi_dep = subproject('libffi', default_options: [
   'warning_level=0',
   'tests=false'
 ]).get_variable('ffi_dep')
+
+pcre2_dep = subproject('pcre2', default_options: [
+  'warning_level=0',
+  'grep=false',
+  'test=false'
+]).get_variable('libpcre2_8')
 
 cargo = find_program('cargo', required: true)
 cp = find_program('cp', required: true)

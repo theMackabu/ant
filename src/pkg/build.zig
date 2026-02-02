@@ -57,7 +57,7 @@ pub fn build(b: *std.Build) void {
   lib.use_llvm = true;
   if (!resolved_target.result.os.tag.isDarwin()) lib.use_lld = true;
   
-  const version = std.posix.getenv("ANT_VERSION") orelse "unknown";
+  const version = getEnv("ANT_VERSION") orelse "unknown";
   const options = b.addOptions();
   options.addOption([]const u8, "version", version);
   
