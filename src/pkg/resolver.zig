@@ -260,7 +260,8 @@ pub const VersionInfo = struct {
   optional_dependencies: std.StringHashMap([]const u8),
   peer_dependencies: std.StringHashMap([]const u8),
   peer_dependencies_meta: std.StringHashMap(bool),
-  os: ?[]const u8, cpu: ?[]const u8,
+  os: ?[]const u8, cpu: ?[]const u8, libc: ?[]const u8,
+  bin: std.StringHashMap([]const u8),
   allocator: std.mem.Allocator,
 
   pub fn deinit(self: *VersionInfo) void {
@@ -293,6 +294,13 @@ pub const VersionInfo = struct {
     self.peer_dependencies_meta.deinit();
     if (self.os) |o| self.allocator.free(o);
     if (self.cpu) |c| self.allocator.free(c);
+    if (self.libc) |l| self.allocator.free(l);
+    var bin_iter = self.bin.iterator();
+    while (bin_iter.next()) |entry| {
+      self.allocator.free(entry.key_ptr.*);
+      self.allocator.free(entry.value_ptr.*);
+    }
+    self.bin.deinit();
   }
 
   pub fn matchesPlatform(self: *const VersionInfo) bool {
@@ -303,6 +311,7 @@ pub const VersionInfo = struct {
       .freebsd => "freebsd",
       else => "unknown",
     };
+    
     const current_cpu = comptime switch (builtin.cpu.arch) {
       .aarch64 => "arm64",
       .x86_64 => "x64",
@@ -310,13 +319,17 @@ pub const VersionInfo = struct {
       .arm => "arm",
       else => "unknown",
     };
+    
+    const current_libc: ?[]const u8 = comptime if (builtin.abi == .gnu or builtin.abi == .gnueabi or builtin.abi == .gnueabihf) "glibc"
+    else if (builtin.abi == .musl or builtin.abi == .musleabi or builtin.abi == .musleabihf) "musl"
+    else if (builtin.os.tag == .macos or builtin.os.tag == .ios) "glibc"
+    else null;
 
-    if (self.os) |os_filter| {
-      if (!matchesFilter(os_filter, current_os)) return false;
-    }
+    if (self.os) |os_filter| if (!matchesFilter(os_filter, current_os)) return false;
+    if (self.cpu) |cpu_filter| if (!matchesFilter(cpu_filter, current_cpu)) return false;
 
-    if (self.cpu) |cpu_filter| {
-      if (!matchesFilter(cpu_filter, current_cpu)) return false;
+    if (self.libc) |libc_filter| {
+      if (current_libc) |libc| if (!matchesFilter(libc_filter, libc)) return false;
     }
 
     return true;
@@ -507,6 +520,41 @@ pub const PackageMetadata = struct {
         }
       }
 
+      var libc_filter: ?[]const u8 = null;
+      if (version_data.object.get("libc")) |libc_arr| {
+        if (libc_arr == .array) {
+          var libc_buf = std.ArrayListUnmanaged(u8){};
+          for (libc_arr.array.items, 0..) |item, i| {
+            if (item == .string) {
+              if (i > 0) libc_buf.append(allocator, ',') catch {};
+              libc_buf.appendSlice(allocator, item.string) catch {};
+            }
+          }
+          if (libc_buf.items.len > 0) {
+            libc_filter = libc_buf.toOwnedSlice(allocator) catch null;
+          } else libc_buf.deinit(allocator);
+        }
+      }
+
+      var bin = std.StringHashMap([]const u8).init(allocator);
+      if (version_data.object.get("bin")) |bin_val| {
+        if (bin_val == .object) {
+          for (bin_val.object.keys(), bin_val.object.values()) |key, val| {
+            if (val == .string) bin.put(allocator.dupe(u8, key) 
+            catch continue, allocator.dupe(u8, val.string) catch continue) catch {};
+          }
+        } else if (bin_val == .string) {
+          const bin_name = allocator.dupe(u8, name) catch continue;
+          const bin_path = allocator.dupe(u8, bin_val.string) catch {
+            allocator.free(bin_name); continue;
+          };
+          bin.put(bin_name, bin_path) catch {
+            allocator.free(bin_name);
+            allocator.free(bin_path);
+          };
+        }
+      }
+
       try metadata.versions.append(allocator, .{
         .version = version,
         .version_str = try allocator.dupe(u8, version_str),
@@ -516,9 +564,8 @@ pub const PackageMetadata = struct {
         .optional_dependencies = opt_deps,
         .peer_dependencies = peer_deps,
         .peer_dependencies_meta = peer_meta,
-        .os = os_filter,
-        .cpu = cpu_filter,
-        .allocator = allocator,
+        .os = os_filter, .cpu = cpu_filter, .libc = libc_filter,
+        .bin = bin, .allocator = allocator,
       });
     }
 
@@ -535,6 +582,7 @@ pub const ResolvedPackage = struct {
   depth: u32,
   direct: bool,
   parent_path: ?[]const u8,
+  has_bin: bool,
   allocator: std.mem.Allocator,
 
   pub const DepFlags = struct {
@@ -1131,6 +1179,7 @@ pub const Resolver = struct {
       .depth = depth,
       .direct = direct,
       .parent_path = null,
+      .has_bin = version_info.bin.count() > 0,
       .allocator = self.allocator,
     };
 
@@ -1219,6 +1268,7 @@ pub const Resolver = struct {
           existing_pkg.integrity = b.integrity;
           self.allocator.free(existing_pkg.tarball_url);
           existing_pkg.tarball_url = try self.allocator.dupe(u8, b.tarball_url);
+          existing_pkg.has_bin = b.bin.count() > 0;
 
           if (self.on_package_resolved) |callback| {
             callback(existing_pkg, self.on_package_resolved_data);
@@ -1283,6 +1333,7 @@ pub const Resolver = struct {
       .depth = depth,
       .direct = direct,
       .parent_path = null,
+      .has_bin = best.bin.count() > 0,
       .allocator = self.allocator,
     };
 
@@ -1362,6 +1413,7 @@ pub const Resolver = struct {
       .depth = depth,
       .direct = false,
       .parent_path = try self.allocator.dupe(u8, parent_path),
+      .has_bin = version_info.bin.count() > 0,
       .allocator = self.allocator,
     };
 
@@ -1450,6 +1502,7 @@ pub const Resolver = struct {
         existing_pkg.integrity = best.integrity;
         self.allocator.free(existing_pkg.tarball_url);
         existing_pkg.tarball_url = try self.allocator.dupe(u8, best.tarball_url);
+        existing_pkg.has_bin = best.bin.count() > 0;
       }
 
       if (depth == 0) existing_pkg.direct = true;
@@ -1475,6 +1528,7 @@ pub const Resolver = struct {
       .depth = depth,
       .direct = (depth == 0),
       .parent_path = null,
+      .has_bin = best.bin.count() > 0,
       .allocator = self.allocator,
     };
 
@@ -1720,7 +1774,10 @@ pub const Resolver = struct {
         .parent_path = parent_ref,
         .deps_start = deps_start,
         .deps_count = deps_written,
-        .flags = .{ .direct = pkg.direct },
+        .flags = .{
+          .direct = pkg.direct,
+          .has_bin = pkg.has_bin,
+        },
       });
     }
 

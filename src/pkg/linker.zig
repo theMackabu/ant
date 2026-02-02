@@ -113,6 +113,7 @@ pub const PackageLink = struct {
   name: []const u8,
   parent_path: ?[]const u8 = null,
   file_count: u32 = 0,
+  has_bin: bool = true,
 };
 
 pub const Linker = struct {
@@ -193,7 +194,7 @@ pub const Linker = struct {
 
     self.linkDirectoryWithHint(source_dir, dest_dir, pkg.file_count, pkg.name) catch |err| return err;
 
-    if (pkg.parent_path == null) try self.linkBinaries(pkg.name);
+    if (pkg.parent_path == null and pkg.has_bin) try self.linkBinaries(pkg.name);
     _ = self.stats.packages_installed.fetchAdd(1, .release);
   }
 

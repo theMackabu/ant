@@ -369,6 +369,7 @@ pub const PkgContext = struct {
         .name = pkg_name,
         .parent_path = if (parent_path.len > 0) parent_path else null,
         .file_count = hit.file_count,
+        .has_bin = pkg.flags.has_bin,
       });
 
       if (pkg.flags.direct) {
@@ -393,6 +394,7 @@ pub const PkgContext = struct {
         version_str: []const u8,
         direct: bool,
         parent_path: ?[]const u8,
+        has_bin: bool,
         completed: bool,
         has_error: bool,
       };
@@ -428,6 +430,7 @@ pub const PkgContext = struct {
           .version_str = version_str,
           .direct = pkg.flags.direct,
           .parent_path = if (parent_path_str.len > 0) parent_path_str else null,
+          .has_bin = pkg.flags.has_bin,
           .completed = false,
           .has_error = false,
         };
@@ -502,6 +505,7 @@ pub const PkgContext = struct {
           .name = ctx.pkg_name,
           .parent_path = ctx.parent_path,
           .file_count = stats.files,
+          .has_bin = ctx.has_bin,
         }) catch {};
       }
       stage_start = debug.timer("cache insert + link misses", stage_start);
@@ -794,6 +798,7 @@ const InterleavedExtractCtx = struct {
   version_str: []const u8,
   direct: bool,
   parent_path: ?[]const u8,
+  has_bin: bool,
   completed: bool,
   has_error: bool,
   queued: bool,
@@ -871,6 +876,7 @@ const InterleavedContext = struct {
       .version_str = version_str,
       .direct = pkg.direct,
       .parent_path = pkg.parent_path,
+      .has_bin = pkg.has_bin,
       .completed = false,
       .has_error = false,
       .queued = false,
@@ -1019,6 +1025,7 @@ export fn pkg_resolve_and_install(
       .name = pkg.name.slice(),
       .parent_path = pkg.parent_path,
       .file_count = cache_entry.file_count,
+      .has_bin = pkg.has_bin,
     }) catch continue;
   }
 
@@ -1093,6 +1100,7 @@ export fn pkg_resolve_and_install(
         .name = ext_ctx.pkg_name,
         .parent_path = ext_ctx.parent_path,
         .file_count = stats.files,
+        .has_bin = ext_ctx.has_bin,
       },
       .size = stats.bytes,
     }) catch continue;
@@ -2469,6 +2477,7 @@ export fn pkg_exec_temp(
       .name = ectx.pkg_name,
       .parent_path = ectx.parent_path,
       .file_count = stats.files,
+      .has_bin = ectx.has_bin,
     }) catch continue;
   }
 
@@ -2483,6 +2492,7 @@ export fn pkg_exec_temp(
         .name = pkg.name.slice(),
         .parent_path = pkg.parent_path,
         .file_count = 0,
+        .has_bin = pkg.has_bin,
       }) catch continue;
     }
   }
