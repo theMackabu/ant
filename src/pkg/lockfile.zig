@@ -56,12 +56,12 @@ pub const Package = extern struct {
   tarball_url: StringRef,
   parent_path: StringRef,
   deps_start: u32,
-  deps_count: u16,
+  deps_count: u32,
   flags: PackageFlags,
-  _padding: u8 = 0,
+  _padding: [3]u8 = .{ 0, 0, 0 },
 
   comptime {
-    std.debug.assert(@sizeOf(Package) == 128);
+    std.debug.assert(@sizeOf(Package) == 136);
   }
 
   pub fn versionString(self: *const Package, allocator: std.mem.Allocator, string_table: []const u8) ![]u8 {
@@ -314,6 +314,11 @@ pub const LockfileWriter = struct {
     try self.dependencies.append(self.allocator, dep);
   }
 
+  fn alignOffset(offset: u32, alignment: u32) u32 {
+    const rem = offset % alignment;
+    return if (rem == 0) offset else offset + (alignment - rem);
+  }
+
   pub fn write(self: *LockfileWriter, path: []const u8) !void {
     const file = try std.fs.cwd().createFile(path, .{});
     defer file.close();
@@ -322,10 +327,12 @@ pub const LockfileWriter = struct {
     const string_table_offset = header_size;
     const string_table_size: u32 = @intCast(self.string_builder.items.len);
 
-    const package_array_offset = string_table_offset + string_table_size;
+    const package_array_offset = alignOffset(string_table_offset + string_table_size, @alignOf(Package));
+    const package_pad_size = package_array_offset - (string_table_offset + string_table_size);
     const package_array_size: u32 = @intCast(self.packages.items.len * @sizeOf(Package));
 
-    const dependency_array_offset = package_array_offset + package_array_size;
+    const dependency_array_offset = alignOffset(package_array_offset + package_array_size, @alignOf(Dependency));
+    const dep_pad_size = dependency_array_offset - (package_array_offset + package_array_size);
     const dependency_array_size: u32 = @intCast(self.dependencies.items.len * @sizeOf(Dependency));
 
     const hash_table_size: u32 = @intCast(@max(1, self.packages.items.len * 10 / 7));
@@ -351,7 +358,8 @@ pub const LockfileWriter = struct {
       };
     }
 
-    const hash_table_offset = dependency_array_offset + dependency_array_size;
+    const hash_table_offset = alignOffset(dependency_array_offset + dependency_array_size, @alignOf(HashBucket));
+    const hash_pad_size = hash_table_offset - (dependency_array_offset + dependency_array_size);
 
     const header = Header{
       .package_count = @intCast(self.packages.items.len),
@@ -366,8 +374,20 @@ pub const LockfileWriter = struct {
 
     try file.writeAll(std.mem.asBytes(&header));
     try file.writeAll(self.string_builder.items);
-    try file.writeAll(std.mem.sliceAsBytes(self.packages.items));
-    try file.writeAll(std.mem.sliceAsBytes(self.dependencies.items));
-    try file.writeAll(std.mem.sliceAsBytes(hash_table));
+    
+    if (package_pad_size > 0) {
+      const padding = [_]u8{0} ** 8;
+      try file.writeAll(padding[0..package_pad_size]);
+    } try file.writeAll(std.mem.sliceAsBytes(self.packages.items));
+    
+    if (dep_pad_size > 0) {
+      const padding = [_]u8{0} ** 8;
+      try file.writeAll(padding[0..dep_pad_size]);
+    } try file.writeAll(std.mem.sliceAsBytes(self.dependencies.items));
+    
+    if (hash_pad_size > 0) {
+      const padding = [_]u8{0} ** 8;
+      try file.writeAll(padding[0..hash_pad_size]);
+    } try file.writeAll(std.mem.sliceAsBytes(hash_table));
   }
 };
