@@ -439,7 +439,7 @@ pub const Extractor = struct {
       switch (result.kind) {
         .need_more_data => return,
         .entry => |entry| try self.handleEntry(entry),
-        .file_data => |d| self.writeFileData(d),
+        .file_data => |d| try self.writeFileData(d),
         .end_of_archive => return self.closeCurrentFile(),
         .err => |e| return e,
       }
@@ -448,18 +448,18 @@ pub const Extractor = struct {
   
   inline fn handleEntry(self: *Extractor, entry: TarParser.Entry) !void {
     switch (entry.entry_type) {
-      .directory => self.output_dir.makePath(entry.path) catch {},
-      .file => self.createFile(entry),
-      .symlink => self.createSymlink(entry),
+      .directory => try self.output_dir.makePath(entry.path),
+      .file => try self.createFile(entry),
+      .symlink => try self.createSymlink(entry),
     }
   }
   
-  inline fn createFile(self: *Extractor, entry: TarParser.Entry) void {
+  inline fn createFile(self: *Extractor, entry: TarParser.Entry) !void {
     self.closeCurrentFile();
     if (std.fs.path.dirname(entry.path)) |dir| {
-      self.output_dir.makePath(dir) catch {};
+      try self.output_dir.makePath(dir);
     }
-    self.current_file = self.output_dir.createFile(entry.path, .{}) catch null;
+    self.current_file = try self.output_dir.createFile(entry.path, .{});
     const len = @min(entry.path.len, 256);
     @memcpy(self.current_file_path[0..len], entry.path[0..len]);
     self.current_file_path_len = len;
@@ -467,24 +467,24 @@ pub const Extractor = struct {
     self.files_extracted += 1;
   }
   
-  inline fn createSymlink(self: *Extractor, entry: TarParser.Entry) void {
+  inline fn createSymlink(self: *Extractor, entry: TarParser.Entry) !void {
     const linkname_len = std.mem.indexOfScalar(u8, &self.parser.header.linkname, 0) orelse self.parser.header.linkname.len;
     const target = self.parser.header.linkname[0..linkname_len];
     
     if (entry.path.len == 0 or target.len == 0) return;
-    validatePath(target) catch return;
+    try validatePath(target);
     
     if (std.fs.path.dirname(entry.path)) |dir| {
-      self.output_dir.makePath(dir) catch {};
+      try self.output_dir.makePath(dir);
     }
     
     self.output_dir.deleteFile(entry.path) catch {};
-    linker.createSymlinkOrCopy(self.output_dir, target, entry.path);
+    try linker.createSymlinkOrCopy(self.output_dir, target, entry.path);
   }
   
-  inline fn writeFileData(self: *Extractor, data: []const u8) void {
+  inline fn writeFileData(self: *Extractor, data: []const u8) !void {
     if (self.current_file) |f| {
-      f.writeAll(data) catch {};
+      try f.writeAll(data);
       self.bytes_extracted += data.len;
     }
   }

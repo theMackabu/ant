@@ -9,9 +9,11 @@ pub const StringRef = extern struct {
   len: u32,
 
   pub fn slice(self: StringRef, string_table: []const u8) []const u8 {
-    if (self.offset >= string_table.len) return "";
-    const end = @min(self.offset + self.len, @as(u32, @intCast(string_table.len)));
-    return string_table[self.offset..end];
+    const offset: usize = self.offset;
+    const len: usize = self.len;
+    if (offset >= string_table.len) return "";
+    const end = @min(offset + len, string_table.len);
+    return string_table[offset..end];
   }
 
   pub const empty: StringRef = .{ .offset = 0, .len = 0 };
@@ -347,10 +349,12 @@ pub const LockfileWriter = struct {
       const name = pkg.name.slice(self.string_builder.items);
       const hash = djb2Hash(name);
       var index = hash % hash_table_size;
+      var probes: u32 = 0;
 
-      while (hash_table[index].package_index != std.math.maxInt(u32)) {
+      while (hash_table[index].package_index != std.math.maxInt(u32) and probes < hash_table_size) : (probes += 1) {
         index = (index + 1) % hash_table_size;
       }
+      if (probes >= hash_table_size) return error.HashTableFull;
 
       hash_table[index] = .{
         .name_hash = hash,

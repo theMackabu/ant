@@ -1147,7 +1147,7 @@ pub const Fetcher = struct {
     var batch_num: usize = 0;
 
     var decompress_buf = std.ArrayListUnmanaged(u8){};
-    defer decompress_buf.deinit(allocator);
+    defer decompress_buf.deinit(c_allocator);
 
     while (offset < names.len) {
       const end = @min(offset + total_capacity, names.len);
@@ -1379,7 +1379,7 @@ pub const Fetcher = struct {
     var batch_num: usize = 0;
 
     var decompress_buf = std.ArrayListUnmanaged(u8){};
-    defer decompress_buf.deinit(allocator);
+    defer decompress_buf.deinit(c_allocator);
 
     while (offset < names.len) {
       const end = @min(offset + total_capacity, names.len);

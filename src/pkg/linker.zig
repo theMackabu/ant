@@ -6,10 +6,10 @@ const debug = @import("debug.zig");
 const PARALLEL_LINK_THRESHOLD = 500;
 const LINK_THREAD_COUNT = 8;
 
-pub fn createSymlinkOrCopy(dir: std.fs.Dir, target: []const u8, link_name: []const u8) void {
+pub fn createSymlinkOrCopy(dir: std.fs.Dir, target: []const u8, link_name: []const u8) !void {
   if (comptime builtin.os.tag == .windows) {
-    createSymlinkWindows(dir, target, link_name);
-  } else dir.symLink(target, link_name, .{}) catch {};
+    try createSymlinkWindows(dir, target, link_name);
+  } else try dir.symLink(target, link_name, .{});
 }
 
 pub fn createSymlinkAbsolute(target: []const u8, link_path: []const u8) void {
@@ -18,18 +18,18 @@ pub fn createSymlinkAbsolute(target: []const u8, link_path: []const u8) void {
   } else std.posix.symlink(target, link_path) catch {};
 }
 
-fn createSymlinkWindows(dir: std.fs.Dir, target: []const u8, link_name: []const u8) void {
+fn createSymlinkWindows(dir: std.fs.Dir, target: []const u8, link_name: []const u8) !void {
   if (comptime builtin.os.tag != .windows) return;
   var target_utf16: [std.fs.max_path_bytes]u16 = undefined;
   var link_utf16: [std.fs.max_path_bytes]u16 = undefined;
-  const target_len = std.unicode.utf8ToUtf16Le(&target_utf16, target) catch return;
-  const link_len = std.unicode.utf8ToUtf16Le(&link_utf16, link_name) catch return;
+  const target_len = try std.unicode.utf8ToUtf16Le(&target_utf16, target);
+  const link_len = try std.unicode.utf8ToUtf16Le(&link_utf16, link_name);
   target_utf16[target_len] = 0;
   
-  _ = std.os.windows.CreateSymbolicLink(
+  _ = try std.os.windows.CreateSymbolicLink(
     dir.fd, link_utf16[0..link_len],
     target_utf16[0..target_len :0], false,
-  ) catch {};
+  );
 }
 
 fn createSymlinkAbsoluteWindows(target: []const u8, link_path: []const u8) void {
@@ -147,8 +147,11 @@ pub const Linker = struct {
       else => return error.IoError,
     };
 
-    self.node_modules_dir = try std.fs.cwd().openDir(path, .{});
-    self.node_modules_path = try self.allocator.dupe(u8, path);
+    var new_nm_dir = try std.fs.cwd().openDir(path, .{});
+    errdefer new_nm_dir.close();
+
+    const new_path = try self.allocator.dupe(u8, path);
+    errdefer self.allocator.free(new_path);
 
     const bin_path = try std.fmt.allocPrint(self.allocator, "{s}/.bin", .{path});
     defer self.allocator.free(bin_path);
@@ -156,7 +159,16 @@ pub const Linker = struct {
       error.PathAlreadyExists => {},
       else => return error.IoError,
     };
-    self.bin_dir = try std.fs.cwd().openDir(bin_path, .{});
+
+    var new_bin_dir = try std.fs.cwd().openDir(bin_path, .{});
+
+    if (self.bin_dir) |*d| d.close();
+    if (self.node_modules_dir) |*d| d.close();
+    if (self.node_modules_path.len > 0) self.allocator.free(self.node_modules_path);
+
+    self.node_modules_dir = new_nm_dir;
+    self.node_modules_path = new_path;
+    self.bin_dir = new_bin_dir;
   }
 
   pub fn linkPackage(self: *Linker, pkg: PackageLink) !void {
@@ -202,8 +214,8 @@ pub const Linker = struct {
     const bin_dir = self.bin_dir orelse return;
     const node_modules = self.node_modules_dir orelse return;
 
-    const pkg_dir = node_modules.openDir(pkg_name, .{}) catch return;
-    defer @constCast(&pkg_dir).close();
+    var pkg_dir = node_modules.openDir(pkg_name, .{}) catch return;
+    defer pkg_dir.close();
 
     const pkg_json_file = pkg_dir.openFile("package.json", .{}) catch return;
     defer pkg_json_file.close();
@@ -320,9 +332,7 @@ pub const Linker = struct {
 
     var threads: [LINK_THREAD_COUNT]?std.Thread = undefined;
     for (&threads) |*t| t.* = null;
-
     var contexts: [LINK_THREAD_COUNT]ParallelThreadContext = undefined;
-    var thread_count: usize = 0;
 
     var offset: usize = 0;
     for (0..LINK_THREAD_COUNT) |i| {
@@ -340,9 +350,7 @@ pub const Linker = struct {
         debug.log("Thread spawn failed for chunk {d}-{d}: {s}", .{ offset, end, @errorName(err) });
         processWorkItems(&contexts[i]);
         break :blk null;
-      };
-      if (threads[i] != null) thread_count += 1;
-      offset = end;
+      }; offset = end;
     }
 
     for (&threads) |*t| if (t.*) |thread| thread.join();
@@ -533,7 +541,10 @@ pub const Linker = struct {
     var source = source_dir.openFile(name, .{}) catch return error.IoError;
     defer source.close();
 
-    var dest = dest_dir.createFile(name, .{}) catch return error.IoError;
+    const stat = source.stat() catch return error.IoError;
+    const mode = if (comptime builtin.os.tag != .windows) stat.mode else {};
+
+    var dest = dest_dir.createFile(name, .{ .mode = mode }) catch return error.IoError;
     defer dest.close();
 
     var buf: [64 * 1024]u8 = undefined;

@@ -1038,7 +1038,11 @@ export fn pkg_resolve_and_install(
     });
     tarball_thread = std.Thread.spawn(.{}, struct {
       fn work(h: *fetcher.Fetcher) void { h.run() catch {}; }
-    }.work, .{http}) catch null;
+    }.work, .{http}) catch |err| blk: {
+      debug.log("warning: failed to spawn tarball thread: {}, running synchronously", .{err});
+      http.run() catch {};
+      break :blk null;
+    };
   }
 
   var linked_count: usize = 0;
@@ -1170,7 +1174,8 @@ export fn pkg_resolve_and_install(
               pkg_ctx.reportProgress(.linking, current, total, msg_buf[0..msg_len.len :0]);
               const start = std.time.nanoTimestamp();
               lnk.linkPackage(job) catch {};
-              const elapsed_ms: u64 = @intCast((@as(u64, @intCast(std.time.nanoTimestamp())) - @as(u64, @intCast(start))) / 1_000_000);
+              const delta = std.time.nanoTimestamp() - start;
+              const elapsed_ms: u64 = if (delta < 0) 0 else @intCast(@as(u128, @intCast(delta)) / 1_000_000);
               if (elapsed_ms > 100) {
                 _ = slow_count.fetchAdd(1, .monotonic);
                 lock.lock();
@@ -2613,8 +2618,13 @@ fn unlinkGlobalBins(allocator: std.mem.Allocator, pkg_name: []const u8) void {
     
     var target_buf: [std.fs.max_path_bytes]u8 = undefined;
     const target = dir.readLink(entry.name, &target_buf) catch continue;
-    
-    if (std.mem.indexOf(u8, target, pkg_name) != null) {
+
+    const pattern = std.fmt.allocPrint(allocator, "/{s}/", .{pkg_name}) catch continue;
+    defer allocator.free(pattern);
+    const pattern_end = std.fmt.allocPrint(allocator, "/{s}", .{pkg_name}) catch continue;
+    defer allocator.free(pattern_end);
+
+    if (std.mem.indexOf(u8, target, pattern) != null or std.mem.endsWith(u8, target, pattern_end)) {
       dir.deleteFile(entry.name) catch continue;
       debug.log("unlinked global bin: {s}", .{entry.name});
     }
