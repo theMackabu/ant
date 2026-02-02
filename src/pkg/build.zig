@@ -24,9 +24,8 @@ pub fn build(b: *std.Build) void {
       break :blk2 std.meta.stringToEnum(std.Target.Os.Tag, o);
     } else null;
 
-    std.debug.print("PKG_TARGET: {s}\n", .{target_str});
-    std.debug.print("cpu_arch: {?}\n", .{cpu_arch});
-    std.debug.print("os_tag: {?}\n", .{os_tag});
+    std.debug.print("[zig.build] cpu_arch: {?}\n", .{cpu_arch});
+    std.debug.print("[zig.build] os_tag: {?}\n", .{os_tag});
 
     break :blk b.resolveTargetQuery(.{
       .cpu_arch = cpu_arch,

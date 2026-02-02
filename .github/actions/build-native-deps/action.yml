@@ -57,14 +57,14 @@ runs:
     - name: Build llhttp
       if: steps.cache.outputs.cache-hit != 'true' && contains(inputs.deps, 'llhttp')
       shell: bash
-      env:
-        CFLAGS: '-Os -flto'
-        AR: ${{ inputs.ar }}
-        RANLIB: ${{ inputs.ranlib }}
       run: |
         git clone --depth 1 --branch release/v${{ inputs.llhttp_version }} https://github.com/nodejs/llhttp.git /tmp/llhttp
         cd /tmp/llhttp
         CMAKE_GENERATOR="${{ inputs.cmake_generator }}"
+        if [[ "$RUNNER_OS" != "macOS" ]]; then
+          export AR="${{ inputs.ar }}"
+          export RANLIB="${{ inputs.ranlib }}"
+        fi
         CC=${{ inputs.cc }} CXX=${{ inputs.cxx || inputs.cc }} cmake -B build \
           ${CMAKE_GENERATOR:+-G "$CMAKE_GENERATOR"} \
           -DCMAKE_INSTALL_PREFIX=${{ inputs.prefix }} \
@@ -76,14 +76,14 @@ runs:
     - name: Build libuv
       if: steps.cache.outputs.cache-hit != 'true' && contains(inputs.deps, 'libuv')
       shell: bash
-      env:
-        CFLAGS: '-Os -flto'
-        AR: ${{ inputs.ar }}
-        RANLIB: ${{ inputs.ranlib }}
       run: |
         git clone --depth 1 --branch v${{ inputs.libuv_version }} https://github.com/libuv/libuv.git /tmp/libuv
         cd /tmp/libuv
         CMAKE_GENERATOR="${{ inputs.cmake_generator }}"
+        if [[ "$RUNNER_OS" != "macOS" ]]; then
+          export AR="${{ inputs.ar }}"
+          export RANLIB="${{ inputs.ranlib }}"
+        fi
         CC=${{ inputs.cc }} cmake -B build \
           ${CMAKE_GENERATOR:+-G "$CMAKE_GENERATOR"} \
           -DCMAKE_INSTALL_PREFIX=${{ inputs.prefix }} \
@@ -119,14 +119,14 @@ runs:
     - name: Build zlib
       if: steps.cache.outputs.cache-hit != 'true' && contains(inputs.deps, 'zlib')
       shell: bash
-      env:
-        CFLAGS: '-Os -flto'
-        AR: ${{ inputs.ar }}
-        RANLIB: ${{ inputs.ranlib }}
       run: |
         git clone --depth 1 --branch v${{ inputs.zlib_version }} https://github.com/madler/zlib.git /tmp/zlib
         cd /tmp/zlib
         CMAKE_GENERATOR="${{ inputs.cmake_generator }}"
+        if [[ "$RUNNER_OS" != "macOS" ]]; then
+          export AR="${{ inputs.ar }}"
+          export RANLIB="${{ inputs.ranlib }}"
+        fi
         CC=${{ inputs.cc }} cmake -B build \
           ${CMAKE_GENERATOR:+-G "$CMAKE_GENERATOR"} \
           -DCMAKE_INSTALL_PREFIX=${{ inputs.prefix }} \
