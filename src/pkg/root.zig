@@ -66,6 +66,7 @@ pub const PkgOptions = extern struct {
 
 pub const CacheStats = extern struct {
   total_size: u64,
+  db_size: u64,
   package_count: u32,
 };
 
@@ -1679,7 +1680,8 @@ export fn pkg_cache_stats(ctx: ?*PkgContext, out: *CacheStats) PkgError {
 
   const stats = db.stats() catch return .cache_error;
   out.* = .{
-    .total_size = stats.used_size,
+    .total_size = stats.cache_size,
+    .db_size = stats.db_size,
     .package_count = @intCast(stats.entries),
   };
 

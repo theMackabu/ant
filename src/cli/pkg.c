@@ -1421,10 +1421,11 @@ static int cmd_cache_info(void) {
     return EXIT_FAILURE;
   }
   
-  char size_buf[64];
+  char size_buf[64], db_buf[64];
   printf("%sCache location:%s ~/.ant/pkg\n", C_BOLD, C_RESET);
   printf("%sPackages:%s      %u\n", C_BOLD, C_RESET, stats.package_count);
   printf("%sSize:%s          %s\n", C_BOLD, C_RESET, format_size(stats.total_size, size_buf, sizeof(size_buf)));
+  printf("%sDB size:%s       %s\n", C_BOLD, C_RESET, format_size(stats.db_size, db_buf, sizeof(db_buf)));
   
   pkg_free(ctx);
   return EXIT_SUCCESS;

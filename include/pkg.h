@@ -83,6 +83,7 @@ void pkg_cache_sync(pkg_context_t *ctx);
 
 typedef struct {
   uint64_t total_size;
+  uint64_t db_size;
   uint32_t package_count;
 } pkg_cache_stats_t;
 

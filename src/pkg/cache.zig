@@ -87,8 +87,17 @@ pub const CacheDB = struct {
     };
 
     try self.openDatabases();
+    self.autoPruneMetadata();
 
     return self;
+  }
+
+  fn autoPruneMetadata(self: *CacheDB) void {
+    var txn: ?*c.MDB_txn = null;
+    if (c.mdb_txn_begin(self.env, null, 0, &txn) != 0) return;
+    
+    self.pruneExpiredMetadata(txn.?);
+    _ = c.mdb_txn_commit(txn);
   }
 
   fn openDatabases(self: *CacheDB) !void {
@@ -363,7 +372,7 @@ pub const CacheDB = struct {
     _ = c.mdb_env_sync(self.env, 1);
   }
 
-  pub fn stats(self: *CacheDB) !struct { entries: usize, map_size: usize, used_size: usize } {
+  pub fn stats(self: *CacheDB) !struct { entries: usize, db_size: usize, cache_size: usize } {
     var txn: ?*c.MDB_txn = null;
     if (c.mdb_txn_begin(self.env, null, c.MDB_RDONLY, &txn) != 0) {
       return error.DatabaseError;
@@ -375,11 +384,66 @@ pub const CacheDB = struct {
     var env_info: c.MDB_envinfo = undefined;
     _ = c.mdb_env_info(self.env, &env_info);
 
+    const db_size = self.getDbFileSize();
+    const cache_size = self.calculateCacheSize();
+
     return .{
       .entries = db_stat.ms_entries,
-      .map_size = env_info.me_mapsize,
-      .used_size = env_info.me_last_pgno * @as(usize, @intCast(db_stat.ms_psize)),
+      .db_size = db_size,
+      .cache_size = cache_size,
     };
+  }
+
+  const BLOCK_SIZE: usize = 4096;
+
+  inline fn alignToBlock(size: u64) usize {
+    const s: usize = @intCast(size);
+    return ((s + BLOCK_SIZE - 1) / BLOCK_SIZE) * BLOCK_SIZE;
+  }
+
+  fn getDbFileSize(self: *CacheDB) usize {
+    const db_path = std.fmt.allocPrint(self.allocator, "{s}/index.lmdb", .{self.cache_dir}) catch return 0;
+    defer self.allocator.free(db_path);
+
+    const stat = std.fs.cwd().statFile(db_path) catch return 0;
+    return alignToBlock(stat.size);
+  }
+
+  fn calculateCacheSize(self: *CacheDB) usize {
+    const cache_path = std.fmt.allocPrint(self.allocator, "{s}/cache", .{self.cache_dir}) catch return 0;
+    defer self.allocator.free(cache_path);
+
+    var total: usize = 0;
+    var dir = std.fs.cwd().openDir(cache_path, .{ .iterate = true }) catch return 0;
+    defer dir.close();
+
+    var iter = dir.iterate();
+    while (iter.next() catch null) |entry| {
+      if (entry.kind == .directory) {
+        total += self.getDirSize(dir, entry.name);
+      } else if (entry.kind == .file) {
+        const stat = dir.statFile(entry.name) catch continue;
+        total += alignToBlock(stat.size);
+      }
+    }
+    return total;
+  }
+
+  fn getDirSize(self: *CacheDB, parent: std.fs.Dir, name: []const u8) usize {
+    var subdir = parent.openDir(name, .{ .iterate = true }) catch return 0;
+    defer subdir.close();
+
+    var total: usize = 0;
+    var iter = subdir.iterate();
+    while (iter.next() catch null) |entry| {
+      if (entry.kind == .directory) {
+        total += self.getDirSize(subdir, entry.name);
+      } else if (entry.kind == .file) {
+        const stat = subdir.statFile(entry.name) catch continue;
+        total += alignToBlock(stat.size);
+      }
+    }
+    return total;
   }
 
   fn makeMetadataKey(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
@@ -550,6 +614,43 @@ pub const CacheDB = struct {
     for (paths) |path| std.fs.cwd().deleteTree(path) catch {};
   }
 
+  inline fn pruneExpiredMetadata(self: *CacheDB, txn: *c.MDB_txn) void {
+    const now = std.time.timestamp();
+
+    var cursor: ?*c.MDB_cursor = null;
+    if (c.mdb_cursor_open(txn, self.dbi_metadata, &cursor) != 0) return;
+    defer c.mdb_cursor_close(cursor);
+
+    var to_delete = std.ArrayListUnmanaged([]u8){};
+    defer {
+      for (to_delete.items) |k| self.allocator.free(k);
+      to_delete.deinit(self.allocator);
+    }
+
+    var key: c.MDB_val = undefined;
+    var value: c.MDB_val = undefined;
+    var rc = c.mdb_cursor_get(cursor, &key, &value, c.MDB_FIRST);
+
+    while (rc == 0) : (rc = c.mdb_cursor_get(cursor, &key, &value, c.MDB_NEXT)) {
+      if (value.mv_size < @sizeOf(i64)) continue;
+
+      const data: [*]const u8 = @ptrCast(value.mv_data);
+      var cached_at: i64 = undefined;
+      @memcpy(std.mem.asBytes(&cached_at), data[0..@sizeOf(i64)]);
+
+      if (now - cached_at <= METADATA_TTL_SECS) continue;
+
+      const key_data: [*]const u8 = @ptrCast(key.mv_data);
+      const key_copy = self.allocator.dupe(u8, key_data[0..key.mv_size]) catch continue;
+      to_delete.append(self.allocator, key_copy) catch self.allocator.free(key_copy);
+    }
+
+    for (to_delete.items) |meta_key| {
+      var del_key = c.MDB_val{ .mv_size = meta_key.len, .mv_data = @ptrCast(meta_key.ptr) };
+      _ = c.mdb_del(txn, self.dbi_metadata, &del_key, null);
+    }
+  }
+
   pub fn prune(self: *CacheDB, max_age_days: u32) !u32 {
     const now = std.time.timestamp();
     const max_age_secs: i64 = @as(i64, max_age_days) * 24 * 60 * 60;
@@ -564,7 +665,9 @@ pub const CacheDB = struct {
 
     try self.collectExpiredEntries(txn.?, cutoff, &collections);
     const pruned = self.deletePrimaryEntries(txn.?, collections.keys.items);
+    
     self.pruneStaleSecondaryEntries(txn.?);
+    self.pruneExpiredMetadata(txn.?);
 
     if (c.mdb_txn_commit(txn) != 0) return error.DatabaseError;
     deletePackageFiles(collections.paths.items);
