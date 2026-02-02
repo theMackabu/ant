@@ -1684,6 +1684,7 @@ pub const Resolver = struct {
       const pkg_install_path = try pkg.installPath(self.allocator);
       defer self.allocator.free(pkg_install_path);
 
+      var deps_written: u32 = 0;
       for (pkg.dependencies.items) |dep| {
         const dep_name = dep.name.slice();
         var found_idx = pkg_indices.get(dep_name);
@@ -1704,7 +1705,7 @@ pub const Resolver = struct {
               .dev = dep.flags.dev,
               .optional = dep.flags.optional,
             },
-          });
+          }); deps_written += 1;
         }
       }
 
@@ -1718,7 +1719,7 @@ pub const Resolver = struct {
         .tarball_url = url_ref,
         .parent_path = parent_ref,
         .deps_start = deps_start,
-        .deps_count = @intCast(pkg.dependencies.items.len),
+        .deps_count = deps_written,
         .flags = .{ .direct = pkg.direct },
       });
     }
