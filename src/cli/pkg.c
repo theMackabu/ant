@@ -680,20 +680,36 @@ static int cmd_init(void) {
     return EXIT_FAILURE;
   }
 
-  fprintf(fp,
-    "{\n"
-    "  \"name\": \"%s\",\n"
-    "  \"version\": \"%s\",\n"
-    "  \"type\": \"module\",\n"
-    "  \"main\": \"%s\",\n"
-    "  \"scripts\": {\n"
-    "    \"start\": \"ant %s\"\n"
-    "  },\n"
-    "  \"dependencies\": {},\n"
-    "  \"devDependencies\": {}\n"
-    "}\n", name, version, entry, entry);
-
+  yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);
+  yyjson_mut_val *root = yyjson_mut_obj(doc);
+  yyjson_mut_doc_set_root(doc, root);
+  
+  yyjson_mut_obj_add_str(doc, root, "name", name);
+  yyjson_mut_obj_add_str(doc, root, "version", version);
+  yyjson_mut_obj_add_str(doc, root, "type", "module");
+  yyjson_mut_obj_add_str(doc, root, "main", entry);
+  
+  yyjson_mut_val *scripts = yyjson_mut_obj_add_obj(doc, root, "scripts");
+  char start_cmd[300];
+  snprintf(start_cmd, sizeof(start_cmd), "ant %s", entry);
+  yyjson_mut_obj_add_str(doc, scripts, "start", start_cmd);
+  
+  yyjson_mut_obj_add_obj(doc, root, "dependencies");
+  yyjson_mut_obj_add_obj(doc, root, "devDependencies");
+  
+  size_t len; char *json_str = yyjson_mut_write(
+    doc, YYJSON_WRITE_PRETTY_TWO_SPACES 
+    | YYJSON_WRITE_ESCAPE_UNICODE, &len
+  );
+  
+  if (json_str) {
+    fwrite(json_str, 1, len, fp);
+    free(json_str);
+  }
+  
+  yyjson_mut_doc_free(doc);
   fclose(fp);
+  
   printf("%s+%s Created %spackage.json%s\n", C_GREEN, C_RESET, C_BOLD, C_RESET);
   return EXIT_SUCCESS;
 }
