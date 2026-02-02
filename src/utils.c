@@ -105,3 +105,11 @@ int ant_version(void *argtable[]) {
   
   return EXIT_SUCCESS;
 }
+
+void *try_oom(size_t size) {
+  void *p = malloc(size);
+  if (!p) {
+    fputs("Error: out of memory\n", stderr);
+    exit(EXIT_FAILURE);
+  } return p;
+}

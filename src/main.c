@@ -210,7 +210,7 @@ int main(int argc, char *argv[]) {
   binary_name = binary_name ? binary_name + 1 : argv[0];
   
   if (strcmp(binary_name, "antx") == 0) {
-    char **exec_argv = malloc(sizeof(char*) * (argc + 2));
+    char **exec_argv = try_oom(sizeof(char*) * (argc + 2));
     exec_argv[0] = argv[0]; exec_argv[1] = "x";
     for (int i = 1; i < argc; i++) exec_argv[i + 1] = argv[i];
     exec_argv[argc + 1] = NULL;
@@ -219,7 +219,7 @@ int main(int argc, char *argv[]) {
     free(exec_argv); return exitcode;
   }
   
-  char **filtered_argv = malloc(sizeof(char*) * argc);
+  char **filtered_argv = try_oom(sizeof(char*) * argc);
   for (int i = 0; i < argc; i++) {
     if (strcmp(argv[i], "--verbose") == 0) pkg_verbose = true;
     else if (strcmp(argv[i], "--no-color") == 0) io_no_color = true;
@@ -280,22 +280,20 @@ int main(int argc, char *argv[]) {
   
   if (version_raw->count > 0) {
     fputs(ANT_VERSION "\n", stdout);
-    free(filtered_argv);
-    return EXIT_SUCCESS;
+    arg_freetable(argtable, ARGTABLE_COUNT);
+    free(filtered_argv); return EXIT_SUCCESS;
   }
   
   if (version->count > 0) {
-    int ret = ant_version(argtable);
-    free(filtered_argv);
-    return ret;
+    int res = ant_version(argtable);
+    free(filtered_argv); return res;
   }
   
   if (nerrors > 0) {
     arg_print_errors(stdout, end, "ant");
     printf("Try 'ant --help' for more information.\n");
     arg_freetable(argtable, ARGTABLE_COUNT);
-    free(filtered_argv);
-    return EXIT_FAILURE;
+    free(filtered_argv); return EXIT_FAILURE;
   }
   
   bool repl_mode = (file->count == 0 && eval->count == 0);
@@ -367,7 +365,7 @@ int main(int argc, char *argv[]) {
     if (stat(module_file, &path_stat) == 0 && S_ISDIR(path_stat.st_mode)) {
       size_t len = strlen(module_file);
       int has_slash = (len > 0 && module_file[len - 1] == '/');
-      resolved_file = malloc(len + 10 + (has_slash ? 0 : 1));
+      resolved_file = try_oom(len + 10 + (has_slash ? 0 : 1));
       sprintf(resolved_file, "%s%sindex.js", module_file, has_slash ? "" : "/");
       module_file = resolved_file;
     }

@@ -11,4 +11,6 @@ uint64_t hash_key(const char *key, size_t len);
 int is_typescript_file(const char *filename);
 int ant_version(void *argtable[]);
 
+void *try_oom(size_t size);
+
 #endif
