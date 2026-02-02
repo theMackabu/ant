@@ -75,7 +75,7 @@ runs:
         if [[ "$RUNNER_OS" == "Windows" ]]; then
           MSYS2_PATH=$(cygpath "$RUNNER_TEMP/msys64/mingw64/bin")
           export PATH="$MSYS2_PATH:$PATH"
-          DEPS_PREFIX=$(cygpath "${{ inputs.deps_prefix }}")
+          DEPS_PREFIX=$(cygpath -m "${{ inputs.deps_prefix }}")
         else
           DEPS_PREFIX="${{ inputs.deps_prefix }}"
         fi
