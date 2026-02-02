@@ -121,7 +121,7 @@ pub const Linker = struct {
   node_modules_dir: ?std.fs.Dir,
   bin_dir: ?std.fs.Dir,
   node_modules_path: []const u8,
-  cross_device: bool,
+  cross_device: std.atomic.Value(bool),
 
   pub fn init(allocator: std.mem.Allocator) Linker {
     return .{
@@ -130,7 +130,7 @@ pub const Linker = struct {
       .node_modules_dir = null,
       .bin_dir = null,
       .node_modules_path = "",
-      .cross_device = false,
+      .cross_device = std.atomic.Value(bool).init(false),
     };
   }
 
@@ -335,7 +335,11 @@ pub const Linker = struct {
         .dest_base = dest,
       };
 
-      threads[i] = std.Thread.spawn(.{}, processWorkItems, .{&contexts[i]}) catch null;
+      threads[i] = std.Thread.spawn(.{}, processWorkItems, .{&contexts[i]}) catch |err| blk: {
+        debug.log("Thread spawn failed for chunk {d}-{d}: {s}", .{ offset, end, @errorName(err) });
+        processWorkItems(&contexts[i]);
+        break :blk null;
+      };
       if (threads[i] != null) thread_count += 1;
       offset = end;
     }
@@ -442,13 +446,13 @@ pub const Linker = struct {
     dest_dir.deleteFile(name) catch {};
 
     if (comptime builtin.os.tag != .windows) {
-      if (!self.cross_device) {
+      if (!self.cross_device.load(.acquire)) {
         if (linkAt(source_dir, name, dest_dir, name)) {
           _ = self.stats.files_linked.fetchAdd(1, .release);
           return;
         } else |err| {
           if (err == error.CrossDevice) {
-            self.cross_device = true;
+            self.cross_device.store(true, .release);
           } else if (err != error.IoError) return err;
         }
       }
