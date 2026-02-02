@@ -39,7 +39,7 @@ runs:
         DEBIAN_FRONTEND: noninteractive
       run: |
         wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
-        echo "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-${{ inputs.version }} main" > /etc/apt/sources.list.d/llvm.list
+        echo "deb https://apt.llvm.org/jammy/ llvm-toolchain-jammy-${{ inputs.version }} main" > /etc/apt/sources.list.d/llvm.list
         apt-get update
         apt-get install -y clang-${{ inputs.version }} lld-${{ inputs.version }} llvm-${{ inputs.version }}
 

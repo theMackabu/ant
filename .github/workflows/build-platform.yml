@@ -167,9 +167,14 @@ jobs:
 
       # === SETUP RUST ===
       - name: Setup Rust
-        uses: ./.github/actions/setup-rust
+        uses: dtolnay/rust-toolchain@stable
         with:
-          target: ${{ steps.config.outputs.rust_target }}
+          targets: ${{ steps.config.outputs.rust_target }}
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/strip -> ../../build/oxc-target
 
       # === BUILD NATIVE DEPS ===
       - name: Build native dependencies
