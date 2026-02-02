@@ -13,9 +13,6 @@
   },
   "targets": {
     "linux-glibc-x64": {
-      "runner": "ubuntu-24.04",
-      "container": "ubuntu:22.04",
-      "shell": "bash",
       "os_type": "linux-glibc",
       "arch": "x86_64",
       "zig_target": "x86_64-linux-gnu",
@@ -29,9 +26,6 @@
       "extra_meson_args": null
     },
     "linux-glibc-aarch64": {
-      "runner": "ubuntu-24.04-arm",
-      "container": "ubuntu:22.04",
-      "shell": "bash",
       "os_type": "linux-glibc",
       "arch": "aarch64",
       "zig_target": "aarch64-linux-gnu",
@@ -45,9 +39,6 @@
       "extra_meson_args": null
     },
     "linux-musl-x64": {
-      "runner": "ubuntu-24.04",
-      "container": "alpine:edge",
-      "shell": "sh",
       "os_type": "linux-musl",
       "arch": "x86_64",
       "zig_target": "x86_64-linux-musl",
@@ -61,9 +52,6 @@
       "extra_meson_args": null
     },
     "linux-musl-aarch64": {
-      "runner": "ubuntu-24.04-arm",
-      "container": "alpine:edge",
-      "shell": "sh",
       "os_type": "linux-musl",
       "arch": "aarch64",
       "zig_target": "aarch64-linux-musl",
@@ -77,9 +65,6 @@
       "extra_meson_args": null
     },
     "macos-x64": {
-      "runner": "macos-15-intel",
-      "container": null,
-      "shell": "bash",
       "os_type": "macos",
       "arch": "x86_64",
       "zig_target": "x86_64-macos",
@@ -93,9 +78,6 @@
       "extra_meson_args": null
     },
     "macos-aarch64": {
-      "runner": "macos-15",
-      "container": null,
-      "shell": "bash",
       "os_type": "macos",
       "arch": "aarch64",
       "zig_target": "aarch64-macos",
@@ -109,9 +91,6 @@
       "extra_meson_args": null
     },
     "macos-x64-mbedtls": {
-      "runner": "macos-15-intel",
-      "container": null,
-      "shell": "bash",
       "os_type": "macos",
       "arch": "x86_64",
       "zig_target": "x86_64-macos",
@@ -125,9 +104,6 @@
       "extra_meson_args": null
     },
     "macos-aarch64-mbedtls": {
-      "runner": "macos-15",
-      "container": null,
-      "shell": "bash",
       "os_type": "macos",
       "arch": "aarch64",
       "zig_target": "aarch64-macos",
@@ -141,9 +117,6 @@
       "extra_meson_args": null
     },
     "windows-x64": {
-      "runner": "windows-latest",
-      "container": null,
-      "shell": "msys2 {0}",
       "os_type": "windows",
       "arch": "x86_64",
       "zig_target": "x86_64-windows-gnu",

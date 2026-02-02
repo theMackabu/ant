@@ -13,7 +13,8 @@ jobs:
   prepare:
     runs-on: ubuntu-latest
     if: |
-      github.ref_type != 'tag' && (
+      github.ref_type != 'tag' &&
+      !contains(github.event.head_commit.message, '[pr] ignore') && (
         github.event_name == 'workflow_dispatch' ||
         github.event_name == 'pull_request' ||
         (github.event_name == 'push' && contains(github.event.head_commit.message, '[ci] trigger build'))

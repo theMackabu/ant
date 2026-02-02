@@ -20,7 +20,6 @@ jobs:
     outputs:
       version: ${{ steps.build.outputs.version }}
     # runs-on/container/shell must be hardcoded
-    # keep in sync with versions.json targets
     runs-on: |-
       ${{ case(
         inputs.platform == 'linux-glibc-x64', 'ubuntu-24.04',
