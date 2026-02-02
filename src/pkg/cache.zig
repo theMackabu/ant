@@ -4,6 +4,9 @@ const c = @cImport({
   @cInclude("lmdb.h");
 });
 
+extern fn strip_npm_metadata(json_data: [*]const u8, json_len: usize, out_len: *usize) ?[*]u8;
+extern fn strip_metadata_free(ptr: [*]u8) void;
+
 pub const CacheEntry = struct {
   integrity: [64]u8,
   path: []const u8,
@@ -401,6 +404,12 @@ pub const CacheDB = struct {
   }
 
   pub fn insertMetadata(self: *CacheDB, name: []const u8, json_data: []const u8) !void {
+    var stripped_len: usize = 0;
+    const stripped_ptr = strip_npm_metadata(json_data.ptr, json_data.len, &stripped_len);
+    defer if (stripped_ptr) |p| strip_metadata_free(p);
+
+    const data_to_store = if (stripped_ptr) |p| p[0..stripped_len] else json_data;
+
     var txn: ?*c.MDB_txn = null;
     if (c.mdb_txn_begin(self.env, null, 0, &txn) != 0) {
       return error.InsertError;
@@ -410,13 +419,13 @@ pub const CacheDB = struct {
     const meta_key = try makeMetadataKey(self.allocator, name);
     defer self.allocator.free(meta_key);
 
-    const value_size = @sizeOf(i64) + json_data.len;
+    const value_size = @sizeOf(i64) + data_to_store.len;
     const value_buf = try self.allocator.alloc(u8, value_size);
     defer self.allocator.free(value_buf);
 
     const now: i64 = std.time.timestamp();
     @memcpy(value_buf[0..@sizeOf(i64)], std.mem.asBytes(&now));
-    @memcpy(value_buf[@sizeOf(i64)..], json_data);
+    @memcpy(value_buf[@sizeOf(i64)..], data_to_store);
 
     var key = c.MDB_val{
       .mv_size = meta_key.len,
@@ -429,7 +438,7 @@ pub const CacheDB = struct {
     };
 
     if (c.mdb_put(txn, self.dbi_metadata, &key, &value, 0) != 0) return error.InsertError;
-    if (c.mdb_txn_commit(txn) != 0)return error.InsertError;
+    if (c.mdb_txn_commit(txn) != 0) return error.InsertError;
   }
 
   pub fn prune(self: *CacheDB, max_age_days: u32) !u32 {

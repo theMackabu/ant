@@ -56,6 +56,11 @@ pub fn build(b: *std.Build) void {
 
   lib.use_llvm = true;
   if (!resolved_target.result.os.tag.isDarwin()) lib.use_lld = true;
+
+  lib.addCSourceFile(.{
+    .file = b.path("metadata.c"),
+    .flags = &.{ "-O3", "-DNDEBUG" },
+  });
   
   const version = getEnv("ANT_VERSION") orelse "unknown";
   const options = b.addOptions();
