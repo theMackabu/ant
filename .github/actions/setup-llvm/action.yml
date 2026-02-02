@@ -1,0 +1,88 @@
+name: Setup LLVM
+description: Install LLVM/Clang toolchain
+
+inputs:
+  version:
+    description: LLVM major version
+    required: true
+  os_type:
+    description: Target OS type (linux-glibc, linux-musl, macos, windows)
+    required: true
+
+outputs:
+  cc:
+    description: C compiler path
+    value: ${{ steps.paths.outputs.cc }}
+  cxx:
+    description: C++ compiler path
+    value: ${{ steps.paths.outputs.cxx }}
+  ar:
+    description: AR path
+    value: ${{ steps.paths.outputs.ar }}
+  ranlib:
+    description: RANLIB path
+    value: ${{ steps.paths.outputs.ranlib }}
+  strip:
+    description: Strip path
+    value: ${{ steps.paths.outputs.strip }}
+  ld:
+    description: Linker path
+    value: ${{ steps.paths.outputs.ld }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install LLVM (Linux glibc)
+      if: inputs.os_type == 'linux-glibc'
+      shell: bash
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+        echo "deb https://apt.llvm.org/jammy/ llvm-toolchain-jammy-${{ inputs.version }} main" > /etc/apt/sources.list.d/llvm.list
+        apt-get update
+        apt-get install -y clang-${{ inputs.version }} lld-${{ inputs.version }} llvm-${{ inputs.version }}
+
+    # linux-musl: LLVM installed via apk in workflow setup step
+    # macos: LLVM installed via brew in workflow setup step
+    # windows: Using MinGW toolchain
+
+    - name: Set output paths
+      id: paths
+      shell: bash
+      run: |
+        case "${{ inputs.os_type }}" in
+          linux-glibc)
+            echo "cc=clang-${{ inputs.version }}" >> $GITHUB_OUTPUT
+            echo "cxx=clang++-${{ inputs.version }}" >> $GITHUB_OUTPUT
+            echo "ar=llvm-ar-${{ inputs.version }}" >> $GITHUB_OUTPUT
+            echo "ranlib=llvm-ranlib-${{ inputs.version }}" >> $GITHUB_OUTPUT
+            echo "strip=llvm-strip-${{ inputs.version }}" >> $GITHUB_OUTPUT
+            echo "ld=lld-${{ inputs.version }}" >> $GITHUB_OUTPUT
+            ;;
+          linux-musl)
+            echo "cc=clang" >> $GITHUB_OUTPUT
+            echo "cxx=clang++" >> $GITHUB_OUTPUT
+            echo "ar=llvm-ar" >> $GITHUB_OUTPUT
+            echo "ranlib=llvm-ranlib" >> $GITHUB_OUTPUT
+            echo "strip=llvm-strip" >> $GITHUB_OUTPUT
+            echo "ld=lld" >> $GITHUB_OUTPUT
+            ;;
+          macos)
+            LLVM_PREFIX=$(brew --prefix llvm)
+            echo "cc=$LLVM_PREFIX/bin/clang" >> $GITHUB_OUTPUT
+            echo "cxx=$LLVM_PREFIX/bin/clang++" >> $GITHUB_OUTPUT
+            echo "ar=$LLVM_PREFIX/bin/llvm-ar" >> $GITHUB_OUTPUT
+            echo "ranlib=$LLVM_PREFIX/bin/llvm-ranlib" >> $GITHUB_OUTPUT
+            echo "strip=strip" >> $GITHUB_OUTPUT
+            echo "ld=" >> $GITHUB_OUTPUT
+            ;;
+          windows)
+            echo "cc=gcc" >> $GITHUB_OUTPUT
+            echo "cxx=g++" >> $GITHUB_OUTPUT
+            echo "ar=ar" >> $GITHUB_OUTPUT
+            echo "ranlib=ranlib" >> $GITHUB_OUTPUT
+            echo "strip=strip" >> $GITHUB_OUTPUT
+            echo "ld=" >> $GITHUB_OUTPUT
+            ;;
+        esac

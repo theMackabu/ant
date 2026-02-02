@@ -3,7 +3,26 @@
 
 #include <string.h>
 #include <stdint.h>
+#include <pthread.h>
 #include <argtable3.h>
+
+static char ant_semver_buf[32];
+static pthread_once_t ant_semver_once = PTHREAD_ONCE_INIT;
+
+static void ant_semver_init(void) {
+  const char *s = ANT_VERSION;
+  int d = 0, i = 0;
+  while (s[i] && d < 3 && i < 31) {
+    if (s[i] == '.') d++;
+    ant_semver_buf[i] = s[i]; i++;
+  }
+  ant_semver_buf[i - (d == 3)] = '\0';
+}
+
+const char *ant_semver(void) {
+  pthread_once(&ant_semver_once, ant_semver_init);
+  return ant_semver_buf;
+}
 
 uint64_t hash_key(const char *key, size_t len) {
   uint64_t hash = 14695981039346656037ULL;
@@ -73,7 +92,7 @@ int ant_version(void *argtable[]) {
     "                                                             /_/" RESET "   by @themackabu\n"
     RESET;
   
-  printf("%s", logo);
+  fputs(logo, stdout);
   
   printf("%s (released %s, %ld%s ago)\n", 
     ANT_VERSION, 
@@ -85,4 +104,12 @@ int ant_version(void *argtable[]) {
   arg_freetable(argtable, ARGTABLE_COUNT);
   
   return EXIT_SUCCESS;
+}
+
+void *try_oom(size_t size) {
+  void *p = malloc(size);
+  if (!p) {
+    fputs("Error: out of memory\n", stderr);
+    exit(EXIT_FAILURE);
+  } return p;
 }

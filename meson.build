@@ -34,6 +34,7 @@ lib_sources = files(
   'src/runtime.c',
   'src/snapshot.c',
   'src/esm/remote.c',
+  'src/cli/pkg.c',
 ) + files(module_files)
 
 include = include_directories('include')
@@ -51,12 +52,40 @@ libant = static_library(
   install: true
 )
 
+pkg_lib = custom_target(
+  'pkg_zig',
+  output: 'libpkg.a',
+  command: [
+    'sh', '-c',
+    '"$ZIG" build --build-file "$PKG_ZIG_DIR/build.zig" --prefix "$PKG_BUILD_DIR" && cp "$PKG_BUILD_DIR/lib/$PKG_LIB_NAME" "@OUTPUT@"'
+  ],
+  env: {
+    'ZIG': zig.full_path(),
+    'ANT_VERSION': ant_version,
+    
+    'PKG_ZIG_DIR': pkg_zig_dir, 'PKG_BUILD_DIR': pkg_build_dir,
+    'LMDB_INCLUDE': lmdb_include_path, 'ZLIB_INCLUDE': zlib_include_path,
+    'LIBUV_INCLUDE': libuv_include_path, 'YYJSON_INCLUDE': yyjson_include_path,
+    
+    'PKG_TARGET': host_machine.cpu_family() + '-' + host_machine.system(),
+    'PKG_LIB_NAME': host_machine.system() == 'windows' ? 'pkg.lib' : 'libpkg.a',
+  },
+  build_by_default: true,
+  build_always_stale: true
+)
+
+pkg_dep = declare_dependency(
+  link_with: [pkg_lib],
+  include_directories: include,
+  dependencies: [lmdb_dep, tlsuv_dep, libuv_dep, nghttp2_dep]
+)
+
 libant_dep = declare_dependency(
   link_with: libant,
   include_directories: [
     include, version_include, build_include
   ],
-  dependencies: ant_deps + [oxc_dep]
+  dependencies: ant_deps + [oxc_dep, pkg_dep]
 )
 
 link_args = []
@@ -71,13 +100,3 @@ executable(
   dependencies: libant_dep,
   link_args: link_args
 )
-
-if get_option('build_examples')
-  executable(
-    'embed_example',
-    files('examples/embed/embed.c'),
-    include_directories: [include, build_include],
-    link_with: libant,
-    dependencies: ant_deps + [oxc_dep]
-  )
-endif

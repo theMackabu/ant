@@ -1,0 +1,54 @@
+name: Setup Zig
+description: Install Zig compiler
+
+inputs:
+  version:
+    description: Zig version
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Determine platform
+      id: platform
+      shell: bash
+      run: |
+        case "${{ runner.os }}-${{ runner.arch }}" in
+          Linux-X64)   echo "slug=x86_64-linux" >> $GITHUB_OUTPUT; echo "ext=tar.xz" >> $GITHUB_OUTPUT ;;
+          Linux-ARM64) echo "slug=aarch64-linux" >> $GITHUB_OUTPUT; echo "ext=tar.xz" >> $GITHUB_OUTPUT ;;
+          macOS-X64)   echo "slug=x86_64-macos" >> $GITHUB_OUTPUT; echo "ext=tar.xz" >> $GITHUB_OUTPUT ;;
+          macOS-ARM64) echo "slug=aarch64-macos" >> $GITHUB_OUTPUT; echo "ext=tar.xz" >> $GITHUB_OUTPUT ;;
+          Windows-X64) echo "slug=x86_64-windows" >> $GITHUB_OUTPUT; echo "ext=zip" >> $GITHUB_OUTPUT ;;
+          *) echo "Unsupported platform: ${{ runner.os }}-${{ runner.arch }}" >&2; exit 1 ;;
+        esac
+        echo "install_path=$RUNNER_TEMP/zig" >> $GITHUB_OUTPUT
+
+    - name: Cache Zig
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.platform.outputs.install_path }}
+        key: zig-${{ steps.platform.outputs.slug }}-${{ inputs.version }}
+
+    - name: Download and install Zig
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        cd "$RUNNER_TEMP"
+        URL="https://ziglang.org/download/${{ inputs.version }}/zig-${{ steps.platform.outputs.slug }}-${{ inputs.version }}.${{ steps.platform.outputs.ext }}"
+        echo "Downloading: $URL"
+        curl -fSL -o zig.${{ steps.platform.outputs.ext }} "$URL"
+        ls -la zig.${{ steps.platform.outputs.ext }}
+        if [[ "${{ steps.platform.outputs.ext }}" == "zip" ]]; then
+          unzip -q zig.${{ steps.platform.outputs.ext }}
+        else
+          tar -xJf zig.${{ steps.platform.outputs.ext }}
+        fi
+
+        INSTALL_PATH="${{ steps.platform.outputs.install_path }}"
+        mkdir -p "$(dirname "$INSTALL_PATH")"
+        mv zig-${{ steps.platform.outputs.slug }}-${{ inputs.version }} "$INSTALL_PATH"
+
+    - name: Add to PATH
+      shell: bash
+      run: echo "${{ steps.platform.outputs.install_path }}" >> $GITHUB_PATH

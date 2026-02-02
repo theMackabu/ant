@@ -234,8 +234,7 @@ static void exit_raw_mode(rl_interface_t *iface) {
 #endif
 
 static void write_output(rl_interface_t *iface, const char *str) {
-  (void)iface;
-  printf("%s", str);
+  fputs(str, stdout);
   fflush(stdout);
 }
 
@@ -1201,7 +1200,7 @@ static jsval_t rl_clear_line(struct js *js, jsval_t *args, int nargs) {
     default: seq = "\033[2K\r"; break;
   }
   
-  printf("%s", seq);
+  fputs(seq, stdout);
   fflush(stdout);
   
   return js_true;

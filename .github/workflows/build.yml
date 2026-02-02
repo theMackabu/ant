@@ -13,65 +13,58 @@ jobs:
   prepare:
     runs-on: ubuntu-latest
     if: |
-      github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'pull_request' ||
-      (github.event_name == 'push' && contains(github.event.head_commit.message, '[ci] trigger build'))
+      github.ref_type != 'tag' &&
+      !contains(github.event.head_commit.message || '', '(ci-ignore)') &&
+      !contains(github.event.pull_request.title || '', '(ci-ignore)') && (
+        github.event_name == 'workflow_dispatch' ||
+        github.event_name == 'pull_request' ||
+        (github.event_name == 'push' && contains(github.event.head_commit.message, '[ci] trigger build'))
+      )
     outputs:
       timestamp: ${{ steps.timestamp.outputs.value }}
     steps:
       - id: timestamp
         run: echo "value=$(date +%s)" >> $GITHUB_OUTPUT
 
-  macos-aarch64:
+  build:
     needs: prepare
-    uses: ./.github/workflows/build-macos-aarch64.yml
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - linux-glibc-x64
+          - linux-glibc-aarch64
+          - linux-musl-x64
+          - linux-musl-aarch64
+          - macos-x64
+          - macos-aarch64
+          - macos-x64-mbedtls
+          - macos-aarch64-mbedtls
+          - windows-x64
+    uses: ./.github/workflows/build-platform.yml
     with:
+      platform: ${{ matrix.platform }}
       build_timestamp: ${{ needs.prepare.outputs.timestamp }}
 
-  macos-x64:
-    needs: prepare
-    uses: ./.github/workflows/build-macos-x64.yml
-    with:
-      build_timestamp: ${{ needs.prepare.outputs.timestamp }}
+  summary:
+    needs: build
+    runs-on: ubuntu-latest
+    if: ${{ !cancelled() && needs.build.result != 'skipped' }}
+    steps:
+      - name: Download version artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: version-*
+          path: versions
 
-  macos-aarch64-mbedtls:
-    needs: prepare
-    uses: ./.github/workflows/build-macos-aarch64-mbedtls.yml
-    with:
-      build_timestamp: ${{ needs.prepare.outputs.timestamp }}
-
-  macos-x64-mbedtls:
-    needs: prepare
-    uses: ./.github/workflows/build-macos-x64-mbedtls.yml
-    with:
-      build_timestamp: ${{ needs.prepare.outputs.timestamp }}
-
-  linux-glibc-x64:
-    needs: prepare
-    uses: ./.github/workflows/build-linux-glibc-x64.yml
-    with:
-      build_timestamp: ${{ needs.prepare.outputs.timestamp }}
-
-  linux-glibc-aarch64:
-    needs: prepare
-    uses: ./.github/workflows/build-linux-glibc-aarch64.yml
-    with:
-      build_timestamp: ${{ needs.prepare.outputs.timestamp }}
-
-  linux-musl-x64:
-    needs: prepare
-    uses: ./.github/workflows/build-linux-musl-x64.yml
-    with:
-      build_timestamp: ${{ needs.prepare.outputs.timestamp }}
-
-  linux-musl-aarch64:
-    needs: prepare
-    uses: ./.github/workflows/build-linux-musl-aarch64.yml
-    with:
-      build_timestamp: ${{ needs.prepare.outputs.timestamp }}
-
-  windows-x64:
-    needs: prepare
-    uses: ./.github/workflows/build-windows-x64.yml
-    with:
-      build_timestamp: ${{ needs.prepare.outputs.timestamp }}
+      - name: Generate summary
+        run: |
+          echo "## Build Versions" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Platform | Version |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|---------|" >> $GITHUB_STEP_SUMMARY
+          for dir in versions/version-*; do
+            platform=$(basename "$dir" | sed 's/version-//')
+            version=$(cat "$dir/version.txt" 2>/dev/null || echo "N/A")
+            echo "| $platform | \`$version\` |" >> $GITHUB_STEP_SUMMARY
+          done

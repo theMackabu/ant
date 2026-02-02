@@ -80,21 +80,36 @@ endif
 tlsuv_opts.append_compile_args('c', tlsuv_compile_args)
 tlsuv_dep = cmake.subproject('tlsuv', options: tlsuv_opts).dependency('tlsuv')
 
-pcre2_dep = subproject('pcre2', default_options: ['warning_level=0']).get_variable('libpcre2_8')
 uthash_dep = subproject('uthash').get_variable('uthash_dep')
 yyjson_dep = subproject('yyjson').get_variable('yyjson_dep')
 uuidv7_dep = subproject('uuidv7').get_variable('uuidv7_dep')
 argtable3_dep = subproject('argtable3').get_variable('argtable3_dep')
 minicoro_dep = subproject('minicoro').get_variable('minicoro_dep')
 
-zlib_dep = subproject('zlib-ng',
-  default_options: ['b_lto=false', 'warning_level=0']
-).get_variable('zlib_ng_dep')
+lmdb_dep = subproject('lmdb', default_options: [
+  'warning_level=0',
+  'programs=disabled'
+]).get_variable('lmdb_dep')
+
+zlib_dep = subproject('zlib-ng', default_options: [
+  'b_lto=false',
+  'warning_level=0'
+]).get_variable('zlib_ng_dep')
+
+nghttp2_dep = subproject('nghttp2', default_options: [
+  'warning_level=0'
+]).get_variable('libnghttp2_dep')
 
 libffi_dep = subproject('libffi', default_options: [
   'warning_level=0',
   'tests=false'
 ]).get_variable('ffi_dep')
+
+pcre2_dep = subproject('pcre2', default_options: [
+  'warning_level=0',
+  'grep=false',
+  'test=false'
+]).get_variable('libpcre2_8')
 
 cargo = find_program('cargo', required: true)
 cp = find_program('cp', required: true)
@@ -116,15 +131,47 @@ oxc_lib = custom_target(
   output: oxc_output_name,
   command: [
     'sh', '-c',
-    cargo.full_path() + ' build --release' + rust_target_arg + ' ' +
-    '--manifest-path ' + src_root / 'src' / 'strip' / 'Cargo.toml' + ' ' +
-    '--target-dir ' + meson.project_build_root() / 'oxc-target' +
-    ' && ' + cp.full_path() + ' ' + oxc_release_dir / oxc_lib_name + ' @OUTPUT@'
+    '"' + cargo.full_path() + '"' + ' build --release' + rust_target_arg + ' ' +
+    '--manifest-path "' + src_root / 'src' / 'strip' / 'Cargo.toml' + '" ' +
+    '--target-dir "' + meson.project_build_root() / 'oxc-target' + '"' +
+    ' && "' + cp.full_path() + '" "' + oxc_release_dir / oxc_lib_name + '" @OUTPUT@'
   ],
   build_by_default: true
 )
 
 oxc_dep = declare_dependency(link_with: oxc_lib)
+zig = find_program('zig', required: true)
+
+deps_info = {
+  'lmdb': {
+    'dir': 'openldap-LMDB_0.9.33',
+    'inc': 'libraries/liblmdb',
+  },
+  'yyjson': {
+    'dir': 'yyjson-0.12.0',
+    'inc': 'src',
+  },
+  'libuv': {
+    'dir': 'libuv-v1.51.0',
+    'inc': 'include',
+  },
+  'zlib-ng': {
+    'dir': 'zlib-ng-2.3.2',
+    'inc': '',
+    'build_dir': true,
+  },
+}
+
+subprojects_src = src_root / 'vendor'
+subprojects_build = meson.project_build_root() / 'vendor'
+
+lmdb_include_path = subprojects_src / deps_info['lmdb']['dir'] / deps_info['lmdb']['inc']
+yyjson_include_path = subprojects_src / deps_info['yyjson']['dir'] / deps_info['yyjson']['inc']
+libuv_include_path = subprojects_src / deps_info['libuv']['dir'] / deps_info['libuv']['inc']
+zlib_include_path = subprojects_build / deps_info['zlib-ng']['dir'] / deps_info['zlib-ng']['inc']
+
+pkg_zig_dir = src_root / 'src' / 'pkg'
+pkg_build_dir = meson.current_build_dir()
 
 ant_deps = [
   libffi_dep, uuid_dep,

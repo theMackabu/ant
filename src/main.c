@@ -2,13 +2,16 @@
 #include <arena.h>
 
 #include <oxc.h>
+#include <cli/pkg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <sys/stat.h>
 #include <argtable3.h>
 
 #include "ant.h"
+#include "config.h"
 #include "repl.h"
 #include "utils.h"
 #include "reactor.h"
@@ -48,6 +51,45 @@
 #include "modules/collections.h"
 
 int js_result = EXIT_SUCCESS;
+typedef int (*cmd_fn)(int argc, char **argv);
+
+typedef struct {
+  const char *name;
+  const char *alias;
+  const char *desc;
+  cmd_fn fn;
+} subcommand_t;
+
+static const subcommand_t subcommands[] = {
+  {"init",    NULL,      "Create a new package.json",              pkg_cmd_init},
+  {"install", "i",       "Install dependencies from lockfile",     pkg_cmd_install},
+  {"add",     "a",       "Add a package to dependencies",          pkg_cmd_add},
+  {"remove",  "rm",      "Remove a package from dependencies",     pkg_cmd_remove},
+  {"trust",   NULL,      "Run lifecycle scripts for packages",     pkg_cmd_trust},
+  {"run",     NULL,      "Run a script from package.json",         pkg_cmd_run},
+  {"exec",    "x",       "Run a command from node_modules/.bin",   pkg_cmd_exec},
+  {"why",     "explain", "Show why a package is installed",        pkg_cmd_why},
+  {"info",    NULL,      "Show package information from registry", pkg_cmd_info},
+  {"ls",      "list",    "List installed packages",                pkg_cmd_ls},
+  {"cache",   NULL,      "Manage the package cache",               pkg_cmd_cache},
+  {NULL, NULL, NULL, NULL}
+};
+
+static const subcommand_t *find_subcommand(const char *name) {
+  for (const subcommand_t *cmd = subcommands; cmd->name; cmd++) {
+    if (strcmp(name, cmd->name) == 0) return cmd;
+    if (cmd->alias && strcmp(name, cmd->alias) == 0) return cmd;
+  }
+  return NULL;
+}
+
+static void print_subcommands(void) {
+  printf("Commands:\n");
+  for (const subcommand_t *cmd = subcommands; cmd->name; cmd++) {
+    printf("  %-12s %s\n", cmd->name, cmd->desc);
+  }
+  printf("\n");
+}
 
 static void eval_code(struct js *js, struct arg_str *eval, struct arg_lit *print) {
   const char *script = eval->sval[0];
@@ -161,10 +203,50 @@ static int execute_module(struct js *js, const char *filename) {
   return EXIT_SUCCESS;
 }
 
-int main(int argc, char *argv[]) {  
+int main(int argc, char *argv[]) {
+  int filtered_argc = 0;
+  
+  const char *binary_name = strrchr(argv[0], '/');
+  binary_name = binary_name ? binary_name + 1 : argv[0];
+  
+  if (strcmp(binary_name, "antx") == 0) {
+    char **exec_argv = try_oom(sizeof(char*) * (argc + 2));
+    exec_argv[0] = argv[0]; exec_argv[1] = "x";
+    for (int i = 1; i < argc; i++) exec_argv[i + 1] = argv[i];
+    exec_argv[argc + 1] = NULL;
+    
+    int exitcode = pkg_cmd_exec(argc, exec_argv + 1);
+    free(exec_argv); return exitcode;
+  }
+  
+  char **filtered_argv = try_oom(sizeof(char*) * argc);
+  for (int i = 0; i < argc; i++) {
+    if (strcmp(argv[i], "--verbose") == 0) pkg_verbose = true;
+    else if (strcmp(argv[i], "--no-color") == 0) io_no_color = true;
+    else filtered_argv[filtered_argc++] = argv[i];
+  }
+  
+  if (filtered_argc >= 2 && filtered_argv[1][0] != '-') {
+    const subcommand_t *cmd = find_subcommand(filtered_argv[1]);
+    if (cmd) {
+      int exitcode = cmd->fn(filtered_argc - 1, filtered_argv + 1);
+      free(filtered_argv);
+      return exitcode;
+    }
+    
+    if (pkg_script_exists("package.json", filtered_argv[1])) {
+      int exitcode = pkg_cmd_run(filtered_argc, filtered_argv);
+      free(filtered_argv);
+      return exitcode;
+    }
+  }
+  
+  argc = filtered_argc;
+  argv = filtered_argv;
+
   struct arg_lit *help = arg_lit0("h", "help", "display this help and exit");
   struct arg_lit *version = arg_lit0("v", "version", "display version information and exit");
-  struct arg_lit *no_color = arg_lit0(NULL, "no-color", "disable colored output");
+  struct arg_lit *version_raw = arg_lit0(NULL, "version-raw", "raw version number for scripts");
   struct arg_str *eval = arg_str0("e", "eval", "<script>", "evaluate script");
   struct arg_lit *print = arg_lit0("p", "print", "evaluate script and print result");
   struct arg_int *initial_mem = arg_int0(NULL, "initial-mem", "<size>", "initial memory size in KB (default: 16kb)");
@@ -174,36 +256,48 @@ int main(int argc, char *argv[]) {
   struct arg_end *end = arg_end(20);
   
   void *argtable[] = {
-    help, version, no_color, eval,
-    print, initial_mem, max_mem,
+    help, version, version_raw,
+    eval, print, initial_mem, max_mem,
     localstorage_file, file, end
   };
-  
+
   int nerrors = arg_parse(argc, argv, argtable);
   
   if (help->count > 0) {
     printf("Ant sized JavaScript\n\n");
-    printf("Usage: ant [options] [module.js]\n\n");
+    printf("Usage: ant [options] [module.js]\n");
+    printf("       ant <command> [args]\n\n");
+    print_subcommands();
     printf("If no module file is specified, ant starts in REPL mode.\n\n");
     printf("Options:\n");
-    arg_print_glossary(stdout, argtable, "  %-25s %s\n");
+    printf("  %-28s %s\n", "--verbose", "enable verbose output");
+    printf("  %-28s %s\n", "--no-color", "disable colored output");
+    arg_print_glossary(stdout, argtable, "  %-28s %s\n");
     arg_freetable(argtable, ARGTABLE_COUNT);
+    free(filtered_argv);
     return EXIT_SUCCESS;
   }
   
-  if (version->count > 0) return ant_version(argtable);
+  if (version_raw->count > 0) {
+    fputs(ANT_VERSION "\n", stdout);
+    arg_freetable(argtable, ARGTABLE_COUNT);
+    free(filtered_argv); return EXIT_SUCCESS;
+  }
+  
+  if (version->count > 0) {
+    int res = ant_version(argtable);
+    free(filtered_argv); return res;
+  }
   
   if (nerrors > 0) {
     arg_print_errors(stdout, end, "ant");
     printf("Try 'ant --help' for more information.\n");
     arg_freetable(argtable, ARGTABLE_COUNT);
-    return EXIT_FAILURE;
+    free(filtered_argv); return EXIT_FAILURE;
   }
   
   bool repl_mode = (file->count == 0 && eval->count == 0);
   const char *module_file = repl_mode ? NULL : (file->count > 0 ? file->filename[0] : NULL);
-  
-  if (no_color->count > 0) io_no_color = true;
   
   struct js *js = js_create_dynamic(
     initial_mem->count > 0 ? (size_t)initial_mem->ival[0] * 1024 : 0,
@@ -213,6 +307,7 @@ int main(int argc, char *argv[]) {
   if (js == NULL) {
     fprintf(stderr, "Error: Failed to allocate JavaScript runtime\n");
     arg_freetable(argtable, ARGTABLE_COUNT);
+    free(filtered_argv);
     return EXIT_FAILURE;
   }
 
@@ -270,7 +365,7 @@ int main(int argc, char *argv[]) {
     if (stat(module_file, &path_stat) == 0 && S_ISDIR(path_stat.st_mode)) {
       size_t len = strlen(module_file);
       int has_slash = (len > 0 && module_file[len - 1] == '/');
-      resolved_file = malloc(len + 10 + (has_slash ? 0 : 1));
+      resolved_file = try_oom(len + 10 + (has_slash ? 0 : 1));
       sprintf(resolved_file, "%s%sindex.js", module_file, has_slash ? "" : "/");
       module_file = resolved_file;
     }
@@ -283,6 +378,7 @@ int main(int argc, char *argv[]) {
     
   js_destroy(js);
   arg_freetable(argtable, ARGTABLE_COUNT);
+  free(filtered_argv);
   
   return js_result;
 }
