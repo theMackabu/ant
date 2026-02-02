@@ -77,7 +77,6 @@ runs:
           -DCMAKE_BUILD_TYPE=MinSizeRel
         cmake --build build
         cmake --install build
-        # Create symlink for pkgconfig (llhttp installs as libllhttp.pc)
         ln -sf ${{ inputs.prefix }}/lib/pkgconfig/libllhttp.pc ${{ inputs.prefix }}/lib/pkgconfig/llhttp.pc 2>/dev/null || true
 
     - name: Build libuv
