@@ -294,7 +294,7 @@ pub const TarParser = struct {
           path = path[self.strip_prefix_len..];
         }
 
-        validatePath(path) catch {
+        if (path.len > 0) validatePath(path) catch {
           return .{ .kind = .{ .err = ExtractError.InvalidPath }, .consumed = to_copy };
         };
 
