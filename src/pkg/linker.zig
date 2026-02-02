@@ -542,10 +542,9 @@ pub const Linker = struct {
     defer source.close();
 
     const stat = source.stat() catch return error.IoError;
-    const mode = if (comptime builtin.os.tag != .windows) stat.mode else {};
-
-    var dest = dest_dir.createFile(name, .{ .mode = mode }) catch return error.IoError;
-    defer dest.close();
+    var dest = dest_dir.createFile(name, 
+      if (comptime builtin.os.tag != .windows) .{ .mode = stat.mode } else .{}
+    ) catch return error.IoError; defer dest.close();
 
     var buf: [64 * 1024]u8 = undefined;
     while (true) {
