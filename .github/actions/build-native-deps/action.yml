@@ -46,7 +46,7 @@ runs:
       uses: actions/cache@v4
       with:
         path: ${{ inputs.prefix }}
-        key: deps-${{ runner.os }}-${{ runner.arch }}-${{ inputs.deps }}-llhttp${{ inputs.llhttp_version }}-libuv${{ inputs.libuv_version }}-libsodium${{ inputs.libsodium_version }}-mbedtls${{ inputs.mbedtls_version }}-zlib${{ inputs.zlib_version }}-v1
+        key: deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/versions.json') }}-v1
 
     - name: Prepare build environment
       if: steps.cache.outputs.cache-hit != 'true'
