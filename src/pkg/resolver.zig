@@ -286,6 +286,10 @@ pub const VersionInfo = struct {
       self.allocator.free(entry.value_ptr.*);
     }
     self.peer_dependencies.deinit();
+    var peer_meta_iter = self.peer_dependencies_meta.iterator();
+    while (peer_meta_iter.next()) |entry| {
+      self.allocator.free(entry.key_ptr.*);
+    }
     self.peer_dependencies_meta.deinit();
     if (self.os) |o| self.allocator.free(o);
     if (self.cpu) |c| self.allocator.free(c);
