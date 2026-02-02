@@ -194,4 +194,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.config.outputs.artifact_name }}
-          path: build/${{ steps.config.outputs.binary_name }}
+          path: |
+            build/${{ steps.config.outputs.binary_name }}
+            build/*.dll

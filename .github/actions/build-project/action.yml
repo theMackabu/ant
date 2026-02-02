@@ -112,3 +112,14 @@ runs:
     - name: Strip binary
       shell: bash
       run: ${{ inputs.strip }} build/${{ inputs.binary_name }}
+
+    - name: Bundle Windows DLLs
+      if: runner.os == 'Windows'
+      shell: bash
+      run: |
+        MINGW_BIN="/mingw64/bin"
+        cp "$MINGW_BIN/libssl-3-x64.dll" build/
+        cp "$MINGW_BIN/libcrypto-3-x64.dll" build/
+        cp "$MINGW_BIN/libsodium-26.dll" build/
+        echo "Bundled DLLs:"
+        ls -la build/*.dll
