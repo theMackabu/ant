@@ -1164,7 +1164,9 @@ pub const Fetcher = struct {
         var attempts: usize = 0;
         while (attempts < NUM_META_CONNECTIONS) : (attempts += 1) {
           if (self.meta_clients[conn_idx]) |c| {
-            if (c.h2_session != null and c.connected == 1 and c.request_count < MAX_PENDING_REQUESTS - 1) client = c; break;
+            if (c.h2_session != null and c.connected == 1 and c.request_count < MAX_PENDING_REQUESTS - 1) {
+              client = c; break;
+            }
           }
           conn_idx = (conn_idx + 1) % NUM_META_CONNECTIONS;
         }
@@ -1395,9 +1397,13 @@ pub const Fetcher = struct {
         var attempts: usize = 0;
         while (attempts < NUM_META_CONNECTIONS) : (attempts += 1) {
           if (self.meta_clients[conn_idx]) |c| {
-            if (c.h2_session != null and c.connected == 1 and c.request_count < MAX_PENDING_REQUESTS - 1) client = c; break;
-          } conn_idx = (conn_idx + 1) % NUM_META_CONNECTIONS;
-        } if (client == null) continue;
+            if (c.h2_session != null and c.connected == 1 and c.request_count < MAX_PENDING_REQUESTS - 1) {
+              client = c; break;
+            }
+          }
+          conn_idx = (conn_idx + 1) % NUM_META_CONNECTIONS;
+        }
+        if (client == null) continue;
 
         const c = client.?;
         const session = c.h2_session orelse continue;
