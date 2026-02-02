@@ -320,9 +320,9 @@ pub const VersionInfo = struct {
       else => "unknown",
     };
     
-    const current_libc: ?[]const u8 = comptime if (builtin.abi == .gnu or builtin.abi == .gnueabi or builtin.abi == .gnueabihf) "glibc"
+    const current_libc: ?[]const u8 = comptime if (builtin.os.tag != .linux) null
+    else if (builtin.abi == .gnu or builtin.abi == .gnueabi or builtin.abi == .gnueabihf) "glibc"
     else if (builtin.abi == .musl or builtin.abi == .musleabi or builtin.abi == .musleabihf) "musl"
-    else if (builtin.os.tag == .macos or builtin.os.tag == .ios) "glibc"
     else null;
 
     if (self.os) |os_filter| if (!matchesFilter(os_filter, current_os)) return false;
