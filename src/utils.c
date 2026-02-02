@@ -3,20 +3,25 @@
 
 #include <string.h>
 #include <stdint.h>
+#include <pthread.h>
 #include <argtable3.h>
 
-const char *ant_semver(void) {
-  static char buf[32]; static int done;
-  if (!done) {
-    const char *s = ANT_VERSION;
-    int d = 0, i = 0;
-    while (s[i] && d < 3 && i < 31) {
-      if (s[i] == '.') d++;
-      buf[i] = s[i]; i++;
-    }
-    buf[i - (d == 3)] = '\0'; done = 1;
+static char ant_semver_buf[32];
+static pthread_once_t ant_semver_once = PTHREAD_ONCE_INIT;
+
+static void ant_semver_init(void) {
+  const char *s = ANT_VERSION;
+  int d = 0, i = 0;
+  while (s[i] && d < 3 && i < 31) {
+    if (s[i] == '.') d++;
+    ant_semver_buf[i] = s[i]; i++;
   }
-  return buf;
+  ant_semver_buf[i - (d == 3)] = '\0';
+}
+
+const char *ant_semver(void) {
+  pthread_once(&ant_semver_once, ant_semver_init);
+  return ant_semver_buf;
 }
 
 uint64_t hash_key(const char *key, size_t len) {
