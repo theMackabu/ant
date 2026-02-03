@@ -3,6 +3,7 @@
 
 #include <uthash.h>
 #include "types.h"
+#include "gc.h"
 
 typedef struct map_entry {
   char *key;
@@ -47,9 +48,21 @@ typedef struct set_iterator_state {
   iter_type_t type;
 } set_iterator_state_t;
 
+typedef struct map_registry_entry {
+  map_entry_t **head;
+  jsoff_t obj_offset;
+} map_registry_entry_t;
+
+typedef struct set_registry_entry {
+  set_entry_t **head;
+  jsoff_t obj_offset;
+} set_registry_entry_t;
+
 void init_collections_module(void);
 void cleanup_collections_module(void);
-void collections_gc_update_roots(void (*op_val)(void *, jsval_t *), void *ctx);
+
+void collections_gc_reserve_roots(GC_OP_VAL_ARGS);
+void collections_gc_update_roots(jsoff_t (*fwd_off)(void *ctx, jsoff_t old), GC_OP_VAL_ARGS);
 
 map_entry_t **get_map_from_obj(ant_t *js, jsval_t obj);
 set_entry_t **get_set_from_obj(ant_t *js, jsval_t obj);

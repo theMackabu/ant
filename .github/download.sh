@@ -37,6 +37,7 @@ mkdir -p "$OUT_DIR"
 
 gh api "repos/${REPO}/actions/runs/${RUN_ID}/artifacts" --jq '.artifacts[] | "\(.id) \(.name)"' | \
 while read -r id name; do
+  if [[ "$name" == version-* ]]; then continue; fi
   echo "  Downloading $name..."
   gh api "repos/${REPO}/actions/artifacts/${id}/zip" > "${OUT_DIR}/${name}.zip"
 done

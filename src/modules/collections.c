@@ -7,15 +7,16 @@
 #include "runtime.h"
 #include "internal.h"
 #include "arena.h"
+#include "gc.h"
 
 #include "modules/collections.h"
 #include "modules/symbol.h"
 
-static map_entry_t ***map_registry_heads = NULL;
+static map_registry_entry_t *map_registry = NULL;
 static size_t map_registry_count = 0;
 static size_t map_registry_cap = 0;
 
-static set_entry_t ***set_registry_heads = NULL;
+static set_registry_entry_t *set_registry = NULL;
 static size_t set_registry_count = 0;
 static size_t set_registry_cap = 0;
 
@@ -23,28 +24,32 @@ static jsval_t iter_return_this(ant_t *js, jsval_t *args, int nargs) {
   return js->this_val;
 }
 
-static void register_map(map_entry_t **head) {
+static void register_map(map_entry_t **head, jsoff_t obj_offset) {
   if (!head) return;
   if (map_registry_count >= map_registry_cap) {
     size_t new_cap = map_registry_cap ? map_registry_cap * 2 : 64;
-    map_entry_t ***new_reg = realloc(map_registry_heads, new_cap * sizeof(map_entry_t **));
+    map_registry_entry_t *new_reg = realloc(map_registry, new_cap * sizeof(map_registry_entry_t));
     if (!new_reg) return;
-    map_registry_heads = new_reg;
+    map_registry = new_reg;
     map_registry_cap = new_cap;
   }
-  map_registry_heads[map_registry_count++] = head;
+  map_registry[map_registry_count].head = head;
+  map_registry[map_registry_count].obj_offset = obj_offset;
+  map_registry_count++;
 }
 
-static void register_set(set_entry_t **head) {
+static void register_set(set_entry_t **head, jsoff_t obj_offset) {
   if (!head) return;
   if (set_registry_count >= set_registry_cap) {
     size_t new_cap = set_registry_cap ? set_registry_cap * 2 : 64;
-    set_entry_t ***new_reg = realloc(set_registry_heads, new_cap * sizeof(set_entry_t **));
+    set_registry_entry_t *new_reg = realloc(set_registry, new_cap * sizeof(set_registry_entry_t));
     if (!new_reg) return;
-    set_registry_heads = new_reg;
+    set_registry = new_reg;
     set_registry_cap = new_cap;
   }
-  set_registry_heads[set_registry_count++] = head;
+  set_registry[set_registry_count].head = head;
+  set_registry[set_registry_count].obj_offset = obj_offset;
+  set_registry_count++;
 }
 
 static const char *jsval_to_key(ant_t *js, jsval_t val) {
@@ -716,6 +721,7 @@ static jsval_t finreg_unregister(ant_t *js, jsval_t *args, int nargs) {
 
 static jsval_t builtin_Map(ant_t *js, jsval_t *args, int nargs) {
   jsval_t map_obj = js_mkobj(js);
+  jsoff_t obj_offset = (jsoff_t)vdata(map_obj);
   
   jsval_t map_proto = js_get_ctor_proto(js, "Map", 3);
   if (is_special_object(map_proto)) js_set_proto(js, map_obj, map_proto);
@@ -724,7 +730,7 @@ static jsval_t builtin_Map(ant_t *js, jsval_t *args, int nargs) {
   if (!map_head) return js_mkerr(js, "out of memory");
   *map_head = NULL;
   
-  register_map(map_head);
+  register_map(map_head, obj_offset);
   js_set_slot(js, map_obj, SLOT_MAP, ANT_PTR(map_head));
   
   if (nargs == 0 || vtype(args[0]) != T_ARR) return map_obj;
@@ -762,6 +768,7 @@ static jsval_t builtin_Map(ant_t *js, jsval_t *args, int nargs) {
 
 static jsval_t builtin_Set(ant_t *js, jsval_t *args, int nargs) {
   jsval_t set_obj = js_mkobj(js);
+  jsoff_t obj_offset = (jsoff_t)vdata(set_obj);
   
   jsval_t set_proto = js_get_ctor_proto(js, "Set", 3);
   if (is_special_object(set_proto)) js_set_proto(js, set_obj, set_proto);
@@ -770,7 +777,7 @@ static jsval_t builtin_Set(ant_t *js, jsval_t *args, int nargs) {
   if (!set_head) return js_mkerr(js, "out of memory");
   *set_head = NULL;
   
-  register_set(set_head);
+  register_set(set_head, obj_offset);
   js_set_slot(js, set_obj, SLOT_SET, ANT_PTR(set_head));
   
   if (nargs == 0 || vtype(args[0]) != T_ARR) return set_obj;
@@ -976,9 +983,9 @@ void init_collections_module(void) {
   js_set(js, glob, "FinalizationRegistry", js_obj_to_func(finreg_ctor));
 }
 
-void collections_gc_update_roots(void (*op_val)(void *, jsval_t *), void *ctx) {
+void collections_gc_reserve_roots(void (*op_val)(void *, jsval_t *), void *ctx) {
   for (size_t i = 0; i < map_registry_count; i++) {
-    map_entry_t **head = map_registry_heads[i];
+    map_entry_t **head = map_registry[i].head;
     if (head && *head) {
       map_entry_t *entry, *tmp;
       HASH_ITER(hh, *head, entry, tmp) op_val(ctx, &entry->value);
@@ -986,7 +993,7 @@ void collections_gc_update_roots(void (*op_val)(void *, jsval_t *), void *ctx) {
   }
   
   for (size_t i = 0; i < set_registry_count; i++) {
-    set_entry_t **head = set_registry_heads[i];
+    set_entry_t **head = set_registry[i].head;
     if (head && *head) {
       set_entry_t *entry, *tmp;
       HASH_ITER(hh, *head, entry, tmp) op_val(ctx, &entry->value);
@@ -994,28 +1001,95 @@ void collections_gc_update_roots(void (*op_val)(void *, jsval_t *), void *ctx) {
   }
 }
 
-#define CLEANUP_REGISTRY(type, heads, count, cap) do { \
-  for (size_t i = 0; i < count; i++) { \
-    type##_entry_t **head = heads[i]; \
-    if (head && *head) { \
-      type##_entry_t *entry, *tmp; \
-      HASH_ITER(hh, *head, entry, tmp) { \
-        HASH_DEL(*head, entry); \
-        free(entry->key); \
-        free(entry); \
-      } \
-    } \
-    free(head); \
-  } \
-  free(heads); \
-  heads = NULL; \
-  count = 0; \
-  cap = 0; \
-} while(0)
+static void free_map_entries(map_entry_t **head) {
+  if (!head || !*head) return;
+  map_entry_t *entry, *tmp;
+  HASH_ITER(hh, *head, entry, tmp) {
+    HASH_DEL(*head, entry);
+    free(entry->key);
+    free(entry);
+  }
+}
+
+static void free_set_entries(set_entry_t **head) {
+  if (!head || !*head) return;
+  set_entry_t *entry, *tmp;
+  HASH_ITER(hh, *head, entry, tmp) {
+    HASH_DEL(*head, entry);
+    free(entry->key);
+    free(entry);
+  }
+}
+
+void collections_gc_update_roots(jsoff_t (*fwd_off)(void *ctx, jsoff_t old), GC_OP_VAL_ARGS) {
+  size_t write_idx = 0;
+  
+  for (size_t i = 0; i < map_registry_count; i++) {
+    jsoff_t old_off = map_registry[i].obj_offset;
+    jsoff_t new_off = fwd_off(ctx, old_off);
+    
+    if (new_off == old_off && old_off != 0) {
+      free_map_entries(map_registry[i].head);
+      free(map_registry[i].head);
+      continue;
+    }
+    
+    map_registry[i].obj_offset = new_off;
+    
+    map_entry_t **head = map_registry[i].head;
+    if (head && *head) {
+      map_entry_t *entry, *tmp;
+      HASH_ITER(hh, *head, entry, tmp) op_val(ctx, &entry->value);
+    }
+    
+    if (write_idx != i) map_registry[write_idx] = map_registry[i];
+    write_idx++;
+  }
+  map_registry_count = write_idx;
+  
+  write_idx = 0;
+  for (size_t i = 0; i < set_registry_count; i++) {
+    jsoff_t old_off = set_registry[i].obj_offset;
+    jsoff_t new_off = fwd_off(ctx, old_off);
+    
+    if (new_off == old_off && old_off != 0) {
+      free_set_entries(set_registry[i].head);
+      free(set_registry[i].head);
+      continue;
+    }
+    
+    set_registry[i].obj_offset = new_off;
+    
+    set_entry_t **head = set_registry[i].head;
+    if (head && *head) {
+      set_entry_t *entry, *tmp;
+      HASH_ITER(hh, *head, entry, tmp) op_val(ctx, &entry->value);
+    }
+    
+    if (write_idx != i) set_registry[write_idx] = set_registry[i];
+    write_idx++;
+  }
+  set_registry_count = write_idx;
+}
 
 void cleanup_collections_module(void) {
-  CLEANUP_REGISTRY(map, map_registry_heads, map_registry_count, map_registry_cap);
-  CLEANUP_REGISTRY(set, set_registry_heads, set_registry_count, set_registry_cap);
+  for (size_t i = 0; i < map_registry_count; i++) {
+    free_map_entries(map_registry[i].head);
+    free(map_registry[i].head);
+  }
+  free(map_registry);
+  map_registry = NULL;
+  map_registry_count = 0;
+  map_registry_cap = 0;
+  
+  for (size_t i = 0; i < set_registry_count; i++) {
+    free_set_entries(set_registry[i].head);
+    free(set_registry[i].head);
+  }
+  free(set_registry);
+  set_registry = NULL;
+  set_registry_count = 0;
+  set_registry_cap = 0;
 }
 
 #undef CLEANUP_REGISTRY

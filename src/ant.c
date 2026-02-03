@@ -21444,7 +21444,7 @@ static void gc_roots_common(gc_off_op_t op_off, gc_val_op_t op_val, gc_cb_ctx_t 
   child_process_gc_update_roots(op_val, c);
   readline_gc_update_roots(op_val, c);
   process_gc_update_roots(op_val, c);
-  collections_gc_update_roots(op_val, c);
+  collections_gc_reserve_roots(op_val, c);
 
   for (int i = 0; i < c->js->for_let_stack_len; i++) {
     op_val(c, &c->js->for_let_stack[i].body_scope);
@@ -21563,6 +21563,7 @@ void js_gc_update_roots(GC_UPDATE_ARGS) {
     }
 
   memset(intern_prop_cache, 0, sizeof(intern_prop_cache));
+  collections_gc_update_roots(fwd_off, gc_update_val_cb, &cb_ctx);
   
   #undef FWD_OFF
   #undef FWD_VAL
