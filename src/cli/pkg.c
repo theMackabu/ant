@@ -1255,15 +1255,17 @@ static void print_ls_package(const char *name, void *user_data) {
 
 typedef struct {
   int count;
-} global_ls_ctx_t;
+  int total;
+} pkg_ls_ctx_t;
 
-static void print_global_package(const char *name, const char *version, void *user_data) {
-  global_ls_ctx_t *ctx = (global_ls_ctx_t *)user_data;
-  printf("  %s%s%s@%s%s%s\n", C_BOLD, name, C_RESET, C_DIM, version, C_RESET);
+static void print_pkg_cb(const char *name, const char *version, void *user_data) {
+  pkg_ls_ctx_t *ctx = (pkg_ls_ctx_t *)user_data;
   ctx->count++;
+  const char *prefix = (ctx->count == ctx->total) ? "└──" : "├──";
+  printf("%s%s%s %s%s%s@%s\n", C_DIM, prefix, C_RESET, C_BOLD, name, C_RESET, version);
 }
 
-static int cmd_ls_global(void) {
+static int cmd_ls(bool is_global) {
   pkg_options_t opts = { .verbose = pkg_verbose };
   pkg_context_t *ctx = pkg_init(&opts);
   if (!ctx) {
@@ -1271,111 +1273,49 @@ static int cmd_ls_global(void) {
     return EXIT_FAILURE;
   }
   
-  printf("%sGlobal packages%s:\n", C_BOLD, C_RESET);
+  char path_buf[PATH_MAX];
+  const char *base_path;
+  const char *nm_path;
+  char nm_full_path[PATH_MAX];
   
-  global_ls_ctx_t ls_ctx = { .count = 0 };
-  pkg_error_t err = pkg_list_global(ctx, print_global_package, &ls_ctx);
-  
-  if (err == PKG_NOT_FOUND || ls_ctx.count == 0) {
-    printf("  (none)\n");
-  } else if (err != PKG_OK) {
-    fprintf(stderr, "Error: %s\n", pkg_error_string(ctx));
-    pkg_free(ctx);
-    return EXIT_FAILURE;
+  if (is_global) {
+    base_path = get_global_dir();
+    snprintf(nm_full_path, sizeof(nm_full_path), "%s/node_modules", base_path);
+    nm_path = nm_full_path;
   } else {
-    printf("\n%s%d%s package%s\n", C_GREEN, ls_ctx.count, C_RESET, ls_ctx.count == 1 ? "" : "s");
+    if (!getcwd(path_buf, sizeof(path_buf))) {
+      fprintf(stderr, "Error: Could not get current directory\n");
+      pkg_free(ctx);
+      return EXIT_FAILURE;
+    }
+    base_path = path_buf;
+    nm_path = "node_modules";
   }
   
-  pkg_free(ctx);
-  return EXIT_SUCCESS;
-}
-
-static int cmd_ls(const char *nm_path, bool is_global) {
-  struct stat st;
-  if (stat(nm_path, &st) != 0) {
-    if (is_global) {
-      printf("No global packages installed.\n");
-    } else {
-      printf("No packages installed. Run 'ant install' first.\n");
-    }
+  uint32_t direct = is_global ? pkg_count_global(ctx) : pkg_count_local(ctx);
+  uint32_t total = pkg_count_installed(nm_path);
+  
+  printf("%s%s/node_modules%s", C_DIM, base_path, C_RESET);
+  
+  if (direct == 0) {
+    printf("\n  (no package.json)\n");
+    pkg_free(ctx);
     return EXIT_SUCCESS;
   }
   
-  if (is_global) {
-    printf("%sGlobal packages%s:\n", C_BOLD, C_RESET);
-  } else {
-    printf("%sInstalled packages%s:\n", C_BOLD, C_RESET);
+  if (total == 0) {
+    printf("\n  (empty)\n");
+    pkg_free(ctx);
+    return EXIT_SUCCESS;
   }
   
-  ls_ctx_t ctx = { .count = 0, .show_path = false, .nm_path = nm_path };
+  printf(" %s(%u)%s\n", C_DIM, total, C_RESET);
   
-  if (is_global) {
-    const char *global_dir = get_global_dir();
-    char pkg_json_path[4096];
-    snprintf(pkg_json_path, sizeof(pkg_json_path), "%s/package.json", global_dir);
-    
-    yyjson_doc *doc = yyjson_read_file(pkg_json_path, 0, NULL, NULL);
-    if (!doc) {
-      printf("  (none)\n");
-      return EXIT_SUCCESS;
-    }
-    
-    yyjson_val *root = yyjson_doc_get_root(doc);
-    yyjson_val *deps = yyjson_obj_get(root, "dependencies");
-    
-    if (!deps || !yyjson_is_obj(deps)) {
-      yyjson_doc_free(doc);
-      printf("  (none)\n");
-      return EXIT_SUCCESS;
-    }
-    
-    yyjson_obj_iter iter;
-    yyjson_obj_iter_init(deps, &iter);
-    yyjson_val *key;
-    while ((key = yyjson_obj_iter_next(&iter)) != NULL) {
-      const char *pkg_name = yyjson_get_str(key);
-      if (pkg_name) print_ls_package(pkg_name, &ctx);
-    }
-    
-    yyjson_doc_free(doc);
-  } else {
-    DIR *dir = opendir(nm_path);
-    if (!dir) {
-      printf("  (none)\n");
-      return EXIT_SUCCESS;
-    }
-    
-    struct dirent *entry;
-    while ((entry = readdir(dir)) != NULL) {
-      if (entry->d_name[0] == '.') continue;
-      
-      if (entry->d_name[0] == '@') {
-        char scope_path[4096];
-        snprintf(scope_path, sizeof(scope_path), "%s/%s", nm_path, entry->d_name);
-        DIR *scope_dir = opendir(scope_path);
-        if (scope_dir) {
-          struct dirent *scoped;
-          while ((scoped = readdir(scope_dir)) != NULL) {
-            if (scoped->d_name[0] == '.') continue;
-            char full_name[512];
-            snprintf(full_name, sizeof(full_name), "%s/%s", entry->d_name, scoped->d_name);
-            print_ls_package(full_name, &ctx);
-          }
-          closedir(scope_dir);
-        }
-      } else {
-        print_ls_package(entry->d_name, &ctx);
-      }
-    }
-    closedir(dir);
-  }
+  pkg_ls_ctx_t ls_ctx = { .count = 0, .total = (int)direct };
+  if (is_global) pkg_list_global(ctx, print_pkg_cb, &ls_ctx);
+  else pkg_list_local(ctx, print_pkg_cb, &ls_ctx);
   
-  if (ctx.count == 0) {
-    printf("  (none)\n");
-  } else {
-    printf("\n%s%d%s package%s\n", C_GREEN, ctx.count, C_RESET, ctx.count == 1 ? "" : "s");
-  }
-  
+  pkg_free(ctx);
   return EXIT_SUCCESS;
 }
 
@@ -1395,11 +1335,7 @@ int pkg_cmd_ls(int argc, char **argv) {
   } else if (nerrors > 0) {
     arg_print_errors(stdout, end, "ant ls");
     exitcode = EXIT_FAILURE;
-  } else if (global->count > 0) {
-    exitcode = cmd_ls_global();
-  } else {
-    exitcode = cmd_ls("node_modules", false);
-  }
+  } else exitcode = cmd_ls(global->count > 0);
   
   arg_freetable(argtable, sizeof(argtable)/sizeof(argtable[0]));
   return exitcode;

@@ -114,13 +114,13 @@ typedef struct {
 } pkg_lifecycle_script_t;
 
 uint32_t pkg_get_added_count(const pkg_context_t *ctx);
+uint32_t pkg_count_installed(const char *node_modules_path);
+uint32_t pkg_get_lifecycle_script_count(const pkg_context_t *ctx);
 
 pkg_error_t pkg_discover_lifecycle_scripts(
   pkg_context_t *ctx,
   const char *node_modules_path
 );
-
-uint32_t pkg_get_lifecycle_script_count(const pkg_context_t *ctx);
 
 pkg_error_t pkg_get_lifecycle_script(
   const pkg_context_t *ctx,
@@ -315,7 +315,16 @@ typedef void (*pkg_global_list_callback)(
   void *user_data
 );
 
+uint32_t pkg_count_global(pkg_context_t *ctx);
+uint32_t pkg_count_local(pkg_context_t *ctx);
+
 pkg_error_t pkg_list_global(
+  pkg_context_t *ctx,
+  pkg_global_list_callback callback,
+  void *user_data
+);
+
+pkg_error_t pkg_list_local(
   pkg_context_t *ctx,
   pkg_global_list_callback callback,
   void *user_data

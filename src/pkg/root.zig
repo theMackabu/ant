@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+pub const cli = @import("cli.zig");
 pub const lockfile = @import("lockfile.zig");
 pub const cache = @import("cache.zig");
 pub const fetcher = @import("fetcher.zig");
@@ -587,6 +588,11 @@ export fn pkg_get_added_package(ctx: ?*const PkgContext, index: u32, out: *Added
   if (index >= c.added_packages.items.len) return .invalid_argument;
   out.* = c.added_packages.items[index];
   return .ok;
+}
+
+export fn pkg_count_installed(node_modules_path: [*:0]const u8) u32 {
+  var dir = std.fs.cwd().openDir(std.mem.span(node_modules_path), .{ .iterate = true }) catch return 0;
+  defer dir.close(); return cli.count_dir(dir, true);
 }
 
 export fn pkg_discover_lifecycle_scripts(
@@ -2720,44 +2726,36 @@ export fn pkg_remove_global(
   return .ok;
 }
 
+export fn pkg_count_local(ctx: ?*PkgContext) u32 {
+  var pd = cli.get_dependencies(ctx, null, true) orelse return 0;
+  defer pd.deinit(); return pd.count();
+}
+
+export fn pkg_count_global(ctx: ?*PkgContext) u32 {
+  const global_dir = getGlobalDir(global_allocator) catch return 0;
+  var pd = cli.get_dependencies(ctx, global_dir, false) orelse return 0;
+  defer pd.deinit(); return pd.count();
+}
+
+export fn pkg_list_local(
+  ctx: ?*PkgContext,
+  callback: ?*const fn (name: [*:0]const u8, version: [*:0]const u8, user_data: ?*anyopaque) callconv(.c) void,
+  user_data: ?*anyopaque,
+) PkgError {
+  var pd = cli.get_dependencies(ctx, null, true) orelse return .ok;
+  defer pd.deinit();
+  if (callback) |cb| cli.list_dependencies(&pd, cb, user_data);
+  return .ok;
+}
+
 export fn pkg_list_global(
   ctx: ?*PkgContext,
   callback: ?*const fn (name: [*:0]const u8, version: [*:0]const u8, user_data: ?*anyopaque) callconv(.c) void,
   user_data: ?*anyopaque,
 ) PkgError {
-  const c = ctx orelse return .invalid_argument;
-  _ = c.arena_state.reset(.retain_capacity);
-  const arena_alloc = c.arena_state.allocator();
-
-  const global_dir = getGlobalDir(arena_alloc) catch return .invalid_argument;
-  const pkg_json_path = std.fmt.allocPrint(arena_alloc, "{s}/package.json", .{global_dir}) catch return .out_of_memory;
-  const nm_path = std.fmt.allocPrint(arena_alloc, "{s}/node_modules", .{global_dir}) catch return .out_of_memory;
-  
-  const content = std.fs.cwd().readFileAlloc(arena_alloc, pkg_json_path, 1024 * 1024) catch return .not_found;
-  
-  const parsed = std.json.parseFromSlice(std.json.Value, arena_alloc, content, .{}) catch return .invalid_argument;
-  defer parsed.deinit();
-  
-  const deps = parsed.value.object.get("dependencies") orelse return .ok;
-  if (deps != .object) return .ok;
-  
-  const cb = callback orelse return .ok;
-  
-  for (deps.object.keys()) |dep_name| {
-    const dep_pkg_json = std.fmt.allocPrint(arena_alloc, "{s}/{s}/package.json", .{nm_path, dep_name}) catch continue;
-    
-    const dep_content = std.fs.cwd().readFileAlloc(arena_alloc, dep_pkg_json, 256 * 1024) catch continue;
-    const dep_parsed = std.json.parseFromSlice(std.json.Value, arena_alloc, dep_content, .{}) catch continue;
-    defer dep_parsed.deinit();
-    
-    const version = if (dep_parsed.value.object.get("version")) |v|
-      if (v == .string) v.string else "?" else "?";
-    
-    const name_z = arena_alloc.dupeZ(u8, dep_name) catch continue;
-    const version_z = arena_alloc.dupeZ(u8, version) catch continue;
-    
-    cb(name_z.ptr, version_z.ptr, user_data);
-  }
-  
+  const global_dir = getGlobalDir(global_allocator) catch return .invalid_argument;
+  var pd = cli.get_dependencies(ctx, global_dir, false) orelse return .ok;
+  defer pd.deinit();
+  if (callback) |cb| cli.list_dependencies(&pd, cb, user_data);
   return .ok;
 }
