@@ -520,8 +520,16 @@ static jsval_t js_typedarray_constructor(struct js *js, jsval_t *args, int nargs
     }
     
     size_t element_size = get_element_size(type);
+    
+    if (byte_offset > buffer->length) {
+      return js_mkerr(js, "Start offset is outside the bounds of the buffer");
+    }
+    
     if (nargs > 2 && vtype(args[2]) == T_NUM) {
       length = (size_t)js_getnum(args[2]);
+      if (byte_offset + length * element_size > buffer->length) {
+        return js_mkerr(js, "Invalid TypedArray length");
+      }
     } else {
       length = (buffer->length - byte_offset) / element_size;
     }
@@ -894,8 +902,15 @@ static jsval_t js_dataview_constructor(struct js *js, jsval_t *args, int nargs) 
     byte_offset = (size_t)js_getnum(args[1]);
   }
   
+  if (byte_offset > buffer->length) {
+    return js_mkerr(js, "Start offset is outside the bounds of the buffer");
+  }
+  
   if (nargs > 2 && vtype(args[2]) == T_NUM) {
     byte_length = (size_t)js_getnum(args[2]);
+    if (byte_offset + byte_length > buffer->length) {
+      return js_mkerr(js, "Invalid DataView length");
+    }
   } else {
     byte_length = buffer->length - byte_offset;
   }
