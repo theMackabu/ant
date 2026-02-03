@@ -6637,9 +6637,10 @@ static inline bool is_primitive(jsval_t v) {
 static jsval_t try_exotic_to_primitive(struct js *js, jsval_t value, int hint) {
   const char *tp_key = get_toPrimitive_sym_key();
   if (!tp_key || !tp_key[0]) return mkval(T_UNDEF, 0);
+  size_t tp_key_len = strlen(tp_key);
   
-  jsoff_t tp_off = lkp(js, value, tp_key, strlen(tp_key));
-  if (tp_off == 0) tp_off = lkp_proto(js, value, tp_key, strlen(tp_key));
+  jsoff_t tp_off = lkp(js, value, tp_key, tp_key_len);
+  if (tp_off == 0) tp_off = lkp_proto(js, value, tp_key, tp_key_len);
   if (tp_off == 0) return mkval(T_UNDEF, 0);
   
   jsval_t tp_fn = resolveprop(js, mkval(T_PROP, tp_off));
@@ -6652,7 +6653,7 @@ static jsval_t try_exotic_to_primitive(struct js *js, jsval_t value, int hint) {
   
   const char *hint_str = hint == 1 ? "string" : (hint == 2 ? "number" : "default");
   jsval_t hint_arg = js_mkstr(js, hint_str, strlen(hint_str));
-  jsval_t result = js_call_method(js, value, tp_key, strlen(tp_key), &hint_arg, 1);
+  jsval_t result = js_call_method(js, value, tp_key, tp_key_len, &hint_arg, 1);
   
   if (is_err(result) || is_primitive(result)) return result;
   return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert object to primitive value");
@@ -12057,7 +12058,9 @@ jsval_t js_symbol_to_string(struct js *js, jsval_t sym) {
   
   size_t desc_len = strlen(desc);
   size_t total = 7 + desc_len + 1;
-  char *buf = malloc(total + 1);
+  
+  char stack_buf[128];
+  char *buf = (total + 1 <= sizeof(stack_buf)) ? stack_buf : malloc(total + 1);
   if (!buf) return js_mkerr(js, "out of memory");
   
   memcpy(buf, "Symbol(", 7);
@@ -12066,7 +12069,7 @@ jsval_t js_symbol_to_string(struct js *js, jsval_t sym) {
   buf[total] = '\0';
   
   jsval_t result = js_mkstr(js, buf, total);
-  free(buf);
+  if (buf != stack_buf) free(buf);
   return result;
 }
 
@@ -13363,8 +13366,8 @@ static jsval_t builtin_Date_toString(struct js *js, jsval_t *args, int nargs) {
   int offset_mins = (int)(labs(offset_sec) % 3600) / 60;
   
   char tz[32], buf[80];
-  strftime(tz, sizeof(tz), "%Z", tm_local);
-  strftime(buf, sizeof(buf), "%a %b %d %Y %H:%M:%S", tm_local);
+  strftime(tz, sizeof(tz), "%Z", &local_copy);
+  strftime(buf, sizeof(buf), "%a %b %d %Y %H:%M:%S", &local_copy);
   size_t n = strlen(buf);
   n += snprintf(buf + n, sizeof(buf) - n, " GMT%+03d%02d (%s)", offset_hours, offset_mins, tz);
   return js_mkstr(js, buf, n);
@@ -14047,6 +14050,33 @@ static jsval_t builtin_Math_trunc(struct js *js, jsval_t *args, int nargs) {
   return tov(trunc(x));
 }
 
+typedef jsval_t (*dynamic_kv_mapper_fn)(
+  struct js *js,
+  jsval_t key,
+  jsval_t val
+);
+
+static jsval_t iterate_dynamic_keys(struct js *js, jsval_t obj, dynamic_accessors_t *acc, dynamic_kv_mapper_fn mapper) {
+  jsval_t keys_arr = acc->keys(js, obj);
+  jsval_t arr = mkarr(js);
+  jsoff_t len = get_array_length(js, keys_arr);
+  
+  for (jsoff_t i = 0; i < len; i++) {
+    char idx_buf[16];
+    size_t idx_len = uint_to_str(idx_buf, sizeof(idx_buf), (unsigned)i);
+    jsoff_t prop_off = lkp(js, keys_arr, idx_buf, idx_len);
+    if (!prop_off) continue;
+    jsval_t key_val = resolveprop(js, mkval(T_PROP, prop_off));
+    if (vtype(key_val) != T_STR) continue;
+    jsoff_t klen; jsoff_t str_off = vstr(js, key_val, &klen);
+    const char *key = (const char *)&js->mem[str_off];
+    jsval_t val = acc->getter(js, obj, key, klen);
+    js_arr_push(js, arr, mapper ? mapper(js, key_val, val) : val);
+  }
+  
+  return mkval(T_ARR, vdata(arr));
+}
+
 static jsval_t builtin_object_keys(struct js *js, jsval_t *args, int nargs) {
   if (nargs == 0) return mkarr(js);
   jsval_t obj = args[0];
@@ -14114,24 +14144,7 @@ static jsval_t builtin_object_values(struct js *js, jsval_t *args, int nargs) {
   jsoff_t obj_off = (jsoff_t)vdata(obj);
   dynamic_accessors_t *acc = NULL;
   HASH_FIND(hh, accessor_registry, &obj_off, sizeof(jsoff_t), acc);
-  if (acc && acc->keys && acc->getter) {
-    jsval_t keys_arr = acc->keys(js, obj);
-    jsval_t arr = mkarr(js);
-    jsoff_t len = get_array_length(js, keys_arr);
-    for (jsoff_t i = 0; i < len; i++) {
-      char idx_buf[16];
-      size_t idx_len = uint_to_str(idx_buf, sizeof(idx_buf), (unsigned)i);
-      jsoff_t prop_off = lkp(js, keys_arr, idx_buf, idx_len);
-      if (!prop_off) continue;
-      jsval_t key_val = resolveprop(js, mkval(T_PROP, prop_off));
-      if (vtype(key_val) != T_STR) continue;
-      jsoff_t klen; jsoff_t str_off = vstr(js, key_val, &klen);
-      const char *key = (const char *)&js->mem[str_off];
-      jsval_t val = acc->getter(js, obj, key, klen);
-      js_arr_push(js, arr, val);
-    }
-    return mkval(T_ARR, vdata(arr));
-  }
+  if (acc && acc->keys && acc->getter) return iterate_dynamic_keys(js, obj, acc, NULL);
   
   jsval_t arr = mkarr(js); jsoff_t idx = 0;
   jsoff_t next = loadoff(js, obj_off) & ~(3U | FLAGMASK);
@@ -14166,6 +14179,14 @@ static jsval_t builtin_object_values(struct js *js, jsval_t *args, int nargs) {
   return mkval(T_ARR, vdata(arr));
 }
 
+static jsval_t map_to_entry(struct js *js, jsval_t key, jsval_t val) {
+  jsval_t pair = mkarr(js);
+  js_mkprop_fast(js, pair, "0", 1, key);
+  js_mkprop_fast(js, pair, "1", 1, val);
+  js_mkprop_fast(js, pair, "length", 6, tov(2.0));
+  return mkval(T_ARR, vdata(pair));
+}
+
 static jsval_t builtin_object_entries(struct js *js, jsval_t *args, int nargs) {
   if (nargs == 0) return mkarr(js);
   jsval_t obj = args[0];
@@ -14177,27 +14198,7 @@ static jsval_t builtin_object_entries(struct js *js, jsval_t *args, int nargs) {
   dynamic_accessors_t *acc = NULL;
   HASH_FIND(hh, accessor_registry, &obj_off, sizeof(jsoff_t), acc);
   if (acc && acc->keys && acc->getter) {
-    jsval_t keys_arr = acc->keys(js, obj);
-    jsval_t arr = mkarr(js);
-    jsoff_t len = get_array_length(js, keys_arr);
-    for (jsoff_t i = 0; i < len; i++) {
-      char idx_buf[16];
-      size_t idx_len = uint_to_str(idx_buf, sizeof(idx_buf), (unsigned)i);
-      jsoff_t prop_off = lkp(js, keys_arr, idx_buf, idx_len);
-      if (!prop_off) continue;
-      jsval_t key_val = resolveprop(js, mkval(T_PROP, prop_off));
-      if (vtype(key_val) != T_STR) continue;
-      jsoff_t klen;
-      jsoff_t str_off = vstr(js, key_val, &klen);
-      const char *key = (const char *)&js->mem[str_off];
-      jsval_t val = acc->getter(js, obj, key, klen);
-      jsval_t pair = mkarr(js);
-      js_mkprop_fast(js, pair, "0", 1, key_val);
-      js_mkprop_fast(js, pair, "1", 1, val);
-      js_mkprop_fast(js, pair, "length", 6, tov(2.0));
-      js_arr_push(js, arr, mkval(T_ARR, vdata(pair)));
-    }
-    return mkval(T_ARR, vdata(arr));
+    return iterate_dynamic_keys(js, obj, acc, map_to_entry);
   }
   
   jsval_t arr = mkarr(js);
@@ -14214,7 +14215,6 @@ static jsval_t builtin_object_entries(struct js *js, jsval_t *args, int nargs) {
     jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
     
     next = next_prop(header);
-    
     if (is_internal_prop(key, klen)) continue;
     
     bool should_include = true;
@@ -14928,7 +14928,8 @@ static jsval_t builtin_object_getOwnPropertySymbols(struct js *js, jsval_t *args
       
       if (klen >= 9 && memcmp(key, "__sym_", 6) == 0 && memcmp(key + klen - 2, "__", 2) == 0) {
         uint64_t sym_id = 0;
-        for (const char *p = key + 6; *p >= '0' && *p <= '9'; p++) sym_id = sym_id * 10 + (uint64_t)(*p - '0');
+        for (const char *p = key + 6; *p >= '0' && *p <= '9' && sym_id <= PROPREF_PAYLOAD / 10; p++)
+          sym_id = sym_id * 10 + (uint64_t)(*p - '0');
         char idxstr[16]; size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)idx++);
         js_mkprop_fast(js, arr, idxstr, idxlen, mkval(T_SYMBOL, (sym_id & PROPREF_PAYLOAD) << PROPREF_KEY_SHIFT));
       }
@@ -22268,7 +22269,8 @@ jsoff_t js_next_prop(jsoff_t header) { return next_prop(header); }
 jsoff_t js_loadoff(struct js *js, jsoff_t off) { return loadoff(js, off); }
 
 void js_set_getter(struct js *js, jsval_t obj, js_getter_fn getter) {
-  if (vtype(obj) != T_OBJ) return;
+  if (!is_object_type(obj)) return;
+  if (vtype(obj) != T_OBJ) obj = mkval(T_OBJ, vdata(obj));
   jsoff_t obj_off = (jsoff_t)vdata(obj);
   dynamic_accessors_t *entry = NULL;
   HASH_FIND(hh, accessor_registry, &obj_off, sizeof(jsoff_t), entry);
@@ -22285,7 +22287,8 @@ void js_set_getter(struct js *js, jsval_t obj, js_getter_fn getter) {
 }
 
 void js_set_setter(struct js *js, jsval_t obj, js_setter_fn setter) {
-  if (vtype(obj) != T_OBJ) return;
+  if (!is_object_type(obj)) return;
+  if (vtype(obj) != T_OBJ) obj = mkval(T_OBJ, vdata(obj));
   jsoff_t obj_off = (jsoff_t)vdata(obj);
   dynamic_accessors_t *entry = NULL;
   HASH_FIND(hh, accessor_registry, &obj_off, sizeof(jsoff_t), entry);
@@ -22302,7 +22305,8 @@ void js_set_setter(struct js *js, jsval_t obj, js_setter_fn setter) {
 }
 
 void js_set_keys(struct js *js, jsval_t obj, js_keys_fn keys) {
-  if (vtype(obj) != T_OBJ) return;
+  if (!is_object_type(obj)) return;
+  if (vtype(obj) != T_OBJ) obj = mkval(T_OBJ, vdata(obj));
   jsoff_t obj_off = (jsoff_t)vdata(obj);
   dynamic_accessors_t *entry = NULL;
   HASH_FIND(hh, accessor_registry, &obj_off, sizeof(jsoff_t), entry);

@@ -1363,9 +1363,10 @@ static jsval_t env_to_object(ant_t *js, jsval_t *args, int nargs) {
   return obj;
 }
 
-static jsval_t env_toString(ant_t *js, jsval_t *args, int nargs) {  
+static jsval_t env_toString(ant_t *js, jsval_t *args, int nargs) {
   size_t buf_cap = 4096;
   char *buf = malloc(buf_cap);
+  if (!buf) return js_mkstr(js, "", 0);
   size_t pos = 0;
   
   for (char **env = environ; *env != NULL; env++) {
@@ -1374,7 +1375,13 @@ static jsval_t env_toString(ant_t *js, jsval_t *args, int nargs) {
     
     if (pos + entry_len + 2 >= buf_cap) {
       buf_cap = buf_cap * 2 + entry_len;
-      buf = realloc(buf, buf_cap);
+      char *new_buf = realloc(buf, buf_cap);
+      if (!new_buf) {
+        buf[pos] = '\0';
+        jsval_t ret = js_mkstr(js, buf, pos);
+        free(buf); return ret;
+      }
+      buf = new_buf;
     }
     
     if (pos > 0) buf[pos++] = '\n';
