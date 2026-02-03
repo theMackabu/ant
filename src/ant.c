@@ -2948,11 +2948,7 @@ jsval_t js_setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v) {
   
 no_descriptor:
   if (existing <= 0) goto create_new;
-  
-  if (is_const_prop(js, existing)) {
-    if (js->flags & F_STRICT) return js_mkerr(js, "assignment to constant");
-    return mkval(T_PROP, existing);
-  }
+  if (is_const_prop(js, existing)) return js_mkerr(js, "assignment to constant");
 
   saveval(js, existing + sizeof(jsoff_t) * 2, v);
   if (vtype(obj) != T_ARR || klen == 0 || key[0] < '0' || key[0] > '9') goto done_update;
@@ -5003,20 +4999,15 @@ static jsval_t assign(struct js *js, jsval_t lhs, jsval_t val) {
   if (vtype(lhs) != T_PROP) {
     if (js->flags & F_STRICT) {
       return js_mkerr_typed(js, JS_ERR_SYNTAX, "Invalid left-hand side in assignment");
-    }
-    return val;
+    } return val;
   }
   
   jsoff_t propoff = (jsoff_t) vdata(lhs);
-  
   jsoff_t koff = loadoff(js, propoff + sizeof(jsoff_t));
   jsoff_t klen = offtolen(loadoff(js, koff));
-  const char *key = (char *)&js->mem[koff + sizeof(jsoff_t)];
   
-  if (is_const_prop(js, propoff)) {
-    if (js->flags & F_STRICT) return js_mkerr(js, "assignment to constant");
-    return mkval(T_PROP, propoff);
-  }
+  const char *key = (char *)&js->mem[koff + sizeof(jsoff_t)];
+  if (is_const_prop(js, propoff)) return js_mkerr(js, "assignment to constant");
   
   if ((klen == 9 && memcmp(key, "undefined", 9) == 0) ||
       (klen == 3 && memcmp(key, "NaN", 3) == 0) ||
@@ -6087,8 +6078,9 @@ jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnlen, jsv
   
   jsval_t saved_scope = js->scope;
   if (global_scope_stack == NULL) utarray_new(global_scope_stack, &jsoff_icd);
-  utarray_push_back(global_scope_stack, &parent_scope_offset);
    jsval_t function_scope = mkobj(js, parent_scope_offset);
+   jsoff_t function_scope_offset = (jsoff_t) vdata(function_scope);
+   utarray_push_back(global_scope_stack, &function_scope_offset);
    js->scope = function_scope;
    
    jsval_t slot_name = get_slot(js, func_val, SLOT_NAME);
@@ -6659,7 +6651,8 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
     uint8_t lhs_type = vtype(lhs);
     if (lhs_type != T_PROP && lhs_type != T_PROPREF)
       return js_mkerr_typed(js, JS_ERR_SYNTAX, "Invalid left-hand side expression in postfix operation");
-    do_assign_op(js, op == TOK_POSTINC ? TOK_PLUS_ASSIGN : TOK_MINUS_ASSIGN, lhs, tov(1));
+    jsval_t assign_res = do_assign_op(js, op == TOK_POSTINC ? TOK_PLUS_ASSIGN : TOK_MINUS_ASSIGN, lhs, tov(1));
+    if (is_err(assign_res)) return assign_res;
     return l;
   }
 
@@ -8757,10 +8750,9 @@ static jsval_t js_unary(struct js *js) {
     if (js->flags & F_NOEXEC) return operand;
     jsval_t resolved = resolveprop(js, operand);
     if (vtype(operand) == T_PROP || vtype(operand) == T_PROPREF) {
-      do_assign_op(js, op == TOK_POSTINC ? TOK_PLUS_ASSIGN : TOK_MINUS_ASSIGN, operand, tov(1));
-    } else {
-      return js_mkerr_typed(js, JS_ERR_SYNTAX, "Invalid left-hand side in assignment");
-    }
+      jsval_t assign_res = do_assign_op(js, op == TOK_POSTINC ? TOK_PLUS_ASSIGN : TOK_MINUS_ASSIGN, operand, tov(1));
+      if (is_err(assign_res)) return assign_res;
+    } else return js_mkerr_typed(js, JS_ERR_SYNTAX, "Invalid left-hand side in assignment");
     return do_op(js, op == TOK_POSTINC ? TOK_PLUS : TOK_MINUS, resolved, tov(1));
   }
   
@@ -10151,8 +10143,16 @@ static jsval_t js_for(struct js *js) {
       } else if (next(js) == TOK_OF) {
         is_for_of = true;
         js->consumed = 1;
+      } else if (next(js) == TOK_ASSIGN) {
+        js->pos = destructure_off;
+        js->consumed = 1;
+        if (is_const_var) v = js_const(js);
+        else if (is_var_decl) v = js_var_decl(js);
+        else v = js_let(js);
+        if (is_err2(&v, &res)) goto done;
+        has_destructure = false;
       } else {
-        res = js_mkerr_typed(js, JS_ERR_SYNTAX, "expected 'in' or 'of' after destructuring pattern");
+        res = js_mkerr_typed(js, JS_ERR_SYNTAX, "expected 'in', 'of', or '=' after destructuring pattern");
         goto done;
       }
     } else if (next(js) == TOK_IDENTIFIER) {
@@ -10172,13 +10172,9 @@ static jsval_t js_for(struct js *js) {
       } else {
         js->pos = var_name_off;
         js->consumed = 1;
-        if (is_const_var) {
-          v = js_const(js);
-        } else if (is_var_decl) {
-          v = js_var_decl(js);
-        } else {
-          v = js_let(js);
-        }
+        if (is_const_var) v = js_const(js);
+        else if (is_var_decl) v = js_var_decl(js);
+        else v = js_let(js);
         if (is_err2(&v, &res)) goto done;
       }
     }
@@ -11653,42 +11649,73 @@ static jsval_t js_var_decl(struct js *js) {
   
   js->consumed = 1;
   for (;;) {
-    EXPECT_IDENT();
-    js->consumed = 0;
-    jsoff_t noff = js->toff, nlen = js->tlen;
-    char *name = (char *) &js->code[noff];
+    uint8_t tok = next(js);
     
-    if (exe && (js->flags & F_STRICT) && is_strict_restricted(name, nlen)) {
-      return js_mkerr_typed(js, JS_ERR_SYNTAX, "cannot use '%.*s' as variable name in strict mode", (int) nlen, name);
-    }
-    
-    if (exe && (js->flags & F_STRICT) && is_strict_reserved(name, nlen)) {
-      return js_mkerr_typed(js, JS_ERR_SYNTAX, "'%.*s' is reserved in strict mode", (int) nlen, name);
-    }
-    
-    jsval_t v = js_mkundef();
-    bool has_initializer = false;
-    js->consumed = 1;
-    if (next(js) == TOK_ASSIGN) {
-      js->consumed = 1;
-      v = js_expr(js);
-      if (is_err(v)) return v;
-      has_initializer = true;
-    }
-    
-    if (exe) {
-      char decoded_name[256];
-      size_t decoded_len = decode_ident_escapes(name, nlen, decoded_name, sizeof(decoded_name));
+    if (tok == TOK_LBRACKET || tok == TOK_LBRACE) {
+      jsoff_t pattern_start = js->toff;
+      uint8_t close_tok = (tok == TOK_LBRACKET) ? TOK_RBRACKET : TOK_RBRACE;
       
-      jsoff_t existing_off = lkp(js, var_scope, decoded_name, decoded_len);
-      if (existing_off > 0) {
-        if (has_initializer && !is_err(v)) {
-          jsval_t key_val = js_mkstr(js, decoded_name, decoded_len);
-          setprop(js, var_scope, key_val, resolveprop(js, v));
+      js->consumed = 1;
+      int depth = 1;
+      while (depth > 0 && next(js) != TOK_EOF) {
+        if (js->tok == tok) depth++;
+        else if (js->tok == close_tok) depth--;
+        if (depth > 0) js->consumed = 1;
+      }
+      js->consumed = 1;
+      jsoff_t pattern_end = js->pos;
+      jsoff_t pattern_len = pattern_end - pattern_start;
+      
+      if (next(js) != TOK_ASSIGN) {
+        return js_mkerr_typed(js, JS_ERR_SYNTAX, "destructuring requires assignment");
+      } js->consumed = 1;
+      
+      jsval_t v = js_expr(js);
+      if (is_err(v)) return v;
+      
+      if (exe) {
+        jsval_t val = resolveprop(js, v);
+        jsval_t r = bind_destruct_pattern(js, &js->code[pattern_start], pattern_len, val, var_scope);
+        if (is_err(r)) return r;
+      }
+    } else {
+      EXPECT_IDENT();
+      js->consumed = 0;
+      jsoff_t noff = js->toff, nlen = js->tlen;
+      char *name = (char *) &js->code[noff];
+      
+      if (exe && (js->flags & F_STRICT) && is_strict_restricted(name, nlen)) {
+        return js_mkerr_typed(js, JS_ERR_SYNTAX, "cannot use '%.*s' as variable name in strict mode", (int) nlen, name);
+      }
+      
+      if (exe && (js->flags & F_STRICT) && is_strict_reserved(name, nlen)) {
+        return js_mkerr_typed(js, JS_ERR_SYNTAX, "'%.*s' is reserved in strict mode", (int) nlen, name);
+      }
+      
+      jsval_t v = js_mkundef();
+      bool has_initializer = false;
+      js->consumed = 1;
+      if (next(js) == TOK_ASSIGN) {
+        js->consumed = 1;
+        v = js_expr(js);
+        if (is_err(v)) return v;
+        has_initializer = true;
+      }
+      
+      if (exe) {
+        char decoded_name[256];
+        size_t decoded_len = decode_ident_escapes(name, nlen, decoded_name, sizeof(decoded_name));
+        
+        jsoff_t existing_off = lkp(js, var_scope, decoded_name, decoded_len);
+        if (existing_off > 0) {
+          if (has_initializer && !is_err(v)) {
+            jsval_t key_val = js_mkstr(js, decoded_name, decoded_len);
+            setprop(js, var_scope, key_val, resolveprop(js, v));
+          }
+        } else {
+          jsval_t x = mkprop(js, var_scope, js_mkstr(js, decoded_name, decoded_len), resolveprop(js, v), 0);
+          if (is_err(x)) return x;
         }
-      } else {
-        jsval_t x = mkprop(js, var_scope, js_mkstr(js, decoded_name, decoded_len), resolveprop(js, v), 0);
-        if (is_err(x)) return x;
       }
     }
     
@@ -21189,7 +21216,7 @@ void js_set(struct js *js, jsval_t obj, const char *key, jsval_t val) {
     jsoff_t existing = lkp(js, obj, key, key_len);
     if (existing > 0) {
       if (is_const_prop(js, existing)) {
-        if (js->flags & F_STRICT) js_mkerr(js, "assignment to constant");
+        js_mkerr(js, "assignment to constant");
         return;
       }
       saveval(js, existing + sizeof(jsoff_t) * 2, val);
@@ -21202,7 +21229,7 @@ void js_set(struct js *js, jsval_t obj, const char *key, jsval_t val) {
     jsoff_t existing = lkp(js, func_obj, key, key_len);
     if (existing > 0) {
       if (is_const_prop(js, existing)) {
-        if (js->flags & F_STRICT) js_mkerr(js, "assignment to constant");
+        js_mkerr(js, "assignment to constant");
         return;
       }
       saveval(js, existing + sizeof(jsoff_t) * 2, val);
@@ -21730,10 +21757,16 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
     mkscope(js);
     js->flags = saved_flags;
     
+    if (global_scope_stack == NULL) utarray_new(global_scope_stack, &jsoff_icd);
+    jsoff_t function_scope_offset = (jsoff_t) vdata(js->scope);
+    
+    utarray_push_back(global_scope_stack, &function_scope_offset);
+    hoist_var_declarations_from_slot(js, js->scope, func_obj);
+    
     parsed_func_t *pf = get_or_parse_func(fn, fnlen);
     if (!pf) {
-      delscope(js);
-      js->scope = saved_scope;
+      if (global_scope_stack && utarray_len(global_scope_stack) > 0) utarray_pop_back(global_scope_stack);
+      delscope(js); js->scope = saved_scope;
       if (combined_args) free(combined_args);
       js->gc_suppress = saved_gc_suppress;
       return js_mkerr(js, "failed to parse function");
@@ -21807,8 +21840,8 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
     js->flags = caller_flags;
     
     js->this_val = saved_this;
-    delscope(js);
-    js->scope = saved_scope;
+    if (global_scope_stack && utarray_len(global_scope_stack) > 0) utarray_pop_back(global_scope_stack);
+    delscope(js); js->scope = saved_scope;
     if (combined_args) free(combined_args);
     
     js->gc_suppress = saved_gc_suppress;
