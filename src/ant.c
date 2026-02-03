@@ -21606,41 +21606,53 @@ bool js_del(struct js *js, jsval_t obj, const char *key) {
   return false;
 }
 
-jsval_t js_get(struct js *js, jsval_t obj, const char *key) {
+static bool js_try_get(struct js *js, jsval_t obj, const char *key, jsval_t *out) {
   size_t key_len = strlen(key);
   
   if (vtype(obj) == T_FUNC) {
     jsval_t func_obj = mkval(T_OBJ, vdata(obj));
     jsoff_t off = lkp(js, func_obj, key, key_len);
-    return off == 0 ? js_mkundef() : resolveprop(js, mkval(T_PROP, off));
+    if (off == 0) return false;
+    *out = resolveprop(js, mkval(T_PROP, off));
+    return true;
   }
   
   if (vtype(obj) == T_ARR) {
     jsval_t arr_obj = mkval(T_OBJ, vdata(obj));
     jsoff_t off = lkp(js, arr_obj, key, key_len);
-    return off == 0 ? js_mkundef() : resolveprop(js, mkval(T_PROP, off));
+    if (off == 0) return false;
+    *out = resolveprop(js, mkval(T_PROP, off));
+    return true;
   }
 
   uint8_t t = vtype(obj);
   bool is_promise = (t == T_PROMISE);
   if (is_promise) obj = mkval(T_OBJ, vdata(obj));
-  else if (t != T_OBJ) return js_mkundef();
+  else if (t != T_OBJ) return false;
   jsoff_t off = lkp(js, obj, key, key_len);
   
   if (off == 0) {
     jsval_t result = try_dynamic_getter(js, obj, key, key_len);
-    if (vtype(result) != T_UNDEF) return result;
+    if (vtype(result) != T_UNDEF) { *out = result; return true; }
   }
   
   if (off == 0 && is_promise) {
     jsval_t promise_proto = get_ctor_proto(js, "Promise", 7);
     if (vtype(promise_proto) != T_UNDEF && vtype(promise_proto) != T_NULL) {
       off = lkp(js, promise_proto, key, key_len);
-      if (off != 0) return resolveprop(js, mkval(T_PROP, off));
+      if (off != 0) { *out = resolveprop(js, mkval(T_PROP, off)); return true; }
     }
   }
   
-  return off == 0 ? js_mkundef() : resolveprop(js, mkval(T_PROP, off));
+  if (off == 0) return false;
+  *out = resolveprop(js, mkval(T_PROP, off));
+  return true;
+}
+
+jsval_t js_get(struct js *js, jsval_t obj, const char *key) {
+  jsval_t val;
+  if (js_try_get(js, obj, key, &val)) return val;
+  return js_mkundef();
 }
 
 jsval_t js_getprop_proto(struct js *js, jsval_t obj, const char *key) {
@@ -21650,10 +21662,9 @@ jsval_t js_getprop_proto(struct js *js, jsval_t obj, const char *key) {
 }
 
 jsval_t js_getprop_fallback(struct js *js, jsval_t obj, const char *name) {
-  jsval_t val = js_get(js, obj, name);
-  if (vtype(val) == T_UNDEF) {
-    val = js_getprop_proto(js, obj, name);
-  } return val;
+  jsval_t val;
+  if (js_try_get(js, obj, name, &val)) return val;
+  return js_getprop_proto(js, obj, name);
 }
 
 typedef struct {
@@ -21662,7 +21673,6 @@ typedef struct {
 } js_iter_ctx_t;
 
 static iter_action_t js_iter_cb(struct js *js, jsval_t value, void *ctx, jsval_t *out) {
-  (void)out;
   js_iter_ctx_t *ictx = (js_iter_ctx_t *)ctx;
   return ictx->callback(js, value, ictx->udata) ? ITER_CONTINUE : ITER_BREAK;
 }

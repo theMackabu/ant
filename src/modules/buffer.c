@@ -530,9 +530,7 @@ static jsval_t js_typedarray_constructor(struct js *js, jsval_t *args, int nargs
       if (byte_offset + length * element_size > buffer->length) {
         return js_mkerr(js, "Invalid TypedArray length");
       }
-    } else {
-      length = (buffer->length - byte_offset) / element_size;
-    }
+    } else length = (buffer->length - byte_offset) / element_size;
     
     return create_typed_array_with_buffer(js, type, buffer, byte_offset, length, type_name, args[0]);
   }
@@ -911,9 +909,7 @@ static jsval_t js_dataview_constructor(struct js *js, jsval_t *args, int nargs) 
     if (byte_offset + byte_length > buffer->length) {
       return js_mkerr(js, "Invalid DataView length");
     }
-  } else {
-    byte_length = buffer->length - byte_offset;
-  }
+  } else byte_length = buffer->length - byte_offset;
   
   DataViewData *dv_data = ta_arena_alloc(sizeof(DataViewData));
   if (!dv_data) return js_mkerr(js, "Failed to allocate DataView");
