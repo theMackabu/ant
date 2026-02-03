@@ -1659,11 +1659,14 @@ static jsval_t js_sharedarraybuffer_constructor(struct js *js, jsval_t *args, in
 }
 
 void init_buffer_module() {
-  struct js *js = rt->js;
-  jsval_t glob = js_glob(js);
+  ant_t *js = rt->js;
   
+  jsval_t glob = js->global;
+  jsval_t object_proto = js->object;
+
   jsval_t arraybuffer_ctor_obj = js_mkobj(js);
   jsval_t arraybuffer_proto = js_mkobj(js);
+  js_set_proto(js, arraybuffer_proto, object_proto);
   
   js_set(js, arraybuffer_proto, "slice", js_mkfun(js_arraybuffer_slice));
   js_set(js, arraybuffer_proto, "transfer", js_mkfun(js_arraybuffer_transfer));
@@ -1678,6 +1681,8 @@ void init_buffer_module() {
   js_set(js, glob, "ArrayBuffer", js_obj_to_func(arraybuffer_ctor_obj));
   
   jsval_t typedarray_proto = js_mkobj(js);
+  js_set_proto(js, typedarray_proto, object_proto);
+  
   js_set(js, typedarray_proto, "slice", js_mkfun(js_typedarray_slice));
   js_set(js, typedarray_proto, "subarray", js_mkfun(js_typedarray_subarray));
   js_set(js, typedarray_proto, "fill", js_mkfun(js_typedarray_fill));
@@ -1710,6 +1715,7 @@ void init_buffer_module() {
   
   jsval_t dataview_ctor_obj = js_mkobj(js);
   jsval_t dataview_proto = js_mkobj(js);
+  js_set_proto(js, dataview_proto, object_proto);
   
   js_set(js, dataview_proto, "getUint8", js_mkfun(js_dataview_getUint8));
   js_set(js, dataview_proto, "setUint8", js_mkfun(js_dataview_setUint8));
@@ -1731,6 +1737,7 @@ void init_buffer_module() {
   
   jsval_t sharedarraybuffer_ctor_obj = js_mkobj(js);
   jsval_t sharedarraybuffer_proto = js_mkobj(js);
+  js_set_proto(js, sharedarraybuffer_proto, object_proto);
   
   js_set(js, sharedarraybuffer_proto, "slice", js_mkfun(js_arraybuffer_slice));
   js_set(js, sharedarraybuffer_proto, get_toStringTag_sym_key(), js_mkstr(js, "SharedArrayBuffer", 17));
@@ -1743,6 +1750,7 @@ void init_buffer_module() {
   
   jsval_t buffer_ctor_obj = js_mkobj(js);
   jsval_t buffer_proto = js_mkobj(js);
+  js_set_proto(js, buffer_proto, object_proto);
   
   js_set(js, buffer_proto, "toString", js_mkfun(js_buffer_toString));
   js_set(js, buffer_proto, "toBase64", js_mkfun(js_buffer_toBase64));

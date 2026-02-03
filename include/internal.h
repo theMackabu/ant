@@ -41,6 +41,7 @@ struct js {
   jsval_t tval;           // holds last parsed numeric or string literal value
   jsval_t scope;          // current scope
   jsval_t global;         // global root object
+  jsval_t object;         // global object prototype
   jsval_t this_val;       // 'this' value for currently executing function
   jsval_t super_val;      // 'super' value for class methods
   jsval_t new_target;     // constructor called with 'new', undefined otherwise

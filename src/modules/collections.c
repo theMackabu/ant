@@ -886,12 +886,15 @@ static jsval_t builtin_WeakSet(ant_t *js, jsval_t *args, int nargs) {
 
 void init_collections_module(void) {
   ant_t *js = rt->js;
-  jsval_t glob = js_glob(js);
+  
+  jsval_t glob = js->global;
+  jsval_t object_proto = js->object;
   
   const char *iter_key = get_iterator_sym_key();
   const char *toStringTag_key = get_toStringTag_sym_key();
   
   jsval_t map_proto = js_mkobj(js);
+  js_set_proto(js, map_proto, object_proto);
   js_set(js, map_proto, "set", js_mkfun(map_set));
   js_set(js, map_proto, "get", js_mkfun(map_get));
   js_set(js, map_proto, "has", js_mkfun(map_has));
@@ -913,6 +916,7 @@ void init_collections_module(void) {
   js_set(js, glob, "Map", js_obj_to_func(map_ctor));
   
   jsval_t set_proto = js_mkobj(js);
+  js_set_proto(js, set_proto, object_proto);
   js_set(js, set_proto, "add", js_mkfun(set_add));
   js_set(js, set_proto, "has", js_mkfun(set_has));
   js_set(js, set_proto, "delete", js_mkfun(set_delete));
@@ -933,6 +937,7 @@ void init_collections_module(void) {
   js_set(js, glob, "Set", js_obj_to_func(set_ctor));
   
   jsval_t weakmap_proto = js_mkobj(js);
+  js_set_proto(js, weakmap_proto, object_proto);
   js_set(js, weakmap_proto, "set", js_mkfun(weakmap_set));
   js_set(js, weakmap_proto, "get", js_mkfun(weakmap_get));
   js_set(js, weakmap_proto, "has", js_mkfun(weakmap_has));
@@ -947,6 +952,7 @@ void init_collections_module(void) {
   js_set(js, glob, "WeakMap", js_obj_to_func(weakmap_ctor));
   
   jsval_t weakset_proto = js_mkobj(js);
+  js_set_proto(js, weakset_proto, object_proto);
   js_set(js, weakset_proto, "add", js_mkfun(weakset_add));
   js_set(js, weakset_proto, "has", js_mkfun(weakset_has));
   js_set(js, weakset_proto, "delete", js_mkfun(weakset_delete));
@@ -960,6 +966,7 @@ void init_collections_module(void) {
   js_set(js, glob, "WeakSet", js_obj_to_func(weakset_ctor));
   
   jsval_t weakref_proto = js_mkobj(js);
+  js_set_proto(js, weakref_proto, object_proto);
   js_set(js, weakref_proto, "deref", js_mkfun(weakref_deref));
   js_set(js, weakref_proto, toStringTag_key, js_mkstr(js, "WeakRef", 7));
   
@@ -971,6 +978,7 @@ void init_collections_module(void) {
   js_set(js, glob, "WeakRef", js_obj_to_func(weakref_ctor));
   
   jsval_t finreg_proto = js_mkobj(js);
+  js_set_proto(js, finreg_proto, object_proto);
   js_set(js, finreg_proto, "register", js_mkfun(finreg_register));
   js_set(js, finreg_proto, "unregister", js_mkfun(finreg_unregister));
   js_set(js, finreg_proto, toStringTag_key, js_mkstr(js, "FinalizationRegistry", 20));
