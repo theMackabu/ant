@@ -591,8 +591,16 @@ export fn pkg_get_added_package(ctx: ?*const PkgContext, index: u32, out: *Added
 }
 
 export fn pkg_count_installed(node_modules_path: [*:0]const u8) u32 {
-  var dir = std.fs.cwd().openDir(std.mem.span(node_modules_path), .{ .iterate = true }) catch return 0;
-  defer dir.close(); return cli.count_dir(dir, true);
+  const nm_path = std.mem.span(node_modules_path);
+  if (!std.mem.endsWith(u8, nm_path, "node_modules")) return 0;
+  
+  const base = nm_path[0 .. nm_path.len - "node_modules".len];
+  var buf: [std.fs.max_path_bytes]u8 = undefined;
+  const lp = std.fmt.bufPrint(&buf, "{s}ant.lockb", .{base}) catch return 0;
+  
+  var lf = lockfile.Lockfile.open(lp) catch return 0;
+  defer lf.close();
+  return lf.header.package_count;
 }
 
 export fn pkg_discover_lifecycle_scripts(
