@@ -1363,6 +1363,45 @@ static jsval_t env_to_object(ant_t *js, jsval_t *args, int nargs) {
   return obj;
 }
 
+static jsval_t env_toString(ant_t *js, jsval_t *args, int nargs) {  
+  size_t buf_cap = 4096;
+  char *buf = malloc(buf_cap);
+  size_t pos = 0;
+  
+  for (char **env = environ; *env != NULL; env++) {
+    char *entry = *env;
+    size_t entry_len = strlen(entry);
+    
+    if (pos + entry_len + 2 >= buf_cap) {
+      buf_cap = buf_cap * 2 + entry_len;
+      buf = realloc(buf, buf_cap);
+    }
+    
+    if (pos > 0) buf[pos++] = '\n';
+    memcpy(buf + pos, entry, entry_len);
+    pos += entry_len;
+  }
+  
+  buf[pos] = '\0';
+  jsval_t ret = js_mkstr(js, buf, pos);
+  free(buf); return ret;
+}
+
+static jsval_t env_keys(ant_t *js, jsval_t obj) {
+  jsval_t arr = js_mkarr(js);
+  
+  for (char **env = environ; *env != NULL; env++) {
+    char *entry = *env;
+    char *equals = strchr(entry, '=');
+    if (equals == NULL) continue;
+    
+    size_t key_len = (size_t)(equals - entry);
+    js_arr_push(js, arr, js_mkstr(js, entry, key_len));
+  }
+  
+  return arr;
+}
+
 static jsval_t process_cwd(ant_t *js, jsval_t *args, int nargs) {
   char cwd[4096];
   if (getcwd(cwd, sizeof(cwd)) != NULL) {
@@ -1569,8 +1608,12 @@ void init_process_module() {
   
   jsval_t env_obj = js_mkobj(js);
   load_dotenv_file(js, env_obj);
+  
   js_set_getter(js, env_obj, env_getter);
+  js_set_keys(js, env_obj, env_keys);
+  
   js_set(js, env_obj, "toObject", js_mkfun(env_to_object));
+  js_set(js, env_obj, "toString", js_mkfun(env_toString));
   js_set(js, process_obj, "env", env_obj);
   
   jsval_t argv_arr = js_mkarr(js);

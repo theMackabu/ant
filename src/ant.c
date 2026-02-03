@@ -219,6 +219,7 @@ typedef struct dynamic_accessors {
   jsoff_t obj_offset;
   js_getter_fn getter;
   js_setter_fn setter;
+  js_keys_fn keys;
   UT_hash_handle hh;
 } dynamic_accessors_t;
 
@@ -14053,10 +14054,13 @@ static jsval_t builtin_object_keys(struct js *js, jsval_t *args, int nargs) {
   if (vtype(obj) != T_OBJ && vtype(obj) != T_ARR && vtype(obj) != T_FUNC) return mkarr(js);
   if (vtype(obj) == T_FUNC) obj = mkval(T_OBJ, vdata(obj));
   
+  jsoff_t obj_off = (jsoff_t)vdata(obj);
+  dynamic_accessors_t *acc = NULL;
+  HASH_FIND(hh, accessor_registry, &obj_off, sizeof(jsoff_t), acc);
+  if (acc && acc->keys) return acc->keys(js, obj);
+  
   jsval_t arr = mkarr(js);
   jsoff_t idx = 0;
-  
-  jsoff_t obj_off = (jsoff_t)vdata(obj);
   jsoff_t next = loadoff(js, obj_off) & ~(3U | FLAGMASK);
   
   while (next < js->brk && next != 0) {
@@ -14107,9 +14111,30 @@ static jsval_t builtin_object_values(struct js *js, jsval_t *args, int nargs) {
   if (vtype(obj) != T_OBJ && vtype(obj) != T_ARR && vtype(obj) != T_FUNC) return mkarr(js);
   if (vtype(obj) == T_FUNC) obj = mkval(T_OBJ, vdata(obj));
   
-  jsval_t arr = mkarr(js);
-  jsoff_t idx = 0;
-  jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | FLAGMASK);
+  jsoff_t obj_off = (jsoff_t)vdata(obj);
+  dynamic_accessors_t *acc = NULL;
+  HASH_FIND(hh, accessor_registry, &obj_off, sizeof(jsoff_t), acc);
+  if (acc && acc->keys && acc->getter) {
+    jsval_t keys_arr = acc->keys(js, obj);
+    jsval_t arr = mkarr(js);
+    jsoff_t len = get_array_length(js, keys_arr);
+    for (jsoff_t i = 0; i < len; i++) {
+      char idx_buf[16];
+      size_t idx_len = uint_to_str(idx_buf, sizeof(idx_buf), (unsigned)i);
+      jsoff_t prop_off = lkp(js, keys_arr, idx_buf, idx_len);
+      if (!prop_off) continue;
+      jsval_t key_val = resolveprop(js, mkval(T_PROP, prop_off));
+      if (vtype(key_val) != T_STR) continue;
+      jsoff_t klen; jsoff_t str_off = vstr(js, key_val, &klen);
+      const char *key = (const char *)&js->mem[str_off];
+      jsval_t val = acc->getter(js, obj, key, klen);
+      js_arr_push(js, arr, val);
+    }
+    return mkval(T_ARR, vdata(arr));
+  }
+  
+  jsval_t arr = mkarr(js); jsoff_t idx = 0;
+  jsoff_t next = loadoff(js, obj_off) & ~(3U | FLAGMASK);
   
   while (next < js->brk && next != 0) {
     jsoff_t header = loadoff(js, next);
@@ -14124,11 +14149,8 @@ static jsval_t builtin_object_values(struct js *js, jsval_t *args, int nargs) {
     if (is_internal_prop(key, klen)) continue;
     
     bool should_include = true;
-    jsoff_t obj_off = (jsoff_t)vdata(obj);
     descriptor_entry_t *desc = lookup_descriptor(obj_off, key, klen);
-    if (desc) {
-      should_include = desc->enumerable;
-    }
+    if (desc) should_include = desc->enumerable;
     
     if (should_include) {
       char idxstr[16];
@@ -14151,9 +14173,36 @@ static jsval_t builtin_object_entries(struct js *js, jsval_t *args, int nargs) {
   if (vtype(obj) != T_OBJ && vtype(obj) != T_ARR && vtype(obj) != T_FUNC) return mkarr(js);
   if (vtype(obj) == T_FUNC) obj = mkval(T_OBJ, vdata(obj));
   
+  jsoff_t obj_off = (jsoff_t)vdata(obj);
+  dynamic_accessors_t *acc = NULL;
+  HASH_FIND(hh, accessor_registry, &obj_off, sizeof(jsoff_t), acc);
+  if (acc && acc->keys && acc->getter) {
+    jsval_t keys_arr = acc->keys(js, obj);
+    jsval_t arr = mkarr(js);
+    jsoff_t len = get_array_length(js, keys_arr);
+    for (jsoff_t i = 0; i < len; i++) {
+      char idx_buf[16];
+      size_t idx_len = uint_to_str(idx_buf, sizeof(idx_buf), (unsigned)i);
+      jsoff_t prop_off = lkp(js, keys_arr, idx_buf, idx_len);
+      if (!prop_off) continue;
+      jsval_t key_val = resolveprop(js, mkval(T_PROP, prop_off));
+      if (vtype(key_val) != T_STR) continue;
+      jsoff_t klen;
+      jsoff_t str_off = vstr(js, key_val, &klen);
+      const char *key = (const char *)&js->mem[str_off];
+      jsval_t val = acc->getter(js, obj, key, klen);
+      jsval_t pair = mkarr(js);
+      js_mkprop_fast(js, pair, "0", 1, key_val);
+      js_mkprop_fast(js, pair, "1", 1, val);
+      js_mkprop_fast(js, pair, "length", 6, tov(2.0));
+      js_arr_push(js, arr, mkval(T_ARR, vdata(pair)));
+    }
+    return mkval(T_ARR, vdata(arr));
+  }
+  
   jsval_t arr = mkarr(js);
   jsoff_t idx = 0;
-  jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | FLAGMASK);
+  jsoff_t next = loadoff(js, obj_off) & ~(3U | FLAGMASK);
   
   while (next < js->brk && next != 0) {
     jsoff_t header = loadoff(js, next);
@@ -14169,11 +14218,8 @@ static jsval_t builtin_object_entries(struct js *js, jsval_t *args, int nargs) {
     if (is_internal_prop(key, klen)) continue;
     
     bool should_include = true;
-    jsoff_t obj_off = (jsoff_t)vdata(obj);
     descriptor_entry_t *desc = lookup_descriptor(obj_off, key, klen);
-    if (desc) {
-      should_include = desc->enumerable;
-    }
+    if (desc) should_include = desc->enumerable;
     
     if (should_include) {
       jsval_t pair = mkarr(js);
@@ -22222,6 +22268,7 @@ void js_set_getter(struct js *js, jsval_t obj, js_getter_fn getter) {
     entry->obj_offset = obj_off;
     entry->getter = NULL;
     entry->setter = NULL;
+    entry->keys = NULL;
     HASH_ADD(hh, accessor_registry, obj_offset, sizeof(jsoff_t), entry);
   }
   entry->getter = getter;
@@ -22238,9 +22285,27 @@ void js_set_setter(struct js *js, jsval_t obj, js_setter_fn setter) {
     entry->obj_offset = obj_off;
     entry->getter = NULL;
     entry->setter = NULL;
+    entry->keys = NULL;
     HASH_ADD(hh, accessor_registry, obj_offset, sizeof(jsoff_t), entry);
   }
   entry->setter = setter;
+}
+
+void js_set_keys(struct js *js, jsval_t obj, js_keys_fn keys) {
+  if (vtype(obj) != T_OBJ) return;
+  jsoff_t obj_off = (jsoff_t)vdata(obj);
+  dynamic_accessors_t *entry = NULL;
+  HASH_FIND(hh, accessor_registry, &obj_off, sizeof(jsoff_t), entry);
+  if (!entry) {
+    entry = (dynamic_accessors_t *)malloc(sizeof(dynamic_accessors_t));
+    if (!entry) return;
+    entry->obj_offset = obj_off;
+    entry->getter = NULL;
+    entry->setter = NULL;
+    entry->keys = NULL;
+    HASH_ADD(hh, accessor_registry, obj_offset, sizeof(jsoff_t), entry);
+  }
+  entry->keys = keys;
 }
 
 static inline uint64_t make_desc_key(jsoff_t obj_off, const char *key, size_t klen) {

@@ -169,9 +169,11 @@ void ant_register_library(ant_library_init_fn init_fn, const char *name, ...);
 
 typedef jsval_t (*js_getter_fn)(ant_t *js, jsval_t obj, const char *key, size_t key_len);
 typedef bool (*js_setter_fn)(ant_t *js, jsval_t obj, const char *key, size_t key_len, jsval_t value);
+typedef jsval_t (*js_keys_fn)(ant_t *js, jsval_t obj);
 
 void js_set_getter(ant_t *js, jsval_t obj, js_getter_fn getter);
 void js_set_setter(ant_t *js, jsval_t obj, js_setter_fn setter);
+void js_set_keys(ant_t *js, jsval_t obj, js_keys_fn keys);
 
 void js_set_descriptor(ant_t *js, jsval_t obj, const char *key, size_t klen, int flags);
 void js_set_getter_desc(ant_t *js, jsval_t obj, const char *key, size_t klen, jsval_t getter, int flags);
