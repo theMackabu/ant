@@ -1,5 +1,6 @@
 .env
 .nova
+.maid
 .cache
 .github/artifacts
 
@@ -9,6 +10,7 @@
 
 /build
 /traces
+/todo/*
 
 /src/pkg/.zig-cache
 /src/strip/target
@@ -25,7 +27,6 @@
 
 ant.txt
 zoo.sh
-todo.txt
 AGENTS.md
 
 node_modules

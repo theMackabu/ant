@@ -7321,11 +7321,9 @@ static jsval_t js_arr_literal(struct js *js) {
     if (!is_spread) {
       char idxstr[16];
       size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)idx);
-      jsval_t key = js_mkstr(js, idxstr, idxlen);
-      jsval_t res = setprop(js, arr, key, resolved);
+      jsval_t res = js_mkprop_fast(js, arr, idxstr, idxlen, resolved);
       if (is_err(res)) return res;
-      idx++;
-      goto next_elem;
+      idx++; goto next_elem;
     }
 
     uint8_t t = vtype(resolved);
@@ -7336,9 +7334,8 @@ static jsval_t js_arr_literal(struct js *js) {
       for (jsoff_t i = 0; i < slen; i++) {
         char idxstr[16];
         size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)idx);
-        jsval_t key = js_mkstr(js, idxstr, idxlen);
         jsval_t ch = js_mkstr(js, (char *)&js->mem[soff + i], 1);
-        setprop(js, arr, key, ch);
+        js_mkprop_fast(js, arr, idxstr, idxlen, ch);
         idx++;
       }
       goto next_elem;
@@ -7347,12 +7344,11 @@ static jsval_t js_arr_literal(struct js *js) {
     jsoff_t len = js_arr_len(js, resolved);
     for (jsoff_t i = 0; i < len; i++) {
       char src_idx[16], dst_idx[16];
-      snprintf(src_idx, sizeof(src_idx), "%u", (unsigned)i);
-      snprintf(dst_idx, sizeof(dst_idx), "%u", (unsigned)idx);
-      jsval_t key = js_mkstr(js, src_idx, strlen(src_idx));
-      jsoff_t prop_off = lkp(js, resolved, (char *)&js->mem[(jsoff_t)vdata(key) + sizeof(jsoff_t)], strlen(src_idx));
+      size_t src_len = uint_to_str(src_idx, sizeof(src_idx), (unsigned)i);
+      size_t dst_len = uint_to_str(dst_idx, sizeof(dst_idx), (unsigned)idx);
+      jsoff_t prop_off = lkp(js, resolved, src_idx, src_len);
       jsval_t elem = (prop_off != 0) ? resolveprop(js, mkval(T_PROP, prop_off)) : js_mkundef();
-      setprop(js, arr, js_mkstr(js, dst_idx, strlen(dst_idx)), elem);
+      js_mkprop_fast(js, arr, dst_idx, dst_len, elem);
       idx++;
     }
 
@@ -7363,9 +7359,7 @@ static jsval_t js_arr_literal(struct js *js) {
 
   EXPECT(TOK_RBRACKET);
   if (exe) {
-    jsval_t len_key = js_mkstr(js, "length", 6);
-    jsval_t len_val = tov((double)idx);
-    jsval_t res = setprop(js, arr, len_key, len_val);
+    jsval_t res = js_mkprop_fast(js, arr, "length", 6, tov((double)idx));
     if (is_err(res)) return res;
     arr = mkval(T_ARR, vdata(arr));
   }
@@ -9678,12 +9672,16 @@ static jsval_t js_block_or_stmt(struct js *js) {
 typedef struct {
   bool is_block;
   bool needs_scope;
+  bool has_func_decl;
+  bool has_func_decl_checked;
   jsval_t loop_scope;
 } loop_block_ctx_t;
 
 static void loop_block_init(struct js *js, loop_block_ctx_t *ctx) {
   ctx->is_block = (lookahead(js) == TOK_LBRACE);
   ctx->needs_scope = false;
+  ctx->has_func_decl = false;
+  ctx->has_func_decl_checked = false;
   ctx->loop_scope = js_mkundef();
   
   if (ctx->is_block && !(js->flags & F_NOEXEC)) {
@@ -9706,7 +9704,22 @@ static void loop_block_init(struct js *js, loop_block_ctx_t *ctx) {
 static inline jsval_t loop_block_exec(struct js *js, loop_block_ctx_t *ctx) {
   if (ctx->is_block) {
     next(js);
-    return js_block(js, false);
+    
+    if (!ctx->has_func_decl_checked) {
+      ctx->has_func_decl = code_has_function_decl(
+        js->code + js->pos, 
+        js->clen - js->pos
+      );
+      ctx->has_func_decl_checked = true;
+    }
+    
+    bool saved_skip = js->skip_func_hoist;
+    if (!ctx->has_func_decl) js->skip_func_hoist = true;
+    
+    jsval_t result = js_block(js, false);
+    js->skip_func_hoist = saved_skip;
+    
+    return result;
   }
   
   return js_block_or_stmt(js);

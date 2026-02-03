@@ -2,6 +2,10 @@
 path = "build"
 script = "meson compile"
 
+[tasks.build.cache]
+path = "src"
+target = ["build/ant"]
+
 [tasks.strip]
 path = "build"
 script = "strip ant"
