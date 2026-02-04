@@ -675,16 +675,16 @@ static jsval_t finreg_register(ant_t *js, jsval_t *args, int nargs) {
   
   char idx[16];
   size_t idx_len = uint_to_str(idx, sizeof(idx), 0);
-  setprop(js, entry, js_mkstr(js, idx, idx_len), target);
+  js_setprop(js, entry, js_mkstr(js, idx, idx_len), target);
   idx_len = uint_to_str(idx, sizeof(idx), 1);
-  setprop(js, entry, js_mkstr(js, idx, idx_len), held_value);
+  js_setprop(js, entry, js_mkstr(js, idx, idx_len), held_value);
   idx_len = uint_to_str(idx, sizeof(idx), 2);
-  setprop(js, entry, js_mkstr(js, idx, idx_len), unregister_token);
-  setprop(js, entry, js_mkstr(js, "length", 6), tov(3.0));
+  js_setprop(js, entry, js_mkstr(js, idx, idx_len), unregister_token);
+  js_setprop(js, entry, js_mkstr(js, "length", 6), tov(3.0));
   
   idx_len = uint_to_str(idx, sizeof(idx), len);
-  setprop(js, registrations, js_mkstr(js, idx, idx_len), entry);
-  setprop(js, registrations, js_mkstr(js, "length", 6), tov((double)(len + 1)));
+  js_setprop(js, registrations, js_mkstr(js, idx, idx_len), entry);
+  js_setprop(js, registrations, js_mkstr(js, "length", 6), tov((double)(len + 1)));
   
   return js_mkundef();
 }
@@ -711,7 +711,7 @@ static jsval_t finreg_unregister(ant_t *js, jsval_t *args, int nargs) {
     if (vtype(entry_token) == T_OBJ && vdata(entry_token) == vdata(token)) {
       char idx[16];
       size_t idx_len = uint_to_str(idx, sizeof(idx), i);
-      setprop(js, registrations, js_mkstr(js, idx, idx_len), js_mkundef());
+      js_setprop(js, registrations, js_mkstr(js, idx, idx_len), js_mkundef());
       removed = true;
     }
   }
