@@ -113,3 +113,21 @@ void *try_oom(size_t size) {
     exit(EXIT_FAILURE);
   } return p;
 }
+
+void cstr_free(cstr_buf_t *buf) {
+  if (buf->heap) free(buf->heap);
+}
+
+char *cstr_init(cstr_buf_t *buf, char *stack, size_t stack_size, const char *src, size_t len) {
+  if (len < stack_size) {
+    buf->ptr = stack;
+    buf->heap = NULL;
+  } else {
+    buf->heap = malloc(len + 1);
+    if (!buf->heap) return NULL;
+    buf->ptr = buf->heap;
+  }
+  memcpy(buf->ptr, src, len);
+  buf->ptr[len] = '\0';
+  return buf->ptr;
+}

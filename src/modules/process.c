@@ -31,6 +31,7 @@
 #include "config.h"
 #include "internal.h"
 #include "runtime.h"
+#include "utils.h"
 
 #include "modules/process.h"
 #include "modules/symbol.h"
@@ -1264,15 +1265,13 @@ static jsval_t process_initgroups(ant_t *js, jsval_t *args, int nargs) {
 }
 #endif
 
-static jsval_t env_getter(ant_t *js, jsval_t obj, const char *key, size_t key_len) {  
-  char *key_str = (char *)malloc(key_len + 1);
+static jsval_t env_getter(ant_t *js, jsval_t obj, const char *key, size_t key_len) {
+  CSTR_BUF(buf, 256);
+  char *key_str = CSTR_INIT(buf, key, key_len);
   if (!key_str) return js_mkundef();
   
-  memcpy(key_str, key, key_len);
-  key_str[key_len] = '\0';
-  
   char *value = getenv(key_str);
-  free(key_str);
+  cstr_free(&buf);
   
   if (value == NULL) return js_mkundef();
   return js_mkstr(js, value, strlen(value));
@@ -1282,14 +1281,13 @@ static bool env_setter(ant_t *js, jsval_t obj, const char *key, size_t key_len, 
   jsval_t str_val = coerce_to_str(js, value);
   setprop_cstr(js, obj, key, key_len, str_val);
   
-  char key_buf[256];
-  if (key_len < sizeof(key_buf)) {
-    memcpy(key_buf, key, key_len);
-    key_buf[key_len] = '\0';
-    
+  CSTR_BUF(buf, 256);
+  char *key_str = CSTR_INIT(buf, key, key_len);
+  if (key_str) {
     size_t val_len;
     char *val_str = js_getstr(js, str_val, &val_len);
-    if (val_str) setenv(key_buf, val_str, 1);
+    if (val_str) setenv(key_str, val_str, 1);
+    cstr_free(&buf);
   }
   
   return true;
@@ -1390,12 +1388,14 @@ static void env_foreach(ant_t *js, jsval_t env_obj, env_iter_cb cb, void *ctx) {
     if (key_len >= 2 && key[0] == '_' && key[1] == '_') continue;
     if (vtype(value) != T_STR) continue;
     
-    char key_buf[256];
-    if (key_len >= sizeof(key_buf)) continue;
-    memcpy(key_buf, key, key_len);
-    key_buf[key_len] = '\0';
+    CSTR_BUF(buf, 256);
+    char *key_str = CSTR_INIT(buf, key, key_len);
+    if (!key_str) continue;
     
-    if (getenv(key_buf)) continue;
+    if (getenv(key_str)) {
+      cstr_free(&buf);
+      continue;
+    } cstr_free(&buf);
     
     size_t val_len;
     char *val_str = js_getstr(js, value, &val_len);
@@ -1407,11 +1407,11 @@ static void env_foreach(ant_t *js, jsval_t env_obj, env_iter_cb cb, void *ctx) {
 
 static void env_to_object_cb(ant_t *js, const char *key, size_t key_len, const char *value, size_t val_len, void *ctx) {
   jsval_t obj = *(jsval_t *)ctx;
-  char key_buf[256];
-  if (key_len >= sizeof(key_buf)) return;
-  memcpy(key_buf, key, key_len);
-  key_buf[key_len] = '\0';
-  js_set(js, obj, key_buf, js_mkstr(js, value, val_len));
+  CSTR_BUF(buf, 256);
+  char *key_str = CSTR_INIT(buf, key, key_len);
+  if (!key_str) return;
+  js_set(js, obj, key_str, js_mkstr(js, value, val_len));
+  cstr_free(&buf);
 }
 
 static jsval_t env_to_object(ant_t *js, jsval_t *args, int nargs) {
