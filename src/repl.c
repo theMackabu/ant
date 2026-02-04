@@ -427,7 +427,8 @@ typedef struct {
 static void push_template(parse_state_t *s) {
   if (s->template_count >= s->template_cap) {
     s->template_cap = s->template_cap ? s->template_cap * 2 : 8;
-    s->templates = realloc(s->templates, s->template_cap * sizeof(int));
+    int *new_templates = realloc(s->templates, s->template_cap * sizeof(int));
+    if (!new_templates) { return; } s->templates = new_templates;
   }
   s->templates[s->template_count++] = s->brace;
 }
