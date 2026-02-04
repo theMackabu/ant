@@ -20922,7 +20922,7 @@ ant_t *js_create(void *buf, size_t len) {
   js->errmsg_size = 4096;
   js->errmsg = (char *)malloc(js->errmsg_size);
   if (js->errmsg) js->errmsg[0] = '\0';
-  js->gc_suppress = true;
+  js->gc_suppress = false;
   
 #ifdef _WIN32
   js->stack_limit = 512 * 1024;
@@ -21998,6 +21998,7 @@ static jsval_t js_eval_inherit_strict(struct js *js, const char *buf, size_t len
     if (js->needs_gc && js->eval_depth == 1 && !js->gc_suppress) {
       js->needs_gc = false;
       js_gc_compact(js);
+      js->gc_alloc_since = 0;
     }
     if (js->flags & F_RETURN) break;
   }

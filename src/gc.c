@@ -375,7 +375,7 @@ static void gc_process_object(gc_ctx_t *ctx, jsoff_t old_off) {
   }
   
   jsoff_t parent_off = gc_loadoff(ctx->js->mem, old_off + sizeof(jsoff_t));
-  if (parent_off != 0 && parent_off < ctx->js->brk) {
+  if (parent_off < ctx->js->brk) {
     jsoff_t new_parent = gc_reserve_object(ctx, parent_off);
     gc_saveoff(ctx->new_mem, new_off + sizeof(jsoff_t), new_parent);
   }
@@ -571,17 +571,6 @@ size_t js_gc_compact(ant_t *js) {
     if ((header_at_0 & 3) == T_OBJ) gc_reserve_object(&ctx, 0);
   }
   
-  jsoff_t scope_off = (jsoff_t)gc_vdata(js->scope);
-  if (scope_off < js->brk) {
-    (void)gc_reserve_object(&ctx, scope_off);
-  }
-  
-  (void)gc_update_val(&ctx, js->this_val);
-  (void)gc_update_val(&ctx, js->module_ns);
-  (void)gc_update_val(&ctx, js->current_func);
-  (void)gc_update_val(&ctx, js->thrown_value);
-  (void)gc_update_val(&ctx, js->tval);
-  
   js_gc_reserve_roots(
     js, 
     gc_fwd_off_callback, 
@@ -597,14 +586,11 @@ size_t js_gc_compact(ant_t *js) {
     fwd_free(&ctx.fwd);
     return 0;
   }
-    
-  js->scope = gc_apply_val(&ctx, js->scope);
-  js->this_val = gc_apply_val(&ctx, js->this_val);
-  js->module_ns = gc_apply_val(&ctx, js->module_ns);
-  js->current_func = gc_apply_val(&ctx, js->current_func);
-  js->thrown_value = gc_apply_val(&ctx, js->thrown_value);
-  js->tval = gc_apply_val(&ctx, js->tval);
-  js_gc_update_roots(js, gc_apply_off_callback, gc_apply_val_callback, &ctx);
+  
+  js_gc_update_roots(js, 
+    gc_apply_off_callback, 
+    gc_apply_val_callback, 
+  &ctx);
   
   memcpy(js->mem, new_mem, ctx.new_brk);
   js->brk = ctx.new_brk;
