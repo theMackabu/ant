@@ -1279,10 +1279,20 @@ static jsval_t env_getter(ant_t *js, jsval_t obj, const char *key, size_t key_le
 }
 
 static bool env_setter(ant_t *js, jsval_t obj, const char *key, size_t key_len, jsval_t value) {
-  setprop_cstr(
-    js, obj, key, key_len, 
-    coerce_to_str(js, value)
-  ); return true;
+  jsval_t str_val = coerce_to_str(js, value);
+  setprop_cstr(js, obj, key, key_len, str_val);
+  
+  char key_buf[256];
+  if (key_len < sizeof(key_buf)) {
+    memcpy(key_buf, key, key_len);
+    key_buf[key_len] = '\0';
+    
+    size_t val_len;
+    char *val_str = js_getstr(js, str_val, &val_len);
+    if (val_str) setenv(key_buf, val_str, 1);
+  }
+  
+  return true;
 }
 
 static void load_dotenv_file(ant_t *js, jsval_t env_obj) {
