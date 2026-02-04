@@ -1294,6 +1294,13 @@ static bool env_setter(ant_t *js, jsval_t obj, const char *key, size_t key_len, 
   return true;
 }
 
+static bool env_deleter(ant_t *js, jsval_t obj, const char *key, size_t key_len) {
+  CSTR_BUF(buf, 256);
+  char *key_str = CSTR_INIT(buf, key, key_len);
+  if (key_str) { unsetenv(key_str); cstr_free(&buf); }
+  return true;
+}
+
 static void load_dotenv_file(ant_t *js, jsval_t env_obj) {
   FILE *fp = fopen(".env", "r");
   if (fp == NULL) return;
@@ -1674,6 +1681,7 @@ void init_process_module() {
 
   js_set_getter(js, env_obj, env_getter);
   js_set_setter(js, env_obj, env_setter);
+  js_set_deleter(js, env_obj, env_deleter);
   
   js_set(js, env_obj, "toObject", js_mkfun(env_to_object));
   js_set(js, env_obj, "toString", js_mkfun(env_toString));

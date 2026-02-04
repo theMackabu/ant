@@ -219,6 +219,7 @@ typedef struct dynamic_accessors {
   jsoff_t obj_offset;
   js_getter_fn getter;
   js_setter_fn setter;
+  js_deleter_fn deleter;
   js_keys_fn keys;
   UT_hash_handle hh;
 } dynamic_accessors_t;
@@ -4859,6 +4860,14 @@ static bool try_dynamic_setter(struct js *js, jsval_t obj, const char *key, size
   return entry->setter(js, obj, key, key_len, value);
 }
 
+static bool try_dynamic_deleter(struct js *js, jsval_t obj, const char *key, size_t key_len) {
+  jsoff_t obj_off = (jsoff_t)vdata(obj);
+  dynamic_accessors_t *entry = NULL;
+  HASH_FIND(hh, accessor_registry, &obj_off, sizeof(jsoff_t), entry);
+  if (!entry || !entry->deleter) return false;
+  return entry->deleter(js, obj, key, key_len);
+}
+
 static jsval_t lookup(struct js *js, const char *buf, size_t len) {
   if (js->flags & F_NOEXEC) return 0;
   
@@ -8816,7 +8825,10 @@ static jsval_t js_unary(struct js *js) {
       if (vtype(err) != T_UNDEF) return err;
 
       jsoff_t prop_off = lkp(js, obj, key_str, len);
-      if (prop_off == 0) return js_true;
+      if (prop_off == 0) {
+        try_dynamic_deleter(js, obj, key_str, len);
+        return js_true;
+      }
 
       if (is_nonconfig_prop(js, prop_off)) {
         if (js->flags & F_STRICT) return js_mkerr_typed(js, JS_ERR_TYPE, "cannot delete non-configurable property");
@@ -22340,9 +22352,8 @@ void js_set_getter(struct js *js, jsval_t obj, js_getter_fn getter) {
     entry = (dynamic_accessors_t *)malloc(sizeof(dynamic_accessors_t));
     if (!entry) return;
     entry->obj_offset = obj_off;
-    entry->getter = NULL;
-    entry->setter = NULL;
-    entry->keys = NULL;
+    entry->getter = NULL; entry->setter = NULL;
+    entry->deleter = NULL; entry->keys = NULL;
     HASH_ADD(hh, accessor_registry, obj_offset, sizeof(jsoff_t), entry);
   }
   entry->getter = getter;
@@ -22358,12 +22369,28 @@ void js_set_setter(struct js *js, jsval_t obj, js_setter_fn setter) {
     entry = (dynamic_accessors_t *)malloc(sizeof(dynamic_accessors_t));
     if (!entry) return;
     entry->obj_offset = obj_off;
-    entry->getter = NULL;
-    entry->setter = NULL;
-    entry->keys = NULL;
+    entry->getter = NULL; entry->setter = NULL;
+    entry->deleter = NULL; entry->keys = NULL;
     HASH_ADD(hh, accessor_registry, obj_offset, sizeof(jsoff_t), entry);
   }
   entry->setter = setter;
+}
+
+void js_set_deleter(struct js *js, jsval_t obj, js_deleter_fn deleter) {
+  if (!is_object_type(obj)) return;
+  if (vtype(obj) != T_OBJ) obj = mkval(T_OBJ, vdata(obj));
+  jsoff_t obj_off = (jsoff_t)vdata(obj);
+  dynamic_accessors_t *entry = NULL;
+  HASH_FIND(hh, accessor_registry, &obj_off, sizeof(jsoff_t), entry);
+  if (!entry) {
+    entry = (dynamic_accessors_t *)malloc(sizeof(dynamic_accessors_t));
+    if (!entry) return;
+    entry->obj_offset = obj_off;
+    entry->getter = NULL; entry->setter = NULL;
+    entry->deleter = NULL; entry->keys = NULL;
+    HASH_ADD(hh, accessor_registry, obj_offset, sizeof(jsoff_t), entry);
+  }
+  entry->deleter = deleter;
 }
 
 void js_set_keys(struct js *js, jsval_t obj, js_keys_fn keys) {
@@ -22376,9 +22403,8 @@ void js_set_keys(struct js *js, jsval_t obj, js_keys_fn keys) {
     entry = (dynamic_accessors_t *)malloc(sizeof(dynamic_accessors_t));
     if (!entry) return;
     entry->obj_offset = obj_off;
-    entry->getter = NULL;
-    entry->setter = NULL;
-    entry->keys = NULL;
+    entry->getter = NULL; entry->setter = NULL;
+    entry->deleter = NULL; entry->keys = NULL;
     HASH_ADD(hh, accessor_registry, obj_offset, sizeof(jsoff_t), entry);
   }
   entry->keys = keys;
