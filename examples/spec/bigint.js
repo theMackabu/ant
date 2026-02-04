@@ -26,4 +26,12 @@ test('bigint negation', -5n, -5n);
 
 test('bigint toString', (255n).toString(16), 'ff');
 
+test('BigInt.asUintN 0 bits', BigInt.asUintN(0, 123n), 0n);
+test('BigInt.asUintN wrap', BigInt.asUintN(8, 256n), 0n);
+test('BigInt.asUintN negative', BigInt.asUintN(8, -1n), 255n);
+test('BigInt.asIntN 0 bits', BigInt.asIntN(0, 123n), 0n);
+test('BigInt.asIntN positive', BigInt.asIntN(8, 127n), 127n);
+test('BigInt.asIntN negative', BigInt.asIntN(8, 255n), -1n);
+test('BigInt.asIntN sign bit', BigInt.asIntN(8, 128n), -128n);
+
 summary();

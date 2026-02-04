@@ -675,6 +675,7 @@ static size_t strbigint(struct js *js, jsval_t value, char *buf, size_t len);
 static size_t tostr(struct js *js, jsval_t value, char *buf, size_t len);
 static size_t strpromise(struct js *js, jsval_t value, char *buf, size_t len);
 static size_t js_to_pcre2_pattern(const char *src, size_t src_len, char *dst, size_t dst_size);
+static double js_to_number(struct js *js, jsval_t arg);
 
 static jsval_t js_stmt_impl(struct js *js);
 static jsval_t js_expr(struct js *js);
@@ -796,6 +797,12 @@ size_t uint_to_str(char *buf, size_t bufsize, uint64_t val) {
   }
   buf[len] = '\0';
   return len;
+}
+
+static jsval_t bigint_from_u64(struct js *js, uint64_t value) {
+  char buf[32];
+  size_t len = uint_to_str(buf, sizeof(buf), value);
+  return js_mkbigint(js, buf, len, false);
 }
 
 #define MAX_STRINGIFY_DEPTH 64
@@ -2401,14 +2408,76 @@ static jsval_t builtin_BigInt(struct js *js, jsval_t *args, int nargs) {
   return js_mkerr(js, "Cannot convert to BigInt");
 }
 
+static jsval_t bigint_pow2(struct js *js, uint64_t bits) {
+  jsval_t two = js_mkbigint(js, "2", 1, false);
+  if (is_err(two)) return two;
+  jsval_t exp = bigint_from_u64(js, bits);
+  if (is_err(exp)) return exp;
+  return bigint_exp(js, two, exp);
+}
+
+static jsval_t bigint_asint_bits(struct js *js, jsval_t arg, uint64_t *bits_out) {
+  double bits = js_to_number(js, arg);
+  if (!isfinite(bits) || bits < 0 || bits != floor(bits)) {
+    return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid bits");
+  }
+  if (bits > 18446744073709551615.0) {
+    return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid bits");
+  }
+  *bits_out = (uint64_t)bits;
+  return js_mkundef();
+}
+
 static jsval_t builtin_BigInt_asIntN(struct js *js, jsval_t *args, int nargs) {
-  (void)js; (void)args; (void)nargs;
-  return js_mkerr(js, "BigInt.asIntN not implemented");
+  if (nargs < 2) return js_mkerr(js, "BigInt.asIntN requires 2 arguments");
+  uint64_t bits = 0;
+  jsval_t err = bigint_asint_bits(js, args[0], &bits);
+  if (is_err(err)) return err;
+  if (vtype(args[1]) != T_BIGINT) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert to BigInt");
+  }
+  if (bits == 0) return js_mkbigint(js, "0", 1, false);
+
+  jsval_t mod = bigint_pow2(js, bits);
+  if (is_err(mod)) return mod;
+  jsval_t res = bigint_mod(js, args[1], mod);
+  if (is_err(res)) return res;
+  if (bigint_IsNegative(js, res)) {
+    jsval_t adj = bigint_add(js, res, mod);
+    if (is_err(adj)) return adj;
+    res = adj;
+  }
+
+  jsval_t threshold = bigint_pow2(js, bits - 1);
+  if (is_err(threshold)) return threshold;
+  if (bigint_compare(js, res, threshold) >= 0) {
+    jsval_t adj = bigint_sub(js, res, mod);
+    if (is_err(adj)) return adj;
+    res = adj;
+  }
+  return res;
 }
 
 static jsval_t builtin_BigInt_asUintN(struct js *js, jsval_t *args, int nargs) {
-  (void)js; (void)args; (void)nargs;
-  return js_mkerr(js, "BigInt.asUintN not implemented");
+  if (nargs < 2) return js_mkerr(js, "BigInt.asUintN requires 2 arguments");
+  uint64_t bits = 0;
+  jsval_t err = bigint_asint_bits(js, args[0], &bits);
+  if (is_err(err)) return err;
+  if (vtype(args[1]) != T_BIGINT) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert to BigInt");
+  }
+  if (bits == 0) return js_mkbigint(js, "0", 1, false);
+
+  jsval_t mod = bigint_pow2(js, bits);
+  if (is_err(mod)) return mod;
+  jsval_t res = bigint_mod(js, args[1], mod);
+  if (is_err(res)) return res;
+  if (bigint_IsNegative(js, res)) {
+    jsval_t adj = bigint_add(js, res, mod);
+    if (is_err(adj)) return adj;
+    res = adj;
+  }
+  return res;
 }
 
 static jsval_t builtin_bigint_toString(struct js *js, jsval_t *args, int nargs) {
