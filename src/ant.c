@@ -1952,6 +1952,71 @@ static char *tostr_alloc(struct js *js, jsval_t value) {
   return buf;
 }
 
+js_cstr_t js_to_cstr(struct js *js, jsval_t value, char *stack_buf, size_t stack_size) {
+  js_cstr_t out = { .ptr = "", .len = 0, .needs_free = false };
+
+  if (is_err(value)) {
+    out.ptr = js->errmsg ? js->errmsg : "";
+    out.len = strlen(out.ptr);
+    return out;
+  }
+
+  if (vtype(value) == T_STR) {
+    size_t len = 0;
+    char *str = js_getstr(js, value, &len);
+    out.ptr = str ? str : ""; out.len = len;
+    return out;
+  }
+
+  multiref_count = 0;
+  multiref_next_id = 0;
+  stringify_depth = 0;
+  scan_refs(js, value);
+
+  size_t capacity = stack_size;
+  char *buf = stack_buf;
+  out.needs_free = false;
+
+  if (!buf || capacity == 0) {
+    capacity = 64;
+    buf = ant_calloc(capacity);
+    if (!buf) return out;
+    out.needs_free = true;
+  }
+
+  for (;;) {
+    stringify_depth = 0;
+    stringify_indent = 0;
+    size_t len = tostr(js, value, buf, capacity);
+
+    if (len < capacity - 1) {
+      out.ptr = buf;
+      out.len = len;
+      return out;
+    }
+
+    size_t new_capacity = capacity * 2;
+    char *next = out.needs_free 
+      ? ant_realloc(buf, new_capacity) 
+      : ant_calloc(new_capacity);
+    
+    if (!next) {
+      if (out.needs_free) free(buf);
+      out.ptr = ""; out.len = 0;
+      out.needs_free = false;
+      return out;
+    }
+
+    if (!out.needs_free) {
+      memcpy(next, buf, capacity);
+      out.needs_free = true;
+    }
+
+    buf = next;
+    capacity = new_capacity;
+  }
+}
+
 jsval_t js_tostring_val(struct js *js, jsval_t value) {
   uint8_t t = vtype(value);
   char *buf; size_t len, buflen;

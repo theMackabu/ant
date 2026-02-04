@@ -17,6 +17,7 @@
 
 /test262
 /javascript-zoo
+/game-of-life
 
 /vendor/*/
 /vendor/.wraplock

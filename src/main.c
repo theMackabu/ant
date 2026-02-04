@@ -105,18 +105,19 @@ static void eval_code(struct js *js, struct arg_str *eval, struct arg_lit *print
   jsval_t result = js_eval(js, script, len);
   js_run_event_loop(js);
   
+  char cbuf_stack[512]; js_cstr_t cstr = js_to_cstr(
+    js, result, cbuf_stack, sizeof(cbuf_stack)
+  );
+  
   if (vtype(result) == T_ERR) {
-    fprintf(stderr, "%s\n", js_str(js, result));
+    fprintf(stderr, "%s\n", cstr.ptr);
     js_result = EXIT_FAILURE;
   } else if (print->count > 0) {
-    if (vtype(result) == T_STR) {
-      char *str = js_getstr(js, result, NULL);
-      if (str) printf("%s\n", str);
-    } else {
-      const char *str = js_str(js, result);
-      if (str && strcmp(str, "undefined") != 0) { print_value_colored(str, stdout); printf("\n"); }
+    if (vtype(result) == T_STR) printf("%s\n", cstr.ptr ? cstr.ptr : "");
+    else if (cstr.ptr && strcmp(cstr.ptr, "undefined") != 0) {
+      print_value_colored(cstr.ptr, stdout); printf("\n");
     }
-  }
+  } if (cstr.needs_free) free((void *)cstr.ptr);
 }
 
 static char *read_file(const char *filename, size_t *len) {

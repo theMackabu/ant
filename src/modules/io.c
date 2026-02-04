@@ -279,15 +279,17 @@ void console_print(struct js *js, jsval_t *args, int nargs, const char *color, F
   for (int i = 0; i < nargs; i++) {
     const char *space = i == 0 ? "" : " ";
     io_puts(space, stream);
-    
     if (vtype(args[i]) == T_STR) {
       char *str = js_getstr(js, args[i], NULL);
-      io_print(str, stream);
+      io_print(str ? str : "", stream);
     } else {
-      const char *str = js_str(js, args[i]);
+      char cbuf_stack[512]; js_cstr_t cstr = js_to_cstr(
+        js, args[i], cbuf_stack, sizeof(cbuf_stack)
+      );
       if (color && !io_no_color) io_puts(ANSI_RESET, stream);
-      print_value_colored(str, stream);
+      print_value_colored(cstr.ptr, stream);
       if (color && !io_no_color) io_puts(color, stream);
+      if (cstr.needs_free) free((void *)cstr.ptr);
     }
   }
   
@@ -316,40 +318,25 @@ static jsval_t js_console_assert(struct js *js, jsval_t *args, int nargs) {
   bool is_truthy = js_truthy(js, args[0]);
   if (is_truthy) return js_mkundef();
   
-  if (!io_no_color) io_puts(ANSI_RED, stderr);
   io_puts("Assertion failed", stderr);
   if (nargs > 1) {
     io_puts(": ", stderr);
-    for (int i = 1; i < nargs; i++) {
-      const char *space = i == 1 ? "" : " ";
-      io_puts(space, stderr);
-      
-      if (vtype(args[i]) == T_STR) {
-        char *str = js_getstr(js, args[i], NULL);
-        io_print(str, stderr);
-      } else {
-        const char *str = js_str(js, args[i]);
-        io_print(str, stderr);
-      }
-    }
+    console_print(js, args + 1, nargs - 1, NULL, stderr);
+    return js_mkundef();
   }
-  if (!io_no_color) io_puts(ANSI_RESET, stderr);
-  io_putc('\n', stderr);
   
+  io_putc('\n', stderr);
   return js_mkundef();
 }
 
 static jsval_t js_console_trace(struct js *js, jsval_t *args, int nargs) {
-  fprintf(stderr, "Console Trace");
-  if (nargs > 0 && vtype(args[0]) == T_STR) {
-    fprintf(stderr, ": ");
-    char *str = js_getstr(js, args[0], NULL);
-    fprintf(stderr, "%s", str);
-  }
+  io_puts("Trace", stderr);
+  if (nargs > 0) {
+    io_puts(": ", stderr);
+    console_print(js, args, nargs, NULL, stderr);
+  } else io_putc('\n', stderr);
   
-  fprintf(stderr, "\n");
   js_print_stack_trace(stderr);
-  
   return js_mkundef();
 }
 
@@ -364,8 +351,6 @@ static jsval_t js_console_debug(struct js *js, jsval_t *args, int nargs) {
 }
 
 static jsval_t js_console_clear(struct js *js, jsval_t *args, int nargs) {
-  (void)args;
-  (void)nargs;
   if (!io_no_color) {
     fprintf(stdout, "\033[2J\033[H");
     fflush(stdout);

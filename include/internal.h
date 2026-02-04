@@ -78,6 +78,12 @@ struct js {
   bool ascii_cache_init;
 };
 
+typedef struct {
+  const char *ptr;
+  size_t len;
+  bool needs_free;
+} js_cstr_t;
+
 enum {
   T_OBJ, T_PROP, T_STR, T_UNDEF, T_NULL, T_NUM, T_BOOL, T_FUNC,
   T_CODEREF, T_CFUNC, T_ERR, T_ARR, T_PROMISE, T_TYPEDARRAY, 
@@ -117,6 +123,7 @@ jsval_t setprop_interned(struct js *js, jsval_t obj, const char *key, size_t len
 
 jsval_t coerce_to_str(struct js *js, jsval_t v);
 jsval_t coerce_to_str_concat(struct js *js, jsval_t v);
+js_cstr_t js_to_cstr(struct js *js, jsval_t value, char *stack_buf, size_t stack_size);
 
 jsoff_t lkp(struct js *js, jsval_t obj, const char *buf, size_t len);
 jsoff_t lkp_proto(struct js *js, jsval_t obj, const char *buf, size_t len);

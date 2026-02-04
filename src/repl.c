@@ -60,7 +60,6 @@ static void sigint_handler(int sig) {
 
 static cmd_result_t cmd_help(struct js *js, history_t *history, const char *arg);
 static cmd_result_t cmd_exit(struct js *js, history_t *history, const char *arg);
-static cmd_result_t cmd_clear(struct js *js, history_t *history, const char *arg);
 static cmd_result_t cmd_load(struct js *js, history_t *history, const char *arg);
 static cmd_result_t cmd_save(struct js *js, history_t *history, const char *arg);
 static cmd_result_t cmd_gc(struct js *js, history_t *history, const char *arg);
@@ -69,7 +68,6 @@ static cmd_result_t cmd_stats(struct js *js, history_t *history, const char *arg
 static const repl_command_t commands[] = {
   { "help",  "Show this help message", false, cmd_help },
   { "exit",  "Exit the REPL", false, cmd_exit },
-  { "clear", "Clear the current context", false, cmd_clear },
   { "load",  "Load JS from a file into the REPL session", true, cmd_load },
   { "save",  "Save all evaluated commands in this REPL session to a file", true, cmd_save },
   { "gc",    "Run garbage collector", false, cmd_gc },
@@ -78,7 +76,6 @@ static const repl_command_t commands[] = {
 };
 
 static cmd_result_t cmd_help(struct js *js, history_t *history, const char *arg) {
-  (void)js; (void)history; (void)arg;
   for (const repl_command_t *cmd = commands; cmd->name; cmd++) {
     printf("  .%-7s - %s\n", cmd->name, cmd->description);
   }
@@ -87,14 +84,7 @@ static cmd_result_t cmd_help(struct js *js, history_t *history, const char *arg)
 }
 
 static cmd_result_t cmd_exit(struct js *js, history_t *history, const char *arg) {
-  (void)js; (void)history; (void)arg;
   return CMD_EXIT;
-}
-
-static cmd_result_t cmd_clear(struct js *js, history_t *history, const char *arg) {
-  (void)js; (void)history; (void)arg;
-  printf("Clearing context...\n");
-  return CMD_OK;
 }
 
 static cmd_result_t cmd_load(struct js *js, history_t *history, const char *arg) {
@@ -601,13 +591,18 @@ void ant_repl_run() {
     jsval_t eval_result = js_eval(js, multiline_buf, multiline_len);
     js_run_event_loop(js);
     
-    if (vtype(eval_result) == T_ERR) {
-      fprintf(stderr, "%s\n", js_str(js, eval_result));
-    } else {
-      const char *str = js_str(js, eval_result);
-      print_value_colored(str, stdout);
+    char cbuf_stack[512]; js_cstr_t cstr = js_to_cstr(
+      js, eval_result, cbuf_stack, sizeof(cbuf_stack)
+    );
+    
+    if (vtype(eval_result) == T_ERR)
+      fprintf(stderr, "%s\n", cstr.ptr);
+    else if (vtype(eval_result) == T_STR) 
+      printf("%s\n", cstr.ptr ? cstr.ptr : ""); 
+    else {
+      print_value_colored(cstr.ptr, stdout);
       printf("\n");
-    }
+    } if (cstr.needs_free) free((void *)cstr.ptr);
     
     free(multiline_buf);
     multiline_buf = NULL;
