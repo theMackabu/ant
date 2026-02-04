@@ -16848,7 +16848,7 @@ static jsval_t builtin_array_toString(struct js *js, jsval_t *args, int nargs) {
     return join_result;
   }
   
-  return js_mkstr(js, "[object Object]", 15);
+  return builtin_object_toString(js, args, nargs);
 }
 
 static jsval_t builtin_array_toLocaleString(struct js *js, jsval_t *args, int nargs) {
