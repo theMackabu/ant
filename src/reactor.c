@@ -37,7 +37,7 @@ void js_poll_events(ant_t *js) {
     } else free_coroutine(temp);
   }
   
-  if (js->needs_gc && !js->gc_suppress) {
+  if (js->needs_gc) {
     js->needs_gc = false;
     js_gc_compact(js);
     js->gc_alloc_since = 0;
@@ -72,7 +72,6 @@ static void maybe_gc(ant_t *js) {
 
 void js_run_event_loop(ant_t *js) {
   work_flags_t work;
-  js->gc_suppress = false;
   
   while ((work = get_pending_work()) & WORK_PENDING) {
     js_poll_events(js);

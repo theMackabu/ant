@@ -187,8 +187,4 @@ bool js_is_slot_prop(jsoff_t header);
 jsoff_t js_next_prop(jsoff_t header);
 jsoff_t js_loadoff(ant_t *js, jsoff_t off);
 
-void js_print_stack_trace(FILE *stream);
-void js_set_needs_gc(ant_t *js, bool needs);
-void js_set_gc_suppress(ant_t *js, bool suppress);
-
 #endif

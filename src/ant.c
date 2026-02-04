@@ -422,14 +422,6 @@ static const char *typestr(uint8_t t) {
   return typestr_raw(t);
 }
 
-void js_set_needs_gc(struct js *js, bool needs) {
-  js->needs_gc = needs;
-}
-
-void js_set_gc_suppress(struct js *js, bool suppress) {
-  js->gc_suppress = suppress;
-}
-
 uint8_t vtype(jsval_t v) { 
   return is_tagged(v) ? ((v >> NANBOX_TYPE_SHIFT) & NANBOX_TYPE_MASK) : (uint8_t)T_NUM; 
 }
@@ -20922,7 +20914,6 @@ ant_t *js_create(void *buf, size_t len) {
   js->errmsg_size = 4096;
   js->errmsg = (char *)malloc(js->errmsg_size);
   if (js->errmsg) js->errmsg[0] = '\0';
-  js->gc_suppress = false;
   
 #ifdef _WIN32
   js->stack_limit = 512 * 1024;
@@ -21995,7 +21986,7 @@ static jsval_t js_eval_inherit_strict(struct js *js, const char *buf, size_t len
 
   while (next(js) != TOK_EOF && !is_err(res)) {
     res = js_stmt(js);
-    if (js->needs_gc && js->eval_depth == 1 && !js->gc_suppress) {
+    if (js->needs_gc && js->eval_depth == 1) {
       js->needs_gc = false;
       js_gc_compact(js);
       js->gc_alloc_since = 0;
@@ -22013,21 +22004,14 @@ inline jsval_t js_eval(struct js *js, const char *buf, size_t len) {
 }
 
 static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this, jsval_t *args, int nargs, bool use_bound_this) {
-  bool saved_gc_suppress = js->gc_suppress;
-  js->gc_suppress = true;
-
   if (vtype(func) == T_FFI) {
-    jsval_t res = ffi_call_by_index(js, (unsigned int)vdata(func), args, nargs);
-    js->gc_suppress = saved_gc_suppress;
-    return res;
+    return ffi_call_by_index(js, (unsigned int)vdata(func), args, nargs);
   } else if (vtype(func) == T_CFUNC) {
     jsval_t saved_this = js->this_val;
     if (use_bound_this) js->this_val = bound_this;
     jsval_t (*fn)(struct js *, jsval_t *, int) = (jsval_t(*)(struct js *, jsval_t *, int)) vdata(func);
     jsval_t res = fn(js, args, nargs);
-    js->this_val = saved_this;
-    js->gc_suppress = saved_gc_suppress;
-    return res;
+    js->this_val = saved_this; return res;
   } else if (vtype(func) == T_FUNC) {
     jsval_t func_obj = mkval(T_OBJ, vdata(func));
     jsval_t cfunc_slot = get_slot(js, func_obj, SLOT_CFUNC);
@@ -22054,7 +22038,6 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
       js->this_val = saved_this;
       
       if (combined_args) free(combined_args);
-      js->gc_suppress = saved_gc_suppress;
       return res;
     }
     
@@ -22076,7 +22059,6 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
       jsval_t closure_scope = get_slot(js, func_obj, SLOT_SCOPE);
       jsval_t res = start_async_in_coroutine(js, fn, fnlen, closure_scope, final_args, final_nargs);
       if (combined_args) free(combined_args);
-      js->gc_suppress = saved_gc_suppress;
       return res;
     }
     
@@ -22100,7 +22082,6 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
       if (global_scope_stack && utarray_len(global_scope_stack) > 0) utarray_pop_back(global_scope_stack);
       delscope(js); js->scope = saved_scope;
       if (combined_args) free(combined_args);
-      js->gc_suppress = saved_gc_suppress;
       return js_mkerr(js, "failed to parse function");
     }
     
@@ -22175,12 +22156,9 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
     if (global_scope_stack && utarray_len(global_scope_stack) > 0) utarray_pop_back(global_scope_stack);
     delscope(js); js->scope = saved_scope;
     if (combined_args) free(combined_args);
-    
-    js->gc_suppress = saved_gc_suppress;
     return res;
   }
   
-  js->gc_suppress = saved_gc_suppress;
   return js_mkerr(js, "not a function");
 }
 

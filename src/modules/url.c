@@ -540,7 +540,7 @@ static jsval_t usp_delete(struct js *js, jsval_t *args, int nargs) {
 
   js_set(js, this_val, "_entries", new_entries);
   usp_sync_url(js, this_val);
-  js_set_needs_gc(js, true);
+  js->needs_gc = true;
   return js_mkundef();
 }
 

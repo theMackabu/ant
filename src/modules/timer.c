@@ -268,8 +268,6 @@ void queue_promise_trigger(uint32_t promise_id) {
 }
 
 void process_microtasks(struct js *js) {
-  js_set_gc_suppress(js, true);
-  
   while (timer_state.microtasks != NULL) {
     microtask_entry_t *entry = timer_state.microtasks;
     timer_state.microtasks = entry->next;
@@ -288,7 +286,6 @@ void process_microtasks(struct js *js) {
     free(entry);
   }
   
-  js_set_gc_suppress(js, false);
   js_check_unhandled_rejections(js);
 }
 
