@@ -2418,78 +2418,88 @@ static jsval_t builtin_bigint_toString(struct js *js, jsval_t *args, int nargs) 
   int radix = 10;
   if (nargs >= 1 && vtype(args[0]) == T_NUM) {
     radix = (int)tod(args[0]);
-    if (radix < 2 || radix > 36) {
-      return js_mkerr(js, "radix must be between 2 and 36");
-    }
+    if (radix < 2 || radix > 36) return js_mkerr(js, "radix must be between 2 and 36");
   }
   
   bool neg = bigint_IsNegative(js, val);
-  size_t dlen;
-  const char *digits = bigint_digits(js, val, &dlen);
+  size_t dlen; const char *digits = bigint_digits(js, val, &dlen);
   
   if (radix == 10) {
     size_t buflen = dlen + 2;
     char *buf = (char *)ant_calloc(buflen);
     if (!buf) return js_mkerr(js, "oom");
-    size_t n = 0;
-    if (neg) buf[n++] = '-';
-    memcpy(buf + n, digits, dlen);
-    n += dlen;
-    jsval_t ret = js_mkstr(js, buf, n);
-    free(buf);
+    size_t n = 0; if (neg) buf[n++] = '-';
+    memcpy(buf + n, digits, dlen); n += dlen;
+    jsval_t ret = js_mkstr(js, buf, n); free(buf);
     return ret;
   }
   
+  const uint32_t base = 1000000000U;
   size_t result_cap = dlen * 4 + 16;
+  
   char *result = (char *)ant_calloc(result_cap);
   if (!result) return js_mkerr(js, "oom");
+  
   size_t rpos = result_cap - 1;
   result[rpos] = '\0';
-  
-  char *num = (char *)ant_calloc(dlen + 1);
-  if (!num) { free(result); return js_mkerr(js, "oom"); }
-  memcpy(num, digits, dlen);
-  num[dlen] = '\0';
-  size_t numlen = dlen;
-  
-  while (numlen > 0 && !(numlen == 1 && num[0] == '0')) {
-    int remainder = 0;
-    for (size_t i = 0; i < numlen; i++) {
-      int d = remainder * 10 + (num[i] - '0');
-      num[i] = (char)('0' + (d / radix));
-      remainder = d % radix;
+
+  size_t limb_cap = (dlen + 8) / 9 + 1;
+  uint32_t *limbs = (uint32_t *)ant_calloc(limb_cap * sizeof(uint32_t));
+  if (!limbs) { free(result); return js_mkerr(js, "oom"); }
+  size_t limb_len = 1;
+
+  for (size_t i = 0; i < dlen; i++) {
+    uint64_t carry = (uint64_t)(digits[i] - '0');
+    for (size_t j = 0; j < limb_len; j++) {
+      uint64_t cur = (uint64_t)limbs[j] * 10 + carry;
+      limbs[j] = (uint32_t)(cur % base);
+      carry = cur / base;
     }
-    size_t start = 0;
-    while (start < numlen - 1 && num[start] == '0') start++;
-    memmove(num, num + start, numlen - start + 1);
-    numlen -= start;
-    if (numlen == 1 && num[0] == '0') numlen = 0;
+    if (carry != 0) {
+      if (limb_len == limb_cap) {
+        size_t new_cap = limb_cap * 2;
+        uint32_t *new_limbs = (uint32_t *)ant_realloc(limbs, new_cap * sizeof(uint32_t));
+        if (!new_limbs) { free(limbs); free(result); return js_mkerr(js, "oom"); }
+        limbs = new_limbs;
+        limb_cap = new_cap;
+      }
+      limbs[limb_len++] = (uint32_t)carry;
+    }
+  }
+
+  static const char digit_map[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+  while (limb_len > 0 && !(limb_len == 1 && limbs[0] == 0)) {
+    uint64_t remainder = 0;
+    for (size_t i = limb_len; i-- > 0;) {
+      uint64_t cur = (uint64_t)limbs[i] + remainder * base;
+      limbs[i] = (uint32_t)(cur / (uint64_t)radix);
+      remainder = cur % (uint64_t)radix;
+    }
+    
+    while (limb_len > 0 && limbs[limb_len - 1] == 0) limb_len--;
     if (rpos == 0) {
       size_t new_cap = result_cap * 2;
       char *new_result = (char *)ant_calloc(new_cap);
-      if (!new_result) { free(num); free(result); return js_mkerr(js, "oom"); }
+      if (!new_result) { free(limbs); free(result); return js_mkerr(js, "oom"); }
+      
       size_t used = result_cap - rpos;
       memcpy(new_result + new_cap - used, result + rpos, used);
       free(result);
+      
       result = new_result;
       rpos = new_cap - used;
       result_cap = new_cap;
     }
-    rpos--;
-    result[rpos] = (char)(remainder < 10 ? '0' + remainder : 'a' + (remainder - 10));
+    result[--rpos] = digit_map[remainder];
   }
+
+  free(limbs);
   
-  free(num);
-  
-  if (rpos == result_cap - 1) {
-    result[--rpos] = '0';
-  }
-  
+  if (rpos == result_cap - 1) result[--rpos] = '0';  
   if (neg) result[--rpos] = '-';
   
   jsval_t ret = js_mkstr(js, result + rpos, result_cap - 1 - rpos);
-  free(result);
-  return ret;
+  free(result); return ret;
 }
 
 static jsval_t mkobj(struct js *js, jsoff_t parent) {
