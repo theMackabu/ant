@@ -42,7 +42,7 @@ script = ['meson subprojects download', '''
 ''']
 
 [tasks.install]
-script = ["maid build -q", "maid strip", '''
+script = ["maid build -q", '''
    bash -c 'if which ant >/dev/null 2>&1; then
      dir=$(dirname "$(which ant)")
      cp ./build/ant "$dir/ant"
