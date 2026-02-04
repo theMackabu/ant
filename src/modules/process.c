@@ -1279,6 +1279,7 @@ static jsval_t env_getter(ant_t *js, jsval_t obj, const char *key, size_t key_le
 
 static bool env_setter(ant_t *js, jsval_t obj, const char *key, size_t key_len, jsval_t value) {
   jsval_t str_val = coerce_to_str(js, value);
+  if (is_err(str_val)) return false;
   setprop_cstr(js, obj, key, key_len, str_val);
   
   CSTR_BUF(buf, 256);
@@ -1425,10 +1426,11 @@ static void env_tostring_cb(ant_t *js, const char *key, size_t key_len, const ch
   size_t entry_len = key_len + 1 + val_len;
   
   if (c->pos + entry_len + 2 >= c->cap) {
-    c->cap = c->cap * 2 + entry_len;
-    char *new_buf = realloc(c->buf, c->cap);
+    size_t new_cap = c->cap * 2 + entry_len;
+    char *new_buf = realloc(c->buf, new_cap);
     if (!new_buf) return;
     c->buf = new_buf;
+    c->cap = new_cap;
   }
   
   if (c->pos > 0) c->buf[c->pos++] = '\n';

@@ -21812,6 +21812,16 @@ static void gc_roots_common(gc_off_op_t op_off, gc_val_op_t op_val, gc_cb_ctx_t 
     op_off(c, &c->js->for_let_stack[i].prop_off);
   }
   
+  op_val(c, &c->js->object);
+  op_val(c, &c->js->tval);
+  op_val(c, &c->js->scope);
+  op_val(c, &c->js->this_val);
+  op_val(c, &c->js->super_val);
+  op_val(c, &c->js->new_target);
+  op_val(c, &c->js->module_ns);
+  op_val(c, &c->js->current_func);
+  op_val(c, &c->js->thrown_value);
+  
   for (jshdl_t i = 0; i < c->js->gc_roots_len; i++) op_val(c, &c->js->gc_roots[i]);
   if (c->js->ascii_cache_init) for (int i = 0; i < 128; i++) op_val(c, &c->js->ascii_char_cache[i]);
 }
