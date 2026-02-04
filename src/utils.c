@@ -3,11 +3,19 @@
 
 #include <string.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <pthread.h>
 #include <argtable3.h>
+#include <sys/stat.h>
 
 static char ant_semver_buf[32];
 static pthread_once_t ant_semver_once = PTHREAD_ONCE_INIT;
+
+static const char *const js_extensions[] = {
+  ".js", ".ts", 
+  ".cjs", ".mjs", 
+  ".jsx", ".tsx", NULL
+};
 
 static void ant_semver_init(void) {
   const char *s = ANT_VERSION;
@@ -54,6 +62,42 @@ int is_typescript_file(const char *filename) {
   ext--;
   
   return (strcmp(ext, ".ts") == 0 || strcmp(ext, ".mts") == 0 || strcmp(ext, ".cts") == 0);
+}
+
+static bool has_js_extension(const char *filename) {
+  const char *dot = strrchr(filename, '.');
+  if (!dot) return false;
+  for (const char *const *ext = js_extensions; *ext; ext++) {
+    if (strcmp(dot, *ext) == 0) return true;
+  }
+  return false;
+}
+
+char *resolve_js_file(const char *filename) {
+  extern bool esm_is_url(const char *path);
+  if (esm_is_url(filename)) return strdup(filename);
+  
+  struct stat st;
+  if (stat(filename, &st) == 0 && S_ISREG(st.st_mode)) {
+    return strdup(filename);
+  }
+  
+  if (has_js_extension(filename)) return NULL;
+  size_t base_len = strlen(filename);
+  
+  for (const char *const *ext = js_extensions; *ext; ext++) {
+    size_t ext_len = strlen(*ext);
+    char *test_path = try_oom(base_len + ext_len + 1);
+    
+    memcpy(test_path, filename, base_len);
+    memcpy(test_path + base_len, *ext, ext_len + 1);
+    
+    if (stat(test_path, &st) == 0 && S_ISREG(st.st_mode)) {
+      return test_path;
+    } free(test_path);
+  }
+  
+  return NULL;
 }
 
 int ant_version(void *argtable[]) {

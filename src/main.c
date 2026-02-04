@@ -362,9 +362,13 @@ int main(int argc, char *argv[]) {
     struct stat path_stat;
     char *resolved_file = NULL;
     
+    resolved_file = resolve_js_file(module_file);
+    if (resolved_file) module_file = resolved_file;
+    
     if (stat(module_file, &path_stat) == 0 && S_ISDIR(path_stat.st_mode)) {
       size_t len = strlen(module_file);
       int has_slash = (len > 0 && module_file[len - 1] == '/');
+      if (resolved_file) free(resolved_file);
       resolved_file = try_oom(len + 10 + (has_slash ? 0 : 1));
       sprintf(resolved_file, "%s%sindex.js", module_file, has_slash ? "" : "/");
       module_file = resolved_file;
