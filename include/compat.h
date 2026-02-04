@@ -114,6 +114,11 @@ static inline char *compat_dirname(char *path) {
   return path;
 }
 
+static inline int compat_setenv(const char *name, const char *value, int overwrite) {
+  if (!overwrite && getenv(name) != NULL) return 0;
+  return _putenv_s(name, value);
+}
+
 #define realpath compat_realpath
 #define timegm compat_timegm
 #define usleep compat_usleep
@@ -122,6 +127,7 @@ static inline char *compat_dirname(char *path) {
 #define memmem compat_memmem
 #define basename compat_basename
 #define dirname compat_dirname
+#define setenv compat_setenv
 
 typedef unsigned int useconds_t;
 typedef unsigned int uid_t;
