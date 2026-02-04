@@ -41,6 +41,7 @@ struct js {
   jsval_t tval;           // holds last parsed numeric or string literal value
   jsval_t scope;          // current scope
   jsval_t global;         // global root object
+  jsval_t object;         // global object prototype
   jsval_t this_val;       // 'this' value for currently executing function
   jsval_t super_val;      // 'super' value for class methods
   jsval_t new_target;     // constructor called with 'new', undefined otherwise
@@ -112,7 +113,11 @@ jsval_t tov(double d);
 double tod(jsval_t v);
 
 jsval_t resolveprop(struct js *js, jsval_t v);
-jsval_t setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v);
+jsval_t setprop_cstr(struct js *js, jsval_t obj, const char *key, size_t len, jsval_t v);
+jsval_t setprop_interned(struct js *js, jsval_t obj, const char *key, size_t len, jsval_t v);
+
+jsval_t coerce_to_str(struct js *js, jsval_t v);
+jsval_t coerce_to_str_concat(struct js *js, jsval_t v);
 
 jsoff_t lkp(struct js *js, jsval_t obj, const char *buf, size_t len);
 jsoff_t lkp_proto(struct js *js, jsval_t obj, const char *buf, size_t len);

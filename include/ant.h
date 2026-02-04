@@ -75,6 +75,7 @@ void js_setthis(ant_t *, jsval_t);
 jsval_t js_getcurrentfunc(ant_t *);
 jsval_t js_get(ant_t *, jsval_t, const char *);
 jsval_t js_getprop_proto(ant_t *, jsval_t, const char *);
+jsval_t js_getprop_fallback(ant_t *js, jsval_t obj, const char *name);
 
 jsoff_t js_arr_len(struct js *js, jsval_t arr);
 jsval_t js_arr_get(struct js *js, jsval_t arr, jsoff_t idx);
@@ -94,6 +95,7 @@ uint64_t js_sym_id(jsval_t sym);
 const char *js_sym_desc(ant_t *js, jsval_t sym);
 
 jsval_t js_mksym_for(ant_t *, const char *key);
+jsval_t js_symbol_to_string(struct js *js, jsval_t sym);
 const char *js_sym_key(jsval_t sym);
 
 jsval_t js_mkobj(ant_t *);
@@ -167,9 +169,11 @@ void ant_register_library(ant_library_init_fn init_fn, const char *name, ...);
 
 typedef jsval_t (*js_getter_fn)(ant_t *js, jsval_t obj, const char *key, size_t key_len);
 typedef bool (*js_setter_fn)(ant_t *js, jsval_t obj, const char *key, size_t key_len, jsval_t value);
+typedef jsval_t (*js_keys_fn)(ant_t *js, jsval_t obj);
 
 void js_set_getter(ant_t *js, jsval_t obj, js_getter_fn getter);
 void js_set_setter(ant_t *js, jsval_t obj, js_setter_fn setter);
+void js_set_keys(ant_t *js, jsval_t obj, js_keys_fn keys);
 
 void js_set_descriptor(ant_t *js, jsval_t obj, const char *key, size_t klen, int flags);
 void js_set_getter_desc(ant_t *js, jsval_t obj, const char *key, size_t klen, jsval_t getter, int flags);

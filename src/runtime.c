@@ -92,13 +92,11 @@ void code_arena_reset(void) {
   code_arena_current = NULL;
 }
 
-struct ant_runtime *ant_runtime_init(struct js *js, int argc, char **argv, struct arg_file *ls_p) {
+struct ant_runtime *ant_runtime_init(ant_t *js, int argc, char **argv, struct arg_file *ls_p) {
   runtime = (struct ant_runtime){
     .js = js,
     .ant_obj = js_newobj(js),
-    .flags = 0,
-    .argc = argc,
-    .argv = argv,
+    .flags = 0, .argc = argc, .argv = argv,
     .ls_fp = (ls_p && ls_p->count > 0) ? ls_p->filename[0] : NULL,
   };
 

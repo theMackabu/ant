@@ -416,74 +416,64 @@ static char* read_line_with_history(history_t *hist, struct js *js, const char *
   } while (1);
 }
 
+typedef struct {
+  int paren, bracket, brace;
+  int *templates;
+  int template_count, template_cap;
+  char string_char;
+  bool in_string, escaped;
+} parse_state_t;
+
+static void push_template(parse_state_t *s) {
+  if (s->template_count >= s->template_cap) {
+    s->template_cap = s->template_cap ? s->template_cap * 2 : 8;
+    int *new_templates = realloc(s->templates, s->template_cap * sizeof(int));
+    if (!new_templates) { return; } s->templates = new_templates;
+  }
+  s->templates[s->template_count++] = s->brace;
+}
+
+static bool in_template_text(parse_state_t *s) {
+  return s->template_count > 0 && s->brace == s->templates[s->template_count - 1];
+}
+
 static bool is_incomplete_input(const char *code, size_t len) {
-  int paren_depth = 0;
-  int bracket_depth = 0;
-  int brace_depth = 0;
-  
-  bool in_string = false;
-  bool in_template = false;
-  char string_char = 0;
-  bool escape_next = false;
+  parse_state_t s = {0};
   
   for (size_t i = 0; i < len; i++) {
     char c = code[i];
     
-    if (escape_next) {
-      escape_next = false;
+    if (s.escaped) { s.escaped = false; continue; }
+    if (c == '\\' && (s.in_string || s.template_count > 0)) { s.escaped = true; continue; }
+    if (s.in_string) { if (c == s.string_char) s.in_string = false; continue; }
+    
+    if (in_template_text(&s)) {
+      if (c == '`') s.template_count--;
+      else if (c == '$' && i + 1 < len && code[i + 1] == '{') { s.brace++; i++; }
       continue;
     }
     
-    if (c == '\\' && (in_string || in_template)) {
-      escape_next = true;
-      continue;
-    }
-    
-    if (in_string) {
-      if (c == string_char) in_string = false;
-      continue;
-    }
-    
-    if (in_template) {
-      if (c == '`') {
-        in_template = false;
-      } else if (c == '$' && i + 1 < len && code[i + 1] == '{') {
-        brace_depth++; i++;
+    if (c == '/' && i + 1 < len) {
+      if (code[i + 1] == '/') { while (i < len && code[i] != '\n') i++; continue; }
+      if (code[i + 1] == '*') {
+        for (i += 2; i + 1 < len && !(code[i] == '*' && code[i + 1] == '/'); i++);
+        if (i + 1 >= len) { free(s.templates); return true; }
+        i++; continue;
       }
-      continue;
-    }
-    
-    if (c == '/' && i + 1 < len && code[i + 1] == '/') {
-      while (i < len && code[i] != '\n') i++;
-      continue;
-    }
-    
-    if (c == '/' && i + 1 < len && code[i + 1] == '*') {
-      i += 2;
-      while (i + 1 < len && !(code[i] == '*' && code[i + 1] == '/')) i++;
-      if (i + 1 >= len) return true;
-      i++; continue;
     }
     
     switch (c) {
-      case '"':
-      case '\'':
-        in_string = true;
-        string_char = c;
-        break;
-      case '`':
-        in_template = true;
-        break;
-      case '(': paren_depth++; break;
-      case ')': paren_depth--; break;
-      case '[': bracket_depth++; break;
-      case ']': bracket_depth--; break;
-      case '{': brace_depth++; break;
-      case '}': brace_depth--; break;
+      case '"': case '\'': s.in_string = true; s.string_char = c; break;
+      case '`': push_template(&s); break;
+      case '(': s.paren++; break;   case ')': s.paren--; break;
+      case '[': s.bracket++; break; case ']': s.bracket--; break;
+      case '{': s.brace++; break;   case '}': s.brace--; break;
     }
   }
   
-  return in_string || in_template || paren_depth > 0 || bracket_depth > 0 || brace_depth > 0;
+  bool incomplete = s.in_string || s.template_count > 0 || s.paren > 0 || s.bracket > 0 || s.brace > 0;
+  free(s.templates);
+  return incomplete;
 }
 
 void ant_repl_run() {

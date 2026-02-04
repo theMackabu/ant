@@ -8,25 +8,55 @@
 #include "internal.h"
 #include "modules/symbol.h"
 
-static jsval_t g_iterator_sym = 0;
-static jsval_t g_asyncIterator_sym = 0;
-static jsval_t g_toStringTag_sym = 0;
-static jsval_t g_hasInstance_sym = 0;
-static jsval_t g_observable_sym = 0;
+typedef struct {
+  jsval_t sym;
+  char key[32];
+} wellknown_sym_t;
 
-static char g_iter_sym_key[32] = {0};
-static char g_asyncIter_sym_key[32] = {0};
-static char g_toStringTag_sym_key[32] = {0};
-static char g_observable_sym_key[32] = {0};
+static wellknown_sym_t g_iterator = {0};
+static wellknown_sym_t g_asyncIterator = {0};
+static wellknown_sym_t g_toStringTag = {0};
+static wellknown_sym_t g_hasInstance = {0};
+static wellknown_sym_t g_observable = {0};
+static wellknown_sym_t g_toPrimitive = {0};
 
-jsval_t get_iterator_symbol(void) { return g_iterator_sym; }
-jsval_t get_asyncIterator_symbol(void) { return g_asyncIterator_sym; }
-jsval_t get_observable_symbol(void) { return g_observable_sym; }
+jsval_t get_iterator_symbol(void) { return g_iterator.sym; }
+jsval_t get_asyncIterator_symbol(void) { return g_asyncIterator.sym; }
+jsval_t get_observable_symbol(void) { return g_observable.sym; }
 
-const char *get_iterator_sym_key(void) { return g_iter_sym_key; }
-const char *get_asyncIterator_sym_key(void) { return g_asyncIter_sym_key; }
-const char *get_toStringTag_sym_key(void) { return g_toStringTag_sym_key; }
-const char *get_observable_sym_key(void) { return g_observable_sym_key; }
+const char *get_iterator_sym_key(void) { return g_iterator.key; }
+const char *get_asyncIterator_sym_key(void) { return g_asyncIterator.key; }
+const char *get_toStringTag_sym_key(void) { return g_toStringTag.key; }
+const char *get_observable_sym_key(void) { return g_observable.key; }
+const char *get_toPrimitive_sym_key(void) { return g_toPrimitive.key; }
+const char *get_hasInstance_sym_key(void) { return g_hasInstance.key; }
+
+static const struct { jsval_t *sym; const char *name; } sym_table[] = {
+  { &g_iterator.sym, "Symbol.iterator" },
+  { &g_asyncIterator.sym, "Symbol.asyncIterator" },
+  { &g_toStringTag.sym, "Symbol.toStringTag" },
+  { &g_hasInstance.sym, "Symbol.hasInstance" },
+  { &g_observable.sym, "Symbol.observable" },
+  { &g_toPrimitive.sym, "Symbol.toPrimitive" },
+};
+
+const char *get_symbol_description_from_key(const char *sym_key, size_t key_len) {
+  if (key_len < 9 || memcmp(sym_key, "__sym_", 6) != 0) return NULL;
+  
+  uint64_t id = 0;
+  for (const char *p = sym_key + 6; *p >= '0' && *p <= '9'; p++) id = id * 10 + (*p - '0');
+  
+  for (size_t i = 0; i < sizeof(sym_table) / sizeof(sym_table[0]); i++) {
+    if (js_sym_id(*sym_table[i].sym) == id) return sym_table[i].name;
+  }
+  
+  return "Symbol()";
+}
+
+static inline void init_symbol(struct js *js, wellknown_sym_t *sym_var, const char *name) {
+  sym_var->sym = js_mksym(js, name);
+  snprintf(sym_var->key, sizeof(sym_var->key), "__sym_%llu__", (unsigned long long)js_sym_id(sym_var->sym));
+}
 
 static jsval_t builtin_Symbol(struct js *js, jsval_t *args, int nargs) {
   const char *desc = NULL;
@@ -58,8 +88,17 @@ static jsval_t builtin_Symbol_keyFor(struct js *js, jsval_t *args, int nargs) {
   return js_mkstr(js, key, strlen(key));
 }
 
+static jsval_t builtin_Symbol_toString(struct js *js, jsval_t *args, int nargs) {
+  jsval_t this_val = js_getthis(js);
+  
+  if (vtype(this_val) != T_SYMBOL) {
+    return js_mkerr(js, "Symbol.prototype.toString requires a symbol");
+  }
+  
+  return js_symbol_to_string(js, this_val);
+}
+
 static jsval_t iterator_next(struct js *js, jsval_t *args, int nargs) {
-  (void)args; (void)nargs;
   jsval_t this_val = js_getthis(js);
   
   jsval_t arr = js_get(js, this_val, "__arr");
@@ -87,7 +126,6 @@ static jsval_t iterator_next(struct js *js, jsval_t *args, int nargs) {
 }
 
 static jsval_t array_iterator(struct js *js, jsval_t *args, int nargs) {
-  (void)args; (void)nargs;
   jsval_t arr = js_getthis(js);
   
   jsval_t len_val = js_get(js, arr, "length");
@@ -103,7 +141,6 @@ static jsval_t array_iterator(struct js *js, jsval_t *args, int nargs) {
 }
 
 static jsval_t string_iterator_next(struct js *js, jsval_t *args, int nargs) {
-  (void)args; (void)nargs;
   jsval_t this_val = js_getthis(js);
   
   jsval_t str = js_get(js, this_val, "__str");
@@ -145,54 +182,76 @@ static jsval_t string_iterator(struct js *js, jsval_t *args, int nargs) {
   return iter;
 }
 
-const char *get_symbol_description_from_key(const char *sym_key, size_t key_len) {
-  if (
-    key_len < 9 || sym_key[0] != '_' || sym_key[1] != '_' || 
-    sym_key[2] != 's' || sym_key[3] != 'y' || sym_key[4] != 'm' || sym_key[5] != '_'
-  ) return NULL;
+static jsval_t date_toPrimitive(struct js *js, jsval_t *args, int nargs) {
+  jsval_t this_val = js_getthis(js);
   
-  if (g_iter_sym_key[0] && strncmp(sym_key, g_iter_sym_key, key_len) == 0 && g_iter_sym_key[key_len] == '\0') return "Symbol.iterator";
-  if (g_toStringTag_sym_key[0] && strncmp(sym_key, g_toStringTag_sym_key, key_len) == 0 && g_toStringTag_sym_key[key_len] == '\0') return "Symbol.toStringTag";
+  const char *hint = "default";
+  if (nargs > 0 && vtype(args[0]) == T_STR) {
+    hint = js_getstr(js, args[0], NULL);
+  } bool prefer_string = (hint == NULL || strcmp(hint, "number") != 0);
   
-  return "Symbol()";
+  const char *methods[2] = {
+    prefer_string ? "toString" : "valueOf",
+    prefer_string ? "valueOf" : "toString"
+  };
+  
+  for (int i = 0; i < 2; i++) {
+    jsval_t method = js_getprop_fallback(js, this_val, methods[i]);
+    if (vtype(method) == T_FUNC || vtype(method) == T_CFUNC) {
+      jsval_t result = js_call_with_this(js, method, this_val, NULL, 0);
+      if (is_err(result) || !is_object_type(result)) return result;
+    }
+  }
+  
+  return js_mkerr(js, "Cannot convert object to primitive value");
 }
+
 
 void init_symbol_module(void) {
   struct js *js = rt->js;
   
-  g_iterator_sym = js_mksym(js, "Symbol.iterator");
-  g_asyncIterator_sym = js_mksym(js, "Symbol.asyncIterator");
-  g_toStringTag_sym = js_mksym(js, "Symbol.toStringTag");
-  g_hasInstance_sym = js_mksym(js, "Symbol.hasInstance");
-  g_observable_sym = js_mksym(js, "Symbol.observable");
-  
-  snprintf(g_iter_sym_key, sizeof(g_iter_sym_key), "__sym_%llu__", (unsigned long long)js_sym_id(g_iterator_sym));
-  snprintf(g_asyncIter_sym_key, sizeof(g_asyncIter_sym_key), "__sym_%llu__", (unsigned long long)js_sym_id(g_asyncIterator_sym));
-  snprintf(g_toStringTag_sym_key, sizeof(g_toStringTag_sym_key), "__sym_%llu__", (unsigned long long)js_sym_id(g_toStringTag_sym));
-  snprintf(g_observable_sym_key, sizeof(g_observable_sym_key), "__sym_%llu__", (unsigned long long)js_sym_id(g_observable_sym));
+  init_symbol(js, &g_iterator, "Symbol.iterator");
+  init_symbol(js, &g_asyncIterator, "Symbol.asyncIterator");
+  init_symbol(js, &g_toStringTag, "Symbol.toStringTag");
+  init_symbol(js, &g_observable, "Symbol.observable");
+  init_symbol(js, &g_toPrimitive, "Symbol.toPrimitive");
+  init_symbol(js, &g_hasInstance, "Symbol.hasInstance");
+
+  jsval_t symbol_proto = js_mkobj(js);
+  js_set(js, symbol_proto, "toString", js_mkfun(builtin_Symbol_toString));
   
   jsval_t symbol_ctor = js_mkobj(js);
   js_set_slot(js, symbol_ctor, SLOT_CFUNC, js_mkfun(builtin_Symbol));
   js_setprop(js, symbol_ctor, js_mkstr(js, "for", 3), js_mkfun(builtin_Symbol_for));
   js_set(js, symbol_ctor, "keyFor", js_mkfun(builtin_Symbol_keyFor));
+  js_set(js, symbol_ctor, "prototype", symbol_proto);
   
-  js_set(js, symbol_ctor, "iterator", g_iterator_sym);
-  js_set(js, symbol_ctor, "asyncIterator", g_asyncIterator_sym);
-  js_set(js, symbol_ctor, "toStringTag", g_toStringTag_sym);
-  js_set(js, symbol_ctor, "hasInstance", g_hasInstance_sym);
-  js_set(js, symbol_ctor, "observable", g_observable_sym);
+  js_set(js, symbol_ctor, "iterator", g_iterator.sym);
+  js_set(js, symbol_ctor, "asyncIterator", g_asyncIterator.sym);
+  js_set(js, symbol_ctor, "toStringTag", g_toStringTag.sym);
+  js_set(js, symbol_ctor, "hasInstance", g_hasInstance.sym);
+  js_set(js, symbol_ctor, "observable", g_observable.sym);
+  js_set(js, symbol_ctor, "toPrimitive", g_toPrimitive.sym);
   
   jsval_t func_symbol = js_obj_to_func(symbol_ctor);
   js_set(js, js_glob(js), "Symbol", func_symbol);
   
-  // set internal types before module ready
+  // set internal types before ant module snapshot
   js_set(js, rt->ant_obj, get_toStringTag_sym_key(), js_mkstr(js, "Ant", 3));
   
   jsval_t array_ctor = js_get(js, js_glob(js), "Array");
   jsval_t array_proto = js_get(js, array_ctor, "prototype");
-  js_set(js, array_proto, g_iter_sym_key, js_mkfun(array_iterator));
+  js_set(js, array_proto, g_iterator.key, js_mkfun(array_iterator));
   
   jsval_t string_ctor = js_get(js, js_glob(js), "String");
   jsval_t string_proto = js_get(js, string_ctor, "prototype");
-  js_set(js, string_proto, g_iter_sym_key, js_mkfun(string_iterator));
+  js_set(js, string_proto, g_iterator.key, js_mkfun(string_iterator));
+  
+  jsval_t date_ctor = js_get(js, js_glob(js), "Date");
+  jsval_t date_proto = js_get(js, date_ctor, "prototype");
+  js_set(js, date_proto, g_toPrimitive.key, js_mkfun(date_toPrimitive));
+  
+  jsval_t promise_ctor = js_get(js, js_glob(js), "Promise");
+  jsval_t promise_proto = js_get(js, promise_ctor, "prototype");
+  js_set(js, promise_proto, g_toStringTag.key, js_mkstr(js, "Promise", 7));
 }
