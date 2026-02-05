@@ -3738,7 +3738,7 @@ static inline bool is_async_function(const char *code, jsoff_t pos, jsoff_t end)
   
   jsoff_t scan = pos + 5;
   while (scan < end && (
-    code[scan] == ' ' || 
+    code[scan] == ' '  || 
     code[scan] == '\t' || 
     code[scan] == '\n' || 
     code[scan] == '\r'

@@ -84,12 +84,27 @@ static void for_let_swap_with_coro(struct js *js, coroutine_t *coro) {
   coro->for_let_stack_cap = tmp_cap;
 }
 
+static void token_stream_swap_with_coro(struct js *js, coroutine_t *coro) {
+  void *tmp_stream = js->token_stream;
+  int tmp_pos = js->token_stream_pos;
+  const char *tmp_code = js->token_stream_code;
+  
+  js->token_stream = coro->token_stream;
+  js->token_stream_pos = coro->token_stream_pos;
+  js->token_stream_code = coro->token_stream_code;
+  
+  coro->token_stream = tmp_stream;
+  coro->token_stream_pos = tmp_pos;
+  coro->token_stream_code = tmp_code;
+}
+
 coro_saved_state_t coro_enter(struct js *js, coroutine_t *coro) {
   extern UT_array *global_scope_stack;
   coro_saved_state_t saved = { js->scope, global_scope_stack };
   js->scope = coro->scope;
   global_scope_stack = coro->scope_stack;
   for_let_swap_with_coro(js, coro);
+  token_stream_swap_with_coro(js, coro);
   return saved;
 }
 
@@ -100,6 +115,7 @@ void coro_leave(struct js *js, coroutine_t *coro, coro_saved_state_t saved) {
   js->scope = saved.scope;
   global_scope_stack = saved.scope_stack;
   for_let_swap_with_coro(js, coro);
+  token_stream_swap_with_coro(js, coro);
 }
 
 static size_t calculate_coro_stack_size(void) {
@@ -212,6 +228,9 @@ jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t code_le
     .for_let_stack = NULL,
     .for_let_stack_len = 0,
     .for_let_stack_cap = 0,
+    .token_stream = NULL,
+    .token_stream_pos = 0,
+    .token_stream_code = NULL,
   };
   
   if (nargs > 0) {
