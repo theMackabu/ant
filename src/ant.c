@@ -7384,7 +7384,9 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
     if (is_non_numeric(lu) || is_non_numeric(ru) || (vtype(lu) == T_STR && vtype(ru) == T_STR)) {
       jsval_t l_str = coerce_to_str_concat(js, l);
       if (is_err(l_str)) return l_str;
+      jshdl_t lh = js_root(js, l_str);
       jsval_t r_str = coerce_to_str_concat(js, r);
+      l_str = js_deref(js, lh); js_unroot(js, lh);
       if (is_err(r_str)) return r_str;
       return do_string_op(js, op, l_str, r_str);
     }
@@ -9517,14 +9519,18 @@ static jsval_t js_expr_bp(struct js *js, uint8_t min_bp) {
     goto *dispatch[tok];
 
     do_binop: {
+      jshdl_t lh = js_root(js, lhs);
       jsval_t rhs = js_expr_bp(js, bp + 1);
+      lhs = js_deref(js, lh); js_unroot(js, lh);
       if (is_err(rhs)) return rhs;
       lhs = do_op(js, tok, lhs, rhs);
       goto loop;
     }
 
     do_exp: {
+      jshdl_t lh = js_root(js, lhs);
       jsval_t rhs = js_expr_bp(js, bp);
+      lhs = js_deref(js, lh); js_unroot(js, lh);
       if (is_err(rhs)) return rhs;
       lhs = do_op(js, TOK_EXP, lhs, rhs);
       goto loop;
@@ -9534,7 +9540,9 @@ static jsval_t js_expr_bp(struct js *js, uint8_t min_bp) {
       uint8_t flags = js->flags;
       lhs = resolveprop(js, lhs);
       if (js_truthy(js, lhs)) js->flags |= F_NOEXEC;
+      jshdl_t lh = js_root(js, lhs);
       jsval_t rhs = js_expr_bp(js, bp);
+      lhs = js_deref(js, lh); js_unroot(js, lh);
       if (!(flags & F_NOEXEC) && !js_truthy(js, lhs)) lhs = rhs;
       js->flags = flags;
       if (is_err(rhs)) return rhs;
@@ -9545,7 +9553,9 @@ static jsval_t js_expr_bp(struct js *js, uint8_t min_bp) {
       uint8_t flags = js->flags;
       lhs = resolveprop(js, lhs);
       if (!js_truthy(js, lhs)) js->flags |= F_NOEXEC;
+      jshdl_t lh = js_root(js, lhs);
       jsval_t rhs = js_expr_bp(js, bp);
+      lhs = js_deref(js, lh); js_unroot(js, lh);
       if (!(flags & F_NOEXEC) && js_truthy(js, lhs)) lhs = rhs;
       js->flags = flags;
       if (is_err(rhs)) return rhs;
@@ -9557,7 +9567,9 @@ static jsval_t js_expr_bp(struct js *js, uint8_t min_bp) {
       lhs = resolveprop(js, lhs);
       uint8_t lhs_type = vtype(lhs);
       if (lhs_type != T_NULL && lhs_type != T_UNDEF) js->flags |= F_NOEXEC;
+      jshdl_t lh = js_root(js, lhs);
       jsval_t rhs = js_expr_bp(js, bp);
+      lhs = js_deref(js, lh); js_unroot(js, lh);
       if (!(flags & F_NOEXEC) && (lhs_type == T_NULL || lhs_type == T_UNDEF)) lhs = rhs;
       js->flags = flags;
       if (is_err(rhs)) return rhs;
@@ -11023,7 +11035,7 @@ static jsval_t js_for(struct js *js) {
   pos4 = js->pos;
   
   while (!(flags & F_NOEXEC)) {
-    js_gc_maybe(js);
+    js_gc_safepoint(js);
     js->flags = flags, js->pos = pos1, js->consumed = 1;
     if (next(js) != TOK_SEMICOLON) {
       v = resolveprop(js, js_expr(js));
@@ -11132,7 +11144,7 @@ static jsval_t js_while(struct js *js) {
   
   if (exe) {
     while (true) {
-      js_gc_maybe(js);
+      js_gc_safepoint(js);
       js->flags = flags;
       js->pos = cond_start;
       js->consumed = 1;
@@ -11228,7 +11240,7 @@ static jsval_t js_do_while(struct js *js) {
   
   if (exe) {
     do {
-      js_gc_maybe(js);
+      js_gc_safepoint(js);
       js->pos = body_start;
       js->consumed = 1;
       js->flags = (flags & ~F_NOEXEC) | F_LOOP;
@@ -22682,10 +22694,7 @@ static jsval_t js_eval_inherit_strict(struct js *js, const char *buf, size_t len
 
   while (next(js) != TOK_EOF && !is_err(res)) {
     res = js_stmt(js);
-    if (js->needs_gc && js->eval_depth == 1) {
-      js->needs_gc = false;
-      if (js_gc_compact(js) > 0) js->gc_alloc_since = 0;
-    }
+    if (js->needs_gc && js->eval_depth == 1) js_gc_safepoint(js);
     if (js->flags & F_RETURN) break;
   }
   

@@ -37,4 +37,10 @@ size_t js_gc_compact(ant_t *js);
 void js_gc_maybe(ant_t *js);
 void js_gc_throttle(bool enabled);
 
+#define js_gc_safepoint(js) do { \
+  (js)->gc_safe = true;          \
+  js_gc_maybe(js);               \
+  (js)->gc_safe = false;          \
+} while (0)
+
 #endif

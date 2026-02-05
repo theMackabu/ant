@@ -573,6 +573,11 @@ size_t js_gc_compact(ant_t *js) {
   if (!js || js->brk == 0) return 0;
   if (js->brk < 2 * 1024 * 1024) return 0;
 
+  if (!js->gc_safe) {
+    js->needs_gc = true;
+    return 0;
+  }
+
   mco_coro *running = mco_running();
   int in_coroutine = (running != NULL && running->stack_base != NULL);
   

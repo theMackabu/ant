@@ -45,11 +45,7 @@ void js_poll_events(ant_t *js) {
     } else free_coroutine(temp);
   }
   
-  if (js->needs_gc) {
-    js->needs_gc = false;
-    if (js_gc_compact(js) > 0) js->gc_alloc_since = 0;
-  }
-  
+  if (js->needs_gc) js_gc_safepoint(js);  
   if (g_poll_hook) g_poll_hook(g_poll_hook_data);
 }
 
@@ -80,7 +76,7 @@ void js_run_event_loop(ant_t *js) {
   
     if (work & WORK_BLOCKING) uv_run(uv_default_loop(), UV_RUN_NOWAIT);
     else if ((work & WORK_ASYNC) || uv_alive) {
-      js_gc_maybe(js);
+      js_gc_safepoint(js);
       uv_run(uv_default_loop(), UV_RUN_ONCE);
     } else if (work & WORK_COROUTINES) break;
   }
