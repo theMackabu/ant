@@ -193,7 +193,7 @@ static int execute_module(struct js *js, const char *filename) {
   js_setup_import_meta(js, use_path);
   js_mkscope(js);
   
-  jsval_t result = js_eval(js, js_code, js_len);
+  jsval_t result = js_eval_cached(js, js_code, js_len);
   free(js_code);
   
   if (vtype(result) == T_ERR) {

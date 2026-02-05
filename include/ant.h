@@ -44,6 +44,7 @@ jsval_t js_glob(ant_t *);
 jsval_t js_mkscope(ant_t *);
 jsval_t js_getscope(ant_t *);
 jsval_t js_eval(ant_t *, const char *, size_t);
+jsval_t js_eval_cached(ant_t *, const char *, size_t);
 
 void js_destroy(ant_t *);
 void js_delscope(ant_t *);

@@ -285,6 +285,7 @@ typedef struct parsed_func {
   bool has_rest;
   bool is_strict;
   bool is_expr;
+  bool uses_arguments;
   jsoff_t rest_param_start;
   jsoff_t rest_param_len;
   UT_array *params;
@@ -3035,42 +3036,37 @@ static jsval_t mkslot(struct js *js, jsval_t obj, internal_slot_t slot, jsval_t 
   
   jsoff_t header = loadoff(js, head);
   jsoff_t first_prop = header & ~(3U | FLAGMASK);
-  jsoff_t tail = loadoff(js, head + sizeof(jsoff_t) + sizeof(jsoff_t));
   
   jsoff_t slot_key = (jsoff_t)slot;
   memcpy(buf, &slot_key, sizeof(slot_key));
   memcpy(buf + sizeof(slot_key), &v, sizeof(v));
   
   jsoff_t new_prop_off = js->brk;
-  jsval_t prop = mkentity(js, 0 | T_PROP | SLOTMASK, buf, sizeof(buf));
+  jsval_t prop = mkentity(js, first_prop | T_PROP | SLOTMASK, buf, sizeof(buf));
   if (is_err(prop)) return prop;
   
+  jsoff_t new_header = new_prop_off | (header & (3U | FLAGMASK));
+  saveoff(js, head, new_header);
+  
   if (first_prop == 0) {
-    jsoff_t new_header = new_prop_off | (header & (3U | FLAGMASK));
-    saveoff(js, head, new_header);
-  } else {
-    jsoff_t tail_header = loadoff(js, tail);
-    jsoff_t new_tail_header = new_prop_off | (tail_header & (3U | FLAGMASK));
-    saveoff(js, tail, new_tail_header);
+    saveoff(js, head + sizeof(jsoff_t) + sizeof(jsoff_t), new_prop_off);
   }
-  saveoff(js, head + sizeof(jsoff_t) + sizeof(jsoff_t), new_prop_off);
   
   return prop;
 }
 
-static jsoff_t search_slot(struct js *js, jsval_t obj, internal_slot_t slot) {
+static inline jsoff_t search_slot(struct js *js, jsval_t obj, internal_slot_t slot) {
   jsoff_t off = (jsoff_t) vdata(obj);
-  if (off >= js->brk) return 0;
+  if (__builtin_expect(off >= js->brk, 0)) return 0;
   jsoff_t next = loadoff(js, off) & ~(3U | FLAGMASK);
   jsoff_t header, koff;
 
 check:
-  if (next == 0 || next >= js->brk) return 0;
+  if (__builtin_expect(next == 0 || next >= js->brk, 0)) return 0;
   header = loadoff(js, next);
-  if ((header & SLOTMASK) == 0) goto advance;
+  if ((header & SLOTMASK) == 0) return 0;
   koff = loadoff(js, next + sizeof(jsoff_t));
   if (koff == (jsoff_t)slot) return next;
-advance:
   next = header & ~(3U | FLAGMASK);
   goto check;
 }
@@ -6186,6 +6182,17 @@ static bool is_strict_function_body(const char *body, size_t len) {
   return false;
 }
 
+static bool code_uses_arguments(const char *code, jsoff_t len) {
+  if (len < 9) return false;
+  for (jsoff_t i = 0; i + 8 < len; i++) {
+    if (code[i] == 'a' && memcmp(&code[i], INTERN_ARGUMENTS, 9) == 0) {
+      if (i > 0 && (is_alpha(code[i-1]) || code[i-1] == '_' || (code[i-1] >= '0' && code[i-1] <= '9'))) continue;
+      if (i + 9 < len && (is_alpha(code[i+9]) || code[i+9] == '_' || (code[i+9] >= '0' && code[i+9] <= '9'))) continue;
+      return true;
+    }
+  } return false;
+}
+
 static parsed_func_t *get_or_parse_func(const char *fn, jsoff_t fnlen) {
   uint64_t h = hash_key(fn, fnlen);
   parsed_func_t *cached = NULL;
@@ -6280,6 +6287,7 @@ static parsed_func_t *get_or_parse_func(const char *fn, jsoff_t fnlen) {
   pf->body_len = (fnlen > fnpos) ? (fnlen - fnpos - (is_block ? 1 : 0)) : 0;
   pf->is_expr = !is_block;
   pf->is_strict = is_strict_function_body(&fn[fnpos], pf->body_len);
+  pf->uses_arguments = code_uses_arguments(&fn[pf->body_start], pf->body_len);
   pf->tokens = NULL;
   
   HASH_ADD(hh, func_parse_cache, code_hash, sizeof(pf->code_hash), pf);
@@ -6289,18 +6297,6 @@ static parsed_func_t *get_or_parse_func(const char *fn, jsoff_t fnlen) {
 static bool is_eval_or_arguments(struct js *js, jsoff_t toff, jsoff_t tlen) {
   if (tlen == 4 && memcmp(&js->code[toff], "eval", 4) == 0) return true;
   if (tlen == 9 && memcmp(&js->code[toff], "arguments", 9) == 0) return true;
-  return false;
-}
-
-static bool code_uses_arguments(const char *code, jsoff_t len) {
-  if (len < 9) return false;
-  for (jsoff_t i = 0; i + 8 < len; i++) {
-    if (code[i] == 'a' && memcmp(&code[i], INTERN_ARGUMENTS, 9) == 0) {
-      if (i > 0 && (is_alpha(code[i-1]) || code[i-1] == '_' || (code[i-1] >= '0' && code[i-1] <= '9'))) continue;
-      if (i + 9 < len && (is_alpha(code[i+9]) || code[i+9] == '_' || (code[i+9] >= '0' && code[i+9] <= '9'))) continue;
-      return true;
-    }
-  }
   return false;
 }
 
@@ -6473,7 +6469,7 @@ jsval_t call_js_internal(
     }
   }
   
-  bool needs_arguments = code_uses_arguments(&fn[pf->body_start], pf->body_len);
+  bool needs_arguments = pf->uses_arguments;
   bool func_strict = pf->is_strict;
   
   if (!func_strict && vtype(func_val) == T_FUNC) {
@@ -20779,7 +20775,7 @@ static jsval_t esm_load_module(struct js *js, esm_module_t *mod) {
   js_set_filename(js, mod->resolved_path);
   mkscope(js); set_slot(js, js->scope, SLOT_MODULE_SCOPE, tov(1));
   
-  jsval_t result = js_eval(js, js_code, js_len);
+  jsval_t result = js_eval_cached(js, js_code, js_len);
   free(content);
   
   js->scope = saved_scope;
@@ -22695,6 +22691,30 @@ inline jsval_t js_eval(struct js *js, const char *buf, size_t len) {
   return js_eval_inherit_strict(js, buf, len, false);
 }
 
+jsval_t js_eval_cached(struct js *js, const char *buf, size_t len) {
+  if (len == (size_t)~0U) len = strlen(buf);
+  
+  void *saved_stream = js->token_stream;
+  int saved_pos = js->token_stream_pos;
+  const char *saved_code = js->token_stream_code;
+  
+  token_stream_t *ts = tokenize_body(js, buf, (jsoff_t)len);
+  if (ts) {
+    js->token_stream = ts;
+    js->token_stream_pos = 0;
+    js->token_stream_code = buf;
+  }
+  
+  jsval_t result = js_eval_inherit_strict(js, buf, len, false);
+  if (ts) { free(ts->tokens); free(ts); }
+  
+  js->token_stream = saved_stream;
+  js->token_stream_pos = saved_pos;
+  js->token_stream_code = saved_code;
+  
+  return result;
+}
+
 static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this, jsval_t *args, int nargs, bool use_bound_this) {
   if (vtype(func) == T_FFI) {
     return ffi_call_by_index(js, (unsigned int)vdata(func), args, nargs);
@@ -22815,7 +22835,7 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
       }
     }
     
-    if (code_uses_arguments(&fn[pf->body_start], pf->body_len)) {
+    if (pf->uses_arguments) {
       setup_arguments(js, js->scope, final_args, final_nargs, pf->is_strict);
     }
     
