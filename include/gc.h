@@ -17,14 +17,24 @@ typedef struct {
   jsval_t cached;
 } rope_node_t;
 
-#define GC_FWD_LOAD_FACTOR 70
-#define GC_ROOTS_INITIAL_CAP 32
+#define GC_FWD_LOAD_FACTOR    70
+#define GC_ROOTS_INITIAL_CAP  32
+#define GC_CB(ret, name, arg) ret (*name)(void *ctx, arg old)
 
-#define GC_FWD_ARGS jsval_t (*fwd_val)(void *ctx, jsval_t old), void *ctx
-#define GC_UPDATE_ARGS ant_t *js, jsoff_t (*fwd_off)(void *ctx, jsoff_t old), GC_FWD_ARGS
-#define GC_OP_VAL_ARGS void (*op_val)(void *ctx, jsval_t *val), void *ctx
-
-void js_maybe_gc(ant_t *js);
 size_t js_gc_compact(ant_t *js);
+
+#define GC_CTX       void *ctx
+#define GC_FWD_OFF   GC_CB(jsoff_t, fwd_off, jsoff_t)
+#define GC_FWD_VAL   GC_CB(jsval_t, fwd_val, jsval_t)
+#define GC_WEAK_OFF  GC_CB(jsoff_t, weak_off, jsoff_t)
+#define GC_OP_VAL    void (*op_val)(void *ctx, jsval_t *val)
+
+#define GC_FWD_ARGS     GC_FWD_VAL, GC_CTX
+#define GC_RESERVE_ARGS ant_t *js, GC_FWD_OFF, GC_FWD_ARGS
+#define GC_UPDATE_ARGS  ant_t *js, GC_FWD_OFF, GC_WEAK_OFF, GC_FWD_ARGS
+#define GC_OP_VAL_ARGS  GC_OP_VAL, GC_CTX
+
+void js_gc_maybe(ant_t *js);
+void js_gc_throttle(bool enabled);
 
 #endif

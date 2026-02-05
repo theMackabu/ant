@@ -114,7 +114,7 @@ enum {
 bool is_internal_prop(const char *key, jsoff_t klen);
 size_t uint_to_str(char *buf, size_t bufsize, uint64_t val);
 
-void js_gc_reserve_roots(GC_UPDATE_ARGS);
+void js_gc_reserve_roots(GC_RESERVE_ARGS);
 void js_gc_update_roots(GC_UPDATE_ARGS);
 
 jsoff_t esize(jsoff_t w);

@@ -35,6 +35,9 @@ static uint8_t *gc_scratch_buf = NULL;
 static size_t gc_scratch_size = 0;
 static time_t gc_last_run_time = 0;
 
+static bool gc_throttled = false;
+void js_gc_throttle(bool enabled) { gc_throttled = enabled; }
+
 #define FWD_EMPTY ((jsoff_t)~0)
 #define FWD_TOMBSTONE ((jsoff_t)~1)
 
@@ -560,6 +563,12 @@ static jsval_t gc_apply_val_callback(void *ctx_ptr, jsval_t val) {
   return gc_apply_val(ctx, val);
 }
 
+static jsoff_t gc_weak_off_callback(void *ctx_ptr, jsoff_t old_off) {
+  gc_ctx_t *ctx = (gc_ctx_t *)ctx_ptr;
+  if (old_off >= ctx->js->brk) return old_off;
+  return fwd_lookup(&ctx->fwd, old_off);
+}
+
 size_t js_gc_compact(ant_t *js) {
   if (!js || js->brk == 0) return 0;
   if (js->brk < 2 * 1024 * 1024) return 0;
@@ -630,14 +639,11 @@ size_t js_gc_compact(ant_t *js) {
     if ((header_at_0 & 3) == T_OBJ) gc_reserve_object(&ctx, 0);
   }
   
-  js_gc_reserve_roots(
-    js, 
-    gc_fwd_off_callback, 
+  js_gc_reserve_roots(js, 
+    gc_fwd_off_callback,
     gc_fwd_val_callback, 
     &ctx
-  );
-  
-  gc_drain_work_queue(&ctx);
+  ); gc_drain_work_queue(&ctx);
   
   if (ctx.failed) {
     free(mark_bits);
@@ -647,7 +653,8 @@ size_t js_gc_compact(ant_t *js) {
   }
   
   js_gc_update_roots(js, 
-    gc_apply_off_callback, 
+    gc_apply_off_callback,
+    gc_weak_off_callback,
     gc_apply_val_callback, 
   &ctx);
   
@@ -676,8 +683,17 @@ size_t js_gc_compact(ant_t *js) {
 
 void js_maybe_gc(ant_t *js) {
   jsoff_t thresh = js->brk / 4;
-  if (thresh < 2 * 1024 * 1024) thresh = 2 * 1024 * 1024;
-  if (thresh > 16 * 1024 * 1024) thresh = 16 * 1024 * 1024;
+  
+  jsoff_t min_thresh = gc_throttled 
+    ? 8 * 1024 * 1024 
+    : 2 * 1024 * 1024;
+    
+  jsoff_t max_thresh = gc_throttled 
+    ? 64 * 1024 * 1024 
+    : 16 * 1024 * 1024;
+  
+  if (thresh < min_thresh) thresh = min_thresh;
+  if (thresh > max_thresh) thresh = max_thresh;
 
   if (js->gc_alloc_since > thresh || js->needs_gc) {
     js->needs_gc = false;

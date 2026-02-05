@@ -81,7 +81,7 @@ void js_run_event_loop(ant_t *js) {
   
     if (work & WORK_BLOCKING) uv_run(uv_default_loop(), UV_RUN_NOWAIT);
     else if ((work & WORK_ASYNC) || uv_alive) {
-      js_maybe_gc(js);
+      js_gc_maybe(js);
       uv_run(uv_default_loop(), UV_RUN_ONCE);
     } else if (work & WORK_COROUTINES) break;
   }

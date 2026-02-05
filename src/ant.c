@@ -11019,7 +11019,7 @@ static jsval_t js_for(struct js *js) {
   pos4 = js->pos;
   
   while (!(flags & F_NOEXEC)) {
-    js_maybe_gc(js);
+    js_gc_maybe(js);
     js->flags = flags, js->pos = pos1, js->consumed = 1;
     if (next(js) != TOK_SEMICOLON) {
       v = resolveprop(js, js_expr(js));
@@ -11128,7 +11128,7 @@ static jsval_t js_while(struct js *js) {
   
   if (exe) {
     while (true) {
-      js_maybe_gc(js);
+      js_gc_maybe(js);
       js->flags = flags;
       js->pos = cond_start;
       js->consumed = 1;
@@ -11224,7 +11224,7 @@ static jsval_t js_do_while(struct js *js) {
   
   if (exe) {
     do {
-      js_maybe_gc(js);
+      js_gc_maybe(js);
       js->pos = body_start;
       js->consumed = 1;
       js->flags = (flags & ~F_NOEXEC) | F_LOOP;
@@ -22474,7 +22474,7 @@ static void gc_roots_common(gc_off_op_t op_off, gc_val_op_t op_val, gc_cb_ctx_t 
   if (c->js->ascii_cache_init) for (int i = 0; i < 128; i++) op_val(c, &c->js->ascii_char_cache[i]);
 }
 
-void js_gc_reserve_roots(GC_UPDATE_ARGS) {
+void js_gc_reserve_roots(GC_RESERVE_ARGS) {
   #define RSV_OFF(x) ((x) ? (void)fwd_off(ctx, x) : (void)0)
   #define RSV_VAL(x) (void)fwd_val(ctx, x)
   
@@ -22484,28 +22484,26 @@ void js_gc_reserve_roots(GC_UPDATE_ARGS) {
   
   promise_data_entry_t *pd, *pd_tmp;
   HASH_ITER(hh, promise_registry, pd, pd_tmp) {
-    (void)fwd_off(ctx, pd->obj_offset);
+    bool can_collect = (pd->state != 0) && (utarray_len(pd->handlers) == 0);
+    if (can_collect) continue;
     RSV_VAL(pd->value);
     UTARRAY_EACH(pd->handlers, promise_handler_t, h) {
-      RSV_VAL(h->onFulfilled); RSV_VAL(h->onRejected); RSV_VAL(h->nextPromise);
+      RSV_VAL(h->onFulfilled); 
+      RSV_VAL(h->onRejected); 
+      RSV_VAL(h->nextPromise);
     }
   }
-
-  // accessor registry is a weak reference
-  // objects only survive if reachable from other roots
-  (void)accessor_registry;
-
+  
   proxy_data_t *proxy, *proxy_tmp;
   HASH_ITER(hh, proxy_registry, proxy, proxy_tmp) {
     RSV_VAL(proxy->target);
     RSV_VAL(proxy->handler);
   }
 
-  descriptor_entry_t *desc, *desc_tmp;
-  HASH_ITER(hh, desc_registry, desc, desc_tmp) {
-    if (desc->has_getter) RSV_VAL(desc->getter);
-    if (desc->has_setter) RSV_VAL(desc->setter);
-  }
+  // accessor/descriptor registry are weak references
+  // objects only survive if reachable from other roots
+  (void)accessor_registry;
+  (void)desc_registry;
   
   #undef RSV_OFF
   #undef RSV_VAL
@@ -22514,6 +22512,7 @@ void js_gc_reserve_roots(GC_UPDATE_ARGS) {
 void js_gc_update_roots(GC_UPDATE_ARGS) {
   #define FWD_OFF(x) ((x) ? ((x) = fwd_off(ctx, x)) : 0)
   #define FWD_VAL(x) ((x) = fwd_val(ctx, x))
+  #define IS_UNREACHABLE(old, new) ((new) == (old) && (old) != 0 && (old) < js->brk)
   
   gc_cb_ctx_t cb_ctx = { fwd_off, fwd_val, ctx, js };
   gc_roots_common(gc_update_off_cb, gc_update_val_cb, &cb_ctx);
@@ -22530,13 +22529,18 @@ void js_gc_update_roots(GC_UPDATE_ARGS) {
       HASH_FIND(hh_unhandled, unhandled_rejections, &pd->promise_id, sizeof(uint32_t), in_unhandled);
       if (in_unhandled) HASH_DELETE(hh_unhandled, unhandled_rejections, pd);
       
-      jsoff_t new_off = fwd_off(ctx, pd->obj_offset);
-      if (new_off == 0) { utarray_free(pd->handlers); free(pd); continue; }
+      jsoff_t new_off = weak_off(ctx, pd->obj_offset);
+      if (new_off == (jsoff_t)~0) { utarray_free(pd->handlers); free(pd); continue; }
+      
+      bool can_collect = (pd->state != 0) && (utarray_len(pd->handlers) == 0);
+      if (can_collect) { utarray_free(pd->handlers); free(pd); continue; }
       
       pd->obj_offset = new_off;
       FWD_VAL(pd->value);
       UTARRAY_EACH(pd->handlers, promise_handler_t, h) {
-        FWD_VAL(h->onFulfilled); FWD_VAL(h->onRejected); FWD_VAL(h->nextPromise);
+        FWD_VAL(h->onFulfilled);
+        FWD_VAL(h->onRejected);
+        FWD_VAL(h->nextPromise);
       }
       
       HASH_ADD(hh, new_promise_registry, promise_id, sizeof(uint32_t), pd);
@@ -22547,9 +22551,8 @@ void js_gc_update_roots(GC_UPDATE_ARGS) {
   for (proxy_data_t *new_proxy_registry = NULL, *_once = NULL; !_once; _once = (void*)1, proxy_registry = new_proxy_registry)
     HASH_ITER(hh, proxy_registry, proxy, proxy_tmp) {
       HASH_DEL(proxy_registry, proxy);
-      jsoff_t old_off = proxy->obj_offset;
-      jsoff_t new_off = fwd_off(ctx, old_off);
-      if (new_off == 0) { free(proxy); continue; }
+      jsoff_t new_off = weak_off(ctx, proxy->obj_offset);
+      if (new_off == (jsoff_t)~0) { free(proxy); continue; }
       proxy->obj_offset = new_off;
       FWD_VAL(proxy->target); FWD_VAL(proxy->handler);
       HASH_ADD(hh, new_proxy_registry, obj_offset, sizeof(jsoff_t), proxy);
@@ -22559,9 +22562,8 @@ void js_gc_update_roots(GC_UPDATE_ARGS) {
   for (dynamic_accessors_t *new_acc_registry = NULL, *_once = NULL; !_once; _once = (void*)1, accessor_registry = new_acc_registry)
     HASH_ITER(hh, accessor_registry, acc, acc_tmp) {
       HASH_DEL(accessor_registry, acc);
-      jsoff_t old_off = acc->obj_offset;
-      jsoff_t new_off = fwd_off(ctx, old_off);
-      if (new_off == 0) { free(acc); continue; }
+      jsoff_t new_off = weak_off(ctx, acc->obj_offset);
+      if (new_off == (jsoff_t)~0) { free(acc); continue; }
       acc->obj_offset = new_off;
       HASH_ADD(hh, new_acc_registry, obj_offset, sizeof(jsoff_t), acc);
     }
@@ -22570,9 +22572,8 @@ void js_gc_update_roots(GC_UPDATE_ARGS) {
   for (descriptor_entry_t *new_desc_registry = NULL, *_once = NULL; !_once; _once = (void*)1, desc_registry = new_desc_registry)
     HASH_ITER(hh, desc_registry, desc, desc_tmp) {
       HASH_DEL(desc_registry, desc);
-      jsoff_t old_off = (jsoff_t)(desc->key >> 32);
-      jsoff_t new_off = fwd_off(ctx, old_off);
-      if (new_off == 0) { free(desc->prop_name); free(desc); continue; }
+      jsoff_t new_off = weak_off(ctx, (jsoff_t)(desc->key >> 32));
+      if (new_off == (jsoff_t)~0) { free(desc); continue; }
       if (desc->has_getter) FWD_VAL(desc->getter);
       if (desc->has_setter) FWD_VAL(desc->setter);
       desc->key = ((uint64_t)new_off << 32) | (uint32_t)(desc->key & 0xFFFFFFFF);

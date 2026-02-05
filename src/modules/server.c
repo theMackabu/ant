@@ -960,9 +960,16 @@ jsval_t js_serve(struct js *js, jsval_t *args, int nargs) {
   }
   
   server->pending_responses = NULL;
+  js_gc_throttle(true);
+  
   js_reactor_set_poll_hook(
-    (reactor_poll_hook_t)check_pending_responses, server
-  ); js_run_event_loop(js);
+    (reactor_poll_hook_t)
+      check_pending_responses, 
+      server
+  );
+  
+  js_run_event_loop(js);
+  js_gc_throttle(false);
   
   return js_mknum(1);
 }
