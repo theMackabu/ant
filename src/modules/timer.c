@@ -342,6 +342,7 @@ void init_timer_module() {
 void timer_gc_update_roots(GC_OP_VAL_ARGS) {
   for (timer_entry_t *t = timer_state.timers; t; t = t->next) {
     op_val(ctx, &t->callback);
+    for (int i = 0; i < t->nargs; i++) op_val(ctx, &t->args[i]);
   }
   for (microtask_entry_t *m = timer_state.microtasks; m; m = m->next) {
     if (m->promise_id == 0) op_val(ctx, &m->callback);

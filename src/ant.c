@@ -16,6 +16,7 @@
 #include "stack.h"
 #include "errors.h"
 #include "utf8.h"
+#include "esm/remote.h"
 
 #include <uv.h>
 #include <oxc.h>
@@ -55,7 +56,7 @@
 #include "modules/collections.h"
 #include "modules/navigator.h"
 #include "modules/server.h"
-#include "esm/remote.h"
+#include "modules/events.h"
 
 #define D(x) ((double)(x))
 
@@ -22458,6 +22459,7 @@ static void gc_roots_common(gc_off_op_t op_off, gc_val_op_t op_val, gc_cb_ctx_t 
   process_gc_update_roots(op_val, c);
   navigator_gc_update_roots(op_val, c);
   server_gc_update_roots(op_val, c);
+  events_gc_update_roots(op_val, c);
 
   for (int i = 0; i < c->js->for_let_stack_len; i++) {
     op_val(c, &c->js->for_let_stack[i].body_scope);
@@ -22508,11 +22510,16 @@ void js_gc_reserve_roots(GC_RESERVE_ARGS) {
     RSV_VAL(proxy->target);
     RSV_VAL(proxy->handler);
   }
+  
+  descriptor_entry_t *desc, *desc_tmp;
+  HASH_ITER(hh, desc_registry, desc, desc_tmp) {
+    if (desc->has_getter) RSV_VAL(desc->getter);
+    if (desc->has_setter) RSV_VAL(desc->setter);
+  }
 
-  // accessor/descriptor registry are weak references
+  // accessor registry is a weak reference
   // objects only survive if reachable from other roots
   (void)accessor_registry;
-  (void)desc_registry;
   
   #undef RSV_OFF
   #undef RSV_VAL
