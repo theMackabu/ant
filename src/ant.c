@@ -22229,9 +22229,7 @@ void js_gc_update_roots(GC_UPDATE_ARGS) {
       if (in_unhandled) HASH_DELETE(hh_unhandled, unhandled_rejections, pd);
       
       jsoff_t new_off = fwd_off(ctx, pd->obj_offset);
-      if (new_off == pd->obj_offset && pd->obj_offset != 0) {
-        utarray_free(pd->handlers); free(pd); continue;
-      }
+      if (new_off == 0) { utarray_free(pd->handlers); free(pd); continue; }
       
       pd->obj_offset = new_off;
       FWD_VAL(pd->value);
