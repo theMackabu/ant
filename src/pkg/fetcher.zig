@@ -83,6 +83,7 @@ const Http2Client = struct {
   use_tls: bool,
   connected: i32,
   connect_pending: bool,
+  closing: bool,
   write_buf: std.ArrayListUnmanaged(u8),
   requests: [MAX_PENDING_REQUESTS]RequestState,
   request_count: usize,
@@ -128,6 +129,7 @@ const Http2Client = struct {
       .use_tls = use_tls,
       .connected = 0,
       .connect_pending = false,
+      .closing = false,
       .write_buf = .{},
       .requests = undefined,
       .request_count = 0,
@@ -166,6 +168,9 @@ const Http2Client = struct {
   }
 
   pub fn deinit(self: *Http2Client) void {
+    self.closing = true;
+    self.connect_pending = false;
+
     for (&self.requests) |*req| {
       req.on_data = null;
       req.on_complete = null;
@@ -257,6 +262,7 @@ const Http2Client = struct {
     const tls: *tlsuv.stream_t = @ptrCast(@alignCast(handle));
     const client: *Http2Client = @ptrCast(@alignCast(tls.data));
     client.connected = -2;
+    client.connect_pending = false;
   }
 
   fn findRequest(self: *Http2Client, stream_id: i32) ?*RequestState {
@@ -351,6 +357,7 @@ const Http2Client = struct {
   }
 
   fn flush(self: *Http2Client) !void {
+    if (self.closing) return error.ConnectionFailed;
     if (self.h2_session) |session| while (nghttp2.nghttp2_session_want_write(session) != 0) if (nghttp2.nghttp2_session_send(session) != 0) break;
     if (self.write_buf.items.len > 0) {
       const data = try self.allocator.dupe(u8, self.write_buf.items);
@@ -381,6 +388,7 @@ const Http2Client = struct {
     const tls: *tlsuv.stream_t = @ptrCast(@alignCast(stream));
     const client: *Http2Client = @ptrCast(@alignCast(tls.data));
     defer if (buf.base) |b| std.c.free(b);
+    if (client.closing) return;
     if (nread < 0) {
       for (client.requests[0..client.request_count]) |*req| if (!req.done) {
         req.done = true;
@@ -399,6 +407,12 @@ const Http2Client = struct {
   fn onConnect(req: *uv.connect_t, status: c_int) callconv(.c) void {
     const ctx: *ConnectCtx = @ptrCast(@alignCast(req.data));
     defer ctx.client.allocator.destroy(ctx);
+    ctx.client.connect_pending = false;
+    if (ctx.client.closing) {
+      ctx.client.connected = -1;
+      _ = tlsuv.tlsuv_stream_close(&ctx.client.tls, onStreamClose);
+      return;
+    }
     if (status < 0) {
       ctx.client.connected = -1;
       return;
@@ -416,6 +430,7 @@ const Http2Client = struct {
   const ConnectCtx = struct { client: *Http2Client, req: uv.connect_t };
 
   fn ensureConnected(self: *Http2Client) !void {
+    if (self.closing) return error.ConnectionFailed;
     if (self.connected > 0) return;
     if (self.connected < 0) return error.ConnectionFailed;
 
@@ -443,6 +458,7 @@ const Http2Client = struct {
   }
 
   pub fn initiateConnectAsync(self: *Http2Client) !void {
+    if (self.closing) return error.ConnectionFailed;
     if (self.connected > 0) return;
     if (self.connected < 0) return error.ConnectionFailed;
     if (self.connect_pending) return;

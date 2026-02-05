@@ -993,7 +993,8 @@ void init_collections_module(void) {
 
 void collections_gc_reserve_roots(void (*op_val)(void *, jsval_t *), void *ctx) {
   for (size_t i = 0; i < map_registry_count; i++) {
-    map_entry_t **head = map_registry[i].head;
+    jsval_t map_obj = mkval(T_OBJ, map_registry[i].obj_offset);
+    op_val(ctx, &map_obj); map_entry_t **head = map_registry[i].head;
     if (head && *head) {
       map_entry_t *entry, *tmp;
       HASH_ITER(hh, *head, entry, tmp) op_val(ctx, &entry->value);
@@ -1001,7 +1002,8 @@ void collections_gc_reserve_roots(void (*op_val)(void *, jsval_t *), void *ctx) 
   }
   
   for (size_t i = 0; i < set_registry_count; i++) {
-    set_entry_t **head = set_registry[i].head;
+    jsval_t set_obj = mkval(T_OBJ, set_registry[i].obj_offset);
+    op_val(ctx, &set_obj); set_entry_t **head = set_registry[i].head;
     if (head && *head) {
       set_entry_t *entry, *tmp;
       HASH_ITER(hh, *head, entry, tmp) op_val(ctx, &entry->value);
@@ -1036,7 +1038,7 @@ void collections_gc_update_roots(jsoff_t (*fwd_off)(void *ctx, jsoff_t old), GC_
     jsoff_t old_off = map_registry[i].obj_offset;
     jsoff_t new_off = fwd_off(ctx, old_off);
     
-    if (new_off == old_off && old_off != 0) {
+    if (new_off == 0) {
       free_map_entries(map_registry[i].head);
       free(map_registry[i].head);
       continue;
@@ -1060,7 +1062,7 @@ void collections_gc_update_roots(jsoff_t (*fwd_off)(void *ctx, jsoff_t old), GC_
     jsoff_t old_off = set_registry[i].obj_offset;
     jsoff_t new_off = fwd_off(ctx, old_off);
     
-    if (new_off == old_off && old_off != 0) {
+    if (new_off == 0) {
       free_set_entries(set_registry[i].head);
       free(set_registry[i].head);
       continue;

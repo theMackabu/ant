@@ -38,6 +38,7 @@
 #include <sys/time.h>
 #include <sys/stat.h>
 #include <sys/resource.h>
+#include <execinfo.h>
 #endif
 
 #include "modules/fs.h"
@@ -9951,7 +9952,7 @@ typedef struct {
   bool needs_scope;
   bool has_func_decl;
   bool has_func_decl_checked;
-  jsval_t loop_scope;
+  jshdl_t loop_scope_handle;
 } loop_block_ctx_t;
 
 static void loop_block_init(struct js *js, loop_block_ctx_t *ctx) {
@@ -9959,7 +9960,7 @@ static void loop_block_init(struct js *js, loop_block_ctx_t *ctx) {
   ctx->needs_scope = false;
   ctx->has_func_decl = false;
   ctx->has_func_decl_checked = false;
-  ctx->loop_scope = js_mkundef();
+  ctx->loop_scope_handle = -1;
   
   if (ctx->is_block && !(js->flags & F_NOEXEC)) {
     jsoff_t saved_pos = js->pos;
@@ -9974,7 +9975,7 @@ static void loop_block_init(struct js *js, loop_block_ctx_t *ctx) {
     js->tok = saved_tok;
     js->consumed = saved_consumed;
     
-    if (ctx->needs_scope) ctx->loop_scope = js_mkscope(js);
+    if (ctx->needs_scope) ctx->loop_scope_handle = js_root(js, js_mkscope(js));
   }
 }
 
@@ -10004,11 +10005,14 @@ static inline jsval_t loop_block_exec(struct js *js, loop_block_ctx_t *ctx) {
 
 static inline void loop_block_sync_scope(struct js *js, loop_block_ctx_t *ctx) {
   struct for_let_ctx *flc = for_let_current(js);
-  if (flc && vtype(flc->body_scope) == T_OBJ) ctx->loop_scope = flc->body_scope;
+  if (flc && vtype(flc->body_scope) == T_OBJ) js_root_update(js, ctx->loop_scope_handle, flc->body_scope);
 }
 
-#define loop_block_clear(js, ctx) if ((ctx)->needs_scope) scope_clear_props(js, (ctx)->loop_scope)
-#define loop_block_cleanup(js, ctx) if ((ctx)->needs_scope) delscope(js)
+#define loop_block_clear(js, ctx) \
+  if ((ctx)->needs_scope) scope_clear_props(js, js_deref(js, (ctx)->loop_scope_handle))
+  
+#define loop_block_cleanup(js, ctx) \
+  do { if ((ctx)->needs_scope) { js_unroot(js, (ctx)->loop_scope_handle); delscope(js); } } while(0)
 
 static jsval_t js_if(struct js *js) {
   js->consumed = 1;
@@ -10129,22 +10133,35 @@ static jsval_t for_in_iter_object(struct js *js, for_iter_ctx_t *ctx, jsval_t ob
   uint8_t obj_type = vtype(obj);
   if (obj_type == T_NULL || obj_type == T_UNDEF) return js_mkundef();
   if (obj_type == T_STR) return for_iter_string_indices(js, ctx, obj);
+  
   if (obj_type != T_OBJ && obj_type != T_ARR && obj_type != T_FUNC)
     return js_mkerr(js, "for-in requires object");
   
   jsval_t iter_obj = (obj_type == T_FUNC) ? mkval(T_OBJ, vdata(obj)) : obj;
-  jsoff_t iter_obj_off = (jsoff_t)vdata(iter_obj);
-  jsoff_t prop_off = loadoff(js, iter_obj_off) & ~(3U | FLAGMASK);
-  
-  jsval_t prim = get_slot(js, obj, SLOT_PRIMITIVE);
+  jsval_t prim = get_slot(js, iter_obj, SLOT_PRIMITIVE);
   if (vtype(prim) == T_STR) return for_iter_string_indices(js, ctx, prim);
   
+  jshdl_t h_obj = js_root(js, iter_obj);
   const char *tag_sym_key = get_toStringTag_sym_key();
   size_t tag_sym_len = tag_sym_key ? strlen(tag_sym_key) : 0;
   
-  while (prop_off < js->brk && prop_off != 0) {
+  jsoff_t prop_idx = 0;
+  char key_buf[256];
+  
+  for (;;) {
+    jsval_t cur_obj = js_deref(js, h_obj);
+    jsoff_t cur_obj_off = (jsoff_t)vdata(cur_obj);
+    jsoff_t prop_off = loadoff(js, cur_obj_off) & ~(3U | FLAGMASK);
+    
+    jsoff_t cur_idx = 0;
+    while (prop_off < js->brk && prop_off != 0 && cur_idx < prop_idx) {
+      jsoff_t header = loadoff(js, prop_off);
+      prop_off = next_prop(header); cur_idx++;
+    }
+    
+    if (prop_off >= js->brk || prop_off == 0) break;
     jsoff_t header = loadoff(js, prop_off);
-    if (is_slot_prop(header)) { prop_off = next_prop(header); continue; }
+    if (is_slot_prop(header)) { prop_idx++; continue; }
     
     jsoff_t koff = loadoff(js, prop_off + (jsoff_t)sizeof(prop_off));
     jsoff_t klen = offtolen(loadoff(js, koff));
@@ -10154,19 +10171,24 @@ static jsval_t for_in_iter_object(struct js *js, for_iter_ctx_t *ctx, jsval_t ob
     if (!skip && tag_sym_key) skip = streq(key, klen, tag_sym_key, tag_sym_len);
     
     if (!skip) {
-      descriptor_entry_t *desc = lookup_descriptor(iter_obj_off, key, klen);
+      descriptor_entry_t *desc = lookup_descriptor(cur_obj_off, key, klen);
       if (desc && !desc->enumerable) skip = true;
     }
     
     if (!skip) {
+      size_t copy_len = klen < sizeof(key_buf) - 1 ? klen : sizeof(key_buf) - 1;
+      memcpy(key_buf, key, copy_len);
+      key_buf[copy_len] = '\0';
+      
       jsval_t out;
-      int rc = for_iter_step(js, ctx, js_mkstr(js, key, klen), &out);
-      if (rc) return (rc == 2) ? out : js_mkundef();
+      int rc = for_iter_step(js, ctx, js_mkstr(js, key_buf, (jsoff_t)copy_len), &out);
+      if (rc) { js_unroot(js, h_obj); return (rc == 2) ? out : js_mkundef(); }
     }
     
-    prop_off = next_prop(header);
+    prop_idx++;
   }
   
+  js_unroot(js, h_obj);
   return js_mkundef();
 }
 
@@ -10593,7 +10615,7 @@ static jsval_t js_for(struct js *js) {
   loop_block_ctx_t loop_ctx = {0};
   if (exe) {
     loop_block_init(js, &loop_ctx);
-    if (is_let_loop && let_var_len > 0 && loop_ctx.needs_scope) for_let_set_body_scope(js, loop_ctx.loop_scope);
+    if (is_let_loop && let_var_len > 0 && loop_ctx.needs_scope) for_let_set_body_scope(js, js_deref(js, loop_ctx.loop_scope_handle));
   }
   
   js->flags |= F_NOEXEC;
@@ -10603,6 +10625,7 @@ static jsval_t js_for(struct js *js) {
   pos4 = js->pos;
   
   while (!(flags & F_NOEXEC)) {
+    js_maybe_gc(js);
     js->flags = flags, js->pos = pos1, js->consumed = 1;
     if (next(js) != TOK_SEMICOLON) {
       v = resolveprop(js, js_expr(js));
@@ -10711,6 +10734,7 @@ static jsval_t js_while(struct js *js) {
   
   if (exe) {
     while (true) {
+      js_maybe_gc(js);
       js->flags = flags;
       js->pos = cond_start;
       js->consumed = 1;
@@ -10806,6 +10830,7 @@ static jsval_t js_do_while(struct js *js) {
   
   if (exe) {
     do {
+      js_maybe_gc(js);
       js->pos = body_start;
       js->consumed = 1;
       js->flags = (flags & ~F_NOEXEC) | F_LOOP;
@@ -21952,7 +21977,6 @@ static void gc_roots_common(gc_off_op_t op_off, gc_val_op_t op_val, gc_cb_ctx_t 
   child_process_gc_update_roots(op_val, c);
   readline_gc_update_roots(op_val, c);
   process_gc_update_roots(op_val, c);
-  collections_gc_reserve_roots(op_val, c);
 
   for (int i = 0; i < c->js->for_let_stack_len; i++) {
     op_val(c, &c->js->for_let_stack[i].body_scope);
@@ -21979,6 +22003,7 @@ void js_gc_reserve_roots(GC_UPDATE_ARGS) {
   
   gc_cb_ctx_t cb_ctx = { fwd_off, fwd_val, ctx, js };
   gc_roots_common(gc_reserve_off_cb, gc_reserve_val_cb, &cb_ctx);
+  collections_gc_reserve_roots(gc_reserve_val_cb, &cb_ctx);
   
   promise_data_entry_t *pd, *pd_tmp;
   HASH_ITER(hh, promise_registry, pd, pd_tmp) {
@@ -22049,7 +22074,7 @@ void js_gc_update_roots(GC_UPDATE_ARGS) {
       HASH_DEL(proxy_registry, proxy);
       jsoff_t old_off = proxy->obj_offset;
       jsoff_t new_off = fwd_off(ctx, old_off);
-      if (new_off == old_off && old_off != 0) { free(proxy); continue; }
+      if (new_off == 0) { free(proxy); continue; }
       proxy->obj_offset = new_off;
       FWD_VAL(proxy->target); FWD_VAL(proxy->handler);
       HASH_ADD(hh, new_proxy_registry, obj_offset, sizeof(jsoff_t), proxy);
@@ -22061,7 +22086,7 @@ void js_gc_update_roots(GC_UPDATE_ARGS) {
       HASH_DEL(accessor_registry, acc);
       jsoff_t old_off = acc->obj_offset;
       jsoff_t new_off = fwd_off(ctx, old_off);
-      if (new_off == old_off && old_off != 0) { free(acc); continue; }
+      if (new_off == 0) { free(acc); continue; }
       acc->obj_offset = new_off;
       HASH_ADD(hh, new_acc_registry, obj_offset, sizeof(jsoff_t), acc);
     }
@@ -22072,7 +22097,7 @@ void js_gc_update_roots(GC_UPDATE_ARGS) {
       HASH_DEL(desc_registry, desc);
       jsoff_t old_off = (jsoff_t)(desc->key >> 32);
       jsoff_t new_off = fwd_off(ctx, old_off);
-      if (new_off == old_off && old_off != 0) { free(desc); continue; }
+      if (new_off == 0) { free(desc->prop_name); free(desc); continue; }
       if (desc->has_getter) FWD_VAL(desc->getter);
       if (desc->has_setter) FWD_VAL(desc->setter);
       desc->key = ((uint64_t)new_off << 32) | (uint32_t)(desc->key & 0xFFFFFFFF);

@@ -21,6 +21,8 @@ typedef enum {
 #define WORK_BLOCKING (WORK_MICROTASKS | WORK_IMMEDIATES | WORK_COROUTINES_READY)
 #define WORK_ASYNC    (WORK_READLINE | WORK_STDIN | WORK_TIMERS | WORK_FETCHES | WORK_FS_OPS | WORK_CHILD_PROCS)
 
+#define UV_CHECK_ALIVE uv_loop_alive(uv_default_loop())
+
 void js_poll_events(ant_t *js) ;
 void js_run_event_loop(ant_t *js);
 

@@ -59,27 +59,21 @@ static inline work_flags_t get_pending_work(void) {
   return flags;
 }
 
-static void maybe_gc(ant_t *js) {
-  jsoff_t thresh = js->brk / 2;
-  if (thresh < 4 * 1024 * 1024) thresh = 4 * 1024 * 1024;
-
-  if (js->gc_alloc_since > thresh || js->needs_gc) {
-    js->needs_gc = false;
-    js_gc_compact(js);
-    js->gc_alloc_since = 0;
-  }
-}
-
 void js_run_event_loop(ant_t *js) {
   work_flags_t work;
+  int uv_alive = UV_CHECK_ALIVE;
   
-  while ((work = get_pending_work()) & WORK_PENDING) {
+  while (((work = get_pending_work()) & WORK_PENDING) || uv_alive) {
     js_poll_events(js);
+    
     work = get_pending_work();
+    uv_alive = UV_CHECK_ALIVE;
   
     if (work & WORK_BLOCKING) uv_run(uv_default_loop(), UV_RUN_NOWAIT);
-    else if (work & WORK_ASYNC) { maybe_gc(js); uv_run(uv_default_loop(), UV_RUN_ONCE); }
-    else if (work & WORK_COROUTINES) break;
+    else if ((work & WORK_ASYNC) || uv_alive) {
+      js_maybe_gc(js);
+      uv_run(uv_default_loop(), UV_RUN_ONCE);
+    } else if (work & WORK_COROUTINES) break;
   }
   
   js_poll_events(js);

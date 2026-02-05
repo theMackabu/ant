@@ -623,3 +623,15 @@ size_t js_gc_compact(ant_t *js) {
   
   return (old_brk > ctx.new_brk ? old_brk - ctx.new_brk : 0);
 }
+
+void js_maybe_gc(ant_t *js) {
+  jsoff_t thresh = js->brk / 2;
+  if (thresh < 4 * 1024 * 1024) thresh = 4 * 1024 * 1024;
+  if (thresh > 64 * 1024 * 1024) thresh = 64 * 1024 * 1024;
+
+  if (js->gc_alloc_since > thresh || js->needs_gc) {
+    js->needs_gc = false;
+    js_gc_compact(js);
+    js->gc_alloc_since = 0;
+  }
+}
