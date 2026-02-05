@@ -53,6 +53,8 @@
 #include "modules/json.h"
 #include "modules/buffer.h"
 #include "modules/collections.h"
+#include "modules/navigator.h"
+#include "modules/server.h"
 #include "esm/remote.h"
 
 #define D(x) ((double)(x))
@@ -22450,6 +22452,8 @@ static void gc_roots_common(gc_off_op_t op_off, gc_val_op_t op_val, gc_cb_ctx_t 
   child_process_gc_update_roots(op_val, c);
   readline_gc_update_roots(op_val, c);
   process_gc_update_roots(op_val, c);
+  navigator_gc_update_roots(op_val, c);
+  server_gc_update_roots(op_val, c);
 
   for (int i = 0; i < c->js->for_let_stack_len; i++) {
     op_val(c, &c->js->for_let_stack[i].body_scope);

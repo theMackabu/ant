@@ -17,7 +17,6 @@
 #include "internal.h"
 
 #include "modules/server.h"
-#include "modules/timer.h"
 #include "modules/json.h"
 
 #define MAX_WRITE_HANDLES 1000
@@ -97,20 +96,10 @@ typedef struct {
   uv_buf_t buf;
 } write_req_t;
 
-static uv_loop_t *g_loop = NULL;
-static int g_loop_initialized = 0;
-static uv_timer_t g_js_timer;
-static int g_request_count = 0;
+static http_server_t *g_server = NULL;
 
 static void server_signal_handler(int signum) {
-  (void)signum;
-  if (g_loop_initialized && g_loop) uv_stop(g_loop);
-  exit(0);
-}
-
-static void on_js_timer(uv_timer_t *handle) {
-  struct js *js = (struct js*)handle->data;
-  if (js && has_pending_immediates()) process_immediates(js);
+  uv_stop(uv_default_loop()); exit(0);
 }
 
 static int parse_accept_encoding(const char *buffer, size_t len) {
@@ -700,14 +689,6 @@ static void handle_http_request(client_t *client, http_request_t *http_req) {
   http_server_t *server = client->server;
   jsval_t result = js_mkundef();
   
-  if (++g_request_count >= 1000 * 10) {
-    js_gc_compact(server->js);
-    g_request_count = 0;
-    
-    server->store_obj = js_get_slot(server->js, rt->ant_obj, SLOT_DATA);
-    server->handler = js_get_slot(server->js, server->store_obj, SLOT_DATA);
-  }
-  
   response_ctx_t *res_ctx = malloc(sizeof(response_ctx_t));
   if (!res_ctx) {
     fprintf(stderr, "Failed to allocate response context\n");
@@ -950,21 +931,15 @@ jsval_t js_serve(struct js *js, jsval_t *args, int nargs) {
   
   server->store_obj = js_mkobj(js);
   server->handler = (nargs >= 2) ? args[1] : js_mkundef();
+  g_server = server;
   
-  js_set_slot(js, server->store_obj, SLOT_DATA, server->handler);
-  js_set_slot(js, rt->ant_obj, SLOT_DATA, server->store_obj);
+  uv_loop_t *loop = uv_default_loop();
+  server->loop = loop;
   
-  if (!g_loop_initialized) {
-    g_loop = uv_default_loop();
-    g_loop_initialized = 1;
-    
-    signal(SIGINT, server_signal_handler);
-    signal(SIGTERM, server_signal_handler);
-  }
+  signal(SIGINT, server_signal_handler);
+  signal(SIGTERM, server_signal_handler);
   
-  server->loop = g_loop;
-  
-  uv_tcp_init(g_loop, &server->server);
+  uv_tcp_init(loop, &server->server);
   server->server.data = server;
   
   struct sockaddr_in addr;
@@ -985,24 +960,20 @@ jsval_t js_serve(struct js *js, jsval_t *args, int nargs) {
   }
   
   server->pending_responses = NULL;
-  uv_timer_init(g_loop, &g_js_timer);
-  
-  g_js_timer.data = js;
-  rt->flags |= ANT_RUNTIME_EXT_EVENT_LOOP;
-  
-  while (uv_loop_alive(g_loop)) {
-    if (has_pending_immediates()) {
-      uv_timer_start(&g_js_timer, on_js_timer, 0, 0);
-    } else uv_timer_stop(&g_js_timer);
-    
-    uv_run(g_loop, UV_RUN_ONCE);
-    js_poll_events(js);
-    check_pending_responses(server);
-  }
+  js_reactor_set_poll_hook(
+    (reactor_poll_hook_t)check_pending_responses, server
+  ); js_run_event_loop(js);
   
   return js_mknum(1);
 }
 
 void init_server_module() {
   js_set(rt->js, rt->ant_obj, "serve", js_mkfun(js_serve));
+}
+
+void server_gc_update_roots(GC_OP_VAL_ARGS) {
+  if (g_server) {
+    op_val(ctx, &g_server->handler);
+    op_val(ctx, &g_server->store_obj);
+  }
 }

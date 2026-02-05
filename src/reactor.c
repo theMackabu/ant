@@ -12,6 +12,14 @@
 #include "modules/readline.h"
 #include "modules/process.h"
 
+static reactor_poll_hook_t g_poll_hook = NULL;
+static void *g_poll_hook_data = NULL;
+
+void js_reactor_set_poll_hook(reactor_poll_hook_t hook, void *data) {
+  g_poll_hook = hook;
+  g_poll_hook_data = data;
+}
+
 void js_poll_events(ant_t *js) {
   coros_this_tick = 0;
   
@@ -42,6 +50,8 @@ void js_poll_events(ant_t *js) {
     js_gc_compact(js);
     js->gc_alloc_since = 0;
   }
+  
+  if (g_poll_hook) g_poll_hook(g_poll_hook_data);
 }
 
 static inline work_flags_t get_pending_work(void) {

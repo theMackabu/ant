@@ -390,3 +390,10 @@ void init_navigator_module(void) {
   js_set(js, navigator_obj, get_toStringTag_sym_key(), js_mkstr(js, "Navigator", 9));
   js_set(js, js_glob(js), "navigator", navigator_obj);
 }
+
+void navigator_gc_update_roots(GC_OP_VAL_ARGS) {
+  for (lock_request_t *req = pending_requests; req; req = req->next) {
+    op_val(ctx, &req->callback);
+    op_val(ctx, &req->promise);
+  }
+}

@@ -23,7 +23,10 @@ typedef enum {
 
 #define UV_CHECK_ALIVE uv_loop_alive(uv_default_loop())
 
-void js_poll_events(ant_t *js) ;
+typedef void (*reactor_poll_hook_t)(void *data);
+void js_reactor_set_poll_hook(reactor_poll_hook_t hook, void *data);
+
+void js_poll_events(ant_t *js);
 void js_run_event_loop(ant_t *js);
 
 #endif
