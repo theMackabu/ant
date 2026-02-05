@@ -56,7 +56,7 @@ static const char *jsval_to_key(ant_t *js, jsval_t val) {
   if (vtype(val) == T_STR) {
     jsoff_t len;
     jsoff_t off = vstr(js, val, &len);
-    return (char *)&js->mem[off];
+    return (char *)js_mem_ptr(js, off);
   }
   return js_str(js, val);
 }

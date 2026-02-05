@@ -357,6 +357,9 @@ int main(int argc, char *argv[]) {
   if (vtype(snapshot_result) == T_ERR) {
     fprintf(stderr, "Warning: Failed to load snapshot: %s\n", js_str(js, snapshot_result));
   }
+  
+  // Enable generational GC nursery after initialization is complete
+  nursery_enable(js);
 
   if (eval->count > 0) eval_code(js, eval, print);
   else if (repl_mode) ant_repl_run(); else {

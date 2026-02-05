@@ -2,6 +2,7 @@
 #include "arena.h"
 #include "internal.h"
 #include "common.h"
+#include "modules/timer.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -685,6 +686,12 @@ size_t js_gc_compact(ant_t *js) {
 }
 
 void js_gc_maybe(ant_t *js) {
+  // Nursery scavenge (fast, frequent) - do this first
+  if (js->nursery_full && js->nursery) {
+    nursery_scavenge(js);
+    js->nursery_full = false;
+  }
+  
   jsoff_t thresh = js->brk / 4;
   
   jsoff_t min_thresh = gc_throttled 
@@ -702,4 +709,493 @@ void js_gc_maybe(ant_t *js) {
     js->needs_gc = false;
     if (js_gc_compact(js) > 0) js->gc_alloc_since = 0;
   }
+}
+
+// ============================================================================
+// Generational GC: Nursery Implementation
+// ============================================================================
+
+bool nursery_init(ant_t *js, size_t size) {
+  if (size < NURSERY_SIZE_MIN) size = NURSERY_SIZE_MIN;
+  if (size > NURSERY_SIZE_MAX) size = NURSERY_SIZE_MAX;
+  
+  js->nursery = (uint8_t *)gc_mmap(size);
+  if (!js->nursery) return false;
+  
+  js->nursery_ptr = 0;
+  js->nursery_size = (jsoff_t)size;
+  js->nursery_full = false;
+  js->nursery_enabled = false;  // enabled after snapshot loads
+  
+  js->remembered_set = NULL;
+  js->rs_count = 0;
+  js->rs_cap = 0;
+  
+  return true;
+}
+
+void nursery_enable(ant_t *js) {
+  if (js->nursery) {
+    js->nursery_enabled = true;
+  }
+}
+
+void nursery_free(ant_t *js) {
+  if (js->nursery) {
+    gc_munmap(js->nursery, js->nursery_size);
+    js->nursery = NULL;
+    js->nursery_ptr = 0;
+    js->nursery_size = 0;
+    js->nursery_enabled = false;
+  }
+  
+  if (js->remembered_set) {
+    free(js->remembered_set);
+    js->remembered_set = NULL;
+    js->rs_count = 0;
+    js->rs_cap = 0;
+  }
+}
+
+// Add object to remembered set (old→young reference)
+void rs_add(ant_t *js, jsval_t obj) {
+  if (js->rs_count >= js->rs_cap) {
+    size_t new_cap = js->rs_cap == 0 ? 64 : js->rs_cap * 2;
+    jsval_t *new_set = (jsval_t *)realloc(js->remembered_set, new_cap * sizeof(jsval_t));
+    if (!new_set) return;
+    js->remembered_set = new_set;
+    js->rs_cap = new_cap;
+  }
+  js->remembered_set[js->rs_count++] = obj;
+}
+
+void rs_clear(ant_t *js) {
+  js->rs_count = 0;
+}
+
+// Nursery allocation with bump pointer (very fast)
+jsoff_t nursery_alloc(ant_t *js, size_t size) {
+  size = (size + 7) & ~(size_t)7;  // align to 8 bytes
+  
+  if (js->nursery_ptr + size > js->nursery_size) {
+    js->nursery_full = true;
+    return ~(jsoff_t)0;  // signal nursery full
+  }
+  
+  jsoff_t off = js->nursery_ptr;
+  js->nursery_ptr += (jsoff_t)size;
+  
+  return off | NURSERY_BIT;  // tag as nursery pointer
+}
+
+// Forward a nursery pointer to old gen, return new offset
+static jsoff_t scavenge_copy_object(ant_t *js, jsoff_t nursery_off, jsoff_t *fwd_table, size_t fwd_cap) {
+  jsoff_t raw_off = nursery_raw_off(nursery_off);
+  
+  // Check if already forwarded
+  if (raw_off < fwd_cap && fwd_table[raw_off >> 3] != 0) {
+    return fwd_table[raw_off >> 3];
+  }
+  
+  // Get object header from nursery
+  jsoff_t header;
+  memcpy(&header, &js->nursery[raw_off], sizeof(header));
+  
+  // Calculate size based on type
+  size_t size;
+  uint8_t type = header & 3;
+  
+  if (type == T_STR) {
+    if (header & ROPE_FLAG) {
+      size = sizeof(rope_node_t);
+    } else {
+      size = esize(header);
+    }
+  } else {
+    size = esize(header);
+  }
+  
+  if (size == (size_t)~0 || size == 0) {
+    size = 24;  // minimum object size
+  }
+  
+  size = (size + 7) & ~(size_t)7;
+  
+  // Allocate in old gen
+  jsoff_t available = js->size - js->brk;
+  if (size > available) {
+    return ~(jsoff_t)0;  // OOM
+  }
+  
+  jsoff_t new_off = js->brk;
+  memcpy(&js->mem[new_off], &js->nursery[raw_off], size);
+  js->brk += (jsoff_t)size;
+  
+  // Install forwarding pointer
+  if (raw_off < fwd_cap) {
+    fwd_table[raw_off >> 3] = new_off;
+  }
+  
+  return new_off;
+}
+
+// Context for scavenge_op_val callback
+typedef struct {
+  ant_t *js;
+  jsoff_t *fwd_table;
+  size_t fwd_cap;
+} scavenge_ctx_t;
+
+static jsval_t scavenge_update_val(ant_t *js, jsval_t val, jsoff_t *fwd_table, size_t fwd_cap);
+
+// Wrapper callbacks for js_gc_scavenge_roots during scavenge
+static void scavenge_op_val(void *ctx, jsval_t *val) {
+  scavenge_ctx_t *sctx = (scavenge_ctx_t *)ctx;
+  *val = scavenge_update_val(sctx->js, *val, sctx->fwd_table, sctx->fwd_cap);
+}
+
+static void scavenge_op_off(void *ctx, jsoff_t *off) {
+  scavenge_ctx_t *sctx = (scavenge_ctx_t *)ctx;
+  if (!is_nursery_off(*off)) return;
+  jsoff_t new_off = scavenge_copy_object(sctx->js, *off, sctx->fwd_table, sctx->fwd_cap);
+  if (new_off != ~(jsoff_t)0) *off = new_off;
+}
+
+// Recursively scan the scope chain and update parent pointers + properties
+static void scavenge_scan_scope_chain(ant_t *js, jsoff_t scope_off, jsoff_t *fwd_table, size_t fwd_cap, int depth);
+
+// Scan all properties of an old-gen object for nursery references
+static void scavenge_scan_object_props(ant_t *js, jsoff_t obj_off, jsoff_t *fwd_table, size_t fwd_cap) {
+  if (obj_off >= js->brk || is_nursery_off(obj_off)) return;
+  
+  jsoff_t header = gc_loadoff(js->mem, obj_off);
+  jsoff_t first_prop = header & ~(3ULL | FLAGMASK);
+  
+  // If first property is in nursery, copy it and update object header
+  if (first_prop != 0 && is_nursery_off(first_prop)) {
+    jsoff_t new_first = scavenge_copy_object(js, first_prop, fwd_table, fwd_cap);
+    if (new_first != ~(jsoff_t)0) {
+      jsoff_t new_header = (new_first & ~3ULL) | (header & (3ULL | FLAGMASK));
+      gc_saveoff(js->mem, obj_off, new_header);
+      first_prop = new_first;
+    }
+  }
+  
+  jsoff_t prop_off = first_prop;
+  while (prop_off != 0 && prop_off < js->brk && !is_nursery_off(prop_off)) {
+    jsoff_t prop_header = gc_loadoff(js->mem, prop_off);
+    jsoff_t next_prop = prop_header & ~(3ULL | FLAGMASK);
+    
+    // If next property is in nursery, copy it and update current prop's header
+    if (next_prop != 0 && is_nursery_off(next_prop)) {
+      jsoff_t new_next = scavenge_copy_object(js, next_prop, fwd_table, fwd_cap);
+      if (new_next != ~(jsoff_t)0) {
+        jsoff_t new_prop_header = (new_next & ~3ULL) | (prop_header & (3ULL | FLAGMASK));
+        gc_saveoff(js->mem, prop_off, new_prop_header);
+        next_prop = new_next;
+      }
+    }
+    
+    // Update property key if it points to nursery
+    jsoff_t key_off = gc_loadoff(js->mem, prop_off + sizeof(jsoff_t));
+    if (is_nursery_off(key_off)) {
+      jsoff_t new_key = scavenge_copy_object(js, key_off, fwd_table, fwd_cap);
+      if (new_key != ~(jsoff_t)0) {
+        gc_saveoff(js->mem, prop_off + sizeof(jsoff_t), new_key);
+      }
+    }
+    
+    // Update property value if it points to nursery
+    jsval_t prop_val = gc_loadval(js->mem, prop_off + sizeof(jsoff_t) * 2);
+    jsval_t new_val = scavenge_update_val(js, prop_val, fwd_table, fwd_cap);
+    if (new_val != prop_val) {
+      gc_saveval(js->mem, prop_off + sizeof(jsoff_t) * 2, new_val);
+    }
+    
+    prop_off = next_prop;
+  }
+}
+
+// Recursively scan the scope chain and update parent pointers + properties
+static void scavenge_scan_scope_chain(ant_t *js, jsoff_t scope_off, jsoff_t *fwd_table, size_t fwd_cap, int depth) {
+  if (depth > 255) return;  // prevent infinite recursion
+  if (scope_off == 0 || is_nursery_off(scope_off) || scope_off >= js->brk) return;
+  
+  // Scan this scope's properties
+  scavenge_scan_object_props(js, scope_off, fwd_table, fwd_cap);
+  
+  // Get parent scope offset (stored at scope_off + sizeof(jsoff_t))
+  jsoff_t parent_off = gc_loadoff(js->mem, scope_off + sizeof(jsoff_t));
+  
+  // If parent is in nursery, copy it and update the pointer
+  if (parent_off != 0 && is_nursery_off(parent_off)) {
+    jsoff_t new_parent = scavenge_copy_object(js, parent_off, fwd_table, fwd_cap);
+    if (new_parent != ~(jsoff_t)0) {
+      gc_saveoff(js->mem, scope_off + sizeof(jsoff_t), new_parent);
+      parent_off = new_parent;
+    }
+  }
+  
+  // Recurse into parent scope
+  if (parent_off != 0 && !is_nursery_off(parent_off) && parent_off < js->brk) {
+    scavenge_scan_scope_chain(js, parent_off, fwd_table, fwd_cap, depth + 1);
+  }
+}
+
+// Update a jsval_t if it points to nursery
+static jsval_t scavenge_update_val(ant_t *js, jsval_t val, jsoff_t *fwd_table, size_t fwd_cap) {
+  if ((val >> 53) != NANBOX_PREFIX_CHK) return val;  // not a tagged value
+  
+  uint8_t type = (val >> NANBOX_TYPE_SHIFT) & NANBOX_TYPE_MASK;
+  jsoff_t off = (jsoff_t)(val & NANBOX_DATA_MASK);
+  
+  if (!is_nursery_off(off)) return val;  // not in nursery
+  
+  switch (type) {
+    case T_OBJ:
+    case T_FUNC:
+    case T_ARR:
+    case T_PROMISE:
+    case T_GENERATOR:
+    case T_STR:
+    case T_PROP:
+    case T_BIGINT: {
+      jsoff_t new_off = scavenge_copy_object(js, off, fwd_table, fwd_cap);
+      if (new_off != ~(jsoff_t)0) {
+        return NANBOX_PREFIX | ((jsval_t)(type & NANBOX_TYPE_MASK) << NANBOX_TYPE_SHIFT) | (new_off & NANBOX_DATA_MASK);
+      }
+      break;
+    }
+    default:
+      break;
+  }
+  
+  return val;
+}
+
+// Scavenge nursery: copy live objects to old gen
+void nursery_scavenge(ant_t *js) {
+  if (!js->nursery || js->nursery_ptr == 0) {
+    js->nursery_full = false;
+    return;
+  }
+  
+  mco_coro *running = mco_running();
+  if (running != NULL && running->stack_base != NULL) {
+    return;
+  }
+  
+  // Allocate forwarding table (indexed by nursery offset >> 3)
+  size_t fwd_cap = js->nursery_ptr + 8;
+  jsoff_t *fwd_table = (jsoff_t *)calloc(fwd_cap >> 3, sizeof(jsoff_t));
+  if (!fwd_table) {
+    js->nursery_ptr = 0;
+    rs_clear(js);
+    return;
+  }
+  
+  jsoff_t scan_start = js->brk;
+  
+  // 1. Scan direct roots and copy nursery objects
+  // Process remembered set (old gen objects pointing to nursery)
+  for (size_t i = 0; i < js->rs_count; i++) {
+    jsval_t old_obj = js->remembered_set[i];
+    jsoff_t obj_off = (jsoff_t)(old_obj & NANBOX_DATA_MASK);
+    
+    if (is_nursery_off(obj_off)) continue;  // skip nursery objects in rs
+    if (obj_off >= js->brk) continue;
+    
+    // Scan object's properties for nursery references
+    jsoff_t header = gc_loadoff(js->mem, obj_off);
+    jsoff_t prop_off = header & ~(3ULL | FLAGMASK);
+    
+    while (prop_off != 0 && prop_off < js->brk) {
+      jsoff_t prop_header = gc_loadoff(js->mem, prop_off);
+      
+      // Update property value if it points to nursery
+      jsval_t prop_val = gc_loadval(js->mem, prop_off + sizeof(jsoff_t) * 2);
+      jsval_t new_val = scavenge_update_val(js, prop_val, fwd_table, fwd_cap);
+      if (new_val != prop_val) {
+        gc_saveval(js->mem, prop_off + sizeof(jsoff_t) * 2, new_val);
+      }
+      
+      prop_off = prop_header & ~(3ULL | FLAGMASK);
+    }
+  }
+  
+  // 2. Scan all runtime roots (scope stacks, for_let_stack, this_stack,
+  //    coroutines, promise registry, timers, modules, etc.)
+  scavenge_ctx_t sctx = { .js = js, .fwd_table = fwd_table, .fwd_cap = fwd_cap };
+  js_gc_scavenge_roots(js, scavenge_op_val, scavenge_op_off, &sctx);
+  
+  // Scan global object properties for nursery references
+  jsoff_t global_off = (jsoff_t)(js->global & NANBOX_DATA_MASK);
+  scavenge_scan_object_props(js, global_off, fwd_table, fwd_cap);
+  
+  // Scan the entire scope chain (current scope + all parents)
+  jsoff_t scope_off = (jsoff_t)(js->scope & NANBOX_DATA_MASK);
+  if (!is_nursery_off(scope_off)) {
+    scavenge_scan_scope_chain(js, scope_off, fwd_table, fwd_cap, 0);
+  }
+  
+  // 3. Cheney scan: process copied objects for more references
+  jsoff_t scan = scan_start;
+  int obj_count = 0;
+  while (scan < js->brk) {
+    jsoff_t header = gc_loadoff(js->mem, scan);
+    uint8_t type = header & 3;
+    size_t obj_size;
+    
+    // Handle rope nodes specially (strings with ROPE_FLAG set)
+    if (type == T_STR && (header & ROPE_FLAG)) {
+      obj_size = sizeof(rope_node_t);
+    } else {
+      obj_size = esize(header);
+    }
+
+    if (obj_size == (size_t)~0) obj_size = 24;
+    obj_size = (obj_size + 7) & ~(size_t)7;
+    obj_count++;
+    
+    if (type == T_OBJ || type == T_PROP) {
+      // Update first prop/next prop
+      jsoff_t prop_ref = header & ~(3ULL | FLAGMASK);
+      if (is_nursery_off(prop_ref)) {
+        jsoff_t new_ref = scavenge_copy_object(js, prop_ref, fwd_table, fwd_cap);
+        if (new_ref != ~(jsoff_t)0) {
+
+          header = (new_ref & ~3ULL) | (header & (3ULL | FLAGMASK));
+          gc_saveoff(js->mem, scan, header);
+        }
+      }
+      
+      if (type == T_OBJ) {
+        // Update parent
+        jsoff_t parent = gc_loadoff(js->mem, scan + sizeof(jsoff_t));
+        if (is_nursery_off(parent)) {
+          jsoff_t new_parent = scavenge_copy_object(js, parent, fwd_table, fwd_cap);
+          if (new_parent != ~(jsoff_t)0) {
+            gc_saveoff(js->mem, scan + sizeof(jsoff_t), new_parent);
+          }
+        }
+        
+        // Update tail
+        jsoff_t tail = gc_loadoff(js->mem, scan + sizeof(jsoff_t) * 2);
+        if (is_nursery_off(tail)) {
+          jsoff_t new_tail = scavenge_copy_object(js, tail, fwd_table, fwd_cap);
+          if (new_tail != ~(jsoff_t)0) {
+            gc_saveoff(js->mem, scan + sizeof(jsoff_t) * 2, new_tail);
+          }
+        }
+      } else if (type == T_PROP) {
+        // Update property key (string offset stored at scan + sizeof(jsoff_t))
+        jsoff_t key_off = gc_loadoff(js->mem, scan + sizeof(jsoff_t));
+        if (is_nursery_off(key_off)) {
+          jsoff_t new_key = scavenge_copy_object(js, key_off, fwd_table, fwd_cap);
+          if (new_key != ~(jsoff_t)0) {
+            gc_saveoff(js->mem, scan + sizeof(jsoff_t), new_key);
+          }
+        }
+        // Update property value
+        jsval_t prop_val = gc_loadval(js->mem, scan + sizeof(jsoff_t) * 2);
+        jsval_t new_val = scavenge_update_val(js, prop_val, fwd_table, fwd_cap);
+        if (new_val != prop_val) {
+          gc_saveval(js->mem, scan + sizeof(jsoff_t) * 2, new_val);
+        }
+      }
+    } else if (type == T_STR && (header & ROPE_FLAG)) {
+      // Rope node - update left/right/cached
+      jsval_t left = gc_loadval(js->mem, scan + offsetof(rope_node_t, left));
+      jsval_t right = gc_loadval(js->mem, scan + offsetof(rope_node_t, right));
+      jsval_t cached = gc_loadval(js->mem, scan + offsetof(rope_node_t, cached));
+      
+      jsval_t new_left = scavenge_update_val(js, left, fwd_table, fwd_cap);
+      jsval_t new_right = scavenge_update_val(js, right, fwd_table, fwd_cap);
+      jsval_t new_cached = scavenge_update_val(js, cached, fwd_table, fwd_cap);
+      
+      if (new_left != left) gc_saveval(js->mem, scan + offsetof(rope_node_t, left), new_left);
+      if (new_right != right) gc_saveval(js->mem, scan + offsetof(rope_node_t, right), new_right);
+      if (new_cached != cached) gc_saveval(js->mem, scan + offsetof(rope_node_t, cached), new_cached);
+    }
+    
+    scan += obj_size;
+  }
+  
+
+  
+  // 4. Reset nursery
+  js->nursery_ptr = 0;
+  js->nursery_full = false;
+  rs_clear(js);
+  
+  // Debug: check scope chain depth and global_scope_stack
+  {
+    jsoff_t dbg_off = (jsoff_t)(js->scope & NANBOX_DATA_MASK);
+    int chain_depth = 0;
+    while (dbg_off != 0 && chain_depth < 50) {
+      if (is_nursery_off(dbg_off) || dbg_off >= js->brk) break;
+      dbg_off = gc_loadoff(js->mem, dbg_off + sizeof(jsoff_t));
+      chain_depth++;
+    }
+    int stack_len = global_scope_stack ? (int)utarray_len(global_scope_stack) : 0;
+    fprintf(stderr, "SCAVENGE: scope chain depth=%d, stack_len=%d, scope=0x%llx, global=0x%llx\n",
+      chain_depth, stack_len,
+      (unsigned long long)(js->scope & NANBOX_DATA_MASK),
+      (unsigned long long)(js->global & NANBOX_DATA_MASK));
+    if (stack_len > 0) {
+      jsoff_t *first = (jsoff_t *)utarray_eltptr(global_scope_stack, 0);
+      fprintf(stderr, "SCAVENGE: scope_stack[0]=0x%llx\n", (unsigned long long)*first);
+    }
+  }
+  // Debug: verify no nursery refs remain in scope chain after scavenge
+  {
+    jsoff_t dbg_off = (jsoff_t)(js->scope & NANBOX_DATA_MASK);
+    int dbg_depth = 0;
+    while (dbg_off != 0 && dbg_depth < 50) {
+      if (is_nursery_off(dbg_off)) {
+        fprintf(stderr, "POST-SCAVENGE BUG: scope chain[%d] is nursery 0x%llx\n", dbg_depth, (unsigned long long)dbg_off);
+        break;
+      }
+      if (dbg_off >= js->brk) {
+        fprintf(stderr, "POST-SCAVENGE BUG: scope chain[%d] OOB 0x%llx (brk=0x%llx)\n", dbg_depth, (unsigned long long)dbg_off, (unsigned long long)js->brk);
+        break;
+      }
+      jsoff_t hdr = gc_loadoff(js->mem, dbg_off);
+      jsoff_t fp = hdr & ~(3ULL | FLAGMASK);
+      if (fp != 0 && is_nursery_off(fp)) {
+        fprintf(stderr, "POST-SCAVENGE BUG: scope[%d] first_prop nursery 0x%llx\n", dbg_depth, (unsigned long long)fp);
+      }
+      jsoff_t pp = fp;
+      int pi = 0;
+      while (pp != 0 && !is_nursery_off(pp) && pp < js->brk && pi < 500) {
+        jsoff_t ph = gc_loadoff(js->mem, pp);
+        jsoff_t np = ph & ~(3ULL | FLAGMASK);
+        if (np != 0 && is_nursery_off(np))
+          fprintf(stderr, "POST-SCAVENGE BUG: scope[%d].prop[%d] next nursery 0x%llx\n", dbg_depth, pi, (unsigned long long)np);
+        jsoff_t koff = gc_loadoff(js->mem, pp + sizeof(jsoff_t));
+        if (is_nursery_off(koff))
+          fprintf(stderr, "POST-SCAVENGE BUG: scope[%d].prop[%d] key nursery 0x%llx\n", dbg_depth, pi, (unsigned long long)koff);
+        jsval_t pv = gc_loadval(js->mem, pp + sizeof(jsoff_t) * 2);
+        jsoff_t pv_off = (jsoff_t)(pv & NANBOX_DATA_MASK);
+        if ((pv >> 53) == NANBOX_PREFIX_CHK && is_nursery_off(pv_off))
+          fprintf(stderr, "POST-SCAVENGE BUG: scope[%d].prop[%d] val nursery 0x%llx\n", dbg_depth, pi, (unsigned long long)pv_off);
+        pp = np;
+        pi++;
+      }
+      dbg_off = gc_loadoff(js->mem, dbg_off + sizeof(jsoff_t));
+      dbg_depth++;
+    }
+    // Also check global_scope_stack entries
+    if (global_scope_stack) {
+      jsoff_t *sp = NULL;
+      int si = 0;
+      while ((sp = (jsoff_t *)utarray_next(global_scope_stack, sp)) != NULL) {
+        if (is_nursery_off(*sp))
+          fprintf(stderr, "POST-SCAVENGE BUG: scope_stack[%d] nursery 0x%llx\n", si, (unsigned long long)*sp);
+        si++;
+      }
+    }
+  }
+  
+  free(fwd_table);
 }

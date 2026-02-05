@@ -157,7 +157,7 @@ static size_t append_error_value(struct js *js, size_t used, jsval_t value) {
   goto l_type_default;
 
   l_type_str:
-    msg = (const char *)&js->mem[vstr(js, value, &msg_len)];
+    msg = (const char *)js_mem_ptr(js, vstr(js, value, &msg_len));
     goto l_type_done;
 
   l_type_obj:

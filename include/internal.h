@@ -66,6 +66,18 @@ struct js {
   bool skip_func_hoist;   // skip function declaration hoisting (pre-computed)
   bool fatal_error;       // fatal error that should bypass promise rejection handling
   
+  // Generational GC: Nursery (young generation)
+  uint8_t *nursery;       // mmap'd nursery region
+  jsoff_t nursery_ptr;    // bump pointer into nursery
+  jsoff_t nursery_size;   // size of nursery (typically 8MB)
+  bool nursery_full;      // flag to trigger scavenge at next safe point
+  bool nursery_enabled;   // true after initialization is complete
+  
+  // Generational GC: Remembered set (old→young references)
+  jsval_t *remembered_set;
+  size_t rs_count;
+  size_t rs_cap;
+  
   struct for_let_ctx *for_let_stack;
   int for_let_stack_len;
   int for_let_stack_cap;
@@ -116,6 +128,7 @@ size_t uint_to_str(char *buf, size_t bufsize, uint64_t val);
 
 void js_gc_reserve_roots(GC_RESERVE_ARGS);
 void js_gc_update_roots(GC_UPDATE_ARGS);
+void js_gc_scavenge_roots(ant_t *js, GC_OP_VALOFF_ARGS);
 
 jsoff_t esize(jsoff_t w);
 jsval_t tov(double d);
@@ -156,6 +169,14 @@ static inline bool is_null(jsval_t v) {
 
 static inline bool is_undefined(jsval_t v) { 
   return vtype(v) == T_UNDEF; 
+}
+
+// Get pointer to memory for an offset (handles nursery vs old gen)
+static inline uint8_t *js_mem_ptr(struct js *js, jsoff_t ofs) {
+  if (is_nursery_off(ofs)) {
+    return js->nursery ? &js->nursery[nursery_raw_off(ofs)] : NULL;
+  }
+  return &js->mem[ofs];
 }
 
 #endif

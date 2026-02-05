@@ -431,12 +431,50 @@ static jsoff_t propref_key(jsval_t v) {
 static inline jsoff_t offtolen(jsoff_t off) { return (off >> 3) - 1; }
 static inline jsoff_t align64(jsoff_t v) { return (v + 7) & ~7ULL; }
 
-static void saveoff(struct js *js, jsoff_t off, jsoff_t val) { 
-  memcpy(&js->mem[off], &val, sizeof(val)); 
+// Get pointer to memory for an offset (handles nursery vs old gen)
+static inline uint8_t *js_mem_ptr_early(struct js *js, jsoff_t ofs) {
+  if (is_nursery_off(ofs)) {
+    return js->nursery ? &js->nursery[nursery_raw_off(ofs)] : NULL;
+  }
+  return &js->mem[ofs];
 }
 
-static void saveval(struct js *js, jsoff_t off, jsval_t val) { 
-  memcpy(&js->mem[off], &val, sizeof(val)); 
+// Check if an offset is valid (within bounds for its generation)
+static inline bool is_valid_off(struct js *js, jsoff_t off) {
+  if (off == 0) return false;
+  if (is_nursery_off(off)) {
+    return js->nursery && nursery_raw_off(off) < js->nursery_ptr;
+  }
+  return off < js->brk;
+}
+
+static void saveoff(struct js *js, jsoff_t off, jsoff_t val) {
+  uint8_t *mem = js_mem_ptr_early(js, off);
+  if (mem) memcpy(mem, &val, sizeof(val)); 
+}
+
+static void saveval(struct js *js, jsoff_t off, jsval_t val) {
+  uint8_t *mem = js_mem_ptr_early(js, off);
+  if (mem) memcpy(mem, &val, sizeof(val)); 
+}
+
+// Write barrier for generational GC: record old→young references
+static inline void write_barrier(struct js *js, jsval_t container, jsval_t value) {
+  if (!js->nursery) return;  // nursery not initialized
+  
+  // Check if container is in old gen and value is in nursery
+  jsoff_t container_off = (jsoff_t)(container & NANBOX_DATA_MASK);
+  jsoff_t value_off = (jsoff_t)(value & NANBOX_DATA_MASK);
+  
+  // Only trigger if container is in old gen and value is in nursery
+  if (!is_nursery_off(container_off) && is_nursery_off(value_off)) {
+    // Value points to nursery - add container to remembered set
+    uint8_t vtype_val = (uint8_t)((value >> NANBOX_TYPE_SHIFT) & NANBOX_TYPE_MASK);
+    if (vtype_val == T_OBJ || vtype_val == T_FUNC || vtype_val == T_ARR || 
+        vtype_val == T_PROMISE || vtype_val == T_STR || vtype_val == T_PROP) {
+      rs_add(js, container);
+    }
+  }
 }
 
 static const char *typestr(uint8_t t) {
@@ -531,7 +569,7 @@ static inline prim_propref_data_t *prim_propref_get(jsval_t v) {
 }
 
 inline size_t js_getbrk(struct js *js) { 
-  return (size_t) js->brk;
+  return (size_t) js->brk + (size_t) js->nursery_ptr;
 }
 
 static inline uint8_t unhex(uint8_t c) {
@@ -662,8 +700,11 @@ static size_t strstring(struct js *js, jsval_t value, char *buf, size_t len);
 static size_t strkey(struct js *js, jsval_t value, char *buf, size_t len);
 
 static inline jsoff_t loadoff(struct js *js, jsoff_t off) {
-  assert(off + sizeof(jsoff_t) <= js->brk); jsoff_t val;
-  memcpy(&val, &js->mem[off], sizeof(val)); return val;
+  jsoff_t val;
+  uint8_t *mem = js_mem_ptr_early(js, off);
+  if (!mem) return 0;
+  memcpy(&val, mem, sizeof(val));
+  return val;
 }
 
 static bool is_arr_off(struct js *js, jsoff_t off) { 
@@ -677,8 +718,12 @@ static bool is_func_off(struct js *js, jsoff_t off) {
   return vtype(code) != T_UNDEF || vtype(cfunc) != T_UNDEF;
 }
 
-static inline jsval_t loadval(struct js *js, jsoff_t off) { 
-  return *(jsval_t *)(&js->mem[off]);
+static inline jsval_t loadval(struct js *js, jsoff_t off) {
+  uint8_t *mem = js_mem_ptr_early(js, off);
+  if (!mem) return js_mkundef();
+  jsval_t val;
+  memcpy(&val, mem, sizeof(val));
+  return val;
 }
 
 static jsval_t upper(struct js *js, jsval_t scope) { 
@@ -903,7 +948,7 @@ static void scan_obj_refs(struct js *js, jsval_t obj) {
   stringify_stack[stringify_depth++] = obj;
   
   jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | FLAGMASK);
-  while (next < js->brk && next != 0) {
+  while (is_valid_off(js, next)) {
     jsoff_t header = loadoff(js, next);
     if (!is_slot_prop(header)) {
       jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
@@ -929,7 +974,7 @@ static void scan_arr_refs(struct js *js, jsval_t obj) {
   stringify_stack[stringify_depth++] = obj;
   
   jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | FLAGMASK);
-  while (next < js->brk && next != 0) {
+  while (is_valid_off(js, next)) {
     jsoff_t header = loadoff(js, next);
     if (!is_slot_prop(header)) {
       jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
@@ -954,7 +999,7 @@ static void scan_func_refs(struct js *js, jsval_t value) {
   stringify_stack[stringify_depth++] = func_obj;
   
   jsoff_t next = loadoff(js, (jsoff_t) vdata(func_obj)) & ~(3U | FLAGMASK);
-  while (next < js->brk && next != 0) {
+  while (is_valid_off(js, next)) {
     jsoff_t header = loadoff(js, next);
     if (!is_slot_prop(header)) {
       jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
@@ -1018,7 +1063,7 @@ static inline jsoff_t get_prop_koff(struct js *js, jsoff_t prop) {
 static void get_prop_key(struct js *js, jsoff_t prop, const char **key, jsoff_t *klen) {
   jsoff_t koff = get_prop_koff(js, prop);
   *klen = offtolen(loadoff(js, koff));
-  *key = (char *) &js->mem[koff + sizeof(koff)];
+  *key = (char *) js_mem_ptr_early(js, koff + sizeof(koff));
 }
 
 static jsval_t get_prop_val(struct js *js, jsoff_t prop) {
@@ -1031,7 +1076,7 @@ const char *get_str_prop(struct js *js, jsval_t obj, const char *key, jsoff_t kl
   if (off <= 0) return NULL;
   jsval_t v = resolveprop(js, mkval(T_PROP, off));
   if (vtype(v) != T_STR) return NULL;
-  return (const char *)&js->mem[vstr(js, v, out_len)];
+  return (const char *)js_mem_ptr_early(js, vstr(js, v, out_len));
 }
 
 static bool is_small_array(struct js *js, jsval_t obj, int *elem_count) {
@@ -1041,7 +1086,7 @@ static bool is_small_array(struct js *js, jsval_t obj, int *elem_count) {
   jsoff_t length = 0;
   jsoff_t scan = next;
   
-  while (scan < js->brk && scan != 0) {
+  while (is_valid_off(js, scan)) {
     const char *key; jsoff_t klen;
     get_prop_key(js, scan, &key, &klen);
     if (streq(key, klen, "length", 6)) {
@@ -1060,7 +1105,7 @@ static bool is_small_array(struct js *js, jsval_t obj, int *elem_count) {
     jsval_t val = js_mkundef();
     bool found = false;
     
-    while (prop < js->brk && prop != 0) {
+    while (is_valid_off(js, prop)) {
       const char *key; jsoff_t klen;
       get_prop_key(js, prop, &key, &klen);
       if (streq(key, klen, idx, idxlen)) {
@@ -1113,7 +1158,7 @@ static const char *get_func_name(struct js *js, jsval_t func, jsoff_t *out_len) 
   jsval_t name = resolveprop(js, mkval(T_PROP, off));
   if (vtype(name) != T_STR) return NULL;
   jsoff_t str_off = vstr(js, name, out_len);
-  return (const char *) &js->mem[str_off];
+  return (const char *) js_mem_ptr_early(js, str_off);
 }
 
 static const char *get_class_name(struct js *js, jsval_t obj, jsoff_t *out_len, const char *skip) {
@@ -1162,7 +1207,7 @@ static size_t strarr(struct js *js, jsval_t obj, char *buf, size_t len) {
     
     bool found = false;
     jsval_t val = js_mkundef();
-    for (jsoff_t p = first; p < js->brk && p != 0; p = next_prop(loadoff(js, p))) {
+    for (jsoff_t p = first; is_valid_off(js, p); p = next_prop(loadoff(js, p))) {
       const char *key; jsoff_t klen;
       get_prop_key(js, p, &key, &klen);
       if (streq(key, klen, idx, idxlen)) {
@@ -1173,7 +1218,7 @@ static size_t strarr(struct js *js, jsval_t obj, char *buf, size_t len) {
     n += found ? tostr(js, val, buf + n, REMAIN(n, len)) : cpy(buf + n, REMAIN(n, len), "undefined", 9);
   }
   
-  for (jsoff_t p = first; p < js->brk && p != 0; p = next_prop(loadoff(js, p))) {
+  for (jsoff_t p = first; is_valid_off(js, p); p = next_prop(loadoff(js, p))) {
     jsoff_t header = loadoff(js, p);
     if (is_slot_prop(header)) continue;
     
@@ -1208,7 +1253,7 @@ static size_t array_to_string(struct js *js, jsval_t obj, char *buf, size_t len)
   jsoff_t length = 0;
   jsoff_t scan = next;
   
-  while (scan < js->brk && scan != 0) {
+  while (is_valid_off(js, scan)) {
     const char *key; jsoff_t klen;
     get_prop_key(js, scan, &key, &klen);
     if (streq(key, klen, "length", 6)) {
@@ -1228,7 +1273,7 @@ static size_t array_to_string(struct js *js, jsval_t obj, char *buf, size_t len)
     jsval_t val = js_mkundef();
     bool found = false;
     
-    while (prop < js->brk && prop != 0) {
+    while (is_valid_off(js, prop)) {
       const char *key; jsoff_t klen;
       get_prop_key(js, prop, &key, &klen);
       if (streq(key, klen, idx, idxlen)) {
@@ -1243,7 +1288,7 @@ static size_t array_to_string(struct js *js, jsval_t obj, char *buf, size_t len)
       uint8_t vt = vtype(val);
       if (vt == T_STR) {
         jsoff_t slen, soff = vstr(js, val, &slen);
-        n += cpy(buf + n, REMAIN(n, len), (const char *)&js->mem[soff], slen);
+        n += cpy(buf + n, REMAIN(n, len), (const char *)js_mem_ptr_early(js, soff), slen);
       } else if (vt != T_UNDEF && vt != T_NULL) n += tostr(js, val, buf + n, REMAIN(n, len));
     }
   }
@@ -1293,7 +1338,7 @@ static bool is_valid_identifier(const char *str, jsoff_t slen) {
 
 static size_t strkey(struct js *js, jsval_t value, char *buf, size_t len) {
   jsoff_t slen, off = vstr(js, value, &slen);
-  const char *str = (const char *) &js->mem[off];
+  const char *str = (const char *) js_mem_ptr_early(js, off);
   
   const char *sym_desc = get_symbol_description_from_key(str, slen);
   if (sym_desc) {
@@ -1317,7 +1362,7 @@ static bool is_small_object(struct js *js, jsval_t obj, int *prop_count) {
   jsoff_t obj_off = (jsoff_t)vdata(obj);
   jsoff_t next = loadoff(js, obj_off) & ~(3U | FLAGMASK);
   
-  while (next < js->brk && next != 0) {
+  while (is_valid_off(js, next)) {
     jsoff_t header = loadoff(js, next);
     if (is_slot_prop(header)) { next = next_prop(header); continue; }
     
@@ -1384,7 +1429,7 @@ static size_t strobj(struct js *js, jsval_t obj, char *buf, size_t len) {
   if (vtype(tag_val) != T_STR) goto print_plain_object;
   
   toff = vstr(js, tag_val, &tlen);
-  tag_str = (const char *) &js->mem[toff];
+  tag_str = (const char *) js_mem_ptr_early(js, toff);
   is_map = (tlen == 3 && memcmp(tag_str, "Map", 3) == 0);
   is_set = (tlen == 3 && memcmp(tag_str, "Set", 3) == 0);
   is_arraybuffer = (tlen >= 11 && memcmp(tag_str + tlen - 11, "ArrayBuffer", 11) == 0);
@@ -1608,7 +1653,7 @@ static size_t strobj(struct js *js, jsval_t obj, char *buf, size_t len) {
   
 print_tagged_object:
   n += cpy(buf + n, REMAIN(n, len), "Object [", 8);
-  n += cpy(buf + n, REMAIN(n, len), (const char *) &js->mem[toff], tlen);
+  n += cpy(buf + n, REMAIN(n, len), (const char *) js_mem_ptr_early(js, toff), tlen);
   n += cpy(buf + n, REMAIN(n, len), "] {\n", 4);
   goto continue_object_print;
   
@@ -1674,14 +1719,14 @@ continue_object_print:;
   jsoff_t *prop_offsets = malloc(prop_capacity * sizeof(jsoff_t));
   int num_props = 0;
   
-  while (next < js->brk && next != 0) {
+  while (is_valid_off(js, next)) {
     jsoff_t header = loadoff(js, next);
     if (is_slot_prop(header)) { next = next_prop(header); continue; }
     
     jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
     jsoff_t klen = offtolen(loadoff(js, koff));
     
-    const char *key = (char *) &js->mem[koff + sizeof(koff)];
+    const char *key = (char *) js_mem_ptr_early(js, koff + sizeof(koff));
     const char *tag_sym_key = get_toStringTag_sym_key();
     bool should_hide = streq(key, klen, STR_PROTO, STR_PROTO_LEN) || streq(key, klen, tag_sym_key, strlen(tag_sym_key));
     
@@ -1704,7 +1749,7 @@ continue_object_print:;
     jsoff_t prop = prop_offsets[i];
     jsoff_t koff = loadoff(js, prop + (jsoff_t) sizeof(prop));
     jsoff_t klen = offtolen(loadoff(js, koff));
-    const char *key = (char *) &js->mem[koff + sizeof(koff)];
+    const char *key = (char *) js_mem_ptr_early(js, koff + sizeof(koff));
     jsval_t val = loadval(js, prop + (jsoff_t) (sizeof(prop) + sizeof(koff)));
     
     if (!first) n += cpy(buf + n, REMAIN(n, len), inline_mode ? ", " : ",\n", 2);
@@ -1862,7 +1907,7 @@ static void rope_flatten_into(struct js *js, jsval_t str, char *dest, jsoff_t *p
     jsoff_t slen;
     jsoff_t soff = (jsoff_t) vdata(str);
     slen = offtolen(loadoff(js, soff));
-    memcpy(dest + *pos, &js->mem[soff + sizeof(jsoff_t)], slen);
+    memcpy(dest + *pos, js_mem_ptr_early(js, soff + sizeof(jsoff_t)), slen);
     *pos += slen; return;
   }
   
@@ -1871,7 +1916,7 @@ static void rope_flatten_into(struct js *js, jsval_t str, char *dest, jsoff_t *p
     jsoff_t clen;
     jsoff_t coff = (jsoff_t) vdata(cached);
     clen = offtolen(loadoff(js, coff));
-    memcpy(dest + *pos, &js->mem[coff + sizeof(jsoff_t)], clen);
+    memcpy(dest + *pos, js_mem_ptr_early(js, coff + sizeof(jsoff_t)), clen);
     *pos += clen; return;
   }
   
@@ -1886,7 +1931,7 @@ static void rope_flatten_into(struct js *js, jsval_t str, char *dest, jsoff_t *p
       jsoff_t slen;
       jsoff_t soff = (jsoff_t) vdata(node);
       slen = offtolen(loadoff(js, soff));
-      memcpy(dest + *pos, &js->mem[soff + sizeof(jsoff_t)], slen);
+      memcpy(dest + *pos, js_mem_ptr_early(js, soff + sizeof(jsoff_t)), slen);
       *pos += slen; continue;
     }
     
@@ -1895,7 +1940,7 @@ static void rope_flatten_into(struct js *js, jsval_t str, char *dest, jsoff_t *p
       jsoff_t clen;
       jsoff_t coff = (jsoff_t) vdata(c);
       clen = offtolen(loadoff(js, coff));
-      memcpy(dest + *pos, &js->mem[coff + sizeof(jsoff_t)], clen);
+      memcpy(dest + *pos, js_mem_ptr_early(js, coff + sizeof(jsoff_t)), clen);
       *pos += clen; continue;
     }
     
@@ -1951,7 +1996,12 @@ jsoff_t vstr(struct js *js, jsval_t value, jsoff_t *len) {
 
 static size_t strstring(struct js *js, jsval_t value, char *buf, size_t len) {
   jsoff_t slen, off = vstr(js, value, &slen);
-  const char *str = (const char *) &js->mem[off];
+  uint8_t *mem = js_mem_ptr_early(js, off);
+  if (!mem) {
+    fprintf(stderr, "DEBUG strstring: mem is NULL, off=%u, nursery=%d, slen=%u\n", off, is_nursery_off(off), slen);
+    return 0;
+  }
+  const char *str = (const char *)mem;
   size_t n = 0;
   n += cpy(buf + n, REMAIN(n, len), "'", 1);
   for (jsoff_t i = 0; i < slen && n < len - 1; i++) {
@@ -2269,7 +2319,10 @@ const char *js_str(struct js *js, jsval_t value) {
   free(buf);
   
   if (is_err(str)) return "";
-  return (const char *)&js->mem[vdata(str) + sizeof(jsoff_t)];
+  jsoff_t str_off = (jsoff_t)vdata(str);
+  uint8_t *mem = js_mem_ptr_early(js, str_off);
+  if (!mem) return "";
+  return (const char *)(mem + sizeof(jsoff_t));
 }
 
 static bool js_try_grow_memory(struct js *js, size_t needed) {
@@ -2316,6 +2369,18 @@ static void js_track_allocation(struct js *js, size_t size) {
 
 static inline jsoff_t js_alloc(struct js *js, size_t size) {
   size = align64((jsoff_t) size);
+  
+  // Try nursery first (fast bump-pointer allocation)
+  // Only use nursery after initialization is complete (nursery_enabled)
+  if (js->nursery_enabled && js->nursery && !js->nursery_full) {
+    jsoff_t off = nursery_alloc(js, size);
+    if (off != ~(jsoff_t)0) {
+      return off;  // nursery offset (has NURSERY_BIT set)
+    }
+    // Nursery is full - continue to old gen allocation
+  }
+  
+  // Fall back to old gen allocation
   if (!js_ensure_space(js, size)) return ~(jsoff_t) 0;
 
   jsoff_t ofs = js->brk;
@@ -2327,12 +2392,14 @@ static inline jsoff_t js_alloc(struct js *js, size_t size) {
 static jsval_t mkentity(struct js *js, jsoff_t b, const void *buf, size_t len) {
   jsoff_t ofs = js_alloc(js, len + sizeof(b));
   if (ofs == (jsoff_t) ~0) return js_mkerr(js, "oom");
-  memcpy(&js->mem[ofs], &b, sizeof(b));
+  
+  uint8_t *mem = js_mem_ptr_early(js, ofs);
+  memcpy(mem, &b, sizeof(b));
   if (buf != NULL) {
     size_t copy_len = ((b & 3) == T_STR && len > 0) ? len - 1 : len;
-    memmove(&js->mem[ofs + sizeof(b)], buf, copy_len);
+    memmove(mem + sizeof(b), buf, copy_len);
   }
-  if ((b & 3) == T_STR) js->mem[ofs + sizeof(b) + len - 1] = 0;
+  if ((b & 3) == T_STR) mem[sizeof(b) + len - 1] = 0;
   return mkval(b & 3, ofs);
 }
 
@@ -2348,10 +2415,11 @@ static jsval_t js_mkrope(struct js *js, jsval_t left, jsval_t right, jsoff_t tot
   jsoff_t header = ((total_len + 1) << 3) | T_STR | ROPE_FLAG | ((jsoff_t)depth << ROPE_DEPTH_SHIFT);
   jsval_t undef = js_mkundef();
   
-  memcpy(&js->mem[ofs + offsetof(rope_node_t, header)], &header, sizeof(header));
-  memcpy(&js->mem[ofs + offsetof(rope_node_t, left)], &left, sizeof(left));
-  memcpy(&js->mem[ofs + offsetof(rope_node_t, right)], &right, sizeof(right));
-  memcpy(&js->mem[ofs + offsetof(rope_node_t, cached)], &undef, sizeof(undef));
+  uint8_t *mem = js_mem_ptr_early(js, ofs);
+  memcpy(mem + offsetof(rope_node_t, header), &header, sizeof(header));
+  memcpy(mem + offsetof(rope_node_t, left), &left, sizeof(left));
+  memcpy(mem + offsetof(rope_node_t, right), &right, sizeof(right));
+  memcpy(mem + offsetof(rope_node_t, cached), &undef, sizeof(undef));
   
   return mkval(T_STR, ofs);
 }
@@ -2361,16 +2429,17 @@ jsval_t js_mkbigint(struct js *js, const char *digits, size_t len, bool negative
   jsoff_t ofs = js_alloc(js, total + sizeof(jsoff_t));
   if (ofs == (jsoff_t) ~0) return js_mkerr(js, "oom");
   jsoff_t header = (jsoff_t) (total << 4);
-  memcpy(&js->mem[ofs], &header, sizeof(header));
-  js->mem[ofs + sizeof(header)] = negative ? 1 : 0;
-  if (digits) memcpy(&js->mem[ofs + sizeof(header) + 1], digits, len);
-  js->mem[ofs + sizeof(header) + 1 + len] = 0;
+  uint8_t *mem = js_mem_ptr_early(js, ofs);
+  memcpy(mem, &header, sizeof(header));
+  mem[sizeof(header)] = negative ? 1 : 0;
+  if (digits) memcpy(mem + sizeof(header) + 1, digits, len);
+  mem[sizeof(header) + 1 + len] = 0;
   return mkval(T_BIGINT, ofs);
 }
 
 static bool bigint_IsNegative(struct js *js, jsval_t v) {
   jsoff_t ofs = (jsoff_t) vdata(v);
-  return js->mem[ofs + sizeof(jsoff_t)] == 1;
+  return js_mem_ptr_early(js, ofs + sizeof(jsoff_t))[0] == 1;
 }
 
 static const char *bigint_digits(struct js *js, jsval_t v, size_t *len) {
@@ -2378,7 +2447,7 @@ static const char *bigint_digits(struct js *js, jsval_t v, size_t *len) {
   jsoff_t header = loadoff(js, ofs);
   size_t total = (header >> 4) - 2;
   if (len) *len = total;
-  return (const char *)&js->mem[ofs + sizeof(jsoff_t) + 1];
+  return (const char *)js_mem_ptr_early(js, ofs + sizeof(jsoff_t) + 1);
 }
 
 static int bigint_cmp_abs(const char *a, size_t alen, const char *b, size_t blen) {
@@ -2648,7 +2717,7 @@ static jsval_t builtin_BigInt(struct js *js, jsval_t *args, int nargs) {
   }
   if (vtype(arg) == T_STR) {
     jsoff_t slen, off = vstr(js, arg, &slen);
-    const char *str = (const char *)&js->mem[off];
+    const char *str = (const char *)js_mem_ptr_early(js, off);
     bool neg = false;
     size_t i = 0;
     if (slen > 0 && str[0] == '-') { neg = true; i++; }
@@ -2866,7 +2935,7 @@ jsoff_t js_arr_len(struct js *js, jsval_t arr) {
   bool found_length_prop = false;
   jsoff_t length_prop_val = 0;
   jsoff_t scan = loadoff(js, (jsoff_t) vdata(arr)) & ~(3U | FLAGMASK);
-  while (scan < js->brk && scan != 0) {
+  while (is_valid_off(js, scan)) {
     const char *key; jsoff_t klen;
     get_prop_key(js, scan, &key, &klen);
     if (streq(key, klen, "length", 6)) {
@@ -2891,7 +2960,7 @@ jsval_t js_arr_get(struct js *js, jsval_t arr, jsoff_t idx) {
   char idxstr[16];
   size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)idx);
   jsoff_t prop = loadoff(js, (jsoff_t) vdata(arr)) & ~(3U | FLAGMASK);
-  while (prop < js->brk && prop != 0) {
+  while (is_valid_off(js, prop)) {
     const char *key; jsoff_t klen;
     get_prop_key(js, prop, &key, &klen);
     if (streq(key, klen, idxstr, idxlen)) return get_prop_val(js, prop);
@@ -2939,7 +3008,7 @@ static void invalidate_prop_cache(struct js *js, jsoff_t obj_off, jsoff_t prop_o
   jsoff_t koff = loadoff(js, prop_off + sizeof(jsoff_t));
   jsoff_t klen = (loadoff(js, koff) >> 3) - 1;
   
-  const char *key = (char *)&js->mem[koff + sizeof(jsoff_t)];
+  const char *key = (char *)js_mem_ptr_early(js, koff + sizeof(jsoff_t));
   const char *interned = intern_string(key, klen);
   if (!interned) return;
   
@@ -2953,6 +3022,8 @@ static void invalidate_prop_cache(struct js *js, jsoff_t obj_off, jsoff_t prop_o
 }
 
 static jsval_t mkprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v, jsoff_t flags) {
+  write_barrier(js, obj, v);  // GC write barrier
+  
   jsoff_t klen; jsoff_t koff = vstr(js, k, &klen);
   jsoff_t koff_entity = koff - sizeof(jsoff_t);
   jsoff_t head = (jsoff_t) vdata(obj);
@@ -2965,12 +3036,15 @@ static jsval_t mkprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v, jsoff_t 
   memcpy(buf, &koff_entity, sizeof(koff_entity));
   memcpy(buf + sizeof(koff_entity), &v, sizeof(v));
   
-  const char *p = (char *) &js->mem[koff];
-  (void)intern_string(p, klen);
+  uint8_t *kptr = js_mem_ptr_early(js, koff);
+  if (kptr) {
+    const char *p = (const char *)kptr;
+    (void)intern_string(p, klen);
+  }
   
-  jsoff_t new_prop_off = js->brk;
   jsval_t prop = mkentity(js, 0 | T_PROP | flags, buf, sizeof(buf));
   if (is_err(prop)) return prop;
+  jsoff_t new_prop_off = (jsoff_t) vdata(prop);  // Get actual offset (may be nursery)
   
   if (first_prop == 0) {
     jsoff_t new_header = new_prop_off | (header & (3U | FLAGMASK));
@@ -2986,6 +3060,8 @@ static jsval_t mkprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v, jsoff_t 
 }
 
 static inline jsval_t mkprop_fast(struct js *js, jsval_t obj, jsval_t k, jsval_t v, jsoff_t flags) {
+  write_barrier(js, obj, v);  // GC write barrier
+  
   jsoff_t klen; jsoff_t koff = vstr(js, k, &klen);
   jsoff_t koff_entity = koff - sizeof(jsoff_t);
   jsoff_t head = (jsoff_t) vdata(obj);
@@ -2998,9 +3074,9 @@ static inline jsval_t mkprop_fast(struct js *js, jsval_t obj, jsval_t k, jsval_t
   memcpy(buf, &koff_entity, sizeof(koff_entity));
   memcpy(buf + sizeof(koff_entity), &v, sizeof(v));
   
-  jsoff_t new_prop_off = js->brk;
   jsval_t prop = mkentity(js, 0 | T_PROP | flags, buf, sizeof(buf));
   if (is_err(prop)) return prop;
+  jsoff_t new_prop_off = (jsoff_t) vdata(prop);  // Get actual offset (may be nursery)
   
   if (first_prop == 0) {
     jsoff_t new_header = new_prop_off | (header & (3U | FLAGMASK));
@@ -3024,9 +3100,9 @@ jsval_t js_mkprop_fast(struct js *js, jsval_t obj, const char *key, size_t len, 
 jsoff_t js_mkprop_fast_off(struct js *js, jsval_t obj, const char *key, size_t len, jsval_t v) {
   jsval_t k = js_mkstr(js, key, len);
   if (is_err(k)) return 0;
-  jsoff_t prop_off = js->brk;
-  mkprop_fast(js, obj, k, v, 0);
-  return prop_off + sizeof(jsoff_t) * 2;
+  jsval_t prop = mkprop_fast(js, obj, k, v, 0);
+  if (is_err(prop)) return 0;
+  return (jsoff_t) vdata(prop) + sizeof(jsoff_t) * 2;
 }
 
 void js_saveval(struct js *js, jsoff_t off, jsval_t v) { saveval(js, off, v); }
@@ -3042,9 +3118,9 @@ static jsval_t mkslot(struct js *js, jsval_t obj, internal_slot_t slot, jsval_t 
   memcpy(buf, &slot_key, sizeof(slot_key));
   memcpy(buf + sizeof(slot_key), &v, sizeof(v));
   
-  jsoff_t new_prop_off = js->brk;
   jsval_t prop = mkentity(js, first_prop | T_PROP | SLOTMASK, buf, sizeof(buf));
   if (is_err(prop)) return prop;
+  jsoff_t new_prop_off = (jsoff_t) vdata(prop);  // Get actual offset (may be nursery)
   
   jsoff_t new_header = new_prop_off | (header & (3U | FLAGMASK));
   saveoff(js, head, new_header);
@@ -3058,12 +3134,12 @@ static jsval_t mkslot(struct js *js, jsval_t obj, internal_slot_t slot, jsval_t 
 
 static inline jsoff_t search_slot(struct js *js, jsval_t obj, internal_slot_t slot) {
   jsoff_t off = (jsoff_t) vdata(obj);
-  if (__builtin_expect(off >= js->brk, 0)) return 0;
+  if (__builtin_expect(!is_valid_off(js, off), 0)) return 0;
   jsoff_t next = loadoff(js, off) & ~(3U | FLAGMASK);
   jsoff_t header, koff;
 
 check:
-  if (__builtin_expect(next == 0 || next >= js->brk, 0)) return 0;
+  if (__builtin_expect(!is_valid_off(js, next), 0)) return 0;
   header = loadoff(js, next);
   if ((header & SLOTMASK) == 0) return 0;
   koff = loadoff(js, next + sizeof(jsoff_t));
@@ -3073,6 +3149,8 @@ check:
 }
 
 static void set_slot(struct js *js, jsval_t obj, internal_slot_t slot, jsval_t val) {
+  write_barrier(js, obj, val);  // GC write barrier
+  
   jsoff_t existing = search_slot(js, obj, slot);
   if (existing > 0) {
     saveval(js, existing + sizeof(jsoff_t) * 2, val);
@@ -3136,7 +3214,7 @@ static double js_to_number(struct js *js, jsval_t arg) {
   
   if (vtype(arg) == T_STR) {
     jsoff_t len, off = vstr(js, arg, &len);
-    const char *s = (char *)&js->mem[off], *end;
+    const char *s = (char *)js_mem_ptr_early(js, off), *end;
     while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r') s++;
     if (!*s) return 0.0;
     double val = strtod(s, (char **)&end);
@@ -3205,8 +3283,12 @@ static jsval_t validate_array_length(struct js *js, jsval_t v) {
 }
 
 jsval_t js_setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v) {
+  write_barrier(js, obj, v);  // GC write barrier
+  
   jsoff_t klen; jsoff_t koff = vstr(js, k, &klen);
-  const char *key = (char *) &js->mem[koff];
+  uint8_t *kptr = js_mem_ptr_early(js, koff);
+  if (!kptr) return js_mkerr(js, "invalid key");
+  const char *key = (const char *)kptr;
   
   if (vtype(obj) == T_ARR && streq(key, klen, "length", 6)) {
     jsval_t err = validate_array_length(js, v);
@@ -3379,7 +3461,11 @@ jsval_t js_mksym(struct js *js, const char *desc) {
   uint64_t id = ++js->sym_counter;
   jsoff_t desc_off = 0;
   if (desc && *desc) {
+    // Symbol descriptions must be in old-gen (offset fits in 23 bits of payload)
+    bool was_enabled = js->nursery_enabled;
+    js->nursery_enabled = false;
     jsval_t desc_str = js_mkstr(js, desc, strlen(desc));
+    js->nursery_enabled = was_enabled;
     desc_off = (jsoff_t)vdata(desc_str);
   }
   uint64_t payload = ((id & PROPREF_PAYLOAD) << PROPREF_KEY_SHIFT) | (desc_off & PROPREF_PAYLOAD);
@@ -3397,7 +3483,7 @@ static inline jsoff_t sym_get_desc_off(jsval_t v) {
 static const char *sym_get_desc(struct js *js, jsval_t v) {
   jsoff_t off = sym_get_desc_off(v);
   if (off == 0) return NULL;
-  return (const char *)&js->mem[off + sizeof(jsoff_t)];
+  return (const char *)js_mem_ptr_early(js, off + sizeof(jsoff_t));
 }
 
 uint64_t inline js_sym_id(jsval_t sym) {
@@ -4647,13 +4733,13 @@ static void copy_body_scope_props(struct js *js, jsval_t body_scope, jsval_t clo
   if (vtype(body_scope) != T_OBJ) return;
   jsoff_t prop_off = loadoff(js, (jsoff_t)vdata(body_scope)) & ~(3U | FLAGMASK);
   
-  while (prop_off < js->brk && prop_off != 0) {
+  while (is_valid_off(js, prop_off)) {
     jsoff_t header = loadoff(js, prop_off);
     if (is_slot_prop(header)) { prop_off = next_prop(header); continue; }
     
     jsoff_t koff = loadoff(js, prop_off + (jsoff_t)sizeof(prop_off));
     jsoff_t klen = offtolen(loadoff(js, koff));
-    const char *key = (char *)&js->mem[koff + sizeof(koff)];
+    const char *key = (char *)js_mem_ptr_early(js, koff + sizeof(koff));
     jsval_t val = loadval(js, prop_off + (jsoff_t)(sizeof(prop_off) + sizeof(koff)));
     
     prop_off = next_prop(header);
@@ -4918,7 +5004,7 @@ static inline jsoff_t lkp_interned(struct js *js, jsval_t obj, const char *searc
   jsoff_t off = first_prop;
   jsoff_t result = 0;
   
-  while (off < js->brk && off != 0) {
+  while (is_valid_off(js, off)) {
     jsoff_t header = loadoff(js, off);
     if (is_slot_prop(header)) { off = next_prop(header); continue; }
     
@@ -4926,7 +5012,7 @@ static inline jsoff_t lkp_interned(struct js *js, jsval_t obj, const char *searc
     jsoff_t klen = (loadoff(js, koff) >> 3) - 1;
     
     if (klen == len) {
-      const char *p = (char *)&js->mem[koff + sizeof(jsoff_t)];
+      const char *p = (char *)js_mem_ptr_early(js, koff + sizeof(jsoff_t));
       if (intern_string(p, klen) == search_intern) { result = off; break; }
     }
     off = next_prop(header);
@@ -4984,14 +5070,14 @@ static jsoff_t lkp_scope(struct js *js, jsval_t scope, const char *buf, size_t l
   jsoff_t scope_off = (jsoff_t)vdata(scope);
   jsoff_t off = loadoff(js, scope_off) & ~(3U | FLAGMASK);
 
-  while (off < js->brk && off != 0) {
+  while (is_valid_off(js, off)) {
     jsoff_t header = loadoff(js, off);
     if (is_slot_prop(header)) { off = next_prop(header); continue; }
 
     jsoff_t koff = loadoff(js, (jsoff_t)(off + sizeof(off)));
     jsoff_t klen = (loadoff(js, koff) >> 3) - 1;
     if (klen == len) {
-      const char *p = (char *)&js->mem[koff + sizeof(koff)];
+      const char *p = (char *)js_mem_ptr_early(js, koff + sizeof(koff));
       if (intern_string(p, klen) == search_intern) return off;
     }
     off = next_prop(header);
@@ -5207,7 +5293,7 @@ static jsval_t getprop_any(struct js *js, jsval_t obj, const char *key, size_t k
   if (t == T_STR && key_len == 6 && memcmp(key, "length", 6) == 0) {
     jsoff_t byte_len;
     jsoff_t str_off = vstr(js, obj, &byte_len);
-    return tov(D(utf16_strlen((const char *)&js->mem[str_off], byte_len)));
+    return tov(D(utf16_strlen((const char *)js_mem_ptr_early(js, str_off), byte_len)));
   }
   
   if (t == T_STR || t == T_NUM || t == T_BOOL || t == T_BIGINT) {
@@ -5357,7 +5443,7 @@ jsval_t resolveprop(struct js *js, jsval_t v) {
       jsval_t prim = prim_data->prim_val;
       jsval_t key = mkval(T_STR, prim_data->key_off);
       jsoff_t key_len;
-      const char *key_str = (const char *)&js->mem[vstr(js, key, &key_len)];
+      const char *key_str = (const char *)js_mem_ptr_early(js, vstr(js, key, &key_len));
       
        jsval_t proto = get_prototype_for_type(js, vtype(prim));
        if (vtype(proto) == T_OBJ) {
@@ -5378,7 +5464,7 @@ jsval_t resolveprop(struct js *js, jsval_t v) {
     jsoff_t key_off = propref_key(v);
     jsval_t key = mkval(T_STR, key_off);
     jsoff_t len;
-    const char *key_str = (const char *)&js->mem[vstr(js, key, &len)];
+    const char *key_str = (const char *)js_mem_ptr_early(js, vstr(js, key, &len));
     
     if (is_arr_off(js, obj_off) && streq(key_str, len, "length", 6)) {
       jsval_t arr = mkval(T_ARR, obj_off);
@@ -5445,7 +5531,7 @@ static jsval_t assign(struct js *js, jsval_t lhs, jsval_t val) {
       jsval_t prim = prim_data->prim_val;
       jsval_t key = mkval(T_STR, prim_data->key_off);
       jsoff_t key_len;
-      const char *key_str = (const char *)&js->mem[vstr(js, key, &key_len)];
+      const char *key_str = (const char *)js_mem_ptr_early(js, vstr(js, key, &key_len));
       
        jsval_t proto = get_prototype_for_type(js, vtype(prim));
        if (vtype(proto) == T_OBJ) {
@@ -5471,7 +5557,7 @@ static jsval_t assign(struct js *js, jsval_t lhs, jsval_t val) {
     jsval_t key = mkval(T_STR, key_off);
     
     jsoff_t key_len;
-    const char *key_str = (const char *)&js->mem[vstr(js, key, &key_len)];
+    const char *key_str = (const char *)js_mem_ptr_early(js, vstr(js, key, &key_len));
     
     jsval_t setter_result;
     if (try_accessor_setter(js, obj, key_str, key_len, val, &setter_result)) {
@@ -5491,7 +5577,7 @@ static jsval_t assign(struct js *js, jsval_t lhs, jsval_t val) {
   jsoff_t koff = loadoff(js, propoff + sizeof(jsoff_t));
   jsoff_t klen = offtolen(loadoff(js, koff));
   
-  const char *key = (char *)&js->mem[koff + sizeof(jsoff_t)];
+  const char *key = (char *)js_mem_ptr_early(js, koff + sizeof(jsoff_t));
   if (is_const_prop(js, propoff)) return js_mkerr(js, "assignment to constant");
   
   if ((klen == 9 && memcmp(key, "undefined", 9) == 0) ||
@@ -5598,8 +5684,8 @@ static jsval_t do_string_op(struct js *js, uint8_t op, jsval_t l, jsval_t r) {
       string_builder_init(&sb, static_buffer, sizeof(static_buffer));
       
       if (
-        !string_builder_append(&sb, (char *)&js->mem[off1], len1) ||
-        !string_builder_append(&sb, (char *)&js->mem[off2], len2)
+        !string_builder_append(&sb, (char *)js_mem_ptr_early(js, off1), len1) ||
+        !string_builder_append(&sb, (char *)js_mem_ptr_early(js, off2), len2)
       ) return js_mkerr(js, "string concatenation failed");
       
       return string_builder_finalize(js, &sb);
@@ -5612,14 +5698,14 @@ static jsval_t do_string_op(struct js *js, uint8_t op, jsval_t l, jsval_t r) {
   jsoff_t n2, off2 = vstr(js, r, &n2);
   
   if (op == TOK_EQ) {
-    bool eq = n1 == n2 && memcmp(&js->mem[off1], &js->mem[off2], n1) == 0;
+    bool eq = n1 == n2 && memcmp(js_mem_ptr_early(js, off1), js_mem_ptr_early(js, off2), n1) == 0;
     return mkval(T_BOOL, eq ? 1 : 0);
   } else if (op == TOK_NE) {
-    bool eq = n1 == n2 && memcmp(&js->mem[off1], &js->mem[off2], n1) == 0;
+    bool eq = n1 == n2 && memcmp(js_mem_ptr_early(js, off1), js_mem_ptr_early(js, off2), n1) == 0;
     return mkval(T_BOOL, eq ? 0 : 1);
   } else if (op == TOK_LT || op == TOK_LE || op == TOK_GT || op == TOK_GE) {
     jsoff_t min_len = n1 < n2 ? n1 : n2;
-    int cmp = memcmp(&js->mem[off1], &js->mem[off2], min_len);
+    int cmp = memcmp(js_mem_ptr_early(js, off1), js_mem_ptr_early(js, off2), min_len);
     
     if (cmp == 0) {
       if (n1 == n2) {
@@ -5654,7 +5740,7 @@ static jsval_t do_bracket_op(struct js *js, jsval_t l, jsval_t r) {
   } else if (vtype(key_val) == T_STR) {
     jsoff_t slen;
     jsoff_t off = vstr(js, key_val, &slen);
-    keystr = (char *) &js->mem[off];
+    keystr = (char *)js_mem_ptr_early(js, off);
     keylen = slen;
   } else if (vtype(key_val) == T_SYMBOL) {
     snprintf(keybuf, sizeof(keybuf), "__sym_%llu__", (unsigned long long)sym_get_id(key_val));
@@ -5665,14 +5751,14 @@ static jsval_t do_bracket_op(struct js *js, jsval_t l, jsval_t r) {
     if (is_err(str_val)) return str_val;
     jsoff_t slen;
     jsoff_t off = vstr(js, str_val, &slen);
-    keystr = (char *) &js->mem[off];
+    keystr = (char *)js_mem_ptr_early(js, off);
     keylen = slen;
   }
   if (streq(keystr, keylen, "length", 6)) {
     if (vtype(obj) == T_STR) {
       jsoff_t byte_len;
       jsoff_t str_off = vstr(js, obj, &byte_len);
-      const char *str_data = (const char *)&js->mem[str_off];
+      const char *str_data = (const char *)js_mem_ptr_early(js, str_off);
       return tov(D(utf16_strlen(str_data, byte_len)));
     }
     if (vtype(obj) == T_ARR) {
@@ -5702,7 +5788,7 @@ static jsval_t do_bracket_op(struct js *js, jsval_t l, jsval_t r) {
     if (!isnan(idx_d) && idx_d >= 0 && idx_d == (double)(long)idx_d) {
       jsoff_t idx = (jsoff_t) idx_d; jsoff_t byte_len;
       jsoff_t str_off = vstr(js, obj, &byte_len);
-      const char *str_data = (const char *)&js->mem[str_off];
+      const char *str_data = (const char *)js_mem_ptr_early(js, str_off);
       size_t char_bytes;
       int byte_offset = utf16_index_to_byte_offset(str_data, byte_len, idx, &char_bytes);
       if (byte_offset >= 0) {
@@ -5805,7 +5891,7 @@ static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
   if (t == T_STR && streq(ptr, plen, "length", 6)) {
     jsoff_t byte_len;
     jsoff_t str_off = vstr(js, l, &byte_len);
-    const char *str_data = (const char *)&js->mem[str_off];
+    const char *str_data = (const char *)js_mem_ptr_early(js, str_off);
     return tov(D(utf16_strlen(str_data, byte_len)));
   }
   
@@ -6962,7 +7048,7 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
       
       if (vtype(nfe_name_val) == T_STR) {
         jsoff_t name_len, name_offset = vstr(js, nfe_name_val, &name_len);
-        func_name = (const char *)&js->mem[name_offset];
+        func_name = (const char *)js_mem_ptr_early(js, name_offset);
       }
       
       const char *final_name = func_name ? func_name : "<anonymous>";
@@ -7004,7 +7090,7 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
       const char *source = (const char *)vdata(src_val);
       
       jsoff_t meta_len, meta_ptr_off = vstr(js, fields_meta, &meta_len);
-      const jsoff_t *metadata = (const jsoff_t *)(&js->mem[meta_ptr_off]);
+      const jsoff_t *metadata = (const jsoff_t *)(js_mem_ptr_early(js, meta_ptr_off));
       
       for (int i = 0; i < field_count; i++) {
         jsoff_t name_off = metadata[i * 4 + 0];
@@ -7212,7 +7298,7 @@ static inline bool strict_eq_values(struct js *js, jsval_t l, jsval_t r) {
   if (t != vtype(r)) return false;
   if (t == T_STR) {
     jsoff_t n1, n2, off1 = vstr(js, l, &n1), off2 = vstr(js, r, &n2);
-    return n1 == n2 && memcmp(&js->mem[off1], &js->mem[off2], n1) == 0;
+    return n1 == n2 && memcmp(js_mem_ptr_early(js, off1), js_mem_ptr_early(js, off2), n1) == 0;
   }
   if (t == T_NUM) return tod(l) == tod(r);
   if (t == T_BIGINT) return bigint_compare(js, l, r) == 0;
@@ -7512,11 +7598,14 @@ static jsval_t js_template_literal(struct js *js) {
     }
     if (n > part_start || (n == part_start && (n >= template_len - 1 || in[n] != '$'))) {
       size_t part_len = n - part_start;
-      size_t needed = sizeof(jsoff_t) + part_len;
-      if (js->brk + needed > js->size) {
-        if (!js_try_grow_memory(js, needed)) return js_mkerr(js, "oom");
+      uint8_t tmp_buf[256];
+      uint8_t *out = tmp_buf;
+      uint8_t *heap_buf = NULL;
+      if (part_len > sizeof(tmp_buf)) {
+        heap_buf = (uint8_t *)malloc(part_len);
+        if (!heap_buf) return js_mkerr(js, "oom");
+        out = heap_buf;
       }
-      uint8_t *out = &js->mem[js->brk + sizeof(jsoff_t)];
       size_t out_len = 0;
       
       for (size_t i = part_start; i < n; i++) {
@@ -7533,7 +7622,8 @@ static jsval_t js_template_literal(struct js *js) {
         }
       }
       
-      parts[part_count++] = js_mkstr(js, NULL, out_len);
+      parts[part_count++] = js_mkstr(js, out, out_len);
+      free(heap_buf);
     }
     
     if (n < template_len - 1 && in[n] == '$' && in[n + 1] == '{') {
@@ -7586,7 +7676,7 @@ static jsval_t js_template_literal(struct js *js) {
   for (int i = 0; i < part_count; i++) {
     if (vtype(parts[i]) == T_STR) {
       jsoff_t part_len, part_off = vstr(js, parts[i], &part_len);
-      memmove(&js->mem[result_off + pos], &js->mem[part_off], part_len);
+      memmove(js_mem_ptr_early(js, result_off + pos), js_mem_ptr_early(js, part_off), part_len);
       pos += part_len;
     }
   }
@@ -7614,14 +7704,16 @@ static jsval_t js_tagged_template(struct js *js, jsval_t tag_func) {
       else n++;
     }
     
-    size_t out_len = 0;
-    size_t needed = sizeof(jsoff_t) + (n - part_start);
-    if (js->brk + needed > js->size) {
-      if (!js_try_grow_memory(js, needed)) {
-        return js_mkerr(js, "oom");
-      }
+    size_t part_len = n - part_start;
+    uint8_t tmp_buf[256];
+    uint8_t *out = tmp_buf;
+    uint8_t *heap_buf = NULL;
+    if (part_len > sizeof(tmp_buf)) {
+      heap_buf = (uint8_t *)malloc(part_len);
+      if (!heap_buf) return js_mkerr(js, "oom");
+      out = heap_buf;
     }
-    uint8_t *out = &js->mem[js->brk + sizeof(jsoff_t)];
+    size_t out_len = 0;
     
     for (size_t i = part_start; i < n; i++) {
       if (in[i] == '\\' && i + 1 < n) {
@@ -7636,7 +7728,8 @@ static jsval_t js_tagged_template(struct js *js, jsval_t tag_func) {
         out[out_len++] = in[i];
       }
     }
-    strings[string_count++] = js_mkstr(js, NULL, out_len);
+    strings[string_count++] = js_mkstr(js, out, out_len);
+    free(heap_buf);
     
     if (n >= template_len - 1 || in[n] != '$') break;
     
@@ -7685,12 +7778,33 @@ static jsval_t js_tagged_template(struct js *js, jsval_t tag_func) {
 static jsval_t js_str_literal(struct js *js) {
   uint8_t *in = (uint8_t *) &js->code[js->toff];
   size_t n1 = 0, n2 = 0;
-  size_t needed = sizeof(jsoff_t) + js->tlen;
-  if (js->brk + needed > js->size) {
-    if (!js_try_grow_memory(js, needed)) return js_mkerr(js, "oom");
+  
+  // Use stack buffer for small strings, heap for large ones
+  uint8_t stack_buf[256];
+  uint8_t *out = stack_buf;
+  uint8_t *heap_buf = NULL;
+  size_t out_cap = sizeof(stack_buf);
+  
+  if (js->tlen > sizeof(stack_buf)) {
+    heap_buf = (uint8_t *)malloc(js->tlen);
+    if (!heap_buf) return js_mkerr(js, "oom");
+    out = heap_buf;
+    out_cap = js->tlen;
   }
-  uint8_t *out = &js->mem[js->brk + sizeof(jsoff_t)];
+  
   while (n2++ + 2 < js->tlen) {
+    // Ensure buffer capacity (for multi-byte escapes)
+    if (n1 + 4 >= out_cap) {
+      size_t new_cap = out_cap * 2;
+      uint8_t *new_buf = (uint8_t *)malloc(new_cap);
+      if (!new_buf) { free(heap_buf); return js_mkerr(js, "oom"); }
+      memcpy(new_buf, out, n1);
+      free(heap_buf);
+      heap_buf = new_buf;
+      out = new_buf;
+      out_cap = new_cap;
+    }
+    
     if (in[n2] == '\\') {
       if (in[n2 + 1] == in[0]) {
         out[n1++] = in[0];
@@ -7704,6 +7818,7 @@ static jsval_t js_str_literal(struct js *js) {
         out[n1++] = '\0';
       } else if (in[n2 + 1] >= '0' && in[n2 + 1] <= '7') {
         if (js->flags & F_STRICT) {
+          free(heap_buf);
           return js_mkerr_typed(js, JS_ERR_SYNTAX, "octal escape sequences are not allowed in strict mode");
         }
         int val = in[n2 + 1] - '0';
@@ -7781,7 +7896,9 @@ static jsval_t js_str_literal(struct js *js) {
       out[n1++] = ((uint8_t *) js->code)[js->toff + n2];
     }
   }
-  return js_mkstr(js, NULL, n1);
+  jsval_t result = js_mkstr(js, out, n1);
+  free(heap_buf);
+  return result;
 }
 
 static jsval_t js_bigint_literal(struct js *js) {
@@ -7877,7 +7994,7 @@ static jsval_t js_arr_destruct_assign(struct js *js) {
           jsval_t elem;
           if (vtype(arr) == T_STR) {
             jsoff_t slen, soff = vstr(js, arr, &slen);
-            elem = js_mkstr(js, (char *)&js->mem[soff + i], 1);
+            elem = js_mkstr(js, (char *)js_mem_ptr_early(js, soff + i), 1);
           } else {
             elem = js_arr_get(js, arr, i);
           }
@@ -7888,7 +8005,7 @@ static jsval_t js_arr_destruct_assign(struct js *js) {
         if (vtype(arr) == T_STR) {
           jsoff_t slen, soff = vstr(js, arr, &slen);
           if ((jsoff_t)index < slen) {
-            prop_val = js_mkstr(js, (char *)&js->mem[soff + index], 1);
+            prop_val = js_mkstr(js, (char *)js_mem_ptr_early(js, soff + index), 1);
           } else {
             prop_val = js_mkundef();
           }
@@ -7996,7 +8113,7 @@ static jsval_t js_arr_literal(struct js *js) {
       for (jsoff_t i = 0; i < slen; i++) {
         char idxstr[16];
         size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)idx);
-        jsval_t ch = js_mkstr(js, (char *)&js->mem[soff + i], 1);
+        jsval_t ch = js_mkstr(js, (char *)js_mem_ptr_early(js, soff + i), 1);
         js_mkprop_fast(js, arr, idxstr, idxlen, ch);
         idx++;
       }
@@ -8100,7 +8217,7 @@ static jsval_t set_obj_property(struct js *js, jsval_t obj, jsval_t key, jsval_t
   bool is_proto = false;
   if (!is_computed && vtype(key) == T_STR) {
     jsoff_t klen;
-    const char *kstr = (char *)&js->mem[vstr(js, key, &klen)];
+    const char *kstr = (char *)js_mem_ptr_early(js, vstr(js, key, &klen));
     is_proto = (klen == STR_PROTO_LEN && memcmp(kstr, STR_PROTO, STR_PROTO_LEN) == 0);
   }
 
@@ -8154,13 +8271,13 @@ static jsval_t js_obj_literal(struct js *js) {
       jsval_t src_obj = (st == T_OBJ) ? spread_obj : mkval(T_OBJ, vdata(spread_obj));
       jsoff_t next_prop_off = loadoff(js, (jsoff_t) vdata(src_obj)) & ~(3U | FLAGMASK);
       
-      while (next_prop_off < js->brk && next_prop_off != 0) {
+      while (is_valid_off(js, next_prop_off)) {
         jsoff_t header = loadoff(js, next_prop_off);
         if (is_slot_prop(header)) { next_prop_off = next_prop(header); continue; }
         
         jsoff_t koff = loadoff(js, next_prop_off + (jsoff_t) sizeof(next_prop_off));
         jsoff_t klen = offtolen(loadoff(js, koff));
-        const char *prop_key = (char *) &js->mem[koff + sizeof(koff)];
+        const char *prop_key = (char *)js_mem_ptr_early(js, koff + sizeof(koff));
         jsval_t prop_val = loadval(js, next_prop_off + (jsoff_t) (sizeof(next_prop_off) + sizeof(koff)));
         
         next_prop_off = next_prop(header);
@@ -8347,7 +8464,7 @@ static jsval_t js_obj_literal(struct js *js) {
           const char *key_str = NULL;
           if (vtype(key) == T_STR) {
             jsoff_t key_off = vstr(js, key, &key_len);
-            key_str = (char *)&js->mem[key_off];
+            key_str = (char *)js_mem_ptr_early(js, key_off);
           }
           
           if (key_str) {
@@ -8685,7 +8802,7 @@ static jsval_t js_literal(struct js *js) {
           js->consumed = 1;
           idx = resolveprop(js, idx);
           if (vtype(idx) == T_STR) {
-            prop_len = 0; prop = (const char *)&js->mem[vstr(js, idx, &prop_len)];
+            prop_len = 0; prop = (const char *)js_mem_ptr_early(js, vstr(js, idx, &prop_len));
           } else {
             char buf[32]; prop_len = (jsoff_t)tostr(js, idx, buf, sizeof(buf));
             prop = buf;
@@ -9274,7 +9391,7 @@ static jsval_t js_unary(struct js *js) {
       jsval_t obj = mkval(T_OBJ, obj_off);
       jsval_t key = mkval(T_STR, key_off);
       jsoff_t len;
-      const char *key_str = (const char *)&js->mem[vstr(js, key, &len)];
+      const char *key_str = (const char *)js_mem_ptr_early(js, vstr(js, key, &len));
 
       if (is_proxy(js, obj)) {
         jsval_t result = proxy_delete(js, obj, key_str, len);
@@ -9334,7 +9451,7 @@ static jsval_t js_unary(struct js *js) {
       if ((cleaned & 3) == T_OBJ) {
         jsoff_t first_prop = cleaned & ~3ULL;
         if (first_prop == prop_off) { owner_obj_off = off; is_first_prop = true; break; }
-        for (jsoff_t cur = first_prop; cur != 0 && cur < js->brk; ) {
+        for (jsoff_t cur = first_prop; is_valid_off(js, cur); ) {
           jsoff_t nx = loadoff(js, cur) & ~(3U | FLAGMASK);
           if (nx == prop_off) { owner_obj_off = off; prev_prop_off = cur; break; }
           cur = nx;
@@ -9351,7 +9468,7 @@ static jsval_t js_unary(struct js *js) {
 
       jsoff_t key_str_off = loadoff(js, (jsoff_t)(prop_off + sizeof(jsoff_t)));
       jsoff_t key_len = (loadoff(js, key_str_off) >> 3) - 1;
-      const char *key_str = (char *)&js->mem[key_str_off + sizeof(jsoff_t)];
+      const char *key_str = (char *)js_mem_ptr_early(js, key_str_off + sizeof(jsoff_t));
       descriptor_entry_t *desc = lookup_descriptor(owner_obj_off, key_str, key_len);
       if (desc && !desc->configurable) {
         if (js->flags & F_STRICT) return js_mkerr_typed(js, JS_ERR_TYPE, "cannot delete non-configurable property");
@@ -9862,7 +9979,7 @@ obj_destruct_rest:;
         uint8_t obj_type = vtype(obj);
         if (obj_type == T_OBJ || obj_type == T_ARR) {
           jsoff_t scan = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | FLAGMASK);
-          while (scan < js->brk && scan != 0) {
+          while (is_valid_off(js, scan)) {
             jsoff_t header = loadoff(js, scan);
             if (is_slot_prop(header)) { scan = next_prop(header); continue; }
             
@@ -9874,7 +9991,7 @@ obj_destruct_rest:;
               jsval_t pk = js_arr_get(js, picked_keys, i);
               if (vtype(pk) != T_STR) continue;
               jsoff_t pklen, pkoff = vstr(js, pk, &pklen);
-              if (klen == pklen && memcmp(key, &js->mem[pkoff], klen) == 0) { is_picked = true; break; }
+              if (klen == pklen && memcmp(key, js_mem_ptr_early(js, pkoff), klen) == 0) { is_picked = true; break; }
             }
             if (!is_picked && !(klen == STR_PROTO_LEN && memcmp(key, STR_PROTO, STR_PROTO_LEN) == 0)) {
               jsval_t val = get_prop_val(js, scan);
@@ -10058,7 +10175,7 @@ obj_destruct_next:
               jsval_t elem;
               if (vtype(arr) == T_STR) {
                 jsoff_t slen, soff = vstr(js, arr, &slen);
-                elem = js_mkstr(js, (char *)&js->mem[soff + i], 1);
+                elem = js_mkstr(js, (char *)js_mem_ptr_early(js, soff + i), 1);
               } else {
                 elem = js_arr_get(js, arr, i);
               }
@@ -10069,7 +10186,7 @@ obj_destruct_next:
             if (vtype(arr) == T_STR) {
               jsoff_t slen, soff = vstr(js, arr, &slen);
               if ((jsoff_t)index < slen) {
-                prop_val = js_mkstr(js, (char *)&js->mem[soff + index], 1);
+                prop_val = js_mkstr(js, (char *)js_mem_ptr_early(js, soff + index), 1);
               } else {
                 prop_val = js_mkundef();
               }
@@ -10552,18 +10669,18 @@ static jsval_t for_in_iter_object(struct js *js, for_iter_ctx_t *ctx, jsval_t ob
     jsoff_t prop_off = loadoff(js, cur_obj_off) & ~(3U | FLAGMASK);
     
     jsoff_t cur_idx = 0;
-    while (prop_off < js->brk && prop_off != 0 && cur_idx < prop_idx) {
+    while (is_valid_off(js, prop_off) && cur_idx < prop_idx) {
       jsoff_t header = loadoff(js, prop_off);
       prop_off = next_prop(header); cur_idx++;
     }
     
-    if (prop_off >= js->brk || prop_off == 0) break;
+    if (!is_valid_off(js, prop_off)) break;
     jsoff_t header = loadoff(js, prop_off);
     if (is_slot_prop(header)) { prop_idx++; continue; }
     
     jsoff_t koff = loadoff(js, prop_off + (jsoff_t)sizeof(prop_off));
     jsoff_t klen = offtolen(loadoff(js, koff));
-    const char *key = (char *)&js->mem[koff + sizeof(koff)];
+    const char *key = (char *)js_mem_ptr_early(js, koff + sizeof(koff));
     
     bool skip = streq(key, klen, STR_PROTO, STR_PROTO_LEN);
     if (!skip && tag_sym_key) skip = streq(key, klen, tag_sym_key, tag_sym_len);
@@ -10597,7 +10714,7 @@ static jsval_t for_of_iter_array(struct js *js, for_iter_ctx_t *ctx, jsval_t ite
     jsval_t arr = js_deref(js, h_iterable);
     jsoff_t next_prop_off = loadoff(js, (jsoff_t) vdata(arr)) & ~(3U | FLAGMASK);
     jsoff_t scan = next_prop_off;
-    while (scan < js->brk && scan != 0) {
+    while (is_valid_off(js, scan)) {
       jsoff_t header = loadoff(js, scan);
       if (is_slot_prop(header)) { scan = next_prop(header); continue; }
       const char *key; jsoff_t klen;
@@ -10621,7 +10738,7 @@ static jsval_t for_of_iter_array(struct js *js, for_iter_ctx_t *ctx, jsval_t ite
     jsoff_t prop = next_prop_off;
     jsval_t val = js_mkundef();
     
-    while (prop < js->brk && prop != 0) {
+    while (is_valid_off(js, prop)) {
       jsoff_t header = loadoff(js, prop);
       if (is_slot_prop(header)) { prop = next_prop(header); continue; }
       const char *key; jsoff_t klen;
@@ -10666,7 +10783,7 @@ static jsval_t for_of_iter_string(struct js *js, for_iter_ctx_t *ctx, jsval_t it
     
     if (byte_pos >= cur_byte_len) break;
     
-    const char *cur_str = (char *) &js->mem[cur_soff];
+    const char *cur_str = (char *)js_mem_ptr_early(js, cur_soff);
     unsigned char c = (unsigned char)cur_str[byte_pos];
     size_t char_bytes;
     jsval_t char_str;
@@ -11800,7 +11917,7 @@ static jsval_t js_switch(struct js *js) {
         } else if (vtype(switch_val) == T_STR) {
           jsoff_t n1, off1 = vstr(js, switch_val, &n1);
           jsoff_t n2, off2 = vstr(js, case_val, &n2);
-          matches = n1 == n2 && memcmp(&js->mem[off1], &js->mem[off2], n1) == 0;
+          matches = n1 == n2 && memcmp(js_mem_ptr_early(js, off1), js_mem_ptr_early(js, off2), n1) == 0;
         } else if (vtype(switch_val) == T_BOOL) {
           matches = vdata(switch_val) == vdata(case_val);
         } else {
@@ -12173,7 +12290,7 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
       
       if (m->is_getter || m->is_setter) {
         jsoff_t name_len;
-        const char *name_str = (const char *)&js->mem[vstr(js, method_name, &name_len)];
+        const char *name_str = (const char *)js_mem_ptr_early(js, vstr(js, method_name, &name_len));
         
         if (m->is_getter) {
           js_set_getter_desc(js, proto, name_str, name_len, method_func, JS_DESC_C);
@@ -12212,8 +12329,8 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
       jsoff_t meta_off = js_alloc(js, meta_len + sizeof(meta_header));
       if (meta_off == (jsoff_t) ~0) return js_mkerr(js, "oom");
       
-      memcpy(&js->mem[meta_off], &meta_header, sizeof(meta_header));
-      jsoff_t *metadata = (jsoff_t *)(&js->mem[meta_off + sizeof(meta_header)]);
+      memcpy(js_mem_ptr_early(js, meta_off), &meta_header, sizeof(meta_header));
+      jsoff_t *metadata = (jsoff_t *)(js_mem_ptr_early(js, meta_off + sizeof(meta_header)));
       
       int meta_idx = 0;
       for (unsigned int i = 0; i < utarray_len(methods); i++) {
@@ -12228,7 +12345,7 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
         meta_idx++;
       }
       
-      js->mem[meta_off + sizeof(meta_header) + metadata_size] = 0;
+      js_mem_ptr_early(js, meta_off + sizeof(meta_header) + metadata_size)[0] = 0;
       jsval_t fields_meta = mkval(T_STR, meta_off);
       
       set_slot(js, func_obj, SLOT_FIELD_COUNT, tov((double)instance_field_count));
@@ -12772,7 +12889,7 @@ static jsval_t builtin_eval(struct js *js, jsval_t *args, int nargs) {
   if (vtype(code_arg) != T_STR) return code_arg;
   
   jsoff_t code_len, code_off = vstr(js, code_arg, &code_len);
-  const char *code_str = (const char *)&js->mem[code_off];
+  const char *code_str = (const char *)js_mem_ptr_early(js, code_off);
   
   js_parse_state_t saved;
   JS_SAVE_STATE(js, saved);
@@ -12839,7 +12956,7 @@ static jsval_t builtin_Function(struct js *js, jsval_t *args, int nargs) {
   
   for (int i = 0; i < nargs - 1; i++) {
     jsoff_t param_len, param_off = vstr(js, args[i], &param_len);
-    memcpy(code_buf + pos, &js->mem[param_off], param_len);
+    memcpy(code_buf + pos, js_mem_ptr_early(js, param_off), param_len);
     pos += param_len;
     if (i < nargs - 2) {
       code_buf[pos++] = ',';
@@ -12850,13 +12967,13 @@ static jsval_t builtin_Function(struct js *js, jsval_t *args, int nargs) {
   code_buf[pos++] = '{';
   
   jsoff_t body_len, body_off = vstr(js, body, &body_len);
-  memcpy(code_buf + pos, &js->mem[body_off], body_len);
+  memcpy(code_buf + pos, js_mem_ptr_early(js, body_off), body_len);
   pos += body_len;
   
   code_buf[pos++] = '}';
   code_buf[pos] = '\0';
   
-  bool is_strict_body = is_strict_function_body((const char *)&js->mem[body_off], body_len);
+  bool is_strict_body = is_strict_function_body((const char *)js_mem_ptr_early(js, body_off), body_len);
   if (is_strict_body && nargs > 1) {
     int i = 0, j;
     jsoff_t param_len_i, param_off_i;
@@ -12866,7 +12983,7 @@ check_param:
     if (i >= nargs - 1) goto params_done;
     
     param_off_i = vstr(js, args[i], &param_len_i);
-    param_i = (const char *)&js->mem[param_off_i];
+    param_i = (const char *)js_mem_ptr_early(js, param_off_i);
     
     if (is_strict_restricted(param_i, param_len_i)) {
       free(code_buf);
@@ -12879,7 +12996,7 @@ check_dup:
     if (j >= nargs - 1) { i++; goto check_param; }
     
     jsoff_t param_len_j, param_off_j = vstr(js, args[j], &param_len_j);
-    const char *param_j = (const char *)&js->mem[param_off_j];
+    const char *param_j = (const char *)js_mem_ptr_early(js, param_off_j);
     
     if (param_len_i == param_len_j && memcmp(param_i, param_j, param_len_i) == 0) {
       free(code_buf);
@@ -12956,7 +13073,7 @@ static jsval_t builtin_AsyncFunction(struct js *js, jsval_t *args, int nargs) {
   
   for (int i = 0; i < nargs - 1; i++) {
     jsoff_t param_len, param_off = vstr(js, args[i], &param_len);
-    memcpy(code_buf + pos, &js->mem[param_off], param_len);
+    memcpy(code_buf + pos, js_mem_ptr_early(js, param_off), param_len);
     pos += param_len;
     if (i < nargs - 2) code_buf[pos++] = ',';
   }
@@ -12965,7 +13082,7 @@ static jsval_t builtin_AsyncFunction(struct js *js, jsval_t *args, int nargs) {
   code_buf[pos++] = '{';
   
   jsoff_t body_len, body_off = vstr(js, body, &body_len);
-  memcpy(code_buf + pos, &js->mem[body_off], body_len);
+  memcpy(code_buf + pos, js_mem_ptr_early(js, body_off), body_len);
   pos += body_len;
   code_buf[pos++] = '}';
   code_buf[pos] = '\0';
@@ -13337,8 +13454,8 @@ static jsval_t builtin_Error_toString(struct js *js, jsval_t *args, int nargs) {
   jsoff_t name_off = vstr(js, name, &name_len);
   jsoff_t msg_off = vstr(js, msg, &msg_len);
   
-  const char *name_str = (const char *)&js->mem[name_off];
-  const char *msg_str = (const char *)&js->mem[msg_off];
+  const char *name_str = (const char *)js_mem_ptr_early(js, name_off);
+  const char *msg_str = (const char *)js_mem_ptr_early(js, msg_off);
   
   if (name_len == 0) return msg;
   if (msg_len == 0) return name;
@@ -13416,7 +13533,7 @@ static jsval_t builtin_RegExp(struct js *js, jsval_t *args, int nargs) {
   js_setprop(js, regexp_obj, flags_key, flags);
   
   jsoff_t flags_len, flags_off = vstr(js, flags, &flags_len);
-  const char *flags_str = (char *) &js->mem[flags_off];
+  const char *flags_str = (char *)js_mem_ptr_early(js, flags_off);
   
   bool global = false, ignoreCase = false, multiline = false, dotAll = false, sticky = false;
   for (jsoff_t i = 0; i < flags_len; i++) {
@@ -13451,7 +13568,7 @@ static jsval_t builtin_regexp_test(struct js *js, jsval_t *args, int nargs) {
   if (vtype(source_val) != T_STR) return mkval(T_BOOL, 0);
 
   jsoff_t plen, poff = vstr(js, source_val, &plen);
-  const char *pattern_ptr = (char *) &js->mem[poff];
+  const char *pattern_ptr = (char *)js_mem_ptr_early(js, poff);
 
   bool ignore_case = false, multiline = false;
   jsoff_t flags_off = lkp(js, regexp, "flags", 5);
@@ -13459,7 +13576,7 @@ static jsval_t builtin_regexp_test(struct js *js, jsval_t *args, int nargs) {
     jsval_t flags_val = resolveprop(js, mkval(T_PROP, flags_off));
     if (vtype(flags_val) == T_STR) {
       jsoff_t flen, foff = vstr(js, flags_val, &flen);
-      const char *flags_str = (char *) &js->mem[foff];
+      const char *flags_str = (char *)js_mem_ptr_early(js, foff);
       for (jsoff_t i = 0; i < flen; i++) {
         if (flags_str[i] == 'i') ignore_case = true;
         if (flags_str[i] == 'm') multiline = true;
@@ -13468,7 +13585,7 @@ static jsval_t builtin_regexp_test(struct js *js, jsval_t *args, int nargs) {
   }
 
   jsoff_t str_len, str_off = vstr(js, str_arg, &str_len);
-  const char *str_ptr = (char *) &js->mem[str_off];
+  const char *str_ptr = (char *)js_mem_ptr_early(js, str_off);
 
   char pcre2_pattern[512];
   size_t pcre2_len = js_to_pcre2_pattern(pattern_ptr, plen, pcre2_pattern, sizeof(pcre2_pattern));
@@ -13505,7 +13622,7 @@ static jsval_t builtin_regexp_exec(struct js *js, jsval_t *args, int nargs) {
   if (vtype(source_val) != T_STR) return js_mknull();
 
   jsoff_t plen, poff = vstr(js, source_val, &plen);
-  const char *pattern_ptr = (char *) &js->mem[poff];
+  const char *pattern_ptr = (char *)js_mem_ptr_early(js, poff);
 
   bool ignore_case = false, multiline = false, global_flag = false;
   jsoff_t flags_off = lkp(js, regexp, "flags", 5);
@@ -13513,7 +13630,7 @@ static jsval_t builtin_regexp_exec(struct js *js, jsval_t *args, int nargs) {
     jsval_t flags_val = resolveprop(js, mkval(T_PROP, flags_off));
     if (vtype(flags_val) == T_STR) {
       jsoff_t flen, foff = vstr(js, flags_val, &flen);
-      const char *flags_str = (char *) &js->mem[foff];
+      const char *flags_str = (char *)js_mem_ptr_early(js, foff);
       for (jsoff_t i = 0; i < flen; i++) {
         if (flags_str[i] == 'i') ignore_case = true;
         if (flags_str[i] == 'm') multiline = true;
@@ -13523,7 +13640,7 @@ static jsval_t builtin_regexp_exec(struct js *js, jsval_t *args, int nargs) {
   }
 
   jsoff_t str_len, str_off = vstr(js, str_arg, &str_len);
-  const char *str_ptr = (char *) &js->mem[str_off];
+  const char *str_ptr = (char *)js_mem_ptr_early(js, str_off);
 
   PCRE2_SIZE start_offset = 0;
   if (global_flag) {
@@ -13657,14 +13774,14 @@ static jsval_t builtin_string_search(struct js *js, jsval_t *args, int nargs) {
 
     jsoff_t poff;
     poff = vstr(js, source_val, &pattern_len);
-    pattern_ptr = (char *) &js->mem[poff];
+    pattern_ptr = (char *)js_mem_ptr_early(js, poff);
 
     jsoff_t flags_off = lkp(js, pattern, "flags", 5);
     if (flags_off != 0) {
       jsval_t flags_val = resolveprop(js, mkval(T_PROP, flags_off));
       if (vtype(flags_val) == T_STR) {
         jsoff_t flen, foff = vstr(js, flags_val, &flen);
-        const char *flags_str = (char *) &js->mem[foff];
+        const char *flags_str = (char *)js_mem_ptr_early(js, foff);
         for (jsoff_t i = 0; i < flen; i++) {
           if (flags_str[i] == 'i') ignore_case = true;
           if (flags_str[i] == 'm') multiline = true;
@@ -13674,13 +13791,13 @@ static jsval_t builtin_string_search(struct js *js, jsval_t *args, int nargs) {
   } else if (vtype(pattern) == T_STR) {
     jsoff_t poff;
     poff = vstr(js, pattern, &pattern_len);
-    pattern_ptr = (char *) &js->mem[poff];
+    pattern_ptr = (char *)js_mem_ptr_early(js, poff);
   } else {
     return tov(-1);
   }
 
   jsoff_t str_len, str_off = vstr(js, str, &str_len);
-  const char *str_ptr = (char *) &js->mem[str_off];
+  const char *str_ptr = (char *)js_mem_ptr_early(js, str_off);
 
   char pcre2_pattern[512];
   size_t pcre2_len = js_to_pcre2_pattern(pattern_ptr, pattern_len, pcre2_pattern, sizeof(pcre2_pattern));
@@ -14636,7 +14753,7 @@ static jsval_t iterate_dynamic_keys(struct js *js, jsval_t obj, dynamic_accessor
     jsval_t key_val = resolveprop(js, mkval(T_PROP, prop_off));
     if (vtype(key_val) != T_STR) continue;
     jsoff_t klen; jsoff_t str_off = vstr(js, key_val, &klen);
-    const char *key = (const char *)&js->mem[str_off];
+    const char *key = (const char *)js_mem_ptr_early(js, str_off);
     jsval_t val = acc->getter(js, obj, key, klen);
     js_arr_push(js, arr, mapper ? mapper(js, key_val, val) : val);
   }
@@ -14689,13 +14806,13 @@ static jsval_t builtin_object_keys(struct js *js, jsval_t *args, int nargs) {
   jsoff_t idx = 0;
   jsoff_t next = loadoff(js, obj_off) & ~(3U | FLAGMASK);
   
-  while (next < js->brk && next != 0) {
+  while (is_valid_off(js, next)) {
     jsoff_t header = loadoff(js, next);
     if (is_slot_prop(header)) { next = next_prop(header); continue; }
     
     jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
     jsoff_t klen = offtolen(loadoff(js, koff));
-    const char *key = (char *) &js->mem[koff + sizeof(koff)];
+    const char *key = (char *)js_mem_ptr_early(js, koff + sizeof(koff));
     
     next = next_prop(header);
     if (is_internal_prop(key, klen)) continue;
@@ -14745,13 +14862,13 @@ static jsval_t builtin_object_values(struct js *js, jsval_t *args, int nargs) {
   jsval_t arr = mkarr(js); jsoff_t idx = 0;
   jsoff_t next = loadoff(js, obj_off) & ~(3U | FLAGMASK);
   
-  while (next < js->brk && next != 0) {
+  while (is_valid_off(js, next)) {
     jsoff_t header = loadoff(js, next);
     if (is_slot_prop(header)) { next = next_prop(header); continue; }
     
     jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
     jsoff_t klen = offtolen(loadoff(js, koff));
-    const char *key = (char *) &js->mem[koff + sizeof(koff)];
+    const char *key = (char *)js_mem_ptr_early(js, koff + sizeof(koff));
     jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
     
     next = next_prop(header);
@@ -14801,13 +14918,13 @@ static jsval_t builtin_object_entries(struct js *js, jsval_t *args, int nargs) {
   jsoff_t idx = 0;
   jsoff_t next = loadoff(js, obj_off) & ~(3U | FLAGMASK);
   
-  while (next < js->brk && next != 0) {
+  while (is_valid_off(js, next)) {
     jsoff_t header = loadoff(js, next);
     if (is_slot_prop(header)) { next = next_prop(header); continue; }
     
     jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
     jsoff_t klen = offtolen(loadoff(js, koff));
-    const char *key = (char *) &js->mem[koff + sizeof(koff)];
+    const char *key = (char *)js_mem_ptr_early(js, koff + sizeof(koff));
     jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
     
     next = next_prop(header);
@@ -14933,13 +15050,13 @@ static jsval_t builtin_object_create(struct js *js, jsval_t *args, int nargs) {
     jsval_t props = args[1];
     jsoff_t next = loadoff(js, (jsoff_t) vdata(props)) & ~(3U | FLAGMASK);
     
-    while (next < js->brk && next != 0) {
+    while (is_valid_off(js, next)) {
       jsoff_t header = loadoff(js, next);
       if (is_slot_prop(header)) { next = next_prop(header); continue; }
       
       jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
       jsoff_t klen = offtolen(loadoff(js, koff));
-      const char *key = (char *) &js->mem[koff + sizeof(koff)];
+      const char *key = (char *)js_mem_ptr_early(js, koff + sizeof(koff));
       jsval_t descriptor = resolveprop(js, mkval(T_PROP, next));
       
       if (vtype(descriptor) == T_OBJ) {
@@ -14971,7 +15088,7 @@ static jsval_t builtin_object_hasOwn(struct js *js, jsval_t *args, int nargs) {
   
   jsval_t as_obj = (t == T_OBJ) ? obj : mkval(T_OBJ, vdata(obj));
   jsoff_t key_len, key_off = vstr(js, key, &key_len);
-  const char *key_str = (char *) &js->mem[key_off];
+  const char *key_str = (char *)js_mem_ptr_early(js, key_off);
   
   jsoff_t off = lkp(js, as_obj, key_str, key_len);
   return mkval(T_BOOL, off != 0 ? 1 : 0);
@@ -15006,7 +15123,7 @@ static jsval_t builtin_object_defineProperty(struct js *js, jsval_t *args, int n
   jsval_t as_obj = (t == T_OBJ) ? obj : mkval(T_OBJ, vdata(obj));
   
   jsoff_t prop_len, prop_off = vstr(js, prop, &prop_len);
-  const char *prop_str = (char *) &js->mem[prop_off];
+  const char *prop_str = (char *)js_mem_ptr_early(js, prop_off);
   
   if (streq(prop_str, prop_len, STR_PROTO, STR_PROTO_LEN)) {
     return js_mkerr(js, "Cannot define " STR_PROTO " property");
@@ -15163,13 +15280,13 @@ static jsval_t builtin_object_defineProperties(struct js *js, jsval_t *args, int
   jsval_t props_obj = props;
   jsoff_t next = loadoff(js, (jsoff_t) vdata(props_obj)) & ~(3U | FLAGMASK);
   
-  while (next < js->brk && next != 0) {
+  while (is_valid_off(js, next)) {
     jsoff_t header = loadoff(js, next);
     if (is_slot_prop(header)) { next = next_prop(header); continue; }
     
     jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
     jsoff_t klen = offtolen(loadoff(js, koff));
-    const char *key = (char *) &js->mem[koff + sizeof(koff)];
+    const char *key = (char *)js_mem_ptr_early(js, koff + sizeof(koff));
     jsval_t descriptor = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
     
     next = next_prop(header);
@@ -15210,13 +15327,13 @@ static jsval_t builtin_object_assign(struct js *js, jsval_t *args, int nargs) {
     jsval_t src_obj = (st == T_OBJ) ? source : mkval(T_OBJ, vdata(source));
     jsoff_t next = loadoff(js, (jsoff_t) vdata(src_obj)) & ~(3U | FLAGMASK);
     
-    while (next < js->brk && next != 0) {
+    while (is_valid_off(js, next)) {
       jsoff_t header = loadoff(js, next);
       if (is_slot_prop(header)) { next = next_prop(header); continue; }
       
       jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
       jsoff_t klen = offtolen(loadoff(js, koff));
-      const char *key = (char *) &js->mem[koff + sizeof(koff)];
+      const char *key = (char *)js_mem_ptr_early(js, koff + sizeof(koff));
       jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
       
       next = next_prop(header);
@@ -15250,13 +15367,13 @@ static jsval_t builtin_object_freeze(struct js *js, jsval_t *args, int nargs) {
   
   jsoff_t next = loadoff(js, (jsoff_t) vdata(as_obj)) & ~(3U | FLAGMASK);
   
-  while (next < js->brk && next != 0) {
+  while (is_valid_off(js, next)) {
     jsoff_t header = loadoff(js, next);
     if (is_slot_prop(header)) { next = next_prop(header); continue; }
     
     jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
     jsoff_t klen = offtolen(loadoff(js, koff));
-    const char *key = (char *) &js->mem[koff + sizeof(koff)];
+    const char *key = (char *)js_mem_ptr_early(js, koff + sizeof(koff));
     
     jsoff_t cur_prop = next;
     next = next_prop(header);
@@ -15303,13 +15420,13 @@ static jsval_t builtin_object_seal(struct js *js, jsval_t *args, int nargs) {
   set_slot(js, as_obj, SLOT_SEALED, js_true);
   jsoff_t next = loadoff(js, (jsoff_t) vdata(as_obj)) & ~(3U | FLAGMASK);
   
-  while (next < js->brk && next != 0) {
+  while (is_valid_off(js, next)) {
     jsoff_t header = loadoff(js, next);
     if (is_slot_prop(header)) { next = next_prop(header); continue; }
     
     jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
     jsoff_t klen = offtolen(loadoff(js, koff));
-    const char *key = (char *) &js->mem[koff + sizeof(koff)];
+    const char *key = (char *)js_mem_ptr_early(js, koff + sizeof(koff));
     
     jsoff_t cur_prop = next;
     next = next_prop(header);
@@ -15413,13 +15530,13 @@ static jsval_t builtin_object_getOwnPropertyDescriptor(struct js *js, jsval_t *a
     key_len = (jsoff_t)strlen(sym_buf);
   } else if (vtype(key) == T_STR) {
     jsoff_t key_off = vstr(js, key, &key_len);
-    key_str = (char *) &js->mem[key_off];
+    key_str = (char *)js_mem_ptr_early(js, key_off);
   } else {
     char buf[64];
     size_t n = tostr(js, key, buf, sizeof(buf));
     key = js_mkstr(js, buf, n);
     jsoff_t key_off = vstr(js, key, &key_len);
-    key_str = (char *) &js->mem[key_off];
+    key_str = (char *)js_mem_ptr_early(js, key_off);
   }
   
   jsval_t as_obj = (t == T_OBJ) ? obj : mkval(T_OBJ, vdata(obj));
@@ -15468,12 +15585,12 @@ static jsval_t builtin_object_getOwnPropertyNames(struct js *js, jsval_t *args, 
   jsoff_t count = 0;
   jsoff_t next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | FLAGMASK);
   
-  while (next < js->brk && next != 0) {
+  while (is_valid_off(js, next)) {
     jsoff_t header = loadoff(js, next);
     if (!is_slot_prop(header)) {
       jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
       jsoff_t klen = offtolen(loadoff(js, koff));
-      const char *key = (char *) &js->mem[koff + sizeof(koff)];
+      const char *key = (char *)js_mem_ptr_early(js, koff + sizeof(koff));
       if (!is_internal_prop(key, klen)) count++;
     }
     next = next_prop(header);
@@ -15490,12 +15607,12 @@ static jsval_t builtin_object_getOwnPropertyNames(struct js *js, jsval_t *args, 
   
   jsoff_t idx = 0;
   next = loadoff(js, (jsoff_t) vdata(obj)) & ~(3U | FLAGMASK);
-  while (next < js->brk && next != 0 && idx < count) {
+  while (is_valid_off(js, next) && idx < count) {
     jsoff_t header = loadoff(js, next);
     if (!is_slot_prop(header)) {
       jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
       jsoff_t klen = offtolen(loadoff(js, koff));
-      const char *key = (char *) &js->mem[koff + sizeof(koff)];
+      const char *key = (char *)js_mem_ptr_early(js, koff + sizeof(koff));
       if (!is_internal_prop(key, klen)) {
         keys[idx++] = js_mkstr(js, key, klen);
       }
@@ -15527,12 +15644,12 @@ static jsval_t builtin_object_getOwnPropertySymbols(struct js *js, jsval_t *args
   jsval_t arr = mkarr(js); jsoff_t idx = 0;
   jsoff_t next = loadoff(js, (jsoff_t)vdata(obj)) & ~(3U | FLAGMASK);
   
-  while (next < js->brk && next != 0) {
+  while (is_valid_off(js, next)) {
     jsoff_t header = loadoff(js, next);
     if (!is_slot_prop(header)) {
       jsoff_t koff = loadoff(js, next + (jsoff_t)sizeof(next));
       jsoff_t klen = offtolen(loadoff(js, koff));
-      const char *key = (char *)&js->mem[koff + sizeof(koff)];
+      const char *key = (char *)js_mem_ptr_early(js, koff + sizeof(koff));
       
       if (klen >= 9 && memcmp(key, "__sym_", 6) == 0 && memcmp(key + klen - 2, "__", 2) == 0) {
         uint64_t sym_id = 0;
@@ -15598,7 +15715,7 @@ static jsval_t builtin_object_hasOwnProperty(struct js *js, jsval_t *args, int n
   
   jsval_t as_obj = (t == T_OBJ) ? obj : mkval(T_OBJ, vdata(obj));
   jsoff_t key_len, key_off = vstr(js, key, &key_len);
-  const char *key_str = (char *) &js->mem[key_off];
+  const char *key_str = (char *)js_mem_ptr_early(js, key_off);
   
   jsoff_t off = lkp(js, as_obj, key_str, key_len);
   return mkval(T_BOOL, off != 0 ? 1 : 0);
@@ -15646,7 +15763,7 @@ static jsval_t builtin_object_propertyIsEnumerable(struct js *js, jsval_t *args,
   
   jsval_t as_obj = (t == T_OBJ) ? obj : mkval(T_OBJ, vdata(obj));
   jsoff_t key_len, key_off = vstr(js, key, &key_len);
-  const char *key_str = (char *) &js->mem[key_off];
+  const char *key_str = (char *)js_mem_ptr_early(js, key_off);
   
   if (t == T_ARR && streq(key_str, key_len, "length", 6)) {
     return mkval(T_BOOL, 0);
@@ -15680,7 +15797,7 @@ static jsval_t builtin_object_toString(struct js *js, jsval_t *args, int nargs) 
       jsval_t tag_val = resolveprop(js, mkval(T_PROP, tag_off));
       if (vtype(tag_val) == T_STR) {
         jsoff_t tag_len, tag_str_off = vstr(js, tag_val, &tag_len);
-        const char *tag_str = (const char *)&js->mem[tag_str_off];
+        const char *tag_str = (const char *)js_mem_ptr_early(js, tag_str_off);
         
         char buf[256];
         int n = snprintf(buf, sizeof(buf), "[object %.*s]", (int)tag_len, tag_str);
@@ -15917,7 +16034,7 @@ static jsval_t builtin_array_join(struct js *js, jsval_t *args, int nargs) {
     if (vtype(args[0]) == T_STR) {
       sep_len = 0;
       jsoff_t sep_off = vstr(js, args[0], &sep_len);
-      sep = (const char *) &js->mem[sep_off];
+      sep = (const char *)js_mem_ptr_early(js, sep_off);
     } else if (vtype(args[0]) != T_UNDEF) {
       const char *sep_str = js_str(js, args[0]);
       sep = sep_str;
@@ -15969,7 +16086,7 @@ static jsval_t builtin_array_join(struct js *js, jsval_t *args, int nargs) {
       if (et == T_STR) {
         jsoff_t soff, slen;
         soff = vstr(js, elem, &slen);
-        elem_str = (const char *)&js->mem[soff];
+        elem_str = (const char *)js_mem_ptr_early(js, soff);
         elem_len = slen;
       } else if (et == T_NUM) {
         snprintf(numstr, sizeof(numstr), "%g", tod(elem));
@@ -15989,7 +16106,7 @@ static jsval_t builtin_array_join(struct js *js, jsval_t *args, int nargs) {
         if (vtype(str_val) == T_STR) {
           jsoff_t soff, slen;
           soff = vstr(js, str_val, &slen);
-          elem_str = (const char *)&js->mem[soff];
+          elem_str = (const char *)js_mem_ptr_early(js, soff);
           elem_len = slen;
         }
       }
@@ -16044,7 +16161,7 @@ static jsval_t builtin_array_includes(struct js *js, jsval_t *args, int nargs) {
       else if (vtype(val) == T_STR) {
         jsoff_t vl, vo = vstr(js, val, &vl);
         jsoff_t sl, so = vstr(js, search, &sl);
-        if (vl == sl && memcmp(&js->mem[vo], &js->mem[so], vl) == 0) match = true;
+        if (vl == sl && memcmp(js_mem_ptr_early(js, vo), js_mem_ptr_early(js, so), vl) == 0) match = true;
       }
       else if ((vtype(val) == T_OBJ || vtype(val) == T_ARR || vtype(val) == T_FUNC) && vdata(val) == vdata(search)) match = true;
       
@@ -16717,7 +16834,7 @@ static jsval_t builtin_array_flatMap(struct js *js, jsval_t *args, int nargs) {
 static const char *js_tostring(struct js *js, jsval_t v) {
   if (vtype(v) == T_STR) {
     jsoff_t slen, off = vstr(js, v, &slen);
-    return (const char *)&js->mem[off];
+    return (const char *)js_mem_ptr_early(js, off);
   }
   return js_str(js, v);
 }
@@ -16733,8 +16850,8 @@ static int js_compare_values(struct js *js, jsval_t a, jsval_t b, jsval_t compar
   
   if (vtype(a) == T_STR && vtype(b) == T_STR) {
     jsoff_t len_a, len_b;
-    const char *sa = (const char *)&js->mem[vstr(js, a, &len_a)];
-    const char *sb = (const char *)&js->mem[vstr(js, b, &len_b)];
+    const char *sa = (const char *)js_mem_ptr_early(js, vstr(js, a, &len_a));
+    const char *sb = (const char *)js_mem_ptr_early(js, vstr(js, b, &len_b));
     return strcmp(sa, sb);
   }
   
@@ -16782,7 +16899,7 @@ static jsval_t builtin_array_indexOf(struct js *js, jsval_t *args, int nargs) {
         if (vtype(elem) == T_STR) {
           jsoff_t el, eo = vstr(js, elem, &el);
           jsoff_t sl, so = vstr(js, search, &sl);
-          if (el == sl && memcmp(&js->mem[eo], &js->mem[so], el) == 0) return tov((double)i);
+          if (el == sl && memcmp(js_mem_ptr_early(js, eo), js_mem_ptr_early(js, so), el) == 0) return tov((double)i);
         }
         if ((vtype(elem) == T_OBJ || vtype(elem) == T_ARR || vtype(elem) == T_FUNC) && vdata(elem) == vdata(search)) return tov((double)i);
       }
@@ -16825,7 +16942,7 @@ static jsval_t builtin_array_lastIndexOf(struct js *js, jsval_t *args, int nargs
         if (vtype(elem) == T_STR) {
           jsoff_t el, eo = vstr(js, elem, &el);
           jsoff_t sl, so = vstr(js, search, &sl);
-          if (el == sl && memcmp(&js->mem[eo], &js->mem[so], el) == 0) return tov((double)i);
+          if (el == sl && memcmp(js_mem_ptr_early(js, eo), js_mem_ptr_early(js, so), el) == 0) return tov((double)i);
         }
         if ((vtype(elem) == T_OBJ || vtype(elem) == T_ARR || vtype(elem) == T_FUNC) && vdata(elem) == vdata(search)) return tov((double)i);
       }
@@ -17069,8 +17186,8 @@ static jsval_t builtin_array_sort(struct js *js, jsval_t *args, int nargs) {
         int cmp;
         if (use_keys) {
           jsoff_t len_a, len_b;
-          const char *sa = (const char *)&js->mem[vstr(js, keys[i], &len_a)];
-          const char *sb = (const char *)&js->mem[vstr(js, keys[j], &len_b)];
+          const char *sa = (const char *)js_mem_ptr_early(js, vstr(js, keys[i], &len_a));
+          const char *sb = (const char *)js_mem_ptr_early(js, vstr(js, keys[j], &len_b));
           cmp = strcmp(sa, sb);
         } else {
           cmp = js_compare_values(js, vals[i], vals[j], compareFn);
@@ -17542,7 +17659,7 @@ static jsval_t builtin_Array_from(struct js *js, jsval_t *args, int nargs) {
   
   if (vtype(src) == T_STR) {
     jsoff_t str_len, str_off = vstr(js, src, &str_len);
-    const char *str_ptr = (const char *)&js->mem[str_off];
+    const char *str_ptr = (const char *)js_mem_ptr_early(js, str_off);
     for (jsoff_t i = 0; i < str_len; i++) {
       char idxstr[16];
       size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)i);
@@ -17622,8 +17739,8 @@ static jsval_t builtin_string_indexOf(struct js *js, jsval_t *args, int nargs) {
   if (search_len == 0) return tov(D(start));
   if (start + search_len > str_len) return tov(-1);
 
-  const char *str_ptr = (char *) &js->mem[str_off];
-  const char *search_ptr = (char *) &js->mem[search_off];
+  const char *str_ptr = (char *)js_mem_ptr_early(js, str_off);
+  const char *search_ptr = (char *)js_mem_ptr_early(js, search_off);
 
   for (jsoff_t i = start; i <= str_len - search_len; i++) {
     if (memcmp(str_ptr + i, search_ptr, search_len) == 0) return tov(D(i));
@@ -17635,7 +17752,7 @@ static jsval_t builtin_string_substring(struct js *js, jsval_t *args, int nargs)
   jsval_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "substring called on non-string");
   jsoff_t byte_len, str_off = vstr(js, str, &byte_len);
-  const char *str_ptr = (char *) &js->mem[str_off];
+  const char *str_ptr = (char *)js_mem_ptr_early(js, str_off);
   size_t utf16_len = utf16_strlen(str_ptr, byte_len);
   jsoff_t start = 0, end = (jsoff_t)utf16_len;
   double dstr_len2 = D(utf16_len);
@@ -17665,7 +17782,7 @@ static jsval_t builtin_string_substr(struct js *js, jsval_t *args, int nargs) {
   jsval_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "substr called on non-string");
   jsoff_t byte_len, str_off = vstr(js, str, &byte_len);
-  const char *str_ptr = (char *) &js->mem[str_off];
+  const char *str_ptr = (char *)js_mem_ptr_early(js, str_off);
   size_t utf16_len = utf16_strlen(str_ptr, byte_len);
   
   if (nargs < 1) return js_mkstr(js, str_ptr, byte_len);
@@ -17697,7 +17814,7 @@ static jsval_t builtin_string_split(struct js *js, jsval_t *args, int nargs) {
   jsval_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "split called on non-string");
   jsoff_t str_len, str_off = vstr(js, str, &str_len);
-  const char *str_ptr = (char *) &js->mem[str_off];
+  const char *str_ptr = (char *)js_mem_ptr_early(js, str_off);
   jsval_t arr = mkarr(js);
 
   if (is_err(arr)) return arr;
@@ -17723,7 +17840,7 @@ static jsval_t builtin_string_split(struct js *js, jsval_t *args, int nargs) {
     if (vtype(source_val) != T_STR) goto return_whole;
 
     jsoff_t plen, poff = vstr(js, source_val, &plen);
-    const char *pattern_ptr = (char *) &js->mem[poff];
+    const char *pattern_ptr = (char *)js_mem_ptr_early(js, poff);
 
     if (plen == 0 || (plen == 4 && memcmp(pattern_ptr, "(?:)", 4) == 0)) {
       jsoff_t idx = 0;
@@ -17857,7 +17974,7 @@ static jsval_t builtin_string_split(struct js *js, jsval_t *args, int nargs) {
   if (vtype(sep_arg) != T_STR) goto return_whole;
 
   jsoff_t sep_len, sep_off = vstr(js, sep_arg, &sep_len);
-  const char *sep_ptr = (char *) &js->mem[sep_off];
+  const char *sep_ptr = (char *)js_mem_ptr_early(js, sep_off);
   jsoff_t idx = 0, start = 0;
 
   if (sep_len == 0) {
@@ -17912,7 +18029,7 @@ static jsval_t builtin_string_slice(struct js *js, jsval_t *args, int nargs) {
   jsval_t str = js_tostring_val(js, this_unwrapped);
   if (is_err(str)) return str;
   jsoff_t byte_len, str_off = vstr(js, str, &byte_len);
-  const char *str_ptr = (char *) &js->mem[str_off];
+  const char *str_ptr = (char *)js_mem_ptr_early(js, str_off);
   size_t utf16_len = utf16_strlen(str_ptr, byte_len);
   jsoff_t start = 0, end = (jsoff_t)utf16_len;
   double dstr_len = D(utf16_len);
@@ -17949,8 +18066,8 @@ static jsval_t builtin_string_includes(struct js *js, jsval_t *args, int nargs) 
   if (vtype(search) != T_STR) return mkval(T_BOOL, 0);
   jsoff_t str_len, str_off = vstr(js, str, &str_len);
   jsoff_t search_len, search_off = vstr(js, search, &search_len);
-  const char *str_ptr = (char *) &js->mem[str_off];
-  const char *search_ptr = (char *) &js->mem[search_off];
+  const char *str_ptr = (char *)js_mem_ptr_early(js, str_off);
+  const char *search_ptr = (char *)js_mem_ptr_early(js, search_off);
   
   jsoff_t start = 0;
   if (nargs >= 2) {
@@ -17980,8 +18097,8 @@ static jsval_t builtin_string_startsWith(struct js *js, jsval_t *args, int nargs
   if (vtype(search) != T_STR) return mkval(T_BOOL, 0);
   jsoff_t str_len, str_off = vstr(js, str, &str_len);
   jsoff_t search_len, search_off = vstr(js, search, &search_len);
-  const char *str_ptr = (char *) &js->mem[str_off];
-  const char *search_ptr = (char *) &js->mem[search_off];
+  const char *str_ptr = (char *)js_mem_ptr_early(js, str_off);
+  const char *search_ptr = (char *)js_mem_ptr_early(js, search_off);
   
   if (search_len > str_len) return mkval(T_BOOL, 0);
   if (search_len == 0) return mkval(T_BOOL, 1);
@@ -17999,8 +18116,8 @@ static jsval_t builtin_string_endsWith(struct js *js, jsval_t *args, int nargs) 
   jsoff_t str_len, str_off = vstr(js, str, &str_len);
   jsoff_t search_len, search_off = vstr(js, search, &search_len);
   
-  const char *str_ptr = (char *) &js->mem[str_off];
-  const char *search_ptr = (char *) &js->mem[search_off];
+  const char *str_ptr = (char *)js_mem_ptr_early(js, str_off);
+  const char *search_ptr = (char *)js_mem_ptr_early(js, search_off);
   
   if (search_len > str_len) return mkval(T_BOOL, 0);
   if (search_len == 0) return mkval(T_BOOL, 1);
@@ -18018,7 +18135,7 @@ static jsval_t builtin_string_replace(struct js *js, jsval_t *args, int nargs) {
   jsval_t replacement = args[1];
   
   jsoff_t str_len, str_off = vstr(js, str, &str_len);
-  const char *str_ptr = (char *) &js->mem[str_off];
+  const char *str_ptr = (char *)js_mem_ptr_early(js, str_off);
   
   bool is_regex = false;
   bool global_flag = false;
@@ -18038,7 +18155,7 @@ static jsval_t builtin_string_replace(struct js *js, jsval_t *args, int nargs) {
     pattern_len = plen;
     pattern_buf = (char *)ant_calloc(plen + 1);
     if (!pattern_buf) return js_mkerr(js, "oom");
-    memcpy(pattern_buf, &js->mem[poff], plen);
+    memcpy(pattern_buf, js_mem_ptr_early(js, poff), plen);
     pattern_buf[plen] = '\0';
     
     jsoff_t flags_off = lkp(js, search, "flags", 5);
@@ -18048,7 +18165,7 @@ static jsval_t builtin_string_replace(struct js *js, jsval_t *args, int nargs) {
     if (vtype(flags_val) != T_STR) { free(pattern_buf); pattern_buf = NULL; goto not_regex; }
     
     jsoff_t flen, foff = vstr(js, flags_val, &flen);
-    const char *flags_str = (char *) &js->mem[foff];
+    const char *flags_str = (char *)js_mem_ptr_early(js, foff);
     for (jsoff_t i = 0; i < flen; i++) {
       if (flags_str[i] == 'g') global_flag = true;
     }
@@ -18061,7 +18178,7 @@ static jsval_t builtin_string_replace(struct js *js, jsval_t *args, int nargs) {
     if (vtype(replacement) != T_STR) { if (pattern_buf) free(pattern_buf); return str; }
     jsoff_t repl_off;
     repl_off = vstr(js, replacement, &repl_len);
-    repl_ptr = (char *) &js->mem[repl_off];
+    repl_ptr = (char *)js_mem_ptr_early(js, repl_off);
   }
   
   size_t result_cap = str_len + repl_len + 256;
@@ -18144,7 +18261,7 @@ static jsval_t builtin_string_replace(struct js *js, jsval_t *args, int nargs) {
         if (vtype(cb_result) == T_STR) {
           jsoff_t cb_len, cb_off = vstr(js, cb_result, &cb_len);
           ENSURE_RESULT_CAP(cb_len);
-          memcpy(result + result_len, &js->mem[cb_off], cb_len);
+          memcpy(result + result_len, js_mem_ptr_early(js, cb_off), cb_len);
           result_len += cb_len;
         } else {
           char numbuf[32];
@@ -18241,7 +18358,7 @@ static jsval_t builtin_string_replace(struct js *js, jsval_t *args, int nargs) {
   } else {
     if (vtype(search) != T_STR) { free(result); return str; }
     jsoff_t search_len, search_off = vstr(js, search, &search_len);
-    const char *search_ptr = (char *) &js->mem[search_off];
+    const char *search_ptr = (char *)js_mem_ptr_early(js, search_off);
     
     if (search_len > str_len) { free(result); return str; }
     
@@ -18261,7 +18378,7 @@ static jsval_t builtin_string_replace(struct js *js, jsval_t *args, int nargs) {
           if (vtype(cb_result) == T_STR) {
             jsoff_t cb_len, cb_off = vstr(js, cb_result, &cb_len);
             ENSURE_RESULT_CAP(cb_len);
-            memcpy(result + result_len, &js->mem[cb_off], cb_len);
+            memcpy(result + result_len, js_mem_ptr_early(js, cb_off), cb_len);
             result_len += cb_len;
           } else {
             char numbuf[32];
@@ -18306,13 +18423,13 @@ static jsval_t builtin_string_replaceAll(struct js *js, jsval_t *args, int nargs
   if (vtype(replacement) != T_STR) return js_mkerr(js, "replaceAll requires string replacement");
   
   jsoff_t str_len, str_off = vstr(js, str, &str_len);
-  const char *str_ptr = (char *) &js->mem[str_off];
+  const char *str_ptr = (char *)js_mem_ptr_early(js, str_off);
   
   jsoff_t search_len, search_off = vstr(js, search, &search_len);
-  const char *search_ptr = (char *) &js->mem[search_off];
+  const char *search_ptr = (char *)js_mem_ptr_early(js, search_off);
   
   jsoff_t repl_len, repl_off = vstr(js, replacement, &repl_len);
-  const char *repl_ptr = (char *) &js->mem[repl_off];
+  const char *repl_ptr = (char *)js_mem_ptr_early(js, repl_off);
   
   if (search_len == 0) {
     size_t total_len = str_len + (str_len + 1) * repl_len;
@@ -18518,14 +18635,14 @@ static jsval_t builtin_string_match(struct js *js, jsval_t *args, int nargs) {
 
     jsoff_t poff;
     poff = vstr(js, source_val, &pattern_len);
-    pattern_ptr = (char *) &js->mem[poff];
+    pattern_ptr = (char *)js_mem_ptr_early(js, poff);
 
     jsoff_t flags_off = lkp(js, pattern, "flags", 5);
     if (flags_off != 0) {
       jsval_t flags_val = resolveprop(js, mkval(T_PROP, flags_off));
       if (vtype(flags_val) == T_STR) {
         jsoff_t flen, foff = vstr(js, flags_val, &flen);
-        const char *flags_str = (char *) &js->mem[foff];
+        const char *flags_str = (char *)js_mem_ptr_early(js, foff);
         for (jsoff_t i = 0; i < flen; i++) {
           if (flags_str[i] == 'g') global_flag = true;
           if (flags_str[i] == 'i') ignore_case = true;
@@ -18536,13 +18653,13 @@ static jsval_t builtin_string_match(struct js *js, jsval_t *args, int nargs) {
   } else if (vtype(pattern) == T_STR) {
     jsoff_t poff;
     poff = vstr(js, pattern, &pattern_len);
-    pattern_ptr = (char *) &js->mem[poff];
+    pattern_ptr = (char *)js_mem_ptr_early(js, poff);
   } else {
     return js_mknull();
   }
 
   jsoff_t str_len, str_off = vstr(js, str, &str_len);
-  const char *str_ptr = (char *) &js->mem[str_off];
+  const char *str_ptr = (char *)js_mem_ptr_early(js, str_off);
 
   jsval_t result = do_regex_match_pcre2(js, pattern_ptr, pattern_len, str_ptr, str_len, global_flag, ignore_case, multiline);
   
@@ -18560,7 +18677,7 @@ static jsval_t builtin_string_template(struct js *js, jsval_t *args, int nargs) 
   
   jsval_t data = args[0];
   jsoff_t str_len, str_off = vstr(js, str, &str_len);
-  const char *str_ptr = (char *) &js->mem[str_off];
+  const char *str_ptr = (char *)js_mem_ptr_early(js, str_off);
   
   size_t result_cap = str_len + 256;
   size_t result_len = 0;
@@ -18593,7 +18710,7 @@ static jsval_t builtin_string_template(struct js *js, jsval_t *args, int nargs) 
           if (vtype(value) == T_STR) {
             jsoff_t val_len, val_off = vstr(js, value, &val_len);
             ENSURE_CAP(val_len);
-            memcpy(result + result_len, &js->mem[val_off], val_len);
+            memcpy(result + result_len, js_mem_ptr_early(js, val_off), val_len);
             result_len += val_len;
           } else if (vtype(value) == T_NUM) {
             char numstr[32];
@@ -18635,7 +18752,7 @@ static jsval_t builtin_string_charCodeAt(struct js *js, jsval_t *args, int nargs
   if (idx_l < 0) return tov(JS_NAN);
   
   jsoff_t byte_len; jsoff_t str_off = vstr(js, str, &byte_len);
-  const char *str_data = (const char *)&js->mem[str_off];
+  const char *str_data = (const char *)js_mem_ptr_early(js, str_off);
   
   uint32_t code_unit = utf16_code_unit_at(str_data, byte_len, idx_l);
   if (code_unit == 0xFFFFFFFF) return tov(JS_NAN);
@@ -18656,7 +18773,7 @@ static jsval_t builtin_string_codePointAt(struct js *js, jsval_t *args, int narg
   
   jsoff_t byte_len;
   jsoff_t str_off = vstr(js, str, &byte_len);
-  const char *str_data = (const char *)&js->mem[str_off];
+  const char *str_data = (const char *)js_mem_ptr_early(js, str_off);
   
   uint32_t cp = utf16_codepoint_at(str_data, byte_len, idx_l);
   if (cp == 0xFFFFFFFF) return js_mkundef();
@@ -18670,12 +18787,12 @@ static jsval_t builtin_string_toLowerCase(struct js *js, jsval_t *args, int narg
   if (vtype(str) != T_STR) return js_mkerr(js, "toLowerCase called on non-string");
   
   jsoff_t str_len, str_off = vstr(js, str, &str_len);
-  const char *str_ptr = (char *) &js->mem[str_off];
+  const char *str_ptr = (char *)js_mem_ptr_early(js, str_off);
   jsval_t result = js_mkstr(js, NULL, str_len);
   if (is_err(result)) return result;
   
   jsoff_t result_len, result_off = vstr(js, result, &result_len);
-  char *result_ptr = (char *) &js->mem[result_off];
+  char *result_ptr = (char *)js_mem_ptr_early(js, result_off);
   
   for (jsoff_t i = 0; i < str_len; i++) {
     char ch = str_ptr[i];
@@ -18691,12 +18808,12 @@ static jsval_t builtin_string_toUpperCase(struct js *js, jsval_t *args, int narg
   if (vtype(str) != T_STR) return js_mkerr(js, "toUpperCase called on non-string");
   
   jsoff_t str_len, str_off = vstr(js, str, &str_len);
-  const char *str_ptr = (char *) &js->mem[str_off];
+  const char *str_ptr = (char *)js_mem_ptr_early(js, str_off);
   jsval_t result = js_mkstr(js, NULL, str_len);
   if (is_err(result)) return result;
   
   jsoff_t result_len, result_off = vstr(js, result, &result_len);
-  char *result_ptr = (char *) &js->mem[result_off];
+  char *result_ptr = (char *)js_mem_ptr_early(js, result_off);
   
   for (jsoff_t i = 0; i < str_len; i++) {
     char ch = str_ptr[i];
@@ -18712,7 +18829,7 @@ static jsval_t builtin_string_trim(struct js *js, jsval_t *args, int nargs) {
   if (vtype(str) != T_STR) return js_mkerr(js, "trim called on non-string");
   
   jsoff_t str_len, str_off = vstr(js, str, &str_len);
-  const char *str_ptr = (char *) &js->mem[str_off];
+  const char *str_ptr = (char *)js_mem_ptr_early(js, str_off);
   
   jsoff_t start = 0, end = str_len;
   while (start < end && is_space(str_ptr[start])) start++;
@@ -18727,7 +18844,7 @@ static jsval_t builtin_string_trimStart(struct js *js, jsval_t *args, int nargs)
   if (vtype(str) != T_STR) return js_mkerr(js, "trimStart called on non-string");
   
   jsoff_t str_len, str_off = vstr(js, str, &str_len);
-  const char *str_ptr = (char *) &js->mem[str_off];
+  const char *str_ptr = (char *)js_mem_ptr_early(js, str_off);
   
   jsoff_t start = 0;
   while (start < str_len && is_space(str_ptr[start])) start++;
@@ -18741,7 +18858,7 @@ static jsval_t builtin_string_trimEnd(struct js *js, jsval_t *args, int nargs) {
   if (vtype(str) != T_STR) return js_mkerr(js, "trimEnd called on non-string");
   
   jsoff_t str_len, str_off = vstr(js, str, &str_len);
-  const char *str_ptr = (char *) &js->mem[str_off];
+  const char *str_ptr = (char *)js_mem_ptr_early(js, str_off);
   
   jsoff_t end = str_len;
   while (end > 0 && is_space(str_ptr[end - 1])) end--;
@@ -18759,7 +18876,7 @@ static jsval_t builtin_string_repeat(struct js *js, jsval_t *args, int nargs) {
   jsoff_t count = (jsoff_t) count_d;
   
   jsoff_t str_len, str_off = vstr(js, str, &str_len);
-  const char *str_ptr = (char *) &js->mem[str_off];
+  const char *str_ptr = (char *)js_mem_ptr_early(js, str_off);
   
   if (count == 0 || str_len == 0) return js_mkstr(js, "", 0);
   
@@ -18767,7 +18884,7 @@ static jsval_t builtin_string_repeat(struct js *js, jsval_t *args, int nargs) {
   if (is_err(result)) return result;
   
   jsoff_t result_len, result_off = vstr(js, result, &result_len);
-  char *result_ptr = (char *) &js->mem[result_off];
+  char *result_ptr = (char *)js_mem_ptr_early(js, result_off);
   
   for (jsoff_t i = 0; i < count; i++) {
     memcpy(result_ptr + i * str_len, str_ptr, str_len);
@@ -18783,7 +18900,7 @@ static jsval_t builtin_string_padStart(struct js *js, jsval_t *args, int nargs) 
   
   jsoff_t target_len = (jsoff_t) tod(args[0]);
   jsoff_t str_len, str_off = vstr(js, str, &str_len);
-  const char *str_ptr = (char *) &js->mem[str_off];
+  const char *str_ptr = (char *)js_mem_ptr_early(js, str_off);
   
   if (target_len <= str_len) return str;
   
@@ -18791,7 +18908,7 @@ static jsval_t builtin_string_padStart(struct js *js, jsval_t *args, int nargs) 
   jsoff_t pad_len = 1;
   if (nargs >= 2 && vtype(args[1]) == T_STR) {
     jsoff_t pad_off = vstr(js, args[1], &pad_len);
-    pad_str = (char *) &js->mem[pad_off];
+    pad_str = (char *)js_mem_ptr_early(js, pad_off);
   }
   
   if (pad_len == 0) return str;
@@ -18801,7 +18918,7 @@ static jsval_t builtin_string_padStart(struct js *js, jsval_t *args, int nargs) 
   if (is_err(result)) return result;
   
   jsoff_t result_len, result_off = vstr(js, result, &result_len);
-  char *result_ptr = (char *) &js->mem[result_off];
+  char *result_ptr = (char *)js_mem_ptr_early(js, result_off);
   
   jsoff_t pos = 0;
   while (pos < fill_len) {
@@ -18821,7 +18938,7 @@ static jsval_t builtin_string_padEnd(struct js *js, jsval_t *args, int nargs) {
   
   jsoff_t target_len = (jsoff_t) tod(args[0]);
   jsoff_t str_len, str_off = vstr(js, str, &str_len);
-  const char *str_ptr = (char *) &js->mem[str_off];
+  const char *str_ptr = (char *)js_mem_ptr_early(js, str_off);
   
   if (target_len <= str_len) return str;
   
@@ -18829,7 +18946,7 @@ static jsval_t builtin_string_padEnd(struct js *js, jsval_t *args, int nargs) {
   jsoff_t pad_len = 1;
   if (nargs >= 2 && vtype(args[1]) == T_STR) {
     jsoff_t pad_off = vstr(js, args[1], &pad_len);
-    pad_str = (char *) &js->mem[pad_off];
+    pad_str = (char *)js_mem_ptr_early(js, pad_off);
   }
   
   if (pad_len == 0) return str;
@@ -18838,7 +18955,7 @@ static jsval_t builtin_string_padEnd(struct js *js, jsval_t *args, int nargs) {
   if (is_err(result)) return result;
   
   jsoff_t result_len, result_off = vstr(js, result, &result_len);
-  char *result_ptr = (char *) &js->mem[result_off];
+  char *result_ptr = (char *)js_mem_ptr_early(js, result_off);
   
   memcpy(result_ptr, str_ptr, str_len);
   jsoff_t pos = str_len;
@@ -18864,7 +18981,7 @@ static jsval_t builtin_string_charAt(struct js *js, jsval_t *args, int nargs) {
   jsoff_t idx = (jsoff_t) idx_d;
   jsoff_t byte_len;
   jsoff_t str_off = vstr(js, str, &byte_len);
-  const char *str_data = (const char *)&js->mem[str_off];
+  const char *str_data = (const char *)js_mem_ptr_early(js, str_off);
   
   size_t char_bytes;
   int byte_offset = utf16_index_to_byte_offset(str_data, byte_len, idx, &char_bytes);
@@ -18881,7 +18998,7 @@ static jsval_t builtin_string_at(struct js *js, jsval_t *args, int nargs) {
   if (isnan(idx_d) || isinf(idx_d)) return js_mkundef();
 
   jsoff_t byte_len; jsoff_t str_off = vstr(js, str, &byte_len);
-  const char *str_data = (const char *)&js->mem[str_off];
+  const char *str_data = (const char *)js_mem_ptr_early(js, str_off);
   size_t utf16_len = utf16_strlen(str_data, byte_len);
   
   long idx = (long) idx_d;
@@ -18909,8 +19026,8 @@ static jsval_t builtin_string_localeCompare(struct js *js, jsval_t *args, int na
   
   jsoff_t str_len, str_off = vstr(js, str, &str_len);
   jsoff_t that_len, that_off = vstr(js, that, &that_len);
-  const char *str_ptr = (char *)&js->mem[str_off];
-  const char *that_ptr = (char *)&js->mem[that_off];
+  const char *str_ptr = (char *)js_mem_ptr_early(js, str_off);
+  const char *that_ptr = (char *)js_mem_ptr_early(js, that_off);
   
   int result = strcoll(str_ptr, that_ptr);
   if (result < 0) return tov(-1);
@@ -18942,8 +19059,8 @@ static jsval_t builtin_string_lastIndexOf(struct js *js, jsval_t *args, int narg
   if (search_len == 0) return tov((double) (max_start > str_len ? str_len : max_start));
   if (search_len > str_len) return tov(-1);
 
-  const char *str_ptr = (char *) &js->mem[str_off];
-  const char *search_ptr = (char *) &js->mem[search_off];
+  const char *str_ptr = (char *)js_mem_ptr_early(js, str_off);
+  const char *search_ptr = (char *)js_mem_ptr_early(js, search_off);
 
   jsoff_t start = (max_start + search_len > str_len) ? str_len - search_len : max_start;
   for (jsoff_t i = start + 1; i > 0; i--) {
@@ -18984,12 +19101,12 @@ static jsval_t builtin_string_concat(struct js *js, jsval_t *args, int nargs) {
 
   jsoff_t base_len;
   base_off = vstr(js, str, &base_len);
-  memcpy(result, &js->mem[base_off], base_len);
+  memcpy(result, js_mem_ptr_early(js, base_off), base_len);
   jsoff_t pos = base_len;
 
   for (int i = 0; i < nargs; i++) {
     jsoff_t arg_len, arg_off = vstr(js, str_args[i], &arg_len);
-    memcpy(result + pos, &js->mem[arg_off], arg_len);
+    memcpy(result + pos, js_mem_ptr_early(js, arg_off), arg_len);
     pos += arg_len;
   }
   result[pos] = '\0';
@@ -19424,7 +19541,7 @@ static jsval_t builtin_parseInt(struct js *js, jsval_t *args, int nargs) {
   }
   
   jsoff_t str_len, str_off = vstr(js, str_val, &str_len);
-  const char *str = (char *) &js->mem[str_off];
+  const char *str = (char *)js_mem_ptr_early(js, str_off);
   
   int radix = 0;
   if (nargs >= 2 && vtype(args[1]) == T_NUM) {
@@ -19489,7 +19606,7 @@ static jsval_t builtin_parseFloat(struct js *js, jsval_t *args, int nargs) {
   }
   
   jsoff_t str_len, str_off = vstr(js, str_val, &str_len);
-  const char *str = (char *) &js->mem[str_off];
+  const char *str = (char *)js_mem_ptr_early(js, str_off);
   
   jsoff_t i = 0;
   while (i < str_len && is_space(str[i])) i++;
@@ -19516,7 +19633,7 @@ static jsval_t builtin_btoa(struct js *js, jsval_t *args, int nargs) {
   }
   
   jsoff_t str_len, str_off = vstr(js, str_val, &str_len);
-  const char *str = (char *) &js->mem[str_off];
+  const char *str = (char *)js_mem_ptr_early(js, str_off);
   
   for (jsoff_t i = 0; i < str_len; i++) {
     if ((unsigned char)str[i] > 255) {
@@ -19577,7 +19694,7 @@ static jsval_t builtin_atob(struct js *js, jsval_t *args, int nargs) {
   }
   
   jsoff_t str_len, str_off = vstr(js, str_val, &str_len);
-  const char *str = (char *) &js->mem[str_off];
+  const char *str = (char *)js_mem_ptr_early(js, str_off);
   
   if (str_len == 0) return js_mkstr(js, "", 0);
   if (str_len % 4 != 0) return js_mkerr(js, "atob: invalid base64 string");
@@ -20364,7 +20481,7 @@ static jsval_t do_in(struct js *js, jsval_t l, jsval_t r) {
   
   if (vtype(l) == T_STR) {
     jsoff_t prop_off = vstr(js, l, &prop_len);
-    prop_name = (char *) &js->mem[prop_off];
+    prop_name = (char *)js_mem_ptr_early(js, prop_off);
   } else if (vtype(l) == T_NUM) {
     prop_len = (jsoff_t) strnum(l, num_buf, sizeof(num_buf));
     prop_name = num_buf;
@@ -20817,7 +20934,7 @@ static char *esm_jsval_to_cstr(struct js *js, jsval_t str, jsoff_t *out_len) {
   jsoff_t len;
   jsoff_t off = vstr(js, str, &len);
   if (out_len) *out_len = len;
-  return strndup((char *)&js->mem[off], len);
+  return strndup((char *)js_mem_ptr_early(js, off), len);
 }
 
 static jsval_t esm_resolve_and_load(struct js *js, const char *spec_str, jsoff_t spec_len) {
@@ -22112,6 +22229,15 @@ struct js *js_create_dynamic(size_t initial_size, size_t max_size) {
   
   memcpy(new_js, js, sizeof(struct js));
   free(init_buf);
+  
+  // Initialize generational GC nursery
+  if (!nursery_init(new_js, NURSERY_SIZE_DEFAULT)) {
+    // Non-fatal: continue without nursery (fall back to old-gen only)
+    new_js->nursery = NULL;
+    new_js->nursery_ptr = 0;
+    new_js->nursery_size = 0;
+    new_js->nursery_full = false;
+  }
 
   return new_js;
 }
@@ -22133,6 +22259,9 @@ void js_destroy(struct js *js) {
     free(js->for_let_stack);
     js->for_let_stack = NULL;
   }
+  
+  // Free generational GC nursery
+  nursery_free(js);
   
   if (js->owns_mem) {
     ant_arena_free(js->mem, js->max_size);
@@ -22168,6 +22297,8 @@ jsval_t js_heavy_mkfun(struct js *js, jsval_t (*fn)(struct js *, jsval_t *, int)
 }
 
 void js_set(struct js *js, jsval_t obj, const char *key, jsval_t val) {
+  write_barrier(js, obj, val);  // GC write barrier
+  
   size_t key_len = strlen(key);
   
   if (vtype(obj) == T_OBJ) {
@@ -22235,7 +22366,7 @@ bool js_del(struct js *js, jsval_t obj, const char *key) {
   }
   
   jsoff_t prev = first_prop;
-  while (prev != 0 && prev < js->brk) {
+  while (is_valid_off(js, prev)) {
     jsoff_t next = loadoff(js, prev) & ~(3U | FLAGMASK);
     if (next == prop_off) {
       jsoff_t deleted_next = loadoff(js, prop_off) & ~(3U | FLAGMASK);
@@ -22336,13 +22467,13 @@ char *js_getstr(struct js *js, jsval_t value, size_t *len) {
   if (vtype(value) != T_STR) return NULL;
   jsoff_t n, off = vstr(js, value, &n);
   if (len != NULL) *len = n;
-  return (char *) &js->mem[off];
+  return (char *)js_mem_ptr_early(js, off);
 }
 
 void js_merge_obj(struct js *js, jsval_t dst, jsval_t src) {
   if (vtype(dst) != T_OBJ || vtype(src) != T_OBJ) return;
   jsoff_t next = loadoff(js, (jsoff_t) vdata(src)) & ~(3U | FLAGMASK);
-  while (next < js->brk && next != 0) {
+  while (is_valid_off(js, next)) {
     jsoff_t header = loadoff(js, next);
     if (is_slot_prop(header)) { next = next_prop(header); continue; }
     
@@ -22619,6 +22750,58 @@ void js_gc_update_roots(GC_UPDATE_ARGS) {
   
   #undef FWD_OFF
   #undef FWD_VAL
+}
+
+typedef struct {
+  void (*user_op_val)(void *ctx, jsval_t *val);
+  void (*user_op_off)(void *ctx, jsoff_t *off);
+  void *user_ctx;
+} scavenge_wrap_t;
+
+static void scavenge_wrap_off(void *cb_ctx, jsoff_t *off) {
+  gc_cb_ctx_t *c = cb_ctx;
+  scavenge_wrap_t *w = c->ctx;
+  w->user_op_off(w->user_ctx, off);
+}
+
+static void scavenge_wrap_val(void *cb_ctx, jsval_t *val) {
+  gc_cb_ctx_t *c = cb_ctx;
+  scavenge_wrap_t *w = c->ctx;
+  w->user_op_val(w->user_ctx, val);
+}
+
+void js_gc_scavenge_roots(ant_t *js, GC_OP_VALOFF_ARGS) {
+  scavenge_wrap_t wrap = { op_val, op_off, ctx };
+  gc_cb_ctx_t cb_ctx = { NULL, NULL, &wrap, js };
+
+  gc_roots_common(scavenge_wrap_off, scavenge_wrap_val, &cb_ctx);
+
+  promise_data_entry_t *pd, *pd_tmp;
+  HASH_ITER(hh, promise_registry, pd, pd_tmp) {
+    op_off(ctx, &pd->obj_offset);
+    op_val(ctx, &pd->value);
+    UTARRAY_EACH(pd->handlers, promise_handler_t, h) {
+      op_val(ctx, &h->onFulfilled);
+      op_val(ctx, &h->onRejected);
+      op_val(ctx, &h->nextPromise);
+    }
+  }
+
+  proxy_data_t *proxy, *proxy_tmp;
+  HASH_ITER(hh, proxy_registry, proxy, proxy_tmp) {
+    op_val(ctx, &proxy->target);
+    op_val(ctx, &proxy->handler);
+  }
+
+  descriptor_entry_t *desc, *desc_tmp;
+  HASH_ITER(hh, desc_registry, desc, desc_tmp) {
+    if (desc->has_getter) op_val(ctx, &desc->getter);
+    if (desc->has_setter) op_val(ctx, &desc->setter);
+  }
+
+  if (js->ascii_cache_init) {
+    for (int i = 0; i < 128; i++) op_val(ctx, &js->ascii_char_cache[i]);
+  }
 }
 
 #undef UTARRAY_EACH
@@ -22927,13 +23110,13 @@ bool js_prop_iter_next(ant_iter_t *iter, const char **key, size_t *key_len, jsva
   ant_t *js = (ant_t *)iter->ctx;
   jsoff_t next = loadoff(js, iter->off) & ~(3U | FLAGMASK);
   
-  while (next < js->brk && next != 0) {
+  while (is_valid_off(js, next)) {
     jsoff_t header = loadoff(js, next);
     if (!is_slot_prop(header)) break;
     next = next_prop(header);
   }
   
-  if (next >= js->brk || next == 0) return false;
+  if (!is_valid_off(js, next)) return false;
   iter->off = next;
   
   jsoff_t koff = loadoff(js, next + (jsoff_t)sizeof(jsoff_t));
@@ -22941,7 +23124,7 @@ bool js_prop_iter_next(ant_iter_t *iter, const char **key, size_t *key_len, jsva
   
   if (key) {
     jsoff_t klen = offtolen(loadoff(js, koff));
-    *key = (const char *)&js->mem[koff + sizeof(jsoff_t)];
+    *key = (const char *)js_mem_ptr_early(js, koff + sizeof(jsoff_t));
     if (key_len) *key_len = klen;
   }
   if (value) *value = val;

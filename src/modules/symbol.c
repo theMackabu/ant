@@ -3,6 +3,7 @@
 #include <stdio.h>
 
 #include "ant.h"
+#include "utils.h"
 #include "errors.h"
 #include "runtime.h"
 #include "internal.h"
@@ -57,11 +58,16 @@ static inline void init_symbol(struct js *js, wellknown_sym_t *sym_var, const ch
 }
 
 static jsval_t builtin_Symbol(struct js *js, jsval_t *args, int nargs) {
-  const char *desc = NULL;
+  CSTR_BUF(desc, 256);
+  const char *desc_ptr = NULL;
   if (nargs > 0 && vtype(args[0]) == T_STR) {
-    desc = js_getstr(js, args[0], NULL);
+    size_t len;
+    const char *src = js_getstr(js, args[0], &len);
+    if (src) desc_ptr = CSTR_INIT(desc, src, len);
   }
-  return js_mksym(js, desc);
+  jsval_t result = js_mksym(js, desc_ptr);
+  cstr_free(&desc);
+  return result;
 }
 
 static jsval_t builtin_Symbol_for(struct js *js, jsval_t *args, int nargs) {
