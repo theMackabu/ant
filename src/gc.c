@@ -38,6 +38,12 @@ static time_t gc_last_run_time = 0;
 #define FWD_EMPTY ((jsoff_t)~0)
 #define FWD_TOMBSTONE ((jsoff_t)~1)
 
+#ifdef _WIN32
+#define RELEASE_PAGES(p, sz) VirtualAlloc(p, sz, MEM_RESET, PAGE_READWRITE)
+#else
+#define RELEASE_PAGES(p, sz) madvise(p, sz, MADV_DONTNEED)
+#endif
+
 typedef struct {
   jsoff_t *old_offs;
   jsoff_t *new_offs;
@@ -82,30 +88,41 @@ static inline size_t next_pow2(size_t n) {
 
 static bool fwd_init(gc_forward_table_t *fwd, size_t estimated) {
   size_t cap = next_pow2(estimated < 64 ? 64 : estimated);
-  fwd->old_offs = (jsoff_t *)ant_calloc(cap * sizeof(jsoff_t));
-  fwd->new_offs = (jsoff_t *)ant_calloc(cap * sizeof(jsoff_t));
+  size_t size = cap * sizeof(jsoff_t);
+  
+  fwd->old_offs = (jsoff_t *)gc_mmap(size);
+  fwd->new_offs = (jsoff_t *)gc_mmap(size);
+  
   if (!fwd->old_offs || !fwd->new_offs) {
-    if (fwd->old_offs) free(fwd->old_offs);
-    if (fwd->new_offs) free(fwd->new_offs);
+    if (fwd->old_offs) gc_munmap(fwd->old_offs, size);
+    if (fwd->new_offs) gc_munmap(fwd->new_offs, size);
     return false;
   }
+  
   for (size_t i = 0; i < cap; i++) fwd->old_offs[i] = FWD_EMPTY;
+  
   fwd->count = 0;
   fwd->capacity = cap;
   fwd->mask = cap - 1;
+  
   return true;
 }
 
 static bool fwd_grow(gc_forward_table_t *fwd) {
   size_t new_cap = fwd->capacity * 2;
   size_t new_mask = new_cap - 1;
-  jsoff_t *new_old = (jsoff_t *)ant_calloc(new_cap * sizeof(jsoff_t));
-  jsoff_t *new_new = (jsoff_t *)ant_calloc(new_cap * sizeof(jsoff_t));
+  size_t new_size = new_cap * sizeof(jsoff_t);
+  size_t old_size = fwd->capacity * sizeof(jsoff_t);
+  
+  jsoff_t *new_old = (jsoff_t *)gc_mmap(new_size);
+  jsoff_t *new_new = (jsoff_t *)gc_mmap(new_size);
+  
   if (!new_old || !new_new) {
-    if (new_old) free(new_old);
-    if (new_new) free(new_new);
+    if (new_old) gc_munmap(new_old, new_size);
+    if (new_new) gc_munmap(new_new, new_size);
     return false;
   }
+  
   for (size_t i = 0; i < new_cap; i++) new_old[i] = FWD_EMPTY;
   
   for (size_t i = 0; i < fwd->capacity; i++) {
@@ -117,12 +134,14 @@ static bool fwd_grow(gc_forward_table_t *fwd) {
     new_new[h] = fwd->new_offs[i];
   }
   
-  free(fwd->old_offs);
-  free(fwd->new_offs);
+  gc_munmap(fwd->old_offs, old_size);
+  gc_munmap(fwd->new_offs, old_size);
+  
   fwd->old_offs = new_old;
   fwd->new_offs = new_new;
   fwd->capacity = new_cap;
   fwd->mask = new_mask;
+  
   return true;
 }
 
@@ -130,6 +149,7 @@ static inline bool fwd_add(gc_forward_table_t *fwd, jsoff_t old_off, jsoff_t new
   if (fwd->count * 100 >= fwd->capacity * GC_FWD_LOAD_FACTOR) {
     if (!fwd_grow(fwd)) return false;
   }
+  
   size_t h = (old_off >> 3) & fwd->mask;
   while (fwd->old_offs[h] != FWD_EMPTY && fwd->old_offs[h] != FWD_TOMBSTONE) {
     if (fwd->old_offs[h] == old_off) {
@@ -138,9 +158,11 @@ static inline bool fwd_add(gc_forward_table_t *fwd, jsoff_t old_off, jsoff_t new
     }
     h = (h + 1) & fwd->mask;
   }
+  
   fwd->old_offs[h] = old_off;
   fwd->new_offs[h] = new_off;
   fwd->count++;
+  
   return true;
 }
 
@@ -156,8 +178,10 @@ static inline jsoff_t fwd_lookup(gc_forward_table_t *fwd, jsoff_t old_off) {
 }
 
 static void fwd_free(gc_forward_table_t *fwd) {
-  if (fwd->old_offs) free(fwd->old_offs);
-  if (fwd->new_offs) free(fwd->new_offs);
+  size_t size = fwd->capacity * sizeof(jsoff_t);
+  if (fwd->old_offs) gc_munmap(fwd->old_offs, size);
+  if (fwd->new_offs) gc_munmap(fwd->new_offs, size);
+  
   fwd->old_offs = NULL;
   fwd->new_offs = NULL;
   fwd->count = 0;
@@ -165,7 +189,8 @@ static void fwd_free(gc_forward_table_t *fwd) {
 }
 
 static bool work_init(gc_work_queue_t *work, size_t initial) {
-  work->items = (jsoff_t *)ant_calloc(initial * sizeof(jsoff_t));
+  size_t size = initial * sizeof(jsoff_t);
+  work->items = (jsoff_t *)gc_mmap(size);
   if (!work->items) return false;
   work->count = 0;
   work->capacity = initial;
@@ -175,13 +200,19 @@ static bool work_init(gc_work_queue_t *work, size_t initial) {
 static inline bool work_push(gc_work_queue_t *work, jsoff_t off) {
   if (work->count >= work->capacity) {
     size_t new_cap = work->capacity * 2;
-    jsoff_t *new_items = (jsoff_t *)ant_calloc(new_cap * sizeof(jsoff_t));
+    size_t new_size = new_cap * sizeof(jsoff_t);
+    size_t old_size = work->capacity * sizeof(jsoff_t);
+    
+    jsoff_t *new_items = (jsoff_t *)gc_mmap(new_size);
     if (!new_items) return false;
+    
     memcpy(new_items, work->items, work->count * sizeof(jsoff_t));
-    free(work->items);
+    gc_munmap(work->items, old_size);
+    
     work->items = new_items;
     work->capacity = new_cap;
   }
+  
   work->items[work->count++] = off;
   return true;
 }
@@ -192,7 +223,9 @@ static inline jsoff_t work_pop(gc_work_queue_t *work) {
 }
 
 static void work_free(gc_work_queue_t *work) {
-  if (work->items) free(work->items);
+  size_t size = work->capacity * sizeof(jsoff_t);
+  if (work->items) gc_munmap(work->items, size);
+  
   work->items = NULL;
   work->count = 0;
   work->capacity = 0;
@@ -529,7 +562,7 @@ static jsval_t gc_apply_val_callback(void *ctx_ptr, jsval_t val) {
 
 size_t js_gc_compact(ant_t *js) {
   if (!js || js->brk == 0) return 0;
-  if (js->brk < 512 * 1024) return 0;
+  if (js->brk < 2 * 1024 * 1024) return 0;
 
   time_t now = time(NULL);
   if (now != (time_t)-1 && gc_last_run_time != 0) {
@@ -561,9 +594,9 @@ size_t js_gc_compact(ant_t *js) {
     gc_scratch_buf = (uint8_t *)gc_mmap(new_size);
     gc_scratch_size = gc_scratch_buf ? new_size : 0;
   }
+  
   if (!gc_scratch_buf) return 0;
   uint8_t *new_mem = gc_scratch_buf;
-  memset(new_mem, 0, new_size);
   
   size_t bitmap_size = (js->brk / 8 + 7) / 8 + 1;
   uint8_t *mark_bits = (uint8_t *)calloc(1, bitmap_size);
@@ -625,10 +658,8 @@ size_t js_gc_compact(ant_t *js) {
   work_free(&ctx.work);
   fwd_free(&ctx.fwd);
   
-  if (gc_scratch_buf) {
-    gc_munmap(gc_scratch_buf, gc_scratch_size);
-    gc_scratch_buf = NULL;
-    gc_scratch_size = 0;
+  if (gc_scratch_buf && gc_scratch_size > 0) {
+    RELEASE_PAGES(gc_scratch_buf, gc_scratch_size);
   }
   
   size_t new_brk = ctx.new_brk;
@@ -645,7 +676,7 @@ size_t js_gc_compact(ant_t *js) {
 
 void js_maybe_gc(ant_t *js) {
   jsoff_t thresh = js->brk / 4;
-  if (thresh < 512 * 1024) thresh = 512 * 1024;
+  if (thresh < 2 * 1024 * 1024) thresh = 2 * 1024 * 1024;
   if (thresh > 16 * 1024 * 1024) thresh = 16 * 1024 * 1024;
 
   if (js->gc_alloc_since > thresh || js->needs_gc) {
