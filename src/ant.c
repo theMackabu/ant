@@ -22492,9 +22492,14 @@ void js_gc_reserve_roots(GC_RESERVE_ARGS) {
   
   promise_data_entry_t *pd, *pd_tmp;
   HASH_ITER(hh, promise_registry, pd, pd_tmp) {
-    bool can_collect = (pd->state != 0) && (utarray_len(pd->handlers) == 0);
+    bool can_collect = (pd->state != 0) 
+      && (utarray_len(pd->handlers) == 0) 
+      && !pd->processing;
+    
     if (can_collect) continue;
+    RSV_OFF(pd->obj_offset);
     RSV_VAL(pd->value);
+    
     UTARRAY_EACH(pd->handlers, promise_handler_t, h) {
       RSV_VAL(h->onFulfilled); 
       RSV_VAL(h->onRejected); 
