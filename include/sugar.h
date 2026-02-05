@@ -45,9 +45,6 @@ typedef struct coroutine {
   int for_let_stack_len;
   int for_let_stack_cap;
   UT_array *scope_stack;
-  void *token_stream;
-  int token_stream_pos;
-  const char *token_stream_code;
 } coroutine_t;
 
 typedef struct {

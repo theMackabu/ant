@@ -199,6 +199,7 @@ typedef struct promise_data_entry {
   jsoff_t obj_offset;
   int state;
   bool has_rejection_handler;
+  bool processing;
   UT_hash_handle hh;
   UT_hash_handle hh_unhandled;
 } promise_data_entry_t;
@@ -629,6 +630,8 @@ typedef struct {
   jsoff_t clen, pos;
   uint8_t tok, consumed;
   int token_stream_pos;
+  void *token_stream;
+  const char *token_stream_code;
 } js_parse_state_t;
 
 #define JS_SAVE_STATE(js, state) do { \
@@ -638,6 +641,8 @@ typedef struct {
   (state).tok = (js)->tok; \
   (state).consumed = (js)->consumed; \
   (state).token_stream_pos = (js)->token_stream_pos; \
+  (state).token_stream = (js)->token_stream; \
+  (state).token_stream_code = (js)->token_stream_code; \
 } while(0)
 
 #define JS_RESTORE_STATE(js, state) do { \
@@ -647,6 +652,8 @@ typedef struct {
   (js)->tok = (state).tok; \
   (js)->consumed = (state).consumed; \
   (js)->token_stream_pos = (state).token_stream_pos; \
+  (js)->token_stream = (state).token_stream; \
+  (js)->token_stream_code = (state).token_stream_code; \
 } while(0)
 
 static size_t strstring(struct js *js, jsval_t value, char *buf, size_t len);
@@ -19689,6 +19696,8 @@ void js_process_promise_handlers(struct js *js, uint32_t pid) {
   jsval_t val = pd->value;
   
   unsigned int len = utarray_len(pd->handlers);
+  if (len == 0) { return; } pd->processing = true;
+  
   for (unsigned int i = 0; i < len; i++) {
     promise_handler_t *h = (promise_handler_t *)utarray_eltptr(pd->handlers, i);
     jsval_t handler = (state == 1) ? h->onFulfilled : h->onRejected;
@@ -19717,6 +19726,7 @@ void js_process_promise_handlers(struct js *js, uint32_t pid) {
     }
   }
 
+  pd->processing = false;
   utarray_clear(pd->handlers);
 }
 
@@ -22429,13 +22439,11 @@ static void gc_roots_common(gc_off_op_t op_off, gc_val_op_t op_val, gc_cb_ctx_t 
       UTARRAY_EACH(coro->scope_stack, jsoff_t, off) op_off(c, off);
     }
 
-    if (coro->mco) {
-      async_exec_context_t *actx = (async_exec_context_t *)mco_get_user_data(coro->mco);
-      if (actx) {
-        op_val(c, &actx->closure_scope);
-        op_val(c, &actx->result);
-        op_val(c, &actx->promise);
-      }
+    async_exec_context_t *actx;
+    if (coro->mco && (actx = mco_get_user_data(coro->mco))) {
+      op_val(c, &actx->closure_scope);
+      op_val(c, &actx->result);
+      op_val(c, &actx->promise);
     }
   }
 
@@ -22527,16 +22535,32 @@ void js_gc_update_roots(GC_UPDATE_ARGS) {
     HASH_ITER(hh, promise_registry, pd, pd_tmp) {
       HASH_DEL(promise_registry, pd);
       promise_data_entry_t *in_unhandled = NULL;
-      HASH_FIND(hh_unhandled, unhandled_rejections, &pd->promise_id, sizeof(uint32_t), in_unhandled);
+      
+      HASH_FIND(
+        hh_unhandled, unhandled_rejections, 
+        &pd->promise_id, sizeof(uint32_t), in_unhandled
+      );
+      
       if (in_unhandled) HASH_DELETE(hh_unhandled, unhandled_rejections, pd);
-      
       jsoff_t new_off = weak_off(ctx, pd->obj_offset);
-      if (new_off == (jsoff_t)~0) { utarray_free(pd->handlers); free(pd); continue; }
       
-      bool can_collect = (pd->state != 0) && (utarray_len(pd->handlers) == 0);
-      if (can_collect) { utarray_free(pd->handlers); free(pd); continue; }
+      if (new_off == (jsoff_t)~0 && !pd->processing) { 
+        utarray_free(pd->handlers); 
+        free(pd); continue; 
+      }
+      
+      bool can_collect = (pd->state != 0) 
+        && (utarray_len(pd->handlers) == 0) 
+        && !pd->processing;
+      
+      if (can_collect) { 
+        utarray_free(pd->handlers); 
+        free(pd); continue; 
+      }
+      
       pd->obj_offset = new_off;
       FWD_VAL(pd->value);
+      
       UTARRAY_EACH(pd->handlers, promise_handler_t, h) {
         FWD_VAL(h->onFulfilled);
         FWD_VAL(h->onRejected);
