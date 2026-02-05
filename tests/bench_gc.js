@@ -92,6 +92,7 @@ bench('Mixed workload', mixedWorkload, 5);
 let final = Ant.stats();
 console.log('Final state:');
 console.log('  arenaUsed:', fmt(final.arenaUsed));
+console.log('  arenaSize:', fmt(final.arenaSize));
 console.log('  rss:', fmt(final.rss));
 console.log('');
 console.log('Note: GC runs automatically at safe points.');

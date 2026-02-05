@@ -605,23 +605,16 @@ size_t js_gc_compact(ant_t *js) {
     gc_scratch_size = 0;
   }
   
-  size_t page_size = 4096;
-  size_t used_pages = (ctx.new_brk + page_size - 1) & ~(page_size - 1);
+  size_t new_brk = ctx.new_brk;
+  size_t old_size = js->size;
   
-  if (js->size > used_pages) {
-    size_t release_size = js->size - used_pages;
-    void *release_start = js->mem + used_pages;
-    
-#ifdef _WIN32
-    VirtualFree(release_start, release_size, MEM_DECOMMIT);
-    VirtualAlloc(release_start, release_size, MEM_COMMIT, PAGE_READWRITE);
-#else
-    void *p = mmap(release_start, release_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0);
-    if (p == MAP_FAILED) madvise(release_start, release_size, MADV_DONTNEED);
-#endif
+  if (new_brk < old_size / 2 && old_size > ARENA_GROW_INCREMENT) {
+    size_t target = ((new_brk * 2 + ARENA_GROW_INCREMENT - 1) / ARENA_GROW_INCREMENT) * ARENA_GROW_INCREMENT;
+    if (target < ARENA_GROW_INCREMENT) target = ARENA_GROW_INCREMENT;
+    if (target < old_size) { ant_arena_decommit(js->mem, old_size, target); js->size = (jsoff_t)target; }
   }
   
-  return (old_brk > ctx.new_brk ? old_brk - ctx.new_brk : 0);
+  return (old_brk > new_brk ? old_brk - new_brk : 0);
 }
 
 void js_maybe_gc(ant_t *js) {

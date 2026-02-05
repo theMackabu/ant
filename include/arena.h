@@ -52,6 +52,13 @@ static inline void ant_arena_free(void *base, size_t reserved_size) {
   if (base) VirtualFree(base, 0, MEM_RELEASE);
 }
 
+static inline int ant_arena_decommit(void *base, size_t old_size, size_t new_size) {
+  if (new_size >= old_size) return 0;
+  void *decommit_start = (char *)base + new_size;
+  size_t decommit_size = old_size - new_size;
+  return VirtualFree(decommit_start, decommit_size, MEM_DECOMMIT) ? 0 : -1;
+}
+
 #else
 
 static inline void *ant_arena_reserve(size_t max_size) {
@@ -79,6 +86,26 @@ static inline int ant_arena_commit(void *base, size_t old_size, size_t new_size)
 
 static inline void ant_arena_free(void *base, size_t reserved_size) {
   if (base) munmap(base, reserved_size);
+}
+
+static inline int ant_arena_decommit(void *base, size_t old_size, size_t new_size) {
+  if (new_size >= old_size) return 0;
+  
+  long page_size_long = sysconf(_SC_PAGESIZE);
+  if (page_size_long <= 0) return -1;
+  
+  size_t page_size = (size_t)page_size_long;
+  size_t new_pages = ((new_size + page_size - 1) / page_size) * page_size;
+  size_t old_pages = ((old_size + page_size - 1) / page_size) * page_size;
+  
+  if (new_pages >= old_pages) return 0;
+  
+  void *decommit_start = (char *)base + new_pages;
+  size_t decommit_size = old_pages - new_pages;
+  
+  if (mprotect(decommit_start, decommit_size, PROT_NONE) == 0) return 0;
+  madvise(decommit_start, decommit_size, MADV_DONTNEED);
+  return 0;
 }
 
 #endif
