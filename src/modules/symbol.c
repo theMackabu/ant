@@ -19,10 +19,7 @@ static wellknown_sym_t g_toStringTag = {0};
 static wellknown_sym_t g_hasInstance = {0};
 static wellknown_sym_t g_observable = {0};
 static wellknown_sym_t g_toPrimitive = {0};
-
-jsval_t get_iterator_symbol(void) { return g_iterator.sym; }
-jsval_t get_asyncIterator_symbol(void) { return g_asyncIterator.sym; }
-jsval_t get_observable_symbol(void) { return g_observable.sym; }
+static wellknown_sym_t g_species = {0};
 
 const char *get_iterator_sym_key(void) { return g_iterator.key; }
 const char *get_asyncIterator_sym_key(void) { return g_asyncIterator.key; }
@@ -38,6 +35,7 @@ static const struct { jsval_t *sym; const char *name; } sym_table[] = {
   { &g_hasInstance.sym, "Symbol.hasInstance" },
   { &g_observable.sym, "Symbol.observable" },
   { &g_toPrimitive.sym, "Symbol.toPrimitive" },
+  { &g_species.sym, "Symbol.species" },
 };
 
 const char *get_symbol_description_from_key(const char *sym_key, size_t key_len) {
@@ -182,6 +180,11 @@ static jsval_t string_iterator(struct js *js, jsval_t *args, int nargs) {
   return iter;
 }
 
+static jsval_t species_getter(struct js *js, jsval_t *args, int nargs) {
+  (void)args; (void)nargs;
+  return js_getthis(js);
+}
+
 static jsval_t date_toPrimitive(struct js *js, jsval_t *args, int nargs) {
   jsval_t this_val = js_getthis(js);
   
@@ -216,6 +219,7 @@ void init_symbol_module(void) {
   init_symbol(js, &g_observable, "Symbol.observable");
   init_symbol(js, &g_toPrimitive, "Symbol.toPrimitive");
   init_symbol(js, &g_hasInstance, "Symbol.hasInstance");
+  init_symbol(js, &g_species, "Symbol.species");
 
   jsval_t symbol_proto = js_mkobj(js);
   js_set(js, symbol_proto, "toString", js_mkfun(builtin_Symbol_toString));
@@ -232,6 +236,7 @@ void init_symbol_module(void) {
   js_set(js, symbol_ctor, "hasInstance", g_hasInstance.sym);
   js_set(js, symbol_ctor, "observable", g_observable.sym);
   js_set(js, symbol_ctor, "toPrimitive", g_toPrimitive.sym);
+  js_set(js, symbol_ctor, "species", g_species.sym);
   
   jsval_t func_symbol = js_obj_to_func(symbol_ctor);
   js_set(js, js_glob(js), "Symbol", func_symbol);
@@ -254,4 +259,8 @@ void init_symbol_module(void) {
   jsval_t promise_ctor = js_get(js, js_glob(js), "Promise");
   jsval_t promise_proto = js_get(js, promise_ctor, "prototype");
   js_set(js, promise_proto, g_toStringTag.key, js_mkstr(js, "Promise", 7));
+  
+  jsval_t species_fn = js_mkfun(species_getter);
+  js_set_getter_desc(js, promise_ctor, g_species.key, strlen(g_species.key), species_fn, JS_DESC_C);
+  js_set_getter_desc(js, array_ctor, g_species.key, strlen(g_species.key), species_fn, JS_DESC_C);
 }

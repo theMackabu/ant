@@ -659,6 +659,13 @@ static bool is_arr_off(struct js *js, jsoff_t off) {
   return (loadoff(js, off) & ARRMASK) != 0; 
 }
 
+static bool is_func_off(struct js *js, jsoff_t off) {
+  jsval_t obj = mkval(T_OBJ, off);
+  jsval_t code = get_slot(js, obj, SLOT_CODE);
+  jsval_t cfunc = get_slot(js, obj, SLOT_CFUNC);
+  return vtype(code) != T_UNDEF || vtype(cfunc) != T_UNDEF;
+}
+
 static inline jsval_t loadval(struct js *js, jsoff_t off) { 
   return *(jsval_t *)(&js->mem[off]);
 }
@@ -5372,7 +5379,8 @@ jsval_t resolveprop(struct js *js, jsval_t v) {
       return tov(D(js_arr_len(js, arr)));
     }
     
-    jsval_t obj = mkval(T_OBJ, obj_off);
+    uint8_t obj_type = is_arr_off(js, obj_off) ? T_ARR : (is_func_off(js, obj_off) ? T_FUNC : T_OBJ);
+    jsval_t obj = mkval(obj_type, obj_off);
     if (is_proxy(js, obj)) return proxy_get(js, obj, key_str, len);
     
     if (len == STR_PROTO_LEN && memcmp(key_str, STR_PROTO, STR_PROTO_LEN) == 0) {
@@ -5703,11 +5711,15 @@ static jsval_t do_bracket_op(struct js *js, jsval_t l, jsval_t r) {
     if ((js->flags & F_STRICT) && (streq(keystr, keylen, "caller", 6) || streq(keystr, keylen, "arguments", 9))) {
       return js_mkerr_typed(js, JS_ERR_TYPE, "'%.*s' not allowed on functions in strict mode", (int)keylen, keystr);
     }
+    jsoff_t obj_off = (jsoff_t)vdata(obj);
+    descriptor_entry_t *desc = lookup_descriptor(obj_off, keystr, keylen);
+    if (desc && (desc->has_getter || desc->has_setter)) {
+      jsval_t key = js_mkstr(js, keystr, keylen);
+      return mkpropref(obj_off, (jsoff_t)vdata(key));
+    }
     jsval_t func_obj = mkval(T_OBJ, vdata(obj));
     jsoff_t off = lkp_proto(js, obj, keystr, keylen);
     if (off != 0) {
-      jsoff_t obj_off = (jsoff_t)vdata(obj);
-      descriptor_entry_t *desc = lookup_descriptor(obj_off, keystr, keylen);
       if (desc) {
         jsval_t key = js_mkstr(js, keystr, keylen);
         return mkpropref(obj_off, (jsoff_t)vdata(key));
@@ -5825,11 +5837,15 @@ static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
       if (vtype(proto) != T_UNDEF) return proto;
       return get_prototype_for_type(js, T_FUNC);
     }
+    jsoff_t obj_off = (jsoff_t)vdata(l);
+    descriptor_entry_t *desc = lookup_descriptor(obj_off, ptr, plen);
+    if (desc && (desc->has_getter || desc->has_setter)) {
+      jsval_t key = js_mkstr(js, ptr, plen);
+      return mkpropref(obj_off, (jsoff_t)vdata(key));
+    }
     jsval_t func_obj = mkval(T_OBJ, vdata(l));
     jsoff_t off = lkp_proto(js, l, ptr, plen);
     if (off != 0) {
-      jsoff_t obj_off = (jsoff_t)vdata(l);
-      descriptor_entry_t *desc = lookup_descriptor(obj_off, ptr, plen);
       if (desc) {
         jsval_t key = js_mkstr(js, ptr, plen);
         return mkpropref(obj_off, (jsoff_t)vdata(key));
@@ -14622,6 +14638,35 @@ static jsval_t iterate_dynamic_keys(struct js *js, jsval_t obj, dynamic_accessor
   return mkval(T_ARR, vdata(arr));
 }
 
+static jsval_t builtin_object_is(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 2) return js_false;
+  
+  jsval_t x = args[0];
+  jsval_t y = args[1];
+  
+  uint8_t tx = vtype(x);
+  uint8_t ty = vtype(y);
+  if (tx != ty) return js_false;
+  
+  if (tx == T_UNDEF || tx == T_NULL) return js_true;
+  
+  if (tx == T_NUM) {
+    double dx = tod(x);
+    double dy = tod(y);
+    if (isnan(dx) && isnan(dy)) return js_true;
+    if (dx == 0.0 && dy == 0.0) {
+      bool x_neg = (1.0 / dx) < 0;
+      bool y_neg = (1.0 / dy) < 0;
+      return x_neg == y_neg ? js_true : js_false;
+    }
+    return dx == dy ? js_true : js_false;
+  }
+  
+  if (tx == T_BOOL) return vdata(x) == vdata(y) ? js_true : js_false;
+  
+  return x == y ? js_true : js_false;
+}
+
 static jsval_t builtin_object_keys(struct js *js, jsval_t *args, int nargs) {
   if (nargs == 0) return mkarr(js);
   jsval_t obj = args[0];
@@ -15351,15 +15396,27 @@ static jsval_t builtin_object_getOwnPropertyDescriptor(struct js *js, jsval_t *a
   uint8_t t = vtype(obj);
   
   if (t != T_OBJ && t != T_ARR && t != T_FUNC) return js_mkundef();
-  if (vtype(key) != T_STR) {
+  
+  char sym_buf[32];
+  const char *key_str;
+  jsoff_t key_len;
+  
+  if (vtype(key) == T_SYMBOL) {
+    snprintf(sym_buf, sizeof(sym_buf), "__sym_%llu__", (unsigned long long)sym_get_id(key));
+    key_str = sym_buf;
+    key_len = (jsoff_t)strlen(sym_buf);
+  } else if (vtype(key) == T_STR) {
+    jsoff_t key_off = vstr(js, key, &key_len);
+    key_str = (char *) &js->mem[key_off];
+  } else {
     char buf[64];
     size_t n = tostr(js, key, buf, sizeof(buf));
     key = js_mkstr(js, buf, n);
+    jsoff_t key_off = vstr(js, key, &key_len);
+    key_str = (char *) &js->mem[key_off];
   }
   
   jsval_t as_obj = (t == T_OBJ) ? obj : mkval(T_OBJ, vdata(obj));
-  jsoff_t key_len, key_off = vstr(js, key, &key_len);
-  const char *key_str = (char *) &js->mem[key_off];
   
   jsoff_t obj_off = (jsoff_t)vdata(as_obj);
   descriptor_entry_t *desc = lookup_descriptor(obj_off, key_str, key_len);
@@ -19981,77 +20038,120 @@ static jsval_t builtin_Promise_all_reject_handler(struct js *js, jsval_t *args, 
   return js_mkundef();
 }
 
-static jsval_t builtin_Promise_all(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return js_mkerr(js, "Promise.all requires an array");
+typedef struct {
+  jsval_t tracker;
+  int index;
+} promise_all_iter_ctx_t;
+
+static iter_action_t promise_all_iter_cb(struct js *js, jsval_t value, void *ctx, jsval_t *out) {
+  promise_all_iter_ctx_t *pctx = (promise_all_iter_ctx_t *)ctx;
+  jsval_t item = value;
   
-  jsval_t arr = args[0];
-  if (vtype(arr) != T_ARR) return js_mkerr(js, "Promise.all requires an array");
-  
-  jsoff_t len_off = lkp_interned(js, arr, INTERN_LENGTH, 6);
-  if (len_off == 0) return builtin_Promise_resolve(js, NULL, 0);
-  jsval_t len_val = resolveprop(js, mkval(T_PROP, len_off));
-  int len = (int)tod(len_val);
-  
-  if (len == 0) {
-    jsval_t empty_arr = mkarr(js);
-    js_setprop(js, empty_arr, js_mkstr(js, "length", 6), tov(0.0));
-    jsval_t resolve_args[] = { mkval(T_ARR, vdata(empty_arr)) };
-    return builtin_Promise_resolve(js, resolve_args, 1);
+  if (vtype(item) != T_PROMISE) {
+    jsval_t wrap_args[] = { item };
+    item = builtin_Promise_resolve(js, wrap_args, 1);
   }
+  
+  jsval_t resolve_obj = mkobj(js, 0);
+  set_slot(js, resolve_obj, SLOT_CFUNC, js_mkfun(builtin_Promise_all_resolve_handler));
+  js_setprop(js, resolve_obj, js_mkstr(js, "index", 5), tov((double)pctx->index));
+  js_setprop(js, resolve_obj, js_mkstr(js, "tracker", 7), pctx->tracker);
+  jsval_t resolve_fn = mkval(T_FUNC, vdata(resolve_obj));
+  
+  jsval_t reject_obj = mkobj(js, 0);
+  set_slot(js, reject_obj, SLOT_CFUNC, js_mkfun(builtin_Promise_all_reject_handler));
+  js_setprop(js, reject_obj, js_mkstr(js, "tracker", 7), pctx->tracker);
+  jsval_t reject_fn = mkval(T_FUNC, vdata(reject_obj));
+  
+  jsval_t then_args[] = { resolve_fn, reject_fn };
+  jsval_t saved_this = js->this_val;
+  js->this_val = item;
+  builtin_promise_then(js, then_args, 2);
+  js->this_val = saved_this;
+  
+  pctx->index++;
+  return ITER_CONTINUE;
+}
+
+static jsval_t builtin_Promise_all(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "Promise.all requires an iterable");
+  
+  jsval_t iterable = args[0];
+  uint8_t t = vtype(iterable);
+  if (t != T_ARR && t != T_OBJ) return js_mkerr(js, "Promise.all requires an iterable");
   
   jsval_t result_promise = mkpromise(js);
   jsval_t tracker = mkobj(js, 0);
+  jsval_t results = mkarr(js);
   
-  js_setprop(js, tracker, js_mkstr(js, "remaining", 9), tov((double)len));
-  js_setprop(js, tracker, js_mkstr(js, "results", 7), mkarr(js));
+  js_setprop(js, tracker, js_mkstr(js, "remaining", 9), tov(0.0));
+  js_setprop(js, tracker, js_mkstr(js, "results", 7), results);
   set_slot(js, tracker, SLOT_DATA, result_promise);
   
-  jsval_t results = resolveprop(js, js_get(js, tracker, "results"));
+  promise_all_iter_ctx_t ctx = { .tracker = tracker, .index = 0 };
+  jsval_t iter_result = iter_foreach(js, iterable, promise_all_iter_cb, &ctx);
+  
+  if (is_err(iter_result)) return iter_result;
+  
+  int len = ctx.index;
   js_setprop(js, results, js_mkstr(js, "length", 6), tov((double)len));
   
-  for (int i = 0; i < len; i++) {
-    char idx[16];
-    snprintf(idx, sizeof(idx), "%d", i);
-    jsval_t item = resolveprop(js, js_get(js, arr, idx));
-    
-    if (vtype(item) != T_PROMISE) {
-      jsval_t wrap_args[] = { item };
-      item = builtin_Promise_resolve(js, wrap_args, 1);
-    }
-    
-    jsval_t resolve_obj = mkobj(js, 0);
-    set_slot(js, resolve_obj, SLOT_CFUNC, js_mkfun(builtin_Promise_all_resolve_handler));
-    js_setprop(js, resolve_obj, js_mkstr(js, "index", 5), tov((double)i));
-    js_setprop(js, resolve_obj, js_mkstr(js, "tracker", 7), tracker);
-    jsval_t resolve_fn = mkval(T_FUNC, vdata(resolve_obj));
-    
-    jsval_t reject_obj = mkobj(js, 0);
-    set_slot(js, reject_obj, SLOT_CFUNC, js_mkfun(builtin_Promise_all_reject_handler));
-    js_setprop(js, reject_obj, js_mkstr(js, "tracker", 7), tracker);
-    jsval_t reject_fn = mkval(T_FUNC, vdata(reject_obj));
-    
-    jsval_t then_args[] = { resolve_fn, reject_fn };
-    jsval_t saved_this = js->this_val;
-    js->this_val = item;
-    builtin_promise_then(js, then_args, 2);
-    js->this_val = saved_this;
+  if (len == 0) {
+    jsval_t resolve_args[] = { mkval(T_ARR, vdata(results)) };
+    return builtin_Promise_resolve(js, resolve_args, 1);
   }
   
+  js_setprop(js, tracker, js_mkstr(js, "remaining", 9), tov((double)len));
   return result_promise;
 }
 
+typedef struct {
+  jsval_t result_promise;
+  jsval_t resolve_fn;
+  jsval_t reject_fn;
+  bool settled;
+} promise_race_iter_ctx_t;
+
+static iter_action_t promise_race_iter_cb(struct js *js, jsval_t value, void *ctx, jsval_t *out) {
+  promise_race_iter_ctx_t *pctx = (promise_race_iter_ctx_t *)ctx;
+  jsval_t item = value;
+  
+  if (vtype(item) != T_PROMISE) {
+    resolve_promise(js, pctx->result_promise, item);
+    pctx->settled = true;
+    return ITER_BREAK;
+  }
+  
+  uint32_t item_pid = get_promise_id(js, item);
+  promise_data_entry_t *pd = get_promise_data(item_pid, false);
+  if (pd) {
+    if (pd->state == 1) {
+      resolve_promise(js, pctx->result_promise, pd->value);
+      pctx->settled = true;
+      return ITER_BREAK;
+    } else if (pd->state == 2) {
+      reject_promise(js, pctx->result_promise, pd->value);
+      pctx->settled = true;
+      return ITER_BREAK;
+    }
+  }
+  
+  jsval_t then_args[] = { pctx->resolve_fn, pctx->reject_fn };
+  jsval_t saved_this = js->this_val;
+  js->this_val = item;
+  builtin_promise_then(js, then_args, 2);
+  js->this_val = saved_this;
+  
+  return ITER_CONTINUE;
+}
+
 static jsval_t builtin_Promise_race(struct js *js, jsval_t *args, int nargs) {
-  if (nargs < 1) return js_mkerr(js, "Promise.race requires an array");
+  if (nargs < 1) return js_mkerr(js, "Promise.race requires an iterable");
   
-  jsval_t arr = args[0];
-  if (vtype(arr) != T_ARR) return js_mkerr(js, "Promise.race requires an array");
+  jsval_t iterable = args[0];
+  uint8_t t = vtype(iterable);
+  if (t != T_ARR && t != T_OBJ) return js_mkerr(js, "Promise.race requires an iterable");
   
-  jsoff_t len_off = lkp_interned(js, arr, INTERN_LENGTH, 6);
-  if (len_off == 0) return mkpromise(js);
-  jsval_t len_val = resolveprop(js, mkval(T_PROP, len_off));
-  int len = (int)tod(len_val);
-  
-  if (len == 0) return mkpromise(js);
   jsval_t result_promise = mkpromise(js);
   
   jsval_t resolve_obj = mkobj(js, 0);
@@ -20064,34 +20164,15 @@ static jsval_t builtin_Promise_race(struct js *js, jsval_t *args, int nargs) {
   set_slot(js, reject_obj, SLOT_DATA, result_promise);
   jsval_t reject_fn = mkval(T_FUNC, vdata(reject_obj));
   
-  for (int i = 0; i < len; i++) {
-    char idx[16];
-    snprintf(idx, sizeof(idx), "%d", i);
-    jsval_t item = resolveprop(js, js_get(js, arr, idx));
-    
-    if (vtype(item) != T_PROMISE) {
-      resolve_promise(js, result_promise, item);
-      return result_promise;
-    }
-    
-    uint32_t item_pid = get_promise_id(js, item);
-    promise_data_entry_t *pd = get_promise_data(item_pid, false);
-    if (pd) {
-      if (pd->state == 1) {
-        resolve_promise(js, result_promise, pd->value);
-        return result_promise;
-      } else if (pd->state == 2) {
-        reject_promise(js, result_promise, pd->value);
-        return result_promise;
-      }
-    }
-    
-    jsval_t then_args[] = { resolve_fn, reject_fn };
-    jsval_t saved_this = js->this_val;
-    js->this_val = item;
-    builtin_promise_then(js, then_args, 2);
-    js->this_val = saved_this;
-  }
+  promise_race_iter_ctx_t ctx = {
+    .result_promise = result_promise,
+    .resolve_fn = resolve_fn,
+    .reject_fn = reject_fn,
+    .settled = false
+  };
+  
+  jsval_t iter_result = iter_foreach(js, iterable, promise_race_iter_cb, &ctx);
+  if (is_err(iter_result)) return iter_result;
   
   return result_promise;
 }
@@ -21745,6 +21826,7 @@ ant_t *js_create(void *buf, size_t len) {
   js_setprop(js, obj_func_obj, js_mkstr(js, "keys", 4), js_mkfun(builtin_object_keys));
   js_setprop(js, obj_func_obj, js_mkstr(js, "values", 6), js_mkfun(builtin_object_values));
   js_setprop(js, obj_func_obj, js_mkstr(js, "entries", 7), js_mkfun(builtin_object_entries));
+  js_setprop(js, obj_func_obj, js_mkstr(js, "is", 2), js_mkfun(builtin_object_is));
   js_setprop(js, obj_func_obj, js_mkstr(js, "getPrototypeOf", 14), js_mkfun(builtin_object_getPrototypeOf));
   js_setprop(js, obj_func_obj, js_mkstr(js, "setPrototypeOf", 14), js_mkfun(builtin_object_setPrototypeOf));
   js_setprop(js, obj_func_obj, js_mkstr(js, "create", 6), js_mkfun(builtin_object_create));
@@ -21810,6 +21892,8 @@ ant_t *js_create(void *buf, size_t len) {
   js_setprop(js, number_ctor_obj, js_mkstr(js, "isFinite", 8), js_mkfun(builtin_Number_isFinite));
   js_setprop(js, number_ctor_obj, js_mkstr(js, "isInteger", 9), js_mkfun(builtin_Number_isInteger));
   js_setprop(js, number_ctor_obj, js_mkstr(js, "isSafeInteger", 13), js_mkfun(builtin_Number_isSafeInteger));
+  js_setprop(js, number_ctor_obj, js_mkstr(js, "parseInt", 8), js_mkfun(builtin_parseInt));
+  js_setprop(js, number_ctor_obj, js_mkstr(js, "parseFloat", 10), js_mkfun(builtin_parseFloat));
   
   js_setprop(js, number_ctor_obj, js_mkstr(js, "MAX_VALUE", 9), tov(1.7976931348623157e+308));
   js_setprop(js, number_ctor_obj, js_mkstr(js, "MIN_VALUE", 9), tov(5e-324));
