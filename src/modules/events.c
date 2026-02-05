@@ -591,3 +591,10 @@ void init_events_module() {
   js_set(js, global, "getEventListeners", js_mkfun(js_get_event_listeners));
   js_set(js, global, "EventTarget", js_obj_to_func(eventtarget_ctor));
 }
+
+void events_gc_update_roots(void (*op_val)(void *, jsval_t *), void *ctx) {
+  EventType *evt, *tmp;
+  HASH_ITER(hh, global_events, evt, tmp) {
+    for (int i = 0; i < evt->listener_count; i++) op_val(ctx, &evt->listeners[i].listener);
+  }
+}

@@ -6,6 +6,7 @@
 
 #include "ant.h"
 #include "gc.h"
+#include "roots.h"
 #include "tokens.h"
 #include "common.h"
 #include "arena.h"
@@ -53,6 +54,7 @@
 #include "modules/json.h"
 #include "modules/buffer.h"
 #include "modules/collections.h"
+#include "modules/events.h"
 #include "modules/navigator.h"
 #include "modules/server.h"
 #include "esm/remote.h"
@@ -661,7 +663,16 @@ static size_t strstring(struct js *js, jsval_t value, char *buf, size_t len);
 static size_t strkey(struct js *js, jsval_t value, char *buf, size_t len);
 
 static inline jsoff_t loadoff(struct js *js, jsoff_t off) {
-  assert(off + sizeof(jsoff_t) <= js->brk); jsoff_t val;
+  if (off + sizeof(jsoff_t) > js->brk) {
+    fprintf(stderr, "[LOADOFF] Invalid read: off=%u, brk=%u\n", off, js->brk);
+    void *bt[200];
+    int n = backtrace(bt, 200);
+    char **syms = backtrace_symbols(bt, n);
+    for (int i = 0; i < n; i++) fprintf(stderr, "  [%d] %s\n", i, syms[i]);
+    free(syms);
+    abort();
+  }
+  jsoff_t val;
   memcpy(&val, &js->mem[off], sizeof(val)); return val;
 }
 
@@ -4604,7 +4615,9 @@ static bool is_typeof_bare_ident(struct js *js) {
 jsval_t js_mkscope(struct js *js) {
   assert((js->flags & F_NOEXEC) == 0);
   if (global_scope_stack == NULL) utarray_new(global_scope_stack, &jsoff_icd);
-  jsoff_t prev = (jsoff_t) vdata(js->scope);
+  ROOTED(parent_scope, js->scope);
+  ROOT_SYNC(parent_scope);
+  jsoff_t prev = (jsoff_t) vdata(parent_scope);
   utarray_push_back(global_scope_stack, &prev);
   js->scope = mkobj(js, prev);
   return js->scope;
@@ -4878,7 +4891,7 @@ static void hoist_var_declarations(struct js *js, jsval_t var_scope) {
 }
 
 static jsval_t js_block(struct js *js, bool create_scope) {
-  jsval_t res = js_mkundef();
+  ROOTED(res, js_mkundef());
   bool scope_created = false;
   
   if (create_scope && lookahead(js) != TOK_RBRACE && block_needs_scope(js)) {
@@ -4892,9 +4905,10 @@ static jsval_t js_block(struct js *js, bool create_scope) {
   uint8_t peek;
   while ((peek = next(js)) != TOK_EOF && peek != TOK_RBRACE && !is_err(res)) {
     uint8_t t = js->tok;
-    res = js_stmt(js);
+    ROOT_UPDATE(res, js_stmt(js));
+    ROOT_SYNC(res);
     if (!is_err(res) && !is_block_tok(t) && !(js->had_newline || is_asi_ok_tok(js->tok))) {
-      res = js_mkerr_typed(js, JS_ERR_SYNTAX, "; expected"); break;
+      ROOT_UPDATE(res, js_mkerr_typed(js, JS_ERR_SYNTAX, "; expected")); break;
     }
     if (js->flags & (F_RETURN | F_THROW)) break;
   }
@@ -6355,17 +6369,19 @@ jsval_t call_js_internal(
   utarray_push_back(saved_scope_stack, &js->scope);
   utarray_push_back(saved_scope_stack, &js->this_val);
   
-  jsval_t target_this = peek_this();
-  jsoff_t parent_scope_offset;
+  ROOTED(target_this, peek_this());
+  ROOTED(parent_scope_val, js_mkundef());
   
   if (vtype(closure_scope) == T_OBJ) {
-    parent_scope_offset = (jsoff_t) vdata(closure_scope);
+    ROOT_UPDATE(parent_scope_val, closure_scope);
   } else {
-    parent_scope_offset = (jsoff_t) vdata(js->scope);
+    ROOT_UPDATE(parent_scope_val, js->scope);
   }
   
   if (global_scope_stack == NULL) utarray_new(global_scope_stack, &jsoff_icd);
-  jsval_t function_scope = mkobj(js, parent_scope_offset);
+  ROOT_SYNC(parent_scope_val);
+  jsoff_t parent_scope_offset = (jsoff_t) vdata(parent_scope_val);
+  ROOTED(function_scope, mkobj(js, parent_scope_offset));
   jsoff_t function_scope_offset = (jsoff_t)vdata(function_scope);
   utarray_push_back(global_scope_stack, &function_scope_offset);
   
@@ -6387,11 +6403,13 @@ jsval_t call_js_internal(
     if (is_spread) caller_pos += 3;
     js->pos = caller_pos;
     js->consumed = 1;
-    jsval_t arg = resolveprop(js, js_expr(js));
+    ROOT_SYNC(function_scope); ROOT_SYNC(target_this);
+    ROOTED(arg, resolveprop(js, js_expr(js)));
     caller_pos = js->pos;
     if (is_spread && vtype(arg) == T_ARR) {
       jsoff_t len = js_arr_len(js, arg);
       for (jsoff_t i = 0; i < len; i++) {
+        ROOT_SYNC(arg);
         jsval_t elem = js_arr_get(js, arg, i);
         utarray_push_back(args_arr, &elem);
       }
@@ -6421,11 +6439,14 @@ jsval_t call_js_internal(
     parsed_param_t *pp = (parsed_param_t *)utarray_eltptr(pf->params, (unsigned int)i);
     
     if (pp->is_destruct) {
-      jsval_t arg_val = (argi < argc) ? args[argi++] : js_mkundef();
+      ROOTED(arg_val, (argi < argc) ? args[argi++] : js_mkundef());
       if (vtype(arg_val) == T_UNDEF && pp->default_len > 0) {
-        arg_val = js_eval_str(js, &fn[pp->default_start], pp->default_len);
+        ROOT_UPDATE(arg_val, js_eval_str(js, &fn[pp->default_start], pp->default_len));
+        ROOT_SYNC(function_scope);
       }
+      ROOT_SYNC(function_scope);
       jsval_t r = bind_destruct_pattern(js, &fn[pp->pattern_off], pp->pattern_len, arg_val, function_scope);
+      ROOT_SYNC(function_scope);
       if (is_err(r)) {
         utarray_free(args_arr);
         restore_saved_scope(js);
@@ -6433,39 +6454,45 @@ jsval_t call_js_internal(
         return r;
       }
     } else {
-      jsval_t v;
+      ROOTED(v, js_mkundef());
       if (argi < argc) {
-        v = args[argi++];
+        ROOT_UPDATE(v, args[argi++]);
       } else if (pp->default_len > 0) {
-        v = js_eval_str(js, &fn[pp->default_start], pp->default_len);
-      } else {
-        v = js_mkundef();
+        ROOT_UPDATE(v, js_eval_str(js, &fn[pp->default_start], pp->default_len));
+        ROOT_SYNC(function_scope);
       }
-      jsval_t k = js_mkstr(js, &fn[pp->name_off], pp->name_len);
+      ROOTED(k, js_mkstr(js, &fn[pp->name_off], pp->name_len));
+      ROOT_SYNC(function_scope); ROOT_SYNC(v);
       if (!is_err(k)) mkprop_fast(js, function_scope, k, v, 0);
     }
   }
   
   if (pf->has_rest && pf->rest_param_len > 0) {
-    jsval_t rest_array = mkarr(js);
+    ROOT_SYNC(function_scope);
+    ROOTED(rest_array, mkarr(js));
     if (!is_err(rest_array)) {
       jsoff_t idx = 0;
       while (argi < argc) {
-        jsval_t key;
+        ROOTED(key, js_mkundef());
         if (idx < 10 && INTERN_IDX[idx]) {
-          key = js_mkstr(js, INTERN_IDX[idx], 1);
+          ROOT_UPDATE(key, js_mkstr(js, INTERN_IDX[idx], 1));
         } else {
           char idxstr[16];
           size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)idx);
-          key = js_mkstr(js, idxstr, idxlen);
+          ROOT_UPDATE(key, js_mkstr(js, idxstr, idxlen));
         }
+        ROOT_SYNC(rest_array);
         js_setprop(js, rest_array, key, args[argi++]);
         idx++;
       }
-      jsval_t len_key = js_mkstr(js, "length", 6);
+      ROOTED(len_key, js_mkstr(js, "length", 6));
+      ROOT_SYNC(rest_array);
       js_setprop(js, rest_array, len_key, tov((double) idx));
-      rest_array = mkval(T_ARR, vdata(rest_array));
-      js_setprop(js, function_scope, js_mkstr(js, &fn[pf->rest_param_start], pf->rest_param_len), rest_array);
+      ROOT_UPDATE(rest_array, mkval(T_ARR, vdata(rest_array)));
+      ROOT_SYNC(function_scope);
+      ROOTED(rest_key, js_mkstr(js, &fn[pf->rest_param_start], pf->rest_param_len));
+      ROOT_SYNC(function_scope); ROOT_SYNC(rest_array);
+      js_setprop(js, function_scope, rest_key, rest_array);
     }
   }
   
@@ -6479,9 +6506,12 @@ jsval_t call_js_internal(
   }
   
   if (needs_arguments) {
+    ROOT_SYNC(function_scope);
     setup_arguments(js, function_scope, args, argc, func_strict);
+    ROOT_SYNC(function_scope);
   }
   
+   ROOT_SYNC(function_scope);
    jsval_t slot_name = get_slot(js, func_val, SLOT_NAME);
    if (vtype(slot_name) == T_STR && vtype(func_val) == T_FUNC) {
      jsoff_t len;
@@ -6489,6 +6519,7 @@ jsval_t call_js_internal(
      if (len > 0) mkprop_fast(js, function_scope, slot_name, func_val, CONSTMASK);
    }
   
+  ROOT_SYNC(function_scope);
   if (vtype(func_val) == T_FUNC) {
     jsval_t func_obj = mkval(T_OBJ, vdata(func_val));
     hoist_var_declarations_from_slot(js, function_scope, func_obj);
@@ -6499,10 +6530,10 @@ jsval_t call_js_internal(
   if (func_strict && (vtype(target_this) == T_UNDEF || vtype(target_this) == T_NULL ||
       (vtype(target_this) == T_OBJ && vdata(target_this) == 0))) {
     js->this_val = js_mkundef();
-  } else js->this_val = target_this;
+  } else { ROOT_SYNC(target_this); js->this_val = target_this; }
   
   js->flags = F_CALL | (func_strict ? F_STRICT : 0);
-  jsval_t res;
+  ROOTED(res, js_mkundef());
   
   void *saved_token_stream = js->token_stream;
   int saved_token_stream_pos = js->token_stream_pos;
@@ -6522,11 +6553,11 @@ jsval_t call_js_internal(
   }
   
   if (pf->is_expr) {
-    res = js_eval_str(js, &fn[pf->body_start], pf->body_len);
-    res = resolveprop(js, res);
+    ROOT_UPDATE(res, js_eval_str(js, &fn[pf->body_start], pf->body_len));
+    ROOT_UPDATE(res, resolveprop(js, res));
   } else {
-    res = js_eval(js, &fn[pf->body_start], pf->body_len);
-    if (!is_err(res) && !(js->flags & F_RETURN)) res = js_mkundef();
+    ROOT_UPDATE(res, js_eval(js, &fn[pf->body_start], pf->body_len));
+    if (!is_err(res) && !(js->flags & F_RETURN)) ROOT_UPDATE(res, js_mkundef());
   }
   
   js->token_stream = saved_token_stream;
@@ -6647,14 +6678,16 @@ jsval_t call_js_with_args(struct js *js, jsval_t func, jsval_t *args, int nargs)
 }
 
 jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnlen, jsval_t closure_scope, jsval_t *args, int nargs, jsval_t func_val) {
-  jsoff_t parent_scope_offset;
+  ROOTED(parent_scope_val, js_mkundef());
   if (vtype(closure_scope) == T_OBJ) {
-    parent_scope_offset = (jsoff_t) vdata(closure_scope);
-  } else parent_scope_offset = (jsoff_t) vdata(js->scope);
+    ROOT_UPDATE(parent_scope_val, closure_scope);
+  } else ROOT_UPDATE(parent_scope_val, js->scope);
   
-  jsval_t saved_scope = js->scope;
+  ROOTED(saved_scope, js->scope);
   if (global_scope_stack == NULL) utarray_new(global_scope_stack, &jsoff_icd);
-   jsval_t function_scope = mkobj(js, parent_scope_offset);
+   ROOT_SYNC(parent_scope_val);
+   jsoff_t parent_scope_offset = (jsoff_t) vdata(parent_scope_val);
+   ROOTED(function_scope, mkobj(js, parent_scope_offset));
    jsoff_t function_scope_offset = (jsoff_t) vdata(function_scope);
    utarray_push_back(global_scope_stack, &function_scope_offset);
    js->scope = function_scope;
@@ -6662,11 +6695,14 @@ jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnlen, jsv
    jsval_t slot_name = get_slot(js, func_val, SLOT_NAME);
    if (vtype(slot_name) == T_STR && vtype(func_val) == T_FUNC) {
      jsoff_t len; vstr(js, slot_name, &len);
+     ROOT_SYNC(function_scope);
      if (len > 0) mkprop(js, function_scope, slot_name, func_val, CONSTMASK);
    }
    
+  ROOT_SYNC(function_scope);
   jsval_t func_obj = mkval(T_OBJ, vdata(func_val));
   hoist_var_declarations_from_slot(js, function_scope, func_obj);
+  ROOT_SYNC(function_scope);
   
   jsoff_t fnpos = 1;
   int arg_idx = 0;
@@ -6702,8 +6738,10 @@ jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnlen, jsv
       }
       jsoff_t pattern_len = fnpos - pattern_start;
       
-      jsval_t arg_val = (arg_idx < nargs) ? args[arg_idx] : js_mkundef();
+      ROOTED(arg_val, (arg_idx < nargs) ? args[arg_idx] : js_mkundef());
+      ROOT_SYNC(function_scope);
       jsval_t r = bind_destruct_pattern(js, &fn[pattern_start], pattern_len, arg_val, function_scope);
+      ROOT_SYNC(function_scope);
       if (is_err(r)) return r;
       
       arg_idx++;
@@ -6725,35 +6763,42 @@ jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnlen, jsv
     jsoff_t default_start = 0, default_len = 0;
     fnpos = extract_default_param_value(fn, fnlen, fnpos + identlen, &default_start, &default_len);
     
-    jsval_t v;
+    ROOTED(v, js_mkundef());
     if (arg_idx < nargs) {
-      v = args[arg_idx];
+      ROOT_UPDATE(v, args[arg_idx]);
     } else if (default_len > 0) {
-      v = js_eval_str(js, &fn[default_start], default_len);
-    } else {
-      v = js_mkundef();
+      ROOT_UPDATE(v, js_eval_str(js, &fn[default_start], default_len));
+      ROOT_SYNC(function_scope);
     }
-    js_setprop(js, function_scope, js_mkstr(js, &fn[param_name_pos], identlen), v);
+    ROOTED(param_key, js_mkstr(js, &fn[param_name_pos], identlen));
+    ROOT_SYNC(function_scope); ROOT_SYNC(v);
+    js_setprop(js, function_scope, param_key, v);
     arg_idx++;
     if (fnpos < fnlen && fn[fnpos] == ',') fnpos++;
   }
   
   if (has_rest && rest_param_len > 0) {
-    jsval_t rest_array = mkarr(js);
+    ROOT_SYNC(function_scope);
+    ROOTED(rest_array, mkarr(js));
     if (!is_err(rest_array)) {
       jsoff_t idx = 0;
       while (arg_idx < nargs) {
         char idxstr[16];
         size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)idx);
-        jsval_t key = js_mkstr(js, idxstr, idxlen);
+        ROOTED(key, js_mkstr(js, idxstr, idxlen));
+        ROOT_SYNC(rest_array);
         js_setprop(js, rest_array, key, args[arg_idx]);
         idx++;
         arg_idx++;
       }
-      jsval_t len_key = js_mkstr(js, "length", 6);
+      ROOTED(len_key, js_mkstr(js, "length", 6));
+      ROOT_SYNC(rest_array);
       js_setprop(js, rest_array, len_key, tov((double) idx));
-      rest_array = mkval(T_ARR, vdata(rest_array));
-      js_setprop(js, function_scope, js_mkstr(js, &fn[rest_param_start], rest_param_len), rest_array);
+      ROOT_UPDATE(rest_array, mkval(T_ARR, vdata(rest_array)));
+      ROOT_SYNC(function_scope);
+      ROOTED(rest_key, js_mkstr(js, &fn[rest_param_start], rest_param_len));
+      ROOT_SYNC(function_scope); ROOT_SYNC(rest_array);
+      js_setprop(js, function_scope, rest_key, rest_array);
     }
   }
   
@@ -6767,11 +6812,13 @@ jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnlen, jsv
   jsoff_t body_len = fnlen - fnpos - (is_block ? 1 : 0);
   
   bool func_strict = is_strict_function_body(&fn[fnpos], body_len);
+  ROOT_SYNC(function_scope);
   if (code_uses_arguments(&fn[fnpos], body_len)) {
     setup_arguments(js, function_scope, args, nargs, func_strict);
+    ROOT_SYNC(function_scope);
   }
   
-  jsval_t saved_this = js->this_val;
+  ROOTED(saved_this, js->this_val);
   jsval_t target_this = peek_this();
   
   if (func_strict && (vtype(target_this) == T_UNDEF || vtype(target_this) == T_NULL ||
@@ -6782,15 +6829,16 @@ jsval_t call_js_code_with_args(struct js *js, const char *fn, jsoff_t fnlen, jsv
   }
   js->flags = F_CALL | (func_strict ? F_STRICT : 0);
   
-  jsval_t res;
+  ROOTED(res, js_mkundef());
   if (!is_block) {
-    res = js_eval_str(js, &fn[fnpos], body_len);
-    res = resolveprop(js, res);
+    ROOT_UPDATE(res, js_eval_str(js, &fn[fnpos], body_len));
+    ROOT_UPDATE(res, resolveprop(js, res));
   } else {
-    res = js_eval(js, &fn[fnpos], body_len);
-    if (!is_err(res) && !(js->flags & F_RETURN)) res = js_mkundef();
+    ROOT_UPDATE(res, js_eval(js, &fn[fnpos], body_len));
+    if (!is_err(res) && !(js->flags & F_RETURN)) ROOT_UPDATE(res, js_mkundef());
   }
   
+  ROOT_SYNC(saved_this); ROOT_SYNC(saved_scope);
   js->this_val = saved_this;
   if (global_scope_stack && utarray_len(global_scope_stack) > 0) utarray_pop_back(global_scope_stack);
   
@@ -6830,16 +6878,16 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
     js->clen = codereflen(args);
     js->pos = skiptonext(js->code, js->clen, 0, NULL);
     
-    jsval_t res = call_ffi(js, (unsigned int)vdata(func));
+    ROOTED(ffi_res, call_ffi(js, (unsigned int)vdata(func)));
     
     js->code = code; js->clen = clen; js->pos = pos;
     js->flags = (flags & ~F_THROW) | (js->flags & F_THROW);
     js->tok = tok;
     js->consumed = 1;
-    return res;
+    return ffi_res;
   }
   
-  jsval_t target_this = peek_this();
+  ROOTED(target_this, peek_this());
   jsval_t target_proto = (vtype(target_this) == T_OBJ) ? get_slot(js, target_this, SLOT_PROTO) : js_mkundef();
   
   if (vtype(func) == T_FUNC && vtype(target_this) == T_OBJ) {
@@ -6868,10 +6916,10 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
   js->pos = skiptonext(js->code, js->clen, 0, NULL);
   
   uint8_t tok = js->tok, flags = js->flags;
-  jsval_t res = js_mkundef();
+  ROOTED(res, js_mkundef());
   
   if (vtype(func) == T_FUNC) {
-    jsval_t func_obj = mkval(T_OBJ, vdata(func));
+    ROOTED(func_obj, mkval(T_OBJ, vdata(func)));
     jsval_t cfunc_slot = get_slot(js, func_obj, SLOT_CFUNC);
     if (vtype(cfunc_slot) == T_CFUNC) {
       jsval_t bound_this_slot = get_slot(js, func_obj, SLOT_BOUND_THIS);
@@ -6889,7 +6937,7 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
       jsval_t *bound_args = resolve_bound_args(js, func_obj, NULL, 0, &bound_argc);
       
       if (!bound_args) {
-        res = call_c(js, (jsval_t(*)(struct js *, jsval_t *, int)) vdata(cfunc_slot));
+        ROOT_UPDATE(res, call_c(js, (jsval_t(*)(struct js *, jsval_t *, int)) vdata(cfunc_slot)));
       } else {
         UT_array *args_arr;
         utarray_new(args_arr, &jsval_icd);
@@ -6909,7 +6957,7 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
         int total_argc = (int)utarray_len(args_arr);
         jsval_t saved_this = js->this_val;
         js->this_val = peek_this();
-        res = ((jsval_t(*)(struct js *, jsval_t *, int)) vdata(cfunc_slot))(js, argv, total_argc);
+        ROOT_UPDATE(res, ((jsval_t(*)(struct js *, jsval_t *, int)) vdata(cfunc_slot))(js, argv, total_argc));
         js->this_val = saved_this;
         utarray_free(args_arr);
       }
@@ -6918,32 +6966,34 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
       
       if (has_bound_this) {
         pop_this();
+        ROOT_SYNC(target_this);
         push_this(target_this);
       }
     } else {
+      ROOT_SYNC(func_obj);
       jsval_t builtin_slot = get_slot(js, func_obj, SLOT_BUILTIN);
-      if (vtype(builtin_slot) == T_NUM && (int)tod(builtin_slot) == BUILTIN_OBJECT) res = call_c(js, builtin_Object); else {
+      if (vtype(builtin_slot) == T_NUM && (int)tod(builtin_slot) == BUILTIN_OBJECT) ROOT_UPDATE(res, call_c(js, builtin_Object)); else {
       jsoff_t fnlen;
       
       const char *code_str = get_func_code(js, func_obj, &fnlen);
       if (!code_str) return js_mkerr(js, "function has no code");
       
-      jsval_t closure_scope = get_slot(js, func_obj, SLOT_SCOPE);
+      ROOTED(closure_scope, get_slot(js, func_obj, SLOT_SCOPE));
       jsval_t async_slot = get_slot(js, func_obj, SLOT_ASYNC);
       bool is_async = (async_slot == js_true);
       
-      jsval_t captured_this = js_mkundef();
+      ROOTED(captured_this, js_mkundef());
       bool is_arrow = false;
       bool is_bound = false;
       
       jsval_t this_slot = get_slot(js, func_obj, SLOT_THIS);
       if (vtype(this_slot) != T_UNDEF) {
-        captured_this = this_slot; is_arrow = true;
+        ROOT_UPDATE(captured_this, this_slot); is_arrow = true;
       }
       
       jsval_t bound_this_slot = get_slot(js, func_obj, SLOT_BOUND_THIS);
       if (vtype(bound_this_slot) != T_UNDEF && vtype(js->new_target) == T_UNDEF) {
-        captured_this = bound_this_slot; is_bound = true;
+        ROOT_UPDATE(captured_this, bound_this_slot); is_bound = true;
       }
       
       int bound_argc;
@@ -6976,15 +7026,17 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
       
       if (is_arrow || is_bound) {
         pop_this();
+        ROOT_SYNC(captured_this);
         push_this(captured_this);
       }
       
+      ROOT_SYNC(func_obj);
       if (get_slot(js, func_obj, SLOT_DEFAULT_CTOR) == js_true) {
         jsval_t super_ctor = js->super_val;
         uint8_t st = vtype(super_ctor);
         if (st == T_FUNC || st == T_CFUNC) {
           js->code = code; js->clen = clen; js->pos = pos;
-          res = do_call_op(js, super_ctor, args);
+          ROOT_UPDATE(res, do_call_op(js, super_ctor, args));
           js->super_val = saved_super;
           js->current_func = saved_func;
           pop_call_frame(); goto restore_state;
@@ -7011,19 +7063,20 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
         jsoff_t init_start = metadata[i * 4 + 2];
         jsoff_t init_end = metadata[i * 4 + 3];
         
-        jsval_t fname = js_mkstr(js, &source[name_off], name_len);
+        ROOTED(fname, js_mkstr(js, &source[name_off], name_len));
         if (is_err(fname)) {
           js->current_func = saved_func;
           pop_call_frame();
           return fname;
         }
         
-        jsval_t field_val = js_mkundef();
+        ROOTED(field_val, js_mkundef());
         if (init_start > 0 && init_end > init_start) {
-          field_val = js_eval_str(js, &source[init_start], init_end - init_start);
-          field_val = resolveprop(js, field_val);
+          ROOT_UPDATE(field_val, js_eval_str(js, &source[init_start], init_end - init_start));
+          ROOT_UPDATE(field_val, resolveprop(js, field_val));
         }
         
+        ROOT_SYNC(target_this); ROOT_SYNC(fname); ROOT_SYNC(field_val);
         jsval_t set_res = js_setprop(js, target_this, fname, field_val);
         if (is_err(set_res)) {
           js->current_func = saved_func;
@@ -7032,6 +7085,7 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
         }
       }
 skip_fields:
+        ROOT_SYNC(closure_scope);
         if (is_async) {
           UT_array *call_args;
           utarray_new(call_args, &jsval_icd);
@@ -7048,9 +7102,13 @@ skip_fields:
           }
           jsval_t *argv = (jsval_t *)utarray_front(call_args);
           int argc = (int)utarray_len(call_args);
-          res = start_async_in_coroutine(js, code_str, fnlen, closure_scope, argv, argc);
+          ROOT_SYNC(closure_scope);
+          ROOT_UPDATE(res, start_async_in_coroutine(js, code_str, fnlen, closure_scope, argv, argc));
           utarray_free(call_args);
-        } else res = call_js_internal(js, code_str, fnlen, closure_scope, bound_args, bound_argc, func);
+        } else {
+          ROOT_SYNC(closure_scope);
+          ROOT_UPDATE(res, call_js_internal(js, code_str, fnlen, closure_scope, bound_args, bound_argc, func));
+        }
         pop_call_frame();
         if (bound_args) free(bound_args);
         js->super_val = saved_super;
@@ -7058,7 +7116,7 @@ skip_fields:
       }
     }
   } else {
-    res = call_c(js, (jsval_t(*)(struct js *, jsval_t *, int)) vdata(func));
+    ROOT_UPDATE(res, call_c(js, (jsval_t(*)(struct js *, jsval_t *, int)) vdata(func)));
   }
   
 restore_state:
@@ -7247,8 +7305,8 @@ jsval_t coerce_to_str_concat(struct js *js, jsval_t v) {
 static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
   if (js->flags & F_NOEXEC) return 0;
   
-  jsval_t l = is_assign(op) ? lhs : resolveprop(js, lhs);
-  jsval_t r = resolveprop(js, rhs);
+  ROOTED(l, is_assign(op) ? lhs : resolveprop(js, lhs));
+  ROOTED(r, resolveprop(js, rhs));
   
   if (is_err(l)) return l;
   if (is_err(r)) return r;
@@ -7365,11 +7423,11 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
     } else if ((lt == T_NUM && rtype == T_STR) || (lt == T_STR && rtype == T_NUM)) {
       eq = js_to_number(js, l) == js_to_number(js, r);
     } else if (lt == T_ARR || lt == T_OBJ) {
-      jsval_t l_prim = js_tostring_val(js, l);
-      if (!is_err(l_prim)) return do_op(js, op, l_prim, r);
+      ROOTED(l_prim, js_tostring_val(js, l));
+      if (!is_err(l_prim)) { ROOT_SYNC(r); return do_op(js, op, l_prim, r); }
     } else if (rtype == T_ARR || rtype == T_OBJ) {
-      jsval_t r_prim = js_tostring_val(js, r);
-      if (!is_err(r_prim)) return do_op(js, op, l, r_prim);
+      ROOTED(r_prim, js_tostring_val(js, r));
+      if (!is_err(r_prim)) { ROOT_SYNC(l); return do_op(js, op, l, r_prim); }
     }
     return mkval(T_BOOL, op == TOK_EQ ? eq : !eq);
   }
@@ -7381,9 +7439,9 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
     if (vtype(lu) == T_BIGINT && vtype(ru) == T_BIGINT) return bigint_add(js, lu, ru);
     if (vtype(lu) == T_BIGINT || vtype(ru) == T_BIGINT) return js_mkerr(js, "Cannot mix BigInt value and other types");
     if (is_non_numeric(lu) || is_non_numeric(ru) || (vtype(lu) == T_STR && vtype(ru) == T_STR)) {
-      jsval_t l_str = coerce_to_str_concat(js, l);
+      ROOTED(l_str, coerce_to_str_concat(js, l));
       if (is_err(l_str)) return l_str;
-      jsval_t r_str = coerce_to_str_concat(js, r);
+      ROOTED(r_str, coerce_to_str_concat(js, r));
       if (is_err(r_str)) return r_str;
       return do_string_op(js, op, l_str, r_str);
     }
@@ -7495,6 +7553,7 @@ static jsval_t js_template_literal(struct js *js) {
   
   size_t n = 1; 
   jsval_t parts[64]; 
+  jshdl_t part_handles[64];
   int part_count = 0;
   
   while (n < template_len - 1 && part_count < 64) {
@@ -7513,7 +7572,10 @@ static jsval_t js_template_literal(struct js *js) {
       size_t part_len = n - part_start;
       size_t needed = sizeof(jsoff_t) + part_len;
       if (js->brk + needed > js->size) {
-        if (!js_try_grow_memory(js, needed)) return js_mkerr(js, "oom");
+        if (!js_try_grow_memory(js, needed)) {
+          for (int j = 0; j < part_count; j++) js_unroot(js, part_handles[j]);
+          return js_mkerr(js, "oom");
+        }
       }
       uint8_t *out = &js->mem[js->brk + sizeof(jsoff_t)];
       size_t out_len = 0;
@@ -7532,7 +7594,9 @@ static jsval_t js_template_literal(struct js *js) {
         }
       }
       
-      parts[part_count++] = js_mkstr(js, NULL, out_len);
+      parts[part_count] = js_mkstr(js, NULL, out_len);
+      part_handles[part_count] = js_root(js, parts[part_count]);
+      part_count++;
     }
     
     if (n < template_len - 1 && in[n] == '$' && in[n + 1] == '{') {
@@ -7546,28 +7610,46 @@ static jsval_t js_template_literal(struct js *js) {
         if (brace_count > 0) n++;
       }
       
-      if (brace_count != 0) return js_mkerr_typed(js, JS_ERR_SYNTAX, "unclosed ${");
+      if (brace_count != 0) {
+        for (int j = 0; j < part_count; j++) js_unroot(js, part_handles[j]);
+        return js_mkerr_typed(js, JS_ERR_SYNTAX, "unclosed ${");
+      }
       
       jsval_t expr_result = js_eval_str(js, (const char *)&in[expr_start], (jsoff_t)(n - expr_start));
-      if (is_err(expr_result)) return expr_result;
+      if (is_err(expr_result)) {
+        for (int j = 0; j < part_count; j++) js_unroot(js, part_handles[j]);
+        return expr_result;
+      }
       expr_result = resolveprop(js, expr_result);
 
       if (vtype(expr_result) == T_SYMBOL) {
+        for (int j = 0; j < part_count; j++) js_unroot(js, part_handles[j]);
         return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert a Symbol value to a string");
       }
       
       if (vtype(expr_result) != T_STR) {
         expr_result = coerce_to_str(js, expr_result);
-        if (is_err(expr_result)) return expr_result;
+        if (is_err(expr_result)) {
+          for (int j = 0; j < part_count; j++) js_unroot(js, part_handles[j]);
+          return expr_result;
+        }
       }
       
-      parts[part_count++] = expr_result;
+      parts[part_count] = expr_result;
+      part_handles[part_count] = js_root(js, parts[part_count]);
+      part_count++;
       n++;
     }
   }
   
   if (part_count == 0) return js_mkstr(js, "", 0);
-  if (part_count == 1) return parts[0];
+  if (part_count == 1) {
+    jsval_t result = js_deref(js, part_handles[0]);
+    js_unroot(js, part_handles[0]);
+    return result;
+  }
+  
+  for (int j = 0; j < part_count; j++) parts[j] = js_deref(js, part_handles[j]);
   
   size_t total_len = 0;
   for (int i = 0; i < part_count; i++) {
@@ -7577,7 +7659,12 @@ static jsval_t js_template_literal(struct js *js) {
   }
   
   jsval_t result = js_mkstr(js, NULL, total_len);
-  if (is_err(result)) return result;
+  if (is_err(result)) {
+    for (int j = 0; j < part_count; j++) js_unroot(js, part_handles[j]);
+    return result;
+  }
+  
+  for (int j = 0; j < part_count; j++) parts[j] = js_deref(js, part_handles[j]);
   
   jsoff_t result_len, result_off = vstr(js, result, &result_len);
   size_t pos = 0;
@@ -7590,6 +7677,7 @@ static jsval_t js_template_literal(struct js *js) {
     }
   }
   
+  for (int j = 0; j < part_count; j++) js_unroot(js, part_handles[j]);
   return result;
 }
 
@@ -7602,8 +7690,14 @@ static jsval_t js_tagged_template(struct js *js, jsval_t tag_func) {
   uint8_t *in = (uint8_t *) &js->code[js->toff];
   size_t template_len = js->tlen;
   jsval_t strings[64], values[64];
+  jshdl_t string_handles[64], value_handles[64];
   int string_count = 0, value_count = 0;
   size_t n = 1;
+  
+#define TAGGED_TEMPLATE_CLEANUP() do { \
+  for (int j = 0; j < string_count; j++) js_unroot(js, string_handles[j]); \
+  for (int j = 0; j < value_count; j++) js_unroot(js, value_handles[j]); \
+} while(0)
   
   while (n < template_len - 1) {
     size_t part_start = n;
@@ -7617,6 +7711,7 @@ static jsval_t js_tagged_template(struct js *js, jsval_t tag_func) {
     size_t needed = sizeof(jsoff_t) + (n - part_start);
     if (js->brk + needed > js->size) {
       if (!js_try_grow_memory(js, needed)) {
+        TAGGED_TEMPLATE_CLEANUP();
         return js_mkerr(js, "oom");
       }
     }
@@ -7635,7 +7730,9 @@ static jsval_t js_tagged_template(struct js *js, jsval_t tag_func) {
         out[out_len++] = in[i];
       }
     }
-    strings[string_count++] = js_mkstr(js, NULL, out_len);
+    strings[string_count] = js_mkstr(js, NULL, out_len);
+    string_handles[string_count] = js_root(js, strings[string_count]);
+    string_count++;
     
     if (n >= template_len - 1 || in[n] != '$') break;
     
@@ -7647,32 +7744,50 @@ static jsval_t js_tagged_template(struct js *js, jsval_t tag_func) {
       else if (in[n] == '}') brace_count--;
       if (brace_count > 0) n++;
     }
-    if (brace_count != 0) return js_mkerr_typed(js, JS_ERR_SYNTAX, "unclosed ${");
+    if (brace_count != 0) {
+      TAGGED_TEMPLATE_CLEANUP();
+      return js_mkerr_typed(js, JS_ERR_SYNTAX, "unclosed ${");
+    }
     
     jsval_t expr_result = js_eval_str(js, (const char *)&in[expr_start], (jsoff_t)(n - expr_start));
-    if (is_err(expr_result)) return expr_result;
+    if (is_err(expr_result)) {
+      TAGGED_TEMPLATE_CLEANUP();
+      return expr_result;
+    }
     expr_result = resolveprop(js, expr_result);
-    values[value_count++] = expr_result;
+    values[value_count] = expr_result;
+    value_handles[value_count] = js_root(js, values[value_count]);
+    value_count++;
     n++;
   }
   
-  jsval_t strings_arr = mkarr(js);
+  for (int j = 0; j < string_count; j++) strings[j] = js_deref(js, string_handles[j]);
+  for (int j = 0; j < value_count; j++) values[j] = js_deref(js, value_handles[j]);
+  
+  ROOTED(strings_arr, mkarr(js));
   for (int i = 0; i < string_count; i++) {
+    strings[i] = js_deref(js, string_handles[i]);
+    ROOT_SYNC(strings_arr);
     char idx[16];
     snprintf(idx, sizeof(idx), "%d", i);
     js_setprop(js, strings_arr, js_mkstr(js, idx, strlen(idx)), strings[i]);
   }
+  ROOT_SYNC(strings_arr);
   js_setprop(js, strings_arr, js_mkstr(js, "length", 6), tov((double)string_count));
-  strings_arr = mkval(T_ARR, vdata(strings_arr));
+  ROOT_UPDATE(strings_arr, mkval(T_ARR, vdata(strings_arr)));
   
   jsval_t args[65];
+  ROOT_SYNC(strings_arr);
   args[0] = strings_arr;
   for (int i = 0; i < value_count; i++) {
-    args[i + 1] = values[i];
+    args[i + 1] = js_deref(js, value_handles[i]);
   }
   
   uint8_t saved_flags = js->flags;
   jsval_t result = call_js_with_args(js, tag_func, args, 1 + value_count);
+  
+  TAGGED_TEMPLATE_CLEANUP();
+#undef TAGGED_TEMPLATE_CLEANUP
   
   JS_RESTORE_STATE(js, saved);
   js->flags = saved_flags;
@@ -8906,12 +9021,13 @@ static jsval_t js_group(struct js *js) {
         return js_mkerr_typed(js, JS_ERR_SYNTAX, "Parenthesized expression cannot be empty");
       }
       
-      jsval_t v = js_expr(js);
+      ROOTED(v, js_expr(js));
       if (is_err(v)) { js->parse_depth--; return v; }
       
       while (next(js) == TOK_COMMA) {
         js->consumed = 1;
-        v = js_expr(js);
+        ROOT_UPDATE(v, js_expr(js));
+        ROOT_SYNC(v);
         if (is_err(v)) { js->parse_depth--; return v; }
       }
       
@@ -8929,9 +9045,11 @@ static jsval_t js_group(struct js *js) {
 }
 
 static jsval_t js_call_dot(struct js *js) {
-  jsval_t res = js_group(js);
-  jsval_t obj = js_mkundef();
+  ROOTED(res, js_group(js));
   if (is_err(res)) return res;
+  
+  ROOTED(obj, js_mkundef());
+  
   if (vtype(res) == T_CODEREF) {
     if (lookahead(js) == TOK_ARROW) return res;
     if (lookahead(js) == TOK_TEMPLATE) {
@@ -8941,7 +9059,8 @@ static jsval_t js_call_dot(struct js *js) {
       js->consumed = 1;
       next(js);
       js->consumed = 1;
-      res = js_tagged_template(js, tag_func);
+      ROOT_UPDATE(res, js_tagged_template(js, tag_func));
+      ROOT_SYNC(res);
       if (is_err(res)) return res;
       goto js_call_dot_loop;
     }
@@ -8961,7 +9080,8 @@ static jsval_t js_call_dot(struct js *js) {
     uint8_t saved_tok = js->tok;
     uint8_t saved_consumed = js->consumed;
     int saved_stream_pos = js->token_stream_pos;
-    res = lookup(js, &js->code[id_off], id_len);
+    ROOT_UPDATE(res, lookup(js, &js->code[id_off], id_len));
+    ROOT_SYNC(res);
     if (is_err(res)) {
       if (!(js->flags & F_STRICT) && !(js->flags & F_NOEXEC)) {
         js->pos = saved_pos;
@@ -8981,18 +9101,20 @@ static jsval_t js_call_dot(struct js *js) {
   }
   js_call_dot_loop:
   while (next(js) == TOK_LPAREN || next(js) == TOK_DOT || next(js) == TOK_OPTIONAL_CHAIN || next(js) == TOK_LBRACKET || next(js) == TOK_TEMPLATE) {
+    ROOT_SYNC(res);
     if (js->tok == TOK_TEMPLATE) {
-      if (vtype(res) == T_PROP) res = resolveprop(js, res);
+      if (vtype(res) == T_PROP) { ROOT_UPDATE(res, resolveprop(js, res)); ROOT_SYNC(res); }
       if (is_err(res)) return res;
       js->consumed = 1;
-      res = js_tagged_template(js, res);
+      ROOT_UPDATE(res, js_tagged_template(js, res));
+      ROOT_SYNC(res);
       if (is_err(res)) return res;
     } else if (js->tok == TOK_DOT || js->tok == TOK_OPTIONAL_CHAIN) {
       uint8_t op = js->tok;
       js->consumed = 1;
       if (vtype(res) != T_PROP && vtype(res) != T_PROPREF) {
-        obj = res;
-      } else obj = resolveprop(js, res);
+        ROOT_UPDATE(obj, res);
+      } else ROOT_UPDATE(obj, resolveprop(js, res));
       jsval_t prop_name;
       uint8_t nxt = next(js);
       if (nxt == TOK_HASH) {
@@ -9011,36 +9133,43 @@ static jsval_t js_call_dot(struct js *js) {
         if (is_err(idx)) return idx;
         if (next(js) != TOK_RBRACKET) return js_mkerr_typed(js, JS_ERR_SYNTAX, "] expected");
         js->consumed = 1;
+        ROOT_SYNC(obj);
         if (op == TOK_OPTIONAL_CHAIN && (vtype(obj) == T_NULL || vtype(obj) == T_UNDEF)) {
-          res = js_mkundef();
+          ROOT_UPDATE(res, js_mkundef());
         } else {
-          res = do_op(js, TOK_BRACKET, res, idx);
+          ROOT_SYNC(res);
+          ROOT_UPDATE(res, do_op(js, TOK_BRACKET, res, idx));
         }
         continue;
       } else {
         prop_name = js_group(js);
       }
+      ROOT_SYNC(obj);
       if (op == TOK_OPTIONAL_CHAIN && (vtype(obj) == T_NULL || vtype(obj) == T_UNDEF)) {
-        res = js_mkundef();
+        ROOT_UPDATE(res, js_mkundef());
       } else {
-        res = do_op(js, op, res, prop_name);
+        ROOT_SYNC(res);
+        ROOT_UPDATE(res, do_op(js, op, res, prop_name));
       }
     } else if (js->tok == TOK_LBRACKET) {
       js->consumed = 1;
       if (vtype(res) != T_PROP && vtype(res) != T_PROPREF) {
-        obj = res;
+        ROOT_UPDATE(obj, res);
       } else {
-        obj = resolveprop(js, res);
+        ROOT_UPDATE(obj, resolveprop(js, res));
       }
       jsval_t idx = js_expr(js);
       if (is_err(idx)) return idx;
       if (next(js) != TOK_RBRACKET) return js_mkerr_typed(js, JS_ERR_SYNTAX, "] expected");
       js->consumed = 1;
-      res = do_op(js, TOK_BRACKET, res, idx);
+      ROOT_SYNC(res);
+      ROOT_UPDATE(res, do_op(js, TOK_BRACKET, res, idx));
     } else {
+      ROOT_SYNC(obj);
+      ROOT_SYNC(res);
       jsval_t func_this = obj;
       bool is_super_call = (vtype(js->super_val) != T_UNDEF && res == js->super_val);
-      if (vtype(obj) == T_UNDEF) {
+      if (vtype(func_this) == T_UNDEF) {
         if (vtype(res) == T_PROPREF) {
           jsoff_t obj_off = propref_obj(res);
           func_this = mkval(T_OBJ, obj_off);
@@ -9052,7 +9181,9 @@ static jsval_t js_call_dot(struct js *js) {
         pop_this();
         return params;
       }
-      res = do_op(js, TOK_CALL, res, params);
+      ROOT_SYNC(res);
+      ROOT_UPDATE(res, do_op(js, TOK_CALL, res, params));
+      ROOT_SYNC(res);
       pop_this();
       if (is_super_call && !is_err(res) && is_object_type(res)) {
         jsoff_t proto_off = lkp_interned(js, mkval(T_OBJ, vdata(js->current_func)), INTERN_PROTOTYPE, 9);
@@ -9060,19 +9191,22 @@ static jsval_t js_call_dot(struct js *js) {
         js->this_val = res;
         if (global_this_stack.depth > 0) global_this_stack.stack[global_this_stack.depth - 1] = res;
       }
-      obj = js_mkundef();
+      ROOT_UPDATE(obj, js_mkundef());
     }
   }
+  
+  ROOT_SYNC(res);
   return res;
 }
 
 static jsval_t js_postfix(struct js *js) {
-  jsval_t res = js_call_dot(js);
+  ROOTED(res, js_call_dot(js));
   if (is_err(res)) return res;
   next(js);
   if ((js->tok == TOK_POSTINC || js->tok == TOK_POSTDEC) && !js->had_newline) {
     js->consumed = 1;
-    res = do_op(js, js->tok, res, 0);
+    ROOT_UPDATE(res, do_op(js, js->tok, res, 0));
+    ROOT_SYNC(res);
   }
   return res;
 }
@@ -9134,15 +9268,16 @@ static jsval_t js_unary(struct js *js) {
 
   do_new: {
     js->consumed = 1;
-    jsval_t obj = mkobj(js, 0);
+    ROOTED(obj, mkobj(js, 0));
     jsval_t saved_this = js->this_val;
     jsval_t saved_new_target = js->new_target;
 
-    jsval_t ctor = js_group(js);
+    ROOTED(ctor, js_group(js));
     if (is_err(ctor)) { return ctor; }
 
     while (next(js) == TOK_DOT || next(js) == TOK_LBRACKET) {
-      ctor = resolve_coderef(js, ctor);
+      ROOT_UPDATE(ctor, resolve_coderef(js, ctor));
+      ROOT_SYNC(ctor);
       if (is_err(ctor)) { return ctor; }
 
       if (js->tok == TOK_DOT) {
@@ -9151,24 +9286,28 @@ static jsval_t js_unary(struct js *js) {
           return js_mkerr_typed(js, JS_ERR_SYNTAX, "identifier expected");
         }
         js->consumed = 1;
-        ctor = do_op(js, TOK_DOT, ctor, mkcoderef((jsoff_t)js->toff, (jsoff_t)js->tlen));
+        ROOT_UPDATE(ctor, do_op(js, TOK_DOT, ctor, mkcoderef((jsoff_t)js->toff, (jsoff_t)js->tlen)));
+        ROOT_SYNC(ctor);
       } else {
         js->consumed = 1;
         jsval_t idx = js_expr(js);
         if (is_err(idx)) { return idx; }
         if (next(js) != TOK_RBRACKET) { return js_mkerr_typed(js, JS_ERR_SYNTAX, "] expected"); }
         js->consumed = 1;
-        ctor = do_op(js, TOK_BRACKET, ctor, idx);
+        ROOT_UPDATE(ctor, do_op(js, TOK_BRACKET, ctor, idx));
+        ROOT_SYNC(ctor);
       }
     }
 
-    ctor = resolve_coderef(js, ctor);
+    ROOT_UPDATE(ctor, resolve_coderef(js, ctor));
+    ROOT_SYNC(ctor);
     if (is_err(ctor)) { return ctor; }
-    if (vtype(ctor) == T_PROP || vtype(ctor) == T_PROPREF) ctor = resolveprop(js, ctor);
+    if (vtype(ctor) == T_PROP || vtype(ctor) == T_PROPREF) { ROOT_UPDATE(ctor, resolveprop(js, ctor)); ROOT_SYNC(ctor); }
 
     js->new_target = ctor;
 
-    jsval_t result;
+    ROOTED(result, js_mkundef());
+    ROOT_SYNC(obj);
     push_this(obj);
     if (next(js) == TOK_LPAREN) {
       jsval_t params = js_call_params(js);
@@ -9176,9 +9315,13 @@ static jsval_t js_unary(struct js *js) {
         pop_this(); 
         js->new_target = saved_new_target; return params; 
       }
-      result = do_op(js, TOK_CALL, ctor, params);
+      ROOT_SYNC(ctor);
+      ROOT_UPDATE(result, do_op(js, TOK_CALL, ctor, params));
+      ROOT_SYNC(result);
     } else {
-      result = do_op(js, TOK_CALL, ctor, mkcoderef(0, 0));
+      ROOT_SYNC(ctor);
+      ROOT_UPDATE(result, do_op(js, TOK_CALL, ctor, mkcoderef(0, 0)));
+      ROOT_SYNC(result);
       js->consumed = 0;
     }
     
@@ -9191,11 +9334,12 @@ static jsval_t js_unary(struct js *js) {
     if (is_err(result)) return result;
     
     uint8_t rtype = vtype(result);
-    jsval_t new_result = (
+    ROOTED(new_result, (
       rtype == T_OBJ || rtype == T_ARR ||
       rtype == T_PROMISE || rtype == T_FUNC
-     ) ? result : constructed_obj;
+     ) ? result : constructed_obj);
     
+    ROOT_SYNC(ctor);
     if (vtype(new_result) == T_OBJ && (vtype(ctor) == T_FUNC || vtype(ctor) == T_CFUNC)) {
       set_slot(js, new_result, SLOT_CTOR, ctor);
     }
@@ -9203,17 +9347,20 @@ static jsval_t js_unary(struct js *js) {
     jsval_t call_obj = js_mkundef();
     while (next(js) == TOK_DOT || next(js) == TOK_LBRACKET || next(js) == TOK_OPTIONAL_CHAIN || next(js) == TOK_LPAREN) {
       uint8_t op = js->tok;
+      ROOT_SYNC(new_result);
       if (op == TOK_DOT || op == TOK_OPTIONAL_CHAIN) {
         js->consumed = 1;
         call_obj = new_result;
         if (op == TOK_OPTIONAL_CHAIN && (vtype(call_obj) == T_NULL || vtype(call_obj) == T_UNDEF)) {
-          new_result = call_obj = js_mkundef();
+          ROOT_UPDATE(new_result, js_mkundef());
+          call_obj = js_mkundef();
         } else {
           if (next(js) != TOK_IDENTIFIER && !is_keyword_propname(js->tok)) {
             return js_mkerr_typed(js, JS_ERR_SYNTAX, "identifier expected");
           }
           js->consumed = 1;
-          new_result = do_op(js, op, new_result, mkcoderef((jsoff_t)js->toff, (jsoff_t)js->tlen));
+          ROOT_UPDATE(new_result, do_op(js, op, new_result, mkcoderef((jsoff_t)js->toff, (jsoff_t)js->tlen)));
+          ROOT_SYNC(new_result);
         }
       } else if (op == TOK_LBRACKET) {
         js->consumed = 1;
@@ -9222,17 +9369,22 @@ static jsval_t js_unary(struct js *js) {
         if (is_err(idx)) return idx;
         if (next(js) != TOK_RBRACKET) return js_mkerr_typed(js, JS_ERR_SYNTAX, "] expected");
         js->consumed = 1;
-        new_result = do_op(js, TOK_BRACKET, new_result, idx);
+        ROOT_SYNC(new_result);
+        ROOT_UPDATE(new_result, do_op(js, TOK_BRACKET, new_result, idx));
+        ROOT_SYNC(new_result);
       } else {
         jsval_t func_this = vtype(call_obj) == T_UNDEF ? js->this_val : call_obj;
         push_this(func_this);
         jsval_t params = js_call_params(js);
         if (is_err(params)) { pop_this(); return params; }
-        new_result = do_op(js, TOK_CALL, new_result, params);
+        ROOT_SYNC(new_result);
+        ROOT_UPDATE(new_result, do_op(js, TOK_CALL, new_result, params));
+        ROOT_SYNC(new_result);
         pop_this();
         call_obj = js_mkundef();
       }
     }
+    ROOT_SYNC(new_result);
     return new_result;
   }
 
@@ -9474,7 +9626,7 @@ static jsval_t js_unary(struct js *js) {
 }
 
 static jsval_t js_expr_bp(struct js *js, uint8_t min_bp) {
-  jsval_t lhs = js_unary(js);
+  ROOTED(lhs, js_unary(js));
   if (is_err(lhs)) return lhs;
 
   loop: {
@@ -9518,23 +9670,26 @@ static jsval_t js_expr_bp(struct js *js, uint8_t min_bp) {
     do_binop: {
       jsval_t rhs = js_expr_bp(js, bp + 1);
       if (is_err(rhs)) return rhs;
-      lhs = do_op(js, tok, lhs, rhs);
+      ROOT_UPDATE(lhs, do_op(js, tok, lhs, rhs));
+      ROOT_SYNC(lhs);
       goto loop;
     }
 
     do_exp: {
       jsval_t rhs = js_expr_bp(js, bp);
       if (is_err(rhs)) return rhs;
-      lhs = do_op(js, TOK_EXP, lhs, rhs);
+      ROOT_UPDATE(lhs, do_op(js, TOK_EXP, lhs, rhs));
+      ROOT_SYNC(lhs);
       goto loop;
     }
 
     do_lor: {
       uint8_t flags = js->flags;
-      lhs = resolveprop(js, lhs);
+      ROOT_UPDATE(lhs, resolveprop(js, lhs));
+      ROOT_SYNC(lhs);
       if (js_truthy(js, lhs)) js->flags |= F_NOEXEC;
       jsval_t rhs = js_expr_bp(js, bp);
-      if (!(flags & F_NOEXEC) && !js_truthy(js, lhs)) lhs = rhs;
+      if (!(flags & F_NOEXEC) && !js_truthy(js, lhs)) { ROOT_UPDATE(lhs, rhs); }
       js->flags = flags;
       if (is_err(rhs)) return rhs;
       goto loop;
@@ -9542,10 +9697,11 @@ static jsval_t js_expr_bp(struct js *js, uint8_t min_bp) {
 
     do_land: {
       uint8_t flags = js->flags;
-      lhs = resolveprop(js, lhs);
+      ROOT_UPDATE(lhs, resolveprop(js, lhs));
+      ROOT_SYNC(lhs);
       if (!js_truthy(js, lhs)) js->flags |= F_NOEXEC;
       jsval_t rhs = js_expr_bp(js, bp);
-      if (!(flags & F_NOEXEC) && js_truthy(js, lhs)) lhs = rhs;
+      if (!(flags & F_NOEXEC) && js_truthy(js, lhs)) { ROOT_UPDATE(lhs, rhs); }
       js->flags = flags;
       if (is_err(rhs)) return rhs;
       goto loop;
@@ -9553,11 +9709,12 @@ static jsval_t js_expr_bp(struct js *js, uint8_t min_bp) {
 
     do_nullish: {
       uint8_t flags = js->flags;
-      lhs = resolveprop(js, lhs);
+      ROOT_UPDATE(lhs, resolveprop(js, lhs));
+      ROOT_SYNC(lhs);
       uint8_t lhs_type = vtype(lhs);
       if (lhs_type != T_NULL && lhs_type != T_UNDEF) js->flags |= F_NOEXEC;
       jsval_t rhs = js_expr_bp(js, bp);
-      if (!(flags & F_NOEXEC) && (lhs_type == T_NULL || lhs_type == T_UNDEF)) lhs = rhs;
+      if (!(flags & F_NOEXEC) && (lhs_type == T_NULL || lhs_type == T_UNDEF)) { ROOT_UPDATE(lhs, rhs); }
       js->flags = flags;
       if (is_err(rhs)) return rhs;
       goto loop;
@@ -9566,12 +9723,13 @@ static jsval_t js_expr_bp(struct js *js, uint8_t min_bp) {
 }
 
 static jsval_t js_ternary(struct js *js) {
-  jsval_t res = js_expr_bp(js, 1);
+  ROOTED(res, js_expr_bp(js, 1));
   if (next(js) == TOK_Q) {
     uint8_t flags = js->flags;
     js->consumed = 1;
+    ROOT_SYNC(res);
     if (js_truthy(js, resolveprop(js, res))) {
-      res = js_ternary(js);
+      ROOT_UPDATE(res, js_ternary(js));
       js->flags |= F_NOEXEC;
       EXPECT(TOK_COLON, js->flags = flags);
       js_ternary(js);
@@ -9581,14 +9739,15 @@ static jsval_t js_ternary(struct js *js) {
       js_ternary(js);
       EXPECT(TOK_COLON, js->flags = flags);
       js->flags = flags;
-      res = js_ternary(js);
+      ROOT_UPDATE(res, js_ternary(js));
     }
   }
+  ROOT_SYNC(res);
   return res;
 }
 
 static jsval_t js_assignment(struct js *js) {
-  jsval_t res = js_ternary(js);
+  ROOTED(res, js_ternary(js));
   
   if (!is_err(res) && vtype(res) == T_CODEREF && next(js) == TOK_ARROW) {
     jsoff_t param_start = coderefoff(res);
@@ -9704,7 +9863,8 @@ static jsval_t js_assignment(struct js *js) {
         if (!(js->flags & F_NOEXEC) && should_assign) {
           jsval_t rhs_resolved = resolveprop(js, rhs);
           if (is_err(rhs_resolved)) return rhs_resolved;
-          res = assign(js, res, rhs_resolved);
+          ROOT_UPDATE(res, assign(js, res, rhs_resolved));
+          ROOT_SYNC(res);
         }
       } else {
         uint8_t saved_flags = js->flags;
@@ -9712,7 +9872,7 @@ static jsval_t js_assignment(struct js *js) {
         jsval_t rhs = js_assignment(js);
         js->flags = saved_flags;
         if (is_err(rhs)) return rhs;
-        res = lhs_val;
+        ROOT_UPDATE(res, lhs_val);
       }
       continue;
     }
@@ -9727,7 +9887,8 @@ static jsval_t js_assignment(struct js *js) {
     if (is_err(rhs)) return rhs;
     
     if (op == TOK_ASSIGN) {
-      res = do_op(js, op, res, rhs);
+      ROOT_UPDATE(res, do_op(js, op, res, rhs));
+      ROOT_SYNC(res);
     } else {
       jsval_t rhs_resolved = resolveprop(js, rhs);
       if (is_err(rhs_resolved)) return rhs_resolved;
@@ -9740,10 +9901,12 @@ static jsval_t js_assignment(struct js *js) {
       
       jsval_t op_result = do_op(js, binary_op, lhs_val, rhs_resolved);
       if (is_err(op_result)) return op_result;
-      res = assign(js, res, op_result);
+      ROOT_UPDATE(res, assign(js, res, op_result));
+      ROOT_SYNC(res);
     }
   }
   
+  ROOT_SYNC(res);
   return res;
 }
 
@@ -10784,7 +10947,8 @@ static jsval_t for_of_iter_object(struct js *js, for_iter_ctx_t *ctx, jsval_t it
 
 static jsval_t js_for(struct js *js) {
   uint8_t flags = js->flags, exe = !(flags & F_NOEXEC);
-  jsval_t v, res = js_mkundef();
+  ROOTED(res, js_mkundef());
+  ROOTED(v, js_mkundef());
   jsoff_t pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
   
   bool use_label_stack = label_stack && utarray_len(label_stack) > 0;
@@ -10850,9 +11014,9 @@ static jsval_t js_for(struct js *js) {
       } else if (next(js) == TOK_ASSIGN) {
         js->pos = destructure_off;
         js->consumed = 1;
-        if (is_const_var) v = js_const(js);
-        else if (is_var_decl) v = js_var_decl(js);
-        else v = js_let(js);
+        if (is_const_var) ROOT_UPDATE(v, js_const(js));
+        else if (is_var_decl) ROOT_UPDATE(v, js_var_decl(js));
+        else ROOT_UPDATE(v, js_let(js));
         if (is_err2(&v, &res)) goto done;
         has_destructure = false;
       } else {
@@ -10876,9 +11040,9 @@ static jsval_t js_for(struct js *js) {
       } else {
         js->pos = var_name_off;
         js->consumed = 1;
-        if (is_const_var) v = js_const(js);
-        else if (is_var_decl) v = js_var_decl(js);
-        else v = js_let(js);
+        if (is_const_var) ROOT_UPDATE(v, js_const(js));
+        else if (is_var_decl) ROOT_UPDATE(v, js_var_decl(js));
+        else ROOT_UPDATE(v, js_let(js));
         if (is_err2(&v, &res)) goto done;
       }
     }
@@ -10895,17 +11059,17 @@ static jsval_t js_for(struct js *js) {
     } else {
       js->pos = var_name_off;
       js->consumed = 1;
-      v = js_expr_comma(js);
+      ROOT_UPDATE(v, js_expr_comma(js));
       if (is_err2(&v, &res)) goto done;
     }
   } else if (next(js) == TOK_SEMICOLON) {
   } else {
-    v = js_expr_comma(js);
+    ROOT_UPDATE(v, js_expr_comma(js));
     if (is_err2(&v, &res)) goto done;
   }
   
   if (is_for_in) {
-    jsval_t obj_expr = js_expr(js);
+    ROOTED(obj_expr, js_expr(js));
     if (is_err2(&obj_expr, &res)) goto done;
     if (!expect(js, TOK_RPAREN, &res)) goto done;
     
@@ -10913,12 +11077,13 @@ static jsval_t js_for(struct js *js) {
     loop_block_ctx_t forin_loop_ctx = {0};
     if (exe) loop_block_init(js, &forin_loop_ctx);
     js->flags |= F_NOEXEC;
-    v = js_block_or_stmt(js);
+    ROOT_UPDATE(v, js_block_or_stmt(js));
     if (is_err2(&v, &res)) goto done;
     jsoff_t body_end = js->pos;
     
     if (exe) {
-      jsval_t obj = resolveprop(js, obj_expr);
+      ROOT_SYNC(obj_expr);
+      ROOTED(obj, resolveprop(js, obj_expr));
       for_iter_ctx_t ctx = { 
         body_start, body_end,
         var_name_off, var_name_len,
@@ -10927,7 +11092,7 @@ static jsval_t js_for(struct js *js) {
         destructure_len, marker_index,
         forin_loop_ctx
       };
-      res = for_in_iter_object(js, &ctx, obj);
+      ROOT_UPDATE(res, for_in_iter_object(js, &ctx, obj));
       loop_block_cleanup(js, &forin_loop_ctx);
       if (is_err(res)) goto done;
       if (js->flags & F_RETURN) goto done;
@@ -10940,7 +11105,7 @@ static jsval_t js_for(struct js *js) {
   }
   
   if (is_for_of) {
-    jsval_t iter_expr = js_expr(js);
+    ROOTED(iter_expr, js_expr(js));
     if (is_err2(&iter_expr, &res)) goto done;
     if (!expect(js, TOK_RPAREN, &res)) goto done;
     
@@ -10948,12 +11113,13 @@ static jsval_t js_for(struct js *js) {
     loop_block_ctx_t forof_loop_ctx = {0};
     if (exe) loop_block_init(js, &forof_loop_ctx);
     js->flags |= F_NOEXEC;
-    v = js_block_or_stmt(js);
+    ROOT_UPDATE(v, js_block_or_stmt(js));
     if (is_err2(&v, &res)) goto done;
     jsoff_t body_end = js->pos;
     
     if (exe) {
-      jsval_t iterable = resolveprop(js, iter_expr);
+      ROOT_SYNC(iter_expr);
+      ROOTED(iterable, resolveprop(js, iter_expr));
       uint8_t itype = vtype(iterable);
       for_iter_ctx_t ctx = { 
         body_start, body_end,
@@ -10964,10 +11130,10 @@ static jsval_t js_for(struct js *js) {
         forof_loop_ctx
       };
       
-      if (itype == T_ARR) res = for_of_iter_array(js, &ctx, iterable);
-      else if (itype == T_STR) res = for_of_iter_string(js, &ctx, iterable);
-      else if (itype == T_OBJ) res = for_of_iter_object(js, &ctx, iterable);
-      else res = js_mkerr(js, "for-of requires iterable");
+      if (itype == T_ARR) ROOT_UPDATE(res, for_of_iter_array(js, &ctx, iterable));
+      else if (itype == T_STR) ROOT_UPDATE(res, for_of_iter_string(js, &ctx, iterable));
+      else if (itype == T_OBJ) ROOT_UPDATE(res, for_of_iter_object(js, &ctx, iterable));
+      else ROOT_UPDATE(res, js_mkerr(js, "for-of requires iterable"));
       
       loop_block_cleanup(js, &forof_loop_ctx);
       if (is_err(res)) goto done;
@@ -10984,13 +11150,13 @@ static jsval_t js_for(struct js *js) {
   js->flags |= F_NOEXEC;
   pos1 = js->pos;
   if (next(js) != TOK_SEMICOLON) {
-    v = js_expr(js);
+    ROOT_UPDATE(v, js_expr(js));
     if (is_err2(&v, &res)) goto done;
   }
   if (!expect(js, TOK_SEMICOLON, &res)) goto done;
   pos2 = js->pos;
   if (next(js) != TOK_RPAREN) {
-    v = js_expr_comma(js);
+    ROOT_UPDATE(v, js_expr_comma(js));
     if (is_err2(&v, &res)) goto done;
   }
   if (!expect(js, TOK_RPAREN, &res)) goto done;
@@ -11016,16 +11182,18 @@ static jsval_t js_for(struct js *js) {
   }
   
   js->flags |= F_NOEXEC;
-  v = js_block_or_stmt(js);
+  ROOT_UPDATE(v, js_block_or_stmt(js));
   if (exe) js->flags = flags;
   if (is_err2(&v, &res)) goto done;
   pos4 = js->pos;
   
   while (!(flags & F_NOEXEC)) {
     js_gc_maybe(js);
+    ROOT_SYNC(res); ROOT_SYNC(v);
     js->flags = flags, js->pos = pos1, js->consumed = 1;
     if (next(js) != TOK_SEMICOLON) {
-      v = resolveprop(js, js_expr(js));
+      ROOT_UPDATE(v, resolveprop(js, js_expr(js)));
+      ROOT_SYNC(v);
       if (is_err2(&v, &res)) goto done;
       if (!js_truthy(js, v)) break;
     }
@@ -11039,7 +11207,8 @@ static jsval_t js_for(struct js *js) {
     }
     
     loop_block_clear(js, &loop_ctx);
-    v = loop_block_exec(js, &loop_ctx);
+    ROOT_UPDATE(v, loop_block_exec(js, &loop_ctx));
+    ROOT_SYNC(v);
     if (is_err2(&v, &res)) {
       loop_block_cleanup(js, &loop_ctx);
       if (is_let_loop && let_var_len > 0) {
@@ -11055,18 +11224,17 @@ static jsval_t js_for(struct js *js) {
         js->flags = flags;
         js->pos = pos2, js->consumed = 1;
         if (next(js) != TOK_RPAREN) {
-          v = js_expr_comma(js);
-          if (is_err2(&v, &res)) goto done;
+          ROOT_UPDATE(v, js_expr_comma(js));
         } continue;
       }
     }
     
     if (js->flags & F_BREAK) break;
-    if (js->flags & F_RETURN) { res = v; break; }
+    if (js->flags & F_RETURN) { ROOT_UPDATE(res, v); break; }
     
     js->flags = flags, js->pos = pos2, js->consumed = 1;
     if (next(js) != TOK_RPAREN) {
-      v = js_expr_comma(js);
+      ROOT_UPDATE(v, js_expr_comma(js));
       if (is_err2(&v, &res)) goto done;
     }
   }
@@ -11097,7 +11265,8 @@ done:
 
 static jsval_t js_while(struct js *js) {
   uint8_t flags = js->flags, exe = !(flags & F_NOEXEC);
-  jsval_t res = js_mkundef(), v;
+  ROOTED(res, js_mkundef());
+  ROOTED(v, js_mkundef());
   loop_block_ctx_t loop_ctx = {0};
   
   bool use_label_stack = label_stack && utarray_len(label_stack) > 0;
@@ -11113,8 +11282,8 @@ static jsval_t js_while(struct js *js) {
   
   jsoff_t cond_start = js->pos;
   js->flags |= F_NOEXEC;
-  v = js_expr(js);
-  if (is_err(v)) { res = v; goto done; }
+  ROOT_UPDATE(v, js_expr(js));
+  if (is_err(v)) { ROOT_UPDATE(res, v); goto done; }
   
   if (!expect(js, TOK_RPAREN, &res)) goto done;
   
@@ -11125,19 +11294,21 @@ static jsval_t js_while(struct js *js) {
     js->flags |= F_NOEXEC;
   }
   
-  v = js_block_or_stmt(js);
-  if (is_err(v)) { res = v; goto done; }
+  ROOT_UPDATE(v, js_block_or_stmt(js));
+  if (is_err(v)) { ROOT_UPDATE(res, v); goto done; }
   jsoff_t body_end = js->pos;
   
   if (exe) {
     while (true) {
       js_gc_maybe(js);
+      ROOT_SYNC(res); ROOT_SYNC(v);
       js->flags = flags;
       js->pos = cond_start;
       js->consumed = 1;
       
-      v = resolveprop(js, js_expr(js));
-      if (is_err(v)) { res = v; break; }
+      ROOT_UPDATE(v, resolveprop(js, js_expr(js)));
+      ROOT_SYNC(v);
+      if (is_err(v)) { ROOT_UPDATE(res, v); break; }
       
       if (!js_truthy(js, v)) break;
       
@@ -11146,8 +11317,9 @@ static jsval_t js_while(struct js *js) {
       js->flags = (flags & ~F_NOEXEC) | F_LOOP;
       
       loop_block_clear(js, &loop_ctx);
-      v = loop_block_exec(js, &loop_ctx);
-      if (is_err(v)) { res = v; break; }
+      ROOT_UPDATE(v, loop_block_exec(js, &loop_ctx));
+      ROOT_SYNC(v);
+      if (is_err(v)) { ROOT_UPDATE(res, v); break; }
       
       if (label_flags & F_CONTINUE_LABEL) {
         if (is_this_loop_continue_target(marker_index)) {
@@ -11158,7 +11330,7 @@ static jsval_t js_while(struct js *js) {
       }
       
       if (js->flags & F_BREAK) break;
-      if (js->flags & F_RETURN) { res = v; break; }
+      if (js->flags & F_RETURN) { ROOT_UPDATE(res, v); break; }
     }
     loop_block_cleanup(js, &loop_ctx);
   }
@@ -11189,7 +11361,8 @@ done:
 
 static jsval_t js_do_while(struct js *js) {
   uint8_t flags = js->flags, exe = !(flags & F_NOEXEC);
-  jsval_t res = js_mkundef(), v;
+  ROOTED(res, js_mkundef());
+  ROOTED(v, js_mkundef());
   loop_block_ctx_t loop_ctx = {0};
   
   bool use_label_stack = label_stack && utarray_len(label_stack) > 0;
@@ -11207,8 +11380,8 @@ static jsval_t js_do_while(struct js *js) {
   if (exe) loop_block_init(js, &loop_ctx);
   
   js->flags |= F_NOEXEC;
-  v = js_block_or_stmt(js);
-  if (is_err(v)) { res = v; goto done; }
+  ROOT_UPDATE(v, js_block_or_stmt(js));
+  if (is_err(v)) { ROOT_UPDATE(res, v); goto done; }
   
   if (is_block && next(js) == TOK_RBRACE) {
     js->consumed = 1;
@@ -11219,8 +11392,8 @@ static jsval_t js_do_while(struct js *js) {
   if (!expect(js, TOK_LPAREN, &res)) goto done;
   
   jsoff_t cond_start = js->pos;
-  v = js_expr(js);
-  if (is_err(v)) { res = v; goto done; }
+  ROOT_UPDATE(v, js_expr(js));
+  if (is_err(v)) { ROOT_UPDATE(res, v); goto done; }
   
   if (!expect(js, TOK_RPAREN, &res)) goto done;
   jsoff_t cond_end = js->pos;
@@ -11228,14 +11401,16 @@ static jsval_t js_do_while(struct js *js) {
   if (exe) {
     do {
       js_gc_maybe(js);
+      ROOT_SYNC(res); ROOT_SYNC(v);
       js->pos = body_start;
       js->consumed = 1;
       js->flags = (flags & ~F_NOEXEC) | F_LOOP;
       
       loop_block_clear(js, &loop_ctx);
-      v = loop_block_exec(js, &loop_ctx);
+      ROOT_UPDATE(v, loop_block_exec(js, &loop_ctx));
+      ROOT_SYNC(v);
       if (is_err(v)) {
-        res = v; break;
+        ROOT_UPDATE(res, v); break;
       }
       
       if (label_flags & F_CONTINUE_LABEL) {
@@ -11250,7 +11425,7 @@ static jsval_t js_do_while(struct js *js) {
       }
       
       if (js->flags & F_RETURN) {
-        res = v;
+        ROOT_UPDATE(res, v);
         break;
       }
       
@@ -11258,9 +11433,10 @@ static jsval_t js_do_while(struct js *js) {
       js->pos = cond_start;
       js->consumed = 1;
       
-      v = resolveprop(js, js_expr(js));
+      ROOT_UPDATE(v, resolveprop(js, js_expr(js)));
+      ROOT_SYNC(v);
       if (is_err(v)) {
-        res = v;
+        ROOT_UPDATE(res, v);
         break;
       }
     } while (js_truthy(js, v));
@@ -11292,14 +11468,14 @@ done:
 
 static jsval_t js_try(struct js *js) {
   uint8_t flags = js->flags, exe = !(flags & F_NOEXEC);
-  jsval_t res = js_mkundef();
-  jsval_t try_result = js_mkundef();
-  jsval_t catch_result = js_mkundef();
-  jsval_t finally_result = js_mkundef();
+  ROOTED(res, js_mkundef());
+  ROOTED(try_result, js_mkundef());
+  ROOTED(catch_result, js_mkundef());
+  ROOTED(finally_result, js_mkundef());
   
   bool had_exception = false;
   char saved_errmsg[256] = {0};
-  jsval_t exception_value = js_mkundef();
+  ROOTED(exception_value, js_mkundef());
   
   js->consumed = 1;
   
@@ -11388,7 +11564,7 @@ static jsval_t js_try(struct js *js) {
   
   if (exe) {
     bool try_returned = false;
-    jsval_t try_return_value = js_mkundef();
+    ROOTED(try_return_value, js_mkundef());
     
     js->flags = flags & (uint8_t)~F_NOEXEC;
     js->pos = try_start;
@@ -11396,13 +11572,14 @@ static jsval_t js_try(struct js *js) {
     
     mkscope(js);
     while (next(js) != TOK_EOF && next(js) != TOK_RBRACE && !(js->flags & (F_RETURN | F_THROW | F_BREAK))) {
-      try_result = js_stmt(js);
+      ROOT_UPDATE(try_result, js_stmt(js));
+      ROOT_SYNC(try_result);
       if (is_err(try_result)) { had_exception = true; break; }
     } delscope(js);
     
     if (js->flags & F_RETURN) {
       try_returned = true;
-      try_return_value = try_result;
+      ROOT_UPDATE(try_return_value, try_result);
       js->flags &= (uint8_t)~(F_RETURN | F_NOEXEC);
     }
     
@@ -11412,7 +11589,7 @@ static jsval_t js_try(struct js *js) {
       strncpy(saved_errmsg, js->errmsg, sizeof(saved_errmsg) - 1);
       saved_errmsg[sizeof(saved_errmsg) - 1] = '\0';
       
-      exception_value = js->thrown_value;
+      ROOT_UPDATE(exception_value, js->thrown_value);
       js->thrown_value = js_mkundef();
       js->errmsg[0] = '\0';
     }
@@ -11421,14 +11598,16 @@ static jsval_t js_try(struct js *js) {
     
     bool exception_handled = false;
     bool catch_returned = false;
-    jsval_t catch_return_value = js_mkundef();
+    ROOTED(catch_return_value, js_mkundef());
     
     if (had_exception && has_catch) {
       exception_handled = true;
       mkscope(js);
       
       if (catch_param_len > 0) {
+        ROOT_SYNC(exception_value);
         jsval_t key = js_mkstr(js, &js->code[catch_param_off], catch_param_len);
+        ROOT_SYNC(exception_value);
         mkprop(js, js->scope, key, exception_value, 0);
       }
       
@@ -11437,13 +11616,14 @@ static jsval_t js_try(struct js *js) {
       js->consumed = 1;
       
       while (next(js) != TOK_EOF && next(js) != TOK_RBRACE && !(js->flags & (F_RETURN | F_THROW | F_BREAK))) {
-        catch_result = js_stmt(js);
+        ROOT_UPDATE(catch_result, js_stmt(js));
+        ROOT_SYNC(catch_result);
         if (is_err(catch_result)) break;
       }
       
       if (js->flags & F_RETURN) {
         catch_returned = true;
-        catch_return_value = catch_result;
+        ROOT_UPDATE(catch_return_value, catch_result);
         js->flags &= (uint8_t)~(F_RETURN | F_NOEXEC);
       }
       
@@ -11454,12 +11634,12 @@ static jsval_t js_try(struct js *js) {
         exception_handled = false;
         strncpy(saved_errmsg, js->errmsg, sizeof(saved_errmsg) - 1);
         saved_errmsg[sizeof(saved_errmsg) - 1] = '\0';
-        exception_value = js->thrown_value;
+        ROOT_UPDATE(exception_value, js->thrown_value);
         js->thrown_value = js_mkundef();
         js->flags &= (uint8_t)~F_THROW;
         js->errmsg[0] = '\0';
       } else {
-        res = catch_result;
+        ROOT_UPDATE(res, catch_result);
       }
     }
     
@@ -11478,7 +11658,8 @@ static jsval_t js_try(struct js *js) {
       js->consumed = 1;
       
       while (next(js) != TOK_EOF && next(js) != TOK_RBRACE && !(js->flags & (F_RETURN | F_THROW | F_BREAK))) {
-        finally_result = js_stmt(js);
+        ROOT_UPDATE(finally_result, js_stmt(js));
+        ROOT_SYNC(finally_result);
         if (is_err(finally_result)) break;
       }
       
@@ -11491,30 +11672,32 @@ static jsval_t js_try(struct js *js) {
         } else if (had_exception && !exception_handled) {
           js->flags |= F_THROW;
           strncpy(js->errmsg, saved_errmsg, sizeof(js->errmsg) - 1);
+          ROOT_SYNC(exception_value);
           js->thrown_value = exception_value;
         } else if (catch_returned) {
           js->flags |= F_RETURN;
-          res = catch_return_value;
+          ROOT_UPDATE(res, catch_return_value);
         } else if (try_returned) {
           js->flags |= F_RETURN;
-          res = try_return_value;
+          ROOT_UPDATE(res, try_return_value);
         }
       }
     } else if (had_exception && !exception_handled) {
       js->flags |= F_THROW;
       strncpy(js->errmsg, saved_errmsg, sizeof(js->errmsg) - 1);
+      ROOT_SYNC(exception_value);
       js->thrown_value = exception_value;
-      res = mkval(T_ERR, 0);
+      ROOT_UPDATE(res, mkval(T_ERR, 0));
     } else if (catch_returned) {
       js->flags |= F_RETURN;
-      res = catch_return_value;
+      ROOT_UPDATE(res, catch_return_value);
     } else if (try_returned) {
       js->flags |= F_RETURN;
-      res = try_return_value;
+      ROOT_UPDATE(res, try_return_value);
     }
     
     if (!had_exception && !try_returned && !(js->flags & (F_RETURN | F_THROW))) {
-      res = try_result;
+      ROOT_UPDATE(res, try_result);
     }
   }
   
@@ -11666,7 +11849,7 @@ static jsval_t js_return(struct js *js) {
 
 static jsval_t js_switch(struct js *js) {
   uint8_t flags = js->flags, exe = !(flags & F_NOEXEC);
-  jsval_t res = js_mkundef();
+  ROOTED(res, js_mkundef());
   
   js->consumed = 1;
   if (!expect(js, TOK_LPAREN, &res)) return res;
@@ -11674,7 +11857,7 @@ static jsval_t js_switch(struct js *js) {
   jsoff_t switch_expr_start = js->pos;
   uint8_t saved_flags = js->flags;
   js->flags |= F_NOEXEC;
-  jsval_t switch_expr = js_expr(js);
+  ROOTED(switch_expr, js_expr(js));
   js->flags = saved_flags;
   
   if (is_err(switch_expr)) return switch_expr;
@@ -11764,7 +11947,7 @@ static jsval_t js_switch(struct js *js) {
     js->pos = switch_expr_start;
     js->consumed = 1;
     js->flags = flags;
-    jsval_t switch_val = resolveprop(js, js_expr(js));
+    ROOTED(switch_val, resolveprop(js, js_expr(js)));
     
     if (is_err(switch_val)) {
       js->pos = end_pos;
@@ -11784,7 +11967,8 @@ static jsval_t js_switch(struct js *js) {
       js->pos = cases[i].case_expr_start;
       js->consumed = 1;
       js->flags = flags;
-      jsval_t case_val = resolveprop(js, js_expr(js));
+      ROOT_SYNC(switch_val);
+      ROOTED(case_val, resolveprop(js, js_expr(js)));
       
       if (is_err(case_val)) {
         js->pos = end_pos;
@@ -11825,7 +12009,8 @@ static jsval_t js_switch(struct js *js) {
         while (next(js) != TOK_EOF && next(js) != TOK_CASE && 
                next(js) != TOK_DEFAULT && next(js) != TOK_RBRACE &&
                !(js->flags & (F_BREAK | F_RETURN | F_THROW))) {
-          res = js_stmt(js);
+          ROOT_UPDATE(res, js_stmt(js));
+          ROOT_SYNC(res);
           if (is_err(res)) {
             js->pos = end_pos;
             uint8_t preserve = 0;
@@ -11884,23 +12069,27 @@ static jsval_t js_with(struct js *js) {
       return js_mkerr(js, "with requires object");
     }
     
-    jsval_t with_obj = obj;
+    ROOTED(with_obj, obj);
     if (vtype(obj) == T_FUNC) {
-      with_obj = mkval(T_OBJ, vdata(obj));
+      ROOT_UPDATE(with_obj, mkval(T_OBJ, vdata(obj)));
     }
     
-    jsoff_t parent_scope_offset = (jsoff_t) vdata(js->scope);
+    ROOTED(parent_scope_val, js->scope);
+    ROOT_SYNC(parent_scope_val);
+    jsoff_t parent_scope_offset = (jsoff_t) vdata(parent_scope_val);
     if (global_scope_stack == NULL) utarray_new(global_scope_stack, &jsoff_icd);
     utarray_push_back(global_scope_stack, &parent_scope_offset);
     
-    jsval_t with_scope = mkobj(js, parent_scope_offset);
+    ROOTED(with_scope, mkobj(js, parent_scope_offset));
+    ROOT_SYNC(with_obj);
     set_slot(js, with_scope, SLOT_WITH, with_obj);
     
-    jsval_t saved_scope = js->scope;
+    ROOTED(saved_scope, js->scope);
     js->scope = with_scope;
     
     res = js_block_or_stmt(js);
     if (global_scope_stack && utarray_len(global_scope_stack) > 0) utarray_pop_back(global_scope_stack);
+    ROOT_SYNC(saved_scope);
     js->scope = saved_scope;
   } else res = js_block_or_stmt(js);
   
@@ -12140,7 +12329,9 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
       if (vtype(object_proto) == T_OBJ) set_proto(js, proto, object_proto);
     }
     
-    jsval_t func_scope = mkobj(js, (jsoff_t) vdata(js->scope));
+    ROOTED(func_scope_parent, js->scope);
+    ROOT_SYNC(func_scope_parent);
+    ROOTED(func_scope, mkobj(js, (jsoff_t) vdata(func_scope_parent)));
     
     for (unsigned int i = 0; i < utarray_len(methods); i++) {
       MethodInfo *m = (MethodInfo *)utarray_eltptr(methods, i);
@@ -12156,6 +12347,7 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
       if (is_err(method_obj)) return method_obj;
       
       set_func_code(js, method_obj, &js->code[m->fn_start], mlen);
+      ROOT_SYNC(func_scope);
       set_slot(js, method_obj, SLOT_SCOPE, func_scope);
       
       if (m->is_async) {
@@ -12525,46 +12717,46 @@ static jsval_t js_labeled_stmt(struct js *js, const char *label, jsoff_t label_l
 }
 
 static jsval_t js_stmt_impl(struct js *js) {
-  jsval_t res;
+  ROOTED(res, js_mkundef());
   uint8_t stmt_tok = next(js);
   
   switch (stmt_tok) {
     case TOK_SEMICOLON:
-      res = js_mkundef();
+      ROOT_UPDATE(res, js_mkundef());
       break;
     case TOK_CASE: case TOK_CATCH:
     case TOK_DEFAULT: case TOK_FINALLY:
-      res = js_mkerr(js, "SyntaxError '%.*s'", (int) js->tlen, js->code + js->toff);
+      ROOT_UPDATE(res, js_mkerr(js, "SyntaxError '%.*s'", (int) js->tlen, js->code + js->toff));
       break;
     case TOK_YIELD:
-      res = js_mkerr(js, " '%.*s' not implemented", (int) js->tlen, js->code + js->toff);
+      ROOT_UPDATE(res, js_mkerr(js, " '%.*s' not implemented", (int) js->tlen, js->code + js->toff));
       break;
-    case TOK_IMPORT:    res = js_import_stmt(js); break;
-    case TOK_EXPORT:    res = js_export_stmt(js); break;
+    case TOK_IMPORT:    ROOT_UPDATE(res, js_import_stmt(js)); break;
+    case TOK_EXPORT:    ROOT_UPDATE(res, js_export_stmt(js)); break;
     case TOK_THROW:     js_throw_handle(js, &res); break;
     case TOK_VAR:       js_var(js, &res); break;
     case TOK_ASYNC:     js_async(js, &res); break;
-    case TOK_WITH:      res = js_with(js); break;
-    case TOK_SWITCH:    res = js_switch(js); break;
-    case TOK_WHILE:     res = js_while(js); break;
-    case TOK_DO:        res = js_do_while(js); break;
-    case TOK_DEBUGGER:  js->consumed = 1; res = js_mkundef(); break;
-    case TOK_CONTINUE:  res = js_continue(js); break;
-    case TOK_BREAK:     res = js_break(js); break;
-    case TOK_LET:       res = js_let(js); break;
-    case TOK_CONST:     res = js_const(js); break;
-    case TOK_FUNC:      res = js_func_decl(js); break;
-    case TOK_CLASS:     res = js_class_decl(js); break;
-    case TOK_IF:        res = js_if(js); break;
-    case TOK_LBRACE:    res = js_block(js, !(js->flags & F_NOEXEC)); break;
-    case TOK_FOR:       res = js_for(js); break;
-    case TOK_RETURN:    res = js_return(js); break;
-    case TOK_TRY:       res = js_try(js); break;
+    case TOK_WITH:      ROOT_UPDATE(res, js_with(js)); break;
+    case TOK_SWITCH:    ROOT_UPDATE(res, js_switch(js)); break;
+    case TOK_WHILE:     ROOT_UPDATE(res, js_while(js)); break;
+    case TOK_DO:        ROOT_UPDATE(res, js_do_while(js)); break;
+    case TOK_DEBUGGER:  js->consumed = 1; ROOT_UPDATE(res, js_mkundef()); break;
+    case TOK_CONTINUE:  ROOT_UPDATE(res, js_continue(js)); break;
+    case TOK_BREAK:     ROOT_UPDATE(res, js_break(js)); break;
+    case TOK_LET:       ROOT_UPDATE(res, js_let(js)); break;
+    case TOK_CONST:     ROOT_UPDATE(res, js_const(js)); break;
+    case TOK_FUNC:      ROOT_UPDATE(res, js_func_decl(js)); break;
+    case TOK_CLASS:     ROOT_UPDATE(res, js_class_decl(js)); break;
+    case TOK_IF:        ROOT_UPDATE(res, js_if(js)); break;
+    case TOK_LBRACE:    ROOT_UPDATE(res, js_block(js, !(js->flags & F_NOEXEC))); break;
+    case TOK_FOR:       ROOT_UPDATE(res, js_for(js)); break;
+    case TOK_RETURN:    ROOT_UPDATE(res, js_return(js)); break;
+    case TOK_TRY:       ROOT_UPDATE(res, js_try(js)); break;
     default:
-      res = resolveprop(js, js_expr(js));
+      ROOT_UPDATE(res, resolveprop(js, js_expr(js)));
       while (next(js) == TOK_COMMA) {
         js->consumed = 1;
-        res = resolveprop(js, js_expr(js));
+        ROOT_UPDATE(res, resolveprop(js, js_expr(js)));
       }
       break;
   }
@@ -22458,6 +22650,7 @@ static void gc_roots_common(gc_off_op_t op_off, gc_val_op_t op_val, gc_cb_ctx_t 
   process_gc_update_roots(op_val, c);
   navigator_gc_update_roots(op_val, c);
   server_gc_update_roots(op_val, c);
+  events_gc_update_roots(op_val, c);
 
   for (int i = 0; i < c->js->for_let_stack_len; i++) {
     op_val(c, &c->js->for_let_stack[i].body_scope);
@@ -22508,11 +22701,16 @@ void js_gc_reserve_roots(GC_RESERVE_ARGS) {
     RSV_VAL(proxy->target);
     RSV_VAL(proxy->handler);
   }
+  
+  descriptor_entry_t *desc, *desc_tmp;
+  HASH_ITER(hh, desc_registry, desc, desc_tmp) {
+    if (desc->has_getter) RSV_VAL(desc->getter);
+    if (desc->has_setter) RSV_VAL(desc->setter);
+  }
 
-  // accessor/descriptor registry are weak references
+  // accessor registry is a weak reference
   // objects only survive if reachable from other roots
   (void)accessor_registry;
-  (void)desc_registry;
   
   #undef RSV_OFF
   #undef RSV_VAL
@@ -22629,7 +22827,7 @@ bool js_chkargs(jsval_t *args, int nargs, const char *spec) {
 }
 
 static jsval_t js_eval_inherit_strict(struct js *js, const char *buf, size_t len, bool inherit_strict) {
-  jsval_t res = js_mkundef();
+  ROOTED(res, js_mkundef());
   if (len == (size_t) ~0U) len = strlen(buf);
   js->eval_depth++;
   js->consumed = 1;
@@ -22674,10 +22872,10 @@ static jsval_t js_eval_inherit_strict(struct js *js, const char *buf, size_t len
   if (!(js->flags & F_CALL)) hoist_var_declarations(js, js->scope);
 
   while (next(js) != TOK_EOF && !is_err(res)) {
-    res = js_stmt(js);
+    ROOT_UPDATE(res, js_stmt(js));
     if (js->needs_gc && js->eval_depth == 1) {
       js->needs_gc = false;
-      if (js_gc_compact(js) > 0) js->gc_alloc_since = 0;
+      if (js_gc_compact(js) > 0) { js->gc_alloc_since = 0; ROOT_SYNC(res); }
     }
     if (js->flags & F_RETURN) break;
   }
@@ -22719,33 +22917,37 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
   if (vtype(func) == T_FFI) {
     return ffi_call_by_index(js, (unsigned int)vdata(func), args, nargs);
   } else if (vtype(func) == T_CFUNC) {
-    jsval_t saved_this = js->this_val;
+    ROOTED(saved_this, js->this_val);
     if (use_bound_this) js->this_val = bound_this;
     jsval_t (*fn)(struct js *, jsval_t *, int) = (jsval_t(*)(struct js *, jsval_t *, int)) vdata(func);
-    jsval_t res = fn(js, args, nargs);
+    ROOTED(res, fn(js, args, nargs));
+    ROOT_SYNC(saved_this);
     js->this_val = saved_this; return res;
   } else if (vtype(func) == T_FUNC) {
-    jsval_t func_obj = mkval(T_OBJ, vdata(func));
+    ROOTED(func_obj, mkval(T_OBJ, vdata(func)));
     jsval_t cfunc_slot = get_slot(js, func_obj, SLOT_CFUNC);
     
     if (vtype(cfunc_slot) == T_CFUNC) {
-      jsval_t slot_bound_this = get_slot(js, func_obj, SLOT_BOUND_THIS);
+      ROOT_SYNC(func_obj);
+      ROOTED(slot_bound_this, get_slot(js, func_obj, SLOT_BOUND_THIS));
       bool has_slot_bound_this = vtype(slot_bound_this) != T_UNDEF;
       
       int final_nargs;
       jsval_t *combined_args = resolve_bound_args(js, func_obj, args, nargs, &final_nargs);
       jsval_t *final_args = combined_args ? combined_args : args;
       
-      jsval_t saved_func = js->current_func;
-      jsval_t saved_this = js->this_val;
+      ROOTED(saved_func, js->current_func);
+      ROOTED(saved_this, js->this_val);
       js->current_func = func;
       
       if (has_slot_bound_this) {
+        ROOT_SYNC(slot_bound_this);
         js->this_val = slot_bound_this;
       } else if (use_bound_this) js->this_val = bound_this;
       
       jsval_t (*fn)(struct js *, jsval_t *, int) = (jsval_t(*)(struct js *, jsval_t *, int)) vdata(cfunc_slot);
-      jsval_t res = fn(js, final_args, final_nargs);
+      ROOTED(res, fn(js, final_args, final_nargs));
+      ROOT_SYNC(saved_func); ROOT_SYNC(saved_this);
       js->current_func = saved_func;
       js->this_val = saved_this;
       
@@ -22753,29 +22955,34 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
       return res;
     }
     
+    ROOT_SYNC(func_obj);
     jsoff_t fnlen;
     const char *fn = get_func_code(js, func_obj, &fnlen);
     if (!fn) return js_mkerr(js, "function has no code");
     
-    jsval_t slot_bound_this = get_slot(js, func_obj, SLOT_BOUND_THIS);
-    bool has_slot_bound_this = vtype(slot_bound_this) != T_UNDEF;
+    ROOTED(slot_bound_this2, get_slot(js, func_obj, SLOT_BOUND_THIS));
+    bool has_slot_bound_this = vtype(slot_bound_this2) != T_UNDEF;
     
     int final_nargs;
     jsval_t *combined_args = resolve_bound_args(js, func_obj, args, nargs, &final_nargs);
     jsval_t *final_args = combined_args ? combined_args : args;
     
+    ROOT_SYNC(func_obj);
     jsval_t async_slot = get_slot(js, func_obj, SLOT_ASYNC);
     bool is_async = vtype(async_slot) == T_BOOL && vdata(async_slot) == 1;
     
     if (is_async) {
-      jsval_t closure_scope = get_slot(js, func_obj, SLOT_SCOPE);
-      jsval_t res = start_async_in_coroutine(js, fn, fnlen, closure_scope, final_args, final_nargs);
+      ROOT_SYNC(func_obj);
+      ROOTED(async_closure_scope, get_slot(js, func_obj, SLOT_SCOPE));
+      ROOT_SYNC(async_closure_scope);
+      ROOTED(async_res, start_async_in_coroutine(js, fn, fnlen, async_closure_scope, final_args, final_nargs));
       if (combined_args) free(combined_args);
-      return res;
+      return async_res;
     }
     
-    jsval_t saved_scope = js->scope;
-    jsval_t closure_scope = get_slot(js, func_obj, SLOT_SCOPE);
+    ROOTED(saved_scope, js->scope);
+    ROOT_SYNC(func_obj);
+    ROOTED(closure_scope, get_slot(js, func_obj, SLOT_SCOPE));
     if (vtype(closure_scope) == T_OBJ) js->scope = closure_scope;
     
     uint8_t saved_flags = js->flags;
@@ -22797,51 +23004,68 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
       return js_mkerr(js, "failed to parse function");
     }
     
+    ROOTED(current_scope, js->scope);
     int arg_idx = 0;
     for (unsigned int i = 0; i < (unsigned int)pf->param_count; i++) {
       parsed_param_t *pp = (parsed_param_t *)utarray_eltptr(pf->params, i);
       
       if (pp->is_destruct) {
-        jsval_t arg_val = (arg_idx < final_nargs) ? final_args[arg_idx++] : js_mkundef();
+        ROOTED(arg_val, (arg_idx < final_nargs) ? final_args[arg_idx++] : js_mkundef());
         if (vtype(arg_val) == T_UNDEF && pp->default_len > 0) {
-          arg_val = js_eval_str(js, &fn[pp->default_start], pp->default_len);
+          ROOT_UPDATE(arg_val, js_eval_str(js, &fn[pp->default_start], pp->default_len));
+          ROOT_SYNC(current_scope);
         }
-        bind_destruct_pattern(js, &fn[pp->pattern_off], pp->pattern_len, arg_val, js->scope);
+        ROOT_SYNC(current_scope);
+        bind_destruct_pattern(js, &fn[pp->pattern_off], pp->pattern_len, arg_val, current_scope);
+        ROOT_SYNC(current_scope);
       } else {
-        jsval_t v = arg_idx < final_nargs ? final_args[arg_idx++] : js_mkundef();
+        ROOTED(v, arg_idx < final_nargs ? final_args[arg_idx++] : js_mkundef());
         if (vtype(v) == T_UNDEF && pp->default_len > 0) {
-          v = js_eval_str(js, &fn[pp->default_start], pp->default_len);
+          ROOT_UPDATE(v, js_eval_str(js, &fn[pp->default_start], pp->default_len));
+          ROOT_SYNC(current_scope);
         }
-        js_setprop(js, js->scope, js_mkstr(js, &fn[pp->name_off], pp->name_len), v);
+        ROOTED(param_key, js_mkstr(js, &fn[pp->name_off], pp->name_len));
+        ROOT_SYNC(current_scope); ROOT_SYNC(v);
+        js_setprop(js, current_scope, param_key, v);
       }
     }
+    ROOT_SYNC(current_scope);
+    js->scope = current_scope;
     
     if (pf->has_rest && pf->rest_param_len > 0) {
-      jsval_t rest_array = mkarr(js);
+      ROOTED(rest_array, mkarr(js));
       if (!is_err(rest_array)) {
         jsoff_t idx = 0;
         while (arg_idx < final_nargs) {
           char idxstr[16];
           size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)idx);
-          jsval_t key = js_mkstr(js, idxstr, idxlen);
+          ROOTED(key, js_mkstr(js, idxstr, idxlen));
+          ROOT_SYNC(rest_array);
           js_setprop(js, rest_array, key, final_args[arg_idx]);
           idx++;
           arg_idx++;
         }
-        jsval_t len_key = js_mkstr(js, "length", 6);
+        ROOTED(len_key, js_mkstr(js, "length", 6));
+        ROOT_SYNC(rest_array);
         js_setprop(js, rest_array, len_key, tov((double) idx));
-        rest_array = mkval(T_ARR, vdata(rest_array));
-        js_setprop(js, js->scope, js_mkstr(js, &fn[pf->rest_param_start], pf->rest_param_len), rest_array);
+        ROOT_UPDATE(rest_array, mkval(T_ARR, vdata(rest_array)));
+        ROOT_SYNC(current_scope);
+        ROOTED(rest_key, js_mkstr(js, &fn[pf->rest_param_start], pf->rest_param_len));
+        ROOT_SYNC(current_scope); ROOT_SYNC(rest_array);
+        js_setprop(js, current_scope, rest_key, rest_array);
       }
     }
+    ROOT_SYNC(current_scope);
+    js->scope = current_scope;
     
     if (pf->uses_arguments) {
       setup_arguments(js, js->scope, final_args, final_nargs, pf->is_strict);
     }
     
-    jsval_t saved_this = js->this_val;
+    ROOTED(saved_this2, js->this_val);
     if (has_slot_bound_this) {
-      js->this_val = slot_bound_this;
+      ROOT_SYNC(slot_bound_this2);
+      js->this_val = slot_bound_this2;
     } else if (use_bound_this) {
       js->this_val = bound_this;
     } else js->this_val = js_glob(js);
@@ -22851,7 +23075,7 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
     uint8_t caller_flags = js->flags;
     
     js->flags = F_CALL | (pf->is_strict ? F_STRICT : 0);
-    jsval_t res;
+    ROOTED(res, js_mkundef());
     
     void *saved_token_stream = js->token_stream;
     int saved_token_stream_pos = js->token_stream_pos;
@@ -22871,11 +23095,11 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
     }
     
     if (pf->is_expr) {
-      res = js_eval_str(js, &fn[pf->body_start], pf->body_len);
-      res = resolveprop(js, res);
+      ROOT_UPDATE(res, js_eval_str(js, &fn[pf->body_start], pf->body_len));
+      ROOT_UPDATE(res, resolveprop(js, res));
     } else {
-      res = js_eval(js, &fn[pf->body_start], pf->body_len);
-      if (!is_err(res) && !(js->flags & F_RETURN)) res = js_mkundef();
+      ROOT_UPDATE(res, js_eval(js, &fn[pf->body_start], pf->body_len));
+      if (!is_err(res) && !(js->flags & F_RETURN)) ROOT_UPDATE(res, js_mkundef());
     }
     
     js->token_stream = saved_token_stream;
@@ -22885,7 +23109,8 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
     JS_RESTORE_STATE(js, saved_state);
     js->flags = caller_flags;
     
-    js->this_val = saved_this;
+    ROOT_SYNC(saved_this2); ROOT_SYNC(saved_scope);
+    js->this_val = saved_this2;
     if (global_scope_stack && utarray_len(global_scope_stack) > 0) utarray_pop_back(global_scope_stack);
     delscope(js); js->scope = saved_scope;
     if (combined_args) free(combined_args);
