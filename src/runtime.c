@@ -92,6 +92,13 @@ void code_arena_reset(void) {
   code_arena_current = NULL;
 }
 
+size_t code_arena_get_memory(void) {
+  size_t total = 0;
+  for (code_block_t *b = code_arena_head; b; b = b->next)
+    total += sizeof(code_block_t) + b->capacity;
+  return total;
+}
+
 struct ant_runtime *ant_runtime_init(ant_t *js, int argc, char **argv, struct arg_file *ls_p) {
   runtime = (struct ant_runtime){
     .js = js,

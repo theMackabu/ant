@@ -1102,4 +1102,34 @@ void cleanup_collections_module(void) {
   set_registry_cap = 0;
 }
 
+size_t collections_get_external_memory(void) {
+  size_t total = 0;
+  
+  total += map_registry_cap * sizeof(map_registry_entry_t);
+  for (size_t i = 0; i < map_registry_count; i++) {
+    total += sizeof(map_entry_t *);
+    if (map_registry[i].head) {
+      map_entry_t *entry, *tmp;
+      HASH_ITER(hh, *map_registry[i].head, entry, tmp) {
+        total += sizeof(map_entry_t);
+        if (entry->key) total += strlen(entry->key) + 1;
+      }
+    }
+  }
+  
+  total += set_registry_cap * sizeof(set_registry_entry_t);
+  for (size_t i = 0; i < set_registry_count; i++) {
+    total += sizeof(set_entry_t *);
+    if (set_registry[i].head) {
+      set_entry_t *entry, *tmp;
+      HASH_ITER(hh, *set_registry[i].head, entry, tmp) {
+        total += sizeof(set_entry_t);
+        if (entry->key) total += strlen(entry->key) + 1;
+      }
+    }
+  }
+  
+  return total;
+}
+
 #undef CLEANUP_REGISTRY

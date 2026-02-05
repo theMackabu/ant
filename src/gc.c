@@ -508,17 +508,22 @@ static jsval_t gc_apply_val_callback(void *ctx_ptr, jsval_t val) {
 
 size_t js_gc_compact(ant_t *js) {
   if (!js || js->brk == 0) return 0;
-  if (js->brk < 2 * 1024 * 1024) return 0;
+  if (js->brk < 512 * 1024) return 0;
 
   time_t now = time(NULL);
   if (now != (time_t)-1 && gc_last_run_time != 0) {
     double elapsed = difftime(now, gc_last_run_time);
     double cooldown;
-    if (js->brk > 128 * 1024 * 1024) cooldown = 2.0;
-    else if (js->brk > 64 * 1024 * 1024) cooldown = 4.0;
-    else if (js->brk > 16 * 1024 * 1024) cooldown = 6.0;
-    else cooldown = 8.0;
-    if (elapsed >= 0.0 && elapsed < cooldown && js->gc_alloc_since < js->brk) return 0;
+    
+    if (js->brk > 64 * 1024 * 1024) cooldown = 0.5;
+    else if (js->brk > 16 * 1024 * 1024) cooldown = 1.0;
+    else if (js->brk > 4 * 1024 * 1024) cooldown = 2.0;
+    else cooldown = 4.0;
+    
+    if (elapsed >= 0.0 
+      && elapsed < cooldown 
+      && js->gc_alloc_since < js->brk / 4
+    ) return 0;
   }
   
   mco_coro *running = mco_running();
@@ -618,9 +623,9 @@ size_t js_gc_compact(ant_t *js) {
 }
 
 void js_maybe_gc(ant_t *js) {
-  jsoff_t thresh = js->brk / 2;
-  if (thresh < 4 * 1024 * 1024) thresh = 4 * 1024 * 1024;
-  if (thresh > 64 * 1024 * 1024) thresh = 64 * 1024 * 1024;
+  jsoff_t thresh = js->brk / 4;
+  if (thresh < 512 * 1024) thresh = 512 * 1024;
+  if (thresh > 16 * 1024 * 1024) thresh = 16 * 1024 * 1024;
 
   if (js->gc_alloc_since > thresh || js->needs_gc) {
     js->needs_gc = false;

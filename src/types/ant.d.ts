@@ -53,12 +53,20 @@ interface AntAllocResult {
   totalBytes: number;
 }
 
+interface AntExternalMemory {
+  buffers: number;
+  code: number;
+  collections: number;
+  total: number;
+}
+
 interface AntStatsResult {
   arenaUsed: number;
+  arenaSize: number;
+  external: AntExternalMemory;
   cstack: number;
-  gcHeapSize: number;
-  gcFreeBytes: number;
-  gcUsedBytes: number;
+  rss?: number;
+  virtualSize?: number;
 }
 
 interface AntRaw {

@@ -77,11 +77,20 @@ function mixedWorkload() {
 
 console.log('=== GC Benchmark ===\n');
 
-let initial = Ant.stats();
-console.log('Initial state:');
-console.log('  arenaUsed:', fmt(initial.arenaUsed));
-console.log('  rss:', fmt(initial.rss));
-console.log('');
+function showStats(label, s) {
+  console.log(`${label}:`);
+  console.log(`  arenaUsed: ${fmt(s.arenaUsed)}`);
+  console.log(`  arenaSize: ${fmt(s.arenaSize)}`);
+  console.log(`  external.buffers: ${fmt(s.external.buffers)}`);
+  console.log(`  external.code: ${fmt(s.external.code)}`);
+  console.log(`  external.collections: ${fmt(s.external.collections)}`);
+  console.log(`  external.total: ${fmt(s.external.total)}`);
+  console.log(`  cstack: ${fmt(s.cstack)}`);
+  console.log(`  rss: ${fmt(s.rss)}`);
+  console.log('');
+}
+
+showStats('Initial state', Ant.stats());
 
 bench('Many small objects (1k objects)', manySmallObjects, 5);
 bench('Deep object graph (1000 levels)', deepObjectGraph, 5);
@@ -89,11 +98,7 @@ bench('Wide object (1000 properties)', wideObject, 5);
 bench('String array (5000 strings)', stringArray, 5);
 bench('Mixed workload', mixedWorkload, 5);
 
-let final = Ant.stats();
-console.log('Final state:');
-console.log('  arenaUsed:', fmt(final.arenaUsed));
-console.log('  arenaSize:', fmt(final.arenaSize));
-console.log('  rss:', fmt(final.rss));
-console.log('');
+showStats('Final state', Ant.stats());
+
 console.log('Note: GC runs automatically at safe points.');
 console.log('Use Ant.gc() as a hint to request collection.');

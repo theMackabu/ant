@@ -6,6 +6,7 @@
 
 void init_buffer_module(void);
 void cleanup_buffer_module(void);
+size_t buffer_get_external_memory(void);
 
 typedef struct {
   uint8_t *data;

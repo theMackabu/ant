@@ -1798,3 +1798,15 @@ void cleanup_buffer_module(void) {
   
   ta_arena_offset = 0;
 }
+
+size_t buffer_get_external_memory(void) {
+  size_t total = ta_arena ? ta_arena_offset : 0;
+  
+  for (size_t i = 0; i < buffer_registry_count; i++) {
+    if (buffer_registry[i])
+      total += sizeof(ArrayBufferData) + buffer_registry[i]->capacity;
+  }
+  total += buffer_registry_cap * sizeof(ArrayBufferData *);
+  
+  return total;
+}

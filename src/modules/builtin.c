@@ -18,6 +18,8 @@
 #include "runtime.h"
 #include "internal.h"
 #include "modules/builtin.h"
+#include "modules/buffer.h"
+#include "modules/collections.h"
 
 static struct {
   struct js *js;
@@ -99,6 +101,18 @@ static jsval_t js_stats_fn(struct js *js, jsval_t *args, int nargs) {
   
   js_set(js, result, "arenaUsed", js_mknum((double)js_getbrk(js)));
   js_set(js, result, "arenaSize", js_mknum((double)js->size));
+  
+  size_t buffer_mem = buffer_get_external_memory();
+  size_t code_mem = code_arena_get_memory();
+  size_t collections_mem = collections_get_external_memory();
+  size_t external_total = buffer_mem + code_mem + collections_mem;
+  
+  jsval_t ext = js_newobj(js);
+  js_set(js, ext, "buffers", js_mknum((double)buffer_mem));
+  js_set(js, ext, "code", js_mknum((double)code_mem));
+  js_set(js, ext, "collections", js_mknum((double)collections_mem));
+  js_set(js, ext, "total", js_mknum((double)external_total));
+  js_set(js, result, "external", ext);
   
   if (js->cstk != NULL) {
     volatile char marker;

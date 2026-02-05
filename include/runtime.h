@@ -22,5 +22,6 @@ struct ant_runtime *ant_runtime_init(struct js *js, int argc, char **argv, struc
 
 const char *code_arena_alloc(const char *code, size_t len);
 void code_arena_reset(void);
+size_t code_arena_get_memory(void);
 
 #endif
