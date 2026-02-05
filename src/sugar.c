@@ -1,4 +1,5 @@
 #include "internal.h"
+#include "gc.h"
 #include "errors.h"
 #include "sugar.h"
 
@@ -250,6 +251,7 @@ jsval_t start_async_in_coroutine(struct js *js, const char *code, size_t code_le
   if (mco_status(mco) == MCO_DEAD) {
     remove_coroutine(coro);
     free_coroutine(coro);
+    js_gc_maybe(js);
   }
   
   return promise;

@@ -573,6 +573,14 @@ size_t js_gc_compact(ant_t *js) {
   if (!js || js->brk == 0) return 0;
   if (js->brk < 2 * 1024 * 1024) return 0;
 
+  mco_coro *running = mco_running();
+  int in_coroutine = (running != NULL && running->stack_base != NULL);
+  
+  if (in_coroutine) {
+    js->needs_gc = true;
+    return 0;
+  }
+
   time_t now = time(NULL);
   if (now != (time_t)-1 && gc_last_run_time != 0) {
     double elapsed = difftime(now, gc_last_run_time);
@@ -588,11 +596,6 @@ size_t js_gc_compact(ant_t *js) {
       && js->gc_alloc_since < js->brk / 4
     ) return 0;
   }
-  
-  mco_coro *running = mco_running();
-  int in_coroutine = (running != NULL && running->stack_base != NULL);
-  
-  if (in_coroutine) return 0;
   if (now != (time_t)-1) gc_last_run_time = now;
   
   size_t old_brk = js->brk;
@@ -681,7 +684,7 @@ size_t js_gc_compact(ant_t *js) {
   return (old_brk > new_brk ? old_brk - new_brk : 0);
 }
 
-void js_maybe_gc(ant_t *js) {
+void js_gc_maybe(ant_t *js) {
   jsoff_t thresh = js->brk / 4;
   
   jsoff_t min_thresh = gc_throttled 
@@ -697,7 +700,6 @@ void js_maybe_gc(ant_t *js) {
 
   if (js->gc_alloc_since > thresh || js->needs_gc) {
     js->needs_gc = false;
-    js_gc_compact(js);
-    js->gc_alloc_since = 0;
+    if (js_gc_compact(js) > 0) js->gc_alloc_since = 0;
   }
 }

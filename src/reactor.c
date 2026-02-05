@@ -47,8 +47,7 @@ void js_poll_events(ant_t *js) {
   
   if (js->needs_gc) {
     js->needs_gc = false;
-    js_gc_compact(js);
-    js->gc_alloc_since = 0;
+    if (js_gc_compact(js) > 0) js->gc_alloc_since = 0;
   }
   
   if (g_poll_hook) g_poll_hook(g_poll_hook_data);

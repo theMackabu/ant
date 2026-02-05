@@ -22519,6 +22519,7 @@ void js_gc_update_roots(GC_UPDATE_ARGS) {
   
   promise_data_entry_t *pd, *pd_tmp;
   promise_data_entry_t *new_unhandled = NULL;
+
   for (
     promise_data_entry_t *new_promise_registry = NULL, *_once = NULL; !_once; _once = (void*)1, 
     promise_registry = new_promise_registry, unhandled_rejections = new_unhandled
@@ -22534,7 +22535,6 @@ void js_gc_update_roots(GC_UPDATE_ARGS) {
       
       bool can_collect = (pd->state != 0) && (utarray_len(pd->handlers) == 0);
       if (can_collect) { utarray_free(pd->handlers); free(pd); continue; }
-      
       pd->obj_offset = new_off;
       FWD_VAL(pd->value);
       UTARRAY_EACH(pd->handlers, promise_handler_t, h) {
@@ -22546,6 +22546,7 @@ void js_gc_update_roots(GC_UPDATE_ARGS) {
       HASH_ADD(hh, new_promise_registry, promise_id, sizeof(uint32_t), pd);
       if (in_unhandled) HASH_ADD(hh_unhandled, new_unhandled, promise_id, sizeof(uint32_t), pd);
     }
+
 
   proxy_data_t *proxy, *proxy_tmp;
   for (proxy_data_t *new_proxy_registry = NULL, *_once = NULL; !_once; _once = (void*)1, proxy_registry = new_proxy_registry)
@@ -22651,8 +22652,7 @@ static jsval_t js_eval_inherit_strict(struct js *js, const char *buf, size_t len
     res = js_stmt(js);
     if (js->needs_gc && js->eval_depth == 1) {
       js->needs_gc = false;
-      js_gc_compact(js);
-      js->gc_alloc_since = 0;
+      if (js_gc_compact(js) > 0) js->gc_alloc_since = 0;
     }
     if (js->flags & F_RETURN) break;
   }

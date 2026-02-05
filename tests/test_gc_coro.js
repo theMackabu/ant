@@ -53,7 +53,9 @@ const interval = setInterval(() => {
     clearInterval(interval);
     console.log('Done - forcing GC...');
     Ant.gc();
-    const after = Ant.stats();
-    console.log(`after GC: arena ${(after.arenaUsed / 1024 / 1024).toFixed(1)}MB`);
+    setTimeout(() => {
+      const after = Ant.stats();
+      console.log(`after GC: arena ${(after.arenaUsed / 1024 / 1024).toFixed(1)}MB`);
+    }, 10);
   }
 }, 10);  // 500 * 10ms = 5 seconds
