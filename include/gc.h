@@ -4,6 +4,19 @@
 #include <types.h>
 #include <stddef.h>
 
+#define ROPE_FLAG              (1ULL << 63)
+#define ROPE_DEPTH_SHIFT       56
+#define ROPE_DEPTH_MASK        0x7FULL
+#define ROPE_MAX_DEPTH         64
+#define ROPE_FLATTEN_THRESHOLD (32 * 1024)
+
+typedef struct {
+  jsoff_t header;
+  jsval_t left;
+  jsval_t right;
+  jsval_t cached;
+} rope_node_t;
+
 #define GC_FWD_LOAD_FACTOR 70
 #define GC_ROOTS_INITIAL_CAP 32
 

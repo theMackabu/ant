@@ -5,6 +5,7 @@
 #include <compat.h> // IWYU pragma: keep
 
 #include "ant.h"
+#include "gc.h"
 #include "tokens.h"
 #include "common.h"
 #include "arena.h"
@@ -639,16 +640,21 @@ static bool is_arr_off(struct js *js, jsoff_t off) {
   return (loadoff(js, off) & ARRMASK) != 0; 
 }
 
-static jsoff_t vstrlen(struct js *js, jsval_t v) { 
-  return offtolen(loadoff(js, (jsoff_t) vdata(v))); 
-}
-
 static inline jsval_t loadval(struct js *js, jsoff_t off) { 
   return *(jsval_t *)(&js->mem[off]);
 }
 
 static jsval_t upper(struct js *js, jsval_t scope) { 
   return mkval(T_OBJ, loadoff(js, (jsoff_t) (vdata(scope) + sizeof(jsoff_t)))); 
+}
+
+static jsoff_t vstrlen(struct js *js, jsval_t v) { 
+  jsoff_t off = (jsoff_t) vdata(v);
+  jsoff_t header = loadoff(js, off);
+  if (header & ROPE_FLAG) {
+    return offtolen(header & ~(ROPE_FLAG | (ROPE_DEPTH_MASK << ROPE_DEPTH_SHIFT)));
+  }
+  return offtolen(header);
 }
 
 #define EXPECT(_tok, ...)                                    \
@@ -1773,9 +1779,135 @@ static size_t strnum(jsval_t value, char *buf, size_t len) {
   return cpy(buf, len, temp, strlen(temp));
 }
 
+static inline bool is_rope(struct js *js, jsval_t value) {
+  jsoff_t off = (jsoff_t) vdata(value);
+  jsoff_t header = loadoff(js, off);
+  return (header & ROPE_FLAG) != 0;
+}
+
+static inline jsoff_t rope_len(struct js *js, jsval_t value) {
+  jsoff_t off = (jsoff_t) vdata(value);
+  jsoff_t header = loadoff(js, off);
+  return offtolen(header & ~(ROPE_FLAG | (ROPE_DEPTH_MASK << ROPE_DEPTH_SHIFT)));
+}
+
+static inline uint8_t rope_depth(struct js *js, jsval_t value) {
+  jsoff_t off = (jsoff_t) vdata(value);
+  jsoff_t header = loadoff(js, off);
+  return (uint8_t)((header >> ROPE_DEPTH_SHIFT) & ROPE_DEPTH_MASK);
+}
+
+static inline jsval_t rope_left(struct js *js, jsval_t value) {
+  jsoff_t off = (jsoff_t) vdata(value);
+  return loadval(js, off + offsetof(rope_node_t, left));
+}
+
+static inline jsval_t rope_right(struct js *js, jsval_t value) {
+  jsoff_t off = (jsoff_t) vdata(value);
+  return loadval(js, off + offsetof(rope_node_t, right));
+}
+
+static inline jsval_t rope_cached_flat(struct js *js, jsval_t value) {
+  jsoff_t off = (jsoff_t) vdata(value);
+  return loadval(js, off + offsetof(rope_node_t, cached));
+}
+
+static inline void rope_set_cached_flat(struct js *js, jsval_t rope, jsval_t flat) {
+  jsoff_t off = (jsoff_t) vdata(rope);
+  saveval(js, off + offsetof(rope_node_t, cached), flat);
+}
+
+static void rope_flatten_into(struct js *js, jsval_t str, char *dest, jsoff_t *pos) {
+  if (vtype(str) != T_STR) return;
+  
+  if (!is_rope(js, str)) {
+    jsoff_t slen;
+    jsoff_t soff = (jsoff_t) vdata(str);
+    slen = offtolen(loadoff(js, soff));
+    memcpy(dest + *pos, &js->mem[soff + sizeof(jsoff_t)], slen);
+    *pos += slen; return;
+  }
+  
+  jsval_t cached = rope_cached_flat(js, str);
+  if (vtype(cached) == T_STR && !is_rope(js, cached)) {
+    jsoff_t clen;
+    jsoff_t coff = (jsoff_t) vdata(cached);
+    clen = offtolen(loadoff(js, coff));
+    memcpy(dest + *pos, &js->mem[coff + sizeof(jsoff_t)], clen);
+    *pos += clen; return;
+  }
+  
+  jsval_t stack[ROPE_MAX_DEPTH + 8];
+  int sp = 0; stack[sp++] = str;
+  
+  while (sp > 0) {
+    jsval_t node = stack[--sp];
+    if (vtype(node) != T_STR) continue;
+    
+    if (!is_rope(js, node)) {
+      jsoff_t slen;
+      jsoff_t soff = (jsoff_t) vdata(node);
+      slen = offtolen(loadoff(js, soff));
+      memcpy(dest + *pos, &js->mem[soff + sizeof(jsoff_t)], slen);
+      *pos += slen; continue;
+    }
+    
+    jsval_t c = rope_cached_flat(js, node);
+    if (vtype(c) == T_STR && !is_rope(js, c)) {
+      jsoff_t clen;
+      jsoff_t coff = (jsoff_t) vdata(c);
+      clen = offtolen(loadoff(js, coff));
+      memcpy(dest + *pos, &js->mem[coff + sizeof(jsoff_t)], clen);
+      *pos += clen; continue;
+    }
+    
+    if (sp + 2 <= ROPE_MAX_DEPTH + 8) {
+      stack[sp++] = rope_right(js, node);
+      stack[sp++] = rope_left(js, node);
+    }
+  }
+}
+
+static jsval_t rope_flatten(struct js *js, jsval_t rope) {
+  if (!is_rope(js, rope)) return rope;
+  
+  jsval_t cached = rope_cached_flat(js, rope);
+  if (vtype(cached) == T_STR && !is_rope(js, cached)) return cached;
+  
+  jsoff_t total_len = rope_len(js, rope);
+  
+  char *buf = (char *)ant_calloc(total_len + 1);
+  if (!buf) return js_mkerr(js, "oom");
+  
+  jsoff_t pos = 0;
+  rope_flatten_into(js, rope, buf, &pos);
+  buf[pos] = '\0';
+  
+  jsval_t flat = js_mkstr(js, buf, pos);
+  free(buf);
+  
+  if (!is_err(flat)) {
+    rope_set_cached_flat(js, rope, flat);
+  }
+  
+  return flat;
+}
+
 jsoff_t vstr(struct js *js, jsval_t value, jsoff_t *len) {
   jsoff_t off = (jsoff_t) vdata(value);
-  if (len) *len = offtolen(loadoff(js, off));
+  jsoff_t header = loadoff(js, off);
+  
+  if (header & ROPE_FLAG) {
+    jsval_t flat = rope_flatten(js, value);
+    if (is_err(flat)) {
+      if (len) *len = 0;
+      return 0;
+    }
+    off = (jsoff_t) vdata(flat);
+    header = loadoff(js, off);
+  }
+  
+  if (len) *len = offtolen(header);
   return (jsoff_t) (off + sizeof(off));
 }
 
@@ -2163,6 +2295,21 @@ static jsval_t mkentity(struct js *js, jsoff_t b, const void *buf, size_t len) {
 jsval_t js_mkstr(struct js *js, const void *ptr, size_t len) {
   jsoff_t n = (jsoff_t) (len + 1);
   return mkentity(js, (jsoff_t) ((n << 3) | T_STR), ptr, n);
+}
+
+static jsval_t js_mkrope(struct js *js, jsval_t left, jsval_t right, jsoff_t total_len, uint8_t depth) {
+  jsoff_t ofs = js_alloc(js, sizeof(rope_node_t));
+  if (ofs == (jsoff_t) ~0) return js_mkerr(js, "oom");
+  
+  jsoff_t header = ((total_len + 1) << 3) | T_STR | ROPE_FLAG | ((jsoff_t)depth << ROPE_DEPTH_SHIFT);
+  jsval_t undef = js_mkundef();
+  
+  memcpy(&js->mem[ofs + offsetof(rope_node_t, header)], &header, sizeof(header));
+  memcpy(&js->mem[ofs + offsetof(rope_node_t, left)], &left, sizeof(left));
+  memcpy(&js->mem[ofs + offsetof(rope_node_t, right)], &right, sizeof(right));
+  memcpy(&js->mem[ofs + offsetof(rope_node_t, cached)], &undef, sizeof(undef));
+  
+  return mkval(T_STR, ofs);
 }
 
 jsval_t js_mkbigint(struct js *js, const char *digits, size_t len, bool negative) {
@@ -2762,19 +2909,19 @@ static void invalidate_prop_cache(struct js *js, jsoff_t obj_off, jsoff_t prop_o
 }
 
 static jsval_t mkprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v, jsoff_t flags) {
-  jsoff_t koff = (jsoff_t) vdata(k);
+  jsoff_t klen; jsoff_t koff = vstr(js, k, &klen);
+  jsoff_t koff_entity = koff - sizeof(jsoff_t);
   jsoff_t head = (jsoff_t) vdata(obj);
-  char buf[sizeof(koff) + sizeof(v)];
+  char buf[sizeof(koff_entity) + sizeof(v)];
   
   jsoff_t header = loadoff(js, head);
   jsoff_t first_prop = header & ~(3U | FLAGMASK);
   jsoff_t tail = loadoff(js, head + sizeof(jsoff_t) + sizeof(jsoff_t));
   
-  memcpy(buf, &koff, sizeof(koff));
-  memcpy(buf + sizeof(koff), &v, sizeof(v));
+  memcpy(buf, &koff_entity, sizeof(koff_entity));
+  memcpy(buf + sizeof(koff_entity), &v, sizeof(v));
   
-  jsoff_t klen = (loadoff(js, koff) >> 3) - 1;
-  const char *p = (char *) &js->mem[koff + sizeof(koff)];
+  const char *p = (char *) &js->mem[koff];
   (void)intern_string(p, klen);
   
   jsoff_t new_prop_off = js->brk;
@@ -2795,16 +2942,17 @@ static jsval_t mkprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v, jsoff_t 
 }
 
 static inline jsval_t mkprop_fast(struct js *js, jsval_t obj, jsval_t k, jsval_t v, jsoff_t flags) {
-  jsoff_t koff = (jsoff_t) vdata(k);
+  jsoff_t klen; jsoff_t koff = vstr(js, k, &klen);
+  jsoff_t koff_entity = koff - sizeof(jsoff_t);
   jsoff_t head = (jsoff_t) vdata(obj);
-  char buf[sizeof(koff) + sizeof(v)];
+  char buf[sizeof(koff_entity) + sizeof(v)];
   
   jsoff_t header = loadoff(js, head);
   jsoff_t first_prop = header & ~(3U | FLAGMASK);
   jsoff_t tail = loadoff(js, head + sizeof(jsoff_t) + sizeof(jsoff_t));
   
-  memcpy(buf, &koff, sizeof(koff));
-  memcpy(buf + sizeof(koff), &v, sizeof(v));
+  memcpy(buf, &koff_entity, sizeof(koff_entity));
+  memcpy(buf + sizeof(koff_entity), &v, sizeof(v));
   
   jsoff_t new_prop_off = js->brk;
   jsval_t prop = mkentity(js, 0 | T_PROP | flags, buf, sizeof(buf));
@@ -3018,9 +3166,8 @@ static jsval_t validate_array_length(struct js *js, jsval_t v) {
 }
 
 jsval_t js_setprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v) {
-  jsoff_t koff = (jsoff_t) vdata(k);
-  jsoff_t klen = offtolen(loadoff(js, koff));
-  const char *key = (char *) &js->mem[koff + sizeof(jsoff_t)];
+  jsoff_t klen; jsoff_t koff = vstr(js, k, &klen);
+  const char *key = (char *) &js->mem[koff];
   
   if (vtype(obj) == T_ARR && streq(key, klen, "length", 6)) {
     jsval_t err = validate_array_length(js, v);
@@ -5241,22 +5388,59 @@ static jsval_t string_builder_finalize(struct js *js, string_builder_t *sb) {
   return result;
 }
 
+static inline jsoff_t str_len_fast(struct js *js, jsval_t str) {
+  if (vtype(str) != T_STR) return 0;
+  jsoff_t off = (jsoff_t) vdata(str);
+  jsoff_t header = loadoff(js, off);
+  if (header & ROPE_FLAG) {
+    return offtolen(header & ~(ROPE_FLAG | (ROPE_DEPTH_MASK << ROPE_DEPTH_SHIFT)));
+  }
+  return offtolen(header);
+}
+
 static jsval_t do_string_op(struct js *js, uint8_t op, jsval_t l, jsval_t r) {
+  if (op == TOK_PLUS) {
+    jsoff_t n1 = str_len_fast(js, l);
+    jsoff_t n2 = str_len_fast(js, r);
+    jsoff_t total_len = n1 + n2;
+    
+    if (n2 == 0) return l;
+    if (n1 == 0) return r;
+    
+    uint8_t left_depth = (vtype(l) == T_STR && is_rope(js, l)) ? rope_depth(js, l) : 0;
+    uint8_t right_depth = (vtype(r) == T_STR && is_rope(js, r)) ? rope_depth(js, r) : 0;
+    uint8_t new_depth = (left_depth > right_depth ? left_depth : right_depth) + 1;
+    
+    if (new_depth >= ROPE_MAX_DEPTH || total_len >= ROPE_FLATTEN_THRESHOLD) {
+      jsval_t flat_l = l, flat_r = r;
+      if (is_rope(js, l)) flat_l = rope_flatten(js, l);
+      if (is_err(flat_l)) return flat_l;
+      if (is_rope(js, r)) flat_r = rope_flatten(js, r);
+      if (is_err(flat_r)) return flat_r;
+      
+      jsoff_t off1, off2, len1, len2;
+      off1 = vstr(js, flat_l, &len1);
+      off2 = vstr(js, flat_r, &len2);
+      
+      string_builder_t sb;
+      char static_buffer[512];
+      string_builder_init(&sb, static_buffer, sizeof(static_buffer));
+      
+      if (
+        !string_builder_append(&sb, (char *)&js->mem[off1], len1) ||
+        !string_builder_append(&sb, (char *)&js->mem[off2], len2)
+      ) return js_mkerr(js, "string concatenation failed");
+      
+      return string_builder_finalize(js, &sb);
+    }
+    
+    return js_mkrope(js, l, r, total_len, new_depth);
+  }
+  
   jsoff_t n1, off1 = vstr(js, l, &n1);
   jsoff_t n2, off2 = vstr(js, r, &n2);
   
-  if (op == TOK_PLUS) {
-    string_builder_t sb;
-    char static_buffer[512];
-    string_builder_init(&sb, static_buffer, sizeof(static_buffer));
-    
-    if (!string_builder_append(&sb, (char *)&js->mem[off1], n1) ||
-        !string_builder_append(&sb, (char *)&js->mem[off2], n2)) {
-      return js_mkerr(js, "string concatenation failed");
-    }
-    
-    return string_builder_finalize(js, &sb);
-  } else if (op == TOK_EQ) {
+  if (op == TOK_EQ) {
     bool eq = n1 == n2 && memcmp(&js->mem[off1], &js->mem[off2], n1) == 0;
     return mkval(T_BOOL, eq ? 1 : 0);
   } else if (op == TOK_NE) {
@@ -5269,9 +5453,7 @@ static jsval_t do_string_op(struct js *js, uint8_t op, jsval_t l, jsval_t r) {
     if (cmp == 0) {
       if (n1 == n2) {
         return mkval(T_BOOL, (op == TOK_LE || op == TOK_GE) ? 1 : 0);
-      } else {
-        cmp = (n1 < n2) ? -1 : 1;
-      }
+      } else cmp = (n1 < n2) ? -1 : 1;
     }
     
     switch (op) {
@@ -5281,9 +5463,7 @@ static jsval_t do_string_op(struct js *js, uint8_t op, jsval_t l, jsval_t r) {
       case TOK_GE: return mkval(T_BOOL, cmp >= 0 ? 1 : 0);
       default:     return js_mkerr(js, "bad str op");
     }
-  } else {
-    return js_mkerr(js, "bad str op");
-  }
+  } else return js_mkerr(js, "bad str op");
 }
 
 static jsval_t do_bracket_op(struct js *js, jsval_t l, jsval_t r) {
@@ -5349,9 +5529,8 @@ static jsval_t do_bracket_op(struct js *js, jsval_t l, jsval_t r) {
       if (endptr == temp || *endptr != '\0') idx_d = JS_NAN;
     }
     if (!isnan(idx_d) && idx_d >= 0 && idx_d == (double)(long)idx_d) {
-      jsoff_t idx = (jsoff_t) idx_d;
-      jsoff_t byte_len = offtolen(loadoff(js, (jsoff_t) vdata(obj)));
-      jsoff_t str_off = (jsoff_t) vdata(obj) + sizeof(jsoff_t);
+      jsoff_t idx = (jsoff_t) idx_d; jsoff_t byte_len;
+      jsoff_t str_off = vstr(js, obj, &byte_len);
       const char *str_data = (const char *)&js->mem[str_off];
       size_t char_bytes;
       int byte_offset = utf16_index_to_byte_offset(str_data, byte_len, idx, &char_bytes);
@@ -18193,8 +18372,7 @@ static jsval_t builtin_string_charCodeAt(struct js *js, jsval_t *args, int nargs
   long idx_l = (long) idx_d;
   if (idx_l < 0) return tov(JS_NAN);
   
-  jsoff_t byte_len = offtolen(loadoff(js, (jsoff_t) vdata(str)));
-  jsoff_t str_off = (jsoff_t) vdata(str) + sizeof(jsoff_t);
+  jsoff_t byte_len; jsoff_t str_off = vstr(js, str, &byte_len);
   const char *str_data = (const char *)&js->mem[str_off];
   
   uint32_t code_unit = utf16_code_unit_at(str_data, byte_len, idx_l);
@@ -18214,8 +18392,8 @@ static jsval_t builtin_string_codePointAt(struct js *js, jsval_t *args, int narg
   long idx_l = (long) idx_d;
   if (idx_l < 0) return js_mkundef();
   
-  jsoff_t byte_len = offtolen(loadoff(js, (jsoff_t) vdata(str)));
-  jsoff_t str_off = (jsoff_t) vdata(str) + sizeof(jsoff_t);
+  jsoff_t byte_len;
+  jsoff_t str_off = vstr(js, str, &byte_len);
   const char *str_data = (const char *)&js->mem[str_off];
   
   uint32_t cp = utf16_codepoint_at(str_data, byte_len, idx_l);
@@ -18350,9 +18528,8 @@ static jsval_t builtin_string_padStart(struct js *js, jsval_t *args, int nargs) 
   const char *pad_str = " ";
   jsoff_t pad_len = 1;
   if (nargs >= 2 && vtype(args[1]) == T_STR) {
-    pad_len = vstr(js, args[1], &pad_len);
-    pad_str = (char *) &js->mem[pad_len];
-    pad_len = offtolen(loadoff(js, (jsoff_t) vdata(args[1])));
+    jsoff_t pad_off = vstr(js, args[1], &pad_len);
+    pad_str = (char *) &js->mem[pad_off];
   }
   
   if (pad_len == 0) return str;
@@ -18389,9 +18566,8 @@ static jsval_t builtin_string_padEnd(struct js *js, jsval_t *args, int nargs) {
   const char *pad_str = " ";
   jsoff_t pad_len = 1;
   if (nargs >= 2 && vtype(args[1]) == T_STR) {
-    pad_len = vstr(js, args[1], &pad_len);
-    pad_str = (char *) &js->mem[pad_len];
-    pad_len = offtolen(loadoff(js, (jsoff_t) vdata(args[1])));
+    jsoff_t pad_off = vstr(js, args[1], &pad_len);
+    pad_str = (char *) &js->mem[pad_off];
   }
   
   if (pad_len == 0) return str;
@@ -18424,8 +18600,8 @@ static jsval_t builtin_string_charAt(struct js *js, jsval_t *args, int nargs) {
   if (idx_d < 0 || isinf(idx_d)) return js_mkstr(js, "", 0);
   
   jsoff_t idx = (jsoff_t) idx_d;
-  jsoff_t byte_len = offtolen(loadoff(js, (jsoff_t) vdata(str)));
-  jsoff_t str_off = (jsoff_t) vdata(str) + sizeof(jsoff_t);
+  jsoff_t byte_len;
+  jsoff_t str_off = vstr(js, str, &byte_len);
   const char *str_data = (const char *)&js->mem[str_off];
   
   size_t char_bytes;
@@ -18442,8 +18618,7 @@ static jsval_t builtin_string_at(struct js *js, jsval_t *args, int nargs) {
   double idx_d = nargs < 1 ? 0.0 : js_to_number(js, args[0]);
   if (isnan(idx_d) || isinf(idx_d)) return js_mkundef();
 
-  jsoff_t byte_len = offtolen(loadoff(js, (jsoff_t) vdata(str)));
-  jsoff_t str_off = (jsoff_t) vdata(str) + sizeof(jsoff_t);
+  jsoff_t byte_len; jsoff_t str_off = vstr(js, str, &byte_len);
   const char *str_data = (const char *)&js->mem[str_off];
   size_t utf16_len = utf16_strlen(str_data, byte_len);
   

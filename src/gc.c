@@ -254,7 +254,13 @@ static jsoff_t gc_copy_string(gc_ctx_t *ctx, jsoff_t old_off) {
   jsoff_t header = gc_loadoff(ctx->js->mem, old_off);
   if ((header & 3) != T_STR) return old_off;
   
-  jsoff_t size = esize(header);
+  bool is_rope_str = (header & ROPE_FLAG) != 0;
+  jsoff_t size;
+  
+  if (is_rope_str) {
+    size = sizeof(rope_node_t);
+  } else size = esize(header);
+  
   if (size == (jsoff_t)~0) return old_off;
   
   new_off = gc_alloc(ctx, size);
@@ -263,6 +269,21 @@ static jsoff_t gc_copy_string(gc_ctx_t *ctx, jsoff_t old_off) {
   memcpy(&ctx->new_mem[new_off], &ctx->js->mem[old_off], size);
   if (!fwd_add(&ctx->fwd, old_off, new_off)) ctx->failed = true;
   mark_set(ctx, old_off);
+  
+  if (is_rope_str) {
+    jsval_t left, right, cached;
+    memcpy(&left, &ctx->js->mem[old_off + offsetof(rope_node_t, left)], sizeof(jsval_t));
+    memcpy(&right, &ctx->js->mem[old_off + offsetof(rope_node_t, right)], sizeof(jsval_t));
+    memcpy(&cached, &ctx->js->mem[old_off + offsetof(rope_node_t, cached)], sizeof(jsval_t));
+    
+    jsval_t new_left = gc_update_val(ctx, left);
+    jsval_t new_right = gc_update_val(ctx, right);
+    jsval_t new_cached = gc_update_val(ctx, cached);
+    
+    memcpy(&ctx->new_mem[new_off + offsetof(rope_node_t, left)], &new_left, sizeof(jsval_t));
+    memcpy(&ctx->new_mem[new_off + offsetof(rope_node_t, right)], &new_right, sizeof(jsval_t));
+    memcpy(&ctx->new_mem[new_off + offsetof(rope_node_t, cached)], &new_cached, sizeof(jsval_t));
+  }
   
   return new_off;
 }
