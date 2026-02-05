@@ -1929,6 +1929,12 @@ static size_t tostr(struct js *js, jsval_t value, char *buf, size_t len) {
     case T_CFUNC:   return ANT_COPY(buf, len, "[native code]");
     case T_FFI:     return ANT_COPY(buf, len, "[native code (ffi)]");
     
+    case T_ERR: {
+      const char *msg = js->errmsg ? js->errmsg : "Error";
+      size_t mlen = strlen(msg);
+      return cpy(buf, len, msg, mlen);
+    }
+    
     case T_SYMBOL: {
       const char *desc = js_sym_desc(js, value);
       if (desc) return (size_t) snprintf(buf, len, "Symbol(%s)", desc);
@@ -19925,10 +19931,25 @@ static bool esm_has_extension(const char *spec) {
   return dot && (!slash || dot > slash);
 }
 
+static char *esm_resolve_absolute(const char *specifier) {
+  char *result;
+  if ((result = esm_try_resolve("", specifier, ""))) return result;
+  if (esm_has_extension(specifier)) return NULL;
+  if ((result = esm_try_resolve("", specifier, ".js"))) return result;
+  if ((result = esm_try_resolve("", specifier, ".ts"))) return result;
+  if ((result = esm_try_resolve("", specifier, ".mts"))) return result;
+  if ((result = esm_try_resolve("", specifier, ".cts"))) return result;
+  if ((result = esm_try_resolve("", specifier, ".json"))) return result;
+  return NULL;
+}
+
 static char *esm_resolve_path(const char *specifier, const char *base_path) {
-  if (!(specifier[0] == '/' || 
-       (specifier[0] == '.' && specifier[1] == '/') || 
-       (specifier[0] == '.' && specifier[1] == '.' && specifier[2] == '/'))) {
+  if (specifier[0] == '/' && specifier[1] != '.') {
+    return esm_resolve_absolute(specifier);
+  }
+  
+  if (!((specifier[0] == '.' && specifier[1] == '/') || 
+        (specifier[0] == '.' && specifier[1] == '.' && specifier[2] == '/'))) {
     return strdup(specifier);
   }
   
