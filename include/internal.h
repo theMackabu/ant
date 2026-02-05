@@ -76,6 +76,10 @@ struct js {
   
   jsval_t ascii_char_cache[128];
   bool ascii_cache_init;
+  
+  void *token_stream;
+  int token_stream_pos;
+  const char *token_stream_code;
 };
 
 typedef struct {

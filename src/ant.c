@@ -259,6 +259,21 @@ typedef struct parsed_param {
   bool is_destruct;
 } parsed_param_t;
 
+typedef struct cached_token {
+  uint8_t tok;
+  uint8_t had_newline;
+  jsoff_t toff;
+  jsoff_t tlen;
+  jsoff_t pos;
+  jsval_t tval;
+} cached_token_t;
+
+typedef struct token_stream {
+  cached_token_t *tokens;
+  int count;
+  int capacity;
+} token_stream_t;
+
 typedef struct parsed_func {
   uint64_t code_hash;
   jsoff_t body_start;
@@ -270,6 +285,7 @@ typedef struct parsed_func {
   jsoff_t rest_param_start;
   jsoff_t rest_param_len;
   UT_array *params;
+  token_stream_t *tokens;
   UT_hash_handle hh;
 } parsed_func_t;
 
@@ -610,6 +626,7 @@ typedef struct {
   const char *code;
   jsoff_t clen, pos;
   uint8_t tok, consumed;
+  int token_stream_pos;
 } js_parse_state_t;
 
 #define JS_SAVE_STATE(js, state) do { \
@@ -618,6 +635,7 @@ typedef struct {
   (state).pos = (js)->pos; \
   (state).tok = (js)->tok; \
   (state).consumed = (js)->consumed; \
+  (state).token_stream_pos = (js)->token_stream_pos; \
 } while(0)
 
 #define JS_RESTORE_STATE(js, state) do { \
@@ -626,6 +644,7 @@ typedef struct {
   (js)->pos = (state).pos; \
   (js)->tok = (state).tok; \
   (js)->consumed = (state).consumed; \
+  (js)->token_stream_pos = (state).token_stream_pos; \
 } while(0)
 
 static size_t strstring(struct js *js, jsval_t value, char *buf, size_t len);
@@ -714,6 +733,7 @@ static jsval_t proxy_set(struct js *js, jsval_t proxy, const char *key, size_t k
 static jsval_t proxy_has(struct js *js, jsval_t proxy, const char *key, size_t key_len);
 static jsval_t proxy_delete(struct js *js, jsval_t proxy, const char *key, size_t key_len);
 
+static uint8_t next_raw(struct js *js);
 static inline bool push_this(jsval_t this_value);
 static inline jsval_t pop_this(void);
 
@@ -4336,7 +4356,115 @@ static inline uint8_t parse_operator(struct js *js, const char *buf, jsoff_t rem
   return js->tok;
 }
 
-static uint8_t next(struct js *js) {
+static token_stream_t *token_stream_create(void) {
+  token_stream_t *ts = (token_stream_t *)malloc(sizeof(token_stream_t));
+  if (!ts) return NULL;
+  ts->capacity = 64;
+  ts->tokens = (cached_token_t *)malloc(ts->capacity * sizeof(cached_token_t));
+  if (!ts->tokens) { free(ts); return NULL; }
+  ts->count = 0;
+  return ts;
+}
+
+static bool token_stream_push(token_stream_t *ts, struct js *js) {
+  if (ts->count >= ts->capacity) {
+    int new_cap = ts->capacity * 2;
+    cached_token_t *new_tokens = (cached_token_t *)realloc(ts->tokens, new_cap * sizeof(cached_token_t));
+    if (!new_tokens) return false;
+    ts->tokens = new_tokens;
+    ts->capacity = new_cap;
+  }
+  cached_token_t *ct = &ts->tokens[ts->count++];
+  ct->tok = js->tok;
+  ct->had_newline = js->had_newline ? 1 : 0;
+  ct->toff = js->toff;
+  ct->tlen = js->tlen;
+  ct->pos = js->pos;
+  ct->tval = js->tval;
+  return true;
+}
+
+static inline bool token_stream_next(struct js *js) {
+  token_stream_t *ts = (token_stream_t *)js->token_stream;
+  if (js->token_stream_pos >= ts->count) {
+    js->tok = TOK_EOF;
+    return false;
+  }
+  cached_token_t *ct = &ts->tokens[js->token_stream_pos++];
+  js->tok = ct->tok;
+  js->had_newline = ct->had_newline;
+  js->toff = ct->toff;
+  js->tlen = ct->tlen;
+  js->pos = ct->pos;
+  js->tval = ct->tval;
+  return true;
+}
+
+static inline void token_stream_sync_pos(struct js *js) {
+  if (!js->token_stream || js->code != js->token_stream_code) return;
+  token_stream_t *ts = (token_stream_t *)js->token_stream;
+  jsoff_t target = js->pos;
+  
+  int lo = 0, hi = ts->count;
+  while (lo < hi) {
+    int mid = lo + (hi - lo) / 2;
+    if (ts->tokens[mid].toff < target) lo = mid + 1;
+    else hi = mid;
+  }
+  js->token_stream_pos = lo;
+}
+
+static token_stream_t *tokenize_body(struct js *js, const char *code, jsoff_t len) {
+  token_stream_t *ts = token_stream_create();
+  if (!ts) return NULL;
+  
+  const char *saved_code = js->code;
+  jsoff_t saved_clen = js->clen;
+  jsoff_t saved_pos = js->pos;
+  uint8_t saved_tok = js->tok;
+  uint8_t saved_consumed = js->consumed;
+  
+  js->code = code;
+  js->clen = len;
+  js->pos = 0;
+  js->consumed = 1;
+  
+  while (next_raw(js) != TOK_EOF) {
+    if (!token_stream_push(ts, js)) {
+      free(ts->tokens);
+      free(ts);
+      ts = NULL;
+      break;
+    }
+    js->consumed = 1;
+  }
+  
+  if (ts) {
+    cached_token_t eof_tok = {
+      .tok = TOK_EOF,
+      .had_newline = 0,
+      .toff = len,
+      .tlen = 0,
+      .pos = len,
+      .tval = 0
+    };
+    if (ts->count < ts->capacity || 
+        (ts->count >= ts->capacity && 
+         (ts->tokens = realloc(ts->tokens, (ts->capacity + 1) * sizeof(cached_token_t))) != NULL)) {
+      ts->tokens[ts->count++] = eof_tok;
+    }
+  }
+  
+  js->code = saved_code;
+  js->clen = saved_clen;
+  js->pos = saved_pos;
+  js->tok = saved_tok;
+  js->consumed = saved_consumed;
+  
+  return ts;
+}
+
+static uint8_t next_raw(struct js *js) {
   if (likely(js->consumed == 0)) return js->tok;
 
   js->consumed = 0;
@@ -4403,16 +4531,35 @@ static uint8_t next(struct js *js) {
   return js->tok;
 }
 
+static uint8_t next(struct js *js) {
+  if (likely(js->consumed == 0)) return js->tok;
+  
+  if (js->token_stream && js->code == js->token_stream_code) {
+    token_stream_t *ts = (token_stream_t *)js->token_stream;
+    int idx = js->token_stream_pos;
+    if (unlikely(idx > 0 && idx <= ts->count && js->pos != ts->tokens[idx - 1].pos)) {
+      token_stream_sync_pos(js);
+    }
+    js->consumed = 0;
+    token_stream_next(js);
+    return js->tok;
+  }
+    
+  return next_raw(js);
+}
+
 static inline uint8_t lookahead(struct js *js) {
   uint8_t old = js->tok, tok = 0;
   uint8_t old_consumed = js->consumed;
   jsoff_t pos = js->pos;
+  int stream_pos = js->token_stream_pos;
   
   js->consumed = 1;
   tok = next(js);
   js->pos = pos;
   js->tok = old;
   js->consumed = old_consumed;
+  js->token_stream_pos = stream_pos;
   
   return tok;
 }
@@ -4421,6 +4568,7 @@ static bool is_typeof_bare_ident(struct js *js) {
   jsoff_t pos = js->pos, toff = js->toff, tlen = js->tlen;
   uint8_t tok = js->tok, consumed = js->consumed;
   bool had_newline = js->had_newline;
+  int stream_pos = js->token_stream_pos;
   
   int depth = 0;
   uint8_t t = next(js);
@@ -4436,6 +4584,7 @@ static bool is_typeof_bare_ident(struct js *js) {
   
   js->pos = pos; js->toff = toff; js->tlen = tlen;
   js->tok = tok; js->consumed = consumed; js->had_newline = had_newline;
+  js->token_stream_pos = stream_pos;
   
   return bare;
 }
@@ -4535,6 +4684,7 @@ static bool block_needs_scope(struct js *js) {
   jsoff_t pos = js->pos, toff = js->toff, tlen = js->tlen;
   uint8_t tok = js->tok, consumed = js->consumed;
   bool had_newline = js->had_newline;
+  int stream_pos = js->token_stream_pos;
   
   bool needs = false;
   int depth = 1;
@@ -4558,6 +4708,7 @@ static bool block_needs_scope(struct js *js) {
   
   js->pos = pos; js->toff = toff; js->tlen = tlen;
   js->tok = tok; js->consumed = consumed; js->had_newline = had_newline;
+  js->token_stream_pos = stream_pos;
   
   return needs;
 }
@@ -6104,6 +6255,7 @@ static parsed_func_t *get_or_parse_func(const char *fn, jsoff_t fnlen) {
   pf->body_len = (fnlen > fnpos) ? (fnlen - fnpos - (is_block ? 1 : 0)) : 0;
   pf->is_expr = !is_block;
   pf->is_strict = is_strict_function_body(&fn[fnpos], pf->body_len);
+  pf->tokens = NULL;
   
   HASH_ADD(hh, func_parse_cache, code_hash, sizeof(pf->code_hash), pf);
   return pf;
@@ -6330,6 +6482,24 @@ jsval_t call_js_internal(
   
   js->flags = F_CALL | (func_strict ? F_STRICT : 0);
   jsval_t res;
+  
+  void *saved_token_stream = js->token_stream;
+  int saved_token_stream_pos = js->token_stream_pos;
+  const char *saved_token_stream_code = js->token_stream_code;
+  
+  if (!pf->is_expr && !pf->tokens && pf->body_len > 0) {
+    pf->tokens = tokenize_body(js, &fn[pf->body_start], pf->body_len);
+  }
+  
+  if (pf->tokens && !pf->is_expr) {
+    js->token_stream = pf->tokens;
+    js->token_stream_pos = 0;
+    js->token_stream_code = &fn[pf->body_start];
+  } else {
+    js->token_stream = NULL;
+    js->token_stream_code = NULL;
+  }
+  
   if (pf->is_expr) {
     res = js_eval_str(js, &fn[pf->body_start], pf->body_len);
     res = resolveprop(js, res);
@@ -6337,6 +6507,11 @@ jsval_t call_js_internal(
     res = js_eval(js, &fn[pf->body_start], pf->body_len);
     if (!is_err(res) && !(js->flags & F_RETURN)) res = js_mkundef();
   }
+  
+  js->token_stream = saved_token_stream;
+  js->token_stream_pos = saved_token_stream_pos;
+  js->token_stream_code = saved_token_stream_code;
+  
   js->skip_func_hoist = false;
   if (global_scope_stack && utarray_len(global_scope_stack) > 0)  utarray_pop_back(global_scope_stack);
   
@@ -7736,6 +7911,7 @@ static jsval_t js_arr_or_destruct(struct js *js) {
   uint8_t saved_tok = js->tok;
   uint8_t saved_consumed = js->consumed;
   uint8_t saved_flags = js->flags;
+  int saved_stream_pos = js->token_stream_pos;
   
   js->flags |= F_NOEXEC;
   js->consumed = 1;
@@ -7752,6 +7928,7 @@ static jsval_t js_arr_or_destruct(struct js *js) {
   js->tok = saved_tok;
   js->consumed = saved_consumed;
   js->flags = saved_flags;
+  js->token_stream_pos = saved_stream_pos;
   
   if (is_destruct) {
     return js_arr_destruct_assign(js);
@@ -7988,6 +8165,7 @@ static jsval_t js_obj_literal(struct js *js) {
         uint8_t saved_consumed = js->consumed;
         jsoff_t saved_toff = js->toff;
         jsoff_t saved_tlen = js->tlen;
+        int saved_stream_pos = js->token_stream_pos;
         
         js->consumed = 1;
         uint8_t peek = next(js);
@@ -8041,6 +8219,7 @@ static jsval_t js_obj_literal(struct js *js) {
           js->consumed = saved_consumed;
           js->toff = saved_toff;
           js->tlen = saved_tlen;
+          js->token_stream_pos = saved_stream_pos;
           
           id_off = saved_toff;
           id_len = saved_tlen;
@@ -8609,6 +8788,7 @@ static jsval_t js_async_arrow_paren(struct js *js) {
   uint8_t saved_tok = js->tok;
   uint8_t saved_consumed = js->consumed;
   uint8_t saved_flags = js->flags;
+  int saved_stream_pos = js->token_stream_pos;
   int paren_depth = 1;
   js->flags |= F_NOEXEC;
   while (paren_depth > 0 && next(js) != TOK_EOF) {
@@ -8622,6 +8802,7 @@ static jsval_t js_async_arrow_paren(struct js *js) {
   js->tok = saved_tok;
   js->consumed = saved_consumed;
   js->flags = saved_flags;
+  js->token_stream_pos = saved_stream_pos;
   if (is_arrow) {
     js->flags |= F_NOEXEC;
     while (next(js) != TOK_RPAREN && next(js) != TOK_EOF) {
@@ -8650,6 +8831,7 @@ static jsval_t js_group(struct js *js) {
     uint8_t saved_tok = js->tok;
     uint8_t saved_consumed = js->consumed;
     uint8_t saved_flags = js->flags;
+    int saved_stream_pos = js->token_stream_pos;
     
     int paren_depth = 1;
     bool could_be_arrow = true;
@@ -8669,6 +8851,7 @@ static jsval_t js_group(struct js *js) {
     js->tok = saved_tok;
     js->consumed = saved_consumed;
     js->flags = saved_flags;
+    js->token_stream_pos = saved_stream_pos;
     
     if (is_arrow) {
       js->flags |= F_NOEXEC;
@@ -8756,12 +8939,14 @@ static jsval_t js_call_dot(struct js *js) {
     jsoff_t saved_pos = js->pos;
     uint8_t saved_tok = js->tok;
     uint8_t saved_consumed = js->consumed;
+    int saved_stream_pos = js->token_stream_pos;
     res = lookup(js, &js->code[id_off], id_len);
     if (is_err(res)) {
       if (!(js->flags & F_STRICT) && !(js->flags & F_NOEXEC)) {
         js->pos = saved_pos;
         js->tok = saved_tok;
         js->consumed = saved_consumed;
+        js->token_stream_pos = saved_stream_pos;
         uint8_t next_tok = next(js);
         if (next_tok == TOK_ASSIGN) {
           js->flags &= (uint8_t)~F_THROW;
@@ -9037,12 +9222,14 @@ static jsval_t js_unary(struct js *js) {
       jsoff_t id_pos = js->pos;
       uint8_t id_tok = js->tok;
       jsoff_t id_toff = js->toff, id_tlen = js->tlen;
+      int id_stream_pos = js->token_stream_pos;
       js->consumed = 1;
       uint8_t after = next(js);
       if (after != TOK_DOT && after != TOK_LBRACKET && after != TOK_OPTIONAL_CHAIN) {
         return js_mkerr_typed(js, JS_ERR_SYNTAX, "cannot delete unqualified identifier in strict mode");
       }
       js->pos = id_pos; js->tok = id_tok; js->toff = id_toff; js->tlen = id_tlen; js->consumed = 0;
+      js->token_stream_pos = id_stream_pos;
     }
 
     js_parse_state_t saved_state;
@@ -9233,11 +9420,13 @@ static jsval_t js_unary(struct js *js) {
     js->consumed = 1;
     jsoff_t saved_pos = js->pos;
     uint8_t saved_tok = js->tok, saved_consumed = js->consumed, saved_flags = js->flags;
+    int saved_stream_pos = js->token_stream_pos;
     bool bare = is_typeof_bare_ident(js);
     jsval_t operand = js_unary(js);
     if (is_err(operand)) {
       if (!bare || get_error_type(js) != JS_ERR_REFERENCE) return operand;
       js->pos = saved_pos; js->tok = saved_tok; js->consumed = saved_consumed;
+      js->token_stream_pos = saved_stream_pos;
       js->flags = (saved_flags & ~F_THROW) | F_NOEXEC;
       js_unary(js);
       js->flags = saved_flags & ~F_THROW;
@@ -10151,6 +10340,7 @@ static void loop_block_init(struct js *js, loop_block_ctx_t *ctx) {
     jsoff_t saved_pos = js->pos;
     uint8_t saved_tok = js->tok;
     uint8_t saved_consumed = js->consumed;
+    int saved_stream_pos = js->token_stream_pos;
     
     js->consumed = 1;
     next(js);
@@ -10159,6 +10349,7 @@ static void loop_block_init(struct js *js, loop_block_ctx_t *ctx) {
     js->pos = saved_pos;
     js->tok = saved_tok;
     js->consumed = saved_consumed;
+    js->token_stream_pos = saved_stream_pos;
     
     if (ctx->needs_scope) ctx->loop_scope_handle = js_root(js, js_mkscope(js));
   }
@@ -11788,6 +11979,7 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
         jsoff_t saved_toff = js->toff;
         jsoff_t saved_tlen = js->tlen;
         uint8_t saved_tok = js->tok;
+        int saved_stream_pos = js->token_stream_pos;
         js->consumed = 1;
         if (next(js) == TOK_IDENTIFIER) {
           is_getter_method = is_get;
@@ -11797,6 +11989,7 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
           js->toff = saved_toff;
           js->tlen = saved_tlen;
           js->tok = saved_tok;
+          js->token_stream_pos = saved_stream_pos;
           js->consumed = 0;
         }
       }
@@ -22330,9 +22523,14 @@ static jsval_t js_eval_inherit_strict(struct js *js, const char *buf, size_t len
   js->clen = (jsoff_t) len;
   js->pos = 0;
   
+  if (js->token_stream && js->code == js->token_stream_code) {
+    js->token_stream_pos = 0;
+  }
+  
   uint8_t saved_tok = js->tok;
   jsoff_t saved_pos = js->pos;
   uint8_t saved_consumed = js->consumed;
+  int saved_stream_pos = js->token_stream_pos;
   js->consumed = 1;
   
   bool is_strict = inherit_strict;
@@ -22350,6 +22548,7 @@ static jsval_t js_eval_inherit_strict(struct js *js, const char *buf, size_t len
   js->tok = saved_tok;
   js->pos = saved_pos;
   js->consumed = saved_consumed;
+  js->token_stream_pos = saved_stream_pos;
   
   if (is_strict) {
     mkscope(js);
@@ -22516,6 +22715,23 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
     js->flags = F_CALL | (pf->is_strict ? F_STRICT : 0);
     jsval_t res;
     
+    void *saved_token_stream = js->token_stream;
+    int saved_token_stream_pos = js->token_stream_pos;
+    const char *saved_token_stream_code = js->token_stream_code;
+    
+    if (!pf->is_expr && !pf->tokens && pf->body_len > 0) {
+      pf->tokens = tokenize_body(js, &fn[pf->body_start], pf->body_len);
+    }
+    
+    if (pf->tokens && !pf->is_expr) {
+      js->token_stream = pf->tokens;
+      js->token_stream_pos = 0;
+      js->token_stream_code = &fn[pf->body_start];
+    } else {
+      js->token_stream = NULL;
+      js->token_stream_code = NULL;
+    }
+    
     if (pf->is_expr) {
       res = js_eval_str(js, &fn[pf->body_start], pf->body_len);
       res = resolveprop(js, res);
@@ -22523,6 +22739,10 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
       res = js_eval(js, &fn[pf->body_start], pf->body_len);
       if (!is_err(res) && !(js->flags & F_RETURN)) res = js_mkundef();
     }
+    
+    js->token_stream = saved_token_stream;
+    js->token_stream_pos = saved_token_stream_pos;
+    js->token_stream_code = saved_token_stream_code;
     
     JS_RESTORE_STATE(js, saved_state);
     js->flags = caller_flags;
