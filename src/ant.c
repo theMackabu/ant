@@ -2356,6 +2356,33 @@ static jsval_t js_mkrope(struct js *js, jsval_t left, jsval_t right, jsoff_t tot
   return mkval(T_STR, ofs);
 }
 
+static bool bigint_parse_abs_u64(struct js *js, jsval_t value, uint64_t *out) {
+  size_t len = 0; const char *digits = bigint_digits(js, value, &len);
+  uint64_t acc = 0;
+
+  for (size_t i = 0; i < len; i++) {
+    char c = digits[i];
+    if (!is_digit(c)) return false;
+    uint64_t digit = (uint64_t)(c - '0');
+    if (acc > UINT64_MAX / 10 || (acc == UINT64_MAX / 10 && digit > (UINT64_MAX % 10))) {
+      return false;
+    } acc = acc * 10 + digit;
+  }
+
+  *out = acc;
+  return true;
+}
+
+static bool bigint_IsNegative(struct js *js, jsval_t v) {
+  jsoff_t ofs = (jsoff_t) vdata(v);
+  return js->mem[ofs + sizeof(jsoff_t)] == 1;
+}
+
+static bool bigint_parse_u64(struct js *js, jsval_t value, uint64_t *out) {
+  if (bigint_IsNegative(js, value)) return false;
+  return bigint_parse_abs_u64(js, value, out);
+}
+
 jsval_t js_mkbigint(struct js *js, const char *digits, size_t len, bool negative) {
   size_t total = len + 2;
   jsoff_t ofs = js_alloc(js, total + sizeof(jsoff_t));
@@ -2366,11 +2393,6 @@ jsval_t js_mkbigint(struct js *js, const char *digits, size_t len, bool negative
   if (digits) memcpy(&js->mem[ofs + sizeof(header) + 1], digits, len);
   js->mem[ofs + sizeof(header) + 1 + len] = 0;
   return mkval(T_BIGINT, ofs);
-}
-
-static bool bigint_IsNegative(struct js *js, jsval_t v) {
-  jsoff_t ofs = (jsoff_t) vdata(v);
-  return js->mem[ofs + sizeof(jsoff_t)] == 1;
 }
 
 static const char *bigint_digits(struct js *js, jsval_t v, size_t *len) {
@@ -2604,6 +2626,66 @@ static jsval_t bigint_exp(struct js *js, jsval_t base, jsval_t exp) {
   return result;
 }
 
+static inline jsval_t bigint_pow2(struct js *js, uint64_t bits) {
+  jsval_t two = js_mkbigint(js, "2", 1, false);
+  if (is_err(two)) return two;
+  jsval_t exp = bigint_from_u64(js, bits);
+  if (is_err(exp)) return exp;
+  return bigint_exp(js, two, exp);
+}
+
+static jsval_t bigint_shift_left(struct js *js, jsval_t value, uint64_t shift) {
+  if (shift == 0) return value;
+  if (shift > 18446744073709551615ULL) return js_mkerr(js, "Shift count too large");
+
+  size_t digits_len; const char *digits = bigint_digits(js, value, &digits_len);
+  if (digits_len == 1 && digits[0] == '0') return js_mkbigint(js, "0", 1, false);
+  uint64_t u64 = 0;
+  if (!bigint_IsNegative(js, value) && shift < 64 && bigint_parse_u64(js, value, &u64)) {
+    if (u64 <= (UINT64_MAX >> shift)) return bigint_from_u64(js, u64 << shift);
+  }
+
+  jsval_t pow = bigint_pow2(js, shift);
+  if (is_err(pow)) return pow;
+  return bigint_mul(js, value, pow);
+}
+
+static jsval_t bigint_shift_right(struct js *js, jsval_t value, uint64_t shift) {
+  if (shift == 0) return value;
+  if (shift > 18446744073709551615ULL) return js_mkerr(js, "Shift count too large");
+
+  size_t digits_len; const char *digits = bigint_digits(js, value, &digits_len);
+  if (digits_len == 1 && digits[0] == '0') return js_mkbigint(js, "0", 1, false);
+  uint64_t u64 = 0;
+  if (!bigint_IsNegative(js, value) && bigint_parse_u64(js, value, &u64)) {
+    if (shift >= 64) return js_mkbigint(js, "0", 1, false);
+    return bigint_from_u64(js, u64 >> shift);
+  }
+
+  if (bigint_parse_abs_u64(js, value, &u64)) {
+    if (shift >= 64) return js_mkbigint(
+      js, bigint_IsNegative(js, value) ? "1" : "0", 1, 
+      bigint_IsNegative(js, value)
+    );
+    uint64_t shifted = u64 >> shift;
+    if (bigint_IsNegative(js, value)) {
+      if ((u64 & ((1ULL << shift) - 1)) != 0) shifted += 1;
+      jsval_t pos = bigint_from_u64(js, shifted);
+      if (is_err(pos)) return pos;
+      return bigint_neg(js, pos);
+    }
+    return bigint_from_u64(js, shifted);
+  }
+
+  jsval_t pow = bigint_pow2(js, shift);
+  if (is_err(pow)) return pow;
+  return bigint_div(js, value, pow);
+}
+
+static inline jsval_t bigint_shift_right_logical(struct js *js, jsval_t value, uint64_t shift) {
+  return js_mkerr_typed(js, JS_ERR_TYPE, "BigInts have no unsigned right shift, use >> instead");
+}
+
 static int bigint_compare(struct js *js, jsval_t a, jsval_t b) {
   bool aneg = bigint_IsNegative(js, a), bneg = bigint_IsNegative(js, b);
   size_t alen, blen;
@@ -2666,15 +2748,17 @@ static jsval_t builtin_BigInt(struct js *js, jsval_t *args, int nargs) {
   return js_mkerr(js, "Cannot convert to BigInt");
 }
 
-static jsval_t bigint_pow2(struct js *js, uint64_t bits) {
-  jsval_t two = js_mkbigint(js, "2", 1, false);
-  if (is_err(two)) return two;
-  jsval_t exp = bigint_from_u64(js, bits);
-  if (is_err(exp)) return exp;
-  return bigint_exp(js, two, exp);
+static jsval_t bigint_to_u64(struct js *js, jsval_t value, uint64_t *out) {
+  if (!bigint_parse_u64(js, value, out)) {
+    return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid bits");
+  }
+  return js_mkundef();
 }
 
 static jsval_t bigint_asint_bits(struct js *js, jsval_t arg, uint64_t *bits_out) {
+  if (vtype(arg) == T_BIGINT) {
+    return bigint_to_u64(js, arg, bits_out);
+  }
   double bits = js_to_number(js, arg);
   if (!isfinite(bits) || bits < 0 || bits != floor(bits)) {
     return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid bits");
@@ -7473,8 +7557,20 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
   L_TOK_SHR:
   L_TOK_ZSHR: {
     uint8_t lt = vtype(l), rtype = vtype(r);
-    if (lt == T_BIGINT || rtype == T_BIGINT)
-      return js_mkerr(js, "Cannot mix BigInt value and other types");
+    if (lt == T_BIGINT || rtype == T_BIGINT) {
+      if (lt != T_BIGINT || rtype != T_BIGINT)
+        return js_mkerr(js, "Cannot mix BigInt value and other types");
+      if (op == TOK_AND || op == TOK_OR || op == TOK_XOR)
+        return js_mkerr_typed(js, JS_ERR_TYPE, "BigInt does not support bitwise ops");
+      uint64_t shift = 0;
+      jsval_t shift_err = bigint_asint_bits(js, r, &shift);
+      if (is_err(shift_err)) return shift_err;
+      switch (op) {
+        case TOK_SHL:  return bigint_shift_left(js, l, shift);
+        case TOK_SHR:  return bigint_shift_right(js, l, shift);
+        case TOK_ZSHR: return bigint_shift_right_logical(js, l, shift);
+      }
+    }
     int32_t ai = (lt == T_NUM) ? js_to_int32(tod(l)) : js_to_int32(js_to_number(js, l));
     uint32_t bi = (rtype == T_NUM) ? js_to_uint32(tod(r)) : js_to_uint32(js_to_number(js, r));
     switch (op) {
