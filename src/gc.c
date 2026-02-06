@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
+#include <setjmp.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -569,6 +570,77 @@ static jsoff_t gc_weak_off_callback(void *ctx_ptr, jsoff_t old_off) {
   return fwd_lookup(&ctx->fwd, old_off);
 }
 
+static inline bool gc_get_stack_bounds(void *base, uintptr_t *lo, uintptr_t *hi) {
+  if (!base) return false;
+  volatile uint8_t sp_marker;
+  uintptr_t bp = (uintptr_t)base;
+  uintptr_t sp = (uintptr_t)&sp_marker;
+  if (sp < bp) { *lo = sp; *hi = bp; }
+  else         { *lo = bp; *hi = sp; }
+  *lo &= ~(uintptr_t)7;
+  *hi &= ~(uintptr_t)7;
+  return true;
+}
+
+__attribute__((noinline))
+static void gc_scan_stack_reserve(gc_ctx_t *ctx) {
+  jmp_buf jb;
+  if (setjmp(jb) != 0) return;
+
+  uintptr_t lo, hi;
+  if (!gc_get_stack_bounds(ctx->js->cstk, &lo, &hi)) return;
+
+  jsoff_t old_brk = ctx->js->brk;
+
+  for (uintptr_t addr = lo; addr < hi; addr += sizeof(uint64_t)) {
+    uint64_t w;
+    memcpy(&w, (void *)addr, sizeof(w));
+
+    if ((w >> 53) != NANBOX_PREFIX_CHK) continue;
+
+    uint8_t type = (w >> NANBOX_TYPE_SHIFT) & NANBOX_TYPE_MASK;
+    if (type > T_FFI) continue;
+    if (!((1u << type) & GC_HEAP_TYPE_MASK)) continue;
+
+    jsoff_t old_off = (jsoff_t)(w & NANBOX_DATA_MASK);
+    if (old_off == 0 || old_off >= old_brk) continue;
+
+    if (fwd_lookup(&ctx->fwd, old_off) != (jsoff_t)~0) continue;
+    gc_update_val(ctx, w);
+  }
+}
+
+__attribute__((noinline))
+static void gc_scan_stack_update(gc_ctx_t *ctx) {
+  jmp_buf jb;
+  if (setjmp(jb) != 0) return;
+
+  uintptr_t lo, hi;
+  if (!gc_get_stack_bounds(ctx->js->cstk, &lo, &hi)) return;
+
+  jsoff_t old_brk = ctx->js->brk;
+
+  for (uintptr_t addr = lo; addr < hi; addr += sizeof(uint64_t)) {
+    uint64_t w;
+    memcpy(&w, (void *)addr, sizeof(w));
+
+    if ((w >> 53) != NANBOX_PREFIX_CHK) continue;
+
+    uint8_t type = (w >> NANBOX_TYPE_SHIFT) & NANBOX_TYPE_MASK;
+    if (type > T_FFI) continue;
+    if (!((1u << type) & GC_HEAP_TYPE_MASK)) continue;
+
+    jsoff_t old_off = (jsoff_t)(w & NANBOX_DATA_MASK);
+    if (old_off == 0 || old_off >= old_brk) continue;
+
+    jsoff_t new_off = fwd_lookup(&ctx->fwd, old_off);
+    if (new_off == (jsoff_t)~0 || new_off == old_off) continue;
+
+    uint64_t updated = gc_mkval(type, new_off);
+    memcpy((void *)addr, &updated, sizeof(updated));
+  }
+}
+
 size_t js_gc_compact(ant_t *js) {
   if (!js || js->brk == 0) return 0;
   if (js->brk < 2 * 1024 * 1024) return 0;
@@ -653,6 +725,9 @@ size_t js_gc_compact(ant_t *js) {
     &ctx
   ); gc_drain_work_queue(&ctx);
   
+  gc_scan_stack_reserve(&ctx);
+  gc_drain_work_queue(&ctx);
+  
   if (ctx.failed) {
     free(mark_bits);
     work_free(&ctx.work);
@@ -666,6 +741,7 @@ size_t js_gc_compact(ant_t *js) {
     gc_apply_val_callback, 
   &ctx);
   
+  gc_scan_stack_update(&ctx);
   memcpy(js->mem, new_mem, ctx.new_brk);
   js->brk = ctx.new_brk;
   

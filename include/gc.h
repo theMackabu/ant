@@ -34,6 +34,10 @@ size_t js_gc_compact(ant_t *js);
 #define GC_UPDATE_ARGS  ant_t *js, GC_FWD_OFF, GC_WEAK_OFF, GC_FWD_ARGS
 #define GC_OP_VAL_ARGS  GC_OP_VAL, GC_CTX
 
+#define GC_HEAP_TYPE_MASK ( \
+  (1u << T_OBJ) | (1u << T_PROP) | (1u << T_STR) | (1u << T_FUNC) | \
+  (1u << T_ARR) | (1u << T_PROMISE) | (1u << T_BIGINT) | (1u << T_GENERATOR))
+
 void js_gc_maybe(ant_t *js);
 void js_gc_throttle(bool enabled);
 
