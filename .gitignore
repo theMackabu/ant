@@ -2,6 +2,8 @@
 .nova
 .maid
 .cache
+
+.claude
 .github/artifacts
 
 *.so

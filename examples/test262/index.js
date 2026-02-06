@@ -223,7 +223,7 @@ function buildScreen() {
     }
 
     lines.push('');
-    lines.push(`${c.dim}m browse · g gc · q quit${c.reset}`);
+    lines.push(`${c.dim}m browse · g gc · q quit${c.reset}  ${c.cyan}${fps.current} fps${c.reset}`);
   }
 
   return lines.map(l => pad(l, cols)).join('\n');
