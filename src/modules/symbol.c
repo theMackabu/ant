@@ -38,8 +38,29 @@ static const struct { jsval_t *sym; const char *name; } sym_table[] = {
   { &g_species.sym, "Symbol.species" },
 };
 
+bool is_symbol_key(const char *key, size_t key_len) {
+  return 
+    key_len > 7 
+    && memcmp(key, "__sym_", 6) == 0 
+    && key[key_len - 1] == '_' 
+    && key[key_len - 2] == '_';
+}
+
+jsval_t get_wellknown_sym_by_key(const char *key, size_t key_len) {
+  static const struct { wellknown_sym_t *sym; } table[] = {
+    { &g_iterator }, { &g_asyncIterator }, { &g_toStringTag },
+    { &g_hasInstance }, { &g_observable }, { &g_toPrimitive }, { &g_species }
+  };
+  for (size_t i = 0; i < sizeof(table)/sizeof(table[0]); i++) {
+    if (table[i].sym->key[0] && strlen(table[i].sym->key) == key_len &&
+        memcmp(table[i].sym->key, key, key_len) == 0)
+      return table[i].sym->sym;
+  }
+  return (jsval_t)0;
+}
+
 const char *get_symbol_description_from_key(const char *sym_key, size_t key_len) {
-  if (key_len < 9 || memcmp(sym_key, "__sym_", 6) != 0) return NULL;
+  if (!is_symbol_key(sym_key, key_len)) return NULL;
   
   uint64_t id = 0;
   for (const char *p = sym_key + 6; *p >= '0' && *p <= '9'; p++) id = id * 10 + (*p - '0');

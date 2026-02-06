@@ -708,6 +708,9 @@ static jsoff_t vstrlen(struct js *js, jsval_t v) {
 
 static bool is_digit(int c);
 static bool is_proxy(struct js *js, jsval_t obj);
+static jsval_t proxy_read_target(struct js *js, jsval_t obj);
+static jsoff_t proxy_aware_length(struct js *js, jsval_t obj);
+static jsval_t proxy_aware_get_elem(struct js *js, jsval_t obj, const char *key, size_t key_len);
 static bool bigint_is_zero(struct js *js, jsval_t v);
 
 static bool streq(const char *buf, size_t len, const char *p, size_t n);
@@ -15862,7 +15865,7 @@ static jsval_t builtin_object_getOwnPropertySymbols(struct js *js, jsval_t *args
       jsoff_t klen = offtolen(loadoff(js, koff));
       const char *key = (char *)&js->mem[koff + sizeof(koff)];
       
-      if (klen >= 9 && memcmp(key, "__sym_", 6) == 0 && memcmp(key + klen - 2, "__", 2) == 0) {
+      if (is_symbol_key(key, klen)) {
         uint64_t sym_id = 0;
         for (const char *p = key + 6; *p >= '0' && *p <= '9' && sym_id <= PROPREF_PAYLOAD / 10; p++)
           sym_id = sym_id * 10 + (uint64_t)(*p - '0');
@@ -16149,19 +16152,36 @@ void js_arr_push(struct js *js, jsval_t arr, jsval_t val) {
 
 static jsval_t builtin_array_pop(struct js *js, jsval_t *args, int nargs) {
   jsval_t arr = js->this_val;
-  
+
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ) {
     return js_mkerr(js, "pop called on non-array");
   }
-  
+
+  if (is_proxy(js, arr)) {
+    jsoff_t len = proxy_aware_length(js, arr);
+    if (len == 0) {
+      jsval_t len_key = js_mkstr(js, "length", 6);
+      js_setprop(js, arr, len_key, tov(0.0));
+      return js_mkundef();
+    }
+    len--;
+    char idxstr[16];
+    size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)len);
+    jsval_t result = proxy_aware_get_elem(js, arr, idxstr, idxlen);
+    jsval_t len_key = js_mkstr(js, "length", 6);
+    js_setprop(js, arr, len_key, tov((double) len));
+    js->needs_gc = true;
+    return result;
+  }
+
   jsoff_t off = lkp_interned(js, arr, INTERN_LENGTH, 6);
   jsoff_t len = 0;
-  
+
   if (off != 0) {
     jsval_t len_val = resolveprop(js, mkval(T_PROP, off));
     if (vtype(len_val) == T_NUM) len = (jsoff_t) tod(len_val);
   }
-  
+
   if (len == 0) return js_mkundef();
   len--; char idxstr[16];
   size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)len);
@@ -16169,7 +16189,7 @@ static jsval_t builtin_array_pop(struct js *js, jsval_t *args, int nargs) {
   jsoff_t arr_off = (jsoff_t)vdata(arr);
   jsoff_t tail = loadoff(js, arr_off + sizeof(jsoff_t) * 2);
   jsoff_t elem_off = 0;
-  
+
   if (tail != 0 && tail < js->brk) {
     jsoff_t tail_hdr = loadoff(js, tail);
     if ((tail_hdr & SLOTMASK) == 0) {
@@ -16179,21 +16199,18 @@ static jsval_t builtin_array_pop(struct js *js, jsval_t *args, int nargs) {
       if (tail_klen == idxlen && memcmp(tail_key, idxstr, idxlen) == 0) elem_off = tail;
     }
   }
-  
+
   if (elem_off == 0) elem_off = lkp(js, arr, idxstr, idxlen);
   jsval_t result = js_mkundef();
   if (elem_off != 0) result = resolveprop(js, mkval(T_PROP, elem_off));
 
-  if (is_proxy(js, arr)) {
-    jsval_t len_key = js_mkstr(js, "length", 6);
-    js_setprop(js, arr, len_key, tov((double) len));
-  } else if (off != 0) {
+  if (off != 0) {
     saveval(js, off + sizeof(jsoff_t) * 2, tov((double) len));
   } else {
     jsval_t len_key = js_mkstr(js, "length", 6);
     js_setprop(js, arr, len_key, tov((double) len));
   }
-  
+
   js->needs_gc = true;
   return result;
 }
@@ -16218,9 +16235,7 @@ static jsval_t builtin_array_slice(struct js *js, jsval_t *args, int nargs) {
     double d = tod(args[0]);
     if (d < 0) {
       start = (jsoff_t) (d + dlen < 0 ? 0 : d + dlen);
-    } else {
-      start = (jsoff_t) (d > dlen ? dlen : d);
-    }
+    } else start = (jsoff_t) (d > dlen ? dlen : d);
   }
   
   if (nargs >= 2 && vtype(args[1]) == T_NUM) {
@@ -16494,10 +16509,43 @@ static jsval_t builtin_array_forEach(struct js *js, jsval_t *args, int nargs) {
 static jsval_t builtin_array_reverse(struct js *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
   jsval_t arr = js->this_val;
-  
+
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ)
     return js_mkerr(js, "reverse called on non-array");
-  
+
+  if (is_proxy(js, arr)) {
+    jsoff_t len = proxy_aware_length(js, arr);
+    if (len <= 1) return arr;
+    jsval_t read_from = proxy_read_target(js, arr);
+    jsoff_t lower = 0;
+    while (lower < len / 2) {
+      jsoff_t upper = len - lower - 1;
+      char lower_str[16], upper_str[16];
+      size_t lower_len = uint_to_str(lower_str, sizeof(lower_str), (unsigned)lower);
+      size_t upper_len = uint_to_str(upper_str, sizeof(upper_str), (unsigned)upper);
+      jsoff_t lower_off = lkp(js, read_from, lower_str, lower_len);
+      jsoff_t upper_off = lkp(js, read_from, upper_str, upper_len);
+      bool lower_exists = lower_off != 0;
+      bool upper_exists = upper_off != 0;
+      jsval_t lower_val = lower_exists ? resolveprop(js, mkval(T_PROP, lower_off)) : js_mkundef();
+      jsval_t upper_val = upper_exists ? resolveprop(js, mkval(T_PROP, upper_off)) : js_mkundef();
+      if (lower_exists && upper_exists) {
+        jsval_t k1 = js_mkstr(js, lower_str, lower_len);
+        js_setprop(js, arr, k1, upper_val);
+        jsval_t k2 = js_mkstr(js, upper_str, upper_len);
+        js_setprop(js, arr, k2, lower_val);
+      } else if (upper_exists) {
+        jsval_t k1 = js_mkstr(js, lower_str, lower_len);
+        js_setprop(js, arr, k1, upper_val);
+      } else if (lower_exists) {
+        jsval_t k2 = js_mkstr(js, upper_str, upper_len);
+        js_setprop(js, arr, k2, lower_val);
+      }
+      lower++;
+    }
+    return arr;
+  }
+
   jsoff_t len_off = lkp_interned(js, arr, INTERN_LENGTH, 6);
   jsoff_t len = 0;
   if (len_off != 0) {
@@ -16505,37 +16553,37 @@ static jsval_t builtin_array_reverse(struct js *js, jsval_t *args, int nargs) {
     if (vtype(len_val) == T_NUM) len = (jsoff_t)tod(len_val);
   }
   if (len <= 1) return arr;
-  
+
   jsval_t *vals = malloc(len * sizeof(jsval_t));
   jsoff_t *offs = malloc(len * sizeof(jsoff_t));
   if (!vals || !offs) { free(vals); free(offs); return js_mkerr(js, "out of memory"); }
-  
+
   jsoff_t count = 0;
   ant_iter_t iter = js_prop_iter_begin(js, arr);
   const char *key;
   size_t key_len;
   jsval_t val;
-  
+
   while (js_prop_iter_next(&iter, &key, &key_len, &val)) {
     unsigned long parsed_idx;
     if (!parse_array_index(key, key_len, len, &parsed_idx) || count >= len) continue;
-    
+
     vals[count] = val;
     offs[count] = iter.off;
     count++;
   }
   js_prop_iter_end(&iter);
-  
+
   for (jsoff_t i = 0; i < count / 2; i++) {
     jsval_t tmp = vals[i];
     vals[i] = vals[count - 1 - i];
     vals[count - 1 - i] = tmp;
   }
-  
+
   for (jsoff_t i = 0; i < count; i++) {
     saveval(js, offs[i] + sizeof(jsoff_t) * 2, vals[i]);
   }
-  
+
   free(vals);
   free(offs);
   return arr;
@@ -16850,15 +16898,10 @@ static jsval_t builtin_array_fill(struct js *js, jsval_t *args, int nargs) {
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ) {
     return js_mkerr(js, "fill called on non-array");
   }
-  
+
   jsval_t value = nargs >= 1 ? args[0] : js_mkundef();
-  
-  jsoff_t off = lkp_interned(js, arr, INTERN_LENGTH, 6);
-  jsoff_t len = 0;
-  if (off != 0) {
-    jsval_t len_val = resolveprop(js, mkval(T_PROP, off));
-    if (vtype(len_val) == T_NUM) len = (jsoff_t) tod(len_val);
-  }
+
+  jsoff_t len = proxy_aware_length(js, arr);
   
   jsoff_t start = 0, end = len;
   if (nargs >= 2 && vtype(args[1]) == T_NUM) {
@@ -17235,29 +17278,26 @@ static jsval_t builtin_array_shift(struct js *js, jsval_t *args, int nargs) {
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ) {
     return js_mkerr(js, "shift called on non-array");
   }
-  
-  jsoff_t off = lkp_interned(js, arr, INTERN_LENGTH, 6);
-  jsoff_t len = 0;
-  if (off != 0) {
-    jsval_t len_val = resolveprop(js, mkval(T_PROP, off));
-    if (vtype(len_val) == T_NUM) len = (jsoff_t) tod(len_val);
-  }
-  
+
+  jsoff_t len = proxy_aware_length(js, arr);
   if (len == 0) return js_mkundef();
-  
-  jsoff_t first_off = lkp(js, arr, "0", 1);
+
+  jsval_t read_from = is_proxy(js, arr) ? proxy_read_target(js, arr) : arr;
+  jsoff_t first_off = lkp(js, read_from, "0", 1);
   jsval_t first = first_off ? resolveprop(js, mkval(T_PROP, first_off)) : js_mkundef();
-  
+
   for (jsoff_t i = 1; i < len; i++) {
     char src[16], dst[16];
     snprintf(src, sizeof(src), "%u", (unsigned) i);
     snprintf(dst, sizeof(dst), "%u", (unsigned)(i - 1));
-    jsoff_t elem_off = lkp(js, arr, src, strlen(src));
-    jsval_t elem = elem_off ? resolveprop(js, mkval(T_PROP, elem_off)) : js_mkundef();
-    jsval_t key = js_mkstr(js, dst, strlen(dst));
-    js_setprop(js, arr, key, elem);
+    jsoff_t elem_off = lkp(js, read_from, src, strlen(src));
+    if (elem_off) {
+      jsval_t elem = resolveprop(js, mkval(T_PROP, elem_off));
+      jsval_t key = js_mkstr(js, dst, strlen(dst));
+      js_setprop(js, arr, key, elem);
+    }
   }
-  
+
   jsval_t len_key = js_mkstr(js, "length", 6);
   js_setprop(js, arr, len_key, tov((double)(len - 1)));
   js->needs_gc = true;
@@ -17269,22 +17309,20 @@ static jsval_t builtin_array_unshift(struct js *js, jsval_t *args, int nargs) {
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ) {
     return js_mkerr(js, "unshift called on non-array");
   }
-  
-  jsoff_t off = lkp_interned(js, arr, INTERN_LENGTH, 6);
-  jsoff_t len = 0;
-  if (off != 0) {
-    jsval_t len_val = resolveprop(js, mkval(T_PROP, off));
-    if (vtype(len_val) == T_NUM) len = (jsoff_t) tod(len_val);
-  }
-  
+
+  jsoff_t len = proxy_aware_length(js, arr);
+  jsval_t read_from = is_proxy(js, arr) ? proxy_read_target(js, arr) : arr;
+
   for (int i = (int)len - 1; i >= 0; i--) {
     char src[16], dst[16];
     snprintf(src, sizeof(src), "%u", (unsigned) i);
     snprintf(dst, sizeof(dst), "%u", (unsigned)(i + nargs));
-    jsoff_t elem_off = lkp(js, arr, src, strlen(src));
-    jsval_t elem = elem_off ? resolveprop(js, mkval(T_PROP, elem_off)) : js_mkundef();
-    jsval_t key = js_mkstr(js, dst, strlen(dst));
-    js_setprop(js, arr, key, elem);
+    jsoff_t elem_off = lkp(js, read_from, src, strlen(src));
+    if (elem_off) {
+      jsval_t elem = resolveprop(js, mkval(T_PROP, elem_off));
+      jsval_t key = js_mkstr(js, dst, strlen(dst));
+      js_setprop(js, arr, key, elem);
+    }
   }
   
   for (int i = 0; i < nargs; i++) {
@@ -17478,14 +17516,10 @@ static jsval_t builtin_array_splice(struct js *js, jsval_t *args, int nargs) {
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ) {
     return js_mkerr(js, "splice called on non-array");
   }
-  
-  jsoff_t off = lkp_interned(js, arr, INTERN_LENGTH, 6);
-  jsoff_t len = 0;
-  if (off != 0) {
-    jsval_t len_val = resolveprop(js, mkval(T_PROP, off));
-    if (vtype(len_val) == T_NUM) len = (jsoff_t) tod(len_val);
-  }
-  
+
+  jsoff_t len = proxy_aware_length(js, arr);
+  jsval_t read_from = is_proxy(js, arr) ? proxy_read_target(js, arr) : arr;
+
   int start = 0;
   if (nargs >= 1 && vtype(args[0]) == T_NUM) {
     start = (int) tod(args[0]);
@@ -17493,24 +17527,24 @@ static jsval_t builtin_array_splice(struct js *js, jsval_t *args, int nargs) {
     if (start < 0) start = 0;
     if (start > (int)len) start = (int)len;
   }
-  
+
   int deleteCount = (int)len - start;
   if (nargs >= 2 && vtype(args[1]) == T_NUM) {
     deleteCount = (int) tod(args[1]);
     if (deleteCount < 0) deleteCount = 0;
     if (deleteCount > (int)len - start) deleteCount = (int)len - start;
   }
-  
+
   int insertCount = nargs > 2 ? nargs - 2 : 0;
-  
+
   jsval_t removed = mkarr(js);
   if (is_err(removed)) return removed;
-  
+
   for (int i = 0; i < deleteCount; i++) {
     char src[16], dst[16];
     snprintf(src, sizeof(src), "%u", (unsigned)(start + i));
     snprintf(dst, sizeof(dst), "%u", (unsigned) i);
-    jsoff_t elem_off = lkp(js, arr, src, strlen(src));
+    jsoff_t elem_off = lkp(js, read_from, src, strlen(src));
     if (elem_off != 0) {
       jsval_t elem = resolveprop(js, mkval(T_PROP, elem_off));
       jsval_t key = js_mkstr(js, dst, strlen(dst));
@@ -17519,14 +17553,14 @@ static jsval_t builtin_array_splice(struct js *js, jsval_t *args, int nargs) {
   }
   jsval_t rem_len_key = js_mkstr(js, "length", 6);
   js_setprop(js, removed, rem_len_key, tov((double) deleteCount));
-  
+
   int shift = insertCount - deleteCount;
   if (shift > 0) {
     for (int i = (int)len - 1; i >= start + deleteCount; i--) {
       char src[16], dst[16];
       snprintf(src, sizeof(src), "%u", (unsigned) i);
       snprintf(dst, sizeof(dst), "%u", (unsigned)(i + shift));
-      jsoff_t elem_off = lkp(js, arr, src, strlen(src));
+      jsoff_t elem_off = lkp(js, read_from, src, strlen(src));
       jsval_t elem = elem_off ? resolveprop(js, mkval(T_PROP, elem_off)) : js_mkundef();
       jsval_t key = js_mkstr(js, dst, strlen(dst));
       js_setprop(js, arr, key, elem);
@@ -17536,7 +17570,7 @@ static jsval_t builtin_array_splice(struct js *js, jsval_t *args, int nargs) {
       char src[16], dst[16];
       snprintf(src, sizeof(src), "%u", (unsigned) i);
       snprintf(dst, sizeof(dst), "%u", (unsigned)(i + shift));
-      jsoff_t elem_off = lkp(js, arr, src, strlen(src));
+      jsoff_t elem_off = lkp(js, read_from, src, strlen(src));
       jsval_t elem = elem_off ? resolveprop(js, mkval(T_PROP, elem_off)) : js_mkundef();
       jsval_t key = js_mkstr(js, dst, strlen(dst));
       js_setprop(js, arr, key, elem);
@@ -17561,14 +17595,10 @@ static jsval_t builtin_array_copyWithin(struct js *js, jsval_t *args, int nargs)
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ) {
     return js_mkerr(js, "copyWithin called on non-array");
   }
-  
-  jsoff_t off = lkp_interned(js, arr, INTERN_LENGTH, 6);
-  jsoff_t len = 0;
-  if (off != 0) {
-    jsval_t len_val = resolveprop(js, mkval(T_PROP, off));
-    if (vtype(len_val) == T_NUM) len = (jsoff_t) tod(len_val);
-  }
-  
+
+  jsoff_t len = proxy_aware_length(js, arr);
+  jsval_t read_from = is_proxy(js, arr) ? proxy_read_target(js, arr) : arr;
+
   int target = 0, start = 0, end = (int)len;
   if (nargs >= 1 && vtype(args[0]) == T_NUM) {
     target = (int) tod(args[0]);
@@ -17585,16 +17615,16 @@ static jsval_t builtin_array_copyWithin(struct js *js, jsval_t *args, int nargs)
     if (end < 0) end = (int)len + end;
     if (end < 0) end = 0;
   }
-  if (end > (int)len) end = (int)len;
   
+  if (end > (int)len) end = (int)len;
   int count = end - start;
   if (count > (int)len - target) count = (int)len - target;
-  
+
   jsval_t *temp = (jsval_t *)malloc(count * sizeof(jsval_t));
   for (int i = 0; i < count; i++) {
     char idxstr[16];
     size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)(start + i));
-    jsoff_t elem_off = lkp(js, arr, idxstr, idxlen);
+    jsoff_t elem_off = lkp(js, read_from, idxstr, idxlen);
     temp[i] = elem_off ? resolveprop(js, mkval(T_PROP, elem_off)) : js_mkundef();
   }
   
@@ -17883,13 +17913,26 @@ static jsval_t builtin_Array_isArray(struct js *js, jsval_t *args, int nargs) {
 
 static jsval_t builtin_Array_from(struct js *js, jsval_t *args, int nargs) {
   if (nargs == 0) return mkarr(js);
-  
+
   jsval_t src = args[0];
   jsval_t mapFn = (nargs >= 2 && vtype(args[1]) == T_FUNC) ? args[1] : js_mkundef();
-  
-  jsval_t result = mkarr(js);
-  if (is_err(result)) return result;
-  
+
+  jsval_t ctor = js->this_val;
+  bool use_ctor = (vtype(ctor) == T_FUNC || vtype(ctor) == T_CFUNC);
+  jsval_t result;
+
+  if (use_ctor) {
+    jsval_t ctor_args[1] = { tov(0.0) };
+    result = js_call(js, ctor, ctor_args, 0);
+    if (is_err(result)) return result;
+  } else {
+    result = mkarr(js);
+    if (is_err(result)) return result;
+  }
+
+  bool result_is_proxy = is_proxy(js, result);
+  jsval_t write_target = result_is_proxy ? proxy_read_target(js, result) : result;
+
   if (vtype(src) == T_STR) {
     jsoff_t str_len, str_off = vstr(js, src, &str_len);
     const char *str_ptr = (const char *)&js->mem[str_off];
@@ -17903,7 +17946,7 @@ static jsval_t builtin_Array_from(struct js *js, jsval_t *args, int nargs) {
         if (is_err(elem)) return elem;
       }
       jsval_t key = js_mkstr(js, idxstr, idxlen);
-      js_setprop(js, result, key, elem);
+      js_setprop(js, write_target, key, elem);
     }
     jsval_t len_key = js_mkstr(js, "length", 6);
     js_setprop(js, result, len_key, tov((double) str_len));
@@ -17925,28 +17968,44 @@ static jsval_t builtin_Array_from(struct js *js, jsval_t *args, int nargs) {
         if (is_err(elem)) return elem;
       }
       jsval_t key = js_mkstr(js, idxstr, idxlen);
-      js_setprop(js, result, key, elem);
+      js_setprop(js, write_target, key, elem);
     }
     jsval_t len_key = js_mkstr(js, "length", 6);
     js_setprop(js, result, len_key, tov((double) len));
   }
-  
-  return mkval(T_ARR, vdata(result));
+
+  if (!use_ctor) return mkval(T_ARR, vdata(result));
+  return result;
 }
 
 static jsval_t builtin_Array_of(struct js *js, jsval_t *args, int nargs) {
-  jsval_t arr = mkarr(js);
-  if (is_err(arr)) return arr;
-  
+  jsval_t ctor = js->this_val;
+  bool use_ctor = (vtype(ctor) == T_FUNC || vtype(ctor) == T_CFUNC);
+  jsval_t arr;
+
+  if (use_ctor) {
+    jsval_t ctor_args[1] = { tov((double)nargs) };
+    arr = js_call(js, ctor, ctor_args, 1);
+    if (is_err(arr)) return arr;
+  } else {
+    arr = mkarr(js);
+    if (is_err(arr)) return arr;
+  }
+
+  bool arr_is_proxy = is_proxy(js, arr);
+  jsval_t write_target = arr_is_proxy ? proxy_read_target(js, arr) : arr;
+
   for (int i = 0; i < nargs; i++) {
     char idxstr[16];
     size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)i);
     jsval_t key = js_mkstr(js, idxstr, idxlen);
-    js_setprop(js, arr, key, args[i]);
+    js_setprop(js, write_target, key, args[i]);
   }
   jsval_t len_key = js_mkstr(js, "length", 6);
   js_setprop(js, arr, len_key, tov((double) nargs));
-  return mkval(T_ARR, vdata(arr));
+
+  if (!use_ctor) return mkval(T_ARR, vdata(arr));
+  return arr;
 }
 
 static jsval_t builtin_string_indexOf(struct js *js, jsval_t *args, int nargs) {
@@ -20648,40 +20707,83 @@ static jsval_t builtin_Promise_any(struct js *js, jsval_t *args, int nargs) {
   return result_promise;
 }
 
+static jsval_t handle_proxy_instanceof(struct js *js, jsval_t l, jsval_t r, uint8_t ltype) {
+  jsval_t target = proxy_read_target(js, r);
+  uint8_t ttype = vtype(target);
+  
+  if (ttype != T_FUNC && ttype != T_CFUNC) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Right-hand side of 'instanceof' is not callable");
+  }
+  
+  const char *hi_key = get_hasInstance_sym_key();
+  if (hi_key && *hi_key) proxy_get(js, r, hi_key, strlen(hi_key));
+  
+  jsval_t proto_val = proxy_get(js, r, "prototype", 9);
+  uint8_t pt = vtype(proto_val);
+  
+  if (pt != T_OBJ && pt != T_ARR && pt != T_FUNC) {
+    return mkval(T_BOOL, 0);
+  }
+  
+  if (ltype != T_OBJ && ltype != T_ARR && ltype != T_FUNC && ltype != T_PROMISE) {
+    return mkval(T_BOOL, 0);
+  }
+  
+  jsval_t current = get_proto(js, l);
+  for (int depth = 0; vtype(current) != T_NULL && depth < 32; depth++) {
+    if (vdata(current) == vdata(proto_val)) {
+      return mkval(T_BOOL, 1);
+    }
+    current = get_proto(js, current);
+  }
+  
+  return mkval(T_BOOL, 0);
+}
+
+static jsval_t handle_cfunc_instanceof(jsval_t l, jsval_t r, uint8_t ltype) {
+  jsval_t (*fn)(struct js *, jsval_t *, int) = (jsval_t(*)(struct js *, jsval_t *, int)) vdata(r);
+  
+  if (fn == builtin_Object) return mkval(T_BOOL, ltype == T_OBJ ? 1 : 0);
+  if (fn == builtin_Function) return mkval(T_BOOL, (ltype == T_FUNC || ltype == T_CFUNC) ? 1 : 0);
+  if (fn == builtin_String) return mkval(T_BOOL, ltype == T_STR ? 1 : 0);
+  if (fn == builtin_Number) return mkval(T_BOOL, ltype == T_NUM ? 1 : 0);
+  if (fn == builtin_Boolean) return mkval(T_BOOL, ltype == T_BOOL ? 1 : 0);
+  if (fn == builtin_Array) return mkval(T_BOOL, ltype == T_ARR ? 1 : 0);
+  if (fn == builtin_Promise) return mkval(T_BOOL, ltype == T_PROMISE ? 1 : 0);
+  
+  return mkval(T_BOOL, 0);
+}
+
+static jsval_t walk_prototype_chain(struct js *js, jsval_t l, jsval_t ctor_proto) {
+  jsval_t current = get_proto(js, l);
+  const int MAX_DEPTH = 32;
+  
+  for (int depth = 0; vtype(current) != T_NULL && depth < MAX_DEPTH; depth++) {
+    if (vdata(current) == vdata(ctor_proto)) return mkval(T_BOOL, 1);
+    current = get_proto(js, current);
+  }
+  
+  return mkval(T_BOOL, 0);
+}
+
 static jsval_t do_instanceof(struct js *js, jsval_t l, jsval_t r) {
   uint8_t ltype = vtype(l);
   uint8_t rtype = vtype(r);
   
   if (rtype != T_FUNC && rtype != T_CFUNC) {
+    if (is_proxy(js, r)) return handle_proxy_instanceof(js, l, r, ltype);
     return js_mkerr_typed(js, JS_ERR_TYPE, "Right-hand side of 'instanceof' is not callable");
   }
   
   if (rtype == T_CFUNC) {
-    // handle legacy T_CFUNC
-    jsval_t (*fn)(struct js *, jsval_t *, int) = (jsval_t(*)(struct js *, jsval_t *, int)) vdata(r);
-    if (fn == builtin_Object) {
-      return mkval(T_BOOL, ltype == T_OBJ ? 1 : 0);
-    } else if (fn == builtin_Function) {
-      return mkval(T_BOOL, (ltype == T_FUNC || ltype == T_CFUNC) ? 1 : 0);
-    } else if (fn == builtin_String) {
-      return mkval(T_BOOL, ltype == T_STR ? 1 : 0);
-    } else if (fn == builtin_Number) {
-      return mkval(T_BOOL, ltype == T_NUM ? 1 : 0);
-    } else if (fn == builtin_Boolean) {
-      return mkval(T_BOOL, ltype == T_BOOL ? 1 : 0);
-    } else if (fn == builtin_Array) {
-      return mkval(T_BOOL, ltype == T_ARR ? 1 : 0);
-    } else if (fn == builtin_Promise) {
-      return mkval(T_BOOL, ltype == T_PROMISE ? 1 : 0);
-    }
-    return mkval(T_BOOL, 0);
+    return handle_cfunc_instanceof(l, r, ltype);
   }
   
   jsval_t func_obj = mkval(T_OBJ, vdata(r));
   jsoff_t proto_off = lkp_interned(js, func_obj, INTERN_PROTOTYPE, 9);
   if (proto_off == 0) return mkval(T_BOOL, 0);
-  jsval_t ctor_proto = resolveprop(js, mkval(T_PROP, proto_off));
   
+  jsval_t ctor_proto = resolveprop(js, mkval(T_PROP, proto_off));
   uint8_t pt = vtype(ctor_proto);
   if (pt != T_OBJ && pt != T_ARR && pt != T_FUNC) return mkval(T_BOOL, 0);
   
@@ -20694,17 +20796,7 @@ static jsval_t do_instanceof(struct js *js, jsval_t l, jsval_t r) {
     return mkval(T_BOOL, 0);
   }
   
-  jsval_t current = get_proto(js, l);
-  int depth = 0;
-  const int MAX_DEPTH = 32;
-  
-  while (vtype(current) != T_NULL && depth < MAX_DEPTH) {
-    if (vdata(current) == vdata(ctor_proto)) return mkval(T_BOOL, 1);
-    current = get_proto(js, current);
-    depth++;
-  }
-  
-  return mkval(T_BOOL, 0);
+  return walk_prototype_chain(js, l, ctor_proto);
 }
 
 static jsval_t do_in(struct js *js, jsval_t l, jsval_t r) {
@@ -21720,6 +21812,25 @@ static bool is_proxy(struct js *js, jsval_t obj) {
   return get_proxy_data(obj) != NULL;
 }
 
+static jsval_t proxy_read_target(struct js *js, jsval_t obj) {
+  proxy_data_t *data = get_proxy_data(obj);
+  return data ? data->target : obj;
+}
+
+static jsoff_t proxy_aware_length(struct js *js, jsval_t obj) {
+  jsval_t src = is_proxy(js, obj) ? proxy_read_target(js, obj) : obj;
+  jsoff_t off = lkp_interned(js, src, INTERN_LENGTH, 6);
+  if (off == 0) return 0;
+  jsval_t len_val = resolveprop(js, mkval(T_PROP, off));
+  return vtype(len_val) == T_NUM ? (jsoff_t)tod(len_val) : 0;
+}
+
+static jsval_t proxy_aware_get_elem(struct js *js, jsval_t obj, const char *key, size_t key_len) {
+  jsval_t src = is_proxy(js, obj) ? proxy_read_target(js, obj) : obj;
+  jsoff_t off = lkp(js, src, key, key_len);
+  return off ? resolveprop(js, mkval(T_PROP, off)) : js_mkundef();
+}
+
 static jsval_t throw_proxy_error(struct js *js, const char *message) {
   jsval_t err_obj = mkobj(js, 0);
   js_setprop(js, err_obj, js_mkstr(js, "message", 7), js_mkstr(js, message, strlen(message)));
@@ -21735,11 +21846,19 @@ static jsval_t proxy_get(struct js *js, jsval_t proxy, const char *key, size_t k
   jsval_t target = data->target;
   jsval_t handler = data->handler;
   
-  jsoff_t get_trap_off = vtype(handler) == T_OBJ ? lkp_interned(js, handler, INTERN_GET, 3) : 0;
+  jsoff_t get_trap_off = vtype(handler) == T_OBJ 
+    ? lkp_interned(js, handler, INTERN_GET, 3) 
+    : 0;
+  
   if (get_trap_off != 0) {
     jsval_t get_trap = resolveprop(js, mkval(T_PROP, get_trap_off));
     if (vtype(get_trap) == T_FUNC || vtype(get_trap) == T_CFUNC) {
-      jsval_t key_val = js_mkstr(js, key, key_len);
+      jsval_t key_val;
+      if (is_symbol_key(key, key_len)) {
+        key_val = get_wellknown_sym_by_key(key, key_len);
+        if (key_val == 0) key_val = js_mkstr(js, key, key_len);
+      } else key_val = js_mkstr(js, key, key_len);
+      
       jsval_t args[3] = { target, key_val, proxy };
       return js_call(js, get_trap, args, 3);
     }
