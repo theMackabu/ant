@@ -16,12 +16,22 @@ curl -fsSL https://ant.themackabu.com/install | bash
 curl -fsSL https://ant.themackabu.com/install | MBEDTLS=1 bash
 ```
 
-## Build from source
+### Building from Source
 
 ```bash
+git clone https://github.com/theMackabu/ant.git && cd ant
+
 meson subprojects download
 meson setup build
 meson compile -C build
 ```
+
+### Security
+
+For information on reporting security vulnerabilities in Ant, see [SECURITY.md](SECURITY.md).
+
+### Contributing to Ant
+
+We welcome contributions through pull request. See [CONTRIBUTING.md](CONTRIBUTING.md) for more details.
 
 For more information about the internals, read the [ant deepwiki](https://deepwiki.com/theMackabu/ant).
