@@ -493,27 +493,54 @@ static jsval_t mkcoderef(jsval_t off, jsoff_t len) {
 }
 
 static jsval_t mkpropref(jsoff_t obj_off, jsoff_t key_off) {
-  if (obj_off <= PROPREF_SAFE_MASK && key_off <= PROPREF_SAFE_MASK) {
-    return mkval(T_PROPREF, (obj_off & PROPREF_OFF_MASK) | ((jsval_t)(key_off & PROPREF_OFF_MASK) << PROPREF_KEY_SHIFT));
-  }
+  if (obj_off <= PROPREF_SAFE_MASK && key_off <= PROPREF_SAFE_MASK) return mkval(
+    T_PROPREF, (obj_off & PROPREF_OFF_MASK) | 
+    ((jsval_t)(key_off & PROPREF_OFF_MASK) << PROPREF_KEY_SHIFT)
+  );
   
   if (!propref_stack) utarray_new(propref_stack, &propref_icd);
-  if (utarray_len(propref_stack) > 1024) utarray_clear(propref_stack);
+  
+  static unsigned propref_next_slot = 0;
+  static unsigned propref_high_water = 0;
+  
+  if (propref_next_slot == 0 && propref_high_water > 0) {
+    assert(propref_high_water <= PROPREF_STACK_SIZE && "propref_stack overflow");
+  }
   
   propref_data_t entry = { obj_off, key_off };
-  utarray_push_back(propref_stack, &entry);
-  int idx = (int)utarray_len(propref_stack) - 1;
+  
+  if (propref_next_slot < utarray_len(propref_stack)) {
+    propref_data_t *slot = (propref_data_t *)utarray_eltptr(propref_stack, propref_next_slot);
+    *slot = entry;
+  } else utarray_push_back(propref_stack, &entry);
+  
+  int idx = (int)propref_next_slot;
+  propref_next_slot = (propref_next_slot + 1) % PROPREF_STACK_SIZE;
+  if ((unsigned)idx > propref_high_water) propref_high_water = (unsigned)idx;
 
   return mkval(T_PROPREF, PROPREF_STACK_FLAG | (uint64_t)idx);
 }
 
 static jsval_t mkprim_propref(jsval_t prim_val, jsoff_t key_off) {
   if (!prim_propref_stack) utarray_new(prim_propref_stack, &prim_propref_icd);
-  if (utarray_len(prim_propref_stack) > 256) utarray_clear(prim_propref_stack);
+  
+  static unsigned prim_propref_next_slot = 0;
+  static unsigned prim_propref_high_water = 0;
+  
+  if (prim_propref_next_slot == 0 && prim_propref_high_water > 0) {
+    assert(prim_propref_high_water <= PRIM_PROPREF_STACK_SIZE && "prim_propref_stack overflow");
+  }
   
   prim_propref_data_t entry = { prim_val, key_off };
-  utarray_push_back(prim_propref_stack, &entry);
-  int idx = (int)utarray_len(prim_propref_stack) - 1;
+  
+  if (prim_propref_next_slot < utarray_len(prim_propref_stack)) {
+    prim_propref_data_t *slot = (prim_propref_data_t *)utarray_eltptr(prim_propref_stack, prim_propref_next_slot);
+    *slot = entry;
+  } else utarray_push_back(prim_propref_stack, &entry);
+  
+  int idx = (int)prim_propref_next_slot;
+  prim_propref_next_slot = (prim_propref_next_slot + 1) % PRIM_PROPREF_STACK_SIZE;
+  if ((unsigned)idx > prim_propref_high_water) prim_propref_high_water = (unsigned)idx;
   
   return mkval(T_PROPREF, PROPREF_PRIM_FLAG | (uint64_t)idx);
 }
@@ -863,9 +890,6 @@ static jsval_t bigint_from_u64(struct js *js, uint64_t value) {
   size_t len = uint_to_str(buf, sizeof(buf), value);
   return js_mkbigint(js, buf, len, false);
 }
-
-#define MAX_STRINGIFY_DEPTH 64
-#define MAX_MULTIREF_OBJS 128
 
 static jsval_t stringify_stack[MAX_STRINGIFY_DEPTH];
 static int stringify_depth = 0;
