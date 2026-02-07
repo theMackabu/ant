@@ -95,9 +95,10 @@ enum {
   T_BIGINT, T_PROPREF, T_SYMBOL, T_GENERATOR, T_FFI
 };
 
-#define JS_HASH_SIZE       512
-#define JS_MAX_PARSE_DEPTH (1024 * 2)
-#define JS_ERR_NO_STACK    (1 << 8)
+#define JS_HASH_SIZE         512
+#define JS_MAX_PARSE_DEPTH   (1024 * 2)
+#define JS_ERR_NO_STACK      (1 << 8)
+#define JS_DENSE_INITIAL_CAP 8
 
 #define NANBOX_PREFIX     0x7FC0000000000000ULL
 #define NANBOX_PREFIX_CHK 0x3FEULL
@@ -106,6 +107,7 @@ enum {
 #define NANBOX_DATA_MASK  0x0000FFFFFFFFFFFFULL
 
 #define TYPE_FLAG(t) (1u << (t))
+#define T_EMPTY      (NANBOX_PREFIX | ((jsval_t)T_FFI << NANBOX_TYPE_SHIFT) | 0xDEADULL)
 
 #define T_SPECIAL_OBJECT_MASK  (TYPE_FLAG(T_OBJ) | TYPE_FLAG(T_ARR))
 #define T_NEEDS_PROTO_FALLBACK (TYPE_FLAG(T_FUNC) | TYPE_FLAG(T_ARR) | TYPE_FLAG(T_PROMISE))
@@ -157,6 +159,10 @@ static inline bool is_null(jsval_t v) {
 
 static inline bool is_undefined(jsval_t v) { 
   return vtype(v) == T_UNDEF; 
+}
+
+static inline bool is_empty_slot(jsval_t v) { 
+  return v == T_EMPTY; 
 }
 
 #endif

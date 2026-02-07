@@ -415,8 +415,40 @@ static void gc_process_prop(gc_ctx_t *ctx, jsoff_t old_off) {
   }
   
   jsval_t val = gc_loadval(ctx->js->mem, old_off + sizeof(jsoff_t) + sizeof(jsoff_t));
-  jsval_t new_val = gc_update_val(ctx, val);
-  gc_saveval(ctx->new_mem, new_off + sizeof(jsoff_t) + sizeof(jsoff_t), new_val);
+  if (!is_slot) goto update_val;
+
+  jsoff_t slot_id = gc_loadoff(ctx->js->mem, old_off + sizeof(jsoff_t));
+  if (slot_id != (jsoff_t)SLOT_DENSE_BUF) goto update_val;
+
+  jsoff_t old_doff = (jsoff_t)tod(val);
+  if (old_doff == 0 || old_doff >= ctx->js->brk) goto update_val;
+
+  jsoff_t cap = gc_loadoff(ctx->js->mem, old_doff);
+  jsoff_t len = gc_loadoff(ctx->js->mem, old_doff + sizeof(jsoff_t));
+  jsoff_t buf_size = (jsoff_t)(sizeof(jsoff_t) * 2 + sizeof(jsval_t) * cap);
+  jsoff_t new_doff = gc_alloc(ctx, buf_size);
+  if (new_doff == (jsoff_t)~0) goto update_val;
+
+  memcpy(&ctx->new_mem[new_doff], &ctx->js->mem[old_doff], buf_size);
+  for (jsoff_t i = 0; i < len; i++) {
+    jsoff_t voff = new_doff + (jsoff_t)(sizeof(jsoff_t) * 2 + sizeof(jsval_t) * i);
+    jsval_t v = gc_loadval(ctx->new_mem, voff);
+    if (v != T_EMPTY) {
+      jsval_t nv = gc_update_val(ctx, v);
+      gc_saveval(ctx->new_mem, voff, nv);
+    }
+  }
+  
+  gc_saveval(
+    ctx->new_mem,
+    new_off + sizeof(jsoff_t) + sizeof(jsoff_t), 
+    tov((double)new_doff)
+  ); return;
+
+  update_val: {
+    jsval_t new_val = gc_update_val(ctx, val);
+    gc_saveval(ctx->new_mem, new_off + sizeof(jsoff_t) + sizeof(jsoff_t), new_val);
+  }
 }
 
 static void gc_process_object(gc_ctx_t *ctx, jsoff_t old_off) {

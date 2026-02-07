@@ -56,6 +56,7 @@ typedef enum {
   SLOT_NO_FUNC_DECLS,
   SLOT_ITER_STATE,
   SLOT_ENTRIES,
+  SLOT_DENSE_BUF,
   SLOT_MAX = 255
 } internal_slot_t;
 
