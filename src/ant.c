@@ -40,7 +40,6 @@
 #include <sys/time.h>
 #include <sys/stat.h>
 #include <sys/resource.h>
-#include <execinfo.h>
 #endif
 
 #include "modules/fs.h"
@@ -176,7 +175,10 @@ typedef struct {
   const char *intern_ptr;
   jsoff_t prop_off;
   jsoff_t tail;
+  uint64_t generation;
 } intern_prop_cache_entry_t;
+
+static uint64_t intern_prop_cache_gen = 1;
 static intern_prop_cache_entry_t intern_prop_cache[ANT_LIMIT_SIZE_CACHE];
 
 typedef struct promise_handler {
@@ -3171,11 +3173,7 @@ static void invalidate_prop_cache(struct js *js, jsoff_t obj_off, jsoff_t prop_o
   
   uint32_t cache_slot = (((uintptr_t)interned >> 3) ^ obj_off) & (ANT_LIMIT_SIZE_CACHE - 1);
   intern_prop_cache_entry_t *ce = &intern_prop_cache[cache_slot];
-  
-  if (ce->obj_off == obj_off && ce->intern_ptr == interned) {
-    ce->obj_off = 0; ce->intern_ptr = NULL;
-    ce->prop_off = 0; ce->tail = 0;
-  }
+  if (ce->obj_off == obj_off && ce->intern_ptr == interned) ce->generation = 0;
 }
 
 static jsval_t mkprop(struct js *js, jsval_t obj, jsval_t k, jsval_t v, jsoff_t flags) {
@@ -5226,15 +5224,19 @@ static jsval_t js_block(struct js *js, bool create_scope) {
 
 static inline jsoff_t lkp_interned(struct js *js, jsval_t obj, const char *search_intern, size_t len) {
   jsoff_t obj_off = (jsoff_t)vdata(obj);
-  jsoff_t first_prop = loadoff(js, obj_off) & ~(3U | FLAGMASK);
   jsoff_t tail = loadoff(js, obj_off + sizeof(jsoff_t) * 2);
   
   uint32_t slot = (((uintptr_t)search_intern >> 3) ^ obj_off) & (ANT_LIMIT_SIZE_CACHE - 1);
   intern_prop_cache_entry_t *ce = &intern_prop_cache[slot];
-  if (ce->obj_off == obj_off && ce->intern_ptr == search_intern && ce->tail == tail) return ce->prop_off;
   
-  jsoff_t off = first_prop;
-  jsoff_t result = 0;
+  if (ce->generation == intern_prop_cache_gen 
+    && ce->obj_off == obj_off 
+    && ce->intern_ptr == search_intern
+    && ce->tail == tail
+  ) return ce->prop_off;
+  
+  jsoff_t first_prop = loadoff(js, obj_off) & ~(3U | FLAGMASK);
+  jsoff_t off = first_prop; jsoff_t result = 0;
   
   while (off < js->brk && off != 0) {
     jsoff_t header = loadoff(js, off);
@@ -5250,6 +5252,7 @@ static inline jsoff_t lkp_interned(struct js *js, jsval_t obj, const char *searc
     off = next_prop(header);
   }
   
+  ce->generation = intern_prop_cache_gen;
   ce->obj_off = obj_off;
   ce->intern_ptr = search_intern;
   ce->prop_off = result;
@@ -22888,7 +22891,7 @@ void js_gc_update_roots(GC_UPDATE_ARGS) {
       HASH_ADD(hh, new_desc_registry, key, sizeof(uint64_t), desc);
     }
 
-  memset(intern_prop_cache, 0, sizeof(intern_prop_cache));
+  intern_prop_cache_gen++;
   collections_gc_update_roots(gc_weak_off_cb, gc_update_val_cb, &cb_ctx);
   
   #undef FWD_OFF
