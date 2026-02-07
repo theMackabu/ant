@@ -232,6 +232,14 @@ static bool ensure_listener_capacity(ProcessEventType *evt) {
   return true;
 }
 
+static void free_event_type(ProcessEventType **events, ProcessEventType *evt) {
+  if (!evt) return;
+  HASH_DEL(*events, evt);
+  
+  free(evt->listeners);
+  free(evt->event_type); free(evt);
+}
+
 static void check_listener_warning(const char *event) {
   ProcessEventType *evt = NULL;
   HASH_FIND_STR(process_events, event, evt);
@@ -260,6 +268,12 @@ static void emit_process_event(const char *event_type, jsval_t *args, int nargs)
         evt->listeners[j] = evt->listeners[j + 1];
       } evt->listener_count--;
     } else i++;
+  }
+
+  if (evt->listener_count == 0) {
+    int signum = get_signal_number(event_type);
+    if (signum > 0) signal(signum, SIG_DFL);
+    free_event_type(&process_events, evt);
   }
 }
 
@@ -299,10 +313,11 @@ static ProcessEventType *find_or_create_stdout_event(const char *event_type) {
   return evt;
 }
 
-static void emit_stdio_event(ProcessEventType *events, const char *event_type, jsval_t *args, int nargs) {
+static void emit_stdio_event(ProcessEventType **events, const char *event_type, jsval_t *args, int nargs) {
   if (!rt->js) return;
   ProcessEventType *evt = NULL;
-  HASH_FIND_STR(events, event_type, evt);
+  
+  HASH_FIND_STR(*events, event_type, evt);
   if (evt == NULL || evt->listener_count == 0) return;
   
   int i = 0;
@@ -316,6 +331,8 @@ static void emit_stdio_event(ProcessEventType *events, const char *event_type, j
       evt->listener_count--;
     } else i++;
   }
+
+  if (evt->listener_count == 0) free_event_type(events, evt);
 }
 
 static const char *stdin_escape_name(const char *seq, int len) {
@@ -435,7 +452,7 @@ static void emit_keypress_event(
   }
 
   jsval_t args[2] = { str_val, key_obj };
-  emit_stdio_event(stdin_events, "keypress", args, 2);
+  emit_stdio_event(&stdin_events, "keypress", args, 2);
 }
 
 static void process_keypress_data(struct js *js, const char *data, size_t len) {
@@ -513,20 +530,26 @@ static void process_keypress_data(struct js *js, const char *data, size_t len) {
   }
 }
 
-static bool remove_listener_from_events(ProcessEventType *events, const char *event, jsval_t listener) {
+static bool remove_listener_from_events(ProcessEventType **events, const char *event, jsval_t listener) {
   ProcessEventType *evt = NULL;
-  HASH_FIND_STR(events, event, evt);
+  HASH_FIND_STR(*events, event, evt);
   if (!evt) return false;
   
   for (int i = 0; i < evt->listener_count; i++) {
     if (evt->listeners[i].listener != listener) continue;
     memmove(
-      &evt->listeners[i], &evt->listeners[i + 1], 
+      &evt->listeners[i], &evt->listeners[i + 1],
       (size_t)(evt->listener_count - i - 1) * sizeof(ProcessEventListener)
     );
-    return --evt->listener_count == 0;
+    
+    if (--evt->listener_count == 0) {
+      free_event_type(events, evt);
+      return true;
+    }
+    
+    return false;
   }
-  
+
   return false;
 }
 
@@ -599,7 +622,7 @@ static void on_stdin_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *bu
   (void)stream;
   if (nread > 0 && rt->js) {
     jsval_t data_val = js_mkstr(rt->js, buf->base, (size_t)nread);
-    emit_stdio_event(stdin_events, "data", &data_val, 1);
+    emit_stdio_event(&stdin_events, "data", &data_val, 1);
     if (stdin_state.keypress_enabled) process_keypress_data(rt->js, buf->base, (size_t)nread);
   }
   if (buf->base) free(buf->base);
@@ -646,7 +669,7 @@ static void on_sigwinch(uv_signal_t *handle, int signum) {
   js_set(rt->js, stdout_obj, "rows", js_mknum(rows));
   js_set(rt->js, stdout_obj, "columns", js_mknum(cols));
   
-  emit_stdio_event(stdout_events, "resize", NULL, 0);
+  emit_stdio_event(&stdout_events, "resize", NULL, 0);
 }
 #endif
 
@@ -706,7 +729,7 @@ static jsval_t js_stdin_remove_all_listeners(ant_t *js, jsval_t *args, int nargs
   if (nargs < 1) {
     ProcessEventType *evt, *tmp;
     HASH_ITER(hh, stdin_events, evt, tmp) {
-      evt->listener_count = 0;
+      free_event_type(&stdin_events, evt);
     }
     stdin_stop_reading();
     return this_obj;
@@ -717,7 +740,7 @@ static jsval_t js_stdin_remove_all_listeners(ant_t *js, jsval_t *args, int nargs
   
   ProcessEventType *evt = NULL;
   HASH_FIND_STR(stdin_events, event, evt);
-  if (evt) evt->listener_count = 0;
+  if (evt) free_event_type(&stdin_events, evt);
   if (strcmp(event, "data") == 0) stdin_stop_reading();
   
   return this_obj;
@@ -730,7 +753,7 @@ static jsval_t js_stdin_remove_listener(ant_t *js, jsval_t *args, int nargs) {
   char *event = js_getstr(js, args[0], NULL);
   if (!event) return this_obj;
   
-  bool now_empty = remove_listener_from_events(stdin_events, event, args[1]);
+  bool now_empty = remove_listener_from_events(&stdin_events, event, args[1]);
   if (now_empty && strcmp(event, "data") == 0) stdin_stop_reading();
   
   return this_obj;
@@ -790,7 +813,7 @@ static jsval_t js_stdout_remove_all_listeners(ant_t *js, jsval_t *args, int narg
   if (nargs < 1) {
     ProcessEventType *evt, *tmp;
     HASH_ITER(hh, stdout_events, evt, tmp) {
-      evt->listener_count = 0;
+      free_event_type(&stdout_events, evt);
     }
     return this_obj;
   }
@@ -800,7 +823,7 @@ static jsval_t js_stdout_remove_all_listeners(ant_t *js, jsval_t *args, int narg
   
   ProcessEventType *evt = NULL;
   HASH_FIND_STR(stdout_events, event, evt);
-  if (evt) evt->listener_count = 0;
+  if (evt) free_event_type(&stdout_events, evt);
   
   return this_obj;
 }
@@ -812,7 +835,7 @@ static jsval_t js_stdout_remove_listener(ant_t *js, jsval_t *args, int nargs) {
   char *event = js_getstr(js, args[0], NULL);
   if (!event) return this_obj;
   
-  remove_listener_from_events(stdout_events, event, args[1]);
+  remove_listener_from_events(&stdout_events, event, args[1]);
   return this_obj;
 }
 
@@ -904,7 +927,7 @@ static jsval_t js_stderr_remove_all_listeners(ant_t *js, jsval_t *args, int narg
   if (nargs < 1) {
     ProcessEventType *evt, *tmp;
     HASH_ITER(hh, stderr_events, evt, tmp) {
-      evt->listener_count = 0;
+      free_event_type(&stderr_events, evt);
     }
     return this_obj;
   }
@@ -914,7 +937,7 @@ static jsval_t js_stderr_remove_all_listeners(ant_t *js, jsval_t *args, int narg
   
   ProcessEventType *evt = NULL;
   HASH_FIND_STR(stderr_events, event, evt);
-  if (evt) evt->listener_count = 0;
+  if (evt) free_event_type(&stderr_events, evt);
   
   return this_obj;
 }
@@ -926,7 +949,7 @@ static jsval_t js_stderr_remove_listener(ant_t *js, jsval_t *args, int nargs) {
   char *event = js_getstr(js, args[0], NULL);
   if (!event) return this_obj;
   
-  remove_listener_from_events(stderr_events, event, args[1]);
+  remove_listener_from_events(&stderr_events, event, args[1]);
   return this_obj;
 }
 
@@ -1568,9 +1591,9 @@ static jsval_t process_remove_all_listeners(ant_t *js, jsval_t *args, int nargs)
       ProcessEventType *evt = NULL;
       HASH_FIND_STR(process_events, event, evt);
       if (evt) {
-        evt->listener_count = 0;
         int signum = get_signal_number(event);
         if (signum > 0) signal(signum, SIG_DFL);
+        free_event_type(&process_events, evt);
       }
     }
   } else {
@@ -1578,7 +1601,7 @@ static jsval_t process_remove_all_listeners(ant_t *js, jsval_t *args, int nargs)
     HASH_ITER(hh, process_events, evt, tmp) {
       int signum = get_signal_number(evt->event_type);
       if (signum > 0) signal(signum, SIG_DFL);
-      evt->listener_count = 0;
+      free_event_type(&process_events, evt);
     }
   }
   
