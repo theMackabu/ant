@@ -20,6 +20,7 @@ typedef struct {
   bool once;
 } __attribute__((packed)) EventListener;
 
+
 typedef struct {
   EventListener listeners[MAX_LISTENERS_PER_EVENT];
   char *event_type;
@@ -27,7 +28,13 @@ typedef struct {
   int listener_count;
 } EventType;
 
+typedef struct emitter_reg {
+  EventType **events;
+  struct emitter_reg *next;
+} emitter_reg_t;
+
 static EventType *global_events = NULL;
+static emitter_reg_t *emitter_registry = NULL;
 
 static inline void remove_listener_at(EventType *evt, int i) {
   int remaining = evt->listener_count - i - 1;
@@ -44,6 +51,12 @@ static EventType **get_or_create_emitter_events(struct js *js, jsval_t this_obj)
     EventType **events = ant_calloc(sizeof(EventType *));
     if (!events) return NULL;
     *events = NULL;
+    emitter_reg_t *reg = ant_calloc(sizeof(emitter_reg_t));
+    if (reg) {
+      reg->events = events;
+      reg->next = emitter_registry;
+      emitter_registry = reg;
+    }
     js_set_slot(js, this_obj, SLOT_DATA, ANT_PTR(events));
     return events;
   }
@@ -596,5 +609,9 @@ void events_gc_update_roots(void (*op_val)(void *, jsval_t *), void *ctx) {
   EventType *evt, *tmp;
   HASH_ITER(hh, global_events, evt, tmp) {
     for (int i = 0; i < evt->listener_count; i++) op_val(ctx, &evt->listeners[i].listener);
+  }
+  for (emitter_reg_t *reg = emitter_registry; reg; reg = reg->next) {
+    HASH_ITER(hh, *reg->events, evt, tmp) 
+      for (int i = 0; i < evt->listener_count; i++) op_val(ctx, &evt->listeners[i].listener);
   }
 }

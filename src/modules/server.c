@@ -76,6 +76,7 @@ typedef struct http_server_s {
   struct js *js;
   jsval_t handler;
   jsval_t store_obj;
+  jsval_t server_obj;
   int port;
   uv_tcp_t server;
   uv_loop_t *loop;
@@ -97,10 +98,15 @@ typedef struct {
 } write_req_t;
 
 static http_server_t *g_server = NULL;
-static uv_async_t shutdown_async;
+static uv_signal_t sigint_handle;
+static uv_signal_t sigterm_handle;
 
-static void shutdown_async_cb(uv_async_t *handle) { uv_stop(uv_default_loop()); }
-static void server_signal_handler(int signum) { uv_async_send(&shutdown_async); }
+static void server_signal_cb(uv_signal_t *handle, int signum) {
+  if (g_server) uv_close((uv_handle_t *)&g_server->server, NULL);
+  uv_close((uv_handle_t *)&sigint_handle, NULL);
+  uv_close((uv_handle_t *)&sigterm_handle, NULL);
+  uv_stop(uv_default_loop());
+}
 
 static int parse_accept_encoding(const char *buffer, size_t len) {
   const char *accept_encoding = strstr(buffer, "Accept-Encoding:");
@@ -685,6 +691,11 @@ static void send_response(uv_stream_t *client, response_ctx_t *res_ctx) {
   uv_write((uv_write_t *)write_req, client, &write_req->buf, 1, on_write);
 }
 
+static jsval_t js_server_stop(struct js *js, jsval_t *args, int nargs) {
+  server_signal_cb(NULL, 0);
+  return js_mkundef();
+}
+
 static void handle_http_request(client_t *client, http_request_t *http_req) {
   http_server_t *server = client->server;
   jsval_t result = js_mkundef();
@@ -737,8 +748,8 @@ static void handle_http_request(client_t *client, http_request_t *http_req) {
     js_set(server->js, ctx, "set", js_heavy_mkfun(server->js, js_set_prop, server->store_obj));
     js_set(server->js, ctx, "get", js_heavy_mkfun(server->js, js_get_prop, server->store_obj));
   
-    jsval_t args[1] = {ctx};
-    result = js_call(server->js, server->handler, args, 1);
+    jsval_t args[2] = {ctx, server->server_obj};
+    result = js_call(server->js, server->handler, args, 2);
     if (vtype(result) == T_PROMISE) return;
     
     if (vtype(result) == T_ERR) {
@@ -931,17 +942,22 @@ jsval_t js_serve(struct js *js, jsval_t *args, int nargs) {
   
   server->store_obj = js_mkobj(js);
   server->handler = (nargs >= 2) ? args[1] : js_mkundef();
+  
+  jsval_t server_obj = js_mkobj(js);
+  js_set(js, server_obj, "stop", js_mkfun(js_server_stop));
+  js_set(js, server_obj, "port", js_mknum(port));
+  
+  server->server_obj = server_obj;
   g_server = server;
   
   uv_loop_t *loop = uv_default_loop();
   server->loop = loop;
   
-  uv_async_init(loop, 
-    &shutdown_async, shutdown_async_cb
-  );
+  uv_signal_init(loop, &sigint_handle);
+  uv_signal_init(loop, &sigterm_handle);
   
-  signal(SIGINT, server_signal_handler);
-  signal(SIGTERM, server_signal_handler);
+  uv_signal_start(&sigint_handle, server_signal_cb, SIGINT);
+  uv_signal_start(&sigterm_handle, server_signal_cb, SIGTERM);
   
   uv_tcp_init(loop, &server->server);
   server->server.data = server;
@@ -973,7 +989,11 @@ jsval_t js_serve(struct js *js, jsval_t *args, int nargs) {
   );
   
   js_run_event_loop(js);
+  js_reactor_set_poll_hook(NULL, NULL);
   js_gc_throttle(false);
+  
+  free(server);
+  g_server = NULL;
   
   return js_mknum(1);
 }
@@ -986,5 +1006,6 @@ void server_gc_update_roots(GC_OP_VAL_ARGS) {
   if (g_server) {
     op_val(ctx, &g_server->handler);
     op_val(ctx, &g_server->store_obj);
+    op_val(ctx, &g_server->server_obj);
   }
 }

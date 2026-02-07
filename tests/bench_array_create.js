@@ -34,7 +34,7 @@ function create_prealloc_assign() {
 function create_prealloc_push() {
   var tab = [];
   tab.length = 1000;
-  for (var i = 0; i < 1000; i++) tab[i] = i;
+  for (var i = 0; i < 1000; i++) tab.push(i);
 }
 
 function main() {

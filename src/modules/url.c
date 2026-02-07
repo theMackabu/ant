@@ -9,6 +9,8 @@
 #include "errors.h"
 #include "internal.h"
 #include "runtime.h"
+#include "utils.h"
+
 #include "modules/url.h"
 #include "modules/symbol.h"
 
@@ -448,7 +450,7 @@ static void usp_sync_url(struct js *js, jsval_t this_val) {
   jsoff_t len = js_arr_len(js, entries);
 
   size_t buf_size = 1024;
-  char *buf = malloc(buf_size);
+  char *buf = try_oom(buf_size);
   buf[0] = '?';
   size_t pos = 1;
 
@@ -465,6 +467,7 @@ static void usp_sync_url(struct js *js, jsval_t this_val) {
     if (pos + needed >= buf_size) {
       buf_size = buf_size * 2 + needed;
       buf = realloc(buf, buf_size);
+      if (!buf) { free(buf); return; }
     }
     
     if (pos > 1) buf[pos++] = '&';
@@ -561,7 +564,7 @@ static jsval_t usp_toString(struct js *js, jsval_t *args, int nargs) {
   jsoff_t len = js_arr_len(js, entries);
 
   size_t buf_size = 1024;
-  char *buf = malloc(buf_size);
+  char *buf = try_oom(buf_size);
   size_t pos = 0;
 
   for (jsoff_t i = 0; i < len; i++) {
@@ -577,6 +580,7 @@ static jsval_t usp_toString(struct js *js, jsval_t *args, int nargs) {
     if (pos + needed >= buf_size) {
       buf_size = buf_size * 2 + needed;
       buf = realloc(buf, buf_size);
+      if (!buf) { free(buf); return js_mkstr(js, "", 0); }
     }
     
     if (pos > 0) buf[pos++] = '&';
