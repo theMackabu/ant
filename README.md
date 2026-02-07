@@ -16,10 +16,12 @@ curl -fsSL https://ant.themackabu.com/install | bash
 curl -fsSL https://ant.themackabu.com/install | MBEDTLS=1 bash
 ```
 
-## Build from Source
+## Build from source
 
 ```bash
 meson subprojects download
 meson setup build
 meson compile -C build
 ```
+
+For more information about the internals, read the [ant deepwiki](https://deepwiki.com/theMackabu/ant).
