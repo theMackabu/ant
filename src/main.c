@@ -100,7 +100,11 @@ static char *read_stdin(size_t *len) {
   size_t n;
   while ((n = fread(buf + *len, 1, cap - *len, stdin)) > 0) {
     *len += n;
-    if (*len == cap) { cap *= 2; buf = realloc(buf, cap); if (!buf) return NULL; }
+    if (*len == cap) {
+      cap *= 2; char *next = realloc(buf, cap);
+      if (!next) { free(buf); return NULL; }
+      buf = next;
+    }
   }
   buf[*len] = '\0';
   return buf;
@@ -391,7 +395,7 @@ int main(int argc, char *argv[]) {
       fprintf(stderr, "Error: Out of memory\n"); 
       js_result = EXIT_FAILURE; goto cleanup; 
     }
-    eval_code(js, buf, len, "[stdin]", false); free(buf);
+    eval_code(js, buf, len, "[stdin]", print->count > 0); free(buf);
   } 
   
   else {
