@@ -51,12 +51,14 @@ static EventType **get_or_create_emitter_events(struct js *js, jsval_t this_obj)
     EventType **events = ant_calloc(sizeof(EventType *));
     if (!events) return NULL;
     *events = NULL;
+    
     emitter_reg_t *reg = ant_calloc(sizeof(emitter_reg_t));
-    if (reg) {
-      reg->events = events;
-      reg->next = emitter_registry;
-      emitter_registry = reg;
-    }
+    if (!reg) { free(events); return NULL; }
+    
+    reg->events = events;
+    reg->next = emitter_registry;
+    emitter_registry = reg;
+ 
     js_set_slot(js, this_obj, SLOT_DATA, ANT_PTR(events));
     return events;
   }

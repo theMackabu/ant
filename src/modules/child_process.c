@@ -1148,13 +1148,11 @@ jsval_t child_process_library(struct js *js) {
 }
 
 int has_pending_child_processes(void) {
-  return pending_children_head != NULL;
+  return pending_children_head != NULL || (cp_loop && uv_loop_alive(cp_loop));
 }
 
 void child_process_poll_events(void) {
-  if (cp_loop && uv_loop_alive(cp_loop)) {
-    uv_run(cp_loop, UV_RUN_NOWAIT);
-  }
+  if (cp_loop && uv_loop_alive(cp_loop)) uv_run(cp_loop, UV_RUN_NOWAIT);
 }
 
 void child_process_gc_update_roots(GC_OP_VAL_ARGS) {

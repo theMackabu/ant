@@ -451,8 +451,7 @@ static void usp_sync_url(struct js *js, jsval_t this_val) {
 
   size_t buf_size = 1024;
   char *buf = try_oom(buf_size);
-  buf[0] = '?';
-  size_t pos = 1;
+  size_t pos = 0;
 
   for (jsoff_t i = 0; i < len; i++) {
     jsval_t entry = js_arr_get(js, entries, i);
@@ -470,7 +469,7 @@ static void usp_sync_url(struct js *js, jsval_t this_val) {
       if (!buf) { free(buf); return; }
     }
     
-    if (pos > 1) buf[pos++] = '&';
+    buf[pos] = pos == 0 ? '?' : '&'; pos++;
     pos += sprintf(buf + pos, "%s=%s", ek, ev);
     free(ek); free(ev);
   }

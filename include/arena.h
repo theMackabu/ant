@@ -103,11 +103,11 @@ static inline int ant_arena_decommit(void *base, size_t old_size, size_t new_siz
   void *decommit_start = (char *)base + new_pages;
   size_t decommit_size = old_pages - new_pages;
   
-  if (mprotect(decommit_start, decommit_size, PROT_NONE) == 0) return 0;
+  if (mprotect(decommit_start, decommit_size, PROT_NONE) != 0) return -1;
 #ifdef __APPLE__
-  madvise(decommit_start, decommit_size, MADV_FREE);
+  if (madvise(decommit_start, decommit_size, MADV_FREE) != 0) return -1;
 #else
-  madvise(decommit_start, decommit_size, MADV_DONTNEED);
+  if (madvise(decommit_start, decommit_size, MADV_DONTNEED) != 0) return -1;
 #endif
   return 0;
 }

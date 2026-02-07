@@ -55,6 +55,8 @@ typedef struct {
   ProcessEventListener *listeners;
   int listener_count;
   int listener_capacity;
+  int emitting;
+  bool free_deferred;
   UT_hash_handle hh;
 } ProcessEventType;
 
@@ -205,17 +207,21 @@ static const char *get_signal_name(int signum) {
   return entry ? entry->name : NULL;
 }
 
-static ProcessEventType *find_or_create_event_type(const char *event_type) {
+static ProcessEventType *find_or_create_event(ProcessEventType **table, const char *event_type) {
   ProcessEventType *evt = NULL;
-  HASH_FIND_STR(process_events, event_type, evt);
+  HASH_FIND_STR(*table, event_type, evt);
   
   if (evt == NULL) {
     evt = malloc(sizeof(ProcessEventType));
-    evt->event_type = strdup(event_type);
-    evt->listener_count = 0;
-    evt->listener_capacity = INITIAL_LISTENER_CAPACITY;
-    evt->listeners = malloc(sizeof(ProcessEventListener) * evt->listener_capacity);
-    HASH_ADD_KEYPTR(hh, process_events, evt->event_type, strlen(evt->event_type), evt);
+    *evt = (ProcessEventType){
+      .event_type = strdup(event_type),
+      .emitting = 0,
+      .listener_count = 0,
+      .free_deferred = false,
+      .listener_capacity = INITIAL_LISTENER_CAPACITY,
+      .listeners = malloc(sizeof(ProcessEventListener) * INITIAL_LISTENER_CAPACITY),
+    };
+    HASH_ADD_KEYPTR(hh, *table, evt->event_type, strlen(evt->event_type), evt);
   }
   
   return evt;
@@ -234,6 +240,7 @@ static bool ensure_listener_capacity(ProcessEventType *evt) {
 
 static void free_event_type(ProcessEventType **events, ProcessEventType *evt) {
   if (!evt) return;
+  if (evt->emitting > 0) { evt->free_deferred = true; return; }
   HASH_DEL(*events, evt);
   
   free(evt->listeners);
@@ -257,8 +264,8 @@ static void emit_process_event(const char *event_type, jsval_t *args, int nargs)
   HASH_FIND_STR(process_events, event_type, evt);
   
   if (evt == NULL || evt->listener_count == 0) return;
+  evt->emitting++; int i = 0;
   
-  int i = 0;
   while (i < evt->listener_count) {
     ProcessEventListener *listener = &evt->listeners[i];
     js_call(rt->js, listener->listener, args, nargs);
@@ -268,12 +275,12 @@ static void emit_process_event(const char *event_type, jsval_t *args, int nargs)
         evt->listeners[j] = evt->listeners[j + 1];
       } evt->listener_count--;
     } else i++;
-  }
+  } evt->emitting--;
 
-  if (evt->listener_count == 0) {
+  if (evt->listener_count == 0 || evt->free_deferred) {
     int signum = get_signal_number(event_type);
     if (signum > 0) signal(signum, SIG_DFL);
-    free_event_type(&process_events, evt);
+    if (evt->emitting == 0) free_event_type(&process_events, evt);
   }
 }
 
@@ -285,33 +292,7 @@ static void process_signal_handler(int signum) {
   }
 }
 
-static ProcessEventType *find_or_create_stdin_event(const char *event_type) {
-  ProcessEventType *evt = NULL;
-  HASH_FIND_STR(stdin_events, event_type, evt);
-  if (evt == NULL) {
-    evt = malloc(sizeof(ProcessEventType));
-    evt->event_type = strdup(event_type);
-    evt->listener_count = 0;
-    evt->listener_capacity = INITIAL_LISTENER_CAPACITY;
-    evt->listeners = malloc(sizeof(ProcessEventListener) * evt->listener_capacity);
-    HASH_ADD_KEYPTR(hh, stdin_events, evt->event_type, strlen(evt->event_type), evt);
-  }
-  return evt;
-}
 
-static ProcessEventType *find_or_create_stdout_event(const char *event_type) {
-  ProcessEventType *evt = NULL;
-  HASH_FIND_STR(stdout_events, event_type, evt);
-  if (evt == NULL) {
-    evt = malloc(sizeof(ProcessEventType));
-    evt->event_type = strdup(event_type);
-    evt->listener_count = 0;
-    evt->listener_capacity = INITIAL_LISTENER_CAPACITY;
-    evt->listeners = malloc(sizeof(ProcessEventListener) * evt->listener_capacity);
-    HASH_ADD_KEYPTR(hh, stdout_events, evt->event_type, strlen(evt->event_type), evt);
-  }
-  return evt;
-}
 
 static void emit_stdio_event(ProcessEventType **events, const char *event_type, jsval_t *args, int nargs) {
   if (!rt->js) return;
@@ -320,19 +301,20 @@ static void emit_stdio_event(ProcessEventType **events, const char *event_type, 
   HASH_FIND_STR(*events, event_type, evt);
   if (evt == NULL || evt->listener_count == 0) return;
   
+  evt->emitting++;
   int i = 0;
   while (i < evt->listener_count) {
     ProcessEventListener *listener = &evt->listeners[i];
     js_call(rt->js, listener->listener, args, nargs);
     if (listener->once) {
-      for (int j = i; j < evt->listener_count - 1; j++) {
+      for (int j = i; j < evt->listener_count - 1; j++) 
         evt->listeners[j] = evt->listeners[j + 1];
-      }
       evt->listener_count--;
     } else i++;
-  }
+  } evt->emitting--;
 
-  if (evt->listener_count == 0) free_event_type(events, evt);
+  if ((evt->listener_count == 0 || evt->free_deferred) && evt->emitting == 0)
+    free_event_type(events, evt);
 }
 
 static const char *stdin_escape_name(const char *seq, int len) {
@@ -711,7 +693,7 @@ static jsval_t js_stdin_on(ant_t *js, jsval_t *args, int nargs) {
   char *event = js_getstr(js, args[0], NULL);
   if (!event || vtype(args[1]) != T_FUNC) return this_obj;
   
-  ProcessEventType *evt = find_or_create_stdin_event(event);
+  ProcessEventType *evt = find_or_create_event(&stdin_events, event);
   if (!ensure_listener_capacity(evt)) return this_obj;
   
   evt->listeners[evt->listener_count].listener = args[1];
@@ -776,7 +758,7 @@ static jsval_t js_stdout_on(ant_t *js, jsval_t *args, int nargs) {
   char *event = js_getstr(js, args[0], NULL);
   if (!event || vtype(args[1]) != T_FUNC) return this_obj;
   
-  ProcessEventType *evt = find_or_create_stdout_event(event);
+  ProcessEventType *evt = find_or_create_event(&stdout_events, event);
   if (!ensure_listener_capacity(evt)) return this_obj;
   
   evt->listeners[evt->listener_count].listener = args[1];
@@ -795,7 +777,7 @@ static jsval_t js_stdout_once(ant_t *js, jsval_t *args, int nargs) {
   char *event = js_getstr(js, args[0], NULL);
   if (!event || vtype(args[1]) != T_FUNC) return this_obj;
   
-  ProcessEventType *evt = find_or_create_stdout_event(event);
+  ProcessEventType *evt = find_or_create_event(&stdout_events, event);
   if (!ensure_listener_capacity(evt)) return this_obj;
   
   evt->listeners[evt->listener_count].listener = args[1];
@@ -863,19 +845,7 @@ static jsval_t js_stdout_columns_getter(ant_t *js, jsval_t *args, int nargs) {
   return js_mknum(cols);
 }
 
-static ProcessEventType *find_or_create_stderr_event(const char *event_type) {
-  ProcessEventType *evt = NULL;
-  HASH_FIND_STR(stderr_events, event_type, evt);
-  if (evt == NULL) {
-    evt = malloc(sizeof(ProcessEventType));
-    evt->event_type = strdup(event_type);
-    evt->listener_count = 0;
-    evt->listener_capacity = INITIAL_LISTENER_CAPACITY;
-    evt->listeners = malloc(sizeof(ProcessEventListener) * evt->listener_capacity);
-    HASH_ADD_KEYPTR(hh, stderr_events, evt->event_type, strlen(evt->event_type), evt);
-  }
-  return evt;
-}
+
 
 static jsval_t js_stderr_write(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_false;
@@ -894,7 +864,7 @@ static jsval_t js_stderr_on(ant_t *js, jsval_t *args, int nargs) {
   char *event = js_getstr(js, args[0], NULL);
   if (!event || vtype(args[1]) != T_FUNC) return this_obj;
   
-  ProcessEventType *evt = find_or_create_stderr_event(event);
+  ProcessEventType *evt = find_or_create_event(&stderr_events, event);
   if (!ensure_listener_capacity(evt)) return this_obj;
   
   evt->listeners[evt->listener_count].listener = args[1];
@@ -911,7 +881,7 @@ static jsval_t js_stderr_once(ant_t *js, jsval_t *args, int nargs) {
   char *event = js_getstr(js, args[0], NULL);
   if (!event || vtype(args[1]) != T_FUNC) return this_obj;
   
-  ProcessEventType *evt = find_or_create_stderr_event(event);
+  ProcessEventType *evt = find_or_create_event(&stderr_events, event);
   if (!ensure_listener_capacity(evt)) return this_obj;
   
   evt->listeners[evt->listener_count].listener = args[1];
@@ -1514,7 +1484,7 @@ static jsval_t process_on(ant_t *js, jsval_t *args, int nargs) {
     signal(signum, process_signal_handler);
   }
   
-  ProcessEventType *evt = find_or_create_event_type(event);
+  ProcessEventType *evt = find_or_create_event(&process_events, event);
   if (!ensure_listener_capacity(evt)) {
     return js_mkerr(js, "failed to allocate listener");
   }
@@ -1540,7 +1510,7 @@ static jsval_t process_once(ant_t *js, jsval_t *args, int nargs) {
     signal(signum, process_signal_handler);
   }
   
-  ProcessEventType *evt = find_or_create_event_type(event);
+  ProcessEventType *evt = find_or_create_event(&process_events, event);
   if (!ensure_listener_capacity(evt)) {
     return js_mkerr(js, "failed to allocate listener");
   }
