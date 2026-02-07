@@ -4,13 +4,8 @@ Thank you for your interest in contributing to Ant! This document provides guide
 
 ## Getting Started
 
-### Prerequisites
-
-- C compiler with C23 support (GCC 14+ or Clang 18+)
-- Meson build system
-- Git
-- OpenSSL
-- libSodium
+For the full list of prerequisites and platform-specific setup instructions, <br>
+see [BUILDING.md](BUILDING.md#prerequisites).
 
 ### Building from Source
 
@@ -21,6 +16,9 @@ meson subprojects download
 meson setup build
 meson compile -C build
 ```
+
+For detailed build instructions including debug builds, ASan builds, <br>
+ccache setup, and Windows/Linux/macOS specifics, see [BUILDING.md](BUILDING.md).
 
 ## How to Contribute
 
@@ -65,6 +63,8 @@ include/        # C header files
 tests/          # JavaScript test files
 vendor/         # External dependencies
 ```
+
+For more information about Ant's internal structure, read the [Ant DeepWiki](https://deepwiki.com/theMackabu/ant).
 
 ## Testing
 
