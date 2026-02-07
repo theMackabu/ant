@@ -74,6 +74,17 @@ typedef struct response_ctx_s {
   struct response_ctx_s *next;
 } response_ctx_t;
 
+static void res_set_body(response_ctx_t *ctx, const char *src, size_t len) {
+  char *copy = malloc(len + 1);
+  if (copy) {
+    memcpy(copy, src, len);
+    copy[len] = '\0';
+  }
+  ctx->body = copy;
+  ctx->body_len = len;
+  ctx->should_free_body = 1;
+}
+
 typedef struct http_server_s {
   struct js *js;
   jsval_t handler;
@@ -440,14 +451,7 @@ static jsval_t res_body(struct js *js, jsval_t *args, int nargs) {
   if (vtype(args[0]) == T_STR) {
     size_t len;
     const char *src = js_getstr(js, args[0], &len);
-    char *copy = malloc(len + 1);
-    if (copy) {
-      memcpy(copy, src, len);
-      copy[len] = '\0';
-    }
-    ctx->body = copy;
-    ctx->body_len = len;
-    ctx->should_free_body = 1;
+    res_set_body(ctx, src, len);
   }
   
   if (nargs >= 2 && vtype(args[1]) == T_NUM) {
@@ -476,14 +480,7 @@ static jsval_t res_html(struct js *js, jsval_t *args, int nargs) {
   if (vtype(args[0]) == T_STR) {
     size_t len;
     const char *src = js_getstr(js, args[0], &len);
-    char *copy = malloc(len + 1);
-    if (copy) {
-      memcpy(copy, src, len);
-      copy[len] = '\0';
-    }
-    ctx->body = copy;
-    ctx->body_len = len;
-    ctx->should_free_body = 1;
+    res_set_body(ctx, src, len);
   }
   
   if (nargs >= 2 && vtype(args[1]) == T_NUM) {
@@ -512,27 +509,10 @@ static jsval_t res_json(struct js *js, jsval_t *args, int nargs) {
   if (vtype(result) == T_STR) {
     size_t len;
     const char *src = js_getstr(js, result, &len);
-    char *copy = malloc(len + 1);
-    if (copy) {
-      memcpy(copy, src, len);
-      copy[len] = '\0';
-    }
-    ctx->body = copy;
-    ctx->body_len = len;
-    ctx->should_free_body = 1;
+    res_set_body(ctx, src, len);
   } else if (vtype(result) == T_ERR) {
     const char *json_str = js_str(js, args[0]);
-    if (json_str) {
-      size_t len = strlen(json_str);
-      char *copy = malloc(len + 1);
-      if (copy) {
-        memcpy(copy, json_str, len);
-        copy[len] = '\0';
-      }
-      ctx->body = copy;
-      ctx->body_len = len;
-      ctx->should_free_body = 1;
-    }
+    if (json_str) res_set_body(ctx, json_str, strlen(json_str));
   }
   
   if (nargs >= 2 && vtype(args[1]) == T_NUM) {
@@ -792,23 +772,12 @@ static void handle_http_request(client_t *client, http_request_t *http_req) {
     if (vtype(result) == T_ERR) {
       const char *error_msg = js_str(server->js, result);
       fprintf(stderr, "Handler error: %s\n", error_msg);
-      
       char *clean_error = strip_ansi(error_msg);
       if (clean_error) {
         res_ctx->body = clean_error;
         res_ctx->body_len = strlen(clean_error);
         res_ctx->should_free_body = 1;
-      } else {
-        size_t err_len = strlen(error_msg);
-        char *err_copy = malloc(err_len + 1);
-        if (err_copy) {
-          memcpy(err_copy, error_msg, err_len);
-          err_copy[err_len] = '\0';
-        }
-        res_ctx->body = err_copy;
-        res_ctx->body_len = err_len;
-        res_ctx->should_free_body = 1;
-      }
+      } else res_set_body(res_ctx, error_msg, strlen(error_msg));
       res_ctx->status = 500;
       res_ctx->content_type = "text/plain";
       res_ctx->sent = 1;
