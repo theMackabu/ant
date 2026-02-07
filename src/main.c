@@ -91,33 +91,19 @@ static void print_subcommands(void) {
   printf("\n");
 }
 
-static void eval_code(struct js *js, struct arg_str *eval, struct arg_lit *print) {
-  const char *script = eval->sval[0];
-  size_t len = strlen(script);
+static char *read_stdin(size_t *len) {
+  size_t cap = 4096;
+  *len = 0;
+  char *buf = malloc(cap);
+  if (!buf) return NULL;
   
-  js_set_filename(js, "[eval]");
-  js_setup_import_meta(js, "[eval]");
-  js_mkscope(js);
-  
-  js_set(js, js_glob(js), "__dirname", js_mkstr(js, ".", 1));
-  js_set(js, js_glob(js), "__filename", js_mkstr(js, "[eval]", 6));
-  
-  jsval_t result = js_eval(js, script, len);
-  js_run_event_loop(js);
-  
-  char cbuf_stack[512]; js_cstr_t cstr = js_to_cstr(
-    js, result, cbuf_stack, sizeof(cbuf_stack)
-  );
-  
-  if (vtype(result) == T_ERR) {
-    fprintf(stderr, "%s\n", cstr.ptr);
-    js_result = EXIT_FAILURE;
-  } else if (print->count > 0) {
-    if (vtype(result) == T_STR) printf("%s\n", cstr.ptr ? cstr.ptr : "");
-    else if (cstr.ptr && strcmp(cstr.ptr, "undefined") != 0) {
-      print_value_colored(cstr.ptr, stdout); printf("\n");
-    }
-  } if (cstr.needs_free) free((void *)cstr.ptr);
+  size_t n;
+  while ((n = fread(buf + *len, 1, cap - *len, stdin)) > 0) {
+    *len += n;
+    if (*len == cap) { cap *= 2; buf = realloc(buf, cap); if (!buf) return NULL; }
+  }
+  buf[*len] = '\0';
+  return buf;
 }
 
 static char *read_file(const char *filename, size_t *len) {
@@ -139,6 +125,34 @@ static char *read_file(const char *filename, size_t *len) {
   buffer[*len] = '\0';
   
   return buffer;
+}
+
+static void eval_code(struct js *js, const char *script, size_t len, const char *tag, bool should_print) {
+  js_set_filename(js, tag);
+  js_setup_import_meta(js, tag);
+  js_mkscope(js);
+  
+  js_set(js, js_glob(js), "__dirname", js_mkstr(js, ".", 1));
+  js_set(js, js_glob(js), "__filename", js_mkstr(js, tag, strlen(tag)));
+  
+  jsval_t result = js_eval(js, script, len);
+  js_run_event_loop(js);
+  
+  char cbuf_stack[512]; js_cstr_t cstr = js_to_cstr(
+    js, result, cbuf_stack, sizeof(cbuf_stack)
+  );
+  
+  if (vtype(result) == T_ERR) {
+    fprintf(stderr, "%s\n", cstr.ptr);
+    js_result = EXIT_FAILURE;
+  } else if (should_print) {
+    if (vtype(result) == T_STR) printf("%s\n", cstr.ptr ? cstr.ptr : "");
+    else if (cstr.ptr && strcmp(cstr.ptr, "undefined") != 0) {
+      print_value_colored(cstr.ptr, stdout); printf("\n");
+    }
+  } 
+  
+  if (cstr.needs_free) free((void *)cstr.ptr);
 }
 
 static int execute_module(struct js *js, const char *filename) {
@@ -297,8 +311,12 @@ int main(int argc, char *argv[]) {
     free(filtered_argv); return EXIT_FAILURE;
   }
   
-  bool repl_mode = (file->count == 0 && eval->count == 0);
-  const char *module_file = repl_mode ? NULL : (file->count > 0 ? file->filename[0] : NULL);
+  bool has_stdin = !isatty(STDIN_FILENO);
+  bool repl_mode = (file->count == 0 && eval->count == 0 && !has_stdin);
+  
+  const char *module_file = repl_mode 
+    ? NULL 
+    : (file->count > 0 ? file->filename[0] : NULL);
   
   struct js *js = js_create_dynamic(
     initial_mem->count > 0 ? (size_t)initial_mem->ival[0] * 1024 : 0,
@@ -358,8 +376,25 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "Warning: Failed to load snapshot: %s\n", js_str(js, snapshot_result));
   }
 
-  if (eval->count > 0) eval_code(js, eval, print);
-  else if (repl_mode) ant_repl_run(); else {
+  if (eval->count > 0) {
+    const char *script = eval->sval[0];
+    eval_code(js, script, strlen(script), "[eval]", print->count > 0);
+  }
+  
+  else if (repl_mode) {
+    ant_repl_run();
+  }
+  
+  else if (has_stdin && file->count == 0) {
+    size_t len = 0; char *buf = read_stdin(&len);
+    if (!buf) { 
+      fprintf(stderr, "Error: Out of memory\n"); 
+      js_result = EXIT_FAILURE; goto cleanup; 
+    }
+    eval_code(js, buf, len, "[stdin]", false); free(buf);
+  } 
+  
+  else {
     struct stat path_stat;
     char *resolved_file = NULL;
     
@@ -381,9 +416,11 @@ int main(int argc, char *argv[]) {
     if (resolved_file) free(resolved_file);
   }
     
-  js_destroy(js);
-  arg_freetable(argtable, ARGTABLE_COUNT);
-  free(filtered_argv);
+  cleanup: {
+    js_destroy(js);
+    arg_freetable(argtable, ARGTABLE_COUNT);
+    free(filtered_argv);
+  }
   
   return js_result;
 }
