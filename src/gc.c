@@ -44,6 +44,8 @@ void js_gc_throttle(bool enabled) { gc_throttled = enabled; }
 
 #ifdef _WIN32
 #define RELEASE_PAGES(p, sz) VirtualAlloc(p, sz, MEM_RESET, PAGE_READWRITE)
+#elif defined(__APPLE__)
+#define RELEASE_PAGES(p, sz) madvise(p, sz, MADV_FREE)
 #else
 #define RELEASE_PAGES(p, sz) madvise(p, sz, MADV_DONTNEED)
 #endif
@@ -788,8 +790,8 @@ size_t js_gc_compact(ant_t *js) {
   size_t new_brk = ctx.new_brk;
   size_t old_size = js->size;
   
-  if (new_brk < old_size / 2 && old_size > ARENA_GROW_INCREMENT) {
-    size_t target = ((new_brk * 2 + ARENA_GROW_INCREMENT - 1) / ARENA_GROW_INCREMENT) * ARENA_GROW_INCREMENT;
+  if (new_brk < old_size * 3 / 4 && old_size > ARENA_GROW_INCREMENT) {
+    size_t target = ((new_brk * 3 / 2 + ARENA_GROW_INCREMENT - 1) / ARENA_GROW_INCREMENT) * ARENA_GROW_INCREMENT;
     if (target < ARENA_GROW_INCREMENT) target = ARENA_GROW_INCREMENT;
     if (target < old_size) { ant_arena_decommit(js->mem, old_size, target); js->size = (jsoff_t)target; }
   }

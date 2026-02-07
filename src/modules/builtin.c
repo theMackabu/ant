@@ -114,6 +114,13 @@ static jsval_t js_stats_fn(struct js *js, jsval_t *args, int nargs) {
   js_set(js, ext, "total", js_mknum((double)external_total));
   js_set(js, result, "external", ext);
   
+  js_intern_stats_t intern_stats = js_intern_stats();
+  jsval_t intern = js_newobj(js);
+  
+  js_set(js, intern, "count", js_mknum((double)intern_stats.count));
+  js_set(js, intern, "bytes", js_mknum((double)intern_stats.bytes));
+  js_set(js, result, "intern", intern);
+  
   if (js->cstk != NULL) {
     volatile char marker;
     uintptr_t base = (uintptr_t)js->cstk;

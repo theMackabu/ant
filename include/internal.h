@@ -71,6 +71,7 @@ struct js {
   int for_let_stack_len;
   int for_let_stack_cap;
   
+  jsval_t length_str;
   jsval_t *gc_roots;
   jshdl_t gc_roots_len;
   jshdl_t gc_roots_cap;
@@ -88,6 +89,11 @@ typedef struct {
   size_t len;
   bool needs_free;
 } js_cstr_t;
+
+typedef struct {
+  size_t count;
+  size_t bytes;
+} js_intern_stats_t;
 
 enum {
   T_OBJ, T_PROP, T_STR, T_UNDEF, T_NULL, T_NUM, T_BOOL, T_FUNC,
@@ -130,6 +136,8 @@ jsval_t setprop_interned(struct js *js, jsval_t obj, const char *key, size_t len
 
 jsval_t coerce_to_str(struct js *js, jsval_t v);
 jsval_t coerce_to_str_concat(struct js *js, jsval_t v);
+
+js_intern_stats_t js_intern_stats(void);
 js_cstr_t js_to_cstr(struct js *js, jsval_t value, char *stack_buf, size_t stack_size);
 
 jsoff_t lkp(struct js *js, jsval_t obj, const char *buf, size_t len);

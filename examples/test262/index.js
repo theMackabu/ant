@@ -214,6 +214,13 @@ function buildScreen() {
       lines.push('');
     }
 
+    if (mem.intern) {
+      lines.push(`${c.cyan}Intern Table${c.reset}`);
+      lines.push(`  Strings:  ${c.bold}${mem.intern.count}${c.reset}`);
+      lines.push(`  Bytes:    ${c.bold}${fmt(mem.intern.bytes)}${c.reset}`);
+      lines.push('');
+    }
+
     lines.push(`${c.cyan}Process${c.reset}`);
     lines.push(`  RSS:      ${c.bold}${fmt(mem.rss)}${c.reset}`);
     if (mem.virtualSize) {

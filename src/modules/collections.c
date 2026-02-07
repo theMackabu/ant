@@ -680,11 +680,11 @@ static jsval_t finreg_register(ant_t *js, jsval_t *args, int nargs) {
   js_setprop(js, entry, js_mkstr(js, idx, idx_len), held_value);
   idx_len = uint_to_str(idx, sizeof(idx), 2);
   js_setprop(js, entry, js_mkstr(js, idx, idx_len), unregister_token);
-  js_setprop(js, entry, js_mkstr(js, "length", 6), tov(3.0));
+  js_setprop(js, entry, js->length_str, tov(3.0));
   
   idx_len = uint_to_str(idx, sizeof(idx), len);
   js_setprop(js, registrations, js_mkstr(js, idx, idx_len), entry);
-  js_setprop(js, registrations, js_mkstr(js, "length", 6), tov((double)(len + 1)));
+  js_setprop(js, registrations, js->length_str, tov((double)(len + 1)));
   
   return js_mkundef();
 }
