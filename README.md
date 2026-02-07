@@ -9,11 +9,11 @@ Full async/await, modules, HTTP servers, crypto, and more.
 
 ## Table of contents
 
-* [Installation](#installation)
-* [Building Ant](#building-ant)
-* [Security](#security)
-* [Contributing to Ant](#contributing-to-ant)
-* [Current project team members](#current-project-team-members)
+- [Installation](#installation)
+- [Building Ant](#building-ant)
+- [Security](#security)
+- [Contributing to Ant](#contributing-to-ant)
+- [Project team members](#current-project-team-members)
 
 ## Installation
 
@@ -37,6 +37,6 @@ For information on reporting security vulnerabilities in Ant, see [SECURITY.md](
 We welcome contributions through pull request. See [CONTRIBUTING.md](CONTRIBUTING.md) for more details. <br>
 For more information about Ant's internal structure, read the [Ant DeepWiki](https://deepwiki.com/theMackabu/ant).
 
-## Current project team members
+## Project team members
 
 For information about the governance of Ant, see [GOVERNANCE.md](GOVERNANCE.md).

@@ -66,6 +66,8 @@ typedef struct response_ctx_s {
   int sent;
   int supports_gzip;
   int should_free_body;
+  int should_free_content_type;
+  int should_free_redirect;
   UT_array *custom_headers;
   char *redirect_location;
   uv_tcp_t *client_handle;
@@ -400,8 +402,8 @@ static jsval_t res_header(struct js *js, jsval_t *args, int nargs) {
   
   if (vtype(args[0]) == T_STR && vtype(args[1]) == T_STR) {
     custom_header_t header;
-    header.name = js_getstr(js, args[0], NULL);
-    header.value = js_getstr(js, args[1], NULL);
+    header.name = strdup(js_getstr(js, args[0], NULL));
+    header.value = strdup(js_getstr(js, args[1], NULL));
     utarray_push_back(ctx->custom_headers, &header);
   }
   
@@ -436,7 +438,16 @@ static jsval_t res_body(struct js *js, jsval_t *args, int nargs) {
   if (!ctx) return js_mkundef();
   
   if (vtype(args[0]) == T_STR) {
-    ctx->body = js_getstr(js, args[0], &ctx->body_len);
+    size_t len;
+    const char *src = js_getstr(js, args[0], &len);
+    char *copy = malloc(len + 1);
+    if (copy) {
+      memcpy(copy, src, len);
+      copy[len] = '\0';
+    }
+    ctx->body = copy;
+    ctx->body_len = len;
+    ctx->should_free_body = 1;
   }
   
   if (nargs >= 2 && vtype(args[1]) == T_NUM) {
@@ -444,13 +455,11 @@ static jsval_t res_body(struct js *js, jsval_t *args, int nargs) {
   }
   
   if (nargs >= 3 && vtype(args[2]) == T_STR) {
-    ctx->content_type = js_getstr(js, args[2], NULL);
-  } else {
-    ctx->content_type = "text/plain";
-  }
+    ctx->content_type = strdup(js_getstr(js, args[2], NULL));
+    ctx->should_free_content_type = 1;
+  } else ctx->content_type = "text/plain";
   
   ctx->sent = 1;
-  
   return js_mkundef();
 }
 
@@ -465,7 +474,16 @@ static jsval_t res_html(struct js *js, jsval_t *args, int nargs) {
   if (!ctx) return js_mkundef();
   
   if (vtype(args[0]) == T_STR) {
-    ctx->body = js_getstr(js, args[0], &ctx->body_len);
+    size_t len;
+    const char *src = js_getstr(js, args[0], &len);
+    char *copy = malloc(len + 1);
+    if (copy) {
+      memcpy(copy, src, len);
+      copy[len] = '\0';
+    }
+    ctx->body = copy;
+    ctx->body_len = len;
+    ctx->should_free_body = 1;
   }
   
   if (nargs >= 2 && vtype(args[1]) == T_NUM) {
@@ -492,12 +510,28 @@ static jsval_t res_json(struct js *js, jsval_t *args, int nargs) {
   jsval_t result = js_json_stringify(js, stringify_args, 1);
   
   if (vtype(result) == T_STR) {
-    ctx->body = js_getstr(js, result, &ctx->body_len);
+    size_t len;
+    const char *src = js_getstr(js, result, &len);
+    char *copy = malloc(len + 1);
+    if (copy) {
+      memcpy(copy, src, len);
+      copy[len] = '\0';
+    }
+    ctx->body = copy;
+    ctx->body_len = len;
+    ctx->should_free_body = 1;
   } else if (vtype(result) == T_ERR) {
     const char *json_str = js_str(js, args[0]);
     if (json_str) {
-      ctx->body = (char *)json_str;
-      ctx->body_len = strlen(json_str);
+      size_t len = strlen(json_str);
+      char *copy = malloc(len + 1);
+      if (copy) {
+        memcpy(copy, json_str, len);
+        copy[len] = '\0';
+      }
+      ctx->body = copy;
+      ctx->body_len = len;
+      ctx->should_free_body = 1;
     }
   }
   
@@ -541,7 +575,8 @@ static jsval_t res_redirect(struct js *js, jsval_t *args, int nargs) {
   if (!ctx) return js_mkundef();
   
   if (vtype(args[0]) == T_STR) {
-    ctx->redirect_location = js_getstr(js, args[0], NULL);
+    ctx->redirect_location = strdup(js_getstr(js, args[0], NULL));
+    ctx->should_free_redirect = 1;
   }
   
   ctx->status = 302;
@@ -714,6 +749,8 @@ static void handle_http_request(client_t *client, http_request_t *http_req) {
   res_ctx->sent = 0;
   res_ctx->supports_gzip = http_req->accepts_gzip;
   res_ctx->should_free_body = 0;
+  res_ctx->should_free_content_type = 0;
+  res_ctx->should_free_redirect = 0;
   utarray_new(res_ctx->custom_headers, &custom_header_icd);
   res_ctx->redirect_location = NULL;
   res_ctx->client_handle = &client->handle;
@@ -762,9 +799,15 @@ static void handle_http_request(client_t *client, http_request_t *http_req) {
         res_ctx->body_len = strlen(clean_error);
         res_ctx->should_free_body = 1;
       } else {
-        res_ctx->body = (char *)error_msg;
-        res_ctx->body_len = strlen(error_msg);
-        res_ctx->should_free_body = 0;
+        size_t err_len = strlen(error_msg);
+        char *err_copy = malloc(err_len + 1);
+        if (err_copy) {
+          memcpy(err_copy, error_msg, err_len);
+          err_copy[err_len] = '\0';
+        }
+        res_ctx->body = err_copy;
+        res_ctx->body_len = err_len;
+        res_ctx->should_free_body = 1;
       }
       res_ctx->status = 500;
       res_ctx->content_type = "text/plain";
@@ -809,8 +852,18 @@ static void check_pending_responses(http_server_t *server) {
         uv_close((uv_handle_t *)ctx->client_handle, on_close);
       }
       
-      if (ctx->custom_headers) utarray_free(ctx->custom_headers);
+      if (ctx->custom_headers) {
+        custom_header_t *h = NULL;
+        while ((h = (custom_header_t*)utarray_next(ctx->custom_headers, h))) {
+          if (h->name) free(h->name);
+          if (h->value) free(h->value);
+        }
+        utarray_free(ctx->custom_headers);
+      }
+      
       if (ctx->should_free_body && ctx->body) free(ctx->body);
+      if (ctx->should_free_content_type && ctx->content_type) free(ctx->content_type);
+      if (ctx->should_free_redirect && ctx->redirect_location) free(ctx->redirect_location);
       
       free(ctx);
     } else { current = &ctx->next; }
@@ -874,6 +927,8 @@ static void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
         res_ctx->sent = 1;
         res_ctx->supports_gzip = 0;
         res_ctx->should_free_body = 0;
+        res_ctx->should_free_content_type = 0;
+        res_ctx->should_free_redirect = 0;
         utarray_new(res_ctx->custom_headers, &custom_header_icd);
         res_ctx->redirect_location = NULL;
         res_ctx->client_handle = &client->handle;

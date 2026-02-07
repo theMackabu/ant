@@ -9855,10 +9855,12 @@ static jsval_t js_unary(struct js *js) {
     js_parse_state_t saved;
     JS_SAVE_STATE(js, saved);
     uint8_t saved_flags = js->flags;
+    jsval_t saved_current_func = js->current_func;
     mco_result mco_res = mco_yield(current_mco);
     
     JS_RESTORE_STATE(js, saved);
     js->flags = saved_flags;
+    js->current_func = saved_current_func;
 
     if (mco_res != MCO_SUCCESS) return js_mkerr(js, "failed to yield coroutine");
 
