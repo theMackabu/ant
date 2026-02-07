@@ -1,9 +1,7 @@
-#include <internal.h>
-#include <uv.h>
-
 #include "gc.h"
 #include "sugar.h"
 #include "reactor.h"
+#include "internal.h" // IWYU pragma: keep
 
 #include "modules/fs.h"
 #include "modules/timer.h"

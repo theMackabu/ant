@@ -2,6 +2,7 @@
 #define REACTOR_H
 
 #include "types.h"
+#include <uv.h>
 
 typedef enum {
   WORK_MICROTASKS       = 1 << 0,
