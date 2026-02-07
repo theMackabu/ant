@@ -2,6 +2,7 @@
 #define SYMBOL_H
 
 #include <stddef.h>
+#include <stdbool.h>
 #include "types.h"
 
 void init_symbol_module(void);

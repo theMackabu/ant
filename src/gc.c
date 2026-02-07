@@ -429,7 +429,7 @@ static void gc_process_prop(gc_ctx_t *ctx, jsoff_t old_off) {
   jsoff_t len = gc_loadoff(ctx->js->mem, old_doff + sizeof(jsoff_t));
   jsoff_t buf_size = (jsoff_t)(sizeof(jsoff_t) * 2 + sizeof(jsval_t) * cap);
   jsoff_t new_doff = gc_alloc(ctx, buf_size);
-  if (new_doff == (jsoff_t)~0) goto update_val;
+  if (new_doff == (jsoff_t)~0) return;
 
   memcpy(&ctx->new_mem[new_doff], &ctx->js->mem[old_doff], buf_size);
   for (jsoff_t i = 0; i < len; i++) {

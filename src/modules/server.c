@@ -97,10 +97,10 @@ typedef struct {
 } write_req_t;
 
 static http_server_t *g_server = NULL;
+static uv_async_t shutdown_async;
 
-static void server_signal_handler(int signum) {
-  uv_stop(uv_default_loop()); exit(0);
-}
+static void shutdown_async_cb(uv_async_t *handle) { uv_stop(uv_default_loop()); }
+static void server_signal_handler(int signum) { uv_async_send(&shutdown_async); }
 
 static int parse_accept_encoding(const char *buffer, size_t len) {
   const char *accept_encoding = strstr(buffer, "Accept-Encoding:");
@@ -935,6 +935,10 @@ jsval_t js_serve(struct js *js, jsval_t *args, int nargs) {
   
   uv_loop_t *loop = uv_default_loop();
   server->loop = loop;
+  
+  uv_async_init(loop, 
+    &shutdown_async, shutdown_async_cb
+  );
   
   signal(SIGINT, server_signal_handler);
   signal(SIGTERM, server_signal_handler);
