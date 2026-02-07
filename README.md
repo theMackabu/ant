@@ -7,8 +7,6 @@ Full async/await, modules, HTTP servers, crypto, and more.
 
 📖 [Read the blog post about Ant](https://s.tail.so/js-in-one-month)
 
-**This project has a [Code of Conduct](CODE_OF_CONDUCT.md).**
-
 ## Installation
 
 ```bash
@@ -34,8 +32,7 @@ For information on reporting security vulnerabilities in Ant, see [SECURITY.md](
 
 ## Contributing to Ant
 
-We welcome contributions through pull request. See [CONTRIBUTING.md](CONTRIBUTING.md) for more details.
-
+We welcome contributions through pull request. See [CONTRIBUTING.md](CONTRIBUTING.md) for more details. <br>
 For more information about the internals, read the [ant deepwiki](https://deepwiki.com/theMackabu/ant).
 
 ## Current project team members
