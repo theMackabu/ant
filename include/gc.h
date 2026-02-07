@@ -3,6 +3,7 @@
 
 #include <types.h>
 #include <stddef.h>
+#include <stdbool.h>
 
 #define ROPE_FLAG              (1ULL << 63)
 #define ROPE_DEPTH_SHIFT       56

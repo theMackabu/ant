@@ -73,6 +73,13 @@ const char *code_arena_alloc(const char *code, size_t len) {
   return dest;
 }
 
+size_t code_arena_get_memory(void) {
+  size_t total = 0;
+  for (code_block_t *b = code_arena_head; b; b = b->next)
+    total += sizeof(code_block_t) + b->capacity;
+  return total;
+}
+
 void code_arena_reset(void) {
   intern_entry_t *entry, *tmp;
   HASH_ITER(hh, code_interns, entry, tmp) {
@@ -92,11 +99,8 @@ void code_arena_reset(void) {
   code_arena_current = NULL;
 }
 
-size_t code_arena_get_memory(void) {
-  size_t total = 0;
-  for (code_block_t *b = code_arena_head; b; b = b->next)
-    total += sizeof(code_block_t) + b->capacity;
-  return total;
+void destroy_runtime(struct js *js) {
+  if (rt->js == js) memset(&runtime, 0, sizeof(runtime));
 }
 
 struct ant_runtime *ant_runtime_init(ant_t *js, int argc, char **argv, struct arg_file *ls_p) {

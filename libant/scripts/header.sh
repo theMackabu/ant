@@ -19,9 +19,10 @@ HEADERS=(
   "common.h:$INCLUDE_DIR/common.h"
   "types.h:$INCLUDE_DIR/types.h"
   "gc.h:$INCLUDE_DIR/gc.h"
-  "ant.h:$INCLUDE_DIR/ant.h"
   "roots.h:$INCLUDE_DIR/roots.h"
+  "uthash.h:$VENDOR_DIR/uthash-2.3.0/src/uthash.h"
   "utarray.h:$VENDOR_DIR/uthash-2.3.0/src/utarray.h"
+  "ant.h:$INCLUDE_DIR/ant.h"
   "internal.h:$INCLUDE_DIR/internal.h"
   "minicoro.h:$VENDOR_DIR/minicoro/minicoro.h"
   "sugar.h:$INCLUDE_DIR/sugar.h"
@@ -110,7 +111,7 @@ for entry in "${HEADERS[@]}"; do
       continue
     fi
     
-    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\<(config|common|argtable3|types|utarray|minicoro)\.h\> ]]; then
+    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\<(config|common|argtable3|types|utarray|uthash|minicoro)\.h\> ]]; then
       continue
     fi
     
