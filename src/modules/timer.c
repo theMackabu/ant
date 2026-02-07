@@ -111,7 +111,7 @@ static jsval_t js_set_timeout(struct js *js, jsval_t *args, int nargs) {
   
   jsval_t callback = args[0];
   double delay_ms = js_getnum(args[1]);
-  if (delay_ms < 0) delay_ms = 0;
+  uint64_t ms = delay_ms < 1 ? 0 : (uint64_t)delay_ms;
   
   timer_entry_t *entry = ant_calloc(sizeof(timer_entry_t));
   if (entry == NULL) return js_mkerr(js, "failed to allocate timer");
@@ -130,7 +130,7 @@ static jsval_t js_set_timeout(struct js *js, jsval_t *args, int nargs) {
   
   add_timer_entry(entry);
   timer_state.active_timer_count++;
-  uv_timer_start(&entry->handle, timer_callback, (uint64_t)delay_ms, 0);
+  uv_timer_start(&entry->handle, timer_callback, ms, 0);
   
   return js_mknum((double)entry->timer_id);
 }
@@ -143,7 +143,7 @@ static jsval_t js_set_interval(struct js *js, jsval_t *args, int nargs) {
   
   jsval_t callback = args[0];
   double delay_ms = js_getnum(args[1]);
-  if (delay_ms < 0) delay_ms = 0;
+  uint64_t ms = delay_ms < 1 ? 1 : (uint64_t)delay_ms;
   
   timer_entry_t *entry = ant_calloc(sizeof(timer_entry_t));
   if (entry == NULL) return js_mkerr(js, "failed to allocate timer");
@@ -162,7 +162,7 @@ static jsval_t js_set_interval(struct js *js, jsval_t *args, int nargs) {
   
   add_timer_entry(entry);
   timer_state.active_timer_count++;
-  uv_timer_start(&entry->handle, timer_callback, (uint64_t)delay_ms, (uint64_t)delay_ms);
+  uv_timer_start(&entry->handle, timer_callback, ms, ms);
   
   return js_mknum((double)entry->timer_id);
 }

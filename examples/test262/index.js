@@ -205,6 +205,15 @@ function buildScreen() {
     lines.push(`  Size:     ${c.bold}${fmt(mem.arenaSize)}${c.reset}`);
     lines.push('');
 
+    if (mem.external) {
+      lines.push(`${c.cyan}External${c.reset}`);
+      lines.push(`  Buffers:  ${c.bold}${fmt(mem.external.buffers)}${c.reset}`);
+      lines.push(`  Code:     ${c.bold}${fmt(mem.external.code)}${c.reset}`);
+      lines.push(`  Collections: ${c.bold}${fmt(mem.external.collections)}${c.reset}`);
+      lines.push(`  Total:    ${c.bold}${fmt(mem.external.total)}${c.reset}`);
+      lines.push('');
+    }
+
     lines.push(`${c.cyan}Process${c.reset}`);
     lines.push(`  RSS:      ${c.bold}${fmt(mem.rss)}${c.reset}`);
     if (mem.virtualSize) {
@@ -230,9 +239,11 @@ function buildScreen() {
 }
 
 function render() {
+  if (pendingRender) return;
   fps.update();
   const screen = buildScreen();
-  process.stdout.write(`${term.syncStart}${term.hideCursor}${term.home}${screen}${term.syncEnd}`);
+  const ok = process.stdout.write(`${term.syncStart}${term.hideCursor}${term.home}${screen}${term.syncEnd}`);
+  if (!ok) pendingRender = true;
 }
 
 function applyFilter(filter) {
@@ -368,6 +379,7 @@ process.stdin.resume();
 process.stdout.write(`${term.altScreenOn}${term.hideCursor}`);
 
 let inputBuf = '';
+let pendingRender = false;
 process.stdin.on('data', chunk => {
   const str = chunk.toString();
   let needsRender = false;
@@ -392,6 +404,11 @@ process.stdin.on('data', chunk => {
 });
 
 process.stdout.on('resize', render);
+process.stdout.on('drain', () => {
+  if (!pendingRender) return;
+  pendingRender = false;
+  render();
+});
 process.on('SIGINT', cleanup);
 process.on('SIGTERM', cleanup);
 
