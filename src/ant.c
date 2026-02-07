@@ -22650,6 +22650,7 @@ typedef void (*gc_val_op_t)(void *cb_ctx, jsval_t *val);
 typedef struct {
   gc_fwd_off_fn fwd_off;
   gc_fwd_val_fn fwd_val;
+  gc_fwd_off_fn weak_off;
   void *ctx;
   ant_t *js;
 } gc_cb_ctx_t;
@@ -22672,6 +22673,11 @@ static inline void gc_update_off_cb(void *cb_ctx, jsoff_t *off) {
 static inline void gc_update_val_cb(void *cb_ctx, jsval_t *val) {
   gc_cb_ctx_t *c = cb_ctx;
   *val = c->fwd_val(c->ctx, *val);
+}
+
+static inline jsoff_t gc_weak_off_cb(void *cb_ctx, jsoff_t old) {
+  gc_cb_ctx_t *c = cb_ctx;
+  return c->weak_off(c->ctx, old);
 }
 
 static void gc_roots_common(gc_off_op_t op_off, gc_val_op_t op_val, gc_cb_ctx_t *c) {
@@ -22761,7 +22767,7 @@ void js_gc_reserve_roots(GC_RESERVE_ARGS) {
   #define RSV_OFF(x) ((x) ? (void)fwd_off(ctx, x) : (void)0)
   #define RSV_VAL(x) (void)fwd_val(ctx, x)
   
-  gc_cb_ctx_t cb_ctx = { fwd_off, fwd_val, ctx, js };
+  gc_cb_ctx_t cb_ctx = { fwd_off, fwd_val, NULL, ctx, js };
   gc_roots_common(gc_reserve_off_cb, gc_reserve_val_cb, &cb_ctx);
   collections_gc_reserve_roots(gc_reserve_val_cb, &cb_ctx);
   
@@ -22807,7 +22813,7 @@ void js_gc_update_roots(GC_UPDATE_ARGS) {
   #define FWD_VAL(x) ((x) = fwd_val(ctx, x))
   #define IS_UNREACHABLE(old, new) ((new) == (old) && (old) != 0 && (old) < js->brk)
   
-  gc_cb_ctx_t cb_ctx = { fwd_off, fwd_val, ctx, js };
+  gc_cb_ctx_t cb_ctx = { fwd_off, fwd_val, weak_off, ctx, js };
   gc_roots_common(gc_update_off_cb, gc_update_val_cb, &cb_ctx);
   
   promise_data_entry_t *pd, *pd_tmp;
@@ -22892,7 +22898,7 @@ void js_gc_update_roots(GC_UPDATE_ARGS) {
     }
 
   memset(intern_prop_cache, 0, sizeof(intern_prop_cache));
-  collections_gc_update_roots(fwd_off, gc_update_val_cb, &cb_ctx);
+  collections_gc_update_roots(gc_weak_off_cb, gc_update_val_cb, &cb_ctx);
   
   #undef FWD_OFF
   #undef FWD_VAL

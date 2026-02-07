@@ -63,7 +63,7 @@ void cleanup_collections_module(void);
 size_t collections_get_external_memory(void);
 
 void collections_gc_reserve_roots(GC_OP_VAL_ARGS);
-void collections_gc_update_roots(jsoff_t (*fwd_off)(void *ctx, jsoff_t old), GC_OP_VAL_ARGS);
+void collections_gc_update_roots(jsoff_t (*weak_off)(void *ctx, jsoff_t old), GC_OP_VAL_ARGS);
 
 map_entry_t **get_map_from_obj(ant_t *js, jsval_t obj);
 set_entry_t **get_set_from_obj(ant_t *js, jsval_t obj);

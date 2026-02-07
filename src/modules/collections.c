@@ -1031,14 +1031,14 @@ static void free_set_entries(set_entry_t **head) {
   }
 }
 
-void collections_gc_update_roots(jsoff_t (*fwd_off)(void *ctx, jsoff_t old), GC_OP_VAL_ARGS) {
+void collections_gc_update_roots(jsoff_t (*weak_off)(void *ctx, jsoff_t old), GC_OP_VAL_ARGS) {
   size_t write_idx = 0;
   
   for (size_t i = 0; i < map_registry_count; i++) {
     jsoff_t old_off = map_registry[i].obj_offset;
-    jsoff_t new_off = fwd_off(ctx, old_off);
+    jsoff_t new_off = weak_off(ctx, old_off);
     
-    if (new_off == 0) {
+    if (new_off == (jsoff_t)~0) {
       free_map_entries(map_registry[i].head);
       free(map_registry[i].head);
       continue;
@@ -1060,9 +1060,9 @@ void collections_gc_update_roots(jsoff_t (*fwd_off)(void *ctx, jsoff_t old), GC_
   write_idx = 0;
   for (size_t i = 0; i < set_registry_count; i++) {
     jsoff_t old_off = set_registry[i].obj_offset;
-    jsoff_t new_off = fwd_off(ctx, old_off);
+    jsoff_t new_off = weak_off(ctx, old_off);
     
-    if (new_off == 0) {
+    if (new_off == (jsoff_t)~0) {
       free_set_entries(set_registry[i].head);
       free(set_registry[i].head);
       continue;
