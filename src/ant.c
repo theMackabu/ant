@@ -3075,7 +3075,6 @@ jsval_t mkarr(struct js *js) {
   jsval_t arr_val = mkval(T_ARR, vdata(arr));
   jsoff_t doff = dense_alloc(js, JS_DENSE_INITIAL_CAP);
   if (doff) set_slot(js, arr_val, SLOT_DENSE_BUF, tov((double)doff));
-  js_set_descriptor(js, arr_val, "length", 6, JS_DESC_W);
   
   return arr_val;
 }
@@ -3472,7 +3471,6 @@ static inline void update_array_length(struct js *js, jsval_t obj, jsoff_t new_l
   
   if (len_off != 0) saveval(js, len_off + sizeof(jsoff_t) * 2, new_len_val); else {
     js_mkprop_fast(js, obj, "length", 6, new_len_val);
-    if (vtype(obj) == T_ARR) js_set_descriptor(js, obj, "length", 6, JS_DESC_W);
   }
 }
 
@@ -3615,7 +3613,6 @@ no_descriptor:
   jsval_t new_len = tov((double)(update_idx + 1));
   if (len_off != 0) saveval(js, len_off + sizeof(jsoff_t) * 2, new_len); else {
     mkprop(js, obj, len_key, new_len, 0);
-    if (vtype(obj) == T_ARR) js_set_descriptor(js, obj, "length", 6, JS_DESC_W);
   }
 
 done_update:
@@ -3662,7 +3659,6 @@ create_new:
     jsval_t inner_new_len = tov((double)(idx + 1));
     if (inner_len_off != 0) saveval(js, inner_len_off + sizeof(jsoff_t) * 2, inner_new_len); else {
       mkprop(js, obj, inner_len_key, inner_new_len, 0);
-      if (vtype(obj) == T_ARR) js_set_descriptor(js, obj, "length", 6, JS_DESC_W);
     }
   }
   
@@ -9716,17 +9712,12 @@ static jsval_t js_unary(struct js *js) {
       jsval_t err = check_frozen_sealed(js, obj, "delete");
       if (vtype(err) != T_UNDEF) return err;
 
-      {
-        jsoff_t header = loadoff(js, obj_off);
-        if ((header & 3) == T_OBJ && (header & ARRMASK)) {
-          jsoff_t doff = get_dense_buf_off(js, obj_off);
-          if (doff) {
-            unsigned long del_idx;
-            if (parse_array_index(key_str, len, dense_length(js, doff), &del_idx)) {
-              arr_del(js, mkval(T_ARR, (uint64_t)obj_off), (jsoff_t)del_idx);
-              return js_true;
-            }
-          }
+      if (is_arr_off(js, obj_off)) {
+        jsoff_t doff = get_dense_buf_off(js, obj_off);
+        unsigned long del_idx;
+        if (doff && parse_array_index(key_str, len, dense_length(js, doff), &del_idx)) {
+          arr_del(js, mkval(T_ARR, (uint64_t)obj_off), (jsoff_t)del_idx);
+          return js_true;
         }
       }
 
@@ -23344,10 +23335,25 @@ static inline uint64_t make_desc_key(jsoff_t obj_off, const char *key, size_t kl
   return ((uint64_t)obj_off << 32) | key_hash;
 }
 
+static descriptor_entry_t arr_length_desc = {
+  .key = 0, .obj_off = 0,
+  .prop_name = "length", .prop_len = 6,
+  .writable = true, .enumerable = false, .configurable = false,
+  .has_getter = false, .has_setter = false,
+  .getter = 0, .setter = 0,
+};
+
 static descriptor_entry_t *lookup_descriptor(jsoff_t obj_off, const char *key, size_t klen) {
-  uint64_t desc_key = make_desc_key(obj_off, key, klen);
+  if (klen == 6 
+    && memcmp(key, "length", 6) == 0 
+    && rt && rt->js 
+    && is_arr_off(rt->js, obj_off)
+  ) return &arr_length_desc;
+  
   descriptor_entry_t *entry = NULL;
+  uint64_t desc_key = make_desc_key(obj_off, key, klen);
   HASH_FIND(hh, desc_registry, &desc_key, sizeof(uint64_t), entry);
+  
   return entry;
 }
 
