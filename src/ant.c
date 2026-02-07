@@ -2293,6 +2293,10 @@ static inline jsoff_t get_dense_buf(struct js *js, jsval_t arr) {
   return (jsoff_t) tod(slot);
 }
 
+static inline jsoff_t get_dense_buf_off(struct js *js, jsoff_t obj_off) {
+  return get_dense_buf(js, mkval(T_ARR, (uint64_t)obj_off));
+}
+
 static inline jsoff_t dense_capacity(struct js *js, jsoff_t doff) {
   return loadoff(js, doff);
 }
@@ -9669,12 +9673,11 @@ static jsval_t js_unary(struct js *js) {
       {
         jsoff_t header = loadoff(js, obj_off);
         if ((header & 3) == T_OBJ && (header & ARRMASK)) {
-          jsval_t arr_val = mkval(T_ARR, (uint64_t)obj_off);
-          jsoff_t doff = get_dense_buf(js, arr_val);
+          jsoff_t doff = get_dense_buf_off(js, obj_off);
           if (doff) {
             unsigned long del_idx;
             if (parse_array_index(key_str, len, dense_length(js, doff), &del_idx)) {
-              arr_del(js, arr_val, (jsoff_t)del_idx);
+              arr_del(js, mkval(T_ARR, (uint64_t)obj_off), (jsoff_t)del_idx);
               return js_true;
             }
           }
@@ -15005,133 +15008,11 @@ static jsval_t builtin_object_is(struct js *js, jsval_t *args, int nargs) {
   return x == y ? js_true : js_false;
 }
 
-static jsval_t builtin_object_keys(struct js *js, jsval_t *args, int nargs) {
-  if (nargs == 0) return mkarr(js);
-  jsval_t obj = args[0];
-  
-  if (vtype(obj) != T_OBJ && vtype(obj) != T_ARR && vtype(obj) != T_FUNC) return mkarr(js);
-  bool is_arr = (vtype(obj) == T_ARR);
-  if (vtype(obj) == T_FUNC) obj = mkval(T_OBJ, vdata(obj));
-  
-  jsoff_t obj_off = (jsoff_t)vdata(obj);
-  dynamic_accessors_t *acc = NULL;
-  HASH_FIND(hh, accessor_registry, &obj_off, sizeof(jsoff_t), acc);
-  if (acc && acc->keys) return acc->keys(js, obj);
-  
-  jsval_t arr = mkarr(js);
-  jsoff_t idx = 0;
-  
-  if (is_arr) {
-    jsval_t arr_val = mkval(T_ARR, (uint64_t)obj_off);
-    jsoff_t doff = get_dense_buf(js, arr_val);
-    if (doff) {
-      jsoff_t dense_len = dense_length(js, doff);
-      for (jsoff_t i = 0; i < dense_len; i++) {
-        jsval_t v = dense_get(js, doff, i);
-        if (is_empty_slot(v)) continue;
-        char idxstr[16]; size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)i);
-        jsval_t key_val = js_mkstr(js, idxstr, idxlen);
-        arr_set(js, arr, idx, key_val);
-        idx++;
-      }
-    }
-  }
-  
-  jsoff_t next = loadoff(js, obj_off) & ~(3U | FLAGMASK);
-  
-  while (next < js->brk && next != 0) {
-    jsoff_t header = loadoff(js, next);
-    if (is_slot_prop(header)) { next = next_prop(header); continue; }
-    
-    jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
-    jsoff_t klen = offtolen(loadoff(js, koff));
-    const char *key = (char *) &js->mem[koff + sizeof(koff)];
-    
-    next = next_prop(header);
-    if (is_internal_prop(key, klen)) continue;
-    if (is_arr && is_array_index(key, klen)) continue;
-    
-    bool should_include = true;
-    descriptor_entry_t *desc = lookup_descriptor(obj_off, key, klen);
-    if (desc) should_include = desc->enumerable;
-    
-    if (should_include) {
-      jsval_t key_val = js_mkstr(js, key, klen);
-      arr_set(js, arr, idx, key_val);
-      idx++;
-    }
-  }
-  
-  descriptor_entry_t *desc, *tmp;
-  HASH_ITER(hh, desc_registry, desc, tmp) {
-    if (desc->obj_off != obj_off) continue;
-    if (!desc->enumerable) continue;
-    if (!desc->has_getter && !desc->has_setter) continue;
-    
-    jsval_t key_val = js_mkstr(js, desc->prop_name, desc->prop_len);
-    arr_set(js, arr, idx, key_val);
-    idx++;
-  }
-  
-  return mkval(T_ARR, vdata(arr));
-}
-
-static jsval_t builtin_object_values(struct js *js, jsval_t *args, int nargs) {
-  if (nargs == 0) return mkarr(js);
-  jsval_t obj = args[0];
-  
-  if (vtype(obj) != T_OBJ && vtype(obj) != T_ARR && vtype(obj) != T_FUNC) return mkarr(js);
-  bool is_arr = (vtype(obj) == T_ARR);
-  if (vtype(obj) == T_FUNC) obj = mkval(T_OBJ, vdata(obj));
-  
-  jsoff_t obj_off = (jsoff_t)vdata(obj);
-  dynamic_accessors_t *acc = NULL;
-  HASH_FIND(hh, accessor_registry, &obj_off, sizeof(jsoff_t), acc);
-  if (acc && acc->keys && acc->getter) return iterate_dynamic_keys(js, obj, acc, NULL);
-  
-  jsval_t arr = mkarr(js); jsoff_t idx = 0;
-  
-  if (is_arr) {
-    jsval_t arr_val = mkval(T_ARR, (uint64_t)obj_off);
-    jsoff_t doff = get_dense_buf(js, arr_val);
-    if (doff) {
-      jsoff_t dense_len = dense_length(js, doff);
-      for (jsoff_t i = 0; i < dense_len; i++) {
-        jsval_t v = dense_get(js, doff, i);
-        if (is_empty_slot(v)) continue;
-        arr_set(js, arr, idx, v);
-        idx++;
-      }
-    }
-  }
-  
-  jsoff_t next = loadoff(js, obj_off) & ~(3U | FLAGMASK);
-  
-  while (next < js->brk && next != 0) {
-    jsoff_t header = loadoff(js, next);
-    if (is_slot_prop(header)) { next = next_prop(header); continue; }
-    
-    jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
-    jsoff_t klen = offtolen(loadoff(js, koff));
-    const char *key = (char *) &js->mem[koff + sizeof(koff)];
-    jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
-    
-    next = next_prop(header);
-    if (is_internal_prop(key, klen)) continue;
-    if (is_arr && is_array_index(key, klen)) continue;
-    
-    bool should_include = true;
-    descriptor_entry_t *desc = lookup_descriptor(obj_off, key, klen);
-    if (desc) should_include = desc->enumerable;
-    
-    if (should_include) {
-      arr_set(js, arr, idx, val);
-      idx++;
-    }
-  }
-  
-  return mkval(T_ARR, vdata(arr));
-}
+enum obj_enum_mode { 
+  OBJ_ENUM_KEYS,
+  OBJ_ENUM_VALUES,
+  OBJ_ENUM_ENTRIES
+};
 
 static jsval_t map_to_entry(struct js *js, jsval_t key, jsval_t val) {
   jsval_t pair = mkarr(js);
@@ -15140,37 +15021,36 @@ static jsval_t map_to_entry(struct js *js, jsval_t key, jsval_t val) {
   return mkval(T_ARR, vdata(pair));
 }
 
-static jsval_t builtin_object_entries(struct js *js, jsval_t *args, int nargs) {
-  if (nargs == 0) return mkarr(js);
-  jsval_t obj = args[0];
-  
-  if (vtype(obj) != T_OBJ && vtype(obj) != T_ARR && vtype(obj) != T_FUNC) return mkarr(js);
-  bool is_arr_obj = (vtype(obj) == T_ARR);
+static jsval_t object_enum(struct js *js, jsval_t obj, enum obj_enum_mode mode) {
+  bool is_arr = (vtype(obj) == T_ARR);
   if (vtype(obj) == T_FUNC) obj = mkval(T_OBJ, vdata(obj));
   
   jsoff_t obj_off = (jsoff_t)vdata(obj);
   dynamic_accessors_t *acc = NULL;
   HASH_FIND(hh, accessor_registry, &obj_off, sizeof(jsoff_t), acc);
-  if (acc && acc->keys && acc->getter) {
-    return iterate_dynamic_keys(js, obj, acc, map_to_entry);
+  if (acc && acc->keys) {
+    if (mode == OBJ_ENUM_KEYS && !acc->getter) return acc->keys(js, obj);
+    if (acc->getter) {
+      dynamic_kv_mapper_fn mapper = (mode == OBJ_ENUM_ENTRIES) ? map_to_entry : NULL;
+      return iterate_dynamic_keys(js, obj, acc, mapper);
+    }
   }
   
   jsval_t arr = mkarr(js);
   jsoff_t idx = 0;
   
-  if (is_arr_obj) {
-    jsval_t arr_val = mkval(T_ARR, (uint64_t)obj_off);
-    jsoff_t doff = get_dense_buf(js, arr_val);
+  if (is_arr) {
+    jsoff_t doff = get_dense_buf_off(js, obj_off);
     if (doff) {
       jsoff_t dense_len = dense_length(js, doff);
       for (jsoff_t i = 0; i < dense_len; i++) {
         jsval_t v = dense_get(js, doff, i);
         if (is_empty_slot(v)) continue;
         char idxstr[16]; size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)i);
-        jsval_t pair = mkarr(js);
-        arr_set(js, pair, 0, js_mkstr(js, idxstr, idxlen));
-        arr_set(js, pair, 1, v);
-        arr_set(js, arr, idx, mkval(T_ARR, vdata(pair)));
+        jsval_t key_val = js_mkstr(js, idxstr, idxlen);
+        if (mode == OBJ_ENUM_KEYS) arr_set(js, arr, idx, key_val);
+        else if (mode == OBJ_ENUM_VALUES) arr_set(js, arr, idx, v);
+        else arr_set(js, arr, idx, map_to_entry(js, key_val, v));
         idx++;
       }
     }
@@ -15189,23 +15069,55 @@ static jsval_t builtin_object_entries(struct js *js, jsval_t *args, int nargs) {
     
     next = next_prop(header);
     if (is_internal_prop(key, klen)) continue;
-    if (is_arr_obj && is_array_index(key, klen)) continue;
+    if (is_arr && is_array_index(key, klen)) continue;
     
     bool should_include = true;
     descriptor_entry_t *desc = lookup_descriptor(obj_off, key, klen);
     if (desc) should_include = desc->enumerable;
     
     if (should_include) {
-      jsval_t pair = mkarr(js);
       jsval_t key_val = js_mkstr(js, key, klen);
-      arr_set(js, pair, 0, key_val);
-      arr_set(js, pair, 1, val);
-      arr_set(js, arr, idx, mkval(T_ARR, vdata(pair)));
+      if (mode == OBJ_ENUM_KEYS) arr_set(js, arr, idx, key_val);
+      else if (mode == OBJ_ENUM_VALUES) arr_set(js, arr, idx, val);
+      else arr_set(js, arr, idx, map_to_entry(js, key_val, val));
+      idx++;
+    }
+  }
+  
+  if (mode == OBJ_ENUM_KEYS) {
+    descriptor_entry_t *desc, *tmp;
+    HASH_ITER(hh, desc_registry, desc, tmp) {
+      if (desc->obj_off != obj_off) continue;
+      if (!desc->enumerable) continue;
+      if (!desc->has_getter && !desc->has_setter) continue;
+      jsval_t key_val = js_mkstr(js, desc->prop_name, desc->prop_len);
+      arr_set(js, arr, idx, key_val);
       idx++;
     }
   }
   
   return mkval(T_ARR, vdata(arr));
+}
+
+static jsval_t builtin_object_keys(struct js *js, jsval_t *args, int nargs) {
+  if (nargs == 0) return mkarr(js);
+  jsval_t obj = args[0];
+  if (vtype(obj) != T_OBJ && vtype(obj) != T_ARR && vtype(obj) != T_FUNC) return mkarr(js);
+  return object_enum(js, obj, OBJ_ENUM_KEYS);
+}
+
+static jsval_t builtin_object_values(struct js *js, jsval_t *args, int nargs) {
+  if (nargs == 0) return mkarr(js);
+  jsval_t obj = args[0];
+  if (vtype(obj) != T_OBJ && vtype(obj) != T_ARR && vtype(obj) != T_FUNC) return mkarr(js);
+  return object_enum(js, obj, OBJ_ENUM_VALUES);
+}
+
+static jsval_t builtin_object_entries(struct js *js, jsval_t *args, int nargs) {
+  if (nargs == 0) return mkarr(js);
+  jsval_t obj = args[0];
+  if (vtype(obj) != T_OBJ && vtype(obj) != T_ARR && vtype(obj) != T_FUNC) return mkarr(js);
+  return object_enum(js, obj, OBJ_ENUM_ENTRIES);
 }
 
 static jsval_t builtin_object_getPrototypeOf(struct js *js, jsval_t *args, int nargs) {
@@ -15845,8 +15757,7 @@ static jsval_t builtin_object_getOwnPropertyNames(struct js *js, jsval_t *args, 
   jsoff_t idx = 0;
   
   if (is_arr_obj) {
-    jsval_t arr_val = mkval(T_ARR, (uint64_t)(jsoff_t)vdata(obj));
-    jsoff_t doff = get_dense_buf(js, arr_val);
+    jsoff_t doff = get_dense_buf_off(js, (jsoff_t)vdata(obj));
     if (doff) {
       jsoff_t dense_len = dense_length(js, doff);
       for (jsoff_t i = 0; i < dense_len; i++) {
