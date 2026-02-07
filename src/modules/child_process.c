@@ -76,11 +76,6 @@ typedef struct child_process_s {
 
 static child_process_t *pending_children_head = NULL;
 static child_process_t *pending_children_tail = NULL;
-static uv_loop_t *cp_loop = NULL;
-
-static void ensure_cp_loop(void) {
-  if (cp_loop == NULL) cp_loop = uv_default_loop();
-}
 
 static void add_pending_child(child_process_t *cp) {
   cp->next = NULL;
@@ -507,8 +502,6 @@ static jsval_t builtin_spawn(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "spawn() requires a command");
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "Command must be a string");
   
-  ensure_cp_loop();
-  
   size_t cmd_len;
   char *cmd = js_getstr(js, args[0], &cmd_len);
   char *cmd_str = strndup(cmd, cmd_len);
@@ -555,9 +548,9 @@ static jsval_t builtin_spawn(struct js *js, jsval_t *args, int nargs) {
   cp->cwd = cwd;
   cp->promise = js_mkundef();
   
-  uv_pipe_init(cp_loop, &cp->stdin_pipe, 0);
-  uv_pipe_init(cp_loop, &cp->stdout_pipe, 0);
-  uv_pipe_init(cp_loop, &cp->stderr_pipe, 0);
+  uv_pipe_init(uv_default_loop(), &cp->stdin_pipe, 0);
+  uv_pipe_init(uv_default_loop(), &cp->stdout_pipe, 0);
+  uv_pipe_init(uv_default_loop(), &cp->stderr_pipe, 0);
   
   cp->stdin_pipe.data = cp;
   cp->stdout_pipe.data = cp;
@@ -615,10 +608,10 @@ static jsval_t builtin_spawn(struct js *js, jsval_t *args, int nargs) {
   options.args = final_args;
   options.stdio_count = 3;
   options.stdio = stdio;
+  
   if (cwd) options.cwd = cwd;
   if (detached) options.flags = UV_PROCESS_DETACHED;
-  
-  int r = uv_spawn(cp_loop, &cp->process, &options);
+  int r = uv_spawn(uv_default_loop(), &cp->process, &options);
   
   if (use_shell) {
     free(final_args[0]);
@@ -628,8 +621,7 @@ static jsval_t builtin_spawn(struct js *js, jsval_t *args, int nargs) {
   } else {
     for (int i = 0; i < final_argc; i++) {
       if (final_args[i]) free(final_args[i]);
-    }
-    free(final_args);
+    } free(final_args);
   }
   
   free_args_array(spawn_args, spawn_argc);
@@ -643,16 +635,14 @@ static jsval_t builtin_spawn(struct js *js, jsval_t *args, int nargs) {
   uv_read_start((uv_stream_t *)&cp->stderr_pipe, alloc_buffer, on_stderr_read);
   
   add_pending_child(cp);
-  
   cp->child_obj = create_child_object(js, cp);
+  
   return cp->child_obj;
 }
 
 static jsval_t builtin_exec(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "exec() requires a command");
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "Command must be a string");
-  
-  ensure_cp_loop();
   
   size_t cmd_len;
   char *cmd = js_getstr(js, args[0], &cmd_len);
@@ -680,9 +670,9 @@ static jsval_t builtin_exec(struct js *js, jsval_t *args, int nargs) {
   cp->cwd = cwd;
   cp->promise = js_mkpromise(js);
   
-  uv_pipe_init(cp_loop, &cp->stdin_pipe, 0);
-  uv_pipe_init(cp_loop, &cp->stdout_pipe, 0);
-  uv_pipe_init(cp_loop, &cp->stderr_pipe, 0);
+  uv_pipe_init(uv_default_loop(), &cp->stdin_pipe, 0);
+  uv_pipe_init(uv_default_loop(), &cp->stdout_pipe, 0);
+  uv_pipe_init(uv_default_loop(), &cp->stderr_pipe, 0);
   
   cp->stdin_pipe.data = cp;
   cp->stdout_pipe.data = cp;
@@ -709,9 +699,9 @@ static jsval_t builtin_exec(struct js *js, jsval_t *args, int nargs) {
   options.args = shell_args;
   options.stdio_count = 3;
   options.stdio = stdio;
-  if (cwd) options.cwd = cwd;
   
-  int r = uv_spawn(cp_loop, &cp->process, &options);
+  if (cwd) options.cwd = cwd;
+  int r = uv_spawn(uv_default_loop(), &cp->process, &options);
   free(cmd_str);
   
   if (r < 0) {
@@ -1148,11 +1138,7 @@ jsval_t child_process_library(struct js *js) {
 }
 
 int has_pending_child_processes(void) {
-  return pending_children_head != NULL || (cp_loop && uv_loop_alive(cp_loop));
-}
-
-void child_process_poll_events(void) {
-  if (cp_loop && uv_loop_alive(cp_loop)) uv_run(cp_loop, UV_RUN_NOWAIT);
+  return pending_children_head != NULL;
 }
 
 void child_process_gc_update_roots(GC_OP_VAL_ARGS) {

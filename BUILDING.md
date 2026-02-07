@@ -4,6 +4,9 @@ Depending on what platform or features you need, the build process may
 differ. After you've built a binary, running the
 test suite to confirm that the binary works as intended is a good next step.
 
+If you can reproduce a test failure, search for it in the <br>
+[Ant issue tracker](https://github.com/theMackabu/ant/issues) or file a new issue.
+
 ## Table of contents
 
 - [Supported platforms](#supported-platforms)
@@ -174,6 +177,10 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 #### Building Ant
 
+> [!IMPORTANT]
+> If the path to your build directory contains a space, the build will likely
+> fail.
+
 To build Ant:
 
 ```bash
@@ -190,6 +197,10 @@ maid setup       # downloads subprojects + configures with ccache and lld
 maid build       # compiles
 maid run <file>  # builds and runs a JS file
 ```
+
+> [!TIP]
+> `maid setup` automatically configures ccache and lld for faster builds.
+> Use `maid run <file>` during development to build and execute in one step.
 
 To verify the build:
 
@@ -229,6 +240,10 @@ To run the spec suite:
 ./build/ant examples/spec/run.js
 ```
 
+> [!NOTE]
+> Remember to recompile with `meson compile -C build` (or `maid build`)
+> between test runs if you change code in the `src/` directory.
+
 #### Building a debug build
 
 A debug build disables optimizations and LTO, and preserves debug symbols:
@@ -258,7 +273,12 @@ lldb ./build/ant core.ant
 
 #### Building an ASan build
 
-[ASan](https://github.com/google/sanitizers) can help detect memory bugs:
+[ASan](https://github.com/google/sanitizers) can help detect memory bugs.
+
+> [!WARNING]
+> ASan builds are significantly slower than release builds. The debug flags
+> are not required but can produce clearer stack traces when ASan detects
+> an issue.
 
 ```bash
 meson subprojects download
@@ -286,6 +306,11 @@ Then run tests against the ASan build:
 If you plan to frequently rebuild Ant, installing `ccache` can greatly
 reduce build times. The `maid setup` task configures ccache automatically.
 
+> [!TIP]
+> Using both `ccache` and `lld` together provides the best rebuild
+> performance. `ccache` caches compilation, while `lld` speeds up linking
+> (which cannot be cached).
+
 On GNU/Linux:
 
 ```bash
@@ -308,9 +333,10 @@ export CC_LD="$(which ld64.lld)"  # macOS with brew llvm
 export CC_LD="$(which lld)"       # Linux
 ```
 
-Note: LTO is enabled by default with 8 threads (`b_lto=true`,
-`b_lto_threads=8`). Disable it with `-Db_lto=false` for faster iteration
-during development.
+> [!NOTE]
+> LTO is enabled by default with 8 threads (`b_lto=true`,
+> `b_lto_threads=8`). Disable it with `-Db_lto=false` for faster iteration
+> during development.
 
 #### Troubleshooting Unix and macOS builds
 
@@ -339,8 +365,11 @@ meson compile -C build -j2
 
 #### Windows prerequisites
 
-Ant on Windows is built using the MSYS2 MINGW64 toolchain. Native MSVC
-builds are not currently supported.
+Ant on Windows is built using the MSYS2 MINGW64 toolchain.
+
+> [!IMPORTANT]
+> Native MSVC builds are not currently supported. You must use the MSYS2
+> MINGW64 environment.
 
 1. Install [MSYS2](https://www.msys2.org/)
 2. Open the **MINGW64** shell and install dependencies:
@@ -366,8 +395,9 @@ meson setup build -Dc_std=gnu2x
 meson compile -C build
 ```
 
-Note: Windows builds use `-Dc_std=gnu2x` instead of `gnu23` due to MinGW
-toolchain compatibility.
+> [!NOTE]
+> Windows builds use `-Dc_std=gnu2x` instead of `gnu23` due to MinGW
+> toolchain compatibility.
 
 To verify:
 
@@ -375,14 +405,15 @@ To verify:
 ./build/ant.exe --version
 ```
 
-Windows builds require bundling the following DLLs alongside `ant.exe`:
-
-- `libssl-3-x64.dll`
-- `libcrypto-3-x64.dll`
-- `libsodium-26.dll`
-
-These are found in the MSYS2 MINGW64 bin directory
-(`/mingw64/bin/` or equivalent).
+> [!WARNING]
+> Windows builds require bundling the following DLLs alongside `ant.exe`:
+>
+> - `libssl-3-x64.dll`
+> - `libcrypto-3-x64.dll`
+> - `libsodium-26.dll`
+>
+> These are found in the MSYS2 MINGW64 bin directory
+> (`/mingw64/bin/` or equivalent).
 
 ## Meson build options
 

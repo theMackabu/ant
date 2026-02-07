@@ -21,10 +21,6 @@ void js_reactor_set_poll_hook(reactor_poll_hook_t hook, void *data) {
 void js_poll_events(ant_t *js) {
   coros_this_tick = 0;
   
-  if (has_pending_fetches())         fetch_poll_events();
-  if (has_pending_fs_ops())          fs_poll_events();
-  if (has_pending_child_processes()) child_process_poll_events();
-  
   process_immediates(js);
   process_microtasks(js);
   

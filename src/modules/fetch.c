@@ -40,7 +40,6 @@ typedef struct fetch_request_s {
   size_t body_len;
 } fetch_request_t;
 
-static uv_loop_t *fetch_loop = NULL;
 static UT_array *pending_requests = NULL;
 
 static void free_fetch_request(fetch_request_t *req) {
@@ -224,7 +223,6 @@ static jsval_t do_fetch_microtask(struct js *js, jsval_t *args, int nargs) {
     return js_mkundef();
   }
   
-  if (!pending_requests) utarray_new(pending_requests, &ut_ptr_icd);
   utarray_push_back(pending_requests, &req);
   
   const char *scheme_end = strstr(url_str, "://");
@@ -248,7 +246,7 @@ static jsval_t do_fetch_microtask(struct js *js, jsval_t *args, int nargs) {
   if (!host_url) return fetch_fail_oom(js, promise, req, false, "Out of memory", 13);
   snprintf(host_url, scheme_len + 3 + host_len + 1, "%.*s://%.*s", (int)scheme_len, url_str, (int)host_len, host_start);
   
-  int rc = tlsuv_http_init(fetch_loop, &req->http_client, host_url); free(host_url);
+  int rc = tlsuv_http_init(uv_default_loop(), &req->http_client, host_url); free(host_url);
   if (rc != 0) return fetch_fail_oom(js, promise, req, false, "Failed to initialize HTTP client", 33);
   
   req->http_client.data = req;
@@ -340,21 +338,12 @@ static jsval_t js_fetch(struct js *js, jsval_t *args, int nargs) {
 }
 
 void init_fetch_module() {
-  if (!fetch_loop) fetch_loop = uv_default_loop();
-  struct js *js = rt->js;
-  js_set(js, js_glob(js), "fetch", js_mkfun(js_fetch));
+  utarray_new(pending_requests, &ut_ptr_icd);
+  js_set(rt->js, rt->js->global, "fetch", js_mkfun(js_fetch));
 }
 
 int has_pending_fetches(void) {
-  return (pending_requests && utarray_len(pending_requests) > 0) || (fetch_loop && uv_loop_alive(fetch_loop));
-}
-
-void fetch_poll_events(void) {
-  if (fetch_loop && fetch_loop == uv_default_loop() && (rt->flags & ANT_RUNTIME_EXT_EVENT_LOOP)) return;
-  if (fetch_loop && uv_loop_alive(fetch_loop)) {
-    uv_run(fetch_loop, fetch_loop == uv_default_loop() ? UV_RUN_NOWAIT : UV_RUN_ONCE);
-    if (pending_requests && utarray_len(pending_requests) > 0) usleep(1000);
-  }
+  return pending_requests && utarray_len(pending_requests) > 0;
 }
 
 void fetch_gc_update_roots(GC_OP_VAL_ARGS) {

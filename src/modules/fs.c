@@ -51,7 +51,6 @@ typedef struct fs_request_s {
   char *error_msg;
 } fs_request_t;
 
-static uv_loop_t *fs_loop = NULL;
 static UT_array *pending_requests = NULL;
 
 static void free_fs_request(fs_request_t *req) {
@@ -110,9 +109,9 @@ static void on_read_complete(uv_fs_t *uv_req) {
   }
   
   req->data_len = uv_req->result;
-  
   uv_fs_t close_req;
-  uv_fs_close(fs_loop, &close_req, req->fd, NULL);
+  
+  uv_fs_close(uv_default_loop(), &close_req, req->fd, NULL);
   uv_fs_req_cleanup(&close_req);
   
   req->completed = 1;
@@ -134,14 +133,14 @@ static void on_open_for_read(uv_fs_t *uv_req) {
   uv_fs_req_cleanup(uv_req);
   
   uv_fs_t stat_req;
-  int stat_result = uv_fs_fstat(fs_loop, &stat_req, req->fd, NULL);
+  int stat_result = uv_fs_fstat(uv_default_loop(), &stat_req, req->fd, NULL);
   
   if (stat_result < 0) {
     req->failed = 1;
     req->error_msg = strdup(uv_strerror(stat_result));
     req->completed = 1;
     uv_fs_t close_req;
-    uv_fs_close(fs_loop, &close_req, req->fd, NULL);
+    uv_fs_close(uv_default_loop(), &close_req, req->fd, NULL);
     uv_fs_req_cleanup(&close_req);
     complete_request(req);
     return;
@@ -157,21 +156,21 @@ static void on_open_for_read(uv_fs_t *uv_req) {
     req->error_msg = strdup("Out of memory");
     req->completed = 1;
     uv_fs_t close_req;
-    uv_fs_close(fs_loop, &close_req, req->fd, NULL);
+    uv_fs_close(uv_default_loop(), &close_req, req->fd, NULL);
     uv_fs_req_cleanup(&close_req);
     complete_request(req);
     return;
   }
   
   uv_buf_t buf = uv_buf_init(req->data, (unsigned int)file_size);
-  int read_result = uv_fs_read(fs_loop, uv_req, req->fd, &buf, 1, 0, on_read_complete);
+  int read_result = uv_fs_read(uv_default_loop(), uv_req, req->fd, &buf, 1, 0, on_read_complete);
   
   if (read_result < 0) {
     req->failed = 1;
     req->error_msg = strdup(uv_strerror(read_result));
     req->completed = 1;
     uv_fs_t close_req;
-    uv_fs_close(fs_loop, &close_req, req->fd, NULL);
+    uv_fs_close(uv_default_loop(), &close_req, req->fd, NULL);
     uv_fs_req_cleanup(&close_req);
     complete_request(req);
     return;
@@ -187,7 +186,7 @@ static void on_write_complete(uv_fs_t *uv_req) {
   }
   
   uv_fs_t close_req;
-  uv_fs_close(fs_loop, &close_req, req->fd, NULL);
+  uv_fs_close(uv_default_loop(), &close_req, req->fd, NULL);
   uv_fs_req_cleanup(&close_req);
   
   req->completed = 1;
@@ -209,14 +208,14 @@ static void on_open_for_write(uv_fs_t *uv_req) {
   uv_fs_req_cleanup(uv_req);
   
   uv_buf_t buf = uv_buf_init(req->data, (unsigned int)req->data_len);
-  int write_result = uv_fs_write(fs_loop, uv_req, req->fd, &buf, 1, 0, on_write_complete);
+  int write_result = uv_fs_write(uv_default_loop(), uv_req, req->fd, &buf, 1, 0, on_write_complete);
   
   if (write_result < 0) {
     req->failed = 1;
     req->error_msg = strdup(uv_strerror(write_result));
     req->completed = 1;
     uv_fs_t close_req;
-    uv_fs_close(fs_loop, &close_req, req->fd, NULL);
+    uv_fs_close(uv_default_loop(), &close_req, req->fd, NULL);
     uv_fs_req_cleanup(&close_req);
     complete_request(req);
     return;
@@ -342,21 +341,6 @@ static void on_readdir_complete(uv_fs_t *uv_req) {
   free_fs_request(req);
 }
 
-static void ensure_fs_loop(void) {
-  if (!fs_loop) {
-    if (rt->flags & ANT_RUNTIME_EXT_EVENT_LOOP) {
-      fs_loop = uv_default_loop();
-    } else {
-      fs_loop = malloc(sizeof(uv_loop_t));
-      uv_loop_init(fs_loop);
-    }
-  }
-  
-  if (!pending_requests) {
-    utarray_new(pending_requests, &ut_ptr_icd);
-  }
-}
-
 static jsval_t builtin_fs_readFileSync(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "readFileSync() requires a path argument");
   
@@ -468,7 +452,6 @@ static jsval_t builtin_fs_readFile(struct js *js, jsval_t *args, int nargs) {
   char *path = js_getstr(js, args[0], &path_len);
   if (!path) return js_mkerr(js, "Failed to get path string");
   
-  ensure_fs_loop();
   
   fs_request_t *req = calloc(1, sizeof(fs_request_t));
   if (!req) return js_mkerr(js, "Out of memory");
@@ -480,7 +463,7 @@ static jsval_t builtin_fs_readFile(struct js *js, jsval_t *args, int nargs) {
   req->uv_req.data = req;
   
   utarray_push_back(pending_requests, &req);
-  int result = uv_fs_open(fs_loop, &req->uv_req, req->path, O_RDONLY, 0, on_open_for_read);
+  int result = uv_fs_open(uv_default_loop(), &req->uv_req, req->path, O_RDONLY, 0, on_open_for_read);
   
   if (result < 0) {
     req->failed = 1;
@@ -501,7 +484,6 @@ static jsval_t builtin_fs_readBytes(struct js *js, jsval_t *args, int nargs) {
   char *path = js_getstr(js, args[0], &path_len);
   if (!path) return js_mkerr(js, "Failed to get path string");
   
-  ensure_fs_loop();
   
   fs_request_t *req = calloc(1, sizeof(fs_request_t));
   if (!req) return js_mkerr(js, "Out of memory");
@@ -513,7 +495,7 @@ static jsval_t builtin_fs_readBytes(struct js *js, jsval_t *args, int nargs) {
   req->uv_req.data = req;
   
   utarray_push_back(pending_requests, &req);
-  int result = uv_fs_open(fs_loop, &req->uv_req, req->path, O_RDONLY, 0, on_open_for_read);
+  int result = uv_fs_open(uv_default_loop(), &req->uv_req, req->path, O_RDONLY, 0, on_open_for_read);
   
   if (result < 0) {
     req->failed = 1;
@@ -693,7 +675,6 @@ static jsval_t builtin_fs_writeFile(struct js *js, jsval_t *args, int nargs) {
   
   if (!path || !data) return js_mkerr(js, "Failed to get arguments");
   
-  ensure_fs_loop();
   
   fs_request_t *req = calloc(1, sizeof(fs_request_t));
   if (!req) return js_mkerr(js, "Out of memory");
@@ -714,7 +695,7 @@ static jsval_t builtin_fs_writeFile(struct js *js, jsval_t *args, int nargs) {
   req->uv_req.data = req;
   
   utarray_push_back(pending_requests, &req);
-  int result = uv_fs_open(fs_loop, &req->uv_req, req->path, O_WRONLY | O_CREAT | O_TRUNC, 0644, on_open_for_write);
+  int result = uv_fs_open(uv_default_loop(), &req->uv_req, req->path, O_WRONLY | O_CREAT | O_TRUNC, 0644, on_open_for_write);
   
   if (result < 0) {
     req->failed = 1;
@@ -759,7 +740,6 @@ static jsval_t builtin_fs_unlink(struct js *js, jsval_t *args, int nargs) {
   char *path = js_getstr(js, args[0], &path_len);
   if (!path) return js_mkerr(js, "Failed to get path string");
   
-  ensure_fs_loop();
   
   fs_request_t *req = calloc(1, sizeof(fs_request_t));
   if (!req) return js_mkerr(js, "Out of memory");
@@ -771,7 +751,7 @@ static jsval_t builtin_fs_unlink(struct js *js, jsval_t *args, int nargs) {
   req->uv_req.data = req;
   
   utarray_push_back(pending_requests, &req);
-  int result = uv_fs_unlink(fs_loop, &req->uv_req, req->path, on_unlink_complete);
+  int result = uv_fs_unlink(uv_default_loop(), &req->uv_req, req->path, on_unlink_complete);
   
   if (result < 0) {
     req->failed = 1;
@@ -849,7 +829,6 @@ static jsval_t builtin_fs_mkdir(struct js *js, jsval_t *args, int nargs) {
     mode = (int)js_getnum(args[1]);
   }
   
-  ensure_fs_loop();
   
   fs_request_t *req = calloc(1, sizeof(fs_request_t));
   if (!req) return js_mkerr(js, "Out of memory");
@@ -861,7 +840,7 @@ static jsval_t builtin_fs_mkdir(struct js *js, jsval_t *args, int nargs) {
   req->uv_req.data = req;
   
   utarray_push_back(pending_requests, &req);
-  int result = uv_fs_mkdir(fs_loop, &req->uv_req, req->path, mode, on_mkdir_complete);
+  int result = uv_fs_mkdir(uv_default_loop(), &req->uv_req, req->path, mode, on_mkdir_complete);
   
   if (result < 0) {
     req->failed = 1;
@@ -910,7 +889,6 @@ static jsval_t builtin_fs_rmdir(struct js *js, jsval_t *args, int nargs) {
   char *path = js_getstr(js, args[0], &path_len);
   if (!path) return js_mkerr(js, "Failed to get path string");
   
-  ensure_fs_loop();
   
   fs_request_t *req = calloc(1, sizeof(fs_request_t));
   if (!req) return js_mkerr(js, "Out of memory");
@@ -922,7 +900,7 @@ static jsval_t builtin_fs_rmdir(struct js *js, jsval_t *args, int nargs) {
   req->uv_req.data = req;
   
   utarray_push_back(pending_requests, &req);
-  int result = uv_fs_rmdir(fs_loop, &req->uv_req, req->path, on_rmdir_complete);
+  int result = uv_fs_rmdir(uv_default_loop(), &req->uv_req, req->path, on_rmdir_complete);
   
   if (result < 0) {
     req->failed = 1;
@@ -1033,7 +1011,6 @@ static jsval_t builtin_fs_stat(struct js *js, jsval_t *args, int nargs) {
   char *path = js_getstr(js, args[0], &path_len);
   if (!path) return js_mkerr(js, "Failed to get path string");
   
-  ensure_fs_loop();
   
   fs_request_t *req = calloc(1, sizeof(fs_request_t));
   if (!req) return js_mkerr(js, "Out of memory");
@@ -1045,7 +1022,7 @@ static jsval_t builtin_fs_stat(struct js *js, jsval_t *args, int nargs) {
   req->uv_req.data = req;
   
   utarray_push_back(pending_requests, &req);
-  int result = uv_fs_stat(fs_loop, &req->uv_req, req->path, on_stat_complete);
+  int result = uv_fs_stat(uv_default_loop(), &req->uv_req, req->path, on_stat_complete);
   
   if (result < 0) {
     req->failed = 1;
@@ -1085,7 +1062,6 @@ static jsval_t builtin_fs_exists(struct js *js, jsval_t *args, int nargs) {
   char *path = js_getstr(js, args[0], &path_len);
   if (!path) return js_mkerr(js, "Failed to get path string");
   
-  ensure_fs_loop();
   
   fs_request_t *req = calloc(1, sizeof(fs_request_t));
   if (!req) return js_mkerr(js, "Out of memory");
@@ -1097,7 +1073,7 @@ static jsval_t builtin_fs_exists(struct js *js, jsval_t *args, int nargs) {
   req->uv_req.data = req;
   
   utarray_push_back(pending_requests, &req);
-  int result = uv_fs_stat(fs_loop, &req->uv_req, req->path, on_exists_complete);
+  int result = uv_fs_stat(uv_default_loop(), &req->uv_req, req->path, on_exists_complete);
   
   if (result < 0) {
     req->completed = 1;
@@ -1151,7 +1127,6 @@ static jsval_t builtin_fs_access(struct js *js, jsval_t *args, int nargs) {
     mode = (int)js_getnum(args[1]);
   }
   
-  ensure_fs_loop();
   
   fs_request_t *req = calloc(1, sizeof(fs_request_t));
   if (!req) return js_mkerr(js, "Out of memory");
@@ -1163,7 +1138,7 @@ static jsval_t builtin_fs_access(struct js *js, jsval_t *args, int nargs) {
   req->uv_req.data = req;
   
   utarray_push_back(pending_requests, &req);
-  int result = uv_fs_access(fs_loop, &req->uv_req, req->path, mode, on_access_complete);
+  int result = uv_fs_access(uv_default_loop(), &req->uv_req, req->path, mode, on_access_complete);
   
   if (result < 0) {
     req->failed = 1;
@@ -1218,7 +1193,6 @@ static jsval_t builtin_fs_readdir(struct js *js, jsval_t *args, int nargs) {
   char *path = js_getstr(js, args[0], &path_len);
   if (!path) return js_mkerr(js, "Failed to get path string");
   
-  ensure_fs_loop();
   
   fs_request_t *req = calloc(1, sizeof(fs_request_t));
   if (!req) return js_mkerr(js, "Out of memory");
@@ -1230,7 +1204,7 @@ static jsval_t builtin_fs_readdir(struct js *js, jsval_t *args, int nargs) {
   req->uv_req.data = req;
   
   utarray_push_back(pending_requests, &req);
-  int result = uv_fs_scandir(fs_loop, &req->uv_req, req->path, 0, on_readdir_complete);
+  int result = uv_fs_scandir(uv_default_loop(), &req->uv_req, req->path, 0, on_readdir_complete);
   
   if (result < 0) {
     req->failed = 1;
@@ -1243,8 +1217,10 @@ static jsval_t builtin_fs_readdir(struct js *js, jsval_t *args, int nargs) {
 }
 
 void init_fs_module(void) {
-  struct js *js = rt->js;
-  jsval_t glob = js_glob(js);
+  utarray_new(pending_requests, &ut_ptr_icd);
+  
+  ant_t *js = rt->js;
+  jsval_t glob = js->global;
   
   jsval_t stats_ctor = js_mkobj(js);
   jsval_t stats_proto = js_mkobj(js);
@@ -1300,15 +1276,7 @@ jsval_t fs_library(struct js *js) {
 }
 
 int has_pending_fs_ops(void) {
-  return (pending_requests && utarray_len(pending_requests) > 0) || (fs_loop && uv_loop_alive(fs_loop));
-}
-
-void fs_poll_events(void) {
-  if (fs_loop && fs_loop == uv_default_loop() && (rt->flags & ANT_RUNTIME_EXT_EVENT_LOOP)) return;
-  if (fs_loop && uv_loop_alive(fs_loop)) {
-    uv_run(fs_loop, fs_loop == uv_default_loop() ? UV_RUN_NOWAIT : UV_RUN_ONCE);
-    if (pending_requests && utarray_len(pending_requests) > 0) usleep(1000);
-  }
+  return pending_requests && utarray_len(pending_requests) > 0;
 }
 
 void fs_gc_update_roots(GC_OP_VAL_ARGS) {

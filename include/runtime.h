@@ -4,9 +4,8 @@
 #include "types.h"
 #include <argtable3.h>
 
-#define ANT_RUNTIME_CRYPTO_INIT      (1u << 0)
-#define ANT_RUNTIME_EXT_EVENT_LOOP   (1u << 1)
-#define CODE_ARENA_BLOCK_SIZE        (64 * 1024)
+#define ANT_RUNTIME_CRYPTO_INIT (1u << 0)
+#define CODE_ARENA_BLOCK_SIZE   (64 * 1024)
 
 struct ant_runtime {
   struct js *js;

@@ -7,6 +7,14 @@ Full async/await, modules, HTTP servers, crypto, and more.
 
 📖 [Read the blog post about Ant](https://s.tail.so/js-in-one-month)
 
+## Table of contents
+
+* [Installation](#installation)
+* [Building Ant](#building-ant)
+* [Security](#security)
+* [Contributing to Ant](#contributing-to-ant)
+* [Current project team members](#current-project-team-members)
+
 ## Installation
 
 ```bash
