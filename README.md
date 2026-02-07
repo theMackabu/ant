@@ -7,6 +7,8 @@ Full async/await, modules, HTTP servers, crypto, and more.
 
 📖 [Read the blog post about Ant](https://s.tail.so/js-in-one-month)
 
+**This project has a [Code of Conduct](CODE_OF_CONDUCT.md).**
+
 ## Installation
 
 ```bash
@@ -16,7 +18,7 @@ curl -fsSL https://ant.themackabu.com/install | bash
 curl -fsSL https://ant.themackabu.com/install | MBEDTLS=1 bash
 ```
 
-### Building from Source
+## Building from Source
 
 ```bash
 git clone https://github.com/theMackabu/ant.git && cd ant
@@ -26,12 +28,16 @@ meson setup build
 meson compile -C build
 ```
 
-### Security
+## Security
 
 For information on reporting security vulnerabilities in Ant, see [SECURITY.md](SECURITY.md).
 
-### Contributing to Ant
+## Contributing to Ant
 
 We welcome contributions through pull request. See [CONTRIBUTING.md](CONTRIBUTING.md) for more details.
 
 For more information about the internals, read the [ant deepwiki](https://deepwiki.com/theMackabu/ant).
+
+## Current project team members
+
+For information about the governance of Ant, see [GOVERNANCE.md](GOVERNANCE.md).

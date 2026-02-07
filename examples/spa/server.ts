@@ -1,4 +1,4 @@
-import { open } from 'ant:fs';
+import { stream } from 'ant:fs';
 import { join, extname } from 'ant:path';
 import { createRouter, addRoute, findRoute } from '../rou3';
 
@@ -30,30 +30,30 @@ declare function addRoute(router: unknown, method: string, path: string, handler
 
 addRoute(router, 'GET', '/api/version', async c => c.res.json({ version: Ant.version }));
 
-addRoute(router, 'GET', '**', c => {
+addRoute(router, 'GET', '**', async c => {
   const reqPath = c.req.uri;
-  if (reqPath === '/') return c.res.body(open(indexPath), 200, 'text/html');
+  if (reqPath === '/') return c.res.body(await stream(indexPath), 200, 'text/html');
 
   const filePath = join(basePath, reqPath);
 
   if (validPaths.has(filePath)) {
     const ext = extname(reqPath) || '.html';
-    return c.res.body(open(filePath), 200, mimeTypes.get(ext) ?? 'application/octet-stream');
+    return c.res.body(await stream(filePath), 200, mimeTypes.get(ext) ?? 'application/octet-stream');
   }
 
   if (invalidPaths.has(filePath)) {
-    return c.res.body(open(indexPath), 200, 'text/html');
+    return c.res.body(await stream(indexPath), 200, 'text/html');
   }
 
   try {
-    const file = open(filePath);
+    const file = await stream(filePath);
     validPaths.add(filePath);
 
     const ext = extname(reqPath) || '.html';
     return c.res.body(file, 200, mimeTypes.get(ext) ?? 'application/octet-stream');
   } catch {
     invalidPaths.add(filePath);
-    return c.res.body(open(indexPath), 200, 'text/html');
+    return c.res.body(await stream(indexPath), 200, 'text/html');
   }
 });
 
