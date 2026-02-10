@@ -7222,6 +7222,7 @@ jsval_t call_js_internal(
     tc_args = js->tc.args;
     js->tc.args = NULL;
     tc_argc = js->tc.argc;
+    tc_iter = true;
     continue;
   }
 

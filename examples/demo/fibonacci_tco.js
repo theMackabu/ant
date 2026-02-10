@@ -8,4 +8,4 @@ const result = fib(30);
 const end = performance.now();
 
 console.log(`fibonacci(30) = ${result}`);
-console.log(`Time: ${(end - start).toFixed(2)} ms`);
+console.log(`Time: ${(end - start).toFixed(4)} ms (${((end - start) * 1000).toFixed(2)} µs)`);
