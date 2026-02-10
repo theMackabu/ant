@@ -12,10 +12,10 @@ extern UT_array *global_scope_stack;
 extern UT_array *saved_scope_stack;
 
 struct for_let_ctx {
-  const char *var_name;   // interned variable name
-  jsoff_t var_len;        // length of var name
-  jsoff_t prop_off;       // offset of var property in loop scope
-  jsval_t body_scope;     // loop body scope for capturing block-scoped vars
+  const char *var_name;
+  jsoff_t var_len;
+  jsoff_t prop_off;
+  jsval_t body_scope;
 };
 
 struct js {
@@ -66,6 +66,18 @@ struct js {
   int parse_depth;        // recursion depth of parser (for stack overflow protection)
   bool skip_func_hoist;   // skip function declaration hoisting (pre-computed)
   bool fatal_error;       // fatal error that should bypass promise rejection handling
+  bool tail_ctx;          // true when evaluating a return expression (for TCO)
+  bool has_tail_calls;    // cached: current function body has tail-call-eligible returns
+  
+  struct {
+    jsval_t func;
+    jsval_t closure_scope;
+    const char *code_str;
+    jsoff_t fnlen;
+    jsval_t *args;
+    int argc;
+    bool pending;
+  } tc;
   
   struct for_let_ctx *for_let_stack;
   int for_let_stack_len;
@@ -120,6 +132,7 @@ enum {
 
 #define TYPE_FLAG(t) (1u << (t))
 #define T_EMPTY      (NANBOX_PREFIX | ((jsval_t)T_FFI << NANBOX_TYPE_SHIFT) | 0xDEADULL)
+#define T_TAILCALL   (NANBOX_PREFIX | ((jsval_t)T_FFI << NANBOX_TYPE_SHIFT) | 0x7A1CULL)
 
 #define T_SPECIAL_OBJECT_MASK  (TYPE_FLAG(T_OBJ) | TYPE_FLAG(T_ARR))
 #define T_NEEDS_PROTO_FALLBACK (TYPE_FLAG(T_FUNC) | TYPE_FLAG(T_ARR) | TYPE_FLAG(T_PROMISE))
