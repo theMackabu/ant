@@ -16,6 +16,7 @@
 #include "stack.h"
 #include "errors.h"
 #include "utf8.h"
+#include "strings.h"
 #include "esm/remote.h"
 
 #include <uv.h>
@@ -567,10 +568,6 @@ static inline prim_propref_data_t *prim_propref_get(jsval_t v) {
 
 inline size_t js_getbrk(struct js *js) { 
   return (size_t) js->brk;
-}
-
-static inline uint8_t unhex(uint8_t c) {
-  return (c & 0xF) + (c >> 6) * 9;
 }
 
 static inline int is_body_end_tok(int tok) {
@@ -4182,11 +4179,6 @@ static bool is_space(int c) {
 static bool is_digit(int c) { 
   if (c < 0 || c >= 256) return false;
   return (char_type[(uint8_t)c] & CHAR_DIGIT) != 0;
-}
-
-static bool is_xdigit(int c) { 
-  if (c < 0 || c >= 256) return false;
-  return (char_type[(uint8_t)c] & CHAR_XDIGIT) != 0;
 }
 
 static bool is_alpha(int c) { 
@@ -8224,72 +8216,6 @@ static jsval_t do_op(struct js *js, uint8_t op, jsval_t lhs, jsval_t rhs) {
   L_default:
     if (is_assign(op)) return do_assign_op(js, op, lhs, r);
     return js_mkerr(js, "unknown op %d", (int)op);
-}
-
-static size_t decode_escape(const uint8_t *in, size_t pos, size_t end, uint8_t *out, size_t *out_pos, uint8_t quote) {
-  size_t n2 = pos;
-  uint8_t c = in[n2 + 1];
-  size_t n1 = *out_pos;
-
-  if (c == quote) {
-    out[n1++] = quote;
-  } else if (c == 'n') {
-    out[n1++] = '\n';
-  } else if (c == 't') {
-    out[n1++] = '\t';
-  } else if (c == 'r') {
-    out[n1++] = '\r';
-  } else if (c == '0' && !(in[n2 + 2] >= '0' && in[n2 + 2] <= '7')) {
-    out[n1++] = '\0';
-  } else if (c >= '1' && c <= '7') {
-    int val = c - '0';
-    int extra = 0;
-    if (in[n2 + 2] >= '0' && in[n2 + 2] <= '7') {
-      val = val * 8 + (in[n2 + 2] - '0');
-      extra++;
-      if (in[n2 + 3] >= '0' && in[n2 + 3] <= '7' && val * 8 + (in[n2 + 3] - '0') <= 255) {
-        val = val * 8 + (in[n2 + 3] - '0');
-        extra++;
-      }
-    }
-    n2 += extra;
-    out[n1++] = (uint8_t)val;
-  } else if (c == 'v') {
-    out[n1++] = '\v';
-  } else if (c == 'f') {
-    out[n1++] = '\f';
-  } else if (c == 'b') {
-    out[n1++] = '\b';
-  } else if (c == 'x' && n2 + 3 < end && is_xdigit(in[n2 + 2]) && is_xdigit(in[n2 + 3])) {
-    out[n1++] = (uint8_t)((unhex(in[n2 + 2]) << 4U) | unhex(in[n2 + 3]));
-    n2 += 2;
-  } else if (c == 'u' && n2 + 2 < end && in[n2 + 2] == '{') {
-    uint32_t cp = 0;
-    size_t i = n2 + 3;
-    while (i < end && is_xdigit(in[i])) { cp = (cp << 4) | unhex(in[i]); i++; }
-    if (i < end && in[i] == '}') {
-      if (cp < 0x80) { out[n1++] = (uint8_t)cp; }
-      else if (cp < 0x800) { out[n1++] = (uint8_t)(0xC0 | (cp >> 6)); out[n1++] = (uint8_t)(0x80 | (cp & 0x3F)); }
-      else if (cp < 0x10000) { out[n1++] = (uint8_t)(0xE0 | (cp >> 12)); out[n1++] = (uint8_t)(0x80 | ((cp >> 6) & 0x3F)); out[n1++] = (uint8_t)(0x80 | (cp & 0x3F)); }
-      else { out[n1++] = (uint8_t)(0xF0 | (cp >> 18)); out[n1++] = (uint8_t)(0x80 | ((cp >> 12) & 0x3F)); out[n1++] = (uint8_t)(0x80 | ((cp >> 6) & 0x3F)); out[n1++] = (uint8_t)(0x80 | (cp & 0x3F)); }
-      n2 = i;
-    } else {
-      out[n1++] = c;
-    }
-  } else if (c == 'u' && n2 + 5 < end && is_xdigit(in[n2 + 2]) && is_xdigit(in[n2 + 3]) && is_xdigit(in[n2 + 4]) && is_xdigit(in[n2 + 5])) {
-    uint32_t cp = (unhex(in[n2 + 2]) << 12U) | (unhex(in[n2 + 3]) << 8U) | (unhex(in[n2 + 4]) << 4U) | unhex(in[n2 + 5]);
-    if (cp < 0x80) { out[n1++] = (uint8_t)cp; }
-    else if (cp < 0x800) { out[n1++] = (uint8_t)(0xC0 | (cp >> 6)); out[n1++] = (uint8_t)(0x80 | (cp & 0x3F)); }
-    else { out[n1++] = (uint8_t)(0xE0 | (cp >> 12)); out[n1++] = (uint8_t)(0x80 | ((cp >> 6) & 0x3F)); out[n1++] = (uint8_t)(0x80 | (cp & 0x3F)); }
-    n2 += 4;
-  } else if (c == '\\') {
-    out[n1++] = '\\';
-  } else {
-    out[n1++] = c;
-  }
-
-  *out_pos = n1;
-  return n2 - pos;
 }
 
 static jsval_t js_template_literal(struct js *js) {
