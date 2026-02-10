@@ -46,6 +46,10 @@ bool is_symbol_key(const char *key, size_t key_len) {
     && key[key_len - 2] == '_';
 }
 
+int sym_to_prop_key(jsval_t sym, char *buf, size_t bufsz) {
+  return snprintf(buf, bufsz, "__sym_%llu__", (unsigned long long)js_sym_id(sym));
+}
+
 jsval_t get_wellknown_sym_by_key(const char *key, size_t key_len) {
   static const struct { wellknown_sym_t *sym; } table[] = {
     { &g_iterator }, { &g_asyncIterator }, { &g_toStringTag },
@@ -74,7 +78,7 @@ const char *get_symbol_description_from_key(const char *sym_key, size_t key_len)
 
 static inline void init_symbol(struct js *js, wellknown_sym_t *sym_var, const char *name) {
   sym_var->sym = js_mksym(js, name);
-  snprintf(sym_var->key, sizeof(sym_var->key), "__sym_%llu__", (unsigned long long)js_sym_id(sym_var->sym));
+  sym_to_prop_key(sym_var->sym, sym_var->key, sizeof(sym_var->key));
 }
 
 static jsval_t builtin_Symbol(struct js *js, jsval_t *args, int nargs) {

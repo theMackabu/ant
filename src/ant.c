@@ -291,6 +291,7 @@ typedef struct parsed_func {
   bool is_strict;
   bool is_expr;
   bool uses_arguments;
+  bool has_tail_calls;
   jsoff_t rest_param_start;
   jsoff_t rest_param_len;
   UT_array *params;
@@ -393,6 +394,9 @@ static void set_slot(struct js *js, jsval_t obj, internal_slot_t slot, jsval_t v
 
 static jsval_t get_proto(struct js *js, jsval_t obj);
 static void set_proto(struct js *js, jsval_t obj, jsval_t proto);
+
+enum tail_scan { TAIL_NONE, TAIL_OK, TAIL_UNSAFE };
+static enum tail_scan scan_tail_span(const char *code, jsoff_t clen, jsoff_t start, jsoff_t end);
 
 static void clear_break_label(void) {
   break_target_label = NULL;
@@ -6136,7 +6140,7 @@ static jsval_t do_bracket_op(struct js *js, jsval_t l, jsval_t r) {
     keystr = (char *) &js->mem[off];
     keylen = slen;
   } else if (vtype(key_val) == T_SYMBOL) {
-    snprintf(keybuf, sizeof(keybuf), "__sym_%llu__", (unsigned long long)sym_get_id(key_val));
+    sym_to_prop_key(key_val, keybuf, sizeof(keybuf));
     keystr = keybuf;
     keylen = strlen(keybuf);
   } else {
@@ -6679,6 +6683,184 @@ static bool code_uses_arguments(const char *code, jsoff_t len) {
   } return false;
 }
 
+static inline int find_statement_end(const token_stream_t *restrict ts, int start) {
+  const cached_token_t *restrict toks = ts->tokens;
+  const int count = ts->count;
+  if (start >= count) return count;
+
+  static const void *dispatch[] = {
+    [TOK_LPAREN]    = &&open,
+    [TOK_LBRACKET]  = &&open,
+    [TOK_LBRACE]    = &&open,
+    [TOK_RPAREN]    = &&close,
+    [TOK_RBRACKET]  = &&close,
+    [TOK_RBRACE]    = &&close,
+    [TOK_SEMICOLON] = &&semi,
+    [TOK_EOF]       = &&semi,
+  };
+  
+  int depth = 0;
+  int j = start;
+  
+  for (;;) {
+    uint8_t t = toks[j].tok;
+    if (t < sizeof(dispatch) / sizeof(*dispatch) && dispatch[t]) goto *dispatch[t];
+    
+  next:
+    if (++j >= count) return count;
+    continue;
+    
+  open:
+    depth++;
+    goto next;
+    
+  close:
+    if (depth == 0) return j;
+    depth--;
+    goto next;
+    
+  semi:
+    if (depth == 0) return j;
+    goto next;
+  }
+}
+
+
+static inline void find_top_level_tokens(
+  const token_stream_t *restrict ts, int start, int end,
+  uint8_t tok1, int *restrict first_tok1,
+  uint8_t tok2, int *restrict first_tok2_after_tok1
+) {
+  const cached_token_t *restrict toks = ts->tokens;
+  int depth = 0;
+  int j = start;
+
+  for (; j < end; j++) {
+    uint8_t t = toks[j].tok;
+    if (t == TOK_LPAREN || t == TOK_LBRACKET) depth++;
+    else if (t == TOK_RPAREN || t == TOK_RBRACKET) depth--;
+    else if (depth == 0 && t == tok1) {
+      *first_tok1 = j;
+      if (!tok2 || !first_tok2_after_tok1) return;
+      j++; goto phase2;
+    }
+  }
+  
+  *first_tok1 = -1;
+  if (first_tok2_after_tok1) *first_tok2_after_tok1 = -1;
+  return;
+
+phase2:
+  for (; j < end; j++) {
+    uint8_t t = toks[j].tok;
+    if (t == TOK_LPAREN || t == TOK_LBRACKET) depth++;
+    else if (t == TOK_RPAREN || t == TOK_RBRACKET) depth--;
+    else if (depth == 0 && t == tok2) { *first_tok2_after_tok1 = j; return; }
+  }
+  *first_tok2_after_tok1 = -1;
+}
+
+static inline int find_last_top_level_token(const token_stream_t *restrict ts, int start, int end, uint8_t tok) {
+  const cached_token_t *restrict toks = ts->tokens;
+  int depth = 0;
+  for (int j = end - 1; j >= start; j--) {
+    uint8_t t = toks[j].tok;
+    if (t == TOK_RPAREN || t == TOK_RBRACKET) depth++;
+    else if (t == TOK_LPAREN || t == TOK_LBRACKET) depth--;
+    else if (depth == 0 && t == tok) return j;
+  }
+  return -1;
+}
+
+static inline int find_matching_open(const token_stream_t *restrict ts, int rparen_idx) {
+  const cached_token_t *restrict toks = ts->tokens;
+  int depth = 0;
+  for (int j = rparen_idx; j >= 0; j--) {
+    uint8_t t = toks[j].tok;
+    if (t == TOK_RPAREN) depth++;
+    else if (t == TOK_LPAREN) if (--depth == 0) return j;
+  }
+  return -1;
+}
+
+static inline bool expr_ends_with_bare_call(const token_stream_t *restrict ts, int start, int end) {
+  if (start >= end) return false;
+
+  const cached_token_t *restrict toks = ts->tokens;
+  if (toks[end - 1].tok != TOK_RPAREN) return false;
+
+  int depth = 0;
+  for (int j = start; j < end - 1; j++) {
+    uint8_t t = toks[j].tok;
+    if (t == TOK_LPAREN || t == TOK_LBRACKET) depth++;
+    else if (t == TOK_RPAREN || t == TOK_RBRACKET) depth--;
+  }
+
+  if (depth != 1) return false;
+  int match = find_matching_open(ts, end - 1);
+  if (match < 0 || match <= start) return false;
+
+  uint8_t before = toks[match - 1].tok;
+  return before == TOK_IDENTIFIER || before == TOK_RPAREN || before == TOK_RBRACKET;
+}
+
+static inline bool return_expr_is_tail_call(
+  const token_stream_t *restrict ts, int start,
+  const char *body, jsoff_t body_len
+) {
+  int end = find_statement_end(ts, start);
+  int last = end - 1;
+  
+  if (last < start) return false;
+  const int count = ts->count;
+
+  int ternary, colon;
+  find_top_level_tokens(ts, start, end, TOK_Q, &ternary, TOK_COLON, &colon);
+
+  if (ternary >= 0) {
+    if (colon < 0) return false;
+    jsoff_t then_start = ts->tokens[ternary + 1].toff;
+    jsoff_t then_end   = ts->tokens[colon].toff;
+    jsoff_t else_start = (colon + 1 < count) ? ts->tokens[colon + 1].toff : body_len;
+    jsoff_t else_end   = (end < count) ? ts->tokens[end].toff : body_len;
+
+    int then_r = scan_tail_span(body, body_len, then_start, then_end);
+    if (then_r == TAIL_UNSAFE) return false;
+    int else_r = scan_tail_span(body, body_len, else_start, else_end);
+
+    return else_r != TAIL_UNSAFE && (then_r == TAIL_OK || else_r == TAIL_OK);
+  }
+
+  int last_comma = find_last_top_level_token(ts, start, end, TOK_COMMA);
+  if (last_comma >= 0) return return_expr_is_tail_call(ts, last_comma + 1, body, body_len);
+
+  return expr_ends_with_bare_call(ts, start, end);
+}
+
+static inline bool tokens_have_tail_calls(
+  const token_stream_t *restrict ts,
+  const char *body, jsoff_t body_len, bool is_expr
+) {
+  if (!ts || ts->count == 0) return false;
+  if (is_expr) return scan_tail_span(body, body_len, 0, body_len) == TAIL_OK;
+
+  const cached_token_t *restrict toks = ts->tokens;
+  const int count = ts->count;
+
+  for (int i = 0; i < count; i++) {
+    if (toks[i].tok != TOK_RETURN) continue;
+
+    int j = i + 1;
+    if (j >= count) continue;
+    uint8_t first = toks[j].tok;
+
+    if (first == TOK_SEMICOLON || first == TOK_RBRACE || first == TOK_EOF) continue;
+    if (return_expr_is_tail_call(ts, j, body, body_len)) return true;
+  }
+
+  return false;
+}
+
 static parsed_func_t *get_or_parse_func(struct js *js, const char *fn, jsoff_t fnlen) {
   uint64_t h = hash_key(fn, fnlen);
   parsed_func_t *cached = NULL;
@@ -6775,6 +6957,7 @@ static parsed_func_t *get_or_parse_func(struct js *js, const char *fn, jsoff_t f
   pf->is_strict = is_strict_function_body(&fn[fnpos], pf->body_len);
   pf->uses_arguments = code_uses_arguments(&fn[pf->body_start], pf->body_len);
   pf->tokens = (pf->body_len > 0) ? tokenize_body(js, &fn[pf->body_start], pf->body_len) : NULL;
+  pf->has_tail_calls = tokens_have_tail_calls(pf->tokens, &fn[pf->body_start], pf->body_len, pf->is_expr);
   
   HASH_ADD(hh, func_parse_cache, code_hash, sizeof(pf->code_hash), pf);
   return pf;
@@ -6840,78 +7023,104 @@ jsval_t call_js_internal(
   if (saved_scope_stack == NULL) utarray_new(saved_scope_stack, &jsval_icd);
   utarray_push_back(saved_scope_stack, &js->scope);
   utarray_push_back(saved_scope_stack, &js->this_val);
-  
+
+  jsval_t res;
+  jsval_t *tc_args = NULL;
+  int tc_argc = 0;
+
+  for (;;) {
   jsval_t target_this = peek_this();
   jsoff_t parent_scope_offset;
   
-  if (vtype(closure_scope) == T_OBJ) {
-    parent_scope_offset = (jsoff_t) vdata(closure_scope);
-  } else {
-    parent_scope_offset = (jsoff_t) vdata(js->scope);
-  }
+  if (vtype(closure_scope) == T_OBJ) parent_scope_offset = (jsoff_t) vdata(closure_scope);
+  else parent_scope_offset = (jsoff_t) vdata(js->scope);
   
   if (global_scope_stack == NULL) utarray_new(global_scope_stack, &jsoff_icd);
   jsval_t function_scope = mkobj(js, parent_scope_offset);
   jsoff_t function_scope_offset = (jsoff_t)vdata(function_scope);
   utarray_push_back(global_scope_stack, &function_scope_offset);
   
-  const char *caller_code = js->code;
-  jsoff_t caller_clen = js->clen;
-  jsoff_t caller_pos = js->pos;
-  
   jsval_t args_buf[8];
-  jsval_t *args = args_buf;
+  jsval_t *args;
   
-  int argc = 0; int args_cap = 8;
-  bool args_on_heap = false;
+  int argc;
+  bool args_on_heap;
 
-  #define ARGS_PUSH(val) do {                                  \
-    if (argc >= args_cap) {                                    \
-      int _new_cap = args_cap * 2;                             \
-      jsval_t *_new = malloc(_new_cap * sizeof(jsval_t));      \
-      memcpy(_new, args, argc * sizeof(jsval_t));              \
-      if (args_on_heap) free(args);                            \
-      args = _new;                                             \
-      args_cap = _new_cap;                                     \
-      args_on_heap = true;                                     \
-    }                                                          \
-    args[argc++] = (val);                                      \
-  } while (0)
+  if (tc_args) {
+    args = tc_args;
+    argc = tc_argc;
+    args_on_heap = (tc_argc > 0);
+    tc_args = NULL;
+    tc_argc = 0;
+  } else {
+    const char *caller_code = js->code;
+    jsoff_t caller_clen = js->clen;
+    jsoff_t caller_pos = js->pos;
 
-  for (int i = 0; i < bound_argc; i++) ARGS_PUSH(bound_args[i]);
-  caller_pos = skiptonext(caller_code, caller_clen, caller_pos, NULL);
+    args = args_buf;
+    argc = 0;
+    args_on_heap = false;
+    int args_cap = 8;
 
-  while (caller_pos < caller_clen && caller_code[caller_pos] != ')') {
-    bool is_spread = (
-      caller_code[caller_pos] == '.' && caller_pos + 2 < caller_clen &&
-      caller_code[caller_pos + 1] == '.' && caller_code[caller_pos + 2] == '.'
-    );
-    if (is_spread) caller_pos += 3;
+    #define ARGS_PUSH(val) do {                                  \
+      if (argc >= args_cap) {                                    \
+        int _new_cap = args_cap * 2;                             \
+        jsval_t *_new = try_oom(_new_cap * sizeof(jsval_t));      \
+        memcpy(_new, args, argc * sizeof(jsval_t));              \
+        if (args_on_heap) free(args);                            \
+        args = _new;                                             \
+        args_cap = _new_cap;                                     \
+        args_on_heap = true;                                     \
+      }                                                          \
+      args[argc++] = (val);                                      \
+    } while (0)
+
+    for (int i = 0; i < bound_argc; i++) ARGS_PUSH(bound_args[i]);
+    caller_pos = skiptonext(caller_code, caller_clen, caller_pos, NULL);
+
+    while (caller_pos < caller_clen && caller_code[caller_pos] != ')') {
+      bool is_spread = (
+        caller_code[caller_pos] == '.' && caller_pos + 2 < caller_clen &&
+        caller_code[caller_pos + 1] == '.' && caller_code[caller_pos + 2] == '.'
+      );
+      if (is_spread) caller_pos += 3;
+      js->pos = caller_pos;
+      js->consumed = 1;
+      jsval_t arg = resolveprop(js, js_expr(js));
+      caller_pos = js->pos;
+      if (is_spread && vtype(arg) == T_ARR) {
+        jsoff_t len = js_arr_len(js, arg);
+        for (jsoff_t i = 0; i < len; i++) ARGS_PUSH(js_arr_get(js, arg, i));
+      } else ARGS_PUSH(arg);
+      caller_pos = skiptonext(caller_code, caller_clen, caller_pos, NULL);
+      if (caller_pos < caller_clen && caller_code[caller_pos] == ',') caller_pos++;
+      caller_pos = skiptonext(caller_code, caller_clen, caller_pos, NULL);
+    }
+    
+    #undef ARGS_PUSH
     js->pos = caller_pos;
-    js->consumed = 1;
-    jsval_t arg = resolveprop(js, js_expr(js));
-    caller_pos = js->pos;
-    if (is_spread && vtype(arg) == T_ARR) {
-      jsoff_t len = js_arr_len(js, arg);
-      for (jsoff_t i = 0; i < len; i++) ARGS_PUSH(js_arr_get(js, arg, i));
-    } else ARGS_PUSH(arg);
-    caller_pos = skiptonext(caller_code, caller_clen, caller_pos, NULL);
-    if (caller_pos < caller_clen && caller_code[caller_pos] == ',') caller_pos++;
-    caller_pos = skiptonext(caller_code, caller_clen, caller_pos, NULL);
   }
-  
-  #undef ARGS_PUSH
-  
-  js->pos = caller_pos;
+
   js->scope = function_scope;
-  
   parsed_func_t *pf = get_or_parse_func(js, fn, fnlen);
+  
   if (!pf) {
     if (args_on_heap) free(args);
     restore_saved_scope(js);
     if (global_scope_stack && utarray_len(global_scope_stack) > 0) utarray_pop_back(global_scope_stack);
     return js_mkerr(js, "failed to parse function");
   }
+  
+  bool func_strict = pf->is_strict;
+  if (!func_strict && vtype(func_val) == T_FUNC) {
+    jsval_t strict_slot = get_slot(js, mkval(T_OBJ, vdata(func_val)), SLOT_STRICT);
+    func_strict = (vtype(strict_slot) == T_BOOL && vdata(strict_slot) == 1);
+  }
+  
+  if (func_strict && (vtype(target_this) == T_UNDEF || vtype(target_this) == T_NULL ||
+      (vtype(target_this) == T_OBJ && vdata(target_this) == 0))) {
+    js->this_val = js_mkundef();
+  } else js->this_val = target_this;
   
   int argi = 0;
   for (int i = 0; i < pf->param_count; i++) {
@@ -6931,13 +7140,9 @@ jsval_t call_js_internal(
       }
     } else {
       jsval_t v;
-      if (argi < argc) {
-        v = args[argi++];
-      } else if (pp->default_len > 0) {
-        v = js_eval_str(js, &fn[pp->default_start], pp->default_len);
-      } else {
-        v = js_mkundef();
-      }
+      if (argi < argc) v = args[argi++];
+      else if (pp->default_len > 0) v = js_eval_str(js, &fn[pp->default_start], pp->default_len);
+      else v = js_mkundef();
       jsval_t k = js_mkstr(js, &fn[pp->name_off], pp->name_len);
       if (!is_err(k)) mkprop_fast(js, function_scope, k, v, 0);
     }
@@ -6954,17 +7159,7 @@ jsval_t call_js_internal(
   }
   
   bool needs_arguments = pf->uses_arguments;
-  bool func_strict = pf->is_strict;
-  
-  if (!func_strict && vtype(func_val) == T_FUNC) {
-    jsval_t func_obj = mkval(T_OBJ, vdata(func_val));
-    jsval_t strict_slot = get_slot(js, func_obj, SLOT_STRICT);
-    func_strict = (vtype(strict_slot) == T_BOOL && vdata(strict_slot) == 1);
-  }
-  
-  if (needs_arguments) {
-    setup_arguments(js, function_scope, args, argc, func_strict);
-  }
+  if (needs_arguments) setup_arguments(js, function_scope, args, argc, func_strict);
   
    jsval_t slot_name = get_slot(js, func_val, SLOT_NAME);
    if (vtype(slot_name) == T_STR && vtype(func_val) == T_FUNC) {
@@ -6980,15 +7175,9 @@ jsval_t call_js_internal(
     js->skip_func_hoist = (vtype(no_func_decls) == T_BOOL && vdata(no_func_decls) == 1);
   } else js->skip_func_hoist = false;
   
-  if (func_strict && (vtype(target_this) == T_UNDEF || vtype(target_this) == T_NULL ||
-      (vtype(target_this) == T_OBJ && vdata(target_this) == 0))) {
-    js->this_val = js_mkundef();
-  } else js->this_val = target_this;
-  
   js->flags = F_CALL | (func_strict ? F_STRICT : 0);
-  jsval_t res;
-  
   void *saved_token_stream = js->token_stream;
+  
   int saved_token_stream_pos = js->token_stream_pos;
   const char *saved_token_stream_code = js->token_stream_code;
   
@@ -7001,24 +7190,53 @@ jsval_t call_js_internal(
     js->token_stream_code = NULL;
   }
   
+  bool saved_has_tail = js->has_tail_calls;
+  js->has_tail_calls = pf->has_tail_calls;
+
   if (pf->is_expr) {
+    js->tail_ctx = pf->has_tail_calls;
     res = js_eval_str(js, &fn[pf->body_start], pf->body_len);
-    res = resolveprop(js, res);
+    js->tail_ctx = false;
+    if (res != (jsval_t)T_TAILCALL) res = resolveprop(js, res);
   } else {
     res = js_eval(js, &fn[pf->body_start], pf->body_len);
     if (!is_err(res) && !(js->flags & F_RETURN)) res = js_mkundef();
   }
-  
+
+  js->has_tail_calls = saved_has_tail;
   js->token_stream = saved_token_stream;
   js->token_stream_pos = saved_token_stream_pos;
   js->token_stream_code = saved_token_stream_code;
   
   js->skip_func_hoist = false;
-  if (global_scope_stack && utarray_len(global_scope_stack) > 0)  utarray_pop_back(global_scope_stack);
   
+  if (global_scope_stack && utarray_len(global_scope_stack) > 0) utarray_pop_back(global_scope_stack);
   if (args_on_heap) free(args);
+
+  if (res == (jsval_t)T_TAILCALL && js->tc.pending) {
+    js->tc.pending = false;
+    fn = js->tc.code_str;
+    fnlen = js->tc.fnlen;
+    closure_scope = js->tc.closure_scope;
+    func_val = js->tc.func;
+    bound_args = NULL;
+    bound_argc = 0;
+    free(tc_args);
+    tc_args = js->tc.args;
+    js->tc.args = NULL;
+    tc_argc = js->tc.argc;
+    continue;
+  }
+
+  break;
+  } // end trampoline
+
+  free(tc_args);
+  tc_args = NULL;
+  free(js->tc.args);
+  js->tc.args = NULL;
+
   restore_saved_scope(js);
-  
   return res;
 }
 
@@ -7280,6 +7498,9 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
   
   if (vtype(args) != T_CODEREF) return js_mkerr(js, "bad call");
   if (vtype(func) != T_FUNC && vtype(func) != T_CFUNC && vtype(func) != T_FFI) return js_mkerr(js, "calling non-function");
+
+  bool is_tail = js->tail_ctx;
+  js->tail_ctx = false;
   
   if (vtype(func) == T_FFI) {
     const char *code = js->code;
@@ -7466,12 +7687,16 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
       const jsoff_t *metadata = (const jsoff_t *)(&js->mem[meta_ptr_off]);
       
       for (int i = 0; i < field_count; i++) {
-        jsoff_t name_off = metadata[i * 4 + 0];
-        jsoff_t name_len = metadata[i * 4 + 1];
-        jsoff_t init_start = metadata[i * 4 + 2];
-        jsoff_t init_end = metadata[i * 4 + 3];
+        jsoff_t name_off = metadata[i * 5 + 0];
+        jsoff_t name_len = metadata[i * 5 + 1];
+        jsoff_t init_start = metadata[i * 5 + 2];
+        jsoff_t init_end = metadata[i * 5 + 3];
+        bool computed = metadata[i * 5 + 4] != 0;
         
-        jsval_t fname = js_mkstr(js, &source[name_off], name_len);
+        jsval_t fname;
+        if (computed) fname = (jsval_t) name_off;
+        else fname = js_mkstr(js, &source[name_off], name_len);
+        
         if (is_err(fname)) {
           js->current_func = saved_func;
           pop_call_frame();
@@ -7510,6 +7735,46 @@ skip_fields:
           int argc = (int)utarray_len(call_args);
           res = start_async_in_coroutine(js, code_str, fnlen, closure_scope, argv, argc);
           utarray_free(call_args);
+        } else if (is_tail && !is_arrow && !is_bound && vtype(js->new_target) == T_UNDEF) {
+          UT_array *tc_args_arr;
+          utarray_new(tc_args_arr, &jsval_icd);
+          if (bound_args) {
+            for (int i = 0; i < bound_argc; i++) utarray_push_back(tc_args_arr, &bound_args[i]);
+            free(bound_args); bound_args = NULL;
+          }
+          jsval_t tc_err;
+          int tc_argc = parse_call_args(js, tc_args_arr, &tc_err);
+          if (tc_argc < 0) {
+            utarray_free(tc_args_arr);
+            pop_call_frame();
+            js->super_val = saved_super;
+            js->current_func = saved_func;
+            js->code = code; js->clen = clen; js->pos = pos;
+            js->flags = (flags & ~F_THROW) | (js->flags & F_THROW);
+            js->tok = tok; js->consumed = 1;
+            return tc_err;
+          }
+          jsval_t *tc_argv = NULL;
+          if (tc_argc > 0) {
+            tc_argv = malloc(tc_argc * sizeof(jsval_t));
+            memcpy(tc_argv, utarray_front(tc_args_arr), tc_argc * sizeof(jsval_t));
+          }
+          utarray_free(tc_args_arr);
+          js->tc.pending = true;
+          js->tc.func = func;
+          js->tc.closure_scope = closure_scope;
+          js->tc.code_str = code_str;
+          js->tc.fnlen = fnlen;
+          js->tc.args = tc_argv;
+          js->tc.argc = tc_argc;
+          pop_call_frame();
+          js->super_val = saved_super;
+          js->current_func = saved_func;
+          js->code = code; js->clen = clen; js->pos = pos;
+          js->flags = (flags & ~F_THROW) | (js->flags & F_THROW);
+          js->tok = tok;
+          js->consumed = 1;
+          return (jsval_t)T_TAILCALL;
         } else res = call_js_internal(js, code_str, fnlen, closure_scope, bound_args, bound_argc, func);
         pop_call_frame();
         if (bound_args) free(bound_args);
@@ -8742,7 +9007,7 @@ static jsval_t js_obj_literal(struct js *js) {
           key = resolved_key;
         } else if (vtype(resolved_key) == T_SYMBOL) {
           char buf[64];
-          snprintf(buf, sizeof(buf), "__sym_%llu__", (unsigned long long)sym_get_id(resolved_key));
+          sym_to_prop_key(resolved_key, buf, sizeof(buf));
           key = js_mkstr(js, buf, strlen(buf));
         } else {
           char buf[64];
@@ -9448,7 +9713,37 @@ static jsval_t js_call_dot(struct js *js) {
     }
   }
   js_call_dot_loop:
-  while (next(js) == TOK_LPAREN || next(js) == TOK_DOT || next(js) == TOK_OPTIONAL_CHAIN || next(js) == TOK_LBRACKET || next(js) == TOK_TEMPLATE) {
+  bool opt_chain_skip = false;
+  uint8_t cd_tok;
+  while (
+    cd_tok = next(js), 
+    cd_tok == TOK_LPAREN 
+    || cd_tok == TOK_DOT 
+    || cd_tok == TOK_OPTIONAL_CHAIN 
+    || cd_tok == TOK_LBRACKET 
+    || cd_tok == TOK_TEMPLATE
+  ) {
+    if (opt_chain_skip) {
+      if (js->tok == TOK_OPTIONAL_CHAIN || js->tok == TOK_DOT) {
+        js->consumed = 1;
+        uint8_t nxt = next(js);
+        if (nxt == TOK_HASH) { js->consumed = 1; next(js); }
+        if (next(js) == TOK_IDENTIFIER || is_keyword_propname(next(js))) js->consumed = 1;
+        else if (next(js) == TOK_LBRACKET) {
+          js->consumed = 1; js_expr(js);
+          if (next(js) == TOK_RBRACKET) js->consumed = 1;
+        }
+        if (js->tok == TOK_OPTIONAL_CHAIN) opt_chain_skip = false;
+        continue;
+      } else if (js->tok == TOK_LBRACKET) {
+        js->consumed = 1; js_expr(js);
+        if (next(js) == TOK_RBRACKET) js->consumed = 1;
+        continue;
+      } else if (js->tok == TOK_LPAREN) {
+        js->consumed = 1; js_call_params(js);
+        continue;
+      } else opt_chain_skip = false;
+    }
     if (js->tok == TOK_TEMPLATE) {
       if (vtype(res) == T_PROP) res = resolveprop(js, res);
       if (is_err(res)) return res;
@@ -9469,7 +9764,7 @@ static jsval_t js_call_dot(struct js *js) {
           return js_mkerr_typed(js, JS_ERR_SYNTAX, "private field name expected");
         }
         js->consumed = 1;
-        prop_name = mkcoderef((jsoff_t) js->toff, (jsoff_t) js->tlen);
+        prop_name = mkcoderef((jsoff_t) (js->toff - 1), (jsoff_t) (js->tlen + 1));
       } else if (nxt == TOK_IDENTIFIER || is_keyword_propname(nxt)) {
         js->consumed = 1;
         prop_name = mkcoderef((jsoff_t) js->toff, (jsoff_t) js->tlen);
@@ -9481,25 +9776,19 @@ static jsval_t js_call_dot(struct js *js) {
         js->consumed = 1;
         if (op == TOK_OPTIONAL_CHAIN && (vtype(obj) == T_NULL || vtype(obj) == T_UNDEF)) {
           res = js_mkundef();
-        } else {
-          res = do_op(js, TOK_BRACKET, res, idx);
-        }
+          opt_chain_skip = true;
+        } else res = do_op(js, TOK_BRACKET, res, idx);
         continue;
-      } else {
-        prop_name = js_group(js);
-      }
+      } else prop_name = js_group(js);
       if (op == TOK_OPTIONAL_CHAIN && (vtype(obj) == T_NULL || vtype(obj) == T_UNDEF)) {
         res = js_mkundef();
-      } else {
-        res = do_op(js, op, res, prop_name);
-      }
+        opt_chain_skip = true;
+      } else res = do_op(js, op, res, prop_name);
     } else if (js->tok == TOK_LBRACKET) {
       js->consumed = 1;
       if (vtype(res) != T_PROP && vtype(res) != T_PROPREF) {
         obj = res;
-      } else {
-        obj = resolveprop(js, res);
-      }
+      } else obj = resolveprop(js, res);
       jsval_t idx = js_expr(js);
       if (is_err(idx)) return idx;
       if (next(js) != TOK_RBRACKET) return js_mkerr_typed(js, JS_ERR_SYNTAX, "] expected");
@@ -12106,6 +12395,112 @@ static jsval_t js_continue(struct js *js) {
   return js_mkundef();
 }
 
+static inline jsoff_t skip_comment_or_string(const char *code, jsoff_t clen, jsoff_t p) {
+  char c = code[p];
+  if (c == '/' && p + 1 < clen) {
+    if (code[p + 1] == '/') return skip_line_comment(code, clen, p);
+    if (code[p + 1] == '*') return skip_block_comment(code, clen, p);
+  }
+  if (c == '\'' || c == '"') return skip_string_literal(code, clen, p, c);
+  if (c == '`') return skip_template_literal(code, clen, p);
+  return 0;
+}
+
+static inline bool is_stmt_end(char c) {
+  return c == ';' || c == '}' || c == '\n';
+}
+
+static const uint8_t binop_table[128] = {
+  ['+']=1, ['*']=1, ['%']=1, ['^']=1, [',']=1, ['=']=1,
+  ['/']=2, ['-']=2, ['&']=2, ['|']=2, ['<']=2, ['>']=2, ['!']=2,
+};
+
+static bool is_binop_char(const char *code, jsoff_t clen, jsoff_t p) {
+  unsigned char c = (unsigned char)code[p];
+  if (c > 127) return false;
+  uint8_t kind = binop_table[c];
+  if (kind == 1) return true;
+  if (kind == 0) return false;
+  if (p + 1 >= clen) return c == '/';
+  char n = code[p + 1];
+  switch (c) {
+    case '/': return n != '/' && n != '*';
+    case '-': return n != '-';
+    case '&': return n != '&';
+    case '|': return n != '|';
+    case '<': return true;
+    case '>': return true;
+    case '!': return n == '=';
+  }
+  return false;
+}
+
+static jsoff_t find_ternary_colon(const char *code, jsoff_t clen, jsoff_t p) {
+  int depth = 0, nesting = 0;
+  for (; p < clen; p++) {
+    jsoff_t skip = skip_comment_or_string(code, clen, p);
+    if (skip) { p = skip - 1; continue; }
+    switch (code[p]) {
+      case '(': case '[': depth++; break;
+      case ')': case ']': depth--; break;
+      case '?': if (!depth) nesting++; break;
+      case ':': if (!depth && nesting-- == 0) return p; break;
+    }
+  }
+  return clen;
+}
+
+static enum tail_scan scan_tail_span(const char *code, jsoff_t clen, jsoff_t start, jsoff_t end) {
+  jsoff_t p = skiptonext(code, end, start, NULL);
+  int depth = 0, bdepth = 0; jsoff_t last_paren_close = 0;
+  bool seen_binop = false;
+
+  while (p < end) {
+    jsoff_t skip = skip_comment_or_string(code, end, p);
+    if (skip) { p = skip; continue; }
+    char c = code[p];
+    if (c == '[') { bdepth++; p++; continue; }
+    if (c == ']') {
+      bdepth--; p++;
+      if (bdepth < 0) return TAIL_UNSAFE;
+      continue;
+    }
+    if (c == '(') { depth++; p++; continue; }
+    if (c == ')') {
+      depth--; p++;
+      if (depth < 0) return TAIL_UNSAFE;
+      if (depth == 0 && bdepth == 0) last_paren_close = p;
+      continue;
+    }
+    if (depth == 0 && bdepth == 0) {
+      if (c == '?') {
+        p++;
+        jsoff_t colon = find_ternary_colon(code, end, p);
+        if (colon >= end) return TAIL_UNSAFE;
+        enum tail_scan t = scan_tail_span(code, colon, p, colon);
+        enum tail_scan f = scan_tail_span(code, end, colon + 1, end);
+        if (t == TAIL_UNSAFE || f == TAIL_UNSAFE) return TAIL_UNSAFE;
+        if (t == TAIL_OK || f == TAIL_OK) return TAIL_OK;
+        return TAIL_NONE;
+      }
+      if (is_binop_char(code, end, p)) seen_binop = true;
+    } p++;
+  }
+
+  if (last_paren_close == 0) return TAIL_NONE;
+  if (seen_binop) return TAIL_UNSAFE;
+  jsoff_t after = skiptonext(code, end, last_paren_close, NULL);
+  if ((after >= end) || is_stmt_end(code[after])) return TAIL_OK;
+  return TAIL_UNSAFE;
+}
+
+static bool is_tail_call_expr(struct js *js) {
+  const char *code = js->code;
+  jsoff_t clen = js->clen;
+  jsoff_t start = skiptonext(code, clen, js->pos, NULL);
+  return scan_tail_span(code, clen, start, clen) == TAIL_OK;
+}
+
 static jsval_t js_return(struct js *js) {
   uint8_t exe = !(js->flags & F_NOEXEC);
   uint8_t in_func = js->flags & F_CALL;
@@ -12114,7 +12509,10 @@ static jsval_t js_return(struct js *js) {
   
   uint8_t nxt = next(js);
   if (nxt != TOK_SEMICOLON && nxt != TOK_RBRACE && nxt != TOK_EOF && !js->had_newline) {
+    bool prev_tail = js->tail_ctx;
+    if (exe && in_func && js->has_tail_calls && is_tail_call_expr(js)) js->tail_ctx = true;
     res = resolveprop(js, js_expr_comma(js));
+    js->tail_ctx = prev_tail;
   }
   
   if (exe && !in_func) return js_mkundef();
@@ -12211,9 +12609,7 @@ static jsval_t js_switch(struct js *js) {
         }
       }
       
-    } else {
-      break;
-    }
+    } else break;
   }
   
   if (!expect(js, TOK_RBRACE, &res)) {
@@ -12314,12 +12710,8 @@ static jsval_t js_switch(struct js *js) {
   js->consumed = 0;
   
   uint8_t preserve = 0;
-  if (js->flags & F_RETURN) {
-    preserve = js->flags & (F_RETURN | F_NOEXEC);
-  }
-  if (js->flags & F_THROW) {
-    preserve = js->flags & (F_THROW | F_NOEXEC);
-  }
+  if (js->flags & F_RETURN) preserve = js->flags & (F_RETURN | F_NOEXEC);
+  if (js->flags & F_THROW) preserve = js->flags & (F_THROW | F_NOEXEC);
   js->flags = (flags & ~F_SWITCH) | preserve;
   
   return res;
@@ -12416,6 +12808,9 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
     bool is_private;
     bool is_getter;
     bool is_setter;
+    bool is_static_block;
+    bool is_computed;
+    jsval_t computed_key;
     jsoff_t field_start, field_end; 
     jsoff_t param_start;
   } MethodInfo;
@@ -12458,14 +12853,23 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
     if (next(js) == TOK_IDENTIFIER) {
       bool is_get = (js->tlen == 3 && memcmp(&js->code[js->toff], "get", 3) == 0);
       bool is_set = (js->tlen == 3 && memcmp(&js->code[js->toff], "set", 3) == 0);
-      if (!is_private_member && (is_get || is_set)) {
+      if (is_get || is_set) {
         jsoff_t saved_pos = js->pos;
         jsoff_t saved_toff = js->toff;
         jsoff_t saved_tlen = js->tlen;
         uint8_t saved_tok = js->tok;
         int saved_stream_pos = js->token_stream_pos;
         js->consumed = 1;
-        if (next(js) == TOK_IDENTIFIER) {
+        uint8_t peek = next(js);
+        bool next_is_name = (peek == TOK_IDENTIFIER);
+        if (!next_is_name && peek == TOK_HASH) {
+          js->consumed = 1;
+          if (next(js) == TOK_IDENTIFIER) { 
+            next_is_name = true;
+            is_private_member = true; 
+          }
+        }
+        if (next_is_name) {
           is_getter_method = is_get;
           is_setter_method = is_set;
         } else {
@@ -12479,11 +12883,82 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
       }
     }
     
+    if (is_static_member && !is_getter_method && !is_setter_method && next(js) == TOK_LBRACE) {
+      jsoff_t block_start = js->pos - 1; js->consumed = 0;
+      jsval_t blk = js_block(js, false);
+      if (is_err(blk)) { js->flags = save_flags; utarray_free(methods); return blk; }
+      jsoff_t block_end = js->pos;
+      MethodInfo static_block = {0};
+      static_block.is_static = true;
+      static_block.is_static_block = true;
+      static_block.field_start = block_start;
+      static_block.field_end = block_end;
+      utarray_push_back(methods, &static_block);
+      js->consumed = 1;
+      continue;
+    }
+    
+    if (next(js) == TOK_LBRACKET) {
+      jsoff_t key_start = js->pos;
+      js->consumed = 1;
+      jsval_t computed_key = js_expr(js);
+      if (is_err(computed_key)) { js->flags = save_flags; utarray_free(methods); return computed_key; }
+      if (next(js) != TOK_RBRACKET) { js->flags = save_flags; return js_mkerr_typed(js, JS_ERR_SYNTAX, "] expected"); }
+      jsoff_t key_end = js->pos - 1;
+      js->consumed = 1;
+      
+      MethodInfo computed = {0};
+      computed.is_static = is_static_member;
+      computed.is_computed = true;
+      computed.name_off = key_start;
+      computed.name_len = key_end - key_start;
+      
+      if (next(js) == TOK_LPAREN) {
+        computed.is_field = false;
+        computed.is_async = is_async_method;
+        computed.is_getter = is_getter_method;
+        computed.is_setter = is_setter_method;
+        EXPECT(TOK_LPAREN, js->flags = save_flags);
+        jsoff_t method_params_start = js->pos - 1;
+        if (!parse_func_params(js, &save_flags, NULL)) {
+          js->flags = save_flags;
+          return js_mkerr_typed(js, JS_ERR_SYNTAX, "invalid method parameters");
+        }
+        EXPECT(TOK_RPAREN, js->flags = save_flags);
+        EXPECT(TOK_LBRACE, js->flags = save_flags);
+        js->consumed = 0;
+        jsval_t blk = js_block(js, false);
+        if (is_err(blk)) { js->flags = save_flags; return blk; }
+        jsoff_t method_body_end = js->pos;
+        computed.fn_start = method_params_start;
+        computed.fn_end = method_body_end;
+        computed.param_start = method_params_start;
+        js->consumed = 1;
+      } else if (next(js) == TOK_ASSIGN) {
+        computed.is_field = true;
+        js->consumed = 1;
+        jsoff_t field_start = js->pos;
+        jsval_t field_expr = js_expr(js);
+        if (is_err(field_expr)) { js->flags = save_flags; utarray_free(methods); return field_expr; }
+        jsoff_t field_end = js->pos;
+        computed.field_start = field_start;
+        computed.field_end = field_end;
+        if (next(js) == TOK_SEMICOLON) js->consumed = 1;
+      } else {
+        computed.is_field = true;
+        if (next(js) == TOK_SEMICOLON) js->consumed = 1;
+      }
+      utarray_push_back(methods, &computed);
+      continue;
+    }
+    
     if (next(js) != TOK_IDENTIFIER && (next(js) < TOK_ASYNC || next(js) > TOK_STATIC)) {
       js->flags = save_flags;
       return js_mkerr_typed(js, JS_ERR_SYNTAX, "method name expected");
     }
-    jsoff_t method_name_off = js->toff, method_name_len = js->tlen;
+    
+    jsoff_t method_name_off = is_private_member ? js->toff - 1 : js->toff;
+    jsoff_t method_name_len = is_private_member ? js->tlen + 1 : js->tlen;
     js->consumed = 1;
     
     if (next(js) == TOK_ASSIGN) {
@@ -12607,14 +13082,28 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
     
     for (unsigned int i = 0; i < utarray_len(methods); i++) {
       MethodInfo *m = (MethodInfo *)utarray_eltptr(methods, i);
+      if (!m->is_computed) continue;
+      jsval_t key_val = js_eval_slice(js, m->name_off, m->name_len);
+      key_val = resolveprop(js, key_val);
+      if (vtype(key_val) == T_SYMBOL) {
+        char sym_buf[48];
+        sym_to_prop_key(key_val, sym_buf, sizeof(sym_buf));
+        m->computed_key = js_mkstr(js, sym_buf, strlen(sym_buf));
+      } else m->computed_key = coerce_to_str(js, key_val);
+      if (is_err(m->computed_key)) { utarray_free(methods); return m->computed_key; }
+    }
+    
+    for (unsigned int i = 0; i < utarray_len(methods); i++) {
+      MethodInfo *m = (MethodInfo *)utarray_eltptr(methods, i);
       if (m->is_static) continue;
       if (m->is_field) continue;
       
-      jsval_t method_name = js_mkstr(js, &js->code[m->name_off], m->name_len);
+      jsval_t method_name;
+      if (m->is_computed) method_name = m->computed_key;
+      else method_name = js_mkstr(js, &js->code[m->name_off], m->name_len);
       if (is_err(method_name)) return method_name;
       
       jsoff_t mlen = m->fn_end - m->fn_start;
-      
       jsval_t method_obj = mkobj(js, 0);
       if (is_err(method_obj)) return method_obj;
       
@@ -12668,7 +13157,7 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
     }
     
     if (instance_field_count > 0) {
-      size_t metadata_size = instance_field_count * sizeof(jsoff_t) * 4;
+      size_t metadata_size = instance_field_count * sizeof(jsoff_t) * 5;
       jsoff_t meta_len = (jsoff_t) (metadata_size + 1);
       jsoff_t meta_header = (jsoff_t) ((meta_len << 3) | T_STR);
       jsoff_t meta_off = js_alloc(js, meta_len + sizeof(meta_header));
@@ -12683,10 +13172,17 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
         if (m->is_static) continue;
         if (!m->is_field) continue;
         
-        metadata[meta_idx * 4 + 0] = m->name_off;
-        metadata[meta_idx * 4 + 1] = m->name_len;
-        metadata[meta_idx * 4 + 2] = m->field_start;
-        metadata[meta_idx * 4 + 3] = m->field_end;
+        if (m->is_computed) {
+          metadata[meta_idx * 5 + 0] = (jsoff_t) m->computed_key;
+          metadata[meta_idx * 5 + 1] = 0;
+        } else {
+          metadata[meta_idx * 5 + 0] = m->name_off;
+          metadata[meta_idx * 5 + 1] = m->name_len;
+        }
+        
+        metadata[meta_idx * 5 + 2] = m->field_start;
+        metadata[meta_idx * 5 + 3] = m->field_end;
+        metadata[meta_idx * 5 + 4] = m->is_computed ? 1 : 0;
         meta_idx++;
       }
       
@@ -12738,7 +13234,23 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
       MethodInfo *m = (MethodInfo *)utarray_eltptr(methods, i);
       if (!m->is_static) continue;
       
-      jsval_t member_name = js_mkstr(js, &js->code[m->name_off], m->name_len);
+      if (m->is_static_block) {
+        if (m->field_start > 0 && m->field_end > m->field_start) {
+          const char *saved_code = js->code;
+          jsoff_t saved_clen = js->clen, saved_pos = js->pos;
+          uint8_t saved_tok = js->tok, saved_consumed = js->consumed;
+          jsval_t blk_res = js_eval(js, &saved_code[m->field_start], m->field_end - m->field_start);
+          js->code = saved_code; js->clen = saved_clen; js->pos = saved_pos;
+          js->tok = saved_tok; js->consumed = saved_consumed;
+          if (is_err(blk_res)) { utarray_free(methods); return blk_res; }
+        }
+        continue;
+      }
+      
+      jsval_t member_name;
+      if (m->is_computed) member_name = m->computed_key;
+      else member_name = js_mkstr(js, &js->code[m->name_off], m->name_len);
+      
       if (is_err(member_name)) return member_name;
       
       if (m->is_field) {
@@ -12763,8 +13275,19 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
         if (vtype(method_func_proto) == T_FUNC) set_proto(js, method_obj, method_func_proto);
         
         jsval_t method_func = mkval(T_FUNC, (unsigned long) vdata(method_obj));
-        jsval_t set_res = js_setprop(js, func_obj, member_name, method_func);
-        if (is_err(set_res)) return set_res;
+        
+        if (m->is_getter || m->is_setter) {
+          jsoff_t nm_len;
+          const char *nm_str = (const char *)&js->mem[vstr(js, member_name, &nm_len)];
+          if (m->is_getter) {
+            js_set_getter_desc(js, func_obj, nm_str, nm_len, method_func, JS_DESC_C);
+          } else {
+            js_set_setter_desc(js, func_obj, nm_str, nm_len, method_func, JS_DESC_C);
+          }
+        } else {
+          jsval_t set_res = js_setprop(js, func_obj, member_name, method_func);
+          if (is_err(set_res)) return set_res;
+        }
       }
     }
     
@@ -15388,7 +15911,7 @@ static jsval_t builtin_object_defineProperty(struct js *js, jsval_t *args, int n
   
   if (vtype(prop) == T_SYMBOL) {
     char keybuf[64];
-    snprintf(keybuf, sizeof(keybuf), "__sym_%llu__", (unsigned long long)sym_get_id(prop));
+    sym_to_prop_key(prop, keybuf, sizeof(keybuf));
     prop = js_mkstr(js, keybuf, strlen(keybuf));
   } else if (vtype(prop) != T_STR) {
     char buf[64];
@@ -15790,7 +16313,7 @@ static jsval_t builtin_object_getOwnPropertyDescriptor(struct js *js, jsval_t *a
   jsoff_t key_len;
   
   if (vtype(key) == T_SYMBOL) {
-    snprintf(sym_buf, sizeof(sym_buf), "__sym_%llu__", (unsigned long long)sym_get_id(key));
+    sym_to_prop_key(key, sym_buf, sizeof(sym_buf));
     key_str = sym_buf;
     key_len = (jsoff_t)strlen(sym_buf);
   } else if (vtype(key) == T_STR) {
@@ -22774,6 +23297,11 @@ static void gc_roots_common(gc_off_op_t op_off, gc_val_op_t op_val, gc_cb_ctx_t 
 
   for (jshdl_t i = 0; i < c->js->gc_roots_len; i++) op_val(c, &c->js->gc_roots[i]);
   if (c->js->ascii_cache_init) for (int i = 0; i < 128; i++) op_val(c, &c->js->ascii_char_cache[i]);
+
+  if (c->js->tc.pending) {
+    op_val(c, &c->js->tc.func); op_val(c, &c->js->tc.closure_scope);
+    for (int i = 0; i < c->js->tc.argc; i++) op_val(c, &c->js->tc.args[i]);
+  }
 }
 
 void js_gc_reserve_roots(GC_RESERVE_ARGS) {
