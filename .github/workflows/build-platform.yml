@@ -37,7 +37,7 @@ jobs:
     container: |-
       ${{ case(
         startsWith(inputs.platform, 'linux-glibc'), 'ubuntu:22.04',
-        startsWith(inputs.platform, 'linux-musl'), 'alpine:edge',
+        startsWith(inputs.platform, 'linux-musl'), 'alpine:3.23',
         ''
       ) }}
 
@@ -64,6 +64,8 @@ jobs:
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
+          sed -i 's|http://archive.ubuntu.com/ubuntu|http://azure.archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list
+          sed -i 's|http://security.ubuntu.com/ubuntu|http://azure.archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list
           apt-get update
           apt-get install -y git ca-certificates gnupg wget software-properties-common curl \
             python3-pip ninja-build cmake pkg-config uuid-dev libssl-dev libsodium-dev jq
