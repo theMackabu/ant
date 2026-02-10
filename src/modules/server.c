@@ -5,7 +5,6 @@
 #include <string.h>
 #include <signal.h>
 #include <uv.h>
-#include <string.h>
 
 #include <zlib-ng.h>
 #include <utarray.h>

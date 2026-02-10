@@ -1,5 +1,5 @@
 #include "utf8.h"
-#include "strings.h"
+#include "escape.h"
 
 static inline size_t decode_hex_escape(const uint8_t *in, size_t pos, uint8_t *out, size_t *out_pos) {
   out[(*out_pos)++] = (uint8_t)((unhex(in[pos + 2]) << 4U) | unhex(in[pos + 3]));

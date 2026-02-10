@@ -1,9 +1,6 @@
-#include <compat.h> // IWYU pragma: keep
-
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <strings.h>
 
 #include "runtime.h"
 #include "errors.h"

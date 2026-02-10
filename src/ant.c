@@ -16,7 +16,7 @@
 #include "stack.h"
 #include "errors.h"
 #include "utf8.h"
-#include "strings.h"
+#include "escape.h"
 #include "esm/remote.h"
 
 #include <uv.h>
