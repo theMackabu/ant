@@ -70,4 +70,73 @@ function lastElement(arr, i = 0) {
 }
 test('tail lastElement', lastElement([1, 2, 3, 4, 5]), 5);
 
+function ternaryBothBare(n) {
+  return n <= 0 ? ternaryBothBare_done(n) : ternaryBothBare(n - 1);
+}
+function ternaryBothBare_done(_) {
+  return 'done';
+}
+test('ternary both bare calls', ternaryBothBare(100000), 'done');
+
+function ternaryThenBinop(n) {
+  return n <= 0 ? identity(0) + 1 : ternaryThenBinop(n - 1);
+}
+function identity(x) {
+  return x;
+}
+test('ternary then-branch binop', ternaryThenBinop(5), 1);
+
+function ternaryElseBinop(n) {
+  return n <= 0 ? identity(42) : identity(n) * 2;
+}
+test('ternary else-branch binop', ternaryElseBinop(0), 42);
+test('ternary else-branch binop non-zero', ternaryElseBinop(3), 6);
+
+function ternaryBothBinop(n) {
+  return n <= 0 ? identity(10) + 5 : identity(n) - 1;
+}
+test('ternary both branches binop', ternaryBothBinop(0), 15);
+test('ternary both branches binop non-zero', ternaryBothBinop(7), 6);
+
+function ternaryNestedArith(n) {
+  return n <= 0 ? (identity(2) + 3) * identity(4) : ternaryNestedArith(n - 1);
+}
+test('ternary nested arith in then', ternaryNestedArith(5), 20);
+
+function ternaryParenBareCall(n) {
+  return n <= 0 ? ternaryParenBareCall_end() : ternaryParenBareCall(n - 1);
+}
+function ternaryParenBareCall_end() {
+  return 'end';
+}
+test('ternary paren bare call', ternaryParenBareCall(100000), 'end');
+
+function ternaryCallWithBinopArg(n) {
+  return n <= 0 ? identity(2 + 3) : ternaryCallWithBinopArg(n - 1);
+}
+test('ternary call with binop arg', ternaryCallWithBinopArg(100000), 5);
+
+function ternaryNested(n, branch) {
+  return branch === 0 ? ternaryNested_a(n) : branch === 1 ? ternaryNested_b(n) : ternaryNested_c(n);
+}
+function ternaryNested_a(_) {
+  return 'a';
+}
+function ternaryNested_b(_) {
+  return 'b';
+}
+function ternaryNested_c(_) {
+  return 'c';
+}
+test('nested ternary branch 0', ternaryNested(1, 0), 'a');
+test('nested ternary branch 1', ternaryNested(1, 1), 'b');
+test('nested ternary branch 2', ternaryNested(1, 2), 'c');
+
+function ternaryNestedUnsafe(n, branch) {
+  return branch === 0 ? identity(n) + 1 : branch === 1 ? identity(n) : identity(n) * 3;
+}
+test('nested ternary unsafe then', ternaryNestedUnsafe(5, 0), 6);
+test('nested ternary safe middle', ternaryNestedUnsafe(5, 1), 5);
+test('nested ternary unsafe else', ternaryNestedUnsafe(5, 2), 15);
+
 summary();
