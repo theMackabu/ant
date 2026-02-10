@@ -1,6 +1,7 @@
 # 🐜 Ant
 
-**Ant-sized JavaScript Runtime**
+**Ant-sized JavaScript Runtime**  
+**_Ant now has a discord! http://discord.gg/CH7YSjWGzY_**
 
 A JavaScript runtime that fits in your pocket. <br>
 Full async/await, modules, HTTP servers, crypto, and more.
