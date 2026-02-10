@@ -46,6 +46,7 @@ const mc = new MultiComputed();
 test('multi computed field a', mc.a, 1);
 test('multi computed field b', mc.b, 2);
 test('multi computed field c', mc.c, 3);
+test('computed key evaluation order', JSON.stringify(order), JSON.stringify(['a', 'b', 'c']));
 
 class ComputedMethod {
   ['say' + 'Hi']() {

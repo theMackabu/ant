@@ -7024,9 +7024,8 @@ jsval_t call_js_internal(
   utarray_push_back(saved_scope_stack, &js->scope);
   utarray_push_back(saved_scope_stack, &js->this_val);
 
-  jsval_t res;
-  jsval_t *tc_args = NULL;
-  int tc_argc = 0;
+  jsval_t res; jsval_t *tc_args = NULL;
+  int tc_argc = 0; bool tc_iter = false;
 
   for (;;) {
   jsval_t target_this = peek_this();
@@ -7046,12 +7045,11 @@ jsval_t call_js_internal(
   int argc;
   bool args_on_heap;
 
-  if (tc_args) {
-    args = tc_args;
+  if (tc_iter) {
+    args = tc_args ? tc_args : args_buf;
     argc = tc_argc;
-    args_on_heap = (tc_argc > 0);
-    tc_args = NULL;
-    tc_argc = 0;
+    args_on_heap = (tc_args != NULL && tc_argc > 0);
+    tc_args = NULL; tc_argc = 0; tc_iter = false;
   } else {
     const char *caller_code = js->code;
     jsoff_t caller_clen = js->clen;
@@ -7221,7 +7219,6 @@ jsval_t call_js_internal(
     func_val = js->tc.func;
     bound_args = NULL;
     bound_argc = 0;
-    free(tc_args);
     tc_args = js->tc.args;
     js->tc.args = NULL;
     tc_argc = js->tc.argc;
