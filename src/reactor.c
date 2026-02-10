@@ -58,6 +58,12 @@ static inline work_flags_t get_pending_work(void) {
   return flags;
 }
 
+static void process_before_exit(ant_t *js) {
+  jsval_t code = js_mknum(0);
+  emit_process_event("beforeExit", &code, 1);
+  if ((get_pending_work() & WORK_PENDING) || UV_CHECK_ALIVE) js_run_event_loop(js);
+}
+
 void js_run_event_loop(ant_t *js) {
   work_flags_t work;
   int uv_alive = UV_CHECK_ALIVE;
@@ -76,4 +82,5 @@ void js_run_event_loop(ant_t *js) {
   }
   
   js_poll_events(js);
+  process_before_exit(js);
 }

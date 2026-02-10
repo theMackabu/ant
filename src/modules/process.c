@@ -257,7 +257,7 @@ static void check_listener_warning(const char *event) {
   );
 }
 
-static void emit_process_event(const char *event_type, jsval_t *args, int nargs) {
+void emit_process_event(const char *event_type, jsval_t *args, int nargs) {
   if (!rt->js) return;
   
   ProcessEventType *evt = NULL;
