@@ -3,7 +3,7 @@ name = "oxc"
 edition = "2024"
 
 [lib]
-crate-type = ["staticlib", "cdylib"]
+crate-type = ["staticlib"]
 
 [dependencies]
 oxc_allocator = "0.110.0"
