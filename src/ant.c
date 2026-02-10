@@ -7221,13 +7221,20 @@ jsval_t call_js_internal(
     func_val = js->tc.func;
     bound_args = NULL;
     bound_argc = 0;
+    free(tc_args);
     tc_args = js->tc.args;
+    js->tc.args = NULL;
     tc_argc = js->tc.argc;
     continue;
   }
 
   break;
   } // end trampoline
+
+  free(tc_args);
+  tc_args = NULL;
+  free(js->tc.args);
+  js->tc.args = NULL;
 
   restore_saved_scope(js);
   return res;
@@ -23290,6 +23297,11 @@ static void gc_roots_common(gc_off_op_t op_off, gc_val_op_t op_val, gc_cb_ctx_t 
 
   for (jshdl_t i = 0; i < c->js->gc_roots_len; i++) op_val(c, &c->js->gc_roots[i]);
   if (c->js->ascii_cache_init) for (int i = 0; i < 128; i++) op_val(c, &c->js->ascii_char_cache[i]);
+
+  if (c->js->tc.pending) {
+    op_val(c, &c->js->tc.func); op_val(c, &c->js->tc.closure_scope);
+    for (int i = 0; i < c->js->tc.argc; i++) op_val(c, &c->js->tc.args[i]);
+  }
 }
 
 void js_gc_reserve_roots(GC_RESERVE_ARGS) {
