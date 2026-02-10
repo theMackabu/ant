@@ -5,8 +5,9 @@
 #include <string.h>
 #include <signal.h>
 #include <uv.h>
+#include <string.h>
 
-#include <zlib.h>
+#include <zlib-ng.h>
 #include <utarray.h>
 
 #include "ant.h"
@@ -573,17 +574,17 @@ static jsval_t res_redirect(struct js *js, jsval_t *args, int nargs) {
 }
 
 static char* gzip_compress(const char *data, size_t data_len, size_t *compressed_len) {
-  z_stream stream;
+  zng_stream stream;
   memset(&stream, 0, sizeof(stream));
   
-  if (deflateInit2(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
+  if (zng_deflateInit2(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
     return NULL;
   }
   
-  size_t bound = deflateBound(&stream, data_len);
+  size_t bound = zng_deflateBound(&stream, data_len);
   char *compressed = malloc(bound);
   if (!compressed) {
-    deflateEnd(&stream);
+    zng_deflateEnd(&stream);
     return NULL;
   }
   
@@ -592,14 +593,14 @@ static char* gzip_compress(const char *data, size_t data_len, size_t *compressed
   stream.next_out = (Bytef *)compressed;
   stream.avail_out = (uInt)bound;
   
-  if (deflate(&stream, Z_FINISH) != Z_STREAM_END) {
+  if (zng_deflate(&stream, Z_FINISH) != Z_STREAM_END) {
     free(compressed);
-    deflateEnd(&stream);
+    zng_deflateEnd(&stream);
     return NULL;
   }
   
   *compressed_len = stream.total_out;
-  deflateEnd(&stream);
+  zng_deflateEnd(&stream);
   
   return compressed;
 }
