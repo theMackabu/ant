@@ -8691,6 +8691,9 @@ static jsval_t js_arr_or_destruct(struct js *js) {
 }
 
 static jsval_t js_arr_literal(struct js *js) {
+  bool saved_tail = js->tail_ctx;
+  js->tail_ctx = false;
+  
   uint8_t exe = !(js->flags & F_NOEXEC);
   jsval_t arr = exe ? mkarr(js) : js_mkundef();
   if (is_err(arr)) return arr;
@@ -8757,6 +8760,7 @@ static jsval_t js_arr_literal(struct js *js) {
     }
     arr = mkval(T_ARR, vdata(arr));
   }
+  js->tail_ctx = saved_tail;
   return arr;
 }
 
@@ -8858,6 +8862,9 @@ static jsval_t set_obj_property(struct js *js, jsval_t obj, jsval_t key, jsval_t
 }
 
 static jsval_t js_obj_literal(struct js *js) {
+  bool saved_tail = js->tail_ctx;
+  js->tail_ctx = false;
+  
   uint8_t exe = !(js->flags & F_NOEXEC);
   jsval_t obj = exe ? mkobj(js, 0) : js_mkundef();
   if (is_err(obj)) return obj;
@@ -9111,6 +9118,8 @@ static jsval_t js_obj_literal(struct js *js) {
   }
   
   EXPECT(TOK_RBRACE);
+  js->tail_ctx = saved_tail;
+  
   return obj;
 }
 
