@@ -6140,7 +6140,7 @@ static jsval_t do_bracket_op(struct js *js, jsval_t l, jsval_t r) {
     keystr = (char *) &js->mem[off];
     keylen = slen;
   } else if (vtype(key_val) == T_SYMBOL) {
-    snprintf(keybuf, sizeof(keybuf), "__sym_%llu__", (unsigned long long)sym_get_id(key_val));
+    sym_to_prop_key(key_val, keybuf, sizeof(keybuf));
     keystr = keybuf;
     keylen = strlen(keybuf);
   } else {
@@ -7687,11 +7687,8 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
         bool computed = metadata[i * 5 + 4] != 0;
         
         jsval_t fname;
-        if (computed) {
-          jsval_t key_val = js_eval_str(js, &source[name_off], name_len);
-          key_val = resolveprop(js, key_val);
-          fname = coerce_to_str(js, key_val);
-        } else fname = js_mkstr(js, &source[name_off], name_len);
+        if (computed) fname = (jsval_t) name_off;
+        else fname = js_mkstr(js, &source[name_off], name_len);
         
         if (is_err(fname)) {
           js->current_func = saved_func;
@@ -9003,7 +9000,7 @@ static jsval_t js_obj_literal(struct js *js) {
           key = resolved_key;
         } else if (vtype(resolved_key) == T_SYMBOL) {
           char buf[64];
-          snprintf(buf, sizeof(buf), "__sym_%llu__", (unsigned long long)sym_get_id(resolved_key));
+          sym_to_prop_key(resolved_key, buf, sizeof(buf));
           key = js_mkstr(js, buf, strlen(buf));
         } else {
           char buf[64];
@@ -12424,8 +12421,8 @@ static bool is_binop_char(const char *code, jsoff_t clen, jsoff_t p) {
     case '-': return n != '-';
     case '&': return n != '&';
     case '|': return n != '|';
-    case '<': return n != '<';
-    case '>': return n != '>';
+    case '<': return true;
+    case '>': return true;
     case '!': return n == '=';
   }
   return false;
@@ -12448,21 +12445,27 @@ static jsoff_t find_ternary_colon(const char *code, jsoff_t clen, jsoff_t p) {
 
 static enum tail_scan scan_tail_span(const char *code, jsoff_t clen, jsoff_t start, jsoff_t end) {
   jsoff_t p = skiptonext(code, end, start, NULL);
-  int depth = 0; jsoff_t last_paren_close = 0;
+  int depth = 0, bdepth = 0; jsoff_t last_paren_close = 0;
   bool seen_binop = false;
 
   while (p < end) {
     jsoff_t skip = skip_comment_or_string(code, end, p);
     if (skip) { p = skip; continue; }
     char c = code[p];
+    if (c == '[') { bdepth++; p++; continue; }
+    if (c == ']') {
+      bdepth--; p++;
+      if (bdepth < 0) return TAIL_UNSAFE;
+      continue;
+    }
     if (c == '(') { depth++; p++; continue; }
     if (c == ')') {
       depth--; p++;
       if (depth < 0) return TAIL_UNSAFE;
-      if (depth == 0) last_paren_close = p;
+      if (depth == 0 && bdepth == 0) last_paren_close = p;
       continue;
     }
-    if (depth == 0) {
+    if (depth == 0 && bdepth == 0) {
       if (c == '?') {
         p++;
         jsoff_t colon = find_ternary_colon(code, end, p);
@@ -12800,6 +12803,7 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
     bool is_setter;
     bool is_static_block;
     bool is_computed;
+    jsval_t computed_key;
     jsoff_t field_start, field_end; 
     jsoff_t param_start;
   } MethodInfo;
@@ -12898,12 +12902,33 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
       
       MethodInfo computed = {0};
       computed.is_static = is_static_member;
-      computed.is_field = true;
       computed.is_computed = true;
       computed.name_off = key_start;
       computed.name_len = key_end - key_start;
       
-      if (next(js) == TOK_ASSIGN) {
+      if (next(js) == TOK_LPAREN) {
+        computed.is_field = false;
+        computed.is_async = is_async_method;
+        computed.is_getter = is_getter_method;
+        computed.is_setter = is_setter_method;
+        EXPECT(TOK_LPAREN, js->flags = save_flags);
+        jsoff_t method_params_start = js->pos - 1;
+        if (!parse_func_params(js, &save_flags, NULL)) {
+          js->flags = save_flags;
+          return js_mkerr_typed(js, JS_ERR_SYNTAX, "invalid method parameters");
+        }
+        EXPECT(TOK_RPAREN, js->flags = save_flags);
+        EXPECT(TOK_LBRACE, js->flags = save_flags);
+        js->consumed = 0;
+        jsval_t blk = js_block(js, false);
+        if (is_err(blk)) { js->flags = save_flags; return blk; }
+        jsoff_t method_body_end = js->pos;
+        computed.fn_start = method_params_start;
+        computed.fn_end = method_body_end;
+        computed.param_start = method_params_start;
+        js->consumed = 1;
+      } else if (next(js) == TOK_ASSIGN) {
+        computed.is_field = true;
         js->consumed = 1;
         jsoff_t field_start = js->pos;
         jsval_t field_expr = js_expr(js);
@@ -12912,7 +12937,10 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
         computed.field_start = field_start;
         computed.field_end = field_end;
         if (next(js) == TOK_SEMICOLON) js->consumed = 1;
-      } else if (next(js) == TOK_SEMICOLON) js->consumed = 1;
+      } else {
+        computed.is_field = true;
+        if (next(js) == TOK_SEMICOLON) js->consumed = 1;
+      }
       utarray_push_back(methods, &computed);
       continue;
     }
@@ -13047,14 +13075,28 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
     
     for (unsigned int i = 0; i < utarray_len(methods); i++) {
       MethodInfo *m = (MethodInfo *)utarray_eltptr(methods, i);
+      if (!m->is_computed) continue;
+      jsval_t key_val = js_eval_slice(js, m->name_off, m->name_len);
+      key_val = resolveprop(js, key_val);
+      if (vtype(key_val) == T_SYMBOL) {
+        char sym_buf[48];
+        sym_to_prop_key(key_val, sym_buf, sizeof(sym_buf));
+        m->computed_key = js_mkstr(js, sym_buf, strlen(sym_buf));
+      } else m->computed_key = coerce_to_str(js, key_val);
+      if (is_err(m->computed_key)) { utarray_free(methods); return m->computed_key; }
+    }
+    
+    for (unsigned int i = 0; i < utarray_len(methods); i++) {
+      MethodInfo *m = (MethodInfo *)utarray_eltptr(methods, i);
       if (m->is_static) continue;
       if (m->is_field) continue;
       
-      jsval_t method_name = js_mkstr(js, &js->code[m->name_off], m->name_len);
+      jsval_t method_name;
+      if (m->is_computed) method_name = m->computed_key;
+      else method_name = js_mkstr(js, &js->code[m->name_off], m->name_len);
       if (is_err(method_name)) return method_name;
       
       jsoff_t mlen = m->fn_end - m->fn_start;
-      
       jsval_t method_obj = mkobj(js, 0);
       if (is_err(method_obj)) return method_obj;
       
@@ -13123,8 +13165,14 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
         if (m->is_static) continue;
         if (!m->is_field) continue;
         
-        metadata[meta_idx * 5 + 0] = m->name_off;
-        metadata[meta_idx * 5 + 1] = m->name_len;
+        if (m->is_computed) {
+          metadata[meta_idx * 5 + 0] = (jsoff_t) m->computed_key;
+          metadata[meta_idx * 5 + 1] = 0;
+        } else {
+          metadata[meta_idx * 5 + 0] = m->name_off;
+          metadata[meta_idx * 5 + 1] = m->name_len;
+        }
+        
         metadata[meta_idx * 5 + 2] = m->field_start;
         metadata[meta_idx * 5 + 3] = m->field_end;
         metadata[meta_idx * 5 + 4] = m->is_computed ? 1 : 0;
@@ -13193,11 +13241,8 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
       }
       
       jsval_t member_name;
-      if (m->is_computed) {
-        jsval_t key_val = js_eval_slice(js, m->name_off, m->name_len);
-        key_val = resolveprop(js, key_val);
-        member_name = coerce_to_str(js, key_val);
-      } else member_name = js_mkstr(js, &js->code[m->name_off], m->name_len);
+      if (m->is_computed) member_name = m->computed_key;
+      else member_name = js_mkstr(js, &js->code[m->name_off], m->name_len);
       
       if (is_err(member_name)) return member_name;
       
@@ -15859,7 +15904,7 @@ static jsval_t builtin_object_defineProperty(struct js *js, jsval_t *args, int n
   
   if (vtype(prop) == T_SYMBOL) {
     char keybuf[64];
-    snprintf(keybuf, sizeof(keybuf), "__sym_%llu__", (unsigned long long)sym_get_id(prop));
+    sym_to_prop_key(prop, keybuf, sizeof(keybuf));
     prop = js_mkstr(js, keybuf, strlen(keybuf));
   } else if (vtype(prop) != T_STR) {
     char buf[64];
@@ -16261,7 +16306,7 @@ static jsval_t builtin_object_getOwnPropertyDescriptor(struct js *js, jsval_t *a
   jsoff_t key_len;
   
   if (vtype(key) == T_SYMBOL) {
-    snprintf(sym_buf, sizeof(sym_buf), "__sym_%llu__", (unsigned long long)sym_get_id(key));
+    sym_to_prop_key(key, sym_buf, sizeof(sym_buf));
     key_str = sym_buf;
     key_len = (jsoff_t)strlen(sym_buf);
   } else if (vtype(key) == T_STR) {

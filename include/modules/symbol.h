@@ -7,6 +7,7 @@
 
 void init_symbol_module(void);
 bool is_symbol_key(const char *key, size_t key_len);
+int sym_to_prop_key(jsval_t sym, char *buf, size_t bufsz);
 
 const char *get_iterator_sym_key(void);
 const char *get_asyncIterator_sym_key(void);
