@@ -12439,8 +12439,8 @@ static jsoff_t find_ternary_colon(const char *code, jsoff_t clen, jsoff_t p) {
     jsoff_t skip = skip_comment_or_string(code, clen, p);
     if (skip) { p = skip - 1; continue; }
     switch (code[p]) {
-      case '(': case '[': depth++; break;
-      case ')': case ']': depth--; break;
+      case '(': case '[': case '{': depth++; break;
+      case ')': case ']': case '}': depth--; break;
       case '?': if (!depth) nesting++; break;
       case ':': if (!depth && nesting-- == 0) return p; break;
     }
@@ -12450,13 +12450,21 @@ static jsoff_t find_ternary_colon(const char *code, jsoff_t clen, jsoff_t p) {
 
 static enum tail_scan scan_tail_span(const char *code, jsoff_t clen, jsoff_t start, jsoff_t end) {
   jsoff_t p = skiptonext(code, end, start, NULL);
-  int depth = 0, bdepth = 0; jsoff_t last_paren_close = 0;
+  int depth = 0, bdepth = 0, cdepth = 0;
+  
+  jsoff_t last_paren_close = 0;
   bool seen_binop = false;
 
   while (p < end) {
     jsoff_t skip = skip_comment_or_string(code, end, p);
     if (skip) { p = skip; continue; }
     char c = code[p];
+    if (c == '{') { cdepth++; p++; continue; }
+    if (c == '}') {
+      cdepth--; p++;
+      if (cdepth < 0) return TAIL_UNSAFE;
+      continue;
+    }
     if (c == '[') { bdepth++; p++; continue; }
     if (c == ']') {
       bdepth--; p++;
@@ -12467,10 +12475,10 @@ static enum tail_scan scan_tail_span(const char *code, jsoff_t clen, jsoff_t sta
     if (c == ')') {
       depth--; p++;
       if (depth < 0) return TAIL_UNSAFE;
-      if (depth == 0 && bdepth == 0) last_paren_close = p;
+      if (depth == 0 && bdepth == 0 && cdepth == 0) last_paren_close = p;
       continue;
     }
-    if (depth == 0 && bdepth == 0) {
+    if (depth == 0 && bdepth == 0 && cdepth == 0) {
       if (c == '?') {
         p++;
         jsoff_t colon = find_ternary_colon(code, end, p);
