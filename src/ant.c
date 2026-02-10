@@ -6679,7 +6679,7 @@ static bool code_uses_arguments(const char *code, jsoff_t len) {
   } return false;
 }
 
-static parsed_func_t *get_or_parse_func(const char *fn, jsoff_t fnlen) {
+static parsed_func_t *get_or_parse_func(struct js *js, const char *fn, jsoff_t fnlen) {
   uint64_t h = hash_key(fn, fnlen);
   parsed_func_t *cached = NULL;
   HASH_FIND(hh, func_parse_cache, &h, sizeof(h), cached);
@@ -6774,7 +6774,7 @@ static parsed_func_t *get_or_parse_func(const char *fn, jsoff_t fnlen) {
   pf->is_expr = !is_block;
   pf->is_strict = is_strict_function_body(&fn[fnpos], pf->body_len);
   pf->uses_arguments = code_uses_arguments(&fn[pf->body_start], pf->body_len);
-  pf->tokens = NULL;
+  pf->tokens = (pf->body_len > 0) ? tokenize_body(js, &fn[pf->body_start], pf->body_len) : NULL;
   
   HASH_ADD(hh, func_parse_cache, code_hash, sizeof(pf->code_hash), pf);
   return pf;
@@ -6905,7 +6905,7 @@ jsval_t call_js_internal(
   js->pos = caller_pos;
   js->scope = function_scope;
   
-  parsed_func_t *pf = get_or_parse_func(fn, fnlen);
+  parsed_func_t *pf = get_or_parse_func(js, fn, fnlen);
   if (!pf) {
     if (args_on_heap) free(args);
     restore_saved_scope(js);
@@ -6992,11 +6992,7 @@ jsval_t call_js_internal(
   int saved_token_stream_pos = js->token_stream_pos;
   const char *saved_token_stream_code = js->token_stream_code;
   
-  if (!pf->is_expr && !pf->tokens && pf->body_len > 0) {
-    pf->tokens = tokenize_body(js, &fn[pf->body_start], pf->body_len);
-  }
-  
-  if (pf->tokens && !pf->is_expr) {
+  if (pf->tokens) {
     js->token_stream = pf->tokens;
     js->token_stream_pos = 0;
     js->token_stream_code = &fn[pf->body_start];
@@ -23093,7 +23089,7 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
     utarray_push_back(global_scope_stack, &function_scope_offset);
     hoist_var_declarations_from_slot(js, js->scope, func_obj);
     
-    parsed_func_t *pf = get_or_parse_func(fn, fnlen);
+    parsed_func_t *pf = get_or_parse_func(js, fn, fnlen);
     if (!pf) {
       if (global_scope_stack && utarray_len(global_scope_stack) > 0) utarray_pop_back(global_scope_stack);
       delscope(js); js->scope = saved_scope;
@@ -23160,11 +23156,7 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
     int saved_token_stream_pos = js->token_stream_pos;
     const char *saved_token_stream_code = js->token_stream_code;
     
-    if (!pf->is_expr && !pf->tokens && pf->body_len > 0) {
-      pf->tokens = tokenize_body(js, &fn[pf->body_start], pf->body_len);
-    }
-    
-    if (pf->tokens && !pf->is_expr) {
+    if (pf->tokens) {
       js->token_stream = pf->tokens;
       js->token_stream_pos = 0;
       js->token_stream_code = &fn[pf->body_start];
