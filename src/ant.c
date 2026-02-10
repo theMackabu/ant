@@ -4454,6 +4454,10 @@ static inline uint8_t parse_number(struct js *js, const char *buf, jsoff_t remai
           return TOK_ERR;
         }
         numlen = parse_legacy_octal(buf, remaining, &value);
+    } else if (is_digit(buf[1]) && (js->flags & F_STRICT)) {
+        js->tok = TOK_ERR;
+        js->tlen = 1;
+        return TOK_ERR;
     } else numlen = parse_decimal(buf, remaining, &value);
   } else numlen = parse_decimal(buf, remaining, &value);
   
@@ -8249,8 +8253,8 @@ static jsval_t js_template_literal(struct js *js) {
       
       for (size_t i = part_start; i < n; i++) {
         if (in[i] == '\\' && i + 1 < n) {
-          if (in[i + 1] >= '1' && in[i + 1] <= '7') return js_mkerr_typed(
-            js, JS_ERR_SYNTAX, "octal escape sequences are not allowed in template literals"
+          if (is_octal_escape(in, i)) return js_mkerr_typed(
+            js, JS_ERR_SYNTAX, "Octal escape sequences are not allowed in template strings."
           );
           i += 1 + decode_escape(in, i, n, out, &out_len, '`');
         } else out[out_len++] = in[i];
@@ -8345,8 +8349,8 @@ static jsval_t js_tagged_template(struct js *js, jsval_t tag_func) {
     
     for (size_t i = part_start; i < n; i++) {
       if (in[i] == '\\' && i + 1 < n) {
-        if (in[i + 1] >= '1' && in[i + 1] <= '7') return js_mkerr_typed(
-          js, JS_ERR_SYNTAX, "octal escape sequences are not allowed in template literals"
+        if (is_octal_escape(in, i)) return js_mkerr_typed(
+          js, JS_ERR_SYNTAX, "Octal escape sequences are not allowed in template strings."
         );
         i += 1 + decode_escape(in, i, n, out, &out_len, '`');
       } else out[out_len++] = in[i];
@@ -8403,8 +8407,8 @@ static jsval_t js_str_literal(struct js *js) {
   uint8_t *out = &js->mem[js->brk + sizeof(jsoff_t)];
   while (n2++ + 2 < js->tlen) {
     if (in[n2] == '\\') {
-      if (in[n2 + 1] >= '1' && in[n2 + 1] <= '7' && (js->flags & F_STRICT)) return js_mkerr_typed(
-        js, JS_ERR_SYNTAX, "octal escape sequences are not allowed in strict mode"
+      if ((js->flags & F_STRICT) && is_octal_escape(in, n2)) return js_mkerr_typed(
+        js, JS_ERR_SYNTAX, "Octal escape sequences are not allowed in strict mode."
       );
       size_t extra = decode_escape(in, n2, js->tlen, out, &n1, in[0]);
       n2 += extra + 1;
@@ -9207,7 +9211,10 @@ static jsval_t js_literal(struct js *js) {
     case TOK_ERR:
       if ((js->flags & F_STRICT) && js->toff < js->clen && js->code[js->toff] == '0' && 
           js->toff + 1 < js->clen && is_digit(js->code[js->toff + 1])) {
-        return js_mkerr_typed(js, JS_ERR_SYNTAX, "octal literals are not allowed in strict mode");
+        uint8_t d = js->code[js->toff + 1];
+        return js_mkerr_typed(js, JS_ERR_SYNTAX, d >= '0' && d <= '7'
+          ? "Octal literals are not allowed in strict mode."
+          : "Decimals with leading zeros are not allowed in strict mode.");
       }
       return js_mkerr_typed(js, JS_ERR_SYNTAX, "parse error");
     case TOK_NUMBER:      return js->tval;

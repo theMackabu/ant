@@ -17,6 +17,11 @@ static inline bool is_xdigit(int c) {
   );
 }
 
+static inline bool is_octal_escape(const uint8_t *in, size_t pos) {
+  uint8_t c = in[pos + 1];
+  return c >= '0' && c <= '7' && !(c == '0' && !(in[pos + 2] >= '0' && in[pos + 2] <= '7'));
+}
+
 size_t decode_escape(
   const uint8_t *in, size_t pos, size_t end,
   uint8_t *out, size_t *out_pos, uint8_t quote
