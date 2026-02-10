@@ -187,7 +187,7 @@ jobs:
         uses: ./.github/actions/build-native-deps
         with:
           deps: ${{ steps.config.outputs.deps }}
-          prefix: ${{ runner.temp }}/deps-cache
+          prefix: ${{ github.workspace }}/.deps-cache
           cc: ${{ steps.llvm.outputs.cc }}
           cxx: ${{ steps.llvm.outputs.cxx }}
           ar: ${{ steps.llvm.outputs.ar }}
@@ -210,7 +210,7 @@ jobs:
           ranlib: ${{ steps.llvm.outputs.ranlib }}
           ld: ${{ steps.llvm.outputs.ld }}
           strip: ${{ steps.llvm.outputs.strip }}
-          deps_prefix: ${{ runner.temp }}/deps-cache
+          deps_prefix: ${{ github.workspace }}/.deps-cache
           build_timestamp: ${{ inputs.build_timestamp }}
           tls_library: ${{ steps.config.outputs.tls_library }}
           static_link: ${{ steps.config.outputs.static_link }}
