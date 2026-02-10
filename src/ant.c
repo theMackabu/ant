@@ -6859,12 +6859,28 @@ jsval_t call_js_internal(
   jsoff_t caller_clen = js->clen;
   jsoff_t caller_pos = js->pos;
   
-  UT_array *args_arr;
-  utarray_new(args_arr, &jsval_icd);
+  jsval_t args_buf[8];
+  jsval_t *args = args_buf;
   
-  for (int i = 0; i < bound_argc; i++) { utarray_push_back(args_arr, &bound_args[i]); } 
+  int argc = 0; int args_cap = 8;
+  bool args_on_heap = false;
+
+  #define ARGS_PUSH(val) do {                                  \
+    if (argc >= args_cap) {                                    \
+      int _new_cap = args_cap * 2;                             \
+      jsval_t *_new = malloc(_new_cap * sizeof(jsval_t));      \
+      memcpy(_new, args, argc * sizeof(jsval_t));              \
+      if (args_on_heap) free(args);                            \
+      args = _new;                                             \
+      args_cap = _new_cap;                                     \
+      args_on_heap = true;                                     \
+    }                                                          \
+    args[argc++] = (val);                                      \
+  } while (0)
+
+  for (int i = 0; i < bound_argc; i++) ARGS_PUSH(bound_args[i]);
   caller_pos = skiptonext(caller_code, caller_clen, caller_pos, NULL);
-  
+
   while (caller_pos < caller_clen && caller_code[caller_pos] != ')') {
     bool is_spread = (
       caller_code[caller_pos] == '.' && caller_pos + 2 < caller_clen &&
@@ -6877,26 +6893,21 @@ jsval_t call_js_internal(
     caller_pos = js->pos;
     if (is_spread && vtype(arg) == T_ARR) {
       jsoff_t len = js_arr_len(js, arg);
-      for (jsoff_t i = 0; i < len; i++) {
-        jsval_t elem = js_arr_get(js, arg, i);
-        utarray_push_back(args_arr, &elem);
-      }
-    } else {
-      utarray_push_back(args_arr, &arg);
-    }
+      for (jsoff_t i = 0; i < len; i++) ARGS_PUSH(js_arr_get(js, arg, i));
+    } else ARGS_PUSH(arg);
     caller_pos = skiptonext(caller_code, caller_clen, caller_pos, NULL);
     if (caller_pos < caller_clen && caller_code[caller_pos] == ',') caller_pos++;
     caller_pos = skiptonext(caller_code, caller_clen, caller_pos, NULL);
   }
-  js->pos = caller_pos;
   
-  jsval_t *args = (jsval_t *)utarray_front(args_arr);
-  int argc = (int)utarray_len(args_arr);
+  #undef ARGS_PUSH
+  
+  js->pos = caller_pos;
   js->scope = function_scope;
   
   parsed_func_t *pf = get_or_parse_func(fn, fnlen);
   if (!pf) {
-    utarray_free(args_arr);
+    if (args_on_heap) free(args);
     restore_saved_scope(js);
     if (global_scope_stack && utarray_len(global_scope_stack) > 0) utarray_pop_back(global_scope_stack);
     return js_mkerr(js, "failed to parse function");
@@ -6913,7 +6924,7 @@ jsval_t call_js_internal(
       }
       jsval_t r = bind_destruct_pattern(js, &fn[pp->pattern_off], pp->pattern_len, arg_val, function_scope);
       if (is_err(r)) {
-        utarray_free(args_arr);
+        if (args_on_heap) free(args);
         restore_saved_scope(js);
         if (global_scope_stack && utarray_len(global_scope_stack) > 0) utarray_pop_back(global_scope_stack);
         return r;
@@ -7009,7 +7020,7 @@ jsval_t call_js_internal(
   js->skip_func_hoist = false;
   if (global_scope_stack && utarray_len(global_scope_stack) > 0)  utarray_pop_back(global_scope_stack);
   
-  utarray_free(args_arr);
+  if (args_on_heap) free(args);
   restore_saved_scope(js);
   
   return res;

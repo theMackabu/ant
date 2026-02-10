@@ -111,7 +111,7 @@ for entry in "${HEADERS[@]}"; do
       continue
     fi
     
-    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\<(config|common|argtable3|types|utarray|uthash|minicoro)\.h\> ]]; then
+    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\<(config|common|uv|argtable3|types|utarray|uthash|minicoro)\.h\> ]]; then
       continue
     fi
     
