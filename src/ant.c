@@ -7065,7 +7065,7 @@ jsval_t call_js_internal(
     #define ARGS_PUSH(val) do {                                  \
       if (argc >= args_cap) {                                    \
         int _new_cap = args_cap * 2;                             \
-        jsval_t *_new = malloc(_new_cap * sizeof(jsval_t));      \
+        jsval_t *_new = try_oom(_new_cap * sizeof(jsval_t));      \
         memcpy(_new, args, argc * sizeof(jsval_t));              \
         if (args_on_heap) free(args);                            \
         args = _new;                                             \
