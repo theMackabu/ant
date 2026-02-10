@@ -64,8 +64,12 @@ jobs:
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          sed -i 's|http://archive.ubuntu.com/ubuntu|http://azure.archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list
-          sed -i 's|http://security.ubuntu.com/ubuntu|http://azure.archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list
+          if [[ "${{ inputs.platform }}" == *"aarch64"* ]]; then
+            sed -i 's|http://ports.ubuntu.com/ubuntu-ports|http://mirrors.ocf.berkeley.edu/ubuntu-ports|g' /etc/apt/sources.list
+          else
+            sed -i 's|http://archive.ubuntu.com/ubuntu|http://azure.archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list
+            sed -i 's|http://security.ubuntu.com/ubuntu|http://azure.archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list
+          fi
           apt-get update
           apt-get install -y git ca-certificates gnupg wget software-properties-common curl \
             python3-pip ninja-build cmake pkg-config uuid-dev libssl-dev libsodium-dev jq
