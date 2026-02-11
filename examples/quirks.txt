@@ -1,0 +1,44 @@
+print:
+(i=0,f=_=>i<10&&(console.log(i++),f``))``
+
+concat:
+(s='',i=0,f=_=>i<10&&(s+=i++,f``),f``,s)
+
+timeout:
+void function f(i){i<5&&setTimeout(f,0,i+1,console.log(i))}(0)
+
+comma:
+(f=i=>(i<5&&(console.log(i),f(i+1)),0))(0)
+
+getter (has to be run twice?):
+({get n(){for(var i=0;i<5;)console.log(i++)}}).n
+
+proxy:
+(p=new Proxy([],{get:(t,k)=>k<5?(console.log(+k),p[+k+1]):0}))[0]
+
+reflect:
+new Proxy([],{get:(t,k,r)=>k<5?(console.log(+k),r[+k+1]):0})[0]
+
+symbol.toPrimitive:
++{i:0,[Symbol.toPrimitive](){return this.i<5?(console.log(this.i++),+this):0}}
+
+toString:
+''+{i:0,toString(){return this.i<5?(console.log(this.i++),this+''):''}}
+
+replace:
+'xxxxx'.replace(/x/g,(_,i)=>console.log(i))
+
+array:
+[...Array(10)].map((_,i)=>console.log(i))
+
+error stack:
+(f=i=>{try{if(i<5)throw i}catch(e){console.log(e),f(e+1)}})(0)
+
+symbol.iterator: (no generators)
+[...{*[Symbol.iterator](){for(let i=0;i<5;)yield console.log(i++)}}]
+
+promise:
+void async function f(i){i<5&&await f(i+1,console.log(i))}(0)
+
+sloppy with:
+with({i:0}){while(i<5)console.log(i++)}
