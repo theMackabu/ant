@@ -18181,11 +18181,38 @@ static jsval_t builtin_Array_isArray(struct js *js, jsval_t *args, int nargs) {
   return mkval(T_BOOL, vtype(args[0]) == T_ARR ? 1 : 0);
 }
 
+typedef struct {
+  jsval_t write_target;
+  jsval_t result;
+  jsval_t mapFn;
+  jsoff_t index;
+} array_from_iter_ctx_t;
+
+static iter_action_t array_from_iter_cb(struct js *js, jsval_t value, void *ctx, jsval_t *out) {
+  array_from_iter_ctx_t *fctx = (array_from_iter_ctx_t *)ctx;
+  jsval_t elem = value;
+
+  if (is_callable(fctx->mapFn)) {
+    jsval_t call_args[2] = { elem, tov((double)fctx->index) };
+    elem = call_js_with_args(js, fctx->mapFn, call_args, 2);
+    if (is_err(elem)) { *out = elem; return ITER_ERROR; }
+  }
+
+  if (vtype(fctx->write_target) == T_ARR) arr_set(js, fctx->write_target, fctx->index, elem);
+  else {
+    char idxstr[16]; size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)fctx->index);
+    js_setprop(js, fctx->write_target, js_mkstr(js, idxstr, idxlen), elem);
+  }
+
+  fctx->index++;
+  return ITER_CONTINUE;
+}
+
 static jsval_t builtin_Array_from(struct js *js, jsval_t *args, int nargs) {
   if (nargs == 0) return mkarr(js);
 
   jsval_t src = args[0];
-  jsval_t mapFn = (nargs >= 2 && vtype(args[1]) == T_FUNC) ? args[1] : js_mkundef();
+  jsval_t mapFn = (nargs >= 2 && is_callable(args[1])) ? args[1] : js_mkundef();
 
   jsval_t ctor = js->this_val;
   bool use_ctor = (vtype(ctor) == T_FUNC || vtype(ctor) == T_CFUNC);
@@ -18204,38 +18231,34 @@ static jsval_t builtin_Array_from(struct js *js, jsval_t *args, int nargs) {
   jsval_t write_target = result_is_proxy ? proxy_read_target(js, result) : result;
 
   if (vtype(src) == T_STR) {
+    array_from_iter_ctx_t ctx = { write_target, result, mapFn, 0 };
     jsoff_t str_len, str_off = vstr(js, src, &str_len);
     const char *str_ptr = (const char *)&js->mem[str_off];
     for (jsoff_t i = 0; i < str_len; i++) {
-      jsval_t elem = js_mkstr(js, str_ptr + i, 1);
-      if (vtype(mapFn) == T_FUNC) {
-        jsval_t call_args[2] = { elem, tov((double)i) };
-        elem = call_js_with_args(js, mapFn, call_args, 2);
-        if (is_err(elem)) return elem;
-      }
-      if (vtype(write_target) == T_ARR) arr_set(js, write_target, i, elem);
-      else {
-        char idxstr[16]; size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)i);
-        js_setprop(js, write_target, js_mkstr(js, idxstr, idxlen), elem);
-      }
+      jsval_t unused;
+      iter_action_t act = array_from_iter_cb(js, js_mkstr(js, str_ptr + i, 1), &ctx, &unused);
+      if (act == ITER_ERROR) return unused;
     }
     if (vtype(result) != T_ARR) js_setprop(js, result, js->length_str, tov((double) str_len));
-  } else if (vtype(src) == T_ARR || vtype(src) == T_OBJ) {
-    jsoff_t len = get_array_length(js, src);
-    for (jsoff_t i = 0; i < len; i++) {
-      jsval_t elem = arr_get(js, src, i);
-      if (vtype(mapFn) == T_FUNC) {
-        jsval_t call_args[2] = { elem, tov((double)i) };
-        elem = call_js_with_args(js, mapFn, call_args, 2);
-        if (is_err(elem)) return elem;
+  } else {
+    const char *iter_key = get_iterator_sym_key();
+    jsoff_t iter_prop = iter_key ? lkp_proto(js, src, iter_key, strlen(iter_key)) : 0;
+
+    if (iter_prop != 0) {
+      array_from_iter_ctx_t ctx = { write_target, result, mapFn, 0 };
+      jsval_t iter_result = iter_foreach(js, src, array_from_iter_cb, &ctx);
+      if (is_err(iter_result)) return iter_result;
+      if (vtype(result) != T_ARR) js_setprop(js, result, js->length_str, tov((double) ctx.index));
+    } else if (vtype(src) == T_ARR || vtype(src) == T_OBJ) {
+      array_from_iter_ctx_t ctx = { write_target, result, mapFn, 0 };
+      jsoff_t len = get_array_length(js, src);
+      for (jsoff_t i = 0; i < len; i++) {
+        jsval_t unused;
+        iter_action_t act = array_from_iter_cb(js, arr_get(js, src, i), &ctx, &unused);
+        if (act == ITER_ERROR) return unused;
       }
-      if (vtype(write_target) == T_ARR) arr_set(js, write_target, i, elem);
-      else {
-        char idxstr[16]; size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)i);
-        js_setprop(js, write_target, js_mkstr(js, idxstr, idxlen), elem);
-      }
+      if (vtype(result) != T_ARR) js_setprop(js, result, js->length_str, tov((double) len));
     }
-    if (vtype(result) != T_ARR) js_setprop(js, result, js->length_str, tov((double) len));
   }
 
   if (!use_ctor) return mkval(T_ARR, vdata(result));
@@ -18604,9 +18627,7 @@ static jsval_t builtin_string_includes(struct js *js, jsval_t *args, int nargs) 
   if (search_len == 0) return mkval(T_BOOL, 1);
   if (start + search_len > str_len) return mkval(T_BOOL, 0);
   for (jsoff_t i = start; i <= str_len - search_len; i++) {
-    if (memcmp(str_ptr + i, search_ptr, search_len) == 0) {
-      return mkval(T_BOOL, 1);
-    }
+    if (memcmp(str_ptr + i, search_ptr, search_len) == 0) return mkval(T_BOOL, 1);
   }
   
   return mkval(T_BOOL, 0);
