@@ -72,6 +72,14 @@ pkg_error_t pkg_add(
   bool dev
 );
 
+pkg_error_t pkg_add_many(
+  pkg_context_t *ctx,
+  const char *package_json_path,
+  const char *const *package_specs,
+  uint32_t count,
+  bool dev
+);
+
 pkg_error_t pkg_remove(
   pkg_context_t *ctx,
   const char *package_json_path,
@@ -302,6 +310,12 @@ pkg_error_t pkg_exec_temp(
 pkg_error_t pkg_add_global(
   pkg_context_t *ctx,
   const char *package_spec
+);
+
+pkg_error_t pkg_add_global_many(
+  pkg_context_t *ctx,
+  const char *const *package_specs,
+  uint32_t count
 );
 
 pkg_error_t pkg_remove_global(

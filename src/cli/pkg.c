@@ -184,11 +184,14 @@ static const char *get_global_dir(void) {
   return global_dir;
 }
 
-static int cmd_add_global(const char *package_spec) {
+static int cmd_add_global(const char *const *package_specs, int count) {
   print_install_header("add -g");
   
+  char resolve_msg[64];
+  snprintf(resolve_msg, sizeof(resolve_msg), "🔍 Resolving [%d/%d]", count, count);
+  
   progress_t progress;
-  if (!pkg_verbose) progress_start(&progress, "🔍 Resolving [1/1]");
+  if (!pkg_verbose) progress_start(&progress, resolve_msg);
   
   pkg_options_t opts = { 
     .progress_callback = pkg_verbose ? NULL : progress_callback,
@@ -202,7 +205,7 @@ static int cmd_add_global(const char *package_spec) {
     return EXIT_FAILURE;
   }
 
-  pkg_error_t err = pkg_add_global(ctx, package_spec);
+  pkg_error_t err = pkg_add_global_many(ctx, package_specs, (uint32_t)count);
   if (!pkg_verbose) progress_stop(&progress);
   
   if (err != PKG_OK) {
@@ -213,8 +216,10 @@ static int cmd_add_global(const char *package_spec) {
 
   pkg_install_result_t result;
   if (pkg_get_install_result(ctx, &result) == PKG_OK) {
-    printf("\n%sinstalled globally%s %s%s%s\n", 
-           C_GREEN, C_RESET, C_BOLD, package_spec, C_RESET);
+    for (int i = 0; i < count; i++) {
+      printf("\n%sinstalled globally%s %s%s%s\n", 
+             C_GREEN, C_RESET, C_BOLD, package_specs[i], C_RESET);
+    }
     printf("  %s(binaries linked to ~/.ant/bin)%s\n", C_DIM, C_RESET);
     printf("\n%s[%s", C_DIM, C_RESET);
     print_elapsed(result.elapsed_ms);
@@ -368,28 +373,15 @@ static int cmd_install(void) {
   return EXIT_SUCCESS;
 }
 
-static int cmd_add(const char *package_spec, bool dev) {
+static int cmd_add(const char *const *package_specs, int count, bool dev) {
   print_install_header(dev ? "add -D" : "add");
   
-  char pkg_name[256];
-  const char *at_pos = strchr(package_spec, '@');
-  if (at_pos == package_spec) {
-    at_pos = strchr(package_spec + 1, '@');
-  }
-  if (at_pos) {
-    size_t name_len = (size_t)(at_pos - package_spec);
-    if (name_len >= sizeof(pkg_name)) name_len = sizeof(pkg_name) - 1;
-    memcpy(pkg_name, package_spec, name_len);
-    pkg_name[name_len] = '\0';
-  } else {
-    strncpy(pkg_name, package_spec, sizeof(pkg_name) - 1);
-    pkg_name[sizeof(pkg_name) - 1] = '\0';
-  }
+  char resolve_msg[64];
+  snprintf(resolve_msg, sizeof(resolve_msg), "🔍 Resolving [%d/%d]", count, count);
   
   progress_t progress;
-  
   if (!pkg_verbose) {
-    progress_start(&progress, "🔍 Resolving [1/1]");
+    progress_start(&progress, resolve_msg);
   }
   
   pkg_options_t opts = { 
@@ -403,7 +395,7 @@ static int cmd_add(const char *package_spec, bool dev) {
     return EXIT_FAILURE;
   }
 
-  pkg_error_t err = pkg_add(ctx, "package.json", package_spec, dev);
+  pkg_error_t err = pkg_add_many(ctx, "package.json", package_specs, (uint32_t)count, dev);
   if (err != PKG_OK) {
     if (!pkg_verbose) { progress_stop(&progress);  }
     fprintf(stderr, "Error: %s\n", pkg_error_string(ctx));
@@ -421,39 +413,34 @@ static int cmd_add(const char *package_spec, bool dev) {
   
   if (!pkg_verbose) progress_stop(&progress);
 
-  pkg_added_package_t added_pkg = {0};
-  uint32_t added_count = pkg_get_added_count(ctx);
-  for (uint32_t i = 0; i < added_count; i++) {
-    pkg_added_package_t pkg;
-    if (pkg_get_added_package(ctx, i, &pkg) == PKG_OK && pkg.direct) {
-      if (strcmp(pkg.name, pkg_name) == 0) {
-        added_pkg = pkg; break;
-      }
-    }
-  }
-
   pkg_install_result_t result;
   if (pkg_get_install_result(ctx, &result) == PKG_OK) {
     printf("\n");
     
-    if (added_pkg.name) {
-      int bin_count = pkg_list_package_bins("node_modules", added_pkg.name, NULL, NULL);
-      
-      if (bin_count > 0) {
-        printf("%sinstalled%s %s%s@%s%s with binaries:\n", 
-          C_GREEN, C_RESET,
-          C_BOLD, added_pkg.name, added_pkg.version, C_RESET);
-        pkg_list_package_bins("node_modules", added_pkg.name, print_bin_callback, NULL);
-      } else {
-        printf("%sinstalled%s %s%s@%s%s\n", 
-          C_GREEN, C_RESET,
-          C_BOLD, added_pkg.name, added_pkg.version, C_RESET);
+    uint32_t added_count = pkg_get_added_count(ctx);
+    for (uint32_t i = 0; i < added_count; i++) {
+      pkg_added_package_t pkg;
+      if (pkg_get_added_package(ctx, i, &pkg) == PKG_OK && pkg.direct) {
+        int bin_count = pkg_list_package_bins("node_modules", pkg.name, NULL, NULL);
+        if (bin_count > 0) {
+          printf("%sinstalled%s %s%s@%s%s with binaries:\n", 
+            C_GREEN, C_RESET,
+            C_BOLD, pkg.name, pkg.version, C_RESET);
+          pkg_list_package_bins("node_modules", pkg.name, print_bin_callback, NULL);
+        } else {
+          printf("%sinstalled%s %s%s@%s%s\n", 
+            C_GREEN, C_RESET,
+            C_BOLD, pkg.name, pkg.version, C_RESET);
+        }
       }
     }
     
-    printf("\n%s[%s", C_DIM, C_RESET);
+    printf("\n%s%u%s package%s installed %s[%s",
+      C_GREEN, result.packages_installed, C_RESET,
+      result.packages_installed == 1 ? "" : "s",
+      C_DIM, C_RESET);
     print_elapsed(result.elapsed_ms);
-    printf("%s]%s done\n", C_DIM, C_RESET);
+    printf("%s]%s\n", C_DIM, C_RESET);
   }
 
   pkg_free(ctx);
@@ -796,9 +783,9 @@ int pkg_cmd_install(int argc, char **argv) {
     exitcode = cmd_install();
   } else {
     bool is_dev = dev->count > 0;
-    for (int i = 0; i < pkgs->count && exitcode == EXIT_SUCCESS; i++) {
-      exitcode = global->count > 0 ? cmd_add_global(pkgs->sval[i]) : cmd_add(pkgs->sval[i], is_dev);
-    }
+    exitcode = global->count > 0 
+      ? cmd_add_global(pkgs->sval, pkgs->count) 
+      : cmd_add(pkgs->sval, pkgs->count, is_dev);
   }
   
   arg_freetable(argtable, sizeof(argtable)/sizeof(argtable[0]));
@@ -826,9 +813,9 @@ int pkg_cmd_add(int argc, char **argv) {
     exitcode = EXIT_FAILURE;
   } else {
     bool is_dev = dev->count > 0;
-    for (int i = 0; i < pkgs->count && exitcode == EXIT_SUCCESS; i++) {
-      exitcode = global->count > 0 ? cmd_add_global(pkgs->sval[i]) : cmd_add(pkgs->sval[i], is_dev);
-    }
+    exitcode = global->count > 0 
+      ? cmd_add_global(pkgs->sval, pkgs->count) 
+      : cmd_add(pkgs->sval, pkgs->count, is_dev);
   }
   
   arg_freetable(argtable, sizeof(argtable)/sizeof(argtable[0]));

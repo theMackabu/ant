@@ -1568,6 +1568,139 @@ export fn pkg_add(
   return .ok;
 }
 
+export fn pkg_add_many(
+  ctx: ?*PkgContext,
+  package_json_path: [*:0]const u8,
+  package_specs: [*]const [*:0]const u8,
+  count: u32,
+  dev: bool,
+) PkgError {
+  const c = ctx orelse return .invalid_argument;
+  _ = c.arena_state.reset(.retain_capacity);
+  const arena_alloc = c.arena_state.allocator();
+
+  const pkg_json_str = std.mem.span(package_json_path);
+
+  const http = c.http orelse return .network_error;
+  var res = resolver.Resolver.init(
+    arena_alloc,
+    c.allocator,
+    &c.string_pool,
+    http,
+    c.cache_db,
+    if (c.options.registry_url) |url| std.mem.span(url) else "https://registry.npmjs.org",
+    &c.metadata_cache,
+  ); defer res.deinit();
+
+  const ResolvedEntry = struct {
+    name: []const u8,
+    version_str: []const u8,
+  };
+
+  const resolved = arena_alloc.alloc(ResolvedEntry, count) catch return .out_of_memory;
+
+  for (0..count) |i| {
+    const spec_str = std.mem.span(package_specs[i]);
+    var pkg_name: []const u8 = spec_str;
+    var version_constraint: []const u8 = "latest";
+
+    if (std.mem.indexOf(u8, spec_str, "@")) |at_idx| {
+      if (at_idx == 0) {
+        if (std.mem.indexOfPos(u8, spec_str, 1, "@")) |second_at| {
+          pkg_name = spec_str[0..second_at];
+          version_constraint = spec_str[second_at + 1 ..];
+        }
+      } else {
+        pkg_name = spec_str[0..at_idx];
+        version_constraint = spec_str[at_idx + 1 ..];
+      }
+    }
+
+    const resolved_pkg = res.resolve(pkg_name, version_constraint, 0) catch |err| {
+      c.setErrorFmt("Failed to resolve {s}: {}", .{ pkg_name, err });
+      return .resolve_error;
+    };
+
+    const version_str = resolved_pkg.version.format(arena_alloc) catch return .out_of_memory;
+    resolved[i] = .{ .name = pkg_name, .version_str = version_str };
+  }
+
+  const content = blk: {
+    const file = std.fs.cwd().openFile(pkg_json_str, .{ .mode = .read_only }) catch |err| {
+      if (err == error.FileNotFound) break :blk "{}";
+      c.setError("Failed to open package.json");
+      return .io_error;
+    };
+    defer file.close();
+    break :blk file.readToEndAlloc(arena_alloc, 10 * 1024 * 1024) catch {
+      c.setError("Failed to read package.json");
+      return .io_error;
+    };
+  };
+
+  const parsed = std.json.parseFromSlice(std.json.Value, arena_alloc, content, .{}) catch {
+    c.setError("Failed to parse package.json");
+    return .invalid_argument;
+  }; defer parsed.deinit();
+
+  if (parsed.value != .object) {
+    c.setError("Invalid package.json format");
+    return .invalid_argument;
+  }
+
+  const target_key = if (dev) "devDependencies" else "dependencies";
+
+  var deps = if (parsed.value.object.get(target_key)) |d|
+    if (d == .object) d.object else std.json.ObjectMap.init(arena_alloc)
+  else std.json.ObjectMap.init(arena_alloc);
+
+  for (resolved) |entry| {
+    const version_with_caret = std.fmt.allocPrint(arena_alloc, "^{s}", .{entry.version_str}) catch return .out_of_memory;
+    deps.put(entry.name, .{ .string = version_with_caret }) catch return .out_of_memory;
+  }
+
+  var writer = json.JsonWriter.init() catch return .out_of_memory;
+  defer writer.deinit();
+
+  const root_obj = writer.createObject();
+  writer.setRoot(root_obj);
+
+  var found_target = false;
+  for (parsed.value.object.keys(), parsed.value.object.values()) |key, value| {
+    if (std.mem.eql(u8, key, target_key)) {
+      found_target = true;
+      const deps_obj = writer.createObject();
+      var dep_iter = deps.iterator();
+      while (dep_iter.next()) |entry| {
+        if (entry.value_ptr.* == .string) {
+          writer.objectAdd(deps_obj, entry.key_ptr.*, writer.createString(entry.value_ptr.string));
+        }
+      } writer.objectAdd(root_obj, key, deps_obj);
+    } else {
+      const json_val = jsonValueToMut(&writer, value) catch continue;
+      writer.objectAdd(root_obj, key, json_val);
+    }
+  }
+
+  if (!found_target) {
+    const deps_obj = writer.createObject();
+    for (resolved) |entry| {
+      const version_with_caret = std.fmt.allocPrint(arena_alloc, "^{s}", .{entry.version_str}) catch return .out_of_memory;
+      writer.objectAdd(deps_obj, entry.name, writer.createString(version_with_caret));
+    }
+    writer.objectAdd(root_obj, target_key, deps_obj);
+  }
+
+  const pkg_json_z = arena_alloc.dupeZ(u8, pkg_json_str) catch return .out_of_memory;
+
+  writer.writeToFile(pkg_json_z) catch {
+    c.setError("Failed to write package.json");
+    return .io_error;
+  };
+
+  return .ok;
+}
+
 fn jsonValueToMut(writer: *json.JsonWriter, value: std.json.Value) !*json.yyjson.yyjson_mut_val {
   return switch (value) {
     .null => writer.createNull(),
@@ -2655,6 +2788,15 @@ export fn pkg_add_global(
   ctx: ?*PkgContext,
   package_spec: [*:0]const u8,
 ) PkgError {
+  const specs = [_][*:0]const u8{package_spec};
+  return pkg_add_global_many(ctx, &specs, 1);
+}
+
+export fn pkg_add_global_many(
+  ctx: ?*PkgContext,
+  package_specs: [*]const [*:0]const u8,
+  count: u32,
+) PkgError {
   const c = ctx orelse return .invalid_argument;
   const allocator = c.allocator;
 
@@ -2676,26 +2818,24 @@ export fn pkg_add_global(
   const nm_path = std.fmt.allocPrintSentinel(allocator, "{s}/node_modules", .{global_dir}, 0) catch return .out_of_memory;
   defer allocator.free(nm_path);
   
-  const spec_str = std.mem.span(package_spec);
-  var pkg_name: []const u8 = spec_str;
-  
-  if (std.mem.indexOf(u8, spec_str, "@")) |at_idx| {
-    if (at_idx == 0) {
-      if (std.mem.indexOfPos(u8, spec_str, 1, "@")) |second_at| {
-        pkg_name = spec_str[0..second_at];
-      }
-    } else {
-      pkg_name = spec_str[0..at_idx];
-    }
-  }
-  
-  const add_result = pkg_add(c, pkg_json_path.ptr, package_spec, false);
+  const add_result = pkg_add_many(c, pkg_json_path.ptr, package_specs, count, false);
   if (add_result != .ok) return add_result;
   
   const install_result = pkg_resolve_and_install(c, pkg_json_path.ptr, lockfile_path.ptr, nm_path.ptr);
   if (install_result != .ok) return install_result;
   
-  linkGlobalBins(allocator, nm_path, pkg_name);
+  for (0..count) |i| {
+    const spec_str = std.mem.span(package_specs[i]);
+    var pkg_name: []const u8 = spec_str;
+    
+    if (std.mem.indexOf(u8, spec_str, "@")) |at_idx| {
+      if (at_idx == 0) {
+        if (std.mem.indexOfPos(u8, spec_str, 1, "@")) |second_at| pkg_name = spec_str[0..second_at];
+      } else pkg_name = spec_str[0..at_idx];
+    }
+    
+    linkGlobalBins(allocator, nm_path, pkg_name);
+  }
   
   return .ok;
 }
