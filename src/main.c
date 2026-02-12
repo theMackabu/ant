@@ -2,7 +2,6 @@
 #include <arena.h>
 
 #include <oxc.h>
-#include <cli/pkg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,6 +18,9 @@
 #include "snapshot.h"
 #include "esm/remote.h"
 #include "internal.h"
+
+#include "cli/pkg.h"
+#include "cli/cprintf.h"
 
 #include "modules/builtin.h"
 #include "modules/buffer.h"
@@ -85,10 +87,11 @@ static const subcommand_t *find_subcommand(const char *name) {
 }
 
 static void print_subcommands(void) {
-  printf("Commands:\n");
+  cprintf("<bold>Commands:</>\n");
   for (const subcommand_t *cmd = subcommands; cmd->name; cmd++) {
-    printf("  %-12s %s\n", cmd->name, cmd->desc);
+    cprintf("  <pad=18>%s</pad> %s\n", cmd->name, cmd->desc);
   }
+  cprintf("\n  <pad=18><command> <bold_cyan>--help</></pad> Print help text for command.\n");
   printf("\n");
 }
 
@@ -284,12 +287,12 @@ int main(int argc, char *argv[]) {
   int nerrors = arg_parse(argc, argv, argtable);
   
   if (help->count > 0) {
-    printf("Ant sized JavaScript\n\n");
-    printf("Usage: ant [options] [module.js]\n");
-    printf("       ant <command> [args]\n\n");
+    cprintf("<bold_red>Ant</> is a tiny JavaScript runtime and package manager (%s)\n\n", ANT_VERSION);
+    printf("%sUsage: ant %s[...options] %s[module.js]\n%s", C_BOLD, C_CYAN, C_YELLOW, C_RESET);
+    printf("%s       ant <command> %s[...args]%s\n\n", C_BOLD, C_CYAN, C_RESET);
     print_subcommands();
     printf("If no module file is specified, ant starts in REPL mode.\n\n");
-    printf("Options:\n");
+    printf("%sOptions:%s\n", C_BOLD, C_RESET);
     printf("  %-28s %s\n", "--verbose", "enable verbose output");
     printf("  %-28s %s\n", "--no-color", "disable colored output");
     arg_print_glossary(stdout, argtable, "  %-28s %s\n");

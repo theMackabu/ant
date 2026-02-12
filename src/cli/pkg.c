@@ -15,23 +15,9 @@
 #include "utils.h"
 #include "config.h"
 #include "progress.h"
+#include "modules/io.h"
 
-extern bool io_no_color;
 bool pkg_verbose = false;
-
-#define C(color)  (io_no_color ? "" : (color))
-#define C_RESET   C("\x1b[0m")
-#define C_BOLD    C("\x1b[1m")
-#define C_DIM     C("\x1b[2m")
-#define C_UL      C("\x1b[4m")
-#define C_UL_OFF  C("\x1b[24m")
-#define C_GREEN   C("\x1b[32m")
-#define C_YELLOW  C("\x1b[33m")
-#define C_BLUE    C("\x1b[34m")
-#define C_MAGENTA C("\x1b[35m")
-#define C_CYAN    C("\x1b[36m")
-#define C_WHITE   C("\x1b[37m")
-#define C_RED     C("\x1b[31m")
 
 static void progress_callback(void *user_data, pkg_phase_t phase, uint32_t current, uint32_t total, const char *message) {
   progress_t *progress = (progress_t *)user_data;

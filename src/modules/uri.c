@@ -6,6 +6,7 @@
 #include "errors.h"
 #include "runtime.h"
 #include "utf8.h"
+#include "utils.h"
 #include "modules/uri.h"
 
 static const unsigned char uri_unreserved[256] = {
@@ -51,13 +52,6 @@ static const unsigned char uri_reserved[256] = {
 
 static int is_valid_continuation(unsigned char c) {
   return (c & 0xC0) == 0x80;
-}
-
-static int hex_digit(char c) {
-  if (c >= '0' && c <= '9') return c - '0';
-  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-  return -1;
 }
 
 static int is_lone_surrogate(const unsigned char *str, int seq_len) {

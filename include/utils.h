@@ -12,10 +12,11 @@ typedef struct {
 } cstr_buf_t;
 
 const char *ant_semver(void);
+char *resolve_js_file(const char *filename);
 uint64_t hash_key(const char *key, size_t len);
 
+int hex_digit(char c);
 int is_typescript_file(const char *filename);
-char *resolve_js_file(const char *filename);
 int ant_version(void *argtable[]);
 
 void *try_oom(size_t size);

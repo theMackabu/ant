@@ -32,6 +32,13 @@ const char *ant_semver(void) {
   return ant_semver_buf;
 }
 
+int hex_digit(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  return -1;
+}
+
 uint64_t hash_key(const char *key, size_t len) {
   uint64_t hash = 14695981039346656037ULL;
   size_t i = 0;

@@ -1,0 +1,647 @@
+/*
+ * cprintf - printf with inline color tags, powered by a register-based VM
+ *
+ * usage:
+ *   cprintf("<red>error:</red> something went wrong\n");
+ *   cprintf("<bold><cyan>info:</cyan></bold> hello %s\n", name);
+ *   cprintf("<#ff8800>orange text</#ff8800>\n");
+ *   cprintf("  <pad=18><green>%s</green></pad> %s\n", cmd->name, cmd->desc);
+ *
+ * supported tags:
+ *   <red> <green> <yellow> <blue> <magenta> <cyan> <white> <black>
+ *   <gray/grey> <bright_red> <bright_green> ... etc
+ *   <bg_red> <bg_green> ... <bg_#RGB> <bg_#RRGGBB>
+ *   <bold> <dim> <ul> (underline)
+ *   <#RRGGBB> or <#RGB> for arbitrary 24-bit foreground colors
+ *   <pad=N> ... </pad>  - right-pad contents to N visible columns
+ *   <rpad=N> ... </rpad> - left-pad (right-align) contents to N visible columns
+ *   </tagname> or </> to reset
+ *
+ */
+
+#include "utils.h"
+#include "cli/cprintf.h"
+
+#include <ctype.h>
+#include <stdio.h>
+#include <stdarg.h>
+#include <string.h>
+#include <stdlib.h>
+#include <stdint.h>
+
+typedef enum {
+  OP_NOP = 0,
+  OP_EMIT_LIT,
+  OP_EMIT_FMT,
+  OP_SET_FG,
+  OP_SET_BG,
+  OP_SET_FG_RGB,
+  OP_SET_BG_RGB,
+  OP_SET_BOLD,
+  OP_SET_DIM,
+  OP_SET_UL,
+  OP_STYLE_FLUSH,
+  OP_STYLE_RESET,
+  OP_PAD_BEGIN,
+  OP_RPAD_BEGIN,
+  OP_PAD_END,
+  OP_HALT,
+  OP_MAX
+} opcode_t;
+
+typedef struct {
+  uint32_t op;
+  uint32_t operand;
+} instruction_t;
+
+typedef enum {
+  COL_NONE = 0,
+  COL_BLACK = 30, COL_RED, COL_GREEN, COL_YELLOW,
+  COL_BLUE, COL_MAGENTA, COL_CYAN, COL_WHITE,
+  COL_GRAY = 90, COL_BRIGHT_RED, COL_BRIGHT_GREEN, COL_BRIGHT_YELLOW,
+  COL_BRIGHT_BLUE, COL_BRIGHT_MAGENTA, COL_BRIGHT_CYAN, COL_BRIGHT_WHITE,
+  COL_RGB = 0xFF
+} color_t;
+
+#define UNPACK_R(c) (((c)>>16)&0xFF)
+#define UNPACK_G(c) (((c)>>8)&0xFF)
+#define UNPACK_B(c) ((c)&0xFF)
+
+#define PACK_RGB(r,g,b) \
+  (((uint32_t)(r)<<16)|((uint32_t)(g)<<8)|(uint32_t)(b))
+
+typedef struct {
+  size_t mark;
+  int width;
+  int right_align;
+} pad_entry_t;
+  
+typedef struct {
+  uint32_t fg;
+  uint32_t bg;
+  uint32_t fg_rgb;
+  uint32_t bg_rgb;
+
+  int bold;
+  int dim;
+  int ul;
+
+  pad_entry_t pad_stack[8];
+  int pad_depth;
+} vm_regs_t;
+
+struct program_t {
+  instruction_t *code;
+  size_t code_len;
+  size_t code_cap;
+  char *literals;
+  size_t lit_len;
+  size_t lit_cap;
+};
+
+static program_t *program_new(void) {
+  program_t *p = calloc(1, sizeof(*p));
+  *p = (program_t){
+    .code_cap = 32,
+    .code = malloc(32 * sizeof(instruction_t)),
+    .lit_cap = 256,
+    .literals = malloc(256),
+  };
+  return p;
+}
+
+static void emit_op(program_t *p, uint32_t op, uint32_t operand) {
+  if (p->code_len >= p->code_cap) {
+    p->code_cap *= 2;
+    p->code = realloc(p->code, p->code_cap * sizeof(instruction_t));
+  }
+  p->code[p->code_len++] = (instruction_t){ op, operand };
+}
+
+static uint32_t add_literal(program_t *p, const char *s, size_t len) {
+  while (p->lit_len + len + 1 > p->lit_cap) {
+    p->lit_cap *= 2;
+    p->literals = realloc(p->literals, p->lit_cap);
+  }
+  
+  uint32_t off = (uint32_t)p->lit_len;
+  memcpy(p->literals + p->lit_len, s, len);
+  
+  p->literals[p->lit_len + len] = '\0';
+  p->lit_len += len + 1;
+  
+  return off;
+}
+
+typedef struct { 
+  const char *name; 
+  int nlen; 
+  color_t col; 
+} color_entry_t;
+
+static const color_entry_t fg_colors[] = {
+  {"black",5,COL_BLACK}, {"red",3,COL_RED}, {"green",5,COL_GREEN},
+  {"yellow",6,COL_YELLOW}, {"blue",4,COL_BLUE}, {"magenta",7,COL_MAGENTA},
+  {"cyan",4,COL_CYAN}, {"white",5,COL_WHITE},
+  {"gray",4,COL_GRAY}, {"grey",4,COL_GRAY},
+  {"bright_red",10,COL_BRIGHT_RED}, {"bright_green",12,COL_BRIGHT_GREEN},
+  {"bright_yellow",13,COL_BRIGHT_YELLOW}, {"bright_blue",11,COL_BRIGHT_BLUE},
+  {"bright_magenta",14,COL_BRIGHT_MAGENTA}, {"bright_cyan",11,COL_BRIGHT_CYAN},
+  {"bright_white",12,COL_BRIGHT_WHITE},
+}; 
+
+static const color_entry_t bg_colors[] = {
+  {"bg_black",8,COL_BLACK}, {"bg_red",6,COL_RED}, {"bg_green",8,COL_GREEN},
+  {"bg_yellow",9,COL_YELLOW}, {"bg_blue",7,COL_BLUE}, {"bg_magenta",10,COL_MAGENTA},
+  {"bg_cyan",7,COL_CYAN}, {"bg_white",8,COL_WHITE},
+};
+
+static const color_entry_t seg_bg_colors[] = {
+  {"black",5,COL_BLACK}, {"red",3,COL_RED}, {"green",5,COL_GREEN},
+  {"yellow",6,COL_YELLOW}, {"blue",4,COL_BLUE}, {"magenta",7,COL_MAGENTA},
+  {"cyan",4,COL_CYAN}, {"white",5,COL_WHITE},
+};
+
+#define FG_COUNT (sizeof(fg_colors)/sizeof(fg_colors[0]))
+#define BG_COUNT (sizeof(bg_colors)/sizeof(bg_colors[0]))
+#define SEG_BG_COUNT (sizeof(seg_bg_colors)/sizeof(seg_bg_colors[0]))
+
+static int parse_hex_rgb(const char *hex, int len, uint32_t *rgb) {
+  int r, g, b;
+  if (len == 4) {
+    int r1=hex_digit(hex[1]), g1=hex_digit(hex[2]), b1=hex_digit(hex[3]);
+    if (r1<0||g1<0||b1<0) return 0;
+    r=r1*17; g=g1*17; b=b1*17;
+  } else if (len == 7) {
+    int r1=hex_digit(hex[1]),r2=hex_digit(hex[2]);
+    int g1=hex_digit(hex[3]),g2=hex_digit(hex[4]);
+    int b1=hex_digit(hex[5]),b2=hex_digit(hex[6]);
+    if (r1<0||r2<0||g1<0||g2<0||b1<0||b2<0) return 0;
+    r=r1*16+r2; g=g1*16+g2; b=b1*16+b2;
+  } else return 0;
+  *rgb = PACK_RGB(r, g, b);
+  return 1;
+}
+
+static int compile_hex_fg(program_t *p, const char *tag, int len) {
+  uint32_t rgb;
+  if (!parse_hex_rgb(tag, len, &rgb)) return 0;
+  emit_op(p, OP_SET_FG_RGB, rgb);
+  return 1;
+}
+
+static int compile_hex_bg(program_t *p, const char *hex, int hlen) {
+  uint32_t rgb;
+  if (!parse_hex_rgb(hex, hlen, &rgb)) return 0;
+  emit_op(p, OP_SET_BG_RGB, rgb);
+  return 1;
+}
+
+static int tag_eq(const char *tag, int len, const char *lit) {
+  int ll = (int)strlen(lit);
+  return len == ll && memcmp(tag, lit, ll) == 0;
+}
+
+static int tag_prefix(const char *tag, int len, const char *pfx) {
+  int pl = (int)strlen(pfx);
+  return len > pl && memcmp(tag, pfx, pl) == 0;
+}
+
+static int match_fg(program_t *p, const char *s, int len) {
+  for (int i = 0; i < (int)FG_COUNT; i++) if (
+    len == fg_colors[i].nlen && memcmp(s, fg_colors[i].name, len) == 0) {
+    emit_op(p, OP_SET_FG, fg_colors[i].col); return 1;
+  }
+  return 0;
+}
+
+static int match_bg(program_t *p, const char *s, int len) {
+  for (int i = 0; i < (int)BG_COUNT; i++) if (
+    len == bg_colors[i].nlen && memcmp(s, bg_colors[i].name, len) == 0) {
+    emit_op(p, OP_SET_BG, bg_colors[i].col); return 1; 
+  }
+  return 0;
+}
+
+static int match_seg_bg(program_t *p, const char *s, int len) {
+  for (int i = 0; i < (int)SEG_BG_COUNT; i++) if (
+    len == seg_bg_colors[i].nlen && memcmp(s, seg_bg_colors[i].name, len) == 0) { 
+    emit_op(p, OP_SET_BG, seg_bg_colors[i].col); return 1; 
+  }
+  return 0;
+}
+
+typedef struct { 
+  const char *name;
+  int nlen;
+  int op; 
+} attr_entry_t;
+
+static const attr_entry_t attrs[] = {
+  { "bold", 4, OP_SET_BOLD },
+  { "dim",  3, OP_SET_DIM  },
+  { "ul",   2, OP_SET_UL   },
+};
+
+#define ATTR_COUNT (sizeof(attrs) / sizeof(attrs[0]))
+
+static int match_attr(program_t *p, const char *s, int len) {
+  for (int i = 0; i < (int)ATTR_COUNT; i++) if (
+    len == attrs[i].nlen && memcmp(s, attrs[i].name, len) == 0) { 
+    emit_op(p, attrs[i].op, 1); return 1; 
+  }
+  return 0;
+}
+
+static const char *next_seg(const char *cur, const char *end, int *out_len) {
+  const char *sep = cur;
+  while (sep < end && *sep != '_') sep++;
+  *out_len = (int)(sep - cur);
+  return sep;
+}
+
+static int compile_tag(program_t *p, const char *tag, int len, int closing) {
+  if (closing) {
+    if (tag_eq(tag, len, "pad") || tag_eq(tag, len, "rpad")) emit_op(p, OP_PAD_END, 0);
+    else emit_op(p, OP_STYLE_RESET, 0);
+    return 1;
+  }
+
+  if (tag_prefix(tag, len, "pad="))  { emit_op(p, OP_PAD_BEGIN,  (uint32_t)atoi(tag + 4)); return 1; }
+  if (tag_prefix(tag, len, "rpad=")) { emit_op(p, OP_RPAD_BEGIN, (uint32_t)atoi(tag + 5)); return 1; }
+
+  if (match_attr(p, tag, len)) { emit_op(p, OP_STYLE_FLUSH, 0); return 1; }
+  if (match_fg(p, tag, len))   { emit_op(p, OP_STYLE_FLUSH, 0); return 1; }
+  if (match_bg(p, tag, len))   { emit_op(p, OP_STYLE_FLUSH, 0); return 1; }
+
+  if (tag[0] == '#') {
+    if (!compile_hex_fg(p, tag, len)) return 0;
+    emit_op(p, OP_STYLE_FLUSH, 0); return 1;
+  }
+
+  if (tag_prefix(tag, len, "bg_#")) {
+    if (!compile_hex_bg(p, tag + 3, len - 3)) return 0;
+    emit_op(p, OP_STYLE_FLUSH, 0); return 1;
+  }
+
+  const char *seg = tag;
+  const char *end = tag + len;
+  int emitted = 0;
+
+  while (seg < end) {
+    int slen;
+    const char *sep = next_seg(seg, end, &slen);
+
+    if (match_attr(p, seg, slen)) {
+    } else if (tag_eq(seg, slen, "bg") && sep < end) {
+      seg = sep + 1;
+      sep = next_seg(seg, end, &slen);
+      if (!match_seg_bg(p, seg, slen)) return 0;
+    } else if (!match_fg(p, seg, slen)) return 0;
+
+    emitted++;
+    seg = (sep < end) ? sep + 1 : end;
+  }
+
+  if (emitted) { emit_op(p, OP_STYLE_FLUSH, 0); return 1; }
+  return 0;
+}
+
+static void flush_lit(program_t *p, const char *lit, const char *end) {
+  if (end <= lit) return;
+  uint32_t off = add_literal(p, lit, end - lit);
+  emit_op(p, OP_EMIT_LIT, off);
+}
+
+static const char *scan_tag(program_t *p, const char *ptr, const char **lit) {
+  flush_lit(p, *lit, ptr);
+
+  const char *start = ptr + 1;
+  int closing = 0;
+  if (*start == '/') { closing = 1; start++; }
+
+  if (closing && *start == '>') {
+    emit_op(p, OP_STYLE_RESET, 0);
+    *lit = start + 1;
+    return *lit;
+  }
+
+  const char *end = start;
+  while (*end && *end != '>') end++;
+
+  if (*end == '>' && compile_tag(p, start, (int)(end - start), closing)) {
+    *lit = end + 1;
+    return *lit;
+  }
+
+  uint32_t off = add_literal(p, "<", 1);
+  emit_op(p, OP_EMIT_LIT, off);
+  *lit = ptr + 1;
+  return *lit;
+}
+
+typedef enum {
+  ARG_NONE = 0,
+  ARG_INT,
+  ARG_LONG,
+  ARG_LLONG,
+  ARG_SIZE,
+  ARG_DOUBLE,
+  ARG_CSTR,
+  ARG_PTR,
+  ARG_WINT,
+  ARG_WSTR,
+} arg_class_t;
+
+static arg_class_t classify_arg(const char *spec, int len) {
+  char conv = spec[len - 1];
+  if (conv == '%' || conv == 'n') return ARG_NONE;
+  if (conv == 's')               return ARG_CSTR;
+  if (conv == 'p')               return ARG_PTR;
+  if (conv == 'f' || conv == 'F' || conv == 'e' || conv == 'E' ||
+      conv == 'g' || conv == 'G' || conv == 'a' || conv == 'A')
+    return ARG_DOUBLE;
+
+  const char *p = spec + 1;
+  while (*p == '-' || *p == '+' || *p == ' ' || *p == '#' || *p == '0') p++;
+  if (*p == '*') p++; else while (*p >= '0' && *p <= '9') p++;
+  if (*p == '.') { p++; if (*p == '*') p++; else while (*p >= '0' && *p <= '9') p++; }
+
+  if (p[0] == 'z')                return ARG_SIZE;
+  if (p[0] == 'l' && p[1] == 'l') return ARG_LLONG;
+  if (p[0] == 'l' && conv == 'c') return ARG_WINT;
+  if (p[0] == 'l' && conv == 's') return ARG_WSTR;
+  if (p[0] == 'l')                return ARG_LONG;
+  if (p[0] == 'j')                return ARG_LLONG;
+
+  return ARG_INT;
+}
+
+static const char *scan_fmt(program_t *p, const char *ptr, const char **lit) {
+  flush_lit(p, *lit, ptr);
+
+  const char *fs = ptr + 1;
+  while (*fs=='-'||*fs=='+'||*fs==' '||*fs=='#'||*fs=='0') fs++;
+  if (*fs == '*') fs++; else while (*fs >= '0' && *fs <= '9') fs++;
+  if (*fs == '.') { fs++; if (*fs == '*') fs++; else while (*fs >= '0' && *fs <= '9') fs++; }
+  while (*fs=='h'||*fs=='l'||*fs=='L'||*fs=='z'||*fs=='j'||*fs=='t') fs++;
+  if (*fs) fs++;
+
+  uint32_t off = add_literal(p, ptr, fs - ptr);
+  arg_class_t cls = classify_arg(ptr, (int)(fs - ptr));
+  emit_op(p, OP_EMIT_FMT, off | ((uint32_t)cls << 28));
+  *lit = fs;
+  return fs;
+}
+
+static const char *scan_percent_escape(program_t *p, const char *ptr, const char **lit) {
+  flush_lit(p, *lit, ptr);
+  uint32_t off = add_literal(p, "%%", 2);
+  emit_op(p, OP_EMIT_LIT, off);
+  *lit = ptr + 2;
+  return *lit;
+}
+
+program_t *cprintf_compile(const char *fmt) {
+  program_t *p = program_new();
+  const char *ptr = fmt;
+  const char *lit = ptr;
+
+  while (*ptr) {
+    if (*ptr == '<')
+      ptr = scan_tag(p, ptr, &lit);
+    else if (*ptr == '%' && ptr[1] && ptr[1] != '%')
+      ptr = scan_fmt(p, ptr, &lit);
+    else if (*ptr == '%' && ptr[1] == '%')
+      ptr = scan_percent_escape(p, ptr, &lit);
+    else ptr++;
+  }
+
+  flush_lit(p, lit, ptr);
+  emit_op(p, OP_HALT, 0);
+  return p;
+}
+
+static size_t visible_len(const char *s, size_t n) {
+  size_t vis = 0;
+  for (size_t i = 0; i < n; i++) {
+    if (s[i] == '\x1b') while (++i < n && !isalpha(s[i]));
+    else vis++;
+  }
+  return vis;
+}
+
+int cprintf_vm_exec(program_t *prog, FILE *stream, va_list ap) {
+  vm_regs_t regs = {0};
+
+  size_t cap = 512, pos = 0;
+  char *out = malloc(cap);
+  if (!out) return -1;
+
+  #define ENSURE(n) ({ \
+    while (pos + (n) + 1 > cap) { \
+      cap *= 2; out = realloc(out, cap); \
+      if (!out) return -1; \
+    }})
+  
+  #define OUT_STR(s, l) ({ ENSURE(l); memcpy(out+pos, s, l); pos += (l); })
+  #define OUT_CSTR(s) ({ size_t _l = strlen(s); OUT_STR(s, _l); })
+
+  const instruction_t *ip = prog->code;
+  static const void *dispatch[OP_MAX] = {
+    [OP_NOP]         = &&op_nop,
+    [OP_EMIT_LIT]    = &&op_emit_lit,
+    [OP_EMIT_FMT]    = &&op_emit_fmt,
+    [OP_SET_FG]      = &&op_set_fg,
+    [OP_SET_BG]      = &&op_set_bg,
+    [OP_SET_FG_RGB]  = &&op_set_fg_rgb,
+    [OP_SET_BG_RGB]  = &&op_set_bg_rgb,
+    [OP_SET_BOLD]    = &&op_set_bold,
+    [OP_SET_DIM]     = &&op_set_dim,
+    [OP_SET_UL]      = &&op_set_ul,
+    [OP_STYLE_FLUSH] = &&op_style_flush,
+    [OP_STYLE_RESET] = &&op_style_reset,
+    [OP_PAD_BEGIN]   = &&op_pad_begin,
+    [OP_RPAD_BEGIN]  = &&op_rpad_begin,
+    [OP_PAD_END]     = &&op_pad_end,
+    [OP_HALT]        = &&op_halt,
+  };
+
+  #define DISPATCH() goto *dispatch[ip->op]
+  #define NEXT()     do { ip++; DISPATCH(); } while(0)
+
+  DISPATCH();
+
+  op_nop: NEXT();
+
+  op_emit_lit: {
+    OUT_CSTR(prog->literals + ip->operand);
+    NEXT();
+  }
+
+  op_emit_fmt: {
+    uint32_t lit_off = ip->operand & 0x0FFFFFFF;
+    arg_class_t cls  = (arg_class_t)(ip->operand >> 28);
+    const char *spec = prog->literals + lit_off;
+    
+    char tmp[256];
+    va_list ap_copy;
+    va_copy(ap_copy, ap);
+    
+    #pragma GCC diagnostic push
+    #pragma GCC diagnostic ignored "-Wformat-nonliteral"
+    int n = vsnprintf(tmp, sizeof(tmp), spec, ap_copy);
+    va_end(ap_copy);
+    
+    if (n > 0 && (size_t)n < sizeof(tmp)) {
+      OUT_STR(tmp, (size_t)n);
+    } else if (n > 0) {
+      ENSURE((size_t)n);
+      va_copy(ap_copy, ap);
+      vsnprintf(out + pos, (size_t)n + 1, spec, ap_copy);
+      va_end(ap_copy);
+      pos += (size_t)n;
+    }
+    #pragma GCC diagnostic pop
+    
+    switch (cls) {
+      case ARG_INT:    (void)va_arg(ap, int); break;
+      case ARG_LONG:   (void)va_arg(ap, long); break;
+      case ARG_LLONG:  (void)va_arg(ap, long long); break;
+      case ARG_SIZE:   (void)va_arg(ap, size_t); break;
+      case ARG_DOUBLE: (void)va_arg(ap, double); break;
+      case ARG_CSTR:   (void)va_arg(ap, const char *); break;
+      case ARG_PTR:    (void)va_arg(ap, void *); break;
+      case ARG_WINT:   (void)va_arg(ap, wint_t); break;
+      case ARG_WSTR:   (void)va_arg(ap, wchar_t *); break;
+      case ARG_NONE:   break;
+    }
+    NEXT();
+  }
+
+  op_set_fg: { 
+    regs.fg = ip->operand;
+    NEXT(); 
+  }
+  
+  op_set_bg: { 
+    regs.bg = ip->operand;
+    NEXT(); 
+  }
+  
+  op_set_bold: { 
+    regs.bold = ip->operand;
+    NEXT(); 
+  }
+  
+  op_set_dim: { 
+    regs.dim = ip->operand;
+    NEXT(); 
+  }
+  
+  op_set_ul: { 
+    regs.ul = ip->operand;
+    NEXT(); 
+  }
+  
+  op_set_fg_rgb: { 
+    regs.fg = COL_RGB;
+    regs.fg_rgb = ip->operand; 
+    NEXT(); 
+  }
+  
+  op_set_bg_rgb: { 
+    regs.bg = COL_RGB;
+    regs.bg_rgb = ip->operand;
+    NEXT();
+  }
+  
+  op_style_reset: {
+    regs.fg = COL_NONE; regs.bg = COL_NONE;
+    regs.fg_rgb = 0; regs.bg_rgb = 0;
+    regs.bold = 0; regs.dim = 0; regs.ul = 0;
+    if (!io_no_color) { OUT_CSTR("\x1b[0m"); }
+    NEXT();
+  }
+  
+  op_pad_begin: {
+    if (regs.pad_depth < 8) regs.pad_stack[regs.pad_depth++] 
+      = (pad_entry_t){ pos, (int)ip->operand, 0 };
+    NEXT();
+  }
+ 
+  op_rpad_begin: {
+    if (regs.pad_depth < 8) regs.pad_stack[regs.pad_depth++] 
+      = (pad_entry_t){ pos, (int)ip->operand, 1 };
+    NEXT();
+  }
+
+  op_style_flush: {
+    if (!io_no_color) {
+      char esc[128];
+      int n = snprintf(esc, sizeof(esc), "\x1b[0m");
+      if (regs.bold) n += snprintf(esc+n, sizeof(esc)-n, "\x1b[1m");
+      if (regs.dim)  n += snprintf(esc+n, sizeof(esc)-n, "\x1b[2m");
+      if (regs.ul)   n += snprintf(esc+n, sizeof(esc)-n, "\x1b[4m");
+      if (regs.fg == COL_RGB)
+        n += snprintf(esc+n, sizeof(esc)-n, "\x1b[38;2;%d;%d;%dm",
+          UNPACK_R(regs.fg_rgb), UNPACK_G(regs.fg_rgb), UNPACK_B(regs.fg_rgb));
+      else if (regs.fg)
+        n += snprintf(esc+n, sizeof(esc)-n, "\x1b[%dm", regs.fg);
+      if (regs.bg == COL_RGB)
+        n += snprintf(esc+n, sizeof(esc)-n, "\x1b[48;2;%d;%d;%dm",
+          UNPACK_R(regs.bg_rgb), UNPACK_G(regs.bg_rgb), UNPACK_B(regs.bg_rgb));
+      else if (regs.bg)
+        n += snprintf(esc+n, sizeof(esc)-n, "\x1b[%dm", regs.bg + 10);
+      OUT_STR(esc, (size_t)n);
+    }
+    NEXT();
+  }
+
+  op_pad_end: {
+    if (regs.pad_depth <= 0) NEXT();
+    regs.pad_depth--;
+    pad_entry_t pe = regs.pad_stack[regs.pad_depth];
+    size_t vis = visible_len(out + pe.mark, pos - pe.mark);
+    if ((size_t)pe.width <= vis) NEXT();
+  
+    size_t pad_n = pe.width - vis;
+    ENSURE(pad_n);
+    if (pe.right_align) {
+      memmove(out + pe.mark + pad_n, out + pe.mark, pos - pe.mark);
+      memset(out + pe.mark, ' ', pad_n);
+    } else memset(out + pos, ' ', pad_n);
+    
+    pos += pad_n;
+    NEXT();
+  }
+  
+  op_halt: {
+    out[pos] = '\0';
+    int ret = (int)fwrite(out, 1, pos, stream);
+    free(out); return ret;
+  }
+
+  #undef ENSURE
+  #undef OUT_STR
+  #undef OUT_CSTR
+}
+
+int cprintf_exec(program_t *prog, FILE *stream, ...) {
+  va_list ap; va_start(ap, stream);
+  int ret = cprintf_vm_exec(prog, stream, ap);
+  
+  va_end(ap);
+  return ret;
+}
+
+int csprintf_inner(program_t *prog, char *buf, size_t size, ...) {
+  FILE *f = fmemopen(buf, size, "w");
+  if (!f) return -1;
+  
+  va_list ap; va_start(ap, size);
+  int ret = cprintf_vm_exec(prog, f, ap);
+  
+  va_end(ap); fclose(f);
+  return ret;
+}
