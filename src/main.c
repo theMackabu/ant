@@ -289,10 +289,10 @@ int main(int argc, char *argv[]) {
   if (help->count > 0) {
     cprintf("<bold_red>Ant</> is a tiny JavaScript runtime and package manager (%s)\n\n", ANT_VERSION);
     cprintf("<bold>Usage: ant <cyan>[...options]</cyan> <yellow>[module.js]\n</>");
-    printf("%s       ant <command> %s[...args]%s\n\n", C_BOLD, C_CYAN, C_RESET);
+    cprintf("<bold>       ant <command> <cyan>[...args]</>\n\n");
     print_subcommands();
     printf("If no module file is specified, ant starts in REPL mode.\n\n");
-    printf("%sOptions:%s\n", C_BOLD, C_RESET);
+    printf("<bold>Options:</>\n");
     printf("  %-28s %s\n", "--verbose", "enable verbose output");
     printf("  %-28s %s\n", "--no-color", "disable colored output");
     arg_print_glossary(stdout, argtable, "  %-28s %s\n");
