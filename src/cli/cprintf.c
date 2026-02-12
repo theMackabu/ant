@@ -15,6 +15,8 @@
  *   <#RRGGBB> or <#RGB> for arbitrary 24-bit foreground colors
  *   <pad=N> ... </pad>  - right-pad contents to N visible columns
  *   <rpad=N> ... </rpad> - left-pad (right-align) contents to N visible columns
+ *   <let name=style1+style2+...> - define a named style variable
+ *   <$name> to apply a previously defined style variable
  *   </tagname> or </> to reset
  *
  */
@@ -40,6 +42,7 @@ typedef enum {
   OP_SET_BOLD,
   OP_SET_DIM,
   OP_SET_UL,
+  OP_STYLE_PUSH,
   OP_STYLE_FLUSH,
   OP_STYLE_RESET,
   OP_PAD_BEGIN,
@@ -75,6 +78,16 @@ typedef struct {
   int width;
   int right_align;
 } pad_entry_t;
+
+typedef struct {
+  uint32_t fg;
+  uint32_t bg;
+  uint32_t fg_rgb;
+  uint32_t bg_rgb;
+  int bold;
+  int dim;
+  int ul;
+} style_entry_t;
   
 typedef struct {
   uint32_t fg;
@@ -86,9 +99,27 @@ typedef struct {
   int dim;
   int ul;
 
+  style_entry_t style_stack[8];
+  int style_depth;
+
   pad_entry_t pad_stack[8];
   int pad_depth;
 } vm_regs_t;
+
+#define MAX_VARS 16
+#define MAX_VAR_NAME 32
+#define MAX_VAR_VALUE 128
+
+typedef struct {
+  char name[MAX_VAR_NAME];
+  char value[MAX_VAR_VALUE];
+  int nlen; int vlen;
+} cprintf_var_t;
+
+typedef struct {
+  cprintf_var_t vars[MAX_VARS];
+  int count;
+} var_table_t;
 
 struct program_t {
   instruction_t *code;
@@ -260,15 +291,77 @@ static const char *next_seg(const char *cur, const char *end, int *out_len) {
   return sep;
 }
 
-static int compile_tag(program_t *p, const char *tag, int len, int closing) {
+static int match_plus_seg(program_t *p, const char *seg, int slen) {
+  if (match_attr(p, seg, slen))      return 1;
+  if (match_fg(p, seg, slen))        return 1;
+  if (match_bg(p, seg, slen))        return 1;
+  if (slen > 0 && seg[0] == '#')     return compile_hex_fg(p, seg, slen);
+  if (tag_prefix(seg, slen, "bg_#")) return compile_hex_bg(p, seg + 3, slen - 3);
+  if (tag_prefix(seg, slen, "bg_"))  return match_seg_bg(p, seg + 3, slen - 3);
+  return 0;
+}
+
+static int compile_plus_segs(program_t *p, const char *s, int len) {
+  const char *seg = s;
+  const char *end = s + len;
+  int emitted = 0;
+
+  while (seg < end) {
+    const char *next = seg;
+    while (next < end && *next != '+') next++;
+    int slen = (int)(next - seg);
+    if (!match_plus_seg(p, seg, slen)) return 0;
+    emitted++;  seg = (next < end) ? next + 1 : end;
+  }
+
+  return emitted;
+}
+
+static int compile_let(var_table_t *vars, const char *tag, int len) {
+  const char *eq = memchr(tag + 4, '=', len - 4);
+  if (!eq) return 0;
+
+  int nlen = (int)(eq - (tag + 4));
+  int vlen = (int)((tag + len) - (eq + 1));
+  if (nlen <= 0 || nlen >= MAX_VAR_NAME || vlen <= 0 || vlen >= MAX_VAR_VALUE) return 0;
+  if (vars->count >= MAX_VARS) return 0;
+
+  cprintf_var_t *v = &vars->vars[vars->count++];
+  memcpy(v->name, tag + 4, nlen);
+  v->name[nlen] = '\0'; v->nlen = nlen;
+  
+  memcpy(v->value, eq + 1, vlen);
+  v->value[vlen] = '\0'; v->vlen = vlen;
+  return 1;
+}
+
+static int compile_var_ref(program_t *p, var_table_t *vars, const char *tag, int len) {
+  int nlen = len - 1;
+  for (int i = 0; i < vars->count; i++) {
+    if (nlen == vars->vars[i].nlen && memcmp(tag + 1, vars->vars[i].name, nlen) == 0) {
+      emit_op(p, OP_STYLE_PUSH, 0);
+      if (!compile_plus_segs(p, vars->vars[i].value, vars->vars[i].vlen)) return 0;
+      emit_op(p, OP_STYLE_FLUSH, 0);
+      return 1;
+    }
+  }
+  return 0;
+}
+
+static int compile_tag(program_t *p, const char *tag, int len, int closing, var_table_t *vars) {
   if (closing) {
     if (tag_eq(tag, len, "pad") || tag_eq(tag, len, "rpad")) emit_op(p, OP_PAD_END, 0);
     else emit_op(p, OP_STYLE_RESET, 0);
     return 1;
   }
 
+  if (tag_prefix(tag, len, "let ")) return compile_let(vars, tag, len);
+  if (tag[0] == '$' && len > 1)     return compile_var_ref(p, vars, tag, len);
+
   if (tag_prefix(tag, len, "pad="))  { emit_op(p, OP_PAD_BEGIN,  (uint32_t)atoi(tag + 4)); return 1; }
   if (tag_prefix(tag, len, "rpad=")) { emit_op(p, OP_RPAD_BEGIN, (uint32_t)atoi(tag + 5)); return 1; }
+
+  emit_op(p, OP_STYLE_PUSH, 0);
 
   if (match_attr(p, tag, len)) { emit_op(p, OP_STYLE_FLUSH, 0); return 1; }
   if (match_fg(p, tag, len))   { emit_op(p, OP_STYLE_FLUSH, 0); return 1; }
@@ -313,7 +406,7 @@ static void flush_lit(program_t *p, const char *lit, const char *end) {
   emit_op(p, OP_EMIT_LIT, off);
 }
 
-static const char *scan_tag(program_t *p, const char *ptr, const char **lit) {
+static const char *scan_tag(program_t *p, const char *ptr, const char **lit, var_table_t *vars) {
   flush_lit(p, *lit, ptr);
 
   const char *start = ptr + 1;
@@ -329,7 +422,7 @@ static const char *scan_tag(program_t *p, const char *ptr, const char **lit) {
   const char *end = start;
   while (*end && *end != '>') end++;
 
-  if (*end == '>' && compile_tag(p, start, (int)(end - start), closing)) {
+  if (*end == '>' && compile_tag(p, start, (int)(end - start), closing, vars)) {
     *lit = end + 1;
     return *lit;
   }
@@ -404,12 +497,13 @@ static const char *scan_percent_escape(program_t *p, const char *ptr, const char
 
 program_t *cprintf_compile(const char *fmt) {
   program_t *p = program_new();
+  var_table_t vars = {0};
   const char *ptr = fmt;
   const char *lit = ptr;
 
   while (*ptr) {
     if (*ptr == '<')
-      ptr = scan_tag(p, ptr, &lit);
+      ptr = scan_tag(p, ptr, &lit, &vars);
     else if (*ptr == '%' && ptr[1] && ptr[1] != '%')
       ptr = scan_fmt(p, ptr, &lit);
     else if (*ptr == '%' && ptr[1] == '%')
@@ -459,6 +553,7 @@ int cprintf_vm_exec(program_t *prog, FILE *stream, va_list ap) {
     [OP_SET_BOLD]    = &&op_set_bold,
     [OP_SET_DIM]     = &&op_set_dim,
     [OP_SET_UL]      = &&op_set_ul,
+    [OP_STYLE_PUSH]  = &&op_style_push,
     [OP_STYLE_FLUSH] = &&op_style_flush,
     [OP_STYLE_RESET] = &&op_style_reset,
     [OP_PAD_BEGIN]   = &&op_pad_begin,
@@ -556,11 +651,10 @@ int cprintf_vm_exec(program_t *prog, FILE *stream, va_list ap) {
     NEXT();
   }
   
-  op_style_reset: {
-    regs.fg = COL_NONE; regs.bg = COL_NONE;
-    regs.fg_rgb = 0; regs.bg_rgb = 0;
-    regs.bold = 0; regs.dim = 0; regs.ul = 0;
-    if (!io_no_color) { OUT_CSTR("\x1b[0m"); }
+  op_style_push: {
+    if (regs.style_depth < 8) regs.style_stack[regs.style_depth++] = (style_entry_t){
+      regs.fg, regs.bg, regs.fg_rgb, regs.bg_rgb, regs.bold, regs.dim, regs.ul,
+    };
     NEXT();
   }
   
@@ -569,13 +663,65 @@ int cprintf_vm_exec(program_t *prog, FILE *stream, va_list ap) {
       = (pad_entry_t){ pos, (int)ip->operand, 0 };
     NEXT();
   }
- 
+  
   op_rpad_begin: {
     if (regs.pad_depth < 8) regs.pad_stack[regs.pad_depth++] 
       = (pad_entry_t){ pos, (int)ip->operand, 1 };
     NEXT();
   }
+  
+  op_pad_end: {
+    if (regs.pad_depth <= 0) NEXT();
+    regs.pad_depth--;
+    pad_entry_t pe = regs.pad_stack[regs.pad_depth];
+    size_t vis = visible_len(out + pe.mark, pos - pe.mark);
+    if ((size_t)pe.width <= vis) NEXT();
+  
+    size_t pad_n = pe.width - vis;
+    ENSURE(pad_n);
+    if (pe.right_align) {
+      memmove(out + pe.mark + pad_n, out + pe.mark, pos - pe.mark);
+      memset(out + pe.mark, ' ', pad_n);
+    } else memset(out + pos, ' ', pad_n);
+    
+    pos += pad_n;
+    NEXT();
+  }
 
+  op_style_reset: {
+    if (regs.style_depth > 0) {
+      style_entry_t se = regs.style_stack[--regs.style_depth];
+      regs.fg = se.fg; regs.bg = se.bg;
+      regs.fg_rgb = se.fg_rgb; regs.bg_rgb = se.bg_rgb;
+      regs.bold = se.bold; regs.dim = se.dim; regs.ul = se.ul;
+    } else {
+      regs.fg = COL_NONE; regs.bg = COL_NONE;
+      regs.fg_rgb = 0; regs.bg_rgb = 0;
+      regs.bold = 0; regs.dim = 0; regs.ul = 0;
+    }
+    
+    if (!io_no_color) {
+      char esc[128];
+      int n = snprintf(esc, sizeof(esc), "\x1b[0m");
+      if (regs.bold) n += snprintf(esc+n, sizeof(esc)-n, "\x1b[1m");
+      if (regs.dim)  n += snprintf(esc+n, sizeof(esc)-n, "\x1b[2m");
+      if (regs.ul)   n += snprintf(esc+n, sizeof(esc)-n, "\x1b[4m");
+      if (regs.fg == COL_RGB)
+        n += snprintf(esc+n, sizeof(esc)-n, "\x1b[38;2;%d;%d;%dm",
+          UNPACK_R(regs.fg_rgb), UNPACK_G(regs.fg_rgb), UNPACK_B(regs.fg_rgb));
+      else if (regs.fg)
+        n += snprintf(esc+n, sizeof(esc)-n, "\x1b[%dm", regs.fg);
+      if (regs.bg == COL_RGB)
+        n += snprintf(esc+n, sizeof(esc)-n, "\x1b[48;2;%d;%d;%dm",
+          UNPACK_R(regs.bg_rgb), UNPACK_G(regs.bg_rgb), UNPACK_B(regs.bg_rgb));
+      else if (regs.bg)
+        n += snprintf(esc+n, sizeof(esc)-n, "\x1b[%dm", regs.bg + 10);
+      OUT_STR(esc, (size_t)n);
+    }
+    
+    NEXT();
+  }
+  
   op_style_flush: {
     if (!io_no_color) {
       char esc[128];
@@ -595,24 +741,6 @@ int cprintf_vm_exec(program_t *prog, FILE *stream, va_list ap) {
         n += snprintf(esc+n, sizeof(esc)-n, "\x1b[%dm", regs.bg + 10);
       OUT_STR(esc, (size_t)n);
     }
-    NEXT();
-  }
-
-  op_pad_end: {
-    if (regs.pad_depth <= 0) NEXT();
-    regs.pad_depth--;
-    pad_entry_t pe = regs.pad_stack[regs.pad_depth];
-    size_t vis = visible_len(out + pe.mark, pos - pe.mark);
-    if ((size_t)pe.width <= vis) NEXT();
-  
-    size_t pad_n = pe.width - vis;
-    ENSURE(pad_n);
-    if (pe.right_align) {
-      memmove(out + pe.mark + pad_n, out + pe.mark, pos - pe.mark);
-      memset(out + pe.mark, ' ', pad_n);
-    } else memset(out + pos, ' ', pad_n);
-    
-    pos += pad_n;
     NEXT();
   }
   
