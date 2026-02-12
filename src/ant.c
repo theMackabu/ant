@@ -181,8 +181,21 @@ typedef struct {
   uint64_t generation;
 } intern_prop_cache_entry_t;
 
+typedef struct {
+  const char *code_ptr;
+  jsoff_t code_off;
+  jsoff_t cached_key_off;
+  uint64_t generation;
+} dot_ic_entry_t;
+
 static uint64_t intern_prop_cache_gen = 1;
+static dot_ic_entry_t dot_ic_table[ANT_LIMIT_SIZE_CACHE];
 static intern_prop_cache_entry_t intern_prop_cache[ANT_LIMIT_SIZE_CACHE];
+
+static inline size_t dot_ic_slot(const char *code, jsoff_t off) {
+  uint64_t h = (uintptr_t)code ^ (off * 0x9E3779B97F4A7C15ULL);
+  return (size_t)((h ^ (h >> 32)) & (ANT_LIMIT_SIZE_CACHE - 1));
+}
 
 typedef struct promise_handler {
   jsval_t onFulfilled;
@@ -6267,6 +6280,16 @@ static jsval_t do_bracket_op(struct js *js, jsval_t l, jsval_t r) {
 }
 
 static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
+  if (vtype(r) == T_CODEREF && is_special_object(l) && !is_proxy(js, l)) {
+    dot_ic_entry_t *ic = &dot_ic_table[dot_ic_slot(js->code, coderefoff(r))];
+    
+    if (
+      ic->generation == intern_prop_cache_gen
+      && ic->code_ptr == js->code
+      && ic->code_off == coderefoff(r)
+    ) return mkpropref((jsoff_t)vdata(l), ic->cached_key_off);
+  }
+
   const char *raw_ptr = (char *) &js->code[coderefoff(r)];
   size_t raw_len = codereflen(r);
   
@@ -6380,6 +6403,10 @@ static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
     return err;
   }
   
+  bool ic_eligible = !is_proxy(js, l);
+  jsoff_t ic_obj_off = (jsoff_t)vdata(l);
+  jsoff_t ic_key_off = 0;
+  
   if ((streq(ptr, plen, "callee", 6) || streq(ptr, plen, "caller", 6)) &&
       vtype(get_slot(js, l, SLOT_STRICT_ARGS)) != T_UNDEF) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "'%.*s' not allowed on strict arguments", (int)plen, ptr);
@@ -6394,8 +6421,11 @@ static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
     jsoff_t obj_off = (jsoff_t)vdata(l);
     descriptor_entry_t *desc = lookup_descriptor(js, obj_off, ptr, plen);
     if (desc) {
+      if (desc->has_getter || desc->has_setter) ic_eligible = false;
       jsval_t key = js_mkstr(js, ptr, plen);
-      return mkpropref(obj_off, (jsoff_t)vdata(key));
+      ic_key_off = (jsoff_t)vdata(key);
+      if (ic_eligible) goto ic_populate;
+      return mkpropref(obj_off, ic_key_off);
     }
     jsval_t result = try_dynamic_getter(js, l, ptr, plen);
     if (vtype(result) != T_UNDEF) {
@@ -6403,26 +6433,49 @@ static jsval_t do_dot_op(struct js *js, jsval_t l, jsval_t r) {
       if (own_off != 0) return mkval(T_PROP, own_off);
     }
     jsval_t key = js_mkstr(js, ptr, plen);
-    return mkpropref((jsoff_t)vdata(l), (jsoff_t)vdata(key));
+    ic_key_off = (jsoff_t)vdata(key);
+    if (ic_eligible) goto ic_populate;
+    return mkpropref((jsoff_t)vdata(l), ic_key_off);
   }
   
-  jsoff_t own_off = lkp(js, l, ptr, plen);
-  if (own_off != 0) {
-    jsval_t key = js_mkstr(js, ptr, plen);
-    return mkpropref((jsoff_t)vdata(l), (jsoff_t)vdata(key));
-  }
-  
-  jsval_t result = try_dynamic_getter(js, l, ptr, plen);
-  if (vtype(result) != T_UNDEF) {
-    own_off = lkp(js, l, ptr, plen);
+  {
+    jsoff_t own_off = lkp(js, l, ptr, plen);
     if (own_off != 0) {
+      if (ic_eligible) {
+        descriptor_entry_t *desc = lookup_descriptor(js, ic_obj_off, ptr, plen);
+        if (desc && (desc->has_getter || desc->has_setter)) ic_eligible = false;
+      }
       jsval_t key = js_mkstr(js, ptr, plen);
-      return mkpropref((jsoff_t)vdata(l), (jsoff_t)vdata(key));
+      ic_key_off = (jsoff_t)vdata(key);
+      if (ic_eligible) goto ic_populate;
+      return mkpropref((jsoff_t)vdata(l), ic_key_off);
     }
+    
+    jsval_t result = try_dynamic_getter(js, l, ptr, plen);
+    if (vtype(result) != T_UNDEF) {
+      own_off = lkp(js, l, ptr, plen);
+      if (own_off != 0) {
+        jsval_t key = js_mkstr(js, ptr, plen);
+        ic_key_off = (jsoff_t)vdata(key);
+        if (ic_eligible) goto ic_populate;
+        return mkpropref((jsoff_t)vdata(l), ic_key_off);
+      }
+    }
+
+    jsval_t key = js_mkstr(js, ptr, plen);
+    ic_key_off = (jsoff_t)vdata(key);
+    if (ic_eligible) goto ic_populate;
+    return mkpropref((jsoff_t)vdata(l), ic_key_off);
   }
 
-  jsval_t key = js_mkstr(js, ptr, plen);
-  return mkpropref((jsoff_t)vdata(l), (jsoff_t)vdata(key));
+ic_populate: {
+    dot_ic_entry_t *ic = &dot_ic_table[dot_ic_slot(js->code, coderefoff(r))];
+    ic->code_ptr = js->code;
+    ic->code_off = coderefoff(r);
+    ic->generation = intern_prop_cache_gen;
+    ic->cached_key_off = ic_key_off;
+    return mkpropref(ic_obj_off, ic_key_off);
+  }
 }
 
 static jsval_t do_optional_chain_op(struct js *js, jsval_t l, jsval_t r) {
