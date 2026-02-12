@@ -1425,3 +1425,93 @@ int pkg_cmd_cache(int argc, char **argv) {
     return EXIT_FAILURE;
   }
 }
+
+int pkg_cmd_create(int argc, char **argv) {
+  if (argc < 2) {
+    printf("Usage: ant create <template> [dest] [...flags]\n");
+    printf("       ant create <github-org/repo> [dest] [...flags]\n\n");
+    printf("Scaffold a new project from a template.\n\n");
+    printf("Templates:\n");
+    printf("  NPM:    Runs 'ant x create-<template>' with given arguments\n");
+    printf("  GitHub: Clones repository contents as template\n\n");
+    printf("Environment variables:\n");
+    printf("  GITHUB_TOKEN    Supply a token for private repos or higher rate limits\n");
+    return EXIT_SUCCESS;
+  }
+
+  const char *template = argv[1];
+  bool is_github = (strchr(template, '/') != NULL);
+
+  if (is_github) {
+    const char *dest = NULL;
+    
+    for (int i = 2; i < argc; i++) {
+      if (argv[i][0] != '-') { dest = argv[i]; break; }
+    }
+
+    if (!dest) {
+      const char *slash = strrchr(template, '/');
+      dest = slash ? slash + 1 : template;
+    }
+
+    struct stat st;
+    if (stat(dest, &st) == 0) {
+      fprintf(stderr, "Error: directory '%s' already exists\n", dest);
+      return EXIT_FAILURE;
+    }
+
+    char url[1024];
+    if (strncmp(template, "https://", 8) == 0 || strncmp(template, "git@", 4) == 0) {
+      snprintf(url, sizeof(url), "%s", template);
+    } else snprintf(url, sizeof(url), "https://github.com/%s.git", template);
+
+    printf("%s+%s Creating project from %s%s%s...\n", C_GREEN, C_RESET, C_BOLD, template, C_RESET);
+
+    char cmd[2048];
+    snprintf(cmd, sizeof(cmd), "git clone --depth 1 %s %s", url, dest);
+    int ret = system(cmd);
+    if (ret != 0) {
+      fprintf(stderr, "Error: failed to clone %s\n", url);
+      return EXIT_FAILURE;
+    }
+
+    char git_dir[1024];
+    snprintf(git_dir, sizeof(git_dir), "%s/.git", dest);
+    
+    char rm_cmd[1024];
+    snprintf(rm_cmd, sizeof(rm_cmd), "rm -rf %s", git_dir);
+    system(rm_cmd);
+
+    if (stat(dest, &st) == 0) {
+      char pkg_json[1024];
+      snprintf(pkg_json, sizeof(pkg_json), "%s/package.json", dest);
+      if (stat(pkg_json, &st) == 0) {
+        printf("\n%sDone!%s Created %s%s%s\n", C_GREEN, C_RESET, C_BOLD, dest, C_RESET);
+        printf("\n  cd %s\n  ant install\n\n", dest);
+      } else printf("\n%sDone!%s Created %s%s%s\n", C_GREEN, C_RESET, C_BOLD, dest, C_RESET);
+    }
+
+    return EXIT_SUCCESS;
+  }
+
+  char create_pkg[512];
+  snprintf(create_pkg, sizeof(create_pkg), "create-%s", template);
+
+  int new_argc = argc;
+  char **new_argv = malloc(sizeof(char*) * (new_argc + 1));
+  if (!new_argv) {
+    fprintf(stderr, "Error: out of memory\n");
+    return EXIT_FAILURE;
+  }
+
+  new_argv[0] = argv[0];
+  new_argv[1] = create_pkg;
+  
+  for (int i = 2; i < argc; i++) new_argv[i] = argv[i];
+  new_argv[new_argc] = NULL;
+
+  int ret = pkg_cmd_exec(new_argc, new_argv);
+  free(new_argv);
+  
+  return ret;
+}

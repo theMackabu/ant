@@ -72,6 +72,7 @@ static const subcommand_t subcommands[] = {
   {"info",    NULL,      "Show package information from registry", pkg_cmd_info},
   {"ls",      "list",    "List installed packages",                pkg_cmd_ls},
   {"cache",   NULL,      "Manage the package cache",               pkg_cmd_cache},
+  {"create",  NULL,      "Scaffold a project from a template",     pkg_cmd_create},
   {NULL, NULL, NULL, NULL}
 };
 
