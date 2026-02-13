@@ -25,6 +25,7 @@
  *   quoted values: {let label='hello'} or <let label="world"/> - quotes are stripped from value
  *   <$name> to apply a variable as a style, {name} to emit its value as literal text
  *   {~name} for lowercase, {^name} for uppercase
+ *   {~'string'} for lowercase literal, {^'string'} for uppercase literal
  *   </tagname> or </> to reset (pops one level)
  *   <reset/> to reset all styles (clears entire stack)
  *   << and >> to emit literal < and >
@@ -724,6 +725,23 @@ static const char *scan_var_brace(program_t *p, const char *ptr, const char **li
   if (*name == '~') { lower = 1; name++; }
   else if (*name == '^') { upper = 1; name++; }
   int nlen = (int)(end - name);
+
+  if (*name == '\'' || *name == '"') {
+    const char *s = name + 1;
+    const char *e = memchr(s, *name, end - s);
+    if (!e) goto emit_brace;
+
+    int slen = (int)(e - s);
+    if (slen > 0 && slen < MAX_VAR_VALUE) {
+      char buf[MAX_VAR_VALUE];
+      if (lower || upper) { transform_case(buf, s, slen, lower); s = buf; }
+      uint32_t off = add_literal(p, s, slen);
+      emit_op(p, OP_EMIT_LIT, off);
+    }
+
+    *lit = end + 1;
+    return *lit;
+  }
 
   for (int i = 0; i < vars->count; i++) {
     cprintf_var_t *v = &vars->vars[i];
