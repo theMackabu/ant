@@ -542,18 +542,23 @@ static size_t visible_len(const char *s, size_t n) {
   return vis;
 }
 
-int cprintf_vm_exec(program_t *prog, FILE *stream, va_list ap) {
+typedef struct {
+  char *data;
+  size_t len;
+} vm_output_t;
+
+static vm_output_t cprintf_vm_run(program_t *prog, va_list ap) {
   vm_regs_t regs = {0};
 
   size_t cap = 512, pos = 0;
   char *out = malloc(cap);
-  if (!out) return -1;
+  if (!out) return (vm_output_t){ NULL, 0 };
 
   #define ENSURE(n) ({ \
-    while (pos + (n) + 1 > cap) { \
-      cap *= 2; out = realloc(out, cap); \
-      if (!out) return -1; \
-    }})
+  while (pos + (n) + 1 > cap) { \
+    cap *= 2; out = realloc(out, cap); \
+    if (!out) return (vm_output_t){ NULL, 0 }; \
+  }})
   
   #define OUT_STR(s, l) ({ ENSURE(l); memcpy(out+pos, s, l); pos += (l); })
   #define OUT_CSTR(s) ({ size_t _l = strlen(s); OUT_STR(s, _l); })
@@ -782,8 +787,7 @@ int cprintf_vm_exec(program_t *prog, FILE *stream, va_list ap) {
   
   op_halt: {
     out[pos] = '\0';
-    int ret = (int)fwrite(out, 1, pos, stream);
-    free(out); return ret;
+    return (vm_output_t){ out, pos };
   }
 
   #undef ENSURE
@@ -793,19 +797,24 @@ int cprintf_vm_exec(program_t *prog, FILE *stream, va_list ap) {
 
 int cprintf_exec(program_t *prog, FILE *stream, ...) {
   va_list ap; va_start(ap, stream);
-  int ret = cprintf_vm_exec(prog, stream, ap);
+  vm_output_t o = cprintf_vm_run(prog, ap);
+  va_end(ap); if (!o.data) return -1;
+
+  int ret = (int)fwrite(o.data, 1, o.len, stream);
+  free(o.data);
   
-  va_end(ap);
   return ret;
 }
 
 int csprintf_inner(program_t *prog, char *buf, size_t size, ...) {
-  FILE *f = fmemopen(buf, size, "w");
-  if (!f) return -1;
-  
   va_list ap; va_start(ap, size);
-  int ret = cprintf_vm_exec(prog, f, ap);
+  vm_output_t o = cprintf_vm_run(prog, ap);
+  va_end(ap); if (!o.data) return -1;
+
+  size_t copy = (o.len < size) ? o.len : size - 1;
+  memcpy(buf, o.data, copy);
+  buf[copy] = '\0';
+  free(o.data);
   
-  va_end(ap); fclose(f);
-  return ret;
+  return (int)o.len;
 }

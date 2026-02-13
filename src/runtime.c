@@ -6,6 +6,7 @@
 #include <runtime.h>
 #include <arena.h>
 #include <uthash.h>
+#include <argtable3.h>
 
 typedef struct {
   const char *ptr;

@@ -2,7 +2,7 @@
 #define RUNTIME_H
 
 #include "types.h"
-#include <argtable3.h>
+struct arg_file;
 
 #define ANT_RUNTIME_CRYPTO_INIT (1u << 0)
 #define CODE_ARENA_BLOCK_SIZE   (64 * 1024)

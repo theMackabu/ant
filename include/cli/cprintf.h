@@ -3,9 +3,9 @@
 
 #include <stdio.h>
 #include <stddef.h>
+#include <stdbool.h>
 
 extern bool io_no_color;
-
 typedef struct program_t program_t;
 
 program_t *cprintf_compile(const char *fmt);

@@ -34,7 +34,6 @@ HEADERS=(
   "utils.h:$INCLUDE_DIR/utils.h"
   "runtime.h:$INCLUDE_DIR/runtime.h"
   "esm/remote.h:$INCLUDE_DIR/esm/remote.h"
-  "argtable3.h:$VENDOR_DIR/argtable-v3.3.0.116da6c/src/argtable3.h"
 )
 
 for f in "$INCLUDE_DIR"/modules/*.h; do
@@ -111,7 +110,7 @@ for entry in "${HEADERS[@]}"; do
       continue
     fi
     
-    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\<(config|common|uv|argtable3|types|utarray|uthash|minicoro)\.h\> ]]; then
+    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\<(config|common|uv|types|utarray|uthash|minicoro)\.h\> ]]; then
       continue
     fi
     
