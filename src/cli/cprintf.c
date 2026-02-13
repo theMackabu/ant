@@ -48,6 +48,7 @@ typedef enum {
   OP_PAD_BEGIN,
   OP_RPAD_BEGIN,
   OP_PAD_END,
+  OP_EMIT_SPACES,
   OP_HALT,
   OP_MAX
 } opcode_t;
@@ -360,6 +361,11 @@ static int compile_tag(program_t *p, const char *tag, int len, int closing, var_
 
   if (tag_prefix(tag, len, "pad="))  { emit_op(p, OP_PAD_BEGIN,  (uint32_t)atoi(tag + 4)); return 1; }
   if (tag_prefix(tag, len, "rpad=")) { emit_op(p, OP_RPAD_BEGIN, (uint32_t)atoi(tag + 5)); return 1; }
+  
+  if (tag_prefix(tag, len, "space=") && tag[len-1] == '/') {
+    emit_op(p, OP_EMIT_SPACES, (uint32_t)atoi(tag + 6));
+    return 1;
+  }
 
   emit_op(p, OP_STYLE_PUSH, 0);
 
@@ -559,6 +565,7 @@ int cprintf_vm_exec(program_t *prog, FILE *stream, va_list ap) {
     [OP_PAD_BEGIN]   = &&op_pad_begin,
     [OP_RPAD_BEGIN]  = &&op_rpad_begin,
     [OP_PAD_END]     = &&op_pad_end,
+    [OP_EMIT_SPACES] = &&op_emit_spaces,
     [OP_HALT]        = &&op_halt,
   };
 
@@ -685,6 +692,14 @@ int cprintf_vm_exec(program_t *prog, FILE *stream, va_list ap) {
     } else memset(out + pos, ' ', pad_n);
     
     pos += pad_n;
+    NEXT();
+  }
+  
+  op_emit_spaces: {
+    size_t n = (size_t)ip->operand;
+    ENSURE(n);
+    memset(out + pos, ' ', n);
+    pos += n;
     NEXT();
   }
 

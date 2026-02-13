@@ -20,6 +20,8 @@
 #include "internal.h"
 
 #include "cli/pkg.h"
+#include "cli/misc.h"
+#include "cli/version.h"
 #include "cli/cprintf.h"
 
 #include "modules/builtin.h"
@@ -267,35 +269,37 @@ int main(int argc, char *argv[]) {
   argc = filtered_argc;
   argv = filtered_argv;
 
-  struct arg_lit *help = arg_lit0("h", "help", "display this help and exit");
-  struct arg_lit *version = arg_lit0("v", "version", "display version information and exit");
-  struct arg_lit *version_raw = arg_lit0(NULL, "version-raw", "raw version number for scripts");
   struct arg_str *eval = arg_str0("e", "eval", "<script>", "evaluate script");
   struct arg_lit *print = arg_lit0("p", "print", "evaluate script and print result");
-  struct arg_int *initial_mem = arg_int0(NULL, "initial-mem", "<size>", "initial memory size in KB (default: 16kb)");
-  struct arg_int *max_mem = arg_int0(NULL, "max-mem", "<size>", "maximum memory size in MB (default: 1024mb)");
+    
+  struct arg_file *file = arg_file0(NULL, NULL, NULL, NULL);
   struct arg_file *localstorage_file = arg_file0(NULL, "localstorage-file", "<path>", "file path for localStorage persistence");
-  struct arg_file *file = arg_file0(NULL, NULL, "<module.js>", "JavaScript module file to execute");
+  
+  struct arg_lit *version = arg_lit0("v", "version", "display version information and exit");
+  struct arg_lit *version_raw = arg_lit0(NULL, "version-raw", "raw version number for scripts");
+  
+  struct arg_lit *help = arg_lit0("h", "help", "display this help and exit");
   struct arg_end *end = arg_end(20);
   
   void *argtable[] = {
-    help, version, version_raw,
-    eval, print, initial_mem, max_mem,
-    localstorage_file, file, end
+    eval, print, 
+    localstorage_file, file,
+    version, version_raw,
+    help, end
   };
 
   int nerrors = arg_parse(argc, argv, argtable);
   
   if (help->count > 0) {
     cprintf("<bold_red>Ant</> is a tiny JavaScript runtime and package manager (%s)\n\n", ANT_VERSION);
-    cprintf("<bold>Usage: ant <cyan>[...options]</cyan> <yellow>[module.js]\n</>");
-    cprintf("<bold>       ant <command> <cyan>[...args]</>\n\n");
-    print_subcommands();
+    cprintf("<bold>Usage: ant <yellow>[module.js]</yellow> <cyan>[...flags]\n</>");
+    cprintf("<bold><space=7/>ant <command><space=3/><cyan>[...args]</>\n\n");
     printf("If no module file is specified, ant starts in REPL mode.\n\n");
-    printf("<bold>Options:</>\n");
-    printf("  %-28s %s\n", "--verbose", "enable verbose output");
-    printf("  %-28s %s\n", "--no-color", "disable colored output");
-    arg_print_glossary(stdout, argtable, "  %-28s %s\n");
+    print_subcommands();
+    cprintf("<bold>Flags:</>\n");
+    print_flags_help(stdout, argtable);
+    print_flag(stdout, (flag_help_t){ .l = "verbose",  .g = "enable verbose output" });
+    print_flag(stdout, (flag_help_t){ .l = "no-color", .g = "disable colored output" });
     arg_freetable(argtable, ARGTABLE_COUNT);
     free(filtered_argv);
     return EXIT_SUCCESS;
@@ -326,19 +330,14 @@ int main(int argc, char *argv[]) {
     ? NULL 
     : (file->count > 0 ? file->filename[0] : NULL);
   
-  struct js *js = js_create_dynamic(
-    initial_mem->count > 0 ? (size_t)initial_mem->ival[0] * 1024 : 0,
-    max_mem->count > 0 ? (size_t)max_mem->ival[0] * 1024 * 1024 : 0
-  );
+  ant_t *js;
+  volatile char stack_base;
   
-  if (js == NULL) {
-    fprintf(stderr, "Error: Failed to allocate JavaScript runtime\n");
-    arg_freetable(argtable, ARGTABLE_COUNT);
-    free(filtered_argv);
+  if (!(js = js_create_dynamic())) {
+    cfprintf(stderr, "<bold_red>FATAL</>: Failed to allocate for Ant.\n");
+    arg_freetable(argtable, ARGTABLE_COUNT); free(filtered_argv);
     return EXIT_FAILURE;
   }
-
-  volatile char stack_base;
   
   js_setstackbase(js, (void *)&stack_base);
   ant_runtime_init(js, argc, argv, localstorage_file);

@@ -36,6 +36,8 @@ lib_sources = files(
   'src/snapshot.c',
   'src/esm/remote.c',
   'src/cli/pkg.c',
+  'src/cli/misc.c',
+  'src/cli/version.c',
   'src/cli/cprintf.c',
 ) + files(module_files)
 

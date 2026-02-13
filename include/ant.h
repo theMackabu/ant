@@ -38,7 +38,7 @@
 #define JS_DESC_C (1 << 2)
 
 ant_t *js_create(void *buf, size_t len);
-ant_t *js_create_dynamic(size_t initial_size, size_t max_size);
+ant_t *js_create_dynamic();
 
 jsval_t js_glob(ant_t *);
 jsval_t js_mkscope(ant_t *);

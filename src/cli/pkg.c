@@ -1,7 +1,6 @@
 #include <compat.h> // IWYU pragma: keep
 
 #include <pkg.h>
-#include <cli/pkg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,6 +10,9 @@
 #include <time.h>
 #include <argtable3.h>
 #include <yyjson.h>
+
+#include "cli/pkg.h"
+#include "cli/version.h"
 
 #include "utils.h"
 #include "config.h"

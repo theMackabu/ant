@@ -22870,21 +22870,18 @@ ant_t *js_create(void *buf, size_t len) {
   return js;
 }
 
-struct js *js_create_dynamic(size_t initial_size, size_t max_size) {
-  if (initial_size < sizeof(struct js) + esize(T_OBJ)) initial_size = ANT_ARENA_MIN;
-  if (max_size == 0 || max_size < initial_size) max_size = ANT_ARENA_MAX;
-  
-  void *init_buf = ant_calloc(initial_size);
+struct js *js_create_dynamic() {
+  void *init_buf = ant_calloc(ANT_ARENA_MIN);
   if (init_buf == NULL) return NULL;
   
-  struct js *js = js_create(init_buf, initial_size);
+  struct js *js = js_create(init_buf, ANT_ARENA_MIN);
   if (js == NULL) { free(init_buf); return NULL; }
   
-  uint8_t *arena = (uint8_t *)ant_arena_reserve(max_size);
+  uint8_t *arena = (uint8_t *)ant_arena_reserve(ANT_ARENA_MAX);
   if (arena == NULL) { free(init_buf); return NULL; }
   
   if (ant_arena_commit(arena, 0, js->size) != 0) {
-    ant_arena_free(arena, max_size);
+    ant_arena_free(arena, ANT_ARENA_MAX);
     free(init_buf); return NULL;
   }
   
@@ -22892,11 +22889,11 @@ struct js *js_create_dynamic(size_t initial_size, size_t max_size) {
   js->mem = arena;
   
   js->owns_mem = true;
-  js->max_size = (jsoff_t) max_size;
+  js->max_size = (jsoff_t) ANT_ARENA_MAX;
   
   struct js *new_js = (struct js *)malloc(sizeof(struct js));
   if (new_js == NULL) {
-    ant_arena_free(arena, max_size);
+    ant_arena_free(arena, ANT_ARENA_MAX);
     free(init_buf);
     return NULL;
   }

@@ -25,7 +25,7 @@ static void print_header(int num, const char *title) {
 }
 
 static struct js *create_js_runtime(void *stack_base) {
-  struct js *js = js_create_dynamic(0, 0);
+  struct js *js = js_create_dynamic();
   if (!js) {
     fprintf(stderr, "Failed to create JS runtime\n");
     return NULL;
