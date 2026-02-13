@@ -1,9 +1,9 @@
 #include "utils.h"
-#include "cli/crprintf.h"
 
 #include <stdio.h>
 #include <stdbool.h>
 #include <sys/stat.h>
+#include <crprintf.h>
 
 static const char *const js_extensions[] = {
   ".js", ".ts", 

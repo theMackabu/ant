@@ -85,6 +85,7 @@ yyjson_dep = subproject('yyjson').get_variable('yyjson_dep')
 uuidv7_dep = subproject('uuidv7').get_variable('uuidv7_dep')
 argtable3_dep = subproject('argtable3').get_variable('argtable3_dep')
 minicoro_dep = subproject('minicoro').get_variable('minicoro_dep')
+crprintf_dep = subproject('crprintf').get_variable('crprintf_dep')
 
 lmdb_dep = subproject('lmdb', default_options: [
   'warning_level=0',
@@ -174,7 +175,7 @@ pkg_zig_dir = src_root / 'src' / 'pkg'
 pkg_build_dir = meson.current_build_dir()
 
 ant_deps = [
-  libffi_dep, uuid_dep,
+  libffi_dep, uuid_dep, crprintf_dep,
   llhttp, pcre2_dep, libuv_dep,
   argtable3_dep, tlsuv_dep, libsodium_dep,
   yyjson_dep, minicoro_dep, uuidv7_dep,

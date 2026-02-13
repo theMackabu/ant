@@ -1,8 +1,8 @@
+#include "cli/misc.h"
+
 #include <stdio.h>
 #include <argtable3.h>
-
-#include "cli/misc.h"
-#include "cli/crprintf.h"
+#include <crprintf.h>
 
 void print_flag(FILE *fp, flag_help_t f) {
   const char *s = f.s, *l = f.l, *d = f.d, *g = f.g;

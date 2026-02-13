@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <argtable3.h>
+#include <crprintf.h>
 
 #include "ant.h"
 #include "config.h"
@@ -22,7 +23,6 @@
 #include "cli/pkg.h"
 #include "cli/misc.h"
 #include "cli/version.h"
-#include "cli/crprintf.h"
 
 #include "modules/builtin.h"
 #include "modules/buffer.h"
@@ -83,8 +83,8 @@ static const subcommand_t subcommands[] = {
 static void parse_ant_debug(const char *flag) {
   if (strncmp(flag, "dump-crprintf=", 14) == 0) {
     const char *mode = flag + 14;
-    if (strcmp(mode, "bytecode") == 0 || strcmp(mode, "all") == 0) crprintf_debug = true;
-    if (strcmp(mode, "hex") == 0      || strcmp(mode, "all") == 0) crprintf_debug_hex = true;
+    if (strcmp(mode, "bytecode") == 0 || strcmp(mode, "all") == 0) crprintf_set_debug(true);
+    if (strcmp(mode, "hex") == 0      || strcmp(mode, "all") == 0) crprintf_set_debug_hex(true);
   }
   
   else crfprintf(stderr, "{warn}: <bold>Unknown ANT_DEBUG flag: \"%s\"</>\n", flag);
@@ -261,7 +261,7 @@ int main(int argc, char *argv[]) {
   char **filtered_argv = try_oom(sizeof(char*) * argc);
   for (int i = 0; i < argc; i++) {
     if (strcmp(argv[i], "--verbose") == 0) pkg_verbose = true;
-    else if (strcmp(argv[i], "--no-color") == 0) io_no_color = true;
+    else if (strcmp(argv[i], "--no-color") == 0) { crprintf_set_color(false); io_no_color = true; }
     else if (strncmp(argv[i], "--ANT_DEBUG:", 12) == 0) parse_ant_debug(argv[i] + 12);
     else filtered_argv[filtered_argc++] = argv[i];
   }
