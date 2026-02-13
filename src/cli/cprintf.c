@@ -21,7 +21,10 @@
  *   <space=N/> - emit N spaces
  *   <gap=N/> - emit N spaces (alias for space)
  *   <let name=style1+style2+...> or <let name=style1, name2=style2...> - define a named style variable
- *   <$name> to apply a previously defined style variable
+ *   {let name=style1+style2+...} or {let name=style1, name2=style2...} - alternative syntax
+ *   quoted values: {let label='hello'} or <let label="world"/> - quotes are stripped from value
+ *   <$name> to apply a variable as a style, {name} to emit its value as literal text
+ *   {~name} for lowercase, {^name} for uppercase
  *   </tagname> or </> to reset (pops one level)
  *   <reset/> to reset all styles (clears entire stack)
  *   << and >> to emit literal < and >
@@ -349,6 +352,34 @@ static int compile_let(var_table_t *vars, const char *body, int len) {
 
     const char *vstart = eq + 1;
     const char *vend = vstart;
+
+    if (vstart < end && (*vstart == '\'' || *vstart == '"')) {
+      char quote = *vstart;
+      vstart++;
+      vend = vstart;
+      
+      while (vend < end && *vend != quote) vend++;
+      if (vend >= end) return 0;
+      const char *after = vend + 1;
+      
+      while (after < end && (*after == ' ' || *after == ',')) after++;
+      int vlen = (int)(vend - vstart);
+      
+      if (nlen <= 0 || nlen >= MAX_VAR_NAME || vlen < 0 || vlen >= MAX_VAR_VALUE) return 0;
+      if (vars->count >= MAX_VARS) return 0;
+
+      cprintf_var_t *v = &vars->vars[vars->count++];
+      memcpy(v->name, p, nlen);
+      
+      v->name[nlen] = '\0'; v->nlen = nlen;
+      memcpy(v->value, vstart, vlen);
+      
+      v->value[vlen] = '\0'; v->vlen = vlen;
+      p = after;
+      
+      continue;
+    }
+
     while (vend < end && *vend != ',') vend++;
 
     int vlen = (int)(vend - vstart);
@@ -573,6 +604,69 @@ static const char *scan_escape(
   return *lit;
 }
 
+static void transform_case(char *dst, const char *src, int len, int lower) {
+  for (int i = 0; i < len; i++) dst[i] = (char)(lower 
+    ? tolower((unsigned char)src[i]) 
+    : toupper((unsigned char)src[i])
+  );
+}
+
+static const char *scan_var_brace(program_t *p, const char *ptr, const char **lit, var_table_t *vars) {
+  flush_lit(p, *lit, ptr);
+
+  const char *name = ptr + 1;
+  const char *end = name;
+  while (*end && *end != '}') end++;
+
+  if (*end != '}') goto emit_brace;
+
+  int lower = 0, upper = 0;
+  if (*name == '~') { lower = 1; name++; }
+  else if (*name == '^') { upper = 1; name++; }
+  int nlen = (int)(end - name);
+
+  for (int i = 0; i < vars->count; i++) {
+    cprintf_var_t *v = &vars->vars[i];
+    if (nlen != v->nlen || memcmp(name, v->name, nlen) != 0) continue;
+
+    const char *val = v->value;
+    int vlen = v->vlen;
+    char buf[MAX_VAR_VALUE];
+    if (lower || upper) {
+      transform_case(buf, val, vlen, lower);
+      val = buf;
+    }
+    uint32_t off = add_literal(p, val, vlen);
+    emit_op(p, OP_EMIT_LIT, off);
+    *lit = end + 1;
+    return *lit;
+  }
+
+emit_brace:;
+  uint32_t off = add_literal(p, "{", 1);
+  emit_op(p, OP_EMIT_LIT, off);
+  *lit = ptr + 1;
+  return *lit;
+}
+
+static const char *scan_let_brace(program_t *p, const char *ptr, const char **lit, var_table_t *vars) {
+  flush_lit(p, *lit, ptr);
+
+  const char *body = ptr + 5;
+  const char *end = body;
+  while (*end && *end != '}') end++;
+
+  if (*end == '}' && compile_let(vars, body, (int)(end - body))) {
+    *lit = end + 1;
+    return *lit;
+  }
+
+  uint32_t off = add_literal(p, "{", 1);
+  emit_op(p, OP_EMIT_LIT, off);
+  *lit = ptr + 1;
+  return *lit;
+}
+
 program_t *cprintf_compile(const char *fmt) {
   program_t *p = program_new();
   var_table_t vars = {0};
@@ -580,11 +674,13 @@ program_t *cprintf_compile(const char *fmt) {
   const char *lit = ptr;
 
   while (*ptr) {
-    if      (*ptr == '<' && ptr[1] == '<')             ptr = scan_escape(p, ptr, &lit, "<", 1);
-    else if (*ptr == '>' && ptr[1] == '>')             ptr = scan_escape(p, ptr, &lit, ">", 1);
-    else if (*ptr == '%' && ptr[1] == '%')             ptr = scan_escape(p, ptr, &lit, "%%", 2);
-    else if (*ptr == '<')                              ptr = scan_tag(p, ptr, &lit, &vars);
-    else if (*ptr == '%' && ptr[1] && ptr[1] != '%')   ptr = scan_fmt(p, ptr, &lit);
+    if      (*ptr == '<' && ptr[1] == '<')                ptr = scan_escape(p, ptr, &lit, "<", 1);
+    else if (*ptr == '>' && ptr[1] == '>')                ptr = scan_escape(p, ptr, &lit, ">", 1);
+    else if (*ptr == '%' && ptr[1] == '%')                ptr = scan_escape(p, ptr, &lit, "%%", 2);
+    else if (*ptr == '{' && memcmp(ptr, "{let ", 5) == 0) ptr = scan_let_brace(p, ptr, &lit, &vars);
+    else if (*ptr == '{')                                 ptr = scan_var_brace(p, ptr, &lit, &vars);
+    else if (*ptr == '<')                                 ptr = scan_tag(p, ptr, &lit, &vars);
+    else if (*ptr == '%' && ptr[1] && ptr[1] != '%')      ptr = scan_fmt(p, ptr, &lit);
     else ptr++;
   }
 
