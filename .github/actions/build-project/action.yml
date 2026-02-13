@@ -111,6 +111,7 @@ runs:
 
         MESON_ARGS="-Db_lto=true --buildtype=release"
         MESON_ARGS="$MESON_ARGS -Dbuild_timestamp=${{ inputs.build_timestamp }}"
+        MESON_ARGS="$MESON_ARGS -Ddeps_prefix_cmake=$DEPS_PREFIX"
 
         if [[ "${{ inputs.tls_library }}" == "mbedtls" ]]; then
           MESON_ARGS="$MESON_ARGS -Dtls_library=mbedtls"
