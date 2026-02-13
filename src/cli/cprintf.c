@@ -34,6 +34,9 @@
 #include <stdint.h>
 #include <wchar.h>
 
+bool cprintf_debug = false;
+bool cprintf_debug_hex = false;
+
 typedef enum {
   OP_NOP = 0,
   OP_EMIT_LIT,
@@ -817,4 +820,194 @@ int csprintf_inner(program_t *prog, char *buf, size_t size, ...) {
   free(o.data);
   
   return (int)o.len;
+}
+
+static const char *op_names[OP_MAX] = {
+  [OP_NOP]             = "NOP",
+  [OP_EMIT_LIT]        = "EMIT_LIT",
+  [OP_EMIT_FMT]        = "EMIT_FMT",
+  [OP_SET_FG]          = "SET_FG",
+  [OP_SET_BG]          = "SET_BG",
+  [OP_SET_FG_RGB]      = "SET_FG_RGB",
+  [OP_SET_BG_RGB]      = "SET_BG_RGB",
+  [OP_SET_BOLD]        = "SET_BOLD",
+  [OP_SET_DIM]         = "SET_DIM",
+  [OP_SET_UL]          = "SET_UL",
+  [OP_STYLE_PUSH]      = "STYLE_PUSH",
+  [OP_STYLE_FLUSH]     = "STYLE_FLUSH",
+  [OP_STYLE_RESET]     = "STYLE_RESET",
+  [OP_STYLE_RESET_ALL] = "STYLE_RESET_ALL",
+  [OP_PAD_BEGIN]       = "PAD_BEGIN",
+  [OP_RPAD_BEGIN]      = "RPAD_BEGIN",
+  [OP_PAD_END]         = "PAD_END",
+  [OP_EMIT_SPACES]     = "EMIT_SPACES",
+  [OP_HALT]            = "HALT",
+};
+
+static const char *color_name(uint32_t col) {
+switch (col) {
+  case COL_BLACK:          return "black";
+  case COL_RED:            return "red";
+  case COL_GREEN:          return "green";
+  case COL_YELLOW:         return "yellow";
+  case COL_BLUE:           return "blue";
+  case COL_MAGENTA:        return "magenta";
+  case COL_CYAN:           return "cyan";
+  case COL_WHITE:          return "white";
+  case COL_GRAY:           return "gray";
+  case COL_BRIGHT_RED:     return "bright_red";
+  case COL_BRIGHT_GREEN:   return "bright_green";
+  case COL_BRIGHT_YELLOW:  return "bright_yellow";
+  case COL_BRIGHT_BLUE:    return "bright_blue";
+  case COL_BRIGHT_MAGENTA: return "bright_magenta";
+  case COL_BRIGHT_CYAN:    return "bright_cyan";
+  case COL_BRIGHT_WHITE:   return "bright_white";
+  default:                 return "?";
+}}
+
+static const char *arg_class_name(arg_class_t cls) {
+switch (cls) {
+  case ARG_NONE:   return "none";
+  case ARG_INT:    return "int";
+  case ARG_LONG:   return "long";
+  case ARG_LLONG:  return "llong";
+  case ARG_SIZE:   return "size_t";
+  case ARG_DOUBLE: return "double";
+  case ARG_CSTR:   return "char*";
+  case ARG_PTR:    return "void*";
+  case ARG_WINT:   return "wint_t";
+  case ARG_WSTR:   return "wchar_t*";
+  default:         return "?";
+}}
+
+static void fprint_escaped(FILE *out, const char *s, int max_chars) {
+  for (int c = 0; *s && (max_chars < 0 || c < max_chars); s++, c++) {
+    if      (*s == '\n')  fprintf(out, "\\n");
+    else if (*s == '\t')  fprintf(out, "\\t");
+    else if (*s == '"')   fprintf(out, "\\\"");
+    else if (*s < 0x20)   fprintf(out, "\\x%02x", (unsigned char)*s);
+    else                  fputc(*s, out);
+  }
+  if (max_chars >= 0 && *s) fprintf(out, "...");
+}
+
+static void fprint_quoted(FILE *out, const char *s, int max_chars) {
+  fputc('"', out);
+  fprint_escaped(out, s, max_chars);
+  fputc('"', out);
+}
+
+static void fprint_operand(FILE *out, program_t *prog, instruction_t *ins, bool compact) {
+  switch (ins->op) {
+    case OP_EMIT_LIT: {
+      const char *s = prog->literals + ins->operand;
+      fprint_quoted(out, s, compact ? 24 : -1);
+      break;
+    }
+
+    case OP_EMIT_FMT: {
+      uint32_t    lit_off = ins->operand & 0x0FFFFFFF;
+      arg_class_t cls     = (arg_class_t)(ins->operand >> 28);
+      const char *s = prog->literals + lit_off;
+      fprint_quoted(out, s, compact ? 24 : -1);
+      fprintf(out, " (%s)", arg_class_name(cls));
+      break;
+    }
+
+    case OP_SET_FG:
+    case OP_SET_BG:
+      if (compact) fprintf(out, "%s", color_name(ins->operand));
+      else fprintf(out, "%s (ANSI %u)", color_name(ins->operand), ins->operand);
+      break;
+
+    case OP_SET_FG_RGB:
+    case OP_SET_BG_RGB:
+      fprintf(out, "#%02x%02x%02x",
+        UNPACK_R(ins->operand), UNPACK_G(ins->operand), UNPACK_B(ins->operand));
+      break;
+
+    case OP_SET_BOLD:
+    case OP_SET_DIM:
+    case OP_SET_UL:
+      fprintf(out, "%s", ins->operand ? "ON" : "OFF");
+      break;
+
+    case OP_PAD_BEGIN:
+    case OP_RPAD_BEGIN:
+      fprintf(out, "width=%u", ins->operand);
+      break;
+
+    case OP_EMIT_SPACES:
+      fprintf(out, "%u", ins->operand);
+      break;
+
+    case OP_NOP:
+    case OP_STYLE_PUSH:
+    case OP_STYLE_FLUSH:
+    case OP_STYLE_RESET:
+    case OP_STYLE_RESET_ALL:
+    case OP_PAD_END:
+    case OP_HALT:
+      break;
+
+    default:
+      if (compact) {
+        if (ins->operand) fprintf(out, "0x%x", ins->operand);
+      } else fprintf(out, "0x%08x", ins->operand);
+      break;
+  }
+}
+
+void cprintf_disasm(program_t *prog, FILE *out) {
+  fprintf(out, "; cprintf bytecode — %zu instructions, %zu bytes literal pool\n", prog->code_len, prog->lit_len);
+  fprintf(out, "; %-4s  %-16s %s\n", "addr", "opcode", "operand");
+  fprintf(out, "; ----  ---------------- -------\n");
+
+  for (size_t i = 0; i < prog->code_len; i++) {
+    instruction_t *ins = &prog->code[i];
+    const char *name = (ins->op < OP_MAX) ? op_names[ins->op] : "???";
+
+    fprintf(out, "  %04zu  %-16s ", i, name);
+    fprint_operand(out, prog, ins, false);
+    fputc('\n', out);
+  }
+}
+
+void cprintf_hexdump(program_t *prog, FILE *out) {
+  fprintf(out, "; cprintf hex dump — %zu instructions, %zu bytes literal pool\n", prog->code_len, prog->lit_len);
+  fprintf(out, "; %-4s  %-26s %s\n", "addr", "bytes", "decoded");
+  fprintf(out, "; ----  -------------------------  --------\n");
+
+  for (size_t i = 0; i < prog->code_len; i++) {
+    instruction_t *ins = &prog->code[i];
+    const uint8_t *raw = (const uint8_t *)ins;
+    const char *name = (ins->op < OP_MAX) ? op_names[ins->op] : "???";
+
+    fprintf(out, "  %04zu  ", i);
+    for (size_t b = 0; b < sizeof(instruction_t); b++) fprintf(out, "%02x ", raw[b]);
+
+    fprintf(out, " ; %s ", name);
+    fprint_operand(out, prog, ins, true);
+    fputc('\n', out);
+  }
+
+  if (prog->lit_len > 0) {
+    fprintf(out, "\n; literal pool (%zu bytes):\n", prog->lit_len);
+    const uint8_t *lit = (const uint8_t *)prog->literals;
+    for (size_t off = 0; off < prog->lit_len; off += 16) {
+      fprintf(out, "  %04zx  ", off);
+
+      size_t end = off + 16;
+      if (end > prog->lit_len) end = prog->lit_len;
+      for (size_t b = off; b < off + 16; b++) {
+        if (b < end) fprintf(out, "%02x ", lit[b]);
+        else         fprintf(out, "   ");
+        if (b == off + 7) fputc(' ', out);
+      }
+
+      fprintf(out, " |");
+      for (size_t b = off; b < end; b++) fputc((lit[b] >= 0x20 && lit[b] < 0x7f) ? lit[b] : '.', out);
+      fprintf(out, "|\n");
+    }
+  }
 }
