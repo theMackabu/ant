@@ -13,6 +13,7 @@
  *   <bg_red> <bg_green> ... <bg_#RGB> <bg_#RRGGBB>
  *   <bold> <dim> <ul> (underline)
  *   <bold_red> <dim_cyan> etc - combine styles with underscores
+ *   <bold+red> <dim+cyan+bg_blue> etc - combine styles with +
  *   <#RRGGBB> or <#RGB> for arbitrary 24-bit foreground colors
  *   <pad=N> ... </pad>  - right-pad contents to N visible columns
  *   <br/> - emit a newline, <br=N/> - emit N newlines
@@ -367,15 +368,29 @@ static int compile_let(var_table_t *vars, const char *body, int len) {
 }
 
 static int compile_var_ref(program_t *p, var_table_t *vars, const char *tag, int len) {
+  const char *name = tag + 1;
   int nlen = len - 1;
+
+  const char *plus = memchr(name, '+', nlen);
+  int var_nlen = plus ? (int)(plus - name) : nlen;
+
   for (int i = 0; i < vars->count; i++) {
-    if (nlen == vars->vars[i].nlen && memcmp(tag + 1, vars->vars[i].name, nlen) == 0) {
-      emit_op(p, OP_STYLE_PUSH, 0);
-      if (!compile_plus_segs(p, vars->vars[i].value, vars->vars[i].vlen)) return 0;
-      emit_op(p, OP_STYLE_FLUSH, 0);
-      return 1;
+    cprintf_var_t *v = &vars->vars[i];
+    if (var_nlen != v->nlen || memcmp(name, v->name, var_nlen) != 0) continue;
+    
+    emit_op(p, OP_STYLE_PUSH, 0);
+    if (!compile_plus_segs(p, v->value, v->vlen)) return 0;
+
+    if (plus) {
+      const char *rest = plus + 1;
+      int rlen = nlen - var_nlen - 1;
+      if (rlen > 0 && !compile_plus_segs(p, rest, rlen)) return 0;
     }
+
+    emit_op(p, OP_STYLE_FLUSH, 0);
+    return 1;
   }
+
   return 0;
 }
 
@@ -431,6 +446,10 @@ static int compile_tag(program_t *p, const char *tag, int len, int closing, var_
   if (tag_prefix(tag, len, "bg_#")) {
     if (!compile_hex_bg(p, tag + 3, len - 3)) return 0;
     emit_op(p, OP_STYLE_FLUSH, 0); return 1;
+  }
+
+  if (memchr(tag, '+', len)) {
+    if (compile_plus_segs(p, tag, len)) { emit_op(p, OP_STYLE_FLUSH, 0); return 1; }
   }
 
   const char *seg = tag;

@@ -304,7 +304,7 @@ int main(int argc, char *argv[]) {
   if (help->count > 0) {
     cprintf(
       "<let h=bold, arg=cyan/>"
-      "<bold_red>Ant</> is a tiny JavaScript runtime and package manager (%s)<br=2/>"
+      "<$h+red>Ant</> is a tiny JavaScript runtime and package manager (%s)<br=2/>"
       "<$h>Usage: ant <yellow>[module.js]</yellow> <$arg>[...flags]</><reset/><br/>"
       "<$h><gap=7/>ant <<command>><gap=3/><$arg>[...args]</><reset/><br=2/>"
       "If no module file is specified, Ant starts in REPL mode.<br=2/>",
