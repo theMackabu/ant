@@ -292,9 +292,9 @@ int main(int argc, char *argv[]) {
   
   if (help->count > 0) {
     cprintf("<bold_red>Ant</> is a tiny JavaScript runtime and package manager (%s)\n\n", ANT_VERSION);
-    cprintf("<bold>Usage: ant <yellow>[module.js]</yellow> <cyan>[...flags]\n</>");
-    cprintf("<bold><space=7/>ant <command><space=3/><cyan>[...args]</>\n\n");
-    printf("If no module file is specified, ant starts in REPL mode.\n\n");
+    cprintf("<bold>Usage: ant <yellow>[module.js]</yellow> <cyan>[...flags]</><reset/>\n");
+    cprintf("<bold><space=7/>ant <<command>><space=3/><cyan>[...args]</><reset/>\n\n");
+    printf("If no module file is specified, Ant starts in REPL mode.\n\n");
     print_subcommands();
     cprintf("<bold>Flags:</>\n");
     print_flags_help(stdout, argtable);

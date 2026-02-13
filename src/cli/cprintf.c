@@ -17,7 +17,9 @@
  *   <rpad=N> ... </rpad> - left-pad (right-align) contents to N visible columns
  *   <let name=style1+style2+...> - define a named style variable
  *   <$name> to apply a previously defined style variable
- *   </tagname> or </> to reset
+ *   </tagname> or </> to reset (pops one level)
+ *   <reset/> to reset all styles (clears entire stack)
+ *   << and >> to emit literal < and >
  *
  */
 
@@ -45,6 +47,7 @@ typedef enum {
   OP_STYLE_PUSH,
   OP_STYLE_FLUSH,
   OP_STYLE_RESET,
+  OP_STYLE_RESET_ALL,
   OP_PAD_BEGIN,
   OP_RPAD_BEGIN,
   OP_PAD_END,
@@ -367,6 +370,11 @@ static int compile_tag(program_t *p, const char *tag, int len, int closing, var_
     return 1;
   }
 
+  if (tag_eq(tag, len, "reset/")) {
+    emit_op(p, OP_STYLE_RESET_ALL, 0);
+    return 1;
+  }
+
   emit_op(p, OP_STYLE_PUSH, 0);
 
   if (match_attr(p, tag, len)) { emit_op(p, OP_STYLE_FLUSH, 0); return 1; }
@@ -493,9 +501,12 @@ static const char *scan_fmt(program_t *p, const char *ptr, const char **lit) {
   return fs;
 }
 
-static const char *scan_percent_escape(program_t *p, const char *ptr, const char **lit) {
+static const char *scan_escape(
+  program_t *p, const char *ptr, 
+  const char **lit, const char *emit, size_t elen
+) {
   flush_lit(p, *lit, ptr);
-  uint32_t off = add_literal(p, "%%", 2);
+  uint32_t off = add_literal(p, emit, elen);
   emit_op(p, OP_EMIT_LIT, off);
   *lit = ptr + 2;
   return *lit;
@@ -508,12 +519,11 @@ program_t *cprintf_compile(const char *fmt) {
   const char *lit = ptr;
 
   while (*ptr) {
-    if (*ptr == '<')
-      ptr = scan_tag(p, ptr, &lit, &vars);
-    else if (*ptr == '%' && ptr[1] && ptr[1] != '%')
-      ptr = scan_fmt(p, ptr, &lit);
-    else if (*ptr == '%' && ptr[1] == '%')
-      ptr = scan_percent_escape(p, ptr, &lit);
+    if      (*ptr == '<' && ptr[1] == '<')             ptr = scan_escape(p, ptr, &lit, "<", 1);
+    else if (*ptr == '>' && ptr[1] == '>')             ptr = scan_escape(p, ptr, &lit, ">", 1);
+    else if (*ptr == '%' && ptr[1] == '%')             ptr = scan_escape(p, ptr, &lit, "%%", 2);
+    else if (*ptr == '<')                              ptr = scan_tag(p, ptr, &lit, &vars);
+    else if (*ptr == '%' && ptr[1] && ptr[1] != '%')   ptr = scan_fmt(p, ptr, &lit);
     else ptr++;
   }
 
@@ -561,8 +571,9 @@ int cprintf_vm_exec(program_t *prog, FILE *stream, va_list ap) {
     [OP_SET_UL]      = &&op_set_ul,
     [OP_STYLE_PUSH]  = &&op_style_push,
     [OP_STYLE_FLUSH] = &&op_style_flush,
-    [OP_STYLE_RESET] = &&op_style_reset,
-    [OP_PAD_BEGIN]   = &&op_pad_begin,
+    [OP_STYLE_RESET]     = &&op_style_reset,
+    [OP_STYLE_RESET_ALL] = &&op_style_reset_all,
+    [OP_PAD_BEGIN]       = &&op_pad_begin,
     [OP_RPAD_BEGIN]  = &&op_rpad_begin,
     [OP_PAD_END]     = &&op_pad_end,
     [OP_EMIT_SPACES] = &&op_emit_spaces,
@@ -737,6 +748,15 @@ int cprintf_vm_exec(program_t *prog, FILE *stream, va_list ap) {
     NEXT();
   }
   
+  op_style_reset_all: {
+    regs.fg = COL_NONE; regs.bg = COL_NONE;
+    regs.fg_rgb = 0; regs.bg_rgb = 0;
+    regs.bold = 0; regs.dim = 0; regs.ul = 0;
+    regs.style_depth = 0;
+    if (!io_no_color) { OUT_CSTR("\x1b[0m"); }
+    NEXT();
+  }
+
   op_style_flush: {
     if (!io_no_color) {
       char esc[128];
