@@ -1,4 +1,5 @@
 #include "utils.h"
+#include "cli/cprintf.h"
 
 #include <stdio.h>
 #include <stdbool.h>
@@ -88,7 +89,7 @@ char *resolve_js_file(const char *filename) {
 void *try_oom(size_t size) {
   void *p = malloc(size);
   if (!p) {
-    fputs("Error: out of memory\n", stderr);
+    cfprintf(stderr, "<bold+red>FATAL</>: Out of memory\n");
     exit(EXIT_FAILURE);
   } return p;
 }

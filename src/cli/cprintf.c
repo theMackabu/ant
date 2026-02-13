@@ -131,7 +131,7 @@ typedef struct {
 typedef struct {
   char name[MAX_VAR_NAME];
   char value[MAX_VAR_VALUE];
-  int nlen; int vlen;
+  int nlen; int vlen; int is_fmt;
 } cprintf_var_t;
 
 typedef struct {
@@ -375,8 +375,14 @@ static int compile_let(var_table_t *vars, const char *body, int len) {
       memcpy(v->value, vstart, vlen);
       
       v->value[vlen] = '\0'; v->vlen = vlen;
-      p = after;
+      v->is_fmt = 0;
       
+      for (int j = 0; j < vlen; j++) {
+        if (vstart[j] == '%' && j + 1 < vlen && vstart[j + 1] != '%') 
+        { v->is_fmt = 1; break; }
+      }
+      
+      p = after;
       continue;
     }
 
@@ -425,10 +431,43 @@ static int compile_var_ref(program_t *p, var_table_t *vars, const char *tag, int
   return 0;
 }
 
+static int match_attr_off(program_t *p, const char *s, int len) {
+  for (int i = 0; i < (int)ATTR_COUNT; i++) if (
+    len == attrs[i].nlen && memcmp(s, attrs[i].name, len) == 0) {
+    emit_op(p, attrs[i].op, 0); return 1;
+  }
+  return 0;
+}
+
+static int match_fg_off(program_t *p, const char *s, int len) {
+  for (int i = 0; i < (int)FG_COUNT; i++) if (
+    len == fg_colors[i].nlen && memcmp(s, fg_colors[i].name, len) == 0) {
+    emit_op(p, OP_SET_FG, COL_NONE); return 1;
+  }
+  if (len > 0 && s[0] == '#') { emit_op(p, OP_SET_FG, COL_NONE); return 1; }
+  return 0;
+}
+
+static int match_bg_off(program_t *p, const char *s, int len) {
+  for (int i = 0; i < (int)BG_COUNT; i++) if (
+    len == bg_colors[i].nlen && memcmp(s, bg_colors[i].name, len) == 0) {
+    emit_op(p, OP_SET_BG, COL_NONE); return 1;
+  }
+  if (tag_prefix(s, len, "bg_#")) { emit_op(p, OP_SET_BG, COL_NONE); return 1; }
+  return 0;
+}
+
 static int compile_tag(program_t *p, const char *tag, int len, int closing, var_table_t *vars) {
   if (closing) {
-    if (tag_eq(tag, len, "pad") || tag_eq(tag, len, "rpad")) emit_op(p, OP_PAD_END, 0);
-    else emit_op(p, OP_STYLE_RESET, 0);
+    if (tag_eq(tag, len, "pad") || tag_eq(tag, len, "rpad")) { 
+      emit_op(p, OP_PAD_END, 0); return 1; 
+    }
+    
+    if (match_attr_off(p, tag, len) || match_fg_off(p, tag, len) || match_bg_off(p, tag, len)) {
+      emit_op(p, OP_STYLE_FLUSH, 0); return 1;
+    }
+    
+    emit_op(p, OP_STYLE_RESET, 0);
     return 1;
   }
 
@@ -632,12 +671,21 @@ static const char *scan_var_brace(program_t *p, const char *ptr, const char **li
     const char *val = v->value;
     int vlen = v->vlen;
     char buf[MAX_VAR_VALUE];
+    
     if (lower || upper) {
       transform_case(buf, val, vlen, lower);
       val = buf;
     }
-    uint32_t off = add_literal(p, val, vlen);
-    emit_op(p, OP_EMIT_LIT, off);
+    
+    if (v->is_fmt) {
+      arg_class_t cls = classify_arg(val, vlen);
+      uint32_t off = add_literal(p, val, vlen);
+      emit_op(p, OP_EMIT_FMT, off | ((uint32_t)cls << 28));
+    } else {
+      uint32_t off = add_literal(p, val, vlen);
+      emit_op(p, OP_EMIT_LIT, off);
+    }
+    
     *lit = end + 1;
     return *lit;
   }
@@ -1009,6 +1057,7 @@ static const char *op_names[OP_MAX] = {
 
 static const char *color_name(uint32_t col) {
 switch (col) {
+  case COL_NONE:           return "none";
   case COL_BLACK:          return "black";
   case COL_RED:            return "red";
   case COL_GREEN:          return "green";
