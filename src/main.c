@@ -81,8 +81,8 @@ static const subcommand_t subcommands[] = {
 };
 
 static void parse_ant_debug(const char *flag) {
-  if (strncmp(flag, "dump-crprintf=", 13) == 0) {
-    const char *mode = flag + 13;
+  if (strncmp(flag, "dump-crprintf=", 14) == 0) {
+    const char *mode = flag + 14;
     if (strcmp(mode, "bytecode") == 0 || strcmp(mode, "all") == 0) crprintf_debug = true;
     if (strcmp(mode, "hex") == 0      || strcmp(mode, "all") == 0) crprintf_debug_hex = true;
   }
