@@ -89,7 +89,7 @@ char *resolve_js_file(const char *filename) {
 void *try_oom(size_t size) {
   void *p = malloc(size);
   if (!p) {
-    cfprintf(stderr, "<bold+red>FATAL</>: Out of memory\n");
+    cfprintf(stderr, "<bold+red>FATAL</bold>: Out of memory\n");
     exit(EXIT_FAILURE);
   } return p;
 }

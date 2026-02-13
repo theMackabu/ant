@@ -12,6 +12,7 @@ extern bool cprintf_debug_hex;
 typedef struct program_t program_t;
 program_t *cprintf_compile(const char *fmt);
 
+void cprintf_var(const char *name, const char *value);
 void cprintf_hexdump(program_t *prog, FILE *out);
 void cprintf_disasm(program_t *prog, FILE *out);
 

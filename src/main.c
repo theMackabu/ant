@@ -87,7 +87,7 @@ static void parse_ant_debug(const char *flag) {
     if (strcmp(mode, "hex") == 0      || strcmp(mode, "all") == 0) cprintf_debug_hex = true;
   }
   
-  else cfprintf(stderr, "<yellow>Warning</yellow>: <bold>Unknown ANT_DEBUG flag: \"%s\"</>\n", flag);
+  else cfprintf(stderr, "{warn}: <bold>Unknown ANT_DEBUG flag: \"%s\"</>\n", flag);
 }
 
 static const subcommand_t *find_subcommand(const char *name) {
@@ -187,7 +187,7 @@ static int execute_module(struct js *js, const char *filename) {
     buffer = esm_fetch_url(filename, &len, &error);
     
     if (!buffer) {
-      cfprintf(stderr, "<red>Error</red>: <bold>Could not fetch \"%s\"</>: %s\n", filename, error ? error : "unknown error");
+      cfprintf(stderr, "{error}: <bold>Could not fetch \"%s\"</>: %s\n", filename, error ? error : "unknown error");
       free(error); return EXIT_FAILURE;
     }
     
@@ -195,7 +195,7 @@ static int execute_module(struct js *js, const char *filename) {
   } else {
     buffer = read_file(filename, &len);
     if (!buffer) {
-      cfprintf(stderr, "<red>Error</red>: <bold>Module not found: \"%s\"</>\n", filename);
+      cfprintf(stderr, "{error}: <bold>Module not found: \"%s\"</>\n", filename);
       return EXIT_FAILURE;
     }
     
@@ -213,7 +213,7 @@ static int execute_module(struct js *js, const char *filename) {
   if (is_typescript_file(filename)) {
     int result = OXC_strip_types(buffer, filename, buffer, len + 1);
     if (result < 0) {
-      cfprintf(stderr, "<red>Error</red>: <bold>Type stripping failed (%d)</>\n", result);
+      cfprintf(stderr, "{error}: <bold>Type stripping failed (%d)</>\n", result);
       free(buffer);
       return EXIT_FAILURE;
     }
@@ -243,6 +243,11 @@ int main(int argc, char *argv[]) {
   const char *binary_name = strrchr(argv[0], '/');
   binary_name = binary_name ? binary_name + 1 : argv[0];
   
+  cprintf_var("version", ANT_VERSION);
+  cprintf_var("fatal", "<bold+red>FATAL</bold>");
+  cprintf_var("error", "<red>Error</red>");
+  cprintf_var("warn", "<yellow>Warning</yellow>");
+
   if (strcmp(binary_name, "antx") == 0) {
     char **exec_argv = try_oom(sizeof(char*) * (argc + 2));
     exec_argv[0] = argv[0]; exec_argv[1] = "x";
@@ -302,12 +307,11 @@ int main(int argc, char *argv[]) {
   
   if (help->count > 0) {
     cprintf(
-      "{let h=bold, arg=cyan, name='Ant', version='%s'}"
+      "{let h=bold, arg=cyan, name='Ant'}"
       "<$h+red>{name}</> is a tiny JavaScript runtime and package manager ({version})<br=2/>"
       "<$h>Usage: {~name} <yellow>[module.js]</yellow> <$arg>[...flags]<reset/><br/>"
       "<$h><gap=7/>{~name} <<command>><gap=3/><$arg>[...args]<reset/><br=2/>"
-      "If no module file is specified, {name} starts in REPL mode.<br=2/>",
-      ANT_VERSION
+      "If no module file is specified, {name} starts in REPL mode.<br=2/>"
     );
     
     print_subcommands();
@@ -352,7 +356,7 @@ int main(int argc, char *argv[]) {
   volatile char stack_base;
   
   if (!(js = js_create_dynamic())) {
-    cfprintf(stderr, "<bold+red>FATAL</bold>: Failed to allocate for Ant.</>\n");
+    cfprintf(stderr, "{fatal}: Failed to allocate for Ant.</>\n");
     arg_freetable(argtable, ARGTABLE_COUNT); free(filtered_argv);
     return EXIT_FAILURE;
   }
@@ -398,7 +402,7 @@ int main(int argc, char *argv[]) {
 
   jsval_t snapshot_result = ant_load_snapshot(js);
   if (vtype(snapshot_result) == T_ERR) {
-    cfprintf(stderr, "<yellow>Warning</yellow>: <bold>Failed to load snapshot:</> %s\n", js_str(js, snapshot_result));
+    cfprintf(stderr, "{warn} <bold>Failed to load snapshot:</> %s\n", js_str(js, snapshot_result));
   }
 
   if (eval->count > 0) {
@@ -413,7 +417,7 @@ int main(int argc, char *argv[]) {
   else if (has_stdin && file->count == 0) {
     size_t len = 0; char *buf = read_stdin(&len);
     if (!buf) { 
-      cfprintf(stderr, "<bold+red>FATAL</bold>: Failed to allocate for Ant.</>\n");
+      cfprintf(stderr, "{fatal}: Failed to allocate for Ant.</>\n");
       js_result = EXIT_FAILURE; goto cleanup; 
     }
     eval_code(js, buf, len, "[stdin]", print->count > 0); free(buf);
