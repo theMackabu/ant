@@ -302,17 +302,25 @@ int main(int argc, char *argv[]) {
   int nerrors = arg_parse(argc, argv, argtable);
   
   if (help->count > 0) {
-    cprintf("<bold_red>Ant</> is a tiny JavaScript runtime and package manager (%s)\n\n", ANT_VERSION);
-    cprintf("<bold>Usage: ant <yellow>[module.js]</yellow> <cyan>[...flags]</><reset/>\n");
-    cprintf("<bold><space=7/>ant <<command>><space=3/><cyan>[...args]</><reset/>\n\n");
-    printf("If no module file is specified, Ant starts in REPL mode.\n\n");
+    cprintf(
+      "<let h=bold, arg=cyan/>"
+      "<bold_red>Ant</> is a tiny JavaScript runtime and package manager (%s)<br=2/>"
+      "<$h>Usage: ant <yellow>[module.js]</yellow> <$arg>[...flags]</><reset/><br/>"
+      "<$h><gap=7/>ant <<command>><gap=3/><$arg>[...args]</><reset/><br=2/>"
+      "If no module file is specified, Ant starts in REPL mode.<br=2/>",
+      ANT_VERSION
+    );
+    
     print_subcommands();
     cprintf("<bold>Flags:</>\n");
+    
     print_flags_help(stdout, argtable);
     print_flag(stdout, (flag_help_t){ .l = "verbose",  .g = "enable verbose output" });
     print_flag(stdout, (flag_help_t){ .l = "no-color", .g = "disable colored output" });
+    
     arg_freetable(argtable, ARGTABLE_COUNT);
     free(filtered_argv);
+    
     return EXIT_SUCCESS;
   }
   

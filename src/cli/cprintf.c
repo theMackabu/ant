@@ -12,14 +12,19 @@
  *   <gray/grey> <bright_red> <bright_green> ... etc
  *   <bg_red> <bg_green> ... <bg_#RGB> <bg_#RRGGBB>
  *   <bold> <dim> <ul> (underline)
+ *   <bold_red> <dim_cyan> etc - combine styles with underscores
  *   <#RRGGBB> or <#RGB> for arbitrary 24-bit foreground colors
  *   <pad=N> ... </pad>  - right-pad contents to N visible columns
+ *   <br/> - emit a newline, <br=N/> - emit N newlines
  *   <rpad=N> ... </rpad> - left-pad (right-align) contents to N visible columns
- *   <let name=style1+style2+...> - define a named style variable
+ *   <space=N/> - emit N spaces
+ *   <gap=N/> - emit N spaces (alias for space)
+ *   <let name=style1+style2+...> or <let name=style1, name2=style2...> - define a named style variable
  *   <$name> to apply a previously defined style variable
  *   </tagname> or </> to reset (pops one level)
  *   <reset/> to reset all styles (clears entire stack)
  *   << and >> to emit literal < and >
+ *   %% to emit a literal %
  *
  */
 
@@ -56,6 +61,7 @@ typedef enum {
   OP_RPAD_BEGIN,
   OP_PAD_END,
   OP_EMIT_SPACES,
+  OP_EMIT_NEWLINES,
   OP_HALT,
   OP_MAX
 } opcode_t;
@@ -325,21 +331,38 @@ static int compile_plus_segs(program_t *p, const char *s, int len) {
   return emitted;
 }
 
-static int compile_let(var_table_t *vars, const char *tag, int len) {
-  const char *eq = memchr(tag + 4, '=', len - 4);
-  if (!eq) return 0;
+static int compile_let(var_table_t *vars, const char *body, int len) {
+  if (len > 0 && body[len - 1] == '/') len--;
 
-  int nlen = (int)(eq - (tag + 4));
-  int vlen = (int)((tag + len) - (eq + 1));
-  if (nlen <= 0 || nlen >= MAX_VAR_NAME || vlen <= 0 || vlen >= MAX_VAR_VALUE) return 0;
-  if (vars->count >= MAX_VARS) return 0;
+  const char *p = body;
+  const char *end = body + len;
 
-  cprintf_var_t *v = &vars->vars[vars->count++];
-  memcpy(v->name, tag + 4, nlen);
-  v->name[nlen] = '\0'; v->nlen = nlen;
-  
-  memcpy(v->value, eq + 1, vlen);
-  v->value[vlen] = '\0'; v->vlen = vlen;
+  while (p < end) {
+    while (p < end && (*p == ' ' || *p == ',')) p++;
+    if (p >= end) break;
+
+    const char *eq = memchr(p, '=', end - p);
+    if (!eq) return 0;
+
+    int nlen = (int)(eq - p);
+
+    const char *vstart = eq + 1;
+    const char *vend = vstart;
+    while (vend < end && *vend != ',') vend++;
+
+    int vlen = (int)(vend - vstart);
+    if (nlen <= 0 || nlen >= MAX_VAR_NAME || vlen <= 0 || vlen >= MAX_VAR_VALUE) return 0;
+    if (vars->count >= MAX_VARS) return 0;
+
+    cprintf_var_t *v = &vars->vars[vars->count++];
+    memcpy(v->name, p, nlen);
+    v->name[nlen] = '\0'; v->nlen = nlen;
+    
+    memcpy(v->value, vstart, vlen);
+    v->value[vlen] = '\0'; v->vlen = vlen;
+    p = vend;
+  }
+
   return 1;
 }
 
@@ -363,7 +386,7 @@ static int compile_tag(program_t *p, const char *tag, int len, int closing, var_
     return 1;
   }
 
-  if (tag_prefix(tag, len, "let ")) return compile_let(vars, tag, len);
+  if (tag_prefix(tag, len, "let ")) return compile_let(vars, tag + 4, len - 4);
   if (tag[0] == '$' && len > 1)     return compile_var_ref(p, vars, tag, len);
 
   if (tag_prefix(tag, len, "pad="))  { emit_op(p, OP_PAD_BEGIN,  (uint32_t)atoi(tag + 4)); return 1; }
@@ -373,9 +396,24 @@ static int compile_tag(program_t *p, const char *tag, int len, int closing, var_
     emit_op(p, OP_EMIT_SPACES, (uint32_t)atoi(tag + 6));
     return 1;
   }
+  
+  if (tag_prefix(tag, len, "gap=") && tag[len-1] == '/') {
+    emit_op(p, OP_EMIT_SPACES, (uint32_t)atoi(tag + 4));
+    return 1;
+  }
 
   if (tag_eq(tag, len, "reset/")) {
     emit_op(p, OP_STYLE_RESET_ALL, 0);
+    return 1;
+  }
+  
+  if (tag_eq(tag, len, "br/")) {
+    emit_op(p, OP_EMIT_NEWLINES, 1);
+    return 1;
+  }
+  
+  if (tag_prefix(tag, len, "br=") && tag[len-1] == '/') {
+    emit_op(p, OP_EMIT_NEWLINES, (uint32_t)atoi(tag + 3));
     return 1;
   }
 
@@ -568,25 +606,26 @@ static vm_output_t cprintf_vm_run(program_t *prog, va_list ap) {
 
   const instruction_t *ip = prog->code;
   static const void *dispatch[OP_MAX] = {
-    [OP_NOP]         = &&op_nop,
-    [OP_EMIT_LIT]    = &&op_emit_lit,
-    [OP_EMIT_FMT]    = &&op_emit_fmt,
-    [OP_SET_FG]      = &&op_set_fg,
-    [OP_SET_BG]      = &&op_set_bg,
-    [OP_SET_FG_RGB]  = &&op_set_fg_rgb,
-    [OP_SET_BG_RGB]  = &&op_set_bg_rgb,
-    [OP_SET_BOLD]    = &&op_set_bold,
-    [OP_SET_DIM]     = &&op_set_dim,
-    [OP_SET_UL]      = &&op_set_ul,
-    [OP_STYLE_PUSH]  = &&op_style_push,
-    [OP_STYLE_FLUSH] = &&op_style_flush,
+    [OP_NOP]             = &&op_nop,
+    [OP_EMIT_LIT]        = &&op_emit_lit,
+    [OP_EMIT_FMT]        = &&op_emit_fmt,
+    [OP_SET_FG]          = &&op_set_fg,
+    [OP_SET_BG]          = &&op_set_bg,
+    [OP_SET_FG_RGB]      = &&op_set_fg_rgb,
+    [OP_SET_BG_RGB]      = &&op_set_bg_rgb,
+    [OP_SET_BOLD]        = &&op_set_bold,
+    [OP_SET_DIM]         = &&op_set_dim,
+    [OP_SET_UL]          = &&op_set_ul,
+    [OP_STYLE_PUSH]      = &&op_style_push,
+    [OP_STYLE_FLUSH]     = &&op_style_flush,
     [OP_STYLE_RESET]     = &&op_style_reset,
     [OP_STYLE_RESET_ALL] = &&op_style_reset_all,
     [OP_PAD_BEGIN]       = &&op_pad_begin,
-    [OP_RPAD_BEGIN]  = &&op_rpad_begin,
-    [OP_PAD_END]     = &&op_pad_end,
-    [OP_EMIT_SPACES] = &&op_emit_spaces,
-    [OP_HALT]        = &&op_halt,
+    [OP_RPAD_BEGIN]      = &&op_rpad_begin,
+    [OP_PAD_END]         = &&op_pad_end,
+    [OP_EMIT_SPACES]     = &&op_emit_spaces,
+    [OP_EMIT_NEWLINES]   = &&op_emit_newlines,
+    [OP_HALT]            = &&op_halt,
   };
 
   #define DISPATCH() goto *dispatch[ip->op]
@@ -722,6 +761,14 @@ static vm_output_t cprintf_vm_run(program_t *prog, va_list ap) {
     pos += n;
     NEXT();
   }
+  
+  op_emit_newlines: {
+    size_t n = (size_t)ip->operand;
+    ENSURE(n);
+    memset(out + pos, '\n', n);
+    pos += n;
+    NEXT();
+  }
 
   op_style_reset: {
     if (regs.style_depth > 0) {
@@ -841,6 +888,7 @@ static const char *op_names[OP_MAX] = {
   [OP_RPAD_BEGIN]      = "RPAD_BEGIN",
   [OP_PAD_END]         = "PAD_END",
   [OP_EMIT_SPACES]     = "EMIT_SPACES",
+  [OP_EMIT_NEWLINES]   = "EMIT_NEWLINES",
   [OP_HALT]            = "HALT",
 };
 
@@ -940,6 +988,10 @@ static void fprint_operand(FILE *out, program_t *prog, instruction_t *ins, bool 
     case OP_EMIT_SPACES:
       fprintf(out, "%u", ins->operand);
       break;
+      
+    case OP_EMIT_NEWLINES:
+      fprintf(out, "%u", ins->operand);
+      break;
 
     case OP_NOP:
     case OP_STYLE_PUSH:
@@ -947,8 +999,7 @@ static void fprint_operand(FILE *out, program_t *prog, instruction_t *ins, bool 
     case OP_STYLE_RESET:
     case OP_STYLE_RESET_ALL:
     case OP_PAD_END:
-    case OP_HALT:
-      break;
+    case OP_HALT: break;
 
     default:
       if (compact) {
