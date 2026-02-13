@@ -32,6 +32,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <wchar.h>
 
 typedef enum {
   OP_NOP = 0,
