@@ -22,7 +22,7 @@
 #include "cli/pkg.h"
 #include "cli/misc.h"
 #include "cli/version.h"
-#include "cli/cprintf.h"
+#include "cli/crprintf.h"
 
 #include "modules/builtin.h"
 #include "modules/buffer.h"
@@ -81,13 +81,13 @@ static const subcommand_t subcommands[] = {
 };
 
 static void parse_ant_debug(const char *flag) {
-  if (strncmp(flag, "dump-cprintf=", 13) == 0) {
+  if (strncmp(flag, "dump-crprintf=", 13) == 0) {
     const char *mode = flag + 13;
-    if (strcmp(mode, "bytecode") == 0 || strcmp(mode, "all") == 0) cprintf_debug = true;
-    if (strcmp(mode, "hex") == 0      || strcmp(mode, "all") == 0) cprintf_debug_hex = true;
+    if (strcmp(mode, "bytecode") == 0 || strcmp(mode, "all") == 0) crprintf_debug = true;
+    if (strcmp(mode, "hex") == 0      || strcmp(mode, "all") == 0) crprintf_debug_hex = true;
   }
   
-  else cfprintf(stderr, "{warn}: <bold>Unknown ANT_DEBUG flag: \"%s\"</>\n", flag);
+  else crfprintf(stderr, "{warn}: <bold>Unknown ANT_DEBUG flag: \"%s\"</>\n", flag);
 }
 
 static const subcommand_t *find_subcommand(const char *name) {
@@ -99,11 +99,11 @@ static const subcommand_t *find_subcommand(const char *name) {
 }
 
 static void print_subcommands(void) {
-  cprintf("<bold>Commands:</>\n");
+  crprintf("<bold>Commands:</>\n");
   for (const subcommand_t *cmd = subcommands; cmd->name; cmd++) {
-    cprintf("  <pad=18>%s</pad> %s\n", cmd->name, cmd->desc);
+    crprintf("  <pad=18>%s</pad> %s\n", cmd->name, cmd->desc);
   }
-  cprintf("\n  <pad=18><command> <bold+cyan>--help</></pad> Print help text for command.\n");
+  crprintf("\n  <pad=18><command> <bold+cyan>--help</></pad> Print help text for command.\n");
   printf("\n");
 }
 
@@ -187,7 +187,7 @@ static int execute_module(struct js *js, const char *filename) {
     buffer = esm_fetch_url(filename, &len, &error);
     
     if (!buffer) {
-      cfprintf(stderr, "{error}: <bold>Could not fetch \"%s\"</>: %s\n", filename, error ? error : "unknown error");
+      crfprintf(stderr, "{error}: <bold>Could not fetch \"%s\"</>: %s\n", filename, error ? error : "unknown error");
       free(error); return EXIT_FAILURE;
     }
     
@@ -195,7 +195,7 @@ static int execute_module(struct js *js, const char *filename) {
   } else {
     buffer = read_file(filename, &len);
     if (!buffer) {
-      cfprintf(stderr, "{error}: <bold>Module not found: \"%s\"</>\n", filename);
+      crfprintf(stderr, "{error}: <bold>Module not found: \"%s\"</>\n", filename);
       return EXIT_FAILURE;
     }
     
@@ -213,7 +213,7 @@ static int execute_module(struct js *js, const char *filename) {
   if (is_typescript_file(filename)) {
     int result = OXC_strip_types(buffer, filename, buffer, len + 1);
     if (result < 0) {
-      cfprintf(stderr, "{error}: <bold>Type stripping failed (%d)</>\n", result);
+      crfprintf(stderr, "{error}: <bold>Type stripping failed (%d)</>\n", result);
       free(buffer);
       return EXIT_FAILURE;
     }
@@ -243,10 +243,10 @@ int main(int argc, char *argv[]) {
   const char *binary_name = strrchr(argv[0], '/');
   binary_name = binary_name ? binary_name + 1 : argv[0];
   
-  cprintf_var("version", ANT_VERSION);
-  cprintf_var("fatal", "<bold+red>FATAL</bold>");
-  cprintf_var("error", "<red>Error</red>");
-  cprintf_var("warn", "<yellow>Warning</yellow>");
+  crprintf_var("version", ANT_VERSION);
+  crprintf_var("fatal", "<bold+red>FATAL</bold>");
+  crprintf_var("error", "<red>Error</red>");
+  crprintf_var("warn", "<yellow>Warning</yellow>");
 
   if (strcmp(binary_name, "antx") == 0) {
     char **exec_argv = try_oom(sizeof(char*) * (argc + 2));
@@ -306,7 +306,7 @@ int main(int argc, char *argv[]) {
   int nerrors = arg_parse(argc, argv, argtable);
   
   if (help->count > 0) {
-    cprintf(
+    crprintf(
       "{let h=bold, arg=cyan, name='Ant'}"
       "<$h+red>{name}</> is a tiny JavaScript runtime and package manager ({version})<br=2/>"
       "<$h>Usage: {~name} <yellow>[module.js]</yellow> <$arg>[...flags]<reset/><br/>"
@@ -315,7 +315,7 @@ int main(int argc, char *argv[]) {
     );
     
     print_subcommands();
-    cprintf("<bold>Flags:</>\n");
+    crprintf("<bold>Flags:</>\n");
     
     print_flags_help(stdout, argtable);
     print_flag(stdout, (flag_help_t){ .l = "verbose",  .g = "enable verbose output" });
@@ -356,7 +356,7 @@ int main(int argc, char *argv[]) {
   volatile char stack_base;
   
   if (!(js = js_create_dynamic())) {
-    cfprintf(stderr, "{fatal}: Failed to allocate for Ant.</>\n");
+    crfprintf(stderr, "{fatal}: Failed to allocate for Ant.</>\n");
     arg_freetable(argtable, ARGTABLE_COUNT); free(filtered_argv);
     return EXIT_FAILURE;
   }
@@ -402,7 +402,7 @@ int main(int argc, char *argv[]) {
 
   jsval_t snapshot_result = ant_load_snapshot(js);
   if (vtype(snapshot_result) == T_ERR) {
-    cfprintf(stderr, "{warn} <bold>Failed to load snapshot:</> %s\n", js_str(js, snapshot_result));
+    crfprintf(stderr, "{warn} <bold>Failed to load snapshot:</> %s\n", js_str(js, snapshot_result));
   }
 
   if (eval->count > 0) {
@@ -417,7 +417,7 @@ int main(int argc, char *argv[]) {
   else if (has_stdin && file->count == 0) {
     size_t len = 0; char *buf = read_stdin(&len);
     if (!buf) { 
-      cfprintf(stderr, "{fatal}: Failed to allocate for Ant.</>\n");
+      crfprintf(stderr, "{fatal}: Failed to allocate for Ant.</>\n");
       js_result = EXIT_FAILURE; goto cleanup; 
     }
     eval_code(js, buf, len, "[stdin]", print->count > 0); free(buf);

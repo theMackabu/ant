@@ -38,7 +38,7 @@ lib_sources = files(
   'src/cli/pkg.c',
   'src/cli/misc.c',
   'src/cli/version.c',
-  'src/cli/cprintf.c',
+  'src/cli/crprintf.c',
 ) + files(module_files)
 
 include = include_directories('include')

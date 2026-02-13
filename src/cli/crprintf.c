@@ -1,11 +1,11 @@
 /*
- * cprintf - printf with inline color tags, powered by a register-based VM
+ * crprintf - printf with inline color tags, powered by a register-based VM
  *
  * usage:
- *   cprintf("<red>error:</red> something went wrong\n");
- *   cprintf("<bold><cyan>info:</cyan></bold> hello %s\n", name);
- *   cprintf("<#ff8800>orange text</#ff8800>\n");
- *   cprintf("  <pad=18><green>%s</green></pad> %s\n", cmd->name, cmd->desc);
+ *   crprintf("<red>error:</red> something went wrong\n");
+ *   crprintf("<bold><cyan>info:</cyan></bold> hello %s\n", name);
+ *   crprintf("<#ff8800>orange text</#ff8800>\n");
+ *   crprintf("  <pad=18><green>%s</green></pad> %s\n", cmd->name, cmd->desc);
  *
  * supported tags:
  *   <red> <green> <yellow> <blue> <magenta> <cyan> <white> <black>
@@ -34,7 +34,7 @@
  */
 
 #include "utils.h"
-#include "cli/cprintf.h"
+#include "cli/crprintf.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -44,8 +44,8 @@
 #include <stdint.h>
 #include <wchar.h>
 
-bool cprintf_debug = false;
-bool cprintf_debug_hex = false;
+bool crprintf_debug = false;
+bool crprintf_debug_hex = false;
 
 typedef enum {
   OP_NOP = 0,
@@ -133,10 +133,10 @@ typedef struct {
   char name[MAX_VAR_NAME];
   char value[MAX_VAR_VALUE];
   int nlen; int vlen; int is_fmt;
-} cprintf_var_t;
+} crprintf_var_t;
 
 typedef struct {
-  cprintf_var_t vars[MAX_VARS];
+  crprintf_var_t vars[MAX_VARS];
   int count;
 } var_table_t;
 
@@ -372,7 +372,7 @@ static int compile_let(var_table_t *vars, const char *body, int len) {
       if (nlen <= 0 || nlen >= MAX_VAR_NAME || vlen < 0 || vlen >= MAX_VAR_VALUE) return 0;
       if (vars->count >= MAX_VARS) return 0;
 
-      cprintf_var_t *v = &vars->vars[vars->count++];
+      crprintf_var_t *v = &vars->vars[vars->count++];
       memcpy(v->name, p, nlen);
       
       v->name[nlen] = '\0'; v->nlen = nlen;
@@ -396,7 +396,7 @@ static int compile_let(var_table_t *vars, const char *body, int len) {
     if (nlen <= 0 || nlen >= MAX_VAR_NAME || vlen <= 0 || vlen >= MAX_VAR_VALUE) return 0;
     if (vars->count >= MAX_VARS) return 0;
 
-    cprintf_var_t *v = &vars->vars[vars->count++];
+    crprintf_var_t *v = &vars->vars[vars->count++];
     memcpy(v->name, p, nlen);
     v->name[nlen] = '\0'; v->nlen = nlen;
     
@@ -408,21 +408,21 @@ static int compile_let(var_table_t *vars, const char *body, int len) {
   return 1;
 }
 
-void cprintf_var(const char *name, const char *value) {
+void crprintf_var(const char *name, const char *value) {
   if (global_vars.count >= MAX_VARS) return;
   int nlen = (int)strlen(name);
   int vlen = (int)strlen(value);
   if (nlen <= 0 || nlen >= MAX_VAR_NAME || vlen <= 0 || vlen >= MAX_VAR_VALUE) return;
 
   for (int i = 0; i < global_vars.count; i++) {
-    cprintf_var_t *v = &global_vars.vars[i];
+    crprintf_var_t *v = &global_vars.vars[i];
     if (v->nlen == nlen && memcmp(v->name, name, nlen) == 0) {
       memcpy(v->value, value, vlen);
       v->value[vlen] = '\0'; v->vlen = vlen; return;
     }
   }
 
-  cprintf_var_t *v = &global_vars.vars[global_vars.count++];
+  crprintf_var_t *v = &global_vars.vars[global_vars.count++];
   memcpy(v->name, name, nlen);
   v->name[nlen] = '\0'; v->nlen = nlen;
   
@@ -438,7 +438,7 @@ static int compile_var_ref(program_t *p, var_table_t *vars, const char *tag, int
   int var_nlen = plus ? (int)(plus - name) : nlen;
 
   for (int i = 0; i < vars->count; i++) {
-    cprintf_var_t *v = &vars->vars[i];
+    crprintf_var_t *v = &vars->vars[i];
     if (var_nlen != v->nlen || memcmp(name, v->name, var_nlen) != 0) continue;
     
     emit_op(p, OP_STYLE_PUSH, 0);
@@ -744,7 +744,7 @@ static const char *scan_var_brace(program_t *p, const char *ptr, const char **li
   }
 
   for (int i = 0; i < vars->count; i++) {
-    cprintf_var_t *v = &vars->vars[i];
+    crprintf_var_t *v = &vars->vars[i];
     if (nlen != v->nlen || memcmp(name, v->name, nlen) != 0) continue;
 
     const char *val = v->value;
@@ -781,7 +781,7 @@ emit_brace:;
   return *lit;
 }
 
-program_t *cprintf_compile(const char *fmt) {
+program_t *crprintf_compile(const char *fmt) {
   program_t *p = program_new();
   var_table_t vars = global_vars;
 
@@ -804,7 +804,7 @@ typedef struct {
   size_t len;
 } vm_output_t;
 
-static vm_output_t cprintf_vm_run(program_t *prog, va_list ap) {
+static vm_output_t crprintf_vm_run(program_t *prog, va_list ap) {
   vm_regs_t regs = {0};
 
   size_t cap = 512, pos = 0;
@@ -1061,9 +1061,9 @@ static vm_output_t cprintf_vm_run(program_t *prog, va_list ap) {
   #undef OUT_CSTR
 }
 
-int cprintf_exec(program_t *prog, FILE *stream, ...) {
+int crprintf_exec(program_t *prog, FILE *stream, ...) {
   va_list ap; va_start(ap, stream);
-  vm_output_t o = cprintf_vm_run(prog, ap);
+  vm_output_t o = crprintf_vm_run(prog, ap);
   va_end(ap); if (!o.data) return -1;
 
   int ret = (int)fwrite(o.data, 1, o.len, stream);
@@ -1072,9 +1072,9 @@ int cprintf_exec(program_t *prog, FILE *stream, ...) {
   return ret;
 }
 
-int csprintf_inner(program_t *prog, char *buf, size_t size, ...) {
+int crsprintf_inner(program_t *prog, char *buf, size_t size, ...) {
   va_list ap; va_start(ap, size);
-  vm_output_t o = cprintf_vm_run(prog, ap);
+  vm_output_t o = crprintf_vm_run(prog, ap);
   va_end(ap); if (!o.data) return -1;
 
   size_t copy = (o.len < size) ? o.len : size - 1;
@@ -1226,8 +1226,8 @@ static void fprint_operand(FILE *out, program_t *prog, instruction_t *ins, bool 
   }
 }
 
-void cprintf_disasm(program_t *prog, FILE *out) {
-  fprintf(out, "; cprintf bytecode — %zu instructions, %zu bytes literal pool\n", prog->code_len, prog->lit_len);
+void crprintf_disasm(program_t *prog, FILE *out) {
+  fprintf(out, "; crprintf bytecode — %zu instructions, %zu bytes literal pool\n", prog->code_len, prog->lit_len);
   fprintf(out, "; %-4s  %-16s %s\n", "addr", "opcode", "operand");
   fprintf(out, "; ----  ---------------- -------\n");
 
@@ -1241,8 +1241,8 @@ void cprintf_disasm(program_t *prog, FILE *out) {
   }
 }
 
-void cprintf_hexdump(program_t *prog, FILE *out) {
-  fprintf(out, "; cprintf hex dump — %zu instructions, %zu bytes literal pool\n", prog->code_len, prog->lit_len);
+void crprintf_hexdump(program_t *prog, FILE *out) {
+  fprintf(out, "; crprintf hex dump — %zu instructions, %zu bytes literal pool\n", prog->code_len, prog->lit_len);
   fprintf(out, "; %-4s  %-26s %s\n", "addr", "bytes", "decoded");
   fprintf(out, "; ----  -------------------------  --------\n");
 

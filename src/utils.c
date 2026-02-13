@@ -1,5 +1,5 @@
 #include "utils.h"
-#include "cli/cprintf.h"
+#include "cli/crprintf.h"
 
 #include <stdio.h>
 #include <stdbool.h>
@@ -89,7 +89,7 @@ char *resolve_js_file(const char *filename) {
 void *try_oom(size_t size) {
   void *p = malloc(size);
   if (!p) {
-    cfprintf(stderr, "<bold+red>FATAL</bold>: Out of memory\n");
+    crfprintf(stderr, "<bold+red>FATAL</bold>: Out of memory\n");
     exit(EXIT_FAILURE);
   } return p;
 }
