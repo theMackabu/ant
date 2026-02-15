@@ -64,8 +64,8 @@ tlsuv_compile_args = [
   '-Wno-sometimes-uninitialized',
   '-Wno-cast-function-type-mismatch',
   '-Wno-missing-field-initializers',
-  '-I' + meson.project_source_root() / vendor_dir / 'libuv-v1.51.0' / 'include'
 ]
+
 if cmake_prefix != ''
   tlsuv_compile_args += ['-I' + cmake_prefix / 'include']
 endif
@@ -147,11 +147,11 @@ deps_info = {
     'inc': 'src',
   },
   'libuv': {
-    'dir': 'libuv-v1.51.0',
+    'dir': 'libuv-v1.52.0',
     'inc': 'include',
   },
   'zlib-ng': {
-    'dir': 'zlib-ng-2.3.2',
+    'dir': 'zlib-ng-2.3.3',
     'inc': '',
     'build_dir': true,
   },

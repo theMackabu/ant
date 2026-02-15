@@ -6,7 +6,7 @@
   },
   "dependencies": {
     "llhttp": "9.2.1",
-    "libuv": "1.51.0",
+    "libuv": "1.52.0",
     "libsodium": "1.0.20",
     "mbedtls": "3.6.5",
     "zlib": "1.3.1"
@@ -125,7 +125,7 @@
       "binary_name": "ant.exe",
       "deps": ["llhttp"],
       "tls_library": "openssl",
-      "static_link": false,
+      "static_link": true,
       "cmake_generator": "MinGW Makefiles",
       "extra_meson_args": "-Dc_std=gnu2x"
     }

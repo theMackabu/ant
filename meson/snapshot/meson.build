@@ -1,13 +1,8 @@
 node = find_program('node', required: true)
 
-core_files = run_command('sh', '-c', 
-  'find ' + src_root / 'src' / 'core' + ' -name "*.js" ! -name "index.js" | sort',
-  check: true
-).stdout().strip().split()
-
 snapshot_h = custom_target(
   'snapshot',
-  input: [src_root / 'src' / 'core' / 'index.ts'] + files(core_files),
+  input: core_files,
   output: 'snapshot_data.h',
   command: [
     node,

@@ -9,48 +9,28 @@ project('ant', 'c', default_options: [
   'warning_level=2'
 ], subproject_dir: 'vendor')
 
-src_root = meson.project_source_root()
-vendor_dir = 'vendor'
+python = find_program('python3')
 is_static = get_option('static_link')
 
-subdir('meson')
-
-module_files = run_command('sh', '-c', 
-  'cd "$MESON_SOURCE_ROOT" && ls src/modules/*.c',
-  check: true
-).stdout().strip().split()
-
-lib_sources = files(
-  'src/roots.c',
-  'src/utils.c',
-  'src/utf8.c',
-  'src/escape.c',
-  'src/reactor.c',
-  'src/sugar.c',
-  'src/ant.c',
-  'src/errors.c',
-  'src/stack.c',
-  'src/gc.c',
-  'src/repl.c',
-  'src/runtime.c',
-  'src/snapshot.c',
-  'src/esm/remote.c',
-  'src/cli/pkg.c',
-  'src/cli/misc.c',
-  'src/cli/version.c',
-) + files(module_files)
-
+src_root = meson.project_source_root()
 include = include_directories('include')
-build_include = include_directories('.')
-strip_include = include_directories('src/strip')
+
+core_files = files(run_command(
+  python, files('meson/sources.py'), files('sources.json'), 'core',
+  check: true
+).stdout().strip().split())
+
+lib_sources = files(run_command(
+  python, files('meson/sources.py'), files('sources.json'), 'engine',
+  check: true
+).stdout().strip().split())
+
+subdir('meson')
 
 libant = static_library(
   'ant',
   lib_sources + [snapshot_h],
-  include_directories: [
-    include, version_include, 
-    build_include, strip_include
-  ],
+  include_directories: include,
   dependencies: ant_deps,
   install: true
 )
@@ -85,9 +65,7 @@ pkg_dep = declare_dependency(
 
 libant_dep = declare_dependency(
   link_with: libant,
-  include_directories: [
-    include, version_include, build_include
-  ],
+  include_directories: include,
   dependencies: ant_deps + [oxc_dep, pkg_dep]
 )
 
@@ -98,8 +76,7 @@ endif
 
 executable(
   'ant',
-  files('src/main.c') + [snapshot_h],
-  include_directories: [strip_include],
+  files('src/main.c'),
   dependencies: libant_dep,
   link_args: link_args
 )

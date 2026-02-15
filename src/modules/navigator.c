@@ -13,7 +13,6 @@
 
 #include "ant.h"
 #include "errors.h"
-#include "config.h"
 #include "runtime.h"
 #include "internal.h"
 #include "modules/navigator.h"

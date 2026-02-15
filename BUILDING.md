@@ -102,9 +102,9 @@ System libraries required:
 The remaining dependencies are vendored as Meson subprojects under `vendor/`
 and are fetched automatically:
 
-- libuv 1.51.0
+- libuv 1.52.0
 - yyjson 0.12.0
-- zlib-ng 2.3.2
+- zlib-ng 2.3.3
 - nghttp2
 - pcre2
 - libffi

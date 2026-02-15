@@ -11,7 +11,6 @@
 #include <crprintf.h>
 
 #include "ant.h"
-#include "config.h"
 #include "repl.h"
 #include "utils.h"
 #include "reactor.h"

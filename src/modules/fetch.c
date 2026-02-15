@@ -10,7 +10,6 @@
 
 #include "ant.h"
 #include "errors.h"
-#include "config.h"
 #include "common.h"
 #include "internal.h"
 #include "runtime.h"

@@ -15,7 +15,6 @@
 #include "cli/version.h"
 
 #include "utils.h"
-#include "config.h"
 #include "progress.h"
 #include "modules/io.h"
 

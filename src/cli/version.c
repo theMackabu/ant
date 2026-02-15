@@ -1,5 +1,4 @@
 #include "utils.h"
-#include "config.h"
 
 #include <string.h>
 #include <argtable3.h>

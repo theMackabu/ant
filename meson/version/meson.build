@@ -18,15 +18,10 @@ endif
 
 target_triple = target_triple + (tls_lib == 'mbedtls' ? '-mbedtls' : '')
 
-version_conf = configuration_data()
-version_conf.set_quoted('ANT_VERSION', ant_version)
-version_conf.set('ANT_BUILD_TIMESTAMP', timestamp)
-version_conf.set_quoted('ANT_GIT_HASH', git_hash)
-version_conf.set_quoted('ANT_TARGET_TRIPLE', target_triple)
-
-config_h = configure_file(
-  output: 'config.h',
-  configuration: version_conf
+add_project_arguments(
+  '-DANT_VERSION="' + ant_version + '"',
+  '-DANT_BUILD_TIMESTAMP=' + timestamp,
+  '-DANT_GIT_HASH="' + git_hash + '"',
+  '-DANT_TARGET_TRIPLE="' + target_triple + '"',
+  language: 'c'
 )
-
-version_include = include_directories('.')

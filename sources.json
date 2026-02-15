@@ -1,0 +1,10 @@
+{
+  "engine": {
+    "patterns": ["src/*.c", "src/esm/*.c", "src/cli/*.c", "src/modules/*.c"],
+    "exclude": ["src/main.c"]
+  },
+  "core": {
+    "patterns": ["src/core/**/*.ts"],
+    "exclude": []
+  }
+}
