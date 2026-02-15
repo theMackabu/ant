@@ -1,5 +1,5 @@
 [wrap-git]
 url = https://github.com/openziti/tlsuv
-revision = v0.40.6
+revision = v0.40.10
 depth = 1
 clone-recursive = true

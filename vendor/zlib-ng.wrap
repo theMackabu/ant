@@ -1,13 +1,14 @@
 [wrap-file]
-directory = zlib-ng-2.3.2
-source_url = https://github.com/zlib-ng/zlib-ng/archive/refs/tags/2.3.2.tar.gz
-source_filename = zlib-ng-2.3.2.tar.gz
-source_hash = 6a0561b50b8f5f6434a6a9e667a67026f2b2064a1ffa959c6b2dae320161c2a8
-source_fallback_url = https://github.com/mesonbuild/wrapdb/releases/download/zlib-ng_2.3.2-1/zlib-ng-2.3.2.tar.gz
-patch_filename = zlib-ng_2.3.2-1_patch.zip
-patch_url = https://wrapdb.mesonbuild.com/v2/zlib-ng_2.3.2-1/get_patch
-patch_hash = 110f10f762f89101c7e6c1d10c6e02bbb3364165cccf557bec4d906018978d98
-wrapdb_version = 2.3.2-1
+directory = zlib-ng-2.3.3
+source_url = https://github.com/zlib-ng/zlib-ng/archive/refs/tags/2.3.3.tar.gz
+source_filename = zlib-ng-2.3.3.tar.gz
+source_hash = f9c65aa9c852eb8255b636fd9f07ce1c406f061ec19a2e7d508b318ca0c907d1
+source_fallback_url = https://wrapdb.mesonbuild.com/v2/zlib-ng_2.3.3-1/get_source/zlib-ng-2.3.3.tar.gz
+patch_filename = zlib-ng_2.3.3-1_patch.zip
+patch_url = https://wrapdb.mesonbuild.com/v2/zlib-ng_2.3.3-1/get_patch
+patch_fallback_url = https://github.com/mesonbuild/wrapdb/releases/download/zlib-ng_2.3.3-1/zlib-ng_2.3.3-1_patch.zip
+patch_hash = a08c90399b334f9f876ba39131e4998f230361568e0194787ea32360ff5423f8
+wrapdb_version = 2.3.3-1
 
 [provide]
 dependency_names = zlib-ng
