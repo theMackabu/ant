@@ -102,12 +102,6 @@ function buildScreen() {
   const lines = [];
 
   if (state.mode === 'browse') {
-    const headerWidth = Math.min(cols, 68);
-    lines.push(`${c.bold}${c.blue}${'═'.repeat(headerWidth)}${c.reset}`);
-    lines.push(`${c.bold}${c.blue}  Test262 Results Visualizer${c.reset}`);
-    lines.push(`${c.bold}${c.blue}${'═'.repeat(headerWidth)}${c.reset}`);
-    lines.push('');
-
     const rateColor = stats.rate >= 80 ? c.green : stats.rate >= 50 ? c.yellow : c.red;
     lines.push(
       `${c.bold}Total:${c.reset} ${stats.total}  ${c.green}Pass:${c.reset} ${stats.passed}  ${c.red}Fail:${c.reset} ${stats.failed}  ${rateColor}${stats.rate}%${c.reset}`
@@ -194,11 +188,6 @@ function buildScreen() {
     lines.push(`${c.dim}s browse · q quit${c.reset}`);
   } else if (state.mode === 'memory') {
     const mem = Ant.stats();
-    const headerWidth = Math.min(cols, 68);
-    lines.push(`${c.bold}${c.blue}${'═'.repeat(headerWidth)}${c.reset}`);
-    lines.push(`${c.bold}  Memory Usage${c.reset}`);
-    lines.push(`${c.bold}${c.blue}${'═'.repeat(headerWidth)}${c.reset}`);
-    lines.push('');
 
     lines.push(`${c.cyan}Arena${c.reset}`);
     lines.push(`  Used:     ${c.bold}${fmt(mem.arenaUsed)}${c.reset}`);
