@@ -15,17 +15,12 @@ is_static = get_option('static_link')
 src_root = meson.project_source_root()
 include = include_directories('include')
 
-core_files = files(run_command(
-  python, files('meson/sources.py'), files('sources.json'), 'core',
-  check: true
-).stdout().strip().split())
+subdir('meson')
 
 lib_sources = files(run_command(
   python, files('meson/sources.py'), files('sources.json'), 'engine',
   check: true
 ).stdout().strip().split())
-
-subdir('meson')
 
 libant = static_library(
   'ant',

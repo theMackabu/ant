@@ -64,6 +64,7 @@ tlsuv_compile_args = [
   '-Wno-sometimes-uninitialized',
   '-Wno-cast-function-type-mismatch',
   '-Wno-missing-field-initializers',
+  '-I' + src_root / 'vendor' / 'libuv-v1.52.0' / 'include',
 ]
 
 if cmake_prefix != ''

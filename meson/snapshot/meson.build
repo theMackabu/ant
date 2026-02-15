@@ -1,5 +1,10 @@
 node = find_program('node', required: true)
 
+core_files = files(run_command(
+  python, files('../sources.py'), src_root / 'sources.json', 'core', src_root,
+  check: true
+).stdout().strip().split())
+
 snapshot_h = custom_target(
   'snapshot',
   input: core_files,

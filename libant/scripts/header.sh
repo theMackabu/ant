@@ -1,21 +1,22 @@
 #!/bin/bash
 set -e
-
 . "$(dirname "$0")/common.sh"
 
-CONFIG_H="$1"
-OUTPUT="$2"
+OUTPUT="$1"
+ANT_VERSION="$2"
+ANT_BUILD_TIMESTAMP="$3"
+ANT_GIT_HASH="$4"
+ANT_TARGET_TRIPLE="$5"
 INCLUDE_DIR="$ROOT_DIR/include"
 
-if [ -z "$CONFIG_H" ] || [ -z "$OUTPUT" ]; then
-  echo "Usage: $0 <config.h> <output.h>"
+if [ -z "$OUTPUT" ] || [ -z "$ANT_VERSION" ]; then
+  echo "Usage: $0 <output.h> <version> <timestamp> <git_hash> <target_triple>"
   exit 1
 fi
 
 VENDOR_DIR="$SCRIPT_DIR/vendor"
 
 HEADERS=(
-  "config.h:$CONFIG_H"
   "common.h:$INCLUDE_DIR/common.h"
   "types.h:$INCLUDE_DIR/types.h"
   "gc.h:$INCLUDE_DIR/gc.h"
@@ -41,7 +42,7 @@ for f in "$INCLUDE_DIR"/modules/*.h; do
   HEADERS+=("$name:$f")
 done
 
-cat > "$OUTPUT" << 'EOF'
+cat > "$OUTPUT" << EOF
 /*
  * Ant JavaScript Engine
  * https://github.com/themackabu/ant
@@ -82,6 +83,12 @@ cat > "$OUTPUT" << 'EOF'
 /* forward declarations */
 struct arg_file;
 
+/* === metadata === */
+#define ANT_VERSION "$ANT_VERSION"
+#define ANT_BUILD_TIMESTAMP $ANT_BUILD_TIMESTAMP
+#define ANT_GIT_HASH "$ANT_GIT_HASH"
+#define ANT_TARGET_TRIPLE "$ANT_TARGET_TRIPLE"
+
 EOF
 
 for entry in "${HEADERS[@]}"; do
@@ -100,7 +107,7 @@ for entry in "${HEADERS[@]}"; do
       continue
     fi
     
-    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\"(config\.h|common\.h|gc.\h|types\.h|compat\.h|ant\.h|utils\.h|arena\.h|runtime\.h|internal\.h)\" ]]; then
+    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\"(metadata\.h|common\.h|gc.\h|types\.h|compat\.h|ant\.h|utils\.h|arena\.h|runtime\.h|internal\.h)\" ]]; then
       continue
     fi
     if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\"esm/ ]]; then
@@ -110,7 +117,7 @@ for entry in "${HEADERS[@]}"; do
       continue
     fi
     
-    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\<(config|common|uv|types|utarray|uthash|minicoro)\.h\> ]]; then
+    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\<(metadata|common|uv|types|utarray|uthash|minicoro)\.h\> ]]; then
       continue
     fi
     

@@ -8,49 +8,24 @@ project('libant', 'c', default_options: [
   'warning_level=2'
 ], subproject_dir: 'vendor')
 
-use_lto = get_option('lto')
-
-src_root = meson.project_source_root() / '..'
-vendor_dir = 'vendor'
+python = find_program('python3')
 is_static = true
+
+use_lto = get_option('lto')
+src_root = meson.project_source_root() / '..'
+include = include_directories('../include')
 
 subdir('meson')
 
-module_files = run_command('sh', '-c', 
-  'ls ' + src_root / 'src' / 'modules' / '*.c',
+lib_sources = files(run_command(
+  python, files('meson/sources.py'), src_root / 'sources.json', 'library', src_root,
   check: true
-).stdout().strip().split()
-
-lib_sources = files(
-  '../src/roots.c',
-  '../src/utils.c',
-  '../src/utf8.c',
-  '../src/escape.c',
-  '../src/reactor.c',
-  '../src/sugar.c',
-  '../src/ant.c',
-  '../src/errors.c',
-  '../src/stack.c',
-  '../src/gc.c',
-  '../src/repl.c',
-  '../src/runtime.c',
-  '../src/snapshot.c',
-  '../src/esm/remote.c',
-) + files(module_files)
-
-include = include_directories('../include')
-build_include = include_directories('.')
-strip_include = include_directories('../src/strip')
+).stdout().strip().split())
 
 libant_core = static_library(
   'ant_core',
   lib_sources + [snapshot_h],
-  include_directories: [
-    include,
-    build_include,
-    version_include,
-    strip_include
-  ],
+  include_directories: include,
   dependencies: ant_deps + [oxc_dep],
 )
 
@@ -58,12 +33,7 @@ if use_lto
   libant_core_lto = static_library(
     'ant_core_lto',
     lib_sources + [snapshot_h],
-    include_directories: [
-      include,
-      build_include,
-      version_include,
-      strip_include
-    ],
+    include_directories: include,
     dependencies: ant_deps + [oxc_dep],
     c_args: ['-flto'],
   )
@@ -83,19 +53,18 @@ endif
 
 pkg.generate(
   name: 'libant',
-  description: 'Ant JavaScript Engine - Embeddable JS runtime',
-  version: version_conf.get('ANT_VERSION'),
+  version: ant_version,
+  description: 'javascript for 🐜\'s',
   extra_cflags: ['-I${includedir}/ant'],
   libraries: ['-L${libdir}', '-lant'] + pkg_libs
 )
 
 custom_target(
   'ant_header',
-  input: [config_h],
   output: 'libant.h',
   command: [
     'bash', meson.project_source_root() / 'scripts' / 'header.sh',
-    '@INPUT0@', '@OUTPUT@'
+    '@OUTPUT@', ant_version, timestamp, git_hash, target_triple,
   ],
   build_by_default: true,
   build_always_stale: true
