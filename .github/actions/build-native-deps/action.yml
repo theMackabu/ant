@@ -1,9 +1,9 @@
 name: Build Native Dependencies
-description: Build llhttp, libuv, libsodium, mbedtls, zlib as needed
+description: Build libsodium, mbedtls, zlib as needed
 
 inputs:
   deps:
-    description: Space-separated list of deps to build (llhttp libuv libsodium mbedtls zlib)
+    description: Space-separated list of deps to build (libsodium mbedtls zlib)
     required: true
   prefix:
     description: Install prefix
@@ -27,10 +27,6 @@ inputs:
     description: CMake generator (Ninja, MinGW Makefiles, etc)
     required: false
     default: ''
-  llhttp_version:
-    required: true
-  libuv_version:
-    required: true
   libsodium_version:
     required: true
   mbedtls_version:
@@ -58,58 +54,6 @@ runs:
       shell: bash
       run: |
         mkdir -p ${{ inputs.prefix }}
-
-    - name: Build llhttp
-      if: steps.cache.outputs.cache-hit != 'true' && contains(inputs.deps, 'llhttp')
-      shell: bash
-      run: |
-        if [[ "$RUNNER_OS" == "Windows" ]]; then
-          export PATH="$(cygpath "$RUNNER_TEMP/msys64/mingw64/bin"):$PATH"
-          PREFIX=$(cygpath -m "${{ inputs.prefix }}")
-        else
-          PREFIX="${{ inputs.prefix }}"
-        fi
-
-        git clone --depth 1 --branch release/v${{ inputs.llhttp_version }} https://github.com/nodejs/llhttp.git /tmp/llhttp
-        cd /tmp/llhttp
-        CMAKE_GENERATOR="${{ inputs.cmake_generator }}"
-        if [[ "$RUNNER_OS" != "macOS" ]]; then
-          export AR="${{ inputs.ar }}"
-          export RANLIB="${{ inputs.ranlib }}"
-        fi
-        CC=${{ inputs.cc }} CXX=${{ inputs.cxx || inputs.cc }} cmake -B build \
-          ${CMAKE_GENERATOR:+-G "$CMAKE_GENERATOR"} \
-          -DCMAKE_INSTALL_PREFIX="$PREFIX" \
-          -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON \
-          -DCMAKE_BUILD_TYPE=MinSizeRel
-        cmake --build build
-        cmake --install build
-        echo "=== PKG_CONFIG files in $PREFIX/lib/pkgconfig ==="
-        ls -la "$PREFIX/lib/pkgconfig/" || echo "pkgconfig dir not found"
-        cp "$PREFIX/lib/pkgconfig/libllhttp.pc" "$PREFIX/lib/pkgconfig/llhttp.pc"
-        echo "=== llhttp.pc contents ==="
-        cat "$PREFIX/lib/pkgconfig/llhttp.pc"
-        echo "=== After copy ==="
-        ls -la "$PREFIX/lib/pkgconfig/"
-
-    - name: Build libuv
-      if: steps.cache.outputs.cache-hit != 'true' && contains(inputs.deps, 'libuv')
-      shell: bash
-      run: |
-        git clone --depth 1 --branch v${{ inputs.libuv_version }} https://github.com/libuv/libuv.git /tmp/libuv
-        cd /tmp/libuv
-        CMAKE_GENERATOR="${{ inputs.cmake_generator }}"
-        if [[ "$RUNNER_OS" != "macOS" ]]; then
-          export AR="${{ inputs.ar }}"
-          export RANLIB="${{ inputs.ranlib }}"
-        fi
-        CC=${{ inputs.cc }} cmake -B build \
-          ${CMAKE_GENERATOR:+-G "$CMAKE_GENERATOR"} \
-          -DCMAKE_INSTALL_PREFIX=${{ inputs.prefix }} \
-          -DBUILD_TESTING=OFF -DLIBUV_BUILD_SHARED=OFF \
-          -DCMAKE_BUILD_TYPE=MinSizeRel
-        cmake --build build
-        cmake --install build
 
     - name: Build libsodium
       if: steps.cache.outputs.cache-hit != 'true' && contains(inputs.deps, 'libsodium')

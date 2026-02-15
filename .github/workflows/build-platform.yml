@@ -151,8 +151,6 @@ jobs:
           echo "deps=$(echo $CONFIG | jq -r '.deps | join(" ")')" >> $GITHUB_OUTPUT
 
           # Dep versions
-          echo "llhttp_version=$(echo $DEPS | jq -r '.llhttp')" >> $GITHUB_OUTPUT
-          echo "libuv_version=$(echo $DEPS | jq -r '.libuv')" >> $GITHUB_OUTPUT
           echo "libsodium_version=$(echo $DEPS | jq -r '.libsodium')" >> $GITHUB_OUTPUT
           echo "mbedtls_version=$(echo $DEPS | jq -r '.mbedtls')" >> $GITHUB_OUTPUT
           echo "zlib_version=$(echo $DEPS | jq -r '.zlib')" >> $GITHUB_OUTPUT
@@ -193,8 +191,6 @@ jobs:
           ar: ${{ steps.llvm.outputs.ar }}
           ranlib: ${{ steps.llvm.outputs.ranlib }}
           cmake_generator: ${{ steps.config.outputs.cmake_generator }}
-          llhttp_version: ${{ steps.config.outputs.llhttp_version }}
-          libuv_version: ${{ steps.config.outputs.libuv_version }}
           libsodium_version: ${{ steps.config.outputs.libsodium_version }}
           mbedtls_version: ${{ steps.config.outputs.mbedtls_version }}
           zlib_version: ${{ steps.config.outputs.zlib_version }}
