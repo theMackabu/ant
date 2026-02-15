@@ -37,13 +37,6 @@ if not llhttp.found()
   llhttp = dependency('llhttp', method: 'cmake', modules: ['llhttp::llhttp_static'], required: true)
 endif
 
-libuv_sub = subproject('libuv', default_options: [
-  'build_tests=false', 
-  'build_benchmarks=false',
-  'warning_level=0'
-])
-libuv_dep = libuv_sub.get_variable('libuv_dep')
-
 tlsuv_opts = cmake.subproject_options()
 tlsuv_opts.set_override_option('warning_level', '0')
 tlsuv_opts.append_compile_args('c', ['-w'])
@@ -80,6 +73,7 @@ endif
 tlsuv_opts.append_compile_args('c', tlsuv_compile_args)
 tlsuv_dep = cmake.subproject('tlsuv', options: tlsuv_opts).dependency('tlsuv')
 
+libuv_dep = subproject('libuv').get_variable('libuv_dep')
 uthash_dep = subproject('uthash').get_variable('uthash_dep')
 yyjson_dep = subproject('yyjson').get_variable('yyjson_dep')
 uuidv7_dep = subproject('uuidv7').get_variable('uuidv7_dep')

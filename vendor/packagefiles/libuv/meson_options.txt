@@ -1,0 +1,19 @@
+option(
+    'build_tests',
+    type: 'boolean',
+    value: false,
+    description: 'build the unit tests',
+)
+option(
+    'build_benchmarks',
+    type: 'boolean',
+    value: false,
+    description: 'build the benchmarks',
+)
+option(
+    'build_for_qemu',
+    type: 'boolean',
+    value: false,
+    description: 'build for qemu',
+)
+# ASAN is handled via meson
