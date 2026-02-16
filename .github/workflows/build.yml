@@ -64,6 +64,7 @@ jobs:
       build_timestamp: ${{ needs.prepare.outputs.timestamp }}
 
   summary:
+    name: Build Summary
     needs: [build, build-mbedtls]
     runs-on: ubuntu-latest
     if: ${{ !cancelled() && (needs.build.result != 'skipped' || needs.build-mbedtls.result != 'skipped') }}
@@ -76,12 +77,20 @@ jobs:
 
       - name: Generate summary
         run: |
-          echo "## Build Versions" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Platform | Version |" >> $GITHUB_STEP_SUMMARY
-          echo "|----------|---------|" >> $GITHUB_STEP_SUMMARY
+          VERSIONS=()
           for dir in versions/version-*; do
-            platform=$(basename "$dir" | sed 's/version-//')
-            version=$(cat "$dir/version.txt" 2>/dev/null || echo "N/A")
-            echo "| $platform | \`$version\` |" >> $GITHUB_STEP_SUMMARY
+            v=$(cat "$dir/version.txt" 2>/dev/null || echo "N/A")
+            VERSIONS+=("$v")
           done
+
+          UNIQUE=($(printf '%s\n' "${VERSIONS[@]}" | sort -u))
+
+          if [[ ${#UNIQUE[@]} -ne 1 ]]; then
+            echo "::error::Version mismatch across platforms: ${UNIQUE[*]}"
+            echo "## ❌ Version Mismatch" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Expected all platforms to have the same version, but found: ${UNIQUE[*]}" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+          echo "## Build Version: \`${UNIQUE[0]}\`" >> $GITHUB_STEP_SUMMARY
