@@ -50,10 +50,17 @@ runs:
         key: deps-${{ runner.os }}-${{ runner.arch }}-${{ steps.deps-hash.outputs.hash }}-${{ hashFiles('.github/versions.json') }}-v1
 
     - name: Prepare build environment
+      id: prep
       if: steps.cache.outputs.cache-hit != 'true'
       shell: bash
       run: |
-        mkdir -p ${{ inputs.prefix }}
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          PREFIX=$(cygpath -m "${{ inputs.prefix }}")
+        else
+          PREFIX="${{ inputs.prefix }}"
+        fi
+        echo "prefix=$PREFIX" >> $GITHUB_OUTPUT
+        mkdir -p "$PREFIX"
 
     - name: Build libsodium
       if: steps.cache.outputs.cache-hit != 'true' && contains(inputs.deps, 'libsodium')
@@ -61,7 +68,7 @@ runs:
       run: |
         git clone --depth 1 --branch ${{ inputs.libsodium_version }}-RELEASE https://github.com/jedisct1/libsodium.git /tmp/libsodium
         cd /tmp/libsodium
-        ./configure CC=${{ inputs.cc }} --prefix=${{ inputs.prefix }} --disable-shared --enable-static
+        ./configure CC=${{ inputs.cc }} --prefix=${{ steps.prep.outputs.prefix }} --disable-shared --enable-static
         make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
         make install
 
@@ -74,7 +81,7 @@ runs:
         CMAKE_GENERATOR="${{ inputs.cmake_generator }}"
         CC=${{ inputs.cc }} cmake -B build \
           ${CMAKE_GENERATOR:+-G "$CMAKE_GENERATOR"} \
-          -DCMAKE_INSTALL_PREFIX=${{ inputs.prefix }} \
+          -DCMAKE_INSTALL_PREFIX=${{ steps.prep.outputs.prefix }} \
           -DENABLE_PROGRAMS=OFF -DENABLE_TESTING=OFF \
           -DCMAKE_BUILD_TYPE=Release \
           -DUSE_STATIC_MBEDTLS_LIBRARY=ON -DUSE_SHARED_MBEDTLS_LIBRARY=OFF
@@ -94,9 +101,9 @@ runs:
         fi
         CC=${{ inputs.cc }} cmake -B build \
           ${CMAKE_GENERATOR:+-G "$CMAKE_GENERATOR"} \
-          -DCMAKE_INSTALL_PREFIX=${{ inputs.prefix }} \
+          -DCMAKE_INSTALL_PREFIX=${{ steps.prep.outputs.prefix }} \
           -DBUILD_SHARED_LIBS=OFF \
           -DCMAKE_BUILD_TYPE=MinSizeRel
         cmake --build build
         cmake --install build
-        rm -f ${{ inputs.prefix }}/lib/libz.so* 2>/dev/null || true
+        rm -f ${{ steps.prep.outputs.prefix }}/lib/libz.so* 2>/dev/null || true
