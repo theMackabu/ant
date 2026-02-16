@@ -71,7 +71,9 @@ runs:
       run: |
         git clone --depth 1 --branch mbedtls-${{ inputs.mbedtls_version }} --recurse-submodules https://github.com/Mbed-TLS/mbedtls.git /tmp/mbedtls
         cd /tmp/mbedtls
+        CMAKE_GENERATOR="${{ inputs.cmake_generator }}"
         CC=${{ inputs.cc }} cmake -B build \
+          ${CMAKE_GENERATOR:+-G "$CMAKE_GENERATOR"} \
           -DCMAKE_INSTALL_PREFIX=${{ inputs.prefix }} \
           -DENABLE_PROGRAMS=OFF -DENABLE_TESTING=OFF \
           -DCMAKE_BUILD_TYPE=Release \

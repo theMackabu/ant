@@ -39,17 +39,34 @@ jobs:
           - macos-x64
           - macos-aarch64
           - windows-x64
-        tls: [openssl, mbedtls]
     uses: ./.github/workflows/build-platform.yml
     with:
       platform: ${{ matrix.platform }}
-      tls_library: ${{ matrix.tls }}
+      build_timestamp: ${{ needs.prepare.outputs.timestamp }}
+
+  build-mbedtls:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - linux-glibc-x64
+          - linux-glibc-aarch64
+          - linux-musl-x64
+          - linux-musl-aarch64
+          - macos-x64
+          - macos-aarch64
+          - windows-x64
+    uses: ./.github/workflows/build-platform.yml
+    with:
+      platform: ${{ matrix.platform }}
+      tls_library: mbedtls
       build_timestamp: ${{ needs.prepare.outputs.timestamp }}
 
   summary:
-    needs: build
+    needs: [build, build-mbedtls]
     runs-on: ubuntu-latest
-    if: ${{ !cancelled() && needs.build.result != 'skipped' }}
+    if: ${{ !cancelled() && (needs.build.result != 'skipped' || needs.build-mbedtls.result != 'skipped') }}
     steps:
       - name: Download version artifacts
         uses: actions/download-artifact@v4
