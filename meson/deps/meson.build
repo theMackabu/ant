@@ -60,6 +60,7 @@ subprojects_src = src_root / 'vendor'
 subprojects_build = meson.project_build_root() / 'vendor'
 
 llhttp = subproject('llhttp').get_variable('llhttp_dep')
+libuv_dep = subproject('libuv').get_variable('libuv_dep')
 
 tlsuv_opts = cmake.subproject_options()
 tlsuv_opts.set_override_option('warning_level', '0')
@@ -105,7 +106,6 @@ endif
 tlsuv_opts.append_compile_args('c', tlsuv_compile_args)
 tlsuv_dep = cmake.subproject('tlsuv', options: tlsuv_opts).dependency('tlsuv')
 
-libuv_dep = subproject('libuv').get_variable('libuv_dep')
 uthash_dep = subproject('uthash').get_variable('uthash_dep')
 yyjson_dep = subproject('yyjson').get_variable('yyjson_dep')
 uuidv7_dep = subproject('uuidv7').get_variable('uuidv7_dep')
