@@ -18,7 +18,6 @@
       "artifact_name": "ant-linux-x64",
       "binary_name": "ant",
       "deps": [],
-      "tls_library": "openssl",
       "static_link": false,
       "cmake_generator": null,
       "extra_meson_args": null
@@ -31,7 +30,6 @@
       "artifact_name": "ant-linux-aarch64",
       "binary_name": "ant",
       "deps": [],
-      "tls_library": "openssl",
       "static_link": false,
       "cmake_generator": null,
       "extra_meson_args": null
@@ -44,7 +42,6 @@
       "artifact_name": "ant-linux-x64-musl",
       "binary_name": "ant",
       "deps": ["zlib"],
-      "tls_library": "openssl",
       "static_link": true,
       "cmake_generator": "Ninja",
       "extra_meson_args": null
@@ -57,7 +54,6 @@
       "artifact_name": "ant-linux-aarch64-musl",
       "binary_name": "ant",
       "deps": ["zlib"],
-      "tls_library": "openssl",
       "static_link": true,
       "cmake_generator": "Ninja",
       "extra_meson_args": null
@@ -70,7 +66,6 @@
       "artifact_name": "ant-darwin-x64",
       "binary_name": "ant",
       "deps": ["libsodium"],
-      "tls_library": "openssl",
       "static_link": false,
       "cmake_generator": null,
       "extra_meson_args": null
@@ -83,33 +78,6 @@
       "artifact_name": "ant-darwin-aarch64",
       "binary_name": "ant",
       "deps": ["libsodium"],
-      "tls_library": "openssl",
-      "static_link": false,
-      "cmake_generator": null,
-      "extra_meson_args": null
-    },
-    "macos-x64-mbedtls": {
-      "os_type": "macos",
-      "arch": "x86_64",
-      "zig_target": "x86_64-macos",
-      "rust_target": "x86_64-apple-darwin",
-      "artifact_name": "ant-darwin-x64-mbedtls",
-      "binary_name": "ant",
-      "deps": ["libsodium", "mbedtls"],
-      "tls_library": "mbedtls",
-      "static_link": false,
-      "cmake_generator": null,
-      "extra_meson_args": null
-    },
-    "macos-aarch64-mbedtls": {
-      "os_type": "macos",
-      "arch": "aarch64",
-      "zig_target": "aarch64-macos",
-      "rust_target": "aarch64-apple-darwin",
-      "artifact_name": "ant-darwin-aarch64-mbedtls",
-      "binary_name": "ant",
-      "deps": ["libsodium", "mbedtls"],
-      "tls_library": "mbedtls",
       "static_link": false,
       "cmake_generator": null,
       "extra_meson_args": null
@@ -122,7 +90,6 @@
       "artifact_name": "ant-windows-x64",
       "binary_name": "ant.exe",
       "deps": [],
-      "tls_library": "openssl",
       "static_link": true,
       "cmake_generator": "MinGW Makefiles",
       "extra_meson_args": "-Dc_std=gnu2x"

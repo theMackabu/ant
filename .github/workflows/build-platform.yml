@@ -7,6 +7,11 @@ on:
         description: 'Platform key from versions.json targets'
         required: true
         type: string
+      tls_library:
+        description: 'TLS library (openssl or mbedtls)'
+        required: false
+        type: string
+        default: 'openssl'
       build_timestamp:
         required: true
         type: string
@@ -27,9 +32,7 @@ jobs:
         inputs.platform == 'linux-musl-x64', 'ubuntu-24.04',
         inputs.platform == 'linux-musl-aarch64', 'ubuntu-24.04-arm',
         inputs.platform == 'macos-x64', 'macos-15-intel',
-        inputs.platform == 'macos-x64-mbedtls', 'macos-15-intel',
         inputs.platform == 'macos-aarch64', 'macos-15',
-        inputs.platform == 'macos-aarch64-mbedtls', 'macos-15',
         inputs.platform == 'windows-x64', 'windows-latest',
         'ubuntu-24.04'
       ) }}
@@ -95,7 +98,7 @@ jobs:
           for pkg in meson ninja llvm jq; do
             brew list "$pkg" &>/dev/null || brew install "$pkg"
           done
-          if [[ "${{ inputs.platform }}" != *"mbedtls"* ]]; then
+          if [[ "${{ inputs.tls_library }}" != "mbedtls" ]]; then
             brew list openssl@3 &>/dev/null || brew install openssl@3
           fi
 
@@ -140,15 +143,28 @@ jobs:
           echo "arch=$(echo $CONFIG | jq -r '.arch')" >> $GITHUB_OUTPUT
           echo "zig_target=$(echo $CONFIG | jq -r '.zig_target')" >> $GITHUB_OUTPUT
           echo "rust_target=$(echo $CONFIG | jq -r '.rust_target')" >> $GITHUB_OUTPUT
-          echo "artifact_name=$(echo $CONFIG | jq -r '.artifact_name')" >> $GITHUB_OUTPUT
           echo "binary_name=$(echo $CONFIG | jq -r '.binary_name')" >> $GITHUB_OUTPUT
-          echo "tls_library=$(echo $CONFIG | jq -r '.tls_library')" >> $GITHUB_OUTPUT
           echo "static_link=$(echo $CONFIG | jq -r '.static_link')" >> $GITHUB_OUTPUT
           echo "cmake_generator=$(echo $CONFIG | jq -r '.cmake_generator // empty')" >> $GITHUB_OUTPUT
           echo "extra_meson_args=$(echo $CONFIG | jq -r '.extra_meson_args // empty')" >> $GITHUB_OUTPUT
 
-          # Deps as space-separated string
-          echo "deps=$(echo $CONFIG | jq -r '.deps | join(" ")')" >> $GITHUB_OUTPUT
+          # TLS library from workflow input (overrides versions.json)
+          TLS_LIBRARY="${{ inputs.tls_library }}"
+          echo "tls_library=$TLS_LIBRARY" >> $GITHUB_OUTPUT
+
+          # Artifact name: append -mbedtls suffix when using mbedtls
+          ARTIFACT_NAME=$(echo $CONFIG | jq -r '.artifact_name')
+          if [[ "$TLS_LIBRARY" == "mbedtls" ]]; then
+            ARTIFACT_NAME="${ARTIFACT_NAME}-mbedtls"
+          fi
+          echo "artifact_name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
+
+          # Deps: add mbedtls to deps list when using mbedtls
+          DEPS_LIST=$(echo $CONFIG | jq -r '.deps | join(" ")')
+          if [[ "$TLS_LIBRARY" == "mbedtls" ]]; then
+            DEPS_LIST="$DEPS_LIST mbedtls"
+          fi
+          echo "deps=$DEPS_LIST" >> $GITHUB_OUTPUT
 
           # Dep versions
           echo "libsodium_version=$(echo $DEPS | jq -r '.libsodium')" >> $GITHUB_OUTPUT
@@ -229,6 +245,6 @@ jobs:
       - name: Upload version info
         uses: actions/upload-artifact@v4
         with:
-          name: version-${{ inputs.platform }}
+          name: version-${{ steps.config.outputs.artifact_name }}
           path: version.txt
           retention-days: 1

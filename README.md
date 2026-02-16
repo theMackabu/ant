@@ -21,7 +21,7 @@ Full async/await, modules, HTTP servers, crypto, and more.
 ```bash
 curl -fsSL https://ant.themackabu.com/install | bash
 
-# or with MbedTLS (darwin only)
+# or with MbedTLS
 curl -fsSL https://ant.themackabu.com/install | MBEDTLS=1 bash
 ```
 

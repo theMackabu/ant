@@ -38,12 +38,12 @@ jobs:
           - linux-musl-aarch64
           - macos-x64
           - macos-aarch64
-          - macos-x64-mbedtls
-          - macos-aarch64-mbedtls
           - windows-x64
+        tls: [openssl, mbedtls]
     uses: ./.github/workflows/build-platform.yml
     with:
       platform: ${{ matrix.platform }}
+      tls_library: ${{ matrix.tls }}
       build_timestamp: ${{ needs.prepare.outputs.timestamp }}
 
   summary:

@@ -59,6 +59,8 @@ deps_info = {
 subprojects_src = src_root / 'vendor'
 subprojects_build = meson.project_build_root() / 'vendor'
 
+llhttp = subproject('llhttp').get_variable('llhttp_dep')
+
 tlsuv_opts = cmake.subproject_options()
 tlsuv_opts.set_override_option('warning_level', '0')
 tlsuv_opts.append_compile_args('c', ['-w'])
@@ -68,11 +70,9 @@ tlsuv_cmake_defines = {
   'BUILD_TESTING': 'OFF',
   'TLSUV_TLSLIB': tls_lib,
   'CMAKE_WARN_DEV': 'OFF',
-  
   'CMAKE_POLICY_DEFAULT_CMP0200': 'NEW',
   'CMAKE_POLICY_DEFAULT_CMP0156': 'NEW',
   'CMAKE_POLICY_DEFAULT_CMP0179': 'NEW',
-  
   'llhttp_DIR': subprojects_src / deps_info['llhttp']['dir'] / 'cmake',
   'libuv_DIR': subprojects_src / deps_info['libuv']['dir'] / 'cmake',
 }
@@ -90,11 +90,13 @@ tlsuv_compile_args = [
   '-Wno-sometimes-uninitialized',
   '-Wno-cast-function-type-mismatch',
   '-Wno-missing-field-initializers',
-  
   '-I' + subprojects_src / deps_info['libuv']['dir'] / deps_info['libuv']['inc'],
   '-I' + subprojects_src / deps_info['llhttp']['dir'] / deps_info['llhttp']['inc'],
-  '-I' + openssl_dep.get_variable(pkgconfig: 'includedir', default_value: ''),
 ]
+
+if tls_lib == 'openssl'
+  tlsuv_compile_args += ['-I' + openssl_dep.get_variable(pkgconfig: 'includedir')]
+endif
 
 if cmake_prefix != ''
   tlsuv_compile_args += ['-I' + cmake_prefix / 'include']
@@ -103,7 +105,6 @@ endif
 tlsuv_opts.append_compile_args('c', tlsuv_compile_args)
 tlsuv_dep = cmake.subproject('tlsuv', options: tlsuv_opts).dependency('tlsuv')
 
-llhttp_dep = subproject('llhttp').get_variable('llhttp_dep')
 libuv_dep = subproject('libuv').get_variable('libuv_dep')
 uthash_dep = subproject('uthash').get_variable('uthash_dep')
 yyjson_dep = subproject('yyjson').get_variable('yyjson_dep')
@@ -168,6 +169,30 @@ oxc_lib = custom_target(
 oxc_dep = declare_dependency(link_with: oxc_lib)
 zig = find_program('zig', required: true)
 
+deps_info = {
+  'lmdb': {
+    'dir': 'openldap-LMDB_0.9.33',
+    'inc': 'libraries/liblmdb',
+  },
+  'yyjson': {
+    'dir': 'yyjson-0.12.0',
+    'inc': 'src',
+  },
+  'libuv': {
+    'dir': 'libuv-v1.52.0',
+    'inc': 'include',
+  },
+  'llhttp': {
+    'dir': 'llhttp-release-v9.3.1',
+    'inc': 'include',
+  },
+  'zlib-ng': {
+    'dir': 'zlib-ng-2.3.3',
+    'inc': '',
+    'build_dir': true,
+  },
+}
+
 subprojects_src = src_root / 'vendor'
 subprojects_build = meson.project_build_root() / 'vendor'
 
@@ -182,7 +207,7 @@ pkg_build_dir = meson.current_build_dir()
 
 ant_deps = [
   libffi_dep, uuid_dep, crprintf_dep,
-  llhttp_dep, pcre2_dep, libuv_dep,
+  llhttp, pcre2_dep, libuv_dep,
   argtable3_dep, tlsuv_dep, libsodium_dep,
   yyjson_dep, minicoro_dep, uuidv7_dep,
   openssl_dep, zlib_dep, uthash_dep,
