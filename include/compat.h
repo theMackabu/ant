@@ -53,11 +53,6 @@ static inline unsigned int compat_sleep(unsigned int seconds) { Sleep(seconds * 
 #define getppid _getpid
 #endif
 
-struct timeval {
-  long tv_sec;
-  long tv_usec;
-};
-
 static inline int compat_gettimeofday(struct timeval *tv, void *tz) {
   (void)tz;
   FILETIME ft;

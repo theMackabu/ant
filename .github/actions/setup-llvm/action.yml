@@ -78,11 +78,11 @@ runs:
             echo "ld=" >> $GITHUB_OUTPUT
             ;;
           windows)
-            echo "cc=gcc" >> $GITHUB_OUTPUT
-            echo "cxx=g++" >> $GITHUB_OUTPUT
-            echo "ar=ar" >> $GITHUB_OUTPUT
-            echo "ranlib=ranlib" >> $GITHUB_OUTPUT
-            echo "strip=strip" >> $GITHUB_OUTPUT
-            echo "ld=" >> $GITHUB_OUTPUT
+            echo "cc=clang" >> $GITHUB_OUTPUT
+            echo "cxx=clang++" >> $GITHUB_OUTPUT
+            echo "ar=llvm-ar" >> $GITHUB_OUTPUT
+            echo "ranlib=llvm-ranlib" >> $GITHUB_OUTPUT
+            echo "strip=llvm-strip" >> $GITHUB_OUTPUT
+            echo "ld=lld" >> $GITHUB_OUTPUT
             ;;
         esac

@@ -1,0 +1,24 @@
+--- a/src/mbedtls/engine.c
++++ b/src/mbedtls/engine.c
+@@ -111,7 +111,7 @@
+ tlsuv_engine_t new_mbedtls_engine(tls_context *ctx, const char *host);
+ 
+ static void mbedtls_set_io(tlsuv_engine_t, io_ctx , io_read , io_write );
+-static void mbedtls_set_fd(tlsuv_engine_t, uv_os_fd_t );
++static void mbedtls_set_fd(tlsuv_engine_t, tlsuv_sock_t );
+ 
+ static tls_handshake_state mbedtls_hs_state(tlsuv_engine_t engine);
+ static tls_handshake_state
+@@ -701,10 +701,10 @@
+     mbedtls_ssl_set_bio(eng->ssl, eng, engine_io_write, engine_io_read, NULL);
+ }
+ 
+-static void mbedtls_set_fd(tlsuv_engine_t e, uv_os_fd_t fd) {
++static void mbedtls_set_fd(tlsuv_engine_t e, tlsuv_sock_t fd) {
+     struct mbedtls_engine *eng = (struct mbedtls_engine *) e;
+     assert(eng->io == NULL);
+-    eng->io_fd = fd;
++    eng->io_fd = (uv_os_fd_t)fd;
+     eng->io = &eng->io_fd;
+     mbedtls_ssl_set_bio(eng->ssl, eng->io, mbedtls_net_send, mbedtls_net_recv, NULL);
+ }

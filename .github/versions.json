@@ -91,7 +91,7 @@
       "binary_name": "ant.exe",
       "deps": [],
       "static_link": true,
-      "cmake_generator": "MinGW Makefiles",
+      "cmake_generator": "Ninja",
       "extra_meson_args": "-Dc_std=gnu2x"
     }
   }

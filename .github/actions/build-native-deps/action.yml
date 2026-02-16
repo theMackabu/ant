@@ -76,11 +76,24 @@ runs:
       if: steps.cache.outputs.cache-hit != 'true' && contains(inputs.deps, 'mbedtls')
       shell: bash
       run: |
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          export PATH="$(cygpath "$RUNNER_TEMP/msys64/clang64/bin"):$PATH"
+        fi
         git clone --depth 1 --branch mbedtls-${{ inputs.mbedtls_version }} --recurse-submodules https://github.com/Mbed-TLS/mbedtls.git /tmp/mbedtls
         cd /tmp/mbedtls
         CMAKE_GENERATOR="${{ inputs.cmake_generator }}"
-        CC=${{ inputs.cc }} cmake -B build \
+        CMAKE_ARGS="-DCMAKE_C_COMPILER=${{ inputs.cc }}"
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          AR_PATH="$(which ${{ inputs.ar }})"
+          RANLIB_PATH="$(which ${{ inputs.ranlib }})"
+          CMAKE_ARGS="$CMAKE_ARGS -DCMAKE_AR=$AR_PATH -DCMAKE_RANLIB=$RANLIB_PATH"
+        fi
+        if [[ -n "${{ inputs.cxx }}" ]]; then
+          CMAKE_ARGS="$CMAKE_ARGS -DCMAKE_CXX_COMPILER=${{ inputs.cxx }}"
+        fi
+        cmake -B build \
           ${CMAKE_GENERATOR:+-G "$CMAKE_GENERATOR"} \
+          $CMAKE_ARGS \
           -DCMAKE_INSTALL_PREFIX=${{ steps.prep.outputs.prefix }} \
           -DENABLE_PROGRAMS=OFF -DENABLE_TESTING=OFF \
           -DCMAKE_BUILD_TYPE=Release \
@@ -92,6 +105,9 @@ runs:
       if: steps.cache.outputs.cache-hit != 'true' && contains(inputs.deps, 'zlib')
       shell: bash
       run: |
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          export PATH="$(cygpath "$RUNNER_TEMP/msys64/clang64/bin"):$PATH"
+        fi
         git clone --depth 1 --branch v${{ inputs.zlib_version }} https://github.com/madler/zlib.git /tmp/zlib
         cd /tmp/zlib
         CMAKE_GENERATOR="${{ inputs.cmake_generator }}"
@@ -99,8 +115,18 @@ runs:
           export AR="${{ inputs.ar }}"
           export RANLIB="${{ inputs.ranlib }}"
         fi
-        CC=${{ inputs.cc }} cmake -B build \
+        CMAKE_ARGS="-DCMAKE_C_COMPILER=${{ inputs.cc }}"
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          AR_PATH="$(which ${{ inputs.ar }})"
+          RANLIB_PATH="$(which ${{ inputs.ranlib }})"
+          CMAKE_ARGS="$CMAKE_ARGS -DCMAKE_AR=$AR_PATH -DCMAKE_RANLIB=$RANLIB_PATH"
+        fi
+        if [[ -n "${{ inputs.cxx }}" ]]; then
+          CMAKE_ARGS="$CMAKE_ARGS -DCMAKE_CXX_COMPILER=${{ inputs.cxx }}"
+        fi
+        cmake -B build \
           ${CMAKE_GENERATOR:+-G "$CMAKE_GENERATOR"} \
+          $CMAKE_ARGS \
           -DCMAKE_INSTALL_PREFIX=${{ steps.prep.outputs.prefix }} \
           -DBUILD_SHARED_LIBS=OFF \
           -DCMAKE_BUILD_TYPE=MinSizeRel

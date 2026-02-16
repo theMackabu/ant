@@ -142,10 +142,10 @@ static inline bool progress_detect_ansi(FILE *f) {
     if (SetConsoleMode(h, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING)) return true;
   }
   const char *term = getenv("TERM");
-  return term && strstr(term, "xterm")
-      || term && strstr(term, "vt100")
-      || term && strstr(term, "color")
-      || term && strstr(term, "ansi");
+  return (term && strstr(term, "xterm"))
+      || (term && strstr(term, "vt100"))
+      || (term && strstr(term, "color"))
+      || (term && strstr(term, "ansi"));
 #else
   const char *term = getenv("TERM");
   if (!term) return false;
