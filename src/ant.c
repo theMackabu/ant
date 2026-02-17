@@ -10,6 +10,7 @@
 #include "common.h"
 #include "arena.h"
 #include "utils.h"
+#include "base64.h"
 #include "runtime.h"
 #include "internal.h"
 #include "sugar.h"
@@ -20219,8 +20220,6 @@ static jsval_t builtin_parseFloat(struct js *js, jsval_t *args, int nargs) {
   return tov(result);
 }
 
-static const char base64_chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
 static jsval_t builtin_btoa(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "btoa requires 1 argument");
   
@@ -20233,54 +20232,15 @@ static jsval_t builtin_btoa(struct js *js, jsval_t *args, int nargs) {
   jsoff_t str_len, str_off = vstr(js, str_val, &str_len);
   const char *str = (char *) &js->mem[str_off];
   
-  for (jsoff_t i = 0; i < str_len; i++) {
-    if ((unsigned char)str[i] > 255) {
-      return js_mkerr(js, "btoa: character out of range");
-    }
-  }
-  
-  size_t out_len = ((str_len + 2) / 3) * 4;
-  char *out = (char *)ant_calloc(out_len + 1);
+  size_t out_len;
+  char *out = ant_base64_encode((const uint8_t *)str, str_len, &out_len);
   if (!out) return js_mkerr(js, "out of memory");
   
-  size_t i = 0, j = 0;
-  while (i < str_len) {
-    size_t remaining = str_len - i;
-    uint32_t a = (unsigned char)str[i++];
-    uint32_t b = (remaining > 1) ? (unsigned char)str[i++] : 0;
-    uint32_t c = (remaining > 2) ? (unsigned char)str[i++] : 0;
-    uint32_t triple = (a << 16) | (b << 8) | c;
-    
-    out[j++] = base64_chars[(triple >> 18) & 0x3F];
-    out[j++] = base64_chars[(triple >> 12) & 0x3F];
-    out[j++] = (remaining > 1) ? base64_chars[(triple >> 6) & 0x3F] : '=';
-    out[j++] = (remaining > 2) ? base64_chars[triple & 0x3F] : '=';
-  }
-  out[j] = '\0';
-  
-  jsval_t result = js_mkstr(js, out, j);
+  jsval_t result = js_mkstr(js, out, out_len);
   free(out);
+  
   return result;
 }
-
-static const int8_t decode_table[256] = {
-  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,62,-1,-1,-1,63,
-  52,53,54,55,56,57,58,59,60,61,-1,-1,-1,-1,-1,-1,
-  -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9,10,11,12,13,14,
-  15,16,17,18,19,20,21,22,23,24,25,-1,-1,-1,-1,-1,
-  -1,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,
-  41,42,43,44,45,46,47,48,49,50,51,-1,-1,-1,-1,-1,
-  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1
-};
 
 static jsval_t builtin_atob(struct js *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "atob requires 1 argument");
@@ -20293,37 +20253,15 @@ static jsval_t builtin_atob(struct js *js, jsval_t *args, int nargs) {
   
   jsoff_t str_len, str_off = vstr(js, str_val, &str_len);
   const char *str = (char *) &js->mem[str_off];
-  
   if (str_len == 0) return js_mkstr(js, "", 0);
-  if (str_len % 4 != 0) return js_mkerr(js, "atob: invalid base64 string");
   
-  size_t out_len = (str_len / 4) * 3;
-  if (str_len > 0 && str[str_len - 1] == '=') out_len--;
-  if (str_len > 1 && str[str_len - 2] == '=') out_len--;
+  size_t out_len;
+  uint8_t *out = ant_base64_decode(str, str_len, &out_len);
+  if (!out) return js_mkerr(js, "atob: invalid base64 string");
   
-  char *out = (char *)ant_calloc(out_len + 1);
-  if (!out) return js_mkerr(js, "out of memory");
-  
-  size_t i = 0, j = 0;
-  while (i < str_len) {
-    int8_t a = decode_table[(unsigned char)str[i++]];
-    int8_t b = decode_table[(unsigned char)str[i++]];
-    int8_t c = (str[i] == '=') ? 0 : decode_table[(unsigned char)str[i]]; i++;
-    int8_t d = (str[i] == '=') ? 0 : decode_table[(unsigned char)str[i]]; i++;
-    
-    if (a < 0 || b < 0 || (str[i-2] != '=' && c < 0) || (str[i-1] != '=' && d < 0)) {
-      free(out);
-      return js_mkerr(js, "atob: invalid character in base64 string");
-    }
-    
-    uint32_t triple = ((uint32_t)a << 18) | ((uint32_t)b << 12) | ((uint32_t)c << 6) | (uint32_t)d;
-    if (j < out_len) out[j++] = (triple >> 16) & 0xFF;
-    if (j < out_len) out[j++] = (triple >> 8) & 0xFF;
-    if (j < out_len) out[j++] = triple & 0xFF;
-  }
-  
-  jsval_t result = js_mkstr(js, out, out_len);
+  jsval_t result = js_mkstr(js, (char *)out, out_len);
   free(out);
+  
   return result;
 }
 

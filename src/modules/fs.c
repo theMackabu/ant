@@ -11,11 +11,15 @@
 #include <errno.h>
 
 #include "ant.h"
+#include "utf8.h"
+#include "utils.h"
+#include "base64.h"
 #include "errors.h"
 #include "internal.h"
 #include "runtime.h"
 
 #include "modules/fs.h"
+#include "modules/buffer.h"
 #include "modules/symbol.h"
 
 #define fs_err_code(js, code, op, path) ({ \
@@ -23,6 +27,103 @@
   js_set(js, _props, "code", js_mkstr(js, code, strlen(code))); \
   js_mkerr_props(js, JS_ERR_TYPE, _props, "%s: %s, %s '%s'", code, strerror(errno), op, path); \
 })
+
+typedef enum {
+  FS_ENC_NONE = 0,
+  FS_ENC_UTF8,
+  FS_ENC_UTF16LE,
+  FS_ENC_LATIN1,
+  FS_ENC_BASE64,
+  FS_ENC_BASE64URL,
+  FS_ENC_HEX,
+  FS_ENC_ASCII,
+} fs_encoding_t;
+
+static fs_encoding_t parse_encoding(struct js *js, jsval_t arg) {
+  size_t len;
+  const char *str = NULL;
+
+  if (vtype(arg) == T_STR) str = js_getstr(js, arg, &len); 
+  else if (vtype(arg) == T_OBJ) {
+    jsval_t enc = js_get(js, arg, "encoding");
+    if (vtype(enc) == T_STR) str = js_getstr(js, enc, &len);
+  }
+
+  if (!str) return FS_ENC_NONE;
+
+  if (len == 4 && memcmp(str, "utf8", 4) == 0)      return FS_ENC_UTF8;
+  if (len == 5 && memcmp(str, "utf-8", 5) == 0)     return FS_ENC_UTF8;
+  if (len == 7 && memcmp(str, "utf16le", 7) == 0)   return FS_ENC_UTF16LE;
+  if (len == 4 && memcmp(str, "ucs2", 4) == 0)      return FS_ENC_UTF16LE;
+  if (len == 5 && memcmp(str, "ucs-2", 5) == 0)     return FS_ENC_UTF16LE;
+  if (len == 6 && memcmp(str, "latin1", 6) == 0)    return FS_ENC_LATIN1;
+  if (len == 6 && memcmp(str, "binary", 6) == 0)    return FS_ENC_LATIN1;
+  if (len == 6 && memcmp(str, "base64", 6) == 0)    return FS_ENC_BASE64;
+  if (len == 9 && memcmp(str, "base64url", 9) == 0) return FS_ENC_BASE64URL;
+  if (len == 3 && memcmp(str, "hex", 3) == 0)       return FS_ENC_HEX;
+  if (len == 5 && memcmp(str, "ascii", 5) == 0)     return FS_ENC_ASCII;
+
+  return FS_ENC_NONE;
+}
+
+static jsval_t encode_data(struct js *js, const char *data, size_t len, fs_encoding_t enc) {
+  switch (enc) {
+    case FS_ENC_UTF8:
+    case FS_ENC_LATIN1:
+    case FS_ENC_ASCII: return js_mkstr(js, data, len);
+
+    case FS_ENC_HEX: {
+      char *out = malloc(len * 2);
+      if (!out) return js_mkerr(js, "Out of memory");
+      for (size_t i = 0; i < len; i++) {
+        out[i * 2] = hex_char((unsigned char)data[i] >> 4);
+        out[i * 2 + 1] = hex_char(data[i]);
+      }
+      jsval_t result = js_mkstr(js, out, len * 2);
+      free(out); return result;
+    }
+
+    case FS_ENC_BASE64: {
+      size_t out_len;
+      char *out = ant_base64_encode((const uint8_t *)data, len, &out_len);
+      if (!out) return js_mkerr(js, "Out of memory");
+      jsval_t result = js_mkstr(js, out, out_len);
+      free(out); return result;
+    }
+
+    case FS_ENC_BASE64URL: {
+      size_t out_len;
+      char *out = ant_base64_encode((const uint8_t *)data, len, &out_len);
+      if (!out) return js_mkerr(js, "Out of memory");
+      for (size_t i = 0; i < out_len; i++) {
+        if (out[i] == '+') out[i] = '-';
+        else if (out[i] == '/') out[i] = '_';
+      }
+      while (out_len > 0 && out[out_len - 1] == '=') out_len--;
+      jsval_t result = js_mkstr(js, out, out_len);
+      free(out); return result;
+    }
+
+    case FS_ENC_UTF16LE: {
+      const unsigned char *s = (const unsigned char *)data;
+      char *out = malloc((len / 2) * 4);
+      if (!out) return js_mkerr(js, "Out of memory");
+      size_t j = 0;
+      for (size_t i = 0; i + 1 < len; i += 2) {
+        uint32_t cp = s[i] | (s[i + 1] << 8);
+        bool is_hi = cp >= 0xD800 && cp <= 0xDBFF && i + 3 < len;
+        uint32_t lo = is_hi ? s[i + 2] | (s[i + 3] << 8) : 0;
+        bool is_pair = is_hi && lo >= 0xDC00 && lo <= 0xDFFF;
+        if (is_pair) { cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00); i += 2; }
+        j += utf8_encode(cp, out + j);
+      }
+      jsval_t result = js_mkstr(js, out, j);
+      free(out); return result;
+    }
+
+    default: return js_mkstr(js, data, len);
+  }
+}
 
 typedef enum {
   FS_OP_READ,
@@ -38,17 +139,18 @@ typedef enum {
 } fs_op_type_t;
 
 typedef struct fs_request_s {
+  uv_fs_t uv_req;
   struct js *js;
   jsval_t promise;
-  uv_fs_t uv_req;
-  fs_op_type_t op_type;
   char *path;
   char *data;
+  char *error_msg;
   size_t data_len;
+  fs_op_type_t op_type;
+  fs_encoding_t encoding;
   uv_file fd;
   int completed;
   int failed;
-  char *error_msg;
 } fs_request_t;
 
 static UT_array *pending_requests = NULL;
@@ -66,16 +168,21 @@ static void free_fs_request(fs_request_t *req) {
 
 static void remove_pending_request(fs_request_t *req) {
   if (!req || !pending_requests) return;
+  unsigned int len = utarray_len(pending_requests);
   
-  fs_request_t **p = NULL;
-  unsigned int i = 0;
-  
-  while ((p = (fs_request_t**)utarray_next(pending_requests, p))) {
-    if (*p == req) {
-      utarray_erase(pending_requests, i, 1);
-      break;
-    } i++;
+  for (unsigned int i = 0; i < len; i++) {
+    if (*(fs_request_t**)utarray_eltptr(pending_requests, i) != req) continue;
+    utarray_erase(pending_requests, i, 1); break;
   }
+}
+
+static jsval_t fs_read_to_uint8array(struct js *js, const char *data, size_t len) {
+  ArrayBufferData *ab = create_array_buffer_data(len);
+  if (!ab) return js_mkundef();
+  memcpy(ab->data, data, len);
+  jsval_t result = create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, len, "Uint8Array");
+  if (vtype(result) == T_ERR) free_array_buffer_data(ab);
+  return result;
 }
 
 static void complete_request(fs_request_t *req) {
@@ -84,12 +191,13 @@ static void complete_request(fs_request_t *req) {
     jsval_t err = js_mkstr(req->js, err_msg, strlen(err_msg));
     js_reject_promise(req->js, req->promise, err);
   } else {
-    jsval_t result;
-    if ((req->op_type == FS_OP_READ || req->op_type == FS_OP_READ_BYTES) && req->data) {
+    jsval_t result = js_mkundef();
+    if (req->op_type == FS_OP_READ && req->data) {
+      if (req->encoding != FS_ENC_NONE)
+        result = encode_data(req->js, req->data, req->data_len, req->encoding);
+      else result = fs_read_to_uint8array(req->js, req->data, req->data_len);
+    } else if (req->op_type == FS_OP_READ_BYTES && req->data)
       result = js_mkstr(req->js, req->data, req->data_len);
-    } else if (req->op_type == FS_OP_STAT) {
-      result = js_mkundef();
-    } else result = js_mkundef();
     js_resolve_promise(req->js, req->promise, result);
   }
   
@@ -386,10 +494,12 @@ static jsval_t builtin_fs_readFileSync(struct js *js, jsval_t *args, int nargs) 
     return js_mkerr(js, "Failed to read entire file");
   }
   
-  data[file_size] = '\0';
-  jsval_t result = js_mkstr(js, data, file_size);
+  fs_encoding_t enc = (nargs > 1) ? parse_encoding(js, args[1]) : FS_ENC_NONE;
+  jsval_t result = (enc != FS_ENC_NONE)
+    ? encode_data(js, data, file_size, enc)
+    : fs_read_to_uint8array(js, data, file_size);
+    
   free(data);
-  
   return result;
 }
 
@@ -458,6 +568,7 @@ static jsval_t builtin_fs_readFile(struct js *js, jsval_t *args, int nargs) {
   
   req->js = js;
   req->op_type = FS_OP_READ;
+  req->encoding = (nargs > 1) ? parse_encoding(js, args[1]) : FS_ENC_NONE;
   req->promise = js_mkpromise(js);
   req->path = strndup(path, path_len);
   req->uv_req.data = req;

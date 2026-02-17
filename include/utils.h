@@ -15,6 +15,7 @@ char *resolve_js_file(const char *filename);
 uint64_t hash_key(const char *key, size_t len);
 
 int hex_digit(char c);
+char hex_char(int v);
 int is_typescript_file(const char *filename);
 
 void *try_oom(size_t size);

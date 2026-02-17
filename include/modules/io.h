@@ -7,6 +7,12 @@
 
 extern bool io_no_color;
 
+typedef struct {
+  jsoff_t *visited;
+  int count;
+  int capacity;
+} inspect_visited_t;
+
 #define C(color)  (io_no_color ? "" : (color))
 #define C_RESET   C("\x1b[0m")
 #define C_BOLD    C("\x1b[1m")
@@ -23,6 +29,23 @@ extern bool io_no_color;
 
 void init_console_module(void);
 void print_value_colored(const char *str, FILE *stream);
-void console_print(struct js *js, jsval_t *args, int nargs, const char *color, FILE *stream);
+void print_repl_value(ant_t *js, jsval_t val, FILE *stream);
+
+void inspect_object(
+  ant_t *js, jsval_t obj,
+  FILE *stream, int depth, 
+  inspect_visited_t *visited
+);
+
+void inspect_value(
+  ant_t *js, jsval_t val,
+  FILE *stream, int depth,
+  inspect_visited_t *visited
+);
+
+jsval_t console_print(
+  ant_t *js, jsval_t *args,
+  int nargs, const char *color, FILE *stream
+);
 
 #endif

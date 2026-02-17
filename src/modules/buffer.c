@@ -12,6 +12,7 @@
 #include "ant.h"
 #include "errors.h"
 #include "arena.h"
+#include "base64.h"
 #include "internal.h"
 #include "runtime.h"
 
@@ -116,70 +117,7 @@ static jsval_t js_buffer_toString(struct js *js, jsval_t *args, int nargs);
 static jsval_t js_buffer_toBase64(struct js *js, jsval_t *args, int nargs);
 static jsval_t js_buffer_write(struct js *js, jsval_t *args, int nargs);
 
-static const char base64_chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-static const unsigned char base64_decode_table[256] = {
-  ['A'] = 0,  ['B'] = 1,  ['C'] = 2,  ['D'] = 3,  ['E'] = 4,  ['F'] = 5,  ['G'] = 6,  ['H'] = 7,
-  ['I'] = 8,  ['J'] = 9,  ['K'] = 10, ['L'] = 11, ['M'] = 12, ['N'] = 13, ['O'] = 14, ['P'] = 15,
-  ['Q'] = 16, ['R'] = 17, ['S'] = 18, ['T'] = 19, ['U'] = 20, ['V'] = 21, ['W'] = 22, ['X'] = 23,
-  ['Y'] = 24, ['Z'] = 25, ['a'] = 26, ['b'] = 27, ['c'] = 28, ['d'] = 29, ['e'] = 30, ['f'] = 31,
-  ['g'] = 32, ['h'] = 33, ['i'] = 34, ['j'] = 35, ['k'] = 36, ['l'] = 37, ['m'] = 38, ['n'] = 39,
-  ['o'] = 40, ['p'] = 41, ['q'] = 42, ['r'] = 43, ['s'] = 44, ['t'] = 45, ['u'] = 46, ['v'] = 47,
-  ['w'] = 48, ['x'] = 49, ['y'] = 50, ['z'] = 51, ['0'] = 52, ['1'] = 53, ['2'] = 54, ['3'] = 55,
-  ['4'] = 56, ['5'] = 57, ['6'] = 58, ['7'] = 59, ['8'] = 60, ['9'] = 61, ['+'] = 62, ['/'] = 63,
-};
-
-static char *base64_encode(const uint8_t *data, size_t len, size_t *out_len) {
-  size_t encoded_len = 4 * ((len + 2) / 3);
-  char *result = malloc(encoded_len + 1);
-  if (!result) return NULL;
-  
-  size_t j = 0;
-  for (size_t i = 0; i < len; i += 3) {
-    uint32_t octet_a = i < len ? data[i] : 0;
-    uint32_t octet_b = i + 1 < len ? data[i + 1] : 0;
-    uint32_t octet_c = i + 2 < len ? data[i + 2] : 0;
-    uint32_t triple = (octet_a << 16) + (octet_b << 8) + octet_c;
-    
-    result[j++] = base64_chars[(triple >> 18) & 0x3F];
-    result[j++] = base64_chars[(triple >> 12) & 0x3F];
-    result[j++] = (i + 1 < len) ? base64_chars[(triple >> 6) & 0x3F] : '=';
-    result[j++] = (i + 2 < len) ? base64_chars[triple & 0x3F] : '=';
-  }
-  
-  result[j] = '\0';
-  *out_len = j;
-  return result;
-}
-
-static uint8_t *base64_decode(const char *data, size_t len, size_t *out_len) {
-  if (len % 4 != 0) return NULL;
-  
-  size_t decoded_len = len / 4 * 3;
-  if (len > 0 && data[len - 1] == '=') decoded_len--;
-  if (len > 1 && data[len - 2] == '=') decoded_len--;
-  
-  uint8_t *result = malloc(decoded_len);
-  if (!result) return NULL;
-  
-  size_t j = 0;
-  for (size_t i = 0; i < len; i += 4) {
-    uint32_t sextet_a = base64_decode_table[(unsigned char)data[i]];
-    uint32_t sextet_b = base64_decode_table[(unsigned char)data[i + 1]];
-    uint32_t sextet_c = data[i + 2] == '=' ? 0 : base64_decode_table[(unsigned char)data[i + 2]];
-    uint32_t sextet_d = data[i + 3] == '=' ? 0 : base64_decode_table[(unsigned char)data[i + 3]];
-    uint32_t triple = (sextet_a << 18) + (sextet_b << 12) + (sextet_c << 6) + sextet_d;
-    
-    if (j < decoded_len) result[j++] = (triple >> 16) & 0xFF;
-    if (j < decoded_len) result[j++] = (triple >> 8) & 0xFF;
-    if (j < decoded_len) result[j++] = triple & 0xFF;
-  }
-  
-  *out_len = decoded_len;
-  return result;
-}
-
-static ArrayBufferData *create_array_buffer_data(size_t length) {
+ArrayBufferData *create_array_buffer_data(size_t length) {
   ArrayBufferData *data = ant_calloc(sizeof(ArrayBufferData) + length);
   if (!data) return NULL;
   
@@ -202,7 +140,7 @@ static ArrayBufferData *create_shared_array_buffer_data(size_t length) {
   return data;
 }
 
-static void free_array_buffer_data(ArrayBufferData *data) {
+void free_array_buffer_data(ArrayBufferData *data) {
   if (!data) return;
   data->ref_count--;
   if (data->ref_count <= 0) {
@@ -424,7 +362,7 @@ static bool typedarray_index_setter(struct js *js, jsval_t obj, const char *key,
   S_DONE:    return true;
 }
 
-static jsval_t create_arraybuffer_obj(struct js *js, ArrayBufferData *buffer) {
+jsval_t create_arraybuffer_obj(struct js *js, ArrayBufferData *buffer) {
   jsval_t ab_obj = js_mkobj(js);
   jsval_t ab_proto = js_get_ctor_proto(js, "ArrayBuffer", 11);
   if (is_special_object(ab_proto)) js_set_proto(js, ab_obj, ab_proto);
@@ -436,7 +374,7 @@ static jsval_t create_arraybuffer_obj(struct js *js, ArrayBufferData *buffer) {
   return ab_obj;
 }
 
-static jsval_t create_typed_array_with_buffer(
+jsval_t create_typed_array_with_buffer(
   struct js *js, TypedArrayType type, ArrayBufferData *buffer,
   size_t byte_offset, size_t length, const char *type_name, jsval_t arraybuffer_obj
 ) {
@@ -468,12 +406,13 @@ static jsval_t create_typed_array_with_buffer(
   return obj;
 }
 
-static jsval_t create_typed_array(
+jsval_t create_typed_array(
   struct js *js, TypedArrayType type, ArrayBufferData *buffer,
   size_t byte_offset, size_t length, const char *type_name
 ) {
   jsval_t ab_obj = create_arraybuffer_obj(js, buffer);
-  return create_typed_array_with_buffer(js, type, buffer, byte_offset, length, type_name, ab_obj);
+  jsval_t result = create_typed_array_with_buffer(js, type, buffer, byte_offset, length, type_name, ab_obj);
+  free_array_buffer_data(buffer); return result;
 }
 
 typedef struct {
@@ -1329,7 +1268,7 @@ static jsval_t js_buffer_from(struct js *js, jsval_t *args, int nargs) {
     
     if (encoding == ENC_BASE64) {
       size_t decoded_len;
-      uint8_t *decoded = base64_decode(str, len, &decoded_len);
+      uint8_t *decoded = ant_base64_decode(str, len, &decoded_len);
       if (!decoded) return js_mkerr(js, "Failed to decode base64");
       
       ArrayBufferData *buffer = create_array_buffer_data(decoded_len);
@@ -1436,7 +1375,7 @@ static jsval_t js_buffer_toString(struct js *js, jsval_t *args, int nargs) {
   
   if (encoding == ENC_BASE64) {
     size_t out_len;
-    char *encoded = base64_encode(data, len, &out_len);
+    char *encoded = ant_base64_encode(data, len, &out_len);
     if (!encoded) return js_mkerr(js, "Failed to encode base64");
     
     jsval_t result = js_mkstr(js, encoded, out_len);

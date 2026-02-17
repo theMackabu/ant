@@ -109,6 +109,7 @@ tlsuv_dep = cmake.subproject('tlsuv', options: tlsuv_opts).dependency('tlsuv')
 uthash_dep = subproject('uthash').get_variable('uthash_dep')
 yyjson_dep = subproject('yyjson').get_variable('yyjson_dep')
 uuidv7_dep = subproject('uuidv7').get_variable('uuidv7_dep')
+base64_dep = subproject('aklomp-base64').get_variable('base64_dep')
 argtable3_dep = subproject('argtable3').get_variable('argtable3_dep')
 minicoro_dep = subproject('minicoro').get_variable('minicoro_dep')
 crprintf_dep = subproject('crprintf').get_variable('crprintf_dep')
@@ -207,7 +208,7 @@ pkg_build_dir = meson.current_build_dir()
 
 ant_deps = [
   libffi_dep, uuid_dep, crprintf_dep,
-  llhttp, pcre2_dep, libuv_dep,
+  llhttp, pcre2_dep, libuv_dep, base64_dep,
   argtable3_dep, tlsuv_dep, libsodium_dep,
   yyjson_dep, minicoro_dep, uuidv7_dep,
   openssl_dep, zlib_dep, uthash_dep,

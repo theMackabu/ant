@@ -21,6 +21,10 @@ int hex_digit(char c) {
   return val ? val : (c == '0' ? 0 : -1);
 }
 
+char hex_char(int v) {
+  return "0123456789abcdef"[v & 0x0f];
+}
+
 uint64_t hash_key(const char *key, size_t len) {
   uint64_t hash = 14695981039346656037ULL;
   size_t i = 0;

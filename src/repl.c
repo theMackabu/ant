@@ -588,20 +588,7 @@ void ant_repl_run() {
     history_add(&history, multiline_buf);
     
     jsval_t eval_result = js_eval(js, multiline_buf, multiline_len);
-    js_run_event_loop(js);
-    
-    char cbuf_stack[512]; js_cstr_t cstr = js_to_cstr(
-      js, eval_result, cbuf_stack, sizeof(cbuf_stack)
-    );
-    
-    if (vtype(eval_result) == T_ERR)
-      fprintf(stderr, "%s\n", cstr.ptr);
-    else if (vtype(eval_result) == T_STR) 
-      printf("%s\n", cstr.ptr ? cstr.ptr : ""); 
-    else {
-      print_value_colored(cstr.ptr, stdout);
-      printf("\n");
-    } if (cstr.needs_free) free((void *)cstr.ptr);
+    js_run_event_loop(js); print_repl_value(js, eval_result, stdout);
     
     free(multiline_buf);
     multiline_buf = NULL;
