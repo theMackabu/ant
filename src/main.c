@@ -285,8 +285,8 @@ int main(int argc, char *argv[]) {
 
   struct arg_str *eval = arg_str0("e", "eval", "<script>", "evaluate script");
   struct arg_lit *print = arg_lit0("p", "print", "evaluate script and print result");
-    
-  struct arg_file *file = arg_file0(NULL, NULL, NULL, NULL);
+  
+  struct arg_file *file = arg_filen(NULL, NULL, NULL, 0, argc, NULL);
   struct arg_file *localstorage_file = arg_file0(NULL, "localstorage-file", "<path>", "file path for localStorage persistence");
   
   struct arg_lit *version = arg_lit0("v", "version", "display version information and exit");
