@@ -675,21 +675,21 @@ static void gc_scan_stack_update(gc_ctx_t *ctx) {
   }
 }
 
-size_t js_gc_compact(ant_t *js) {
-  if (!js || js->brk == 0) return 0;
-  if (js->brk < 2 * 1024 * 1024) return 0;
+static void gc_compact(ant_t *js) {
+  js->needs_gc = false;
+  
+  if (!js || js->brk == 0) return;
+  if (js->brk < 2 * 1024 * 1024) return;
 
   if (!js->gc_safe) {
-    js->needs_gc = true;
-    return 0;
+    js->needs_gc = true; return;
   }
 
   mco_coro *running = mco_running();
   int in_coroutine = (running != NULL && running->stack_base != NULL);
   
   if (in_coroutine) {
-    js->needs_gc = true;
-    return 0;
+    js->needs_gc = true; return;
   }
 
   time_t now = time(NULL);
@@ -705,11 +705,10 @@ size_t js_gc_compact(ant_t *js) {
     if (elapsed >= 0.0 
       && elapsed < cooldown 
       && js->gc_alloc_since < js->brk / 4
-    ) return 0;
+    ) return;
   }
-  if (now != (time_t)-1) gc_last_run_time = now;
   
-  size_t old_brk = js->brk;
+  if (now != (time_t)-1) gc_last_run_time = now;
   size_t new_size = js->size;
   
   if (new_size > gc_scratch_size) {
@@ -718,12 +717,12 @@ size_t js_gc_compact(ant_t *js) {
     gc_scratch_size = gc_scratch_buf ? new_size : 0;
   }
   
-  if (!gc_scratch_buf) return 0;
+  if (!gc_scratch_buf) return;
   uint8_t *new_mem = gc_scratch_buf;
   
   size_t bitmap_size = (js->brk / 8 + 7) / 8 + 1;
   uint8_t *mark_bits = (uint8_t *)calloc(1, bitmap_size);
-  if (!mark_bits) return 0;
+  if (!mark_bits) return;
   
   size_t estimated_objs = js->brk / 64;
   if (estimated_objs < 256) estimated_objs = 256;
@@ -736,14 +735,12 @@ size_t js_gc_compact(ant_t *js) {
   ctx.mark_bits = mark_bits;
   
   if (!fwd_init(&ctx.fwd, estimated_objs)) {
-    free(mark_bits);
-    return 0;
+    free(mark_bits); return;
   }
   
   if (!work_init(&ctx.work, estimated_objs / 4 < 64 ? 64 : estimated_objs / 4)) {
     fwd_free(&ctx.fwd);
-    free(mark_bits);
-    return 0;
+    free(mark_bits); return;
   }
   
   ctx.failed = false;
@@ -765,8 +762,7 @@ size_t js_gc_compact(ant_t *js) {
   if (ctx.failed) {
     free(mark_bits);
     work_free(&ctx.work);
-    fwd_free(&ctx.fwd);
-    return 0;
+    fwd_free(&ctx.fwd); return;
   }
   
   js_gc_update_roots(js, 
@@ -795,8 +791,6 @@ size_t js_gc_compact(ant_t *js) {
     if (target < ARENA_GROW_INCREMENT) target = ARENA_GROW_INCREMENT;
     if (target < old_size) { ant_arena_decommit(js->mem, old_size, target); js->size = (jsoff_t)target; }
   }
-  
-  return (old_brk > new_brk ? old_brk - new_brk : 0);
 }
 
 void js_gc_maybe(ant_t *js) {
@@ -814,7 +808,7 @@ void js_gc_maybe(ant_t *js) {
   if (thresh > max_thresh) thresh = max_thresh;
 
   if (js->gc_alloc_since > thresh || js->needs_gc) {
-    js->needs_gc = false;
-    if (js_gc_compact(js) > 0) js->gc_alloc_since = 0;
+    gc_compact(js);
+    js->gc_alloc_since = 0;
   }
 }

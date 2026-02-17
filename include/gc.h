@@ -2,7 +2,6 @@
 #define GC_H
 
 #include <types.h>
-#include <stddef.h>
 #include <stdbool.h>
 
 #define ROPE_FLAG              (1ULL << 63)
@@ -21,8 +20,6 @@ typedef struct {
 #define GC_FWD_LOAD_FACTOR    70
 #define GC_ROOTS_INITIAL_CAP  32
 #define GC_CB(ret, name, arg) ret (*name)(void *ctx, arg old)
-
-size_t js_gc_compact(ant_t *js);
 
 #define GC_CTX       void *ctx
 #define GC_FWD_OFF   GC_CB(jsoff_t, fwd_off, jsoff_t)
