@@ -20,6 +20,11 @@ static wellknown_sym_t g_hasInstance = {0};
 static wellknown_sym_t g_observable = {0};
 static wellknown_sym_t g_toPrimitive = {0};
 static wellknown_sym_t g_species = {0};
+static wellknown_sym_t g_unscopables = {0};
+
+static jsval_t g_iterator_proto_obj = {0};
+static jsval_t g_array_iterator_proto_obj = {0};
+static jsval_t g_string_iterator_proto_obj = {0};
 
 const char *get_iterator_sym_key(void) { return g_iterator.key; }
 const char *get_asyncIterator_sym_key(void) { return g_asyncIterator.key; }
@@ -28,6 +33,7 @@ const char *get_observable_sym_key(void) { return g_observable.key; }
 const char *get_toPrimitive_sym_key(void) { return g_toPrimitive.key; }
 const char *get_hasInstance_sym_key(void) { return g_hasInstance.key; }
 const char *get_species_sym_key(void) { return g_species.key; }
+const char *get_unscopables_sym_key(void) { return g_unscopables.key; }
 
 static const struct { jsval_t *sym; const char *name; } sym_table[] = {
   { &g_iterator.sym, "Symbol.iterator" },
@@ -37,6 +43,7 @@ static const struct { jsval_t *sym; const char *name; } sym_table[] = {
   { &g_observable.sym, "Symbol.observable" },
   { &g_toPrimitive.sym, "Symbol.toPrimitive" },
   { &g_species.sym, "Symbol.species" },
+  { &g_unscopables.sym, "Symbol.unscopables" },
 };
 
 bool is_symbol_key(const char *key, size_t key_len) {
@@ -54,7 +61,8 @@ int sym_to_prop_key(jsval_t sym, char *buf, size_t bufsz) {
 jsval_t get_wellknown_sym_by_key(const char *key, size_t key_len) {
   static const struct { wellknown_sym_t *sym; } table[] = {
     { &g_iterator }, { &g_asyncIterator }, { &g_toStringTag },
-    { &g_hasInstance }, { &g_observable }, { &g_toPrimitive }, { &g_species }
+    { &g_hasInstance }, { &g_observable }, { &g_toPrimitive }, 
+    { &g_species }, { &g_unscopables }
   };
   for (size_t i = 0; i < sizeof(table)/sizeof(table[0]); i++) {
     if (table[i].sym->key[0] && strlen(table[i].sym->key) == key_len &&
@@ -149,9 +157,33 @@ static jsval_t iterator_next(struct js *js, jsval_t *args, int nargs) {
   return result;
 }
 
+static jsval_t iter_return_this(struct js *js, jsval_t *args, int nargs) {
+  return js->this_val;
+}
+
+static jsval_t get_iterator_prototype(struct js *js) {
+  if (vtype(g_iterator_proto_obj) == T_OBJ) return g_iterator_proto_obj;
+
+  g_iterator_proto_obj = js_mkobj(js);
+  js_set_proto(js, g_iterator_proto_obj, js->object);
+  if (g_iterator.key[0]) js_set(js, g_iterator_proto_obj, g_iterator.key, js_mkfun(iter_return_this));
+  
+  return g_iterator_proto_obj;
+}
+
+static jsval_t get_array_iterator_prototype(struct js *js) {
+  if (vtype(g_array_iterator_proto_obj) == T_OBJ) return g_array_iterator_proto_obj;
+
+  jsval_t iterator_proto = get_iterator_prototype(js);
+  g_array_iterator_proto_obj = js_mkobj(js);
+  js_set(js, g_array_iterator_proto_obj, "next", js_mkfun(iterator_next));
+  js_set_proto(js, g_array_iterator_proto_obj, iterator_proto);
+  
+  return g_array_iterator_proto_obj;
+}
+
 static jsval_t array_iterator(struct js *js, jsval_t *args, int nargs) {
   jsval_t arr = js_getthis(js);
-  
   jsval_t len_val = js_get(js, arr, "length");
   int len = vtype(len_val) == T_NUM ? (int)js_getnum(len_val) : 0;
   
@@ -159,7 +191,7 @@ static jsval_t array_iterator(struct js *js, jsval_t *args, int nargs) {
   js_set(js, iter, "__arr", arr);
   js_set(js, iter, "__idx", js_mknum(0));
   js_set(js, iter, "__len", js_mknum(len));
-  js_set(js, iter, "next", js_mkfun(iterator_next));
+  js_set_proto(js, iter, get_array_iterator_prototype(js));
   
   return iter;
 }
@@ -190,18 +222,26 @@ static jsval_t string_iterator_next(struct js *js, jsval_t *args, int nargs) {
   return result;
 }
 
-static jsval_t string_iterator(struct js *js, jsval_t *args, int nargs) {
-  (void)args; (void)nargs;
-  jsval_t str = js_getthis(js);
+static jsval_t get_string_iterator_prototype(struct js *js) {
+  if (vtype(g_string_iterator_proto_obj) == T_OBJ) return g_string_iterator_proto_obj;
+
+  jsval_t iterator_proto = get_iterator_prototype(js);
+  g_string_iterator_proto_obj = js_mkobj(js);
+  js_set(js, g_string_iterator_proto_obj, "next", js_mkfun(string_iterator_next));
+  js_set_proto(js, g_string_iterator_proto_obj, iterator_proto);
   
-  size_t len;
-  js_getstr(js, str, &len);
+  return g_string_iterator_proto_obj;
+}
+
+static jsval_t string_iterator(struct js *js, jsval_t *args, int nargs) {
+  jsval_t str = js_getthis(js);
+  size_t len; js_getstr(js, str, &len);
   
   jsval_t iter = js_mkobj(js);
   js_set(js, iter, "__str", str);
   js_set(js, iter, "__idx", js_mknum(0));
   js_set(js, iter, "__len", js_mknum((double)len));
-  js_set(js, iter, "next", js_mkfun(string_iterator_next));
+  js_set_proto(js, iter, get_string_iterator_prototype(js));
   
   return iter;
 }
@@ -244,6 +284,10 @@ static jsval_t date_toPrimitive(struct js *js, jsval_t *args, int nargs) {
 
 void init_symbol_module(void) {
   struct js *js = rt->js;
+
+  g_iterator_proto_obj = js_mkundef();
+  g_array_iterator_proto_obj = js_mkundef();
+  g_string_iterator_proto_obj = js_mkundef();
   
   init_symbol(js, &g_iterator, "Symbol.iterator");
   init_symbol(js, &g_asyncIterator, "Symbol.asyncIterator");
@@ -252,6 +296,7 @@ void init_symbol_module(void) {
   init_symbol(js, &g_toPrimitive, "Symbol.toPrimitive");
   init_symbol(js, &g_hasInstance, "Symbol.hasInstance");
   init_symbol(js, &g_species, "Symbol.species");
+  init_symbol(js, &g_unscopables, "Symbol.unscopables");
 
   jsval_t symbol_proto = js_mkobj(js);
   js_set(js, symbol_proto, "toString", js_mkfun(builtin_Symbol_toString));
@@ -269,6 +314,7 @@ void init_symbol_module(void) {
   js_set(js, symbol_ctor, "observable", g_observable.sym);
   js_set(js, symbol_ctor, "toPrimitive", g_toPrimitive.sym);
   js_set(js, symbol_ctor, "species", g_species.sym);
+  js_set(js, symbol_ctor, "unscopables", g_unscopables.sym);
   
   jsval_t func_symbol = js_obj_to_func(symbol_ctor);
   js_set(js, js_glob(js), "Symbol", func_symbol);
@@ -278,7 +324,22 @@ void init_symbol_module(void) {
   
   jsval_t array_ctor = js_get(js, js_glob(js), "Array");
   jsval_t array_proto = js_get(js, array_ctor, "prototype");
+  
+  (void)get_array_iterator_prototype(js);
+  (void)get_string_iterator_prototype(js);
   js_set(js, array_proto, g_iterator.key, js_mkfun(array_iterator));
+
+  jsval_t array_unscopables = js_mkobj(js);
+  js_set(js, array_unscopables, "find", js_true);
+  js_set(js, array_unscopables, "findIndex", js_true);
+  js_set(js, array_unscopables, "fill", js_true);
+  js_set(js, array_unscopables, "copyWithin", js_true);
+  js_set(js, array_unscopables, "entries", js_true);
+  js_set(js, array_unscopables, "keys", js_true);
+  js_set(js, array_unscopables, "values", js_true);
+  js_set(js, array_unscopables, "flat", js_true);
+  js_set(js, array_unscopables, "flatMap", js_true);
+  js_set(js, array_proto, g_unscopables.key, array_unscopables);
   
   jsval_t string_ctor = js_get(js, js_glob(js), "String");
   jsval_t string_proto = js_get(js, string_ctor, "prototype");

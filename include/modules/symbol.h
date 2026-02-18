@@ -19,6 +19,7 @@ const char *get_observable_sym_key(void);
 const char *get_toPrimitive_sym_key(void);
 const char *get_hasInstance_sym_key(void);
 const char *get_species_sym_key(void);
+const char *get_unscopables_sym_key(void);
 
 jsval_t get_wellknown_sym_by_key(const char *key, size_t key_len);
 const char *get_symbol_description_from_key(const char *sym_key, size_t key_len);

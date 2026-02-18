@@ -452,6 +452,9 @@ static const char *get_slot_name(internal_slot_t slot) {
     [SLOT_MODULE_SCOPE] = "MODULE_SCOPE",
     [SLOT_STRICT_ARGS] = "STRICT_ARGS",
     [SLOT_NO_FUNC_DECLS] = "NO_FUNC_DECLS",
+    [SLOT_ITER_STATE] = "ITER_STATE",
+    [SLOT_ENTRIES] = "ENTRIES",
+    [SLOT_DENSE_BUF] = "DENSE_BUF",
   };
   
   if (slot < sizeof(slot_names) / sizeof(slot_names[0]) && slot_names[slot]) {

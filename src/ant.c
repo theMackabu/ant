@@ -11728,25 +11728,36 @@ static jsval_t for_of_iter_string(struct js *js, for_iter_ctx_t *ctx, jsval_t it
 typedef enum { ITER_CONTINUE, ITER_BREAK, ITER_ERROR } iter_action_t;
 typedef iter_action_t (*iter_callback_t)(struct js *js, jsval_t value, void *ctx, jsval_t *out);
 
+static jsval_t iter_call_noargs_with_this(struct js *js, jsval_t this_val, jsval_t method) {
+  js_parse_state_t saved_state;
+  JS_SAVE_STATE(js, saved_state);
+  uint8_t saved_flags = js->flags;
+  jsval_t saved_this = js->this_val;
+  push_this(this_val); js->this_val = this_val;
+  jsval_t result = call_js_with_args(js, method, NULL, 0);
+  pop_this();  js->this_val = saved_this;
+  JS_RESTORE_STATE(js, saved_state);
+  js->flags = saved_flags;
+  return result;
+}
+
+static jsval_t iter_close_iterator(struct js *js, jsval_t iterator) {
+  jsoff_t return_off = lkp_proto(js, iterator, "return", 6);
+  if (return_off == 0) return js_mkundef();
+  jsval_t return_method = loadval(js, return_off + sizeof(jsoff_t) * 2);
+  if (vtype(return_method) != T_FUNC && vtype(return_method) != T_CFUNC) {
+    return js_mkerr(js, "iterator.return is not a function");
+  }
+  return iter_call_noargs_with_this(js, iterator, return_method);
+}
+
 static jsval_t iter_foreach(struct js *js, jsval_t iterable, iter_callback_t cb, void *ctx) {
   const char *iter_key = get_iterator_sym_key();
   jsoff_t iter_prop = iter_key ? lkp_proto(js, iterable, iter_key, strlen(iter_key)) : 0;
   if (iter_prop == 0) return js_mkerr(js, "not iterable");
-  
-  js_parse_state_t saved_state;
-  JS_SAVE_STATE(js, saved_state);
-  uint8_t saved_flags = js->flags;
-  
+
   jsval_t iter_method = loadval(js, iter_prop + sizeof(jsoff_t) * 2);
-  jsval_t outer_saved_this = js->this_val;
-  push_this(iterable);
-  js->this_val = iterable;
-  jsval_t iterator = call_js_with_args(js, iter_method, NULL, 0);
-  pop_this();
-  js->this_val = outer_saved_this;
-  JS_RESTORE_STATE(js, saved_state);
-  js->flags = saved_flags;
-  
+  jsval_t iterator = iter_call_noargs_with_this(js, iterable, iter_method);
   if (is_err(iterator)) return iterator;
   
   jshdl_t h_iterator = js_root(js, iterator);
@@ -11764,15 +11775,7 @@ static jsval_t iter_foreach(struct js *js, jsval_t iterable, iter_callback_t cb,
     }
     
     cur_iter = js_deref(js, h_iterator);
-    jsval_t saved_this = js->this_val;
-    push_this(cur_iter);
-    js->this_val = cur_iter;
-    jsval_t result = call_js_with_args(js, next_method, NULL, 0);
-    pop_this();
-    js->this_val = saved_this;
-    JS_RESTORE_STATE(js, saved_state);
-    js->flags = saved_flags;
-    
+    jsval_t result = iter_call_noargs_with_this(js, cur_iter, next_method);
     if (is_err(result)) { js_unroot(js, h_iterator); return result; }
     
     jsoff_t done_off = lkp(js, result, "done", 4);
@@ -11783,8 +11786,17 @@ static jsval_t iter_foreach(struct js *js, jsval_t iterable, iter_callback_t cb,
     jsval_t value = value_off ? loadval(js, value_off + sizeof(jsoff_t) * 2) : js_mkundef();
     
     iter_action_t action = cb(js, value, ctx, &out);
-    if (action == ITER_BREAK) break;
-    if (action == ITER_ERROR) { js_unroot(js, h_iterator); return out; }
+    if (action == ITER_BREAK) {
+      jsval_t close_result = iter_close_iterator(js, cur_iter);
+      if (is_err(close_result)) { js_unroot(js, h_iterator); return close_result; }
+      break;
+    }
+    if (action == ITER_ERROR) {
+      jsval_t close_result = iter_close_iterator(js, cur_iter);
+      js_unroot(js, h_iterator);
+      if (is_err(close_result)) return close_result;
+      return out;
+    }
   }
   
   js_unroot(js, h_iterator);
@@ -16884,16 +16896,34 @@ static jsval_t builtin_object_hasOwnProperty(struct js *js, jsval_t *args, int n
   uint8_t t = vtype(obj);
   
   if (t != T_OBJ && t != T_ARR && t != T_FUNC) return mkval(T_BOOL, 0);
-  if (vtype(key) != T_STR) {
-    char buf[64];
-    size_t n = tostr(js, key, buf, sizeof(buf));
-    key = js_mkstr(js, buf, n);
-  }
-  
   jsval_t as_obj = (t == T_OBJ) ? obj : mkval(T_OBJ, vdata(obj));
-  jsoff_t key_len, key_off = vstr(js, key, &key_len);
-  const char *key_str = (char *) &js->mem[key_off];
-  
+
+  char sym_buf[64];
+  const char *key_str = NULL;
+  jsoff_t key_len = 0;
+  if (vtype(key) == T_SYMBOL) {
+    int klen = sym_to_prop_key(key, sym_buf, sizeof(sym_buf));
+    if (klen <= 0) return mkval(T_BOOL, 0);
+    key_str = sym_buf;
+    key_len = (jsoff_t)klen;
+  } else {
+    if (vtype(key) != T_STR) {
+      char buf[64];
+      size_t n = tostr(js, key, buf, sizeof(buf));
+      key = js_mkstr(js, buf, n);
+    }
+    jsoff_t key_off = vstr(js, key, &key_len);
+    key_str = (char *) &js->mem[key_off];
+  }
+
+  if (t == T_ARR && streq(key_str, key_len, "length", 6)) return mkval(T_BOOL, 1);
+  if (t == T_ARR && is_array_index(key_str, key_len)) {
+    unsigned long idx;
+    if (parse_array_index(key_str, key_len, get_array_length(js, obj), &idx)) {
+      return mkval(T_BOOL, arr_has(js, obj, (jsoff_t)idx) ? 1 : 0);
+    }
+  }
+
   jsoff_t off = lkp(js, as_obj, key_str, key_len);
   return mkval(T_BOOL, off != 0 ? 1 : 0);
 }
@@ -16932,16 +16962,26 @@ static jsval_t builtin_object_propertyIsEnumerable(struct js *js, jsval_t *args,
   uint8_t t = vtype(obj);
   
   if (t != T_OBJ && t != T_ARR && t != T_FUNC) return mkval(T_BOOL, 0);
-  if (vtype(key) != T_STR) {
-    char buf[64];
-    size_t n = tostr(js, key, buf, sizeof(buf));
-    key = js_mkstr(js, buf, n);
-  }
-  
   jsval_t as_obj = (t == T_OBJ) ? obj : mkval(T_OBJ, vdata(obj));
-  jsoff_t key_len, key_off = vstr(js, key, &key_len);
-  const char *key_str = (char *) &js->mem[key_off];
-  
+
+  char sym_buf[64];
+  const char *key_str = NULL;
+  jsoff_t key_len = 0;
+  if (vtype(key) == T_SYMBOL) {
+    int klen = sym_to_prop_key(key, sym_buf, sizeof(sym_buf));
+    if (klen <= 0) return mkval(T_BOOL, 0);
+    key_str = sym_buf;
+    key_len = (jsoff_t)klen;
+  } else {
+    if (vtype(key) != T_STR) {
+      char buf[64];
+      size_t n = tostr(js, key, buf, sizeof(buf));
+      key = js_mkstr(js, buf, n);
+    }
+    jsoff_t key_off = vstr(js, key, &key_len);
+    key_str = (char *) &js->mem[key_off];
+  }
+
   if (t == T_ARR && streq(key_str, key_len, "length", 6)) {
     return mkval(T_BOOL, 0);
   }
@@ -18650,6 +18690,7 @@ typedef struct {
   jsval_t write_target;
   jsval_t result;
   jsval_t mapFn;
+  jsval_t mapThis;
   jsoff_t index;
 } array_from_iter_ctx_t;
 
@@ -18659,7 +18700,7 @@ static iter_action_t array_from_iter_cb(struct js *js, jsval_t value, void *ctx,
 
   if (is_callable(fctx->mapFn)) {
     jsval_t call_args[2] = { elem, tov((double)fctx->index) };
-    elem = call_js_with_args(js, fctx->mapFn, call_args, 2);
+    elem = js_call_with_this(js, fctx->mapFn, fctx->mapThis, call_args, 2);
     if (is_err(elem)) { *out = elem; return ITER_ERROR; }
   }
 
@@ -18678,6 +18719,7 @@ static jsval_t builtin_Array_from(struct js *js, jsval_t *args, int nargs) {
 
   jsval_t src = args[0];
   jsval_t mapFn = (nargs >= 2 && is_callable(args[1])) ? args[1] : js_mkundef();
+  jsval_t mapThis = (nargs >= 3) ? args[2] : js_mkundef();
 
   jsval_t ctor = js->this_val;
   bool use_ctor = (vtype(ctor) == T_FUNC || vtype(ctor) == T_CFUNC);
@@ -18696,7 +18738,7 @@ static jsval_t builtin_Array_from(struct js *js, jsval_t *args, int nargs) {
   jsval_t write_target = result_is_proxy ? proxy_read_target(js, result) : result;
 
   if (vtype(src) == T_STR) {
-    array_from_iter_ctx_t ctx = { write_target, result, mapFn, 0 };
+    array_from_iter_ctx_t ctx = { write_target, result, mapFn, mapThis, 0 };
     jsoff_t str_len, str_off = vstr(js, src, &str_len);
     const char *str_ptr = (const char *)&js->mem[str_off];
     for (jsoff_t i = 0; i < str_len; i++) {
@@ -18710,12 +18752,12 @@ static jsval_t builtin_Array_from(struct js *js, jsval_t *args, int nargs) {
     jsoff_t iter_prop = iter_key ? lkp_proto(js, src, iter_key, strlen(iter_key)) : 0;
 
     if (iter_prop != 0) {
-      array_from_iter_ctx_t ctx = { write_target, result, mapFn, 0 };
+      array_from_iter_ctx_t ctx = { write_target, result, mapFn, mapThis, 0 };
       jsval_t iter_result = iter_foreach(js, src, array_from_iter_cb, &ctx);
       if (is_err(iter_result)) return iter_result;
       if (vtype(result) != T_ARR) js_setprop(js, result, js->length_str, tov((double) ctx.index));
     } else if (vtype(src) == T_ARR || vtype(src) == T_OBJ) {
-      array_from_iter_ctx_t ctx = { write_target, result, mapFn, 0 };
+      array_from_iter_ctx_t ctx = { write_target, result, mapFn, mapThis, 0 };
       jsoff_t len = get_array_length(js, src);
       for (jsoff_t i = 0; i < len; i++) {
         jsval_t unused;
