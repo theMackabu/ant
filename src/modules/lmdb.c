@@ -1,3 +1,5 @@
+#include <compat.h> // IWYU pragma: keep
+
 #include "ant.h"
 #include "arena.h"
 #include "errors.h"

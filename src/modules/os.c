@@ -11,8 +11,10 @@
 #include <ws2tcpip.h>
 #include <iphlpapi.h>
 #include <lmcons.h>
+#ifdef _MSC_VER
 #pragma comment(lib, "iphlpapi.lib")
 #pragma comment(lib, "ws2_32.lib")
+#endif
 #else
 #include <sys/resource.h>
 #include <sys/utsname.h>

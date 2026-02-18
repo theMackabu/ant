@@ -22,7 +22,9 @@ if host_machine.system() == 'windows'
   ntdll_dep = cc.find_library('ntdll', required: true)
   crypt32_dep = cc.find_library('crypt32', required: true)
   userenv_dep = cc.find_library('userenv', required: true)
-  win_deps = [secur32_dep, ntdll_dep, crypt32_dep, userenv_dep]
+  ws2_32_dep = cc.find_library('ws2_32', required: true)
+  iphlpapi_dep = cc.find_library('iphlpapi', required: true)
+  win_deps = [secur32_dep, ntdll_dep, crypt32_dep, userenv_dep, ws2_32_dep, iphlpapi_dep]
 elif host_machine.system() == 'darwin'
   uuid_dep = dependency('uuid', required: true)
   security_dep = dependency('appleframeworks', modules: ['Security', 'CoreFoundation'], required: true)
