@@ -3475,6 +3475,23 @@ static jsval_t setup_func_prototype(struct js *js, jsval_t func) {
   return js_mkundef();
 }
 
+static jsval_t get_function_instance_proto_from_new_target(struct js *js, jsval_t fallback_proto) {
+  jsval_t instance_proto = js_mkundef();
+  
+  if (vtype(js->new_target) == T_FUNC) {
+    jsval_t nt_obj = mkval(T_OBJ, vdata(js->new_target));
+    jsoff_t nt_proto_off = lkp_interned(js, nt_obj, INTERN_PROTOTYPE, 9);
+    if (nt_proto_off != 0) {
+      jsval_t nt_proto = resolveprop(js, mkval(T_PROP, nt_proto_off));
+      if (is_object_type(nt_proto)) instance_proto = nt_proto;
+    }
+  }
+  
+  if (!is_object_type(instance_proto) && is_object_type(fallback_proto)) {
+    instance_proto = fallback_proto;
+  } return instance_proto;
+}
+
 static void infer_func_name(struct js *js, jsval_t func, const char *name, size_t len) {
   jsval_t func_obj = mkval(T_OBJ, vdata(func));
   if (vtype(get_slot(js, func_obj, SLOT_NAME)) != T_UNDEF) return;
@@ -11715,17 +11732,30 @@ static jsval_t js_for(struct js *js) {
     if (!expect(js, TOK_RPAREN, &res)) goto done;
     
     jsoff_t body_start = js->pos;
+    jsoff_t body_end_pos = 0;
+    uint8_t body_end_token = TOK_ERR;
+    uint8_t body_end_consumed = 1;
+    jsoff_t body_end_toff = 0, body_end_tlen = 0;
+    
+    int body_end_stream_pos = 0;
     loop_block_ctx_t forin_loop_ctx = {0};
+    
     if (exe) loop_block_init(js, &forin_loop_ctx);
     js->flags |= F_NOEXEC;
     v = js_block_or_stmt(js);
     if (is_err2(&v, &res)) goto done;
-    jsoff_t body_end = js->pos;
+    
+    body_end_pos = js->pos;
+    body_end_token = js->tok;
+    body_end_consumed = js->consumed;
+    body_end_toff = js->toff;
+    body_end_tlen = js->tlen;
+    body_end_stream_pos = js->token_stream_pos;
     
     if (exe) {
       jsval_t obj = resolveprop(js, obj_expr);
       for_iter_ctx_t ctx = { 
-        body_start, body_end,
+        body_start, body_end_pos,
         var_name_off, var_name_len,
         is_const_var, flags,
         has_destructure, destructure_off,
@@ -11738,9 +11768,13 @@ static jsval_t js_for(struct js *js) {
       if (js->flags & F_RETURN) goto done;
     }
     
-    js->pos = body_end;
-    js->tok = TOK_SEMICOLON;
-    js->consumed = 0;
+    js->pos = body_end_pos;
+    js->tok = body_end_token;
+    js->consumed = body_end_consumed;
+    js->toff = body_end_toff;
+    js->tlen = body_end_tlen;
+    js->token_stream_pos = body_end_stream_pos;
+    
     goto done;
   }
   
@@ -11750,18 +11784,31 @@ static jsval_t js_for(struct js *js) {
     if (!expect(js, TOK_RPAREN, &res)) goto done;
     
     jsoff_t body_start = js->pos;
+    jsoff_t body_end_pos = 0;
+    uint8_t body_end_token = TOK_ERR;
+    uint8_t body_end_consumed = 1;
+    jsoff_t body_end_toff = 0, body_end_tlen = 0;
+    
+    int body_end_stream_pos = 0;
     loop_block_ctx_t forof_loop_ctx = {0};
+    
     if (exe) loop_block_init(js, &forof_loop_ctx);
     js->flags |= F_NOEXEC;
     v = js_block_or_stmt(js);
     if (is_err2(&v, &res)) goto done;
-    jsoff_t body_end = js->pos;
+    
+    body_end_pos = js->pos;
+    body_end_token = js->tok;
+    body_end_consumed = js->consumed;
+    body_end_toff = js->toff;
+    body_end_tlen = js->tlen;
+    body_end_stream_pos = js->token_stream_pos;
     
     if (exe) {
       jsval_t iterable = resolveprop(js, iter_expr);
       uint8_t itype = vtype(iterable);
       for_iter_ctx_t ctx = { 
-        body_start, body_end,
+        body_start, body_end_pos,
         var_name_off, var_name_len,
         is_const_var, flags,
         has_destructure, destructure_off,
@@ -11779,9 +11826,13 @@ static jsval_t js_for(struct js *js) {
       if (js->flags & F_RETURN) goto done;
     }
     
-    js->pos = body_end;
-    js->tok = TOK_SEMICOLON;
-    js->consumed = 0;
+    js->pos = body_end_pos;
+    js->tok = body_end_token;
+    js->consumed = body_end_consumed;
+    js->toff = body_end_toff;
+    js->tlen = body_end_tlen;
+    js->token_stream_pos = body_end_stream_pos;
+    
     goto done;
   }
   
@@ -13884,11 +13935,14 @@ static jsval_t builtin_Function(struct js *js, jsval_t *args, int nargs) {
     set_func_code_ptr(js, func_obj, "(){}", 4);
     set_slot(js, func_obj, SLOT_SCOPE, js_glob(js));
     
+    jsval_t func_proto = get_slot(js, js_glob(js), SLOT_FUNC_PROTO);
+    jsval_t instance_proto = get_function_instance_proto_from_new_target(js, func_proto);
+    if (is_object_type(instance_proto)) set_proto(js, func_obj, instance_proto);
+    
     jsval_t func = mkval(T_FUNC, (unsigned long) vdata(func_obj));
-    
     jsval_t proto_setup = setup_func_prototype(js, func);
-    if (is_err(proto_setup)) return proto_setup;
     
+    if (is_err(proto_setup)) return proto_setup;
     return func;
   }
   
@@ -13985,14 +14039,17 @@ params_done:;
   jsval_t func_obj = mkobj(js, 0);
   if (is_err(func_obj)) { free(code_buf); return func_obj; }
   
-  set_func_code(js, func_obj, code_buf, pos);
-  free(code_buf);
+  set_func_code(js, func_obj, code_buf, pos); free(code_buf);
   set_slot(js, func_obj, SLOT_SCOPE, js_glob(js));
+  
+  jsval_t func_proto = get_slot(js, js_glob(js), SLOT_FUNC_PROTO);
+  jsval_t instance_proto = get_function_instance_proto_from_new_target(js, func_proto);
+  if (is_object_type(instance_proto)) set_proto(js, func_obj, instance_proto);
   
   jsval_t func = mkval(T_FUNC, (unsigned long) vdata(func_obj));
   jsval_t proto_setup = setup_func_prototype(js, func);
-  if (is_err(proto_setup)) return proto_setup;
   
+  if (is_err(proto_setup)) return proto_setup;
   return func;
 }
 
@@ -14312,6 +14369,12 @@ static jsval_t builtin_function_bind(struct js *js, jsval_t *args, int nargs) {
   jsval_t async_slot = get_slot(js, func_obj, SLOT_ASYNC);
   if (vtype(async_slot) == T_BOOL && vdata(async_slot) == 1) {
     set_slot(js, bound_func, SLOT_ASYNC, js_true);
+  }
+
+  jsval_t target_proto = get_proto(js, func);
+  if (is_object_type(target_proto)) {
+    set_proto(js, bound_func, target_proto);
+  } else if (vtype(async_slot) == T_BOOL && vdata(async_slot) == 1) {
     jsval_t async_proto = get_slot(js, js_glob(js), SLOT_ASYNC_PROTO);
     if (vtype(async_proto) == T_FUNC) set_proto(js, bound_func, async_proto);
   } else {
