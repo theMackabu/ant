@@ -17,6 +17,13 @@ include = include_directories('../include')
 
 subdir('meson')
 
+messages_h = custom_target('messages_h',
+  input: '../src/core/messages.toml',
+  output: 'messages.h',
+  command: [python, files('../meson/messages.py'), '@INPUT@'],
+  capture: true,
+)
+
 lib_sources = files(run_command(
   python, files('meson/sources.py'), src_root / 'sources.json', 'library', src_root,
   check: true
@@ -24,7 +31,7 @@ lib_sources = files(run_command(
 
 libant_core = static_library(
   'ant_core',
-  lib_sources + [snapshot_h],
+  lib_sources + [snapshot_h, messages_h],
   include_directories: include,
   dependencies: ant_deps + [oxc_dep],
 )
@@ -32,7 +39,7 @@ libant_core = static_library(
 if use_lto
   libant_core_lto = static_library(
     'ant_core_lto',
-    lib_sources + [snapshot_h],
+    lib_sources + [snapshot_h, messages_h],
     include_directories: include,
     dependencies: ant_deps + [oxc_dep],
     c_args: ['-flto'],
