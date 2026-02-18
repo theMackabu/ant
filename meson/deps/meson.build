@@ -211,7 +211,7 @@ ant_deps = [
   llhttp, pcre2_dep, libuv_dep, base64_dep,
   argtable3_dep, tlsuv_dep, libsodium_dep,
   yyjson_dep, minicoro_dep, uuidv7_dep,
-  openssl_dep, zlib_dep, uthash_dep,
+  openssl_dep, zlib_dep, uthash_dep, lmdb_dep,
 ] + mbedtls_dep + win_deps
 
 if host_machine.system() == 'darwin'
