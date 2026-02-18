@@ -78,7 +78,7 @@ jobs:
             python3-pip ninja-build cmake pkg-config uuid-dev libssl-dev libsodium-dev jq
           curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
           apt-get install -y nodejs
-          pip3 install meson
+          pip3 install meson tomli
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       # === LINUX MUSL SETUP ===
@@ -88,7 +88,7 @@ jobs:
           apk add --no-cache git clang lld llvm meson ninja cmake pkgconf curl npm nodejs \
             musl-dev openssl-dev openssl-libs-static libsodium-dev libsodium-static \
             util-linux-dev util-linux-static linux-headers libunwind-dev libunwind-static \
-            tar xz zstd jq bash
+            py3-tomli tar xz zstd jq bash
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       # === MACOS SETUP ===

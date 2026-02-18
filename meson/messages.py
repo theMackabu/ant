@@ -1,4 +1,14 @@
-import tomllib, sys
+import sys
+
+try:
+  import tomllib
+except ModuleNotFoundError:
+  try:
+    import tomli as tomllib
+  except ModuleNotFoundError as exc:
+    raise ModuleNotFoundError(
+      "No TOML parser available. Use Python 3.11+ or install 'tomli'."
+    ) from exc
 
 with open(sys.argv[1], "rb") as f:
   messages = tomllib.load(f)["messages"]
