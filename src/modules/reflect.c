@@ -113,9 +113,14 @@ static jsval_t reflect_construct(struct js *js, jsval_t *args, int nargs) {
   
   jsval_t target = args[0];
   jsval_t args_arr = args[1];
+  jsval_t new_target = (nargs >= 3) ? args[2] : target;
   
-  if (vtype(target) != T_FUNC) {
+  if (vtype(target) != T_FUNC && vtype(target) != T_CFUNC) {
     return js_mkerr(js, "Reflect.construct: first argument must be a constructor");
+  }
+  
+  if (vtype(new_target) != T_FUNC && vtype(new_target) != T_CFUNC) {
+    return js_mkerr(js, "Reflect.construct: third argument must be a constructor");
   }
   
   jsval_t length_val = js_get(js, args_arr, "length");
@@ -137,14 +142,18 @@ static jsval_t reflect_construct(struct js *js, jsval_t *args, int nargs) {
   }
   
   jsval_t new_obj = js_mkobj(js);
-  jsval_t result = js_call_with_this(js, target, new_obj, call_args, arg_count);
+  jsval_t proto = js_get(js, new_target, "prototype");
+  if (vtype(proto) == T_OBJ) js_set_proto(js, new_obj, proto);
+
+  jsval_t saved_new_target = js->new_target;
+  js->new_target = new_target;
   
+  jsval_t result = js_call_with_this(js, target, new_obj, call_args, arg_count);
+  js->new_target = saved_new_target;
   if (call_args) free(call_args);
   
   int result_type = vtype(result);
-  if (result_type == T_FUNC || is_special_object(result)) {
-    return result;
-  }
+  if (result_type == T_FUNC || is_special_object(result)) return result;
   return new_obj;
 }
 

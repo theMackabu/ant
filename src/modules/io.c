@@ -411,6 +411,7 @@ static const char *get_slot_name(internal_slot_t slot) {
     [SLOT_WITH] = "WITH",
     [SLOT_SCOPE] = "SCOPE",
     [SLOT_THIS] = "THIS",
+    [SLOT_NEW_TARGET] = "NEW_TARGET",
     [SLOT_BOUND_THIS] = "BOUND_THIS",
     [SLOT_BOUND_ARGS] = "BOUND_ARGS",
     [SLOT_FIELD_COUNT] = "FIELD_COUNT",

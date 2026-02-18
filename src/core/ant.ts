@@ -26,7 +26,8 @@ Ant.typeof = function (t) {
     T_PROPREF: 'propref',
     T_SYMBOL: 'symbol',
     T_GENERATOR: 'generator',
-    T_FFI: 'ffi'
+    T_FFI: 'ffi',
+    T_NTARG: 'ntarg'
   } as const;
 
   const names = Object.values(types);

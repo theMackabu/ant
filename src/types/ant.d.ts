@@ -17,7 +17,8 @@ type AntType =
   | 'propref'
   | 'symbol'
   | 'generator'
-  | 'ffi';
+  | 'ffi'
+  | 'ntarg';
 
 type AntHost =
   | 'cygwin'

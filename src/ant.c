@@ -364,7 +364,7 @@ static const char *typestr_raw(uint8_t t) {
   const char *names[] = { 
     "object", "prop", "string", "undefined", "null", "number",
     "boolean", "function", "coderef", "cfunc", "err", "array", 
-    "promise", "typedarray", "bigint", "propref", "symbol", "generator", "ffi"
+    "promise", "typedarray", "bigint", "propref", "symbol", "generator", "ffi", "ntarg"
   };
   
   return (t < sizeof(names) / sizeof(names[0])) ? names[t] : "??";
@@ -510,6 +510,19 @@ int js_getffi(jsval_t val) {
 
 static jsval_t mkcoderef(jsval_t off, jsoff_t len) { 
   return mkval(T_CODEREF, (off & PROPREF_OFF_MASK) | ((jsval_t)(len & PROPREF_OFF_MASK) << PROPREF_KEY_SHIFT));
+}
+
+typedef enum {
+  NTARG_INVALID = 0,
+  NTARG_NEW_TARGET = 1
+} ntarg_kind_t;
+
+static inline jsval_t mkntarg(ntarg_kind_t tag) {
+  return mkval(T_NTARG, (uint64_t)tag);
+}
+
+static inline bool is_new_target_ref(jsval_t v) {
+  return vtype(v) == T_NTARG && vdata(v) == (uint64_t)NTARG_NEW_TARGET;
 }
 
 static jsval_t mkpropref(jsoff_t obj_off, jsoff_t key_off) {
@@ -4927,6 +4940,43 @@ static uint8_t next(struct js *js) {
   return next_raw(js);
 }
 
+static jsval_t validate_dynamic_function_source(struct js *js, const char *params_body, size_t params_body_len, bool is_async) {
+  #define DYN_FN_PREFIX_SYNC  "(function"
+  #define DYN_FN_PREFIX_ASYNC "(async function"
+  
+  const char *prefix = is_async 
+    ? DYN_FN_PREFIX_ASYNC 
+    : DYN_FN_PREFIX_SYNC;
+    
+  size_t prefix_len = strlen(prefix);
+  size_t wrapped_len = prefix_len + params_body_len + 2;
+  
+  char *wrapped = (char *) malloc(wrapped_len + 1);
+  if (!wrapped) return js_mkerr(js, "oom");
+
+  memcpy(wrapped, prefix, prefix_len);
+  memcpy(wrapped + prefix_len, params_body, params_body_len);
+  wrapped[prefix_len + params_body_len] = ')';
+  
+  wrapped[prefix_len + params_body_len + 1] = ';';
+  wrapped[wrapped_len] = '\0';
+
+  js_parse_state_t saved;
+  JS_SAVE_STATE(js, saved);
+  bool saved_had_newline = js->had_newline;
+  uint8_t saved_flags = js->flags;
+
+  js->flags = saved_flags | F_NOEXEC;
+  jsval_t parsed = js_eval(js, wrapped, wrapped_len);
+
+  JS_RESTORE_STATE(js, saved);
+  js->had_newline = saved_had_newline;
+  js->flags = saved_flags;
+
+  free(wrapped);
+  return parsed;
+}
+
 static inline uint8_t lookahead(struct js *js) {
   uint8_t old = js->tok, tok = 0;
   uint8_t old_consumed = js->consumed;
@@ -5786,6 +5836,25 @@ static inline jsval_t resolve_array_named_prop(struct js *js, jsoff_t obj_off, c
   return js_mkundef();
 }
 
+static inline jsval_t current_lexical_new_target(struct js *js) {
+  if (vtype(js->current_func) != T_FUNC) return js->new_target;
+
+  jsval_t func_obj = mkval(T_OBJ, vdata(js->current_func));
+  if (get_slot(js, func_obj, SLOT_ARROW) != js_true) return js->new_target;
+
+  jsval_t captured = get_slot(js, func_obj, SLOT_NEW_TARGET);
+  if (captured == T_EMPTY) return js_mkundef();
+  if (vtype(captured) == T_UNDEF) return js_mkundef();
+  
+  return captured;
+}
+
+static inline void capture_arrow_new_target(struct js *js, jsval_t func_obj) {
+  jsval_t captured = current_lexical_new_target(js);
+  if (vtype(captured) == T_UNDEF) captured = T_EMPTY;
+  set_slot(js, func_obj, SLOT_NEW_TARGET, captured);
+}
+
 static inline jsval_t resolve_object_prop(struct js *js, jsval_t obj, const char *key_str, jsoff_t len) {
   if (is_proxy(js, obj)) return proxy_get(js, obj, key_str, len);
   
@@ -5813,6 +5882,8 @@ static inline jsval_t resolve_object_prop(struct js *js, jsval_t obj, const char
 }
 
 jsval_t resolveprop(struct js *js, jsval_t v) {
+  if (is_new_target_ref(v)) return current_lexical_new_target(js);
+
   if (vtype(v) == T_PROPREF) {
     if (is_prim_propref(v)) return resolve_prim_propref(js, v);
     
@@ -9352,6 +9423,7 @@ static jsval_t js_literal(struct js *js) {
             if (is_err(closure_scope)) return closure_scope;
             set_slot(js, func_obj, SLOT_SCOPE, closure_scope);
             set_slot(js, func_obj, SLOT_THIS, js->this_val);
+            capture_arrow_new_target(js, func_obj);
           }
           return mkval(T_FUNC, (unsigned long) vdata(func_obj));
         }
@@ -9495,6 +9567,7 @@ static jsval_t js_arrow_func(struct js *js, jsoff_t params_start, jsoff_t params
     if (is_err(closure_scope)) return closure_scope;
     set_slot(js, func_obj, SLOT_SCOPE, closure_scope);
     set_slot(js, func_obj, SLOT_THIS, js->this_val);
+    capture_arrow_new_target(js, func_obj);
   }
   
   set_slot(js, func_obj, SLOT_ARROW, js_true);
@@ -9857,6 +9930,15 @@ static jsval_t js_unary(struct js *js) {
 
   do_new: {
     js->consumed = 1;
+    if (next(js) == TOK_DOT) {
+      js->consumed = 1;
+      if (next(js) != TOK_IDENTIFIER || !streq(&js->code[js->toff], js->tlen, "target", 6)) {
+        return js_mkerr_typed(js, JS_ERR_SYNTAX, "identifier expected");
+      }
+      js->consumed = 1;
+      return mkntarg(NTARG_NEW_TARGET);
+    }
+
     jsval_t obj = mkobj(js, 0);
     jsval_t saved_this = js->this_val;
     jsval_t saved_new_target = js->new_target;
@@ -9888,7 +9970,7 @@ static jsval_t js_unary(struct js *js) {
     ctor = resolve_coderef(js, ctor);
     if (is_err(ctor)) { return ctor; }
     if (vtype(ctor) == T_PROP || vtype(ctor) == T_PROPREF) ctor = resolveprop(js, ctor);
-
+    if (vtype(obj) == T_OBJ && (vtype(ctor) == T_FUNC || vtype(ctor) == T_CFUNC)) set_slot(js, obj, SLOT_CTOR, ctor);
     js->new_target = ctor;
 
     jsval_t result;
@@ -10313,6 +10395,7 @@ static jsval_t js_ternary(struct js *js) {
 
 static jsval_t js_assignment(struct js *js) {
   jsval_t res = js_ternary(js);
+  bool lhs_is_new_target = is_new_target_ref(res);
   
   if (!is_err(res) && vtype(res) == T_CODEREF && next(js) == TOK_ARROW) {
     jsoff_t param_start = coderefoff(res);
@@ -10387,6 +10470,7 @@ static jsval_t js_assignment(struct js *js) {
       if (is_err(closure_scope)) return closure_scope;
       set_slot(js, func_obj, SLOT_SCOPE, closure_scope);
       set_slot(js, func_obj, SLOT_THIS, js->this_val);
+      capture_arrow_new_target(js, func_obj);
     }
     
     set_slot(js, func_obj, SLOT_ARROW, js_true);
@@ -10403,6 +10487,9 @@ static jsval_t js_assignment(struct js *js) {
     js->tok == TOK_LOR_ASSIGN || js->tok == TOK_LAND_ASSIGN ||
     js->tok == TOK_NULLISH_ASSIGN)
   ) {
+    if (lhs_is_new_target) {
+      return js_mkerr_typed(js, JS_ERR_SYNTAX, "Invalid left-hand side in assignment");
+    }
     uint8_t op = js->tok;
     js->consumed = 1;
     
@@ -13851,6 +13938,12 @@ check_dup:
 params_done:;
   }
 
+  jsval_t validate_res = validate_dynamic_function_source(js, code_buf, pos, false);
+  if (is_err(validate_res)) {
+    free(code_buf);
+    return validate_res;
+  }
+
   jsval_t func_obj = mkobj(js, 0);
   if (is_err(func_obj)) { free(code_buf); return func_obj; }
   
@@ -13928,6 +14021,12 @@ static jsval_t builtin_AsyncFunction(struct js *js, jsval_t *args, int nargs) {
   pos += body_len;
   code_buf[pos++] = '}';
   code_buf[pos] = '\0';
+
+  jsval_t validate_res = validate_dynamic_function_source(js, code_buf, pos, true);
+  if (is_err(validate_res)) {
+    free(code_buf);
+    return validate_res;
+  }
 
   jsval_t func_obj = mkobj(js, 0);
   if (is_err(func_obj)) { free(code_buf); return func_obj; }
