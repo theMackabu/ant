@@ -12845,14 +12845,23 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
     return js_mkerr_typed(js, JS_ERR_SYNTAX, "class name expected");
   }
   
-  jsoff_t super_off = 0, super_len = 0;
-  if (next(js) == TOK_IDENTIFIER && js->tlen == 7 &&
-      streq(&js->code[js->toff], js->tlen, "extends", 7)) {
+  jsoff_t super_expr_off = 0, super_expr_len = 0;
+  if (
+    next(js) == TOK_IDENTIFIER 
+    && js->tlen == 7 
+    && streq(&js->code[js->toff], js->tlen, "extends", 7)
+  ) {
     js->consumed = 1;
-    EXPECT_IDENT();
-    super_off = js->toff;
-    super_len = js->tlen;
-    js->consumed = 1;
+    if (next(js) == TOK_LBRACE || next(js) == TOK_EOF) {
+      return js_mkerr_typed(js, JS_ERR_SYNTAX, "super class expression expected");
+    }
+    super_expr_off = js->toff;
+    uint8_t saved_flags = js->flags;
+    js->flags |= F_NOEXEC;
+    jsval_t super_expr = js_expr(js);
+    js->flags = saved_flags;
+    if (is_err(super_expr)) return super_expr;
+    super_expr_len = js->pos - super_expr_off;
   }
   
   EXPECT(TOK_LBRACE);
@@ -12888,6 +12897,8 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
   
   uint8_t class_tok;
   while ((class_tok = next(js)) != TOK_RBRACE && class_tok != TOK_EOF) {
+    if (class_tok == TOK_SEMICOLON) { js->consumed = 1; continue; }
+    
     bool is_async_method = false;
     bool is_static_member = false;
     bool is_getter_method = false;
@@ -12922,7 +12933,11 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
         int saved_stream_pos = js->token_stream_pos;
         js->consumed = 1;
         uint8_t peek = next(js);
-        bool next_is_name = (peek == TOK_IDENTIFIER);
+        bool next_is_name = (
+          peek == TOK_IDENTIFIER || is_keyword_propname(peek) ||
+          peek == TOK_STRING || peek == TOK_NUMBER ||
+          peek == TOK_LBRACKET
+        );
         if (!next_is_name && peek == TOK_HASH) {
           js->consumed = 1;
           if (next(js) == TOK_IDENTIFIER) { 
@@ -13013,14 +13028,18 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
       continue;
     }
     
-    if (next(js) != TOK_IDENTIFIER && (next(js) < TOK_ASYNC || next(js) > TOK_STATIC)) {
+    uint8_t name_tok = next(js);
+    bool name_is_ident = (name_tok == TOK_IDENTIFIER || is_keyword_propname(name_tok));
+    bool name_is_literal = (name_tok == TOK_STRING || name_tok == TOK_NUMBER);
+    
+    if (!name_is_ident && !name_is_literal) {
       js->flags = save_flags;
       return js_mkerr_typed(js, JS_ERR_SYNTAX, "method name expected");
     }
     
     jsoff_t method_name_off = is_private_member ? js->toff - 1 : js->toff;
     jsoff_t method_name_len = is_private_member ? js->tlen + 1 : js->tlen;
-    js->consumed = 1;
+    bool name_needs_eval = name_is_literal; js->consumed = 1;
     
     if (next(js) == TOK_ASSIGN) {
       js->consumed = 1;
@@ -13041,6 +13060,7 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
         .is_async = false,
         .is_field = true,
         .is_private = is_private_member,
+        .is_computed = name_needs_eval,
         .field_start = field_start,
         .field_end = field_end,
         .fn_start = 0,
@@ -13059,6 +13079,7 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
         .is_async = false,
         .is_field = true,
         .is_private = is_private_member,
+        .is_computed = name_needs_eval,
         .field_start = 0,
         .field_end = 0,
         .fn_start = 0,
@@ -13084,7 +13105,11 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
       return blk;
     }
     jsoff_t method_body_end = js->pos;
-    if (streq(&js->code[method_name_off], method_name_len, "constructor", 11)) {
+    if (
+      !is_private_member 
+      && !name_needs_eval 
+      && streq(&js->code[method_name_off], method_name_len, "constructor", 11)
+    ) {
       constructor_params_start = method_params_start;
       constructor_body_start = method_body_start + 1;
       constructor_body_end = method_body_end;
@@ -13101,12 +13126,12 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
         .is_private = is_private_member,
         .is_getter = is_getter_method,
         .is_setter = is_setter_method,
+        .is_computed = name_needs_eval,
         .field_start = 0,
         .field_end = 0,
       };
       utarray_push_back(methods, &func_method);
-     }
-    js->consumed = 1;
+     } js->consumed = 1;
   }
   
   EXPECT(TOK_RBRACE, js->flags = save_flags);
@@ -13115,25 +13140,37 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
   if (exe) {
     jsval_t super_constructor = js_mkundef();
     jsval_t super_proto = js_mknull();
-    if (super_len > 0) {
-      jsval_t super_val = lookup(js, &js->code[super_off], super_len);
+    bool has_super_ctor = false;
+    if (super_expr_len > 0) {
+      jsval_t super_val = js_eval_slice(js, super_expr_off, super_expr_len);
       if (is_err(super_val)) return super_val;
       super_constructor = resolveprop(js, super_val);
-      if (vtype(super_constructor) != T_FUNC && vtype(super_constructor) != T_CFUNC) {
-        return js_mkerr(js, "super class must be a constructor");
-      }
-      jsval_t super_obj = mkval(T_OBJ, vdata(super_constructor));
-      jsoff_t super_proto_off = lkp_interned(js, super_obj, INTERN_PROTOTYPE, 9);
-      if (super_proto_off != 0) {
-        super_proto = resolveprop(js, mkval(T_PROP, super_proto_off));
-      }
+      uint8_t super_type = vtype(super_constructor);
+      if (super_type == T_NULL) {
+        super_proto = js_mknull();
+      } else if (super_type == T_FUNC) {
+        has_super_ctor = true;
+        jsval_t super_obj = mkval(T_OBJ, vdata(super_constructor));
+        jsoff_t super_proto_off = lkp_interned(js, super_obj, INTERN_PROTOTYPE, 9);
+        if (super_proto_off != 0) {
+          super_proto = resolveprop(js, mkval(T_PROP, super_proto_off));
+        }
+        if (vtype(super_proto) != T_OBJ && vtype(super_proto) != T_NULL) {
+          return js_mkerr(js, "super class prototype must be an object or null");
+        }
+      } else return js_mkerr(js, "super class must be a constructor");
     }
     
     jsval_t proto = js_mkobj(js);
     if (is_err(proto)) return proto;
     
-    if (vtype(super_proto) == T_OBJ) {
-      set_proto(js, proto, super_proto);
+    if (super_expr_len > 0) {
+      if (vtype(super_proto) == T_OBJ || vtype(super_proto) == T_NULL) {
+        set_proto(js, proto, super_proto);
+      } else {
+        jsval_t object_proto = get_ctor_proto(js, "Object", 6);
+        if (vtype(object_proto) == T_OBJ) set_proto(js, proto, object_proto);
+      }
     } else {
       jsval_t object_proto = get_ctor_proto(js, "Object", 6);
       if (vtype(object_proto) == T_OBJ) set_proto(js, proto, object_proto);
@@ -13180,7 +13217,7 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
         if (vtype(func_proto) == T_FUNC) set_proto(js, method_obj, func_proto);
       }
       
-      if (super_len > 0) set_slot(js, method_obj, SLOT_SUPER, super_constructor);
+      if (has_super_ctor) set_slot(js, method_obj, SLOT_SUPER, super_constructor);
       jsval_t method_func = mkval(T_FUNC, (unsigned long) vdata(method_obj));
       
       if (m->is_getter || m->is_setter) {
@@ -13206,7 +13243,7 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
       set_func_code(js, func_obj, &js->code[constructor_params_start], code_len);
     } else {
       set_func_code_ptr(js, func_obj, "(){}", 4);
-      if (super_len > 0) set_slot(js, func_obj, SLOT_DEFAULT_CTOR, js_true);
+      if (has_super_ctor) set_slot(js, func_obj, SLOT_DEFAULT_CTOR, js_true);
     }
     
     int instance_field_count = 0;
@@ -13258,10 +13295,11 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
     }
     
     set_slot(js, func_obj, SLOT_SCOPE, func_scope);
-    if (super_len > 0) set_slot(js, func_obj, SLOT_SUPER, super_constructor);
+    if (has_super_ctor) set_slot(js, func_obj, SLOT_SUPER, super_constructor);
     
     jsval_t func_proto = get_slot(js, js_glob(js), SLOT_FUNC_PROTO);
     if (vtype(func_proto) == T_FUNC) set_proto(js, func_obj, func_proto);
+    if (has_super_ctor) set_proto(js, func_obj, super_constructor);
     
     jsval_t name_key = js_mkstr(js, "name", 4);
     if (is_err(name_key)) return name_key;
@@ -13330,7 +13368,7 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
         
         set_func_code(js, method_obj, &js->code[m->fn_start], mlen);
         set_slot(js, method_obj, SLOT_SCOPE, func_scope);
-        if (super_len > 0) set_slot(js, method_obj, SLOT_SUPER, super_constructor);
+        if (has_super_ctor) set_slot(js, method_obj, SLOT_SUPER, super_constructor);
         
         jsval_t method_func_proto = get_slot(js, js_glob(js), SLOT_FUNC_PROTO);
         if (vtype(method_func_proto) == T_FUNC) set_proto(js, method_obj, method_func_proto);
