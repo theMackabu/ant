@@ -6699,6 +6699,206 @@ static jsoff_t skip_default_expr(const char *p, jsoff_t len, jsoff_t pos) {
   return pos;
 }
 
+static jsoff_t destruct_source_len(struct js *js, jsval_t val) {
+  if (vtype(val) == T_STR) {
+    size_t slen = 0;
+    (void)js_getstr(js, val, &slen);
+    return (jsoff_t)slen;
+  }
+  return js_arr_len(js, val);
+}
+
+static jsval_t destruct_source_get(struct js *js, jsval_t val, jsoff_t idx) {
+  if (vtype(val) == T_STR) {
+    size_t slen = 0;
+    char *s = js_getstr(js, val, &slen);
+    if ((size_t)idx >= slen) return js_mkundef();
+    return js_mkstr(js, &s[idx], 1);
+  }
+  return js_arr_get(js, val, idx);
+}
+
+static jsval_t destruct_get_by_key(struct js *js, jsval_t obj, jsval_t key) {
+  if (!is_object_type(obj)) return js_mkerr(js, "invalid assignment target");
+  if (vtype(key) == T_SYMBOL) {
+    char sym_buf[32];
+    int klen = sym_to_prop_key(key, sym_buf, sizeof(sym_buf));
+    if (klen < 0) return js_mkerr(js, "invalid symbol key");
+    return getprop_any(js, obj, sym_buf, (size_t)klen);
+  }
+  jsval_t key_str = coerce_to_str(js, key);
+  if (is_err(key_str)) return key_str;
+  jsoff_t klen = 0, koff = vstr(js, key_str, &klen);
+  return getprop_any(js, obj, (const char *)&js->mem[koff], (size_t)klen);
+}
+
+static jsval_t destruct_set_by_key(struct js *js, jsval_t obj, jsval_t key, jsval_t value) {
+  if (!is_object_type(obj)) return js_mkerr(js, "invalid assignment target");
+  if (vtype(key) == T_SYMBOL) {
+    char sym_buf[32];
+    int klen = sym_to_prop_key(key, sym_buf, sizeof(sym_buf));
+    if (klen < 0) return js_mkerr(js, "invalid symbol key");
+    return js_setprop(js, obj, js_mkstr(js, sym_buf, (size_t)klen), value);
+  }
+  jsval_t key_str = coerce_to_str(js, key);
+  if (is_err(key_str)) return key_str;
+  return js_setprop(js, obj, key_str, value);
+}
+
+static bool scan_balanced_with_strings(const char *p, jsoff_t len, jsoff_t *pos, char open, char close) {
+  if (*pos >= len || p[*pos] != open) return false;
+
+  int depth = 1;
+  bool in_string = false;
+  char string_char = '\0';
+  (*pos)++;
+
+  while (*pos < len && depth > 0) {
+    char ch = p[*pos];
+    if (in_string) {
+      if (ch == '\\' && *pos + 1 < len) {
+        *pos += 2;
+        continue;
+      }
+      if (ch == string_char) {
+        in_string = false;
+        string_char = '\0';
+      }
+      (*pos)++;
+      continue;
+    }
+    if (ch == '"' || ch == '\'' || ch == '`') {
+      in_string = true;
+      string_char = ch;
+      (*pos)++;
+      continue;
+    }
+    if (ch == open) depth++;
+    else if (ch == close) depth--;
+    (*pos)++;
+  }
+  return depth == 0;
+}
+
+static jsval_t parse_nested_pattern_span(
+  struct js *js, const char *p, jsoff_t len, jsoff_t *pos,
+  jsoff_t *out_start, jsoff_t *out_len
+) {
+  char open = p[*pos];
+  char close = (open == '[') ? ']' : '}';
+
+  *out_start = *pos;
+  if (!scan_balanced_with_strings(p, len, pos, open, close)) {
+    return js_mkerr_typed(js, JS_ERR_SYNTAX, "unclosed nested destructuring pattern");
+  }
+  *out_len = *pos - *out_start;
+  return js_mkundef();
+}
+
+static jsval_t eval_computed_key_expr(
+  struct js *js, const char *p, jsoff_t len, jsoff_t *pos, const char *unclosed_msg
+) {
+  jsoff_t expr_start = *pos + 1;
+  if (!scan_balanced_with_strings(p, len, pos, '[', ']')) {
+    return js_mkerr_typed(js, JS_ERR_SYNTAX, "%s", unclosed_msg);
+  }
+
+  jsoff_t expr_end = *pos - 1;
+  jsval_t key = js_eval_str(js, &p[expr_start], expr_end - expr_start);
+  if (is_err(key)) return key;
+  return resolveprop(js, key);
+}
+
+static jsval_t extend_destruct_target_span(
+  struct js *js, const char *p, jsoff_t len, jsoff_t target_pos,
+  jsoff_t *target_len, jsoff_t *out_pos
+) {
+  jsoff_t pos = skiptonext(p, len, target_pos + *target_len, NULL);
+
+  while (pos < len && (p[pos] == '.' || p[pos] == '[')) {
+    if (p[pos] == '.') {
+      pos = skiptonext(p, len, pos + 1, NULL);
+      jsoff_t ident_len = 0;
+      if (parseident(&p[pos], len - pos, &ident_len) != TOK_IDENTIFIER) {
+        return js_mkerr_typed(js, JS_ERR_SYNTAX, "identifier expected after '.'");
+      }
+      pos += ident_len;
+      pos = skiptonext(p, len, pos, NULL);
+      *target_len = pos - target_pos;
+      continue;
+    }
+
+    if (!scan_balanced_with_strings(p, len, &pos, '[', ']')) {
+      return js_mkerr_typed(js, JS_ERR_SYNTAX, "']' expected");
+    }
+    pos = skiptonext(p, len, pos, NULL);
+    *target_len = pos - target_pos;
+  }
+
+  *out_pos = pos;
+  return js_mkundef();
+}
+
+static jsval_t make_destruct_rest_array(struct js *js, jsval_t val, jsoff_t start_idx) {
+  jsval_t rest = js_mkarr(js);
+  if (is_err(rest)) return rest;
+
+  jsoff_t alen = destruct_source_len(js, val);
+  for (jsoff_t i = start_idx; i < alen; i++) {
+    js_arr_push(js, rest, destruct_source_get(js, val, i));
+  }
+  return rest;
+}
+
+static jsval_t assign_destruct_target(struct js *js, const char *p, jsoff_t len, jsval_t value, jsval_t scope) {
+  jsoff_t pos = skiptonext(p, len, 0, NULL);
+  jsoff_t base_len = 0;
+  if (parseident(&p[pos], len - pos, &base_len) != TOK_IDENTIFIER) {
+    return js_mkerr_typed(js, JS_ERR_SYNTAX, "invalid assignment target in destructuring");
+  }
+
+  jsoff_t base_pos = pos;
+  pos += base_len;
+  pos = skiptonext(p, len, pos, NULL);
+  if (pos >= len) {
+    jsval_t vname = js_mkstr(js, &p[base_pos], base_len);
+    return js_setprop(js, scope, vname, value);
+  }
+
+  jsval_t cur = getprop_any(js, scope, &p[base_pos], (size_t)base_len);
+  if (is_err(cur)) return cur;
+
+  while (pos < len) {
+    if (p[pos] == '.') {
+      pos = skiptonext(p, len, pos + 1, NULL);
+      jsoff_t nlen = 0;
+      if (parseident(&p[pos], len - pos, &nlen) != TOK_IDENTIFIER) {
+        return js_mkerr_typed(js, JS_ERR_SYNTAX, "identifier expected after '.'");
+      }
+      jsval_t key = js_mkstr(js, &p[pos], nlen);
+      pos += nlen;
+      pos = skiptonext(p, len, pos, NULL);
+      if (pos >= len) return destruct_set_by_key(js, cur, key, value);
+      cur = destruct_get_by_key(js, cur, key);
+      if (is_err(cur)) return cur;
+      continue;
+    }
+
+    if (p[pos] == '[') {
+      jsval_t key = eval_computed_key_expr(js, p, len, &pos, "']' expected");
+      if (is_err(key)) return key;
+      pos = skiptonext(p, len, pos, NULL);
+      if (pos >= len) return destruct_set_by_key(js, cur, key, value);
+      cur = destruct_get_by_key(js, cur, key);
+      if (is_err(cur)) return cur;
+      continue;
+    }
+
+    return js_mkerr_typed(js, JS_ERR_SYNTAX, "invalid assignment target in destructuring");
+  }
+  return js_mkundef();
+}
+
 static jsval_t bind_destruct_pattern(struct js *js, const char *p, jsoff_t len, jsval_t val, jsval_t scope) {
   jsoff_t pos = skiptonext(p, len, 0, NULL);
   if (pos >= len) return js_mkundef();
@@ -6716,17 +6916,11 @@ static jsval_t bind_destruct_pattern(struct js *js, const char *p, jsoff_t len, 
     if (p[pos] == ',') { pos++; idx++; continue; }
 
     if (is_arr && (p[pos] == '[' || p[pos] == '{')) {
-      jsoff_t nested_start = pos;
-      char open = p[pos], close = (open == '[') ? ']' : '}';
-      int depth = 1;
-      pos++;
-      while (pos < len && depth > 0) {
-        if (p[pos] == open) depth++;
-        else if (p[pos] == close) depth--;
-        pos++;
-      }
-      jsoff_t nested_len = pos - nested_start;
-      jsval_t elem_val = js_arr_get(js, val, idx);
+      jsoff_t nested_start = 0, nested_len = 0;
+      jsval_t nested_res = parse_nested_pattern_span(js, p, len, &pos, &nested_start, &nested_len);
+      if (is_err(nested_res)) return nested_res;
+
+      jsval_t elem_val = destruct_source_get(js, val, idx);
       jsval_t r = bind_destruct_pattern(js, &p[nested_start], nested_len, elem_val, scope);
       if (is_err(r)) return r;
       idx++;
@@ -6737,14 +6931,45 @@ static jsval_t bind_destruct_pattern(struct js *js, const char *p, jsoff_t len, 
     
     bool is_rest = (pos + 2 < len && p[pos] == '.' && p[pos+1] == '.' && p[pos+2] == '.');
     if (is_rest) { pos += 3; pos = skiptonext(p, len, pos, NULL); }
+
+    if (is_arr && is_rest && pos < len && (p[pos] == '[' || p[pos] == '{')) {
+      jsoff_t nested_start = 0, nested_len = 0;
+      jsval_t nested_res = parse_nested_pattern_span(js, p, len, &pos, &nested_start, &nested_len);
+      if (is_err(nested_res)) return nested_res;
+
+      jsval_t rest = make_destruct_rest_array(js, val, idx);
+      if (is_err(rest)) return rest;
+
+      jsval_t r = bind_destruct_pattern(js, &p[nested_start], nested_len, rest, scope);
+      if (is_err(r)) return r;
+
+      idx = (int)destruct_source_len(js, val);
+      pos = skiptonext(p, len, pos, NULL);
+      if (pos < len && p[pos] == ',') pos++;
+      continue;
+    }
     
+    bool has_computed_key = false;
+    jsval_t computed_key = js_mkundef();
     jsoff_t name_len = 0;
-    if (parseident(&p[pos], len - pos, &name_len) != TOK_IDENTIFIER) break;
-    
-    jsoff_t var_pos = pos, var_len = name_len;
-    jsoff_t src_pos = pos, src_len = name_len;
-    
-    pos += name_len;
+    jsoff_t var_pos = 0, var_len = 0;
+    jsoff_t src_pos = 0, src_len = 0;
+    jsoff_t target_pos = 0, target_len = 0;
+
+    if (!is_arr && p[pos] == '[') {
+      has_computed_key = true;
+      computed_key = eval_computed_key_expr(js, p, len, &pos, "unclosed computed property name");
+      if (is_err(computed_key)) return computed_key;
+    } else {
+      if (parseident(&p[pos], len - pos, &name_len) != TOK_IDENTIFIER) break;
+      var_pos = pos;
+      var_len = name_len;
+      src_pos = pos;
+      src_len = name_len;
+      target_pos = pos;
+      target_len = name_len;
+      pos += name_len;
+    }
     pos = skiptonext(p, len, pos, NULL);
     
     bool is_nested = false;
@@ -6755,37 +6980,36 @@ static jsval_t bind_destruct_pattern(struct js *js, const char *p, jsoff_t len, 
       
       if (pos < len && (p[pos] == '{' || p[pos] == '[')) {
         is_nested = true;
-        nested_start = pos;
-        char open = p[pos], close = (open == '{') ? '}' : ']';
-        int depth = 1;
-        pos++;
-        while (pos < len && depth > 0) {
-          if (p[pos] == open) depth++;
-          else if (p[pos] == close) depth--;
-          pos++;
-        }
-        nested_len = pos - nested_start;
+        jsval_t nested_res = parse_nested_pattern_span(js, p, len, &pos, &nested_start, &nested_len);
+        if (is_err(nested_res)) return nested_res;
         pos = skiptonext(p, len, pos, NULL);
       } else {
         jsoff_t rlen = 0;
         if (parseident(&p[pos], len - pos, &rlen) == TOK_IDENTIFIER) {
           var_pos = pos; var_len = rlen;
+          target_pos = pos; target_len = rlen;
           pos += rlen;
           pos = skiptonext(p, len, pos, NULL);
         }
       }
+    } else if (!is_arr && has_computed_key) {
+      return js_mkerr(js, "':' expected after computed property name");
+    }
+
+    if (target_len > 0) {
+      jsval_t span_res = extend_destruct_target_span(js, p, len, target_pos, &target_len, &pos);
+      if (is_err(span_res)) return span_res;
     }
     
     jsval_t prop_val;
     if (is_rest && is_arr) {
-      jsval_t rest = js_mkarr(js);
-      if (is_err(rest)) return rest;
-      jsoff_t alen = js_arr_len(js, val);
-      for (jsoff_t i = idx; i < alen; i++) js_arr_push(js, rest, js_arr_get(js, val, i));
-      prop_val = rest;
+      prop_val = make_destruct_rest_array(js, val, idx);
+      if (is_err(prop_val)) return prop_val;
     } else if (is_rest) prop_val = mkobj(js, 0);
-    else if (is_arr) prop_val = js_arr_get(js, val, idx);
+    else if (is_arr) prop_val = destruct_source_get(js, val, idx);
+    else if (has_computed_key) prop_val = destruct_get_by_key(js, val, computed_key);
     else prop_val = getprop_any(js, val, &p[src_pos], src_len);
+    if (is_err(prop_val)) return prop_val;
     
     if (is_nested) {
       jsval_t r = bind_destruct_pattern(js, &p[nested_start], nested_len, prop_val, scope);
@@ -6808,9 +7032,13 @@ static jsval_t bind_destruct_pattern(struct js *js, const char *p, jsoff_t len, 
     prop_val = resolveprop(js, prop_val);
     
 bind:;
-    jsval_t vname = js_mkstr(js, &p[var_pos], var_len);
-    if (is_err(vname)) return vname;
-    jsval_t r = js_setprop(js, scope, vname, prop_val);
+    jsval_t r;
+    if (target_len > 0) r = assign_destruct_target(js, &p[target_pos], target_len, prop_val, scope);
+    else {
+      jsval_t vname = js_mkstr(js, &p[var_pos], var_len);
+      if (is_err(vname)) return vname;
+      r = js_setprop(js, scope, vname, prop_val);
+    }
     if (is_err(r)) return r;
     
     idx++;
