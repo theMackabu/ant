@@ -31,8 +31,8 @@ lib_sources = files(run_command(
 
 libant = static_library(
   'ant',
-  install: true,
   lib_sources + [snapshot_h, messages_h],
+  install: true,
   include_directories: include,
   dependencies: ant_deps
 )
@@ -78,6 +78,6 @@ endif
 
 executable(
   'ant',
-  files('src/main.c', 'src/watch.c'),
+  files('src/main.c', 'src/watch.c') + [messages_h],
   dependencies: libant_dep, link_args: link_args
 )
