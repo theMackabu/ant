@@ -478,7 +478,7 @@ static void process_keypress_data(struct js *js, const char *data, size_t len) {
     }
 
     if (c == '\r' || c == '\n') {
-      emit_keypress_event(js, "\n", 1, "return", false, false, false, "\n", 1);
+      emit_keypress_event(js, "\r", 1, "return", false, false, false, "\r", 1);
       continue;
     }
 

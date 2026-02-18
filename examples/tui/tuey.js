@@ -143,6 +143,38 @@ export function padCenter(str, len, char = ' ') {
   return char.repeat(left) + str + char.repeat(right);
 }
 
+export function sliceAnsi(str, start, end) {
+  let vis = 0;
+  let i = 0;
+  let result = '';
+  let lastStyle = '';
+
+  while (i < str.length) {
+    if (str[i] === '\x1b') {
+      const match = str.slice(i).match(/^\x1b\[[0-9;]*m/);
+      if (match) {
+        if (vis >= start && (end === undefined || vis < end)) {
+          result += match[0];
+        } else if (vis < start) {
+          lastStyle = match[0];
+        }
+        i += match[0].length;
+        continue;
+      }
+    }
+
+    if (vis >= start && (end === undefined || vis < end)) {
+      if (result === '' && lastStyle) result = lastStyle;
+      result += str[i];
+    }
+    vis++;
+    if (end !== undefined && vis >= end) break;
+    i++;
+  }
+
+  return result;
+}
+
 export function truncate(str, len, suffix = '…') {
   const stripped = stripAnsi(str);
   if (stripped.length <= len) return str;
@@ -242,10 +274,9 @@ export class Buffer {
     if (y < 0 || y >= this.height) return;
     const stripped = stripAnsi(text);
     const line = this.lines[y];
-    const lineStripped = stripAnsi(line);
 
-    const before = lineStripped.slice(0, Math.max(0, x));
-    const after = lineStripped.slice(x + stripped.length);
+    const before = sliceAnsi(line, 0, x);
+    const after = sliceAnsi(line, x + stripped.length);
     this.lines[y] = pad(before, x) + text + codes.reset + after;
   }
 
@@ -257,7 +288,7 @@ export class Buffer {
     }
   }
 
-  box(x, y, width, height, style = box.light, title = '', titleStyle = '') {
+  box(x, y, width, height, style = box.light, title = '', titleStyle = '', borderColor = '') {
     if (height < 2 || width < 2) return;
     if (!style || !style.h) {
       console.error("box() style undefined:", style);
@@ -265,21 +296,22 @@ export class Buffer {
       process.exit(1);
     }
 
-    const top = style.tl + style.h.repeat(width - 2) + style.tr;
-    const bottom = style.bl + style.h.repeat(width - 2) + style.br;
+    const bc = borderColor || '';
+    const top = bc + style.tl + style.h.repeat(width - 2) + style.tr + codes.reset;
+    const bottom = bc + style.bl + style.h.repeat(width - 2) + style.br + codes.reset;
 
     this.writeStyled(x, y, top);
     this.writeStyled(x, y + height - 1, bottom);
 
     for (let row = y + 1; row < y + height - 1 && row < this.height; row++) {
       if (row < 0) continue;
-      this.writeStyled(x, row, style.v);
-      this.writeStyled(x + width - 1, row, style.v);
+      this.writeStyled(x, row, bc + style.v + codes.reset);
+      this.writeStyled(x + width - 1, row, bc + style.v + codes.reset);
     }
 
     if (title) {
       const titleStr = ` ${title} `;
-      const titleX = x + Math.floor((width - visibleLength(titleStr)) / 2);
+      const titleX = x + 2;
       this.writeStyled(titleX, y, titleStyle + titleStr + codes.reset);
     }
   }
@@ -307,7 +339,6 @@ export class Screen {
     this._width = this.stdout.columns || 80;
     this._height = this.stdout.rows || 24;
     this._buffer = new Buffer(this._width, this._height);
-    this._prevBuffer = null;
     this._running = false;
     this._keyHandlers = [];
     this._resizeHandlers = [];
@@ -371,7 +402,6 @@ export class Screen {
     this._width = this.stdout.columns || 80;
     this._height = this.stdout.rows || 24;
     this._buffer.resize(this._width, this._height);
-    this._prevBuffer = null;
     for (const handler of this._resizeHandlers) {
       handler(this._width, this._height);
     }
@@ -428,8 +458,8 @@ export class Screen {
     }
   }
 
-  box(x, y, width, height, style = box.light, title = '', titleStyle = '') {
-    this._buffer.box(x, y, width, height, style, title, titleStyle);
+  box(x, y, width, height, style = box.light, title = '', titleStyle = '', borderColor = '') {
+    this._buffer.box(x, y, width, height, style, title, titleStyle, borderColor);
   }
 
   pushModal(options) {
@@ -489,12 +519,11 @@ export class Screen {
       if (y + row < 0) continue;
       const modalLine = modalBuffer.lines[row];
       const bgLine = this._buffer.lines[y + row];
-      const bgStripped = stripAnsi(bgLine);
 
-      const before = bgStripped.slice(0, Math.max(0, x));
-      const after = bgStripped.slice(x + width);
+      const before = sliceAnsi(bgLine, 0, x);
+      const after = sliceAnsi(bgLine, x + width);
 
-      this._buffer.lines[y + row] = pad(before, x) + modalLine + after;
+      this._buffer.lines[y + row] = pad(before, x) + codes.reset + modalLine + codes.reset + after;
     }
   }
 
@@ -512,7 +541,6 @@ export class Screen {
       output +
       codes.syncEnd
     );
-    this._prevBuffer = this._buffer.clone();
   }
 
   exit(code = 0) {
@@ -620,7 +648,10 @@ export class List {
       const isSelected = i === this.index;
       const style = isSelected ? this.selectedStyle : this.normalStyle;
 
-      screen.write(this.x, row, pad(style + text + codes.reset, this.width));
+      const styledText = style ? text.replaceAll(codes.reset, codes.reset + style) : text;
+      const visible = visibleLength(text);
+      const padding = Math.max(0, this.width - visible);
+      screen.write(this.x, row, style + styledText + ' '.repeat(padding) + codes.reset);
     }
 
     for (let i = end - this.scrollOffset; i < this.height; i++) {
@@ -887,7 +918,7 @@ export function confirm(screen, options) {
       },
       render: (buf, w, h, ox, oy) => {
         buf.writeStyled(ox, oy + 1, padCenter(message, w));
-        buf.writeStyled(ox, oy + 3, padCenter(`${colors.green}[Y]es${codes.reset}  ${colors.red}[N]o${codes.reset}`, w + 20));
+        buf.writeStyled(ox, oy + 3, padCenter(`${colors.green}[Y]es${codes.reset}  ${colors.red}[N]o${codes.reset}`, w));
       }
     });
     screen.render();
@@ -919,7 +950,7 @@ export function alert(screen, options) {
         for (let i = 0; i < lines.length; i++) {
           buf.writeStyled(ox, oy + i + 1, padCenter(lines[i], w));
         }
-        buf.writeStyled(ox, oy + lines.length + 2, padCenter(`${colors.dim}[Enter] OK${codes.reset}`, w + 10));
+        buf.writeStyled(ox, oy + lines.length + 2, padCenter(`${colors.dim}[Enter] OK${codes.reset}`, w));
       }
     });
     screen.render();

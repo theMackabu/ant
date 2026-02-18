@@ -1,4 +1,4 @@
-import { Screen, List, ProgressBar, Input, Table, colors, box, keys, codes, modal, confirm, pad, padCenter, truncate } from './tuey.js';
+import { Screen, List, ProgressBar, Input, Table, colors, box, keys, codes, modal, confirm, pad, padCenter, truncate, visibleLength } from './tuey.js';
 
 const screen = new Screen({ fullscreen: true, hideCursor: true });
 
@@ -37,8 +37,54 @@ let state = {
   memUsage: 62,
   diskUsage: 78,
   networkIn: 0,
-  networkOut: 0
+  networkOut: 0,
+  settingsIndex: 0
 };
+
+const settings = [
+  { key: 'refreshRate', label: 'Refresh Rate', type: 'cycle', options: [500, 1000, 2000, 5000], value: 1000, format: v => `${v}ms` },
+  { key: 'logInterval', label: 'Log Interval', type: 'cycle', options: [1000, 2000, 5000, 10000], value: 2000, format: v => `${v / 1000}s` },
+  { key: 'logLevel', label: 'Min Log Level', type: 'cycle', options: ['DEBUG', 'INFO', 'WARN', 'ERROR'], value: 'DEBUG', format: v => v },
+  { key: 'boxStyle', label: 'Box Style', type: 'cycle', options: ['rounded', 'light', 'heavy', 'double'], value: 'rounded', format: v => v },
+  { key: 'confirmQuit', label: 'Confirm on Quit', type: 'toggle', value: true, format: v => v ? 'On' : 'Off' },
+  { key: 'simulateStats', label: 'Simulate Stats', type: 'toggle', value: true, format: v => v ? 'On' : 'Off' },
+  { key: 'maxLogs', label: 'Max Log Entries', type: 'cycle', options: [50, 100, 250, 500], value: 100, format: v => String(v) }
+];
+
+function getSetting(key) {
+  return settings.find(s => s.key === key).value;
+}
+
+function cycleSetting(index, direction) {
+  const s = settings[index];
+  if (s.type === 'toggle') {
+    s.value = !s.value;
+  } else if (s.type === 'cycle') {
+    const idx = s.options.indexOf(s.value);
+    const next = (idx + direction + s.options.length) % s.options.length;
+    s.value = s.options[next];
+  }
+  applySetting(s.key);
+}
+
+function applySetting(key) {
+  if (key === 'refreshRate') {
+    clearInterval(statsTimer);
+    statsTimer = setInterval(updateStats, getSetting('refreshRate'));
+  } else if (key === 'logInterval') {
+    clearInterval(logTimer);
+    logTimer = setInterval(addRandomLog, getSetting('logInterval'));
+  } else if (key === 'logLevel') {
+    const levels = ['DEBUG', 'INFO', 'WARN', 'ERROR'];
+    const minIdx = levels.indexOf(getSetting('logLevel'));
+    const filtered = logs.filter(l => levels.indexOf(l.level) >= minIdx);
+    logList.setItems(filtered);
+  } else if (key === 'maxLogs') {
+    const max = getSetting('maxLogs');
+    while (logs.length > max) logs.shift();
+    logList.setItems(logs);
+  }
+}
 
 const taskList = new List({
   items: tasks,
@@ -46,7 +92,7 @@ const taskList = new List({
   y: 5,
   width: 50,
   height: 12,
-  selectedStyle: colors.bgBlue + colors.bold + colors.white,
+  selectedStyle: colors.bgGray + colors.white,
   renderItem: task => {
     const statusIcon =
       task.status === 'done'
@@ -91,11 +137,6 @@ function filterTasks() {
 }
 
 function drawHeader() {
-  const title = ' TUI Demo - Press ? for help ';
-  const w = screen.width;
-
-  screen.write(0, 0, colors.bgBlue + colors.bold + colors.white + padCenter(title, w) + codes.reset);
-
   const tabs = [
     { key: '1', name: 'Dashboard', view: 'dashboard' },
     { key: '2', name: 'Tasks', view: 'tasks' },
@@ -109,7 +150,7 @@ function drawHeader() {
     const style = isActive ? colors.bgWhite + colors.black + colors.bold : colors.dim;
     tabLine += `${style} ${tab.key}:${tab.name} ${codes.reset} `;
   }
-  screen.write(0, 1, tabLine);
+  screen.write(0, 0, tabLine);
 }
 
 function drawFooter() {
@@ -124,75 +165,61 @@ function drawFooter() {
 
 function drawDashboard() {
   const w = screen.width;
+  const sbw = 42;
+  const tbw = 44;
+  const rbw = 55;
+  const rcw = rbw - 4;
+  const bs = box[getSetting('boxStyle')];
 
-  screen.write(2, 3, colors.bold + colors.cyan + '┌─ System Status ─────────────────────────┐' + codes.reset);
+  screen.box(2, 3, sbw, 5, bs, 'System Status', colors.bold + colors.cyan, colors.cyan);
 
   cpuBar.setValue(state.cpuUsage);
   memBar.setValue(state.memUsage);
   diskBar.setValue(state.diskUsage);
 
-  screen.write(2, 4, colors.cyan + '│' + codes.reset);
   screen.write(4, 4, `CPU:    ${cpuBar.render()}`);
-  screen.write(45, 4, colors.cyan + '│' + codes.reset);
-
-  screen.write(2, 5, colors.cyan + '│' + codes.reset);
   screen.write(4, 5, `Memory: ${memBar.render()}`);
-  screen.write(45, 5, colors.cyan + '│' + codes.reset);
-
-  screen.write(2, 6, colors.cyan + '│' + codes.reset);
   screen.write(4, 6, `Disk:   ${diskBar.render()}`);
-  screen.write(45, 6, colors.cyan + '│' + codes.reset);
 
-  screen.write(2, 7, colors.cyan + '└──────────────────────────────────────────┘' + codes.reset);
-
-  screen.write(2, 9, colors.bold + colors.yellow + '┌─ Task Summary ──────────────────────────┐' + codes.reset);
+  screen.box(2, 9, tbw, 6, bs, 'Task Summary', colors.bold + colors.yellow, colors.yellow);
 
   const done = tasks.filter(t => t.status === 'done').length;
   const inProgress = tasks.filter(t => t.status === 'in_progress').length;
   const todo = tasks.filter(t => t.status === 'todo').length;
 
-  screen.write(2, 10, colors.yellow + '│' + codes.reset);
-  screen.write(
-    4,
-    10,
-    `${colors.green}✓ Completed:${codes.reset} ${done}   ${colors.yellow}◐ In Progress:${codes.reset} ${inProgress}   ${colors.gray}○ Todo:${codes.reset} ${todo}`
-  );
-  screen.write(45, 10, colors.yellow + '│' + codes.reset);
+  screen.write(4, 10, `${colors.green}✓ Completed:${codes.reset}   ${done}`);
+  screen.write(4, 11, `${colors.yellow}◐ In Progress:${codes.reset} ${inProgress}`);
+  screen.write(4, 12, `${colors.gray}○ Todo:${codes.reset}        ${todo}`);
 
   const progress = new ProgressBar({
     value: done,
     max: tasks.length,
-    width: 35,
+    width: 25,
     filledStyle: colors.green,
     showPercent: true
   });
 
-  screen.write(2, 11, colors.yellow + '│' + codes.reset);
-  screen.write(4, 11, `Progress: ${progress.render()}`);
-  screen.write(45, 11, colors.yellow + '│' + codes.reset);
+  screen.write(4, 13, `Progress: ${progress.render()}`);
 
-  screen.write(2, 12, colors.yellow + '└──────────────────────────────────────────┘' + codes.reset);
+  screen.box(2, 16, rbw, 7, bs, 'Recent Activity', colors.bold + colors.magenta, colors.magenta);
 
-  screen.write(2, 14, colors.bold + colors.magenta + '┌─ Recent Activity ───────────────────────┐' + codes.reset);
-
-  for (let i = 0; i < Math.min(5, logs.length); i++) {
-    const log = logs[logs.length - 1 - i];
-    const levelColor = log.level === 'ERROR' ? colors.red : log.level === 'WARN' ? colors.yellow : colors.green;
-    screen.write(2, 15 + i, colors.magenta + '│' + codes.reset);
-    screen.write(4, 15 + i, `${colors.dim}${log.time}${codes.reset} ${levelColor}${log.level}${codes.reset} ${truncate(log.message, 30)}`);
-    screen.write(45, 15 + i, colors.magenta + '│' + codes.reset);
+  const recentLogs = logs.slice(-5).reverse();
+  for (let i = 0; i < recentLogs.length; i++) {
+    const log = recentLogs[i];
+    const levelColor = log.level === 'ERROR' ? colors.red : log.level === 'WARN' ? colors.yellow : log.level === 'DEBUG' ? colors.cyan : colors.green;
+    screen.write(4, 17 + i, `${colors.dim}${log.time}${codes.reset} ${levelColor}${pad(log.level, 5)}${codes.reset} ${truncate(log.message, rcw - 16)}`);
   }
 
-  screen.write(2, 20, colors.magenta + '└──────────────────────────────────────────┘' + codes.reset);
-
-  if (w > 55) {
-    screen.box(50, 3, 30, 10, box.rounded, 'Quick Stats', colors.bold + colors.green);
-    screen.write(52, 5, `${colors.bold}Uptime:${codes.reset} 2h 34m`);
-    screen.write(52, 6, `${colors.bold}Network In:${codes.reset} ${state.networkIn} KB/s`);
-    screen.write(52, 7, `${colors.bold}Network Out:${codes.reset} ${state.networkOut} KB/s`);
-    screen.write(52, 8, `${colors.bold}Active Users:${codes.reset} 42`);
-    screen.write(52, 9, `${colors.bold}Requests/s:${codes.reset} 1,234`);
-    screen.write(52, 10, `${colors.bold}Errors:${codes.reset} ${colors.red}3${codes.reset}`);
+  const qw = 30;
+  const qx = w - qw - 2;
+  if (qx > rbw + 4) {
+    screen.box(qx, 3, qw, 10, bs, 'Quick Stats', colors.bold + colors.green, colors.green);
+    screen.write(qx + 2, 5, `${colors.bold}Uptime:${codes.reset} 2h 34m`);
+    screen.write(qx + 2, 6, `${colors.bold}Network In:${codes.reset} ${state.networkIn} KB/s`);
+    screen.write(qx + 2, 7, `${colors.bold}Network Out:${codes.reset} ${state.networkOut} KB/s`);
+    screen.write(qx + 2, 8, `${colors.bold}Active Users:${codes.reset} 42`);
+    screen.write(qx + 2, 9, `${colors.bold}Requests/s:${codes.reset} 1,234`);
+    screen.write(qx + 2, 10, `${colors.bold}Errors:${codes.reset} ${colors.red}3${codes.reset}`);
   }
 }
 
@@ -222,8 +249,9 @@ function drawTasks() {
     screen.write(detailX + 2, 10, `${colors.bold}Priority:${codes.reset} ${selected.priority}`);
 
     screen.write(detailX + 2, 12, colors.dim + 'Enter to toggle status' + codes.reset);
-    screen.write(detailX + 2, 13, colors.dim + 'D to delete task' + codes.reset);
-    screen.write(detailX + 2, 14, colors.dim + 'N to add new task' + codes.reset);
+    screen.write(detailX + 2, 13, colors.dim + 'P to cycle priority' + codes.reset);
+    screen.write(detailX + 2, 14, colors.dim + 'D to delete task' + codes.reset);
+    screen.write(detailX + 2, 15, colors.dim + 'N to add new task' + codes.reset);
   }
 }
 
@@ -238,52 +266,56 @@ function drawLogs() {
 function drawSettings() {
   screen.write(2, 3, colors.bold + colors.cyan + 'Settings' + codes.reset);
 
-  const table = new Table({
-    x: 2,
-    y: 5,
-    width: 60,
-    columns: [
-      { key: 'setting', header: 'Setting' },
-      { key: 'value', header: 'Value' },
-      { key: 'description', header: 'Description' }
-    ],
-    rows: [
-      { setting: 'Theme', value: 'Dark', description: 'UI color scheme' },
-      { setting: 'Refresh Rate', value: '1000ms', description: 'Dashboard update interval' },
-      { setting: 'Log Level', value: 'INFO', description: 'Minimum log level to display' },
-      { setting: 'Notifications', value: 'Enabled', description: 'Show system notifications' },
-      { setting: 'Auto-save', value: 'On', description: 'Automatically save changes' }
-    ],
-    borderStyle: box.rounded,
-    headerStyle: colors.bold + colors.cyan
-  });
+  for (let i = 0; i < settings.length; i++) {
+    const s = settings[i];
+    const y = 5 + i;
+    const isSelected = state.settingsIndex === i;
+    const style = isSelected ? colors.bgGray + colors.white : '';
+    const label = pad(s.label, 20);
+    const value = s.format(s.value);
+    const valueStyle = isSelected ? colors.cyan + colors.bold : colors.yellow;
+    const line = ` ${label} ${valueStyle}${value}${codes.reset} `;
+    const visible = visibleLength(line);
+    const padding = Math.max(0, 50 - visible);
 
-  table.render(screen);
-
-  screen.write(2, 15, colors.dim + 'Press Enter on a setting to modify it' + codes.reset);
-}
-
-function render() {
-  screen.clear();
-  drawHeader();
-
-  switch (state.view) {
-    case 'dashboard':
-      drawDashboard();
-      break;
-    case 'tasks':
-      drawTasks();
-      break;
-    case 'logs':
-      drawLogs();
-      break;
-    case 'settings':
-      drawSettings();
-      break;
+    if (isSelected) {
+      screen.write(2, y, style + line + ' '.repeat(padding) + codes.reset);
+    } else {
+      screen.write(2, y, line);
+    }
   }
 
-  drawFooter();
-  screen.render();
+  screen.write(2, 5 + settings.length + 1, colors.dim + '↑↓: Navigate  Enter/→: Change  ←: Change back' + codes.reset);
+}
+
+let _renderPending = false;
+
+function render() {
+  if (_renderPending) return;
+  _renderPending = true;
+  queueMicrotask(() => {
+    _renderPending = false;
+    screen.clear();
+    drawHeader();
+
+    switch (state.view) {
+      case 'dashboard':
+        drawDashboard();
+        break;
+      case 'tasks':
+        drawTasks();
+        break;
+      case 'logs':
+        drawLogs();
+        break;
+      case 'settings':
+        drawSettings();
+        break;
+    }
+
+    drawFooter();
+    screen.render();
+  });
 }
 
 function showHelp() {
@@ -338,7 +370,7 @@ function showMemoryModal() {
   modal(screen, {
     id: 'memory',
     width: 40,
-    height: 14,
+    height: 24,
     title: 'Memory Usage',
     titleStyle: colors.bold + colors.yellow,
     borderStyle: box.rounded,
@@ -355,14 +387,41 @@ function showMemoryModal() {
     },
     render: (buf, _w, _h, ox, oy) => {
       const mem = Ant.stats();
-      buf.writeStyled(ox, oy + 1, `${colors.cyan}Arena${codes.reset}`);
-      buf.writeStyled(ox, oy + 2, `  Used: ${colors.bold}${fmt(mem.arenaUsed)}${codes.reset}`);
-      buf.writeStyled(ox, oy + 3, `  Size: ${colors.bold}${fmt(mem.arenaSize)}${codes.reset}`);
-      buf.writeStyled(ox, oy + 5, `${colors.cyan}Process${codes.reset}`);
-      buf.writeStyled(ox, oy + 6, `  RSS:  ${colors.bold}${fmt(mem.rss)}${codes.reset}`);
-      buf.writeStyled(ox, oy + 8, `${colors.cyan}C Stack${codes.reset}`);
-      buf.writeStyled(ox, oy + 9, `  Max:  ${colors.bold}${fmt(mem.cstack)}${codes.reset}`);
-      buf.writeStyled(ox, oy + 11, colors.dim + '  g: Run GC  m/Esc: Close' + codes.reset);
+      let y = 1;
+
+      buf.writeStyled(ox, oy + y++, `${colors.cyan}Arena${codes.reset}`);
+      buf.writeStyled(ox, oy + y++, `  Used:        ${colors.bold}${fmt(mem.arenaUsed)}${codes.reset}`);
+      buf.writeStyled(ox, oy + y++, `  Size:        ${colors.bold}${fmt(mem.arenaSize)}${codes.reset}`);
+      y++;
+
+      if (mem.external) {
+        buf.writeStyled(ox, oy + y++, `${colors.cyan}External${codes.reset}`);
+        buf.writeStyled(ox, oy + y++, `  Buffers:     ${colors.bold}${fmt(mem.external.buffers)}${codes.reset}`);
+        buf.writeStyled(ox, oy + y++, `  Code:        ${colors.bold}${fmt(mem.external.code)}${codes.reset}`);
+        buf.writeStyled(ox, oy + y++, `  Collections: ${colors.bold}${fmt(mem.external.collections)}${codes.reset}`);
+        buf.writeStyled(ox, oy + y++, `  Total:       ${colors.bold}${fmt(mem.external.total)}${codes.reset}`);
+        y++;
+      }
+
+      if (mem.intern) {
+        buf.writeStyled(ox, oy + y++, `${colors.cyan}Intern Table${codes.reset}`);
+        buf.writeStyled(ox, oy + y++, `  Strings:     ${colors.bold}${mem.intern.count}${codes.reset}`);
+        buf.writeStyled(ox, oy + y++, `  Bytes:       ${colors.bold}${fmt(mem.intern.bytes)}${codes.reset}`);
+        y++;
+      }
+
+      buf.writeStyled(ox, oy + y++, `${colors.cyan}Process${codes.reset}`);
+      buf.writeStyled(ox, oy + y++, `  RSS:         ${colors.bold}${fmt(mem.rss)}${codes.reset}`);
+      if (mem.virtualSize) {
+        buf.writeStyled(ox, oy + y++, `  Virtual:     ${colors.bold}${fmt(mem.virtualSize)}${codes.reset}`);
+      }
+      y++;
+
+      buf.writeStyled(ox, oy + y++, `${colors.cyan}C Stack${codes.reset}`);
+      buf.writeStyled(ox, oy + y++, `  Max:         ${colors.bold}${fmt(mem.cstack)}${codes.reset}`);
+      y++;
+
+      buf.writeStyled(ox, oy + y, colors.dim + '  g: Run GC  m/Esc: Close' + codes.reset);
     }
   });
   screen.render();
@@ -393,13 +452,17 @@ function handleKey(key) {
   switch (key) {
     case 'q':
     case keys.CTRL_C:
-      confirm(screen, {
-        title: 'Quit',
-        message: 'Are you sure you want to quit?'
-      }).then(confirmed => {
-        if (confirmed) screen.exit(0);
-        render();
-      });
+      if (getSetting('confirmQuit')) {
+        confirm(screen, {
+          title: 'Quit',
+          message: 'Are you sure you want to quit?'
+        }).then(confirmed => {
+          if (confirmed) screen.exit(0);
+          render();
+        });
+      } else {
+        screen.exit(0);
+      }
       return;
 
     case '1':
@@ -430,6 +493,7 @@ function handleKey(key) {
     case 'k':
       if (state.view === 'tasks') taskList.selectPrev();
       else if (state.view === 'logs') logList.selectPrev();
+      else if (state.view === 'settings') state.settingsIndex = Math.max(0, state.settingsIndex - 1);
       render();
       break;
 
@@ -437,6 +501,7 @@ function handleKey(key) {
     case 'j':
       if (state.view === 'tasks') taskList.selectNext();
       else if (state.view === 'logs') logList.selectNext();
+      else if (state.view === 'settings') state.settingsIndex = Math.min(settings.length - 1, state.settingsIndex + 1);
       render();
       break;
 
@@ -453,12 +518,22 @@ function handleKey(key) {
       break;
 
     case keys.ENTER:
+    case keys.RIGHT:
       if (state.view === 'tasks') {
         const task = taskList.getSelected();
         if (task) {
           task.status = task.status === 'done' ? 'todo' : task.status === 'todo' ? 'in_progress' : 'done';
           filterTasks();
         }
+      } else if (state.view === 'settings') {
+        cycleSetting(state.settingsIndex, 1);
+      }
+      render();
+      break;
+
+    case keys.LEFT:
+      if (state.view === 'settings') {
+        cycleSetting(state.settingsIndex, -1);
       }
       render();
       break;
@@ -495,6 +570,68 @@ function handleKey(key) {
       }
       break;
 
+    case 'P':
+      if (state.view === 'tasks') {
+        const task = taskList.getSelected();
+        if (task) {
+          task.priority = task.priority === 'low' ? 'medium' : task.priority === 'medium' ? 'high' : 'low';
+        }
+      }
+      render();
+      break;
+
+    case 'D':
+      if (state.view === 'tasks') {
+        const task = taskList.getSelected();
+        if (task) {
+          const idx = tasks.indexOf(task);
+          if (idx >= 0) tasks.splice(idx, 1);
+          filterTasks();
+        }
+      }
+      render();
+      break;
+
+    case 'N':
+      if (state.view === 'tasks') {
+        const nameInput = new Input({ width: 30, placeholder: 'Task name...' });
+        modal(screen, {
+          id: 'new-task',
+          width: 40,
+          height: 7,
+          title: 'New Task',
+          titleStyle: colors.bold + colors.cyan,
+          borderStyle: box.rounded,
+          onKey: key => {
+            if (key === keys.ENTER && nameInput.value) {
+              const newTask = {
+                id: tasks.length ? Math.max(...tasks.map(t => t.id)) + 1 : 1,
+                name: nameInput.value,
+                status: 'todo',
+                priority: 'medium'
+              };
+              tasks.push(newTask);
+              filterTasks();
+              screen.popModal('new-task');
+              render();
+            } else if (key === keys.ESCAPE) {
+              screen.popModal('new-task');
+              render();
+            } else {
+              nameInput.handleKey(key);
+              screen.render();
+            }
+            return false;
+          },
+          render: (buf, w, h, ox, oy) => {
+            buf.writeStyled(ox, oy + 1, ' Name: ' + nameInput.render());
+            buf.writeStyled(ox, oy + 3, colors.dim + ' Enter: Save  Esc: Cancel' + codes.reset);
+          }
+        });
+        screen.render();
+      }
+      break;
+
     case 'd':
       if (state.view === 'tasks') {
         state.taskFilter = 'done';
@@ -511,7 +648,33 @@ screen.onResize(() => {
   render();
 });
 
-setInterval(() => {
+const randomMessages = [
+  'Request processed successfully',
+  'User session expired',
+  'Cache miss for key: user_prefs',
+  'Rate limit exceeded for IP 192.168.1.42',
+  'Garbage collection completed',
+  'New connection from 10.0.0.15',
+  'Query took 234ms to execute',
+  'SSL certificate renewal scheduled',
+  'Worker thread pool resized to 8',
+  'Health check passed',
+  'Disk usage above 80% threshold',
+  'Backup completed successfully',
+  'Failed to resolve hostname: api.example.com',
+  'Retrying failed request (attempt 3/5)',
+  'Memory pressure detected, evicting cache',
+  'Configuration hot-reloaded',
+  'Websocket connection dropped',
+  'Slow query detected: SELECT * FROM events',
+  'Plugin loaded: analytics-v2',
+  'Cron job triggered: cleanup_temp_files'
+];
+
+const randomLevels = ['INFO', 'INFO', 'INFO', 'DEBUG', 'DEBUG', 'WARN', 'ERROR'];
+
+function updateStats() {
+  if (!getSetting('simulateStats')) return;
   state.cpuUsage = Math.max(5, Math.min(95, state.cpuUsage + (Math.random() - 0.5) * 10));
   state.memUsage = Math.max(20, Math.min(90, state.memUsage + (Math.random() - 0.5) * 5));
   state.networkIn = Math.floor(Math.random() * 500);
@@ -520,7 +683,29 @@ setInterval(() => {
   if (state.view === 'dashboard' && !screen.hasModal()) {
     render();
   }
-}, 1000);
+}
+
+function addRandomLog() {
+  const now = new Date();
+  const time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+  const level = randomLevels[Math.floor(Math.random() * randomLevels.length)];
+  const message = randomMessages[Math.floor(Math.random() * randomMessages.length)];
+  logs.push({ time, level, message });
+
+  const max = getSetting('maxLogs');
+  while (logs.length > max) logs.shift();
+
+  const levels = ['DEBUG', 'INFO', 'WARN', 'ERROR'];
+  const minIdx = levels.indexOf(getSetting('logLevel'));
+  logList.setItems(logs.filter(l => levels.indexOf(l.level) >= minIdx));
+
+  if (!screen.hasModal()) {
+    render();
+  }
+}
+
+let statsTimer = setInterval(updateStats, getSetting('refreshRate'));
+let logTimer = setInterval(addRandomLog, getSetting('logInterval'));
 
 screen.start();
 render();
