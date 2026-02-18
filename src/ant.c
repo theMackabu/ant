@@ -58,6 +58,7 @@
 #include "modules/navigator.h"
 #include "modules/server.h"
 #include "modules/events.h"
+#include "modules/lmdb.h"
 
 #define D(x) ((double)(x))
 
@@ -22849,6 +22850,7 @@ void js_destroy(struct js *js) {
   code_arena_reset();
   cleanup_buffer_module();
   cleanup_collections_module();
+  cleanup_lmdb_module();
   
   if (js->errmsg) {
     free(js->errmsg);
@@ -23206,6 +23208,7 @@ static void gc_roots_common(gc_off_op_t op_off, gc_val_op_t op_val, gc_cb_ctx_t 
   navigator_gc_update_roots(op_val, c);
   server_gc_update_roots(op_val, c);
   events_gc_update_roots(op_val, c);
+  lmdb_gc_update_roots(op_val, c);
 
   for (int i = 0; i < c->js->for_let_stack_len; i++) {
     op_val(c, &c->js->for_let_stack[i].body_scope);

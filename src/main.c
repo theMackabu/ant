@@ -39,6 +39,7 @@
 #include "modules/path.h"
 #include "modules/ffi.h"
 #include "modules/events.h"
+#include "modules/lmdb.h"
 #include "modules/performance.h"
 #include "modules/uri.h"
 #include "modules/url.h"
@@ -389,6 +390,7 @@ int main(int argc, char *argv[]) {
   
   ant_register_library(shell_library, "ant:shell", NULL);
   ant_register_library(ffi_library, "ant:ffi", NULL);
+  ant_register_library(lmdb_library, "ant:lmdb", NULL);
 
   ant_standard_library("path", path_library);
   ant_standard_library("fs", fs_library);

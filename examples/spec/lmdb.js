@@ -21,22 +21,27 @@ const db = env.openDB('main', { create: true });
 test('db open', typeof db.get, 'function');
 
 db.put('hello', 'world');
-test('db.get string', db.get('hello', { as: 'string' }), 'world');
+test('db.getString', db.getString('hello'), 'world');
+test('db.get utf8', db.get('hello', 'utf8'), 'world');
 
 const bytesIn = new Uint8Array([1, 2, 3, 255]);
 db.put('bytes', bytesIn);
-const bytesOut = db.get('bytes');
+const bytesOut = db.getBytes('bytes');
 test('db.get bytes is Uint8Array', bytesOut instanceof Uint8Array, true);
 test('db.get bytes length', bytesOut.length, 4);
 test('db.get bytes[3]', bytesOut[3], 255);
+const bytesOutViaGet = db.get('bytes', 'bytes');
+test('db.get(bytes) returns Uint8Array', bytesOutViaGet instanceof Uint8Array, true);
+test('db.get(bytes) value preserved', bytesOutViaGet[3], 255);
 
 const tx = env.beginTxn();
 tx.put(db, 'tx-key', 'tx-value');
 tx.commit();
-test('txn commit', db.get('tx-key', { as: 'string' }), 'tx-value');
+test('txn commit', db.getString('tx-key'), 'tx-value');
 
 const ro = env.beginTxn({ readOnly: true });
-test('ro txn read', ro.get(db, 'tx-key', { as: 'string' }), 'tx-value');
+test('ro txn read', ro.getString(db, 'tx-key'), 'tx-value');
+test('ro txn get utf8', ro.get(db, 'tx-key', 'utf8'), 'tx-value');
 ro.abort();
 
 test('db.del returns true', db.del('hello'), true);
