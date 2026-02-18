@@ -166,6 +166,9 @@ static size_t get_element_size(TypedArrayType type) {
 
 // ArrayBuffer constructor
 static jsval_t js_arraybuffer_constructor(struct js *js, jsval_t *args, int nargs) {
+  if (vtype(js->new_target) == T_UNDEF) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "ArrayBuffer constructor requires 'new'");
+  }
   size_t length = 0;
   if (nargs > 0 && vtype(args[0]) == T_NUM) {
     length = (size_t)js_getnum(args[0]);
@@ -807,6 +810,7 @@ static jsval_t js_typedarray_with(struct js *js, jsval_t *args, int nargs) {
 
 #define DEFINE_TYPEDARRAY_CONSTRUCTOR(name, type) \
   static jsval_t js_##name##_constructor(struct js *js, jsval_t *args, int nargs) { \
+    if (vtype(js->new_target) == T_UNDEF) return js_mkerr_typed(js, JS_ERR_TYPE, #name " constructor requires 'new'"); \
     return js_typedarray_constructor(js, args, nargs, type, #name); \
   }
 
@@ -823,6 +827,9 @@ DEFINE_TYPEDARRAY_CONSTRUCTOR(BigInt64Array, TYPED_ARRAY_BIGINT64)
 DEFINE_TYPEDARRAY_CONSTRUCTOR(BigUint64Array, TYPED_ARRAY_BIGUINT64)
 
 static jsval_t js_dataview_constructor(struct js *js, jsval_t *args, int nargs) {
+  if (vtype(js->new_target) == T_UNDEF) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "DataView constructor requires 'new'");
+  }
   if (nargs < 1) {
     return js_mkerr(js, "DataView requires an ArrayBuffer");
   }
@@ -1589,6 +1596,9 @@ static jsval_t js_buffer_compare(struct js *js, jsval_t *args, int nargs) {
 }
 
 static jsval_t js_sharedarraybuffer_constructor(struct js *js, jsval_t *args, int nargs) {
+  if (vtype(js->new_target) == T_UNDEF) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "SharedArrayBuffer constructor requires 'new'");
+  }
   size_t length = 0;
   if (nargs > 0 && vtype(args[0]) == T_NUM) {
     length = (size_t)js_getnum(args[0]);
@@ -1629,6 +1639,7 @@ void init_buffer_module() {
   js_mkprop_fast(js, arraybuffer_ctor_obj, "prototype", 9, arraybuffer_proto);
   js_mkprop_fast(js, arraybuffer_ctor_obj, "name", 4, ANT_STRING("ArrayBuffer"));
   js_set_descriptor(js, arraybuffer_ctor_obj, "name", 4, 0);
+  js_define_species_getter(js, arraybuffer_ctor_obj);
   js_set(js, glob, "ArrayBuffer", js_obj_to_func(arraybuffer_ctor_obj));
   
   jsval_t typedarray_proto = js_mkobj(js);
@@ -1649,6 +1660,9 @@ void init_buffer_module() {
       js_set_proto(js, name##_proto, typedarray_proto); \
       js_set_slot(js, name##_ctor_obj, SLOT_CFUNC, js_mkfun(js_##name##_constructor)); \
       js_setprop(js, name##_ctor_obj, js_mkstr(js, "prototype", 9), name##_proto); \
+      js_mkprop_fast(js, name##_ctor_obj, "name", 4, ANT_STRING(#name)); \
+      js_set_descriptor(js, name##_ctor_obj, "name", 4, 0); \
+      js_define_species_getter(js, name##_ctor_obj); \
       js_set(js, glob, #name, js_obj_to_func(name##_ctor_obj)); \
     } while(0)
   

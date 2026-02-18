@@ -720,6 +720,10 @@ static jsval_t finreg_unregister(ant_t *js, jsval_t *args, int nargs) {
 }
 
 static jsval_t builtin_Map(ant_t *js, jsval_t *args, int nargs) {
+  if (vtype(js->new_target) == T_UNDEF) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Map constructor requires 'new'");
+  }
+  
   jsval_t map_obj = js_mkobj(js);
   jsoff_t obj_offset = (jsoff_t)vdata(map_obj);
   
@@ -767,6 +771,10 @@ static jsval_t builtin_Map(ant_t *js, jsval_t *args, int nargs) {
 }
 
 static jsval_t builtin_Set(ant_t *js, jsval_t *args, int nargs) {
+  if (vtype(js->new_target) == T_UNDEF) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Set constructor requires 'new'");
+  }
+  
   jsval_t set_obj = js_mkobj(js);
   jsoff_t obj_offset = (jsoff_t)vdata(set_obj);
   
@@ -804,6 +812,9 @@ static jsval_t builtin_Set(ant_t *js, jsval_t *args, int nargs) {
 }
 
 static jsval_t builtin_WeakMap(ant_t *js, jsval_t *args, int nargs) {
+  if (vtype(js->new_target) == T_UNDEF) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "WeakMap constructor requires 'new'");
+  }
   jsval_t wm_obj = js_mkobj(js);
   
   jsval_t wm_proto = js_get_ctor_proto(js, "WeakMap", 7);
@@ -850,8 +861,11 @@ static jsval_t builtin_WeakMap(ant_t *js, jsval_t *args, int nargs) {
 }
 
 static jsval_t builtin_WeakSet(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t ws_obj = js_mkobj(js);
+  if (vtype(js->new_target) == T_UNDEF) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "WeakSet constructor requires 'new'");
+  }
   
+  jsval_t ws_obj = js_mkobj(js);
   jsval_t ws_proto = js_get_ctor_proto(js, "WeakSet", 7);
   if (is_special_object(ws_proto)) js_set_proto(js, ws_obj, ws_proto);
   
@@ -913,6 +927,7 @@ void init_collections_module(void) {
   js_mkprop_fast(js, map_ctor, "prototype", 9, map_proto);
   js_mkprop_fast(js, map_ctor, "name", 4, ANT_STRING("Map"));
   js_set_descriptor(js, map_ctor, "name", 4, 0);
+  js_define_species_getter(js, map_ctor);
   js_set(js, glob, "Map", js_obj_to_func(map_ctor));
   
   jsval_t set_proto = js_mkobj(js);
@@ -934,6 +949,7 @@ void init_collections_module(void) {
   js_mkprop_fast(js, set_ctor, "prototype", 9, set_proto);
   js_mkprop_fast(js, set_ctor, "name", 4, ANT_STRING("Set"));
   js_set_descriptor(js, set_ctor, "name", 4, 0);
+  js_define_species_getter(js, set_ctor);
   js_set(js, glob, "Set", js_obj_to_func(set_ctor));
   
   jsval_t weakmap_proto = js_mkobj(js);

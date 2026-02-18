@@ -6714,6 +6714,26 @@ static jsval_t bind_destruct_pattern(struct js *js, const char *p, jsoff_t len, 
     if (pos >= len) break;
     if ((is_arr && p[pos] == ']') || (!is_arr && p[pos] == '}')) break;
     if (p[pos] == ',') { pos++; idx++; continue; }
+
+    if (is_arr && (p[pos] == '[' || p[pos] == '{')) {
+      jsoff_t nested_start = pos;
+      char open = p[pos], close = (open == '[') ? ']' : '}';
+      int depth = 1;
+      pos++;
+      while (pos < len && depth > 0) {
+        if (p[pos] == open) depth++;
+        else if (p[pos] == close) depth--;
+        pos++;
+      }
+      jsoff_t nested_len = pos - nested_start;
+      jsval_t elem_val = js_arr_get(js, val, idx);
+      jsval_t r = bind_destruct_pattern(js, &p[nested_start], nested_len, elem_val, scope);
+      if (is_err(r)) return r;
+      idx++;
+      pos = skiptonext(p, len, pos, NULL);
+      if (pos < len && p[pos] == ',') pos++;
+      continue;
+    }
     
     bool is_rest = (pos + 2 < len && p[pos] == '.' && p[pos+1] == '.' && p[pos+2] == '.');
     if (is_rest) { pos += 3; pos = skiptonext(p, len, pos, NULL); }
@@ -8569,146 +8589,75 @@ static jsval_t js_bigint_literal(struct js *js) {
   return js_mkbigint(js, start, len, neg);
 }
 
-static jsval_t js_arr_destruct_assign(struct js *js) {
+static jsval_t js_destruct_assign_pattern(
+  struct js *js, uint8_t open_tok, uint8_t close_tok,
+  const char *missing_assign_msg, bool object_required
+) {
   uint8_t exe = !(js->flags & F_NOEXEC);
+  jsoff_t pattern_start = js->toff;
   js->consumed = 1;
-  
-  js_parse_state_t pattern_state;
-  JS_SAVE_STATE(js, pattern_state);
   
   int depth = 1;
   while (depth > 0 && next(js) != TOK_EOF) {
-    if (js->tok == TOK_LBRACKET) depth++;
-    else if (js->tok == TOK_RBRACKET) depth--;
+    if (js->tok == open_tok) depth++;
+    else if (js->tok == close_tok) depth--;
     if (depth > 0) js->consumed = 1;
   }
   js->consumed = 1;
+  jsoff_t pattern_len = js->pos - pattern_start;
   
   if (next(js) != TOK_ASSIGN) {
-    return js_mkerr_typed(js, JS_ERR_SYNTAX, "array destructuring requires assignment");
+    return js_mkerr_typed(js, JS_ERR_SYNTAX, "%s", missing_assign_msg);
   }
   js->consumed = 1;
   
-  jsval_t v = js_expr(js);
-  if (is_err(v)) return v;
+  jsval_t rhs = js_expr(js);
+  if (is_err(rhs)) return rhs;
   
-  jsval_t arr = js_mkundef();
   if (exe) {
-    arr = resolveprop(js, v);
-    if (vtype(arr) != T_ARR && vtype(arr) != T_STR) {
+    jsval_t val = resolveprop(js, rhs);
+    uint8_t vt = vtype(val);
+    
+    if (object_required) {
+      if (vt == T_NULL || vt == T_UNDEF) {
+        return js_mkerr(js, "cannot destructure null or undefined");
+      }
+    } else if (vt != T_ARR && vt != T_STR) {
       return js_mkerr(js, "cannot array destructure non-iterable");
     }
+    
+    jsval_t bind = bind_destruct_pattern(js, &js->code[pattern_start], pattern_len, val, js->scope);
+    if (is_err(bind)) return bind;
   }
   
-  js_parse_state_t end_state;
-  JS_SAVE_STATE(js, end_state);
-  JS_RESTORE_STATE(js, pattern_state);
-  
-  int index = 0;
-  while (next(js) != TOK_RBRACKET && next(js) != TOK_EOF) {
-    if (next(js) == TOK_COMMA) {
-      js->consumed = 1;
-      index++;
-      continue;
-    }
-    
-    bool is_rest = false;
-    if (next(js) == TOK_REST) {
-      is_rest = true;
-      js->consumed = 1;
-    }
-    
-    if (next(js) != TOK_IDENTIFIER) {
-      return js_mkerr_typed(js, JS_ERR_SYNTAX, "identifier expected in array destructuring");
-    }
-    jsoff_t var_off = js->toff, var_len = js->tlen;
-    js->consumed = 1;
-    
-    jsoff_t default_off = 0, default_len = 0;
-    if (!is_rest && next(js) == TOK_ASSIGN) {
-      js->consumed = 1;
-      default_off = js->pos;
-      uint8_t sf = js->flags;
-      js->flags |= F_NOEXEC;
-      jsval_t r = js_expr(js);
-      js->flags = sf;
-      if (is_err(r)) return r;
-      default_len = js->pos - default_off;
-    }
-    
-    if (exe) {
-      const char *var_name = &js->code[var_off];
-      
-      jsval_t prop_val;
-      if (is_rest) {
-        jsval_t rest_arr = js_mkarr(js);
-        if (is_err(rest_arr)) return rest_arr;
-        jsoff_t total_len = vtype(arr) == T_STR ? 0 : js_arr_len(js, arr);
-        if (vtype(arr) == T_STR) {
-          jsoff_t slen;
-          vstr(js, arr, &slen);
-          total_len = slen;
-        }
-        for (jsoff_t i = index; i < total_len; i++) {
-          jsval_t elem;
-          if (vtype(arr) == T_STR) {
-            jsoff_t slen, soff = vstr(js, arr, &slen);
-            elem = js_mkstr(js, (char *)&js->mem[soff + i], 1);
-          } else {
-            elem = js_arr_get(js, arr, i);
-          }
-          js_arr_push(js, rest_arr, elem);
-        }
-        prop_val = rest_arr;
-      } else {
-        if (vtype(arr) == T_STR) {
-          jsoff_t slen, soff = vstr(js, arr, &slen);
-          if ((jsoff_t)index < slen) {
-            prop_val = js_mkstr(js, (char *)&js->mem[soff + index], 1);
-          } else {
-            prop_val = js_mkundef();
-          }
-        } else {
-          prop_val = js_arr_get(js, arr, index);
-        }
-        
-        if (vtype(prop_val) == T_UNDEF && default_len > 0) {
-          prop_val = js_eval_slice(js, default_off, default_len);
-          if (is_err(prop_val)) return prop_val;
-          prop_val = resolveprop(js, prop_val);
-        }
-      }
-      
-      jsoff_t existing = lkp_scope(js, js->scope, var_name, var_len);
-      if (existing != 0) {
-        jsval_t res = js_setprop(js, js->scope, js_mkstr(js, var_name, var_len), prop_val);
-        if (is_err(res)) return res;
-      } else {
-        jsval_t global_scope = js->scope;
-        while (vdata(upper(js, global_scope)) != 0) {
-          global_scope = upper(js, global_scope);
-        }
-        jsval_t res = js_setprop(js, global_scope, js_mkstr(js, var_name, var_len), prop_val);
-        if (is_err(res)) return res;
-      }
-    }
-    
-    index++;
-    if (next(js) == TOK_RBRACKET) break;
-    EXPECT(TOK_COMMA);
-  }
-  
-  JS_RESTORE_STATE(js, end_state);
-  return v;
+  return rhs;
+}
+
+static jsval_t js_arr_destruct_assign(struct js *js) {
+  return js_destruct_assign_pattern(
+    js, TOK_LBRACKET, TOK_RBRACKET,
+    "array destructuring requires assignment", false
+  );
+}
+
+static jsval_t js_obj_destruct_assign(struct js *js) {
+  return js_destruct_assign_pattern(
+    js, TOK_LBRACE, TOK_RBRACE,
+    "destructuring requires assignment", true
+  );
 }
 
 static jsval_t js_arr_literal(struct js *js);
+static jsval_t js_obj_literal(struct js *js);
 
 static jsval_t js_arr_or_destruct(struct js *js) {
   jsoff_t saved_pos = js->pos;
   uint8_t saved_tok = js->tok;
   uint8_t saved_consumed = js->consumed;
   uint8_t saved_flags = js->flags;
+  
+  jsoff_t saved_toff = js->toff;
+  jsoff_t saved_tlen = js->tlen;
   int saved_stream_pos = js->token_stream_pos;
   
   js->flags |= F_NOEXEC;
@@ -8726,12 +8675,45 @@ static jsval_t js_arr_or_destruct(struct js *js) {
   js->tok = saved_tok;
   js->consumed = saved_consumed;
   js->flags = saved_flags;
+  js->toff = saved_toff;
+  js->tlen = saved_tlen;
   js->token_stream_pos = saved_stream_pos;
   
-  if (is_destruct) {
-    return js_arr_destruct_assign(js);
-  }
+  if (is_destruct) return js_arr_destruct_assign(js);  
   return js_arr_literal(js);
+}
+
+static jsval_t js_obj_or_destruct(struct js *js) {
+  jsoff_t saved_pos = js->pos;
+  uint8_t saved_tok = js->tok;
+  uint8_t saved_consumed = js->consumed;
+  uint8_t saved_flags = js->flags;
+  
+  jsoff_t saved_toff = js->toff;
+  jsoff_t saved_tlen = js->tlen;
+  int saved_stream_pos = js->token_stream_pos;
+  
+  js->flags |= F_NOEXEC;
+  js->consumed = 1;
+  int depth = 1;
+  while (depth > 0 && next(js) != TOK_EOF) {
+    if (js->tok == TOK_LBRACE) depth++;
+    else if (js->tok == TOK_RBRACE) depth--;
+    if (depth > 0) js->consumed = 1;
+  }
+  js->consumed = 1;
+  bool is_destruct = (next(js) == TOK_ASSIGN);
+  
+  js->pos = saved_pos;
+  js->tok = saved_tok;
+  js->consumed = saved_consumed;
+  js->flags = saved_flags;
+  js->toff = saved_toff;
+  js->tlen = saved_tlen;
+  js->token_stream_pos = saved_stream_pos;
+  
+  if (is_destruct) return js_obj_destruct_assign(js);
+  return js_obj_literal(js);
 }
 
 static jsval_t js_arr_literal(struct js *js) {
@@ -9364,7 +9346,7 @@ static jsval_t js_literal(struct js *js) {
     case TOK_BIGINT:      return js_bigint_literal(js);
     case TOK_STRING:      return js_str_literal(js);
     case TOK_TEMPLATE:    return js_template_literal(js);
-    case TOK_LBRACE:      return js_obj_literal(js);
+    case TOK_LBRACE:      return js_obj_or_destruct(js);
     case TOK_LBRACKET:    return js_arr_or_destruct(js);
     case TOK_DIV:         return js_regex_literal(js);
     case TOK_CLASS:       return js_class_expr(js, true);
@@ -22429,23 +22411,30 @@ static jsval_t mkproxy(struct js *js, jsval_t target, jsval_t handler) {
   return proxy_obj;
 }
 
-static jsval_t builtin_Proxy(struct js *js, jsval_t *args, int nargs) {
+static jsval_t create_proxy_checked(struct js *js, jsval_t *args, int nargs, bool require_new) {
+  if (require_new && vtype(js->new_target) == T_UNDEF) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Proxy constructor requires 'new'");
+  }
   if (nargs < 2) return js_mkerr(js, "Proxy requires two arguments: target and handler");
-  
+
   jsval_t target = args[0];
   jsval_t handler = args[1];
-  
+
   uint8_t target_type = vtype(target);
   if (target_type != T_OBJ && target_type != T_FUNC && target_type != T_ARR) {
     return js_mkerr(js, "Proxy target must be an object");
   }
-  
+
   uint8_t handler_type = vtype(handler);
   if (handler_type != T_OBJ && handler_type != T_FUNC) {
     return js_mkerr(js, "Proxy handler must be an object");
   }
-  
+
   return mkproxy(js, target, handler);
+}
+
+static jsval_t builtin_Proxy(struct js *js, jsval_t *args, int nargs) {
+  return create_proxy_checked(js, args, nargs, true);
 }
 
 static jsval_t proxy_revoke_fn(struct js *js, jsval_t *args, int nargs) {
@@ -22463,7 +22452,7 @@ static jsval_t proxy_revoke_fn(struct js *js, jsval_t *args, int nargs) {
 }
 
 static jsval_t builtin_Proxy_revocable(struct js *js, jsval_t *args, int nargs) {
-  jsval_t proxy = builtin_Proxy(js, args, nargs);
+  jsval_t proxy = create_proxy_checked(js, args, nargs, false);
   if (is_err(proxy)) return proxy;
   
   jsval_t revoke_obj = mkobj(js, 0);

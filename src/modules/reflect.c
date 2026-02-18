@@ -166,7 +166,7 @@ static jsval_t reflect_apply(struct js *js, jsval_t *args, int nargs) {
   jsval_t this_arg = args[1];
   jsval_t args_arr = args[2];
   
-  if (vtype(target) != T_FUNC) {
+  if (vtype(target) != T_FUNC && vtype(target) != T_CFUNC) {
     return js_mkerr(js, "Reflect.apply: first argument must be a function");
   }
   
