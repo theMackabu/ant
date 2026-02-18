@@ -902,6 +902,7 @@ const InterleavedContext = struct {
       struct {
         fn onData(data: []const u8, ud: ?*anyopaque) void {
           const c: *InterleavedExtractCtx = @ptrCast(@alignCast(ud));
+          if (c.has_error) return;
           c.ext.feedCompressed(data) catch { c.has_error = true; };
         }
       }.onData,

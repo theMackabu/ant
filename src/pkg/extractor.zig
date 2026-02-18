@@ -106,11 +106,13 @@ pub const TarHeader = extern struct {
     return true;
   }
 
-  pub fn getName(self: *const TarHeader, buf: []u8) []const u8 {
+  pub fn getName(self: *const TarHeader, buf: []u8) ![]const u8 {
     const prefix_len = std.mem.indexOfScalar(u8, &self.prefix, 0) orelse self.prefix.len;
     const name_len = std.mem.indexOfScalar(u8, &self.name, 0) orelse self.name.len;
     
     if (prefix_len > 0) {
+      const total_len = prefix_len + 1 + name_len;
+      if (total_len > buf.len) return error.InvalidPath;
       @memcpy(buf[0..prefix_len], self.prefix[0..prefix_len]);
       buf[prefix_len] = '/';
       @memcpy(buf[prefix_len + 1 ..][0..name_len], self.name[0..name_len]);
@@ -280,11 +282,17 @@ pub const TarParser = struct {
 
         if (self.header.isZero()) {
           return .{ .kind = .end_of_archive, .consumed = to_copy };
-        } var path = self.header.getName(&self.path_buf);
+        } var path = self.header.getName(&self.path_buf) catch {
+          return .{ .kind = .{ .err = ExtractError.InvalidPath }, .consumed = to_copy };
+        };
 
         if (!self.prefix_detected and self.header.isDirectory()) {
-          const prefix_len = @min(path.len, 128);
+          var prefix_len = @min(path.len, 127);
           @memcpy(self.strip_prefix[0..prefix_len], path[0..prefix_len]);
+          if (prefix_len > 0 and self.strip_prefix[prefix_len - 1] != '/') {
+            self.strip_prefix[prefix_len] = '/';
+            prefix_len += 1;
+          }
           self.strip_prefix_len = prefix_len;
           self.prefix_detected = true;
         }
@@ -451,7 +459,7 @@ pub const Extractor = struct {
     switch (entry.entry_type) {
       .directory => self.output_dir.makePath(entry.path) catch {},
       .file => try self.createFile(entry),
-      .symlink => try self.createSymlink(entry),
+      .symlink => self.createSymlink(entry) catch {},
     }
   }
   

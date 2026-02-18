@@ -180,20 +180,38 @@ pub const Linker = struct {
       try self.allocator.dupe(u8, pkg.name);
     defer self.allocator.free(install_path);
 
-    const d = node_modules.openDir(install_path, .{}) catch null;
-    if (d) |dir| {
-      var dd = dir;
-      defer dd.close();
-      if (dd.statFile("package.json")) |_| {
-        _ = self.stats.packages_skipped.fetchAdd(1, .release);
-        return;
-      } else |_| {}
-    }
-
     var source_dir = std.fs.cwd().openDir(pkg.cache_path, .{ .iterate = true }) catch {
       return error.PathNotFound;
     };
     defer source_dir.close();
+
+    const source_version = readPackageVersion(self.allocator, source_dir);
+    defer if (source_version) |v| self.allocator.free(v);
+
+    var should_skip = false;
+    var has_existing_install = false;
+    
+    {
+      const existing = node_modules.openDir(install_path, .{}) catch null;
+      if (existing) |dir| {
+        has_existing_install = true;
+        var installed_dir = dir;
+        defer installed_dir.close();
+
+        const installed_version = readPackageVersion(self.allocator, installed_dir);
+        defer if (installed_version) |v| self.allocator.free(v);
+        should_skip = packageVersionsMatch(source_version, installed_version);
+      }
+    }
+
+    if (should_skip) {
+      _ = self.stats.packages_skipped.fetchAdd(1, .release);
+      return;
+    }
+
+    if (has_existing_install) {
+      node_modules.deleteTree(install_path) catch return error.IoError;
+    }
 
     node_modules.makePath(install_path) catch |err| switch (err) {
       error.PathAlreadyExists => {},
@@ -241,6 +259,26 @@ pub const Linker = struct {
         pkg_name;
       self.createBinSymlink(pkg_name, simple_name, bin_path, bin_dir) catch {};
     }
+  }
+
+  fn readPackageVersion(allocator: std.mem.Allocator, dir: std.fs.Dir) ?[]const u8 {
+    const pkg_json = dir.openFile("package.json", .{}) catch return null;
+    defer pkg_json.close();
+
+    const content = pkg_json.readToEndAlloc(allocator, 256 * 1024) catch return null;
+    defer allocator.free(content);
+
+    var doc = json.JsonDoc.parse(content) catch return null;
+    defer doc.deinit();
+
+    const version = doc.root().getString("version") orelse return null;
+    return allocator.dupe(u8, version) catch null;
+  }
+
+  fn packageVersionsMatch(source_version: ?[]const u8, installed_version: ?[]const u8) bool {
+    const src = source_version orelse return false;
+    const dst = installed_version orelse return false;
+    return std.mem.eql(u8, src, dst);
   }
 
   fn createBinSymlink(self: *Linker, pkg_name: []const u8, cmd_name: []const u8, bin_path: []const u8, bin_dir: std.fs.Dir) !void {
