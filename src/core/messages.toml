@@ -1,4 +1,3 @@
-[messages]
 ant_help_flags = "<bold>Flags:</>\n"
 ant_command_extra = "\n  <pad=18><command> <bold+cyan>--help</></pad> Print help text for command.\n"
 

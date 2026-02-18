@@ -11,7 +11,7 @@ except ModuleNotFoundError:
     ) from exc
 
 with open(sys.argv[1], "rb") as f:
-  messages = tomllib.load(f)["messages"]
+  messages = tomllib.load(f)
 
 print("#ifndef MESSAGES_H")
 print("#define MESSAGES_H")
