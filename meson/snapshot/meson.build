@@ -12,7 +12,7 @@ snapshot_h = custom_target(
   command: [
     node,
     src_root / 'src' / 'tools' / 'gen_snapshot.js',
-    '@INPUT0@', 
+    src_root / 'src' / 'core' / 'index.ts',
     '@OUTPUT@',
     'VERSION=' + ant_version,
     'GIT_HASH=' + git_hash,

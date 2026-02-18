@@ -157,6 +157,10 @@ test('versions is object', typeof process.versions, 'object');
 test('versions.ant exists', typeof process.versions.ant, 'string');
 test('versions.uv exists', typeof process.versions.uv, 'string');
 
+test('features is object', typeof process.features, 'object');
+test('features.uv is boolean', typeof process.features.uv, 'boolean');
+test('features.typescript exists', typeof process.features.typescript, 'string');
+
 test('release is object', typeof process.release, 'object');
 test('release.name is string', typeof process.release.name, 'string');
 

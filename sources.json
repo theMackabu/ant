@@ -9,6 +9,6 @@
   },
   "core": {
     "patterns": ["src/core/**/*.ts"],
-    "exclude": []
+    "exclude": ["src/core/index.ts"]
   }
 }
