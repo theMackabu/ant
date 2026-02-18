@@ -13,11 +13,13 @@
 #include "ant.h"
 #include "repl.h"
 #include "utils.h"
+#include "watch.h"
 #include "reactor.h"
 #include "runtime.h"
 #include "snapshot.h"
 #include "esm/remote.h"
 #include "internal.h"
+#include "messages.h"
 
 #include "cli/pkg.h"
 #include "cli/misc.h"
@@ -87,7 +89,7 @@ static void parse_ant_debug(const char *flag) {
     if (strcmp(mode, "hex") == 0      || strcmp(mode, "all") == 0) crprintf_set_debug_hex(true);
   }
   
-  else crfprintf(stderr, "{warn}: <bold>Unknown ANT_DEBUG flag: \"%s\"</>\n", flag);
+  else crfprintf(stderr, msg.unknown_flag_warn, flag);
 }
 
 static const subcommand_t *find_subcommand(const char *name) {
@@ -103,8 +105,25 @@ static void print_subcommands(void) {
   for (const subcommand_t *cmd = subcommands; cmd->name; cmd++) {
     crprintf("  <pad=18>%s</pad> %s\n", cmd->name, cmd->desc);
   }
-  crprintf("\n  <pad=18><command> <bold+cyan>--help</></pad> Print help text for command.\n");
+  crprintf(msg.ant_command_extra);
   printf("\n");
+}
+
+static void print_commands(void **argtable) {
+  crprintf(msg.ant_help_header);
+  
+  print_subcommands();
+  crprintf(msg.ant_help_flags);
+  
+  print_flags_help(stdout, argtable);
+  print_flag(stdout, (flag_help_t){ .l = "verbose",  .g = "enable verbose output" });
+  print_flag(stdout, (flag_help_t){ .l = "no-color", .g = "disable colored output" });
+}
+
+static int find_argv_token_index(int argc, char **argv, const char *token) {
+  if (!token) return -1;
+  for (int i = 1; i < argc; i++) if (argv[i] == token) return i;
+  return -1;
 }
 
 static char *read_stdin(size_t *len) {
@@ -187,7 +206,7 @@ static int execute_module(struct js *js, const char *filename) {
     buffer = esm_fetch_url(filename, &len, &error);
     
     if (!buffer) {
-      crfprintf(stderr, "{error}: <bold>Could not fetch \"%s\"</>: %s\n", filename, error ? error : "unknown error");
+      crfprintf(stderr, msg.failed_to_fetch, filename, error ? error : "unknown error");
       free(error); return EXIT_FAILURE;
     }
     
@@ -195,7 +214,7 @@ static int execute_module(struct js *js, const char *filename) {
   } else {
     buffer = read_file(filename, &len);
     if (!buffer) {
-      crfprintf(stderr, "{error}: <bold>Module not found: \"%s\"</>\n", filename);
+      crfprintf(stderr, msg.module_not_found, filename);
       return EXIT_FAILURE;
     }
     
@@ -213,7 +232,7 @@ static int execute_module(struct js *js, const char *filename) {
   if (is_typescript_file(filename)) {
     int result = OXC_strip_types(buffer, filename, buffer, len + 1);
     if (result < 0) {
-      crfprintf(stderr, "{error}: <bold>Type stripping failed (%d)</>\n", result);
+      crfprintf(stderr, msg.type_strip_failed, result);
       free(buffer);
       return EXIT_FAILURE;
     }
@@ -238,7 +257,8 @@ static int execute_module(struct js *js, const char *filename) {
 }
 
 int main(int argc, char *argv[]) {
-  int filtered_argc = 0;
+  int filtered_argc = 0; int original_argc = argc;
+  char **original_argv = argv;
   
   const char *binary_name = strrchr(argv[0], '/');
   binary_name = binary_name ? binary_name + 1 : argv[0];
@@ -266,71 +286,45 @@ int main(int argc, char *argv[]) {
     else filtered_argv[filtered_argc++] = argv[i];
   }
   
-  if (filtered_argc >= 2 && filtered_argv[1][0] != '-') {
-    const subcommand_t *cmd = find_subcommand(filtered_argv[1]);
-    if (cmd) {
-      int exitcode = cmd->fn(filtered_argc - 1, filtered_argv + 1);
-      free(filtered_argv);
-      return exitcode;
-    }
-    
-    if (pkg_script_exists("package.json", filtered_argv[1])) {
-      int exitcode = pkg_cmd_run(filtered_argc, filtered_argv);
-      free(filtered_argv);
-      return exitcode;
-    }
-  }
-  
   argc = filtered_argc;
   argv = filtered_argv;
 
-  struct arg_str *eval = arg_str0("e", "eval", "<script>", "evaluate script");
-  struct arg_lit *print = arg_lit0("p", "print", "evaluate script and print result");
+  #define ARG_ITEMS(X) \
+    X(struct arg_str *, eval, arg_str0("e", "eval", "<script>", "evaluate script")) \
+    X(struct arg_lit *, print, arg_lit0("p", "print", "evaluate script and print result")) \
+    X(struct arg_lit *, watch, arg_lit0("w", "watch", "restart process when entry file changes")) \
+    X(struct arg_lit *, no_clear_screen, arg_lit0(NULL, "no-clear-screen", "keep output when restarting in watch mode")) \
+    X(struct arg_file *, localstorage_file, arg_file0(NULL, "localstorage-file", "<path>", "file path for localStorage persistence")) \
+    X(struct arg_file *, file, arg_filen(NULL, NULL, NULL, 0, argc, NULL)) \
+    X(struct arg_lit *, version, arg_lit0("v", "version", "display version information and exit")) \
+    X(struct arg_lit *, version_raw, arg_lit0(NULL, "version-raw", "raw version number for scripts")) \
+    X(struct arg_lit *, help, arg_lit0("h", "help", "display this help and exit")) \
+    X(struct arg_end *, end, arg_end(20))
   
-  struct arg_file *file = arg_filen(NULL, NULL, NULL, 0, argc, NULL);
-  struct arg_file *localstorage_file = arg_file0(NULL, "localstorage-file", "<path>", "file path for localStorage persistence");
+  #define DECL(t, n, init) t n = init;
+  ARG_ITEMS(DECL)
+  #undef DECL
   
-  struct arg_lit *version = arg_lit0("v", "version", "display version information and exit");
-  struct arg_lit *version_raw = arg_lit0(NULL, "version-raw", "raw version number for scripts");
-  
-  struct arg_lit *help = arg_lit0("h", "help", "display this help and exit");
-  struct arg_end *end = arg_end(20);
-  
-  void *argtable[] = {
-    eval, print, 
-    localstorage_file, file,
-    version, version_raw,
-    help, end
-  };
-
+  #define REF(t, n, init) n,
+  void *argtable[] = { ARG_ITEMS(REF) };
   int nerrors = arg_parse(argc, argv, argtable);
+  #undef REF
+  
+  #define CLEANUP_ARGS_AND_ARGV() ({ \
+    arg_freetable(argtable, ARGTABLE_COUNT); \
+    free(filtered_argv); \
+  })
   
   if (help->count > 0) {
-    crprintf(
-      "{let h=bold, arg=cyan, name='Ant'}"
-      "<$h+red>{name}</> is a tiny JavaScript runtime and package manager ({version})<br=2/>"
-      "<$h>Usage: {~name} <yellow>[module.js]</yellow> <$arg>[...flags]<reset/><br/>"
-      "<$h><gap=7/>{~name} <<command>><gap=3/><$arg>[...args]<reset/><br=2/>"
-      "If no module file is specified, {name} starts in REPL mode.<br=2/>"
-    );
-    
-    print_subcommands();
-    crprintf("<bold>Flags:</>\n");
-    
-    print_flags_help(stdout, argtable);
-    print_flag(stdout, (flag_help_t){ .l = "verbose",  .g = "enable verbose output" });
-    print_flag(stdout, (flag_help_t){ .l = "no-color", .g = "disable colored output" });
-    
-    arg_freetable(argtable, ARGTABLE_COUNT);
-    free(filtered_argv);
-    
+    print_commands(argtable);
+    CLEANUP_ARGS_AND_ARGV();
     return EXIT_SUCCESS;
   }
   
   if (version_raw->count > 0) {
     fputs(ANT_VERSION "\n", stdout);
-    arg_freetable(argtable, ARGTABLE_COUNT);
-    free(filtered_argv); return EXIT_SUCCESS;
+    CLEANUP_ARGS_AND_ARGV();
+    return EXIT_SUCCESS;
   }
   
   if (version->count > 0) {
@@ -338,26 +332,110 @@ int main(int argc, char *argv[]) {
     free(filtered_argv); return res;
   }
   
+
   if (nerrors > 0) {
-    arg_print_errors(stdout, end, "ant");
-    printf("Try 'ant --help' for more information.\n");
-    arg_freetable(argtable, ARGTABLE_COUNT);
-    free(filtered_argv); return EXIT_FAILURE;
+    print_errors(stdout, end);
+    print_commands(argtable);
+    CLEANUP_ARGS_AND_ARGV();
+    return EXIT_FAILURE;
+  }
+
+  if (no_clear_screen->count > 0 && watch->count == 0) {
+    crfprintf(stderr, msg.misuse_clear_screen);
+    CLEANUP_ARGS_AND_ARGV();
+    return EXIT_FAILURE;
+  }
+
+  if (eval->count == 0 && file->count > 0 && file->filename[0] != NULL) {
+    const char *positional = file->filename[0];
+    int first_pos_idx = find_argv_token_index(argc, argv, positional);
+    
+    if (first_pos_idx <= 0 || first_pos_idx >= argc) {
+      crfprintf(stderr, msg.argument_fatal);
+      CLEANUP_ARGS_AND_ARGV();
+      return EXIT_FAILURE;
+    }
+
+    const subcommand_t *cmd = find_subcommand(positional);
+
+    if (cmd) {
+      if (watch->count > 0) {
+        crfprintf(stderr, msg.watch_subcommand_error);
+        CLEANUP_ARGS_AND_ARGV();
+        return EXIT_FAILURE;
+      }
+      
+      int exitcode = cmd->fn(
+        argc - first_pos_idx, 
+        argv + first_pos_idx
+      );
+      
+      CLEANUP_ARGS_AND_ARGV();
+      return exitcode;
+    }
+
+    if (pkg_script_exists("package.json", positional)) {
+      if (watch->count > 0) {
+        crfprintf(stderr, msg.watch_subcommand_error);
+        CLEANUP_ARGS_AND_ARGV();
+        return EXIT_FAILURE;
+      }
+
+      int run_argc = argc - first_pos_idx + 1;
+      char **run_argv = try_oom(sizeof(*run_argv) * (size_t)(run_argc + 1));
+      
+      run_argv[0] = argv[0];
+      memcpy(run_argv + 1, argv + first_pos_idx, sizeof(*run_argv) * (size_t)(run_argc - 1));
+      
+      run_argv[run_argc] = NULL;
+      int exitcode = pkg_cmd_run(run_argc, run_argv);
+      
+      free(run_argv);
+      CLEANUP_ARGS_AND_ARGV();
+      
+      return exitcode;
+    }
   }
   
   bool has_stdin = !isatty(STDIN_FILENO);
   bool repl_mode = (file->count == 0 && eval->count == 0 && !has_stdin);
+  bool stdin_mode = (has_stdin && file->count == 0);
+  
+  if (watch->count > 0 && (eval->count > 0 || repl_mode || stdin_mode)) {
+    crfprintf(stderr, msg.watch_module_error);
+    CLEANUP_ARGS_AND_ARGV();
+    return EXIT_FAILURE;
+  }
   
   const char *module_file = repl_mode 
     ? NULL 
     : (file->count > 0 ? file->filename[0] : NULL);
+
+  if (watch->count > 0) {
+    char *resolved_file = NULL;
+
+    resolved_file = resolve_js_file(module_file);
+    if (resolved_file) module_file = resolved_file;
+
+    if (!module_file || esm_is_url(module_file)) {
+      crfprintf(stderr, msg.watch_entrypoint_error);
+      if (resolved_file) free(resolved_file);
+      CLEANUP_ARGS_AND_ARGV();
+      return EXIT_FAILURE;
+    }
+
+    int res = ant_watch_run(original_argc, original_argv, module_file, no_clear_screen->count > 0);
+    if (resolved_file) free(resolved_file);
+    CLEANUP_ARGS_AND_ARGV();
+    return res;
+  }
   
   ant_t *js;
   volatile char stack_base;
   
   if (!(js = js_create_dynamic())) {
-    crfprintf(stderr, "{fatal}: Failed to allocate for Ant.</>\n");
-    arg_freetable(argtable, ARGTABLE_COUNT); free(filtered_argv);
+    crfprintf(stderr, msg.ant_allocation_fatal);
+    CLEANUP_ARGS_AND_ARGV();
     return EXIT_FAILURE;
   }
   
@@ -403,7 +481,7 @@ int main(int argc, char *argv[]) {
 
   jsval_t snapshot_result = ant_load_snapshot(js);
   if (vtype(snapshot_result) == T_ERR) {
-    crfprintf(stderr, "{warn} <bold>Failed to load snapshot:</> %s\n", js_str(js, snapshot_result));
+    crfprintf(stderr, msg.snapshot_warn, js_str(js, snapshot_result));
   }
 
   if (eval->count > 0) {
@@ -415,30 +493,18 @@ int main(int argc, char *argv[]) {
     ant_repl_run();
   }
   
-  else if (has_stdin && file->count == 0) {
+  else if (stdin_mode) {
     size_t len = 0; char *buf = read_stdin(&len);
     if (!buf) { 
-      crfprintf(stderr, "{fatal}: Failed to allocate for Ant.</>\n");
+      crfprintf(stderr, msg.ant_allocation_fatal);
       js_result = EXIT_FAILURE; goto cleanup; 
     }
     eval_code(js, buf, len, "[stdin]", print->count > 0); free(buf);
   } 
   
   else {
-    struct stat path_stat;
-    char *resolved_file = NULL;
-    
-    resolved_file = resolve_js_file(module_file);
+    char *resolved_file = resolve_js_file(module_file);
     if (resolved_file) module_file = resolved_file;
-    
-    if (stat(module_file, &path_stat) == 0 && S_ISDIR(path_stat.st_mode)) {
-      size_t len = strlen(module_file);
-      int has_slash = (len > 0 && module_file[len - 1] == '/');
-      if (resolved_file) free(resolved_file);
-      resolved_file = try_oom(len + 10 + (has_slash ? 0 : 1));
-      sprintf(resolved_file, "%s%sindex.js", module_file, has_slash ? "" : "/");
-      module_file = resolved_file;
-    }
     
     js_result = execute_module(js, module_file);
     js_run_event_loop(js);
@@ -448,9 +514,9 @@ int main(int argc, char *argv[]) {
     
   cleanup: {
     js_destroy(js);
-    arg_freetable(argtable, ARGTABLE_COUNT);
-    free(filtered_argv);
+    CLEANUP_ARGS_AND_ARGV();
   }
+  #undef CLEANUP_ARGS_AND_ARGV
   
   return js_result;
 }

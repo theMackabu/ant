@@ -9,4 +9,5 @@ async function server(c) {
   return await meow(c);
 }
 
+console.log('server on http://localhost:8000');
 Ant.serve(8000, server);

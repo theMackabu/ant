@@ -64,6 +64,13 @@ libant_dep = declare_dependency(
   dependencies: ant_deps + [oxc_dep, pkg_dep]
 )
 
+messages_h = custom_target('messages_h',
+  input: 'src/core/messages.toml',
+  output: 'messages.h',
+  command: [python, files('meson/messages.py'), '@INPUT@'],
+  capture: true,
+)
+
 link_args = []
 if get_option('static_link')
   link_args += ['-static']
@@ -71,7 +78,6 @@ endif
 
 executable(
   'ant',
-  files('src/main.c'),
-  dependencies: libant_dep,
-  link_args: link_args
+  files('src/main.c', 'src/watch.c') + [messages_h],
+  dependencies: libant_dep, link_args: link_args
 )

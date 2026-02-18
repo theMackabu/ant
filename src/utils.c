@@ -1,4 +1,5 @@
 #include "utils.h"
+#include "messages.h"
 
 #include <stdio.h>
 #include <stdbool.h>
@@ -68,11 +69,19 @@ static bool has_js_extension(const char *filename) {
 
 char *resolve_js_file(const char *filename) {
   extern bool esm_is_url(const char *path);
+  if (!filename) return NULL;
   if (esm_is_url(filename)) return strdup(filename);
   
   struct stat st;
-  if (stat(filename, &st) == 0 && S_ISREG(st.st_mode)) {
-    return strdup(filename);
+  if (stat(filename, &st) == 0) {
+    if (S_ISREG(st.st_mode)) return strdup(filename);
+    if (!S_ISDIR(st.st_mode)) return NULL;
+
+    size_t len = strlen(filename);
+    int has_slash = (len > 0 && filename[len - 1] == '/');
+    char *index_path = try_oom(len + 10 + (has_slash ? 0 : 1));
+    sprintf(index_path, "%s%sindex.js", filename, has_slash ? "" : "/");
+    return index_path;
   }
   
   if (has_js_extension(filename)) return NULL;
@@ -96,7 +105,7 @@ char *resolve_js_file(const char *filename) {
 void *try_oom(size_t size) {
   void *p = malloc(size);
   if (!p) {
-    crfprintf(stderr, "<bold+red>FATAL</bold>: Out of memory\n");
+    crfprintf(stderr, msg.oom_fatal);
     exit(EXIT_FAILURE);
   } return p;
 }

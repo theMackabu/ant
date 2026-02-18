@@ -1,11 +1,11 @@
 {
   "engine": {
     "patterns": ["src/*.c", "src/esm/*.c", "src/cli/*.c", "src/modules/*.c"],
-    "exclude": ["src/main.c"]
+    "exclude": ["src/main.c", "src/watch.c"]
   },
   "library": {
     "patterns": ["src/*.c", "src/esm/*.c", "src/modules/*.c"],
-    "exclude": ["src/main.c"]
+    "exclude": ["src/main.c", "src/watch.c"]
   },
   "core": {
     "patterns": ["src/core/**/*.ts"],

@@ -1,0 +1,44 @@
+[messages]
+ant_help_flags = "<bold>Flags:</>\n"
+ant_command_extra = "\n  <pad=18><command> <bold+cyan>--help</></pad> Print help text for command.\n"
+
+snapshot_warn = "{warn}: <bold>Failed to load snapshot:</> %s\n"
+unknown_flag_warn = "{warn}: <bold>Unknown ANT_DEBUG flag: \"%s\"</>\n"
+
+failed_to_fetch = "{error}: <bold>Could not fetch \"%s\"</>: %s\n"
+module_not_found = "{error}: <bold>Module not found: \"%s\"</>\n"
+type_strip_failed = "{error}: <bold>Type stripping failed (%d)</>\n"
+watch_entrypoint_error = "{error}: <bold>--watch requires a local file entrypoint.</>\n"
+watch_module_error = "{error}: <bold>--watch only supports module file execution.</>\n"
+watch_subcommand_error = "{error}: <bold>--watch is only supported when executing a module file.</>\n"
+misuse_clear_screen = "{error}: <bold>--no-clear-screen can only be used with --watch.</>\n"
+
+ant_allocation_fatal = "{fatal}: Failed to allocate for Ant.</>\n"
+oom_fatal = "<bold+red>FATAL</bold>: Out of memory\n"
+argument_fatal = "{fatal}: <bold>Failed to resolve positional argument index.</>\n"
+
+arg_unexpected = "{error}: <bold>Unexpected argument <cyan>%s</>\n"
+arg_opt_needed = "{error}: <bold>Option <cyan>%s</> requires an argument\n"
+arg_invalid = "{error}: <bold>Invalid option <cyan>%s</>\n"
+opt_invalid = "{error}: <bold>Invalid option <cyan>-%c</>\n"
+
+ant_help_header = """\
+{let h=bold, arg=cyan, name='Ant'}\
+<$h+red>{name}</> is a tiny JavaScript runtime and package manager ({version})<br=2/>\
+<$h>Usage: {~name} <yellow>[module.js]</yellow> <$arg>[...flags]<reset/><br/>\
+<$h><gap=7/>{~name} <<command>><gap=3/><$arg>[...args]<reset/><br=2/>\
+If no module file is specified, {name} starts in REPL mode.<br=2/>\
+"""
+
+watch_spawn_failed = "{error}: <bold>Failed to spawn watched process:</> %s\n"
+watch_entrypoint_missing = "{error}: <bold>--watch requires a local file entrypoint.</>\n"
+watch_file_failed = "{error}: <bold>Failed to watch %s:</> %s\n"
+watch_child_error = "{error}: <bold>Failed to terminate child process:</> %s\n"
+
+watch_warn_normal = "{warn}: Watcher error on %s: %s\n"
+watch_loop_cleanup = "{warn}: Watch loop cleanup incomplete: %s\n"
+watch_graceful_term = "{warn}: Failed to terminate child process gracefully: %s\n"
+
+watch_start_fatal = "{fatal}: Failed to initialize watch mode.\n"
+watch_loop_fatal = "{fatal}: Failed to initialize watch loop: %s\n"
+watch_loop_handles_fatal = "{fatal}: Failed to initialize watch handles: %s\n"
