@@ -108,10 +108,14 @@ endif
 tlsuv_opts.append_compile_args('c', tlsuv_compile_args)
 tlsuv_dep = cmake.subproject('tlsuv', options: tlsuv_opts).dependency('tlsuv')
 
+base64_dep = declare_dependency(
+  dependencies: subproject('aklomp-base64').get_variable('base64_dep'),
+  compile_args: ['-DBASE64_STATIC_DEFINE'],
+)
+
 uthash_dep = subproject('uthash').get_variable('uthash_dep')
 yyjson_dep = subproject('yyjson').get_variable('yyjson_dep')
 uuidv7_dep = subproject('uuidv7').get_variable('uuidv7_dep')
-base64_dep = subproject('aklomp-base64').get_variable('base64_dep')
 argtable3_dep = subproject('argtable3').get_variable('argtable3_dep')
 minicoro_dep = subproject('minicoro').get_variable('minicoro_dep')
 crprintf_dep = subproject('crprintf').get_variable('crprintf_dep')
