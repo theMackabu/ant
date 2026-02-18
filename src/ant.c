@@ -13155,7 +13155,7 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
         if (super_proto_off != 0) {
           super_proto = resolveprop(js, mkval(T_PROP, super_proto_off));
         }
-        if (vtype(super_proto) != T_OBJ && vtype(super_proto) != T_NULL) {
+        if (!is_object_type(super_proto) && vtype(super_proto) != T_NULL) {
           return js_mkerr(js, "super class prototype must be an object or null");
         }
       } else return js_mkerr(js, "super class must be a constructor");
@@ -13165,7 +13165,7 @@ static jsval_t js_class_expr(struct js *js, bool is_expression) {
     if (is_err(proto)) return proto;
     
     if (super_expr_len > 0) {
-      if (vtype(super_proto) == T_OBJ || vtype(super_proto) == T_NULL) {
+      if (is_object_type(super_proto) || vtype(super_proto) == T_NULL) {
         set_proto(js, proto, super_proto);
       } else {
         jsval_t object_proto = get_ctor_proto(js, "Object", 6);
