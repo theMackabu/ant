@@ -387,7 +387,7 @@ static jsval_t js_from_iteration(struct js *js, jsval_t *args, int nargs) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Iterator must return an object");
   }
   
-  jsval_t nextMethod = js_get(js, iterator, "next");
+  jsval_t nextMethod = js_getprop_fallback(js, iterator, "next");
   if (!is_callable(nextMethod)) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Iterator must have a next method");
   }
@@ -411,7 +411,7 @@ static jsval_t js_from_iteration(struct js *js, jsval_t *args, int nargs) {
     }
     
     if (is_special_object(subscription) && subscription_closed(js, subscription)) {
-      jsval_t returnMethod = js_get(js, iterator, "return");
+      jsval_t returnMethod = js_getprop_fallback(js, iterator, "return");
       if (is_callable(returnMethod)) js_call_with_this(js, returnMethod, iterator, NULL, 0);
       return js_mkundef();
     }

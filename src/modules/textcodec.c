@@ -17,18 +17,23 @@ static jsval_t js_textencoder_encode(struct js *js, jsval_t *args, int nargs) {
   
   if (nargs > 0 && vtype(args[0]) == T_STR) {
     str = js_getstr(js, args[0], &str_len);
-    if (!str) {
-      str = "";
-      str_len = 0;
-    }
+    if (!str) { str = ""; str_len = 0; }
   }
   
   jsval_t glob = js_glob(js);
   jsval_t uint8array_ctor = js_get(js, glob, "Uint8Array");
   
+  if (vtype(uint8array_ctor) != T_FUNC && vtype(uint8array_ctor) != T_CFUNC) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Uint8Array constructor missing");
+  }
+  
   jsval_t len_arg = js_mknum((double)str_len);
+  jsval_t saved_new_target = js->new_target;
+  
+  js->new_target = uint8array_ctor;
   jsval_t arr = js_call(js, uint8array_ctor, &len_arg, 1);
   
+  js->new_target = saved_new_target;
   if (vtype(arr) == T_ERR) return arr;
   
   if (str_len > 0) {
