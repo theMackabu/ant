@@ -6074,6 +6074,7 @@ static inline jsval_t resolve_object_prop(struct js *js, jsval_t obj, const char
 }
 
 jsval_t resolveprop(struct js *js, jsval_t v) {
+  assert(v != (jsval_t)T_TAILCALL && "T_TAILCALL leaked into resolveprop");
   if (is_new_target_ref(v)) return current_lexical_new_target(js);
 
   if (vtype(v) == T_PROPREF) {
@@ -7505,7 +7506,7 @@ static inline bool tokens_have_tail_calls(
   const char *body, jsoff_t body_len, bool is_expr
 ) {
   if (!ts || ts->count == 0) return false;
-  if (is_expr) return scan_tail_span(body, body_len, 0, body_len) == TAIL_OK;
+  if (is_expr) return return_expr_is_tail_call(ts, 0, body, body_len);
 
   const cached_token_t *restrict toks = ts->tokens;
   const int count = ts->count;
@@ -7915,6 +7916,7 @@ jsval_t call_js_internal(
   js->tc.args = NULL;
 
   restore_saved_scope(js);
+  assert(res != (jsval_t)T_TAILCALL && "T_TAILCALL escaped call_js_internal");
   return res;
 }
 
@@ -12316,9 +12318,10 @@ static jsval_t js_for(struct js *js) {
     
     if (exe) loop_block_init(js, &forin_loop_ctx);
     js->flags |= F_NOEXEC;
-    v = js_block_or_stmt_pos(js, &body_end_pos);
+    v = js_block_or_stmt(js);
     if (is_err2(&v, &res)) goto done;
     
+    body_end_pos = js->pos;
     body_end_token = js->tok;
     body_end_consumed = js->consumed;
     body_end_toff = js->toff;
@@ -12367,9 +12370,10 @@ static jsval_t js_for(struct js *js) {
     
     if (exe) loop_block_init(js, &forof_loop_ctx);
     js->flags |= F_NOEXEC;
-    v = js_block_or_stmt_pos(js, &body_end_pos);
+    v = js_block_or_stmt(js);
     if (is_err2(&v, &res)) goto done;
     
+    body_end_pos = js->pos;
     body_end_token = js->tok;
     body_end_consumed = js->consumed;
     body_end_toff = js->toff;
