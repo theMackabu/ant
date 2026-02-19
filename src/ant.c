@@ -3646,7 +3646,7 @@ static inline jsval_t array_alloc_from_ctor(struct js *js, jsval_t ctor) {
   return array_alloc_from_ctor_with_length(js, ctor, 0);
 }
 
-static jsval_t array_alloc_like(struct js *js, jsval_t receiver) {
+static inline jsval_t array_alloc_like(struct js *js, jsval_t receiver) {
   jsval_t ctor = array_constructor_from_receiver(js, receiver);
   if (is_err(ctor)) return ctor;
   return array_alloc_from_ctor(js, ctor);
@@ -6781,32 +6781,15 @@ static void reverse(jsval_t *args, int nargs) {
 
 typedef enum { ITER_CONTINUE, ITER_BREAK, ITER_ERROR } iter_action_t;
 typedef iter_action_t (*iter_callback_t)(struct js *js, jsval_t value, void *ctx, jsval_t *out);
-
 static jsval_t iter_foreach(struct js *js, jsval_t iterable, iter_callback_t cb, void *ctx);
-typedef struct { UT_array *args; } spread_utarray_ctx_t;
 
-static iter_action_t spread_utarray_iter_cb(struct js *js, jsval_t value, void *ctx, jsval_t *out) {
-  spread_utarray_ctx_t *sctx = (spread_utarray_ctx_t *)ctx;
-  utarray_push_back(sctx->args, &value);
-  return ITER_CONTINUE;
-}
-
-static jsval_t append_spread_to_utarray(struct js *js, UT_array *args, jsval_t spread_value) {
-  if (vtype(spread_value) == T_ARR) {
-    jsoff_t len = js_arr_len(js, spread_value);
-    for (jsoff_t i = 0; i < len; i++) {
-      jsval_t elem = arr_get(js, spread_value, i);
-      utarray_push_back(args, &elem);
-    } return js_mkundef();
-  }
-  spread_utarray_ctx_t ctx = { .args = args };
-  return iter_foreach(js, spread_value, spread_utarray_iter_cb, &ctx);
-}
+#define SPREAD_STR_CB      0
+#define SPREAD_STR_UTARRAY 1
+#define SPREAD_STR_DYNARGS 2
 
 typedef struct {
   jsval_t **args;
-  int *argc;
-  int *args_cap;
+  int *argc; int *args_cap;
   bool *args_on_heap;
 } spread_dynargs_ctx_t;
 
@@ -6823,10 +6806,55 @@ static void spread_dynargs_push(spread_dynargs_ctx_t *ctx, jsval_t value) {
   (*ctx->args)[(*ctx->argc)++] = value;
 }
 
+static jsval_t str_spread_chars(struct js *js, jsval_t str, int flags, void *ctx, iter_callback_t cb) {
+  if (is_rope(js, str)) str = rope_flatten(js, str);
+  if (is_err(str)) return str;
+  jsoff_t len = str_len_fast(js, str);
+  for (jsoff_t i = 0; i < len; ) {
+    jsoff_t off = vstr(js, str, NULL);
+    unsigned char c = (unsigned char)js->mem[off + i];
+    jsoff_t cb_len = 1;
+    if (c >= 0x80) {
+      int seq = utf8_sequence_length(c);
+      cb_len = seq > 0 ? (jsoff_t)seq : 1;
+      if (i + cb_len > len) cb_len = len - i;
+    }
+    jsval_t ch = js_mkstr(js, (char *)&js->mem[off + i], cb_len);
+    if (flags == SPREAD_STR_CB) {
+      jsval_t out;
+      iter_action_t act = cb(js, ch, ctx, &out);
+      if (act == ITER_ERROR) return out;
+      if (act == ITER_BREAK) break;
+    } else if (flags == SPREAD_STR_UTARRAY) {
+      utarray_push_back((UT_array *)ctx, &ch);
+    } else if (flags == SPREAD_STR_DYNARGS) {
+      spread_dynargs_push((spread_dynargs_ctx_t *)ctx, ch);
+    } i += cb_len;
+  }
+  return js_mkundef();
+}
+
+static iter_action_t spread_utarray_iter_cb(struct js *js, jsval_t value, void *ctx, jsval_t *out) {
+  utarray_push_back((UT_array *)ctx, &value);
+  return ITER_CONTINUE;
+}
+
 static iter_action_t spread_dynargs_iter_cb(struct js *js, jsval_t value, void *ctx, jsval_t *out) {
   spread_dynargs_ctx_t *sctx = (spread_dynargs_ctx_t *)ctx;
   spread_dynargs_push(sctx, value);
   return ITER_CONTINUE;
+}
+
+static jsval_t append_spread_to_utarray(struct js *js, UT_array *args, jsval_t spread_value) {
+  if (vtype(spread_value) == T_ARR) {
+    jsoff_t len = js_arr_len(js, spread_value);
+    for (jsoff_t i = 0; i < len; i++) {
+      jsval_t elem = arr_get(js, spread_value, i);
+      utarray_push_back(args, &elem);
+    } return js_mkundef();
+  }
+  if (vtype(spread_value) == T_STR) return str_spread_chars(js, spread_value, SPREAD_STR_UTARRAY, args, NULL);
+  return iter_foreach(js, spread_value, spread_utarray_iter_cb, args);
 }
 
 static jsval_t append_spread_to_dynargs(struct js *js, spread_dynargs_ctx_t *ctx, jsval_t spread_value) {
@@ -6835,6 +6863,7 @@ static jsval_t append_spread_to_dynargs(struct js *js, spread_dynargs_ctx_t *ctx
     for (jsoff_t i = 0; i < len; i++) spread_dynargs_push(ctx, arr_get(js, spread_value, i));
     return js_mkundef();
   }
+  if (vtype(spread_value) == T_STR) return str_spread_chars(js, spread_value, SPREAD_STR_DYNARGS, ctx, NULL);
   return iter_foreach(js, spread_value, spread_dynargs_iter_cb, ctx);
 }
 
@@ -9241,20 +9270,8 @@ static jsval_t append_spread_to_array_literal(struct js *js, jsval_t arr, jsoff_
     return js_mkundef();
   }
   if (t == T_STR) {
-    jsoff_t len, off = vstr(js, spread_value, &len);
-    for (jsoff_t i = 0; i < len; ) {
-      unsigned char c = (unsigned char)js->mem[off + i];
-      jsoff_t cb = 1;
-      if (c >= 0x80) {
-        int seq = utf8_sequence_length(c);
-        cb = seq > 0 ? (jsoff_t)seq : 1;
-        if (i + cb > len) cb = len - i;
-      }
-      arr_set(js, arr, *idx, js_mkstr(js, (char *)&js->mem[off + i], cb));
-      (*idx)++; i += cb;
-      off = vstr(js, spread_value, &len);
-    }
-    return js_mkundef();
+    spread_arr_literal_ctx_t ctx = { .arr = arr, .idx = idx };
+    return str_spread_chars(js, spread_value, SPREAD_STR_CB, &ctx, spread_arr_literal_iter_cb);
   }
   spread_arr_literal_ctx_t ctx = { .arr = arr, .idx = idx };
   return iter_foreach(js, spread_value, spread_arr_literal_iter_cb, &ctx);
@@ -15412,8 +15429,6 @@ jsval_t builtin_regexp_symbol_split(struct js *js, jsval_t *args, int nargs) {
   if (is_err(flags_val)) return flags_val;
   jsval_t exec_val = js_get(js, regexp, "exec");
   if (is_err(exec_val)) return exec_val;
-  (void)flags_val;
-  (void)exec_val;
 
   jsval_t str = nargs > 0 ? js_tostring_val(js, args[0]) : js_mkstr(js, "", 0);
   if (is_err(str)) return str;
@@ -17454,77 +17469,67 @@ static jsval_t builtin_object_toString(struct js *js, jsval_t *args, int nargs) 
   obj = resolveprop(js, obj);
   uint8_t t = vtype(obj);
   
-  if (is_object_type(obj)) {
-    jsval_t check_obj = (t != T_OBJ) ? mkval(T_OBJ, vdata(obj)) : obj;
-    const char *tostr_tag_key = get_toStringTag_sym_key();
-    jsoff_t tag_off = lkp(js, check_obj, tostr_tag_key, strlen(tostr_tag_key));
-    if (tag_off == 0) tag_off = lkp_proto(js, check_obj, tostr_tag_key, strlen(tostr_tag_key));
+  const char *tag = NULL;
+  jsoff_t tag_len = 0;
+
+  const char *tostr_tag_key = get_toStringTag_sym_key();
+  if (tostr_tag_key && tostr_tag_key[0]) {
+    jsoff_t tag_off = 0;
+    if (is_object_type(obj)) {
+      jsval_t check_obj = (t != T_OBJ) ? mkval(T_OBJ, vdata(obj)) : obj;
+      tag_off = lkp(js, check_obj, tostr_tag_key, strlen(tostr_tag_key));
+      if (tag_off == 0) tag_off = lkp_proto(js, check_obj, tostr_tag_key, strlen(tostr_tag_key));
+    } else {
+      jsval_t proto = get_prototype_for_type(js, t);
+      if (is_object_type(proto)) {
+        tag_off = lkp(js, proto, tostr_tag_key, strlen(tostr_tag_key));
+        if (tag_off == 0) tag_off = lkp_proto(js, proto, tostr_tag_key, strlen(tostr_tag_key));
+      }
+    }
     if (tag_off != 0) {
       jsval_t tag_val = resolveprop(js, mkval(T_PROP, tag_off));
       if (vtype(tag_val) == T_STR) {
-        jsoff_t tag_len, tag_str_off = vstr(js, tag_val, &tag_len);
-        const char *tag_str = (const char *)&js->mem[tag_str_off];
-        
-        char buf[256];
-        int n = snprintf(buf, sizeof(buf), "[object %.*s]", (int)tag_len, tag_str);
-        return js_mkstr(js, buf, n);
+        jsoff_t str_off = vstr(js, tag_val, &tag_len);
+        tag = (const char *)&js->mem[str_off];
       }
+    }
+  }
+  
+  if (!tag) {
+    if (is_object_type(obj) && get_slot(js, obj, SLOT_ERROR_BRAND) == js_true) {
+      tag = "Error"; tag_len = 5;
+    } else switch (t) {
+      case T_UNDEF:   tag = "Undefined"; tag_len = 9; break;
+      case T_NULL:    tag = "Null";      tag_len = 4; break;
+      case T_BOOL:    tag = "Boolean";   tag_len = 7; break;
+      case T_NUM:     tag = "Number";    tag_len = 6; break;
+      case T_STR:     tag = "String";    tag_len = 6; break;
+      case T_ARR:     tag = "Array";     tag_len = 5; break;
+      case T_FUNC:    tag = "Function";  tag_len = 8; break;
+      case T_ERR:     tag = "Error";     tag_len = 5; break;
+      case T_BIGINT:  tag = "BigInt";    tag_len = 6; break;
+      case T_PROMISE: tag = "Promise";   tag_len = 7; break;
+      case T_OBJ:     tag = "Object";    tag_len = 6; break;
+      default:        tag = "Unknown";   tag_len = 7; break;
     }
   }
 
-  if (is_object_type(obj) && get_slot(js, obj, SLOT_ERROR_BRAND) == js_true) {
-    return js_mkstr(js, "[object Error]", 14);
-  }
+  char static_buf[64];
+  string_builder_t sb;
   
-  // refactor
-  if (t == T_STR || t == T_NUM || t == T_BOOL) {
-    const char *tostr_tag_key = get_toStringTag_sym_key();
-    jsval_t proto = get_prototype_for_type(js, t);
-    if (tostr_tag_key && tostr_tag_key[0] && is_object_type(proto)) {
-      jsoff_t tag_off = lkp(js, proto, tostr_tag_key, strlen(tostr_tag_key));
-      if (tag_off == 0) tag_off = lkp_proto(js, proto, tostr_tag_key, strlen(tostr_tag_key));
-      if (tag_off != 0) {
-        jsval_t tag_val = resolveprop(js, mkval(T_PROP, tag_off));
-        if (vtype(tag_val) == T_STR) {
-          jsoff_t tag_len, tag_str_off = vstr(js, tag_val, &tag_len);
-          const char *tag_str = (const char *)&js->mem[tag_str_off];
-          char buf[256];
-          int n = snprintf(buf, sizeof(buf), "[object %.*s]", (int)tag_len, tag_str);
-          return js_mkstr(js, buf, n);
-        }
-      }
-    }
-  }
+  string_builder_init(&sb, static_buf, sizeof(static_buf));
+  string_builder_append(&sb, "[object ", 8);
+  string_builder_append(&sb, tag, tag_len);
+  string_builder_append(&sb, "]", 1);
   
-  const char *type_name = NULL;
-  
-  switch (t) {
-    case T_UNDEF:   type_name = "Undefined"; break;
-    case T_NULL:    type_name = "Null"; break;
-    case T_BOOL:    type_name = "Boolean"; break;
-    case T_NUM:     type_name = "Number"; break;
-    case T_STR:     type_name = "String"; break;
-    case T_ARR:     type_name = "Array"; break;
-    case T_FUNC:    type_name = "Function"; break;
-    case T_ERR:     type_name = "Error"; break;
-    case T_BIGINT:  type_name = "BigInt"; break;
-    case T_PROMISE: type_name = "Promise"; break;
-    case T_OBJ:     type_name = "Object"; break;
-    default:        type_name = "Unknown"; break;
-  }
-  
-  char buf[256];
-  int n = snprintf(buf, sizeof(buf), "[object %s]", type_name);
-  return js_mkstr(js, buf, n);
+  return string_builder_finalize(js, &sb);
 }
 
 static jsval_t builtin_object_valueOf(struct js *js, jsval_t *args, int nargs) {
-  (void)args; (void)nargs;
   return js->this_val;
 }
 
 static jsval_t builtin_object_toLocaleString(struct js *js, jsval_t *args, int nargs) {
-  (void)args; (void)nargs;
   return js_call_toString(js, js->this_val);
 }
 
@@ -19202,14 +19207,9 @@ static jsval_t builtin_Array_from(struct js *js, jsval_t *args, int nargs) {
 
   if (vtype(src) == T_STR) {
     array_from_iter_ctx_t ctx = { write_target, result, mapFn, mapThis, 0 };
-    jsoff_t str_len, str_off = vstr(js, src, &str_len);
-    const char *str_ptr = (const char *)&js->mem[str_off];
-    for (jsoff_t i = 0; i < str_len; i++) {
-      jsval_t unused;
-      iter_action_t act = array_from_iter_cb(js, js_mkstr(js, str_ptr + i, 1), &ctx, &unused);
-      if (act == ITER_ERROR) return unused;
-    }
-    if (vtype(result) != T_ARR) js_setprop(js, result, js->length_str, tov((double) str_len));
+    jsval_t r = str_spread_chars(js, src, SPREAD_STR_CB, &ctx, array_from_iter_cb);
+    if (is_err(r)) return r;
+    if (vtype(result) != T_ARR) js_setprop(js, result, js->length_str, tov((double) ctx.index));
   } else {
     const char *iter_key = get_iterator_sym_key();
     jsoff_t iter_prop = iter_key ? lkp_proto(js, src, iter_key, strlen(iter_key)) : 0;
