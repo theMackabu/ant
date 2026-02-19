@@ -3,6 +3,7 @@
 #include <stdio.h>
 
 #include "ant.h"
+#include "utf8.h"
 #include "errors.h"
 #include "runtime.h"
 #include "internal.h"
@@ -213,10 +214,15 @@ static jsval_t string_iterator_next(struct js *js, jsval_t *args, int nargs) {
     js_set(js, result, "value", js_mkundef());
   } else {
     char *s = js_getstr(js, str, NULL);
-    char ch[2] = {s[idx], 0};
-    js_set(js, result, "value", js_mkstr(js, ch, 1));
+    unsigned char c = (unsigned char)s[idx];
+    
+    int char_bytes = utf8_sequence_length(c);
+    if (char_bytes < 1) char_bytes = 1;
+    if (idx + char_bytes > len) char_bytes = len - idx;
+    
+    js_set(js, result, "value", js_mkstr(js, s + idx, (jsoff_t)char_bytes));
     js_set(js, result, "done", js_false);
-    js_set(js, this_val, "__idx", js_mknum(idx + 1));
+    js_set(js, this_val, "__idx", js_mknum(idx + char_bytes));
   }
   
   return result;

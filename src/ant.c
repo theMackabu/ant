@@ -6599,6 +6599,53 @@ static void reverse(jsval_t *args, int nargs) {
   }
 }
 
+typedef enum { ITER_CONTINUE, ITER_BREAK, ITER_ERROR } iter_action_t;
+typedef iter_action_t (*iter_callback_t)(struct js *js, jsval_t value, void *ctx, jsval_t *out);
+
+static jsval_t iter_foreach(struct js *js, jsval_t iterable, iter_callback_t cb, void *ctx);
+typedef struct { UT_array *args; } spread_utarray_ctx_t;
+
+static iter_action_t spread_utarray_iter_cb(struct js *js, jsval_t value, void *ctx, jsval_t *out) {
+  spread_utarray_ctx_t *sctx = (spread_utarray_ctx_t *)ctx;
+  utarray_push_back(sctx->args, &value);
+  return ITER_CONTINUE;
+}
+
+static jsval_t append_spread_to_utarray(struct js *js, UT_array *args, jsval_t spread_value) {
+  spread_utarray_ctx_t ctx = { .args = args };
+  return iter_foreach(js, spread_value, spread_utarray_iter_cb, &ctx);
+}
+
+typedef struct {
+  jsval_t **args;
+  int *argc;
+  int *args_cap;
+  bool *args_on_heap;
+} spread_dynargs_ctx_t;
+
+static void spread_dynargs_push(spread_dynargs_ctx_t *ctx, jsval_t value) {
+  if (*ctx->argc >= *ctx->args_cap) {
+    int new_cap = *ctx->args_cap * 2;
+    jsval_t *new_args = try_oom((size_t)new_cap * sizeof(jsval_t));
+    memcpy(new_args, *ctx->args, (size_t)*ctx->argc * sizeof(jsval_t));
+    if (*ctx->args_on_heap) free(*ctx->args);
+    *ctx->args = new_args;
+    *ctx->args_cap = new_cap;
+    *ctx->args_on_heap = true;
+  }
+  (*ctx->args)[(*ctx->argc)++] = value;
+}
+
+static iter_action_t spread_dynargs_iter_cb(struct js *js, jsval_t value, void *ctx, jsval_t *out) {
+  spread_dynargs_ctx_t *sctx = (spread_dynargs_ctx_t *)ctx;
+  spread_dynargs_push(sctx, value);
+  return ITER_CONTINUE;
+}
+
+static jsval_t append_spread_to_dynargs(struct js *js, spread_dynargs_ctx_t *ctx, jsval_t spread_value) {
+  return iter_foreach(js, spread_value, spread_dynargs_iter_cb, ctx);
+}
+
 static int parse_call_args(struct js *js, UT_array *args, jsval_t *err_out) {
   while (js->pos < js->clen) {
     if (next(js) == TOK_RPAREN) break;
@@ -6606,12 +6653,9 @@ static int parse_call_args(struct js *js, UT_array *args, jsval_t *err_out) {
     if (is_spread) js->consumed = 1;
     jsval_t arg = resolveprop(js, js_expr(js));
     if (is_err(arg)) { *err_out = arg; return -1; }
-    if (is_spread && vtype(arg) == T_ARR) {
-      jsoff_t len = js_arr_len(js, arg);
-      for (jsoff_t i = 0; i < len; i++) {
-        jsval_t elem = js_arr_get(js, arg, i);
-        utarray_push_back(args, &elem);
-      }
+    if (is_spread) {
+      jsval_t spread_result = append_spread_to_utarray(js, args, arg);
+      if (is_err(spread_result)) { *err_out = spread_result; return -1; }
     } else utarray_push_back(args, &arg);
     if (next(js) == TOK_COMMA) js->consumed = 1;
   }
@@ -7446,21 +7490,14 @@ jsval_t call_js_internal(
     argc = 0;
     args_on_heap = false;
     int args_cap = 8;
+    spread_dynargs_ctx_t spread_ctx = {
+      .args = &args,
+      .argc = &argc,
+      .args_cap = &args_cap,
+      .args_on_heap = &args_on_heap
+    };
 
-    #define ARGS_PUSH(val) do {                                  \
-      if (argc >= args_cap) {                                    \
-        int _new_cap = args_cap * 2;                             \
-        jsval_t *_new = try_oom(_new_cap * sizeof(jsval_t));      \
-        memcpy(_new, args, argc * sizeof(jsval_t));              \
-        if (args_on_heap) free(args);                            \
-        args = _new;                                             \
-        args_cap = _new_cap;                                     \
-        args_on_heap = true;                                     \
-      }                                                          \
-      args[argc++] = (val);                                      \
-    } while (0)
-
-    for (int i = 0; i < bound_argc; i++) ARGS_PUSH(bound_args[i]);
+    for (int i = 0; i < bound_argc; i++) spread_dynargs_push(&spread_ctx, bound_args[i]);
     caller_pos = skiptonext(caller_code, caller_clen, caller_pos, NULL);
 
     while (caller_pos < caller_clen && caller_code[caller_pos] != ')') {
@@ -7473,16 +7510,26 @@ jsval_t call_js_internal(
       js->consumed = 1;
       jsval_t arg = resolveprop(js, js_expr(js));
       caller_pos = js->pos;
-      if (is_spread && vtype(arg) == T_ARR) {
-        jsoff_t len = js_arr_len(js, arg);
-        for (jsoff_t i = 0; i < len; i++) ARGS_PUSH(js_arr_get(js, arg, i));
-      } else ARGS_PUSH(arg);
+      if (is_err(arg)) {
+        if (args_on_heap) free(args);
+        restore_saved_scope(js);
+        if (global_scope_stack && utarray_len(global_scope_stack) > 0) utarray_pop_back(global_scope_stack);
+        return arg;
+      }
+      if (is_spread) {
+        jsval_t spread_result = append_spread_to_dynargs(js, &spread_ctx, arg);
+        if (is_err(spread_result)) {
+          if (args_on_heap) free(args);
+          restore_saved_scope(js);
+          if (global_scope_stack && utarray_len(global_scope_stack) > 0) utarray_pop_back(global_scope_stack);
+          return spread_result;
+        }
+      } else spread_dynargs_push(&spread_ctx, arg);
       caller_pos = skiptonext(caller_code, caller_clen, caller_pos, NULL);
       if (caller_pos < caller_clen && caller_code[caller_pos] == ',') caller_pos++;
       caller_pos = skiptonext(caller_code, caller_clen, caller_pos, NULL);
     }
-    
-    #undef ARGS_PUSH
+
     js->pos = caller_pos;
   }
 
@@ -8944,6 +8991,23 @@ static jsval_t js_obj_or_destruct(struct js *js) {
   return js_obj_literal(js);
 }
 
+typedef struct {
+  jsval_t arr;
+  jsoff_t *idx;
+} spread_arr_literal_ctx_t;
+
+static iter_action_t spread_arr_literal_iter_cb(struct js *js, jsval_t value, void *ctx, jsval_t *out) {
+  spread_arr_literal_ctx_t *sctx = (spread_arr_literal_ctx_t *)ctx;
+  arr_set(js, sctx->arr, *sctx->idx, value);
+  (*sctx->idx)++;
+  return ITER_CONTINUE;
+}
+
+static jsval_t append_spread_to_array_literal(struct js *js, jsval_t arr, jsoff_t *idx, jsval_t spread_value) {
+  spread_arr_literal_ctx_t ctx = { .arr = arr, .idx = idx };
+  return iter_foreach(js, spread_value, spread_arr_literal_iter_cb, &ctx);
+}
+
 static jsval_t js_arr_literal(struct js *js) {
   bool saved_tail = js->tail_ctx;
   js->tail_ctx = false;
@@ -8981,24 +9045,8 @@ static jsval_t js_arr_literal(struct js *js) {
       arr_set(js, arr, idx, resolved);
       idx++; goto next_elem;
     }
-
-    uint8_t t = vtype(resolved);
-    if (t != T_ARR && t != T_STR) goto next_elem;
-
-    if (t == T_STR) {
-      jsoff_t slen, soff = vstr(js, resolved, &slen);
-      for (jsoff_t i = 0; i < slen; i++) {
-        jsval_t ch = js_mkstr(js, (char *)&js->mem[soff + i], 1);
-        arr_set(js, arr, idx, ch); idx++;
-      }
-      goto next_elem;
-    }
-
-    jsoff_t len = js_arr_len(js, resolved);
-    for (jsoff_t i = 0; i < len; i++) {
-      jsval_t elem = arr_get(js, resolved, i);
-      arr_set(js, arr, idx, elem); idx++;
-    }
+    jsval_t spread_result = append_spread_to_array_literal(js, arr, &idx, resolved);
+    if (is_err(spread_result)) return spread_result;
 
   next_elem:
     if (next(js) == TOK_RBRACKET) break;
@@ -11702,14 +11750,16 @@ static jsval_t for_of_iter_string(struct js *js, for_iter_ctx_t *ctx, jsval_t it
     size_t char_bytes;
     jsval_t char_str;
     
-    if (c < 0x80) { char_bytes = 1; char_str = js->ascii_char_cache[c]; } else {
-      if ((c & 0xE0) == 0xC0) char_bytes = 2;
-      else if ((c & 0xF0) == 0xE0) char_bytes = 3;
-      else if ((c & 0xF8) == 0xF0) char_bytes = 4;
-      else char_bytes = 1;
+    if (c < 0x80) {
+      char_bytes = 1;
+      char_str = js->ascii_char_cache[c];
+    } else {
+      int seq_len = utf8_sequence_length(c);
+      char_bytes = (size_t)(seq_len > 0 ? seq_len : 1);
       if (byte_pos + char_bytes > cur_byte_len) char_bytes = cur_byte_len - byte_pos;
       char_str = js_mkstr(js, cur_str + byte_pos, char_bytes);
-    } byte_pos += char_bytes;
+    }
+    byte_pos += char_bytes;
     
     jsval_t err = for_iter_bind_var(js, ctx, char_str);
     if (is_err(err)) { js_unroot(js, h_iterable); return err; }
@@ -11724,9 +11774,6 @@ static jsval_t for_of_iter_string(struct js *js, for_iter_ctx_t *ctx, jsval_t it
   js_unroot(js, h_iterable);
   return js_mkundef();
 }
-
-typedef enum { ITER_CONTINUE, ITER_BREAK, ITER_ERROR } iter_action_t;
-typedef iter_action_t (*iter_callback_t)(struct js *js, jsval_t value, void *ctx, jsval_t *out);
 
 static jsval_t iter_call_noargs_with_this(struct js *js, jsval_t this_val, jsval_t method) {
   js_parse_state_t saved_state;
