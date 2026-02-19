@@ -9335,6 +9335,32 @@ static jsval_t js_arr_literal(struct js *js) {
   return arr;
 }
 
+static void regexp_init_flags(struct js *js, jsval_t obj, const char *fstr, jsoff_t flen) {
+  bool g = false, i = false, m = false, s = false, y = false;
+  for (jsoff_t k = 0; k < flen; k++) {
+    if (fstr[k] == 'g') g = true;
+    if (fstr[k] == 'i') i = true;
+    if (fstr[k] == 'm') m = true;
+    if (fstr[k] == 's') s = true;
+    if (fstr[k] == 'y') y = true;
+  }
+
+  char sorted[8]; int si = 0;
+  if (g) sorted[si++] = 'g';
+  if (i) sorted[si++] = 'i';
+  if (m) sorted[si++] = 'm';
+  if (s) sorted[si++] = 's';
+  if (y) sorted[si++] = 'y';
+  
+  js_setprop(js, obj, js_mkstr(js, "flags", 5), js_mkstr(js, sorted, si));
+  js_setprop(js, obj, js_mkstr(js, "global", 6), mkval(T_BOOL, g ? 1 : 0));
+  js_setprop(js, obj, js_mkstr(js, "ignoreCase", 10), mkval(T_BOOL, i ? 1 : 0));
+  js_setprop(js, obj, js_mkstr(js, "multiline", 9), mkval(T_BOOL, m ? 1 : 0));
+  js_setprop(js, obj, js_mkstr(js, "dotAll", 6), mkval(T_BOOL, s ? 1 : 0));
+  js_setprop(js, obj, js_mkstr(js, "sticky", 6), mkval(T_BOOL, y ? 1 : 0));
+  js_setprop(js, obj, js_mkstr(js, "lastIndex", 9), tov(0));
+}
+
 static jsval_t js_regex_literal(struct js *js) {
   jsoff_t start = js->pos;
   jsoff_t pattern_start = start;
@@ -9364,41 +9390,20 @@ static jsval_t js_regex_literal(struct js *js) {
     char c = js->code[js->pos];
     if (c == 'g' || c == 'i' || c == 'm' || c == 's' || c == 'u' || c == 'y') {
       js->pos++;
-    } else {
-      break;
-    }
+    } else break;
   }
-  jsoff_t flags_end = js->pos;
   
+  jsoff_t flags_end = js->pos;
   if (js->flags & F_NOEXEC) return js_mkundef();
   
   jsval_t pattern = js_mkstr(js, &js->code[pattern_start], pattern_end - pattern_start);
-  jsval_t flags = js_mkstr(js, &js->code[flags_start], flags_end - flags_start);
-  
   jsval_t regexp_obj = mkobj(js, 0);
+  
   jsval_t regexp_proto = get_ctor_proto(js, "RegExp", 6);
   if (vtype(regexp_proto) == T_OBJ) set_proto(js, regexp_obj, regexp_proto);
 
   js_setprop(js, regexp_obj, js_mkstr(js, "source", 6), pattern);
-  js_setprop(js, regexp_obj, js_mkstr(js, "flags", 5), flags);
-
-  jsoff_t flen = flags_end - flags_start;
-  const char *fstr = &js->code[flags_start];
-  bool global = false, ignoreCase = false, multiline = false, dotAll = false, sticky = false;
-  for (jsoff_t i = 0; i < flen; i++) {
-    if (fstr[i] == 'g') global = true;
-    if (fstr[i] == 'i') ignoreCase = true;
-    if (fstr[i] == 'm') multiline = true;
-    if (fstr[i] == 's') dotAll = true;
-    if (fstr[i] == 'y') sticky = true;
-  }
-
-  js_setprop(js, regexp_obj, js_mkstr(js, "global", 6), mkval(T_BOOL, global ? 1 : 0));
-  js_setprop(js, regexp_obj, js_mkstr(js, "ignoreCase", 10), mkval(T_BOOL, ignoreCase ? 1 : 0));
-  js_setprop(js, regexp_obj, js_mkstr(js, "multiline", 9), mkval(T_BOOL, multiline ? 1 : 0));
-  js_setprop(js, regexp_obj, js_mkstr(js, "dotAll", 6), mkval(T_BOOL, dotAll ? 1 : 0));
-  js_setprop(js, regexp_obj, js_mkstr(js, "sticky", 6), mkval(T_BOOL, sticky ? 1 : 0));
-  js_setprop(js, regexp_obj, js_mkstr(js, "lastIndex", 9), tov(0));
+  regexp_init_flags(js, regexp_obj, &js->code[flags_start], flags_end - flags_start);
 
   return regexp_obj;
 }
@@ -15141,30 +15146,9 @@ static jsval_t builtin_RegExp(struct js *js, jsval_t *args, int nargs) {
     }
   }
   
-  jsval_t source_key = js_mkstr(js, "source", 6);
-  js_setprop(js, regexp_obj, source_key, pattern);
-  
-  jsval_t flags_key = js_mkstr(js, "flags", 5);
-  js_setprop(js, regexp_obj, flags_key, flags);
-  
+  js_setprop(js, regexp_obj, js_mkstr(js, "source", 6), pattern);
   jsoff_t flags_len, flags_off = vstr(js, flags, &flags_len);
-  const char *flags_str = (char *) &js->mem[flags_off];
-  
-  bool global = false, ignoreCase = false, multiline = false, dotAll = false, sticky = false;
-  for (jsoff_t i = 0; i < flags_len; i++) {
-    if (flags_str[i] == 'g') global = true;
-    if (flags_str[i] == 'i') ignoreCase = true;
-    if (flags_str[i] == 'm') multiline = true;
-    if (flags_str[i] == 's') dotAll = true;
-    if (flags_str[i] == 'y') sticky = true;
-  }
-
-  js_setprop(js, regexp_obj, js_mkstr(js, "global", 6), mkval(T_BOOL, global ? 1 : 0));
-  js_setprop(js, regexp_obj, js_mkstr(js, "ignoreCase", 10), mkval(T_BOOL, ignoreCase ? 1 : 0));
-  js_setprop(js, regexp_obj, js_mkstr(js, "multiline", 9), mkval(T_BOOL, multiline ? 1 : 0));
-  js_setprop(js, regexp_obj, js_mkstr(js, "dotAll", 6), mkval(T_BOOL, dotAll ? 1 : 0));
-  js_setprop(js, regexp_obj, js_mkstr(js, "sticky", 6), mkval(T_BOOL, sticky ? 1 : 0));
-  js_setprop(js, regexp_obj, js_mkstr(js, "lastIndex", 9), tov(0));
+  regexp_init_flags(js, regexp_obj, (const char *)&js->mem[flags_off], flags_len);
 
   return regexp_obj;
 }
@@ -15419,6 +15403,211 @@ static jsval_t builtin_regexp_test(struct js *js, jsval_t *args, int nargs) {
   jsval_t result = regexp_exec_abstract(js, regexp, str_arg);
   if (is_err(result)) return result;
   return mkval(T_BOOL, vtype(result) != T_NULL ? 1 : 0);
+}
+
+jsval_t builtin_regexp_flags_getter(struct js *js, jsval_t *args, int nargs) {
+  jsval_t rx = js->this_val;
+  if (!is_object_type(rx))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "RegExp.prototype.flags called on non-object");
+
+  char static_buf[16]; string_builder_t sb;
+  string_builder_init(&sb, static_buf, sizeof(static_buf));
+
+  static const struct { const char *name; size_t len; char flag; } flag_props[] = {
+    {"hasIndices", 10, 'd'}, {"global", 6, 'g'}, {"ignoreCase", 10, 'i'},
+    {"multiline", 9, 'm'}, {"dotAll", 6, 's'}, {"unicode", 7, 'u'},
+    {"unicodeSets", 11, 'v'}, {"sticky", 6, 'y'},
+  };
+
+  for (int i = 0; i < 8; i++) {
+    jsval_t v = js_getprop_fallback(js, rx, flag_props[i].name);
+    if (is_err(v)) { if (sb.is_dynamic) free(sb.buffer); return v; }
+    if (js_truthy(js, v)) string_builder_append(&sb, &flag_props[i].flag, 1);
+  }
+
+  return string_builder_finalize(js, &sb);
+}
+
+jsval_t builtin_regexp_symbol_match(struct js *js, jsval_t *args, int nargs) {
+  jsval_t rx = js->this_val;
+  if (!is_object_type(rx))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "RegExp.prototype[@@match] called on non-object");
+
+  jsval_t str = nargs > 0 ? js_tostring_val(js, args[0]) : js_mkstr(js, "undefined", 9);
+  if (is_err(str)) return str;
+
+  jsval_t global_val = js_getprop_fallback(js, rx, "global");
+  if (is_err(global_val)) return global_val;
+
+  if (!js_truthy(js, global_val))
+    return regexp_exec_abstract(js, rx, str);
+
+  jsval_t unicode_val = js_getprop_fallback(js, rx, "unicode");
+  if (is_err(unicode_val)) return unicode_val;
+  
+  bool full_unicode = js_truthy(js, unicode_val);
+  js_setprop(js, rx, js_mkstr(js, "lastIndex", 9), tov(0));
+
+  jsval_t A = mkarr(js);
+  if (is_err(A)) return A;
+  jsoff_t n = 0;
+
+  for (;;) {
+    jsval_t result = regexp_exec_abstract(js, rx, str);
+    if (is_err(result)) return result;
+    if (vtype(result) == T_NULL) return n == 0 ? js_mknull() : mkval(T_ARR, vdata(A));
+
+    jsval_t match_str = js_tostring_val(js, arr_get(js, result, 0));
+    if (is_err(match_str)) return match_str;
+    arr_set(js, A, n++, match_str);
+
+    jsoff_t mlen;
+    vstr(js, match_str, &mlen);
+    if (mlen == 0) {
+      jsval_t li_val = js_getprop_fallback(js, rx, "lastIndex");
+      if (is_err(li_val)) return li_val;
+      double li = vtype(li_val) == T_NUM ? tod(li_val) : 0;
+      jsoff_t str_len, str_off = vstr(js, str, &str_len);
+      double advance = 1;
+      if (full_unicode && li < (double)str_len) {
+        advance = (double)utf8_char_len_at((const char *)&js->mem[str_off], str_len, (jsoff_t)li);
+      } js_setprop(js, rx, js_mkstr(js, "lastIndex", 9), tov(li + advance));
+    }
+  }
+}
+
+jsval_t builtin_regexp_symbol_replace(struct js *js, jsval_t *args, int nargs) {
+  jsval_t rx = js->this_val;
+  if (!is_object_type(rx))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "RegExp.prototype[@@replace] called on non-object");
+
+  jsval_t str = nargs > 0 ? js_tostring_val(js, args[0]) : js_mkstr(js, "undefined", 9);
+  if (is_err(str)) return str;
+  jsval_t replace_value = nargs > 1 ? args[1] : js_mkundef();
+  bool func_replace = (vtype(replace_value) == T_FUNC || vtype(replace_value) == T_CFUNC);
+  jsval_t replace_str = js_mkundef();
+  if (!func_replace) {
+    replace_str = js_tostring_val(js, replace_value);
+    if (is_err(replace_str)) return replace_str;
+  }
+
+  jsval_t global_val = js_getprop_fallback(js, rx, "global");
+  if (is_err(global_val)) return global_val;
+  bool global = js_truthy(js, global_val);
+
+  bool full_unicode = false;
+  if (global) {
+    jsval_t unicode_val = js_getprop_fallback(js, rx, "unicode");
+    if (is_err(unicode_val)) return unicode_val;
+    full_unicode = js_truthy(js, unicode_val);
+    js_setprop(js, rx, js_mkstr(js, "lastIndex", 9), tov(0));
+  }
+
+  jsval_t results = mkarr(js);
+  if (is_err(results)) return results;
+  jsoff_t nresults = 0;
+
+  for (;;) {
+    jsval_t result = regexp_exec_abstract(js, rx, str);
+    if (is_err(result)) return result;
+    if (vtype(result) == T_NULL) break;
+    arr_set(js, results, nresults++, result);
+    if (!global) break;
+
+    jsval_t match_str = js_tostring_val(js, arr_get(js, result, 0));
+    if (is_err(match_str)) return match_str;
+    jsoff_t mlen; vstr(js, match_str, &mlen);
+    if (mlen == 0) {
+      jsval_t li_val = js_getprop_fallback(js, rx, "lastIndex");
+      if (is_err(li_val)) return li_val;
+      double li = vtype(li_val) == T_NUM ? tod(li_val) : 0;
+      jsoff_t sl, so = vstr(js, str, &sl);
+      double advance = 1;
+      if (full_unicode && li < (double)sl) {
+        advance = (double)utf8_char_len_at((const char *)&js->mem[so], sl, (jsoff_t)li);
+      }
+      js_setprop(js, rx, js_mkstr(js, "lastIndex", 9), tov(li + advance));
+    }
+  }
+
+  jsoff_t str_len, str_off = vstr(js, str, &str_len);
+  char static_buf[256];
+  string_builder_t sb;
+  string_builder_init(&sb, static_buf, sizeof(static_buf));
+  jsoff_t next_src_pos = 0;
+
+  for (jsoff_t i = 0; i < nresults; i++) {
+    jsval_t result = arr_get(js, results, i);
+    jsval_t matched = js_tostring_val(js, arr_get(js, result, 0));
+    if (is_err(matched)) { if (sb.is_dynamic) free(sb.buffer); return matched; }
+    jsoff_t matched_len; vstr(js, matched, &matched_len);
+
+    jsval_t pos_val = js_getprop_fallback(js, result, "index");
+    jsoff_t position = 0;
+    if (!is_err(pos_val) && vtype(pos_val) == T_NUM) {
+      double d = tod(pos_val);
+      position = d < 0 ? 0 : (jsoff_t)d;
+    }
+    if (position > str_len) position = str_len;
+
+    jsval_t replacement;
+    if (func_replace) {
+      jsoff_t ncaptures = get_array_length(js, result);
+      jsval_t call_args[32];
+      int ca = 0;
+      for (jsoff_t c = 0; c < ncaptures && ca < 30; c++)
+        call_args[ca++] = arr_get(js, result, c);
+      call_args[ca++] = tov((double)position);
+      call_args[ca++] = str;
+      replacement = js_call_with_this(js, replace_value, js_mkundef(), call_args, ca);
+    } else {
+      replacement = replace_str;
+    }
+    if (is_err(replacement)) { if (sb.is_dynamic) free(sb.buffer); return replacement; }
+    jsval_t rep_str = js_tostring_val(js, replacement);
+    if (is_err(rep_str)) { if (sb.is_dynamic) free(sb.buffer); return rep_str; }
+
+    if (position >= next_src_pos) {
+      str_off = vstr(js, str, &str_len);
+      if (position > next_src_pos)
+        string_builder_append(&sb, (const char *)&js->mem[str_off + next_src_pos], position - next_src_pos);
+      jsoff_t rep_len, rep_off = vstr(js, rep_str, &rep_len);
+      string_builder_append(&sb, (const char *)&js->mem[rep_off], rep_len);
+      next_src_pos = position + matched_len;
+    }
+  }
+
+  str_off = vstr(js, str, &str_len);
+  if (next_src_pos < str_len)
+    string_builder_append(&sb, (const char *)&js->mem[str_off + next_src_pos], str_len - next_src_pos);
+
+  return string_builder_finalize(js, &sb);
+}
+
+jsval_t builtin_regexp_symbol_search(struct js *js, jsval_t *args, int nargs) {
+  jsval_t rx = js->this_val;
+  if (!is_object_type(rx))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "RegExp.prototype[@@search] called on non-object");
+
+  jsval_t str = nargs > 0 ? js_tostring_val(js, args[0]) : js_mkstr(js, "undefined", 9);
+  if (is_err(str)) return str;
+
+  jsval_t prev_li = js_getprop_fallback(js, rx, "lastIndex");
+  if (is_err(prev_li)) return prev_li;
+  js_setprop(js, rx, js_mkstr(js, "lastIndex", 9), tov(0));
+
+  jsval_t result = regexp_exec_abstract(js, rx, str);
+  if (is_err(result)) return result;
+
+  jsval_t cur_li = js_getprop_fallback(js, rx, "lastIndex");
+  if (is_err(cur_li)) return cur_li;
+  js_setprop(js, rx, js_mkstr(js, "lastIndex", 9), prev_li);
+
+  if (vtype(result) == T_NULL) return tov(-1);
+
+  jsval_t idx = js_getprop_fallback(js, result, "index");
+  if (is_err(idx)) return idx;
+  return vtype(idx) == T_NUM ? idx : tov(-1);
 }
 
 jsval_t builtin_regexp_symbol_split(struct js *js, jsval_t *args, int nargs) {
@@ -23742,6 +23931,15 @@ ant_t *js_create(void *buf, size_t len) {
   js_setprop(js, regexp_proto, js_mkstr(js, "exec", 4), js_mkfun(builtin_regexp_exec));
   js_setprop(js, regexp_proto, js_mkstr(js, "toString", 8), js_mkfun(builtin_regexp_toString));
   
+  js_mkprop_fast(js, regexp_proto, "global", 6, js_false);
+  js_mkprop_fast(js, regexp_proto, "ignoreCase", 10, js_false);
+  js_mkprop_fast(js, regexp_proto, "multiline", 9, js_false);
+  js_mkprop_fast(js, regexp_proto, "dotAll", 6, js_false);
+  js_mkprop_fast(js, regexp_proto, "unicode", 7, js_false);
+  js_mkprop_fast(js, regexp_proto, "sticky", 6, js_false);
+  js_mkprop_fast(js, regexp_proto, "hasIndices", 10, js_false);
+  js_mkprop_fast(js, regexp_proto, "unicodeSets", 11, js_false);
+  
   jsval_t promise_proto = js_mkobj(js);
   set_proto(js, promise_proto, object_proto);
   js_setprop(js, promise_proto, js_mkstr(js, "then", 4), js_mkfun(builtin_promise_then));
@@ -24733,6 +24931,15 @@ static jsval_t js_call_internal(struct js *js, jsval_t func, jsval_t bound_this,
       js->this_val = saved_this;
       
       if (combined_args) free(combined_args);
+      return res;
+    }
+    
+    jsval_t builtin_slot = get_slot(js, func_obj, SLOT_BUILTIN);
+    if (vtype(builtin_slot) == T_NUM && (int)tod(builtin_slot) == BUILTIN_OBJECT) {
+      jsval_t saved_this = js->this_val;
+      if (use_bound_this) js->this_val = bound_this;
+      jsval_t res = builtin_Object(js, args, nargs);
+      js->this_val = saved_this;
       return res;
     }
     

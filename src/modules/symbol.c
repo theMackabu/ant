@@ -384,6 +384,10 @@ void init_symbol_module(void) {
   jsval_t regexp_ctor = js_get(js, js_glob(js), "RegExp");
   jsval_t regexp_proto = js_get(js, regexp_ctor, "prototype");
   js_set(js, regexp_proto, g_split.key, js_mkfun(builtin_regexp_symbol_split));
+  js_set(js, regexp_proto, g_match.key, js_mkfun(builtin_regexp_symbol_match));
+  js_set(js, regexp_proto, g_replace.key, js_mkfun(builtin_regexp_symbol_replace));
+  js_set(js, regexp_proto, g_search.key, js_mkfun(builtin_regexp_symbol_search));
+  js_set_getter_desc(js, regexp_proto, "flags", 5, js_mkfun(builtin_regexp_flags_getter), JS_DESC_C);
   
   jsval_t promise_ctor = js_get(js, js_glob(js), "Promise");
   jsval_t promise_proto = js_get(js, promise_ctor, "prototype");

@@ -120,10 +120,53 @@ static void print_commands(void **argtable) {
   print_flag(stdout, (flag_help_t){ .l = "no-color", .g = "disable colored output" });
 }
 
+typedef struct { 
+  int argc; 
+  char **argv; 
+} argv_split_t;
+
+static bool is_valued_flag(const char *arg) {
+  return 
+    strcmp(arg, "-e") == 0 || 
+    strcmp(arg, "--eval") == 0 || 
+    strcmp(arg, "--localstorage-file") == 0;
+}
+
 static int find_argv_token_index(int argc, char **argv, const char *token) {
   if (!token) return -1;
   for (int i = 1; i < argc; i++) if (argv[i] == token) return i;
   return -1;
+}
+
+static argv_split_t split_script_args(int *argc, char **argv) {
+  for (int i = 1; i < *argc; i++) {
+    if (strcmp(argv[i], "--") == 0) {
+      argv_split_t tail = { *argc - i - 1, argv + i + 1 };
+      *argc = i;
+      return tail;
+    }
+    if (argv[i][0] == '-') {
+      if (is_valued_flag(argv[i]) && i + 1 < *argc) i++;
+      continue;
+    }
+    argv_split_t tail = { *argc - i - 1, argv + i + 1 };
+    *argc = i + 1;
+    return tail;
+  }
+  return (argv_split_t){ 0, NULL };
+}
+
+static argv_split_t build_process_argv(int argc, char **argv, const char *module, argv_split_t script) {
+  if (!module || script.argc == 0) return (argv_split_t){ argc, argv };
+
+  int total = 2 + script.argc;
+  char **out = try_oom(sizeof(char*) * (total + 1));
+
+  out[0] = argv[0]; out[1] = (char *)module;
+  for (int i = 0; i < script.argc; i++) out[2 + i] = script.argv[i];
+  out[total] = NULL;
+
+  return (argv_split_t){ total, out };
 }
 
 static char *read_stdin(size_t *len) {
@@ -286,8 +329,11 @@ int main(int argc, char *argv[]) {
     else filtered_argv[filtered_argc++] = argv[i];
   }
   
-  argc = filtered_argc;
+  argc = filtered_argc; 
   argv = filtered_argv;
+  
+  argv_split_t script_tail = split_script_args(&argc, argv);
+  argv_split_t proc_argv = { 0, NULL };
 
   #define ARG_ITEMS(X) \
     X(struct arg_str *, eval, arg_str0("e", "eval", "<script>", "evaluate script")) \
@@ -311,6 +357,7 @@ int main(int argc, char *argv[]) {
   #undef REF
   
   #define CLEANUP_ARGS_AND_ARGV() ({ \
+    if (proc_argv.argv != argv) free(proc_argv.argv); \
     arg_freetable(argtable, ARGTABLE_COUNT); \
     free(filtered_argv); \
   })
@@ -440,7 +487,8 @@ int main(int argc, char *argv[]) {
   }
   
   js_setstackbase(js, (void *)&stack_base);
-  ant_runtime_init(js, argc, argv, localstorage_file);
+  proc_argv = build_process_argv(argc, argv, module_file, script_tail);
+  ant_runtime_init(js, proc_argv.argc, proc_argv.argv, localstorage_file);
 
   init_symbol_module();
   init_collections_module();
