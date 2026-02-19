@@ -11685,8 +11685,12 @@ static jsval_t js_func_decl_async(struct js *js) {
   return js_mkundef();
 }
 
-static jsval_t js_block_or_stmt(struct js *js) {
-  if (next(js) == TOK_LBRACE) return js_block(js, !(js->flags & F_NOEXEC));
+static jsval_t js_block_or_stmt_pos(struct js *js, jsoff_t *end_pos) {
+  if (next(js) == TOK_LBRACE) {
+    jsval_t res = js_block(js, !(js->flags & F_NOEXEC));
+    if (end_pos) *end_pos = js->pos;
+    return res;
+  }
   uint8_t stmt_tok = js->tok;
   jsval_t res = resolveprop(js, js_stmt(js));
   bool is_block_stmt = (
@@ -11696,8 +11700,15 @@ static jsval_t js_block_or_stmt(struct js *js) {
     stmt_tok == TOK_SWITCH || stmt_tok == TOK_TRY ||
     stmt_tok == TOK_LBRACE || stmt_tok == TOK_ASYNC
   );
+  if (end_pos) {
+    *end_pos = (!is_block_stmt && !js->consumed) ? js->toff : js->pos;
+  }
   if (!is_block_stmt) js->consumed = 0;
   return res;
+}
+
+static inline jsval_t js_block_or_stmt(struct js *js) {
+  return js_block_or_stmt_pos(js, NULL);
 }
 
 typedef struct {
@@ -11786,9 +11797,8 @@ static jsval_t js_if(struct js *js) {
   if (cond_true) res = blk;
   if (exe && !cond_true) js->flags &= (uint8_t) ~F_NOEXEC;
   
-  if (lookahead(js) == TOK_ELSE) {
-    js->consumed = 1;
-    next(js);
+  if (next(js) == TOK_ELSE || lookahead(js) == TOK_ELSE) {
+    if (js->tok != TOK_ELSE) { js->consumed = 1; next(js); }
     js->consumed = 1;
     if (cond_true) js->flags |= F_NOEXEC;
     blk = js_block_or_stmt(js);
@@ -12287,10 +12297,9 @@ static jsval_t js_for(struct js *js) {
     
     if (exe) loop_block_init(js, &forin_loop_ctx);
     js->flags |= F_NOEXEC;
-    v = js_block_or_stmt(js);
+    v = js_block_or_stmt_pos(js, &body_end_pos);
     if (is_err2(&v, &res)) goto done;
     
-    body_end_pos = js->pos;
     body_end_token = js->tok;
     body_end_consumed = js->consumed;
     body_end_toff = js->toff;
@@ -12339,10 +12348,9 @@ static jsval_t js_for(struct js *js) {
     
     if (exe) loop_block_init(js, &forof_loop_ctx);
     js->flags |= F_NOEXEC;
-    v = js_block_or_stmt(js);
+    v = js_block_or_stmt_pos(js, &body_end_pos);
     if (is_err2(&v, &res)) goto done;
     
-    body_end_pos = js->pos;
     body_end_token = js->tok;
     body_end_consumed = js->consumed;
     body_end_toff = js->toff;
@@ -12417,10 +12425,9 @@ static jsval_t js_for(struct js *js) {
   }
   
   js->flags |= F_NOEXEC;
-  v = js_block_or_stmt(js);
+  v = js_block_or_stmt_pos(js, &pos4);
   if (exe) js->flags = flags;
   if (is_err2(&v, &res)) goto done;
-  pos4 = js->pos;
   
   while (!(flags & F_NOEXEC)) {
     js_gc_safepoint(js);
@@ -12526,9 +12533,9 @@ static jsval_t js_while(struct js *js) {
     js->flags |= F_NOEXEC;
   }
   
-  v = js_block_or_stmt(js);
+  jsoff_t body_end;
+  v = js_block_or_stmt_pos(js, &body_end);
   if (is_err(v)) { res = v; goto done; }
-  jsoff_t body_end = js->pos;
   
   if (exe) {
     while (true) {
@@ -13369,7 +13376,7 @@ static jsval_t js_switch(struct js *js) {
   uint8_t preserve = 0;
   if (js->flags & F_RETURN) preserve = js->flags & (F_RETURN | F_NOEXEC);
   if (js->flags & F_THROW) preserve = js->flags & (F_THROW | F_NOEXEC);
-  js->flags = (flags & ~F_SWITCH) | preserve;
+  js->flags = flags | preserve;
   
   return res;
 }
