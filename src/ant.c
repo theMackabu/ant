@@ -6734,6 +6734,13 @@ static iter_action_t spread_utarray_iter_cb(struct js *js, jsval_t value, void *
 }
 
 static jsval_t append_spread_to_utarray(struct js *js, UT_array *args, jsval_t spread_value) {
+  if (vtype(spread_value) == T_ARR) {
+    jsoff_t len = js_arr_len(js, spread_value);
+    for (jsoff_t i = 0; i < len; i++) {
+      jsval_t elem = arr_get(js, spread_value, i);
+      utarray_push_back(args, &elem);
+    } return js_mkundef();
+  }
   spread_utarray_ctx_t ctx = { .args = args };
   return iter_foreach(js, spread_value, spread_utarray_iter_cb, &ctx);
 }
@@ -6765,6 +6772,11 @@ static iter_action_t spread_dynargs_iter_cb(struct js *js, jsval_t value, void *
 }
 
 static jsval_t append_spread_to_dynargs(struct js *js, spread_dynargs_ctx_t *ctx, jsval_t spread_value) {
+  if (vtype(spread_value) == T_ARR) {
+    jsoff_t len = js_arr_len(js, spread_value);
+    for (jsoff_t i = 0; i < len; i++) spread_dynargs_push(ctx, arr_get(js, spread_value, i));
+    return js_mkundef();
+  }
   return iter_foreach(js, spread_value, spread_dynargs_iter_cb, ctx);
 }
 
@@ -7579,6 +7591,7 @@ jsval_t call_js_internal(
 
   jsval_t res; jsval_t *tc_args = NULL;
   int tc_argc = 0; bool tc_iter = false;
+  bool tc_pushed_this = false;
 
   for (;;) {
   jsval_t target_this = peek_this();
@@ -7773,6 +7786,9 @@ jsval_t call_js_internal(
     fnlen = js->tc.fnlen;
     closure_scope = js->tc.closure_scope;
     func_val = js->tc.func;
+    if (tc_pushed_this) pop_this();
+    push_this(js->tc.this_val);
+    tc_pushed_this = true;
     bound_args = NULL;
     bound_argc = 0;
     tc_args = js->tc.args;
@@ -7784,6 +7800,7 @@ jsval_t call_js_internal(
 
   break;
   } // end trampoline
+  if (tc_pushed_this) pop_this();
 
   free(tc_args);
   tc_args = NULL;
@@ -8322,6 +8339,7 @@ skip_fields:
           js->tc.pending = true;
           js->tc.func = func;
           js->tc.closure_scope = closure_scope;
+          js->tc.this_val = peek_this();
           js->tc.code_str = code_str;
           js->tc.fnlen = fnlen;
           js->tc.args = tc_argv;
@@ -9132,6 +9150,30 @@ static iter_action_t spread_arr_literal_iter_cb(struct js *js, jsval_t value, vo
 }
 
 static jsval_t append_spread_to_array_literal(struct js *js, jsval_t arr, jsoff_t *idx, jsval_t spread_value) {
+  uint8_t t = vtype(spread_value);
+  if (t == T_ARR) {
+    jsoff_t len = js_arr_len(js, spread_value);
+    for (jsoff_t i = 0; i < len; i++) {
+      arr_set(js, arr, *idx, arr_get(js, spread_value, i)); (*idx)++;
+    }
+    return js_mkundef();
+  }
+  if (t == T_STR) {
+    jsoff_t len, off = vstr(js, spread_value, &len);
+    for (jsoff_t i = 0; i < len; ) {
+      unsigned char c = (unsigned char)js->mem[off + i];
+      jsoff_t cb = 1;
+      if (c >= 0x80) {
+        int seq = utf8_sequence_length(c);
+        cb = seq > 0 ? (jsoff_t)seq : 1;
+        if (i + cb > len) cb = len - i;
+      }
+      arr_set(js, arr, *idx, js_mkstr(js, (char *)&js->mem[off + i], cb));
+      (*idx)++; i += cb;
+      off = vstr(js, spread_value, &len);
+    }
+    return js_mkundef();
+  }
   spread_arr_literal_ctx_t ctx = { .arr = arr, .idx = idx };
   return iter_foreach(js, spread_value, spread_arr_literal_iter_cb, &ctx);
 }

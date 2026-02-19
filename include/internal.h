@@ -73,6 +73,7 @@ struct js {
   struct {
     jsval_t func;
     jsval_t closure_scope;
+    jsval_t this_val;
     const char *code_str;
     jsoff_t fnlen;
     jsval_t *args;
