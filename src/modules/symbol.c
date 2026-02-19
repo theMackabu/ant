@@ -18,6 +18,11 @@ static wellknown_sym_t g_iterator = {0};
 static wellknown_sym_t g_asyncIterator = {0};
 static wellknown_sym_t g_toStringTag = {0};
 static wellknown_sym_t g_hasInstance = {0};
+static wellknown_sym_t g_match = {0};
+static wellknown_sym_t g_replace = {0};
+static wellknown_sym_t g_search = {0};
+static wellknown_sym_t g_split = {0};
+static wellknown_sym_t g_isConcatSpreadable = {0};
 static wellknown_sym_t g_observable = {0};
 static wellknown_sym_t g_toPrimitive = {0};
 static wellknown_sym_t g_species = {0};
@@ -33,6 +38,11 @@ const char *get_toStringTag_sym_key(void) { return g_toStringTag.key; }
 const char *get_observable_sym_key(void) { return g_observable.key; }
 const char *get_toPrimitive_sym_key(void) { return g_toPrimitive.key; }
 const char *get_hasInstance_sym_key(void) { return g_hasInstance.key; }
+const char *get_match_sym_key(void) { return g_match.key; }
+const char *get_replace_sym_key(void) { return g_replace.key; }
+const char *get_search_sym_key(void) { return g_search.key; }
+const char *get_split_sym_key(void) { return g_split.key; }
+const char *get_isConcatSpreadable_sym_key(void) { return g_isConcatSpreadable.key; }
 const char *get_species_sym_key(void) { return g_species.key; }
 const char *get_unscopables_sym_key(void) { return g_unscopables.key; }
 
@@ -41,6 +51,11 @@ static const struct { jsval_t *sym; const char *name; } sym_table[] = {
   { &g_asyncIterator.sym, "Symbol.asyncIterator" },
   { &g_toStringTag.sym, "Symbol.toStringTag" },
   { &g_hasInstance.sym, "Symbol.hasInstance" },
+  { &g_match.sym, "Symbol.match" },
+  { &g_replace.sym, "Symbol.replace" },
+  { &g_search.sym, "Symbol.search" },
+  { &g_split.sym, "Symbol.split" },
+  { &g_isConcatSpreadable.sym, "Symbol.isConcatSpreadable" },
   { &g_observable.sym, "Symbol.observable" },
   { &g_toPrimitive.sym, "Symbol.toPrimitive" },
   { &g_species.sym, "Symbol.species" },
@@ -62,7 +77,8 @@ int sym_to_prop_key(jsval_t sym, char *buf, size_t bufsz) {
 jsval_t get_wellknown_sym_by_key(const char *key, size_t key_len) {
   static const struct { wellknown_sym_t *sym; } table[] = {
     { &g_iterator }, { &g_asyncIterator }, { &g_toStringTag },
-    { &g_hasInstance }, { &g_observable }, { &g_toPrimitive }, 
+    { &g_hasInstance }, { &g_match }, { &g_replace }, { &g_search }, { &g_split },
+    { &g_isConcatSpreadable }, { &g_observable }, { &g_toPrimitive },
     { &g_species }, { &g_unscopables }
   };
   for (size_t i = 0; i < sizeof(table)/sizeof(table[0]); i++) {
@@ -301,6 +317,11 @@ void init_symbol_module(void) {
   init_symbol(js, &g_observable, "Symbol.observable");
   init_symbol(js, &g_toPrimitive, "Symbol.toPrimitive");
   init_symbol(js, &g_hasInstance, "Symbol.hasInstance");
+  init_symbol(js, &g_match, "Symbol.match");
+  init_symbol(js, &g_replace, "Symbol.replace");
+  init_symbol(js, &g_search, "Symbol.search");
+  init_symbol(js, &g_split, "Symbol.split");
+  init_symbol(js, &g_isConcatSpreadable, "Symbol.isConcatSpreadable");
   init_symbol(js, &g_species, "Symbol.species");
   init_symbol(js, &g_unscopables, "Symbol.unscopables");
 
@@ -317,6 +338,11 @@ void init_symbol_module(void) {
   js_set(js, symbol_ctor, "asyncIterator", g_asyncIterator.sym);
   js_set(js, symbol_ctor, "toStringTag", g_toStringTag.sym);
   js_set(js, symbol_ctor, "hasInstance", g_hasInstance.sym);
+  js_set(js, symbol_ctor, "match", g_match.sym);
+  js_set(js, symbol_ctor, "replace", g_replace.sym);
+  js_set(js, symbol_ctor, "search", g_search.sym);
+  js_set(js, symbol_ctor, "split", g_split.sym);
+  js_set(js, symbol_ctor, "isConcatSpreadable", g_isConcatSpreadable.sym);
   js_set(js, symbol_ctor, "observable", g_observable.sym);
   js_set(js, symbol_ctor, "toPrimitive", g_toPrimitive.sym);
   js_set(js, symbol_ctor, "species", g_species.sym);
@@ -354,12 +380,19 @@ void init_symbol_module(void) {
   jsval_t date_ctor = js_get(js, js_glob(js), "Date");
   jsval_t date_proto = js_get(js, date_ctor, "prototype");
   js_set(js, date_proto, g_toPrimitive.key, js_mkfun(date_toPrimitive));
+
+  jsval_t regexp_ctor = js_get(js, js_glob(js), "RegExp");
+  jsval_t regexp_proto = js_get(js, regexp_ctor, "prototype");
+  js_set(js, regexp_proto, g_split.key, js_mkfun(builtin_regexp_symbol_split));
   
   jsval_t promise_ctor = js_get(js, js_glob(js), "Promise");
   jsval_t promise_proto = js_get(js, promise_ctor, "prototype");
   js_set(js, promise_proto, g_toStringTag.key, js_mkstr(js, "Promise", 7));
 
+  jsval_t math_obj = js_get(js, js_glob(js), "Math");
+  if (is_object_type(math_obj)) js_set(js, math_obj, g_toStringTag.key, js_mkstr(js, "Math", 4));
+
   js_define_species_getter(js, promise_ctor);
   js_define_species_getter(js, array_ctor);
-  js_define_species_getter(js, js_get(js, js_glob(js), "RegExp"));
+  js_define_species_getter(js, regexp_ctor);
 }

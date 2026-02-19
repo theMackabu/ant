@@ -18,6 +18,11 @@ const char *get_toStringTag_sym_key(void);
 const char *get_observable_sym_key(void);
 const char *get_toPrimitive_sym_key(void);
 const char *get_hasInstance_sym_key(void);
+const char *get_match_sym_key(void);
+const char *get_replace_sym_key(void);
+const char *get_search_sym_key(void);
+const char *get_split_sym_key(void);
+const char *get_isConcatSpreadable_sym_key(void);
 const char *get_species_sym_key(void);
 const char *get_unscopables_sym_key(void);
 

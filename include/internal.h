@@ -161,6 +161,7 @@ jsval_t setprop_interned(struct js *js, jsval_t obj, const char *key, size_t len
 
 jsval_t coerce_to_str(struct js *js, jsval_t v);
 jsval_t coerce_to_str_concat(struct js *js, jsval_t v);
+jsval_t builtin_regexp_symbol_split(struct js *js, jsval_t *args, int nargs);
 
 js_intern_stats_t js_intern_stats(void);
 js_cstr_t js_to_cstr(struct js *js, jsval_t value, char *stack_buf, size_t stack_size);
