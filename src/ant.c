@@ -11797,7 +11797,7 @@ static jsval_t js_if(struct js *js) {
   if (cond_true) res = blk;
   if (exe && !cond_true) js->flags &= (uint8_t) ~F_NOEXEC;
   
-  if (next(js) == TOK_ELSE || lookahead(js) == TOK_ELSE) {
+  if ((!js->consumed && js->tok == TOK_ELSE) || lookahead(js) == TOK_ELSE) {
     if (js->tok != TOK_ELSE) { js->consumed = 1; next(js); }
     js->consumed = 1;
     if (cond_true) js->flags |= F_NOEXEC;
