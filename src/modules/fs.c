@@ -135,7 +135,10 @@ typedef enum {
   FS_OP_READ_BYTES,
   FS_OP_EXISTS,
   FS_OP_READDIR,
-  FS_OP_ACCESS
+  FS_OP_ACCESS,
+  FS_OP_WRITE_FD,
+  FS_OP_OPEN,
+  FS_OP_CLOSE
 } fs_op_type_t;
 
 typedef struct fs_request_s {
@@ -1327,6 +1330,428 @@ static jsval_t builtin_fs_readdir(struct js *js, jsval_t *args, int nargs) {
   return req->promise;
 }
 
+static void on_write_fd_complete(uv_fs_t *uv_req) {
+  fs_request_t *req = (fs_request_t *)uv_req->data;
+  
+  if (uv_req->result < 0) {
+    req->failed = 1;
+    req->error_msg = strdup(uv_strerror((int)uv_req->result));
+    req->completed = 1;
+    complete_request(req);
+    return;
+  }
+  
+  req->completed = 1;
+  js_resolve_promise(req->js, req->promise, js_mknum((double)uv_req->result));
+  remove_pending_request(req);
+  free_fs_request(req);
+}
+
+static jsval_t builtin_fs_writeSync(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 2) return js_mkerr(js, "writeSync() requires fd and data arguments");
+  if (vtype(args[0]) != T_NUM) return js_mkerr(js, "writeSync() fd must be a number");
+  
+  int fd = (int)js_getnum(args[0]);
+  
+  if (vtype(args[1]) == T_STR) {
+    size_t str_len;
+    const char *str = js_getstr(js, args[1], &str_len);
+    if (!str) return js_mkerr(js, "Failed to get string");
+    
+    int64_t position = -1;
+    if (nargs >= 3 && vtype(args[2]) == T_NUM)
+      position = (int64_t)js_getnum(args[2]);
+    
+    uv_fs_t req;
+    uv_buf_t buf = uv_buf_init((char *)str, (unsigned int)str_len);
+    int result = uv_fs_write(uv_default_loop(), &req, fd, &buf, 1, position, NULL);
+    uv_fs_req_cleanup(&req);
+    
+    if (result < 0) return js_mkerr(js, "writeSync failed: %s", uv_strerror(result));
+    return js_mknum((double)result);
+  }
+  
+  jsval_t ta_data_val = js_get_slot(js, args[1], SLOT_BUFFER);
+  TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
+  if (!ta_data || !ta_data->buffer || !ta_data->buffer->data)
+    return js_mkerr(js, "writeSync() second argument must be a Buffer, TypedArray, DataView, or string");
+  
+  uint8_t *buf_data = ta_data->buffer->data + ta_data->byte_offset;
+  size_t buf_len = ta_data->byte_length;
+  size_t offset = 0;
+  size_t length = buf_len;
+  int64_t position = -1;
+  
+  if (nargs >= 3) {
+    if (vtype(args[2]) == T_OBJ) {
+      jsval_t off_val = js_get(js, args[2], "offset");
+      jsval_t len_val = js_get(js, args[2], "length");
+      jsval_t pos_val = js_get(js, args[2], "position");
+      if (vtype(off_val) == T_NUM) offset = (size_t)js_getnum(off_val);
+      if (vtype(len_val) == T_NUM) length = (size_t)js_getnum(len_val);
+      else length = buf_len - offset;
+      if (vtype(pos_val) == T_NUM) position = (int64_t)js_getnum(pos_val);
+    } else if (vtype(args[2]) == T_NUM) {
+      offset = (size_t)js_getnum(args[2]);
+      length = buf_len - offset;
+      if (nargs >= 4 && vtype(args[3]) == T_NUM) length = (size_t)js_getnum(args[3]);
+      if (nargs >= 5 && vtype(args[4]) == T_NUM) position = (int64_t)js_getnum(args[4]);
+    }
+  }
+  
+  if (offset > buf_len) return js_mkerr(js, "offset is out of bounds");
+  if (offset + length > buf_len) return js_mkerr(js, "length extends beyond buffer");
+  
+  uv_fs_t req;
+  uv_buf_t buf = uv_buf_init((char *)(buf_data + offset), (unsigned int)length);
+  int result = uv_fs_write(uv_default_loop(), &req, fd, &buf, 1, position, NULL);
+  uv_fs_req_cleanup(&req);
+  
+  if (result < 0) return js_mkerr(js, "writeSync failed: %s", uv_strerror(result));
+  return js_mknum((double)result);
+}
+
+static jsval_t builtin_fs_write_fd(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 2) return js_mkerr(js, "write() requires fd and data arguments");
+  if (vtype(args[0]) != T_NUM) return js_mkerr(js, "write() fd must be a number");
+  
+  int fd = (int)js_getnum(args[0]);
+  const char *write_data;
+  size_t write_len;
+  int64_t position = -1;
+  
+  if (vtype(args[1]) == T_STR) {
+    size_t str_len;
+    const char *str = js_getstr(js, args[1], &str_len);
+    if (!str) return js_mkerr(js, "Failed to get string");
+    
+    if (nargs >= 3 && vtype(args[2]) == T_NUM)
+      position = (int64_t)js_getnum(args[2]);
+    
+    write_data = str;
+    write_len = str_len;
+  } else {
+    jsval_t ta_data_val = js_get_slot(js, args[1], SLOT_BUFFER);
+    TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
+    if (!ta_data || !ta_data->buffer || !ta_data->buffer->data)
+      return js_mkerr(js, "write() second argument must be a Buffer, TypedArray, DataView, or string");
+    
+    uint8_t *buf_data = ta_data->buffer->data + ta_data->byte_offset;
+    size_t buf_len = ta_data->byte_length;
+    size_t offset = 0;
+    size_t length = buf_len;
+    
+    if (nargs >= 3) {
+      if (vtype(args[2]) == T_OBJ) {
+        jsval_t off_val = js_get(js, args[2], "offset");
+        jsval_t len_val = js_get(js, args[2], "length");
+        jsval_t pos_val = js_get(js, args[2], "position");
+        if (vtype(off_val) == T_NUM) offset = (size_t)js_getnum(off_val);
+        if (vtype(len_val) == T_NUM) length = (size_t)js_getnum(len_val);
+        else length = buf_len - offset;
+        if (vtype(pos_val) == T_NUM) position = (int64_t)js_getnum(pos_val);
+      } else if (vtype(args[2]) == T_NUM) {
+        offset = (size_t)js_getnum(args[2]);
+        length = buf_len - offset;
+        if (nargs >= 4 && vtype(args[3]) == T_NUM) length = (size_t)js_getnum(args[3]);
+        if (nargs >= 5 && vtype(args[4]) == T_NUM) position = (int64_t)js_getnum(args[4]);
+      }
+    }
+    
+    if (offset > buf_len) return js_mkerr(js, "offset is out of bounds");
+    if (offset + length > buf_len) return js_mkerr(js, "length extends beyond buffer");
+    
+    write_data = (const char *)(buf_data + offset);
+    write_len = length;
+  }
+  
+  fs_request_t *req = calloc(1, sizeof(fs_request_t));
+  if (!req) return js_mkerr(js, "Out of memory");
+  
+  req->js = js;
+  req->op_type = FS_OP_WRITE_FD;
+  req->promise = js_mkpromise(js);
+  req->fd = fd;
+  req->data = malloc(write_len);
+  if (!req->data) {
+    free(req);
+    return js_mkerr(js, "Out of memory");
+  }
+  memcpy(req->data, write_data, write_len);
+  req->data_len = write_len;
+  req->uv_req.data = req;
+  
+  utarray_push_back(pending_requests, &req);
+  
+  uv_buf_t buf = uv_buf_init(req->data, (unsigned int)req->data_len);
+  int result = uv_fs_write(uv_default_loop(), &req->uv_req, req->fd, &buf, 1, position, on_write_fd_complete);
+  
+  if (result < 0) {
+    req->failed = 1;
+    req->error_msg = strdup(uv_strerror(result));
+    req->completed = 1;
+    complete_request(req);
+  }
+  
+  return req->promise;
+}
+
+static jsval_t builtin_fs_writevSync(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 2) return js_mkerr(js, "writevSync() requires fd and buffers arguments");
+  if (vtype(args[0]) != T_NUM) return js_mkerr(js, "writevSync() fd must be a number");
+  
+  int fd = (int)js_getnum(args[0]);
+  jsoff_t arr_len = js_arr_len(js, args[1]);
+  if (arr_len == 0) return js_mknum(0);
+  
+  int64_t position = -1;
+  if (nargs >= 3 && vtype(args[2]) == T_NUM)
+    position = (int64_t)js_getnum(args[2]);
+  
+  uv_buf_t *bufs = calloc((size_t)arr_len, sizeof(uv_buf_t));
+  if (!bufs) return js_mkerr(js, "Out of memory");
+  
+  for (jsoff_t i = 0; i < arr_len; i++) {
+    jsval_t item = js_arr_get(js, args[1], i);
+    jsval_t ta_val = js_get_slot(js, item, SLOT_BUFFER);
+    TypedArrayData *ta = (TypedArrayData *)js_gettypedarray(ta_val);
+    if (!ta || !ta->buffer || !ta->buffer->data) {
+      free(bufs);
+      return js_mkerr(js, "writevSync() buffers must contain ArrayBufferViews");
+    }
+    bufs[i] = uv_buf_init((char *)(ta->buffer->data + ta->byte_offset), (unsigned int)ta->byte_length);
+  }
+  
+  uv_fs_t req;
+  int result = uv_fs_write(uv_default_loop(), &req, fd, bufs, (unsigned int)arr_len, position, NULL);
+  uv_fs_req_cleanup(&req);
+  free(bufs);
+  
+  if (result < 0) return js_mkerr(js, "writevSync failed: %s", uv_strerror(result));
+  return js_mknum((double)result);
+}
+
+static jsval_t builtin_fs_writev_fd(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 2) return js_mkerr(js, "writev() requires fd and buffers arguments");
+  if (vtype(args[0]) != T_NUM) return js_mkerr(js, "writev() fd must be a number");
+  
+  int fd = (int)js_getnum(args[0]);
+  jsoff_t arr_len = js_arr_len(js, args[1]);
+  
+  if (arr_len == 0) {
+    jsval_t promise = js_mkpromise(js);
+    js_resolve_promise(js, promise, js_mknum(0));
+    return promise;
+  }
+  
+  int64_t position = -1;
+  if (nargs >= 3 && vtype(args[2]) == T_NUM)
+    position = (int64_t)js_getnum(args[2]);
+  
+  size_t total_len = 0;
+  for (jsoff_t i = 0; i < arr_len; i++) {
+    jsval_t item = js_arr_get(js, args[1], i);
+    jsval_t ta_val = js_get_slot(js, item, SLOT_BUFFER);
+    TypedArrayData *ta = (TypedArrayData *)js_gettypedarray(ta_val);
+    if (!ta || !ta->buffer || !ta->buffer->data)
+      return js_mkerr(js, "writev() buffers must contain ArrayBufferViews");
+    total_len += ta->byte_length;
+  }
+  
+  fs_request_t *req = calloc(1, sizeof(fs_request_t));
+  if (!req) return js_mkerr(js, "Out of memory");
+  
+  req->data = malloc(total_len);
+  if (!req->data) {
+    free(req);
+    return js_mkerr(js, "Out of memory");
+  }
+  
+  size_t off = 0;
+  for (jsoff_t i = 0; i < arr_len; i++) {
+    jsval_t item = js_arr_get(js, args[1], i);
+    jsval_t ta_val = js_get_slot(js, item, SLOT_BUFFER);
+    TypedArrayData *ta = (TypedArrayData *)js_gettypedarray(ta_val);
+    memcpy(req->data + off, ta->buffer->data + ta->byte_offset, ta->byte_length);
+    off += ta->byte_length;
+  }
+  
+  req->js = js;
+  req->op_type = FS_OP_WRITE_FD;
+  req->promise = js_mkpromise(js);
+  req->fd = fd;
+  req->data_len = total_len;
+  req->uv_req.data = req;
+  
+  utarray_push_back(pending_requests, &req);
+  
+  uv_buf_t buf = uv_buf_init(req->data, (unsigned int)total_len);
+  int result = uv_fs_write(uv_default_loop(), &req->uv_req, req->fd, &buf, 1, position, on_write_fd_complete);
+  
+  if (result < 0) {
+    req->failed = 1;
+    req->error_msg = strdup(uv_strerror(result));
+    req->completed = 1;
+    complete_request(req);
+  }
+  
+  return req->promise;
+}
+
+static int parse_open_flags(struct js *js, jsval_t arg) {
+  if (vtype(arg) == T_NUM) return (int)js_getnum(arg);
+  if (vtype(arg) != T_STR) return O_RDONLY;
+  
+  size_t len;
+  const char *str = js_getstr(js, arg, &len);
+  if (!str) return O_RDONLY;
+  
+  if (len == 1 && str[0] == 'r')                      return O_RDONLY;
+  if (len == 2 && memcmp(str, "r+", 2) == 0)          return O_RDWR;
+  if (len == 1 && str[0] == 'w')                      return O_WRONLY | O_CREAT | O_TRUNC;
+  if (len == 2 && memcmp(str, "wx", 2) == 0)          return O_WRONLY | O_CREAT | O_TRUNC | O_EXCL;
+  if (len == 2 && memcmp(str, "w+", 2) == 0)          return O_RDWR | O_CREAT | O_TRUNC;
+  if (len == 3 && memcmp(str, "wx+", 3) == 0)         return O_RDWR | O_CREAT | O_TRUNC | O_EXCL;
+  if (len == 1 && str[0] == 'a')                      return O_WRONLY | O_CREAT | O_APPEND;
+  if (len == 2 && memcmp(str, "ax", 2) == 0)          return O_WRONLY | O_CREAT | O_APPEND | O_EXCL;
+  if (len == 2 && memcmp(str, "a+", 2) == 0)          return O_RDWR | O_CREAT | O_APPEND;
+  if (len == 3 && memcmp(str, "ax+", 3) == 0)         return O_RDWR | O_CREAT | O_APPEND | O_EXCL;
+  
+  return O_RDONLY;
+}
+
+static jsval_t builtin_fs_openSync(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "openSync() requires a path argument");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "openSync() path must be a string");
+  
+  size_t path_len;
+  char *path = js_getstr(js, args[0], &path_len);
+  if (!path) return js_mkerr(js, "Failed to get path string");
+  
+  int flags = (nargs >= 2) ? parse_open_flags(js, args[1]) : O_RDONLY;
+  int mode = (nargs >= 3 && vtype(args[2]) == T_NUM) ? (int)js_getnum(args[2]) : 0666;
+  
+  char *path_cstr = strndup(path, path_len);
+  if (!path_cstr) return js_mkerr(js, "Out of memory");
+  
+  uv_fs_t req;
+  int result = uv_fs_open(uv_default_loop(), &req, path_cstr, flags, mode, NULL);
+  uv_fs_req_cleanup(&req);
+  free(path_cstr);
+  
+  if (result < 0) return js_mkerr(js, "openSync failed: %s", uv_strerror(result));
+  return js_mknum((double)result);
+}
+
+static jsval_t builtin_fs_closeSync(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "closeSync() requires a fd argument");
+  if (vtype(args[0]) != T_NUM) return js_mkerr(js, "closeSync() fd must be a number");
+  
+  int fd = (int)js_getnum(args[0]);
+  
+  uv_fs_t req;
+  int result = uv_fs_close(uv_default_loop(), &req, fd, NULL);
+  uv_fs_req_cleanup(&req);
+  
+  if (result < 0) return js_mkerr(js, "closeSync failed: %s", uv_strerror(result));
+  return js_mkundef();
+}
+
+static void on_open_fd_complete(uv_fs_t *uv_req) {
+  fs_request_t *req = (fs_request_t *)uv_req->data;
+  
+  if (uv_req->result < 0) {
+    req->failed = 1;
+    req->error_msg = strdup(uv_strerror((int)uv_req->result));
+    req->completed = 1;
+    complete_request(req);
+    return;
+  }
+  
+  req->completed = 1;
+  js_resolve_promise(req->js, req->promise, js_mknum((double)uv_req->result));
+  remove_pending_request(req);
+  free_fs_request(req);
+}
+
+static jsval_t builtin_fs_open_fd(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "open() requires a path argument");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "open() path must be a string");
+  
+  size_t path_len;
+  char *path = js_getstr(js, args[0], &path_len);
+  if (!path) return js_mkerr(js, "Failed to get path string");
+  
+  int flags = (nargs >= 2) ? parse_open_flags(js, args[1]) : O_RDONLY;
+  int mode = (nargs >= 3 && vtype(args[2]) == T_NUM) ? (int)js_getnum(args[2]) : 0666;
+  
+  fs_request_t *req = calloc(1, sizeof(fs_request_t));
+  if (!req) return js_mkerr(js, "Out of memory");
+  
+  req->js = js;
+  req->op_type = FS_OP_OPEN;
+  req->promise = js_mkpromise(js);
+  req->path = strndup(path, path_len);
+  req->uv_req.data = req;
+  
+  utarray_push_back(pending_requests, &req);
+  int result = uv_fs_open(uv_default_loop(), &req->uv_req, req->path, flags, mode, on_open_fd_complete);
+  
+  if (result < 0) {
+    req->failed = 1;
+    req->error_msg = strdup(uv_strerror(result));
+    req->completed = 1;
+    complete_request(req);
+  }
+  
+  return req->promise;
+}
+
+static void on_close_fd_complete(uv_fs_t *uv_req) {
+  fs_request_t *req = (fs_request_t *)uv_req->data;
+  
+  if (uv_req->result < 0) {
+    req->failed = 1;
+    req->error_msg = strdup(uv_strerror((int)uv_req->result));
+    req->completed = 1;
+    complete_request(req);
+    return;
+  }
+  
+  req->completed = 1;
+  js_resolve_promise(req->js, req->promise, js_mkundef());
+  remove_pending_request(req);
+  free_fs_request(req);
+}
+
+static jsval_t builtin_fs_close_fd(struct js *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "close() requires a fd argument");
+  if (vtype(args[0]) != T_NUM) return js_mkerr(js, "close() fd must be a number");
+  
+  int fd = (int)js_getnum(args[0]);
+  
+  fs_request_t *req = calloc(1, sizeof(fs_request_t));
+  if (!req) return js_mkerr(js, "Out of memory");
+  
+  req->js = js;
+  req->op_type = FS_OP_CLOSE;
+  req->promise = js_mkpromise(js);
+  req->fd = fd;
+  req->uv_req.data = req;
+  
+  utarray_push_back(pending_requests, &req);
+  int result = uv_fs_close(uv_default_loop(), &req->uv_req, req->fd, on_close_fd_complete);
+  
+  if (result < 0) {
+    req->failed = 1;
+    req->error_msg = strdup(uv_strerror(result));
+    req->completed = 1;
+    complete_request(req);
+  }
+  
+  return req->promise;
+}
+
 void init_fs_module(void) {
   utarray_new(pending_requests, &ut_ptr_icd);
   
@@ -1354,9 +1779,16 @@ jsval_t fs_library(struct js *js) {
   js_set(js, lib, "readFile", js_mkfun(builtin_fs_readFile));
   js_set(js, lib, "readFileSync", js_mkfun(builtin_fs_readFileSync));
   js_set(js, lib, "stream", js_mkfun(builtin_fs_readBytes));
-  js_set(js, lib, "open", js_mkfun(builtin_fs_readBytesSync));
+  js_set(js, lib, "open", js_mkfun(builtin_fs_open_fd));
+  js_set(js, lib, "openSync", js_mkfun(builtin_fs_openSync));
+  js_set(js, lib, "close", js_mkfun(builtin_fs_close_fd));
+  js_set(js, lib, "closeSync", js_mkfun(builtin_fs_closeSync));
   js_set(js, lib, "writeFile", js_mkfun(builtin_fs_writeFile));
   js_set(js, lib, "writeFileSync", js_mkfun(builtin_fs_writeFileSync));
+  js_set(js, lib, "write", js_mkfun(builtin_fs_write_fd));
+  js_set(js, lib, "writeSync", js_mkfun(builtin_fs_writeSync));
+  js_set(js, lib, "writev", js_mkfun(builtin_fs_writev_fd));
+  js_set(js, lib, "writevSync", js_mkfun(builtin_fs_writevSync));
   js_set(js, lib, "appendFileSync", js_mkfun(builtin_fs_appendFileSync));
   js_set(js, lib, "copyFileSync", js_mkfun(builtin_fs_copyFileSync));
   js_set(js, lib, "renameSync", js_mkfun(builtin_fs_renameSync));
@@ -1381,6 +1813,13 @@ jsval_t fs_library(struct js *js) {
   js_set(js, constants, "R_OK", js_mknum(R_OK));
   js_set(js, constants, "W_OK", js_mknum(W_OK));
   js_set(js, constants, "X_OK", js_mknum(X_OK));
+  js_set(js, constants, "O_RDONLY", js_mknum(O_RDONLY));
+  js_set(js, constants, "O_WRONLY", js_mknum(O_WRONLY));
+  js_set(js, constants, "O_RDWR", js_mknum(O_RDWR));
+  js_set(js, constants, "O_CREAT", js_mknum(O_CREAT));
+  js_set(js, constants, "O_EXCL", js_mknum(O_EXCL));
+  js_set(js, constants, "O_TRUNC", js_mknum(O_TRUNC));
+  js_set(js, constants, "O_APPEND", js_mknum(O_APPEND));
   js_set(js, lib, "constants", constants);
 
   return lib;
