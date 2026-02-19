@@ -57,6 +57,14 @@ uint32_t utf8_decode(const unsigned char *buf, size_t len, int *seq_len) {
   return 0xFFFD;
 }
 
+size_t utf8_char_len_at(const char *str, size_t byte_len, size_t pos) {
+  if (pos >= byte_len) return 1;
+  int seq = utf8_sequence_length((unsigned char)str[pos]);
+  if (seq <= 0) return 1;
+  if (pos + (size_t)seq > byte_len) return byte_len - pos;
+  return (size_t)seq;
+}
+
 size_t utf8_strlen(const char *str, size_t byte_len) {
   size_t count = 0;
   const unsigned char *p = (const unsigned char *)str;
