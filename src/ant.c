@@ -8104,7 +8104,11 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
   
   uint8_t tok = js->tok, flags = js->flags;
   jsval_t res = js_mkundef();
-  
+
+  jsval_t saved_new_target = js->new_target;
+  js->new_target = js->pending_ntg;
+  js->pending_ntg = js_mkundef();
+
   if (vtype(func) == T_FUNC) {
     jsval_t func_obj = mkval(T_OBJ, vdata(func));
     jsval_t cfunc_slot = get_slot(js, func_obj, SLOT_CFUNC);
@@ -8219,6 +8223,7 @@ static jsval_t do_call_op(struct js *js, jsval_t func, jsval_t args) {
         uint8_t st = vtype(super_ctor);
         if (st == T_FUNC || st == T_CFUNC) {
           js->code = code; js->clen = clen; js->pos = pos;
+          js->pending_ntg = js->new_target;
           res = do_call_op(js, super_ctor, args);
           js->super_val = saved_super;
           js->current_func = saved_func;
@@ -8341,6 +8346,7 @@ skip_fields:
   }
   
 restore_state:
+  js->new_target = saved_new_target;
   js->code = code, js->clen = clen, js->pos = pos;
   js->flags = (flags & ~F_THROW) | (js->flags & F_THROW);
   js->tok = tok;
@@ -9879,6 +9885,7 @@ static jsval_t js_literal(struct js *js) {
         
         return mkval(T_FUNC, vdata(bound));
       }
+      js->pending_ntg = js->new_target;
       return super_ctor;
     }
     
@@ -10368,7 +10375,7 @@ static jsval_t js_unary(struct js *js) {
     if (is_err(ctor)) { return ctor; }
     if (vtype(ctor) == T_PROP || vtype(ctor) == T_PROPREF) ctor = resolveprop(js, ctor);
     if (vtype(obj) == T_OBJ && (vtype(ctor) == T_FUNC || vtype(ctor) == T_CFUNC)) set_slot(js, obj, SLOT_CTOR, ctor);
-    js->new_target = ctor;
+    js->pending_ntg = ctor;
 
     jsval_t result;
     push_this(obj);
@@ -10376,6 +10383,7 @@ static jsval_t js_unary(struct js *js) {
       jsval_t params = js_call_params(js);
       if (is_err(params)) { 
         pop_this(); 
+        js->pending_ntg = js_mkundef();
         js->new_target = saved_new_target; return params; 
       }
       result = do_op(js, TOK_CALL, ctor, params);
@@ -22956,6 +22964,7 @@ ant_t *js_create(void *buf, size_t len) {
   js->this_val = js->scope;
   js->super_val = js_mkundef();
   js->new_target = js_mkundef();
+  js->pending_ntg = js_mkundef();
   js->errmsg_size = 4096;
   js->errmsg = (char *)malloc(js->errmsg_size);
   if (js->errmsg) js->errmsg[0] = '\0';

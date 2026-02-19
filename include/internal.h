@@ -45,6 +45,7 @@ struct js {
   jsval_t this_val;       // 'this' value for currently executing function
   jsval_t super_val;      // 'super' value for class methods
   jsval_t new_target;     // constructor called with 'new', undefined otherwise
+  jsval_t pending_ntg;    // staged new_target for next do_call_op
   jsval_t module_ns;      // current ESM module namespace
   uint8_t *mem;           // available JS memory
   jsoff_t size;           // memory size
