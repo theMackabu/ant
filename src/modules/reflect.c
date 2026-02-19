@@ -150,10 +150,10 @@ static jsval_t reflect_construct(struct js *js, jsval_t *args, int nargs) {
   
   jsval_t result = js_call_with_this(js, target, new_obj, call_args, arg_count);
   js->new_target = saved_new_target;
-  if (call_args) free(call_args);
   
-  int result_type = vtype(result);
-  if (result_type == T_FUNC || is_special_object(result)) return result;
+  if (call_args) free(call_args);
+  if (is_object_type(result)) return result;
+  
   return new_obj;
 }
 

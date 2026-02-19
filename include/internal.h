@@ -121,8 +121,12 @@ enum {
 #define PROPREF_STACK_SIZE      2048
 #define PRIM_PROPREF_STACK_SIZE 512
 
-#define MAX_STRINGIFY_DEPTH 64
-#define MAX_MULTIREF_OBJS   128
+#define MAX_STRINGIFY_DEPTH   64
+#define MAX_PROTO_CHAIN_DEPTH 256
+#define MAX_MULTIREF_OBJS     128
+
+#define PROTO_WALK_F_OBJECT_ONLY (1u << 0)
+#define PROTO_WALK_F_LOOKUP      (1u << 1)
 
 #define NANBOX_PREFIX     0x7FC0000000000000ULL
 #define NANBOX_PREFIX_CHK 0x3FEULL
@@ -158,6 +162,7 @@ jsval_t coerce_to_str_concat(struct js *js, jsval_t v);
 
 js_intern_stats_t js_intern_stats(void);
 js_cstr_t js_to_cstr(struct js *js, jsval_t value, char *stack_buf, size_t stack_size);
+jsval_t js_instance_proto_from_new_target(struct js *js, jsval_t fallback_proto);
 
 jsoff_t lkp(struct js *js, jsval_t obj, const char *buf, size_t len);
 jsoff_t lkp_proto(struct js *js, jsval_t obj, const char *buf, size_t len);

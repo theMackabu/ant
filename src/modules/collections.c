@@ -724,11 +724,18 @@ static jsval_t builtin_Map(ant_t *js, jsval_t *args, int nargs) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Map constructor requires 'new'");
   }
   
-  jsval_t map_obj = js_mkobj(js);
+  jsval_t map_obj = js->this_val;
+  if (vtype(map_obj) != T_OBJ) map_obj = js_mkobj(js);
+  if (is_err(map_obj)) return map_obj;
   jsoff_t obj_offset = (jsoff_t)vdata(map_obj);
   
   jsval_t map_proto = js_get_ctor_proto(js, "Map", 3);
-  if (is_special_object(map_proto)) js_set_proto(js, map_obj, map_proto);
+  jsval_t instance_proto = js_instance_proto_from_new_target(js, map_proto);
+  
+  if (is_special_object(instance_proto)) js_set_proto(js, map_obj, instance_proto);
+  if (vtype(js->new_target) == T_FUNC || vtype(js->new_target) == T_CFUNC) {
+    js_set_slot(js, map_obj, SLOT_CTOR, js->new_target);
+  }
   
   map_entry_t **map_head = ant_calloc(sizeof(map_entry_t *));
   if (!map_head) return js_mkerr(js, "out of memory");
@@ -775,11 +782,18 @@ static jsval_t builtin_Set(ant_t *js, jsval_t *args, int nargs) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Set constructor requires 'new'");
   }
   
-  jsval_t set_obj = js_mkobj(js);
+  jsval_t set_obj = js->this_val;
+  if (vtype(set_obj) != T_OBJ) set_obj = js_mkobj(js);
+  if (is_err(set_obj)) return set_obj;
   jsoff_t obj_offset = (jsoff_t)vdata(set_obj);
   
   jsval_t set_proto = js_get_ctor_proto(js, "Set", 3);
-  if (is_special_object(set_proto)) js_set_proto(js, set_obj, set_proto);
+  jsval_t instance_proto = js_instance_proto_from_new_target(js, set_proto);
+  
+  if (is_special_object(instance_proto)) js_set_proto(js, set_obj, instance_proto);
+  if (vtype(js->new_target) == T_FUNC || vtype(js->new_target) == T_CFUNC) {
+    js_set_slot(js, set_obj, SLOT_CTOR, js->new_target);
+  }
   
   set_entry_t **set_head = ant_calloc(sizeof(set_entry_t *));
   if (!set_head) return js_mkerr(js, "out of memory");
@@ -815,10 +829,18 @@ static jsval_t builtin_WeakMap(ant_t *js, jsval_t *args, int nargs) {
   if (vtype(js->new_target) == T_UNDEF) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "WeakMap constructor requires 'new'");
   }
-  jsval_t wm_obj = js_mkobj(js);
+  
+  jsval_t wm_obj = js->this_val;
+  if (vtype(wm_obj) != T_OBJ) wm_obj = js_mkobj(js);
+  if (is_err(wm_obj)) return wm_obj;
   
   jsval_t wm_proto = js_get_ctor_proto(js, "WeakMap", 7);
-  if (is_special_object(wm_proto)) js_set_proto(js, wm_obj, wm_proto);
+  jsval_t instance_proto = js_instance_proto_from_new_target(js, wm_proto);
+  
+  if (is_special_object(instance_proto)) js_set_proto(js, wm_obj, instance_proto);
+  if (vtype(js->new_target) == T_FUNC || vtype(js->new_target) == T_CFUNC) {
+    js_set_slot(js, wm_obj, SLOT_CTOR, js->new_target);
+  }
   
   weakmap_entry_t **wm_head = ant_calloc(sizeof(weakmap_entry_t *));
   if (!wm_head) return js_mkerr(js, "out of memory");
@@ -865,9 +887,17 @@ static jsval_t builtin_WeakSet(ant_t *js, jsval_t *args, int nargs) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "WeakSet constructor requires 'new'");
   }
   
-  jsval_t ws_obj = js_mkobj(js);
+  jsval_t ws_obj = js->this_val;
+  if (vtype(ws_obj) != T_OBJ) ws_obj = js_mkobj(js);
+  if (is_err(ws_obj)) return ws_obj;
+  
   jsval_t ws_proto = js_get_ctor_proto(js, "WeakSet", 7);
-  if (is_special_object(ws_proto)) js_set_proto(js, ws_obj, ws_proto);
+  jsval_t instance_proto = js_instance_proto_from_new_target(js, ws_proto);
+  
+  if (is_special_object(instance_proto)) js_set_proto(js, ws_obj, instance_proto);
+  if (vtype(js->new_target) == T_FUNC || vtype(js->new_target) == T_CFUNC) {
+    js_set_slot(js, ws_obj, SLOT_CTOR, js->new_target);
+  }
   
   weakset_entry_t **ws_head = ant_calloc(sizeof(weakset_entry_t *));
   if (!ws_head) return js_mkerr(js, "out of memory");
