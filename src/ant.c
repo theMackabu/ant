@@ -5157,13 +5157,23 @@ static jsval_t validate_dynamic_function_source(struct js *js, const char *param
 static inline uint8_t lookahead(struct js *js) {
   uint8_t old = js->tok, tok = 0;
   uint8_t old_consumed = js->consumed;
+  
   jsoff_t pos = js->pos;
+  jsoff_t toff = js->toff;
+  jsoff_t tlen = js->tlen;
+  
+  bool had_newline = js->had_newline;
   int stream_pos = js->token_stream_pos;
   
   js->consumed = 1;
   tok = next(js);
+  
   js->pos = pos;
   js->tok = old;
+  js->toff = toff;
+  js->tlen = tlen;
+  
+  js->had_newline = had_newline;
   js->consumed = old_consumed;
   js->token_stream_pos = stream_pos;
   
@@ -10928,17 +10938,17 @@ static jsval_t js_ternary(struct js *js) {
     uint8_t flags = js->flags;
     js->consumed = 1;
     if (js_truthy(js, resolveprop(js, res))) {
-      res = js_ternary(js);
+      res = js_assignment(js);
       js->flags |= F_NOEXEC;
       EXPECT(TOK_COLON, js->flags = flags);
-      js_ternary(js);
+      js_assignment(js);
       js->flags = flags;
     } else {
       js->flags |= F_NOEXEC;
-      js_ternary(js);
+      js_assignment(js);
       EXPECT(TOK_COLON, js->flags = flags);
       js->flags = flags;
-      res = js_ternary(js);
+      res = js_assignment(js);
     }
   }
   return res;
