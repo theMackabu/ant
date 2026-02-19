@@ -22913,28 +22913,42 @@ static jsval_t esm_make_file_url(struct js *js, const char *path) {
   return val;
 }
 
+static bool esm_parse_name(struct js *js, const char **name, size_t *len, bool *is_string) {
+  if (next(js) == TOK_STRING) {
+    jsval_t sv = js_str_literal(js);
+    jsoff_t slen;  jsoff_t soff = vstr(js, sv, &slen);
+    *name = (const char *)&js->mem[soff]; *len = slen;
+    if (is_string) *is_string = true;
+  } else if (next(js) == TOK_IDENTIFIER || next(js) == TOK_DEFAULT) {
+    *name = &js->code[js->toff];
+    *len = js->tlen;
+    if (is_string) *is_string = false;
+  } else return false;
+  
+  js->consumed = 1;
+  return true;
+}
+
 static int esm_parse_named_imports(struct js *js, esm_import_binding_t *bindings, int max_bindings) {
   int count = 0;
   
   while (next(js) != TOK_RBRACE && count < max_bindings) {
-    if (next(js) != TOK_IDENTIFIER && next(js) != TOK_DEFAULT) {
+    bool import_is_string = false;
+    const char *import_name;
+    size_t import_len;
+    
+    if (!esm_parse_name(js, &import_name, &import_len, &import_is_string))
       return -1;
-    }
-    const char *import_name = &js->code[js->toff];
-    size_t import_len = js->tlen;
-    js->consumed = 1;
     
     const char *local_name = import_name;
     size_t local_len = import_len;
     
     if (next(js) == TOK_AS) {
       js->consumed = 1;
-      if (next(js) != TOK_IDENTIFIER && next(js) != TOK_DEFAULT) {
+      if (!esm_parse_name(js, &local_name, &local_len, NULL))
         return -1;
-      }
-      local_name = &js->code[js->toff];
-      local_len = js->tlen;
-      js->consumed = 1;
+    } else if (import_is_string) {
+      return -1;
     }
     
     bindings[count].import_name = import_name;
@@ -23317,10 +23331,8 @@ static jsval_t js_export_stmt(struct js *js) {
     
     if (next(js) == TOK_AS) {
       js->consumed = 1;
-      EXPECT(TOK_IDENTIFIER);
-      alias_name = &js->code[js->toff];
-      alias_len = js->tlen;
-      js->consumed = 1;
+      if (!esm_parse_name(js, &alias_name, &alias_len, NULL))
+        return js_mkerr_typed(js, JS_ERR_SYNTAX, "expected identifier or string after 'as'");
     }
     
     EXPECT(TOK_FROM);
@@ -23364,23 +23376,15 @@ static jsval_t js_export_stmt(struct js *js) {
     while (next(js) != TOK_RBRACE) {
       if (spec_count >= 64) return js_mkerr(js, "too many export specifiers");
       
-      if (next(js) != TOK_IDENTIFIER && next(js) != TOK_DEFAULT) {
-        return js_mkerr_typed(js, JS_ERR_SYNTAX, "expected identifier or 'default' in export list");
-      }
-      specs[spec_count].local = &js->code[js->toff];
-      specs[spec_count].local_len = js->tlen;
+      if (!esm_parse_name(js, &specs[spec_count].local, &specs[spec_count].local_len, NULL))
+        return js_mkerr_typed(js, JS_ERR_SYNTAX, "expected identifier, string, or 'default' in export list");
       specs[spec_count].exported = specs[spec_count].local;
       specs[spec_count].export_len = specs[spec_count].local_len;
-      js->consumed = 1;
       
       if (next(js) == TOK_AS) {
         js->consumed = 1;
-        if (next(js) != TOK_IDENTIFIER && next(js) != TOK_DEFAULT) {
-          return js_mkerr_typed(js, JS_ERR_SYNTAX, "expected identifier or 'default' after 'as'");
-        }
-        specs[spec_count].exported = &js->code[js->toff];
-        specs[spec_count].export_len = js->tlen;
-        js->consumed = 1;
+        if (!esm_parse_name(js, &specs[spec_count].exported, &specs[spec_count].export_len, NULL))
+          return js_mkerr_typed(js, JS_ERR_SYNTAX, "expected identifier, string, or 'default' after 'as'");
       }
       
       spec_count++;
