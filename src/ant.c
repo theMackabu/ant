@@ -364,7 +364,8 @@ static const char *typestr_raw(uint8_t t) {
   const char *names[] = { 
     "object", "prop", "string", "undefined", "null", "number",
     "boolean", "function", "coderef", "cfunc", "err", "array", 
-    "promise", "typedarray", "bigint", "propref", "symbol", "generator", "ffi", "ntarg"
+    "promise", "typedarray", "bigint", "propref", "symbol", 
+    "generator", "ffi", "ntarg"
   };
   
   return (t < sizeof(names) / sizeof(names[0])) ? names[t] : "??";
@@ -8417,7 +8418,7 @@ skip_fields:
           int argc = (int)utarray_len(call_args);
           res = start_async_in_coroutine(js, code_str, fnlen, closure_scope, argv, argc);
           utarray_free(call_args);
-        } else if (is_tail && !is_arrow && !is_bound && vtype(js->new_target) == T_UNDEF) {
+        } else if (is_tail && vtype(js->new_target) == T_UNDEF) {
           UT_array *tc_args_arr;
           utarray_new(tc_args_arr, &jsval_icd);
           if (bound_args) {
@@ -10313,6 +10314,7 @@ static jsval_t js_call_dot(struct js *js) {
   }
   js_call_dot_loop:
   bool opt_chain_skip = false;
+  bool saved_tail_for_chain = js->tail_ctx;
   uint8_t cd_tok;
   while (
     cd_tok = next(js), 
@@ -10403,13 +10405,20 @@ static jsval_t js_call_dot(struct js *js) {
         } else func_this = js->this_val;
       }
       push_this(func_this);
+      js->tail_ctx = false;
       jsval_t params = js_call_params(js);
       if (is_err(params)) {
         pop_this();
         return params;
       }
+      uint8_t la = lookahead(js);
+      if (la != TOK_LPAREN && la != TOK_DOT && la != TOK_LBRACKET
+          && la != TOK_OPTIONAL_CHAIN && la != TOK_TEMPLATE) {
+        js->tail_ctx = saved_tail_for_chain;
+      }
       res = do_op(js, TOK_CALL, res, params);
       pop_this();
+      if (res == (jsval_t)T_TAILCALL) return res;
       if (is_super_call && !is_err(res) && is_object_type(res)) {
         jsoff_t proto_off = lkp_interned(js, mkval(T_OBJ, vdata(js->current_func)), INTERN_PROTOTYPE, 9);
         if (proto_off) set_proto(js, res, resolveprop(js, mkval(T_PROP, proto_off)));
@@ -13171,7 +13180,7 @@ static enum tail_scan scan_tail_span(const char *code, jsoff_t clen, jsoff_t sta
 static bool is_tail_call_expr(struct js *js) {
   const char *code = js->code;
   jsoff_t clen = js->clen;
-  jsoff_t start = skiptonext(code, clen, js->pos, NULL);
+  jsoff_t start = skiptonext(code, clen, js->toff, NULL);
   return scan_tail_span(code, clen, start, clen) == TAIL_OK;
 }
 
@@ -13185,8 +13194,9 @@ static jsval_t js_return(struct js *js) {
   if (nxt != TOK_SEMICOLON && nxt != TOK_RBRACE && nxt != TOK_EOF && !js->had_newline) {
     bool prev_tail = js->tail_ctx;
     if (exe && in_func && js->has_tail_calls && is_tail_call_expr(js)) js->tail_ctx = true;
-    res = resolveprop(js, js_expr_comma(js));
+    res = js_expr_comma(js);
     js->tail_ctx = prev_tail;
+    if (res != (jsval_t)T_TAILCALL) res = resolveprop(js, res);
   }
   
   if (exe && !in_func) return js_mkundef();
