@@ -7874,6 +7874,7 @@ jsval_t call_js_internal(
     js->tail_ctx = false;
     if (res != (jsval_t)T_TAILCALL) res = resolveprop(js, res);
   } else {
+    js->tail_ctx = false;
     res = js_eval(js, &fn[pf->body_start], pf->body_len);
     if (!is_err(res) && !(js->flags & F_RETURN)) res = js_mkundef();
   }
@@ -11713,7 +11714,8 @@ static jsval_t js_block_or_stmt_pos(struct js *js, jsoff_t *end_pos) {
     return res;
   }
   uint8_t stmt_tok = js->tok;
-  jsval_t res = resolveprop(js, js_stmt(js));
+  jsval_t res = js_stmt(js);
+  if (res != (jsval_t)T_TAILCALL) res = resolveprop(js, res);
   bool is_block_stmt = (
     stmt_tok == TOK_FUNC || stmt_tok == TOK_CLASS || 
     stmt_tok == TOK_IF || stmt_tok == TOK_WHILE || 
