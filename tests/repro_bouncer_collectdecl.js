@@ -39,15 +39,10 @@ function reverse(xs) {
 const n = Number(process.argv[2] || 5000);
 const xs = mkList(n);
 
-let badOverflow = false;
 try {
   collectBad(xs);
-} catch (_) {
-  badOverflow = true;
-}
-
-if (!badOverflow) {
-  console.log('FAIL: expected collectBad to overflow');
+} catch {
+  console.log('FAIL: collectBad should not overflow');
   process.exit(1);
 }
 
