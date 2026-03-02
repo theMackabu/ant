@@ -64,7 +64,7 @@ jobs:
       build_timestamp: ${{ needs.prepare.outputs.timestamp }}
 
   summary:
-    name: Build Summary
+    name: Version
     needs: [build, build-mbedtls]
     runs-on: ubuntu-latest
     if: ${{ !cancelled() && (needs.build.result != 'skipped' || needs.build-mbedtls.result != 'skipped') }}
