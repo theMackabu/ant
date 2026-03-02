@@ -1,4 +1,5 @@
 #ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #define dlopen(name, flags) ((void*)LoadLibraryA(name))
 #define dlsym(handle, name) ((void*)GetProcAddress((HMODULE)(handle), (name)))

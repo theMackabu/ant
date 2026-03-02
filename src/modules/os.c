@@ -6,9 +6,10 @@
 #include <errno.h>
 
 #ifdef _WIN32
-#include <windows.h>
+#define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <windows.h>
 #include <iphlpapi.h>
 #include <lmcons.h>
 #ifdef _MSC_VER

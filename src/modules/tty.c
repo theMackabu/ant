@@ -12,6 +12,7 @@
 
 #ifdef _WIN32
 #include <io.h>
+#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #define ANT_WRITE_FD _write
 #define ANT_ISATTY _isatty

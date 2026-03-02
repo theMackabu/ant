@@ -1,6 +1,7 @@
 #include <compat.h> // IWYU pragma: keep
 
 #ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #define NAPI_DLOPEN(name, flags) ((void*)LoadLibraryA(name))
 #define NAPI_DLSYM(handle, name) ((void*)GetProcAddress((HMODULE)(handle), (name)))

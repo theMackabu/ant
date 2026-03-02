@@ -22,7 +22,6 @@
 #include "esm/remote.h"
 #include "esm/loader.h"
 
-#include "silver/ast.h"
 #include "silver/lexer.h"
 #include "silver/compiler.h"
 #include "silver/engine.h"

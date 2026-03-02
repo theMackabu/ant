@@ -10,6 +10,7 @@
 
 #ifdef _WIN32
 #include <conio.h>
+#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <io.h>
 #define STDIN_FILENO 0
