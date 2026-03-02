@@ -11,7 +11,7 @@ const bind = (m, f) =>
 const pure = v => MkM(tc => eta => ({ tag: 1, h2: { h2: tc, h3: v } }));
 
 let chain = pure(0);
-for (let i = 0; i < 800; i++) {
+for (let i = 0; i < 1000; i++) {
   chain = bind(chain, v => pure(v + 1));
 }
 const result = chain.h1({})(0);

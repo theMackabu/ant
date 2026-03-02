@@ -8,7 +8,7 @@ async function run() {
   const testDir = '/tmp/ant-spec-test-async';
   const testFile = path.join(testDir, 'test.txt');
 
-  await fs.mkdir(testDir);
+  await fs.mkdir(testDir, { recursive: true });
   test('mkdir creates dir', await fs.exists(testDir), true);
 
   await fs.writeFile(testFile, 'hello world');

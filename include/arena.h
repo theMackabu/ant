@@ -21,11 +21,13 @@
 #define ARENA_GROW_INCREMENT (8ULL * 1024 * 1024)
 
 static inline void *mantissa_chk(void *p, const char *func) {
-  if (p && ((uintptr_t)p >> 48) != 0) {
-    fprintf(stderr, 
-      "FATAL: %s returned pointer %p outside 48-bit NaN-boxing range\n"
+  if (p && ((uintptr_t)p >> 47) != 0) {
+    fprintf(
+      stderr,
+      "FATAL: %s returned pointer %p outside 47-bit NaN-boxing range\n"
       "Please report this issue with your OS/architecture details.\n", func, p
-    ); abort();
+    );
+    abort();
   }
   
   return p;

@@ -81,11 +81,30 @@ test('concat', 'hello'.concat(' ', 'world'), 'hello world');
 test('lastIndexOf', 'hello world world'.lastIndexOf('world'), 12);
 
 test('String.fromCharCode', String.fromCharCode(65, 66, 67), 'ABC');
+test('String.raw tagged template', String.raw`line1\nline2`, 'line1\\nline2');
+test('String.raw substitutions', String.raw({ raw: ['a', 'b', 'c'] }, 1, 2), 'a1b2c');
 
 test('empty string length', ''.length, 0);
 test('empty indexOf', ''.indexOf('x'), -1);
 test('empty includes empty', ''.includes(''), true);
 test('empty startsWith empty', ''.startsWith(''), true);
+
+let nfc = '\u0041\u006d\u0065\u0301\u006c\u0069\u0065';
+test('normalize default (NFC)', nfc.normalize(), 'Am\u00E9lie');
+test('normalize NFC explicit', nfc.normalize('NFC'), 'Am\u00E9lie');
+
+let composed = 'Am\u00E9lie';
+test('normalize NFD', composed.normalize('NFD'), 'Ame\u0301lie');
+
+test('normalize NFKC fi ligature', '\uFB01'.normalize('NFKC'), 'fi');
+test('normalize NFKC fullwidth', '\uFF21'.normalize('NFKC'), 'A');
+
+test('normalize NFKD fi ligature', '\uFB01'.normalize('NFKD'), 'fi');
+test('normalize NFKD fullwidth', '\uFF21'.normalize('NFKD'), 'A');
+
+test('normalize empty string', ''.normalize(), '');
+test('normalize ascii passthrough', 'hello'.normalize(), 'hello');
+test('normalize no arg same as NFC', '\u00E9'.normalize(), '\u00E9');
 
 let template = `Value: ${1 + 2}`;
 test('template literal', template, 'Value: 3');

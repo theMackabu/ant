@@ -82,7 +82,7 @@ int wait_queue_notify(WaitQueue *queue, int32_t *address, int count) {
   return notified;
 }
 
-static bool get_atomic_array_data(struct js *js, jsval_t this_val, TypedArrayData **out_data, uint8_t **out_ptr) {
+static bool get_atomic_array_data(ant_t *js, jsval_t this_val, TypedArrayData **out_data, uint8_t **out_ptr) {
   jsval_t ta_data_val = js_get_slot(js, this_val, SLOT_BUFFER);
   TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
   if (!ta_data || !ta_data->buffer) return false;
@@ -93,7 +93,7 @@ static bool get_atomic_array_data(struct js *js, jsval_t this_val, TypedArrayDat
 }
 
 // Atomics.add(typedArray, index, value)
-static jsval_t js_atomics_add(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_atomics_add(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 3) {
     return js_mkerr(js, "Atomics.add requires 3 arguments");
   }
@@ -151,7 +151,7 @@ static jsval_t js_atomics_add(struct js *js, jsval_t *args, int nargs) {
 }
 
 // Atomics.and(typedArray, index, value)
-static jsval_t js_atomics_and(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_atomics_and(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 3) {
     return js_mkerr(js, "Atomics.and requires 3 arguments");
   }
@@ -209,7 +209,7 @@ static jsval_t js_atomics_and(struct js *js, jsval_t *args, int nargs) {
 }
 
 // Atomics.compareExchange(typedArray, index, expectedValue, replacementValue)
-static jsval_t js_atomics_compareExchange(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_atomics_compareExchange(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 4) {
     return js_mkerr(js, "Atomics.compareExchange requires 4 arguments");
   }
@@ -277,7 +277,7 @@ static jsval_t js_atomics_compareExchange(struct js *js, jsval_t *args, int narg
 }
 
 // Atomics.exchange(typedArray, index, value)
-static jsval_t js_atomics_exchange(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_atomics_exchange(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 3) {
     return js_mkerr(js, "Atomics.exchange requires 3 arguments");
   }
@@ -335,7 +335,7 @@ static jsval_t js_atomics_exchange(struct js *js, jsval_t *args, int nargs) {
 }
 
 // Atomics.isLockFree(size)
-static jsval_t js_atomics_isLockFree(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_atomics_isLockFree(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) {
     return js_mkerr(js, "Atomics.isLockFree requires 1 argument");
   }
@@ -364,7 +364,7 @@ static jsval_t js_atomics_isLockFree(struct js *js, jsval_t *args, int nargs) {
 }
 
 // Atomics.load(typedArray, index)
-static jsval_t js_atomics_load(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_atomics_load(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) {
     return js_mkerr(js, "Atomics.load requires 2 arguments");
   }
@@ -421,7 +421,7 @@ static jsval_t js_atomics_load(struct js *js, jsval_t *args, int nargs) {
 }
 
 // Atomics.or(typedArray, index, value)
-static jsval_t js_atomics_or(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_atomics_or(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 3) {
     return js_mkerr(js, "Atomics.or requires 3 arguments");
   }
@@ -479,7 +479,7 @@ static jsval_t js_atomics_or(struct js *js, jsval_t *args, int nargs) {
 }
 
 // Atomics.store(typedArray, index, value)
-static jsval_t js_atomics_store(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_atomics_store(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 3) {
     return js_mkerr(js, "Atomics.store requires 3 arguments");
   }
@@ -536,7 +536,7 @@ static jsval_t js_atomics_store(struct js *js, jsval_t *args, int nargs) {
 }
 
 // Atomics.sub(typedArray, index, value)
-static jsval_t js_atomics_sub(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_atomics_sub(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 3) {
     return js_mkerr(js, "Atomics.sub requires 3 arguments");
   }
@@ -594,7 +594,7 @@ static jsval_t js_atomics_sub(struct js *js, jsval_t *args, int nargs) {
 }
 
 // Atomics.xor(typedArray, index, value)
-static jsval_t js_atomics_xor(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_atomics_xor(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 3) {
     return js_mkerr(js, "Atomics.xor requires 3 arguments");
   }
@@ -652,7 +652,7 @@ static jsval_t js_atomics_xor(struct js *js, jsval_t *args, int nargs) {
 }
 
 // Atomics.wait(typedArray, index, value, timeout)
-static jsval_t js_atomics_wait(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_atomics_wait(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 3) {
     return js_mkerr(js, "Atomics.wait requires at least 3 arguments");
   }
@@ -725,7 +725,7 @@ static jsval_t js_atomics_wait(struct js *js, jsval_t *args, int nargs) {
 }
 
 // Atomics.notify(typedArray, index, count)
-static jsval_t js_atomics_notify(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_atomics_notify(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) {
     return js_mkerr(js, "Atomics.notify requires at least 2 arguments");
   }
@@ -759,7 +759,7 @@ static jsval_t js_atomics_notify(struct js *js, jsval_t *args, int nargs) {
 }
 
 // Atomics.waitAsync(typedArray, index, value, timeout)
-static jsval_t js_atomics_waitAsync(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_atomics_waitAsync(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 3) {
     return js_mkerr(js, "Atomics.waitAsync requires at least 3 arguments");
   }
@@ -799,7 +799,7 @@ static jsval_t js_atomics_waitAsync(struct js *js, jsval_t *args, int nargs) {
 }
 
 // Atomics.pause()
-static jsval_t js_atomics_pause(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_atomics_pause(ant_t *js, jsval_t *args, int nargs) {
   (void)js;
   (void)args;
   (void)nargs;
@@ -814,7 +814,7 @@ static jsval_t js_atomics_pause(struct js *js, jsval_t *args, int nargs) {
 }
 
 void init_atomics_module(void) {
-  struct js *js = rt->js;
+  ant_t *js = rt->js;
   
   jsval_t glob = js_glob(js);
   jsval_t atomics = js_mkobj(js);
@@ -834,6 +834,6 @@ void init_atomics_module(void) {
   js_set(js, atomics, "waitAsync", js_mkfun(js_atomics_waitAsync));
   js_set(js, atomics, "xor", js_mkfun(js_atomics_xor));
   
-  js_set(js, atomics, get_toStringTag_sym_key(), js_mkstr(js, "Atomics", 7));
+  js_set_sym(js, atomics, get_toStringTag_sym(), js_mkstr(js, "Atomics", 7));
   js_set(js, glob, "Atomics", atomics);
 }

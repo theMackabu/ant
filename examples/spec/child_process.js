@@ -27,14 +27,14 @@ const inputSync = spawnSync('cat', [], { input: 'test input' });
 test('spawnSync with input', inputSync.stdout, 'test input');
 
 let execDone = false;
-exec('echo async').then(result => {
+const execDoneP = exec('echo async').then(result => {
   test('exec resolves with stdout', result.stdout.trim(), 'async');
   test('exec exitCode', result.exitCode, 0);
   execDone = true;
 });
 
 let execFailDone = false;
-exec('exit 1').catch(err => {
+const execFailDoneP = exec('exit 1').catch(err => {
   test('exec rejects on non-zero exit', typeof err, 'string');
   execFailDone = true;
 });
@@ -59,23 +59,21 @@ child.on('exit', code => {
   spawnExitCode = code;
 });
 
-child.on('close', () => {
+const childClosedP = new Promise(resolve => child.on('close', () => {
   spawnClosed = true;
   test('spawn collects stdout', spawnStdout.trim(), 'line1\nline2');
   test('spawn exit code', spawnExitCode, 0);
   test('spawn close event fired', spawnClosed, true);
+  resolve();
+}));
 
+const shellChildDoneP = childClosedP.then(() => new Promise(resolve => {
   const shellChild = spawn('echo $HOME', [], { shell: true });
   shellChild.on('close', () => {
     test('spawn with shell option', shellChild.stdout.length > 0, true);
-
-    setTimeout(() => {
-      test('exec async completed', execDone, true);
-      test('exec fail async completed', execFailDone, true);
-      summary();
-    }, 100);
+    resolve();
   });
-});
+}));
 
 const stderrChild = spawn('sh', ['-c', 'echo err >&2']);
 let stderrData = '';
@@ -90,3 +88,9 @@ const longChild = spawn('sleep', ['10']);
 longChild.on('close', () => {});
 const killResult = longChild.kill('SIGTERM');
 test('spawn kill returns true', killResult, true);
+
+Promise.all([execDoneP, execFailDoneP, shellChildDoneP]).then(() => {
+  test('exec async completed', execDone, true);
+  test('exec fail async completed', execFailDone, true);
+  summary();
+});

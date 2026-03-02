@@ -6,8 +6,8 @@ function fibonacci(n, memo = {}) {
 }
 
 const start = performance.now();
-const result = fibonacci(621);
+const result = fibonacci(30);
 const end = performance.now();
 
-console.log(`fibonacci(621) = ${result}`);
+console.log(`fibonacci(30) = ${result}`);
 console.log(`Time: ${(end - start).toFixed(4)} ms (${((end - start) * 1000).toFixed(2)} µs)`);

@@ -190,6 +190,7 @@ pub const Linker = struct {
 
     var should_skip = false;
     var has_existing_install = false;
+    var has_existing_package = false;
     
     {
       const existing = node_modules.openDir(install_path, .{}) catch null;
@@ -200,6 +201,7 @@ pub const Linker = struct {
 
         const installed_version = readPackageVersion(self.allocator, installed_dir);
         defer if (installed_version) |v| self.allocator.free(v);
+        has_existing_package = installed_version != null;
         should_skip = packageVersionsMatch(source_version, installed_version);
       }
     }
@@ -209,7 +211,7 @@ pub const Linker = struct {
       return;
     }
 
-    if (has_existing_install) {
+    if (has_existing_install and has_existing_package) {
       node_modules.deleteTree(install_path) catch return error.IoError;
     }
 

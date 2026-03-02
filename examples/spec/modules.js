@@ -13,7 +13,8 @@ console.log('Module Tests\n');
 
 test('import.meta exists', typeof import.meta, 'object');
 test('import.meta.url exists', typeof import.meta.url, 'string');
-test('import.meta.url is file', import.meta.url.startsWith('file://'), true);
+test('import.meta.url is file', import.meta.url.startsWith('file:'), true);
+test('import.meta.url points to modules.js', /\/modules\.js$/.test(import.meta.url), true);
 
 test('module imported test', typeof test, 'function');
 test('module imported summary', typeof summary, 'function');
@@ -40,5 +41,22 @@ test('JSON named import count', count, 42);
 
 test('text default import type', typeof textContent, 'string');
 test('text default import value', textContent, 'Hello from text file\n');
+
+const absTargetUrl = typeof import.meta.resolve === 'function'
+  ? import.meta.resolve('./import_abs_target.js')
+  : import.meta.url.replace(/\/modules\.js$/, '/import_abs_target.js');
+const absTargetLooksRight = /\/import_abs_target\.js$/.test(absTargetUrl);
+test('absolute file URL target resolves to fixture', absTargetLooksRight, true);
+
+if (absTargetLooksRight) {
+  try {
+    const absMod = await import(absTargetUrl);
+    test('dynamic import absolute file URL marker', absMod.marker, 'abs-import-ok');
+  } catch (e) {
+    const msg = String(e && (e.stack || e.message || e));
+    test('dynamic import absolute file URL works', false, true);
+    test('dynamic import absolute file URL error message', typeof msg, 'string');
+  }
+} else test('dynamic import absolute file URL works', false, true);
 
 summary();

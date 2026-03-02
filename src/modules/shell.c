@@ -16,10 +16,10 @@
 #include "internal.h"
 #include "modules/symbol.h"
 
-static jsval_t builtin_shell_text(struct js *js, jsval_t *args, int nargs);
-static jsval_t builtin_shell_lines(struct js *js, jsval_t *args, int nargs);
+static jsval_t builtin_shell_text(ant_t *js, jsval_t *args, int nargs);
+static jsval_t builtin_shell_lines(ant_t *js, jsval_t *args, int nargs);
 
-static jsval_t shell_exec(struct js *js, const char *cmd, size_t cmd_len) {
+static jsval_t shell_exec(ant_t *js, const char *cmd, size_t cmd_len) {
   jsval_t result = js_mkobj(js);
   
   FILE *fp = popen(cmd, "r");
@@ -75,7 +75,7 @@ static jsval_t shell_exec(struct js *js, const char *cmd, size_t cmd_len) {
   return result;
 }
 
-static jsval_t builtin_shell_text(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_shell_text(ant_t *js, jsval_t *args, int nargs) {
   (void)args;
   (void)nargs;
   
@@ -83,7 +83,7 @@ static jsval_t builtin_shell_text(struct js *js, jsval_t *args, int nargs) {
   return js_get_slot(js, fn, SLOT_DATA);
 }
 
-static jsval_t builtin_shell_lines(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_shell_lines(ant_t *js, jsval_t *args, int nargs) {
   (void)args;
   (void)nargs;
   
@@ -109,7 +109,7 @@ static jsval_t builtin_shell_lines(struct js *js, jsval_t *args, int nargs) {
   return lines_array;
 }
 
-static jsval_t builtin_shell_dollar(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_shell_dollar(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "$() requires at least one argument");
     
   if (!is_special_object(args[0])) {
@@ -194,11 +194,11 @@ static jsval_t builtin_shell_dollar(struct js *js, jsval_t *args, int nargs) {
   return result;
 }
 
-jsval_t shell_library(struct js *js) {
+jsval_t shell_library(ant_t *js) {
   jsval_t lib = js_mkobj(js);
   
   js_set(js, lib, "$", js_mkfun(builtin_shell_dollar));
-  js_set(js, lib, get_toStringTag_sym_key(), js_mkstr(js, "shell", 5));
+  js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "shell", 5));
   
   return lib;
 }

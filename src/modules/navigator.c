@@ -15,6 +15,7 @@
 #include "errors.h"
 #include "runtime.h"
 #include "internal.h"
+#include "silver/engine.h"
 #include "modules/navigator.h"
 #include "modules/symbol.h"
 
@@ -31,7 +32,7 @@ typedef struct lock_entry {
 } lock_entry_t;
 
 typedef struct lock_request {
-  struct js *js;
+  ant_t *js;
   char *name;
   lock_mode_t mode;
   jsval_t callback;
@@ -115,21 +116,21 @@ static void release_lock(const char *name) {
   free(entry);
 }
 
-static void process_pending_requests(struct js *js);
+static void process_pending_requests(ant_t *js);
 
-static jsval_t make_lock_handler(struct js *js, jsval_t cfunc, jsval_t lock_name, jsval_t outer_promise) {
+static jsval_t make_lock_handler(ant_t *js, jsval_t cfunc, jsval_t lock_name, jsval_t outer_promise) {
   jsval_t fn_obj = js_mkobj(js);
-  js_set_slot(js, fn_obj, SLOT_CFUNC, cfunc);
   
   jsval_t data_obj = js_mkobj(js);
   js_set(js, data_obj, "lockName", lock_name);
   js_set(js, data_obj, "outerPromise", outer_promise);
   js_set_slot(js, fn_obj, SLOT_DATA, data_obj);
+  js_set_slot(js, fn_obj, SLOT_CFUNC, cfunc);
   
   return js_obj_to_func(fn_obj);
 }
 
-static jsval_t lock_then_handler(struct js *js, jsval_t *args, int nargs) {
+static jsval_t lock_then_handler(ant_t *js, jsval_t *args, int nargs) {
   jsval_t current_func = js_getcurrentfunc(js);
   jsval_t data_obj = js_get_slot(js, current_func, SLOT_DATA);
   
@@ -147,7 +148,7 @@ static jsval_t lock_then_handler(struct js *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t lock_catch_handler(struct js *js, jsval_t *args, int nargs) {
+static jsval_t lock_catch_handler(ant_t *js, jsval_t *args, int nargs) {
   jsval_t current_func = js_getcurrentfunc(js);
   jsval_t data_obj = js_get_slot(js, current_func, SLOT_DATA);
   
@@ -166,13 +167,13 @@ static jsval_t lock_catch_handler(struct js *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static void execute_lock_callback(struct js *js, const char *name, lock_mode_t mode, jsval_t callback, jsval_t outer_promise) {
+static void execute_lock_callback(ant_t *js, const char *name, lock_mode_t mode, jsval_t callback, jsval_t outer_promise) {
   jsval_t lock_obj = js_mkobj(js);
   js_set(js, lock_obj, "name", js_mkstr(js, name, strlen(name)));
   js_set(js, lock_obj, "mode", js_mkstr(js, mode == LOCK_MODE_EXCLUSIVE ? "exclusive" : "shared", mode == LOCK_MODE_EXCLUSIVE ? 9 : 6));
-  js_set(js, lock_obj, get_toStringTag_sym_key(), js_mkstr(js, "Lock", 4));
+  js_set_sym(js, lock_obj, get_toStringTag_sym(), js_mkstr(js, "Lock", 4));
   
-  jsval_t result = js_call(js, callback, &lock_obj, 1);
+  jsval_t result = sv_vm_call(js->vm, js, callback, js_mkundef(), &lock_obj, 1, NULL, false);
   
   if (vtype(result) == T_ERR) {
     release_lock(name);
@@ -192,7 +193,7 @@ static void execute_lock_callback(struct js *js, const char *name, lock_mode_t m
       jsval_t on_reject = make_lock_handler(js, js_mkfun(lock_catch_handler), name_str, outer_promise);
       
       jsval_t then_args[2] = { on_resolve, on_reject };
-      js_call_with_this(js, then_fn, result, then_args, 2);
+      sv_vm_call(js->vm, js, then_fn, result, then_args, 2, NULL, false);
       return;
     }
   }
@@ -202,7 +203,7 @@ static void execute_lock_callback(struct js *js, const char *name, lock_mode_t m
   process_pending_requests(js);
 }
 
-static void process_pending_requests(struct js *js) {
+static void process_pending_requests(ant_t *js) {
   lock_request_t *prev = NULL;
   lock_request_t *req = pending_requests;
   
@@ -236,7 +237,7 @@ static void process_pending_requests(struct js *js) {
   }
 }
 
-static jsval_t locks_request(struct js *js, jsval_t *args, int nargs) {
+static jsval_t locks_request(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "locks.request requires at least 2 arguments");
   }
@@ -278,7 +279,7 @@ static jsval_t locks_request(struct js *js, jsval_t *args, int nargs) {
   
   if (if_available && !can_acquire_lock(name, mode)) {
     jsval_t null_val = js_mknull();
-    jsval_t result = js_call(js, callback, &null_val, 1);
+    jsval_t result = sv_vm_call(js->vm, js, callback, js_mkundef(), &null_val, 1, NULL, false);
     
     if (vtype(result) == T_PROMISE) {
       jsval_t then_fn = js_get(js, result, "then");
@@ -288,7 +289,7 @@ static jsval_t locks_request(struct js *js, jsval_t *args, int nargs) {
           js, js_mkfun(lock_then_handler), 
           js_mkstr(js, "", 0), promise
         );
-        js_call_with_this(js, then_fn, result, &on_resolve, 1);
+        sv_vm_call(js->vm, js, then_fn, result, &on_resolve, 1, NULL, false);
         return promise;
       }
     }
@@ -327,7 +328,7 @@ static jsval_t locks_request(struct js *js, jsval_t *args, int nargs) {
   return promise;
 }
 
-static jsval_t locks_query(struct js *js, jsval_t *args, int nargs) {
+static jsval_t locks_query(ant_t *js, jsval_t *args, int nargs) {
   (void)args;
   (void)nargs;
   
@@ -362,7 +363,7 @@ static jsval_t locks_query(struct js *js, jsval_t *args, int nargs) {
 }
 
 void init_navigator_module(void) {
-  struct js *js = rt->js;
+  ant_t *js = rt->js;
   
   jsval_t navigator_obj = js_mkobj(js);
   
@@ -383,10 +384,10 @@ void init_navigator_module(void) {
   jsval_t locks_obj = js_mkobj(js);
   js_set(js, locks_obj, "request", js_mkfun(locks_request));
   js_set(js, locks_obj, "query", js_mkfun(locks_query));
-  js_set(js, locks_obj, get_toStringTag_sym_key(), js_mkstr(js, "LockManager", 11));
+  js_set_sym(js, locks_obj, get_toStringTag_sym(), js_mkstr(js, "LockManager", 11));
   js_set(js, navigator_obj, "locks", locks_obj);
   
-  js_set(js, navigator_obj, get_toStringTag_sym_key(), js_mkstr(js, "Navigator", 9));
+  js_set_sym(js, navigator_obj, get_toStringTag_sym(), js_mkstr(js, "Navigator", 9));
   js_set(js, js_glob(js), "navigator", navigator_obj);
 }
 

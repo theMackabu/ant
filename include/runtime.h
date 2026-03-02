@@ -8,21 +8,31 @@ struct arg_file;
 #define CODE_ARENA_BLOCK_SIZE   (64 * 1024)
 
 struct ant_runtime {
-  struct js *js;
+  ant_t *js;
   char **argv;
   jsval_t ant_obj;
   int argc;
+  int pid;
   unsigned int flags;
   const char *ls_fp;
 };
 
-extern struct ant_runtime *const rt;
-struct ant_runtime *ant_runtime_init(struct js *js, int argc, char **argv, struct arg_file *ls_p);
+typedef struct {
+  void *block;
+  size_t used;
+} code_arena_mark_t;
 
-const char *code_arena_alloc(const char *code, size_t len);
+extern struct ant_runtime *const rt;
+struct ant_runtime *ant_runtime_init(ant_t *js, int argc, char **argv, struct arg_file *ls_p);
+
 size_t code_arena_get_memory(void);
+const char *code_arena_alloc(const char *code, size_t len);
+
+code_arena_mark_t code_arena_mark(void);
+void code_arena_rewind(code_arena_mark_t mark);
 
 void code_arena_reset(void);
-void destroy_runtime(struct js *js);
+void destroy_runtime(ant_t *js);
+void *code_arena_bump(size_t size);
 
 #endif

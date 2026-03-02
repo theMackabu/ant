@@ -13,36 +13,6 @@
 static reactor_poll_hook_t g_poll_hook = NULL;
 static void *g_poll_hook_data = NULL;
 
-void js_reactor_set_poll_hook(reactor_poll_hook_t hook, void *data) {
-  g_poll_hook = hook;
-  g_poll_hook_data = data;
-}
-
-void js_poll_events(ant_t *js) {
-  coros_this_tick = 0;
-  
-  process_immediates(js);
-  process_microtasks(js);
-  
-  for (coroutine_t *temp = pending_coroutines.head, *next; temp; temp = next) {
-    next = temp->next;
-    if (!temp->is_ready || !temp->mco || mco_status(temp->mco) != MCO_SUSPENDED) continue;
-    remove_coroutine(temp);
-    
-    coro_saved_state_t saved = coro_enter(temp->js, temp);
-    mco_result res = mco_resume(temp->mco);
-    coro_leave(temp->js, temp, saved);
-    
-    if (res == MCO_SUCCESS && mco_status(temp->mco) != MCO_DEAD) {
-      temp->is_ready = false;
-      enqueue_coroutine(temp);
-    } else free_coroutine(temp);
-  }
-  
-  if (js->needs_gc) js_gc_safepoint(js);  
-  if (g_poll_hook) g_poll_hook(g_poll_hook_data);
-}
-
 static inline work_flags_t get_pending_work(void) {
   work_flags_t flags = 0;
   if (has_pending_microtasks())         flags |= WORK_MICROTASKS;
@@ -58,29 +28,62 @@ static inline work_flags_t get_pending_work(void) {
   return flags;
 }
 
-static void process_before_exit(ant_t *js) {
-  jsval_t code = js_mknum(0);
-  emit_process_event("beforeExit", &code, 1);
-  if ((get_pending_work() & WORK_PENDING) || UV_CHECK_ALIVE) js_run_event_loop(js);
+static inline bool event_loop_alive(void) {
+  work_flags_t w = get_pending_work();
+  if (w & (WORK_PENDING & ~WORK_COROUTINES)) return true;
+  if ((w & WORK_COROUTINES) && (w & WORK_COROUTINES_READY)) return true;
+  return UV_CHECK_ALIVE;
+}
+
+void js_reactor_set_poll_hook(reactor_poll_hook_t hook, void *data) {
+  g_poll_hook = hook;
+  g_poll_hook_data = data;
+}
+
+void js_poll_events(ant_t *js) {
+  coros_this_tick = 0;
+  
+  process_immediates(js);
+  process_microtasks(js);
+  
+  for (;;) {
+    coroutine_t *temp = NULL;
+    for (coroutine_t *c = pending_coroutines.head; c; c = c->next) {
+      if (c->is_ready && c->mco && mco_status(c->mco) == MCO_SUSPENDED) { temp = c; break; }
+    }
+    
+    if (!temp) break;
+    temp->is_ready = false;
+
+    mco_result res;
+    MCO_RESUME_SAVE(js, temp->mco, res);
+
+    if (res != MCO_SUCCESS || mco_status(temp->mco) == MCO_DEAD) {
+      remove_coroutine(temp);
+      free_coroutine(temp);
+    }
+  }
+  
+  if (js->needs_gc) js_gc_maybe(js);  
+  if (g_poll_hook) g_poll_hook(g_poll_hook_data);
 }
 
 void js_run_event_loop(ant_t *js) {
-  work_flags_t work;
-  int uv_alive = UV_CHECK_ALIVE;
-  
-  while (((work = get_pending_work()) & WORK_PENDING) || uv_alive) {
+drain:
+  while (event_loop_alive()) {
     js_poll_events(js);
+    work_flags_t work = get_pending_work();
     
-    work = get_pending_work();
-    uv_alive = UV_CHECK_ALIVE;
-  
     if (work & WORK_BLOCKING) uv_run(uv_default_loop(), UV_RUN_NOWAIT);
-    else if ((work & WORK_ASYNC) || uv_alive) {
-      js_gc_safepoint(js);
+    else if ((work & WORK_ASYNC) || UV_CHECK_ALIVE) {
+      js_gc_maybe(js);
       uv_run(uv_default_loop(), UV_RUN_ONCE);
-    } else if (work & WORK_COROUTINES) break;
-  }
+    } else break;
+  } 
   
   js_poll_events(js);
-  process_before_exit(js);
+  jsval_t code = js_mknum(0);
+  emit_process_event("beforeExit", &code, 1);
+  
+  if (event_loop_alive()) goto drain;
 }

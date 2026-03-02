@@ -160,6 +160,14 @@ pkg_error_t pkg_get_added_package(
   pkg_added_package_t *out
 );
 
+int pkg_get_latest_available_version(
+  pkg_context_t *ctx,
+  const char *package_name,
+  const char *installed_version,
+  char *out_version,
+  size_t out_version_len
+);
+
 int pkg_get_bin_path(
   const char *node_modules_path,
   const char *bin_name,

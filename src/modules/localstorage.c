@@ -9,6 +9,7 @@
 #include "arena.h"
 #include "runtime.h"
 #include "internal.h"
+#include "descriptors.h"
 
 #include "modules/symbol.h"
 #include "modules/localstorage.h"
@@ -157,7 +158,7 @@ static char *storage_key(size_t index) {
   }
 
 // localStorage.setItem(key, value)
-static jsval_t js_localstorage_setItem(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_localstorage_setItem(ant_t *js, jsval_t *args, int nargs) {
   CHECK_FILE_SET(js);
   
   if (nargs < 2) {
@@ -174,7 +175,7 @@ static jsval_t js_localstorage_setItem(struct js *js, jsval_t *args, int nargs) 
 }
 
 // localStorage.getItem(key)
-static jsval_t js_localstorage_getItem(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_localstorage_getItem(ant_t *js, jsval_t *args, int nargs) {
   CHECK_FILE_SET(js);
   
   if (nargs < 1) {
@@ -191,7 +192,7 @@ static jsval_t js_localstorage_getItem(struct js *js, jsval_t *args, int nargs) 
 }
 
 // localStorage.removeItem(key)
-static jsval_t js_localstorage_removeItem(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_localstorage_removeItem(ant_t *js, jsval_t *args, int nargs) {
   CHECK_FILE_SET(js);
   
   if (nargs < 1) {
@@ -206,7 +207,7 @@ static jsval_t js_localstorage_removeItem(struct js *js, jsval_t *args, int narg
 }
 
 // localStorage.clear()
-static jsval_t js_localstorage_clear(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_localstorage_clear(ant_t *js, jsval_t *args, int nargs) {
   CHECK_FILE_SET(js);
   (void)args; (void)nargs;
   storage_clear();
@@ -215,7 +216,7 @@ static jsval_t js_localstorage_clear(struct js *js, jsval_t *args, int nargs) {
 }
 
 // localStorage.key(index)
-static jsval_t js_localstorage_key(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_localstorage_key(ant_t *js, jsval_t *args, int nargs) {
   CHECK_FILE_SET(js);
   
   if (nargs < 1) {
@@ -238,14 +239,14 @@ static jsval_t js_localstorage_key(struct js *js, jsval_t *args, int nargs) {
 }
 
 // localStorage.length
-static jsval_t js_localstorage_length(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_localstorage_length(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
   CHECK_FILE_SET(js)
   return js_mknum((double)storage_length());
 }
 
 // localStorage.setFile(path)
-static jsval_t js_localstorage_setFile(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_localstorage_setFile(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) {
     return js_mkerr(js, "Failed to execute 'setFile' on 'Storage': 1 argument required");
   }
@@ -272,7 +273,7 @@ static jsval_t js_localstorage_setFile(struct js *js, jsval_t *args, int nargs) 
 }
 
 void init_localstorage_module() {
-  struct js *js = rt->js;
+  ant_t *js = rt->js;
   
   jsval_t glob = js_glob(js);
   const char *file_path = rt->ls_fp;
@@ -294,6 +295,6 @@ void init_localstorage_module() {
   jsval_t length_getter = js_mkfun(js_localstorage_length);
   js_set_getter_desc(js, storage_obj, "length", 6, length_getter, JS_DESC_E);
   
-  js_set(js, storage_obj, get_toStringTag_sym_key(), js_mkstr(js, "Storage", 7));
+  js_set_sym(js, storage_obj, get_toStringTag_sym(), js_mkstr(js, "Storage", 7));
   js_set(js, glob, "localStorage", storage_obj);
 }

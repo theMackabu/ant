@@ -410,16 +410,22 @@ pub const PackageMetadata = struct {
   allocator: std.mem.Allocator,
   name: []const u8,
   versions: std.ArrayListUnmanaged(VersionInfo),
+  dist_tag_latest: ?Version = null,
 
   pub fn init(allocator: std.mem.Allocator, name: []const u8) !PackageMetadata {
     return .{
       .allocator = allocator,
       .name = try allocator.dupe(u8, name),
       .versions = .{},
+      .dist_tag_latest = null,
     };
   }
 
   pub fn deinit(self: *PackageMetadata) void {
+    if (self.dist_tag_latest) |*dtl| {
+      if (dtl.prerelease) |pre| self.allocator.free(pre);
+      if (dtl.build) |bld| self.allocator.free(bld);
+    }
     for (self.versions.items) |*v| {
       v.deinit();
     }
@@ -442,6 +448,17 @@ pub const PackageMetadata = struct {
 
     var metadata = try PackageMetadata.init(allocator, name);
     errdefer metadata.deinit();
+
+    metadata.dist_tag_latest = blk: {
+      const dt = root.object.get("dist-tags") orelse break :blk null;
+      if (dt != .object) break :blk null;
+      const latest_val = dt.object.get("latest") orelse break :blk null;
+      if (latest_val != .string) break :blk null;
+      var pl = Version.parse(latest_val.string) catch break :blk null;
+      if (pl.prerelease) |pre| pl.prerelease = allocator.dupe(u8, pre) catch null;
+      if (pl.build) |bld| pl.build = allocator.dupe(u8, bld) catch null;
+      break :blk pl;
+    };
 
     const versions_obj = root.object.get("versions") orelse return metadata;
     if (versions_obj != .object) return metadata;
@@ -1648,6 +1665,11 @@ pub const Resolver = struct {
   }
 
   fn selectBestVersion(_: *Resolver, metadata: *const PackageMetadata, constraint: Constraint) ?*const VersionInfo {
+    if (constraint.kind == .any) for (metadata.versions.items) |*v| {
+      const dtl = metadata.dist_tag_latest orelse break;
+      if (v.version.order(dtl) == .eq) return v;
+    };
+
     var best: ?*const VersionInfo = null;
     const want_prerelease = constraint.version.prerelease != null;
 
@@ -1677,6 +1699,11 @@ pub const Resolver = struct {
       if (c.version.prerelease != null) want_prerelease = true;
       if (c.kind != .any) all_any = false;
     }
+
+    if (all_any) for (metadata.versions.items) |*v| {
+      const dtl = metadata.dist_tag_latest orelse break;
+      if (v.version.order(dtl) == .eq) return v;
+    };
 
     for (metadata.versions.items) |*v| {
       if (v.version.prerelease != null and !want_prerelease) continue;

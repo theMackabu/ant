@@ -88,6 +88,7 @@ const Http2Client = struct {
   requests: [MAX_PENDING_REQUESTS]RequestState,
   request_count: usize,
   requests_done: usize,
+  last_response_status_code: u16,
 
   const RequestState = struct {
     stream_id: i32,
@@ -134,6 +135,7 @@ const Http2Client = struct {
       .requests = undefined,
       .request_count = 0,
       .requests_done = 0,
+      .last_response_status_code = 0,
     };
 
     for (&client.requests) |*req| {
@@ -532,6 +534,7 @@ const Http2Client = struct {
       try self.flush();
     }
     
+    self.last_response_status_code = req.status_code;
     if (req.has_error or req.status_code != 200) return error.ResponseError;
     return try allocator.dupe(u8, req.response_body.items);
   }
@@ -667,6 +670,13 @@ pub const Fetcher = struct {
   tarball_contexts: std.ArrayListUnmanaged(*TarballCtx),
   tarball_round_robin: usize,
   tarball_stats: std.ArrayListUnmanaged(TarballStats),
+  last_http_error_url: ?[]u8,
+  last_http_error_status: u16,
+
+  pub const HttpErrorInfo = struct {
+    url: []const u8,
+    status: u16,
+  };
 
   pub fn init(allocator: std.mem.Allocator, registry_host: []const u8) !*Fetcher {
     const f = try allocator.create(Fetcher);
@@ -681,11 +691,14 @@ pub const Fetcher = struct {
       .tarball_contexts = .{},
       .tarball_round_robin = 0,
       .tarball_stats = .{},
+      .last_http_error_url = null,
+      .last_http_error_status = 0,
     };
     return f;
   }
 
   pub fn deinit(self: *Fetcher) void {
+    if (self.last_http_error_url) |url| self.allocator.free(url);
     for (&self.meta_clients) |*maybe_client| {
       if (maybe_client.*) |c| { c.deinit();  maybe_client.* = null; }
     }
@@ -703,6 +716,23 @@ pub const Fetcher = struct {
     self.tarball_stats.deinit(self.allocator);
     self.allocator.free(self.registry_host);
     self.allocator.destroy(self);
+  }
+
+  fn clearLastHttpError(self: *Fetcher) void {
+    if (self.last_http_error_url) |url| self.allocator.free(url);
+    self.last_http_error_url = null;
+    self.last_http_error_status = 0;
+  }
+
+  fn setLastHttpError(self: *Fetcher, url: []const u8, status: u16) void {
+    self.clearLastHttpError();
+    self.last_http_error_url = self.allocator.dupe(u8, url) catch null;
+    self.last_http_error_status = status;
+  }
+
+  pub fn getLastHttpError(self: *const Fetcher) ?HttpErrorInfo {
+    const url = self.last_http_error_url orelse return null;
+    return .{ .url = url, .status = self.last_http_error_status };
   }
 
   fn ensureMetaClients(self: *Fetcher) !void {
@@ -731,6 +761,7 @@ pub const Fetcher = struct {
   }
 
   pub fn resetMetaClients(self: *Fetcher) void {
+    self.clearLastHttpError();
     for (&self.meta_clients) |*slot| {
       if (slot.*) |client| { client.deinit(); slot.* = null; }
     }
@@ -1132,14 +1163,86 @@ pub const Fetcher = struct {
     return self.fetchMetadataFull(package_name, false, allocator);
   }
 
+  const DecodedMetadata = struct {
+    data: []u8,
+    compressed: bool,
+  };
+
+  fn metaClientCanQueue(c: *const Http2Client) bool {
+    return c.h2_session != null and c.connected == 1 and c.request_count < MAX_PENDING_REQUESTS - 1;
+  }
+
+  fn nextMetaClient(self: *Fetcher, conn_idx: *usize) ?*Http2Client {
+    var attempts: usize = 0;
+    while (attempts < NUM_META_CONNECTIONS) : (attempts += 1) {
+      if (self.meta_clients[conn_idx.*]) |c| {
+        if (metaClientCanQueue(c)) return c;
+      }
+      conn_idx.* = (conn_idx.* + 1) % NUM_META_CONNECTIONS;
+    }
+    return null;
+  }
+
+  fn flushMetaClients(self: *Fetcher) void {
+    for (self.meta_clients) |maybe_client| {
+      if (maybe_client) |c| c.flush() catch {};
+    }
+  }
+
+  fn metaRequestsComplete(self: *Fetcher) bool {
+    for (self.meta_clients) |maybe_client| {
+      if (maybe_client) |c| {
+        for (c.requests[0..c.request_count]) |*req| {
+          if (!req.done and !req.has_error) return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  fn decodeMetadataOwned(
+    req: *Http2Client.RequestState,
+    allocator: std.mem.Allocator,
+    decompress_buf: *std.ArrayListUnmanaged(u8),
+  ) ?DecodedMetadata {
+    if (req.has_error or req.status_code != 200) return null;
+
+    if (req.content_encoding != .gzip) {
+      const data = allocator.dupe(u8, req.response_body.items) catch return null;
+      return .{ .data = data, .compressed = false };
+    }
+
+    decompress_buf.clearRetainingCapacity();
+    const decomp = extractor.GzipDecompressor.init(allocator) catch return null;
+    defer decomp.deinit();
+
+    _ = decomp.decompress(req.response_body.items, struct {
+      fn onChunk(data: []const u8, ctx: ?*anyopaque) anyerror!void {
+        const buf: *std.ArrayListUnmanaged(u8) = @ptrCast(@alignCast(ctx));
+        try buf.appendSlice(c_allocator, data);
+      }
+    }.onChunk, decompress_buf) catch return null;
+
+    const data = allocator.dupe(u8, decompress_buf.items) catch return null;
+    return .{ .data = data, .compressed = true };
+  }
+
   pub fn fetchMetadataFull(self: *Fetcher, package_name: []const u8, full: bool, allocator: std.mem.Allocator) ![]u8 {
     try self.ensureMetaClients();
+    self.clearLastHttpError();
     for (self.meta_clients) |maybe_client| {
       if (maybe_client) |client| {
         var path_buf: [512]u8 = undefined;
         const path_slice = std.fmt.bufPrint(&path_buf, "/{s}", .{package_name}) catch return error.OutOfMemory;
         const accept: [:0]const u8 = if (full) "application/json" else "application/vnd.npm.install-v1+json";
-        return client.getWithAccept(path_slice, accept, allocator);
+        return client.getWithAccept(path_slice, accept, allocator) catch |err| {
+          if (err == error.ResponseError) {
+            var url_buf: [1024]u8 = undefined;
+            const url = std.fmt.bufPrint(&url_buf, "https://{s}/{s}", .{ self.registry_host, package_name }) catch "";
+            self.setLastHttpError(url, client.last_response_status_code);
+          }
+          return err;
+        };
       }
     }
     return error.ConnectionFailed;
@@ -1151,6 +1254,21 @@ pub const Fetcher = struct {
     compressed: bool,
     has_error: bool,
   };
+
+  fn storeMetadataBatchResult(
+    req: *Http2Client.RequestState,
+    result: *MetadataResult,
+    allocator: std.mem.Allocator,
+    decompress_buf: *std.ArrayListUnmanaged(u8),
+  ) bool {
+    const decoded = decodeMetadataOwned(req, allocator, decompress_buf) orelse {
+      result.has_error = true;
+      return false;
+    };
+    result.data = decoded.data;
+    result.compressed = decoded.compressed;
+    return true;
+  }
 
   pub fn fetchMetadataBatch(self: *Fetcher, names: []const []const u8, allocator: std.mem.Allocator) ![]MetadataResult {
     if (names.len == 0) return &[_]MetadataResult{};
@@ -1189,22 +1307,10 @@ pub const Fetcher = struct {
         const result = &results[i];
         const name = names[i];
 
-        var client: ?*Http2Client = null;
-        var attempts: usize = 0;
-        while (attempts < NUM_META_CONNECTIONS) : (attempts += 1) {
-          if (self.meta_clients[conn_idx]) |c| {
-            if (c.h2_session != null and c.connected == 1 and c.request_count < MAX_PENDING_REQUESTS - 1) {
-              client = c; break;
-            }
-          }
-          conn_idx = (conn_idx + 1) % NUM_META_CONNECTIONS;
-        }
-
-        if (client == null) {
+        const c = self.nextMetaClient(&conn_idx) orelse {
           result.has_error = true; continue;
-        }
-
-        const c = client.?;
+        };
+        
         const session = c.h2_session orelse {
           result.has_error = true; continue;
         };
@@ -1257,11 +1363,9 @@ pub const Fetcher = struct {
         queued += 1;
         conn_idx = (conn_idx + 1) % NUM_META_CONNECTIONS;
       }
+      
       batch_start = debug.timer("  meta: queue requests", batch_start);
-
-      for (self.meta_clients) |maybe_client| {
-        if (maybe_client) |c| c.flush() catch {};
-      }
+      self.flushMetaClients();
 
       const loop = uv.uv_default_loop();
       var all_done = false;
@@ -1271,15 +1375,7 @@ pub const Fetcher = struct {
       while (!all_done) {
         _ = uv.uv_run(loop, uv.RUN_ONCE);
         loops += 1;
-
-        all_done = true;
-        for (self.meta_clients) |maybe_client| {
-          if (maybe_client) |c| {
-            for (c.requests[0..c.request_count]) |*req| {
-              if (!req.done and !req.has_error) { all_done = false; break; }
-            } if (!all_done) break;
-          }
-        }
+        all_done = self.metaRequestsComplete();
       }
 
       const elapsed_ns: u64 = @intCast(@as(i128, @intCast(std.time.nanoTimestamp())) - @as(i128, run_start));
@@ -1320,32 +1416,7 @@ pub const Fetcher = struct {
         if (maybe_client) |c| {
           for (c.requests[0..c.request_count]) |*req| {
             const result: *MetadataResult = @ptrCast(@alignCast(req.userdata));
-            if (req.has_error or req.status_code != 200) {
-              result.has_error = true;
-            } else {
-              if (req.content_encoding == .gzip) {
-                decompress_buf.clearRetainingCapacity();
-                const decomp = extractor.GzipDecompressor.init(allocator) catch {
-                  result.has_error = true;
-                  continue;
-                };
-                defer decomp.deinit();
-                _ = decomp.decompress(req.response_body.items, struct {
-                  fn onChunk(data: []const u8, ctx: ?*anyopaque) anyerror!void {
-                    const buf: *std.ArrayListUnmanaged(u8) = @ptrCast(@alignCast(ctx));
-                    try buf.appendSlice(c_allocator, data);
-                  }
-                }.onChunk, &decompress_buf) catch {
-                  result.has_error = true;
-                  continue;
-                };
-                result.data = allocator.dupe(u8, decompress_buf.items) catch null;
-                result.compressed = true;
-              } else {
-                result.data = allocator.dupe(u8, req.response_body.items) catch null;
-              }
-              if (result.data == null) result.has_error = true else success += 1;
-            }
+            if (storeMetadataBatchResult(req, result, allocator, &decompress_buf)) success += 1;
           }
           c.resetRequests();
         }
@@ -1366,6 +1437,71 @@ pub const Fetcher = struct {
     has_error: bool,
     userdata: ?*anyopaque
   ) void;
+
+  const MetadataStreamTracker = struct {
+    name: []const u8,
+    index: usize,
+  };
+
+  fn emitMetadataStreamingResult(
+    req: *Http2Client.RequestState,
+    name: []const u8,
+    allocator: std.mem.Allocator,
+    decompress_buf: *std.ArrayListUnmanaged(u8),
+    callback: MetadataCallback,
+    userdata: ?*anyopaque,
+  ) void {
+    if (req.has_error or req.status_code != 200) {
+      callback(name, null, true, userdata);
+      return;
+    }
+
+    if (req.content_encoding != .gzip) {
+      callback(name, req.response_body.items, false, userdata);
+      return;
+    }
+
+    decompress_buf.clearRetainingCapacity();
+    const decomp = extractor.GzipDecompressor.init(allocator) catch {
+      callback(name, null, true, userdata);
+      return;
+    };
+    defer decomp.deinit();
+
+    _ = decomp.decompress(req.response_body.items, struct {
+      fn onChunk(data: []const u8, ctx: ?*anyopaque) anyerror!void {
+        const buf: *std.ArrayListUnmanaged(u8) = @ptrCast(@alignCast(ctx));
+        try buf.appendSlice(c_allocator, data);
+      }
+    }.onChunk, decompress_buf) catch {
+      callback(name, null, true, userdata);
+      return;
+    };
+
+    callback(name, decompress_buf.items, false, userdata);
+  }
+
+  fn emitCompletedStreamingMetadataCallbacks(
+    self: *Fetcher,
+    processed: []bool,
+    allocator: std.mem.Allocator,
+    decompress_buf: *std.ArrayListUnmanaged(u8),
+    callback: MetadataCallback,
+    userdata: ?*anyopaque,
+  ) void {
+    for (self.meta_clients) |maybe_client| {
+      const c = maybe_client orelse continue;
+      for (c.requests[0..c.request_count]) |*req| {
+        if (!req.done and !req.has_error) continue;
+
+        const tracker: *MetadataStreamTracker = @ptrCast(@alignCast(req.userdata));
+        if (processed[tracker.index]) continue;
+
+        processed[tracker.index] = true;
+        emitMetadataStreamingResult(req, tracker.name, allocator, decompress_buf, callback, userdata);
+      }
+    }
+  }
 
   pub fn fetchMetadataStreaming(
     self: *Fetcher,
@@ -1388,16 +1524,11 @@ pub const Fetcher = struct {
     if (active_connections == 0) return error.ConnectionFailed;
     debug.log("  meta: streaming {d} packages across {d} connections", .{ names.len, active_connections });
 
-    var processed = try allocator.alloc(bool, names.len);
+    const processed = try allocator.alloc(bool, names.len);
     defer allocator.free(processed);
     @memset(processed, false);
 
-    const ResultTracker = struct {
-      name: []const u8,
-      index: usize,
-    };
-    
-    var trackers = try allocator.alloc(ResultTracker, names.len);
+    var trackers = try allocator.alloc(MetadataStreamTracker, names.len);
     defer allocator.free(trackers);
     for (names, 0..) |name, i| {
       trackers[i] = .{ .name = name, .index = i };
@@ -1422,19 +1553,7 @@ pub const Fetcher = struct {
         const tracker = &trackers[i];
         const name = names[i];
 
-        var client: ?*Http2Client = null;
-        var attempts: usize = 0;
-        while (attempts < NUM_META_CONNECTIONS) : (attempts += 1) {
-          if (self.meta_clients[conn_idx]) |c| {
-            if (c.h2_session != null and c.connected == 1 and c.request_count < MAX_PENDING_REQUESTS - 1) {
-              client = c; break;
-            }
-          }
-          conn_idx = (conn_idx + 1) % NUM_META_CONNECTIONS;
-        }
-        if (client == null) continue;
-
-        const c = client.?;
+        const c = self.nextMetaClient(&conn_idx) orelse continue;
         const session = c.h2_session orelse continue;
         
         var path_buf: [512]u8 = undefined;
@@ -1480,11 +1599,9 @@ pub const Fetcher = struct {
         queued += 1;
         conn_idx = (conn_idx + 1) % NUM_META_CONNECTIONS;
       }
+      
       batch_start = debug.timer("  meta: queue requests", batch_start);
-
-      for (self.meta_clients) |maybe_client| {
-        if (maybe_client) |c| c.flush() catch {};
-      }
+      self.flushMetaClients();
 
       const loop = uv.uv_default_loop();
       var all_done = false;
@@ -1494,54 +1611,9 @@ pub const Fetcher = struct {
       while (!all_done) {
         _ = uv.uv_run(loop, uv.RUN_ONCE);
         loops += 1;
+        self.emitCompletedStreamingMetadataCallbacks(processed, allocator, &decompress_buf, callback, userdata);
 
-        for (self.meta_clients) |maybe_client| {
-          if (maybe_client) |c| {
-            for (c.requests[0..c.request_count]) |*req| {
-              if (req.done or req.has_error) {
-                const tracker: *ResultTracker = @ptrCast(@alignCast(req.userdata));
-                if (!processed[tracker.index]) {
-                  processed[tracker.index] = true;
-                  if (req.has_error or req.status_code != 200) {
-                    callback(tracker.name, null, true, userdata);
-                  } else if (req.content_encoding == .gzip) {
-                    decompress_buf.clearRetainingCapacity();
-                    const decomp = extractor.GzipDecompressor.init(allocator) catch {
-                      callback(tracker.name, null, true, userdata);
-                      continue;
-                    };
-                    defer decomp.deinit();
-                    _ = decomp.decompress(req.response_body.items, struct {
-                      fn onChunk(data: []const u8, ctx: ?*anyopaque) anyerror!void {
-                        const buf: *std.ArrayListUnmanaged(u8) = @ptrCast(@alignCast(ctx));
-                        try buf.appendSlice(c_allocator, data);
-                      }
-                    }.onChunk, &decompress_buf) catch {
-                      callback(tracker.name, null, true, userdata);
-                      continue;
-                    };
-                    callback(tracker.name, decompress_buf.items, false, userdata);
-                  } else {
-                    callback(tracker.name, req.response_body.items, false, userdata);
-                  }
-                }
-              }
-            }
-          }
-        }
-
-        all_done = true;
-        for (self.meta_clients) |maybe_client| {
-          if (maybe_client) |c| {
-            for (c.requests[0..c.request_count]) |*req| {
-              if (!req.done and !req.has_error) {
-                all_done = false;
-                break;
-              }
-            }
-            if (!all_done) break;
-          }
-        }
+        all_done = self.metaRequestsComplete();
       }
 
       const elapsed_ns: u64 = @intCast(@as(i128, @intCast(std.time.nanoTimestamp())) - @as(i128, run_start));
@@ -1554,7 +1626,7 @@ pub const Fetcher = struct {
       for (self.meta_clients) |maybe_client| {
         if (maybe_client) |c| {
           for (c.requests[0..c.request_count]) |*req| {
-            const tracker: *ResultTracker = @ptrCast(@alignCast(req.userdata));
+            const tracker: *MetadataStreamTracker = @ptrCast(@alignCast(req.userdata));
             const end_ns = if (req.end_ns != 0) req.end_ns else @as(u64, @intCast(std.time.nanoTimestamp()));
             const duration_ms: u64 = @intCast((end_ns - req.start_ns) / 1_000_000);
             total_bytes += req.response_body.items.len;

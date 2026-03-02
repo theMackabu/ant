@@ -38,7 +38,7 @@ static char* normalize_separators(const char *path, size_t len) {
   return result;
 }
 
-static jsval_t builtin_path_basename(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_path_basename(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "basename() requires a path argument");
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "basename() path must be a string");
   
@@ -66,7 +66,7 @@ static jsval_t builtin_path_basename(struct js *js, jsval_t *args, int nargs) {
 }
 
 // path.dirname(path)
-static jsval_t builtin_path_dirname(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_path_dirname(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "dirname() requires a path argument");
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "dirname() path must be a string");
   
@@ -84,7 +84,7 @@ static jsval_t builtin_path_dirname(struct js *js, jsval_t *args, int nargs) {
 }
 
 // path.extname(path)
-static jsval_t builtin_path_extname(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_path_extname(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "extname() requires a path argument");
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "extname() path must be a string");
   
@@ -192,7 +192,7 @@ fail:
 }
 
 // path.normalize(path)
-static jsval_t builtin_path_normalize(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_path_normalize(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "normalize() requires a path argument");
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "normalize() path must be a string");
   
@@ -209,7 +209,7 @@ static jsval_t builtin_path_normalize(struct js *js, jsval_t *args, int nargs) {
 }
 
 // path.join(...paths)
-static jsval_t builtin_path_join(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_path_join(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkstr(js, ".", 1);
   
   size_t total_len = 0;
@@ -280,7 +280,7 @@ static jsval_t builtin_path_join(struct js *js, jsval_t *args, int nargs) {
 }
 
 // path.resolve(...paths)
-static jsval_t builtin_path_resolve(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_path_resolve(ant_t *js, jsval_t *args, int nargs) {
   char cwd[PATH_MAX];
   if (getcwd(cwd, sizeof(cwd)) == NULL) {
     return js_mkerr(js, "Failed to get current working directory");
@@ -321,7 +321,7 @@ static jsval_t builtin_path_resolve(struct js *js, jsval_t *args, int nargs) {
 }
 
 // path.relative(from, to)
-static jsval_t builtin_path_relative(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_path_relative(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "relative() requires from and to arguments");
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "relative() from must be a string");
   if (vtype(args[1]) != T_STR) return js_mkerr(js, "relative() to must be a string");
@@ -337,7 +337,7 @@ static jsval_t builtin_path_relative(struct js *js, jsval_t *args, int nargs) {
 }
 
 // path.isAbsolute(path)
-static jsval_t builtin_path_isAbsolute(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_path_isAbsolute(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "isAbsolute() requires a path argument");
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "isAbsolute() path must be a string");
   
@@ -355,7 +355,7 @@ static jsval_t builtin_path_isAbsolute(struct js *js, jsval_t *args, int nargs) 
 }
 
 // path.parse(path)
-static jsval_t builtin_path_parse(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_path_parse(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "parse() requires a path argument");
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "parse() path must be a string");
   
@@ -397,7 +397,7 @@ static jsval_t builtin_path_parse(struct js *js, jsval_t *args, int nargs) {
 }
 
 // path.format(pathObject)
-static jsval_t builtin_path_format(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_path_format(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "format() requires a path object argument");
   if (!is_special_object(args[0])) return js_mkerr(js, "format() argument must be an object");
   
@@ -460,7 +460,7 @@ static jsval_t builtin_path_format(struct js *js, jsval_t *args, int nargs) {
   return js_mkstr(js, result, pos);
 }
 
-jsval_t path_library(struct js *js) {
+jsval_t path_library(ant_t *js) {
   jsval_t lib = js_mkobj(js);
   
   js_set(js, lib, "basename", js_mkfun(builtin_path_basename));
@@ -477,7 +477,7 @@ jsval_t path_library(struct js *js) {
   js_set(js, lib, "sep", js_mkstr(js, PATH_SEP_STR, 1));
   char delimiter_str[2] = {PATH_DELIMITER, '\0'};
   js_set(js, lib, "delimiter", js_mkstr(js, delimiter_str, 1));
-  js_set(js, lib, get_toStringTag_sym_key(), js_mkstr(js, "path", 4));
+  js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "path", 4));
   
   return lib;
 }

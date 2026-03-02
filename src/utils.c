@@ -1,15 +1,16 @@
 #include "utils.h"
 #include "messages.h"
 
+#include <oxc.h>
 #include <stdio.h>
 #include <stdbool.h>
 #include <sys/stat.h>
 #include <crprintf.h>
 
-static const char *const js_extensions[] = {
-  ".js", ".ts", 
-  ".cjs", ".mjs", 
-  ".jsx", ".tsx", NULL
+const char *const module_resolve_extensions[] = {
+  ".js", ".mjs", ".cjs",
+  ".ts", ".mts", ".cts",
+  ".json", ".node", NULL
 };
 
 int hex_digit(char c) {
@@ -58,10 +59,76 @@ int is_typescript_file(const char *filename) {
   return (strcmp(ext, ".ts") == 0 || strcmp(ext, ".mts") == 0 || strcmp(ext, ".cts") == 0);
 }
 
+int strip_typescript_inplace(
+  char **buffer,
+  size_t len,
+  const char *filename,
+  size_t *out_len,
+  const char **error_detail
+) {
+  if (out_len) *out_len = len;
+  if (error_detail) *error_detail = NULL;
+  if (!is_typescript_file(filename)) return 0;
+
+  if (!buffer || !*buffer) {
+    if (error_detail) *error_detail = "null input/output passed";
+    return OXC_ERR_NULL_INPUT;
+  }
+  
+  char *input = *buffer;
+  char error_buf[256] = {0};
+  size_t stripped_len = 0;
+  
+  int strip_error = OXC_ERR_TRANSFORM_FAILED;
+  char *stripped = OXC_strip_types_owned(
+    input, filename,
+    &stripped_len, &strip_error,
+    error_buf, sizeof(error_buf)
+  );
+
+  if (!stripped) {
+    if (error_buf[0] != '\0') {
+      size_t msg_len = strlen(error_buf);
+      size_t copy_len = msg_len > len ? len : msg_len;
+      memcpy(input, error_buf, copy_len);
+      input[copy_len] = '\0';
+    } else input[0] = '\0';
+
+    if (error_detail) {
+      *error_detail = input[0] != '\0' ? input : "unknown strip error";
+    }
+    
+    return strip_error;
+  }
+
+  char *next = realloc(input, stripped_len + 1);
+  if (!next) {
+    OXC_free_stripped_output(stripped, stripped_len);
+    if (error_detail) *error_detail = "out of memory while resizing strip output buffer";
+    return OXC_ERR_OUTPUT_TOO_LARGE;
+  }
+
+  memcpy(next, stripped, stripped_len + 1);
+  OXC_free_stripped_output(stripped, stripped_len);
+
+  *buffer = next;
+  if (out_len) *out_len = stripped_len;
+  
+  return 0;
+}
+
+static bool is_entrypoint_script_extension(const char *ext) {
+  return 
+    ext && 
+    strcmp(ext, ".json") != 0 &&
+    strcmp(ext, ".node") != 0;
+}
+
 static bool has_js_extension(const char *filename) {
   const char *dot = strrchr(filename, '.');
   if (!dot) return false;
-  for (const char *const *ext = js_extensions; *ext; ext++) {
+  for (const char *const *ext = module_resolve_extensions; *ext; ext++) {
+    if (!is_entrypoint_script_extension(*ext)) continue;
     if (strcmp(dot, *ext) == 0) return true;
   }
   return false;
@@ -74,20 +141,33 @@ char *resolve_js_file(const char *filename) {
   
   struct stat st;
   if (stat(filename, &st) == 0) {
-    if (S_ISREG(st.st_mode)) return strdup(filename);
+    if (S_ISREG(st.st_mode)) {
+      const char *dot = strrchr(filename, '.');
+      if (dot && !has_js_extension(filename)) return NULL;
+      return strdup(filename);
+    }
     if (!S_ISDIR(st.st_mode)) return NULL;
 
     size_t len = strlen(filename);
     int has_slash = (len > 0 && filename[len - 1] == '/');
-    char *index_path = try_oom(len + 10 + (has_slash ? 0 : 1));
-    sprintf(index_path, "%s%sindex.js", filename, has_slash ? "" : "/");
-    return index_path;
+    
+    for (const char *const *ext = module_resolve_extensions; *ext; ext++) {
+      if (!is_entrypoint_script_extension(*ext)) continue;
+      size_t ext_len = strlen(*ext);
+      char *index_path = try_oom(len + 7 + ext_len + 1);
+      sprintf(index_path, "%s%sindex%s", filename, has_slash ? "" : "/", *ext);
+      if (stat(index_path, &st) == 0 && S_ISREG(st.st_mode)) return index_path;
+      free(index_path);
+    }
+    
+    return NULL;
   }
   
   if (has_js_extension(filename)) return NULL;
   size_t base_len = strlen(filename);
   
-  for (const char *const *ext = js_extensions; *ext; ext++) {
+  for (const char *const *ext = module_resolve_extensions; *ext; ext++) {
+    if (!is_entrypoint_script_extension(*ext)) continue;
     size_t ext_len = strlen(*ext);
     char *test_path = try_oom(base_len + ext_len + 1);
     
@@ -101,6 +181,90 @@ char *resolve_js_file(const char *filename) {
   
   return NULL;
 }
+
+typedef struct {
+  const char *repl; size_t repl_len; size_t *ri;
+  const char *matched; size_t matched_len;
+  const char *str; size_t str_len; size_t position;
+  const repl_capture_t *caps; int ncaptures;
+  char **buf; size_t *buf_len; size_t *buf_cap;
+} rt_ctx_t;
+
+#define RT_APPEND(c, data, dlen) do { \
+  if (*(c)->buf_len + (dlen) >= *(c)->buf_cap) { \
+    *(c)->buf_cap = (*(c)->buf_len + (dlen) + 1) * 2; \
+    *(c)->buf = realloc(*(c)->buf, *(c)->buf_cap); \
+  } \
+  memcpy(*(c)->buf + *(c)->buf_len, data, dlen); *(c)->buf_len += (dlen); \
+} while(0)
+
+static void rt_dollar(rt_ctx_t *c)  { RT_APPEND(c, "$", 1); *c->ri += 2; }
+static void rt_match(rt_ctx_t *c)   { RT_APPEND(c, c->matched, c->matched_len); *c->ri += 2; }
+static void rt_prefix(rt_ctx_t *c)  { RT_APPEND(c, c->str, c->position); *c->ri += 2; }
+
+static void rt_suffix(rt_ctx_t *c) {
+  size_t after = c->position + c->matched_len;
+  if (after < c->str_len) RT_APPEND(c, c->str + after, c->str_len - after);
+  *c->ri += 2;
+}
+
+static void rt_capture(rt_ctx_t *c) {
+  char nc = c->repl[*c->ri + 1];
+  int gn = nc - '0';
+  *c->ri += 2;
+  if (*c->ri < c->repl_len && c->repl[*c->ri] >= '0' && c->repl[*c->ri] <= '9') {
+    int two = gn * 10 + (c->repl[*c->ri] - '0');
+    if (two <= c->ncaptures) { gn = two; (*c->ri)++; }
+  }
+  if (gn > 0 && gn <= c->ncaptures && c->caps[gn - 1].ptr) {
+    RT_APPEND(c, c->caps[gn - 1].ptr, c->caps[gn - 1].len);
+  } else if (gn == 0 || gn > c->ncaptures) {
+    RT_APPEND(c, "$", 1); RT_APPEND(c, &nc, 1);
+  }
+}
+
+typedef void (*rt_handler_t)(rt_ctx_t *);
+static rt_handler_t rt_dispatch[128];
+static bool rt_dispatch_init = false;
+
+static void rt_init_dispatch(void) {
+  if (rt_dispatch_init) return;
+  rt_dispatch['$'] = rt_dollar;
+  rt_dispatch['&'] = rt_match;
+  rt_dispatch['`'] = rt_prefix;
+  rt_dispatch['\''] = rt_suffix;
+  for (int i = '0'; i <= '9'; i++) rt_dispatch[i] = rt_capture;
+  rt_dispatch_init = true;
+}
+
+void repl_template(
+  const char *repl, size_t repl_len,
+  const char *matched, size_t matched_len,
+  const char *str, size_t str_len, size_t position,
+  const repl_capture_t *caps, int ncaptures,
+  char **buf, size_t *buf_len, size_t *buf_cap
+) {
+  rt_init_dispatch();
+  rt_ctx_t c = {
+    repl, repl_len, NULL,
+    matched, matched_len,
+    str, str_len, position,
+    caps, ncaptures,
+    buf, buf_len, buf_cap,
+  };
+  
+  for (size_t ri = 0; ri < repl_len; ) {
+    if (repl[ri] == '$' && ri + 1 < repl_len) {
+      unsigned char nc = (unsigned char)repl[ri + 1];
+      c.ri = &ri;
+      rt_handler_t h = nc < 128 ? rt_dispatch[nc] : NULL;
+      if (h) { h(&c); continue; }
+    }
+    RT_APPEND(&c, &repl[ri], 1); ri++;
+  }
+}
+
+#undef RT_APPEND
 
 void *try_oom(size_t size) {
   void *p = malloc(size);

@@ -1,0 +1,30 @@
+{
+  "name": "smoke",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "ant index.js"
+  },
+  "dependencies": {
+    "uuid": "^13.0.0",
+    "ms": "^2.1.3",
+    "pretty-bytes": "^7.1.0",
+    "slugify": "^1.6.6",
+    "lodash-es": "^4.17.23",
+    "nanoid": "^5.1.6",
+    "zod": "^4.3.6",
+    "marked": "^17.0.3",
+    "radash": "^12.1.1",
+    "chalk": "^5.6.2",
+    "semver": "^7.7.4",
+    "minimatch": "^10.2.4",
+    "yaml": "^2.8.2",
+    "csv-parse": "^6.1.0",
+    "dotenv": "^17.3.1",
+    "date-fns": "^4.1.0",
+    "ajv": "^8.18.0",
+    "cheerio": "^1.2.0",
+    "handlebars": "^4.7.8"
+  },
+  "devDependencies": {}
+}

@@ -31,10 +31,8 @@ function render() {
   return lines.join('\n');
 }
 
-async function handleEvent(n) {
-  for (let i = 0; i < 10; i++) {
-    render();
-  }
+async function handleEvent(_) {
+  for (let i = 0; i < 10; i++) render();
 }
 
 for (let count = 1; count <= 500; count++) {
@@ -42,12 +40,11 @@ for (let count = 1; count <= 500; count++) {
   const stats = Ant.stats();
   console.log(
     `tick ${count}: arena ${(stats.arenaUsed / 1024 / 1024).toFixed(1)}MB / ` +
-    `${(stats.arenaSize / 1024 / 1024).toFixed(1)}MB, ` +
-    `rss ${(stats.rss / 1024 / 1024).toFixed(1)}MB`
+      `${(stats.arenaSize / 1024 / 1024).toFixed(1)}MB, ` +
+      `rss ${(stats.rss / 1024 / 1024).toFixed(1)}MB`
   );
 }
 
 console.log('Done - forcing GC...');
-Ant.gc();
 const after = Ant.stats();
 console.log(`after GC: arena ${(after.arenaUsed / 1024 / 1024).toFixed(1)}MB`);

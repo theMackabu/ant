@@ -8,6 +8,14 @@ interface Features {
   typescript: 'transform' | 'none';
 }
 
+interface Versions {
+  node: string;
+  ant: string;
+  v8: string;
+  uv: string;
+  modules: string;
+}
+
 interface Process {
   env: ProcessEnv;
   argv: string[];
@@ -16,7 +24,9 @@ interface Process {
   arch: string;
   exit(code?: number): never;
   cwd(): string;
+  dlopen(module: { exports?: unknown }, filename: string): void;
   features: Features;
+  versions: Versions;
 }
 
 declare const process: Process;

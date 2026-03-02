@@ -221,14 +221,12 @@ function buildScreen() {
     lines.push(`  Max:      ${c.bold}${fmt(mem.cstack)}${c.reset}`);
     lines.push('');
 
-    lines.push(`${c.dim}Press 'g' to run GC${c.reset}`);
-
     while (lines.length < rows - 2) {
       lines.push('');
     }
 
     lines.push('');
-    lines.push(`${c.dim}m browse · g gc · q quit${c.reset}  ${c.cyan}${fps.current} fps${c.reset}`);
+    lines.push(`${c.dim}m browse · q quit${c.reset}  ${c.cyan}${fps.current} fps${c.reset}`);
   }
 
   return lines.map(l => pad(l, cols)).join('\n');
@@ -309,11 +307,7 @@ function handleKey(key) {
       needsRender = true;
       break;
     case 'g':
-      if (state.mode === 'memory') {
-        Ant.gc();
-      } else {
-        state.index = 0;
-      }
+      state.index = 0;
       needsRender = true;
       break;
     case 'G':

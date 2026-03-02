@@ -2,7 +2,8 @@
 #include "escape.h"
 
 static inline size_t decode_hex_escape(const uint8_t *in, size_t pos, uint8_t *out, size_t *out_pos) {
-  out[(*out_pos)++] = (uint8_t)((unhex(in[pos + 2]) << 4U) | unhex(in[pos + 3]));
+  uint32_t cp = (unhex(in[pos + 2]) << 4U) | unhex(in[pos + 3]);
+  *out_pos += utf8_encode(cp, (char *)&out[*out_pos]);
   return 2;
 }
 
@@ -18,7 +19,7 @@ static size_t decode_octal_escape(const uint8_t *in, size_t pos, uint8_t *out, s
     }
   }
   
-  out[(*out_pos)++] = (uint8_t)val;
+  *out_pos += utf8_encode((uint32_t)val, (char *)&out[*out_pos]);
   return extra;
 }
 
@@ -36,11 +37,25 @@ static size_t decode_unicode_braced(const uint8_t *in, size_t pos, size_t end, u
   return 0;
 }
 
-static size_t decode_unicode_fixed(const uint8_t *in, size_t pos, uint8_t *out, size_t *out_pos) {
-  uint32_t cp = 
+static size_t decode_unicode_fixed(const uint8_t *in, size_t pos, size_t end, uint8_t *out, size_t *out_pos) {
+  uint32_t cp =
     (unhex(in[pos + 2]) << 12U) | (unhex(in[pos + 3]) << 8U) |
     (unhex(in[pos + 4]) << 4U)  |  unhex(in[pos + 5]);
-    
+
+  if (cp >= 0xD800 && cp <= 0xDBFF && pos + 11 < end &&
+      in[pos + 6] == '\\' && in[pos + 7] == 'u' &&
+      is_xdigit(in[pos + 8]) && is_xdigit(in[pos + 9]) &&
+      is_xdigit(in[pos + 10]) && is_xdigit(in[pos + 11])) {
+    uint32_t lo =
+      (unhex(in[pos + 8]) << 12U) | (unhex(in[pos + 9]) << 8U) |
+      (unhex(in[pos + 10]) << 4U)  |  unhex(in[pos + 11]);
+    if (lo >= 0xDC00 && lo <= 0xDFFF) {
+      cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+      *out_pos += utf8_encode(cp, (char *)&out[*out_pos]);
+      return 10;
+    }
+  }
+
   *out_pos += utf8_encode(cp, (char *)&out[*out_pos]);
   return 4;
 }
@@ -74,7 +89,7 @@ size_t decode_escape(const uint8_t *in, size_t pos, size_t end, uint8_t *out, si
       } else if (
         pos + 5 < end && is_xdigit(in[pos + 2]) && is_xdigit(in[pos + 3]) &&
         is_xdigit(in[pos + 4]) && is_xdigit(in[pos + 5])
-      ) advance = decode_unicode_fixed(in, pos, out, out_pos);
+      ) advance = decode_unicode_fixed(in, pos, end, out, out_pos);
       else out[(*out_pos)++] = c;
       break;
     default:

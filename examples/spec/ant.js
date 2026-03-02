@@ -45,10 +45,6 @@ test('typeof null', Ant.typeof(null), 'null');
 test('typeof undefined', Ant.typeof(undefined), 'undefined');
 test('typeof boolean', Ant.typeof(true), 'boolean');
 
-test('gc is function', typeof Ant.gc, 'function');
-const gcResult = Ant.gc();
-test('gc returns undefined', gcResult, undefined);
-
 test('stats is function', typeof Ant.stats, 'function');
 test('raw is object', typeof Ant.raw, 'object');
 test('raw.typeof is function', typeof Ant.raw.typeof, 'function');

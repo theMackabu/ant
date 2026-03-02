@@ -4,12 +4,14 @@
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
+#include <uriparser/Uri.h>
 
 #include "ant.h"
 #include "errors.h"
 #include "internal.h"
 #include "runtime.h"
 #include "utils.h"
+#include "descriptors.h"
 
 #include "modules/url.h"
 #include "modules/symbol.h"
@@ -67,128 +69,122 @@ static char *url_decode_component(const char *str) {
       int lo = isdigit(str[i+2]) ? str[i+2] - '0' : tolower(str[i+2]) - 'a' + 10;
       out[j++] = (char)((hi << 4) | lo);
       i += 2;
-    } else if (str[i] == '+') {
-      out[j++] = ' ';
-    } else {
-      out[j++] = str[i];
     }
+    else if (str[i] == '+') out[j++] = ' ';
+    else out[j++] = str[i];
   }
   out[j] = '\0';
   return out;
 }
 
+static char *uri_range_dup(const UriTextRangeA *range) {
+  if (!range->first || !range->afterLast) return strdup("");
+  size_t len = (size_t)(range->afterLast - range->first);
+  return strndup(range->first, len);
+}
+
+static void uri_to_parsed(const UriUriA *uri, parsed_url_t *out) {
+  char *scheme = uri_range_dup(&uri->scheme);
+  size_t slen = strlen(scheme);
+  out->protocol = malloc(slen + 2);
+  memcpy(out->protocol, scheme, slen);
+  out->protocol[slen] = ':';
+  out->protocol[slen + 1] = '\0';
+  free(scheme);
+
+  char *userinfo = uri_range_dup(&uri->userInfo);
+  char *colon = strchr(userinfo, ':');
+  if (colon) {
+    *colon = '\0';
+    out->username = strdup(userinfo);
+    out->password = strdup(colon + 1);
+  } else {
+    out->username = strdup(userinfo);
+    out->password = strdup("");
+  }
+  free(userinfo);
+
+  out->hostname = uri_range_dup(&uri->hostText);
+  out->port = uri_range_dup(&uri->portText);
+
+  size_t path_cap = 1;
+  for (UriPathSegmentA *seg = uri->pathHead; seg; seg = seg->next)
+    path_cap += (size_t)(seg->text.afterLast - seg->text.first) + 1;
+  char *path = malloc(path_cap + 1);
+  size_t pos = 0;
+  for (UriPathSegmentA *seg = uri->pathHead; seg; seg = seg->next) {
+    path[pos++] = '/';
+    size_t slen_uri = (size_t)(seg->text.afterLast - seg->text.first);
+    memcpy(path + pos, seg->text.first, slen_uri);
+    pos += slen_uri;
+  }
+  if (pos == 0) path[pos++] = '/';
+  path[pos] = '\0';
+  out->pathname = path;
+
+  char *query = uri_range_dup(&uri->query);
+  if (*query) {
+    out->search = malloc(strlen(query) + 2);
+    out->search[0] = '?';
+    strcpy(out->search + 1, query);
+  } else out->search = strdup("");
+  free(query);
+
+  char *frag = uri_range_dup(&uri->fragment);
+  if (*frag) {
+    out->hash = malloc(strlen(frag) + 2);
+    out->hash[0] = '#';
+    strcpy(out->hash + 1, frag);
+  } else out->hash = strdup("");
+  free(frag);
+}
+
+static const char *coerce_to_string(ant_t *js, jsval_t val, size_t *len) {
+  if (vtype(val) == T_STR) return js_getstr(js, val, len);
+  if (is_object_type(val)) {
+    jsval_t href = js_get(js, val, "href");
+    if (vtype(href) == T_STR) return js_getstr(js, href, len);
+  }
+  return NULL;
+}
+
 static int parse_url(const char *url_str, const char *base_str, parsed_url_t *out) {
   memset(out, 0, sizeof(*out));
 
-  const char *p = url_str;
-  const char *end = url_str + strlen(url_str);
+  UriUriA uri;
+  const char *errorPos;
 
-  if (base_str && *p == '/') {
-    parsed_url_t base = {0};
-    if (parse_url(base_str, NULL, &base) < 0) return -1;
-    out->protocol = base.protocol ? strdup(base.protocol) : NULL;
-    out->username = base.username ? strdup(base.username) : strdup("");
-    out->password = base.password ? strdup(base.password) : strdup("");
-    out->hostname = base.hostname ? strdup(base.hostname) : NULL;
-    out->port = base.port ? strdup(base.port) : strdup("");
-
-    char *path_copy = strdup(p);
-    char *q = strchr(path_copy, '?');
-    char *h = strchr(path_copy, '#');
-
-    if (h) {
-      out->hash = strdup(h);
-      *h = '\0';
-    } else {
-      out->hash = strdup("");
+  if (base_str && !strstr(url_str, "://")) {
+    UriUriA base_uri, rel_uri, resolved;
+    
+    if (uriParseSingleUriA(&base_uri, base_str, &errorPos) != URI_SUCCESS)
+      return -1;
+      
+    if (uriParseSingleUriA(&rel_uri, url_str, &errorPos) != URI_SUCCESS) {
+      uriFreeUriMembersA(&base_uri);
+      return -1;
     }
-
-    if (q) {
-      out->search = strdup(q);
-      *q = '\0';
-    } else {
-      out->search = strdup("");
+    
+    if (uriAddBaseUriA(&resolved, &rel_uri, &base_uri) != URI_SUCCESS) {
+      uriFreeUriMembersA(&base_uri);
+      uriFreeUriMembersA(&rel_uri);
+      return -1;
     }
-
-    out->pathname = strdup(path_copy);
-    free(path_copy);
-
-    free(base.protocol); free(base.username); free(base.password);
-    free(base.hostname); free(base.port); free(base.pathname);
-    free(base.search); free(base.hash);
+    
+    uriNormalizeSyntaxA(&resolved);
+    uri_to_parsed(&resolved, out);
+    
+    uriFreeUriMembersA(&resolved);
+    uriFreeUriMembersA(&rel_uri);
+    uriFreeUriMembersA(&base_uri);
     return 0;
   }
 
-  const char *scheme_end = strstr(p, "://");
-  if (!scheme_end) return -1;
-
-  size_t scheme_len = scheme_end - p;
-  out->protocol = malloc(scheme_len + 2);
-  memcpy(out->protocol, p, scheme_len);
-  out->protocol[scheme_len] = ':';
-  out->protocol[scheme_len + 1] = '\0';
-  p = scheme_end + 3;
-
-  out->username = strdup("");
-  out->password = strdup("");
-
-  const char *at = strchr(p, '@');
-  const char *slash = strchr(p, '/');
-  if (at && (!slash || at < slash)) {
-    const char *colon = strchr(p, ':');
-    if (colon && colon < at) {
-      free(out->username);
-      out->username = strndup(p, colon - p);
-      free(out->password);
-      out->password = strndup(colon + 1, at - colon - 1);
-    } else {
-      free(out->username);
-      out->username = strndup(p, at - p);
-    }
-    p = at + 1;
-  }
-
-  slash = strchr(p, '/');
-  const char *qmark = strchr(p, '?');
-  const char *hash = strchr(p, '#');
-
-  const char *host_end = slash ? slash : (qmark ? qmark : (hash ? hash : end));
-  char *host_part = strndup(p, host_end - p);
-
-  char *port_sep = strrchr(host_part, ':');
-  if (port_sep && strchr(port_sep, ']') == NULL) {
-    *port_sep = '\0';
-    out->port = strdup(port_sep + 1);
-    out->hostname = strdup(host_part);
-  } else {
-    out->hostname = strdup(host_part);
-    out->port = strdup("");
-  }
-  free(host_part);
-  p = host_end;
-
-  if (slash) {
-    const char *path_end = qmark ? qmark : (hash ? hash : end);
-    out->pathname = strndup(slash, path_end - slash);
-    p = path_end;
-  } else {
-    out->pathname = strdup("/");
-  }
-
-  if (qmark && (!hash || qmark < hash)) {
-    const char *search_end = hash ? hash : end;
-    out->search = strndup(qmark, search_end - qmark);
-    p = search_end;
-  } else {
-    out->search = strdup("");
-  }
-
-  if (hash) {
-    out->hash = strdup(hash);
-  } else {
-    out->hash = strdup("");
-  }
-
+  if (uriParseSingleUriA(&uri, url_str, &errorPos) != URI_SUCCESS)
+    return -1;
+    
+  uri_to_parsed(&uri, out);
+  uriFreeUriMembersA(&uri);
   return 0;
 }
 
@@ -256,7 +252,7 @@ static char *build_href(
   return href;
 }
 
-static void update_url_href(struct js *js, jsval_t url_obj) {
+static void update_url_href(ant_t *js, jsval_t url_obj) {
   char *protocol = js_getstr(js, js_get(js, url_obj, "protocol"), NULL);
   char *username = js_getstr(js, js_get(js, url_obj, "username"), NULL);
   char *password = js_getstr(js, js_get(js, url_obj, "password"), NULL);
@@ -302,11 +298,11 @@ static void update_url_href(struct js *js, jsval_t url_obj) {
   free(href);
 }
 
-static jsval_t url_toString(struct js *js, jsval_t *args, int nargs) {
+static jsval_t url_toString(ant_t *js, jsval_t *args, int nargs) {
   return js_get(js, js_getthis(js), "href");
 }
 
-static jsval_t js_URLSearchParams(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_URLSearchParams(ant_t *js, jsval_t *args, int nargs) {
   jsval_t usp = js_mkobj(js);
   jsval_t proto = js_get_ctor_proto(js, "URLSearchParams", 15);
   if (is_special_object(proto)) js_set_proto(js, usp, proto);
@@ -340,11 +336,11 @@ parse_pair:
   goto parse_pair;
 }
 
-static jsval_t js_URL(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_URL(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "TypeError: URL requires at least 1 argument");
 
   char *url_str = js_getstr(js, args[0], NULL);
-  char *base_str = (nargs > 1) ? js_getstr(js, args[1], NULL) : NULL;
+  char *base_str = (nargs > 1) ? (char *)coerce_to_string(js, args[1], NULL) : NULL;
   if (!url_str) return js_mkerr(js, "TypeError: Invalid URL");
 
   parsed_url_t parsed;
@@ -367,21 +363,25 @@ static jsval_t js_URL(struct js *js, jsval_t *args, int nargs) {
 
   update_url_href(js, url_obj);
 
-  jsval_t search_params;
+  jsval_t search_params = js_mkobj(js);
+  jsval_t usp_proto = js_get_ctor_proto(js, "URLSearchParams", 15);
+  if (is_special_object(usp_proto)) js_set_proto(js, search_params, usp_proto);
+  js_set_slot(js, search_params, SLOT_DATA, url_obj);
   if (parsed.search && *parsed.search) {
     const char *qs = parsed.search[0] == '?' ? parsed.search + 1 : parsed.search;
     jsval_t arg = js_mkstr(js, qs, strlen(qs));
-    search_params = js_URLSearchParams(js, &arg, 1);
-  } else search_params = js_URLSearchParams(js, NULL, 0);
-  
-  js_set_slot(js, search_params, SLOT_DATA, url_obj);
+    jsval_t tmp = js_URLSearchParams(js, &arg, 1);
+    js_set_slot(js, search_params, SLOT_ENTRIES, js_get_slot(js, tmp, SLOT_ENTRIES));
+  } else {
+    js_set_slot(js, search_params, SLOT_ENTRIES, js_mkarr(js));
+  }
   js_set(js, url_obj, "searchParams", search_params);
 
   free_parsed_url(&parsed);
   return url_obj;
 }
 
-static jsval_t usp_get(struct js *js, jsval_t *args, int nargs) {
+static jsval_t usp_get(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mknull();
   jsval_t this_val = js_getthis(js);
   
@@ -401,7 +401,7 @@ static jsval_t usp_get(struct js *js, jsval_t *args, int nargs) {
   return js_mknull();
 }
 
-static jsval_t usp_getAll(struct js *js, jsval_t *args, int nargs) {
+static jsval_t usp_getAll(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkarr(js);
   jsval_t this_val = js_getthis(js);
   
@@ -422,7 +422,7 @@ static jsval_t usp_getAll(struct js *js, jsval_t *args, int nargs) {
   return result;
 }
 
-static jsval_t usp_has(struct js *js, jsval_t *args, int nargs) {
+static jsval_t usp_has(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_false;
   jsval_t this_val = js_getthis(js);
   
@@ -442,7 +442,7 @@ static jsval_t usp_has(struct js *js, jsval_t *args, int nargs) {
   return js_false;
 }
 
-static void usp_sync_url(struct js *js, jsval_t this_val) {
+static void usp_sync_url(ant_t *js, jsval_t this_val) {
   jsval_t url_obj = js_get_slot(js, this_val, SLOT_DATA);
   if (!is_special_object(url_obj)) return;
 
@@ -480,7 +480,7 @@ static void usp_sync_url(struct js *js, jsval_t this_val) {
   free(buf);
 }
 
-static jsval_t usp_set(struct js *js, jsval_t *args, int nargs) {
+static jsval_t usp_set(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkundef();
   jsval_t this_val = js_getthis(js);
   
@@ -520,7 +520,7 @@ static jsval_t usp_set(struct js *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t usp_append(struct js *js, jsval_t *args, int nargs) {
+static jsval_t usp_append(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkundef();
   jsval_t this_val = js_getthis(js);
 
@@ -534,7 +534,7 @@ static jsval_t usp_append(struct js *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t usp_delete(struct js *js, jsval_t *args, int nargs) {
+static jsval_t usp_delete(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
   jsval_t this_val = js_getthis(js);
   char *key = js_getstr(js, args[0], NULL);
@@ -557,7 +557,7 @@ static jsval_t usp_delete(struct js *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t usp_toString(struct js *js, jsval_t *args, int nargs) {
+static jsval_t usp_toString(ant_t *js, jsval_t *args, int nargs) {
   jsval_t this_val = js_getthis(js);
   jsval_t entries = js_get_slot(js, this_val, SLOT_ENTRIES);
   jsoff_t len = js_arr_len(js, entries);
@@ -603,7 +603,7 @@ void init_url_module(void) {
   jsval_t url_proto = js_mkobj(js);
   
   js_set(js, url_proto, "toString", js_mkfun(url_toString));
-  js_set(js, url_proto, get_toStringTag_sym_key(), js_mkstr(js, "URL", 3));
+  js_set_sym(js, url_proto, get_toStringTag_sym(), js_mkstr(js, "URL", 3));
   
   js_set_slot(js, url_ctor, SLOT_CFUNC, js_mkfun(js_URL));
   js_mkprop_fast(js, url_ctor, "prototype", 9, url_proto);
@@ -622,7 +622,7 @@ void init_url_module(void) {
   js_set(js, usp_proto, "append", js_mkfun(usp_append));
   js_set(js, usp_proto, "delete", js_mkfun(usp_delete));
   js_set(js, usp_proto, "toString", js_mkfun(usp_toString));
-  js_set(js, usp_proto, get_toStringTag_sym_key(), js_mkstr(js, "URLSearchParams", 15));
+  js_set_sym(js, usp_proto, get_toStringTag_sym(), js_mkstr(js, "URLSearchParams", 15));
   
   js_set_slot(js, usp_ctor, SLOT_CFUNC, js_mkfun(js_URLSearchParams));
   js_mkprop_fast(js, usp_ctor, "prototype", 9, usp_proto);
@@ -630,4 +630,63 @@ void init_url_module(void) {
   js_set_descriptor(js, usp_ctor, "name", 4, 0);
   
   js_set(js, glob, "URLSearchParams", js_obj_to_func(usp_ctor));
+}
+
+static jsval_t builtin_fileURLToPath(ant_t *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "fileURLToPath requires a string or URL argument");
+
+  size_t len;
+  const char *str = coerce_to_string(js, args[0], &len);
+  if (!str) return js_mkerr(js, "fileURLToPath requires a string or URL argument");
+
+  parsed_url_t parsed;
+  if (parse_url(str, NULL, &parsed) != 0)
+    return js_mkerr(js, "Invalid URL");
+
+  if (strcmp(parsed.protocol, "file:") != 0) {
+    free_parsed_url(&parsed);
+    return js_mkerr(js, "fileURLToPath requires a file: URL");
+  }
+
+  char *decoded = url_decode_component(parsed.pathname);
+  free_parsed_url(&parsed);
+  if (!decoded) return js_mkerr(js, "allocation failure");
+
+  jsval_t ret = js_mkstr(js, decoded, strlen(decoded));
+  free(decoded);
+  return ret;
+}
+
+static jsval_t builtin_pathToFileURL(ant_t *js, jsval_t *args, int nargs) {
+  if (nargs < 1 || vtype(args[0]) != T_STR)
+    return js_mkerr(js, "pathToFileURL requires a string argument");
+
+  size_t len;
+  const char *path = js_getstr(js, args[0], &len);
+
+  size_t total = 7 + len;
+  char *buf = malloc(total + 1);
+  if (!buf) return js_mkerr(js, "allocation failure");
+
+  memcpy(buf, "file://", 7);
+  memcpy(buf + 7, path, len);
+  buf[total] = '\0';
+
+  jsval_t url_args[1] = { js_mkstr(js, buf, total) };
+  free(buf);
+
+  return js_URL(js, url_args, 1);
+}
+
+jsval_t url_library(ant_t *js) {
+  jsval_t lib = js_mkobj(js);
+  jsval_t glob = js_glob(js);
+
+  js_set(js, lib, "URL", js_get(js, glob, "URL"));
+  js_set(js, lib, "URLSearchParams", js_get(js, glob, "URLSearchParams"));
+  js_set(js, lib, "fileURLToPath", js_mkfun(builtin_fileURLToPath));
+  js_set(js, lib, "pathToFileURL", js_mkfun(builtin_pathToFileURL));
+  js_set(js, lib, "default", lib);
+
+  return lib;
 }

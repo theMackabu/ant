@@ -8,6 +8,7 @@
 #include "errors.h"
 #include "runtime.h"
 #include "internal.h"
+#include "silver/engine.h"
 
 #include "modules/json.h"
 #include "modules/symbol.h"
@@ -19,7 +20,7 @@ typedef struct {
   UT_hash_handle hh;
 } json_key_entry_t;
 
-static jsval_t yyjson_to_jsval(struct js *js, yyjson_val *val) {
+static jsval_t yyjson_to_jsval(ant_t *js, yyjson_val *val) {
   if (!val) return js_mkundef();
   
   switch (yyjson_get_type(val)) {
@@ -80,7 +81,7 @@ typedef struct {
   int stack_size;
   int stack_cap;
   int has_cycle;
-  struct js *js;
+  ant_t *js;
   jsval_t replacer_func;
   jsval_t replacer_arr;
   int replacer_arr_len;
@@ -107,13 +108,13 @@ static inline void json_cycle_pop(json_cycle_ctx *ctx) {
 
 typedef struct { char *key; size_t key_len; jsval_t value; } prop_entry;
 
-static int should_skip_prop(struct js *js, const char *key, size_t key_len, jsval_t value) {
+static int should_skip_prop(ant_t *js, const char *key, size_t key_len, jsval_t value) {
   if (is_internal_prop(key, (jsoff_t)key_len)) return 1;
   if (!is_special_object(value)) return 0;
   return vtype(js_get_slot(js, value, SLOT_CODE)) == T_CFUNC;
 }
 
-static prop_entry *collect_props(struct js *js, jsval_t val, int *out_count) {
+static prop_entry *collect_props(ant_t *js, jsval_t val, int *out_count) {
   prop_entry *props = NULL;
   int count = 0, cap = 0;
   const char *key;
@@ -151,7 +152,7 @@ static inline int key_matches(const char *a, size_t a_len, const char *b, size_t
   return a_len == b_len && memcmp(a, b, a_len) == 0;
 }
 
-static int is_key_in_replacer_arr(struct js *js, json_cycle_ctx *ctx, const char *key, size_t key_len) {
+static int is_key_in_replacer_arr(ant_t *js, json_cycle_ctx *ctx, const char *key, size_t key_len) {
   if (!is_special_object(ctx->replacer_arr)) return 1;
   
   for (int i = 0; i < ctx->replacer_arr_len; i++) {
@@ -173,16 +174,16 @@ static int is_key_in_replacer_arr(struct js *js, json_cycle_ctx *ctx, const char
   return 0;
 }
 
-static yyjson_mut_val *jsval_to_yyjson_with_key(struct js *js, yyjson_mut_doc *doc, const char *key, jsval_t val, json_cycle_ctx *ctx, int in_array);
+static yyjson_mut_val *jsval_to_yyjson_with_key(ant_t *js, yyjson_mut_doc *doc, const char *key, jsval_t val, json_cycle_ctx *ctx, int in_array);
 
-static yyjson_mut_val *jsval_to_yyjson_impl(struct js *js, yyjson_mut_doc *doc, jsval_t val, json_cycle_ctx *ctx, int in_array) {
+static yyjson_mut_val *jsval_to_yyjson_impl(ant_t *js, yyjson_mut_doc *doc, jsval_t val, json_cycle_ctx *ctx, int in_array) {
   int type = vtype(val);
   yyjson_mut_val *result = NULL;
   
   if (is_special_object(val)) {
     jsval_t toJSON = js_get(js, val, "toJSON");
     if (vtype(toJSON) == T_FUNC) {
-      jsval_t r = js_call(js, toJSON, &val, 1);
+      jsval_t r = sv_vm_call(js->vm, js, toJSON, js_mkundef(), &val, 1, NULL, false);
       if (vtype(r) == T_ERR) { ctx->has_cycle = 1; return NULL; }
       return jsval_to_yyjson_impl(js, doc, r, ctx, in_array);
     }
@@ -276,13 +277,13 @@ done:
   return result;
 }
 
-static yyjson_mut_val *jsval_to_yyjson_with_key(struct js *js, yyjson_mut_doc *doc, const char *key, jsval_t val, json_cycle_ctx *ctx, int in_array) {
+static yyjson_mut_val *jsval_to_yyjson_with_key(ant_t *js, yyjson_mut_doc *doc, const char *key, jsval_t val, json_cycle_ctx *ctx, int in_array) {
   if (vtype(ctx->replacer_func) != T_FUNC)
     return jsval_to_yyjson_impl(js, doc, val, ctx, in_array);
   
   jsval_t key_str = js_mkstr(js, key, strlen(key));
   jsval_t call_args[2] = { key_str, val };
-  jsval_t transformed = js_call(js, ctx->replacer_func, call_args, 2);
+  jsval_t transformed = sv_vm_call(js->vm, js, ctx->replacer_func, js_mkundef(), call_args, 2, NULL, false);
   
   if (vtype(transformed) == T_ERR) {
     ctx->has_cycle = 1;
@@ -292,11 +293,11 @@ static yyjson_mut_val *jsval_to_yyjson_with_key(struct js *js, yyjson_mut_doc *d
   return jsval_to_yyjson_impl(js, doc, transformed, ctx, in_array);
 }
 
-static yyjson_mut_val *jsval_to_yyjson(struct js *js, yyjson_mut_doc *doc, jsval_t val, json_cycle_ctx *ctx) {
+static yyjson_mut_val *jsval_to_yyjson(ant_t *js, yyjson_mut_doc *doc, jsval_t val, json_cycle_ctx *ctx) {
   return jsval_to_yyjson_with_key(js, doc, "", val, ctx, 0);
 }
 
-static jsval_t apply_reviver(struct js *js, jsval_t holder, const char *key, jsval_t reviver) {
+static jsval_t apply_reviver(ant_t *js, jsval_t holder, const char *key, jsval_t reviver) {
   jsval_t val = js_get(js, holder, key);
   
   if (is_special_object(val)) {
@@ -343,10 +344,10 @@ static jsval_t apply_reviver(struct js *js, jsval_t holder, const char *key, jsv
   jsval_t key_str = js_mkstr(js, key, strlen(key));
   jsval_t call_args[2] = { key_str, js_get(js, holder, key) };
   
-  return js_call_with_this(js, reviver, holder, call_args, 2);
+  return sv_vm_call(js->vm, js, reviver, holder, call_args, 2, NULL, false);
 }
 
-jsval_t js_json_parse(struct js *js, jsval_t *args, int nargs) {
+jsval_t js_json_parse(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "JSON.parse() requires at least 1 argument");
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "JSON.parse() argument must be a string");
   
@@ -383,7 +384,7 @@ static yyjson_write_flag get_write_flags(jsval_t *args, int nargs) {
   return YYJSON_WRITE_PRETTY;
 }
 
-jsval_t js_json_stringify(struct js *js, jsval_t *args, int nargs) {
+jsval_t js_json_stringify(ant_t *js, jsval_t *args, int nargs) {
   jsval_t result;
   yyjson_mut_doc *doc = NULL;
   json_cycle_ctx ctx = {0};
@@ -448,12 +449,12 @@ cleanup:
 }
 
 void init_json_module() {
-  struct js *js = rt->js;
+  ant_t *js = rt->js;
   jsval_t json_obj = js_mkobj(js);
   
   js_set(js, json_obj, "parse", js_mkfun(js_json_parse));
   js_set(js, json_obj, "stringify", js_mkfun(js_json_stringify));
   
-  js_set(js, json_obj, get_toStringTag_sym_key(), js_mkstr(js, "JSON", 4));
+  js_set_sym(js, json_obj, get_toStringTag_sym(), js_mkstr(js, "JSON", 4));
   js_set(js, js_glob(js), "JSON", json_obj);
 }

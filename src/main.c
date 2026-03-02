@@ -1,24 +1,28 @@
 #include <compat.h> // IWYU pragma: keep
 #include <arena.h>
 
-#include <oxc.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/resource.h>
 #include <argtable3.h>
 #include <crprintf.h>
 
 #include "ant.h"
 #include "repl.h"
+#include "debug.h"
 #include "utils.h"
 #include "watch.h"
 #include "reactor.h"
 #include "runtime.h"
 #include "snapshot.h"
+#include "esm/loader.h"
+#include "esm/library.h"
 #include "esm/remote.h"
 #include "internal.h"
+#include "silver/vm.h"
 #include "messages.h"
 
 #include "cli/pkg.h"
@@ -38,6 +42,7 @@
 #include "modules/fetch.h"
 #include "modules/shell.h"
 #include "modules/process.h"
+#include "modules/tty.h"
 #include "modules/path.h"
 #include "modules/ffi.h"
 #include "modules/events.h"
@@ -47,6 +52,8 @@
 #include "modules/url.h"
 #include "modules/reflect.h"
 #include "modules/symbol.h"
+#include "modules/date.h"
+#include "modules/regex.h"
 #include "modules/textcodec.h"
 #include "modules/sessionstorage.h"
 #include "modules/localstorage.h"
@@ -55,6 +62,12 @@
 #include "modules/readline.h"
 #include "modules/observable.h"
 #include "modules/collections.h"
+#include "modules/module.h"
+#include "modules/util.h"
+#include "modules/async_hooks.h"
+#include "modules/net.h"
+#include "modules/dns.h"
+#include "modules/worker_threads.h"
 
 int js_result = EXIT_SUCCESS;
 typedef int (*cmd_fn)(int argc, char **argv);
@@ -67,29 +80,52 @@ typedef struct {
 } subcommand_t;
 
 static const subcommand_t subcommands[] = {
-  {"init",    NULL,      "Create a new package.json",              pkg_cmd_init},
-  {"install", "i",       "Install dependencies from lockfile",     pkg_cmd_install},
-  {"add",     "a",       "Add a package to dependencies",          pkg_cmd_add},
-  {"remove",  "rm",      "Remove a package from dependencies",     pkg_cmd_remove},
-  {"trust",   NULL,      "Run lifecycle scripts for packages",     pkg_cmd_trust},
-  {"run",     NULL,      "Run a script from package.json",         pkg_cmd_run},
-  {"exec",    "x",       "Run a command from node_modules/.bin",   pkg_cmd_exec},
-  {"why",     "explain", "Show why a package is installed",        pkg_cmd_why},
-  {"info",    NULL,      "Show package information from registry", pkg_cmd_info},
-  {"ls",      "list",    "List installed packages",                pkg_cmd_ls},
-  {"cache",   NULL,      "Manage the package cache",               pkg_cmd_cache},
-  {"create",  NULL,      "Scaffold a project from a template",     pkg_cmd_create},
+  {"init",    NULL,      "Create a new package.json",                    pkg_cmd_init},
+  {"install", "i",       "Install dependencies from lockfile",           pkg_cmd_install},
+  {"update",  "up",      "Re-resolve dependencies and refresh lockfile", pkg_cmd_update},
+  {"add",     "a",       "Add a package to dependencies",                pkg_cmd_add},
+  {"remove",  "rm",      "Remove a package from dependencies",           pkg_cmd_remove},
+  {"trust",   NULL,      "Run lifecycle scripts for packages",           pkg_cmd_trust},
+  {"run",     NULL,      "Run a script from package.json",               pkg_cmd_run},
+  {"exec",    "x",       "Run a command from node_modules/.bin",         pkg_cmd_exec},
+  {"why",     "explain", "Show why a package is installed",              pkg_cmd_why},
+  {"info",    NULL,      "Show package information from registry",       pkg_cmd_info},
+  {"ls",      "list",    "List installed packages",                      pkg_cmd_ls},
+  {"cache",   NULL,      "Manage the package cache",                     pkg_cmd_cache},
+  {"create",  NULL,      "Scaffold a project from a template",           pkg_cmd_create},
   {NULL, NULL, NULL, NULL}
 };
 
-static void parse_ant_debug(const char *flag) {
-  if (strncmp(flag, "dump-crprintf=", 14) == 0) {
-    const char *mode = flag + 14;
-    if (strcmp(mode, "bytecode") == 0 || strcmp(mode, "all") == 0) crprintf_set_debug(true);
-    if (strcmp(mode, "hex") == 0      || strcmp(mode, "all") == 0) crprintf_set_debug_hex(true);
-  }
+static void ant_debug_apply(const char *key, const char *val) {
+  if (strcmp(key, "dump/crprintf") == 0) {
+    if (strcmp(val, "bytecode") == 0 || strcmp(val, "all") == 0) crprintf_set_debug(true);
+    if (strcmp(val, "hex") == 0      || strcmp(val, "all") == 0) crprintf_set_debug_hex(true);
+  } 
   
-  else crfprintf(stderr, msg.unknown_flag_warn, flag);
+  else if (strcmp(key, "dump/vm") == 0) {
+    if (strcmp(val, "bytecode") == 0 || strcmp(val, "all") == 0) sv_debug_enable(SV_DEBUG_DUMP_BYTECODE);
+    if (strcmp(val, "jit") == 0      || strcmp(val, "all") == 0) sv_debug_enable(SV_DEBUG_DUMP_JIT);
+    if (strcmp(val, "op-warn") == 0  || strcmp(val, "all") == 0) sv_debug_enable(SV_DEBUG_JIT_WARN);
+  }
+}
+
+static void parse_ant_debug_flags(void) {
+  const char *env = getenv("ANT_DEBUG");
+  if (!env || !*env) return;
+
+  char *buf = strdup(env);
+  if (!buf) return;
+
+  char *sp = NULL, *vp = NULL;
+  for (char *e = strtok_r(buf, " ", &sp); e; e = strtok_r(NULL, " ", &sp)) {
+    char *sep = strchr(e, ':');
+    if (!sep) { crfprintf(stderr, msg.unknown_flag_warn, e); continue; }
+    *sep++ = '\0';
+    for (char *v = strtok_r(sep, ",", &vp); v; v = strtok_r(NULL, ",", &vp))
+      ant_debug_apply(e, v);
+  }
+
+  free(buf);
 }
 
 static const subcommand_t *find_subcommand(const char *name) {
@@ -145,14 +181,17 @@ static argv_split_t split_script_args(int *argc, char **argv) {
       *argc = i;
       return tail;
     }
+    
     if (argv[i][0] == '-') {
       if (is_valued_flag(argv[i]) && i + 1 < *argc) i++;
       continue;
     }
+    
     argv_split_t tail = { *argc - i - 1, argv + i + 1 };
     *argc = i + 1;
     return tail;
   }
+  
   return (argv_split_t){ 0, NULL };
 }
 
@@ -209,16 +248,20 @@ static char *read_file(const char *filename, size_t *len) {
   return buffer;
 }
 
-static void eval_code(struct js *js, const char *script, size_t len, const char *tag, bool should_print) {
+static void eval_code(ant_t *js, const char *script, size_t len, const char *tag, bool should_print) {
   js_set_filename(js, tag);
   js_setup_import_meta(js, tag);
-  js_mkscope(js);
   
   js_set(js, js_glob(js), "__dirname", js_mkstr(js, ".", 1));
   js_set(js, js_glob(js), "__filename", js_mkstr(js, tag, strlen(tag)));
   
-  jsval_t result = js_eval(js, script, len);
+  jsval_t result = js_eval_bytecode_eval(js, script, len);
   js_run_event_loop(js);
+  
+  if (print_uncaught_throw(js)) {
+    js_result = EXIT_FAILURE;
+    return;
+  }
   
   char cbuf_stack[512]; js_cstr_t cstr = js_to_cstr(
     js, result, cbuf_stack, sizeof(cbuf_stack)
@@ -237,11 +280,11 @@ static void eval_code(struct js *js, const char *script, size_t len, const char 
   if (cstr.needs_free) free((void *)cstr.ptr);
 }
 
-static int execute_module(struct js *js, const char *filename) {
+static int execute_module(ant_t *js, const char *filename) {
   char *buffer = NULL;
   size_t len = 0;
   
-  char abs_path[PATH_MAX];
+  char *use_path_owned = NULL;
   const char *use_path = filename;
   
   if (esm_is_url(filename)) {
@@ -266,40 +309,55 @@ static int execute_module(struct js *js, const char *filename) {
     js_set(js, js_glob(js), "__dirname", js_mkstr(js, dir, strlen(dir)));
     free(file_path);
     
-    if (realpath(filename, abs_path)) use_path = abs_path;
+    use_path_owned = realpath(filename, NULL);
+    if (use_path_owned) use_path = use_path_owned;
+  }
+  
+  size_t js_len = len;
+  const char *strip_detail = NULL;
+  
+  int strip_result = strip_typescript_inplace(
+    &buffer, len, filename, &js_len, &strip_detail
+  );
+  
+  if (strip_result < 0) {
+    crfprintf(stderr, msg.type_strip_failed, strip_result, strip_detail);
+    free(buffer); free(use_path_owned);
+    return EXIT_FAILURE;
   }
   
   char *js_code = buffer;
-  size_t js_len = len;
+  js_set(js, js_glob(js), 
+    "__filename", 
+    js_mkstr(js, filename, strlen(filename))
+  );
   
-  if (is_typescript_file(filename)) {
-    int result = OXC_strip_types(buffer, filename, buffer, len + 1);
-    if (result < 0) {
-      crfprintf(stderr, msg.type_strip_failed, result);
-      free(buffer);
-      return EXIT_FAILURE;
-    }
-    js_len = (size_t)result;
-  }
-
   js_set_filename(js, use_path);
-  js_set(js, js_glob(js), "__filename", js_mkstr(js, filename, strlen(filename)));
-  
   js_setup_import_meta(js, use_path);
-  js_mkscope(js);
   
-  jsval_t result = js_eval_cached(js, js_code, js_len);
+  jsval_t import_fn = js_get(js, js->global, "import");
+  jsval_t module_ns = mkobj(js, 0);
+  
+  js->import_meta = (vtype(import_fn) == T_FUNC)
+    ? js_get(js, import_fn, "meta")
+    : js_mkundef();
+
+  jsval_t result = js_esm_eval_module_source(
+    js, use_path, js_code, 
+    js_len, module_ns
+  ); 
+  
   free(js_code);
   
-  if (vtype(result) == T_ERR) {
-    fprintf(stderr, "%s\n", js_str(js, result));
-    return EXIT_FAILURE;
-  }
+  if (print_uncaught_throw(js)) return EXIT_FAILURE;
+  if (vtype(result) == T_ERR) fprintf(stderr, "%s\n", js_str(js, result));
   
   return EXIT_SUCCESS;
 }
 
 int main(int argc, char *argv[]) {
+  parse_ant_debug_flags();
+  
   int filtered_argc = 0; int original_argc = argc;
   char **original_argv = argv;
   
@@ -314,6 +372,7 @@ int main(int argc, char *argv[]) {
   if (strcmp(binary_name, "antx") == 0) {
     char **exec_argv = try_oom(sizeof(char*) * (argc + 2));
     exec_argv[0] = argv[0]; exec_argv[1] = "x";
+    
     for (int i = 1; i < argc; i++) exec_argv[i + 1] = argv[i];
     exec_argv[argc + 1] = NULL;
     
@@ -325,7 +384,7 @@ int main(int argc, char *argv[]) {
   for (int i = 0; i < argc; i++) {
     if (strcmp(argv[i], "--verbose") == 0) pkg_verbose = true;
     else if (strcmp(argv[i], "--no-color") == 0) { crprintf_set_color(false); io_no_color = true; }
-    else if (strncmp(argv[i], "--ANT_DEBUG:", 12) == 0) parse_ant_debug(argv[i] + 12);
+    else if (strncmp(argv[i], "--stack-size=", 13) == 0) sv_user_stack_size_kb = atoi(argv[i] + 13);
     else filtered_argv[filtered_argc++] = argv[i];
   }
   
@@ -411,11 +470,24 @@ int main(int argc, char *argv[]) {
         CLEANUP_ARGS_AND_ARGV();
         return EXIT_FAILURE;
       }
+
+      int cmd_argc = argc - first_pos_idx;
+      char **cmd_argv = argv + first_pos_idx;
+      char **cmd_argv_full = NULL;
       
-      int exitcode = cmd->fn(
-        argc - first_pos_idx, 
-        argv + first_pos_idx
-      );
+      if (script_tail.argc > 0) {
+        cmd_argv_full = try_oom(sizeof(*cmd_argv_full) * (size_t)(cmd_argc + script_tail.argc + 1));
+        
+        memcpy(cmd_argv_full, cmd_argv, sizeof(*cmd_argv_full) * (size_t)cmd_argc);
+        memcpy(cmd_argv_full + cmd_argc, script_tail.argv, sizeof(*cmd_argv_full) * (size_t)script_tail.argc);
+        
+        cmd_argc += script_tail.argc;
+        cmd_argv_full[cmd_argc] = NULL;
+        cmd_argv = cmd_argv_full;
+      }
+
+      int exitcode = cmd->fn(cmd_argc, cmd_argv);
+      free(cmd_argv_full);
       
       CLEANUP_ARGS_AND_ARGV();
       return exitcode;
@@ -428,11 +500,16 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
       }
 
-      int run_argc = argc - first_pos_idx + 1;
+      int run_argc = argc - first_pos_idx + 1 + script_tail.argc;
       char **run_argv = try_oom(sizeof(*run_argv) * (size_t)(run_argc + 1));
       
       run_argv[0] = argv[0];
-      memcpy(run_argv + 1, argv + first_pos_idx, sizeof(*run_argv) * (size_t)(run_argc - 1));
+      int copied = argc - first_pos_idx;
+      
+      memcpy(run_argv + 1, argv + first_pos_idx, sizeof(*run_argv) * (size_t)copied);
+      if (script_tail.argc > 0) {
+        memcpy(run_argv + 1 + copied, script_tail.argv, sizeof(*run_argv) * (size_t)script_tail.argc);
+      }
       
       run_argv[run_argc] = NULL;
       int exitcode = pkg_cmd_run(run_argc, run_argv);
@@ -454,9 +531,9 @@ int main(int argc, char *argv[]) {
     return EXIT_FAILURE;
   }
   
-  const char *module_file = repl_mode 
+  const char *module_file = (repl_mode || file->count == 0) 
     ? NULL 
-    : (file->count > 0 ? file->filename[0] : NULL);
+    : file->filename[0];
 
   if (watch->count > 0) {
     char *resolved_file = NULL;
@@ -487,10 +564,19 @@ int main(int argc, char *argv[]) {
   }
   
   js_setstackbase(js, (void *)&stack_base);
+  {
+    struct rlimit rl;
+    if (getrlimit(RLIMIT_STACK, &rl) == 0 && rl.rlim_cur != RLIM_INFINITY)
+      js_setstacklimit(js, (size_t)rl.rlim_cur * 3 / 4);
+    else
+      js_setstacklimit(js, 512 * 1024);
+  }
   proc_argv = build_process_argv(argc, argv, module_file, script_tail);
   ant_runtime_init(js, proc_argv.argc, proc_argv.argv, localstorage_file);
 
   init_symbol_module();
+  init_date_module();
+  init_regex_module();
   init_collections_module();
   init_builtin_module();
   init_buffer_module();
@@ -503,6 +589,7 @@ int main(int argc, char *argv[]) {
   init_server_module();
   init_timer_module();
   init_process_module();
+  init_tty_module();
   init_events_module();
   init_performance_module();
   init_uri_module();
@@ -518,14 +605,26 @@ int main(int argc, char *argv[]) {
   ant_register_library(ffi_library, "ant:ffi", NULL);
   ant_register_library(lmdb_library, "ant:lmdb", NULL);
 
+  ant_standard_library("util", util_library);
+  ant_standard_library("net", net_library);
+  ant_standard_library("dns", dns_library);
+  ant_standard_library("module", module_library);
+  ant_standard_library("buffer", buffer_library);
   ant_standard_library("path", path_library);
   ant_standard_library("fs", fs_library);
+  ant_standard_library("fs/promises", fs_promises_library);
   ant_standard_library("os", os_library);
+  ant_standard_library("url", url_library);
+  ant_standard_library("perf_hooks", perf_hooks_library);
+  ant_standard_library("process", process_library);
   ant_standard_library("crypto", crypto_library);
   ant_standard_library("events", events_library);
+  ant_standard_library("tty", tty_library);
   ant_standard_library("readline", readline_library);
   ant_standard_library("readline/promises", readline_promises_library);
   ant_standard_library("child_process", child_process_library);
+  ant_standard_library("worker_threads", worker_threads_library);
+  ant_standard_library("async_hooks", async_hooks_library);
 
   jsval_t snapshot_result = ant_load_snapshot(js);
   if (vtype(snapshot_result) == T_ERR) {
@@ -551,14 +650,21 @@ int main(int argc, char *argv[]) {
   } 
   
   else {
-    char *resolved_file = resolve_js_file(module_file);
-    if (resolved_file) module_file = resolved_file;
+  for (int fi = 0; fi < file->count; fi++) {
+    const char *fl = file->filename[fi];
+    char *resolved_file = resolve_js_file(fl);
+    if (!resolved_file) {
+      crfprintf(stderr, msg.module_not_found, fl);
+      js_result = EXIT_FAILURE; break;
+    }
     
-    js_result = execute_module(js, module_file);
+    fl = resolved_file;
+    js_result = execute_module(js, fl);
     js_run_event_loop(js);
     
-    if (resolved_file) free(resolved_file);
-  }
+    free(resolved_file);
+    if (js_result != EXIT_SUCCESS) break;
+  }}
     
   cleanup: {
     js_destroy(js);

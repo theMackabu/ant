@@ -16,12 +16,12 @@ function render() {
   const width = 120;
   const height = 40;
   const lines = [];
-  
+
   // Clear buffer
   for (let y = 0; y < height; y++) {
     lines.push(' '.repeat(width));
   }
-  
+
   // Draw styled content (like the TUI does)
   for (let y = 0; y < height; y++) {
     let text = `\x1b[38;5;196mRow ${y}\x1b[0m: `;
@@ -30,7 +30,7 @@ function render() {
     text = pad(text, width);
     lines[y] = text;
   }
-  
+
   return lines.join('\n');
 }
 
@@ -45,17 +45,18 @@ let count = 0;
 const interval = setInterval(() => {
   count++;
   handleEvent(count);
-  
+
   const stats = Ant.stats();
-  console.log(`tick ${count}: arena ${(stats.arenaUsed / 1024 / 1024).toFixed(1)}MB / ${(stats.arenaSize / 1024 / 1024).toFixed(1)}MB, rss ${(stats.rss / 1024 / 1024).toFixed(1)}MB`);
-  
-  if (count >= 500) {  // Run for ~5 seconds
+  console.log(
+    `tick ${count}: arena ${(stats.arenaUsed / 1024 / 1024).toFixed(1)}MB / ${(stats.arenaSize / 1024 / 1024).toFixed(1)}MB, rss ${(stats.rss / 1024 / 1024).toFixed(1)}MB`
+  );
+
+  if (count >= 500) {
+    // Run for ~5 seconds
     clearInterval(interval);
-    console.log('Done - forcing GC...');
-    Ant.gc();
     setTimeout(() => {
       const after = Ant.stats();
       console.log(`after GC: arena ${(after.arenaUsed / 1024 / 1024).toFixed(1)}MB`);
     }, 10);
   }
-}, 10);  // 500 * 10ms = 5 seconds
+}, 10); // 500 * 10ms = 5 seconds

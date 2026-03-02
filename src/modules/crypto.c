@@ -20,7 +20,7 @@
 #include "modules/buffer.h"
 #include "modules/symbol.h"
 
-static int ensure_crypto_init(struct js *js) {
+static int ensure_crypto_init(ant_t *js) {
   static int crypto_initialized = 0;
   
   if (!crypto_initialized) {
@@ -52,7 +52,7 @@ int uuidv7_new(uint8_t *uuid_out) {
 }
 
 // crypto.random()
-static jsval_t js_crypto_random(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_crypto_random(ant_t *js, jsval_t *args, int nargs) {
   (void) args;
   (void) nargs;
   (void) js;
@@ -66,7 +66,7 @@ static jsval_t js_crypto_random(struct js *js, jsval_t *args, int nargs) {
 }
 
 // crypto.randomBytes(length)
-static jsval_t js_crypto_random_bytes(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_crypto_random_bytes(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) {
     return js_mkerr(js, "randomBytes requires a length argument");
   }
@@ -102,7 +102,7 @@ static jsval_t js_crypto_random_bytes(struct js *js, jsval_t *args, int nargs) {
 }
 
 // crypto.randomUUID()
-static jsval_t js_crypto_random_uuid(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_crypto_random_uuid(ant_t *js, jsval_t *args, int nargs) {
   (void) args;
   (void) nargs;
   
@@ -130,7 +130,7 @@ static jsval_t js_crypto_random_uuid(struct js *js, jsval_t *args, int nargs) {
 }
 
 // crypto.randomUUIDv7()
-static jsval_t js_crypto_random_uuidv7(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_crypto_random_uuidv7(ant_t *js, jsval_t *args, int nargs) {
   (void) args;
   (void) nargs;
   
@@ -152,7 +152,7 @@ static jsval_t js_crypto_random_uuidv7(struct js *js, jsval_t *args, int nargs) 
 }
 
 // crypto.getRandomValues(typedArray)
-static jsval_t js_crypto_get_random_values(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_crypto_get_random_values(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) {
     return js_mkerr(js, "getRandomValues requires a TypedArray argument");
   }
@@ -177,7 +177,7 @@ static jsval_t js_crypto_get_random_values(struct js *js, jsval_t *args, int nar
   return args[0];
 }
 
-static jsval_t create_crypto_obj(struct js *js) {
+static jsval_t create_crypto_obj(ant_t *js) {
   jsval_t crypto_obj = js_mkobj(js);
   
   js_set(js, crypto_obj, "random", js_mkfun(js_crypto_random));
@@ -186,17 +186,17 @@ static jsval_t create_crypto_obj(struct js *js) {
   js_set(js, crypto_obj, "randomUUIDv7", js_mkfun(js_crypto_random_uuidv7));
   js_set(js, crypto_obj, "getRandomValues", js_mkfun(js_crypto_get_random_values));
   
-  js_set(js, crypto_obj, get_toStringTag_sym_key(), js_mkstr(js, "Crypto", 6));
+  js_set_sym(js, crypto_obj, get_toStringTag_sym(), js_mkstr(js, "Crypto", 6));
   return crypto_obj;
 }
 
 void init_crypto_module() {
-  struct js *js = rt->js;
+  ant_t *js = rt->js;
   jsval_t crypto_obj = create_crypto_obj(js);
   js_set(js, js_glob(js), "crypto", crypto_obj);
 }
 
-jsval_t crypto_library(struct js *js) {
+jsval_t crypto_library(ant_t *js) {
   jsval_t lib = js_mkobj(js);
   jsval_t webcrypto = create_crypto_obj(js);
   
@@ -204,7 +204,7 @@ jsval_t crypto_library(struct js *js) {
   js_set(js, lib, "randomBytes", js_mkfun(js_crypto_random_bytes));
   js_set(js, lib, "randomUUID", js_mkfun(js_crypto_random_uuid));
   js_set(js, lib, "getRandomValues", js_mkfun(js_crypto_get_random_values));
-  js_set(js, lib, get_toStringTag_sym_key(), js_mkstr(js, "crypto", 6));
+  js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "crypto", 6));
 
   return lib;
 }

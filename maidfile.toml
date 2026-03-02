@@ -6,6 +6,10 @@ script = "meson compile"
 path = "src"
 target = ["build/ant"]
 
+[tasks.reconfigure]
+path = "build"
+script = "meson setup --reconfigure"
+
 [tasks.strip]
 path = "build"
 script = "strip ant"
@@ -16,23 +20,21 @@ script = [".github/download.sh", "open .github/artifacts"]
 [tasks.run]
 script = ["maid build -q", "./build/ant %{arg.1}"]
 
-[tasks.spec]
-script = ["maid build -q", "./build/ant examples/spec/%{arg.1}.js"]
-
 [tasks.amber]
 script = "amber build .github/install/install.ab install.sh"
-
-[tasks.save_spec]
-script = ['rm spec.txt', '''
-   bash -c 'ant examples/spec/run.js \
-   | sed "s/\x1b\[[0-9;]*[a-zA-Z]//g" > spec.txt'
-''']
 
 [tasks.setup]
 script = ['meson subprojects download', '''
    bash -c 'CC="ccache $(which clang)" \
    CC_LD="$(which ld64.lld)" \
    meson setup build --wipe'
+''']
+
+[tasks.no_jit]
+script = ['meson subprojects download', '''
+   bash -c 'CC="ccache $(which clang)" \
+   CC_LD="$(which ld64.lld)" \
+   meson setup build --wipe -Djit=false'
 ''']
 
 [tasks.asan]

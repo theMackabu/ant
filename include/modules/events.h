@@ -6,6 +6,6 @@
 void init_events_module(void);
 void events_gc_update_roots(void (*op_val)(void *, jsval_t *), void *ctx);
 
-jsval_t events_library(struct js *js);
+jsval_t events_library(ant_t *js);
 
 #endif

@@ -25,6 +25,8 @@
 #include "errors.h"
 #include "runtime.h"
 #include "internal.h"
+#include "descriptors.h"
+#include "silver/engine.h"
 
 #include "modules/readline.h"
 #include "modules/process.h"
@@ -174,7 +176,7 @@ static RLEventType *find_or_create_event_type(rl_interface_t *iface, const char 
   return evt;
 }
 
-static void emit_event(struct js *js, rl_interface_t *iface, const char *event_type, jsval_t *args, int nargs) {
+static void emit_event(ant_t *js, rl_interface_t *iface, const char *event_type, jsval_t *args, int nargs) {
   RLEventType *evt = NULL;
   HASH_FIND_STR(iface->events, event_type, evt);
   
@@ -183,7 +185,7 @@ static void emit_event(struct js *js, rl_interface_t *iface, const char *event_t
   int i = 0;
   while (i < evt->listener_count) {
     RLEventListener *listener = &evt->listeners[i];
-    js_call(js, listener->listener, args, nargs);
+    sv_vm_call(js->vm, js, listener->listener, js_mkundef(), args, nargs, NULL, false);
     
     if (listener->once) {
       for (int j = i; j < evt->listener_count - 1; j++) {
@@ -194,7 +196,7 @@ static void emit_event(struct js *js, rl_interface_t *iface, const char *event_t
   }
 }
 
-static jsval_t get_history_array(struct js *js, rl_interface_t *iface) {
+static jsval_t get_history_array(ant_t *js, rl_interface_t *iface) {
   jsval_t arr = js_mkarr(js);
   for (int i = 0; i < iface->history.count; i++) {
     js_arr_push(js, arr, js_mkstr(js, iface->history.lines[i], strlen(iface->history.lines[i])));
@@ -202,7 +204,7 @@ static jsval_t get_history_array(struct js *js, rl_interface_t *iface) {
   return arr;
 }
 
-static void emit_history_event(struct js *js, rl_interface_t *iface) {
+static void emit_history_event(ant_t *js, rl_interface_t *iface) {
   jsval_t history_arr = get_history_array(js, iface);
   emit_event(js, iface, "history", &history_arr, 1);
 }
@@ -438,7 +440,7 @@ static void alloc_buffer(uv_handle_t *handle, size_t suggested_size, uv_buf_t *b
 
 static void on_stdin_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
   rl_interface_t *iface = (rl_interface_t *)stream->data;
-  struct js *js = rt->js;
+  ant_t *js = rt->js;
 
   if (!iface) {
     if (buf->base) free(buf->base);
@@ -503,7 +505,7 @@ static void on_stdin_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *bu
       emit_event(js, iface, "line", &line_val, 1);
       
       if (vtype(iface->pending_question_resolve) == T_FUNC) {
-        js_call(js, iface->pending_question_resolve, &line_val, 1);
+        sv_vm_call(js->vm, js, iface->pending_question_resolve, js_mkundef(), &line_val, 1, NULL, false);
         iface->pending_question_resolve = js_mkundef();
         iface->pending_question_reject = js_mkundef();
       }
@@ -586,7 +588,7 @@ static void stop_reading(rl_interface_t *iface) {
   iface->reading = false;
 }
 
-static void process_line(struct js *js, rl_interface_t *iface) {
+static void process_line(ant_t *js, rl_interface_t *iface) {
   char *line = strdup(iface->line_buffer);
   
   rl_history_add(&iface->history, line, iface->remove_history_duplicates);
@@ -596,7 +598,7 @@ static void process_line(struct js *js, rl_interface_t *iface) {
   emit_event(js, iface, "line", &line_val, 1);
   
   if (vtype(iface->pending_question_resolve) == T_FUNC) {
-    js_call(js, iface->pending_question_resolve, &line_val, 1);
+    sv_vm_call(js->vm, js, iface->pending_question_resolve, js_mkundef(), &line_val, 1, NULL, false);
     iface->pending_question_resolve = js_mkundef();
     iface->pending_question_reject = js_mkundef();
   }
@@ -608,7 +610,7 @@ static void process_line(struct js *js, rl_interface_t *iface) {
   free(line);
 }
 
-static rl_interface_t *get_interface(struct js *js, jsval_t this_obj) {
+static rl_interface_t *get_interface(ant_t *js, jsval_t this_obj) {
   jsval_t id_val = js_get(js, this_obj, "_rl_id");
   if (vtype(id_val) != T_NUM) return NULL;
   
@@ -618,7 +620,7 @@ static rl_interface_t *get_interface(struct js *js, jsval_t this_obj) {
   return iface;
 }
 
-static jsval_t rl_interface_on(struct js *js, jsval_t *args, int nargs) {
+static jsval_t rl_interface_on(ant_t *js, jsval_t *args, int nargs) {
   jsval_t this_obj = js_getthis(js);
   rl_interface_t *iface = get_interface(js, this_obj);
   
@@ -642,7 +644,7 @@ static jsval_t rl_interface_on(struct js *js, jsval_t *args, int nargs) {
   return this_obj;
 }
 
-static jsval_t rl_interface_once(struct js *js, jsval_t *args, int nargs) {
+static jsval_t rl_interface_once(ant_t *js, jsval_t *args, int nargs) {
   jsval_t this_obj = js_getthis(js);
   rl_interface_t *iface = get_interface(js, this_obj);
   
@@ -666,7 +668,7 @@ static jsval_t rl_interface_once(struct js *js, jsval_t *args, int nargs) {
   return this_obj;
 }
 
-static jsval_t rl_interface_off(struct js *js, jsval_t *args, int nargs) {
+static jsval_t rl_interface_off(ant_t *js, jsval_t *args, int nargs) {
   jsval_t this_obj = js_getthis(js);
   rl_interface_t *iface = get_interface(js, this_obj);
   
@@ -693,7 +695,7 @@ static jsval_t rl_interface_off(struct js *js, jsval_t *args, int nargs) {
   return this_obj;
 }
 
-static jsval_t rl_interface_emit(struct js *js, jsval_t *args, int nargs) {
+static jsval_t rl_interface_emit(ant_t *js, jsval_t *args, int nargs) {
   jsval_t this_obj = js_getthis(js);
   rl_interface_t *iface = get_interface(js, this_obj);
   
@@ -707,7 +709,7 @@ static jsval_t rl_interface_emit(struct js *js, jsval_t *args, int nargs) {
   return js_true;
 }
 
-static jsval_t rl_interface_close(struct js *js, jsval_t *args, int nargs) {
+static jsval_t rl_interface_close(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
   jsval_t this_obj = js_getthis(js);
   rl_interface_t *iface = get_interface(js, this_obj);
@@ -732,7 +734,7 @@ static jsval_t rl_interface_close(struct js *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t rl_interface_pause(struct js *js, jsval_t *args, int nargs) {
+static jsval_t rl_interface_pause(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
   jsval_t this_obj = js_getthis(js);
   rl_interface_t *iface = get_interface(js, this_obj);
@@ -748,7 +750,7 @@ static jsval_t rl_interface_pause(struct js *js, jsval_t *args, int nargs) {
   return this_obj;
 }
 
-static jsval_t rl_interface_resume(struct js *js, jsval_t *args, int nargs) {
+static jsval_t rl_interface_resume(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
   jsval_t this_obj = js_getthis(js);
   rl_interface_t *iface = get_interface(js, this_obj);
@@ -764,7 +766,7 @@ static jsval_t rl_interface_resume(struct js *js, jsval_t *args, int nargs) {
   return this_obj;
 }
 
-static jsval_t rl_interface_prompt(struct js *js, jsval_t *args, int nargs) {
+static jsval_t rl_interface_prompt(ant_t *js, jsval_t *args, int nargs) {
   jsval_t this_obj = js_getthis(js);
   rl_interface_t *iface = get_interface(js, this_obj);
   
@@ -794,7 +796,7 @@ static jsval_t rl_interface_prompt(struct js *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t rl_interface_set_prompt(struct js *js, jsval_t *args, int nargs) {
+static jsval_t rl_interface_set_prompt(ant_t *js, jsval_t *args, int nargs) {
   jsval_t this_obj = js_getthis(js);
   rl_interface_t *iface = get_interface(js, this_obj);
   
@@ -810,7 +812,7 @@ static jsval_t rl_interface_set_prompt(struct js *js, jsval_t *args, int nargs) 
   return js_mkundef();
 }
 
-static jsval_t rl_interface_get_prompt(struct js *js, jsval_t *args, int nargs) {
+static jsval_t rl_interface_get_prompt(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
   jsval_t this_obj = js_getthis(js);
   rl_interface_t *iface = get_interface(js, this_obj);
@@ -861,7 +863,7 @@ static void process_key_sequence(rl_interface_t *iface, const char *name, bool c
   }
 }
 
-static jsval_t rl_interface_write(struct js *js, jsval_t *args, int nargs) {
+static jsval_t rl_interface_write(ant_t *js, jsval_t *args, int nargs) {
   jsval_t this_obj = js_getthis(js);
   rl_interface_t *iface = get_interface(js, this_obj);
   
@@ -916,7 +918,7 @@ static jsval_t rl_interface_write(struct js *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t rl_interface_line_getter(struct js *js, jsval_t *args, int nargs) {
+static jsval_t rl_interface_line_getter(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
   jsval_t this_obj = js_getthis(js);
   rl_interface_t *iface = get_interface(js, this_obj);
@@ -925,7 +927,7 @@ static jsval_t rl_interface_line_getter(struct js *js, jsval_t *args, int nargs)
   return js_mkstr(js, iface->line_buffer, strlen(iface->line_buffer));
 }
 
-static jsval_t rl_interface_cursor_getter(struct js *js, jsval_t *args, int nargs) {
+static jsval_t rl_interface_cursor_getter(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
   jsval_t this_obj = js_getthis(js);
   rl_interface_t *iface = get_interface(js, this_obj);
@@ -934,7 +936,7 @@ static jsval_t rl_interface_cursor_getter(struct js *js, jsval_t *args, int narg
   return js_mknum((double)iface->line_pos);
 }
 
-static jsval_t rl_interface_question_callback(struct js *js, jsval_t *args, int nargs) {
+static jsval_t rl_interface_question_callback(ant_t *js, jsval_t *args, int nargs) {
   jsval_t this_obj = js_getthis(js);
   rl_interface_t *iface = get_interface(js, this_obj);
   
@@ -964,7 +966,7 @@ static jsval_t rl_interface_question_callback(struct js *js, jsval_t *args, int 
   return js_mkundef();
 }
 
-static jsval_t rl_interface_question_promise(struct js *js, jsval_t *args, int nargs) {
+static jsval_t rl_interface_question_promise(ant_t *js, jsval_t *args, int nargs) {
   jsval_t this_obj = js_getthis(js);
   rl_interface_t *iface = get_interface(js, this_obj);
   
@@ -985,7 +987,7 @@ static jsval_t rl_interface_question_promise(struct js *js, jsval_t *args, int n
   return promise;
 }
 
-static jsval_t rl_interface_get_cursor_pos(struct js *js, jsval_t *args, int nargs) {
+static jsval_t rl_interface_get_cursor_pos(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
   jsval_t this_obj = js_getthis(js);
   rl_interface_t *iface = get_interface(js, this_obj);
@@ -1022,7 +1024,7 @@ static jsval_t rl_interface_get_cursor_pos(struct js *js, jsval_t *args, int nar
   return result;
 }
 
-static jsval_t rl_interface_closed_getter(struct js *js, jsval_t *args, int nargs) {
+static jsval_t rl_interface_closed_getter(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
   jsval_t this_obj = js_getthis(js);
   rl_interface_t *iface = get_interface(js, this_obj);
@@ -1031,7 +1033,7 @@ static jsval_t rl_interface_closed_getter(struct js *js, jsval_t *args, int narg
   return js_bool(iface->closed);
 }
 
-static jsval_t rl_interface_async_iterator(struct js *js, jsval_t *args, int nargs) {
+static jsval_t rl_interface_async_iterator(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
   jsval_t this_obj = js_getthis(js);
   rl_interface_t *iface = get_interface(js, this_obj);
@@ -1065,7 +1067,7 @@ static void free_interface(rl_interface_t *iface) {
   free(iface);
 }
 
-static jsval_t rl_create_interface(struct js *js, jsval_t *args, int nargs) {
+static jsval_t rl_create_interface(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "createInterface requires options");
   
   jsval_t options = args[0];
@@ -1174,13 +1176,13 @@ static jsval_t rl_create_interface(struct js *js, jsval_t *args, int nargs) {
   js_set_getter_desc(js, obj, "closed", 6, js_mkfun(rl_interface_closed_getter), JS_DESC_E | JS_DESC_C);
   
   js_set(js, obj, "terminal", js_bool(iface->terminal));
-  js_set(js, obj, get_asyncIterator_sym_key(), js_mkfun(rl_interface_async_iterator));
-  js_set(js, obj, get_toStringTag_sym_key(), js_mkstr(js, "Interface", 9));
+  js_set_sym(js, obj, get_asyncIterator_sym(), js_mkfun(rl_interface_async_iterator));
+  js_set_sym(js, obj, get_toStringTag_sym(), js_mkstr(js, "Interface", 9));
   
   return obj;
 }
 
-static jsval_t rl_create_interface_promises(struct js *js, jsval_t *args, int nargs) {
+static jsval_t rl_create_interface_promises(ant_t *js, jsval_t *args, int nargs) {
   jsval_t iface_obj = rl_create_interface(js, args, nargs);
   if (vtype(iface_obj) == T_ERR) return iface_obj;
   js_set(js, iface_obj, "question", js_mkfun(rl_interface_question_promise));
@@ -1188,7 +1190,7 @@ static jsval_t rl_create_interface_promises(struct js *js, jsval_t *args, int na
   return iface_obj;
 }
 
-static jsval_t rl_clear_line(struct js *js, jsval_t *args, int nargs) {
+static jsval_t rl_clear_line(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_false;
   int dir = (int)js_getnum(args[1]);
   
@@ -1206,7 +1208,7 @@ static jsval_t rl_clear_line(struct js *js, jsval_t *args, int nargs) {
   return js_true;
 }
 
-static jsval_t rl_clear_screen_down(struct js *js, jsval_t *args, int nargs) {
+static jsval_t rl_clear_screen_down(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
   
   printf("\033[J");
@@ -1215,7 +1217,7 @@ static jsval_t rl_clear_screen_down(struct js *js, jsval_t *args, int nargs) {
   return js_true;
 }
 
-static jsval_t rl_cursor_to(struct js *js, jsval_t *args, int nargs) {
+static jsval_t rl_cursor_to(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_false;
   int x = (int)js_getnum(args[1]);
   
@@ -1230,7 +1232,7 @@ static jsval_t rl_cursor_to(struct js *js, jsval_t *args, int nargs) {
   return js_true;
 }
 
-static jsval_t rl_move_cursor(struct js *js, jsval_t *args, int nargs) {
+static jsval_t rl_move_cursor(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 3) return js_false;
   
   int dx = (int)js_getnum(args[1]);
@@ -1246,7 +1248,7 @@ static jsval_t rl_move_cursor(struct js *js, jsval_t *args, int nargs) {
   return js_true;
 }
 
-static jsval_t rl_emit_keypress_events(struct js *js, jsval_t *args, int nargs) {
+static jsval_t rl_emit_keypress_events(ant_t *js, jsval_t *args, int nargs) {
   if (nargs > 0) {
     jsval_t stdin_obj = js_get(js, js_get(js, js_glob(js), "process"), "stdin");
     if (stdin_obj != args[0]) {
@@ -1282,7 +1284,7 @@ void readline_gc_update_roots(GC_OP_VAL_ARGS) {
   }
 }
 
-jsval_t readline_library(struct js *js) {
+jsval_t readline_library(ant_t *js) {
   jsval_t lib = js_mkobj(js);
 
   js_set(js, lib, "createInterface", js_mkfun(rl_create_interface));
@@ -1291,12 +1293,12 @@ jsval_t readline_library(struct js *js) {
   js_set(js, lib, "cursorTo", js_mkfun(rl_cursor_to));
   js_set(js, lib, "moveCursor", js_mkfun(rl_move_cursor));
   js_set(js, lib, "emitKeypressEvents", js_mkfun(rl_emit_keypress_events));
-  js_set(js, lib, get_toStringTag_sym_key(), js_mkstr(js, "readline", 8));
+  js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "readline", 8));
   
   return lib;
 }
 
-jsval_t readline_promises_library(struct js *js) {
+jsval_t readline_promises_library(ant_t *js) {
   jsval_t lib = js_mkobj(js);
 
   js_set(js, lib, "createInterface", js_mkfun(rl_create_interface_promises));
@@ -1305,7 +1307,7 @@ jsval_t readline_promises_library(struct js *js) {
   js_set(js, lib, "cursorTo", js_mkfun(rl_cursor_to));
   js_set(js, lib, "moveCursor", js_mkfun(rl_move_cursor));
   js_set(js, lib, "emitKeypressEvents", js_mkfun(rl_emit_keypress_events));
-  js_set(js, lib, get_toStringTag_sym_key(), js_mkstr(js, "readline/promises", 17));
+  js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "readline/promises", 17));
   
   return lib;
 }

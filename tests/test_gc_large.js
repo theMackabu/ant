@@ -33,13 +33,6 @@ console.log('');
 // Free the objects
 largeObjects = null;
 
-Ant.gc();
-console.log('GC 1 requested');
-Ant.gc();
-console.log('GC 2 requested');
-Ant.gc();
-console.log('GC 3 requested');
-
 let stats3 = Ant.stats();
 console.log('\nAfter 3x GC:');
 console.log('  arenaUsed:', fmt(stats3.arenaUsed));

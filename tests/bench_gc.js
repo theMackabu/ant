@@ -11,10 +11,6 @@ function bench(name, fn, iterations = 1) {
   for (let iter = 0; iter < iterations; iter++) fn();
   const afterAlloc = Ant.stats().arenaUsed;
 
-  console.log('  Waiting 5s before GC...');
-  Ant.sleep(5);
-  Ant.gc();
-
   console.log(`${name}:`);
   console.log(`  Before: ${fmt(before)}, After alloc: ${fmt(afterAlloc)}`);
   console.log(`  Allocated: ${fmt(afterAlloc - before)} (${iterations} iterations)`);
@@ -99,6 +95,3 @@ bench('String array (5000 strings)', stringArray, 5);
 bench('Mixed workload', mixedWorkload, 5);
 
 showStats('Final state', Ant.stats());
-
-console.log('Note: GC runs automatically at safe points.');
-console.log('Use Ant.gc() as a hint to request collection.');

@@ -1,4 +1,20 @@
-import { Screen, List, ProgressBar, Input, Table, colors, box, keys, codes, modal, confirm, pad, padCenter, truncate, visibleLength } from './tuey.js';
+import {
+  Screen,
+  List,
+  ProgressBar,
+  Input,
+  Table,
+  colors,
+  box,
+  keys,
+  codes,
+  modal,
+  confirm,
+  pad,
+  padCenter,
+  truncate,
+  visibleLength
+} from './tuey.js';
 
 const screen = new Screen({ fullscreen: true, hideCursor: true });
 
@@ -46,8 +62,8 @@ const settings = [
   { key: 'logInterval', label: 'Log Interval', type: 'cycle', options: [1000, 2000, 5000, 10000], value: 2000, format: v => `${v / 1000}s` },
   { key: 'logLevel', label: 'Min Log Level', type: 'cycle', options: ['DEBUG', 'INFO', 'WARN', 'ERROR'], value: 'DEBUG', format: v => v },
   { key: 'boxStyle', label: 'Box Style', type: 'cycle', options: ['rounded', 'light', 'heavy', 'double'], value: 'rounded', format: v => v },
-  { key: 'confirmQuit', label: 'Confirm on Quit', type: 'toggle', value: true, format: v => v ? 'On' : 'Off' },
-  { key: 'simulateStats', label: 'Simulate Stats', type: 'toggle', value: true, format: v => v ? 'On' : 'Off' },
+  { key: 'confirmQuit', label: 'Confirm on Quit', type: 'toggle', value: true, format: v => (v ? 'On' : 'Off') },
+  { key: 'simulateStats', label: 'Simulate Stats', type: 'toggle', value: true, format: v => (v ? 'On' : 'Off') },
   { key: 'maxLogs', label: 'Max Log Entries', type: 'cycle', options: [50, 100, 250, 500], value: 100, format: v => String(v) }
 ];
 
@@ -207,7 +223,11 @@ function drawDashboard() {
   for (let i = 0; i < recentLogs.length; i++) {
     const log = recentLogs[i];
     const levelColor = log.level === 'ERROR' ? colors.red : log.level === 'WARN' ? colors.yellow : log.level === 'DEBUG' ? colors.cyan : colors.green;
-    screen.write(4, 17 + i, `${colors.dim}${log.time}${codes.reset} ${levelColor}${pad(log.level, 5)}${codes.reset} ${truncate(log.message, rcw - 16)}`);
+    screen.write(
+      4,
+      17 + i,
+      `${colors.dim}${log.time}${codes.reset} ${levelColor}${pad(log.level, 5)}${codes.reset} ${truncate(log.message, rcw - 16)}`
+    );
   }
 
   const qw = 30;
@@ -378,10 +398,6 @@ function showMemoryModal() {
       if (key === 'm' || key === keys.ESCAPE) {
         screen.popModal('memory');
         render();
-      } else if (key === 'g') {
-        Ant.gc();
-        screen.popModal('memory');
-        showMemoryModal();
       }
       return false;
     },
@@ -421,7 +437,7 @@ function showMemoryModal() {
       buf.writeStyled(ox, oy + y++, `  Max:         ${colors.bold}${fmt(mem.cstack)}${codes.reset}`);
       y++;
 
-      buf.writeStyled(ox, oy + y, colors.dim + '  g: Run GC  m/Esc: Close' + codes.reset);
+      buf.writeStyled(ox, oy + y, colors.dim + '  m/Esc: Close' + codes.reset);
     }
   });
   screen.render();

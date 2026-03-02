@@ -115,10 +115,12 @@ base64_dep = declare_dependency(
 
 uthash_dep = subproject('uthash').get_variable('uthash_dep')
 yyjson_dep = subproject('yyjson').get_variable('yyjson_dep')
+utf8proc_dep = subproject('utf8proc').get_variable('utf8proc_dep')
 uuidv7_dep = subproject('uuidv7').get_variable('uuidv7_dep')
 argtable3_dep = subproject('argtable3').get_variable('argtable3_dep')
 minicoro_dep = subproject('minicoro').get_variable('minicoro_dep')
 crprintf_dep = subproject('crprintf').get_variable('crprintf_dep')
+uriparser_dep = subproject('uriparser').get_variable('uriparser_dep')
 
 lmdb_dep = subproject('lmdb', default_options: [
   'warning_level=0',
@@ -170,7 +172,8 @@ oxc_lib = custom_target(
     '--target-dir "' + meson.project_build_root() / 'oxc-target' + '"' +
     ' && "' + cp.full_path() + '" "' + oxc_release_dir / oxc_lib_name + '" @OUTPUT@'
   ],
-  build_by_default: true
+  build_by_default: true,
+  build_always_stale: true
 )
 
 oxc_dep = declare_dependency(link_with: oxc_lib)
@@ -216,9 +219,16 @@ ant_deps = [
   libffi_dep, uuid_dep, crprintf_dep,
   llhttp, pcre2_dep, libuv_dep, base64_dep,
   argtable3_dep, tlsuv_dep, libsodium_dep,
-  yyjson_dep, minicoro_dep, uuidv7_dep,
-  openssl_dep, zlib_dep, uthash_dep, lmdb_dep,
+  yyjson_dep, minicoro_dep, uuidv7_dep, 
+  uriparser_dep, utf8proc_dep, openssl_dep,
+  zlib_dep, uthash_dep, lmdb_dep,
 ] + mbedtls_dep + win_deps
+
+if get_option('jit')
+  mir_dep = subproject('mir').get_variable('mir_dep')
+  ant_deps += [mir_dep]
+  add_project_arguments('-DANT_JIT', language: 'c')
+endif
 
 if host_machine.system() == 'darwin'
   ant_deps += [security_dep]

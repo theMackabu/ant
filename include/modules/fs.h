@@ -4,7 +4,9 @@
 #include "gc.h"
 #include "types.h"
 
-jsval_t fs_library(struct js *js);
+jsval_t fs_library(ant_t *js);
+jsval_t fs_promises_library(ant_t *js);
+
 int has_pending_fs_ops(void);
 
 void init_fs_module(void);

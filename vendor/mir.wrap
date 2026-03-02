@@ -1,0 +1,8 @@
+[wrap-git]
+url = https://github.com/vnmakarov/mir.git
+revision = head
+patch_directory = mir
+depth = 1
+
+[provide]
+mir = mir_dep

@@ -28,12 +28,16 @@
 
 #include "ant.h"
 #include "errors.h"
-#include "internal.h"
-#include "runtime.h"
 #include "utils.h"
+#include "internal.h"
+#include "descriptors.h"
+#include "runtime.h"
+#include "silver/engine.h"
 
 #include "modules/process.h"
 #include "modules/symbol.h"
+#include "modules/buffer.h"
+#include "modules/napi.h"
 
 #ifndef _WIN32
 extern char **environ;
@@ -267,7 +271,7 @@ void emit_process_event(const char *event_type, jsval_t *args, int nargs) {
   
   while (i < evt->listener_count) {
     ProcessEventListener *listener = &evt->listeners[i];
-    js_call(rt->js, listener->listener, args, nargs);
+    sv_vm_call(rt->js->vm, rt->js, listener->listener, js_mkundef(), args, nargs, NULL, false);
     
     if (listener->once) {
       for (int j = i; j < evt->listener_count - 1; j++) {
@@ -304,7 +308,7 @@ static void emit_stdio_event(ProcessEventType **events, const char *event_type, 
   int i = 0;
   while (i < evt->listener_count) {
     ProcessEventListener *listener = &evt->listeners[i];
-    js_call(rt->js, listener->listener, args, nargs);
+    sv_vm_call(rt->js->vm, rt->js, listener->listener, js_mkundef(), args, nargs, NULL, false);
     if (listener->once) {
       for (int j = i; j < evt->listener_count - 1; j++) 
         evt->listeners[j] = evt->listeners[j + 1];
@@ -405,7 +409,7 @@ static const char *stdin_escape_name(const char *seq, int len) {
 }
 
 static void emit_keypress_event(
-  struct js *js,
+  ant_t *js,
   const char *str,
   size_t str_len,
   const char *name,
@@ -436,7 +440,7 @@ static void emit_keypress_event(
   emit_stdio_event(&stdin_events, "keypress", args, 2);
 }
 
-static void process_keypress_data(struct js *js, const char *data, size_t len) {
+static void process_keypress_data(ant_t *js, const char *data, size_t len) {
   for (size_t i = 0; i < len; i++) {
     unsigned char c = (unsigned char)data[i];
 
@@ -602,7 +606,11 @@ static void stdin_alloc_buffer(uv_handle_t *handle, size_t suggested_size, uv_bu
 static void on_stdin_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
   (void)stream;
   if (nread > 0 && rt->js) {
-    jsval_t data_val = js_mkstr(rt->js, buf->base, (size_t)nread);
+    ArrayBufferData *ab = create_array_buffer_data((size_t)nread);
+    if (ab) memcpy(ab->data, buf->base, (size_t)nread);
+    jsval_t data_val = ab
+      ? create_typed_array(rt->js, TYPED_ARRAY_UINT8, ab, 0, (size_t)nread, "Buffer")
+      : js_mkstr(rt->js, buf->base, (size_t)nread);
     emit_stdio_event(&stdin_events, "data", &data_val, 1);
     if (stdin_state.keypress_enabled) process_keypress_data(rt->js, buf->base, (size_t)nread);
   }
@@ -1614,6 +1622,10 @@ static jsval_t process_get_max_listeners(ant_t *js, jsval_t *args, int nargs) {
   return js_mknum(max_listeners);
 }
 
+jsval_t process_library(ant_t *js) {
+  return js_get(js, js_glob(js), "process");
+}
+
 void init_process_module() {
   ant_t *js = rt->js;
   jsval_t global = js_glob(js);
@@ -1647,6 +1659,7 @@ void init_process_module() {
   jsval_t hrtime_fn = js_heavy_mkfun(js, process_hrtime, js_mkundef());
   js_set(js, hrtime_fn, "bigint", js_mkfun(process_hrtime_bigint));
   js_set(js, process_proto, "hrtime", hrtime_fn);
+  js_set(js, process_proto, "dlopen", js_mkfun(napi_process_dlopen_js));
   
 #ifndef _WIN32
   js_set(js, process_proto, "getuid", js_mkfun(process_getuid));
@@ -1662,7 +1675,7 @@ void init_process_module() {
   js_set(js, process_proto, "initgroups", js_mkfun(process_initgroups));
 #endif
   
-  js_set(js, process_proto, get_toStringTag_sym_key(), js_mkstr(js, "process", 7));
+  js_set_sym(js, process_proto, get_toStringTag_sym(), js_mkstr(js, "process", 7));
   
   jsval_t process_obj = js_mkobj(js);
   jsval_t env_obj = js_mkobj(js);
@@ -1741,7 +1754,7 @@ void init_process_module() {
   js_set(js, stdin_proto, "removeListener", js_mkfun(js_stdin_remove_listener));
   js_set(js, stdin_proto, "off", js_mkfun(js_stdin_remove_listener));
   js_set(js, stdin_proto, "removeAllListeners", js_mkfun(js_stdin_remove_all_listeners));
-  js_set(js, stdin_proto, get_toStringTag_sym_key(), js_mkstr(js, "ReadStream", 10));
+  js_set_sym(js, stdin_proto, get_toStringTag_sym(), js_mkstr(js, "ReadStream", 10));
   
   jsval_t stdin_obj = js_mkobj(js);
   js_set_proto(js, stdin_obj, stdin_proto);
@@ -1756,7 +1769,7 @@ void init_process_module() {
   js_set(js, stdout_proto, "off", js_mkfun(js_stdout_remove_listener));
   js_set(js, stdout_proto, "removeAllListeners", js_mkfun(js_stdout_remove_all_listeners));
   js_set(js, stdout_proto, "getWindowSize", js_mkfun(js_stdout_get_window_size));
-  js_set(js, stdout_proto, get_toStringTag_sym_key(), js_mkstr(js, "WriteStream", 11));
+  js_set_sym(js, stdout_proto, get_toStringTag_sym(), js_mkstr(js, "WriteStream", 11));
   
   jsval_t stdout_obj = js_mkobj(js);
   js_set_proto(js, stdout_obj, stdout_proto);
@@ -1772,7 +1785,7 @@ void init_process_module() {
   js_set(js, stderr_proto, "removeListener", js_mkfun(js_stderr_remove_listener));
   js_set(js, stderr_proto, "off", js_mkfun(js_stderr_remove_listener));
   js_set(js, stderr_proto, "removeAllListeners", js_mkfun(js_stderr_remove_all_listeners));
-  js_set(js, stderr_proto, get_toStringTag_sym_key(), js_mkstr(js, "WriteStream", 11));
+  js_set_sym(js, stderr_proto, get_toStringTag_sym(), js_mkstr(js, "WriteStream", 11));
   
   jsval_t stderr_obj = js_mkobj(js);
   js_set_proto(js, stderr_obj, stderr_proto);

@@ -79,5 +79,7 @@ endif
 executable(
   'ant',
   files('src/main.c', 'src/watch.c') + [messages_h],
-  dependencies: libant_dep, link_args: link_args
+  dependencies: libant_dep,
+  link_args: link_args,
+  export_dynamic: true
 )

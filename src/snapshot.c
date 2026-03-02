@@ -7,10 +7,12 @@
 
 jsval_t ant_load_snapshot(ant_t *js) {
   if (!js) return js_mkundef();
-  jsval_t result = js_eval_cached(js, (const char *)ant_snapshot_source, ant_snapshot_source_len);
   
-  if (vtype(result) == T_ERR) return result;
-  return js_true;
+  const char *src = (const char *)ant_snapshot_source;
+  size_t len = ant_snapshot_source_len;
+  
+  jsval_t result = js_eval_bytecode(js, src, len);
+  return vtype(result) == T_ERR ? result : js_true;
 }
 
 const uint8_t *ant_get_snapshot_source(size_t *len) {

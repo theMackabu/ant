@@ -24,8 +24,8 @@ static void print_header(int num, const char *title) {
   printf("%s\n\n", SUBSEP);
 }
 
-static struct js *create_js_runtime(void *stack_base) {
-  struct js *js = js_create_dynamic();
+static ant_t *create_js_runtime(void *stack_base) {
+  ant_t *js = js_create_dynamic();
   if (!js) {
     fprintf(stderr, "Failed to create JS runtime\n");
     return NULL;
@@ -43,13 +43,13 @@ static void example_basic_eval(void) {
   print_header(1, "Basic Evaluation");
 
   volatile char stack_base;
-  struct js *js = create_js_runtime((void *)&stack_base);
+  ant_t *js = create_js_runtime((void *)&stack_base);
   if (!js) return;
 
-  js_mkscope(js);
+
 
   const char *code = "1 + 2 * 3";
-  jsval_t result = js_eval(js, code, strlen(code));
+  jsval_t result = js_eval_bytecode_eval(js, code, strlen(code));
 
   if (vtype(result) == T_NUM) {
     printf("  Result: %g\n", js_getnum(result));
@@ -60,7 +60,7 @@ static void example_basic_eval(void) {
   js_destroy(js);
 }
 
-static jsval_t my_add(struct js *js, jsval_t *args, int nargs) {
+static jsval_t my_add(ant_t *js, jsval_t *args, int nargs) {
   if (!js_chkargs(args, nargs, "dd")) {
     return js_mkerr(js, "add() expects two numbers");
   }
@@ -71,7 +71,7 @@ static jsval_t my_add(struct js *js, jsval_t *args, int nargs) {
   return js_mknum(a + b);
 }
 
-static jsval_t my_greet(struct js *js, jsval_t *args, int nargs) {
+static jsval_t my_greet(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1 || vtype(args[0]) != T_STR) {
     return js_mkerr(js, "greet() expects a string");
   }
@@ -85,7 +85,7 @@ static jsval_t my_greet(struct js *js, jsval_t *args, int nargs) {
   return js_mkstr(js, buf, strlen(buf));
 }
 
-static jsval_t my_create_point(struct js *js, jsval_t *args, int nargs) {
+static jsval_t my_create_point(ant_t *js, jsval_t *args, int nargs) {
   if (!js_chkargs(args, nargs, "dd")) {
     return js_mkerr(js, "createPoint() expects two numbers");
   }
@@ -101,10 +101,10 @@ static void example_c_functions(void) {
   print_header(2, "C Functions");
 
   volatile char stack_base;
-  struct js *js = create_js_runtime((void *)&stack_base);
+  ant_t *js = create_js_runtime((void *)&stack_base);
   if (!js) return;
 
-  js_mkscope(js);
+
 
   jsval_t global = js_glob(js);
   js_set(js, global, "add", js_mkfun(my_add));
@@ -112,15 +112,15 @@ static void example_c_functions(void) {
   js_set(js, global, "createPoint", js_mkfun(my_create_point));
 
   const char *code1 = "add(10, 32)";
-  jsval_t r1 = js_eval(js, code1, strlen(code1));
+  jsval_t r1 = js_eval_bytecode_eval(js, code1, strlen(code1));
   printf("  add(10, 32) = %g\n", js_getnum(r1));
 
   const char *code2 = "greet('World')";
-  jsval_t r2 = js_eval(js, code2, strlen(code2));
+  jsval_t r2 = js_eval_bytecode_eval(js, code2, strlen(code2));
   printf("  greet('World') = %s\n", js_str(js, r2));
 
   const char *code3 = "let p = createPoint(3, 4); p.x * p.x + p.y * p.y";
-  jsval_t r3 = js_eval(js, code3, strlen(code3));
+  jsval_t r3 = js_eval_bytecode_eval(js, code3, strlen(code3));
   printf("  distance² = %g\n", js_getnum(r3));
 
   js_destroy(js);
@@ -130,10 +130,10 @@ static void example_objects_arrays(void) {
   print_header(3, "Objects and Arrays");
 
   volatile char stack_base;
-  struct js *js = create_js_runtime((void *)&stack_base);
+  ant_t *js = create_js_runtime((void *)&stack_base);
   if (!js) return;
 
-  js_mkscope(js);
+
   jsval_t global = js_glob(js);
 
   jsval_t config = js_mkobj(js);
@@ -149,7 +149,7 @@ static void example_objects_arrays(void) {
   js_set(js, global, "numbers", arr);
 
   const char *code = "config.name + ' v' + config.version + ' - sum: ' + numbers.reduce((a,b) => a+b, 0)";
-  jsval_t result = js_eval(js, code, strlen(code));
+  jsval_t result = js_eval_bytecode_eval(js, code, strlen(code));
   printf("  Result: %s\n", js_str(js, result));
 
   jsval_t name_val = js_get(js, config, "name");
@@ -165,19 +165,19 @@ static void example_error_handling(void) {
   print_header(4, "Error Handling");
 
   volatile char stack_base;
-  struct js *js = create_js_runtime((void *)&stack_base);
+  ant_t *js = create_js_runtime((void *)&stack_base);
   if (!js) return;
 
-  js_mkscope(js);
+
 
   const char *bad_code = "let x = {";
-  jsval_t r1 = js_eval(js, bad_code, strlen(bad_code));
+  jsval_t r1 = js_eval_bytecode_eval(js, bad_code, strlen(bad_code));
   if (vtype(r1) == T_ERR) {
     printf("  Syntax error:    %s\n", js_str(js, r1));
   }
 
   const char *ref_err = "undefinedVariable + 1";
-  jsval_t r2 = js_eval(js, ref_err, strlen(ref_err));
+  jsval_t r2 = js_eval_bytecode_eval(js, ref_err, strlen(ref_err));
   if (vtype(r2) == T_ERR) {
     printf("  Reference error: %s\n", js_str(js, r2));
   }
@@ -186,7 +186,7 @@ static void example_error_handling(void) {
   js_set(js, global, "add", js_mkfun(my_add));
 
   const char *type_err = "add('not', 'numbers')";
-  jsval_t r3 = js_eval(js, type_err, strlen(type_err));
+  jsval_t r3 = js_eval_bytecode_eval(js, type_err, strlen(type_err));
   if (vtype(r3) == T_ERR) {
     printf("  Type error:      %s\n", js_str(js, r3));
   }
@@ -198,10 +198,8 @@ static void example_call_js_from_c(void) {
   print_header(5, "Calling JS from C");
 
   volatile char stack_base;
-  struct js *js = create_js_runtime((void *)&stack_base);
+  ant_t *js = create_js_runtime((void *)&stack_base);
   if (!js) return;
-
-  jsval_t scope = js_mkscope(js);
 
   const char *code =
     "function multiply(a, b) {"
@@ -211,13 +209,14 @@ static void example_call_js_from_c(void) {
     "    return last + ', ' + first;"
     "}";
 
-  js_eval(js, code, strlen(code));
+  js_eval_bytecode_eval(js, code, strlen(code));
 
-  jsval_t multiply_fn = js_get(js, scope, "multiply");
-  jsval_t format_fn = js_get(js, scope, "formatName");
+  jsval_t glob = js_glob(js);
+  jsval_t multiply_fn = js_get(js, glob, "multiply");
+  jsval_t format_fn = js_get(js, glob, "formatName");
 
   jsval_t args1[] = { js_mknum(6), js_mknum(7) };
-  jsval_t result1 = js_call(js, multiply_fn, args1, 2);
+  jsval_t result1 = sv_vm_call(js->vm, js, multiply_fn, js_mkundef(), args1, 2, NULL, false);
   printf("  multiply(6, 7) = %g\n", js_getnum(result1));
 
   jsval_t args2[] = {
@@ -225,7 +224,7 @@ static void example_call_js_from_c(void) {
     js_mkstr(js, "Doe", 3)
   };
 
-  jsval_t result2 = js_call(js, format_fn, args2, 2);
+  jsval_t result2 = sv_vm_call(js->vm, js, format_fn, js_mkundef(), args2, 2, NULL, false);
   printf("  formatName('John', 'Doe') = %s\n", js_str(js, result2));
 
   js_destroy(js);
@@ -235,13 +234,11 @@ static void example_iterate_properties(void) {
   print_header(6, "Iterating Properties");
 
   volatile char stack_base;
-  struct js *js = create_js_runtime((void *)&stack_base);
+  ant_t *js = create_js_runtime((void *)&stack_base);
   if (!js) return;
 
-  js_mkscope(js);
-
   const char *code = "({ name: 'Alice', age: 30, city: 'NYC' })";
-  jsval_t obj = js_eval(js, code, strlen(code));
+  jsval_t obj = js_eval_bytecode_eval(js, code, strlen(code));
 
   ant_iter_t iter = js_prop_iter_begin(js, obj);
   const char *key;
@@ -257,7 +254,7 @@ static void example_iterate_properties(void) {
   js_destroy(js);
 }
 
-static jsval_t method_get_full_name(struct js *js, jsval_t *args, int nargs) {
+static jsval_t method_get_full_name(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
 
   jsval_t this_obj = js_getthis(js);
@@ -279,10 +276,10 @@ static void example_this_context(void) {
   print_header(7, "'this' Context");
 
   volatile char stack_base;
-  struct js *js = create_js_runtime((void *)&stack_base);
+  ant_t *js = create_js_runtime((void *)&stack_base);
   if (!js) return;
 
-  js_mkscope(js);
+
 
   jsval_t person = js_mkobj(js);
   js_set(js, person, "firstName", js_mkstr(js, "Jane", 4));
@@ -292,7 +289,7 @@ static void example_this_context(void) {
   js_set(js, js_glob(js), "person", person);
 
   const char *code = "person.getFullName()";
-  jsval_t result = js_eval(js, code, strlen(code));
+  jsval_t result = js_eval_bytecode_eval(js, code, strlen(code));
   printf("  person.getFullName() = %s\n", js_str(js, result));
 
   js_destroy(js);
@@ -302,10 +299,10 @@ static void example_stateful_session(void) {
   print_header(8, "Stateful Session");
 
   volatile char stack_base;
-  struct js *js = create_js_runtime((void *)&stack_base);
+  ant_t *js = create_js_runtime((void *)&stack_base);
   if (!js) return;
 
-  js_mkscope(js);
+
 
   const char *scripts[] = {
     "let counter = 0;",
@@ -317,7 +314,7 @@ static void example_stateful_session(void) {
 
   jsval_t result = js_mkundef();
   for (int i = 0; i < 5; i++) {
-    result = js_eval(js, scripts[i], strlen(scripts[i]));
+    result = js_eval_bytecode_eval(js, scripts[i], strlen(scripts[i]));
     if (vtype(result) == T_ERR) {
       printf("  Error in script %d: %s\n", i, js_str(js, result));
       break;
@@ -333,14 +330,12 @@ static void example_async_event_loop(void) {
   print_header(9, "Async & Event Loop");
 
   volatile char stack_base;
-  struct js *js = create_js_runtime((void *)&stack_base);
+  ant_t *js = create_js_runtime((void *)&stack_base);
   if (!js) return;
 
   init_symbol_module();
   init_builtin_module();
   init_timer_module();
-
-  jsval_t scope = js_mkscope(js);
 
   const char *code =
     "let results = [];"
@@ -363,7 +358,7 @@ static void example_async_event_loop(void) {
     ""
     "results.push('sync');";
 
-  jsval_t result = js_eval(js, code, strlen(code));
+  jsval_t result = js_eval_bytecode_eval(js, code, strlen(code));
   if (vtype(result) == T_ERR) {
     printf("  Error: %s\n", js_str(js, result));
     js_destroy(js);
@@ -372,7 +367,7 @@ static void example_async_event_loop(void) {
 
   js_run_event_loop(js);
 
-  jsval_t results = js_get(js, scope, "results");
+  jsval_t results = js_get(js, js_glob(js), "results");
 
   printf("  Execution order:\n");
   jsoff_t len = js_arr_len(js, results);
@@ -388,11 +383,11 @@ static void example_console_logging(void) {
   print_header(10, "Console Logging");
 
   volatile char stack_base;
-  struct js *js = create_js_runtime((void *)&stack_base);
+  ant_t *js = create_js_runtime((void *)&stack_base);
   if (!js) return;
 
   init_console_module();
-  js_mkscope(js);
+
 
   const char *code =
     "console.log('Hello from JavaScript!');"
@@ -403,7 +398,7 @@ static void example_console_logging(void) {
     "console.error('This is an error');"
     "'done'";
 
-  jsval_t result = js_eval(js, code, strlen(code));
+  jsval_t result = js_eval_bytecode_eval(js, code, strlen(code));
   if (vtype(result) == T_ERR) {
     printf("  Error: %s\n", js_str(js, result));
   }
@@ -415,11 +410,11 @@ static void example_global_this(void) {
   print_header(11, "GlobalThis");
 
   volatile char stack_base;
-  struct js *js = create_js_runtime((void *)&stack_base);
+  ant_t *js = create_js_runtime((void *)&stack_base);
   if (!js) return;
 
   init_console_module();
-  js_mkscope(js);
+
 
   jsval_t global = js_glob(js);
   js_set(js, global, "myNumber", js_mknum(42));
@@ -448,7 +443,7 @@ static void example_global_this(void) {
     "console.log('  addedFromJS:', addedFromJS);"
     "console.log(this)";
 
-  jsval_t result = js_eval(js, code, strlen(code));
+  jsval_t result = js_eval_bytecode_eval(js, code, strlen(code));
   if (vtype(result) == T_ERR) {
     printf("  Error: %s\n", js_str(js, result));
   }

@@ -14,6 +14,7 @@
 #include "reactor.h"
 #include "runtime.h"
 #include "internal.h"
+#include "silver/engine.h"
 
 #include "modules/server.h"
 #include "modules/json.h"
@@ -85,7 +86,7 @@ static void res_set_body(response_ctx_t *ctx, const char *src, size_t len) {
 }
 
 typedef struct http_server_s {
-  struct js *js;
+  ant_t *js;
   jsval_t handler;
   jsval_t store_obj;
   jsval_t server_obj;
@@ -344,7 +345,7 @@ static void free_http_request(http_request_t *req) {
 static void on_close(uv_handle_t *handle);
 static void send_response(uv_stream_t *client, response_ctx_t *res_ctx);
 
-static jsval_t js_set_prop(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_set_prop(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkundef();
   
   jsval_t fn = js_getcurrentfunc(js);
@@ -360,7 +361,7 @@ static jsval_t js_set_prop(struct js *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t js_get_prop(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_get_prop(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
   
   jsval_t fn = js_getcurrentfunc(js);
@@ -376,7 +377,7 @@ static jsval_t js_get_prop(struct js *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t req_header(struct js *js, jsval_t *args, int nargs) {
+static jsval_t req_header(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
   
   jsval_t fn = js_getcurrentfunc(js);
@@ -400,7 +401,7 @@ static jsval_t req_header(struct js *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t res_header(struct js *js, jsval_t *args, int nargs) {
+static jsval_t res_header(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkundef();
   
   jsval_t fn = js_getcurrentfunc(js);
@@ -420,7 +421,7 @@ static jsval_t res_header(struct js *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t res_status(struct js *js, jsval_t *args, int nargs) {
+static jsval_t res_status(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
   
   jsval_t fn = js_getcurrentfunc(js);
@@ -437,7 +438,7 @@ static jsval_t res_status(struct js *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t res_body(struct js *js, jsval_t *args, int nargs) {
+static jsval_t res_body(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
   
   jsval_t fn = js_getcurrentfunc(js);
@@ -466,7 +467,7 @@ static jsval_t res_body(struct js *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t res_html(struct js *js, jsval_t *args, int nargs) {
+static jsval_t res_html(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
   
   jsval_t fn = js_getcurrentfunc(js);
@@ -492,7 +493,7 @@ static jsval_t res_html(struct js *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t res_json(struct js *js, jsval_t *args, int nargs) {
+static jsval_t res_json(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
   
   jsval_t fn = js_getcurrentfunc(js);
@@ -524,7 +525,7 @@ static jsval_t res_json(struct js *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t res_notFound(struct js *js, jsval_t *args, int nargs) {
+static jsval_t res_notFound(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
   
   jsval_t fn = js_getcurrentfunc(js);
@@ -543,7 +544,7 @@ static jsval_t res_notFound(struct js *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t res_redirect(struct js *js, jsval_t *args, int nargs) {
+static jsval_t res_redirect(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
   
   jsval_t fn = js_getcurrentfunc(js);
@@ -705,7 +706,7 @@ static void send_response(uv_stream_t *client, response_ctx_t *res_ctx) {
   uv_write((uv_write_t *)write_req, client, &write_req->buf, 1, on_write);
 }
 
-static jsval_t js_server_stop(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_server_stop(ant_t *js, jsval_t *args, int nargs) {
   server_signal_cb(NULL, 0);
   return js_mkundef();
 }
@@ -765,7 +766,7 @@ static void handle_http_request(client_t *client, http_request_t *http_req) {
     js_set(server->js, ctx, "get", js_heavy_mkfun(server->js, js_get_prop, server->store_obj));
   
     jsval_t args[2] = {ctx, server->server_obj};
-    result = js_call(server->js, server->handler, args, 2);
+    result = sv_vm_call(server->js->vm, server->js, server->handler, js_mkundef(), args, 2, NULL, false);
     if (vtype(result) == T_PROMISE) return;
     
     if (vtype(result) == T_ERR) {
@@ -943,7 +944,7 @@ static void on_connection(uv_stream_t *server, int status) {
 }
 
 // Ant.serve(port, handler)
-jsval_t js_serve(struct js *js, jsval_t *args, int nargs) {
+jsval_t js_serve(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) {
     fprintf(stderr, "Error: Ant.serve() requires at least 1 argument (port)\n");
     return js_mkundef();

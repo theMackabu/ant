@@ -15,13 +15,22 @@ declare module 'fs' {
     W_OK: number;
     X_OK: number;
   };
+  const promises: typeof import('fs/promises');
 
   function readFile(path: string): Promise<string>;
   function readFileSync(path: string): string;
+  function readSync(fd: number, buffer: ArrayBufferView, offset?: number, length?: number, position?: number | null): number;
   function stream(path: string): Promise<string>;
-  function open(path: string): string;
+  function open(path: string, flags?: string, mode?: number): Promise<number>;
+  function openSync(path: string, flags?: string, mode?: number): number;
+  function close(fd: number): Promise<void>;
+  function closeSync(fd: number): void;
   function writeFile(path: string, data: string): Promise<void>;
   function writeFileSync(path: string, data: string): void;
+  function write(fd: number, data: string | ArrayBufferView, offset?: number, length?: number, position?: number | null): Promise<number>;
+  function writeSync(fd: number, data: string | ArrayBufferView, offset?: number, length?: number, position?: number | null): number;
+  function writev(fd: number, buffers: ArrayBufferView[], position?: number): Promise<number>;
+  function writevSync(fd: number, buffers: ArrayBufferView[], position?: number): number;
   function appendFileSync(path: string, data: string): void;
   function copyFileSync(src: string, dest: string): void;
   function renameSync(oldPath: string, newPath: string): void;
@@ -47,4 +56,45 @@ declare module 'ant:fs' {
 
 declare module 'node:fs' {
   export * from 'fs';
+}
+
+declare module 'fs/promises' {
+  interface Stats {
+    size: number;
+    mode: number;
+    uid: number;
+    gid: number;
+    isFile(): boolean;
+    isDirectory(): boolean;
+    isSymbolicLink(): boolean;
+  }
+
+  const constants: {
+    F_OK: number;
+    R_OK: number;
+    W_OK: number;
+    X_OK: number;
+  };
+
+  function readFile(path: string): Promise<string>;
+  function open(path: string, flags?: string, mode?: number): Promise<number>;
+  function close(fd: number): Promise<void>;
+  function writeFile(path: string, data: string): Promise<void>;
+  function write(fd: number, data: string | ArrayBufferView, offset?: number, length?: number, position?: number | null): Promise<number>;
+  function writev(fd: number, buffers: ArrayBufferView[], position?: number): Promise<number>;
+  function unlink(path: string): Promise<void>;
+  function mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
+  function rmdir(path: string): Promise<void>;
+  function stat(path: string): Promise<Stats>;
+  function exists(path: string): Promise<boolean>;
+  function access(path: string, mode?: number): Promise<void>;
+  function readdir(path: string): Promise<string[]>;
+}
+
+declare module 'ant:fs/promises' {
+  export * from 'fs/promises';
+}
+
+declare module 'node:fs/promises' {
+  export * from 'fs/promises';
 }

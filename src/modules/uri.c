@@ -74,7 +74,7 @@ static int decode_escape_sequence(const char *str, size_t len, size_t *pos, unsi
 }
 
 // encodeURIComponent()
-static jsval_t js_encodeURIComponent(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_encodeURIComponent(ant_t *js, jsval_t *args, int nargs) {
   jsval_t result;
   char *out = NULL;
   
@@ -127,7 +127,7 @@ malformed:
 }
 
 // encodeURI()
-static jsval_t js_encodeURI(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_encodeURI(ant_t *js, jsval_t *args, int nargs) {
   jsval_t result;
   char *out = NULL;
   
@@ -180,7 +180,7 @@ malformed:
 }
 
 // decodeURIComponent()
-static jsval_t js_decodeURIComponent(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_decodeURIComponent(ant_t *js, jsval_t *args, int nargs) {
   jsval_t result;
   char *out = NULL;
   
@@ -229,7 +229,7 @@ malformed:
 }
 
 // decodeURI()
-static jsval_t js_decodeURI(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_decodeURI(ant_t *js, jsval_t *args, int nargs) {
   jsval_t result;
   char *out = NULL;
   
@@ -299,7 +299,7 @@ static int is_escape_unreserved(unsigned char c) {
          c == '-' || c == '.' || c == '/';
 }
 
-static jsval_t js_escape(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_escape(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkstr(js, "undefined", 9);
   
   char *str = js_getstr(js, args[0], NULL);
@@ -326,7 +326,7 @@ static jsval_t js_escape(struct js *js, jsval_t *args, int nargs) {
   return result;
 }
 
-static jsval_t js_unescape(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_unescape(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkstr(js, "undefined", 9);
   
   char *str = js_getstr(js, args[0], NULL);
@@ -359,7 +359,7 @@ static jsval_t js_unescape(struct js *js, jsval_t *args, int nargs) {
 }
 
 void init_uri_module(void) {
-  struct js *js = rt->js;
+  ant_t *js = rt->js;
   jsval_t glob = js_glob(js);
 
   js_set(js, glob, "encodeURI", js_mkfun(js_encodeURI));

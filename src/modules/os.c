@@ -48,7 +48,7 @@
 #define OS_DEVNULL "/dev/null"
 #endif
 
-static jsval_t os_arch(struct js *js, jsval_t *args, int nargs) {
+static jsval_t os_arch(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
 #if defined(__x86_64__) || defined(_M_X64)
   return js_mkstr(js, "x64", 3);
@@ -75,7 +75,7 @@ static jsval_t os_arch(struct js *js, jsval_t *args, int nargs) {
 #endif
 }
 
-static jsval_t os_platform(struct js *js, jsval_t *args, int nargs) {
+static jsval_t os_platform(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
 #if defined(__APPLE__)
   return js_mkstr(js, "darwin", 6);
@@ -96,7 +96,7 @@ static jsval_t os_platform(struct js *js, jsval_t *args, int nargs) {
 #endif
 }
 
-static jsval_t os_type(struct js *js, jsval_t *args, int nargs) {
+static jsval_t os_type(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
 #if defined(__APPLE__)
   return js_mkstr(js, "Darwin", 6);
@@ -113,7 +113,7 @@ static jsval_t os_type(struct js *js, jsval_t *args, int nargs) {
 #endif
 }
 
-static jsval_t os_release(struct js *js, jsval_t *args, int nargs) {
+static jsval_t os_release(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
 #ifdef _WIN32
   OSVERSIONINFOA osvi;
@@ -137,7 +137,7 @@ static jsval_t os_release(struct js *js, jsval_t *args, int nargs) {
 #endif
 }
 
-static jsval_t os_version(struct js *js, jsval_t *args, int nargs) {
+static jsval_t os_version(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
 #ifdef _WIN32
   OSVERSIONINFOA osvi;
@@ -161,7 +161,7 @@ static jsval_t os_version(struct js *js, jsval_t *args, int nargs) {
 #endif
 }
 
-static jsval_t os_machine(struct js *js, jsval_t *args, int nargs) {
+static jsval_t os_machine(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
 #ifdef _WIN32
   SYSTEM_INFO sysinfo;
@@ -182,7 +182,7 @@ static jsval_t os_machine(struct js *js, jsval_t *args, int nargs) {
 #endif
 }
 
-static jsval_t os_hostname(struct js *js, jsval_t *args, int nargs) {
+static jsval_t os_hostname(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
   char hostname[256];
   if (gethostname(hostname, sizeof(hostname)) == 0) {
@@ -191,7 +191,7 @@ static jsval_t os_hostname(struct js *js, jsval_t *args, int nargs) {
   return js_mkstr(js, "", 0);
 }
 
-static jsval_t os_homedir(struct js *js, jsval_t *args, int nargs) {
+static jsval_t os_homedir(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
 #ifdef _WIN32
   const char *userprofile = getenv("USERPROFILE");
@@ -219,7 +219,7 @@ static jsval_t os_homedir(struct js *js, jsval_t *args, int nargs) {
 #endif
 }
 
-static jsval_t os_tmpdir(struct js *js, jsval_t *args, int nargs) {
+static jsval_t os_tmpdir(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
   const char *tmpdir = getenv("TMPDIR");
   if (!tmpdir) tmpdir = getenv("TMP");
@@ -228,7 +228,7 @@ static jsval_t os_tmpdir(struct js *js, jsval_t *args, int nargs) {
   return js_mkstr(js, tmpdir, strlen(tmpdir));
 }
 
-static jsval_t os_endianness(struct js *js, jsval_t *args, int nargs) {
+static jsval_t os_endianness(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
   uint16_t test = 1;
   if (*(uint8_t *)&test == 1) {
@@ -237,7 +237,7 @@ static jsval_t os_endianness(struct js *js, jsval_t *args, int nargs) {
   return js_mkstr(js, "BE", 2);
 }
 
-static jsval_t os_uptime(struct js *js, jsval_t *args, int nargs) {
+static jsval_t os_uptime(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
 #ifdef _WIN32
   return js_mknum((double)GetTickCount64() / 1000.0);
@@ -261,7 +261,7 @@ static jsval_t os_uptime(struct js *js, jsval_t *args, int nargs) {
 #endif
 }
 
-static jsval_t os_totalmem(struct js *js, jsval_t *args, int nargs) {
+static jsval_t os_totalmem(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
 #ifdef _WIN32
   MEMORYSTATUSEX memInfo;
@@ -288,7 +288,7 @@ static jsval_t os_totalmem(struct js *js, jsval_t *args, int nargs) {
 #endif
 }
 
-static jsval_t os_freemem(struct js *js, jsval_t *args, int nargs) {
+static jsval_t os_freemem(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
 #ifdef _WIN32
   MEMORYSTATUSEX memInfo;
@@ -319,7 +319,7 @@ static jsval_t os_freemem(struct js *js, jsval_t *args, int nargs) {
 #endif
 }
 
-static jsval_t os_availableParallelism(struct js *js, jsval_t *args, int nargs) {
+static jsval_t os_availableParallelism(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
 #ifdef _WIN32
   SYSTEM_INFO sysinfo;
@@ -344,7 +344,7 @@ typedef struct {
   double user, nice, sys, idle, irq;
 } cpu_times_t;
 
-static void push_cpu_entry(struct js *js, jsval_t arr, const char *model, double speed, cpu_times_t *times) {
+static void push_cpu_entry(ant_t *js, jsval_t arr, const char *model, double speed, cpu_times_t *times) {
   jsval_t cpu = js_mkobj(js);
   js_set(js, cpu, "model", js_mkstr(js, model, strlen(model)));
   js_set(js, cpu, "speed", js_mknum(speed));
@@ -361,7 +361,7 @@ static void push_cpu_entry(struct js *js, jsval_t arr, const char *model, double
 }
 
 #ifdef __APPLE__
-static jsval_t os_cpus_darwin(struct js *js) {
+static jsval_t os_cpus_darwin(ant_t *js) {
   jsval_t arr = js_mkarr(js);
   
   natural_t ncpu;
@@ -410,7 +410,7 @@ static char *parse_colon_value(char *line) {
   return colon;
 }
 
-static jsval_t os_cpus_linux(struct js *js) {
+static jsval_t os_cpus_linux(ant_t *js) {
   jsval_t arr = js_mkarr(js);
   char model[256] = "Unknown";
   double speed = 0;
@@ -461,7 +461,7 @@ read_stat:
 }
 #endif
 
-static jsval_t os_cpus(struct js *js, jsval_t *args, int nargs) {
+static jsval_t os_cpus(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
 #ifdef __APPLE__
   return os_cpus_darwin(js);
@@ -472,7 +472,7 @@ static jsval_t os_cpus(struct js *js, jsval_t *args, int nargs) {
 #endif
 }
 
-static jsval_t os_loadavg(struct js *js, jsval_t *args, int nargs) {
+static jsval_t os_loadavg(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
   jsval_t arr = js_mkarr(js);
   
@@ -498,7 +498,7 @@ static jsval_t os_loadavg(struct js *js, jsval_t *args, int nargs) {
 
 #ifdef _WIN32
 
-static jsval_t os_networkInterfaces(struct js *js, jsval_t *args, int nargs) {
+static jsval_t os_networkInterfaces(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
   jsval_t result = js_mkobj(js);
   
@@ -575,7 +575,7 @@ static jsval_t os_networkInterfaces(struct js *js, jsval_t *args, int nargs) {
   return result;
 }
 
-static jsval_t os_userInfo(struct js *js, jsval_t *args, int nargs) {
+static jsval_t os_userInfo(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
   jsval_t info = js_mkobj(js);
   
@@ -602,12 +602,12 @@ static jsval_t os_userInfo(struct js *js, jsval_t *args, int nargs) {
   return info;
 }
 
-static jsval_t os_getPriority(struct js *js, jsval_t *args, int nargs) {
+static jsval_t os_getPriority(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
   return js_mknum(0);
 }
 
-static jsval_t os_setPriority(struct js *js, jsval_t *args, int nargs) {
+static jsval_t os_setPriority(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
   return js_mkundef();
 }
@@ -635,7 +635,7 @@ static int calc_prefix_len(struct sockaddr *netmask, int family) {
   return prefix;
 }
 
-static void add_iface_entry(struct js *js, jsval_t iface_arr, struct ifaddrs *ifa, int family) {
+static void add_iface_entry(ant_t *js, jsval_t iface_arr, struct ifaddrs *ifa, int family) {
   char addr_str[INET6_ADDRSTRLEN] = "";
   char netmask_str[INET6_ADDRSTRLEN] = "";
   char cidr[128];
@@ -698,7 +698,7 @@ static unsigned char *get_mac_bytes(struct ifaddrs *ifa) {
 #endif
 }
 
-static void apply_mac_to_iface(struct js *js, jsval_t result, const char *name, unsigned char *mac_bytes) {
+static void apply_mac_to_iface(ant_t *js, jsval_t result, const char *name, unsigned char *mac_bytes) {
   char mac_str[18];
   format_mac_address(mac_str, sizeof(mac_str), mac_bytes);
   
@@ -718,7 +718,7 @@ static void apply_mac_to_iface(struct js *js, jsval_t result, const char *name, 
   }
 }
 
-static jsval_t os_networkInterfaces(struct js *js, jsval_t *args, int nargs) {
+static jsval_t os_networkInterfaces(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
   jsval_t result = js_mkobj(js);
   
@@ -752,7 +752,7 @@ static jsval_t os_networkInterfaces(struct js *js, jsval_t *args, int nargs) {
   return result;
 }
 
-static jsval_t os_userInfo(struct js *js, jsval_t *args, int nargs) {
+static jsval_t os_userInfo(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
   jsval_t info = js_mkobj(js);
   
@@ -781,7 +781,7 @@ static jsval_t os_userInfo(struct js *js, jsval_t *args, int nargs) {
   return info;
 }
 
-static jsval_t os_getPriority(struct js *js, jsval_t *args, int nargs) {
+static jsval_t os_getPriority(ant_t *js, jsval_t *args, int nargs) {
   int pid = 0;
   if (nargs > 0 && vtype(args[0]) == T_NUM) {
     pid = (int)js_getnum(args[0]);
@@ -795,7 +795,7 @@ static jsval_t os_getPriority(struct js *js, jsval_t *args, int nargs) {
   return js_mknum((double)priority);
 }
 
-static jsval_t os_setPriority(struct js *js, jsval_t *args, int nargs) {
+static jsval_t os_setPriority(ant_t *js, jsval_t *args, int nargs) {
   int pid = 0;
   int priority = 0;
   
@@ -822,7 +822,7 @@ static jsval_t os_setPriority(struct js *js, jsval_t *args, int nargs) {
 
 #endif
 
-static void add_signal_constants(struct js *js, jsval_t signals) {
+static void add_signal_constants(ant_t *js, jsval_t signals) {
 #ifdef SIGHUP
   js_set(js, signals, "SIGHUP", js_mknum(SIGHUP));
 #endif
@@ -915,7 +915,7 @@ static void add_signal_constants(struct js *js, jsval_t signals) {
 #endif
 }
 
-static void add_errno_constants(struct js *js, jsval_t errn) {
+static void add_errno_constants(ant_t *js, jsval_t errn) {
   js_set(js, errn, "E2BIG", js_mknum(E2BIG));
   js_set(js, errn, "EACCES", js_mknum(EACCES));
   js_set(js, errn, "EADDRINUSE", js_mknum(EADDRINUSE));
@@ -984,7 +984,7 @@ static void add_errno_constants(struct js *js, jsval_t errn) {
   js_set(js, errn, "EXDEV", js_mknum(EXDEV));
 }
 
-static void add_priority_constants(struct js *js, jsval_t priority) {
+static void add_priority_constants(ant_t *js, jsval_t priority) {
   js_set(js, priority, "PRIORITY_LOW", js_mknum(19));
   js_set(js, priority, "PRIORITY_BELOW_NORMAL", js_mknum(10));
   js_set(js, priority, "PRIORITY_NORMAL", js_mknum(0));
@@ -993,7 +993,7 @@ static void add_priority_constants(struct js *js, jsval_t priority) {
   js_set(js, priority, "PRIORITY_HIGHEST", js_mknum(-20));
 }
 
-static void add_dlopen_constants(struct js *js, jsval_t dlopen_obj) {
+static void add_dlopen_constants(ant_t *js, jsval_t dlopen_obj) {
 #ifdef RTLD_LAZY
   js_set(js, dlopen_obj, "RTLD_LAZY", js_mknum(RTLD_LAZY));
 #endif
@@ -1011,7 +1011,7 @@ static void add_dlopen_constants(struct js *js, jsval_t dlopen_obj) {
 #endif
 }
 
-jsval_t os_library(struct js *js) {
+jsval_t os_library(ant_t *js) {
   jsval_t lib = js_mkobj(js);
   
   js_set(js, lib, "EOL", js_mkstr(js, OS_EOL, strlen(OS_EOL)));
@@ -1055,7 +1055,7 @@ jsval_t os_library(struct js *js) {
   js_set(js, constants, "dlopen", dlopen_obj);
   js_set(js, constants, "UV_UDP_REUSEADDR", js_mknum(4));
   js_set(js, lib, "constants", constants);
-  js_set(js, lib, get_toStringTag_sym_key(), js_mkstr(js, "os", 2));
+  js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "os", 2));
 
   return lib;
 }

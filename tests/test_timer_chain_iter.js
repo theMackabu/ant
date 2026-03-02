@@ -72,7 +72,7 @@ const render = () => {
 
 let ticks = 0;
 const start = performance.now();
-const duration = 30000;
+const duration = 2000;
 const batch_size = 100;
 
 const run = () => {

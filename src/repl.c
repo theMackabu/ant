@@ -23,6 +23,8 @@
 #include "reactor.h"
 #include "runtime.h"
 #include "internal.h"
+#include "silver/ast.h"
+#include "silver/engine.h"
 #include "modules/io.h"
 
 #define MAX_HISTORY 512
@@ -49,32 +51,298 @@ typedef struct {
   const char *name;
   const char *description;
   bool has_arg;
-  cmd_result_t (*handler)(struct js *js, history_t *history, const char *arg);
+  cmd_result_t (*handler)(ant_t *js, history_t *history, const char *arg);
 } repl_command_t;
 
-static void sigint_handler(int sig) {
-  (void)sig;
-  ctrl_c_pressed++;
+typedef struct {
+  char *name;
+  size_t len;
+} repl_decl_name_t;
+
+typedef struct {
+  repl_decl_name_t *items;
+  size_t count;
+  size_t cap;
+} repl_decl_registry_t;
+
+typedef struct {
+  const char **names;
+  uint32_t *lens;
+  size_t count;
+  size_t cap;
+} repl_decl_pending_t;
+
+static repl_decl_registry_t *g_repl_decl_registry = NULL;
+static void sigint_handler(int sig) { ctrl_c_pressed++; }
+
+static inline void repl_clear_exception_state(ant_t *js) {
+  js->thrown_exists = false;
+  js->thrown_value = js_mkundef();
 }
 
-static cmd_result_t cmd_help(struct js *js, history_t *history, const char *arg);
-static cmd_result_t cmd_exit(struct js *js, history_t *history, const char *arg);
-static cmd_result_t cmd_load(struct js *js, history_t *history, const char *arg);
-static cmd_result_t cmd_save(struct js *js, history_t *history, const char *arg);
-static cmd_result_t cmd_gc(struct js *js, history_t *history, const char *arg);
-static cmd_result_t cmd_stats(struct js *js, history_t *history, const char *arg);
+static void repl_decl_registry_free(repl_decl_registry_t *reg) {
+  if (!reg) return;
+  for (size_t i = 0; i < reg->count; i++) 
+    free(reg->items[i].name);
+  free(reg->items);
+  reg->items = NULL;
+  reg->count = 0;
+  reg->cap = 0;
+}
+
+static bool repl_decl_registry_contains(
+  const repl_decl_registry_t *reg,
+  const char *name, uint32_t len
+) {
+  if (!reg || !name) return false;
+  for (size_t i = 0; i < reg->count; i++) {
+    if (
+      reg->items[i].len == (size_t)len 
+      && memcmp(reg->items[i].name, name, (size_t)len) == 0
+    ) return true;
+  }
+  return false;
+}
+
+static bool repl_decl_registry_add(
+  ant_t *js, repl_decl_registry_t *reg,
+  const char *name, uint32_t len
+) {
+  if (!reg || !name) return true;
+  if (repl_decl_registry_contains(reg, name, len)) return true;
+  
+  if (reg->count >= reg->cap) {
+    size_t new_cap = reg->cap ? reg->cap * 2 : 32;
+    repl_decl_name_t *ni = realloc(reg->items, new_cap * sizeof(*ni));
+    if (!ni) {
+      js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "out of memory");
+      return false;
+    }
+    reg->items = ni;
+    reg->cap = new_cap;
+  }
+  
+  char *copy = malloc((size_t)len + 1);
+  if (!copy) {
+    js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "out of memory");
+    return false;
+  }
+  
+  memcpy(copy, name, (size_t)len);
+  copy[len] = '\0';
+  reg->items[reg->count++] = (repl_decl_name_t){ .name = copy, .len = (size_t)len };
+  
+  return true;
+}
+
+static void repl_decl_pending_free(repl_decl_pending_t *p) {
+  if (!p) return;
+  free(p->names);
+  free(p->lens);
+  p->names = NULL;
+  p->lens = NULL;
+  p->count = 0;
+  p->cap = 0;
+}
+
+static bool repl_decl_pending_contains(
+  const repl_decl_pending_t *p,
+  const char *name, uint32_t len
+) {
+  if (!p || !name) return false;
+  for (size_t i = 0; i < p->count; i++) 
+    if (p->lens[i] == len && memcmp(p->names[i], name, (size_t)len) == 0) return true;
+  return false;
+}
+
+static bool repl_decl_pending_push(
+  ant_t *js, repl_decl_pending_t *p,
+  const char *name, uint32_t len
+) {
+  if (!p || !name || len == 0) return true;
+  if (repl_decl_pending_contains(p, name, len)) return true;
+  if (p->count >= p->cap) {
+    size_t new_cap = p->cap ? p->cap * 2 : 16;
+    const char **nn = realloc(p->names, new_cap * sizeof(*nn));
+    if (!nn) {
+      js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "out of memory");
+      return false;
+    }
+    uint32_t *nl = realloc(p->lens, new_cap * sizeof(*nl));
+    if (!nl) {
+      p->names = nn;
+      js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "out of memory");
+      return false;
+    }
+    p->names = nn;
+    p->lens = nl;
+    p->cap = new_cap;
+  }
+  p->names[p->count] = name;
+  p->lens[p->count] = len;
+  p->count++;
+  return true;
+}
+
+static bool repl_collect_pattern_names(ant_t *js, sv_ast_t *pat, repl_decl_pending_t *p) {
+  if (!pat) return true;
+  switch (pat->type) {
+    case N_IDENT:
+      return repl_decl_pending_push(js, p, pat->str, pat->len);
+    case N_ASSIGN_PAT:
+    case N_ASSIGN:
+      return repl_collect_pattern_names(js, pat->left, p);
+    case N_REST:
+    case N_SPREAD:
+      return repl_collect_pattern_names(js, pat->right, p);
+    case N_ARRAY:
+    case N_ARRAY_PAT:
+      for (int i = 0; i < pat->args.count; i++) {
+        if (!repl_collect_pattern_names(js, pat->args.items[i], p)) return false;
+      }
+      return true;
+    case N_OBJECT:
+    case N_OBJECT_PAT:
+      for (int i = 0; i < pat->args.count; i++) {
+        sv_ast_t *prop = pat->args.items[i];
+        if (!prop) continue;
+        if (prop->type == N_PROPERTY) {
+          if (!repl_collect_pattern_names(js, prop->right, p)) return false;
+        } else if (prop->type == N_REST || prop->type == N_SPREAD) {
+          if (!repl_collect_pattern_names(js, prop->right, p)) return false;
+        }
+      }
+      return true;
+    default: return true;
+  }
+}
+
+static bool repl_collect_top_level_decls(ant_t *js, sv_ast_t *stmt, repl_decl_pending_t *p) {
+  if (!stmt) return true;
+  sv_ast_t *node = (stmt->type == N_EXPORT) ? stmt->left : stmt;
+  if (!node) return true;
+
+  if (node->type == N_VAR && node->var_kind != VAR_VAR) {
+    for (int i = 0; i < node->args.count; i++) {
+      sv_ast_t *decl = node->args.items[i];
+      if (!decl || decl->type != N_VARDECL || !decl->left) continue;
+      if (!repl_collect_pattern_names(js, decl->left, p)) return false;
+    }
+    return true;
+  }
+
+  if (node->type == N_CLASS && node->str && node->len > 0)
+    return repl_decl_pending_push(js, p, node->str, node->len);
+
+  if (node->type == N_IMPORT_DECL) {
+    for (int i = 0; i < node->args.count; i++) {
+      sv_ast_t *spec = node->args.items[i];
+      if (!spec || spec->type != N_IMPORT_SPEC || !spec->right) continue;
+      if (spec->right->type != N_IDENT) continue;
+      if (!repl_decl_pending_push(js, p, spec->right->str, spec->right->len)) return false;
+    }
+  }
+
+  return true;
+}
+
+static bool repl_precheck_and_commit_lexicals(
+  ant_t *js, repl_decl_registry_t *reg,
+  const char *code, size_t len
+) {
+  if (!js || !reg || !code || len == 0) return true;
+
+  code_arena_mark_t mark = code_arena_mark();
+  repl_decl_pending_t pending = {0};
+  bool ok = true;
+
+  repl_clear_exception_state(js);
+  sv_ast_t *program = sv_parse(js, code, (jsoff_t)len, false);
+  
+  if (!program || js->thrown_exists) {
+    ok = true;
+    goto done;
+  }
+
+  for (int i = 0; i < program->args.count; i++) {
+    if (
+      !repl_collect_top_level_decls(
+      js, program->args.items[i], &pending)
+    ) { ok = false; goto done; }
+  }
+
+  for (size_t i = 0; i < pending.count; i++) {
+    if (repl_decl_registry_contains(reg, pending.names[i], pending.lens[i])) {
+      js_mkerr_typed(
+        js, JS_ERR_SYNTAX, "Identifier '%.*s' has already been declared",
+        (int)pending.lens[i], pending.names[i]
+      );
+      ok = false; goto done;
+    }
+  }
+
+  for (size_t i = 0; i < pending.count; i++) {
+    if (
+      !repl_decl_registry_add(
+      js, reg, pending.names[i], pending.lens[i])
+    ) { ok = false; goto done; }
+  }
+
+done:
+  code_arena_rewind(mark);
+  repl_decl_pending_free(&pending);
+
+  if (ok && js->thrown_exists)
+    repl_clear_exception_state(js);
+
+  return ok;
+}
+
+typedef enum {
+  REPL_PRINT_INTERACTIVE,
+  REPL_PRINT_LOAD,
+} repl_print_mode_t;
+
+static void repl_eval_chunk(
+  ant_t *js, repl_decl_registry_t *decl_registry,
+  const char *code, size_t len,
+  repl_print_mode_t print_mode
+) {
+  if (!repl_precheck_and_commit_lexicals(js, decl_registry, code, len)) {
+    print_uncaught_throw(js);
+    return;
+  }
+
+  repl_clear_exception_state(js);
+  jsval_t result = js_eval_bytecode_repl(js, code, len);
+  js_run_event_loop(js);
+
+  if (print_uncaught_throw(js)) return;
+  if (print_mode == REPL_PRINT_INTERACTIVE) {
+    print_repl_value(js, result, stdout);
+    return;
+  }
+
+  if (vtype(result) == T_ERR) fprintf(stderr, "%s\n", js_str(js, result));
+  else if (vtype(result) != T_UNDEF) printf("%s\n", js_str(js, result));
+}
+
+static cmd_result_t cmd_help(ant_t *js, history_t *history, const char *arg);
+static cmd_result_t cmd_exit(ant_t *js, history_t *history, const char *arg);
+static cmd_result_t cmd_load(ant_t *js, history_t *history, const char *arg);
+static cmd_result_t cmd_save(ant_t *js, history_t *history, const char *arg);
+static cmd_result_t cmd_stats(ant_t *js, history_t *history, const char *arg);
 
 static const repl_command_t commands[] = {
   { "help",  "Show this help message", false, cmd_help },
   { "exit",  "Exit the REPL", false, cmd_exit },
   { "load",  "Load JS from a file into the REPL session", true, cmd_load },
   { "save",  "Save all evaluated commands in this REPL session to a file", true, cmd_save },
-  { "gc",    "Run garbage collector", false, cmd_gc },
   { "stats", "Show memory statistics", false, cmd_stats },
   { NULL, NULL, false, NULL }
 };
 
-static cmd_result_t cmd_help(struct js *js, history_t *history, const char *arg) {
+static cmd_result_t cmd_help(ant_t *js, history_t *history, const char *arg) {
   for (const repl_command_t *cmd = commands; cmd->name; cmd++) {
     printf("  .%-7s - %s\n", cmd->name, cmd->description);
   }
@@ -82,11 +350,11 @@ static cmd_result_t cmd_help(struct js *js, history_t *history, const char *arg)
   return CMD_OK;
 }
 
-static cmd_result_t cmd_exit(struct js *js, history_t *history, const char *arg) {
+static cmd_result_t cmd_exit(ant_t *js, history_t *history, const char *arg) {
   return CMD_EXIT;
 }
 
-static cmd_result_t cmd_load(struct js *js, history_t *history, const char *arg) {
+static cmd_result_t cmd_load(ant_t *js, history_t *history, const char *arg) {
   (void)history;
   if (!arg || *arg == '\0') {
     fprintf(stderr, "Usage: .load <filename>\n");
@@ -107,22 +375,17 @@ static cmd_result_t cmd_load(struct js *js, history_t *history, const char *arg)
   if (file_buffer) {
     size_t len = fread(file_buffer, 1, file_size, fp);
     file_buffer[len] = '\0';
-    
-    jsval_t result = js_eval(js, file_buffer, len);
-    js_run_event_loop(js);
-    if (vtype(result) == T_ERR) {
-      fprintf(stderr, "%s\n", js_str(js, result));
-    } else if (vtype(result) != T_UNDEF) {
-      printf("%s\n", js_str(js, result));
-    }
-    
+    repl_eval_chunk(
+      js, g_repl_decl_registry, 
+      file_buffer, len, REPL_PRINT_LOAD
+    );
     free(file_buffer);
   }
   fclose(fp);
   return CMD_OK;
 }
 
-static cmd_result_t cmd_save(struct js *js, history_t *history, const char *arg) {
+static cmd_result_t cmd_save(ant_t *js, history_t *history, const char *arg) {
   (void)js;
   if (!arg || *arg == '\0') {
     fprintf(stderr, "Usage: .save <filename>\n");
@@ -143,21 +406,14 @@ static cmd_result_t cmd_save(struct js *js, history_t *history, const char *arg)
   return CMD_OK;
 }
 
-static cmd_result_t cmd_gc(struct js *js, history_t *history, const char *arg) {
-  jsval_t gc_fn = js_get(js, rt->ant_obj, "gc");
-  jsval_t result = js_call(js, gc_fn, NULL, 0);
-  console_print(js, &result, 1, NULL, stdout);
-  return CMD_OK;
-}
-
-static cmd_result_t cmd_stats(struct js *js, history_t *history, const char *arg) {
+static cmd_result_t cmd_stats(ant_t *js, history_t *history, const char *arg) {
   jsval_t stats_fn = js_get(js, rt->ant_obj, "stats");
-  jsval_t result = js_call(js, stats_fn, NULL, 0);
+  jsval_t result = sv_vm_call(js->vm, js, stats_fn, js_mkundef(), NULL, 0, NULL, false);
   console_print(js, &result, 1, NULL, stdout);
   return CMD_OK;
 }
 
-static cmd_result_t execute_command(struct js *js, history_t *history, const char *line) {
+static cmd_result_t execute_command(ant_t *js, history_t *history, const char *line) {
   const char *cmd_start = line + 1;
   
   for (const repl_command_t *cmd = commands; cmd->name; cmd++) {
@@ -379,7 +635,7 @@ static key_handler_t handlers[] = {
   [KEY_BACKSPACE] = handle_backspace, [KEY_CHAR] = handle_char,
 };
 
-static char* read_line_with_history(history_t *hist, struct js *js, const char *prompt) {
+static char* read_line_with_history(history_t *hist, ant_t *js, const char *prompt) {
   char *line = malloc(MAX_LINE_LENGTH);
   int pos = 0, len = 0; line[0] = '\0';
   
@@ -466,11 +722,10 @@ static bool is_incomplete_input(const char *code, size_t len) {
 }
 
 void ant_repl_run() {
-  struct js *js = rt->js;
+  ant_t *js = rt->js;
   
   js_set_filename(js, "[repl]");
   js_setup_import_meta(js, "[repl]");
-  js_mkscope(js);
   
   printf("Welcome to Ant JavaScript v%s\n", ANT_VERSION);
   printf("Type \".help\" for more information.\n");
@@ -488,6 +743,9 @@ void ant_repl_run() {
   history_t history;
   history_init(&history);
   history_load(&history);
+  
+  repl_decl_registry_t decl_registry = {0};
+  g_repl_decl_registry = &decl_registry;
   
   js_set(js, js_glob(js), "__dirname", js_mkstr(js, ".", 1));
   js_set(js, js_glob(js), "__filename", js_mkstr(js, "[repl]", 6));
@@ -581,14 +839,15 @@ void ant_repl_run() {
     memcpy(multiline_buf + multiline_len, line, line_len);
     multiline_len += line_len;
     multiline_buf[multiline_len] = '\0';
-    
     free(line);
     
     if (is_incomplete_input(multiline_buf, multiline_len)) continue;
     history_add(&history, multiline_buf);
     
-    jsval_t eval_result = js_eval(js, multiline_buf, multiline_len);
-    js_run_event_loop(js); print_repl_value(js, eval_result, stdout);
+    repl_eval_chunk(
+      js, &decl_registry, multiline_buf, 
+      multiline_len, REPL_PRINT_INTERACTIVE
+    );
     
     free(multiline_buf);
     multiline_buf = NULL;
@@ -597,6 +856,9 @@ void ant_repl_run() {
   }
   
   if (multiline_buf) free(multiline_buf);
+  repl_decl_registry_free(&decl_registry);
+  g_repl_decl_registry = NULL;
+  
   history_save(&history);
   history_free(&history);
 }

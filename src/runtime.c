@@ -8,6 +8,14 @@
 #include <uthash.h>
 #include <argtable3.h>
 
+#ifdef _WIN32
+#include <process.h>
+#define ant_getpid _getpid
+#else
+#include <unistd.h>
+#define ant_getpid getpid
+#endif
+
 typedef struct {
   const char *ptr;
   size_t len;
@@ -74,11 +82,61 @@ const char *code_arena_alloc(const char *code, size_t len) {
   return dest;
 }
 
+void *code_arena_bump(size_t size) {
+  size = (size + 7) & ~(size_t)7;
+  if (!code_arena_current || code_arena_current->used + size > code_arena_current->capacity) {
+    code_block_t *new_block = code_arena_new_block(size);
+    if (!new_block) return NULL;
+    if (!code_arena_head) code_arena_head = new_block;
+    else if (code_arena_current) code_arena_current->next = new_block;
+    code_arena_current = new_block;
+  }
+  void *ptr = &code_arena_current->data[code_arena_current->used];
+  code_arena_current->used += size;
+  return ptr;
+}
+
 size_t code_arena_get_memory(void) {
   size_t total = 0;
   for (code_block_t *b = code_arena_head; b; b = b->next)
     total += sizeof(code_block_t) + b->capacity;
   return total;
+}
+
+code_arena_mark_t code_arena_mark(void) {
+  code_arena_mark_t mark = {0};
+  mark.block = code_arena_current;
+  mark.used = code_arena_current ? code_arena_current->used : 0;
+  return mark;
+}
+
+void code_arena_rewind(code_arena_mark_t mark) {
+  code_block_t *target = (code_block_t *)mark.block;
+
+  if (!target) {
+    code_block_t *block = code_arena_head;
+    
+    while (block) {
+      code_block_t *next = block->next;
+      free(block); block = next;
+    }
+    
+    code_arena_head = NULL;
+    code_arena_current = NULL;
+    
+    return;
+  }
+
+  if (mark.used <= target->capacity) target->used = mark.used;
+  code_block_t *b = target->next;
+  
+  while (b) {
+    code_block_t *next = b->next;
+    free(b); b = next;
+  }
+  
+  target->next = NULL;
+  code_arena_current = target;
 }
 
 void code_arena_reset(void) {
@@ -100,7 +158,7 @@ void code_arena_reset(void) {
   code_arena_current = NULL;
 }
 
-void destroy_runtime(struct js *js) {
+void destroy_runtime(ant_t *js) {
   if (rt->js == js) memset(&runtime, 0, sizeof(runtime));
 }
 
@@ -109,6 +167,7 @@ struct ant_runtime *ant_runtime_init(ant_t *js, int argc, char **argv, struct ar
     .js = js,
     .ant_obj = js_newobj(js),
     .flags = 0, .argc = argc, .argv = argv,
+    .pid = (int)ant_getpid(),
     .ls_fp = (ls_p && ls_p->count > 0) ? ls_p->filename[0] : NULL,
   };
 

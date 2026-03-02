@@ -352,6 +352,8 @@ pub const PkgContext = struct {
     }
     debug.log("  cache hits: {d}, misses: {d}", .{ cache_hits.items.len, misses.items.len });
 
+    std.sort.heap(cache.CacheDB.BatchHit, cache_hits.items, &lf, batchHitLessThanParentFirst);
+
     var pkg_linker = linker.Linker.init(self.allocator);
     defer pkg_linker.deinit();
     try pkg_linker.setNodeModulesPath(node_modules_path);
@@ -375,11 +377,7 @@ pub const PkgContext = struct {
       });
 
       if (pkg.flags.direct) {
-        const version_str = std.fmt.allocPrint(arena_alloc, "{d}.{d}.{d}", .{
-          pkg.version_major,
-          pkg.version_minor,
-          pkg.version_patch,
-        }) catch continue;
+        const version_str = pkg.versionString(arena_alloc, lf.string_table) catch continue;
         self.addPackageToResults(pkg_name, version_str, true) catch {};
       }
     }
@@ -473,6 +471,20 @@ pub const PkgContext = struct {
 
       var success_count: usize = 0;
       var error_count: usize = 0;
+      std.sort.heap(PkgExtractCtx, extract_contexts[0..valid_count], {}, struct {
+        fn lessThan(_: void, a: PkgExtractCtx, b: PkgExtractCtx) bool {
+          const depth_a = linkPathDepth(a.parent_path);
+          const depth_b = linkPathDepth(b.parent_path);
+          if (depth_a != depth_b) return depth_a < depth_b;
+
+          const parent_a = a.parent_path orelse "";
+          const parent_b = b.parent_path orelse "";
+          const parent_order = std.mem.order(u8, parent_a, parent_b);
+          if (parent_order != .eq) return parent_order == .lt;
+          return std.mem.order(u8, a.pkg_name, b.pkg_name) == .lt;
+        }
+      }.lessThan);
+
       for (extract_contexts[0..valid_count], 0..) |*ctx, i| {
         defer ctx.ext.deinit();
 
@@ -531,6 +543,66 @@ pub const PkgContext = struct {
   }
 };
 
+fn trySetHttpResolveError(c: *PkgContext, err: anyerror) bool {
+  if (err != error.ResponseError) return false;
+
+  const http = c.http orelse return false;
+  const info = http.getLastHttpError() orelse return false;
+
+  c.setErrorFmt("error: GET {s} - {d}", .{ info.url, info.status });
+  return true;
+}
+
+fn setResolveError(c: *PkgContext, target: ?[]const u8, err: anyerror) void {
+  if (trySetHttpResolveError(c, err)) return;
+
+  if (target) |name| c.setErrorFmt("Failed to resolve {s}: {}", .{ name, err })
+  else c.setErrorFmt("Failed to resolve dependencies: {}", .{ err });
+}
+
+fn linkPathDepth(parent_path: ?[]const u8) u32 {
+  const parent = parent_path orelse return 0;
+  if (parent.len == 0) return 0;
+
+  var depth: u32 = 1;
+  var it: usize = 0;
+  while (std.mem.indexOfPos(u8, parent, it, "/node_modules/")) |idx| {
+    depth += 1;
+    it = idx + "/node_modules/".len;
+  }
+  return depth;
+}
+
+fn packageLinkLessThanParentFirst(_: void, a: linker.PackageLink, b: linker.PackageLink) bool {
+  const a_depth = linkPathDepth(a.parent_path);
+  const b_depth = linkPathDepth(b.parent_path);
+  if (a_depth != b_depth) return a_depth < b_depth;
+
+  const a_parent = a.parent_path orelse "";
+  const b_parent = b.parent_path orelse "";
+  const parent_order = std.mem.order(u8, a_parent, b_parent);
+  if (parent_order != .eq) return parent_order == .lt;
+
+  return std.mem.order(u8, a.name, b.name) == .lt;
+}
+
+fn batchHitLessThanParentFirst(lf: *const lockfile.Lockfile, a: cache.CacheDB.BatchHit, b: cache.CacheDB.BatchHit) bool {
+  const pkg_a = &lf.packages[a.index];
+  const pkg_b = &lf.packages[b.index];
+
+  const parent_a = pkg_a.parent_path.slice(lf.string_table);
+  const parent_b = pkg_b.parent_path.slice(lf.string_table);
+  const depth_a = linkPathDepth(if (parent_a.len > 0) parent_a else null);
+  const depth_b = linkPathDepth(if (parent_b.len > 0) parent_b else null);
+  if (depth_a != depth_b) return depth_a < depth_b;
+
+  const name_a = pkg_a.name.slice(lf.string_table);
+  const name_b = pkg_b.name.slice(lf.string_table);
+  const parent_order = std.mem.order(u8, parent_a, parent_b);
+  if (parent_order != .eq) return parent_order == .lt;
+  return std.mem.order(u8, name_a, name_b) == .lt;
+}
+
 export fn pkg_init(options: *const PkgOptions) ?*PkgContext {
   return PkgContext.init(global_allocator, options.*) catch null;
 }
@@ -588,6 +660,44 @@ export fn pkg_get_added_package(ctx: ?*const PkgContext, index: u32, out: *Added
   if (index >= c.added_packages.items.len) return .invalid_argument;
   out.* = c.added_packages.items[index];
   return .ok;
+}
+
+export fn pkg_get_latest_available_version(
+  ctx: ?*PkgContext,
+  package_name: [*:0]const u8,
+  installed_version: [*:0]const u8,
+  out_version: [*]u8,
+  out_version_len: usize,
+) c_int {
+  const c = ctx orelse return 0;
+  if (out_version_len == 0) return 0;
+  out_version[0] = 0;
+
+  const name = std.mem.span(package_name);
+  const installed_str = std.mem.span(installed_version);
+  const installed = resolver.Version.parse(installed_str) catch return 0;
+  const meta = c.metadata_cache.get(name) orelse return 0;
+
+  var best: ?*const resolver.VersionInfo = null;
+  for (meta.versions.items) |*v| {
+    if (v.version.prerelease != null) continue;
+    if (!v.matchesPlatform()) continue;
+    if (best == null or v.version.order(best.?.version) == .gt) best = v;
+  }
+  if (best == null) {
+    for (meta.versions.items) |*v| {
+      if (!v.matchesPlatform()) continue;
+      if (best == null or v.version.order(best.?.version) == .gt) best = v;
+    }
+  }
+
+  const latest = best orelse return 0;
+  if (latest.version.order(installed) != .gt) return 0;
+
+  if (latest.version_str.len + 1 > out_version_len) return 0;
+  @memcpy(out_version[0..latest.version_str.len], latest.version_str);
+  out_version[latest.version_str.len] = 0;
+  return 1;
 }
 
 export fn pkg_count_installed(node_modules_path: [*:0]const u8) u32 {
@@ -874,9 +984,7 @@ const InterleavedContext = struct {
     } self.tarballs_queued += 1;
 
     const cache_path = self.db.getPackagePath(&pkg.integrity, self.arena_alloc) catch return;
-    const version_str = std.fmt.allocPrint(self.arena_alloc, "{d}.{d}.{d}", .{
-      pkg.version.major, pkg.version.minor, pkg.version.patch,
-    }) catch return;
+    const version_str = pkg.version.format(self.arena_alloc) catch return;
 
     const ext = extractor.Extractor.init(self.allocator, cache_path) catch return;
     const ctx = self.arena_alloc.create(InterleavedExtractCtx) catch {
@@ -990,7 +1098,7 @@ export fn pkg_resolve_and_install(
 
   res.setOnPackageResolved(InterleavedContext.onPackageResolved, &interleaved);
   res.resolveFromPackageJson(std.mem.span(package_json_path)) catch |err| {
-    c.setErrorFmt("Failed to resolve dependencies: {}", .{err});
+    setResolveError(c, null, err);
     return .resolve_error;
   };
   
@@ -1007,11 +1115,7 @@ export fn pkg_resolve_and_install(
   while (direct_iter.next()) |pkg_ptr| {
     const pkg = pkg_ptr.*;
     if (pkg.direct) {
-      const version_str = std.fmt.allocPrint(arena_alloc, "{d}.{d}.{d}", .{
-        pkg.version.major,
-        pkg.version.minor,
-        pkg.version.patch,
-      }) catch continue;
+      const version_str = pkg.version.format(arena_alloc) catch continue;
       c.addPackageToResults(pkg.name.slice(), version_str, true) catch {};
     }
   }
@@ -1060,6 +1164,8 @@ export fn pkg_resolve_and_install(
       break :blk null;
     };
   }
+
+  std.sort.heap(linker.PackageLink, cache_hit_jobs.items, {}, packageLinkLessThanParentFirst);
 
   var linked_count: usize = 0;
   for (cache_hit_jobs.items, 0..) |job, i| {
@@ -1138,25 +1244,20 @@ export fn pkg_resolve_and_install(
 
   const total_jobs: u32 = @intCast(link_jobs.items.len);
   var link_counter = std.atomic.Value(u32).init(0);
-  const LARGE_LINK_BYTES: u64 = 2 * 1024 * 1024;
-
   std.sort.heap(LinkJobWithSize, link_jobs.items, {}, struct {
     fn lessThan(_: void, a: LinkJobWithSize, b: LinkJobWithSize) bool {
-      return a.size > b.size;
+      const depth_a = linkPathDepth(a.job.parent_path);
+      const depth_b = linkPathDepth(b.job.parent_path);
+      if (depth_a != depth_b) return depth_a < depth_b;
+      if (a.size != b.size) return a.size > b.size;
+
+      const parent_a = a.job.parent_path orelse "";
+      const parent_b = b.job.parent_path orelse "";
+      const parent_order = std.mem.order(u8, parent_a, parent_b);
+      if (parent_order != .eq) return parent_order == .lt;
+      return std.mem.order(u8, a.job.name, b.job.name) == .lt;
     }
   }.lessThan);
-
-  var split_idx: usize = link_jobs.items.len;
-  for (link_jobs.items, 0..) |job, i| {
-    if (job.size < LARGE_LINK_BYTES) {
-      split_idx = i;
-      break;
-    }
-  }
-
-  const large_jobs = link_jobs.items[0..split_idx];
-  const small_jobs = link_jobs.items[split_idx..];
-  const phases = [_][]const LinkJobWithSize{ large_jobs, small_jobs };
 
   var slow_link_count = std.atomic.Value(u32).init(0);
   var max_link_ms = std.atomic.Value(u64).init(0);
@@ -1164,19 +1265,26 @@ export fn pkg_resolve_and_install(
   defer slow_link_names.deinit(c.allocator);
   var slow_link_lock = std.Thread.Mutex{};
 
-  for (phases) |phase_jobs| {
-    if (phase_jobs.len == 0) continue;
-    const num_threads = @min(8, phase_jobs.len);
-    if (c.options.verbose and phase_jobs.len == large_jobs.len) {
-      debug.log("  linking large packages first ({d} items)", .{phase_jobs.len});
+  var depth_start: usize = 0;
+  while (depth_start < link_jobs.items.len) {
+    const depth = linkPathDepth(link_jobs.items[depth_start].job.parent_path);
+    var depth_end = depth_start + 1;
+    while (depth_end < link_jobs.items.len and
+      linkPathDepth(link_jobs.items[depth_end].job.parent_path) == depth) : (depth_end += 1) {}
+
+    const depth_jobs = link_jobs.items[depth_start..depth_end];
+    const num_threads = @min(8, depth_jobs.len);
+    if (c.options.verbose and depth_jobs.len > 1) {
+      debug.log("  linking depth {d} ({d} items)", .{ depth, depth_jobs.len });
     }
-    if (num_threads > 1 and phase_jobs.len > 4) {
+
+    if (num_threads > 1 and depth_jobs.len > 4) {
       var threads: [8]?std.Thread = .{null} ** 8;
-      const jobs_per_thread = (phase_jobs.len + num_threads - 1) / num_threads;
+      const jobs_per_thread = (depth_jobs.len + num_threads - 1) / num_threads;
 
       for (0..num_threads) |t| {
         const start_idx = t * jobs_per_thread;
-        const end_idx = @min(start_idx + jobs_per_thread, phase_jobs.len);
+        const end_idx = @min(start_idx + jobs_per_thread, depth_jobs.len);
         if (start_idx >= end_idx) break;
 
         threads[t] = std.Thread.spawn(.{}, struct {
@@ -1207,14 +1315,14 @@ export fn pkg_resolve_and_install(
               }
             }
           }
-        }.work, .{ &pkg_linker, phase_jobs[start_idx..end_idx], c, total_jobs, &link_counter, &slow_link_count, &max_link_ms, &slow_link_names, &slow_link_lock, c.allocator }) catch null;
+        }.work, .{ &pkg_linker, depth_jobs[start_idx..end_idx], c, total_jobs, &link_counter, &slow_link_count, &max_link_ms, &slow_link_names, &slow_link_lock, c.allocator }) catch null;
       }
 
       for (&threads) |*t| {
         if (t.*) |thread| thread.join();
       }
     } else {
-      for (phase_jobs) |job_with_size| {
+      for (depth_jobs) |job_with_size| {
         const job = job_with_size.job;
         const current = link_counter.fetchAdd(1, .monotonic) + 1;
         const msg = std.fmt.allocPrintSentinel(arena_alloc, "{s}", .{job.name}, 0) catch continue;
@@ -1227,6 +1335,8 @@ export fn pkg_resolve_and_install(
         }
       }
     }
+
+    depth_start = depth_end;
   }
 
   if (c.options.verbose) {
@@ -1482,7 +1592,7 @@ export fn pkg_add(
   ); defer res.deinit();
 
   const resolved_pkg = res.resolve(pkg_name, version_constraint, 0) catch |err| {
-    c.setErrorFmt("Failed to resolve {s}: {}", .{ pkg_name, err });
+    setResolveError(c, pkg_name, err);
     return .resolve_error;
   };
 
@@ -1618,7 +1728,7 @@ export fn pkg_add_many(
     }
 
     const resolved_pkg = res.resolve(pkg_name, version_constraint, 0) catch |err| {
-      c.setErrorFmt("Failed to resolve {s}: {}", .{ pkg_name, err });
+      setResolveError(c, pkg_name, err);
       return .resolve_error;
     };
 
@@ -2600,7 +2710,7 @@ export fn pkg_exec_temp(
 
   res.setOnPackageResolved(InterleavedContext.onPackageResolved, &interleaved);
   res.resolveFromPackageJson(temp_pkg_json) catch |err| {
-    c.setErrorFmt("Failed to resolve {s}: {}", .{ pkg_name, err });
+    setResolveError(c, pkg_name, err);
     return .resolve_error;
   };
 

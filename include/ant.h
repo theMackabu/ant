@@ -33,24 +33,22 @@
 #define js_false   (NANBOX_PREFIX | ((jsval_t)T_BOOL << NANBOX_TYPE_SHIFT))
 #define js_bool(x) (js_false | (jsval_t)!!(x))
 
-#define JS_DESC_W (1 << 0)
-#define JS_DESC_E (1 << 1)
-#define JS_DESC_C (1 << 2)
-
 ant_t *js_create(void *buf, size_t len);
 ant_t *js_create_dynamic();
 
 jsval_t js_glob(ant_t *);
-jsval_t js_mkscope(ant_t *);
-jsval_t js_getscope(ant_t *);
-jsval_t js_eval(ant_t *, const char *, size_t);
-jsval_t js_eval_cached(ant_t *, const char *, size_t);
+
+// TODO: improve naming
+jsval_t js_eval_bytecode(ant_t *, const char *, size_t);
+jsval_t js_eval_bytecode_module(ant_t *, const char *, size_t);
+jsval_t js_eval_bytecode_eval(ant_t *, const char *, size_t);
+jsval_t js_eval_bytecode_eval_with_strict(ant_t *, const char *, size_t, bool);
+jsval_t js_eval_bytecode_repl(ant_t *, const char *, size_t);
 
 void js_destroy(ant_t *);
-void js_delscope(ant_t *);
 bool js_truthy(ant_t *, jsval_t);
-void js_setstacklimit(ant_t *, size_t);
 void js_setstackbase(ant_t *, void *);
+void js_setstacklimit(ant_t *, size_t);
 
 uint32_t js_to_uint32(double d);
 int32_t js_to_int32(double d);
@@ -77,9 +75,10 @@ jsval_t js_getcurrentfunc(ant_t *);
 jsval_t js_get(ant_t *, jsval_t, const char *);
 jsval_t js_getprop_proto(ant_t *, jsval_t, const char *);
 jsval_t js_getprop_fallback(ant_t *js, jsval_t obj, const char *name);
+jsval_t js_getprop_super(ant_t *js, jsval_t super_obj, jsval_t receiver, const char *name);
 
-jsoff_t js_arr_len(struct js *js, jsval_t arr);
-jsval_t js_arr_get(struct js *js, jsval_t arr, jsoff_t idx);
+jsoff_t js_arr_len(ant_t *js, jsval_t arr);
+jsval_t js_arr_get(ant_t *js, jsval_t arr, jsoff_t idx);
 
 bool js_iter(
   ant_t *js, 
@@ -94,10 +93,11 @@ bool js_iter(
 
 uint64_t js_sym_id(jsval_t sym);
 const char *js_sym_desc(ant_t *js, jsval_t sym);
+const char *js_sym_key(jsval_t sym);
 
 jsval_t js_mksym_for(ant_t *, const char *key);
-jsval_t js_symbol_to_string(struct js *js, jsval_t sym);
-const char *js_sym_key(jsval_t sym);
+jsval_t js_symbol_to_string(ant_t *js, jsval_t sym);
+jsval_t js_get_sym(ant_t *, jsval_t obj, jsval_t sym);
 
 jsval_t js_mkobj(ant_t *);
 jsval_t js_newobj(ant_t *);
@@ -111,18 +111,16 @@ jsval_t js_heavy_mkfun(ant_t *js, jsval_t (*fn)(ant_t *, jsval_t *, int), jsval_
 jsval_t js_mkprop_fast(ant_t *js, jsval_t obj, const char *key, size_t len, jsval_t v);
 jsoff_t js_mkprop_fast_off(ant_t *js, jsval_t obj, const char *key, size_t len, jsval_t v);
 
-jsval_t js_call(ant_t *js, jsval_t func, jsval_t *args, int nargs);
-jsval_t js_call_with_this(ant_t *js, jsval_t func, jsval_t this_val, jsval_t *args, int nargs);
-
 void js_set(ant_t *, jsval_t, const char *, jsval_t);
+void js_set_sym(ant_t *, jsval_t obj, jsval_t sym, jsval_t val);
 void js_saveval(ant_t *js, jsoff_t off, jsval_t v);
 bool js_del(ant_t *, jsval_t obj, const char *key);
 void js_merge_obj(ant_t *, jsval_t dst, jsval_t src);
 void js_arr_push(ant_t *, jsval_t arr, jsval_t val);
+void js_set_proto(ant_t *, jsval_t obj, jsval_t proto);
 
 jsval_t js_setprop(ant_t *, jsval_t obj, jsval_t key, jsval_t val);
 jsval_t js_setprop_nonconfigurable(ant_t *, jsval_t obj, const char *key, size_t keylen, jsval_t val);
-void js_set_proto(ant_t *, jsval_t obj, jsval_t proto);
 
 jsval_t js_get_proto(ant_t *, jsval_t obj);
 jsval_t js_get_ctor_proto(ant_t *, const char *name, size_t len);
@@ -135,7 +133,7 @@ double js_getnum(jsval_t val);
 char *js_getstr(ant_t *js, jsval_t val, size_t *len);
 
 const char *js_str(ant_t *, jsval_t val);
-const char *get_str_prop(struct js *js, jsval_t obj, const char *key, jsoff_t klen, jsoff_t *out_len);
+const char *get_str_prop(ant_t *js, jsval_t obj, const char *key, jsoff_t klen, jsoff_t *out_len);
 
 typedef struct {
   void *ctx;
@@ -162,12 +160,6 @@ void js_check_unhandled_rejections(ant_t *js);
 void js_process_promise_handlers(ant_t *js, uint32_t promise_id);
 void js_setup_import_meta(ant_t *js, const char *filename);
 
-typedef jsval_t (*ant_library_init_fn)(ant_t *js);
-void ant_register_library(ant_library_init_fn init_fn, const char *name, ...);
-
-#define ant_standard_library(name, lib) \
-  ant_register_library(lib, name, "ant:" name, "node:" name, NULL)
-
 typedef jsval_t (*js_getter_fn)(ant_t *js, jsval_t obj, const char *key, size_t key_len);
 typedef bool (*js_setter_fn)(ant_t *js, jsval_t obj, const char *key, size_t key_len, jsval_t value);
 typedef bool (*js_deleter_fn)(ant_t *js, jsval_t obj, const char *key, size_t key_len);
@@ -177,11 +169,6 @@ void js_set_getter(ant_t *js, jsval_t obj, js_getter_fn getter);
 void js_set_setter(ant_t *js, jsval_t obj, js_setter_fn setter);
 void js_set_deleter(ant_t *js, jsval_t obj, js_deleter_fn deleter);
 void js_set_keys(ant_t *js, jsval_t obj, js_keys_fn keys);
-
-void js_set_descriptor(ant_t *js, jsval_t obj, const char *key, size_t klen, int flags);
-void js_set_getter_desc(ant_t *js, jsval_t obj, const char *key, size_t klen, jsval_t getter, int flags);
-void js_set_setter_desc(ant_t *js, jsval_t obj, const char *key, size_t klen, jsval_t setter, int flags);
-void js_set_accessor_desc(ant_t *js, jsval_t obj, const char *key, size_t klen, jsval_t getter, jsval_t setter, int flags);
 
 jsval_t js_get_slot(ant_t *js, jsval_t obj, internal_slot_t slot);
 void js_set_slot(ant_t *js, jsval_t obj, internal_slot_t slot, jsval_t value);

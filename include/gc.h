@@ -32,17 +32,32 @@ typedef struct {
 #define GC_UPDATE_ARGS  ant_t *js, GC_FWD_OFF, GC_WEAK_OFF, GC_FWD_ARGS
 #define GC_OP_VAL_ARGS  GC_OP_VAL, GC_CTX
 
+#define FWD_EMPTY     ((jsoff_t)~0)
+#define FWD_TOMBSTONE ((jsoff_t)~1)
+
+#define GC_BIGINT_HEADER_SHIFT 4
+#define GC_SYM_HEADER_SHIFT    4
+
+#define GC_BIGINT_HEADER_LOW_MASK ((jsoff_t)((1u << GC_BIGINT_HEADER_SHIFT) - 1u))
+#define GC_SYM_HEADER_LOW_MASK    ((jsoff_t)((1u << GC_SYM_HEADER_SHIFT) - 1u))
+#define GC_SYM_HEAP_FIXED         (sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uintptr_t))
+
+#ifdef _WIN32
+#define RELEASE_PAGES(p, sz) VirtualAlloc(p, sz, MEM_RESET, PAGE_READWRITE)
+#elif defined(__APPLE__)
+#define RELEASE_PAGES(p, sz) madvise(p, sz, MADV_FREE)
+#else
+#define RELEASE_PAGES(p, sz) madvise(p, sz, MADV_DONTNEED)
+#endif
+
 #define GC_HEAP_TYPE_MASK ( \
-  (1u << T_OBJ) | (1u << T_PROP) | (1u << T_STR) | (1u << T_FUNC) | \
-  (1u << T_ARR) | (1u << T_PROMISE) | (1u << T_BIGINT) | (1u << T_GENERATOR))
+  (1u << T_OBJ) | (1u << T_PROP) | (1u << T_STR) | \
+  (1u << T_ARR) | (1u << T_PROMISE) | (1u << T_BIGINT) | (1u << T_GENERATOR) | \
+  (1u << T_SYMBOL))
+
+extern uint32_t gc_epoch_counter;
 
 void js_gc_maybe(ant_t *js);
 void js_gc_throttle(bool enabled);
-
-#define js_gc_safepoint(js) do { \
-  (js)->gc_safe = true;          \
-  js_gc_maybe(js);               \
-  (js)->gc_safe = false;          \
-} while (0)
 
 #endif

@@ -17,20 +17,22 @@ fi
 VENDOR_DIR="$SCRIPT_DIR/vendor"
 
 HEADERS=(
+  "debug.h:$INCLUDE_DIR/debug.h"
   "common.h:$INCLUDE_DIR/common.h"
   "types.h:$INCLUDE_DIR/types.h"
   "gc.h:$INCLUDE_DIR/gc.h"
   "roots.h:$INCLUDE_DIR/roots.h"
   "uthash.h:$VENDOR_DIR/uthash-2.3.0/src/uthash.h"
-  "utarray.h:$VENDOR_DIR/uthash-2.3.0/src/utarray.h"
+  "errors.h:$INCLUDE_DIR/errors.h"
   "ant.h:$INCLUDE_DIR/ant.h"
   "internal.h:$INCLUDE_DIR/internal.h"
+  "silver/vm.h:$INCLUDE_DIR/silver/vm.h"
+  "silver/engine.h:$INCLUDE_DIR/silver/engine.h"
   "minicoro.h:$VENDOR_DIR/minicoro/minicoro.h"
   "sugar.h:$INCLUDE_DIR/sugar.h"
   "reactor.h:$INCLUDE_DIR/reactor.h"
   "tokens.h:$INCLUDE_DIR/tokens.h"
   "stack.h:$INCLUDE_DIR/stack.h"
-  "errors.h:$INCLUDE_DIR/errors.h"
   "compat.h:$INCLUDE_DIR/compat.h"
   "utils.h:$INCLUDE_DIR/utils.h"
   "runtime.h:$INCLUDE_DIR/runtime.h"
@@ -106,8 +108,13 @@ for entry in "${HEADERS[@]}"; do
     if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*pragma[[:space:]]+once ]]; then
       continue
     fi
+
+    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\"silver/opcode\.h\" ]]; then
+      cat "$INCLUDE_DIR/silver/opcode.h" >> "$OUTPUT"
+      continue
+    fi
     
-    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\"(metadata\.h|common\.h|gc.\h|types\.h|compat\.h|ant\.h|utils\.h|arena\.h|runtime\.h|internal\.h)\" ]]; then
+    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\"(metadata\.h|errors\.h|common\.h|gc.\h|types\.h|compat\.h|ant\.h|utils\.h|arena\.h|runtime\.h|internal\.h)\" ]]; then
       continue
     fi
     if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\"esm/ ]]; then
@@ -116,8 +123,10 @@ for entry in "${HEADERS[@]}"; do
     if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\"modules/ ]]; then
       continue
     fi
-    
-    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\<(metadata|common|uv|types|utarray|uthash|minicoro)\.h\> ]]; then
+    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\"silver/ ]]; then
+      continue
+    fi
+    if [[ "$line" =~ ^[[:space:]]*#[[:space:]]*include[[:space:]]+\<(metadata|common|uv|types|uthash|minicoro)\.h\> ]]; then
       continue
     fi
     

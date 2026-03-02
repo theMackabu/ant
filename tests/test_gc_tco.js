@@ -18,7 +18,6 @@ function assert(cond, msg) {
   }
 }
 
-// Inflate arena past 10MB so Ant.gc() actually compacts
 function inflateArena() {
   let junk = [];
   for (let i = 0; i < 40000; i++) {
@@ -38,7 +37,6 @@ let _garbage = inflateArena();
 
 function tailWithObjects(n, obj) {
   if (n <= 0) return obj;
-  Ant.gc();
   return tailWithObjects(n - 1, { value: obj.value + 1, prev: obj });
 }
 
@@ -48,7 +46,10 @@ assert(result1.value === 200, 'final value should be 200, got ' + result1.value)
 let walk = result1;
 let chainOk = true;
 for (let i = 200; i >= 0; i--) {
-  if (walk.value !== i) { chainOk = false; break; }
+  if (walk.value !== i) {
+    chainOk = false;
+    break;
+  }
   walk = walk.prev;
 }
 assert(chainOk, 'object chain should be intact through all 200 links');
@@ -62,7 +63,6 @@ _garbage = inflateArena();
 
 function pingStr(n, s) {
   if (n <= 0) return s;
-  Ant.gc();
   return pongStr(n - 1, s + 'p');
 }
 function pongStr(n, s) {
@@ -86,14 +86,13 @@ function makeAccumulator() {
   function loop(n) {
     if (n <= 0) return captured;
     captured.sum += n;
-    Ant.gc();
     return loop(n - 1);
   }
   return loop;
 }
 
 let accResult = makeAccumulator()(500);
-assert(accResult.sum === 500 * 501 / 2, 'sum should be 125250, got ' + accResult.sum);
+assert(accResult.sum === (500 * 501) / 2, 'sum should be 125250, got ' + accResult.sum);
 console.log('  Closure scope through tail calls: OK\n');
 
 // ---------------------------------------------------------------------------
@@ -105,7 +104,6 @@ _garbage = inflateArena();
 function multiArg(n, arr, obj, str) {
   if (n <= 0) return { arr, obj, str };
   arr.push(n);
-  Ant.gc();
   return multiArg(n - 1, arr, { v: obj.v + 1, inner: obj }, str + 'x');
 }
 
@@ -123,7 +121,6 @@ _garbage = inflateArena();
 
 function deepTail(n, acc) {
   if (n <= 0) return acc;
-  if (n % 500 === 0) Ant.gc();
   return deepTail(n - 1, acc + 1);
 }
 
@@ -140,7 +137,6 @@ _garbage = inflateArena();
 function step1(n, data) {
   if (n <= 0) return data;
   data.a++;
-  Ant.gc();
   return step2(n - 1, data);
 }
 function step2(n, data) {
@@ -171,7 +167,6 @@ function freshArrays(n, results) {
   let data = new Array(50);
   for (let i = 0; i < 50; i++) data[i] = n;
   results.push(data);
-  if (n % 10 === 0) Ant.gc();
   return freshArrays(n - 1, results);
 }
 

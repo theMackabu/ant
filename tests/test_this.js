@@ -5,10 +5,12 @@ const user = {
     console.log(this);
 
     console.log(globalThis.Ant.version);
+    try {
+      console.log(this.crypto.randomUUID());
+    } catch (err) {
+      console.log(err);
+    }
     console.log(window.crypto.randomUUID());
-
-    console.log('\nexpecting error below');
-    console.log(this.crypto.randomUUID());
   }
 };
 

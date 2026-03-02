@@ -11,12 +11,22 @@ typedef struct {
   char *heap;
 } cstr_buf_t;
 
-char *resolve_js_file(const char *filename);
+extern const char *const module_resolve_extensions[];
 uint64_t hash_key(const char *key, size_t len);
 
-int hex_digit(char c);
 char hex_char(int v);
+char *resolve_js_file(const char *filename);
+
+int hex_digit(char c);
 int is_typescript_file(const char *filename);
+
+int strip_typescript_inplace(
+  char **buffer,
+  size_t len,
+  const char *filename,
+  size_t *out_len,
+  const char **error_detail
+);
 
 void *try_oom(size_t size);
 void cstr_free(cstr_buf_t *buf);
@@ -35,5 +45,18 @@ char *cstr_init(
 
 #define CSTR_INIT(buf, src, len) \
   cstr_init(&(buf), buf##_stack, sizeof(buf##_stack), (src), (len))
+
+typedef struct {
+  const char *ptr;
+  size_t len;
+} repl_capture_t;
+
+void repl_template(
+  const char *repl, size_t repl_len,
+  const char *matched, size_t matched_len,
+  const char *str, size_t str_len, size_t position,
+  const repl_capture_t *caps, int ncaptures,
+  char **buf, size_t *buf_len, size_t *buf_cap
+);
 
 #endif

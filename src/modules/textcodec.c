@@ -5,13 +5,14 @@
 #include "runtime.h"
 #include "errors.h"
 #include "internal.h"
+#include "silver/engine.h"
 
 #include "modules/textcodec.h"
 #include "modules/buffer.h"
 #include "modules/symbol.h"
 
 // TextEncoder.prototype.encode(string)
-static jsval_t js_textencoder_encode(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_textencoder_encode(ant_t *js, jsval_t *args, int nargs) {
   size_t str_len = 0;
   const char *str = "";
   
@@ -31,7 +32,7 @@ static jsval_t js_textencoder_encode(struct js *js, jsval_t *args, int nargs) {
   jsval_t saved_new_target = js->new_target;
   
   js->new_target = uint8array_ctor;
-  jsval_t arr = js_call(js, uint8array_ctor, &len_arg, 1);
+  jsval_t arr = sv_vm_call(js->vm, js, uint8array_ctor, js_mkundef(), &len_arg, 1, NULL, true);
   
   js->new_target = saved_new_target;
   if (vtype(arr) == T_ERR) return arr;
@@ -46,7 +47,7 @@ static jsval_t js_textencoder_encode(struct js *js, jsval_t *args, int nargs) {
 }
 
 // TextEncoder.prototype.encodeInto(string, uint8array)
-static jsval_t js_textencoder_encodeInto(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_textencoder_encodeInto(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) {
     return js_mkerr(js, "encodeInto requires string and Uint8Array arguments");
   }
@@ -80,7 +81,7 @@ static jsval_t js_textencoder_encodeInto(struct js *js, jsval_t *args, int nargs
   return result;
 }
 
-static jsval_t js_textencoder_constructor(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_textencoder_constructor(ant_t *js, jsval_t *args, int nargs) {
   (void)args;
   (void)nargs;
   
@@ -88,13 +89,13 @@ static jsval_t js_textencoder_constructor(struct js *js, jsval_t *args, int narg
   js_set(js, obj, "encoding", js_mkstr(js, "utf-8", 5));
   js_set(js, obj, "encode", js_mkfun(js_textencoder_encode));
   js_set(js, obj, "encodeInto", js_mkfun(js_textencoder_encodeInto));
-  js_set(js, obj, get_toStringTag_sym_key(), js_mkstr(js, "TextEncoder", 11));
+  js_set_sym(js, obj, get_toStringTag_sym(), js_mkstr(js, "TextEncoder", 11));
   
   return obj;
 }
 
 // TextDecoder.prototype.decode(bufferSource)
-static jsval_t js_textdecoder_decode(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_textdecoder_decode(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) {
     return js_mkstr(js, "", 0);
   }
@@ -118,7 +119,7 @@ static jsval_t js_textdecoder_decode(struct js *js, jsval_t *args, int nargs) {
   return js_mkstr(js, "", 0);
 }
 
-static jsval_t js_textdecoder_constructor(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_textdecoder_constructor(ant_t *js, jsval_t *args, int nargs) {
   const char *encoding = "utf-8";
   size_t encoding_len = 5;
   
@@ -135,13 +136,13 @@ static jsval_t js_textdecoder_constructor(struct js *js, jsval_t *args, int narg
   js_set(js, obj, "fatal", js_false);
   js_set(js, obj, "ignoreBOM", js_false);
   js_set(js, obj, "decode", js_mkfun(js_textdecoder_decode));
-  js_set(js, obj, get_toStringTag_sym_key(), js_mkstr(js, "TextDecoder", 11));
+  js_set_sym(js, obj, get_toStringTag_sym(), js_mkstr(js, "TextDecoder", 11));
   
   return obj;
 }
 
 void init_textcodec_module(void) {
-  struct js *js = rt->js;
+  ant_t *js = rt->js;
   jsval_t glob = js_glob(js);
   
   jsval_t textencoder_constructor = js_mkfun(js_textencoder_constructor);

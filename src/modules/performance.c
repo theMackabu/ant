@@ -28,20 +28,27 @@ static double get_current_time_ms(void) {
 }
 
 // performance.now()
-static jsval_t js_performance_now(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_performance_now(ant_t *js, jsval_t *args, int nargs) {
   (void) args; (void) nargs;
   double now = get_current_time_ms() - time_origin_ms;
   return js_mknum(now);
 }
 
 // performance.timeOrigin
-static jsval_t js_performance_time_origin(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_performance_time_origin(ant_t *js, jsval_t *args, int nargs) {
   (void) args; (void) nargs;
   return js_mknum(time_origin_ms);
 }
 
+jsval_t perf_hooks_library(ant_t *js) {
+  jsval_t lib = js_mkobj(js);
+  js_set(js, lib, "performance", js_get(js, js_glob(js), "performance"));
+  js_set_sym(js, lib, get_toStringTag_sym(), ANT_STRING("perf_hooks"));
+  return lib;
+}
+
 void init_performance_module() {
-  struct js *js = rt->js;
+  ant_t *js = rt->js;
   
   jsval_t glob = js_glob(js);
   jsval_t perf_obj = js_mkobj(js);
@@ -51,6 +58,6 @@ void init_performance_module() {
   js_set(js, perf_obj, "now", js_mkfun(js_performance_now));
   js_set(js, perf_obj, "timeOrigin", js_mknum(time_origin_ms));
   
-  js_set(js, perf_obj, get_toStringTag_sym_key(), ANT_STRING("Performance"));
+  js_set_sym(js, perf_obj, get_toStringTag_sym(), ANT_STRING("Performance"));
   js_set(js, glob, "performance", perf_obj);
 }

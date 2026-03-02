@@ -1,0 +1,14 @@
+{
+  "name": "react",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "ant index.js"
+  },
+  "dependencies": {
+    "react": "^19.2.4",
+    "esbuild": "^0.27.3"
+  },
+  "devDependencies": {}
+}

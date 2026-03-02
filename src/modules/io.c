@@ -12,6 +12,7 @@
 #include "errors.h"
 #include "internal.h"
 #include "runtime.h"
+#include "silver/engine.h"
 #include "modules/io.h"
 #include "modules/symbol.h"
 
@@ -27,6 +28,10 @@ bool io_no_color = false;
 #define JSON_TAG    "\x1b[34m"
 #define JSON_REF    "\x1b[90m"
 #define JSON_WHITE  "\x1b[97m"
+
+static inline bool io_is_digit_ascii(char c) { 
+  return c >= '0' && c <= '9'; 
+}
 
 static void io_print(const char *str, FILE *stream) {
   if (!io_no_color) {
@@ -97,6 +102,44 @@ static const uint8_t char_class_table[256] = {
   ['U'] = CC_ALPHA, ['V'] = CC_ALPHA, ['W'] = CC_ALPHA, ['X'] = CC_ALPHA,
   ['Y'] = CC_ALPHA, ['Z'] = CC_ALPHA,
 };
+
+static int io_iso_utc_token_len(const char *p) {
+  int i = 0;
+
+  if (*p == '+' || *p == '-') {
+    i++;
+    for (int d = 0; d < 6; d++, i++) if (!io_is_digit_ascii(p[i])) return 0;
+  } else for (int d = 0; d < 4; d++, i++) if (!io_is_digit_ascii(p[i])) return 0;
+
+  if (p[i++] != '-') return 0;
+  if (!io_is_digit_ascii(p[i++]) || !io_is_digit_ascii(p[i++])) return 0;
+  if (p[i++] != '-') return 0;
+  if (!io_is_digit_ascii(p[i++]) || !io_is_digit_ascii(p[i++])) return 0;
+  if (p[i++] != 'T') return 0;
+  if (!io_is_digit_ascii(p[i++]) || !io_is_digit_ascii(p[i++])) return 0;
+  if (p[i++] != ':') return 0;
+  if (!io_is_digit_ascii(p[i++]) || !io_is_digit_ascii(p[i++])) return 0;
+  if (p[i++] != ':') return 0;
+  if (!io_is_digit_ascii(p[i++]) || !io_is_digit_ascii(p[i++])) return 0;
+  if (p[i++] != '.') return 0;
+  if (!io_is_digit_ascii(p[i++]) || !io_is_digit_ascii(p[i++]) || !io_is_digit_ascii(p[i++])) return 0;
+  if (p[i++] != 'Z') return 0;
+
+  char boundary = p[i];
+  if (
+    !(boundary == '\0'
+    || boundary == ' '
+    || boundary == '\t'
+    || boundary == '\n'
+    || boundary == ','
+    || boundary == ']'
+    || boundary == '}'
+    || boundary == ')'
+    || boundary == '>')
+  ) return 0;
+
+  return i;
+}
 
 #define KEYWORD(kw, color) \
   if (memcmp(p, kw, sizeof(kw) - 1) == 0 && !isalnum((unsigned char)p[sizeof(kw) - 1]) && p[sizeof(kw) - 1] != '_') { \
@@ -191,6 +234,15 @@ separator:
   goto next;
 
 number:
+  {
+    int iso_len = io_iso_utc_token_len(p);
+    if (iso_len > 0) {
+      fputs(C_MAGENTA, stream);
+      for (int k = 0; k < iso_len; k++) fputc(*p++, stream);
+      fputs(C_RESET, stream);
+      goto next;
+    }
+  }
   fputs(JSON_NUMBER, stream);
   while ((*p >= '0' && *p <= '9') || *p == '.' || *p == 'e' || *p == 'E' || *p == '+' || *p == '-')
     fputc(*p++, stream);
@@ -198,6 +250,19 @@ number:
   goto next;
 
 minus:
+  {
+    int iso_len = io_iso_utc_token_len(p);
+    if (iso_len > 0) {
+      fputs(C_MAGENTA, stream);
+      for (int k = 0; k < iso_len; k++) fputc(*p++, stream);
+      fputs(C_RESET, stream);
+      goto next;
+    }
+  }
+  if (memcmp(p + 1, "Infinity", 8) == 0 && !isalnum((unsigned char)p[9]) && p[9] != '_') {
+    fputs(JSON_NUMBER, stream); fputs("-Infinity", stream); fputs(C_RESET, stream);
+    p += 9; goto next;
+  }
   if (p[1] >= '0' && p[1] <= '9') {
     fputs(JSON_NUMBER, stream); fputc(*p++, stream);
     while ((*p >= '0' && *p <= '9') || *p == '.' || *p == 'e' || *p == 'E' || *p == '+' || *p == '-')
@@ -252,13 +317,22 @@ ident:
   fputc(*p++, stream); goto next;
 
 other:
+  if (*p == '+') {
+    int iso_len = io_iso_utc_token_len(p);
+    if (iso_len > 0) {
+      fputs(C_MAGENTA, stream);
+      for (int k = 0; k < iso_len; k++) fputc(*p++, stream);
+      fputs(C_RESET, stream);
+      goto next;
+    }
+  }
   fputc(*p++, stream); goto next;
 }
 
 #undef KEYWORD
 #undef EMIT_UNTIL
 
-void print_repl_value(struct js *js, jsval_t val, FILE *stream) {
+void print_repl_value(ant_t *js, jsval_t val, FILE *stream) {
   if (vtype(val) == T_STR) {
     char *str = js_getstr(js, val, NULL);
     fprintf(stream, "%s'%s'%s\n", C(JSON_STRING), str ? str : "", C(C_RESET));
@@ -276,14 +350,20 @@ void print_repl_value(struct js *js, jsval_t val, FILE *stream) {
   if (cstr.needs_free) free((void *)cstr.ptr);
 }
 
-jsval_t console_print(struct js *js, jsval_t *args, int nargs, const char *color, FILE *stream) {
+jsval_t console_print(ant_t *js, jsval_t *args, int nargs, const char *color, FILE *stream) {
   if (color && !io_no_color) fputs(color, stream);
   
   for (int i = 0; i < nargs; i++) {
     if (i) fputc(' ', stream);
+
+    if (vtype(args[i]) == T_OBJ) {
+      const char *stack = get_str_prop(js, args[i], "stack", 5, NULL);
+      if (stack) { io_print(stack, stream); continue; }
+    }
+
     char cbuf[512];
     js_cstr_t cstr = js_to_cstr(js, args[i], cbuf, sizeof(cbuf));
-    
+
     if (vtype(args[i]) == T_STR) io_print(cstr.ptr, stream); else {
       if (color && !io_no_color) fputs(C_RESET, stream);
       print_value_colored(cstr.ptr, stream);
@@ -299,19 +379,19 @@ jsval_t console_print(struct js *js, jsval_t *args, int nargs, const char *color
   return js_mkundef();
 }
 
-static jsval_t js_console_log(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_console_log(ant_t *js, jsval_t *args, int nargs) {
   return console_print(js, args, nargs, NULL, stdout);
 }
 
-static jsval_t js_console_error(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_console_error(ant_t *js, jsval_t *args, int nargs) {
   return console_print(js, args, nargs, C_RED, stderr);
 }
 
-static jsval_t js_console_warn(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_console_warn(ant_t *js, jsval_t *args, int nargs) {
   return console_print(js, args, nargs, C_YELLOW, stderr);
 }
 
-static jsval_t js_console_assert(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_console_assert(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
   
   bool is_truthy = js_truthy(js, args[0]);
@@ -328,26 +408,26 @@ static jsval_t js_console_assert(struct js *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t js_console_trace(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_console_trace(ant_t *js, jsval_t *args, int nargs) {
   fputs("Trace", stderr);
   if (nargs > 0) {
     fputs(": ", stderr);
     console_print(js, args, nargs, NULL, stderr);
   } else fputc('\n', stderr);
   
-  js_print_stack_trace(stderr);
+  js_print_stack_trace_vm(js, stderr);
   return js_mkundef();
 }
 
-static jsval_t js_console_info(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_console_info(ant_t *js, jsval_t *args, int nargs) {
   return console_print(js, args, nargs, C_CYAN, stdout);
 }
 
-static jsval_t js_console_debug(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_console_debug(ant_t *js, jsval_t *args, int nargs) {
   return console_print(js, args, nargs, C_MAGENTA, stdout);
 }
 
-static jsval_t js_console_clear(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_console_clear(ant_t *js, jsval_t *args, int nargs) {
   if (!io_no_color) {
     fprintf(stdout, "\033[2J\033[H");
     fflush(stdout);
@@ -358,7 +438,7 @@ static jsval_t js_console_clear(struct js *js, jsval_t *args, int nargs) {
 static struct { char *label; double start_time; } console_timers[64];
 static int console_timer_count = 0;
 
-static jsval_t js_console_time(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_console_time(ant_t *js, jsval_t *args, int nargs) {
   const char *label = "default";
   if (nargs > 0 && vtype(args[0]) == T_STR) {
     label = js_getstr(js, args[0], NULL);
@@ -380,7 +460,7 @@ static jsval_t js_console_time(struct js *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t js_console_timeEnd(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_console_timeEnd(ant_t *js, jsval_t *args, int nargs) {
   const char *label = "default";
   if (nargs > 0 && vtype(args[0]) == T_STR) {
     label = js_getstr(js, args[0], NULL);
@@ -409,13 +489,11 @@ static const char *get_slot_name(internal_slot_t slot) {
     [SLOT_PID] = "PID",
     [SLOT_ASYNC] = "ASYNC",
     [SLOT_WITH] = "WITH",
-    [SLOT_SCOPE] = "SCOPE",
     [SLOT_THIS] = "THIS",
     [SLOT_NEW_TARGET] = "NEW_TARGET",
     [SLOT_BOUND_THIS] = "BOUND_THIS",
     [SLOT_BOUND_ARGS] = "BOUND_ARGS",
     [SLOT_FIELD_COUNT] = "FIELD_COUNT",
-    [SLOT_SOURCE] = "SOURCE",
     [SLOT_FIELDS] = "FIELDS",
     [SLOT_STRICT] = "STRICT",
     [SLOT_CODE] = "CODE",
@@ -449,8 +527,6 @@ static const char *get_slot_name(internal_slot_t slot) {
     [SLOT_SUBSCRIPTION_CLEANUP] = "SUBSCRIPTION_CLEANUP",
     [SLOT_HOISTED_VARS] = "HOISTED_VARS",
     [SLOT_HOISTED_VARS_LEN] = "HOISTED_VARS_LEN",
-    [SLOT_STRICT_EVAL_SCOPE] = "STRICT_EVAL_SCOPE",
-    [SLOT_MODULE_SCOPE] = "MODULE_SCOPE",
     [SLOT_STRICT_ARGS] = "STRICT_ARGS",
     [SLOT_NO_FUNC_DECLS] = "NO_FUNC_DECLS",
     [SLOT_ITER_STATE] = "ITER_STATE",
@@ -474,14 +550,12 @@ static const char *get_type_name(int type) {
     [T_NUM]        = "number",
     [T_BOOL]       = "boolean",
     [T_FUNC]       = "function",
-    [T_CODEREF]    = "coderef",
     [T_CFUNC]      = "function",
     [T_ERR]        = "error",
     [T_ARR]        = "array",
     [T_PROMISE]    = "Promise",
     [T_TYPEDARRAY] = "TypedArray",
     [T_BIGINT]     = "bigint",
-    [T_PROPREF]    = "propref",
     [T_SYMBOL]     = "symbol",
     [T_GENERATOR]  = "Generator",
     [T_FFI]        = "ffi"
@@ -533,7 +607,7 @@ void inspect_value(ant_t *js, jsval_t val, FILE *stream, int depth, inspect_visi
   }
   
   if (t == T_OBJ || t == T_FUNC || t == T_PROMISE || t == T_ARR) {
-    if (depth > 10) fprintf(stream, "<%s @%" PRIu64 " ...>", get_type_name(t), (uint64_t)vdata(val));
+    if (depth > 10) fprintf(stream, "<%s @%" PRIu64 " ...>", get_type_name(t), (uint64_t)vdata(js_as_obj(val)));
     else inspect_object(js, val, stream, depth, visited);
     return;
   }
@@ -548,6 +622,7 @@ void inspect_value(ant_t *js, jsval_t val, FILE *stream, int depth, inspect_visi
 
 void inspect_object(ant_t *js, jsval_t obj, FILE *stream, int depth, inspect_visited_t *visited) {
   int type = vtype(obj);
+  obj = js_as_obj(obj);
   jsoff_t obj_off = (jsoff_t)vdata(obj);
   
   if (inspect_was_visited(visited, obj_off)) {
@@ -582,10 +657,10 @@ void inspect_object(ant_t *js, jsval_t obj, FILE *stream, int depth, inspect_vis
         fprintf(stream, "%.0f", js_getnum(slot_val));
         break;
       default:
-        if ((t == T_OBJ || t == T_FUNC || t == T_PROMISE) && inspect_was_visited(visited, (jsoff_t)vdata(slot_val)))
-          fprintf(stream, "[Circular *%llu]", (u64)vdata(slot_val));
+        if ((t == T_OBJ || t == T_FUNC || t == T_PROMISE) && inspect_was_visited(visited, (jsoff_t)vdata(js_as_obj(slot_val))))
+          fprintf(stream, "[Circular *%llu]", (u64)vdata(js_as_obj(slot_val)));
         else if (t == T_OBJ || t == T_FUNC || t == T_PROMISE)
-          fprintf(stream, "<%s @%llu>", get_type_name(t), (u64)vdata(slot_val));
+          fprintf(stream, "<%s @%llu>", get_type_name(t), (u64)vdata(js_as_obj(slot_val)));
         else
           inspect_value(js, slot_val, stream, inner_depth + 1, visited);
         break;
@@ -632,7 +707,7 @@ void inspect_object(ant_t *js, jsval_t obj, FILE *stream, int depth, inspect_vis
   fprintf(stream, "}");
 }
 
-static jsval_t js_console_inspect(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_console_inspect(ant_t *js, jsval_t *args, int nargs) {
   FILE *stream = stdout;
   inspect_visited_t visited = {0};
   
@@ -648,7 +723,7 @@ static jsval_t js_console_inspect(struct js *js, jsval_t *args, int nargs) {
 }
 
 void init_console_module() {
-  struct js *js = rt->js;
+  ant_t *js = rt->js;
   jsval_t console_obj = js_mkobj(js);
   
   js_set(js, console_obj, "log", js_mkfun(js_console_log));
@@ -663,6 +738,6 @@ void init_console_module() {
   js_set(js, console_obj, "clear", js_mkfun(js_console_clear));
   js_set(js, console_obj, "inspect", js_mkfun(js_console_inspect));
   
-  js_set(js, console_obj, get_toStringTag_sym_key(), js_mkstr(js, "console", 7));
+  js_set_sym(js, console_obj, get_toStringTag_sym(), js_mkstr(js, "console", 7));
   js_set(js, js_glob(js), "console", console_obj);
 }

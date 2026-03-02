@@ -1,5 +1,3 @@
-console.log('=== SYMBOL KEY STRINGIFICATION TEST ===\n');
-
 const obj = {};
 
 obj[Symbol.iterator] = 'iter-value';
@@ -19,17 +17,11 @@ console.log('\nIndividual access:');
 console.log('  [Symbol.iterator]: ' + obj[Symbol.iterator]);
 console.log('  [Symbol.toStringTag]: ' + obj[Symbol.toStringTag]);
 
-console.log('\nObject.keys (should NOT include symbols):');
+console.log('\nObject.keys:');
 console.log(Object.keys(obj));
 
-console.log('\nObject.getOwnPropertySymbols (if supported):');
-try {
-  console.log(Object.getOwnPropertySymbols(obj));
-} catch (e) {
-  console.log('  Not supported: ' + e.message);
-}
+console.log('\nObject.getOwnPropertySymbols:');
+console.log(Object.getOwnPropertySymbols(obj));
 
-console.log('\nJSON.stringify (symbols should be skipped):');
+console.log('\nJSON.stringify:');
 console.log(JSON.stringify(obj));
-
-console.log('\n=== DONE ===');

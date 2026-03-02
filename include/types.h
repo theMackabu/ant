@@ -4,13 +4,17 @@
 #include <stdint.h>
 #include <stddef.h>
 
-struct js;
+struct ant;
 
-typedef struct js ant_t;
+typedef struct ant ant_t;
 typedef unsigned long long u64;
 
 typedef size_t   jshdl_t;
 typedef uint64_t jsoff_t;
 typedef uint64_t jsval_t;
+
+typedef size_t   ant_handle_t;
+typedef uint64_t ant_offset_t;
+typedef uint64_t ant_value_t;
 
 #endif

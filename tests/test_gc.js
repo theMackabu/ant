@@ -25,9 +25,8 @@ console.log('  arenaSize:', fmt(stats2.arenaSize));
 console.log('  rss:', fmt(stats2.rss));
 console.log('  arenaUsed increase:', fmt(stats2.arenaUsed - stats1.arenaUsed));
 
-console.log('\n=== Testing Ant.gc() ===');
+console.log('\n=== Testing GC ===');
 arr = null;
-Ant.gc();
 
 console.log('\n=== Stats after GC ===');
 let stats3 = Ant.stats();
@@ -48,7 +47,6 @@ for (let cycle = 0; cycle < 3; cycle = cycle + 1) {
   console.log('  Before GC - arenaUsed:', fmt(before.arenaUsed));
 
   temp = null;
-  Ant.gc();
   console.log('  After GC - arenaUsed:', fmt(Ant.stats().arenaUsed));
 }
 

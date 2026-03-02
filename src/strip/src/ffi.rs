@@ -1,3 +1,4 @@
+use std::alloc::{Layout, alloc, dealloc};
 use std::ffi::{CStr, c_char, c_int};
 use std::ptr;
 
@@ -6,38 +7,115 @@ use crate::strip::strip_types_internal;
 
 pub const OXC_ERR_NULL_INPUT: c_int = -1;
 pub const OXC_ERR_INVALID_UTF8: c_int = -2;
+pub const OXC_ERR_PARSE_FAILED: c_int = -3;
 pub const OXC_ERR_TRANSFORM_FAILED: c_int = -4;
 pub const OXC_ERR_OUTPUT_TOO_LARGE: c_int = -5;
 
+fn classify_strip_error(err: &str) -> c_int {
+  match ["Parse errors:", "Semantic errors:"].iter().any(|p| err.starts_with(p)) {
+    true => OXC_ERR_PARSE_FAILED,
+    false => OXC_ERR_TRANSFORM_FAILED,
+  }
+}
+
+unsafe fn write_error(output: *mut c_char, output_len: usize, msg: &str) {
+  if output.is_null() || output_len == 0 {
+    return;
+  }
+
+  let bytes = msg.as_bytes();
+  let copy_len = bytes.len().min(output_len.saturating_sub(1));
+
+  unsafe {
+    ptr::copy_nonoverlapping(bytes.as_ptr(), output as *mut u8, copy_len);
+    *output.add(copy_len) = 0;
+  }
+}
+
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn OXC_strip_types(input: *const c_char, filename: *const c_char, output: *mut c_char, output_len: usize) -> c_int {
-  if input.is_null() || output.is_null() {
-    return OXC_ERR_NULL_INPUT;
+pub unsafe extern "C" fn OXC_strip_types_owned(
+  input: *const c_char, filename: *const c_char, out_len: *mut usize, out_error: *mut c_int, error_output: *mut c_char, error_output_len: usize,
+) -> *mut c_char {
+  if !out_error.is_null() {
+    unsafe { *out_error = OXC_ERR_NULL_INPUT };
+  }
+
+  if !out_len.is_null() {
+    unsafe { *out_len = 0 };
+  }
+
+  if input.is_null() || filename.is_null() || out_len.is_null() {
+    unsafe { write_error(error_output, error_output_len, "null input/output passed") };
+    return ptr::null_mut();
   }
 
   let filename_str = match unsafe { CStr::from_ptr(filename).to_str() } {
     Ok(s) => s,
-    Err(_) => return OXC_ERR_INVALID_UTF8,
+    Err(_) => {
+      unsafe { write_error(error_output, error_output_len, "filename is not valid UTF-8") };
+      if !out_error.is_null() {
+        unsafe { *out_error = OXC_ERR_INVALID_UTF8 };
+      }
+      return ptr::null_mut();
+    }
   };
 
   let input_str = match unsafe { CStr::from_ptr(input).to_str() } {
     Ok(s) => s,
-    Err(_) => return OXC_ERR_INVALID_UTF8,
+    Err(_) => {
+      unsafe { write_error(error_output, error_output_len, "source input is not valid UTF-8") };
+      if !out_error.is_null() {
+        unsafe { *out_error = OXC_ERR_INVALID_UTF8 };
+      }
+      return ptr::null_mut();
+    }
   };
 
   match strip_types_internal(input_str, filename_str) {
     Ok(result) => {
       let bytes = result.as_bytes();
-      if bytes.len() + 1 > output_len {
-        return OXC_ERR_OUTPUT_TOO_LARGE;
+      let alloc_len = bytes.len() + 1;
+      let layout = Layout::from_size_align(alloc_len, 1).unwrap();
+      let out_ptr = unsafe { alloc(layout) as *mut c_char };
+      if out_ptr.is_null() {
+        unsafe { write_error(error_output, error_output_len, "out of memory allocating strip output") };
+        if !out_error.is_null() {
+          unsafe { *out_error = OXC_ERR_OUTPUT_TOO_LARGE };
+        }
+        return ptr::null_mut();
       }
+
       unsafe {
-        ptr::copy_nonoverlapping(bytes.as_ptr(), output as *mut u8, bytes.len());
-        *output.add(bytes.len()) = 0;
+        ptr::copy_nonoverlapping(bytes.as_ptr(), out_ptr as *mut u8, bytes.len());
+        *out_ptr.add(bytes.len()) = 0;
+        *out_len = bytes.len();
       }
-      bytes.len() as c_int
+      if !out_error.is_null() {
+        unsafe { *out_error = 0 };
+      }
+      out_ptr
     }
-    Err(_) => OXC_ERR_TRANSFORM_FAILED,
+    Err(err) => {
+      unsafe { write_error(error_output, error_output_len, &err) };
+      if !out_error.is_null() {
+        unsafe { *out_error = classify_strip_error(&err) };
+      }
+      ptr::null_mut()
+    }
+  }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn OXC_free_stripped_output(ptr: *mut c_char, len: usize) {
+  if ptr.is_null() {
+    return;
+  }
+
+  let alloc_len = len.saturating_add(1);
+  let layout = Layout::from_size_align(alloc_len, 1).unwrap();
+
+  unsafe {
+    dealloc(ptr as *mut u8, layout);
   }
 }
 

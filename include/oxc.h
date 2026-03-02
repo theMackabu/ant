@@ -9,11 +9,13 @@
 #define OXC_ERR_TRANSFORM_FAILED -4
 #define OXC_ERR_OUTPUT_TOO_LARGE -5
 
-int OXC_strip_types(
+char *OXC_strip_types_owned(
   const char *input,
   const char *filename,
-  char *output,
-  size_t output_len
+  size_t *out_len,
+  int *out_error,
+  char *error_output,
+  size_t error_output_len
 );
 
 char *OXC_get_hoisted_vars(
@@ -29,5 +31,6 @@ char *OXC_get_func_hoisted_vars(
 );
 
 void OXC_free_hoisted_vars(char *ptr, size_t len);
+void OXC_free_stripped_output(char *ptr, size_t len);
 
 #endif

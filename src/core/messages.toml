@@ -6,7 +6,7 @@ unknown_flag_warn = "{warn}: <bold>Unknown ANT_DEBUG flag: \"%s\"</>\n"
 
 failed_to_fetch = "{error}: <bold>Could not fetch \"%s\"</>: %s\n"
 module_not_found = "{error}: <bold>Module not found: \"%s\"</>\n"
-type_strip_failed = "{error}: <bold>Type stripping failed (%d)</>\n"
+type_strip_failed = "{error}: <bold>Type stripping failed (%d)</>: %s\n"
 watch_entrypoint_error = "{error}: <bold>--watch requires a local file entrypoint.</>\n"
 watch_module_error = "{error}: <bold>--watch only supports module file execution.</>\n"
 watch_subcommand_error = "{error}: <bold>--watch is only supported when executing a module file.</>\n"

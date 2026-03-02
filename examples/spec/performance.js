@@ -16,6 +16,9 @@ test('now advances', t2 >= t1, true);
 
 test('timeOrigin exists', typeof performance.timeOrigin, 'number');
 test('timeOrigin positive', performance.timeOrigin > 0, true);
-test('timeOrigin before now', performance.timeOrigin <= Date.now(), true);
+
+const wallNow = Date.now();
+const perfNowEpoch = performance.timeOrigin + performance.now();
+test('timeOrigin aligns with now', Math.abs(perfNowEpoch - wallNow) < 1000, true);
 
 summary();

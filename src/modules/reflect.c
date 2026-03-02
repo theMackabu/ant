@@ -5,11 +5,12 @@
 #include "errors.h"
 #include "runtime.h"
 #include "internal.h"
+#include "silver/engine.h"
 
 #include "modules/reflect.h"
 #include "modules/symbol.h"
 
-static jsval_t reflect_get(struct js *js, jsval_t *args, int nargs) {
+static jsval_t reflect_get(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkundef();
   
   jsval_t target = args[0];
@@ -26,7 +27,7 @@ static jsval_t reflect_get(struct js *js, jsval_t *args, int nargs) {
   return js_get(js, target, key_str);
 }
 
-static jsval_t reflect_set(struct js *js, jsval_t *args, int nargs) {
+static jsval_t reflect_set(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 3) return js_false;
   
   jsval_t target = args[0];
@@ -45,7 +46,7 @@ static jsval_t reflect_set(struct js *js, jsval_t *args, int nargs) {
   return js_true; 
 }
 
-static jsval_t reflect_has(struct js *js, jsval_t *args, int nargs) {
+static jsval_t reflect_has(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_false;
   
   jsval_t target = args[0];
@@ -64,7 +65,7 @@ static jsval_t reflect_has(struct js *js, jsval_t *args, int nargs) {
   return js_bool(off > 0);
 }
 
-static jsval_t reflect_delete_property(struct js *js, jsval_t *args, int nargs) {
+static jsval_t reflect_delete_property(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_false;
   
   jsval_t target = args[0];
@@ -82,7 +83,7 @@ static jsval_t reflect_delete_property(struct js *js, jsval_t *args, int nargs) 
   return js_bool(deleted);
 }
 
-static jsval_t reflect_own_keys(struct js *js, jsval_t *args, int nargs) {
+static jsval_t reflect_own_keys(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkarr(js);
   
   jsval_t target = args[0];
@@ -106,7 +107,7 @@ static jsval_t reflect_own_keys(struct js *js, jsval_t *args, int nargs) {
   return keys_arr;
 }
 
-static jsval_t reflect_construct(struct js *js, jsval_t *args, int nargs) {
+static jsval_t reflect_construct(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) {
     return js_mkerr(js, "Reflect.construct requires at least 2 arguments");
   }
@@ -147,8 +148,8 @@ static jsval_t reflect_construct(struct js *js, jsval_t *args, int nargs) {
 
   jsval_t saved_new_target = js->new_target;
   js->new_target = new_target;
-  
-  jsval_t result = js_call_with_this(js, target, new_obj, call_args, arg_count);
+
+  jsval_t result = sv_vm_call(js->vm, js, target, new_obj, call_args, arg_count, NULL, true);
   js->new_target = saved_new_target;
   
   if (call_args) free(call_args);
@@ -157,7 +158,7 @@ static jsval_t reflect_construct(struct js *js, jsval_t *args, int nargs) {
   return new_obj;
 }
 
-static jsval_t reflect_apply(struct js *js, jsval_t *args, int nargs) {
+static jsval_t reflect_apply(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 3) {
     return js_mkerr(js, "Reflect.apply requires 3 arguments");
   }
@@ -188,13 +189,13 @@ static jsval_t reflect_apply(struct js *js, jsval_t *args, int nargs) {
     }
   }
   
-  jsval_t result = js_call_with_this(js, target, this_arg, call_args, arg_count);
+  jsval_t result = sv_vm_call(js->vm, js, target, this_arg, call_args, arg_count, NULL, false);
   
   if (call_args) free(call_args);
   return result;
 }
 
-static jsval_t reflect_get_own_property_descriptor(struct js *js, jsval_t *args, int nargs) {
+static jsval_t reflect_get_own_property_descriptor(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkundef();
   
   jsval_t target = args[0];
@@ -222,7 +223,7 @@ static jsval_t reflect_get_own_property_descriptor(struct js *js, jsval_t *args,
   return desc;
 }
 
-static jsval_t reflect_define_property(struct js *js, jsval_t *args, int nargs) {
+static jsval_t reflect_define_property(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 3) return js_false;
   
   jsval_t target = args[0];
@@ -244,7 +245,7 @@ static jsval_t reflect_define_property(struct js *js, jsval_t *args, int nargs) 
   return js_true;
 }
 
-static jsval_t reflect_get_prototype_of(struct js *js, jsval_t *args, int nargs) {
+static jsval_t reflect_get_prototype_of(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) {
     return js_mkerr(js, "Reflect.getPrototypeOf requires an argument");
   }
@@ -258,7 +259,7 @@ static jsval_t reflect_get_prototype_of(struct js *js, jsval_t *args, int nargs)
   return js_get_proto(js, target);
 }
 
-static jsval_t reflect_set_prototype_of(struct js *js, jsval_t *args, int nargs) {
+static jsval_t reflect_set_prototype_of(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_false;
   
   jsval_t target = args[0];
@@ -274,7 +275,7 @@ static jsval_t reflect_set_prototype_of(struct js *js, jsval_t *args, int nargs)
   return js_true;
 }
 
-static jsval_t reflect_is_extensible(struct js *js, jsval_t *args, int nargs) {
+static jsval_t reflect_is_extensible(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_false;
   
   jsval_t target = args[0];
@@ -289,7 +290,7 @@ static jsval_t reflect_is_extensible(struct js *js, jsval_t *args, int nargs) {
   return js_true;
 }
 
-static jsval_t reflect_prevent_extensions(struct js *js, jsval_t *args, int nargs) {
+static jsval_t reflect_prevent_extensions(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_false;
   
   jsval_t target = args[0];
@@ -302,7 +303,7 @@ static jsval_t reflect_prevent_extensions(struct js *js, jsval_t *args, int narg
 }
 
 void init_reflect_module(void) {
-  struct js *js = rt->js;
+  ant_t *js = rt->js;
   jsval_t reflect_obj = js_mkobj(js);
   
   js_set(js, reflect_obj, "get", js_mkfun(reflect_get));
@@ -319,6 +320,6 @@ void init_reflect_module(void) {
   js_set(js, reflect_obj, "isExtensible", js_mkfun(reflect_is_extensible));
   js_set(js, reflect_obj, "preventExtensions", js_mkfun(reflect_prevent_extensions));
   
-  js_set(js, reflect_obj, get_toStringTag_sym_key(), js_mkstr(js, "Reflect", 7));
+  js_set_sym(js, reflect_obj, get_toStringTag_sym(), js_mkstr(js, "Reflect", 7));
   js_set(js, js_glob(js), "Reflect", reflect_obj);
 }

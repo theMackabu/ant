@@ -45,14 +45,12 @@ const interval = setInterval(() => {
   const stats = Ant.stats();
   console.log(
     `tick ${count}: arena ${(stats.arenaUsed / 1024 / 1024).toFixed(1)}MB / ` +
-    `${(stats.arenaSize / 1024 / 1024).toFixed(1)}MB, ` +
-    `rss ${(stats.rss / 1024 / 1024).toFixed(1)}MB`
+      `${(stats.arenaSize / 1024 / 1024).toFixed(1)}MB, ` +
+      `rss ${(stats.rss / 1024 / 1024).toFixed(1)}MB`
   );
 
   if (count >= 500) {
     clearInterval(interval);
-    console.log('Done - forcing GC...');
-    Ant.gc();
     const after = Ant.stats();
     console.log(`after GC: arena ${(after.arenaUsed / 1024 / 1024).toFixed(1)}MB`);
   }

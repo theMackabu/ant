@@ -17,6 +17,7 @@
 #include "errors.h"
 #include "internal.h"
 #include "runtime.h"
+#include "descriptors.h"
 
 #include "modules/fs.h"
 #include "modules/buffer.h"
@@ -39,7 +40,16 @@ typedef enum {
   FS_ENC_ASCII,
 } fs_encoding_t;
 
-static fs_encoding_t parse_encoding(struct js *js, jsval_t arg) {
+static jsval_t fs_coerce_path(ant_t *js, jsval_t arg) {
+  if (vtype(arg) == T_STR) return arg;
+  if (is_object_type(arg)) {
+    jsval_t pathname = js_get(js, arg, "pathname");
+    if (vtype(pathname) == T_STR) return pathname;
+  }
+  return js_mkundef();
+}
+
+static fs_encoding_t parse_encoding(ant_t *js, jsval_t arg) {
   size_t len;
   const char *str = NULL;
 
@@ -66,7 +76,7 @@ static fs_encoding_t parse_encoding(struct js *js, jsval_t arg) {
   return FS_ENC_NONE;
 }
 
-static jsval_t encode_data(struct js *js, const char *data, size_t len, fs_encoding_t enc) {
+static jsval_t encode_data(ant_t *js, const char *data, size_t len, fs_encoding_t enc) {
   switch (enc) {
     case FS_ENC_UTF8:
     case FS_ENC_LATIN1:
@@ -143,7 +153,7 @@ typedef enum {
 
 typedef struct fs_request_s {
   uv_fs_t uv_req;
-  struct js *js;
+  ant_t *js;
   jsval_t promise;
   char *path;
   char *data;
@@ -154,6 +164,7 @@ typedef struct fs_request_s {
   uv_file fd;
   int completed;
   int failed;
+  int recursive;
 } fs_request_t;
 
 static UT_array *pending_requests = NULL;
@@ -179,11 +190,11 @@ static void remove_pending_request(fs_request_t *req) {
   }
 }
 
-static jsval_t fs_read_to_uint8array(struct js *js, const char *data, size_t len) {
+static jsval_t fs_read_to_uint8array(ant_t *js, const char *data, size_t len) {
   ArrayBufferData *ab = create_array_buffer_data(len);
   if (!ab) return js_mkundef();
   memcpy(ab->data, data, len);
-  jsval_t result = create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, len, "Uint8Array");
+  jsval_t result = create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, len, "Buffer");
   if (vtype(result) == T_ERR) free_array_buffer_data(ab);
   return result;
 }
@@ -191,8 +202,16 @@ static jsval_t fs_read_to_uint8array(struct js *js, const char *data, size_t len
 static void complete_request(fs_request_t *req) {
   if (req->failed) {
     const char *err_msg = req->error_msg ? req->error_msg : "Unknown error";
-    jsval_t err = js_mkstr(req->js, err_msg, strlen(err_msg));
-    js_reject_promise(req->js, req->promise, err);
+    jsval_t reject_value = js_mkerr(req->js, "%s", err_msg);
+    if (is_err(reject_value)) {
+      reject_value = req->js->thrown_value;
+      if (vtype(reject_value) == T_UNDEF) {
+        reject_value = js_mkstr(req->js, err_msg, strlen(err_msg));
+      }
+      req->js->thrown_exists = false;
+      req->js->thrown_value = js_mkundef();
+    }
+    js_reject_promise(req->js, req->promise, reject_value);
   } else {
     jsval_t result = js_mkundef();
     if (req->op_type == FS_OP_READ && req->data) {
@@ -350,9 +369,10 @@ static void on_mkdir_complete(uv_fs_t *uv_req) {
   fs_request_t *req = (fs_request_t *)uv_req->data;
   
   if (uv_req->result < 0) {
+  if (!req->recursive || uv_req->result != UV_EEXIST) {
     req->failed = 1;
     req->error_msg = strdup(uv_strerror((int)uv_req->result));
-  }
+  }}
   
   uv_fs_req_cleanup(uv_req);
   req->completed = 1;
@@ -452,13 +472,14 @@ static void on_readdir_complete(uv_fs_t *uv_req) {
   free_fs_request(req);
 }
 
-static jsval_t builtin_fs_readFileSync(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_fs_readFileSync(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "readFileSync() requires a path argument");
   
-  if (vtype(args[0]) != T_STR) return js_mkerr(js, "readFileSync() path must be a string");
+  jsval_t path_val = fs_coerce_path(js, args[0]);
+  if (vtype(path_val) != T_STR) return js_mkerr(js, "readFileSync() path must be a string or URL");
   
   size_t path_len;
-  char *path = js_getstr(js, args[0], &path_len);
+  char *path = js_getstr(js, path_val, &path_len);
   if (!path) return js_mkerr(js, "Failed to get path string");
   
   char *path_cstr = strndup(path, path_len);
@@ -506,7 +527,7 @@ static jsval_t builtin_fs_readFileSync(struct js *js, jsval_t *args, int nargs) 
   return result;
 }
 
-static jsval_t builtin_fs_readBytesSync(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_fs_readBytesSync(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "readBytesSync() requires a path argument");
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "readBytesSync() path must be a string");
   
@@ -556,7 +577,7 @@ static jsval_t builtin_fs_readBytesSync(struct js *js, jsval_t *args, int nargs)
   return result;
 }
 
-static jsval_t builtin_fs_readFile(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_fs_readFile(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "readFile() requires a path argument");
   
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "readFile() path must be a string");
@@ -589,7 +610,7 @@ static jsval_t builtin_fs_readFile(struct js *js, jsval_t *args, int nargs) {
   return req->promise;
 }
 
-static jsval_t builtin_fs_readBytes(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_fs_readBytes(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "readBytes() requires a path argument");
   
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "readBytes() path must be a string");
@@ -621,7 +642,7 @@ static jsval_t builtin_fs_readBytes(struct js *js, jsval_t *args, int nargs) {
   return req->promise;
 }
 
-static jsval_t builtin_fs_writeFileSync(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_fs_writeFileSync(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "writeFileSync() requires path and data arguments");
   
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "writeFileSync() path must be a string");
@@ -654,7 +675,7 @@ static jsval_t builtin_fs_writeFileSync(struct js *js, jsval_t *args, int nargs)
   return js_mkundef();
 }
 
-static jsval_t builtin_fs_copyFileSync(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_fs_copyFileSync(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "copyFileSync() requires src and dest arguments");
   
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "copyFileSync() src must be a string");
@@ -711,7 +732,7 @@ static jsval_t builtin_fs_copyFileSync(struct js *js, jsval_t *args, int nargs) 
   return js_mkundef();
 }
 
-static jsval_t builtin_fs_renameSync(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_fs_renameSync(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "renameSync() requires oldPath and newPath arguments");
   
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "renameSync() oldPath must be a string");
@@ -744,7 +765,7 @@ static jsval_t builtin_fs_renameSync(struct js *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t builtin_fs_appendFileSync(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_fs_appendFileSync(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "appendFileSync() requires path and data arguments");
   
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "appendFileSync() path must be a string");
@@ -777,7 +798,7 @@ static jsval_t builtin_fs_appendFileSync(struct js *js, jsval_t *args, int nargs
   return js_mkundef();
 }
 
-static jsval_t builtin_fs_writeFile(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_fs_writeFile(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "writeFile() requires path and data arguments");
   
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "writeFile() path must be a string");
@@ -821,7 +842,7 @@ static jsval_t builtin_fs_writeFile(struct js *js, jsval_t *args, int nargs) {
   return req->promise;
 }
 
-static jsval_t builtin_fs_unlinkSync(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_fs_unlinkSync(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "unlinkSync() requires a path argument");
   
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "unlinkSync() path must be a string");
@@ -845,7 +866,7 @@ static jsval_t builtin_fs_unlinkSync(struct js *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t builtin_fs_unlink(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_fs_unlink(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "unlink() requires a path argument");
   
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "unlink() path must be a string");
@@ -877,7 +898,7 @@ static jsval_t builtin_fs_unlink(struct js *js, jsval_t *args, int nargs) {
   return req->promise;
 }
 
-static jsval_t builtin_fs_mkdirSync(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_fs_mkdirSync(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "mkdirSync() requires a path argument");
   
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "mkdirSync() path must be a string");
@@ -929,7 +950,7 @@ do_mkdir:
   return js_mkundef();
 }
 
-static jsval_t builtin_fs_mkdir(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_fs_mkdir(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "mkdir() requires a path argument");
   
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "mkdir() path must be a string");
@@ -939,11 +960,22 @@ static jsval_t builtin_fs_mkdir(struct js *js, jsval_t *args, int nargs) {
   if (!path) return js_mkerr(js, "Failed to get path string");
   
   int mode = 0755;
-  if (nargs >= 2 && vtype(args[1]) == T_NUM) {
-    mode = (int)js_getnum(args[1]);
+  int recursive = 0;
+  if (nargs >= 2) {
+    switch (vtype(args[1])) {
+      case T_NUM:
+        mode = (int)js_getnum(args[1]);
+        break;
+      case T_OBJ: {
+        jsval_t opt = args[1];
+        recursive = js_get(js, opt, "recursive") == js_true;
+        jsval_t mode_val = js_get(js, opt, "mode");
+        if (vtype(mode_val) == T_NUM) mode = (int)js_getnum(mode_val);
+        break;
+      }
+    }
   }
-  
-  
+
   fs_request_t *req = calloc(1, sizeof(fs_request_t));
   if (!req) return js_mkerr(js, "Out of memory");
   
@@ -951,22 +983,28 @@ static jsval_t builtin_fs_mkdir(struct js *js, jsval_t *args, int nargs) {
   req->op_type = FS_OP_MKDIR;
   req->promise = js_mkpromise(js);
   req->path = strndup(path, path_len);
+  req->recursive = recursive;
   req->uv_req.data = req;
   
   utarray_push_back(pending_requests, &req);
   int result = uv_fs_mkdir(uv_default_loop(), &req->uv_req, req->path, mode, on_mkdir_complete);
   
   if (result < 0) {
-    req->failed = 1;
-    req->error_msg = strdup(uv_strerror(result));
-    req->completed = 1;
-    complete_request(req);
+    if (recursive && result == UV_EEXIST) {
+      req->completed = 1;
+      complete_request(req);
+    } else {
+      req->failed = 1;
+      req->error_msg = strdup(uv_strerror(result));
+      req->completed = 1;
+      complete_request(req);
+    }
   }
   
   return req->promise;
 }
 
-static jsval_t builtin_fs_rmdirSync(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_fs_rmdirSync(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "rmdirSync() requires a path argument");
   
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "rmdirSync() path must be a string");
@@ -994,7 +1032,7 @@ static jsval_t builtin_fs_rmdirSync(struct js *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t builtin_fs_rmdir(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_fs_rmdir(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "rmdir() requires a path argument");
   
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "rmdir() path must be a string");
@@ -1026,7 +1064,7 @@ static jsval_t builtin_fs_rmdir(struct js *js, jsval_t *args, int nargs) {
   return req->promise;
 }
 
-static jsval_t stat_isFile(struct js *js, jsval_t *args, int nargs) {
+static jsval_t stat_isFile(ant_t *js, jsval_t *args, int nargs) {
   jsval_t this = js_getthis(js);
   jsval_t mode_val = js_get_slot(js, this, SLOT_DATA);
   
@@ -1036,7 +1074,7 @@ static jsval_t stat_isFile(struct js *js, jsval_t *args, int nargs) {
   return js_bool(S_ISREG(mode));
 }
 
-static jsval_t stat_isDirectory(struct js *js, jsval_t *args, int nargs) {
+static jsval_t stat_isDirectory(ant_t *js, jsval_t *args, int nargs) {
   jsval_t this = js_getthis(js);
   jsval_t mode_val = js_get_slot(js, this, SLOT_DATA);
   
@@ -1046,7 +1084,7 @@ static jsval_t stat_isDirectory(struct js *js, jsval_t *args, int nargs) {
   return js_bool(S_ISDIR(mode));
 }
 
-static jsval_t stat_isSymbolicLink(struct js *js, jsval_t *args, int nargs) {
+static jsval_t stat_isSymbolicLink(ant_t *js, jsval_t *args, int nargs) {
   jsval_t this = js_getthis(js);
   jsval_t mode_val = js_get_slot(js, this, SLOT_DATA);
   
@@ -1056,7 +1094,7 @@ static jsval_t stat_isSymbolicLink(struct js *js, jsval_t *args, int nargs) {
   return js_bool(S_ISLNK(mode));
 }
 
-static jsval_t create_stats_object(struct js *js, struct stat *st) {
+static jsval_t create_stats_object(ant_t *js, struct stat *st) {
   jsval_t stat_obj = js_mkobj(js);
   jsval_t proto = js_get_ctor_proto(js, "Stats", 5);
   if (is_special_object(proto)) js_set_proto(js, stat_obj, proto);
@@ -1091,7 +1129,7 @@ static const char *errno_to_code(int err_num) {
   }
 }
 
-static jsval_t builtin_fs_statSync(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_fs_statSync(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "statSync() requires a path argument");
   
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "statSync() path must be a string");
@@ -1116,7 +1154,7 @@ static jsval_t builtin_fs_statSync(struct js *js, jsval_t *args, int nargs) {
   return create_stats_object(js, &st);
 }
 
-static jsval_t builtin_fs_stat(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_fs_stat(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "stat() requires a path argument");
   
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "stat() path must be a string");
@@ -1148,7 +1186,7 @@ static jsval_t builtin_fs_stat(struct js *js, jsval_t *args, int nargs) {
   return req->promise;
 }
 
-static jsval_t builtin_fs_existsSync(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_fs_existsSync(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "existsSync() requires a path argument");
   
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "existsSync() path must be a string");
@@ -1167,7 +1205,7 @@ static jsval_t builtin_fs_existsSync(struct js *js, jsval_t *args, int nargs) {
   return js_bool(result == 0);
 }
 
-static jsval_t builtin_fs_exists(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_fs_exists(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "exists() requires a path argument");
   
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "exists() path must be a string");
@@ -1199,7 +1237,7 @@ static jsval_t builtin_fs_exists(struct js *js, jsval_t *args, int nargs) {
   return req->promise;
 }
 
-static jsval_t builtin_fs_accessSync(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_fs_accessSync(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "accessSync() requires a path argument");
   
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "accessSync() path must be a string");
@@ -1227,7 +1265,7 @@ static jsval_t builtin_fs_accessSync(struct js *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t builtin_fs_access(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_fs_access(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "access() requires a path argument");
   
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "access() path must be a string");
@@ -1264,7 +1302,7 @@ static jsval_t builtin_fs_access(struct js *js, jsval_t *args, int nargs) {
   return req->promise;
 }
 
-static jsval_t builtin_fs_readdirSync(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_fs_readdirSync(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "readdirSync() requires a path argument");
   
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "readdirSync() path must be a string");
@@ -1298,7 +1336,7 @@ static jsval_t builtin_fs_readdirSync(struct js *js, jsval_t *args, int nargs) {
   return arr;
 }
 
-static jsval_t builtin_fs_readdir(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_fs_readdir(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "readdir() requires a path argument");
   
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "readdir() path must be a string");
@@ -1347,7 +1385,53 @@ static void on_write_fd_complete(uv_fs_t *uv_req) {
   free_fs_request(req);
 }
 
-static jsval_t builtin_fs_writeSync(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_fs_readSync(ant_t *js, jsval_t *args, int nargs) {
+  if (nargs < 2) return js_mkerr(js, "readSync() requires fd and buffer arguments");
+  if (vtype(args[0]) != T_NUM) return js_mkerr(js, "readSync() fd must be a number");
+  
+  int fd = (int)js_getnum(args[0]);
+  
+  jsval_t ta_data_val = js_get_slot(js, args[1], SLOT_BUFFER);
+  TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
+  if (!ta_data || !ta_data->buffer || !ta_data->buffer->data)
+    return js_mkerr(js, "readSync() second argument must be a Buffer, TypedArray, or DataView");
+  
+  uint8_t *buf_data = ta_data->buffer->data + ta_data->byte_offset;
+  size_t buf_len = ta_data->byte_length;
+  size_t offset = 0;
+  size_t length = buf_len;
+  int64_t position = -1;
+  
+  if (nargs >= 3) {
+    if (vtype(args[2]) == T_OBJ) {
+      jsval_t off_val = js_get(js, args[2], "offset");
+      jsval_t len_val = js_get(js, args[2], "length");
+      jsval_t pos_val = js_get(js, args[2], "position");
+      if (vtype(off_val) == T_NUM) offset = (size_t)js_getnum(off_val);
+      if (vtype(len_val) == T_NUM) length = (size_t)js_getnum(len_val);
+      else length = buf_len - offset;
+      if (vtype(pos_val) == T_NUM) position = (int64_t)js_getnum(pos_val);
+    } else if (vtype(args[2]) == T_NUM) {
+      offset = (size_t)js_getnum(args[2]);
+      length = buf_len - offset;
+      if (nargs >= 4 && vtype(args[3]) == T_NUM) length = (size_t)js_getnum(args[3]);
+      if (nargs >= 5 && vtype(args[4]) == T_NUM) position = (int64_t)js_getnum(args[4]);
+    }
+  }
+  
+  if (offset > buf_len) return js_mkerr(js, "offset is out of bounds");
+  if (offset + length > buf_len) return js_mkerr(js, "length extends beyond buffer");
+  
+  uv_fs_t req;
+  uv_buf_t buf = uv_buf_init((char *)(buf_data + offset), (unsigned int)length);
+  int result = uv_fs_read(uv_default_loop(), &req, fd, &buf, 1, position, NULL);
+  uv_fs_req_cleanup(&req);
+  
+  if (result < 0) return js_mkerr(js, "readSync failed: %s", uv_strerror(result));
+  return js_mknum((double)result);
+}
+
+static jsval_t builtin_fs_writeSync(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "writeSync() requires fd and data arguments");
   if (vtype(args[0]) != T_NUM) return js_mkerr(js, "writeSync() fd must be a number");
   
@@ -1411,7 +1495,7 @@ static jsval_t builtin_fs_writeSync(struct js *js, jsval_t *args, int nargs) {
   return js_mknum((double)result);
 }
 
-static jsval_t builtin_fs_write_fd(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_fs_write_fd(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "write() requires fd and data arguments");
   if (vtype(args[0]) != T_NUM) return js_mkerr(js, "write() fd must be a number");
   
@@ -1496,7 +1580,7 @@ static jsval_t builtin_fs_write_fd(struct js *js, jsval_t *args, int nargs) {
   return req->promise;
 }
 
-static jsval_t builtin_fs_writevSync(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_fs_writevSync(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "writevSync() requires fd and buffers arguments");
   if (vtype(args[0]) != T_NUM) return js_mkerr(js, "writevSync() fd must be a number");
   
@@ -1531,7 +1615,7 @@ static jsval_t builtin_fs_writevSync(struct js *js, jsval_t *args, int nargs) {
   return js_mknum((double)result);
 }
 
-static jsval_t builtin_fs_writev_fd(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_fs_writev_fd(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "writev() requires fd and buffers arguments");
   if (vtype(args[0]) != T_NUM) return js_mkerr(js, "writev() fd must be a number");
   
@@ -1598,7 +1682,7 @@ static jsval_t builtin_fs_writev_fd(struct js *js, jsval_t *args, int nargs) {
   return req->promise;
 }
 
-static int parse_open_flags(struct js *js, jsval_t arg) {
+static int parse_open_flags(ant_t *js, jsval_t arg) {
   if (vtype(arg) == T_NUM) return (int)js_getnum(arg);
   if (vtype(arg) != T_STR) return O_RDONLY;
   
@@ -1620,7 +1704,7 @@ static int parse_open_flags(struct js *js, jsval_t arg) {
   return O_RDONLY;
 }
 
-static jsval_t builtin_fs_openSync(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_fs_openSync(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "openSync() requires a path argument");
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "openSync() path must be a string");
   
@@ -1643,7 +1727,7 @@ static jsval_t builtin_fs_openSync(struct js *js, jsval_t *args, int nargs) {
   return js_mknum((double)result);
 }
 
-static jsval_t builtin_fs_closeSync(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_fs_closeSync(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "closeSync() requires a fd argument");
   if (vtype(args[0]) != T_NUM) return js_mkerr(js, "closeSync() fd must be a number");
   
@@ -1674,7 +1758,7 @@ static void on_open_fd_complete(uv_fs_t *uv_req) {
   free_fs_request(req);
 }
 
-static jsval_t builtin_fs_open_fd(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_fs_open_fd(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "open() requires a path argument");
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "open() path must be a string");
   
@@ -1724,7 +1808,7 @@ static void on_close_fd_complete(uv_fs_t *uv_req) {
   free_fs_request(req);
 }
 
-static jsval_t builtin_fs_close_fd(struct js *js, jsval_t *args, int nargs) {
+static jsval_t builtin_fs_close_fd(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "close() requires a fd argument");
   if (vtype(args[0]) != T_NUM) return js_mkerr(js, "close() fd must be a number");
   
@@ -1764,7 +1848,7 @@ void init_fs_module(void) {
   js_set(js, stats_proto, "isFile", js_mkfun(stat_isFile));
   js_set(js, stats_proto, "isDirectory", js_mkfun(stat_isDirectory));
   js_set(js, stats_proto, "isSymbolicLink", js_mkfun(stat_isSymbolicLink));
-  js_set(js, stats_proto, get_toStringTag_sym_key(), js_mkstr(js, "Stats", 5));
+  js_set_sym(js, stats_proto, get_toStringTag_sym(), js_mkstr(js, "Stats", 5));
   
   js_mkprop_fast(js, stats_ctor, "prototype", 9, stats_proto);
   js_mkprop_fast(js, stats_ctor, "name", 4, js_mkstr(js, "Stats", 5));
@@ -1773,41 +1857,23 @@ void init_fs_module(void) {
   js_set(js, glob, "Stats", js_obj_to_func(stats_ctor));
 }
 
-jsval_t fs_library(struct js *js) {
-  jsval_t lib = js_mkobj(js);
-  
+static void fs_set_promise_methods(ant_t *js, jsval_t lib) {
   js_set(js, lib, "readFile", js_mkfun(builtin_fs_readFile));
-  js_set(js, lib, "readFileSync", js_mkfun(builtin_fs_readFileSync));
-  js_set(js, lib, "stream", js_mkfun(builtin_fs_readBytes));
   js_set(js, lib, "open", js_mkfun(builtin_fs_open_fd));
-  js_set(js, lib, "openSync", js_mkfun(builtin_fs_openSync));
   js_set(js, lib, "close", js_mkfun(builtin_fs_close_fd));
-  js_set(js, lib, "closeSync", js_mkfun(builtin_fs_closeSync));
   js_set(js, lib, "writeFile", js_mkfun(builtin_fs_writeFile));
-  js_set(js, lib, "writeFileSync", js_mkfun(builtin_fs_writeFileSync));
   js_set(js, lib, "write", js_mkfun(builtin_fs_write_fd));
-  js_set(js, lib, "writeSync", js_mkfun(builtin_fs_writeSync));
   js_set(js, lib, "writev", js_mkfun(builtin_fs_writev_fd));
-  js_set(js, lib, "writevSync", js_mkfun(builtin_fs_writevSync));
-  js_set(js, lib, "appendFileSync", js_mkfun(builtin_fs_appendFileSync));
-  js_set(js, lib, "copyFileSync", js_mkfun(builtin_fs_copyFileSync));
-  js_set(js, lib, "renameSync", js_mkfun(builtin_fs_renameSync));
   js_set(js, lib, "unlink", js_mkfun(builtin_fs_unlink));
-  js_set(js, lib, "unlinkSync", js_mkfun(builtin_fs_unlinkSync));
   js_set(js, lib, "mkdir", js_mkfun(builtin_fs_mkdir));
-  js_set(js, lib, "mkdirSync", js_mkfun(builtin_fs_mkdirSync));
   js_set(js, lib, "rmdir", js_mkfun(builtin_fs_rmdir));
-  js_set(js, lib, "rmdirSync", js_mkfun(builtin_fs_rmdirSync));
   js_set(js, lib, "stat", js_mkfun(builtin_fs_stat));
-  js_set(js, lib, "statSync", js_mkfun(builtin_fs_statSync));
   js_set(js, lib, "exists", js_mkfun(builtin_fs_exists));
-  js_set(js, lib, "existsSync", js_mkfun(builtin_fs_existsSync));
   js_set(js, lib, "access", js_mkfun(builtin_fs_access));
-  js_set(js, lib, "accessSync", js_mkfun(builtin_fs_accessSync));
   js_set(js, lib, "readdir", js_mkfun(builtin_fs_readdir));
-  js_set(js, lib, "readdirSync", js_mkfun(builtin_fs_readdirSync));
-  js_set(js, lib, get_toStringTag_sym_key(), js_mkstr(js, "fs", 2));
-  
+}
+
+static jsval_t fs_make_constants(ant_t *js) {
   jsval_t constants = js_mkobj(js);
   js_set(js, constants, "F_OK", js_mknum(F_OK));
   js_set(js, constants, "R_OK", js_mknum(R_OK));
@@ -1820,8 +1886,62 @@ jsval_t fs_library(struct js *js) {
   js_set(js, constants, "O_EXCL", js_mknum(O_EXCL));
   js_set(js, constants, "O_TRUNC", js_mknum(O_TRUNC));
   js_set(js, constants, "O_APPEND", js_mknum(O_APPEND));
-  js_set(js, lib, "constants", constants);
+  return constants;
+}
 
+static jsval_t builtin_fs_promises_getter(ant_t *js, jsval_t *args, int nargs) {
+  jsval_t getter_fn = js_getcurrentfunc(js);
+  jsval_t cached = js_get_slot(js, getter_fn, SLOT_DATA);
+  if (is_object_type(cached)) return cached;
+
+  jsval_t promises = fs_promises_library(js);
+  js_set_slot(js, getter_fn, SLOT_DATA, promises);
+  return promises;
+}
+
+jsval_t fs_library(ant_t *js) {
+  jsval_t lib = js_mkobj(js);
+  fs_set_promise_methods(js, lib);
+
+  js_set(js, lib, "readFileSync", js_mkfun(builtin_fs_readFileSync));
+  js_set(js, lib, "readSync", js_mkfun(builtin_fs_readSync));
+  js_set(js, lib, "stream", js_mkfun(builtin_fs_readBytes));
+  js_set(js, lib, "openSync", js_mkfun(builtin_fs_openSync));
+  js_set(js, lib, "closeSync", js_mkfun(builtin_fs_closeSync));
+  js_set(js, lib, "writeFileSync", js_mkfun(builtin_fs_writeFileSync));
+  js_set(js, lib, "writeSync", js_mkfun(builtin_fs_writeSync));
+  js_set(js, lib, "writevSync", js_mkfun(builtin_fs_writevSync));
+  js_set(js, lib, "appendFileSync", js_mkfun(builtin_fs_appendFileSync));
+  js_set(js, lib, "copyFileSync", js_mkfun(builtin_fs_copyFileSync));
+  js_set(js, lib, "renameSync", js_mkfun(builtin_fs_renameSync));
+  js_set(js, lib, "unlinkSync", js_mkfun(builtin_fs_unlinkSync));
+  js_set(js, lib, "mkdirSync", js_mkfun(builtin_fs_mkdirSync));
+  js_set(js, lib, "rmdirSync", js_mkfun(builtin_fs_rmdirSync));
+  js_set(js, lib, "statSync", js_mkfun(builtin_fs_statSync));
+  js_set(js, lib, "existsSync", js_mkfun(builtin_fs_existsSync));
+  js_set(js, lib, "accessSync", js_mkfun(builtin_fs_accessSync));
+  js_set(js, lib, "readdirSync", js_mkfun(builtin_fs_readdirSync));
+  
+  js_set_getter_desc(
+    js, lib,
+    "promises", 8,
+    js_heavy_mkfun(js, builtin_fs_promises_getter, js_mkundef()),
+    JS_DESC_E | JS_DESC_C
+  );
+  
+  js_set(js, lib, "constants", fs_make_constants(js));
+  js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "fs", 2));
+  
+  return lib;
+}
+
+jsval_t fs_promises_library(ant_t *js) {
+  jsval_t lib = js_mkobj(js);
+
+  fs_set_promise_methods(js, lib);
+  js_set(js, lib, "constants", fs_make_constants(js));
+
+  js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "fs/promises", 11));
   return lib;
 }
 

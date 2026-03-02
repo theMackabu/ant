@@ -6,7 +6,6 @@ for (let i = 0; i < 5; i = i + 1) {
   cycleData.iteration = i;
   cycleData['data' + i] = { value: i * 10 };
   console.log('  Before GC - iteration:', cycleData.iteration);
-  Ant.gc();
   console.log('  After GC - iteration:', cycleData.iteration);
 }
 

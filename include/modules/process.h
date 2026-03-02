@@ -10,4 +10,6 @@ void emit_process_event(const char *event_type, jsval_t *args, int nargs);
 void init_process_module(void);
 bool has_active_stdin(void);
 
+jsval_t process_library(ant_t *js);
+
 #endif

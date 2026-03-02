@@ -16,7 +16,7 @@ async function testForLetClosure() {
   }
   return fns.map(f => f()).join(',');
 }
-testForLetClosure().then(v => {
+const p1 = testForLetClosure().then(v => {
   results.forLetClosure = v;
 });
 
@@ -29,7 +29,7 @@ async function testBlockScopedCapture() {
   }
   return fns.map(f => f()).join(',');
 }
-testBlockScopedCapture().then(v => {
+const p2 = testBlockScopedCapture().then(v => {
   results.blockScopedCapture = v;
 });
 
@@ -44,7 +44,7 @@ async function testNestedLoops() {
   }
   return fns.map(f => f()).join(',');
 }
-testNestedLoops().then(v => {
+const p3 = testNestedLoops().then(v => {
   results.nestedLoops = v;
 });
 
@@ -59,7 +59,7 @@ async function testWhileLoop() {
   }
   return values.join(',');
 }
-testWhileLoop().then(v => {
+const p4 = testWhileLoop().then(v => {
   results.whileLoop = v;
 });
 
@@ -73,7 +73,7 @@ async function testMultipleAwaits() {
   }
   return fns.map(f => f()).join(',');
 }
-testMultipleAwaits().then(v => {
+const p5 = testMultipleAwaits().then(v => {
   results.multipleAwaits = v;
 });
 
@@ -92,7 +92,7 @@ async function testSequentialTasks() {
   const b = await loopTask('B');
   return { a: a.join(','), b: b.join(',') };
 }
-testSequentialTasks().then(v => {
+const p6 = testSequentialTasks().then(v => {
   results.sequentialTasks = v;
 });
 
@@ -108,7 +108,7 @@ async function testAsyncArrowInLoop() {
   const values = await Promise.all(fns.map(f => f()));
   return values.join(',');
 }
-testAsyncArrowInLoop().then(v => {
+const p7 = testAsyncArrowInLoop().then(v => {
   results.asyncArrowInLoop = v;
 });
 
@@ -125,7 +125,7 @@ async function testTryCatchInLoop() {
   }
   return values.join(',');
 }
-testTryCatchInLoop().then(v => {
+const p8 = testTryCatchInLoop().then(v => {
   results.tryCatchInLoop = v;
 });
 
@@ -140,7 +140,7 @@ async function testDoWhile() {
   } while (i < 3);
   return values.join(',');
 }
-testDoWhile().then(v => {
+const p9 = testDoWhile().then(v => {
   results.doWhile = v;
 });
 
@@ -155,7 +155,7 @@ async function testConditionalAwait() {
   }
   return fns.map(f => f()).join(',');
 }
-testConditionalAwait().then(v => {
+const p10 = testConditionalAwait().then(v => {
   results.conditionalAwait = v;
 });
 
@@ -178,13 +178,13 @@ async function outer(id) {
   return taskResults;
 }
 
-Promise.all([outer('A'), outer('B'), outer('C')]).then(([a, b, c]) => {
+const p11 = Promise.all([outer('A'), outer('B'), outer('C')]).then(([a, b, c]) => {
   results.nestedAsyncA = a.join(',');
   results.nestedAsyncB = b.join(',');
   results.nestedAsyncC = c.join(',');
 });
 
-setTimeout(() => {
+Promise.all([p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11]).then(() => {
   test('for-let with async closure', results.forLetClosure, '0,1,2');
   test('block-scoped capture', results.blockScopedCapture, '0,10,20');
   test('nested loops', results.nestedLoops, '0-0,0-1,1-0,1-1');
@@ -200,4 +200,4 @@ setTimeout(() => {
   test('nested async calls B', results.nestedAsyncB, 'B:0:0,B:0:1,B:1:0,B:1:1');
   test('nested async calls C', results.nestedAsyncC, 'C:0:0,C:0:1,C:1:0,C:1:1');
   summary();
-}, 200);
+});

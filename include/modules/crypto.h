@@ -4,6 +4,6 @@
 #include "types.h"
 
 void init_crypto_module();
-jsval_t crypto_library(struct js *js);
+jsval_t crypto_library(ant_t *js);
 
 #endif

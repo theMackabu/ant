@@ -17,30 +17,31 @@
 #include "errors.h"
 #include "runtime.h"
 #include "internal.h"
+#include "silver/engine.h"
 #include "modules/builtin.h"
 #include "modules/buffer.h"
 #include "modules/collections.h"
 
 static struct {
-  struct js *js;
+  ant_t *js;
   jsval_t handler;
 } signal_handlers[NSIG] = {0};
 
 static void general_signal_handler(int signum) {
   if (signum < 0 || signum >= NSIG) return;
-  struct js *js = signal_handlers[signum].js;
+  ant_t *js = signal_handlers[signum].js;
   jsval_t handler = signal_handlers[signum].handler;
   
   if (js && vtype(handler) != T_UNDEF) {
     jsval_t args[] = {js_mknum(signum)};
-    js_call(js, handler, args, 1);
+    sv_vm_call(js->vm, js, handler, js_mkundef(), args, 1, NULL, false);
   }
   
   exit(0);
 }
 
 // Ant.signal(signal, handler)
-static jsval_t js_signal(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_signal(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "Ant.signal() requires 2 arguments");
   
   int signum = (int)js_getnum(args[0]);
@@ -55,21 +56,15 @@ static jsval_t js_signal(struct js *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-// Ant.gc()
-static jsval_t js_gc_trigger(struct js *js, jsval_t *args, int nargs) {
-  js->needs_gc = true;
-  return js_mkundef();
-}
-
 // Ant.raw.typeof(jsval_t)
-static jsval_t js_raw_typeof(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_raw_typeof(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "Ant.raw.typeof() requires 1 argument");
   const uint8_t type = vtype(args[0]);
   return js_mknum((double)type);
 }
 
 // Ant.sleep(seconds)
-static jsval_t js_sleep(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_sleep(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "Ant.sleep() requires 1 argument");
   unsigned int seconds = (unsigned int)js_getnum(args[0]);
   sleep(seconds);
@@ -77,7 +72,7 @@ static jsval_t js_sleep(struct js *js, jsval_t *args, int nargs) {
 }
 
 // Ant.msleep(milliseconds)
-static jsval_t js_msleep(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_msleep(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "Ant.msleep() requires 1 argument");
   long ms = (long)js_getnum(args[0]);
   struct timespec ts = { .tv_sec = ms / 1000, .tv_nsec = (ms % 1000) * 1000000 };
@@ -87,7 +82,7 @@ static jsval_t js_msleep(struct js *js, jsval_t *args, int nargs) {
 }
 
 // Ant.usleep(microseconds)
-static jsval_t js_usleep(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_usleep(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "Ant.usleep() requires 1 argument");
   useconds_t us = (useconds_t)js_getnum(args[0]);
   usleep(us);
@@ -95,7 +90,7 @@ static jsval_t js_usleep(struct js *js, jsval_t *args, int nargs) {
 }
 
 // Ant.stats()
-static jsval_t js_stats_fn(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_stats_fn(ant_t *js, jsval_t *args, int nargs) {
   (void) args; (void) nargs;
   jsval_t result = js_newobj(js);
   
@@ -121,9 +116,19 @@ static jsval_t js_stats_fn(struct js *js, jsval_t *args, int nargs) {
   js_set(js, intern, "bytes", js_mknum((double)intern_stats.bytes));
   js_set(js, result, "intern", intern);
   
-  if (js->cstk != NULL) {
+  if (js->vm) {
+    sv_vm_t *vm = js->vm;
+    jsval_t vmobj = js_newobj(js);
+    js_set(js, vmobj, "stackSize", js_mknum((double)vm->stack_size));
+    js_set(js, vmobj, "stackUsed", js_mknum((double)vm->sp));
+    js_set(js, vmobj, "maxFrames", js_mknum((double)vm->max_frames));
+    js_set(js, vmobj, "framesUsed", js_mknum((double)(vm->fp + 1)));
+    js_set(js, result, "vm", vmobj);
+  }
+
+  if (js->cstk.base != NULL) {
     volatile char marker;
-    uintptr_t base = (uintptr_t)js->cstk;
+    uintptr_t base = (uintptr_t)js->cstk.base;
     uintptr_t curr = (uintptr_t)&marker;
     size_t used = (base > curr) ? (base - curr) : (curr - base);
     js_set(js, result, "cstack", js_mknum((double)used));
@@ -147,10 +152,9 @@ static jsval_t js_stats_fn(struct js *js, jsval_t *args, int nargs) {
 }
 
 void init_builtin_module() {
-  struct js *js = rt->js;
+  ant_t *js = rt->js;
   jsval_t ant_obj = rt->ant_obj;
 
-  js_set(js, ant_obj, "gc", js_mkfun(js_gc_trigger));
   js_set(js, ant_obj, "stats", js_mkfun(js_stats_fn));
   js_set(js, ant_obj, "signal", js_mkfun(js_signal));
   js_set(js, ant_obj, "sleep", js_mkfun(js_sleep));

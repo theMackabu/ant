@@ -2,6 +2,8 @@
 #include "arena.h"
 #include "internal.h"
 #include "common.h"
+#include "sugar.h"
+#include "silver/engine.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -9,13 +11,23 @@
 #include <time.h>
 #include <setjmp.h>
 
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#include <sanitizer/asan_interface.h>
+#define ANT_HAS_ASAN 1
+#endif
+#endif
+
+#ifndef ANT_HAS_ASAN
+#define ANT_HAS_ASAN 0
+#endif
+
 #ifdef _WIN32
 #include <windows.h>
 static inline void *gc_mmap(size_t size) {
   return VirtualAlloc(NULL, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
 }
 static inline void gc_munmap(void *ptr, size_t size) {
-  (void)size;
   VirtualFree(ptr, 0, MEM_RELEASE);
 }
 #else
@@ -32,23 +44,14 @@ static inline void gc_munmap(void *ptr, size_t size) {
 #define MCO_API extern
 #include "minicoro.h"
 
+uint32_t gc_epoch_counter;
 static uint8_t *gc_scratch_buf = NULL;
+
 static size_t gc_scratch_size = 0;
 static time_t gc_last_run_time = 0;
 
 static bool gc_throttled = false;
 void js_gc_throttle(bool enabled) { gc_throttled = enabled; }
-
-#define FWD_EMPTY ((jsoff_t)~0)
-#define FWD_TOMBSTONE ((jsoff_t)~1)
-
-#ifdef _WIN32
-#define RELEASE_PAGES(p, sz) VirtualAlloc(p, sz, MEM_RESET, PAGE_READWRITE)
-#elif defined(__APPLE__)
-#define RELEASE_PAGES(p, sz) madvise(p, sz, MADV_FREE)
-#else
-#define RELEASE_PAGES(p, sz) madvise(p, sz, MADV_DONTNEED)
-#endif
 
 typedef struct {
   jsoff_t *old_offs;
@@ -76,6 +79,34 @@ typedef struct {
 } gc_ctx_t;
 
 static jsval_t gc_update_val(gc_ctx_t *ctx, jsval_t val);
+static jsval_t gc_apply_val(gc_ctx_t *ctx, jsval_t val);
+
+/* inlined helpers from ant.c */
+static inline bool gc_func_const_count_sane(int n) {
+  return n >= 0 && n <= (1 << 20);
+}
+
+static inline bool gc_upvalue_is_closed(const sv_upvalue_t *uv) {
+  return uv && uv->location == &uv->closed;
+}
+
+static inline bool gc_is_tagged(jsval_t v) {
+  return v > NANBOX_PREFIX;
+}
+
+static inline uint8_t gc_vtype(jsval_t v) {
+  return gc_is_tagged(v) ? ((v >> NANBOX_TYPE_SHIFT) & NANBOX_TYPE_MASK) : 255;
+}
+
+static inline size_t gc_vdata(jsval_t v) {
+  return (size_t)(v & NANBOX_DATA_MASK);
+}
+
+static inline jsval_t gc_mkval(uint8_t type, uint64_t data) {
+  return NANBOX_PREFIX 
+    | ((jsval_t)(type & NANBOX_TYPE_MASK) << NANBOX_TYPE_SHIFT)
+    | (data & NANBOX_DATA_MASK);
+}
 
 static inline void mark_set(gc_ctx_t *ctx, jsoff_t off) {
   jsoff_t idx = off >> 3;
@@ -90,6 +121,50 @@ static inline size_t next_pow2(size_t n) {
   n |= n >> 32;
 #endif
   return n + 1;
+}
+
+static void gc_update_func_constants(gc_ctx_t *ctx, sv_func_t *func, int depth) {
+  if (!func || depth > 1024) return;
+  if (func->gc_epoch == gc_epoch_counter) return;
+  
+  func->gc_epoch = gc_epoch_counter;
+  if (!func->constants || !gc_func_const_count_sane(func->const_count)) return;
+
+  for (int i = 0; i < func->const_count; i++) {
+    jsval_t c = func->constants[i];
+
+    if (vtype(c) == T_CFUNC) {
+      sv_func_t *child = (sv_func_t *)(uintptr_t)vdata(c);
+      gc_update_func_constants(ctx, child, depth + 1);
+      continue;
+    }
+
+    func->constants[i] = gc_update_val(ctx, c);
+  }
+}
+
+static inline void gc_update_closure(gc_ctx_t *ctx, sv_closure_t *closure) {
+  if (!closure) return;
+  if (closure->gc_epoch == gc_epoch_counter) return;
+  
+  closure->gc_epoch = gc_epoch_counter;
+  closure->func_obj = gc_update_val(ctx, closure->func_obj);
+  closure->bound_this = gc_update_val(ctx, closure->bound_this);
+  
+  if (!closure->func) return;
+  gc_update_func_constants(ctx, closure->func, 0);
+  
+  if (!closure->upvalues) return;
+  int n = closure->func->upvalue_count;
+  if (n <= 0 || n > (int)UINT16_MAX) return;
+  
+  for (int i = 0; i < n; i++) {
+    sv_upvalue_t *uv = closure->upvalues[i];
+    if (!gc_upvalue_is_closed(uv)) continue;
+    if (uv->gc_epoch == gc_epoch_counter) continue;
+    uv->gc_epoch = gc_epoch_counter;
+    uv->closed = gc_update_val(ctx, uv->closed);
+  }
 }
 
 static bool fwd_init(gc_forward_table_t *fwd, size_t estimated) {
@@ -268,22 +343,6 @@ static jsoff_t gc_alloc(gc_ctx_t *ctx, size_t size) {
   return off;
 }
 
-static inline bool gc_is_tagged(jsval_t v) {
-  return (v >> 53) == NANBOX_PREFIX_CHK;
-}
-
-static inline uint8_t gc_vtype(jsval_t v) {
-  return gc_is_tagged(v) ? ((v >> NANBOX_TYPE_SHIFT) & NANBOX_TYPE_MASK) : 255;
-}
-
-static inline size_t gc_vdata(jsval_t v) {
-  return (size_t)(v & NANBOX_DATA_MASK);
-}
-
-static inline jsval_t gc_mkval(uint8_t type, uint64_t data) {
-  return NANBOX_PREFIX | ((jsval_t)(type & NANBOX_TYPE_MASK) << NANBOX_TYPE_SHIFT) | (data & NANBOX_DATA_MASK);
-}
-
 static jsoff_t gc_copy_string(gc_ctx_t *ctx, jsoff_t old_off) {
   if (old_off >= ctx->js->brk) return old_off;
   
@@ -347,6 +406,26 @@ static jsoff_t gc_copy_bigint(gc_ctx_t *ctx, jsoff_t old_off) {
   return new_off;
 }
 
+static jsoff_t gc_copy_symbol(gc_ctx_t *ctx, jsoff_t old_off) {
+  if (old_off >= ctx->js->brk) return old_off;
+  
+  jsoff_t new_off = fwd_lookup(&ctx->fwd, old_off);
+  if (new_off != (jsoff_t)~0) return new_off;
+  
+  jsoff_t header = gc_loadoff(ctx->js->mem, old_off);
+  size_t total = (header >> GC_SYM_HEADER_SHIFT) + sizeof(jsoff_t);
+  total = (total + 7) / 8 * 8;
+  
+  new_off = gc_alloc(ctx, total);
+  if (new_off == (jsoff_t)~0) return old_off;
+  
+  memcpy(&ctx->new_mem[new_off], &ctx->js->mem[old_off], total);
+  if (!fwd_add(&ctx->fwd, old_off, new_off)) ctx->failed = true;
+  mark_set(ctx, old_off);
+  
+  return new_off;
+}
+
 static jsoff_t gc_reserve_object(gc_ctx_t *ctx, jsoff_t old_off) {
   if (old_off >= ctx->js->brk) return old_off;
   
@@ -398,8 +477,8 @@ static void gc_process_prop(gc_ctx_t *ctx, jsoff_t old_off) {
   if (new_off == (jsoff_t)~0) return;
   
   jsoff_t header = gc_loadoff(ctx->js->mem, old_off);
-  
   jsoff_t next_prop = header & ~(3ULL | FLAGMASK);
+  
   if (next_prop != 0 && next_prop < ctx->js->brk) {
     jsoff_t new_next = gc_reserve_prop(ctx, next_prop);
     jsoff_t new_header = (new_next & ~3ULL) | (header & (3ULL | FLAGMASK));
@@ -411,7 +490,9 @@ static void gc_process_prop(gc_ctx_t *ctx, jsoff_t old_off) {
   if (!is_slot) {
     jsoff_t key_off = gc_loadoff(ctx->js->mem, old_off + sizeof(jsoff_t));
     if (key_off < ctx->js->brk) {
-      jsoff_t new_key = gc_copy_string(ctx, key_off);
+      jsoff_t key_hdr = gc_loadoff(ctx->js->mem, key_off); jsoff_t new_key;
+      if ((key_hdr & 3) == T_STR) new_key = gc_copy_string(ctx, key_off);
+      else new_key = gc_copy_symbol(ctx, key_off);
       gc_saveoff(ctx->new_mem, new_off + sizeof(jsoff_t), new_key);
     }
   }
@@ -500,7 +581,6 @@ static jsval_t gc_update_val(gc_ctx_t *ctx, jsval_t val) {
   
   switch (type) {
     case T_OBJ:
-    case T_FUNC:
     case T_ARR:
     case T_PROMISE:
     case T_GENERATOR: {
@@ -526,6 +606,17 @@ static jsval_t gc_update_val(gc_ctx_t *ctx, jsval_t val) {
       jsoff_t new_off = gc_copy_bigint(ctx, old_off);
       if (new_off != (jsoff_t)~0) return gc_mkval(type, new_off);
       break;
+    }
+    case T_SYMBOL: {
+      if (old_off >= ctx->js->brk) return val;
+      jsoff_t new_off = gc_copy_symbol(ctx, old_off);
+      if (new_off != (jsoff_t)~0) return gc_mkval(type, new_off);
+      break;
+    }
+    case T_FUNC:
+    case T_CLOSURE: {
+      gc_update_closure(ctx, (sv_closure_t *)(uintptr_t)gc_vdata(val));
+      return val;
     }
     default: break;
   }
@@ -571,18 +662,20 @@ static jsval_t gc_apply_val(gc_ctx_t *ctx, jsval_t val) {
   if (!gc_is_tagged(val)) return val;
   
   uint8_t type = gc_vtype(val);
+  if (type == T_FUNC || type == T_CLOSURE) return val;
+
   jsoff_t old_off = (jsoff_t)gc_vdata(val);
   if (old_off >= ctx->js->brk) return val;
   
   switch (type) {
     case T_OBJ:
-    case T_FUNC:
     case T_ARR:
     case T_PROMISE:
     case T_GENERATOR:
     case T_STR:
     case T_PROP:
-    case T_BIGINT: {
+    case T_BIGINT:
+    case T_SYMBOL: {
       jsoff_t new_off = fwd_lookup(&ctx->fwd, old_off);
       if (new_off != (jsoff_t)~0) return gc_mkval(type, new_off);
       break;
@@ -604,16 +697,87 @@ static jsoff_t gc_weak_off_callback(void *ctx_ptr, jsoff_t old_off) {
   return fwd_lookup(&ctx->fwd, old_off);
 }
 
-static inline bool gc_get_stack_bounds(void *base, uintptr_t *lo, uintptr_t *hi) {
-  if (!base) return false;
-  volatile uint8_t sp_marker;
-  uintptr_t bp = (uintptr_t)base;
-  uintptr_t sp = (uintptr_t)&sp_marker;
-  if (sp < bp) { *lo = sp; *hi = bp; }
-  else         { *lo = bp; *hi = sp; }
-  *lo &= ~(uintptr_t)7;
-  *hi &= ~(uintptr_t)7;
+static inline bool gc_get_stack_bounds(uintptr_t base, uintptr_t sp, uintptr_t *lo, uintptr_t *hi) {
+  if (base == 0 || sp == 0) return false;
+
+  uintptr_t minp = (sp < base) ? sp : base;
+  uintptr_t maxp = (sp < base) ? base : sp;
+
+  uintptr_t aligned_lo = (minp + (uintptr_t)sizeof(uint64_t) - 1u) & ~((uintptr_t)sizeof(uint64_t) - 1u);
+  uintptr_t aligned_hi = maxp & ~((uintptr_t)sizeof(uint64_t) - 1u);
+
+  if (aligned_lo >= aligned_hi) return false;
+  *lo = aligned_lo;
+  *hi = aligned_hi;
   return true;
+}
+
+static inline bool gc_stack_word_readable(uintptr_t addr) {
+#if ANT_HAS_ASAN
+  return __asan_region_is_poisoned((void *)addr, sizeof(uint64_t)) == NULL;
+#else
+  return true;
+#endif
+}
+
+static inline bool gc_off_has_bytes(jsoff_t off, jsoff_t need, jsoff_t brk) {
+  return off <= brk && need <= brk - off;
+}
+
+static inline bool gc_stack_word_valid(gc_ctx_t *ctx, uint8_t type, jsoff_t old_off, jsoff_t old_brk) {
+  if (old_off == 0 || old_off >= old_brk) return false;
+  if (!gc_off_has_bytes(old_off, (jsoff_t)sizeof(jsoff_t), old_brk)) return false;
+
+  jsoff_t header = gc_loadoff(ctx->js->mem, old_off);
+
+  switch (type) {
+    case T_OBJ:
+    case T_ARR:
+    case T_PROMISE:
+    case T_GENERATOR: {
+      if ((header & 3) != T_OBJ) return false;
+      jsoff_t size = esize(header);
+      return size != (jsoff_t)~0 && gc_off_has_bytes(old_off, size, old_brk);
+    }
+    case T_PROP: {
+      if ((header & 3) != T_PROP) return false;
+      jsoff_t size = esize(header);
+      return size != (jsoff_t)~0 && gc_off_has_bytes(old_off, size, old_brk);
+    }
+    case T_STR: {
+      if ((header & 3) != T_STR) return false;
+      if ((header & ROPE_FLAG) != 0)
+        return gc_off_has_bytes(old_off, (jsoff_t)sizeof(rope_node_t), old_brk);
+      jsoff_t size = esize(header);
+      return size != (jsoff_t)~0 && gc_off_has_bytes(old_off, size, old_brk);
+    }
+    case T_BIGINT: {
+      if ((header & GC_BIGINT_HEADER_LOW_MASK) != 0) return false;
+      jsoff_t payload = header >> GC_BIGINT_HEADER_SHIFT;
+      if (payload < 2) return false;
+      
+      jsoff_t total = payload + (jsoff_t)sizeof(jsoff_t);
+      total = (total + 7) & ~(jsoff_t)7;
+      if (!gc_off_has_bytes(old_off, total, old_brk)) return false;
+      
+      jsoff_t sign_off = old_off + (jsoff_t)sizeof(jsoff_t);
+      uint8_t sign = ctx->js->mem[sign_off];
+      if (sign > 1) return false;
+      
+      jsoff_t nul_off = sign_off + payload - 1;
+      return ctx->js->mem[nul_off] == 0;
+    }
+    case T_SYMBOL: {
+      if ((header & GC_SYM_HEADER_LOW_MASK) != 0) return false;
+      jsoff_t payload = header >> GC_SYM_HEADER_SHIFT;
+      if (payload < GC_SYM_HEAP_FIXED) return false;
+      
+      jsoff_t total = payload + (jsoff_t)sizeof(jsoff_t);
+      total = (total + 7) & ~(jsoff_t)7;
+      return gc_off_has_bytes(old_off, total, old_brk);
+    }
+    default: return false;
+  }
 }
 
 __attribute__((noinline))
@@ -621,16 +785,17 @@ static void gc_scan_stack_reserve(gc_ctx_t *ctx) {
   jmp_buf jb;
   if (setjmp(jb) != 0) return;
 
-  uintptr_t lo, hi;
-  if (!gc_get_stack_bounds(ctx->js->cstk, &lo, &hi)) return;
+  volatile uint8_t sp_marker = 0; uintptr_t lo, hi;
+  if (!gc_get_stack_bounds((uintptr_t)ctx->js->cstk.base, (uintptr_t)&sp_marker, &lo, &hi)) return;
 
   jsoff_t old_brk = ctx->js->brk;
 
   for (uintptr_t addr = lo; addr < hi; addr += sizeof(uint64_t)) {
+    if (!gc_stack_word_readable(addr)) continue;
     uint64_t w;
     memcpy(&w, (void *)addr, sizeof(w));
 
-    if ((w >> 53) != NANBOX_PREFIX_CHK) continue;
+    if (w <= NANBOX_PREFIX) continue;
 
     uint8_t type = (w >> NANBOX_TYPE_SHIFT) & NANBOX_TYPE_MASK;
     if (type > T_FFI) continue;
@@ -638,6 +803,7 @@ static void gc_scan_stack_reserve(gc_ctx_t *ctx) {
 
     jsoff_t old_off = (jsoff_t)(w & NANBOX_DATA_MASK);
     if (old_off == 0 || old_off >= old_brk) continue;
+    if (!gc_stack_word_valid(ctx, type, old_off, old_brk)) continue;
 
     if (fwd_lookup(&ctx->fwd, old_off) != (jsoff_t)~0) continue;
     gc_update_val(ctx, w);
@@ -649,16 +815,17 @@ static void gc_scan_stack_update(gc_ctx_t *ctx) {
   jmp_buf jb;
   if (setjmp(jb) != 0) return;
 
-  uintptr_t lo, hi;
-  if (!gc_get_stack_bounds(ctx->js->cstk, &lo, &hi)) return;
+  volatile uint8_t sp_marker = 0; uintptr_t lo, hi;
+  if (!gc_get_stack_bounds((uintptr_t)ctx->js->cstk.base, (uintptr_t)&sp_marker, &lo, &hi)) return;
 
   jsoff_t old_brk = ctx->js->brk;
 
   for (uintptr_t addr = lo; addr < hi; addr += sizeof(uint64_t)) {
+    if (!gc_stack_word_readable(addr)) continue;
     uint64_t w;
     memcpy(&w, (void *)addr, sizeof(w));
 
-    if ((w >> 53) != NANBOX_PREFIX_CHK) continue;
+    if (w <= NANBOX_PREFIX) continue;
 
     uint8_t type = (w >> NANBOX_TYPE_SHIFT) & NANBOX_TYPE_MASK;
     if (type > T_FFI) continue;
@@ -666,6 +833,7 @@ static void gc_scan_stack_update(gc_ctx_t *ctx) {
 
     jsoff_t old_off = (jsoff_t)(w & NANBOX_DATA_MASK);
     if (old_off == 0 || old_off >= old_brk) continue;
+    if (!gc_stack_word_valid(ctx, type, old_off, old_brk)) continue;
 
     jsoff_t new_off = fwd_lookup(&ctx->fwd, old_off);
     if (new_off == (jsoff_t)~0 || new_off == old_off) continue;
@@ -675,22 +843,103 @@ static void gc_scan_stack_update(gc_ctx_t *ctx) {
   }
 }
 
+static void gc_scan_range_reserve(gc_ctx_t *ctx, uintptr_t lo, uintptr_t hi) {
+  jsoff_t old_brk = ctx->js->brk;
+  for (uintptr_t addr = lo; addr < hi; addr += sizeof(uint64_t)) {
+    if (!gc_stack_word_readable(addr)) continue;
+    uint64_t w;
+    memcpy(&w, (void *)addr, sizeof(w));
+    if (w <= NANBOX_PREFIX) continue;
+    uint8_t type = (w >> NANBOX_TYPE_SHIFT) & NANBOX_TYPE_MASK;
+    if (type > T_FFI) continue;
+    if (!((1u << type) & GC_HEAP_TYPE_MASK)) continue;
+    jsoff_t old_off = (jsoff_t)(w & NANBOX_DATA_MASK);
+    if (old_off == 0 || old_off >= old_brk) continue;
+    if (!gc_stack_word_valid(ctx, type, old_off, old_brk)) continue;
+    if (fwd_lookup(&ctx->fwd, old_off) != (jsoff_t)~0) continue;
+    gc_update_val(ctx, w);
+  }
+}
+
+static void gc_scan_range_update(gc_ctx_t *ctx, uintptr_t lo, uintptr_t hi) {
+  jsoff_t old_brk = ctx->js->brk;
+  for (uintptr_t addr = lo; addr < hi; addr += sizeof(uint64_t)) {
+    if (!gc_stack_word_readable(addr)) continue;
+    uint64_t w;
+    memcpy(&w, (void *)addr, sizeof(w));
+    if (w <= NANBOX_PREFIX) continue;
+    uint8_t type = (w >> NANBOX_TYPE_SHIFT) & NANBOX_TYPE_MASK;
+    if (type > T_FFI) continue;
+    if (!((1u << type) & GC_HEAP_TYPE_MASK)) continue;
+    jsoff_t old_off = (jsoff_t)(w & NANBOX_DATA_MASK);
+    if (old_off == 0 || old_off >= old_brk) continue;
+    if (!gc_stack_word_valid(ctx, type, old_off, old_brk)) continue;
+    jsoff_t new_off = fwd_lookup(&ctx->fwd, old_off);
+    if (new_off == (jsoff_t)~0 || new_off == old_off) continue;
+    uint64_t updated = gc_mkval(type, new_off);
+    memcpy((void *)addr, &updated, sizeof(updated));
+  }
+}
+
+static inline void gc_scan_mco_stack(
+  gc_ctx_t *ctx, mco_coro *mco, mco_coro *skip,
+  void (*scan)(gc_ctx_t *, uintptr_t, uintptr_t)
+) {
+  if (!mco || mco == skip) return;
+  if (!mco->stack_base || mco->stack_size == 0) return;
+  uintptr_t lo = (uintptr_t)mco->stack_base;
+  uintptr_t hi = lo + mco->stack_size;
+  scan(ctx, lo, hi);
+}
+
+static void gc_scan_other_stacks_reserve(gc_ctx_t *ctx) {
+  mco_coro *running = mco_running();
+  if (!running) return;
+
+  for (mco_coro *a = running->prev_co; a; a = a->prev_co)
+    gc_scan_mco_stack(ctx, a, running, gc_scan_range_reserve);
+
+  for (coroutine_t *c = pending_coroutines.head; c; c = c->next)
+    gc_scan_mco_stack(ctx, c->mco, running, gc_scan_range_reserve);
+
+  if (ctx->js->cstk.main_base && ctx->js->cstk.main_lo) {
+    uintptr_t lo, hi;
+    if (gc_get_stack_bounds(
+      (uintptr_t)ctx->js->cstk.main_base, 
+      (uintptr_t)ctx->js->cstk.main_lo, &lo, &hi)
+    ) gc_scan_range_reserve(ctx, lo, hi);
+  }
+}
+
+static void gc_scan_other_stacks_update(gc_ctx_t *ctx) {
+  mco_coro *running = mco_running();
+  if (!running) return;
+
+  for (mco_coro *a = running->prev_co; a; a = a->prev_co)
+    gc_scan_mco_stack(ctx, a, running, gc_scan_range_update);
+
+  for (coroutine_t *c = pending_coroutines.head; c; c = c->next)
+    gc_scan_mco_stack(ctx, c->mco, running, gc_scan_range_update);
+
+  if (ctx->js->cstk.main_base && ctx->js->cstk.main_lo) {
+    uintptr_t lo, hi;
+    if (gc_get_stack_bounds(
+      (uintptr_t)ctx->js->cstk.main_base,
+      (uintptr_t)ctx->js->cstk.main_lo, &lo, &hi)
+    ) gc_scan_range_update(ctx, lo, hi);
+  }
+}
+
+static void gc_forward_func_cb(void *ctx_ptr, sv_func_t *func) {
+  gc_ctx_t *ctx = (gc_ctx_t *)ctx_ptr;
+  gc_update_func_constants(ctx, func, 0);
+}
+
 static void gc_compact(ant_t *js) {
   js->needs_gc = false;
   
   if (!js || js->brk == 0) return;
   if (js->brk < 2 * 1024 * 1024) return;
-
-  if (!js->gc_safe) {
-    js->needs_gc = true; return;
-  }
-
-  mco_coro *running = mco_running();
-  int in_coroutine = (running != NULL && running->stack_base != NULL);
-  
-  if (in_coroutine) {
-    js->needs_gc = true; return;
-  }
 
   time_t now = time(NULL);
   if (now != (time_t)-1 && gc_last_run_time != 0) {
@@ -730,7 +979,7 @@ static void gc_compact(ant_t *js) {
   gc_ctx_t ctx;
   ctx.js = js;
   ctx.new_mem = new_mem;
-  ctx.new_brk = 0;
+  ctx.new_brk = NANBOX_HEAP_OFFSET;
   ctx.new_size = (jsoff_t)new_size;
   ctx.mark_bits = mark_bits;
   
@@ -744,7 +993,8 @@ static void gc_compact(ant_t *js) {
   }
   
   ctx.failed = false;
-    
+  gc_epoch_counter++;
+  
   if (js->brk > 0) {
     jsoff_t header_at_0 = gc_loadoff(js->mem, 0);
     if ((header_at_0 & 3) == T_OBJ) gc_reserve_object(&ctx, 0);
@@ -757,6 +1007,7 @@ static void gc_compact(ant_t *js) {
   ); gc_drain_work_queue(&ctx);
   
   gc_scan_stack_reserve(&ctx);
+  gc_scan_other_stacks_reserve(&ctx);
   gc_drain_work_queue(&ctx);
   
   if (ctx.failed) {
@@ -764,7 +1015,10 @@ static void gc_compact(ant_t *js) {
     work_free(&ctx.work);
     fwd_free(&ctx.fwd); return;
   }
-  
+
+  js_gc_visit_frame_funcs(js, gc_forward_func_cb, &ctx);
+  gc_drain_work_queue(&ctx);
+
   js_gc_update_roots(js, 
     gc_apply_off_callback,
     gc_weak_off_callback,
@@ -772,9 +1026,10 @@ static void gc_compact(ant_t *js) {
   &ctx);
   
   gc_scan_stack_update(&ctx);
+  gc_scan_other_stacks_update(&ctx);
   memcpy(js->mem, new_mem, ctx.new_brk);
   js->brk = ctx.new_brk;
-  
+
   free(mark_bits);
   work_free(&ctx.work);
   fwd_free(&ctx.fwd);

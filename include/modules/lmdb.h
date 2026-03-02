@@ -22,7 +22,7 @@ typedef struct {
   bool ready;
 } lmdb_js_types_t;
 
-jsval_t lmdb_library(struct js *js);
+jsval_t lmdb_library(ant_t *js);
 void lmdb_gc_update_roots(GC_OP_VAL_ARGS);
 void cleanup_lmdb_module(void);
 

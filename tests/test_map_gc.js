@@ -18,9 +18,6 @@ console.log('  map.get("key1"):', map.get('key1'));
 console.log('  map.get("key2"):', map.get('key2'));
 console.log('  map.get("key3"):', map.get('key3'));
 
-Ant.gc();
-console.log('\nGC requested');
-
 console.log('\nAfter GC:');
 console.log('  map.size:', map.size);
 console.log('  map.get("key1"):', map.get('key1'));

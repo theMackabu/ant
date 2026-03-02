@@ -5,4 +5,4 @@ function ack(i, j) {
   return ack(i - 1, ack(i, j - 1));
 }
 
-console.log(ack(3, 3));
+console.log(ack(3, 6));

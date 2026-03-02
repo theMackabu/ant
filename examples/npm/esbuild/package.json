@@ -1,0 +1,13 @@
+{
+  "name": "esbuild",
+  "type": "module",
+  "main": "index.ts",
+  "scripts": {
+    "start": "ant index.ts"
+  },
+  "dependencies": {
+    "nanoid": "^5.1.6",
+    "esbuild": "^0.27.3"
+  },
+  "devDependencies": {}
+}

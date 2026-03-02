@@ -18,7 +18,11 @@
 #include "progress.h"
 #include "modules/io.h"
 
+// migrate this file to crprintf for colors
+
 bool pkg_verbose = false;
+
+static void print_bin_callback(const char *name, void *user_data);
 
 static void progress_callback(void *user_data, pkg_phase_t phase, uint32_t current, uint32_t total, const char *message) {
   progress_t *progress = (progress_t *)user_data;
@@ -43,23 +47,33 @@ static void progress_callback(void *user_data, pkg_phase_t phase, uint32_t curre
   progress_update(progress, msg);
 }
 
+static void print_latest_available_hint(pkg_context_t *ctx, const char *pkg_name, const char *installed_version) {
+  if (!ctx || !pkg_name || !installed_version || !pkg_name[0] || !installed_version[0]) return;
+
+  char latest[64];
+  if (pkg_get_latest_available_version(ctx, pkg_name, installed_version, latest, sizeof(latest)) <= 0) return;
+  printf(" %s(v%s available)%s", C_BLUE, latest, C_RESET);
+}
+
 static void print_added_packages(pkg_context_t *ctx) {
   uint32_t count = pkg_get_added_count(ctx);
   uint32_t printed = 0;
-  if (count > 0) printf("\n");
+  if (count > 0) fputc('\n', stdout);
   
   for (uint32_t i = 0; i < count; i++) {
     pkg_added_package_t pkg;
     if (pkg_get_added_package(ctx, i, &pkg) == PKG_OK && pkg.direct) {
-      printf("%s+%s %s%s%s@%s%s%s\n", 
+      printf("%s+%s %s%s%s@%s%s%s", 
         C_GREEN, C_RESET,
         C_BOLD, pkg.name, C_RESET,
         C_DIM, pkg.version, C_RESET
-      ); printed++;
+      );
+      print_latest_available_hint(ctx, pkg.name, pkg.version);
+      fputc('\n', stdout); printed++;
     }
   }
   
-  if (printed > 0) printf("\n");
+  if (printed > 0) fputc('\n', stdout);
 }
 
 static uint64_t timespec_diff_ms(struct timespec *start, struct timespec *end) {
@@ -106,6 +120,56 @@ static void prompt_with_default(const char *prompt, const char *def, char *buf, 
     strncpy(buf, def, buf_size - 1);
     buf[buf_size - 1] = '\0';
   }
+}
+
+static void print_direct_installed_packages(pkg_context_t *ctx) {
+  if (!ctx) return;
+
+  fputc('\n', stdout);
+
+  uint32_t added_count = pkg_get_added_count(ctx);
+  for (uint32_t i = 0; i < added_count; i++) {
+    pkg_added_package_t pkg;
+    if (pkg_get_added_package(ctx, i, &pkg) != PKG_OK || !pkg.direct) continue;
+
+    int bin_count = pkg_list_package_bins("node_modules", pkg.name, NULL, NULL);
+    printf("%sinstalled%s %s%s@%s%s",
+      C_GREEN, C_RESET,
+      C_BOLD, pkg.name, pkg.version, C_RESET);
+    print_latest_available_hint(ctx, pkg.name, pkg.version);
+    if (bin_count > 0) {
+      printf(" with binaries:\n");
+      pkg_list_package_bins("node_modules", pkg.name, print_bin_callback, NULL);
+    } else fputc('\n', stdout);
+  }
+}
+
+static void print_add_summary(pkg_context_t *ctx, const pkg_install_result_t *result, bool include_done_suffix) {
+  if (!ctx || !result) return;
+
+  if (result->packages_installed > 0) {
+    print_direct_installed_packages(ctx);
+
+    printf("\n%s%u%s package%s installed %s[%s",
+      C_GREEN, result->packages_installed, C_RESET,
+      result->packages_installed == 1 ? "" : "s",
+      C_DIM, C_RESET);
+    print_elapsed(result->elapsed_ms);
+    printf("%s]%s", C_DIM, C_RESET);
+    if (include_done_suffix) printf(" done");
+    
+    fputc('\n', stdout);
+    return;
+  }
+
+  printf("\n%sChecked%s %s%u%s installs across %s%u%s packages %s(no changes)%s %s[%s",
+    C_DIM, C_RESET,
+    C_GREEN, result->packages_installed + result->packages_skipped, C_RESET,
+    C_GREEN, result->package_count, C_RESET,
+    C_DIM, C_RESET,
+    C_DIM, C_RESET);
+  print_elapsed(result->elapsed_ms);
+  printf("%s]%s\n", C_DIM, C_RESET);
 }
 
 typedef struct {
@@ -157,6 +221,103 @@ static void print_bin_name(const char *name, void *ud) {
   printf("  %s\n", name);
 }
 
+static void print_pkg_error(pkg_context_t *ctx) {
+  const char *msg = pkg_error_string(ctx);
+  if (!msg || !msg[0]) {
+    fprintf(stderr, "Error: unknown error\n");
+    return;
+  }
+  if (strncmp(msg, "error:", 6) == 0) {
+    fprintf(stderr, "%s\n", msg);
+  } else fprintf(stderr, "Error: %s\n", msg);
+}
+
+static size_t package_name_from_spec(const char *spec, char *out, size_t out_size) {
+  if (!spec || !out || out_size == 0) return 0;
+
+  const char *split = NULL;
+  if (spec[0] == '@') {
+    split = strchr(spec + 1, '@');
+  } else split = strchr(spec, '@');
+
+  size_t len = split ? (size_t)(split - spec) : strlen(spec);
+  if (len == 0 || len >= out_size) return 0;
+
+  memcpy(out, spec, len);
+  out[len] = '\0';
+  return len;
+}
+
+static bool pkg_json_has_dep(yyjson_val *root, const char *section, const char *name) {
+  yyjson_val *deps = yyjson_obj_get(root, section);
+  if (!deps || !yyjson_is_obj(deps)) return false;
+  return yyjson_obj_get(deps, name) != NULL;
+}
+
+static int classify_update_specs(
+  const char *const *package_specs,
+  int count,
+  const char ***deps_specs_out,
+  int *deps_count_out,
+  const char ***dev_specs_out,
+  int *dev_count_out
+) {
+  *deps_specs_out = NULL;
+  *deps_count_out = 0;
+  *dev_specs_out = NULL;
+  *dev_count_out = 0;
+
+  yyjson_read_err err;
+  yyjson_doc *doc = yyjson_read_file("package.json", 0, NULL, &err);
+  if (!doc) {
+    fprintf(stderr, "Error: No package.json found\n");
+    return EXIT_FAILURE;
+  }
+
+  yyjson_val *root = yyjson_doc_get_root(doc);
+  if (!root || !yyjson_is_obj(root)) {
+    yyjson_doc_free(doc);
+    fprintf(stderr, "Error: Invalid package.json format\n");
+    return EXIT_FAILURE;
+  }
+
+  const char **deps_specs = try_oom((size_t)count * sizeof(char *));
+  const char **dev_specs = try_oom((size_t)count * sizeof(char *));
+  if (!deps_specs || !dev_specs) {
+    free((void *)deps_specs);
+    free((void *)dev_specs);
+    yyjson_doc_free(doc);
+    fprintf(stderr, "Error: out of memory\n");
+    return EXIT_FAILURE;
+  }
+
+  int deps_count = 0;
+  int dev_count = 0;
+  for (int i = 0; i < count; i++) {
+    char pkg_name[512];
+    if (package_name_from_spec(package_specs[i], pkg_name, sizeof(pkg_name)) == 0) {
+      free((void *)deps_specs);
+      free((void *)dev_specs);
+      yyjson_doc_free(doc);
+      fprintf(stderr, "Error: Invalid package spec '%s'\n", package_specs[i]);
+      return EXIT_FAILURE;
+    }
+
+    bool in_deps = pkg_json_has_dep(root, "dependencies", pkg_name);
+    bool in_dev = pkg_json_has_dep(root, "devDependencies", pkg_name);
+    if (in_deps) deps_specs[deps_count++] = package_specs[i];
+    else if (in_dev) dev_specs[dev_count++] = package_specs[i];
+    else deps_specs[deps_count++] = package_specs[i];
+  }
+
+  yyjson_doc_free(doc);
+  *deps_specs_out = deps_specs;
+  *deps_count_out = deps_count;
+  *dev_specs_out = dev_specs;
+  *dev_count_out = dev_count;
+  return EXIT_SUCCESS;
+}
+
 bool pkg_script_exists(const char *package_json_path, const char *script_name) {
   char script_cmd[4096];
   return pkg_get_script(package_json_path, script_name, script_cmd, sizeof(script_cmd)) >= 0;
@@ -196,7 +357,7 @@ static int cmd_add_global(const char *const *package_specs, int count) {
   if (!pkg_verbose) progress_stop(&progress);
   
   if (err != PKG_OK) {
-    fprintf(stderr, "Error: %s\n", pkg_error_string(ctx));
+    print_pkg_error(ctx);
     pkg_free(ctx);
     return EXIT_FAILURE;
   }
@@ -245,7 +406,7 @@ static int cmd_remove_global(const char *package_name) {
   }
   
   if (err != PKG_OK) {
-    fprintf(stderr, "Error: %s\n", pkg_error_string(ctx));
+    print_pkg_error(ctx);
     pkg_free(ctx);
     return EXIT_FAILURE;
   }
@@ -290,7 +451,7 @@ static int cmd_install(void) {
     pkg_error_t err = pkg_resolve_and_install(ctx, "package.json", "ant.lockb", "node_modules");
     if (err != PKG_OK) {
       if (!pkg_verbose) { progress_stop(&progress);  }
-      fprintf(stderr, "Error: %s\n", pkg_error_string(ctx));
+      print_pkg_error(ctx);
       pkg_free(ctx);
       return EXIT_FAILURE;
     }
@@ -298,7 +459,7 @@ static int cmd_install(void) {
     pkg_error_t err = pkg_install(ctx, "package.json", "ant.lockb", "node_modules");
     if (err != PKG_OK) {
       if (!pkg_verbose) { progress_stop(&progress);  }
-      fprintf(stderr, "Error: %s\n", pkg_error_string(ctx));
+      print_pkg_error(ctx);
       pkg_free(ctx);
       return EXIT_FAILURE;
     }
@@ -360,6 +521,166 @@ static int cmd_install(void) {
   return EXIT_SUCCESS;
 }
 
+static int cmd_update(void) {
+  print_install_header("update");
+  
+  progress_t progress;
+  
+  if (!pkg_verbose) {
+    progress_start(&progress, "🔍 Resolving [1/1]");
+  }
+  
+  pkg_options_t opts = { 
+    .progress_callback = pkg_verbose ? NULL : progress_callback,
+    .user_data = pkg_verbose ? NULL : &progress,
+    .verbose = pkg_verbose 
+  };
+  pkg_context_t *ctx = pkg_init(&opts);
+  if (!ctx) {
+    fprintf(stderr, "Error: Failed to initialize package manager\n");
+    return EXIT_FAILURE;
+  }
+
+  struct stat st;
+  if (stat("package.json", &st) != 0) {
+    if (!pkg_verbose) progress_stop(&progress);
+    fprintf(stderr, "Error: No package.json found\n");
+    pkg_free(ctx);
+    return EXIT_FAILURE;
+  }
+
+  pkg_error_t err = pkg_resolve_and_install(ctx, "package.json", "ant.lockb", "node_modules");
+  if (err != PKG_OK) {
+    if (!pkg_verbose) progress_stop(&progress);
+    print_pkg_error(ctx);
+    pkg_free(ctx);
+    return EXIT_FAILURE;
+  }
+  
+  if (!pkg_verbose) {
+    progress_stop(&progress);
+  }
+
+  pkg_install_result_t result;
+  if (pkg_get_install_result(ctx, &result) == PKG_OK) {
+    if (result.packages_installed > 0) {
+      print_added_packages(ctx);
+      printf("%s%u%s package%s installed", 
+        C_GREEN, result.packages_installed, C_RESET,
+        result.packages_installed == 1 ? "" : "s");
+      if (result.cache_hits > 0) {
+        printf(" %s(%u cached)%s", C_DIM, result.cache_hits, C_RESET);
+      }
+      printf(" %s[%s", C_DIM, C_RESET);
+      print_elapsed(result.elapsed_ms);
+      printf("%s]%s\n", C_DIM, C_RESET);
+    } else {
+      printf("\n%sChecked%s %s%u%s installs across %s%u%s packages %s(no changes)%s %s[%s",
+        C_DIM, C_RESET,
+        C_GREEN, result.packages_installed + result.packages_skipped, C_RESET,
+        C_GREEN, result.package_count, C_RESET,
+        C_DIM, C_RESET,
+        C_DIM, C_RESET);
+      print_elapsed(result.elapsed_ms);
+      printf("%s]%s\n", C_DIM, C_RESET);
+    }
+  }
+
+  if (pkg_discover_lifecycle_scripts(ctx, "node_modules") == PKG_OK) {
+    uint32_t script_count = pkg_get_lifecycle_script_count(ctx);
+    if (script_count > 0) {
+      printf("\n%s%u%s package%s need%s to run lifecycle scripts:\n",
+        C_YELLOW, script_count, C_RESET,
+        script_count == 1 ? "" : "s",
+        script_count == 1 ? "s" : "");
+      
+      for (uint32_t i = 0; i < script_count; i++) {
+        pkg_lifecycle_script_t script;
+        if (pkg_get_lifecycle_script(ctx, i, &script) == PKG_OK) {
+          printf("  %s•%s %s%s%s %s(%s)%s\n", 
+            C_DIM, C_RESET,
+            C_CYAN, script.name, C_RESET,
+            C_DIM, script.script, C_RESET);
+        }
+      }
+      
+      printf("\nRun: %sant trust <pkg>%s or %sant trust --all%s\n", C_DIM, C_RESET, C_DIM, C_RESET);
+    }
+  }
+
+  pkg_free(ctx);
+  return EXIT_SUCCESS;
+}
+
+static int cmd_update_many(const char *const *package_specs, int count) {
+  print_install_header("update");
+
+  const char **deps_specs = NULL;
+  const char **dev_specs = NULL;
+  int deps_count = 0;
+  int dev_count = 0;
+  if (classify_update_specs(package_specs, count, &deps_specs, &deps_count, &dev_specs, &dev_count) != EXIT_SUCCESS) {
+    return EXIT_FAILURE;
+  }
+
+  char resolve_msg[64];
+  snprintf(resolve_msg, sizeof(resolve_msg), "🔍 Resolving [%d/%d]", count, count);
+  
+  progress_t progress;
+  if (!pkg_verbose) {
+    progress_start(&progress, resolve_msg);
+  }
+  
+  pkg_options_t opts = {
+    .progress_callback = pkg_verbose ? NULL : progress_callback,
+    .user_data = pkg_verbose ? NULL : &progress,
+    .verbose = pkg_verbose
+  };
+  pkg_context_t *ctx = pkg_init(&opts);
+  if (!ctx) {
+    free((void *)deps_specs);
+    free((void *)dev_specs);
+    if (!pkg_verbose) progress_stop(&progress);
+    fprintf(stderr, "Error: Failed to initialize package manager\n");
+    return EXIT_FAILURE;
+  }
+
+  pkg_error_t err = PKG_OK;
+  if (deps_count > 0) {
+    err = pkg_add_many(ctx, "package.json", deps_specs, (uint32_t)deps_count, false);
+  }
+  if (err == PKG_OK && dev_count > 0) {
+    err = pkg_add_many(ctx, "package.json", dev_specs, (uint32_t)dev_count, true);
+  }
+  free((void *)deps_specs);
+  free((void *)dev_specs);
+
+  if (err != PKG_OK) {
+    if (!pkg_verbose) progress_stop(&progress);
+    print_pkg_error(ctx);
+    pkg_free(ctx);
+    return EXIT_FAILURE;
+  }
+
+  err = pkg_resolve_and_install(ctx, "package.json", "ant.lockb", "node_modules");
+  if (err != PKG_OK) {
+    if (!pkg_verbose) progress_stop(&progress);
+    print_pkg_error(ctx);
+    pkg_free(ctx);
+    return EXIT_FAILURE;
+  }
+  
+  if (!pkg_verbose) progress_stop(&progress);
+
+  pkg_install_result_t result;
+  if (pkg_get_install_result(ctx, &result) == PKG_OK) {
+    print_add_summary(ctx, &result, true);
+  }
+
+  pkg_free(ctx);
+  return EXIT_SUCCESS;
+}
+
 static int cmd_add(const char *const *package_specs, int count, bool dev) {
   print_install_header(dev ? "add -D" : "add");
   
@@ -385,7 +706,7 @@ static int cmd_add(const char *const *package_specs, int count, bool dev) {
   pkg_error_t err = pkg_add_many(ctx, "package.json", package_specs, (uint32_t)count, dev);
   if (err != PKG_OK) {
     if (!pkg_verbose) { progress_stop(&progress);  }
-    fprintf(stderr, "Error: %s\n", pkg_error_string(ctx));
+    print_pkg_error(ctx);
     pkg_free(ctx);
     return EXIT_FAILURE;
   }
@@ -393,7 +714,7 @@ static int cmd_add(const char *const *package_specs, int count, bool dev) {
   err = pkg_resolve_and_install(ctx, "package.json", "ant.lockb", "node_modules");
   if (err != PKG_OK) {
     if (!pkg_verbose) { progress_stop(&progress);  }
-    fprintf(stderr, "Error: %s\n", pkg_error_string(ctx));
+    print_pkg_error(ctx);
     pkg_free(ctx);
     return EXIT_FAILURE;
   }
@@ -402,32 +723,7 @@ static int cmd_add(const char *const *package_specs, int count, bool dev) {
 
   pkg_install_result_t result;
   if (pkg_get_install_result(ctx, &result) == PKG_OK) {
-    printf("\n");
-    
-    uint32_t added_count = pkg_get_added_count(ctx);
-    for (uint32_t i = 0; i < added_count; i++) {
-      pkg_added_package_t pkg;
-      if (pkg_get_added_package(ctx, i, &pkg) == PKG_OK && pkg.direct) {
-        int bin_count = pkg_list_package_bins("node_modules", pkg.name, NULL, NULL);
-        if (bin_count > 0) {
-          printf("%sinstalled%s %s%s@%s%s with binaries:\n", 
-            C_GREEN, C_RESET,
-            C_BOLD, pkg.name, pkg.version, C_RESET);
-          pkg_list_package_bins("node_modules", pkg.name, print_bin_callback, NULL);
-        } else {
-          printf("%sinstalled%s %s%s@%s%s\n", 
-            C_GREEN, C_RESET,
-            C_BOLD, pkg.name, pkg.version, C_RESET);
-        }
-      }
-    }
-    
-    printf("\n%s%u%s package%s installed %s[%s",
-      C_GREEN, result.packages_installed, C_RESET,
-      result.packages_installed == 1 ? "" : "s",
-      C_DIM, C_RESET);
-    print_elapsed(result.elapsed_ms);
-    printf("%s]%s\n", C_DIM, C_RESET);
+    print_add_summary(ctx, &result, false);
   }
 
   pkg_free(ctx);
@@ -456,7 +752,7 @@ static int cmd_remove(const char *package_name) {
   pkg_error_t err = pkg_remove(ctx, "package.json", package_name);
   if (err != PKG_OK && err != PKG_NOT_FOUND) {
     if (!pkg_verbose) { progress_stop(&progress);  }
-    fprintf(stderr, "Error: %s\n", pkg_error_string(ctx));
+    print_pkg_error(ctx);
     pkg_free(ctx);
     return EXIT_FAILURE;
   }
@@ -473,7 +769,7 @@ static int cmd_remove(const char *package_name) {
   err = pkg_resolve_and_install(ctx, "package.json", "ant.lockb", "node_modules");
   if (err != PKG_OK) {
     if (!pkg_verbose) { progress_stop(&progress);  }
-    fprintf(stderr, "Error: %s\n", pkg_error_string(ctx));
+    print_pkg_error(ctx);
     pkg_free(ctx);
     return EXIT_FAILURE;
   }
@@ -641,7 +937,7 @@ static int cmd_init(void) {
     prompt_with_default("version", "1.0.0", version, sizeof(version));
     prompt_with_default("entry point", "index.js", entry, sizeof(entry));
     
-    printf("\n");
+    fputc('\n', stdout);
   } else {
     strncpy(name, default_name, sizeof(name) - 1);
     strncpy(version, "1.0.0", sizeof(version) - 1);
@@ -721,7 +1017,7 @@ static int cmd_why(const char *package_name) {
     printf("  %s(no dependents)%s\n", C_DIM, C_RESET);
   }
   
-  printf("\n");
+  fputc('\n', stdout);
   return EXIT_SUCCESS;
 }
 
@@ -773,6 +1069,29 @@ int pkg_cmd_install(int argc, char **argv) {
     exitcode = global->count > 0 
       ? cmd_add_global(pkgs->sval, pkgs->count) 
       : cmd_add(pkgs->sval, pkgs->count, is_dev);
+  }
+  
+  arg_freetable(argtable, sizeof(argtable)/sizeof(argtable[0]));
+  return exitcode;
+}
+
+int pkg_cmd_update(int argc, char **argv) {
+  struct arg_str *pkgs = arg_strn(NULL, NULL, "<package[@version]>", 0, 100, NULL);
+  struct arg_lit *help = arg_lit0("h", "help", "display help");
+  struct arg_end *end = arg_end(5);
+  
+  void *argtable[] = { pkgs, help, end };
+  int nerrors = arg_parse(argc, argv, argtable);
+  
+  int exitcode = EXIT_SUCCESS;
+  if (help->count > 0) {
+    printf("Usage: ant update [packages...] [--verbose]\n\n");
+    printf("Re-resolve all dependencies, or upgrade specific packages in place.\n");
+  } else if (nerrors > 0) {
+    arg_print_errors(stdout, end, "ant update");
+    exitcode = EXIT_FAILURE;
+  } else {
+    exitcode = pkgs->count > 0 ? cmd_update_many(pkgs->sval, pkgs->count) : cmd_update();
   }
   
   arg_freetable(argtable, sizeof(argtable)/sizeof(argtable[0]));
@@ -863,7 +1182,7 @@ int pkg_cmd_trust(int argc, char **argv) {
 
 int pkg_cmd_run(int argc, char **argv) {
   if (argc < 2) {
-    printf("Usage: ant run <script> [-- args...]\n\n");
+    printf("Usage: ant run <script> [args...]\n\n");
     printf("Run a script from package.json\n\n");
     printf("Available scripts:\n");
     
@@ -890,31 +1209,24 @@ int pkg_cmd_run(int argc, char **argv) {
   
   char extra_args[4096] = {0};
   int extra_args_len = 0;
-  bool found_separator = false;
   
-  for (int i = 2; i < argc; i++) {
-    if (!found_separator && strcmp(argv[i], "--") == 0) {
-      found_separator = true;
-      continue;
-    }
-    if (found_separator) {
-      if (extra_args_len > 0) {
-        extra_args[extra_args_len++] = ' ';
-      }
-      size_t arg_len = strlen(argv[i]);
-      if ((size_t)extra_args_len + arg_len < sizeof(extra_args) - 1) {
-        memcpy(extra_args + extra_args_len, argv[i], arg_len);
-        extra_args_len += (int)arg_len;
-      }
+  int arg_start = 2;
+  if (arg_start < argc && strcmp(argv[arg_start], "--") == 0) arg_start++;
+
+  for (int i = arg_start; i < argc; i++) {
+    if (extra_args_len > 0) extra_args[extra_args_len++] = ' ';
+    size_t arg_len = strlen(argv[i]);
+    if ((size_t)extra_args_len + arg_len < sizeof(extra_args) - 1) {
+      memcpy(extra_args + extra_args_len, argv[i], arg_len);
+      extra_args_len += (int)arg_len;
     }
   }
+  
   extra_args[extra_args_len] = '\0';
-  
   printf("%s$%s %s%s%s", C_MAGENTA, C_RESET, C_BOLD, script_cmd, C_RESET);
-  if (extra_args_len > 0) {
-    printf(" %s", extra_args);
-  }
-  printf("\n");
+  
+  if (extra_args_len > 0) printf(" %s", extra_args);
+  fputc('\n', stdout);
   
   pkg_script_result_t result = {0};
   pkg_error_t err = pkg_run_script(
@@ -1088,7 +1400,7 @@ static int cmd_info(const char *package_spec) {
   pkg_info_t info;
   pkg_error_t err = pkg_info(ctx, package_spec, &info);
   if (err != PKG_OK) {
-    fprintf(stderr, "Error: %s\n", pkg_error_string(ctx));
+    print_pkg_error(ctx);
     pkg_free(ctx);
     return EXIT_FAILURE;
   }
@@ -1142,12 +1454,11 @@ static int cmd_info(const char *package_spec) {
       if (pkg_info_get_maintainer(ctx, i, &maint) == PKG_OK) {
         printf("- %s", maint.name);
         if (maint.email[0]) printf(" <%s>", maint.email);
-        printf("\n");
+        fputc('\n', stdout);
       }
     }
   }
   
-  // Published date
   if (info.published[0]) printf("\n%sPublished:%s %s\n", C_BOLD, C_RESET, info.published);
   
   pkg_free(ctx);

@@ -1,4 +1,6 @@
 #include "utils.h"
+#include "base64.h"
+#include "escape.h"
 #include "esm/remote.h"
 
 #include <stdio.h>
@@ -35,6 +37,58 @@ typedef struct {
 
 bool esm_is_url(const char *spec) {
   return (strncmp(spec, "http://", 7) == 0 || strncmp(spec, "https://", 8) == 0);
+}
+
+bool esm_is_data_url(const char *spec) {
+  return strncmp(spec, "data:", 5) == 0;
+}
+
+static char *esm_percent_decode(const char *src, size_t src_len, size_t *out_len) {
+  char *out = malloc(src_len + 1);
+  if (!out) return NULL;
+
+  size_t j = 0;
+  for (size_t i = 0; i < src_len; i++) {
+    if (src[i] == '%' && i + 2 < src_len &&
+        is_xdigit(src[i + 1]) && is_xdigit(src[i + 2])) {
+      out[j++] = (char)((unhex(src[i + 1]) << 4) | unhex(src[i + 2]));
+      i += 2;
+    } else out[j++] = src[i];
+  }
+
+  out[j] = '\0';
+  if (out_len) *out_len = j;
+  return out;
+}
+
+char *esm_parse_data_url(const char *url, size_t *out_len) {
+  if (!esm_is_data_url(url)) return NULL;
+
+  const char *comma = strchr(url + 5, ',');
+  if (!comma) return NULL;
+
+  const char *header = url + 5;
+  size_t header_len = (size_t)(comma - header);
+  
+  const char *body = comma + 1;
+  size_t body_len = strlen(body);
+
+  bool is_base64 = (header_len >= 7 && strncmp(comma - 7, ";base64", 7) == 0);
+  if (is_base64) {
+    uint8_t *decoded = ant_base64_decode(body, body_len, out_len);
+    if (!decoded) return NULL;
+    
+    char *result = malloc(*out_len + 1);
+    if (!result) { free(decoded); return NULL; }
+    
+    memcpy(result, decoded, *out_len);
+    result[*out_len] = '\0';
+    free(decoded);
+    
+    return result;
+  }
+
+  return esm_percent_decode(body, body_len, out_len);
 }
 
 static int is_path_sep(char c) {
@@ -126,9 +180,9 @@ static char *esm_get_cache_path(const char *url) {
   if (!cache_path) return NULL;
 
 #ifdef _WIN32
-  snprintf(cache_path, len, "%s\\.ant\\esm\\%016llx", home, (unsigned long long)hash);
+  snprintf(cache_path, len, "%s\\.ant\\remote\\%016llx", home, (unsigned long long)hash);
 #else
-  snprintf(cache_path, len, "%s/.ant/esm/%016llx", home, (unsigned long long)hash);
+  snprintf(cache_path, len, "%s/.ant/remote/%016llx", home, (unsigned long long)hash);
 #endif
   return cache_path;
 }
@@ -362,6 +416,7 @@ char *esm_resolve_url(const char *specifier, const char *base_url) {
 }
 
 char *esm_resolve(const char *specifier, const char *base_path, char FILE_RESOLVER) {
+  if (esm_is_data_url(specifier)) return strdup(specifier);
   if (esm_is_url(specifier) || esm_is_url(base_path)) return esm_resolve_url(specifier, base_path);
   return file_resolver(specifier, base_path);
 }

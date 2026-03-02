@@ -16,3 +16,5 @@
 /// <reference path="modules/events.d.ts" />
 /// <reference path="modules/ffi.d.ts" />
 /// <reference path="modules/shell.d.ts" />
+/// <reference path="modules/util.d.ts" />
+/// <reference path="modules/worker_threads.d.ts" />

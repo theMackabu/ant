@@ -14,7 +14,9 @@
 #include "arena.h"
 #include "base64.h"
 #include "internal.h"
+#include "silver/engine.h"
 #include "runtime.h"
+#include "descriptors.h"
 
 #include "modules/buffer.h"
 #include "modules/symbol.h"
@@ -96,26 +98,31 @@ static void *ta_arena_alloc(size_t size) {
   return ptr;
 }
 
-static jsval_t js_arraybuffer_slice(struct js *js, jsval_t *args, int nargs);
-static jsval_t js_typedarray_slice(struct js *js, jsval_t *args, int nargs);
-static jsval_t js_typedarray_subarray(struct js *js, jsval_t *args, int nargs);
-static jsval_t js_typedarray_fill(struct js *js, jsval_t *args, int nargs);
-static jsval_t js_typedarray_toReversed(struct js *js, jsval_t *args, int nargs);
-static jsval_t js_typedarray_toSorted(struct js *js, jsval_t *args, int nargs);
-static jsval_t js_typedarray_with(struct js *js, jsval_t *args, int nargs);
-static jsval_t js_dataview_getUint8(struct js *js, jsval_t *args, int nargs);
-static jsval_t js_dataview_setUint8(struct js *js, jsval_t *args, int nargs);
-static jsval_t js_dataview_getInt16(struct js *js, jsval_t *args, int nargs);
-static jsval_t js_dataview_setInt16(struct js *js, jsval_t *args, int nargs);
-static jsval_t js_dataview_getInt32(struct js *js, jsval_t *args, int nargs);
-static jsval_t js_dataview_setInt32(struct js *js, jsval_t *args, int nargs);
-static jsval_t js_dataview_getFloat32(struct js *js, jsval_t *args, int nargs);
-static jsval_t js_dataview_setFloat32(struct js *js, jsval_t *args, int nargs);
-static jsval_t js_dataview_getFloat64(struct js *js, jsval_t *args, int nargs);
-static jsval_t js_dataview_setFloat64(struct js *js, jsval_t *args, int nargs);
-static jsval_t js_buffer_toString(struct js *js, jsval_t *args, int nargs);
-static jsval_t js_buffer_toBase64(struct js *js, jsval_t *args, int nargs);
-static jsval_t js_buffer_write(struct js *js, jsval_t *args, int nargs);
+static jsval_t js_arraybuffer_slice(ant_t *js, jsval_t *args, int nargs);
+static jsval_t js_typedarray_slice(ant_t *js, jsval_t *args, int nargs);
+static jsval_t js_typedarray_subarray(ant_t *js, jsval_t *args, int nargs);
+static jsval_t js_typedarray_fill(ant_t *js, jsval_t *args, int nargs);
+static jsval_t js_typedarray_at(ant_t *js, jsval_t *args, int nargs);
+static jsval_t js_typedarray_set(ant_t *js, jsval_t *args, int nargs);
+static jsval_t js_typedarray_copyWithin(ant_t *js, jsval_t *args, int nargs);
+static jsval_t js_typedarray_toReversed(ant_t *js, jsval_t *args, int nargs);
+static jsval_t js_typedarray_toSorted(ant_t *js, jsval_t *args, int nargs);
+static jsval_t js_typedarray_with(ant_t *js, jsval_t *args, int nargs);
+static jsval_t js_dataview_getUint8(ant_t *js, jsval_t *args, int nargs);
+static jsval_t js_dataview_setUint8(ant_t *js, jsval_t *args, int nargs);
+static jsval_t js_dataview_getInt16(ant_t *js, jsval_t *args, int nargs);
+static jsval_t js_dataview_setInt16(ant_t *js, jsval_t *args, int nargs);
+static jsval_t js_dataview_getInt32(ant_t *js, jsval_t *args, int nargs);
+static jsval_t js_dataview_setInt32(ant_t *js, jsval_t *args, int nargs);
+static jsval_t js_dataview_getFloat32(ant_t *js, jsval_t *args, int nargs);
+static jsval_t js_dataview_setFloat32(ant_t *js, jsval_t *args, int nargs);
+static jsval_t js_dataview_getFloat64(ant_t *js, jsval_t *args, int nargs);
+static jsval_t js_dataview_setFloat64(ant_t *js, jsval_t *args, int nargs);
+static jsval_t js_typedarray_toString(ant_t *js, jsval_t *args, int nargs);
+static jsval_t js_buffer_slice(ant_t *js, jsval_t *args, int nargs);
+static jsval_t js_buffer_toString(ant_t *js, jsval_t *args, int nargs);
+static jsval_t js_buffer_toBase64(ant_t *js, jsval_t *args, int nargs);
+static jsval_t js_buffer_write(ant_t *js, jsval_t *args, int nargs);
 
 ArrayBufferData *create_array_buffer_data(size_t length) {
   ArrayBufferData *data = ant_calloc(sizeof(ArrayBufferData) + length);
@@ -164,8 +171,44 @@ static size_t get_element_size(TypedArrayType type) {
   L_8: return 8;
 }
 
-// ArrayBuffer constructor
-static jsval_t js_arraybuffer_constructor(struct js *js, jsval_t *args, int nargs) {
+static const char *typedarray_type_name(TypedArrayType type) {
+switch (type) {
+  case TYPED_ARRAY_INT8: return "Int8Array";
+  case TYPED_ARRAY_UINT8: return "Uint8Array";
+  case TYPED_ARRAY_UINT8_CLAMPED: return "Uint8ClampedArray";
+  case TYPED_ARRAY_INT16: return "Int16Array";
+  case TYPED_ARRAY_UINT16: return "Uint16Array";
+  case TYPED_ARRAY_INT32: return "Int32Array";
+  case TYPED_ARRAY_UINT32: return "Uint32Array";
+  case TYPED_ARRAY_FLOAT32: return "Float32Array";
+  case TYPED_ARRAY_FLOAT64: return "Float64Array";
+  case TYPED_ARRAY_BIGINT64: return "BigInt64Array";
+  case TYPED_ARRAY_BIGUINT64: return "BigUint64Array";
+  default: return "Uint8Array";
+}}
+
+static jsval_t create_typed_array_like(
+  ant_t *js,
+  jsval_t this_val,
+  TypedArrayType type,
+  ArrayBufferData *buffer,
+  size_t byte_offset,
+  size_t length
+) {
+  jsval_t ab_obj = create_arraybuffer_obj(js, buffer);
+  jsval_t out = create_typed_array_with_buffer(
+    js,type, buffer, byte_offset,
+    length, typedarray_type_name(type), ab_obj
+  );
+  
+  if (is_err(out)) return out;
+  jsval_t proto = js_get_proto(js, this_val);
+  if (is_special_object(proto)) js_set_proto(js, out, proto);
+  
+  return out;
+}
+
+static jsval_t js_arraybuffer_constructor(ant_t *js, jsval_t *args, int nargs) {
   if (vtype(js->new_target) == T_UNDEF) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "ArrayBuffer constructor requires 'new'");
   }
@@ -190,7 +233,7 @@ static jsval_t js_arraybuffer_constructor(struct js *js, jsval_t *args, int narg
 }
 
 // ArrayBuffer.prototype.slice(begin, end)
-static jsval_t js_arraybuffer_slice(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_arraybuffer_slice(ant_t *js, jsval_t *args, int nargs) {
   jsval_t this_val = js_getthis(js);
   jsval_t data_val = js_get_slot(js, this_val, SLOT_BUFFER);
   
@@ -228,7 +271,7 @@ static jsval_t js_arraybuffer_slice(struct js *js, jsval_t *args, int nargs) {
 }
 
 // ArrayBuffer.prototype.transfer(newLength)
-static jsval_t js_arraybuffer_transfer(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_arraybuffer_transfer(ant_t *js, jsval_t *args, int nargs) {
   jsval_t this_val = js_getthis(js);
   jsval_t data_val = js_get_slot(js, this_val, SLOT_BUFFER);
   
@@ -273,12 +316,12 @@ static jsval_t js_arraybuffer_transfer(struct js *js, jsval_t *args, int nargs) 
 }
 
 // ArrayBuffer.prototype.transferToFixedLength(newLength)
-static jsval_t js_arraybuffer_transferToFixedLength(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_arraybuffer_transferToFixedLength(ant_t *js, jsval_t *args, int nargs) {
   return js_arraybuffer_transfer(js, args, nargs);
 }
 
 // ArrayBuffer.prototype.detached getter
-static jsval_t js_arraybuffer_detached_getter(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_arraybuffer_detached_getter(ant_t *js, jsval_t *args, int nargs) {
   jsval_t this_val = js_getthis(js);
   jsval_t data_val = js_get_slot(js, this_val, SLOT_BUFFER);
   if (vtype(data_val) != T_NUM) return js_false;
@@ -289,7 +332,7 @@ static jsval_t js_arraybuffer_detached_getter(struct js *js, jsval_t *args, int 
   return js_bool(data->is_detached);
 }
 
-static jsval_t typedarray_index_getter(struct js *js, jsval_t obj, const char *key, size_t key_len) {
+static jsval_t typedarray_index_getter(ant_t *js, jsval_t obj, const char *key, size_t key_len) {
   if (key_len == 0 || key_len > 10) return js_mkundef();
   
   size_t index = 0;
@@ -327,7 +370,7 @@ static jsval_t typedarray_index_getter(struct js *js, jsval_t obj, const char *k
   L_DONE:    return js_mknum(value);
 }
 
-static bool typedarray_index_setter(struct js *js, jsval_t obj, const char *key, size_t key_len, jsval_t value) {
+static bool typedarray_index_setter(ant_t *js, jsval_t obj, const char *key, size_t key_len, jsval_t value) {
   if (key_len == 0 || key_len > 10) return false;
   
   size_t index = 0;
@@ -365,7 +408,53 @@ static bool typedarray_index_setter(struct js *js, jsval_t obj, const char *key,
   S_DONE:    return true;
 }
 
-jsval_t create_arraybuffer_obj(struct js *js, ArrayBufferData *buffer) {
+static bool typedarray_read_number(const TypedArrayData *ta_data, size_t index, double *out) {
+  if (!ta_data || !ta_data->buffer || ta_data->buffer->is_detached || index >= ta_data->length) return false;
+  uint8_t *data = ta_data->buffer->data + ta_data->byte_offset;
+
+  static const void *dispatch[] = {
+    &&R_INT8, &&R_UINT8, &&R_UINT8, &&R_INT16, &&R_UINT16,
+    &&R_INT32, &&R_UINT32, &&R_FLOAT32, &&R_FLOAT64, &&R_FAIL, &&R_FAIL
+  };
+
+  if (ta_data->type > TYPED_ARRAY_BIGUINT64) goto R_FAIL;
+  goto *dispatch[ta_data->type];
+
+  R_INT8:    *out = (double)((int8_t *)data)[index];   return true;
+  R_UINT8:   *out = (double)data[index];               return true;
+  R_INT16:   *out = (double)((int16_t *)data)[index];  return true;
+  R_UINT16:  *out = (double)((uint16_t *)data)[index]; return true;
+  R_INT32:   *out = (double)((int32_t *)data)[index];  return true;
+  R_UINT32:  *out = (double)((uint32_t *)data)[index]; return true;
+  R_FLOAT32: *out = (double)((float *)data)[index];    return true;
+  R_FLOAT64: *out = ((double *)data)[index];           return true;
+  R_FAIL:    return false;
+}
+
+static bool typedarray_write_number(TypedArrayData *ta_data, size_t index, double value) {
+  if (!ta_data || !ta_data->buffer || ta_data->buffer->is_detached || index >= ta_data->length) return false;
+  uint8_t *data = ta_data->buffer->data + ta_data->byte_offset;
+
+  static const void *dispatch[] = {
+    &&W_INT8, &&W_UINT8, &&W_UINT8, &&W_INT16, &&W_UINT16,
+    &&W_INT32, &&W_UINT32, &&W_FLOAT32, &&W_FLOAT64, &&W_FAIL, &&W_FAIL
+  };
+
+  if (ta_data->type > TYPED_ARRAY_BIGUINT64) goto W_FAIL;
+  goto *dispatch[ta_data->type];
+
+  W_INT8:    ((int8_t *)data)[index] = (int8_t)value;     return true;
+  W_UINT8:   data[index] = (uint8_t)value;                return true;
+  W_INT16:   ((int16_t *)data)[index] = (int16_t)value;   return true;
+  W_UINT16:  ((uint16_t *)data)[index] = (uint16_t)value; return true;
+  W_INT32:   ((int32_t *)data)[index] = (int32_t)value;   return true;
+  W_UINT32:  ((uint32_t *)data)[index] = (uint32_t)value; return true;
+  W_FLOAT32: ((float *)data)[index] = (float)value;       return true;
+  W_FLOAT64: ((double *)data)[index] = value;             return true;
+  W_FAIL:    return false;
+}
+
+jsval_t create_arraybuffer_obj(ant_t *js, ArrayBufferData *buffer) {
   jsval_t ab_obj = js_mkobj(js);
   jsval_t ab_proto = js_get_ctor_proto(js, "ArrayBuffer", 11);
   if (is_special_object(ab_proto)) js_set_proto(js, ab_obj, ab_proto);
@@ -378,7 +467,7 @@ jsval_t create_arraybuffer_obj(struct js *js, ArrayBufferData *buffer) {
 }
 
 jsval_t create_typed_array_with_buffer(
-  struct js *js, TypedArrayType type, ArrayBufferData *buffer,
+  ant_t *js, TypedArrayType type, ArrayBufferData *buffer,
   size_t byte_offset, size_t length, const char *type_name, jsval_t arraybuffer_obj
 ) {
   TypedArrayData *ta_data = ta_arena_alloc(sizeof(TypedArrayData));
@@ -410,7 +499,7 @@ jsval_t create_typed_array_with_buffer(
 }
 
 jsval_t create_typed_array(
-  struct js *js, TypedArrayType type, ArrayBufferData *buffer,
+  ant_t *js, TypedArrayType type, ArrayBufferData *buffer,
   size_t byte_offset, size_t length, const char *type_name
 ) {
   jsval_t ab_obj = create_arraybuffer_obj(js, buffer);
@@ -424,7 +513,7 @@ typedef struct {
   size_t capacity;
 } iter_collect_ctx_t;
 
-static bool iter_collect_callback(struct js *js, jsval_t value, void *udata) {
+static bool iter_collect_callback(ant_t *js, jsval_t value, void *udata) {
   (void)js;
   iter_collect_ctx_t *ctx = (iter_collect_ctx_t *)udata;
   if (ctx->length >= ctx->capacity) {
@@ -437,7 +526,7 @@ static bool iter_collect_callback(struct js *js, jsval_t value, void *udata) {
   return true;
 }
 
-static jsval_t js_typedarray_constructor(struct js *js, jsval_t *args, int nargs, TypedArrayType type, const char *type_name) {
+static jsval_t js_typedarray_constructor(ant_t *js, jsval_t *args, int nargs, TypedArrayType type, const char *type_name) {
   if (nargs == 0) {
     ArrayBufferData *buffer = create_array_buffer_data(0);
     return create_typed_array(js, type, buffer, 0, 0, type_name);
@@ -540,7 +629,42 @@ static jsval_t js_typedarray_constructor(struct js *js, jsval_t *args, int nargs
 }
 
 // TypedArray.prototype.slice(begin, end)
-static jsval_t js_typedarray_slice(struct js *js, jsval_t *args, int nargs) {
+// TypedArray.prototype.at(index)
+static jsval_t js_typedarray_at(ant_t *js, jsval_t *args, int nargs) {
+  jsval_t this_val = js_getthis(js);
+  jsval_t ta_data_val = js_get_slot(js, this_val, SLOT_BUFFER);
+  
+  TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
+  if (!ta_data) return js_mkerr(js, "Invalid TypedArray");
+  
+  if (nargs == 0 || vtype(args[0]) != T_NUM) return js_mkundef();
+  
+  ssize_t len = (ssize_t)ta_data->length;
+  ssize_t idx = (ssize_t)js_getnum(args[0]);
+  if (idx < 0) idx += len;
+  if (idx < 0 || idx >= len) return js_mkundef();
+  if (!ta_data->buffer || ta_data->buffer->is_detached) return js_mkundef();
+  
+  size_t index = (size_t)idx;
+  uint8_t *data = ta_data->buffer->data + ta_data->byte_offset;
+  double value;
+  
+  switch (ta_data->type) {
+    case TYPED_ARRAY_INT8:         value = (double)((int8_t*)data)[index];   break;
+    case TYPED_ARRAY_UINT8:
+    case TYPED_ARRAY_UINT8_CLAMPED: value = (double)data[index];            break;
+    case TYPED_ARRAY_INT16:        value = (double)((int16_t*)data)[index];  break;
+    case TYPED_ARRAY_UINT16:       value = (double)((uint16_t*)data)[index]; break;
+    case TYPED_ARRAY_INT32:        value = (double)((int32_t*)data)[index];  break;
+    case TYPED_ARRAY_UINT32:       value = (double)((uint32_t*)data)[index]; break;
+    case TYPED_ARRAY_FLOAT32:      value = (double)((float*)data)[index];    break;
+    case TYPED_ARRAY_FLOAT64:      value = ((double*)data)[index];           break;
+    default: return js_mkundef();
+  }
+  return js_mknum(value);
+}
+
+static jsval_t js_typedarray_slice(ant_t *js, jsval_t *args, int nargs) {
   jsval_t this_val = js_getthis(js);
   jsval_t ta_data_val = js_get_slot(js, this_val, SLOT_BUFFER);
   
@@ -568,11 +692,16 @@ static jsval_t js_typedarray_slice(struct js *js, jsval_t *args, int nargs) {
     new_length * element_size
   );
   
-  return create_typed_array(js, ta_data->type, new_buffer, 0, new_length, "TypedArray");
+  jsval_t out = create_typed_array_like(
+    js, this_val, ta_data->type, 
+    new_buffer, 0, new_length
+  ); free_array_buffer_data(new_buffer);
+  
+  return out;
 }
 
 // TypedArray.prototype.subarray(begin, end)
-static jsval_t js_typedarray_subarray(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_typedarray_subarray(ant_t *js, jsval_t *args, int nargs) {
   jsval_t this_val = js_getthis(js);
   jsval_t ta_data_val = js_get_slot(js, this_val, SLOT_BUFFER);
   
@@ -593,11 +722,14 @@ static jsval_t js_typedarray_subarray(struct js *js, jsval_t *args, int nargs) {
   size_t element_size = get_element_size(ta_data->type);
   size_t new_offset = ta_data->byte_offset + (size_t)begin * element_size;
   
-  return create_typed_array(js, ta_data->type, ta_data->buffer, new_offset, new_length, "TypedArray");
+  return create_typed_array_like(
+    js, this_val, ta_data->type, 
+    ta_data->buffer, new_offset, new_length
+  );
 }
 
 // TypedArray.prototype.fill(value, start, end)
-static jsval_t js_typedarray_fill(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_typedarray_fill(ant_t *js, jsval_t *args, int nargs) {
   jsval_t this_val = js_getthis(js);
   jsval_t ta_data_val = js_get_slot(js, this_val, SLOT_BUFFER);
   
@@ -655,8 +787,114 @@ static jsval_t js_typedarray_fill(struct js *js, jsval_t *args, int nargs) {
     return this_val;
 }
 
+// TypedArray.prototype.set(source, offset = 0)
+static jsval_t js_typedarray_set(ant_t *js, jsval_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "set requires source argument");
+
+  jsval_t this_val = js_getthis(js);
+  jsval_t dst_ta_val = js_get_slot(js, this_val, SLOT_BUFFER);
+  TypedArrayData *dst = (TypedArrayData *)js_gettypedarray(dst_ta_val);
+  if (!dst) return js_mkerr(js, "Invalid TypedArray");
+  if (!dst->buffer || dst->buffer->is_detached) return js_mkerr(js, "Cannot operate on a detached TypedArray");
+
+  ssize_t offset_i = 0;
+  if (nargs > 1 && vtype(args[1]) == T_NUM) offset_i = (ssize_t)js_getnum(args[1]);
+  if (offset_i < 0) return js_mkerr(js, "Offset out of bounds");
+  size_t offset = (size_t)offset_i;
+  if (offset > dst->length) return js_mkerr(js, "Offset out of bounds");
+
+  jsval_t src_val = args[0];
+  jsval_t src_ta_val = js_get_slot(js, src_val, SLOT_BUFFER);
+  TypedArrayData *src_ta = (TypedArrayData *)js_gettypedarray(src_ta_val);
+
+  if (src_ta && src_ta->buffer && !src_ta->buffer->is_detached) {
+    size_t src_len = src_ta->length;
+    if (offset + src_len > dst->length) return js_mkerr(js, "Source is too large");
+
+    if (src_ta->type == dst->type) {
+      size_t el = get_element_size(dst->type);
+      uint8_t *dst_data = dst->buffer->data + dst->byte_offset + offset * el;
+      uint8_t *src_data = src_ta->buffer->data + src_ta->byte_offset;
+      memmove(dst_data, src_data, src_len * el);
+      return js_mkundef();
+    }
+
+    for (size_t i = 0; i < src_len; i++) {
+      double value = 0;
+      if (!typedarray_read_number(src_ta, i, &value)) value = 0;
+      (void)typedarray_write_number(dst, offset + i, value);
+    }
+    return js_mkundef();
+  }
+
+  if (!is_special_object(src_val) && vtype(src_val) != T_STR) {
+    return js_mkerr(js, "set source must be array-like or TypedArray");
+  }
+
+  size_t src_len = 0;
+  if (vtype(src_val) == T_STR) {
+    src_len = (size_t)vstrlen(js, src_val);
+  } else {
+    jsval_t len_val = js_get(js, src_val, "length");
+    src_len = vtype(len_val) == T_NUM ? (size_t)js_getnum(len_val) : 0;
+  }
+
+  if (offset + src_len > dst->length) return js_mkerr(js, "Source is too large");
+
+  for (size_t i = 0; i < src_len; i++) {
+    double value = 0;
+    if (vtype(src_val) == T_STR) {
+      jsoff_t slen = 0;
+      jsoff_t soff = vstr(js, src_val, &slen);
+      if (i < (size_t)slen) value = (unsigned char)js->mem[soff + (jsoff_t)i];
+    } else {
+      char idx[24];
+      size_t idx_len = uint_to_str(idx, sizeof(idx), (uint64_t)i);
+      idx[idx_len] = '\0';
+      jsval_t elem = js_get(js, src_val, idx);
+      value = vtype(elem) == T_NUM ? js_getnum(elem) : 0;
+    }
+    (void)typedarray_write_number(dst, offset + i, value);
+  }
+
+  return js_mkundef();
+}
+
+// TypedArray.prototype.copyWithin(target, start, end)
+static jsval_t js_typedarray_copyWithin(ant_t *js, jsval_t *args, int nargs) {
+  jsval_t this_val = js_getthis(js);
+  jsval_t ta_data_val = js_get_slot(js, this_val, SLOT_BUFFER);
+  TypedArrayData *ta = (TypedArrayData *)js_gettypedarray(ta_data_val);
+  if (!ta) return js_mkerr(js, "Invalid TypedArray");
+  if (!ta->buffer || ta->buffer->is_detached) return js_mkerr(js, "Cannot operate on a detached TypedArray");
+
+  ssize_t len = (ssize_t)ta->length;
+  if (len <= 0) return this_val;
+
+  ssize_t target = 0, start = 0, end = len;
+  if (nargs > 0 && vtype(args[0]) == T_NUM) target = (ssize_t)js_getnum(args[0]);
+  if (nargs > 1 && vtype(args[1]) == T_NUM) start = (ssize_t)js_getnum(args[1]);
+  if (nargs > 2 && vtype(args[2]) == T_NUM) end = (ssize_t)js_getnum(args[2]);
+
+  target = normalize_index(target, len);
+  start = normalize_index(start, len);
+  end = normalize_index(end, len);
+  if (end < start) end = start;
+  if (target >= len || start >= len || end <= start) return this_val;
+
+  size_t count = (size_t)(end - start);
+  size_t max_to_end = (size_t)(len - target);
+  if (count > max_to_end) count = max_to_end;
+  if (count == 0) return this_val;
+
+  size_t el = get_element_size(ta->type);
+  uint8_t *base = ta->buffer->data + ta->byte_offset;
+  memmove(base + (size_t)target * el, base + (size_t)start * el, count * el);
+  return this_val;
+}
+
 // TypedArray.prototype.toReversed()
-static jsval_t js_typedarray_toReversed(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_typedarray_toReversed(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
   jsval_t this_val = js_getthis(js);
   jsval_t ta_data_val = js_get_slot(js, this_val, SLOT_BUFFER);
@@ -676,11 +914,16 @@ static jsval_t js_typedarray_toReversed(struct js *js, jsval_t *args, int nargs)
     memcpy(dst + i * element_size, src + (length - 1 - i) * element_size, element_size);
   }
   
-  return create_typed_array(js, ta_data->type, new_buffer, 0, length, "TypedArray");
+  jsval_t out = create_typed_array_like(
+    js, this_val, ta_data->type,
+    new_buffer, 0, length
+  ); free_array_buffer_data(new_buffer);
+  
+  return out;
 }
 
 // TypedArray.prototype.toSorted(comparefn)
-static jsval_t js_typedarray_toSorted(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_typedarray_toSorted(ant_t *js, jsval_t *args, int nargs) {
   jsval_t this_val = js_getthis(js);
   jsval_t ta_data_val = js_get_slot(js, this_val, SLOT_BUFFER);
   
@@ -693,8 +936,11 @@ static jsval_t js_typedarray_toSorted(struct js *js, jsval_t *args, int nargs) {
   if (!new_buffer) return js_mkerr(js, "Failed to allocate new buffer");
   
   memcpy(new_buffer->data, ta_data->buffer->data + ta_data->byte_offset, length * element_size);
+  jsval_t result = create_typed_array_like(js, this_val, ta_data->type, new_buffer, 0, length);
   
-  jsval_t result = create_typed_array(js, ta_data->type, new_buffer, 0, length, "TypedArray");
+  free_array_buffer_data(new_buffer);
+  if (is_err(result)) return result;
+  
   jsval_t result_ta_val = js_get_slot(js, result, SLOT_BUFFER);
   TypedArrayData *result_ta = (TypedArrayData *)js_gettypedarray(result_ta_val);
   uint8_t *data = result_ta->buffer->data;
@@ -728,7 +974,7 @@ static jsval_t js_typedarray_toSorted(struct js *js, jsval_t *args, int nargs) {
       R_COMPARE:
       if (has_comparefn) {
         jsval_t cmp_args[2] = { js_mknum(a_val), js_mknum(b_val) };
-        jsval_t cmp_result = js_call(js, comparefn, cmp_args, 2);
+        jsval_t cmp_result = sv_vm_call(js->vm, js, comparefn, js_mkundef(), cmp_args, 2, NULL, false);
         cmp = (int)js_getnum(cmp_result);
       } else {
         cmp = (a_val > b_val) ? 1 : ((a_val < b_val) ? -1 : 0);
@@ -761,7 +1007,7 @@ static jsval_t js_typedarray_toSorted(struct js *js, jsval_t *args, int nargs) {
 }
 
 // TypedArray.prototype.with(index, value)
-static jsval_t js_typedarray_with(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_typedarray_with(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "with requires index and value");
   
   jsval_t this_val = js_getthis(js);
@@ -805,11 +1051,16 @@ static jsval_t js_typedarray_with(struct js *js, jsval_t *args, int nargs) {
   W_FLOAT64: ((double*)data)[index] = value; goto W_DONE;
   W_DONE:
   
-  return create_typed_array(js, ta_data->type, new_buffer, 0, length, "TypedArray");
+  jsval_t out = create_typed_array_like(
+    js, this_val, ta_data->type,
+    new_buffer, 0, length
+  ); free_array_buffer_data(new_buffer);
+  
+  return out;
 }
 
 #define DEFINE_TYPEDARRAY_CONSTRUCTOR(name, type) \
-  static jsval_t js_##name##_constructor(struct js *js, jsval_t *args, int nargs) { \
+  static jsval_t js_##name##_constructor(ant_t *js, jsval_t *args, int nargs) { \
     if (vtype(js->new_target) == T_UNDEF) return js_mkerr_typed(js, JS_ERR_TYPE, #name " constructor requires 'new'"); \
     return js_typedarray_constructor(js, args, nargs, type, #name); \
   }
@@ -826,7 +1077,7 @@ DEFINE_TYPEDARRAY_CONSTRUCTOR(Float64Array, TYPED_ARRAY_FLOAT64)
 DEFINE_TYPEDARRAY_CONSTRUCTOR(BigInt64Array, TYPED_ARRAY_BIGINT64)
 DEFINE_TYPEDARRAY_CONSTRUCTOR(BigUint64Array, TYPED_ARRAY_BIGUINT64)
 
-static jsval_t js_dataview_constructor(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_dataview_constructor(ant_t *js, jsval_t *args, int nargs) {
   if (vtype(js->new_target) == T_UNDEF) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "DataView constructor requires 'new'");
   }
@@ -881,7 +1132,7 @@ static jsval_t js_dataview_constructor(struct js *js, jsval_t *args, int nargs) 
 }
 
 // DataView.prototype.getUint8(byteOffset)
-static jsval_t js_dataview_getUint8(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_dataview_getUint8(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "getUint8 requires byteOffset");
   
   jsval_t this_val = js_getthis(js);
@@ -903,7 +1154,7 @@ static jsval_t js_dataview_getUint8(struct js *js, jsval_t *args, int nargs) {
 }
 
 // DataView.prototype.setUint8(byteOffset, value)
-static jsval_t js_dataview_setUint8(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_dataview_setUint8(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "setUint8 requires byteOffset and value");
   
   jsval_t this_val = js_getthis(js);
@@ -926,7 +1177,7 @@ static jsval_t js_dataview_setUint8(struct js *js, jsval_t *args, int nargs) {
 }
 
 // DataView.prototype.getInt16(byteOffset, littleEndian)
-static jsval_t js_dataview_getInt16(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_dataview_getInt16(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "getInt16 requires byteOffset");
   
   jsval_t this_val = js_getthis(js);
@@ -957,7 +1208,7 @@ static jsval_t js_dataview_getInt16(struct js *js, jsval_t *args, int nargs) {
 }
 
 // DataView.prototype.getInt32(byteOffset, littleEndian)
-static jsval_t js_dataview_getInt32(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_dataview_getInt32(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "getInt32 requires byteOffset");
   
   jsval_t this_val = js_getthis(js);
@@ -988,7 +1239,7 @@ static jsval_t js_dataview_getInt32(struct js *js, jsval_t *args, int nargs) {
 }
 
 // DataView.prototype.getFloat32(byteOffset, littleEndian)
-static jsval_t js_dataview_getFloat32(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_dataview_getFloat32(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "getFloat32 requires byteOffset");
   
   jsval_t this_val = js_getthis(js);
@@ -1021,7 +1272,7 @@ static jsval_t js_dataview_getFloat32(struct js *js, jsval_t *args, int nargs) {
 }
 
 // DataView.prototype.setInt16(byteOffset, value, littleEndian)
-static jsval_t js_dataview_setInt16(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_dataview_setInt16(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "setInt16 requires byteOffset and value");
   
   jsval_t this_val = js_getthis(js);
@@ -1054,7 +1305,7 @@ static jsval_t js_dataview_setInt16(struct js *js, jsval_t *args, int nargs) {
 }
 
 // DataView.prototype.setInt32(byteOffset, value, littleEndian)
-static jsval_t js_dataview_setInt32(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_dataview_setInt32(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "setInt32 requires byteOffset and value");
   
   jsval_t this_val = js_getthis(js);
@@ -1091,7 +1342,7 @@ static jsval_t js_dataview_setInt32(struct js *js, jsval_t *args, int nargs) {
 }
 
 // DataView.prototype.setFloat32(byteOffset, value, littleEndian)
-static jsval_t js_dataview_setFloat32(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_dataview_setFloat32(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "setFloat32 requires byteOffset and value");
   
   jsval_t this_val = js_getthis(js);
@@ -1130,7 +1381,7 @@ static jsval_t js_dataview_setFloat32(struct js *js, jsval_t *args, int nargs) {
 }
 
 // DataView.prototype.getFloat64(byteOffset, littleEndian)
-static jsval_t js_dataview_getFloat64(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_dataview_getFloat64(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "getFloat64 requires byteOffset");
   
   jsval_t this_val = js_getthis(js);
@@ -1165,7 +1416,7 @@ static jsval_t js_dataview_getFloat64(struct js *js, jsval_t *args, int nargs) {
 }
 
 // DataView.prototype.setFloat64(byteOffset, value, littleEndian)
-static jsval_t js_dataview_setFloat64(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_dataview_setFloat64(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "setFloat64 requires byteOffset and value");
   
   jsval_t this_val = js_getthis(js);
@@ -1258,7 +1509,7 @@ static BufferEncoding parse_encoding(const char *enc, size_t len) {
 }
 
 // Buffer.from(array/string/buffer, encoding)
-static jsval_t js_buffer_from(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_buffer_from(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "Buffer.from requires at least one argument");
   
   if (vtype(args[0]) == T_STR) {
@@ -1336,7 +1587,7 @@ static jsval_t js_buffer_from(struct js *js, jsval_t *args, int nargs) {
 }
 
 // Buffer.alloc(size)
-static jsval_t js_buffer_alloc(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_buffer_alloc(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) {
     return js_mkerr(js, "Buffer.alloc requires a size argument");
   }
@@ -1350,7 +1601,7 @@ static jsval_t js_buffer_alloc(struct js *js, jsval_t *args, int nargs) {
 }
 
 // Buffer.allocUnsafe(size)
-static jsval_t js_buffer_allocUnsafe(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_buffer_allocUnsafe(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) {
     return js_mkerr(js, "Buffer.allocUnsafe requires a size argument");
   }
@@ -1361,8 +1612,85 @@ static jsval_t js_buffer_allocUnsafe(struct js *js, jsval_t *args, int nargs) {
   return create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, size, "Buffer");
 }
 
+static jsval_t typedarray_join_with(ant_t *js, jsval_t this_val, const char *sep, size_t sep_len) {
+  jsval_t ta_data_val = js_get_slot(js, this_val, SLOT_BUFFER);
+
+  TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
+  if (!ta_data) return js_mkstr(js, "", 0);
+  if (!ta_data->buffer || ta_data->buffer->is_detached || ta_data->length == 0)
+    return js_mkstr(js, "", 0);
+
+  uint8_t *data = ta_data->buffer->data + ta_data->byte_offset;
+  size_t len = ta_data->length;
+
+  size_t cap = len * 12;
+  char *buf = malloc(cap);
+  if (!buf) return js_mkerr(js, "Out of memory");
+  size_t pos = 0;
+
+  for (size_t i = 0; i < len; i++) {
+    if (i > 0) {
+      if (pos + sep_len + 32 > cap) {
+        cap *= 2;
+        char *tmp = realloc(buf, cap);
+        if (!tmp) { free(buf); return js_mkerr(js, "Out of memory"); }
+        buf = tmp;
+      }
+      memcpy(buf + pos, sep, sep_len);
+      pos += sep_len;
+    }
+
+    if (pos + 32 > cap) {
+      cap *= 2;
+      char *tmp = realloc(buf, cap);
+      if (!tmp) { free(buf); return js_mkerr(js, "Out of memory"); }
+      buf = tmp;
+    }
+
+    int written = 0;
+    switch (ta_data->type) {
+      case TYPED_ARRAY_INT8:          written = snprintf(buf + pos, cap - pos, "%d", ((int8_t*)data)[i]); break;
+      case TYPED_ARRAY_UINT8:
+      case TYPED_ARRAY_UINT8_CLAMPED: written = snprintf(buf + pos, cap - pos, "%u", data[i]); break;
+      case TYPED_ARRAY_INT16:         written = snprintf(buf + pos, cap - pos, "%d", ((int16_t*)data)[i]); break;
+      case TYPED_ARRAY_UINT16:        written = snprintf(buf + pos, cap - pos, "%u", ((uint16_t*)data)[i]); break;
+      case TYPED_ARRAY_INT32:         written = snprintf(buf + pos, cap - pos, "%d", ((int32_t*)data)[i]); break;
+      case TYPED_ARRAY_UINT32:        written = snprintf(buf + pos, cap - pos, "%u", ((uint32_t*)data)[i]); break;
+      case TYPED_ARRAY_FLOAT32:       written = snprintf(buf + pos, cap - pos, "%g", (double)((float*)data)[i]); break;
+      case TYPED_ARRAY_FLOAT64:       written = snprintf(buf + pos, cap - pos, "%g", ((double*)data)[i]); break;
+      case TYPED_ARRAY_BIGINT64:      written = snprintf(buf + pos, cap - pos, "%lld", ((long long*)data)[i]); break;
+      case TYPED_ARRAY_BIGUINT64:     written = snprintf(buf + pos, cap - pos, "%llu", ((unsigned long long*)data)[i]); break;
+      default: break;
+    }
+    if (written > 0) pos += (size_t)written;
+  }
+
+  jsval_t ret = js_mkstr(js, buf, pos);
+  free(buf);
+  return ret;
+}
+
+// TypedArray.prototype.toString()
+static jsval_t js_typedarray_toString(ant_t *js, jsval_t *args, int nargs) {
+  return typedarray_join_with(js, js_getthis(js), ",", 1);
+}
+
+// TypedArray.prototype.join(separator)
+static jsval_t js_typedarray_join(ant_t *js, jsval_t *args, int nargs) {
+  const char *sep = ",";
+  size_t sep_len = 1;
+  if (nargs > 0 && vtype(args[0]) == T_STR)
+    sep = js_getstr(js, args[0], &sep_len);
+  return typedarray_join_with(js, js_getthis(js), sep, sep_len);
+}
+
 // Buffer.prototype.toString(encoding)
-static jsval_t js_buffer_toString(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_buffer_slice(ant_t *js, jsval_t *args, int nargs) {
+  return js_typedarray_subarray(js, args, nargs);
+}
+
+// Buffer.prototype.toString(encoding)
+static jsval_t js_buffer_toString(ant_t *js, jsval_t *args, int nargs) {
   jsval_t this_val = js_getthis(js);
   jsval_t ta_data_val = js_get_slot(js, this_val, SLOT_BUFFER);
   
@@ -1414,7 +1742,7 @@ static jsval_t js_buffer_toString(struct js *js, jsval_t *args, int nargs) {
 }
 
 // Buffer.prototype.toBase64()
-static jsval_t js_buffer_toBase64(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_buffer_toBase64(ant_t *js, jsval_t *args, int nargs) {
   (void)args; (void)nargs;
   jsval_t encoding_arg = js_mkstr(js, "base64", 6);
   jsval_t new_args[1] = {encoding_arg};
@@ -1422,7 +1750,7 @@ static jsval_t js_buffer_toBase64(struct js *js, jsval_t *args, int nargs) {
 }
 
 // Buffer.prototype.write(string, offset, length, encoding)
-static jsval_t js_buffer_write(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_buffer_write(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "write requires a string");
   
   jsval_t this_val = js_getthis(js);
@@ -1457,7 +1785,7 @@ static jsval_t js_buffer_write(struct js *js, jsval_t *args, int nargs) {
 }
 
 // Buffer.isBuffer(obj)
-static jsval_t js_buffer_isBuffer(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_buffer_isBuffer(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_false;
   if (!is_special_object(args[0])) return js_false;
   
@@ -1468,7 +1796,7 @@ static jsval_t js_buffer_isBuffer(struct js *js, jsval_t *args, int nargs) {
 }
 
 // Buffer.isEncoding(encoding)
-static jsval_t js_buffer_isEncoding(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_buffer_isEncoding(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1 || vtype(args[0]) != T_STR) return js_false;
   
   size_t len;
@@ -1492,7 +1820,7 @@ static jsval_t js_buffer_isEncoding(struct js *js, jsval_t *args, int nargs) {
 }
 
 // Buffer.byteLength(string, encoding)
-static jsval_t js_buffer_byteLength(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_buffer_byteLength(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1) return js_mknum(0);
   
   jsval_t arg = args[0];
@@ -1515,7 +1843,7 @@ static jsval_t js_buffer_byteLength(struct js *js, jsval_t *args, int nargs) {
 }
 
 // Buffer.concat(list, totalLength)
-static jsval_t js_buffer_concat(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_buffer_concat(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 1 || !is_special_object(args[0])) {
     return js_mkerr(js, "First argument must be an array");
   }
@@ -1567,7 +1895,7 @@ static jsval_t js_buffer_concat(struct js *js, jsval_t *args, int nargs) {
 }
 
 // Buffer.compare(buf1, buf2)
-static jsval_t js_buffer_compare(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_buffer_compare(ant_t *js, jsval_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "Buffer.compare requires two arguments");
   
   jsval_t ta1_val = js_get_slot(js, args[0], SLOT_BUFFER);
@@ -1595,7 +1923,7 @@ static jsval_t js_buffer_compare(struct js *js, jsval_t *args, int nargs) {
   return js_mknum((double)cmp);
 }
 
-static jsval_t js_sharedarraybuffer_constructor(struct js *js, jsval_t *args, int nargs) {
+static jsval_t js_sharedarraybuffer_constructor(ant_t *js, jsval_t *args, int nargs) {
   if (vtype(js->new_target) == T_UNDEF) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "SharedArrayBuffer constructor requires 'new'");
   }
@@ -1619,6 +1947,10 @@ static jsval_t js_sharedarraybuffer_constructor(struct js *js, jsval_t *args, in
   return obj;
 }
 
+jsval_t buffer_library(ant_t *js) {
+  return js_get(js, js_glob(js), "Buffer");
+}
+
 void init_buffer_module() {
   ant_t *js = rt->js;
   
@@ -1633,7 +1965,7 @@ void init_buffer_module() {
   js_set(js, arraybuffer_proto, "transfer", js_mkfun(js_arraybuffer_transfer));
   js_set(js, arraybuffer_proto, "transferToFixedLength", js_mkfun(js_arraybuffer_transferToFixedLength));
   js_set_getter_desc(js, arraybuffer_proto, "detached", 8, js_mkfun(js_arraybuffer_detached_getter), JS_DESC_E);
-  js_set(js, arraybuffer_proto, get_toStringTag_sym_key(), js_mkstr(js, "ArrayBuffer", 11));
+  js_set_sym(js, arraybuffer_proto, get_toStringTag_sym(), js_mkstr(js, "ArrayBuffer", 11));
   
   js_set_slot(js, arraybuffer_ctor_obj, SLOT_CFUNC, js_mkfun(js_arraybuffer_constructor));
   js_mkprop_fast(js, arraybuffer_ctor_obj, "prototype", 9, arraybuffer_proto);
@@ -1645,13 +1977,23 @@ void init_buffer_module() {
   jsval_t typedarray_proto = js_mkobj(js);
   js_set_proto(js, typedarray_proto, object_proto);
   
+  js_set(js, typedarray_proto, "at", js_mkfun(js_typedarray_at));
+  js_set(js, typedarray_proto, "set", js_mkfun(js_typedarray_set));
+  js_set(js, typedarray_proto, "copyWithin", js_mkfun(js_typedarray_copyWithin));
   js_set(js, typedarray_proto, "slice", js_mkfun(js_typedarray_slice));
   js_set(js, typedarray_proto, "subarray", js_mkfun(js_typedarray_subarray));
   js_set(js, typedarray_proto, "fill", js_mkfun(js_typedarray_fill));
   js_set(js, typedarray_proto, "toReversed", js_mkfun(js_typedarray_toReversed));
   js_set(js, typedarray_proto, "toSorted", js_mkfun(js_typedarray_toSorted));
   js_set(js, typedarray_proto, "with", js_mkfun(js_typedarray_with));
-  js_set(js, typedarray_proto, get_toStringTag_sym_key(), js_mkstr(js, "TypedArray", 10));
+  js_set(js, typedarray_proto, "toString", js_mkfun(js_typedarray_toString));
+  js_set(js, typedarray_proto, "join", js_mkfun(js_typedarray_join));
+  js_set_sym(js, typedarray_proto, get_toStringTag_sym(), js_mkstr(js, "TypedArray", 10));
+
+  jsval_t array_proto = js_get(js, js_get(js, glob, "Array"), "prototype");
+  jsval_t iter_fn = js_get_sym(js, array_proto, get_iterator_sym());
+  js_set_sym(js, typedarray_proto, get_iterator_sym(), iter_fn);
+  js_set(js, typedarray_proto, "values", iter_fn);
   
   #define SETUP_TYPEDARRAY(name) \
     do { \
@@ -1692,7 +2034,7 @@ void init_buffer_module() {
   js_set(js, dataview_proto, "setFloat32", js_mkfun(js_dataview_setFloat32));
   js_set(js, dataview_proto, "getFloat64", js_mkfun(js_dataview_getFloat64));
   js_set(js, dataview_proto, "setFloat64", js_mkfun(js_dataview_setFloat64));
-  js_set(js, dataview_proto, get_toStringTag_sym_key(), js_mkstr(js, "DataView", 8));
+  js_set_sym(js, dataview_proto, get_toStringTag_sym(), js_mkstr(js, "DataView", 8));
 
   js_set_slot(js, dataview_ctor_obj, SLOT_CFUNC, js_mkfun(js_dataview_constructor));
   js_mkprop_fast(js, dataview_ctor_obj, "prototype", 9, dataview_proto);
@@ -1705,7 +2047,7 @@ void init_buffer_module() {
   js_set_proto(js, sharedarraybuffer_proto, object_proto);
   
   js_set(js, sharedarraybuffer_proto, "slice", js_mkfun(js_arraybuffer_slice));
-  js_set(js, sharedarraybuffer_proto, get_toStringTag_sym_key(), js_mkstr(js, "SharedArrayBuffer", 17));
+  js_set_sym(js, sharedarraybuffer_proto, get_toStringTag_sym(), js_mkstr(js, "SharedArrayBuffer", 17));
   
   js_set_slot(js, sharedarraybuffer_ctor_obj, SLOT_CFUNC, js_mkfun(js_sharedarraybuffer_constructor));
   js_mkprop_fast(js, sharedarraybuffer_ctor_obj, "prototype", 9, sharedarraybuffer_proto);
@@ -1715,12 +2057,20 @@ void init_buffer_module() {
   
   jsval_t buffer_ctor_obj = js_mkobj(js);
   jsval_t buffer_proto = js_mkobj(js);
-  js_set_proto(js, buffer_proto, object_proto);
   
+  jsval_t uint8array_ctor = js_get(js, glob, "Uint8Array");
+  jsval_t uint8array_proto = js_get(js, uint8array_ctor, "prototype");
+  
+  if (is_special_object(uint8array_proto)) js_set_proto(js, buffer_proto, uint8array_proto);
+  else js_set_proto(js, buffer_proto, typedarray_proto);
+  
+  js_set(js, buffer_proto, "slice", js_mkfun(js_buffer_slice));
   js_set(js, buffer_proto, "toString", js_mkfun(js_buffer_toString));
   js_set(js, buffer_proto, "toBase64", js_mkfun(js_buffer_toBase64));
   js_set(js, buffer_proto, "write", js_mkfun(js_buffer_write));
-  js_set(js, buffer_proto, get_toStringTag_sym_key(), js_mkstr(js, "Buffer", 6));
+  js_set_sym(js, buffer_proto, get_toStringTag_sym(), js_mkstr(js, "Buffer", 6));
+  js_set_sym(js, buffer_proto, get_iterator_sym(), iter_fn);
+  js_set(js, buffer_proto, "values", iter_fn);
   
   js_set(js, buffer_ctor_obj, "from", js_mkfun(js_buffer_from));
   js_set(js, buffer_ctor_obj, "alloc", js_mkfun(js_buffer_alloc));

@@ -1,60 +1,11 @@
 #include "utf8.h"
 #include <string.h>
 
-int utf8_sequence_length(unsigned char first_byte) {
-  if ((first_byte & 0x80) == 0) return 1;
-  if ((first_byte & 0xE0) == 0xC0) return 2;
-  if ((first_byte & 0xF0) == 0xE0) return 3;
-  if ((first_byte & 0xF8) == 0xF0) return 4;
-  return -1;
-}
-
-int utf8_encode(uint32_t cp, char *out) {
-  if (cp < 0x80) {
-    out[0] = (char)cp;
-    return 1;
-  } else if (cp < 0x800) {
-    out[0] = (char)(0xC0 | (cp >> 6));
-    out[1] = (char)(0x80 | (cp & 0x3F));
-    return 2;
-  } else if (cp < 0x10000) {
-    out[0] = (char)(0xE0 | (cp >> 12));
-    out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
-    out[2] = (char)(0x80 | (cp & 0x3F));
-    return 3;
-  } else {
-    out[0] = (char)(0xF0 | (cp >> 18));
-    out[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
-    out[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
-    out[3] = (char)(0x80 | (cp & 0x3F));
-    return 4;
-  }
-}
-
-uint32_t utf8_decode(const unsigned char *buf, size_t len, int *seq_len) {
+static uint32_t utf8_decode(const unsigned char *buf, size_t len, int *seq_len) {
   if (len == 0) { *seq_len = 0; return 0; }
-  
-  unsigned char first = buf[0];
-  
-  if (first < 0x80) { *seq_len = 1; return first; }
-  if ((first & 0xE0) == 0xC0 && len >= 2) {
-    if ((buf[1] & 0xC0) != 0x80) { *seq_len = 1; return 0xFFFD; }
-    *seq_len = 2;
-    return ((first & 0x1F) << 6) | (buf[1] & 0x3F);
-  }
-  if ((first & 0xF0) == 0xE0 && len >= 3) {
-    if ((buf[1] & 0xC0) != 0x80 || (buf[2] & 0xC0) != 0x80) { *seq_len = 1; return 0xFFFD; }
-    *seq_len = 3;
-    return ((first & 0x0F) << 12) | ((buf[1] & 0x3F) << 6) | (buf[2] & 0x3F);
-  }
-  if ((first & 0xF8) == 0xF0 && len >= 4) {
-    if ((buf[1] & 0xC0) != 0x80 || (buf[2] & 0xC0) != 0x80 || (buf[3] & 0xC0) != 0x80) { *seq_len = 1; return 0xFFFD; }
-    *seq_len = 4;
-    return ((first & 0x07) << 18) | ((buf[1] & 0x3F) << 12) | ((buf[2] & 0x3F) << 6) | (buf[3] & 0x3F);
-  }
-  
-  *seq_len = 1;
-  return 0xFFFD;
+  utf8proc_int32_t cp;
+  *seq_len = (int)utf8_next(buf, (utf8proc_ssize_t)len, &cp);
+  return cp < 0 ? 0xFFFD : (uint32_t)cp;
 }
 
 size_t utf8_char_len_at(const char *str, size_t byte_len, size_t pos) {
@@ -82,7 +33,6 @@ size_t utf16_strlen(const char *str, size_t byte_len) {
   const unsigned char *p = (const unsigned char *)str;
   const unsigned char *end = p + byte_len;
   
-  // Fast path: check if string is ASCII-only (very common case)
   size_t i = 0;
   for (; i + 8 <= byte_len; i += 8) {
     uint64_t chunk;
@@ -92,16 +42,16 @@ size_t utf16_strlen(const char *str, size_t byte_len) {
   for (; i < byte_len; i++) {
     if (p[i] & 0x80) goto slow_path;
   }
-  return byte_len;  // All ASCII: UTF-16 length == byte length
+  return byte_len;
   
 slow_path:;
-  size_t count = i;  // ASCII chars counted before first non-ASCII
+  size_t count = i;
   p += i;
   while (p < end) {
     unsigned char c = *p;
     if ((c & 0xC0) != 0x80) {
       count++;
-      if ((c & 0xF8) == 0xF0) count++;  // 4-byte UTF-8 = 2 UTF-16 units
+      if ((c & 0xF8) == 0xF0) count++;
     }
     p++;
   }
@@ -132,12 +82,16 @@ int utf16_index_to_byte_offset(
     if (utf16_pos == utf16_idx) {
       if (out_char_bytes) *out_char_bytes = 0;
       return (int)byte_len;
-    }
-    return -1;
+    } return -1;
   }
   
   unsigned char c = *p;
-  size_t slen = (c < 0x80) ? 1 : ((c & 0xE0) == 0xC0) ? 2 : ((c & 0xF0) == 0xE0) ? 3 : ((c & 0xF8) == 0xF0) ? 4 : 1;
+  size_t slen = (c < 0x80) 
+    ? 1 : ((c & 0xE0) == 0xC0) 
+    ? 2 : ((c & 0xF0) == 0xE0) 
+    ? 3 : ((c & 0xF8) == 0xF0) 
+    ? 4 : 1;
+    
   if (out_char_bytes) *out_char_bytes = slen;
   return (int)(p - (const unsigned char *)str);
 }
@@ -152,6 +106,7 @@ int utf16_range_to_byte_range(
 ) {
   const unsigned char *p = (const unsigned char *)str;
   const unsigned char *end = p + byte_len;
+  
   size_t utf16_pos = 0;
   size_t b_start = 0, b_end = byte_len;
   int found_start = 0, found_end = 0;
@@ -174,6 +129,7 @@ int utf16_range_to_byte_range(
   
   *byte_start = b_start;
   *byte_end = b_end;
+  
   return 0;
 }
 
@@ -189,13 +145,22 @@ uint32_t utf16_code_unit_at(const char *str, size_t byte_len, size_t utf16_idx) 
     
     if (c < 0x80) { cp = c; slen = 1; units = 1; }
     else if ((c & 0xE0) == 0xC0 && p + 1 < end) {
-      cp = ((c & 0x1F) << 6) | (p[1] & 0x3F); slen = 2; units = 1;
+      cp = ((c & 0x1F) << 6)
+      | (p[1] & 0x3F); 
+      slen = 2; units = 1;
     }
     else if ((c & 0xF0) == 0xE0 && p + 2 < end) {
-      cp = ((c & 0x0F) << 12) | ((p[1] & 0x3F) << 6) | (p[2] & 0x3F); slen = 3; units = 1;
+      cp = ((c & 0x0F) << 12)
+      | ((p[1] & 0x3F) << 6)
+      | (p[2] & 0x3F); 
+      slen = 3; units = 1;
     }
     else if ((c & 0xF8) == 0xF0 && p + 3 < end) {
-      cp = ((c & 0x07) << 18) | ((p[1] & 0x3F) << 12) | ((p[2] & 0x3F) << 6) | (p[3] & 0x3F); slen = 4; units = 2;
+      cp = ((c & 0x07) << 18) 
+      | ((p[1] & 0x3F) << 12) 
+      | ((p[2] & 0x3F) << 6)
+      | (p[3] & 0x3F); 
+      slen = 4; units = 2;
     }
     else { cp = c; slen = 1; units = 1; }
     
@@ -209,6 +174,7 @@ uint32_t utf16_code_unit_at(const char *str, size_t byte_len, size_t utf16_idx) 
     p += slen;
     utf16_pos += units;
   }
+  
   return 0xFFFFFFFF;
 }
 
@@ -224,13 +190,22 @@ uint32_t utf16_codepoint_at(const char *str, size_t byte_len, size_t utf16_idx) 
     
     if (c < 0x80) { cp = c; slen = 1; units = 1; }
     else if ((c & 0xE0) == 0xC0 && p + 1 < end) {
-      cp = ((c & 0x1F) << 6) | (p[1] & 0x3F); slen = 2; units = 1;
+      cp = ((c & 0x1F) << 6)
+      | (p[1] & 0x3F); 
+      slen = 2; units = 1;
     }
     else if ((c & 0xF0) == 0xE0 && p + 2 < end) {
-      cp = ((c & 0x0F) << 12) | ((p[1] & 0x3F) << 6) | (p[2] & 0x3F); slen = 3; units = 1;
+      cp = ((c & 0x0F) << 12)
+      | ((p[1] & 0x3F) << 6)
+      | (p[2] & 0x3F); 
+      slen = 3; units = 1;
     }
     else if ((c & 0xF8) == 0xF0 && p + 3 < end) {
-      cp = ((c & 0x07) << 18) | ((p[1] & 0x3F) << 12) | ((p[2] & 0x3F) << 6) | (p[3] & 0x3F); slen = 4; units = 2;
+      cp = ((c & 0x07) << 18)
+      | ((p[1] & 0x3F) << 12)
+      | ((p[2] & 0x3F) << 6)
+      | (p[3] & 0x3F); 
+      slen = 4; units = 2;
     }
     else { cp = c; slen = 1; units = 1; }
     
@@ -238,8 +213,10 @@ uint32_t utf16_codepoint_at(const char *str, size_t byte_len, size_t utf16_idx) 
     if (units == 2 && utf16_pos + 1 == utf16_idx) {
       return 0xDC00 + ((cp - 0x10000) & 0x3FF);
     }
+    
     p += slen;
     utf16_pos += units;
   }
+  
   return 0xFFFFFFFF;
 }

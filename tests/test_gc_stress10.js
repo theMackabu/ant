@@ -7,7 +7,7 @@ const logs = [
   { time: '10:23:48', level: 'WARN', message: 'Cache directory not found, creating...' },
   { time: '10:24:05', level: 'ERROR', message: 'Failed to load plugin: missing-plugin' },
   { time: '10:24:06', level: 'WARN', message: 'Running with reduced functionality' },
-  { time: '10:24:10', level: 'INFO', message: 'Ready to accept connections' },
+  { time: '10:24:10', level: 'INFO', message: 'Ready to accept connections' }
 ];
 
 function render() {
@@ -22,8 +22,20 @@ function render() {
   screen.write(2, 20, colors.magenta + '└──────────────────────────────────────────┘' + codes.reset);
 }
 
+const t0 = Date.now();
 for (let frame = 0; frame < 50000; frame++) {
   render();
+  const stats = Ant.stats();
+  const elapsed = ((Date.now() - t0) / 1000).toFixed(2);
+  console.log(
+    `frame ${frame}: arena ${(stats.arenaUsed / 1024 / 1024).toFixed(1)}MB / ` +
+      `${(stats.arenaSize / 1024 / 1024).toFixed(1)}MB, ` +
+      `rss ${(stats.rss / 1024 / 1024).toFixed(1)}MB, ` +
+      `elapsed ${elapsed}s`
+  );
 }
 
+const total = ((Date.now() - t0) / 1000).toFixed(2);
+const final_stats = Ant.stats();
+console.log(`Done: ${total}s, arena ${(final_stats.arenaUsed / 1024 / 1024).toFixed(1)}MB, ` + `rss ${(final_stats.rss / 1024 / 1024).toFixed(1)}MB`);
 console.log('OK');
