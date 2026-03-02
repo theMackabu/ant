@@ -803,7 +803,7 @@ static void hoist_var_decls(sv_compiler_t *c, sv_ast_t *node) {
   if (!node) return;
   switch (node->type) {
     case N_VAR:
-      if (node->var_kind == VAR_VAR) {
+      if (node->var_kind == SV_VAR_VAR) {
         for (int i = 0; i < node->args.count; i++) {
           sv_ast_t *decl = node->args.items[i];
           if (decl->type == N_VARDECL && decl->left)
@@ -902,8 +902,8 @@ static void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
     sv_ast_t *decl_node = (node->type == N_EXPORT) ? node->left : node;
     if (!decl_node) continue;
 
-    if (decl_node->type == N_VAR && decl_node->var_kind != VAR_VAR) {
-      bool is_const = (decl_node->var_kind == VAR_CONST);
+    if (decl_node->type == N_VAR && decl_node->var_kind != SV_VAR_VAR) {
+      bool is_const = (decl_node->var_kind == SV_VAR_CONST);
       int lb = c->local_count;
       for (int j = 0; j < decl_node->args.count; j++) {
         sv_ast_t *decl = decl_node->args.items[j];
@@ -2063,7 +2063,7 @@ static void compile_destructure_store(sv_compiler_t *c, sv_ast_t *target,
   }
 
   if (target->type == N_IDENT) {
-    bool is_const = (kind == VAR_CONST);
+    bool is_const = (kind == SV_VAR_CONST);
     int idx = ensure_local_at_depth(c, target->str, target->len,
                                     is_const, c->scope_depth);
     emit_put_local(c, idx);
@@ -2179,12 +2179,12 @@ static void compile_destructure_pattern(sv_compiler_t *c, sv_ast_t *pat,
 
 static void compile_array_destructure(sv_compiler_t *c, sv_ast_t *pat,
                                       bool keep) {
-  compile_destructure_pattern(c, pat, keep, true, DESTRUCTURE_ASSIGN, VAR_LET);
+  compile_destructure_pattern(c, pat, keep, true, DESTRUCTURE_ASSIGN, SV_VAR_LET);
 }
 
 static void compile_object_destructure(sv_compiler_t *c, sv_ast_t *pat,
                                        bool keep) {
-  compile_destructure_pattern(c, pat, keep, true, DESTRUCTURE_ASSIGN, VAR_LET);
+  compile_destructure_pattern(c, pat, keep, true, DESTRUCTURE_ASSIGN, SV_VAR_LET);
 }
 
 static bool is_tail_callable(sv_compiler_t *c, sv_ast_t *node) {
@@ -2496,7 +2496,7 @@ static void compile_export_decl(sv_compiler_t *c, sv_ast_t *node) {
     sv_ast_t *decl = node->left;
     if (decl->type == N_VAR) {
       compile_var_decl(c, decl);
-      bool is_var = decl->var_kind == VAR_VAR;
+      bool is_var = decl->var_kind == SV_VAR_VAR;
       for (int i = 0; i < decl->args.count; i++) {
         sv_ast_t *var = decl->args.items[i];
         if (!var || var->type != N_VARDECL) continue;
@@ -2570,7 +2570,7 @@ static void compile_export_decl(sv_compiler_t *c, sv_ast_t *node) {
 
 static void compile_var_decl(sv_compiler_t *c, sv_ast_t *node) {
   sv_var_kind_t kind = node->var_kind;
-  bool is_const = (kind == VAR_CONST);
+  bool is_const = (kind == SV_VAR_CONST);
   bool repl_top = is_repl_top_level(c);
 
   for (int i = 0; i < node->args.count; i++) {
@@ -2579,7 +2579,7 @@ static void compile_var_decl(sv_compiler_t *c, sv_ast_t *node) {
     sv_ast_t *target = decl->left;
 
     if (repl_top) {
-      if (!decl->right && kind == VAR_VAR) continue;
+      if (!decl->right && kind == SV_VAR_VAR) continue;
       if (decl->right) {
         compile_expr(c, decl->right);
       } else {
@@ -2591,7 +2591,7 @@ static void compile_var_decl(sv_compiler_t *c, sv_ast_t *node) {
         compile_destructure_pattern(c, target, false, true,
                                     DESTRUCTURE_ASSIGN, kind);
       }
-    } else if (kind == VAR_VAR) {
+    } else if (kind == SV_VAR_VAR) {
       if (decl->right) {
         compile_expr(c, decl->right);
         compile_lhs_set(c, target, false);
@@ -2752,7 +2752,7 @@ static void compile_for(sv_compiler_t *c, sv_ast_t *node) {
     if (node->init->type == N_VAR) {
       sv_var_kind_t kind = node->init->var_kind;
       compile_var_decl(c, node->init);
-      if (kind == VAR_LET || kind == VAR_CONST)
+      if (kind == SV_VAR_LET || kind == SV_VAR_CONST)
         for_collect_var_decl_slots(c, node->init, &iter_slots, &iter_count, &iter_cap);
     } else {
       compile_expr(c, node->init);
@@ -2858,12 +2858,12 @@ static void compile_for_each_assign_target(sv_compiler_t *c, sv_ast_t *lhs) {
     if (target->type == N_IDENT) {
       int loc = resolve_local(c, target->str, target->len);
       if (loc == -1) {
-        bool is_const = (lhs->var_kind == VAR_CONST);
+        bool is_const = (lhs->var_kind == SV_VAR_CONST);
         loc = add_local(c, target->str, target->len, is_const, c->scope_depth);
       }
       emit_put_local(c, loc);
     } else {
-      if (lhs->var_kind == VAR_VAR) {
+      if (lhs->var_kind == SV_VAR_VAR) {
         compile_lhs_set(c, target, false);
       } else {
         compile_destructure_binding(c, target, lhs->var_kind);
@@ -2887,8 +2887,8 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
   int iter_cap = 0;
 
   if (node->left && node->left->type == N_VAR &&
-      node->left->var_kind != VAR_VAR) {
-    bool is_const = (node->left->var_kind == VAR_CONST);
+      node->left->var_kind != SV_VAR_VAR) {
+    bool is_const = (node->left->var_kind == SV_VAR_CONST);
     int lb = c->local_count;
     for (int i = 0; i < node->left->args.count; i++) {
       sv_ast_t *decl = node->left->args.items[i];
@@ -2905,7 +2905,7 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
   }
 
   if (!is_for_of && node->left && node->left->type == N_VAR &&
-      node->left->var_kind == VAR_VAR && node->left->args.count > 0) {
+      node->left->var_kind == SV_VAR_VAR && node->left->args.count > 0) {
     sv_ast_t *decl = node->left->args.items[0];
     if (decl && decl->right) {
       compile_expr(c, decl->right);
@@ -3100,7 +3100,7 @@ static void compile_catch_body(sv_compiler_t *c, sv_ast_t *node) {
                         node->catch_param->len, false, c->scope_depth);
     emit_put_local(c, loc);
   } else if (node->catch_param && is_destructure_pattern_node(node->catch_param)) {
-    compile_destructure_binding(c, node->catch_param, VAR_LET);
+    compile_destructure_binding(c, node->catch_param, SV_VAR_LET);
     emit_op(c, OP_POP);
   } else {
     emit_op(c, OP_POP);  
@@ -3657,7 +3657,7 @@ static sv_func_t *compile_function_body(
           emit_op(&comp, OP_PUT_ARG);
           emit_u16(&comp, (uint16_t)i);
         } else if (p->left) {
-          compile_destructure_binding(&comp, p->left, VAR_LET);
+          compile_destructure_binding(&comp, p->left, SV_VAR_LET);
           emit_op(&comp, OP_POP);
         } else emit_op(&comp, OP_POP);
       } else if (
@@ -3665,7 +3665,7 @@ static sv_func_t *compile_function_body(
         p->type == N_OBJECT_PAT || p->type == N_OBJECT) {
         emit_op(&comp, OP_GET_ARG);
         emit_u16(&comp, (uint16_t)i);
-        compile_destructure_binding(&comp, p, VAR_LET);
+        compile_destructure_binding(&comp, p, SV_VAR_LET);
         emit_op(&comp, OP_POP);
       } else if (p->type == N_REST && p->right && p->right->type == N_IDENT) {
         emit_op(&comp, OP_REST);
@@ -3678,7 +3678,7 @@ static sv_func_t *compile_function_body(
       } else if (p->type == N_REST && p->right) {
         emit_op(&comp, OP_REST);
         emit_u16(&comp, (uint16_t)i);
-        compile_destructure_binding(&comp, p->right, VAR_LET);
+        compile_destructure_binding(&comp, p->right, SV_VAR_LET);
         emit_op(&comp, OP_POP);
       }
     }
@@ -3749,7 +3749,7 @@ static sv_func_t *compile_function_body(
           if (slot <= 255) { emit_op(&comp, OP_PUT_LOCAL8); emit(&comp, (uint8_t)slot); }
           else { emit_op(&comp, OP_PUT_LOCAL); emit_u16(&comp, (uint16_t)slot); }
         } else if (p->left) {
-          compile_destructure_binding(&comp, p->left, VAR_LET);
+          compile_destructure_binding(&comp, p->left, SV_VAR_LET);
           emit_op(&comp, OP_POP);
         } else {
           emit_op(&comp, OP_POP);
@@ -3759,7 +3759,7 @@ static sv_func_t *compile_function_body(
         p->type == N_OBJECT_PAT || p->type == N_OBJECT) {
         emit_op(&comp, OP_GET_ARG);
         emit_u16(&comp, (uint16_t)i);
-        compile_destructure_binding(&comp, p, VAR_LET);
+        compile_destructure_binding(&comp, p, SV_VAR_LET);
         emit_op(&comp, OP_POP);
       } else if (
         p->type == N_REST && p->right && p->right->type == N_IDENT &&
@@ -3773,7 +3773,7 @@ static sv_func_t *compile_function_body(
       } else if (p->type == N_REST && p->right) {
         emit_op(&comp, OP_REST);
         emit_u16(&comp, (uint16_t)i);
-        compile_destructure_binding(&comp, p->right, VAR_LET);
+        compile_destructure_binding(&comp, p->right, SV_VAR_LET);
         emit_op(&comp, OP_POP);
       }
     }

@@ -1421,7 +1421,7 @@ static sv_ast_t *parse_var_decl(P, sv_var_kind_t kind, bool allow_uninit_const) 
     if (NEXT() == TOK_ASSIGN) {
       CONSUME();
       decl->right = parse_assign(p);
-    } else if (kind == VAR_CONST && !allow_uninit_const) {
+    } else if (kind == SV_VAR_CONST && !allow_uninit_const) {
       SV_MKERR_TYPED(JS, JS_ERR_SYNTAX, "Missing initializer in const declaration");
     }
     sv_ast_list_push(&var->args, decl);
@@ -1644,8 +1644,8 @@ static sv_ast_t *parse_export_stmt(P) {
   if (TOK == TOK_VAR || TOK == TOK_LET || TOK == TOK_CONST) {
     decl->flags |= EX_DECL;
     sv_var_kind_t kind = (
-      TOK == TOK_VAR) ? VAR_VAR :
-      (TOK == TOK_LET) ? VAR_LET : VAR_CONST;
+      TOK == TOK_VAR) ? SV_VAR_VAR :
+      (TOK == TOK_LET) ? SV_VAR_LET : SV_VAR_CONST;
     CONSUME();
     decl->left = parse_var_decl(p, kind, false);
     if (NEXT() == TOK_SEMICOLON) CONSUME();
@@ -1769,19 +1769,19 @@ static sv_ast_t *parse_stmt(P) {
 
   l_var: {
     CONSUME();
-    sv_ast_t *n = parse_var_decl(p, VAR_VAR, false);
+    sv_ast_t *n = parse_var_decl(p, SV_VAR_VAR, false);
     if (NEXT() == TOK_SEMICOLON) CONSUME();
     return n;
   }
   l_let: {
     CONSUME();
-    sv_ast_t *n = parse_var_decl(p, VAR_LET, false);
+    sv_ast_t *n = parse_var_decl(p, SV_VAR_LET, false);
     if (NEXT() == TOK_SEMICOLON) CONSUME();
     return n;
   }
   l_const: {
     CONSUME();
-    sv_ast_t *n = parse_var_decl(p, VAR_CONST, false);
+    sv_ast_t *n = parse_var_decl(p, SV_VAR_CONST, false);
     if (NEXT() == TOK_SEMICOLON) CONSUME();
     return n;
   }
@@ -1835,8 +1835,8 @@ static sv_ast_t *parse_stmt(P) {
     NEXT();
     if (TOK == TOK_VAR || TOK == TOK_LET || TOK == TOK_CONST) {
       sv_var_kind_t kind = (
-        TOK == TOK_VAR) ? VAR_VAR :
-        (TOK == TOK_LET) ? VAR_LET : VAR_CONST;
+        TOK == TOK_VAR) ? SV_VAR_VAR :
+        (TOK == TOK_LET) ? SV_VAR_LET : SV_VAR_CONST;
       CONSUME();
       p->no_in = true;
       init_node = parse_var_decl(p, kind, true);
@@ -1868,7 +1868,7 @@ static sv_ast_t *parse_stmt(P) {
       return n;
     }
 
-    if (init_node && init_node->type == N_VAR && init_node->var_kind == VAR_CONST) {
+    if (init_node && init_node->type == N_VAR && init_node->var_kind == SV_VAR_CONST) {
       for (int i = 0; i < init_node->args.count; i++) {
         sv_ast_t *decl = init_node->args.items[i];
         if (decl && decl->type == N_VARDECL && !decl->right) {

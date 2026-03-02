@@ -1,3 +1,5 @@
+#include <compat.h> // IWYU pragma: keep
+
 #include "esm/loader.h"
 #include "esm/commonjs.h"
 #include "esm/library.h"
@@ -12,12 +14,14 @@
 #include "reactor.h"
 #include "utils.h"
 
-#include <libgen.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#ifndef _WIN32
+#include <libgen.h>
 #include <unistd.h>
+#endif
 #include <uthash.h>
 #include <yyjson.h>
 

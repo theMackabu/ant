@@ -223,7 +223,7 @@ static bool repl_collect_top_level_decls(ant_t *js, sv_ast_t *stmt, repl_decl_pe
   sv_ast_t *node = (stmt->type == N_EXPORT) ? stmt->left : stmt;
   if (!node) return true;
 
-  if (node->type == N_VAR && node->var_kind != VAR_VAR) {
+  if (node->type == N_VAR && node->var_kind != SV_VAR_VAR) {
     for (int i = 0; i < node->args.count; i++) {
       sv_ast_t *decl = node->args.items[i];
       if (!decl || decl->type != N_VARDECL || !decl->left) continue;
