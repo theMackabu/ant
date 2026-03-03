@@ -141,13 +141,19 @@ function l_is_lambda(args: Types.Expr[], env: Types.Env): number {
 }
 
 function l_loop(args: Types.Expr[], env: Types.Env): number {
-  while (evaluate(args[0], env) === TRUE) evaluate(args[1], env);
+  while (evaluate(args[0], env)) evaluate(args[1], env);
   return -1;
 }
 
 function l_set(args: Types.Expr[], env: Types.Env): Types.LispValue[] {
   const array = Eval.arr(args[0], env);
   array[Eval.num(args[1], env)] = evaluate(args[2], env);
+  return array;
+}
+
+function l_push(args: Types.Expr[], env: Types.Env): Types.LispValue[] {
+  const array = Eval.arr(args[0], env);
+  array.push(evaluate(args[1], env));
   return array;
 }
 
@@ -162,21 +168,46 @@ function l_write(args: Types.Expr[], env: Types.Env): Types.LispValue {
   return FALSE;
 }
 
-function l_dot(args: Types.Expr[], env: Types.Env): Types.LispValue {
-  const obj: any = evaluate(args[0], env);
-  const method = String(Eval.name(args[1]));
-  return obj[method](...args.slice(2).map(a => evaluate(a, env)));
+function l_neq(args: Types.Expr[], env: Types.Env): number {
+  return +(evaluate(args[0], env) !== evaluate(args[1], env));
 }
 
-function l_fn(args: Types.Expr[], env: Types.Env): Types.LispValue {
-  const name = Eval.name(args[0]);
-  return (env[name] = l_lambda(args.slice(1), env));
+function l_concat(args: Types.Expr[], env: Types.Env): string {
+  return args.map(a => String(evaluate(a, env))).join('');
 }
 
 function l_resolve(name: string, env: Types.Env) {
   if (name in env) return { target: env, value: env[name] };
   if (name.includes('.')) return jsResolve(name);
   return { target: env, value: env[name] };
+}
+
+function l_dot(args: Types.Expr[], env: Types.Env): Types.LispValue {
+  const obj: any = evaluate(args[0], env);
+  const member = String(Eval.name(args[1]));
+  const val = obj[member];
+  if (typeof val === 'function') return val.call(obj, ...args.slice(2).map(a => evaluate(a, env)));
+  return val as Types.LispValue;
+}
+
+function l_mut(args: Types.Expr[], env: Types.Env): Types.LispValue {
+  const name = String(Eval.name(args[0]));
+  const val = evaluate(args[1], env);
+  let scope: any = env;
+  while (scope && !Object.prototype.hasOwnProperty.call(scope, name)) {
+    scope = Object.getPrototypeOf(scope);
+  }
+  if (scope) scope[name] = val;
+  else env[name] = val;
+  return val;
+}
+
+function l_cond(args: Types.Expr[], env: Types.Env): Types.LispValue {
+  for (let i = 0; i < args.length - 1; i += 2) {
+    if (evaluate(args[i], env)) return evaluate(args[i + 1], env);
+  }
+  if (args.length % 2 === 1) return evaluate(args.at(-1)!, env);
+  return FALSE;
 }
 
 function l_lambda(args: Types.Expr[], env: Types.Env): Types.LispFn {
@@ -186,6 +217,18 @@ function l_lambda(args: Types.Expr[], env: Types.Env): Types.LispFn {
     props.forEach((prop, i) => (localEnv[Eval.name(params[i])] = evaluate(prop, scope)));
     return evaluate(args.at(-1)!, localEnv);
   };
+}
+
+function l_fn(args: Types.Expr[], env: Types.Env): Types.LispValue {
+  const name = Eval.name(args[0]);
+  const paramList = args[1] as Types.Expr[];
+  const bodyExprs = args.slice(2);
+  const fn: Types.LispFn = (props: Types.Expr[] = [], scope: Types.Env) => {
+    const localEnv: Types.Env = Object.create(env);
+    paramList.forEach((param, i) => (localEnv[Eval.name(param)] = evaluate(props[i], scope)));
+    return bodyExprs.reduce<Types.LispValue>((_, x) => evaluate(x, localEnv), 0);
+  };
+  return (env[name] = fn);
 }
 
 function jsResolve(path: string): { target: any; value: any } {
@@ -225,9 +268,14 @@ const keywords: Types.Env = {
   ['atom?']: l_is_atom,
   ['lambda?']: l_is_lambda,
   ['loop']: l_loop,
+  ['!=']: l_neq,
   ['set!']: l_set,
+  ['push!']: l_push,
   ['pop!']: l_pop,
+  ['mut!']: l_mut,
   ['write']: l_write,
+  ['concat']: l_concat,
+  ['cond']: l_cond,
   ['.']: l_dot,
   ['lambda']: l_lambda,
   ['fn']: l_fn

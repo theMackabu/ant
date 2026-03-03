@@ -12664,6 +12664,19 @@ static bool js_try_get(ant_t *js, jsval_t obj, const char *key, jsval_t *out) {
     *out = proxy_get(js, obj, key, key_len);
     return true;
   }
+  
+  if (t == T_STR || t == T_NUM || t == T_BOOL) {
+    if (t == T_STR && key_len == 6 && memcmp(key, "length", 6) == 0) {
+      jsoff_t byte_len = 0; jsoff_t str_off = vstr(js, obj, &byte_len);
+      const char *str_data = (const char *)&js->mem[str_off];
+      *out = tov((double)utf16_strlen(str_data, byte_len));
+      return true;
+    }
+    jsval_t boxed = mkobj(js, 0);
+    js_set_slot(js, js_as_obj(boxed), SLOT_PRIMITIVE, obj);
+    obj = boxed; t = T_OBJ;
+  }
+  
   if (is_promise) obj = js_as_obj(obj);
   else if (t != T_OBJ) return false;
   jsoff_t off = lkp(js, obj, key, key_len);

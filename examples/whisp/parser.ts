@@ -11,6 +11,10 @@ interface ParseContext {
 }
 
 const openParen = (ctx: ParseContext): void => {
+  if (!ctx.head) {
+    const around = ctx.source.substring(Math.max(0, ctx.i - 20), ctx.i + 20);
+    throw new Error(`Unexpected '(' at position ${ctx.i} (stack empty): ...${around}...`);
+  }
   const temp: Types.Expr[] = [];
   ctx.head.push(temp);
   ctx.stack.push(ctx.head);
@@ -19,6 +23,10 @@ const openParen = (ctx: ParseContext): void => {
 
 const closeParen = (ctx: ParseContext): void => {
   flushToken(ctx);
+  if (ctx.stack.length === 0) {
+    const around = ctx.source.substring(Math.max(0, ctx.i - 20), ctx.i + 20);
+    throw new Error(`Unmatched ')' at position ${ctx.i}: ...${around}...`);
+  }
   ctx.head = ctx.stack.pop()!;
 };
 
@@ -45,10 +53,16 @@ const parseString = (ctx: ParseContext): void => {
   ctx.head.push(Types.Leaf.string(str));
 };
 
+const skipComment = (ctx: ParseContext): void => {
+  flushToken(ctx);
+  while (ctx.i < ctx.source.length && ctx.source[ctx.i] !== '\n') ctx.i++;
+};
+
 const tokenTable: Record<string, TokenHandler> = {
   '"': parseString,
   '(': openParen,
   ')': closeParen,
+  ';': skipComment,
   ' ': flushToken,
   '\n': flushToken,
   '\r': flushToken,

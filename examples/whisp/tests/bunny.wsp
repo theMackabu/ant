@@ -1,0 +1,339 @@
+;; === opcodes ===
+(let CONST  0)
+(let LOAD   1)
+(let ADD    2)
+(let CALL   3)
+(let RETURN 4)
+(let EXTERN 5)
+(let HALT   6)
+
+;; === token types ===
+(let T_EOF   0)
+(let T_FN    1)
+(let T_RET   2)
+(let T_IDENT 3)
+(let T_NUM   4)
+(let T_STR   5)
+(let T_LPAREN 6)
+(let T_RPAREN 7)
+(let T_LBRACE 8)
+(let T_RBRACE 9)
+(let T_COMMA  10)
+(let T_SEMI   11)
+(let T_PLUS   12)
+(let T_DOT    13)
+
+;; === vm state ===
+(let code      (array))
+(let stack     (array))
+(let callstack (array))
+(let functions (array))
+(let output    (array))
+(let entry     0)
+
+;; === extern table ===
+(let externs (array
+  (array "std.io.println" 1 0)
+  (array "bunny.squeak"   0 1)))
+
+;; === lexer state ===
+(let src "")
+(let pos 0)
+(let cur_type 0)
+(let cur_val  "")
+(let cur_num  0)
+
+(fn is_alpha (c)
+  (let cc (. c charCodeAt 0))
+  (or (and (>= cc 65) (<= cc 90))
+      (and (>= cc 97) (<= cc 122))))
+
+(fn is_digit (c)
+  (let cc (. c charCodeAt 0))
+  (and (>= cc 48) (<= cc 57)))
+
+(fn is_alnum (c)
+  (or (is_alpha c) (is_digit c)))
+
+(fn is_space (c)
+  (or (= c " ") (or (= c "\n") (or (= c "\r") (= c "\t")))))
+
+(fn char_at (i)
+  (if (< i (. src length)) (. src charAt i) ""))
+
+(fn skip_ws ()
+  (loop (and (< pos (. src length)) (is_space (char_at pos)))
+    (mut! pos (+ pos 1))))
+
+(fn next_token ()
+  (skip_ws)
+  (if (>= pos (. src length))
+    (do (mut! cur_type T_EOF) (mut! cur_val "") 0)
+    (do
+      (let c (char_at pos))
+      (cond
+        (is_alpha c) (do
+          (let start pos)
+          (loop (and (< pos (. src length)) (or (is_alnum (char_at pos)) (= (char_at pos) "_")))
+            (mut! pos (+ pos 1)))
+          (let word (. src slice start pos))
+          (cond
+            (= word "fn")     (do (mut! cur_type T_FN)    (mut! cur_val word))
+            (= word "return") (do (mut! cur_type T_RET)   (mut! cur_val word))
+            (do (mut! cur_type T_IDENT) (mut! cur_val word))))
+
+        (is_digit c) (do
+          (let start pos)
+          (loop (and (< pos (. src length)) (is_digit (char_at pos)))
+            (mut! pos (+ pos 1)))
+          (mut! cur_type T_NUM)
+          (mut! cur_num (Number.parseInt (. src slice start pos)))
+          (mut! cur_val ""))
+
+        (= c "\"") (do
+          (mut! pos (+ pos 1))
+          (let start pos)
+          (loop (and (< pos (. src length)) (!= (char_at pos) "\""))
+            (mut! pos (+ pos 1)))
+          (mut! cur_type T_STR)
+          (mut! cur_val (. src slice start pos))
+          (mut! pos (+ pos 1)))
+
+        (do
+          (mut! pos (+ pos 1))
+          (cond
+            (= c "(") (mut! cur_type T_LPAREN)
+            (= c ")") (mut! cur_type T_RPAREN)
+            (= c "{") (mut! cur_type T_LBRACE)
+            (= c "}") (mut! cur_type T_RBRACE)
+            (= c ",") (mut! cur_type T_COMMA)
+            (= c ";") (mut! cur_type T_SEMI)
+            (= c "+") (mut! cur_type T_PLUS)
+            (= c ".") (mut! cur_type T_DOT)
+            (mut! cur_type T_EOF))
+          (mut! cur_val ""))))))
+
+(fn advance () (next_token))
+
+(fn emit (op operand)
+  (push! code (array op operand)))
+
+(fn find_function (name)
+  (let i 0)
+  (let result -1)
+  (loop (and (< i (. functions length)) (= result -1))
+    (do
+      (if (= (get (get functions i) 0) name)
+        (mut! result i) 0)
+      (mut! i (+ i 1))))
+  result)
+
+(fn find_extern (name)
+  (let i 0)
+  (let result -1)
+  (loop (and (< i (. externs length)) (= result -1))
+    (do
+      (if (= (get (get externs i) 0) name)
+        (mut! result i) 0)
+      (mut! i (+ i 1))))
+  result)
+
+(fn find_param (func name)
+  (if (= func -1) -1
+    (do
+      (let f (get functions func))
+      (let params (get f 2))
+      (let nparams (get f 1))
+      (let i 0)
+      (let result -1)
+      (loop (and (< i nparams) (= result -1))
+        (do
+          (if (= (get params i) name)
+            (mut! result (- nparams (+ i 1))) 0)
+          (mut! i (+ i 1))))
+      result)))
+
+(fn parse_qname ()
+  (if (!= cur_type T_IDENT) ""
+    (do
+      (let name cur_val)
+      (advance)
+      (loop (= cur_type T_DOT)
+        (do
+          (advance)
+          (if (= cur_type T_IDENT)
+            (do (mut! name (concat name "." cur_val))
+                (advance)) 0)))
+      name)))
+
+(fn parse_expr (func)
+  (cond
+    (= cur_type T_NUM) (do
+      (emit CONST cur_num)
+      (advance))
+
+    (= cur_type T_STR) (do
+      (emit CONST cur_val)
+      (advance))
+
+    (= cur_type T_IDENT) (do
+      (let name (parse_qname))
+      (if (= cur_type T_LPAREN)
+        (parse_call func name)
+        (do
+          (let offset (find_param func name))
+          (emit LOAD offset)))))
+
+  (if (= cur_type T_PLUS)
+    (do (advance) (parse_expr func) (emit ADD 0)) 0))
+
+(fn parse_call (func name)
+  (advance)
+  (if (!= cur_type T_RPAREN)
+    (do
+      (parse_expr func)
+      (loop (= cur_type T_COMMA)
+        (do (advance) (parse_expr func)))) 0)
+  (advance)
+
+  (let ext (find_extern name))
+  (if (!= ext -1)
+    (emit EXTERN ext)
+    (emit CALL (find_function name))))
+
+(fn parse_function ()
+  (advance)
+  (let fname cur_val)
+  (advance)
+  (advance)
+
+  (let params (array))
+  (if (= cur_type T_IDENT)
+    (do
+      (push! params cur_val)
+      (advance)
+      (loop (= cur_type T_COMMA)
+        (do (advance)
+            (push! params cur_val)
+            (advance)))) 0)
+  (advance)
+  (advance)
+
+  (let fidx (. functions length))
+  (push! functions (array fname (. params length) params (. code length)))
+
+  (loop (!= cur_type T_RBRACE)
+    (if (= cur_type T_RET)
+      (do
+        (advance)
+        (parse_expr fidx)
+        (emit RETURN 0)
+        (advance)) 0))
+  (advance))
+
+(fn parse_program ()
+  (loop (= cur_type T_FN)
+    (parse_function))
+
+  (mut! entry (. code length))
+
+  (loop (!= cur_type T_EOF)
+    (if (= cur_type T_IDENT)
+      (do
+        (let name (parse_qname))
+        (if (= cur_type T_LPAREN)
+          (do (parse_call -1 name)
+              (if (= cur_type T_SEMI) (advance) 0)) 0))
+      (advance)))
+
+  (emit HALT 0))
+
+(fn vm_run ()
+  (let pc entry)
+  (let fp 0)
+
+  (loop (< pc (. code length))
+    (do
+      (let instr (get code pc))
+      (let op (get instr 0))
+      (let operand (get instr 1))
+
+      (cond
+        (= op CONST) (do
+          (push! stack operand)
+          (mut! pc (+ pc 1)))
+
+        (= op LOAD) (do
+          (push! stack (get stack (+ fp operand)))
+          (mut! pc (+ pc 1)))
+
+        (= op ADD) (do
+          (let b (. stack pop))
+          (let a (. stack pop))
+          (push! stack (+ a b))
+          (mut! pc (+ pc 1)))
+
+        (= op CALL) (do
+          (let f (get functions operand))
+          (push! callstack (+ pc 1))
+          (push! callstack fp)
+          (mut! fp (- (. stack length) (get f 1)))
+          (mut! pc (get f 3)))
+
+        (= op RETURN) (do
+          (let ret (. stack pop))
+          (mut! stack (. stack slice 0 fp))
+          (mut! fp (. callstack pop))
+          (mut! pc (. callstack pop))
+          (push! stack ret))
+
+        (= op EXTERN) (do
+          (let ext (get externs operand))
+          (let eid (get ext 2))
+          (cond
+            (= eid 0) (do
+              (let val (. stack pop))
+              (push! output (concat val))
+              (push! stack 0))
+            (= eid 1) (do
+              (push! output "squeak")
+              (push! stack 0)))
+          (mut! pc (+ pc 1)))
+
+        (= op HALT)
+          (mut! pc (. code length))))))
+
+(fn print_bytecode ()
+  (let names (array "CONST" "LOAD" "ADD" "CALL" "RETURN" "EXTERN" "HALT"))
+  (write "bytecode:\n")
+  (let i 0)
+  (loop (< i (. code length))
+    (do
+      (let instr (get code i))
+      (write "  " i ": " (get names (get instr 0)) " " (get instr 1) "\n")
+      (mut! i (+ i 1)))))
+
+(let source "fn add(a, b) {
+    return a + b;
+}
+bunny.squeak();
+std.io.println(add(5, 10));
+std.io.println(\"hello world\");")
+
+(write "Source:\n\n" source "\n\n")
+(write (concat (. "=" repeat 40) "\n\n"))
+
+(mut! src source)
+(mut! pos 0)
+(next_token)
+(parse_program)
+(print_bytecode)
+
+(write "\nOutput:\n")
+(vm_run)
+
+(let i 0)
+(loop (< i (. output length))
+  (do
+    (write (get output i) "\n")
+    (mut! i (+ i 1))))

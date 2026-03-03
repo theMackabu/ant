@@ -78,7 +78,7 @@ typedef enum {
 
 typedef enum {
   SV_VAR_VAR,
-  SV_VAR_LET_ASN,
+  SV_VAR_LET,
   SV_VAR_CONST,
 } sv_var_kind_t;
 
