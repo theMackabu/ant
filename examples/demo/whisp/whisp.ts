@@ -5,14 +5,18 @@ const TRUE = 1;
 const FALSE = 0;
 
 const handlers: Record<Types.LispNode, (value: any, args: Types.Expr[], env: Types.Env) => Types.LispValue> = {
-  [Types.LispNode.WORD]: (value, _, env) => env[value],
-  [Types.LispNode.APPLY]: (value, args, env) => (env[value] as Types.LispFn)(args, env),
   [Types.LispNode.ATOM]: value => value,
-  [Types.LispNode.STRING]: value => value
+  [Types.LispNode.STRING]: value => value,
+  [Types.LispNode.WORD]: (value, _, env) => l_resolve(value, env).value as Types.LispValue,
+
+  [Types.LispNode.APPLY]: (value, args, env) => {
+    const { target, value: fn } = l_resolve(value, env);
+    return target === env ? (fn as Types.LispFn)(args, env) : fn.call(target, ...args.map(a => evaluate(a, env)));
+  }
 };
 
 const Eval = {
-  name: (exp: Types.Expr) => { const [, value] = exp as Types.Leaf; return value; },
+  name: (exp: Types.Expr) => (exp as Types.Leaf)[1],
   num: (exp: Types.Expr, env: Types.Env): number => evaluate(exp, env) as number,
   str: (exp: Types.Expr, env: Types.Env): string => evaluate(exp, env) as string,
   arr: (exp: Types.Expr, env: Types.Env): Types.LispValue[] => evaluate(exp, env) as Types.LispValue[],
@@ -158,6 +162,23 @@ function l_write(args: Types.Expr[], env: Types.Env): Types.LispValue {
   return FALSE;
 }
 
+function l_dot(args: Types.Expr[], env: Types.Env): Types.LispValue {
+  const obj: any = evaluate(args[0], env);
+  const method = String(Eval.name(args[1]));
+  return obj[method](...args.slice(2).map(a => evaluate(a, env)));
+}
+
+function l_fn(args: Types.Expr[], env: Types.Env): Types.LispValue {
+  const name = Eval.name(args[0]);
+  return (env[name] = l_lambda(args.slice(1), env));
+}
+
+function l_resolve(name: string, env: Types.Env) {
+  if (name in env) return { target: env, value: env[name] };
+  if (name.includes('.')) return jsResolve(name);
+  return { target: env, value: env[name] };
+}
+
 function l_lambda(args: Types.Expr[], env: Types.Env): Types.LispFn {
   const params = args.slice(0, -1);
   return (props: Types.Expr[] = [], scope: Types.Env) => {
@@ -165,6 +186,13 @@ function l_lambda(args: Types.Expr[], env: Types.Env): Types.LispFn {
     props.forEach((prop, i) => (localEnv[Eval.name(params[i])] = evaluate(prop, scope)));
     return evaluate(args.at(-1)!, localEnv);
   };
+}
+
+function jsResolve(path: string): { target: any; value: any } {
+  const parts = path.split('.');
+  let target: any = globalThis;
+  parts.slice(0, -1).forEach(p => (target = target[p]));
+  return { target, value: target[parts.at(-1)!] };
 }
 
 const keywords: Types.Env = {
@@ -200,7 +228,9 @@ const keywords: Types.Env = {
   ['set!']: l_set,
   ['pop!']: l_pop,
   ['write']: l_write,
-  ['lambda']: l_lambda
+  ['.']: l_dot,
+  ['lambda']: l_lambda,
+  ['fn']: l_fn
 };
 
 function evaluate(exp: Types.Expr, env: Types.Env = keywords): Types.LispValue {
@@ -211,13 +241,8 @@ function evaluate(exp: Types.Expr, env: Types.Env = keywords): Types.LispValue {
 }
 
 export default function run(strings: TemplateStringsArray | string, ...values: unknown[]): Types.LispValue {
-  if (typeof strings === 'string') {
-    return evaluate(parse(`(apply (lambda (do ${strings})))`));
-  }
-
-  const source = (strings as TemplateStringsArray).reduce((acc: string, str: string, i: number) => {
-    return acc + str + (values[i] !== undefined ? values[i] : '');
-  }, '');
-
-  return evaluate(parse(`(apply (lambda (do ${source})))`));
+  let source: string;
+  if (typeof strings === 'string') source = strings;
+  else source = (strings as TemplateStringsArray).reduce((acc, str, i) => acc + str + (values[i] ?? ''), '');
+  return evaluate(parse(`(do ${source})`), Object.create(keywords));
 }
