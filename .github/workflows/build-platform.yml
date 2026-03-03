@@ -119,6 +119,11 @@ jobs:
             mingw-w64-clang-x86_64-cmake mingw-w64-clang-x86_64-openssl mingw-w64-clang-x86_64-libsodium
             mingw-w64-clang-x86_64-lld mingw-w64-clang-x86_64-nodejs git jq
 
+      - name: Configure git line endings
+        if: inputs.platform == 'windows-x64'
+        run: git config --global core.autocrlf false
+        shell: bash
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
