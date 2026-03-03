@@ -3,7 +3,6 @@
     "noEmit": true,
     "strict": true,
     "noImplicitAny": true,
-
     "target": "ES2024",
     "module": "ESNext",
     "moduleResolution": "bundler",
