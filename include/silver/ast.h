@@ -5,6 +5,10 @@
 #include <stdbool.h>
 #include "types.h"
 
+#ifdef N_NULL
+#undef N_NULL
+#endif
+
 typedef enum {
   N_NUMBER,
   N_STRING,
