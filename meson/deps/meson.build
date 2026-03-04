@@ -115,12 +115,17 @@ base64_dep = declare_dependency(
 
 uthash_dep = subproject('uthash').get_variable('uthash_dep')
 yyjson_dep = subproject('yyjson').get_variable('yyjson_dep')
-utf8proc_dep = subproject('utf8proc').get_variable('utf8proc_dep')
 uuidv7_dep = subproject('uuidv7').get_variable('uuidv7_dep')
 argtable3_dep = subproject('argtable3').get_variable('argtable3_dep')
 minicoro_dep = subproject('minicoro').get_variable('minicoro_dep')
 crprintf_dep = subproject('crprintf').get_variable('crprintf_dep')
 uriparser_dep = subproject('uriparser').get_variable('uriparser_dep')
+
+utf8proc_base_dep = subproject('utf8proc').get_variable('utf8proc_dep')
+utf8proc_dep = declare_dependency(
+  dependencies: [utf8proc_base_dep],
+  compile_args: get_option('default_library') == 'static' ? ['-DUTF8PROC_STATIC'] : [],
+)
 
 lmdb_dep = subproject('lmdb', default_options: [
   'warning_level=0',
