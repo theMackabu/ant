@@ -50,7 +50,7 @@ Ant plans to fully target the [WinterTC Minimum Common API](https://min-common-a
 | Suite            | Pass rate | Notes                                      |
 | ---------------- | --------- | ------------------------------------------ |
 | js-zoo (ES1–ES5) | ~100%     |                                            |
-| js-zoo (ES6)     | ~78%      | Whats left, mostly generators              |
+| js-zoo (ES6)     | ~80%\*    | \*Generators unsupported                   |
 | js-zoo (ES2016+) | ~85%      |                                            |
 | test262          | ~40%      | Improving, focus is on real-world coverage |
 
