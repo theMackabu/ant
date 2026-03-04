@@ -711,9 +711,10 @@ static bool is_string_keyword_literal(const char *s, size_t n) {
 
 static const char *class_to_crvar(hl_token_class cls) {
 switch (cls) {
-  case HL_NUMBER:           return "yellow";
-  case HL_BOOLEAN:          return "magenta";
-  case HL_LITERAL_NULL:     return "gray";
+  case HL_NUMBER:           return "#E8CD7C";
+  case HL_NUMBER_PREFIX:    return "#EADBAD";
+  case HL_BOOLEAN:          return "#65B2FF";
+  case HL_LITERAL_NULL:     return "#65B2FF";
 
   case HL_STRING:           return "#FF8A7F";
   case HL_STRING_DELIMITER: return "#FF7265";
@@ -854,6 +855,19 @@ static void ob_write_regex_literal(outbuf_t *o, const char *s, size_t n) {
   ob_write_with_class(o, in_class ? HL_REGEX_CDATA : HL_REGEX, s + seg_start, n - seg_start);
 }
 
+static void ob_write_number_literal(outbuf_t *o, const char *s, size_t n) {
+  if (n >= 2 && s[0] == '0' &&
+      (s[1] == 'x' || s[1] == 'X' ||
+       s[1] == 'b' || s[1] == 'B' ||
+       s[1] == 'o' || s[1] == 'O')) {
+    ob_write_with_class(o, HL_NUMBER_PREFIX, s, 2);
+    ob_write_with_class(o, HL_NUMBER, s + 2, n - 2);
+    return;
+  }
+
+  ob_write_with_class(o, HL_NUMBER, s, n);
+}
+
 int ant_highlight_stateful(
   const char *input, size_t input_len,
   char *out, size_t out_size,
@@ -872,6 +886,7 @@ int ant_highlight_stateful(
       if (span_is_template_string(piece, span.len)) body_cls = HL_STRING_TEMPLATE;
       ob_write_string_literal(&o, piece, span.len, body_cls);
     } else if (span.cls == HL_REGEX) ob_write_regex_literal(&o, input + span.off, span.len);
+    else if (span.cls == HL_NUMBER) ob_write_number_literal(&o, input + span.off, span.len);
     else ob_write_with_class(&o, span.cls, input + span.off, span.len);
   }
 
@@ -926,6 +941,7 @@ int highlight_js_line_clipped(
         if (span_is_template_string(piece, emit_len)) body_cls = HL_STRING_TEMPLATE;
         ob_write_string_literal(&o, piece, emit_len, body_cls);
       } else if (span.cls == HL_REGEX) ob_write_regex_literal(&o, line + span.off, emit_len);
+      else if (span.cls == HL_NUMBER) ob_write_number_literal(&o, line + span.off, emit_len);
       else ob_write_with_class(&o, span.cls, line + span.off, emit_len);
     }
 
