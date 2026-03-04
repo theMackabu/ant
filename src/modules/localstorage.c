@@ -158,7 +158,7 @@ static char *storage_key(size_t index) {
   }
 
 // localStorage.setItem(key, value)
-static jsval_t js_localstorage_setItem(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_localstorage_setItem(ant_t *js, ant_value_t *args, int nargs) {
   CHECK_FILE_SET(js);
   
   if (nargs < 2) {
@@ -175,7 +175,7 @@ static jsval_t js_localstorage_setItem(ant_t *js, jsval_t *args, int nargs) {
 }
 
 // localStorage.getItem(key)
-static jsval_t js_localstorage_getItem(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_localstorage_getItem(ant_t *js, ant_value_t *args, int nargs) {
   CHECK_FILE_SET(js);
   
   if (nargs < 1) {
@@ -192,7 +192,7 @@ static jsval_t js_localstorage_getItem(ant_t *js, jsval_t *args, int nargs) {
 }
 
 // localStorage.removeItem(key)
-static jsval_t js_localstorage_removeItem(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_localstorage_removeItem(ant_t *js, ant_value_t *args, int nargs) {
   CHECK_FILE_SET(js);
   
   if (nargs < 1) {
@@ -207,7 +207,7 @@ static jsval_t js_localstorage_removeItem(ant_t *js, jsval_t *args, int nargs) {
 }
 
 // localStorage.clear()
-static jsval_t js_localstorage_clear(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_localstorage_clear(ant_t *js, ant_value_t *args, int nargs) {
   CHECK_FILE_SET(js);
   (void)args; (void)nargs;
   storage_clear();
@@ -216,7 +216,7 @@ static jsval_t js_localstorage_clear(ant_t *js, jsval_t *args, int nargs) {
 }
 
 // localStorage.key(index)
-static jsval_t js_localstorage_key(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_localstorage_key(ant_t *js, ant_value_t *args, int nargs) {
   CHECK_FILE_SET(js);
   
   if (nargs < 1) {
@@ -239,14 +239,14 @@ static jsval_t js_localstorage_key(ant_t *js, jsval_t *args, int nargs) {
 }
 
 // localStorage.length
-static jsval_t js_localstorage_length(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_localstorage_length(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
   CHECK_FILE_SET(js)
   return js_mknum((double)storage_length());
 }
 
 // localStorage.setFile(path)
-static jsval_t js_localstorage_setFile(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_localstorage_setFile(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) {
     return js_mkerr(js, "Failed to execute 'setFile' on 'Storage': 1 argument required");
   }
@@ -275,7 +275,7 @@ static jsval_t js_localstorage_setFile(ant_t *js, jsval_t *args, int nargs) {
 void init_localstorage_module() {
   ant_t *js = rt->js;
   
-  jsval_t glob = js_glob(js);
+  ant_value_t glob = js_glob(js);
   const char *file_path = rt->ls_fp;
   
   if (file_path) {
@@ -283,7 +283,7 @@ void init_localstorage_module() {
     storage_load();
   }
   
-  jsval_t storage_obj = js_mkobj(js);
+  ant_value_t storage_obj = js_mkobj(js);
   
   js_set(js, storage_obj, "setItem", js_mkfun(js_localstorage_setItem));
   js_set(js, storage_obj, "getItem", js_mkfun(js_localstorage_getItem));
@@ -292,7 +292,7 @@ void init_localstorage_module() {
   js_set(js, storage_obj, "key", js_mkfun(js_localstorage_key));
   js_set(js, storage_obj, "setFile", js_mkfun(js_localstorage_setFile));
   
-  jsval_t length_getter = js_mkfun(js_localstorage_length);
+  ant_value_t length_getter = js_mkfun(js_localstorage_length);
   js_set_getter_desc(js, storage_obj, "length", 6, length_getter, JS_DESC_E);
   
   js_set_sym(js, storage_obj, get_toStringTag_sym(), js_mkstr(js, "Storage", 7));

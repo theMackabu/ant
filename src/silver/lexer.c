@@ -10,7 +10,7 @@
 #include <math.h>
 #include <string.h>
 
-void sv_lexer_init(sv_lexer_t *lx, ant_t *js, const char *code, jsoff_t clen, bool strict) {
+void sv_lexer_init(sv_lexer_t *lx, ant_t *js, const char *code, ant_offset_t clen, bool strict) {
   lx->js = js;
   lx->code = code;
   lx->clen = clen;
@@ -26,7 +26,7 @@ void sv_lexer_init(sv_lexer_t *lx, ant_t *js, const char *code, jsoff_t clen, bo
 
 void sv_lexer_set_error_site(sv_lexer_t *lx) {
   ant_t *js = lx->js;
-  jsoff_t off = lx->st.toff > 0 ? lx->st.toff : lx->st.pos;
+  ant_offset_t off = lx->st.toff > 0 ? lx->st.toff : lx->st.pos;
   js_set_error_site(js, lx->code, lx->clen, js->filename, off, lx->st.tlen);
 }
 
@@ -38,7 +38,7 @@ void sv_lexer_restore_state(sv_lexer_t *lx, const sv_lexer_state_t *st) {
   lx->st = *st;
 }
 
-void sv_lexer_push_source(sv_lexer_t *lx, sv_lexer_checkpoint_t *cp, const char *code, jsoff_t clen) {
+void sv_lexer_push_source(sv_lexer_t *lx, sv_lexer_checkpoint_t *cp, const char *code, ant_offset_t clen) {
   cp->code = lx->code;
   cp->clen = lx->clen;
   cp->strict = lx->strict;
@@ -98,7 +98,7 @@ sv_lex_string_t sv_lexer_str_literal(sv_lexer_t *lx) {
   return outv;
 }
 
-static int is_unicode_space(const unsigned char *p, jsoff_t remaining, bool *is_line_term) {
+static int is_unicode_space(const unsigned char *p, ant_offset_t remaining, bool *is_line_term) {
   if (is_line_term) *is_line_term = false;
   if (p[0] < 0x80) return 0;
 
@@ -132,7 +132,7 @@ static const uint8_t cc[128] = {
   0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
 };
 
-static jsoff_t sv_skiptonext(const char *code, jsoff_t len, jsoff_t n, bool *nl) {
+static ant_offset_t sv_skiptonext(const char *code, ant_offset_t len, ant_offset_t n, bool *nl) {
   static const void *D[] = { &&L0, &&LS, &&LN, &&LSL, &&LH };
   bool saw_nl = false;
   unsigned char c;
@@ -184,7 +184,7 @@ LSL:
 
 LH: {
   bool lt;
-  int u = is_unicode_space((const unsigned char *)p, (jsoff_t)(end - p), &lt);
+  int u = is_unicode_space((const unsigned char *)p, (ant_offset_t)(end - p), &lt);
   if (u > 0) {
     if (lt) saw_nl = true;
     p += u;
@@ -196,7 +196,7 @@ LH: {
 
 L0:
   if (nl) *nl = saw_nl;
-  return (jsoff_t)(p - code);
+  return (ant_offset_t)(p - code);
 }
 
 #define K(s, t) if (len == sizeof(s)-1 && !memcmp(buf, s, sizeof(s)-1)) return t
@@ -412,12 +412,12 @@ bool is_ident_continue(int c) {
   return (c & 0x80) != 0;
 }
 
-static int parse_unicode_escape(const char *buf, jsoff_t len, jsoff_t pos, uint32_t *codepoint) {
+static int parse_unicode_escape(const char *buf, ant_offset_t len, ant_offset_t pos, uint32_t *codepoint) {
   if (pos + 3 >= len) return 0;
   if (buf[pos] != '\\' || buf[pos + 1] != 'u') return 0;
 
   if (buf[pos + 2] == '{') {
-    jsoff_t i = pos + 3;
+    ant_offset_t i = pos + 3;
     uint32_t cp = 0;
     int ndigits = 0;
     while (i < len && is_xdigit((unsigned char)buf[i])) {
@@ -473,7 +473,7 @@ static size_t decode_ident_escapes(const char *src, size_t srclen, char *dst, si
   size_t si = 0, di = 0;
   while (si < srclen && di + 4 < dstlen) {
     uint32_t cp;
-    int el = parse_unicode_escape(src, (jsoff_t)srclen, (jsoff_t)si, &cp);
+    int el = parse_unicode_escape(src, (ant_offset_t)srclen, (ant_offset_t)si, &cp);
     if (el > 0) {
       di += utf8_encode(cp, dst + di);
       si += el;
@@ -483,11 +483,11 @@ static size_t decode_ident_escapes(const char *src, size_t srclen, char *dst, si
   return di;
 }
 
-static uint8_t parseident(const char *buf, jsoff_t len, jsoff_t *tlen) {
+static uint8_t parseident(const char *buf, ant_offset_t len, ant_offset_t *tlen) {
   if (len == 0) return TOK_ERR;
   
   unsigned char c = (unsigned char)buf[0];
-  jsoff_t i = 0;
+  ant_offset_t i = 0;
   
   if (c < 128 && c != '\\' && is_ident_begin(c)) {
     i = 1;
@@ -513,7 +513,7 @@ static uint8_t parseident(const char *buf, jsoff_t len, jsoff_t *tlen) {
     utf8proc_int32_t cp;
     utf8proc_ssize_t n = utf8_next((const utf8proc_uint8_t *)buf, (utf8proc_ssize_t)len, &cp);
     if (cp < 0 || !is_unicode_id_start(cp)) return TOK_ERR;
-    i = (jsoff_t)n;
+    i = (ant_offset_t)n;
     *tlen = i;
     goto slow_path_loop;
   }
@@ -545,7 +545,7 @@ slow_path_loop:;
         (utf8proc_ssize_t)(len - *tlen), &cp
       );
       if (cp < 0 || !is_unicode_id_continue(cp)) break;
-      *tlen += (jsoff_t)n;
+      *tlen += (ant_offset_t)n;
     }
   }
   
@@ -560,10 +560,10 @@ slow_path_loop:;
   return sv_parsekeyword(buf, *tlen);
 }
 
-static inline jsoff_t parse_decimal(const char *buf, jsoff_t maxlen, double *out) {
+static inline ant_offset_t parse_decimal(const char *buf, ant_offset_t maxlen, double *out) {
   uint64_t int_part = 0, frac_part = 0;
   int frac_digits = 0;
-  jsoff_t i = 0;
+  ant_offset_t i = 0;
 
   while (i < maxlen && (IS_DIGIT(buf[i]) || buf[i] == '_')) {
     if (buf[i] != '_') int_part = int_part * 10 + (buf[i] - '0');
@@ -615,9 +615,9 @@ static inline jsoff_t parse_decimal(const char *buf, jsoff_t maxlen, double *out
   return i;
 }
 
-static inline jsoff_t parse_binary(const char *buf, jsoff_t maxlen, double *out) {
+static inline ant_offset_t parse_binary(const char *buf, ant_offset_t maxlen, double *out) {
   double val = 0;
-  jsoff_t i = 2;
+  ant_offset_t i = 2;
   while (i < maxlen && (buf[i] == '0' || buf[i] == '1' || buf[i] == '_')) {
     if (buf[i] != '_') val = val * 2 + (buf[i] - '0');
     i++;
@@ -626,9 +626,9 @@ static inline jsoff_t parse_binary(const char *buf, jsoff_t maxlen, double *out)
   return i;
 }
 
-static inline jsoff_t parse_octal(const char *buf, jsoff_t maxlen, double *out) {
+static inline ant_offset_t parse_octal(const char *buf, ant_offset_t maxlen, double *out) {
   double val = 0;
-  jsoff_t i = 2;
+  ant_offset_t i = 2;
   while (i < maxlen && (IS_OCTAL(buf[i]) || buf[i] == '_')) {
     if (buf[i] != '_') val = val * 8 + (buf[i] - '0');
     i++;
@@ -637,9 +637,9 @@ static inline jsoff_t parse_octal(const char *buf, jsoff_t maxlen, double *out) 
   return i;
 }
 
-static inline jsoff_t parse_legacy_octal(const char *buf, jsoff_t maxlen, double *out) {
+static inline ant_offset_t parse_legacy_octal(const char *buf, ant_offset_t maxlen, double *out) {
   double val = 0;
-  jsoff_t i = 1;
+  ant_offset_t i = 1;
   while (i < maxlen && IS_OCTAL(buf[i])) {
       val = val * 8 + (buf[i] - '0');
       i++;
@@ -648,9 +648,9 @@ static inline jsoff_t parse_legacy_octal(const char *buf, jsoff_t maxlen, double
   return i;
 }
 
-static inline jsoff_t parse_hex(const char *buf, jsoff_t maxlen, double *out) {
+static inline ant_offset_t parse_hex(const char *buf, ant_offset_t maxlen, double *out) {
   double val = 0;
-  jsoff_t i = 2;
+  ant_offset_t i = 2;
   while (i < maxlen && (IS_XDIGIT(buf[i]) || buf[i] == '_')) {
     if (buf[i] != '_') {
       int d = 
@@ -663,9 +663,9 @@ static inline jsoff_t parse_hex(const char *buf, jsoff_t maxlen, double *out) {
   return i;
 }
 
-static inline uint8_t parse_number(sv_lexer_t *lx, const char *buf, jsoff_t remaining) {
+static inline uint8_t parse_number(sv_lexer_t *lx, const char *buf, ant_offset_t remaining) {
   double value = 0;
-  jsoff_t numlen = 0;
+  ant_offset_t numlen = 0;
   
   if (buf[0] == '0' && remaining > 1) {
     char c1 = buf[1] | 0x20; 
@@ -701,12 +701,12 @@ static inline uint8_t parse_number(sv_lexer_t *lx, const char *buf, jsoff_t rema
   return lx->st.tok;
 }
 
-static inline uint8_t scan_string(sv_lexer_t *lx, const char *buf, jsoff_t rem, char quote) {
-  jsoff_t i = 1;
+static inline uint8_t scan_string(sv_lexer_t *lx, const char *buf, ant_offset_t rem, char quote) {
+  ant_offset_t i = 1;
 
   while (i < rem) {
     const char *p = buf + i;
-    jsoff_t search_len = rem - i;
+    ant_offset_t search_len = rem - i;
 
     const char *q = memchr(p, quote, search_len);
     const char *b = memchr(p, '\\', search_len);
@@ -718,13 +718,13 @@ static inline uint8_t scan_string(sv_lexer_t *lx, const char *buf, jsoff_t rem, 
     }
 
     if (b == NULL || q < b) {
-      i = (jsoff_t)((q - buf) + 1);
+      i = (ant_offset_t)((q - buf) + 1);
       lx->st.tok = TOK_STRING;
       lx->st.tlen = i;
       return TOK_STRING;
     }
 
-    jsoff_t esc_pos = (jsoff_t)(b - buf);
+    ant_offset_t esc_pos = (ant_offset_t)(b - buf);
     if (esc_pos + 1 >= rem) {
       lx->st.tok = TOK_ERR;
       lx->st.tlen = rem;
@@ -732,12 +732,12 @@ static inline uint8_t scan_string(sv_lexer_t *lx, const char *buf, jsoff_t rem, 
     }
 
     char esc_char = buf[esc_pos + 1];
-    jsoff_t skip = 2;
+    ant_offset_t skip = 2;
 
     if (esc_char == 'x') { skip = 4; } else if (esc_char == 'u') {
       skip = (esc_pos + 2 < rem && buf[esc_pos + 2] == '{') ? 0 : 6;
       if (skip == 0) {
-        jsoff_t j = esc_pos + 3;
+        ant_offset_t j = esc_pos + 3;
         while (j < rem && buf[j] != '}') j++;
         skip = (j < rem) ? (j - esc_pos + 1) : (rem - esc_pos);
       }
@@ -757,8 +757,8 @@ static inline uint8_t scan_string(sv_lexer_t *lx, const char *buf, jsoff_t rem, 
   return TOK_ERR;
 }
 
-static inline jsoff_t skip_string_literal(const char *buf, jsoff_t rem, jsoff_t start, char quote) {
-  jsoff_t i = start + 1;
+static inline ant_offset_t skip_string_literal(const char *buf, ant_offset_t rem, ant_offset_t start, char quote) {
+  ant_offset_t i = start + 1;
   while (i < rem) {
     if (buf[i] == '\\') { i += 2; continue; }
     if (buf[i] == quote) { return i + 1; } i++;
@@ -766,14 +766,14 @@ static inline jsoff_t skip_string_literal(const char *buf, jsoff_t rem, jsoff_t 
   return rem;
 }
 
-static inline jsoff_t skip_line_comment(const char *buf, jsoff_t rem, jsoff_t start) {
-  jsoff_t i = start + 2;
+static inline ant_offset_t skip_line_comment(const char *buf, ant_offset_t rem, ant_offset_t start) {
+  ant_offset_t i = start + 2;
   while (i < rem && buf[i] != '\n') i++;
   return i;
 }
 
-static inline jsoff_t skip_block_comment(const char *buf, jsoff_t rem, jsoff_t start) {
-  jsoff_t i = start + 2;
+static inline ant_offset_t skip_block_comment(const char *buf, ant_offset_t rem, ant_offset_t start) {
+  ant_offset_t i = start + 2;
   while (i + 1 < rem && !(buf[i] == '*' && buf[i + 1] == '/')) i++;
   return (i + 1 < rem) ? (i + 2) : rem;
 }
@@ -793,8 +793,8 @@ static inline bool is_ident_ascii_continue(char c) {
   return is_ident_ascii_start(c) || (c >= '0' && c <= '9');
 }
 
-static inline jsoff_t skip_regex_literal(const char *buf, jsoff_t rem, jsoff_t start) {
-  jsoff_t i = start + 1;
+static inline ant_offset_t skip_regex_literal(const char *buf, ant_offset_t rem, ant_offset_t start) {
+  ant_offset_t i = start + 1;
   bool in_class = false;
 
   while (i < rem) {
@@ -811,7 +811,7 @@ static inline jsoff_t skip_regex_literal(const char *buf, jsoff_t rem, jsoff_t s
 }
 
 // todo: modularize
-static inline bool regex_allowed_after_ident(const char *buf, jsoff_t start, jsoff_t end) {
+static inline bool regex_allowed_after_ident(const char *buf, ant_offset_t start, ant_offset_t end) {
   size_t n = (size_t)(end - start);
   if (n == 2 && !memcmp(buf + start, "if", 2)) return true;
   if (n == 2 && !memcmp(buf + start, "in", 2)) return true;
@@ -830,8 +830,8 @@ static inline bool regex_allowed_after_ident(const char *buf, jsoff_t start, jso
   return false;
 }
 
-static jsoff_t skip_template_literal(const char *buf, jsoff_t rem, jsoff_t start) {
-  jsoff_t i = start + 1;
+static ant_offset_t skip_template_literal(const char *buf, ant_offset_t rem, ant_offset_t start) {
+  ant_offset_t i = start + 1;
   int expr_depth = 0;
   bool can_start_regex = true;
 
@@ -859,7 +859,7 @@ static jsoff_t skip_template_literal(const char *buf, jsoff_t rem, jsoff_t start
     }
 
     if (c == '`') {
-      jsoff_t next = skip_template_literal(buf, rem, i);
+      ant_offset_t next = skip_template_literal(buf, rem, i);
       if (next <= i) return rem;
       i = next;
       can_start_regex = false;
@@ -882,7 +882,7 @@ static jsoff_t skip_template_literal(const char *buf, jsoff_t rem, jsoff_t start
     if (is_expr_ws(c)) { i++; continue; }
 
     if (is_ident_ascii_start(c)) {
-      jsoff_t id_start = i;
+      ant_offset_t id_start = i;
       i++;
       while (i < rem && is_ident_ascii_continue(buf[i])) i++;
       can_start_regex = regex_allowed_after_ident(buf, id_start, i);
@@ -924,8 +924,8 @@ static jsoff_t skip_template_literal(const char *buf, jsoff_t rem, jsoff_t start
   return rem;
 }
 
-static inline uint8_t scan_template(sv_lexer_t *lx, const char *buf, jsoff_t rem) {
-  jsoff_t end = skip_template_literal(buf, rem, 0);
+static inline uint8_t scan_template(sv_lexer_t *lx, const char *buf, ant_offset_t rem) {
+  ant_offset_t end = skip_template_literal(buf, rem, 0);
   if (end <= 1 || end > rem) {
     lx->st.tok = TOK_ERR;
     lx->st.tlen = rem;
@@ -937,7 +937,7 @@ static inline uint8_t scan_template(sv_lexer_t *lx, const char *buf, jsoff_t rem
   return TOK_TEMPLATE;
 }
 
-static inline uint8_t parse_operator(sv_lexer_t *lx, const char *buf, jsoff_t rem) {
+static inline uint8_t parse_operator(sv_lexer_t *lx, const char *buf, ant_offset_t rem) {
   #define MATCH2(c1,c2)       (rem >= 2 && buf[1] == (c2))
   #define MATCH3(c1,c2,c3)    (rem >= 3 && buf[1] == (c2) && buf[2] == (c3))
   #define MATCH4(c1,c2,c3,c4) (rem >= 4 && buf[1]==(c2) && buf[2]==(c3) && buf[3]==(c4))
@@ -1063,7 +1063,7 @@ static uint8_t sv_next_raw(sv_lexer_t *lx) {
   }
 
   const char *buf = lx->code + lx->st.toff;
-  jsoff_t rem = lx->clen - lx->st.toff;
+  ant_offset_t rem = lx->clen - lx->st.toff;
   uint8_t c = (uint8_t)buf[0];
 
   if (likely(c < 128)) {
@@ -1125,9 +1125,9 @@ uint8_t sv_lexer_lookahead(sv_lexer_t *lx) {
   uint8_t old = lx->st.tok, tok = 0;
   uint8_t old_consumed = lx->st.consumed;
   
-  jsoff_t pos = lx->st.pos;
-  jsoff_t toff = lx->st.toff;
-  jsoff_t tlen = lx->st.tlen;
+  ant_offset_t pos = lx->st.pos;
+  ant_offset_t toff = lx->st.toff;
+  ant_offset_t tlen = lx->st.tlen;
   
   bool had_newline = lx->st.had_newline;
 

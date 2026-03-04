@@ -45,8 +45,8 @@ typedef struct esm_module {
   char *resolved_path;
   char *url_content;
   size_t url_content_len;
-  jsval_t namespace_obj;
-  jsval_t default_export;
+  ant_value_t namespace_obj;
+  ant_value_t default_export;
   UT_hash_handle hh;
   esm_module_kind_t kind;
   esm_module_format_t format;
@@ -67,14 +67,14 @@ typedef struct {
 static esm_module_cache_t global_module_cache = {NULL, 0};
 static char *esm_resolve_node_module(const char *specifier, const char *base_path);
 
-static jsval_t esm_get_import_meta_raw(ant_t *js) {
-  jsval_t import_fn = js_get(js, js->global, "import");
+static ant_value_t esm_get_import_meta_raw(ant_t *js) {
+  ant_value_t import_fn = js_get(js, js->global, "import");
   if (vtype(import_fn) != T_FUNC) return js_mkundef();
   return js_get(js, js_func_obj(import_fn), "meta");
 }
 
 static void esm_set_import_meta_main_flag(ant_t *js, bool is_main) {
-  jsval_t meta = esm_get_import_meta_raw(js);
+  ant_value_t meta = esm_get_import_meta_raw(js);
   if (vtype(meta) != T_OBJ) return;
   js_set(js, meta, "main", is_main ? js_true : js_false);
 }
@@ -712,12 +712,12 @@ static esm_module_format_t esm_decide_module_format(const char *resolved_path) {
   return ESM_MODULE_FORMAT_ESM;
 }
 
-static jsval_t esm_eval_module_with_format(
+static ant_value_t esm_eval_module_with_format(
   ant_t *js,
   const char *resolved_path,
   const char *js_code,
   size_t js_len,
-  jsval_t ns,
+  ant_value_t ns,
   esm_module_format_t format
 ) {
   if (format == ESM_MODULE_FORMAT_CJS) {
@@ -726,18 +726,18 @@ static jsval_t esm_eval_module_with_format(
   return js_eval_bytecode_module(js, js_code, js_len);
 }
 
-jsval_t js_esm_eval_module_source(
+ant_value_t js_esm_eval_module_source(
   ant_t *js,
   const char *resolved_path,
   const char *js_code,
   size_t js_len,
-  jsval_t ns
+  ant_value_t ns
 ) {
   esm_module_format_t format = esm_decide_module_format(resolved_path);
-  jsval_t prev_module = js->module_ns;
+  ant_value_t prev_module = js->module_ns;
   js->module_ns = ns;
 
-  jsval_t result = esm_eval_module_with_format(
+  ant_value_t result = esm_eval_module_with_format(
     js, resolved_path, js_code, js_len, ns, format
   );
   
@@ -851,7 +851,7 @@ void js_esm_cleanup_module_cache(void) {
   global_module_cache.count = 0;
 }
 
-void js_esm_gc_roots(void (*visit)(void *ctx, jsval_t *val), void *ctx) {
+void js_esm_gc_roots(void (*visit)(void *ctx, ant_value_t *val), void *ctx) {
   if (!visit) return;
   esm_module_t *mod = NULL, *tmp = NULL;
   HASH_ITER(hh, global_module_cache.modules, mod, tmp) {
@@ -860,7 +860,7 @@ void js_esm_gc_roots(void (*visit)(void *ctx, jsval_t *val), void *ctx) {
   }
 }
 
-static jsval_t esm_read_file(ant_t *js, const char *path, const char *kind, esm_file_data_t *out) {
+static ant_value_t esm_read_file(ant_t *js, const char *path, const char *kind, esm_file_data_t *out) {
   FILE *fp = fopen(path, "rb");
   if (!fp) return js_mkerr(js, "Cannot open %s: %s", kind, path);
 
@@ -883,36 +883,36 @@ static jsval_t esm_read_file(ant_t *js, const char *path, const char *kind, esm_
   return js_mkundef();
 }
 
-static jsval_t esm_load_json(ant_t *js, const char *path) {
+static ant_value_t esm_load_json(ant_t *js, const char *path) {
   esm_file_data_t file;
-  jsval_t err = esm_read_file(js, path, "JSON file", &file);
+  ant_value_t err = esm_read_file(js, path, "JSON file", &file);
   if (is_err(err)) return err;
 
-  jsval_t json_str = js_mkstr(js, file.data, file.size);
+  ant_value_t json_str = js_mkstr(js, file.data, file.size);
   free(file.data);
   return js_json_parse(js, &json_str, 1);
 }
 
-static jsval_t esm_load_text(ant_t *js, const char *path) {
+static ant_value_t esm_load_text(ant_t *js, const char *path) {
   esm_file_data_t file;
-  jsval_t err = esm_read_file(js, path, "text file", &file);
+  ant_value_t err = esm_read_file(js, path, "text file", &file);
   if (is_err(err)) return err;
 
-  jsval_t result = js_mkstr(js, file.data, file.size);
+  ant_value_t result = js_mkstr(js, file.data, file.size);
   free(file.data);
   return result;
 }
 
-static jsval_t esm_load_image(ant_t *js, const char *path) {
+static ant_value_t esm_load_image(ant_t *js, const char *path) {
   esm_file_data_t file;
-  jsval_t err = esm_read_file(js, path, "image file", &file);
+  ant_value_t err = esm_read_file(js, path, "image file", &file);
   if (is_err(err)) return err;
 
   unsigned char *content = (unsigned char *)file.data;
   size_t size = file.size;
 
-  jsval_t obj = js_mkobj(js);
-  jsval_t data_arr = js_mkarr(js);
+  ant_value_t obj = js_mkobj(js);
+  ant_value_t data_arr = js_mkarr(js);
 
   for (size_t i = 0; i < size; i++) {
     js_arr_push(js, data_arr, tov((double)content[i]));
@@ -926,7 +926,7 @@ static jsval_t esm_load_image(ant_t *js, const char *path) {
   return obj;
 }
 
-static jsval_t esm_load_module(ant_t *js, esm_module_t *mod) {
+static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod) {
   if (mod->is_loaded) return mod->namespace_obj;
   if (mod->is_loading) return mod->namespace_obj;
 
@@ -934,7 +934,7 @@ static jsval_t esm_load_module(ant_t *js, esm_module_t *mod) {
 
   switch (mod->kind) {
     case ESM_MODULE_KIND_JSON: {
-      jsval_t json_val = esm_load_json(js, mod->resolved_path);
+      ant_value_t json_val = esm_load_json(js, mod->resolved_path);
       if (is_err(json_val)) {
         mod->is_loading = false;
         return json_val;
@@ -946,7 +946,7 @@ static jsval_t esm_load_module(ant_t *js, esm_module_t *mod) {
       return json_val;
     }
     case ESM_MODULE_KIND_TEXT: {
-      jsval_t text_val = esm_load_text(js, mod->resolved_path);
+      ant_value_t text_val = esm_load_text(js, mod->resolved_path);
       if (is_err(text_val)) {
         mod->is_loading = false;
         return text_val;
@@ -958,7 +958,7 @@ static jsval_t esm_load_module(ant_t *js, esm_module_t *mod) {
       return text_val;
     }
     case ESM_MODULE_KIND_IMAGE: {
-      jsval_t img_val = esm_load_image(js, mod->resolved_path);
+      ant_value_t img_val = esm_load_image(js, mod->resolved_path);
       if (is_err(img_val)) {
         mod->is_loading = false;
         return img_val;
@@ -970,16 +970,16 @@ static jsval_t esm_load_module(ant_t *js, esm_module_t *mod) {
       return img_val;
     }
     case ESM_MODULE_KIND_NATIVE: {
-      jsval_t ns = js_mkobj(js);
+      ant_value_t ns = js_mkobj(js);
       mod->namespace_obj = ns;
 
-      jsval_t native_exports = napi_load_native_module(js, mod->resolved_path, ns);
+      ant_value_t native_exports = napi_load_native_module(js, mod->resolved_path, ns);
       if (is_err(native_exports)) {
         mod->is_loading = false;
         return native_exports;
       }
 
-      jsval_t default_val = js_get_slot(js, ns, SLOT_DEFAULT);
+      ant_value_t default_val = js_get_slot(js, ns, SLOT_DEFAULT);
       mod->default_export = vtype(default_val) != T_UNDEF ? default_val : ns;
       mod->is_loaded = true;
       mod->is_loading = false;
@@ -1008,7 +1008,7 @@ static jsval_t esm_load_module(ant_t *js, esm_module_t *mod) {
       content = esm_fetch_url(mod->resolved_path, &size, &error);
       if (!content) {
         mod->is_loading = false;
-        jsval_t err = js_mkerr(js, "Cannot fetch module %s: %s", mod->resolved_path, error ? error : "unknown error");
+        ant_value_t err = js_mkerr(js, "Cannot fetch module %s: %s", mod->resolved_path, error ? error : "unknown error");
         if (error) free(error);
         return err;
       }
@@ -1017,7 +1017,7 @@ static jsval_t esm_load_module(ant_t *js, esm_module_t *mod) {
     }
   } else {
     esm_file_data_t file;
-    jsval_t err = esm_read_file(js, mod->resolved_path, "module", &file);
+    ant_value_t err = esm_read_file(js, mod->resolved_path, "module", &file);
     if (is_err(err)) {
       mod->is_loading = false;
       return err;
@@ -1035,7 +1035,7 @@ static jsval_t esm_load_module(ant_t *js, esm_module_t *mod) {
   );
   
   if (strip_result < 0) {
-    jsval_t err = js_mkerr(
+    ant_value_t err = js_mkerr(
       js, "TypeScript error: strip failed (%d): %s",
       strip_result, strip_detail
     );
@@ -1047,14 +1047,14 @@ static jsval_t esm_load_module(ant_t *js, esm_module_t *mod) {
   }
   
   char *js_code = content;
-  jsval_t ns = js_mkobj(js);
+  ant_value_t ns = js_mkobj(js);
   mod->namespace_obj = ns;
   
-  jsval_t prev_module = js->module_ns;
+  ant_value_t prev_module = js->module_ns;
   js->module_ns = ns;
 
   const char *prev_filename = js->filename;
-  jshdl_t prev_import_meta_h = js_root(js, js->import_meta);
+  ant_handle_t prev_import_meta_h = js_root(js, js->import_meta);
   
   js_set_filename(js, mod->resolved_path);
   js_setup_import_meta(js, mod->resolved_path);
@@ -1066,7 +1066,7 @@ static jsval_t esm_load_module(ant_t *js, esm_module_t *mod) {
     mod->format = esm_decide_module_format(mod->resolved_path);
   }
 
-  jsval_t result = esm_eval_module_with_format(
+  ant_value_t result = esm_eval_module_with_format(
     js, mod->resolved_path, js_code, js_len, ns, mod->format
   );
   
@@ -1083,7 +1083,7 @@ static jsval_t esm_load_module(ant_t *js, esm_module_t *mod) {
     return result;
   }
 
-  jsval_t default_val = js_get_slot(js, ns, SLOT_DEFAULT);
+  ant_value_t default_val = js_get_slot(js, ns, SLOT_DEFAULT);
   mod->default_export = vtype(default_val) != T_UNDEF ? default_val : ns;
 
   mod->is_loaded = true;
@@ -1092,7 +1092,7 @@ static jsval_t esm_load_module(ant_t *js, esm_module_t *mod) {
   return ns;
 }
 
-static jsval_t esm_get_or_load(ant_t *js, const char *specifier, const char *resolved_path) {
+static ant_value_t esm_get_or_load(ant_t *js, const char *specifier, const char *resolved_path) {
   esm_module_t *mod = esm_find_module(resolved_path);
   if (!mod) {
     mod = esm_create_module(specifier, resolved_path);
@@ -1101,7 +1101,7 @@ static jsval_t esm_get_or_load(ant_t *js, const char *specifier, const char *res
   return esm_load_module(js, mod);
 }
 
-jsval_t js_esm_import_sync_cstr(ant_t *js, const char *specifier, size_t spec_len) {
+ant_value_t js_esm_import_sync_cstr(ant_t *js, const char *specifier, size_t spec_len) {
   char *spec_copy = strndup(specifier, spec_len);
   if (!spec_copy) return js_mkerr(js, "oom");
 
@@ -1112,7 +1112,7 @@ jsval_t js_esm_import_sync_cstr(ant_t *js, const char *specifier, size_t spec_le
   }
 
   bool loaded = false;
-  jsval_t lib = js_esm_load_registered_library(js, spec_copy, spec_len, &loaded);
+  ant_value_t lib = js_esm_load_registered_library(js, spec_copy, spec_len, &loaded);
   if (loaded) {
     free(spec_copy);
     return lib;
@@ -1121,46 +1121,46 @@ jsval_t js_esm_import_sync_cstr(ant_t *js, const char *specifier, size_t spec_le
   const char *base_path = js->filename ? js->filename : ".";
   char *resolved_path = esm_resolve(spec_copy, base_path, esm_resolve_path);
   if (!resolved_path) {
-    jsval_t err = js_mkerr(js, "Cannot resolve module: %s", spec_copy);
+    ant_value_t err = js_mkerr(js, "Cannot resolve module: %s", spec_copy);
     free(spec_copy);
     return err;
   }
 
-  jsval_t ns = esm_get_or_load(js, spec_copy, resolved_path);
+  ant_value_t ns = esm_get_or_load(js, spec_copy, resolved_path);
   free(resolved_path);
   free(spec_copy);
   return ns;
 }
 
-jsval_t js_esm_import_sync(ant_t *js, jsval_t specifier) {
+ant_value_t js_esm_import_sync(ant_t *js, ant_value_t specifier) {
   if (vtype(specifier) != T_STR)
     return js_mkerr(js, "import() requires a string specifier");
 
-  jsoff_t spec_len = 0;
-  jsoff_t spec_off = vstr(js, specifier, &spec_len);
+  ant_offset_t spec_len = 0;
+  ant_offset_t spec_off = vstr(js, specifier, &spec_len);
   const char *spec_str = (const char *)&js->mem[spec_off];
 
   return js_esm_import_sync_cstr(js, spec_str, (size_t)spec_len);
 }
 
-jsval_t js_esm_make_file_url(ant_t *js, const char *path) {
+ant_value_t js_esm_make_file_url(ant_t *js, const char *path) {
   size_t url_len = strlen(path) + 8;
   char *url = malloc(url_len);
   if (!url) return js_mkerr(js, "oom");
 
   snprintf(url, url_len, "file://%s", path);
-  jsval_t val = js_mkstr(js, url, strlen(url));
+  ant_value_t val = js_mkstr(js, url, strlen(url));
   free(url);
   return val;
 }
 
-jsval_t js_esm_resolve_specifier(ant_t *js, jsval_t specifier, const char *base_path) {
+ant_value_t js_esm_resolve_specifier(ant_t *js, ant_value_t specifier, const char *base_path) {
   if (vtype(specifier) != T_STR) {
     return js_mkerr(js, "import.meta.resolve() requires a string specifier");
   }
 
-  jsoff_t spec_len = 0;
-  jsoff_t spec_off = vstr(js, specifier, &spec_len);
+  ant_offset_t spec_len = 0;
+  ant_offset_t spec_off = vstr(js, specifier, &spec_len);
   const char *spec_str = (const char *)&js->mem[spec_off];
   char *spec_copy = strndup(spec_str, (size_t)spec_len);
   if (!spec_copy) return js_mkerr(js, "oom");
@@ -1174,12 +1174,12 @@ jsval_t js_esm_resolve_specifier(ant_t *js, jsval_t specifier, const char *base_
   }
 
   if (esm_is_url(resolved_path)) {
-    jsval_t result = js_mkstr(js, resolved_path, strlen(resolved_path));
+    ant_value_t result = js_mkstr(js, resolved_path, strlen(resolved_path));
     free(resolved_path);
     return result;
   }
 
-  jsval_t result = js_esm_make_file_url(js, resolved_path);
+  ant_value_t result = js_esm_make_file_url(js, resolved_path);
   free(resolved_path);
   return result;
 }

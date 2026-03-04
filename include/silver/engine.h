@@ -47,7 +47,7 @@ struct sv_func {
   uint8_t *code;
   int code_len;
   
-  jsval_t *constants;
+  ant_value_t *constants;
   int const_count;
   
   sv_atom_t *atoms;
@@ -100,7 +100,7 @@ typedef enum {
 
 typedef struct {
   sv_completion_kind_t kind;
-  jsval_t              value;
+  ant_value_t              value;
 } sv_completion_t;
 
 typedef struct 
@@ -108,14 +108,14 @@ typedef struct
 
 typedef struct {
   uint8_t *ip;
-  jsval_t *bp;
-  jsval_t *lp;
+  ant_value_t *bp;
+  ant_value_t *lp;
   
   sv_func_t *func;
-  jsval_t callee;
-  jsval_t this;
-  jsval_t new_target;
-  jsval_t super_val;
+  ant_value_t callee;
+  ant_value_t this;
+  ant_value_t new_target;
+  ant_value_t super_val;
   
   int prev_sp;
   int handler_base;
@@ -125,7 +125,7 @@ typedef struct {
   sv_completion_t completion;
   sv_upvalue_t **upvalues;
   int upvalue_count;
-  jsval_t with_obj;
+  ant_value_t with_obj;
 } sv_frame_t;
 
 typedef enum {
@@ -140,8 +140,8 @@ typedef struct {
 } sv_handler_t;
 
 struct sv_upvalue {
-  jsval_t *location;
-  jsval_t closed;
+  ant_value_t *location;
+  ant_value_t closed;
   struct sv_upvalue *next;
   uint32_t gc_epoch;
 };
@@ -152,41 +152,41 @@ struct sv_upvalue {
 typedef struct sv_closure {
   sv_func_t *func;
   sv_upvalue_t **upvalues;
-  jsval_t bound_this;
-  jsval_t func_obj;
+  ant_value_t bound_this;
+  ant_value_t func_obj;
   uint32_t gc_epoch;
   uint8_t call_flags;
 } sv_closure_t;
 
-static inline sv_closure_t *js_func_closure(jsval_t func) {
+static inline sv_closure_t *js_func_closure(ant_value_t func) {
   return (sv_closure_t *)(uintptr_t)vdata(func);
 }
 
-static inline jsval_t js_func_obj(jsval_t func) {
+static inline ant_value_t js_func_obj(ant_value_t func) {
   return js_func_closure(func)->func_obj;
 }
 
-static inline jsval_t js_as_obj(jsval_t v) {
+static inline ant_value_t js_as_obj(ant_value_t v) {
   uint8_t t = vtype(v);
   if (t == T_OBJ) return v;
   if (t == T_FUNC) return js_func_obj(v);
   return mkval(T_OBJ, vdata(v));
 }
 
-jsval_t sv_execute_closure_entry(
+ant_value_t sv_execute_closure_entry(
   sv_vm_t *vm,sv_closure_t *closure,
-  jsval_t callee_func, jsval_t super_val,
-  jsval_t this_val, jsval_t *args,
-  int argc, jsval_t *out_this
+  ant_value_t callee_func, ant_value_t super_val,
+  ant_value_t this_val, ant_value_t *args,
+  int argc, ant_value_t *out_this
 );
 
 #ifdef ANT_JIT
 typedef struct {
   bool active;
   int bc_offset;
-  jsval_t *locals;
+  ant_value_t *locals;
   int n_locals;
-  jsval_t *lp;
+  ant_value_t *lp;
 } sv_jit_osr_t;
 #endif
 
@@ -200,7 +200,7 @@ typedef struct {
 struct sv_vm {
   ant_t *js;
 
-  jsval_t *stack;
+  ant_value_t *stack;
   int sp;
   int stack_size;
 
@@ -216,9 +216,9 @@ struct sv_vm {
   struct {
     bool active;
     int64_t ip_offset;
-    jsval_t *locals;
+    ant_value_t *locals;
     int64_t n_locals;
-    jsval_t *vstack;
+    ant_value_t *vstack;
     int64_t vstack_sp;
   } jit_resume;
 
@@ -256,13 +256,13 @@ static inline bool sv_frame_is_strict(const sv_frame_t *frame) {
   return frame && frame->func && frame->func->is_strict;
 }
 
-static inline bool sv_is_nullish_this(jsval_t v) {
+static inline bool sv_is_nullish_this(ant_value_t v) {
   return 
     vtype(v) == T_UNDEF || vtype(v) == T_NULL ||
     (vtype(v) == T_OBJ && vdata(v) == 0);
 }
 
-static inline jsval_t sv_normalize_this_for_frame(ant_t *js, sv_func_t *func, jsval_t this_val) {
+static inline ant_value_t sv_normalize_this_for_frame(ant_t *js, sv_func_t *func, ant_value_t this_val) {
   if (!func || func->is_arrow) return this_val;
   if (func->is_strict) return sv_is_nullish_this(this_val) ? js_mkundef() : this_val;
   return sv_is_nullish_this(this_val) ? js->global : this_val;
@@ -276,12 +276,12 @@ static inline bool sv_vm_is_strict(const sv_vm_t *vm) {
   return false;
 }
 
-static inline jsval_t sv_vm_get_new_target(const sv_vm_t *vm, ant_t *js) {
+static inline ant_value_t sv_vm_get_new_target(const sv_vm_t *vm, ant_t *js) {
   if (vm && vm->fp >= 0) return vm->frames[vm->fp].new_target;
   return js->new_target;
 }
 
-static inline jsval_t sv_vm_get_super_val(const sv_vm_t *vm) {
+static inline ant_value_t sv_vm_get_super_val(const sv_vm_t *vm) {
   if (vm && vm->fp >= 0) return vm->frames[vm->fp].super_val;
   return js_mkundef();
 }
@@ -291,19 +291,19 @@ static inline int sv_frame_arg_slots(const sv_frame_t *frame) {
   return frame->argc > frame->func->param_count ? frame->argc : frame->func->param_count;
 }
 
-static inline jsval_t sv_frame_get_arg_value(const sv_frame_t *frame, uint16_t idx) {
+static inline ant_value_t sv_frame_get_arg_value(const sv_frame_t *frame, uint16_t idx) {
   int arg_slots = sv_frame_arg_slots(frame);
   if (!frame || !frame->bp || (int)idx >= arg_slots) return js_mkundef();
   return frame->bp[idx];
 }
 
-static inline void sv_frame_set_arg_value(sv_frame_t *frame, uint16_t idx, jsval_t val) {
+static inline void sv_frame_set_arg_value(sv_frame_t *frame, uint16_t idx, ant_value_t val) {
   int arg_slots = sv_frame_arg_slots(frame);
   if (!frame || !frame->bp || (int)idx >= arg_slots) return;
   frame->bp[idx] = val;
 }
 
-static inline jsval_t *sv_frame_slot_ptr(sv_frame_t *frame, uint16_t slot_idx) {
+static inline ant_value_t *sv_frame_slot_ptr(sv_frame_t *frame, uint16_t slot_idx) {
   if (!frame || !frame->func) return NULL;
   int param_count = frame->func->param_count;
   if ((int)slot_idx < param_count) {
@@ -315,43 +315,43 @@ static inline jsval_t *sv_frame_slot_ptr(sv_frame_t *frame, uint16_t slot_idx) {
   return &frame->lp[slot_idx - param_count];
 }
 
-static inline jsval_t sv_vm_call(
-  sv_vm_t *vm, ant_t *js, jsval_t func,
-  jsval_t this_val, jsval_t *args, int argc,
-  jsval_t *out_this, bool is_construct_call
+static inline ant_value_t sv_vm_call(
+  sv_vm_t *vm, ant_t *js, ant_value_t func,
+  ant_value_t this_val, ant_value_t *args, int argc,
+  ant_value_t *out_this, bool is_construct_call
 );
 
 typedef struct {
-  jsval_t  this_val;
-  jsval_t  super_val;
-  jsval_t *args;
+  ant_value_t  this_val;
+  ant_value_t  super_val;
+  ant_value_t *args;
   int      argc;
-  jsval_t *alloc;
+  ant_value_t *alloc;
 } sv_call_ctx_t;
 
-static inline jsval_t sv_call_cfunc(
-  ant_t *js, jsval_t func,
-  jsval_t this_val, jsval_t *args, int argc
+static inline ant_value_t sv_call_cfunc(
+  ant_t *js, ant_value_t func,
+  ant_value_t this_val, ant_value_t *args, int argc
 ) {
   js->this_val = this_val;
   return js_as_cfunc(func)(js, args, argc);
 }
 
-static inline jsval_t sv_call_resolve_bound(ant_t *js, jsval_t func_obj, sv_call_ctx_t *ctx) {
-  jsval_t bound_this = js_get_slot(js, func_obj, SLOT_BOUND_THIS);
+static inline ant_value_t sv_call_resolve_bound(ant_t *js, ant_value_t func_obj, sv_call_ctx_t *ctx) {
+  ant_value_t bound_this = js_get_slot(js, func_obj, SLOT_BOUND_THIS);
   if (js_get_slot(js, func_obj, SLOT_ARROW) == js_true) {
     ctx->this_val = bound_this;
   } else if (vtype(bound_this) != T_UNDEF) ctx->this_val = bound_this;
 
-  jsval_t bound_arr = js_get_slot(js, func_obj, SLOT_BOUND_ARGS);
+  ant_value_t bound_arr = js_get_slot(js, func_obj, SLOT_BOUND_ARGS);
   if (vtype(bound_arr) == T_ARR) {
     int bound_argc = (int)js_arr_len(js, bound_arr);
     if (bound_argc > 0) {
       int total = bound_argc + ctx->argc;
-      jsval_t *combined = malloc(sizeof(jsval_t) * (size_t)total);
+      ant_value_t *combined = malloc(sizeof(ant_value_t) * (size_t)total);
       if (!combined) return js_mkerr(js, "out of memory");
       for (int i = 0; i < bound_argc; i++)
-        combined[i] = js_arr_get(js, bound_arr, (jsoff_t)i);
+        combined[i] = js_arr_get(js, bound_arr, (ant_offset_t)i);
       for (int i = 0; i < ctx->argc; i++)
         combined[bound_argc + i] = ctx->args[i];
       ctx->args  = combined;
@@ -360,7 +360,7 @@ static inline jsval_t sv_call_resolve_bound(ant_t *js, jsval_t func_obj, sv_call
     }
   }
 
-  jsval_t func_super = js_get_slot(js, func_obj, SLOT_SUPER);
+  ant_value_t func_super = js_get_slot(js, func_obj, SLOT_SUPER);
   if (vtype(func_super) != T_UNDEF) ctx->super_val = func_super;
 
   return js_mkundef();
@@ -370,9 +370,9 @@ static inline void sv_call_cleanup(ant_t *js, sv_call_ctx_t *ctx) {
   if (ctx->alloc) { free(ctx->alloc); ctx->alloc = NULL; }
 }
 
-static inline jsval_t sv_call_default_ctor(
-  sv_vm_t *vm, ant_t *js, jsval_t func_obj,
-  sv_call_ctx_t *ctx, jsval_t *out_this
+static inline ant_value_t sv_call_default_ctor(
+  sv_vm_t *vm, ant_t *js, ant_value_t func_obj,
+  sv_call_ctx_t *ctx, ant_value_t *out_this
 ) {
   if (vtype(js->new_target) == T_UNDEF) {
     sv_call_cleanup(js, ctx);
@@ -382,11 +382,11 @@ static inline jsval_t sv_call_default_ctor(
     );
   }
 
-  jsval_t super_ctor = js_get_slot(js, func_obj, SLOT_SUPER);
+  ant_value_t super_ctor = js_get_slot(js, func_obj, SLOT_SUPER);
   uint8_t st = vtype(super_ctor);
   if (st == T_FUNC || st == T_CFUNC) {
-    jsval_t super_this = ctx->this_val;
-    jsval_t result = sv_vm_call(
+    ant_value_t super_this = ctx->this_val;
+    ant_value_t result = sv_vm_call(
       vm, js, super_ctor, ctx->this_val,
       ctx->args, ctx->argc, &super_this, true
     );
@@ -399,17 +399,17 @@ static inline jsval_t sv_call_default_ctor(
   return js_mkundef();
 }
 
-jsval_t sv_call_async_closure_dispatch(
+ant_value_t sv_call_async_closure_dispatch(
   sv_vm_t *vm, ant_t *js, sv_closure_t *closure,
-  jsval_t callee_func, jsval_t super_val,
-  jsval_t this_val, jsval_t *args, int argc
+  ant_value_t callee_func, ant_value_t super_val,
+  ant_value_t this_val, ant_value_t *args, int argc
 );
 
-static inline jsval_t sv_call_async_closure(
+static inline ant_value_t sv_call_async_closure(
   sv_vm_t *vm, ant_t *js, sv_closure_t *closure,
-  jsval_t callee_func, sv_call_ctx_t *ctx
+  ant_value_t callee_func, sv_call_ctx_t *ctx
 ) {
-  jsval_t result = sv_call_async_closure_dispatch(
+  ant_value_t result = sv_call_async_closure_dispatch(
     vm, js, closure, callee_func,
     ctx->super_val, ctx->this_val, ctx->args, ctx->argc
   );
@@ -417,11 +417,11 @@ static inline jsval_t sv_call_async_closure(
   return result;
 }
 
-static inline jsval_t sv_call_closure(
+static inline ant_value_t sv_call_closure(
   sv_vm_t *vm, ant_t *js, sv_closure_t *closure,
-  jsval_t callee_func, sv_call_ctx_t *ctx, jsval_t *out_this
+  ant_value_t callee_func, sv_call_ctx_t *ctx, ant_value_t *out_this
 ) {
-  jsval_t result = sv_execute_closure_entry(
+  ant_value_t result = sv_execute_closure_entry(
     vm, closure, callee_func, ctx->super_val,
     ctx->this_val, ctx->args, ctx->argc, out_this
   );
@@ -444,10 +444,10 @@ static inline jsval_t sv_call_closure(
 
 #define SV_JIT_BAILOUT \
   (NANBOX_PREFIX \
-    | ((jsval_t)T_SENTINEL << NANBOX_TYPE_SHIFT) \
+    | ((ant_value_t)T_SENTINEL << NANBOX_TYPE_SHIFT) \
     | SV_JIT_MAGIC)
   
-static inline bool sv_is_jit_bailout(jsval_t v) { 
+static inline bool sv_is_jit_bailout(ant_value_t v) { 
   return v == SV_JIT_BAILOUT;
 }
 
@@ -457,22 +457,22 @@ static inline void sv_jit_on_bailout(sv_func_t *fn) {
   fn->call_count = SV_JIT_THRESHOLD - SV_JIT_RECOMPILE_DELAY;
 }
 
-typedef jsval_t (*sv_jit_func_t)
-  (sv_vm_t *, jsval_t, jsval_t *, int, sv_closure_t *);
+typedef ant_value_t (*sv_jit_func_t)
+  (sv_vm_t *, ant_value_t, ant_value_t *, int, sv_closure_t *);
 
-jsval_t sv_jit_try_compile_and_call(sv_vm_t *vm, ant_t *js,
-  sv_closure_t *closure, jsval_t callee_func,
-  sv_call_ctx_t *ctx, jsval_t *out_this
+ant_value_t sv_jit_try_compile_and_call(sv_vm_t *vm, ant_t *js,
+  sv_closure_t *closure, ant_value_t callee_func,
+  sv_call_ctx_t *ctx, ant_value_t *out_this
 );
 
-static inline uint8_t sv_tfb_classify(jsval_t v) {
+static inline uint8_t sv_tfb_classify(ant_value_t v) {
   if (vtype(v) == T_NUM) return SV_TFB_NUM;
   if (vtype(v) == T_STR) return SV_TFB_STR;
   if (vtype(v) == T_BOOL) return SV_TFB_BOOL;
   return SV_TFB_OTHER;
 }
 
-static inline void sv_tfb_record2(sv_func_t *func, uint8_t *ip, jsval_t l, jsval_t r) {
+static inline void sv_tfb_record2(sv_func_t *func, uint8_t *ip, ant_value_t l, ant_value_t r) {
 if (func->type_feedback) {
   int off = (int)(ip - func->code);
   uint8_t old = func->type_feedback[off];
@@ -480,7 +480,7 @@ if (func->type_feedback) {
   if (neu != old) { func->type_feedback[off] = neu; func->tfb_version++; }
 }}
 
-static inline void sv_tfb_record1(sv_func_t *func, uint8_t *ip, jsval_t v) {
+static inline void sv_tfb_record1(sv_func_t *func, uint8_t *ip, ant_value_t v) {
 if (func->type_feedback) {
   int off = (int)(ip - func->code);
   uint8_t old = func->type_feedback[off];
@@ -494,9 +494,9 @@ static inline void sv_tfb_ensure(sv_func_t *fn) {
 }
 #endif
 
-static inline jsval_t sv_call_resolve_closure(
+static inline ant_value_t sv_call_resolve_closure(
   sv_vm_t *vm, ant_t *js, sv_closure_t *closure,
-  jsval_t callee_func, sv_call_ctx_t *ctx, jsval_t *out_this
+  ant_value_t callee_func, sv_call_ctx_t *ctx, ant_value_t *out_this
 ) {
   if (closure->func->is_async)
     return sv_call_async_closure(vm, js, closure, callee_func, ctx);
@@ -504,7 +504,7 @@ static inline jsval_t sv_call_resolve_closure(
   if (!closure->func->is_generator) {
     sv_func_t *fn = closure->func;
     if (fn->jit_code) {
-      jsval_t result = ((sv_jit_func_t)fn->jit_code)(vm, ctx->this_val, ctx->args, ctx->argc, closure);
+      ant_value_t result = ((sv_jit_func_t)fn->jit_code)(vm, ctx->this_val, ctx->args, ctx->argc, closure);
       if (sv_is_jit_bailout(result)) {
         sv_jit_on_bailout(fn);
       } else { sv_call_cleanup(js, ctx); return result; }
@@ -514,7 +514,7 @@ static inline jsval_t sv_call_resolve_closure(
       if (__builtin_expect(cc == SV_TFB_ALLOC_THRESHOLD, 0))
         sv_tfb_ensure(fn);
       if (cc > SV_JIT_THRESHOLD) {
-        jsval_t result = sv_jit_try_compile_and_call(vm, js, closure, callee_func, ctx, out_this);
+        ant_value_t result = sv_jit_try_compile_and_call(vm, js, closure, callee_func, ctx, out_this);
         if (result != SV_JIT_RETRY_INTERP) return result;
       }
     }
@@ -523,10 +523,10 @@ static inline jsval_t sv_call_resolve_closure(
   return sv_call_closure(vm, js, closure, callee_func, ctx, out_this);
 }
 
-static inline jsval_t sv_vm_call(
-  sv_vm_t *vm, ant_t *js, jsval_t func,
-  jsval_t this_val, jsval_t *args, int argc,
-  jsval_t *out_this, bool is_construct_call
+static inline ant_value_t sv_vm_call(
+  sv_vm_t *vm, ant_t *js, ant_value_t func,
+  ant_value_t this_val, ant_value_t *args, int argc,
+  ant_value_t *out_this, bool is_construct_call
 ) {
   if (!is_construct_call) js->new_target = js_mkundef();
   if (out_this) *out_this = this_val;
@@ -535,7 +535,7 @@ static inline jsval_t sv_vm_call(
     return js_proxy_apply(js, func, this_val, args, argc);
 
   if (vtype(func) == T_CFUNC) {
-    jsval_t cfunc_this = sv_is_nullish_this(this_val) ? js->global : this_val;
+    ant_value_t cfunc_this = sv_is_nullish_this(this_val) ? js->global : this_val;
     return sv_call_cfunc(js, func, cfunc_this, args, argc);
   }
 
@@ -543,14 +543,14 @@ static inline jsval_t sv_vm_call(
     return sv_call_native(js, func, this_val, args, argc);
 
   sv_closure_t *closure = js_func_closure(func);
-  jsval_t func_obj = closure->func_obj;
+  ant_value_t func_obj = closure->func_obj;
 
   sv_call_ctx_t ctx = {
     .this_val = this_val, .super_val = js_mkundef(),
     .args = args, .argc = argc, .alloc = NULL,
   };
 
-  jsval_t err = sv_call_resolve_bound(js, func_obj, &ctx);
+  ant_value_t err = sv_call_resolve_bound(js, func_obj, &ctx);
   if (is_err(err)) return err;
 
   if (is_construct_call) ctx.this_val = this_val;
@@ -562,7 +562,7 @@ static inline jsval_t sv_vm_call(
   if (closure->func != NULL)
     return sv_call_resolve_closure(vm, js, closure, func, &ctx, out_this);
 
-  jsval_t result = sv_call_native(js, func, ctx.this_val, ctx.args, ctx.argc);
+  ant_value_t result = sv_call_native(js, func, ctx.this_val, ctx.args, ctx.argc);
   sv_call_cleanup(js, &ctx);
   
   return result;

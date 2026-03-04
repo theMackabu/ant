@@ -22,7 +22,7 @@ static inline void sv_clear_completion(sv_vm_t *vm) {
   frame->completion.value = js_mkundef();
 }
 
-static inline void sv_close_upvalues_from_slot(sv_vm_t *vm, jsval_t *slot) {
+static inline void sv_close_upvalues_from_slot(sv_vm_t *vm, ant_value_t *slot) {
   sv_upvalue_t **pp = &vm->open_upvalues;
   while (*pp) {
   sv_upvalue_t *uv = *pp;
@@ -33,11 +33,11 @@ static inline void sv_close_upvalues_from_slot(sv_vm_t *vm, jsval_t *slot) {
   } else pp = &uv->next;}
 }
 
-static inline jsval_t sv_op_throw(sv_vm_t *vm) {
+static inline ant_value_t sv_op_throw(sv_vm_t *vm) {
   return vm->stack[--vm->sp];
 }
 
-static inline jsval_t sv_op_throw_error(
+static inline ant_value_t sv_op_throw_error(
   sv_vm_t *vm, ant_t *js,
   sv_func_t *func, uint8_t *ip
 ) {
@@ -75,12 +75,12 @@ static inline void sv_op_try_pop(sv_vm_t *vm) {
   }
 }
 
-static inline void sv_op_catch(sv_vm_t *vm, jsval_t caught, uint8_t *ip) {
+static inline void sv_op_catch(sv_vm_t *vm, ant_value_t caught, uint8_t *ip) {
   if (vm->sp == 0) vm->stack[vm->sp++] = caught;
   sv_clear_completion(vm);
 }
 
-static inline jsval_t sv_op_finally(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
+static inline ant_value_t sv_op_finally(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   sv_frame_t *frame = &vm->frames[vm->fp];
   if (vm->handler_depth >= SV_HANDLER_MAX)
     return js_mkerr(js, "handler stack overflow");
@@ -98,7 +98,7 @@ static inline jsval_t sv_op_finally(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
 static inline sv_finally_ret_t sv_op_finally_ret(
   sv_vm_t *vm, ant_t *js,
   uint8_t **resume_ip,
-  jsval_t *completion_val
+  ant_value_t *completion_val
 ) {
   sv_frame_t *frame = &vm->frames[vm->fp];
   if (vm->handler_depth <= frame->handler_base ||
@@ -127,12 +127,12 @@ static inline sv_finally_ret_t sv_op_finally_ret(
 }
 
 static inline void sv_op_nip_catch(sv_vm_t *vm) {
-  jsval_t a = vm->stack[vm->sp - 1];
+  ant_value_t a = vm->stack[vm->sp - 1];
   vm->stack[vm->sp - 2] = a;
   vm->sp--;
 }
 
-static inline uint8_t *sv_vm_throw(sv_vm_t *vm, jsval_t err, int min_fp) {
+static inline uint8_t *sv_vm_throw(sv_vm_t *vm, ant_value_t err, int min_fp) {
   ant_t *js = vm->js;
   if (min_fp < 0) min_fp = 0;
 
@@ -145,11 +145,11 @@ static inline uint8_t *sv_vm_throw(sv_vm_t *vm, jsval_t err, int min_fp) {
       if (h->kind != SV_HANDLER_TRY) continue;
 
       for (int drop = vm->fp; drop > f; drop--) {
-        jsval_t *bp = vm->frames[drop].bp;
+        ant_value_t *bp = vm->frames[drop].bp;
         if (bp) sv_close_upvalues_from_slot(vm, bp);
       }
 
-      jsval_t caught = err;
+      ant_value_t caught = err;
       if (vtype(err) == T_ERR && js->thrown_exists &&
           vtype(js->thrown_value) != T_UNDEF) {
         caught = js->thrown_value;
@@ -175,7 +175,7 @@ static inline uint8_t *sv_vm_throw(sv_vm_t *vm, jsval_t err, int min_fp) {
   return NULL;
 }
 
-static inline uint8_t *sv_vm_unwind_for_return(sv_vm_t *vm, jsval_t ret) {
+static inline uint8_t *sv_vm_unwind_for_return(sv_vm_t *vm, ant_value_t ret) {
   sv_frame_t *frame = &vm->frames[vm->fp];
   for (int i = vm->handler_depth - 1; i >= frame->handler_base; i--) {
     sv_handler_t *h = &vm->handler_stack[i];

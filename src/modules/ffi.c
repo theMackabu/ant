@@ -26,7 +26,7 @@
 typedef struct ffi_lib {
   char name[256];
   void *handle;
-  jsval_t js_obj;
+  ant_value_t js_obj;
   UT_hash_handle hh;
 } ffi_lib_t;
 
@@ -60,7 +60,7 @@ typedef struct ffi_callback {
   char **arg_type_strs;
   int arg_count;
   ant_t *js;
-  jsval_t js_func;
+  ant_value_t js_func;
   uint64_t cb_key;
   UT_hash_handle hh;
 } ffi_callback_t;
@@ -82,26 +82,26 @@ static const UT_icd ffi_func_icd = {
   .dtor = NULL,
 };
 
-static jsval_t ffi_dlopen(ant_t *js, jsval_t *args, int nargs);
-static jsval_t ffi_define(ant_t *js, jsval_t *args, int nargs);
-static jsval_t ffi_lib_call(ant_t *js, jsval_t *args, int nargs);
-static jsval_t ffi_call_function(ant_t *js, ffi_func_t *func, jsval_t *args, int nargs);
-static jsval_t ffi_alloc_memory(ant_t *js, jsval_t *args, int nargs);
-static jsval_t ffi_free_memory(ant_t *js, jsval_t *args, int nargs);
-static jsval_t ffi_read_memory(ant_t *js, jsval_t *args, int nargs);
-static jsval_t ffi_write_memory(ant_t *js, jsval_t *args, int nargs);
-static jsval_t ffi_get_pointer(ant_t *js, jsval_t *args, int nargs);
-static jsval_t ffi_create_callback(ant_t *js, jsval_t *args, int nargs);
-static jsval_t ffi_free_callback(ant_t *js, jsval_t *args, int nargs);
-static jsval_t ffi_read_ptr(ant_t *js, jsval_t *args, int nargs);
+static ant_value_t ffi_dlopen(ant_t *js, ant_value_t *args, int nargs);
+static ant_value_t ffi_define(ant_t *js, ant_value_t *args, int nargs);
+static ant_value_t ffi_lib_call(ant_t *js, ant_value_t *args, int nargs);
+static ant_value_t ffi_call_function(ant_t *js, ffi_func_t *func, ant_value_t *args, int nargs);
+static ant_value_t ffi_alloc_memory(ant_t *js, ant_value_t *args, int nargs);
+static ant_value_t ffi_free_memory(ant_t *js, ant_value_t *args, int nargs);
+static ant_value_t ffi_read_memory(ant_t *js, ant_value_t *args, int nargs);
+static ant_value_t ffi_write_memory(ant_t *js, ant_value_t *args, int nargs);
+static ant_value_t ffi_get_pointer(ant_t *js, ant_value_t *args, int nargs);
+static ant_value_t ffi_create_callback(ant_t *js, ant_value_t *args, int nargs);
+static ant_value_t ffi_free_callback(ant_t *js, ant_value_t *args, int nargs);
+static ant_value_t ffi_read_ptr(ant_t *js, ant_value_t *args, int nargs);
 
 static ffi_type *get_ffi_type(const char *type_str);
-static void *js_to_ffi_value(ant_t *js, jsval_t val, ffi_type *type, void *buffer);
-static jsval_t ffi_to_js_value(ant_t *js, void *val, ffi_type *type, const char *type_str);
+static void *js_to_ffi_value(ant_t *js, ant_value_t val, ffi_type *type, void *buffer);
+static ant_value_t ffi_to_js_value(ant_t *js, void *val, ffi_type *type, const char *type_str);
 static void ffi_callback_handler(ffi_cif *cif, void *ret, void **args, void *user_data);
 
-jsval_t ffi_library(ant_t *js) {
-  jsval_t ffi_obj = js_mkobj(js);
+ant_value_t ffi_library(ant_t *js) {
+  ant_value_t ffi_obj = js_mkobj(js);
 
   js_set(js, ffi_obj, "dlopen", js_mkfun(ffi_dlopen));
   js_set(js, ffi_obj, "alloc", js_mkfun(ffi_alloc_memory));
@@ -125,7 +125,7 @@ jsval_t ffi_library(ant_t *js) {
 #endif
   js_set(js, ffi_obj, "suffix", js_mkstr(js, suffix, strlen(suffix)));
 
-  jsval_t ffi_types = js_mkobj(js);
+  ant_value_t ffi_types = js_mkobj(js);
   js_set(js, ffi_types, "void", js_mkstr(js, "void", 4));
   js_set(js, ffi_types, "int8", js_mkstr(js, "int8", 4));
   js_set(js, ffi_types, "int16", js_mkstr(js, "int16", 5));
@@ -154,7 +154,7 @@ static void ffi_init_array(void) {
     utarray_new(ffi_functions_array, &ffi_func_icd);
 }
 
-static jsval_t ffi_dlopen(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t ffi_dlopen(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1 || vtype(args[0]) != T_STR) {
     return js_mkerr(js, "dlopen() requires library name string");
   }
@@ -169,7 +169,7 @@ static jsval_t ffi_dlopen(ant_t *js, jsval_t *args, int nargs) {
   ffi_lib_t *lib = NULL;
   HASH_FIND_STR(ffi_libraries, lib_name, lib);
   if (lib) {
-    jsval_t result = lib->js_obj;
+    ant_value_t result = lib->js_obj;
     pthread_mutex_unlock(&ffi_libraries_mutex);
     return result;
   }
@@ -203,13 +203,13 @@ static jsval_t ffi_dlopen(ant_t *js, jsval_t *args, int nargs) {
   return lib->js_obj;
 }
 
-static jsval_t ffi_define(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t ffi_define(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2 || vtype(args[0]) != T_STR) {
     return js_mkerr(js, "define() requires function name string and signature");
   }
 
-  jsval_t this_obj = js_getthis(js);
-  jsval_t lib_ptr_val = js_get(js, this_obj, "__lib_ptr");
+  ant_value_t this_obj = js_getthis(js);
+  ant_value_t lib_ptr_val = js_get(js, this_obj, "__lib_ptr");
   if (vtype(lib_ptr_val) != T_NUM) {
     return js_mkerr(js, "Invalid library object");
   }
@@ -217,7 +217,7 @@ static jsval_t ffi_define(ant_t *js, jsval_t *args, int nargs) {
   size_t func_name_len;
   const char *func_name = js_getstr(js, args[0], &func_name_len);
 
-  jsval_t sig = args[1];
+  ant_value_t sig = args[1];
   int sig_type = vtype(sig);
   if (sig_type == T_STR || sig_type == T_NUM || sig_type == T_NULL ||
       sig_type == T_UNDEF) {
@@ -227,11 +227,11 @@ static jsval_t ffi_define(ant_t *js, jsval_t *args, int nargs) {
   }
 
   const char *ret_type_str;
-  jsval_t arg_types_arr;
+  ant_value_t arg_types_arr;
   int arg_count;
 
-  jsval_t returns_val = js_get(js, sig, "returns");
-  jsval_t args_val = js_get(js, sig, "args");
+  ant_value_t returns_val = js_get(js, sig, "returns");
+  ant_value_t args_val = js_get(js, sig, "args");
 
   if (vtype(returns_val) != T_UNDEF && vtype(args_val) != T_UNDEF) {
     if (vtype(returns_val) != T_STR) {
@@ -246,10 +246,10 @@ static jsval_t ffi_define(ant_t *js, jsval_t *args, int nargs) {
       return js_mkerr(js, "Argument types must be an array");
     }
 
-    jsval_t length_val = js_get(js, arg_types_arr, "length");
+    ant_value_t length_val = js_get(js, arg_types_arr, "length");
     arg_count = (int)js_getnum(length_val);
   } else {
-    jsval_t ret_type_val = js_get(js, sig, "0");
+    ant_value_t ret_type_val = js_get(js, sig, "0");
     if (vtype(ret_type_val) != T_STR) {
       return js_mkerr(js, "Return type must be a string");
     }
@@ -263,7 +263,7 @@ static jsval_t ffi_define(ant_t *js, jsval_t *args, int nargs) {
       return js_mkerr(js, "Argument types must be an array");
     }
 
-    jsval_t length_val = js_get(js, arg_types_arr, "length");
+    ant_value_t length_val = js_get(js, arg_types_arr, "length");
     arg_count = (int)js_getnum(length_val);
   }
 
@@ -302,7 +302,7 @@ static jsval_t ffi_define(ant_t *js, jsval_t *args, int nargs) {
     for (int i = 0; i < arg_count; i++) {
       char idx_str[16];
       snprintf(idx_str, sizeof(idx_str), "%d", i);
-      jsval_t arg_type_val = js_get(js, arg_types_arr, idx_str);
+      ant_value_t arg_type_val = js_get(js, arg_types_arr, idx_str);
 
       if (vtype(arg_type_val) != T_STR) {
         free(func->arg_types);
@@ -350,15 +350,15 @@ static jsval_t ffi_define(ant_t *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t ffi_lib_call(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t lib_obj = js_getthis(js);
+static ant_value_t ffi_lib_call(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t lib_obj = js_getthis(js);
   if (nargs < 1 || vtype(args[0]) != T_STR)
     return js_mkerr(js, "call() requires function name string");
 
   size_t func_name_len;
   const char *func_name = js_getstr(js, args[0], &func_name_len);
 
-  jsval_t ffi_val = js_get(js, lib_obj, func_name);
+  ant_value_t ffi_val = js_get(js, lib_obj, func_name);
   int func_index = js_getffi(ffi_val);
   if (func_index < 0) {
     return js_mkerr(js, "Function '%s' not defined", func_name);
@@ -367,7 +367,7 @@ static jsval_t ffi_lib_call(ant_t *js, jsval_t *args, int nargs) {
   return ffi_call_by_index(js, (unsigned int)func_index, args + 1, nargs - 1);
 }
 
-static jsval_t ffi_call_function(ant_t *js, ffi_func_t *func, jsval_t *args,int nargs) {
+static ant_value_t ffi_call_function(ant_t *js, ffi_func_t *func, ant_value_t *args,int nargs) {
   if (!func->is_variadic && nargs != func->arg_count) {
     return js_mkerr(js, "Function '%s' expects %d arguments, got %d", func->name, func->arg_count, nargs);
   }
@@ -432,7 +432,7 @@ static jsval_t ffi_call_function(ant_t *js, ffi_func_t *func, jsval_t *args,int 
   return ffi_to_js_value(js, &result, func->ret_type, func->ret_type_str);
 }
 
-jsval_t ffi_call_by_index(ant_t *js, unsigned int func_index, jsval_t *args, int nargs) {
+ant_value_t ffi_call_by_index(ant_t *js, unsigned int func_index, ant_value_t *args, int nargs) {
   pthread_mutex_lock(&ffi_functions_mutex);
   if (func_index >= utarray_len(ffi_functions_array)) {
     pthread_mutex_unlock(&ffi_functions_mutex);
@@ -445,7 +445,7 @@ jsval_t ffi_call_by_index(ant_t *js, unsigned int func_index, jsval_t *args, int
   return ffi_call_function(js, func, args, nargs);
 }
 
-static jsval_t ffi_alloc_memory(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t ffi_alloc_memory(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1 || vtype(args[0]) != T_NUM) {
     return js_mkerr(js, "alloc() requires size");
   }
@@ -478,7 +478,7 @@ static jsval_t ffi_alloc_memory(ant_t *js, jsval_t *args, int nargs) {
   return js_mknum((double)ffi_ptr->ptr_key);
 }
 
-static jsval_t ffi_free_memory(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t ffi_free_memory(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1 || vtype(args[0]) != T_NUM) {
     return js_mkerr(js, "free() requires pointer");
   }
@@ -505,7 +505,7 @@ static jsval_t ffi_free_memory(ant_t *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t ffi_read_memory(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t ffi_read_memory(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2 || vtype(args[0]) != T_NUM || vtype(args[1]) != T_STR) {
     return js_mkerr(js, "read() requires pointer and type");
   }
@@ -533,7 +533,7 @@ static jsval_t ffi_read_memory(ant_t *js, jsval_t *args, int nargs) {
   return ffi_to_js_value(js, ptr, type, type_str);
 }
 
-static jsval_t ffi_write_memory(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t ffi_write_memory(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 3 || vtype(args[0]) != T_NUM || vtype(args[1]) != T_STR) {
     return js_mkerr(js, "write() requires pointer, type, and value");
   }
@@ -563,7 +563,7 @@ static jsval_t ffi_write_memory(ant_t *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t ffi_get_pointer(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t ffi_get_pointer(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1 || vtype(args[0]) != T_NUM) return js_mkerr(js, "pointer() requires pointer");
   uint64_t ptr_key = (uint64_t)js_getnum(args[0]);
 
@@ -576,7 +576,7 @@ static jsval_t ffi_get_pointer(ant_t *js, jsval_t *args, int nargs) {
   return js_bool(exists);
 }
 
-static jsval_t ffi_read_ptr(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t ffi_read_ptr(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2 || vtype(args[0]) != T_NUM || vtype(args[1]) != T_STR) {
     return js_mkerr(js, "readPtr() requires pointer and type");
   }
@@ -602,14 +602,14 @@ static void ffi_callback_handler(ffi_cif *cif, void *ret, void **args, void *use
   ffi_callback_t *cb = (ffi_callback_t *)user_data;
   ant_t *js = cb->js;
 
-  jsval_t js_args[32];
+  ant_value_t js_args[32];
   int arg_count = cb->arg_count > 32 ? 32 : cb->arg_count;
 
   for (int i = 0; i < arg_count; i++) {
     js_args[i] = ffi_to_js_value(js, args[i], cb->arg_types[i], cb->arg_type_strs[i]);
   }
 
-  jsval_t result = sv_vm_call(js->vm, js, cb->js_func, js_mkundef(), js_args, arg_count, NULL, false);
+  ant_value_t result = sv_vm_call(js->vm, js, cb->js_func, js_mkundef(), js_args, arg_count, NULL, false);
 
   if (cb->ret_type != &ffi_type_void) {
     if (cb->ret_type == &ffi_type_sint8) {
@@ -640,35 +640,35 @@ static void ffi_callback_handler(ffi_cif *cif, void *ret, void **args, void *use
   }
 }
 
-static jsval_t ffi_create_callback(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t ffi_create_callback(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "callback() requires function and signature");
 
-  jsval_t js_func = args[0];
-  jsval_t sig = args[1];
+  ant_value_t js_func = args[0];
+  ant_value_t sig = args[1];
   int sig_type = vtype(sig);
   if (sig_type == T_STR || sig_type == T_NUM || sig_type == T_NULL || sig_type == T_UNDEF) {
     return js_mkerr(js, "Signature must be an object {args: [...], returns: type}");
   }
 
   const char *ret_type_str;
-  jsval_t arg_types_arr;
+  ant_value_t arg_types_arr;
   int arg_count;
 
-  jsval_t returns_val = js_get(js, sig, "returns");
-  jsval_t args_val = js_get(js, sig, "args");
+  ant_value_t returns_val = js_get(js, sig, "returns");
+  ant_value_t args_val = js_get(js, sig, "args");
 
   if (vtype(returns_val) != T_UNDEF && vtype(args_val) != T_UNDEF) {
     if (vtype(returns_val) != T_STR) return js_mkerr(js, "Return type must be a string");
     ret_type_str = js_getstr(js, returns_val, NULL);
     arg_types_arr = args_val;
-    jsval_t length_val = js_get(js, arg_types_arr, "length");
+    ant_value_t length_val = js_get(js, arg_types_arr, "length");
     arg_count = (int)js_getnum(length_val);
   } else {
-    jsval_t ret_type_val = js_get(js, sig, "0");
+    ant_value_t ret_type_val = js_get(js, sig, "0");
     if (vtype(ret_type_val) != T_STR) return js_mkerr(js, "Return type must be a string");
     ret_type_str = js_getstr(js, ret_type_val, NULL);
     arg_types_arr = js_get(js, sig, "1");
-    jsval_t length_val = js_get(js, arg_types_arr, "length");
+    ant_value_t length_val = js_get(js, arg_types_arr, "length");
     arg_count = (int)js_getnum(length_val);
   }
 
@@ -698,7 +698,7 @@ static jsval_t ffi_create_callback(ant_t *js, jsval_t *args, int nargs) {
     for (int i = 0; i < arg_count; i++) {
       char idx_str[16];
       snprintf(idx_str, sizeof(idx_str), "%d", i);
-      jsval_t arg_type_val = js_get(js, arg_types_arr, idx_str);
+      ant_value_t arg_type_val = js_get(js, arg_types_arr, idx_str);
 
       if (vtype(arg_type_val) != T_STR) {
         for (int j = 0; j < i; j++) free(cb->arg_type_strs[j]);
@@ -761,7 +761,7 @@ static jsval_t ffi_create_callback(ant_t *js, jsval_t *args, int nargs) {
   return js_mknum((double)cb->cb_key);
 }
 
-static jsval_t ffi_free_callback(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t ffi_free_callback(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1 || vtype(args[0]) != T_NUM) {
     return js_mkerr(js, "freeCallback() requires callback pointer");
   }
@@ -855,7 +855,7 @@ static ffi_type *get_ffi_type(const char *type_str) {
   return type_map[id];
 }
 
-static void *js_to_ffi_value(ant_t *js, jsval_t val, ffi_type *type, void *buffer) {
+static void *js_to_ffi_value(ant_t *js, ant_value_t val, ffi_type *type, void *buffer) {
   static const void *dispatch[] = {
     &&do_sint8, &&do_sint16, &&do_sint32, &&do_sint64,
     &&do_uint8, &&do_uint16, &&do_uint64,
@@ -938,7 +938,7 @@ do_done:
   return buffer;
 }
 
-static jsval_t ffi_to_js_value(ant_t *js, void *val, ffi_type *type, const char *type_str) {
+static ant_value_t ffi_to_js_value(ant_t *js, void *val, ffi_type *type, const char *type_str) {
   static const void *dispatch[] = {
     &&ret_void, &&ret_sint8, &&ret_sint16, &&ret_sint32, &&ret_sint64,
     &&ret_uint8, &&ret_uint16, &&ret_uint64,

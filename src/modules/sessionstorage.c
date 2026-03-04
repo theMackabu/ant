@@ -85,7 +85,7 @@ static char *storage_key(size_t index) {
 }
 
 // sessionStorage.setItem(key, value)
-static jsval_t js_sessionstorage_setItem(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_sessionstorage_setItem(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) {
     return js_mkerr(js, "Failed to execute 'setItem' on 'Storage': 2 arguments required");
   }
@@ -100,7 +100,7 @@ static jsval_t js_sessionstorage_setItem(ant_t *js, jsval_t *args, int nargs) {
 }
 
 // sessionStorage.getItem(key)
-static jsval_t js_sessionstorage_getItem(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_sessionstorage_getItem(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) {
     return js_mkerr(js, "Failed to execute 'getItem' on 'Storage': 1 argument required");
   }
@@ -115,7 +115,7 @@ static jsval_t js_sessionstorage_getItem(ant_t *js, jsval_t *args, int nargs) {
 }
 
 // sessionStorage.removeItem(key)
-static jsval_t js_sessionstorage_removeItem(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_sessionstorage_removeItem(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) {
     return js_mkerr(js, "Failed to execute 'removeItem' on 'Storage': 1 argument required");
   }
@@ -128,14 +128,14 @@ static jsval_t js_sessionstorage_removeItem(ant_t *js, jsval_t *args, int nargs)
 }
 
 // sessionStorage.clear()
-static jsval_t js_sessionstorage_clear(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_sessionstorage_clear(ant_t *js, ant_value_t *args, int nargs) {
   (void)js; (void)args; (void)nargs;
   storage_clear();
   return js_mkundef();
 }
 
 // sessionStorage.key(index)
-static jsval_t js_sessionstorage_key(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_sessionstorage_key(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) {
     return js_mkerr(js, "Failed to execute 'key' on 'Storage': 1 argument required");
   }
@@ -156,7 +156,7 @@ static jsval_t js_sessionstorage_key(ant_t *js, jsval_t *args, int nargs) {
 }
 
 // sessionStorage.length
-static jsval_t js_sessionstorage_length(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_sessionstorage_length(ant_t *js, ant_value_t *args, int nargs) {
   (void)js; (void)args; (void)nargs;
   return js_mknum((double)storage_length());
 }
@@ -164,8 +164,8 @@ static jsval_t js_sessionstorage_length(ant_t *js, jsval_t *args, int nargs) {
 void init_sessionstorage_module(void) {
   ant_t *js = rt->js;
   
-  jsval_t glob = js_glob(js);
-  jsval_t storage_obj = js_mkobj(js);
+  ant_value_t glob = js_glob(js);
+  ant_value_t storage_obj = js_mkobj(js);
   
   js_set(js, storage_obj, "setItem", js_mkfun(js_sessionstorage_setItem));
   js_set(js, storage_obj, "getItem", js_mkfun(js_sessionstorage_getItem));
@@ -173,7 +173,7 @@ void init_sessionstorage_module(void) {
   js_set(js, storage_obj, "clear", js_mkfun(js_sessionstorage_clear));
   js_set(js, storage_obj, "key", js_mkfun(js_sessionstorage_key));
   
-  jsval_t length_getter = js_mkfun(js_sessionstorage_length);
+  ant_value_t length_getter = js_mkfun(js_sessionstorage_length);
   js_set_getter_desc(js, storage_obj, "length", 6, length_getter, JS_DESC_E);
   
   js_set_sym(js, storage_obj, get_toStringTag_sym(), ANT_STRING("Storage"));

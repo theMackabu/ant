@@ -10,15 +10,15 @@
 #include "globals.h"
 #include "property.h"
 
-static inline jsval_t sv_module_export_cstr(
+static inline ant_value_t sv_module_export_cstr(
   ant_t *js,
   const char *name, size_t len,
-  jsval_t value
+  ant_value_t value
 ) {
   if (vtype(js->module_ns) != T_OBJ)
     return js_mkerr_typed(js, JS_ERR_SYNTAX, "export used outside module");
 
-  jsval_t set_res = setprop_cstr(js, js->module_ns, name, len, value);
+  ant_value_t set_res = setprop_cstr(js, js->module_ns, name, len, value);
   if (is_err(set_res)) return set_res;
 
   if (len == 7 && memcmp(name, "default", 7) == 0)
@@ -27,41 +27,41 @@ static inline jsval_t sv_module_export_cstr(
   return tov(0);
 }
 
-static inline jsval_t sv_op_to_object(sv_vm_t *vm, ant_t *js) {
-  jsval_t v = vm->stack[vm->sp - 1];
+static inline ant_value_t sv_op_to_object(sv_vm_t *vm, ant_t *js) {
+  ant_value_t v = vm->stack[vm->sp - 1];
   uint8_t t = vtype(v);
   if (t == T_OBJ || t == T_ARR || t == T_FUNC) return tov(0);
   if (t == T_NULL || t == T_UNDEF)
     return js_mkerr_typed(js, JS_ERR_TYPE,
       "Cannot convert undefined or null to object");
-  jsval_t obj = mkobj(js, 0);
-  jsval_t obj_as_obj = js_as_obj(obj);
+  ant_value_t obj = mkobj(js, 0);
+  ant_value_t obj_as_obj = js_as_obj(obj);
   js_set_slot(js, obj_as_obj, SLOT_PRIMITIVE, v);
   vm->stack[vm->sp - 1] = obj;
   return tov(0);
 }
 
 static inline void sv_op_to_propkey(sv_vm_t *vm, ant_t *js) {
-  jsval_t v = vm->stack[vm->sp - 1];
+  ant_value_t v = vm->stack[vm->sp - 1];
   if (vtype(v) != T_STR && vtype(v) != T_SYMBOL)
     vm->stack[vm->sp - 1] = coerce_to_str(js, v);
 }
 
 static inline void sv_op_is_undef(sv_vm_t *vm) {
-  jsval_t v = vm->stack[vm->sp - 1];
+  ant_value_t v = vm->stack[vm->sp - 1];
   vm->stack[vm->sp - 1] = mkval(T_BOOL, vtype(v) == T_UNDEF);
 }
 
 static inline void sv_op_is_null(sv_vm_t *vm) {
-  jsval_t v = vm->stack[vm->sp - 1];
+  ant_value_t v = vm->stack[vm->sp - 1];
   vm->stack[vm->sp - 1] = mkval(T_BOOL, vtype(v) == T_NULL);
 }
 
-static inline jsval_t sv_op_import(sv_vm_t *vm, ant_t *js) {
-  jsval_t specifier = vm->stack[--vm->sp];
-  jsval_t import_fn = js_getprop_fallback(js, js->global, "import");
+static inline ant_value_t sv_op_import(sv_vm_t *vm, ant_t *js) {
+  ant_value_t specifier = vm->stack[--vm->sp];
+  ant_value_t import_fn = js_getprop_fallback(js, js->global, "import");
   if (vtype(import_fn) == T_FUNC || vtype(import_fn) == T_CFUNC) {
-    jsval_t result = sv_vm_call(vm, js, import_fn, js->global, &specifier, 1, NULL, false);
+    ant_value_t result = sv_vm_call(vm, js, import_fn, js->global, &specifier, 1, NULL, false);
     if (!is_err(result)) vm->stack[vm->sp++] = result;
     return result;
   }
@@ -69,43 +69,43 @@ static inline jsval_t sv_op_import(sv_vm_t *vm, ant_t *js) {
   return tov(0);
 }
 
-static inline jsval_t sv_op_import_sync(sv_vm_t *vm, ant_t *js) {
-  jsval_t specifier = vm->stack[--vm->sp];
-  jsval_t result = js_esm_import_sync(js, specifier);
+static inline ant_value_t sv_op_import_sync(sv_vm_t *vm, ant_t *js) {
+  ant_value_t specifier = vm->stack[--vm->sp];
+  ant_value_t result = js_esm_import_sync(js, specifier);
   if (!is_err(result)) vm->stack[vm->sp++] = result;
   return result;
 }
 
 static inline void sv_op_import_default(sv_vm_t *vm, ant_t *js) {
-  jsval_t ns = vm->stack[vm->sp - 1];
+  ant_value_t ns = vm->stack[vm->sp - 1];
   if (vtype(ns) == T_OBJ) {
-    jsval_t slot_val = js_get_slot(js, ns, SLOT_DEFAULT);
+    ant_value_t slot_val = js_get_slot(js, ns, SLOT_DEFAULT);
     if (vtype(slot_val) != T_UNDEF) { vm->stack[vm->sp - 1] = slot_val; return;  }
   }
 }
 
-static inline jsval_t sv_op_export(sv_vm_t *vm, ant_t *js, sv_func_t *func, uint8_t *ip) {
+static inline ant_value_t sv_op_export(sv_vm_t *vm, ant_t *js, sv_func_t *func, uint8_t *ip) {
   uint32_t atom_idx = sv_get_u32(ip + 1);
   if (atom_idx >= (uint32_t)func->atom_count)
     return js_mkerr(js, "invalid export atom index");
 
-  jsval_t value = vm->stack[--vm->sp];
+  ant_value_t value = vm->stack[--vm->sp];
   sv_atom_t *a = &func->atoms[atom_idx];
   return sv_module_export_cstr(js, a->str, a->len, value);
 }
 
-static inline jsval_t sv_op_export_all(sv_vm_t *vm, ant_t *js) {
-  jsval_t ns = vm->stack[--vm->sp];
+static inline ant_value_t sv_op_export_all(sv_vm_t *vm, ant_t *js) {
+  ant_value_t ns = vm->stack[--vm->sp];
   if (vtype(ns) != T_OBJ)
     return js_mkerr_typed(js, JS_ERR_SYNTAX, "Cannot re-export from non-object module");
 
   ant_iter_t iter = js_prop_iter_begin(js, ns);
   const char *key = NULL;
   size_t key_len = 0;
-  jsval_t value = js_mkundef();
+  ant_value_t value = js_mkundef();
 
   while (js_prop_iter_next(&iter, &key, &key_len, &value)) {
-    jsval_t export_res = sv_module_export_cstr(js, key, key_len, value);
+    ant_value_t export_res = sv_module_export_cstr(js, key, key_len, value);
     if (is_err(export_res)) { js_prop_iter_end(&iter); return export_res; }
   }
   
@@ -113,7 +113,7 @@ static inline jsval_t sv_op_export_all(sv_vm_t *vm, ant_t *js) {
   return tov(0);
 }
 
-static inline jsval_t sv_op_enter_with(sv_vm_t *vm, ant_t *js, sv_frame_t *frame) {
+static inline ant_value_t sv_op_enter_with(sv_vm_t *vm, ant_t *js, sv_frame_t *frame) {
   if (sv_frame_is_strict(frame))
     return js_mkerr_typed(js, JS_ERR_SYNTAX, "with statement not allowed in strict mode");
   frame->with_obj = vm->stack[--vm->sp];
@@ -131,7 +131,7 @@ enum {
   WITH_FB_UPVAL  = 3 
 };
 
-static inline jsval_t sv_with_fallback_get(
+static inline ant_value_t sv_with_fallback_get(
   sv_vm_t *vm, ant_t *js,
   sv_frame_t *frame,
   uint8_t kind, uint16_t idx
@@ -151,7 +151,7 @@ static inline void sv_with_fallback_put(
   sv_vm_t *vm, ant_t *js,
   sv_frame_t *frame,
   uint8_t kind, uint16_t idx,
-  jsval_t val
+  ant_value_t val
 ) {
   switch (kind) {
     case WITH_FB_LOCAL:
@@ -170,7 +170,7 @@ static inline void sv_with_fallback_put(
   }
 }
 
-static inline jsval_t sv_op_with_get_var(
+static inline ant_value_t sv_op_with_get_var(
   sv_vm_t *vm, ant_t *js,
   sv_frame_t *frame,
   sv_func_t *func, uint8_t *ip
@@ -182,8 +182,8 @@ static inline jsval_t sv_op_with_get_var(
 
   if (vtype(frame->with_obj) != T_UNDEF) {
     if (lkp(js, frame->with_obj, a->str, a->len) != 0) {
-      jsval_t val = sv_getprop_fallback_len(
-        js, frame->with_obj, a->str, (jsoff_t)a->len);
+      ant_value_t val = sv_getprop_fallback_len(
+        js, frame->with_obj, a->str, (ant_offset_t)a->len);
       if (is_err(val)) return val;
       vm->stack[vm->sp++] = val;
       return js_mkundef();
@@ -191,7 +191,7 @@ static inline jsval_t sv_op_with_get_var(
   }
 
   if (fb_kind == WITH_FB_GLOBAL) {
-    jsval_t val = sv_global_get(js, a->str, a->len);
+    ant_value_t val = sv_global_get(js, a->str, a->len);
     if (is_undefined(val))
       return js_mkerr_typed(
         js, JS_ERR_REFERENCE, "'%.*s' is not defined",
@@ -211,11 +211,11 @@ static inline void sv_op_with_put_var(
   uint16_t fb_idx   = sv_get_u16(ip + 6);
   
   sv_atom_t *a = &func->atoms[atom_idx];
-  jsval_t val = vm->stack[--vm->sp];
+  ant_value_t val = vm->stack[--vm->sp];
 
   if (vtype(frame->with_obj) != T_UNDEF) {
     if (lkp(js, frame->with_obj, a->str, a->len) != 0) {
-      jsval_t key = js_mkstr(js, a->str, a->len);
+      ant_value_t key = js_mkstr(js, a->str, a->len);
       js_setprop(js, frame->with_obj, key, val);
       return;
     }
@@ -236,7 +236,7 @@ static inline void sv_op_with_del_var(
   
   if (vtype(frame->with_obj) != T_UNDEF) {
     if (lkp(js, frame->with_obj, a->str, a->len) != 0) {
-      jsval_t result = js_delete_prop(js, frame->with_obj, a->str, a->len);
+      ant_value_t result = js_delete_prop(js, frame->with_obj, a->str, a->len);
       vm->stack[vm->sp++] = result;
       return;
     }
@@ -265,8 +265,8 @@ static inline void sv_op_special_obj(
     return;
   }
 
-  jsval_t arr = js_mkarr(js);
-  jshdl_t h = js_root(js, arr);
+  ant_value_t arr = js_mkarr(js);
+  ant_handle_t h = js_root(js, arr);
   
   if (frame->bp && frame->argc > 0) {
     for (int i = 0; i < frame->argc; i++)
@@ -279,10 +279,10 @@ static inline void sv_op_special_obj(
     setprop_cstr(js, js_deref(js, h), "callee", 6, frame->callee);
 
   js_set_sym(js, js_deref(js, h), get_toStringTag_sym(), js_mkstr(js, "Arguments", 9));
-  jsval_t array_proto = js_get_ctor_proto(js, "Array", 5);
+  ant_value_t array_proto = js_get_ctor_proto(js, "Array", 5);
   
   if (is_object_type(array_proto)) {
-    jsval_t iter_fn = js_get_sym(js, array_proto, get_iterator_sym());
+    ant_value_t iter_fn = js_get_sym(js, array_proto, get_iterator_sym());
     if (vtype(iter_fn) == T_FUNC || vtype(iter_fn) == T_CFUNC)
       js_set_sym(js, js_deref(js, h), get_iterator_sym(), iter_fn);
   }

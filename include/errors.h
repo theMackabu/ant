@@ -25,7 +25,7 @@ typedef enum {
 js_err_type_t get_error_type(ant_t *js);
 
 bool print_uncaught_throw(ant_t *js);
-bool print_unhandled_promise_rejection(ant_t *js, jsval_t value);
+bool print_unhandled_promise_rejection(ant_t *js, ant_value_t value);
 
 void js_clear_error_site(ant_t *js);
 void js_print_stack_trace_vm(ant_t *js, FILE *stream);
@@ -38,13 +38,13 @@ void js_set_error_site_from_bc(
 
 void js_set_error_site(
   ant_t *js, const char *src,
-  jsoff_t src_len, const char *filename,
-  jsoff_t off, jsoff_t span_len
+  ant_offset_t src_len, const char *filename,
+  ant_offset_t off, ant_offset_t span_len
 );
 
 __attribute__((format(printf, 4, 5)))
-jsval_t js_create_error(ant_t *js, js_err_type_t err_type, jsval_t props, const char *fmt, ...);
-jsval_t js_throw(ant_t *js, jsval_t value);
+ant_value_t js_create_error(ant_t *js, js_err_type_t err_type, ant_value_t props, const char *fmt, ...);
+ant_value_t js_throw(ant_t *js, ant_value_t value);
 
 #define js_mkerr(js, ...) js_create_error(js, JS_ERR_TYPE, js_mkundef(), __VA_ARGS__)
 #define js_mkerr_typed(js, err_type, ...) js_create_error(js, err_type, js_mkundef(), __VA_ARGS__)

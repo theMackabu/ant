@@ -230,9 +230,9 @@ static inline void sv_parse_unexpected_token(P) {
   size_t tok_len = 0;
 
   if (TOFF < CLEN && TLEN > 0) {
-    jsoff_t rem = CLEN - TOFF;
+    ant_offset_t rem = CLEN - TOFF;
     tok_len = (size_t)TLEN;
-    if ((jsoff_t)tok_len > rem) tok_len = (size_t)rem;
+    if ((ant_offset_t)tok_len > rem) tok_len = (size_t)rem;
   }
 
   if (tok_len == 0) {
@@ -621,7 +621,7 @@ static sv_ast_t *parse_primary(P) {
         ? (tpl_len - 1 - expr_start) : 0;
 
       sv_lexer_checkpoint_t cp;
-      sv_lexer_push_source(&p->lx, &cp, (const char *)&in[expr_start], (jsoff_t)expr_max_len);
+      sv_lexer_push_source(&p->lx, &cp, (const char *)&in[expr_start], (ant_offset_t)expr_max_len);
 
       sv_ast_t *expr = parse_expr(p);
       sv_ast_list_push(&n->args, expr);
@@ -768,7 +768,7 @@ static sv_ast_t *parse_primary(P) {
 
   l_regex: {
     CONSUME();
-    jsoff_t pattern_start = (TOK == TOK_DIV_ASSIGN) ? (TOFF + 1) : POS;
+    ant_offset_t pattern_start = (TOK == TOK_DIV_ASSIGN) ? (TOFF + 1) : POS;
     if (TOK == TOK_DIV_ASSIGN) POS = pattern_start;
     bool in_class = false;
 
@@ -784,10 +784,10 @@ static sv_ast_t *parse_primary(P) {
       POS++;
     }
 
-    jsoff_t pattern_end = POS;
+    ant_offset_t pattern_end = POS;
     if (POS < CLEN) POS++;
 
-    jsoff_t flags_start = POS;
+    ant_offset_t flags_start = POS;
     while (POS < CLEN) {
       char c = CODE[POS];
       if (c == 'g' || c == 'i' || c == 'm' || c == 's' || c == 'u' || c == 'y')
@@ -795,7 +795,7 @@ static sv_ast_t *parse_primary(P) {
       else break;
     }
     
-    jsoff_t flags_end = POS;
+    ant_offset_t flags_end = POS;
     sv_ast_t *n = mk(N_REGEXP);
     
     n->str = &CODE[pattern_start];
@@ -2047,7 +2047,7 @@ static sv_ast_t *parse_stmt(P) {
   }
 }
 
-sv_ast_t *sv_parse(ant_t *js, const char *code, jsoff_t clen, bool strict){
+sv_ast_t *sv_parse(ant_t *js, const char *code, ant_offset_t clen, bool strict){
   sv_parser_t parser = { .js = js };
   sv_parser_t *p = &parser;
   sv_lexer_init(&p->lx, js, code, clen, strict);

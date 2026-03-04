@@ -13,7 +13,7 @@
 #include "ant.h"
 #include "internal.h" // IWYU pragma: keep
 
-static jsval_t net_isIP(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t net_isIP(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mknum(0);
   size_t len;
   const char *host = js_getstr(js, args[0], &len);
@@ -27,7 +27,7 @@ static jsval_t net_isIP(ant_t *js, jsval_t *args, int nargs) {
   return js_mknum(0);
 }
 
-static jsval_t net_isIPv4(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t net_isIPv4(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_false;
   size_t len;
   const char *host = js_getstr(js, args[0], &len);
@@ -37,7 +37,7 @@ static jsval_t net_isIPv4(ant_t *js, jsval_t *args, int nargs) {
   return inet_pton(AF_INET, host, &addr) == 1 ? js_true : js_false;
 }
 
-static jsval_t net_isIPv6(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t net_isIPv6(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_false;
   size_t len;
   const char *host = js_getstr(js, args[0], &len);
@@ -47,8 +47,8 @@ static jsval_t net_isIPv6(ant_t *js, jsval_t *args, int nargs) {
   return inet_pton(AF_INET6, host, &addr) == 1 ? js_true : js_false;
 }
 
-jsval_t net_library(ant_t *js) {
-  jsval_t lib = js_mkobj(js);
+ant_value_t net_library(ant_t *js) {
+  ant_value_t lib = js_mkobj(js);
 
   js_set(js, lib, "isIP", js_mkfun(net_isIP));
   js_set(js, lib, "isIPv4", js_mkfun(net_isIPv4));

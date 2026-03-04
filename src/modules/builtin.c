@@ -24,16 +24,16 @@
 
 static struct {
   ant_t *js;
-  jsval_t handler;
+  ant_value_t handler;
 } signal_handlers[NSIG] = {0};
 
 static void general_signal_handler(int signum) {
   if (signum < 0 || signum >= NSIG) return;
   ant_t *js = signal_handlers[signum].js;
-  jsval_t handler = signal_handlers[signum].handler;
+  ant_value_t handler = signal_handlers[signum].handler;
   
   if (js && vtype(handler) != T_UNDEF) {
-    jsval_t args[] = {js_mknum(signum)};
+    ant_value_t args[] = {js_mknum(signum)};
     sv_vm_call(js->vm, js, handler, js_mkundef(), args, 1, NULL, false);
   }
   
@@ -41,7 +41,7 @@ static void general_signal_handler(int signum) {
 }
 
 // Ant.signal(signal, handler)
-static jsval_t js_signal(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_signal(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "Ant.signal() requires 2 arguments");
   
   int signum = (int)js_getnum(args[0]);
@@ -56,15 +56,15 @@ static jsval_t js_signal(ant_t *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-// Ant.raw.typeof(jsval_t)
-static jsval_t js_raw_typeof(ant_t *js, jsval_t *args, int nargs) {
+// Ant.raw.typeof(ant_value_t)
+static ant_value_t js_raw_typeof(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "Ant.raw.typeof() requires 1 argument");
   const uint8_t type = vtype(args[0]);
   return js_mknum((double)type);
 }
 
 // Ant.sleep(seconds)
-static jsval_t js_sleep(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_sleep(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "Ant.sleep() requires 1 argument");
   unsigned int seconds = (unsigned int)js_getnum(args[0]);
   sleep(seconds);
@@ -72,7 +72,7 @@ static jsval_t js_sleep(ant_t *js, jsval_t *args, int nargs) {
 }
 
 // Ant.msleep(milliseconds)
-static jsval_t js_msleep(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_msleep(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "Ant.msleep() requires 1 argument");
   long ms = (long)js_getnum(args[0]);
   struct timespec ts = { .tv_sec = ms / 1000, .tv_nsec = (ms % 1000) * 1000000 };
@@ -82,7 +82,7 @@ static jsval_t js_msleep(ant_t *js, jsval_t *args, int nargs) {
 }
 
 // Ant.usleep(microseconds)
-static jsval_t js_usleep(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_usleep(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "Ant.usleep() requires 1 argument");
   useconds_t us = (useconds_t)js_getnum(args[0]);
   usleep(us);
@@ -90,9 +90,9 @@ static jsval_t js_usleep(ant_t *js, jsval_t *args, int nargs) {
 }
 
 // Ant.stats()
-static jsval_t js_stats_fn(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_stats_fn(ant_t *js, ant_value_t *args, int nargs) {
   (void) args; (void) nargs;
-  jsval_t result = js_newobj(js);
+  ant_value_t result = js_newobj(js);
   
   js_set(js, result, "arenaUsed", js_mknum((double)js_getbrk(js)));
   js_set(js, result, "arenaSize", js_mknum((double)js->size));
@@ -102,7 +102,7 @@ static jsval_t js_stats_fn(ant_t *js, jsval_t *args, int nargs) {
   size_t collections_mem = collections_get_external_memory();
   size_t external_total = buffer_mem + code_mem + collections_mem;
   
-  jsval_t ext = js_newobj(js);
+  ant_value_t ext = js_newobj(js);
   js_set(js, ext, "buffers", js_mknum((double)buffer_mem));
   js_set(js, ext, "code", js_mknum((double)code_mem));
   js_set(js, ext, "collections", js_mknum((double)collections_mem));
@@ -110,7 +110,7 @@ static jsval_t js_stats_fn(ant_t *js, jsval_t *args, int nargs) {
   js_set(js, result, "external", ext);
   
   js_intern_stats_t intern_stats = js_intern_stats();
-  jsval_t intern = js_newobj(js);
+  ant_value_t intern = js_newobj(js);
   
   js_set(js, intern, "count", js_mknum((double)intern_stats.count));
   js_set(js, intern, "bytes", js_mknum((double)intern_stats.bytes));
@@ -118,7 +118,7 @@ static jsval_t js_stats_fn(ant_t *js, jsval_t *args, int nargs) {
   
   if (js->vm) {
     sv_vm_t *vm = js->vm;
-    jsval_t vmobj = js_newobj(js);
+    ant_value_t vmobj = js_newobj(js);
     js_set(js, vmobj, "stackSize", js_mknum((double)vm->stack_size));
     js_set(js, vmobj, "stackUsed", js_mknum((double)vm->sp));
     js_set(js, vmobj, "maxFrames", js_mknum((double)vm->max_frames));
@@ -153,7 +153,7 @@ static jsval_t js_stats_fn(ant_t *js, jsval_t *args, int nargs) {
 
 void init_builtin_module() {
   ant_t *js = rt->js;
-  jsval_t ant_obj = rt->ant_obj;
+  ant_value_t ant_obj = rt->ant_obj;
 
   js_set(js, ant_obj, "stats", js_mkfun(js_stats_fn));
   js_set(js, ant_obj, "signal", js_mkfun(js_signal));
@@ -161,7 +161,7 @@ void init_builtin_module() {
   js_set(js, ant_obj, "msleep", js_mkfun(js_msleep));
   js_set(js, ant_obj, "usleep", js_mkfun(js_usleep));
 
-  jsval_t raw_obj = js_newobj(js);
+  ant_value_t raw_obj = js_newobj(js);
   js_set(js, raw_obj, "typeof", js_mkfun(js_raw_typeof));
   js_set(js, ant_obj, "raw", raw_obj);
 }

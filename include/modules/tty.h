@@ -4,6 +4,6 @@
 #include "types.h"
 
 void init_tty_module(void);
-jsval_t tty_library(ant_t *js);
+ant_value_t tty_library(ant_t *js);
 
 #endif

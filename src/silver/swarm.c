@@ -208,14 +208,14 @@ static void mir_emit_bailout_check(MIR_context_t ctx, MIR_item_t fn,
     MIR_append_insn(ctx, fn,
       MIR_new_insn(ctx, MIR_MOV,
         MIR_new_mem_op(ctx, MIR_T_I64,
-          (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_args_buf, 0, 1),
+          (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_args_buf, 0, 1),
         MIR_new_reg_op(ctx, vs->regs[i])));
   }
   for (int i = 0; i < n_locals; i++)
     MIR_append_insn(ctx, fn,
       MIR_new_insn(ctx, MIR_MOV,
         MIR_new_mem_op(ctx, MIR_T_I64,
-          (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_lbuf, 0, 1),
+          (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1),
         MIR_new_reg_op(ctx, local_regs[i])));
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_MOV,
@@ -241,14 +241,14 @@ static void mir_load_imm(MIR_context_t ctx, MIR_item_t fn,
 }
 
 
-static inline bool jit_const_is_heap(jsval_t cv) {
+static inline bool jit_const_is_heap(ant_value_t cv) {
   uint8_t t = vtype(cv);
   return ((1u << t) & GC_HEAP_TYPE_MASK) != 0;
 }
 
 
 static void mir_load_const_slot(MIR_context_t ctx, MIR_item_t fn,
-                                MIR_reg_t dst, jsval_t *slot) {
+                                MIR_reg_t dst, ant_value_t *slot) {
   mir_load_imm(ctx, fn, dst, (uint64_t)(uintptr_t)slot);
   MIR_append_insn(ctx, fn,
     MIR_new_insn(ctx, MIR_MOV,
@@ -471,7 +471,7 @@ static bool jit_emit_inline_body(
       case OP_CONST: {
         uint32_t idx = sv_get_u32(ip + 1);
         if (idx >= (uint32_t)callee->const_count) return false;
-        jsval_t cv = callee->constants[idx];
+        ant_value_t cv = callee->constants[idx];
         MIR_reg_t dst = inl_vs[isp++];
         if (jit_const_is_heap(cv))
           mir_load_const_slot(ctx, jit_func, dst, &callee->constants[idx]);
@@ -482,7 +482,7 @@ static bool jit_emit_inline_body(
       case OP_CONST8: {
         uint8_t idx = sv_get_u8(ip + 1);
         if (idx >= (uint8_t)callee->const_count) return false;
-        jsval_t cv = callee->constants[idx];
+        ant_value_t cv = callee->constants[idx];
         MIR_reg_t dst = inl_vs[isp++];
         if (jit_const_is_heap(cv))
           mir_load_const_slot(ctx, jit_func, dst, &callee->constants[idx]);
@@ -1223,7 +1223,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
     MIR_append_insn(ctx, jit_func,
       MIR_new_insn(ctx, MIR_ALLOCA,
         MIR_new_reg_op(ctx, r_args_buf),
-        MIR_new_uint_op(ctx, (uint64_t)scratch_slots * sizeof(jsval_t))));
+        MIR_new_uint_op(ctx, (uint64_t)scratch_slots * sizeof(ant_value_t))));
   } else {
     mir_load_imm(ctx, jit_func, r_args_buf, 0);
   }
@@ -1243,7 +1243,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
     MIR_append_insn(ctx, jit_func,
       MIR_new_insn(ctx, MIR_ALLOCA,
         MIR_new_reg_op(ctx, r_lbuf),
-        MIR_new_uint_op(ctx, (uint64_t)n_locals * sizeof(jsval_t))));
+        MIR_new_uint_op(ctx, (uint64_t)n_locals * sizeof(ant_value_t))));
   } else {
     mir_load_imm(ctx, jit_func, r_lbuf, 0);
   }
@@ -1260,7 +1260,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, MIR_MOV,
             MIR_new_mem_op(ctx, MIR_T_I64,
-              (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_lbuf, 0, 1),
+              (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1),
             MIR_new_uint_op(ctx, mkval(T_UNDEF, 0))));
     }
   }
@@ -1278,12 +1278,12 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
     MIR_append_insn(ctx, jit_func,
       MIR_new_insn(ctx, MIR_ALLOCA,
         MIR_new_reg_op(ctx, r_arg_local),
-        MIR_new_uint_op(ctx, (uint64_t)param_count * sizeof(jsval_t))));
+        MIR_new_uint_op(ctx, (uint64_t)param_count * sizeof(ant_value_t))));
     for (int i = 0; i < param_count; i++)
       MIR_append_insn(ctx, jit_func,
         MIR_new_insn(ctx, MIR_MOV,
           MIR_new_mem_op(ctx, MIR_T_I64,
-            (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_arg_local, 0, 1),
+            (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_arg_local, 0, 1),
           MIR_new_uint_op(ctx, mkval(T_UNDEF, 0))));
     for (int i = 0; i < param_count; i++) {
       MIR_label_t copy_skip = MIR_new_label(ctx);
@@ -1295,9 +1295,9 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       MIR_append_insn(ctx, jit_func,
         MIR_new_insn(ctx, MIR_MOV,
           MIR_new_mem_op(ctx, MIR_T_I64,
-            (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_arg_local, 0, 1),
+            (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_arg_local, 0, 1),
           MIR_new_mem_op(ctx, MIR_T_I64,
-            (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_args, 0, 1)));
+            (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_args, 0, 1)));
       MIR_append_insn(ctx, jit_func, copy_skip);
     }
     MIR_append_insn(ctx, jit_func,
@@ -1345,7 +1345,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         MIR_new_insn(ctx, MIR_MOV,
           MIR_new_reg_op(ctx, local_regs[i]),
           MIR_new_mem_op(ctx, MIR_JSVAL,
-            (MIR_disp_t)(i * (int)sizeof(jsval_t)),
+            (MIR_disp_t)(i * (int)sizeof(ant_value_t)),
             r_osr_locals, 0, 1)));
 
     if (has_captures) {
@@ -1448,7 +1448,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       case OP_CONST: {
         uint32_t idx = sv_get_u32(ip + 1);
         if (idx >= (uint32_t)func->const_count) { ok = false; break; }
-        jsval_t cv = func->constants[idx];
+        ant_value_t cv = func->constants[idx];
         MIR_reg_t dst = vstack_push(&vs);
         if (jit_const_is_heap(cv))
           mir_load_const_slot(ctx, jit_func, dst, &func->constants[idx]);
@@ -1469,7 +1469,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       case OP_CONST8: {
         uint8_t idx = sv_get_u8(ip + 1);
         if (idx >= (uint8_t)func->const_count) { ok = false; break; }
-        jsval_t cv = func->constants[idx];
+        ant_value_t cv = func->constants[idx];
         MIR_reg_t dst = vstack_push(&vs);
         if (jit_const_is_heap(cv))
           mir_load_const_slot(ctx, jit_func, dst, &func->constants[idx]);
@@ -1516,7 +1516,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           MIR_new_insn(ctx, MIR_MOV,
             MIR_new_reg_op(ctx, dst),
             MIR_new_mem_op(ctx, MIR_JSVAL,
-              (MIR_disp_t)(idx * (int)sizeof(jsval_t)),
+              (MIR_disp_t)(idx * (int)sizeof(ant_value_t)),
               r_args, 0, 1)));
         break;
       }
@@ -1527,7 +1527,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, MIR_MOV,
             MIR_new_mem_op(ctx, MIR_JSVAL,
-              (MIR_disp_t)(idx * (int)sizeof(jsval_t)),
+              (MIR_disp_t)(idx * (int)sizeof(ant_value_t)),
               r_args, 0, 1),
             MIR_new_reg_op(ctx, val)));
         break;
@@ -1541,7 +1541,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_insn(ctx, MIR_MOV,
               MIR_new_reg_op(ctx, local_regs[idx]),
               MIR_new_mem_op(ctx, MIR_T_I64,
-                (MIR_disp_t)((int)idx * (int)sizeof(jsval_t)), r_lbuf, 0, 1)));
+                (MIR_disp_t)((int)idx * (int)sizeof(ant_value_t)), r_lbuf, 0, 1)));
         MIR_reg_t dst = vstack_push(&vs);
         if (known_func_locals) vs.known_func[vs.sp - 1] = known_func_locals[idx];
         MIR_append_insn(ctx, jit_func,
@@ -1558,7 +1558,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_insn(ctx, MIR_MOV,
               MIR_new_reg_op(ctx, local_regs[idx]),
               MIR_new_mem_op(ctx, MIR_T_I64,
-                (MIR_disp_t)((int)idx * (int)sizeof(jsval_t)), r_lbuf, 0, 1)));
+                (MIR_disp_t)((int)idx * (int)sizeof(ant_value_t)), r_lbuf, 0, 1)));
         MIR_reg_t dst = vstack_push(&vs);
         if (known_func_locals) vs.known_func[vs.sp - 1] = known_func_locals[idx];
         MIR_append_insn(ctx, jit_func,
@@ -1583,7 +1583,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
               MIR_new_mem_op(ctx, MIR_T_I64,
-                (MIR_disp_t)((int)idx * (int)sizeof(jsval_t)), r_lbuf, 0, 1),
+                (MIR_disp_t)((int)idx * (int)sizeof(ant_value_t)), r_lbuf, 0, 1),
               MIR_new_reg_op(ctx, src)));
         break;
       }
@@ -1602,7 +1602,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
               MIR_new_mem_op(ctx, MIR_T_I64,
-                (MIR_disp_t)((int)idx * (int)sizeof(jsval_t)), r_lbuf, 0, 1),
+                (MIR_disp_t)((int)idx * (int)sizeof(ant_value_t)), r_lbuf, 0, 1),
               MIR_new_reg_op(ctx, src)));
         break;
       }
@@ -1621,7 +1621,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
               MIR_new_mem_op(ctx, MIR_T_I64,
-                (MIR_disp_t)((int)idx * (int)sizeof(jsval_t)), r_lbuf, 0, 1),
+                (MIR_disp_t)((int)idx * (int)sizeof(ant_value_t)), r_lbuf, 0, 1),
               MIR_new_reg_op(ctx, src)));
         break;
       }
@@ -1639,7 +1639,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
               MIR_new_mem_op(ctx, MIR_T_I64,
-                (MIR_disp_t)((int)idx * (int)sizeof(jsval_t)), r_lbuf, 0, 1),
+                (MIR_disp_t)((int)idx * (int)sizeof(ant_value_t)), r_lbuf, 0, 1),
               MIR_new_reg_op(ctx, src)));
         break;
       }
@@ -1761,14 +1761,14 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_append_insn(ctx, jit_func,
               MIR_new_insn(ctx, MIR_MOV,
                 MIR_new_mem_op(ctx, MIR_T_I64,
-                  (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_args_buf, 0, 1),
+                  (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_args_buf, 0, 1),
                 MIR_new_reg_op(ctx, vs.regs[i])));
           }
           for (int i = 0; i < n_locals; i++)
             MIR_append_insn(ctx, jit_func,
               MIR_new_insn(ctx, MIR_MOV,
                 MIR_new_mem_op(ctx, MIR_T_I64,
-                  (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_lbuf, 0, 1),
+                  (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1),
                 MIR_new_reg_op(ctx, local_regs[i])));
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
@@ -1816,14 +1816,14 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_append_insn(ctx, jit_func,
               MIR_new_insn(ctx, MIR_MOV,
                 MIR_new_mem_op(ctx, MIR_T_I64,
-                  (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_args_buf, 0, 1),
+                  (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_args_buf, 0, 1),
                 MIR_new_reg_op(ctx, vs.regs[i])));
           }
           for (int i = 0; i < n_locals; i++)
             MIR_append_insn(ctx, jit_func,
               MIR_new_insn(ctx, MIR_MOV,
                 MIR_new_mem_op(ctx, MIR_T_I64,
-                  (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_lbuf, 0, 1),
+                  (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1),
                 MIR_new_reg_op(ctx, local_regs[i])));
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
@@ -1868,14 +1868,14 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_append_insn(ctx, jit_func,
               MIR_new_insn(ctx, MIR_MOV,
                 MIR_new_mem_op(ctx, MIR_T_I64,
-                  (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_args_buf, 0, 1),
+                  (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_args_buf, 0, 1),
                 MIR_new_reg_op(ctx, vs.regs[i])));
           }
           for (int i = 0; i < n_locals; i++)
             MIR_append_insn(ctx, jit_func,
               MIR_new_insn(ctx, MIR_MOV,
                 MIR_new_mem_op(ctx, MIR_T_I64,
-                  (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_lbuf, 0, 1),
+                  (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1),
                 MIR_new_reg_op(ctx, local_regs[i])));
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
@@ -1988,14 +1988,14 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_append_insn(ctx, jit_func,
               MIR_new_insn(ctx, MIR_MOV,
                 MIR_new_mem_op(ctx, MIR_T_I64,
-                  (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_args_buf, 0, 1),
+                  (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_args_buf, 0, 1),
                 MIR_new_reg_op(ctx, vs.regs[i])));
           }
           for (int i = 0; i < n_locals; i++)
             MIR_append_insn(ctx, jit_func,
               MIR_new_insn(ctx, MIR_MOV,
                 MIR_new_mem_op(ctx, MIR_T_I64,
-                  (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_lbuf, 0, 1),
+                  (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1),
                 MIR_new_reg_op(ctx, local_regs[i])));
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
@@ -2040,14 +2040,14 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_append_insn(ctx, jit_func,
               MIR_new_insn(ctx, MIR_MOV,
                 MIR_new_mem_op(ctx, MIR_T_I64,
-                  (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_args_buf, 0, 1),
+                  (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_args_buf, 0, 1),
                 MIR_new_reg_op(ctx, vs.regs[i])));
           }
           for (int i = 0; i < n_locals; i++)
             MIR_append_insn(ctx, jit_func,
               MIR_new_insn(ctx, MIR_MOV,
                 MIR_new_mem_op(ctx, MIR_T_I64,
-                  (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_lbuf, 0, 1),
+                  (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1),
                 MIR_new_reg_op(ctx, local_regs[i])));
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
@@ -2159,14 +2159,14 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_append_insn(ctx, jit_func,
               MIR_new_insn(ctx, MIR_MOV,
                 MIR_new_mem_op(ctx, MIR_T_I64,
-                  (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_args_buf, 0, 1),
+                  (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_args_buf, 0, 1),
                 MIR_new_reg_op(ctx, vs.regs[i])));
           }
           for (int i = 0; i < n_locals; i++)
             MIR_append_insn(ctx, jit_func,
               MIR_new_insn(ctx, MIR_MOV,
                 MIR_new_mem_op(ctx, MIR_T_I64,
-                  (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_lbuf, 0, 1),
+                  (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1),
                 MIR_new_reg_op(ctx, local_regs[i])));
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
@@ -2211,14 +2211,14 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_append_insn(ctx, jit_func,
               MIR_new_insn(ctx, MIR_MOV,
                 MIR_new_mem_op(ctx, MIR_T_I64,
-                  (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_args_buf, 0, 1),
+                  (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_args_buf, 0, 1),
                 MIR_new_reg_op(ctx, vs.regs[i])));
           }
           for (int i = 0; i < n_locals; i++)
             MIR_append_insn(ctx, jit_func,
               MIR_new_insn(ctx, MIR_MOV,
                 MIR_new_mem_op(ctx, MIR_T_I64,
-                  (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_lbuf, 0, 1),
+                  (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1),
                 MIR_new_reg_op(ctx, local_regs[i])));
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
@@ -2330,14 +2330,14 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_append_insn(ctx, jit_func,
               MIR_new_insn(ctx, MIR_MOV,
                 MIR_new_mem_op(ctx, MIR_T_I64,
-                  (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_args_buf, 0, 1),
+                  (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_args_buf, 0, 1),
                 MIR_new_reg_op(ctx, vs.regs[i])));
           }
           for (int i = 0; i < n_locals; i++)
             MIR_append_insn(ctx, jit_func,
               MIR_new_insn(ctx, MIR_MOV,
                 MIR_new_mem_op(ctx, MIR_T_I64,
-                  (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_lbuf, 0, 1),
+                  (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1),
                 MIR_new_reg_op(ctx, local_regs[i])));
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
@@ -2382,14 +2382,14 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_append_insn(ctx, jit_func,
               MIR_new_insn(ctx, MIR_MOV,
                 MIR_new_mem_op(ctx, MIR_T_I64,
-                  (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_args_buf, 0, 1),
+                  (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_args_buf, 0, 1),
                 MIR_new_reg_op(ctx, vs.regs[i])));
           }
           for (int i = 0; i < n_locals; i++)
             MIR_append_insn(ctx, jit_func,
               MIR_new_insn(ctx, MIR_MOV,
                 MIR_new_mem_op(ctx, MIR_T_I64,
-                  (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_lbuf, 0, 1),
+                  (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1),
                 MIR_new_reg_op(ctx, local_regs[i])));
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
@@ -2489,14 +2489,14 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
               MIR_new_mem_op(ctx, MIR_T_I64,
-                (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_args_buf, 0, 1),
+                (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_args_buf, 0, 1),
               MIR_new_reg_op(ctx, vs.regs[i])));
         }
         for (int i = 0; i < n_locals; i++)
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
               MIR_new_mem_op(ctx, MIR_T_I64,
-                (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_lbuf, 0, 1),
+                (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1),
               MIR_new_reg_op(ctx, local_regs[i])));
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, MIR_MOV,
@@ -2609,14 +2609,14 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_append_insn(ctx, jit_func,
               MIR_new_insn(ctx, MIR_MOV,
                 MIR_new_mem_op(ctx, MIR_T_I64,
-                  (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_args_buf, 0, 1),
+                  (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_args_buf, 0, 1),
                 MIR_new_reg_op(ctx, vs.regs[i])));
           }
           for (int i = 0; i < n_locals; i++)
             MIR_append_insn(ctx, jit_func,
               MIR_new_insn(ctx, MIR_MOV,
                 MIR_new_mem_op(ctx, MIR_T_I64,
-                  (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_lbuf, 0, 1),
+                  (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1),
                 MIR_new_reg_op(ctx, local_regs[i])));
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
@@ -2665,13 +2665,13 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_append_insn(ctx, jit_func,
               MIR_new_insn(ctx, MIR_MOV,
                 MIR_new_mem_op(ctx, MIR_T_I64,
-                  (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_args_buf, 0, 1),
+                  (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_args_buf, 0, 1),
                 MIR_new_reg_op(ctx, vs.regs[i])));
           for (int i = 0; i < n_locals; i++)
             MIR_append_insn(ctx, jit_func,
               MIR_new_insn(ctx, MIR_MOV,
                 MIR_new_mem_op(ctx, MIR_T_I64,
-                  (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_lbuf, 0, 1),
+                  (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1),
                 MIR_new_reg_op(ctx, local_regs[i])));
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
@@ -2805,14 +2805,14 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_append_insn(ctx, jit_func,
               MIR_new_insn(ctx, MIR_MOV,
                 MIR_new_mem_op(ctx, MIR_T_I64,
-                  (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_args_buf, 0, 1),
+                  (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_args_buf, 0, 1),
                 MIR_new_reg_op(ctx, vs.regs[i])));
           }
           for (int i = 0; i < n_locals; i++)
             MIR_append_insn(ctx, jit_func,
               MIR_new_insn(ctx, MIR_MOV,
                 MIR_new_mem_op(ctx, MIR_T_I64,
-                  (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_lbuf, 0, 1),
+                  (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1),
                 MIR_new_reg_op(ctx, local_regs[i])));
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
@@ -2861,13 +2861,13 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_append_insn(ctx, jit_func,
               MIR_new_insn(ctx, MIR_MOV,
                 MIR_new_mem_op(ctx, MIR_T_I64,
-                  (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_args_buf, 0, 1),
+                  (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_args_buf, 0, 1),
                 MIR_new_reg_op(ctx, vs.regs[i])));
           for (int i = 0; i < n_locals; i++)
             MIR_append_insn(ctx, jit_func,
               MIR_new_insn(ctx, MIR_MOV,
                 MIR_new_mem_op(ctx, MIR_T_I64,
-                  (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_lbuf, 0, 1),
+                  (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1),
                 MIR_new_reg_op(ctx, local_regs[i])));
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
@@ -3087,7 +3087,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
                 MIR_append_insn(ctx, jit_func,
                   MIR_new_insn(ctx, MIR_MOV,
                     MIR_new_mem_op(ctx, MIR_JSVAL,
-                      (MIR_disp_t)(i * (int)sizeof(jsval_t)),
+                      (MIR_disp_t)(i * (int)sizeof(ant_value_t)),
                       r_args_buf, 0, 1),
                     MIR_new_reg_op(ctx, inl_arg_regs[i])));
 
@@ -3133,7 +3133,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
               MIR_new_mem_op(ctx, MIR_JSVAL,
-                (MIR_disp_t)(i * (int)sizeof(jsval_t)),
+                (MIR_disp_t)(i * (int)sizeof(ant_value_t)),
                 r_arg_arr, 0, 1),
               MIR_new_reg_op(ctx, areg)));
         }
@@ -3165,7 +3165,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
                   MIR_append_insn(ctx, jit_func,
                     MIR_new_insn(ctx, MIR_MOV,
                       MIR_new_mem_op(ctx, MIR_T_I64,
-                        (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_lbuf, 0, 1),
+                        (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1),
                       MIR_new_uint_op(ctx, mkval(T_UNDEF, 0))));
             }
             MIR_append_insn(ctx, jit_func,
@@ -3190,7 +3190,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
                   MIR_new_insn(ctx, MIR_MOV,
                     MIR_new_reg_op(ctx, local_regs[i]),
                     MIR_new_mem_op(ctx, MIR_T_I64,
-                      (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_lbuf, 0, 1)));
+                      (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1)));
           }
           if (jit_try_depth > 0) {
             jit_try_entry_t *h = &jit_try_stack[jit_try_depth - 1];
@@ -3305,7 +3305,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
                 MIR_append_insn(ctx, jit_func,
                   MIR_new_insn(ctx, MIR_MOV,
                     MIR_new_mem_op(ctx, MIR_T_I64,
-                      (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_lbuf, 0, 1),
+                      (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1),
                     MIR_new_uint_op(ctx, mkval(T_UNDEF, 0))));
           }
           MIR_append_insn(ctx, jit_func,
@@ -3351,7 +3351,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
                   MIR_new_insn(ctx, MIR_MOV,
                     MIR_new_reg_op(ctx, local_regs[i]),
                     MIR_new_mem_op(ctx, MIR_T_I64,
-                      (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_lbuf, 0, 1)));
+                      (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1)));
           }
           if (jit_try_depth > 0) {
             jit_try_entry_t *h = &jit_try_stack[jit_try_depth - 1];
@@ -3408,14 +3408,14 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         if (vs.known_func && hint_closure &&
             idx < (uint16_t)func->upvalue_count &&
             hint_closure->upvalues && hint_closure->upvalues[idx]) {
-          jsval_t uv_val = *hint_closure->upvalues[idx]->location;
+          ant_value_t uv_val = *hint_closure->upvalues[idx]->location;
           if (vtype(uv_val) == T_FUNC) {
             sv_closure_t *ucl = js_func_closure(uv_val);
             if (ucl && ucl->func == func) {
               MIR_reg_t dst = vstack_push(&vs);
               vs.known_func[vs.sp - 1] = func;
               uint64_t func_tag = NANBOX_PREFIX
-                | ((jsval_t)(T_FUNC & NANBOX_TYPE_MASK) << NANBOX_TYPE_SHIFT);
+                | ((ant_value_t)(T_FUNC & NANBOX_TYPE_MASK) << NANBOX_TYPE_SHIFT);
               mir_load_imm(ctx, jit_func, r_tmp, func_tag);
               MIR_append_insn(ctx, jit_func,
                 MIR_new_insn(ctx, MIR_OR,
@@ -3551,7 +3551,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_append_insn(ctx, jit_func,
               MIR_new_insn(ctx, MIR_MOV,
                 MIR_new_mem_op(ctx, MIR_T_I64,
-                  (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_lbuf, 0, 1),
+                  (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1),
                 MIR_new_reg_op(ctx, local_regs[i])));
         }
         MIR_append_insn(ctx, jit_func,
@@ -3573,13 +3573,13 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         MIR_reg_t dst = vstack_push(&vs);
 
         if (vs.known_func) {
-          jsval_t gv = jit_helper_get_global(js, atom->str, atom->len);
+          ant_value_t gv = jit_helper_get_global(js, atom->str, atom->len);
           if (vtype(gv) == T_FUNC) {
             sv_closure_t *gcl = js_func_closure(gv);
             if (gcl && gcl->func == func) {
               vs.known_func[vs.sp - 1] = func;
               uint64_t func_tag = NANBOX_PREFIX
-                | ((jsval_t)(T_FUNC & NANBOX_TYPE_MASK) << NANBOX_TYPE_SHIFT);
+                | ((ant_value_t)(T_FUNC & NANBOX_TYPE_MASK) << NANBOX_TYPE_SHIFT);
               mir_load_imm(ctx, jit_func, r_tmp, func_tag);
               MIR_append_insn(ctx, jit_func,
                 MIR_new_insn(ctx, MIR_OR,
@@ -3638,7 +3638,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
               MIR_new_mem_op(ctx, MIR_T_I64,
-                (MIR_disp_t)((int)idx * (int)sizeof(jsval_t)), r_lbuf, 0, 1),
+                (MIR_disp_t)((int)idx * (int)sizeof(ant_value_t)), r_lbuf, 0, 1),
               MIR_new_reg_op(ctx, local_regs[idx])));
         break;
       }
@@ -3664,7 +3664,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
               MIR_new_mem_op(ctx, MIR_T_I64,
-                (MIR_disp_t)((int)idx * (int)sizeof(jsval_t)), r_lbuf, 0, 1),
+                (MIR_disp_t)((int)idx * (int)sizeof(ant_value_t)), r_lbuf, 0, 1),
               MIR_new_reg_op(ctx, local_regs[idx])));
         break;
       }
@@ -3718,7 +3718,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
               MIR_new_mem_op(ctx, MIR_T_I64,
-                (MIR_disp_t)((int)idx * (int)sizeof(jsval_t)), r_lbuf, 0, 1),
+                (MIR_disp_t)((int)idx * (int)sizeof(ant_value_t)), r_lbuf, 0, 1),
               MIR_new_reg_op(ctx, local_regs[idx])));
         break;
       }
@@ -4114,7 +4114,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
               MIR_new_mem_op(ctx, MIR_T_I64,
-                (MIR_disp_t)(i * (int)sizeof(jsval_t)),
+                (MIR_disp_t)(i * (int)sizeof(ant_value_t)),
                 r_args_buf, 0, 1),
               MIR_new_reg_op(ctx, elem)));
         }
@@ -4237,7 +4237,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
                 MIR_new_insn(ctx, MIR_MOV,
                   MIR_new_reg_op(ctx, local_regs[i]),
                   MIR_new_mem_op(ctx, MIR_T_I64,
-                    (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_lbuf, 0, 1)));
+                    (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1)));
         }
         MIR_label_t no_err = MIR_new_label(ctx);
         MIR_append_insn(ctx, jit_func,
@@ -4396,14 +4396,14 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_append_insn(ctx, jit_func,
               MIR_new_insn(ctx, MIR_MOV,
                 MIR_new_mem_op(ctx, MIR_T_I64,
-                  (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_args_buf, 0, 1),
+                  (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_args_buf, 0, 1),
                 MIR_new_reg_op(ctx, vs.regs[i])));
           }
           for (int i = 0; i < n_locals; i++)
             MIR_append_insn(ctx, jit_func,
               MIR_new_insn(ctx, MIR_MOV,
                 MIR_new_mem_op(ctx, MIR_T_I64,
-                  (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_lbuf, 0, 1),
+                  (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1),
                 MIR_new_reg_op(ctx, local_regs[i])));
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
@@ -4537,14 +4537,14 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_append_insn(ctx, jit_func,
               MIR_new_insn(ctx, MIR_MOV,
                 MIR_new_mem_op(ctx, MIR_T_I64,
-                  (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_args_buf, 0, 1),
+                  (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_args_buf, 0, 1),
                 MIR_new_reg_op(ctx, vs.regs[i])));
           }
           for (int i = 0; i < n_locals; i++)
             MIR_append_insn(ctx, jit_func,
               MIR_new_insn(ctx, MIR_MOV,
                 MIR_new_mem_op(ctx, MIR_T_I64,
-                  (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_lbuf, 0, 1),
+                  (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1),
                 MIR_new_reg_op(ctx, local_regs[i])));
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
@@ -4650,13 +4650,13 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
               MIR_new_mem_op(ctx, MIR_T_I64,
-                (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_args_buf, 0, 1),
+                (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_args_buf, 0, 1),
               MIR_new_reg_op(ctx, vs.regs[i])));
         for (int i = 0; i < n_locals; i++)
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
               MIR_new_mem_op(ctx, MIR_T_I64,
-                (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_lbuf, 0, 1),
+                (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1),
               MIR_new_reg_op(ctx, local_regs[i])));
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, MIR_MOV,
@@ -4692,13 +4692,13 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
               MIR_new_mem_op(ctx, MIR_T_I64,
-                (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_args_buf, 0, 1),
+                (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_args_buf, 0, 1),
               MIR_new_reg_op(ctx, vs.regs[i])));
         for (int i = 0; i < n_locals; i++)
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
               MIR_new_mem_op(ctx, MIR_T_I64,
-                (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_lbuf, 0, 1),
+                (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1),
               MIR_new_reg_op(ctx, local_regs[i])));
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, MIR_MOV,
@@ -4765,7 +4765,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
               MIR_new_mem_op(ctx, MIR_JSVAL,
-                (MIR_disp_t)(i * (int)sizeof(jsval_t)),
+                (MIR_disp_t)(i * (int)sizeof(ant_value_t)),
                 r_args_buf, 0, 1),
               MIR_new_reg_op(ctx, areg)));
         }
@@ -4793,7 +4793,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
                 MIR_new_insn(ctx, MIR_MOV,
                   MIR_new_reg_op(ctx, local_regs[i]),
                   MIR_new_mem_op(ctx, MIR_T_I64,
-                    (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_lbuf, 0, 1)));
+                    (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1)));
         }
 
         MIR_label_t no_err = MIR_new_label(ctx);
@@ -4846,7 +4846,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
               MIR_new_mem_op(ctx, MIR_JSVAL,
-                (MIR_disp_t)(i * (int)sizeof(jsval_t)),
+                (MIR_disp_t)(i * (int)sizeof(ant_value_t)),
                 r_arg_arr, 0, 1),
               MIR_new_reg_op(ctx, areg)));
         }
@@ -4947,7 +4947,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
                   MIR_new_insn(ctx, MIR_MOV,
                     MIR_new_reg_op(ctx, local_regs[i]),
                     MIR_new_mem_op(ctx, MIR_T_I64,
-                      (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_lbuf, 0, 1)));
+                      (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1)));
           }
           if (jit_try_depth > 0) {
             jit_try_entry_t *h = &jit_try_stack[jit_try_depth - 1];
@@ -5136,14 +5136,14 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         uint32_t idx = sv_get_u32(ip + 1);
         if (idx >= (uint32_t)func->const_count) { ok = false; break; }
         MIR_reg_t dst = vstack_push(&vs);
-        jsval_t cv = func->constants[idx];
+        ant_value_t cv = func->constants[idx];
         vs.known_func[vs.sp - 1] = (sv_func_t *)(uintptr_t)vdata(cv);
         if (n_locals > 0) {
           for (int i = 0; i < n_locals; i++)
             MIR_append_insn(ctx, jit_func,
               MIR_new_insn(ctx, MIR_MOV,
                 MIR_new_mem_op(ctx, MIR_T_I64,
-                  (MIR_disp_t)(i * (int)sizeof(jsval_t)), r_lbuf, 0, 1),
+                  (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1),
                 MIR_new_reg_op(ctx, local_regs[i])));
         }
         MIR_append_insn(ctx, jit_func,
@@ -5276,10 +5276,10 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 }
 
 
-jsval_t sv_jit_try_compile_and_call(
+ant_value_t sv_jit_try_compile_and_call(
   sv_vm_t *vm, ant_t *js,
-  sv_closure_t *closure, jsval_t callee_func,
-  sv_call_ctx_t *ctx, jsval_t *out_this
+  sv_closure_t *closure, ant_value_t callee_func,
+  sv_call_ctx_t *ctx, ant_value_t *out_this
 ) {
   sv_func_t *fn = closure->func;
 
@@ -5291,7 +5291,7 @@ jsval_t sv_jit_try_compile_and_call(
   }
 
   fn->jit_code = (void *)jit;
-  jsval_t result = jit(vm, ctx->this_val, ctx->args, ctx->argc, closure);
+  ant_value_t result = jit(vm, ctx->this_val, ctx->args, ctx->argc, closure);
   if (sv_is_jit_bailout(result)) {
     sv_jit_on_bailout(fn);
     return SV_JIT_RETRY_INTERP;
@@ -5302,7 +5302,7 @@ jsval_t sv_jit_try_compile_and_call(
 }
 
 
-jsval_t sv_jit_try_osr(
+ant_value_t sv_jit_try_osr(
   sv_vm_t *vm, ant_t *js,
   sv_frame_t *frame, sv_func_t *func,
   int bc_offset
@@ -5328,7 +5328,7 @@ jsval_t sv_jit_try_osr(
   }
 
   int nl = func->max_locals;
-  jsval_t osr_locals[nl > 0 ? nl : 1];
+  ant_value_t osr_locals[nl > 0 ? nl : 1];
   for (int i = 0; i < nl; i++)
     osr_locals[i] = frame->lp[i];
 
@@ -5338,7 +5338,7 @@ jsval_t sv_jit_try_osr(
   vm->jit_osr.n_locals  = nl;
   vm->jit_osr.lp        = frame->lp;
 
-  jsval_t result = jit(vm, frame->this, frame->bp, frame->argc, closure);
+  ant_value_t result = jit(vm, frame->this, frame->bp, frame->argc, closure);
 
   if (sv_is_jit_bailout(result)) {
     sv_jit_on_bailout(func);

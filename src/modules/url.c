@@ -139,10 +139,10 @@ static void uri_to_parsed(const UriUriA *uri, parsed_url_t *out) {
   free(frag);
 }
 
-static const char *coerce_to_string(ant_t *js, jsval_t val, size_t *len) {
+static const char *coerce_to_string(ant_t *js, ant_value_t val, size_t *len) {
   if (vtype(val) == T_STR) return js_getstr(js, val, len);
   if (is_object_type(val)) {
-    jsval_t href = js_get(js, val, "href");
+    ant_value_t href = js_get(js, val, "href");
     if (vtype(href) == T_STR) return js_getstr(js, href, len);
   }
   return NULL;
@@ -252,7 +252,7 @@ static char *build_href(
   return href;
 }
 
-static void update_url_href(ant_t *js, jsval_t url_obj) {
+static void update_url_href(ant_t *js, ant_value_t url_obj) {
   char *protocol = js_getstr(js, js_get(js, url_obj, "protocol"), NULL);
   char *username = js_getstr(js, js_get(js, url_obj, "username"), NULL);
   char *password = js_getstr(js, js_get(js, url_obj, "password"), NULL);
@@ -298,16 +298,16 @@ static void update_url_href(ant_t *js, jsval_t url_obj) {
   free(href);
 }
 
-static jsval_t url_toString(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t url_toString(ant_t *js, ant_value_t *args, int nargs) {
   return js_get(js, js_getthis(js), "href");
 }
 
-static jsval_t js_URLSearchParams(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t usp = js_mkobj(js);
-  jsval_t proto = js_get_ctor_proto(js, "URLSearchParams", 15);
+static ant_value_t js_URLSearchParams(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t usp = js_mkobj(js);
+  ant_value_t proto = js_get_ctor_proto(js, "URLSearchParams", 15);
   if (is_special_object(proto)) js_set_proto(js, usp, proto);
   
-  jsval_t entries = js_mkarr(js);
+  ant_value_t entries = js_mkarr(js);
   js_set_slot(js, usp, SLOT_ENTRIES, entries);
 
   if (nargs < 1 || vtype(args[0]) != T_STR) return usp;
@@ -326,7 +326,7 @@ parse_pair:
   char *key = pair, *val = eq ? (eq[0] = '\0', eq + 1) : "";
   char *dk = url_decode_component(key);
   char *dv = url_decode_component(val);
-  jsval_t entry = js_mkarr(js);
+  ant_value_t entry = js_mkarr(js);
   js_arr_push(js, entry, js_mkstr(js, dk, strlen(dk)));
   js_arr_push(js, entry, js_mkstr(js, dv, strlen(dv)));
   js_arr_push(js, entries, entry);
@@ -336,7 +336,7 @@ parse_pair:
   goto parse_pair;
 }
 
-static jsval_t js_URL(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_URL(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "TypeError: URL requires at least 1 argument");
 
   char *url_str = js_getstr(js, args[0], NULL);
@@ -348,8 +348,8 @@ static jsval_t js_URL(ant_t *js, jsval_t *args, int nargs) {
     return js_mkerr(js, "TypeError: Invalid URL");
   }
 
-  jsval_t url_obj = js_mkobj(js);
-  jsval_t proto = js_get_ctor_proto(js, "URL", 3);
+  ant_value_t url_obj = js_mkobj(js);
+  ant_value_t proto = js_get_ctor_proto(js, "URL", 3);
   if (is_special_object(proto)) js_set_proto(js, url_obj, proto);
 
   js_set(js, url_obj, "protocol", js_mkstr(js, parsed.protocol, strlen(parsed.protocol)));
@@ -363,14 +363,14 @@ static jsval_t js_URL(ant_t *js, jsval_t *args, int nargs) {
 
   update_url_href(js, url_obj);
 
-  jsval_t search_params = js_mkobj(js);
-  jsval_t usp_proto = js_get_ctor_proto(js, "URLSearchParams", 15);
+  ant_value_t search_params = js_mkobj(js);
+  ant_value_t usp_proto = js_get_ctor_proto(js, "URLSearchParams", 15);
   if (is_special_object(usp_proto)) js_set_proto(js, search_params, usp_proto);
   js_set_slot(js, search_params, SLOT_DATA, url_obj);
   if (parsed.search && *parsed.search) {
     const char *qs = parsed.search[0] == '?' ? parsed.search + 1 : parsed.search;
-    jsval_t arg = js_mkstr(js, qs, strlen(qs));
-    jsval_t tmp = js_URLSearchParams(js, &arg, 1);
+    ant_value_t arg = js_mkstr(js, qs, strlen(qs));
+    ant_value_t tmp = js_URLSearchParams(js, &arg, 1);
     js_set_slot(js, search_params, SLOT_ENTRIES, js_get_slot(js, tmp, SLOT_ENTRIES));
   } else {
     js_set_slot(js, search_params, SLOT_ENTRIES, js_mkarr(js));
@@ -381,19 +381,19 @@ static jsval_t js_URL(ant_t *js, jsval_t *args, int nargs) {
   return url_obj;
 }
 
-static jsval_t usp_get(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t usp_get(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mknull();
-  jsval_t this_val = js_getthis(js);
+  ant_value_t this_val = js_getthis(js);
   
   char *key = js_getstr(js, args[0], NULL);
   if (!key) return js_mknull();
 
-  jsval_t entries = js_get_slot(js, this_val, SLOT_ENTRIES);
+  ant_value_t entries = js_get_slot(js, this_val, SLOT_ENTRIES);
   if (!is_special_object(entries)) return js_mknull();
 
-  jsoff_t len = js_arr_len(js, entries);
-  for (jsoff_t i = 0; i < len; i++) {
-    jsval_t entry = js_arr_get(js, entries, i);
+  ant_offset_t len = js_arr_len(js, entries);
+  for (ant_offset_t i = 0; i < len; i++) {
+    ant_value_t entry = js_arr_get(js, entries, i);
     char *ks = js_getstr(js, js_arr_get(js, entry, 0), NULL);
     if (ks && strcmp(ks, key) == 0) return js_arr_get(js, entry, 1);
   }
@@ -401,20 +401,20 @@ static jsval_t usp_get(ant_t *js, jsval_t *args, int nargs) {
   return js_mknull();
 }
 
-static jsval_t usp_getAll(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t usp_getAll(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkarr(js);
-  jsval_t this_val = js_getthis(js);
+  ant_value_t this_val = js_getthis(js);
   
   char *key = js_getstr(js, args[0], NULL);
   if (!key) return js_mkarr(js);
 
-  jsval_t result = js_mkarr(js);
-  jsval_t entries = js_get_slot(js, this_val, SLOT_ENTRIES);
+  ant_value_t result = js_mkarr(js);
+  ant_value_t entries = js_get_slot(js, this_val, SLOT_ENTRIES);
   if (!is_special_object(entries)) return result;
 
-  jsoff_t len = js_arr_len(js, entries);
-  for (jsoff_t i = 0; i < len; i++) {
-    jsval_t entry = js_arr_get(js, entries, i);
+  ant_offset_t len = js_arr_len(js, entries);
+  for (ant_offset_t i = 0; i < len; i++) {
+    ant_value_t entry = js_arr_get(js, entries, i);
     char *ks = js_getstr(js, js_arr_get(js, entry, 0), NULL);
     if (ks && strcmp(ks, key) == 0) js_arr_push(js, result, js_arr_get(js, entry, 1));
   }
@@ -422,19 +422,19 @@ static jsval_t usp_getAll(ant_t *js, jsval_t *args, int nargs) {
   return result;
 }
 
-static jsval_t usp_has(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t usp_has(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_false;
-  jsval_t this_val = js_getthis(js);
+  ant_value_t this_val = js_getthis(js);
   
   char *key = js_getstr(js, args[0], NULL);
   if (!key) return js_false;
 
-  jsval_t entries = js_get_slot(js, this_val, SLOT_ENTRIES);
+  ant_value_t entries = js_get_slot(js, this_val, SLOT_ENTRIES);
   if (!is_special_object(entries)) return js_false;
 
-  jsoff_t len = js_arr_len(js, entries);
-  for (jsoff_t i = 0; i < len; i++) {
-    jsval_t entry = js_arr_get(js, entries, i);
+  ant_offset_t len = js_arr_len(js, entries);
+  for (ant_offset_t i = 0; i < len; i++) {
+    ant_value_t entry = js_arr_get(js, entries, i);
     char *ks = js_getstr(js, js_arr_get(js, entry, 0), NULL);
     if (ks && strcmp(ks, key) == 0) return js_true;
   }
@@ -442,19 +442,19 @@ static jsval_t usp_has(ant_t *js, jsval_t *args, int nargs) {
   return js_false;
 }
 
-static void usp_sync_url(ant_t *js, jsval_t this_val) {
-  jsval_t url_obj = js_get_slot(js, this_val, SLOT_DATA);
+static void usp_sync_url(ant_t *js, ant_value_t this_val) {
+  ant_value_t url_obj = js_get_slot(js, this_val, SLOT_DATA);
   if (!is_special_object(url_obj)) return;
 
-  jsval_t entries = js_get_slot(js, this_val, SLOT_ENTRIES);
-  jsoff_t len = js_arr_len(js, entries);
+  ant_value_t entries = js_get_slot(js, this_val, SLOT_ENTRIES);
+  ant_offset_t len = js_arr_len(js, entries);
 
   size_t buf_size = 1024;
   char *buf = try_oom(buf_size);
   size_t pos = 0;
 
-  for (jsoff_t i = 0; i < len; i++) {
-    jsval_t entry = js_arr_get(js, entries, i);
+  for (ant_offset_t i = 0; i < len; i++) {
+    ant_value_t entry = js_arr_get(js, entries, i);
     char *k = js_getstr(js, js_arr_get(js, entry, 0), NULL);
     char *v = js_getstr(js, js_arr_get(js, entry, 1), NULL);
     if (!k) continue;
@@ -480,25 +480,25 @@ static void usp_sync_url(ant_t *js, jsval_t this_val) {
   free(buf);
 }
 
-static jsval_t usp_set(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t usp_set(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_mkundef();
-  jsval_t this_val = js_getthis(js);
+  ant_value_t this_val = js_getthis(js);
   
   char *key = js_getstr(js, args[0], NULL);
   if (!key) return js_mkundef();
 
-  jsval_t entries = js_get_slot(js, this_val, SLOT_ENTRIES);
-  jsoff_t len = js_arr_len(js, entries);
+  ant_value_t entries = js_get_slot(js, this_val, SLOT_ENTRIES);
+  ant_offset_t len = js_arr_len(js, entries);
 
-  jsval_t new_entries = js_mkarr(js);
+  ant_value_t new_entries = js_mkarr(js);
   int found = 0;
 
-  for (jsoff_t i = 0; i < len; i++) {
-    jsval_t entry = js_arr_get(js, entries, i);
+  for (ant_offset_t i = 0; i < len; i++) {
+    ant_value_t entry = js_arr_get(js, entries, i);
     char *ks = js_getstr(js, js_arr_get(js, entry, 0), NULL);
     if (ks && strcmp(ks, key) == 0) {
       if (!found) {
-        jsval_t new_entry = js_mkarr(js);
+        ant_value_t new_entry = js_mkarr(js);
         js_arr_push(js, new_entry, args[0]);
         js_arr_push(js, new_entry, args[1]);
         js_arr_push(js, new_entries, new_entry);
@@ -508,7 +508,7 @@ static jsval_t usp_set(ant_t *js, jsval_t *args, int nargs) {
   }
 
   if (!found) {
-    jsval_t new_entry = js_mkarr(js);
+    ant_value_t new_entry = js_mkarr(js);
     js_arr_push(js, new_entry, args[0]);
     js_arr_push(js, new_entry, args[1]);
     js_arr_push(js, new_entries, new_entry);
@@ -520,12 +520,12 @@ static jsval_t usp_set(ant_t *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t usp_append(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t usp_append(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_mkundef();
-  jsval_t this_val = js_getthis(js);
+  ant_value_t this_val = js_getthis(js);
 
-  jsval_t entries = js_get_slot(js, this_val, SLOT_ENTRIES);
-  jsval_t entry = js_mkarr(js);
+  ant_value_t entries = js_get_slot(js, this_val, SLOT_ENTRIES);
+  ant_value_t entry = js_mkarr(js);
   js_arr_push(js, entry, args[0]);
   js_arr_push(js, entry, args[1]);
   js_arr_push(js, entries, entry);
@@ -534,18 +534,18 @@ static jsval_t usp_append(ant_t *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t usp_delete(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t usp_delete(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
-  jsval_t this_val = js_getthis(js);
+  ant_value_t this_val = js_getthis(js);
   char *key = js_getstr(js, args[0], NULL);
   if (!key) return js_mkundef();
 
-  jsval_t entries = js_get_slot(js, this_val, SLOT_ENTRIES);
-  jsoff_t len = js_arr_len(js, entries);
+  ant_value_t entries = js_get_slot(js, this_val, SLOT_ENTRIES);
+  ant_offset_t len = js_arr_len(js, entries);
 
-  jsval_t new_entries = js_mkarr(js);
-  for (jsoff_t i = 0; i < len; i++) {
-    jsval_t entry = js_arr_get(js, entries, i);
+  ant_value_t new_entries = js_mkarr(js);
+  for (ant_offset_t i = 0; i < len; i++) {
+    ant_value_t entry = js_arr_get(js, entries, i);
     char *ks = js_getstr(js, js_arr_get(js, entry, 0), NULL);
     if (!ks || strcmp(ks, key) != 0) js_arr_push(js, new_entries, entry);
   }
@@ -557,17 +557,17 @@ static jsval_t usp_delete(ant_t *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t usp_toString(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t this_val = js_getthis(js);
-  jsval_t entries = js_get_slot(js, this_val, SLOT_ENTRIES);
-  jsoff_t len = js_arr_len(js, entries);
+static ant_value_t usp_toString(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_val = js_getthis(js);
+  ant_value_t entries = js_get_slot(js, this_val, SLOT_ENTRIES);
+  ant_offset_t len = js_arr_len(js, entries);
 
   size_t buf_size = 1024;
   char *buf = try_oom(buf_size);
   size_t pos = 0;
 
-  for (jsoff_t i = 0; i < len; i++) {
-    jsval_t entry = js_arr_get(js, entries, i);
+  for (ant_offset_t i = 0; i < len; i++) {
+    ant_value_t entry = js_arr_get(js, entries, i);
     char *k = js_getstr(js, js_arr_get(js, entry, 0), NULL);
     char *v = js_getstr(js, js_arr_get(js, entry, 1), NULL);
     if (!k) continue;
@@ -589,7 +589,7 @@ static jsval_t usp_toString(ant_t *js, jsval_t *args, int nargs) {
   }
   
   buf[pos] = '\0';
-  jsval_t ret = js_mkstr(js, buf, pos);
+  ant_value_t ret = js_mkstr(js, buf, pos);
   free(buf);
   
   return ret;
@@ -597,10 +597,10 @@ static jsval_t usp_toString(ant_t *js, jsval_t *args, int nargs) {
 
 void init_url_module(void) {
   ant_t *js = rt->js;
-  jsval_t glob = js->global;
+  ant_value_t glob = js->global;
 
-  jsval_t url_ctor = js_mkobj(js);
-  jsval_t url_proto = js_mkobj(js);
+  ant_value_t url_ctor = js_mkobj(js);
+  ant_value_t url_proto = js_mkobj(js);
   
   js_set(js, url_proto, "toString", js_mkfun(url_toString));
   js_set_sym(js, url_proto, get_toStringTag_sym(), js_mkstr(js, "URL", 3));
@@ -612,8 +612,8 @@ void init_url_module(void) {
   
   js_set(js, glob, "URL", js_obj_to_func(url_ctor));
   
-  jsval_t usp_ctor = js_mkobj(js);
-  jsval_t usp_proto = js_mkobj(js);
+  ant_value_t usp_ctor = js_mkobj(js);
+  ant_value_t usp_proto = js_mkobj(js);
   
   js_set(js, usp_proto, "get", js_mkfun(usp_get));
   js_set(js, usp_proto, "getAll", js_mkfun(usp_getAll));
@@ -632,7 +632,7 @@ void init_url_module(void) {
   js_set(js, glob, "URLSearchParams", js_obj_to_func(usp_ctor));
 }
 
-static jsval_t builtin_fileURLToPath(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_fileURLToPath(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "fileURLToPath requires a string or URL argument");
 
   size_t len;
@@ -652,12 +652,12 @@ static jsval_t builtin_fileURLToPath(ant_t *js, jsval_t *args, int nargs) {
   free_parsed_url(&parsed);
   if (!decoded) return js_mkerr(js, "allocation failure");
 
-  jsval_t ret = js_mkstr(js, decoded, strlen(decoded));
+  ant_value_t ret = js_mkstr(js, decoded, strlen(decoded));
   free(decoded);
   return ret;
 }
 
-static jsval_t builtin_pathToFileURL(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_pathToFileURL(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1 || vtype(args[0]) != T_STR)
     return js_mkerr(js, "pathToFileURL requires a string argument");
 
@@ -672,15 +672,15 @@ static jsval_t builtin_pathToFileURL(ant_t *js, jsval_t *args, int nargs) {
   memcpy(buf + 7, path, len);
   buf[total] = '\0';
 
-  jsval_t url_args[1] = { js_mkstr(js, buf, total) };
+  ant_value_t url_args[1] = { js_mkstr(js, buf, total) };
   free(buf);
 
   return js_URL(js, url_args, 1);
 }
 
-jsval_t url_library(ant_t *js) {
-  jsval_t lib = js_mkobj(js);
-  jsval_t glob = js_glob(js);
+ant_value_t url_library(ant_t *js) {
+  ant_value_t lib = js_mkobj(js);
+  ant_value_t glob = js_glob(js);
 
   js_set(js, lib, "URL", js_get(js, glob, "URL"));
   js_set(js, lib, "URLSearchParams", js_get(js, glob, "URLSearchParams"));

@@ -82,7 +82,7 @@ drain:
   } 
   
   js_poll_events(js);
-  jsval_t code = js_mknum(0);
+  ant_value_t code = js_mknum(0);
   emit_process_event("beforeExit", &code, 1);
   
   if (event_loop_alive()) goto drain;

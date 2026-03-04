@@ -6,7 +6,7 @@
 
 void init_json_module(void);
 
-jsval_t js_json_parse(ant_t *js, jsval_t *args, int nargs);
-jsval_t js_json_stringify(ant_t *js, jsval_t *args, int nargs);
+ant_value_t js_json_parse(ant_t *js, ant_value_t *args, int nargs);
+ant_value_t js_json_stringify(ant_t *js, ant_value_t *args, int nargs);
 
 #endif

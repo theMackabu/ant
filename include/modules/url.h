@@ -4,6 +4,6 @@
 #include "types.h"
 
 void init_url_module(void);
-jsval_t url_library(ant_t *js);
+ant_value_t url_library(ant_t *js);
 
 #endif

@@ -57,7 +57,7 @@ static const util_style_entry_t util_styles[] = {
   {"bgWhite", "\x1b[47m", "\x1b[49m"},
 };
 
-static inline bool util_is_callable(jsval_t v) {
+static inline bool util_is_callable(ant_value_t v) {
   uint8_t t = vtype(v);
   return t == T_FUNC || t == T_CFUNC;
 }
@@ -93,7 +93,7 @@ static bool util_sb_append_c(util_sb_t *sb, char c) {
   return true;
 }
 
-static bool util_sb_append_jsval(ant_t *js, util_sb_t *sb, jsval_t v) {
+static bool util_sb_append_jsval(ant_t *js, util_sb_t *sb, ant_value_t v) {
   char cbuf[512];
   js_cstr_t cstr = js_to_cstr(js, v, cbuf, sizeof(cbuf));
   size_t len = strlen(cstr.ptr);
@@ -102,9 +102,9 @@ static bool util_sb_append_jsval(ant_t *js, util_sb_t *sb, jsval_t v) {
   return ok;
 }
 
-static bool util_sb_append_json(ant_t *js, util_sb_t *sb, jsval_t v) {
-  jsval_t stringify_args[1] = {v};
-  jsval_t json = js_json_stringify(js, stringify_args, 1);
+static bool util_sb_append_json(ant_t *js, util_sb_t *sb, ant_value_t v) {
+  ant_value_t stringify_args[1] = {v};
+  ant_value_t json = js_json_stringify(js, stringify_args, 1);
   if (vtype(json) != T_STR) {
     return util_sb_append_n(sb, "[Circular]", 10);
   }
@@ -113,10 +113,10 @@ static bool util_sb_append_json(ant_t *js, util_sb_t *sb, jsval_t v) {
   return s ? util_sb_append_n(sb, s, len) : util_sb_append_n(sb, "[Circular]", 10);
 }
 
-static jsval_t util_format_impl(ant_t *js, jsval_t *args, int nargs, int fmt_index) {
+static ant_value_t util_format_impl(ant_t *js, ant_value_t *args, int nargs, int fmt_index) {
   util_sb_t sb = {0};
   if (fmt_index >= nargs) {
-    jsval_t out = js_mkstr(js, "", 0);
+    ant_value_t out = js_mkstr(js, "", 0);
     free(sb.buf);
     return out;
   }
@@ -126,7 +126,7 @@ static jsval_t util_format_impl(ant_t *js, jsval_t *args, int nargs, int fmt_ind
       if (i > fmt_index) util_sb_append_c(&sb, ' ');
       util_sb_append_jsval(js, &sb, args[i]);
     }
-    jsval_t out = js_mkstr(js, sb.buf ? sb.buf : "", sb.len);
+    ant_value_t out = js_mkstr(js, sb.buf ? sb.buf : "", sb.len);
     free(sb.buf);
     return out;
   }
@@ -160,7 +160,7 @@ static jsval_t util_format_impl(ant_t *js, jsval_t *args, int nargs, int fmt_ind
       continue;
     }
 
-    jsval_t v = (argi < nargs) ? args[argi++] : js_mkundef();
+    ant_value_t v = (argi < nargs) ? args[argi++] : js_mkundef();
 
     if (spec == 's') {
       util_sb_append_jsval(js, &sb, v);
@@ -192,30 +192,30 @@ static jsval_t util_format_impl(ant_t *js, jsval_t *args, int nargs, int fmt_ind
     util_sb_append_jsval(js, &sb, args[argi]);
   }
 
-  jsval_t out = js_mkstr(js, sb.buf ? sb.buf : "", sb.len);
+  ant_value_t out = js_mkstr(js, sb.buf ? sb.buf : "", sb.len);
   free(sb.buf);
   return out;
 }
 
-static jsval_t util_format(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t util_format(ant_t *js, ant_value_t *args, int nargs) {
   return util_format_impl(js, args, nargs, 0);
 }
 
-static jsval_t util_format_with_options(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t util_format_with_options(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs <= 1) return js_mkstr(js, "", 0);
   return util_format_impl(js, args, nargs, 1);
 }
 
-static jsval_t util_inspect(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t util_inspect(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkstr(js, "undefined", 9);
   char cbuf[512];
   js_cstr_t cstr = js_to_cstr(js, args[0], cbuf, sizeof(cbuf));
-  jsval_t out = js_mkstr(js, cstr.ptr, strlen(cstr.ptr));
+  ant_value_t out = js_mkstr(js, cstr.ptr, strlen(cstr.ptr));
   if (cstr.needs_free) free((void *)cstr.ptr);
   return out;
 }
 
-static jsval_t util_strip_vt_control_characters(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t util_strip_vt_control_characters(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkstr(js, "", 0);
 
   char cbuf[512];
@@ -255,7 +255,7 @@ static jsval_t util_strip_vt_control_characters(ant_t *js, jsval_t *args, int na
     }
   }
 
-  jsval_t out = js_mkstr(js, sb.buf ? sb.buf : "", sb.len);
+  ant_value_t out = js_mkstr(js, sb.buf ? sb.buf : "", sb.len);
   if (cstr.needs_free) free((void *)cstr.ptr);
   free(sb.buf);
   return out;
@@ -268,7 +268,7 @@ static const util_style_entry_t *util_find_style(const char *name) {
   return NULL;
 }
 
-static jsval_t util_style_text(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t util_style_text(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_mkstr(js, "", 0);
 
   char text_buf[512];
@@ -282,9 +282,9 @@ static jsval_t util_style_text(ant_t *js, jsval_t *args, int nargs) {
     const util_style_entry_t *e = name ? util_find_style(name) : NULL;
     if (e) picked[picked_n++] = e;
   } else if (vtype(args[0]) == T_ARR) {
-    jsoff_t len = js_arr_len(js, args[0]);
-    for (jsoff_t i = 0; i < len && picked_n < (int)(sizeof(picked) / sizeof(picked[0])); i++) {
-      jsval_t item = js_arr_get(js, args[0], i);
+    ant_offset_t len = js_arr_len(js, args[0]);
+    for (ant_offset_t i = 0; i < len && picked_n < (int)(sizeof(picked) / sizeof(picked[0])); i++) {
+      ant_value_t item = js_arr_get(js, args[0], i);
       if (vtype(item) != T_STR) continue;
       const char *name = js_getstr(js, item, NULL);
       const util_style_entry_t *e = name ? util_find_style(name) : NULL;
@@ -293,7 +293,7 @@ static jsval_t util_style_text(ant_t *js, jsval_t *args, int nargs) {
   }
 
   if (picked_n == 0) {
-    jsval_t out = js_mkstr(js, text_cstr.ptr, strlen(text_cstr.ptr));
+    ant_value_t out = js_mkstr(js, text_cstr.ptr, strlen(text_cstr.ptr));
     if (text_cstr.needs_free) free((void *)text_cstr.ptr);
     return out;
   }
@@ -307,22 +307,22 @@ static jsval_t util_style_text(ant_t *js, jsval_t *args, int nargs) {
     util_sb_append_n(&sb, picked[i]->close, strlen(picked[i]->close));
   }
 
-  jsval_t out = js_mkstr(js, sb.buf ? sb.buf : "", sb.len);
+  ant_value_t out = js_mkstr(js, sb.buf ? sb.buf : "", sb.len);
   if (text_cstr.needs_free) free((void *)text_cstr.ptr);
   free(sb.buf);
   return out;
 }
 
-static jsval_t util_promisify_callback(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t fn = js_getcurrentfunc(js);
-  jsval_t ctx = js_get_slot(js, fn, SLOT_DATA);
+static ant_value_t util_promisify_callback(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t fn = js_getcurrentfunc(js);
+  ant_value_t ctx = js_get_slot(js, fn, SLOT_DATA);
   if (!is_object_type(ctx)) return js_mkundef();
 
-  jsval_t settled = js_get_slot(js, ctx, SLOT_SETTLED);
+  ant_value_t settled = js_get_slot(js, ctx, SLOT_SETTLED);
   if (vtype(settled) == T_BOOL && settled == js_true) return js_mkundef();
   js_set_slot(js, ctx, SLOT_SETTLED, js_true);
 
-  jsval_t promise = js_get_slot(js, ctx, SLOT_DATA);
+  ant_value_t promise = js_get_slot(js, ctx, SLOT_DATA);
   if (!is_object_type(promise)) return js_mkundef();
 
   if (nargs > 0 && !is_null(args[0]) && !is_undefined(args[0])) {
@@ -340,24 +340,24 @@ static jsval_t util_promisify_callback(ant_t *js, jsval_t *args, int nargs) {
     return js_mkundef();
   }
 
-  jsval_t arr = js_mkarr(js);
+  ant_value_t arr = js_mkarr(js);
   for (int i = 1; i < nargs; i++) js_arr_push(js, arr, args[i]);
   js_resolve_promise(js, promise, arr);
   return js_mkundef();
 }
 
-static jsval_t util_promisified_call(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t fn = js_getcurrentfunc(js);
-  jsval_t original = js_get_slot(js, fn, SLOT_DATA);
+static ant_value_t util_promisified_call(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t fn = js_getcurrentfunc(js);
+  ant_value_t original = js_get_slot(js, fn, SLOT_DATA);
   if (!util_is_callable(original)) return js_mkerr(js, "promisified target is not callable");
 
-  jsval_t promise = js_mkpromise(js);
-  jsval_t ctx = js_mkobj(js);
+  ant_value_t promise = js_mkpromise(js);
+  ant_value_t ctx = js_mkobj(js);
   js_set_slot(js, ctx, SLOT_DATA, promise);
   js_set_slot(js, ctx, SLOT_SETTLED, js_false);
-  jsval_t cb = js_heavy_mkfun(js, util_promisify_callback, ctx);
+  ant_value_t cb = js_heavy_mkfun(js, util_promisify_callback, ctx);
 
-  jsval_t *call_args = (jsval_t *)malloc((size_t)(nargs + 1) * sizeof(jsval_t));
+  ant_value_t *call_args = (ant_value_t *)malloc((size_t)(nargs + 1) * sizeof(ant_value_t));
   if (!call_args) {
     js_reject_promise(js, promise, js_mkerr(js, "Out of memory"));
     return promise;
@@ -365,16 +365,16 @@ static jsval_t util_promisified_call(ant_t *js, jsval_t *args, int nargs) {
   for (int i = 0; i < nargs; i++) call_args[i] = args[i];
   call_args[nargs] = cb;
 
-  jsval_t this_arg = js_getthis(js);
-  jsval_t call_result = sv_vm_call(
+  ant_value_t this_arg = js_getthis(js);
+  ant_value_t call_result = sv_vm_call(
     js->vm, js, original, this_arg, call_args, nargs + 1, NULL, false
   );
   free(call_args);
 
-  jsval_t settled = js_get_slot(js, ctx, SLOT_SETTLED);
+  ant_value_t settled = js_get_slot(js, ctx, SLOT_SETTLED);
   bool is_settled = (vtype(settled) == T_BOOL && settled == js_true);
   if (!is_settled && (is_err(call_result) || js->thrown_exists)) {
-    jsval_t ex = js->thrown_exists ? js->thrown_value : call_result;
+    ant_value_t ex = js->thrown_exists ? js->thrown_value : call_result;
     js->thrown_exists = false;
     js->thrown_value = js_mkundef();
     js->thrown_stack = js_mkundef();
@@ -385,15 +385,15 @@ static jsval_t util_promisified_call(ant_t *js, jsval_t *args, int nargs) {
   return promise;
 }
 
-static jsval_t util_promisify(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t util_promisify(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1 || !util_is_callable(args[0])) {
     return js_mkerr(js, "promisify(fn) requires a function");
   }
   return js_heavy_mkfun(js, util_promisified_call, args[0]);
 }
 
-jsval_t util_library(ant_t *js) {
-  jsval_t lib = js_mkobj(js);
+ant_value_t util_library(ant_t *js) {
+  ant_value_t lib = js_mkobj(js);
 
   js_set(js, lib, "format", js_mkfun(util_format));
   js_set(js, lib, "formatWithOptions", js_mkfun(util_format_with_options));

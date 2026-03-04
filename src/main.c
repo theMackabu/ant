@@ -254,7 +254,7 @@ static void eval_code(ant_t *js, const char *script, size_t len, const char *tag
   js_set(js, js_glob(js), "__dirname", js_mkstr(js, ".", 1));
   js_set(js, js_glob(js), "__filename", js_mkstr(js, tag, strlen(tag)));
   
-  jsval_t result = js_eval_bytecode_eval(js, script, len);
+  ant_value_t result = js_eval_bytecode_eval(js, script, len);
   js_run_event_loop(js);
   
   if (print_uncaught_throw(js)) {
@@ -334,14 +334,14 @@ static int execute_module(ant_t *js, const char *filename) {
   js_set_filename(js, use_path);
   js_setup_import_meta(js, use_path);
   
-  jsval_t import_fn = js_get(js, js->global, "import");
-  jsval_t module_ns = mkobj(js, 0);
+  ant_value_t import_fn = js_get(js, js->global, "import");
+  ant_value_t module_ns = mkobj(js, 0);
   
   js->import_meta = (vtype(import_fn) == T_FUNC)
     ? js_get(js, import_fn, "meta")
     : js_mkundef();
 
-  jsval_t result = js_esm_eval_module_source(
+  ant_value_t result = js_esm_eval_module_source(
     js, use_path, js_code, 
     js_len, module_ns
   ); 
@@ -620,7 +620,7 @@ int main(int argc, char *argv[]) {
   ant_standard_library("worker_threads", worker_threads_library);
   ant_standard_library("async_hooks", async_hooks_library);
 
-  jsval_t snapshot_result = ant_load_snapshot(js);
+  ant_value_t snapshot_result = ant_load_snapshot(js);
   if (vtype(snapshot_result) == T_ERR) {
     crfprintf(stderr, msg.snapshot_warn, js_str(js, snapshot_result));
   }

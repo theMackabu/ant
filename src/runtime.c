@@ -171,7 +171,7 @@ struct ant_runtime *ant_runtime_init(ant_t *js, int argc, char **argv, struct ar
     .ls_fp = (ls_p && ls_p->count > 0) ? ls_p->filename[0] : NULL,
   };
 
-  jsval_t global = js_glob(js);
+  ant_value_t global = js_glob(js);
   js_set(js, global, "global", global);
   js_set(js, global, "window", global);
   js_set(js, global, "globalThis", global);

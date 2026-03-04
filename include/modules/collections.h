@@ -7,24 +7,24 @@
 
 typedef struct map_entry {
   char *key;
-  jsval_t value;
+  ant_value_t value;
   UT_hash_handle hh;
 } map_entry_t;
 
 typedef struct set_entry {
-  jsval_t value;
+  ant_value_t value;
   char *key;
   UT_hash_handle hh;
 } set_entry_t;
 
 typedef struct weakmap_entry {
-  jsval_t key_obj;
-  jsval_t value;
+  ant_value_t key_obj;
+  ant_value_t value;
   UT_hash_handle hh;
 } weakmap_entry_t;
 
 typedef struct weakset_entry {
-  jsval_t value_obj;
+  ant_value_t value_obj;
   UT_hash_handle hh;
 } weakset_entry_t;
 
@@ -50,12 +50,12 @@ typedef struct set_iterator_state {
 
 typedef struct map_registry_entry {
   map_entry_t **head;
-  jsoff_t obj_offset;
+  ant_offset_t obj_offset;
 } map_registry_entry_t;
 
 typedef struct set_registry_entry {
   set_entry_t **head;
-  jsoff_t obj_offset;
+  ant_offset_t obj_offset;
 } set_registry_entry_t;
 
 void init_collections_module(void);
@@ -63,9 +63,9 @@ void cleanup_collections_module(void);
 size_t collections_get_external_memory(void);
 
 void collections_gc_reserve_roots(GC_OP_VAL_ARGS);
-void collections_gc_update_roots(jsoff_t (*weak_off)(void *ctx, jsoff_t old), GC_OP_VAL_ARGS);
+void collections_gc_update_roots(ant_offset_t (*weak_off)(void *ctx, ant_offset_t old), GC_OP_VAL_ARGS);
 
-map_entry_t **get_map_from_obj(ant_t *js, jsval_t obj);
-set_entry_t **get_set_from_obj(ant_t *js, jsval_t obj);
+map_entry_t **get_map_from_obj(ant_t *js, ant_value_t obj);
+set_entry_t **get_set_from_obj(ant_t *js, ant_value_t obj);
 
 #endif

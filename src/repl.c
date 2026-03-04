@@ -235,7 +235,7 @@ static bool repl_precheck_and_commit_lexicals(
   bool ok = true;
 
   repl_clear_exception_state(js);
-  sv_ast_t *program = sv_parse(js, code, (jsoff_t)len, false);
+  sv_ast_t *program = sv_parse(js, code, (ant_offset_t)len, false);
   
   if (!program || js->thrown_exists) {
     ok = true;
@@ -293,7 +293,7 @@ static void repl_eval_chunk(
   }
 
   repl_clear_exception_state(js);
-  jsval_t result = js_eval_bytecode_repl(js, code, len);
+  ant_value_t result = js_eval_bytecode_repl(js, code, len);
   js_run_event_loop(js);
 
   if (js->thrown_exists) {
@@ -422,8 +422,8 @@ static cmd_result_t cmd_save(ant_t *js, history_t *history, const char *arg) {
 }
 
 static cmd_result_t cmd_stats(ant_t *js, history_t *history, const char *arg) {
-  jsval_t stats_fn = js_get(js, rt->ant_obj, "stats");
-  jsval_t result = sv_vm_call(js->vm, js, stats_fn, js_mkundef(), NULL, 0, NULL, false);
+  ant_value_t stats_fn = js_get(js, rt->ant_obj, "stats");
+  ant_value_t result = sv_vm_call(js->vm, js, stats_fn, js_mkundef(), NULL, 0, NULL, false);
   console_print(js, &result, 1, NULL, stdout);
   return CMD_OK;
 }
@@ -482,7 +482,7 @@ static cmd_result_t cmd_copy(ant_t *js, history_t *history, const char *arg) {
   }
 
   repl_clear_exception_state(js);
-  jsval_t result = js_eval_bytecode_repl(js, arg, strlen(arg));
+  ant_value_t result = js_eval_bytecode_repl(js, arg, strlen(arg));
   
   js_run_event_loop(js);
   if (js->thrown_exists) {

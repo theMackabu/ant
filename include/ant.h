@@ -29,152 +29,152 @@
 #define JS_INF     ((double)INFINITY)
 #define JS_NEG_INF ((double)(-INFINITY))
 
-#define js_true    (NANBOX_PREFIX | ((jsval_t)T_BOOL << NANBOX_TYPE_SHIFT) | 1)
-#define js_false   (NANBOX_PREFIX | ((jsval_t)T_BOOL << NANBOX_TYPE_SHIFT))
-#define js_bool(x) (js_false | (jsval_t)!!(x))
+#define js_true    (NANBOX_PREFIX | ((ant_value_t)T_BOOL << NANBOX_TYPE_SHIFT) | 1)
+#define js_false   (NANBOX_PREFIX | ((ant_value_t)T_BOOL << NANBOX_TYPE_SHIFT))
+#define js_bool(x) (js_false | (ant_value_t)!!(x))
 
 ant_t *js_create(void *buf, size_t len);
 ant_t *js_create_dynamic();
 
-jsval_t js_glob(ant_t *);
+ant_value_t js_glob(ant_t *);
 
 // TODO: improve naming
-jsval_t js_eval_bytecode(ant_t *, const char *, size_t);
-jsval_t js_eval_bytecode_module(ant_t *, const char *, size_t);
-jsval_t js_eval_bytecode_eval(ant_t *, const char *, size_t);
-jsval_t js_eval_bytecode_eval_with_strict(ant_t *, const char *, size_t, bool);
-jsval_t js_eval_bytecode_repl(ant_t *, const char *, size_t);
+ant_value_t js_eval_bytecode(ant_t *, const char *, size_t);
+ant_value_t js_eval_bytecode_module(ant_t *, const char *, size_t);
+ant_value_t js_eval_bytecode_eval(ant_t *, const char *, size_t);
+ant_value_t js_eval_bytecode_eval_with_strict(ant_t *, const char *, size_t, bool);
+ant_value_t js_eval_bytecode_repl(ant_t *, const char *, size_t);
 
 void js_destroy(ant_t *);
-bool js_truthy(ant_t *, jsval_t);
+bool js_truthy(ant_t *, ant_value_t);
 void js_setstackbase(ant_t *, void *);
 void js_setstacklimit(ant_t *, size_t);
 
 uint32_t js_to_uint32(double d);
 int32_t js_to_int32(double d);
 
-bool js_chkargs(jsval_t *, int, const char *);
+bool js_chkargs(ant_value_t *, int, const char *);
 void js_set_filename(ant_t *, const char *);
 void js_stats(ant_t *, size_t *total, size_t *min, size_t *cstacksize);
 size_t js_getbrk(ant_t *);
 
-jshdl_t js_root(ant_t *, jsval_t);
-jsval_t js_deref(ant_t *, jshdl_t);
+ant_handle_t js_root(ant_t *, ant_value_t);
+ant_value_t js_deref(ant_t *, ant_handle_t);
 
-void js_unroot(ant_t *, jshdl_t);
-void js_root_update(ant_t *, jshdl_t, jsval_t);
+void js_unroot(ant_t *, ant_handle_t);
+void js_root_update(ant_t *, ant_handle_t, ant_value_t);
 
-jsval_t js_mkundef(void);
-jsval_t js_mknull(void);
-jsval_t js_mknum(double);
+ant_value_t js_mkundef(void);
+ant_value_t js_mknull(void);
+ant_value_t js_mknum(double);
 
-jsval_t js_getthis(ant_t *);
-void js_setthis(ant_t *, jsval_t);
+ant_value_t js_getthis(ant_t *);
+void js_setthis(ant_t *, ant_value_t);
 
-jsval_t js_getcurrentfunc(ant_t *);
-jsval_t js_get(ant_t *, jsval_t, const char *);
-jsval_t js_getprop_proto(ant_t *, jsval_t, const char *);
-jsval_t js_getprop_fallback(ant_t *js, jsval_t obj, const char *name);
-jsval_t js_getprop_super(ant_t *js, jsval_t super_obj, jsval_t receiver, const char *name);
+ant_value_t js_getcurrentfunc(ant_t *);
+ant_value_t js_get(ant_t *, ant_value_t, const char *);
+ant_value_t js_getprop_proto(ant_t *, ant_value_t, const char *);
+ant_value_t js_getprop_fallback(ant_t *js, ant_value_t obj, const char *name);
+ant_value_t js_getprop_super(ant_t *js, ant_value_t super_obj, ant_value_t receiver, const char *name);
 
-jsoff_t js_arr_len(ant_t *js, jsval_t arr);
-jsval_t js_arr_get(ant_t *js, jsval_t arr, jsoff_t idx);
+ant_offset_t js_arr_len(ant_t *js, ant_value_t arr);
+ant_value_t js_arr_get(ant_t *js, ant_value_t arr, ant_offset_t idx);
 
 bool js_iter(
   ant_t *js, 
-  jsval_t iterable,
+  ant_value_t iterable,
   bool (*callback)(
     ant_t *js,
-    jsval_t value,
+    ant_value_t value,
     void *udata
   ), 
   void *udata
 );
 
-uint64_t js_sym_id(jsval_t sym);
-const char *js_sym_desc(ant_t *js, jsval_t sym);
-const char *js_sym_key(jsval_t sym);
+uint64_t js_sym_id(ant_value_t sym);
+const char *js_sym_desc(ant_t *js, ant_value_t sym);
+const char *js_sym_key(ant_value_t sym);
 
-jsval_t js_mksym_for(ant_t *, const char *key);
-jsval_t js_symbol_to_string(ant_t *js, jsval_t sym);
-jsval_t js_get_sym(ant_t *, jsval_t obj, jsval_t sym);
+ant_value_t js_mksym_for(ant_t *, const char *key);
+ant_value_t js_symbol_to_string(ant_t *js, ant_value_t sym);
+ant_value_t js_get_sym(ant_t *, ant_value_t obj, ant_value_t sym);
 
-jsval_t js_mkobj(ant_t *);
-jsval_t js_newobj(ant_t *);
-jsval_t js_mkarr(ant_t *);
-jsval_t js_mkstr(ant_t *, const void *, size_t);
-jsval_t js_mkbigint(ant_t *, const char *digits, size_t len, bool negative);
-jsval_t js_mksym(ant_t *, const char *desc);
-jsval_t js_mkfun(jsval_t (*fn)(ant_t *, jsval_t *, int));
-jsval_t js_heavy_mkfun(ant_t *js, jsval_t (*fn)(ant_t *, jsval_t *, int), jsval_t data);
+ant_value_t js_mkobj(ant_t *);
+ant_value_t js_newobj(ant_t *);
+ant_value_t js_mkarr(ant_t *);
+ant_value_t js_mkstr(ant_t *, const void *, size_t);
+ant_value_t js_mkbigint(ant_t *, const char *digits, size_t len, bool negative);
+ant_value_t js_mksym(ant_t *, const char *desc);
+ant_value_t js_mkfun(ant_value_t (*fn)(ant_t *, ant_value_t *, int));
+ant_value_t js_heavy_mkfun(ant_t *js, ant_value_t (*fn)(ant_t *, ant_value_t *, int), ant_value_t data);
 
-jsval_t js_mkprop_fast(ant_t *js, jsval_t obj, const char *key, size_t len, jsval_t v);
-jsoff_t js_mkprop_fast_off(ant_t *js, jsval_t obj, const char *key, size_t len, jsval_t v);
+ant_value_t js_mkprop_fast(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v);
+ant_offset_t js_mkprop_fast_off(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v);
 
-void js_set(ant_t *, jsval_t, const char *, jsval_t);
-void js_set_sym(ant_t *, jsval_t obj, jsval_t sym, jsval_t val);
-void js_saveval(ant_t *js, jsoff_t off, jsval_t v);
-bool js_del(ant_t *, jsval_t obj, const char *key);
-void js_merge_obj(ant_t *, jsval_t dst, jsval_t src);
-void js_arr_push(ant_t *, jsval_t arr, jsval_t val);
-void js_set_proto(ant_t *, jsval_t obj, jsval_t proto);
+void js_set(ant_t *, ant_value_t, const char *, ant_value_t);
+void js_set_sym(ant_t *, ant_value_t obj, ant_value_t sym, ant_value_t val);
+void js_saveval(ant_t *js, ant_offset_t off, ant_value_t v);
+bool js_del(ant_t *, ant_value_t obj, const char *key);
+void js_merge_obj(ant_t *, ant_value_t dst, ant_value_t src);
+void js_arr_push(ant_t *, ant_value_t arr, ant_value_t val);
+void js_set_proto(ant_t *, ant_value_t obj, ant_value_t proto);
 
-jsval_t js_setprop(ant_t *, jsval_t obj, jsval_t key, jsval_t val);
-jsval_t js_setprop_nonconfigurable(ant_t *, jsval_t obj, const char *key, size_t keylen, jsval_t val);
+ant_value_t js_setprop(ant_t *, ant_value_t obj, ant_value_t key, ant_value_t val);
+ant_value_t js_setprop_nonconfigurable(ant_t *, ant_value_t obj, const char *key, size_t keylen, ant_value_t val);
 
-jsval_t js_get_proto(ant_t *, jsval_t obj);
-jsval_t js_get_ctor_proto(ant_t *, const char *name, size_t len);
-jsval_t js_tostring_val(ant_t *js, jsval_t value);
+ant_value_t js_get_proto(ant_t *, ant_value_t obj);
+ant_value_t js_get_ctor_proto(ant_t *, const char *name, size_t len);
+ant_value_t js_tostring_val(ant_t *js, ant_value_t value);
 
-uint8_t vtype(jsval_t val);
-size_t vdata(jsval_t val);
+uint8_t vtype(ant_value_t val);
+size_t vdata(ant_value_t val);
 
-double js_getnum(jsval_t val);
-char *js_getstr(ant_t *js, jsval_t val, size_t *len);
+double js_getnum(ant_value_t val);
+char *js_getstr(ant_t *js, ant_value_t val, size_t *len);
 
-const char *js_str(ant_t *, jsval_t val);
-const char *get_str_prop(ant_t *js, jsval_t obj, const char *key, jsoff_t klen, jsoff_t *out_len);
+const char *js_str(ant_t *, ant_value_t val);
+const char *get_str_prop(ant_t *js, ant_value_t obj, const char *key, ant_offset_t klen, ant_offset_t *out_len);
 
 typedef struct {
   void *ctx;
-  jsoff_t off;
+  ant_offset_t off;
 } ant_iter_t;
 
-ant_iter_t js_prop_iter_begin(ant_t *js, jsval_t obj);
+ant_iter_t js_prop_iter_begin(ant_t *js, ant_value_t obj);
 
-bool js_prop_iter_next(ant_iter_t *iter, const char **key, size_t *key_len, jsval_t *value);
+bool js_prop_iter_next(ant_iter_t *iter, const char **key, size_t *key_len, ant_value_t *value);
 void js_prop_iter_end(ant_iter_t *iter);
 
-jsval_t js_obj_to_func(jsval_t obj);
-jsval_t js_mkpromise(ant_t *js);
+ant_value_t js_obj_to_func(ant_value_t obj);
+ant_value_t js_mkpromise(ant_t *js);
 
-jsval_t js_mktypedarray(void *data);
-void *js_gettypedarray(jsval_t val);
+ant_value_t js_mktypedarray(void *data);
+void *js_gettypedarray(ant_value_t val);
 
-jsval_t js_mkffi(unsigned int index);
-int js_getffi(jsval_t val);
+ant_value_t js_mkffi(unsigned int index);
+int js_getffi(ant_value_t val);
 
-void js_resolve_promise(ant_t *js, jsval_t promise, jsval_t value);
-void js_reject_promise(ant_t *js, jsval_t promise, jsval_t value);
+void js_resolve_promise(ant_t *js, ant_value_t promise, ant_value_t value);
+void js_reject_promise(ant_t *js, ant_value_t promise, ant_value_t value);
 void js_check_unhandled_rejections(ant_t *js);
 void js_process_promise_handlers(ant_t *js, uint32_t promise_id);
 void js_setup_import_meta(ant_t *js, const char *filename);
 
-typedef jsval_t (*js_getter_fn)(ant_t *js, jsval_t obj, const char *key, size_t key_len);
-typedef bool (*js_setter_fn)(ant_t *js, jsval_t obj, const char *key, size_t key_len, jsval_t value);
-typedef bool (*js_deleter_fn)(ant_t *js, jsval_t obj, const char *key, size_t key_len);
-typedef jsval_t (*js_keys_fn)(ant_t *js, jsval_t obj);
+typedef ant_value_t (*js_getter_fn)(ant_t *js, ant_value_t obj, const char *key, size_t key_len);
+typedef bool (*js_setter_fn)(ant_t *js, ant_value_t obj, const char *key, size_t key_len, ant_value_t value);
+typedef bool (*js_deleter_fn)(ant_t *js, ant_value_t obj, const char *key, size_t key_len);
+typedef ant_value_t (*js_keys_fn)(ant_t *js, ant_value_t obj);
 
-void js_set_getter(ant_t *js, jsval_t obj, js_getter_fn getter);
-void js_set_setter(ant_t *js, jsval_t obj, js_setter_fn setter);
-void js_set_deleter(ant_t *js, jsval_t obj, js_deleter_fn deleter);
-void js_set_keys(ant_t *js, jsval_t obj, js_keys_fn keys);
+void js_set_getter(ant_t *js, ant_value_t obj, js_getter_fn getter);
+void js_set_setter(ant_t *js, ant_value_t obj, js_setter_fn setter);
+void js_set_deleter(ant_t *js, ant_value_t obj, js_deleter_fn deleter);
+void js_set_keys(ant_t *js, ant_value_t obj, js_keys_fn keys);
 
-jsval_t js_get_slot(ant_t *js, jsval_t obj, internal_slot_t slot);
-void js_set_slot(ant_t *js, jsval_t obj, internal_slot_t slot, jsval_t value);
+ant_value_t js_get_slot(ant_t *js, ant_value_t obj, internal_slot_t slot);
+void js_set_slot(ant_t *js, ant_value_t obj, internal_slot_t slot, ant_value_t value);
 
-bool js_is_slot_prop(jsoff_t header);
-jsoff_t js_next_prop(jsoff_t header);
-jsoff_t js_loadoff(ant_t *js, jsoff_t off);
+bool js_is_slot_prop(ant_offset_t header);
+ant_offset_t js_next_prop(ant_offset_t header);
+ant_offset_t js_loadoff(ant_t *js, ant_offset_t off);
 
 #endif

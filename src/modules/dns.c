@@ -16,7 +16,7 @@
 #include "ant.h"
 #include "errors.h"
 
-static jsval_t dns_promises_lookup(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t dns_promises_lookup(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "hostname is required");
 
   size_t len;
@@ -50,18 +50,18 @@ static jsval_t dns_promises_lookup(ant_t *js, jsval_t *args, int nargs) {
 
   freeaddrinfo(res);
 
-  jsval_t result = js_mkobj(js);
+  ant_value_t result = js_mkobj(js);
   js_set(js, result, "address", js_mkstr(js, addr_str, strlen(addr_str)));
   js_set(js, result, "family", js_mknum(family));
 
-  jsval_t promise = js_mkpromise(js);
+  ant_value_t promise = js_mkpromise(js);
   js_resolve_promise(js, promise, result);
   return promise;
 }
 
-jsval_t dns_library(ant_t *js) {
-  jsval_t lib = js_mkobj(js);
-  jsval_t promises = js_mkobj(js);
+ant_value_t dns_library(ant_t *js) {
+  ant_value_t lib = js_mkobj(js);
+  ant_value_t promises = js_mkobj(js);
 
   js_set(js, promises, "lookup", js_mkfun(dns_promises_lookup));
   js_set(js, lib, "promises", promises);

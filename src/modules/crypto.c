@@ -52,7 +52,7 @@ int uuidv7_new(uint8_t *uuid_out) {
 }
 
 // crypto.random()
-static jsval_t js_crypto_random(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_crypto_random(ant_t *js, ant_value_t *args, int nargs) {
   (void) args;
   (void) nargs;
   (void) js;
@@ -66,7 +66,7 @@ static jsval_t js_crypto_random(ant_t *js, jsval_t *args, int nargs) {
 }
 
 // crypto.randomBytes(length)
-static jsval_t js_crypto_random_bytes(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_crypto_random_bytes(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) {
     return js_mkerr(js, "randomBytes requires a length argument");
   }
@@ -88,7 +88,7 @@ static jsval_t js_crypto_random_bytes(ant_t *js, jsval_t *args, int nargs) {
   
   randombytes_buf(random_bytes, length);
   
-  jsval_t array = js_mkobj(js);
+  ant_value_t array = js_mkobj(js);
   js_set(js, array, "length", js_mknum((double)length));
   
   for (int i = 0; i < length; i++) {
@@ -102,7 +102,7 @@ static jsval_t js_crypto_random_bytes(ant_t *js, jsval_t *args, int nargs) {
 }
 
 // crypto.randomUUID()
-static jsval_t js_crypto_random_uuid(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_crypto_random_uuid(ant_t *js, ant_value_t *args, int nargs) {
   (void) args;
   (void) nargs;
   
@@ -130,7 +130,7 @@ static jsval_t js_crypto_random_uuid(ant_t *js, jsval_t *args, int nargs) {
 }
 
 // crypto.randomUUIDv7()
-static jsval_t js_crypto_random_uuidv7(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_crypto_random_uuidv7(ant_t *js, ant_value_t *args, int nargs) {
   (void) args;
   (void) nargs;
   
@@ -152,7 +152,7 @@ static jsval_t js_crypto_random_uuidv7(ant_t *js, jsval_t *args, int nargs) {
 }
 
 // crypto.getRandomValues(typedArray)
-static jsval_t js_crypto_get_random_values(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_crypto_get_random_values(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) {
     return js_mkerr(js, "getRandomValues requires a TypedArray argument");
   }
@@ -161,7 +161,7 @@ static jsval_t js_crypto_get_random_values(ant_t *js, jsval_t *args, int nargs) 
     return js_mkerr(js, "libsodium initialization failed");
   }
   
-  jsval_t ta_data_val = js_get_slot(js, args[0], SLOT_BUFFER);
+  ant_value_t ta_data_val = js_get_slot(js, args[0], SLOT_BUFFER);
   TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
   if (!ta_data || !ta_data->buffer) {
     return js_mkerr(js, "argument must be a TypedArray");
@@ -177,8 +177,8 @@ static jsval_t js_crypto_get_random_values(ant_t *js, jsval_t *args, int nargs) 
   return args[0];
 }
 
-static jsval_t create_crypto_obj(ant_t *js) {
-  jsval_t crypto_obj = js_mkobj(js);
+static ant_value_t create_crypto_obj(ant_t *js) {
+  ant_value_t crypto_obj = js_mkobj(js);
   
   js_set(js, crypto_obj, "random", js_mkfun(js_crypto_random));
   js_set(js, crypto_obj, "randomBytes", js_mkfun(js_crypto_random_bytes));
@@ -192,13 +192,13 @@ static jsval_t create_crypto_obj(ant_t *js) {
 
 void init_crypto_module() {
   ant_t *js = rt->js;
-  jsval_t crypto_obj = create_crypto_obj(js);
+  ant_value_t crypto_obj = create_crypto_obj(js);
   js_set(js, js_glob(js), "crypto", crypto_obj);
 }
 
-jsval_t crypto_library(ant_t *js) {
-  jsval_t lib = js_mkobj(js);
-  jsval_t webcrypto = create_crypto_obj(js);
+ant_value_t crypto_library(ant_t *js) {
+  ant_value_t lib = js_mkobj(js);
+  ant_value_t webcrypto = create_crypto_obj(js);
   
   js_set(js, lib, "webcrypto", webcrypto);
   js_set(js, lib, "randomBytes", js_mkfun(js_crypto_random_bytes));

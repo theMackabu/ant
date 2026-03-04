@@ -74,8 +74,8 @@ static int decode_escape_sequence(const char *str, size_t len, size_t *pos, unsi
 }
 
 // encodeURIComponent()
-static jsval_t js_encodeURIComponent(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t result;
+static ant_value_t js_encodeURIComponent(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t result;
   char *out = NULL;
   
   if (nargs < 1) return js_mkstr(js, "undefined", 9);
@@ -127,8 +127,8 @@ malformed:
 }
 
 // encodeURI()
-static jsval_t js_encodeURI(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t result;
+static ant_value_t js_encodeURI(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t result;
   char *out = NULL;
   
   if (nargs < 1) return js_mkstr(js, "undefined", 9);
@@ -180,8 +180,8 @@ malformed:
 }
 
 // decodeURIComponent()
-static jsval_t js_decodeURIComponent(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t result;
+static ant_value_t js_decodeURIComponent(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t result;
   char *out = NULL;
   
   if (nargs < 1) return js_mkstr(js, "undefined", 9);
@@ -229,8 +229,8 @@ malformed:
 }
 
 // decodeURI()
-static jsval_t js_decodeURI(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t result;
+static ant_value_t js_decodeURI(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t result;
   char *out = NULL;
   
   if (nargs < 1) return js_mkstr(js, "undefined", 9);
@@ -299,7 +299,7 @@ static int is_escape_unreserved(unsigned char c) {
          c == '-' || c == '.' || c == '/';
 }
 
-static jsval_t js_escape(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_escape(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkstr(js, "undefined", 9);
   
   char *str = js_getstr(js, args[0], NULL);
@@ -321,12 +321,12 @@ static jsval_t js_escape(ant_t *js, jsval_t *args, int nargs) {
   }
   
   out[out_len] = '\0';
-  jsval_t result = js_mkstr(js, out, out_len);
+  ant_value_t result = js_mkstr(js, out, out_len);
   free(out);
   return result;
 }
 
-static jsval_t js_unescape(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_unescape(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkstr(js, "undefined", 9);
   
   char *str = js_getstr(js, args[0], NULL);
@@ -353,14 +353,14 @@ static jsval_t js_unescape(ant_t *js, jsval_t *args, int nargs) {
   }
   
   out[out_len] = '\0';
-  jsval_t result = js_mkstr(js, out, out_len);
+  ant_value_t result = js_mkstr(js, out, out_len);
   free(out);
   return result;
 }
 
 void init_uri_module(void) {
   ant_t *js = rt->js;
-  jsval_t glob = js_glob(js);
+  ant_value_t glob = js_glob(js);
 
   js_set(js, glob, "encodeURI", js_mkfun(js_encodeURI));
   js_set(js, glob, "encodeURIComponent", js_mkfun(js_encodeURIComponent));

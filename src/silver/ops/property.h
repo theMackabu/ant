@@ -6,43 +6,43 @@
 #include <math.h>
 #include <stdlib.h>
 
-static inline jsval_t sv_getprop_fallback_len(
-  ant_t *js, jsval_t obj,
-  const char *key, jsoff_t key_len
+static inline ant_value_t sv_getprop_fallback_len(
+  ant_t *js, ant_value_t obj,
+  const char *key, ant_offset_t key_len
 ) {
   char small[64];
   char *tmp = small;
 
-  if (key_len + 1 > (jsoff_t)sizeof(small)) {
+  if (key_len + 1 > (ant_offset_t)sizeof(small)) {
     tmp = malloc((size_t)key_len + 1);
     if (!tmp) return js_mkerr(js, "out of memory");
   }
 
   memcpy(tmp, key, (size_t)key_len);
   tmp[key_len] = '\0';
-  jsval_t out = js_getprop_fallback(js, obj, tmp);
+  ant_value_t out = js_getprop_fallback(js, obj, tmp);
 
   if (tmp != small) free(tmp);
   return out;
 }
 
-static inline jsval_t sv_key_to_propstr(ant_t *js, jsval_t key) {
+static inline ant_value_t sv_key_to_propstr(ant_t *js, ant_value_t key) {
   return coerce_to_str(js, key);
 }
 
-static inline jsval_t sv_getprop_by_key(ant_t *js, jsval_t obj, jsval_t key) {
+static inline ant_value_t sv_getprop_by_key(ant_t *js, ant_value_t obj, ant_value_t key) {
   if (vtype(key) == T_SYMBOL) return js_get_sym(js, obj, key);
-  jsval_t key_str = sv_key_to_propstr(js, key);
+  ant_value_t key_str = sv_key_to_propstr(js, key);
   if (is_err(key_str) || vtype(key_str) != T_STR) return js_mkundef();
 
-  jsoff_t klen = 0;
-  jsoff_t koff = vstr(js, key_str, &klen);
+  ant_offset_t klen = 0;
+  ant_offset_t koff = vstr(js, key_str, &klen);
   const char *kptr = (const char *)&js->mem[koff];
   return sv_getprop_fallback_len(js, obj, kptr, klen);
 }
 
-static inline jsval_t sv_prop_get_at(
-  ant_t *js, jsval_t obj, const char *str, uint32_t len,
+static inline ant_value_t sv_prop_get_at(
+  ant_t *js, ant_value_t obj, const char *str, uint32_t len,
   sv_func_t *func, uint8_t *ip
 ) {
   uint8_t t = vtype(obj);
@@ -54,22 +54,22 @@ static inline jsval_t sv_prop_get_at(
       t == T_NULL ? "null" : "undefined", (int)len, str);
   }
 
-  jsval_t str_prim = js_mkundef();
-  jsval_t sym_prim = js_mkundef();
+  ant_value_t str_prim = js_mkundef();
+  ant_value_t sym_prim = js_mkundef();
 
   if (t == T_STR) {
     str_prim = obj;
   } else if (t == T_SYMBOL) {
     sym_prim = obj;
   } else if (t == T_OBJ) {
-    jsval_t prim = js_get_slot(js, obj, SLOT_PRIMITIVE);
+    ant_value_t prim = js_get_slot(js, obj, SLOT_PRIMITIVE);
     if (vtype(prim) == T_STR) str_prim = prim;
     else if (vtype(prim) == T_SYMBOL) sym_prim = prim;
   }
 
   if (vtype(str_prim) == T_STR && len == 6 && memcmp(str, "length", 6) == 0) {
-    jsoff_t byte_len = 0;
-    jsoff_t str_off = vstr(js, str_prim, &byte_len);
+    ant_offset_t byte_len = 0;
+    ant_offset_t str_off = vstr(js, str_prim, &byte_len);
     const char *str_data = (const char *)&js->mem[str_off];
     return tov((double)utf16_strlen(str_data, byte_len));
   }
@@ -81,14 +81,14 @@ static inline jsval_t sv_prop_get_at(
     return js_mkundef();
   }
   
-  return sv_getprop_fallback_len(js, obj, str, (jsoff_t)len);
+  return sv_getprop_fallback_len(js, obj, str, (ant_offset_t)len);
 }
 
-static inline jsval_t sv_prop_get(ant_t *js, jsval_t obj, const char *str, uint32_t len) {
+static inline ant_value_t sv_prop_get(ant_t *js, ant_value_t obj, const char *str, uint32_t len) {
   return sv_prop_get_at(js, obj, str, len, NULL, NULL);
 }
 
-static inline bool sv_parse_string_index_key(ant_t *js, jsval_t key, size_t *out_idx) {
+static inline bool sv_parse_string_index_key(ant_t *js, ant_value_t key, size_t *out_idx) {
   if (vtype(key) == T_NUM) {
     double d = tod(key);
     if (!isfinite(d) || d < 0.0) return false;
@@ -100,14 +100,14 @@ static inline bool sv_parse_string_index_key(ant_t *js, jsval_t key, size_t *out
 
   if (vtype(key) != T_STR) return false;
 
-  jsoff_t klen = 0;
-  jsoff_t koff = vstr(js, key, &klen);
+  ant_offset_t klen = 0;
+  ant_offset_t koff = vstr(js, key, &klen);
   const char *k = (const char *)&js->mem[koff];
   if (klen == 0) return false;
   if (klen > 1 && k[0] == '0') return false;
 
   size_t idx = 0;
-  for (jsoff_t i = 0; i < klen; i++) {
+  for (ant_offset_t i = 0; i < klen; i++) {
     if (k[i] < '0' || k[i] > '9') return false;
     size_t digit = (size_t)(k[i] - '0');
     if (idx > (SIZE_MAX - digit) / 10) return false;
@@ -118,10 +118,10 @@ static inline bool sv_parse_string_index_key(ant_t *js, jsval_t key, size_t *out
   return true;
 }
 
-static inline bool sv_try_string_index_get(ant_t *js, jsval_t obj, jsval_t key, jsval_t *out) {
-  jsval_t str = obj;
+static inline bool sv_try_string_index_get(ant_t *js, ant_value_t obj, ant_value_t key, ant_value_t *out) {
+  ant_value_t str = obj;
   if (vtype(obj) == T_OBJ) {
-    jsval_t prim = js_get_slot(js, obj, SLOT_PRIMITIVE);
+    ant_value_t prim = js_get_slot(js, obj, SLOT_PRIMITIVE);
     if (vtype(prim) == T_STR) str = prim;
   }
   if (vtype(str) != T_STR) return false;
@@ -129,8 +129,8 @@ static inline bool sv_try_string_index_get(ant_t *js, jsval_t obj, jsval_t key, 
   size_t idx = 0;
   if (!sv_parse_string_index_key(js, key, &idx)) return false;
 
-  jsoff_t byte_len = 0;
-  jsoff_t str_off = vstr(js, str, &byte_len);
+  ant_offset_t byte_len = 0;
+  ant_offset_t str_off = vstr(js, str, &byte_len);
   const char *str_data = (const char *)&js->mem[str_off];
   size_t char_bytes = 0;
   int byte_offset = utf16_index_to_byte_offset(str_data, byte_len, idx, &char_bytes);
@@ -143,50 +143,50 @@ static inline bool sv_try_string_index_get(ant_t *js, jsval_t obj, jsval_t key, 
   return true;
 }
 
-static inline jsval_t sv_op_get_field(
+static inline ant_value_t sv_op_get_field(
   sv_vm_t *vm, ant_t *js,
   sv_func_t *func, uint8_t *ip
 ) {
   uint32_t idx = sv_get_u32(ip + 1);
   sv_atom_t *a = &func->atoms[idx];
-  jsval_t obj = vm->stack[--vm->sp];
-  jsval_t res = sv_prop_get_at(js, obj, a->str, a->len, func, ip);
+  ant_value_t obj = vm->stack[--vm->sp];
+  ant_value_t res = sv_prop_get_at(js, obj, a->str, a->len, func, ip);
   if (is_err(res)) return res;
   vm->stack[vm->sp++] = res;
   return js_mkundef();
 }
 
-static inline jsval_t sv_op_get_field2(
+static inline ant_value_t sv_op_get_field2(
   sv_vm_t *vm, ant_t *js,
   sv_func_t *func, uint8_t *ip
 ) {
   uint32_t idx = sv_get_u32(ip + 1);
   sv_atom_t *a = &func->atoms[idx];
-  jsval_t obj = vm->stack[vm->sp - 1];
-  jsval_t res = sv_prop_get_at(js, obj, a->str, a->len, func, ip);
+  ant_value_t obj = vm->stack[vm->sp - 1];
+  ant_value_t res = sv_prop_get_at(js, obj, a->str, a->len, func, ip);
   if (is_err(res)) return res;
   vm->stack[vm->sp++] = res;
   return js_mkundef();
 }
 
-static inline jsval_t sv_op_put_field(
+static inline ant_value_t sv_op_put_field(
   sv_vm_t *vm, ant_t *js,
   sv_func_t *func, uint8_t *ip
 ) {
   uint32_t idx = sv_get_u32(ip + 1);
   sv_atom_t *a = &func->atoms[idx];
-  jsval_t val = vm->stack[--vm->sp];
-  jsval_t obj = vm->stack[--vm->sp];
-  jsval_t key = js_mkstr(js, a->str, a->len);
+  ant_value_t val = vm->stack[--vm->sp];
+  ant_value_t obj = vm->stack[--vm->sp];
+  ant_value_t key = js_mkstr(js, a->str, a->len);
   return js_setprop(js, obj, key, val);
 }
 
-static inline jsval_t sv_op_get_elem(
+static inline ant_value_t sv_op_get_elem(
   sv_vm_t *vm, ant_t *js,
   sv_func_t *func, uint8_t *ip
 ) {
-  jsval_t key = vm->stack[--vm->sp];
-  jsval_t obj = vm->stack[--vm->sp];
+  ant_value_t key = vm->stack[--vm->sp];
+  ant_value_t obj = vm->stack[--vm->sp];
   uint8_t ot = vtype(obj);
 
   if (ot == T_NULL || ot == T_UNDEF) {
@@ -203,24 +203,24 @@ static inline jsval_t sv_op_get_elem(
     }
   }
 
-  jsval_t str_elem = js_mkundef();
+  ant_value_t str_elem = js_mkundef();
   if (sv_try_string_index_get(js, obj, key, &str_elem)) {
     vm->stack[vm->sp++] = str_elem;
     return js_mkundef();
   }
 
-  jsval_t res = sv_getprop_by_key(js, obj, key);
+  ant_value_t res = sv_getprop_by_key(js, obj, key);
   if (is_err(res)) return res;
   vm->stack[vm->sp++] = res;
   return js_mkundef();
 }
 
-static inline jsval_t sv_op_get_elem2(
+static inline ant_value_t sv_op_get_elem2(
   sv_vm_t *vm, ant_t *js,
   sv_func_t *func, uint8_t *ip
 ) {
-  jsval_t key = vm->stack[--vm->sp];
-  jsval_t obj = vm->stack[vm->sp - 1];
+  ant_value_t key = vm->stack[--vm->sp];
+  ant_value_t obj = vm->stack[vm->sp - 1];
 
   uint8_t ot = vtype(obj);
   if (ot == T_NULL || ot == T_UNDEF) {
@@ -237,24 +237,24 @@ static inline jsval_t sv_op_get_elem2(
     }
   }
 
-  jsval_t str_elem = js_mkundef();
+  ant_value_t str_elem = js_mkundef();
   if (sv_try_string_index_get(js, obj, key, &str_elem)) {
     vm->stack[vm->sp++] = str_elem;
     return js_mkundef();
   }
 
-  jsval_t res = sv_getprop_by_key(js, obj, key);
+  ant_value_t res = sv_getprop_by_key(js, obj, key);
   if (is_err(res)) return res;
   vm->stack[vm->sp++] = res;
   return js_mkundef();
 }
 
-static inline jsval_t sv_op_put_elem(sv_vm_t *vm, ant_t *js) {
-  jsval_t val = vm->stack[--vm->sp];
-  jsval_t key = vm->stack[--vm->sp];
-  jsval_t obj = vm->stack[--vm->sp];
+static inline ant_value_t sv_op_put_elem(sv_vm_t *vm, ant_t *js) {
+  ant_value_t val = vm->stack[--vm->sp];
+  ant_value_t key = vm->stack[--vm->sp];
+  ant_value_t obj = vm->stack[--vm->sp];
   if (vtype(key) == T_SYMBOL) return js_setprop(js, obj, key, val);
-  jsval_t key_jv = sv_key_to_propstr(js, key);
+  ant_value_t key_jv = sv_key_to_propstr(js, key);
   return js_setprop(js, obj, key_jv, val);
 }
 
@@ -264,13 +264,13 @@ static inline void sv_op_define_field(
 ) {
   uint32_t idx = sv_get_u32(ip + 1);
   sv_atom_t *a = &func->atoms[idx];
-  jsval_t val = vm->stack[--vm->sp];
-  jsval_t obj = vm->stack[vm->sp - 1];
+  ant_value_t val = vm->stack[--vm->sp];
+  ant_value_t obj = vm->stack[vm->sp - 1];
   js_define_own_prop(js, obj, a->str, a->len, val);
 }
 
-static inline jsval_t sv_op_get_length(sv_vm_t *vm, ant_t *js) {
-  jsval_t obj = vm->stack[--vm->sp];
+static inline ant_value_t sv_op_get_length(sv_vm_t *vm, ant_t *js) {
+  ant_value_t obj = vm->stack[--vm->sp];
 
   if (vtype(obj) == T_ARR) {
     vm->stack[vm->sp++] = tov((double)(uint32_t)js_arr_len(js, obj));
@@ -278,14 +278,14 @@ static inline jsval_t sv_op_get_length(sv_vm_t *vm, ant_t *js) {
   }
   
   if (vtype(obj) == T_STR) {
-    jsoff_t byte_len = 0;
-    jsoff_t off = vstr(js, obj, &byte_len);
+    ant_offset_t byte_len = 0;
+    ant_offset_t off = vstr(js, obj, &byte_len);
     const char *str_data = (const char *)&js->mem[off];
     vm->stack[vm->sp++] = tov((double)(uint32_t)utf16_strlen(str_data, byte_len));
     return js_mkundef();
   }
 
-  jsval_t res = js_getprop_fallback(js, obj, "length");
+  ant_value_t res = js_getprop_fallback(js, obj, "length");
   if (is_err(res)) return res;
   
   vm->stack[vm->sp++] = res;

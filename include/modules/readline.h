@@ -5,8 +5,8 @@
 #include "types.h"
 #include <stdbool.h>
 
-jsval_t readline_library(ant_t *js);
-jsval_t readline_promises_library(ant_t *js);
+ant_value_t readline_library(ant_t *js);
+ant_value_t readline_promises_library(ant_t *js);
 
 bool has_active_readline_interfaces(void);
 void readline_gc_update_roots(GC_OP_VAL_ARGS);

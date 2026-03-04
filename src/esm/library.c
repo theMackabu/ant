@@ -53,7 +53,7 @@ void ant_library_foreach(ant_library_iter_fn cb, void *userdata) {
   }
 }
 
-jsval_t js_esm_load_registered_library(ant_t *js, const char *specifier, size_t spec_len, bool *loaded) {
+ant_value_t js_esm_load_registered_library(ant_t *js, const char *specifier, size_t spec_len, bool *loaded) {
   ant_library_entry_t *lib = find_library(specifier, spec_len);
   if (!lib) {
     if (loaded) *loaded = false;

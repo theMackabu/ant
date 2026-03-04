@@ -44,13 +44,13 @@ typedef struct {
 typedef struct sv_compiler {
   ant_t *js;
   const char *source;
-  jsoff_t source_len;
+  ant_offset_t source_len;
 
   uint8_t *code;
   int code_len;
   int code_cap;
 
-  jsval_t *constants;
+  ant_value_t *constants;
   int const_count;
   int const_cap;
 
@@ -153,7 +153,7 @@ static void compile_switch(sv_compiler_t *c, sv_ast_t *node);
 static void compile_label(sv_compiler_t *c, sv_ast_t *node);
 static void compile_class(sv_compiler_t *c, sv_ast_t *node);
 
-static const char *pin_source_text(const char *source, jsoff_t source_len) {
+static const char *pin_source_text(const char *source, ant_offset_t source_len) {
   if (!source || source_len <= 0) return source;
   const char *pinned = code_arena_alloc(source, (size_t)source_len);
   return pinned ? pinned : source;
@@ -192,7 +192,7 @@ static void emit_op(sv_compiler_t *c, sv_op_t op) {
 static void emit_srcpos(sv_compiler_t *c, sv_ast_t *node) {
   if (!node) return;
   const char *code = c->source;
-  jsoff_t clen = c->source_len;
+  ant_offset_t clen = c->source_len;
   if (!code || clen <= 0) return;
 
   uint32_t off = node->src_off;
@@ -231,16 +231,16 @@ static void patch_u32(sv_compiler_t *c, int offset, uint32_t val) {
   c->code[offset + 3] = (uint8_t)((val >> 24) & 0xFF);
 }
 
-static int add_constant(sv_compiler_t *c, jsval_t val) {
+static int add_constant(sv_compiler_t *c, ant_value_t val) {
   if (c->const_count >= c->const_cap) {
     c->const_cap = c->const_cap ? c->const_cap * 2 : 16;
-    c->constants = realloc(c->constants, (size_t)c->const_cap * sizeof(jsval_t));
+    c->constants = realloc(c->constants, (size_t)c->const_cap * sizeof(ant_value_t));
   }
   c->constants[c->const_count] = val;
   return c->const_count++;
 }
 
-static void emit_constant(sv_compiler_t *c, jsval_t val) {
+static void emit_constant(sv_compiler_t *c, ant_value_t val) {
   int idx = add_constant(c, val);
   if (idx <= 255) {
     emit_op(c, OP_CONST8);
@@ -270,7 +270,7 @@ static inline bool is_invalid_cooked_string(const sv_ast_t *node) {
   return node && (node->flags & FN_INVALID_COOKED);
 }
 
-static inline jsval_t ast_string_const(sv_compiler_t *c, const sv_ast_t *node) {
+static inline ant_value_t ast_string_const(sv_compiler_t *c, const sv_ast_t *node) {
   if (!node || !node->str) return js_mkstr(c->js, "", 0);
   return js_mkstr(c->js, node->str, node->len);
 }
@@ -1003,7 +1003,7 @@ static void compile_expr(sv_compiler_t *c, sv_ast_t *node) {
         neg = true; digits++; dlen--;
       }
       if (dlen > 0 && digits[dlen - 1] == 'n') dlen--;
-      jsval_t bi = js_mkbigint(c->js, digits, dlen, neg);
+      ant_value_t bi = js_mkbigint(c->js, digits, dlen, neg);
       emit_constant(c, bi);
       break;
     }
@@ -1584,7 +1584,7 @@ static void compile_delete(sv_compiler_t *c, sv_ast_t *node) {
   sv_ast_t *arg = node->right;
   if (arg->type == N_MEMBER && !(arg->flags & 1)) {
     compile_expr(c, arg->left);
-    jsval_t key = js_mkstr(c->js, arg->right->str, arg->right->len);
+    ant_value_t key = js_mkstr(c->js, arg->right->str, arg->right->len);
     emit_constant(c, key);
     emit_op(c, OP_DELETE);
   } else if (arg->type == N_MEMBER && (arg->flags & 1)) {
@@ -3429,8 +3429,8 @@ static void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     memcpy(fn->code, comp.code, (size_t)comp.code_len);
     fn->code_len = comp.code_len;
     if (comp.const_count > 0) {
-      fn->constants = code_arena_bump((size_t)comp.const_count * sizeof(jsval_t));
-      memcpy(fn->constants, comp.constants, (size_t)comp.const_count * sizeof(jsval_t));
+      fn->constants = code_arena_bump((size_t)comp.const_count * sizeof(ant_value_t));
+      memcpy(fn->constants, comp.constants, (size_t)comp.const_count * sizeof(ant_value_t));
       fn->const_count = comp.const_count;
     }
     if (comp.atom_count > 0) {
@@ -3861,8 +3861,8 @@ static sv_func_t *compile_function_body(
   func->code_len = comp.code_len;
 
   if (comp.const_count > 0) {
-    func->constants = code_arena_bump((size_t)comp.const_count * sizeof(jsval_t));
-    memcpy(func->constants, comp.constants, (size_t)comp.const_count * sizeof(jsval_t));
+    func->constants = code_arena_bump((size_t)comp.const_count * sizeof(ant_value_t));
+    memcpy(func->constants, comp.constants, (size_t)comp.const_count * sizeof(ant_value_t));
     func->const_count = comp.const_count;
   }
 
@@ -3953,7 +3953,7 @@ void sv_disasm(ant_t *js, sv_func_t *func, const char *label) {
   fprintf(stderr, "Bytecode length: %d\n", func->code_len);
   fprintf(stderr, "Parameter count %d\n", func->param_count);
   fprintf(stderr, "Register count %d\n", func->max_locals);
-  fprintf(stderr, "Frame size %d\n", func->max_locals * (int)sizeof(jsval_t));
+  fprintf(stderr, "Frame size %d\n", func->max_locals * (int)sizeof(ant_value_t));
 
   int pc = 0;
   while (pc < func->code_len) {
@@ -4067,11 +4067,11 @@ void sv_disasm(ant_t *js, sv_func_t *func, const char *label) {
 
   fprintf(stderr, "Constant pool (size = %d)\n", func->const_count);
   for (int i = 0; i < func->const_count; i++) {
-    jsval_t v = func->constants[i];
+    ant_value_t v = func->constants[i];
     uint8_t t = vtype(v);
     if (t == T_STR) {
-      jsoff_t slen;
-      jsoff_t soff = vstr(js, v, &slen);
+      ant_offset_t slen;
+      ant_offset_t soff = vstr(js, v, &slen);
       fprintf(stderr, "           %d: <String[%d]: #%.*s>\n", i, (int)slen, (int)slen, &js->mem[soff]);
     } else if (t == T_NUM) {
       fprintf(stderr, "           %d: <Number [%g]>\n", i, tod(v));
@@ -4103,7 +4103,7 @@ void sv_disasm(ant_t *js, sv_func_t *func, const char *label) {
   }
 }
 
-sv_func_t *sv_compile(ant_t *js, sv_ast_t *program, sv_compile_mode_t mode, const char *source, jsoff_t source_len) {
+sv_func_t *sv_compile(ant_t *js, sv_ast_t *program, sv_compile_mode_t mode, const char *source, ant_offset_t source_len) {
   if (!program || program->type != N_PROGRAM) return NULL;
   
   static const char *k_top_name_script = "<script>";
@@ -4158,7 +4158,7 @@ sv_func_t *sv_compile_function(ant_t *js, const char *source, size_t len, bool i
   wrapped[wrapped_len] = '\0';
   
   bool parse_strict = sv_vm_is_strict(js->vm);
-  sv_ast_t *program = sv_parse(js, wrapped, (jsoff_t)wrapped_len, parse_strict);
+  sv_ast_t *program = sv_parse(js, wrapped, (ant_offset_t)wrapped_len, parse_strict);
   if (!program) { free(wrapped); return NULL; }
 
   sv_ast_t *func_node = NULL;
@@ -4174,8 +4174,8 @@ sv_func_t *sv_compile_function(ant_t *js, const char *source, size_t len, bool i
 
   sv_compiler_t root = {0};
   root.js = js;
-  root.source = pin_source_text(wrapped, (jsoff_t)wrapped_len);
-  root.source_len = (jsoff_t)wrapped_len;
+  root.source = pin_source_text(wrapped, (ant_offset_t)wrapped_len);
+  root.source_len = (ant_offset_t)wrapped_len;
   root.mode = SV_COMPILE_SCRIPT;
   root.is_strict = (program->flags & FN_PARSE_STRICT) != 0;
 

@@ -3,6 +3,6 @@
 
 #include "types.h"
 
-jsval_t module_library(ant_t *js);
+ant_value_t module_library(ant_t *js);
 
 #endif

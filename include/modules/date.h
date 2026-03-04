@@ -66,13 +66,13 @@ typedef struct {
 typedef struct {
   const char *name;
   size_t len;
-  jsval_t (*fn)(ant_t *, jsval_t *, int);
+  ant_value_t (*fn)(ant_t *, ant_value_t *, int);
 } date_method_entry_t;
 
 void init_date_module(void);
 
-jsval_t get_date_string(
-  ant_t *js, jsval_t this_val, 
+ant_value_t get_date_string(
+  ant_t *js, ant_value_t this_val, 
   date_string_spec_t spec
 );
 

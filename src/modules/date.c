@@ -68,7 +68,7 @@ static inline int to_upper_ascii(int c) {
   return c;
 }
 
-static inline bool date_is_primitive(jsval_t v) {
+static inline bool date_is_primitive(ant_value_t v) {
   uint8_t t = vtype(v);
   return 
     t == T_STR 
@@ -80,9 +80,9 @@ static inline bool date_is_primitive(jsval_t v) {
     || t == T_BIGINT;
 }
 
-static bool is_date_instance(ant_t *js, jsval_t value) {
+static bool is_date_instance(ant_t *js, ant_value_t value) {
   if (!is_object_type(value)) return false;
-  jsval_t date_proto = js_get_ctor_proto(js, "Date", 4);
+  ant_value_t date_proto = js_get_ctor_proto(js, "Date", 4);
   
   if (!is_object_type(date_proto)) return false;
   if (value == date_proto) return true;
@@ -90,18 +90,18 @@ static bool is_date_instance(ant_t *js, jsval_t value) {
   return proto_chain_contains(js, value, date_proto);
 }
 
-static bool date_this_time_value(ant_t *js, jsval_t this_val, double *out, jsval_t *err) {
+static bool date_this_time_value(ant_t *js, ant_value_t this_val, double *out, ant_value_t *err) {
   if (!is_date_instance(js, this_val)) {
     if (err) *err = js_mkerr_typed(js, JS_ERR_TYPE, "not a Date object");
     return false;
   }
   
-  jsval_t t = js_get_slot(js, js_as_obj(this_val), SLOT_DATA);
+  ant_value_t t = js_get_slot(js, js_as_obj(this_val), SLOT_DATA);
   *out = (vtype(t) == T_NUM) ? tod(t) : JS_NAN;
   return true;
 }
 
-static jsval_t date_set_this_time_value(ant_t *js, jsval_t this_val, double v) {
+static ant_value_t date_set_this_time_value(ant_t *js, ant_value_t this_val, double v) {
   if (!is_date_instance(js, this_val)) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "not a Date object");
   }
@@ -243,9 +243,9 @@ static int date_extract_fields_from_time(double dval, date_fields_t *fields, int
 }
 
 static int date_extract_fields(
-  ant_t *js, jsval_t this_val,
+  ant_t *js, ant_value_t this_val,
   date_fields_t *fields,
-  int is_local, int force, jsval_t *err
+  int is_local, int force, ant_value_t *err
 ) {
   double dval;
   if (!date_this_time_value(js, this_val, &dval, err)) return -1;
@@ -304,13 +304,13 @@ static double date_make_fields(const date_fields_t *fields, int is_local) {
   return d;
 }
 
-jsval_t get_date_string(ant_t *js, jsval_t this_val, date_string_spec_t spec) {
+ant_value_t get_date_string(ant_t *js, ant_value_t this_val, date_string_spec_t spec) {
   char buf[96];
   date_fields_t fields;
   
   int res, fmt, pos;
   int y, mon, d, h, m, s, ms, wd, tz;
-  jsval_t err;
+  ant_value_t err;
 
   fmt = (int)spec.fmt;
   res = date_extract_fields(
@@ -745,12 +745,12 @@ static bool parse_otherstring(const uint8_t *sp, int fields[9], bool *is_local) 
   return true;
 }
 
-static bool date_parse_string_to_ms(ant_t *js, jsval_t arg, double *out_ms) {
-  jsval_t s = coerce_to_str(js, arg);
+static bool date_parse_string_to_ms(ant_t *js, ant_value_t arg, double *out_ms) {
+  ant_value_t s = coerce_to_str(js, arg);
   if (is_err(s)) return false;
 
-  jsoff_t len = 0;
-  jsoff_t off = vstr(js, s, &len);
+  ant_offset_t len = 0;
+  ant_offset_t off = vstr(js, s, &len);
 
   char *buf = (char *)malloc((size_t)len + 1);
   if (!buf) {
@@ -798,7 +798,7 @@ static bool date_parse_string_to_ms(ant_t *js, jsval_t arg, double *out_ms) {
   return true;
 }
 
-static jsval_t builtin_Date(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date(ant_t *js, ant_value_t *args, int nargs) {
   double val;
   static const date_string_spec_t kDateToStringSpec = {
     DATE_STRING_FMT_LOCAL,
@@ -807,8 +807,8 @@ static jsval_t builtin_Date(ant_t *js, jsval_t *args, int nargs) {
 
   if (vtype(js->new_target) == T_UNDEF) {
     val = (double)date_now();
-    jsval_t tmp = js_mkobj(js);
-    jsval_t date_proto = js_get_ctor_proto(js, "Date", 4);
+    ant_value_t tmp = js_mkobj(js);
+    ant_value_t date_proto = js_get_ctor_proto(js, "Date", 4);
     if (is_object_type(date_proto)) js_set_proto(js, tmp, date_proto);
     js_set_slot(js, tmp, SLOT_DATA, tov(val));
     return get_date_string(js, tmp, kDateToStringSpec);
@@ -817,14 +817,14 @@ static jsval_t builtin_Date(ant_t *js, jsval_t *args, int nargs) {
   if (nargs == 0) {
     val = (double)date_now();
   } else if (nargs == 1) {
-    jsval_t input = args[0];
+    ant_value_t input = args[0];
 
     if (is_object_type(input) && is_date_instance(js, input)) {
-      jsval_t tv = js_get_slot(js, js_as_obj(input), SLOT_DATA);
+      ant_value_t tv = js_get_slot(js, js_as_obj(input), SLOT_DATA);
       val = (vtype(tv) == T_NUM) ? tod(tv) : JS_NAN;
       val = date_timeclip(val);
     } else {
-      jsval_t prim = js_to_primitive(js, input, 0);
+      ant_value_t prim = js_to_primitive(js, input, 0);
       if (is_err(prim)) return prim;
       if (vtype(prim) == T_STR) {
         if (!date_parse_string_to_ms(js, prim, &val)) return js_mkerr_typed(js, JS_ERR_INTERNAL, "Date parse failed");
@@ -855,7 +855,7 @@ static jsval_t builtin_Date(ant_t *js, jsval_t *args, int nargs) {
   return js->this_val;
 }
 
-static jsval_t builtin_Date_UTC(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_UTC(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return tov(JS_NAN);
 
   date_fields_t fields = {0};
@@ -874,7 +874,7 @@ static jsval_t builtin_Date_UTC(ant_t *js, jsval_t *args, int nargs) {
   return tov(date_make_fields(&fields, 0));
 }
 
-static jsval_t builtin_Date_parse(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_parse(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return tov(JS_NAN);
   double v;
   if (!date_parse_string_to_ms(js, args[0], &v)) {
@@ -883,13 +883,13 @@ static jsval_t builtin_Date_parse(ant_t *js, jsval_t *args, int nargs) {
   return tov(v);
 }
 
-static jsval_t builtin_Date_now(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_now(ant_t *js, ant_value_t *args, int nargs) {
   return tov((double)date_now());
 }
 
-static jsval_t date_get_field(ant_t *js, date_get_field_spec_t spec) {
+static ant_value_t date_get_field(ant_t *js, date_get_field_spec_t spec) {
   date_fields_t fields;
-  jsval_t err;
+  ant_value_t err;
 
   int res = date_extract_fields(js, js->this_val, &fields, spec.local_time, 0, &err);
   if (res < 0) return err;
@@ -899,9 +899,9 @@ static jsval_t date_get_field(ant_t *js, date_get_field_spec_t spec) {
   return tov(date_fields_get(&fields, spec.field));
 }
 
-static jsval_t date_set_field(ant_t *js, jsval_t *args, int nargs, date_set_field_spec_t spec) {
+static ant_value_t date_set_field(ant_t *js, ant_value_t *args, int nargs, date_set_field_spec_t spec) {
   date_fields_t fields;
-  jsval_t err;
+  ant_value_t err;
   double d = JS_NAN;
 
   int res = date_extract_fields(
@@ -925,232 +925,232 @@ static jsval_t date_set_field(ant_t *js, jsval_t *args, int nargs, date_set_fiel
   return date_set_this_time_value(js, js->this_val, d);
 }
 
-static jsval_t builtin_Date_valueOf(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_valueOf(ant_t *js, ant_value_t *args, int nargs) {
   double v;
-  jsval_t err;
+  ant_value_t err;
   if (!date_this_time_value(js, js->this_val, &v, &err)) return err;
   return tov(v);
 }
 
-static jsval_t builtin_Date_getTime(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_getTime(ant_t *js, ant_value_t *args, int nargs) {
   return builtin_Date_valueOf(js, args, nargs);
 }
 
-static jsval_t builtin_Date_toUTCString(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_toUTCString(ant_t *js, ant_value_t *args, int nargs) {
   static const date_string_spec_t kSpec = {DATE_STRING_FMT_UTC, DATE_STRING_PART_ALL};
   return get_date_string(js, js->this_val, kSpec);
 }
 
-static jsval_t builtin_Date_toString(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_toString(ant_t *js, ant_value_t *args, int nargs) {
   static const date_string_spec_t kSpec = {DATE_STRING_FMT_LOCAL, DATE_STRING_PART_ALL};
   return get_date_string(js, js->this_val, kSpec);
 }
 
-static jsval_t builtin_Date_toISOString(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_toISOString(ant_t *js, ant_value_t *args, int nargs) {
   static const date_string_spec_t kSpec = {DATE_STRING_FMT_ISO, DATE_STRING_PART_ALL};
   return get_date_string(js, js->this_val, kSpec);
 }
 
-static jsval_t builtin_Date_toDateString(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_toDateString(ant_t *js, ant_value_t *args, int nargs) {
   static const date_string_spec_t kSpec = {DATE_STRING_FMT_LOCAL, DATE_STRING_PART_DATE};
   return get_date_string(js, js->this_val, kSpec);
 }
 
-static jsval_t builtin_Date_toTimeString(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_toTimeString(ant_t *js, ant_value_t *args, int nargs) {
   static const date_string_spec_t kSpec = {DATE_STRING_FMT_LOCAL, DATE_STRING_PART_TIME};
   return get_date_string(js, js->this_val, kSpec);
 }
 
-static jsval_t builtin_Date_toLocaleString(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_toLocaleString(ant_t *js, ant_value_t *args, int nargs) {
   static const date_string_spec_t kSpec = {DATE_STRING_FMT_LOCALE, DATE_STRING_PART_ALL};
   return get_date_string(js, js->this_val, kSpec);
 }
 
-static jsval_t builtin_Date_toLocaleDateString(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_toLocaleDateString(ant_t *js, ant_value_t *args, int nargs) {
   static const date_string_spec_t kSpec = {DATE_STRING_FMT_LOCALE, DATE_STRING_PART_DATE};
   return get_date_string(js, js->this_val, kSpec);
 }
 
-static jsval_t builtin_Date_toLocaleTimeString(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_toLocaleTimeString(ant_t *js, ant_value_t *args, int nargs) {
   static const date_string_spec_t kSpec = {DATE_STRING_FMT_LOCALE, DATE_STRING_PART_TIME};
   return get_date_string(js, js->this_val, kSpec);
 }
 
-static jsval_t builtin_Date_getTimezoneOffset(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_getTimezoneOffset(ant_t *js, ant_value_t *args, int nargs) {
   double v;
-  jsval_t err;
+  ant_value_t err;
   if (!date_this_time_value(js, js->this_val, &v, &err)) return err;
   if (isnan(v)) return tov(JS_NAN);
   return tov((double)get_timezone_offset((int64_t)trunc(v)));
 }
 
-static jsval_t builtin_Date_setTime(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_setTime(ant_t *js, ant_value_t *args, int nargs) {
   double cur;
-  jsval_t err;
+  ant_value_t err;
   if (!date_this_time_value(js, js->this_val, &cur, &err)) return err;
 
   double v = (nargs > 0) ? js_to_number(js, args[0]) : JS_NAN;
   return date_set_this_time_value(js, js->this_val, date_timeclip(v));
 }
 
-static jsval_t builtin_Date_getYear(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_getYear(ant_t *js, ant_value_t *args, int nargs) {
   static const date_get_field_spec_t kSpec = {DATE_FIELD_YEAR, true, true};
   return date_get_field(js, kSpec);
 }
 
-static jsval_t builtin_Date_getFullYear(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_getFullYear(ant_t *js, ant_value_t *args, int nargs) {
   static const date_get_field_spec_t kSpec = {DATE_FIELD_YEAR, true, false};
   return date_get_field(js, kSpec);
 }
 
-static jsval_t builtin_Date_getUTCFullYear(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_getUTCFullYear(ant_t *js, ant_value_t *args, int nargs) {
   static const date_get_field_spec_t kSpec = {DATE_FIELD_YEAR, false, false};
   return date_get_field(js, kSpec);
 }
 
-static jsval_t builtin_Date_getMonth(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_getMonth(ant_t *js, ant_value_t *args, int nargs) {
   static const date_get_field_spec_t kSpec = {DATE_FIELD_MONTH, true, false};
   return date_get_field(js, kSpec);
 }
 
-static jsval_t builtin_Date_getUTCMonth(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_getUTCMonth(ant_t *js, ant_value_t *args, int nargs) {
   static const date_get_field_spec_t kSpec = {DATE_FIELD_MONTH, false, false};
   return date_get_field(js, kSpec);
 }
 
-static jsval_t builtin_Date_getDate(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_getDate(ant_t *js, ant_value_t *args, int nargs) {
   static const date_get_field_spec_t kSpec = {DATE_FIELD_DAY_OF_MONTH, true, false};
   return date_get_field(js, kSpec);
 }
 
-static jsval_t builtin_Date_getUTCDate(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_getUTCDate(ant_t *js, ant_value_t *args, int nargs) {
   static const date_get_field_spec_t kSpec = {DATE_FIELD_DAY_OF_MONTH, false, false};
   return date_get_field(js, kSpec);
 }
 
-static jsval_t builtin_Date_getHours(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_getHours(ant_t *js, ant_value_t *args, int nargs) {
   static const date_get_field_spec_t kSpec = {DATE_FIELD_HOUR, true, false};
   return date_get_field(js, kSpec);
 }
 
-static jsval_t builtin_Date_getUTCHours(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_getUTCHours(ant_t *js, ant_value_t *args, int nargs) {
   static const date_get_field_spec_t kSpec = {DATE_FIELD_HOUR, false, false};
   return date_get_field(js, kSpec);
 }
 
-static jsval_t builtin_Date_getMinutes(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_getMinutes(ant_t *js, ant_value_t *args, int nargs) {
   static const date_get_field_spec_t kSpec = {DATE_FIELD_MINUTE, true, false};
   return date_get_field(js, kSpec);
 }
 
-static jsval_t builtin_Date_getUTCMinutes(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_getUTCMinutes(ant_t *js, ant_value_t *args, int nargs) {
   static const date_get_field_spec_t kSpec = {DATE_FIELD_MINUTE, false, false};
   return date_get_field(js, kSpec);
 }
 
-static jsval_t builtin_Date_getSeconds(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_getSeconds(ant_t *js, ant_value_t *args, int nargs) {
   static const date_get_field_spec_t kSpec = {DATE_FIELD_SECOND, true, false};
   return date_get_field(js, kSpec);
 }
 
-static jsval_t builtin_Date_getUTCSeconds(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_getUTCSeconds(ant_t *js, ant_value_t *args, int nargs) {
   static const date_get_field_spec_t kSpec = {DATE_FIELD_SECOND, false, false};
   return date_get_field(js, kSpec);
 }
 
-static jsval_t builtin_Date_getMilliseconds(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_getMilliseconds(ant_t *js, ant_value_t *args, int nargs) {
   static const date_get_field_spec_t kSpec = {DATE_FIELD_MILLISECOND, true, false};
   return date_get_field(js, kSpec);
 }
 
-static jsval_t builtin_Date_getUTCMilliseconds(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_getUTCMilliseconds(ant_t *js, ant_value_t *args, int nargs) {
   static const date_get_field_spec_t kSpec = {DATE_FIELD_MILLISECOND, false, false};
   return date_get_field(js, kSpec);
 }
 
-static jsval_t builtin_Date_getDay(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_getDay(ant_t *js, ant_value_t *args, int nargs) {
   static const date_get_field_spec_t kSpec = {DATE_FIELD_DAY_OF_WEEK, true, false};
   return date_get_field(js, kSpec);
 }
 
-static jsval_t builtin_Date_getUTCDay(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_getUTCDay(ant_t *js, ant_value_t *args, int nargs) {
   static const date_get_field_spec_t kSpec = {DATE_FIELD_DAY_OF_WEEK, false, false};
   return date_get_field(js, kSpec);
 }
 
-static jsval_t builtin_Date_setMilliseconds(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_setMilliseconds(ant_t *js, ant_value_t *args, int nargs) {
   static const date_set_field_spec_t kSpec = {DATE_FIELD_MILLISECOND, DATE_FIELD_DAY_OF_WEEK, true};
   return date_set_field(js, args, nargs, kSpec);
 }
 
-static jsval_t builtin_Date_setUTCMilliseconds(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_setUTCMilliseconds(ant_t *js, ant_value_t *args, int nargs) {
   static const date_set_field_spec_t kSpec = {DATE_FIELD_MILLISECOND, DATE_FIELD_DAY_OF_WEEK, false};
   return date_set_field(js, args, nargs, kSpec);
 }
 
-static jsval_t builtin_Date_setSeconds(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_setSeconds(ant_t *js, ant_value_t *args, int nargs) {
   static const date_set_field_spec_t kSpec = {DATE_FIELD_SECOND, DATE_FIELD_DAY_OF_WEEK, true};
   return date_set_field(js, args, nargs, kSpec);
 }
 
-static jsval_t builtin_Date_setUTCSeconds(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_setUTCSeconds(ant_t *js, ant_value_t *args, int nargs) {
   static const date_set_field_spec_t kSpec = {DATE_FIELD_SECOND, DATE_FIELD_DAY_OF_WEEK, false};
   return date_set_field(js, args, nargs, kSpec);
 }
 
-static jsval_t builtin_Date_setMinutes(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_setMinutes(ant_t *js, ant_value_t *args, int nargs) {
   static const date_set_field_spec_t kSpec = {DATE_FIELD_MINUTE, DATE_FIELD_DAY_OF_WEEK, true};
   return date_set_field(js, args, nargs, kSpec);
 }
 
-static jsval_t builtin_Date_setUTCMinutes(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_setUTCMinutes(ant_t *js, ant_value_t *args, int nargs) {
   static const date_set_field_spec_t kSpec = {DATE_FIELD_MINUTE, DATE_FIELD_DAY_OF_WEEK, false};
   return date_set_field(js, args, nargs, kSpec);
 }
 
-static jsval_t builtin_Date_setHours(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_setHours(ant_t *js, ant_value_t *args, int nargs) {
   static const date_set_field_spec_t kSpec = {DATE_FIELD_HOUR, DATE_FIELD_DAY_OF_WEEK, true};
   return date_set_field(js, args, nargs, kSpec);
 }
 
-static jsval_t builtin_Date_setUTCHours(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_setUTCHours(ant_t *js, ant_value_t *args, int nargs) {
   static const date_set_field_spec_t kSpec = {DATE_FIELD_HOUR, DATE_FIELD_DAY_OF_WEEK, false};
   return date_set_field(js, args, nargs, kSpec);
 }
 
-static jsval_t builtin_Date_setDate(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_setDate(ant_t *js, ant_value_t *args, int nargs) {
   static const date_set_field_spec_t kSpec = {DATE_FIELD_DAY_OF_MONTH, DATE_FIELD_HOUR, true};
   return date_set_field(js, args, nargs, kSpec);
 }
 
-static jsval_t builtin_Date_setUTCDate(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_setUTCDate(ant_t *js, ant_value_t *args, int nargs) {
   static const date_set_field_spec_t kSpec = {DATE_FIELD_DAY_OF_MONTH, DATE_FIELD_HOUR, false};
   return date_set_field(js, args, nargs, kSpec);
 }
 
-static jsval_t builtin_Date_setMonth(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_setMonth(ant_t *js, ant_value_t *args, int nargs) {
   static const date_set_field_spec_t kSpec = {DATE_FIELD_MONTH, DATE_FIELD_DAY_OF_MONTH, true};
   return date_set_field(js, args, nargs, kSpec);
 }
 
-static jsval_t builtin_Date_setUTCMonth(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_setUTCMonth(ant_t *js, ant_value_t *args, int nargs) {
   static const date_set_field_spec_t kSpec = {DATE_FIELD_MONTH, DATE_FIELD_DAY_OF_MONTH, false};
   return date_set_field(js, args, nargs, kSpec);
 }
 
-static jsval_t builtin_Date_setFullYear(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_setFullYear(ant_t *js, ant_value_t *args, int nargs) {
   static const date_set_field_spec_t kSpec = {DATE_FIELD_YEAR, DATE_FIELD_HOUR, true};
   return date_set_field(js, args, nargs, kSpec);
 }
 
-static jsval_t builtin_Date_setUTCFullYear(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_setUTCFullYear(ant_t *js, ant_value_t *args, int nargs) {
   static const date_set_field_spec_t kSpec = {DATE_FIELD_YEAR, DATE_FIELD_HOUR, false};
   return date_set_field(js, args, nargs, kSpec);
 }
 
-static jsval_t builtin_Date_setYear(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Date_setYear(ant_t *js, ant_value_t *args, int nargs) {
   double y;
-  jsval_t err;
+  ant_value_t err;
   if (!date_this_time_value(js, js->this_val, &y, &err)) return err;
 
   y = (nargs > 0) ? js_to_number(js, args[0]) : JS_NAN;
@@ -1161,21 +1161,21 @@ static jsval_t builtin_Date_setYear(ant_t *js, jsval_t *args, int nargs) {
     if (y >= 0 && y < 100) y += 1900;
   }
 
-  jsval_t darg = tov(y);
+  ant_value_t darg = tov(y);
   static const date_set_field_spec_t kSetYearSpec = {
     DATE_FIELD_YEAR, DATE_FIELD_MONTH, true
   };
   return date_set_field(js, &darg, 1, kSetYearSpec);
 }
 
-static jsval_t date_to_primitive_number(ant_t *js, jsval_t obj) {
-  jsval_t to_primitive_sym = get_toPrimitive_sym();
+static ant_value_t date_to_primitive_number(ant_t *js, ant_value_t obj) {
+  ant_value_t to_primitive_sym = get_toPrimitive_sym();
   if (vtype(to_primitive_sym) == T_SYMBOL) {
-    jsval_t ex = js_get_sym(js, obj, to_primitive_sym);
+    ant_value_t ex = js_get_sym(js, obj, to_primitive_sym);
     uint8_t et = vtype(ex);
     if (et == T_FUNC || et == T_CFUNC) {
-      jsval_t hint = js_mkstr(js, "number", 6);
-      jsval_t result = sv_vm_call(js->vm, js, ex, obj, &hint, 1, NULL, false);
+      ant_value_t hint = js_mkstr(js, "number", 6);
+      ant_value_t result = sv_vm_call(js->vm, js, ex, obj, &hint, 1, NULL, false);
       if (is_err(result)) return result;
       if (date_is_primitive(result)) return result;
       return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert object to primitive value");
@@ -1187,10 +1187,10 @@ static jsval_t date_to_primitive_number(ant_t *js, jsval_t obj) {
 
   const char *methods[2] = {"valueOf", "toString"};
   for (int i = 0; i < 2; i++) {
-    jsval_t method = js_getprop_fallback(js, obj, methods[i]);
+    ant_value_t method = js_getprop_fallback(js, obj, methods[i]);
     uint8_t mt = vtype(method);
     if (mt == T_FUNC || mt == T_CFUNC) {
-      jsval_t result = sv_vm_call(js->vm, js, method, obj, NULL, 0, NULL, false);
+      ant_value_t result = sv_vm_call(js->vm, js, method, obj, NULL, 0, NULL, false);
       if (is_err(result)) return result;
       if (date_is_primitive(result)) return result;
     }
@@ -1199,20 +1199,20 @@ static jsval_t date_to_primitive_number(ant_t *js, jsval_t obj) {
   return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert object to primitive value");
 }
 
-static jsval_t builtin_Date_toJSON(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t obj = js->this_val;
+static ant_value_t builtin_Date_toJSON(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t obj = js->this_val;
   if (!is_object_type(obj)) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Date.prototype.toJSON called on non-object");
   }
 
-  jsval_t tv = date_to_primitive_number(js, obj);
+  ant_value_t tv = date_to_primitive_number(js, obj);
   if (is_err(tv)) return tv;
 
   if (vtype(tv) == T_NUM && !isfinite(tod(tv))) {
     return js_mknull();
   }
 
-  jsval_t method = js_getprop_fallback(js, obj, "toISOString");
+  ant_value_t method = js_getprop_fallback(js, obj, "toISOString");
   uint8_t mt = vtype(method);
   if (mt != T_FUNC && mt != T_CFUNC) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "object needs toISOString method");
@@ -1221,8 +1221,8 @@ static jsval_t builtin_Date_toJSON(ant_t *js, jsval_t *args, int nargs) {
   return sv_vm_call(js->vm, js, method, obj, NULL, 0, NULL, false);
 }
 
-static jsval_t date_toPrimitive(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t this_val = js_getthis(js);
+static ant_value_t date_toPrimitive(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_val = js_getthis(js);
   if (!is_object_type(this_val)) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Not an object");
   }
@@ -1250,10 +1250,10 @@ static jsval_t date_toPrimitive(ant_t *js, jsval_t *args, int nargs) {
   const char **methods = hint_num ? methods1 : methods0;
 
   for (int i = 0; i < 2; i++) {
-    jsval_t method = js_getprop_fallback(js, this_val, methods[i]);
+    ant_value_t method = js_getprop_fallback(js, this_val, methods[i]);
     uint8_t mt = vtype(method);
     if (mt == T_FUNC || mt == T_CFUNC) {
-      jsval_t result = sv_vm_call(js->vm, js, method, this_val, NULL, 0, NULL, false);
+      ant_value_t result = sv_vm_call(js->vm, js, method, this_val, NULL, 0, NULL, false);
       if (is_err(result)) return result;
       if (date_is_primitive(result)) return result;
     }
@@ -1263,7 +1263,7 @@ static jsval_t date_toPrimitive(ant_t *js, jsval_t *args, int nargs) {
 }
 
 static void date_define_methods(
-  ant_t *js, jsval_t target,
+  ant_t *js, ant_value_t target,
   const date_method_entry_t *methods,
   size_t count
 ) {
@@ -1275,11 +1275,11 @@ static void date_define_methods(
 
 void init_date_module(void) {
   ant_t *js = rt->js;
-  jsval_t glob = js_glob(js);
-  jsval_t object_proto = js_get_ctor_proto(js, "Object", 6);
-  jsval_t function_proto = js_get_ctor_proto(js, "Function", 8);
+  ant_value_t glob = js_glob(js);
+  ant_value_t object_proto = js_get_ctor_proto(js, "Object", 6);
+  ant_value_t function_proto = js_get_ctor_proto(js, "Function", 8);
 
-  jsval_t date_proto = js_mkobj(js);
+  ant_value_t date_proto = js_mkobj(js);
   js_set_proto(js, date_proto, object_proto);
 
   static const date_method_entry_t kDateProtoMethods[] = {
@@ -1332,12 +1332,12 @@ void init_date_module(void) {
   };
   date_define_methods(js, date_proto, kDateProtoMethods, DATE_COUNT_OF(kDateProtoMethods));
 
-  jsval_t to_primitive_sym = get_toPrimitive_sym();
+  ant_value_t to_primitive_sym = get_toPrimitive_sym();
   if (vtype(to_primitive_sym) == T_SYMBOL) {
     js_set_sym(js, date_proto, to_primitive_sym, js_mkfun(date_toPrimitive));
   }
 
-  jsval_t date_ctor_obj = js_mkobj(js);
+  ant_value_t date_ctor_obj = js_mkobj(js);
   js_set_proto(js, date_ctor_obj, function_proto);
   js_set_slot(js, date_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_Date));
   static const date_method_entry_t kDateCtorMethods[] = {
@@ -1349,7 +1349,7 @@ void init_date_module(void) {
   js_setprop_nonconfigurable(js, date_ctor_obj, "prototype", 9, date_proto);
   js_setprop(js, date_ctor_obj, ANT_STRING("name"), ANT_STRING("Date"));
 
-  jsval_t date_ctor_func = js_obj_to_func(date_ctor_obj);
+  ant_value_t date_ctor_func = js_obj_to_func(date_ctor_obj);
   js_setprop(js, glob, js_mkstr(js, "Date", 4), date_ctor_func);
 
   js_setprop(js, date_proto, js_mkstr(js, "constructor", 11), date_ctor_func);

@@ -14,7 +14,7 @@ typedef enum {
 sv_func_t *sv_compile(
   ant_t *js, sv_ast_t *program,
   sv_compile_mode_t mode,
-  const char *source, jsoff_t source_len
+  const char *source, ant_offset_t source_len
 );
 
 sv_func_t *sv_compile_function(

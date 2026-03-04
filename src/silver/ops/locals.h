@@ -4,47 +4,47 @@
 #include "silver/engine.h"
 #include "errors.h"
 
-static inline void sv_op_get_local(sv_vm_t *vm, jsval_t *lp, uint8_t *ip) {
+static inline void sv_op_get_local(sv_vm_t *vm, ant_value_t *lp, uint8_t *ip) {
   uint16_t idx = sv_get_u16(ip + 1);
   vm->stack[vm->sp++] = lp[idx];
 }
 
-static inline void sv_op_put_local(sv_vm_t *vm, jsval_t *lp, uint8_t *ip) {
+static inline void sv_op_put_local(sv_vm_t *vm, ant_value_t *lp, uint8_t *ip) {
   uint16_t idx = sv_get_u16(ip + 1);
   lp[idx] = vm->stack[--vm->sp];
 }
 
-static inline void sv_op_set_local(sv_vm_t *vm, jsval_t *lp, uint8_t *ip) {
+static inline void sv_op_set_local(sv_vm_t *vm, ant_value_t *lp, uint8_t *ip) {
   uint16_t idx = sv_get_u16(ip + 1);
   lp[idx] = vm->stack[vm->sp - 1];
 }
 
-static inline void sv_op_get_local8(sv_vm_t *vm, jsval_t *lp, uint8_t *ip) {
+static inline void sv_op_get_local8(sv_vm_t *vm, ant_value_t *lp, uint8_t *ip) {
   uint8_t idx = sv_get_u8(ip + 1);
   vm->stack[vm->sp++] = lp[idx];
 }
 
-static inline void sv_op_put_local8(sv_vm_t *vm, jsval_t *lp, uint8_t *ip) {
+static inline void sv_op_put_local8(sv_vm_t *vm, ant_value_t *lp, uint8_t *ip) {
   uint8_t idx = sv_get_u8(ip + 1);
   lp[idx] = vm->stack[--vm->sp];
 }
 
-static inline void sv_op_set_local8(sv_vm_t *vm, jsval_t *lp, uint8_t *ip) {
+static inline void sv_op_set_local8(sv_vm_t *vm, ant_value_t *lp, uint8_t *ip) {
   uint8_t idx = sv_get_u8(ip + 1);
   lp[idx] = vm->stack[vm->sp - 1];
 }
 
-static inline void sv_op_set_local_undef(jsval_t *lp, uint8_t *ip) {
+static inline void sv_op_set_local_undef(ant_value_t *lp, uint8_t *ip) {
   uint16_t idx = sv_get_u16(ip + 1);
   lp[idx] = SV_TDZ;
 }
 
-static inline jsval_t sv_op_get_local_chk(
-  sv_vm_t *vm, jsval_t *lp,
+static inline ant_value_t sv_op_get_local_chk(
+  sv_vm_t *vm, ant_value_t *lp,
   ant_t *js, sv_func_t *func, uint8_t *ip
 ) {
   uint16_t idx = sv_get_u16(ip + 1);
-  jsval_t val = lp[idx];
+  ant_value_t val = lp[idx];
   if (val == SV_TDZ) {
     uint32_t ai = sv_get_u32(ip + 3);
     if (ai < (uint32_t)func->atom_count) {
@@ -61,12 +61,12 @@ static inline jsval_t sv_op_get_local_chk(
   return val;
 }
 
-static inline jsval_t sv_op_put_local_chk(
-  sv_vm_t *vm, jsval_t *lp,
+static inline ant_value_t sv_op_put_local_chk(
+  sv_vm_t *vm, ant_value_t *lp,
   ant_t *js, sv_func_t *func, uint8_t *ip
 ) {
   uint16_t idx = sv_get_u16(ip + 1);
-  jsval_t *slot = &lp[idx];
+  ant_value_t *slot = &lp[idx];
   if (*slot == SV_TDZ) {
     uint32_t ai = sv_get_u32(ip + 3);
     if (ai < (uint32_t)func->atom_count) {
@@ -103,8 +103,8 @@ static inline void sv_op_rest(
   ant_t *js, uint8_t *ip
 ) {
   uint16_t start = sv_get_u16(ip + 1);
-  jsval_t arr = js_mkarr(js);
-  jshdl_t h = js_root(js, arr);
+  ant_value_t arr = js_mkarr(js);
+  ant_handle_t h = js_root(js, arr);
   if (frame->bp) {
     for (int i = (int)start; i < frame->argc; i++)
       js_arr_push(js, js_deref(js, h), frame->bp[i]);

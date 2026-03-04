@@ -14,8 +14,8 @@
 
 typedef struct timer_entry {
   uv_timer_t handle;
-  jsval_t callback;
-  jsval_t *args;
+  ant_value_t callback;
+  ant_value_t *args;
   int nargs;
   int timer_id;
   int active;
@@ -26,13 +26,13 @@ typedef struct timer_entry {
 } timer_entry_t;
 
 typedef struct microtask_entry {
-  jsval_t callback;
+  ant_value_t callback;
   uint32_t promise_id;
   struct microtask_entry *next;
 } microtask_entry_t;
 
 typedef struct immediate_entry {
-  jsval_t callback;
+  ant_value_t callback;
   int immediate_id;
   int active;
   struct immediate_entry *next;
@@ -72,12 +72,12 @@ static int timer_entry_is_registered(timer_entry_t *entry) {
   return 0;
 }
 
-static int timer_copy_args(timer_entry_t *entry, jsval_t *args, int nargs) {
+static int timer_copy_args(timer_entry_t *entry, ant_value_t *args, int nargs) {
   entry->nargs = nargs > 2 ? nargs - 2 : 0;
   if (entry->nargs > 0) {
-    entry->args = ant_calloc(sizeof(jsval_t) * entry->nargs);
+    entry->args = ant_calloc(sizeof(ant_value_t) * entry->nargs);
     if (!entry->args) return -1;
-    memcpy(entry->args, args + 2, sizeof(jsval_t) * entry->nargs);
+    memcpy(entry->args, args + 2, sizeof(ant_value_t) * entry->nargs);
   } else entry->args = NULL;
   return 0;
 }
@@ -121,12 +121,12 @@ static void timer_callback(uv_timer_t *handle) {
 }
 
 // setTimeout(callback, delay, ...args)
-static jsval_t js_set_timeout(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_set_timeout(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) {
     return js_mkerr(js, "setTimeout requires 2 arguments (callback, delay)");
   }
   
-  jsval_t callback = args[0];
+  ant_value_t callback = args[0];
   double delay_ms = js_getnum(args[1]);
   uint64_t ms = delay_ms < 1 ? 0 : (uint64_t)delay_ms;
   
@@ -154,12 +154,12 @@ static jsval_t js_set_timeout(ant_t *js, jsval_t *args, int nargs) {
 }
 
 // setInterval(callback, delay, ...args)
-static jsval_t js_set_interval(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_set_interval(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) {
     return js_mkerr(js, "setInterval requires 2 arguments (callback, delay)");
   }
   
-  jsval_t callback = args[0];
+  ant_value_t callback = args[0];
   double delay_ms = js_getnum(args[1]);
   uint64_t ms = delay_ms < 1 ? 1 : (uint64_t)delay_ms;
   
@@ -187,7 +187,7 @@ static jsval_t js_set_interval(ant_t *js, jsval_t *args, int nargs) {
 }
 
 // clearTimeout(timerId)
-static jsval_t js_clear_timeout(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_clear_timeout(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
   int timer_id = (int)js_getnum(args[0]);
   
@@ -204,12 +204,12 @@ static jsval_t js_clear_timeout(ant_t *js, jsval_t *args, int nargs) {
 }
 
 // setImmediate(callback)
-static jsval_t js_set_immediate(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_set_immediate(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) {
     return js_mkerr(js, "setImmediate requires 1 argument (callback)");
   }
   
-  jsval_t callback = args[0];
+  ant_value_t callback = args[0];
   
   immediate_entry_t *entry = ant_calloc(sizeof(immediate_entry_t));
   if (entry == NULL) {
@@ -233,7 +233,7 @@ static jsval_t js_set_immediate(ant_t *js, jsval_t *args, int nargs) {
 }
 
 // clearImmediate(immediateId)
-static jsval_t js_clear_immediate(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_clear_immediate(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();  
   int immediate_id = (int)js_getnum(args[0]);
   
@@ -245,7 +245,7 @@ static jsval_t js_clear_immediate(ant_t *js, jsval_t *args, int nargs) {
 }
 
 // queueMicrotask(callback)
-static jsval_t js_queue_microtask(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_queue_microtask(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) {
     return js_mkerr(js, "queueMicrotask requires 1 argument (callback)");
   }
@@ -254,7 +254,7 @@ static jsval_t js_queue_microtask(ant_t *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-void queue_microtask(ant_t *js, jsval_t callback) {
+void queue_microtask(ant_t *js, ant_value_t callback) {
   microtask_entry_t *entry = ant_calloc(sizeof(microtask_entry_t));
   if (entry == NULL) return;
   
@@ -300,7 +300,7 @@ void process_microtasks(ant_t *js) {
     if (entry->promise_id != 0) {
       js_process_promise_handlers(js, entry->promise_id);
     } else {
-      jsval_t args[0];
+      ant_value_t args[0];
       sv_vm_call(js->vm, js, entry->callback, js_mkundef(), args, 0, NULL, false);
     }
     
@@ -320,7 +320,7 @@ void process_immediates(ant_t *js) {
     }
     
     if (entry->active) {
-      jsval_t args[0];
+      ant_value_t args[0];
       sv_vm_call(js->vm, js, entry->callback, js_mkundef(), args, 0, NULL, false);
       process_microtasks(js);
     }
@@ -349,7 +349,7 @@ void init_timer_module() {
   ant_t *js = rt->js;
 
   timer_state.js = js;
-  jsval_t global = js_glob(js);
+  ant_value_t global = js_glob(js);
   
   js_set(js, global, "setTimeout", js_mkfun(js_set_timeout));
   js_set(js, global, "clearTimeout", js_mkfun(js_clear_timeout));

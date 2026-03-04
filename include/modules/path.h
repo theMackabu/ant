@@ -3,6 +3,6 @@
 
 #include "types.h"
 
-jsval_t path_library(ant_t *js);
+ant_value_t path_library(ant_t *js);
 
 #endif

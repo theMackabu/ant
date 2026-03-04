@@ -105,9 +105,9 @@ static size_t intern_bytes = 0;
 static interned_string_t *intern_buckets[ANT_LIMIT_SIZE_CACHE];
 
 typedef struct promise_handler {
-  jsval_t onFulfilled;
-  jsval_t onRejected;
-  jsval_t nextPromise;
+  ant_value_t onFulfilled;
+  ant_value_t onRejected;
+  ant_value_t nextPromise;
 } promise_handler_t;
 
 static const UT_icd promise_handler_icd = {
@@ -118,10 +118,10 @@ static const UT_icd promise_handler_icd = {
 };
 
 typedef struct {
-  jsoff_t obj_off;
+  ant_offset_t obj_off;
   const char *intern_ptr;
-  jsoff_t prop_off;
-  jsoff_t tail;
+  ant_offset_t prop_off;
+  ant_offset_t tail;
   uint64_t generation;
 } intern_prop_cache_entry_t;
 
@@ -129,11 +129,11 @@ static uint64_t intern_prop_cache_gen = 1;
 static intern_prop_cache_entry_t intern_prop_cache[ANT_LIMIT_SIZE_CACHE];
 
 typedef struct promise_data_entry {
-  jsval_t value;
+  ant_value_t value;
   UT_array *handlers;
   uint32_t promise_id;
   uint32_t trigger_pid;
-  jsoff_t obj_offset;
+  ant_offset_t obj_offset;
   int state;
   bool has_rejection_handler;
   bool processing;
@@ -146,19 +146,19 @@ static promise_data_entry_t *unhandled_rejections = NULL;
 static uint32_t next_promise_id = 1;
 
 static promise_data_entry_t *get_promise_data(uint32_t promise_id, bool create);
-static uint32_t get_promise_id(ant_t *js, jsval_t p);
+static uint32_t get_promise_id(ant_t *js, ant_value_t p);
 static bool js_try_grow_memory(ant_t *js, size_t needed);
 
 typedef struct proxy_data {
-  jsoff_t obj_offset;
-  jsval_t target;
-  jsval_t handler;
+  ant_offset_t obj_offset;
+  ant_value_t target;
+  ant_value_t handler;
   bool revoked;
   UT_hash_handle hh;
 } proxy_data_t;
 
 typedef struct dynamic_accessors {
-  jsoff_t obj_offset;
+  ant_offset_t obj_offset;
   js_getter_fn getter;
   js_setter_fn setter;
   js_deleter_fn deleter;
@@ -167,43 +167,43 @@ typedef struct dynamic_accessors {
 } dynamic_accessors_t;
 
 static proxy_data_t *proxy_registry = NULL;
-static proxy_data_t *get_proxy_data(jsval_t obj);
+static proxy_data_t *get_proxy_data(ant_value_t obj);
 static dynamic_accessors_t *accessor_registry = NULL;
 
-jsval_t tov(double d) {
-  union { double d; jsval_t v; } u = {d};
+ant_value_t tov(double d) {
+  union { double d; ant_value_t v; } u = {d};
   if (__builtin_expect(isnan(d), 0)) 
     return (u.v > NANBOX_PREFIX) 
     ? 0x7FF8000000000000ULL : u.v; // canonical NaN
   return u.v;
 }
 
-double tod(jsval_t v) {
-  union { jsval_t v; double d; } u = {v}; return u.d;
+double tod(ant_value_t v) {
+  union { ant_value_t v; double d; } u = {v}; return u.d;
 }
 
-static bool is_tagged(jsval_t v) {
+static bool is_tagged(ant_value_t v) {
   return v > NANBOX_PREFIX;
 }
 
-size_t vdata(jsval_t v) {
+size_t vdata(ant_value_t v) {
   return (size_t)(v & NANBOX_DATA_MASK);
 }
 
-static jsval_t get_slot(ant_t *js, jsval_t obj, internal_slot_t slot);
-static void set_slot(ant_t *js, jsval_t obj, internal_slot_t slot, jsval_t value);
+static ant_value_t get_slot(ant_t *js, ant_value_t obj, internal_slot_t slot);
+static void set_slot(ant_t *js, ant_value_t obj, internal_slot_t slot, ant_value_t value);
 
-static jsval_t get_proto(ant_t *js, jsval_t obj);
-static void set_proto(ant_t *js, jsval_t obj, jsval_t proto);
+static ant_value_t get_proto(ant_t *js, ant_value_t obj);
+static void set_proto(ant_t *js, ant_value_t obj, ant_value_t proto);
 
-static inline jsoff_t offtolen(jsoff_t off) { return (off >> 3) - 1; }
-static inline jsoff_t align64(jsoff_t v) { return (v + 7) & ~7ULL; }
+static inline ant_offset_t offtolen(ant_offset_t off) { return (off >> 3) - 1; }
+static inline ant_offset_t align64(ant_offset_t v) { return (v + 7) & ~7ULL; }
 
-static void saveoff(ant_t *js, jsoff_t off, jsoff_t val) {
+static void saveoff(ant_t *js, ant_offset_t off, ant_offset_t val) {
   memcpy(&js->mem[off], &val, sizeof(val));
 }
 
-static void saveval(ant_t *js, jsoff_t off, jsval_t val) {
+static void saveval(ant_t *js, ant_offset_t off, ant_value_t val) {
   memcpy(&js->mem[off], &val, sizeof(val));
 }
 
@@ -221,44 +221,44 @@ const char *typestr(uint8_t t) {
   return (t < sizeof(names) / sizeof(names[0])) ? names[t] : "??";
 }
 
-uint8_t vtype(jsval_t v) { 
+uint8_t vtype(ant_value_t v) { 
   return is_tagged(v) ? ((v >> NANBOX_TYPE_SHIFT) & NANBOX_TYPE_MASK) : (uint8_t)T_NUM; 
 }
 
-jsval_t mkval(uint8_t type, uint64_t data) { 
+ant_value_t mkval(uint8_t type, uint64_t data) { 
   return NANBOX_PREFIX 
-    | ((jsval_t)(type & NANBOX_TYPE_MASK) << NANBOX_TYPE_SHIFT) 
+    | ((ant_value_t)(type & NANBOX_TYPE_MASK) << NANBOX_TYPE_SHIFT) 
     | (data & NANBOX_DATA_MASK);
 }
 
-jsval_t js_obj_to_func(jsval_t obj) {
+ant_value_t js_obj_to_func(ant_value_t obj) {
   sv_closure_t *closure = calloc(1, sizeof(sv_closure_t));
   closure->func_obj = (vtype(obj) == T_OBJ) ? obj : mkval(T_OBJ, vdata(obj));
   return mkval(T_FUNC, (uintptr_t)closure);
 }
 
-jsval_t js_mktypedarray(void *data) {
+ant_value_t js_mktypedarray(void *data) {
   return mkval(T_TYPEDARRAY, (uintptr_t)data);
 }
 
-void *js_gettypedarray(jsval_t val) {
+void *js_gettypedarray(ant_value_t val) {
   if (vtype(val) != T_TYPEDARRAY) return NULL;
   return (void *)vdata(val);
 }
 
-jsval_t js_get_slot(ant_t *js, jsval_t obj, internal_slot_t slot) { 
+ant_value_t js_get_slot(ant_t *js, ant_value_t obj, internal_slot_t slot) { 
   return get_slot(js, js_as_obj(obj), slot); 
 }
 
-void js_set_slot(ant_t *js, jsval_t obj, internal_slot_t slot, jsval_t value) { 
+void js_set_slot(ant_t *js, ant_value_t obj, internal_slot_t slot, ant_value_t value) { 
   set_slot(js, js_as_obj(obj), slot, value); 
 }
 
-jsval_t js_mkffi(unsigned int index) {
+ant_value_t js_mkffi(unsigned int index) {
   return mkval(T_FFI, (uint64_t)index);
 }
 
-int js_getffi(jsval_t val) {
+int js_getffi(ant_value_t val) {
   if (vtype(val) != T_FFI) return -1;
   return (int)vdata(val);
 }
@@ -272,10 +272,10 @@ inline size_t js_getbrk(ant_t *js) {
   return (size_t) js->brk;
 }
 
-static inline bool is_unboxed_obj(ant_t *js, jsval_t val, jsval_t expected_proto) {
+static inline bool is_unboxed_obj(ant_t *js, ant_value_t val, ant_value_t expected_proto) {
   if (vtype(val) != T_OBJ) return false;
   if (vtype(get_slot(js, val, SLOT_PRIMITIVE)) != T_UNDEF) return false;
-  jsval_t proto = get_slot(js, val, SLOT_PROTO);
+  ant_value_t proto = get_slot(js, val, SLOT_PROTO);
   return vdata(proto) == vdata(expected_proto);
 }
 
@@ -294,65 +294,65 @@ int32_t js_to_int32(double d) {
   return (int32_t) uint32;
 }
 
-static size_t strstring(ant_t *js, jsval_t value, char *buf, size_t len);
-static size_t strkey(ant_t *js, jsval_t value, char *buf, size_t len);
+static size_t strstring(ant_t *js, ant_value_t value, char *buf, size_t len);
+static size_t strkey(ant_t *js, ant_value_t value, char *buf, size_t len);
 
-jsoff_t vstrlen(ant_t *js, jsval_t v) { 
-  jsoff_t off = (jsoff_t) vdata(v);
-  jsoff_t header = loadoff(js, off);
+ant_offset_t vstrlen(ant_t *js, ant_value_t v) { 
+  ant_offset_t off = (ant_offset_t) vdata(v);
+  ant_offset_t header = loadoff(js, off);
   if (header & ROPE_FLAG) {
     return offtolen(header & ~(ROPE_FLAG | (ROPE_DEPTH_MASK << ROPE_DEPTH_SHIFT)));
   }
   return offtolen(header);
 }
 
-static jsval_t proxy_read_target(ant_t *js, jsval_t obj);
-static jsoff_t proxy_aware_length(ant_t *js, jsval_t obj);
-static jsval_t proxy_aware_get_elem(ant_t *js, jsval_t obj, const char *key, size_t key_len);
-static bool bigint_is_zero(ant_t *js, jsval_t v);
+static ant_value_t proxy_read_target(ant_t *js, ant_value_t obj);
+static ant_offset_t proxy_aware_length(ant_t *js, ant_value_t obj);
+static ant_value_t proxy_aware_get_elem(ant_t *js, ant_value_t obj, const char *key, size_t key_len);
+static bool bigint_is_zero(ant_t *js, ant_value_t v);
 
-static jsoff_t get_dense_buf(ant_t *js, jsval_t arr);
-static jsoff_t dense_length(ant_t *js, jsoff_t doff);
-static jsoff_t get_array_length(ant_t *js, jsval_t arr);
-static jsval_t arr_get(ant_t *js, jsval_t arr, jsoff_t idx);
-static bool arr_has(ant_t *js, jsval_t arr, jsoff_t idx);
+static ant_offset_t get_dense_buf(ant_t *js, ant_value_t arr);
+static ant_offset_t dense_length(ant_t *js, ant_offset_t doff);
+static ant_offset_t get_array_length(ant_t *js, ant_value_t arr);
+static ant_value_t arr_get(ant_t *js, ant_value_t arr, ant_offset_t idx);
+static bool arr_has(ant_t *js, ant_value_t arr, ant_offset_t idx);
 
 static bool streq(const char *buf, size_t len, const char *p, size_t n);
 static bool parse_func_params(ant_t *js, uint8_t *flags, int *out_count);
-static bool try_dynamic_setter(ant_t *js, jsval_t obj, const char *key, size_t key_len, jsval_t value);
-static jsoff_t lkp_with_setter(ant_t *js, jsval_t obj, const char *buf, size_t len, jsval_t *setter_out, bool *has_setter_out);
-static jsval_t call_proto_accessor(ant_t *js, jsval_t prim, jsval_t accessor, bool has_accessor, jsval_t *arg, int arg_count, bool is_setter);
-static jsval_t get_prototype_for_type(ant_t *js, uint8_t type);
+static bool try_dynamic_setter(ant_t *js, ant_value_t obj, const char *key, size_t key_len, ant_value_t value);
+static ant_offset_t lkp_with_setter(ant_t *js, ant_value_t obj, const char *buf, size_t len, ant_value_t *setter_out, bool *has_setter_out);
+static ant_value_t call_proto_accessor(ant_t *js, ant_value_t prim, ant_value_t accessor, bool has_accessor, ant_value_t *arg, int arg_count, bool is_setter);
+static ant_value_t get_prototype_for_type(ant_t *js, uint8_t type);
 
-static size_t strbigint(ant_t *js, jsval_t value, char *buf, size_t len);
-static size_t tostr(ant_t *js, jsval_t value, char *buf, size_t len);
-static size_t strpromise(ant_t *js, jsval_t value, char *buf, size_t len);
-static jsval_t js_call_valueOf(ant_t *js, jsval_t value);
-static jsval_t js_call_toString(ant_t *js, jsval_t value);
-static jsval_t js_call_method(ant_t *js, jsval_t obj, const char *method, size_t method_len, jsval_t *args, int nargs);
+static size_t strbigint(ant_t *js, ant_value_t value, char *buf, size_t len);
+static size_t tostr(ant_t *js, ant_value_t value, char *buf, size_t len);
+static size_t strpromise(ant_t *js, ant_value_t value, char *buf, size_t len);
+static ant_value_t js_call_valueOf(ant_t *js, ant_value_t value);
+static ant_value_t js_call_toString(ant_t *js, ant_value_t value);
+static ant_value_t js_call_method(ant_t *js, ant_value_t obj, const char *method, size_t method_len, ant_value_t *args, int nargs);
 
-static inline bool is_slot_prop(jsoff_t header);
-static inline jsoff_t next_prop(jsoff_t header);
+static inline bool is_slot_prop(ant_offset_t header);
+static inline ant_offset_t next_prop(ant_offset_t header);
 
-static jsval_t builtin_Object(ant_t *js, jsval_t *args, int nargs);
-static jsval_t builtin_promise_then(ant_t *js, jsval_t *args, int nargs);
-static jsval_t string_split_impl(ant_t *js, jsval_t str, jsval_t *args, int nargs);
+static ant_value_t builtin_Object(ant_t *js, ant_value_t *args, int nargs);
+static ant_value_t builtin_promise_then(ant_t *js, ant_value_t *args, int nargs);
+static ant_value_t string_split_impl(ant_t *js, ant_value_t str, ant_value_t *args, int nargs);
 
-static jsval_t proxy_get(ant_t *js, jsval_t proxy, const char *key, size_t key_len);
-static jsval_t proxy_get_val(ant_t *js, jsval_t proxy, jsval_t key_val);
-static jsval_t proxy_set(ant_t *js, jsval_t proxy, const char *key, size_t key_len, jsval_t value);
-static jsval_t proxy_has(ant_t *js, jsval_t proxy, const char *key, size_t key_len);
-static jsval_t proxy_has_val(ant_t *js, jsval_t proxy, jsval_t key_val);
-static jsval_t proxy_delete(ant_t *js, jsval_t proxy, const char *key, size_t key_len);
-static jsval_t proxy_delete_val(ant_t *js, jsval_t proxy, jsval_t key_val);
+static ant_value_t proxy_get(ant_t *js, ant_value_t proxy, const char *key, size_t key_len);
+static ant_value_t proxy_get_val(ant_t *js, ant_value_t proxy, ant_value_t key_val);
+static ant_value_t proxy_set(ant_t *js, ant_value_t proxy, const char *key, size_t key_len, ant_value_t value);
+static ant_value_t proxy_has(ant_t *js, ant_value_t proxy, const char *key, size_t key_len);
+static ant_value_t proxy_has_val(ant_t *js, ant_value_t proxy, ant_value_t key_val);
+static ant_value_t proxy_delete(ant_t *js, ant_value_t proxy, const char *key, size_t key_len);
+static ant_value_t proxy_delete_val(ant_t *js, ant_value_t proxy, ant_value_t key_val);
 
-static jsval_t get_prototype_for_type(ant_t *js, uint8_t type);
-static jsval_t get_ctor_proto(ant_t *js, const char *name, size_t len);
-static jsoff_t lkp_interned(ant_t *js, jsval_t obj, const char *search_intern, size_t len);
+static ant_value_t get_prototype_for_type(ant_t *js, uint8_t type);
+static ant_value_t get_ctor_proto(ant_t *js, const char *name, size_t len);
+static ant_offset_t lkp_interned(ant_t *js, ant_value_t obj, const char *search_intern, size_t len);
 
-static const char *bigint_digits(ant_t *js, jsval_t v, size_t *len);
+static const char *bigint_digits(ant_t *js, ant_value_t v, size_t *len);
 
-typedef struct { jsval_t handle; bool is_new; } ctor_t;
+typedef struct { ant_value_t handle; bool is_new; } ctor_t;
 
 static ctor_t get_constructor(ant_t *js, const char *name, size_t len) {
   ctor_t ctor;
@@ -363,24 +363,24 @@ static ctor_t get_constructor(ant_t *js, const char *name, size_t len) {
   return ctor;
 }
 
-jsval_t unwrap_primitive(ant_t *js, jsval_t val) {
+ant_value_t unwrap_primitive(ant_t *js, ant_value_t val) {
   if (vtype(val) != T_OBJ) return val;
-  jsval_t prim = get_slot(js, val, SLOT_PRIMITIVE);
+  ant_value_t prim = get_slot(js, val, SLOT_PRIMITIVE);
   if (vtype(prim) == T_UNDEF) return val;
   return prim;
 }
 
-static jsval_t to_string_val(ant_t *js, jsval_t val) {
+static ant_value_t to_string_val(ant_t *js, ant_value_t val) {
   uint8_t t = vtype(val);
   if (t == T_STR) return val;
   if (t == T_OBJ) {
-    jsval_t prim = get_slot(js, val, SLOT_PRIMITIVE);
+    ant_value_t prim = get_slot(js, val, SLOT_PRIMITIVE);
     if (vtype(prim) == T_STR) return prim;
   }
   return js_call_toString(js, val);
 }
 
-bool js_truthy(ant_t *js, jsval_t v) {
+bool js_truthy(ant_t *js, ant_value_t v) {
   static const void *dispatch[] = {
     [T_OBJ]    = &&l_true,
     [T_FUNC]   = &&l_true,
@@ -436,38 +436,38 @@ size_t uint_to_str(char *buf, size_t bufsize, uint64_t val) {
   return len;
 }
 
-static jsval_t bigint_from_u64(ant_t *js, uint64_t value) {
+static ant_value_t bigint_from_u64(ant_t *js, uint64_t value) {
   char buf[32];
   size_t len = uint_to_str(buf, sizeof(buf), value);
   return js_mkbigint(js, buf, len, false);
 }
 
-static jsval_t stringify_stack[MAX_STRINGIFY_DEPTH];
+static ant_value_t stringify_stack[MAX_STRINGIFY_DEPTH];
 static int stringify_depth = 0;
 static int stringify_indent = 0;
 
-static jsval_t multiref_objs[MAX_MULTIREF_OBJS];
+static ant_value_t multiref_objs[MAX_MULTIREF_OBJS];
 static int multiref_ids[MAX_MULTIREF_OBJS];
 static int multiref_count = 0;
 static int multiref_next_id = 0;
 
-static void scan_refs(ant_t *js, jsval_t value);
+static void scan_refs(ant_t *js, ant_value_t value);
 
-static int find_multiref(jsval_t obj) {
+static int find_multiref(ant_value_t obj) {
   for (int i = 0; i < multiref_count; i++) {
     if (multiref_objs[i] == obj) return multiref_ids[i];
   }
   return 0;
 }
 
-static bool is_on_stack(jsval_t obj) {
+static bool is_on_stack(ant_value_t obj) {
   for (int i = 0; i < stringify_depth; i++) {
     if (stringify_stack[i] == obj) return true;
   }
   return false;
 }
 
-static void mark_multiref(jsval_t obj) {
+static void mark_multiref(ant_value_t obj) {
   for (int i = 0; i < multiref_count; i++) {
     if (multiref_objs[i] == obj) {
       if (multiref_ids[i] == 0) multiref_ids[i] = ++multiref_next_id;
@@ -481,7 +481,7 @@ static void mark_multiref(jsval_t obj) {
   }
 }
 
-static void scan_obj_refs(ant_t *js, jsval_t obj) {
+static void scan_obj_refs(ant_t *js, ant_value_t obj) {
   if (is_on_stack(obj)) {
     mark_multiref(obj);
     return;
@@ -490,24 +490,24 @@ static void scan_obj_refs(ant_t *js, jsval_t obj) {
   if (stringify_depth >= MAX_STRINGIFY_DEPTH) return;
   stringify_stack[stringify_depth++] = obj;
   
-  jsoff_t next = loadoff(js, (jsoff_t) vdata(js_as_obj(obj))) & ~(3U | FLAGMASK);
+  ant_offset_t next = loadoff(js, (ant_offset_t) vdata(js_as_obj(obj))) & ~(3U | FLAGMASK);
   while (next < js->brk && next != 0) {
-    jsoff_t header = loadoff(js, next);
+    ant_offset_t header = loadoff(js, next);
     if (!is_slot_prop(header)) {
-      jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
-      jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
+      ant_offset_t koff = loadoff(js, next + (ant_offset_t) sizeof(next));
+      ant_value_t val = loadval(js, next + (ant_offset_t) (sizeof(next) + sizeof(koff)));
       scan_refs(js, val);
     }
     next = next_prop(header);
   }
   
-  jsval_t proto_val = get_slot(js, obj, SLOT_PROTO);
+  ant_value_t proto_val = get_slot(js, obj, SLOT_PROTO);
   if (vtype(proto_val) == T_OBJ) scan_refs(js, proto_val);
   
   stringify_depth--;
 }
 
-static void scan_arr_refs(ant_t *js, jsval_t obj) {
+static void scan_arr_refs(ant_t *js, ant_value_t obj) {
   if (is_on_stack(obj)) {
     mark_multiref(obj);
     return;
@@ -516,12 +516,12 @@ static void scan_arr_refs(ant_t *js, jsval_t obj) {
   if (stringify_depth >= MAX_STRINGIFY_DEPTH) return;
   stringify_stack[stringify_depth++] = obj;
   
-  jsoff_t next = loadoff(js, (jsoff_t) vdata(js_as_obj(obj))) & ~(3U | FLAGMASK);
+  ant_offset_t next = loadoff(js, (ant_offset_t) vdata(js_as_obj(obj))) & ~(3U | FLAGMASK);
   while (next < js->brk && next != 0) {
-    jsoff_t header = loadoff(js, next);
+    ant_offset_t header = loadoff(js, next);
     if (!is_slot_prop(header)) {
-      jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
-      jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
+      ant_offset_t koff = loadoff(js, next + (ant_offset_t) sizeof(next));
+      ant_value_t val = loadval(js, next + (ant_offset_t) (sizeof(next) + sizeof(koff)));
       scan_refs(js, val);
     }
     next = next_prop(header);
@@ -530,8 +530,8 @@ static void scan_arr_refs(ant_t *js, jsval_t obj) {
   stringify_depth--;
 }
 
-static void scan_func_refs(ant_t *js, jsval_t value) {
-  jsval_t func_obj = js_func_obj(value);
+static void scan_func_refs(ant_t *js, ant_value_t value) {
+  ant_value_t func_obj = js_func_obj(value);
   
   if (is_on_stack(func_obj)) {
     mark_multiref(func_obj);
@@ -541,12 +541,12 @@ static void scan_func_refs(ant_t *js, jsval_t value) {
   if (stringify_depth >= MAX_STRINGIFY_DEPTH) return;
   stringify_stack[stringify_depth++] = func_obj;
   
-  jsoff_t next = loadoff(js, (jsoff_t) vdata(func_obj)) & ~(3U | FLAGMASK);
+  ant_offset_t next = loadoff(js, (ant_offset_t) vdata(func_obj)) & ~(3U | FLAGMASK);
   while (next < js->brk && next != 0) {
-    jsoff_t header = loadoff(js, next);
+    ant_offset_t header = loadoff(js, next);
     if (!is_slot_prop(header)) {
-      jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
-      jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
+      ant_offset_t koff = loadoff(js, next + (ant_offset_t) sizeof(next));
+      ant_value_t val = loadval(js, next + (ant_offset_t) (sizeof(next) + sizeof(koff)));
       scan_refs(js, val);
     }
     next = next_prop(header);
@@ -555,7 +555,7 @@ static void scan_func_refs(ant_t *js, jsval_t value) {
   stringify_depth--;
 }
 
-static void scan_refs(ant_t *js, jsval_t value) {
+static void scan_refs(ant_t *js, ant_value_t value) {
   switch (vtype(value)) {
     case T_OBJ: scan_obj_refs(js, value); break;
     case T_ARR: scan_arr_refs(js, value); break;
@@ -564,7 +564,7 @@ static void scan_refs(ant_t *js, jsval_t value) {
   }
 }
 
-static int get_circular_ref(jsval_t obj) {
+static int get_circular_ref(ant_value_t obj) {
   if (is_on_stack(obj)) {
     int ref = find_multiref(obj);
     return ref ? ref : -1;
@@ -572,15 +572,15 @@ static int get_circular_ref(jsval_t obj) {
   return 0;
 }
 
-static bool is_circular(jsval_t obj) {
+static bool is_circular(ant_value_t obj) {
   return is_on_stack(obj);
 }
 
-static int get_self_ref(jsval_t obj) {
+static int get_self_ref(ant_value_t obj) {
   return find_multiref(obj);
 }
 
-static void push_stringify(jsval_t obj) {
+static void push_stringify(ant_value_t obj) {
   if (stringify_depth < MAX_STRINGIFY_DEPTH) {
     stringify_stack[stringify_depth++] = obj;
   }
@@ -599,41 +599,41 @@ static size_t add_indent(char *buf, size_t len, int level) {
   return wanted;
 }
 
-static inline jsoff_t get_prop_koff(ant_t *js, jsoff_t prop) {
-  return loadoff(js, prop + (jsoff_t) sizeof(prop));
+static inline ant_offset_t get_prop_koff(ant_t *js, ant_offset_t prop) {
+  return loadoff(js, prop + (ant_offset_t) sizeof(prop));
 }
 
-static inline bool is_sym_key_prop(ant_t *js, jsoff_t prop) {
-  jsoff_t koff = get_prop_koff(js, prop);
+static inline bool is_sym_key_prop(ant_t *js, ant_offset_t prop) {
+  ant_offset_t koff = get_prop_koff(js, prop);
   return koff < js->brk && (loadoff(js, koff) & 0xF) == 0;
 }
 
-static void get_prop_key(ant_t *js, jsoff_t prop, const char **key, jsoff_t *klen) {
-  jsoff_t koff = get_prop_koff(js, prop);
+static void get_prop_key(ant_t *js, ant_offset_t prop, const char **key, ant_offset_t *klen) {
+  ant_offset_t koff = get_prop_koff(js, prop);
   *klen = offtolen(loadoff(js, koff));
   *key = (char *) &js->mem[koff + sizeof(koff)];
 }
 
-static jsval_t get_prop_val(ant_t *js, jsoff_t prop) {
-  jsoff_t koff = get_prop_koff(js, prop);
-  return loadval(js, prop + (jsoff_t) (sizeof(prop) + sizeof(koff)));
+static ant_value_t get_prop_val(ant_t *js, ant_offset_t prop) {
+  ant_offset_t koff = get_prop_koff(js, prop);
+  return loadval(js, prop + (ant_offset_t) (sizeof(prop) + sizeof(koff)));
 }
 
-const char *get_str_prop(ant_t *js, jsval_t obj, const char *key, jsoff_t klen, jsoff_t *out_len) {
-  jsoff_t off = lkp(js, obj, key, klen);
+const char *get_str_prop(ant_t *js, ant_value_t obj, const char *key, ant_offset_t klen, ant_offset_t *out_len) {
+  ant_offset_t off = lkp(js, obj, key, klen);
   if (off <= 0) return NULL;
-  jsval_t v = resolveprop(js, mkval(T_PROP, off));
+  ant_value_t v = resolveprop(js, mkval(T_PROP, off));
   if (vtype(v) != T_STR) return NULL;
   return (const char *)&js->mem[vstr(js, v, out_len)];
 }
 
-static bool is_small_array(ant_t *js, jsval_t obj, int *elem_count) {
-  jsoff_t length = get_array_length(js, obj);
+static bool is_small_array(ant_t *js, ant_value_t obj, int *elem_count) {
+  ant_offset_t length = get_array_length(js, obj);
   if (length > 64) { if (elem_count) *elem_count = (int)length; return false; }
   
   int count = 0; bool has_nested = false;
-  for (jsoff_t i = 0; i < length; i++) {
-    jsval_t val = arr_get(js, obj, i); uint8_t t = vtype(val);
+  for (ant_offset_t i = 0; i < length; i++) {
+    ant_value_t val = arr_get(js, obj, i); uint8_t t = vtype(val);
     if (t == T_OBJ || t == T_ARR || t == T_FUNC) has_nested = true;
     count++;
   }
@@ -642,15 +642,15 @@ static bool is_small_array(ant_t *js, jsval_t obj, int *elem_count) {
   return count <= 4 && !has_nested;
 }
 
-static inline bool is_array_index(const char *key, jsoff_t klen) {
+static inline bool is_array_index(const char *key, ant_offset_t klen) {
   if (klen == 0 || (klen > 1 && key[0] == '0')) return false;
-  for (jsoff_t i = 0; i < klen; i++) {
+  for (ant_offset_t i = 0; i < klen; i++) {
     if (key[i] < '0' || key[i] > '9') return false;
   }
   return true;
 }
 
-static inline bool parse_array_index(const char *key, size_t klen, jsoff_t max_len, unsigned long *out_idx) {
+static inline bool parse_array_index(const char *key, size_t klen, ant_offset_t max_len, unsigned long *out_idx) {
   if (klen == 0 || key[0] < '0' || key[0] > '9') return false;
   unsigned long parsed_idx = 0;
   
@@ -664,62 +664,62 @@ static inline bool parse_array_index(const char *key, size_t klen, jsoff_t max_l
   return true;
 }
 
-static jsoff_t get_array_length(ant_t *js, jsval_t arr) {
-  jsoff_t doff = get_dense_buf(js, arr);
-  jsoff_t dense_len = doff ? dense_length(js, doff) : 0;
-  jsoff_t off = lkp_interned(js, arr, INTERN_LENGTH, 6);
+static ant_offset_t get_array_length(ant_t *js, ant_value_t arr) {
+  ant_offset_t doff = get_dense_buf(js, arr);
+  ant_offset_t dense_len = doff ? dense_length(js, doff) : 0;
+  ant_offset_t off = lkp_interned(js, arr, INTERN_LENGTH, 6);
   if (off) {
-    jsval_t val = resolveprop(js, mkval(T_PROP, off));
+    ant_value_t val = resolveprop(js, mkval(T_PROP, off));
     if (vtype(val) == T_NUM) {
-      jsoff_t prop_len = (jsoff_t) tod(val);
+      ant_offset_t prop_len = (ant_offset_t) tod(val);
       return prop_len > dense_len ? prop_len : dense_len;
     }
   }
   return dense_len;
 }
 
-static jsval_t get_obj_ctor(ant_t *js, jsval_t obj) {
-  jsval_t ctor = get_slot(js, obj, SLOT_CTOR);
+static ant_value_t get_obj_ctor(ant_t *js, ant_value_t obj) {
+  ant_value_t ctor = get_slot(js, obj, SLOT_CTOR);
   if (vtype(ctor) == T_FUNC) return ctor;
-  jsval_t proto = get_slot(js, obj, SLOT_PROTO);
+  ant_value_t proto = get_slot(js, obj, SLOT_PROTO);
   if (vtype(proto) != T_OBJ) return js_mkundef();
-  jsoff_t off = lkp_interned(js, proto, INTERN_CONSTRUCTOR, 11);
+  ant_offset_t off = lkp_interned(js, proto, INTERN_CONSTRUCTOR, 11);
   return off ? resolveprop(js, mkval(T_PROP, off)) : js_mkundef();
 }
 
-static const char *get_func_name(ant_t *js, jsval_t func, jsoff_t *out_len) {
+static const char *get_func_name(ant_t *js, ant_value_t func, ant_offset_t *out_len) {
   if (vtype(func) != T_FUNC) return NULL;
-  jsoff_t off = lkp(js, js_func_obj(func), "name", 4);
+  ant_offset_t off = lkp(js, js_func_obj(func), "name", 4);
   if (!off) return NULL;
-  jsval_t name = resolveprop(js, mkval(T_PROP, off));
+  ant_value_t name = resolveprop(js, mkval(T_PROP, off));
   if (vtype(name) != T_STR) return NULL;
-  jsoff_t str_off = vstr(js, name, out_len);
+  ant_offset_t str_off = vstr(js, name, out_len);
   return (const char *) &js->mem[str_off];
 }
 
-static const char *get_class_name(ant_t *js, jsval_t obj, jsoff_t *out_len, const char *skip) {
+static const char *get_class_name(ant_t *js, ant_value_t obj, ant_offset_t *out_len, const char *skip) {
   const char *name = get_func_name(js, get_obj_ctor(js, obj), out_len);
   if (!name) return NULL;
-  if (skip && *out_len == (jsoff_t)strlen(skip) && memcmp(name, skip, *out_len) == 0) return NULL;
+  if (skip && *out_len == (ant_offset_t)strlen(skip) && memcmp(name, skip, *out_len) == 0) return NULL;
   return name;
 }
 
-static inline jsoff_t dense_iterable_length(ant_t *js, jsval_t obj) {
-  jsoff_t doff = get_dense_buf(js, obj);
+static inline ant_offset_t dense_iterable_length(ant_t *js, ant_value_t obj) {
+  ant_offset_t doff = get_dense_buf(js, obj);
   return doff ? dense_length(js, doff) : 0;
 }
 
-static size_t strarr(ant_t *js, jsval_t obj, char *buf, size_t len) {
+static size_t strarr(ant_t *js, ant_value_t obj, char *buf, size_t len) {
   int ref = get_circular_ref(obj);
   if (ref) return ref > 0 ? (size_t) snprintf(buf, len, "[Circular *%d]", ref) : cpy(buf, len, "[Circular]", 10);
   
   push_stringify(obj);
-  jsoff_t first = loadoff(js, (jsoff_t) vdata(js_as_obj(obj))) & ~(3U | FLAGMASK);
-  jsoff_t length = get_array_length(js, obj);
-  jsoff_t d_len = dense_iterable_length(js, obj);
-  jsoff_t iter_len = (d_len >= length) ? length : d_len;
+  ant_offset_t first = loadoff(js, (ant_offset_t) vdata(js_as_obj(obj))) & ~(3U | FLAGMASK);
+  ant_offset_t length = get_array_length(js, obj);
+  ant_offset_t d_len = dense_iterable_length(js, obj);
+  ant_offset_t iter_len = (d_len >= length) ? length : d_len;
   
-  jsoff_t class_len = 0;
+  ant_offset_t class_len = 0;
   const char *class_name = get_class_name(js, obj, &class_len, "Array");
   
   int elem_count = 0;
@@ -741,20 +741,20 @@ static size_t strarr(ant_t *js, jsval_t obj, char *buf, size_t len) {
   if (!inline_mode) stringify_indent++;
   
   bool printed_first = false;
-  for (jsoff_t i = 0; i < iter_len; i++) {
+  for (ant_offset_t i = 0; i < iter_len; i++) {
     if (printed_first) n += cpy(buf + n, REMAIN(n, len), inline_mode ? ", " : ",\n", 2);
     if (!inline_mode) n += add_indent(buf + n, REMAIN(n, len), stringify_indent);
     
-    jsval_t val = arr_get(js, obj, i); bool found = arr_has(js, obj, i);
+    ant_value_t val = arr_get(js, obj, i); bool found = arr_has(js, obj, i);
     n += found ? tostr(js, val, buf + n, REMAIN(n, len)) : cpy(buf + n, REMAIN(n, len), "undefined", 9);
     printed_first = true;
   }
   
-  for (jsoff_t p = first; p < js->brk && p != 0; p = next_prop(loadoff(js, p))) {
-    jsoff_t header = loadoff(js, p);
+  for (ant_offset_t p = first; p < js->brk && p != 0; p = next_prop(loadoff(js, p))) {
+    ant_offset_t header = loadoff(js, p);
     if (is_slot_prop(header)) continue;
     
-    const char *key; jsoff_t klen;
+    const char *key; ant_offset_t klen;
     get_prop_key(js, p, &key, &klen);
     if (streq(key, klen, "length", 6)) continue;
     
@@ -782,33 +782,33 @@ static size_t strarr(ant_t *js, jsval_t obj, char *buf, size_t len) {
   return n;
 }
 
-static size_t strdate(ant_t *js, jsval_t obj, char *buf, size_t len) {
-  jsval_t time_val = js_get_slot(js, obj, SLOT_DATA);
+static size_t strdate(ant_t *js, ant_value_t obj, char *buf, size_t len) {
+  ant_value_t time_val = js_get_slot(js, obj, SLOT_DATA);
   if (vtype(time_val) != T_NUM) return cpy(buf, len, "Invalid Date", 12);
 
   static const date_string_spec_t kSpec = {DATE_STRING_FMT_ISO, DATE_STRING_PART_ALL};
-  jsval_t iso = get_date_string(js, obj, kSpec);
+  ant_value_t iso = get_date_string(js, obj, kSpec);
   if (is_err(iso) || vtype(iso) != T_STR) return cpy(buf, len, "Invalid Date", 12);
 
-  jsoff_t slen;
-  jsoff_t soff = vstr(js, iso, &slen);
+  ant_offset_t slen;
+  ant_offset_t soff = vstr(js, iso, &slen);
   
   return cpy(buf, len, (const char *)&js->mem[soff], slen);
 }
 
-static bool is_valid_identifier(const char *str, jsoff_t slen) {
+static bool is_valid_identifier(const char *str, ant_offset_t slen) {
   if (slen == 0) return false;
   char c = str[0];
   if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || c == '$')) return false;
-  for (jsoff_t i = 1; i < slen; i++) {
+  for (ant_offset_t i = 1; i < slen; i++) {
     c = str[i];
     if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '$')) return false;
   }
   return true;
 }
 
-static size_t strkey(ant_t *js, jsval_t value, char *buf, size_t len) {
-  jsoff_t slen, off = vstr(js, value, &slen);
+static size_t strkey(ant_t *js, ant_value_t value, char *buf, size_t len) {
+  ant_offset_t slen, off = vstr(js, value, &slen);
   const char *str = (const char *) &js->mem[off];
   
   if (is_valid_identifier(str, slen)) {
@@ -817,15 +817,15 @@ static size_t strkey(ant_t *js, jsval_t value, char *buf, size_t len) {
   return strstring(js, value, buf, len);
 }
 
-static bool is_small_object(ant_t *js, jsval_t obj, int *prop_count) {
+static bool is_small_object(ant_t *js, ant_value_t obj, int *prop_count) {
   int count = 0;
   bool has_nested = false;
   
-  jsoff_t obj_off = (jsoff_t)vdata(js_as_obj(obj));
-  jsoff_t next = loadoff(js, obj_off) & ~(3U | FLAGMASK);
+  ant_offset_t obj_off = (ant_offset_t)vdata(js_as_obj(obj));
+  ant_offset_t next = loadoff(js, obj_off) & ~(3U | FLAGMASK);
   
   while (next < js->brk && next != 0) {
-    jsoff_t header = loadoff(js, next);
+    ant_offset_t header = loadoff(js, next);
     if (is_slot_prop(header)) { next = next_prop(header); continue; }
     
     if (is_sym_key_prop(js, next)) {
@@ -834,13 +834,13 @@ static bool is_small_object(ant_t *js, jsval_t obj, int *prop_count) {
       continue;
     }
     
-    const char *key; jsoff_t klen;
+    const char *key; ant_offset_t klen;
     get_prop_key(js, next, &key, &klen);
     
     descriptor_entry_t *desc = lookup_descriptor(js, obj_off, key, klen);
     if (desc && !desc->enumerable) { next = next_prop(header); continue; }
     
-    jsval_t val = get_prop_val(js, next);
+    ant_value_t val = get_prop_val(js, next);
     uint8_t t = vtype(val);
     if (t == T_OBJ || t == T_ARR || t == T_FUNC) has_nested = true;
     count++;
@@ -861,9 +861,9 @@ static bool is_small_object(ant_t *js, jsval_t obj, int *prop_count) {
 }
 
 // todo: split into smaller functions
-static size_t strobj(ant_t *js, jsval_t obj, char *buf, size_t len) {
-  jsval_t obj_proto = js_get_proto(js, obj);
-  jsval_t date_proto = js_get_ctor_proto(js, "Date", 4);
+static size_t strobj(ant_t *js, ant_value_t obj, char *buf, size_t len) {
+  ant_value_t obj_proto = js_get_proto(js, obj);
+  ant_value_t date_proto = js_get_ctor_proto(js, "Date", 4);
   if (obj_proto == date_proto) return strdate(js, obj, buf, len);
   
   int ref = get_circular_ref(obj);
@@ -877,17 +877,17 @@ static size_t strobj(ant_t *js, jsval_t obj, char *buf, size_t len) {
     n += (size_t) snprintf(buf + n, REMAIN(n, len), "<ref *%d> ", self_ref);
   }
   
-  jsval_t tag_sym = get_toStringTag_sym();
-  jsoff_t tag_off = (vtype(tag_sym) == T_SYMBOL) ? lkp_sym_proto(js, obj, (jsoff_t)vdata(tag_sym)) : 0;
+  ant_value_t tag_sym = get_toStringTag_sym();
+  ant_offset_t tag_off = (vtype(tag_sym) == T_SYMBOL) ? lkp_sym_proto(js, obj, (ant_offset_t)vdata(tag_sym)) : 0;
   bool is_map = false, is_set = false, is_arraybuffer = false;
-  jsoff_t tlen = 0, toff = 0;
+  ant_offset_t tlen = 0, toff = 0;
   const char *tag_str = NULL;
   int prop_count = 0;
   bool inline_mode = false;
   
   if (tag_off == 0) goto print_plain_object;
   
-  jsval_t tag_val = resolveprop(js, mkval(T_PROP, tag_off));
+  ant_value_t tag_val = resolveprop(js, mkval(T_PROP, tag_off));
   if (vtype(tag_val) != T_STR) goto print_plain_object;
   
   toff = vstr(js, tag_val, &tlen);
@@ -896,7 +896,7 @@ static size_t strobj(ant_t *js, jsval_t obj, char *buf, size_t len) {
   is_set = (tlen == 3 && memcmp(tag_str, "Set", 3) == 0);
   is_arraybuffer = (tlen >= 11 && memcmp(tag_str + tlen - 11, "ArrayBuffer", 11) == 0);
   
-  jsval_t ta_slot = js_get_slot(js, obj, SLOT_BUFFER);
+  ant_value_t ta_slot = js_get_slot(js, obj, SLOT_BUFFER);
   if (vtype(ta_slot) == T_TYPEDARRAY) {
     TypedArrayData *ta = (TypedArrayData *)vdata(ta_slot);
     if (ta && ta->buffer) {
@@ -909,8 +909,8 @@ static size_t strobj(ant_t *js, jsval_t obj, char *buf, size_t len) {
       const char *type_name = NULL;
       size_t type_len = 0;
       
-      jsval_t proto = js_get_proto(js, obj);
-      jsval_t buffer_proto = get_ctor_proto(js, "Buffer", 6);
+      ant_value_t proto = js_get_proto(js, obj);
+      ant_value_t buffer_proto = get_ctor_proto(js, "Buffer", 6);
       if (vtype(proto) == T_OBJ && vtype(buffer_proto) == T_OBJ && vdata(proto) == vdata(buffer_proto)) {
         type_name = "Buffer";
         type_len = 6;
@@ -977,7 +977,7 @@ static size_t strobj(ant_t *js, jsval_t obj, char *buf, size_t len) {
   }
   
   if (is_arraybuffer) {
-    jsval_t buf_val = js_get_slot(js, obj, SLOT_BUFFER);
+    ant_value_t buf_val = js_get_slot(js, obj, SLOT_BUFFER);
     if (vtype(buf_val) == T_NUM) {
       ArrayBufferData *ab_data = (ArrayBufferData *)(uintptr_t)tod(buf_val);
       size_t bytelen = ab_data ? ab_data->length : 0;
@@ -1004,7 +1004,7 @@ static size_t strobj(ant_t *js, jsval_t obj, char *buf, size_t len) {
   
   bool is_dataview = (tlen == 8 && memcmp(tag_str, "DataView", 8) == 0);
   if (is_dataview) {
-    jsval_t dv_data_val = js_get_slot(js, obj, SLOT_DATA);
+    ant_value_t dv_data_val = js_get_slot(js, obj, SLOT_DATA);
     if (vtype(dv_data_val) == T_NUM) {
       DataViewData *dv = (DataViewData *)(uintptr_t)tod(dv_data_val);
       if (dv && dv->buffer) {
@@ -1036,7 +1036,7 @@ static size_t strobj(ant_t *js, jsval_t obj, char *buf, size_t len) {
   }
   
   if (is_map) {
-    jsval_t map_val = js_get_slot(js, obj, SLOT_MAP);
+    ant_value_t map_val = js_get_slot(js, obj, SLOT_MAP);
     if (vtype(map_val) == T_UNDEF) goto print_tagged_object;
     
     map_entry_t **map_ptr = (map_entry_t**)(size_t)tod(map_val);
@@ -1078,7 +1078,7 @@ static size_t strobj(ant_t *js, jsval_t obj, char *buf, size_t len) {
   }
   
   if (is_set) {
-    jsval_t set_val = js_get_slot(js, obj, SLOT_SET);
+    ant_value_t set_val = js_get_slot(js, obj, SLOT_SET);
     if (vtype(set_val) == T_UNDEF) goto print_tagged_object;
     
     set_entry_t **set_ptr = (set_entry_t**)(size_t)tod(set_val);
@@ -1122,19 +1122,19 @@ print_tagged_object:
 print_plain_object:
   inline_mode = is_small_object(js, obj, &prop_count);
   
-  jsval_t proto_val = js_get_proto(js, obj);
+  ant_value_t proto_val = js_get_proto(js, obj);
   bool is_null_proto = (vtype(proto_val) == T_NULL);
   bool proto_is_null_proto = false;
   const char *class_name = NULL;
-  jsoff_t class_name_len = 0;
+  ant_offset_t class_name_len = 0;
   
   do {
     if (is_null_proto) break;
     uint8_t pt = vtype(proto_val);
     if (pt != T_OBJ && pt != T_FUNC) break;
     
-    jsval_t proto_proto = js_get_proto(js, proto_val);
-    jsval_t object_proto = get_ctor_proto(js, "Object", 6);
+    ant_value_t proto_proto = js_get_proto(js, proto_val);
+    ant_value_t object_proto = get_ctor_proto(js, "Object", 6);
     proto_is_null_proto = (vtype(proto_proto) == T_NULL) && 
                           (vdata(proto_val) != vdata(object_proto));
     
@@ -1172,23 +1172,23 @@ print_plain_object:
 continue_object_print:;
   
   if (!inline_mode) stringify_indent++;
-  jsoff_t next = loadoff(js, (jsoff_t) vdata(js_as_obj(obj))) & ~(3U | FLAGMASK);
+  ant_offset_t next = loadoff(js, (ant_offset_t) vdata(js_as_obj(obj))) & ~(3U | FLAGMASK);
   bool first = true;
   
-  jsoff_t obj_off = (jsoff_t)vdata(js_as_obj(obj));
+  ant_offset_t obj_off = (ant_offset_t)vdata(js_as_obj(obj));
   int prop_capacity = 64;
   
-  jsoff_t *prop_offsets = malloc(prop_capacity * sizeof(jsoff_t));
+  ant_offset_t *prop_offsets = malloc(prop_capacity * sizeof(ant_offset_t));
   int num_props = 0;
   
   while (next < js->brk && next != 0) {
-    jsoff_t header = loadoff(js, next);
+    ant_offset_t header = loadoff(js, next);
     if (is_slot_prop(header)) { next = next_prop(header); continue; }
     
     if (is_sym_key_prop(js, next)) { next = next_prop(header); continue; }
     
-    jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
-    jsoff_t klen = offtolen(loadoff(js, koff));
+    ant_offset_t koff = loadoff(js, next + (ant_offset_t) sizeof(next));
+    ant_offset_t klen = offtolen(loadoff(js, koff));
     const char *key = (char *) &js->mem[koff + sizeof(koff)];
     
     descriptor_entry_t *desc = lookup_descriptor(js, obj_off, key, klen);
@@ -1196,18 +1196,18 @@ continue_object_print:;
     
     if (num_props >= prop_capacity) {
       prop_capacity *= 2;
-      prop_offsets = realloc(prop_offsets, prop_capacity * sizeof(jsoff_t));
+      prop_offsets = realloc(prop_offsets, prop_capacity * sizeof(ant_offset_t));
     }
     prop_offsets[num_props++] = next;
     next = next_prop(header);
   }
   
   for (int i = 0; i < num_props; i++) {
-    jsoff_t prop = prop_offsets[i];
-    jsoff_t koff = loadoff(js, prop + (jsoff_t) sizeof(prop));
-    jsoff_t klen = offtolen(loadoff(js, koff));
+    ant_offset_t prop = prop_offsets[i];
+    ant_offset_t koff = loadoff(js, prop + (ant_offset_t) sizeof(prop));
+    ant_offset_t klen = offtolen(loadoff(js, koff));
     const char *key = (char *) &js->mem[koff + sizeof(koff)];
-    jsval_t val = loadval(js, prop + (jsoff_t) (sizeof(prop) + sizeof(koff)));
+    ant_value_t val = loadval(js, prop + (ant_offset_t) (sizeof(prop) + sizeof(koff)));
     
     if (!first) n += cpy(buf + n, REMAIN(n, len), inline_mode ? ", " : ",\n", 2);
     first = false;
@@ -1235,18 +1235,18 @@ continue_object_print:;
   
   next = loadoff(js, obj_off) & ~(3U | FLAGMASK);
   while (next < js->brk && next != 0) {
-    jsoff_t header = loadoff(js, next);
+    ant_offset_t header = loadoff(js, next);
     if (is_slot_prop(header) || !is_sym_key_prop(js, next)) { 
       next = next_prop(header); continue; 
     }
     
-    jsoff_t sym_off = get_prop_koff(js, next);
-    if (vtype(tag_sym) == T_SYMBOL && sym_off == (jsoff_t)vdata(tag_sym)) { 
+    ant_offset_t sym_off = get_prop_koff(js, next);
+    if (vtype(tag_sym) == T_SYMBOL && sym_off == (ant_offset_t)vdata(tag_sym)) { 
       next = next_prop(header); continue; 
     }
     
-    jsval_t sym = mkval(T_SYMBOL, sym_off);
-    jsval_t val = loadval(js, next + (jsoff_t)(sizeof(jsoff_t) * 2));
+    ant_value_t sym = mkval(T_SYMBOL, sym_off);
+    ant_value_t val = loadval(js, next + (ant_offset_t)(sizeof(ant_offset_t) * 2));
     
     if (!first) n += cpy(buf + n, REMAIN(n, len), inline_mode ? ", " : ",\n", 2);
     first = false;
@@ -1311,7 +1311,7 @@ static size_t fix_exponent(char *buf, size_t n) {
   return n;
 }
 
-static size_t strnum(jsval_t value, char *buf, size_t len) {
+static size_t strnum(ant_value_t value, char *buf, size_t len) {
   double dv = tod(value);
   
   if (isnan(dv)) return cpy(buf, len, "NaN", 3);
@@ -1345,111 +1345,111 @@ static size_t strnum(jsval_t value, char *buf, size_t len) {
   return cpy(buf, len, temp, strlen(temp));
 }
 
-static inline jsoff_t assert_string_header(ant_t *js, jsval_t value, jsoff_t *out_off) {
+static inline ant_offset_t assert_string_header(ant_t *js, ant_value_t value, ant_offset_t *out_off) {
   assert(vtype(value) == T_STR);
-  jsoff_t off = (jsoff_t) vdata(value);
-  assert(off + sizeof(jsoff_t) <= js->brk);
-  jsoff_t header = loadoff(js, off);
+  ant_offset_t off = (ant_offset_t) vdata(value);
+  assert(off + sizeof(ant_offset_t) <= js->brk);
+  ant_offset_t header = loadoff(js, off);
   assert((header & 3) == T_STR);
   if (out_off) *out_off = off;
   return header;
 }
 
-static inline jsoff_t assert_flat_string_len(ant_t *js, jsval_t value, jsoff_t *out_off) {
-  jsoff_t off;
-  jsoff_t header = assert_string_header(js, value, &off);
+static inline ant_offset_t assert_flat_string_len(ant_t *js, ant_value_t value, ant_offset_t *out_off) {
+  ant_offset_t off;
+  ant_offset_t header = assert_string_header(js, value, &off);
   assert((header & ROPE_FLAG) == 0);
-  jsoff_t len = offtolen(header);
-  assert(off + sizeof(jsoff_t) + len <= js->brk);
+  ant_offset_t len = offtolen(header);
+  assert(off + sizeof(ant_offset_t) + len <= js->brk);
   if (out_off) *out_off = off;
   return len;
 }
 
-static inline jsoff_t assert_rope_header(ant_t *js, jsval_t value, jsoff_t *out_off) {
-  jsoff_t off;
-  jsoff_t header = assert_string_header(js, value, &off);
+static inline ant_offset_t assert_rope_header(ant_t *js, ant_value_t value, ant_offset_t *out_off) {
+  ant_offset_t off;
+  ant_offset_t header = assert_string_header(js, value, &off);
   assert((header & ROPE_FLAG) != 0);
   assert(off + sizeof(rope_node_t) <= js->brk);
-  jsoff_t payload_header = header & ~(ROPE_FLAG | (ROPE_DEPTH_MASK << ROPE_DEPTH_SHIFT));
+  ant_offset_t payload_header = header & ~(ROPE_FLAG | (ROPE_DEPTH_MASK << ROPE_DEPTH_SHIFT));
   assert((payload_header >> 3) > 0);
   if (out_off) *out_off = off;
   return header;
 }
 
-bool is_rope(ant_t *js, jsval_t value) {
-  jsoff_t header = assert_string_header(js, value, NULL);
+bool is_rope(ant_t *js, ant_value_t value) {
+  ant_offset_t header = assert_string_header(js, value, NULL);
   if ((header & ROPE_FLAG) != 0) assert_rope_header(js, value, NULL);
   return (header & ROPE_FLAG) != 0;
 }
 
-static inline jsoff_t rope_len(ant_t *js, jsval_t value) {
-  jsoff_t header = assert_rope_header(js, value, NULL);
+static inline ant_offset_t rope_len(ant_t *js, ant_value_t value) {
+  ant_offset_t header = assert_rope_header(js, value, NULL);
   return offtolen(header & ~(ROPE_FLAG | (ROPE_DEPTH_MASK << ROPE_DEPTH_SHIFT)));
 }
 
-static inline uint8_t rope_depth(ant_t *js, jsval_t value) {
-  jsoff_t off = (jsoff_t) vdata(value);
-  jsoff_t header = loadoff(js, off);
+static inline uint8_t rope_depth(ant_t *js, ant_value_t value) {
+  ant_offset_t off = (ant_offset_t) vdata(value);
+  ant_offset_t header = loadoff(js, off);
   return (uint8_t)((header >> ROPE_DEPTH_SHIFT) & ROPE_DEPTH_MASK);
 }
 
-static inline jsval_t rope_left(ant_t *js, jsval_t value) {
-  jsoff_t off = (jsoff_t) vdata(value);
+static inline ant_value_t rope_left(ant_t *js, ant_value_t value) {
+  ant_offset_t off = (ant_offset_t) vdata(value);
   return loadval(js, off + offsetof(rope_node_t, left));
 }
 
-static inline jsval_t rope_right(ant_t *js, jsval_t value) {
-  jsoff_t off = (jsoff_t) vdata(value);
+static inline ant_value_t rope_right(ant_t *js, ant_value_t value) {
+  ant_offset_t off = (ant_offset_t) vdata(value);
   return loadval(js, off + offsetof(rope_node_t, right));
 }
 
-static inline jsval_t rope_cached_flat(ant_t *js, jsval_t value) {
-  jsoff_t off = (jsoff_t) vdata(value);
+static inline ant_value_t rope_cached_flat(ant_t *js, ant_value_t value) {
+  ant_offset_t off = (ant_offset_t) vdata(value);
   return loadval(js, off + offsetof(rope_node_t, cached));
 }
 
-static inline void rope_set_cached_flat(ant_t *js, jsval_t rope, jsval_t flat) {
-  jsoff_t off = (jsoff_t) vdata(rope);
+static inline void rope_set_cached_flat(ant_t *js, ant_value_t rope, ant_value_t flat) {
+  ant_offset_t off = (ant_offset_t) vdata(rope);
   saveval(js, off + offsetof(rope_node_t, cached), flat);
 }
 
-static void rope_flatten_into(ant_t *js, jsval_t str, char *dest, jsoff_t *pos) {
+static void rope_flatten_into(ant_t *js, ant_value_t str, char *dest, ant_offset_t *pos) {
   assert(vtype(str) == T_STR);
   
   if (!is_rope(js, str)) {
-    jsoff_t soff;
-    jsoff_t slen = assert_flat_string_len(js, str, &soff);
-    memcpy(dest + *pos, &js->mem[soff + sizeof(jsoff_t)], slen);
+    ant_offset_t soff;
+    ant_offset_t slen = assert_flat_string_len(js, str, &soff);
+    memcpy(dest + *pos, &js->mem[soff + sizeof(ant_offset_t)], slen);
     *pos += slen; return;
   }
   
-  jsval_t cached = rope_cached_flat(js, str);
+  ant_value_t cached = rope_cached_flat(js, str);
   if (vtype(cached) == T_STR && !is_rope(js, cached)) {
-    jsoff_t coff;
-    jsoff_t clen = assert_flat_string_len(js, cached, &coff);
-    memcpy(dest + *pos, &js->mem[coff + sizeof(jsoff_t)], clen);
+    ant_offset_t coff;
+    ant_offset_t clen = assert_flat_string_len(js, cached, &coff);
+    memcpy(dest + *pos, &js->mem[coff + sizeof(ant_offset_t)], clen);
     *pos += clen; return;
   }
   
-  jsval_t stack[ROPE_MAX_DEPTH + 8];
+  ant_value_t stack[ROPE_MAX_DEPTH + 8];
   int sp = 0; stack[sp++] = str;
   
   while (sp > 0) {
-    jsval_t node = stack[--sp];
+    ant_value_t node = stack[--sp];
     assert(vtype(node) == T_STR);
     
     if (!is_rope(js, node)) {
-      jsoff_t soff;
-      jsoff_t slen = assert_flat_string_len(js, node, &soff);
-      memcpy(dest + *pos, &js->mem[soff + sizeof(jsoff_t)], slen);
+      ant_offset_t soff;
+      ant_offset_t slen = assert_flat_string_len(js, node, &soff);
+      memcpy(dest + *pos, &js->mem[soff + sizeof(ant_offset_t)], slen);
       *pos += slen; continue;
     }
     
-    jsval_t c = rope_cached_flat(js, node);
+    ant_value_t c = rope_cached_flat(js, node);
     if (vtype(c) == T_STR && !is_rope(js, c)) {
-      jsoff_t coff;
-      jsoff_t clen = assert_flat_string_len(js, c, &coff);
-      memcpy(dest + *pos, &js->mem[coff + sizeof(jsoff_t)], clen);
+      ant_offset_t coff;
+      ant_offset_t clen = assert_flat_string_len(js, c, &coff);
+      memcpy(dest + *pos, &js->mem[coff + sizeof(ant_offset_t)], clen);
       *pos += clen; continue;
     }
     
@@ -1460,23 +1460,23 @@ static void rope_flatten_into(ant_t *js, jsval_t str, char *dest, jsoff_t *pos) 
   }
 }
 
-jsval_t rope_flatten(ant_t *js, jsval_t rope) {
+ant_value_t rope_flatten(ant_t *js, ant_value_t rope) {
   assert(vtype(rope) == T_STR);
   if (!is_rope(js, rope)) return rope;
   
-  jsval_t cached = rope_cached_flat(js, rope);
+  ant_value_t cached = rope_cached_flat(js, rope);
   if (vtype(cached) == T_STR && !is_rope(js, cached)) return cached;
   
-  jsoff_t total_len = rope_len(js, rope);
+  ant_offset_t total_len = rope_len(js, rope);
   
   char *buf = (char *)ant_calloc(total_len + 1);
   if (!buf) return js_mkerr(js, "oom");
   
-  jsoff_t pos = 0;
+  ant_offset_t pos = 0;
   rope_flatten_into(js, rope, buf, &pos);
   buf[pos] = '\0';
   
-  jsval_t flat = js_mkstr(js, buf, pos);
+  ant_value_t flat = js_mkstr(js, buf, pos);
   free(buf);
   
   if (!is_err(flat)) {
@@ -1486,27 +1486,27 @@ jsval_t rope_flatten(ant_t *js, jsval_t rope) {
   return flat;
 }
 
-jsoff_t vstr(ant_t *js, jsval_t value, jsoff_t *len) {
-  jsoff_t header = assert_string_header(js, value, NULL);
+ant_offset_t vstr(ant_t *js, ant_value_t value, ant_offset_t *len) {
+  ant_offset_t header = assert_string_header(js, value, NULL);
   
   if (header & ROPE_FLAG) {
-    jsval_t flat = rope_flatten(js, value);
+    ant_value_t flat = rope_flatten(js, value);
     assert(!is_err(flat));
     value = flat;
   }
   
-  jsoff_t off;
-  jsoff_t slen = assert_flat_string_len(js, value, &off);
+  ant_offset_t off;
+  ant_offset_t slen = assert_flat_string_len(js, value, &off);
   if (len) *len = slen;
-  return (jsoff_t) (off + sizeof(off));
+  return (ant_offset_t) (off + sizeof(off));
 }
 
-static size_t strstring(ant_t *js, jsval_t value, char *buf, size_t len) {
-  jsoff_t slen, off = vstr(js, value, &slen);
+static size_t strstring(ant_t *js, ant_value_t value, char *buf, size_t len) {
+  ant_offset_t slen, off = vstr(js, value, &slen);
   const char *str = (const char *) &js->mem[off];
   size_t n = 0;
   n += cpy(buf + n, REMAIN(n, len), "'", 1);
-  for (jsoff_t i = 0; i < slen && n < len - 1; i++) {
+  for (ant_offset_t i = 0; i < slen && n < len - 1; i++) {
     char c = str[i];
     if (c == '\n') { n += cpy(buf + n, REMAIN(n, len), "\\n", 2); }
     else if (c == '\r') { n += cpy(buf + n, REMAIN(n, len), "\\r", 2); }
@@ -1553,7 +1553,7 @@ js_intern_stats_t js_intern_stats(void) {
   };
 }
 
-bool is_internal_prop(const char *key, jsoff_t klen) {
+bool is_internal_prop(const char *key, ant_offset_t klen) {
   if (klen < 2) return false;
   if (key[0] != '_' || key[1] != '_') return false;
   if (klen == STR_PROTO_LEN && memcmp(key, STR_PROTO, STR_PROTO_LEN) == 0) return false;
@@ -1574,14 +1574,14 @@ static const struct func_format formats[] = {
 };
 
 // todo: make it work with bytecode NAME
-static size_t strfunc(ant_t *js, jsval_t value, char *buf, size_t len) {
-  jsoff_t name_len = 0;
+static size_t strfunc(ant_t *js, ant_value_t value, char *buf, size_t len) {
+  ant_offset_t name_len = 0;
   const char *name = get_func_name(js, value, &name_len);
   
-  jsval_t func_obj = js_func_obj(value);
-  jsval_t code_slot = get_slot(js, func_obj, SLOT_CODE);
-  jsval_t builtin_slot = get_slot(js, func_obj, SLOT_BUILTIN);
-  jsval_t async_slot = get_slot(js, func_obj, SLOT_ASYNC);
+  ant_value_t func_obj = js_func_obj(value);
+  ant_value_t code_slot = get_slot(js, func_obj, SLOT_CODE);
+  ant_value_t builtin_slot = get_slot(js, func_obj, SLOT_BUILTIN);
+  ant_value_t async_slot = get_slot(js, func_obj, SLOT_ASYNC);
   
   bool is_async = (async_slot == js_true);
   bool has_code = (vtype(code_slot) == T_CFUNC);
@@ -1599,7 +1599,7 @@ static size_t strfunc(ant_t *js, jsval_t value, char *buf, size_t len) {
   }
   
   if (!has_code) {
-    jsval_t cfunc_slot = get_slot(js, func_obj, SLOT_CFUNC);
+    ant_value_t cfunc_slot = get_slot(js, func_obj, SLOT_CFUNC);
     bool is_native = (vtype(cfunc_slot) == T_CFUNC);
     size_t n;
     
@@ -1613,18 +1613,18 @@ static size_t strfunc(ant_t *js, jsval_t value, char *buf, size_t len) {
     
     if (!is_native) return n;
     
-    jsval_t proto = get_slot(js, func_obj, SLOT_PROTO);
+    ant_value_t proto = get_slot(js, func_obj, SLOT_PROTO);
     uint8_t pt = vtype(proto);
     if (pt != T_OBJ && pt != T_FUNC) return n;
     
-    jsoff_t ctor_off = lkp(js, proto, "constructor", 11);
+    ant_offset_t ctor_off = lkp(js, proto, "constructor", 11);
     if (ctor_off == 0) return n;
     
-    jsval_t ctor = resolveprop(js, mkval(T_PROP, ctor_off));
+    ant_value_t ctor = resolveprop(js, mkval(T_PROP, ctor_off));
     uint8_t ct = vtype(ctor);
     if (ct != T_FUNC && ct != T_CFUNC) return n;
     
-    jsoff_t ctor_name_len = 0;
+    ant_offset_t ctor_name_len = 0;
     const char *ctor_name = get_func_name(js, ctor, &ctor_name_len);
     if (ctor_name && ctor_name_len > 0) {
       n += cpy(buf + n, REMAIN(n, len), " ", 1);
@@ -1643,7 +1643,7 @@ static size_t strfunc(ant_t *js, jsval_t value, char *buf, size_t len) {
   return cpy(buf, len, fmt->anon, fmt->anon_len);
 }
 
-static size_t tostr(ant_t *js, jsval_t value, char *buf, size_t len) {
+static size_t tostr(ant_t *js, ant_value_t value, char *buf, size_t len) {
   switch (vtype(value)) {
     case T_UNDEF:   return ANT_COPY(buf, len, "undefined");
     case T_NULL:    return ANT_COPY(buf, len, "null");
@@ -1667,11 +1667,11 @@ static size_t tostr(ant_t *js, jsval_t value, char *buf, size_t len) {
     case T_ERR: {
       uint64_t data = vdata(value);
       if (data != 0) {
-        jsval_t obj = mkval(T_OBJ, data);
-        jsval_t stack = js_get(js, obj, "stack");
+        ant_value_t obj = mkval(T_OBJ, data);
+        ant_value_t stack = js_get(js, obj, "stack");
         if (vtype(stack) == T_STR) {
-          jsoff_t slen;
-          jsoff_t off = vstr(js, stack, &slen);
+          ant_offset_t slen;
+          ant_offset_t off = vstr(js, stack, &slen);
           return cpy(buf, len, (const char *)&js->mem[off], slen);
         }
       }
@@ -1689,7 +1689,7 @@ static size_t tostr(ant_t *js, jsval_t value, char *buf, size_t len) {
   }
 }
 
-static char *tostr_alloc(ant_t *js, jsval_t value) {
+static char *tostr_alloc(ant_t *js, ant_value_t value) {
   size_t cap = 64;
   char *buf = ant_calloc(cap);
   size_t n = tostr(js, value, buf, cap);
@@ -1701,17 +1701,17 @@ static char *tostr_alloc(ant_t *js, jsval_t value) {
   return buf;
 }
 
-js_cstr_t js_to_cstr(ant_t *js, jsval_t value, char *stack_buf, size_t stack_size) {
+js_cstr_t js_to_cstr(ant_t *js, ant_value_t value, char *stack_buf, size_t stack_size) {
   js_cstr_t out = { .ptr = "", .len = 0, .needs_free = false };
 
   if (is_err(value)) {
     uint64_t data = vdata(value);
     if (data != 0) {
-      jsval_t obj = mkval(T_OBJ, data);
-      jsval_t stack = js_get(js, obj, "stack");
+      ant_value_t obj = mkval(T_OBJ, data);
+      ant_value_t stack = js_get(js, obj, "stack");
       if (vtype(stack) == T_STR) {
-        jsoff_t slen;
-        jsoff_t off = vstr(js, stack, &slen);
+        ant_offset_t slen;
+        ant_offset_t off = vstr(js, stack, &slen);
         out.ptr = (const char *)&js->mem[off];
         out.len = slen;
         return out;
@@ -1778,7 +1778,7 @@ js_cstr_t js_to_cstr(ant_t *js, jsval_t value, char *stack_buf, size_t stack_siz
   }
 }
 
-jsval_t js_tostring_val(ant_t *js, jsval_t value) {
+ant_value_t js_tostring_val(ant_t *js, ant_value_t value) {
   uint8_t t = vtype(value);
   char *buf; size_t len, buflen;
   
@@ -1804,7 +1804,7 @@ jsval_t js_tostring_val(ant_t *js, jsval_t value) {
   L_NUM: {
     buf = (char *)ant_calloc(32);
     len = strnum(value, buf, 32);
-    jsval_t result = js_mkstr(js, buf, len);
+    ant_value_t result = js_mkstr(js, buf, len);
     free(buf); return result;
   }
     
@@ -1812,26 +1812,26 @@ jsval_t js_tostring_val(ant_t *js, jsval_t value) {
     bigint_digits(js, value, &buflen);
     buf = (char *)ant_calloc(buflen + 2);
     len = strbigint(js, value, buf, buflen + 2);
-    jsval_t result = js_mkstr(js, buf, len);
+    ant_value_t result = js_mkstr(js, buf, len);
     free(buf); return result;
   }
     
   L_DEFAULT: {
     buf = (char *)ant_calloc(64);
     len = tostr(js, value, buf, 64);
-    jsval_t result = js_mkstr(js, buf, len);
+    ant_value_t result = js_mkstr(js, buf, len);
     free(buf); return result;
   }
 }
 
-const char *js_str(ant_t *js, jsval_t value) {
+const char *js_str(ant_t *js, ant_value_t value) {
   if (is_err(value)) {
     uint64_t data = vdata(value);
     if (data != 0) {
-      jsval_t obj = mkval(T_OBJ, data);
-      jsval_t stack = js_get(js, obj, "stack");
+      ant_value_t obj = mkval(T_OBJ, data);
+      ant_value_t stack = js_get(js, obj, "stack");
       if (vtype(stack) == T_STR) {
-        jsoff_t slen, off = vstr(js, stack, &slen);
+        ant_offset_t slen, off = vstr(js, stack, &slen);
         return (const char *)&js->mem[off];
       }
     }
@@ -1860,11 +1860,11 @@ const char *js_str(ant_t *js, jsval_t value) {
     if (!buf) return "";
   }
   
-  jsval_t str = js_mkstr(js, buf, len);
+  ant_value_t str = js_mkstr(js, buf, len);
   free(buf);
   
   if (is_err(str)) return "";
-  return (const char *)&js->mem[vdata(str) + sizeof(jsoff_t)];
+  return (const char *)&js->mem[vdata(str) + sizeof(ant_offset_t)];
 }
 
 static bool js_try_grow_memory(ant_t *js, size_t needed) {
@@ -1879,7 +1879,7 @@ static bool js_try_grow_memory(ant_t *js, size_t needed) {
   if (new_mem_size <= current) return false;
   
   if (ant_arena_commit(js->mem, js->size, new_mem_size) != 0) return false;
-  js->size = (jsoff_t)(new_mem_size / 8U * 8U);
+  js->size = (ant_offset_t)(new_mem_size / 8U * 8U);
   
   return true;
 }
@@ -1901,93 +1901,93 @@ static bool js_ensure_space(ant_t *js, size_t size) {
 }
 
 static void js_track_allocation(ant_t *js, size_t size) {
-  js->brk += (jsoff_t) size;
-  js->gc_alloc_since += (jsoff_t) size;
+  js->brk += (ant_offset_t) size;
+  js->gc_alloc_since += (ant_offset_t) size;
   
-  jsoff_t threshold = js->brk / 2;
+  ant_offset_t threshold = js->brk / 2;
   if (threshold < 4 * 1024 * 1024) threshold = 4 * 1024 * 1024;
   if (js->gc_alloc_since > threshold) js->needs_gc = true;
 }
 
-static inline jsoff_t js_alloc(ant_t *js, size_t size) {
-  size = align64((jsoff_t) size);
-  if (!js_ensure_space(js, size)) return ~(jsoff_t) 0;
+static inline ant_offset_t js_alloc(ant_t *js, size_t size) {
+  size = align64((ant_offset_t) size);
+  if (!js_ensure_space(js, size)) return ~(ant_offset_t) 0;
 
-  jsoff_t ofs = js->brk;
+  ant_offset_t ofs = js->brk;
   js_track_allocation(js, size);
   
   return ofs;
 }
 
-static jsoff_t dense_alloc(ant_t *js, jsoff_t capacity) {
-  jsoff_t size = sizeof(jsoff_t) * 2 + sizeof(jsval_t) * capacity;
-  jsoff_t off = js_alloc(js, size);
-  if (off == (jsoff_t)~0) return 0;
+static ant_offset_t dense_alloc(ant_t *js, ant_offset_t capacity) {
+  ant_offset_t size = sizeof(ant_offset_t) * 2 + sizeof(ant_value_t) * capacity;
+  ant_offset_t off = js_alloc(js, size);
+  if (off == (ant_offset_t)~0) return 0;
   
   saveoff(js, off, capacity);
-  saveoff(js, off + sizeof(jsoff_t), 0);
+  saveoff(js, off + sizeof(ant_offset_t), 0);
   
-  for (jsoff_t i = 0; i < capacity; i++) saveval(
-    js, off + sizeof(jsoff_t) * 2 + sizeof(jsval_t) * i, T_EMPTY
+  for (ant_offset_t i = 0; i < capacity; i++) saveval(
+    js, off + sizeof(ant_offset_t) * 2 + sizeof(ant_value_t) * i, T_EMPTY
   );
   
   return off;
 }
 
-static inline jsoff_t get_dense_buf(ant_t *js, jsval_t arr) {
-  jsoff_t off = (jsoff_t) vdata(js_as_obj(arr));
+static inline ant_offset_t get_dense_buf(ant_t *js, ant_value_t arr) {
+  ant_offset_t off = (ant_offset_t) vdata(js_as_obj(arr));
   if (__builtin_expect(off >= js->brk, 0)) return 0;
-  jsoff_t next = loadoff(js, off) & ~(3U | FLAGMASK);
+  ant_offset_t next = loadoff(js, off) & ~(3U | FLAGMASK);
   if (__builtin_expect(next == 0 || next >= js->brk, 0)) return 0;
-  jsoff_t header = loadoff(js, next);
+  ant_offset_t header = loadoff(js, next);
   if ((header & SLOTMASK) &&
-      loadoff(js, next + sizeof(jsoff_t)) == (jsoff_t)SLOT_DENSE_BUF) {
-    jsval_t slot = loadval(js, next + sizeof(jsoff_t) * 2);
-    return (jsoff_t) tod(slot);
+      loadoff(js, next + sizeof(ant_offset_t)) == (ant_offset_t)SLOT_DENSE_BUF) {
+    ant_value_t slot = loadval(js, next + sizeof(ant_offset_t) * 2);
+    return (ant_offset_t) tod(slot);
   }
-  jsval_t slot = get_slot(js, arr, SLOT_DENSE_BUF);
+  ant_value_t slot = get_slot(js, arr, SLOT_DENSE_BUF);
   if (vtype(slot) == T_UNDEF) return 0;
-  return (jsoff_t) tod(slot);
+  return (ant_offset_t) tod(slot);
 }
 
-static inline jsoff_t get_dense_buf_off(ant_t *js, jsoff_t obj_off) {
+static inline ant_offset_t get_dense_buf_off(ant_t *js, ant_offset_t obj_off) {
   return get_dense_buf(js, mkval(T_ARR, (uint64_t)obj_off));
 }
 
-static inline jsoff_t dense_capacity(ant_t *js, jsoff_t doff) {
+static inline ant_offset_t dense_capacity(ant_t *js, ant_offset_t doff) {
   return loadoff(js, doff);
 }
 
-static inline jsoff_t dense_length(ant_t *js, jsoff_t doff) {
-  return loadoff(js, doff + sizeof(jsoff_t));
+static inline ant_offset_t dense_length(ant_t *js, ant_offset_t doff) {
+  return loadoff(js, doff + sizeof(ant_offset_t));
 }
 
-static inline void dense_set_length(ant_t *js, jsoff_t doff, jsoff_t len) {
-  saveoff(js, doff + sizeof(jsoff_t), len);
+static inline void dense_set_length(ant_t *js, ant_offset_t doff, ant_offset_t len) {
+  saveoff(js, doff + sizeof(ant_offset_t), len);
 }
 
-static inline jsval_t dense_get(ant_t *js, jsoff_t doff, jsoff_t idx) {
-  return loadval(js, doff + sizeof(jsoff_t) * 2 + sizeof(jsval_t) * idx);
+static inline ant_value_t dense_get(ant_t *js, ant_offset_t doff, ant_offset_t idx) {
+  return loadval(js, doff + sizeof(ant_offset_t) * 2 + sizeof(ant_value_t) * idx);
 }
 
-static inline void dense_set(ant_t *js, jsoff_t doff, jsoff_t idx, jsval_t val) {
-  saveval(js, doff + sizeof(jsoff_t) * 2 + sizeof(jsval_t) * idx, val);
+static inline void dense_set(ant_t *js, ant_offset_t doff, ant_offset_t idx, ant_value_t val) {
+  saveval(js, doff + sizeof(ant_offset_t) * 2 + sizeof(ant_value_t) * idx, val);
 }
 
-static jsoff_t dense_grow(ant_t *js, jsval_t arr, jsoff_t needed) {
-  jsoff_t doff = get_dense_buf(js, arr);
-  jsoff_t old_cap = doff ? dense_capacity(js, doff) : 0;
-  jsoff_t old_len = doff ? dense_length(js, doff) : 0;
-  jsoff_t new_cap = old_cap ? old_cap : MAX_DENSE_INITIAL_CAP;
+static ant_offset_t dense_grow(ant_t *js, ant_value_t arr, ant_offset_t needed) {
+  ant_offset_t doff = get_dense_buf(js, arr);
+  ant_offset_t old_cap = doff ? dense_capacity(js, doff) : 0;
+  ant_offset_t old_len = doff ? dense_length(js, doff) : 0;
+  ant_offset_t new_cap = old_cap ? old_cap : MAX_DENSE_INITIAL_CAP;
   
   while (new_cap < needed) new_cap *= 2;
-  jsoff_t new_doff = dense_alloc(js, new_cap);
+  ant_offset_t new_doff = dense_alloc(js, new_cap);
   
   if (new_doff == 0) return 0;
   if (doff && old_len > 0) memcpy(
-    &js->mem[new_doff + sizeof(jsoff_t) * 2],
-    &js->mem[doff + sizeof(jsoff_t) * 2],
-    sizeof(jsval_t) * old_len
+    &js->mem[new_doff + sizeof(ant_offset_t) * 2],
+    &js->mem[doff + sizeof(ant_offset_t) * 2],
+    sizeof(ant_value_t) * old_len
   );
   
   dense_set_length(js, new_doff, old_len);
@@ -1996,13 +1996,13 @@ static jsoff_t dense_grow(ant_t *js, jsval_t arr, jsoff_t needed) {
   return new_doff;
 }
 
-static inline jsval_t arr_get(ant_t *js, jsval_t arr, jsoff_t idx) {
-  jsoff_t doff = get_dense_buf(js, arr);
+static inline ant_value_t arr_get(ant_t *js, ant_value_t arr, ant_offset_t idx) {
+  ant_offset_t doff = get_dense_buf(js, arr);
   
   if (doff) {
-    jsoff_t len = dense_length(js, doff);
+    ant_offset_t len = dense_length(js, doff);
     if (idx < len) {
-      jsval_t v = dense_get(js, doff, idx);
+      ant_value_t v = dense_get(js, doff, idx);
       if (!is_empty_slot(v)) return v;
       return js_mkundef();
     }
@@ -2010,33 +2010,33 @@ static inline jsval_t arr_get(ant_t *js, jsval_t arr, jsoff_t idx) {
   
   char idxstr[16];
   size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)idx);
-  jsoff_t prop = lkp(js, arr, idxstr, idxlen);
+  ant_offset_t prop = lkp(js, arr, idxstr, idxlen);
   
   return prop ? resolveprop(js, mkval(T_PROP, prop)) : js_mkundef();
 }
 
-static inline void arr_set(ant_t *js, jsval_t arr, jsoff_t idx, jsval_t val) {
-  jsoff_t doff = get_dense_buf(js, arr);
+static inline void arr_set(ant_t *js, ant_value_t arr, ant_offset_t idx, ant_value_t val) {
+  ant_offset_t doff = get_dense_buf(js, arr);
   
   if (doff) {
-    jsoff_t len = dense_length(js, doff);
+    ant_offset_t len = dense_length(js, doff);
     
     if (idx < len) {
       dense_set(js, doff, idx, val);
       return;
     }
     
-    jsoff_t density_limit = len > 0 ? len * 4 : 64;
+    ant_offset_t density_limit = len > 0 ? len * 4 : 64;
     if (idx >= density_limit) goto sparse;
     
-    jsoff_t cap = dense_capacity(js, doff);
+    ant_offset_t cap = dense_capacity(js, doff);
     if (idx >= cap) {
       doff = dense_grow(js, arr, idx + 1);
       if (doff == 0) goto sparse;
     }
     
-    for (jsoff_t i = len; i < idx; i++) {
-      jsval_t v = dense_get(js, doff, i);
+    for (ant_offset_t i = len; i < idx; i++) {
+      ant_value_t v = dense_get(js, doff, i);
       if (!is_empty_slot(v) && vtype(v) == T_UNDEF) dense_set(js, doff, i, T_EMPTY);
     }
     dense_set(js, doff, idx, val);
@@ -2047,16 +2047,16 @@ static inline void arr_set(ant_t *js, jsval_t arr, jsoff_t idx, jsval_t val) {
   sparse:;
   char idxstr[24];
   size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (uint64_t)idx);
-  jsval_t key = js_mkstr(js, idxstr, idxlen);
+  ant_value_t key = js_mkstr(js, idxstr, idxlen);
   
   js_setprop(js, arr, key, val);
 }
 
-static inline bool arr_has(ant_t *js, jsval_t arr, jsoff_t idx) {
-  jsoff_t doff = get_dense_buf(js, arr);
+static inline bool arr_has(ant_t *js, ant_value_t arr, ant_offset_t idx) {
+  ant_offset_t doff = get_dense_buf(js, arr);
   
   if (doff) {
-    jsoff_t len = dense_length(js, doff);
+    ant_offset_t len = dense_length(js, doff);
     if (idx < len) return !is_empty_slot(dense_get(js, doff, idx));
   }
   
@@ -2065,11 +2065,11 @@ static inline bool arr_has(ant_t *js, jsval_t arr, jsoff_t idx) {
   return lkp(js, arr, idxstr, idxlen) != 0;
 }
 
-static inline void arr_del(ant_t *js, jsval_t arr, jsoff_t idx) {
-  jsoff_t doff = get_dense_buf(js, arr);
+static inline void arr_del(ant_t *js, ant_value_t arr, ant_offset_t idx) {
+  ant_offset_t doff = get_dense_buf(js, arr);
   
   if (doff) {
-    jsoff_t len = dense_length(js, doff);
+    ant_offset_t len = dense_length(js, doff);
     if (idx < len) dense_set(js, doff, idx, T_EMPTY);
     return;
   }
@@ -2079,9 +2079,9 @@ static inline void arr_del(ant_t *js, jsval_t arr, jsoff_t idx) {
   js_del(js, arr, idxstr);
 }
 
-static jsval_t mkentity(ant_t *js, jsoff_t b, const void *buf, size_t len) {
-  jsoff_t ofs = js_alloc(js, len + sizeof(b));
-  if (ofs == (jsoff_t) ~0) return js_mkerr(js, "oom");
+static ant_value_t mkentity(ant_t *js, ant_offset_t b, const void *buf, size_t len) {
+  ant_offset_t ofs = js_alloc(js, len + sizeof(b));
+  if (ofs == (ant_offset_t) ~0) return js_mkerr(js, "oom");
   
   memcpy(&js->mem[ofs], &b, sizeof(b));
   if (buf != NULL) {
@@ -2093,17 +2093,17 @@ static jsval_t mkentity(ant_t *js, jsoff_t b, const void *buf, size_t len) {
   return mkval(b & 3, ofs);
 }
 
-jsval_t js_mkstr(ant_t *js, const void *ptr, size_t len) {
-  jsoff_t n = (jsoff_t) (len + 1);
-  return mkentity(js, (jsoff_t) ((n << 3) | T_STR), ptr, n);
+ant_value_t js_mkstr(ant_t *js, const void *ptr, size_t len) {
+  ant_offset_t n = (ant_offset_t) (len + 1);
+  return mkentity(js, (ant_offset_t) ((n << 3) | T_STR), ptr, n);
 }
 
-static jsval_t js_mkrope(ant_t *js, jsval_t left, jsval_t right, jsoff_t total_len, uint8_t depth) {
-  jsoff_t ofs = js_alloc(js, sizeof(rope_node_t));
-  if (ofs == (jsoff_t) ~0) return js_mkerr(js, "oom");
+static ant_value_t js_mkrope(ant_t *js, ant_value_t left, ant_value_t right, ant_offset_t total_len, uint8_t depth) {
+  ant_offset_t ofs = js_alloc(js, sizeof(rope_node_t));
+  if (ofs == (ant_offset_t) ~0) return js_mkerr(js, "oom");
   
-  jsoff_t header = ((total_len + 1) << 3) | T_STR | ROPE_FLAG | ((jsoff_t)depth << ROPE_DEPTH_SHIFT);
-  jsval_t undef = js_mkundef();
+  ant_offset_t header = ((total_len + 1) << 3) | T_STR | ROPE_FLAG | ((ant_offset_t)depth << ROPE_DEPTH_SHIFT);
+  ant_value_t undef = js_mkundef();
   
   memcpy(&js->mem[ofs + offsetof(rope_node_t, header)], &header, sizeof(header));
   memcpy(&js->mem[ofs + offsetof(rope_node_t, left)], &left, sizeof(left));
@@ -2113,7 +2113,7 @@ static jsval_t js_mkrope(ant_t *js, jsval_t left, jsval_t right, jsoff_t total_l
   return mkval(T_STR, ofs);
 }
 
-static bool bigint_parse_abs_u64(ant_t *js, jsval_t value, uint64_t *out) {
+static bool bigint_parse_abs_u64(ant_t *js, ant_value_t value, uint64_t *out) {
   size_t len = 0; const char *digits = bigint_digits(js, value, &len);
   uint64_t acc = 0;
 
@@ -2130,21 +2130,21 @@ static bool bigint_parse_abs_u64(ant_t *js, jsval_t value, uint64_t *out) {
   return true;
 }
 
-static bool bigint_IsNegative(ant_t *js, jsval_t v) {
-  jsoff_t ofs = (jsoff_t) vdata(v);
-  return js->mem[ofs + sizeof(jsoff_t)] == 1;
+static bool bigint_IsNegative(ant_t *js, ant_value_t v) {
+  ant_offset_t ofs = (ant_offset_t) vdata(v);
+  return js->mem[ofs + sizeof(ant_offset_t)] == 1;
 }
 
-static bool bigint_parse_u64(ant_t *js, jsval_t value, uint64_t *out) {
+static bool bigint_parse_u64(ant_t *js, ant_value_t value, uint64_t *out) {
   if (bigint_IsNegative(js, value)) return false;
   return bigint_parse_abs_u64(js, value, out);
 }
 
-jsval_t js_mkbigint(ant_t *js, const char *digits, size_t len, bool negative) {
+ant_value_t js_mkbigint(ant_t *js, const char *digits, size_t len, bool negative) {
   size_t total = len + 2;
-  jsoff_t ofs = js_alloc(js, total + sizeof(jsoff_t));
-  if (ofs == (jsoff_t) ~0) return js_mkerr(js, "oom");
-  jsoff_t header = (jsoff_t) (total << 4);
+  ant_offset_t ofs = js_alloc(js, total + sizeof(ant_offset_t));
+  if (ofs == (ant_offset_t) ~0) return js_mkerr(js, "oom");
+  ant_offset_t header = (ant_offset_t) (total << 4);
   memcpy(&js->mem[ofs], &header, sizeof(header));
   js->mem[ofs + sizeof(header)] = negative ? 1 : 0;
   if (digits) memcpy(&js->mem[ofs + sizeof(header) + 1], digits, len);
@@ -2152,12 +2152,12 @@ jsval_t js_mkbigint(ant_t *js, const char *digits, size_t len, bool negative) {
   return mkval(T_BIGINT, ofs);
 }
 
-static const char *bigint_digits(ant_t *js, jsval_t v, size_t *len) {
-  jsoff_t ofs = (jsoff_t) vdata(v);
-  jsoff_t header = loadoff(js, ofs);
+static const char *bigint_digits(ant_t *js, ant_value_t v, size_t *len) {
+  ant_offset_t ofs = (ant_offset_t) vdata(v);
+  ant_offset_t header = loadoff(js, ofs);
   size_t total = (header >> 4) - 2;
   if (len) *len = total;
-  return (const char *)&js->mem[ofs + sizeof(jsoff_t) + 1];
+  return (const char *)&js->mem[ofs + sizeof(ant_offset_t) + 1];
 }
 
 static int bigint_cmp_abs(const char *a, size_t alen, const char *b, size_t blen) {
@@ -2269,7 +2269,7 @@ static char *bigint_div_abs(const char *a, size_t alen, const char *b, size_t bl
   return result;
 }
 
-jsval_t bigint_add(ant_t *js, jsval_t a, jsval_t b) {
+ant_value_t bigint_add(ant_t *js, ant_value_t a, ant_value_t b) {
   bool aneg = bigint_IsNegative(js, a), bneg = bigint_IsNegative(js, b);
   size_t alen, blen;
   const char *ad = bigint_digits(js, a, &alen), *bd = bigint_digits(js, b, &blen);
@@ -2283,12 +2283,12 @@ jsval_t bigint_add(ant_t *js, jsval_t a, jsval_t b) {
   }
   if (!result) return js_mkerr(js, "oom");
   if (rlen == 1 && result[0] == '0') rneg = false;
-  jsval_t r = js_mkbigint(js, result, rlen, rneg);
+  ant_value_t r = js_mkbigint(js, result, rlen, rneg);
   free(result);
   return r;
 }
 
-jsval_t bigint_sub(ant_t *js, jsval_t a, jsval_t b) {
+ant_value_t bigint_sub(ant_t *js, ant_value_t a, ant_value_t b) {
   bool aneg = bigint_IsNegative(js, a), bneg = bigint_IsNegative(js, b);
   size_t alen, blen;
   const char *ad = bigint_digits(js, a, &alen), *bd = bigint_digits(js, b, &blen);
@@ -2302,12 +2302,12 @@ jsval_t bigint_sub(ant_t *js, jsval_t a, jsval_t b) {
   }
   if (!result) return js_mkerr(js, "oom");
   if (rlen == 1 && result[0] == '0') rneg = false;
-  jsval_t r = js_mkbigint(js, result, rlen, rneg);
+  ant_value_t r = js_mkbigint(js, result, rlen, rneg);
   free(result);
   return r;
 }
 
-jsval_t bigint_mul(ant_t *js, jsval_t a, jsval_t b) {
+ant_value_t bigint_mul(ant_t *js, ant_value_t a, ant_value_t b) {
   bool aneg = bigint_IsNegative(js, a), bneg = bigint_IsNegative(js, b);
   size_t alen, blen;
   const char *ad = bigint_digits(js, a, &alen), *bd = bigint_digits(js, b, &blen);
@@ -2315,12 +2315,12 @@ jsval_t bigint_mul(ant_t *js, jsval_t a, jsval_t b) {
   char *result = bigint_mul_abs(ad, alen, bd, blen, &rlen);
   if (!result) return js_mkerr(js, "oom");
   bool rneg = (aneg != bneg) && !(rlen == 1 && result[0] == '0');
-  jsval_t r = js_mkbigint(js, result, rlen, rneg);
+  ant_value_t r = js_mkbigint(js, result, rlen, rneg);
   free(result);
   return r;
 }
 
-jsval_t bigint_div(ant_t *js, jsval_t a, jsval_t b) {
+ant_value_t bigint_div(ant_t *js, ant_value_t a, ant_value_t b) {
   bool aneg = bigint_IsNegative(js, a), bneg = bigint_IsNegative(js, b);
   size_t alen, blen;
   const char *ad = bigint_digits(js, a, &alen), *bd = bigint_digits(js, b, &blen);
@@ -2329,12 +2329,12 @@ jsval_t bigint_div(ant_t *js, jsval_t a, jsval_t b) {
   char *result = bigint_div_abs(ad, alen, bd, blen, &rlen, NULL, NULL);
   if (!result) return js_mkerr(js, "oom");
   bool rneg = (aneg != bneg) && !(rlen == 1 && result[0] == '0');
-  jsval_t r = js_mkbigint(js, result, rlen, rneg);
+  ant_value_t r = js_mkbigint(js, result, rlen, rneg);
   free(result);
   return r;
 }
 
-jsval_t bigint_mod(ant_t *js, jsval_t a, jsval_t b) {
+ant_value_t bigint_mod(ant_t *js, ant_value_t a, ant_value_t b) {
   bool aneg = bigint_IsNegative(js, a);
   size_t alen, blen;
   const char *ad = bigint_digits(js, a, &alen), *bd = bigint_digits(js, b, &blen);
@@ -2344,12 +2344,12 @@ jsval_t bigint_mod(ant_t *js, jsval_t a, jsval_t b) {
   if (!result) return js_mkerr(js, "oom");
   free(result);
   bool rneg = aneg && !(remlen == 1 && rem[0] == '0');
-  jsval_t r = js_mkbigint(js, rem, remlen, rneg);
+  ant_value_t r = js_mkbigint(js, rem, remlen, rneg);
   free(rem);
   return r;
 }
 
-jsval_t bigint_neg(ant_t *js, jsval_t a) {
+ant_value_t bigint_neg(ant_t *js, ant_value_t a) {
   size_t len;
   const char *digits = bigint_digits(js, a, &len);
   bool neg = bigint_IsNegative(js, a);
@@ -2357,15 +2357,15 @@ jsval_t bigint_neg(ant_t *js, jsval_t a) {
   return js_mkbigint(js, digits, len, !neg);
 }
 
-jsval_t bigint_exp(ant_t *js, jsval_t base, jsval_t exp) {
+ant_value_t bigint_exp(ant_t *js, ant_value_t base, ant_value_t exp) {
   if (bigint_IsNegative(js, exp)) return js_mkerr(js, "Exponent must be positive");
   size_t explen;
   const char *expd = bigint_digits(js, exp, &explen);
   if (explen == 1 && expd[0] == '0') return js_mkbigint(js, "1", 1, false);
-  jsval_t result = js_mkbigint(js, "1", 1, false);
-  jsval_t b = base;
-  jsval_t e = exp;
-  jsval_t two = js_mkbigint(js, "2", 1, false);
+  ant_value_t result = js_mkbigint(js, "1", 1, false);
+  ant_value_t b = base;
+  ant_value_t e = exp;
+  ant_value_t two = js_mkbigint(js, "2", 1, false);
   while (true) {
     size_t elen;
     const char *ed = bigint_digits(js, e, &elen);
@@ -2383,15 +2383,15 @@ jsval_t bigint_exp(ant_t *js, jsval_t base, jsval_t exp) {
   return result;
 }
 
-static inline jsval_t bigint_pow2(ant_t *js, uint64_t bits) {
-  jsval_t two = js_mkbigint(js, "2", 1, false);
+static inline ant_value_t bigint_pow2(ant_t *js, uint64_t bits) {
+  ant_value_t two = js_mkbigint(js, "2", 1, false);
   if (is_err(two)) return two;
-  jsval_t exp = bigint_from_u64(js, bits);
+  ant_value_t exp = bigint_from_u64(js, bits);
   if (is_err(exp)) return exp;
   return bigint_exp(js, two, exp);
 }
 
-jsval_t bigint_shift_left(ant_t *js, jsval_t value, uint64_t shift) {
+ant_value_t bigint_shift_left(ant_t *js, ant_value_t value, uint64_t shift) {
   if (shift == 0) return value;
   if (shift > 18446744073709551615ULL) return js_mkerr(js, "Shift count too large");
 
@@ -2402,12 +2402,12 @@ jsval_t bigint_shift_left(ant_t *js, jsval_t value, uint64_t shift) {
     if (u64 <= (UINT64_MAX >> shift)) return bigint_from_u64(js, u64 << shift);
   }
 
-  jsval_t pow = bigint_pow2(js, shift);
+  ant_value_t pow = bigint_pow2(js, shift);
   if (is_err(pow)) return pow;
   return bigint_mul(js, value, pow);
 }
 
-jsval_t bigint_shift_right(ant_t *js, jsval_t value, uint64_t shift) {
+ant_value_t bigint_shift_right(ant_t *js, ant_value_t value, uint64_t shift) {
   if (shift == 0) return value;
   if (shift > 18446744073709551615ULL) return js_mkerr(js, "Shift count too large");
 
@@ -2427,23 +2427,23 @@ jsval_t bigint_shift_right(ant_t *js, jsval_t value, uint64_t shift) {
     uint64_t shifted = u64 >> shift;
     if (bigint_IsNegative(js, value)) {
       if ((u64 & ((1ULL << shift) - 1)) != 0) shifted += 1;
-      jsval_t pos = bigint_from_u64(js, shifted);
+      ant_value_t pos = bigint_from_u64(js, shifted);
       if (is_err(pos)) return pos;
       return bigint_neg(js, pos);
     }
     return bigint_from_u64(js, shifted);
   }
 
-  jsval_t pow = bigint_pow2(js, shift);
+  ant_value_t pow = bigint_pow2(js, shift);
   if (is_err(pow)) return pow;
   return bigint_div(js, value, pow);
 }
 
-jsval_t bigint_shift_right_logical(ant_t *js, jsval_t value, uint64_t shift) {
+ant_value_t bigint_shift_right_logical(ant_t *js, ant_value_t value, uint64_t shift) {
   return js_mkerr_typed(js, JS_ERR_TYPE, "BigInts have no unsigned right shift, use >> instead");
 }
 
-int bigint_compare(ant_t *js, jsval_t a, jsval_t b) {
+int bigint_compare(ant_t *js, ant_value_t a, ant_value_t b) {
   bool aneg = bigint_IsNegative(js, a), bneg = bigint_IsNegative(js, b);
   size_t alen, blen;
   const char *ad = bigint_digits(js, a, &alen), *bd = bigint_digits(js, b, &blen);
@@ -2453,13 +2453,13 @@ int bigint_compare(ant_t *js, jsval_t a, jsval_t b) {
   return aneg ? -cmp : cmp;
 }
 
-static bool bigint_is_zero(ant_t *js, jsval_t v) {
+static bool bigint_is_zero(ant_t *js, ant_value_t v) {
   size_t len;
   const char *digits = bigint_digits(js, v, &len);
   return len == 1 && digits[0] == '0';
 }
 
-static size_t strbigint(ant_t *js, jsval_t value, char *buf, size_t len) {
+static size_t strbigint(ant_t *js, ant_value_t value, char *buf, size_t len) {
   bool neg = bigint_IsNegative(js, value);
   size_t dlen;
   const char *digits = bigint_digits(js, value, &dlen);
@@ -2469,11 +2469,11 @@ static size_t strbigint(ant_t *js, jsval_t value, char *buf, size_t len) {
   return n;
 }
 
-static jsval_t builtin_BigInt(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_BigInt(ant_t *js, ant_value_t *args, int nargs) {
   if (vtype(js->new_target) != T_UNDEF) return js_mkerr_typed(js, JS_ERR_TYPE, "BigInt is not a constructor");
   if (nargs < 1) return js_mkbigint(js, "0", 1, false);
   
-  jsval_t arg = args[0];
+  ant_value_t arg = args[0];
   if (vtype(arg) == T_BIGINT) return arg;
   if (vtype(arg) == T_NUM) {
     double d = tod(arg);
@@ -2486,7 +2486,7 @@ static jsval_t builtin_BigInt(ant_t *js, jsval_t *args, int nargs) {
     return js_mkbigint(js, buf, strlen(buf), neg);
   }
   if (vtype(arg) == T_STR) {
-    jsoff_t slen, off = vstr(js, arg, &slen);
+    ant_offset_t slen, off = vstr(js, arg, &slen);
     const char *str = (const char *)&js->mem[off];
     bool neg = false;
     size_t i = 0;
@@ -2505,14 +2505,14 @@ static jsval_t builtin_BigInt(ant_t *js, jsval_t *args, int nargs) {
   return js_mkerr(js, "Cannot convert to BigInt");
 }
 
-static jsval_t bigint_to_u64(ant_t *js, jsval_t value, uint64_t *out) {
+static ant_value_t bigint_to_u64(ant_t *js, ant_value_t value, uint64_t *out) {
   if (!bigint_parse_u64(js, value, out)) {
     return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid bits");
   }
   return js_mkundef();
 }
 
-jsval_t bigint_asint_bits(ant_t *js, jsval_t arg, uint64_t *bits_out) {
+ant_value_t bigint_asint_bits(ant_t *js, ant_value_t arg, uint64_t *bits_out) {
   if (vtype(arg) == T_BIGINT) {
     return bigint_to_u64(js, arg, bits_out);
   }
@@ -2527,60 +2527,60 @@ jsval_t bigint_asint_bits(ant_t *js, jsval_t arg, uint64_t *bits_out) {
   return js_mkundef();
 }
 
-static jsval_t builtin_BigInt_asIntN(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_BigInt_asIntN(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "BigInt.asIntN requires 2 arguments");
   uint64_t bits = 0;
-  jsval_t err = bigint_asint_bits(js, args[0], &bits);
+  ant_value_t err = bigint_asint_bits(js, args[0], &bits);
   if (is_err(err)) return err;
   if (vtype(args[1]) != T_BIGINT) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert to BigInt");
   }
   if (bits == 0) return js_mkbigint(js, "0", 1, false);
 
-  jsval_t mod = bigint_pow2(js, bits);
+  ant_value_t mod = bigint_pow2(js, bits);
   if (is_err(mod)) return mod;
-  jsval_t res = bigint_mod(js, args[1], mod);
+  ant_value_t res = bigint_mod(js, args[1], mod);
   if (is_err(res)) return res;
   if (bigint_IsNegative(js, res)) {
-    jsval_t adj = bigint_add(js, res, mod);
+    ant_value_t adj = bigint_add(js, res, mod);
     if (is_err(adj)) return adj;
     res = adj;
   }
 
-  jsval_t threshold = bigint_pow2(js, bits - 1);
+  ant_value_t threshold = bigint_pow2(js, bits - 1);
   if (is_err(threshold)) return threshold;
   if (bigint_compare(js, res, threshold) >= 0) {
-    jsval_t adj = bigint_sub(js, res, mod);
+    ant_value_t adj = bigint_sub(js, res, mod);
     if (is_err(adj)) return adj;
     res = adj;
   }
   return res;
 }
 
-static jsval_t builtin_BigInt_asUintN(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_BigInt_asUintN(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "BigInt.asUintN requires 2 arguments");
   uint64_t bits = 0;
-  jsval_t err = bigint_asint_bits(js, args[0], &bits);
+  ant_value_t err = bigint_asint_bits(js, args[0], &bits);
   if (is_err(err)) return err;
   if (vtype(args[1]) != T_BIGINT) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert to BigInt");
   }
   if (bits == 0) return js_mkbigint(js, "0", 1, false);
 
-  jsval_t mod = bigint_pow2(js, bits);
+  ant_value_t mod = bigint_pow2(js, bits);
   if (is_err(mod)) return mod;
-  jsval_t res = bigint_mod(js, args[1], mod);
+  ant_value_t res = bigint_mod(js, args[1], mod);
   if (is_err(res)) return res;
   if (bigint_IsNegative(js, res)) {
-    jsval_t adj = bigint_add(js, res, mod);
+    ant_value_t adj = bigint_add(js, res, mod);
     if (is_err(adj)) return adj;
     res = adj;
   }
   return res;
 }
 
-static jsval_t builtin_bigint_toString(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t val = js->this_val;
+static ant_value_t builtin_bigint_toString(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t val = js->this_val;
   if (vtype(val) != T_BIGINT) return js_mkerr(js, "toString called on non-BigInt");
   
   int radix = 10;
@@ -2598,7 +2598,7 @@ static jsval_t builtin_bigint_toString(ant_t *js, jsval_t *args, int nargs) {
     if (!buf) return js_mkerr(js, "oom");
     size_t n = 0; if (neg) buf[n++] = '-';
     memcpy(buf + n, digits, dlen); n += dlen;
-    jsval_t ret = js_mkstr(js, buf, n); free(buf);
+    ant_value_t ret = js_mkstr(js, buf, n); free(buf);
     return ret;
   }
   
@@ -2666,59 +2666,59 @@ static jsval_t builtin_bigint_toString(ant_t *js, jsval_t *args, int nargs) {
   if (rpos == result_cap - 1) result[--rpos] = '0';  
   if (neg) result[--rpos] = '-';
   
-  jsval_t ret = js_mkstr(js, result + rpos, result_cap - 1 - rpos);
+  ant_value_t ret = js_mkstr(js, result + rpos, result_cap - 1 - rpos);
   free(result); return ret;
 }
 
-jsval_t mkobj(ant_t *js, jsoff_t parent) {
-  jsoff_t buf[2] = { parent, 0 };
+ant_value_t mkobj(ant_t *js, ant_offset_t parent) {
+  ant_offset_t buf[2] = { parent, 0 };
   return mkentity(js, 0 | T_OBJ, buf, sizeof(buf));
 }
 
-jsval_t mkarr(ant_t *js) {
-  jsval_t arr = mkobj(js, 0);
-  jsoff_t off = (jsoff_t) vdata(arr);
-  jsoff_t header = loadoff(js, off);
+ant_value_t mkarr(ant_t *js) {
+  ant_value_t arr = mkobj(js, 0);
+  ant_offset_t off = (ant_offset_t) vdata(arr);
+  ant_offset_t header = loadoff(js, off);
   
   saveoff(js, off, header | ARRMASK);
-  jsval_t array_proto = get_ctor_proto(js, "Array", 5);
+  ant_value_t array_proto = get_ctor_proto(js, "Array", 5);
   if (vtype(array_proto) == T_OBJ) set_proto(js, arr, array_proto);
   
-  jsval_t arr_val = mkval(T_ARR, vdata(arr));
-  jsoff_t doff = dense_alloc(js, MAX_DENSE_INITIAL_CAP);
+  ant_value_t arr_val = mkval(T_ARR, vdata(arr));
+  ant_offset_t doff = dense_alloc(js, MAX_DENSE_INITIAL_CAP);
   if (doff) set_slot(js, arr_val, SLOT_DENSE_BUF, tov((double)doff));
   
   return arr_val;
 }
 
-jsval_t js_mkarr(ant_t *js) { 
+ant_value_t js_mkarr(ant_t *js) { 
   return mkarr(js); 
 }
 
-jsval_t js_newobj(ant_t *js) {
-  jsval_t obj = mkobj(js, 0);
-  jsval_t proto = get_ctor_proto(js, "Object", 6);
+ant_value_t js_newobj(ant_t *js) {
+  ant_value_t obj = mkobj(js, 0);
+  ant_value_t proto = get_ctor_proto(js, "Object", 6);
   if (vtype(proto) == T_OBJ) set_proto(js, obj, proto);
   return obj;
 }
 
-jsoff_t js_arr_len(ant_t *js, jsval_t arr) {
+ant_offset_t js_arr_len(ant_t *js, ant_value_t arr) {
   if (vtype(arr) != T_ARR) return 0;
   return get_array_length(js, arr);
 }
 
-jsval_t js_arr_get(ant_t *js, jsval_t arr, jsoff_t idx) {
+ant_value_t js_arr_get(ant_t *js, ant_value_t arr, ant_offset_t idx) {
   if (vtype(arr) != T_ARR) return js_mkundef();
   return arr_get(js, arr, idx);
 }
 
-static inline bool is_const_prop(ant_t *js, jsoff_t propoff) {
-  jsoff_t v = loadoff(js, propoff);
+static inline bool is_const_prop(ant_t *js, ant_offset_t propoff) {
+  ant_offset_t v = loadoff(js, propoff);
   return (v & CONSTMASK) != 0;
 }
 
-static inline bool is_nonconfig_prop(ant_t *js, jsoff_t propoff) {
-  jsoff_t v = loadoff(js, propoff);
+static inline bool is_nonconfig_prop(ant_t *js, ant_offset_t propoff) {
+  ant_offset_t v = loadoff(js, propoff);
   return (v & NONCONFIGMASK) != 0;
 }
 
@@ -2747,11 +2747,11 @@ static void intern_init(void) {
   INTERN_IDX[9] = intern_string("9", 1);
 }
 
-static void invalidate_prop_cache(ant_t *js, jsoff_t obj_off, jsoff_t prop_off) {
-  jsoff_t koff = loadoff(js, prop_off + sizeof(jsoff_t));
-  jsoff_t klen = (loadoff(js, koff) >> 3) - 1;
+static void invalidate_prop_cache(ant_t *js, ant_offset_t obj_off, ant_offset_t prop_off) {
+  ant_offset_t koff = loadoff(js, prop_off + sizeof(ant_offset_t));
+  ant_offset_t klen = (loadoff(js, koff) >> 3) - 1;
   
-  const char *key = (char *)&js->mem[koff + sizeof(jsoff_t)];
+  const char *key = (char *)&js->mem[koff + sizeof(ant_offset_t)];
   const char *interned = intern_string(key, klen);
   if (!interned) return;
   
@@ -2760,158 +2760,158 @@ static void invalidate_prop_cache(ant_t *js, jsoff_t obj_off, jsoff_t prop_off) 
   if (ce->obj_off == obj_off && ce->intern_ptr == interned) ce->generation = 0;
 }
 
-jsval_t mkprop(ant_t *js, jsval_t obj, jsval_t k, jsval_t v, jsoff_t flags) {
+ant_value_t mkprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, ant_offset_t flags) {
   obj = js_as_obj(obj);
-  jsoff_t koff_entity;
+  ant_offset_t koff_entity;
   
   if (vtype(k) == T_SYMBOL) {
-    koff_entity = (jsoff_t)vdata(k);
+    koff_entity = (ant_offset_t)vdata(k);
   } else {
-    jsoff_t klen; jsoff_t koff = vstr(js, k, &klen);
-    koff_entity = koff - sizeof(jsoff_t);
+    ant_offset_t klen; ant_offset_t koff = vstr(js, k, &klen);
+    koff_entity = koff - sizeof(ant_offset_t);
     const char *p = (char *) &js->mem[koff];
     (void)intern_string(p, klen);
   }
   
-  jsoff_t head = (jsoff_t) vdata(obj);
+  ant_offset_t head = (ant_offset_t) vdata(obj);
   char buf[sizeof(koff_entity) + sizeof(v)];
   
-  jsoff_t header = loadoff(js, head);
-  jsoff_t first_prop = header & ~(3U | FLAGMASK);
-  jsoff_t tail = loadoff(js, head + sizeof(jsoff_t) + sizeof(jsoff_t));
+  ant_offset_t header = loadoff(js, head);
+  ant_offset_t first_prop = header & ~(3U | FLAGMASK);
+  ant_offset_t tail = loadoff(js, head + sizeof(ant_offset_t) + sizeof(ant_offset_t));
   
   memcpy(buf, &koff_entity, sizeof(koff_entity));
   memcpy(buf + sizeof(koff_entity), &v, sizeof(v));
   
-  jsoff_t new_prop_off = js->brk;
-  jsval_t prop = mkentity(js, 0 | T_PROP | flags, buf, sizeof(buf));
+  ant_offset_t new_prop_off = js->brk;
+  ant_value_t prop = mkentity(js, 0 | T_PROP | flags, buf, sizeof(buf));
   if (is_err(prop)) return prop;
   
   if (first_prop == 0) {
-    jsoff_t new_header = new_prop_off | (header & (3U | FLAGMASK));
+    ant_offset_t new_header = new_prop_off | (header & (3U | FLAGMASK));
     saveoff(js, head, new_header);
   } else {
-    jsoff_t tail_header = loadoff(js, tail);
-    jsoff_t new_tail_header = new_prop_off | (tail_header & (3U | FLAGMASK));
+    ant_offset_t tail_header = loadoff(js, tail);
+    ant_offset_t new_tail_header = new_prop_off | (tail_header & (3U | FLAGMASK));
     saveoff(js, tail, new_tail_header);
   }
-  saveoff(js, head + sizeof(jsoff_t) + sizeof(jsoff_t), new_prop_off);
+  saveoff(js, head + sizeof(ant_offset_t) + sizeof(ant_offset_t), new_prop_off);
   
   return prop;
 }
 
-static inline jsval_t mkprop_fast(ant_t *js, jsval_t obj, jsval_t k, jsval_t v, jsoff_t flags) {
+static inline ant_value_t mkprop_fast(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, ant_offset_t flags) {
   obj = js_as_obj(obj);
-  jsoff_t koff_entity;
+  ant_offset_t koff_entity;
   if (vtype(k) == T_SYMBOL) {
-    koff_entity = (jsoff_t)vdata(k);
+    koff_entity = (ant_offset_t)vdata(k);
   } else {
-    jsoff_t klen; jsoff_t koff = vstr(js, k, &klen);
-    koff_entity = koff - sizeof(jsoff_t);
+    ant_offset_t klen; ant_offset_t koff = vstr(js, k, &klen);
+    koff_entity = koff - sizeof(ant_offset_t);
   }
-  jsoff_t head = (jsoff_t) vdata(obj);
+  ant_offset_t head = (ant_offset_t) vdata(obj);
   char buf[sizeof(koff_entity) + sizeof(v)];
   
-  jsoff_t header = loadoff(js, head);
-  jsoff_t first_prop = header & ~(3U | FLAGMASK);
-  jsoff_t tail = loadoff(js, head + sizeof(jsoff_t) + sizeof(jsoff_t));
+  ant_offset_t header = loadoff(js, head);
+  ant_offset_t first_prop = header & ~(3U | FLAGMASK);
+  ant_offset_t tail = loadoff(js, head + sizeof(ant_offset_t) + sizeof(ant_offset_t));
   
   memcpy(buf, &koff_entity, sizeof(koff_entity));
   memcpy(buf + sizeof(koff_entity), &v, sizeof(v));
   
-  jsoff_t new_prop_off = js->brk;
-  jsval_t prop = mkentity(js, 0 | T_PROP | flags, buf, sizeof(buf));
+  ant_offset_t new_prop_off = js->brk;
+  ant_value_t prop = mkentity(js, 0 | T_PROP | flags, buf, sizeof(buf));
   if (is_err(prop)) return prop;
   
   if (first_prop == 0) {
-    jsoff_t new_header = new_prop_off | (header & (3U | FLAGMASK));
+    ant_offset_t new_header = new_prop_off | (header & (3U | FLAGMASK));
     saveoff(js, head, new_header);
   } else {
-    jsoff_t tail_header = loadoff(js, tail);
-    jsoff_t new_tail_header = new_prop_off | (tail_header & (3U | FLAGMASK));
+    ant_offset_t tail_header = loadoff(js, tail);
+    ant_offset_t new_tail_header = new_prop_off | (tail_header & (3U | FLAGMASK));
     saveoff(js, tail, new_tail_header);
   }
-  saveoff(js, head + sizeof(jsoff_t) + sizeof(jsoff_t), new_prop_off);
+  saveoff(js, head + sizeof(ant_offset_t) + sizeof(ant_offset_t), new_prop_off);
   
   return prop;
 }
 
-jsval_t js_mkprop_fast(ant_t *js, jsval_t obj, const char *key, size_t len, jsval_t v) {
-  jsval_t k = js_mkstr(js, key, len);
+ant_value_t js_mkprop_fast(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v) {
+  ant_value_t k = js_mkstr(js, key, len);
   if (is_err(k)) return k;
   return mkprop_fast(js, obj, k, v, 0);
 }
 
-jsoff_t js_mkprop_fast_off(ant_t *js, jsval_t obj, const char *key, size_t len, jsval_t v) {
-  jsval_t k = js_mkstr(js, key, len);
+ant_offset_t js_mkprop_fast_off(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v) {
+  ant_value_t k = js_mkstr(js, key, len);
   if (is_err(k)) return 0;
-  jsoff_t prop_off = js->brk;
+  ant_offset_t prop_off = js->brk;
   mkprop_fast(js, obj, k, v, 0);
-  return prop_off + sizeof(jsoff_t) * 2;
+  return prop_off + sizeof(ant_offset_t) * 2;
 }
 
-void js_saveval(ant_t *js, jsoff_t off, jsval_t v) { saveval(js, off, v); }
+void js_saveval(ant_t *js, ant_offset_t off, ant_value_t v) { saveval(js, off, v); }
 
-static jsval_t mkslot(ant_t *js, jsval_t obj, internal_slot_t slot, jsval_t v) {
+static ant_value_t mkslot(ant_t *js, ant_value_t obj, internal_slot_t slot, ant_value_t v) {
   obj = js_as_obj(obj);
-  jsoff_t head = (jsoff_t) vdata(obj);
-  char buf[sizeof(jsoff_t) + sizeof(v)];
+  ant_offset_t head = (ant_offset_t) vdata(obj);
+  char buf[sizeof(ant_offset_t) + sizeof(v)];
   
-  jsoff_t header = loadoff(js, head);
-  jsoff_t first_prop = header & ~(3U | FLAGMASK);
+  ant_offset_t header = loadoff(js, head);
+  ant_offset_t first_prop = header & ~(3U | FLAGMASK);
   
-  jsoff_t slot_key = (jsoff_t)slot;
+  ant_offset_t slot_key = (ant_offset_t)slot;
   memcpy(buf, &slot_key, sizeof(slot_key));
   memcpy(buf + sizeof(slot_key), &v, sizeof(v));
   
-  jsoff_t new_prop_off = js->brk;
-  jsval_t prop = mkentity(js, first_prop | T_PROP | SLOTMASK, buf, sizeof(buf));
+  ant_offset_t new_prop_off = js->brk;
+  ant_value_t prop = mkentity(js, first_prop | T_PROP | SLOTMASK, buf, sizeof(buf));
   if (is_err(prop)) return prop;
   
-  jsoff_t new_header = new_prop_off | (header & (3U | FLAGMASK));
+  ant_offset_t new_header = new_prop_off | (header & (3U | FLAGMASK));
   saveoff(js, head, new_header);
   
   if (first_prop == 0) {
-    saveoff(js, head + sizeof(jsoff_t) + sizeof(jsoff_t), new_prop_off);
+    saveoff(js, head + sizeof(ant_offset_t) + sizeof(ant_offset_t), new_prop_off);
   }
   
   return prop;
 }
 
-static inline jsoff_t search_slot(ant_t *js, jsval_t obj, internal_slot_t slot) {
+static inline ant_offset_t search_slot(ant_t *js, ant_value_t obj, internal_slot_t slot) {
   obj = js_as_obj(obj);
-  jsoff_t off = (jsoff_t) vdata(obj);
+  ant_offset_t off = (ant_offset_t) vdata(obj);
   if (__builtin_expect(off >= js->brk, 0)) return 0;
-  jsoff_t next = loadoff(js, off) & ~(3U | FLAGMASK);
+  ant_offset_t next = loadoff(js, off) & ~(3U | FLAGMASK);
   while (next != 0 && next < js->brk) {
-    jsoff_t header = loadoff(js, next);
+    ant_offset_t header = loadoff(js, next);
     if ((header & SLOTMASK) == 0) return 0;
-    jsoff_t koff = loadoff(js, next + sizeof(jsoff_t));
-    if (koff == (jsoff_t)slot) return next;
+    ant_offset_t koff = loadoff(js, next + sizeof(ant_offset_t));
+    if (koff == (ant_offset_t)slot) return next;
     next = header & ~(3U | FLAGMASK);
   }
   return 0;
 }
 
-static void set_slot(ant_t *js, jsval_t obj, internal_slot_t slot, jsval_t val) {
-  jsoff_t existing = search_slot(js, obj, slot);
+static void set_slot(ant_t *js, ant_value_t obj, internal_slot_t slot, ant_value_t val) {
+  ant_offset_t existing = search_slot(js, obj, slot);
   if (existing > 0) {
-    saveval(js, existing + sizeof(jsoff_t) * 2, val);
+    saveval(js, existing + sizeof(ant_offset_t) * 2, val);
   } else mkslot(js, obj, slot, val);
 }
 
-static jsval_t get_slot(ant_t *js, jsval_t obj, internal_slot_t slot) {
-  jsoff_t off = search_slot(js, obj, slot);
+static ant_value_t get_slot(ant_t *js, ant_value_t obj, internal_slot_t slot) {
+  ant_offset_t off = search_slot(js, obj, slot);
   if (off == 0) return js_mkundef();
-  return loadval(js, off + sizeof(jsoff_t) * 2);
+  return loadval(js, off + sizeof(ant_offset_t) * 2);
 }
 
-static void set_func_code_ptr(ant_t *js, jsval_t func_obj, const char *code, size_t len) {
+static void set_func_code_ptr(ant_t *js, ant_value_t func_obj, const char *code, size_t len) {
   set_slot(js, func_obj, SLOT_CODE, mkval(T_CFUNC, (size_t)code));
   set_slot(js, func_obj, SLOT_CODE_LEN, tov((double)len));
 }
 
-static void set_func_code(ant_t *js, jsval_t func_obj, const char *code, size_t len) {
+static void set_func_code(ant_t *js, ant_value_t func_obj, const char *code, size_t len) {
   const char *arena_code = code_arena_alloc(code, len);
   if (!arena_code) return;
   set_func_code_ptr(js, func_obj, arena_code, len);
@@ -2927,35 +2927,35 @@ static void set_func_code(ant_t *js, jsval_t func_obj, const char *code, size_t 
   }
 }
 
-static const char *get_func_code(ant_t *js, jsval_t func_obj, jsoff_t *len) {
-  jsval_t code_val = get_slot(js, func_obj, SLOT_CODE);
-  jsval_t len_val = get_slot(js, func_obj, SLOT_CODE_LEN);
+static const char *get_func_code(ant_t *js, ant_value_t func_obj, ant_offset_t *len) {
+  ant_value_t code_val = get_slot(js, func_obj, SLOT_CODE);
+  ant_value_t len_val = get_slot(js, func_obj, SLOT_CODE_LEN);
   
   if (vtype(code_val) != T_CFUNC) {
     if (len) *len = 0;
     return NULL;
   }
   
-  if (len) *len = (jsoff_t)tod(len_val);
+  if (len) *len = (ant_offset_t)tod(len_val);
   return (const char *)vdata(code_val);
 }
 
-static inline bool is_slot_prop(jsoff_t header) {
+static inline bool is_slot_prop(ant_offset_t header) {
   return (header & SLOTMASK) != 0;
 }
 
-static inline jsoff_t next_prop(jsoff_t header) {
+static inline ant_offset_t next_prop(ant_offset_t header) {
   return header & ~(3U | FLAGMASK);
 }
 
-double js_to_number(ant_t *js, jsval_t arg) {
+double js_to_number(ant_t *js, ant_value_t arg) {
   if (vtype(arg) == T_NUM) return tod(arg);
   if (vtype(arg) == T_BOOL) return vdata(arg) ? 1.0 : 0.0;
   if (vtype(arg) == T_NULL) return 0.0;
   if (vtype(arg) == T_UNDEF) return JS_NAN;
   
   if (vtype(arg) == T_STR) {
-    jsoff_t len, off = vstr(js, arg, &len);
+    ant_offset_t len, off = vstr(js, arg, &len);
     const char *s = (char *)&js->mem[off], *end;
     while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r') s++;
     if (!*s) return 0.0;
@@ -2966,12 +2966,12 @@ double js_to_number(ant_t *js, jsval_t arg) {
   
   if (vtype(arg) == T_OBJ || vtype(arg) == T_ARR) {
     if (vtype(arg) == T_OBJ) {
-      jsval_t prim = js_call_valueOf(js, arg);
+      ant_value_t prim = js_call_valueOf(js, arg);
       uint8_t pt = vtype(prim);
       if (pt != T_OBJ && pt != T_ARR && pt != T_FUNC) return js_to_number(js, prim);
     }
     
-    jsval_t str_val = js_tostring_val(js, arg);
+    ant_value_t str_val = js_tostring_val(js, arg);
     if (is_err(str_val) || vtype(str_val) != T_STR) return JS_NAN;
     return js_to_number(js, str_val);
   }
@@ -2979,23 +2979,23 @@ double js_to_number(ant_t *js, jsval_t arg) {
   return JS_NAN;
 }
 
-static jsval_t setup_func_prototype(ant_t *js, jsval_t func) {
-  jsval_t proto_obj = mkobj(js, 0);
+static ant_value_t setup_func_prototype(ant_t *js, ant_value_t func) {
+  ant_value_t proto_obj = mkobj(js, 0);
   if (is_err(proto_obj)) return proto_obj;
   
-  jsval_t object_proto = get_ctor_proto(js, "Object", 6);
+  ant_value_t object_proto = get_ctor_proto(js, "Object", 6);
   if (vtype(object_proto) == T_OBJ) {
     set_proto(js, proto_obj, object_proto);
   }
   
-  jsval_t constructor_key = js_mkstr(js, "constructor", 11);
+  ant_value_t constructor_key = js_mkstr(js, "constructor", 11);
   if (is_err(constructor_key)) return constructor_key;
   
-  jsval_t res = mkprop(js, proto_obj, constructor_key, func, 0);
+  ant_value_t res = mkprop(js, proto_obj, constructor_key, func, 0);
   if (is_err(res)) return res;
   js_set_descriptor(js, proto_obj, "constructor", 11, JS_DESC_W | JS_DESC_C);
   
-  jsval_t prototype_key = js_mkstr(js, "prototype", 9);
+  ant_value_t prototype_key = js_mkstr(js, "prototype", 9);
   if (is_err(prototype_key)) return prototype_key;
   
   res = js_setprop(js, func, prototype_key, proto_obj);
@@ -3005,12 +3005,12 @@ static jsval_t setup_func_prototype(ant_t *js, jsval_t func) {
   return js_mkundef();
 }
 
-static inline bool proto_walk_next(ant_t *js, jsval_t *cur, uint8_t *t, uint8_t flags) {
+static inline bool proto_walk_next(ant_t *js, ant_value_t *cur, uint8_t *t, uint8_t flags) {
   uint8_t ct = *t;
 
   if (flags & PROTO_WALK_F_OBJECT_ONLY) {
     if (!is_object_type(*cur)) return false;
-    jsval_t next = get_proto(js, *cur);
+    ant_value_t next = get_proto(js, *cur);
     uint8_t nt = vtype(next);
     if (nt == T_NULL || nt == T_UNDEF || !is_object_type(next)) return false;
     *cur = next; *t = nt;
@@ -3018,8 +3018,8 @@ static inline bool proto_walk_next(ant_t *js, jsval_t *cur, uint8_t *t, uint8_t 
   }
 
   if (ct == T_OBJ || ct == T_ARR || ct == T_FUNC || ct == T_PROMISE) {
-    jsval_t as_obj = js_as_obj(*cur);
-    jsval_t proto = get_slot(js, as_obj, SLOT_PROTO);
+    ant_value_t as_obj = js_as_obj(*cur);
+    ant_value_t proto = get_slot(js, as_obj, SLOT_PROTO);
     
     uint8_t pt = vtype(proto);
     if (pt == T_OBJ || pt == T_ARR || pt == T_FUNC) {
@@ -3029,7 +3029,7 @@ static inline bool proto_walk_next(ant_t *js, jsval_t *cur, uint8_t *t, uint8_t 
     }
     
     if (JS_TYPE_FLAG(ct) & T_NEEDS_PROTO_FALLBACK) {
-      jsval_t fallback = get_prototype_for_type(js, ct);
+      ant_value_t fallback = get_prototype_for_type(js, ct);
       uint8_t ft = vtype(fallback);
       if (ft == T_NULL || ft == T_UNDEF) return false;
       *cur = fallback;
@@ -3041,7 +3041,7 @@ static inline bool proto_walk_next(ant_t *js, jsval_t *cur, uint8_t *t, uint8_t 
   }
 
   if (ct == T_STR || ct == T_NUM || ct == T_BOOL || ct == T_BIGINT || ct == T_SYMBOL) {
-    jsval_t proto = get_prototype_for_type(js, ct);
+    ant_value_t proto = get_prototype_for_type(js, ct);
     uint8_t pt = vtype(proto);
     if (pt == T_NULL || pt == T_UNDEF) return false;
     *cur = proto; *t = pt;
@@ -3051,14 +3051,14 @@ static inline bool proto_walk_next(ant_t *js, jsval_t *cur, uint8_t *t, uint8_t 
   return false;
 }
 
-jsval_t js_instance_proto_from_new_target(ant_t *js, jsval_t fallback_proto) {
-  jsval_t instance_proto = js_mkundef();
+ant_value_t js_instance_proto_from_new_target(ant_t *js, ant_value_t fallback_proto) {
+  ant_value_t instance_proto = js_mkundef();
   
   if (vtype(js->new_target) == T_FUNC || vtype(js->new_target) == T_CFUNC) {
-    jsval_t nt_obj = js_as_obj(js->new_target);
-    jsoff_t nt_proto_off = lkp_interned(js, nt_obj, INTERN_PROTOTYPE, 9);
+    ant_value_t nt_obj = js_as_obj(js->new_target);
+    ant_offset_t nt_proto_off = lkp_interned(js, nt_obj, INTERN_PROTOTYPE, 9);
     if (nt_proto_off != 0) {
-      jsval_t nt_proto = resolveprop(js, mkval(T_PROP, nt_proto_off));
+      ant_value_t nt_proto = resolveprop(js, mkval(T_PROP, nt_proto_off));
       if (is_object_type(nt_proto)) instance_proto = nt_proto;
     }
   }
@@ -3068,9 +3068,9 @@ jsval_t js_instance_proto_from_new_target(ant_t *js, jsval_t fallback_proto) {
   } return instance_proto;
 }
 
-bool proto_chain_contains(ant_t *js, jsval_t obj, jsval_t proto_target) {
+bool proto_chain_contains(ant_t *js, ant_value_t obj, ant_value_t proto_target) {
   if (!is_object_type(obj) || !is_object_type(proto_target)) return false;
-  jsval_t cur = obj; uint8_t t = vtype(cur);
+  ant_value_t cur = obj; uint8_t t = vtype(cur);
   for (int depth = 0; depth < MAX_PROTO_CHAIN_DEPTH; depth++) {
     if (!proto_walk_next(js, &cur, &t, PROTO_WALK_F_OBJECT_ONLY)) break;
     if (vdata(cur) == vdata(proto_target)) return true;
@@ -3078,61 +3078,61 @@ bool proto_chain_contains(ant_t *js, jsval_t obj, jsval_t proto_target) {
   return false;
 }
 
-static inline bool is_wrapper_ctor_target(ant_t *js, jsval_t this_val, jsval_t expected_proto) {
+static inline bool is_wrapper_ctor_target(ant_t *js, ant_value_t this_val, ant_value_t expected_proto) {
   if (vtype(js->new_target) == T_UNDEF) return false;
   if (vtype(this_val) != T_OBJ) return false;
   if (vtype(get_slot(js, this_val, SLOT_PRIMITIVE)) != T_UNDEF) return false;
   return proto_chain_contains(js, this_val, expected_proto);
 }
 
-jsval_t get_ctor_species_value(ant_t *js, jsval_t ctor) {
+ant_value_t get_ctor_species_value(ant_t *js, ant_value_t ctor) {
   if (!is_object_type(ctor) && vtype(ctor) != T_CFUNC) return js_mkundef();
   return js_get_sym(js, ctor, get_species_sym());
 }
 
-bool same_ctor_identity(ant_t *js, jsval_t a, jsval_t b) {
+bool same_ctor_identity(ant_t *js, ant_value_t a, ant_value_t b) {
   if (vtype(a) == vtype(b) && vdata(a) == vdata(b)) return true;
   
   if (vtype(a) == T_FUNC && vtype(b) == T_CFUNC) {
-    jsval_t c = get_slot(js, a, SLOT_CFUNC);
+    ant_value_t c = get_slot(js, a, SLOT_CFUNC);
     return vtype(c) == T_CFUNC && vdata(c) == vdata(b);
   }
   
   if (vtype(a) == T_CFUNC && vtype(b) == T_FUNC) {
-    jsval_t c = get_slot(js, b, SLOT_CFUNC);
+    ant_value_t c = get_slot(js, b, SLOT_CFUNC);
     return vtype(c) == T_CFUNC && vdata(c) == vdata(a);
   }
   
   if (vtype(a) == T_FUNC && vtype(b) == T_FUNC) {
-    jsval_t ca = get_slot(js, a, SLOT_CFUNC);
-    jsval_t cb = get_slot(js, b, SLOT_CFUNC);
+    ant_value_t ca = get_slot(js, a, SLOT_CFUNC);
+    ant_value_t cb = get_slot(js, b, SLOT_CFUNC);
     if (vtype(ca) == T_CFUNC && vtype(cb) == T_CFUNC && vdata(ca) == vdata(cb)) return true;
   }
   
   return false;
 }
 
-static jsval_t array_constructor_from_receiver(ant_t *js, jsval_t receiver) {
+static ant_value_t array_constructor_from_receiver(ant_t *js, ant_value_t receiver) {
   if (!is_object_type(receiver)) return js_mkundef();
   
-  jsval_t species_source = receiver;
+  ant_value_t species_source = receiver;
   if (is_proxy(js, species_source)) {
     species_source = proxy_read_target(js, species_source);
   }
   
   bool receiver_is_array = (vtype(species_source) == T_ARR);
   if (!receiver_is_array) {
-    jsval_t array_proto = get_ctor_proto(js, "Array", 5);
+    ant_value_t array_proto = get_ctor_proto(js, "Array", 5);
     if (is_object_type(array_proto) && is_object_type(species_source)) {
       receiver_is_array = proto_chain_contains(js, species_source, array_proto);
     }
   }
   if (!receiver_is_array) return js_mkundef();
 
-  jsval_t ctor = js_getprop_fallback(js, receiver, "constructor");
+  ant_value_t ctor = js_getprop_fallback(js, receiver, "constructor");
   if (is_err(ctor)) return ctor;
 
-  jsval_t species = get_ctor_species_value(js, ctor);
+  ant_value_t species = get_ctor_species_value(js, ctor);
   if (is_err(species)) return species;
   
   if (vtype(species) == T_NULL) return js_mkundef();
@@ -3142,41 +3142,41 @@ static jsval_t array_constructor_from_receiver(ant_t *js, jsval_t receiver) {
   return ctor;
 }
 
-static jsval_t array_alloc_from_ctor_with_length(ant_t *js, jsval_t ctor, jsoff_t length_hint) {
+static ant_value_t array_alloc_from_ctor_with_length(ant_t *js, ant_value_t ctor, ant_offset_t length_hint) {
   if (vtype(ctor) != T_FUNC && vtype(ctor) != T_CFUNC) {
     return mkarr(js);
   }
 
-  jsval_t seed = js_mkobj(js);
+  ant_value_t seed = js_mkobj(js);
   if (is_err(seed)) return seed;
 
-  jsval_t proto = js_get(js, ctor, "prototype");
+  ant_value_t proto = js_get(js, ctor, "prototype");
   if (is_err(proto)) return proto;
   if (is_object_type(proto)) set_proto(js, seed, proto);
 
-  jsval_t ctor_args[1] = { tov((double)length_hint) };
-  jsval_t saved_new_target = js->new_target;
+  ant_value_t ctor_args[1] = { tov((double)length_hint) };
+  ant_value_t saved_new_target = js->new_target;
   js->new_target = ctor;
-  jsval_t constructed = sv_vm_call(js->vm, js, ctor, seed, ctor_args, 1, NULL, true);
+  ant_value_t constructed = sv_vm_call(js->vm, js, ctor, seed, ctor_args, 1, NULL, true);
   js->new_target = saved_new_target;
   if (is_err(constructed)) return constructed;
 
-  jsval_t result = is_object_type(constructed) ? constructed : seed;
+  ant_value_t result = is_object_type(constructed) ? constructed : seed;
   set_slot(js, js_as_obj(result), SLOT_CTOR, ctor);
   return result;
 }
 
-static inline jsval_t array_alloc_from_ctor(ant_t *js, jsval_t ctor) {
+static inline ant_value_t array_alloc_from_ctor(ant_t *js, ant_value_t ctor) {
   return array_alloc_from_ctor_with_length(js, ctor, 0);
 }
 
-static inline jsval_t array_alloc_like(ant_t *js, jsval_t receiver) {
-  jsval_t ctor = array_constructor_from_receiver(js, receiver);
+static inline ant_value_t array_alloc_like(ant_t *js, ant_value_t receiver) {
+  ant_value_t ctor = array_constructor_from_receiver(js, receiver);
   if (is_err(ctor)) return ctor;
   return array_alloc_from_ctor(js, ctor);
 }
 
-static jsval_t validate_array_length(ant_t *js, jsval_t v) {
+static ant_value_t validate_array_length(ant_t *js, ant_value_t v) {
   if (vtype(v) != T_NUM) {
     return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid array length");
   }
@@ -3187,31 +3187,31 @@ static jsval_t validate_array_length(ant_t *js, jsval_t v) {
   return js_mkundef();
 }
 
-static inline jsval_t check_object_extensibility(ant_t *js, jsval_t obj) {
+static inline ant_value_t check_object_extensibility(ant_t *js, ant_value_t obj) {
   obj = js_as_obj(obj);
-  jsoff_t obj_off_fp = (jsoff_t)vdata(obj);
-  jsoff_t next = loadoff(js, obj_off_fp) & ~(3U | FLAGMASK);
+  ant_offset_t obj_off_fp = (ant_offset_t)vdata(obj);
+  ant_offset_t next = loadoff(js, obj_off_fp) & ~(3U | FLAGMASK);
   
   while (next != 0 && next < js->brk) {
-    jsoff_t hdr = loadoff(js, next);
+    ant_offset_t hdr = loadoff(js, next);
     if ((hdr & SLOTMASK) == 0) break;
     
-    jsoff_t sk = loadoff(js, next + sizeof(jsoff_t));
-    jsval_t sv = loadval(js, next + sizeof(jsoff_t) * 2);
+    ant_offset_t sk = loadoff(js, next + sizeof(ant_offset_t));
+    ant_value_t sv = loadval(js, next + sizeof(ant_offset_t) * 2);
     
-    if (sk == (jsoff_t)SLOT_FROZEN && js_truthy(js, sv)) {
+    if (sk == (ant_offset_t)SLOT_FROZEN && js_truthy(js, sv)) {
       return sv_vm_is_strict(js->vm)
         ? js_mkerr(js, "cannot add property to frozen object")
         : js_mkundef();
     }
     
-    if (sk == (jsoff_t)SLOT_SEALED && js_truthy(js, sv)) {
+    if (sk == (ant_offset_t)SLOT_SEALED && js_truthy(js, sv)) {
       return sv_vm_is_strict(js->vm)
         ? js_mkerr(js, "cannot add property to sealed object")
         : js_mkundef();
     }
     
-    if (sk == (jsoff_t)SLOT_EXTENSIBLE && !js_truthy(js, sv)) {
+    if (sk == (ant_offset_t)SLOT_EXTENSIBLE && !js_truthy(js, sv)) {
       return sv_vm_is_strict(js->vm)
         ? js_mkerr(js, "cannot add property to non-extensible object")
         : js_mkundef();
@@ -3223,56 +3223,56 @@ static inline jsval_t check_object_extensibility(ant_t *js, jsval_t obj) {
   return js_mkundef();
 }
 
-static inline void update_array_length(ant_t *js, jsval_t obj, jsoff_t new_len) {
-  jsoff_t len_off = lkp_interned(js, obj, INTERN_LENGTH, 6);
-  jsval_t new_len_val = tov((double)new_len);
+static inline void update_array_length(ant_t *js, ant_value_t obj, ant_offset_t new_len) {
+  ant_offset_t len_off = lkp_interned(js, obj, INTERN_LENGTH, 6);
+  ant_value_t new_len_val = tov((double)new_len);
   
-  if (len_off != 0) saveval(js, len_off + sizeof(jsoff_t) * 2, new_len_val); else {
+  if (len_off != 0) saveval(js, len_off + sizeof(ant_offset_t) * 2, new_len_val); else {
     js_mkprop_fast(js, obj, "length", 6, new_len_val);
   }
 }
 
-static jsval_t js_setprop_array_fast(ant_t *js, jsval_t obj, jsval_t k, jsval_t v, jsoff_t klen, const char *key) {
+static ant_value_t js_setprop_array_fast(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, ant_offset_t klen, const char *key) {
   unsigned long idx;
-  if (!parse_array_index(key, klen, (jsoff_t)-1, &idx)) return js_mkundef();
+  if (!parse_array_index(key, klen, (ant_offset_t)-1, &idx)) return js_mkundef();
   
-  jsoff_t doff = get_dense_buf(js, obj);
+  ant_offset_t doff = get_dense_buf(js, obj);
   if (doff) {
-    jsoff_t cur_len = dense_length(js, doff);
-    if (idx < cur_len) { dense_set(js, doff, (jsoff_t)idx, v); return v; }
+    ant_offset_t cur_len = dense_length(js, doff);
+    if (idx < cur_len) { dense_set(js, doff, (ant_offset_t)idx, v); return v; }
 
-    jsoff_t density_limit = cur_len > 0 ? cur_len * 4 : 64;
+    ant_offset_t density_limit = cur_len > 0 ? cur_len * 4 : 64;
     if (idx >= density_limit) goto sparse;
     
-    jsval_t extensibility_error = check_object_extensibility(js, obj);
+    ant_value_t extensibility_error = check_object_extensibility(js, obj);
     if (!is_undefined(extensibility_error)) return extensibility_error;
     
-    arr_set(js, obj, (jsoff_t)idx, v);
+    arr_set(js, obj, (ant_offset_t)idx, v);
     return v;
   }
   
   sparse:;
-  jsoff_t cur_len = get_array_length(js, obj);
+  ant_offset_t cur_len = get_array_length(js, obj);
   if (idx < cur_len) return js_mkundef();
   
-  jsval_t extensibility_error = check_object_extensibility(js, obj);
+  ant_value_t extensibility_error = check_object_extensibility(js, obj);
   if (!is_undefined(extensibility_error)) return extensibility_error;
   
-  jsval_t result = mkprop_fast(js, obj, k, v, 0);
+  ant_value_t result = mkprop_fast(js, obj, k, v, 0);
   update_array_length(js, obj, idx + 1);
   
   return result;
 }
 
-jsval_t js_setprop(ant_t *js, jsval_t obj, jsval_t k, jsval_t v) {
+ant_value_t js_setprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v) {
   uint8_t ot = vtype(obj);
 
   if (ot == T_STR || ot == T_NUM || ot == T_BOOL) {
-    jsoff_t klen; jsoff_t koff = vstr(js, k, &klen);
+    ant_offset_t klen; ant_offset_t koff = vstr(js, k, &klen);
     const char *key = (char *)&js->mem[koff];
-    jsval_t proto = get_prototype_for_type(js, ot);
+    ant_value_t proto = get_prototype_for_type(js, ot);
     if (is_object_type(proto)) {
-      jsval_t setter = js_mkundef();
+      ant_value_t setter = js_mkundef();
       bool has_setter = false;
       lkp_with_setter(js, proto, key, klen, &setter, &has_setter);
       if (has_setter && (vtype(setter) == T_FUNC || vtype(setter) == T_CFUNC)) {
@@ -3289,16 +3289,16 @@ jsval_t js_setprop(ant_t *js, jsval_t obj, jsval_t k, jsval_t v) {
 
   if (vtype(obj) == T_FUNC) obj = js_func_obj(obj);
   if (vtype(k) == T_SYMBOL) {
-    jsoff_t sym_off = (jsoff_t)vdata(k);
-    jsval_t cur = obj;
+    ant_offset_t sym_off = (ant_offset_t)vdata(k);
+    ant_value_t cur = obj;
     
     for (int i = 0; i < MAX_PROTO_CHAIN_DEPTH; i++) {
-      jsoff_t cur_off = (jsoff_t)vdata(js_as_obj(cur));
+      ant_offset_t cur_off = (ant_offset_t)vdata(js_as_obj(cur));
       descriptor_entry_t *sd = lookup_sym_descriptor(cur_off, sym_off);
       if (sd && sd->has_setter) {
-        jsval_t setter = sd->setter;
+        ant_value_t setter = sd->setter;
         if (vtype(setter) == T_FUNC || vtype(setter) == T_CFUNC) {
-          jsval_t result = sv_vm_call(js->vm, js, setter, obj, &v, 1, NULL, false);
+          ant_value_t result = sv_vm_call(js->vm, js, setter, obj, &v, 1, NULL, false);
           if (is_err(result)) return result;
           return v;
         }
@@ -3309,16 +3309,16 @@ jsval_t js_setprop(ant_t *js, jsval_t obj, jsval_t k, jsval_t v) {
         return v;
       }
       
-      jsval_t proto = get_proto(js, js_as_obj(cur));
+      ant_value_t proto = get_proto(js, js_as_obj(cur));
       if (!is_object_type(proto)) break;
       cur = proto;
     }
 
-    jsoff_t existing = lkp_sym(js, obj, sym_off);
+    ant_offset_t existing = lkp_sym(js, obj, sym_off);
     
     if (existing > 0) {
       if (is_const_prop(js, existing)) return js_mkerr(js, "assignment to constant");
-      saveval(js, existing + sizeof(jsoff_t) * 2, v);
+      saveval(js, existing + sizeof(ant_offset_t) * 2, v);
       return mkval(T_PROP, existing);
     }
     
@@ -3330,23 +3330,23 @@ jsval_t js_setprop(ant_t *js, jsval_t obj, jsval_t k, jsval_t v) {
     return mkprop(js, obj, k, v, 0);
   }
 
-  jsoff_t klen; jsoff_t koff = vstr(js, k, &klen);
+  ant_offset_t klen; ant_offset_t koff = vstr(js, k, &klen);
   const char *key = (char *) &js->mem[koff];
   
   if (vtype(obj) == T_ARR && !is_proxy(js, obj) && klen > 0 && key[0] >= '0' && key[0] <= '9') {
-    jsval_t result = js_setprop_array_fast(js, obj, k, v, klen, key);
+    ant_value_t result = js_setprop_array_fast(js, obj, k, v, klen, key);
     if (vtype(result) != T_UNDEF) return result;
   }
 
   if (vtype(obj) == T_ARR && streq(key, klen, "length", 6)) {
-    jsval_t err = validate_array_length(js, v);
+    ant_value_t err = validate_array_length(js, v);
     if (is_err(err)) return err;
-    jsoff_t doff = get_dense_buf(js, obj);
+    ant_offset_t doff = get_dense_buf(js, obj);
     if (doff) {
-      jsoff_t new_len_val = (jsoff_t) tod(v);
-      jsoff_t cur_len = dense_length(js, doff);
+      ant_offset_t new_len_val = (ant_offset_t) tod(v);
+      ant_offset_t cur_len = dense_length(js, doff);
       if (new_len_val < cur_len) {
-        for (jsoff_t i = new_len_val; i < cur_len; i++)
+        for (ant_offset_t i = new_len_val; i < cur_len; i++)
           dense_set(js, doff, i, T_EMPTY);
         dense_set_length(js, doff, new_len_val);
         return v;
@@ -3358,24 +3358,24 @@ jsval_t js_setprop(ant_t *js, jsval_t obj, jsval_t k, jsval_t v) {
   }
   
   if (is_proxy(js, obj)) {
-    jsval_t result = proxy_set(js, obj, key, klen, v);
+    ant_value_t result = proxy_set(js, obj, key, klen, v);
     if (is_err(result)) return result;
     return v;
   }
   
   if (try_dynamic_setter(js, obj, key, klen, v)) return v;
-  jsoff_t existing = lkp(js, obj, key, klen);
+  ant_offset_t existing = lkp(js, obj, key, klen);
   
   {
-    jsoff_t obj_off = (jsoff_t)vdata(js_as_obj(obj));
+    ant_offset_t obj_off = (ant_offset_t)vdata(js_as_obj(obj));
     descriptor_entry_t *desc = lookup_descriptor(js, obj_off, key, klen);
 
     if (!desc) {
-      jsval_t cur = obj;
+      ant_value_t cur = obj;
       for (int i = 0; i < MAX_PROTO_CHAIN_DEPTH && !desc; i++) {
         cur = get_proto(js, cur);
         if (vtype(cur) != T_OBJ && vtype(cur) != T_FUNC) break;
-        desc = lookup_descriptor(js, (jsoff_t)vdata(js_as_obj(cur)), key, klen);
+        desc = lookup_descriptor(js, (ant_offset_t)vdata(js_as_obj(cur)), key, klen);
       }
       if (desc && !desc->has_setter && !desc->has_getter && desc->writable) desc = NULL;
     }
@@ -3383,11 +3383,11 @@ jsval_t js_setprop(ant_t *js, jsval_t obj, jsval_t k, jsval_t v) {
     if (!desc) goto no_descriptor;
     
     if (desc->has_setter) {
-      jsval_t setter = desc->setter;
+      ant_value_t setter = desc->setter;
       uint8_t setter_type = vtype(setter);
       if (setter_type == T_FUNC || setter_type == T_CFUNC) {
         js_error_site_t saved_errsite = js->errsite;
-        jsval_t result = sv_vm_call(js->vm, js, setter, obj, &v, 1, NULL, false);
+        ant_value_t result = sv_vm_call(js->vm, js, setter, obj, &v, 1, NULL, false);
         js->errsite = saved_errsite;
         if (is_err(result)) return result;
         return v;
@@ -3411,24 +3411,24 @@ no_descriptor:
   if (existing <= 0) goto create_new;
   if (is_const_prop(js, existing)) return js_mkerr(js, "assignment to constant");
 
-  saveval(js, existing + sizeof(jsoff_t) * 2, v);
+  saveval(js, existing + sizeof(ant_offset_t) * 2, v);
   if (vtype(obj) != T_ARR || klen == 0 || key[0] < '0' || key[0] > '9') goto done_update;
-  { jsoff_t doff = get_dense_buf(js, obj); if (doff) goto done_update; }
+  { ant_offset_t doff = get_dense_buf(js, obj); if (doff) goto done_update; }
   
   char *endptr;
   unsigned long update_idx = strtoul(key, &endptr, 10);
   if (endptr != key + klen) goto done_update;
   
-  jsoff_t len_off = lkp_interned(js, obj, INTERN_LENGTH, 6);
-  jsoff_t cur_len = 0;
+  ant_offset_t len_off = lkp_interned(js, obj, INTERN_LENGTH, 6);
+  ant_offset_t cur_len = 0;
   if (len_off != 0) {
-    jsval_t len_val = resolveprop(js, mkval(T_PROP, len_off));
-    if (vtype(len_val) == T_NUM) cur_len = (jsoff_t) tod(len_val);
+    ant_value_t len_val = resolveprop(js, mkval(T_PROP, len_off));
+    if (vtype(len_val) == T_NUM) cur_len = (ant_offset_t) tod(len_val);
   }
   if (update_idx < cur_len) goto done_update;
   
-  jsval_t new_len = tov((double)(update_idx + 1));
-  if (len_off != 0) saveval(js, len_off + sizeof(jsoff_t) * 2, new_len); else {
+  ant_value_t new_len = tov((double)(update_idx + 1));
+  if (len_off != 0) saveval(js, len_off + sizeof(ant_offset_t) * 2, new_len); else {
     mkprop(js, obj, js->length_str, new_len, 0);
   }
 
@@ -3446,7 +3446,7 @@ create_new:
     return js_mkundef();
   }
   
-  jsval_t ext_slot = get_slot(js, obj, SLOT_EXTENSIBLE);
+  ant_value_t ext_slot = get_slot(js, obj, SLOT_EXTENSIBLE);
   if (vtype(ext_slot) != T_UNDEF && !js_truthy(js, ext_slot)) {
     if (sv_vm_is_strict(js->vm)) return js_mkerr(js, "cannot add property to non-extensible object");
     return js_mkundef();
@@ -3459,21 +3459,21 @@ create_new:
     char *inner_endptr;
     idx = strtoul(key, &inner_endptr, 10);
     if (inner_endptr == key + klen) {
-      jsoff_t inner_len_off = lkp_interned(js, obj, INTERN_LENGTH, 6);
-      jsoff_t inner_cur_len = 0;
+      ant_offset_t inner_len_off = lkp_interned(js, obj, INTERN_LENGTH, 6);
+      ant_offset_t inner_cur_len = 0;
       if (inner_len_off != 0) {
-        jsval_t len_val = resolveprop(js, mkval(T_PROP, inner_len_off));
-        if (vtype(len_val) == T_NUM) inner_cur_len = (jsoff_t) tod(len_val);
+        ant_value_t len_val = resolveprop(js, mkval(T_PROP, inner_len_off));
+        if (vtype(len_val) == T_NUM) inner_cur_len = (ant_offset_t) tod(len_val);
       }
       if (idx >= inner_cur_len) need_length_update = 1;
     }
   }
   
-  jsval_t result = mkprop(js, obj, k, v, 0);
+  ant_value_t result = mkprop(js, obj, k, v, 0);
   if (need_length_update) {
-    jsoff_t inner_len_off = lkp_interned(js, obj, INTERN_LENGTH, 6);
-    jsval_t inner_new_len = tov((double)(idx + 1));
-    if (inner_len_off != 0) saveval(js, inner_len_off + sizeof(jsoff_t) * 2, inner_new_len); else {
+    ant_offset_t inner_len_off = lkp_interned(js, obj, INTERN_LENGTH, 6);
+    ant_value_t inner_new_len = tov((double)(idx + 1));
+    if (inner_len_off != 0) saveval(js, inner_len_off + sizeof(ant_offset_t) * 2, inner_new_len); else {
       mkprop(js, obj, js->length_str, inner_new_len, 0);
     }
   }
@@ -3481,26 +3481,26 @@ create_new:
   return result;
 }
 
-jsval_t setprop_cstr(ant_t *js, jsval_t obj, const char *key, size_t len, jsval_t v) {
+ant_value_t setprop_cstr(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v) {
   obj = js_as_obj(obj);
-  jsval_t k = js_mkstr(js, key, len);
+  ant_value_t k = js_mkstr(js, key, len);
   if (is_err(k)) return k;
   return mkprop(js, obj, k, v, 0);
 }
 
-jsval_t js_define_own_prop(ant_t *js, jsval_t obj, const char *key, size_t klen, jsval_t v) {
+ant_value_t js_define_own_prop(ant_t *js, ant_value_t obj, const char *key, size_t klen, ant_value_t v) {
   obj = js_as_obj(obj);
   if (is_proxy(js, obj)) {
-    jsval_t result = proxy_set(js, obj, key, klen, v);
+    ant_value_t result = proxy_set(js, obj, key, klen, v);
     if (is_err(result)) return result;
     return v;
   }
 
   if (try_dynamic_setter(js, obj, key, klen, v)) return v;
-  jsoff_t existing = lkp(js, obj, key, klen);
+  ant_offset_t existing = lkp(js, obj, key, klen);
 
   {
-    jsoff_t obj_off = (jsoff_t)vdata(js_as_obj(obj));
+    ant_offset_t obj_off = (ant_offset_t)vdata(js_as_obj(obj));
     descriptor_entry_t *desc = lookup_descriptor(js, obj_off, key, klen);
     if (desc) {
       if (!desc->writable && !desc->has_setter) {
@@ -3508,10 +3508,10 @@ jsval_t js_define_own_prop(ant_t *js, jsval_t obj, const char *key, size_t klen,
         return v;
       }
       if (desc->has_setter) {
-        jsval_t setter = desc->setter;
+        ant_value_t setter = desc->setter;
         uint8_t setter_type = vtype(setter);
         if (setter_type == T_FUNC || setter_type == T_CFUNC) {
-          jsval_t result = sv_vm_call(js->vm, js, setter, obj, &v, 1, NULL, false);
+          ant_value_t result = sv_vm_call(js->vm, js, setter, obj, &v, 1, NULL, false);
           if (is_err(result)) return result;
           return v;
         }
@@ -3521,7 +3521,7 @@ jsval_t js_define_own_prop(ant_t *js, jsval_t obj, const char *key, size_t klen,
 
   if (existing > 0) {
     if (is_const_prop(js, existing)) return js_mkerr(js, "assignment to constant");
-    saveval(js, existing + sizeof(jsoff_t) * 2, v);
+    saveval(js, existing + sizeof(ant_offset_t) * 2, v);
     return mkval(T_PROP, existing);
   }
 
@@ -3533,27 +3533,27 @@ jsval_t js_define_own_prop(ant_t *js, jsval_t obj, const char *key, size_t klen,
     if (sv_vm_is_strict(js->vm)) return js_mkerr(js, "cannot add property to sealed object");
     return js_mkundef();
   }
-  jsval_t ext_slot = get_slot(js, obj, SLOT_EXTENSIBLE);
+  ant_value_t ext_slot = get_slot(js, obj, SLOT_EXTENSIBLE);
   if (vtype(ext_slot) != T_UNDEF && !js_truthy(js, ext_slot)) {
     if (sv_vm_is_strict(js->vm)) return js_mkerr(js, "cannot add property to non-extensible object");
     return js_mkundef();
   }
 
-  jsval_t k = js_mkstr(js, key, klen);
+  ant_value_t k = js_mkstr(js, key, klen);
   if (is_err(k)) return k;
   return mkprop(js, obj, k, v, 0);
 }
 
-jsval_t setprop_interned(ant_t *js, jsval_t obj, const char *key, size_t len, jsval_t v) {
-  jsval_t k = js_mkstr(js, key, len);
+ant_value_t setprop_interned(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v) {
+  ant_value_t k = js_mkstr(js, key, len);
   if (is_err(k)) return k;
   return js_setprop(js, obj, k, v);
 }
 
-jsval_t js_setprop_nonconfigurable(ant_t *js, jsval_t obj, const char *key, size_t keylen, jsval_t v) {
-  jsval_t k = js_mkstr(js, key, keylen);
+ant_value_t js_setprop_nonconfigurable(ant_t *js, ant_value_t obj, const char *key, size_t keylen, ant_value_t v) {
+  ant_value_t k = js_mkstr(js, key, keylen);
   if (is_err(k)) return k;
-  jsval_t result = js_setprop(js, obj, k, v);
+  ant_value_t result = js_setprop(js, obj, k, v);
   if (is_err(result)) return result;
   
   js_set_descriptor(js, obj, key, keylen, JS_DESC_W);
@@ -3572,12 +3572,12 @@ static struct {
 static size_t  g_sym_registry_count = 0;
 static size_t  g_sym_all_count      = 0;
 static size_t  g_sym_all_cap        = 0;
-static jsval_t *g_sym_all = NULL;
+static ant_value_t *g_sym_all = NULL;
 
-static void sym_table_add(jsval_t sym) {
+static void sym_table_add(ant_value_t sym) {
   if (g_sym_all_count >= g_sym_all_cap) {
     size_t new_cap = g_sym_all_cap ? g_sym_all_cap * 2 : 64;
-    jsval_t *new_buf = realloc(g_sym_all, new_cap * sizeof(jsval_t));
+    ant_value_t *new_buf = realloc(g_sym_all, new_cap * sizeof(ant_value_t));
     if (!new_buf) return;
     g_sym_all = new_buf;
     g_sym_all_cap = new_cap;
@@ -3585,18 +3585,18 @@ static void sym_table_add(jsval_t sym) {
   g_sym_all[g_sym_all_count++] = sym;
 }
 
-jsval_t js_mksym(ant_t *js, const char *desc) {
+ant_value_t js_mksym(ant_t *js, const char *desc) {
   uint32_t id = (uint32_t)(++js->sym_counter);
   size_t desc_len = (desc && *desc) ? strlen(desc) : 0;
   size_t payload = SYM_HEAP_FIXED + (desc_len ? desc_len + 1 : 0);
 
-  jsoff_t ofs = js_alloc(js, payload + sizeof(jsoff_t));
-  if (ofs == (jsoff_t)~0) return js_mkerr(js, "oom");
+  ant_offset_t ofs = js_alloc(js, payload + sizeof(ant_offset_t));
+  if (ofs == (ant_offset_t)~0) return js_mkerr(js, "oom");
 
-  jsoff_t header = (jsoff_t)(payload << 4);
+  ant_offset_t header = (ant_offset_t)(payload << 4);
   memcpy(&js->mem[ofs], &header, sizeof(header));
 
-  jsoff_t p = ofs + sizeof(jsoff_t);
+  ant_offset_t p = ofs + sizeof(ant_offset_t);
   memcpy(&js->mem[p], &id, sizeof(id));
   p += sizeof(uint32_t);
   uint32_t flags = 0;
@@ -3611,48 +3611,48 @@ jsval_t js_mksym(ant_t *js, const char *desc) {
     js->mem[p + desc_len] = '\0';
   }
 
-  jsval_t sym = mkval(T_SYMBOL, ofs);
+  ant_value_t sym = mkval(T_SYMBOL, ofs);
   sym_table_add(sym);
   return sym;
 }
 
-static inline uint32_t sym_get_id(ant_t *js, jsval_t v) {
-  jsoff_t ofs = (jsoff_t)vdata(v);
+static inline uint32_t sym_get_id(ant_t *js, ant_value_t v) {
+  ant_offset_t ofs = (ant_offset_t)vdata(v);
   uint32_t id;
-  memcpy(&id, &js->mem[ofs + sizeof(jsoff_t)], sizeof(id));
+  memcpy(&id, &js->mem[ofs + sizeof(ant_offset_t)], sizeof(id));
   return id;
 }
 
-static inline uint32_t sym_get_flags(ant_t *js, jsval_t v) {
-  jsoff_t ofs = (jsoff_t)vdata(v);
+static inline uint32_t sym_get_flags(ant_t *js, ant_value_t v) {
+  ant_offset_t ofs = (ant_offset_t)vdata(v);
   uint32_t flags;
-  memcpy(&flags, &js->mem[ofs + sizeof(jsoff_t) + sizeof(uint32_t)], sizeof(flags));
+  memcpy(&flags, &js->mem[ofs + sizeof(ant_offset_t) + sizeof(uint32_t)], sizeof(flags));
   return flags;
 }
 
-static inline uintptr_t sym_get_key_ptr(ant_t *js, jsval_t v) {
-  jsoff_t ofs = (jsoff_t)vdata(v);
+static inline uintptr_t sym_get_key_ptr(ant_t *js, ant_value_t v) {
+  ant_offset_t ofs = (ant_offset_t)vdata(v);
   uintptr_t kp;
-  memcpy(&kp, &js->mem[ofs + sizeof(jsoff_t) + sizeof(uint32_t) * 2], sizeof(kp));
+  memcpy(&kp, &js->mem[ofs + sizeof(ant_offset_t) + sizeof(uint32_t) * 2], sizeof(kp));
   return kp;
 }
 
-static const char *sym_get_desc(ant_t *js, jsval_t v) {
-  jsoff_t ofs = (jsoff_t)vdata(v);
-  jsoff_t header;
+static const char *sym_get_desc(ant_t *js, ant_value_t v) {
+  ant_offset_t ofs = (ant_offset_t)vdata(v);
+  ant_offset_t header;
   memcpy(&header, &js->mem[ofs], sizeof(header));
   size_t payload = (size_t)(header >> 4);
   if (payload <= SYM_HEAP_FIXED) return NULL;
-  return (const char *)&js->mem[ofs + sizeof(jsoff_t) + SYM_HEAP_FIXED];
+  return (const char *)&js->mem[ofs + sizeof(ant_offset_t) + SYM_HEAP_FIXED];
 }
 
-uint64_t inline js_sym_id(jsval_t sym) {
+uint64_t inline js_sym_id(ant_value_t sym) {
   // TODO: fix to not use the global runtime
   ant_t *js = rt->js;
   return sym_get_id(js, sym);
 }
 
-jsval_t js_mksym_for(ant_t *js, const char *key) {
+ant_value_t js_mksym_for(ant_t *js, const char *key) {
   const char *interned = intern_string(key, strlen(key));
 
   for (size_t i = 0; i < g_sym_registry_count; i++) {
@@ -3662,14 +3662,14 @@ jsval_t js_mksym_for(ant_t *js, const char *key) {
     }
   }
 
-  jsval_t sym = js_mksym(js, key);
+  ant_value_t sym = js_mksym(js, key);
   if (is_err(sym)) return sym;
 
-  jsoff_t ofs = (jsoff_t)vdata(sym);
+  ant_offset_t ofs = (ant_offset_t)vdata(sym);
   uint32_t flags = SYM_FLAG_GLOBAL;
-  memcpy(&js->mem[ofs + sizeof(jsoff_t) + sizeof(uint32_t)], &flags, sizeof(flags));
+  memcpy(&js->mem[ofs + sizeof(ant_offset_t) + sizeof(uint32_t)], &flags, sizeof(flags));
   uintptr_t kp = (uintptr_t)interned;
-  memcpy(&js->mem[ofs + sizeof(jsoff_t) + sizeof(uint32_t) * 2], &kp, sizeof(kp));
+  memcpy(&js->mem[ofs + sizeof(ant_offset_t) + sizeof(uint32_t) * 2], &kp, sizeof(kp));
 
   if (g_sym_registry_count < SYM_REGISTRY_MAX) {
     uint32_t id = sym_get_id(js, sym);
@@ -3681,35 +3681,35 @@ jsval_t js_mksym_for(ant_t *js, const char *key) {
   return sym;
 }
 
-const char *js_sym_key(jsval_t sym) {
+const char *js_sym_key(ant_value_t sym) {
   if (vtype(sym) != T_SYMBOL) return NULL;
   ant_t *js = rt->js;
   if (!(sym_get_flags(js, sym) & SYM_FLAG_GLOBAL)) return NULL;
   return (const char *)sym_get_key_ptr(js, sym);
 }
 
-const inline char *js_sym_desc(ant_t *js, jsval_t sym) {
+const inline char *js_sym_desc(ant_t *js, ant_value_t sym) {
   return sym_get_desc(js, sym);
 }
 
-jsval_t sym_lookup_by_id(uint32_t id) {
-  if (id == 0 || id - 1 >= g_sym_all_count) return (jsval_t)0;
+ant_value_t sym_lookup_by_id(uint32_t id) {
+  if (id == 0 || id - 1 >= g_sym_all_count) return (ant_value_t)0;
   return g_sym_all[id - 1];
 }
 
-void sym_gc_update_all(void (*op_val)(void *, jsval_t *), void *ctx) {
+void sym_gc_update_all(void (*op_val)(void *, ant_value_t *), void *ctx) {
   for (size_t i = 0; i < g_sym_all_count; i++) {
     op_val(ctx, &g_sym_all[i]);
   }
 }
 
-jsoff_t esize(jsoff_t w) {
-  jsoff_t cleaned = w & ~FLAGMASK;
+ant_offset_t esize(ant_offset_t w) {
+  ant_offset_t cleaned = w & ~FLAGMASK;
   switch (cleaned & 3U) {
-    case T_OBJ:  return (jsoff_t) (sizeof(jsoff_t) + sizeof(jsoff_t) + sizeof(jsoff_t));
-    case T_PROP: return (jsoff_t) (sizeof(jsoff_t) + sizeof(jsoff_t) + sizeof(jsval_t));
-    case T_STR:  return (jsoff_t) (sizeof(jsoff_t) + align64(cleaned >> 3U));
-    default:     return (jsoff_t) ~0U;
+    case T_OBJ:  return (ant_offset_t) (sizeof(ant_offset_t) + sizeof(ant_offset_t) + sizeof(ant_offset_t));
+    case T_PROP: return (ant_offset_t) (sizeof(ant_offset_t) + sizeof(ant_offset_t) + sizeof(ant_value_t));
+    case T_STR:  return (ant_offset_t) (sizeof(ant_offset_t) + align64(cleaned >> 3U));
+    default:     return (ant_offset_t) ~0U;
   }
 }
 
@@ -3717,10 +3717,10 @@ static inline bool streq(const char *buf, size_t len, const char *s, size_t n) {
   return len == n && !memcmp(buf, s, n);
 }
 
-static inline jsoff_t lkp_interned(ant_t *js, jsval_t obj, const char *search_intern, size_t len) {
+static inline ant_offset_t lkp_interned(ant_t *js, ant_value_t obj, const char *search_intern, size_t len) {
   obj = js_as_obj(obj);
-  jsoff_t obj_off = (jsoff_t)vdata(obj);
-  jsoff_t tail = loadoff(js, obj_off + sizeof(jsoff_t) * 2);
+  ant_offset_t obj_off = (ant_offset_t)vdata(obj);
+  ant_offset_t tail = loadoff(js, obj_off + sizeof(ant_offset_t) * 2);
   
   uint32_t slot = (((uintptr_t)search_intern >> 3) ^ obj_off) & (ANT_LIMIT_SIZE_CACHE - 1);
   intern_prop_cache_entry_t *ce = &intern_prop_cache[slot];
@@ -3731,18 +3731,18 @@ static inline jsoff_t lkp_interned(ant_t *js, jsval_t obj, const char *search_in
     && ce->tail == tail
   ) return ce->prop_off;
   
-  jsoff_t first_prop = loadoff(js, obj_off) & ~(3U | FLAGMASK);
-  jsoff_t off = first_prop; jsoff_t result = 0;
+  ant_offset_t first_prop = loadoff(js, obj_off) & ~(3U | FLAGMASK);
+  ant_offset_t off = first_prop; ant_offset_t result = 0;
   
   while (off < js->brk && off != 0) {
-    jsoff_t header = loadoff(js, off);
+    ant_offset_t header = loadoff(js, off);
     if (is_slot_prop(header)) { off = next_prop(header); continue; }
     
-    jsoff_t koff = loadoff(js, off + sizeof(jsoff_t));
-    jsoff_t klen = (loadoff(js, koff) >> 3) - 1;
+    ant_offset_t koff = loadoff(js, off + sizeof(ant_offset_t));
+    ant_offset_t klen = (loadoff(js, koff) >> 3) - 1;
     
     if (klen == len) {
-      const char *p = (char *)&js->mem[koff + sizeof(jsoff_t)];
+      const char *p = (char *)&js->mem[koff + sizeof(ant_offset_t)];
       if (intern_string(p, klen) == search_intern) { result = off; break; }
     }
     off = next_prop(header);
@@ -3757,43 +3757,43 @@ static inline jsoff_t lkp_interned(ant_t *js, jsval_t obj, const char *search_in
   return result;
 }
 
-inline jsoff_t lkp(ant_t *js, jsval_t obj, const char *buf, size_t len) {
+inline ant_offset_t lkp(ant_t *js, ant_value_t obj, const char *buf, size_t len) {
   const char *search_intern = intern_string(buf, len);
   if (!search_intern) return 0;
   return lkp_interned(js, obj, search_intern, len);
 }
 
-jsoff_t lkp_sym(ant_t *js, jsval_t obj, jsoff_t sym_off) {
+ant_offset_t lkp_sym(ant_t *js, ant_value_t obj, ant_offset_t sym_off) {
   obj = js_as_obj(obj);
-  jsoff_t obj_off = (jsoff_t)vdata(obj);
-  jsoff_t first_prop = loadoff(js, obj_off) & ~(3U | FLAGMASK);
-  jsoff_t off = first_prop;
+  ant_offset_t obj_off = (ant_offset_t)vdata(obj);
+  ant_offset_t first_prop = loadoff(js, obj_off) & ~(3U | FLAGMASK);
+  ant_offset_t off = first_prop;
   
   while (off < js->brk && off != 0) {
-    jsoff_t header = loadoff(js, off);
+    ant_offset_t header = loadoff(js, off);
     if (is_slot_prop(header)) { off = next_prop(header); continue; }
-    jsoff_t koff = loadoff(js, off + sizeof(jsoff_t));
+    ant_offset_t koff = loadoff(js, off + sizeof(ant_offset_t));
     if (koff == sym_off) return off;
     off = next_prop(header);
   }
   return 0;
 }
 
-jsoff_t lkp_sym_proto(ant_t *js, jsval_t obj, jsoff_t sym_off) {
+ant_offset_t lkp_sym_proto(ant_t *js, ant_value_t obj, ant_offset_t sym_off) {
   for (int i = 0; i < MAX_PROTO_CHAIN_DEPTH; i++) {
-    jsoff_t off = lkp_sym(js, obj, sym_off);
+    ant_offset_t off = lkp_sym(js, obj, sym_off);
     if (off != 0) return off;
-    jsval_t proto = get_proto(js, js_as_obj(obj));
+    ant_value_t proto = get_proto(js, js_as_obj(obj));
     if (!is_object_type(proto)) break;
     obj = proto;
   }
   return 0;
 }
 
-static jsval_t *resolve_bound_args(ant_t *js, jsval_t func_obj, jsval_t *args, int nargs, int *out_nargs) {
+static ant_value_t *resolve_bound_args(ant_t *js, ant_value_t func_obj, ant_value_t *args, int nargs, int *out_nargs) {
   *out_nargs = nargs;
   
-  jsval_t bound_arr = get_slot(js, func_obj, SLOT_BOUND_ARGS);
+  ant_value_t bound_arr = get_slot(js, func_obj, SLOT_BOUND_ARGS);
   int bound_argc = 0;
   
   if (vtype(bound_arr) == T_ARR) {
@@ -3801,22 +3801,22 @@ static jsval_t *resolve_bound_args(ant_t *js, jsval_t func_obj, jsval_t *args, i
   } if (bound_argc <= 0) return NULL;
   
   *out_nargs = bound_argc + nargs;
-  jsval_t *combined = (jsval_t *)ant_calloc(sizeof(jsval_t) * (*out_nargs));
+  ant_value_t *combined = (ant_value_t *)ant_calloc(sizeof(ant_value_t) * (*out_nargs));
   if (!combined) return NULL;
   
-  for (int i = 0; i < bound_argc; i++) combined[i] = arr_get(js, bound_arr, (jsoff_t)i);
+  for (int i = 0; i < bound_argc; i++) combined[i] = arr_get(js, bound_arr, (ant_offset_t)i);
   for (int i = 0; i < nargs; i++) combined[bound_argc + i] = args[i];
   
   return combined;
 }
 
-static jsoff_t lkp_with_getter(ant_t *js, jsval_t obj, const char *buf, size_t len, jsval_t *getter_out, bool *has_getter_out) {
+static ant_offset_t lkp_with_getter(ant_t *js, ant_value_t obj, const char *buf, size_t len, ant_value_t *getter_out, bool *has_getter_out) {
   *has_getter_out = false;
   *getter_out = js_mkundef();
   
-  for (jsval_t current = obj; is_object_type(current); ) {
+  for (ant_value_t current = obj; is_object_type(current); ) {
     current = js_as_obj(current);
-    jsoff_t current_off = (jsoff_t)vdata(current);
+    ant_offset_t current_off = (ant_offset_t)vdata(current);
     descriptor_entry_t *desc = lookup_descriptor(js, current_off, buf, len);
     
     if (desc && desc->has_getter) {
@@ -3825,10 +3825,10 @@ static jsoff_t lkp_with_getter(ant_t *js, jsval_t obj, const char *buf, size_t l
       return current_off;
     }
     
-    jsoff_t prop_off = lkp_interned(js, current, intern_string(buf, len), len);
+    ant_offset_t prop_off = lkp_interned(js, current, intern_string(buf, len), len);
     if (prop_off != 0) return prop_off;
     
-    jsval_t proto = get_proto(js, current);
+    ant_value_t proto = get_proto(js, current);
     if (!is_object_type(proto)) break;
     current = proto;
   }
@@ -3836,14 +3836,14 @@ static jsoff_t lkp_with_getter(ant_t *js, jsval_t obj, const char *buf, size_t l
   return 0;
 }
 
-static jsoff_t lkp_with_setter(ant_t *js, jsval_t obj, const char *buf, size_t len, jsval_t *setter_out, bool *has_setter_out) {
+static ant_offset_t lkp_with_setter(ant_t *js, ant_value_t obj, const char *buf, size_t len, ant_value_t *setter_out, bool *has_setter_out) {
   *has_setter_out = false;
   *setter_out = js_mkundef();
   
-  jsval_t current = obj;
+  ant_value_t current = obj;
   while (vtype(current) == T_OBJ || vtype(current) == T_FUNC) {
     current = js_as_obj(current);
-    jsoff_t current_off = (jsoff_t)vdata(current);
+    ant_offset_t current_off = (ant_offset_t)vdata(current);
     descriptor_entry_t *desc = lookup_descriptor(js, current_off, buf, len);
     
     if (desc && desc->has_setter) {
@@ -3852,10 +3852,10 @@ static jsoff_t lkp_with_setter(ant_t *js, jsval_t obj, const char *buf, size_t l
       return current_off;
     }
     
-    jsoff_t prop_off = lkp_interned(js, current, intern_string(buf, len), len);
+    ant_offset_t prop_off = lkp_interned(js, current, intern_string(buf, len), len);
     if (prop_off != 0) return prop_off;
     
-    jsval_t proto = get_proto(js, current);
+    ant_value_t proto = get_proto(js, current);
     if (vtype(proto) != T_OBJ && vtype(proto) != T_FUNC) break;
     current = proto;
   }
@@ -3863,14 +3863,14 @@ static jsoff_t lkp_with_setter(ant_t *js, jsval_t obj, const char *buf, size_t l
   return 0;
 }
 
-static jsval_t call_proto_accessor(ant_t *js, jsval_t prim, jsval_t accessor, bool has_accessor, jsval_t *arg, int arg_count, bool is_setter) {
+static ant_value_t call_proto_accessor(ant_t *js, ant_value_t prim, ant_value_t accessor, bool has_accessor, ant_value_t *arg, int arg_count, bool is_setter) {
   if (!has_accessor || (vtype(accessor) != T_FUNC && vtype(accessor) != T_CFUNC)) return js_mkundef();
   
   js_error_site_t saved_errsite = js->errsite;
-  jsval_t result = sv_vm_call(js->vm, js, accessor, prim, arg, arg_count, NULL, false);
+  ant_value_t result = sv_vm_call(js->vm, js, accessor, prim, arg, arg_count, NULL, false);
   
   bool had_throw = js->thrown_exists;
-  jsval_t thrown = js->thrown_value;
+  ant_value_t thrown = js->thrown_value;
   js->errsite = saved_errsite;
   
   if (had_throw) {
@@ -3882,50 +3882,50 @@ static jsval_t call_proto_accessor(ant_t *js, jsval_t prim, jsval_t accessor, bo
   return result;
 }
 
-jsval_t js_get_proto(ant_t *js, jsval_t obj) {
+ant_value_t js_get_proto(ant_t *js, ant_value_t obj) {
   uint8_t t = vtype(obj);
 
   if (!is_object_type(obj)) return js_mknull();
-  jsval_t as_obj = js_as_obj(obj);
+  ant_value_t as_obj = js_as_obj(obj);
   
-  jsval_t proto = get_slot(js, as_obj, SLOT_PROTO);
+  ant_value_t proto = get_slot(js, as_obj, SLOT_PROTO);
   if (is_object_type(proto)) return proto;
   
   if (t != T_OBJ) return get_prototype_for_type(js, t);
   return js_mknull();
 }
 
-static jsval_t get_proto(ant_t *js, jsval_t obj) {
+static ant_value_t get_proto(ant_t *js, ant_value_t obj) {
   return js_get_proto(js, obj);
 }
 
-void js_set_proto(ant_t *js, jsval_t obj, jsval_t proto) {
+void js_set_proto(ant_t *js, ant_value_t obj, ant_value_t proto) {
   if (!is_object_type(obj)) return;
   
-  jsval_t as_obj = js_as_obj(obj);
+  ant_value_t as_obj = js_as_obj(obj);
   set_slot(js, as_obj, SLOT_PROTO, proto);
 }
 
-static void set_proto(ant_t *js, jsval_t obj, jsval_t proto) {
+static void set_proto(ant_t *js, ant_value_t obj, ant_value_t proto) {
   js_set_proto(js, obj, proto);
 }
 
-jsval_t js_get_ctor_proto(ant_t *js, const char *name, size_t len) {
-  jsoff_t ctor_off = lkp_interned(js, js->global, intern_string(name, len), len);
+ant_value_t js_get_ctor_proto(ant_t *js, const char *name, size_t len) {
+  ant_offset_t ctor_off = lkp_interned(js, js->global, intern_string(name, len), len);
   if (ctor_off == 0) return js_mknull();
-  jsval_t ctor = resolveprop(js, mkval(T_PROP, ctor_off));
+  ant_value_t ctor = resolveprop(js, mkval(T_PROP, ctor_off));
   if (vtype(ctor) != T_FUNC) return js_mknull();
-  jsval_t ctor_obj = js_as_obj(ctor);
-  jsoff_t proto_off = lkp_interned(js, ctor_obj, INTERN_PROTOTYPE, 9);
+  ant_value_t ctor_obj = js_as_obj(ctor);
+  ant_offset_t proto_off = lkp_interned(js, ctor_obj, INTERN_PROTOTYPE, 9);
   if (proto_off == 0) return js_mknull();
   return resolveprop(js, mkval(T_PROP, proto_off));
 }
 
-static inline jsval_t get_ctor_proto(ant_t *js, const char *name, size_t len) {
+static inline ant_value_t get_ctor_proto(ant_t *js, const char *name, size_t len) {
   return js_get_ctor_proto(js, name, len);
 }
 
-static jsval_t get_prototype_for_type(ant_t *js, uint8_t type) {
+static ant_value_t get_prototype_for_type(ant_t *js, uint8_t type) {
 switch (type) {
   case T_STR:     return get_ctor_proto(js, "String", 6);
   case T_NUM:     return get_ctor_proto(js, "Number", 6);
@@ -3939,24 +3939,24 @@ switch (type) {
   default:        return js_mknull();
 }}
 
-jsoff_t lkp_proto(ant_t *js, jsval_t obj, const char *key, size_t len) {
+ant_offset_t lkp_proto(ant_t *js, ant_value_t obj, const char *key, size_t len) {
   uint8_t t = vtype(obj);
   const char *key_intern = intern_string(key, len);
   if (!key_intern) return 0;
 
-  jsval_t cur = obj;
+  ant_value_t cur = obj;
   int depth = 0;
   
   while (depth < MAX_PROTO_CHAIN_DEPTH) {
     if (t == T_OBJ || t == T_ARR || t == T_FUNC || t == T_PROMISE) {
-      jsval_t as_obj = js_as_obj(cur);
-      jsoff_t off = lkp_interned(js, as_obj, key_intern, len);
+      ant_value_t as_obj = js_as_obj(cur);
+      ant_offset_t off = lkp_interned(js, as_obj, key_intern, len);
       if (off != 0) return off;
     } else if (t == T_CFUNC) {
-      jsval_t func_proto = get_ctor_proto(js, "Function", 8);
+      ant_value_t func_proto = get_ctor_proto(js, "Function", 8);
       uint8_t ft = vtype(func_proto);
       if (ft == T_OBJ || ft == T_ARR || ft == T_FUNC) {
-        jsoff_t off = lkp(js, js_as_obj(func_proto), key, len);
+        ant_offset_t off = lkp(js, js_as_obj(func_proto), key, len);
         if (off != 0) return off;
       }
       break;
@@ -3967,24 +3967,24 @@ jsoff_t lkp_proto(ant_t *js, jsval_t obj, const char *key, size_t len) {
   return 0;
 }
 
-static jsval_t getprop_any(ant_t *js, jsval_t obj, const char *key, size_t key_len) {
+static ant_value_t getprop_any(ant_t *js, ant_value_t obj, const char *key, size_t key_len) {
   uint8_t t = vtype(obj);
   
   if (t == T_STR && key_len == 6 && memcmp(key, "length", 6) == 0) {
-    jsoff_t byte_len;
-    jsoff_t str_off = vstr(js, obj, &byte_len);
+    ant_offset_t byte_len;
+    ant_offset_t str_off = vstr(js, obj, &byte_len);
     return tov(D(utf16_strlen((const char *)&js->mem[str_off], byte_len)));
   }
   
   if (t == T_STR || t == T_NUM || t == T_BOOL || t == T_BIGINT) {
-    jsoff_t off = lkp_proto(js, obj, key, key_len);
+    ant_offset_t off = lkp_proto(js, obj, key, key_len);
     if (off != 0) return resolveprop(js, mkval(T_PROP, off));
     return js_mkundef();
   }
   
   if (t == T_OBJ || t == T_ARR || t == T_FUNC) {
-    jsval_t as_obj = js_as_obj(obj);
-    jsoff_t off = lkp(js, as_obj, key, key_len);
+    ant_value_t as_obj = js_as_obj(obj);
+    ant_offset_t off = lkp(js, as_obj, key, key_len);
     if (off != 0) return resolveprop(js, mkval(T_PROP, off));
     off = lkp_proto(js, obj, key, key_len);
     if (off != 0) return resolveprop(js, mkval(T_PROP, off));
@@ -3993,36 +3993,36 @@ static jsval_t getprop_any(ant_t *js, jsval_t obj, const char *key, size_t key_l
   return js_mkundef();
 }
 
-static jsval_t try_dynamic_getter(ant_t *js, jsval_t obj, const char *key, size_t key_len) {
-  jsoff_t obj_off = (jsoff_t)vdata(js_as_obj(obj));
+static ant_value_t try_dynamic_getter(ant_t *js, ant_value_t obj, const char *key, size_t key_len) {
+  ant_offset_t obj_off = (ant_offset_t)vdata(js_as_obj(obj));
   dynamic_accessors_t *entry = NULL;
-  HASH_FIND(hh, accessor_registry, &obj_off, sizeof(jsoff_t), entry);
+  HASH_FIND(hh, accessor_registry, &obj_off, sizeof(ant_offset_t), entry);
   if (!entry || !entry->getter) return js_mkundef();
   return entry->getter(js, obj, key, key_len);
 }
 
-static bool try_dynamic_setter(ant_t *js, jsval_t obj, const char *key, size_t key_len, jsval_t value) {
-  jsoff_t obj_off = (jsoff_t)vdata(js_as_obj(obj));
+static bool try_dynamic_setter(ant_t *js, ant_value_t obj, const char *key, size_t key_len, ant_value_t value) {
+  ant_offset_t obj_off = (ant_offset_t)vdata(js_as_obj(obj));
   dynamic_accessors_t *entry = NULL;
-  HASH_FIND(hh, accessor_registry, &obj_off, sizeof(jsoff_t), entry);
+  HASH_FIND(hh, accessor_registry, &obj_off, sizeof(ant_offset_t), entry);
   if (!entry || !entry->setter) return false;
   return entry->setter(js, obj, key, key_len, value);
 }
 
-static bool try_dynamic_deleter(ant_t *js, jsval_t obj, const char *key, size_t key_len) {
-  jsoff_t obj_off = (jsoff_t)vdata(js_as_obj(obj));
+static bool try_dynamic_deleter(ant_t *js, ant_value_t obj, const char *key, size_t key_len) {
+  ant_offset_t obj_off = (ant_offset_t)vdata(js_as_obj(obj));
   dynamic_accessors_t *entry = NULL;
-  HASH_FIND(hh, accessor_registry, &obj_off, sizeof(jsoff_t), entry);
+  HASH_FIND(hh, accessor_registry, &obj_off, sizeof(ant_offset_t), entry);
   if (!entry || !entry->deleter) return false;
   return entry->deleter(js, obj, key, key_len);
 }
 
-static bool try_accessor_getter(ant_t *js, jsval_t obj, const char *key, size_t key_len, jsval_t *out) {
-  jsval_t getter = js_mkundef();
+static bool try_accessor_getter(ant_t *js, ant_value_t obj, const char *key, size_t key_len, ant_value_t *out) {
+  ant_value_t getter = js_mkundef();
   bool has_getter = false;
   lkp_with_getter(js, obj, key, key_len, &getter, &has_getter);
 
-  jsval_t result = call_proto_accessor(js, obj, getter, has_getter, NULL, 0, false);
+  ant_value_t result = call_proto_accessor(js, obj, getter, has_getter, NULL, 0, false);
   if (vtype(result) != T_UNDEF) {
     *out = result;
     return true;
@@ -4030,14 +4030,14 @@ static bool try_accessor_getter(ant_t *js, jsval_t obj, const char *key, size_t 
   return false;
 }
 
-static bool try_accessor_setter(ant_t *js, jsval_t obj, const char *key, size_t key_len, jsval_t val, jsval_t *out) {
-  jsval_t setter = js_mkundef();
+static bool try_accessor_setter(ant_t *js, ant_value_t obj, const char *key, size_t key_len, ant_value_t val, ant_value_t *out) {
+  ant_value_t setter = js_mkundef();
   bool has_setter = false;
   
   lkp_with_setter(js, obj, key, key_len, &setter, &has_setter);
   if (!has_setter) return false;
 
-  jsval_t result = call_proto_accessor(js, obj, setter, has_setter, &val, 1, true);
+  ant_value_t result = call_proto_accessor(js, obj, setter, has_setter, &val, 1, true);
   if (is_err(result)) {
     *out = result;
     return true;
@@ -4047,9 +4047,9 @@ static bool try_accessor_setter(ant_t *js, jsval_t obj, const char *key, size_t 
   return true;
 }
 
-jsval_t resolveprop(ant_t *js, jsval_t v) {
+ant_value_t resolveprop(ant_t *js, ant_value_t v) {
   if (vtype(v) != T_PROP) return v;
-  return resolveprop(js, loadval(js, (jsoff_t) (vdata(v) + sizeof(jsoff_t) * 2)));
+  return resolveprop(js, loadval(js, (ant_offset_t) (vdata(v) + sizeof(ant_offset_t) * 2)));
 }
 
 typedef struct {
@@ -4090,23 +4090,23 @@ static bool string_builder_append(string_builder_t *sb, const char *data, size_t
   return true;
 }
 
-static jsval_t string_builder_finalize(ant_t *js, string_builder_t *sb) {
-  jsval_t result = js_mkstr(js, sb->buffer, sb->size);
+static ant_value_t string_builder_finalize(ant_t *js, string_builder_t *sb) {
+  ant_value_t result = js_mkstr(js, sb->buffer, sb->size);
   if (sb->is_dynamic && sb->buffer) free(sb->buffer);
   return result;
 }
 
-jsoff_t str_len_fast(ant_t *js, jsval_t str) {
+ant_offset_t str_len_fast(ant_t *js, ant_value_t str) {
   if (vtype(str) != T_STR) return 0;
   if (is_rope(js, str)) return rope_len(js, str);
   return assert_flat_string_len(js, str, NULL);
 }
 
-jsval_t do_string_op(ant_t *js, uint8_t op, jsval_t l, jsval_t r) {
+ant_value_t do_string_op(ant_t *js, uint8_t op, ant_value_t l, ant_value_t r) {
   if (op == TOK_PLUS) {
-    jsoff_t n1 = str_len_fast(js, l);
-    jsoff_t n2 = str_len_fast(js, r);
-    jsoff_t total_len = n1 + n2;
+    ant_offset_t n1 = str_len_fast(js, l);
+    ant_offset_t n2 = str_len_fast(js, r);
+    ant_offset_t total_len = n1 + n2;
     
     if (n2 == 0) return l;
     if (n1 == 0) return r;
@@ -4116,13 +4116,13 @@ jsval_t do_string_op(ant_t *js, uint8_t op, jsval_t l, jsval_t r) {
     uint8_t new_depth = (left_depth > right_depth ? left_depth : right_depth) + 1;
     
     if (new_depth >= ROPE_MAX_DEPTH || total_len >= ROPE_FLATTEN_THRESHOLD) {
-      jsval_t flat_l = l, flat_r = r;
+      ant_value_t flat_l = l, flat_r = r;
       if (is_rope(js, l)) flat_l = rope_flatten(js, l);
       if (is_err(flat_l)) return flat_l;
       if (is_rope(js, r)) flat_r = rope_flatten(js, r);
       if (is_err(flat_r)) return flat_r;
       
-      jsoff_t off1, off2, len1, len2;
+      ant_offset_t off1, off2, len1, len2;
       off1 = vstr(js, flat_l, &len1);
       off2 = vstr(js, flat_r, &len2);
       
@@ -4141,8 +4141,8 @@ jsval_t do_string_op(ant_t *js, uint8_t op, jsval_t l, jsval_t r) {
     return js_mkrope(js, l, r, total_len, new_depth);
   }
   
-  jsoff_t n1, off1 = vstr(js, l, &n1);
-  jsoff_t n2, off2 = vstr(js, r, &n2);
+  ant_offset_t n1, off1 = vstr(js, l, &n1);
+  ant_offset_t n2, off2 = vstr(js, r, &n2);
   
   if (op == TOK_EQ) {
     bool eq = n1 == n2 && memcmp(&js->mem[off1], &js->mem[off2], n1) == 0;
@@ -4151,7 +4151,7 @@ jsval_t do_string_op(ant_t *js, uint8_t op, jsval_t l, jsval_t r) {
     bool eq = n1 == n2 && memcmp(&js->mem[off1], &js->mem[off2], n1) == 0;
     return mkval(T_BOOL, eq ? 0 : 1);
   } else if (op == TOK_LT || op == TOK_LE || op == TOK_GT || op == TOK_GE) {
-    jsoff_t min_len = n1 < n2 ? n1 : n2;
+    ant_offset_t min_len = n1 < n2 ? n1 : n2;
     int cmp = memcmp(&js->mem[off1], &js->mem[off2], min_len);
     
     if (cmp == 0) {
@@ -4172,15 +4172,15 @@ jsval_t do_string_op(ant_t *js, uint8_t op, jsval_t l, jsval_t r) {
 
 
 typedef enum { ITER_CONTINUE, ITER_BREAK, ITER_ERROR } iter_action_t;
-typedef iter_action_t (*iter_callback_t)(ant_t *js, jsval_t value, void *ctx, jsval_t *out);
-static jsval_t iter_foreach(ant_t *js, jsval_t iterable, iter_callback_t cb, void *ctx);
+typedef iter_action_t (*iter_callback_t)(ant_t *js, ant_value_t value, void *ctx, ant_value_t *out);
+static ant_value_t iter_foreach(ant_t *js, ant_value_t iterable, iter_callback_t cb, void *ctx);
 
 
-static bool js_try_call_method(ant_t *js, jsval_t obj, const char *method, size_t method_len, jsval_t *args, int nargs, jsval_t *out_result) {
-  jsval_t getter = js_mkundef(); bool has_getter = false;
-  jsoff_t off = lkp_with_getter(js, obj, method, method_len, &getter, &has_getter);
+static bool js_try_call_method(ant_t *js, ant_value_t obj, const char *method, size_t method_len, ant_value_t *args, int nargs, ant_value_t *out_result) {
+  ant_value_t getter = js_mkundef(); bool has_getter = false;
+  ant_offset_t off = lkp_with_getter(js, obj, method, method_len, &getter, &has_getter);
   
-  jsval_t fn;
+  ant_value_t fn;
   if (has_getter) {
     fn = call_proto_accessor(js, obj, getter, true, NULL, 0, false);
     if (is_err(fn)) { *out_result = fn; return true; }
@@ -4191,15 +4191,15 @@ static bool js_try_call_method(ant_t *js, jsval_t obj, const char *method, size_
   uint8_t ft = vtype(fn);
   if (ft != T_FUNC && ft != T_CFUNC) return false;
   
-  jsval_t saved_this = js->this_val;
+  ant_value_t saved_this = js->this_val;
   js->this_val = obj;
   
-  jsval_t result;
-  if (ft == T_CFUNC) result = ((jsval_t (*)(ant_t *, jsval_t *, int))vdata(fn))(js, args, nargs);
+  ant_value_t result;
+  if (ft == T_CFUNC) result = ((ant_value_t (*)(ant_t *, ant_value_t *, int))vdata(fn))(js, args, nargs);
   else result = sv_vm_call(js->vm, js, fn, obj, args, nargs, NULL, false);
   
   bool had_throw = js->thrown_exists;
-  jsval_t thrown = js->thrown_value;
+  ant_value_t thrown = js->thrown_value;
   
   js->this_val = saved_this;
   if (had_throw) {
@@ -4211,14 +4211,14 @@ static bool js_try_call_method(ant_t *js, jsval_t obj, const char *method, size_
   return true;
 }
 
-static jsval_t js_call_method(ant_t *js, jsval_t obj, const char *method, size_t method_len, jsval_t *args, int nargs) {
-  jsval_t result;
+static ant_value_t js_call_method(ant_t *js, ant_value_t obj, const char *method, size_t method_len, ant_value_t *args, int nargs) {
+  ant_value_t result;
   if (!js_try_call_method(js, obj, method, method_len, args, nargs, &result)) return js_mkundef();
   return result;
 }
 
-static jsval_t js_call_toString(ant_t *js, jsval_t value) {
-  jsval_t result = js_call_method(js, value, "toString", 8, NULL, 0);
+static ant_value_t js_call_toString(ant_t *js, ant_value_t value) {
+  ant_value_t result = js_call_method(js, value, "toString", 8, NULL, 0);
   
   if (is_err(result)) return result;
   if (vtype(result) == T_STR) return result;
@@ -4240,24 +4240,24 @@ fallback:;
   return js_mkstr(js, buf, len);
 }
 
-static jsval_t js_call_valueOf(ant_t *js, jsval_t value) {
-  jsval_t result = js_call_method(js, value, "valueOf", 7, NULL, 0);
+static ant_value_t js_call_valueOf(ant_t *js, ant_value_t value) {
+  ant_value_t result = js_call_method(js, value, "valueOf", 7, NULL, 0);
   if (vtype(result) == T_UNDEF) return value;
   return result;
 }
 
-static inline bool is_primitive(jsval_t v) {
+static inline bool is_primitive(ant_value_t v) {
   uint8_t t = vtype(v);
   return t == T_STR || t == T_NUM || t == T_BOOL || t == T_NULL || t == T_UNDEF || t == T_SYMBOL || t == T_BIGINT;
 }
 
-static jsval_t try_exotic_to_primitive(ant_t *js, jsval_t value, int hint) {
-  jsval_t tp_sym = get_toPrimitive_sym();
+static ant_value_t try_exotic_to_primitive(ant_t *js, ant_value_t value, int hint) {
+  ant_value_t tp_sym = get_toPrimitive_sym();
   if (vtype(tp_sym) != T_SYMBOL) return mkval(T_UNDEF, 0);
-  jsoff_t tp_off = lkp_sym_proto(js, value, (jsoff_t)vdata(tp_sym));
+  ant_offset_t tp_off = lkp_sym_proto(js, value, (ant_offset_t)vdata(tp_sym));
   if (tp_off == 0) return mkval(T_UNDEF, 0);
   
-  jsval_t tp_fn = resolveprop(js, mkval(T_PROP, tp_off));
+  ant_value_t tp_fn = resolveprop(js, mkval(T_PROP, tp_off));
   uint8_t ft = vtype(tp_fn);
   
   if (ft == T_UNDEF) return mkval(T_UNDEF, 0);
@@ -4266,19 +4266,19 @@ static jsval_t try_exotic_to_primitive(ant_t *js, jsval_t value, int hint) {
   }
   
   const char *hint_str = hint == 1 ? "string" : (hint == 2 ? "number" : "default");
-  jsval_t hint_arg = js_mkstr(js, hint_str, strlen(hint_str));
-  jsval_t result = sv_vm_call(js->vm, js, tp_fn, value, &hint_arg, 1, NULL, false);
+  ant_value_t hint_arg = js_mkstr(js, hint_str, strlen(hint_str));
+  ant_value_t result = sv_vm_call(js->vm, js, tp_fn, value, &hint_arg, 1, NULL, false);
   
   if (is_err(result) || is_primitive(result)) return result;
   return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert object to primitive value");
 }
 
-static jsval_t try_ordinary_to_primitive(ant_t *js, jsval_t value, int hint) {
+static ant_value_t try_ordinary_to_primitive(ant_t *js, ant_value_t value, int hint) {
   static const char *names[] = {"valueOf", "toString"};
   static const size_t lens[] = {7, 8};
   
   int first = (hint == 1); 
-  jsval_t result;
+  ant_value_t result;
   
   for (int i = 0; i < 2; i++) {
     int idx = first ^ i;
@@ -4289,21 +4289,21 @@ static jsval_t try_ordinary_to_primitive(ant_t *js, jsval_t value, int hint) {
   return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert object to primitive value");
 }
 
-jsval_t js_to_primitive(ant_t *js, jsval_t value, int hint) {
+ant_value_t js_to_primitive(ant_t *js, ant_value_t value, int hint) {
   if (is_primitive(value)) return value;
   if (!is_object_type(value)) return value;
   
-  jsval_t result = try_exotic_to_primitive(js, value, hint);
+  ant_value_t result = try_exotic_to_primitive(js, value, hint);
   if (vtype(result) != T_UNDEF) return result;
   
   return try_ordinary_to_primitive(js, value, hint);
 }
 
-bool strict_eq_values(ant_t *js, jsval_t l, jsval_t r) {
+bool strict_eq_values(ant_t *js, ant_value_t l, ant_value_t r) {
   uint8_t t = vtype(l);
   if (t != vtype(r)) return false;
   if (t == T_STR) {
-    jsoff_t n1, n2, off1 = vstr(js, l, &n1), off2 = vstr(js, r, &n2);
+    ant_offset_t n1, n2, off1 = vstr(js, l, &n1), off2 = vstr(js, r, &n2);
     return n1 == n2 && memcmp(&js->mem[off1], &js->mem[off2], n1) == 0;
   }
   if (t == T_NUM) return tod(l) == tod(r);
@@ -4311,11 +4311,11 @@ bool strict_eq_values(ant_t *js, jsval_t l, jsval_t r) {
   return vdata(l) == vdata(r);
 }
 
-jsval_t coerce_to_str(ant_t *js, jsval_t v) {
+ant_value_t coerce_to_str(ant_t *js, ant_value_t v) {
   if (vtype(v) == T_STR) return v;
   
   if (is_object_type(v)) {
-    jsval_t prim = js_to_primitive(js, v, 1);
+    ant_value_t prim = js_to_primitive(js, v, 1);
     if (is_err(prim)) return prim;
     if (vtype(prim) == T_STR) return prim;
     return js_tostring_val(js, prim);
@@ -4324,11 +4324,11 @@ jsval_t coerce_to_str(ant_t *js, jsval_t v) {
   return js_tostring_val(js, v);
 }
 
-jsval_t coerce_to_str_concat(ant_t *js, jsval_t v) {
+ant_value_t coerce_to_str_concat(ant_t *js, ant_value_t v) {
   if (vtype(v) == T_STR) return v;
   
   if (is_object_type(v)) {
-    jsval_t prim = js_to_primitive(js, v, 0);
+    ant_value_t prim = js_to_primitive(js, v, 0);
     if (is_err(prim)) return prim;
     if (vtype(prim) == T_STR) return prim;
     return js_tostring_val(js, prim);
@@ -4337,23 +4337,23 @@ jsval_t coerce_to_str_concat(ant_t *js, jsval_t v) {
   return js_tostring_val(js, v);
 }
 
-static void unlink_prop(ant_t *js, jsoff_t obj_off, jsoff_t prop_off, jsoff_t prev_off) {
-  jsoff_t deleted_next = loadoff(js, prop_off) & ~FLAGMASK;
-  jsoff_t target = prev_off ? prev_off : obj_off;
-  jsoff_t current = loadoff(js, target);
+static void unlink_prop(ant_t *js, ant_offset_t obj_off, ant_offset_t prop_off, ant_offset_t prev_off) {
+  ant_offset_t deleted_next = loadoff(js, prop_off) & ~FLAGMASK;
+  ant_offset_t target = prev_off ? prev_off : obj_off;
+  ant_offset_t current = loadoff(js, target);
   
   saveoff(js, target, (deleted_next & ~3ULL) | (current & (FLAGMASK | 3ULL)));
-  jsoff_t tail = loadoff(js, obj_off + sizeof(jsoff_t) + sizeof(jsoff_t));
+  ant_offset_t tail = loadoff(js, obj_off + sizeof(ant_offset_t) + sizeof(ant_offset_t));
   
   if (tail == prop_off) {
-    saveoff(js, obj_off + sizeof(jsoff_t) + sizeof(jsoff_t), prev_off);
+    saveoff(js, obj_off + sizeof(ant_offset_t) + sizeof(ant_offset_t), prev_off);
   }
   
   invalidate_prop_cache(js, obj_off, prop_off);
   js->needs_gc = true;
 }
 
-static jsval_t check_frozen_sealed(ant_t *js, jsval_t obj, const char *action) {
+static ant_value_t check_frozen_sealed(ant_t *js, ant_value_t obj, const char *action) {
   if (js_truthy(js, get_slot(js, obj, SLOT_FROZEN))) {
     if (sv_vm_is_strict(js->vm)) return js_mkerr(js, "cannot %s property of frozen object", action);
     return js_false;
@@ -4365,28 +4365,28 @@ static jsval_t check_frozen_sealed(ant_t *js, jsval_t obj, const char *action) {
   return js_mkundef();
 }
 
-jsval_t js_delete_prop(ant_t *js, jsval_t obj, const char *key, size_t len) {
+ant_value_t js_delete_prop(ant_t *js, ant_value_t obj, const char *key, size_t len) {
   obj = js_as_obj(obj);
   if (is_proxy(js, obj)) {
-    jsval_t result = proxy_delete(js, obj, key, len);
+    ant_value_t result = proxy_delete(js, obj, key, len);
     return is_err(result) ? result : js_bool(js_truthy(js, result));
   }
 
-  jsval_t err = check_frozen_sealed(js, obj, "delete");
+  ant_value_t err = check_frozen_sealed(js, obj, "delete");
   if (vtype(err) != T_UNDEF) return err;
 
-  jsoff_t obj_off = (jsoff_t)vdata(js_as_obj(obj));
+  ant_offset_t obj_off = (ant_offset_t)vdata(js_as_obj(obj));
 
   if (is_arr_off(js, obj_off)) {
-    jsoff_t doff = get_dense_buf_off(js, obj_off);
+    ant_offset_t doff = get_dense_buf_off(js, obj_off);
     unsigned long del_idx;
     if (doff && parse_array_index(key, len, dense_length(js, doff), &del_idx)) {
-      arr_del(js, mkval(T_ARR, (uint64_t)obj_off), (jsoff_t)del_idx);
+      arr_del(js, mkval(T_ARR, (uint64_t)obj_off), (ant_offset_t)del_idx);
       return js_true;
     }
   }
 
-  jsoff_t prop_off = lkp(js, obj, key, len);
+  ant_offset_t prop_off = lkp(js, obj, key, len);
   if (prop_off == 0) {
     try_dynamic_deleter(js, obj, key, len);
     return js_true;
@@ -4403,13 +4403,13 @@ jsval_t js_delete_prop(ant_t *js, jsval_t obj, const char *key, size_t len) {
     return js_false;
   }
 
-  jsoff_t first_prop = loadoff(js, obj_off) & ~(3U | FLAGMASK);
+  ant_offset_t first_prop = loadoff(js, obj_off) & ~(3U | FLAGMASK);
   if (first_prop == prop_off) {
     unlink_prop(js, obj_off, prop_off, 0);
     return js_true;
   }
-  for (jsoff_t prev = first_prop; prev != 0; ) {
-    jsoff_t next_prop = loadoff(js, prev) & ~(3U | FLAGMASK);
+  for (ant_offset_t prev = first_prop; prev != 0; ) {
+    ant_offset_t next_prop = loadoff(js, prev) & ~(3U | FLAGMASK);
     if (next_prop == prop_off) {
       unlink_prop(js, obj_off, prop_off, prev);
       return js_true;
@@ -4419,19 +4419,19 @@ jsval_t js_delete_prop(ant_t *js, jsval_t obj, const char *key, size_t len) {
   return js_true;
 }
 
-jsval_t js_delete_sym_prop(ant_t *js, jsval_t obj, jsval_t sym) {
+ant_value_t js_delete_sym_prop(ant_t *js, ant_value_t obj, ant_value_t sym) {
   obj = js_as_obj(obj);
   if (is_proxy(js, obj)) {
-    jsval_t result = proxy_delete_val(js, obj, sym);
+    ant_value_t result = proxy_delete_val(js, obj, sym);
     return is_err(result) ? result : js_bool(js_truthy(js, result));
   }
 
-  jsval_t err = check_frozen_sealed(js, obj, "delete");
+  ant_value_t err = check_frozen_sealed(js, obj, "delete");
   if (vtype(err) != T_UNDEF) return err;
 
-  jsoff_t obj_off = (jsoff_t)vdata(obj);
-  jsoff_t sym_off = (jsoff_t)vdata(sym);
-  jsoff_t prop_off = lkp_sym(js, obj, sym_off);
+  ant_offset_t obj_off = (ant_offset_t)vdata(obj);
+  ant_offset_t sym_off = (ant_offset_t)vdata(sym);
+  ant_offset_t prop_off = lkp_sym(js, obj, sym_off);
   if (prop_off == 0) return js_true;
 
   if (is_nonconfig_prop(js, prop_off)) {
@@ -4439,13 +4439,13 @@ jsval_t js_delete_sym_prop(ant_t *js, jsval_t obj, jsval_t sym) {
     return js_false;
   }
 
-  jsoff_t first_prop = loadoff(js, obj_off) & ~(3U | FLAGMASK);
+  ant_offset_t first_prop = loadoff(js, obj_off) & ~(3U | FLAGMASK);
   if (first_prop == prop_off) {
     unlink_prop(js, obj_off, prop_off, 0);
     return js_true;
   }
-  for (jsoff_t prev = first_prop; prev != 0; ) {
-    jsoff_t np = loadoff(js, prev) & ~(3U | FLAGMASK);
+  for (ant_offset_t prev = first_prop; prev != 0; ) {
+    ant_offset_t np = loadoff(js, prev) & ~(3U | FLAGMASK);
     if (np == prop_off) {
       unlink_prop(js, obj_off, prop_off, prev);
       return js_true;
@@ -4455,63 +4455,63 @@ jsval_t js_delete_sym_prop(ant_t *js, jsval_t obj, jsval_t sym) {
   return js_true;
 }
 
-static jsval_t iter_call_noargs_with_this(ant_t *js, jsval_t this_val, jsval_t method) {
-  jsval_t result = sv_vm_call(js->vm, js, method, this_val, NULL, 0, NULL, false);
+static ant_value_t iter_call_noargs_with_this(ant_t *js, ant_value_t this_val, ant_value_t method) {
+  ant_value_t result = sv_vm_call(js->vm, js, method, this_val, NULL, 0, NULL, false);
   return result;
 }
 
-static jsval_t iter_close_iterator(ant_t *js, jsval_t iterator) {
-  jsoff_t return_off = lkp_proto(js, iterator, "return", 6);
+static ant_value_t iter_close_iterator(ant_t *js, ant_value_t iterator) {
+  ant_offset_t return_off = lkp_proto(js, iterator, "return", 6);
   if (return_off == 0) return js_mkundef();
-  jsval_t return_method = loadval(js, return_off + sizeof(jsoff_t) * 2);
+  ant_value_t return_method = loadval(js, return_off + sizeof(ant_offset_t) * 2);
   if (vtype(return_method) != T_FUNC && vtype(return_method) != T_CFUNC) {
     return js_mkerr(js, "iterator.return is not a function");
   }
   return iter_call_noargs_with_this(js, iterator, return_method);
 }
 
-static jsval_t iter_foreach(ant_t *js, jsval_t iterable, iter_callback_t cb, void *ctx) {
-  jsval_t iter_sym = get_iterator_sym();
-  jsoff_t iter_prop = (vtype(iter_sym) == T_SYMBOL) ? lkp_sym_proto(js, iterable, (jsoff_t)vdata(iter_sym)) : 0;
+static ant_value_t iter_foreach(ant_t *js, ant_value_t iterable, iter_callback_t cb, void *ctx) {
+  ant_value_t iter_sym = get_iterator_sym();
+  ant_offset_t iter_prop = (vtype(iter_sym) == T_SYMBOL) ? lkp_sym_proto(js, iterable, (ant_offset_t)vdata(iter_sym)) : 0;
   if (iter_prop == 0) return js_mkerr(js, "not iterable");
 
-  jsval_t iter_method = loadval(js, iter_prop + sizeof(jsoff_t) * 2);
-  jsval_t iterator = iter_call_noargs_with_this(js, iterable, iter_method);
+  ant_value_t iter_method = loadval(js, iter_prop + sizeof(ant_offset_t) * 2);
+  ant_value_t iterator = iter_call_noargs_with_this(js, iterable, iter_method);
   if (is_err(iterator)) return iterator;
   
-  jshdl_t h_iterator = js_root(js, iterator);
-  jsval_t out = js_mkundef();
+  ant_handle_t h_iterator = js_root(js, iterator);
+  ant_value_t out = js_mkundef();
   
   while (true) {
-    jsval_t cur_iter = js_deref(js, h_iterator);
-    jsoff_t next_off = lkp_proto(js, cur_iter, "next", 4);
+    ant_value_t cur_iter = js_deref(js, h_iterator);
+    ant_offset_t next_off = lkp_proto(js, cur_iter, "next", 4);
     if (next_off == 0) { js_unroot(js, h_iterator); return js_mkerr(js, "iterator.next is not a function"); }
     
-    jsval_t next_method = loadval(js, next_off + sizeof(jsoff_t) * 2);
+    ant_value_t next_method = loadval(js, next_off + sizeof(ant_offset_t) * 2);
     if (vtype(next_method) != T_FUNC && vtype(next_method) != T_CFUNC) {
       js_unroot(js, h_iterator);
       return js_mkerr(js, "iterator.next is not a function");
     }
     
     cur_iter = js_deref(js, h_iterator);
-    jsval_t result = iter_call_noargs_with_this(js, cur_iter, next_method);
+    ant_value_t result = iter_call_noargs_with_this(js, cur_iter, next_method);
     if (is_err(result)) { js_unroot(js, h_iterator); return result; }
     
-    jsoff_t done_off = lkp(js, result, "done", 4);
-    jsval_t done_val = done_off ? loadval(js, done_off + sizeof(jsoff_t) * 2) : js_mkundef();
+    ant_offset_t done_off = lkp(js, result, "done", 4);
+    ant_value_t done_val = done_off ? loadval(js, done_off + sizeof(ant_offset_t) * 2) : js_mkundef();
     if (js_truthy(js, done_val)) break;
     
-    jsoff_t value_off = lkp(js, result, "value", 5);
-    jsval_t value = value_off ? loadval(js, value_off + sizeof(jsoff_t) * 2) : js_mkundef();
+    ant_offset_t value_off = lkp(js, result, "value", 5);
+    ant_value_t value = value_off ? loadval(js, value_off + sizeof(ant_offset_t) * 2) : js_mkundef();
     
     iter_action_t action = cb(js, value, ctx, &out);
     if (action == ITER_BREAK) {
-      jsval_t close_result = iter_close_iterator(js, cur_iter);
+      ant_value_t close_result = iter_close_iterator(js, cur_iter);
       if (is_err(close_result)) { js_unroot(js, h_iterator); return close_result; }
       break;
     }
     if (action == ITER_ERROR) {
-      jsval_t close_result = iter_close_iterator(js, cur_iter);
+      ant_value_t close_result = iter_close_iterator(js, cur_iter);
       js_unroot(js, h_iterator);
       if (is_err(close_result)) return close_result;
       return out;
@@ -4522,7 +4522,7 @@ static jsval_t iter_foreach(ant_t *js, jsval_t iterable, iter_callback_t cb, voi
   return out;
 }
 
-jsval_t js_symbol_to_string(ant_t *js, jsval_t sym) {
+ant_value_t js_symbol_to_string(ant_t *js, ant_value_t sym) {
   const char *desc = js_sym_desc(js, sym);
   if (!desc) return js_mkstr(js, "Symbol()", 8);
   
@@ -4538,13 +4538,13 @@ jsval_t js_symbol_to_string(ant_t *js, jsval_t sym) {
   buf[7 + desc_len] = ')';
   buf[total] = '\0';
   
-  jsval_t result = js_mkstr(js, buf, total);
+  ant_value_t result = js_mkstr(js, buf, total);
   if (buf != stack_buf) free(buf);
   return result;
 }
 
-static jsval_t builtin_String(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t sval;
+static ant_value_t builtin_String(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t sval;
   
   if (nargs == 0) {
     sval = js_mkstr(js, "", 0);
@@ -4558,10 +4558,10 @@ static jsval_t builtin_String(ant_t *js, jsval_t *args, int nargs) {
     if (is_err(sval)) return sval;
   }
   
-  jsval_t string_proto = js_get_ctor_proto(js, "String", 6);
+  ant_value_t string_proto = js_get_ctor_proto(js, "String", 6);
   if (is_wrapper_ctor_target(js, js->this_val, string_proto)) {
     set_slot(js, js->this_val, SLOT_PRIMITIVE, sval);
-    jsoff_t slen;
+    ant_offset_t slen;
     vstr(js, sval, &slen);
     js_setprop(js, js->this_val, js->length_str, tov((double)slen));
     js_set_descriptor(js, js->this_val, "length", 6, 0);
@@ -4569,9 +4569,9 @@ static jsval_t builtin_String(ant_t *js, jsval_t *args, int nargs) {
   return sval;
 }
 
-static jsval_t builtin_Number_isNaN(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Number_isNaN(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return mkval(T_BOOL, 0);
-  jsval_t arg = args[0];
+  ant_value_t arg = args[0];
   
   if (vtype(arg) != T_NUM) return mkval(T_BOOL, 0);
   
@@ -4579,9 +4579,9 @@ static jsval_t builtin_Number_isNaN(ant_t *js, jsval_t *args, int nargs) {
   return mkval(T_BOOL, isnan(val) ? 1 : 0);
 }
 
-static jsval_t builtin_Number_isFinite(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Number_isFinite(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return mkval(T_BOOL, 0);
-  jsval_t arg = args[0];
+  ant_value_t arg = args[0];
   
   if (vtype(arg) != T_NUM) return mkval(T_BOOL, 0);
   
@@ -4589,31 +4589,31 @@ static jsval_t builtin_Number_isFinite(ant_t *js, jsval_t *args, int nargs) {
   return mkval(T_BOOL, isfinite(val) ? 1 : 0);
 }
 
-static jsval_t builtin_global_isNaN(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_global_isNaN(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return mkval(T_BOOL, 1);
   double val = js_to_number(js, args[0]);
   return mkval(T_BOOL, isnan(val) ? 1 : 0);
 }
 
-static jsval_t builtin_global_isFinite(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_global_isFinite(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return mkval(T_BOOL, 0);
   double val = js_to_number(js, args[0]);
   return mkval(T_BOOL, isfinite(val) ? 1 : 0);
 }
 
-static jsval_t builtin_eval(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_eval(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return js_mkundef();
-  jsval_t code = args[0];
+  ant_value_t code = args[0];
   if (vtype(code) != T_STR) return code;
-  jsoff_t code_len = 0;
-  jsoff_t code_off = vstr(js, code, &code_len);
+  ant_offset_t code_len = 0;
+  ant_offset_t code_off = vstr(js, code, &code_len);
   const char *code_str = (const char *)&js->mem[code_off];
   return js_eval_bytecode_eval_with_strict(js, code_str, (size_t)code_len, false);
 }
 
-static jsval_t builtin_Number_isInteger(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Number_isInteger(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return mkval(T_BOOL, 0);
-  jsval_t arg = args[0];
+  ant_value_t arg = args[0];
   
   if (vtype(arg) != T_NUM) return mkval(T_BOOL, 0);
   
@@ -4622,9 +4622,9 @@ static jsval_t builtin_Number_isInteger(ant_t *js, jsval_t *args, int nargs) {
   return mkval(T_BOOL, (val == floor(val)) ? 1 : 0);
 }
 
-static jsval_t builtin_Number_isSafeInteger(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Number_isSafeInteger(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return mkval(T_BOOL, 0);
-  jsval_t arg = args[0];
+  ant_value_t arg = args[0];
   
   if (vtype(arg) != T_NUM) return mkval(T_BOOL, 0);
   
@@ -4635,40 +4635,40 @@ static jsval_t builtin_Number_isSafeInteger(ant_t *js, jsval_t *args, int nargs)
   return mkval(T_BOOL, (val >= -9007199254740991.0 && val <= 9007199254740991.0) ? 1 : 0);
 }
 
-static jsval_t builtin_Number(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t nval = tov(nargs > 0 ? js_to_number(js, args[0]) : 0.0);
-  jsval_t number_proto = js_get_ctor_proto(js, "Number", 6);
+static ant_value_t builtin_Number(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t nval = tov(nargs > 0 ? js_to_number(js, args[0]) : 0.0);
+  ant_value_t number_proto = js_get_ctor_proto(js, "Number", 6);
   if (is_wrapper_ctor_target(js, js->this_val, number_proto)) {
     set_slot(js, js->this_val, SLOT_PRIMITIVE, nval);
   }
   return nval;
 }
 
-static jsval_t builtin_Boolean(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t bval = mkval(T_BOOL, nargs > 0 && js_truthy(js, args[0]) ? 1 : 0);
-  jsval_t boolean_proto = js_get_ctor_proto(js, "Boolean", 7);
+static ant_value_t builtin_Boolean(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t bval = mkval(T_BOOL, nargs > 0 && js_truthy(js, args[0]) ? 1 : 0);
+  ant_value_t boolean_proto = js_get_ctor_proto(js, "Boolean", 7);
   if (is_wrapper_ctor_target(js, js->this_val, boolean_proto)) {
     set_slot(js, js->this_val, SLOT_PRIMITIVE, bval);
   }
   return bval;
 }
 
-static jsval_t builtin_Object(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Object(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0 || vtype(args[0]) == T_NULL || vtype(args[0]) == T_UNDEF) {
-    jsval_t obj_proto = js_get_ctor_proto(js, "Object", 6);
+    ant_value_t obj_proto = js_get_ctor_proto(js, "Object", 6);
     if (is_unboxed_obj(js, js->this_val, obj_proto)) return js->this_val;
     return js_mkobj(js);
   }
   
-  jsval_t arg = args[0];
+  ant_value_t arg = args[0];
   uint8_t t = vtype(arg);
   
   if (t == T_OBJ || t == T_ARR || t == T_FUNC) return arg;
   if (t == T_STR || t == T_NUM || t == T_BOOL || t == T_BIGINT) {
-    jsval_t wrapper = js_mkobj(js);
+    ant_value_t wrapper = js_mkobj(js);
     if (is_err(wrapper)) return wrapper;
     set_slot(js, wrapper, SLOT_PRIMITIVE, arg);
-    jsval_t proto = get_prototype_for_type(js, t);
+    ant_value_t proto = get_prototype_for_type(js, t);
     if (vtype(proto) == T_OBJ) set_proto(js, wrapper, proto);
     return wrapper;
   }
@@ -4676,27 +4676,27 @@ static jsval_t builtin_Object(ant_t *js, jsval_t *args, int nargs) {
   return arg;
 }
 
-static jsval_t builtin_function_empty(ant_t *, jsval_t *, int);
+static ant_value_t builtin_function_empty(ant_t *, ant_value_t *, int);
 
-static jsval_t build_dynamic_function(ant_t *js, jsval_t *args, int nargs, bool is_async) {
+static ant_value_t build_dynamic_function(ant_t *js, ant_value_t *args, int nargs, bool is_async) {
   if (nargs == 0) {
-    jsval_t func_obj = mkobj(js, 0);
+    ant_value_t func_obj = mkobj(js, 0);
     if (is_err(func_obj)) return func_obj;
     
     set_func_code_ptr(js, func_obj, "(){}", 4);
     if (is_async) {
       set_slot(js, func_obj, SLOT_ASYNC, js_true);
-      jsval_t async_proto = get_slot(js, js_glob(js), SLOT_ASYNC_PROTO);
+      ant_value_t async_proto = get_slot(js, js_glob(js), SLOT_ASYNC_PROTO);
       if (vtype(async_proto) == T_FUNC) set_proto(js, func_obj, async_proto);
     } else {
-      jsval_t func_proto = get_slot(js, js_glob(js), SLOT_FUNC_PROTO);
-      jsval_t instance_proto = js_instance_proto_from_new_target(js, func_proto);
+      ant_value_t func_proto = get_slot(js, js_glob(js), SLOT_FUNC_PROTO);
+      ant_value_t instance_proto = js_instance_proto_from_new_target(js, func_proto);
       if (is_object_type(instance_proto)) set_proto(js, func_obj, instance_proto);
     }
     set_slot(js, func_obj, SLOT_CFUNC, js_mkfun(builtin_function_empty));
     
-    jsval_t func = js_obj_to_func(func_obj);
-    jsval_t proto_setup = setup_func_prototype(js, func);
+    ant_value_t func = js_obj_to_func(func_obj);
+    ant_value_t proto_setup = setup_func_prototype(js, func);
     if (is_err(proto_setup)) return proto_setup;
     return func;
   }
@@ -4712,7 +4712,7 @@ static jsval_t build_dynamic_function(ant_t *js, jsval_t *args, int nargs, bool 
   
   total_len += 2;
   
-  jsval_t body = coerce_to_str(js, args[nargs - 1]);
+  ant_value_t body = coerce_to_str(js, args[nargs - 1]);
   if (is_err(body)) return body;
   total_len += vstrlen(js, body);
   total_len += 1;
@@ -4723,20 +4723,20 @@ static jsval_t build_dynamic_function(ant_t *js, jsval_t *args, int nargs, bool 
 
   code_buf[pos++] = '(';
   for (int i = 0; i < nargs - 1; i++) {
-    jsoff_t param_len, param_off = vstr(js, args[i], &param_len);
+    ant_offset_t param_len, param_off = vstr(js, args[i], &param_len);
     memcpy(code_buf + pos, &js->mem[param_off], param_len);
     pos += param_len;
     if (i < nargs - 2) code_buf[pos++] = ',';
   }
   code_buf[pos++] = ')';
   code_buf[pos++] = '{';
-  jsoff_t body_len, body_off = vstr(js, body, &body_len);
+  ant_offset_t body_len, body_off = vstr(js, body, &body_len);
   memcpy(code_buf + pos, &js->mem[body_off], body_len);
   pos += body_len;
   code_buf[pos++] = '}';
   code_buf[pos] = '\0';
 
-  jsval_t func_obj = mkobj(js, 0);
+  ant_value_t func_obj = mkobj(js, 0);
   if (is_err(func_obj)) { free(code_buf); return func_obj; }
 
   sv_func_t *compiled = sv_compile_function(js, code_buf, pos, is_async);
@@ -4772,42 +4772,42 @@ static jsval_t build_dynamic_function(ant_t *js, jsval_t *args, int nargs, bool 
   
   if (is_async) {
     set_slot(js, func_obj, SLOT_ASYNC, js_true);
-    jsval_t async_proto = get_slot(js, js_glob(js), SLOT_ASYNC_PROTO);
+    ant_value_t async_proto = get_slot(js, js_glob(js), SLOT_ASYNC_PROTO);
     if (vtype(async_proto) == T_FUNC) set_proto(js, func_obj, async_proto);
   } else {
-    jsval_t func_proto = get_slot(js, js_glob(js), SLOT_FUNC_PROTO);
-    jsval_t instance_proto = js_instance_proto_from_new_target(js, func_proto);
+    ant_value_t func_proto = get_slot(js, js_glob(js), SLOT_FUNC_PROTO);
+    ant_value_t instance_proto = js_instance_proto_from_new_target(js, func_proto);
     if (is_object_type(instance_proto)) set_proto(js, func_obj, instance_proto);
   }
   
-  jsval_t func = mkval(T_FUNC, (uintptr_t)closure);
-  jsval_t proto_setup = setup_func_prototype(js, func);
+  ant_value_t func = mkval(T_FUNC, (uintptr_t)closure);
+  ant_value_t proto_setup = setup_func_prototype(js, func);
   if (is_err(proto_setup)) return proto_setup;
   return func;
 }
 
-static jsval_t builtin_Function(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Function(ant_t *js, ant_value_t *args, int nargs) {
   return build_dynamic_function(js, args, nargs, false);
 }
 
-static jsval_t builtin_AsyncFunction(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_AsyncFunction(ant_t *js, ant_value_t *args, int nargs) {
   return build_dynamic_function(js, args, nargs, true);
 }
 
-static jsval_t builtin_function_empty(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_function_empty(ant_t *js, ant_value_t *args, int nargs) {
   (void)js; (void)args; (void)nargs;
   return js_mkundef();
 }
 
-static jsval_t builtin_function_call(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t func = js->this_val;
+static ant_value_t builtin_function_call(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t func = js->this_val;
   if (vtype(func) != T_FUNC && vtype(func) != T_CFUNC) {
     return js_mkerr(js, "call requires a function");
   }
   
-  jsval_t this_arg = (nargs > 0) ? args[0] : js_mkundef();
+  ant_value_t this_arg = (nargs > 0) ? args[0] : js_mkundef();
   
-  jsval_t *call_args = NULL;
+  ant_value_t *call_args = NULL;
   int call_nargs = (nargs > 1) ? nargs - 1 : 0;
   if (call_nargs > 0) {
     call_args = &args[1];
@@ -4816,23 +4816,23 @@ static jsval_t builtin_function_call(ant_t *js, jsval_t *args, int nargs) {
   return sv_vm_call(js->vm, js, func, this_arg, call_args, call_nargs, NULL, false);
 }
 
-static int extract_array_args(ant_t *js, jsval_t arr, jsval_t **out_args) {
+static int extract_array_args(ant_t *js, ant_value_t arr, ant_value_t **out_args) {
   int len = (int) get_array_length(js, arr);
   if (len <= 0) return 0;
   
-  jsval_t *args_out = (jsval_t *)ant_calloc(sizeof(jsval_t) * len);
+  ant_value_t *args_out = (ant_value_t *)ant_calloc(sizeof(ant_value_t) * len);
   if (!args_out) return 0;
   
   for (int i = 0; i < len; i++) {
-    args_out[i] = arr_get(js, arr, (jsoff_t)i);
+    args_out[i] = arr_get(js, arr, (ant_offset_t)i);
   }
   
   *out_args = args_out;
   return len;
 }
 
-static jsval_t builtin_function_toString(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t func = js->this_val;
+static ant_value_t builtin_function_toString(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t func = js->this_val;
   uint8_t t = vtype(func);
   
   if (t != T_FUNC && t != T_CFUNC) {
@@ -4841,11 +4841,11 @@ static jsval_t builtin_function_toString(ant_t *js, jsval_t *args, int nargs) {
   
   if (t == T_CFUNC) return ANT_STRING("function() { [native code] }");
   
-  jsval_t func_obj = js_func_obj(func);
-  jsval_t cfunc_slot = get_slot(js, func_obj, SLOT_CFUNC);
+  ant_value_t func_obj = js_func_obj(func);
+  ant_value_t cfunc_slot = get_slot(js, func_obj, SLOT_CFUNC);
   
   if (vtype(cfunc_slot) == T_CFUNC) {
-    jsoff_t name_len = 0;
+    ant_offset_t name_len = 0;
     const char *name = get_func_name(js, func, &name_len);
     if (name && name_len > 0) {
       size_t total = 9 + name_len + 21 + 1;
@@ -4854,23 +4854,23 @@ static jsval_t builtin_function_toString(ant_t *js, jsval_t *args, int nargs) {
       n += cpy(buf + n, total - n, "function ", 9);
       n += cpy(buf + n, total - n, name, name_len);
       n += cpy(buf + n, total - n, "() { [native code] }", 20);
-      jsval_t result = js_mkstr(js, buf, n);
+      ant_value_t result = js_mkstr(js, buf, n);
       free(buf);
       return result;
     }
     return ANT_STRING("function() { [native code] }");
   }
   
-  jsval_t code_val = get_slot(js, func_obj, SLOT_CODE);
-  jsval_t len_val = get_slot(js, func_obj, SLOT_CODE_LEN);
+  ant_value_t code_val = get_slot(js, func_obj, SLOT_CODE);
+  ant_value_t len_val = get_slot(js, func_obj, SLOT_CODE_LEN);
   
   if (vtype(code_val) == T_CFUNC && vtype(len_val) == T_NUM) {
     const char *code = (const char *)(uintptr_t)vdata(code_val);
     size_t code_len = (size_t)tod(len_val);
     
     if (code && code_len > 0) {
-      jsval_t async_slot = get_slot(js, func_obj, SLOT_ASYNC);
-      jsval_t arrow_slot = get_slot(js, func_obj, SLOT_ARROW);
+      ant_value_t async_slot = get_slot(js, func_obj, SLOT_ASYNC);
+      ant_value_t arrow_slot = get_slot(js, func_obj, SLOT_ARROW);
       
       bool is_async = (async_slot == js_true);
       bool is_arrow = (arrow_slot == js_true);
@@ -4892,7 +4892,7 @@ static jsval_t builtin_function_toString(ant_t *js, jsval_t *args, int nargs) {
         n += cpy(buf + n, REMAIN(n, len), " => ", 4);
         n += cpy(buf + n, REMAIN(n, len), body, body_len);
         
-        jsval_t result = js_mkstr(js, buf, n);
+        ant_value_t result = js_mkstr(js, buf, n);
         free(buf);
         return result;
         fallback_arrow:;
@@ -4918,50 +4918,50 @@ static jsval_t builtin_function_toString(ant_t *js, jsval_t *args, int nargs) {
   return js_mkstr(js, buf, len);
 }
 
-static jsval_t builtin_function_apply(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t func = js->this_val;
+static ant_value_t builtin_function_apply(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t func = js->this_val;
   if (vtype(func) != T_FUNC && vtype(func) != T_CFUNC) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Function.prototype.apply requires that 'this' be a Function");
   }
   
-  jsval_t this_arg = (nargs > 0) ? args[0] : js_mkundef();
-  jsval_t *call_args = NULL;
+  ant_value_t this_arg = (nargs > 0) ? args[0] : js_mkundef();
+  ant_value_t *call_args = NULL;
   int call_nargs = 0;
   
   if (nargs > 1) {
-    jsval_t arg_array = args[1];
+    ant_value_t arg_array = args[1];
     uint8_t t = vtype(arg_array);
     if (t == T_ARR || t == T_OBJ) {
       call_nargs = extract_array_args(js, arg_array, &call_args);
     } else if (t != T_UNDEF && t != T_NULL) {}
   }
   
-  jsval_t result = sv_vm_call(js->vm, js, func, this_arg, call_args, call_nargs, NULL, false);
+  ant_value_t result = sv_vm_call(js->vm, js, func, this_arg, call_args, call_nargs, NULL, false);
   if (call_args) free(call_args);
   return result;
 }
 
-static jsval_t builtin_function_bind(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t func = js->this_val;
+static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t func = js->this_val;
   
   if (vtype(func) != T_FUNC && vtype(func) != T_CFUNC) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "bind requires a function");
   }
 
-  jsval_t this_arg = (nargs > 0) ? args[0] : js_mkundef();
+  ant_value_t this_arg = (nargs > 0) ? args[0] : js_mkundef();
   
   int bound_argc = (nargs > 1) ? nargs - 1 : 0;
-  jsval_t *bound_args = (bound_argc > 0) ? &args[1] : NULL;
+  ant_value_t *bound_args = (bound_argc > 0) ? &args[1] : NULL;
   
   int orig_length = 0;
-  jsval_t target_func_obj;
+  ant_value_t target_func_obj;
   if (vtype(func) == T_CFUNC) {
     orig_length = 0;
   } else {
     target_func_obj = js_func_obj(func);
-    jsoff_t len_off = lkp_interned(js, target_func_obj, INTERN_LENGTH, 6);
+    ant_offset_t len_off = lkp_interned(js, target_func_obj, INTERN_LENGTH, 6);
     if (len_off != 0) {
-      jsval_t len_val = resolveprop(js, mkval(T_PROP, len_off));
+      ant_value_t len_val = resolveprop(js, mkval(T_PROP, len_off));
       if (vtype(len_val) == T_NUM) {
         orig_length = (int) tod(len_val);
       }
@@ -4972,35 +4972,35 @@ static jsval_t builtin_function_bind(ant_t *js, jsval_t *args, int nargs) {
   if (bound_length < 0) bound_length = 0;
 
   if (vtype(func) == T_CFUNC) {
-    jsval_t bound_func = mkobj(js, 0);
+    ant_value_t bound_func = mkobj(js, 0);
     if (is_err(bound_func)) return bound_func;
     
     set_slot(js, bound_func, SLOT_CFUNC, func);
     set_slot(js, bound_func, SLOT_BOUND_THIS, this_arg);
     
     if (bound_argc > 0) {
-      jsval_t bound_arr = mkarr(js);
-      for (int i = 0; i < bound_argc; i++) arr_set(js, bound_arr, (jsoff_t)i, bound_args[i]);
+      ant_value_t bound_arr = mkarr(js);
+      for (int i = 0; i < bound_argc; i++) arr_set(js, bound_arr, (ant_offset_t)i, bound_args[i]);
       set_slot(js, bound_func, SLOT_BOUND_ARGS, bound_arr);
     }
     
-    jsval_t func_proto = get_slot(js, js_glob(js), SLOT_FUNC_PROTO);
+    ant_value_t func_proto = get_slot(js, js_glob(js), SLOT_FUNC_PROTO);
     if (vtype(func_proto) == T_FUNC) set_proto(js, bound_func, func_proto);
     
-    jsval_t bound = js_obj_to_func(bound_func);
+    ant_value_t bound = js_obj_to_func(bound_func);
     js_setprop(js, bound_func, js->length_str, tov((double) bound_length));
     
-    jsval_t proto_setup = setup_func_prototype(js, bound);
+    ant_value_t proto_setup = setup_func_prototype(js, bound);
     if (is_err(proto_setup)) return proto_setup;
     
     return bound;
   }
 
-  jsval_t func_obj = js_func_obj(func);
-  jsval_t bound_func = mkobj(js, 0);
+  ant_value_t func_obj = js_func_obj(func);
+  ant_value_t bound_func = mkobj(js, 0);
   if (is_err(bound_func)) return bound_func;
 
-  jsval_t code_val = get_slot(js, func_obj, SLOT_CODE);
+  ant_value_t code_val = get_slot(js, func_obj, SLOT_CODE);
   if (vtype(code_val) == T_STR || vtype(code_val) == T_CFUNC) {
     set_slot(js, bound_func, SLOT_CODE, code_val);
     set_slot(js, bound_func, SLOT_CODE_LEN, get_slot(js, func_obj, SLOT_CODE_LEN));
@@ -5016,23 +5016,23 @@ static jsval_t builtin_function_bind(ant_t *js, jsval_t *args, int nargs) {
   if (bound_argc > 0)
     bound_closure->call_flags |= SV_CALL_HAS_BOUND_ARGS;
 
-  jsval_t async_slot = get_slot(js, func_obj, SLOT_ASYNC);
+  ant_value_t async_slot = get_slot(js, func_obj, SLOT_ASYNC);
   if (vtype(async_slot) == T_BOOL && vdata(async_slot) == 1) {
     set_slot(js, bound_func, SLOT_ASYNC, js_true);
   }
 
-  jsval_t target_proto = get_proto(js, func);
+  ant_value_t target_proto = get_proto(js, func);
   if (is_object_type(target_proto)) {
     set_proto(js, bound_func, target_proto);
   } else if (vtype(async_slot) == T_BOOL && vdata(async_slot) == 1) {
-    jsval_t async_proto = get_slot(js, js_glob(js), SLOT_ASYNC_PROTO);
+    ant_value_t async_proto = get_slot(js, js_glob(js), SLOT_ASYNC_PROTO);
     if (vtype(async_proto) == T_FUNC) set_proto(js, bound_func, async_proto);
   } else {
-    jsval_t func_proto = get_slot(js, js_glob(js), SLOT_FUNC_PROTO);
+    ant_value_t func_proto = get_slot(js, js_glob(js), SLOT_FUNC_PROTO);
     if (vtype(func_proto) == T_FUNC) set_proto(js, bound_func, func_proto);
   }
 
-  jsval_t data_slot = get_slot(js, func_obj, SLOT_DATA);
+  ant_value_t data_slot = get_slot(js, func_obj, SLOT_DATA);
   if (vtype(data_slot) != T_UNDEF) {
     set_slot(js, bound_func, SLOT_DATA, data_slot);
   }
@@ -5041,45 +5041,45 @@ static jsval_t builtin_function_bind(ant_t *js, jsval_t *args, int nargs) {
   set_slot(js, bound_func, SLOT_BOUND_THIS, this_arg);
   
   if (bound_argc > 0) {
-    jsval_t bound_arr = mkarr(js);
-    for (int i = 0; i < bound_argc; i++) arr_set(js, bound_arr, (jsoff_t)i, bound_args[i]);
+    ant_value_t bound_arr = mkarr(js);
+    for (int i = 0; i < bound_argc; i++) arr_set(js, bound_arr, (ant_offset_t)i, bound_args[i]);
     set_slot(js, bound_func, SLOT_BOUND_ARGS, bound_arr);
   }
 
-  jsval_t cfunc_slot = get_slot(js, func_obj, SLOT_CFUNC);
+  ant_value_t cfunc_slot = get_slot(js, func_obj, SLOT_CFUNC);
   if (vtype(cfunc_slot) == T_CFUNC) {
     set_slot(js, bound_func, SLOT_CFUNC, cfunc_slot);
   }
   
   js_setprop(js, bound_func, js->length_str, tov((double) bound_length));
   
-  jsval_t bound = mkval(T_FUNC, (uintptr_t)bound_closure);  
-  jsval_t proto_setup = setup_func_prototype(js, bound);
+  ant_value_t bound = mkval(T_FUNC, (uintptr_t)bound_closure);  
+  ant_value_t proto_setup = setup_func_prototype(js, bound);
   if (is_err(proto_setup)) return proto_setup;
   
   return bound;
 }
 
-static jsval_t builtin_Array(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t arr = mkarr(js);
+static ant_value_t builtin_Array(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t arr = mkarr(js);
   if (is_err(arr)) return arr;
   
   if (nargs == 1 && vtype(args[0]) == T_NUM) {
-    jsval_t err = validate_array_length(js, args[0]);
+    ant_value_t err = validate_array_length(js, args[0]);
     if (is_err(err)) return err;
-    jsoff_t new_len = (jsoff_t)tod(args[0]);
-    jsoff_t doff = get_dense_buf(js, arr);
+    ant_offset_t new_len = (ant_offset_t)tod(args[0]);
+    ant_offset_t doff = get_dense_buf(js, arr);
     if (doff && new_len <= 1024) {
       if (new_len > dense_capacity(js, doff)) doff = dense_grow(js, arr, new_len);
       if (doff) dense_set_length(js, doff, new_len);
     }
     update_array_length(js, arr, new_len);
   } else if (nargs > 0) {
-    for (int i = 0; i < nargs; i++) arr_set(js, arr, (jsoff_t)i, args[i]);
+    for (int i = 0; i < nargs; i++) arr_set(js, arr, (ant_offset_t)i, args[i]);
   }
 
-  jsval_t array_proto = get_ctor_proto(js, "Array", 5);
-  jsval_t instance_proto = js_instance_proto_from_new_target(js, array_proto);
+  ant_value_t array_proto = get_ctor_proto(js, "Array", 5);
+  ant_value_t instance_proto = js_instance_proto_from_new_target(js, array_proto);
   
   if (is_object_type(instance_proto)) set_proto(js, arr, instance_proto);
   if (vtype(js->new_target) == T_FUNC || vtype(js->new_target) == T_CFUNC) {
@@ -5089,27 +5089,27 @@ static jsval_t builtin_Array(ant_t *js, jsval_t *args, int nargs) {
   return arr;
 }
 
-static jsval_t builtin_Error(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Error(ant_t *js, ant_value_t *args, int nargs) {
   bool is_new = (vtype(js->new_target) != T_UNDEF);
-  jsval_t this_val = js->this_val;
+  ant_value_t this_val = js->this_val;
   
-  jsval_t target = is_new ? js->new_target : js->current_func;
-  jsval_t name = ANT_STRING("Error");
+  ant_value_t target = is_new ? js->new_target : js->current_func;
+  ant_value_t name = ANT_STRING("Error");
   
   if (vtype(target) == T_FUNC) {
-    jsoff_t off = lkp(js, js_func_obj(target), "name", 4);
+    ant_offset_t off = lkp(js, js_func_obj(target), "name", 4);
     if (off) name = resolveprop(js, mkval(T_PROP, off));
   }
 
   if (!is_new) {
     this_val = js_mkobj(js);
-    jsoff_t proto_off = lkp_interned(js, js_func_obj(js->current_func), INTERN_PROTOTYPE, 9);
+    ant_offset_t proto_off = lkp_interned(js, js_func_obj(js->current_func), INTERN_PROTOTYPE, 9);
     if (proto_off) set_proto(js, this_val, resolveprop(js, mkval(T_PROP, proto_off)));
     else set_proto(js, this_val, get_ctor_proto(js, "Error", 5));
   }
   
   if (nargs > 0) {
-    jsval_t msg = args[0];
+    ant_value_t msg = args[0];
     if (vtype(msg) != T_STR) {
       const char *str = js_str(js, msg);
       msg = js_mkstr(js, str, strlen(str));
@@ -5118,7 +5118,7 @@ static jsval_t builtin_Error(ant_t *js, jsval_t *args, int nargs) {
   }
   
   if (nargs > 1 && vtype(args[1]) == T_OBJ) {
-    jsoff_t cause_off = lkp(js, args[1], "cause", 5);
+    ant_offset_t cause_off = lkp(js, args[1], "cause", 5);
     if (cause_off) js_mkprop_fast(js, this_val, "cause", 5, resolveprop(js, mkval(T_PROP, cause_off)));
   }
   
@@ -5128,26 +5128,26 @@ static jsval_t builtin_Error(ant_t *js, jsval_t *args, int nargs) {
   return this_val;
 }
 
-static jsval_t builtin_Error_toString(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t this_val = js_getthis(js);
+static ant_value_t builtin_Error_toString(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_val = js_getthis(js);
   
-  jsval_t name = js_get(js, this_val, "name");
+  ant_value_t name = js_get(js, this_val, "name");
   if (vtype(name) == T_UNDEF) name = js_mkstr(js, "Error", 5);
   else if (vtype(name) != T_STR) {
     const char *s = js_str(js, name);
     name = js_mkstr(js, s, strlen(s));
   }
   
-  jsval_t msg = js_get(js, this_val, "message");
+  ant_value_t msg = js_get(js, this_val, "message");
   if (vtype(msg) == T_UNDEF) msg = js_mkstr(js, "", 0);
   else if (vtype(msg) != T_STR) {
     const char *s = js_str(js, msg);
     msg = js_mkstr(js, s, strlen(s));
   }
   
-  jsoff_t name_len, msg_len;
-  jsoff_t name_off = vstr(js, name, &name_len);
-  jsoff_t msg_off = vstr(js, msg, &msg_len);
+  ant_offset_t name_len, msg_len;
+  ant_offset_t name_off = vstr(js, name, &name_len);
+  ant_offset_t msg_off = vstr(js, msg, &msg_len);
   
   const char *name_str = (const char *)&js->mem[name_off];
   const char *msg_str = (const char *)&js->mem[msg_off];
@@ -5165,28 +5165,28 @@ static jsval_t builtin_Error_toString(ant_t *js, jsval_t *args, int nargs) {
   memcpy(buf + name_len + 2, msg_str, (size_t)msg_len);
   buf[total] = '\0';
   
-  jsval_t result = js_mkstr(js, buf, total);
+  ant_value_t result = js_mkstr(js, buf, total);
   free(buf);
   return result;
 }
 
-static jsval_t builtin_AggregateError(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_AggregateError(ant_t *js, ant_value_t *args, int nargs) {
   bool is_new = (vtype(js->new_target) != T_UNDEF);
-  jsval_t this_val = js->this_val;
+  ant_value_t this_val = js->this_val;
   
   if (!is_new) {
     this_val = js_mkobj(js);
-    jsoff_t proto_off = lkp_interned(js, js_func_obj(js->current_func), INTERN_PROTOTYPE, 9);
+    ant_offset_t proto_off = lkp_interned(js, js_func_obj(js->current_func), INTERN_PROTOTYPE, 9);
     if (proto_off) set_proto(js, this_val, resolveprop(js, mkval(T_PROP, proto_off)));
     else set_proto(js, this_val, get_ctor_proto(js, "AggregateError", 14));
   }
   
-  jsval_t errors = nargs > 0 ? args[0] : mkarr(js);
+  ant_value_t errors = nargs > 0 ? args[0] : mkarr(js);
   if (vtype(errors) != T_ARR) errors = mkarr(js);
   js_mkprop_fast(js, this_val, "errors", 6, errors);
   
   if (nargs > 1 && vtype(args[1]) != T_UNDEF) {
-    jsval_t msg = args[1];
+    ant_value_t msg = args[1];
     if (vtype(msg) != T_STR) {
       const char *str = js_str(js, msg);
       msg = js_mkstr(js, str, strlen(str));
@@ -5195,7 +5195,7 @@ static jsval_t builtin_AggregateError(ant_t *js, jsval_t *args, int nargs) {
   }
   
   if (nargs > 2 && vtype(args[2]) == T_OBJ) {
-    jsoff_t cause_off = lkp(js, args[2], "cause", 5);
+    ant_offset_t cause_off = lkp(js, args[2], "cause", 5);
     if (cause_off) js_mkprop_fast(js, this_val, "cause", 5, resolveprop(js, mkval(T_PROP, cause_off)));
   }
   
@@ -5205,68 +5205,68 @@ static jsval_t builtin_AggregateError(ant_t *js, jsval_t *args, int nargs) {
   return this_val;
 }
 
-static jsval_t builtin_Math_abs(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Math_abs(ant_t *js, ant_value_t *args, int nargs) {
   double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   if (isnan(x)) return tov(JS_NAN);
   return tov(fabs(x));
 }
 
-static jsval_t builtin_Math_acos(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Math_acos(ant_t *js, ant_value_t *args, int nargs) {
   double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   if (isnan(x)) return tov(JS_NAN);
   return tov(acos(x));
 }
 
-static jsval_t builtin_Math_acosh(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Math_acosh(ant_t *js, ant_value_t *args, int nargs) {
   double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   if (isnan(x)) return tov(JS_NAN);
   return tov(acosh(x));
 }
 
-static jsval_t builtin_Math_asin(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Math_asin(ant_t *js, ant_value_t *args, int nargs) {
   double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   if (isnan(x)) return tov(JS_NAN);
   return tov(asin(x));
 }
 
-static jsval_t builtin_Math_asinh(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Math_asinh(ant_t *js, ant_value_t *args, int nargs) {
   double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   if (isnan(x)) return tov(JS_NAN);
   return tov(asinh(x));
 }
 
-static jsval_t builtin_Math_atan(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Math_atan(ant_t *js, ant_value_t *args, int nargs) {
   double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   if (isnan(x)) return tov(JS_NAN);
   return tov(atan(x));
 }
 
-static jsval_t builtin_Math_atanh(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Math_atanh(ant_t *js, ant_value_t *args, int nargs) {
   double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   if (isnan(x)) return tov(JS_NAN);
   return tov(atanh(x));
 }
 
-static jsval_t builtin_Math_atan2(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Math_atan2(ant_t *js, ant_value_t *args, int nargs) {
   double y = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   double x = (nargs < 2) ? JS_NAN : js_to_number(js, args[1]);
   if (isnan(y) || isnan(x)) return tov(JS_NAN);
   return tov(atan2(y, x));
 }
 
-static jsval_t builtin_Math_cbrt(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Math_cbrt(ant_t *js, ant_value_t *args, int nargs) {
   double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   if (isnan(x)) return tov(JS_NAN);
   return tov(cbrt(x));
 }
 
-static jsval_t builtin_Math_ceil(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Math_ceil(ant_t *js, ant_value_t *args, int nargs) {
   double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   if (isnan(x)) return tov(JS_NAN);
   return tov(ceil(x));
 }
 
-static jsval_t builtin_Math_clz32(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Math_clz32(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return tov(32);
   double x = js_to_number(js, args[0]);
   if (isnan(x) || isinf(x)) return tov(32);
@@ -5277,43 +5277,43 @@ static jsval_t builtin_Math_clz32(ant_t *js, jsval_t *args, int nargs) {
   return tov((double) count);
 }
 
-static jsval_t builtin_Math_cos(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Math_cos(ant_t *js, ant_value_t *args, int nargs) {
   double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   if (isnan(x)) return tov(JS_NAN);
   return tov(cos(x));
 }
 
-static jsval_t builtin_Math_cosh(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Math_cosh(ant_t *js, ant_value_t *args, int nargs) {
   double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   if (isnan(x)) return tov(JS_NAN);
   return tov(cosh(x));
 }
 
-static jsval_t builtin_Math_exp(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Math_exp(ant_t *js, ant_value_t *args, int nargs) {
   double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   if (isnan(x)) return tov(JS_NAN);
   return tov(exp(x));
 }
 
-static jsval_t builtin_Math_expm1(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Math_expm1(ant_t *js, ant_value_t *args, int nargs) {
   double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   if (isnan(x)) return tov(JS_NAN);
   return tov(expm1(x));
 }
 
-static jsval_t builtin_Math_floor(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Math_floor(ant_t *js, ant_value_t *args, int nargs) {
   double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   if (isnan(x)) return tov(JS_NAN);
   return tov(floor(x));
 }
 
-static jsval_t builtin_Math_fround(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Math_fround(ant_t *js, ant_value_t *args, int nargs) {
   double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   if (isnan(x)) return tov(JS_NAN);
   return tov((double)(float)x);
 }
 
-static jsval_t builtin_Math_hypot(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Math_hypot(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return tov(0.0);
   double sum = 0.0;
   for (int i = 0; i < nargs; i++) {
@@ -5335,38 +5335,38 @@ static int32_t toInt32(double d) {
   return (int32_t)mod_val;
 }
 
-static jsval_t builtin_Math_imul(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Math_imul(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return tov(0);
   int32_t a = toInt32(js_to_number(js, args[0]));
   int32_t b = toInt32(js_to_number(js, args[1]));
   return tov((double)((int32_t)((uint32_t)a * (uint32_t)b)));
 }
 
-static jsval_t builtin_Math_log(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Math_log(ant_t *js, ant_value_t *args, int nargs) {
   double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   if (isnan(x)) return tov(JS_NAN);
   return tov(log(x));
 }
 
-static jsval_t builtin_Math_log1p(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Math_log1p(ant_t *js, ant_value_t *args, int nargs) {
   double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   if (isnan(x)) return tov(JS_NAN);
   return tov(log1p(x));
 }
 
-static jsval_t builtin_Math_log10(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Math_log10(ant_t *js, ant_value_t *args, int nargs) {
   double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   if (isnan(x)) return tov(JS_NAN);
   return tov(log10(x));
 }
 
-static jsval_t builtin_Math_log2(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Math_log2(ant_t *js, ant_value_t *args, int nargs) {
   double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   if (isnan(x)) return tov(JS_NAN);
   return tov(log2(x));
 }
 
-static jsval_t builtin_Math_max(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Math_max(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return tov(JS_NEG_INF);
   double max_val = JS_NEG_INF;
   for (int i = 0; i < nargs; i++) {
@@ -5377,7 +5377,7 @@ static jsval_t builtin_Math_max(ant_t *js, jsval_t *args, int nargs) {
   return tov(max_val);
 }
 
-static jsval_t builtin_Math_min(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Math_min(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return tov(JS_INF);
   double min_val = JS_INF;
   for (int i = 0; i < nargs; i++) {
@@ -5388,7 +5388,7 @@ static jsval_t builtin_Math_min(ant_t *js, jsval_t *args, int nargs) {
   return tov(min_val);
 }
 
-static jsval_t builtin_Math_pow(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Math_pow(ant_t *js, ant_value_t *args, int nargs) {
   double base = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   double exp = (nargs < 2) ? JS_NAN : js_to_number(js, args[1]);
   if (isnan(base) || isnan(exp)) return tov(JS_NAN);
@@ -5397,7 +5397,7 @@ static jsval_t builtin_Math_pow(ant_t *js, jsval_t *args, int nargs) {
 
 static bool random_seeded = false;
 
-static jsval_t builtin_Math_random(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Math_random(ant_t *js, ant_value_t *args, int nargs) {
   if (!random_seeded) {
     srand((unsigned int) time(NULL));
     random_seeded = true;
@@ -5405,13 +5405,13 @@ static jsval_t builtin_Math_random(ant_t *js, jsval_t *args, int nargs) {
   return tov((double) rand() / ((double) RAND_MAX + 1.0));
 }
 
-static jsval_t builtin_Math_round(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Math_round(ant_t *js, ant_value_t *args, int nargs) {
   double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   if (isnan(x) || isinf(x)) return tov(x);
   return tov(floor(x + 0.5));
 }
 
-static jsval_t builtin_Math_sign(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Math_sign(ant_t *js, ant_value_t *args, int nargs) {
   double v = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   if (isnan(v)) return tov(JS_NAN);
   if (v > 0) return tov(1.0);
@@ -5419,70 +5419,70 @@ static jsval_t builtin_Math_sign(ant_t *js, jsval_t *args, int nargs) {
   return tov(v);
 }
 
-static jsval_t builtin_Math_sin(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Math_sin(ant_t *js, ant_value_t *args, int nargs) {
   double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   if (isnan(x)) return tov(JS_NAN);
   return tov(sin(x));
 }
 
-static jsval_t builtin_Math_sinh(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Math_sinh(ant_t *js, ant_value_t *args, int nargs) {
   double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   if (isnan(x)) return tov(JS_NAN);
   return tov(sinh(x));
 }
 
-static jsval_t builtin_Math_sqrt(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Math_sqrt(ant_t *js, ant_value_t *args, int nargs) {
   double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   if (isnan(x)) return tov(JS_NAN);
   return tov(sqrt(x));
 }
 
-static jsval_t builtin_Math_tan(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Math_tan(ant_t *js, ant_value_t *args, int nargs) {
   double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   if (isnan(x)) return tov(JS_NAN);
   return tov(tan(x));
 }
 
-static jsval_t builtin_Math_tanh(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Math_tanh(ant_t *js, ant_value_t *args, int nargs) {
   double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   if (isnan(x)) return tov(JS_NAN);
   return tov(tanh(x));
 }
 
-static jsval_t builtin_Math_trunc(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Math_trunc(ant_t *js, ant_value_t *args, int nargs) {
   double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
   if (isnan(x)) return tov(JS_NAN);
   return tov(trunc(x));
 }
 
-typedef jsval_t (*dynamic_kv_mapper_fn)(
+typedef ant_value_t (*dynamic_kv_mapper_fn)(
   ant_t *js,
-  jsval_t key,
-  jsval_t val
+  ant_value_t key,
+  ant_value_t val
 );
 
-static jsval_t iterate_dynamic_keys(ant_t *js, jsval_t obj, dynamic_accessors_t *acc, dynamic_kv_mapper_fn mapper) {
-  jsval_t keys_arr = acc->keys(js, obj);
-  jsval_t arr = mkarr(js);
-  jsoff_t len = get_array_length(js, keys_arr);
+static ant_value_t iterate_dynamic_keys(ant_t *js, ant_value_t obj, dynamic_accessors_t *acc, dynamic_kv_mapper_fn mapper) {
+  ant_value_t keys_arr = acc->keys(js, obj);
+  ant_value_t arr = mkarr(js);
+  ant_offset_t len = get_array_length(js, keys_arr);
   
-  for (jsoff_t i = 0; i < len; i++) {
-    jsval_t key_val = arr_get(js, keys_arr, i);
+  for (ant_offset_t i = 0; i < len; i++) {
+    ant_value_t key_val = arr_get(js, keys_arr, i);
     if (vtype(key_val) != T_STR) continue;
-    jsoff_t klen; jsoff_t str_off = vstr(js, key_val, &klen);
+    ant_offset_t klen; ant_offset_t str_off = vstr(js, key_val, &klen);
     const char *key = (const char *)&js->mem[str_off];
-    jsval_t val = acc->getter(js, obj, key, klen);
+    ant_value_t val = acc->getter(js, obj, key, klen);
     js_arr_push(js, arr, mapper ? mapper(js, key_val, val) : val);
   }
   
   return mkval(T_ARR, vdata(arr));
 }
 
-static jsval_t builtin_object_is(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_object_is(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_false;
   
-  jsval_t x = args[0];
-  jsval_t y = args[1];
+  ant_value_t x = args[0];
+  ant_value_t y = args[1];
   
   uint8_t tx = vtype(x);
   uint8_t ty = vtype(y);
@@ -5513,20 +5513,20 @@ enum obj_enum_mode {
   OBJ_ENUM_ENTRIES
 };
 
-static jsval_t map_to_entry(ant_t *js, jsval_t key, jsval_t val) {
-  jsval_t pair = mkarr(js);
+static ant_value_t map_to_entry(ant_t *js, ant_value_t key, ant_value_t val) {
+  ant_value_t pair = mkarr(js);
   arr_set(js, pair, 0, key);
   arr_set(js, pair, 1, val);
   return mkval(T_ARR, vdata(pair));
 }
 
-static jsval_t object_enum(ant_t *js, jsval_t obj, enum obj_enum_mode mode) {
+static ant_value_t object_enum(ant_t *js, ant_value_t obj, enum obj_enum_mode mode) {
   bool is_arr = (vtype(obj) == T_ARR);
   if (vtype(obj) == T_FUNC) obj = js_func_obj(obj);
   
-  jsoff_t obj_off = (jsoff_t)vdata(obj);
+  ant_offset_t obj_off = (ant_offset_t)vdata(obj);
   dynamic_accessors_t *acc = NULL;
-  HASH_FIND(hh, accessor_registry, &obj_off, sizeof(jsoff_t), acc);
+  HASH_FIND(hh, accessor_registry, &obj_off, sizeof(ant_offset_t), acc);
   if (acc && acc->keys) {
     if (mode == OBJ_ENUM_KEYS && !acc->getter) return acc->keys(js, obj);
     if (acc->getter) {
@@ -5535,18 +5535,18 @@ static jsval_t object_enum(ant_t *js, jsval_t obj, enum obj_enum_mode mode) {
     }
   }
   
-  jsval_t arr = mkarr(js);
-  jsoff_t idx = 0;
+  ant_value_t arr = mkarr(js);
+  ant_offset_t idx = 0;
   
   if (is_arr) {
-    jsoff_t doff = get_dense_buf_off(js, obj_off);
+    ant_offset_t doff = get_dense_buf_off(js, obj_off);
     if (doff) {
-      jsoff_t dense_len = dense_length(js, doff);
-      for (jsoff_t i = 0; i < dense_len; i++) {
-        jsval_t v = dense_get(js, doff, i);
+      ant_offset_t dense_len = dense_length(js, doff);
+      for (ant_offset_t i = 0; i < dense_len; i++) {
+        ant_value_t v = dense_get(js, doff, i);
         if (is_empty_slot(v)) continue;
         char idxstr[16]; size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)i);
-        jsval_t key_val = js_mkstr(js, idxstr, idxlen);
+        ant_value_t key_val = js_mkstr(js, idxstr, idxlen);
         if (mode == OBJ_ENUM_KEYS) arr_set(js, arr, idx, key_val);
         else if (mode == OBJ_ENUM_VALUES) arr_set(js, arr, idx, v);
         else arr_set(js, arr, idx, map_to_entry(js, key_val, v));
@@ -5555,25 +5555,25 @@ static jsval_t object_enum(ant_t *js, jsval_t obj, enum obj_enum_mode mode) {
     }
   }
   
-  jsoff_t next = loadoff(js, obj_off) & ~(3U | FLAGMASK);
+  ant_offset_t next = loadoff(js, obj_off) & ~(3U | FLAGMASK);
   
   while (next < js->brk && next != 0) {
-    jsoff_t header = loadoff(js, next);
+    ant_offset_t header = loadoff(js, next);
     if (is_slot_prop(header)) { next = next_prop(header); continue; }
     if (is_sym_key_prop(js, next)) { next = next_prop(header); continue; }
     
-    jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
-    jsoff_t klen = offtolen(loadoff(js, koff));
+    ant_offset_t koff = loadoff(js, next + (ant_offset_t) sizeof(next));
+    ant_offset_t klen = offtolen(loadoff(js, koff));
     const char *key = (char *) &js->mem[koff + sizeof(koff)];
-    jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
+    ant_value_t val = loadval(js, next + (ant_offset_t) (sizeof(next) + sizeof(koff)));
     
     next = next_prop(header);
     if (is_internal_prop(key, klen)) continue;
     if (is_arr && is_array_index(key, klen)) {
-      jsoff_t doff = get_dense_buf_off(js, obj_off);
+      ant_offset_t doff = get_dense_buf_off(js, obj_off);
       if (doff) {
         unsigned long pidx = 0;
-        for (jsoff_t ci = 0; ci < klen; ci++) pidx = pidx * 10 + (key[ci] - '0');
+        for (ant_offset_t ci = 0; ci < klen; ci++) pidx = pidx * 10 + (key[ci] - '0');
         if (pidx < dense_length(js, doff)) continue;
       }
     }
@@ -5583,7 +5583,7 @@ static jsval_t object_enum(ant_t *js, jsval_t obj, enum obj_enum_mode mode) {
     if (desc) should_include = desc->enumerable;
     
     if (should_include) {
-      jsval_t key_val = js_mkstr(js, key, klen);
+      ant_value_t key_val = js_mkstr(js, key, klen);
       if (mode == OBJ_ENUM_KEYS) arr_set(js, arr, idx, key_val);
       else if (mode == OBJ_ENUM_VALUES) arr_set(js, arr, idx, val);
       else arr_set(js, arr, idx, map_to_entry(js, key_val, val));
@@ -5594,9 +5594,9 @@ static jsval_t object_enum(ant_t *js, jsval_t obj, enum obj_enum_mode mode) {
   return mkval(T_ARR, vdata(arr));
 }
 
-static jsval_t builtin_object_keys(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_object_keys(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return mkarr(js);
-  jsval_t obj = args[0];
+  ant_value_t obj = args[0];
   if (vtype(obj) != T_OBJ && vtype(obj) != T_ARR && vtype(obj) != T_FUNC) return mkarr(js);
   
   if (is_proxy(js, obj)) {
@@ -5605,28 +5605,28 @@ static jsval_t builtin_object_keys(ant_t *js, jsval_t *args, int nargs) {
     if (data->revoked)
       return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot perform 'ownKeys' on a proxy that has been revoked");
     
-    jsoff_t trap_off = lkp(js, data->handler, "ownKeys", 7);
+    ant_offset_t trap_off = lkp(js, data->handler, "ownKeys", 7);
     if (!trap_off) return object_enum(js, data->target, OBJ_ENUM_KEYS);
     
-    jsval_t trap = resolveprop(js, mkval(T_PROP, trap_off));
+    ant_value_t trap = resolveprop(js, mkval(T_PROP, trap_off));
     uint8_t ft = vtype(trap);
     if (ft != T_FUNC && ft != T_CFUNC) return object_enum(js, data->target, OBJ_ENUM_KEYS);
     
-    jsval_t trap_args[1] = { data->target };
-    jsval_t result = sv_vm_call(js->vm, js, trap, data->handler, trap_args, 1, NULL, false);
+    ant_value_t trap_args[1] = { data->target };
+    ant_value_t result = sv_vm_call(js->vm, js, trap, data->handler, trap_args, 1, NULL, false);
     if (is_err(result)) return result;
     if (vtype(result) != T_ARR)
       return js_mkerr_typed(js, JS_ERR_TYPE, "ownKeys trap must return an array");
     
-    jsoff_t len = get_array_length(js, result);
-    for (jsoff_t i = 0; i < len; i++) {
-      jsval_t ki = arr_get(js, result, i);
+    ant_offset_t len = get_array_length(js, result);
+    for (ant_offset_t i = 0; i < len; i++) {
+      ant_value_t ki = arr_get(js, result, i);
       if (vtype(ki) != T_STR && vtype(ki) != T_SYMBOL)
         return js_mkerr_typed(js, JS_ERR_TYPE, "ownKeys trap result must contain only strings or symbols");
-      jsoff_t ki_len; jsoff_t ki_off = vstr(js, ki, &ki_len);
-      for (jsoff_t j = 0; j < i; j++) {
-        jsval_t kj = arr_get(js, result, j);
-        jsoff_t kj_len; jsoff_t kj_off = vstr(js, kj, &kj_len);
+      ant_offset_t ki_len; ant_offset_t ki_off = vstr(js, ki, &ki_len);
+      for (ant_offset_t j = 0; j < i; j++) {
+        ant_value_t kj = arr_get(js, result, j);
+        ant_offset_t kj_len; ant_offset_t kj_off = vstr(js, kj, &kj_len);
         if (ki_len == kj_len && memcmp(&js->mem[ki_off], &js->mem[kj_off], ki_len) == 0)
           return js_mkerr_typed(js, JS_ERR_TYPE, "ownKeys trap result must not contain duplicate entries");
       }
@@ -5637,11 +5637,11 @@ static jsval_t builtin_object_keys(ant_t *js, jsval_t *args, int nargs) {
   return object_enum(js, obj, OBJ_ENUM_KEYS);
 }
 
-static jsval_t for_in_keys_add(ant_t *js, jsval_t out, jsval_t seen, jsval_t key) {
+static ant_value_t for_in_keys_add(ant_t *js, ant_value_t out, ant_value_t seen, ant_value_t key) {
   if (vtype(key) != T_STR) return js_mkundef();
 
-  jsoff_t key_len = 0;
-  jsoff_t key_off = vstr(js, key, &key_len);
+  ant_offset_t key_len = 0;
+  ant_offset_t key_off = vstr(js, key, &key_len);
   const char *key_ptr = (const char *)&js->mem[key_off];
 
   if (is_internal_prop(key_ptr, key_len))
@@ -5649,34 +5649,34 @@ static jsval_t for_in_keys_add(ant_t *js, jsval_t out, jsval_t seen, jsval_t key
   if (lkp(js, seen, key_ptr, key_len) != 0)
     return js_mkundef();
 
-  jsval_t mark = setprop_cstr(js, seen, key_ptr, key_len, js_true);
+  ant_value_t mark = setprop_cstr(js, seen, key_ptr, key_len, js_true);
   if (is_err(mark)) return mark;
 
   js_arr_push(js, out, key);
   return js_mkundef();
 }
 
-static jsval_t for_in_keys_add_string_indices(ant_t *js, jsval_t out, jsval_t seen, jsval_t str) {
-  jsoff_t slen = vstrlen(js, str);
-  for (jsoff_t i = 0; i < slen; i++) {
+static ant_value_t for_in_keys_add_string_indices(ant_t *js, ant_value_t out, ant_value_t seen, ant_value_t str) {
+  ant_offset_t slen = vstrlen(js, str);
+  for (ant_offset_t i = 0; i < slen; i++) {
     char idx[16];
     size_t idx_len = uint_to_str(idx, sizeof(idx), (uint64_t)i);
-    jsval_t key = js_mkstr(js, idx, idx_len);
-    jsval_t r = for_in_keys_add(js, out, seen, key);
+    ant_value_t key = js_mkstr(js, idx, idx_len);
+    ant_value_t r = for_in_keys_add(js, out, seen, key);
     if (is_err(r)) return r;
   }
   return js_mkundef();
 }
 
-jsval_t js_for_in_keys(ant_t *js, jsval_t obj) {
+ant_value_t js_for_in_keys(ant_t *js, ant_value_t obj) {
   uint8_t t = vtype(obj);
-  jsval_t out = mkarr(js);
+  ant_value_t out = mkarr(js);
   if (t == T_NULL || t == T_UNDEF) return out;
 
-  jsval_t seen = mkobj(js, 0);
-  jshdl_t h_out = js_root(js, out);
-  jshdl_t h_seen = js_root(js, seen);
-  jsval_t result = js_mkundef();
+  ant_value_t seen = mkobj(js, 0);
+  ant_handle_t h_out = js_root(js, out);
+  ant_handle_t h_seen = js_root(js, seen);
+  ant_value_t result = js_mkundef();
 
   if (t == T_STR) {
     result = for_in_keys_add_string_indices(js, js_deref(js, h_out), js_deref(js, h_seen), obj);
@@ -5684,7 +5684,7 @@ jsval_t js_for_in_keys(ant_t *js, jsval_t obj) {
   }
 
   if (t == T_OBJ) {
-    jsval_t prim = get_slot(js, obj, SLOT_PRIMITIVE);
+    ant_value_t prim = get_slot(js, obj, SLOT_PRIMITIVE);
     if (vtype(prim) == T_STR) {
       result = for_in_keys_add_string_indices(js, js_deref(js, h_out), js_deref(js, h_seen), prim);
       if (is_err(result)) goto done;
@@ -5692,16 +5692,16 @@ jsval_t js_for_in_keys(ant_t *js, jsval_t obj) {
   }
 
   if (t == T_OBJ || t == T_ARR || t == T_FUNC) {
-    jsval_t own_keys = object_enum(js, obj, OBJ_ENUM_KEYS);
+    ant_value_t own_keys = object_enum(js, obj, OBJ_ENUM_KEYS);
     if (is_err(own_keys)) {
       result = own_keys;
       goto done;
     }
     if (vtype(own_keys) == T_ARR) {
-      jshdl_t h_own = js_root(js, own_keys);
-      jsoff_t own_len = js_arr_len(js, js_deref(js, h_own));
-      for (jsoff_t i = 0; i < own_len; i++) {
-        jsval_t key = js_arr_get(js, js_deref(js, h_own), i);
+      ant_handle_t h_own = js_root(js, own_keys);
+      ant_offset_t own_len = js_arr_len(js, js_deref(js, h_own));
+      for (ant_offset_t i = 0; i < own_len; i++) {
+        ant_value_t key = js_arr_get(js, js_deref(js, h_own), i);
         result = for_in_keys_add(js, js_deref(js, h_out), js_deref(js, h_seen), key);
         if (is_err(result)) {
           js_unroot(js, h_own);
@@ -5718,29 +5718,29 @@ done:
     js_unroot(js, h_out);
     return result;
   }
-  jsval_t ret = js_deref(js, h_out);
+  ant_value_t ret = js_deref(js, h_out);
   js_unroot(js, h_seen);
   js_unroot(js, h_out);
   return ret;
 }
 
-static jsval_t builtin_object_values(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_object_values(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return mkarr(js);
-  jsval_t obj = args[0];
+  ant_value_t obj = args[0];
   if (vtype(obj) != T_OBJ && vtype(obj) != T_ARR && vtype(obj) != T_FUNC) return mkarr(js);
   return object_enum(js, obj, OBJ_ENUM_VALUES);
 }
 
-static jsval_t builtin_object_entries(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_object_entries(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return mkarr(js);
-  jsval_t obj = args[0];
+  ant_value_t obj = args[0];
   if (vtype(obj) != T_OBJ && vtype(obj) != T_ARR && vtype(obj) != T_FUNC) return mkarr(js);
   return object_enum(js, obj, OBJ_ENUM_ENTRIES);
 }
 
-static jsval_t builtin_object_getPrototypeOf(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_object_getPrototypeOf(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return js_mkerr(js, "Object.getPrototypeOf requires an argument");
-  jsval_t obj = args[0];
+  ant_value_t obj = args[0];
   uint8_t t = vtype(obj);
   
   if (t == T_STR || t == T_NUM || t == T_BOOL || t == T_BIGINT) return get_prototype_for_type(js, t);
@@ -5749,11 +5749,11 @@ static jsval_t builtin_object_getPrototypeOf(ant_t *js, jsval_t *args, int nargs
   return js_mknull();
 }
 
-static jsval_t builtin_object_setPrototypeOf(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_object_setPrototypeOf(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "Object.setPrototypeOf requires 2 arguments");
   
-  jsval_t obj = args[0];
-  jsval_t proto = args[1];
+  ant_value_t obj = args[0];
+  ant_value_t proto = args[1];
   
   uint8_t t = vtype(obj);
   if (t != T_OBJ && t != T_ARR && t != T_FUNC) {
@@ -5765,7 +5765,7 @@ static jsval_t builtin_object_setPrototypeOf(ant_t *js, jsval_t *args, int nargs
     return js_mkerr(js, "Object.setPrototypeOf: prototype must be an object or null");
   }
   
-  for (jsval_t cur = proto; pt != T_NULL && vtype(cur) != T_NULL; cur = get_proto(js, cur)) {
+  for (ant_value_t cur = proto; pt != T_NULL && vtype(cur) != T_NULL; cur = get_proto(js, cur)) {
     if (vdata(js_as_obj(cur)) == vdata(js_as_obj(obj))) return js_mkerr(js, "Cyclic __proto__ value");
   }
   
@@ -5773,8 +5773,8 @@ static jsval_t builtin_object_setPrototypeOf(ant_t *js, jsval_t *args, int nargs
   return obj;
 }
 
-static jsval_t builtin_proto_getter(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t this_val = js->this_val;
+static ant_value_t builtin_proto_getter(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_val = js->this_val;
   uint8_t t = vtype(this_val);
   
   if (t == T_UNDEF || t == T_NULL) {
@@ -5788,8 +5788,8 @@ static jsval_t builtin_proto_getter(ant_t *js, jsval_t *args, int nargs) {
   return get_prototype_for_type(js, t);
 }
 
-static jsval_t builtin_proto_setter(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t this_val = js->this_val;
+static ant_value_t builtin_proto_setter(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_val = js->this_val;
   uint8_t t = vtype(this_val);
   
   if (t == T_UNDEF || t == T_NULL) {
@@ -5802,14 +5802,14 @@ static jsval_t builtin_proto_setter(ant_t *js, jsval_t *args, int nargs) {
   
   if (nargs == 0) return js_mkundef();
   
-  jsval_t proto = args[0];
+  ant_value_t proto = args[0];
   uint8_t pt = vtype(proto);
   
   if (pt != T_OBJ && pt != T_ARR && pt != T_FUNC && pt != T_NULL) {
     return js_mkundef();
   }
   
-  for (jsval_t cur = proto; pt != T_NULL && vtype(cur) == T_OBJ; cur = get_proto(js, cur)) {
+  for (ant_value_t cur = proto; pt != T_NULL && vtype(cur) == T_OBJ; cur = get_proto(js, cur)) {
     if (vdata(cur) == vdata(this_val)) return js_mkundef();
   }
   
@@ -5817,39 +5817,39 @@ static jsval_t builtin_proto_setter(ant_t *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t builtin_object_create(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_object_create(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return js_mkerr(js, "Object.create requires a prototype argument");
   
-  jsval_t proto = args[0];
+  ant_value_t proto = args[0];
   uint8_t pt = vtype(proto);
   
   if (pt != T_OBJ && pt != T_ARR && pt != T_FUNC && pt != T_NULL) {
     return js_mkerr(js, "Object.create: prototype must be an object or null");
   }
   
-  jsval_t obj = js_mkobj(js);
+  ant_value_t obj = js_mkobj(js);
   if (pt == T_NULL) {
     set_proto(js, obj, js_mknull());
   } else set_proto(js, obj, proto);
   
   if (nargs >= 2 && vtype(args[1]) == T_OBJ) {
-    jsval_t props = args[1];
-    jsoff_t next = loadoff(js, (jsoff_t) vdata(props)) & ~(3U | FLAGMASK);
+    ant_value_t props = args[1];
+    ant_offset_t next = loadoff(js, (ant_offset_t) vdata(props)) & ~(3U | FLAGMASK);
     
     while (next < js->brk && next != 0) {
-      jsoff_t header = loadoff(js, next);
+      ant_offset_t header = loadoff(js, next);
       if (is_slot_prop(header)) { next = next_prop(header); continue; }
       
-      jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
-      jsoff_t klen = offtolen(loadoff(js, koff));
+      ant_offset_t koff = loadoff(js, next + (ant_offset_t) sizeof(next));
+      ant_offset_t klen = offtolen(loadoff(js, koff));
       const char *key = (char *) &js->mem[koff + sizeof(koff)];
-      jsval_t descriptor = resolveprop(js, mkval(T_PROP, next));
+      ant_value_t descriptor = resolveprop(js, mkval(T_PROP, next));
       
       if (vtype(descriptor) == T_OBJ) {
-        jsoff_t val_off = lkp(js, descriptor, "value", 5);
+        ant_offset_t val_off = lkp(js, descriptor, "value", 5);
         if (val_off != 0) {
-          jsval_t val = resolveprop(js, mkval(T_PROP, val_off));
-          jsval_t key_str = js_mkstr(js, key, klen);
+          ant_value_t val = resolveprop(js, mkval(T_PROP, val_off));
+          ant_value_t key_str = js_mkstr(js, key, klen);
           js_setprop(js, obj, key_str, val);
         }
       }
@@ -5861,17 +5861,17 @@ static jsval_t builtin_object_create(ant_t *js, jsval_t *args, int nargs) {
   return obj;
 }
 
-static jsval_t builtin_object_hasOwn(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_object_hasOwn(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return mkval(T_BOOL, 0);
   
-  jsval_t obj = args[0];
+  ant_value_t obj = args[0];
   uint8_t t = vtype(obj);
   
   if (t == T_NULL || t == T_UNDEF) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert undefined or null to object");
   }
   
-  jsval_t key = args[1];
+  ant_value_t key = args[1];
   if (vtype(key) != T_STR) {
     key = js_tostring_val(js, key);
     if (is_err(key)) return key;
@@ -5879,42 +5879,42 @@ static jsval_t builtin_object_hasOwn(ant_t *js, jsval_t *args, int nargs) {
   
   if (t != T_OBJ && t != T_ARR && t != T_FUNC) return mkval(T_BOOL, 0);
   
-  jsval_t as_obj = js_as_obj(obj);
-  jsoff_t key_len, key_off = vstr(js, key, &key_len);
+  ant_value_t as_obj = js_as_obj(obj);
+  ant_offset_t key_len, key_off = vstr(js, key, &key_len);
   const char *key_str = (char *) &js->mem[key_off];
   
-  jsoff_t off = lkp(js, as_obj, key_str, key_len);
+  ant_offset_t off = lkp(js, as_obj, key_str, key_len);
   return mkval(T_BOOL, off != 0 ? 1 : 0);
 }
 
-static jsval_t builtin_object_groupBy(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_object_groupBy(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_mkerr_typed(js, JS_ERR_TYPE, "Object.groupBy requires 2 arguments");
   
-  jsval_t items = args[0];
-  jsval_t callback = args[1];
+  ant_value_t items = args[0];
+  ant_value_t callback = args[1];
   
   if (vtype(callback) != T_FUNC && vtype(callback) != T_CFUNC)
     return js_mkerr_typed(js, JS_ERR_TYPE, "callback is not a function");
   
-  jsval_t result = js_mkobj(js);
+  ant_value_t result = js_mkobj(js);
   set_proto(js, result, js_mknull());
   
-  jsoff_t len = get_array_length(js, items);
-  for (jsoff_t i = 0; i < len; i++) {
-    jsval_t val = arr_get(js, items, i);
-    jsval_t cb_args[2] = { val, tov((double)i) };
-    jsval_t key = sv_vm_call(js->vm, js, callback, js_mkundef(), cb_args, 2, NULL, false);
+  ant_offset_t len = get_array_length(js, items);
+  for (ant_offset_t i = 0; i < len; i++) {
+    ant_value_t val = arr_get(js, items, i);
+    ant_value_t cb_args[2] = { val, tov((double)i) };
+    ant_value_t key = sv_vm_call(js->vm, js, callback, js_mkundef(), cb_args, 2, NULL, false);
     if (is_err(key)) return key;
     
-    jsval_t key_str = js_tostring_val(js, key);
+    ant_value_t key_str = js_tostring_val(js, key);
     if (is_err(key_str)) return key_str;
     
-    jsoff_t klen;
-    jsoff_t koff = vstr(js, key_str, &klen);
+    ant_offset_t klen;
+    ant_offset_t koff = vstr(js, key_str, &klen);
     const char *kptr = (char *)&js->mem[koff];
     
-    jsoff_t grp_off = lkp(js, result, kptr, klen);
-    jsval_t group;
+    ant_offset_t grp_off = lkp(js, result, kptr, klen);
+    ant_value_t group;
     if (grp_off) {
       group = resolveprop(js, mkval(T_PROP, grp_off));
     } else {
@@ -5927,12 +5927,12 @@ static jsval_t builtin_object_groupBy(ant_t *js, jsval_t *args, int nargs) {
   return result;
 }
 
-static jsval_t builtin_object_defineProperty(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_object_defineProperty(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 3) return js_mkerr(js, "Object.defineProperty requires 3 arguments");
   
-  jsval_t obj = args[0];
-  jsval_t prop = args[1];
-  jsval_t descriptor = args[2];
+  ant_value_t obj = args[0];
+  ant_value_t prop = args[1];
+  ant_value_t descriptor = args[2];
   
   uint8_t t = vtype(obj);
   if (t != T_OBJ && t != T_ARR && t != T_FUNC) {
@@ -5950,19 +5950,19 @@ static jsval_t builtin_object_defineProperty(ant_t *js, jsval_t *args, int nargs
     return js_mkerr(js, "Property descriptor must be an object");
   }
   
-  jsval_t as_obj = js_as_obj(obj);
+  ant_value_t as_obj = js_as_obj(obj);
   
-  jsoff_t prop_len = 0;
+  ant_offset_t prop_len = 0;
   const char *prop_str = NULL;
-  jsoff_t sym_off = 0;
+  ant_offset_t sym_off = 0;
   
   if (sym_key) {
-    sym_off = (jsoff_t)vdata(prop);
+    sym_off = (ant_offset_t)vdata(prop);
     const char *desc = js_sym_desc(js, prop);
     prop_str = desc ? desc : "symbol";
-    prop_len = (jsoff_t)strlen(prop_str);
+    prop_len = (ant_offset_t)strlen(prop_str);
   } else {
-    jsoff_t prop_off = vstr(js, prop, &prop_len);
+    ant_offset_t prop_off = vstr(js, prop, &prop_len);
     prop_str = (char *) &js->mem[prop_off];
     if (streq(prop_str, prop_len, STR_PROTO, STR_PROTO_LEN)) {
       return js_mkerr(js, "Cannot define " STR_PROTO " property");
@@ -5970,28 +5970,28 @@ static jsval_t builtin_object_defineProperty(ant_t *js, jsval_t *args, int nargs
   }
   
   bool has_value = false, has_get = false, has_set = false, has_writable = false;
-  jsval_t value = js_mkundef();
+  ant_value_t value = js_mkundef();
   bool writable = false, enumerable = false, configurable = false;
   
-  jsoff_t value_off = lkp(js, descriptor, "value", 5);
+  ant_offset_t value_off = lkp(js, descriptor, "value", 5);
   if (value_off != 0) {
     has_value = true;
     value = resolveprop(js, mkval(T_PROP, value_off));
   }
   
-  jsoff_t get_off = lkp_interned(js, descriptor, INTERN_GET, 3);
+  ant_offset_t get_off = lkp_interned(js, descriptor, INTERN_GET, 3);
   if (get_off != 0) {
     has_get = true;
-    jsval_t getter = resolveprop(js, mkval(T_PROP, get_off));
+    ant_value_t getter = resolveprop(js, mkval(T_PROP, get_off));
     if (vtype(getter) != T_FUNC && vtype(getter) != T_UNDEF) {
       return js_mkerr(js, "Getter must be a function");
     }
   }
   
-  jsoff_t set_off = lkp_interned(js, descriptor, INTERN_SET, 3);
+  ant_offset_t set_off = lkp_interned(js, descriptor, INTERN_SET, 3);
   if (set_off != 0) {
     has_set = true;
-    jsval_t setter = resolveprop(js, mkval(T_PROP, set_off));
+    ant_value_t setter = resolveprop(js, mkval(T_PROP, set_off));
     if (vtype(setter) != T_FUNC && vtype(setter) != T_UNDEF) {
       return js_mkerr(js, "Setter must be a function");
     }
@@ -6001,26 +6001,26 @@ static jsval_t builtin_object_defineProperty(ant_t *js, jsval_t *args, int nargs
     return js_mkerr(js, "Invalid property descriptor. Cannot both specify accessors and a value or writable attribute");
   }
   
-  jsoff_t writable_off = lkp(js, descriptor, "writable", 8);
+  ant_offset_t writable_off = lkp(js, descriptor, "writable", 8);
   if (writable_off != 0) {
     has_writable = true;
-    jsval_t w_val = resolveprop(js, mkval(T_PROP, writable_off));
+    ant_value_t w_val = resolveprop(js, mkval(T_PROP, writable_off));
     writable = js_truthy(js, w_val);
   }
   
-  jsoff_t enumerable_off = lkp(js, descriptor, "enumerable", 10);
+  ant_offset_t enumerable_off = lkp(js, descriptor, "enumerable", 10);
   if (enumerable_off != 0) {
-    jsval_t e_val = resolveprop(js, mkval(T_PROP, enumerable_off));
+    ant_value_t e_val = resolveprop(js, mkval(T_PROP, enumerable_off));
     enumerable = js_truthy(js, e_val);
   }
   
-  jsoff_t configurable_off = lkp(js, descriptor, "configurable", 12);
+  ant_offset_t configurable_off = lkp(js, descriptor, "configurable", 12);
   if (configurable_off != 0) {
-    jsval_t c_val = resolveprop(js, mkval(T_PROP, configurable_off));
+    ant_value_t c_val = resolveprop(js, mkval(T_PROP, configurable_off));
     configurable = js_truthy(js, c_val);
   }
   
-  jsoff_t existing_off = sym_key ? lkp_sym(js, as_obj, sym_off) : lkp(js, as_obj, prop_str, prop_len);
+  ant_offset_t existing_off = sym_key ? lkp_sym(js, as_obj, sym_off) : lkp(js, as_obj, prop_str, prop_len);
   
   if (existing_off == 0) {
     if (js_truthy(js, get_slot(js, as_obj, SLOT_FROZEN))) 
@@ -6038,14 +6038,14 @@ static jsval_t builtin_object_defineProperty(ant_t *js, jsval_t *args, int nargs
     
     if (!sym_key) {
       if (has_get && has_set) {
-        jsval_t getter = resolveprop(js, mkval(T_PROP, get_off));
-        jsval_t setter = resolveprop(js, mkval(T_PROP, set_off));
+        ant_value_t getter = resolveprop(js, mkval(T_PROP, get_off));
+        ant_value_t setter = resolveprop(js, mkval(T_PROP, set_off));
         js_set_accessor_desc(js, as_obj, prop_str, prop_len, getter, setter, desc_flags);
       } else if (has_get) {
-        jsval_t getter = resolveprop(js, mkval(T_PROP, get_off));
+        ant_value_t getter = resolveprop(js, mkval(T_PROP, get_off));
         js_set_getter_desc(js, as_obj, prop_str, prop_len, getter, desc_flags);
       } else {
-        jsval_t setter = resolveprop(js, mkval(T_PROP, set_off));
+        ant_value_t setter = resolveprop(js, mkval(T_PROP, set_off));
         js_set_setter_desc(js, as_obj, prop_str, prop_len, setter, desc_flags);
       }
     }
@@ -6075,19 +6075,19 @@ static jsval_t builtin_object_defineProperty(ant_t *js, jsval_t *args, int nargs
       }
       
       if (is_readonly && has_value) return js_mkerr(js, "Cannot assign to read-only property '%.*s'", (int)prop_len, prop_str);
-      if (has_value) saveval(js, existing_off + sizeof(jsoff_t) * 2, value);
+      if (has_value) saveval(js, existing_off + sizeof(ant_offset_t) * 2, value);
       
       if (!writable || !configurable) {
-        jsoff_t head = (jsoff_t) vdata(as_obj);
-        jsoff_t firstprop = loadoff(js, head);
+        ant_offset_t head = (ant_offset_t) vdata(as_obj);
+        ant_offset_t firstprop = loadoff(js, head);
         if ((firstprop & ~(3U | FLAGMASK)) == existing_off) {
-          jsoff_t flags = 0;
+          ant_offset_t flags = 0;
           if (!writable) flags |= CONSTMASK;
           if (!configurable) flags |= NONCONFIGMASK;
           saveoff(js, head, firstprop | flags);
         } else {
-          jsoff_t prop_header = loadoff(js, existing_off);
-          jsoff_t flags = 0;
+          ant_offset_t prop_header = loadoff(js, existing_off);
+          ant_offset_t flags = 0;
           if (!writable) flags |= CONSTMASK;
           if (!configurable) flags |= NONCONFIGMASK;
           saveoff(js, existing_off, prop_header | flags);
@@ -6095,8 +6095,8 @@ static jsval_t builtin_object_defineProperty(ant_t *js, jsval_t *args, int nargs
       }
     } else {
       if (!has_value) value = js_mkundef();      
-      jsval_t prop_key = sym_key ? prop : js_mkstr(js, prop_str, prop_len);
-      jsoff_t flags = (writable ? 0 : CONSTMASK) | (configurable ? 0 : NONCONFIGMASK);
+      ant_value_t prop_key = sym_key ? prop : js_mkstr(js, prop_str, prop_len);
+      ant_offset_t flags = (writable ? 0 : CONSTMASK) | (configurable ? 0 : NONCONFIGMASK);
       mkprop(js, as_obj, prop_key, value, flags);
     }
   }
@@ -6104,11 +6104,11 @@ static jsval_t builtin_object_defineProperty(ant_t *js, jsval_t *args, int nargs
   return obj;
 }
 
-static jsval_t builtin_object_defineProperties(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_object_defineProperties(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "Object.defineProperties requires 2 arguments");
   
-  jsval_t obj = args[0];
-  jsval_t props = args[1];
+  ant_value_t obj = args[0];
+  ant_value_t props = args[1];
   
   uint8_t t = vtype(obj);
   if (t != T_OBJ && t != T_ARR && t != T_FUNC) {
@@ -6119,34 +6119,34 @@ static jsval_t builtin_object_defineProperties(ant_t *js, jsval_t *args, int nar
     return js_mkerr(js, "Property descriptors must be an object");
   }
   
-  jsval_t props_obj = props;
-  jsoff_t next = loadoff(js, (jsoff_t) vdata(props_obj)) & ~(3U | FLAGMASK);
+  ant_value_t props_obj = props;
+  ant_offset_t next = loadoff(js, (ant_offset_t) vdata(props_obj)) & ~(3U | FLAGMASK);
   
   while (next < js->brk && next != 0) {
-    jsoff_t header = loadoff(js, next);
+    ant_offset_t header = loadoff(js, next);
     if (is_slot_prop(header)) { next = next_prop(header); continue; }
     
-    jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
-    jsoff_t klen = offtolen(loadoff(js, koff));
+    ant_offset_t koff = loadoff(js, next + (ant_offset_t) sizeof(next));
+    ant_offset_t klen = offtolen(loadoff(js, koff));
     const char *key = (char *) &js->mem[koff + sizeof(koff)];
-    jsval_t descriptor = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
+    ant_value_t descriptor = loadval(js, next + (ant_offset_t) (sizeof(next) + sizeof(koff)));
     
     next = next_prop(header);
     if (is_internal_prop(key, klen)) continue;
     
-    jsval_t prop_key = js_mkstr(js, key, klen);
-    jsval_t define_args[3] = { obj, prop_key, descriptor };
-    jsval_t result = builtin_object_defineProperty(js, define_args, 3);
+    ant_value_t prop_key = js_mkstr(js, key, klen);
+    ant_value_t define_args[3] = { obj, prop_key, descriptor };
+    ant_value_t result = builtin_object_defineProperty(js, define_args, 3);
     if (is_err(result)) return result;
   }
   
   return obj;
 }
 
-static jsval_t builtin_object_assign(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_object_assign(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return js_mkerr(js, "Object.assign requires at least 1 argument");
   
-  jsval_t target = args[0];
+  ant_value_t target = args[0];
   uint8_t t = vtype(target);
   
   if (t == T_NULL || t == T_UNDEF) {
@@ -6157,38 +6157,38 @@ static jsval_t builtin_object_assign(ant_t *js, jsval_t *args, int nargs) {
     target = js_mkobj(js);
   }
   
-  jsval_t as_obj = js_as_obj(target);
+  ant_value_t as_obj = js_as_obj(target);
   
   for (int i = 1; i < nargs; i++) {
-    jsval_t source = args[i];
+    ant_value_t source = args[i];
     uint8_t st = vtype(source);
     
     if (st == T_NULL || st == T_UNDEF) continue;
     if (st != T_OBJ && st != T_ARR && st != T_FUNC) continue;
     
-    jsval_t src_obj = js_as_obj(source);
-    jsoff_t next = loadoff(js, (jsoff_t) vdata(src_obj)) & ~(3U | FLAGMASK);
+    ant_value_t src_obj = js_as_obj(source);
+    ant_offset_t next = loadoff(js, (ant_offset_t) vdata(src_obj)) & ~(3U | FLAGMASK);
     
     while (next < js->brk && next != 0) {
-      jsoff_t header = loadoff(js, next);
+      ant_offset_t header = loadoff(js, next);
       if (is_slot_prop(header)) { next = next_prop(header); continue; }
       
-      jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
-      jsoff_t klen = offtolen(loadoff(js, koff));
+      ant_offset_t koff = loadoff(js, next + (ant_offset_t) sizeof(next));
+      ant_offset_t klen = offtolen(loadoff(js, koff));
       const char *key = (char *) &js->mem[koff + sizeof(koff)];
-      jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
+      ant_value_t val = loadval(js, next + (ant_offset_t) (sizeof(next) + sizeof(koff)));
       
       next = next_prop(header);
       if (is_internal_prop(key, klen)) continue;
       
       bool should_copy = true;
-      jsoff_t src_obj_off = (jsoff_t)vdata(src_obj);
+      ant_offset_t src_obj_off = (ant_offset_t)vdata(src_obj);
       
       descriptor_entry_t *desc = lookup_descriptor(js, src_obj_off, key, klen);
       if (desc) should_copy = desc->enumerable;
       
       if (should_copy) {
-        jsval_t key_str = js_mkstr(js, key, klen);
+        ant_value_t key_str = js_mkstr(js, key, klen);
         js_setprop(js, as_obj, key_str, val);
       }
     }
@@ -6197,36 +6197,36 @@ static jsval_t builtin_object_assign(ant_t *js, jsval_t *args, int nargs) {
   return target;
 }
 
-static jsval_t builtin_object_freeze(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_object_freeze(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return js_mkundef();
   
-  jsval_t obj = args[0];
+  ant_value_t obj = args[0];
   uint8_t t = vtype(obj);
   
   if (t != T_OBJ && t != T_ARR && t != T_FUNC) return obj;
-  jsval_t as_obj = js_as_obj(obj);
+  ant_value_t as_obj = js_as_obj(obj);
   
-  jsoff_t next = loadoff(js, (jsoff_t) vdata(as_obj)) & ~(3U | FLAGMASK);
+  ant_offset_t next = loadoff(js, (ant_offset_t) vdata(as_obj)) & ~(3U | FLAGMASK);
   
   while (next < js->brk && next != 0) {
-    jsoff_t header = loadoff(js, next);
+    ant_offset_t header = loadoff(js, next);
     if (is_slot_prop(header)) { next = next_prop(header); continue; }
     
-    jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
-    jsoff_t klen = offtolen(loadoff(js, koff));
+    ant_offset_t koff = loadoff(js, next + (ant_offset_t) sizeof(next));
+    ant_offset_t klen = offtolen(loadoff(js, koff));
     const char *key = (char *) &js->mem[koff + sizeof(koff)];
     
-    jsoff_t cur_prop = next;
+    ant_offset_t cur_prop = next;
     next = next_prop(header);
     if (is_internal_prop(key, klen)) continue;
     
-    jsoff_t freeze_flags = CONSTMASK | NONCONFIGMASK;
-    jsoff_t head = (jsoff_t) vdata(as_obj);
-    jsoff_t firstprop = loadoff(js, head);
+    ant_offset_t freeze_flags = CONSTMASK | NONCONFIGMASK;
+    ant_offset_t head = (ant_offset_t) vdata(as_obj);
+    ant_offset_t firstprop = loadoff(js, head);
     if ((firstprop & ~(3U | FLAGMASK)) == cur_prop) {
       saveoff(js, head, firstprop | freeze_flags);
     } else {
-      jsoff_t prop_header = loadoff(js, cur_prop);
+      ant_offset_t prop_header = loadoff(js, cur_prop);
       saveoff(js, cur_prop, prop_header | freeze_flags);
     }
     
@@ -6237,49 +6237,49 @@ static jsval_t builtin_object_freeze(ant_t *js, jsval_t *args, int nargs) {
   return obj;
 }
 
-static jsval_t builtin_object_isFrozen(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_object_isFrozen(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return js_true;
   
-  jsval_t obj = args[0];
+  ant_value_t obj = args[0];
   uint8_t t = vtype(obj);
   
   if (t != T_OBJ && t != T_ARR && t != T_FUNC) return js_true;
-  jsval_t as_obj = js_as_obj(obj);
+  ant_value_t as_obj = js_as_obj(obj);
   
   return js_bool(js_truthy(js, get_slot(js, as_obj, SLOT_FROZEN)));
 }
 
-static jsval_t builtin_object_seal(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_object_seal(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return js_mkundef();
   
-  jsval_t obj = args[0];
+  ant_value_t obj = args[0];
   uint8_t t = vtype(obj);
   
   if (t != T_OBJ && t != T_ARR && t != T_FUNC) return obj;
-  jsval_t as_obj = js_as_obj(obj);
+  ant_value_t as_obj = js_as_obj(obj);
   
   set_slot(js, as_obj, SLOT_SEALED, js_true);
-  jsoff_t next = loadoff(js, (jsoff_t) vdata(as_obj)) & ~(3U | FLAGMASK);
+  ant_offset_t next = loadoff(js, (ant_offset_t) vdata(as_obj)) & ~(3U | FLAGMASK);
   
   while (next < js->brk && next != 0) {
-    jsoff_t header = loadoff(js, next);
+    ant_offset_t header = loadoff(js, next);
     if (is_slot_prop(header)) { next = next_prop(header); continue; }
     
-    jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
-    jsoff_t klen = offtolen(loadoff(js, koff));
+    ant_offset_t koff = loadoff(js, next + (ant_offset_t) sizeof(next));
+    ant_offset_t klen = offtolen(loadoff(js, koff));
     const char *key = (char *) &js->mem[koff + sizeof(koff)];
     
-    jsoff_t cur_prop = next;
+    ant_offset_t cur_prop = next;
     next = next_prop(header);
     
     if (is_internal_prop(key, klen)) continue;
     
-    jsoff_t head = (jsoff_t) vdata(as_obj);
-    jsoff_t firstprop = loadoff(js, head);
+    ant_offset_t head = (ant_offset_t) vdata(as_obj);
+    ant_offset_t firstprop = loadoff(js, head);
     if ((firstprop & ~(3U | FLAGMASK)) == cur_prop) {
       saveoff(js, head, firstprop | NONCONFIGMASK);
     } else {
-      jsoff_t prop_header = loadoff(js, cur_prop);
+      ant_offset_t prop_header = loadoff(js, cur_prop);
       saveoff(js, cur_prop, prop_header | NONCONFIGMASK);
     }
     
@@ -6289,14 +6289,14 @@ static jsval_t builtin_object_seal(ant_t *js, jsval_t *args, int nargs) {
   return obj;
 }
 
-static jsval_t builtin_object_isSealed(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_object_isSealed(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return js_true;
   
-  jsval_t obj = args[0];
+  ant_value_t obj = args[0];
   uint8_t t = vtype(obj);
   
   if (t != T_OBJ && t != T_ARR && t != T_FUNC) return js_true;
-  jsval_t as_obj = js_as_obj(obj);
+  ant_value_t as_obj = js_as_obj(obj);
   
   if (js_truthy(js, get_slot(js, as_obj, SLOT_SEALED))) return js_true;
   if (js_truthy(js, get_slot(js, as_obj, SLOT_FROZEN))) return js_true;
@@ -6304,27 +6304,27 @@ static jsval_t builtin_object_isSealed(ant_t *js, jsval_t *args, int nargs) {
   return js_false;
 }
 
-static jsval_t builtin_object_fromEntries(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_object_fromEntries(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return js_mkerr(js, "Object.fromEntries requires an iterable argument");
   
-  jsval_t iterable = args[0];
+  ant_value_t iterable = args[0];
   uint8_t t = vtype(iterable);
   
   if (t != T_ARR && t != T_OBJ) {
     return js_mkerr(js, "Object.fromEntries requires an iterable");
   }
   
-  jsval_t result = js_mkobj(js);
-  jsoff_t len = get_array_length(js, iterable);
+  ant_value_t result = js_mkobj(js);
+  ant_offset_t len = get_array_length(js, iterable);
   if (len == 0) return result;
   
-  for (jsoff_t i = 0; i < len; i++) {
-    jsval_t entry = arr_get(js, iterable, i);
+  for (ant_offset_t i = 0; i < len; i++) {
+    ant_value_t entry = arr_get(js, iterable, i);
     if (vtype(entry) != T_ARR && vtype(entry) != T_OBJ) continue;
     
-    jsval_t key = arr_get(js, entry, 0);
+    ant_value_t key = arr_get(js, entry, 0);
     if (is_undefined(key)) continue;
-    jsval_t val = arr_get(js, entry, 1);
+    ant_value_t val = arr_get(js, entry, 1);
     
     if (vtype(key) != T_STR) {
       char buf[64];
@@ -6338,47 +6338,47 @@ static jsval_t builtin_object_fromEntries(ant_t *js, jsval_t *args, int nargs) {
   return result;
 }
 
-static jsval_t builtin_object_getOwnPropertyDescriptor(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_object_getOwnPropertyDescriptor(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
   
-  jsval_t obj = args[0];
-  jsval_t key = args[1];
+  ant_value_t obj = args[0];
+  ant_value_t key = args[1];
   uint8_t t = vtype(obj);
   
   if (t != T_OBJ && t != T_ARR && t != T_FUNC) return js_mkundef();
   
   const char *key_str;
-  jsoff_t key_len;
+  ant_offset_t key_len;
   
   bool is_sym = (vtype(key) == T_SYMBOL);
   if (is_sym) {
     const char *d = js_sym_desc(js, key);
     key_str = d ? d : "symbol";
-    key_len = (jsoff_t)strlen(key_str);
+    key_len = (ant_offset_t)strlen(key_str);
   } else if (vtype(key) == T_STR) {
-    jsoff_t key_off = vstr(js, key, &key_len);
+    ant_offset_t key_off = vstr(js, key, &key_len);
     key_str = (char *) &js->mem[key_off];
   } else {
     char buf[64];
     size_t n = tostr(js, key, buf, sizeof(buf));
     key = js_mkstr(js, buf, n);
-    jsoff_t key_off = vstr(js, key, &key_len);
+    ant_offset_t key_off = vstr(js, key, &key_len);
     key_str = (char *) &js->mem[key_off];
   }
   
-  jsval_t as_obj = js_as_obj(obj);
-  jsoff_t obj_off = (jsoff_t)vdata(as_obj);
+  ant_value_t as_obj = js_as_obj(obj);
+  ant_offset_t obj_off = (ant_offset_t)vdata(as_obj);
   
   descriptor_entry_t *desc = is_sym 
-    ? lookup_sym_descriptor(obj_off, (jsoff_t)vdata(key)) 
+    ? lookup_sym_descriptor(obj_off, (ant_offset_t)vdata(key)) 
     : lookup_descriptor(js, obj_off, key_str, key_len);
   
-  jsoff_t prop_off = is_sym ? lkp_sym(js, as_obj, (jsoff_t)vdata(key)) : lkp(js, as_obj, key_str, key_len);
+  ant_offset_t prop_off = is_sym ? lkp_sym(js, as_obj, (ant_offset_t)vdata(key)) : lkp(js, as_obj, key_str, key_len);
   if (prop_off == 0 && !desc) {
     return js_mkundef();
   }
   
-  jsval_t result = js_mkobj(js);
+  ant_value_t result = js_mkobj(js);
   
   if (desc && (desc->has_getter || desc->has_setter)) {
     if (desc->has_getter) {
@@ -6391,7 +6391,7 @@ static jsval_t builtin_object_getOwnPropertyDescriptor(ant_t *js, jsval_t *args,
     js_setprop(js, result, js_mkstr(js, "configurable", 12), js_bool(desc->configurable));
   } else {
     if (prop_off != 0) {
-      jsval_t prop_val = resolveprop(js, mkval(T_PROP, prop_off));
+      ant_value_t prop_val = resolveprop(js, mkval(T_PROP, prop_off));
       js_setprop(js, result, js_mkstr(js, "value", 5), prop_val);
     }
     js_setprop(js, result, js_mkstr(js, "writable", 8), desc ? (js_bool(desc->writable)) : js_true);
@@ -6405,56 +6405,56 @@ static jsval_t builtin_object_getOwnPropertyDescriptor(ant_t *js, jsval_t *args,
 }
 
 static inline bool own_prop_names_is_dense_shadow(
-  ant_t *js, jsoff_t obj_off,
-  const char *key, jsoff_t key_len
+  ant_t *js, ant_offset_t obj_off,
+  const char *key, ant_offset_t key_len
 ) {
-  jsoff_t doff = get_dense_buf_off(js, obj_off);
+  ant_offset_t doff = get_dense_buf_off(js, obj_off);
   if (!doff) return false;
   
-  jsoff_t dense_len = dense_length(js, doff);
+  ant_offset_t dense_len = dense_length(js, doff);
   if (dense_len <= 0 || !is_array_index(key, key_len)) return false;
   
   unsigned long dense_idx = 0;
   return parse_array_index(key, (size_t)key_len, dense_len, &dense_idx);
 }
 
-static jsval_t builtin_object_getOwnPropertyNames(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_object_getOwnPropertyNames(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return mkarr(js);
-  jsval_t obj = args[0];
+  ant_value_t obj = args[0];
   
   if (vtype(obj) != T_OBJ && vtype(obj) != T_ARR && vtype(obj) != T_FUNC) return mkarr(js);
   if (vtype(obj) == T_FUNC) obj = js_func_obj(obj);
   
-  jsoff_t obj_off = (jsoff_t)vdata(obj);
+  ant_offset_t obj_off = (ant_offset_t)vdata(obj);
   bool is_arr_obj = (vtype(obj) == T_ARR);
   
-  jsval_t arr = mkarr(js);
-  jsoff_t idx = 0;
+  ant_value_t arr = mkarr(js);
+  ant_offset_t idx = 0;
   
   if (is_arr_obj) {
-  for (jsoff_t i = 0;; i++) {
-    jsoff_t doff = get_dense_buf_off(js, obj_off);
+  for (ant_offset_t i = 0;; i++) {
+    ant_offset_t doff = get_dense_buf_off(js, obj_off);
     if (!doff) break;
     
-    jsoff_t dense_len = dense_length(js, doff);
+    ant_offset_t dense_len = dense_length(js, doff);
     if (i >= dense_len) break;
 
-    jsval_t v = dense_get(js, doff, i);
+    ant_value_t v = dense_get(js, doff, i);
     if (is_empty_slot(v)) continue;
     
     char idxstr[16]; size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)i);
     arr_set(js, arr, idx++, js_mkstr(js, idxstr, idxlen));
   }}
   
-  jsoff_t next = loadoff(js, obj_off) & ~(3U | FLAGMASK);
+  ant_offset_t next = loadoff(js, obj_off) & ~(3U | FLAGMASK);
   while (next < js->brk && next != 0) {
-    jsoff_t prop = next;
-    jsoff_t header = loadoff(js, prop);
+    ant_offset_t prop = next;
+    ant_offset_t header = loadoff(js, prop);
     next = next_prop(header);
     if (is_slot_prop(header) || is_sym_key_prop(js, prop)) continue;
 
-    jsoff_t koff = loadoff(js, prop + (jsoff_t)sizeof(prop));
-    jsoff_t klen = offtolen(loadoff(js, koff));
+    ant_offset_t koff = loadoff(js, prop + (ant_offset_t)sizeof(prop));
+    ant_offset_t klen = offtolen(loadoff(js, koff));
     const char *key = (char *)&js->mem[koff + sizeof(koff)];
 
     if (is_internal_prop(key, klen)) continue;
@@ -6466,19 +6466,19 @@ static jsval_t builtin_object_getOwnPropertyNames(ant_t *js, jsval_t *args, int 
   return mkval(T_ARR, vdata(arr));
 }
 
-static jsval_t builtin_object_getOwnPropertySymbols(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_object_getOwnPropertySymbols(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return mkarr(js);
-  jsval_t obj = args[0];
+  ant_value_t obj = args[0];
   
   uint8_t t = vtype(obj);
   if (t != T_OBJ && t != T_ARR && t != T_FUNC) return mkarr(js);
   if (t == T_FUNC) obj = js_func_obj(obj);
   
-  jsval_t arr = mkarr(js); jsoff_t idx = 0;
-  jsoff_t next = loadoff(js, (jsoff_t)vdata(obj)) & ~(3U | FLAGMASK);
+  ant_value_t arr = mkarr(js); ant_offset_t idx = 0;
+  ant_offset_t next = loadoff(js, (ant_offset_t)vdata(obj)) & ~(3U | FLAGMASK);
   
   while (next < js->brk && next != 0) {
-    jsoff_t header = loadoff(js, next);
+    ant_offset_t header = loadoff(js, next);
     if (!is_slot_prop(header) && is_sym_key_prop(js, next)) {
       arr_set(js, arr, idx++, mkval(T_SYMBOL, get_prop_koff(js, next)));
     }
@@ -6488,127 +6488,127 @@ static jsval_t builtin_object_getOwnPropertySymbols(ant_t *js, jsval_t *args, in
   return mkval(T_ARR, vdata(arr));
 }
 
-static jsval_t builtin_object_isExtensible(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_object_isExtensible(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return js_true;
   
-  jsval_t obj = args[0];
+  ant_value_t obj = args[0];
   uint8_t t = vtype(obj);
   
   if (t != T_OBJ && t != T_ARR && t != T_FUNC) return js_true;
-  jsval_t as_obj = js_as_obj(obj);
+  ant_value_t as_obj = js_as_obj(obj);
   
   if (js_truthy(js, get_slot(js, as_obj, SLOT_FROZEN))) return js_false;
   if (js_truthy(js, get_slot(js, as_obj, SLOT_SEALED))) return js_false;
   
-  jsval_t ext_slot = get_slot(js, as_obj, SLOT_EXTENSIBLE);
+  ant_value_t ext_slot = get_slot(js, as_obj, SLOT_EXTENSIBLE);
   if (vtype(ext_slot) != T_UNDEF) return js_bool(js_truthy(js, ext_slot));
   
   return js_true;
 }
 
-static jsval_t builtin_object_preventExtensions(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_object_preventExtensions(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return js_mkundef();
   
-  jsval_t obj = args[0];
+  ant_value_t obj = args[0];
   uint8_t t = vtype(obj);
   
   if (t != T_OBJ && t != T_ARR && t != T_FUNC) return obj;
-  jsval_t as_obj = js_as_obj(obj);
+  ant_value_t as_obj = js_as_obj(obj);
   
   set_slot(js, as_obj, SLOT_EXTENSIBLE, js_false);
   return obj;
 }
 
-static jsval_t builtin_object_hasOwnProperty(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_object_hasOwnProperty(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return mkval(T_BOOL, 0);
   
-  jsval_t obj = js->this_val;
-  jsval_t key = args[0];
+  ant_value_t obj = js->this_val;
+  ant_value_t key = args[0];
   
   obj = resolveprop(js, obj);
   uint8_t t = vtype(obj);
   
   if (t != T_OBJ && t != T_ARR && t != T_FUNC) return mkval(T_BOOL, 0);
-  jsval_t as_obj = js_as_obj(obj);
+  ant_value_t as_obj = js_as_obj(obj);
 
   if (vtype(key) == T_SYMBOL) {
-    jsoff_t off = lkp_sym(js, as_obj, (jsoff_t)vdata(key));
+    ant_offset_t off = lkp_sym(js, as_obj, (ant_offset_t)vdata(key));
     return mkval(T_BOOL, off != 0 ? 1 : 0);
   }
 
   const char *key_str = NULL;
-  jsoff_t key_len = 0;
+  ant_offset_t key_len = 0;
   if (vtype(key) != T_STR) {
     char buf[64];
     size_t n = tostr(js, key, buf, sizeof(buf));
     key = js_mkstr(js, buf, n);
   }
-  jsoff_t key_off = vstr(js, key, &key_len);
+  ant_offset_t key_off = vstr(js, key, &key_len);
   key_str = (char *) &js->mem[key_off];
 
   if (t == T_ARR && streq(key_str, key_len, "length", 6)) return mkval(T_BOOL, 1);
   if (t == T_ARR && is_array_index(key_str, key_len)) {
     unsigned long idx;
     if (parse_array_index(key_str, key_len, get_array_length(js, obj), &idx)) {
-      return mkval(T_BOOL, arr_has(js, obj, (jsoff_t)idx) ? 1 : 0);
+      return mkval(T_BOOL, arr_has(js, obj, (ant_offset_t)idx) ? 1 : 0);
     }
   }
 
-  jsoff_t off = lkp(js, as_obj, key_str, key_len);
+  ant_offset_t off = lkp(js, as_obj, key_str, key_len);
   if (off != 0) return mkval(T_BOOL, 1);
-  descriptor_entry_t *desc = lookup_descriptor(js, (jsoff_t)vdata(as_obj), key_str, key_len);
+  descriptor_entry_t *desc = lookup_descriptor(js, (ant_offset_t)vdata(as_obj), key_str, key_len);
   return mkval(T_BOOL, (desc && (desc->has_getter || desc->has_setter)) ? 1 : 0);
 }
 
-static jsval_t builtin_object_isPrototypeOf(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_object_isPrototypeOf(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return mkval(T_BOOL, 0);
   
-  jsval_t proto_obj = resolveprop(js, js->this_val);
-  jsval_t obj = args[0];
+  ant_value_t proto_obj = resolveprop(js, js->this_val);
+  ant_value_t obj = args[0];
   
   uint8_t obj_type = vtype(obj);
   if (obj_type != T_OBJ && obj_type != T_ARR && obj_type != T_FUNC) return mkval(T_BOOL, 0);
   
   uint8_t proto_type = vtype(proto_obj);
   if (proto_type != T_OBJ && proto_type != T_ARR && proto_type != T_FUNC) return mkval(T_BOOL, 0);
-  jsoff_t proto_data = (jsoff_t)vdata(js_as_obj(proto_obj));
+  ant_offset_t proto_data = (ant_offset_t)vdata(js_as_obj(proto_obj));
   
-  jsval_t current = get_proto(js, obj);
+  ant_value_t current = get_proto(js, obj);
   while (!is_undefined(current) && !is_null(current)) {
     uint8_t cur_type = vtype(current);
     if (cur_type != T_OBJ && cur_type != T_ARR && cur_type != T_FUNC) break;
-    if ((jsoff_t)vdata(js_as_obj(current)) == proto_data) return mkval(T_BOOL, 1);
+    if ((ant_offset_t)vdata(js_as_obj(current)) == proto_data) return mkval(T_BOOL, 1);
     current = get_proto(js, current);
   }
   
   return mkval(T_BOOL, 0);
 }
 
-static jsval_t builtin_object_propertyIsEnumerable(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_object_propertyIsEnumerable(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return mkval(T_BOOL, 0);
   
-  jsval_t obj = js->this_val;
-  jsval_t key = args[0];
+  ant_value_t obj = js->this_val;
+  ant_value_t key = args[0];
   
   obj = resolveprop(js, obj);
   uint8_t t = vtype(obj);
   
   if (t != T_OBJ && t != T_ARR && t != T_FUNC) return mkval(T_BOOL, 0);
-  jsval_t as_obj = js_as_obj(obj);
+  ant_value_t as_obj = js_as_obj(obj);
 
   if (vtype(key) == T_SYMBOL) {
-    jsoff_t off = lkp_sym(js, as_obj, (jsoff_t)vdata(key));
+    ant_offset_t off = lkp_sym(js, as_obj, (ant_offset_t)vdata(key));
     return mkval(T_BOOL, off != 0 ? 1 : 0);
   }
 
   const char *key_str = NULL;
-  jsoff_t key_len = 0;
+  ant_offset_t key_len = 0;
   if (vtype(key) != T_STR) {
     char buf[64];
     size_t n = tostr(js, key, buf, sizeof(buf));
     key = js_mkstr(js, buf, n);
   }
-  jsoff_t key_off = vstr(js, key, &key_len);
+  ant_offset_t key_off = vstr(js, key, &key_len);
   key_str = (char *) &js->mem[key_off];
 
   if (t == T_ARR && streq(key_str, key_len, "length", 6)) {
@@ -6616,19 +6616,19 @@ static jsval_t builtin_object_propertyIsEnumerable(ant_t *js, jsval_t *args, int
   }
   
   if (t == T_ARR) {
-    jsoff_t doff = get_dense_buf(js, obj);
+    ant_offset_t doff = get_dense_buf(js, obj);
     if (doff) {
       unsigned long idx;
       if (parse_array_index(key_str, key_len, dense_length(js, doff), &idx)) {
-        return mkval(T_BOOL, !is_empty_slot(dense_get(js, doff, (jsoff_t)idx)) ? 1 : 0);
+        return mkval(T_BOOL, !is_empty_slot(dense_get(js, doff, (ant_offset_t)idx)) ? 1 : 0);
       }
     }
   }
   
-  jsoff_t off = lkp(js, as_obj, key_str, key_len);
+  ant_offset_t off = lkp(js, as_obj, key_str, key_len);
   if (off == 0) return mkval(T_BOOL, 0);
   
-  jsoff_t obj_off = (jsoff_t)vdata(as_obj);
+  ant_offset_t obj_off = (ant_offset_t)vdata(as_obj);
   descriptor_entry_t *desc = lookup_descriptor(js, obj_off, key_str, key_len);
   if (desc) {
     return mkval(T_BOOL, desc->enumerable ? 1 : 0);
@@ -6637,32 +6637,32 @@ static jsval_t builtin_object_propertyIsEnumerable(ant_t *js, jsval_t *args, int
   return mkval(T_BOOL, 1);
 }
 
-static jsval_t builtin_object_toString(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_object_toString(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
-  jsval_t obj = js->this_val;
+  ant_value_t obj = js->this_val;
   
   obj = resolveprop(js, obj);
   uint8_t t = vtype(obj);
   
   const char *tag = NULL;
-  jsoff_t tag_len = 0;
+  ant_offset_t tag_len = 0;
 
-  jsval_t tag_sym = get_toStringTag_sym();
+  ant_value_t tag_sym = get_toStringTag_sym();
   if (vtype(tag_sym) == T_SYMBOL) {
-    jsoff_t sym_off = (jsoff_t)vdata(tag_sym);
-    jsoff_t tag_off = 0;
+    ant_offset_t sym_off = (ant_offset_t)vdata(tag_sym);
+    ant_offset_t tag_off = 0;
     if (is_object_type(obj)) {
       tag_off = lkp_sym_proto(js, obj, sym_off);
     } else {
-      jsval_t proto = get_prototype_for_type(js, t);
+      ant_value_t proto = get_prototype_for_type(js, t);
       if (is_object_type(proto)) {
         tag_off = lkp_sym_proto(js, proto, sym_off);
       }
     }
     if (tag_off != 0) {
-      jsval_t tag_val = resolveprop(js, mkval(T_PROP, tag_off));
+      ant_value_t tag_val = resolveprop(js, mkval(T_PROP, tag_off));
       if (vtype(tag_val) == T_STR) {
-        jsoff_t str_off = vstr(js, tag_val, &tag_len);
+        ant_offset_t str_off = vstr(js, tag_val, &tag_len);
         tag = (const char *)&js->mem[str_off];
       }
     }
@@ -6699,33 +6699,33 @@ static jsval_t builtin_object_toString(ant_t *js, jsval_t *args, int nargs) {
   return string_builder_finalize(js, &sb);
 }
 
-static jsval_t builtin_object_valueOf(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_object_valueOf(ant_t *js, ant_value_t *args, int nargs) {
   return js->this_val;
 }
 
-static jsval_t builtin_object_toLocaleString(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_object_toLocaleString(ant_t *js, ant_value_t *args, int nargs) {
   return js_call_toString(js, js->this_val);
 }
 
-static inline bool is_callable(jsval_t v) {
+static inline bool is_callable(ant_value_t v) {
   uint8_t t = vtype(v);
   return t == T_FUNC || t == T_CFUNC;
 }
 
-static inline jsval_t require_callback(ant_t *js, jsval_t *args, int nargs, const char *name) {
+static inline ant_value_t require_callback(ant_t *js, ant_value_t *args, int nargs, const char *name) {
   if (nargs == 0 || !is_callable(args[0]))
     return js_mkerr(js, "%s requires a function argument", name);
   return args[0];
 }
 
-static jsval_t array_shallow_copy(ant_t *js, jsval_t arr, jsoff_t len) {
-  jsval_t result = mkarr(js);
+static ant_value_t array_shallow_copy(ant_t *js, ant_value_t arr, ant_offset_t len) {
+  ant_value_t result = mkarr(js);
   if (is_err(result)) return result;
   
-  jsoff_t doff = get_dense_buf(js, arr);
+  ant_offset_t doff = get_dense_buf(js, arr);
   if (doff) {
-    for (jsoff_t i = 0; i < len; i++) {
-      jsval_t v = dense_get(js, doff, i);
+    for (ant_offset_t i = 0; i < len; i++) {
+      ant_value_t v = dense_get(js, doff, i);
       arr_set(js, result, i, v);
     }
     return result;
@@ -6734,7 +6734,7 @@ static jsval_t array_shallow_copy(ant_t *js, jsval_t arr, jsoff_t len) {
   ant_iter_t iter = js_prop_iter_begin(js, arr);
   const char *key;
   size_t key_len;
-  jsval_t val;
+  ant_value_t val;
   
   while (js_prop_iter_next(&iter, &key, &key_len, &val)) {
     if (key_len == 0 || key[0] > '9' || key[0] < '0') continue;
@@ -6746,8 +6746,8 @@ static jsval_t array_shallow_copy(ant_t *js, jsval_t arr, jsoff_t len) {
   return result;
 }
 
-static jsval_t builtin_array_push(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t arr = js->this_val;
+static ant_value_t builtin_array_push(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t arr = js->this_val;
   arr = resolveprop(js, arr);
   
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ) {
@@ -6755,31 +6755,31 @@ static jsval_t builtin_array_push(ant_t *js, jsval_t *args, int nargs) {
   }
 
   if (is_proxy(js, arr)) {
-    jsoff_t off = lkp_interned(js, arr, INTERN_LENGTH, 6);
-    jsoff_t len = 0;
+    ant_offset_t off = lkp_interned(js, arr, INTERN_LENGTH, 6);
+    ant_offset_t len = 0;
     if (off != 0) {
-      jsval_t len_val = resolveprop(js, mkval(T_PROP, off));
-      if (vtype(len_val) == T_NUM) len = (jsoff_t) tod(len_val);
+      ant_value_t len_val = resolveprop(js, mkval(T_PROP, off));
+      if (vtype(len_val) == T_NUM) len = (ant_offset_t) tod(len_val);
     }
     for (int i = 0; i < nargs; i++) {
       char idxstr[16];
       size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)len);
-      jsval_t key = js_mkstr(js, idxstr, idxlen);
+      ant_value_t key = js_mkstr(js, idxstr, idxlen);
       js_setprop(js, arr, key, args[i]);
       len++;
     }
     
-    jsval_t len_val = tov((double) len);
+    ant_value_t len_val = tov((double) len);
     js_setprop(js, arr, js->length_str, len_val);
     return len_val;
   }
 
-  jsoff_t len = get_array_length(js, arr);
+  ant_offset_t len = get_array_length(js, arr);
   
-  jsoff_t doff = get_dense_buf(js, arr);
+  ant_offset_t doff = get_dense_buf(js, arr);
   if (doff) {
     for (int i = 0; i < nargs; i++) {
-      jsoff_t cap = dense_capacity(js, doff);
+      ant_offset_t cap = dense_capacity(js, doff);
       if (len >= cap) {
         doff = dense_grow(js, arr, len + 1);
         if (doff == 0) return js_mkerr(js, "oom");
@@ -6791,7 +6791,7 @@ static jsval_t builtin_array_push(ant_t *js, jsval_t *args, int nargs) {
     return tov((double) len);
   }
   
-  jsoff_t off = lkp_interned(js, arr, INTERN_LENGTH, 6);
+  ant_offset_t off = lkp_interned(js, arr, INTERN_LENGTH, 6);
   
   for (int i = 0; i < nargs; i++) {
     char idxstr[16];
@@ -6799,21 +6799,21 @@ static jsval_t builtin_array_push(ant_t *js, jsval_t *args, int nargs) {
     js_mkprop_fast(js, arr, idxstr, idxlen, args[i]); len++;
   }
 
-  jsval_t new_len = tov((double) len);
-  if (off != 0) saveval(js, off + sizeof(jsoff_t) * 2, new_len);
+  ant_value_t new_len = tov((double) len);
+  if (off != 0) saveval(js, off + sizeof(ant_offset_t) * 2, new_len);
   else js_mkprop_fast(js, arr, "length", 6, new_len);
 
   return new_len;
 }
 
-void js_arr_push(ant_t *js, jsval_t arr, jsval_t val) {
+void js_arr_push(ant_t *js, ant_value_t arr, ant_value_t val) {
   arr = resolveprop(js, arr);
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ) return;
   
-  jsoff_t doff = get_dense_buf(js, arr);
+  ant_offset_t doff = get_dense_buf(js, arr);
   if (doff) {
-    jsoff_t len = dense_length(js, doff);
-    jsoff_t cap = dense_capacity(js, doff);
+    ant_offset_t len = dense_length(js, doff);
+    ant_offset_t cap = dense_capacity(js, doff);
     if (len >= cap) {
       doff = dense_grow(js, arr, len + 1);
       if (doff == 0) return;
@@ -6823,30 +6823,30 @@ void js_arr_push(ant_t *js, jsval_t arr, jsval_t val) {
     return;
   }
   
-  jsoff_t len_off = lkp_interned(js, arr, INTERN_LENGTH, 6);
-  jsoff_t len = 0;
+  ant_offset_t len_off = lkp_interned(js, arr, INTERN_LENGTH, 6);
+  ant_offset_t len = 0;
   if (len_off != 0) {
-    jsval_t len_val = resolveprop(js, mkval(T_PROP, len_off));
-    if (vtype(len_val) == T_NUM) len = (jsoff_t) tod(len_val);
+    ant_value_t len_val = resolveprop(js, mkval(T_PROP, len_off));
+    if (vtype(len_val) == T_NUM) len = (ant_offset_t) tod(len_val);
   }
   
   char idxstr[16];
   size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)len);
   js_mkprop_fast(js, arr, idxstr, idxlen, val);
   
-  if (len_off != 0) saveval(js, len_off + sizeof(jsoff_t) * 2, tov((double)(len + 1)));
+  if (len_off != 0) saveval(js, len_off + sizeof(ant_offset_t) * 2, tov((double)(len + 1)));
   else js_mkprop_fast(js, arr, "length", 6, tov((double)(len + 1)));
 }
 
-static jsval_t builtin_array_pop(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t arr = js->this_val;
+static ant_value_t builtin_array_pop(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t arr = js->this_val;
 
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ) {
     return js_mkerr(js, "pop called on non-array");
   }
 
   if (is_proxy(js, arr)) {
-    jsoff_t len = proxy_aware_length(js, arr);
+    ant_offset_t len = proxy_aware_length(js, arr);
     if (len == 0) {
       js_setprop(js, arr, js->length_str, tov(0.0));
       return js_mkundef();
@@ -6854,95 +6854,95 @@ static jsval_t builtin_array_pop(ant_t *js, jsval_t *args, int nargs) {
     len--;
     char idxstr[16];
     size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)len);
-    jsval_t result = proxy_aware_get_elem(js, arr, idxstr, idxlen);
+    ant_value_t result = proxy_aware_get_elem(js, arr, idxstr, idxlen);
     js_setprop(js, arr, js->length_str, tov((double) len));
     js->needs_gc = true;
     return result;
   }
 
-  jsoff_t doff = get_dense_buf(js, arr);
+  ant_offset_t doff = get_dense_buf(js, arr);
   if (doff) {
-    jsoff_t len = dense_length(js, doff);
+    ant_offset_t len = dense_length(js, doff);
     if (len == 0) return js_mkundef();
     len--;
-    jsval_t result = dense_get(js, doff, len);
+    ant_value_t result = dense_get(js, doff, len);
     if (is_empty_slot(result)) result = js_mkundef();
     dense_set(js, doff, len, T_EMPTY);
     dense_set_length(js, doff, len);
     return result;
   }
 
-  jsoff_t off = lkp_interned(js, arr, INTERN_LENGTH, 6);
-  jsoff_t len = 0;
+  ant_offset_t off = lkp_interned(js, arr, INTERN_LENGTH, 6);
+  ant_offset_t len = 0;
 
   if (off != 0) {
-    jsval_t len_val = resolveprop(js, mkval(T_PROP, off));
-    if (vtype(len_val) == T_NUM) len = (jsoff_t) tod(len_val);
+    ant_value_t len_val = resolveprop(js, mkval(T_PROP, off));
+    if (vtype(len_val) == T_NUM) len = (ant_offset_t) tod(len_val);
   }
 
   if (len == 0) return js_mkundef();
   len--; char idxstr[16];
   size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)len);
 
-  jsoff_t arr_off = (jsoff_t)vdata(js_as_obj(arr));
-  jsoff_t tail = loadoff(js, arr_off + sizeof(jsoff_t) * 2);
-  jsoff_t elem_off = 0;
+  ant_offset_t arr_off = (ant_offset_t)vdata(js_as_obj(arr));
+  ant_offset_t tail = loadoff(js, arr_off + sizeof(ant_offset_t) * 2);
+  ant_offset_t elem_off = 0;
 
   if (tail != 0 && tail < js->brk) {
-    jsoff_t tail_hdr = loadoff(js, tail);
+    ant_offset_t tail_hdr = loadoff(js, tail);
     if ((tail_hdr & SLOTMASK) == 0) {
-      jsoff_t tail_koff = loadoff(js, tail + sizeof(jsoff_t));
-      jsoff_t tail_klen = offtolen(loadoff(js, tail_koff));
-      const char *tail_key = (char *)&js->mem[tail_koff + sizeof(jsoff_t)];
+      ant_offset_t tail_koff = loadoff(js, tail + sizeof(ant_offset_t));
+      ant_offset_t tail_klen = offtolen(loadoff(js, tail_koff));
+      const char *tail_key = (char *)&js->mem[tail_koff + sizeof(ant_offset_t)];
       if (tail_klen == idxlen && memcmp(tail_key, idxstr, idxlen) == 0) elem_off = tail;
     }
   }
 
   if (elem_off == 0) elem_off = lkp(js, arr, idxstr, idxlen);
-  jsval_t result = js_mkundef();
+  ant_value_t result = js_mkundef();
   if (elem_off != 0) result = resolveprop(js, mkval(T_PROP, elem_off));
 
   if (off != 0) {
-    saveval(js, off + sizeof(jsoff_t) * 2, tov((double) len));
+    saveval(js, off + sizeof(ant_offset_t) * 2, tov((double) len));
   } else js_setprop(js, arr, js->length_str, tov((double) len));
 
   js->needs_gc = true;
   return result;
 }
 
-static jsval_t builtin_array_slice(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t arr = js->this_val;
+static ant_value_t builtin_array_slice(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t arr = js->this_val;
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ) {
     return js_mkerr(js, "slice called on non-array");
   }
   
-  jsoff_t len = get_array_length(js, arr);
+  ant_offset_t len = get_array_length(js, arr);
   
-  jsoff_t start = 0, end = len;
+  ant_offset_t start = 0, end = len;
   double dlen = D(len);
   if (nargs >= 1 && vtype(args[0]) == T_NUM) {
     double d = tod(args[0]);
     if (d < 0) {
-      start = (jsoff_t) (d + dlen < 0 ? 0 : d + dlen);
-    } else start = (jsoff_t) (d > dlen ? dlen : d);
+      start = (ant_offset_t) (d + dlen < 0 ? 0 : d + dlen);
+    } else start = (ant_offset_t) (d > dlen ? dlen : d);
   }
   
   if (nargs >= 2 && vtype(args[1]) == T_NUM) {
     double d = tod(args[1]);
     if (d < 0) {
-      end = (jsoff_t) (d + dlen < 0 ? 0 : d + dlen);
+      end = (ant_offset_t) (d + dlen < 0 ? 0 : d + dlen);
     } else {
-      end = (jsoff_t) (d > dlen ? dlen : d);
+      end = (ant_offset_t) (d > dlen ? dlen : d);
     }
   }
   
   if (start > end) start = end;
-  jsval_t result = array_alloc_like(js, arr);
+  ant_value_t result = array_alloc_like(js, arr);
   if (is_err(result)) return result;
-  jsoff_t result_idx = 0;
+  ant_offset_t result_idx = 0;
   
-  for (jsoff_t i = start; i < end; i++) {
-    jsval_t elem = arr_get(js, arr, i);
+  for (ant_offset_t i = start; i < end; i++) {
+    ant_value_t elem = arr_get(js, arr, i);
     arr_set(js, result, result_idx, elem);
     result_idx++;
   }
@@ -6950,27 +6950,27 @@ static jsval_t builtin_array_slice(ant_t *js, jsval_t *args, int nargs) {
   return result;
 }
 
-static jsval_t builtin_array_join(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t arr = js->this_val;
+static ant_value_t builtin_array_join(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t arr = js->this_val;
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ) {
     return js_mkerr(js, "join called on non-array");
   }
   const char *sep = ",";
-  jsoff_t sep_len = 1;
+  ant_offset_t sep_len = 1;
   
   if (nargs >= 1) {
     if (vtype(args[0]) == T_STR) {
       sep_len = 0;
-      jsoff_t sep_off = vstr(js, args[0], &sep_len);
+      ant_offset_t sep_off = vstr(js, args[0], &sep_len);
       sep = (const char *) &js->mem[sep_off];
     } else if (vtype(args[0]) != T_UNDEF) {
       const char *sep_str = js_str(js, args[0]);
       sep = sep_str;
-      sep_len = (jsoff_t) strlen(sep_str);
+      sep_len = (ant_offset_t) strlen(sep_str);
     }
   }
   
-  jsoff_t len = get_array_length(js, arr);
+  ant_offset_t len = get_array_length(js, arr);
   
   if (len == 0) return js_mkstr(js, "", 0);
   
@@ -6979,7 +6979,7 @@ static jsval_t builtin_array_join(ant_t *js, jsval_t *args, int nargs) {
   char *result = (char *)ant_calloc(capacity);
   if (!result) return js_mkerr(js, "oom");
   
-  for (jsoff_t i = 0; i < len; i++) {
+  for (ant_offset_t i = 0; i < len; i++) {
     if (i > 0) {
       if (result_len + sep_len >= capacity) {
         capacity = (result_len + sep_len + 1) * 2;
@@ -6992,17 +6992,17 @@ static jsval_t builtin_array_join(ant_t *js, jsval_t *args, int nargs) {
     }
     
     {
-      jsval_t elem = arr_get(js, arr, i);
+      ant_value_t elem = arr_get(js, arr, i);
       uint8_t et = vtype(elem);
       if (et == T_NULL || et == T_UNDEF) continue;
       
       const char *elem_str = NULL;
       size_t elem_len = 0;
       char numstr[64];
-      jsval_t str_val = js_mkundef();
+      ant_value_t str_val = js_mkundef();
       
       if (et == T_STR) {
-        jsoff_t soff, slen;
+        ant_offset_t soff, slen;
         soff = vstr(js, elem, &slen);
         elem_str = (const char *)&js->mem[soff];
         elem_len = slen;
@@ -7022,7 +7022,7 @@ static jsval_t builtin_array_join(ant_t *js, jsval_t *args, int nargs) {
         }
         
         if (vtype(str_val) == T_STR) {
-          jsoff_t soff, slen;
+          ant_offset_t soff, slen;
           soff = vstr(js, str_val, &slen);
           elem_str = (const char *)&js->mem[soff];
           elem_len = slen;
@@ -7043,32 +7043,32 @@ static jsval_t builtin_array_join(ant_t *js, jsval_t *args, int nargs) {
     }
   }
   
-  jsval_t ret = js_mkstr(js, result, result_len);
+  ant_value_t ret = js_mkstr(js, result, result_len);
   free(result); return ret;
 }
 
-static jsval_t builtin_array_includes(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t arr = js->this_val;
+static ant_value_t builtin_array_includes(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t arr = js->this_val;
   
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ)
     return js_mkerr(js, "includes called on non-array");
   
   if (nargs == 0) return mkval(T_BOOL, 0);
-  jsval_t search = args[0];
+  ant_value_t search = args[0];
   
-  jsoff_t len = get_array_length(js, arr);
+  ant_offset_t len = get_array_length(js, arr);
   if (len == 0) return mkval(T_BOOL, 0);
   
-  jsoff_t start = 0;
+  ant_offset_t start = 0;
   if (nargs >= 2 && vtype(args[1]) == T_NUM) {
     int s = (int) tod(args[1]);
     if (s < 0) s = (int)len + s;
     if (s < 0) s = 0;
-    start = (jsoff_t) s;
+    start = (ant_offset_t) s;
   }
   
-  for (jsoff_t i = start; i < len; i++) {
-    jsval_t val = arr_get(js, arr, i);
+  for (ant_offset_t i = start; i < len; i++) {
+    ant_value_t val = arr_get(js, arr, i);
     if (vtype(val) == T_NUM && vtype(search) == T_NUM && isnan(tod(val)) && isnan(tod(search))) return mkval(T_BOOL, 1);
     if (strict_eq_values(js, val, search)) return mkval(T_BOOL, 1);
   }
@@ -7076,23 +7076,23 @@ static jsval_t builtin_array_includes(ant_t *js, jsval_t *args, int nargs) {
   return mkval(T_BOOL, 0);
 }
 
-static jsval_t builtin_array_every(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t arr = js->this_val;
+static ant_value_t builtin_array_every(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t arr = js->this_val;
   
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ)
     return js_mkerr(js, "every called on non-array");
   
-  jsval_t callback = require_callback(js, args, nargs, "every");
+  ant_value_t callback = require_callback(js, args, nargs, "every");
   if (is_err(callback)) return callback;
-  jsval_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
+  ant_value_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
   
-  jsoff_t len = get_array_length(js, arr);
+  ant_offset_t len = get_array_length(js, arr);
   
-  for (jsoff_t i = 0; i < len; i++) {
+  for (ant_offset_t i = 0; i < len; i++) {
     if (!arr_has(js, arr, i)) continue;
-    jsval_t val = arr_get(js, arr, i);
-    jsval_t call_args[3] = { val, tov((double)i), arr };
-    jsval_t result = sv_vm_call(js->vm, js, callback, this_arg, call_args, 3, NULL, false);
+    ant_value_t val = arr_get(js, arr, i);
+    ant_value_t call_args[3] = { val, tov((double)i), arr };
+    ant_value_t result = sv_vm_call(js->vm, js, callback, this_arg, call_args, 3, NULL, false);
     if (is_err(result)) return result;
     if (!js_truthy(js, result)) return mkval(T_BOOL, 0);
   }
@@ -7100,47 +7100,47 @@ static jsval_t builtin_array_every(ant_t *js, jsval_t *args, int nargs) {
   return mkval(T_BOOL, 1);
 }
 
-static jsval_t builtin_array_forEach(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t arr = js->this_val;
+static ant_value_t builtin_array_forEach(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t arr = js->this_val;
   
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ)
     return js_mkerr(js, "forEach called on non-array");
   
-  jsval_t callback = require_callback(js, args, nargs, "forEach");
+  ant_value_t callback = require_callback(js, args, nargs, "forEach");
   if (is_err(callback)) return callback;
-  jsval_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
+  ant_value_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
   
-  jsoff_t len = get_array_length(js, arr);
+  ant_offset_t len = get_array_length(js, arr);
   
-  for (jsoff_t i = 0; i < len; i++) {
+  for (ant_offset_t i = 0; i < len; i++) {
     if (!arr_has(js, arr, i)) continue;
-    jsval_t val = arr_get(js, arr, i);
-    jsval_t call_args[3] = { val, tov((double)i), arr };
-    jsval_t result = sv_vm_call(js->vm, js, callback, this_arg, call_args, 3, NULL, false);
+    ant_value_t val = arr_get(js, arr, i);
+    ant_value_t call_args[3] = { val, tov((double)i), arr };
+    ant_value_t result = sv_vm_call(js->vm, js, callback, this_arg, call_args, 3, NULL, false);
     if (is_err(result)) return result;
   }
   
   return js_mkundef();
 }
 
-static jsval_t builtin_array_reverse(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_array_reverse(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
-  jsval_t arr = js->this_val;
+  ant_value_t arr = js->this_val;
 
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ)
     return js_mkerr(js, "reverse called on non-array");
 
   if (is_proxy(js, arr)) {
-    jsoff_t len = proxy_aware_length(js, arr);
+    ant_offset_t len = proxy_aware_length(js, arr);
     if (len <= 1) return arr;
-    jsval_t read_from = proxy_read_target(js, arr);
-    jsoff_t lower = 0;
+    ant_value_t read_from = proxy_read_target(js, arr);
+    ant_offset_t lower = 0;
     while (lower < len / 2) {
-      jsoff_t upper_idx = len - lower - 1;
+      ant_offset_t upper_idx = len - lower - 1;
       bool lower_exists = arr_has(js, read_from, lower);
       bool upper_exists = arr_has(js, read_from, upper_idx);
-      jsval_t lower_val = lower_exists ? arr_get(js, read_from, lower) : js_mkundef();
-      jsval_t upper_val = upper_exists ? arr_get(js, read_from, upper_idx) : js_mkundef();
+      ant_value_t lower_val = lower_exists ? arr_get(js, read_from, lower) : js_mkundef();
+      ant_value_t upper_val = upper_exists ? arr_get(js, read_from, upper_idx) : js_mkundef();
       if (lower_exists && upper_exists) {
         char s1[16]; size_t l1 = uint_to_str(s1, sizeof(s1), (unsigned)lower);
         js_setprop(js, arr, js_mkstr(js, s1, l1), upper_val);
@@ -7156,29 +7156,29 @@ static jsval_t builtin_array_reverse(ant_t *js, jsval_t *args, int nargs) {
     } return arr;
   }
 
-  jsoff_t len = get_array_length(js, arr);
+  ant_offset_t len = get_array_length(js, arr);
   if (len <= 1) return arr;
 
-  jsoff_t doff = get_dense_buf(js, arr);
+  ant_offset_t doff = get_dense_buf(js, arr);
   if (doff) {
-    for (jsoff_t i = 0; i < len / 2; i++) {
-      jsval_t a = dense_get(js, doff, i);
-      jsval_t b = dense_get(js, doff, len - 1 - i);
+    for (ant_offset_t i = 0; i < len / 2; i++) {
+      ant_value_t a = dense_get(js, doff, i);
+      ant_value_t b = dense_get(js, doff, len - 1 - i);
       dense_set(js, doff, i, b);
       dense_set(js, doff, len - 1 - i, a);
     }
     return arr;
   }
 
-  jsval_t *vals = malloc(len * sizeof(jsval_t));
-  jsoff_t *offs = malloc(len * sizeof(jsoff_t));
+  ant_value_t *vals = malloc(len * sizeof(ant_value_t));
+  ant_offset_t *offs = malloc(len * sizeof(ant_offset_t));
   if (!vals || !offs) { free(vals); free(offs); return js_mkerr(js, "out of memory"); }
 
-  jsoff_t count = 0;
+  ant_offset_t count = 0;
   ant_iter_t iter = js_prop_iter_begin(js, arr);
   const char *key;
   size_t key_len;
-  jsval_t val;
+  ant_value_t val;
 
   while (js_prop_iter_next(&iter, &key, &key_len, &val)) {
     unsigned long parsed_idx;
@@ -7190,14 +7190,14 @@ static jsval_t builtin_array_reverse(ant_t *js, jsval_t *args, int nargs) {
   }
   js_prop_iter_end(&iter);
 
-  for (jsoff_t i = 0; i < count / 2; i++) {
-    jsval_t tmp = vals[i];
+  for (ant_offset_t i = 0; i < count / 2; i++) {
+    ant_value_t tmp = vals[i];
     vals[i] = vals[count - 1 - i];
     vals[count - 1 - i] = tmp;
   }
 
-  for (jsoff_t i = 0; i < count; i++) {
-    saveval(js, offs[i] + sizeof(jsoff_t) * 2, vals[i]);
+  for (ant_offset_t i = 0; i < count; i++) {
+    saveval(js, offs[i] + sizeof(ant_offset_t) * 2, vals[i]);
   }
 
   free(vals);
@@ -7205,25 +7205,25 @@ static jsval_t builtin_array_reverse(ant_t *js, jsval_t *args, int nargs) {
   return arr;
 }
 
-static jsval_t builtin_array_map(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t arr = js->this_val;
+static ant_value_t builtin_array_map(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t arr = js->this_val;
   
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ)
     return js_mkerr(js, "map called on non-array");
   
-  jsval_t callback = require_callback(js, args, nargs, "map");
+  ant_value_t callback = require_callback(js, args, nargs, "map");
   if (is_err(callback)) return callback;
-  jsval_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
+  ant_value_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
   
-  jsoff_t len = get_array_length(js, arr);
-  jsval_t result = array_alloc_like(js, arr);
+  ant_offset_t len = get_array_length(js, arr);
+  ant_value_t result = array_alloc_like(js, arr);
   if (is_err(result)) return result;
   
-  for (jsoff_t i = 0; i < len; i++) {
+  for (ant_offset_t i = 0; i < len; i++) {
     if (!arr_has(js, arr, i)) continue;
-    jsval_t val = arr_get(js, arr, i);
-    jsval_t call_args[3] = { val, tov((double)i), arr };
-    jsval_t mapped = sv_vm_call(js->vm, js, callback, this_arg, call_args, 3, NULL, false);
+    ant_value_t val = arr_get(js, arr, i);
+    ant_value_t call_args[3] = { val, tov((double)i), arr };
+    ant_value_t mapped = sv_vm_call(js->vm, js, callback, this_arg, call_args, 3, NULL, false);
     if (is_err(mapped)) return mapped;
     arr_set(js, result, i, mapped);
   }
@@ -7231,27 +7231,27 @@ static jsval_t builtin_array_map(ant_t *js, jsval_t *args, int nargs) {
   return result;
 }
 
-static jsval_t builtin_array_filter(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t arr = js->this_val;
+static ant_value_t builtin_array_filter(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t arr = js->this_val;
   
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ)
     return js_mkerr(js, "filter called on non-array");
   
-  jsval_t callback = require_callback(js, args, nargs, "filter");
+  ant_value_t callback = require_callback(js, args, nargs, "filter");
   if (is_err(callback)) return callback;
-  jsval_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
+  ant_value_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
   
-  jsoff_t len = get_array_length(js, arr);
-  jsval_t result = array_alloc_like(js, arr);
+  ant_offset_t len = get_array_length(js, arr);
+  ant_value_t result = array_alloc_like(js, arr);
   if (is_err(result)) return result;
   
-  jsoff_t result_idx = 0;
+  ant_offset_t result_idx = 0;
   
-  for (jsoff_t i = 0; i < len; i++) {
+  for (ant_offset_t i = 0; i < len; i++) {
     if (!arr_has(js, arr, i)) continue;
-    jsval_t val = arr_get(js, arr, i);
-    jsval_t call_args[3] = { val, tov((double)i), arr };
-    jsval_t test = sv_vm_call(js->vm, js, callback, this_arg, call_args, 3, NULL, false);
+    ant_value_t val = arr_get(js, arr, i);
+    ant_value_t call_args[3] = { val, tov((double)i), arr };
+    ant_value_t test = sv_vm_call(js->vm, js, callback, this_arg, call_args, 3, NULL, false);
     
     if (is_err(test)) return test;
     if (js_truthy(js, test)) { arr_set(js, result, result_idx, val); result_idx++; }
@@ -7260,26 +7260,26 @@ static jsval_t builtin_array_filter(ant_t *js, jsval_t *args, int nargs) {
   return result;
 }
 
-static jsval_t builtin_array_reduce(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t arr = js->this_val;
+static ant_value_t builtin_array_reduce(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t arr = js->this_val;
   
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ)
     return js_mkerr(js, "reduce called on non-array");
   
-  jsval_t callback = require_callback(js, args, nargs, "reduce");
+  ant_value_t callback = require_callback(js, args, nargs, "reduce");
   if (is_err(callback)) return callback;
   bool has_initial = (nargs >= 2);
   
-  jsoff_t len = get_array_length(js, arr);
+  ant_offset_t len = get_array_length(js, arr);
   
-  jsval_t accumulator = has_initial ? args[1] : js_mkundef();
+  ant_value_t accumulator = has_initial ? args[1] : js_mkundef();
   bool first = !has_initial;
   
-  for (jsoff_t i = 0; i < len; i++) {
+  for (ant_offset_t i = 0; i < len; i++) {
     if (!arr_has(js, arr, i)) continue;
-    jsval_t val = arr_get(js, arr, i);
+    ant_value_t val = arr_get(js, arr, i);
     if (first) { accumulator = val; first = false; continue; }
-    jsval_t call_args[4] = { accumulator, val, tov((double)i), arr };
+    ant_value_t call_args[4] = { accumulator, val, tov((double)i), arr };
     accumulator = sv_vm_call(js->vm, js, callback, js_mkundef(), call_args, 4, NULL, false);
     if (is_err(accumulator)) return accumulator;
   }
@@ -7288,13 +7288,13 @@ static jsval_t builtin_array_reduce(ant_t *js, jsval_t *args, int nargs) {
   return accumulator;
 }
 
-static void flat_helper(ant_t *js, jsval_t arr, jsval_t result, jsoff_t *result_idx, int depth) {
-  jsoff_t len = get_array_length(js, arr);
+static void flat_helper(ant_t *js, ant_value_t arr, ant_value_t result, ant_offset_t *result_idx, int depth) {
+  ant_offset_t len = get_array_length(js, arr);
   if (len == 0) return;
   
-  for (jsoff_t i = 0; i < len; i++) {
+  for (ant_offset_t i = 0; i < len; i++) {
     if (!arr_has(js, arr, i)) continue;
-    jsval_t val = arr_get(js, arr, i);
+    ant_value_t val = arr_get(js, arr, i);
     
     if (depth > 0 && (vtype(val) == T_ARR || vtype(val) == T_OBJ)) {
       flat_helper(js, val, result, result_idx, depth - 1);
@@ -7302,8 +7302,8 @@ static void flat_helper(ant_t *js, jsval_t arr, jsval_t result, jsoff_t *result_
   }
 }
 
-static jsval_t builtin_array_flat(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t arr = js->this_val;
+static ant_value_t builtin_array_flat(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t arr = js->this_val;
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ) {
     return js_mkerr(js, "flat called on non-array");
   }
@@ -7314,51 +7314,51 @@ static jsval_t builtin_array_flat(ant_t *js, jsval_t *args, int nargs) {
     if (depth < 0) depth = 0;
   }
   
-  jsval_t result = array_alloc_like(js, arr);
+  ant_value_t result = array_alloc_like(js, arr);
   if (is_err(result)) return result;
-  jsoff_t result_idx = 0;
+  ant_offset_t result_idx = 0;
   
   flat_helper(js, arr, result, &result_idx, depth);
   return result;
 }
 
-static jsval_t builtin_array_concat(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t arr = js->this_val;
+static ant_value_t builtin_array_concat(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t arr = js->this_val;
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ) {
     return js_mkerr(js, "concat called on non-array");
   }
   
-  jsval_t result = array_alloc_like(js, arr);
+  ant_value_t result = array_alloc_like(js, arr);
   if (is_err(result)) return result;
   
-  jsoff_t result_idx = 0;
+  ant_offset_t result_idx = 0;
   for (int a = -1; a < nargs; a++) {
-    jsval_t arg = (a < 0) ? arr : args[a];
+    ant_value_t arg = (a < 0) ? arr : args[a];
     bool spreadable = false;
     
     if (vtype(arg) == T_ARR || vtype(arg) == T_OBJ) {
       bool array_default_spreadable = (vtype(arg) == T_ARR);
       if (!array_default_spreadable && is_proxy(js, arg)) {
-        jsval_t target = proxy_read_target(js, arg);
+        ant_value_t target = proxy_read_target(js, arg);
         array_default_spreadable = (vtype(target) == T_ARR);
       }
       
-      jsval_t spread_val = js_get_sym(js, arg, get_isConcatSpreadable_sym());
+      ant_value_t spread_val = js_get_sym(js, arg, get_isConcatSpreadable_sym());
       if (is_err(spread_val)) return spread_val;
       if (vtype(spread_val) == T_UNDEF) spreadable = array_default_spreadable;
       else spreadable = js_truthy(js, spread_val);
     }
     
     if (spreadable) {
-      jsoff_t arg_len = 0;
-      jsval_t len_val = js_get(js, arg, "length");
+      ant_offset_t arg_len = 0;
+      ant_value_t len_val = js_get(js, arg, "length");
       if (is_err(len_val)) return len_val;
-      if (vtype(len_val) == T_NUM && tod(len_val) > 0) arg_len = (jsoff_t)tod(len_val);
+      if (vtype(len_val) == T_NUM && tod(len_val) > 0) arg_len = (ant_offset_t)tod(len_val);
       
-      for (jsoff_t i = 0; i < arg_len; i++) {
+      for (ant_offset_t i = 0; i < arg_len; i++) {
         char idxstr[32];
         uint_to_str(idxstr, sizeof(idxstr), (uint64_t)i);
-        jsval_t elem = js_get(js, arg, idxstr);
+        ant_value_t elem = js_get(js, arg, idxstr);
         if (is_err(elem)) return elem;
         arr_set(js, result, result_idx, elem);
         result_idx++;
@@ -7372,74 +7372,74 @@ static jsval_t builtin_array_concat(ant_t *js, jsval_t *args, int nargs) {
   return result;
 }
 
-static jsval_t builtin_array_at(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t arr = js->this_val;
+static ant_value_t builtin_array_at(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t arr = js->this_val;
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ) {
     return js_mkerr(js, "at called on non-array");
   }
   
   if (nargs == 0 || vtype(args[0]) != T_NUM) return js_mkundef();
   
-  jsoff_t len = get_array_length(js, arr);
+  ant_offset_t len = get_array_length(js, arr);
   
   int idx = (int) tod(args[0]);
   if (idx < 0) idx = (int)len + idx;
-  if (idx < 0 || (jsoff_t)idx >= len) return js_mkundef();
+  if (idx < 0 || (ant_offset_t)idx >= len) return js_mkundef();
   
-  return arr_get(js, arr, (jsoff_t)idx);
+  return arr_get(js, arr, (ant_offset_t)idx);
 }
 
-static jsval_t builtin_array_fill(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t arr = js->this_val;
+static ant_value_t builtin_array_fill(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t arr = js->this_val;
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ) {
     return js_mkerr(js, "fill called on non-array");
   }
 
-  jsval_t value = nargs >= 1 ? args[0] : js_mkundef();
+  ant_value_t value = nargs >= 1 ? args[0] : js_mkundef();
 
-  jsoff_t len = proxy_aware_length(js, arr);
+  ant_offset_t len = proxy_aware_length(js, arr);
   
-  jsoff_t start = 0, end = len;
+  ant_offset_t start = 0, end = len;
   if (nargs >= 2 && vtype(args[1]) == T_NUM) {
     int s = (int) tod(args[1]);
     if (s < 0) s = (int)len + s;
     if (s < 0) s = 0;
-    start = (jsoff_t) s;
+    start = (ant_offset_t) s;
   }
   if (nargs >= 3 && vtype(args[2]) == T_NUM) {
     int e = (int) tod(args[2]);
     if (e < 0) e = (int)len + e;
     if (e < 0) e = 0;
-    end = (jsoff_t) e;
+    end = (ant_offset_t) e;
   }
   if (start > len) start = len;
   if (end > len) end = len;
   
-  for (jsoff_t i = start; i < end; i++) {
+  for (ant_offset_t i = start; i < end; i++) {
     arr_set(js, arr, i, value);
   }
   
   return arr;
 }
 
-static jsval_t array_find_impl(ant_t *js, jsval_t *args, int nargs, bool return_index, const char *name) {
-  jsval_t arr = js->this_val;
+static ant_value_t array_find_impl(ant_t *js, ant_value_t *args, int nargs, bool return_index, const char *name) {
+  ant_value_t arr = js->this_val;
   
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ)
     return js_mkerr(js, "%s called on non-array", name);
   
-  jsval_t callback = require_callback(js, args, nargs, name);
+  ant_value_t callback = require_callback(js, args, nargs, name);
   if (is_err(callback)) return callback;
-  jsval_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
+  ant_value_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
   
-  jsoff_t len = get_array_length(js, arr);
+  ant_offset_t len = get_array_length(js, arr);
   if (len == 0) return return_index ? tov(-1) : js_mkundef();
   
-  for (jsoff_t i = 0; i < len; i++) {
-    jsval_t val = arr_get(js, arr, i);
+  for (ant_offset_t i = 0; i < len; i++) {
+    ant_value_t val = arr_get(js, arr, i);
     
-    jsval_t call_args[3] = { val, tov((double)i), arr };
-    jsval_t result = sv_vm_call(js->vm, js, callback, this_arg, call_args, 3, NULL, false);
+    ant_value_t call_args[3] = { val, tov((double)i), arr };
+    ant_value_t result = sv_vm_call(js->vm, js, callback, this_arg, call_args, 3, NULL, false);
     
     if (is_err(result)) return result;
     if (js_truthy(js, result)) return return_index ? tov((double)i) : val;
@@ -7448,32 +7448,32 @@ static jsval_t array_find_impl(ant_t *js, jsval_t *args, int nargs, bool return_
   return return_index ? tov(-1) : js_mkundef();
 }
 
-static jsval_t builtin_array_find(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_array_find(ant_t *js, ant_value_t *args, int nargs) {
   return array_find_impl(js, args, nargs, false, "find");
 }
 
-static jsval_t builtin_array_findIndex(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_array_findIndex(ant_t *js, ant_value_t *args, int nargs) {
   return array_find_impl(js, args, nargs, true, "findIndex");
 }
 
-static jsval_t array_find_last_impl(ant_t *js, jsval_t *args, int nargs, bool return_index, const char *name) {
-  jsval_t arr = js->this_val;
+static ant_value_t array_find_last_impl(ant_t *js, ant_value_t *args, int nargs, bool return_index, const char *name) {
+  ant_value_t arr = js->this_val;
   
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ)
     return js_mkerr(js, "%s called on non-array", name);
   
-  jsval_t callback = require_callback(js, args, nargs, name);
+  ant_value_t callback = require_callback(js, args, nargs, name);
   if (is_err(callback)) return callback;
-  jsval_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
+  ant_value_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
   
-  jsoff_t len = get_array_length(js, arr);
+  ant_offset_t len = get_array_length(js, arr);
   if (len == 0) return return_index ? tov(-1) : js_mkundef();
   
-  for (jsoff_t i = len; i > 0; i--) {
-    jsval_t val = arr_get(js, arr, i - 1);
+  for (ant_offset_t i = len; i > 0; i--) {
+    ant_value_t val = arr_get(js, arr, i - 1);
     
-    jsval_t call_args[3] = { val, tov((double)(i - 1)), arr };
-    jsval_t result = sv_vm_call(js->vm, js, callback, this_arg, call_args, 3, NULL, false);
+    ant_value_t call_args[3] = { val, tov((double)(i - 1)), arr };
+    ant_value_t result = sv_vm_call(js->vm, js, callback, this_arg, call_args, 3, NULL, false);
     
     if (is_err(result)) return result;
     if (js_truthy(js, result)) return return_index ? tov((double)(i - 1)) : val;
@@ -7482,16 +7482,16 @@ static jsval_t array_find_last_impl(ant_t *js, jsval_t *args, int nargs, bool re
   return return_index ? tov(-1) : js_mkundef();
 }
 
-static jsval_t builtin_array_findLast(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_array_findLast(ant_t *js, ant_value_t *args, int nargs) {
   return array_find_last_impl(js, args, nargs, false, "findLast");
 }
 
-static jsval_t builtin_array_findLastIndex(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_array_findLastIndex(ant_t *js, ant_value_t *args, int nargs) {
   return array_find_last_impl(js, args, nargs, true, "findLastIndex");
 }
 
-static jsval_t builtin_array_flatMap(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t arr = js->this_val;
+static ant_value_t builtin_array_flatMap(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t arr = js->this_val;
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ) {
     return js_mkerr(js, "flatMap called on non-array");
   }
@@ -7499,24 +7499,24 @@ static jsval_t builtin_array_flatMap(ant_t *js, jsval_t *args, int nargs) {
     return js_mkerr(js, "flatMap requires a function argument");
   }
   
-  jsval_t callback = args[0];
-  jsval_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
-  jsoff_t len = get_array_length(js, arr);
+  ant_value_t callback = args[0];
+  ant_value_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
+  ant_offset_t len = get_array_length(js, arr);
   
-  jsval_t result = mkarr(js);
+  ant_value_t result = mkarr(js);
   if (is_err(result)) return result;
-  jsoff_t result_idx = 0;
+  ant_offset_t result_idx = 0;
   
-  for (jsoff_t i = 0; i < len; i++) {
-    jsval_t elem = arr_get(js, arr, i);
-    jsval_t call_args[3] = { elem, tov((double)i), arr };
-    jsval_t mapped = sv_vm_call(js->vm, js, callback, this_arg, call_args, 3, NULL, false);
+  for (ant_offset_t i = 0; i < len; i++) {
+    ant_value_t elem = arr_get(js, arr, i);
+    ant_value_t call_args[3] = { elem, tov((double)i), arr };
+    ant_value_t mapped = sv_vm_call(js->vm, js, callback, this_arg, call_args, 3, NULL, false);
     if (is_err(mapped)) return mapped;
     
     if (vtype(mapped) == T_ARR || vtype(mapped) == T_OBJ) {
-      jsoff_t m_len = get_array_length(js, mapped);
-      for (jsoff_t j = 0; j < m_len; j++) {
-        jsval_t m_elem = arr_get(js, mapped, j);
+      ant_offset_t m_len = get_array_length(js, mapped);
+      for (ant_offset_t j = 0; j < m_len; j++) {
+        ant_value_t m_elem = arr_get(js, mapped, j);
         arr_set(js, result, result_idx, m_elem);
         result_idx++;
       }
@@ -7529,25 +7529,25 @@ static jsval_t builtin_array_flatMap(ant_t *js, jsval_t *args, int nargs) {
   return mkval(T_ARR, vdata(result));
 }
 
-static const char *js_tostring(ant_t *js, jsval_t v) {
+static const char *js_tostring(ant_t *js, ant_value_t v) {
   if (vtype(v) == T_STR) {
-    jsoff_t slen, off = vstr(js, v, &slen);
+    ant_offset_t slen, off = vstr(js, v, &slen);
     return (const char *)&js->mem[off];
   }
   return js_str(js, v);
 }
 
-static int js_compare_values(ant_t *js, jsval_t a, jsval_t b, jsval_t compareFn) {
+static int js_compare_values(ant_t *js, ant_value_t a, ant_value_t b, ant_value_t compareFn) {
   uint8_t t = vtype(compareFn);
   if (t == T_FUNC || t == T_CFUNC) {
-    jsval_t call_args[2] = { a, b };
-    jsval_t result = sv_vm_call(js->vm, js, compareFn, js_mkundef(), call_args, 2, NULL, false);
+    ant_value_t call_args[2] = { a, b };
+    ant_value_t result = sv_vm_call(js->vm, js, compareFn, js_mkundef(), call_args, 2, NULL, false);
     if (vtype(result) == T_NUM) return (int)tod(result);
     return 0;
   }
   
   if (vtype(a) == T_STR && vtype(b) == T_STR) {
-    jsoff_t len_a, len_b;
+    ant_offset_t len_a, len_b;
     const char *sa = (const char *)&js->mem[vstr(js, a, &len_a)];
     const char *sb = (const char *)&js->mem[vstr(js, b, &len_b)];
     return strcmp(sa, sb);
@@ -7562,41 +7562,41 @@ static int js_compare_values(ant_t *js, jsval_t a, jsval_t b, jsval_t compareFn)
   return strcmp(copy, js_tostring(js, b));
 }
 
-static jsval_t builtin_array_indexOf(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t arr = js->this_val;
+static ant_value_t builtin_array_indexOf(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t arr = js->this_val;
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ) {
     return js_mkerr(js, "indexOf called on non-array");
   }
   if (nargs == 0) return tov(-1);
   
-  jsval_t search = args[0];
-  jsoff_t len = get_array_length(js, arr);
+  ant_value_t search = args[0];
+  ant_offset_t len = get_array_length(js, arr);
   
-  jsoff_t start = 0;
+  ant_offset_t start = 0;
   if (nargs >= 2 && vtype(args[1]) == T_NUM) {
     int s = (int) tod(args[1]);
     if (s < 0) s = (int)len + s;
     if (s < 0) s = 0;
-    start = (jsoff_t) s;
+    start = (ant_offset_t) s;
   }
   
-  for (jsoff_t i = start; i < len; i++) {
-    jsval_t elem = arr_get(js, arr, i);
+  for (ant_offset_t i = start; i < len; i++) {
+    ant_value_t elem = arr_get(js, arr, i);
     if (vtype(elem) == T_UNDEF && !arr_has(js, arr, i)) continue;
     if (strict_eq_values(js, elem, search)) return tov((double)i);
   }
   return tov(-1);
 }
 
-static jsval_t builtin_array_lastIndexOf(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t arr = js->this_val;
+static ant_value_t builtin_array_lastIndexOf(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t arr = js->this_val;
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ) {
     return js_mkerr(js, "lastIndexOf called on non-array");
   }
   if (nargs == 0) return tov(-1);
   
-  jsval_t search = args[0];
-  jsoff_t len = get_array_length(js, arr);
+  ant_value_t search = args[0];
+  ant_offset_t len = get_array_length(js, arr);
   
   int start = (int)len - 1;
   if (nargs >= 2 && vtype(args[1]) == T_NUM) {
@@ -7606,15 +7606,15 @@ static jsval_t builtin_array_lastIndexOf(ant_t *js, jsval_t *args, int nargs) {
   if (start >= (int)len) start = (int)len - 1;
   
   for (int i = start; i >= 0; i--) {
-    jsval_t elem = arr_get(js, arr, (jsoff_t)i);
-    if (vtype(elem) == T_UNDEF && !arr_has(js, arr, (jsoff_t)i)) continue;
+    ant_value_t elem = arr_get(js, arr, (ant_offset_t)i);
+    if (vtype(elem) == T_UNDEF && !arr_has(js, arr, (ant_offset_t)i)) continue;
     if (strict_eq_values(js, elem, search)) return tov((double)i);
   }
   return tov(-1);
 }
 
-static jsval_t builtin_array_reduceRight(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t arr = js->this_val;
+static ant_value_t builtin_array_reduceRight(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t arr = js->this_val;
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ) {
     return js_mkerr(js, "reduceRight called on non-array");
   }
@@ -7622,11 +7622,11 @@ static jsval_t builtin_array_reduceRight(ant_t *js, jsval_t *args, int nargs) {
     return js_mkerr(js, "reduceRight requires a function argument");
   }
   
-  jsval_t callback = args[0];
-  jsoff_t len = get_array_length(js, arr);
+  ant_value_t callback = args[0];
+  ant_offset_t len = get_array_length(js, arr);
   
   int start_idx = (int)len - 1;
-  jsval_t accumulator;
+  ant_value_t accumulator;
   
   if (nargs >= 2) {
     accumulator = args[1];
@@ -7637,8 +7637,8 @@ static jsval_t builtin_array_reduceRight(ant_t *js, jsval_t *args, int nargs) {
   }
   
   for (int i = start_idx; i >= 0; i--) {
-    jsval_t elem = arr_get(js, arr, (jsoff_t)i);
-    jsval_t call_args[4] = { accumulator, elem, tov((double)i), arr };
+    ant_value_t elem = arr_get(js, arr, (ant_offset_t)i);
+    ant_value_t call_args[4] = { accumulator, elem, tov((double)i), arr };
     accumulator = sv_vm_call(js->vm, js, callback, js_mkundef(), call_args, 4, NULL, false);
     if (is_err(accumulator)) return accumulator;
   }
@@ -7646,37 +7646,37 @@ static jsval_t builtin_array_reduceRight(ant_t *js, jsval_t *args, int nargs) {
   return accumulator;
 }
 
-static jsval_t builtin_array_shift(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_array_shift(ant_t *js, ant_value_t *args, int nargs) {
   (void) args;
   (void) nargs;
-  jsval_t arr = js->this_val;
+  ant_value_t arr = js->this_val;
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ) {
     return js_mkerr(js, "shift called on non-array");
   }
 
-  jsoff_t len = proxy_aware_length(js, arr);
+  ant_offset_t len = proxy_aware_length(js, arr);
   if (len == 0) return js_mkundef();
 
-  jsoff_t doff = get_dense_buf(js, arr);
+  ant_offset_t doff = get_dense_buf(js, arr);
   if (doff && !is_proxy(js, arr)) {
-    jsoff_t d_len = dense_length(js, doff);
+    ant_offset_t d_len = dense_length(js, doff);
     if (d_len == 0) return js_mkundef();
-    jsval_t first = dense_get(js, doff, 0);
+    ant_value_t first = dense_get(js, doff, 0);
     if (is_empty_slot(first)) first = js_mkundef();
-    memmove(&js->mem[doff + sizeof(jsoff_t) * 2],
-            &js->mem[doff + sizeof(jsoff_t) * 2 + sizeof(jsval_t)],
-            sizeof(jsval_t) * (d_len - 1));
+    memmove(&js->mem[doff + sizeof(ant_offset_t) * 2],
+            &js->mem[doff + sizeof(ant_offset_t) * 2 + sizeof(ant_value_t)],
+            sizeof(ant_value_t) * (d_len - 1));
     dense_set(js, doff, d_len - 1, T_EMPTY);
     dense_set_length(js, doff, d_len - 1);
     return first;
   }
 
-  jsval_t read_from = is_proxy(js, arr) ? proxy_read_target(js, arr) : arr;
-  jsval_t first = arr_get(js, read_from, 0);
+  ant_value_t read_from = is_proxy(js, arr) ? proxy_read_target(js, arr) : arr;
+  ant_value_t first = arr_get(js, read_from, 0);
 
-  for (jsoff_t i = 1; i < len; i++) {
+  for (ant_offset_t i = 1; i < len; i++) {
     if (arr_has(js, read_from, i)) {
-      jsval_t elem = arr_get(js, read_from, i);
+      ant_value_t elem = arr_get(js, read_from, i);
       char dst[16];
       size_t dstlen = uint_to_str(dst, sizeof(dst), (unsigned)(i - 1));
       js_setprop(js, arr, js_mkstr(js, dst, dstlen), elem);
@@ -7689,37 +7689,37 @@ static jsval_t builtin_array_shift(ant_t *js, jsval_t *args, int nargs) {
   return first;
 }
 
-static jsval_t builtin_array_unshift(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t arr = js->this_val;
+static ant_value_t builtin_array_unshift(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t arr = js->this_val;
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ) {
     return js_mkerr(js, "unshift called on non-array");
   }
 
-  jsoff_t len = proxy_aware_length(js, arr);
+  ant_offset_t len = proxy_aware_length(js, arr);
 
-  jsoff_t doff = get_dense_buf(js, arr);
+  ant_offset_t doff = get_dense_buf(js, arr);
   if (doff && !is_proxy(js, arr)) {
-    jsoff_t d_len = dense_length(js, doff);
-    jsoff_t new_len = d_len + nargs;
-    jsoff_t cap = dense_capacity(js, doff);
+    ant_offset_t d_len = dense_length(js, doff);
+    ant_offset_t new_len = d_len + nargs;
+    ant_offset_t cap = dense_capacity(js, doff);
     if (new_len > cap) {
       doff = dense_grow(js, arr, new_len);
       if (doff == 0) return js_mkerr(js, "oom");
     }
-    memmove(&js->mem[doff + sizeof(jsoff_t) * 2 + sizeof(jsval_t) * nargs],
-            &js->mem[doff + sizeof(jsoff_t) * 2],
-            sizeof(jsval_t) * d_len);
+    memmove(&js->mem[doff + sizeof(ant_offset_t) * 2 + sizeof(ant_value_t) * nargs],
+            &js->mem[doff + sizeof(ant_offset_t) * 2],
+            sizeof(ant_value_t) * d_len);
     for (int i = 0; i < nargs; i++)
-      dense_set(js, doff, (jsoff_t)i, args[i]);
+      dense_set(js, doff, (ant_offset_t)i, args[i]);
     dense_set_length(js, doff, new_len);
     return tov((double) new_len);
   }
 
-  jsval_t read_from = is_proxy(js, arr) ? proxy_read_target(js, arr) : arr;
+  ant_value_t read_from = is_proxy(js, arr) ? proxy_read_target(js, arr) : arr;
 
   for (int i = (int)len - 1; i >= 0; i--) {
-    if (arr_has(js, read_from, (jsoff_t)i)) {
-      jsval_t elem = arr_get(js, read_from, (jsoff_t)i);
+    if (arr_has(js, read_from, (ant_offset_t)i)) {
+      ant_value_t elem = arr_get(js, read_from, (ant_offset_t)i);
       char dst[16];
       size_t dstlen = uint_to_str(dst, sizeof(dst), (unsigned)(i + nargs));
       js_setprop(js, arr, js_mkstr(js, dst, dstlen), elem);
@@ -7729,35 +7729,35 @@ static jsval_t builtin_array_unshift(ant_t *js, jsval_t *args, int nargs) {
   for (int i = 0; i < nargs; i++) {
     char idxstr[16];
     size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)i);
-    jsval_t key = js_mkstr(js, idxstr, idxlen);
+    ant_value_t key = js_mkstr(js, idxstr, idxlen);
     js_setprop(js, arr, key, args[i]);
   }
   
-  jsoff_t new_len = len + nargs;
+  ant_offset_t new_len = len + nargs;
   js_setprop(js, arr, js->length_str, tov((double) new_len));
   
   return tov((double) new_len);
 }
 
-static jsval_t builtin_array_some(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t arr = js->this_val;
+static ant_value_t builtin_array_some(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t arr = js->this_val;
   
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ)
     return js_mkerr(js, "some called on non-array");
   
-  jsval_t callback = require_callback(js, args, nargs, "some");
+  ant_value_t callback = require_callback(js, args, nargs, "some");
   if (is_err(callback)) return callback;
-  jsval_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
+  ant_value_t this_arg = (nargs >= 2) ? args[1] : js_mkundef();
   
-  jsoff_t len = get_array_length(js, arr);
+  ant_offset_t len = get_array_length(js, arr);
   if (len == 0) return mkval(T_BOOL, 0);
   
-  for (jsoff_t i = 0; i < len; i++) {
+  for (ant_offset_t i = 0; i < len; i++) {
     if (!arr_has(js, arr, i)) continue;
-    jsval_t val = arr_get(js, arr, i);
+    ant_value_t val = arr_get(js, arr, i);
     
-    jsval_t call_args[3] = { val, tov((double)i), arr };
-    jsval_t result = sv_vm_call(js->vm, js, callback, this_arg, call_args, 3, NULL, false);
+    ant_value_t call_args[3] = { val, tov((double)i), arr };
+    ant_value_t result = sv_vm_call(js->vm, js, callback, this_arg, call_args, 3, NULL, false);
     
     if (is_err(result)) return result;
     if (js_truthy(js, result)) return mkval(T_BOOL, 1);
@@ -7766,12 +7766,12 @@ static jsval_t builtin_array_some(ant_t *js, jsval_t *args, int nargs) {
   return mkval(T_BOOL, 0);
 }
 
-static jsval_t builtin_array_sort(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t arr = js->this_val;
-  jsval_t compareFn = js_mkundef();
-  jsval_t *vals = NULL, *keys = NULL, *temp_vals = NULL, *temp_keys = NULL;
-  jsoff_t *offs = NULL;
-  jsoff_t count = 0, undef_count = 0, len = 0;
+static ant_value_t builtin_array_sort(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t arr = js->this_val;
+  ant_value_t compareFn = js_mkundef();
+  ant_value_t *vals = NULL, *keys = NULL, *temp_vals = NULL, *temp_keys = NULL;
+  ant_offset_t *offs = NULL;
+  ant_offset_t count = 0, undef_count = 0, len = 0;
   
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ)
     return js_mkerr(js, "sort called on non-array");
@@ -7785,24 +7785,24 @@ static jsval_t builtin_array_sort(ant_t *js, jsval_t *args, int nargs) {
   len = get_array_length(js, arr);
   if (len == 0) return arr;
   
-  jsoff_t doff = get_dense_buf(js, arr);
+  ant_offset_t doff = get_dense_buf(js, arr);
   if (doff) {
-    vals = malloc(len * sizeof(jsval_t));
+    vals = malloc(len * sizeof(ant_value_t));
     if (!vals) goto oom;
-    for (jsoff_t i = 0; i < len; i++) {
-      jsval_t v = dense_get(js, doff, i);
+    for (ant_offset_t i = 0; i < len; i++) {
+      ant_value_t v = dense_get(js, doff, i);
       if (is_empty_slot(v) || vtype(v) == T_UNDEF) undef_count++;
       else vals[count++] = v;
     }
   } else {
-    vals = malloc(len * sizeof(jsval_t));
-    offs = malloc(len * sizeof(jsoff_t));
+    vals = malloc(len * sizeof(ant_value_t));
+    offs = malloc(len * sizeof(ant_offset_t));
     if (!vals || !offs) goto oom;
     
     ant_iter_t iter = js_prop_iter_begin(js, arr);
     const char *key;
     size_t key_len;
-    jsval_t val;
+    ant_value_t val;
     
     while (js_prop_iter_next(&iter, &key, &key_len, &val)) {
       if (key_len == 0 || key[0] > '9' || key[0] < '0') continue;
@@ -7826,29 +7826,29 @@ static jsval_t builtin_array_sort(ant_t *js, jsval_t *args, int nargs) {
   
   bool use_keys = (vtype(compareFn) == T_UNDEF);
   if (use_keys) {
-    keys = malloc(count * sizeof(jsval_t));
+    keys = malloc(count * sizeof(ant_value_t));
     if (!keys) goto oom;
-    for (jsoff_t i = 0; i < count; i++) {
+    for (ant_offset_t i = 0; i < count; i++) {
       const char *s = js_tostring(js, vals[i]);
       keys[i] = js_mkstr(js, s, strlen(s));
     }
   }
   
-  temp_vals = malloc(count * sizeof(jsval_t));
-  if (use_keys) temp_keys = malloc(count * sizeof(jsval_t));
+  temp_vals = malloc(count * sizeof(ant_value_t));
+  if (use_keys) temp_keys = malloc(count * sizeof(ant_value_t));
   if (!temp_vals || (use_keys && !temp_keys)) goto oom;
   
-  for (jsoff_t width = 1; width < count; width *= 2) {
-    for (jsoff_t left = 0; left < count; left += width * 2) {
-      jsoff_t mid = left + width;
-      jsoff_t right = (mid + width < count) ? mid + width : count;
+  for (ant_offset_t width = 1; width < count; width *= 2) {
+    for (ant_offset_t left = 0; left < count; left += width * 2) {
+      ant_offset_t mid = left + width;
+      ant_offset_t right = (mid + width < count) ? mid + width : count;
       if (mid >= count) break;
       
-      jsoff_t i = left, j = mid, k = 0;
+      ant_offset_t i = left, j = mid, k = 0;
       while (i < mid && j < right) {
         int cmp;
         if (use_keys) {
-          jsoff_t len_a, len_b;
+          ant_offset_t len_a, len_b;
           const char *sa = (const char *)&js->mem[vstr(js, keys[i], &len_a)];
           const char *sb = (const char *)&js->mem[vstr(js, keys[j], &len_b)];
           cmp = strcmp(sa, sb);
@@ -7876,21 +7876,21 @@ static jsval_t builtin_array_sort(ant_t *js, jsval_t *args, int nargs) {
         k++; j++;
       }
       
-      memcpy(&vals[left], temp_vals, k * sizeof(jsval_t));
-      if (use_keys) memcpy(&keys[left], temp_keys, k * sizeof(jsval_t));
+      memcpy(&vals[left], temp_vals, k * sizeof(ant_value_t));
+      if (use_keys) memcpy(&keys[left], temp_keys, k * sizeof(ant_value_t));
     }
   }
   
 writeback:
   if (doff) {
-    for (jsoff_t i = 0; i < count; i++) dense_set(js, doff, i, vals[i]);
-    for (jsoff_t i = count; i < count + undef_count; i++) dense_set(js, doff, i, js_mkundef());
-    for (jsoff_t i = count + undef_count; i < len; i++) dense_set(js, doff, i, T_EMPTY);
+    for (ant_offset_t i = 0; i < count; i++) dense_set(js, doff, i, vals[i]);
+    for (ant_offset_t i = count; i < count + undef_count; i++) dense_set(js, doff, i, js_mkundef());
+    for (ant_offset_t i = count + undef_count; i < len; i++) dense_set(js, doff, i, T_EMPTY);
   } else {
-    for (jsoff_t i = 0; i < count; i++)
-      saveval(js, offs[i] + sizeof(jsoff_t) * 2, vals[i]);
-    for (jsoff_t i = 0; i < undef_count; i++)
-      saveval(js, offs[count + i] + sizeof(jsoff_t) * 2, js_mkundef());
+    for (ant_offset_t i = 0; i < count; i++)
+      saveval(js, offs[i] + sizeof(ant_offset_t) * 2, vals[i]);
+    for (ant_offset_t i = 0; i < undef_count; i++)
+      saveval(js, offs[count + i] + sizeof(ant_offset_t) * 2, js_mkundef());
   }
   
   free(temp_keys);
@@ -7909,14 +7909,14 @@ oom:
   return js_mkerr(js, "out of memory");
 }
 
-static jsval_t builtin_array_splice(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t arr = js->this_val;
+static ant_value_t builtin_array_splice(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t arr = js->this_val;
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ) {
     return js_mkerr(js, "splice called on non-array");
   }
 
-  jsoff_t len = proxy_aware_length(js, arr);
-  jsval_t read_from = is_proxy(js, arr) ? proxy_read_target(js, arr) : arr;
+  ant_offset_t len = proxy_aware_length(js, arr);
+  ant_value_t read_from = is_proxy(js, arr) ? proxy_read_target(js, arr) : arr;
 
   int start = 0;
   if (nargs >= 1 && vtype(args[0]) == T_NUM) {
@@ -7935,40 +7935,40 @@ static jsval_t builtin_array_splice(ant_t *js, jsval_t *args, int nargs) {
 
   int insertCount = nargs > 2 ? nargs - 2 : 0;
 
-  jsval_t removed = array_alloc_like(js, arr);
+  ant_value_t removed = array_alloc_like(js, arr);
   if (is_err(removed)) return removed;
 
-  jsoff_t doff = get_dense_buf(js, arr);
+  ant_offset_t doff = get_dense_buf(js, arr);
   if (doff && !is_proxy(js, arr)) {
     for (int i = 0; i < deleteCount; i++) {
-      jsval_t elem = arr_get(js, arr, (jsoff_t)(start + i));
-      arr_set(js, removed, (jsoff_t)i, elem);
+      ant_value_t elem = arr_get(js, arr, (ant_offset_t)(start + i));
+      arr_set(js, removed, (ant_offset_t)i, elem);
     }
 
-    jsoff_t d_len = dense_length(js, doff);
+    ant_offset_t d_len = dense_length(js, doff);
     int shift = insertCount - deleteCount;
-    jsoff_t new_len = (jsoff_t)((int)d_len + shift);
+    ant_offset_t new_len = (ant_offset_t)((int)d_len + shift);
 
     if (shift != 0) {
       if (new_len > dense_capacity(js, doff)) {
         doff = dense_grow(js, arr, new_len);
         if (doff == 0) return js_mkerr(js, "oom");
       }
-      jsoff_t move_start = (jsoff_t)(start + deleteCount);
-      jsoff_t move_dest = (jsoff_t)(start + insertCount);
-      jsoff_t move_count = d_len - move_start;
+      ant_offset_t move_start = (ant_offset_t)(start + deleteCount);
+      ant_offset_t move_dest = (ant_offset_t)(start + insertCount);
+      ant_offset_t move_count = d_len - move_start;
       if (move_count > 0) memmove(
-        &js->mem[doff + sizeof(jsoff_t) * 2 + sizeof(jsval_t) * move_dest],
-        &js->mem[doff + sizeof(jsoff_t) * 2 + sizeof(jsval_t) * move_start],
-        sizeof(jsval_t) * move_count
+        &js->mem[doff + sizeof(ant_offset_t) * 2 + sizeof(ant_value_t) * move_dest],
+        &js->mem[doff + sizeof(ant_offset_t) * 2 + sizeof(ant_value_t) * move_start],
+        sizeof(ant_value_t) * move_count
       );
     }
 
     for (int i = 0; i < insertCount; i++)
-      dense_set(js, doff, (jsoff_t)(start + i), args[2 + i]);
+      dense_set(js, doff, (ant_offset_t)(start + i), args[2 + i]);
 
     if (shift < 0) {
-      for (jsoff_t i = new_len; i < d_len; i++)
+      for (ant_offset_t i = new_len; i < d_len; i++)
         dense_set(js, doff, i, T_EMPTY);
     }
 
@@ -7981,10 +7981,10 @@ static jsval_t builtin_array_splice(ant_t *js, jsval_t *args, int nargs) {
     char src[16], dst[16];
     snprintf(src, sizeof(src), "%u", (unsigned)(start + i));
     snprintf(dst, sizeof(dst), "%u", (unsigned) i);
-    jsoff_t elem_off = lkp(js, read_from, src, strlen(src));
+    ant_offset_t elem_off = lkp(js, read_from, src, strlen(src));
     if (elem_off != 0) {
-      jsval_t elem = resolveprop(js, mkval(T_PROP, elem_off));
-      jsval_t key = js_mkstr(js, dst, strlen(dst));
+      ant_value_t elem = resolveprop(js, mkval(T_PROP, elem_off));
+      ant_value_t key = js_mkstr(js, dst, strlen(dst));
       js_setprop(js, removed, key, elem);
     }
   }
@@ -7997,9 +7997,9 @@ static jsval_t builtin_array_splice(ant_t *js, jsval_t *args, int nargs) {
       char src[16], dst[16];
       snprintf(src, sizeof(src), "%u", (unsigned) i);
       snprintf(dst, sizeof(dst), "%u", (unsigned)(i + shift));
-      jsoff_t elem_off = lkp(js, read_from, src, strlen(src));
-      jsval_t elem = elem_off ? resolveprop(js, mkval(T_PROP, elem_off)) : js_mkundef();
-      jsval_t key = js_mkstr(js, dst, strlen(dst));
+      ant_offset_t elem_off = lkp(js, read_from, src, strlen(src));
+      ant_value_t elem = elem_off ? resolveprop(js, mkval(T_PROP, elem_off)) : js_mkundef();
+      ant_value_t key = js_mkstr(js, dst, strlen(dst));
       js_setprop(js, arr, key, elem);
     }
   } else if (shift < 0) {
@@ -8007,9 +8007,9 @@ static jsval_t builtin_array_splice(ant_t *js, jsval_t *args, int nargs) {
       char src[16], dst[16];
       snprintf(src, sizeof(src), "%u", (unsigned) i);
       snprintf(dst, sizeof(dst), "%u", (unsigned)(i + shift));
-      jsoff_t elem_off = lkp(js, read_from, src, strlen(src));
-      jsval_t elem = elem_off ? resolveprop(js, mkval(T_PROP, elem_off)) : js_mkundef();
-      jsval_t key = js_mkstr(js, dst, strlen(dst));
+      ant_offset_t elem_off = lkp(js, read_from, src, strlen(src));
+      ant_value_t elem = elem_off ? resolveprop(js, mkval(T_PROP, elem_off)) : js_mkundef();
+      ant_value_t key = js_mkstr(js, dst, strlen(dst));
       js_setprop(js, arr, key, elem);
     }
   }
@@ -8017,7 +8017,7 @@ static jsval_t builtin_array_splice(ant_t *js, jsval_t *args, int nargs) {
   for (int i = 0; i < insertCount; i++) {
     char idxstr[16];
     size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)(start + i));
-    jsval_t key = js_mkstr(js, idxstr, idxlen);
+    ant_value_t key = js_mkstr(js, idxstr, idxlen);
     js_setprop(js, arr, key, args[2 + i]);
   }
   
@@ -8027,14 +8027,14 @@ static jsval_t builtin_array_splice(ant_t *js, jsval_t *args, int nargs) {
   return removed;
 }
 
-static jsval_t builtin_array_copyWithin(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t arr = js->this_val;
+static ant_value_t builtin_array_copyWithin(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t arr = js->this_val;
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ) {
     return js_mkerr(js, "copyWithin called on non-array");
   }
 
-  jsoff_t len = proxy_aware_length(js, arr);
-  jsval_t read_from = is_proxy(js, arr) ? proxy_read_target(js, arr) : arr;
+  ant_offset_t len = proxy_aware_length(js, arr);
+  ant_value_t read_from = is_proxy(js, arr) ? proxy_read_target(js, arr) : arr;
 
   int target = 0, start = 0, end = (int)len;
   if (nargs >= 1 && vtype(args[0]) == T_NUM) {
@@ -8058,34 +8058,34 @@ static jsval_t builtin_array_copyWithin(ant_t *js, jsval_t *args, int nargs) {
   if (count > (int)len - target) count = (int)len - target;
   if (count <= 0) return arr;
 
-  jsoff_t doff = get_dense_buf(js, arr);
+  ant_offset_t doff = get_dense_buf(js, arr);
   if (doff && !is_proxy(js, arr)) {
     if (start < target) {
       for (int i = count - 1; i >= 0; i--) {
-        jsval_t v = dense_get(js, doff, (jsoff_t)(start + i));
-        dense_set(js, doff, (jsoff_t)(target + i), is_empty_slot(v) ? js_mkundef() : v);
+        ant_value_t v = dense_get(js, doff, (ant_offset_t)(start + i));
+        dense_set(js, doff, (ant_offset_t)(target + i), is_empty_slot(v) ? js_mkundef() : v);
       }
     } else {
       for (int i = 0; i < count; i++) {
-        jsval_t v = dense_get(js, doff, (jsoff_t)(start + i));
-        dense_set(js, doff, (jsoff_t)(target + i), is_empty_slot(v) ? js_mkundef() : v);
+        ant_value_t v = dense_get(js, doff, (ant_offset_t)(start + i));
+        dense_set(js, doff, (ant_offset_t)(target + i), is_empty_slot(v) ? js_mkundef() : v);
       }
     }
     return arr;
   }
 
-  jsval_t *temp = (jsval_t *)malloc(count * sizeof(jsval_t));
+  ant_value_t *temp = (ant_value_t *)malloc(count * sizeof(ant_value_t));
   for (int i = 0; i < count; i++) {
     char idxstr[16];
     size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)(start + i));
-    jsoff_t elem_off = lkp(js, read_from, idxstr, idxlen);
+    ant_offset_t elem_off = lkp(js, read_from, idxstr, idxlen);
     temp[i] = elem_off ? resolveprop(js, mkval(T_PROP, elem_off)) : js_mkundef();
   }
   
   for (int i = 0; i < count; i++) {
     char idxstr[16];
     size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)(target + i));
-    jsval_t key = js_mkstr(js, idxstr, idxlen);
+    ant_value_t key = js_mkstr(js, idxstr, idxlen);
     js_setprop(js, arr, key, temp[i]);
   }
   
@@ -8093,50 +8093,50 @@ static jsval_t builtin_array_copyWithin(ant_t *js, jsval_t *args, int nargs) {
   return arr;
 }
 
-static jsval_t builtin_array_toSorted(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t arr = js->this_val;
+static ant_value_t builtin_array_toSorted(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t arr = js->this_val;
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ)
     return js_mkerr(js, "toSorted called on non-array");
   
-  jsval_t result = array_shallow_copy(js, arr, get_array_length(js, arr));
+  ant_value_t result = array_shallow_copy(js, arr, get_array_length(js, arr));
   if (is_err(result)) return result;
   
-  jsval_t saved_this = js->this_val;
+  ant_value_t saved_this = js->this_val;
   js->this_val = result;
-  jsval_t sorted = builtin_array_sort(js, args, nargs);
+  ant_value_t sorted = builtin_array_sort(js, args, nargs);
   js->this_val = saved_this;
   
   if (is_err(sorted)) return sorted;
   return mkval(T_ARR, vdata(result));
 }
 
-static jsval_t builtin_array_toReversed(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_array_toReversed(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
-  jsval_t arr = js->this_val;
+  ant_value_t arr = js->this_val;
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ)
     return js_mkerr(js, "toReversed called on non-array");
   
-  jsval_t result = array_shallow_copy(js, arr, get_array_length(js, arr));
+  ant_value_t result = array_shallow_copy(js, arr, get_array_length(js, arr));
   if (is_err(result)) return result;
   
-  jsval_t saved_this = js->this_val;
+  ant_value_t saved_this = js->this_val;
   js->this_val = result;
-  jsval_t reversed = builtin_array_reverse(js, NULL, 0);
+  ant_value_t reversed = builtin_array_reverse(js, NULL, 0);
   js->this_val = saved_this;
   
   if (is_err(reversed)) return reversed;
   return mkval(T_ARR, vdata(result));
 }
 
-static jsval_t builtin_array_toSpliced(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t arr = js->this_val;
+static ant_value_t builtin_array_toSpliced(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t arr = js->this_val;
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ)
     return js_mkerr(js, "toSpliced called on non-array");
   
-  jsval_t result = array_shallow_copy(js, arr, get_array_length(js, arr));
+  ant_value_t result = array_shallow_copy(js, arr, get_array_length(js, arr));
   if (is_err(result)) return result;
   
-  jsval_t saved_this = js->this_val;
+  ant_value_t saved_this = js->this_val;
   js->this_val = result;
   builtin_array_splice(js, args, nargs);
   js->this_val = saved_this;
@@ -8144,89 +8144,89 @@ static jsval_t builtin_array_toSpliced(ant_t *js, jsval_t *args, int nargs) {
   return mkval(T_ARR, vdata(result));
 }
 
-static jsval_t builtin_array_with(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t arr = js->this_val;
+static ant_value_t builtin_array_with(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t arr = js->this_val;
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ) {
     return js_mkerr(js, "with called on non-array");
   }
   
   if (nargs < 2) return js_mkerr(js, "with requires index and value arguments");
   
-  jsoff_t len = get_array_length(js, arr);
+  ant_offset_t len = get_array_length(js, arr);
   
   int idx = (int) tod(args[0]);
   if (idx < 0) idx = (int)len + idx;
-  if (idx < 0 || (jsoff_t)idx >= len) return js_mkerr(js, "Invalid index");
+  if (idx < 0 || (ant_offset_t)idx >= len) return js_mkerr(js, "Invalid index");
   
-  jsval_t result = mkarr(js);
+  ant_value_t result = mkarr(js);
   if (is_err(result)) return result;
   
-  for (jsoff_t i = 0; i < len; i++) {
-    jsval_t elem = ((jsoff_t)idx == i) ? args[1] : arr_get(js, arr, i);
+  for (ant_offset_t i = 0; i < len; i++) {
+    ant_value_t elem = ((ant_offset_t)idx == i) ? args[1] : arr_get(js, arr, i);
     arr_set(js, result, i, elem);
   }
   
   return mkval(T_ARR, vdata(result));
 }
 
-static jsval_t builtin_array_keys(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_array_keys(ant_t *js, ant_value_t *args, int nargs) {
   (void) args;
   (void) nargs;
-  jsval_t arr = js->this_val;
+  ant_value_t arr = js->this_val;
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ) {
     return js_mkerr(js, "keys called on non-array");
   }
   
-  jsoff_t len = get_array_length(js, arr);
+  ant_offset_t len = get_array_length(js, arr);
   
-  jsval_t result = mkarr(js);
+  ant_value_t result = mkarr(js);
   if (is_err(result)) return result;
   
-  for (jsoff_t i = 0; i < len; i++) {
+  for (ant_offset_t i = 0; i < len; i++) {
     arr_set(js, result, i, tov((double) i));
   }
   
   return mkval(T_ARR, vdata(result));
 }
 
-static jsval_t builtin_array_values(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_array_values(ant_t *js, ant_value_t *args, int nargs) {
   (void) args;
   (void) nargs;
-  jsval_t arr = js->this_val;
+  ant_value_t arr = js->this_val;
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ) {
     return js_mkerr(js, "values called on non-array");
   }
   
-  jsoff_t len = get_array_length(js, arr);
+  ant_offset_t len = get_array_length(js, arr);
   
-  jsval_t result = mkarr(js);
+  ant_value_t result = mkarr(js);
   if (is_err(result)) return result;
   
-  for (jsoff_t i = 0; i < len; i++) {
+  for (ant_offset_t i = 0; i < len; i++) {
     arr_set(js, result, i, arr_get(js, arr, i));
   }
   
   return mkval(T_ARR, vdata(result));
 }
 
-static jsval_t builtin_array_entries(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_array_entries(ant_t *js, ant_value_t *args, int nargs) {
   (void) args;
   (void) nargs;
-  jsval_t arr = js->this_val;
+  ant_value_t arr = js->this_val;
   if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ) {
     return js_mkerr(js, "entries called on non-array");
   }
   
-  jsoff_t len = get_array_length(js, arr);
+  ant_offset_t len = get_array_length(js, arr);
   
-  jsval_t result = mkarr(js);
+  ant_value_t result = mkarr(js);
   if (is_err(result)) return result;
   
-  for (jsoff_t i = 0; i < len; i++) {
-    jsval_t entry = mkarr(js);
+  for (ant_offset_t i = 0; i < len; i++) {
+    ant_value_t entry = mkarr(js);
     if (is_err(entry)) return entry;
     
-    jsval_t elem = arr_get(js, arr, i);
+    ant_value_t elem = arr_get(js, arr, i);
     
     arr_set(js, entry, 0, tov((double) i));
     arr_set(js, entry, 1, elem);
@@ -8237,10 +8237,10 @@ static jsval_t builtin_array_entries(ant_t *js, jsval_t *args, int nargs) {
   return mkval(T_ARR, vdata(result));
 }
 
-static jsval_t builtin_array_toString(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t arr = js->this_val;
+static ant_value_t builtin_array_toString(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t arr = js->this_val;
   
-  jsval_t join_result;
+  ant_value_t join_result;
   if (js_try_call_method(js, arr, "join", 4, NULL, 0, &join_result)) {
     if (is_err(join_result)) return join_result;
     return join_result;
@@ -8249,13 +8249,13 @@ static jsval_t builtin_array_toString(ant_t *js, jsval_t *args, int nargs) {
   return builtin_object_toString(js, args, nargs);
 }
 
-static jsval_t builtin_array_toLocaleString(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_array_toLocaleString(ant_t *js, ant_value_t *args, int nargs) {
   (void) args;
   (void) nargs;
-  jsval_t arr = js->this_val;
+  ant_value_t arr = js->this_val;
   if (vtype(arr) != T_ARR) return js_mkerr(js, "toLocaleString called on non-array");
   
-  jsoff_t len = get_array_length(js, arr);
+  ant_offset_t len = get_array_length(js, arr);
   if (len == 0) return js_mkstr(js, "", 0);
   
   char *result = NULL;
@@ -8263,7 +8263,7 @@ static jsval_t builtin_array_toLocaleString(ant_t *js, jsval_t *args, int nargs)
   result = (char *)ant_calloc(result_cap);
   if (!result) return js_mkerr(js, "oom");
   
-  for (jsoff_t i = 0; i < len; i++) {
+  for (ant_offset_t i = 0; i < len; i++) {
     if (i > 0) {
       if (result_len + 1 >= result_cap) {
         result_cap *= 2;
@@ -8277,7 +8277,7 @@ static jsval_t builtin_array_toLocaleString(ant_t *js, jsval_t *args, int nargs)
     }
     
     if (!arr_has(js, arr, i)) continue;
-    jsval_t elem = arr_get(js, arr, i);
+    ant_value_t elem = arr_get(js, arr, i);
     if (vtype(elem) == T_NULL || vtype(elem) == T_UNDEF) continue;
     
     char buf[64];
@@ -8295,31 +8295,31 @@ static jsval_t builtin_array_toLocaleString(ant_t *js, jsval_t *args, int nargs)
     result_len += elem_len;
   }
   
-  jsval_t ret = js_mkstr(js, result, result_len);
+  ant_value_t ret = js_mkstr(js, result, result_len);
   free(result);
   return ret;
 }
 
-static jsval_t builtin_Array_isArray(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Array_isArray(ant_t *js, ant_value_t *args, int nargs) {
   (void) js;
   if (nargs == 0) return mkval(T_BOOL, 0);
   return mkval(T_BOOL, vtype(args[0]) == T_ARR ? 1 : 0);
 }
 
 typedef struct {
-  jsval_t write_target;
-  jsval_t result;
-  jsval_t mapFn;
-  jsval_t mapThis;
-  jsoff_t index;
+  ant_value_t write_target;
+  ant_value_t result;
+  ant_value_t mapFn;
+  ant_value_t mapThis;
+  ant_offset_t index;
 } array_from_iter_ctx_t;
 
-static iter_action_t array_from_iter_cb(ant_t *js, jsval_t value, void *ctx, jsval_t *out) {
+static iter_action_t array_from_iter_cb(ant_t *js, ant_value_t value, void *ctx, ant_value_t *out) {
   array_from_iter_ctx_t *fctx = (array_from_iter_ctx_t *)ctx;
-  jsval_t elem = value;
+  ant_value_t elem = value;
 
   if (is_callable(fctx->mapFn)) {
-    jsval_t call_args[2] = { elem, tov((double)fctx->index) };
+    ant_value_t call_args[2] = { elem, tov((double)fctx->index) };
     elem = sv_vm_call(js->vm, js, fctx->mapFn, fctx->mapThis, call_args, 2, NULL, false);
     if (is_err(elem)) { *out = elem; return ITER_ERROR; }
   }
@@ -8334,33 +8334,33 @@ static iter_action_t array_from_iter_cb(ant_t *js, jsval_t value, void *ctx, jsv
   return ITER_CONTINUE;
 }
 
-static jsval_t builtin_Array_from(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Array_from(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return mkarr(js);
 
-  jsval_t src = args[0];
-  jsval_t mapFn = (nargs >= 2 && is_callable(args[1])) ? args[1] : js_mkundef();
-  jsval_t mapThis = (nargs >= 3) ? args[2] : js_mkundef();
+  ant_value_t src = args[0];
+  ant_value_t mapFn = (nargs >= 2 && is_callable(args[1])) ? args[1] : js_mkundef();
+  ant_value_t mapThis = (nargs >= 3) ? args[2] : js_mkundef();
 
-  jsval_t ctor = js->this_val;
+  ant_value_t ctor = js->this_val;
   bool use_ctor = (vtype(ctor) == T_FUNC || vtype(ctor) == T_CFUNC);
-  jsval_t result = use_ctor ? array_alloc_from_ctor_with_length(js, ctor, 0) : mkarr(js);
+  ant_value_t result = use_ctor ? array_alloc_from_ctor_with_length(js, ctor, 0) : mkarr(js);
   if (is_err(result)) return result;
 
   bool result_is_proxy = is_proxy(js, result);
-  jsval_t write_target = result_is_proxy ? proxy_read_target(js, result) : result;
-  jsval_t iter_sym = get_iterator_sym();
+  ant_value_t write_target = result_is_proxy ? proxy_read_target(js, result) : result;
+  ant_value_t iter_sym = get_iterator_sym();
 
   if (vtype(src) == T_STR) {
     if (is_rope(js, src)) { src = rope_flatten(js, src); if (is_err(src)) return src; }
-    jsoff_t slen = str_len_fast(js, src);
+    ant_offset_t slen = str_len_fast(js, src);
     array_from_iter_ctx_t ctx = { write_target, result, mapFn, mapThis, 0 };
-    for (jsoff_t i = 0; i < slen; ) {
-      jsoff_t off = vstr(js, src, NULL);
+    for (ant_offset_t i = 0; i < slen; ) {
+      ant_offset_t off = vstr(js, src, NULL);
       utf8proc_int32_t cp;
-      jsoff_t cb_len = (jsoff_t)utf8_next((const utf8proc_uint8_t *)&js->mem[off + i], (utf8proc_ssize_t)(slen - i), &cp);
-      jsval_t ch = js_mkstr(js, (char *)&js->mem[off + i], cb_len);
+      ant_offset_t cb_len = (ant_offset_t)utf8_next((const utf8proc_uint8_t *)&js->mem[off + i], (utf8proc_ssize_t)(slen - i), &cp);
+      ant_value_t ch = js_mkstr(js, (char *)&js->mem[off + i], cb_len);
       
-      jsval_t out;
+      ant_value_t out;
       iter_action_t act = array_from_iter_cb(js, ch, &ctx, &out);
       
       if (act == ITER_ERROR) return out;
@@ -8368,37 +8368,37 @@ static jsval_t builtin_Array_from(ant_t *js, jsval_t *args, int nargs) {
     }
     if (vtype(result) != T_ARR) js_setprop(js, result, js->length_str, tov((double)ctx.index));
   } else if (vtype(src) == T_ARR) {
-    jsoff_t iter_off = (vtype(iter_sym) == T_SYMBOL) ? lkp_sym_proto(js, src, (jsoff_t)vdata(iter_sym)) : 0;
-    bool default_iter = iter_off != 0 && vtype(loadval(js, iter_off + sizeof(jsoff_t) * 2)) == T_CFUNC;
+    ant_offset_t iter_off = (vtype(iter_sym) == T_SYMBOL) ? lkp_sym_proto(js, src, (ant_offset_t)vdata(iter_sym)) : 0;
+    bool default_iter = iter_off != 0 && vtype(loadval(js, iter_off + sizeof(ant_offset_t) * 2)) == T_CFUNC;
 
     if (default_iter) {
       array_from_iter_ctx_t ctx = { write_target, result, mapFn, mapThis, 0 };
-      jsoff_t len = get_array_length(js, src);
-      for (jsoff_t i = 0; i < len; i++) {
-        jsval_t unused;
+      ant_offset_t len = get_array_length(js, src);
+      for (ant_offset_t i = 0; i < len; i++) {
+        ant_value_t unused;
         iter_action_t act = array_from_iter_cb(js, arr_get(js, src, i), &ctx, &unused);
         if (act == ITER_ERROR) return unused;
       }
       if (vtype(result) != T_ARR) js_setprop(js, result, js->length_str, tov((double)len));
     } else {
       array_from_iter_ctx_t ctx = { write_target, result, mapFn, mapThis, 0 };
-      jsval_t iter_result = iter_foreach(js, src, array_from_iter_cb, &ctx);
+      ant_value_t iter_result = iter_foreach(js, src, array_from_iter_cb, &ctx);
       if (is_err(iter_result)) return iter_result;
       if (vtype(result) != T_ARR) js_setprop(js, result, js->length_str, tov((double)ctx.index));
     }
   } else {
-    jsoff_t iter_prop = (vtype(iter_sym) == T_SYMBOL) ? lkp_sym_proto(js, src, (jsoff_t)vdata(iter_sym)) : 0;
+    ant_offset_t iter_prop = (vtype(iter_sym) == T_SYMBOL) ? lkp_sym_proto(js, src, (ant_offset_t)vdata(iter_sym)) : 0;
 
     if (iter_prop != 0) {
       array_from_iter_ctx_t ctx = { write_target, result, mapFn, mapThis, 0 };
-      jsval_t iter_result = iter_foreach(js, src, array_from_iter_cb, &ctx);
+      ant_value_t iter_result = iter_foreach(js, src, array_from_iter_cb, &ctx);
       if (is_err(iter_result)) return iter_result;
       if (vtype(result) != T_ARR) js_setprop(js, result, js->length_str, tov((double)ctx.index));
     } else if (vtype(src) == T_OBJ) {
       array_from_iter_ctx_t ctx = { write_target, result, mapFn, mapThis, 0 };
-      jsoff_t len = get_array_length(js, src);
-      for (jsoff_t i = 0; i < len; i++) {
-        jsval_t unused;
+      ant_offset_t len = get_array_length(js, src);
+      for (ant_offset_t i = 0; i < len; i++) {
+        ant_value_t unused;
         iter_action_t act = array_from_iter_cb(js, arr_get(js, src, i), &ctx, &unused);
         if (act == ITER_ERROR) return unused;
       }
@@ -8410,17 +8410,17 @@ static jsval_t builtin_Array_from(ant_t *js, jsval_t *args, int nargs) {
   return result;
 }
 
-static jsval_t builtin_Array_of(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t ctor = js->this_val;
+static ant_value_t builtin_Array_of(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t ctor = js->this_val;
   bool use_ctor = (vtype(ctor) == T_FUNC || vtype(ctor) == T_CFUNC);
-  jsval_t arr = use_ctor ? array_alloc_from_ctor_with_length(js, ctor, (jsoff_t)nargs) : mkarr(js);
+  ant_value_t arr = use_ctor ? array_alloc_from_ctor_with_length(js, ctor, (ant_offset_t)nargs) : mkarr(js);
   if (is_err(arr)) return arr;
 
   bool arr_is_proxy = is_proxy(js, arr);
-  jsval_t write_target = arr_is_proxy ? proxy_read_target(js, arr) : arr;
+  ant_value_t write_target = arr_is_proxy ? proxy_read_target(js, arr) : arr;
 
   for (int i = 0; i < nargs; i++) {
-    if (vtype(write_target) == T_ARR) arr_set(js, write_target, (jsoff_t)i, args[i]);
+    if (vtype(write_target) == T_ARR) arr_set(js, write_target, (ant_offset_t)i, args[i]);
     else {
       char idxstr[16]; size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)i);
       js_setprop(js, write_target, js_mkstr(js, idxstr, idxlen), args[i]);
@@ -8433,24 +8433,24 @@ static jsval_t builtin_Array_of(ant_t *js, jsval_t *args, int nargs) {
   return arr;
 }
 
-static jsval_t builtin_string_indexOf(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t str = to_string_val(js, js->this_val);
+static ant_value_t builtin_string_indexOf(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "indexOf called on non-string");
   if (nargs == 0) return tov(-1);
 
-  jsval_t search = args[0];
+  ant_value_t search = args[0];
   if (vtype(search) != T_STR) return tov(-1);
 
-  jsoff_t str_len, str_off = vstr(js, str, &str_len);
-  jsoff_t search_len, search_off = vstr(js, search, &search_len);
+  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
+  ant_offset_t search_len, search_off = vstr(js, search, &search_len);
   
-  jsoff_t start = 0;
+  ant_offset_t start = 0;
   double dstr_len = D(str_len);
   if (nargs >= 2 && vtype(args[1]) == T_NUM) {
     double pos = tod(args[1]);
     if (pos < 0) pos = 0;
     if (pos > dstr_len) pos = dstr_len;
-    start = (jsoff_t) pos;
+    start = (ant_offset_t) pos;
   }
   
   if (search_len == 0) return tov(D(start));
@@ -8459,33 +8459,33 @@ static jsval_t builtin_string_indexOf(ant_t *js, jsval_t *args, int nargs) {
   const char *str_ptr = (char *) &js->mem[str_off];
   const char *search_ptr = (char *) &js->mem[search_off];
 
-  for (jsoff_t i = start; i <= str_len - search_len; i++) {
+  for (ant_offset_t i = start; i <= str_len - search_len; i++) {
     if (memcmp(str_ptr + i, search_ptr, search_len) == 0) return tov(D(i));
   }
   return tov(-1);
 }
 
-static jsval_t builtin_string_substring(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t str = to_string_val(js, js->this_val);
+static ant_value_t builtin_string_substring(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "substring called on non-string");
-  jsoff_t byte_len, str_off = vstr(js, str, &byte_len);
+  ant_offset_t byte_len, str_off = vstr(js, str, &byte_len);
   const char *str_ptr = (char *) &js->mem[str_off];
   size_t utf16_len = utf16_strlen(str_ptr, byte_len);
-  jsoff_t start = 0, end = (jsoff_t)utf16_len;
+  ant_offset_t start = 0, end = (ant_offset_t)utf16_len;
   double dstr_len2 = D(utf16_len);
   
   if (nargs >= 1 && vtype(args[0]) == T_NUM) {
     double d = tod(args[0]);
-    start = (jsoff_t) (d < 0 ? 0 : (d > dstr_len2 ? dstr_len2 : d));
+    start = (ant_offset_t) (d < 0 ? 0 : (d > dstr_len2 ? dstr_len2 : d));
   }
   
   if (nargs >= 2 && vtype(args[1]) == T_NUM) {
     double d = tod(args[1]);
-    end = (jsoff_t) (d < 0 ? 0 : (d > dstr_len2 ? dstr_len2 : d));
+    end = (ant_offset_t) (d < 0 ? 0 : (d > dstr_len2 ? dstr_len2 : d));
   }
   
   if (start > end) {
-    jsoff_t tmp = start;
+    ant_offset_t tmp = start;
     start = end;
     end = tmp;
   }
@@ -8495,43 +8495,43 @@ static jsval_t builtin_string_substring(ant_t *js, jsval_t *args, int nargs) {
   return js_mkstr(js, str_ptr + byte_start, byte_end - byte_start);
 }
 
-static jsval_t builtin_string_substr(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t str = to_string_val(js, js->this_val);
+static ant_value_t builtin_string_substr(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "substr called on non-string");
-  jsoff_t byte_len, str_off = vstr(js, str, &byte_len);
+  ant_offset_t byte_len, str_off = vstr(js, str, &byte_len);
   const char *str_ptr = (char *) &js->mem[str_off];
   size_t utf16_len = utf16_strlen(str_ptr, byte_len);
   
   if (nargs < 1) return js_mkstr(js, str_ptr, byte_len);
   
   double d_start = tod(args[0]);
-  jsoff_t start;
+  ant_offset_t start;
   if (d_start < 0) {
-    start = (jsoff_t)((double)utf16_len + d_start);
+    start = (ant_offset_t)((double)utf16_len + d_start);
     if ((int)start < 0) start = 0;
   } else {
-    start = (jsoff_t)d_start;
+    start = (ant_offset_t)d_start;
   }
-  if (start > (jsoff_t)utf16_len) start = (jsoff_t)utf16_len;
+  if (start > (ant_offset_t)utf16_len) start = (ant_offset_t)utf16_len;
   
-  jsoff_t len = (jsoff_t)utf16_len - start;
+  ant_offset_t len = (ant_offset_t)utf16_len - start;
   if (nargs >= 2 && vtype(args[1]) == T_NUM) {
     double d = tod(args[1]);
     if (d < 0) d = 0;
-    len = (jsoff_t)d;
+    len = (ant_offset_t)d;
   }
-  if (start + len > (jsoff_t)utf16_len) len = (jsoff_t)utf16_len - start;
+  if (start + len > (ant_offset_t)utf16_len) len = (ant_offset_t)utf16_len - start;
   
   size_t byte_start, byte_end;
   utf16_range_to_byte_range(str_ptr, byte_len, start, start + len, &byte_start, &byte_end);
   return js_mkstr(js, str_ptr + byte_start, byte_end - byte_start);
 }
 
-static jsval_t string_split_impl(ant_t *js, jsval_t str, jsval_t *args, int nargs) {
+static ant_value_t string_split_impl(ant_t *js, ant_value_t str, ant_value_t *args, int nargs) {
   if (vtype(str) != T_STR) return js_mkerr(js, "split called on non-string");
-  jsoff_t str_len, str_off = vstr(js, str, &str_len);
+  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
   const char *str_ptr = (char *) &js->mem[str_off];
-  jsval_t arr = mkarr(js);
+  ant_value_t arr = mkarr(js);
 
   if (is_err(arr)) return arr;
 
@@ -8547,20 +8547,20 @@ static jsval_t string_split_impl(ant_t *js, jsval_t str, jsval_t *args, int narg
   }
   if (nargs == 0) goto return_whole;
 
-  jsval_t sep_arg = args[0];
+  ant_value_t sep_arg = args[0];
   if (vtype(sep_arg) == T_OBJ) {
-    jsoff_t source_off = lkp(js, sep_arg, "source", 6);
+    ant_offset_t source_off = lkp(js, sep_arg, "source", 6);
     if (source_off == 0) goto return_whole;
-    jsval_t source_val = resolveprop(js, mkval(T_PROP, source_off));
+    ant_value_t source_val = resolveprop(js, mkval(T_PROP, source_off));
     if (vtype(source_val) != T_STR) goto return_whole;
 
-    jsoff_t plen, poff = vstr(js, source_val, &plen);
+    ant_offset_t plen, poff = vstr(js, source_val, &plen);
     const char *pattern_ptr = (char *) &js->mem[poff];
 
     if (plen == 0 || (plen == 4 && memcmp(pattern_ptr, "(?:)", 4) == 0)) {
-      jsoff_t idx = 0;
-      for (jsoff_t i = 0; i < str_len && idx < limit; i++) {
-        jsval_t part = js_mkstr(js, str_ptr + i, 1);
+      ant_offset_t idx = 0;
+      for (ant_offset_t i = 0; i < str_len && idx < limit; i++) {
+        ant_value_t part = js_mkstr(js, str_ptr + i, 1);
         arr_set(js, arr, idx, part);
         idx++;
       }
@@ -8589,7 +8589,7 @@ static jsval_t string_split_impl(ant_t *js, jsval_t str, jsval_t *args, int narg
       }
     }
 
-    jsoff_t idx = 0;
+    ant_offset_t idx = 0;
     PCRE2_SIZE search_pos = 0;
     PCRE2_SIZE segment_start = 0;
     PCRE2_SIZE last_match_end = (PCRE2_SIZE)-1;
@@ -8626,7 +8626,7 @@ static jsval_t string_split_impl(ant_t *js, jsval_t str, jsval_t *args, int narg
       
       had_any_split = true;
 
-      jsval_t part = js_mkstr(js, str_ptr + segment_start, match_start - segment_start);
+      ant_value_t part = js_mkstr(js, str_ptr + segment_start, match_start - segment_start);
       arr_set(js, arr, idx, part);
       idx++;
 
@@ -8659,7 +8659,7 @@ static jsval_t string_split_impl(ant_t *js, jsval_t str, jsval_t *args, int narg
     }
 
     if (idx < limit) {
-      jsval_t part = js_mkstr(js, str_ptr + segment_start, str_len - segment_start);
+      ant_value_t part = js_mkstr(js, str_ptr + segment_start, str_len - segment_start);
       arr_set(js, arr, idx, part);
       idx++;
     }
@@ -8671,29 +8671,29 @@ static jsval_t string_split_impl(ant_t *js, jsval_t str, jsval_t *args, int narg
 
   if (vtype(sep_arg) != T_STR) goto return_whole;
 
-  jsoff_t sep_len, sep_off = vstr(js, sep_arg, &sep_len);
+  ant_offset_t sep_len, sep_off = vstr(js, sep_arg, &sep_len);
   const char *sep_ptr = (char *) &js->mem[sep_off];
-  jsoff_t idx = 0, start = 0;
+  ant_offset_t idx = 0, start = 0;
 
   if (sep_len == 0) {
-    for (jsoff_t i = 0; i < str_len && idx < limit; i++) {
-      jsval_t part = js_mkstr(js, str_ptr + i, 1);
+    for (ant_offset_t i = 0; i < str_len && idx < limit; i++) {
+      ant_value_t part = js_mkstr(js, str_ptr + i, 1);
       arr_set(js, arr, idx, part);
       idx++;
     }
     return mkval(T_ARR, vdata(arr));
   }
 
-  for (jsoff_t i = 0; i + sep_len <= str_len && idx < limit; i++) {
+  for (ant_offset_t i = 0; i + sep_len <= str_len && idx < limit; i++) {
     if (memcmp(str_ptr + i, sep_ptr, sep_len) != 0) continue;
-    jsval_t part = js_mkstr(js, str_ptr + start, i - start);
+    ant_value_t part = js_mkstr(js, str_ptr + start, i - start);
     arr_set(js, arr, idx, part);
     idx++;
     start = i + sep_len;
     i += sep_len - 1;
   }
   if (idx < limit && start <= str_len) {
-    jsval_t part = js_mkstr(js, str_ptr + start, str_len - start);
+    ant_value_t part = js_mkstr(js, str_ptr + start, str_len - start);
     arr_set(js, arr, idx, part);
     idx++;
   }
@@ -8707,20 +8707,20 @@ return_whole:
   return mkval(T_ARR, vdata(arr));
 }
 
-static jsval_t builtin_string_split(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t str = to_string_val(js, js->this_val);
+static ant_value_t builtin_string_split(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "split called on non-string");
 
   if (nargs > 0 && is_object_type(args[0])) {
     bool called = false;
-    jsval_t call_args[2];
+    ant_value_t call_args[2];
     int call_nargs = 1;
     call_args[0] = str;
     if (nargs >= 2) {
       call_args[1] = args[1];
       call_nargs = 2;
     }
-    jsval_t dispatched = maybe_call_symbol_method(
+    ant_value_t dispatched = maybe_call_symbol_method(
       js, args[0], get_split_sym(), args[0], call_args, call_nargs, &called
     );
     if (is_err(dispatched)) return dispatched;
@@ -8730,29 +8730,29 @@ static jsval_t builtin_string_split(ant_t *js, jsval_t *args, int nargs) {
   return string_split_impl(js, str, args, nargs);
 }
 
-static jsval_t builtin_string_slice(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t this_unwrapped = unwrap_primitive(js, js->this_val);
-  jsval_t str = js_tostring_val(js, this_unwrapped);
+static ant_value_t builtin_string_slice(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_unwrapped = unwrap_primitive(js, js->this_val);
+  ant_value_t str = js_tostring_val(js, this_unwrapped);
   if (is_err(str)) return str;
   
-  jsoff_t byte_len, str_off = vstr(js, str, &byte_len);
+  ant_offset_t byte_len, str_off = vstr(js, str, &byte_len);
   const char *str_ptr = (char *) &js->mem[str_off];
   size_t utf16_len = utf16_strlen(str_ptr, byte_len);
-  jsoff_t start = 0, end = (jsoff_t)utf16_len;
+  ant_offset_t start = 0, end = (ant_offset_t)utf16_len;
   double dstr_len = D(utf16_len);
   
   if (nargs >= 1 && vtype(args[0]) == T_NUM) {
     double d = tod(args[0]);
     if (d < 0) {
-      start = (jsoff_t) (d + dstr_len < 0 ? 0 : d + dstr_len);
-    } else start = (jsoff_t) (d > dstr_len ? dstr_len : d);
+      start = (ant_offset_t) (d + dstr_len < 0 ? 0 : d + dstr_len);
+    } else start = (ant_offset_t) (d > dstr_len ? dstr_len : d);
   }
   
   if (nargs >= 2 && vtype(args[1]) == T_NUM) {
     double d = tod(args[1]);
     if (d < 0) {
-      end = (jsoff_t) (d + dstr_len < 0 ? 0 : d + dstr_len);
-    } else end = (jsoff_t) (d > dstr_len ? dstr_len : d);
+      end = (ant_offset_t) (d + dstr_len < 0 ? 0 : d + dstr_len);
+    } else end = (ant_offset_t) (d > dstr_len ? dstr_len : d);
   }
   
   if (start > end) start = end;
@@ -8761,56 +8761,56 @@ static jsval_t builtin_string_slice(ant_t *js, jsval_t *args, int nargs) {
   return js_mkstr(js, str_ptr + byte_start, byte_end - byte_start);
 }
 
-static jsval_t builtin_string_includes(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t str = to_string_val(js, js->this_val);
+static ant_value_t builtin_string_includes(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "includes called on non-string");
   if (nargs == 0) return mkval(T_BOOL, 0);
-  jsval_t search = args[0];
+  ant_value_t search = args[0];
   
   if (is_object_type(search)) {
-    jsval_t maybe_err = reject_regexp_arg(js, search, "includes");
+    ant_value_t maybe_err = reject_regexp_arg(js, search, "includes");
     if (is_err(maybe_err)) return maybe_err;
   }
   search = js_tostring_val(js, search);
   if (is_err(search)) return search;
   
-  jsoff_t str_len, str_off = vstr(js, str, &str_len);
-  jsoff_t search_len, search_off = vstr(js, search, &search_len);
+  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
+  ant_offset_t search_len, search_off = vstr(js, search, &search_len);
   const char *str_ptr = (char *) &js->mem[str_off];
   const char *search_ptr = (char *) &js->mem[search_off];
   
-  jsoff_t start = 0;
+  ant_offset_t start = 0;
   if (nargs >= 2) {
     double pos = tod(args[1]);
     if (isnan(pos) || pos < 0) pos = 0;
     if (pos > D(str_len)) return mkval(T_BOOL, 0);
-    start = (jsoff_t) pos;
+    start = (ant_offset_t) pos;
   }
   
   if (search_len == 0) return mkval(T_BOOL, 1);
   if (start + search_len > str_len) return mkval(T_BOOL, 0);
-  for (jsoff_t i = start; i <= str_len - search_len; i++) {
+  for (ant_offset_t i = start; i <= str_len - search_len; i++) {
     if (memcmp(str_ptr + i, search_ptr, search_len) == 0) return mkval(T_BOOL, 1);
   }
   
   return mkval(T_BOOL, 0);
 }
 
-static jsval_t builtin_string_startsWith(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t str = to_string_val(js, js->this_val);
+static ant_value_t builtin_string_startsWith(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "startsWith called on non-string");
   if (nargs == 0) return mkval(T_BOOL, 0);
-  jsval_t search = args[0];
+  ant_value_t search = args[0];
   
   if (is_object_type(search)) {
-    jsval_t maybe_err = reject_regexp_arg(js, search, "startsWith");
+    ant_value_t maybe_err = reject_regexp_arg(js, search, "startsWith");
     if (is_err(maybe_err)) return maybe_err;
   }
   search = js_tostring_val(js, search);
   if (is_err(search)) return search;
   
-  jsoff_t str_len, str_off = vstr(js, str, &str_len);
-  jsoff_t search_len, search_off = vstr(js, search, &search_len);
+  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
+  ant_offset_t search_len, search_off = vstr(js, search, &search_len);
   const char *str_ptr = (char *) &js->mem[str_off];
   const char *search_ptr = (char *) &js->mem[search_off];
   
@@ -8820,21 +8820,21 @@ static jsval_t builtin_string_startsWith(ant_t *js, jsval_t *args, int nargs) {
   return mkval(T_BOOL, memcmp(str_ptr, search_ptr, search_len) == 0 ? 1 : 0);
 }
 
-static jsval_t builtin_string_endsWith(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t str = to_string_val(js, js->this_val);
+static ant_value_t builtin_string_endsWith(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "endsWith called on non-string");
   if (nargs == 0) return mkval(T_BOOL, 0);
-  jsval_t search = args[0];
+  ant_value_t search = args[0];
   
   if (is_object_type(search)) {
-    jsval_t maybe_err = reject_regexp_arg(js, search, "endsWith");
+    ant_value_t maybe_err = reject_regexp_arg(js, search, "endsWith");
     if (is_err(maybe_err)) return maybe_err;
   }
   search = js_tostring_val(js, search);
   if (is_err(search)) return search;
   
-  jsoff_t str_len, str_off = vstr(js, str, &str_len);
-  jsoff_t search_len, search_off = vstr(js, search, &search_len);
+  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
+  ant_offset_t search_len, search_off = vstr(js, search, &search_len);
   
   const char *str_ptr = (char *) &js->mem[str_off];
   const char *search_ptr = (char *) &js->mem[search_off];
@@ -8845,17 +8845,17 @@ static jsval_t builtin_string_endsWith(ant_t *js, jsval_t *args, int nargs) {
   return mkval(T_BOOL, memcmp(str_ptr + str_len - search_len, search_ptr, search_len) == 0 ? 1 : 0);
 }
 
-static jsval_t builtin_string_replace(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t this_unwrapped = unwrap_primitive(js, js->this_val);
-  jsval_t str = js_tostring_val(js, this_unwrapped);
+static ant_value_t builtin_string_replace(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_unwrapped = unwrap_primitive(js, js->this_val);
+  ant_value_t str = js_tostring_val(js, this_unwrapped);
   if (is_err(str)) return str;
   if (nargs < 1) return str;
   
   if (is_object_type(args[0])) {
     bool called = false;
-    jsval_t replacement_arg = nargs > 1 ? args[1] : js_mkundef();
-    jsval_t call_args[2] = { str, replacement_arg };
-    jsval_t dispatched = maybe_call_symbol_method(
+    ant_value_t replacement_arg = nargs > 1 ? args[1] : js_mkundef();
+    ant_value_t call_args[2] = { str, replacement_arg };
+    ant_value_t dispatched = maybe_call_symbol_method(
       js, args[0], get_replace_sym(), args[0], call_args, 2, &called
     );
     if (is_err(dispatched)) return dispatched;
@@ -8863,52 +8863,52 @@ static jsval_t builtin_string_replace(ant_t *js, jsval_t *args, int nargs) {
   }
   if (nargs < 2) return str;
   
-  jsval_t search = args[0];
-  jsval_t replacement = args[1];
+  ant_value_t search = args[0];
+  ant_value_t replacement = args[1];
   
-  jsoff_t str_len, str_off = vstr(js, str, &str_len);
+  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
   const char *str_ptr = (char *) &js->mem[str_off];
   
   bool is_regex = false;
   bool global_flag = false;
   bool is_func_replacement = (vtype(replacement) == T_FUNC);
   char *pattern_buf = NULL;
-  jsoff_t pattern_len = 0;
+  ant_offset_t pattern_len = 0;
   
   if (vtype(search) == T_OBJ) {
-    jsoff_t pattern_off = lkp(js, search, "source", 6);
+    ant_offset_t pattern_off = lkp(js, search, "source", 6);
     if (pattern_off == 0) goto not_regex;
     
-    jsval_t pattern_val = resolveprop(js, mkval(T_PROP, pattern_off));
+    ant_value_t pattern_val = resolveprop(js, mkval(T_PROP, pattern_off));
     if (vtype(pattern_val) != T_STR) goto not_regex;
     
     is_regex = true;
-    jsoff_t plen, poff = vstr(js, pattern_val, &plen);
+    ant_offset_t plen, poff = vstr(js, pattern_val, &plen);
     pattern_len = plen;
     pattern_buf = (char *)ant_calloc(plen + 1);
     if (!pattern_buf) return js_mkerr(js, "oom");
     memcpy(pattern_buf, &js->mem[poff], plen);
     pattern_buf[plen] = '\0';
     
-    jsoff_t flags_off = lkp(js, search, "flags", 5);
+    ant_offset_t flags_off = lkp(js, search, "flags", 5);
     if (flags_off == 0) { free(pattern_buf); pattern_buf = NULL; goto not_regex; }
     
-    jsval_t flags_val = resolveprop(js, mkval(T_PROP, flags_off));
+    ant_value_t flags_val = resolveprop(js, mkval(T_PROP, flags_off));
     if (vtype(flags_val) != T_STR) { free(pattern_buf); pattern_buf = NULL; goto not_regex; }
     
-    jsoff_t flen, foff = vstr(js, flags_val, &flen);
+    ant_offset_t flen, foff = vstr(js, flags_val, &flen);
     const char *flags_str = (char *) &js->mem[foff];
-    for (jsoff_t i = 0; i < flen; i++) {
+    for (ant_offset_t i = 0; i < flen; i++) {
       if (flags_str[i] == 'g') global_flag = true;
     }
   }
   not_regex:
   
-  jsoff_t repl_len = 0;
+  ant_offset_t repl_len = 0;
   const char *repl_ptr = NULL;
   if (!is_func_replacement) {
     if (vtype(replacement) != T_STR) { if (pattern_buf) free(pattern_buf); return str; }
-    jsoff_t repl_off;
+    ant_offset_t repl_off;
     repl_off = vstr(js, replacement, &repl_len);
     repl_ptr = (char *) &js->mem[repl_off];
   }
@@ -8962,7 +8962,7 @@ static jsval_t builtin_string_replace(ant_t *js, jsval_t *args, int nargs) {
 
       if (is_func_replacement) {
         int nargs_cb = 1 + capture_count + 2;
-        jsval_t *cb_args = (jsval_t *)ant_calloc(nargs_cb * sizeof(jsval_t));
+        ant_value_t *cb_args = (ant_value_t *)ant_calloc(nargs_cb * sizeof(ant_value_t));
         if (!cb_args) {
           pcre2_match_data_free(match_data);
           pcre2_code_free(re);
@@ -8981,7 +8981,7 @@ static jsval_t builtin_string_replace(ant_t *js, jsval_t *args, int nargs) {
         cb_args[1 + capture_count] = tov((double)match_start);
         cb_args[2 + capture_count] = str;
 
-        jsval_t cb_result = sv_vm_call(js->vm, js, replacement, js_mkundef(), cb_args, nargs_cb, NULL, false);
+        ant_value_t cb_result = sv_vm_call(js->vm, js, replacement, js_mkundef(), cb_args, nargs_cb, NULL, false);
         free(cb_args);
 
         if (vtype(cb_result) == T_ERR) {
@@ -8991,7 +8991,7 @@ static jsval_t builtin_string_replace(ant_t *js, jsval_t *args, int nargs) {
         }
 
         if (vtype(cb_result) == T_STR) {
-          jsoff_t cb_len, cb_off = vstr(js, cb_result, &cb_len);
+          ant_offset_t cb_len, cb_off = vstr(js, cb_result, &cb_len);
           ENSURE_RESULT_CAP(cb_len);
           memcpy(result + result_len, &js->mem[cb_off], cb_len);
           result_len += cb_len;
@@ -9036,30 +9036,30 @@ static jsval_t builtin_string_replace(ant_t *js, jsval_t *args, int nargs) {
     pcre2_match_data_free(match_data); pcre2_code_free(re);
     if (pattern_buf) free(pattern_buf);
     
-    jsval_t ret = replaced ? js_mkstr(js, result, result_len) : str;
+    ant_value_t ret = replaced ? js_mkstr(js, result, result_len) : str;
     free(result); return ret;
   } else {
     if (vtype(search) != T_STR) { free(result); return str; }
-    jsoff_t search_len, search_off = vstr(js, search, &search_len);
+    ant_offset_t search_len, search_off = vstr(js, search, &search_len);
     const char *search_ptr = (char *) &js->mem[search_off];
     
     if (search_len > str_len) { free(result); return str; }
     
-    for (jsoff_t i = 0; i <= str_len - search_len; i++) {
+    for (ant_offset_t i = 0; i <= str_len - search_len; i++) {
       if (memcmp(str_ptr + i, search_ptr, search_len) == 0) {
         ENSURE_RESULT_CAP(i);
         memcpy(result + result_len, str_ptr, i);
         result_len += i;
         
         if (is_func_replacement) {
-          jsval_t match_str = js_mkstr(js, search_ptr, search_len);
-          jsval_t cb_args[1] = { match_str };
-          jsval_t cb_result = sv_vm_call(js->vm, js, replacement, js_mkundef(), cb_args, 1, NULL, false);
+          ant_value_t match_str = js_mkstr(js, search_ptr, search_len);
+          ant_value_t cb_args[1] = { match_str };
+          ant_value_t cb_result = sv_vm_call(js->vm, js, replacement, js_mkundef(), cb_args, 1, NULL, false);
           
           if (vtype(cb_result) == T_ERR) { free(result); return cb_result; }
           
           if (vtype(cb_result) == T_STR) {
-            jsoff_t cb_len, cb_off = vstr(js, cb_result, &cb_len);
+            ant_offset_t cb_len, cb_off = vstr(js, cb_result, &cb_len);
             ENSURE_RESULT_CAP(cb_len);
             memcpy(result + result_len, &js->mem[cb_off], cb_len);
             result_len += cb_len;
@@ -9076,14 +9076,14 @@ static jsval_t builtin_string_replace(ant_t *js, jsval_t *args, int nargs) {
           result_len += repl_len;
         }
         
-        jsoff_t after_start = i + search_len;
-        jsoff_t after_len = str_len - after_start;
+        ant_offset_t after_start = i + search_len;
+        ant_offset_t after_len = str_len - after_start;
         if (after_len > 0) {
           ENSURE_RESULT_CAP(after_len);
           memcpy(result + result_len, str_ptr + after_start, after_len);
           result_len += after_len;
         }
-        jsval_t ret = js_mkstr(js, result, result_len);
+        ant_value_t ret = js_mkstr(js, result, result_len);
         free(result);
         return ret;
       }
@@ -9094,24 +9094,24 @@ static jsval_t builtin_string_replace(ant_t *js, jsval_t *args, int nargs) {
 #undef ENSURE_RESULT_CAP
 }
 
-static jsval_t builtin_string_replaceAll(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t str = to_string_val(js, js->this_val);
+static ant_value_t builtin_string_replaceAll(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "replaceAll called on non-string");
   if (nargs < 2) return str;
   
-  jsval_t search = args[0];
-  jsval_t replacement = args[1];
+  ant_value_t search = args[0];
+  ant_value_t replacement = args[1];
   
   if (vtype(search) != T_STR) return js_mkerr(js, "replaceAll requires string search pattern");
   if (vtype(replacement) != T_STR) return js_mkerr(js, "replaceAll requires string replacement");
   
-  jsoff_t str_len, str_off = vstr(js, str, &str_len);
+  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
   const char *str_ptr = (char *) &js->mem[str_off];
   
-  jsoff_t search_len, search_off = vstr(js, search, &search_len);
+  ant_offset_t search_len, search_off = vstr(js, search, &search_len);
   const char *search_ptr = (char *) &js->mem[search_off];
   
-  jsoff_t repl_len, repl_off = vstr(js, replacement, &repl_len);
+  ant_offset_t repl_len, repl_off = vstr(js, replacement, &repl_len);
   const char *repl_ptr = (char *) &js->mem[repl_off];
   
   if (search_len == 0) {
@@ -9122,18 +9122,18 @@ static jsval_t builtin_string_replaceAll(ant_t *js, jsval_t *args, int nargs) {
     size_t pos = 0;
     memcpy(result + pos, repl_ptr, repl_len);
     pos += repl_len;
-    for (jsoff_t i = 0; i < str_len; i++) {
+    for (ant_offset_t i = 0; i < str_len; i++) {
       result[pos++] = str_ptr[i];
       memcpy(result + pos, repl_ptr, repl_len);
       pos += repl_len;
     }
-    jsval_t ret = js_mkstr(js, result, pos);
+    ant_value_t ret = js_mkstr(js, result, pos);
     free(result);
     return ret;
   }
   
-  jsoff_t count = 0;
-  for (jsoff_t i = 0; i <= str_len - search_len; i++) {
+  ant_offset_t count = 0;
+  for (ant_offset_t i = 0; i <= str_len - search_len; i++) {
     if (memcmp(str_ptr + i, search_ptr, search_len) == 0) {
       count++;
       i += search_len - 1;
@@ -9147,7 +9147,7 @@ static jsval_t builtin_string_replaceAll(ant_t *js, jsval_t *args, int nargs) {
   if (!result) return js_mkerr(js, "oom");
   
   size_t result_pos = 0;
-  jsoff_t str_pos = 0;
+  ant_offset_t str_pos = 0;
   
   while (str_pos <= str_len - search_len) {
     if (memcmp(str_ptr + str_pos, search_ptr, search_len) == 0) {
@@ -9163,26 +9163,26 @@ static jsval_t builtin_string_replaceAll(ant_t *js, jsval_t *args, int nargs) {
     result[result_pos++] = str_ptr[str_pos++];
   }
   
-  jsval_t ret = js_mkstr(js, result, result_pos);
+  ant_value_t ret = js_mkstr(js, result, result_pos);
   free(result);
   return ret;
 }
 
 
-static jsval_t builtin_string_template(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t str = to_string_val(js, js->this_val);
+static ant_value_t builtin_string_template(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "template called on non-string");
   if (nargs < 1 || vtype(args[0]) != T_OBJ) return str;
   
-  jsval_t data = args[0];
-  jsoff_t str_len, str_off = vstr(js, str, &str_len);
+  ant_value_t data = args[0];
+  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
   const char *str_ptr = (char *) &js->mem[str_off];
   
   size_t result_cap = str_len + 256;
   size_t result_len = 0;
   char *result = (char *)ant_calloc(result_cap);
   if (!result) return js_mkerr(js, "oom");
-  jsoff_t i = 0;
+  ant_offset_t i = 0;
 
 #define ENSURE_CAP(need) do { \
   if (result_len + (need) >= result_cap) { \
@@ -9195,19 +9195,19 @@ static jsval_t builtin_string_template(ant_t *js, jsval_t *args, int nargs) {
   
   while (i < str_len) {
     if (i < str_len - 3 && str_ptr[i] == '{' && str_ptr[i + 1] == '{') {
-      jsoff_t start = i + 2;
-      jsoff_t end = start;
+      ant_offset_t start = i + 2;
+      ant_offset_t end = start;
       while (end < str_len - 1 && !(str_ptr[end] == '}' && str_ptr[end + 1] == '}')) {
         end++;
       }
       if (end < str_len - 1 && str_ptr[end] == '}' && str_ptr[end + 1] == '}') {
-        jsoff_t key_len = end - start;
-        jsoff_t prop_off = lkp(js, data, str_ptr + start, key_len);
+        ant_offset_t key_len = end - start;
+        ant_offset_t prop_off = lkp(js, data, str_ptr + start, key_len);
         
         if (prop_off != 0) {
-          jsval_t value = resolveprop(js, mkval(T_PROP, prop_off));
+          ant_value_t value = resolveprop(js, mkval(T_PROP, prop_off));
           if (vtype(value) == T_STR) {
-            jsoff_t val_len, val_off = vstr(js, value, &val_len);
+            ant_offset_t val_len, val_off = vstr(js, value, &val_len);
             ENSURE_CAP(val_len);
             memcpy(result + result_len, &js->mem[val_off], val_len);
             result_len += val_len;
@@ -9233,14 +9233,14 @@ static jsval_t builtin_string_template(ant_t *js, jsval_t *args, int nargs) {
     ENSURE_CAP(1);
     result[result_len++] = str_ptr[i++];
   }
-  jsval_t ret = js_mkstr(js, result, result_len);
+  ant_value_t ret = js_mkstr(js, result, result_len);
   free(result);
   return ret;
 #undef ENSURE_CAP
 }
 
-static jsval_t builtin_string_charCodeAt(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t str = to_string_val(js, js->this_val);
+static ant_value_t builtin_string_charCodeAt(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "charCodeAt called on non-string");
   
   double idx_d = nargs < 1 ? 0.0 : js_to_number(js, args[0]);
@@ -9250,7 +9250,7 @@ static jsval_t builtin_string_charCodeAt(ant_t *js, jsval_t *args, int nargs) {
   long idx_l = (long) idx_d;
   if (idx_l < 0) return tov(JS_NAN);
   
-  jsoff_t byte_len; jsoff_t str_off = vstr(js, str, &byte_len);
+  ant_offset_t byte_len; ant_offset_t str_off = vstr(js, str, &byte_len);
   const char *str_data = (const char *)&js->mem[str_off];
   
   uint32_t code_unit = utf16_code_unit_at(str_data, byte_len, idx_l);
@@ -9259,8 +9259,8 @@ static jsval_t builtin_string_charCodeAt(ant_t *js, jsval_t *args, int nargs) {
   return tov((double) code_unit);
 }
 
-static jsval_t builtin_string_codePointAt(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t str = to_string_val(js, js->this_val);
+static ant_value_t builtin_string_codePointAt(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "codePointAt called on non-string");
   
   double idx_d = nargs < 1 ? 0.0 : js_to_number(js, args[0]);
@@ -9270,8 +9270,8 @@ static jsval_t builtin_string_codePointAt(ant_t *js, jsval_t *args, int nargs) {
   long idx_l = (long) idx_d;
   if (idx_l < 0) return js_mkundef();
   
-  jsoff_t byte_len;
-  jsoff_t str_off = vstr(js, str, &byte_len);
+  ant_offset_t byte_len;
+  ant_offset_t str_off = vstr(js, str, &byte_len);
   const char *str_data = (const char *)&js->mem[str_off];
   
   uint32_t cp = utf16_codepoint_at(str_data, byte_len, idx_l);
@@ -9280,177 +9280,177 @@ static jsval_t builtin_string_codePointAt(ant_t *js, jsval_t *args, int nargs) {
   return tov((double) cp);
 }
 
-static jsval_t builtin_string_toLowerCase(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_string_toLowerCase(ant_t *js, ant_value_t *args, int nargs) {
   (void) args; (void) nargs;
-  jsval_t str = to_string_val(js, js->this_val);
+  ant_value_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "toLowerCase called on non-string");
   
-  jsoff_t str_len, str_off = vstr(js, str, &str_len);
+  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
   const char *str_ptr = (char *) &js->mem[str_off];
   if (str_len == 0) return js_mkstr(js, "", 0);
 
   const utf8proc_uint8_t *src = (const utf8proc_uint8_t *)str_ptr;
   utf8proc_ssize_t src_len = (utf8proc_ssize_t)str_len;
 
-  jsoff_t out_len = 0;
+  ant_offset_t out_len = 0;
   utf8proc_ssize_t pos = 0;
   while (pos < src_len) {
     utf8proc_int32_t cp;
     utf8proc_ssize_t n = utf8_next(src + pos, src_len - pos, &cp);
     if (cp < 0) { out_len++; pos++; continue; }
     utf8proc_uint8_t tmp[4];
-    out_len += (jsoff_t)utf8proc_encode_char(utf8proc_tolower(cp), tmp);
+    out_len += (ant_offset_t)utf8proc_encode_char(utf8proc_tolower(cp), tmp);
     pos += n;
   }
 
-  jsval_t result = js_mkstr(js, NULL, out_len);
+  ant_value_t result = js_mkstr(js, NULL, out_len);
   if (is_err(result)) return result;
-  jsoff_t result_len, result_off = vstr(js, result, &result_len);
+  ant_offset_t result_len, result_off = vstr(js, result, &result_len);
   char *result_ptr = (char *) &js->mem[result_off];
 
   pos = 0;
-  jsoff_t wpos = 0;
+  ant_offset_t wpos = 0;
   while (pos < src_len) {
     utf8proc_int32_t cp;
     utf8proc_ssize_t n = utf8_next(src + pos, src_len - pos, &cp);
     if (cp < 0) { result_ptr[wpos++] = (char)src[pos]; pos++; continue; }
-    wpos += (jsoff_t)utf8proc_encode_char(utf8proc_tolower(cp), (utf8proc_uint8_t *)(result_ptr + wpos));
+    wpos += (ant_offset_t)utf8proc_encode_char(utf8proc_tolower(cp), (utf8proc_uint8_t *)(result_ptr + wpos));
     pos += n;
   }
 
   return result;
 }
 
-static jsval_t builtin_string_toUpperCase(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_string_toUpperCase(ant_t *js, ant_value_t *args, int nargs) {
   (void) args; (void) nargs;
-  jsval_t str = to_string_val(js, js->this_val);
+  ant_value_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "toUpperCase called on non-string");
   
-  jsoff_t str_len, str_off = vstr(js, str, &str_len);
+  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
   const char *str_ptr = (char *) &js->mem[str_off];
   if (str_len == 0) return js_mkstr(js, "", 0);
 
   const utf8proc_uint8_t *src = (const utf8proc_uint8_t *)str_ptr;
   utf8proc_ssize_t src_len = (utf8proc_ssize_t)str_len;
 
-  jsoff_t out_len = 0;
+  ant_offset_t out_len = 0;
   utf8proc_ssize_t pos = 0;
   while (pos < src_len) {
     utf8proc_int32_t cp;
     utf8proc_ssize_t n = utf8_next(src + pos, src_len - pos, &cp);
     if (cp < 0) { out_len++; pos++; continue; }
     utf8proc_uint8_t tmp[4];
-    out_len += (jsoff_t)utf8proc_encode_char(utf8proc_toupper(cp), tmp);
+    out_len += (ant_offset_t)utf8proc_encode_char(utf8proc_toupper(cp), tmp);
     pos += n;
   }
 
-  jsval_t result = js_mkstr(js, NULL, out_len);
+  ant_value_t result = js_mkstr(js, NULL, out_len);
   if (is_err(result)) return result;
-  jsoff_t result_len, result_off = vstr(js, result, &result_len);
+  ant_offset_t result_len, result_off = vstr(js, result, &result_len);
   char *result_ptr = (char *) &js->mem[result_off];
 
   pos = 0;
-  jsoff_t wpos = 0;
+  ant_offset_t wpos = 0;
   while (pos < src_len) {
     utf8proc_int32_t cp;
     utf8proc_ssize_t n = utf8_next(src + pos, src_len - pos, &cp);
     if (cp < 0) { result_ptr[wpos++] = (char)src[pos]; pos++; continue; }
-    wpos += (jsoff_t)utf8proc_encode_char(utf8proc_toupper(cp), (utf8proc_uint8_t *)(result_ptr + wpos));
+    wpos += (ant_offset_t)utf8proc_encode_char(utf8proc_toupper(cp), (utf8proc_uint8_t *)(result_ptr + wpos));
     pos += n;
   }
 
   return result;
 }
 
-static jsval_t builtin_string_trim(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_string_trim(ant_t *js, ant_value_t *args, int nargs) {
   (void) args; (void) nargs;
-  jsval_t str = to_string_val(js, js->this_val);
+  ant_value_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "trim called on non-string");
   
-  jsoff_t str_len, str_off = vstr(js, str, &str_len);
+  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
   const char *str_ptr = (char *) &js->mem[str_off];
   
-  jsoff_t start = 0, end = str_len;
+  ant_offset_t start = 0, end = str_len;
   while (start < end && is_space(str_ptr[start])) start++;
   while (end > start && is_space(str_ptr[end - 1])) end--;
   
   return js_mkstr(js, str_ptr + start, end - start);
 }
 
-static jsval_t builtin_string_trimStart(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_string_trimStart(ant_t *js, ant_value_t *args, int nargs) {
   (void) args; (void) nargs;
-  jsval_t str = to_string_val(js, js->this_val);
+  ant_value_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "trimStart called on non-string");
   
-  jsoff_t str_len, str_off = vstr(js, str, &str_len);
+  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
   const char *str_ptr = (char *) &js->mem[str_off];
   
-  jsoff_t start = 0;
+  ant_offset_t start = 0;
   while (start < str_len && is_space(str_ptr[start])) start++;
   
   return js_mkstr(js, str_ptr + start, str_len - start);
 }
 
-static jsval_t builtin_string_trimEnd(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_string_trimEnd(ant_t *js, ant_value_t *args, int nargs) {
   (void) args; (void) nargs;
-  jsval_t str = to_string_val(js, js->this_val);
+  ant_value_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "trimEnd called on non-string");
   
-  jsoff_t str_len, str_off = vstr(js, str, &str_len);
+  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
   const char *str_ptr = (char *) &js->mem[str_off];
   
-  jsoff_t end = str_len;
+  ant_offset_t end = str_len;
   while (end > 0 && is_space(str_ptr[end - 1])) end--;
   
   return js_mkstr(js, str_ptr, end);
 }
 
-static jsval_t builtin_string_repeat(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t str = to_string_val(js, js->this_val);
+static ant_value_t builtin_string_repeat(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "repeat called on non-string");
   if (nargs < 1 || vtype(args[0]) != T_NUM) return js_mkerr(js, "repeat count required");
   
   double count_d = tod(args[0]);
   if (count_d < 0 || count_d != (double)(long)count_d) return js_mkerr(js, "invalid repeat count");
-  jsoff_t count = (jsoff_t) count_d;
+  ant_offset_t count = (ant_offset_t) count_d;
   
-  jsoff_t str_len, str_off = vstr(js, str, &str_len);
+  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
   const char *str_ptr = (char *) &js->mem[str_off];
   
   if (count == 0 || str_len == 0) return js_mkstr(js, "", 0);
   
-  jsval_t result = js_mkstr(js, NULL, str_len * count);
+  ant_value_t result = js_mkstr(js, NULL, str_len * count);
   if (is_err(result)) return result;
   
-  jsoff_t result_len, result_off = vstr(js, result, &result_len);
+  ant_offset_t result_len, result_off = vstr(js, result, &result_len);
   char *result_ptr = (char *) &js->mem[result_off];
   
-  for (jsoff_t i = 0; i < count; i++) {
+  for (ant_offset_t i = 0; i < count; i++) {
     memcpy(result_ptr + i * str_len, str_ptr, str_len);
   }
   
   return result;
 }
 
-static jsval_t builtin_string_padStart(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t str = to_string_val(js, js->this_val);
+static ant_value_t builtin_string_padStart(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "padStart called on non-string");
   if (nargs < 1 || vtype(args[0]) != T_NUM) return str;
   
-  jsoff_t target_len = (jsoff_t)tod(args[0]);
+  ant_offset_t target_len = (ant_offset_t)tod(args[0]);
   if (target_len <= 0) return str;
-  jsoff_t str_len, str_off = vstr(js, str, &str_len);
+  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
   const char *str_ptr = (char *) &js->mem[str_off];
   size_t str_utf16_len = utf16_strlen(str_ptr, (size_t)str_len);
   
   if ((size_t)target_len <= str_utf16_len) return str;
   
-  jsval_t pad_val = js_mkstr(js, " ", 1);
+  ant_value_t pad_val = js_mkstr(js, " ", 1);
   if (nargs >= 2 && vtype(args[1]) != T_UNDEF) {
     pad_val = coerce_to_str(js, args[1]);
     if (is_err(pad_val)) return pad_val;
   }
-  jsoff_t pad_len, pad_off = vstr(js, pad_val, &pad_len);
+  ant_offset_t pad_len, pad_off = vstr(js, pad_val, &pad_len);
   const char *pad_str = (char *)&js->mem[pad_off];
   size_t pad_utf16_len = utf16_strlen(pad_str, (size_t)pad_len);
   
@@ -9468,10 +9468,10 @@ static jsval_t builtin_string_padStart(ant_t *js, jsval_t *args, int nargs) {
   size_t fill_bytes = full_repeats * (size_t)pad_len + rem_bytes;
   size_t total_bytes = fill_bytes + (size_t)str_len;
 
-  jsval_t result = js_mkstr(js, NULL, (jsoff_t)total_bytes);
+  ant_value_t result = js_mkstr(js, NULL, (ant_offset_t)total_bytes);
   if (is_err(result)) return result;
   
-  jsoff_t result_len, result_off = vstr(js, result, &result_len);
+  ant_offset_t result_len, result_off = vstr(js, result, &result_len);
   char *result_ptr = (char *) &js->mem[result_off];
   
   size_t pos = 0;
@@ -9488,25 +9488,25 @@ static jsval_t builtin_string_padStart(ant_t *js, jsval_t *args, int nargs) {
   return result;
 }
 
-static jsval_t builtin_string_padEnd(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t str = to_string_val(js, js->this_val);
+static ant_value_t builtin_string_padEnd(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "padEnd called on non-string");
   if (nargs < 1 || vtype(args[0]) != T_NUM) return str;
   
-  jsoff_t target_len = (jsoff_t)tod(args[0]);
+  ant_offset_t target_len = (ant_offset_t)tod(args[0]);
   if (target_len <= 0) return str;
-  jsoff_t str_len, str_off = vstr(js, str, &str_len);
+  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
   const char *str_ptr = (char *) &js->mem[str_off];
   size_t str_utf16_len = utf16_strlen(str_ptr, (size_t)str_len);
   
   if ((size_t)target_len <= str_utf16_len) return str;
   
-  jsval_t pad_val = js_mkstr(js, " ", 1);
+  ant_value_t pad_val = js_mkstr(js, " ", 1);
   if (nargs >= 2 && vtype(args[1]) != T_UNDEF) {
     pad_val = coerce_to_str(js, args[1]);
     if (is_err(pad_val)) return pad_val;
   }
-  jsoff_t pad_len, pad_off = vstr(js, pad_val, &pad_len);
+  ant_offset_t pad_len, pad_off = vstr(js, pad_val, &pad_len);
   const char *pad_str = (char *) &js->mem[pad_off];
   size_t pad_utf16_len = utf16_strlen(pad_str, (size_t)pad_len);
   
@@ -9524,10 +9524,10 @@ static jsval_t builtin_string_padEnd(ant_t *js, jsval_t *args, int nargs) {
   size_t fill_bytes = full_repeats * (size_t)pad_len + rem_bytes;
   size_t total_bytes = (size_t)str_len + fill_bytes;
 
-  jsval_t result = js_mkstr(js, NULL, (jsoff_t)total_bytes);
+  ant_value_t result = js_mkstr(js, NULL, (ant_offset_t)total_bytes);
   if (is_err(result)) return result;
   
-  jsoff_t result_len, result_off = vstr(js, result, &result_len);
+  ant_offset_t result_len, result_off = vstr(js, result, &result_len);
   char *result_ptr = (char *) &js->mem[result_off];
   
   memcpy(result_ptr, str_ptr, (size_t)str_len);
@@ -9544,8 +9544,8 @@ static jsval_t builtin_string_padEnd(ant_t *js, jsval_t *args, int nargs) {
   return result;
 }
 
-static jsval_t builtin_string_charAt(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t str = to_string_val(js, js->this_val);
+static ant_value_t builtin_string_charAt(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "charAt called on non-string");
   
   double idx_d = nargs < 1 ? 0.0 : js_to_number(js, args[0]);
@@ -9554,9 +9554,9 @@ static jsval_t builtin_string_charAt(ant_t *js, jsval_t *args, int nargs) {
   else idx_d = floor(idx_d);
   if (idx_d < 0 || isinf(idx_d)) return js_mkstr(js, "", 0);
   
-  jsoff_t idx = (jsoff_t) idx_d;
-  jsoff_t byte_len;
-  jsoff_t str_off = vstr(js, str, &byte_len);
+  ant_offset_t idx = (ant_offset_t) idx_d;
+  ant_offset_t byte_len;
+  ant_offset_t str_off = vstr(js, str, &byte_len);
   const char *str_data = (const char *)&js->mem[str_off];
   
   size_t char_bytes;
@@ -9566,14 +9566,14 @@ static jsval_t builtin_string_charAt(ant_t *js, jsval_t *args, int nargs) {
   return js_mkstr(js, str_data + byte_offset, char_bytes);
 }
 
-static jsval_t builtin_string_at(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t str = to_string_val(js, js->this_val);
+static ant_value_t builtin_string_at(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "at called on non-string");
   
   double idx_d = nargs < 1 ? 0.0 : js_to_number(js, args[0]);
   if (isnan(idx_d) || isinf(idx_d)) return js_mkundef();
 
-  jsoff_t byte_len; jsoff_t str_off = vstr(js, str, &byte_len);
+  ant_offset_t byte_len; ant_offset_t str_off = vstr(js, str, &byte_len);
   const char *str_data = (const char *)&js->mem[str_off];
   size_t utf16_len = utf16_strlen(str_data, byte_len);
   
@@ -9588,20 +9588,20 @@ static jsval_t builtin_string_at(ant_t *js, jsval_t *args, int nargs) {
   return js_mkstr(js, str_data + byte_offset, char_bytes);
 }
 
-static jsval_t builtin_string_localeCompare(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t str = to_string_val(js, js->this_val);
+static ant_value_t builtin_string_localeCompare(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "localeCompare called on non-string");
   if (nargs < 1) return tov(0);
   
-  jsval_t that = args[0];
+  ant_value_t that = args[0];
   if (vtype(that) != T_STR) {
     char buf[64];
     size_t n = tostr(js, that, buf, sizeof(buf));
     that = js_mkstr(js, buf, n);
   }
   
-  jsoff_t str_len, str_off = vstr(js, str, &str_len);
-  jsoff_t that_len, that_off = vstr(js, that, &that_len);
+  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
+  ant_offset_t that_len, that_off = vstr(js, that, &that_len);
   const char *str_ptr = (char *)&js->mem[str_off];
   const char *that_ptr = (char *)&js->mem[that_off];
   
@@ -9611,25 +9611,25 @@ static jsval_t builtin_string_localeCompare(ant_t *js, jsval_t *args, int nargs)
   return tov(0);
 }
 
-static jsval_t builtin_string_lastIndexOf(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t str = to_string_val(js, js->this_val);
+static ant_value_t builtin_string_lastIndexOf(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "lastIndexOf called on non-string");
   if (nargs == 0) return tov(-1);
 
-  jsval_t search = args[0];
+  ant_value_t search = args[0];
   if (vtype(search) != T_STR) return tov(-1);
 
-  jsoff_t str_len, str_off = vstr(js, str, &str_len);
-  jsoff_t search_len, search_off = vstr(js, search, &search_len);
+  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
+  ant_offset_t search_len, search_off = vstr(js, search, &search_len);
   
-  jsoff_t max_start = str_len;
+  ant_offset_t max_start = str_len;
   double dstr_len = D(str_len);
   if (nargs >= 2 && vtype(args[1]) == T_NUM) {
     double pos = tod(args[1]);
     if (isnan(pos)) pos = dstr_len;
     if (pos < 0) pos = 0;
     if (pos > dstr_len) pos = dstr_len;
-    max_start = (jsoff_t) pos;
+    max_start = (ant_offset_t) pos;
   }
   
   if (search_len == 0) return tov((double) (max_start > str_len ? str_len : max_start));
@@ -9638,24 +9638,24 @@ static jsval_t builtin_string_lastIndexOf(ant_t *js, jsval_t *args, int nargs) {
   const char *str_ptr = (char *) &js->mem[str_off];
   const char *search_ptr = (char *) &js->mem[search_off];
 
-  jsoff_t start = (max_start + search_len > str_len) ? str_len - search_len : max_start;
-  for (jsoff_t i = start + 1; i > 0; i--) {
+  ant_offset_t start = (max_start + search_len > str_len) ? str_len - search_len : max_start;
+  for (ant_offset_t i = start + 1; i > 0; i--) {
     if (memcmp(str_ptr + i - 1, search_ptr, search_len) == 0) return tov((double)(i - 1));
   }
   return tov(-1);
 }
 
-static jsval_t builtin_string_concat(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t this_unwrapped = unwrap_primitive(js, js->this_val);
-  jsval_t str = js_tostring_val(js, this_unwrapped);
+static ant_value_t builtin_string_concat(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_unwrapped = unwrap_primitive(js, js->this_val);
+  ant_value_t str = js_tostring_val(js, this_unwrapped);
   if (is_err(str)) return str;
 
-  jsoff_t total_len;
-  jsoff_t base_off = vstr(js, str, &total_len);
+  ant_offset_t total_len;
+  ant_offset_t base_off = vstr(js, str, &total_len);
   
-  jsval_t *str_args = NULL;
+  ant_value_t *str_args = NULL;
   if (nargs > 0) {
-    str_args = (jsval_t *)ant_calloc(nargs * sizeof(jsval_t));
+    str_args = (ant_value_t *)ant_calloc(nargs * sizeof(ant_value_t));
     if (!str_args) return js_mkerr(js, "oom");
     for (int i = 0; i < nargs; i++) {
       str_args[i] = js_tostring_val(js, args[i]);
@@ -9663,7 +9663,7 @@ static jsval_t builtin_string_concat(ant_t *js, jsval_t *args, int nargs) {
         free(str_args);
         return str_args[i];
       }
-      jsoff_t arg_len;
+      ant_offset_t arg_len;
       vstr(js, str_args[i], &arg_len);
       total_len += arg_len;
     }
@@ -9675,38 +9675,38 @@ static jsval_t builtin_string_concat(ant_t *js, jsval_t *args, int nargs) {
     return js_mkerr(js, "oom");
   }
 
-  jsoff_t base_len;
+  ant_offset_t base_len;
   base_off = vstr(js, str, &base_len);
   memcpy(result, &js->mem[base_off], base_len);
-  jsoff_t pos = base_len;
+  ant_offset_t pos = base_len;
 
   for (int i = 0; i < nargs; i++) {
-    jsoff_t arg_len, arg_off = vstr(js, str_args[i], &arg_len);
+    ant_offset_t arg_len, arg_off = vstr(js, str_args[i], &arg_len);
     memcpy(result + pos, &js->mem[arg_off], arg_len);
     pos += arg_len;
   }
   result[pos] = '\0';
 
-  jsval_t ret = js_mkstr(js, result, pos);
+  ant_value_t ret = js_mkstr(js, result, pos);
   free(result); if (str_args) free(str_args);
   
   return ret;
 }
 
-static jsval_t builtin_string_normalize(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t str = to_string_val(js, js->this_val);
+static ant_value_t builtin_string_normalize(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "normalize called on non-string");
 
-  jsoff_t str_len, str_off = vstr(js, str, &str_len);
+  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
   const char *str_ptr = (const char *)&js->mem[str_off];
 
   if (str_len == 0) return js_mkstr(js, "", 0);
   utf8proc_option_t opts = UTF8PROC_COMPOSE | UTF8PROC_STABLE;
 
   if (nargs >= 1 && vtype(args[0]) != T_UNDEF) {
-    jsval_t form_val = js_tostring_val(js, args[0]);
+    ant_value_t form_val = js_tostring_val(js, args[0]);
     if (is_err(form_val)) return form_val;
-    jsoff_t flen, foff = vstr(js, form_val, &flen);
+    ant_offset_t flen, foff = vstr(js, form_val, &flen);
     const char *form = (const char *)&js->mem[foff];
 
     if (flen == 3 && memcmp(form, "NFC", 3) == 0) {
@@ -9730,13 +9730,13 @@ static jsval_t builtin_string_normalize(ant_t *js, jsval_t *args, int nargs) {
     return js_mkstr(js, str_ptr, str_len);
   }
 
-  jsval_t ret = js_mkstr(js, (const char *)result, (jsoff_t)rlen);
+  ant_value_t ret = js_mkstr(js, (const char *)result, (ant_offset_t)rlen);
   free(result);
   
   return ret;
 }
 
-static jsval_t builtin_string_fromCharCode(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_string_fromCharCode(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return js_mkstr(js, "", 0);
 
   char *buf = (char *)ant_calloc(nargs + 1);
@@ -9749,12 +9749,12 @@ static jsval_t builtin_string_fromCharCode(ant_t *js, jsval_t *args, int nargs) 
   }
   buf[nargs] = '\0';
 
-  jsval_t ret = js_mkstr(js, buf, nargs);
+  ant_value_t ret = js_mkstr(js, buf, nargs);
   free(buf);
   return ret;
 }
 
-static jsval_t builtin_string_fromCodePoint(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_string_fromCodePoint(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return js_mkstr(js, "", 0);
 
   char *buf = (char *)ant_calloc(nargs * 4 + 1);
@@ -9787,7 +9787,7 @@ static jsval_t builtin_string_fromCodePoint(ant_t *js, jsval_t *args, int nargs)
   }
   buf[len] = '\0';
 
-  jsval_t ret = js_mkstr(js, buf, len);
+  ant_value_t ret = js_mkstr(js, buf, len);
   free(buf);
   return ret;
 }
@@ -9795,16 +9795,16 @@ static jsval_t builtin_string_fromCodePoint(ant_t *js, jsval_t *args, int nargs)
 static bool string_builder_append_value(
   ant_t *js, char **buf,
   size_t *len, size_t *cap,
-  jsval_t value, jsval_t *err
+  ant_value_t value, ant_value_t *err
 ) {
-  jsval_t s = js_tostring_val(js, value);
+  ant_value_t s = js_tostring_val(js, value);
   if (is_err(s)) {
     if (err) *err = s;
     return false;
   }
 
-  jsoff_t slen = 0;
-  jsoff_t soff = vstr(js, s, &slen);
+  ant_offset_t slen = 0;
+  ant_offset_t soff = vstr(js, s, &slen);
   
   size_t need = *len + (size_t)slen + 1;
   if (need > *cap) {
@@ -9825,22 +9825,22 @@ static bool string_builder_append_value(
   return true;
 }
 
-static jsval_t builtin_string_raw(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_string_raw(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1 || is_null(args[0]) || is_undefined(args[0])) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "String.raw requires a template object");
   }
 
-  jsval_t tmpl = args[0];
+  ant_value_t tmpl = args[0];
   if (!is_object_type(tmpl)) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "String.raw requires a template object");
   }
 
-  jsval_t raw = js_get(js, tmpl, "raw");
+  ant_value_t raw = js_get(js, tmpl, "raw");
   if (is_null(raw) || is_undefined(raw) || !is_object_type(raw)) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "String.raw requires template.raw");
   }
 
-  jsval_t raw_len_val = js_get(js, raw, "length");
+  ant_value_t raw_len_val = js_get(js, raw, "length");
   double raw_len_num = js_to_number(js, raw_len_val);
   if (!isfinite(raw_len_num) || raw_len_num <= 0) return js_mkstr(js, "", 0);
 
@@ -9849,11 +9849,11 @@ static jsval_t builtin_string_raw(ant_t *js, jsval_t *args, int nargs) {
 
   char *buf = NULL;
   size_t len = 0; size_t cap = 0;
-  jsval_t err = js_mkundef();
+  ant_value_t err = js_mkundef();
 
   for (size_t i = 0; i < literal_count; i++) {
-    jsval_t chunk = js_mkundef();
-    if (vtype(raw) == T_ARR) chunk = js_arr_get(js, raw, (jsoff_t)i);
+    ant_value_t chunk = js_mkundef();
+    if (vtype(raw) == T_ARR) chunk = js_arr_get(js, raw, (ant_offset_t)i);
     else {
       char key[32];
       snprintf(key, sizeof(key), "%zu", i);
@@ -9872,14 +9872,14 @@ static jsval_t builtin_string_raw(ant_t *js, jsval_t *args, int nargs) {
     }
   }
 
-  jsval_t out = js_mkstr(js, buf ? buf : "", len);
+  ant_value_t out = js_mkstr(js, buf ? buf : "", len);
   free(buf);
   
   return out;
 }
 
-static jsval_t builtin_number_toString(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t num = unwrap_primitive(js, js->this_val);
+static ant_value_t builtin_number_toString(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t num = unwrap_primitive(js, js->this_val);
   if (vtype(num) != T_NUM) return js_mkerr(js, "toString called on non-number");
   
   int radix = 10;
@@ -9948,8 +9948,8 @@ static jsval_t builtin_number_toString(ant_t *js, jsval_t *args, int nargs) {
   return js_mkstr(js, p, int_len);
 }
 
-static jsval_t builtin_number_toFixed(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t num = unwrap_primitive(js, js->this_val);
+static ant_value_t builtin_number_toFixed(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t num = unwrap_primitive(js, js->this_val);
   if (vtype(num) != T_NUM) return js_mkerr(js, "toFixed called on non-number");
   
   double d = tod(num);
@@ -10009,8 +10009,8 @@ static jsval_t builtin_number_toFixed(ant_t *js, jsval_t *args, int nargs) {
   return js_mkstr(js, buf, pos);
 }
 
-static jsval_t builtin_number_toPrecision(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t num = unwrap_primitive(js, js->this_val);
+static ant_value_t builtin_number_toPrecision(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t num = unwrap_primitive(js, js->this_val);
   if (vtype(num) != T_NUM) return js_mkerr(js, "toPrecision called on non-number");
   
   double d = tod(num);
@@ -10114,8 +10114,8 @@ static jsval_t builtin_number_toPrecision(ant_t *js, jsval_t *args, int nargs) {
   }
 }
 
-static jsval_t builtin_number_toExponential(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t num = unwrap_primitive(js, js->this_val);
+static ant_value_t builtin_number_toExponential(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t num = unwrap_primitive(js, js->this_val);
   if (vtype(num) != T_NUM) return js_mkerr(js, "toExponential called on non-number");
   
   double d = tod(num);
@@ -10195,16 +10195,16 @@ static jsval_t builtin_number_toExponential(ant_t *js, jsval_t *args, int nargs)
   return js_mkstr(js, buf, strlen(buf));
 }
 
-static jsval_t builtin_number_valueOf(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_number_valueOf(ant_t *js, ant_value_t *args, int nargs) {
   (void) args; (void) nargs;
-  jsval_t num = unwrap_primitive(js, js->this_val);
+  ant_value_t num = unwrap_primitive(js, js->this_val);
   if (vtype(num) != T_NUM) return js_mkerr(js, "valueOf called on non-number");
   return num;
 }
 
-static jsval_t builtin_number_toLocaleString(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_number_toLocaleString(ant_t *js, ant_value_t *args, int nargs) {
   (void) args; (void) nargs;
-  jsval_t num = unwrap_primitive(js, js->this_val);
+  ant_value_t num = unwrap_primitive(js, js->this_val);
   if (vtype(num) != T_NUM) return js_mkerr(js, "toLocaleString called on non-number");
   double d = tod(num);
   char raw[64];
@@ -10229,41 +10229,41 @@ static jsval_t builtin_number_toLocaleString(ant_t *js, jsval_t *args, int nargs
   return js_mkstr(js, buf, pos);
 }
 
-static jsval_t builtin_string_valueOf(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_string_valueOf(ant_t *js, ant_value_t *args, int nargs) {
   (void) args; (void) nargs;
-  jsval_t str = to_string_val(js, js->this_val);
+  ant_value_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "valueOf called on non-string");
   return str;
 }
 
-static jsval_t builtin_string_toString(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_string_toString(ant_t *js, ant_value_t *args, int nargs) {
   return builtin_string_valueOf(js, args, nargs);
 }
 
-static jsval_t builtin_boolean_valueOf(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_boolean_valueOf(ant_t *js, ant_value_t *args, int nargs) {
   (void) args; (void) nargs;
-  jsval_t b = unwrap_primitive(js, js->this_val);
+  ant_value_t b = unwrap_primitive(js, js->this_val);
   if (vtype(b) != T_BOOL) return js_mkerr(js, "valueOf called on non-boolean");
   return b;
 }
 
-static jsval_t builtin_boolean_toString(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_boolean_toString(ant_t *js, ant_value_t *args, int nargs) {
   (void) args; (void) nargs;
-  jsval_t b = unwrap_primitive(js, js->this_val);
+  ant_value_t b = unwrap_primitive(js, js->this_val);
   if (vtype(b) != T_BOOL) return js_mkerr(js, "toString called on non-boolean");
   return vdata(b) ? js_mkstr(js, "true", 4) : js_mkstr(js, "false", 5);
 }
 
-static jsval_t builtin_parseInt(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_parseInt(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return tov(JS_NAN);
   
-  jsval_t str_val = args[0];
+  ant_value_t str_val = args[0];
   if (vtype(str_val) != T_STR) {
     const char *str = js_str(js, str_val);
     str_val = js_mkstr(js, str, strlen(str));
   }
   
-  jsoff_t str_len, str_off = vstr(js, str_val, &str_len);
+  ant_offset_t str_len, str_off = vstr(js, str_val, &str_len);
   const char *str = (char *) &js->mem[str_off];
   
   int radix = 0;
@@ -10272,7 +10272,7 @@ static jsval_t builtin_parseInt(ant_t *js, jsval_t *args, int nargs) {
     if (radix != 0 && (radix < 2 || radix > 36)) return tov(JS_NAN);
   }
   
-  jsoff_t i = 0;
+  ant_offset_t i = 0;
   while (i < str_len && is_space(str[i])) i++;
   
   if (i >= str_len) return tov(JS_NAN);
@@ -10319,19 +10319,19 @@ static jsval_t builtin_parseInt(ant_t *js, jsval_t *args, int nargs) {
   return tov(sign * result);
 }
 
-static jsval_t builtin_parseFloat(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_parseFloat(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return tov(JS_NAN);
   
-  jsval_t str_val = args[0];
+  ant_value_t str_val = args[0];
   if (vtype(str_val) != T_STR) {
     const char *str = js_str(js, str_val);
     str_val = js_mkstr(js, str, strlen(str));
   }
   
-  jsoff_t str_len, str_off = vstr(js, str_val, &str_len);
+  ant_offset_t str_len, str_off = vstr(js, str_val, &str_len);
   const char *str = (char *) &js->mem[str_off];
   
-  jsoff_t i = 0;
+  ant_offset_t i = 0;
   while (i < str_len && is_space(str[i])) i++;
   
   if (i >= str_len) return tov(JS_NAN);
@@ -10344,38 +10344,38 @@ static jsval_t builtin_parseFloat(ant_t *js, jsval_t *args, int nargs) {
   return tov(result);
 }
 
-static jsval_t builtin_btoa(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_btoa(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "btoa requires 1 argument");
   
-  jsval_t str_val = args[0];
+  ant_value_t str_val = args[0];
   if (vtype(str_val) != T_STR) {
     const char *str = js_str(js, str_val);
     str_val = js_mkstr(js, str, strlen(str));
   }
   
-  jsoff_t str_len, str_off = vstr(js, str_val, &str_len);
+  ant_offset_t str_len, str_off = vstr(js, str_val, &str_len);
   const char *str = (char *) &js->mem[str_off];
   
   size_t out_len;
   char *out = ant_base64_encode((const uint8_t *)str, str_len, &out_len);
   if (!out) return js_mkerr(js, "out of memory");
   
-  jsval_t result = js_mkstr(js, out, out_len);
+  ant_value_t result = js_mkstr(js, out, out_len);
   free(out);
   
   return result;
 }
 
-static jsval_t builtin_atob(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_atob(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "atob requires 1 argument");
   
-  jsval_t str_val = args[0];
+  ant_value_t str_val = args[0];
   if (vtype(str_val) != T_STR) {
     const char *str = js_str(js, str_val);
     str_val = js_mkstr(js, str, strlen(str));
   }
   
-  jsoff_t str_len, str_off = vstr(js, str_val, &str_len);
+  ant_offset_t str_len, str_off = vstr(js, str_val, &str_len);
   const char *str = (char *) &js->mem[str_off];
   if (str_len == 0) return js_mkstr(js, "", 0);
   
@@ -10383,18 +10383,18 @@ static jsval_t builtin_atob(ant_t *js, jsval_t *args, int nargs) {
   uint8_t *out = ant_base64_decode(str, str_len, &out_len);
   if (!out) return js_mkerr(js, "atob: invalid base64 string");
   
-  jsval_t result = js_mkstr(js, (char *)out, out_len);
+  ant_value_t result = js_mkstr(js, (char *)out, out_len);
   free(out);
   
   return result;
 }
 
-static jsval_t builtin_resolve_internal(ant_t *js, jsval_t *args, int nargs);
-static jsval_t builtin_reject_internal(ant_t *js, jsval_t *args, int nargs);
-static void resolve_promise(ant_t *js, jsval_t p, jsval_t val);
-static void reject_promise(ant_t *js, jsval_t p, jsval_t val);
+static ant_value_t builtin_resolve_internal(ant_t *js, ant_value_t *args, int nargs);
+static ant_value_t builtin_reject_internal(ant_t *js, ant_value_t *args, int nargs);
+static void resolve_promise(ant_t *js, ant_value_t p, ant_value_t val);
+static void reject_promise(ant_t *js, ant_value_t p, ant_value_t val);
 
-static size_t strpromise(ant_t *js, jsval_t value, char *buf, size_t len) {
+static size_t strpromise(ant_t *js, ant_value_t value, char *buf, size_t len) {
   uint32_t pid = get_promise_id(js, value);
   promise_data_entry_t *pd = get_promise_data(pid, false);
   
@@ -10438,36 +10438,36 @@ static promise_data_entry_t *get_promise_data(uint32_t promise_id, bool create) 
   return entry;
 }
 
-static uint32_t get_promise_id(ant_t *js, jsval_t p) {
-  jsval_t p_obj = js_as_obj(p);
-  jsval_t pid_val = get_slot(js, p_obj, SLOT_PID);
+static uint32_t get_promise_id(ant_t *js, ant_value_t p) {
+  ant_value_t p_obj = js_as_obj(p);
+  ant_value_t pid_val = get_slot(js, p_obj, SLOT_PID);
   if (vtype(pid_val) == T_UNDEF) return 0;
   return (uint32_t)tod(pid_val);
 }
 
-static jsval_t mkpromise(ant_t *js) {
-  jsval_t obj = mkobj(js, 0);
+static ant_value_t mkpromise(ant_t *js) {
+  ant_value_t obj = mkobj(js, 0);
   if (is_err(obj)) return obj;
 
   uint32_t pid = next_promise_id++;
   set_slot(js, obj, SLOT_PID, tov((double)pid));
 
-  jsval_t promise_ctor = js_get(js, js_glob(js), "Promise");
+  ant_value_t promise_ctor = js_get(js, js_glob(js), "Promise");
   if (vtype(promise_ctor) == T_FUNC || vtype(promise_ctor) == T_CFUNC) {
     set_slot(js, obj, SLOT_CTOR, promise_ctor);
   }
 
-  jsval_t promise_proto = get_ctor_proto(js, "Promise", 7);
+  ant_value_t promise_proto = get_ctor_proto(js, "Promise", 7);
   if (is_object_type(promise_proto)) {
     set_slot(js, obj, SLOT_PROTO, promise_proto);
   }
   promise_data_entry_t *pd = get_promise_data(pid, true);
-  if (pd) pd->obj_offset = (jsoff_t)vdata(js_as_obj(obj));
+  if (pd) pd->obj_offset = (ant_offset_t)vdata(js_as_obj(obj));
   
   return mkval(T_PROMISE, vdata(obj));
 }
 
-static inline void trigger_handlers(ant_t *js, jsval_t p) {
+static inline void trigger_handlers(ant_t *js, ant_value_t p) {
   uint32_t pid = get_promise_id(js, p);
   queue_promise_trigger(pid);
 }
@@ -10477,27 +10477,27 @@ void js_process_promise_handlers(ant_t *js, uint32_t pid) {
   if (!pd) return;
   
   int state = pd->state;
-  jsval_t val = pd->value;
+  ant_value_t val = pd->value;
   
   unsigned int len = utarray_len(pd->handlers);
   if (len == 0) { return; } pd->processing = true;
   
   for (unsigned int i = 0; i < len; i++) {
     promise_handler_t *h = (promise_handler_t *)utarray_eltptr(pd->handlers, i);
-    jsval_t handler = (state == 1) ? h->onFulfilled : h->onRejected;
+    ant_value_t handler = (state == 1) ? h->onFulfilled : h->onRejected;
     
     if (vtype(handler) == T_FUNC || vtype(handler) == T_CFUNC) {
-      jsval_t res;
+      ant_value_t res;
       if (vtype(handler) == T_CFUNC) {
-        jsval_t (*fn)(ant_t *, jsval_t *, int) = (jsval_t(*)(ant_t *, jsval_t *, int)) vdata(handler);
+        ant_value_t (*fn)(ant_t *, ant_value_t *, int) = (ant_value_t(*)(ant_t *, ant_value_t *, int)) vdata(handler);
         res = fn(js, &val, 1);
       } else {
-        jsval_t call_args[] = { val };
+        ant_value_t call_args[] = { val };
         res = sv_vm_call(js->vm, js, handler, js_mkundef(), call_args, 1, NULL, false);
       }
        
       if (is_err(res)) {
-        jsval_t reject_val = js->thrown_value;
+        ant_value_t reject_val = js->thrown_value;
         if (vtype(reject_val) == T_UNDEF) reject_val = res;
         js->thrown_exists = false;
         js->thrown_value = js_mkundef();
@@ -10514,7 +10514,7 @@ void js_process_promise_handlers(ant_t *js, uint32_t pid) {
   utarray_clear(pd->handlers);
 }
 
-static void resolve_promise(ant_t *js, jsval_t p, jsval_t val) {
+static void resolve_promise(ant_t *js, ant_value_t p, ant_value_t val) {
   uint32_t pid = get_promise_id(js, p);
   promise_data_entry_t *pd = get_promise_data(pid, false);
   if (!pd || pd->state != 0) return;
@@ -10522,22 +10522,22 @@ static void resolve_promise(ant_t *js, jsval_t p, jsval_t val) {
   if (vtype(val) == T_PROMISE) {
     uint32_t val_pid = get_promise_id(js, val);
     if (val_pid == pid) {
-      jsval_t err = js_mkerr(js, "TypeError: Chaining cycle");
+      ant_value_t err = js_mkerr(js, "TypeError: Chaining cycle");
       return reject_promise(js, p, err);
     }
     
-    jsval_t res_obj = mkobj(js, 0);
+    ant_value_t res_obj = mkobj(js, 0);
     set_slot(js, res_obj, SLOT_DATA, p);
     set_slot(js, res_obj, SLOT_CFUNC, js_mkfun(builtin_resolve_internal));
-    jsval_t res_fn = js_obj_to_func(res_obj);
+    ant_value_t res_fn = js_obj_to_func(res_obj);
     
-    jsval_t rej_obj = mkobj(js, 0);
+    ant_value_t rej_obj = mkobj(js, 0);
     set_slot(js, rej_obj, SLOT_DATA, p);
     set_slot(js, rej_obj, SLOT_CFUNC, js_mkfun(builtin_reject_internal));
-    jsval_t rej_fn = js_obj_to_func(rej_obj);
+    ant_value_t rej_fn = js_obj_to_func(rej_obj);
     
-    jsval_t call_args[] = { res_fn, rej_fn };
-    jsval_t then_prop = js_get(js, val, "then");
+    ant_value_t call_args[] = { res_fn, rej_fn };
+    ant_value_t then_prop = js_get(js, val, "then");
     
     if (vtype(then_prop) == T_FUNC || vtype(then_prop) == T_CFUNC) {
       (void)sv_vm_call(js->vm, js, then_prop, val, call_args, 2, NULL, false); return;
@@ -10549,7 +10549,7 @@ static void resolve_promise(ant_t *js, jsval_t p, jsval_t val) {
   trigger_handlers(js, p);
 }
 
-static void reject_promise(ant_t *js, jsval_t p, jsval_t val) {
+static void reject_promise(ant_t *js, ant_value_t p, ant_value_t val) {
   uint32_t pid = get_promise_id(js, p);
   promise_data_entry_t *pd = get_promise_data(pid, false);
   if (!pd || pd->state != 0) return;
@@ -10568,23 +10568,23 @@ static void reject_promise(ant_t *js, jsval_t p, jsval_t val) {
   trigger_handlers(js, p);
 }
 
-static jsval_t builtin_resolve_internal(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t me = js->current_func;
-  jsval_t p = get_slot(js, me, SLOT_DATA);
+static ant_value_t builtin_resolve_internal(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t me = js->current_func;
+  ant_value_t p = get_slot(js, me, SLOT_DATA);
   if (vtype(p) != T_PROMISE) return js_mkundef();
   resolve_promise(js, p, nargs > 0 ? args[0] : js_mkundef());
   return js_mkundef();
 }
 
-static jsval_t builtin_reject_internal(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t me = js->current_func;
-  jsval_t p = get_slot(js, me, SLOT_DATA);
+static ant_value_t builtin_reject_internal(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t me = js->current_func;
+  ant_value_t p = get_slot(js, me, SLOT_DATA);
   if (vtype(p) != T_PROMISE) return js_mkundef();
   reject_promise(js, p, nargs > 0 ? args[0] : js_mkundef());
   return js_mkundef();
 }
 
-static jsval_t builtin_Promise(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Promise(ant_t *js, ant_value_t *args, int nargs) {
   if (vtype(js->new_target) == T_UNDEF) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Promise constructor cannot be invoked without 'new'");
   }
@@ -10594,65 +10594,65 @@ static jsval_t builtin_Promise(ant_t *js, jsval_t *args, int nargs) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Promise resolver %s is not a function", val_str);
   }
   
-  jsval_t p = mkpromise(js);
-  jsval_t new_target = js->new_target;
-  jsval_t p_obj = js_as_obj(p);
+  ant_value_t p = mkpromise(js);
+  ant_value_t new_target = js->new_target;
+  ant_value_t p_obj = js_as_obj(p);
   
-  jsval_t promise_proto = get_ctor_proto(js, "Promise", 7);
-  jsval_t instance_proto = js_instance_proto_from_new_target(js, promise_proto);
+  ant_value_t promise_proto = get_ctor_proto(js, "Promise", 7);
+  ant_value_t instance_proto = js_instance_proto_from_new_target(js, promise_proto);
   
   if (vtype(new_target) == T_FUNC || vtype(new_target) == T_CFUNC) set_slot(js, p_obj, SLOT_CTOR, new_target);
   if (is_object_type(instance_proto)) set_slot(js, p_obj, SLOT_PROTO, instance_proto);
   
-  jsval_t res_obj = mkobj(js, 0);
+  ant_value_t res_obj = mkobj(js, 0);
   set_slot(js, res_obj, SLOT_DATA, p);
   set_slot(js, res_obj, SLOT_CFUNC, js_mkfun(builtin_resolve_internal));
   
-  jsval_t res_fn = js_obj_to_func(res_obj);
-  jsval_t rej_obj = mkobj(js, 0);
+  ant_value_t res_fn = js_obj_to_func(res_obj);
+  ant_value_t rej_obj = mkobj(js, 0);
   
   set_slot(js, rej_obj, SLOT_DATA, p);
   set_slot(js, rej_obj, SLOT_CFUNC, js_mkfun(builtin_reject_internal));
   
-  jsval_t rej_fn = js_obj_to_func(rej_obj);
-  jsval_t exec_args[] = { res_fn, rej_fn };
+  ant_value_t rej_fn = js_obj_to_func(rej_obj);
+  ant_value_t exec_args[] = { res_fn, rej_fn };
   sv_vm_call(js->vm, js, args[0], js_mkundef(), exec_args, 2, NULL, false);
   
   return p;
 }
 
-static jsval_t builtin_Promise_resolve(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t val = nargs > 0 ? args[0] : js_mkundef();
+static ant_value_t builtin_Promise_resolve(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t val = nargs > 0 ? args[0] : js_mkundef();
   if (vtype(val) == T_PROMISE) return val;
-  jsval_t p = mkpromise(js);
+  ant_value_t p = mkpromise(js);
   resolve_promise(js, p, val);
   return p;
 }
 
-static jsval_t builtin_Promise_reject(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t val = nargs > 0 ? args[0] : js_mkundef();
-  jsval_t p = mkpromise(js);
+static ant_value_t builtin_Promise_reject(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t val = nargs > 0 ? args[0] : js_mkundef();
+  ant_value_t p = mkpromise(js);
   reject_promise(js, p, val);
   return p;
 }
 
-static jsval_t promise_species_noop_executor(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t promise_species_noop_executor(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t builtin_promise_then(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t p = js->this_val;
+static ant_value_t builtin_promise_then(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t p = js->this_val;
   if (vtype(p) != T_PROMISE) return js_mkerr(js, "not a promise");
   
-  jsval_t promise_ctor = js_get(js, js_glob(js), "Promise");
-  jsval_t species_ctor = promise_ctor;
-  jsval_t p_obj = js_as_obj(p);
-  jsval_t ctor = js_get(js, p_obj, "constructor");
+  ant_value_t promise_ctor = js_get(js, js_glob(js), "Promise");
+  ant_value_t species_ctor = promise_ctor;
+  ant_value_t p_obj = js_as_obj(p);
+  ant_value_t ctor = js_get(js, p_obj, "constructor");
   
   if (is_err(ctor)) return ctor;
   if (vtype(ctor) == T_UNDEF) ctor = get_slot(js, p_obj, SLOT_CTOR);
   
-  jsval_t species = get_ctor_species_value(js, ctor);
+  ant_value_t species = get_ctor_species_value(js, ctor);
   if (is_err(species)) return species;
   
   if (vtype(species) == T_FUNC || vtype(species) == T_CFUNC) {
@@ -10663,25 +10663,25 @@ static jsval_t builtin_promise_then(ant_t *js, jsval_t *args, int nargs) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Promise species is not a constructor");
   }
   
-  jsval_t nextP = mkpromise(js);
+  ant_value_t nextP = mkpromise(js);
   if ((vtype(species_ctor) == T_FUNC || vtype(species_ctor) == T_CFUNC)
       && !(vtype(species_ctor) == vtype(promise_ctor)
            && vdata(species_ctor) == vdata(promise_ctor))) {
-    jsval_t species_proto = js_get(js, species_ctor, "prototype");
+    ant_value_t species_proto = js_get(js, species_ctor, "prototype");
     if (is_object_type(species_proto))
       set_proto(js, js_as_obj(nextP), species_proto);
     set_slot(js, js_as_obj(nextP), SLOT_CTOR, species_ctor);
   } else {
-    jsval_t p_proto = get_slot(js, js_as_obj(p), SLOT_PROTO);
+    ant_value_t p_proto = get_slot(js, js_as_obj(p), SLOT_PROTO);
     if (vtype(p_proto) == T_OBJ) {
       set_slot(js, js_as_obj(nextP), SLOT_PROTO, p_proto);
-      jsval_t p_ctor = get_slot(js, js_as_obj(p), SLOT_CTOR);
+      ant_value_t p_ctor = get_slot(js, js_as_obj(p), SLOT_CTOR);
       if (vtype(p_ctor) == T_FUNC) set_slot(js, js_as_obj(nextP), SLOT_CTOR, p_ctor);
     }
   }
   
-  jsval_t onFulfilled = nargs > 0 ? args[0] : js_mkundef();
-  jsval_t onRejected = nargs > 1 ? args[1] : js_mkundef();
+  ant_value_t onFulfilled = nargs > 0 ? args[0] : js_mkundef();
+  ant_value_t onRejected = nargs > 1 ? args[1] : js_mkundef();
   
   uint32_t pid = get_promise_id(js, p);
   uint32_t next_pid = get_promise_id(js, nextP);
@@ -10706,138 +10706,138 @@ static jsval_t builtin_promise_then(ant_t *js, jsval_t *args, int nargs) {
   return nextP;
 }
 
-static jsval_t builtin_promise_catch(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t args_then[] = { js_mkundef(), nargs > 0 ? args[0] : js_mkundef() };
+static ant_value_t builtin_promise_catch(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t args_then[] = { js_mkundef(), nargs > 0 ? args[0] : js_mkundef() };
   return builtin_promise_then(js, args_then, 2);
 }
 
-static jsval_t finally_value_thunk(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t me = js->current_func;
+static ant_value_t finally_value_thunk(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t me = js->current_func;
   return get_slot(js, me, SLOT_DATA);
 }
 
-static jsval_t finally_thrower(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t me = js->current_func;
-  jsval_t reason = get_slot(js, me, SLOT_DATA);
-  jsval_t rejected = js_mkpromise(js);
+static ant_value_t finally_thrower(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t me = js->current_func;
+  ant_value_t reason = get_slot(js, me, SLOT_DATA);
+  ant_value_t rejected = js_mkpromise(js);
   js_reject_promise(js, rejected, reason);
   return rejected;
 }
 
-static jsval_t finally_identity_reject(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t reason = nargs > 0 ? args[0] : js_mkundef();
-  jsval_t rejected = js_mkpromise(js);
+static ant_value_t finally_identity_reject(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t reason = nargs > 0 ? args[0] : js_mkundef();
+  ant_value_t rejected = js_mkpromise(js);
   js_reject_promise(js, rejected, reason);
   return rejected;
 }
 
-static jsval_t finally_fulfilled_wrapper(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t me = js->current_func;
-  jsval_t callback = get_slot(js, me, SLOT_DATA);
-  jsval_t value = nargs > 0 ? args[0] : js_mkundef();
+static ant_value_t finally_fulfilled_wrapper(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t me = js->current_func;
+  ant_value_t callback = get_slot(js, me, SLOT_DATA);
+  ant_value_t value = nargs > 0 ? args[0] : js_mkundef();
   
-  jsval_t result = js_mkundef();
+  ant_value_t result = js_mkundef();
   if (vtype(callback) == T_FUNC || vtype(callback) == T_CFUNC) {
     result = sv_vm_call(js->vm, js, callback, js_mkundef(), NULL, 0, NULL, false);
     if (is_err(result)) return result;
   }
   
   if (vtype(result) == T_PROMISE || (vtype(result) == T_OBJ && vtype(js_get(js, result, "then")) == T_FUNC)) {
-    jsval_t thunk_obj = mkobj(js, 0);
+    ant_value_t thunk_obj = mkobj(js, 0);
     set_slot(js, thunk_obj, SLOT_DATA, value);
     set_slot(js, thunk_obj, SLOT_CFUNC, js_mkfun(finally_value_thunk));
-    jsval_t thunk_fn = js_obj_to_func(thunk_obj);
+    ant_value_t thunk_fn = js_obj_to_func(thunk_obj);
     
-    jsval_t identity_rej_fn = js_mkfun(finally_identity_reject);
+    ant_value_t identity_rej_fn = js_mkfun(finally_identity_reject);
     
-    jsval_t then_fn = js_get(js, result, "then");
-    jsval_t call_args[] = { thunk_fn, identity_rej_fn };
+    ant_value_t then_fn = js_get(js, result, "then");
+    ant_value_t call_args[] = { thunk_fn, identity_rej_fn };
     return sv_vm_call(js->vm, js, then_fn, result, call_args, 2, NULL, false);
   }
   
   return value;
 }
 
-static jsval_t finally_rejected_wrapper(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t me = js->current_func;
-  jsval_t callback = get_slot(js, me, SLOT_DATA);
-  jsval_t reason = nargs > 0 ? args[0] : js_mkundef();
+static ant_value_t finally_rejected_wrapper(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t me = js->current_func;
+  ant_value_t callback = get_slot(js, me, SLOT_DATA);
+  ant_value_t reason = nargs > 0 ? args[0] : js_mkundef();
   
-  jsval_t result = js_mkundef();
+  ant_value_t result = js_mkundef();
   if (vtype(callback) == T_FUNC || vtype(callback) == T_CFUNC) {
     result = sv_vm_call(js->vm, js, callback, js_mkundef(), NULL, 0, NULL, false);
     if (is_err(result)) return result;
   }
   
   if (vtype(result) == T_PROMISE || (vtype(result) == T_OBJ && vtype(js_get(js, result, "then")) == T_FUNC)) {
-    jsval_t thrower_obj = mkobj(js, 0);
+    ant_value_t thrower_obj = mkobj(js, 0);
     set_slot(js, thrower_obj, SLOT_DATA, reason);
     set_slot(js, thrower_obj, SLOT_CFUNC, js_mkfun(finally_thrower));
     
-    jsval_t thrower_fn = js_obj_to_func(thrower_obj);
-    jsval_t identity_rej_fn = js_mkfun(finally_identity_reject);
+    ant_value_t thrower_fn = js_obj_to_func(thrower_obj);
+    ant_value_t identity_rej_fn = js_mkfun(finally_identity_reject);
     
-    jsval_t then_prop = js_get(js, result, "then");
-    jsval_t call_args[] = { thrower_fn, identity_rej_fn };
+    ant_value_t then_prop = js_get(js, result, "then");
+    ant_value_t call_args[] = { thrower_fn, identity_rej_fn };
     
     return sv_vm_call(js->vm, js, then_prop, result, call_args, 2, NULL, false);
   }
   
-  jsval_t rejected = js_mkpromise(js);
+  ant_value_t rejected = js_mkpromise(js);
   js_reject_promise(js, rejected, reason);
   return rejected;
 }
 
-static jsval_t builtin_promise_finally(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t callback = nargs > 0 ? args[0] : js_mkundef();
+static ant_value_t builtin_promise_finally(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t callback = nargs > 0 ? args[0] : js_mkundef();
   
-  jsval_t fulfilled_obj = mkobj(js, 0);
+  ant_value_t fulfilled_obj = mkobj(js, 0);
   set_slot(js, fulfilled_obj, SLOT_DATA, callback);
   set_slot(js, fulfilled_obj, SLOT_CFUNC, js_mkfun(finally_fulfilled_wrapper));
-  jsval_t fulfilled_fn = js_obj_to_func(fulfilled_obj);
+  ant_value_t fulfilled_fn = js_obj_to_func(fulfilled_obj);
   
-  jsval_t rejected_obj = mkobj(js, 0);
+  ant_value_t rejected_obj = mkobj(js, 0);
   set_slot(js, rejected_obj, SLOT_DATA, callback);
   set_slot(js, rejected_obj, SLOT_CFUNC, js_mkfun(finally_rejected_wrapper));
-  jsval_t rejected_fn = js_obj_to_func(rejected_obj);
+  ant_value_t rejected_fn = js_obj_to_func(rejected_obj);
   
-  jsval_t args_then[] = { fulfilled_fn, rejected_fn };
+  ant_value_t args_then[] = { fulfilled_fn, rejected_fn };
   return builtin_promise_then(js, args_then, 2);
 }
 
-static jsval_t builtin_Promise_try(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Promise_try(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return builtin_Promise_resolve(js, args, 0);
-  jsval_t fn = args[0];
-  jsval_t *call_args = nargs > 1 ? &args[1] : NULL;
+  ant_value_t fn = args[0];
+  ant_value_t *call_args = nargs > 1 ? &args[1] : NULL;
   int call_nargs = nargs > 1 ? nargs - 1 : 0;
-  jsval_t res = sv_vm_call(js->vm, js, fn, js_mkundef(), call_args, call_nargs, NULL, false);
+  ant_value_t res = sv_vm_call(js->vm, js, fn, js_mkundef(), call_args, call_nargs, NULL, false);
   if (is_err(res)) {
-    jsval_t reject_val = js->thrown_value;
+    ant_value_t reject_val = js->thrown_value;
     if (vtype(reject_val) == T_UNDEF) reject_val = res;
     js->thrown_exists = false;
     js->thrown_value = js_mkundef();
     js->thrown_stack = js_mkundef();
-    jsval_t rej_args[] = { reject_val };
+    ant_value_t rej_args[] = { reject_val };
     return builtin_Promise_reject(js, rej_args, 1);
   }
-  jsval_t res_args[] = { res };
+  ant_value_t res_args[] = { res };
   return builtin_Promise_resolve(js, res_args, 1);
 }
 
-static jsval_t builtin_Promise_withResolvers(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t p = mkpromise(js);
+static ant_value_t builtin_Promise_withResolvers(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t p = mkpromise(js);
   
-  jsval_t res_obj = mkobj(js, 0);
+  ant_value_t res_obj = mkobj(js, 0);
   set_slot(js, res_obj, SLOT_DATA, p);
   set_slot(js, res_obj, SLOT_CFUNC, js_mkfun(builtin_resolve_internal));
-  jsval_t res_fn = js_obj_to_func(res_obj);
+  ant_value_t res_fn = js_obj_to_func(res_obj);
   
-  jsval_t rej_obj = mkobj(js, 0);
+  ant_value_t rej_obj = mkobj(js, 0);
   set_slot(js, rej_obj, SLOT_DATA, p);
   set_slot(js, rej_obj, SLOT_CFUNC, js_mkfun(builtin_reject_internal));
-  jsval_t rej_fn = js_obj_to_func(rej_obj);
+  ant_value_t rej_fn = js_obj_to_func(rej_obj);
   
-  jsval_t result = js_newobj(js);
+  ant_value_t result = js_newobj(js);
   js_setprop(js, result, js_mkstr(js, "promise", 7), p);
   js_setprop(js, result, js_mkstr(js, "resolve", 7), res_fn);
   js_setprop(js, result, js_mkstr(js, "reject", 6), rej_fn);
@@ -10845,81 +10845,81 @@ static jsval_t builtin_Promise_withResolvers(ant_t *js, jsval_t *args, int nargs
   return result;
 }
 
-static jsval_t mkpromise_with_ctor(ant_t *js, jsval_t ctor) {
-  jsval_t p = mkpromise(js);
+static ant_value_t mkpromise_with_ctor(ant_t *js, ant_value_t ctor) {
+  ant_value_t p = mkpromise(js);
   if (vtype(ctor) != T_FUNC && vtype(ctor) != T_CFUNC) return p;
 
-  jsval_t proto = js_get(js, ctor, "prototype");
+  ant_value_t proto = js_get(js, ctor, "prototype");
   if (is_err(proto)) return proto;
   if (is_object_type(proto)) {
-    jsval_t p_obj = js_as_obj(p);
+    ant_value_t p_obj = js_as_obj(p);
     set_slot(js, p_obj, SLOT_CTOR, ctor);
     set_slot(js, p_obj, SLOT_PROTO, proto);
   }
   return p;
 }
 
-static jsval_t builtin_Promise_all_resolve_handler(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t me = js->current_func;
-  jsval_t tracker = js_get(js, me, "tracker");
-  jsval_t index_val = js_get(js, me, "index");
+static ant_value_t builtin_Promise_all_resolve_handler(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t me = js->current_func;
+  ant_value_t tracker = js_get(js, me, "tracker");
+  ant_value_t index_val = js_get(js, me, "index");
   
   int index = (int)tod(index_val);
-  jsval_t value = nargs > 0 ? args[0] : js_mkundef();
+  ant_value_t value = nargs > 0 ? args[0] : js_mkundef();
   
-  jsval_t results = js_get(js, tracker, "results");
-  arr_set(js, results, (jsoff_t)index, value);
+  ant_value_t results = js_get(js, tracker, "results");
+  arr_set(js, results, (ant_offset_t)index, value);
   
-  jsval_t remaining_val = js_get(js, tracker, "remaining");
+  ant_value_t remaining_val = js_get(js, tracker, "remaining");
   int remaining = (int)tod(remaining_val) - 1;
   js_setprop(js, tracker, js_mkstr(js, "remaining", 9), tov((double)remaining));
   
   if (remaining == 0) {
-    jsval_t result_promise = get_slot(js, tracker, SLOT_DATA);
+    ant_value_t result_promise = get_slot(js, tracker, SLOT_DATA);
     resolve_promise(js, result_promise, mkval(T_ARR, vdata(results)));
   }
   
   return js_mkundef();
 }
 
-static jsval_t builtin_Promise_all_reject_handler(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t me = js->current_func;
-  jsval_t tracker = js_get(js, me, "tracker");
-  jsval_t result_promise = get_slot(js, tracker, SLOT_DATA);
+static ant_value_t builtin_Promise_all_reject_handler(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t me = js->current_func;
+  ant_value_t tracker = js_get(js, me, "tracker");
+  ant_value_t result_promise = get_slot(js, tracker, SLOT_DATA);
   
-  jsval_t reason = nargs > 0 ? args[0] : js_mkundef();
+  ant_value_t reason = nargs > 0 ? args[0] : js_mkundef();
   reject_promise(js, result_promise, reason);
   
   return js_mkundef();
 }
 
 typedef struct {
-  jsval_t tracker;
+  ant_value_t tracker;
   int index;
 } promise_all_iter_ctx_t;
 
-static iter_action_t promise_all_iter_cb(ant_t *js, jsval_t value, void *ctx, jsval_t *out) {
+static iter_action_t promise_all_iter_cb(ant_t *js, ant_value_t value, void *ctx, ant_value_t *out) {
   promise_all_iter_ctx_t *pctx = (promise_all_iter_ctx_t *)ctx;
-  jsval_t item = value;
+  ant_value_t item = value;
   
   if (vtype(item) != T_PROMISE) {
-    jsval_t wrap_args[] = { item };
+    ant_value_t wrap_args[] = { item };
     item = builtin_Promise_resolve(js, wrap_args, 1);
   }
   
-  jsval_t resolve_obj = mkobj(js, 0);
+  ant_value_t resolve_obj = mkobj(js, 0);
   set_slot(js, resolve_obj, SLOT_CFUNC, js_mkfun(builtin_Promise_all_resolve_handler));
   js_setprop(js, resolve_obj, js_mkstr(js, "index", 5), tov((double)pctx->index));
   js_setprop(js, resolve_obj, js_mkstr(js, "tracker", 7), pctx->tracker);
-  jsval_t resolve_fn = js_obj_to_func(resolve_obj);
+  ant_value_t resolve_fn = js_obj_to_func(resolve_obj);
   
-  jsval_t reject_obj = mkobj(js, 0);
+  ant_value_t reject_obj = mkobj(js, 0);
   set_slot(js, reject_obj, SLOT_CFUNC, js_mkfun(builtin_Promise_all_reject_handler));
   js_setprop(js, reject_obj, js_mkstr(js, "tracker", 7), pctx->tracker);
-  jsval_t reject_fn = js_obj_to_func(reject_obj);
+  ant_value_t reject_fn = js_obj_to_func(reject_obj);
   
-  jsval_t then_args[] = { resolve_fn, reject_fn };
-  jsval_t saved_this = js->this_val;
+  ant_value_t then_args[] = { resolve_fn, reject_fn };
+  ant_value_t saved_this = js->this_val;
   js->this_val = item;
   builtin_promise_then(js, then_args, 2);
   js->this_val = saved_this;
@@ -10928,37 +10928,37 @@ static iter_action_t promise_all_iter_cb(ant_t *js, jsval_t value, void *ctx, js
   return ITER_CONTINUE;
 }
 
-static jsval_t builtin_Promise_all(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Promise_all(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "Promise.all requires an iterable");
   
-  jsval_t iterable = args[0];
+  ant_value_t iterable = args[0];
   uint8_t t = vtype(iterable);
   if (t != T_ARR && t != T_OBJ) return js_mkerr(js, "Promise.all requires an iterable");
   
-  jsval_t ctor = js->this_val;
+  ant_value_t ctor = js->this_val;
   if (vtype(ctor) != T_FUNC && vtype(ctor) != T_CFUNC) ctor = js_mkundef();
   
-  jsval_t result_promise = mkpromise_with_ctor(js, ctor);
+  ant_value_t result_promise = mkpromise_with_ctor(js, ctor);
   if (is_err(result_promise)) return result_promise;
   
-  jsval_t tracker = mkobj(js, 0);
-  jsval_t results = mkarr(js);
+  ant_value_t tracker = mkobj(js, 0);
+  ant_value_t results = mkarr(js);
   
   js_setprop(js, tracker, js_mkstr(js, "remaining", 9), tov(0.0));
   js_setprop(js, tracker, js_mkstr(js, "results", 7), results);
   set_slot(js, tracker, SLOT_DATA, result_promise);
   
   promise_all_iter_ctx_t ctx = { .tracker = tracker, .index = 0 };
-  jsval_t iter_result = iter_foreach(js, iterable, promise_all_iter_cb, &ctx);
+  ant_value_t iter_result = iter_foreach(js, iterable, promise_all_iter_cb, &ctx);
   
   if (is_err(iter_result)) return iter_result;
   
   int len = ctx.index;
   {
-    jsoff_t doff = get_dense_buf(js, results);
+    ant_offset_t doff = get_dense_buf(js, results);
     if (doff) {
-      if ((jsoff_t)len > dense_capacity(js, doff)) doff = dense_grow(js, results, (jsoff_t)len);
-      if (doff) dense_set_length(js, doff, (jsoff_t)len);
+      if ((ant_offset_t)len > dense_capacity(js, doff)) doff = dense_grow(js, results, (ant_offset_t)len);
+      if (doff) dense_set_length(js, doff, (ant_offset_t)len);
     }
   }
   
@@ -10972,15 +10972,15 @@ static jsval_t builtin_Promise_all(ant_t *js, jsval_t *args, int nargs) {
 }
 
 typedef struct {
-  jsval_t result_promise;
-  jsval_t resolve_fn;
-  jsval_t reject_fn;
+  ant_value_t result_promise;
+  ant_value_t resolve_fn;
+  ant_value_t reject_fn;
   bool settled;
 } promise_race_iter_ctx_t;
 
-static iter_action_t promise_race_iter_cb(ant_t *js, jsval_t value, void *ctx, jsval_t *out) {
+static iter_action_t promise_race_iter_cb(ant_t *js, ant_value_t value, void *ctx, ant_value_t *out) {
   promise_race_iter_ctx_t *pctx = (promise_race_iter_ctx_t *)ctx;
-  jsval_t item = value;
+  ant_value_t item = value;
   
   if (vtype(item) != T_PROMISE) {
     resolve_promise(js, pctx->result_promise, item);
@@ -11002,8 +11002,8 @@ static iter_action_t promise_race_iter_cb(ant_t *js, jsval_t value, void *ctx, j
     }
   }
   
-  jsval_t then_args[] = { pctx->resolve_fn, pctx->reject_fn };
-  jsval_t saved_this = js->this_val;
+  ant_value_t then_args[] = { pctx->resolve_fn, pctx->reject_fn };
+  ant_value_t saved_this = js->this_val;
   js->this_val = item;
   builtin_promise_then(js, then_args, 2);
   js->this_val = saved_this;
@@ -11011,27 +11011,27 @@ static iter_action_t promise_race_iter_cb(ant_t *js, jsval_t value, void *ctx, j
   return ITER_CONTINUE;
 }
 
-static jsval_t builtin_Promise_race(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Promise_race(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "Promise.race requires an iterable");
   
-  jsval_t iterable = args[0];
+  ant_value_t iterable = args[0];
   uint8_t t = vtype(iterable);
   if (t != T_ARR && t != T_OBJ) return js_mkerr(js, "Promise.race requires an iterable");
   
-  jsval_t ctor = js->this_val;
+  ant_value_t ctor = js->this_val;
   if (vtype(ctor) != T_FUNC && vtype(ctor) != T_CFUNC) ctor = js_mkundef();
-  jsval_t result_promise = mkpromise_with_ctor(js, ctor);
+  ant_value_t result_promise = mkpromise_with_ctor(js, ctor);
   if (is_err(result_promise)) return result_promise;
   
-  jsval_t resolve_obj = mkobj(js, 0);
+  ant_value_t resolve_obj = mkobj(js, 0);
   set_slot(js, resolve_obj, SLOT_CFUNC, js_mkfun(builtin_resolve_internal));
   set_slot(js, resolve_obj, SLOT_DATA, result_promise);
-  jsval_t resolve_fn = js_obj_to_func(resolve_obj);
+  ant_value_t resolve_fn = js_obj_to_func(resolve_obj);
   
-  jsval_t reject_obj = mkobj(js, 0);
+  ant_value_t reject_obj = mkobj(js, 0);
   set_slot(js, reject_obj, SLOT_CFUNC, js_mkfun(builtin_reject_internal));
   set_slot(js, reject_obj, SLOT_DATA, result_promise);
-  jsval_t reject_fn = js_obj_to_func(reject_obj);
+  ant_value_t reject_fn = js_obj_to_func(reject_obj);
   
   promise_race_iter_ctx_t ctx = {
     .result_promise = result_promise,
@@ -11040,29 +11040,29 @@ static jsval_t builtin_Promise_race(ant_t *js, jsval_t *args, int nargs) {
     .settled = false
   };
   
-  jsval_t iter_result = iter_foreach(js, iterable, promise_race_iter_cb, &ctx);
+  ant_value_t iter_result = iter_foreach(js, iterable, promise_race_iter_cb, &ctx);
   if (is_err(iter_result)) return iter_result;
   
   return result_promise;
 }
 
-static jsval_t mk_aggregate_error(ant_t *js, jsval_t errors) {
-  jsval_t args[] = { errors, js_mkstr(js, "All promises were rejected", 26) };
-  jsoff_t off = lkp(js, js_glob(js), "AggregateError", 14);
-  jsval_t ctor = off ? resolveprop(js, mkval(T_PROP, off)) : js_mkundef();
+static ant_value_t mk_aggregate_error(ant_t *js, ant_value_t errors) {
+  ant_value_t args[] = { errors, js_mkstr(js, "All promises were rejected", 26) };
+  ant_offset_t off = lkp(js, js_glob(js), "AggregateError", 14);
+  ant_value_t ctor = off ? resolveprop(js, mkval(T_PROP, off)) : js_mkundef();
   return sv_vm_call(js->vm, js, ctor, js_mkundef(), args, 2, NULL, false);
 }
 
-static bool promise_any_try_resolve(ant_t *js, jsval_t tracker, jsval_t value) {
+static bool promise_any_try_resolve(ant_t *js, ant_value_t tracker, ant_value_t value) {
   if (js_truthy(js, js_get(js, tracker, "resolved"))) return false;
   js_set(js, tracker, "resolved", js_true);
   resolve_promise(js, get_slot(js, tracker, SLOT_DATA), value);
   return true;
 }
 
-static void promise_any_record_rejection(ant_t *js, jsval_t tracker, int index, jsval_t reason) {
-  jsval_t errors = resolveprop(js, js_get(js, tracker, "errors"));
-  arr_set(js, errors, (jsoff_t)index, reason);
+static void promise_any_record_rejection(ant_t *js, ant_value_t tracker, int index, ant_value_t reason) {
+  ant_value_t errors = resolveprop(js, js_get(js, tracker, "errors"));
+  arr_set(js, errors, (ant_offset_t)index, reason);
   
   int remaining = (int)tod(js_get(js, tracker, "remaining")) - 1;
   js_set(js, tracker, "remaining", tov((double)remaining));
@@ -11070,14 +11070,14 @@ static void promise_any_record_rejection(ant_t *js, jsval_t tracker, int index, 
   if (remaining == 0) reject_promise(js, get_slot(js, tracker, SLOT_DATA), mk_aggregate_error(js, errors));
 }
 
-static jsval_t builtin_Promise_any_resolve_handler(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t tracker = js_get(js, js->this_val, "tracker");
+static ant_value_t builtin_Promise_any_resolve_handler(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t tracker = js_get(js, js->this_val, "tracker");
   promise_any_try_resolve(js, tracker, nargs > 0 ? args[0] : js_mkundef());
   return js_mkundef();
 }
 
-static jsval_t builtin_Promise_any_reject_handler(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t tracker = js_get(js, js->this_val, "tracker");
+static ant_value_t builtin_Promise_any_reject_handler(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t tracker = js_get(js, js->this_val, "tracker");
   if (js_truthy(js, js_get(js, tracker, "resolved"))) return js_mkundef();
   
   int index = (int)tod(js_get(js, js->this_val, "index"));
@@ -11085,22 +11085,22 @@ static jsval_t builtin_Promise_any_reject_handler(ant_t *js, jsval_t *args, int 
   return js_mkundef();
 }
 
-static jsval_t builtin_Promise_any(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Promise_any(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "Promise.any requires an array");
   
-  jsval_t arr = args[0];
+  ant_value_t arr = args[0];
   if (vtype(arr) != T_ARR) return js_mkerr(js, "Promise.any requires an array");
   
   int len = (int)get_array_length(js, arr);
   
   if (len == 0) {
-    jsval_t reject_args[] = { mk_aggregate_error(js, mkarr(js)) };
+    ant_value_t reject_args[] = { mk_aggregate_error(js, mkarr(js)) };
     return builtin_Promise_reject(js, reject_args, 1);
   }
   
-  jsval_t result_promise = mkpromise(js);
-  jsval_t tracker = mkobj(js, 0);
-  jsval_t errors = mkarr(js);
+  ant_value_t result_promise = mkpromise(js);
+  ant_value_t tracker = mkobj(js, 0);
+  ant_value_t errors = mkarr(js);
   
   set_slot(js, tracker, SLOT_DATA, result_promise);
 
@@ -11109,15 +11109,15 @@ static jsval_t builtin_Promise_any(ant_t *js, jsval_t *args, int nargs) {
   js_setprop(js, tracker, js_mkstr(js, "resolved", 8), js_false);
   
   {
-    jsoff_t doff = get_dense_buf(js, errors);
+    ant_offset_t doff = get_dense_buf(js, errors);
     if (doff) {
-      if ((jsoff_t)len > dense_capacity(js, doff)) doff = dense_grow(js, errors, (jsoff_t)len);
-      if (doff) dense_set_length(js, doff, (jsoff_t)len);
+      if ((ant_offset_t)len > dense_capacity(js, doff)) doff = dense_grow(js, errors, (ant_offset_t)len);
+      if (doff) dense_set_length(js, doff, (ant_offset_t)len);
     }
   }
   
   for (int i = 0; i < len; i++) {
-    jsval_t item = arr_get(js, arr, (jsoff_t)i);
+    ant_value_t item = arr_get(js, arr, (ant_offset_t)i);
     item = resolveprop(js, item);
     
     if (vtype(item) != T_PROMISE) {
@@ -11142,17 +11142,17 @@ static jsval_t builtin_Promise_any(ant_t *js, jsval_t *args, int nargs) {
       }
     }
     
-    jsval_t resolve_obj = mkobj(js, 0);
+    ant_value_t resolve_obj = mkobj(js, 0);
     set_slot(js, resolve_obj, SLOT_CFUNC, js_mkfun(builtin_Promise_any_resolve_handler));
     js_setprop(js, resolve_obj, js_mkstr(js, "tracker", 7), tracker);
     
-    jsval_t reject_obj = mkobj(js, 0);
+    ant_value_t reject_obj = mkobj(js, 0);
     set_slot(js, reject_obj, SLOT_CFUNC, js_mkfun(builtin_Promise_any_reject_handler));
     js_setprop(js, reject_obj, js_mkstr(js, "index", 5), tov((double)i));
     js_setprop(js, reject_obj, js_mkstr(js, "tracker", 7), tracker);
     
-    jsval_t then_args[] = { js_obj_to_func(resolve_obj), js_obj_to_func(reject_obj) };
-    jsval_t saved_this = js->this_val;
+    ant_value_t then_args[] = { js_obj_to_func(resolve_obj), js_obj_to_func(reject_obj) };
+    ant_value_t saved_this = js->this_val;
     js->this_val = item;
     builtin_promise_then(js, then_args, 2);
     js->this_val = saved_this;
@@ -11161,8 +11161,8 @@ static jsval_t builtin_Promise_any(ant_t *js, jsval_t *args, int nargs) {
   return result_promise;
 }
 
-static jsval_t handle_proxy_instanceof(ant_t *js, jsval_t l, jsval_t r, uint8_t ltype) {
-  jsval_t target = proxy_read_target(js, r);
+static ant_value_t handle_proxy_instanceof(ant_t *js, ant_value_t l, ant_value_t r, uint8_t ltype) {
+  ant_value_t target = proxy_read_target(js, r);
   uint8_t ttype = vtype(target);
   
   if (ttype != T_FUNC && ttype != T_CFUNC) {
@@ -11170,12 +11170,12 @@ static jsval_t handle_proxy_instanceof(ant_t *js, jsval_t l, jsval_t r, uint8_t 
   }
   
   {
-    jsval_t has_instance = js_get_sym(js, r, get_hasInstance_sym());
+    ant_value_t has_instance = js_get_sym(js, r, get_hasInstance_sym());
     if (is_err(has_instance)) return has_instance;
     uint8_t hit = vtype(has_instance);
     if (hit == T_FUNC || hit == T_CFUNC) {
-      jsval_t args[1] = { l };
-      jsval_t result = sv_vm_call(js->vm, js, has_instance, r, args, 1, NULL, false);
+      ant_value_t args[1] = { l };
+      ant_value_t result = sv_vm_call(js->vm, js, has_instance, r, args, 1, NULL, false);
       if (is_err(result)) return result;
       return js_bool(js_truthy(js, result));
     }
@@ -11184,7 +11184,7 @@ static jsval_t handle_proxy_instanceof(ant_t *js, jsval_t l, jsval_t r, uint8_t 
     }
   }
   
-  jsval_t proto_val = proxy_get(js, r, "prototype", 9);
+  ant_value_t proto_val = proxy_get(js, r, "prototype", 9);
   uint8_t pt = vtype(proto_val);
   
   if (pt != T_OBJ && pt != T_ARR && pt != T_FUNC) {
@@ -11195,7 +11195,7 @@ static jsval_t handle_proxy_instanceof(ant_t *js, jsval_t l, jsval_t r, uint8_t 
     return mkval(T_BOOL, 0);
   }
   
-  jsval_t current = get_proto(js, l);
+  ant_value_t current = get_proto(js, l);
   for (int depth = 0; vtype(current) != T_NULL && depth < 32; depth++) {
     if (vdata(current) == vdata(proto_val)) {
       return mkval(T_BOOL, 1);
@@ -11206,8 +11206,8 @@ static jsval_t handle_proxy_instanceof(ant_t *js, jsval_t l, jsval_t r, uint8_t 
   return mkval(T_BOOL, 0);
 }
 
-static jsval_t handle_cfunc_instanceof(jsval_t l, jsval_t r, uint8_t ltype) {
-  jsval_t (*fn)(ant_t *, jsval_t *, int) = (jsval_t(*)(ant_t *, jsval_t *, int)) vdata(r);
+static ant_value_t handle_cfunc_instanceof(ant_value_t l, ant_value_t r, uint8_t ltype) {
+  ant_value_t (*fn)(ant_t *, ant_value_t *, int) = (ant_value_t(*)(ant_t *, ant_value_t *, int)) vdata(r);
   
   if (fn == builtin_Object) return mkval(T_BOOL, ltype == T_OBJ ? 1 : 0);
   if (fn == builtin_Function) return mkval(T_BOOL, (ltype == T_FUNC || ltype == T_CFUNC) ? 1 : 0);
@@ -11220,8 +11220,8 @@ static jsval_t handle_cfunc_instanceof(jsval_t l, jsval_t r, uint8_t ltype) {
   return mkval(T_BOOL, 0);
 }
 
-static jsval_t walk_prototype_chain(ant_t *js, jsval_t l, jsval_t ctor_proto) {
-  jsval_t current = get_proto(js, l);
+static ant_value_t walk_prototype_chain(ant_t *js, ant_value_t l, ant_value_t ctor_proto) {
+  ant_value_t current = get_proto(js, l);
   const int MAX_DEPTH = 32;
   
   for (int depth = 0; vtype(current) != T_NULL && depth < MAX_DEPTH; depth++) {
@@ -11232,7 +11232,7 @@ static jsval_t walk_prototype_chain(ant_t *js, jsval_t l, jsval_t ctor_proto) {
   return mkval(T_BOOL, 0);
 }
 
-jsval_t do_instanceof(ant_t *js, jsval_t l, jsval_t r) {
+ant_value_t do_instanceof(ant_t *js, ant_value_t l, ant_value_t r) {
   uint8_t ltype = vtype(l);
   uint8_t rtype = vtype(r);
   
@@ -11246,12 +11246,12 @@ jsval_t do_instanceof(ant_t *js, jsval_t l, jsval_t r) {
   }
   
   {
-    jsval_t has_instance = js_get_sym(js, r, get_hasInstance_sym());
+    ant_value_t has_instance = js_get_sym(js, r, get_hasInstance_sym());
     if (is_err(has_instance)) return has_instance;
     uint8_t hit = vtype(has_instance);
     if (hit == T_FUNC || hit == T_CFUNC) {
-      jsval_t args[1] = { l };
-      jsval_t result = sv_vm_call(js->vm, js, has_instance, r, args, 1, NULL, false);
+      ant_value_t args[1] = { l };
+      ant_value_t result = sv_vm_call(js->vm, js, has_instance, r, args, 1, NULL, false);
       if (is_err(result)) return result;
       return js_bool(js_truthy(js, result));
     }
@@ -11260,16 +11260,16 @@ jsval_t do_instanceof(ant_t *js, jsval_t l, jsval_t r) {
     }
   }
   
-  jsval_t func_obj = js_func_obj(r);
-  jsoff_t proto_off = lkp_interned(js, func_obj, INTERN_PROTOTYPE, 9);
+  ant_value_t func_obj = js_func_obj(r);
+  ant_offset_t proto_off = lkp_interned(js, func_obj, INTERN_PROTOTYPE, 9);
   if (proto_off == 0) return mkval(T_BOOL, 0);
   
-  jsval_t ctor_proto = resolveprop(js, mkval(T_PROP, proto_off));
+  ant_value_t ctor_proto = resolveprop(js, mkval(T_PROP, proto_off));
   uint8_t pt = vtype(ctor_proto);
   if (pt != T_OBJ && pt != T_ARR && pt != T_FUNC) return mkval(T_BOOL, 0);
   
   if (ltype == T_STR || ltype == T_NUM || ltype == T_BOOL) {
-    jsval_t type_proto = get_prototype_for_type(js, ltype);
+    ant_value_t type_proto = get_prototype_for_type(js, ltype);
     return mkval(T_BOOL, vdata(ctor_proto) == vdata(type_proto) ? 1 : 0);
   }
   
@@ -11280,12 +11280,12 @@ jsval_t do_instanceof(ant_t *js, jsval_t l, jsval_t r) {
   return walk_prototype_chain(js, l, ctor_proto);
 }
 
-jsval_t do_in(ant_t *js, jsval_t l, jsval_t r) {
-  jsoff_t prop_len;
+ant_value_t do_in(ant_t *js, ant_value_t l, ant_value_t r) {
+  ant_offset_t prop_len;
   const char *prop_name;
   char num_buf[32];
   
-  jsval_t key = js_to_primitive(js, l, 1);
+  ant_value_t key = js_to_primitive(js, l, 1);
   if (is_err(key)) return key;
   
   bool is_sym = (vtype(key) == T_SYMBOL);
@@ -11293,14 +11293,14 @@ jsval_t do_in(ant_t *js, jsval_t l, jsval_t r) {
   if (is_sym) {
     const char *d = js_sym_desc(js, key);
     prop_name = d ? d : "symbol";
-    prop_len = (jsoff_t)strlen(prop_name);
+    prop_len = (ant_offset_t)strlen(prop_name);
   } else if (vtype(key) == T_NUM) {
-    prop_len = (jsoff_t)strnum(key, num_buf, sizeof(num_buf));
+    prop_len = (ant_offset_t)strnum(key, num_buf, sizeof(num_buf));
     prop_name = num_buf;
   } else {
-    jsval_t key_str = js_tostring_val(js, key);
+    ant_value_t key_str = js_tostring_val(js, key);
     if (is_err(key_str)) return key_str;
-    jsoff_t prop_off = vstr(js, key_str, &prop_len);
+    ant_offset_t prop_off = vstr(js, key_str, &prop_len);
     prop_name = (char *)&js->mem[prop_off];
   }
   
@@ -11310,37 +11310,37 @@ jsval_t do_in(ant_t *js, jsval_t l, jsval_t r) {
   }
   
   if (is_proxy(js, r)) {
-    jsval_t result = is_sym ? proxy_has_val(js, r, key) : proxy_has(js, r, prop_name, prop_len);
+    ant_value_t result = is_sym ? proxy_has_val(js, r, key) : proxy_has(js, r, prop_name, prop_len);
     if (is_err(result)) return result;
     return js_bool(js_truthy(js, result));
   }
   
   if (!is_sym && vtype(r) == T_ARR) {
     unsigned long idx;
-    jsoff_t arr_len = get_array_length(js, r);
-    if (parse_array_index(prop_name, prop_len, arr_len, &idx)) return mkval(T_BOOL, arr_has(js, r, (jsoff_t)idx) ? 1 : 0);
+    ant_offset_t arr_len = get_array_length(js, r);
+    if (parse_array_index(prop_name, prop_len, arr_len, &idx)) return mkval(T_BOOL, arr_has(js, r, (ant_offset_t)idx) ? 1 : 0);
     if (prop_len == 6 && memcmp(prop_name, "length", 6) == 0) return mkval(T_BOOL, 1);
   }
   
-  jsoff_t found = is_sym ? lkp_sym_proto(js, r, (jsoff_t)vdata(key)) : lkp_proto(js, r, prop_name, prop_len);
+  ant_offset_t found = is_sym ? lkp_sym_proto(js, r, (ant_offset_t)vdata(key)) : lkp_proto(js, r, prop_name, prop_len);
   return mkval(T_BOOL, found != 0 ? 1 : 0);
 }
 
-static jsval_t builtin_import(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_import(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "import() requires a string specifier");
-  jsval_t ns = js_esm_import_sync(js, args[0]);
+  ant_value_t ns = js_esm_import_sync(js, args[0]);
   if (is_err(ns)) return builtin_Promise_reject(js, &ns, 1);
 
-  jsval_t promise_args[] = { ns };
+  ant_value_t promise_args[] = { ns };
   return builtin_Promise_resolve(js, promise_args, 1);
 }
 
-static jsval_t builtin_import_meta_resolve(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_import_meta_resolve(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "import.meta.resolve() requires a string specifier");
   if (vtype(js->import_meta) == T_OBJ) {
-    jsval_t filename = js_get(js, js->import_meta, "filename");
+    ant_value_t filename = js_get(js, js->import_meta, "filename");
     if (vtype(filename) == T_STR) {
-      jsoff_t n = 0; jsoff_t off = vstr(js, filename, &n);
+      ant_offset_t n = 0; ant_offset_t off = vstr(js, filename, &n);
       return js_esm_resolve_specifier(js, args[0], (const char *)&js->mem[off]);
     }
   } return js_esm_resolve_specifier(js, args[0], NULL);
@@ -11349,14 +11349,14 @@ static jsval_t builtin_import_meta_resolve(ant_t *js, jsval_t *args, int nargs) 
 void js_setup_import_meta(ant_t *js, const char *filename) {
   if (!filename) return;
   
-  jsval_t import_meta = mkobj(js, 0);
+  ant_value_t import_meta = mkobj(js, 0);
   if (is_err(import_meta)) return;
   bool is_url = esm_is_url(filename);
   
-  jsval_t url_val = is_url ? js_mkstr(js, filename, strlen(filename)) : js_esm_make_file_url(js, filename);
+  ant_value_t url_val = is_url ? js_mkstr(js, filename, strlen(filename)) : js_esm_make_file_url(js, filename);
   if (!is_err(url_val)) js_setprop(js, import_meta, js_mkstr(js, "url", 3), url_val);
   
-  jsval_t filename_val = js_mkstr(js, filename, strlen(filename));
+  ant_value_t filename_val = js_mkstr(js, filename, strlen(filename));
   if (!is_err(filename_val)) js_setprop(js, import_meta, js_mkstr(js, "filename", 8), filename_val);
   
   if (is_url) {
@@ -11366,7 +11366,7 @@ void js_setup_import_meta(ant_t *js, const char *filename) {
       char *scheme_end = strstr(filename_copy, "://");
       if (last_slash && scheme_end && last_slash > scheme_end + 2) {
         *last_slash = '\0';
-        jsval_t dirname_val = js_mkstr(js, filename_copy, strlen(filename_copy));
+        ant_value_t dirname_val = js_mkstr(js, filename_copy, strlen(filename_copy));
         if (!is_err(dirname_val)) js_setprop(js, import_meta, js_mkstr(js, "dirname", 7), dirname_val);
       }
       free(filename_copy);
@@ -11376,7 +11376,7 @@ void js_setup_import_meta(ant_t *js, const char *filename) {
     if (filename_copy) {
       char *dir = dirname(filename_copy);
       if (dir) {
-        jsval_t dirname_val = js_mkstr(js, dir, strlen(dir));
+        ant_value_t dirname_val = js_mkstr(js, dir, strlen(dir));
         if (!is_err(dirname_val)) js_setprop(js, import_meta, js_mkstr(js, "dirname", 7), dirname_val);
       }
       free(filename_copy);
@@ -11384,126 +11384,126 @@ void js_setup_import_meta(ant_t *js, const char *filename) {
   }
   
   js_setprop(js, import_meta, js_mkstr(js, "main", 4), js_true);
-  jsval_t resolve_fn = js_mkfun(builtin_import_meta_resolve);
+  ant_value_t resolve_fn = js_mkfun(builtin_import_meta_resolve);
   js_setprop(js, import_meta, js_mkstr(js, "resolve", 7), resolve_fn);
   
-  jsval_t glob = js_glob(js);
-  jsoff_t import_off = lkp(js, glob, "import", 6);
+  ant_value_t glob = js_glob(js);
+  ant_offset_t import_off = lkp(js, glob, "import", 6);
   
   if (import_off != 0) {
-    jsval_t import_fn = resolveprop(js, mkval(T_PROP, import_off));
+    ant_value_t import_fn = resolveprop(js, mkval(T_PROP, import_off));
     if (vtype(import_fn) == T_FUNC) {
-      jsval_t import_obj = js_func_obj(import_fn);
+      ant_value_t import_obj = js_func_obj(import_fn);
       js_setprop(js, import_obj, js_mkstr(js, "meta", 4), import_meta);
     }
   }
 }
 
-static proxy_data_t *get_proxy_data(jsval_t obj) {
+static proxy_data_t *get_proxy_data(ant_value_t obj) {
   if (vtype(obj) != T_OBJ) return NULL;
-  jsoff_t off = (jsoff_t)vdata(obj);
+  ant_offset_t off = (ant_offset_t)vdata(obj);
   proxy_data_t *data = NULL;
-  HASH_FIND(hh, proxy_registry, &off, sizeof(jsoff_t), data);
+  HASH_FIND(hh, proxy_registry, &off, sizeof(ant_offset_t), data);
   return data;
 }
 
-bool is_proxy(ant_t *js, jsval_t obj) {
+bool is_proxy(ant_t *js, ant_value_t obj) {
   (void)js;
   return get_proxy_data(obj) != NULL;
 }
 
-static jsval_t proxy_read_target(ant_t *js, jsval_t obj) {
+static ant_value_t proxy_read_target(ant_t *js, ant_value_t obj) {
   proxy_data_t *data = get_proxy_data(obj);
   return data ? data->target : obj;
 }
 
-static jsoff_t proxy_aware_length(ant_t *js, jsval_t obj) {
-  jsval_t src = is_proxy(js, obj) ? proxy_read_target(js, obj) : obj;
+static ant_offset_t proxy_aware_length(ant_t *js, ant_value_t obj) {
+  ant_value_t src = is_proxy(js, obj) ? proxy_read_target(js, obj) : obj;
   if (vtype(src) == T_ARR) {
-    jsoff_t doff = get_dense_buf(js, src);
+    ant_offset_t doff = get_dense_buf(js, src);
     if (doff) return dense_length(js, doff);
   }
-  jsoff_t off = lkp_interned(js, src, INTERN_LENGTH, 6);
+  ant_offset_t off = lkp_interned(js, src, INTERN_LENGTH, 6);
   if (off == 0) return 0;
-  jsval_t len_val = resolveprop(js, mkval(T_PROP, off));
-  return vtype(len_val) == T_NUM ? (jsoff_t)tod(len_val) : 0;
+  ant_value_t len_val = resolveprop(js, mkval(T_PROP, off));
+  return vtype(len_val) == T_NUM ? (ant_offset_t)tod(len_val) : 0;
 }
 
-static jsval_t proxy_aware_get_elem(ant_t *js, jsval_t obj, const char *key, size_t key_len) {
-  jsval_t src = is_proxy(js, obj) ? proxy_read_target(js, obj) : obj;
-  jsoff_t off = lkp(js, src, key, key_len);
+static ant_value_t proxy_aware_get_elem(ant_t *js, ant_value_t obj, const char *key, size_t key_len) {
+  ant_value_t src = is_proxy(js, obj) ? proxy_read_target(js, obj) : obj;
+  ant_offset_t off = lkp(js, src, key, key_len);
   return off ? resolveprop(js, mkval(T_PROP, off)) : js_mkundef();
 }
 
-static jsval_t throw_proxy_error(ant_t *js, const char *message) {
-  jsval_t err_obj = mkobj(js, 0);
+static ant_value_t throw_proxy_error(ant_t *js, const char *message) {
+  ant_value_t err_obj = mkobj(js, 0);
   js_setprop(js, err_obj, js_mkstr(js, "message", 7), js_mkstr(js, message, strlen(message)));
   js_setprop(js, err_obj, js_mkstr(js, "name", 4), js_mkstr(js, "TypeError", 9));
   return js_throw(js, err_obj);
 }
 
-static bool proxy_target_is_extensible(ant_t *js, jsval_t obj) {
+static bool proxy_target_is_extensible(ant_t *js, ant_value_t obj) {
   uint8_t t = vtype(obj);
   if (t != T_OBJ && t != T_ARR && t != T_FUNC) return false;
 
-  jsval_t as_obj = js_as_obj(obj);
+  ant_value_t as_obj = js_as_obj(obj);
   if (js_truthy(js, get_slot(js, as_obj, SLOT_FROZEN))) return false;
   if (js_truthy(js, get_slot(js, as_obj, SLOT_SEALED))) return false;
 
-  jsval_t ext_slot = get_slot(js, as_obj, SLOT_EXTENSIBLE);
+  ant_value_t ext_slot = get_slot(js, as_obj, SLOT_EXTENSIBLE);
   if (vtype(ext_slot) != T_UNDEF) return js_truthy(js, ext_slot);
   return true;
 }
 
-static jsoff_t proxy_target_prop_flags(ant_t *js, jsval_t target, jsoff_t prop_off) {
+static ant_offset_t proxy_target_prop_flags(ant_t *js, ant_value_t target, ant_offset_t prop_off) {
   if (prop_off == 0) return 0;
-  jsoff_t obj_off = (jsoff_t)vdata(js_as_obj(target));
-  jsoff_t head = loadoff(js, obj_off);
+  ant_offset_t obj_off = (ant_offset_t)vdata(js_as_obj(target));
+  ant_offset_t head = loadoff(js, obj_off);
   if ((head & ~(3U | FLAGMASK)) == prop_off) return head;
   return loadoff(js, prop_off);
 }
 
-static bool proxy_target_prop_is_nonconfig(ant_t *js, jsval_t target, jsoff_t prop_off) {
+static bool proxy_target_prop_is_nonconfig(ant_t *js, ant_value_t target, ant_offset_t prop_off) {
   return (proxy_target_prop_flags(js, target, prop_off) & NONCONFIGMASK) != 0;
 }
 
-static bool proxy_target_prop_is_const(ant_t *js, jsval_t target, jsoff_t prop_off) {
+static bool proxy_target_prop_is_const(ant_t *js, ant_value_t target, ant_offset_t prop_off) {
   return (proxy_target_prop_flags(js, target, prop_off) & CONSTMASK) != 0;
 }
 
-static jsval_t proxy_get(ant_t *js, jsval_t proxy, const char *key, size_t key_len) {
+static ant_value_t proxy_get(ant_t *js, ant_value_t proxy, const char *key, size_t key_len) {
   proxy_data_t *data = get_proxy_data(proxy);
   if (!data) return js_mkundef();
   if (data->revoked) return throw_proxy_error(js, "Cannot perform 'get' on a proxy that has been revoked");
   
-  jsval_t target = data->target;
-  jsval_t handler = data->handler;
+  ant_value_t target = data->target;
+  ant_value_t handler = data->handler;
   
-  jsoff_t get_trap_off = vtype(handler) == T_OBJ 
+  ant_offset_t get_trap_off = vtype(handler) == T_OBJ 
     ? lkp_interned(js, handler, INTERN_GET, 3) 
     : 0;
   
   if (get_trap_off != 0) {
-    jsval_t get_trap = resolveprop(js, mkval(T_PROP, get_trap_off));
+    ant_value_t get_trap = resolveprop(js, mkval(T_PROP, get_trap_off));
     if (vtype(get_trap) == T_FUNC || vtype(get_trap) == T_CFUNC) {
-      jsval_t key_val = js_mkstr(js, key, key_len);
+      ant_value_t key_val = js_mkstr(js, key, key_len);
       
-      jsval_t args[3] = { target, key_val, proxy };
-      jsval_t result = sv_vm_call(js->vm, js, get_trap, js_mkundef(), args, 3, NULL, false);
+      ant_value_t args[3] = { target, key_val, proxy };
+      ant_value_t result = sv_vm_call(js->vm, js, get_trap, js_mkundef(), args, 3, NULL, false);
       if (is_err(result)) return result;
 
-      jsoff_t prop_off = lkp(js, target, key, key_len);
+      ant_offset_t prop_off = lkp(js, target, key, key_len);
       if (prop_off != 0 && proxy_target_prop_is_nonconfig(js, target, prop_off) &&
           proxy_target_prop_is_const(js, target, prop_off)) {
-        jsval_t target_value = resolveprop(js, mkval(T_PROP, prop_off));
+        ant_value_t target_value = resolveprop(js, mkval(T_PROP, prop_off));
         if (!strict_eq_values(js, result, target_value))
           return js_mkerr_typed(js, JS_ERR_TYPE, "'get' on proxy: trap returned invalid value for non-configurable, non-writable property");
       }
 
-      descriptor_entry_t *desc = lookup_descriptor(js, (jsoff_t)vdata(js_as_obj(target)), key, key_len);
+      descriptor_entry_t *desc = lookup_descriptor(js, (ant_offset_t)vdata(js_as_obj(target)), key, key_len);
       if (desc && !desc->configurable) {
         if (!desc->has_getter && !desc->has_setter && !desc->writable && prop_off != 0) {
-          jsval_t target_value = resolveprop(js, mkval(T_PROP, prop_off));
+          ant_value_t target_value = resolveprop(js, mkval(T_PROP, prop_off));
           if (!strict_eq_values(js, result, target_value))
             return js_mkerr_typed(js, JS_ERR_TYPE, "'get' on proxy: trap returned invalid value for non-configurable, non-writable property");
         }
@@ -11520,44 +11520,44 @@ static jsval_t proxy_get(ant_t *js, jsval_t proxy, const char *key, size_t key_l
   memcpy(key_buf, key, len);
   key_buf[len] = '\0';
   
-  jsoff_t off = lkp(js, target, key_buf, len);
+  ant_offset_t off = lkp(js, target, key_buf, len);
   if (off != 0) return resolveprop(js, mkval(T_PROP, off));
   
-  jsoff_t proto_off = lkp_proto(js, target, key_buf, len);
+  ant_offset_t proto_off = lkp_proto(js, target, key_buf, len);
   if (proto_off != 0) return resolveprop(js, mkval(T_PROP, proto_off));
   
   return js_mkundef();
 }
 
-static jsval_t proxy_set(ant_t *js, jsval_t proxy, const char *key, size_t key_len, jsval_t value) {
+static ant_value_t proxy_set(ant_t *js, ant_value_t proxy, const char *key, size_t key_len, ant_value_t value) {
   proxy_data_t *data = get_proxy_data(proxy);
   if (!data) return js_mkundef();
   if (data->revoked) return throw_proxy_error(js, "Cannot perform 'set' on a proxy that has been revoked");
   
-  jsval_t target = data->target;
-  jsval_t handler = data->handler;
+  ant_value_t target = data->target;
+  ant_value_t handler = data->handler;
   
-  jsoff_t set_trap_off = vtype(handler) == T_OBJ ? lkp_interned(js, handler, INTERN_SET, 3) : 0;
+  ant_offset_t set_trap_off = vtype(handler) == T_OBJ ? lkp_interned(js, handler, INTERN_SET, 3) : 0;
   if (set_trap_off != 0) {
-    jsval_t set_trap = resolveprop(js, mkval(T_PROP, set_trap_off));
+    ant_value_t set_trap = resolveprop(js, mkval(T_PROP, set_trap_off));
     if (vtype(set_trap) == T_FUNC || vtype(set_trap) == T_CFUNC) {
-      jsval_t key_val = js_mkstr(js, key, key_len);
-      jsval_t args[4] = { target, key_val, value, proxy };
-      jsval_t result = sv_vm_call(js->vm, js, set_trap, js_mkundef(), args, 4, NULL, false);
+      ant_value_t key_val = js_mkstr(js, key, key_len);
+      ant_value_t args[4] = { target, key_val, value, proxy };
+      ant_value_t result = sv_vm_call(js->vm, js, set_trap, js_mkundef(), args, 4, NULL, false);
       if (is_err(result)) return result;
       if (js_truthy(js, result)) {
-        jsoff_t prop_off = lkp(js, target, key, key_len);
+        ant_offset_t prop_off = lkp(js, target, key, key_len);
         if (prop_off != 0 && proxy_target_prop_is_nonconfig(js, target, prop_off) &&
             proxy_target_prop_is_const(js, target, prop_off)) {
-          jsval_t target_value = resolveprop(js, mkval(T_PROP, prop_off));
+          ant_value_t target_value = resolveprop(js, mkval(T_PROP, prop_off));
           if (!strict_eq_values(js, value, target_value))
             return js_mkerr_typed(js, JS_ERR_TYPE, "'set' on proxy: trap returned truthy for non-configurable, non-writable property with different value");
         }
 
-        descriptor_entry_t *desc = lookup_descriptor(js, (jsoff_t)vdata(js_as_obj(target)), key, key_len);
+        descriptor_entry_t *desc = lookup_descriptor(js, (ant_offset_t)vdata(js_as_obj(target)), key, key_len);
         if (desc && !desc->configurable) {
           if (!desc->has_getter && !desc->has_setter && !desc->writable && prop_off != 0) {
-            jsval_t target_value = resolveprop(js, mkval(T_PROP, prop_off));
+            ant_value_t target_value = resolveprop(js, mkval(T_PROP, prop_off));
             if (!strict_eq_values(js, value, target_value))
               return js_mkerr_typed(js, JS_ERR_TYPE, "'set' on proxy: trap returned truthy for non-configurable, non-writable property with different value");
           }
@@ -11569,31 +11569,31 @@ static jsval_t proxy_set(ant_t *js, jsval_t proxy, const char *key, size_t key_l
     }
   }
   
-  jsval_t key_str = js_mkstr(js, key, key_len);
+  ant_value_t key_str = js_mkstr(js, key, key_len);
   js_setprop(js, target, key_str, value);
   return js_true;
 }
 
-static jsval_t proxy_has(ant_t *js, jsval_t proxy, const char *key, size_t key_len) {
+static ant_value_t proxy_has(ant_t *js, ant_value_t proxy, const char *key, size_t key_len) {
   proxy_data_t *data = get_proxy_data(proxy);
   if (!data) return js_false;
   if (data->revoked) return throw_proxy_error(js, "Cannot perform 'has' on a proxy that has been revoked");
   
-  jsval_t target = data->target;
-  jsval_t handler = data->handler;
+  ant_value_t target = data->target;
+  ant_value_t handler = data->handler;
   
-  jsoff_t has_trap_off = vtype(handler) == T_OBJ ? lkp(js, handler, "has", 3) : 0;
+  ant_offset_t has_trap_off = vtype(handler) == T_OBJ ? lkp(js, handler, "has", 3) : 0;
   if (has_trap_off != 0) {
-    jsval_t has_trap = resolveprop(js, mkval(T_PROP, has_trap_off));
+    ant_value_t has_trap = resolveprop(js, mkval(T_PROP, has_trap_off));
     if (vtype(has_trap) == T_FUNC || vtype(has_trap) == T_CFUNC) {
-      jsval_t key_val = js_mkstr(js, key, key_len);
-      jsval_t args[2] = { target, key_val };
-      jsval_t result = sv_vm_call(js->vm, js, has_trap, js_mkundef(), args, 2, NULL, false);
+      ant_value_t key_val = js_mkstr(js, key, key_len);
+      ant_value_t args[2] = { target, key_val };
+      ant_value_t result = sv_vm_call(js->vm, js, has_trap, js_mkundef(), args, 2, NULL, false);
       if (is_err(result)) return result;
 
       if (!js_truthy(js, result)) {
-        jsoff_t prop_off = lkp(js, target, key, key_len);
-        descriptor_entry_t *desc = lookup_descriptor(js, (jsoff_t)vdata(js_as_obj(target)), key, key_len);
+        ant_offset_t prop_off = lkp(js, target, key, key_len);
+        descriptor_entry_t *desc = lookup_descriptor(js, (ant_offset_t)vdata(js_as_obj(target)), key, key_len);
         bool has_own = (prop_off != 0) || (desc != NULL);
 
         if ((prop_off != 0 && proxy_target_prop_is_nonconfig(js, target, prop_off)) || (desc && !desc->configurable))
@@ -11612,31 +11612,31 @@ static jsval_t proxy_has(ant_t *js, jsval_t proxy, const char *key, size_t key_l
   memcpy(key_buf, key, len);
   key_buf[len] = '\0';
   
-  jsoff_t off = lkp_proto(js, target, key_buf, len);
+  ant_offset_t off = lkp_proto(js, target, key_buf, len);
   return js_bool(off != 0);
 }
 
-static jsval_t proxy_delete(ant_t *js, jsval_t proxy, const char *key, size_t key_len) {
+static ant_value_t proxy_delete(ant_t *js, ant_value_t proxy, const char *key, size_t key_len) {
   proxy_data_t *data = get_proxy_data(proxy);
   if (!data) return js_true;
   if (data->revoked) return throw_proxy_error(js, "Cannot perform 'deleteProperty' on a proxy that has been revoked");
   
-  jsval_t target = data->target;
-  jsval_t handler = data->handler;
+  ant_value_t target = data->target;
+  ant_value_t handler = data->handler;
   
-  jsoff_t delete_trap_off = vtype(handler) == T_OBJ ? lkp(js, handler, "deleteProperty", 14) : 0;
+  ant_offset_t delete_trap_off = vtype(handler) == T_OBJ ? lkp(js, handler, "deleteProperty", 14) : 0;
   if (delete_trap_off != 0) {
-    jsval_t delete_trap = resolveprop(js, mkval(T_PROP, delete_trap_off));
+    ant_value_t delete_trap = resolveprop(js, mkval(T_PROP, delete_trap_off));
     if (vtype(delete_trap) == T_FUNC || vtype(delete_trap) == T_CFUNC) {
-      jsval_t key_val = js_mkstr(js, key, key_len);
-      jsval_t args[2] = { target, key_val };
-      jsval_t result = sv_vm_call(js->vm, js, delete_trap, js_mkundef(), args, 2, NULL, false);
+      ant_value_t key_val = js_mkstr(js, key, key_len);
+      ant_value_t args[2] = { target, key_val };
+      ant_value_t result = sv_vm_call(js->vm, js, delete_trap, js_mkundef(), args, 2, NULL, false);
       if (is_err(result)) return result;
       if (js_truthy(js, result)) {
-        jsoff_t prop_off = lkp(js, target, key, key_len);
+        ant_offset_t prop_off = lkp(js, target, key, key_len);
         if (prop_off != 0 && is_nonconfig_prop(js, prop_off))
           return js_mkerr_typed(js, JS_ERR_TYPE, "'deleteProperty' on proxy: trap returned truthy for non-configurable property");
-        descriptor_entry_t *desc = lookup_descriptor(js, (jsoff_t)vdata(js_as_obj(target)), key, key_len);
+        descriptor_entry_t *desc = lookup_descriptor(js, (ant_offset_t)vdata(js_as_obj(target)), key, key_len);
         if (desc && !desc->configurable)
           return js_mkerr_typed(js, JS_ERR_TYPE, "'deleteProperty' on proxy: trap returned truthy for non-configurable property");
       }
@@ -11644,78 +11644,78 @@ static jsval_t proxy_delete(ant_t *js, jsval_t proxy, const char *key, size_t ke
     }
   }
   
-  jsval_t key_str = js_mkstr(js, key, key_len);
+  ant_value_t key_str = js_mkstr(js, key, key_len);
   js_setprop(js, target, key_str, js_mkundef());
   return js_true;
 }
 
-static jsval_t proxy_get_val(ant_t *js, jsval_t proxy, jsval_t key_val) {
+static ant_value_t proxy_get_val(ant_t *js, ant_value_t proxy, ant_value_t key_val) {
   proxy_data_t *data = get_proxy_data(proxy);
   if (!data) return js_mkundef();
   if (data->revoked) return throw_proxy_error(js, "Cannot perform 'get' on a proxy that has been revoked");
 
-  jsval_t target = data->target;
-  jsval_t handler = data->handler;
+  ant_value_t target = data->target;
+  ant_value_t handler = data->handler;
 
-  jsoff_t get_trap_off = vtype(handler) == T_OBJ
+  ant_offset_t get_trap_off = vtype(handler) == T_OBJ
     ? lkp_interned(js, handler, INTERN_GET, 3) : 0;
   if (get_trap_off != 0) {
-    jsval_t get_trap = resolveprop(js, mkval(T_PROP, get_trap_off));
+    ant_value_t get_trap = resolveprop(js, mkval(T_PROP, get_trap_off));
     if (vtype(get_trap) == T_FUNC || vtype(get_trap) == T_CFUNC) {
-      jsval_t args[3] = { target, key_val, proxy };
+      ant_value_t args[3] = { target, key_val, proxy };
       return sv_vm_call(js->vm, js, get_trap, js_mkundef(), args, 3, NULL, false);
     }
   }
 
   if (vtype(key_val) == T_SYMBOL) {
-    jsoff_t off = lkp_sym_proto(js, target, (jsoff_t)vdata(key_val));
+    ant_offset_t off = lkp_sym_proto(js, target, (ant_offset_t)vdata(key_val));
     return off != 0 ? resolveprop(js, mkval(T_PROP, off)) : js_mkundef();
   }
 
   return proxy_get(js, proxy, "", 0);
 }
 
-static jsval_t proxy_has_val(ant_t *js, jsval_t proxy, jsval_t key_val) {
+static ant_value_t proxy_has_val(ant_t *js, ant_value_t proxy, ant_value_t key_val) {
   proxy_data_t *data = get_proxy_data(proxy);
   if (!data) return js_false;
   if (data->revoked) return throw_proxy_error(js, "Cannot perform 'has' on a proxy that has been revoked");
 
-  jsval_t target = data->target;
-  jsval_t handler = data->handler;
+  ant_value_t target = data->target;
+  ant_value_t handler = data->handler;
 
-  jsoff_t has_trap_off = vtype(handler) == T_OBJ ? lkp(js, handler, "has", 3) : 0;
+  ant_offset_t has_trap_off = vtype(handler) == T_OBJ ? lkp(js, handler, "has", 3) : 0;
   if (has_trap_off != 0) {
-    jsval_t has_trap = resolveprop(js, mkval(T_PROP, has_trap_off));
+    ant_value_t has_trap = resolveprop(js, mkval(T_PROP, has_trap_off));
     if (vtype(has_trap) == T_FUNC || vtype(has_trap) == T_CFUNC) {
-      jsval_t args[2] = { target, key_val };
+      ant_value_t args[2] = { target, key_val };
       return sv_vm_call(js->vm, js, has_trap, js_mkundef(), args, 2, NULL, false);
     }
   }
 
   if (vtype(key_val) == T_SYMBOL) {
-    jsoff_t off = lkp_sym_proto(js, target, (jsoff_t)vdata(key_val));
+    ant_offset_t off = lkp_sym_proto(js, target, (ant_offset_t)vdata(key_val));
     return js_bool(off != 0);
   }
   return js_false;
 }
 
-static jsval_t proxy_delete_val(ant_t *js, jsval_t proxy, jsval_t key_val) {
+static ant_value_t proxy_delete_val(ant_t *js, ant_value_t proxy, ant_value_t key_val) {
   proxy_data_t *data = get_proxy_data(proxy);
   if (!data) return js_true;
   if (data->revoked) return throw_proxy_error(js, "Cannot perform 'deleteProperty' on a proxy that has been revoked");
 
-  jsval_t target = data->target;
-  jsval_t handler = data->handler;
+  ant_value_t target = data->target;
+  ant_value_t handler = data->handler;
 
-  jsoff_t delete_trap_off = vtype(handler) == T_OBJ ? lkp(js, handler, "deleteProperty", 14) : 0;
+  ant_offset_t delete_trap_off = vtype(handler) == T_OBJ ? lkp(js, handler, "deleteProperty", 14) : 0;
   if (delete_trap_off != 0) {
-    jsval_t delete_trap = resolveprop(js, mkval(T_PROP, delete_trap_off));
+    ant_value_t delete_trap = resolveprop(js, mkval(T_PROP, delete_trap_off));
     if (vtype(delete_trap) == T_FUNC || vtype(delete_trap) == T_CFUNC) {
-      jsval_t args[2] = { target, key_val };
-      jsval_t result = sv_vm_call(js->vm, js, delete_trap, js_mkundef(), args, 2, NULL, false);
+      ant_value_t args[2] = { target, key_val };
+      ant_value_t result = sv_vm_call(js->vm, js, delete_trap, js_mkundef(), args, 2, NULL, false);
       if (is_err(result)) return result;
       if (js_truthy(js, result) && vtype(key_val) == T_SYMBOL) {
-        jsoff_t prop_off = lkp_sym(js, target, (jsoff_t)vdata(key_val));
+        ant_offset_t prop_off = lkp_sym(js, target, (ant_offset_t)vdata(key_val));
         if (prop_off != 0 && is_nonconfig_prop(js, prop_off))
           return js_mkerr_typed(js, JS_ERR_TYPE, "'deleteProperty' on proxy: trap returned truthy for non-configurable property");
       }
@@ -11724,16 +11724,16 @@ static jsval_t proxy_delete_val(ant_t *js, jsval_t proxy, jsval_t key_val) {
   }
 
   if (vtype(key_val) == T_SYMBOL) {
-    jsoff_t sym_off = (jsoff_t)vdata(key_val);
-    jsoff_t prop_off = lkp_sym(js, target, sym_off);
+    ant_offset_t sym_off = (ant_offset_t)vdata(key_val);
+    ant_offset_t prop_off = lkp_sym(js, target, sym_off);
     if (prop_off != 0) {
-      jsoff_t obj_off = (jsoff_t)vdata(js_as_obj(target));
-      jsoff_t first_prop = loadoff(js, obj_off) & ~(3U | FLAGMASK);
+      ant_offset_t obj_off = (ant_offset_t)vdata(js_as_obj(target));
+      ant_offset_t first_prop = loadoff(js, obj_off) & ~(3U | FLAGMASK);
       if (first_prop == prop_off) {
         unlink_prop(js, obj_off, prop_off, 0);
       } else {
-        for (jsoff_t prev = first_prop; prev != 0; ) {
-          jsoff_t np = loadoff(js, prev) & ~(3U | FLAGMASK);
+        for (ant_offset_t prev = first_prop; prev != 0; ) {
+          ant_offset_t np = loadoff(js, prev) & ~(3U | FLAGMASK);
           if (np == prop_off) { unlink_prop(js, obj_off, prop_off, prev); break; }
           prev = np;
         }
@@ -11743,26 +11743,26 @@ static jsval_t proxy_delete_val(ant_t *js, jsval_t proxy, jsval_t key_val) {
   return js_true;
 }
 
-jsval_t js_proxy_apply(ant_t *js, jsval_t proxy, jsval_t this_arg, jsval_t *args, int argc) {
+ant_value_t js_proxy_apply(ant_t *js, ant_value_t proxy, ant_value_t this_arg, ant_value_t *args, int argc) {
   proxy_data_t *data = get_proxy_data(proxy);
   if (!data) return js_mkerr_typed(js, JS_ERR_TYPE, "object is not a function");
   if (data->revoked) return throw_proxy_error(js, "Cannot perform 'apply' on a proxy that has been revoked");
 
-  jsval_t target = data->target;
-  jsval_t handler = data->handler;
+  ant_value_t target = data->target;
+  ant_value_t handler = data->handler;
   uint8_t target_type = vtype(target);
 
   if (target_type != T_FUNC && target_type != T_CFUNC && !(target_type == T_OBJ && is_proxy(js, target)))
     return js_mkerr_typed(js, JS_ERR_TYPE, "%s is not a function", typestr(target_type));
 
-  jsoff_t trap_off = vtype(handler) == T_OBJ ? lkp(js, handler, "apply", 5) : 0;
+  ant_offset_t trap_off = vtype(handler) == T_OBJ ? lkp(js, handler, "apply", 5) : 0;
   if (trap_off != 0) {
-    jsval_t trap = resolveprop(js, mkval(T_PROP, trap_off));
+    ant_value_t trap = resolveprop(js, mkval(T_PROP, trap_off));
     if (vtype(trap) == T_FUNC || vtype(trap) == T_CFUNC) {
-      jsval_t args_arr = mkarr(js);
+      ant_value_t args_arr = mkarr(js);
       for (int i = 0; i < argc; i++)
         js_arr_push(js, args_arr, args[i]);
-      jsval_t trap_args[3] = { target, this_arg, args_arr };
+      ant_value_t trap_args[3] = { target, this_arg, args_arr };
       return sv_vm_call(js->vm, js, trap, handler, trap_args, 3, NULL, false);
     }
   }
@@ -11770,26 +11770,26 @@ jsval_t js_proxy_apply(ant_t *js, jsval_t proxy, jsval_t this_arg, jsval_t *args
   return sv_vm_call(js->vm, js, target, this_arg, args, argc, NULL, false);
 }
 
-jsval_t js_proxy_construct(ant_t *js, jsval_t proxy, jsval_t *args, int argc, jsval_t new_target) {
+ant_value_t js_proxy_construct(ant_t *js, ant_value_t proxy, ant_value_t *args, int argc, ant_value_t new_target) {
   proxy_data_t *data = get_proxy_data(proxy);
   if (!data) return js_mkerr_typed(js, JS_ERR_TYPE, "not a constructor");
   if (data->revoked) return throw_proxy_error(js, "Cannot perform 'construct' on a proxy that has been revoked");
 
-  jsval_t target = data->target;
-  jsval_t handler = data->handler;
+  ant_value_t target = data->target;
+  ant_value_t handler = data->handler;
 
   if (vtype(target) != T_FUNC)
     return js_mkerr_typed(js, JS_ERR_TYPE, "not a constructor");
 
-  jsoff_t trap_off = vtype(handler) == T_OBJ ? lkp(js, handler, "construct", 9) : 0;
+  ant_offset_t trap_off = vtype(handler) == T_OBJ ? lkp(js, handler, "construct", 9) : 0;
   if (trap_off != 0) {
-    jsval_t trap = resolveprop(js, mkval(T_PROP, trap_off));
+    ant_value_t trap = resolveprop(js, mkval(T_PROP, trap_off));
     if (vtype(trap) == T_FUNC || vtype(trap) == T_CFUNC) {
-      jsval_t args_arr = mkarr(js);
+      ant_value_t args_arr = mkarr(js);
       for (int i = 0; i < argc; i++)
         js_arr_push(js, args_arr, args[i]);
-      jsval_t trap_args[3] = { target, args_arr, new_target };
-      jsval_t result = sv_vm_call(js->vm, js, trap, js_mkundef(), trap_args, 3, NULL, false);
+      ant_value_t trap_args[3] = { target, args_arr, new_target };
+      ant_value_t result = sv_vm_call(js->vm, js, trap, js_mkundef(), trap_args, 3, NULL, false);
       if (is_err(result)) return result;
       if (!is_object_type(result))
         return js_mkerr_typed(js, JS_ERR_TYPE, "'construct' on proxy: trap returned non-Object");
@@ -11797,21 +11797,21 @@ jsval_t js_proxy_construct(ant_t *js, jsval_t proxy, jsval_t *args, int argc, js
     }
   }
 
-  jsval_t obj = mkobj(js, 0);
-  jsval_t proto = js_getprop_fallback(js, target, "prototype");
+  ant_value_t obj = mkobj(js, 0);
+  ant_value_t proto = js_getprop_fallback(js, target, "prototype");
   if (is_object_type(proto)) js_set_proto(js, obj, proto);
-  jsval_t saved = js->new_target;
+  ant_value_t saved = js->new_target;
   js->new_target = new_target;
-  jsval_t ctor_this = obj;
-  jsval_t result = sv_vm_call(js->vm, js, target, obj, args, argc, &ctor_this, true);
+  ant_value_t ctor_this = obj;
+  ant_value_t result = sv_vm_call(js->vm, js, target, obj, args, argc, &ctor_this, true);
   js->new_target = saved;
   if (is_err(result)) return result;
   return is_object_type(result) ? result : (is_object_type(ctor_this) ? ctor_this : obj);
 }
 
-static jsval_t mkproxy(ant_t *js, jsval_t target, jsval_t handler) {
-  jsval_t proxy_obj = mkobj(js, 0);
-  jsoff_t off = (jsoff_t)vdata(proxy_obj);
+static ant_value_t mkproxy(ant_t *js, ant_value_t target, ant_value_t handler) {
+  ant_value_t proxy_obj = mkobj(js, 0);
+  ant_offset_t off = (ant_offset_t)vdata(proxy_obj);
   
   proxy_data_t *data = (proxy_data_t *)ant_calloc(sizeof(proxy_data_t));
   if (!data) return js_mkerr(js, "out of memory");
@@ -11821,18 +11821,18 @@ static jsval_t mkproxy(ant_t *js, jsval_t target, jsval_t handler) {
   data->handler = handler;
   data->revoked = false;
   
-  HASH_ADD(hh, proxy_registry, obj_offset, sizeof(jsoff_t), data);
+  HASH_ADD(hh, proxy_registry, obj_offset, sizeof(ant_offset_t), data);
   return proxy_obj;
 }
 
-static jsval_t create_proxy_checked(ant_t *js, jsval_t *args, int nargs, bool require_new) {
+static ant_value_t create_proxy_checked(ant_t *js, ant_value_t *args, int nargs, bool require_new) {
   if (require_new && vtype(js->new_target) == T_UNDEF) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Proxy constructor requires 'new'");
   }
   if (nargs < 2) return js_mkerr(js, "Proxy requires two arguments: target and handler");
 
-  jsval_t target = args[0];
-  jsval_t handler = args[1];
+  ant_value_t target = args[0];
+  ant_value_t handler = args[1];
 
   uint8_t target_type = vtype(target);
   if (target_type != T_OBJ && target_type != T_FUNC && target_type != T_ARR) {
@@ -11847,17 +11847,17 @@ static jsval_t create_proxy_checked(ant_t *js, jsval_t *args, int nargs, bool re
   return mkproxy(js, target, handler);
 }
 
-static jsval_t builtin_Proxy(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_Proxy(ant_t *js, ant_value_t *args, int nargs) {
   return create_proxy_checked(js, args, nargs, true);
 }
 
-static jsval_t proxy_revoke_fn(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t proxy_revoke_fn(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
-  jsval_t func = js->current_func;
-  jsval_t ref_slot = get_slot(js, func, SLOT_PROXY_REF);
+  ant_value_t func = js->current_func;
+  ant_value_t ref_slot = get_slot(js, func, SLOT_PROXY_REF);
   
   if (vtype(ref_slot) != T_UNDEF && vdata(ref_slot) != 0) {
-    jsval_t proxy = resolveprop(js, mkval(T_PROP, (jsoff_t)vdata(ref_slot)));
+    ant_value_t proxy = resolveprop(js, mkval(T_PROP, (ant_offset_t)vdata(ref_slot)));
     proxy_data_t *data = get_proxy_data(proxy);
     if (data) data->revoked = true;
   }
@@ -11865,17 +11865,17 @@ static jsval_t proxy_revoke_fn(ant_t *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t builtin_Proxy_revocable(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t proxy = create_proxy_checked(js, args, nargs, false);
+static ant_value_t builtin_Proxy_revocable(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t proxy = create_proxy_checked(js, args, nargs, false);
   if (is_err(proxy)) return proxy;
   
-  jsval_t revoke_obj = mkobj(js, 0);
+  ant_value_t revoke_obj = mkobj(js, 0);
   set_slot(js, revoke_obj, SLOT_CFUNC, js_mkfun(proxy_revoke_fn));
   set_slot(js, revoke_obj, SLOT_PROXY_REF, proxy);
   
-  jsval_t revoke_func = js_obj_to_func(revoke_obj);
+  ant_value_t revoke_func = js_obj_to_func(revoke_obj);
   
-  jsval_t result = mkobj(js, 0);
+  ant_value_t result = mkobj(js, 0);
   js_setprop(js, result, js_mkstr(js, "proxy", 5), proxy);
   js_setprop(js, result, js_mkstr(js, "revoke", 6), revoke_func);
   
@@ -11896,7 +11896,7 @@ ant_t *js_create(void *buf, size_t len) {
   
   js = (ant_t *) buf;
   js->mem = (uint8_t *) (js + 1);
-  js->size = (jsoff_t) (len - sizeof(*js));
+  js->size = (ant_offset_t) (len - sizeof(*js));
   js->brk = NANBOX_HEAP_OFFSET;
   js->global = mkobj(js, 0);
   js->size = js->size / 8U * 8U;
@@ -11904,8 +11904,8 @@ ant_t *js_create(void *buf, size_t len) {
   js->new_target = js_mkundef();
   js->length_str = ANT_STRING("length");
 
-  jsval_t glob = js->global;
-  jsval_t object_proto = js_mkobj(js);
+  ant_value_t glob = js->global;
+  ant_value_t object_proto = js_mkobj(js);
   set_proto(js, object_proto, js_mknull());
   
   js_setprop(js, object_proto, js_mkstr(js, "toString", 8), js_mkfun(builtin_object_toString));
@@ -11926,21 +11926,21 @@ ant_t *js_create(void *buf, size_t len) {
   js_setprop(js, object_proto, js_mkstr(js, "propertyIsEnumerable", 20), js_mkfun(builtin_object_propertyIsEnumerable));
   js_set_descriptor(js, object_proto, "propertyIsEnumerable", 20, JS_DESC_W | JS_DESC_C);
   
-  jsval_t proto_getter = js_mkfun(builtin_proto_getter);
-  jsval_t proto_setter = js_mkfun(builtin_proto_setter);
+  ant_value_t proto_getter = js_mkfun(builtin_proto_getter);
+  ant_value_t proto_setter = js_mkfun(builtin_proto_setter);
   js_set_accessor_desc(js, object_proto, STR_PROTO, STR_PROTO_LEN, proto_getter, proto_setter, JS_DESC_C);
   
-  jsval_t function_proto_obj = js_mkobj(js);
+  ant_value_t function_proto_obj = js_mkobj(js);
   set_proto(js, function_proto_obj, object_proto);
   set_slot(js, function_proto_obj, SLOT_CFUNC, js_mkfun(builtin_function_empty));
   js_setprop(js, function_proto_obj, ANT_STRING("call"), js_mkfun(builtin_function_call));
   js_setprop(js, function_proto_obj, ANT_STRING("apply"), js_mkfun(builtin_function_apply));
   js_setprop(js, function_proto_obj, ANT_STRING("bind"), js_mkfun(builtin_function_bind));
   js_setprop(js, function_proto_obj, ANT_STRING("toString"), js_mkfun(builtin_function_toString));
-  jsval_t function_proto = js_obj_to_func(function_proto_obj);
+  ant_value_t function_proto = js_obj_to_func(function_proto_obj);
   set_slot(js, glob, SLOT_FUNC_PROTO, function_proto);
   
-  jsval_t array_proto = js_mkobj(js);
+  ant_value_t array_proto = js_mkobj(js);
   set_proto(js, array_proto, object_proto);
   js_setprop(js, array_proto, js_mkstr(js, "push", 4), js_mkfun(builtin_array_push));
   js_setprop(js, array_proto, js_mkstr(js, "pop", 3), js_mkfun(builtin_array_pop));
@@ -11981,7 +11981,7 @@ ant_t *js_create(void *buf, size_t len) {
   js_setprop(js, array_proto, js_mkstr(js, "toString", 8), js_mkfun(builtin_array_toString));
   js_setprop(js, array_proto, js_mkstr(js, "toLocaleString", 14), js_mkfun(builtin_array_toLocaleString));
   
-  jsval_t string_proto = js_mkobj(js);
+  ant_value_t string_proto = js_mkobj(js);
   set_proto(js, string_proto, object_proto);
   js_setprop(js, string_proto, js_mkstr(js, "indexOf", 7), js_mkfun(builtin_string_indexOf));
   js_setprop(js, string_proto, js_mkstr(js, "substring", 9), js_mkfun(builtin_string_substring));
@@ -12015,7 +12015,7 @@ ant_t *js_create(void *buf, size_t len) {
   js_setprop(js, string_proto, js_mkstr(js, "valueOf", 7), js_mkfun(builtin_string_valueOf));
   js_setprop(js, string_proto, js_mkstr(js, "toString", 8), js_mkfun(builtin_string_toString));
 
-  jsval_t number_proto = js_mkobj(js);
+  ant_value_t number_proto = js_mkobj(js);
   set_proto(js, number_proto, object_proto);
   js_setprop(js, number_proto, js_mkstr(js, "toString", 8), js_mkfun(builtin_number_toString));
   js_setprop(js, number_proto, js_mkstr(js, "toFixed", 7), js_mkfun(builtin_number_toFixed));
@@ -12024,41 +12024,41 @@ ant_t *js_create(void *buf, size_t len) {
   js_setprop(js, number_proto, js_mkstr(js, "valueOf", 7), js_mkfun(builtin_number_valueOf));
   js_setprop(js, number_proto, js_mkstr(js, "toLocaleString", 14), js_mkfun(builtin_number_toLocaleString));
   
-  jsval_t boolean_proto = js_mkobj(js);
+  ant_value_t boolean_proto = js_mkobj(js);
   set_proto(js, boolean_proto, object_proto);
   js_setprop(js, boolean_proto, js_mkstr(js, "valueOf", 7), js_mkfun(builtin_boolean_valueOf));
   js_setprop(js, boolean_proto, js_mkstr(js, "toString", 8), js_mkfun(builtin_boolean_toString));
   
-  jsval_t bigint_proto = js_mkobj(js);
+  ant_value_t bigint_proto = js_mkobj(js);
   set_proto(js, bigint_proto, object_proto);
   js_setprop(js, bigint_proto, js_mkstr(js, "toString", 8), js_mkfun(builtin_bigint_toString));
   
-  jsval_t error_proto = js_mkobj(js);
+  ant_value_t error_proto = js_mkobj(js);
   set_proto(js, error_proto, object_proto);
   js_setprop(js, error_proto, ANT_STRING("name"), ANT_STRING("Error"));
   js_setprop(js, error_proto, ANT_STRING("message"), js_mkstr(js, "", 0));
   js_setprop(js, error_proto, js_mkstr(js, "toString", 8), js_mkfun(builtin_Error_toString));
   
-  jsval_t err_ctor_obj = mkobj(js, 0);
+  ant_value_t err_ctor_obj = mkobj(js, 0);
   set_proto(js, err_ctor_obj, function_proto);
   set_slot(js, err_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_Error));
   js_setprop_nonconfigurable(js, err_ctor_obj, "prototype", 9, error_proto);
   js_setprop(js, err_ctor_obj, ANT_STRING("name"), ANT_STRING("Error"));
-  jsval_t err_ctor_func = js_obj_to_func(err_ctor_obj);
+  ant_value_t err_ctor_func = js_obj_to_func(err_ctor_obj);
   js_setprop(js, glob, ANT_STRING("Error"), err_ctor_func);
   js_setprop(js, error_proto, js_mkstr(js, "constructor", 11), err_ctor_func);
   js_set_descriptor(js, error_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
   
   #define REGISTER_ERROR_SUBTYPE(name_str) do { \
-    jsval_t proto = js_mkobj(js); \
+    ant_value_t proto = js_mkobj(js); \
     set_proto(js, proto, error_proto); \
     js_setprop(js, proto, ANT_STRING("name"), ANT_STRING(name_str)); \
-    jsval_t ctor = mkobj(js, 0); \
+    ant_value_t ctor = mkobj(js, 0); \
     set_proto(js, ctor, function_proto); \
     set_slot(js, ctor, SLOT_CFUNC, js_mkfun(builtin_Error)); \
     js_setprop_nonconfigurable(js, ctor, "prototype", 9, proto); \
     js_setprop(js, ctor, ANT_STRING("name"), ANT_STRING(name_str)); \
-    jsval_t ctor_func = js_obj_to_func(ctor); \
+    ant_value_t ctor_func = js_obj_to_func(ctor); \
     js_setprop(js, proto, ANT_STRING("constructor"), ctor_func); \
     js_set_descriptor(js, proto, "constructor", 11, JS_DESC_W | JS_DESC_C); \
     js_setprop(js, glob, ANT_STRING(name_str), ctor_func); \
@@ -12074,10 +12074,10 @@ ant_t *js_create(void *buf, size_t len) {
   
   #undef REGISTER_ERROR_SUBTYPE
   
-  jsval_t proto = js_mkobj(js);
+  ant_value_t proto = js_mkobj(js);
   set_proto(js, proto, error_proto);
   js_setprop(js, proto, ANT_STRING("name"), ANT_STRING("AggregateError"));
-  jsval_t ctor = mkobj(js, 0);
+  ant_value_t ctor = mkobj(js, 0);
   set_proto(js, ctor, function_proto);
   set_slot(js, ctor, SLOT_CFUNC, js_mkfun(builtin_AggregateError));
   js_setprop_nonconfigurable(js, ctor, "prototype", 9, proto);
@@ -12086,14 +12086,14 @@ ant_t *js_create(void *buf, size_t len) {
   js_set_descriptor(js, proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
   js_setprop(js, glob, ANT_STRING("AggregateError"), js_obj_to_func(ctor));
   
-  jsval_t promise_proto = js_mkobj(js);
+  ant_value_t promise_proto = js_mkobj(js);
   set_proto(js, promise_proto, object_proto);
   js_setprop(js, promise_proto, js_mkstr(js, "then", 4), js_mkfun(builtin_promise_then));
   js_setprop(js, promise_proto, js_mkstr(js, "catch", 5), js_mkfun(builtin_promise_catch));
   js_setprop(js, promise_proto, js_mkstr(js, "finally", 7), js_mkfun(builtin_promise_finally));
   // Symbol.toStringTag is set in init_symbol_module after symbols are initialized
   
-  jsval_t obj_func_obj = mkobj(js, 0);
+  ant_value_t obj_func_obj = mkobj(js, 0);
   set_proto(js, obj_func_obj, function_proto);
   set_slot(js, obj_func_obj, SLOT_BUILTIN, tov(BUILTIN_OBJECT));
   js_setprop(js, obj_func_obj, js_mkstr(js, "keys", 4), js_mkfun(builtin_object_keys));
@@ -12120,38 +12120,38 @@ ant_t *js_create(void *buf, size_t len) {
   js_setprop(js, obj_func_obj, js_mkstr(js, "preventExtensions", 17), js_mkfun(builtin_object_preventExtensions));
   js_setprop(js, obj_func_obj, ANT_STRING("name"), ANT_STRING("Object"));
   js_setprop_nonconfigurable(js, obj_func_obj, "prototype", 9, object_proto);
-  jsval_t obj_func = js_obj_to_func(obj_func_obj);
+  ant_value_t obj_func = js_obj_to_func(obj_func_obj);
   js_setprop(js, glob, js_mkstr(js, "Object", 6), obj_func);
   
-  jsval_t func_ctor_obj = mkobj(js, 0);
+  ant_value_t func_ctor_obj = mkobj(js, 0);
   set_proto(js, func_ctor_obj, function_proto);
   set_slot(js, func_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_Function));
   js_setprop_nonconfigurable(js, func_ctor_obj, "prototype", 9, function_proto);
   js_setprop(js, func_ctor_obj, js->length_str, tov(1.0));
   js_set_descriptor(js, func_ctor_obj, "length", 6, JS_DESC_C);
   js_setprop(js, func_ctor_obj, ANT_STRING("name"), ANT_STRING("Function"));
-  jsval_t func_ctor_func = js_obj_to_func(func_ctor_obj);
+  ant_value_t func_ctor_func = js_obj_to_func(func_ctor_obj);
   js_setprop(js, glob, js_mkstr(js, "Function", 8), func_ctor_func);
   
-  jsval_t async_func_proto_obj = js_mkobj(js);
+  ant_value_t async_func_proto_obj = js_mkobj(js);
   set_proto(js, async_func_proto_obj, function_proto);
   set_slot(js, async_func_proto_obj, SLOT_ASYNC, js_true);
-  jsval_t async_func_proto = js_obj_to_func(async_func_proto_obj);
+  ant_value_t async_func_proto = js_obj_to_func(async_func_proto_obj);
   set_slot(js, glob, SLOT_ASYNC_PROTO, async_func_proto);
   
-  jsval_t async_func_ctor_obj = mkobj(js, 0);
+  ant_value_t async_func_ctor_obj = mkobj(js, 0);
   set_proto(js, async_func_ctor_obj, function_proto);
   set_slot(js, async_func_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_AsyncFunction));
   js_setprop_nonconfigurable(js, async_func_ctor_obj, "prototype", 9, async_func_proto);
   js_setprop(js, async_func_ctor_obj, js->length_str, tov(1.0));
   js_set_descriptor(js, async_func_ctor_obj, "length", 6, JS_DESC_C);
   js_setprop(js, async_func_ctor_obj, ANT_STRING("name"), ANT_STRING("AsyncFunction"));
-  jsval_t async_func_ctor = js_obj_to_func(async_func_ctor_obj);
+  ant_value_t async_func_ctor = js_obj_to_func(async_func_ctor_obj);
   
   js_setprop(js, async_func_proto_obj, js_mkstr(js, "constructor", 11), async_func_ctor);
   js_set_descriptor(js, async_func_proto_obj, "constructor", 11, JS_DESC_W | JS_DESC_C);
   
-  jsval_t str_ctor_obj = mkobj(js, 0);
+  ant_value_t str_ctor_obj = mkobj(js, 0);
   set_proto(js, str_ctor_obj, function_proto);
   set_slot(js, str_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_String));
   js_setprop_nonconfigurable(js, str_ctor_obj, "prototype", 9, string_proto);
@@ -12159,10 +12159,10 @@ ant_t *js_create(void *buf, size_t len) {
   js_setprop(js, str_ctor_obj, js_mkstr(js, "fromCodePoint", 13), js_mkfun(builtin_string_fromCodePoint));
   js_setprop(js, str_ctor_obj, js_mkstr(js, "raw", 3), js_mkfun(builtin_string_raw));
   js_setprop(js, str_ctor_obj, ANT_STRING("name"), ANT_STRING("String"));
-  jsval_t str_ctor_func = js_obj_to_func(str_ctor_obj);
+  ant_value_t str_ctor_func = js_obj_to_func(str_ctor_obj);
   js_setprop(js, glob, js_mkstr(js, "String", 6), str_ctor_func);
   
-  jsval_t number_ctor_obj = mkobj(js, 0);
+  ant_value_t number_ctor_obj = mkobj(js, 0);
   set_proto(js, number_ctor_obj, function_proto);
   
   set_slot(js, number_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_Number));
@@ -12184,18 +12184,18 @@ ant_t *js_create(void *buf, size_t len) {
   
   js_setprop_nonconfigurable(js, number_ctor_obj, "prototype", 9, number_proto);
   js_setprop(js, number_ctor_obj, ANT_STRING("name"), ANT_STRING("Number"));
-  jsval_t number_ctor_func = js_obj_to_func(number_ctor_obj);
+  ant_value_t number_ctor_func = js_obj_to_func(number_ctor_obj);
   js_setprop(js, glob, js_mkstr(js, "Number", 6), number_ctor_func);
   
-  jsval_t bool_ctor_obj = mkobj(js, 0);
+  ant_value_t bool_ctor_obj = mkobj(js, 0);
   set_proto(js, bool_ctor_obj, function_proto);
   set_slot(js, bool_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_Boolean));
   js_setprop_nonconfigurable(js, bool_ctor_obj, "prototype", 9, boolean_proto);
   js_setprop(js, bool_ctor_obj, ANT_STRING("name"), ANT_STRING("Boolean"));
-  jsval_t bool_ctor_func = js_obj_to_func(bool_ctor_obj);
+  ant_value_t bool_ctor_func = js_obj_to_func(bool_ctor_obj);
   js_setprop(js, glob, js_mkstr(js, "Boolean", 7), bool_ctor_func);
   
-  jsval_t arr_ctor_obj = mkobj(js, 0);
+  ant_value_t arr_ctor_obj = mkobj(js, 0);
   set_proto(js, arr_ctor_obj, function_proto);
   set_slot(js, arr_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_Array));
   js_setprop_nonconfigurable(js, arr_ctor_obj, "prototype", 9, array_proto);
@@ -12205,17 +12205,17 @@ ant_t *js_create(void *buf, size_t len) {
   js_setprop(js, arr_ctor_obj, js->length_str, tov(1.0));
   js_set_descriptor(js, arr_ctor_obj, "length", 6, JS_DESC_C);
   js_setprop(js, arr_ctor_obj, ANT_STRING("name"), ANT_STRING("Array"));
-  jsval_t arr_ctor_func = js_obj_to_func(arr_ctor_obj);
+  ant_value_t arr_ctor_func = js_obj_to_func(arr_ctor_obj);
   js_setprop(js, glob, js_mkstr(js, "Array", 5), arr_ctor_func);
   
-  jsval_t proxy_ctor_obj = mkobj(js, 0);
+  ant_value_t proxy_ctor_obj = mkobj(js, 0);
   set_proto(js, proxy_ctor_obj, function_proto);
   set_slot(js, proxy_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_Proxy));
   js_setprop(js, proxy_ctor_obj, js_mkstr(js, "revocable", 9), js_mkfun(builtin_Proxy_revocable));
   js_setprop(js, proxy_ctor_obj, ANT_STRING("name"), ANT_STRING("Proxy"));
   js_setprop(js, glob, js_mkstr(js, "Proxy", 5), js_obj_to_func(proxy_ctor_obj));
   
-  jsval_t p_ctor_obj = mkobj(js, 0);
+  ant_value_t p_ctor_obj = mkobj(js, 0);
   set_proto(js, p_ctor_obj, function_proto);
   set_slot(js, p_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_Promise));
   js_setprop(js, p_ctor_obj, js_mkstr(js, "resolve", 7), js_mkfun(builtin_Promise_resolve));
@@ -12229,7 +12229,7 @@ ant_t *js_create(void *buf, size_t len) {
   js_setprop(js, p_ctor_obj, ANT_STRING("name"), ANT_STRING("Promise"));
   js_setprop(js, glob, js_mkstr(js, "Promise", 7), js_obj_to_func(p_ctor_obj));
   
-  jsval_t bigint_ctor_obj = mkobj(js, 0);
+  ant_value_t bigint_ctor_obj = mkobj(js, 0);
   set_proto(js, bigint_ctor_obj, function_proto);
   set_slot(js, bigint_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_BigInt));
   js_setprop(js, bigint_ctor_obj, js_mkstr(js, "asIntN", 6), js_mkfun(builtin_BigInt_asIntN));
@@ -12252,7 +12252,7 @@ ant_t *js_create(void *buf, size_t len) {
   js_setprop(js, glob, js_mkstr(js, "undefined", 9), js_mkundef());
   js_set_descriptor(js, glob, "undefined", 9, 0);
   
-  jsval_t math_obj = mkobj(js, 0);
+  ant_value_t math_obj = mkobj(js, 0);
   set_proto(js, math_obj, object_proto);
   js_setprop(js, math_obj, js_mkstr(js, "E", 1), tov(M_E));
   js_setprop(js, math_obj, js_mkstr(js, "LN10", 4), tov(M_LN10));
@@ -12299,7 +12299,7 @@ ant_t *js_create(void *buf, size_t len) {
   js_setprop(js, math_obj, js_mkstr(js, "trunc", 5), js_mkfun(builtin_Math_trunc));
   js_setprop(js, glob, js_mkstr(js, "Math", 4), math_obj);
   
-  jsval_t import_obj = mkobj(js, 0);
+  ant_value_t import_obj = mkobj(js, 0);
   set_proto(js, import_obj, function_proto);
   
   set_slot(js, import_obj, SLOT_CFUNC, js_mkfun(builtin_import));
@@ -12354,7 +12354,7 @@ ant_t *js_create_dynamic() {
   js->mem = arena;
   
   js->owns_mem = true;
-  js->max_size = (jsoff_t) ANT_ARENA_MAX;
+  js->max_size = (ant_offset_t) ANT_ARENA_MAX;
   
   ant_t *new_js = (ant_t *)malloc(sizeof(ant_t));
   if (new_js == NULL) {
@@ -12393,25 +12393,25 @@ void js_destroy(ant_t *js) {
   destroy_runtime(js);
 }
 
-inline double js_getnum(jsval_t value) { return tod(value); }
+inline double js_getnum(ant_value_t value) { return tod(value); }
 inline void js_setstackbase(ant_t *js, void *base) { js->cstk.base = base; js->cstk.main_base = base; }
 inline void js_setstacklimit(ant_t *js, size_t max) { js->cstk.limit = max; }
 inline void js_set_filename(ant_t *js, const char *filename) { js->filename = filename; }
 
-inline jsval_t js_mkundef(void) { return mkval(T_UNDEF, 0); }
-inline jsval_t js_mknull(void) { return mkval(T_NULL, 0); }
-inline jsval_t js_mknum(double value) { return tov(value); }
-inline jsval_t js_mkobj(ant_t *js) { return mkobj(js, 0); }
-inline jsval_t js_glob(ant_t *js) { return js->global; }
-inline jsval_t js_mkfun(jsval_t (*fn)(ant_t *, jsval_t *, int)) { return mkval(T_CFUNC, (size_t) (void *) fn); }
+inline ant_value_t js_mkundef(void) { return mkval(T_UNDEF, 0); }
+inline ant_value_t js_mknull(void) { return mkval(T_NULL, 0); }
+inline ant_value_t js_mknum(double value) { return tov(value); }
+inline ant_value_t js_mkobj(ant_t *js) { return mkobj(js, 0); }
+inline ant_value_t js_glob(ant_t *js) { return js->global; }
+inline ant_value_t js_mkfun(ant_value_t (*fn)(ant_t *, ant_value_t *, int)) { return mkval(T_CFUNC, (size_t) (void *) fn); }
 
-inline jsval_t js_getthis(ant_t *js) { return js->this_val; }
-inline void js_setthis(ant_t *js, jsval_t val) { js->this_val = val; }
-inline jsval_t js_getcurrentfunc(ant_t *js) { return js->current_func; }
+inline ant_value_t js_getthis(ant_t *js) { return js->this_val; }
+inline void js_setthis(ant_t *js, ant_value_t val) { js->this_val = val; }
+inline ant_value_t js_getcurrentfunc(ant_t *js) { return js->current_func; }
 
-jsval_t js_heavy_mkfun(ant_t *js, jsval_t (*fn)(ant_t *, jsval_t *, int), jsval_t data) {
-  jsval_t cfunc = js_mkfun(fn);
-  jsval_t fn_obj = mkobj(js, 0);
+ant_value_t js_heavy_mkfun(ant_t *js, ant_value_t (*fn)(ant_t *, ant_value_t *, int), ant_value_t data) {
+  ant_value_t cfunc = js_mkfun(fn);
+  ant_value_t fn_obj = mkobj(js, 0);
   
   set_slot(js, fn_obj, SLOT_CFUNC, cfunc);
   set_slot(js, fn_obj, SLOT_DATA, data);
@@ -12419,61 +12419,61 @@ jsval_t js_heavy_mkfun(ant_t *js, jsval_t (*fn)(ant_t *, jsval_t *, int), jsval_
   return js_obj_to_func(fn_obj);
 }
 
-void js_set(ant_t *js, jsval_t obj, const char *key, jsval_t val) {
+void js_set(ant_t *js, ant_value_t obj, const char *key, ant_value_t val) {
   size_t key_len = strlen(key);
   
   if (vtype(obj) == T_OBJ) {
-    jsoff_t existing = lkp(js, obj, key, key_len);
+    ant_offset_t existing = lkp(js, obj, key, key_len);
     if (existing > 0) {
       if (is_const_prop(js, existing)) {
         js_mkerr(js, "assignment to constant");
         return;
       }
-      saveval(js, existing + sizeof(jsoff_t) * 2, val);
+      saveval(js, existing + sizeof(ant_offset_t) * 2, val);
     } else {
-      jsval_t key_str = js_mkstr(js, key, key_len);
+      ant_value_t key_str = js_mkstr(js, key, key_len);
       mkprop(js, obj, key_str, val, 0);
     }
   } else if (vtype(obj) == T_FUNC) {
-    jsval_t func_obj = js_func_obj(obj);
-    jsoff_t existing = lkp(js, func_obj, key, key_len);
+    ant_value_t func_obj = js_func_obj(obj);
+    ant_offset_t existing = lkp(js, func_obj, key, key_len);
     if (existing > 0) {
       if (is_const_prop(js, existing)) {
         js_mkerr(js, "assignment to constant");
         return;
       }
-      saveval(js, existing + sizeof(jsoff_t) * 2, val);
+      saveval(js, existing + sizeof(ant_offset_t) * 2, val);
     } else {
-      jsval_t key_str = js_mkstr(js, key, key_len);
+      ant_value_t key_str = js_mkstr(js, key, key_len);
       mkprop(js, func_obj, key_str, val, 0);
     }
   }
 }
 
-void js_set_sym(ant_t *js, jsval_t obj, jsval_t sym, jsval_t val) {
+void js_set_sym(ant_t *js, ant_value_t obj, ant_value_t sym, ant_value_t val) {
   if (vtype(sym) != T_SYMBOL) return;
-  jsoff_t sym_off = (jsoff_t)vdata(sym);
+  ant_offset_t sym_off = (ant_offset_t)vdata(sym);
   
   if (vtype(obj) == T_FUNC) obj = js_func_obj(obj);
   if (vtype(obj) != T_OBJ && vtype(obj) != T_ARR) return;
   
-  jsoff_t existing = lkp_sym(js, obj, sym_off);
+  ant_offset_t existing = lkp_sym(js, obj, sym_off);
   if (existing > 0) {
     if (is_const_prop(js, existing)) return;
-    saveval(js, existing + sizeof(jsoff_t) * 2, val);
+    saveval(js, existing + sizeof(ant_offset_t) * 2, val);
   } else mkprop(js, obj, sym, val, 0);
 }
 
-jsval_t js_get_sym(ant_t *js, jsval_t obj, jsval_t sym) {
+ant_value_t js_get_sym(ant_t *js, ant_value_t obj, ant_value_t sym) {
   if (vtype(sym) != T_SYMBOL) return js_mkundef();
-  jsoff_t sym_off = (jsoff_t)vdata(sym);
+  ant_offset_t sym_off = (ant_offset_t)vdata(sym);
   
-  jsval_t receiver = obj;
+  ant_value_t receiver = obj;
   if (vtype(obj) == T_FUNC) obj = js_func_obj(obj);
   uint8_t ot = vtype(obj);
   if (!is_object_type(obj)) {
     if (ot == T_STR || ot == T_NUM || ot == T_BOOL || ot == T_BIGINT || ot == T_SYMBOL) {
-      jsval_t proto = get_prototype_for_type(js, ot);
+      ant_value_t proto = get_prototype_for_type(js, ot);
       if (!is_object_type(proto)) return js_mkundef();
       obj = js_as_obj(proto);
     } else {
@@ -12485,39 +12485,39 @@ jsval_t js_get_sym(ant_t *js, jsval_t obj, jsval_t sym) {
   
   if (is_proxy(js, obj)) return proxy_get_val(js, obj, sym);
   
-  jsval_t cur = obj;
+  ant_value_t cur = obj;
   for (int i = 0; i < MAX_PROTO_CHAIN_DEPTH; i++) {
-    jsoff_t cur_off = (jsoff_t)vdata(cur);
+    ant_offset_t cur_off = (ant_offset_t)vdata(cur);
     descriptor_entry_t *sd = lookup_sym_descriptor(cur_off, sym_off);
     if (sd && sd->has_getter) {
-      jsval_t g = sd->getter;
+      ant_value_t g = sd->getter;
       if (vtype(g) == T_FUNC || vtype(g) == T_CFUNC)
         return sv_vm_call(js->vm, js, g, receiver, NULL, 0, NULL, false);
       return js_mkundef();
     }
-    jsval_t proto = get_proto(js, cur);
+    ant_value_t proto = get_proto(js, cur);
     if (!is_object_type(proto)) break;
     cur = js_as_obj(proto);
   }
   
-  jsoff_t off = lkp_sym_proto(js, obj, sym_off);
+  ant_offset_t off = lkp_sym_proto(js, obj, sym_off);
   if (off == 0) return js_mkundef();
   return resolveprop(js, mkval(T_PROP, off));
 }
 
-bool js_del(ant_t *js, jsval_t obj, const char *key) {
+bool js_del(ant_t *js, ant_value_t obj, const char *key) {
   size_t len = strlen(key);
-  jsoff_t obj_off;
+  ant_offset_t obj_off;
   
   if (vtype(obj) == T_OBJ) {
-    obj_off = (jsoff_t)vdata(obj);
+    obj_off = (ant_offset_t)vdata(obj);
   } else if (vtype(obj) == T_ARR || vtype(obj) == T_FUNC) {
-    obj_off = (jsoff_t)vdata(js_as_obj(obj));
+    obj_off = (ant_offset_t)vdata(js_as_obj(obj));
     if (vtype(obj) == T_ARR) {
       unsigned long del_idx;
-      jsoff_t arr_len = get_array_length(js, obj);
+      ant_offset_t arr_len = get_array_length(js, obj);
       if (parse_array_index(key, len, arr_len, &del_idx)) {
-        arr_del(js, obj, (jsoff_t)del_idx);
+        arr_del(js, obj, (ant_offset_t)del_idx);
         return true;
       }
     }
@@ -12526,22 +12526,22 @@ bool js_del(ant_t *js, jsval_t obj, const char *key) {
     return false;
   }
   
-  jsoff_t prop_off = lkp(js, obj, key, len);
+  ant_offset_t prop_off = lkp(js, obj, key, len);
   if (prop_off == 0) return true;
   if (is_nonconfig_prop(js, prop_off)) return false;
   
   descriptor_entry_t *desc = lookup_descriptor(js, obj_off, key, len);
   if (desc && !desc->configurable) return false;
   
-  jsoff_t first_prop = loadoff(js, obj_off) & ~(3U | FLAGMASK);
-  jsoff_t tail = loadoff(js, obj_off + sizeof(jsoff_t) + sizeof(jsoff_t));
+  ant_offset_t first_prop = loadoff(js, obj_off) & ~(3U | FLAGMASK);
+  ant_offset_t tail = loadoff(js, obj_off + sizeof(ant_offset_t) + sizeof(ant_offset_t));
   
   if (first_prop == prop_off) {
-    jsoff_t deleted_next = loadoff(js, prop_off) & ~FLAGMASK;
-    jsoff_t current = loadoff(js, obj_off);
+    ant_offset_t deleted_next = loadoff(js, prop_off) & ~FLAGMASK;
+    ant_offset_t current = loadoff(js, obj_off);
     
     saveoff(js, obj_off, (deleted_next & ~3ULL) | (current & (FLAGMASK | 3ULL)));
-    if (tail == prop_off) saveoff(js, obj_off + sizeof(jsoff_t) + sizeof(jsoff_t), 0);
+    if (tail == prop_off) saveoff(js, obj_off + sizeof(ant_offset_t) + sizeof(ant_offset_t), 0);
     
     invalidate_prop_cache(js, obj_off, prop_off);
     js->needs_gc = true;
@@ -12549,15 +12549,15 @@ bool js_del(ant_t *js, jsval_t obj, const char *key) {
     return true;
   }
   
-  jsoff_t prev = first_prop;
+  ant_offset_t prev = first_prop;
   while (prev != 0 && prev < js->brk) {
-    jsoff_t next = loadoff(js, prev) & ~(3U | FLAGMASK);
+    ant_offset_t next = loadoff(js, prev) & ~(3U | FLAGMASK);
     if (next == prop_off) {
-      jsoff_t deleted_next = loadoff(js, prop_off) & ~(3U | FLAGMASK);
-      jsoff_t prev_flags = loadoff(js, prev) & FLAGMASK;
+      ant_offset_t deleted_next = loadoff(js, prop_off) & ~(3U | FLAGMASK);
+      ant_offset_t prev_flags = loadoff(js, prev) & FLAGMASK;
       
       saveoff(js, prev, deleted_next | prev_flags);
-      if (tail == prop_off) saveoff(js, obj_off + sizeof(jsoff_t) + sizeof(jsoff_t), prev);
+      if (tail == prop_off) saveoff(js, obj_off + sizeof(ant_offset_t) + sizeof(ant_offset_t), prev);
       
       invalidate_prop_cache(js, obj_off, prop_off);
       js->needs_gc = true;
@@ -12570,7 +12570,7 @@ bool js_del(ant_t *js, jsval_t obj, const char *key) {
   return false;
 }
 
-static bool js_try_get(ant_t *js, jsval_t obj, const char *key, jsval_t *out) {
+static bool js_try_get(ant_t *js, ant_value_t obj, const char *key, ant_value_t *out) {
   size_t key_len = strlen(key);
   
   if (vtype(obj) == T_FUNC) {
@@ -12583,17 +12583,17 @@ static bool js_try_get(ant_t *js, jsval_t obj, const char *key, jsval_t *out) {
       return true;
     }
 
-    jsval_t func_obj = js_func_obj(obj);
+    ant_value_t func_obj = js_func_obj(obj);
     if (key_len == 4 && memcmp(key, "meta", 4) == 0 && vtype(js->import_meta) != T_UNDEF) {
-      jsval_t cfunc = js_get_slot(js, func_obj, SLOT_CFUNC);
+      ant_value_t cfunc = js_get_slot(js, func_obj, SLOT_CFUNC);
       if (vtype(cfunc) == T_CFUNC && js_as_cfunc(cfunc) == builtin_import) {
         *out = js->import_meta;
         return true;
       }
     }
-    jsoff_t off = lkp(js, func_obj, key, key_len);
+    ant_offset_t off = lkp(js, func_obj, key, key_len);
     if (off == 0) {
-      jsval_t accessor_result;
+      ant_value_t accessor_result;
       if (try_accessor_getter(js, obj, key, key_len, &accessor_result)) {
         *out = accessor_result;
         return true;
@@ -12601,9 +12601,9 @@ static bool js_try_get(ant_t *js, jsval_t obj, const char *key, jsval_t *out) {
       return false;
     }
 
-    descriptor_entry_t *desc = lookup_descriptor(js, (jsoff_t)vdata(func_obj), key, key_len);
+    descriptor_entry_t *desc = lookup_descriptor(js, (ant_offset_t)vdata(func_obj), key, key_len);
     if (desc && desc->has_getter) {
-      jsval_t accessor_result;
+      ant_value_t accessor_result;
       if (try_accessor_getter(js, obj, key, key_len, &accessor_result)) {
         *out = accessor_result;
         return true;
@@ -12629,26 +12629,26 @@ static bool js_try_get(ant_t *js, jsval_t obj, const char *key, jsval_t *out) {
       return true;
     }
     unsigned long idx;
-    jsoff_t arr_len = get_array_length(js, obj);
+    ant_offset_t arr_len = get_array_length(js, obj);
     if (parse_array_index(key, key_len, arr_len, &idx)) {
-      if (arr_has(js, obj, (jsoff_t)idx)) {
-        *out = arr_get(js, obj, (jsoff_t)idx);
+      if (arr_has(js, obj, (ant_offset_t)idx)) {
+        *out = arr_get(js, obj, (ant_offset_t)idx);
         return true;
       } return false;
     }
     
-    jsval_t arr_obj = js_as_obj(obj);
-    jsoff_t off = lkp(js, arr_obj, key, key_len);
+    ant_value_t arr_obj = js_as_obj(obj);
+    ant_offset_t off = lkp(js, arr_obj, key, key_len);
     if (off == 0) {
-      jsval_t accessor_result;
+      ant_value_t accessor_result;
       if (try_accessor_getter(js, arr_obj, key, key_len, &accessor_result)) {
         *out = accessor_result; return true;
       } return false;
     }
     
-    descriptor_entry_t *desc = lookup_descriptor(js, (jsoff_t)vdata(arr_obj), key, key_len);
+    descriptor_entry_t *desc = lookup_descriptor(js, (ant_offset_t)vdata(arr_obj), key, key_len);
     if (desc && desc->has_getter) {
-      jsval_t accessor_result;
+      ant_value_t accessor_result;
       if (try_accessor_getter(js, arr_obj, key, key_len, &accessor_result)) {
         *out = accessor_result; return true;
       }
@@ -12667,27 +12667,27 @@ static bool js_try_get(ant_t *js, jsval_t obj, const char *key, jsval_t *out) {
   
   if (t == T_STR || t == T_NUM || t == T_BOOL) {
     if (t == T_STR && key_len == 6 && memcmp(key, "length", 6) == 0) {
-      jsoff_t byte_len = 0; jsoff_t str_off = vstr(js, obj, &byte_len);
+      ant_offset_t byte_len = 0; ant_offset_t str_off = vstr(js, obj, &byte_len);
       const char *str_data = (const char *)&js->mem[str_off];
       *out = tov((double)utf16_strlen(str_data, byte_len));
       return true;
     }
-    jsval_t boxed = mkobj(js, 0);
+    ant_value_t boxed = mkobj(js, 0);
     js_set_slot(js, js_as_obj(boxed), SLOT_PRIMITIVE, obj);
     obj = boxed; t = T_OBJ;
   }
   
   if (is_promise) obj = js_as_obj(obj);
   else if (t != T_OBJ) return false;
-  jsoff_t off = lkp(js, obj, key, key_len);
+  ant_offset_t off = lkp(js, obj, key, key_len);
   
   if (off == 0) {
-    jsval_t result = try_dynamic_getter(js, obj, key, key_len);
+    ant_value_t result = try_dynamic_getter(js, obj, key, key_len);
     if (vtype(result) != T_UNDEF) { *out = result; return true; }
   }
   
   if (off == 0 && is_promise) {
-    jsval_t promise_proto = get_ctor_proto(js, "Promise", 7);
+    ant_value_t promise_proto = get_ctor_proto(js, "Promise", 7);
     if (vtype(promise_proto) != T_UNDEF && vtype(promise_proto) != T_NULL) {
       off = lkp(js, promise_proto, key, key_len);
       if (off != 0) { *out = resolveprop(js, mkval(T_PROP, off)); return true; }
@@ -12695,16 +12695,16 @@ static bool js_try_get(ant_t *js, jsval_t obj, const char *key, jsval_t *out) {
   }
   
   if (off == 0) {
-    jsval_t accessor_result;
+    ant_value_t accessor_result;
     if (try_accessor_getter(js, obj, key, key_len, &accessor_result)) {
       *out = accessor_result; return true;
     }
     return false;
   }
   
-  descriptor_entry_t *desc = lookup_descriptor(js, (jsoff_t)vdata(js_as_obj(obj)), key, key_len);
+  descriptor_entry_t *desc = lookup_descriptor(js, (ant_offset_t)vdata(js_as_obj(obj)), key, key_len);
   if (desc && desc->has_getter) {
-    jsval_t accessor_result;
+    ant_value_t accessor_result;
     if (try_accessor_getter(js, obj, key, key_len, &accessor_result)) {
       *out = accessor_result; return true;
     }
@@ -12714,25 +12714,25 @@ static bool js_try_get(ant_t *js, jsval_t obj, const char *key, jsval_t *out) {
   return true;
 }
 
-jsval_t js_get(ant_t *js, jsval_t obj, const char *key) {
-  jsval_t val;
+ant_value_t js_get(ant_t *js, ant_value_t obj, const char *key) {
+  ant_value_t val;
   if (js_try_get(js, obj, key, &val)) return val;
   return js_mkundef();
 }
 
-jsval_t js_getprop_proto(ant_t *js, jsval_t obj, const char *key) {
+ant_value_t js_getprop_proto(ant_t *js, ant_value_t obj, const char *key) {
   size_t key_len = strlen(key);
-  jsoff_t off = lkp_proto(js, obj, key, key_len);
+  ant_offset_t off = lkp_proto(js, obj, key, key_len);
   return off == 0 ? js_mkundef() : resolveprop(js, mkval(T_PROP, off));
 }
 
-jsval_t js_getprop_fallback(ant_t *js, jsval_t obj, const char *name) {
-  jsval_t val;
+ant_value_t js_getprop_fallback(ant_t *js, ant_value_t obj, const char *name) {
+  ant_value_t val;
   if (js_try_get(js, obj, name, &val)) return val;
   return js_getprop_proto(js, obj, name);
 }
 
-jsval_t js_getprop_super(ant_t *js, jsval_t super_obj, jsval_t receiver, const char *name) {
+ant_value_t js_getprop_super(ant_t *js, ant_value_t super_obj, ant_value_t receiver, const char *name) {
   if (!name) return js_mkundef();
 
   if (vtype(super_obj) == T_FUNC) super_obj = js_func_obj(super_obj);
@@ -12744,13 +12744,13 @@ jsval_t js_getprop_super(ant_t *js, jsval_t super_obj, jsval_t receiver, const c
   const char *key_intern = intern_string(name, key_len);
   if (!key_intern) return js_mkundef();
 
-  jsval_t cur = js_as_obj(super_obj);
+  ant_value_t cur = js_as_obj(super_obj);
   for (int i = 0; i < MAX_PROTO_CHAIN_DEPTH; i++) {
-    jsoff_t cur_off = (jsoff_t)vdata(cur);
+    ant_offset_t cur_off = (ant_offset_t)vdata(cur);
     descriptor_entry_t *desc = lookup_descriptor(js, cur_off, name, key_len);
     if (desc) {
       if (desc->has_getter) {
-        jsval_t getter = desc->getter;
+        ant_value_t getter = desc->getter;
         if (vtype(getter) == T_FUNC || vtype(getter) == T_CFUNC)
           return sv_vm_call(js->vm, js, getter, receiver, NULL, 0, NULL, false);
         return js_mkundef();
@@ -12758,10 +12758,10 @@ jsval_t js_getprop_super(ant_t *js, jsval_t super_obj, jsval_t receiver, const c
       if (desc->has_setter) return js_mkundef();
     }
 
-    jsoff_t prop_off = lkp_interned(js, cur, key_intern, key_len);
+    ant_offset_t prop_off = lkp_interned(js, cur, key_intern, key_len);
     if (prop_off != 0) return resolveprop(js, mkval(T_PROP, prop_off));
 
-    jsval_t proto = get_proto(js, cur);
+    ant_value_t proto = get_proto(js, cur);
     if (!is_object_type(proto)) break;
     cur = js_as_obj(proto);
   }
@@ -12770,37 +12770,37 @@ jsval_t js_getprop_super(ant_t *js, jsval_t super_obj, jsval_t receiver, const c
 }
 
 typedef struct {
-  bool (*callback)(ant_t *js, jsval_t value, void *udata);
+  bool (*callback)(ant_t *js, ant_value_t value, void *udata);
   void *udata;
 } js_iter_ctx_t;
 
-static iter_action_t js_iter_cb(ant_t *js, jsval_t value, void *ctx, jsval_t *out) {
+static iter_action_t js_iter_cb(ant_t *js, ant_value_t value, void *ctx, ant_value_t *out) {
   js_iter_ctx_t *ictx = (js_iter_ctx_t *)ctx;
   return ictx->callback(js, value, ictx->udata) ? ITER_CONTINUE : ITER_BREAK;
 }
 
-bool js_iter(ant_t *js, jsval_t iterable, bool (*callback)(ant_t *js, jsval_t value, void *udata), void *udata) {
+bool js_iter(ant_t *js, ant_value_t iterable, bool (*callback)(ant_t *js, ant_value_t value, void *udata), void *udata) {
   js_iter_ctx_t ctx = { .callback = callback, .udata = udata };
-  jsval_t result = iter_foreach(js, iterable, js_iter_cb, &ctx);
+  ant_value_t result = iter_foreach(js, iterable, js_iter_cb, &ctx);
   return !is_err(result);
 }
 
-char *js_getstr(ant_t *js, jsval_t value, size_t *len) {
+char *js_getstr(ant_t *js, ant_value_t value, size_t *len) {
   if (vtype(value) != T_STR) return NULL;
-  jsoff_t n, off = vstr(js, value, &n);
+  ant_offset_t n, off = vstr(js, value, &n);
   if (len != NULL) *len = n;
   return (char *) &js->mem[off];
 }
 
-void js_merge_obj(ant_t *js, jsval_t dst, jsval_t src) {
+void js_merge_obj(ant_t *js, ant_value_t dst, ant_value_t src) {
   if (vtype(dst) != T_OBJ || vtype(src) != T_OBJ) return;
-  jsoff_t next = loadoff(js, (jsoff_t) vdata(src)) & ~(3U | FLAGMASK);
+  ant_offset_t next = loadoff(js, (ant_offset_t) vdata(src)) & ~(3U | FLAGMASK);
   while (next < js->brk && next != 0) {
-    jsoff_t header = loadoff(js, next);
+    ant_offset_t header = loadoff(js, next);
     if (is_slot_prop(header)) { next = next_prop(header); continue; }
     
-    jsoff_t koff = loadoff(js, next + (jsoff_t) sizeof(next));
-    jsval_t val = loadval(js, next + (jsoff_t) (sizeof(next) + sizeof(koff)));
+    ant_offset_t koff = loadoff(js, next + (ant_offset_t) sizeof(next));
+    ant_value_t val = loadval(js, next + (ant_offset_t) (sizeof(next) + sizeof(koff)));
     
     js_setprop(js, dst, mkval(T_STR, koff), val);
     next = next_prop(header);
@@ -12818,10 +12818,10 @@ for (typeof(registry) new_reg = NULL, *_once = NULL; !_once; _once = (void*)1, r
     HASH_ADD(hh, new_reg, key_field, key_size, entry); \
 }
 
-typedef jsoff_t (*gc_fwd_off_fn)(void *ctx, jsoff_t old);
-typedef jsval_t (*gc_fwd_val_fn)(void *ctx, jsval_t old);
-typedef void (*gc_off_op_t)(void *cb_ctx, jsoff_t *off);
-typedef void (*gc_val_op_t)(void *cb_ctx, jsval_t *val);
+typedef ant_offset_t (*gc_fwd_off_fn)(void *ctx, ant_offset_t old);
+typedef ant_value_t (*gc_fwd_val_fn)(void *ctx, ant_value_t old);
+typedef void (*gc_off_op_t)(void *cb_ctx, ant_offset_t *off);
+typedef void (*gc_val_op_t)(void *cb_ctx, ant_value_t *val);
 
 typedef struct {
   gc_fwd_off_fn fwd_off;
@@ -12831,27 +12831,27 @@ typedef struct {
   ant_t *js;
 } gc_cb_ctx_t;
 
-static inline void gc_reserve_off_cb(void *cb_ctx, jsoff_t *off) {
+static inline void gc_reserve_off_cb(void *cb_ctx, ant_offset_t *off) {
   gc_cb_ctx_t *c = cb_ctx;
   if (*off) (void)c->fwd_off(c->ctx, *off);
 }
 
-static inline void gc_reserve_val_cb(void *cb_ctx, jsval_t *val) {
+static inline void gc_reserve_val_cb(void *cb_ctx, ant_value_t *val) {
   gc_cb_ctx_t *c = cb_ctx;
   (void)c->fwd_val(c->ctx, *val);
 }
 
-static inline void gc_update_off_cb(void *cb_ctx, jsoff_t *off) {
+static inline void gc_update_off_cb(void *cb_ctx, ant_offset_t *off) {
   gc_cb_ctx_t *c = cb_ctx;
   if (*off) *off = c->fwd_off(c->ctx, *off);
 }
 
-static inline void gc_update_val_cb(void *cb_ctx, jsval_t *val) {
+static inline void gc_update_val_cb(void *cb_ctx, ant_value_t *val) {
   gc_cb_ctx_t *c = cb_ctx;
   *val = c->fwd_val(c->ctx, *val);
 }
 
-static inline jsoff_t gc_weak_off_cb(void *cb_ctx, jsoff_t old) {
+static inline ant_offset_t gc_weak_off_cb(void *cb_ctx, ant_offset_t old) {
   gc_cb_ctx_t *c = cb_ctx;
   return c->weak_off(c->ctx, old);
 }
@@ -12905,7 +12905,7 @@ static void gc_roots_common(gc_off_op_t op_off, gc_val_op_t op_val, gc_cb_ctx_t 
   sv_vm_gc_roots(c->js->vm, op_val, c);
   sv_vm_gc_roots_pending(op_val, c);
 
-  for (jshdl_t i = 0; i < c->js->gc_roots_len; i++) op_val(c, &c->js->gc_roots[i]);
+  for (ant_handle_t i = 0; i < c->js->gc_roots_len; i++) op_val(c, &c->js->gc_roots[i]);
 }
 
 void js_gc_reserve_roots(GC_RESERVE_ARGS) {
@@ -12978,9 +12978,9 @@ void js_gc_update_roots(GC_UPDATE_ARGS) {
       );
       
       if (in_unhandled) HASH_DELETE(hh_unhandled, unhandled_rejections, pd);
-      jsoff_t new_off = weak_off(ctx, pd->obj_offset);
+      ant_offset_t new_off = weak_off(ctx, pd->obj_offset);
       
-      if (new_off == (jsoff_t)~0 && !pd->processing) { 
+      if (new_off == (ant_offset_t)~0 && !pd->processing) { 
         utarray_free(pd->handlers); 
         free(pd); continue; 
       }
@@ -13012,35 +13012,35 @@ void js_gc_update_roots(GC_UPDATE_ARGS) {
   for (proxy_data_t *new_proxy_registry = NULL, *_once = NULL; !_once; _once = (void*)1, proxy_registry = new_proxy_registry)
     HASH_ITER(hh, proxy_registry, proxy, proxy_tmp) {
       HASH_DEL(proxy_registry, proxy);
-      jsoff_t new_off = weak_off(ctx, proxy->obj_offset);
-      if (new_off == (jsoff_t)~0) { free(proxy); continue; }
+      ant_offset_t new_off = weak_off(ctx, proxy->obj_offset);
+      if (new_off == (ant_offset_t)~0) { free(proxy); continue; }
       proxy->obj_offset = new_off;
       FWD_VAL(proxy->target); FWD_VAL(proxy->handler);
-      HASH_ADD(hh, new_proxy_registry, obj_offset, sizeof(jsoff_t), proxy);
+      HASH_ADD(hh, new_proxy_registry, obj_offset, sizeof(ant_offset_t), proxy);
     }
 
   dynamic_accessors_t *acc, *acc_tmp;
   for (dynamic_accessors_t *new_acc_registry = NULL, *_once = NULL; !_once; _once = (void*)1, accessor_registry = new_acc_registry)
     HASH_ITER(hh, accessor_registry, acc, acc_tmp) {
       HASH_DEL(accessor_registry, acc);
-      jsoff_t new_off = weak_off(ctx, acc->obj_offset);
-      if (new_off == (jsoff_t)~0) { free(acc); continue; }
+      ant_offset_t new_off = weak_off(ctx, acc->obj_offset);
+      if (new_off == (ant_offset_t)~0) { free(acc); continue; }
       acc->obj_offset = new_off;
-      HASH_ADD(hh, new_acc_registry, obj_offset, sizeof(jsoff_t), acc);
+      HASH_ADD(hh, new_acc_registry, obj_offset, sizeof(ant_offset_t), acc);
     }
 
   descriptor_entry_t *desc, *desc_tmp;
   for (descriptor_entry_t *new_desc_registry = NULL, *_once = NULL; !_once; _once = (void*)1, desc_registry = new_desc_registry)
     HASH_ITER(hh, desc_registry, desc, desc_tmp) {
       HASH_DEL(desc_registry, desc);
-      jsoff_t new_off = weak_off(ctx, (jsoff_t)(desc->key >> 32));
-      if (new_off == (jsoff_t)~0) { free(desc); continue; }
+      ant_offset_t new_off = weak_off(ctx, (ant_offset_t)(desc->key >> 32));
+      if (new_off == (ant_offset_t)~0) { free(desc); continue; }
       if (desc->has_getter) FWD_VAL(desc->getter);
       if (desc->has_setter) FWD_VAL(desc->setter);
       if (desc->prop_name) {
         desc->key = ((uint64_t)new_off << 32) | (uint32_t)(desc->key & 0xFFFFFFFF);
       } else {
-        jsoff_t new_sym = fwd_off(ctx, desc->sym_off);
+        ant_offset_t new_sym = fwd_off(ctx, desc->sym_off);
         desc->sym_off = new_sym;
         desc->key = make_sym_desc_key(new_off, new_sym);
       }
@@ -13059,7 +13059,7 @@ void js_gc_update_roots(GC_UPDATE_ARGS) {
 #undef UTARRAY_EACH
 #undef REHASH_REGISTRY
 
-bool js_chkargs(jsval_t *args, int nargs, const char *spec) {
+bool js_chkargs(ant_value_t *args, int nargs, const char *spec) {
   int i = 0, ok = 1;
   for (; ok && i < nargs && spec[i]; i++) {
     uint8_t t = vtype(args[i]), c = (uint8_t) spec[i];
@@ -13070,25 +13070,25 @@ bool js_chkargs(jsval_t *args, int nargs, const char *spec) {
   return ok;
 }
 
-static jsval_t js_eval_bytecode_mode(ant_t *js, const char *buf, size_t len, sv_compile_mode_t mode, bool parse_strict) {
+static ant_value_t js_eval_bytecode_mode(ant_t *js, const char *buf, size_t len, sv_compile_mode_t mode, bool parse_strict) {
   if (len == (size_t)~0U) len = strlen(buf);
-  sv_ast_t *program = sv_parse(js, buf, (jsoff_t)len, parse_strict);
+  sv_ast_t *program = sv_parse(js, buf, (ant_offset_t)len, parse_strict);
 
   if (!program) {
     if (js->thrown_exists) return mkval(T_ERR, 0);
     return js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "Unexpected parse error");
   }
 
-  sv_func_t *func = sv_compile(js, program, mode, buf, (jsoff_t)len);
+  sv_func_t *func = sv_compile(js, program, mode, buf, (ant_offset_t)len);
   if (!func) {
     if (js->thrown_exists) return mkval(T_ERR, 0);
     return js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "Unexpected compile error");
   }
   
   js_clear_error_site(js);   
-  jsval_t result;
+  ant_value_t result;
   // TODO: this-newtarget-frame-migration
-  jsval_t saved_this = js->this_val;
+  ant_value_t saved_this = js->this_val;
 
   if (sv_dump_bytecode_unlikely) sv_disasm(js, func, js->filename);
   if (func->is_tla) result = sv_execute_entry_tla(js, func, js->this_val);
@@ -13098,68 +13098,68 @@ static jsval_t js_eval_bytecode_mode(ant_t *js, const char *buf, size_t len, sv_
   return result;
 }
 
-jsval_t js_eval_bytecode(ant_t *js, const char *buf, size_t len) {
+ant_value_t js_eval_bytecode(ant_t *js, const char *buf, size_t len) {
   return js_eval_bytecode_mode(js, buf, len, SV_COMPILE_SCRIPT, false);
 }
 
-jsval_t js_eval_bytecode_module(ant_t *js, const char *buf, size_t len) {
+ant_value_t js_eval_bytecode_module(ant_t *js, const char *buf, size_t len) {
   return js_eval_bytecode_mode(js, buf, len, SV_COMPILE_MODULE, false);
 }
 
-jsval_t js_eval_bytecode_eval(ant_t *js, const char *buf, size_t len) {
+ant_value_t js_eval_bytecode_eval(ant_t *js, const char *buf, size_t len) {
   return js_eval_bytecode_mode(js, buf, len, SV_COMPILE_EVAL, false);
 }
 
-jsval_t js_eval_bytecode_eval_with_strict(ant_t *js, const char *buf, size_t len, bool inherit_strict) {
+ant_value_t js_eval_bytecode_eval_with_strict(ant_t *js, const char *buf, size_t len, bool inherit_strict) {
   return js_eval_bytecode_mode(js, buf, len, SV_COMPILE_EVAL, inherit_strict);
 }
 
-jsval_t js_eval_bytecode_repl(ant_t *js, const char *buf, size_t len) {
+ant_value_t js_eval_bytecode_repl(ant_t *js, const char *buf, size_t len) {
   return js_eval_bytecode_mode(js, buf, len, SV_COMPILE_REPL, false);
 }
 
-jsval_t sv_call_native(
-  ant_t *js, jsval_t func, jsval_t this_val,
-  jsval_t *args, int nargs
+ant_value_t sv_call_native(
+  ant_t *js, ant_value_t func, ant_value_t this_val,
+  ant_value_t *args, int nargs
 ) {
   if (vtype(func) == T_FFI)
     return ffi_call_by_index(js, (unsigned int)vdata(func), args, nargs);
 
   if (vtype(func) == T_CFUNC) {
-    jsval_t saved_this = js->this_val;
+    ant_value_t saved_this = js->this_val;
     js->this_val = this_val;
-    jsval_t (*fn)(ant_t *, jsval_t *, int) = (jsval_t(*)(ant_t *, jsval_t *, int))vdata(func);
-    jsval_t res = fn(js, args, nargs);
+    ant_value_t (*fn)(ant_t *, ant_value_t *, int) = (ant_value_t(*)(ant_t *, ant_value_t *, int))vdata(func);
+    ant_value_t res = fn(js, args, nargs);
     js->this_val = saved_this;
     return res;
   }
 
   if (vtype(func) == T_FUNC) {
-    jsval_t func_obj = js_func_obj(func);
+    ant_value_t func_obj = js_func_obj(func);
 
-    jsval_t cfunc_slot = get_slot(js, func_obj, SLOT_CFUNC);
+    ant_value_t cfunc_slot = get_slot(js, func_obj, SLOT_CFUNC);
     if (vtype(cfunc_slot) == T_CFUNC) {
-      jsval_t slot_bound_this = get_slot(js, func_obj, SLOT_BOUND_THIS);
+      ant_value_t slot_bound_this = get_slot(js, func_obj, SLOT_BOUND_THIS);
       int final_nargs;
-      jsval_t *combined = resolve_bound_args(js, func_obj, args, nargs, &final_nargs);
-      jsval_t *final_args = combined ? combined : args;
-      jsval_t saved_func = js->current_func;
-      jsval_t saved_this = js->this_val;
+      ant_value_t *combined = resolve_bound_args(js, func_obj, args, nargs, &final_nargs);
+      ant_value_t *final_args = combined ? combined : args;
+      ant_value_t saved_func = js->current_func;
+      ant_value_t saved_this = js->this_val;
       js->current_func = func;
       js->this_val = (vtype(slot_bound_this) != T_UNDEF) ? slot_bound_this : this_val;
-      jsval_t (*fn)(ant_t *, jsval_t *, int) = (jsval_t(*)(ant_t *, jsval_t *, int))vdata(cfunc_slot);
-      jsval_t res = fn(js, final_args, final_nargs);
+      ant_value_t (*fn)(ant_t *, ant_value_t *, int) = (ant_value_t(*)(ant_t *, ant_value_t *, int))vdata(cfunc_slot);
+      ant_value_t res = fn(js, final_args, final_nargs);
       js->current_func = saved_func;
       js->this_val = saved_this;
       if (combined) free(combined);
       return res;
     }
 
-    jsval_t builtin_slot = get_slot(js, func_obj, SLOT_BUILTIN);
+    ant_value_t builtin_slot = get_slot(js, func_obj, SLOT_BUILTIN);
     if (vtype(builtin_slot) == T_NUM && (int)tod(builtin_slot) == BUILTIN_OBJECT) {
-      jsval_t saved_this = js->this_val;
+      ant_value_t saved_this = js->this_val;
       js->this_val = this_val;
-      jsval_t res = builtin_Object(js, args, nargs);
+      ant_value_t res = builtin_Object(js, args, nargs);
       js->this_val = saved_this;
       return res;
     }
@@ -13168,25 +13168,25 @@ jsval_t sv_call_native(
   return js_mkerr_typed(js, JS_ERR_TYPE, "%s is not a function", typestr(vtype(func)));
 }
 
-ant_iter_t js_prop_iter_begin(ant_t *js, jsval_t obj) {
+ant_iter_t js_prop_iter_begin(ant_t *js, ant_value_t obj) {
   ant_iter_t iter = {.ctx = js, .off = 0};
   
   uint8_t t = vtype(obj);
   if (t == T_OBJ || t == T_ARR || t == T_FUNC) {
-    iter.off = (jsoff_t)vdata(js_as_obj(obj));
+    iter.off = (ant_offset_t)vdata(js_as_obj(obj));
   }
   
   return iter;
 }
 
-bool js_prop_iter_next(ant_iter_t *iter, const char **key, size_t *key_len, jsval_t *value) {
+bool js_prop_iter_next(ant_iter_t *iter, const char **key, size_t *key_len, ant_value_t *value) {
   if (!iter || !iter->ctx) return false;
   
   ant_t *js = (ant_t *)iter->ctx;
-  jsoff_t next = loadoff(js, iter->off) & ~(3U | FLAGMASK);
+  ant_offset_t next = loadoff(js, iter->off) & ~(3U | FLAGMASK);
   
   while (next < js->brk && next != 0) {
-    jsoff_t header = loadoff(js, next);
+    ant_offset_t header = loadoff(js, next);
     if (!is_slot_prop(header) && !is_sym_key_prop(js, next)) break;
     next = next_prop(header);
   }
@@ -13194,12 +13194,12 @@ bool js_prop_iter_next(ant_iter_t *iter, const char **key, size_t *key_len, jsva
   if (next >= js->brk || next == 0) return false;
   iter->off = next;
   
-  jsoff_t koff = loadoff(js, next + (jsoff_t)sizeof(jsoff_t));
-  jsval_t val = loadval(js, next + (jsoff_t)(sizeof(jsoff_t) * 2));
+  ant_offset_t koff = loadoff(js, next + (ant_offset_t)sizeof(ant_offset_t));
+  ant_value_t val = loadval(js, next + (ant_offset_t)(sizeof(ant_offset_t) * 2));
   
   if (key) {
-    jsoff_t klen = offtolen(loadoff(js, koff));
-    *key = (const char *)&js->mem[koff + sizeof(jsoff_t)];
+    ant_offset_t klen = offtolen(loadoff(js, koff));
+    *key = (const char *)&js->mem[koff + sizeof(ant_offset_t)];
     if (key_len) *key_len = klen;
   }
   if (value) *value = val;
@@ -13211,9 +13211,9 @@ void js_prop_iter_end(ant_iter_t *iter) {
   if (iter) { iter->off = 0; iter->ctx = NULL; }
 }
 
-jsval_t js_mkpromise(ant_t *js) { return mkpromise(js); }
-void js_resolve_promise(ant_t *js, jsval_t promise, jsval_t value) { resolve_promise(js, promise, value); }
-void js_reject_promise(ant_t *js, jsval_t promise, jsval_t value) { reject_promise(js, promise, value); }
+ant_value_t js_mkpromise(ant_t *js) { return mkpromise(js); }
+void js_resolve_promise(ant_t *js, ant_value_t promise, ant_value_t value) { resolve_promise(js, promise, value); }
+void js_reject_promise(ant_t *js, ant_value_t promise, ant_value_t value) { reject_promise(js, promise, value); }
 
 void js_check_unhandled_rejections(ant_t *js) {
   promise_data_entry_t *pd, *tmp;
@@ -13244,74 +13244,74 @@ void js_check_unhandled_rejections(ant_t *js) {
   }
 }
 
-bool js_is_slot_prop(jsoff_t header) { return is_slot_prop(header); }
-jsoff_t js_next_prop(jsoff_t header) { return next_prop(header); }
-jsoff_t js_loadoff(ant_t *js, jsoff_t off) { return loadoff(js, off); }
+bool js_is_slot_prop(ant_offset_t header) { return is_slot_prop(header); }
+ant_offset_t js_next_prop(ant_offset_t header) { return next_prop(header); }
+ant_offset_t js_loadoff(ant_t *js, ant_offset_t off) { return loadoff(js, off); }
 
-void js_set_getter(ant_t *js, jsval_t obj, js_getter_fn getter) {
+void js_set_getter(ant_t *js, ant_value_t obj, js_getter_fn getter) {
   if (!is_object_type(obj)) return;
   if (vtype(obj) != T_OBJ) obj = js_as_obj(obj);
-  jsoff_t obj_off = (jsoff_t)vdata(obj);
+  ant_offset_t obj_off = (ant_offset_t)vdata(obj);
   dynamic_accessors_t *entry = NULL;
-  HASH_FIND(hh, accessor_registry, &obj_off, sizeof(jsoff_t), entry);
+  HASH_FIND(hh, accessor_registry, &obj_off, sizeof(ant_offset_t), entry);
   if (!entry) {
     entry = (dynamic_accessors_t *)malloc(sizeof(dynamic_accessors_t));
     if (!entry) return;
     entry->obj_offset = obj_off;
     entry->getter = NULL; entry->setter = NULL;
     entry->deleter = NULL; entry->keys = NULL;
-    HASH_ADD(hh, accessor_registry, obj_offset, sizeof(jsoff_t), entry);
+    HASH_ADD(hh, accessor_registry, obj_offset, sizeof(ant_offset_t), entry);
   }
   entry->getter = getter;
 }
 
-void js_set_setter(ant_t *js, jsval_t obj, js_setter_fn setter) {
+void js_set_setter(ant_t *js, ant_value_t obj, js_setter_fn setter) {
   if (!is_object_type(obj)) return;
   if (vtype(obj) != T_OBJ) obj = js_as_obj(obj);
-  jsoff_t obj_off = (jsoff_t)vdata(obj);
+  ant_offset_t obj_off = (ant_offset_t)vdata(obj);
   dynamic_accessors_t *entry = NULL;
-  HASH_FIND(hh, accessor_registry, &obj_off, sizeof(jsoff_t), entry);
+  HASH_FIND(hh, accessor_registry, &obj_off, sizeof(ant_offset_t), entry);
   if (!entry) {
     entry = (dynamic_accessors_t *)malloc(sizeof(dynamic_accessors_t));
     if (!entry) return;
     entry->obj_offset = obj_off;
     entry->getter = NULL; entry->setter = NULL;
     entry->deleter = NULL; entry->keys = NULL;
-    HASH_ADD(hh, accessor_registry, obj_offset, sizeof(jsoff_t), entry);
+    HASH_ADD(hh, accessor_registry, obj_offset, sizeof(ant_offset_t), entry);
   }
   entry->setter = setter;
 }
 
-void js_set_deleter(ant_t *js, jsval_t obj, js_deleter_fn deleter) {
+void js_set_deleter(ant_t *js, ant_value_t obj, js_deleter_fn deleter) {
   if (!is_object_type(obj)) return;
   if (vtype(obj) != T_OBJ) obj = js_as_obj(obj);
-  jsoff_t obj_off = (jsoff_t)vdata(obj);
+  ant_offset_t obj_off = (ant_offset_t)vdata(obj);
   dynamic_accessors_t *entry = NULL;
-  HASH_FIND(hh, accessor_registry, &obj_off, sizeof(jsoff_t), entry);
+  HASH_FIND(hh, accessor_registry, &obj_off, sizeof(ant_offset_t), entry);
   if (!entry) {
     entry = (dynamic_accessors_t *)malloc(sizeof(dynamic_accessors_t));
     if (!entry) return;
     entry->obj_offset = obj_off;
     entry->getter = NULL; entry->setter = NULL;
     entry->deleter = NULL; entry->keys = NULL;
-    HASH_ADD(hh, accessor_registry, obj_offset, sizeof(jsoff_t), entry);
+    HASH_ADD(hh, accessor_registry, obj_offset, sizeof(ant_offset_t), entry);
   }
   entry->deleter = deleter;
 }
 
-void js_set_keys(ant_t *js, jsval_t obj, js_keys_fn keys) {
+void js_set_keys(ant_t *js, ant_value_t obj, js_keys_fn keys) {
   if (!is_object_type(obj)) return;
   if (vtype(obj) != T_OBJ) obj = js_as_obj(obj);
-  jsoff_t obj_off = (jsoff_t)vdata(obj);
+  ant_offset_t obj_off = (ant_offset_t)vdata(obj);
   dynamic_accessors_t *entry = NULL;
-  HASH_FIND(hh, accessor_registry, &obj_off, sizeof(jsoff_t), entry);
+  HASH_FIND(hh, accessor_registry, &obj_off, sizeof(ant_offset_t), entry);
   if (!entry) {
     entry = (dynamic_accessors_t *)malloc(sizeof(dynamic_accessors_t));
     if (!entry) return;
     entry->obj_offset = obj_off;
     entry->getter = NULL; entry->setter = NULL;
     entry->deleter = NULL; entry->keys = NULL;
-    HASH_ADD(hh, accessor_registry, obj_offset, sizeof(jsoff_t), entry);
+    HASH_ADD(hh, accessor_registry, obj_offset, sizeof(ant_offset_t), entry);
   }
   entry->keys = keys;
 }

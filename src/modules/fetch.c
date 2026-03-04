@@ -25,7 +25,7 @@ typedef struct {
 
 typedef struct fetch_request_s {
   ant_t *js;
-  jsval_t promise;
+  ant_value_t promise;
   tlsuv_http_t http_client;
   tlsuv_http_req_t *http_req;
   fetch_buffer_t response_buffer;
@@ -33,7 +33,7 @@ typedef struct fetch_request_s {
   int completed;
   int failed;
   char *error_msg;
-  jsval_t headers_obj;
+  ant_value_t headers_obj;
   char *method;
   char *body;
   size_t body_len;
@@ -64,29 +64,29 @@ static void remove_pending_request(fetch_request_t *req) {
   }
 }
 
-static jsval_t fetch_fail_oom(ant_t *js, jsval_t promise, fetch_request_t *req, bool close_http, const char *msg, size_t len) {
-  jsval_t err = js_mkstr(js, msg, len);
+static ant_value_t fetch_fail_oom(ant_t *js, ant_value_t promise, fetch_request_t *req, bool close_http, const char *msg, size_t len) {
+  ant_value_t err = js_mkstr(js, msg, len);
   js_reject_promise(js, promise, err);
   if (close_http) tlsuv_http_close(&req->http_client, NULL);
   remove_pending_request(req); free_fetch_request(req);
   return js_mkundef();
 }
 
-static jsval_t response_text(ant_t *js, jsval_t *args, int nargs) {  
-  jsval_t this = js_getthis(js);
-  jsval_t body = js_get_slot(js, this, SLOT_DATA);
+static ant_value_t response_text(ant_t *js, ant_value_t *args, int nargs) {  
+  ant_value_t this = js_getthis(js);
+  ant_value_t body = js_get_slot(js, this, SLOT_DATA);
   
-  jsval_t promise = js_mkpromise(js);
+  ant_value_t promise = js_mkpromise(js);
   js_resolve_promise(js, promise, body);
   
   return promise;
 }
 
-static jsval_t response_json(ant_t *js, jsval_t *args, int nargs) {  
-  jsval_t this = js_getthis(js);
-  jsval_t body = js_get_slot(js, this, SLOT_DATA);
-  jsval_t parsed = js_json_parse(js, &body, 1);
-  jsval_t promise = js_mkpromise(js);
+static ant_value_t response_json(ant_t *js, ant_value_t *args, int nargs) {  
+  ant_value_t this = js_getthis(js);
+  ant_value_t body = js_get_slot(js, this, SLOT_DATA);
+  ant_value_t parsed = js_json_parse(js, &body, 1);
+  ant_value_t promise = js_mkpromise(js);
   
   if (vtype(parsed) == T_ERR) {
     js_reject_promise(js, promise, parsed);
@@ -95,9 +95,9 @@ static jsval_t response_json(ant_t *js, jsval_t *args, int nargs) {
   return promise;
 }
 
-static jsval_t create_response(ant_t *js, int status, const char *body, size_t body_len) {
-  jsval_t response_obj = js_mkobj(js);
-  jsval_t body_str = js_mkstr(js, body, body_len);
+static ant_value_t create_response(ant_t *js, int status, const char *body, size_t body_len) {
+  ant_value_t response_obj = js_mkobj(js);
+  ant_value_t body_str = js_mkstr(js, body, body_len);
 
   js_set(js, response_obj, "ok", js_bool(status >= 200 && status < 300));
   js_set(js, response_obj, "status", js_mknum(status));
@@ -112,12 +112,12 @@ static jsval_t create_response(ant_t *js, int status, const char *body, size_t b
 
 static void complete_request(fetch_request_t *req) {
   if (req->failed) {
-    jsval_t err = js_mkstr(req->js, req->error_msg ? req->error_msg : "Unknown error", req->error_msg ? strlen(req->error_msg) : 13);
+    ant_value_t err = js_mkstr(req->js, req->error_msg ? req->error_msg : "Unknown error", req->error_msg ? strlen(req->error_msg) : 13);
     js_reject_promise(req->js, req->promise, err);
   } else {
     const char *body = req->response_buffer.data ? req->response_buffer.data : "";
     size_t body_len = req->response_buffer.data ? req->response_buffer.size : 0;
-    jsval_t response = create_response(req->js, req->status_code, body, body_len);
+    ant_value_t response = create_response(req->js, req->status_code, body, body_len);
     js_resolve_promise(req->js, req->promise, response);
   }
   
@@ -184,25 +184,25 @@ static void resp_cb(tlsuv_http_resp_t *resp, void *data) {
   resp->body_cb = body_cb;
 }
 
-static jsval_t do_fetch_microtask(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t do_fetch_microtask(ant_t *js, ant_value_t *args, int nargs) {
   (void)args;
   (void)nargs;
   
-  jsval_t current_func = js_getcurrentfunc(js);
-  jsval_t url_val = js_get(js, current_func, "url");
-  jsval_t options_val = js_get(js, current_func, "options");
-  jsval_t promise = js_get_slot(js, current_func, SLOT_DATA);
+  ant_value_t current_func = js_getcurrentfunc(js);
+  ant_value_t url_val = js_get(js, current_func, "url");
+  ant_value_t options_val = js_get(js, current_func, "options");
+  ant_value_t promise = js_get_slot(js, current_func, SLOT_DATA);
   
   char *url_str = js_getstr(js, url_val, NULL);
   if (!url_str) {
-    jsval_t err = js_mkstr(js, "Invalid URL", 11);
+    ant_value_t err = js_mkstr(js, "Invalid URL", 11);
     js_reject_promise(js, promise, err);
     return js_mkundef();
   }
   
   fetch_request_t *req = calloc(1, sizeof(fetch_request_t));
   if (!req) {
-    jsval_t err = js_mkstr(js, "Out of memory", 13);
+    ant_value_t err = js_mkstr(js, "Out of memory", 13);
     js_reject_promise(js, promise, err);
     return js_mkundef();
   }
@@ -216,7 +216,7 @@ static jsval_t do_fetch_microtask(ant_t *js, jsval_t *args, int nargs) {
   req->response_buffer.size = 0;
   
   if (!req->response_buffer.data) {
-    jsval_t err = js_mkstr(js, "Out of memory", 13);
+    ant_value_t err = js_mkstr(js, "Out of memory", 13);
     js_reject_promise(js, promise, err);
     free(req);
     return js_mkundef();
@@ -254,7 +254,7 @@ static jsval_t do_fetch_microtask(ant_t *js, jsval_t *args, int nargs) {
   req->body_len = 0;
   
   if (is_special_object(options_val)) {
-    jsval_t method_val = js_get(js, options_val, "method");
+    ant_value_t method_val = js_get(js, options_val, "method");
     if (vtype(method_val) == T_STR) {
       char *str = js_getstr(js, method_val, NULL);
       if (str) {
@@ -263,7 +263,7 @@ static jsval_t do_fetch_microtask(ant_t *js, jsval_t *args, int nargs) {
       }
     }
     
-    jsval_t body_val = js_get(js, options_val, "body");
+    ant_value_t body_val = js_get(js, options_val, "body");
     if (vtype(body_val) == T_STR) {
       size_t len;
       char *str = js_getstr(js, body_val, &len);
@@ -290,12 +290,12 @@ static jsval_t do_fetch_microtask(ant_t *js, jsval_t *args, int nargs) {
   tlsuv_http_req_header(req->http_req, "User-Agent", user_agent);
   
   if (is_special_object(options_val)) {
-    jsval_t headers_val = js_get(js, options_val, "headers");
+    ant_value_t headers_val = js_get(js, options_val, "headers");
     if (is_special_object(headers_val)) {
       ant_iter_t iter = js_prop_iter_begin(js, headers_val);
       const char *key;
       size_t key_len;
-      jsval_t value;
+      ant_value_t value;
       
       while (js_prop_iter_next(&iter, &key, &key_len, &value)) {
         char *value_str = js_getstr(js, value, NULL);
@@ -315,15 +315,15 @@ static jsval_t do_fetch_microtask(ant_t *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t js_fetch(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_fetch(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "fetch requires at least 1 argument");
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "fetch URL must be a string");
   
-  jsval_t url_val = args[0];
-  jsval_t options_val = nargs > 1 ? args[1] : js_mkundef();
+  ant_value_t url_val = args[0];
+  ant_value_t options_val = nargs > 1 ? args[1] : js_mkundef();
   
-  jsval_t promise = js_mkpromise(js);
-  jsval_t wrapper_obj = js_mkobj(js);
+  ant_value_t promise = js_mkpromise(js);
+  ant_value_t wrapper_obj = js_mkobj(js);
   
   js_set_slot(js, wrapper_obj, SLOT_DATA, promise);
   js_set_slot(js, wrapper_obj, SLOT_CFUNC, js_mkfun(do_fetch_microtask));

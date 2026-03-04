@@ -5,15 +5,15 @@
 #include "internal.h" // IWYU pragma: keep
 
 void init_symbol_module(void);
-void js_define_species_getter(ant_t *js, jsval_t ctor);
+void js_define_species_getter(ant_t *js, ant_value_t ctor);
 void symbol_gc_update_roots(GC_OP_VAL_ARGS);
 
-jsval_t sym_lookup_by_id(uint32_t id);
-void sym_gc_update_all(void (*op_val)(void *, jsval_t *), void *ctx);
+ant_value_t sym_lookup_by_id(uint32_t id);
+void sym_gc_update_all(void (*op_val)(void *, ant_value_t *), void *ctx);
 
-jsval_t maybe_call_symbol_method(
-  ant_t *js, jsval_t target, jsval_t sym,
-  jsval_t this_arg, jsval_t *args,
+ant_value_t maybe_call_symbol_method(
+  ant_t *js, ant_value_t target, ant_value_t sym,
+  ant_value_t this_arg, ant_value_t *args,
   int nargs, bool *called
 );
 
@@ -32,11 +32,11 @@ jsval_t maybe_call_symbol_method(
   X(species,             "Symbol.species")             \
   X(unscopables,         "Symbol.unscopables")
 
-#define DECL_GET_SYM(name, _desc) jsval_t get_##name##_sym(void);
+#define DECL_GET_SYM(name, _desc) ant_value_t get_##name##_sym(void);
 WELLKNOWN_SYMBOLS(DECL_GET_SYM)
 #undef DECL_GET_SYM
 
-static inline jsval_t sym_this_cb(ant_t *js, jsval_t *args, int nargs) {
+static inline ant_value_t sym_this_cb(ant_t *js, ant_value_t *args, int nargs) {
   return js->this_val;
 }
 

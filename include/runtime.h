@@ -10,7 +10,7 @@ struct arg_file;
 struct ant_runtime {
   ant_t *js;
   char **argv;
-  jsval_t ant_obj;
+  ant_value_t ant_obj;
   int argc;
   int pid;
   unsigned int flags;

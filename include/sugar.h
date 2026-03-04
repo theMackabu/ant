@@ -38,16 +38,16 @@ typedef enum {
 typedef struct coroutine {
   ant_t *js;
   
-  jsval_t this_val;
-  jsval_t super_val;
-  jsval_t new_target;
-  jsval_t result;
-  jsval_t async_func;
-  jsval_t yield_value;
-  jsval_t *args;
+  ant_value_t this_val;
+  ant_value_t super_val;
+  ant_value_t new_target;
+  ant_value_t result;
+  ant_value_t async_func;
+  ant_value_t yield_value;
+  ant_value_t *args;
   
-  jsval_t awaited_promise;
-  jsval_t async_promise;
+  ant_value_t awaited_promise;
+  ant_value_t async_promise;
   
   struct coroutine *prev;
   struct coroutine *next;
@@ -55,7 +55,7 @@ typedef struct coroutine {
   mco_coro *mco;
   struct sv_vm *sv_vm;
   
-  jsoff_t resume_point;
+  ant_offset_t resume_point;
   coroutine_type_t type;
   
   int nargs;
@@ -78,9 +78,9 @@ void enqueue_coroutine(coroutine_t *coro);
 void remove_coroutine(coroutine_t *coro);
 void free_coroutine(coroutine_t *coro);
 
-jsval_t start_async_in_coroutine(ant_t *js, const char *code, size_t code_len, jsval_t closure_scope, jsval_t *args, int nargs);
-jsval_t resume_coroutine_wrapper(ant_t *js, jsval_t *args, int nargs);
-jsval_t reject_coroutine_wrapper(ant_t *js, jsval_t *args, int nargs);
+ant_value_t start_async_in_coroutine(ant_t *js, const char *code, size_t code_len, ant_value_t closure_scope, ant_value_t *args, int nargs);
+ant_value_t resume_coroutine_wrapper(ant_t *js, ant_value_t *args, int nargs);
+ant_value_t reject_coroutine_wrapper(ant_t *js, ant_value_t *args, int nargs);
 
 bool has_ready_coroutines(void);
 bool has_pending_coroutines(void);

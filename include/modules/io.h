@@ -8,7 +8,7 @@
 extern bool io_no_color;
 
 typedef struct {
-  jsoff_t *visited;
+  ant_offset_t *visited;
   int count;
   int capacity;
 } inspect_visited_t;
@@ -30,23 +30,23 @@ typedef struct {
 
 void init_console_module(void);
 void print_value_colored(const char *str, FILE *stream);
-void print_repl_value(ant_t *js, jsval_t val, FILE *stream);
+void print_repl_value(ant_t *js, ant_value_t val, FILE *stream);
 bool print_uncaught_throw(ant_t *js);
 
 void inspect_object(
-  ant_t *js, jsval_t obj,
+  ant_t *js, ant_value_t obj,
   FILE *stream, int depth, 
   inspect_visited_t *visited
 );
 
 void inspect_value(
-  ant_t *js, jsval_t val,
+  ant_t *js, ant_value_t val,
   FILE *stream, int depth,
   inspect_visited_t *visited
 );
 
-jsval_t console_print(
-  ant_t *js, jsval_t *args,
+ant_value_t console_print(
+  ant_t *js, ant_value_t *args,
   int nargs, const char *color, FILE *stream
 );
 

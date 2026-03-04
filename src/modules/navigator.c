@@ -35,8 +35,8 @@ typedef struct lock_request {
   ant_t *js;
   char *name;
   lock_mode_t mode;
-  jsval_t callback;
-  jsval_t promise;
+  ant_value_t callback;
+  ant_value_t promise;
   struct lock_request *next;
 } lock_request_t;
 
@@ -118,10 +118,10 @@ static void release_lock(const char *name) {
 
 static void process_pending_requests(ant_t *js);
 
-static jsval_t make_lock_handler(ant_t *js, jsval_t cfunc, jsval_t lock_name, jsval_t outer_promise) {
-  jsval_t fn_obj = js_mkobj(js);
+static ant_value_t make_lock_handler(ant_t *js, ant_value_t cfunc, ant_value_t lock_name, ant_value_t outer_promise) {
+  ant_value_t fn_obj = js_mkobj(js);
   
-  jsval_t data_obj = js_mkobj(js);
+  ant_value_t data_obj = js_mkobj(js);
   js_set(js, data_obj, "lockName", lock_name);
   js_set(js, data_obj, "outerPromise", outer_promise);
   js_set_slot(js, fn_obj, SLOT_DATA, data_obj);
@@ -130,13 +130,13 @@ static jsval_t make_lock_handler(ant_t *js, jsval_t cfunc, jsval_t lock_name, js
   return js_obj_to_func(fn_obj);
 }
 
-static jsval_t lock_then_handler(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t current_func = js_getcurrentfunc(js);
-  jsval_t data_obj = js_get_slot(js, current_func, SLOT_DATA);
+static ant_value_t lock_then_handler(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t current_func = js_getcurrentfunc(js);
+  ant_value_t data_obj = js_get_slot(js, current_func, SLOT_DATA);
   
-  jsval_t lock_name_val = js_get(js, data_obj, "lockName");
-  jsval_t outer_promise = js_get(js, data_obj, "outerPromise");
-  jsval_t result_val = (nargs > 0) ? args[0] : js_mkundef();
+  ant_value_t lock_name_val = js_get(js, data_obj, "lockName");
+  ant_value_t outer_promise = js_get(js, data_obj, "outerPromise");
+  ant_value_t result_val = (nargs > 0) ? args[0] : js_mkundef();
   
   size_t name_len;
   char *name = js_getstr(js, lock_name_val, &name_len);
@@ -148,13 +148,13 @@ static jsval_t lock_then_handler(ant_t *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t lock_catch_handler(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t current_func = js_getcurrentfunc(js);
-  jsval_t data_obj = js_get_slot(js, current_func, SLOT_DATA);
+static ant_value_t lock_catch_handler(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t current_func = js_getcurrentfunc(js);
+  ant_value_t data_obj = js_get_slot(js, current_func, SLOT_DATA);
   
-  jsval_t lock_name_val = js_get(js, data_obj, "lockName");
-  jsval_t outer_promise = js_get(js, data_obj, "outerPromise");
-  jsval_t error_val = (nargs > 0) ? args[0] : js_mkundef();
+  ant_value_t lock_name_val = js_get(js, data_obj, "lockName");
+  ant_value_t outer_promise = js_get(js, data_obj, "outerPromise");
+  ant_value_t error_val = (nargs > 0) ? args[0] : js_mkundef();
   
   size_t name_len;
   char *name = js_getstr(js, lock_name_val, &name_len);
@@ -167,13 +167,13 @@ static jsval_t lock_catch_handler(ant_t *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static void execute_lock_callback(ant_t *js, const char *name, lock_mode_t mode, jsval_t callback, jsval_t outer_promise) {
-  jsval_t lock_obj = js_mkobj(js);
+static void execute_lock_callback(ant_t *js, const char *name, lock_mode_t mode, ant_value_t callback, ant_value_t outer_promise) {
+  ant_value_t lock_obj = js_mkobj(js);
   js_set(js, lock_obj, "name", js_mkstr(js, name, strlen(name)));
   js_set(js, lock_obj, "mode", js_mkstr(js, mode == LOCK_MODE_EXCLUSIVE ? "exclusive" : "shared", mode == LOCK_MODE_EXCLUSIVE ? 9 : 6));
   js_set_sym(js, lock_obj, get_toStringTag_sym(), js_mkstr(js, "Lock", 4));
   
-  jsval_t result = sv_vm_call(js->vm, js, callback, js_mkundef(), &lock_obj, 1, NULL, false);
+  ant_value_t result = sv_vm_call(js->vm, js, callback, js_mkundef(), &lock_obj, 1, NULL, false);
   
   if (vtype(result) == T_ERR) {
     release_lock(name);
@@ -183,16 +183,16 @@ static void execute_lock_callback(ant_t *js, const char *name, lock_mode_t mode,
   }
   
   if (vtype(result) == T_PROMISE) {
-    jsval_t then_fn = js_get(js, result, "then");
+    ant_value_t then_fn = js_get(js, result, "then");
     int fn_type = vtype(then_fn);
     
     if (fn_type == T_FUNC || fn_type == T_CFUNC) {
-      jsval_t name_str = js_mkstr(js, name, strlen(name));
+      ant_value_t name_str = js_mkstr(js, name, strlen(name));
       
-      jsval_t on_resolve = make_lock_handler(js, js_mkfun(lock_then_handler), name_str, outer_promise);
-      jsval_t on_reject = make_lock_handler(js, js_mkfun(lock_catch_handler), name_str, outer_promise);
+      ant_value_t on_resolve = make_lock_handler(js, js_mkfun(lock_then_handler), name_str, outer_promise);
+      ant_value_t on_reject = make_lock_handler(js, js_mkfun(lock_catch_handler), name_str, outer_promise);
       
-      jsval_t then_args[2] = { on_resolve, on_reject };
+      ant_value_t then_args[2] = { on_resolve, on_reject };
       sv_vm_call(js->vm, js, then_fn, result, then_args, 2, NULL, false);
       return;
     }
@@ -237,7 +237,7 @@ static void process_pending_requests(ant_t *js) {
   }
 }
 
-static jsval_t locks_request(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t locks_request(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "locks.request requires at least 2 arguments");
   }
@@ -248,8 +248,8 @@ static jsval_t locks_request(ant_t *js, jsval_t *args, int nargs) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "First argument must be a string");
   }
   
-  jsval_t options = js_mkundef();
-  jsval_t callback;
+  ant_value_t options = js_mkundef();
+  ant_value_t callback;
   lock_mode_t mode = LOCK_MODE_EXCLUSIVE;
   bool if_available = false;
   
@@ -260,7 +260,7 @@ static jsval_t locks_request(ant_t *js, jsval_t *args, int nargs) {
     callback = args[2];
     
     if (is_special_object(options)) {
-      jsval_t mode_val = js_get(js, options, "mode");
+      ant_value_t mode_val = js_get(js, options, "mode");
       if (vtype(mode_val) == T_STR) {
         size_t mode_len;
         char *mode_str = js_getstr(js, mode_val, &mode_len);
@@ -275,17 +275,17 @@ static jsval_t locks_request(ant_t *js, jsval_t *args, int nargs) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Callback must be a function");
   }
   
-  jsval_t promise = js_mkpromise(js);
+  ant_value_t promise = js_mkpromise(js);
   
   if (if_available && !can_acquire_lock(name, mode)) {
-    jsval_t null_val = js_mknull();
-    jsval_t result = sv_vm_call(js->vm, js, callback, js_mkundef(), &null_val, 1, NULL, false);
+    ant_value_t null_val = js_mknull();
+    ant_value_t result = sv_vm_call(js->vm, js, callback, js_mkundef(), &null_val, 1, NULL, false);
     
     if (vtype(result) == T_PROMISE) {
-      jsval_t then_fn = js_get(js, result, "then");
+      ant_value_t then_fn = js_get(js, result, "then");
       int fn_type = vtype(then_fn);
       if (fn_type == T_FUNC || fn_type == T_CFUNC) {
-        jsval_t on_resolve = make_lock_handler(
+        ant_value_t on_resolve = make_lock_handler(
           js, js_mkfun(lock_then_handler), 
           js_mkstr(js, "", 0), promise
         );
@@ -328,17 +328,17 @@ static jsval_t locks_request(ant_t *js, jsval_t *args, int nargs) {
   return promise;
 }
 
-static jsval_t locks_query(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t locks_query(ant_t *js, ant_value_t *args, int nargs) {
   (void)args;
   (void)nargs;
   
-  jsval_t result = js_mkobj(js);
-  jsval_t held_arr = js_mkarr(js);
-  jsval_t pending_arr = js_mkarr(js);
+  ant_value_t result = js_mkobj(js);
+  ant_value_t held_arr = js_mkarr(js);
+  ant_value_t pending_arr = js_mkarr(js);
   
   lock_entry_t *entry, *tmp;
   HASH_ITER(hh, locks, entry, tmp) {
-    jsval_t lock_info = js_mkobj(js);
+    ant_value_t lock_info = js_mkobj(js);
     js_set(js, lock_info, "name", js_mkstr(js, entry->name, strlen(entry->name)));
     js_set(js, lock_info, "mode", js_mkstr(js, entry->mode == LOCK_MODE_EXCLUSIVE ? "exclusive" : "shared", entry->mode == LOCK_MODE_EXCLUSIVE ? 9 : 6));
     js_arr_push(js, held_arr, lock_info);
@@ -346,7 +346,7 @@ static jsval_t locks_query(ant_t *js, jsval_t *args, int nargs) {
   
   lock_request_t *req = pending_requests;
   while (req) {
-    jsval_t req_info = js_mkobj(js);
+    ant_value_t req_info = js_mkobj(js);
     js_set(js, req_info, "name", js_mkstr(js, req->name, strlen(req->name)));
     js_set(js, req_info, "mode", js_mkstr(js, req->mode == LOCK_MODE_EXCLUSIVE ? "exclusive" : "shared", req->mode == LOCK_MODE_EXCLUSIVE ? 9 : 6));
     js_arr_push(js, pending_arr, req_info);
@@ -356,7 +356,7 @@ static jsval_t locks_query(ant_t *js, jsval_t *args, int nargs) {
   js_set(js, result, "held", held_arr);
   js_set(js, result, "pending", pending_arr);
   
-  jsval_t promise = js_mkpromise(js);
+  ant_value_t promise = js_mkpromise(js);
   js_resolve_promise(js, promise, result);
   
   return promise;
@@ -365,12 +365,12 @@ static jsval_t locks_query(ant_t *js, jsval_t *args, int nargs) {
 void init_navigator_module(void) {
   ant_t *js = rt->js;
   
-  jsval_t navigator_obj = js_mkobj(js);
+  ant_value_t navigator_obj = js_mkobj(js);
   
   js_set(js, navigator_obj, "hardwareConcurrency", js_mknum((double)get_hardware_concurrency()));
   js_set(js, navigator_obj, "language", js_mkstr(js, "en-US", 5));
   
-  jsval_t languages_arr = js_mkarr(js);
+  ant_value_t languages_arr = js_mkarr(js);
   js_arr_push(js, languages_arr, js_mkstr(js, "en-US", 5));
   js_set(js, navigator_obj, "languages", languages_arr);
   
@@ -381,7 +381,7 @@ void init_navigator_module(void) {
   snprintf(user_agent, sizeof(user_agent), "Ant/%s", ANT_VERSION);
   js_set(js, navigator_obj, "userAgent", js_mkstr(js, user_agent, strlen(user_agent)));
   
-  jsval_t locks_obj = js_mkobj(js);
+  ant_value_t locks_obj = js_mkobj(js);
   js_set(js, locks_obj, "request", js_mkfun(locks_request));
   js_set(js, locks_obj, "query", js_mkfun(locks_query));
   js_set_sym(js, locks_obj, get_toStringTag_sym(), js_mkstr(js, "LockManager", 11));

@@ -12,7 +12,7 @@
 #include "modules/symbol.h"
 
 // TextEncoder.prototype.encode(string)
-static jsval_t js_textencoder_encode(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_textencoder_encode(ant_t *js, ant_value_t *args, int nargs) {
   size_t str_len = 0;
   const char *str = "";
   
@@ -21,24 +21,24 @@ static jsval_t js_textencoder_encode(ant_t *js, jsval_t *args, int nargs) {
     if (!str) { str = ""; str_len = 0; }
   }
   
-  jsval_t glob = js_glob(js);
-  jsval_t uint8array_ctor = js_get(js, glob, "Uint8Array");
+  ant_value_t glob = js_glob(js);
+  ant_value_t uint8array_ctor = js_get(js, glob, "Uint8Array");
   
   if (vtype(uint8array_ctor) != T_FUNC && vtype(uint8array_ctor) != T_CFUNC) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Uint8Array constructor missing");
   }
   
-  jsval_t len_arg = js_mknum((double)str_len);
-  jsval_t saved_new_target = js->new_target;
+  ant_value_t len_arg = js_mknum((double)str_len);
+  ant_value_t saved_new_target = js->new_target;
   
   js->new_target = uint8array_ctor;
-  jsval_t arr = sv_vm_call(js->vm, js, uint8array_ctor, js_mkundef(), &len_arg, 1, NULL, true);
+  ant_value_t arr = sv_vm_call(js->vm, js, uint8array_ctor, js_mkundef(), &len_arg, 1, NULL, true);
   
   js->new_target = saved_new_target;
   if (vtype(arr) == T_ERR) return arr;
   
   if (str_len > 0) {
-    jsval_t ta_data_val = js_get_slot(js, arr, SLOT_BUFFER);
+    ant_value_t ta_data_val = js_get_slot(js, arr, SLOT_BUFFER);
     TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
     if (ta_data && ta_data->buffer && ta_data->buffer->data) memcpy(ta_data->buffer->data, str, str_len);
   }
@@ -47,7 +47,7 @@ static jsval_t js_textencoder_encode(ant_t *js, jsval_t *args, int nargs) {
 }
 
 // TextEncoder.prototype.encodeInto(string, uint8array)
-static jsval_t js_textencoder_encodeInto(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_textencoder_encodeInto(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) {
     return js_mkerr(js, "encodeInto requires string and Uint8Array arguments");
   }
@@ -63,7 +63,7 @@ static jsval_t js_textencoder_encodeInto(ant_t *js, jsval_t *args, int nargs) {
     }
   }
   
-  jsval_t ta_data_val = js_get_slot(js, args[1], SLOT_BUFFER);
+  ant_value_t ta_data_val = js_get_slot(js, args[1], SLOT_BUFFER);
   TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
   if (!ta_data) return js_mkerr(js, "Second argument must be a Uint8Array");
   
@@ -74,18 +74,18 @@ static jsval_t js_textencoder_encodeInto(ant_t *js, jsval_t *args, int nargs) {
     memcpy(ta_data->buffer->data + ta_data->byte_offset, str, to_write);
   }
   
-  jsval_t result = js_mkobj(js);
+  ant_value_t result = js_mkobj(js);
   js_set(js, result, "read", js_mknum((double)to_write));
   js_set(js, result, "written", js_mknum((double)to_write));
   
   return result;
 }
 
-static jsval_t js_textencoder_constructor(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_textencoder_constructor(ant_t *js, ant_value_t *args, int nargs) {
   (void)args;
   (void)nargs;
   
-  jsval_t obj = js_mkobj(js);
+  ant_value_t obj = js_mkobj(js);
   js_set(js, obj, "encoding", js_mkstr(js, "utf-8", 5));
   js_set(js, obj, "encode", js_mkfun(js_textencoder_encode));
   js_set(js, obj, "encodeInto", js_mkfun(js_textencoder_encodeInto));
@@ -95,12 +95,12 @@ static jsval_t js_textencoder_constructor(ant_t *js, jsval_t *args, int nargs) {
 }
 
 // TextDecoder.prototype.decode(bufferSource)
-static jsval_t js_textdecoder_decode(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_textdecoder_decode(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) {
     return js_mkstr(js, "", 0);
   }
   
-  jsval_t ta_data_val = js_get_slot(js, args[0], SLOT_BUFFER);
+  ant_value_t ta_data_val = js_get_slot(js, args[0], SLOT_BUFFER);
   TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
   if (ta_data) {
     if (!ta_data->buffer) return js_mkstr(js, "", 0);
@@ -109,7 +109,7 @@ static jsval_t js_textdecoder_decode(ant_t *js, jsval_t *args, int nargs) {
     return js_mkstr(js, (const char *)data, len);
   }
   
-  jsval_t ab_data_val = js_get_slot(js, args[0], SLOT_BUFFER);
+  ant_value_t ab_data_val = js_get_slot(js, args[0], SLOT_BUFFER);
   if (vtype(ab_data_val) == T_NUM) {
     ArrayBufferData *ab_data = (ArrayBufferData *)(uintptr_t)js_getnum(ab_data_val);
     if (!ab_data || !ab_data->data) return js_mkstr(js, "", 0);    
@@ -119,7 +119,7 @@ static jsval_t js_textdecoder_decode(ant_t *js, jsval_t *args, int nargs) {
   return js_mkstr(js, "", 0);
 }
 
-static jsval_t js_textdecoder_constructor(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_textdecoder_constructor(ant_t *js, ant_value_t *args, int nargs) {
   const char *encoding = "utf-8";
   size_t encoding_len = 5;
   
@@ -131,7 +131,7 @@ static jsval_t js_textdecoder_constructor(ant_t *js, jsval_t *args, int nargs) {
       ) { encoding = "utf-8"; encoding_len = 5; }
   }
   
-  jsval_t obj = js_mkobj(js);
+  ant_value_t obj = js_mkobj(js);
   js_set(js, obj, "encoding", js_mkstr(js, encoding, encoding_len));
   js_set(js, obj, "fatal", js_false);
   js_set(js, obj, "ignoreBOM", js_false);
@@ -143,10 +143,10 @@ static jsval_t js_textdecoder_constructor(ant_t *js, jsval_t *args, int nargs) {
 
 void init_textcodec_module(void) {
   ant_t *js = rt->js;
-  jsval_t glob = js_glob(js);
+  ant_value_t glob = js_glob(js);
   
-  jsval_t textencoder_constructor = js_mkfun(js_textencoder_constructor);
-  jsval_t textencoder_proto = js_mkobj(js);
+  ant_value_t textencoder_constructor = js_mkfun(js_textencoder_constructor);
+  ant_value_t textencoder_proto = js_mkobj(js);
   
   js_set(js, textencoder_proto, "encode", js_mkfun(js_textencoder_encode));
   js_set(js, textencoder_proto, "encodeInto", js_mkfun(js_textencoder_encodeInto));
@@ -154,8 +154,8 @@ void init_textcodec_module(void) {
   js_set(js, textencoder_constructor, "prototype", textencoder_proto);
   js_set(js, glob, "TextEncoder", textencoder_constructor);
   
-  jsval_t textdecoder_constructor = js_mkfun(js_textdecoder_constructor);
-  jsval_t textdecoder_proto = js_mkobj(js);
+  ant_value_t textdecoder_constructor = js_mkfun(js_textdecoder_constructor);
+  ant_value_t textdecoder_proto = js_mkobj(js);
   
   js_set(js, textdecoder_proto, "decode", js_mkfun(js_textdecoder_decode));
   js_set(js, textdecoder_proto, "encoding", js_mkstr(js, "utf-8", 5));

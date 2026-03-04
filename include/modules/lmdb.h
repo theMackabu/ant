@@ -13,16 +13,16 @@ typedef struct lmdb_db_ref lmdb_db_ref_t;
 typedef struct lmdb_txn_ref lmdb_txn_ref_t;
 
 typedef struct {
-  jsval_t env_ctor;
-  jsval_t db_ctor;
-  jsval_t txn_ctor;
-  jsval_t env_proto;
-  jsval_t db_proto;
-  jsval_t txn_proto;
+  ant_value_t env_ctor;
+  ant_value_t db_ctor;
+  ant_value_t txn_ctor;
+  ant_value_t env_proto;
+  ant_value_t db_proto;
+  ant_value_t txn_proto;
   bool ready;
 } lmdb_js_types_t;
 
-jsval_t lmdb_library(ant_t *js);
+ant_value_t lmdb_library(ant_t *js);
 void lmdb_gc_update_roots(GC_OP_VAL_ARGS);
 void cleanup_lmdb_module(void);
 

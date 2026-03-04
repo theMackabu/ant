@@ -82,7 +82,7 @@ static size_t calculate_coro_stack_size(void) {
   return cached_size;
 }
 
-static inline void settle_coroutine(coroutine_t *coro, jsval_t *args, int nargs, bool is_error) {
+static inline void settle_coroutine(coroutine_t *coro, ant_value_t *args, int nargs, bool is_error) {
   coro->result = nargs > 0 ? args[0] : js_mkundef();
   coro->is_settled = true;
   coro->is_error = is_error;
@@ -102,9 +102,9 @@ static void resume_coroutine_if_suspended(ant_t *js, coroutine_t *coro) {
   }
 }
 
-jsval_t resume_coroutine_wrapper(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t me = js->current_func;
-  jsval_t coro_val = js_get_slot(js, me, SLOT_CORO);
+ant_value_t resume_coroutine_wrapper(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t me = js->current_func;
+  ant_value_t coro_val = js_get_slot(js, me, SLOT_CORO);
   if (vtype(coro_val) != T_NUM) return js_mkundef();
   
   coroutine_t *coro = (coroutine_t *)(uintptr_t)tod(coro_val);
@@ -116,9 +116,9 @@ jsval_t resume_coroutine_wrapper(ant_t *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-jsval_t reject_coroutine_wrapper(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t me = js->current_func;
-  jsval_t coro_val = js_get_slot(js, me, SLOT_CORO);
+ant_value_t reject_coroutine_wrapper(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t me = js->current_func;
+  ant_value_t coro_val = js_get_slot(js, me, SLOT_CORO);
   
   if (vtype(coro_val) != T_NUM) return js_mkundef();
   

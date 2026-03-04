@@ -4,7 +4,7 @@
 #include "gc.h"
 #include "types.h"
 
-jsval_t child_process_library(ant_t *js);
+ant_value_t child_process_library(ant_t *js);
 
 int has_pending_child_processes(void);
 void child_process_gc_update_roots(GC_OP_VAL_ARGS);

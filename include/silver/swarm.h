@@ -14,7 +14,7 @@ sv_jit_func_t sv_jit_compile(
   sv_closure_t *hint_closure
 );
 
-jsval_t sv_jit_try_osr(
+ant_value_t sv_jit_try_osr(
   sv_vm_t *vm, ant_t *js,
   sv_frame_t *frame, sv_func_t *func,
   int bc_offset

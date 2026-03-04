@@ -11,10 +11,10 @@
 #define ROPE_FLATTEN_THRESHOLD (32 * 1024)
 
 typedef struct {
-  jsoff_t header;
-  jsval_t left;
-  jsval_t right;
-  jsval_t cached;
+  ant_offset_t header;
+  ant_value_t left;
+  ant_value_t right;
+  ant_value_t cached;
 } rope_node_t;
 
 #define GC_FWD_LOAD_FACTOR    70
@@ -22,24 +22,24 @@ typedef struct {
 #define GC_CB(ret, name, arg) ret (*name)(void *ctx, arg old)
 
 #define GC_CTX       void *ctx
-#define GC_FWD_OFF   GC_CB(jsoff_t, fwd_off, jsoff_t)
-#define GC_FWD_VAL   GC_CB(jsval_t, fwd_val, jsval_t)
-#define GC_WEAK_OFF  GC_CB(jsoff_t, weak_off, jsoff_t)
-#define GC_OP_VAL    void (*op_val)(void *ctx, jsval_t *val)
+#define GC_FWD_OFF   GC_CB(ant_offset_t, fwd_off, ant_offset_t)
+#define GC_FWD_VAL   GC_CB(ant_value_t, fwd_val, ant_value_t)
+#define GC_WEAK_OFF  GC_CB(ant_offset_t, weak_off, ant_offset_t)
+#define GC_OP_VAL    void (*op_val)(void *ctx, ant_value_t *val)
 
 #define GC_FWD_ARGS     GC_FWD_VAL, GC_CTX
 #define GC_RESERVE_ARGS ant_t *js, GC_FWD_OFF, GC_FWD_ARGS
 #define GC_UPDATE_ARGS  ant_t *js, GC_FWD_OFF, GC_WEAK_OFF, GC_FWD_ARGS
 #define GC_OP_VAL_ARGS  GC_OP_VAL, GC_CTX
 
-#define FWD_EMPTY     ((jsoff_t)~0)
-#define FWD_TOMBSTONE ((jsoff_t)~1)
+#define FWD_EMPTY     ((ant_offset_t)~0)
+#define FWD_TOMBSTONE ((ant_offset_t)~1)
 
 #define GC_BIGINT_HEADER_SHIFT 4
 #define GC_SYM_HEADER_SHIFT    4
 
-#define GC_BIGINT_HEADER_LOW_MASK ((jsoff_t)((1u << GC_BIGINT_HEADER_SHIFT) - 1u))
-#define GC_SYM_HEADER_LOW_MASK    ((jsoff_t)((1u << GC_SYM_HEADER_SHIFT) - 1u))
+#define GC_BIGINT_HEADER_LOW_MASK ((ant_offset_t)((1u << GC_BIGINT_HEADER_SHIFT) - 1u))
+#define GC_SYM_HEADER_LOW_MASK    ((ant_offset_t)((1u << GC_SYM_HEADER_SHIFT) - 1u))
 #define GC_SYM_HEAP_FIXED         (sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uintptr_t))
 
 #ifdef _WIN32

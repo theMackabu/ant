@@ -332,7 +332,7 @@ other:
 #undef KEYWORD
 #undef EMIT_UNTIL
 
-void print_repl_value(ant_t *js, jsval_t val, FILE *stream) {
+void print_repl_value(ant_t *js, ant_value_t val, FILE *stream) {
   if (vtype(val) == T_STR) {
     char *str = js_getstr(js, val, NULL);
     fprintf(stream, "%s'%s'%s\n", C(JSON_STRING), str ? str : "", C(C_RESET));
@@ -350,7 +350,7 @@ void print_repl_value(ant_t *js, jsval_t val, FILE *stream) {
   if (cstr.needs_free) free((void *)cstr.ptr);
 }
 
-jsval_t console_print(ant_t *js, jsval_t *args, int nargs, const char *color, FILE *stream) {
+ant_value_t console_print(ant_t *js, ant_value_t *args, int nargs, const char *color, FILE *stream) {
   if (color && !io_no_color) fputs(color, stream);
   
   for (int i = 0; i < nargs; i++) {
@@ -379,19 +379,19 @@ jsval_t console_print(ant_t *js, jsval_t *args, int nargs, const char *color, FI
   return js_mkundef();
 }
 
-static jsval_t js_console_log(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_console_log(ant_t *js, ant_value_t *args, int nargs) {
   return console_print(js, args, nargs, NULL, stdout);
 }
 
-static jsval_t js_console_error(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_console_error(ant_t *js, ant_value_t *args, int nargs) {
   return console_print(js, args, nargs, C_RED, stderr);
 }
 
-static jsval_t js_console_warn(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_console_warn(ant_t *js, ant_value_t *args, int nargs) {
   return console_print(js, args, nargs, C_YELLOW, stderr);
 }
 
-static jsval_t js_console_assert(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_console_assert(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
   
   bool is_truthy = js_truthy(js, args[0]);
@@ -408,7 +408,7 @@ static jsval_t js_console_assert(ant_t *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t js_console_trace(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_console_trace(ant_t *js, ant_value_t *args, int nargs) {
   fputs("Trace", stderr);
   if (nargs > 0) {
     fputs(": ", stderr);
@@ -419,15 +419,15 @@ static jsval_t js_console_trace(ant_t *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t js_console_info(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_console_info(ant_t *js, ant_value_t *args, int nargs) {
   return console_print(js, args, nargs, C_CYAN, stdout);
 }
 
-static jsval_t js_console_debug(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_console_debug(ant_t *js, ant_value_t *args, int nargs) {
   return console_print(js, args, nargs, C_MAGENTA, stdout);
 }
 
-static jsval_t js_console_clear(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_console_clear(ant_t *js, ant_value_t *args, int nargs) {
   if (!io_no_color) {
     fprintf(stdout, "\033[2J\033[H");
     fflush(stdout);
@@ -438,7 +438,7 @@ static jsval_t js_console_clear(ant_t *js, jsval_t *args, int nargs) {
 static struct { char *label; double start_time; } console_timers[64];
 static int console_timer_count = 0;
 
-static jsval_t js_console_time(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_console_time(ant_t *js, ant_value_t *args, int nargs) {
   const char *label = "default";
   if (nargs > 0 && vtype(args[0]) == T_STR) {
     label = js_getstr(js, args[0], NULL);
@@ -460,7 +460,7 @@ static jsval_t js_console_time(ant_t *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t js_console_timeEnd(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_console_timeEnd(ant_t *js, ant_value_t *args, int nargs) {
   const char *label = "default";
   if (nargs > 0 && vtype(args[0]) == T_STR) {
     label = js_getstr(js, args[0], NULL);
@@ -567,7 +567,7 @@ static const char *get_type_name(int type) {
   return type_names[type] ? type_names[type] : "unknown";
 }
 
-static bool inspect_was_visited(inspect_visited_t *v, jsoff_t off) {
+static bool inspect_was_visited(inspect_visited_t *v, ant_offset_t off) {
   for (int i = 0; i < v->count; i++) if (v->visited[i] == off) return true;
   return false;
 }
@@ -576,15 +576,15 @@ static void inspect_print_indent(FILE *stream, int depth) {
   for (int i = 0; i < depth; i++) fprintf(stream, "  ");
 }
 
-static void inspect_mark_visited(inspect_visited_t *v, jsoff_t off) {
+static void inspect_mark_visited(inspect_visited_t *v, ant_offset_t off) {
   if (v->count >= v->capacity) {
     v->capacity = v->capacity ? v->capacity * 2 : 32;
-    v->visited = realloc(v->visited, v->capacity * sizeof(jsoff_t));
+    v->visited = realloc(v->visited, v->capacity * sizeof(ant_offset_t));
   }
   v->visited[v->count++] = off;
 }
 
-void inspect_value(ant_t *js, jsval_t val, FILE *stream, int depth, inspect_visited_t *visited) {
+void inspect_value(ant_t *js, ant_value_t val, FILE *stream, int depth, inspect_visited_t *visited) {
   int t = vtype(val);
   
   if (t == T_UNDEF) { fprintf(stream, "undefined"); return; }
@@ -620,10 +620,10 @@ void inspect_value(ant_t *js, jsval_t val, FILE *stream, int depth, inspect_visi
   fprintf(stream, "<%s rawtype=%d data=%" PRIu64 ">", get_type_name(t), vtype(val), (uint64_t)vdata(val));
 }
 
-void inspect_object(ant_t *js, jsval_t obj, FILE *stream, int depth, inspect_visited_t *visited) {
+void inspect_object(ant_t *js, ant_value_t obj, FILE *stream, int depth, inspect_visited_t *visited) {
   int type = vtype(obj);
   obj = js_as_obj(obj);
-  jsoff_t obj_off = (jsoff_t)vdata(obj);
+  ant_offset_t obj_off = (ant_offset_t)vdata(obj);
   
   if (inspect_was_visited(visited, obj_off)) {
     fprintf(stream, "[Circular *%llu]", (u64)obj_off);
@@ -639,7 +639,7 @@ void inspect_object(ant_t *js, jsval_t obj, FILE *stream, int depth, inspect_vis
   fprintf(stream, "[[Slots]]: {\n");
   
   for (int slot = SLOT_NONE + 1; slot < SLOT_MAX; slot++) {
-    jsval_t slot_val = js_get_slot(js, obj, (internal_slot_t)slot);
+    ant_value_t slot_val = js_get_slot(js, obj, (internal_slot_t)slot);
     int t = vtype(slot_val);
     if (t == T_UNDEF) continue;
     
@@ -657,7 +657,7 @@ void inspect_object(ant_t *js, jsval_t obj, FILE *stream, int depth, inspect_vis
         fprintf(stream, "%.0f", js_getnum(slot_val));
         break;
       default:
-        if ((t == T_OBJ || t == T_FUNC || t == T_PROMISE) && inspect_was_visited(visited, (jsoff_t)vdata(js_as_obj(slot_val))))
+        if ((t == T_OBJ || t == T_FUNC || t == T_PROMISE) && inspect_was_visited(visited, (ant_offset_t)vdata(js_as_obj(slot_val))))
           fprintf(stream, "[Circular *%llu]", (u64)vdata(js_as_obj(slot_val)));
         else if (t == T_OBJ || t == T_FUNC || t == T_PROMISE)
           fprintf(stream, "<%s @%llu>", get_type_name(t), (u64)vdata(js_as_obj(slot_val)));
@@ -678,7 +678,7 @@ void inspect_object(ant_t *js, jsval_t obj, FILE *stream, int depth, inspect_vis
   ant_iter_t iter = js_prop_iter_begin(js, obj);
   const char *key;
   size_t key_len;
-  jsval_t value;
+  ant_value_t value;
   
   while (js_prop_iter_next(&iter, &key, &key_len, &value)) {
     inspect_print_indent(stream, inner_depth + 1);
@@ -691,7 +691,7 @@ void inspect_object(ant_t *js, jsval_t obj, FILE *stream, int depth, inspect_vis
   inspect_print_indent(stream, inner_depth);
   fprintf(stream, "}\n");
   
-  jsval_t proto = js_get_proto(js, obj);
+  ant_value_t proto = js_get_proto(js, obj);
   inspect_print_indent(stream, inner_depth);
   fprintf(stream, "[[Prototype]]: ");
   if (vtype(proto) == T_NULL) {
@@ -707,7 +707,7 @@ void inspect_object(ant_t *js, jsval_t obj, FILE *stream, int depth, inspect_vis
   fprintf(stream, "}");
 }
 
-static jsval_t js_console_inspect(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_console_inspect(ant_t *js, ant_value_t *args, int nargs) {
   FILE *stream = stdout;
   inspect_visited_t visited = {0};
   
@@ -724,7 +724,7 @@ static jsval_t js_console_inspect(ant_t *js, jsval_t *args, int nargs) {
 
 void init_console_module() {
   ant_t *js = rt->js;
-  jsval_t console_obj = js_mkobj(js);
+  ant_value_t console_obj = js_mkobj(js);
   
   js_set(js, console_obj, "log", js_mkfun(js_console_log));
   js_set(js, console_obj, "error", js_mkfun(js_console_error));

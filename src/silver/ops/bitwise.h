@@ -4,9 +4,9 @@
 #include "errors.h"
 #include "silver/engine.h"
 
-static inline jsval_t sv_op_band(sv_vm_t *vm, ant_t *js) {
-  jsval_t r = vm->stack[--vm->sp];
-  jsval_t l = vm->stack[--vm->sp];
+static inline ant_value_t sv_op_band(sv_vm_t *vm, ant_t *js) {
+  ant_value_t r = vm->stack[--vm->sp];
+  ant_value_t l = vm->stack[--vm->sp];
   uint8_t lt = vtype(l), rt = vtype(r);
   if (lt == T_BIGINT || rt == T_BIGINT) {
     if (lt != T_BIGINT || rt != T_BIGINT)
@@ -19,9 +19,9 @@ static inline jsval_t sv_op_band(sv_vm_t *vm, ant_t *js) {
   return tov(0);
 }
 
-static inline jsval_t sv_op_bor(sv_vm_t *vm, ant_t *js) {
-  jsval_t r = vm->stack[--vm->sp];
-  jsval_t l = vm->stack[--vm->sp];
+static inline ant_value_t sv_op_bor(sv_vm_t *vm, ant_t *js) {
+  ant_value_t r = vm->stack[--vm->sp];
+  ant_value_t l = vm->stack[--vm->sp];
   uint8_t lt = vtype(l), rt = vtype(r);
   if (lt == T_BIGINT || rt == T_BIGINT) {
     if (lt != T_BIGINT || rt != T_BIGINT)
@@ -34,9 +34,9 @@ static inline jsval_t sv_op_bor(sv_vm_t *vm, ant_t *js) {
   return tov(0);
 }
 
-static inline jsval_t sv_op_bxor(sv_vm_t *vm, ant_t *js) {
-  jsval_t r = vm->stack[--vm->sp];
-  jsval_t l = vm->stack[--vm->sp];
+static inline ant_value_t sv_op_bxor(sv_vm_t *vm, ant_t *js) {
+  ant_value_t r = vm->stack[--vm->sp];
+  ant_value_t l = vm->stack[--vm->sp];
   uint8_t lt = vtype(l), rt = vtype(r);
   if (lt == T_BIGINT || rt == T_BIGINT) {
     if (lt != T_BIGINT || rt != T_BIGINT)
@@ -50,21 +50,21 @@ static inline jsval_t sv_op_bxor(sv_vm_t *vm, ant_t *js) {
 }
 
 static inline void sv_op_bnot(sv_vm_t *vm, ant_t *js) {
-  jsval_t a = vm->stack[--vm->sp];
+  ant_value_t a = vm->stack[--vm->sp];
   vm->stack[vm->sp++] = tov((double)(~js_to_int32(js_to_number(js, a))));
 }
 
-static inline jsval_t sv_op_shl(sv_vm_t *vm, ant_t *js) {
-  jsval_t r = vm->stack[--vm->sp];
-  jsval_t l = vm->stack[--vm->sp];
+static inline ant_value_t sv_op_shl(sv_vm_t *vm, ant_t *js) {
+  ant_value_t r = vm->stack[--vm->sp];
+  ant_value_t l = vm->stack[--vm->sp];
   uint8_t lt = vtype(l), rt = vtype(r);
   if (lt == T_BIGINT || rt == T_BIGINT) {
     if (lt != T_BIGINT || rt != T_BIGINT)
       return js_mkerr(js, "Cannot mix BigInt value and other types");
     uint64_t shift = 0;
-    jsval_t err = bigint_asint_bits(js, r, &shift);
+    ant_value_t err = bigint_asint_bits(js, r, &shift);
     if (is_err(err)) return err;
-    jsval_t res = bigint_shift_left(js, l, shift);
+    ant_value_t res = bigint_shift_left(js, l, shift);
     if (is_err(res)) return res;
     vm->stack[vm->sp++] = res;
     return tov(0);
@@ -75,17 +75,17 @@ static inline jsval_t sv_op_shl(sv_vm_t *vm, ant_t *js) {
   return tov(0);
 }
 
-static inline jsval_t sv_op_shr(sv_vm_t *vm, ant_t *js) {
-  jsval_t r = vm->stack[--vm->sp];
-  jsval_t l = vm->stack[--vm->sp];
+static inline ant_value_t sv_op_shr(sv_vm_t *vm, ant_t *js) {
+  ant_value_t r = vm->stack[--vm->sp];
+  ant_value_t l = vm->stack[--vm->sp];
   uint8_t lt = vtype(l), rt = vtype(r);
   if (lt == T_BIGINT || rt == T_BIGINT) {
     if (lt != T_BIGINT || rt != T_BIGINT)
       return js_mkerr(js, "Cannot mix BigInt value and other types");
     uint64_t shift = 0;
-    jsval_t err = bigint_asint_bits(js, r, &shift);
+    ant_value_t err = bigint_asint_bits(js, r, &shift);
     if (is_err(err)) return err;
-    jsval_t res = bigint_shift_right(js, l, shift);
+    ant_value_t res = bigint_shift_right(js, l, shift);
     if (is_err(res)) return res;
     vm->stack[vm->sp++] = res;
     return tov(0);
@@ -96,17 +96,17 @@ static inline jsval_t sv_op_shr(sv_vm_t *vm, ant_t *js) {
   return tov(0);
 }
 
-static inline jsval_t sv_op_ushr(sv_vm_t *vm, ant_t *js) {
-  jsval_t r = vm->stack[--vm->sp];
-  jsval_t l = vm->stack[--vm->sp];
+static inline ant_value_t sv_op_ushr(sv_vm_t *vm, ant_t *js) {
+  ant_value_t r = vm->stack[--vm->sp];
+  ant_value_t l = vm->stack[--vm->sp];
   uint8_t lt = vtype(l), rt = vtype(r);
   if (lt == T_BIGINT || rt == T_BIGINT) {
     if (lt != T_BIGINT || rt != T_BIGINT)
       return js_mkerr(js, "Cannot mix BigInt value and other types");
     uint64_t shift = 0;
-    jsval_t err = bigint_asint_bits(js, r, &shift);
+    ant_value_t err = bigint_asint_bits(js, r, &shift);
     if (is_err(err)) return err;
-    jsval_t res = bigint_shift_right_logical(js, l, shift);
+    ant_value_t res = bigint_shift_right_logical(js, l, shift);
     if (is_err(res)) return res;
     vm->stack[vm->sp++] = res;
     return tov(0);

@@ -7,7 +7,7 @@
 void init_timer_module(void);
 void process_microtasks(ant_t *js);
 void process_immediates(ant_t *js);
-void queue_microtask(ant_t *js, jsval_t callback);
+void queue_microtask(ant_t *js, ant_value_t callback);
 void queue_promise_trigger(uint32_t promise_id);
 void timer_gc_update_roots(GC_OP_VAL_ARGS);
 

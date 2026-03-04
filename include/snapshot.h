@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include "types.h"
 
-jsval_t ant_load_snapshot(ant_t *js);
+ant_value_t ant_load_snapshot(ant_t *js);
 const uint8_t *ant_get_snapshot_source(size_t *len);
 
 #endif

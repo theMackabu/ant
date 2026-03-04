@@ -50,7 +50,7 @@ typedef struct {
 } child_stream_ctx_t;
 
 typedef struct {
-  jsval_t callback;
+  ant_value_t callback;
   bool once;
 } child_listener_t;
 
@@ -67,14 +67,14 @@ struct child_process_s {
   uv_pipe_t stdin_pipe;
   uv_pipe_t stdout_pipe;
   uv_pipe_t stderr_pipe;
-  jsval_t child_obj;
-  jsval_t stdin_obj;
-  jsval_t stdout_obj;
-  jsval_t stderr_obj;
+  ant_value_t child_obj;
+  ant_value_t stdin_obj;
+  ant_value_t stdout_obj;
+  ant_value_t stderr_obj;
   child_stream_ctx_t *stdin_ctx;
   child_stream_ctx_t *stdout_ctx;
   child_stream_ctx_t *stderr_ctx;
-  jsval_t promise;
+  ant_value_t promise;
   child_event_t *events;
   char *stdout_buf;
   size_t stdout_len;
@@ -101,38 +101,38 @@ struct child_process_s {
 static child_process_t *pending_children_head = NULL;
 static child_process_t *pending_children_tail = NULL;
 
-static void fprint_js_str_raw(FILE *out, ant_t *js, jsval_t s) {
+static void fprint_js_str_raw(FILE *out, ant_t *js, ant_value_t s) {
   if (vtype(s) != T_STR) {
     fprintf(out, "%s\n", js_str(js, s));
     return;
   }
 
-  jsoff_t len = 0;
-  jsoff_t off = vstr(js, s, &len);
+  ant_offset_t len = 0;
+  ant_offset_t off = vstr(js, s, &len);
   if (off > 0 && len > 0) fwrite(&js->mem[off], 1, (size_t)len, out);
   if (len == 0 || js->mem[off + len - 1] != '\n') fputc('\n', out);
 }
 
-static void log_listener_error(ant_t *js, const char *event_name, jsval_t err) {
-  jsval_t thrown_stack = js->thrown_stack;
+static void log_listener_error(ant_t *js, const char *event_name, ant_value_t err) {
+  ant_value_t thrown_stack = js->thrown_stack;
   if (vtype(thrown_stack) == T_STR) {
     fprintf(stderr, "Error in child_process '%s' listener:\n", event_name);
     fprint_js_str_raw(stderr, js, thrown_stack);
     return;
   }
 
-  jsval_t thrown_value = js->thrown_value;
-  jsval_t src = (vtype(thrown_value) != T_UNDEF) ? thrown_value : err;
+  ant_value_t thrown_value = js->thrown_value;
+  ant_value_t src = (vtype(thrown_value) != T_UNDEF) ? thrown_value : err;
   
-  jsval_t stack = js_get(js, src, "stack");
+  ant_value_t stack = js_get(js, src, "stack");
   if (vtype(stack) == T_STR) {
     fprintf(stderr, "Error in child_process '%s' listener:\n", event_name);
     fprint_js_str_raw(stderr, js, stack);
     return;
   }
 
-  jsval_t name = js_get(js, src, "name");
-  jsval_t message = js_get(js, src, "message");
+  ant_value_t name = js_get(js, src, "name");
+  ant_value_t message = js_get(js, src, "message");
 
   const char *detail = NULL;
   if (vtype(name) == T_STR && vtype(message) == T_STR) {
@@ -148,7 +148,7 @@ static void log_listener_error(ant_t *js, const char *event_name, jsval_t err) {
   js_print_stack_trace_vm(js, stderr);
 }
 
-static void emit_event(child_process_t *cp, const char *name, jsval_t *args, int nargs) {
+static void emit_event(child_process_t *cp, const char *name, ant_value_t *args, int nargs) {
   child_event_t *evt = NULL;
   HASH_FIND_STR(cp->events, name, evt);
   if (!evt || evt->count == 0) return;
@@ -156,7 +156,7 @@ static void emit_event(child_process_t *cp, const char *name, jsval_t *args, int
   int i = 0;
   while (i < evt->count) {
     child_listener_t *l = &evt->listeners[i];
-    jsval_t result = sv_vm_call(cp->js->vm, cp->js, l->callback, js_mkundef(), args, nargs, NULL, false);
+    ant_value_t result = sv_vm_call(cp->js->vm, cp->js, l->callback, js_mkundef(), args, nargs, NULL, false);
     if (vtype(result) == T_ERR) log_listener_error(cp->js, name, result);
     if (l->once) {
       for (int j = i; j < evt->count - 1; j++) 
@@ -179,7 +179,7 @@ static void emit_stream_event(
   child_process_t *cp,
   child_stream_kind_t kind,
   const char *event,
-  jsval_t *args,
+  ant_value_t *args,
   int nargs
 ) {
   char full_name[64];
@@ -187,7 +187,7 @@ static void emit_stream_event(
   emit_event(cp, full_name, args, nargs);
 }
 
-static jsval_t make_uint8array_chunk(ant_t *js, const char *data, size_t len) {
+static ant_value_t make_uint8array_chunk(ant_t *js, const char *data, size_t len) {
   ArrayBufferData *ab = create_array_buffer_data(len);
   if (!ab) return js_mkerr(js, "Out of memory");
   if (len > 0 && data) memcpy(ab->data, data, len);
@@ -255,8 +255,8 @@ static void check_completion(child_process_t *cp) {
   if (cp->exited && cp->stdout_closed && cp->stderr_closed && !cp->close_emitted) {
     cp->close_emitted = true;
     
-    jsval_t stdout_val = js_mkstr(cp->js, cp->stdout_buf ? cp->stdout_buf : "", cp->stdout_len);
-    jsval_t stderr_val = js_mkstr(cp->js, cp->stderr_buf ? cp->stderr_buf : "", cp->stderr_len);
+    ant_value_t stdout_val = js_mkstr(cp->js, cp->stdout_buf ? cp->stdout_buf : "", cp->stdout_len);
+    ant_value_t stderr_val = js_mkstr(cp->js, cp->stderr_buf ? cp->stderr_buf : "", cp->stderr_len);
 
     if (vtype(cp->stdout_obj) == T_OBJ) {
       js_set(cp->js, cp->stdout_obj, "text", stdout_val);
@@ -273,11 +273,11 @@ static void check_completion(child_process_t *cp) {
     js_set(cp->js, cp->child_obj, "exitCode", js_mknum((double)cp->exit_code));
     js_set(cp->js, cp->child_obj, "signalCode", cp->term_signal ? js_mknum((double)cp->term_signal) : js_mknull());
     
-    jsval_t close_args[2] = { js_mknum((double)cp->exit_code), cp->term_signal ? js_mknum((double)cp->term_signal) : js_mknull() };
+    ant_value_t close_args[2] = { js_mknum((double)cp->exit_code), cp->term_signal ? js_mknum((double)cp->term_signal) : js_mknull() };
     emit_event(cp, "close", close_args, 2);
     
     if (vtype(cp->promise) != T_UNDEF) {
-      jsval_t result = js_mkobj(cp->js);
+      ant_value_t result = js_mkobj(cp->js);
       js_set(cp->js, result, "stdout", stdout_val);
       js_set(cp->js, result, "stderr", stderr_val);
       js_set(cp->js, result, "exitCode", js_mknum((double)cp->exit_code));
@@ -286,7 +286,7 @@ static void check_completion(child_process_t *cp) {
       if (cp->exit_code != 0) {
         char err_msg[256];
         snprintf(err_msg, sizeof(err_msg), "Command failed with exit code %lld", (long long)cp->exit_code);
-        jsval_t err = js_mkstr(cp->js, err_msg, strlen(err_msg));
+        ant_value_t err = js_mkstr(cp->js, err_msg, strlen(err_msg));
         js_reject_promise(cp->js, cp->promise, err);
       } else {
         js_resolve_promise(cp->js, cp->promise, result);
@@ -317,7 +317,7 @@ static void on_process_exit(uv_process_t *proc, int64_t exit_status, int term_si
     js_set(cp->js, cp->child_obj, "killed", js_true);
   }
   
-  jsval_t exit_args[2] = { js_mknum((double)exit_status), term_signal ? js_mknum((double)term_signal) : js_mknull() };
+  ant_value_t exit_args[2] = { js_mknum((double)exit_status), term_signal ? js_mknum((double)term_signal) : js_mknull() };
   emit_event(cp, "exit", exit_args, 2);
   
   cp->pending_closes++;
@@ -368,12 +368,12 @@ static void on_stdout_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *b
       cp->stdout_len += nread;
     }
     
-    jsval_t text_data = js_mkstr(cp->js, buf->base, nread);
-    jsval_t text_args[1] = { text_data };
+    ant_value_t text_data = js_mkstr(cp->js, buf->base, nread);
+    ant_value_t text_args[1] = { text_data };
     emit_event(cp, "stdout", text_args, 1);
 
-    jsval_t byte_data = make_uint8array_chunk(cp->js, buf->base, (size_t)nread);
-    jsval_t byte_args[1] = { byte_data };
+    ant_value_t byte_data = make_uint8array_chunk(cp->js, buf->base, (size_t)nread);
+    ant_value_t byte_args[1] = { byte_data };
     emit_stream_event(cp, CHILD_STREAM_STDOUT, "data", byte_args, 1);
     
     if (vtype(cp->stdout_obj) == T_OBJ) js_set(
@@ -386,7 +386,7 @@ static void on_stdout_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *b
   
   if (nread < 0) {
     if (nread != UV_EOF) {
-      jsval_t err_args[1] = { js_mkstr(cp->js, uv_strerror((int)nread), (int)strlen(uv_strerror((int)nread))) };
+      ant_value_t err_args[1] = { js_mkstr(cp->js, uv_strerror((int)nread), (int)strlen(uv_strerror((int)nread))) };
       emit_event(cp, "error", err_args, 1);
       emit_stream_event(cp, CHILD_STREAM_STDOUT, "error", err_args, 1);
     } else emit_stream_event(cp, CHILD_STREAM_STDOUT, "end", NULL, 0);
@@ -420,12 +420,12 @@ static void on_stderr_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *b
       cp->stderr_len += nread;
     }
     
-    jsval_t text_data = js_mkstr(cp->js, buf->base, nread);
-    jsval_t text_args[1] = { text_data };
+    ant_value_t text_data = js_mkstr(cp->js, buf->base, nread);
+    ant_value_t text_args[1] = { text_data };
     emit_event(cp, "stderr", text_args, 1);
 
-    jsval_t byte_data = make_uint8array_chunk(cp->js, buf->base, (size_t)nread);
-    jsval_t byte_args[1] = { byte_data };
+    ant_value_t byte_data = make_uint8array_chunk(cp->js, buf->base, (size_t)nread);
+    ant_value_t byte_args[1] = { byte_data };
     emit_stream_event(cp, CHILD_STREAM_STDERR, "data", byte_args, 1);
     
     if (vtype(cp->stderr_obj) == T_OBJ) js_set(
@@ -438,7 +438,7 @@ static void on_stderr_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *b
   
   if (nread < 0) {
     if (nread != UV_EOF) {
-      jsval_t err_args[1] = { 
+      ant_value_t err_args[1] = { 
         js_mkstr(cp->js, uv_strerror((int)nread),
         (int)strlen(uv_strerror((int)nread)))
       };
@@ -454,13 +454,13 @@ static void on_stderr_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *b
   }
 }
 
-static jsval_t child_on(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t this_obj = js_getthis(js);
+static ant_value_t child_on(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
   if (nargs < 2) return js_mkerr(js, "on() requires event name and callback");
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "Event name must be a string");
   if (vtype(args[1]) != T_FUNC) return js_mkerr(js, "Callback must be a function");
   
-  jsval_t cp_ptr = js_get_slot(js, this_obj, SLOT_DATA);
+  ant_value_t cp_ptr = js_get_slot(js, this_obj, SLOT_DATA);
   if (vtype(cp_ptr) == T_UNDEF) return js_mkerr(js, "Invalid child process object");
   
   child_process_t *cp = (child_process_t *)(uintptr_t)js_getnum(cp_ptr);
@@ -483,13 +483,13 @@ static jsval_t child_on(ant_t *js, jsval_t *args, int nargs) {
   return this_obj;
 }
 
-static jsval_t child_once(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t this_obj = js_getthis(js);
+static ant_value_t child_once(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
   if (nargs < 2) return js_mkerr(js, "once() requires event name and callback");
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "Event name must be a string");
   if (vtype(args[1]) != T_FUNC) return js_mkerr(js, "Callback must be a function");
   
-  jsval_t cp_ptr = js_get_slot(js, this_obj, SLOT_DATA);
+  ant_value_t cp_ptr = js_get_slot(js, this_obj, SLOT_DATA);
   if (vtype(cp_ptr) == T_UNDEF) return js_mkerr(js, "Invalid child process object");
   
   child_process_t *cp = (child_process_t *)(uintptr_t)js_getnum(cp_ptr);
@@ -512,10 +512,10 @@ static jsval_t child_once(ant_t *js, jsval_t *args, int nargs) {
   return this_obj;
 }
 
-static jsval_t child_kill(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t this_obj = js_getthis(js);
+static ant_value_t child_kill(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
   
-  jsval_t cp_ptr = js_get_slot(js, this_obj, SLOT_DATA);
+  ant_value_t cp_ptr = js_get_slot(js, this_obj, SLOT_DATA);
   if (vtype(cp_ptr) == T_UNDEF) return js_false;
   
   child_process_t *cp = (child_process_t *)(uintptr_t)js_getnum(cp_ptr);
@@ -540,7 +540,7 @@ static jsval_t child_kill(ant_t *js, jsval_t *args, int nargs) {
   return js_bool(result == 0);
 }
 
-static jsval_t child_write_impl(ant_t *js, child_process_t *cp, jsval_t data_arg) {
+static ant_value_t child_write_impl(ant_t *js, child_process_t *cp, ant_value_t data_arg) {
   if (cp->stdin_closed) return js_false;
   
   const char *data = NULL;
@@ -550,7 +550,7 @@ static jsval_t child_write_impl(ant_t *js, child_process_t *cp, jsval_t data_arg
     data = js_getstr(js, data_arg, &data_len);
     if (!data) return js_mkerr(js, "Data must be a string or Buffer");
   } else {
-    jsval_t ta_data_val = js_get_slot(js, data_arg, SLOT_BUFFER);
+    ant_value_t ta_data_val = js_get_slot(js, data_arg, SLOT_BUFFER);
     TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
     if (!ta_data || !ta_data->buffer || !ta_data->buffer->data) {
       return js_mkerr(js, "Data must be a string or Buffer");
@@ -568,7 +568,7 @@ static jsval_t child_write_impl(ant_t *js, child_process_t *cp, jsval_t data_arg
   
   int result = uv_write(write_req, (uv_stream_t *)&cp->stdin_pipe, &buf, 1, NULL);
   if (result < 0) {
-    jsval_t err_args[1] = { js_mkstr(js, uv_strerror(result), strlen(uv_strerror(result))) };
+    ant_value_t err_args[1] = { js_mkstr(js, uv_strerror(result), strlen(uv_strerror(result))) };
     emit_stream_event(cp, CHILD_STREAM_STDIN, "error", err_args, 1);
     free(buf_data); free(write_req);
     return js_false;
@@ -577,7 +577,7 @@ static jsval_t child_write_impl(ant_t *js, child_process_t *cp, jsval_t data_arg
   return js_true;
 }
 
-static jsval_t child_end_impl(child_process_t *cp) {
+static ant_value_t child_end_impl(child_process_t *cp) {
   if (!cp->stdin_closed) {
     uv_close((uv_handle_t *)&cp->stdin_pipe, NULL);
     cp->stdin_closed = true;
@@ -586,20 +586,20 @@ static jsval_t child_end_impl(child_process_t *cp) {
   return js_mkundef();
 }
 
-static jsval_t child_write(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t this_obj = js_getthis(js);
+static ant_value_t child_write(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
   if (nargs < 1) return js_mkerr(js, "write() requires data argument");
   
-  jsval_t cp_ptr = js_get_slot(js, this_obj, SLOT_DATA);
+  ant_value_t cp_ptr = js_get_slot(js, this_obj, SLOT_DATA);
   if (vtype(cp_ptr) == T_UNDEF) return js_mkerr(js, "Invalid child process object");
   
   child_process_t *cp = (child_process_t *)(uintptr_t)js_getnum(cp_ptr);
   return child_write_impl(js, cp, args[0]);
 }
 
-static jsval_t child_ref(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t this_obj = js_getthis(js);
-  jsval_t cp_ptr = js_get_slot(js, this_obj, SLOT_DATA);
+static ant_value_t child_ref(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
+  ant_value_t cp_ptr = js_get_slot(js, this_obj, SLOT_DATA);
   if (vtype(cp_ptr) == T_UNDEF) return this_obj;
 
   child_process_t *cp = (child_process_t *)(uintptr_t)js_getnum(cp_ptr);
@@ -614,9 +614,9 @@ static jsval_t child_ref(ant_t *js, jsval_t *args, int nargs) {
   return this_obj;
 }
 
-static jsval_t child_unref(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t this_obj = js_getthis(js);
-  jsval_t cp_ptr = js_get_slot(js, this_obj, SLOT_DATA);
+static ant_value_t child_unref(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
+  ant_value_t cp_ptr = js_get_slot(js, this_obj, SLOT_DATA);
   if (vtype(cp_ptr) == T_UNDEF) return this_obj;
 
   child_process_t *cp = (child_process_t *)(uintptr_t)js_getnum(cp_ptr);
@@ -629,10 +629,10 @@ static jsval_t child_unref(ant_t *js, jsval_t *args, int nargs) {
   return this_obj;
 }
 
-static jsval_t child_end(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t this_obj = js_getthis(js);
+static ant_value_t child_end(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
   
-  jsval_t cp_ptr = js_get_slot(js, this_obj, SLOT_DATA);
+  ant_value_t cp_ptr = js_get_slot(js, this_obj, SLOT_DATA);
   if (vtype(cp_ptr) == T_UNDEF) return js_mkundef();
   
   child_process_t *cp = (child_process_t *)(uintptr_t)js_getnum(cp_ptr);
@@ -649,30 +649,30 @@ static uv_handle_t *child_stream_handle(child_process_t *cp, child_stream_kind_t
   }
 }
 
-static jsval_t child_stream_write(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t this_obj = js_getthis(js);
+static ant_value_t child_stream_write(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
   if (nargs < 1) return js_mkerr(js, "write() requires data argument");
-  jsval_t ctx_ptr = js_get_slot(js, this_obj, SLOT_DATA);
+  ant_value_t ctx_ptr = js_get_slot(js, this_obj, SLOT_DATA);
   if (vtype(ctx_ptr) == T_UNDEF) return js_mkerr(js, "Invalid stream object");
   child_stream_ctx_t *ctx = (child_stream_ctx_t *)(uintptr_t)js_getnum(ctx_ptr);
   if (!ctx || !ctx->cp) return js_mkerr(js, "Invalid stream context");
   return child_write_impl(js, ctx->cp, args[0]);
 }
 
-static jsval_t child_stream_end(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t child_stream_end(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
-  jsval_t this_obj = js_getthis(js);
-  jsval_t ctx_ptr = js_get_slot(js, this_obj, SLOT_DATA);
+  ant_value_t this_obj = js_getthis(js);
+  ant_value_t ctx_ptr = js_get_slot(js, this_obj, SLOT_DATA);
   if (vtype(ctx_ptr) == T_UNDEF) return js_mkundef();
   child_stream_ctx_t *ctx = (child_stream_ctx_t *)(uintptr_t)js_getnum(ctx_ptr);
   if (!ctx || !ctx->cp) return js_mkundef();
   return child_end_impl(ctx->cp);
 }
 
-static jsval_t child_stream_ref(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t child_stream_ref(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
-  jsval_t this_obj = js_getthis(js);
-  jsval_t ctx_ptr = js_get_slot(js, this_obj, SLOT_DATA);
+  ant_value_t this_obj = js_getthis(js);
+  ant_value_t ctx_ptr = js_get_slot(js, this_obj, SLOT_DATA);
   if (vtype(ctx_ptr) == T_UNDEF) return this_obj;
   child_stream_ctx_t *ctx = (child_stream_ctx_t *)(uintptr_t)js_getnum(ctx_ptr);
   if (!ctx || !ctx->cp) return this_obj;
@@ -682,10 +682,10 @@ static jsval_t child_stream_ref(ant_t *js, jsval_t *args, int nargs) {
   return this_obj;
 }
 
-static jsval_t child_stream_unref(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t child_stream_unref(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
-  jsval_t this_obj = js_getthis(js);
-  jsval_t ctx_ptr = js_get_slot(js, this_obj, SLOT_DATA);
+  ant_value_t this_obj = js_getthis(js);
+  ant_value_t ctx_ptr = js_get_slot(js, this_obj, SLOT_DATA);
   if (vtype(ctx_ptr) == T_UNDEF) return this_obj;
   child_stream_ctx_t *ctx = (child_stream_ctx_t *)(uintptr_t)js_getnum(ctx_ptr);
   if (!ctx || !ctx->cp) return this_obj;
@@ -695,10 +695,10 @@ static jsval_t child_stream_unref(ant_t *js, jsval_t *args, int nargs) {
   return this_obj;
 }
 
-static jsval_t child_stream_destroy(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t child_stream_destroy(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
-  jsval_t this_obj = js_getthis(js);
-  jsval_t ctx_ptr = js_get_slot(js, this_obj, SLOT_DATA);
+  ant_value_t this_obj = js_getthis(js);
+  ant_value_t ctx_ptr = js_get_slot(js, this_obj, SLOT_DATA);
   if (vtype(ctx_ptr) == T_UNDEF) return this_obj;
   child_stream_ctx_t *ctx = (child_stream_ctx_t *)(uintptr_t)js_getnum(ctx_ptr);
   if (!ctx || !ctx->cp) return this_obj;
@@ -726,13 +726,13 @@ static jsval_t child_stream_destroy(ant_t *js, jsval_t *args, int nargs) {
   return this_obj;
 }
 
-static jsval_t child_stream_on(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t this_obj = js_getthis(js);
+static ant_value_t child_stream_on(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
   if (nargs < 2) return js_mkerr(js, "on() requires event name and callback");
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "Event name must be a string");
   if (vtype(args[1]) != T_FUNC) return js_mkerr(js, "Callback must be a function");
 
-  jsval_t ctx_ptr = js_get_slot(js, this_obj, SLOT_DATA);
+  ant_value_t ctx_ptr = js_get_slot(js, this_obj, SLOT_DATA);
   if (vtype(ctx_ptr) == T_UNDEF) return js_mkerr(js, "Invalid stream object");
   
   child_stream_ctx_t *ctx = (child_stream_ctx_t *)(uintptr_t)js_getnum(ctx_ptr);
@@ -763,13 +763,13 @@ static jsval_t child_stream_on(ant_t *js, jsval_t *args, int nargs) {
   return this_obj;
 }
 
-static jsval_t child_stream_once(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t this_obj = js_getthis(js);
+static ant_value_t child_stream_once(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
   if (nargs < 2) return js_mkerr(js, "once() requires event name and callback");
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "Event name must be a string");
   if (vtype(args[1]) != T_FUNC) return js_mkerr(js, "Callback must be a function");
 
-  jsval_t ctx_ptr = js_get_slot(js, this_obj, SLOT_DATA);
+  ant_value_t ctx_ptr = js_get_slot(js, this_obj, SLOT_DATA);
   if (vtype(ctx_ptr) == T_UNDEF) return js_mkerr(js, "Invalid stream object");
   
   child_stream_ctx_t *ctx = (child_stream_ctx_t *)(uintptr_t)js_getnum(ctx_ptr);
@@ -800,8 +800,8 @@ static jsval_t child_stream_once(ant_t *js, jsval_t *args, int nargs) {
   return this_obj;
 }
 
-static jsval_t create_child_stream_object(ant_t *js, child_process_t *cp, child_stream_kind_t kind) {
-  jsval_t obj = js_mkobj(js);
+static ant_value_t create_child_stream_object(ant_t *js, child_process_t *cp, child_stream_kind_t kind) {
+  ant_value_t obj = js_mkobj(js);
   child_stream_ctx_t *ctx = calloc(1, sizeof(child_stream_ctx_t));
   if (!ctx) return js_mkerr(js, "Out of memory");
   
@@ -828,8 +828,8 @@ static jsval_t create_child_stream_object(ant_t *js, child_process_t *cp, child_
   return obj;
 }
 
-static jsval_t create_child_object(ant_t *js, child_process_t *cp) {
-  jsval_t obj = js_mkobj(js);
+static ant_value_t create_child_object(ant_t *js, child_process_t *cp) {
+  ant_value_t obj = js_mkobj(js);
   
   js_set_slot(js, obj, SLOT_DATA, ANT_PTR(cp));
   js_set(js, obj, "pid", js_mknum((double)cp->process.pid));
@@ -859,8 +859,8 @@ static jsval_t create_child_object(ant_t *js, child_process_t *cp) {
   return obj;
 }
 
-static char **parse_args_array(ant_t *js, jsval_t arr, int *count) {
-  jsval_t len_val = js_get(js, arr, "length");
+static char **parse_args_array(ant_t *js, ant_value_t arr, int *count) {
+  ant_value_t len_val = js_get(js, arr, "length");
   int len = (int)js_getnum(len_val);
   
   char **args = calloc(len + 1, sizeof(char *));
@@ -872,7 +872,7 @@ static char **parse_args_array(ant_t *js, jsval_t arr, int *count) {
   for (int i = 0; i < len; i++) {
     char idx[16];
     snprintf(idx, sizeof(idx), "%d", i);
-    jsval_t val = js_get(js, arr, idx);
+    ant_value_t val = js_get(js, arr, idx);
     if (vtype(val) == T_STR) {
       size_t arg_len;
       char *arg = js_getstr(js, val, &arg_len);
@@ -893,7 +893,7 @@ static void free_args_array(char **args, int count) {
   free(args);
 }
 
-static jsval_t builtin_spawn(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_spawn(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "spawn() requires a command");
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "Command must be a string");
   
@@ -908,24 +908,24 @@ static jsval_t builtin_spawn(ant_t *js, jsval_t *args, int nargs) {
   bool detached = false;
   
   if (nargs >= 2 && is_special_object(args[1])) {
-    jsval_t len_val = js_get(js, args[1], "length");
+    ant_value_t len_val = js_get(js, args[1], "length");
     if (vtype(len_val) == T_NUM) {
       spawn_args = parse_args_array(js, args[1], &spawn_argc);
     }
   }
   
   if (nargs >= 3 && is_special_object(args[2])) {
-    jsval_t cwd_val = js_get(js, args[2], "cwd");
+    ant_value_t cwd_val = js_get(js, args[2], "cwd");
     if (vtype(cwd_val) == T_STR) {
       size_t cwd_len;
       char *cwd_str = js_getstr(js, cwd_val, &cwd_len);
       cwd = strndup(cwd_str, cwd_len);
     }
     
-    jsval_t shell_val = js_get(js, args[2], "shell");
+    ant_value_t shell_val = js_get(js, args[2], "shell");
     use_shell = js_truthy(js, shell_val);
     
-    jsval_t detached_val = js_get(js, args[2], "detached");
+    ant_value_t detached_val = js_get(js, args[2], "detached");
     detached = js_truthy(js, detached_val);
   }
   
@@ -1036,7 +1036,7 @@ static jsval_t builtin_spawn(ant_t *js, jsval_t *args, int nargs) {
   return cp->child_obj;
 }
 
-static jsval_t builtin_exec(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_exec(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "exec() requires a command");
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "Command must be a string");
   
@@ -1046,7 +1046,7 @@ static jsval_t builtin_exec(ant_t *js, jsval_t *args, int nargs) {
   
   char *cwd = NULL;
   if (nargs >= 2 && is_special_object(args[1])) {
-    jsval_t cwd_val = js_get(js, args[1], "cwd");
+    ant_value_t cwd_val = js_get(js, args[1], "cwd");
     if (vtype(cwd_val) == T_STR) {
       size_t cwd_len;
       char *cwd_s = js_getstr(js, cwd_val, &cwd_len);
@@ -1102,7 +1102,7 @@ static jsval_t builtin_exec(ant_t *js, jsval_t *args, int nargs) {
   free(cmd_str);
   
   if (r < 0) {
-    jsval_t promise = cp->promise;
+    ant_value_t promise = cp->promise;
     free_child_process(cp);
     js_reject_promise(js, promise, js_mkstr(js, uv_strerror(r), strlen(uv_strerror(r))));
     return promise;
@@ -1117,7 +1117,7 @@ static jsval_t builtin_exec(ant_t *js, jsval_t *args, int nargs) {
   return cp->promise;
 }
 
-static jsval_t builtin_execSync(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_execSync(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "execSync() requires a command");
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "Command must be a string");
   
@@ -1176,13 +1176,13 @@ static jsval_t builtin_execSync(ant_t *js, jsval_t *args, int nargs) {
     free(output); return js_mkerr(js, "%s", err_msg);
   }
   
-  jsval_t result = js_mkstr(js, output, output_len);
+  ant_value_t result = js_mkstr(js, output, output_len);
   free(output);
   return result;
 }
 
 #ifdef _WIN32
-static jsval_t builtin_spawnSync(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_spawnSync(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "spawnSync() requires a command");
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "Command must be a string");
   
@@ -1196,14 +1196,14 @@ static jsval_t builtin_spawnSync(ant_t *js, jsval_t *args, int nargs) {
   size_t input_len = 0;
   
   if (nargs >= 2 && is_special_object(args[1])) {
-    jsval_t len_val = js_get(js, args[1], "length");
+    ant_value_t len_val = js_get(js, args[1], "length");
     if (vtype(len_val) == T_NUM) {
       spawn_args = parse_args_array(js, args[1], &spawn_argc);
     }
   }
   
   if (nargs >= 3 && is_special_object(args[2])) {
-    jsval_t input_val = js_get(js, args[2], "input");
+    ant_value_t input_val = js_get(js, args[2], "input");
     if (vtype(input_val) == T_STR) {
       input = js_getstr(js, input_val, &input_len);
     }
@@ -1314,7 +1314,7 @@ static jsval_t builtin_spawnSync(ant_t *js, jsval_t *args, int nargs) {
   CloseHandle(pi.hProcess);
   CloseHandle(pi.hThread);
   
-  jsval_t result = js_mkobj(js);
+  ant_value_t result = js_mkobj(js);
   js_set(js, result, "stdout", js_mkstr(js, stdout_buf ? stdout_buf : "", stdout_len));
   js_set(js, result, "stderr", js_mkstr(js, stderr_buf ? stderr_buf : "", stderr_len));
   js_set(js, result, "status", js_mknum((double)exit_code));
@@ -1327,7 +1327,7 @@ static jsval_t builtin_spawnSync(ant_t *js, jsval_t *args, int nargs) {
   return result;
 }
 #else
-static jsval_t builtin_spawnSync(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_spawnSync(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "spawnSync() requires a command");
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "Command must be a string");
   
@@ -1341,14 +1341,14 @@ static jsval_t builtin_spawnSync(ant_t *js, jsval_t *args, int nargs) {
   size_t input_len = 0;
   
   if (nargs >= 2 && is_special_object(args[1])) {
-    jsval_t len_val = js_get(js, args[1], "length");
+    ant_value_t len_val = js_get(js, args[1], "length");
     if (vtype(len_val) == T_NUM) {
       spawn_args = parse_args_array(js, args[1], &spawn_argc);
     }
   }
   
   if (nargs >= 3 && is_special_object(args[2])) {
-    jsval_t input_val = js_get(js, args[2], "input");
+    ant_value_t input_val = js_get(js, args[2], "input");
     if (vtype(input_val) == T_STR) {
       input = js_getstr(js, input_val, &input_len);
     }
@@ -1453,7 +1453,7 @@ static jsval_t builtin_spawnSync(ant_t *js, jsval_t *args, int nargs) {
   int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
   int signal_code = WIFSIGNALED(status) ? WTERMSIG(status) : 0;
   
-  jsval_t result = js_mkobj(js);
+  ant_value_t result = js_mkobj(js);
   js_set(js, result, "stdout", js_mkstr(js, stdout_buf ? stdout_buf : "", stdout_len));
   js_set(js, result, "stderr", js_mkstr(js, stderr_buf ? stderr_buf : "", stderr_len));
   js_set(js, result, "status", js_mknum((double)exit_code));
@@ -1467,7 +1467,7 @@ static jsval_t builtin_spawnSync(ant_t *js, jsval_t *args, int nargs) {
 }
 #endif
 
-static jsval_t builtin_fork(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_fork(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "fork() requires a module path");
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "Module path must be a string");
   size_t path_len;
@@ -1493,21 +1493,21 @@ static jsval_t builtin_fork(ant_t *js, jsval_t *args, int nargs) {
   strncpy(exe_path, "ant", sizeof(exe_path));
 #endif
   
-  jsval_t spawn_args[3];
+  ant_value_t spawn_args[3];
   spawn_args[0] = js_mkstr(js, exe_path, strlen(exe_path));
   
-  jsval_t args_arr = js_mkarr(js);
+  ant_value_t args_arr = js_mkarr(js);
   js_arr_push(js, args_arr, js_mkstr(js, path_str, path_len));
   
   if (nargs >= 2 && is_special_object(args[1])) {
-    jsval_t exec_args = js_get(js, args[1], "execArgv");
+    ant_value_t exec_args = js_get(js, args[1], "execArgv");
     if (is_special_object(exec_args)) {
-      jsval_t len_val = js_get(js, exec_args, "length");
+      ant_value_t len_val = js_get(js, exec_args, "length");
       int arr_len = (int)js_getnum(len_val);
       for (int i = 0; i < arr_len; i++) {
         char idx[16];
         snprintf(idx, sizeof(idx), "%d", i);
-        jsval_t arg = js_get(js, exec_args, idx);
+        ant_value_t arg = js_get(js, exec_args, idx);
         js_arr_push(js, args_arr, arg);
       }
     }
@@ -1521,8 +1521,8 @@ static jsval_t builtin_fork(ant_t *js, jsval_t *args, int nargs) {
   return builtin_spawn(js, spawn_args, 3);
 }
 
-jsval_t child_process_library(ant_t *js) {
-  jsval_t lib = js_mkobj(js);
+ant_value_t child_process_library(ant_t *js) {
+  ant_value_t lib = js_mkobj(js);
   
   js_set(js, lib, "spawn", js_mkfun(builtin_spawn));
   js_set(js, lib, "exec", js_mkfun(builtin_exec));

@@ -55,15 +55,15 @@ static bool gc_throttled = false;
 void js_gc_throttle(bool enabled) { gc_throttled = enabled; }
 
 typedef struct {
-  jsoff_t *old_offs;
-  jsoff_t *new_offs;
+  ant_offset_t *old_offs;
+  ant_offset_t *new_offs;
   size_t count;
   size_t capacity;
   size_t mask;
 } gc_forward_table_t;
 
 typedef struct {
-  jsoff_t *items;
+  ant_offset_t *items;
   size_t count;
   size_t capacity;
 } gc_work_queue_t;
@@ -74,13 +74,13 @@ typedef struct {
   uint8_t *mark_bits;
   gc_forward_table_t fwd;
   gc_work_queue_t work;
-  jsoff_t new_brk;
-  jsoff_t new_size;
+  ant_offset_t new_brk;
+  ant_offset_t new_size;
   bool failed;
 } gc_ctx_t;
 
-static jsval_t gc_update_val(gc_ctx_t *ctx, jsval_t val);
-static jsval_t gc_apply_val(gc_ctx_t *ctx, jsval_t val);
+static ant_value_t gc_update_val(gc_ctx_t *ctx, ant_value_t val);
+static ant_value_t gc_apply_val(gc_ctx_t *ctx, ant_value_t val);
 
 /* inlined helpers from ant.c */
 static inline bool gc_func_const_count_sane(int n) {
@@ -91,26 +91,26 @@ static inline bool gc_upvalue_is_closed(const sv_upvalue_t *uv) {
   return uv && uv->location == &uv->closed;
 }
 
-static inline bool gc_is_tagged(jsval_t v) {
+static inline bool gc_is_tagged(ant_value_t v) {
   return v > NANBOX_PREFIX;
 }
 
-static inline uint8_t gc_vtype(jsval_t v) {
+static inline uint8_t gc_vtype(ant_value_t v) {
   return gc_is_tagged(v) ? ((v >> NANBOX_TYPE_SHIFT) & NANBOX_TYPE_MASK) : 255;
 }
 
-static inline size_t gc_vdata(jsval_t v) {
+static inline size_t gc_vdata(ant_value_t v) {
   return (size_t)(v & NANBOX_DATA_MASK);
 }
 
-static inline jsval_t gc_mkval(uint8_t type, uint64_t data) {
+static inline ant_value_t gc_mkval(uint8_t type, uint64_t data) {
   return NANBOX_PREFIX 
-    | ((jsval_t)(type & NANBOX_TYPE_MASK) << NANBOX_TYPE_SHIFT)
+    | ((ant_value_t)(type & NANBOX_TYPE_MASK) << NANBOX_TYPE_SHIFT)
     | (data & NANBOX_DATA_MASK);
 }
 
-static inline void mark_set(gc_ctx_t *ctx, jsoff_t off) {
-  jsoff_t idx = off >> 3;
+static inline void mark_set(gc_ctx_t *ctx, ant_offset_t off) {
+  ant_offset_t idx = off >> 3;
   ctx->mark_bits[idx >> 3] |= (1 << (idx & 7));
 }
 
@@ -132,7 +132,7 @@ static void gc_update_func_constants(gc_ctx_t *ctx, sv_func_t *func, int depth) 
   if (!func->constants || !gc_func_const_count_sane(func->const_count)) return;
 
   for (int i = 0; i < func->const_count; i++) {
-    jsval_t c = func->constants[i];
+    ant_value_t c = func->constants[i];
 
     if (vtype(c) == T_CFUNC) {
       sv_func_t *child = (sv_func_t *)(uintptr_t)vdata(c);
@@ -170,10 +170,10 @@ static inline void gc_update_closure(gc_ctx_t *ctx, sv_closure_t *closure) {
 
 static bool fwd_init(gc_forward_table_t *fwd, size_t estimated) {
   size_t cap = next_pow2(estimated < 64 ? 64 : estimated);
-  size_t size = cap * sizeof(jsoff_t);
+  size_t size = cap * sizeof(ant_offset_t);
   
-  fwd->old_offs = (jsoff_t *)gc_mmap(size);
-  fwd->new_offs = (jsoff_t *)gc_mmap(size);
+  fwd->old_offs = (ant_offset_t *)gc_mmap(size);
+  fwd->new_offs = (ant_offset_t *)gc_mmap(size);
   
   if (!fwd->old_offs || !fwd->new_offs) {
     if (fwd->old_offs) gc_munmap(fwd->old_offs, size);
@@ -193,11 +193,11 @@ static bool fwd_init(gc_forward_table_t *fwd, size_t estimated) {
 static bool fwd_grow(gc_forward_table_t *fwd) {
   size_t new_cap = fwd->capacity * 2;
   size_t new_mask = new_cap - 1;
-  size_t new_size = new_cap * sizeof(jsoff_t);
-  size_t old_size = fwd->capacity * sizeof(jsoff_t);
+  size_t new_size = new_cap * sizeof(ant_offset_t);
+  size_t old_size = fwd->capacity * sizeof(ant_offset_t);
   
-  jsoff_t *new_old = (jsoff_t *)gc_mmap(new_size);
-  jsoff_t *new_new = (jsoff_t *)gc_mmap(new_size);
+  ant_offset_t *new_old = (ant_offset_t *)gc_mmap(new_size);
+  ant_offset_t *new_new = (ant_offset_t *)gc_mmap(new_size);
   
   if (!new_old || !new_new) {
     if (new_old) gc_munmap(new_old, new_size);
@@ -208,7 +208,7 @@ static bool fwd_grow(gc_forward_table_t *fwd) {
   for (size_t i = 0; i < new_cap; i++) new_old[i] = FWD_EMPTY;
   
   for (size_t i = 0; i < fwd->capacity; i++) {
-    jsoff_t key = fwd->old_offs[i];
+    ant_offset_t key = fwd->old_offs[i];
     if (key == FWD_EMPTY || key == FWD_TOMBSTONE) continue;
     size_t h = (key >> 3) & new_mask;
     while (new_old[h] != FWD_EMPTY) h = (h + 1) & new_mask;
@@ -227,7 +227,7 @@ static bool fwd_grow(gc_forward_table_t *fwd) {
   return true;
 }
 
-static inline bool fwd_add(gc_forward_table_t *fwd, jsoff_t old_off, jsoff_t new_off) {
+static inline bool fwd_add(gc_forward_table_t *fwd, ant_offset_t old_off, ant_offset_t new_off) {
   if (fwd->count * 100 >= fwd->capacity * GC_FWD_LOAD_FACTOR) {
     if (!fwd_grow(fwd)) return false;
   }
@@ -248,19 +248,19 @@ static inline bool fwd_add(gc_forward_table_t *fwd, jsoff_t old_off, jsoff_t new
   return true;
 }
 
-static inline jsoff_t fwd_lookup(gc_forward_table_t *fwd, jsoff_t old_off) {
+static inline ant_offset_t fwd_lookup(gc_forward_table_t *fwd, ant_offset_t old_off) {
   size_t h = (old_off >> 3) & fwd->mask;
   for (size_t i = 0; i < fwd->capacity; i++) {
-    jsoff_t key = fwd->old_offs[h];
-    if (key == FWD_EMPTY) return (jsoff_t)~0;
+    ant_offset_t key = fwd->old_offs[h];
+    if (key == FWD_EMPTY) return (ant_offset_t)~0;
     if (key == old_off) return fwd->new_offs[h];
     h = (h + 1) & fwd->mask;
   }
-  return (jsoff_t)~0;
+  return (ant_offset_t)~0;
 }
 
 static void fwd_free(gc_forward_table_t *fwd) {
-  size_t size = fwd->capacity * sizeof(jsoff_t);
+  size_t size = fwd->capacity * sizeof(ant_offset_t);
   if (fwd->old_offs) gc_munmap(fwd->old_offs, size);
   if (fwd->new_offs) gc_munmap(fwd->new_offs, size);
   
@@ -271,24 +271,24 @@ static void fwd_free(gc_forward_table_t *fwd) {
 }
 
 static bool work_init(gc_work_queue_t *work, size_t initial) {
-  size_t size = initial * sizeof(jsoff_t);
-  work->items = (jsoff_t *)gc_mmap(size);
+  size_t size = initial * sizeof(ant_offset_t);
+  work->items = (ant_offset_t *)gc_mmap(size);
   if (!work->items) return false;
   work->count = 0;
   work->capacity = initial;
   return true;
 }
 
-static inline bool work_push(gc_work_queue_t *work, jsoff_t off) {
+static inline bool work_push(gc_work_queue_t *work, ant_offset_t off) {
   if (work->count >= work->capacity) {
     size_t new_cap = work->capacity * 2;
-    size_t new_size = new_cap * sizeof(jsoff_t);
-    size_t old_size = work->capacity * sizeof(jsoff_t);
+    size_t new_size = new_cap * sizeof(ant_offset_t);
+    size_t old_size = work->capacity * sizeof(ant_offset_t);
     
-    jsoff_t *new_items = (jsoff_t *)gc_mmap(new_size);
+    ant_offset_t *new_items = (ant_offset_t *)gc_mmap(new_size);
     if (!new_items) return false;
     
-    memcpy(new_items, work->items, work->count * sizeof(jsoff_t));
+    memcpy(new_items, work->items, work->count * sizeof(ant_offset_t));
     gc_munmap(work->items, old_size);
     
     work->items = new_items;
@@ -299,13 +299,13 @@ static inline bool work_push(gc_work_queue_t *work, jsoff_t off) {
   return true;
 }
 
-static inline jsoff_t work_pop(gc_work_queue_t *work) {
-  if (work->count == 0) return (jsoff_t)~0;
+static inline ant_offset_t work_pop(gc_work_queue_t *work) {
+  if (work->count == 0) return (ant_offset_t)~0;
   return work->items[--work->count];
 }
 
 static void work_free(gc_work_queue_t *work) {
-  size_t size = work->capacity * sizeof(jsoff_t);
+  size_t size = work->capacity * sizeof(ant_offset_t);
   if (work->items) gc_munmap(work->items, size);
   
   work->items = NULL;
@@ -313,92 +313,92 @@ static void work_free(gc_work_queue_t *work) {
   work->capacity = 0;
 }
 
-static inline jsoff_t gc_loadoff(uint8_t *mem, jsoff_t off) {
-  jsoff_t val;
+static inline ant_offset_t gc_loadoff(uint8_t *mem, ant_offset_t off) {
+  ant_offset_t val;
   memcpy(&val, &mem[off], sizeof(val));
   return val;
 }
 
-static inline jsval_t gc_loadval(uint8_t *mem, jsoff_t off) {
-  jsval_t val;
+static inline ant_value_t gc_loadval(uint8_t *mem, ant_offset_t off) {
+  ant_value_t val;
   memcpy(&val, &mem[off], sizeof(val));
   return val;
 }
 
-static inline void gc_saveoff(uint8_t *mem, jsoff_t off, jsoff_t val) {
+static inline void gc_saveoff(uint8_t *mem, ant_offset_t off, ant_offset_t val) {
   memcpy(&mem[off], &val, sizeof(val));
 }
 
-static inline void gc_saveval(uint8_t *mem, jsoff_t off, jsval_t val) {
+static inline void gc_saveval(uint8_t *mem, ant_offset_t off, ant_value_t val) {
   memcpy(&mem[off], &val, sizeof(val));
 }
 
-static jsoff_t gc_alloc(gc_ctx_t *ctx, size_t size) {
+static ant_offset_t gc_alloc(gc_ctx_t *ctx, size_t size) {
   size = (size + 7) / 8 * 8;
   if (ctx->new_brk + size > ctx->new_size) {
     ctx->failed = true;
-    return (jsoff_t)~0;
+    return (ant_offset_t)~0;
   }
-  jsoff_t off = ctx->new_brk;
-  ctx->new_brk += (jsoff_t)size;
+  ant_offset_t off = ctx->new_brk;
+  ctx->new_brk += (ant_offset_t)size;
   return off;
 }
 
-static jsoff_t gc_copy_string(gc_ctx_t *ctx, jsoff_t old_off) {
+static ant_offset_t gc_copy_string(gc_ctx_t *ctx, ant_offset_t old_off) {
   if (old_off >= ctx->js->brk) return old_off;
   
-  jsoff_t new_off = fwd_lookup(&ctx->fwd, old_off);
-  if (new_off != (jsoff_t)~0) return new_off;
+  ant_offset_t new_off = fwd_lookup(&ctx->fwd, old_off);
+  if (new_off != (ant_offset_t)~0) return new_off;
   
-  jsoff_t header = gc_loadoff(ctx->js->mem, old_off);
+  ant_offset_t header = gc_loadoff(ctx->js->mem, old_off);
   if ((header & 3) != T_STR) return old_off;
   
   bool is_rope_str = (header & ROPE_FLAG) != 0;
-  jsoff_t size;
+  ant_offset_t size;
   
   if (is_rope_str) {
     size = sizeof(rope_node_t);
   } else size = esize(header);
   
-  if (size == (jsoff_t)~0) return old_off;
+  if (size == (ant_offset_t)~0) return old_off;
   
   new_off = gc_alloc(ctx, size);
-  if (new_off == (jsoff_t)~0) return old_off;
+  if (new_off == (ant_offset_t)~0) return old_off;
   
   memcpy(&ctx->new_mem[new_off], &ctx->js->mem[old_off], size);
   if (!fwd_add(&ctx->fwd, old_off, new_off)) ctx->failed = true;
   mark_set(ctx, old_off);
   
   if (is_rope_str) {
-    jsval_t left, right, cached;
-    memcpy(&left, &ctx->js->mem[old_off + offsetof(rope_node_t, left)], sizeof(jsval_t));
-    memcpy(&right, &ctx->js->mem[old_off + offsetof(rope_node_t, right)], sizeof(jsval_t));
-    memcpy(&cached, &ctx->js->mem[old_off + offsetof(rope_node_t, cached)], sizeof(jsval_t));
+    ant_value_t left, right, cached;
+    memcpy(&left, &ctx->js->mem[old_off + offsetof(rope_node_t, left)], sizeof(ant_value_t));
+    memcpy(&right, &ctx->js->mem[old_off + offsetof(rope_node_t, right)], sizeof(ant_value_t));
+    memcpy(&cached, &ctx->js->mem[old_off + offsetof(rope_node_t, cached)], sizeof(ant_value_t));
     
-    jsval_t new_left = gc_update_val(ctx, left);
-    jsval_t new_right = gc_update_val(ctx, right);
-    jsval_t new_cached = gc_update_val(ctx, cached);
+    ant_value_t new_left = gc_update_val(ctx, left);
+    ant_value_t new_right = gc_update_val(ctx, right);
+    ant_value_t new_cached = gc_update_val(ctx, cached);
     
-    memcpy(&ctx->new_mem[new_off + offsetof(rope_node_t, left)], &new_left, sizeof(jsval_t));
-    memcpy(&ctx->new_mem[new_off + offsetof(rope_node_t, right)], &new_right, sizeof(jsval_t));
-    memcpy(&ctx->new_mem[new_off + offsetof(rope_node_t, cached)], &new_cached, sizeof(jsval_t));
+    memcpy(&ctx->new_mem[new_off + offsetof(rope_node_t, left)], &new_left, sizeof(ant_value_t));
+    memcpy(&ctx->new_mem[new_off + offsetof(rope_node_t, right)], &new_right, sizeof(ant_value_t));
+    memcpy(&ctx->new_mem[new_off + offsetof(rope_node_t, cached)], &new_cached, sizeof(ant_value_t));
   }
   
   return new_off;
 }
 
-static jsoff_t gc_copy_bigint(gc_ctx_t *ctx, jsoff_t old_off) {
+static ant_offset_t gc_copy_bigint(gc_ctx_t *ctx, ant_offset_t old_off) {
   if (old_off >= ctx->js->brk) return old_off;
   
-  jsoff_t new_off = fwd_lookup(&ctx->fwd, old_off);
-  if (new_off != (jsoff_t)~0) return new_off;
+  ant_offset_t new_off = fwd_lookup(&ctx->fwd, old_off);
+  if (new_off != (ant_offset_t)~0) return new_off;
   
-  jsoff_t header = gc_loadoff(ctx->js->mem, old_off);
-  size_t total = (header >> 4) + sizeof(jsoff_t);
+  ant_offset_t header = gc_loadoff(ctx->js->mem, old_off);
+  size_t total = (header >> 4) + sizeof(ant_offset_t);
   total = (total + 7) / 8 * 8;
   
   new_off = gc_alloc(ctx, total);
-  if (new_off == (jsoff_t)~0) return old_off;
+  if (new_off == (ant_offset_t)~0) return old_off;
   
   memcpy(&ctx->new_mem[new_off], &ctx->js->mem[old_off], total);
   if (!fwd_add(&ctx->fwd, old_off, new_off)) ctx->failed = true;
@@ -407,18 +407,18 @@ static jsoff_t gc_copy_bigint(gc_ctx_t *ctx, jsoff_t old_off) {
   return new_off;
 }
 
-static jsoff_t gc_copy_symbol(gc_ctx_t *ctx, jsoff_t old_off) {
+static ant_offset_t gc_copy_symbol(gc_ctx_t *ctx, ant_offset_t old_off) {
   if (old_off >= ctx->js->brk) return old_off;
   
-  jsoff_t new_off = fwd_lookup(&ctx->fwd, old_off);
-  if (new_off != (jsoff_t)~0) return new_off;
+  ant_offset_t new_off = fwd_lookup(&ctx->fwd, old_off);
+  if (new_off != (ant_offset_t)~0) return new_off;
   
-  jsoff_t header = gc_loadoff(ctx->js->mem, old_off);
-  size_t total = (header >> GC_SYM_HEADER_SHIFT) + sizeof(jsoff_t);
+  ant_offset_t header = gc_loadoff(ctx->js->mem, old_off);
+  size_t total = (header >> GC_SYM_HEADER_SHIFT) + sizeof(ant_offset_t);
   total = (total + 7) / 8 * 8;
   
   new_off = gc_alloc(ctx, total);
-  if (new_off == (jsoff_t)~0) return old_off;
+  if (new_off == (ant_offset_t)~0) return old_off;
   
   memcpy(&ctx->new_mem[new_off], &ctx->js->mem[old_off], total);
   if (!fwd_add(&ctx->fwd, old_off, new_off)) ctx->failed = true;
@@ -427,20 +427,20 @@ static jsoff_t gc_copy_symbol(gc_ctx_t *ctx, jsoff_t old_off) {
   return new_off;
 }
 
-static jsoff_t gc_reserve_object(gc_ctx_t *ctx, jsoff_t old_off) {
+static ant_offset_t gc_reserve_object(gc_ctx_t *ctx, ant_offset_t old_off) {
   if (old_off >= ctx->js->brk) return old_off;
   
-  jsoff_t new_off = fwd_lookup(&ctx->fwd, old_off);
-  if (new_off != (jsoff_t)~0) return new_off;
+  ant_offset_t new_off = fwd_lookup(&ctx->fwd, old_off);
+  if (new_off != (ant_offset_t)~0) return new_off;
   
-  jsoff_t header = gc_loadoff(ctx->js->mem, old_off);
+  ant_offset_t header = gc_loadoff(ctx->js->mem, old_off);
   if ((header & 3) != T_OBJ) return old_off;
   
-  jsoff_t size = esize(header);
-  if (size == (jsoff_t)~0) return old_off;
+  ant_offset_t size = esize(header);
+  if (size == (ant_offset_t)~0) return old_off;
   
   new_off = gc_alloc(ctx, size);
-  if (new_off == (jsoff_t)~0) return old_off;
+  if (new_off == (ant_offset_t)~0) return old_off;
   
   memcpy(&ctx->new_mem[new_off], &ctx->js->mem[old_off], size);
   if (!fwd_add(&ctx->fwd, old_off, new_off)) ctx->failed = true;
@@ -450,20 +450,20 @@ static jsoff_t gc_reserve_object(gc_ctx_t *ctx, jsoff_t old_off) {
   return new_off;
 }
 
-static jsoff_t gc_reserve_prop(gc_ctx_t *ctx, jsoff_t old_off) {
+static ant_offset_t gc_reserve_prop(gc_ctx_t *ctx, ant_offset_t old_off) {
   if (old_off >= ctx->js->brk) return old_off;
   
-  jsoff_t new_off = fwd_lookup(&ctx->fwd, old_off);
-  if (new_off != (jsoff_t)~0) return new_off;
+  ant_offset_t new_off = fwd_lookup(&ctx->fwd, old_off);
+  if (new_off != (ant_offset_t)~0) return new_off;
   
-  jsoff_t header = gc_loadoff(ctx->js->mem, old_off);
+  ant_offset_t header = gc_loadoff(ctx->js->mem, old_off);
   if ((header & 3) != T_PROP) return old_off;
   
-  jsoff_t size = esize(header);
-  if (size == (jsoff_t)~0) return old_off;
+  ant_offset_t size = esize(header);
+  if (size == (ant_offset_t)~0) return old_off;
   
   new_off = gc_alloc(ctx, size);
-  if (new_off == (jsoff_t)~0) return old_off;
+  if (new_off == (ant_offset_t)~0) return old_off;
   
   memcpy(&ctx->new_mem[new_off], &ctx->js->mem[old_off], size);
   if (!fwd_add(&ctx->fwd, old_off, new_off)) ctx->failed = true;
@@ -473,99 +473,99 @@ static jsoff_t gc_reserve_prop(gc_ctx_t *ctx, jsoff_t old_off) {
   return new_off;
 }
 
-static void gc_process_prop(gc_ctx_t *ctx, jsoff_t old_off) {
-  jsoff_t new_off = fwd_lookup(&ctx->fwd, old_off);
-  if (new_off == (jsoff_t)~0) return;
+static void gc_process_prop(gc_ctx_t *ctx, ant_offset_t old_off) {
+  ant_offset_t new_off = fwd_lookup(&ctx->fwd, old_off);
+  if (new_off == (ant_offset_t)~0) return;
   
-  jsoff_t header = gc_loadoff(ctx->js->mem, old_off);
-  jsoff_t next_prop = header & ~(3ULL | FLAGMASK);
+  ant_offset_t header = gc_loadoff(ctx->js->mem, old_off);
+  ant_offset_t next_prop = header & ~(3ULL | FLAGMASK);
   
   if (next_prop != 0 && next_prop < ctx->js->brk) {
-    jsoff_t new_next = gc_reserve_prop(ctx, next_prop);
-    jsoff_t new_header = (new_next & ~3ULL) | (header & (3ULL | FLAGMASK));
+    ant_offset_t new_next = gc_reserve_prop(ctx, next_prop);
+    ant_offset_t new_header = (new_next & ~3ULL) | (header & (3ULL | FLAGMASK));
     gc_saveoff(ctx->new_mem, new_off, new_header);
   }
   
   bool is_slot = (header & SLOTMASK) != 0;
   
   if (!is_slot) {
-    jsoff_t key_off = gc_loadoff(ctx->js->mem, old_off + sizeof(jsoff_t));
+    ant_offset_t key_off = gc_loadoff(ctx->js->mem, old_off + sizeof(ant_offset_t));
     if (key_off < ctx->js->brk) {
-      jsoff_t key_hdr = gc_loadoff(ctx->js->mem, key_off); jsoff_t new_key;
+      ant_offset_t key_hdr = gc_loadoff(ctx->js->mem, key_off); ant_offset_t new_key;
       if ((key_hdr & 3) == T_STR) new_key = gc_copy_string(ctx, key_off);
       else new_key = gc_copy_symbol(ctx, key_off);
-      gc_saveoff(ctx->new_mem, new_off + sizeof(jsoff_t), new_key);
+      gc_saveoff(ctx->new_mem, new_off + sizeof(ant_offset_t), new_key);
     }
   }
   
-  jsval_t val = gc_loadval(ctx->js->mem, old_off + sizeof(jsoff_t) + sizeof(jsoff_t));
+  ant_value_t val = gc_loadval(ctx->js->mem, old_off + sizeof(ant_offset_t) + sizeof(ant_offset_t));
   if (!is_slot) goto update_val;
 
-  jsoff_t slot_id = gc_loadoff(ctx->js->mem, old_off + sizeof(jsoff_t));
-  if (slot_id != (jsoff_t)SLOT_DENSE_BUF) goto update_val;
+  ant_offset_t slot_id = gc_loadoff(ctx->js->mem, old_off + sizeof(ant_offset_t));
+  if (slot_id != (ant_offset_t)SLOT_DENSE_BUF) goto update_val;
 
-  jsoff_t old_doff = (jsoff_t)tod(val);
+  ant_offset_t old_doff = (ant_offset_t)tod(val);
   if (old_doff == 0 || old_doff >= ctx->js->brk) goto update_val;
 
-  jsoff_t cap = gc_loadoff(ctx->js->mem, old_doff);
-  jsoff_t len = gc_loadoff(ctx->js->mem, old_doff + sizeof(jsoff_t));
-  jsoff_t buf_size = (jsoff_t)(sizeof(jsoff_t) * 2 + sizeof(jsval_t) * cap);
-  jsoff_t new_doff = gc_alloc(ctx, buf_size);
-  if (new_doff == (jsoff_t)~0) return;
+  ant_offset_t cap = gc_loadoff(ctx->js->mem, old_doff);
+  ant_offset_t len = gc_loadoff(ctx->js->mem, old_doff + sizeof(ant_offset_t));
+  ant_offset_t buf_size = (ant_offset_t)(sizeof(ant_offset_t) * 2 + sizeof(ant_value_t) * cap);
+  ant_offset_t new_doff = gc_alloc(ctx, buf_size);
+  if (new_doff == (ant_offset_t)~0) return;
 
   memcpy(&ctx->new_mem[new_doff], &ctx->js->mem[old_doff], buf_size);
-  for (jsoff_t i = 0; i < len; i++) {
-    jsoff_t voff = new_doff + (jsoff_t)(sizeof(jsoff_t) * 2 + sizeof(jsval_t) * i);
-    jsval_t v = gc_loadval(ctx->new_mem, voff);
+  for (ant_offset_t i = 0; i < len; i++) {
+    ant_offset_t voff = new_doff + (ant_offset_t)(sizeof(ant_offset_t) * 2 + sizeof(ant_value_t) * i);
+    ant_value_t v = gc_loadval(ctx->new_mem, voff);
     if (v != T_EMPTY) {
-      jsval_t nv = gc_update_val(ctx, v);
+      ant_value_t nv = gc_update_val(ctx, v);
       gc_saveval(ctx->new_mem, voff, nv);
     }
   }
   
   gc_saveval(
     ctx->new_mem,
-    new_off + sizeof(jsoff_t) + sizeof(jsoff_t), 
+    new_off + sizeof(ant_offset_t) + sizeof(ant_offset_t), 
     tov((double)new_doff)
   ); return;
 
   update_val: {
-    jsval_t new_val = gc_update_val(ctx, val);
-    gc_saveval(ctx->new_mem, new_off + sizeof(jsoff_t) + sizeof(jsoff_t), new_val);
+    ant_value_t new_val = gc_update_val(ctx, val);
+    gc_saveval(ctx->new_mem, new_off + sizeof(ant_offset_t) + sizeof(ant_offset_t), new_val);
   }
 }
 
-static void gc_process_object(gc_ctx_t *ctx, jsoff_t old_off) {
-  jsoff_t new_off = fwd_lookup(&ctx->fwd, old_off);
-  if (new_off == (jsoff_t)~0) return;
+static void gc_process_object(gc_ctx_t *ctx, ant_offset_t old_off) {
+  ant_offset_t new_off = fwd_lookup(&ctx->fwd, old_off);
+  if (new_off == (ant_offset_t)~0) return;
   
-  jsoff_t header = gc_loadoff(ctx->js->mem, old_off);
+  ant_offset_t header = gc_loadoff(ctx->js->mem, old_off);
   
-  jsoff_t first_prop = header & ~(3ULL | FLAGMASK);
+  ant_offset_t first_prop = header & ~(3ULL | FLAGMASK);
   if (first_prop != 0 && first_prop < ctx->js->brk) {
-    jsoff_t new_first = gc_reserve_prop(ctx, first_prop);
-    jsoff_t new_header = (new_first & ~3ULL) | (header & (3ULL | FLAGMASK));
+    ant_offset_t new_first = gc_reserve_prop(ctx, first_prop);
+    ant_offset_t new_header = (new_first & ~3ULL) | (header & (3ULL | FLAGMASK));
     gc_saveoff(ctx->new_mem, new_off, new_header);
   }
   
-  jsoff_t parent_off = gc_loadoff(ctx->js->mem, old_off + sizeof(jsoff_t));
+  ant_offset_t parent_off = gc_loadoff(ctx->js->mem, old_off + sizeof(ant_offset_t));
   if (parent_off < ctx->js->brk) {
-    jsoff_t new_parent = gc_reserve_object(ctx, parent_off);
-    gc_saveoff(ctx->new_mem, new_off + sizeof(jsoff_t), new_parent);
+    ant_offset_t new_parent = gc_reserve_object(ctx, parent_off);
+    gc_saveoff(ctx->new_mem, new_off + sizeof(ant_offset_t), new_parent);
   }
   
-  jsoff_t tail_off = gc_loadoff(ctx->js->mem, old_off + sizeof(jsoff_t) + sizeof(jsoff_t));
+  ant_offset_t tail_off = gc_loadoff(ctx->js->mem, old_off + sizeof(ant_offset_t) + sizeof(ant_offset_t));
   if (tail_off != 0 && tail_off < ctx->js->brk) {
-    jsoff_t new_tail = fwd_lookup(&ctx->fwd, tail_off);
-    if (new_tail == (jsoff_t)~0) new_tail = gc_reserve_prop(ctx, tail_off);
-    gc_saveoff(ctx->new_mem, new_off + sizeof(jsoff_t) + sizeof(jsoff_t), new_tail);
+    ant_offset_t new_tail = fwd_lookup(&ctx->fwd, tail_off);
+    if (new_tail == (ant_offset_t)~0) new_tail = gc_reserve_prop(ctx, tail_off);
+    gc_saveoff(ctx->new_mem, new_off + sizeof(ant_offset_t) + sizeof(ant_offset_t), new_tail);
   }
 }
 
 static void gc_drain_work_queue(gc_ctx_t *ctx) {
-  jsoff_t off;
-  while ((off = work_pop(&ctx->work)) != (jsoff_t)~0) {
-    jsoff_t header = gc_loadoff(ctx->js->mem, off);
+  ant_offset_t off;
+  while ((off = work_pop(&ctx->work)) != (ant_offset_t)~0) {
+    ant_offset_t header = gc_loadoff(ctx->js->mem, off);
     switch (header & 3) {
       case T_OBJ:  gc_process_object(ctx, off); break;
       case T_PROP: gc_process_prop(ctx, off); break;
@@ -574,11 +574,11 @@ static void gc_drain_work_queue(gc_ctx_t *ctx) {
   }
 }
 
-static jsval_t gc_update_val(gc_ctx_t *ctx, jsval_t val) {
+static ant_value_t gc_update_val(gc_ctx_t *ctx, ant_value_t val) {
   if (!gc_is_tagged(val)) return val;
   
   uint8_t type = gc_vtype(val);
-  jsoff_t old_off = (jsoff_t)gc_vdata(val);
+  ant_offset_t old_off = (ant_offset_t)gc_vdata(val);
   
   switch (type) {
     case T_OBJ:
@@ -586,32 +586,32 @@ static jsval_t gc_update_val(gc_ctx_t *ctx, jsval_t val) {
     case T_PROMISE:
     case T_GENERATOR: {
       if (old_off >= ctx->js->brk) return val;
-      jsoff_t new_off = gc_reserve_object(ctx, old_off);
-      if (new_off != (jsoff_t)~0) return gc_mkval(type, new_off);
+      ant_offset_t new_off = gc_reserve_object(ctx, old_off);
+      if (new_off != (ant_offset_t)~0) return gc_mkval(type, new_off);
       break;
     }
     case T_STR: {
       if (old_off >= ctx->js->brk) return val;
-      jsoff_t new_off = gc_copy_string(ctx, old_off);
-      if (new_off != (jsoff_t)~0) return gc_mkval(type, new_off);
+      ant_offset_t new_off = gc_copy_string(ctx, old_off);
+      if (new_off != (ant_offset_t)~0) return gc_mkval(type, new_off);
       break;
     }
     case T_PROP: {
       if (old_off >= ctx->js->brk) return val;
-      jsoff_t new_off = gc_reserve_prop(ctx, old_off);
-      if (new_off != (jsoff_t)~0) return gc_mkval(type, new_off);
+      ant_offset_t new_off = gc_reserve_prop(ctx, old_off);
+      if (new_off != (ant_offset_t)~0) return gc_mkval(type, new_off);
       break;
     }
     case T_BIGINT: {
       if (old_off >= ctx->js->brk) return val;
-      jsoff_t new_off = gc_copy_bigint(ctx, old_off);
-      if (new_off != (jsoff_t)~0) return gc_mkval(type, new_off);
+      ant_offset_t new_off = gc_copy_bigint(ctx, old_off);
+      if (new_off != (ant_offset_t)~0) return gc_mkval(type, new_off);
       break;
     }
     case T_SYMBOL: {
       if (old_off >= ctx->js->brk) return val;
-      jsoff_t new_off = gc_copy_symbol(ctx, old_off);
-      if (new_off != (jsoff_t)~0) return gc_mkval(type, new_off);
+      ant_offset_t new_off = gc_copy_symbol(ctx, old_off);
+      if (new_off != (ant_offset_t)~0) return gc_mkval(type, new_off);
       break;
     }
     case T_FUNC:
@@ -625,16 +625,16 @@ static jsval_t gc_update_val(gc_ctx_t *ctx, jsval_t val) {
   return val;
 }
 
-static jsoff_t gc_fwd_off_callback(void *ctx_ptr, jsoff_t old_off) {
+static ant_offset_t gc_fwd_off_callback(void *ctx_ptr, ant_offset_t old_off) {
   gc_ctx_t *ctx = (gc_ctx_t *)ctx_ptr;
   if (old_off == 0) return 0;
   if (old_off >= ctx->js->brk) return old_off;
   
-  jsoff_t new_off = fwd_lookup(&ctx->fwd, old_off);
-  if (new_off != (jsoff_t)~0) return new_off;
+  ant_offset_t new_off = fwd_lookup(&ctx->fwd, old_off);
+  if (new_off != (ant_offset_t)~0) return new_off;
   
   static const void *dispatch[] = { &&l_obj, &&l_prop, &&l_str, &&l_default };
-  jsoff_t header = gc_loadoff(ctx->js->mem, old_off);
+  ant_offset_t header = gc_loadoff(ctx->js->mem, old_off);
   goto *dispatch[header & 3];
   
   l_obj:     new_off = gc_reserve_object(ctx, old_off); goto l_done;
@@ -642,30 +642,30 @@ static jsoff_t gc_fwd_off_callback(void *ctx_ptr, jsoff_t old_off) {
   l_str:     new_off = gc_copy_string(ctx, old_off);    goto l_done;
   l_default: return old_off;
   
-  l_done: return (new_off != (jsoff_t)~0) ? new_off : old_off;
+  l_done: return (new_off != (ant_offset_t)~0) ? new_off : old_off;
 }
 
-static jsval_t gc_fwd_val_callback(void *ctx_ptr, jsval_t val) {
+static ant_value_t gc_fwd_val_callback(void *ctx_ptr, ant_value_t val) {
   gc_ctx_t *ctx = (gc_ctx_t *)ctx_ptr;
   return gc_update_val(ctx, val);
 }
 
-static jsoff_t gc_apply_off_callback(void *ctx_ptr, jsoff_t old_off) {
+static ant_offset_t gc_apply_off_callback(void *ctx_ptr, ant_offset_t old_off) {
   gc_ctx_t *ctx = (gc_ctx_t *)ctx_ptr;
   if (old_off == 0) return 0;
   if (old_off >= ctx->js->brk) return old_off;
   
-  jsoff_t new_off = fwd_lookup(&ctx->fwd, old_off);
-  return (new_off != (jsoff_t)~0) ? new_off : old_off;
+  ant_offset_t new_off = fwd_lookup(&ctx->fwd, old_off);
+  return (new_off != (ant_offset_t)~0) ? new_off : old_off;
 }
 
-static jsval_t gc_apply_val(gc_ctx_t *ctx, jsval_t val) {
+static ant_value_t gc_apply_val(gc_ctx_t *ctx, ant_value_t val) {
   if (!gc_is_tagged(val)) return val;
   
   uint8_t type = gc_vtype(val);
   if (type == T_FUNC || type == T_CLOSURE) return val;
 
-  jsoff_t old_off = (jsoff_t)gc_vdata(val);
+  ant_offset_t old_off = (ant_offset_t)gc_vdata(val);
   if (old_off >= ctx->js->brk) return val;
   
   switch (type) {
@@ -677,8 +677,8 @@ static jsval_t gc_apply_val(gc_ctx_t *ctx, jsval_t val) {
     case T_PROP:
     case T_BIGINT:
     case T_SYMBOL: {
-      jsoff_t new_off = fwd_lookup(&ctx->fwd, old_off);
-      if (new_off != (jsoff_t)~0) return gc_mkval(type, new_off);
+      ant_offset_t new_off = fwd_lookup(&ctx->fwd, old_off);
+      if (new_off != (ant_offset_t)~0) return gc_mkval(type, new_off);
       break;
     }
     default: break;
@@ -687,12 +687,12 @@ static jsval_t gc_apply_val(gc_ctx_t *ctx, jsval_t val) {
   return val;
 }
 
-static jsval_t gc_apply_val_callback(void *ctx_ptr, jsval_t val) {
+static ant_value_t gc_apply_val_callback(void *ctx_ptr, ant_value_t val) {
   gc_ctx_t *ctx = (gc_ctx_t *)ctx_ptr;
   return gc_apply_val(ctx, val);
 }
 
-static jsoff_t gc_weak_off_callback(void *ctx_ptr, jsoff_t old_off) {
+static ant_offset_t gc_weak_off_callback(void *ctx_ptr, ant_offset_t old_off) {
   gc_ctx_t *ctx = (gc_ctx_t *)ctx_ptr;
   if (old_off >= ctx->js->brk) return old_off;
   return fwd_lookup(&ctx->fwd, old_off);
@@ -721,15 +721,15 @@ static inline bool gc_stack_word_readable(uintptr_t addr) {
 #endif
 }
 
-static inline bool gc_off_has_bytes(jsoff_t off, jsoff_t need, jsoff_t brk) {
+static inline bool gc_off_has_bytes(ant_offset_t off, ant_offset_t need, ant_offset_t brk) {
   return off <= brk && need <= brk - off;
 }
 
-static inline bool gc_stack_word_valid(gc_ctx_t *ctx, uint8_t type, jsoff_t old_off, jsoff_t old_brk) {
+static inline bool gc_stack_word_valid(gc_ctx_t *ctx, uint8_t type, ant_offset_t old_off, ant_offset_t old_brk) {
   if (old_off == 0 || old_off >= old_brk) return false;
-  if (!gc_off_has_bytes(old_off, (jsoff_t)sizeof(jsoff_t), old_brk)) return false;
+  if (!gc_off_has_bytes(old_off, (ant_offset_t)sizeof(ant_offset_t), old_brk)) return false;
 
-  jsoff_t header = gc_loadoff(ctx->js->mem, old_off);
+  ant_offset_t header = gc_loadoff(ctx->js->mem, old_off);
 
   switch (type) {
     case T_OBJ:
@@ -737,44 +737,44 @@ static inline bool gc_stack_word_valid(gc_ctx_t *ctx, uint8_t type, jsoff_t old_
     case T_PROMISE:
     case T_GENERATOR: {
       if ((header & 3) != T_OBJ) return false;
-      jsoff_t size = esize(header);
-      return size != (jsoff_t)~0 && gc_off_has_bytes(old_off, size, old_brk);
+      ant_offset_t size = esize(header);
+      return size != (ant_offset_t)~0 && gc_off_has_bytes(old_off, size, old_brk);
     }
     case T_PROP: {
       if ((header & 3) != T_PROP) return false;
-      jsoff_t size = esize(header);
-      return size != (jsoff_t)~0 && gc_off_has_bytes(old_off, size, old_brk);
+      ant_offset_t size = esize(header);
+      return size != (ant_offset_t)~0 && gc_off_has_bytes(old_off, size, old_brk);
     }
     case T_STR: {
       if ((header & 3) != T_STR) return false;
       if ((header & ROPE_FLAG) != 0)
-        return gc_off_has_bytes(old_off, (jsoff_t)sizeof(rope_node_t), old_brk);
-      jsoff_t size = esize(header);
-      return size != (jsoff_t)~0 && gc_off_has_bytes(old_off, size, old_brk);
+        return gc_off_has_bytes(old_off, (ant_offset_t)sizeof(rope_node_t), old_brk);
+      ant_offset_t size = esize(header);
+      return size != (ant_offset_t)~0 && gc_off_has_bytes(old_off, size, old_brk);
     }
     case T_BIGINT: {
       if ((header & GC_BIGINT_HEADER_LOW_MASK) != 0) return false;
-      jsoff_t payload = header >> GC_BIGINT_HEADER_SHIFT;
+      ant_offset_t payload = header >> GC_BIGINT_HEADER_SHIFT;
       if (payload < 2) return false;
       
-      jsoff_t total = payload + (jsoff_t)sizeof(jsoff_t);
-      total = (total + 7) & ~(jsoff_t)7;
+      ant_offset_t total = payload + (ant_offset_t)sizeof(ant_offset_t);
+      total = (total + 7) & ~(ant_offset_t)7;
       if (!gc_off_has_bytes(old_off, total, old_brk)) return false;
       
-      jsoff_t sign_off = old_off + (jsoff_t)sizeof(jsoff_t);
+      ant_offset_t sign_off = old_off + (ant_offset_t)sizeof(ant_offset_t);
       uint8_t sign = ctx->js->mem[sign_off];
       if (sign > 1) return false;
       
-      jsoff_t nul_off = sign_off + payload - 1;
+      ant_offset_t nul_off = sign_off + payload - 1;
       return ctx->js->mem[nul_off] == 0;
     }
     case T_SYMBOL: {
       if ((header & GC_SYM_HEADER_LOW_MASK) != 0) return false;
-      jsoff_t payload = header >> GC_SYM_HEADER_SHIFT;
+      ant_offset_t payload = header >> GC_SYM_HEADER_SHIFT;
       if (payload < GC_SYM_HEAP_FIXED) return false;
       
-      jsoff_t total = payload + (jsoff_t)sizeof(jsoff_t);
-      total = (total + 7) & ~(jsoff_t)7;
+      ant_offset_t total = payload + (ant_offset_t)sizeof(ant_offset_t);
+      total = (total + 7) & ~(ant_offset_t)7;
       return gc_off_has_bytes(old_off, total, old_brk);
     }
     default: return false;
@@ -789,7 +789,7 @@ static void gc_scan_stack_reserve(gc_ctx_t *ctx) {
   volatile uint8_t sp_marker = 0; uintptr_t lo, hi;
   if (!gc_get_stack_bounds((uintptr_t)ctx->js->cstk.base, (uintptr_t)&sp_marker, &lo, &hi)) return;
 
-  jsoff_t old_brk = ctx->js->brk;
+  ant_offset_t old_brk = ctx->js->brk;
 
   for (uintptr_t addr = lo; addr < hi; addr += sizeof(uint64_t)) {
     if (!gc_stack_word_readable(addr)) continue;
@@ -802,11 +802,11 @@ static void gc_scan_stack_reserve(gc_ctx_t *ctx) {
     if (type > T_FFI) continue;
     if (!((1u << type) & GC_HEAP_TYPE_MASK)) continue;
 
-    jsoff_t old_off = (jsoff_t)(w & NANBOX_DATA_MASK);
+    ant_offset_t old_off = (ant_offset_t)(w & NANBOX_DATA_MASK);
     if (old_off == 0 || old_off >= old_brk) continue;
     if (!gc_stack_word_valid(ctx, type, old_off, old_brk)) continue;
 
-    if (fwd_lookup(&ctx->fwd, old_off) != (jsoff_t)~0) continue;
+    if (fwd_lookup(&ctx->fwd, old_off) != (ant_offset_t)~0) continue;
     gc_update_val(ctx, w);
   }
 }
@@ -819,7 +819,7 @@ static void gc_scan_stack_update(gc_ctx_t *ctx) {
   volatile uint8_t sp_marker = 0; uintptr_t lo, hi;
   if (!gc_get_stack_bounds((uintptr_t)ctx->js->cstk.base, (uintptr_t)&sp_marker, &lo, &hi)) return;
 
-  jsoff_t old_brk = ctx->js->brk;
+  ant_offset_t old_brk = ctx->js->brk;
 
   for (uintptr_t addr = lo; addr < hi; addr += sizeof(uint64_t)) {
     if (!gc_stack_word_readable(addr)) continue;
@@ -832,12 +832,12 @@ static void gc_scan_stack_update(gc_ctx_t *ctx) {
     if (type > T_FFI) continue;
     if (!((1u << type) & GC_HEAP_TYPE_MASK)) continue;
 
-    jsoff_t old_off = (jsoff_t)(w & NANBOX_DATA_MASK);
+    ant_offset_t old_off = (ant_offset_t)(w & NANBOX_DATA_MASK);
     if (old_off == 0 || old_off >= old_brk) continue;
     if (!gc_stack_word_valid(ctx, type, old_off, old_brk)) continue;
 
-    jsoff_t new_off = fwd_lookup(&ctx->fwd, old_off);
-    if (new_off == (jsoff_t)~0 || new_off == old_off) continue;
+    ant_offset_t new_off = fwd_lookup(&ctx->fwd, old_off);
+    if (new_off == (ant_offset_t)~0 || new_off == old_off) continue;
 
     uint64_t updated = gc_mkval(type, new_off);
     memcpy((void *)addr, &updated, sizeof(updated));
@@ -845,7 +845,7 @@ static void gc_scan_stack_update(gc_ctx_t *ctx) {
 }
 
 static void gc_scan_range_reserve(gc_ctx_t *ctx, uintptr_t lo, uintptr_t hi) {
-  jsoff_t old_brk = ctx->js->brk;
+  ant_offset_t old_brk = ctx->js->brk;
   for (uintptr_t addr = lo; addr < hi; addr += sizeof(uint64_t)) {
     if (!gc_stack_word_readable(addr)) continue;
     uint64_t w;
@@ -854,16 +854,16 @@ static void gc_scan_range_reserve(gc_ctx_t *ctx, uintptr_t lo, uintptr_t hi) {
     uint8_t type = (w >> NANBOX_TYPE_SHIFT) & NANBOX_TYPE_MASK;
     if (type > T_FFI) continue;
     if (!((1u << type) & GC_HEAP_TYPE_MASK)) continue;
-    jsoff_t old_off = (jsoff_t)(w & NANBOX_DATA_MASK);
+    ant_offset_t old_off = (ant_offset_t)(w & NANBOX_DATA_MASK);
     if (old_off == 0 || old_off >= old_brk) continue;
     if (!gc_stack_word_valid(ctx, type, old_off, old_brk)) continue;
-    if (fwd_lookup(&ctx->fwd, old_off) != (jsoff_t)~0) continue;
+    if (fwd_lookup(&ctx->fwd, old_off) != (ant_offset_t)~0) continue;
     gc_update_val(ctx, w);
   }
 }
 
 static void gc_scan_range_update(gc_ctx_t *ctx, uintptr_t lo, uintptr_t hi) {
-  jsoff_t old_brk = ctx->js->brk;
+  ant_offset_t old_brk = ctx->js->brk;
   for (uintptr_t addr = lo; addr < hi; addr += sizeof(uint64_t)) {
     if (!gc_stack_word_readable(addr)) continue;
     uint64_t w;
@@ -872,11 +872,11 @@ static void gc_scan_range_update(gc_ctx_t *ctx, uintptr_t lo, uintptr_t hi) {
     uint8_t type = (w >> NANBOX_TYPE_SHIFT) & NANBOX_TYPE_MASK;
     if (type > T_FFI) continue;
     if (!((1u << type) & GC_HEAP_TYPE_MASK)) continue;
-    jsoff_t old_off = (jsoff_t)(w & NANBOX_DATA_MASK);
+    ant_offset_t old_off = (ant_offset_t)(w & NANBOX_DATA_MASK);
     if (old_off == 0 || old_off >= old_brk) continue;
     if (!gc_stack_word_valid(ctx, type, old_off, old_brk)) continue;
-    jsoff_t new_off = fwd_lookup(&ctx->fwd, old_off);
-    if (new_off == (jsoff_t)~0 || new_off == old_off) continue;
+    ant_offset_t new_off = fwd_lookup(&ctx->fwd, old_off);
+    if (new_off == (ant_offset_t)~0 || new_off == old_off) continue;
     uint64_t updated = gc_mkval(type, new_off);
     memcpy((void *)addr, &updated, sizeof(updated));
   }
@@ -981,7 +981,7 @@ static void gc_compact(ant_t *js) {
   ctx.js = js;
   ctx.new_mem = new_mem;
   ctx.new_brk = NANBOX_HEAP_OFFSET;
-  ctx.new_size = (jsoff_t)new_size;
+  ctx.new_size = (ant_offset_t)new_size;
   ctx.mark_bits = mark_bits;
   
   if (!fwd_init(&ctx.fwd, estimated_objs)) {
@@ -997,7 +997,7 @@ static void gc_compact(ant_t *js) {
   gc_epoch_counter++;
   
   if (js->brk > 0) {
-    jsoff_t header_at_0 = gc_loadoff(js->mem, 0);
+    ant_offset_t header_at_0 = gc_loadoff(js->mem, 0);
     if ((header_at_0 & 3) == T_OBJ) gc_reserve_object(&ctx, 0);
   }
   
@@ -1045,18 +1045,18 @@ static void gc_compact(ant_t *js) {
   if (new_brk < old_size * 3 / 4 && old_size > ARENA_GROW_INCREMENT) {
     size_t target = ((new_brk * 3 / 2 + ARENA_GROW_INCREMENT - 1) / ARENA_GROW_INCREMENT) * ARENA_GROW_INCREMENT;
     if (target < ARENA_GROW_INCREMENT) target = ARENA_GROW_INCREMENT;
-    if (target < old_size) { ant_arena_decommit(js->mem, old_size, target); js->size = (jsoff_t)target; }
+    if (target < old_size) { ant_arena_decommit(js->mem, old_size, target); js->size = (ant_offset_t)target; }
   }
 }
 
 void js_gc_maybe(ant_t *js) {
-  jsoff_t thresh = js->brk / 4;
+  ant_offset_t thresh = js->brk / 4;
   
-  jsoff_t min_thresh = gc_throttled 
+  ant_offset_t min_thresh = gc_throttled 
     ? 8 * 1024 * 1024 
     : 2 * 1024 * 1024;
     
-  jsoff_t max_thresh = gc_throttled 
+  ant_offset_t max_thresh = gc_throttled 
     ? 64 * 1024 * 1024 
     : 16 * 1024 * 1024;
   

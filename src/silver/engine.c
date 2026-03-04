@@ -36,7 +36,7 @@ sv_vm_t *sv_vm_create(ant_t *js, sv_vm_kind_t kind) {
   
   vm->js = js;
   vm->stack_size = stack_size;
-  vm->stack = calloc((size_t)stack_size, sizeof(jsval_t));
+  vm->stack = calloc((size_t)stack_size, sizeof(ant_value_t));
   vm->max_frames = max_frames;
   vm->frames = calloc((size_t)max_frames, sizeof(sv_frame_t));
   if (!vm->stack || !vm->frames) { sv_vm_destroy(vm); return NULL; }
@@ -69,8 +69,8 @@ static bool sv_vm_grow_stack(sv_vm_t *vm) {
   if (new_size > SV_STACK_HARD_MAX) new_size = SV_STACK_HARD_MAX;
   if (new_size <= vm->stack_size) return false;
   
-  jsval_t *old = vm->stack;
-  jsval_t *ns = realloc(vm->stack, (size_t)new_size * sizeof(jsval_t));
+  ant_value_t *old = vm->stack;
+  ant_value_t *ns = realloc(vm->stack, (size_t)new_size * sizeof(ant_value_t));
   if (!ns) return false;
   
   ptrdiff_t delta = ns - old;
@@ -123,8 +123,8 @@ bool sv_lookup_srcspan(sv_func_t *func, int bc_offset, uint32_t *src_off, uint32
   return true;
 }
 
-static jsoff_t sv_srcpos_to_offset_local(const char *code, jsoff_t clen, uint32_t line, uint32_t col) {
-  jsoff_t off = 0;
+static ant_offset_t sv_srcpos_to_offset_local(const char *code, ant_offset_t clen, uint32_t line, uint32_t col) {
+  ant_offset_t off = 0;
   uint32_t cur = 1;
   
   while (off < clen && cur < line) {
@@ -142,12 +142,12 @@ void js_set_error_site_from_bc(ant_t *js, sv_func_t *func, int bc_offset, const 
 
   uint32_t src_off = 0, src_end = 0;
   if (sv_lookup_srcspan(func, bc_offset, &src_off, &src_end)) {
-    jsoff_t off = (jsoff_t)src_off;
-    jsoff_t span_len = (jsoff_t)(src_end > src_off ? (src_end - src_off) : 0);
-    if (span_len <= 0 && off < (jsoff_t)func->source_len) span_len = 1;
+    ant_offset_t off = (ant_offset_t)src_off;
+    ant_offset_t span_len = (ant_offset_t)(src_end > src_off ? (src_end - src_off) : 0);
+    if (span_len <= 0 && off < (ant_offset_t)func->source_len) span_len = 1;
     
     js_set_error_site(
-      js, func->source, (jsoff_t)func->source_len,
+      js, func->source, (ant_offset_t)func->source_len,
       filename ? filename : func->filename, off, span_len
     );
     return;
@@ -155,9 +155,9 @@ void js_set_error_site_from_bc(ant_t *js, sv_func_t *func, int bc_offset, const 
 
   uint32_t line = 0, col = 0;
   if (sv_lookup_srcpos(func, bc_offset, &line, &col)) {
-    jsoff_t off = sv_srcpos_to_offset_local(func->source, (jsoff_t)func->source_len, line, col);
+    ant_offset_t off = sv_srcpos_to_offset_local(func->source, (ant_offset_t)func->source_len, line, col);
     js_set_error_site(
-      js, func->source, (jsoff_t)func->source_len,
+      js, func->source, (ant_offset_t)func->source_len,
       filename ? filename : func->filename, off, 0
     );
   }
@@ -174,7 +174,7 @@ void js_set_error_site_from_vm_top(ant_t *js) {
   js_set_error_site_from_bc(js, func, bc_off, func->filename);
 }
 
-void sv_vm_gc_roots(sv_vm_t *vm, void (*op_val)(void *, jsval_t *), void *ctx) {
+void sv_vm_gc_roots(sv_vm_t *vm, void (*op_val)(void *, ant_value_t *), void *ctx) {
   if (!vm) return;
 
   for (int i = 0; i < vm->sp; i++)
@@ -216,25 +216,25 @@ void sv_vm_visit_frame_funcs(sv_vm_t *vm, void (*visitor)(void *, sv_func_t *), 
   for (int i = 0; i <= vm->fp; i++) if (vm->frames[i].func) visitor(ctx, vm->frames[i].func);
 }
 
-jsval_t sv_call_async_closure_dispatch(
+ant_value_t sv_call_async_closure_dispatch(
   sv_vm_t *vm, ant_t *js, sv_closure_t *closure,
-  jsval_t callee_func, jsval_t super_val,
-  jsval_t this_val, jsval_t *args, int argc
+  ant_value_t callee_func, ant_value_t super_val,
+  ant_value_t this_val, ant_value_t *args, int argc
 ) {
   return sv_start_async_closure(vm, js, closure, callee_func, super_val, this_val, args, argc);
 }
 
-jsval_t sv_execute_entry_tla(ant_t *js, sv_func_t *func, jsval_t this_val) {
+ant_value_t sv_execute_entry_tla(ant_t *js, sv_func_t *func, ant_value_t this_val) {
   return sv_start_tla(js, func, this_val);
 }
 
-void sv_vm_gc_roots_pending(void (*op_val)(void *, jsval_t *), void *ctx) {
+void sv_vm_gc_roots_pending(void (*op_val)(void *, ant_value_t *), void *ctx) {
   sv_vm_gc_roots_async(op_val, ctx);
 }
 
-static inline jsval_t sv_stage_frame_args(
-  sv_vm_t *vm, ant_t *js, sv_func_t *func, jsval_t *args, int argc,
-  jsval_t **out_bp, jsval_t **out_lp
+static inline ant_value_t sv_stage_frame_args(
+  sv_vm_t *vm, ant_t *js, sv_func_t *func, ant_value_t *args, int argc,
+  ant_value_t **out_bp, ant_value_t **out_lp
 ) {
   int arg_slots = (argc > func->param_count) ? argc : func->param_count;
   int need = arg_slots + func->max_locals;
@@ -248,12 +248,12 @@ static inline jsval_t sv_stage_frame_args(
     if (args_idx >= 0) args = &vm->stack[args_idx];
   }
 
-  jsval_t *base = &vm->stack[vm->sp];
+  ant_value_t *base = &vm->stack[vm->sp];
   *out_bp = base;
   *out_lp = base + arg_slots;
 
   if (argc > 0 && args)
-    memmove(base, args, (size_t)argc * sizeof(jsval_t));
+    memmove(base, args, (size_t)argc * sizeof(ant_value_t));
   for (int i = argc; i < arg_slots; i++)
     base[i] = js_mkundef();
   if (func->max_locals > 0)
@@ -263,10 +263,10 @@ static inline jsval_t sv_stage_frame_args(
   return js_mkundef();
 }
 
-static inline jsval_t sv_execute_entry_common(
+static inline ant_value_t sv_execute_entry_common(
   sv_vm_t *vm, sv_func_t *func, sv_upvalue_t **upvalues, int upvalue_count,
-  jsval_t callee_func, jsval_t super_val,
-  jsval_t this_val, jsval_t *args, int argc, jsval_t *out_this
+  ant_value_t callee_func, ant_value_t super_val,
+  ant_value_t this_val, ant_value_t *args, int argc, ant_value_t *out_this
 ) {
   if (!vm || !vm->js || !func) return mkval(T_ERR, 0);
   ant_t *js = vm->js;
@@ -279,7 +279,7 @@ static inline jsval_t sv_execute_entry_common(
   vm->frames[vm->fp].upvalue_count = upvalue_count;
   vm->frames[vm->fp].callee = callee_func;
 
-  jsval_t result = sv_execute_frame(vm, func, this_val, super_val, args, argc);
+  ant_value_t result = sv_execute_frame(vm, func, this_val, super_val, args, argc);
   if (out_this) *out_this = vm->frames[vm->fp].this;
 
   vm->fp = saved_fp;
@@ -287,15 +287,15 @@ static inline jsval_t sv_execute_entry_common(
   return result;
 }
 
-jsval_t sv_execute_entry(
-  sv_vm_t *vm, sv_func_t *func, jsval_t this_val, jsval_t *args, int argc
+ant_value_t sv_execute_entry(
+  sv_vm_t *vm, sv_func_t *func, ant_value_t this_val, ant_value_t *args, int argc
 ) {
   return sv_execute_entry_common(vm, func, NULL, 0, js_mkundef(), js_mkundef(), this_val, args, argc, NULL);
 }
 
-jsval_t sv_execute_closure_entry(
-  sv_vm_t *vm, sv_closure_t *closure, jsval_t callee_func, jsval_t super_val,
-  jsval_t this_val, jsval_t *args, int argc, jsval_t *out_this
+ant_value_t sv_execute_closure_entry(
+  sv_vm_t *vm, sv_closure_t *closure, ant_value_t callee_func, ant_value_t super_val,
+  ant_value_t this_val, ant_value_t *args, int argc, ant_value_t *out_this
 ) {
   if (!closure || !closure->func) return mkval(T_ERR, 0);
   return sv_execute_entry_common(
@@ -304,11 +304,11 @@ jsval_t sv_execute_closure_entry(
   );
 }
 
-jsval_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, jsval_t this, jsval_t super_val, jsval_t *args, int argc) {
+ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant_value_t super_val, ant_value_t *args, int argc) {
   ant_t *js = vm->js;
   uint8_t *ip = func->code;
   int entry_fp = vm->fp;
-  jsval_t vm_result = js_mkundef();
+  ant_value_t vm_result = js_mkundef();
 
   // TODO: shorthand?
   sv_frame_t *frame = &vm->frames[vm->fp];
@@ -325,9 +325,9 @@ jsval_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, jsval_t this, jsval_t sup
   frame->completion.value = js_mkundef();
   frame->with_obj = js_mkundef();
   
-  jsval_t *entry_bp = NULL;
-  jsval_t *entry_lp = NULL;
-  jsval_t stage_err = sv_stage_frame_args(vm, js, func, args, argc, &entry_bp, &entry_lp);
+  ant_value_t *entry_bp = NULL;
+  ant_value_t *entry_lp = NULL;
+  ant_value_t stage_err = sv_stage_frame_args(vm, js, func, args, argc, &entry_bp, &entry_lp);
   if (is_err(stage_err)) {
     vm_result = stage_err;
     goto sv_leave;
@@ -346,8 +346,8 @@ jsval_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, jsval_t this, jsval_t sup
   frame->bp = entry_bp;
   frame->lp = entry_lp;
 
-  jsval_t *bp = frame->bp;
-  jsval_t *lp = frame->lp;
+  ant_value_t *bp = frame->bp;
+  ant_value_t *lp = frame->lp;
 
   #ifdef ANT_JIT
   if (vm->jit_resume.active) {
@@ -480,13 +480,13 @@ jsval_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, jsval_t this, jsval_t sup
   };
   #undef OP
   
-  jsval_t sv_err;
+  ant_value_t sv_err;
   #define VM_CHECK(expr) do {             \
     frame->ip = ip;                     \
     sv_err = (expr);                    \
     if (is_err(sv_err)) goto sv_throw;  \
   } while (0)
-  jsval_t  tc_this = js_mkundef();
+  ant_value_t  tc_this = js_mkundef();
 
   #define DISPATCH()  goto *dispatch[*ip]
   #define NEXT(n)     do { ip += (n); DISPATCH(); } while (0)
@@ -496,7 +496,7 @@ jsval_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, jsval_t this, jsval_t sup
     if (!func->jit_compile_failed) {                                        \
       if (!func->type_feedback) sv_tfb_ensure(func);                        \
       if (++func->back_edge_count >= SV_JIT_OSR_THRESHOLD) {                \
-      jsval_t osr_r = sv_jit_try_osr(                                       \
+      ant_value_t osr_r = sv_jit_try_osr(                                       \
         vm, js, frame, func,                                                \
          (int)(ip - func->code));                                           \
       if (osr_r != SV_JIT_RETRY_INTERP) {                                   \
@@ -598,7 +598,7 @@ jsval_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, jsval_t this, jsval_t sup
   L_PUT_SUPER_VAL:  { sv_op_put_super_val(vm, js);  NEXT(1); }
 
   L_ADD: {
-    jsval_t r = vm->stack[vm->sp - 1], l = vm->stack[vm->sp - 2];
+    ant_value_t r = vm->stack[vm->sp - 1], l = vm->stack[vm->sp - 2];
     sv_tfb_record2(func, ip, l, r);
     if (__builtin_expect(vtype(l) == T_NUM && vtype(r) == T_NUM, 1)) {
       vm->sp--; vm->stack[vm->sp - 1] = tov(tod(l) + tod(r)); NEXT(1);
@@ -607,7 +607,7 @@ jsval_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, jsval_t this, jsval_t sup
   }
   
   L_SUB: {
-    jsval_t r = vm->stack[vm->sp - 1], l = vm->stack[vm->sp - 2];
+    ant_value_t r = vm->stack[vm->sp - 1], l = vm->stack[vm->sp - 2];
     sv_tfb_record2(func, ip, l, r);
     if (__builtin_expect(vtype(l) == T_NUM && vtype(r) == T_NUM, 1)) {
       vm->sp--; vm->stack[vm->sp - 1] = tov(tod(l) - tod(r)); NEXT(1);
@@ -636,7 +636,7 @@ jsval_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, jsval_t this, jsval_t sup
   L_SNE:  { sv_op_sne(vm, js);  NEXT(1); }
   
   L_LT: {
-    jsval_t r = vm->stack[vm->sp - 1], l = vm->stack[vm->sp - 2];
+    ant_value_t r = vm->stack[vm->sp - 1], l = vm->stack[vm->sp - 2];
     sv_tfb_record2(func, ip, l, r);
     if (__builtin_expect(vtype(l) == T_NUM && vtype(r) == T_NUM, 1)) {
       vm->sp--; vm->stack[vm->sp - 1] = mkval(T_BOOL, tod(l) < tod(r)); NEXT(1);
@@ -678,7 +678,7 @@ jsval_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, jsval_t this, jsval_t sup
   
   L_JMP_FALSE: {
     uint8_t *prev = ip;
-    jsval_t v = vm->stack[--vm->sp];
+    ant_value_t v = vm->stack[--vm->sp];
     if (__builtin_expect(vtype(v) == T_BOOL, 1)) {
       ip = vdata(v) 
         ? ip + sv_op_size[OP_JMP_FALSE]
@@ -697,7 +697,7 @@ jsval_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, jsval_t this, jsval_t sup
   
   L_JMP_TRUE: {
     uint8_t *prev = ip;
-    jsval_t v = vm->stack[--vm->sp];
+    ant_value_t v = vm->stack[--vm->sp];
     if (__builtin_expect(vtype(v) == T_BOOL, 1)) {
       ip = vdata(v) 
         ? ip + sv_op_size[OP_JMP_TRUE] + sv_get_i32(ip + 1)
@@ -771,12 +771,12 @@ jsval_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, jsval_t this, jsval_t sup
   // TODO: make the methods below DRY
   L_CALL: {
     uint16_t call_argc = sv_get_u16(ip + 1);
-    jsval_t *call_args = &vm->stack[vm->sp - call_argc];
-    jsval_t call_func = vm->stack[vm->sp - call_argc - 1];
+    ant_value_t *call_args = &vm->stack[vm->sp - call_argc];
+    ant_value_t call_func = vm->stack[vm->sp - call_argc - 1];
     
     bool is_super_call =
       (vtype(frame->super_val) != T_UNDEF && call_func == frame->super_val);
-    jsval_t call_this = is_super_call ? frame->this : js_mkundef();
+    ant_value_t call_this = is_super_call ? frame->this : js_mkundef();
 
     if (!is_super_call && vtype(frame->new_target) == T_UNDEF && vtype(call_func) == T_FUNC) {
       sv_closure_t *closure = js_func_closure(call_func);
@@ -788,11 +788,11 @@ jsval_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, jsval_t this, jsval_t sup
         {
           sv_func_t *callee = closure->func;
           if (callee->jit_code) {
-            jsval_t jit_this = (
+            ant_value_t jit_this = (
               callee->is_arrow || vtype(closure->bound_this) != T_UNDEF)
               ? closure->bound_this : js_mkundef();
             frame->ip = ip + 3;
-            jsval_t jit_result = ((sv_jit_func_t)callee->jit_code)(
+            ant_value_t jit_result = ((sv_jit_func_t)callee->jit_code)(
               vm, jit_this, call_args, (int)call_argc, closure);
             if (sv_is_jit_bailout(jit_result)) {
               sv_jit_on_bailout(callee);
@@ -812,11 +812,11 @@ jsval_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, jsval_t this, jsval_t sup
             sv_jit_func_t jit_fn = sv_jit_compile(js, callee, closure);
             if (jit_fn) {
               callee->jit_code = (void *)jit_fn;
-              jsval_t jit_this = (
+              ant_value_t jit_this = (
                 callee->is_arrow || vtype(closure->bound_this) != T_UNDEF)
                  ? closure->bound_this : js_mkundef();
               frame->ip = ip + 3;
-              jsval_t jit_result = jit_fn(vm, jit_this, call_args, (int)call_argc, closure);
+              ant_value_t jit_result = jit_fn(vm, jit_this, call_args, (int)call_argc, closure);
               if (sv_is_jit_bailout(jit_result)) {
                 sv_jit_on_bailout(callee);
                 goto call_fallback;
@@ -853,9 +853,9 @@ jsval_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, jsval_t this, jsval_t sup
         frame->handler_base = vm->handler_depth;
         frame->handler_top = vm->handler_depth;
         frame->argc = call_argc;
-        jsval_t *call_bp = NULL;
-        jsval_t *call_lp = NULL;
-        jsval_t call_stage_err = sv_stage_frame_args(
+        ant_value_t *call_bp = NULL;
+        ant_value_t *call_lp = NULL;
+        ant_value_t call_stage_err = sv_stage_frame_args(
           vm, js, func, call_args, (int)call_argc, &call_bp, &call_lp
         );
         if (is_err(call_stage_err)) {
@@ -877,7 +877,7 @@ jsval_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, jsval_t this, jsval_t sup
     }
     call_fallback:;
     frame->ip = ip;
-    jsval_t call_result = sv_vm_call(
+    ant_value_t call_result = sv_vm_call(
       vm, js, call_func, call_this, call_args, call_argc, NULL, false);
     vm->sp -= call_argc + 1;
     if (is_err(call_result)) { sv_err = call_result; goto sv_throw; }
@@ -889,9 +889,9 @@ jsval_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, jsval_t this, jsval_t sup
 
   L_CALL_METHOD: {
     uint16_t call_argc = sv_get_u16(ip + 1);
-    jsval_t *call_args = &vm->stack[vm->sp - call_argc];
-    jsval_t call_func = vm->stack[vm->sp - call_argc - 1];
-    jsval_t call_this = vm->stack[vm->sp - call_argc - 2];
+    ant_value_t *call_args = &vm->stack[vm->sp - call_argc];
+    ant_value_t call_func = vm->stack[vm->sp - call_argc - 1];
+    ant_value_t call_this = vm->stack[vm->sp - call_argc - 2];
     
     bool is_super_call =
       (vtype(frame->super_val) != T_UNDEF && call_func == frame->super_val);
@@ -907,11 +907,11 @@ jsval_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, jsval_t this, jsval_t sup
         {
           sv_func_t *callee = closure->func;
           if (callee->jit_code) {
-            jsval_t jit_this = (
+            ant_value_t jit_this = (
               callee->is_arrow || vtype(closure->bound_this) != T_UNDEF)
               ? closure->bound_this : call_this;
             frame->ip = ip + 3;
-            jsval_t jit_result = ((sv_jit_func_t)callee->jit_code)(
+            ant_value_t jit_result = ((sv_jit_func_t)callee->jit_code)(
               vm, jit_this, call_args, (int)call_argc, closure);
             if (sv_is_jit_bailout(jit_result)) {
               sv_jit_on_bailout(callee);
@@ -931,11 +931,11 @@ jsval_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, jsval_t this, jsval_t sup
             sv_jit_func_t jit_fn = sv_jit_compile(js, callee, closure);
             if (jit_fn) {
               callee->jit_code = (void *)jit_fn;
-              jsval_t jit_this = (
+              ant_value_t jit_this = (
                 callee->is_arrow || vtype(closure->bound_this) != T_UNDEF)
                 ? closure->bound_this : call_this;
               frame->ip = ip + 3;
-              jsval_t jit_result = jit_fn(vm, jit_this, call_args, (int)call_argc, closure);
+              ant_value_t jit_result = jit_fn(vm, jit_this, call_args, (int)call_argc, closure);
               if (sv_is_jit_bailout(jit_result)) {
                 sv_jit_on_bailout(callee);
                 goto call_method_fallback;
@@ -973,9 +973,9 @@ jsval_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, jsval_t this, jsval_t sup
         frame->handler_base = vm->handler_depth;
         frame->handler_top = vm->handler_depth;
         frame->argc = call_argc;
-        jsval_t *call_bp = NULL;
-        jsval_t *call_lp = NULL;
-        jsval_t call_stage_err = sv_stage_frame_args(
+        ant_value_t *call_bp = NULL;
+        ant_value_t *call_lp = NULL;
+        ant_value_t call_stage_err = sv_stage_frame_args(
           vm, js, func, call_args, (int)call_argc, &call_bp, &call_lp
         );
         if (is_err(call_stage_err)) {
@@ -997,7 +997,7 @@ jsval_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, jsval_t this, jsval_t sup
     call_method_fallback:;
     frame->ip = ip;
     if (is_super_call) js->new_target = frame->new_target;
-    jsval_t call_result = sv_vm_call(
+    ant_value_t call_result = sv_vm_call(
       vm, js, call_func, call_this, call_args, call_argc, NULL, is_super_call);
     vm->sp -= call_argc + 2;
     if (is_err(call_result)) { sv_err = call_result; goto sv_throw; }
@@ -1009,7 +1009,7 @@ jsval_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, jsval_t this, jsval_t sup
 
   L_TAIL_CALL: {
     uint16_t call_argc = sv_get_u16(ip + 1);
-    jsval_t call_func = vm->stack[vm->sp - call_argc - 1];
+    ant_value_t call_func = vm->stack[vm->sp - call_argc - 1];
     tc_this = js_mkundef();
 
     if (vm->handler_depth == frame->handler_base &&
@@ -1025,9 +1025,9 @@ jsval_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, jsval_t this, jsval_t sup
         }
       }
     }
-    jsval_t *call_args = &vm->stack[vm->sp - call_argc];
+    ant_value_t *call_args = &vm->stack[vm->sp - call_argc];
     frame->ip = ip;
-    jsval_t call_result = sv_vm_call(
+    ant_value_t call_result = sv_vm_call(
       vm, js, call_func, tc_this, call_args, call_argc, NULL, false);
     vm->sp -= call_argc + 1;
     if (is_err(call_result)) { sv_err = call_result; goto sv_throw; }
@@ -1037,7 +1037,7 @@ jsval_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, jsval_t this, jsval_t sup
 
   L_TAIL_CALL_METHOD: {
     uint16_t call_argc = sv_get_u16(ip + 1);
-    jsval_t call_func = vm->stack[vm->sp - call_argc - 1];
+    ant_value_t call_func = vm->stack[vm->sp - call_argc - 1];
     tc_this = vm->stack[vm->sp - call_argc - 2];
 
     if (vm->handler_depth == frame->handler_base &&
@@ -1053,8 +1053,8 @@ jsval_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, jsval_t this, jsval_t sup
         }
       }
     }
-    jsval_t *call_args = &vm->stack[vm->sp - call_argc];
-    jsval_t call_result = sv_vm_call(
+    ant_value_t *call_args = &vm->stack[vm->sp - call_argc];
+    ant_value_t call_result = sv_vm_call(
       vm, js, call_func, tc_this, call_args, call_argc, NULL, false);
     vm->sp -= call_argc + 2;
     if (is_err(call_result)) { sv_err = call_result; goto sv_throw; }
@@ -1064,8 +1064,8 @@ jsval_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, jsval_t this, jsval_t sup
 
   tail_call_inline: {
     uint16_t call_argc = sv_get_u16(ip + 1);
-    jsval_t *call_args = &vm->stack[vm->sp - call_argc];
-    jsval_t call_func = vm->stack[vm->sp - call_argc - 1];
+    ant_value_t *call_args = &vm->stack[vm->sp - call_argc];
+    ant_value_t call_func = vm->stack[vm->sp - call_argc - 1];
     sv_closure_t *closure = js_func_closure(call_func);
     if (frame->bp) sv_close_upvalues_from_slot(vm, frame->bp);
     vm->sp = frame->prev_sp;
@@ -1073,10 +1073,10 @@ jsval_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, jsval_t this, jsval_t sup
       (int)call_argc > closure->func->param_count)
       ? (int)call_argc : closure->func->param_count;
     int need = arg_slots + closure->func->max_locals;
-    jsval_t *base = &vm->stack[vm->sp];
-    memmove(base, call_args, (size_t)call_argc * sizeof(jsval_t));
+    ant_value_t *base = &vm->stack[vm->sp];
+    memmove(base, call_args, (size_t)call_argc * sizeof(ant_value_t));
     for (int i = (int)call_argc; i < arg_slots; i++) base[i] = js_mkundef();
-    jsval_t *new_lp = base + arg_slots;
+    ant_value_t *new_lp = base + arg_slots;
     for (int i = 0; i < closure->func->max_locals; i++) new_lp[i] = js_mkundef();
     vm->sp = frame->prev_sp + need;
     func = closure->func;
@@ -1104,7 +1104,7 @@ jsval_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, jsval_t this, jsval_t sup
 
   // TODO: make the methods below DRY
   L_RETURN: {
-    jsval_t r = vm->stack[--vm->sp];
+    ant_value_t r = vm->stack[--vm->sp];
     if (__builtin_expect(vm->handler_depth != frame->handler_base, 0)) {
       uint8_t *finally_ip = sv_vm_unwind_for_return(vm, r);
       if (finally_ip) {
@@ -1134,7 +1134,7 @@ jsval_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, jsval_t this, jsval_t sup
   }
 
   L_RETURN_UNDEF: {
-    jsval_t r = js_mkundef();
+    ant_value_t r = js_mkundef();
     if (__builtin_expect(vm->handler_depth != frame->handler_base, 0)) {
       uint8_t *finally_ip = sv_vm_unwind_for_return(vm, r);
       if (finally_ip) {
@@ -1164,7 +1164,7 @@ jsval_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, jsval_t this, jsval_t sup
   }
 
   L_RETURN_ASYNC: {
-    jsval_t r = vm->stack[--vm->sp];
+    ant_value_t r = vm->stack[--vm->sp];
     if (__builtin_expect(vm->handler_depth != frame->handler_base, 0)) {
       uint8_t *finally_ip = sv_vm_unwind_for_return(vm, r);
       if (finally_ip) {
@@ -1211,7 +1211,7 @@ jsval_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, jsval_t this, jsval_t sup
   
   L_FINALLY_RET: {
     uint8_t *resume_ip = NULL;
-    jsval_t completion = js_mkundef();
+    ant_value_t completion = js_mkundef();
     sv_finally_ret_t action = sv_op_finally_ret(vm, js, &resume_ip, &completion);
     if (action == SV_FINALLY_RET_ERROR || action == SV_FINALLY_RET_THROW) {
       sv_err = completion;
@@ -1250,8 +1250,8 @@ jsval_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, jsval_t this, jsval_t sup
   L_AWAIT_ITER_NEXT:  { VM_CHECK(sv_op_await_iter_next(vm, js));  NEXT(1); }
 
   L_AWAIT: {
-    jsval_t await_val = vm->stack[--vm->sp];
-    jsval_t result = sv_await_value(js, await_val);
+    ant_value_t await_val = vm->stack[--vm->sp];
+    ant_value_t result = sv_await_value(js, await_val);
     if (is_err(result)) { sv_err = result; goto sv_throw; }
     vm->stack[vm->sp++] = result;
     NEXT(1);
@@ -1329,7 +1329,7 @@ jsval_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, jsval_t this, jsval_t sup
 
   sv_leave:
   for (int f = vm->fp; f >= entry_fp; f--) {
-    jsval_t *drop_bp = vm->frames[f].bp;
+    ant_value_t *drop_bp = vm->frames[f].bp;
     if (drop_bp) sv_close_upvalues_from_slot(vm, drop_bp);
   }
   vm->fp = entry_fp;

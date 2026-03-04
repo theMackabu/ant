@@ -6,10 +6,10 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-jsval_t esm_load_commonjs_module(
+ant_value_t esm_load_commonjs_module(
   ant_t *js,
   const char *module_path, const char *code,
-  size_t code_len, jsval_t ns
+  size_t code_len, ant_value_t ns
 );
 
 #endif

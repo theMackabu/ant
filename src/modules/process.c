@@ -50,7 +50,7 @@ extern char **environ;
 #define INITIAL_LISTENER_CAPACITY 4
 
 typedef struct {
-  jsval_t listener;
+  ant_value_t listener;
   bool once;
 } ProcessEventListener;
 
@@ -261,7 +261,7 @@ static void check_listener_warning(const char *event) {
   );
 }
 
-void emit_process_event(const char *event_type, jsval_t *args, int nargs) {
+void emit_process_event(const char *event_type, ant_value_t *args, int nargs) {
   if (!rt->js) return;
   
   ProcessEventType *evt = NULL;
@@ -291,14 +291,14 @@ void emit_process_event(const char *event_type, jsval_t *args, int nargs) {
 static void process_signal_handler(int signum) {
   const char *name = get_signal_name(signum);
   if (name) {
-    jsval_t sig_arg = js_mkstr(rt->js, name, strlen(name));
+    ant_value_t sig_arg = js_mkstr(rt->js, name, strlen(name));
     emit_process_event(name, &sig_arg, 1);
   }
 }
 
 
 
-static void emit_stdio_event(ProcessEventType **events, const char *event_type, jsval_t *args, int nargs) {
+static void emit_stdio_event(ProcessEventType **events, const char *event_type, ant_value_t *args, int nargs) {
   if (!rt->js) return;
   ProcessEventType *evt = NULL;
   
@@ -420,8 +420,8 @@ static void emit_keypress_event(
   const char *sequence,
   size_t sequence_len
 ) {
-  jsval_t str_val = js_mkstr(js, str ? str : "", str ? str_len : 0);
-  jsval_t key_obj = js_mkobj(js);
+  ant_value_t str_val = js_mkstr(js, str ? str : "", str ? str_len : 0);
+  ant_value_t key_obj = js_mkobj(js);
 
   if (name) {
     js_set(js, key_obj, "name", js_mkstr(js, name, strlen(name)));
@@ -437,7 +437,7 @@ static void emit_keypress_event(
     js_set(js, key_obj, "sequence", js_mkstr(js, sequence, sequence_len));
   }
 
-  jsval_t args[2] = { str_val, key_obj };
+  ant_value_t args[2] = { str_val, key_obj };
   emit_stdio_event(&stdin_events, "keypress", args, 2);
 }
 
@@ -516,7 +516,7 @@ static void process_keypress_data(ant_t *js, const char *data, size_t len) {
   }
 }
 
-static bool remove_listener_from_events(ProcessEventType **events, const char *event, jsval_t listener) {
+static bool remove_listener_from_events(ProcessEventType **events, const char *event, ant_value_t listener) {
   ProcessEventType *evt = NULL;
   HASH_FIND_STR(*events, event, evt);
   if (!evt) return false;
@@ -609,7 +609,7 @@ static void on_stdin_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *bu
   if (nread > 0 && rt->js) {
     ArrayBufferData *ab = create_array_buffer_data((size_t)nread);
     if (ab) memcpy(ab->data, buf->base, (size_t)nread);
-    jsval_t data_val = ab
+    ant_value_t data_val = ab
       ? create_typed_array(rt->js, TYPED_ARRAY_UINT8, ab, 0, (size_t)nread, "Buffer")
       : js_mkstr(rt->js, buf->base, (size_t)nread);
     emit_stdio_event(&stdin_events, "data", &data_val, 1);
@@ -648,10 +648,10 @@ static void on_sigwinch(uv_signal_t *handle, int signum) {
   (void)handle; (void)signum;
   if (!rt->js) return;
   
-  jsval_t process_obj = js_get(rt->js, js_glob(rt->js), "process");
+  ant_value_t process_obj = js_get(rt->js, js_glob(rt->js), "process");
   if (!is_special_object(process_obj)) return;
   
-  jsval_t stdout_obj = js_get(rt->js, process_obj, "stdout");
+  ant_value_t stdout_obj = js_get(rt->js, process_obj, "stdout");
   if (!is_special_object(stdout_obj)) return;
   
   int rows = 0, cols = 0;
@@ -677,25 +677,25 @@ static void start_sigwinch_handler(void) {
 #endif
 }
 
-static jsval_t js_stdin_set_raw_mode(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_stdin_set_raw_mode(ant_t *js, ant_value_t *args, int nargs) {
   bool enable = nargs > 0 ? js_truthy(js, args[0]) : true;
   return js_bool(stdin_set_raw_mode(enable));
 }
 
-static jsval_t js_stdin_resume(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_stdin_resume(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
   stdin_start_reading();
   return js_getthis(js);
 }
 
-static jsval_t js_stdin_pause(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_stdin_pause(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
   stdin_stop_reading();
   return js_getthis(js);
 }
 
-static jsval_t js_stdin_on(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t this_obj = js_getthis(js);
+static ant_value_t js_stdin_on(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
   if (nargs < 2) return this_obj;
   
   char *event = js_getstr(js, args[0], NULL);
@@ -713,8 +713,8 @@ static jsval_t js_stdin_on(ant_t *js, jsval_t *args, int nargs) {
   return this_obj;
 }
 
-static jsval_t js_stdin_remove_all_listeners(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t this_obj = js_getthis(js);
+static ant_value_t js_stdin_remove_all_listeners(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
   
   if (nargs < 1) {
     ProcessEventType *evt, *tmp;
@@ -736,8 +736,8 @@ static jsval_t js_stdin_remove_all_listeners(ant_t *js, jsval_t *args, int nargs
   return this_obj;
 }
 
-static jsval_t js_stdin_remove_listener(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t this_obj = js_getthis(js);
+static ant_value_t js_stdin_remove_listener(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
   if (nargs < 2) return this_obj;
   
   char *event = js_getstr(js, args[0], NULL);
@@ -749,7 +749,7 @@ static jsval_t js_stdin_remove_listener(ant_t *js, jsval_t *args, int nargs) {
   return this_obj;
 }
 
-static jsval_t js_stdout_write(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_stdout_write(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_false;
   size_t len = 0;
   char *data = js_getstr(js, args[0], &len);
@@ -759,8 +759,8 @@ static jsval_t js_stdout_write(ant_t *js, jsval_t *args, int nargs) {
   return js_true;
 }
 
-static jsval_t js_stdout_on(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t this_obj = js_getthis(js);
+static ant_value_t js_stdout_on(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
   if (nargs < 2) return this_obj;
   
   char *event = js_getstr(js, args[0], NULL);
@@ -778,8 +778,8 @@ static jsval_t js_stdout_on(ant_t *js, jsval_t *args, int nargs) {
   return this_obj;
 }
 
-static jsval_t js_stdout_once(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t this_obj = js_getthis(js);
+static ant_value_t js_stdout_once(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
   if (nargs < 2) return this_obj;
   
   char *event = js_getstr(js, args[0], NULL);
@@ -797,8 +797,8 @@ static jsval_t js_stdout_once(ant_t *js, jsval_t *args, int nargs) {
   return this_obj;
 }
 
-static jsval_t js_stdout_remove_all_listeners(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t this_obj = js_getthis(js);
+static ant_value_t js_stdout_remove_all_listeners(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
   
   if (nargs < 1) {
     ProcessEventType *evt, *tmp;
@@ -818,8 +818,8 @@ static jsval_t js_stdout_remove_all_listeners(ant_t *js, jsval_t *args, int narg
   return this_obj;
 }
 
-static jsval_t js_stdout_remove_listener(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t this_obj = js_getthis(js);
+static ant_value_t js_stdout_remove_listener(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
   if (nargs < 2) return this_obj;
   
   char *event = js_getstr(js, args[0], NULL);
@@ -829,24 +829,24 @@ static jsval_t js_stdout_remove_listener(ant_t *js, jsval_t *args, int nargs) {
   return this_obj;
 }
 
-static jsval_t js_stdout_get_window_size(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_stdout_get_window_size(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
   int rows = 0, cols = 0;
   get_tty_size(STDOUT_FILENO, &rows, &cols);
-  jsval_t arr = js_mkarr(js);
+  ant_value_t arr = js_mkarr(js);
   js_arr_push(js, arr, js_mknum(cols));
   js_arr_push(js, arr, js_mknum(rows));
   return arr;
 }
 
-static jsval_t js_stdout_rows_getter(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_stdout_rows_getter(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
   int rows = 0, cols = 0;
   get_tty_size(STDOUT_FILENO, &rows, &cols);
   return js_mknum(rows);
 }
 
-static jsval_t js_stdout_columns_getter(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_stdout_columns_getter(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
   int rows = 0, cols = 0;
   get_tty_size(STDOUT_FILENO, &rows, &cols);
@@ -855,7 +855,7 @@ static jsval_t js_stdout_columns_getter(ant_t *js, jsval_t *args, int nargs) {
 
 
 
-static jsval_t js_stderr_write(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_stderr_write(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_false;
   size_t len = 0;
   char *data = js_getstr(js, args[0], &len);
@@ -865,8 +865,8 @@ static jsval_t js_stderr_write(ant_t *js, jsval_t *args, int nargs) {
   return js_true;
 }
 
-static jsval_t js_stderr_on(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t this_obj = js_getthis(js);
+static ant_value_t js_stderr_on(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
   if (nargs < 2) return this_obj;
   
   char *event = js_getstr(js, args[0], NULL);
@@ -882,8 +882,8 @@ static jsval_t js_stderr_on(ant_t *js, jsval_t *args, int nargs) {
   return this_obj;
 }
 
-static jsval_t js_stderr_once(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t this_obj = js_getthis(js);
+static ant_value_t js_stderr_once(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
   if (nargs < 2) return this_obj;
   
   char *event = js_getstr(js, args[0], NULL);
@@ -899,8 +899,8 @@ static jsval_t js_stderr_once(ant_t *js, jsval_t *args, int nargs) {
   return this_obj;
 }
 
-static jsval_t js_stderr_remove_all_listeners(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t this_obj = js_getthis(js);
+static ant_value_t js_stderr_remove_all_listeners(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
   
   if (nargs < 1) {
     ProcessEventType *evt, *tmp;
@@ -920,8 +920,8 @@ static jsval_t js_stderr_remove_all_listeners(ant_t *js, jsval_t *args, int narg
   return this_obj;
 }
 
-static jsval_t js_stderr_remove_listener(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t this_obj = js_getthis(js);
+static ant_value_t js_stderr_remove_listener(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
   if (nargs < 2) return this_obj;
   
   char *event = js_getstr(js, args[0], NULL);
@@ -931,26 +931,26 @@ static jsval_t js_stderr_remove_listener(ant_t *js, jsval_t *args, int nargs) {
   return this_obj;
 }
 
-static jsval_t process_uptime(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t process_uptime(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
   uint64_t now = uv_hrtime();
   double seconds = (double)(now - process_start_time) / 1e9;
   return js_mknum(seconds);
 }
 
-static jsval_t process_hrtime(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t process_hrtime(ant_t *js, ant_value_t *args, int nargs) {
   uint64_t now = uv_hrtime();
   
   if (nargs > 0 && vtype(args[0]) == T_ARR) {
-    jsval_t prev_sec = js_get(js, args[0], "0");
-    jsval_t prev_nsec = js_get(js, args[0], "1");
+    ant_value_t prev_sec = js_get(js, args[0], "0");
+    ant_value_t prev_nsec = js_get(js, args[0], "1");
     if (vtype(prev_sec) == T_NUM && vtype(prev_nsec) == T_NUM) {
       uint64_t prev = (uint64_t)js_getnum(prev_sec) * 1000000000ULL + (uint64_t)js_getnum(prev_nsec);
       now = now - prev;
     }
   }
   
-  jsval_t arr = js_mkarr(js);
+  ant_value_t arr = js_mkarr(js);
   
   uint64_t secs = now / 1000000000ULL;
   uint64_t nsecs = now % 1000000000ULL;
@@ -961,7 +961,7 @@ static jsval_t process_hrtime(ant_t *js, jsval_t *args, int nargs) {
   return arr;
 }
 
-static jsval_t process_hrtime_bigint(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t process_hrtime_bigint(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
   uint64_t now = uv_hrtime();
   char buf[32];
@@ -969,9 +969,9 @@ static jsval_t process_hrtime_bigint(ant_t *js, jsval_t *args, int nargs) {
   return js_mkbigint(js, buf, strlen(buf), false);
 }
 
-static jsval_t process_memory_usage(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t process_memory_usage(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
-  jsval_t obj = js_mkobj(js);
+  ant_value_t obj = js_mkobj(js);
   
   size_t rss = 0;
   uv_resident_set_memory(&rss);
@@ -1003,15 +1003,15 @@ static jsval_t process_memory_usage(ant_t *js, jsval_t *args, int nargs) {
   return obj;
 }
 
-static jsval_t process_memory_usage_rss(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t process_memory_usage_rss(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
   size_t rss = 0;
   uv_resident_set_memory(&rss);
   return js_mknum((double)rss);
 }
 
-static jsval_t process_cpu_usage(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t obj = js_mkobj(js);
+static ant_value_t process_cpu_usage(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t obj = js_mkobj(js);
   uv_rusage_t rusage;
   
   if (uv_getrusage(&rusage) == 0) {
@@ -1019,8 +1019,8 @@ static jsval_t process_cpu_usage(ant_t *js, jsval_t *args, int nargs) {
     int64_t sys_usec = rusage.ru_stime.tv_sec * 1000000LL + rusage.ru_stime.tv_usec;
     
     if (nargs > 0 && is_special_object(args[0])) {
-      jsval_t prev_user = js_get(js, args[0], "user");
-      jsval_t prev_system = js_get(js, args[0], "system");
+      ant_value_t prev_user = js_get(js, args[0], "user");
+      ant_value_t prev_system = js_get(js, args[0], "system");
       if (vtype(prev_user) == T_NUM) user_usec -= (int64_t)js_getnum(prev_user);
       if (vtype(prev_system) == T_NUM) sys_usec -= (int64_t)js_getnum(prev_system);
     }
@@ -1035,7 +1035,7 @@ static jsval_t process_cpu_usage(ant_t *js, jsval_t *args, int nargs) {
   return obj;
 }
 
-static jsval_t process_kill(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t process_kill(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "process.kill requires at least 1 argument");
   if (vtype(args[0]) != T_NUM) return js_mkerr(js, "pid must be a number");
   
@@ -1060,13 +1060,13 @@ static jsval_t process_kill(ant_t *js, jsval_t *args, int nargs) {
   return js_true;
 }
 
-static jsval_t process_abort(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t process_abort(ant_t *js, ant_value_t *args, int nargs) {
   (void)js; (void)args; (void)nargs;
   abort();
   return js_mkundef();
 }
 
-static jsval_t process_chdir(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t process_chdir(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "process.chdir requires 1 argument");
   
   char *dir = js_getstr(js, args[0], NULL);
@@ -1077,7 +1077,7 @@ static jsval_t process_chdir(ant_t *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t process_umask(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t process_umask(ant_t *js, ant_value_t *args, int nargs) {
 #ifdef _WIN32
   (void)args; (void)nargs;
   return js_mknum(0);
@@ -1094,27 +1094,27 @@ static jsval_t process_umask(ant_t *js, jsval_t *args, int nargs) {
 }
 
 #ifndef _WIN32
-static jsval_t process_getuid(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t process_getuid(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
   return js_mknum((double)getuid());
 }
 
-static jsval_t process_geteuid(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t process_geteuid(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
   return js_mknum((double)geteuid());
 }
 
-static jsval_t process_getgid(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t process_getgid(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
   return js_mknum((double)getgid());
 }
 
-static jsval_t process_getegid(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t process_getegid(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
   return js_mknum((double)getegid());
 }
 
-static jsval_t process_getgroups(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t process_getgroups(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
   int ngroups = getgroups(0, NULL);
   if (ngroups < 0) return js_mkarr(js);
@@ -1123,7 +1123,7 @@ static jsval_t process_getgroups(ant_t *js, jsval_t *args, int nargs) {
   if (!groups) return js_mkarr(js);
   
   ngroups = getgroups(ngroups, groups);
-  jsval_t arr = js_mkarr(js);
+  ant_value_t arr = js_mkarr(js);
   for (int i = 0; i < ngroups; i++) {
     js_arr_push(js, arr, js_mknum((double)groups[i]));
   }
@@ -1131,7 +1131,7 @@ static jsval_t process_getgroups(ant_t *js, jsval_t *args, int nargs) {
   return arr;
 }
 
-static jsval_t process_setuid(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t process_setuid(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "process.setuid requires 1 argument");
   
   uid_t uid;
@@ -1150,7 +1150,7 @@ static jsval_t process_setuid(ant_t *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t process_setgid(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t process_setgid(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "process.setgid requires 1 argument");
   
   gid_t gid;
@@ -1169,7 +1169,7 @@ static jsval_t process_setgid(ant_t *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t process_seteuid(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t process_seteuid(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "process.seteuid requires 1 argument");
   
   uid_t uid;
@@ -1188,7 +1188,7 @@ static jsval_t process_seteuid(ant_t *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t process_setegid(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t process_setegid(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "process.setegid requires 1 argument");
   
   gid_t gid;
@@ -1207,12 +1207,12 @@ static jsval_t process_setegid(ant_t *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t process_setgroups(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t process_setgroups(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1 || vtype(args[0]) != T_ARR) {
     return js_mkerr(js, "process.setgroups requires an array");
   }
   
-  jsval_t len_val = js_get(js, args[0], "length");
+  ant_value_t len_val = js_get(js, args[0], "length");
   int len = (int)js_getnum(len_val);
   
   gid_t *groups = malloc(sizeof(gid_t) * (size_t)len);
@@ -1221,7 +1221,7 @@ static jsval_t process_setgroups(ant_t *js, jsval_t *args, int nargs) {
   for (int i = 0; i < len; i++) {
     char idx[16];
     snprintf(idx, sizeof(idx), "%d", i);
-    jsval_t val = js_get(js, args[0], idx);
+    ant_value_t val = js_get(js, args[0], idx);
     if (vtype(val) == T_NUM) {
       groups[i] = (gid_t)js_getnum(val);
     } else if (vtype(val) == T_STR) {
@@ -1243,7 +1243,7 @@ static jsval_t process_setgroups(ant_t *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t process_initgroups(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t process_initgroups(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "process.initgroups requires 2 arguments");
   
   char *user = js_getstr(js, args[0], NULL);
@@ -1266,7 +1266,7 @@ static jsval_t process_initgroups(ant_t *js, jsval_t *args, int nargs) {
 }
 #endif
 
-static jsval_t env_getter(ant_t *js, jsval_t obj, const char *key, size_t key_len) {
+static ant_value_t env_getter(ant_t *js, ant_value_t obj, const char *key, size_t key_len) {
   CSTR_BUF(buf, 256);
   char *key_str = CSTR_INIT(buf, key, key_len);
   if (!key_str) return js_mkundef();
@@ -1278,8 +1278,8 @@ static jsval_t env_getter(ant_t *js, jsval_t obj, const char *key, size_t key_le
   return js_mkstr(js, value, strlen(value));
 }
 
-static bool env_setter(ant_t *js, jsval_t obj, const char *key, size_t key_len, jsval_t value) {
-  jsval_t str_val = coerce_to_str(js, value);
+static bool env_setter(ant_t *js, ant_value_t obj, const char *key, size_t key_len, ant_value_t value) {
+  ant_value_t str_val = coerce_to_str(js, value);
   if (is_err(str_val)) return false;
   setprop_cstr(js, obj, key, key_len, str_val);
   
@@ -1295,14 +1295,14 @@ static bool env_setter(ant_t *js, jsval_t obj, const char *key, size_t key_len, 
   return true;
 }
 
-static bool env_deleter(ant_t *js, jsval_t obj, const char *key, size_t key_len) {
+static bool env_deleter(ant_t *js, ant_value_t obj, const char *key, size_t key_len) {
   CSTR_BUF(buf, 256);
   char *key_str = CSTR_INIT(buf, key, key_len);
   if (key_str) { unsetenv(key_str); cstr_free(&buf); }
   return true;
 }
 
-static void load_dotenv_file(ant_t *js, jsval_t env_obj) {
+static void load_dotenv_file(ant_t *js, ant_value_t env_obj) {
   FILE *fp = fopen(".env", "r");
   if (fp == NULL) return;
   
@@ -1353,7 +1353,7 @@ static void load_dotenv_file(ant_t *js, jsval_t env_obj) {
   fclose(fp);
 }
 
-static jsval_t process_exit(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t process_exit(ant_t *js, ant_value_t *args, int nargs) {
   int code = 0;
   
   if (nargs > 0 && vtype(args[0]) == T_NUM) {
@@ -1379,7 +1379,7 @@ typedef void (*env_iter_cb)(
   void *ctx
 );
 
-static void env_foreach(ant_t *js, jsval_t env_obj, env_iter_cb cb, void *ctx) {
+static void env_foreach(ant_t *js, ant_value_t env_obj, env_iter_cb cb, void *ctx) {
   for (char **env = environ; *env != NULL; env++) {
     char *entry = *env;
     char *equals = strchr(entry, '=');
@@ -1391,7 +1391,7 @@ static void env_foreach(ant_t *js, jsval_t env_obj, env_iter_cb cb, void *ctx) {
   }
   
   ant_iter_t iter = js_prop_iter_begin(js, env_obj);
-  const char *key; size_t key_len; jsval_t value;
+  const char *key; size_t key_len; ant_value_t value;
   
   while (js_prop_iter_next(&iter, &key, &key_len, &value)) {
     if (key_len >= 2 && key[0] == '_' && key[1] == '_') continue;
@@ -1415,7 +1415,7 @@ static void env_foreach(ant_t *js, jsval_t env_obj, env_iter_cb cb, void *ctx) {
 }
 
 static void env_to_object_cb(ant_t *js, const char *key, size_t key_len, const char *value, size_t val_len, void *ctx) {
-  jsval_t obj = *(jsval_t *)ctx;
+  ant_value_t obj = *(ant_value_t *)ctx;
   CSTR_BUF(buf, 256);
   char *key_str = CSTR_INIT(buf, key, key_len);
   if (!key_str) return;
@@ -1423,8 +1423,8 @@ static void env_to_object_cb(ant_t *js, const char *key, size_t key_len, const c
   cstr_free(&buf);
 }
 
-static jsval_t env_to_object(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t obj = js_mkobj(js);
+static ant_value_t env_to_object(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t obj = js_mkobj(js);
   env_foreach(js, js->this_val, env_to_object_cb, &obj);
   return obj;
 }
@@ -1449,30 +1449,30 @@ static void env_tostring_cb(ant_t *js, const char *key, size_t key_len, const ch
   c->pos += val_len;
 }
 
-static jsval_t env_toString(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t env_toString(ant_t *js, ant_value_t *args, int nargs) {
   env_str_ctx ctx = { .buf = malloc(4096), .pos = 0, .cap = 4096 };
   if (!ctx.buf) return js_mkstr(js, "", 0);
   
   env_foreach(js, js->this_val, env_tostring_cb, &ctx);
   ctx.buf[ctx.pos] = '\0';
   
-  jsval_t ret = js_mkstr(js, ctx.buf, ctx.pos);
+  ant_value_t ret = js_mkstr(js, ctx.buf, ctx.pos);
   free(ctx.buf);
   return ret;
 }
 
 static void env_keys_cb(ant_t *js, const char *key, size_t key_len, const char *value, size_t val_len, void *ctx) {
-  jsval_t arr = *(jsval_t *)ctx;
+  ant_value_t arr = *(ant_value_t *)ctx;
   js_arr_push(js, arr, js_mkstr(js, key, key_len));
 }
 
-static jsval_t env_keys(ant_t *js, jsval_t obj) {
-  jsval_t arr = js_mkarr(js);
+static ant_value_t env_keys(ant_t *js, ant_value_t obj) {
+  ant_value_t arr = js_mkarr(js);
   env_foreach(js, obj, env_keys_cb, &arr);
   return arr;
 }
 
-static jsval_t process_cwd(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t process_cwd(ant_t *js, ant_value_t *args, int nargs) {
   char cwd[4096];
   if (getcwd(cwd, sizeof(cwd)) != NULL) {
     return js_mkstr(js, cwd, strlen(cwd));
@@ -1480,7 +1480,7 @@ static jsval_t process_cwd(ant_t *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t process_on(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t process_on(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "process.on requires 2 arguments");
   
   char *event = js_getstr(js, args[0], NULL);
@@ -1506,7 +1506,7 @@ static jsval_t process_on(ant_t *js, jsval_t *args, int nargs) {
   return js_get(js, js_glob(js), "process");
 }
 
-static jsval_t process_once(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t process_once(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "process.once requires 2 arguments");
   
   char *event = js_getstr(js, args[0], NULL);
@@ -1532,8 +1532,8 @@ static jsval_t process_once(ant_t *js, jsval_t *args, int nargs) {
   return js_get(js, js_glob(js), "process");
 }
 
-static jsval_t process_off(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t process_obj = js_get(js, js_glob(js), "process");
+static ant_value_t process_off(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t process_obj = js_get(js, js_glob(js), "process");
   if (nargs < 2) return process_obj;
   
   char *event = js_getstr(js, args[0], NULL);
@@ -1560,8 +1560,8 @@ static jsval_t process_off(ant_t *js, jsval_t *args, int nargs) {
   return process_obj;
 }
 
-static jsval_t process_remove_all_listeners(ant_t *js, jsval_t *args, int nargs) {
-  jsval_t process_obj = js_get(js, js_glob(js), "process");
+static ant_value_t process_remove_all_listeners(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t process_obj = js_get(js, js_glob(js), "process");
   
   if (nargs > 0 && vtype(args[0]) == T_STR) {
     char *event = js_getstr(js, args[0], NULL);
@@ -1586,7 +1586,7 @@ static jsval_t process_remove_all_listeners(ant_t *js, jsval_t *args, int nargs)
   return process_obj;
 }
 
-static jsval_t process_emit(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t process_emit(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_false;
   
   char *event = js_getstr(js, args[0], NULL);
@@ -1596,7 +1596,7 @@ static jsval_t process_emit(ant_t *js, jsval_t *args, int nargs) {
   return js_true;
 }
 
-static jsval_t process_listener_count(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t process_listener_count(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mknum(0);
   
   char *event = js_getstr(js, args[0], NULL);
@@ -1608,7 +1608,7 @@ static jsval_t process_listener_count(ant_t *js, jsval_t *args, int nargs) {
   return js_mknum(evt ? evt->listener_count : 0);
 }
 
-static jsval_t process_set_max_listeners(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t process_set_max_listeners(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "setMaxListeners requires 1 argument");
   if (vtype(args[0]) != T_NUM) return js_mkerr(js, "n must be a number");
   
@@ -1619,20 +1619,20 @@ static jsval_t process_set_max_listeners(ant_t *js, jsval_t *args, int nargs) {
   return js_get(js, js_glob(js), "process");
 }
 
-static jsval_t process_get_max_listeners(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t process_get_max_listeners(ant_t *js, ant_value_t *args, int nargs) {
   return js_mknum(max_listeners);
 }
 
-jsval_t process_library(ant_t *js) {
+ant_value_t process_library(ant_t *js) {
   return js_get(js, js_glob(js), "process");
 }
 
 void init_process_module() {
   ant_t *js = rt->js;
-  jsval_t global = js_glob(js);
+  ant_value_t global = js_glob(js);
   
   process_start_time = uv_hrtime();
-  jsval_t process_proto = js_mkobj(js);
+  ant_value_t process_proto = js_mkobj(js);
   
   js_set(js, process_proto, "exit", js_mkfun(process_exit));
   js_set(js, process_proto, "on", js_mkfun(process_on));
@@ -1653,11 +1653,11 @@ void init_process_module() {
   js_set(js, process_proto, "abort", js_mkfun(process_abort));
   js_set(js, process_proto, "umask", js_mkfun(process_umask));
   
-  jsval_t mem_usage_fn = js_heavy_mkfun(js, process_memory_usage, js_mkundef());
+  ant_value_t mem_usage_fn = js_heavy_mkfun(js, process_memory_usage, js_mkundef());
   js_set(js, mem_usage_fn, "rss", js_mkfun(process_memory_usage_rss));
   js_set(js, process_proto, "memoryUsage", mem_usage_fn);
   
-  jsval_t hrtime_fn = js_heavy_mkfun(js, process_hrtime, js_mkundef());
+  ant_value_t hrtime_fn = js_heavy_mkfun(js, process_hrtime, js_mkundef());
   js_set(js, hrtime_fn, "bigint", js_mkfun(process_hrtime_bigint));
   js_set(js, process_proto, "hrtime", hrtime_fn);
   js_set(js, process_proto, "dlopen", js_mkfun(napi_process_dlopen_js));
@@ -1678,8 +1678,8 @@ void init_process_module() {
   
   js_set_sym(js, process_proto, get_toStringTag_sym(), js_mkstr(js, "process", 7));
   
-  jsval_t process_obj = js_mkobj(js);
-  jsval_t env_obj = js_mkobj(js);
+  ant_value_t process_obj = js_mkobj(js);
+  ant_value_t env_obj = js_mkobj(js);
   js_set_proto(js, process_obj, process_proto);
 
   load_dotenv_file(js, env_obj);
@@ -1693,7 +1693,7 @@ void init_process_module() {
   js_set(js, env_obj, "toString", js_mkfun(env_toString));
   js_set(js, process_obj, "env", env_obj);
   
-  jsval_t argv_arr = js_mkarr(js);
+  ant_value_t argv_arr = js_mkarr(js);
   for (int i = 0; i < rt->argc; i++) {
     js_arr_push(js, argv_arr, js_mkstr(js, rt->argv[i], strlen(rt->argv[i])));
   }
@@ -1710,14 +1710,14 @@ void init_process_module() {
   snprintf(version_str, sizeof(version_str), "v%s", ANT_VERSION);
   js_set(js, process_obj, "version", js_mkstr(js, version_str, strlen(version_str)));
   
-  jsval_t versions_obj = js_mkobj(js);
+  ant_value_t versions_obj = js_mkobj(js);
   js_set(js, versions_obj, "ant", js_mkstr(js, ANT_VERSION, strlen(ANT_VERSION)));
   char uv_ver[32];
   snprintf(uv_ver, sizeof(uv_ver), "%d.%d.%d", UV_VERSION_MAJOR, UV_VERSION_MINOR, UV_VERSION_PATCH);
   js_set(js, versions_obj, "uv", js_mkstr(js, uv_ver, strlen(uv_ver)));
   js_set(js, process_obj, "versions", versions_obj);
   
-  jsval_t release_obj = js_mkobj(js);
+  ant_value_t release_obj = js_mkobj(js);
   js_set(js, release_obj, "name", js_mkstr(js, "ant", 3));
   js_set(js, process_obj, "release", release_obj);
   
@@ -1747,7 +1747,7 @@ void init_process_module() {
     js_set(js, process_obj, "arch", js_mkstr(js, "unknown", 7));
   #endif
   
-  jsval_t stdin_proto = js_mkobj(js);
+  ant_value_t stdin_proto = js_mkobj(js);
   js_set(js, stdin_proto, "setRawMode", js_mkfun(js_stdin_set_raw_mode));
   js_set(js, stdin_proto, "resume", js_mkfun(js_stdin_resume));
   js_set(js, stdin_proto, "pause", js_mkfun(js_stdin_pause));
@@ -1757,12 +1757,12 @@ void init_process_module() {
   js_set(js, stdin_proto, "removeAllListeners", js_mkfun(js_stdin_remove_all_listeners));
   js_set_sym(js, stdin_proto, get_toStringTag_sym(), js_mkstr(js, "ReadStream", 10));
   
-  jsval_t stdin_obj = js_mkobj(js);
+  ant_value_t stdin_obj = js_mkobj(js);
   js_set_proto(js, stdin_obj, stdin_proto);
   js_set(js, stdin_obj, "isTTY", js_bool(stdin_is_tty()));
   js_set(js, process_obj, "stdin", stdin_obj);
   
-  jsval_t stdout_proto = js_mkobj(js);
+  ant_value_t stdout_proto = js_mkobj(js);
   js_set(js, stdout_proto, "write", js_mkfun(js_stdout_write));
   js_set(js, stdout_proto, "on", js_mkfun(js_stdout_on));
   js_set(js, stdout_proto, "once", js_mkfun(js_stdout_once));
@@ -1772,14 +1772,14 @@ void init_process_module() {
   js_set(js, stdout_proto, "getWindowSize", js_mkfun(js_stdout_get_window_size));
   js_set_sym(js, stdout_proto, get_toStringTag_sym(), js_mkstr(js, "WriteStream", 11));
   
-  jsval_t stdout_obj = js_mkobj(js);
+  ant_value_t stdout_obj = js_mkobj(js);
   js_set_proto(js, stdout_obj, stdout_proto);
   js_set(js, stdout_obj, "isTTY", js_bool(stdout_is_tty()));
   js_set_getter_desc(js, stdout_obj, "rows", 4, js_mkfun(js_stdout_rows_getter), JS_DESC_E | JS_DESC_C);
   js_set_getter_desc(js, stdout_obj, "columns", 7, js_mkfun(js_stdout_columns_getter), JS_DESC_E | JS_DESC_C);
   js_set(js, process_obj, "stdout", stdout_obj);
   
-  jsval_t stderr_proto = js_mkobj(js);
+  ant_value_t stderr_proto = js_mkobj(js);
   js_set(js, stderr_proto, "write", js_mkfun(js_stderr_write));
   js_set(js, stderr_proto, "on", js_mkfun(js_stderr_on));
   js_set(js, stderr_proto, "once", js_mkfun(js_stderr_once));
@@ -1788,7 +1788,7 @@ void init_process_module() {
   js_set(js, stderr_proto, "removeAllListeners", js_mkfun(js_stderr_remove_all_listeners));
   js_set_sym(js, stderr_proto, get_toStringTag_sym(), js_mkstr(js, "WriteStream", 11));
   
-  jsval_t stderr_obj = js_mkobj(js);
+  ant_value_t stderr_obj = js_mkobj(js);
   js_set_proto(js, stderr_obj, stderr_proto);
   js_set(js, stderr_obj, "isTTY", js_bool(stderr_is_tty()));
   js_set(js, process_obj, "stderr", stderr_obj);

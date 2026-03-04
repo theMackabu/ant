@@ -48,19 +48,19 @@ void free_array_buffer_data(ArrayBufferData *data);
 size_t buffer_get_external_memory(void);
 
 ArrayBufferData *create_array_buffer_data(size_t length);
-jsval_t create_arraybuffer_obj(ant_t *js, ArrayBufferData *buffer);
+ant_value_t create_arraybuffer_obj(ant_t *js, ArrayBufferData *buffer);
 
-jsval_t create_typed_array(
+ant_value_t create_typed_array(
   ant_t *js, TypedArrayType type, ArrayBufferData *buffer,
   size_t byte_offset, size_t length, const char *type_name
 );
 
-jsval_t create_typed_array_with_buffer(
+ant_value_t create_typed_array_with_buffer(
   ant_t *js, TypedArrayType type, ArrayBufferData *buffer,
   size_t byte_offset, size_t length, 
-  const char *type_name, jsval_t arraybuffer_obj
+  const char *type_name, ant_value_t arraybuffer_obj
 );
 
-jsval_t buffer_library(ant_t *js);
+ant_value_t buffer_library(ant_t *js);
 
 #endif

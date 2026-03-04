@@ -49,7 +49,7 @@ static void example_basic_eval(void) {
 
 
   const char *code = "1 + 2 * 3";
-  jsval_t result = js_eval_bytecode_eval(js, code, strlen(code));
+  ant_value_t result = js_eval_bytecode_eval(js, code, strlen(code));
 
   if (vtype(result) == T_NUM) {
     printf("  Result: %g\n", js_getnum(result));
@@ -60,7 +60,7 @@ static void example_basic_eval(void) {
   js_destroy(js);
 }
 
-static jsval_t my_add(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t my_add(ant_t *js, ant_value_t *args, int nargs) {
   if (!js_chkargs(args, nargs, "dd")) {
     return js_mkerr(js, "add() expects two numbers");
   }
@@ -71,7 +71,7 @@ static jsval_t my_add(ant_t *js, jsval_t *args, int nargs) {
   return js_mknum(a + b);
 }
 
-static jsval_t my_greet(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t my_greet(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1 || vtype(args[0]) != T_STR) {
     return js_mkerr(js, "greet() expects a string");
   }
@@ -85,12 +85,12 @@ static jsval_t my_greet(ant_t *js, jsval_t *args, int nargs) {
   return js_mkstr(js, buf, strlen(buf));
 }
 
-static jsval_t my_create_point(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t my_create_point(ant_t *js, ant_value_t *args, int nargs) {
   if (!js_chkargs(args, nargs, "dd")) {
     return js_mkerr(js, "createPoint() expects two numbers");
   }
 
-  jsval_t obj = js_mkobj(js);
+  ant_value_t obj = js_mkobj(js);
   js_set(js, obj, "x", args[0]);
   js_set(js, obj, "y", args[1]);
 
@@ -106,21 +106,21 @@ static void example_c_functions(void) {
 
 
 
-  jsval_t global = js_glob(js);
+  ant_value_t global = js_glob(js);
   js_set(js, global, "add", js_mkfun(my_add));
   js_set(js, global, "greet", js_mkfun(my_greet));
   js_set(js, global, "createPoint", js_mkfun(my_create_point));
 
   const char *code1 = "add(10, 32)";
-  jsval_t r1 = js_eval_bytecode_eval(js, code1, strlen(code1));
+  ant_value_t r1 = js_eval_bytecode_eval(js, code1, strlen(code1));
   printf("  add(10, 32) = %g\n", js_getnum(r1));
 
   const char *code2 = "greet('World')";
-  jsval_t r2 = js_eval_bytecode_eval(js, code2, strlen(code2));
+  ant_value_t r2 = js_eval_bytecode_eval(js, code2, strlen(code2));
   printf("  greet('World') = %s\n", js_str(js, r2));
 
   const char *code3 = "let p = createPoint(3, 4); p.x * p.x + p.y * p.y";
-  jsval_t r3 = js_eval_bytecode_eval(js, code3, strlen(code3));
+  ant_value_t r3 = js_eval_bytecode_eval(js, code3, strlen(code3));
   printf("  distance² = %g\n", js_getnum(r3));
 
   js_destroy(js);
@@ -134,28 +134,28 @@ static void example_objects_arrays(void) {
   if (!js) return;
 
 
-  jsval_t global = js_glob(js);
+  ant_value_t global = js_glob(js);
 
-  jsval_t config = js_mkobj(js);
+  ant_value_t config = js_mkobj(js);
   js_set(js, config, "debug", js_true);
   js_set(js, config, "version", js_mknum(1.0));
   js_set(js, config, "name", js_mkstr(js, "MyApp", 5));
   js_set(js, global, "config", config);
 
-  jsval_t arr = js_mkarr(js);
+  ant_value_t arr = js_mkarr(js);
   js_arr_push(js, arr, js_mknum(10));
   js_arr_push(js, arr, js_mknum(20));
   js_arr_push(js, arr, js_mknum(30));
   js_set(js, global, "numbers", arr);
 
   const char *code = "config.name + ' v' + config.version + ' - sum: ' + numbers.reduce((a,b) => a+b, 0)";
-  jsval_t result = js_eval_bytecode_eval(js, code, strlen(code));
+  ant_value_t result = js_eval_bytecode_eval(js, code, strlen(code));
   printf("  Result: %s\n", js_str(js, result));
 
-  jsval_t name_val = js_get(js, config, "name");
+  ant_value_t name_val = js_get(js, config, "name");
   printf("  config.name: %s\n", js_str(js, name_val));
   
-  jsval_t debug_val = js_get(js, config, "debug");
+  ant_value_t debug_val = js_get(js, config, "debug");
   printf("  config.debug: %s\n", js_str(js, debug_val));
 
   js_destroy(js);
@@ -171,22 +171,22 @@ static void example_error_handling(void) {
 
 
   const char *bad_code = "let x = {";
-  jsval_t r1 = js_eval_bytecode_eval(js, bad_code, strlen(bad_code));
+  ant_value_t r1 = js_eval_bytecode_eval(js, bad_code, strlen(bad_code));
   if (vtype(r1) == T_ERR) {
     printf("  Syntax error:    %s\n", js_str(js, r1));
   }
 
   const char *ref_err = "undefinedVariable + 1";
-  jsval_t r2 = js_eval_bytecode_eval(js, ref_err, strlen(ref_err));
+  ant_value_t r2 = js_eval_bytecode_eval(js, ref_err, strlen(ref_err));
   if (vtype(r2) == T_ERR) {
     printf("  Reference error: %s\n", js_str(js, r2));
   }
 
-  jsval_t global = js_glob(js);
+  ant_value_t global = js_glob(js);
   js_set(js, global, "add", js_mkfun(my_add));
 
   const char *type_err = "add('not', 'numbers')";
-  jsval_t r3 = js_eval_bytecode_eval(js, type_err, strlen(type_err));
+  ant_value_t r3 = js_eval_bytecode_eval(js, type_err, strlen(type_err));
   if (vtype(r3) == T_ERR) {
     printf("  Type error:      %s\n", js_str(js, r3));
   }
@@ -211,20 +211,20 @@ static void example_call_js_from_c(void) {
 
   js_eval_bytecode_eval(js, code, strlen(code));
 
-  jsval_t glob = js_glob(js);
-  jsval_t multiply_fn = js_get(js, glob, "multiply");
-  jsval_t format_fn = js_get(js, glob, "formatName");
+  ant_value_t glob = js_glob(js);
+  ant_value_t multiply_fn = js_get(js, glob, "multiply");
+  ant_value_t format_fn = js_get(js, glob, "formatName");
 
-  jsval_t args1[] = { js_mknum(6), js_mknum(7) };
-  jsval_t result1 = sv_vm_call(js->vm, js, multiply_fn, js_mkundef(), args1, 2, NULL, false);
+  ant_value_t args1[] = { js_mknum(6), js_mknum(7) };
+  ant_value_t result1 = sv_vm_call(js->vm, js, multiply_fn, js_mkundef(), args1, 2, NULL, false);
   printf("  multiply(6, 7) = %g\n", js_getnum(result1));
 
-  jsval_t args2[] = {
+  ant_value_t args2[] = {
     js_mkstr(js, "John", 4),
     js_mkstr(js, "Doe", 3)
   };
 
-  jsval_t result2 = sv_vm_call(js->vm, js, format_fn, js_mkundef(), args2, 2, NULL, false);
+  ant_value_t result2 = sv_vm_call(js->vm, js, format_fn, js_mkundef(), args2, 2, NULL, false);
   printf("  formatName('John', 'Doe') = %s\n", js_str(js, result2));
 
   js_destroy(js);
@@ -238,12 +238,12 @@ static void example_iterate_properties(void) {
   if (!js) return;
 
   const char *code = "({ name: 'Alice', age: 30, city: 'NYC' })";
-  jsval_t obj = js_eval_bytecode_eval(js, code, strlen(code));
+  ant_value_t obj = js_eval_bytecode_eval(js, code, strlen(code));
 
   ant_iter_t iter = js_prop_iter_begin(js, obj);
   const char *key;
   size_t key_len;
-  jsval_t value;
+  ant_value_t value;
 
   printf("  Object properties:\n");
   while (js_prop_iter_next(&iter, &key, &key_len, &value)) {
@@ -254,13 +254,13 @@ static void example_iterate_properties(void) {
   js_destroy(js);
 }
 
-static jsval_t method_get_full_name(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t method_get_full_name(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
 
-  jsval_t this_obj = js_getthis(js);
+  ant_value_t this_obj = js_getthis(js);
 
-  jsval_t first = js_get(js, this_obj, "firstName");
-  jsval_t last = js_get(js, this_obj, "lastName");
+  ant_value_t first = js_get(js, this_obj, "firstName");
+  ant_value_t last = js_get(js, this_obj, "lastName");
 
   size_t first_len, last_len;
   char *first_str = js_getstr(js, first, &first_len);
@@ -281,7 +281,7 @@ static void example_this_context(void) {
 
 
 
-  jsval_t person = js_mkobj(js);
+  ant_value_t person = js_mkobj(js);
   js_set(js, person, "firstName", js_mkstr(js, "Jane", 4));
   js_set(js, person, "lastName", js_mkstr(js, "Smith", 5));
   js_set(js, person, "getFullName", js_mkfun(method_get_full_name));
@@ -289,7 +289,7 @@ static void example_this_context(void) {
   js_set(js, js_glob(js), "person", person);
 
   const char *code = "person.getFullName()";
-  jsval_t result = js_eval_bytecode_eval(js, code, strlen(code));
+  ant_value_t result = js_eval_bytecode_eval(js, code, strlen(code));
   printf("  person.getFullName() = %s\n", js_str(js, result));
 
   js_destroy(js);
@@ -312,7 +312,7 @@ static void example_stateful_session(void) {
     "getCount()"
   };
 
-  jsval_t result = js_mkundef();
+  ant_value_t result = js_mkundef();
   for (int i = 0; i < 5; i++) {
     result = js_eval_bytecode_eval(js, scripts[i], strlen(scripts[i]));
     if (vtype(result) == T_ERR) {
@@ -358,7 +358,7 @@ static void example_async_event_loop(void) {
     ""
     "results.push('sync');";
 
-  jsval_t result = js_eval_bytecode_eval(js, code, strlen(code));
+  ant_value_t result = js_eval_bytecode_eval(js, code, strlen(code));
   if (vtype(result) == T_ERR) {
     printf("  Error: %s\n", js_str(js, result));
     js_destroy(js);
@@ -367,12 +367,12 @@ static void example_async_event_loop(void) {
 
   js_run_event_loop(js);
 
-  jsval_t results = js_get(js, js_glob(js), "results");
+  ant_value_t results = js_get(js, js_glob(js), "results");
 
   printf("  Execution order:\n");
-  jsoff_t len = js_arr_len(js, results);
-  for (jsoff_t i = 0; i < len; i++) {
-    jsval_t item = js_arr_get(js, results, i);
+  ant_offset_t len = js_arr_len(js, results);
+  for (ant_offset_t i = 0; i < len; i++) {
+    ant_value_t item = js_arr_get(js, results, i);
     printf("    %llu. %s\n", (unsigned long long)i + 1, js_str(js, item));
   }
 
@@ -398,7 +398,7 @@ static void example_console_logging(void) {
     "console.error('This is an error');"
     "'done'";
 
-  jsval_t result = js_eval_bytecode_eval(js, code, strlen(code));
+  ant_value_t result = js_eval_bytecode_eval(js, code, strlen(code));
   if (vtype(result) == T_ERR) {
     printf("  Error: %s\n", js_str(js, result));
   }
@@ -416,12 +416,12 @@ static void example_global_this(void) {
   init_console_module();
 
 
-  jsval_t global = js_glob(js);
+  ant_value_t global = js_glob(js);
   js_set(js, global, "myNumber", js_mknum(42));
   js_set(js, global, "myString", js_mkstr(js, "hello from C", 12));
   js_set(js, global, "myBool", js_true);
 
-  jsval_t myObj = js_mkobj(js);
+  ant_value_t myObj = js_mkobj(js);
   js_set(js, myObj, "a", js_mknum(1));
   js_set(js, myObj, "b", js_mknum(2));
   js_set(js, global, "myObject", myObj);
@@ -443,12 +443,12 @@ static void example_global_this(void) {
     "console.log('  addedFromJS:', addedFromJS);"
     "console.log(this)";
 
-  jsval_t result = js_eval_bytecode_eval(js, code, strlen(code));
+  ant_value_t result = js_eval_bytecode_eval(js, code, strlen(code));
   if (vtype(result) == T_ERR) {
     printf("  Error: %s\n", js_str(js, result));
   }
 
-  jsval_t added = js_get(js, global, "addedFromJS");
+  ant_value_t added = js_get(js, global, "addedFromJS");
   printf("\n  Read from C: addedFromJS = %s\n", js_str(js, added));
 
   js_destroy(js);

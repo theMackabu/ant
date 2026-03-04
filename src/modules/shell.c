@@ -16,11 +16,11 @@
 #include "internal.h"
 #include "modules/symbol.h"
 
-static jsval_t builtin_shell_text(ant_t *js, jsval_t *args, int nargs);
-static jsval_t builtin_shell_lines(ant_t *js, jsval_t *args, int nargs);
+static ant_value_t builtin_shell_text(ant_t *js, ant_value_t *args, int nargs);
+static ant_value_t builtin_shell_lines(ant_t *js, ant_value_t *args, int nargs);
 
-static jsval_t shell_exec(ant_t *js, const char *cmd, size_t cmd_len) {
-  jsval_t result = js_mkobj(js);
+static ant_value_t shell_exec(ant_t *js, const char *cmd, size_t cmd_len) {
+  ant_value_t result = js_mkobj(js);
   
   FILE *fp = popen(cmd, "r");
   if (!fp) {
@@ -65,7 +65,7 @@ static jsval_t shell_exec(ant_t *js, const char *cmd, size_t cmd_len) {
 #endif
   if (output_size > 0 && output[output_size - 1] == '\n') output_size--;
   
-  jsval_t stdout_val = js_mkstr(js, output, output_size);
+  ant_value_t stdout_val = js_mkstr(js, output, output_size);
   free(output);
   
   js_set(js, result, "exitCode", js_mknum(exit_code));
@@ -75,32 +75,32 @@ static jsval_t shell_exec(ant_t *js, const char *cmd, size_t cmd_len) {
   return result;
 }
 
-static jsval_t builtin_shell_text(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_shell_text(ant_t *js, ant_value_t *args, int nargs) {
   (void)args;
   (void)nargs;
   
-  jsval_t fn = js_getcurrentfunc(js);
+  ant_value_t fn = js_getcurrentfunc(js);
   return js_get_slot(js, fn, SLOT_DATA);
 }
 
-static jsval_t builtin_shell_lines(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_shell_lines(ant_t *js, ant_value_t *args, int nargs) {
   (void)args;
   (void)nargs;
   
-  jsval_t fn = js_getcurrentfunc(js);
-  jsval_t stdout_val = js_get_slot(js, fn, SLOT_DATA);
+  ant_value_t fn = js_getcurrentfunc(js);
+  ant_value_t stdout_val = js_get_slot(js, fn, SLOT_DATA);
   
   size_t text_len;
   char *text = js_getstr(js, stdout_val, &text_len);
   if (!text) return js_mkarr(js);
   
-  jsval_t lines_array = js_mkarr(js);
+  ant_value_t lines_array = js_mkarr(js);
   size_t line_start = 0;
   
   for (size_t i = 0; i <= text_len; i++) {
     if (i == text_len || text[i] == '\n') {
       size_t line_len = i - line_start;
-      jsval_t line_val = js_mkstr(js, text + line_start, line_len);
+      ant_value_t line_val = js_mkstr(js, text + line_start, line_len);
       js_arr_push(js, lines_array, line_val);
       line_start = i + 1;
     }
@@ -109,7 +109,7 @@ static jsval_t builtin_shell_lines(ant_t *js, jsval_t *args, int nargs) {
   return lines_array;
 }
 
-static jsval_t builtin_shell_dollar(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t builtin_shell_dollar(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "$() requires at least one argument");
     
   if (!is_special_object(args[0])) {
@@ -123,7 +123,7 @@ static jsval_t builtin_shell_dollar(ant_t *js, jsval_t *args, int nargs) {
     return js_mkerr(js, "$() requires a template string");
   }
   
-  jsval_t strings_array = args[0];
+  ant_value_t strings_array = args[0];
   
   char *command = malloc(4096);
   if (!command) return js_mkerr(js, "Out of memory");
@@ -131,14 +131,14 @@ static jsval_t builtin_shell_dollar(ant_t *js, jsval_t *args, int nargs) {
   size_t cmd_pos = 0;
   size_t cmd_capacity = 4096;
   
-  jsval_t length_val = js_get(js, strings_array, "length");
+  ant_value_t length_val = js_get(js, strings_array, "length");
   int length = (int)js_getnum(length_val);
   
   for (int i = 0; i < length; i++) {
     char idx_str[32];
     snprintf(idx_str, sizeof(idx_str), "%d", i);
     
-    jsval_t str_val = js_get(js, strings_array, idx_str);
+    ant_value_t str_val = js_get(js, strings_array, idx_str);
     if (vtype(str_val) == T_STR) {
       size_t str_len;
       char *str = js_getstr(js, str_val, &str_len);
@@ -158,7 +158,7 @@ static jsval_t builtin_shell_dollar(ant_t *js, jsval_t *args, int nargs) {
     }
     
     if (i + 1 < nargs) {
-      jsval_t val = args[i + 1];
+      ant_value_t val = args[i + 1];
       char val_str[256];
       size_t val_len = 0;
       
@@ -188,14 +188,14 @@ static jsval_t builtin_shell_dollar(ant_t *js, jsval_t *args, int nargs) {
   
   command[cmd_pos] = '\0';
   
-  jsval_t result = shell_exec(js, command, cmd_pos);
+  ant_value_t result = shell_exec(js, command, cmd_pos);
   free(command);
   
   return result;
 }
 
-jsval_t shell_library(ant_t *js) {
-  jsval_t lib = js_mkobj(js);
+ant_value_t shell_library(ant_t *js) {
+  ant_value_t lib = js_mkobj(js);
   
   js_set(js, lib, "$", js_mkfun(builtin_shell_dollar));
   js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "shell", 5));

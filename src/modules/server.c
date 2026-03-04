@@ -87,9 +87,9 @@ static void res_set_body(response_ctx_t *ctx, const char *src, size_t len) {
 
 typedef struct http_server_s {
   ant_t *js;
-  jsval_t handler;
-  jsval_t store_obj;
-  jsval_t server_obj;
+  ant_value_t handler;
+  ant_value_t store_obj;
+  ant_value_t server_obj;
   int port;
   uv_tcp_t server;
   uv_loop_t *loop;
@@ -345,11 +345,11 @@ static void free_http_request(http_request_t *req) {
 static void on_close(uv_handle_t *handle);
 static void send_response(uv_stream_t *client, response_ctx_t *res_ctx);
 
-static jsval_t js_set_prop(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_set_prop(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_mkundef();
   
-  jsval_t fn = js_getcurrentfunc(js);
-  jsval_t store_obj = js_get_slot(js, fn, SLOT_DATA);
+  ant_value_t fn = js_getcurrentfunc(js);
+  ant_value_t store_obj = js_get_slot(js, fn, SLOT_DATA);
   if (vtype(store_obj) == T_UNDEF) return js_mkundef();
   
   if (vtype(args[0]) == T_STR) {
@@ -361,11 +361,11 @@ static jsval_t js_set_prop(ant_t *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t js_get_prop(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_get_prop(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
   
-  jsval_t fn = js_getcurrentfunc(js);
-  jsval_t store_obj = js_get_slot(js, fn, SLOT_DATA);
+  ant_value_t fn = js_getcurrentfunc(js);
+  ant_value_t store_obj = js_get_slot(js, fn, SLOT_DATA);
   if (vtype(store_obj) == T_UNDEF) return js_mkundef();
   
   if (vtype(args[0]) == T_STR) {
@@ -377,11 +377,11 @@ static jsval_t js_get_prop(ant_t *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t req_header(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t req_header(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
   
-  jsval_t fn = js_getcurrentfunc(js);
-  jsval_t headers_val = js_get_slot(js, fn, SLOT_DATA);
+  ant_value_t fn = js_getcurrentfunc(js);
+  ant_value_t headers_val = js_get_slot(js, fn, SLOT_DATA);
   if (vtype(headers_val) != T_NUM) return js_mkundef();
   
   UT_array *headers = (UT_array *)(unsigned long)js_getnum(headers_val);
@@ -401,11 +401,11 @@ static jsval_t req_header(ant_t *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t res_header(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t res_header(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_mkundef();
   
-  jsval_t fn = js_getcurrentfunc(js);
-  jsval_t ctx_val = js_get_slot(js, fn, SLOT_DATA);
+  ant_value_t fn = js_getcurrentfunc(js);
+  ant_value_t ctx_val = js_get_slot(js, fn, SLOT_DATA);
   if (vtype(ctx_val) != T_NUM) return js_mkundef();
   
   response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
@@ -421,11 +421,11 @@ static jsval_t res_header(ant_t *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t res_status(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t res_status(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
   
-  jsval_t fn = js_getcurrentfunc(js);
-  jsval_t ctx_val = js_get_slot(js, fn, SLOT_DATA);
+  ant_value_t fn = js_getcurrentfunc(js);
+  ant_value_t ctx_val = js_get_slot(js, fn, SLOT_DATA);
   if (vtype(ctx_val) != T_NUM) return js_mkundef();
   
   response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
@@ -438,11 +438,11 @@ static jsval_t res_status(ant_t *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t res_body(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t res_body(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
   
-  jsval_t fn = js_getcurrentfunc(js);
-  jsval_t ctx_val = js_get_slot(js, fn, SLOT_DATA);
+  ant_value_t fn = js_getcurrentfunc(js);
+  ant_value_t ctx_val = js_get_slot(js, fn, SLOT_DATA);
   if (vtype(ctx_val) != T_NUM) return js_mkundef();
   
   response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
@@ -467,11 +467,11 @@ static jsval_t res_body(ant_t *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t res_html(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t res_html(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
   
-  jsval_t fn = js_getcurrentfunc(js);
-  jsval_t ctx_val = js_get_slot(js, fn, SLOT_DATA);
+  ant_value_t fn = js_getcurrentfunc(js);
+  ant_value_t ctx_val = js_get_slot(js, fn, SLOT_DATA);
   if (vtype(ctx_val) != T_NUM) return js_mkundef();
   
   response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
@@ -493,18 +493,18 @@ static jsval_t res_html(ant_t *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t res_json(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t res_json(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
   
-  jsval_t fn = js_getcurrentfunc(js);
-  jsval_t ctx_val = js_get_slot(js, fn, SLOT_DATA);
+  ant_value_t fn = js_getcurrentfunc(js);
+  ant_value_t ctx_val = js_get_slot(js, fn, SLOT_DATA);
   if (vtype(ctx_val) != T_NUM) return js_mkundef();
   
   response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
   if (!ctx) return js_mkundef();
   
-  jsval_t stringify_args[1] = { args[0] };
-  jsval_t result = js_json_stringify(js, stringify_args, 1);
+  ant_value_t stringify_args[1] = { args[0] };
+  ant_value_t result = js_json_stringify(js, stringify_args, 1);
   
   if (vtype(result) == T_STR) {
     size_t len;
@@ -525,11 +525,11 @@ static jsval_t res_json(ant_t *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t res_notFound(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t res_notFound(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
   
-  jsval_t fn = js_getcurrentfunc(js);
-  jsval_t ctx_val = js_get_slot(js, fn, SLOT_DATA);
+  ant_value_t fn = js_getcurrentfunc(js);
+  ant_value_t ctx_val = js_get_slot(js, fn, SLOT_DATA);
   if (vtype(ctx_val) != T_NUM) return js_mkundef();
   
   response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
@@ -544,11 +544,11 @@ static jsval_t res_notFound(ant_t *js, jsval_t *args, int nargs) {
   return js_mkundef();
 }
 
-static jsval_t res_redirect(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t res_redirect(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
   
-  jsval_t fn = js_getcurrentfunc(js);
-  jsval_t ctx_val = js_get_slot(js, fn, SLOT_DATA);
+  ant_value_t fn = js_getcurrentfunc(js);
+  ant_value_t ctx_val = js_get_slot(js, fn, SLOT_DATA);
   if (vtype(ctx_val) != T_NUM) return js_mkundef();
   
   response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
@@ -706,14 +706,14 @@ static void send_response(uv_stream_t *client, response_ctx_t *res_ctx) {
   uv_write((uv_write_t *)write_req, client, &write_req->buf, 1, on_write);
 }
 
-static jsval_t js_server_stop(ant_t *js, jsval_t *args, int nargs) {
+static ant_value_t js_server_stop(ant_t *js, ant_value_t *args, int nargs) {
   server_signal_cb(NULL, 0);
   return js_mkundef();
 }
 
 static void handle_http_request(client_t *client, http_request_t *http_req) {
   http_server_t *server = client->server;
-  jsval_t result = js_mkundef();
+  ant_value_t result = js_mkundef();
   
   response_ctx_t *res_ctx = malloc(sizeof(response_ctx_t));
   if (!res_ctx) {
@@ -741,16 +741,16 @@ static void handle_http_request(client_t *client, http_request_t *http_req) {
   server->pending_responses = res_ctx;
   
   if (server->handler != 0 && vtype(server->handler) != T_UNDEF) {
-    jsval_t ctx = js_mkobj(server->js);
+    ant_value_t ctx = js_mkobj(server->js);
     
-    jsval_t req = js_mkobj(server->js);
+    ant_value_t req = js_mkobj(server->js);
     js_set(server->js, req, "method", js_mkstr(server->js, http_req->method, strlen(http_req->method)));
     js_set(server->js, req, "uri", js_mkstr(server->js, http_req->uri, strlen(http_req->uri)));
     js_set(server->js, req, "query", js_mkstr(server->js, http_req->query, strlen(http_req->query)));
     js_set(server->js, req, "body", js_mkstr(server->js, http_req->body ? http_req->body : "", http_req->body ? http_req->body_len : 0));
     js_set(server->js, req, "header", js_heavy_mkfun(server->js, req_header, ANT_PTR(http_req->headers)));
     
-    jsval_t res_obj = js_mkobj(server->js);
+    ant_value_t res_obj = js_mkobj(server->js);
     js_set(server->js, res_obj, "header", js_heavy_mkfun(server->js, res_header, ANT_PTR(res_ctx)));
     js_set(server->js, res_obj, "status", js_heavy_mkfun(server->js, res_status, ANT_PTR(res_ctx)));
     js_set(server->js, res_obj, "body", js_heavy_mkfun(server->js, res_body, ANT_PTR(res_ctx)));
@@ -765,7 +765,7 @@ static void handle_http_request(client_t *client, http_request_t *http_req) {
     js_set(server->js, ctx, "set", js_heavy_mkfun(server->js, js_set_prop, server->store_obj));
     js_set(server->js, ctx, "get", js_heavy_mkfun(server->js, js_get_prop, server->store_obj));
   
-    jsval_t args[2] = {ctx, server->server_obj};
+    ant_value_t args[2] = {ctx, server->server_obj};
     result = sv_vm_call(server->js->vm, server->js, server->handler, js_mkundef(), args, 2, NULL, false);
     if (vtype(result) == T_PROMISE) return;
     
@@ -944,7 +944,7 @@ static void on_connection(uv_stream_t *server, int status) {
 }
 
 // Ant.serve(port, handler)
-jsval_t js_serve(ant_t *js, jsval_t *args, int nargs) {
+ant_value_t js_serve(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) {
     fprintf(stderr, "Error: Ant.serve() requires at least 1 argument (port)\n");
     return js_mkundef();
@@ -967,7 +967,7 @@ jsval_t js_serve(ant_t *js, jsval_t *args, int nargs) {
   server->store_obj = js_mkobj(js);
   server->handler = (nargs >= 2) ? args[1] : js_mkundef();
   
-  jsval_t server_obj = js_mkobj(js);
+  ant_value_t server_obj = js_mkobj(js);
   js_set(js, server_obj, "stop", js_mkfun(js_server_stop));
   js_set(js, server_obj, "port", js_mknum(port));
   

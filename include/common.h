@@ -1,10 +1,10 @@
 #ifndef COMMON_H
 #define COMMON_H
 
-#define SLOTMASK ~(((jsoff_t) ~0) >> 1)
-#define CONSTMASK (~(((jsoff_t) ~0) >> 1) >> 1)
-#define ARRMASK (~(((jsoff_t) ~0) >> 1) >> 2)
-#define NONCONFIGMASK (~(((jsoff_t) ~0) >> 1) >> 3)
+#define SLOTMASK ~(((ant_offset_t) ~0) >> 1)
+#define CONSTMASK (~(((ant_offset_t) ~0) >> 1) >> 1)
+#define ARRMASK (~(((ant_offset_t) ~0) >> 1) >> 2)
+#define NONCONFIGMASK (~(((ant_offset_t) ~0) >> 1) >> 3)
 #define FLAGMASK (SLOTMASK | CONSTMASK | ARRMASK | NONCONFIGMASK)
 
 typedef enum {
