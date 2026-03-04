@@ -56,9 +56,15 @@ ccache setup, and Windows/Linux/macOS specifics, see [BUILDING.md](BUILDING.md).
 src/
 ├── cli/        # Command line interface helpers
 ├── core/       # Bundled snapshot code
+├── esm/        # ES module system (loader, resolver, cache)
+├── highlight/  # Syntax highlighting (emit, iterators)
 ├── modules/    # Built-in JS modules (fs, path, shell, etc.)
-├── esm/        # ES module system
 ├── pkg/        # Zig-based package manager
+├── silver/     # Silver bytecode compiler and VM
+│   └── ops/    # Bytecode operation definitions
+├── strip/      # Rust-based type stripping (oxc)
+├── tools/      # Code generation scripts (snapshot gen)
+├── types/      # TypeScript type declarations
 include/        # C header files
 tests/          # JavaScript test files
 vendor/         # External dependencies
