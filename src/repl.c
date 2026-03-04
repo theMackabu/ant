@@ -25,7 +25,6 @@
 #include "reactor.h"
 #include "runtime.h"
 #include "internal.h"
-#include "base64.h"
 
 #include "silver/ast.h"
 #include "silver/engine.h"
@@ -426,26 +425,6 @@ static cmd_result_t cmd_stats(ant_t *js, history_t *history, const char *arg) {
 }
 
 #ifdef _WIN32
-static bool repl_stdout_is_tty(void) {
-  return _isatty(_fileno(stdout)) != 0;
-}
-
-static bool repl_copy_with_osc52(const char *data, size_t len) {
-  const char *term = getenv("TERM");
-  if (!repl_stdout_is_tty()) return false;
-  if (term && strcmp(term, "dumb") == 0) return false;
-
-  size_t b64_len = 0;
-  char *b64 = ant_base64_encode((const uint8_t *)data, len, &b64_len);
-  (void)b64_len;
-  if (!b64) return false;
-
-  int rc = fprintf(stdout, "\033]52;c;%s\a", b64);
-  fflush(stdout);
-  free(b64);
-  return rc > 0;
-}
-
 static bool repl_copy_with_command(const char *data, size_t len) {
   FILE *pipe = _popen("clip", "wb");
   if (!pipe) return false;
@@ -455,33 +434,6 @@ static bool repl_copy_with_command(const char *data, size_t len) {
   return written == len && close_rc == 0;
 }
 #else
-static bool repl_stdout_is_tty(void) {
-  return isatty(STDOUT_FILENO) == 1;
-}
-
-static bool repl_copy_with_osc52(const char *data, size_t len) {
-  const char *term = getenv("TERM");
-  if (!repl_stdout_is_tty()) return false;
-  if (term && strcmp(term, "dumb") == 0) return false;
-
-  size_t b64_len = 0;
-  char *b64 = ant_base64_encode((const uint8_t *)data, len, &b64_len);
-  (void)b64_len;
-  if (!b64) return false;
-
-  int rc = 0;
-  const char *tmux = getenv("TMUX");
-  if (tmux && *tmux) {
-    rc = fprintf(stdout, "\033Ptmux;\033\033]52;c;%s\a\033\\", b64);
-  } else {
-    rc = fprintf(stdout, "\033]52;c;%s\a", b64);
-  }
-
-  fflush(stdout);
-  free(b64);
-  return rc > 0;
-}
-
 static bool repl_copy_with_single_command(const char *cmd, const char *data, size_t len) {
   FILE *pipe = popen(cmd, "w");
   if (!pipe) return false;
@@ -514,24 +466,22 @@ static cmd_result_t cmd_copy(ant_t *js, history_t *history, const char *arg) {
 
   repl_clear_exception_state(js);
   jsval_t result = js_eval_bytecode_repl(js, arg, strlen(arg));
+  
   js_run_event_loop(js);
-
   if (print_uncaught_throw(js)) return CMD_OK;
 
   char cbuf[512];
   js_cstr_t cstr = js_to_cstr(js, result, cbuf, sizeof(cbuf));
-  bool copied_osc52 = repl_copy_with_osc52(cstr.ptr, cstr.len);
-  bool copied = copied_osc52 || repl_copy_with_command(cstr.ptr, cstr.len);
-
+  
+  bool copied_command = repl_copy_with_command(cstr.ptr, cstr.len);
   if (cstr.needs_free) free((void *)cstr.ptr);
 
-  if (!copied) {
+  if (!copied_command) {
     fprintf(stderr, "Failed to copy to clipboard (no clipboard command available).\n");
     return CMD_OK;
   }
 
-  if (copied_osc52) printf("Copied to clipboard (OSC 52).\n");
-  else printf("Copied to clipboard.\n");
+  printf("Copied to clipboard.\n");
   return CMD_OK;
 }
 
