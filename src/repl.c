@@ -25,11 +25,13 @@
 #include "reactor.h"
 #include "runtime.h"
 #include "internal.h"
+#include "base64.h"
+
 #include "silver/ast.h"
 #include "silver/engine.h"
-#include "modules/io.h"
 
 #include <crprintf.h>
+#include "modules/io.h"
 #include "highlight.h"
 #include "highlight/regex.h"
 
@@ -340,6 +342,7 @@ static cmd_result_t cmd_exit(ant_t *js, history_t *history, const char *arg);
 static cmd_result_t cmd_load(ant_t *js, history_t *history, const char *arg);
 static cmd_result_t cmd_save(ant_t *js, history_t *history, const char *arg);
 static cmd_result_t cmd_stats(ant_t *js, history_t *history, const char *arg);
+static cmd_result_t cmd_copy(ant_t *js, history_t *history, const char *arg);
 
 static const repl_command_t commands[] = {
   { "help",  "Show this help message", false, cmd_help },
@@ -347,6 +350,7 @@ static const repl_command_t commands[] = {
   { "load",  "Load JS from a file into the REPL session", true, cmd_load },
   { "save",  "Save all evaluated commands in this REPL session to a file", true, cmd_save },
   { "stats", "Show memory statistics", false, cmd_stats },
+  { "copy",  "Evaluate expression and copy its value", true, cmd_copy },
   { NULL, NULL, false, NULL }
 };
 
@@ -418,6 +422,116 @@ static cmd_result_t cmd_stats(ant_t *js, history_t *history, const char *arg) {
   jsval_t stats_fn = js_get(js, rt->ant_obj, "stats");
   jsval_t result = sv_vm_call(js->vm, js, stats_fn, js_mkundef(), NULL, 0, NULL, false);
   console_print(js, &result, 1, NULL, stdout);
+  return CMD_OK;
+}
+
+#ifdef _WIN32
+static bool repl_stdout_is_tty(void) {
+  return _isatty(_fileno(stdout)) != 0;
+}
+
+static bool repl_copy_with_osc52(const char *data, size_t len) {
+  const char *term = getenv("TERM");
+  if (!repl_stdout_is_tty()) return false;
+  if (term && strcmp(term, "dumb") == 0) return false;
+
+  size_t b64_len = 0;
+  char *b64 = ant_base64_encode((const uint8_t *)data, len, &b64_len);
+  (void)b64_len;
+  if (!b64) return false;
+
+  int rc = fprintf(stdout, "\033]52;c;%s\a", b64);
+  fflush(stdout);
+  free(b64);
+  return rc > 0;
+}
+
+static bool repl_copy_with_command(const char *data, size_t len) {
+  FILE *pipe = _popen("clip", "wb");
+  if (!pipe) return false;
+
+  size_t written = fwrite(data, 1, len, pipe);
+  int close_rc = _pclose(pipe);
+  return written == len && close_rc == 0;
+}
+#else
+static bool repl_stdout_is_tty(void) {
+  return isatty(STDOUT_FILENO) == 1;
+}
+
+static bool repl_copy_with_osc52(const char *data, size_t len) {
+  const char *term = getenv("TERM");
+  if (!repl_stdout_is_tty()) return false;
+  if (term && strcmp(term, "dumb") == 0) return false;
+
+  size_t b64_len = 0;
+  char *b64 = ant_base64_encode((const uint8_t *)data, len, &b64_len);
+  (void)b64_len;
+  if (!b64) return false;
+
+  int rc = 0;
+  const char *tmux = getenv("TMUX");
+  if (tmux && *tmux) {
+    rc = fprintf(stdout, "\033Ptmux;\033\033]52;c;%s\a\033\\", b64);
+  } else {
+    rc = fprintf(stdout, "\033]52;c;%s\a", b64);
+  }
+
+  fflush(stdout);
+  free(b64);
+  return rc > 0;
+}
+
+static bool repl_copy_with_single_command(const char *cmd, const char *data, size_t len) {
+  FILE *pipe = popen(cmd, "w");
+  if (!pipe) return false;
+
+  size_t written = fwrite(data, 1, len, pipe);
+  int close_rc = pclose(pipe);
+  return written == len && close_rc == 0;
+}
+
+static bool repl_copy_with_command(const char *data, size_t len) {
+  static const char *cmds[] = {
+    "pbcopy",
+    "wl-copy",
+    "xclip -selection clipboard",
+    "xsel --clipboard --input",
+  };
+  for (size_t i = 0; i < sizeof(cmds) / sizeof(cmds[0]); i++) {
+    if (repl_copy_with_single_command(cmds[i], data, len)) return true;
+  }
+  return false;
+}
+#endif
+
+static cmd_result_t cmd_copy(ant_t *js, history_t *history, const char *arg) {
+  (void)history;
+  if (!arg || *arg == '\0') {
+    fprintf(stderr, "Usage: .copy <expression>\n");
+    return CMD_OK;
+  }
+
+  repl_clear_exception_state(js);
+  jsval_t result = js_eval_bytecode_repl(js, arg, strlen(arg));
+  js_run_event_loop(js);
+
+  if (print_uncaught_throw(js)) return CMD_OK;
+
+  char cbuf[512];
+  js_cstr_t cstr = js_to_cstr(js, result, cbuf, sizeof(cbuf));
+  bool copied_osc52 = repl_copy_with_osc52(cstr.ptr, cstr.len);
+  bool copied = copied_osc52 || repl_copy_with_command(cstr.ptr, cstr.len);
+
+  if (cstr.needs_free) free((void *)cstr.ptr);
+
+  if (!copied) {
+    fprintf(stderr, "Failed to copy to clipboard (no clipboard command available).\n");
+    return CMD_OK;
+  }
+
+  if (copied_osc52) printf("Copied to clipboard (OSC 52).\n");
+  else printf("Copied to clipboard.\n");
   return CMD_OK;
 }
 
@@ -602,7 +716,9 @@ static void refresh_line(const char *line, int len, int pos, const char *prompt)
   } else if (len > 0) fwrite(line, 1, (size_t)len, stdout);
 
   int end_cols = prompt_len + len;
-  int end_row = end_cols > 0 ? end_cols / cols : 0;
+  int end_rows = end_cols > 0 ? (end_cols - 1) / cols + 1 : 1;
+  int end_row = end_rows - 1;
+  
   int cursor_cols = prompt_len + pos;
   int cursor_row = cursor_cols > 0 ? cursor_cols / cols : 0;
   int cursor_col = cursor_cols > 0 ? cursor_cols % cols : 0;
@@ -621,7 +737,7 @@ static void refresh_line(const char *line, int len, int pos, const char *prompt)
     fputs(move_buf, stdout);
   }
 
-  repl_last_render_rows = end_cols > 0 ? end_cols / cols + 1 : 1;
+  repl_last_render_rows = end_rows;
 
   fflush(stdout);
 }
