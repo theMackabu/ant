@@ -1,20 +1,38 @@
 # 🐜 Ant
 
-**Ant-sized JavaScript Runtime**  
-**_Ant now has a discord! http://discord.gg/CH7YSjWGzY_**
+**A 5MB JavaScript runtime with 1ms cold starts.**
 
-A JavaScript runtime that fits in your pocket. <br>
-Full async/await, modules, HTTP servers, crypto, and more.
+Ant is a lightweight, high-performance JavaScript runtime built from scratch. <br>
+Fits in your pocket while Delivering near-V8 speeds in a binary smaller than most npm packages.
 
-📖 [Read the blog post about Ant](https://s.tail.so/js-in-one-month)
+```
+$ ls -lh ant
+-rwxr-xr-x⠀5.2M⠀ant*
+```
 
 ## Table of contents
 
+- [Why Ant?](#why-ant)
 - [Installation](#installation)
+- [Spec conformance](#spec-conformance)
 - [Building Ant](#building-ant)
 - [Security](#security)
+- [Community](#community)
 - [Contributing to Ant](#contributing-to-ant)
-- [Project team members](#current-project-team-members)
+
+## Why Ant?
+
+|                     | Ant         | Node      | Bun      | Deno      |
+| ------------------- | ----------- | --------- | -------- | --------- |
+| Binary size         | **~5 MB**   | ~120 MB   | ~60 MB   | ~90 MB    |
+| Cold start          | **~3-5 ms** | ~30-50 ms | ~5-10 ms | ~20-30 ms |
+| Engine              | Ant Silver  | V8        | JSC      | V8        |
+| JIT                 | ✓           | ✓         | ✓        | ✓         |
+| WinterTC conformant | partial     | partial   | ✓        | ✓         |
+
+Ant is designed for environments where size and startup time matter: serverless functions, edge computing, embedded systems, CLI tools, and anywhere you'd want JavaScript but can't afford a 50MB+ runtime.
+
+The engine, Ant Silver is hand-built, not a wrapper around V8, JSC, or SpiderMonkey. The JIT compiler uses [MIR](https://github.com/vnmakarov/mir), a lightweight JIT backend that enables compiled performance in a fraction of the binary size of traditional JIT engines.
 
 ## Installation
 
@@ -25,6 +43,17 @@ curl -fsSL https://ant.themackabu.com/install | bash
 curl -fsSL https://ant.themackabu.com/install | MBEDTLS=1 bash
 ```
 
+## Spec conformance
+
+Ant plans to fully target the [WinterTC Minimum Common API](https://min-common-api.proposal.wintertc.org/) specification, the standard for server-side JavaScript interoperability developed by Ecma TC55.
+
+| Suite            | Pass rate | Notes                                      |
+| ---------------- | --------- | ------------------------------------------ |
+| js-zoo (ES1–ES5) | ~100%     |                                            |
+| js-zoo (ES6)     | ~78%      | Whats left, mostly generators              |
+| js-zoo (ES2016+) | ~85%      |                                            |
+| test262          | ~40%      | Improving, focus is on real-world coverage |
+
 ## Building Ant
 
 See [BUILDING.md](BUILDING.md) for instructions on how to build Ant from source and a list of supported platforms.
@@ -33,11 +62,13 @@ See [BUILDING.md](BUILDING.md) for instructions on how to build Ant from source 
 
 For information on reporting security vulnerabilities in Ant, see [SECURITY.md](SECURITY.md).
 
+## Community
+
+- [Discord](http://discord.gg/CH7YSjWGzY)
+- [Blog: Building Ant](https://s.tail.so/js-in-one-month)
+- [DeepWiki: Ant internals](https://deepwiki.com/theMackabu/ant)
+
 ## Contributing to Ant
 
 We welcome contributions through pull request. See [CONTRIBUTING.md](CONTRIBUTING.md) for more details. <br>
-For more information about Ant's internal structure, read the [Ant DeepWiki](https://deepwiki.com/theMackabu/ant).
-
-## Project team members
-
 For information about the governance of Ant, see [GOVERNANCE.md](GOVERNANCE.md).
