@@ -30,6 +30,7 @@
 
 #include <crprintf.h>
 #include "highlight.h"
+#include "regex_scan.h"
 
 #define MAX_HISTORY          512
 #define MAX_LINE_LENGTH      4096
@@ -755,6 +756,12 @@ static bool is_incomplete_input(const char *code, size_t len) {
         for (i += 2; i + 1 < len && !(code[i] == '*' && code[i + 1] == '/'); i++);
         if (i + 1 >= len) { free(s.templates); return true; }
         i++; continue;
+      }
+      if (js_regex_can_start(code, i)) {
+        size_t regex_end = 0;
+        if (!js_scan_regex_literal(code, len, i, &regex_end)) { free(s.templates); return true; }
+        i = regex_end - 1;
+        continue;
       }
     }
     

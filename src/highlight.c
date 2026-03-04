@@ -5,6 +5,7 @@
 
 #include "tokens.h"
 #include "highlight.h"
+#include "regex_scan.h"
 #include "silver/lexer.h"
 
 typedef struct { const char *op; int len; hl_token_class cls; } op_entry_t;
@@ -111,106 +112,6 @@ static hl_context keyword_sets_context(const char *word, size_t len) {
   if (len == 5 && memcmp(word, "class", 5) == 0)    return HL_CTX_AFTER_CLASS;
   if (len == 7 && memcmp(word, "extends", 7) == 0)  return HL_CTX_AFTER_EXTENDS;
   return HL_CTX_NONE;
-}
-
-static bool regex_allowed_after_word(const char *word, size_t len) {
-#define W(s) (len == sizeof(s) - 1 && memcmp(word, s, sizeof(s) - 1) == 0)
-  return 
-    W("return") || W("throw") || W("case") || W("delete") ||
-    W("void") || W("new") || W("typeof") || W("instanceof") ||
-    W("in") || W("of") || W("yield") || W("await");
-#undef W
-}
-
-static bool can_start_regex_literal(const char *input, size_t start) {
-  if (start == 0) return true;
-
-  size_t i = start;
-  while (i > 0) {
-    unsigned char prev = (unsigned char)input[i - 1];
-    if (prev == ' ' || prev == '\t') {
-      i--;
-      continue;
-    }
-    if (prev == '\n' || prev == '\r') return true;
-
-    if (is_ident_continue(prev)) {
-      size_t end = i;
-      while (i > 0 && is_ident_continue((unsigned char)input[i - 1])) i--;
-      return regex_allowed_after_word(input + i, end - i);
-    }
-
-    if (
-      IS_DIGIT(prev) || prev == ')' || prev == ']' || prev == '}' ||
-      prev == '\'' || prev == '"' || prev == '`' || prev == '.'
-    ) return false;
-
-    switch (prev) {
-    case '(':
-    case '[':
-    case '{':
-    case ',':
-    case ';':
-    case ':':
-    case '=':
-    case '!':
-    case '?':
-    case '+':
-    case '-':
-    case '*':
-    case '%':
-    case '&':
-    case '|':
-    case '^':
-    case '~':
-    case '<':
-    case '>': return true;
-    default: return false;
-    }
-  }
-
-  return true;
-}
-
-static bool try_parse_regex_literal(const char *input, size_t input_len, size_t start, size_t *out_end) {
-  if (input[start] != '/' || start + 1 >= input_len) return false;
-  if (input[start + 1] == '/' || input[start + 1] == '*') return false;
-  if (!can_start_regex_literal(input, start)) return false;
-
-  size_t i = start + 1;
-  bool in_class = false;
-
-  while (i < input_len) {
-    unsigned char ch = (unsigned char)input[i];
-
-    if (ch == '\\') {
-      i += (i + 1 < input_len) ? 2 : 1;
-      continue;
-    }
-    if (ch == '\n' || ch == '\r') return false;
-    if (!in_class && ch == '[') {
-      in_class = true; i++;
-      continue;
-    }
-    if (in_class && ch == ']') {
-      in_class = false; i++;
-      continue;
-    }
-    if (!in_class && ch == '/') {
-      i++;
-      while (i < input_len) {
-        unsigned char f = (unsigned char)input[i];
-        if ((f >= 'a' && f <= 'z') || (f >= 'A' && f <= 'Z')) {
-          i++;
-          continue;
-        } break;
-      }
-      *out_end = i;
-      return true;
-    } i++;
-  }
-
-  return false;
 }
 
 static size_t skip_inline_ws_forward(const char *input, size_t input_len, size_t i) {
@@ -441,7 +342,7 @@ bool hl_iter_next(hl_iter *it, hl_span *out) {
 
   if (c == '/') {
     size_t regex_end = 0;
-    if (try_parse_regex_literal(input, input_len, i, &regex_end)) {
+    if (js_scan_regex_literal(input, input_len, i, &regex_end)) {
       it->ctx = HL_CTX_NONE;
       *out = (hl_span){ i, regex_end - i, HL_REGEX };
       it->pos = regex_end;
