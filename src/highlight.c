@@ -502,6 +502,16 @@ bool hl_iter_next(hl_iter *it, hl_span *out) {
     }
   }
 
+  if (c == '#' && i + 1 < input_len && is_ident_begin((unsigned char)input[i + 1])) {
+    size_t start = i;
+    i += 2;
+    while (i < input_len && is_ident_continue((unsigned char)input[i])) i++;
+    it->ctx = HL_CTX_NONE;
+    *out = (hl_span){ start, i - start, HL_PROPERTY };
+    it->pos = i;
+    return true;
+  }
+
   if (is_ident_begin(c)) {
     size_t start = i;
     i++;
@@ -644,39 +654,72 @@ static inline void ob_write_escaped(outbuf_t *o, const char *s, size_t n) {
   for (size_t i = 0; i < n; i++) ob_put_escaped(o, s[i]);
 }
 
+static bool span_is_template_string(const char *s, size_t n) {
+  for (size_t i = 0; i < n; i++) {
+    if (s[i] == '`') return true;
+    if (s[i] == '$' && i + 1 < n && s[i + 1] == '{') return true;
+  }
+  return false;
+}
+
+static bool is_string_key_context(const char *input, size_t input_len, size_t off, size_t len) {
+  size_t i = off + len;
+  while (i < input_len && (input[i] == ' ' || input[i] == '\t')) i++;
+  return (i < input_len && input[i] == ':' && (i + 1 >= input_len || input[i + 1] != ':'));
+}
+
+static bool is_string_keyword_literal(const char *s, size_t n) {
+  if (n < 2) return false;
+  if (!((s[0] == '"' && s[n - 1] == '"') || (s[0] == '\'' && s[n - 1] == '\''))) return false;
+
+  const char *inner = s + 1;
+  size_t len = n - 2;
+
+#define SKW(w) (len == sizeof(w) - 1 && memcmp(inner, w, sizeof(w) - 1) == 0)
+  return SKW("true") || SKW("false") || SKW("null") || SKW("undefined") ||
+         SKW("NaN") || SKW("Infinity");
+#undef SKW
+}
+
 static const char *class_to_crvar(hl_token_class cls) {
 switch (cls) {
-  case HL_STRING:          return "green";
   case HL_NUMBER:          return "yellow";
   case HL_BOOLEAN:         return "magenta";
   
-  case HL_REGEX:           return "#FFB265";
-  case HL_REGEX_ESCAPE:    return "#FFCC99";
-  case HL_REGEX_DELIMITER: return "#FF9932";
-  case HL_REGEX_CDATA:     return "#65B2FF";
+  case HL_STRING:           return "#FF8A7F";
+  case HL_STRING_DELIMITER: return "#FF7265";
+  case HL_STRING_ESCAPE:    return "#F4AAA3";
+  case HL_STRING_KEY:       return "#CCA3F4";
+  case HL_STRING_KEYWORD:   return "#FFE5CC";
+  case HL_STRING_TEMPLATE:  return "#FFB265";
+  
+  case HL_REGEX:            return "#FFB265";
+  case HL_REGEX_ESCAPE:     return "#FFCC99";
+  case HL_REGEX_DELIMITER:  return "#FF9932";
+  case HL_REGEX_CDATA:      return "#65B2FF";
 
-  case HL_KEYWORD:         return "#65B2FF";
-  case HL_KEYWORD_DELETE:  return "#F43D3D";
-  case HL_TYPE:            return "#59D8F1";
-  case HL_TYPE_STRING:     return "#30E8AA";
-  case HL_TYPE_BOOLEAN:    return "#30E8AA";
-  case HL_LITERAL_NULL:    return "#242628";
-  case HL_COMMENT:         return "#758CA3";
-  case HL_FUNCTION_NAME:   return "#30E8AA";
-  case HL_FUNCTION:        return "#30E8AA";
-  case HL_ARGUMENT:        return "#CCA3F4";
-  case HL_PROPERTY:        return "#CCA3F4";
-  case HL_OPERATOR:        return "#8CB2D8";
-  case HL_OPTIONAL_CHAIN:  return "#8CB2D8";
-  case HL_BRACKET:         return "#8CB2D8";
-  case HL_SEMICOLON:       return "#B2CCE5";
+  case HL_KEYWORD:          return "#65B2FF";
+  case HL_KEYWORD_DELETE:   return "#F43D3D";
+  case HL_TYPE:             return "#59D8F1";
+  case HL_TYPE_STRING:      return "#30E8AA";
+  case HL_TYPE_BOOLEAN:     return "#30E8AA";
+  case HL_LITERAL_NULL:     return "#242628";
+  case HL_COMMENT:          return "#758CA3";
+  case HL_FUNCTION_NAME:    return "#30E8AA";
+  case HL_FUNCTION:         return "#30E8AA";
+  case HL_ARGUMENT:         return "#CCA3F4";
+  case HL_PROPERTY:         return "#CCA3F4";
+  case HL_OPERATOR:         return "#8CB2D8";
+  case HL_OPTIONAL_CHAIN:   return "#8CB2D8";
+  case HL_BRACKET:          return "#8CB2D8";
+  case HL_SEMICOLON:        return "#B2CCE5";
   
-  case HL_KEYWORD_ITALIC:  return "italic+#65B2FF";
-  case HL_CLASS_NAME:      return "bold+#F7B76D";
-  case HL_PARENT_CLASS:    return "bold+#59D8F1";
-  case HL_KEYWORD_EXTENDS: return "italic+#59D8F1";
+  case HL_KEYWORD_ITALIC:   return "italic+#65B2FF";
+  case HL_CLASS_NAME:       return "bold+#F7B76D";
+  case HL_PARENT_CLASS:     return "bold+#59D8F1";
+  case HL_KEYWORD_EXTENDS:  return "italic+#59D8F1";
   
-  default:                 return NULL;
+  default:                  return NULL;
 }}
 
 static inline void ob_write_with_class(outbuf_t *o, hl_token_class cls, const char *s, size_t n) {
@@ -690,6 +733,47 @@ static inline void ob_write_with_class(outbuf_t *o, hl_token_class cls, const ch
     ob_write_escaped(o, s, n);
     ob_write(o, "</>", 3);
   } else ob_write_escaped(o, s, n);
+}
+
+static void ob_write_string_literal(outbuf_t *o, const char *s, size_t n, hl_token_class body_cls) {
+  if (n == 0) return;
+
+  size_t i = 0;
+  size_t seg_start = 0;
+
+  while (i < n) {
+    unsigned char ch = (unsigned char)s[i];
+
+    if (ch == '\\') {
+      ob_write_with_class(o, body_cls, s + seg_start, i - seg_start);
+      size_t esc_len = (i + 1 < n) ? 2 : 1;
+      ob_write_with_class(o, HL_STRING_ESCAPE, s + i, esc_len);
+      i += esc_len;
+      seg_start = i;
+      continue;
+    }
+
+    if (ch == '"' || ch == '\'' || ch == '`') {
+      ob_write_with_class(o, body_cls, s + seg_start, i - seg_start);
+      ob_write_with_class(o, HL_STRING_DELIMITER, s + i, 1);
+      i++;
+      seg_start = i;
+      continue;
+    }
+
+    if (ch == '$' && i + 1 < n && s[i + 1] == '{') {
+      ob_write_with_class(o, body_cls, s + seg_start, i - seg_start);
+      ob_write_with_class(o, HL_BRACKET, s + i, 1);
+      ob_write_with_class(o, HL_BRACKET, s + i + 1, 1);
+      i += 2;
+      seg_start = i;
+      continue;
+    }
+
+    i++;
+  }
+
+  ob_write_with_class(o, body_cls, s + seg_start, n - seg_start);
 }
 
 static void ob_write_regex_literal(outbuf_t *o, const char *s, size_t n) {
@@ -755,7 +839,14 @@ int ant_highlight_stateful(
 
   hl_span span;
   while (hl_iter_next(&it, &span) && !o.overflow) {
-    if (span.cls == HL_REGEX) ob_write_regex_literal(&o, input + span.off, span.len);
+    if (span.cls == HL_STRING) {
+      const char *piece = input + span.off;
+      hl_token_class body_cls = HL_STRING;
+      if (span_is_template_string(piece, span.len)) body_cls = HL_STRING_TEMPLATE;
+      else if (is_string_key_context(input, input_len, span.off, span.len)) body_cls = HL_STRING_KEY;
+      else if (is_string_keyword_literal(piece, span.len)) body_cls = HL_STRING_KEYWORD;
+      ob_write_string_literal(&o, piece, span.len, body_cls);
+    } else if (span.cls == HL_REGEX) ob_write_regex_literal(&o, input + span.off, span.len);
     else ob_write_with_class(&o, span.cls, input + span.off, span.len);
   }
 
@@ -804,7 +895,14 @@ int highlight_js_line_clipped(
     size_t emit_len = span.len < span_remaining ? span.len : span_remaining;
 
     if (!o.overflow) {
-      if (span.cls == HL_REGEX) ob_write_regex_literal(&o, line + span.off, emit_len);
+      if (span.cls == HL_STRING) {
+        const char *piece = line + span.off;
+        hl_token_class body_cls = HL_STRING;
+        if (span_is_template_string(piece, emit_len)) body_cls = HL_STRING_TEMPLATE;
+        else if (is_string_key_context(line, line_len, span.off, emit_len)) body_cls = HL_STRING_KEY;
+        else if (is_string_keyword_literal(piece, emit_len)) body_cls = HL_STRING_KEYWORD;
+        ob_write_string_literal(&o, piece, emit_len, body_cls);
+      } else if (span.cls == HL_REGEX) ob_write_regex_literal(&o, line + span.off, emit_len);
       else ob_write_with_class(&o, span.cls, line + span.off, emit_len);
     }
 
