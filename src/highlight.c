@@ -10,14 +10,14 @@
 typedef struct { const char *op; int len; hl_token_class cls; } op_entry_t;
 
 static const op_entry_t operators[] = {
-  { "===", 3, HL_OPERATOR_CMP },
-  { "!==", 3, HL_OPERATOR_CMP },
+  { "===", 3, HL_OPERATOR },
+  { "!==", 3, HL_OPERATOR },
   { "...", 3, HL_OPERATOR },
   { "=>",  2, HL_OPERATOR },
-  { "==",  2, HL_OPERATOR_CMP },
-  { "!=",  2, HL_OPERATOR_CMP },
-  { "<=",  2, HL_OPERATOR_CMP },
-  { ">=",  2, HL_OPERATOR_CMP },
+  { "==",  2, HL_OPERATOR },
+  { "!=",  2, HL_OPERATOR },
+  { "<=",  2, HL_OPERATOR },
+  { ">=",  2, HL_OPERATOR },
   { "&&",  2, HL_OPERATOR },
   { "||",  2, HL_OPERATOR },
   { "??",  2, HL_OPERATOR },
@@ -107,6 +107,208 @@ static hl_context keyword_sets_context(const char *word, size_t len) {
   return HL_CTX_NONE;
 }
 
+static bool regex_allowed_after_word(const char *word, size_t len) {
+#define W(s) (len == sizeof(s) - 1 && memcmp(word, s, sizeof(s) - 1) == 0)
+  return 
+    W("return") || W("throw") || W("case") || W("delete") ||
+    W("void") || W("new") || W("typeof") || W("instanceof") ||
+    W("in") || W("of") || W("yield") || W("await");
+#undef W
+}
+
+static bool can_start_regex_literal(const char *input, size_t start) {
+  if (start == 0) return true;
+
+  size_t i = start;
+  while (i > 0) {
+    unsigned char prev = (unsigned char)input[i - 1];
+    if (prev == ' ' || prev == '\t') {
+      i--;
+      continue;
+    }
+    if (prev == '\n' || prev == '\r') return true;
+
+    if (is_ident_continue(prev)) {
+      size_t end = i;
+      while (i > 0 && is_ident_continue((unsigned char)input[i - 1])) i--;
+      return regex_allowed_after_word(input + i, end - i);
+    }
+
+    if (
+      IS_DIGIT(prev) || prev == ')' || prev == ']' || prev == '}' ||
+      prev == '\'' || prev == '"' || prev == '`' || prev == '.'
+    ) return false;
+
+    switch (prev) {
+    case '(':
+    case '[':
+    case '{':
+    case ',':
+    case ';':
+    case ':':
+    case '=':
+    case '!':
+    case '?':
+    case '+':
+    case '-':
+    case '*':
+    case '%':
+    case '&':
+    case '|':
+    case '^':
+    case '~':
+    case '<':
+    case '>': return true;
+    default: return false;
+    }
+  }
+
+  return true;
+}
+
+static bool try_parse_regex_literal(const char *input, size_t input_len, size_t start, size_t *out_end) {
+  if (input[start] != '/' || start + 1 >= input_len) return false;
+  if (input[start + 1] == '/' || input[start + 1] == '*') return false;
+  if (!can_start_regex_literal(input, start)) return false;
+
+  size_t i = start + 1;
+  bool in_class = false;
+
+  while (i < input_len) {
+    unsigned char ch = (unsigned char)input[i];
+
+    if (ch == '\\') {
+      i += (i + 1 < input_len) ? 2 : 1;
+      continue;
+    }
+    if (ch == '\n' || ch == '\r') return false;
+    if (!in_class && ch == '[') {
+      in_class = true; i++;
+      continue;
+    }
+    if (in_class && ch == ']') {
+      in_class = false; i++;
+      continue;
+    }
+    if (!in_class && ch == '/') {
+      i++;
+      while (i < input_len) {
+        unsigned char f = (unsigned char)input[i];
+        if ((f >= 'a' && f <= 'z') || (f >= 'A' && f <= 'Z')) {
+          i++;
+          continue;
+        } break;
+      }
+      *out_end = i;
+      return true;
+    } i++;
+  }
+
+  return false;
+}
+
+static size_t skip_inline_ws_forward(const char *input, size_t input_len, size_t i) {
+  while (i < input_len && (input[i] == ' ' || input[i] == '\t')) i++;
+  return i;
+}
+
+static size_t skip_inline_ws_backward(const char *input, size_t i) {
+  while (i > 0 && (input[i - 1] == ' ' || input[i - 1] == '\t')) i--;
+  return i;
+}
+
+static bool read_prev_word(const char *input, size_t end, size_t *word_start, size_t *word_len) {
+  size_t i = skip_inline_ws_backward(input, end);
+  if (i == 0 || !is_ident_continue((unsigned char)input[i - 1])) return false;
+
+  size_t wend = i;
+  while (i > 0 && is_ident_continue((unsigned char)input[i - 1])) i--;
+
+  *word_start = i;
+  *word_len = wend - i;
+  return true;
+}
+
+static bool has_function_keyword_before_paren(const char *input, size_t open_paren) {
+  size_t word_start = 0;
+  size_t word_len = 0;
+
+  if (!read_prev_word(input, open_paren, &word_start, &word_len)) return false;
+  if (word_len == 8 && memcmp(input + word_start, "function", 8) == 0) return true;
+
+  if (!read_prev_word(input, word_start, &word_start, &word_len)) return false;
+  return (word_len == 8 && memcmp(input + word_start, "function", 8) == 0);
+}
+
+static bool find_enclosing_open_paren(const char *input, size_t pos, size_t *open_paren) {
+  size_t depth = 0;
+  size_t i = pos;
+
+  while (i > 0) {
+    i--;
+    unsigned char ch = (unsigned char)input[i];
+    if (ch == ')') {
+      depth++;
+      continue;
+    }
+    if (ch == '(') {
+      if (depth == 0) {
+        *open_paren = i;
+        return true;
+      }
+      depth--;
+    }
+  }
+  return false;
+}
+
+static bool find_matching_close_paren(const char *input, size_t input_len, size_t open_paren, size_t *close_paren) {
+  size_t depth = 0;
+  for (size_t i = open_paren + 1; i < input_len; i++) {
+    unsigned char ch = (unsigned char)input[i];
+    if (ch == '(') {
+      depth++;
+      continue;
+    }
+    if (ch == ')') {
+      if (depth == 0) {
+        *close_paren = i;
+        return true;
+      }
+      depth--;
+    }
+  }
+  return false;
+}
+
+static bool is_arrow_after(const char *input, size_t input_len, size_t pos) {
+  size_t i = skip_inline_ws_forward(input, input_len, pos);
+  return (i + 1 < input_len && input[i] == '=' && input[i + 1] == '>');
+}
+
+static bool is_function_argument_identifier(const char *input, size_t input_len, size_t start, size_t end) {
+  if (is_arrow_after(input, input_len, end)) {
+    size_t left = skip_inline_ws_backward(input, start);
+    if (left > 0 && input[left - 1] == '.') return false;
+    return true;
+  }
+
+  size_t prev = skip_inline_ws_backward(input, start);
+  if (prev == 0) return false;
+  unsigned char prev_ch = (unsigned char)input[prev - 1];
+  if (!(prev_ch == '(' || prev_ch == ',')) return false;
+
+  size_t open_paren = 0;
+  if (!find_enclosing_open_paren(input, start, &open_paren)) return false;
+
+  size_t close_paren = 0;
+  if (find_matching_close_paren(input, input_len, open_paren, &close_paren) &&
+      is_arrow_after(input, input_len, close_paren + 1))
+    return true;
+
+  return has_function_keyword_before_paren(input, open_paren);
+}
+
 bool hl_iter_next(hl_iter *it, hl_span *out) {
   const char *input = it->input;
   size_t input_len = it->input_len;
@@ -174,14 +376,14 @@ bool hl_iter_next(hl_iter *it, hl_span *out) {
     if (it->state.template_depth <= 0) {
       it->state.mode = HL_STATE_TEMPLATE;
       it->state.template_depth = 0;
-      *out = (hl_span){ i, 1, HL_NONE };
+      *out = (hl_span){ i, 1, HL_BRACKET };
       it->pos = i + 1;
       return true;
     }
   }
   if (it->state.mode == HL_STATE_TEMPLATE_EXPR && c == '{') {
     it->state.template_depth++;
-    *out = (hl_span){ i, 1, HL_NONE };
+    *out = (hl_span){ i, 1, HL_BRACKET };
     it->pos = i + 1;
     return true;
   }
@@ -207,6 +409,16 @@ bool hl_iter_next(hl_iter *it, hl_span *out) {
     *out = (hl_span){ start, i - start, HL_COMMENT };
     it->pos = i;
     return true;
+  }
+
+  if (c == '/') {
+    size_t regex_end = 0;
+    if (try_parse_regex_literal(input, input_len, i, &regex_end)) {
+      it->ctx = HL_CTX_NONE;
+      *out = (hl_span){ i, regex_end - i, HL_REGEX };
+      it->pos = regex_end;
+      return true;
+    }
   }
 
   if (c == '\'' || c == '"') {
@@ -297,18 +509,28 @@ bool hl_iter_next(hl_iter *it, hl_span *out) {
     size_t word_len = i - start;
     const char *word = input + start;
 
+    bool is_member_access = (start > 0 && input[start - 1] == '.' &&
+                             (start < 2 || input[start - 2] != '.'));
     bool is_method = false;
-    if (start > 0 && input[start - 1] == '.') {
+    if (is_member_access) {
       size_t peek = i;
       while (peek < input_len && input[peek] == ' ') peek++;
       if (peek < input_len && input[peek] == '(') is_method = true;
     }
+    size_t after_word = i;
+    while (after_word < input_len && input[after_word] == ' ') after_word++;
+    bool is_call = (after_word < input_len && input[after_word] == '(');
 
     hl_token_class cls = HL_NONE;
+    bool is_console = (word_len == 7 && memcmp(word, "console", 7) == 0);
 
-    if (is_method) {
+    if (is_console) {
+      cls = HL_PROPERTY;
+    } else if (is_function_argument_identifier(input, input_len, start, i)) {
+      cls = HL_ARGUMENT;
+    } else if (is_method) {
       cls = HL_FUNCTION;
-    } else if (start > 0 && input[start - 1] == '.') {
+    } else if (is_member_access) {
       cls = HL_PROPERTY;
     } else if (it->ctx == HL_CTX_AFTER_FUNCTION) {
       cls = HL_FUNCTION_NAME;
@@ -346,6 +568,10 @@ bool hl_iter_next(hl_iter *it, hl_span *out) {
         cls = HL_TYPE;
       }
 
+      if (cls == HL_NONE && is_call) {
+        cls = HL_FUNCTION;
+      }
+
       hl_context next_ctx = keyword_sets_context(word, word_len);
       if (next_ctx != HL_CTX_NONE) it->ctx = next_ctx;
     }
@@ -357,7 +583,14 @@ bool hl_iter_next(hl_iter *it, hl_span *out) {
 
   if (c == '<' || c == '>' || c == '=') {
     it->ctx = HL_CTX_NONE;
-    *out = (hl_span){ i, 1, HL_OPERATOR_CMP };
+    *out = (hl_span){ i, 1, HL_OPERATOR };
+    it->pos = i + 1;
+    return true;
+  }
+
+  if (c == '(' || c == ')' || c == '[' || c == ']' || c == '{' || c == '}') {
+    it->ctx = HL_CTX_NONE;
+    *out = (hl_span){ i, 1, HL_BRACKET };
     it->pos = i + 1;
     return true;
   }
@@ -416,6 +649,11 @@ switch (cls) {
   case HL_STRING:          return "green";
   case HL_NUMBER:          return "yellow";
   case HL_BOOLEAN:         return "magenta";
+  
+  case HL_REGEX:           return "#FFB265";
+  case HL_REGEX_ESCAPE:    return "#FFCC99";
+  case HL_REGEX_DELIMITER: return "#FF9932";
+  case HL_REGEX_CDATA:     return "#65B2FF";
 
   case HL_KEYWORD:         return "#65B2FF";
   case HL_KEYWORD_DELETE:  return "#F43D3D";
@@ -426,10 +664,11 @@ switch (cls) {
   case HL_COMMENT:         return "#758CA3";
   case HL_FUNCTION_NAME:   return "#30E8AA";
   case HL_FUNCTION:        return "#30E8AA";
+  case HL_ARGUMENT:        return "#CCA3F4";
   case HL_PROPERTY:        return "#CCA3F4";
-  case HL_OPERATOR:        return "#CCA3F4";
-  case HL_OPERATOR_CMP:    return "#8CB2D8";
+  case HL_OPERATOR:        return "#8CB2D8";
   case HL_OPTIONAL_CHAIN:  return "#8CB2D8";
+  case HL_BRACKET:         return "#8CB2D8";
   case HL_SEMICOLON:       return "#B2CCE5";
   
   case HL_KEYWORD_ITALIC:  return "italic+#65B2FF";
@@ -439,6 +678,70 @@ switch (cls) {
   
   default:                 return NULL;
 }}
+
+static inline void ob_write_with_class(outbuf_t *o, hl_token_class cls, const char *s, size_t n) {
+  if (n == 0) return;
+
+  const char *var = class_to_crvar(cls);
+  if (var) {
+    ob_putc(o, '<');
+    ob_puts(o, var);
+    ob_putc(o, '>');
+    ob_write_escaped(o, s, n);
+    ob_write(o, "</>", 3);
+  } else ob_write_escaped(o, s, n);
+}
+
+static void ob_write_regex_literal(outbuf_t *o, const char *s, size_t n) {
+  if (n == 0) return;
+
+  ob_write_with_class(o, HL_REGEX_DELIMITER, s, 1);
+
+  size_t i = 1;
+  size_t seg_start = i;
+  bool in_class = false;
+
+  while (i < n) {
+    unsigned char ch = (unsigned char)s[i];
+
+    if (!in_class && ch == '/') {
+      ob_write_with_class(o, HL_REGEX, s + seg_start, i - seg_start);
+      ob_write_with_class(o, HL_REGEX_DELIMITER, s + i, 1);
+      i++;
+      ob_write_with_class(o, HL_REGEX_DELIMITER, s + i, n - i);
+      return;
+    }
+
+    if (ch == '\\') {
+      ob_write_with_class(o, in_class ? HL_REGEX_CDATA : HL_REGEX, s + seg_start, i - seg_start);
+      size_t esc_len = (i + 1 < n) ? 2 : 1;
+      ob_write_with_class(o, HL_REGEX_ESCAPE, s + i, esc_len);
+      i += esc_len;
+      seg_start = i;
+      continue;
+    }
+
+    if (!in_class && ch == '[') {
+      ob_write_with_class(o, HL_REGEX, s + seg_start, i - seg_start);
+      in_class = true;
+      seg_start = i;
+      i++;
+      continue;
+    }
+
+    if (in_class && ch == ']') {
+      i++;
+      ob_write_with_class(o, HL_REGEX_CDATA, s + seg_start, i - seg_start);
+      in_class = false;
+      seg_start = i;
+      continue;
+    }
+
+    i++;
+  }
+
+  ob_write_with_class(o, in_class ? HL_REGEX_CDATA : HL_REGEX, s + seg_start, n - seg_start);
+}
 
 int ant_highlight_stateful(
   const char *input, size_t input_len,
@@ -452,16 +755,8 @@ int ant_highlight_stateful(
 
   hl_span span;
   while (hl_iter_next(&it, &span) && !o.overflow) {
-    const char *var = class_to_crvar(span.cls);
-    if (var) {
-      ob_putc(&o, '<');
-      ob_puts(&o, var);
-      ob_putc(&o, '>');
-      ob_write_escaped(&o, input + span.off, span.len);
-      ob_write(&o, "</>", 3);
-    } else {
-      ob_write_escaped(&o, input + span.off, span.len);
-    }
+    if (span.cls == HL_REGEX) ob_write_regex_literal(&o, input + span.off, span.len);
+    else ob_write_with_class(&o, span.cls, input + span.off, span.len);
   }
 
   *state = hl_iter_state(&it);
@@ -509,16 +804,8 @@ int highlight_js_line_clipped(
     size_t emit_len = span.len < span_remaining ? span.len : span_remaining;
 
     if (!o.overflow) {
-      const char *var = class_to_crvar(span.cls);
-      if (var) {
-        ob_putc(&o, '<');
-        ob_puts(&o, var);
-        ob_putc(&o, '>');
-        ob_write_escaped(&o, line + span.off, emit_len);
-        ob_write(&o, "</>", 3);
-      } else {
-        ob_write_escaped(&o, line + span.off, emit_len);
-      }
+      if (span.cls == HL_REGEX) ob_write_regex_literal(&o, line + span.off, emit_len);
+      else ob_write_with_class(&o, span.cls, line + span.off, emit_len);
     }
 
     vis_cols += span.len;
