@@ -48,3 +48,7 @@ Array(16).join('wat' - 1) + ' Batman!';
 
 banana:
 ('b' + 'a' + + 'a' + 'a').toLowerCase()
+
+sentient window loop:
+(i=0,w=new Proxy(window,{get:(t,k)=>k==='window'?(console.log(i++),w):t[k]}))
+w.window.window.window.window.window.window

@@ -1,5 +1,5 @@
-#ifndef REGEX_SCAN_H
-#define REGEX_SCAN_H
+#ifndef HIGHLIGHT_REGEX_SCAN_H
+#define HIGHLIGHT_REGEX_SCAN_H
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -31,7 +31,7 @@ static inline size_t js_regex_skip_ws_back(const char *code, size_t i) {
 }
 
 static inline bool js_regex_word_allows_start(const char *word, size_t len) {
-  return 
+  return
     js_regex_word_eq(word, len, "return", 6) ||
     js_regex_word_eq(word, len, "throw", 5) ||
     js_regex_word_eq(word, len, "case", 4) ||
@@ -47,35 +47,36 @@ static inline bool js_regex_word_allows_start(const char *word, size_t len) {
 }
 
 static inline bool js_regex_prev_forbids_start(unsigned char prev) {
-  return 
+  return
     js_regex_is_digit(prev) ||
     prev == ')' || prev == ']' || prev == '}' ||
     prev == '"' || prev == '\'' || prev == '`' || prev == '.';
 }
 
 static inline bool js_regex_prev_allows_start(unsigned char prev) {
-switch (prev) {
-  case '(':
-  case '[':
-  case '{':
-  case ',':
-  case ';':
-  case ':':
-  case '=':
-  case '!':
-  case '?':
-  case '+':
-  case '-':
-  case '*':
-  case '%':
-  case '&':
-  case '|':
-  case '^':
-  case '~':
-  case '<':
-  case '>': return true;
-  default:  return false;
-}}
+  switch (prev) {
+    case '(':
+    case '[':
+    case '{':
+    case ',':
+    case ';':
+    case ':':
+    case '=':
+    case '!':
+    case '?':
+    case '+':
+    case '-':
+    case '*':
+    case '%':
+    case '&':
+    case '|':
+    case '^':
+    case '~':
+    case '<':
+    case '>': return true;
+    default:  return false;
+  }
+}
 
 static inline bool js_regex_can_start(const char *code, size_t start) {
   if (start == 0) return true;
@@ -109,27 +110,27 @@ static inline bool js_scan_regex_literal(
   for (; i < len; i++) {
     unsigned char ch = (unsigned char)code[i];
     if (ch == '\n' || ch == '\r') return false;
-    
+
     if (ch == '\\') {
       if (i + 1 < len) i++;
       continue;
     }
-    
+
     if (in_class) {
       if (ch == ']') in_class = false;
       continue;
     }
-    
+
     if (ch == '[') {
       in_class = true;
       continue;
     }
-    
+
     if (ch != '/') continue;
-    
+
     i++;
     while (i < len && js_regex_is_alpha((unsigned char)code[i])) i++;
-    
+
     if (out_end) *out_end = i;
     return true;
   }

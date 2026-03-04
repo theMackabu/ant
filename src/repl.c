@@ -30,7 +30,7 @@
 
 #include <crprintf.h>
 #include "highlight.h"
-#include "regex_scan.h"
+#include "highlight/regex.h"
 
 #define MAX_HISTORY          512
 #define MAX_LINE_LENGTH      4096
