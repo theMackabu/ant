@@ -88,7 +88,7 @@ static hl_token_class tok_to_class(uint8_t tok) {
   l_kw_italic: return HL_KEYWORD_ITALIC;
   l_kw_delete: return HL_KEYWORD_DELETE;
   l_type:      return HL_TYPE;
-  l_bool:      return HL_TYPE_BOOLEAN;
+  l_bool:      return HL_BOOLEAN;
   l_null:      return HL_LITERAL_NULL;
 }
 
@@ -413,26 +413,30 @@ static inline void ob_write_escaped(outbuf_t *o, const char *s, size_t n) {
 
 static const char *class_to_crvar(hl_token_class cls) {
 switch (cls) {
-  case HL_KEYWORD:         return "blue";
-  case HL_KEYWORD_ITALIC:  return "italic+blue";
-  case HL_KEYWORD_DELETE:  return "red";
-  case HL_KEYWORD_EXTENDS: return "italic+cyan";
-  case HL_TYPE:            return "cyan";
-  case HL_TYPE_STRING:     return "green";
-  case HL_TYPE_BOOLEAN:    return "magenta";
-  case HL_LITERAL_NULL:    return "gray";
   case HL_STRING:          return "green";
   case HL_NUMBER:          return "yellow";
-  case HL_COMMENT:         return "dim";
-  case HL_FUNCTION_NAME:   return "green";
-  case HL_CLASS_NAME:      return "bold+yellow";
-  case HL_PARENT_CLASS:    return "bold+cyan";
-  case HL_FUNCTION:        return "green";
-  case HL_PROPERTY:        return "bright_magenta";
-  case HL_OPERATOR:        return "bright_magenta";
-  case HL_OPERATOR_CMP:    return "gray";
-  case HL_OPTIONAL_CHAIN:  return "gray";
-  case HL_SEMICOLON:       return "dim";
+  case HL_BOOLEAN:         return "magenta";
+
+  case HL_KEYWORD:         return "#65B2FF";
+  case HL_KEYWORD_DELETE:  return "#F43D3D";
+  case HL_TYPE:            return "#59D8F1";
+  case HL_TYPE_STRING:     return "#30E8AA";
+  case HL_TYPE_BOOLEAN:    return "#30E8AA";
+  case HL_LITERAL_NULL:    return "#242628";
+  case HL_COMMENT:         return "#758CA3";
+  case HL_FUNCTION_NAME:   return "#30E8AA";
+  case HL_FUNCTION:        return "#30E8AA";
+  case HL_PROPERTY:        return "#CCA3F4";
+  case HL_OPERATOR:        return "#CCA3F4";
+  case HL_OPERATOR_CMP:    return "#8CB2D8";
+  case HL_OPTIONAL_CHAIN:  return "#8CB2D8";
+  case HL_SEMICOLON:       return "#B2CCE5";
+  
+  case HL_KEYWORD_ITALIC:  return "italic+#65B2FF";
+  case HL_CLASS_NAME:      return "bold+#F7B76D";
+  case HL_PARENT_CLASS:    return "bold+#59D8F1";
+  case HL_KEYWORD_EXTENDS: return "italic+#59D8F1";
+  
   default:                 return NULL;
 }}
 
