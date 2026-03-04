@@ -683,9 +683,10 @@ static bool is_string_keyword_literal(const char *s, size_t n) {
 
 static const char *class_to_crvar(hl_token_class cls) {
 switch (cls) {
-  case HL_NUMBER:          return "yellow";
-  case HL_BOOLEAN:         return "magenta";
-  
+  case HL_NUMBER:           return "yellow";
+  case HL_BOOLEAN:          return "magenta";
+  case HL_LITERAL_NULL:     return "gray";
+
   case HL_STRING:           return "#FF8A7F";
   case HL_STRING_DELIMITER: return "#FF7265";
   case HL_STRING_ESCAPE:    return "#F4AAA3";
@@ -703,7 +704,6 @@ switch (cls) {
   case HL_TYPE:             return "#59D8F1";
   case HL_TYPE_STRING:      return "#30E8AA";
   case HL_TYPE_BOOLEAN:     return "#30E8AA";
-  case HL_LITERAL_NULL:     return "#242628";
   case HL_COMMENT:          return "#758CA3";
   case HL_FUNCTION_NAME:    return "#30E8AA";
   case HL_FUNCTION:         return "#30E8AA";
