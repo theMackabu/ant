@@ -2,30 +2,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
-#include <signal.h>
-#include <sys/stat.h>
-
-#ifdef _WIN32
-#include <conio.h>
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#include <io.h>
-#include <direct.h>
-#define STDIN_FILENO 0
-#define mkdir_p(path) _mkdir(path)
-#else
-#include <sys/ioctl.h>
-#include <termios.h>
-#include <unistd.h>
-#define mkdir_p(path) mkdir(path, 0755)
-#endif
 
 #include "ant.h"
 #include "repl.h"
+#include "readline.h"
 #include "reactor.h"
 #include "runtime.h"
 #include "internal.h"
-#include "utf8.h"
 
 #include "silver/ast.h"
 #include "silver/engine.h"
@@ -35,21 +18,7 @@
 #include "highlight.h"
 #include "highlight/regex.h"
 
-#define MAX_HISTORY          512
-#define MAX_LINE_LENGTH      4096
-#define MAX_MULTILINE_LENGTH 65536
-
-#define INPUT \
-  char *line, int *pos, int *len, key_event_t *key, history_t *hist, const char *prompt
-
-static volatile sig_atomic_t ctrl_c_pressed = 0;
-
-typedef struct {
-  char **lines;
-  int count;
-  int capacity;
-  int current;
-} history_t;
+typedef ant_history_t history_t;
 
 typedef enum {
   CMD_OK,
@@ -83,7 +52,6 @@ typedef struct {
 } repl_decl_pending_t;
 
 static repl_decl_registry_t *g_repl_decl_registry = NULL;
-static void sigint_handler(int sig) { ctrl_c_pressed++; }
 
 static inline void repl_clear_exception_state(ant_t *js) {
   js->thrown_exists = false;
@@ -386,8 +354,10 @@ static cmd_result_t cmd_help(ant_t *js, history_t *history, const char *arg) {
   printf("\n%sKeybindings:%s\n", C_BOLD, C_RESET);
   printf("  Ctrl+C       Abort current expression (press twice to exit)\n");
   printf("  Left/Right   Move backward/forward one character\n");
+  printf("  Home/End     Jump to start/end of line\n");
   printf("  Up/Down      Navigate history\n");
   printf("  Backspace    Delete character backward\n");
+  printf("  Delete       Delete character under cursor\n");
   printf("  Enter        Submit input\n");
   printf("\n%sSpecial Variables:%s\n", C_BOLD, C_RESET);
   printf("  %s_%s           Last expression result\n", C_CYAN, C_RESET);
@@ -556,401 +526,6 @@ static cmd_result_t execute_command(ant_t *js, history_t *history, const char *l
   return CMD_NOT_FOUND;
 }
 
-static void history_init(history_t *hist) {
-  hist->capacity = MAX_HISTORY;
-  hist->lines = malloc(sizeof(char*) * hist->capacity);
-  hist->count = 0;
-  hist->current = -1;
-}
-
-static void history_add(history_t *hist, const char *line) {
-  if (strlen(line) == 0) return;
-  if (hist->count > 0 && strcmp(hist->lines[hist->count - 1], line) == 0) return;
-  
-  if (hist->count >= hist->capacity) {
-    free(hist->lines[0]);
-    memmove(hist->lines, hist->lines + 1, sizeof(char*) * (hist->capacity - 1));
-    hist->count--;
-  }
-  
-  hist->lines[hist->count++] = strdup(line);
-  hist->current = hist->count;
-}
-
-static const char* history_prev(history_t *hist) {
-  if (hist->count == 0) return NULL;
-  if (hist->current > 0) hist->current--;
-  return hist->lines[hist->current];
-}
-
-static const char* history_next(history_t *hist) {
-  if (hist->count == 0) return NULL;
-  if (hist->current < hist->count - 1) {
-    hist->current++;
-    return hist->lines[hist->current];
-  }
-  hist->current = hist->count;
-  return "";
-}
-
-static void history_free(history_t *hist) {
-  for (int i = 0; i < hist->count; i++) free(hist->lines[i]);
-  free(hist->lines);
-}
-
-static char* get_history_path(void) {
-  const char *home = getenv("HOME");
-  if (!home) home = getenv("USERPROFILE");
-  if (!home) return NULL;
-  
-  size_t len = strlen(home) + 32;
-  char *path = malloc(len);
-  snprintf(path, len, "%s/.ant", home);
-  mkdir_p(path);
-  snprintf(path, len, "%s/.ant/repl_history", home);
-  return path;
-}
-
-static void history_load(history_t *hist) {
-  char *path = get_history_path();
-  if (!path) return;
-  
-  FILE *fp = fopen(path, "r");
-  free(path);
-  if (!fp) return;
-  
-  char line[MAX_LINE_LENGTH];
-  while (fgets(line, sizeof(line), fp)) {
-    size_t len = strlen(line);
-    if (len > 0 && line[len - 1] == '\n') line[len - 1] = '\0';
-    if (line[0]) history_add(hist, line);
-  }
-  fclose(fp);
-}
-
-static void history_save(history_t *hist) {
-  char *path = get_history_path();
-  if (!path) return;
-  
-  FILE *fp = fopen(path, "w");
-  free(path);
-  if (!fp) return;
-  
-  for (int i = 0; i < hist->count; i++) {
-    fprintf(fp, "%s\n", hist->lines[i]);
-  }
-  fclose(fp);
-}
-
-typedef enum { 
-  KEY_NONE, KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT, 
-  KEY_BACKSPACE, KEY_ENTER, KEY_EOF, KEY_CHAR 
-} key_type_t;
-
-typedef struct { key_type_t type; int ch; } key_event_t;
-typedef void (*key_handler_t)(INPUT);
-
-static crprintf_compiled *hl_prog = NULL;
-static highlight_state hl_line_state = HL_STATE_INIT;
-static int repl_last_render_rows = 1;
-
-static int repl_terminal_cols(void) {
-  int cols = 80;
-#ifdef _WIN32
-  CONSOLE_SCREEN_BUFFER_INFO csbi;
-  if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
-    cols = csbi.srWindow.Right - csbi.srWindow.Left + 1;
-  }
-#else
-  struct winsize ws;
-  if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) {
-    cols = ws.ws_col;
-  }
-#endif
-  return cols > 0 ? cols : 80;
-}
-
-static size_t repl_skip_ansi_escape(const char *s, size_t len, size_t i) {
-  if (i >= len || (unsigned char)s[i] != 0x1B) return i;
-  if (i + 1 >= len) return i + 1;
-
-  unsigned char next = (unsigned char)s[i + 1];
-
-  if (next == '[') {
-    i += 2;
-    while (i < len) {
-      unsigned char ch = (unsigned char)s[i++];
-      if (ch >= 0x40 && ch <= 0x7E) break;
-    }
-    return i;
-  }
-
-  if (next == ']') {
-    i += 2;
-    while (i < len) {
-      unsigned char ch = (unsigned char)s[i];
-      if (ch == '\a') return i + 1;
-      if (ch == 0x1B && i + 1 < len && s[i + 1] == '\\') return i + 2;
-      i++;
-    }
-    return i;
-  }
-
-  return i + 2;
-}
-
-static int repl_display_width(const char *s) {
-  if (!s) return 0;
-
-  int width = 0;
-  size_t len = strlen(s);
-  size_t i = 0;
-
-  while (i < len) {
-    if ((unsigned char)s[i] == 0x1B) {
-      i = repl_skip_ansi_escape(s, len, i);
-      continue;
-    }
-
-    utf8proc_int32_t cp = 0;
-    utf8proc_ssize_t n = utf8_next((const utf8proc_uint8_t *)(s + i), (utf8proc_ssize_t)(len - i), &cp);
-    if (n <= 0) n = 1;
-
-    int w = utf8proc_charwidth(cp);
-    if (w > 0) width += w;
-
-    i += (size_t)n;
-  }
-
-  return width;
-}
-
-static void repl_move_to_line_start(const char *prompt, int pos, int cols) {
-  int prompt_len = repl_display_width(prompt);
-  int cursor_cols = prompt_len + pos;
-  int cursor_row = cursor_cols / cols;
-  if (cursor_cols > 0 && cursor_cols % cols == 0) cursor_row--;
-
-  if (cursor_row > 0) {
-    char move_buf[32];
-    snprintf(move_buf, sizeof(move_buf), "\033[%dA", cursor_row);
-    fputs(move_buf, stdout);
-  }
-  fputs("\r", stdout);
-}
-
-static void refresh_line(const char *line, int len, int pos, const char *prompt) {
-  int cols = repl_terminal_cols();
-  int prompt_len = repl_display_width(prompt);
-  int line_cols = prompt_len + len;
-  int current_rows = line_cols > 0 ? (line_cols - 1) / cols + 1 : 1;
-  int rows = repl_last_render_rows > current_rows ? repl_last_render_rows : current_rows;
-
-  repl_move_to_line_start(prompt, pos, cols);
-  for (int i = 0; i < rows; i++) {
-    fputs("\033[K", stdout);
-    if (i < rows - 1) fputs("\033[B\r", stdout);
-  }
-  for (int i = 0; i < rows - 1; i++) fputs("\033[A", stdout);
-  fputs("\r", stdout);
-
-  fputs(prompt, stdout);
-
-  if (crprintf_get_color() && len > 0) {
-    if (len <= 2048) {
-    char tagged[8192];
-    char rendered[8192];
-    
-    highlight_state state = hl_line_state;
-    ant_highlight_stateful(line, (size_t)len, tagged, sizeof(tagged), &state);
-    
-    hl_prog = crprintf_recompile(hl_prog, tagged);
-    crprintf_state *rs = crprintf_state_new();
-    
-    crsprintf_compiled(rendered, sizeof(rendered), rs, hl_prog);
-    crprintf_state_free(rs);
-    
-    fputs(rendered, stdout);
-    } else fwrite(line, 1, (size_t)len, stdout);
-  } else if (len > 0) fwrite(line, 1, (size_t)len, stdout);
-
-  int end_cols = prompt_len + len;
-  int end_rows = end_cols > 0 ? (end_cols - 1) / cols + 1 : 1;
-  int end_row = end_rows - 1;
-  
-  int cursor_cols = prompt_len + pos;
-  int cursor_row = cursor_cols > 0 ? cursor_cols / cols : 0;
-  int cursor_col = cursor_cols > 0 ? cursor_cols % cols : 0;
-  int up_rows = end_row - cursor_row;
-
-  if (up_rows > 0) {
-    char move_buf[32];
-    snprintf(move_buf, sizeof(move_buf), "\033[%dA", up_rows);
-    fputs(move_buf, stdout);
-  }
-  
-  fputs("\r", stdout);
-  if (cursor_col > 0) {
-    char move_buf[32];
-    snprintf(move_buf, sizeof(move_buf), "\033[%dC", cursor_col);
-    fputs(move_buf, stdout);
-  }
-
-  repl_last_render_rows = end_rows;
-
-  fflush(stdout);
-}
-
-static void cursor_move(int *pos, int len, int dir) {
-  if (dir < 0 && *pos > 0) { printf("\033[D"); fflush(stdout); (*pos)--; }
-  else if (dir > 0 && *pos < len) { printf("\033[C"); fflush(stdout); (*pos)++; }
-}
-
-static void line_set(char *line, int *pos, int *len, const char *str, const char *prompt) {
-  strcpy(line, str);
-  *len = (int)strlen(line); *pos = *len;
-  refresh_line(line, *len, *pos, prompt);
-}
-
-static void line_backspace(char *line, int *pos, int *len, const char *prompt) {
-  if (*pos <= 0) return;
-  
-  memmove(line + *pos - 1, line + *pos, *len - *pos + 1);
-  (*pos)--; (*len)--;
-  refresh_line(line, *len, *pos, prompt);
-}
-
-static void line_insert(char *line, int *pos, int *len, int c, const char *prompt) {
-  if (*len >= MAX_LINE_LENGTH - 1) return;
-  
-  memmove(line + *pos + 1, line + *pos, *len - *pos + 1);
-  line[*pos] = (char)c;
-  (*pos)++; (*len)++;
-  refresh_line(line, *len, *pos, prompt);
-}
-
-#ifdef _WIN32
-static key_event_t read_key(void) {
-  if (ctrl_c_pressed > 0) return (key_event_t){ KEY_EOF, 0 };
-  int c = _getch();
-  if (c == 0 || c == 0xE0) {
-    int ext = _getch();
-    switch (ext) {
-      case 72: return (key_event_t){ KEY_UP, 0 };
-      case 80: return (key_event_t){ KEY_DOWN, 0 };
-      case 77: return (key_event_t){ KEY_RIGHT, 0 };
-      case 75: return (key_event_t){ KEY_LEFT, 0 };
-    }
-    return (key_event_t){ KEY_NONE, 0 };
-  }
-  if (c == 8) return (key_event_t){ KEY_BACKSPACE, 0 };
-  if (c == '\r' || c == '\n') return (key_event_t){ KEY_ENTER, 0 };
-  if (c == 3) { ctrl_c_pressed++; return (key_event_t){ KEY_EOF, 0 }; }
-  if (c == 4 || c == 26) return (key_event_t){ KEY_EOF, 0 };
-  if (isprint(c) || (unsigned char)c >= 0x80) return (key_event_t){ KEY_CHAR, c };
-  return (key_event_t){ KEY_NONE, 0 };
-}
-#else
-static struct termios saved_tio;
-static key_event_t read_key(void) {
-  if (ctrl_c_pressed > 0) return (key_event_t){ KEY_EOF, 0 };
-  int c = getchar();
-  if (c == EOF && !feof(stdin)) { clearerr(stdin); return (key_event_t){ KEY_EOF, 0 }; }
-  if (c == EOF) return (key_event_t){ KEY_EOF, 0 };
-  if (c == 27) {
-    int seq1 = getchar();
-    if (seq1 == EOF) return (key_event_t){ KEY_NONE, 0 };
-    if (seq1 != '[') return (key_event_t){ KEY_NONE, 0 };
-    int seq2 = getchar();
-    if (seq2 == EOF) return (key_event_t){ KEY_NONE, 0 };
-    switch (seq2) {
-      case 'A': return (key_event_t){ KEY_UP, 0 };
-      case 'B': return (key_event_t){ KEY_DOWN, 0 };
-      case 'C': return (key_event_t){ KEY_RIGHT, 0 };
-      case 'D': return (key_event_t){ KEY_LEFT, 0 };
-    }
-    if (seq2 >= '0' && seq2 <= '9') {
-      int seq3 = getchar();
-      (void)seq3;
-    }
-    return (key_event_t){ KEY_NONE, 0 };
-  }
-  if (c == 127 || c == 8) return (key_event_t){ KEY_BACKSPACE, 0 };
-  if (c == '\n' || c == '\r') return (key_event_t){ KEY_ENTER, 0 };
-  if (isprint(c) || (unsigned char)c >= 0x80) return (key_event_t){ KEY_CHAR, c };
-  return (key_event_t){ KEY_NONE, 0 };
-}
-#endif
-
-static void handle_up(INPUT) {
-  const char *h = history_prev(hist);
-  if (h) line_set(line, pos, len, h, prompt);
-}
-
-static void handle_down(INPUT) {
-  const char *h = history_next(hist);
-  if (h) line_set(line, pos, len, h, prompt);
-}
-
-static void handle_left(INPUT) { cursor_move(pos, *len, -1); }
-static void handle_right(INPUT) { cursor_move(pos, *len, 1); }
-
-static void handle_backspace(INPUT) { line_backspace(line, pos, len, prompt); }
-static void handle_char(INPUT) { line_insert(line, pos, len, key->ch, prompt); }
-
-static key_handler_t handlers[] = {
-  [KEY_UP] = handle_up,
-  [KEY_DOWN] = handle_down,
-  [KEY_LEFT] = handle_left,
-  [KEY_RIGHT] = handle_right,
-  [KEY_BACKSPACE] = handle_backspace,
-  [KEY_CHAR] = handle_char,
-};
-
-static inline void term_restore(void) {
-#ifndef _WIN32
-  tcsetattr(STDIN_FILENO, TCSANOW, &saved_tio);
-#endif
-}
-
-static char *read_line_with_history(history_t *hist, ant_t *js, const char *prompt) {
-  char *line = malloc(MAX_LINE_LENGTH);
-  int pos = 0, len = 0; line[0] = '\0';
-  repl_last_render_rows = 1;
-  
-  #ifndef _WIN32
-  struct termios new_tio;
-  tcgetattr(STDIN_FILENO, &saved_tio);
-  new_tio = saved_tio;
-  new_tio.c_lflag &= ~(ICANON | ECHO);
-  tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
-  #endif
-
-  again:
-  key_event_t key = read_key();
-  
-  switch (key.type) {
-  case KEY_ENTER:
-    putchar('\n');
-    term_restore();
-    return line;
-  
-  case KEY_EOF:
-    putchar('\n');
-    term_restore();
-    free(line);
-    return NULL;
-  
-  default:
-    if (handlers[key.type]) handlers[key.type](
-      line, &pos, &len, &key, hist, prompt
-    );
-    break;
-  }
-  
-  goto again;
-}
-
 typedef struct {
   int paren, bracket, brace;
   int *templates;
@@ -1019,6 +594,7 @@ static bool is_incomplete_input(const char *code, size_t len) {
 
 void ant_repl_run() {
   ant_t *js = rt->js;
+  ant_readline_install_signal_handler();
   
   js_set_filename(js, "[repl]");
   js_setup_import_meta(js, "[repl]");
@@ -1029,19 +605,9 @@ void ant_repl_run() {
     ANT_VERSION
   );
   
-#ifdef _WIN32
-  signal(SIGINT, sigint_handler);
-#else
-  struct sigaction sa;
-  sa.sa_handler = sigint_handler;
-  sigemptyset(&sa.sa_mask);
-  sa.sa_flags = 0;
-  sigaction(SIGINT, &sa, NULL);
-#endif
-  
   history_t history;
-  history_init(&history);
-  history_load(&history);
+  ant_history_init(&history, 512);
+  ant_history_load(&history);
   
   repl_decl_registry_t decl_registry = {0};
   g_repl_decl_registry = &decl_registry;
@@ -1059,20 +625,20 @@ void ant_repl_run() {
   
   while (1) {
     const char *prompt = multiline_buf ? "\x1b[2m|\x1b[0m " : "\x1b[2m❯\x1b[0m ";
-
+    highlight_state prefix_state = HL_STATE_INIT;
     if (multiline_buf && multiline_len > 0) {
       char scratch[8192];
-      hl_line_state = HL_STATE_INIT;
-      ant_highlight_stateful(multiline_buf, multiline_len, scratch, sizeof(scratch), &hl_line_state);
-    } else hl_line_state = HL_STATE_INIT;
+      ant_highlight_stateful(multiline_buf, multiline_len, scratch, sizeof(scratch), &prefix_state);
+    }
 
     fputs(prompt, stdout);
     fflush(stdout);
-    
-    ctrl_c_pressed = 0;
-    char *line = read_line_with_history(&history, js, prompt);
-    
-    if (ctrl_c_pressed > 0) {
+
+    char *line = NULL;
+    ant_readline_result_t readline_status =
+      ant_readline(&history, prompt, prefix_state, &line);
+
+    if (readline_status == ANT_READLINE_INTERRUPT) {
       if (multiline_buf) {
         free(multiline_buf);
         multiline_buf = NULL;
@@ -1091,8 +657,8 @@ void ant_repl_run() {
       if (line) free(line);
       continue;
     }
-    
-    if (line == NULL) {
+
+    if (readline_status == ANT_READLINE_EOF || line == NULL) {
       if (multiline_buf) {
         free(multiline_buf);
         multiline_buf = NULL;
@@ -1151,7 +717,7 @@ void ant_repl_run() {
     free(line);
     
     if (is_incomplete_input(multiline_buf, multiline_len)) continue;
-    history_add(&history, multiline_buf);
+    ant_history_add(&history, multiline_buf);
     
     repl_eval_chunk(
       js, &decl_registry, multiline_buf, 
@@ -1165,11 +731,11 @@ void ant_repl_run() {
   }
   
   if (multiline_buf) free(multiline_buf);
-  if (hl_prog) { crprintf_compiled_free(hl_prog); hl_prog = NULL; }
+  ant_readline_shutdown();
   
   repl_decl_registry_free(&decl_registry);
   g_repl_decl_registry = NULL;
   
-  history_save(&history);
-  history_free(&history);
+  ant_history_save(&history);
+  ant_history_free(&history);
 }
