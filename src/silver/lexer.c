@@ -325,15 +325,7 @@ uint8_t sv_parsekeyword(const char *buf, size_t len) {
 #undef K
 #undef M
 
-#define CHAR_DIGIT  0x01
-#define CHAR_XDIGIT 0x02
-#define CHAR_ALPHA  0x04
-#define CHAR_IDENT  0x08
-#define CHAR_IDENT1 0x10
-#define CHAR_WS     0x20
-#define CHAR_OCTAL  0x40
-
-static const uint8_t char_type[256] = {
+const uint8_t char_type[256] = {
   ['\t'] = CHAR_WS, ['\n'] = CHAR_WS, ['\r'] = CHAR_WS, [' '] = CHAR_WS,
   ['0'] = CHAR_DIGIT | CHAR_XDIGIT | CHAR_IDENT | CHAR_OCTAL,
   ['1'] = CHAR_DIGIT | CHAR_XDIGIT | CHAR_IDENT | CHAR_OCTAL,
@@ -381,12 +373,6 @@ static const uint8_t char_type[256] = {
   ['$'] = CHAR_IDENT | CHAR_IDENT1,
 };
 
-#define IS_DIGIT(c)  (char_type[(uint8_t)(c)] & CHAR_DIGIT)
-#define IS_XDIGIT(c) (char_type[(uint8_t)(c)] & CHAR_XDIGIT)
-#define IS_IDENT(c)  (char_type[(uint8_t)(c)] & CHAR_IDENT)
-#define IS_IDENT1(c) (char_type[(uint8_t)(c)] & CHAR_IDENT1)
-#define IS_OCTAL(c)  (char_type[(uint8_t)(c)] & CHAR_OCTAL)
-
 #define likely(x)   __builtin_expect(!!(x), 1)
 #define unlikely(x) __builtin_expect(!!(x), 0)
 
@@ -414,13 +400,13 @@ bool is_digit(int c) {
   return (char_type[(uint8_t)c] & CHAR_DIGIT) != 0;
 }
 
-static bool is_ident_begin(int c) { 
+bool is_ident_begin(int c) { 
   if (c < 0) return false;
   if (c < 128) return (char_type[(uint8_t)c] & CHAR_IDENT1) != 0;
   return (c & 0x80) != 0;
 }
 
-static bool is_ident_continue(int c) { 
+bool is_ident_continue(int c) { 
   if (c < 0) return false;
   if (c < 128) return (char_type[(uint8_t)c] & (CHAR_IDENT | CHAR_IDENT1)) != 0;
   return (c & 0x80) != 0;

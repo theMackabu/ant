@@ -92,31 +92,6 @@ static hl_token_class tok_to_class(uint8_t tok) {
   l_null:      return HL_LITERAL_NULL;
 }
 
-static inline bool hl_is_ident1(unsigned char c) {
-  return 
-    (c >= 'a' && c <= 'z') 
-    || (c >= 'A' && c <= 'Z') 
-    || c == '_' 
-    || c == '$' 
-    || c >= 0x80;
-}
-
-// TODO: dry
-static inline bool hl_is_ident(unsigned char c) {
-  return hl_is_ident1(c) || (c >= '0' && c <= '9');
-}
-
-static inline bool hl_is_digit(unsigned char c) { 
-  return c >= '0' && c <= '9'; 
-}
-
-static inline bool hl_is_xdigit(unsigned char c) {
-  return hl_is_digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
-}
-
-static inline bool hl_is_bindigit(unsigned char c) { return c == '0' || c == '1'; }
-static inline bool hl_is_octdigit(unsigned char c) { return c >= '0' && c <= '7'; }
-
 void hl_iter_init(hl_iter *it, const char *input, size_t input_len, const highlight_state *state) {
   it->input = input;
   it->input_len = input_len;
@@ -268,34 +243,34 @@ bool hl_iter_next(hl_iter *it, hl_span *out) {
     return true;
   }
 
-  if (hl_is_digit(c) || (c == '.' && i + 1 < input_len && hl_is_digit((unsigned char)input[i + 1]))) {
+  if (IS_DIGIT(c) || (c == '.' && i + 1 < input_len && IS_DIGIT(input[i + 1]))) {
     it->ctx = HL_CTX_NONE;
     size_t start = i;
     if (c == '0' && i + 1 < input_len) {
       unsigned char next = (unsigned char)input[i + 1];
       if (next == 'x' || next == 'X') {
         i += 2;
-        while (i < input_len && (hl_is_xdigit((unsigned char)input[i]) || input[i] == '_')) i++;
+        while (i < input_len && (IS_XDIGIT(input[i]) || input[i] == '_')) i++;
         goto num_done;
       } else if (next == 'b' || next == 'B') {
         i += 2;
-        while (i < input_len && (hl_is_bindigit((unsigned char)input[i]) || input[i] == '_')) i++;
+        while (i < input_len && (input[i] == '0' || input[i] == '1' || input[i] == '_')) i++;
         goto num_done;
       } else if (next == 'o' || next == 'O') {
         i += 2;
-        while (i < input_len && (hl_is_octdigit((unsigned char)input[i]) || input[i] == '_')) i++;
+        while (i < input_len && (IS_OCTAL(input[i]) || input[i] == '_')) i++;
         goto num_done;
       }
     }
-    while (i < input_len && (hl_is_digit((unsigned char)input[i]) || input[i] == '_')) i++;
+    while (i < input_len && (IS_DIGIT(input[i]) || input[i] == '_')) i++;
     if (i < input_len && input[i] == '.') {
       i++;
-      while (i < input_len && (hl_is_digit((unsigned char)input[i]) || input[i] == '_')) i++;
+      while (i < input_len && (IS_DIGIT(input[i]) || input[i] == '_')) i++;
     }
     if (i < input_len && (input[i] == 'e' || input[i] == 'E')) {
       i++;
       if (i < input_len && (input[i] == '+' || input[i] == '-')) i++;
-      while (i < input_len && (hl_is_digit((unsigned char)input[i]) || input[i] == '_')) i++;
+      while (i < input_len && (IS_DIGIT(input[i]) || input[i] == '_')) i++;
     }
     num_done:
     if (i < input_len && input[i] == 'n') i++;
@@ -315,10 +290,10 @@ bool hl_iter_next(hl_iter *it, hl_span *out) {
     }
   }
 
-  if (hl_is_ident1(c)) {
+  if (is_ident_begin(c)) {
     size_t start = i;
     i++;
-    while (i < input_len && hl_is_ident((unsigned char)input[i])) i++;
+    while (i < input_len && is_ident_continue(input[i])) i++;
     size_t word_len = i - start;
     const char *word = input + start;
 
@@ -563,5 +538,3 @@ int highlight_js_line_clipped(
   o.buf[o.pos] = '\0';
   return (int)o.pos;
 }
-
-

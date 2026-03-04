@@ -53,7 +53,26 @@ uint8_t sv_parsekeyword(const char *buf, size_t len);
 bool is_space(int c);
 bool is_digit(int c);
 
+bool is_ident_begin(int c);
+bool is_ident_continue(int c);
+
 bool is_eval_or_arguments_name(const char *buf, size_t len);
 bool is_strict_reserved_name(const char *buf, size_t len);
+
+#define CHAR_DIGIT  0x01
+#define CHAR_XDIGIT 0x02
+#define CHAR_ALPHA  0x04
+#define CHAR_IDENT  0x08
+#define CHAR_IDENT1 0x10
+#define CHAR_WS     0x20
+#define CHAR_OCTAL  0x40
+
+extern const uint8_t char_type[256];
+
+#define IS_DIGIT(c)  (char_type[(uint8_t)(c)] & CHAR_DIGIT)
+#define IS_XDIGIT(c) (char_type[(uint8_t)(c)] & CHAR_XDIGIT)
+#define IS_IDENT(c)  (char_type[(uint8_t)(c)] & CHAR_IDENT)
+#define IS_IDENT1(c) (char_type[(uint8_t)(c)] & CHAR_IDENT1)
+#define IS_OCTAL(c)  (char_type[(uint8_t)(c)] & CHAR_OCTAL)
 
 #endif
