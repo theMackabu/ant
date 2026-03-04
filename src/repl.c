@@ -25,6 +25,7 @@
 #include "reactor.h"
 #include "runtime.h"
 #include "internal.h"
+#include "utf8.h"
 
 #include "silver/ast.h"
 #include "silver/engine.h"
@@ -318,6 +319,7 @@ static void repl_eval_chunk(
   repl_print_mode_t print_mode
 ) {
   if (!repl_precheck_and_commit_lexicals(js, decl_registry, code, len)) {
+    if (js->thrown_exists) js_set(js, js_glob(js), "_error", js->thrown_value);
     print_uncaught_throw(js);
     return;
   }
@@ -326,8 +328,13 @@ static void repl_eval_chunk(
   jsval_t result = js_eval_bytecode_repl(js, code, len);
   js_run_event_loop(js);
 
-  if (print_uncaught_throw(js)) return;
+  if (js->thrown_exists) {
+    js_set(js, js_glob(js), "_error", js->thrown_value);
+    if (print_uncaught_throw(js)) return;
+  }
+
   if (print_mode == REPL_PRINT_INTERACTIVE) {
+    js_set(js, js_glob(js), "_", result);
     print_repl_value(js, result, stdout);
     return;
   }
@@ -342,22 +349,49 @@ static cmd_result_t cmd_load(ant_t *js, history_t *history, const char *arg);
 static cmd_result_t cmd_save(ant_t *js, history_t *history, const char *arg);
 static cmd_result_t cmd_stats(ant_t *js, history_t *history, const char *arg);
 static cmd_result_t cmd_copy(ant_t *js, history_t *history, const char *arg);
+static cmd_result_t cmd_clear(ant_t *js, history_t *history, const char *arg);
+static cmd_result_t cmd_history(ant_t *js, history_t *history, const char *arg);
 
 static const repl_command_t commands[] = {
-  { "help",  "Show this help message", false, cmd_help },
-  { "exit",  "Exit the REPL", false, cmd_exit },
-  { "load",  "Load JS from a file into the REPL session", true, cmd_load },
-  { "save",  "Save all evaluated commands in this REPL session to a file", true, cmd_save },
-  { "stats", "Show memory statistics", false, cmd_stats },
-  { "copy",  "Evaluate expression and copy its value", true, cmd_copy },
+  { "help",    "Show this help message",                                     false, cmd_help },
+  { "exit",    "Exit the REPL",                                              false, cmd_exit },
+  { "clear",   "Clear the screen",                                           false, cmd_clear },
+  { "history", "Show command history",                                       false, cmd_history },
+  { "load",    "Load JS from a file into the REPL session",                  true, cmd_load },
+  { "save",    "Save all evaluated commands in this REPL session to a file", true, cmd_save },
+  { "stats",   "Show memory statistics",                                     false, cmd_stats },
+  { "copy",    "Evaluate expression and copy its value",                     true, cmd_copy },
   { NULL, NULL, false, NULL }
 };
 
+static const char *repl_command_usage(const repl_command_t *cmd) {
+  if (!cmd || !cmd->name) return "";
+  if (strcmp(cmd->name, "copy") == 0)    return ".copy [expr]";
+  if (strcmp(cmd->name, "load") == 0)    return ".load <file>";
+  if (strcmp(cmd->name, "save") == 0)    return ".save <file>";
+  if (strcmp(cmd->name, "history") == 0) return ".history";
+  if (strcmp(cmd->name, "clear") == 0)   return ".clear";
+  if (strcmp(cmd->name, "stats") == 0)   return ".stats";
+  if (strcmp(cmd->name, "exit") == 0)    return ".exit";
+  if (strcmp(cmd->name, "help") == 0)    return ".help";
+  return cmd->name;
+}
+
 static cmd_result_t cmd_help(ant_t *js, history_t *history, const char *arg) {
+  printf("\n%sREPL Commands:%s\n", C_BOLD, C_RESET);
   for (const repl_command_t *cmd = commands; cmd->name; cmd++) {
-    printf("  .%-7s - %s\n", cmd->name, cmd->description);
+    const char *usage = repl_command_usage(cmd);
+    printf("  %s%-12s%s %s\n", C_CYAN, usage, C_RESET, cmd->description);
   }
-  printf("\nPress Ctrl+C to abort current expression.\n");
+  printf("\n%sKeybindings:%s\n", C_BOLD, C_RESET);
+  printf("  Ctrl+C       Abort current expression (press twice to exit)\n");
+  printf("  Left/Right   Move backward/forward one character\n");
+  printf("  Up/Down      Navigate history\n");
+  printf("  Backspace    Delete character backward\n");
+  printf("  Enter        Submit input\n");
+  printf("\n%sSpecial Variables:%s\n", C_BOLD, C_RESET);
+  printf("  %s_%s           Last expression result\n", C_CYAN, C_RESET);
+  printf("  %s_error%s      Last error\n\n", C_CYAN, C_RESET);
   return CMD_OK;
 }
 
@@ -424,6 +458,19 @@ static cmd_result_t cmd_stats(ant_t *js, history_t *history, const char *arg) {
   return CMD_OK;
 }
 
+static cmd_result_t cmd_clear(ant_t *js, history_t *history, const char *arg) {
+  fputs("\033[2J\033[H", stdout);
+  fflush(stdout);
+  return CMD_OK;
+}
+
+static cmd_result_t cmd_history(ant_t *js, history_t *history, const char *arg) {
+  for (int i = 0; i < history->count; i++) {
+    printf("%4d  %s\n", i + 1, history->lines[i]);
+  }
+  return CMD_OK;
+}
+
 #ifdef _WIN32
 static bool repl_copy_with_command(const char *data, size_t len) {
   FILE *pipe = _popen("clip", "wb");
@@ -468,7 +515,12 @@ static cmd_result_t cmd_copy(ant_t *js, history_t *history, const char *arg) {
   jsval_t result = js_eval_bytecode_repl(js, arg, strlen(arg));
   
   js_run_event_loop(js);
-  if (print_uncaught_throw(js)) return CMD_OK;
+  if (js->thrown_exists) {
+    js_set(js, js_glob(js), "_error", js->thrown_value);
+    if (print_uncaught_throw(js)) return CMD_OK;
+  }
+
+  js_set(js, js_glob(js), "_", result);
 
   char cbuf[512];
   js_cstr_t cstr = js_to_cstr(js, result, cbuf, sizeof(cbuf));
@@ -618,8 +670,63 @@ static int repl_terminal_cols(void) {
   return cols > 0 ? cols : 80;
 }
 
+static size_t repl_skip_ansi_escape(const char *s, size_t len, size_t i) {
+  if (i >= len || (unsigned char)s[i] != 0x1B) return i;
+  if (i + 1 >= len) return i + 1;
+
+  unsigned char next = (unsigned char)s[i + 1];
+
+  if (next == '[') {
+    i += 2;
+    while (i < len) {
+      unsigned char ch = (unsigned char)s[i++];
+      if (ch >= 0x40 && ch <= 0x7E) break;
+    }
+    return i;
+  }
+
+  if (next == ']') {
+    i += 2;
+    while (i < len) {
+      unsigned char ch = (unsigned char)s[i];
+      if (ch == '\a') return i + 1;
+      if (ch == 0x1B && i + 1 < len && s[i + 1] == '\\') return i + 2;
+      i++;
+    }
+    return i;
+  }
+
+  return i + 2;
+}
+
+static int repl_display_width(const char *s) {
+  if (!s) return 0;
+
+  int width = 0;
+  size_t len = strlen(s);
+  size_t i = 0;
+
+  while (i < len) {
+    if ((unsigned char)s[i] == 0x1B) {
+      i = repl_skip_ansi_escape(s, len, i);
+      continue;
+    }
+
+    utf8proc_int32_t cp = 0;
+    utf8proc_ssize_t n = utf8_next((const utf8proc_uint8_t *)(s + i), (utf8proc_ssize_t)(len - i), &cp);
+    if (n <= 0) n = 1;
+
+    int w = utf8proc_charwidth(cp);
+    if (w > 0) width += w;
+
+    i += (size_t)n;
+  }
+
+  return width;
+}
+
 static void repl_move_to_line_start(const char *prompt, int pos, int cols) {
-  int prompt_len = (int)strlen(prompt);
+  int prompt_len = repl_display_width(prompt);
   int cursor_cols = prompt_len + pos;
   int cursor_row = cursor_cols / cols;
   if (cursor_cols > 0 && cursor_cols % cols == 0) cursor_row--;
@@ -634,7 +741,7 @@ static void repl_move_to_line_start(const char *prompt, int pos, int cols) {
 
 static void refresh_line(const char *line, int len, int pos, const char *prompt) {
   int cols = repl_terminal_cols();
-  int prompt_len = (int)strlen(prompt);
+  int prompt_len = repl_display_width(prompt);
   int line_cols = prompt_len + len;
   int current_rows = line_cols > 0 ? (line_cols - 1) / cols + 1 : 1;
   int rows = repl_last_render_rows > current_rows ? repl_last_render_rows : current_rows;
@@ -649,7 +756,8 @@ static void refresh_line(const char *line, int len, int pos, const char *prompt)
 
   fputs(prompt, stdout);
 
-  if (crprintf_get_color() && len > 0 && len <= 2048) {
+  if (crprintf_get_color() && len > 0) {
+    if (len <= 2048) {
     char tagged[8192];
     char rendered[8192];
     
@@ -663,6 +771,7 @@ static void refresh_line(const char *line, int len, int pos, const char *prompt)
     crprintf_state_free(rs);
     
     fputs(rendered, stdout);
+    } else fwrite(line, 1, (size_t)len, stdout);
   } else if (len > 0) fwrite(line, 1, (size_t)len, stdout);
 
   int end_cols = prompt_len + len;
@@ -916,7 +1025,7 @@ void ant_repl_run() {
   
   crprintf(
     "Welcome to <red+bold>Ant JavaScript</> v%s\n"
-    "Type <cyan>.copy [code]</cyan> to copy, <cyan>.help</cyan> for more information.\n",
+    "Type <cyan>.copy [code]</cyan> to copy, <cyan>.help</cyan> for more information.\n\n",
     ANT_VERSION
   );
   
@@ -939,6 +1048,9 @@ void ant_repl_run() {
   
   js_set(js, js_glob(js), "__dirname", js_mkstr(js, ".", 1));
   js_set(js, js_glob(js), "__filename", js_mkstr(js, "[repl]", 6));
+  
+  js_set(js, js_glob(js), "_", js_mkundef());
+  js_set(js, js_glob(js), "_error", js_mkundef());
 
   int prev_ctrl_c_count = 0;
   char *multiline_buf = NULL;
@@ -946,7 +1058,7 @@ void ant_repl_run() {
   size_t multiline_cap = 0;
   
   while (1) {
-    const char *prompt = multiline_buf ? "| " : "> ";
+    const char *prompt = multiline_buf ? "\x1b[2m|\x1b[0m " : "\x1b[2m❯\x1b[0m ";
 
     if (multiline_buf && multiline_len > 0) {
       char scratch[8192];
