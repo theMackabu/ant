@@ -914,8 +914,11 @@ void ant_repl_run() {
   js_set_filename(js, "[repl]");
   js_setup_import_meta(js, "[repl]");
   
-  printf("Welcome to Ant JavaScript v%s\n", ANT_VERSION);
-  printf("Type \".help\" for more information.\n");
+  crprintf(
+    "Welcome to <red+bold>Ant JavaScript</> v%s\n"
+    "Type <cyan>.copy [code]</cyan> to copy, <cyan>.help</cyan> for more information.\n",
+    ANT_VERSION
+  );
   
 #ifdef _WIN32
   signal(SIGINT, sigint_handler);
