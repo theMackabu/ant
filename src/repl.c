@@ -14,6 +14,7 @@
 #define STDIN_FILENO 0
 #define mkdir_p(path) _mkdir(path)
 #else
+#include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
 #define mkdir_p(path) mkdir(path, 0755)
@@ -535,9 +536,53 @@ typedef void (*key_handler_t)(INPUT);
 
 static crprintf_compiled *hl_prog = NULL;
 static highlight_state hl_line_state = HL_STATE_INIT;
+static int repl_last_render_rows = 1;
+
+static int repl_terminal_cols(void) {
+  int cols = 80;
+#ifdef _WIN32
+  CONSOLE_SCREEN_BUFFER_INFO csbi;
+  if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
+    cols = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+  }
+#else
+  struct winsize ws;
+  if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) {
+    cols = ws.ws_col;
+  }
+#endif
+  return cols > 0 ? cols : 80;
+}
+
+static void repl_move_to_line_start(const char *prompt, int pos, int cols) {
+  int prompt_len = (int)strlen(prompt);
+  int cursor_cols = prompt_len + pos;
+  int cursor_row = cursor_cols / cols;
+  if (cursor_cols > 0 && cursor_cols % cols == 0) cursor_row--;
+
+  if (cursor_row > 0) {
+    char move_buf[32];
+    snprintf(move_buf, sizeof(move_buf), "\033[%dA", cursor_row);
+    fputs(move_buf, stdout);
+  }
+  fputs("\r", stdout);
+}
 
 static void refresh_line(const char *line, int len, int pos, const char *prompt) {
-  fputs("\r\033[2K", stdout);
+  int cols = repl_terminal_cols();
+  int prompt_len = (int)strlen(prompt);
+  int line_cols = prompt_len + len;
+  int current_rows = line_cols > 0 ? (line_cols - 1) / cols + 1 : 1;
+  int rows = repl_last_render_rows > current_rows ? repl_last_render_rows : current_rows;
+
+  repl_move_to_line_start(prompt, pos, cols);
+  for (int i = 0; i < rows; i++) {
+    fputs("\033[K", stdout);
+    if (i < rows - 1) fputs("\033[B\r", stdout);
+  }
+  for (int i = 0; i < rows - 1; i++) fputs("\033[A", stdout);
+  fputs("\r", stdout);
+
   fputs(prompt, stdout);
 
   if (crprintf_get_color() && len > 0 && len <= 2048) {
@@ -555,11 +600,28 @@ static void refresh_line(const char *line, int len, int pos, const char *prompt)
     
     fputs(rendered, stdout);
   } else if (len > 0) fwrite(line, 1, (size_t)len, stdout);
-  
-  if (pos < len) {
-    size_t prompt_len = strlen(prompt);
-    printf("\r\033[%zuC", prompt_len + (size_t)pos);
+
+  int end_cols = prompt_len + len;
+  int end_row = end_cols > 0 ? end_cols / cols : 0;
+  int cursor_cols = prompt_len + pos;
+  int cursor_row = cursor_cols > 0 ? cursor_cols / cols : 0;
+  int cursor_col = cursor_cols > 0 ? cursor_cols % cols : 0;
+  int up_rows = end_row - cursor_row;
+
+  if (up_rows > 0) {
+    char move_buf[32];
+    snprintf(move_buf, sizeof(move_buf), "\033[%dA", up_rows);
+    fputs(move_buf, stdout);
   }
+  
+  fputs("\r", stdout);
+  if (cursor_col > 0) {
+    char move_buf[32];
+    snprintf(move_buf, sizeof(move_buf), "\033[%dC", cursor_col);
+    fputs(move_buf, stdout);
+  }
+
+  repl_last_render_rows = end_cols > 0 ? end_cols / cols + 1 : 1;
 
   fflush(stdout);
 }
@@ -679,6 +741,7 @@ static inline void term_restore(void) {
 static char *read_line_with_history(history_t *hist, ant_t *js, const char *prompt) {
   char *line = malloc(MAX_LINE_LENGTH);
   int pos = 0, len = 0; line[0] = '\0';
+  repl_last_render_rows = 1;
   
   #ifndef _WIN32
   struct termios new_tio;
