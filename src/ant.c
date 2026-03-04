@@ -13087,11 +13087,14 @@ static jsval_t js_eval_bytecode_mode(ant_t *js, const char *buf, size_t len, sv_
   
   js_clear_error_site(js);   
   jsval_t result;
+  // TODO: this-newtarget-frame-migration
+  jsval_t saved_this = js->this_val;
 
   if (sv_dump_bytecode_unlikely) sv_disasm(js, func, js->filename);
   if (func->is_tla) result = sv_execute_entry_tla(js, func, js->this_val);
   else result = sv_execute_entry(js->vm, func, js->this_val, NULL, 0);
 
+  js->this_val = saved_this;
   return result;
 }
 

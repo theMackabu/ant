@@ -6,7 +6,6 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
-#include <sys/resource.h>
 #include <argtable3.h>
 #include <crprintf.h>
 
@@ -564,13 +563,8 @@ int main(int argc, char *argv[]) {
   }
   
   js_setstackbase(js, (void *)&stack_base);
-  {
-    struct rlimit rl;
-    if (getrlimit(RLIMIT_STACK, &rl) == 0 && rl.rlim_cur != RLIM_INFINITY)
-      js_setstacklimit(js, (size_t)rl.rlim_cur * 3 / 4);
-    else
-      js_setstacklimit(js, 512 * 1024);
-  }
+  js_setstacklimit(js, os_thread_stack_size() * 3 / 4);
+  
   proc_argv = build_process_argv(argc, argv, module_file, script_tail);
   ant_runtime_init(js, proc_argv.argc, proc_argv.argv, localstorage_file);
 

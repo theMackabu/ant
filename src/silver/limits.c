@@ -17,9 +17,11 @@
 
 int sv_user_stack_size_kb = 0;
 
-static size_t os_thread_stack_size(void) {
+size_t os_thread_stack_size(void) {
 #ifdef _WIN32
-  return 1024 * 1024;
+  ULONG_PTR low, high;
+  GetCurrentThreadStackLimits(&low, &high);
+  return (size_t)(high - low);
 #else
   struct rlimit rl;
   if (getrlimit(RLIMIT_STACK, &rl) == 0 && rl.rlim_cur != RLIM_INFINITY)

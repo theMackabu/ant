@@ -235,7 +235,7 @@ bool is_strict_reserved_name(const char *buf, size_t len) {
   return false;
 }
 
-static uint8_t parsekeyword(const char *buf, size_t len) {
+uint8_t sv_parsekeyword(const char *buf, size_t len) {
   switch (buf[0]) {
     case 'a':
       K("as", TOK_AS);
@@ -512,7 +512,7 @@ static uint8_t parseident(const char *buf, jsoff_t len, jsoff_t *tlen) {
       i++;
     }
     *tlen = i;
-    return parsekeyword(buf, i);
+    return sv_parsekeyword(buf, i);
   }
   
   if (c == '\\') {
@@ -566,12 +566,12 @@ slow_path_loop:;
   if (has_escapes) {
     char decoded[256];
     size_t decoded_len = decode_ident_escapes(buf, *tlen, decoded, sizeof(decoded));
-    uint8_t kw = parsekeyword(decoded, decoded_len);
+    uint8_t kw = sv_parsekeyword(decoded, decoded_len);
     if (kw != TOK_IDENTIFIER) return TOK_ERR;
     return TOK_IDENTIFIER;
   }
   
-  return parsekeyword(buf, *tlen);
+  return sv_parsekeyword(buf, *tlen);
 }
 
 static inline jsoff_t parse_decimal(const char *buf, jsoff_t maxlen, double *out) {
@@ -1158,3 +1158,4 @@ uint8_t sv_lexer_lookahead(sv_lexer_t *lx) {
   
   return tok;
 }
+

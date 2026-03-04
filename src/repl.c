@@ -28,10 +28,15 @@
 #include "silver/engine.h"
 #include "modules/io.h"
 
-#define MAX_HISTORY 512
-#define MAX_LINE_LENGTH 4096
+#include <crprintf.h>
+#include "highlight.h"
+
+#define MAX_HISTORY          512
+#define MAX_LINE_LENGTH      4096
 #define MAX_MULTILINE_LENGTH 65536
-#define INPUT char *line, int *pos, int *len, key_event_t *key, history_t *hist, const char *prompt
+
+#define INPUT \
+  char *line, int *pos, int *len, key_event_t *key, history_t *hist, const char *prompt
 
 static volatile sig_atomic_t ctrl_c_pressed = 0;
 
@@ -527,36 +532,63 @@ typedef enum {
 typedef struct { key_type_t type; int ch; } key_event_t;
 typedef void (*key_handler_t)(INPUT);
 
+static crprintf_compiled *hl_prog = NULL;
+static highlight_state hl_line_state = { .mode = HL_STATE_NORMAL, .template_depth = 0 };
+
+static void refresh_line(const char *line, int len, int pos, const char *prompt) {
+  fputs("\r\033[2K", stdout);
+  fputs(prompt, stdout);
+
+  if (crprintf_get_color() && len > 0 && len <= 2048) {
+    char tagged[8192];
+    char rendered[8192];
+    
+    highlight_state state = hl_line_state;
+    ant_highlight_stateful(line, (size_t)len, tagged, sizeof(tagged), &state);
+    
+    hl_prog = crprintf_recompile(hl_prog, tagged);
+    crprintf_state *rs = crprintf_state_new();
+    
+    crsprintf_compiled(rendered, sizeof(rendered), rs, hl_prog);
+    crprintf_state_free(rs);
+    
+    fputs(rendered, stdout);
+  } else if (len > 0) fwrite(line, 1, (size_t)len, stdout);
+  
+  if (pos < len) {
+    size_t prompt_len = strlen(prompt);
+    printf("\r\033[%zuC", prompt_len + (size_t)pos);
+  }
+
+  fflush(stdout);
+}
+
 static void cursor_move(int *pos, int len, int dir) {
   if (dir < 0 && *pos > 0) { printf("\033[D"); fflush(stdout); (*pos)--; }
   else if (dir > 0 && *pos < len) { printf("\033[C"); fflush(stdout); (*pos)++; }
 }
 
 static void line_set(char *line, int *pos, int *len, const char *str, const char *prompt) {
-  printf("\r\033[K%s%s", prompt, str);
-  fflush(stdout); strcpy(line, str);
+  strcpy(line, str);
   *len = (int)strlen(line); *pos = *len;
+  refresh_line(line, *len, *pos, prompt);
 }
 
-static void line_backspace(char *line, int *pos, int *len) {
+static void line_backspace(char *line, int *pos, int *len, const char *prompt) {
   if (*pos <= 0) return;
   
   memmove(line + *pos - 1, line + *pos, *len - *pos + 1);
   (*pos)--; (*len)--;
-  printf("\b\033[K%s", line + *pos);
-  for (int i = 0; i < *len - *pos; i++) printf("\033[D");
-  fflush(stdout);
+  refresh_line(line, *len, *pos, prompt);
 }
 
-static void line_insert(char *line, int *pos, int *len, int c) {
+static void line_insert(char *line, int *pos, int *len, int c, const char *prompt) {
   if (*len >= MAX_LINE_LENGTH - 1) return;
   
   memmove(line + *pos + 1, line + *pos, *len - *pos + 1);
   line[*pos] = (char)c;
   (*pos)++; (*len)++;
-  printf("%c%s", c, line + *pos);
-  for (int i = 0; i < *len - *pos; i++) printf("\033[D");
-  fflush(stdout);
+  refresh_line(line, *len, *pos, prompt);
 }
 
 #ifdef _WIN32
@@ -580,8 +612,6 @@ static key_event_t read_key(void) {
   if (isprint(c) || (unsigned char)c >= 0x80) return (key_event_t){ KEY_CHAR, c };
   return (key_event_t){ KEY_NONE, 0 };
 }
-#define TERM_INIT()
-#define TERM_RESTORE()
 #else
 static struct termios saved_tio;
 static key_event_t read_key(void) {
@@ -590,13 +620,20 @@ static key_event_t read_key(void) {
   if (c == EOF && !feof(stdin)) { clearerr(stdin); return (key_event_t){ KEY_EOF, 0 }; }
   if (c == EOF) return (key_event_t){ KEY_EOF, 0 };
   if (c == 27) {
-    if (getchar() == '[') {
-      switch (getchar()) {
-        case 'A': return (key_event_t){ KEY_UP, 0 };
-        case 'B': return (key_event_t){ KEY_DOWN, 0 };
-        case 'C': return (key_event_t){ KEY_RIGHT, 0 };
-        case 'D': return (key_event_t){ KEY_LEFT, 0 };
-      }
+    int seq1 = getchar();
+    if (seq1 == EOF) return (key_event_t){ KEY_NONE, 0 };
+    if (seq1 != '[') return (key_event_t){ KEY_NONE, 0 };
+    int seq2 = getchar();
+    if (seq2 == EOF) return (key_event_t){ KEY_NONE, 0 };
+    switch (seq2) {
+      case 'A': return (key_event_t){ KEY_UP, 0 };
+      case 'B': return (key_event_t){ KEY_DOWN, 0 };
+      case 'C': return (key_event_t){ KEY_RIGHT, 0 };
+      case 'D': return (key_event_t){ KEY_LEFT, 0 };
+    }
+    if (seq2 >= '0' && seq2 <= '9') {
+      int seq3 = getchar();
+      (void)seq3;
     }
     return (key_event_t){ KEY_NONE, 0 };
   }
@@ -605,14 +642,6 @@ static key_event_t read_key(void) {
   if (isprint(c) || (unsigned char)c >= 0x80) return (key_event_t){ KEY_CHAR, c };
   return (key_event_t){ KEY_NONE, 0 };
 }
-#define TERM_INIT() do { \
-  struct termios new_tio; \
-  tcgetattr(STDIN_FILENO, &saved_tio); \
-  new_tio = saved_tio; \
-  new_tio.c_lflag &= ~(ICANON | ECHO); \
-  tcsetattr(STDIN_FILENO, TCSANOW, &new_tio); \
-} while(0)
-#define TERM_RESTORE() tcsetattr(STDIN_FILENO, TCSANOW, &saved_tio)
 #endif
 
 static void handle_up(INPUT) {
@@ -627,39 +656,60 @@ static void handle_down(INPUT) {
 
 static void handle_left(INPUT) { cursor_move(pos, *len, -1); }
 static void handle_right(INPUT) { cursor_move(pos, *len, 1); }
-static void handle_backspace(INPUT) { line_backspace(line, pos, len); }
-static void handle_char(INPUT) { line_insert(line, pos, len, key->ch); }
+
+static void handle_backspace(INPUT) { line_backspace(line, pos, len, prompt); }
+static void handle_char(INPUT) { line_insert(line, pos, len, key->ch, prompt); }
 
 static key_handler_t handlers[] = {
-  [KEY_UP] = handle_up, [KEY_DOWN] = handle_down,
-  [KEY_LEFT] = handle_left, [KEY_RIGHT] = handle_right,
-  [KEY_BACKSPACE] = handle_backspace, [KEY_CHAR] = handle_char,
+  [KEY_UP] = handle_up,
+  [KEY_DOWN] = handle_down,
+  [KEY_LEFT] = handle_left,
+  [KEY_RIGHT] = handle_right,
+  [KEY_BACKSPACE] = handle_backspace,
+  [KEY_CHAR] = handle_char,
 };
 
-static char* read_line_with_history(history_t *hist, ant_t *js, const char *prompt) {
+static inline void term_restore(void) {
+#ifndef _WIN32
+  tcsetattr(STDIN_FILENO, TCSANOW, &saved_tio);
+#endif
+}
+
+static char *read_line_with_history(history_t *hist, ant_t *js, const char *prompt) {
   char *line = malloc(MAX_LINE_LENGTH);
   int pos = 0, len = 0; line[0] = '\0';
   
-  TERM_INIT();
+  #ifndef _WIN32
+  struct termios new_tio;
+  tcgetattr(STDIN_FILENO, &saved_tio);
+  new_tio = saved_tio;
+  new_tio.c_lflag &= ~(ICANON | ECHO);
+  tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
+  #endif
+
+  again:
+  key_event_t key = read_key();
   
-  do {
-    key_event_t key = read_key();
-    
-    if (key.type == KEY_ENTER) {
-      printf("\n"); fflush(stdout);
-      TERM_RESTORE(); return line;
-    }
-    
-    if (key.type == KEY_EOF) {
-      printf("\n"); fflush(stdout);
-      TERM_RESTORE();
-      free(line); return NULL;
-    }
-    
-    if (handlers[key.type]) {
-      handlers[key.type](line, &pos, &len, &key, hist, prompt);
-    }
-  } while (1);
+  switch (key.type) {
+  case KEY_ENTER:
+    putchar('\n');
+    term_restore();
+    return line;
+  
+  case KEY_EOF:
+    putchar('\n');
+    term_restore();
+    free(line);
+    return NULL;
+  
+  default:
+    if (handlers[key.type]) handlers[key.type](
+      line, &pos, &len, &key, hist, prompt
+    );
+    break;
+  }
+  
+  goto again;
 }
 
 typedef struct {
@@ -758,6 +808,14 @@ void ant_repl_run() {
   
   while (1) {
     const char *prompt = multiline_buf ? "| " : "> ";
+
+    if (multiline_buf && multiline_len > 0) {
+      char scratch[8192];
+      // TODO: dry
+      hl_line_state = (highlight_state){ .mode = HL_STATE_NORMAL, .template_depth = 0 };
+      ant_highlight_stateful(multiline_buf, multiline_len, scratch, sizeof(scratch), &hl_line_state);
+    } else hl_line_state = (highlight_state){ .mode = HL_STATE_NORMAL, .template_depth = 0 };
+
     fputs(prompt, stdout);
     fflush(stdout);
     
@@ -857,6 +915,8 @@ void ant_repl_run() {
   }
   
   if (multiline_buf) free(multiline_buf);
+  if (hl_prog) { crprintf_compiled_free(hl_prog); hl_prog = NULL; }
+  
   repl_decl_registry_free(&decl_registry);
   g_repl_decl_registry = NULL;
   

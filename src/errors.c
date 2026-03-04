@@ -2,11 +2,13 @@
 #include "internal.h"
 #include "silver/engine.h"
 #include "modules/io.h"
+#include "highlight.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
 #include <limits.h>
+#include <crprintf.h>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -475,36 +477,48 @@ static bool append_error_context(
 
   int gutter_w = count_digits_int(error_line_no);
   int src_cols_limit = error_context_src_cols_limit(gutter_w);
-  int line_no = first_line_no;
-  jsoff_t cur = ctx_start;
-  
-  while (cur <= err_line_end && cur < src_len) {
-    jsoff_t line_start = cur;
-    jsoff_t line_end = cur;
-    
-    while (line_end < src_len && src[line_end] != '\n' && src[line_end] != '\0') line_end++;
-    int line_len = (int)(line_end - line_start);
-    bool clipped = (src_cols_limit > 0 && line_len > src_cols_limit);
-    int shown_len = clipped ? src_cols_limit : line_len;
-    
-    *n = append_errbuf_fmt(eb, *n, "\n%*d | %.*s", gutter_w, line_no, shown_len, src + line_start);
-    if (clipped) *n = append_errbuf_fmt(eb, *n, "...");
 
-    if (line_start == err_line_start) {
+  char tagged[4096]; char rendered[8192];
+  highlight_state hl_state = { .mode = HL_STATE_NORMAL, .template_depth = 0 };
+
+  jsoff_t cur = ctx_start;
+  int line_no = first_line_no;
+
+  while (cur <= err_line_end && cur < src_len) {
+    jsoff_t ls = cur, le = cur;
+    while (le < src_len && src[le] != '\n' && src[le] != '\0') le++;
+    
+    int line_len = (int)(le - ls);
+    bool was_clipped = (src_cols_limit > 0 && line_len > src_cols_limit);
+
+    if (!io_no_color) {
+      highlight_js_line_clipped(
+        src + ls, (size_t)line_len, (size_t)src_cols_limit,
+        tagged, sizeof(tagged), &hl_state
+      );
+      crsprintf_stateful(rendered, sizeof(rendered), NULL, tagged);
+      *n = append_errbuf_fmt(eb, *n, "\n%*d | %s", gutter_w, line_no, rendered);
+    } else {
+      int shown = was_clipped ? src_cols_limit : line_len;
+      *n = append_errbuf_fmt(eb, *n, "\n%*d | %.*s", gutter_w, line_no, shown, src + ls);
+    }
+
+    if (was_clipped) *n = append_errbuf_fmt(eb, *n, "...");
+    if (ls == err_line_start) {
       *n = append_errbuf_fmt(eb, *n, "\n%*s   ", gutter_w, "");
       int caret_col = error_col;
       int caret_span = error_span_cols;
-      
-      if (clipped) {
-        int max_col = shown_len > 0 ? shown_len : 1;
+      if (was_clipped) {
+        int max_col = src_cols_limit > 0 ? src_cols_limit : 1;
         if (caret_col > max_col) caret_col = max_col;
         if (caret_span > max_col - caret_col + 1) caret_span = max_col - caret_col + 1;
         if (caret_span < 1) caret_span = 1;
-      } append_error_caret(eb, n, caret_col, caret_span);
+      }
+      append_error_caret(eb, n, caret_col, caret_span);
     }
 
-    if (line_end >= src_len || src[line_end] == '\0') break;
-    cur = line_end + 1; line_no++;
+    if (le >= src_len || src[le] == '\0') break;
+    cur = le + 1; line_no++;
   }
 
   return true;

@@ -5,6 +5,7 @@
 
 typedef struct sv_vm sv_vm_t;
 typedef struct sv_func sv_func_t;
+size_t os_thread_stack_size(void);
 
 typedef enum {
   SV_VM_MAIN,

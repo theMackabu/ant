@@ -48,6 +48,7 @@ void sv_lexer_pop_source(sv_lexer_t *lx, const sv_lexer_checkpoint_t *cp);
 
 uint8_t sv_lexer_next(sv_lexer_t *lx);
 uint8_t sv_lexer_lookahead(sv_lexer_t *lx);
+uint8_t sv_parsekeyword(const char *buf, size_t len);
 
 bool is_space(int c);
 bool is_digit(int c);
