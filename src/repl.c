@@ -533,7 +533,7 @@ typedef struct { key_type_t type; int ch; } key_event_t;
 typedef void (*key_handler_t)(INPUT);
 
 static crprintf_compiled *hl_prog = NULL;
-static highlight_state hl_line_state = { .mode = HL_STATE_NORMAL, .template_depth = 0 };
+static highlight_state hl_line_state = HL_STATE_INIT;
 
 static void refresh_line(const char *line, int len, int pos, const char *prompt) {
   fputs("\r\033[2K", stdout);
@@ -811,10 +811,9 @@ void ant_repl_run() {
 
     if (multiline_buf && multiline_len > 0) {
       char scratch[8192];
-      // TODO: dry
-      hl_line_state = (highlight_state){ .mode = HL_STATE_NORMAL, .template_depth = 0 };
+      hl_line_state = HL_STATE_INIT;
       ant_highlight_stateful(multiline_buf, multiline_len, scratch, sizeof(scratch), &hl_line_state);
-    } else hl_line_state = (highlight_state){ .mode = HL_STATE_NORMAL, .template_depth = 0 };
+    } else hl_line_state = HL_STATE_INIT;
 
     fputs(prompt, stdout);
     fflush(stdout);

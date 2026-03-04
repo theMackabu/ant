@@ -18,6 +18,8 @@ typedef struct {
   int template_depth;
 } highlight_state;
 
+#define HL_STATE_INIT ((highlight_state){ .mode = HL_STATE_NORMAL, .template_depth = 0 })
+
 typedef enum {
   HL_NONE,
   HL_KEYWORD,
@@ -68,7 +70,7 @@ static inline highlight_state hl_iter_state(const hl_iter *it) { return it->stat
 void hl_iter_init(hl_iter *it, const char *input, size_t input_len, const highlight_state *state);
 bool hl_iter_next(hl_iter *it, hl_span *out);
 
-int ant_highlighl(
+int ant_highlight(
   const char *input, size_t input_len,
   char *out, size_t out_size
 );

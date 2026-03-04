@@ -96,7 +96,7 @@ void hl_iter_init(hl_iter *it, const char *input, size_t input_len, const highli
   it->input = input;
   it->input_len = input_len;
   it->pos = 0;
-  it->state = state ? *state : (highlight_state){ .mode = HL_STATE_NORMAL, .template_depth = 0 };
+  it->state = state ? *state : HL_STATE_INIT;
   it->ctx = HL_CTX_NONE;
 }
 
@@ -479,8 +479,8 @@ int ant_highlight_stateful(
   return (int)o.pos;
 }
 
-int ant_highlighl(const char *input, size_t input_len, char *out, size_t out_size) {
-  highlight_state state = { .mode = HL_STATE_NORMAL, .template_depth = 0 };
+int ant_highlight(const char *input, size_t input_len, char *out, size_t out_size) {
+  highlight_state state = HL_STATE_INIT;
   return ant_highlight_stateful(input, input_len, out, out_size, &state);
 }
 

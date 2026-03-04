@@ -479,7 +479,7 @@ static bool append_error_context(
   int src_cols_limit = error_context_src_cols_limit(gutter_w);
 
   char tagged[4096]; char rendered[8192];
-  highlight_state hl_state = { .mode = HL_STATE_NORMAL, .template_depth = 0 };
+  highlight_state hl_state = HL_STATE_INIT;
 
   jsoff_t cur = ctx_start;
   int line_no = first_line_no;
