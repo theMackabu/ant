@@ -29,10 +29,16 @@ static const op_entry_t operators[] = {
 
 static hl_token_class lookup_extra_keyword(const char *word, size_t len) {
   switch (word[0]) {
-  case 'a': K("abstract", HL_TYPE); break;
+  case 'a':
+    K("abstract", HL_TYPE);
+    K("async", HL_KEYWORD_ITALIC);
+    break;
   case 'b': K("boolean", HL_TYPE_BOOLEAN); break;
   case 'd': K("declare", HL_TYPE); break;
-  case 'e': K("enum", HL_TYPE); break;
+  case 'e':
+    K("enum", HL_TYPE);
+    K("export", HL_KEYWORD_ITALIC);
+    break;
   case 'g': K("global", HL_KEYWORD_ITALIC); break;
   case 'i':
     K("interface", HL_TYPE);
@@ -208,12 +214,12 @@ static bool try_parse_regex_literal(const char *input, size_t input_len, size_t 
 }
 
 static size_t skip_inline_ws_forward(const char *input, size_t input_len, size_t i) {
-  while (i < input_len && (input[i] == ' ' || input[i] == '\t')) i++;
+  while (i < input_len && (input[i] == ' ' || input[i] == '\t' || input[i] == '\n' || input[i] == '\r')) i++;
   return i;
 }
 
 static size_t skip_inline_ws_backward(const char *input, size_t i) {
-  while (i > 0 && (input[i - 1] == ' ' || input[i - 1] == '\t')) i--;
+  while (i > 0 && (input[i - 1] == ' ' || input[i - 1] == '\t' || input[i - 1] == '\n' || input[i - 1] == '\r')) i--;
   return i;
 }
 
@@ -229,6 +235,11 @@ static bool read_prev_word(const char *input, size_t end, size_t *word_start, si
   return true;
 }
 
+static bool is_arrow_after(const char *input, size_t input_len, size_t pos) {
+  size_t i = skip_inline_ws_forward(input, input_len, pos);
+  return (i + 1 < input_len && input[i] == '=' && input[i + 1] == '>');
+}
+
 static bool has_function_keyword_before_paren(const char *input, size_t open_paren) {
   size_t word_start = 0;
   size_t word_len = 0;
@@ -238,6 +249,30 @@ static bool has_function_keyword_before_paren(const char *input, size_t open_par
 
   if (!read_prev_word(input, word_start, &word_start, &word_len)) return false;
   return (word_len == 8 && memcmp(input + word_start, "function", 8) == 0);
+}
+
+static bool is_control_paren_prefix(const char *input, size_t open_paren) {
+  size_t word_start = 0;
+  size_t word_len = 0;
+  if (!read_prev_word(input, open_paren, &word_start, &word_len)) return false;
+
+#define C(s) (word_len == sizeof(s) - 1 && memcmp(input + word_start, s, sizeof(s) - 1) == 0)
+  return C("if") || C("for") || C("while") || C("switch") || C("catch") || C("with");
+#undef C
+}
+
+static bool is_likely_function_param_paren(
+  const char *input, size_t input_len,
+  size_t open_paren, size_t close_paren
+) {
+  if (is_arrow_after(input, input_len, close_paren + 1)) return true;
+  if (has_function_keyword_before_paren(input, open_paren)) return true;
+
+  size_t after = skip_inline_ws_forward(input, input_len, close_paren + 1);
+  if (after < input_len && input[after] == '{' && !is_control_paren_prefix(input, open_paren))
+    return true;
+
+  return false;
 }
 
 static bool find_enclosing_open_paren(const char *input, size_t pos, size_t *open_paren) {
@@ -281,11 +316,6 @@ static bool find_matching_close_paren(const char *input, size_t input_len, size_
   return false;
 }
 
-static bool is_arrow_after(const char *input, size_t input_len, size_t pos) {
-  size_t i = skip_inline_ws_forward(input, input_len, pos);
-  return (i + 1 < input_len && input[i] == '=' && input[i + 1] == '>');
-}
-
 static bool is_function_argument_identifier(const char *input, size_t input_len, size_t start, size_t end) {
   if (is_arrow_after(input, input_len, end)) {
     size_t left = skip_inline_ws_backward(input, start);
@@ -296,17 +326,15 @@ static bool is_function_argument_identifier(const char *input, size_t input_len,
   size_t prev = skip_inline_ws_backward(input, start);
   if (prev == 0) return false;
   unsigned char prev_ch = (unsigned char)input[prev - 1];
-  if (!(prev_ch == '(' || prev_ch == ',')) return false;
+  if (!(prev_ch == '(' || prev_ch == ',' || prev_ch == '{' || prev_ch == '[' || prev_ch == ':'))
+    return false;
 
   size_t open_paren = 0;
   if (!find_enclosing_open_paren(input, start, &open_paren)) return false;
 
   size_t close_paren = 0;
-  if (find_matching_close_paren(input, input_len, open_paren, &close_paren) &&
-      is_arrow_after(input, input_len, close_paren + 1))
-    return true;
-
-  return has_function_keyword_before_paren(input, open_paren);
+  if (!find_matching_close_paren(input, input_len, open_paren, &close_paren)) return false;
+  return is_likely_function_param_paren(input, input_len, open_paren, close_paren);
 }
 
 bool hl_iter_next(hl_iter *it, hl_span *out) {
@@ -691,7 +719,6 @@ switch (cls) {
   case HL_STRING_DELIMITER: return "#FF7265";
   case HL_STRING_ESCAPE:    return "#F4AAA3";
   case HL_STRING_KEY:       return "#CCA3F4";
-  case HL_STRING_KEYWORD:   return "#FFE5CC";
   case HL_STRING_TEMPLATE:  return "#FFB265";
   
   case HL_REGEX:            return "#FFB265";
@@ -843,8 +870,6 @@ int ant_highlight_stateful(
       const char *piece = input + span.off;
       hl_token_class body_cls = HL_STRING;
       if (span_is_template_string(piece, span.len)) body_cls = HL_STRING_TEMPLATE;
-      else if (is_string_key_context(input, input_len, span.off, span.len)) body_cls = HL_STRING_KEY;
-      else if (is_string_keyword_literal(piece, span.len)) body_cls = HL_STRING_KEYWORD;
       ob_write_string_literal(&o, piece, span.len, body_cls);
     } else if (span.cls == HL_REGEX) ob_write_regex_literal(&o, input + span.off, span.len);
     else ob_write_with_class(&o, span.cls, input + span.off, span.len);
@@ -899,8 +924,6 @@ int highlight_js_line_clipped(
         const char *piece = line + span.off;
         hl_token_class body_cls = HL_STRING;
         if (span_is_template_string(piece, emit_len)) body_cls = HL_STRING_TEMPLATE;
-        else if (is_string_key_context(line, line_len, span.off, emit_len)) body_cls = HL_STRING_KEY;
-        else if (is_string_keyword_literal(piece, emit_len)) body_cls = HL_STRING_KEYWORD;
         ob_write_string_literal(&o, piece, emit_len, body_cls);
       } else if (span.cls == HL_REGEX) ob_write_regex_literal(&o, line + span.off, emit_len);
       else ob_write_with_class(&o, span.cls, line + span.off, emit_len);
