@@ -124,6 +124,18 @@ static inline size_t next_pow2(size_t n) {
   return n + 1;
 }
 
+static inline bool gc_stack_word_readable(uintptr_t addr) {
+#if ANT_HAS_ASAN
+  return __asan_region_is_poisoned((void *)addr, sizeof(uint64_t)) == NULL;
+#else
+  return true;
+#endif
+}
+
+static inline bool gc_off_has_bytes(ant_offset_t off, ant_offset_t need, ant_offset_t brk) {
+  return off <= brk && need <= brk - off;
+}
+
 static void gc_update_func_constants(gc_ctx_t *ctx, sv_func_t *func, int depth) {
   if (!func || depth > 1024) return;
   if (func->gc_epoch == gc_epoch_counter) return;
@@ -344,6 +356,7 @@ static ant_offset_t gc_alloc(gc_ctx_t *ctx, size_t size) {
   return off;
 }
 
+
 static ant_offset_t gc_copy_string(gc_ctx_t *ctx, ant_offset_t old_off) {
   if (old_off >= ctx->js->brk) return old_off;
   
@@ -387,20 +400,80 @@ static ant_offset_t gc_copy_string(gc_ctx_t *ctx, ant_offset_t old_off) {
   return new_off;
 }
 
+typedef struct {
+  ant_offset_t total_aligned;
+  ant_offset_t limbs_off;
+  uint32_t limb_count;
+  uint8_t sign;
+} gc_bigint_meta_t;
+
+static bool gc_read_bigint_meta(
+  gc_ctx_t *ctx,
+  ant_offset_t old_off,
+  ant_offset_t old_brk,
+  gc_bigint_meta_t *meta
+) {
+  ant_offset_t header = gc_loadoff(ctx->js->mem, old_off);
+  if ((header & GC_BIGINT_HEADER_LOW_MASK) != 0) return false;
+
+  ant_offset_t payload = header >> GC_BIGINT_HEADER_SHIFT;
+  const ant_offset_t fixed_payload = (ant_offset_t)(sizeof(uint32_t) + sizeof(uint32_t));
+  if (payload < fixed_payload + (ant_offset_t)sizeof(uint32_t)) return false;
+
+  ant_offset_t total = payload + (ant_offset_t)sizeof(ant_offset_t);
+  total = (total + 7) & ~(ant_offset_t)7;
+  if (!gc_off_has_bytes(old_off, total, old_brk)) return false;
+
+  ant_offset_t sign_off = old_off + (ant_offset_t)sizeof(ant_offset_t);
+  uint8_t sign = ctx->js->mem[sign_off];
+  if (sign > 1) return false;
+
+  ant_offset_t count_off = old_off + (ant_offset_t)sizeof(ant_offset_t) + (ant_offset_t)sizeof(uint32_t);
+  uint32_t limb_count = 0;
+  memcpy(&limb_count, &ctx->js->mem[count_off], sizeof(limb_count));
+  if (limb_count == 0) return false;
+
+  ant_offset_t expected_payload = fixed_payload + (ant_offset_t)limb_count * (ant_offset_t)sizeof(uint32_t);
+  if (expected_payload != payload) return false;
+
+  ant_offset_t limbs_off = count_off + (ant_offset_t)sizeof(uint32_t);
+  uint32_t top_limb = 0;
+  memcpy(
+    &top_limb,
+    &ctx->js->mem[limbs_off + (ant_offset_t)(limb_count - 1) * (ant_offset_t)sizeof(uint32_t)],
+    sizeof(top_limb)
+  );
+  if (top_limb == 0 && limb_count > 1) return false;
+
+  if (limb_count == 1) {
+    uint32_t limb0 = 0;
+    memcpy(&limb0, &ctx->js->mem[limbs_off], sizeof(limb0));
+    if (limb0 == 0 && sign != 0) return false;
+  }
+
+  if (meta) {
+    meta->total_aligned = total;
+    meta->limbs_off = limbs_off;
+    meta->limb_count = limb_count;
+    meta->sign = sign;
+  }
+
+  return true;
+}
+
 static ant_offset_t gc_copy_bigint(gc_ctx_t *ctx, ant_offset_t old_off) {
   if (old_off >= ctx->js->brk) return old_off;
   
   ant_offset_t new_off = fwd_lookup(&ctx->fwd, old_off);
   if (new_off != (ant_offset_t)~0) return new_off;
+
+  gc_bigint_meta_t meta;
+  if (!gc_read_bigint_meta(ctx, old_off, ctx->js->brk, &meta)) return old_off;
   
-  ant_offset_t header = gc_loadoff(ctx->js->mem, old_off);
-  size_t total = (header >> 4) + sizeof(ant_offset_t);
-  total = (total + 7) / 8 * 8;
-  
-  new_off = gc_alloc(ctx, total);
+  new_off = gc_alloc(ctx, (size_t)meta.total_aligned);
   if (new_off == (ant_offset_t)~0) return old_off;
   
-  memcpy(&ctx->new_mem[new_off], &ctx->js->mem[old_off], total);
+  memcpy(&ctx->new_mem[new_off], &ctx->js->mem[old_off], (size_t)meta.total_aligned);
   if (!fwd_add(&ctx->fwd, old_off, new_off)) ctx->failed = true;
   mark_set(ctx, old_off);
   
@@ -713,18 +786,6 @@ static inline bool gc_get_stack_bounds(uintptr_t base, uintptr_t sp, uintptr_t *
   return true;
 }
 
-static inline bool gc_stack_word_readable(uintptr_t addr) {
-#if ANT_HAS_ASAN
-  return __asan_region_is_poisoned((void *)addr, sizeof(uint64_t)) == NULL;
-#else
-  return true;
-#endif
-}
-
-static inline bool gc_off_has_bytes(ant_offset_t off, ant_offset_t need, ant_offset_t brk) {
-  return off <= brk && need <= brk - off;
-}
-
 static inline bool gc_stack_word_valid(gc_ctx_t *ctx, uint8_t type, ant_offset_t old_off, ant_offset_t old_brk) {
   if (old_off == 0 || old_off >= old_brk) return false;
   if (!gc_off_has_bytes(old_off, (ant_offset_t)sizeof(ant_offset_t), old_brk)) return false;
@@ -753,20 +814,7 @@ static inline bool gc_stack_word_valid(gc_ctx_t *ctx, uint8_t type, ant_offset_t
       return size != (ant_offset_t)~0 && gc_off_has_bytes(old_off, size, old_brk);
     }
     case T_BIGINT: {
-      if ((header & GC_BIGINT_HEADER_LOW_MASK) != 0) return false;
-      ant_offset_t payload = header >> GC_BIGINT_HEADER_SHIFT;
-      if (payload < 2) return false;
-      
-      ant_offset_t total = payload + (ant_offset_t)sizeof(ant_offset_t);
-      total = (total + 7) & ~(ant_offset_t)7;
-      if (!gc_off_has_bytes(old_off, total, old_brk)) return false;
-      
-      ant_offset_t sign_off = old_off + (ant_offset_t)sizeof(ant_offset_t);
-      uint8_t sign = ctx->js->mem[sign_off];
-      if (sign > 1) return false;
-      
-      ant_offset_t nul_off = sign_off + payload - 1;
-      return ctx->js->mem[nul_off] == 0;
+      return gc_read_bigint_meta(ctx, old_off, old_brk, NULL);
     }
     case T_SYMBOL: {
       if ((header & GC_SYM_HEADER_LOW_MASK) != 0) return false;

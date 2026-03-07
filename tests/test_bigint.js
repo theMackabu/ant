@@ -13,6 +13,23 @@ function test(name, actual, expected) {
   }
 }
 
+function testThrows(name, fn, expectedMessagePart) {
+  try {
+    fn();
+    console.log('FAIL:', name, '- expected throw');
+    failed++;
+  } catch (err) {
+    const msg = String(err);
+    if (msg.indexOf(expectedMessagePart) !== -1) {
+      console.log('PASS:', name);
+      passed++;
+    } else {
+      console.log('FAIL:', name, '- wrong error:', msg);
+      failed++;
+    }
+  }
+}
+
 console.log('=== BigInt Literals ===');
 test('123n', 123n, '123');
 test('0n', 0n, '0');
@@ -98,6 +115,35 @@ const big2 = 98765432109876543210987654321n;
 test('big1 + big2', big1 + big2, '111111111011111111101111111110');
 test('big2 - big1', big2 - big1, '86419753208641975320864197532');
 test('big1 * 2n', big1 * 2n, '24691357802469135780246913578');
+
+console.log('\n=== BigInt Shift Semantics ===');
+test('8n >> 1n', 8n >> 1n, '4');
+test('-3n >> 1n (floor)', -3n >> 1n, '-2');
+test('-5n >> 1n (floor)', -5n >> 1n, '-3');
+test('-1n >> 100n', -1n >> 100n, '-1');
+test('1n << 130n', 1n << 130n, '1361129467683753853853498429727072845824');
+test('(-1n) << 65n', (-1n) << 65n, '-36893488147419103232');
+testThrows('1n >>> 0n throws TypeError', () => (1n >>> 0n), 'BigInts have no unsigned right shift');
+
+console.log('\n=== BigInt Division and Mod Edge Cases ===');
+const limbA = (1n << 200n) + (1n << 129n) + 12345678901234567890n;
+const limbB = (1n << 73n) + 12345n;
+test('multi-limb divide', limbA / limbB, '170141183460469231509371611710366941474');
+test('multi-limb modulo', limbA % limbB, '5527003422616403339840');
+test('negative divide truncates toward zero', -19n / 4n, '-4');
+test('negative modulo keeps dividend sign', -19n % 4n, '-3');
+
+console.log('\n=== BigInt toString(radix) ===');
+const rad = (1n << 128n) + (1n << 64n) + 255n;
+test('radix 10', rad.toString(10), '340282366920938463481821351505477763327');
+test('radix 16', rad.toString(16), '1000000000000000100000000000000ff');
+test('radix 2 suffix', rad.toString(2).slice(-8), '11111111');
+
+console.log('\n=== BigInt.asIntN / asUintN ===');
+test('BigInt.asIntN(8, 255n)', BigInt.asIntN(8, 255n), '-1');
+test('BigInt.asIntN(8, 128n)', BigInt.asIntN(8, 128n), '-128');
+test('BigInt.asUintN(8, -1n)', BigInt.asUintN(8, -1n), '255');
+test('BigInt.asUintN(5, -3n)', BigInt.asUintN(5, -3n), '29');
 
 console.log('\n=== Summary ===');
 console.log('Passed:', passed);

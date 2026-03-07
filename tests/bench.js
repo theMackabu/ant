@@ -567,6 +567,21 @@ function bigint256_arith(n) {
   return bigint_arith(n, 256);
 }
 
+function bigint_shift_floor(n) {
+  var i, j, x, y;
+  x = (BigInt(1) << BigInt(260)) + (BigInt(1) << BigInt(131)) + BigInt(123456789);
+  y = BigInt(0);
+  for (j = 0; j < n; j++) {
+    for (i = 0; i < 500; i++) {
+      x = (x << BigInt(3)) - BigInt(7);
+      y += x >> BigInt(5);
+      y += (-x) >> BigInt(7);
+    }
+  }
+  global_res = x + y;
+  return n * 1000;
+}
+
 function set_collection_add(n) {
   var s,
     i,
@@ -970,6 +985,7 @@ function main(argc, argv, g) {
     /* BigInt test */
     test_list.push(bigint64_arith);
     test_list.push(bigint256_arith);
+    test_list.push(bigint_shift_floor);
   }
 
   for (i = 1; i < argc; ) {
