@@ -20,7 +20,7 @@
 #include "modules/buffer.h"
 #include "modules/symbol.h"
 
-static int ensure_crypto_init(ant_t *js) {
+int ensure_crypto_init(void) {
   static int crypto_initialized = 0;
   
   if (!crypto_initialized) {
@@ -53,11 +53,7 @@ int uuidv7_new(uint8_t *uuid_out) {
 
 // crypto.random()
 static ant_value_t js_crypto_random(ant_t *js, ant_value_t *args, int nargs) {
-  (void) args;
-  (void) nargs;
-  (void) js;
-  
-  if (ensure_crypto_init(js) < 0) {
+  if (ensure_crypto_init() < 0) {
     return js_mkerr(js, "libsodium initialization failed");
   }
   
@@ -71,7 +67,7 @@ static ant_value_t js_crypto_random_bytes(ant_t *js, ant_value_t *args, int narg
     return js_mkerr(js, "randomBytes requires a length argument");
   }
   
-  if (ensure_crypto_init(js) < 0) {
+  if (ensure_crypto_init() < 0) {
     return js_mkerr(js, "libsodium initialization failed");
   }
   
@@ -103,10 +99,7 @@ static ant_value_t js_crypto_random_bytes(ant_t *js, ant_value_t *args, int narg
 
 // crypto.randomUUID()
 static ant_value_t js_crypto_random_uuid(ant_t *js, ant_value_t *args, int nargs) {
-  (void) args;
-  (void) nargs;
-  
-  if (ensure_crypto_init(js) < 0) {
+  if (ensure_crypto_init() < 0) {
     return js_mkerr(js, "libsodium initialization failed");
   }
   
@@ -131,10 +124,7 @@ static ant_value_t js_crypto_random_uuid(ant_t *js, ant_value_t *args, int nargs
 
 // crypto.randomUUIDv7()
 static ant_value_t js_crypto_random_uuidv7(ant_t *js, ant_value_t *args, int nargs) {
-  (void) args;
-  (void) nargs;
-  
-  if (ensure_crypto_init(js) < 0) {
+  if (ensure_crypto_init() < 0) {
     return js_mkerr(js, "libsodium initialization failed");
   }
   
@@ -157,7 +147,7 @@ static ant_value_t js_crypto_get_random_values(ant_t *js, ant_value_t *args, int
     return js_mkerr(js, "getRandomValues requires a TypedArray argument");
   }
   
-  if (ensure_crypto_init(js) < 0) {
+  if (ensure_crypto_init() < 0) {
     return js_mkerr(js, "libsodium initialization failed");
   }
   

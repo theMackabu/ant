@@ -471,7 +471,7 @@ ant_value_t bigint_shift_right_logical(ant_t *js, ant_value_t value, uint64_t sh
   return js_mkerr_typed(js, JS_ERR_TYPE, "BigInts have no unsigned right shift, use >> instead");
 }
 
-size_t bigint_compare(ant_t *js, ant_value_t a, ant_value_t b) {
+int bigint_compare(ant_t *js, ant_value_t a, ant_value_t b) {
   bool aneg = bigint_is_negative(js, a);
   bool bneg = bigint_is_negative(js, b);
   

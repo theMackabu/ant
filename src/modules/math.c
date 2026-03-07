@@ -1,9 +1,23 @@
-#include <stdlib.h>
-#include <time.h>
+#include <sodium.h>
+#include <float.h>
 
 #include "ant.h"
+#include "errors.h"
 #include "internal.h"
 #include "runtime.h"
+#include "modules/crypto.h"
+
+#if DBL_MANT_DIG >= 64
+#error "Unsupported double mantissa width for Math.random"
+#endif
+
+enum {
+  MATH_RANDOM_MANTISSA_BITS = DBL_MANT_DIG,
+  MATH_RANDOM_DISCARD_BITS = 64 - DBL_MANT_DIG,
+};
+
+static const double math_random_scale =
+  1.0 / (double)(UINT64_C(1) << MATH_RANDOM_MANTISSA_BITS);
 
 static ant_value_t builtin_Math_abs(ant_t *js, ant_value_t *args, int nargs) {
   double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
@@ -68,13 +82,13 @@ static ant_value_t builtin_Math_ceil(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t builtin_Math_clz32(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return tov(32);
-  double x = js_to_number(js, args[0]);
-  if (isnan(x) || isinf(x)) return tov(32);
-  uint32_t n = (uint32_t)x;
+  uint32_t n = js_to_uint32(js_to_number(js, args[0]));
   if (n == 0) return tov(32);
-  int count = 0;
-  while ((n & 0x80000000U) == 0) { count++; n <<= 1; }
-  return tov((double)count);
+  int lz = __builtin_clz(n);
+  if (sizeof(unsigned int) > sizeof(uint32_t)) {
+    lz -= (int)((sizeof(unsigned int) - sizeof(uint32_t)) * 8);
+  }
+  return tov((double)lz);
 }
 
 static ant_value_t builtin_Math_cos(ant_t *js, ant_value_t *args, int nargs) {
@@ -115,30 +129,22 @@ static ant_value_t builtin_Math_fround(ant_t *js, ant_value_t *args, int nargs) 
 
 static ant_value_t builtin_Math_hypot(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return tov(0.0);
-  double sum = 0.0;
+  double acc = 0.0;
+  bool saw_nan = false;
   for (int i = 0; i < nargs; i++) {
     double v = js_to_number(js, args[i]);
-    if (isnan(v)) return tov(JS_NAN);
-    sum += v * v;
+    if (isinf(v)) return tov(JS_INF);
+    if (isnan(v)) { saw_nan = true; continue; }
+    acc = hypot(acc, v);
   }
-  return tov(sqrt(sum));
-}
-
-static int32_t toInt32(double d) {
-  if (isnan(d) || isinf(d) || d == 0) return 0;
-  double int_val = trunc(d);
-  double two32 = (double)(1ULL << 32);
-  double two31 = (double)(1ULL << 31);
-  double mod_val = fmod(int_val, two32);
-  if (mod_val < 0) mod_val += two32;
-  if (mod_val >= two31) mod_val -= two32;
-  return (int32_t)mod_val;
+  if (saw_nan) return tov(JS_NAN);
+  return tov(acc);
 }
 
 static ant_value_t builtin_Math_imul(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return tov(0);
-  int32_t a = toInt32(js_to_number(js, args[0]));
-  int32_t b = toInt32(js_to_number(js, args[1]));
+  int32_t a = js_to_int32(js_to_number(js, args[0]));
+  int32_t b = js_to_int32(js_to_number(js, args[1]));
   return tov((double)((int32_t)((uint32_t)a * (uint32_t)b)));
 }
 
@@ -168,22 +174,35 @@ static ant_value_t builtin_Math_log2(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t builtin_Math_max(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return tov(JS_NEG_INF);
-  double max_val = JS_NEG_INF;
-  for (int i = 0; i < nargs; i++) {
+  double max_val = js_to_number(js, args[0]);
+  if (isnan(max_val)) return tov(JS_NAN);
+  for (int i = 1; i < nargs; i++) {
     double v = js_to_number(js, args[i]);
     if (isnan(v)) return tov(JS_NAN);
-    if (v > max_val) max_val = v;
+    if (v > max_val) { max_val = v; continue; }
+    if (v == 0.0 && max_val == 0.0 && !signbit(v) && signbit(max_val)) {
+      max_val = v;
+    }
   }
   return tov(max_val);
 }
 
 static ant_value_t builtin_Math_min(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return tov(JS_INF);
-  double min_val = JS_INF;
-  for (int i = 0; i < nargs; i++) {
+  double min_val = js_to_number(js, args[0]);
+  if (isnan(min_val)) return tov(JS_NAN);
+  for (int i = 1; i < nargs; i++) {
     double v = js_to_number(js, args[i]);
     if (isnan(v)) return tov(JS_NAN);
-    if (v < min_val) min_val = v;
+    if (v < min_val) {
+      min_val = v;
+      continue;
+    }
+    if (v == 0.0 
+      && min_val == 0.0 
+      && signbit(v) 
+      && !signbit(min_val)
+    ) min_val = v;
   }
   return tov(min_val);
 }
@@ -195,22 +214,21 @@ static ant_value_t builtin_Math_pow(ant_t *js, ant_value_t *args, int nargs) {
   return tov(pow(base, exp));
 }
 
-static bool random_seeded = false;
-
 static ant_value_t builtin_Math_random(ant_t *js, ant_value_t *args, int nargs) {
-  (void)js;
-  (void)args;
-  (void)nargs;
-  if (!random_seeded) {
-    srand((unsigned int)time(NULL));
-    random_seeded = true;
+  if (ensure_crypto_init() < 0) {
+    return js_mkerr(js, "libsodium initialization failed");
   }
-  return tov((double)rand() / ((double)RAND_MAX + 1.0));
+
+  uint64_t r = 0; randombytes_buf(&r, sizeof(r));
+  uint64_t fraction = r >> MATH_RANDOM_DISCARD_BITS;
+  
+  return tov((double)fraction * math_random_scale);
 }
 
 static ant_value_t builtin_Math_round(ant_t *js, ant_value_t *args, int nargs) {
   double x = (nargs < 1) ? JS_NAN : js_to_number(js, args[0]);
-  if (isnan(x) || isinf(x)) return tov(x);
+  if (isnan(x) || isinf(x) || x == 0.0) return tov(x);
+  if (x < 0.0 && x >= -0.5) return tov(-0.0);
   return tov(floor(x + 0.5));
 }
 

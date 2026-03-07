@@ -21,9 +21,8 @@ ant_value_t bigint_asint_bits(ant_t *js, ant_value_t arg, uint64_t *bits_out);
 bool bigint_is_negative(ant_t *js, ant_value_t v);
 bool bigint_is_zero(ant_t *js, ant_value_t v);
 
-
 size_t bigint_digits_len(ant_t *js, ant_value_t v);
 size_t strbigint(ant_t *js, ant_value_t value, char *buf, size_t len);
-size_t bigint_compare(ant_t *js, ant_value_t a, ant_value_t b);
+int bigint_compare(ant_t *js, ant_value_t a, ant_value_t b);
 
 #endif
