@@ -139,6 +139,122 @@ static bool is_arrow_after(const char *input, size_t input_len, size_t pos) {
   return (i + 1 < input_len && input[i] == '=' && input[i + 1] == '>');
 }
 
+static bool find_matching_close_paren(const char *input, size_t input_len, size_t open_paren, size_t *close_paren) {
+  size_t depth = 0;
+  for (size_t i = open_paren + 1; i < input_len; i++) {
+    unsigned char ch = (unsigned char)input[i];
+    if (ch == '(') {
+      depth++;
+      continue;
+    }
+    if (ch == ')') {
+      if (depth == 0) {
+        *close_paren = i;
+        return true;
+      }
+      depth--;
+    }
+  }
+  return false;
+}
+
+static bool has_declaration_keyword_before(const char *input, size_t ident_start) {
+  size_t ws, wstart, wlen;
+  ws = skip_inline_ws_backward(input, ident_start);
+  if (ws == 0) return false;
+
+  size_t wend = ws;
+  size_t i = ws;
+  while (i > 0 && is_ident_continue((unsigned char)input[i - 1])) i--;
+  wstart = i;
+  wlen = wend - i;
+
+  return (wlen == 5 && memcmp(input + wstart, "const", 5) == 0) ||
+         (wlen == 3 && memcmp(input + wstart, "let", 3) == 0) ||
+         (wlen == 3 && memcmp(input + wstart, "var", 3) == 0);
+}
+
+static bool is_assigned_arrow_function(const char *input, size_t input_len, size_t ident_start, size_t ident_end) {
+  if (!has_declaration_keyword_before(input, ident_start)) return false;
+
+  size_t i = skip_inline_ws_forward(input, input_len, ident_end);
+  if (i >= input_len || input[i] != '=') return false;
+  if (i + 1 < input_len && input[i + 1] == '>') return false;
+  i++;
+
+  i = skip_inline_ws_forward(input, input_len, i);
+  if (i >= input_len) return false;
+
+  if (is_arrow_after(input, input_len, i)) return false;
+
+  if (is_ident_begin((unsigned char)input[i])) {
+    size_t j = i + 1;
+    while (j < input_len && is_ident_continue((unsigned char)input[j])) j++;
+    if (is_arrow_after(input, input_len, j)) return true;
+  }
+
+  if (input[i] == '(') {
+    size_t close = 0;
+    if (find_matching_close_paren(input, input_len, i, &close))
+      if (is_arrow_after(input, input_len, close + 1)) return true;
+  }
+
+  if (is_ident_begin((unsigned char)input[i]) || input[i] == '(') {
+    size_t j = i;
+    if (input[j] == '(') {
+      size_t close = 0;
+      if (find_matching_close_paren(input, input_len, j, &close)) j = close + 1;
+      else return false;
+    } else {
+      j++;
+      while (j < input_len && is_ident_continue((unsigned char)input[j])) j++;
+    }
+
+    j = skip_inline_ws_forward(input, input_len, j);
+    if (j < input_len && input[j] == ':') {
+      j++;
+      size_t depth = 0;
+      while (j < input_len) {
+        unsigned char ch = (unsigned char)input[j];
+        if (ch == '(' || ch == '<') { depth++; j++; continue; }
+        if (ch == ')' || ch == '>') {
+          if (depth > 0) depth--;
+          j++;
+          continue;
+        }
+        if (depth == 0 && (ch == '=' || ch == ',')) break;
+        j++;
+      }
+      if (is_arrow_after(input, input_len, j)) return true;
+    }
+  }
+
+  if (input[i] == 'a') {
+    if (i + 5 <= input_len && memcmp(input + i, "async", 5) == 0 &&
+        (i + 5 >= input_len || !is_ident_continue((unsigned char)input[i + 5]))) {
+      size_t j = skip_inline_ws_forward(input, input_len, i + 5);
+      if (j < input_len && input[j] == '(') {
+        size_t close = 0;
+        if (find_matching_close_paren(input, input_len, j, &close))
+          if (is_arrow_after(input, input_len, close + 1)) return true;
+      }
+      if (j < input_len && is_ident_begin((unsigned char)input[j])) {
+        size_t k = j + 1;
+        while (k < input_len && is_ident_continue((unsigned char)input[k])) k++;
+        if (is_arrow_after(input, input_len, k)) return true;
+      }
+    }
+  }
+
+  if (input[i] == 'f') {
+    if (i + 8 <= input_len && memcmp(input + i, "function", 8) == 0 &&
+        (i + 8 >= input_len || !is_ident_continue((unsigned char)input[i + 8])))
+      return true;
+  }
+
+  return false;
+}
+
 static bool has_function_keyword_before_paren(const char *input, size_t open_paren) {
   size_t word_start = 0;
   size_t word_len = 0;
@@ -188,25 +304,6 @@ static bool find_enclosing_open_paren(const char *input, size_t pos, size_t *ope
     if (ch == '(') {
       if (depth == 0) {
         *open_paren = i;
-        return true;
-      }
-      depth--;
-    }
-  }
-  return false;
-}
-
-static bool find_matching_close_paren(const char *input, size_t input_len, size_t open_paren, size_t *close_paren) {
-  size_t depth = 0;
-  for (size_t i = open_paren + 1; i < input_len; i++) {
-    unsigned char ch = (unsigned char)input[i];
-    if (ch == '(') {
-      depth++;
-      continue;
-    }
-    if (ch == ')') {
-      if (depth == 0) {
-        *close_paren = i;
         return true;
       }
       depth--;
@@ -469,6 +566,8 @@ bool hl_iter_next(hl_iter *it, hl_span *out) {
       cls = HL_FUNCTION;
     } else if (is_member_access) {
       cls = HL_PROPERTY;
+    } else if (is_assigned_arrow_function(input, input_len, start, i)) {
+      cls = HL_FUNCTION_NAME;
     } else if (it->ctx == HL_CTX_AFTER_FUNCTION) {
       cls = HL_FUNCTION_NAME;
       it->ctx = HL_CTX_NONE;
@@ -518,7 +617,10 @@ bool hl_iter_next(hl_iter *it, hl_span *out) {
     return true;
   }
 
-  if (c == '<' || c == '>' || c == '=') {
+  if (c == '<' || c == '>' || c == '=' ||
+      c == '+' || c == '-' || c == '*' || c == '/' ||
+      c == '%' || c == '&' || c == '|' || c == '^' ||
+      c == '~' || c == '!' || c == '?') {
     it->ctx = HL_CTX_NONE;
     *out = (hl_span){ i, 1, HL_OPERATOR };
     it->pos = i + 1;
