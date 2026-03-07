@@ -133,6 +133,56 @@ static char *esm_try_resolve_index_with_exts(const char *dir, const char *spec) 
   return esm_try_resolve_with_exts(dir, idx, false);
 }
 
+static ant_value_t esm_default_export_or_namespace(ant_t *js, ant_value_t ns) {
+  ant_value_t default_val = js_get_slot(js, ns, SLOT_DEFAULT);
+  return vtype(default_val) != T_UNDEF ? default_val : ns;
+}
+
+static ant_value_t esm_complete_value_module(esm_module_t *mod, ant_value_t value) {
+  if (is_err(value)) {
+    mod->is_loading = false;
+    return value;
+  }
+  mod->namespace_obj = value;
+  mod->default_export = value;
+  mod->is_loaded = true;
+  mod->is_loading = false;
+  return value;
+}
+
+static ant_value_t esm_complete_namespace_module(ant_t *js, esm_module_t *mod, ant_value_t ns) {
+  mod->namespace_obj = ns;
+  mod->default_export = esm_default_export_or_namespace(js, ns);
+  mod->is_loaded = true;
+  mod->is_loading = false;
+  return ns;
+}
+
+static ant_value_t esm_prepare_eval_ctx(
+  ant_t *js,
+  const char *resolved_path,
+  ant_value_t ns,
+  ant_module_format_t format,
+  bool is_main,
+  const char *fallback_parent_path,
+  ant_module_t *out_ctx
+) {
+  ant_module_t *parent_ctx = js->module;
+  ant_value_t import_meta = js_create_import_meta(js, resolved_path, is_main);
+  if (is_err(import_meta)) return import_meta;
+
+  *out_ctx = (ant_module_t){
+    .module_ns = ns,
+    .import_meta = import_meta,
+    .prev_import_meta_prop = js_mkundef(),
+    .filename = resolved_path,
+    .parent_path = parent_ctx ? parent_ctx->filename : fallback_parent_path,
+    .format = format,
+    .prev = NULL,
+  };
+  return js_mkundef();
+}
+
 static char *esm_try_resolve_from_extension_list(
   const char *dir,
   const char *spec,
@@ -713,23 +763,19 @@ ant_value_t js_esm_eval_module_source(
   size_t js_len, ant_value_t ns
 ) {
   ant_module_format_t format = esm_decide_module_format(resolved_path);
-  ant_module_t *parent_ctx = js->module;
-  ant_value_t import_meta = js_create_import_meta(js, resolved_path, parent_ctx == NULL);
-  if (is_err(import_meta)) return import_meta;
-
-  ant_module_t eval_ctx = {
-    .module_ns = ns,
-    .import_meta = import_meta,
-    .prev_import_meta_prop = js_mkundef(),
-    .filename = resolved_path,
-    .parent_path = parent_ctx ? parent_ctx->filename : NULL,
-    .format = format,
-    .prev = NULL,
-  };
-
+  ant_module_t eval_ctx;
+  
+  ant_value_t prep_res = esm_prepare_eval_ctx(
+    js, resolved_path, ns, format, 
+    js->module == NULL, NULL, &eval_ctx
+  );
+  
+  if (is_err(prep_res)) return prep_res;
   js_module_eval_ctx_push(js, &eval_ctx);
+  
   ant_value_t result = esm_eval_module_with_format(
-    js, resolved_path, js_code, js_len, ns, format
+    js, resolved_path, js_code, 
+    js_len, ns, format
   );
 
   js_module_eval_ctx_pop(js, &eval_ctx);
@@ -926,39 +972,15 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod) {
   switch (mod->kind) {
     case ESM_MODULE_KIND_JSON: {
       ant_value_t json_val = esm_load_json(js, mod->resolved_path);
-      if (is_err(json_val)) {
-        mod->is_loading = false;
-        return json_val;
-      }
-      mod->namespace_obj = json_val;
-      mod->default_export = json_val;
-      mod->is_loaded = true;
-      mod->is_loading = false;
-      return json_val;
+      return esm_complete_value_module(mod, json_val);
     }
     case ESM_MODULE_KIND_TEXT: {
       ant_value_t text_val = esm_load_text(js, mod->resolved_path);
-      if (is_err(text_val)) {
-        mod->is_loading = false;
-        return text_val;
-      }
-      mod->namespace_obj = text_val;
-      mod->default_export = text_val;
-      mod->is_loaded = true;
-      mod->is_loading = false;
-      return text_val;
+      return esm_complete_value_module(mod, text_val);
     }
     case ESM_MODULE_KIND_IMAGE: {
       ant_value_t img_val = esm_load_image(js, mod->resolved_path);
-      if (is_err(img_val)) {
-        mod->is_loading = false;
-        return img_val;
-      }
-      mod->namespace_obj = img_val;
-      mod->default_export = img_val;
-      mod->is_loaded = true;
-      mod->is_loading = false;
-      return img_val;
+      return esm_complete_value_module(mod, img_val);
     }
     case ESM_MODULE_KIND_NATIVE: {
       ant_value_t ns = js_mkobj(js);
@@ -969,16 +991,10 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod) {
         mod->is_loading = false;
         return native_exports;
       }
-
-      ant_value_t default_val = js_get_slot(js, ns, SLOT_DEFAULT);
-      mod->default_export = vtype(default_val) != T_UNDEF ? default_val : ns;
-      mod->is_loaded = true;
-      mod->is_loading = false;
-      return ns;
+      return esm_complete_namespace_module(js, mod, ns);
     }
     case ESM_MODULE_KIND_CODE:
-    case ESM_MODULE_KIND_URL:
-      break;
+    case ESM_MODULE_KIND_URL: break;
   }
 
   char *content = NULL;
@@ -1042,24 +1058,20 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod) {
   mod->namespace_obj = ns;
 
   const char *prev_filename = js->filename;
-  ant_module_t *parent_ctx = js->module;
-
-  ant_value_t import_meta = js_create_import_meta(js, mod->resolved_path, false);
-  if (is_err(import_meta)) {
+  ant_module_t eval_ctx;
+  
+  ant_value_t prep_res = esm_prepare_eval_ctx(
+    js, mod->resolved_path,
+    ns, mod->format,
+    false, prev_filename,
+    &eval_ctx
+  );
+  
+  if (is_err(prep_res)) {
     free(content);
     mod->is_loading = false;
-    return import_meta;
+    return prep_res;
   }
-
-  ant_module_t eval_ctx = {
-    .module_ns = ns,
-    .import_meta = import_meta,
-    .prev_import_meta_prop = js_mkundef(),
-    .filename = mod->resolved_path,
-    .parent_path = parent_ctx ? parent_ctx->filename : prev_filename,
-    .format = mod->format,
-    .prev = NULL,
-  };
 
   js_set_filename(js, mod->resolved_path);
   js_module_eval_ctx_push(js, &eval_ctx);
@@ -1083,14 +1095,7 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod) {
     mod->is_loading = false;
     return result;
   }
-
-  ant_value_t default_val = js_get_slot(js, ns, SLOT_DEFAULT);
-  mod->default_export = vtype(default_val) != T_UNDEF ? default_val : ns;
-
-  mod->is_loaded = true;
-  mod->is_loading = false;
-
-  return ns;
+  return esm_complete_namespace_module(js, mod, ns);
 }
 
 static ant_value_t esm_get_or_load(ant_t *js, const char *specifier, const char *resolved_path) {
