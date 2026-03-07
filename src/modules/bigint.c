@@ -47,6 +47,26 @@ static uint32_t *limb_dup(const uint32_t *limbs, size_t count) {
   return copy;
 }
 
+static bool grow_u32_buffer(uint32_t **buf, size_t *cap) {
+  if (!buf || !*buf || !cap || *cap == 0 || *cap > SIZE_MAX / 2) return false;
+  size_t new_cap = *cap * 2;
+  uint32_t *grown = (uint32_t *)realloc(*buf, new_cap * sizeof(uint32_t));
+  if (!grown) return false;
+  memset(grown + *cap, 0, (new_cap - *cap) * sizeof(uint32_t));
+  *buf = grown;
+  *cap = new_cap;
+  return true;
+}
+
+static bool append_carry_limbs(uint32_t **limbs, size_t *count, size_t *cap, uint64_t carry) {
+  while (carry != 0) {
+    if (*count == *cap && !grow_u32_buffer(limbs, cap)) return false;
+    (*limbs)[(*count)++] = (uint32_t)carry;
+    carry >>= 32;
+  }
+  return true;
+}
+
 static void bigint_normalize_limbs(uint32_t *limbs, size_t *count) {
   while (*count > 1 && limbs[*count - 1] == 0) (*count)--;
 }
@@ -802,24 +822,9 @@ static ant_value_t bigint_from_string_digits(
       carry = cur >> 32;
     }
 
-    if (carry != 0) {
-      while (carry != 0) {
-        if (count == cap) {
-          size_t new_cap = cap * 2;
-          uint32_t *new_limbs = (uint32_t *)realloc(limbs, new_cap * sizeof(uint32_t));
-          if (!new_limbs) {
-            free(limbs);
-            return js_mkerr(js, "oom");
-          }
-
-          memset(new_limbs + cap, 0, (new_cap - cap) * sizeof(uint32_t));
-          limbs = new_limbs;
-          cap = new_cap;
-        }
-
-        limbs[count++] = (uint32_t)carry;
-        carry >>= 32;
-      }
+    if (carry != 0 && !append_carry_limbs(&limbs, &count, &cap, carry)) {
+      free(limbs);
+      return js_mkerr(js, "oom");
     }
   }
 
@@ -870,16 +875,10 @@ static char *bigint_abs_to_decimal_string(const uint32_t *limbs, size_t count, s
   size_t groups_len = 0;
 
   while (!(tmp_count == 1 && tmp[0] == 0)) {
-    if (groups_len == groups_cap) {
-      size_t new_cap = groups_cap * 2;
-      uint32_t *new_groups = (uint32_t *)realloc(groups, new_cap * sizeof(uint32_t));
-      if (!new_groups) {
-        free(tmp);
-        free(groups);
-        return NULL;
-      }
-      groups = new_groups;
-      groups_cap = new_cap;
+    if (groups_len == groups_cap && !grow_u32_buffer(&groups, &groups_cap)) {
+      free(tmp);
+      free(groups);
+      return NULL;
     }
 
     uint32_t rem = bigint_div_small_inplace(tmp, tmp_count, BIGINT_DEC_GROUP_BASE);
