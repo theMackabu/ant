@@ -1,7 +1,8 @@
 import { build } from 'esbuild';
+import { join } from 'node:path';
 
 const { outputFiles } = await build({
-  entryPoints: ['app.jsx'],
+  entryPoints: [join(import.meta.dirname, 'app.jsx')],
   bundle: true,
   write: false,
   jsx: 'automatic',

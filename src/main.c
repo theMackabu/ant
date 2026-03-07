@@ -336,16 +336,9 @@ static int execute_module(ant_t *js, const char *filename) {
   js_set_filename(js, use_path);
   js_setup_import_meta(js, use_path);
   
-  ant_value_t import_fn = js_get(js, js->global, "import");
-  ant_value_t module_ns = mkobj(js, 0);
-  
-  js->import_meta = (vtype(import_fn) == T_FUNC)
-    ? js_get(js, import_fn, "meta")
-    : js_mkundef();
-
   ant_value_t result = js_esm_eval_module_source(
     js, use_path, js_code, 
-    js_len, module_ns
+    js_len, mkobj(js, 0)
   ); 
   
   free(js_code);

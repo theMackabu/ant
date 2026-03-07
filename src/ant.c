@@ -10521,10 +10521,38 @@ static ant_value_t builtin_import(ant_t *js, ant_value_t *args, int nargs) {
   return builtin_Promise_resolve(js, promise_args, 1);
 }
 
+static ant_value_t js_get_import_meta_prop(ant_t *js) {
+  ant_value_t glob = js_glob(js);
+  ant_offset_t import_off = lkp(js, glob, "import", 6);
+  if (import_off == 0) return js_mkundef();
+
+  ant_value_t import_fn = resolveprop(js, mkval(T_PROP, import_off));
+  if (vtype(import_fn) != T_FUNC) return js_mkundef();
+  return js_get(js, js_func_obj(import_fn), "meta");
+}
+
+static void js_set_import_meta_prop(ant_t *js, ant_value_t import_meta) {
+  ant_value_t glob = js_glob(js);
+  ant_offset_t import_off = lkp(js, glob, "import", 6);
+  if (import_off == 0) return;
+
+  ant_value_t import_fn = resolveprop(js, mkval(T_PROP, import_off));
+  if (vtype(import_fn) != T_FUNC) return;
+  js_setprop(js, js_func_obj(import_fn), js_mkstr(js, "meta", 4), import_meta);
+}
+
+static ant_value_t js_get_current_import_meta(ant_t *js) {
+  ant_value_t import_meta = js_module_eval_active_import_meta(js);
+  if (vtype(import_meta) == T_OBJ) return import_meta;
+  return js_get_import_meta_prop(js);
+}
+
 static ant_value_t builtin_import_meta_resolve(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "import.meta.resolve() requires a string specifier");
-  if (vtype(js->import_meta) == T_OBJ) {
-    ant_value_t filename = js_get(js, js->import_meta, "filename");
+
+  ant_value_t import_meta = js_get_current_import_meta(js);
+  if (vtype(import_meta) == T_OBJ) {
+    ant_value_t filename = js_get(js, import_meta, "filename");
     if (vtype(filename) == T_STR) {
       ant_offset_t n = 0; ant_offset_t off = vstr(js, filename, &n);
       return js_esm_resolve_specifier(js, args[0], (const char *)&js->mem[off]);
@@ -10532,19 +10560,19 @@ static ant_value_t builtin_import_meta_resolve(ant_t *js, ant_value_t *args, int
   } return js_esm_resolve_specifier(js, args[0], NULL);
 }
 
-void js_setup_import_meta(ant_t *js, const char *filename) {
-  if (!filename) return;
-  
+ant_value_t js_create_import_meta(ant_t *js, const char *filename, bool is_main) {
+  if (!filename) return js_mkundef();
+
   ant_value_t import_meta = mkobj(js, 0);
-  if (is_err(import_meta)) return;
+  if (is_err(import_meta)) return import_meta;
   bool is_url = esm_is_url(filename);
-  
+
   ant_value_t url_val = is_url ? js_mkstr(js, filename, strlen(filename)) : js_esm_make_file_url(js, filename);
   if (!is_err(url_val)) js_setprop(js, import_meta, js_mkstr(js, "url", 3), url_val);
-  
+
   ant_value_t filename_val = js_mkstr(js, filename, strlen(filename));
   if (!is_err(filename_val)) js_setprop(js, import_meta, js_mkstr(js, "filename", 8), filename_val);
-  
+
   if (is_url) {
     char *filename_copy = strdup(filename);
     if (filename_copy) {
@@ -10568,20 +10596,38 @@ void js_setup_import_meta(ant_t *js, const char *filename) {
       free(filename_copy);
     }
   }
-  
-  js_setprop(js, import_meta, js_mkstr(js, "main", 4), js_true);
+
+  js_setprop(js, import_meta, js_mkstr(js, "main", 4), is_main ? js_true : js_false);
   ant_value_t resolve_fn = js_mkfun(builtin_import_meta_resolve);
   js_setprop(js, import_meta, js_mkstr(js, "resolve", 7), resolve_fn);
-  
-  ant_value_t glob = js_glob(js);
-  ant_offset_t import_off = lkp(js, glob, "import", 6);
-  
-  if (import_off != 0) {
-    ant_value_t import_fn = resolveprop(js, mkval(T_PROP, import_off));
-    if (vtype(import_fn) == T_FUNC) {
-      ant_value_t import_obj = js_func_obj(import_fn);
-      js_setprop(js, import_obj, js_mkstr(js, "meta", 4), import_meta);
-    }
+  return import_meta;
+}
+
+void js_setup_import_meta(ant_t *js, const char *filename) {
+  if (!filename) return;
+
+  ant_value_t import_meta = js_create_import_meta(js, filename, true);
+  if (is_err(import_meta)) return;
+  js_set_import_meta_prop(js, import_meta);
+}
+
+void js_module_eval_ctx_push(ant_t *js, ant_module_t *ctx) {
+  if (!js || !ctx) return;
+
+  ctx->prev = js->module;
+  ctx->prev_import_meta_prop = js_get_import_meta_prop(js);
+  js->module = ctx;
+
+  if (vtype(ctx->import_meta) != T_UNDEF)
+    js_set_import_meta_prop(js, ctx->import_meta);
+}
+
+void js_module_eval_ctx_pop(ant_t *js, ant_module_t *ctx) {
+  if (!js || !ctx) return;
+
+  if (js->module == ctx) {
+    js_set_import_meta_prop(js, ctx->prev_import_meta_prop);
+    js->module = ctx->prev;
   }
 }
 
@@ -11431,9 +11477,6 @@ ant_t *js_create(void *buf, size_t len) {
   set_slot(js, import_obj, SLOT_CFUNC, js_mkfun(builtin_import));
   js_setprop(js, glob, js_mkstr(js, "import", 6), js_obj_to_func(import_obj));
   
-  js->module_ns = js_mkundef();
-  js->import_meta = js_mkundef();
-  
   js_setprop(js, object_proto, js_mkstr(js, "constructor", 11), obj_func);
   js_set_descriptor(js, object_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
   
@@ -11710,10 +11753,11 @@ static bool js_try_get(ant_t *js, ant_value_t obj, const char *key, ant_value_t 
     }
 
     ant_value_t func_obj = js_func_obj(obj);
-    if (key_len == 4 && memcmp(key, "meta", 4) == 0 && vtype(js->import_meta) != T_UNDEF) {
+    ant_value_t import_meta = js_get_current_import_meta(js);
+    if (key_len == 4 && memcmp(key, "meta", 4) == 0 && vtype(import_meta) != T_UNDEF) {
       ant_value_t cfunc = js_get_slot(js, func_obj, SLOT_CFUNC);
       if (vtype(cfunc) == T_CFUNC && js_as_cfunc(cfunc) == builtin_import) {
-        *out = js->import_meta;
+        *out = import_meta;
         return true;
       }
     }
@@ -12005,7 +12049,13 @@ static void gc_roots_common(gc_off_op_t op_off, gc_val_op_t op_val, gc_cb_ctx_t 
   }
 
   js_esm_gc_roots(op_val, c);
-  op_val(c, &c->js->import_meta);
+
+  for (ant_module_t *ctx = c->js->module; ctx; ctx = ctx->prev) {
+    op_val(c, &ctx->module_ns);
+    op_val(c, &ctx->import_meta);
+    op_val(c, &ctx->prev_import_meta_prop);
+  }
+
   timer_gc_update_roots(op_val, c);
   ffi_gc_update_roots(op_val, c);
   fetch_gc_update_roots(op_val, c);
@@ -12023,7 +12073,6 @@ static void gc_roots_common(gc_off_op_t op_off, gc_val_op_t op_val, gc_cb_ctx_t 
   op_val(c, &c->js->object);
   op_val(c, &c->js->this_val);
   op_val(c, &c->js->new_target);
-  op_val(c, &c->js->module_ns);
   op_val(c, &c->js->current_func);
   op_val(c, &c->js->thrown_value);
   op_val(c, &c->js->length_str);

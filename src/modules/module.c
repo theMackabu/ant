@@ -25,16 +25,15 @@ static ant_value_t builtin_createRequire_call(ant_t *js, ant_value_t *args, int 
 
   ant_value_t fn = js_getcurrentfunc(js);
   ant_value_t data = js_get_slot(js, fn, SLOT_DATA);
-  const char *prev_filename = js->filename;
+  const char *base_path = js_module_eval_active_filename(js);
 
   if (vtype(data) == T_STR) {
     ant_offset_t plen = 0;
     ant_offset_t poff = vstr(js, data, &plen);
-    js_set_filename(js, (const char *)&js->mem[poff]);
+    base_path = (const char *)&js->mem[poff];
   }
 
-  ant_value_t ns = js_esm_import_sync(js, args[0]);
-  js_set_filename(js, prev_filename);
+  ant_value_t ns = js_esm_import_sync_from(js, args[0], base_path);
   if (is_err(ns)) return ns;
 
   if (vtype(ns) == T_OBJ) {
@@ -51,7 +50,7 @@ static ant_value_t builtin_createRequire_resolve(ant_t *js, ant_value_t *args, i
 
   ant_value_t fn = js_getcurrentfunc(js);
   ant_value_t data = js_get_slot(js, fn, SLOT_DATA);
-  const char *base_path = js->filename ? js->filename : ".";
+  const char *base_path = js_module_eval_active_filename(js);
 
   if (vtype(data) == T_STR) {
     ant_offset_t dlen = 0;
@@ -114,7 +113,7 @@ static ant_value_t builtin_resolveFilename(ant_t *js, ant_value_t *args, int nar
   if (nargs < 1 || vtype(args[0]) != T_STR) 
     return js_mkerr(js, "Module._resolveFilename() requires a string request");
 
-  const char *base_path = js->filename ? js->filename : ".";
+  const char *base_path = js_module_eval_active_filename(js);
   if (nargs >= 2 && vtype(args[1]) == T_OBJ) {
     ant_value_t parent_filename = js_get(js, args[1], "filename");
     if (vtype(parent_filename) == T_STR) {

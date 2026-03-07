@@ -18,17 +18,15 @@ static ant_value_t esm_cjs_require(ant_t *js, ant_value_t *args, int nargs) {
 
   ant_value_t fn = js_getcurrentfunc(js);
   ant_value_t data = js_get_slot(js, fn, SLOT_DATA);
-  const char *prev_filename = js->filename;
+  const char *base_path = js_module_eval_active_filename(js);
 
   if (vtype(data) == T_STR) {
     ant_offset_t path_len = 0;
     ant_offset_t path_off = vstr(js, data, &path_len);
-    (void)path_len;
-    js_set_filename(js, (const char *)&js->mem[path_off]);
+    base_path = (const char *)&js->mem[path_off];
   }
 
-  ant_value_t ns = js_esm_import_sync(js, args[0]);
-  js_set_filename(js, prev_filename);
+  ant_value_t ns = js_esm_import_sync_from(js, args[0], base_path);
   if (is_err(ns)) return ns;
 
   if (vtype(ns) == T_OBJ) {
@@ -45,7 +43,7 @@ static ant_value_t esm_cjs_require_resolve(ant_t *js, ant_value_t *args, int nar
 
   ant_value_t fn = js_getcurrentfunc(js);
   ant_value_t data = js_get_slot(js, fn, SLOT_DATA);
-  const char *base_path = js->filename ? js->filename : ".";
+  const char *base_path = js_module_eval_active_filename(js);
 
   if (vtype(data) == T_STR) {
     ant_offset_t data_len = 0;

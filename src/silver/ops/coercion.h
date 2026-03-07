@@ -15,14 +15,15 @@ static inline ant_value_t sv_module_export_cstr(
   const char *name, size_t len,
   ant_value_t value
 ) {
-  if (vtype(js->module_ns) != T_OBJ)
+  ant_value_t module_ns = js_module_eval_active_ns(js);
+  if (vtype(module_ns) != T_OBJ)
     return js_mkerr_typed(js, JS_ERR_SYNTAX, "export used outside module");
 
-  ant_value_t set_res = setprop_cstr(js, js->module_ns, name, len, value);
+  ant_value_t set_res = setprop_cstr(js, module_ns, name, len, value);
   if (is_err(set_res)) return set_res;
 
   if (len == 7 && memcmp(name, "default", 7) == 0)
-    js_set_slot(js, js->module_ns, SLOT_DEFAULT, value);
+    js_set_slot(js, module_ns, SLOT_DEFAULT, value);
 
   return tov(0);
 }

@@ -3,6 +3,7 @@
 
 #include "ant.h"
 #include "gc.h"
+#include "esm/loader.h"
 
 #include <assert.h>
 #include <string.h>
@@ -119,7 +120,8 @@ typedef struct {
 
 struct ant {
   sv_vm_t *vm;
-  
+  ant_module_t *module;
+
   #ifdef ANT_JIT
   void *jit_ctx;
   #endif
@@ -135,9 +137,6 @@ struct ant {
   ant_value_t this_val;
   ant_value_t new_target;
   ant_value_t current_func;
-
-  ant_value_t module_ns;
-  ant_value_t import_meta;
   ant_value_t length_str;
 
   uint8_t *mem;
@@ -231,7 +230,10 @@ ant_value_t resolveprop(ant_t *js, ant_value_t v);
 ant_value_t mkprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, ant_offset_t flags);
 ant_value_t setprop_cstr(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v);
 ant_value_t setprop_interned(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v);
+
 ant_value_t js_define_own_prop(ant_t *js, ant_value_t obj, const char *key, size_t klen, ant_value_t v);
+ant_value_t js_create_import_meta(ant_t *js, const char *filename, bool is_main);
+ant_value_t js_instance_proto_from_new_target(ant_t *js, ant_value_t fallback_proto);
 
 ant_value_t coerce_to_str(ant_t *js, ant_value_t v);
 ant_value_t coerce_to_str_concat(ant_t *js, ant_value_t v);
@@ -243,7 +245,6 @@ bool same_ctor_identity(ant_t *js, ant_value_t a, ant_value_t b);
 
 js_intern_stats_t js_intern_stats(void);
 js_cstr_t js_to_cstr(ant_t *js, ant_value_t value, char *stack_buf, size_t stack_size);
-ant_value_t js_instance_proto_from_new_target(ant_t *js, ant_value_t fallback_proto);
 
 ant_offset_t lkp(ant_t *js, ant_value_t obj, const char *buf, size_t len);
 ant_offset_t lkp_proto(ant_t *js, ant_value_t obj, const char *buf, size_t len);
@@ -277,5 +278,33 @@ ant_value_t js_to_primitive(ant_t *js, ant_value_t value, int hint);
 
 ant_value_t do_instanceof(ant_t *js, ant_value_t l, ant_value_t r);
 ant_value_t do_in(ant_t *js, ant_value_t l, ant_value_t r);
+
+void js_module_eval_ctx_push(ant_t *js, ant_module_t *ctx);
+void js_module_eval_ctx_pop(ant_t *js, ant_module_t *ctx);
+
+static inline ant_value_t js_module_eval_active_ns(ant_t *js) {
+  ant_module_t *ctx = js->module;
+  return ctx ? ctx->module_ns : js_mkundef();
+}
+
+static inline ant_value_t js_module_eval_active_import_meta(ant_t *js) {
+  ant_module_t *ctx = js->module;
+  return ctx ? ctx->import_meta : js_mkundef();
+}
+
+static inline const char *js_module_eval_active_filename(ant_t *js) {
+  ant_module_t *ctx = js->module;
+  return ctx ? ctx->filename : js->filename;
+}
+
+static inline const char *js_module_eval_active_parent_path(ant_t *js) {
+  ant_module_t *ctx = js->module;
+  return ctx ? ctx->parent_path : NULL;
+}
+
+static inline ant_module_format_t js_module_eval_active_format(ant_t *js) {
+  ant_module_t *ctx = js->module;
+  return ctx ? ctx->format : MODULE_EVAL_FORMAT_UNKNOWN;
+}
 
 #endif
