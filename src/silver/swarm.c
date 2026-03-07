@@ -4605,6 +4605,10 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 
       case OP_BAND: case OP_BOR: case OP_BXOR:
       case OP_SHL:  case OP_SHR: case OP_USHR: {
+        int rr_idx = vs.sp - 1;
+        int rl_idx = vs.sp - 2;
+        vstack_ensure_boxed(&vs, rl_idx, ctx, jit_func, r_d_slot);
+        vstack_ensure_boxed(&vs, rr_idx, ctx, jit_func, r_d_slot);
         MIR_reg_t rr = vstack_pop(&vs);
         MIR_reg_t rl = vstack_pop(&vs);
         MIR_reg_t rd = vstack_push(&vs);
@@ -4631,6 +4635,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       }
 
       case OP_BNOT: {
+        vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
         MIR_reg_t rs = vstack_top(&vs);
         MIR_append_insn(ctx, jit_func,
           MIR_new_call_insn(ctx, 6,
@@ -4674,6 +4679,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       }
 
       case OP_NOT: {
+        vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
         MIR_reg_t rs = vstack_top(&vs);
         MIR_append_insn(ctx, jit_func,
           MIR_new_call_insn(ctx, 6,
