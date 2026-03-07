@@ -361,9 +361,9 @@ static ctor_t get_constructor(ant_t *js, const char *name, size_t len) {
 }
 
 ant_value_t unwrap_primitive(ant_t *js, ant_value_t val) {
-  if (vtype(val) != T_OBJ) return val;
+  if (__builtin_expect(vtype(val) != T_OBJ, 1)) return val;
   ant_value_t prim = get_slot(js, val, SLOT_PRIMITIVE);
-  if (vtype(prim) == T_UNDEF) return val;
+  if (__builtin_expect(vtype(prim) == T_UNDEF, 1)) return val;
   return prim;
 }
 
