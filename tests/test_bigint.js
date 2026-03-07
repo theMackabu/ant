@@ -41,10 +41,19 @@ test('BigInt(0)', BigInt(0), '0');
 test('BigInt(-5)', BigInt(-5), '-5');
 test('BigInt("123")', BigInt("123"), '123');
 test('BigInt("-456")', BigInt("-456"), '-456');
+test('BigInt("0xff")', BigInt("0xff"), '255');
+test('BigInt("0b1010")', BigInt("0b1010"), '10');
+test('BigInt("0o77")', BigInt("0o77"), '63');
+test('BigInt("  42  ")', BigInt("  42  "), '42');
+test('BigInt("")', BigInt(""), '0');
 test('BigInt(true)', BigInt(true), '1');
 test('BigInt(false)', BigInt(false), '0');
+testThrows('BigInt("0x") throws', () => BigInt("0x"), 'Cannot convert string to BigInt');
+testThrows('BigInt("1_2") throws', () => BigInt("1_2"), 'Cannot convert string to BigInt');
 
 console.log('\n=== BigInt Addition ===');
+test('0xffn + 1n', 0xffn + 1n, '256');
+test('0b1010n + 0o7n', 0b1010n + 0o7n, '17');
 test('1n + 2n', 1n + 2n, '3');
 test('100n + 200n', 100n + 200n, '300');
 test('999999999999999999n + 1n', 999999999999999999n + 1n, '1000000000000000000');
@@ -79,6 +88,18 @@ test('10n % 3n', 10n % 3n, '1');
 test('100n % 7n', 100n % 7n, '2');
 test('-10n % 3n', -10n % 3n, '-1');
 test('10n % (-3n)', 10n % (-3n), '1');
+
+console.log('\n=== BigInt Bitwise ===');
+test('5n & 3n', 5n & 3n, '1');
+test('5n | 2n', 5n | 2n, '7');
+test('5n ^ 1n', 5n ^ 1n, '4');
+test('~0n', ~0n, '-1');
+test('~(-1n)', ~(-1n), '0');
+test('(-5n) & 3n', (-5n) & 3n, '3');
+test('(-8n) | 3n', (-8n) | 3n, '-5');
+test('(-8n) ^ 3n', (-8n) ^ 3n, '-5');
+test('0xffn ^ 0b1010n', 0xffn ^ 0b1010n, '245');
+testThrows('1n & 1 throws mixed types', () => (1n & 1), 'Cannot mix BigInt value and other types');
 
 console.log('\n=== BigInt Comparison ===');
 test('5n == 5n', 5n == 5n, true);

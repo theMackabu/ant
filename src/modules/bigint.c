@@ -5,6 +5,8 @@
 #include "internal.h"
 #include "errors.h"
 #include "runtime.h"
+#include "utils.h"
+#include "silver/lexer.h"
 
 #define BIGINT_BASE ((uint64_t)0x100000000ULL)
 #define BIGINT_DEC_GROUP_BASE 1000000000U
@@ -353,6 +355,168 @@ static uint32_t bigint_div_small_inplace(uint32_t *limbs, size_t count, uint32_t
   return (uint32_t)rem;
 }
 
+static size_t bigint_abs_bitlen_limbs(const uint32_t *limbs, size_t count) {
+  while (count > 1 && limbs[count - 1] == 0) count--;
+  if (count == 1 && limbs[0] == 0) return 0;
+
+  uint32_t top = limbs[count - 1];
+#if defined(__GNUC__) || defined(__clang__)
+  unsigned lead = (unsigned)__builtin_clz(top);
+#else
+  unsigned lead = 0;
+  while ((top & 0x80000000u) == 0) {
+    top <<= 1;
+    lead++;
+  }
+#endif
+  return (count - 1) * 32u + (32u - (size_t)lead);
+}
+
+static uint32_t *bigint_to_twos_complement_limbs(
+  const uint32_t *limbs,
+  size_t count,
+  bool negative,
+  size_t width
+) {
+  if (width == 0) width = 1;
+
+  uint32_t *out = limb_alloc(width);
+  if (!out) return NULL;
+
+  size_t copy_count = count < width ? count : width;
+  if (copy_count > 0) memcpy(out, limbs, copy_count * sizeof(uint32_t));
+
+  if (!negative) return out;
+
+  for (size_t i = 0; i < width; i++) out[i] = ~out[i];
+
+  uint64_t carry = 1;
+  for (size_t i = 0; i < width && carry != 0; i++) {
+    uint64_t cur = (uint64_t)out[i] + carry;
+    out[i] = (uint32_t)cur;
+    carry = cur >> 32;
+  }
+
+  return out;
+}
+
+static uint32_t *bigint_from_twos_complement_limbs(
+  const uint32_t *twos,
+  size_t width,
+  bool *negative_out,
+  size_t *count_out
+) {
+  if (width == 0) width = 1;
+
+  bool negative = (twos[width - 1] & 0x80000000u) != 0;
+  uint32_t *mag = limb_dup(twos, width);
+  if (!mag) return NULL;
+
+  if (negative) {
+    for (size_t i = 0; i < width; i++) mag[i] = ~mag[i];
+    uint64_t carry = 1;
+    for (size_t i = 0; i < width && carry != 0; i++) {
+      uint64_t cur = (uint64_t)mag[i] + carry;
+      mag[i] = (uint32_t)cur;
+      carry = cur >> 32;
+    }
+  }
+
+  size_t mcount = width;
+  bigint_normalize_limbs(mag, &mcount);
+  if (mcount == 1 && mag[0] == 0) negative = false;
+
+  if (negative_out) *negative_out = negative;
+  if (count_out) *count_out = mcount;
+  return mag;
+}
+
+typedef enum {
+  BIGINT_BAND = 0,
+  BIGINT_BOR,
+  BIGINT_BXOR
+} bigint_bitop_t;
+
+static ant_value_t bigint_bitwise_binary(ant_t *js, ant_value_t a, ant_value_t b, bigint_bitop_t op) {
+  bool aneg = bigint_is_negative(js, a);
+  bool bneg = bigint_is_negative(js, b);
+
+  size_t alen = 0, blen = 0;
+  const uint32_t *ad = bigint_limbs(js, a, &alen);
+  const uint32_t *bd = bigint_limbs(js, b, &blen);
+
+  size_t abit = bigint_abs_bitlen_limbs(ad, alen);
+  size_t bbit = bigint_abs_bitlen_limbs(bd, blen);
+  size_t width_bits = (abit > bbit ? abit : bbit) + 1;
+  size_t width = (width_bits + 31u) / 32u;
+  if (width == 0) width = 1;
+
+  uint32_t *at = bigint_to_twos_complement_limbs(ad, alen, aneg, width);
+  uint32_t *bt = bigint_to_twos_complement_limbs(bd, blen, bneg, width);
+  if (!at || !bt) {
+    free(at);
+    free(bt);
+    return js_mkerr(js, "oom");
+  }
+
+  for (size_t i = 0; i < width; i++) {
+    switch (op) {
+      case BIGINT_BAND: at[i] &= bt[i]; break;
+      case BIGINT_BOR:  at[i] |= bt[i]; break;
+      case BIGINT_BXOR: at[i] ^= bt[i]; break;
+    }
+  }
+
+  bool negative = false;
+  size_t mcount = 0;
+  uint32_t *mag = bigint_from_twos_complement_limbs(at, width, &negative, &mcount);
+  free(at);
+  free(bt);
+  if (!mag) return js_mkerr(js, "oom");
+
+  ant_value_t out = js_mkbigint_limbs(js, mag, mcount, negative);
+  free(mag);
+  return out;
+}
+
+ant_value_t bigint_bitand(ant_t *js, ant_value_t a, ant_value_t b) {
+  return bigint_bitwise_binary(js, a, b, BIGINT_BAND);
+}
+
+ant_value_t bigint_bitor(ant_t *js, ant_value_t a, ant_value_t b) {
+  return bigint_bitwise_binary(js, a, b, BIGINT_BOR);
+}
+
+ant_value_t bigint_bitxor(ant_t *js, ant_value_t a, ant_value_t b) {
+  return bigint_bitwise_binary(js, a, b, BIGINT_BXOR);
+}
+
+ant_value_t bigint_bitnot(ant_t *js, ant_value_t value) {
+  bool neg = bigint_is_negative(js, value);
+  size_t count = 0;
+  const uint32_t *limbs = bigint_limbs(js, value, &count);
+
+  size_t bits = bigint_abs_bitlen_limbs(limbs, count);
+  size_t width_bits = bits + 1;
+  size_t width = (width_bits + 31u) / 32u;
+  if (width == 0) width = 1;
+
+  uint32_t *twos = bigint_to_twos_complement_limbs(limbs, count, neg, width);
+  if (!twos) return js_mkerr(js, "oom");
+  for (size_t i = 0; i < width; i++) twos[i] = ~twos[i];
+
+  bool out_neg = false;
+  size_t out_count = 0;
+  
+  uint32_t *mag = bigint_from_twos_complement_limbs(twos, width, &out_neg, &out_count);
+  free(twos); if (!mag) return js_mkerr(js, "oom");
+
+  ant_value_t out = js_mkbigint_limbs(js, mag, out_count, out_neg);
+  free(mag);
+  
+  return out;
+}
+
 static inline unsigned clz32_nonzero(uint32_t v) {
 #if defined(__GNUC__) || defined(__clang__)
   return (unsigned)__builtin_clz(v);
@@ -569,53 +733,99 @@ static bool bigint_divmod_abs_limbs(
   return true;
 }
 
-static ant_value_t bigint_from_decimal_digits(ant_t *js, const char *digits, size_t len, bool negative) {
+static ant_value_t bigint_from_string_digits(
+  ant_t *js,
+  const char *digits,
+  size_t len,
+  bool negative,
+  bool allow_separators
+) {
   if (!digits || len == 0) {
     uint32_t zero = 0;
     return js_mkbigint_limbs(js, &zero, 1, false);
   }
 
-  while (len > 1 && *digits == '0') {
-    digits++;
-    len--;
+  uint32_t base = 10;
+  size_t start = 0;
+
+  if (len >= 2 && digits[0] == '0') {
+    char p = (char)(digits[1] | 0x20);
+    if (p == 'x') {
+      base = 16;
+      start = 2;
+    } else if (p == 'o') {
+      base = 8;
+      start = 2;
+    } else if (p == 'b') {
+      base = 2;
+      start = 2;
+    }
   }
 
-  size_t cap = len / 9 + 2;
+  if (start >= len) return js_mkerr(js, "Cannot convert string to BigInt");
+
+  size_t cap = len / 8 + 2;
+  if (cap < 4) cap = 4;
   uint32_t *limbs = limb_alloc(cap);
   if (!limbs) return js_mkerr(js, "oom");
 
   size_t count = 1;
+  bool has_digit = false;
+  bool prev_sep = false;
 
-  for (size_t i = 0; i < len; i++) {
-    if (!is_decimal_digit(digits[i])) {
+  for (size_t i = start; i < len; i++) {
+    char ch = digits[i];
+
+    if (ch == '_') {
+      if (!allow_separators || !has_digit || prev_sep) {
+        free(limbs);
+        return js_mkerr(js, "Cannot convert string to BigInt");
+      }
+      prev_sep = true;
+      continue;
+    }
+
+    int digit = hex_digit(ch);
+    if (digit < 0 || (uint32_t)digit >= base) {
       free(limbs);
       return js_mkerr(js, "Cannot convert string to BigInt");
     }
 
-    uint64_t carry = (uint64_t)(digits[i] - '0');
+    has_digit = true;
+    prev_sep = false;
+
+    uint64_t carry = (uint64_t)digit;
 
     for (size_t j = 0; j < count; j++) {
-      uint64_t cur = (uint64_t)limbs[j] * 10 + carry;
+      uint64_t cur = (uint64_t)limbs[j] * base + carry;
       limbs[j] = (uint32_t)cur;
       carry = cur >> 32;
     }
 
     if (carry != 0) {
-      if (count == cap) {
-        size_t new_cap = cap * 2;
-        uint32_t *new_limbs = (uint32_t *)realloc(limbs, new_cap * sizeof(uint32_t));
-        if (!new_limbs) {
-          free(limbs);
-          return js_mkerr(js, "oom");
+      while (carry != 0) {
+        if (count == cap) {
+          size_t new_cap = cap * 2;
+          uint32_t *new_limbs = (uint32_t *)realloc(limbs, new_cap * sizeof(uint32_t));
+          if (!new_limbs) {
+            free(limbs);
+            return js_mkerr(js, "oom");
+          }
+
+          memset(new_limbs + cap, 0, (new_cap - cap) * sizeof(uint32_t));
+          limbs = new_limbs;
+          cap = new_cap;
         }
 
-        memset(new_limbs + cap, 0, (new_cap - cap) * sizeof(uint32_t));
-        limbs = new_limbs;
-        cap = new_cap;
+        limbs[count++] = (uint32_t)carry;
+        carry >>= 32;
       }
-
-      limbs[count++] = (uint32_t)carry;
     }
+  }
+
+  if (!has_digit || prev_sep) {
+    free(limbs);
+    return js_mkerr(js, "Cannot convert string to BigInt");
   }
 
   ant_value_t result = js_mkbigint_limbs(js, limbs, count, negative);
@@ -757,7 +967,7 @@ static char *bigint_abs_to_radix_string(const uint32_t *limbs, size_t count, uin
 }
 
 ant_value_t js_mkbigint(ant_t *js, const char *digits, size_t len, bool negative) {
-  return bigint_from_decimal_digits(js, digits, len, negative);
+  return bigint_from_string_digits(js, digits, len, negative, true);
 }
 
 ant_value_t bigint_add(ant_t *js, ant_value_t a, ant_value_t b) {
@@ -1099,24 +1309,21 @@ static ant_value_t builtin_BigInt(ant_t *js, ant_value_t *args, int nargs) {
     ant_offset_t off = vstr(js, arg, &slen);
     const char *str = (const char *)&js->mem[off];
 
+    size_t start = 0;
+    size_t end = slen;
+    
+    while (start < end && is_space((unsigned char)str[start])) start++;
+    while (end > start && is_space((unsigned char)str[end - 1])) end--;
+    if (start >= end) return js_mkbigint(js, "0", 1, false);
+
     bool neg = false;
-    size_t i = 0;
-
-    if (slen > 0 && str[0] == '-') {
+    if (str[start] == '-') {
       neg = true;
-      i++;
-    } else if (slen > 0 && str[0] == '+') {
-      i++;
-    }
+      start++;
+    } else if (str[start] == '+') start++;
 
-    while (i < slen && str[i] == '0') i++;
-    if (i >= slen) return js_mkbigint(js, "0", 1, false);
-
-    for (size_t j = i; j < slen; j++) {
-      if (!is_decimal_digit(str[j])) return js_mkerr(js, "Cannot convert string to BigInt");
-    }
-
-    return js_mkbigint(js, str + i, slen - i, neg);
+    if (start >= end) return js_mkerr(js, "Cannot convert string to BigInt");
+    return bigint_from_string_digits(js, str + start, end - start, neg, false);
   }
 
   if (vtype(arg) == T_BOOL) return js_mkbigint(js, vdata(arg) ? "1" : "0", 1, false);

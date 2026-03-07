@@ -12,7 +12,10 @@ static inline ant_value_t sv_op_band(sv_vm_t *vm, ant_t *js) {
   if (lt == T_BIGINT || rt == T_BIGINT) {
     if (lt != T_BIGINT || rt != T_BIGINT)
       return js_mkerr(js, "Cannot mix BigInt value and other types");
-    return js_mkerr_typed(js, JS_ERR_TYPE, "BigInt does not support bitwise ops");
+    ant_value_t res = bigint_bitand(js, l, r);
+    if (is_err(res)) return res;
+    vm->stack[vm->sp++] = res;
+    return tov(0);
   }
   int32_t ai = (lt == T_NUM) ? js_to_int32(tod(l)) : js_to_int32(js_to_number(js, l));
   int32_t bi = (rt == T_NUM) ? js_to_int32(tod(r)) : js_to_int32(js_to_number(js, r));
@@ -27,7 +30,10 @@ static inline ant_value_t sv_op_bor(sv_vm_t *vm, ant_t *js) {
   if (lt == T_BIGINT || rt == T_BIGINT) {
     if (lt != T_BIGINT || rt != T_BIGINT)
       return js_mkerr(js, "Cannot mix BigInt value and other types");
-    return js_mkerr_typed(js, JS_ERR_TYPE, "BigInt does not support bitwise ops");
+    ant_value_t res = bigint_bitor(js, l, r);
+    if (is_err(res)) return res;
+    vm->stack[vm->sp++] = res;
+    return tov(0);
   }
   int32_t ai = (lt == T_NUM) ? js_to_int32(tod(l)) : js_to_int32(js_to_number(js, l));
   int32_t bi = (rt == T_NUM) ? js_to_int32(tod(r)) : js_to_int32(js_to_number(js, r));
@@ -42,7 +48,10 @@ static inline ant_value_t sv_op_bxor(sv_vm_t *vm, ant_t *js) {
   if (lt == T_BIGINT || rt == T_BIGINT) {
     if (lt != T_BIGINT || rt != T_BIGINT)
       return js_mkerr(js, "Cannot mix BigInt value and other types");
-    return js_mkerr_typed(js, JS_ERR_TYPE, "BigInt does not support bitwise ops");
+    ant_value_t res = bigint_bitxor(js, l, r);
+    if (is_err(res)) return res;
+    vm->stack[vm->sp++] = res;
+    return tov(0);
   }
   int32_t ai = (lt == T_NUM) ? js_to_int32(tod(l)) : js_to_int32(js_to_number(js, l));
   int32_t bi = (rt == T_NUM) ? js_to_int32(tod(r)) : js_to_int32(js_to_number(js, r));
@@ -50,9 +59,16 @@ static inline ant_value_t sv_op_bxor(sv_vm_t *vm, ant_t *js) {
   return tov(0);
 }
 
-static inline void sv_op_bnot(sv_vm_t *vm, ant_t *js) {
+static inline ant_value_t sv_op_bnot(sv_vm_t *vm, ant_t *js) {
   ant_value_t a = vm->stack[--vm->sp];
+  if (vtype(a) == T_BIGINT) {
+    ant_value_t res = bigint_bitnot(js, a);
+    if (is_err(res)) return res;
+    vm->stack[vm->sp++] = res;
+    return tov(0);
+  }
   vm->stack[vm->sp++] = tov((double)(~js_to_int32(js_to_number(js, a))));
+  return tov(0);
 }
 
 static inline ant_value_t sv_op_shl(sv_vm_t *vm, ant_t *js) {

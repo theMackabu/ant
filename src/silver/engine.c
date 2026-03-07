@@ -656,7 +656,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_BAND:  { VM_CHECK(sv_op_band(vm, js));  NEXT(1); }
   L_BOR:   { VM_CHECK(sv_op_bor(vm, js));   NEXT(1); }
   L_BXOR:  { VM_CHECK(sv_op_bxor(vm, js));  NEXT(1); }
-  L_BNOT:  { sv_op_bnot(vm, js);            NEXT(1); }
+  L_BNOT:  { VM_CHECK(sv_op_bnot(vm, js));  NEXT(1); }
   L_SHL:   { VM_CHECK(sv_op_shl(vm, js));   NEXT(1); }
   L_SHR:   { VM_CHECK(sv_op_shr(vm, js));   NEXT(1); }
   L_USHR:  { VM_CHECK(sv_op_ushr(vm, js));  NEXT(1); }

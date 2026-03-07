@@ -5,13 +5,26 @@ console.log('BigInt Tests\n');
 test('bigint literal', 123n, 123n);
 test('BigInt()', BigInt(456), 456n);
 test('BigInt from string', BigInt('789'), 789n);
+test('BigInt from hex string', BigInt('0xff'), 255n);
+test('BigInt from binary string', BigInt('0b1010'), 10n);
+test('BigInt from octal string', BigInt('0o77'), 63n);
+test('BigInt from trimmed string', BigInt('  42  '), 42n);
+test('BigInt from empty string', BigInt(''), 0n);
+testThrows('BigInt invalid prefixed string', () => BigInt('0x'));
+testThrows('BigInt invalid underscore string', () => BigInt('1_2'));
 
 test('bigint addition', 1n + 2n, 3n);
+test('bigint prefixed literal addition', 0xffn + 1n, 256n);
 test('bigint subtraction', 10n - 3n, 7n);
 test('bigint multiplication', 4n * 5n, 20n);
 test('bigint division', 10n / 3n, 3n);
 test('bigint modulo', 10n % 3n, 1n);
 test('bigint exponentiation', 2n ** 10n, 1024n);
+test('bigint bitwise and', 5n & 3n, 1n);
+test('bigint bitwise or', 5n | 2n, 7n);
+test('bigint bitwise xor', 5n ^ 1n, 4n);
+test('bigint bitwise not', ~0n, -1n);
+test('bigint bitwise negative mix', (-8n) | 3n, -5n);
 
 test('bigint comparison <', 1n < 2n, true);
 test('bigint comparison >', 5n > 3n, true);
