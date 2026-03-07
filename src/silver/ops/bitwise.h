@@ -3,6 +3,7 @@
 
 #include "errors.h"
 #include "silver/engine.h"
+#include "modules/bigint.h"
 
 static inline ant_value_t sv_op_band(sv_vm_t *vm, ant_t *js) {
   ant_value_t r = vm->stack[--vm->sp];

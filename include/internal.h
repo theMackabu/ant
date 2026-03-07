@@ -251,12 +251,13 @@ ant_offset_t lkp_sym(ant_t *js, ant_value_t obj, ant_offset_t sym_off);
 ant_offset_t lkp_sym_proto(ant_t *js, ant_value_t obj, ant_offset_t sym_off);
 ant_offset_t vstr(ant_t *js, ant_value_t value, ant_offset_t *len);
 ant_offset_t vstrlen(ant_t *js, ant_value_t value);
-ant_value_t rope_flatten(ant_t *js, ant_value_t rope);
 ant_offset_t str_len_fast(ant_t *js, ant_value_t str);
+ant_offset_t js_alloc(ant_t *js, size_t size);
 
 ant_value_t mkarr(ant_t *js);
 ant_value_t mkval(uint8_t type, uint64_t data);
 ant_value_t mkobj(ant_t *js, ant_offset_t parent);
+ant_value_t rope_flatten(ant_t *js, ant_value_t rope);
 
 ant_value_t js_for_in_keys(ant_t *js, ant_value_t obj);
 ant_value_t js_delete_prop(ant_t *js, ant_value_t obj, const char *key, size_t len);
@@ -276,19 +277,5 @@ ant_value_t js_to_primitive(ant_t *js, ant_value_t value, int hint);
 
 ant_value_t do_instanceof(ant_t *js, ant_value_t l, ant_value_t r);
 ant_value_t do_in(ant_t *js, ant_value_t l, ant_value_t r);
-
-ant_value_t bigint_add(ant_t *js, ant_value_t a, ant_value_t b);
-ant_value_t bigint_sub(ant_t *js, ant_value_t a, ant_value_t b);
-ant_value_t bigint_mul(ant_t *js, ant_value_t a, ant_value_t b);
-ant_value_t bigint_div(ant_t *js, ant_value_t a, ant_value_t b);
-ant_value_t bigint_mod(ant_t *js, ant_value_t a, ant_value_t b);
-ant_value_t bigint_neg(ant_t *js, ant_value_t a);
-ant_value_t bigint_exp(ant_t *js, ant_value_t base, ant_value_t exp);
-int bigint_compare(ant_t *js, ant_value_t a, ant_value_t b);
-
-ant_value_t bigint_shift_left(ant_t *js, ant_value_t value, uint64_t shift);
-ant_value_t bigint_shift_right(ant_t *js, ant_value_t value, uint64_t shift);
-ant_value_t bigint_shift_right_logical(ant_t *js, ant_value_t value, uint64_t shift);
-ant_value_t bigint_asint_bits(ant_t *js, ant_value_t arg, uint64_t *bits_out);
 
 #endif

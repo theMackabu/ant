@@ -52,6 +52,8 @@
 #include "modules/reflect.h"
 #include "modules/symbol.h"
 #include "modules/date.h"
+#include "modules/math.h"
+#include "modules/bigint.h"
 #include "modules/regex.h"
 #include "modules/textcodec.h"
 #include "modules/sessionstorage.h"
@@ -568,6 +570,8 @@ int main(int argc, char *argv[]) {
   proc_argv = build_process_argv(argc, argv, module_file, script_tail);
   ant_runtime_init(js, proc_argv.argc, proc_argv.argv, localstorage_file);
 
+  init_math_module();
+  init_bigint_module();
   init_symbol_module();
   init_date_module();
   init_regex_module();
