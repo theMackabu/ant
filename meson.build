@@ -24,6 +24,13 @@ messages_h = custom_target('messages_h',
   capture: true,
 )
 
+theme_h = custom_target('theme_h',
+  input: 'src/highlight/theme.toml',
+  output: 'theme.h',
+  command: [python, files('meson/theme.py'), '@INPUT@'],
+  capture: true,
+)
+
 lib_sources = files(run_command(
   python, files('meson/sources.py'), files('sources.json'), 'engine',
   check: true
@@ -31,7 +38,11 @@ lib_sources = files(run_command(
 
 libant = static_library(
   'ant',
-  lib_sources + [snapshot_h, messages_h],
+  lib_sources + [
+    snapshot_h,
+    messages_h,
+    theme_h
+  ],
   install: true,
   include_directories: include,
   dependencies: ant_deps

@@ -1,4 +1,6 @@
 #include <string.h>
+
+#include "theme.h"
 #include "highlight/emit.h"
 
 static inline void ob_putc(hl_outbuf *o, char c) {
@@ -30,52 +32,10 @@ void hl_outbuf_write_escaped(hl_outbuf *o, const char *s, size_t n) {
   for (size_t i = 0; i < n; i++) ob_put_escaped(o, s[i]);
 }
 
-static const char *class_to_crvar(hl_token_class cls) {
-  switch (cls) {
-    case HL_NUMBER:           return "#E8CD7C";
-    case HL_NUMBER_PREFIX:    return "#EADBAD";
-    case HL_BOOLEAN:          return "#65B2FF";
-    case HL_LITERAL_NULL:     return "#65B2FF";
-
-    case HL_STRING:           return "#FF8A7F";
-    case HL_STRING_DELIMITER: return "#FF7265";
-    case HL_STRING_ESCAPE:    return "#F4AAA3";
-    case HL_STRING_KEY:       return "#CCA3F4";
-    case HL_STRING_TEMPLATE:  return "#FFB265";
-
-    case HL_REGEX:            return "#FFB265";
-    case HL_REGEX_ESCAPE:     return "#FFCC99";
-    case HL_REGEX_DELIMITER:  return "#FF9932";
-    case HL_REGEX_CDATA:      return "#65B2FF";
-
-    case HL_KEYWORD:          return "#65B2FF";
-    case HL_KEYWORD_DELETE:   return "#F43D3D";
-    case HL_TYPE:             return "#59D8F1";
-    case HL_TYPE_STRING:      return "#30E8AA";
-    case HL_TYPE_BOOLEAN:     return "#30E8AA";
-    case HL_COMMENT:          return "#758CA3";
-    case HL_FUNCTION_NAME:    return "#30E8AA";
-    case HL_FUNCTION:         return "#30E8AA";
-    case HL_ARGUMENT:         return "#CCA3F4";
-    case HL_PROPERTY:         return "#CCA3F4";
-    case HL_OPERATOR:         return "#8CB2D8";
-    case HL_OPTIONAL_CHAIN:   return "#8CB2D8";
-    case HL_BRACKET:          return "#8CB2D8";
-    case HL_SEMICOLON:        return "#B2CCE5";
-
-    case HL_KEYWORD_ITALIC:   return "italic+#65B2FF";
-    case HL_CLASS_NAME:       return "bold+#F7B76D";
-    case HL_PARENT_CLASS:     return "bold+#59D8F1";
-    case HL_KEYWORD_EXTENDS:  return "italic+#59D8F1";
-
-    default:                  return NULL;
-  }
-}
-
 static inline void ob_write_with_class(hl_outbuf *o, hl_token_class cls, const char *s, size_t n) {
   if (n == 0) return;
 
-  const char *var = class_to_crvar(cls);
+  const char *var = hl_theme_color(cls);
   if (var) {
     ob_putc(o, '<');
     ob_puts(o, var);

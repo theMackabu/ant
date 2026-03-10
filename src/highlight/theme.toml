@@ -1,0 +1,43 @@
+# Highlight theme — token class → crprintf color/style string
+# Styles: hex colors (#RRGGBB), with optional prefix modifiers (bold+, italic+)
+
+[colors]
+number           = "#E8CD7C"
+number_prefix    = "#EADBAD"
+boolean          = "#65B2FF"
+literal_null     = "#65B2FF"
+
+string           = "#FF8A7F"
+string_delimiter = "#FF7265"
+string_escape    = "#F4AAA3"
+string_key       = "#CCA3F4"
+string_template  = "#FFB265"
+
+regex            = "#FFB265"
+regex_escape     = "#FFCC99"
+regex_delimiter  = "#FF9932"
+regex_cdata      = "#65B2FF"
+
+keyword          = "#65B2FF"
+keyword_delete   = "#F43D3D"
+keyword_italic   = "italic+#65B2FF"
+keyword_extends  = "italic+#59D8F1"
+
+type             = "#59D8F1"
+type_string      = "#30E8AA"
+type_boolean     = "#30E8AA"
+
+comment          = "#758CA3"
+
+function_name    = "#30E8AA"
+function         = "#30E8AA"
+argument         = "#CCA3F4"
+property         = "#CCA3F4"
+
+operator         = "#8CB2D8"
+optional_chain   = "#8CB2D8"
+bracket          = "#8CB2D8"
+semicolon        = "#B2CCE5"
+
+class_name       = "bold+#F7B76D"
+parent_class     = "bold+#59D8F1"
