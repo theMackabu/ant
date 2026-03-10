@@ -1,0 +1,17 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -94,7 +94,13 @@
+     )
+ endif (TLSUV_HTTP)
+ 
+-add_subdirectory(src/${TLSUV_TLSLIB})
++if(TLSUV_TLSLIB STREQUAL "openssl")
++    add_subdirectory(src/openssl)
++elseif(TLSUV_TLSLIB STREQUAL "mbedtls")
++    add_subdirectory(src/mbedtls)
++elseif(TLSUV_TLSLIB STREQUAL "win32crypto")
++    add_subdirectory(src/win32crypto)
++endif()
+ 
+ if (TARGET libuv::uv)
+     message(NOTICE "upstream project set libuv target")
