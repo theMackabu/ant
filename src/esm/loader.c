@@ -733,7 +733,7 @@ static ant_module_format_t esm_decide_module_format(const char *resolved_path) {
   if (esm_is_cjs_extension(resolved_path)) return MODULE_EVAL_FORMAT_CJS;
   if (esm_is_esm_extension(resolved_path)) return MODULE_EVAL_FORMAT_ESM;
 
-  if (esm_has_suffix(resolved_path, ".js") && esm_path_contains_node_modules(resolved_path)) {
+  if (esm_has_suffix(resolved_path, ".js")) {
     bool pkg_is_module = false;
     bool has_package_json = esm_lookup_package_type_module(resolved_path, &pkg_is_module);
     if (!has_package_json) return MODULE_EVAL_FORMAT_CJS;
