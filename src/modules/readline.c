@@ -27,6 +27,7 @@
 #include "runtime.h"
 #include "internal.h"
 #include "descriptors.h"
+#include "tty_ctrl.h"
 #include "silver/engine.h"
 
 #include "modules/readline.h"
@@ -1192,61 +1193,66 @@ static ant_value_t rl_create_interface_promises(ant_t *js, ant_value_t *args, in
 }
 
 static ant_value_t rl_clear_line(ant_t *js, ant_value_t *args, int nargs) {
+  (void)js;
   if (nargs < 2) return js_false;
   int dir = (int)js_getnum(args[1]);
-  
-  const char *seq;
-  switch (dir) {
-    case -1: seq = "\033[1K"; break;
-    case 1:  seq = "\033[0K"; break;
-    case 0:
-    default: seq = "\033[2K\r"; break;
-  }
-  
-  fputs(seq, stdout);
-  fflush(stdout);
-  
-  return js_true;
+
+  size_t seq_len = 0;
+  const char *seq = tty_ctrl_clear_line_seq(dir, &seq_len);
+  return js_bool(tty_ctrl_write_stream(stdout, seq, seq_len, true));
 }
 
 static ant_value_t rl_clear_screen_down(ant_t *js, ant_value_t *args, int nargs) {
-  (void)args; (void)nargs;
-  
-  printf("\033[J");
-  fflush(stdout);
-  
-  return js_true;
+  (void)js; (void)args; (void)nargs;
+
+  size_t seq_len = 0;
+  const char *seq = tty_ctrl_clear_screen_down_seq(&seq_len);
+  return js_bool(tty_ctrl_write_stream(stdout, seq, seq_len, true));
 }
 
 static ant_value_t rl_cursor_to(ant_t *js, ant_value_t *args, int nargs) {
+  (void)js;
   if (nargs < 2) return js_false;
   int x = (int)js_getnum(args[1]);
-  
+
+  char seq[64];
+  size_t seq_len = 0;
+  bool ok = false;
   if (nargs >= 3 && vtype(args[2]) == T_NUM) {
     int y = (int)js_getnum(args[2]);
-    printf("\033[%d;%dH", y + 1, x + 1);
+    ok = tty_ctrl_build_cursor_to(seq, sizeof(seq), x, true, y, &seq_len);
   } else {
-    printf("\033[%dG", x + 1);
+    ok = tty_ctrl_build_cursor_to(seq, sizeof(seq), x, false, 0, &seq_len);
   }
-  fflush(stdout);
-  
-  return js_true;
+  if (!ok) return js_false;
+
+  return js_bool(tty_ctrl_write_stream(stdout, seq, seq_len, true));
 }
 
 static ant_value_t rl_move_cursor(ant_t *js, ant_value_t *args, int nargs) {
+  (void)js;
   if (nargs < 3) return js_false;
-  
+
   int dx = (int)js_getnum(args[1]);
   int dy = (int)js_getnum(args[2]);
-  
-  if (dx > 0) printf("\033[%dC", dx);
-  else if (dx < 0) printf("\033[%dD", -dx);
-  
-  if (dy > 0) printf("\033[%dB", dy);
-  else if (dy < 0) printf("\033[%dA", -dy);
-  
-  fflush(stdout);
-  return js_true;
+
+  bool ok = true;
+  if (dx != 0) {
+    char seq_x[32];
+    size_t len_x = 0;
+    ok = tty_ctrl_build_move_cursor_axis(seq_x, sizeof(seq_x), dx, true, &len_x);
+    if (ok) ok = tty_ctrl_write_stream(stdout, seq_x, len_x, false);
+  }
+
+  if (ok && dy != 0) {
+    char seq_y[32];
+    size_t len_y = 0;
+    ok = tty_ctrl_build_move_cursor_axis(seq_y, sizeof(seq_y), dy, false, &len_y);
+    if (ok) ok = tty_ctrl_write_stream(stdout, seq_y, len_y, false);
+  }
+
+  if (!ok) return js_false;
+  return js_bool(fflush(stdout) == 0);
 }
 
 static ant_value_t rl_emit_keypress_events(ant_t *js, ant_value_t *args, int nargs) {

@@ -1,6 +1,5 @@
 #include <compat.h> // IWYU pragma: keep
 
-#include <errno.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -14,7 +13,6 @@
 #include <io.h>
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#define ANT_WRITE_FD _write
 #define ANT_ISATTY _isatty
 #define ANT_STDIN_FD 0
 #define ANT_STDOUT_FD 1
@@ -23,7 +21,6 @@
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
-#define ANT_WRITE_FD write
 #define ANT_ISATTY isatty
 #define ANT_STDIN_FD STDIN_FILENO
 #define ANT_STDOUT_FD STDOUT_FILENO
@@ -35,6 +32,7 @@
 #include "errors.h"
 #include "internal.h"
 #include "runtime.h"
+#include "tty_ctrl.h"
 #include "silver/engine.h"
 
 #include "modules/symbol.h"
@@ -77,31 +75,6 @@ static int stream_fd_from_this(ant_t *js, int fallback_fd) {
   int fd = 0;
   if (!parse_fd(fd_val, &fd)) return fallback_fd;
   return fd;
-}
-
-static bool write_to_fd(int fd, const char *data, size_t len) {
-  if (fd < 0 || !data) return false;
-  if (len == 0) return true;
-
-  size_t off = 0;
-  while (off < len) {
-#ifdef _WIN32
-    size_t rem = len - off;
-    unsigned int chunk = (rem > (size_t)INT_MAX) ? (unsigned int)INT_MAX : (unsigned int)rem;
-    int wrote = ANT_WRITE_FD(fd, data + off, chunk);
-    if (wrote <= 0) return false;
-    off += (size_t)wrote;
-#else
-    ssize_t wrote = ANT_WRITE_FD(fd, data + off, len - off);
-    if (wrote < 0) {
-      if (errno == EINTR) continue;
-      return false;
-    }
-    if (wrote == 0) return false;
-    off += (size_t)wrote;
-#endif
-  }
-  return true;
 }
 
 static void get_tty_size(int fd, int *rows, int *cols) {
@@ -386,7 +359,7 @@ static ant_value_t tty_stream_write(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs > 1 && is_callable(args[1])) cb = args[1];
 
   int fd = stream_fd_from_this(js, ANT_STDOUT_FD);
-  bool ok = write_to_fd(fd, data, len);
+  bool ok = tty_ctrl_write_fd(fd, data, len);
 
   if (is_callable(cb)) {
     if (ok) invoke_callback_if_needed(js, cb, js_mknull());
@@ -447,12 +420,10 @@ static ant_value_t tty_write_stream_clear_line(ant_t *js, ant_value_t *args, int
   ant_value_t cb = js_mkundef();
   if (nargs > 1 && is_callable(args[1])) cb = args[1];
 
-  const char *seq = "\033[2K\r";
-  if (dir < 0) seq = "\033[1K";
-  else if (dir > 0) seq = "\033[0K";
-
   int fd = stream_fd_from_this(js, ANT_STDOUT_FD);
-  bool ok = write_to_fd(fd, seq, strlen(seq));
+  size_t seq_len = 0;
+  const char *seq = tty_ctrl_clear_line_seq(dir, &seq_len);
+  bool ok = tty_ctrl_write_fd(fd, seq, seq_len);
   return maybe_callback_or_throw(js, this_obj, cb, ok, "clearLine", fd);
 }
 
@@ -462,9 +433,10 @@ static ant_value_t tty_write_stream_clear_screen_down(ant_t *js, ant_value_t *ar
   ant_value_t cb = js_mkundef();
   if (nargs > 0 && is_callable(args[0])) cb = args[0];
 
-  static const char seq[] = "\033[0J";
   int fd = stream_fd_from_this(js, ANT_STDOUT_FD);
-  bool ok = write_to_fd(fd, seq, sizeof(seq) - 1);
+  size_t seq_len = 0;
+  const char *seq = tty_ctrl_clear_screen_down_seq(&seq_len);
+  bool ok = tty_ctrl_write_fd(fd, seq, seq_len);
   return maybe_callback_or_throw(js, this_obj, cb, ok, "clearScreenDown", fd);
 }
 
@@ -497,14 +469,13 @@ static ant_value_t tty_write_stream_cursor_to(ant_t *js, ant_value_t *args, int 
   }
 
   char seq[64];
-  int n = 0;
-  if (has_y) n = snprintf(seq, sizeof(seq), "\033[%d;%dH", y + 1, x + 1);
-  else n = snprintf(seq, sizeof(seq), "\033[%dG", x + 1);
-
-  if (n < 0 || (size_t)n >= sizeof(seq)) return js_mkerr(js, "Failed to build cursor sequence");
+  size_t seq_len = 0;
+  if (!tty_ctrl_build_cursor_to(seq, sizeof(seq), x, has_y, y, &seq_len)) {
+    return js_mkerr(js, "Failed to build cursor sequence");
+  }
 
   int fd = stream_fd_from_this(js, ANT_STDOUT_FD);
-  bool ok = write_to_fd(fd, seq, (size_t)n);
+  bool ok = tty_ctrl_write_fd(fd, seq, seq_len);
   return maybe_callback_or_throw(js, this_obj, cb, ok, "cursorTo", fd);
 }
 
@@ -528,20 +499,20 @@ static ant_value_t tty_write_stream_move_cursor(ant_t *js, ant_value_t *args, in
 
   if (dx != 0) {
     char seq_x[32];
-    int n_x = 0;
-    if (dx > 0) n_x = snprintf(seq_x, sizeof(seq_x), "\033[%dC", dx);
-    else n_x = snprintf(seq_x, sizeof(seq_x), "\033[%dD", -dx);
-    if (n_x < 0 || (size_t)n_x >= sizeof(seq_x)) return js_mkerr(js, "Failed to build moveCursor sequence");
-    if (!write_to_fd(fd, seq_x, (size_t)n_x)) ok = false;
+    size_t len_x = 0;
+    if (!tty_ctrl_build_move_cursor_axis(seq_x, sizeof(seq_x), dx, true, &len_x)) {
+      return js_mkerr(js, "Failed to build moveCursor sequence");
+    }
+    if (!tty_ctrl_write_fd(fd, seq_x, len_x)) ok = false;
   }
 
   if (ok && dy != 0) {
     char seq_y[32];
-    int n_y = 0;
-    if (dy > 0) n_y = snprintf(seq_y, sizeof(seq_y), "\033[%dB", dy);
-    else n_y = snprintf(seq_y, sizeof(seq_y), "\033[%dA", -dy);
-    if (n_y < 0 || (size_t)n_y >= sizeof(seq_y)) return js_mkerr(js, "Failed to build moveCursor sequence");
-    if (!write_to_fd(fd, seq_y, (size_t)n_y)) ok = false;
+    size_t len_y = 0;
+    if (!tty_ctrl_build_move_cursor_axis(seq_y, sizeof(seq_y), dy, false, &len_y)) {
+      return js_mkerr(js, "Failed to build moveCursor sequence");
+    }
+    if (!tty_ctrl_write_fd(fd, seq_y, len_y)) ok = false;
   }
 
   return maybe_callback_or_throw(js, this_obj, cb, ok, "moveCursor", fd);
