@@ -1193,48 +1193,40 @@ static ant_value_t rl_create_interface_promises(ant_t *js, ant_value_t *args, in
 }
 
 static ant_value_t rl_clear_line(ant_t *js, ant_value_t *args, int nargs) {
-  (void)js;
-  if (nargs < 2) return js_false;
-  int dir = (int)js_getnum(args[1]);
+  int dir = 0;
+  if (!tty_ctrl_parse_clear_line_dir(args, nargs, 1, &dir)) return js_false;
 
   size_t seq_len = 0;
   const char *seq = tty_ctrl_clear_line_seq(dir, &seq_len);
-  return js_bool(tty_ctrl_write_stream(stdout, seq, seq_len, true));
+  return tty_ctrl_bool_result(js, tty_ctrl_write_stream(stdout, seq, seq_len, true));
 }
 
 static ant_value_t rl_clear_screen_down(ant_t *js, ant_value_t *args, int nargs) {
-  (void)js; (void)args; (void)nargs;
-
   size_t seq_len = 0;
   const char *seq = tty_ctrl_clear_screen_down_seq(&seq_len);
-  return js_bool(tty_ctrl_write_stream(stdout, seq, seq_len, true));
+  return tty_ctrl_bool_result(js, tty_ctrl_write_stream(stdout, seq, seq_len, true));
 }
 
 static ant_value_t rl_cursor_to(ant_t *js, ant_value_t *args, int nargs) {
-  (void)js;
-  if (nargs < 2) return js_false;
-  int x = (int)js_getnum(args[1]);
+  tty_ctrl_cursor_to_args_t parsed;
+  if (!tty_ctrl_parse_cursor_to_args(args, nargs, 1, 2, &parsed)) return js_false;
 
   char seq[64];
   size_t seq_len = 0;
-  bool ok = false;
-  if (nargs >= 3 && vtype(args[2]) == T_NUM) {
-    int y = (int)js_getnum(args[2]);
-    ok = tty_ctrl_build_cursor_to(seq, sizeof(seq), x, true, y, &seq_len);
-  } else {
-    ok = tty_ctrl_build_cursor_to(seq, sizeof(seq), x, false, 0, &seq_len);
-  }
+  bool ok = tty_ctrl_build_cursor_to(
+    seq, sizeof(seq),
+    parsed.x, parsed.has_y, parsed.y,
+    &seq_len
+  );
   if (!ok) return js_false;
 
-  return js_bool(tty_ctrl_write_stream(stdout, seq, seq_len, true));
+  return tty_ctrl_bool_result(js, tty_ctrl_write_stream(stdout, seq, seq_len, true));
 }
 
 static ant_value_t rl_move_cursor(ant_t *js, ant_value_t *args, int nargs) {
-  (void)js;
-  if (nargs < 3) return js_false;
-
-  int dx = (int)js_getnum(args[1]);
-  int dy = (int)js_getnum(args[2]);
+  int dx = 0;
+  int dy = 0;
+  if (!tty_ctrl_parse_move_cursor_args(args, nargs, 1, 2, &dx, &dy)) return js_false;
 
   bool ok = true;
   if (dx != 0) {
@@ -1252,7 +1244,7 @@ static ant_value_t rl_move_cursor(ant_t *js, ant_value_t *args, int nargs) {
   }
 
   if (!ok) return js_false;
-  return js_bool(fflush(stdout) == 0);
+  return tty_ctrl_bool_result(js, fflush(stdout) == 0);
 }
 
 static ant_value_t rl_emit_keypress_events(ant_t *js, ant_value_t *args, int nargs) {

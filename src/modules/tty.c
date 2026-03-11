@@ -1,6 +1,5 @@
 #include <compat.h> // IWYU pragma: keep
 
-#include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -43,20 +42,9 @@ static inline bool is_callable(ant_value_t value) {
   return t == T_FUNC || t == T_CFUNC;
 }
 
-static bool parse_int(ant_value_t value, int *out) {
-  if (vtype(value) != T_NUM) return false;
-  double d = js_getnum(value);
-  if (!isfinite(d)) return false;
-  if (d < (double)INT_MIN || d > (double)INT_MAX) return false;
-  int i = (int)d;
-  if ((double)i != d) return false;
-  *out = i;
-  return true;
-}
-
 static bool parse_fd(ant_value_t value, int *fd_out) {
   int fd = 0;
-  if (!parse_int(value, &fd)) return false;
+  if (!tty_ctrl_parse_int_value(value, &fd)) return false;
   if (fd < 0) return false;
   *fd_out = fd;
   return true;
@@ -413,7 +401,7 @@ static ant_value_t tty_write_stream_clear_line(ant_t *js, ant_value_t *args, int
   ant_value_t this_obj = js_getthis(js);
 
   int dir = 0;
-  if (nargs > 0 && vtype(args[0]) != T_UNDEF && !parse_int(args[0], &dir)) {
+  if (!tty_ctrl_parse_clear_line_dir(args, nargs, 0, &dir)) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "clearLine(dir) requires a numeric dir");
   }
 
@@ -442,13 +430,12 @@ static ant_value_t tty_write_stream_clear_screen_down(ant_t *js, ant_value_t *ar
 
 static ant_value_t tty_write_stream_cursor_to(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_obj = js_getthis(js);
-  if (nargs < 1 || !parse_int(args[0], &(int){0})) {
+  int x = 0;
+  if (nargs < 1 || !tty_ctrl_parse_int_value(args[0], &x)) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "cursorTo(x[, y][, callback]) requires numeric x");
   }
 
-  int x = 0;
-  (void)parse_int(args[0], &x);
-  if (x < 0) x = 0;
+  x = tty_ctrl_normalize_coord(x);
 
   bool has_y = false;
   int y = 0;
@@ -459,9 +446,9 @@ static ant_value_t tty_write_stream_cursor_to(ant_t *js, ant_value_t *args, int 
       cb = args[1];
     } else if (vtype(args[1]) == T_UNDEF) {
       // no-op
-    } else if (parse_int(args[1], &y)) {
+    } else if (tty_ctrl_parse_int_value(args[1], &y)) {
       has_y = true;
-      if (y < 0) y = 0;
+      y = tty_ctrl_normalize_coord(y);
       if (nargs > 2 && is_callable(args[2])) cb = args[2];
     } else {
       return js_mkerr_typed(js, JS_ERR_TYPE, "cursorTo y must be a number when provided");
@@ -487,7 +474,7 @@ static ant_value_t tty_write_stream_move_cursor(ant_t *js, ant_value_t *args, in
 
   int dx = 0;
   int dy = 0;
-  if (!parse_int(args[0], &dx) || !parse_int(args[1], &dy)) {
+  if (!tty_ctrl_parse_move_cursor_args(args, nargs, 0, 1, &dx, &dy)) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "moveCursor(dx, dy[, callback]) requires numeric dx and dy");
   }
 
@@ -534,7 +521,7 @@ static ant_value_t tty_write_stream_has_colors(ant_t *js, ant_value_t *args, int
   if (nargs > 0) {
     if (vtype(args[0]) == T_NUM) {
       int parsed_count = 16;
-      if (!parse_int(args[0], &parsed_count)) {
+      if (!tty_ctrl_parse_int_value(args[0], &parsed_count)) {
         return js_mkerr_typed(js, JS_ERR_TYPE, "hasColors(count[, env]) count must be an integer");
       }
       count = parsed_count;
