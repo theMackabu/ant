@@ -40,6 +40,21 @@ typedef struct {
   uint32_t src_end;
 } sv_srcpos_t;
 
+typedef enum {
+  SV_TI_UNKNOWN = 0,
+  SV_TI_NUM,
+  SV_TI_STR,
+  SV_TI_ARR,
+  SV_TI_OBJ,
+  SV_TI_BOOL,
+  SV_TI_NULL,
+  SV_TI_UNDEF,
+} sv_local_type_t;
+
+typedef struct {
+  uint8_t type;
+} sv_type_info_t;
+
 bool sv_lookup_srcpos(sv_func_t *func, int bc_offset, uint32_t *line, uint32_t *col);
 bool sv_lookup_srcspan(sv_func_t *func, int bc_offset, uint32_t *src_off, uint32_t *src_end);
 
@@ -56,6 +71,10 @@ struct sv_func {
   sv_upval_desc_t *upval_descs;
   int max_locals;
   int max_stack;
+  
+  sv_type_info_t *local_types;
+  int local_type_count;
+  
   int param_count;
   int upvalue_count;
   

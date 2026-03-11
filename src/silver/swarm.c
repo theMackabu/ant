@@ -403,7 +403,9 @@ static bool jit_inlineable(sv_func_t *f) {
       case OP_PUT_LOCAL: case OP_PUT_LOCAL8:
       case OP_SET_LOCAL: case OP_SET_LOCAL8:
       case OP_POP: case OP_DUP:
-      case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV: case OP_MOD:
+      case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV:
+      case OP_ADD_NUM: case OP_SUB_NUM: case OP_MUL_NUM: case OP_DIV_NUM:
+      case OP_MOD:
       case OP_LT:  case OP_LE:
       case OP_RETURN: case OP_RETURN_UNDEF:
       case OP_NOP: case OP_LINE_NUM: case OP_COL_NUM: case OP_LABEL:
@@ -560,13 +562,17 @@ static bool jit_emit_inline_body(
         break;
       }
 
-      case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV: {
+      case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV:
+      case OP_ADD_NUM: case OP_SUB_NUM: case OP_MUL_NUM: case OP_DIV_NUM: {
         MIR_reg_t rr = inl_vs[--isp];
         MIR_reg_t rl = inl_vs[--isp];
         MIR_reg_t rd = inl_vs[isp++];
 
-        mir_emit_is_num_guard(ctx, jit_func, r_bool, rl, slow);
-        mir_emit_is_num_guard(ctx, jit_func, r_bool, rr, slow);
+        if (!(op == OP_ADD_NUM || op == OP_SUB_NUM ||
+              op == OP_MUL_NUM || op == OP_DIV_NUM)) {
+          mir_emit_is_num_guard(ctx, jit_func, r_bool, rl, slow);
+          mir_emit_is_num_guard(ctx, jit_func, r_bool, rr, slow);
+        }
 
         if (!*p_d_slot) {
           *p_d_slot = MIR_new_func_reg(ctx, jit_func->u.func,
@@ -591,10 +597,13 @@ static bool jit_emit_inline_body(
 
         MIR_insn_code_t mir_op;
         switch (op) {
-          case OP_ADD: mir_op = MIR_DADD; break;
-          case OP_SUB: mir_op = MIR_DSUB; break;
-          case OP_MUL: mir_op = MIR_DMUL; break;
-          default:     mir_op = MIR_DDIV; break;
+          case OP_ADD:
+          case OP_ADD_NUM: mir_op = MIR_DADD; break;
+          case OP_SUB:
+          case OP_SUB_NUM: mir_op = MIR_DSUB; break;
+          case OP_MUL:
+          case OP_MUL_NUM: mir_op = MIR_DMUL; break;
+          default:         mir_op = MIR_DDIV; break;
         }
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, mir_op,
@@ -730,6 +739,7 @@ static jit_features_t jit_prescan_features(sv_func_t *func) {
     if (sz == 0) break;
     switch (op) {
       case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV: case OP_MOD:
+      case OP_ADD_NUM: case OP_SUB_NUM: case OP_MUL_NUM: case OP_DIV_NUM:
       case OP_NEG:
       case OP_LT:  case OP_LE:  case OP_GT:  case OP_GE:
       case OP_BAND: case OP_BOR: case OP_BXOR: case OP_BNOT:
@@ -784,6 +794,7 @@ static bool jit_is_eligible(sv_func_t *func) {
       case OP_POP: case OP_DUP: case OP_DUP2:
       case OP_INSERT2: case OP_INSERT3:
       case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV: case OP_MOD:
+      case OP_ADD_NUM: case OP_SUB_NUM: case OP_MUL_NUM: case OP_DIV_NUM:
       case OP_NEG: case OP_IS_UNDEF: case OP_IS_NULL:
       case OP_LT:  case OP_LE:  case OP_GT:  case OP_GE:
       case OP_NE:  case OP_SNE:
@@ -1180,10 +1191,21 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   int n_locals = func->max_locals;
   MIR_reg_t *local_regs = NULL;
   sv_func_t **known_func_locals = NULL;
+  uint8_t *known_type_locals = NULL;
   if (n_locals > 0) {
     local_regs = calloc((size_t)n_locals, sizeof(MIR_reg_t));
     known_func_locals = calloc((size_t)n_locals, sizeof(sv_func_t *));
-    if (!local_regs) { free(vs.regs); free(vs.known_func); free(vs.d_regs); free(vs.slot_type); free(known_func_locals); MIR_finish_func(ctx); MIR_finish_module(ctx); return NULL; }
+    known_type_locals = calloc((size_t)n_locals, sizeof(uint8_t));
+    if (!local_regs || !known_func_locals || !known_type_locals) {
+      free(vs.regs); free(vs.known_func); free(vs.d_regs); free(vs.slot_type);
+      free(local_regs); free(known_func_locals); free(known_type_locals);
+      MIR_finish_func(ctx); MIR_finish_module(ctx); return NULL;
+    }
+    if (func->local_types && func->local_type_count > 0) {
+      int ncopy = func->local_type_count < n_locals ? func->local_type_count : n_locals;
+      for (int i = 0; i < ncopy; i++)
+        known_type_locals[i] = func->local_types[i].type;
+    }
     for (int i = 0; i < n_locals; i++) {
       char rname[32];
       snprintf(rname, sizeof(rname), "l%d", i);
@@ -1548,6 +1570,10 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           MIR_new_insn(ctx, MIR_MOV,
             MIR_new_reg_op(ctx, dst),
             MIR_new_reg_op(ctx, local_regs[idx])));
+        if (known_type_locals && known_type_locals[idx] == SV_TI_NUM) {
+          mir_i64_to_d(ctx, jit_func, vs.d_regs[vs.sp - 1], dst, r_d_slot);
+          if (vs.slot_type) vs.slot_type[vs.sp - 1] = SLOT_NUM;
+        }
         break;
       }
       case OP_GET_LOCAL8: {
@@ -1565,6 +1591,10 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           MIR_new_insn(ctx, MIR_MOV,
             MIR_new_reg_op(ctx, dst),
             MIR_new_reg_op(ctx, local_regs[idx])));
+        if (known_type_locals && known_type_locals[idx] == SV_TI_NUM) {
+          mir_i64_to_d(ctx, jit_func, vs.d_regs[vs.sp - 1], dst, r_d_slot);
+          if (vs.slot_type) vs.slot_type[vs.sp - 1] = SLOT_NUM;
+        }
         break;
       }
 
@@ -1575,6 +1605,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
         MIR_reg_t src = vstack_pop(&vs);
         if (known_func_locals) known_func_locals[idx] = kf;
+        if (known_type_locals) known_type_locals[idx] = SV_TI_UNKNOWN;
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, MIR_MOV,
             MIR_new_reg_op(ctx, local_regs[idx]),
@@ -1594,6 +1625,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
         MIR_reg_t src = vstack_pop(&vs);
         if (known_func_locals) known_func_locals[idx] = kf;
+        if (known_type_locals) known_type_locals[idx] = SV_TI_UNKNOWN;
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, MIR_MOV,
             MIR_new_reg_op(ctx, local_regs[idx]),
@@ -1613,6 +1645,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
         MIR_reg_t src = vstack_top(&vs);
         if (known_func_locals) known_func_locals[idx] = vs.known_func[vs.sp - 1];
+        if (known_type_locals) known_type_locals[idx] = SV_TI_UNKNOWN;
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, MIR_MOV,
             MIR_new_reg_op(ctx, local_regs[idx]),
@@ -1631,6 +1664,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
         MIR_reg_t src = vstack_top(&vs);
         if (known_func_locals) known_func_locals[idx] = vs.known_func[vs.sp - 1];
+        if (known_type_locals) known_type_locals[idx] = SV_TI_UNKNOWN;
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, MIR_MOV,
             MIR_new_reg_op(ctx, local_regs[idx]),
@@ -1644,8 +1678,12 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         break;
       }
 
-      case OP_SET_LOCAL_UNDEF:
+      case OP_SET_LOCAL_UNDEF: {
+        uint16_t idx = sv_get_u16(ip + 1);
+        if (idx >= (uint16_t)n_locals) { ok = false; break; }
+        if (known_type_locals) known_type_locals[idx] = SV_TI_UNKNOWN;
         break;
+      }
 
       case OP_POP:
         vstack_pop(&vs);
@@ -1741,10 +1779,12 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         break;
       }
 
-      case OP_ADD: {
+      case OP_ADD:
+      case OP_ADD_NUM: {
         uint8_t fb = func->type_feedback ? func->type_feedback[bc_off] : 0;
-        bool fb_num_only  = fb && !(fb & ~SV_TFB_NUM);
-        bool fb_never_num = fb && !(fb & SV_TFB_NUM);
+        bool force_num_only = (op == OP_ADD_NUM);
+        bool fb_num_only  = force_num_only || (fb && !(fb & ~SV_TFB_NUM));
+        bool fb_never_num = !force_num_only && fb && !(fb & SV_TFB_NUM);
 
         bool l_is_num = vs.slot_type && vs.slot_type[vs.sp - 2] == SLOT_NUM;
         bool r_is_num = vs.slot_type && vs.slot_type[vs.sp - 1] == SLOT_NUM;
@@ -1929,10 +1969,12 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         break;
       }
 
-      case OP_SUB: {
+      case OP_SUB:
+      case OP_SUB_NUM: {
         uint8_t fb = func->type_feedback ? func->type_feedback[bc_off] : 0;
-        bool fb_num_only  = fb && !(fb & ~SV_TFB_NUM);
-        bool fb_never_num = fb && !(fb & SV_TFB_NUM);
+        bool force_num_only = (op == OP_SUB_NUM);
+        bool fb_num_only  = force_num_only || (fb && !(fb & ~SV_TFB_NUM));
+        bool fb_never_num = !force_num_only && fb && !(fb & SV_TFB_NUM);
 
         bool l_is_num = vs.slot_type && vs.slot_type[vs.sp - 2] == SLOT_NUM;
         bool r_is_num = vs.slot_type && vs.slot_type[vs.sp - 1] == SLOT_NUM;
@@ -2100,10 +2142,12 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         break;
       }
 
-      case OP_MUL: {
+      case OP_MUL:
+      case OP_MUL_NUM: {
         uint8_t fb = func->type_feedback ? func->type_feedback[bc_off] : 0;
-        bool fb_num_only  = fb && !(fb & ~SV_TFB_NUM);
-        bool fb_never_num = fb && !(fb & SV_TFB_NUM);
+        bool force_num_only = (op == OP_MUL_NUM);
+        bool fb_num_only  = force_num_only || (fb && !(fb & ~SV_TFB_NUM));
+        bool fb_never_num = !force_num_only && fb && !(fb & SV_TFB_NUM);
 
         bool l_is_num = vs.slot_type && vs.slot_type[vs.sp - 2] == SLOT_NUM;
         bool r_is_num = vs.slot_type && vs.slot_type[vs.sp - 1] == SLOT_NUM;
@@ -2271,10 +2315,12 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         break;
       }
 
-      case OP_DIV: {
+      case OP_DIV:
+      case OP_DIV_NUM: {
         uint8_t fb = func->type_feedback ? func->type_feedback[bc_off] : 0;
-        bool fb_num_only  = fb && !(fb & ~SV_TFB_NUM);
-        bool fb_never_num = fb && !(fb & SV_TFB_NUM);
+        bool force_num_only = (op == OP_DIV_NUM);
+        bool fb_num_only  = force_num_only || (fb && !(fb & ~SV_TFB_NUM));
+        bool fb_never_num = !force_num_only && fb && !(fb & SV_TFB_NUM);
 
         bool l_is_num = vs.slot_type && vs.slot_type[vs.sp - 2] == SLOT_NUM;
         bool r_is_num = vs.slot_type && vs.slot_type[vs.sp - 1] == SLOT_NUM;
@@ -3621,6 +3667,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         uint8_t idx = sv_get_u8(ip + 1);
         if (idx >= (uint8_t)n_locals) { ok = false; break; }
         if (known_func_locals) known_func_locals[idx] = NULL;
+        if (known_type_locals) known_type_locals[idx] = SV_TI_UNKNOWN;
         int in = arith_n++;
         char il_d1[32], il_d2[32];
         snprintf(il_d1, sizeof(il_d1), "il_d1_%d", in);
@@ -3647,6 +3694,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         uint8_t idx = sv_get_u8(ip + 1);
         if (idx >= (uint8_t)n_locals) { ok = false; break; }
         if (known_func_locals) known_func_locals[idx] = NULL;
+        if (known_type_locals) known_type_locals[idx] = SV_TI_UNKNOWN;
         int dn = arith_n++;
         char dl_d1[32], dl_d2[32];
         snprintf(dl_d1, sizeof(dl_d1), "dl_d1_%d", dn);
@@ -3673,6 +3721,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         uint8_t idx = sv_get_u8(ip + 1);
         if (idx >= (uint8_t)n_locals) { ok = false; break; }
         if (known_func_locals) known_func_locals[idx] = NULL;
+        if (known_type_locals) known_type_locals[idx] = SV_TI_UNKNOWN;
         MIR_reg_t rr = vstack_pop(&vs);
 
         MIR_label_t slow = MIR_new_label(ctx);
@@ -5217,6 +5266,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   free(vs.slot_type);
   free(local_regs);
   free(known_func_locals);
+  free(known_type_locals);
   free(captured_locals);
 
   if (!ok) return NULL;

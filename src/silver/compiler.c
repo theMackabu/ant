@@ -12,6 +12,12 @@
 #include <string.h>
 #include <stdio.h>
 
+enum {
+  SV_ITER_HINT_GENERIC = 0,
+  SV_ITER_HINT_ARRAY = 1,
+  SV_ITER_HINT_STRING = 4,
+};
+
 typedef struct {
   const char *name;
   uint32_t name_len;
@@ -19,6 +25,7 @@ typedef struct {
   bool is_const;
   bool captured;
   bool is_tdz;
+  uint8_t inferred_type;
 } sv_local_t;
 
 typedef struct {
@@ -104,6 +111,9 @@ typedef struct sv_compiler {
   uint32_t last_srcpos_off;
   uint32_t last_srcpos_end;
 
+  sv_type_info_t *slot_types;
+  int slot_type_cap;
+
   sv_deferred_export_t *deferred_exports;
   int deferred_export_count;
   int deferred_export_cap;
@@ -153,6 +163,8 @@ static void compile_try(sv_compiler_t *c, sv_ast_t *node);
 static void compile_switch(sv_compiler_t *c, sv_ast_t *node);
 static void compile_label(sv_compiler_t *c, sv_ast_t *node);
 static void compile_class(sv_compiler_t *c, sv_ast_t *node);
+
+static uint8_t infer_expr_type(sv_compiler_t *c, sv_ast_t *node);
 
 static const char *pin_source_text(const char *source, ant_offset_t source_len) {
   if (!source || source_len <= 0) return source;
@@ -402,8 +414,80 @@ static int add_local(
   c->locals[idx] = (sv_local_t){
     .name = name, .name_len = len,
     .depth = depth, .is_const = is_const, .captured = false,
+    .inferred_type = SV_TI_UNKNOWN,
   };
   return idx;
+}
+
+static inline bool sv_type_is_known(uint8_t t) {
+  return t != SV_TI_UNKNOWN;
+}
+
+static inline bool sv_type_is_num(uint8_t t) {
+  return t == SV_TI_NUM;
+}
+
+static void ensure_slot_type_cap(sv_compiler_t *c, int slot) {
+  if (slot < 0) return;
+  if (slot < c->slot_type_cap) return;
+  int new_cap = c->slot_type_cap ? c->slot_type_cap : 16;
+  while (new_cap <= slot) new_cap *= 2;
+  sv_type_info_t *next = realloc(c->slot_types, (size_t)new_cap * sizeof(sv_type_info_t));
+  if (!next) return;
+  memset(next + c->slot_type_cap, 0, (size_t)(new_cap - c->slot_type_cap) * sizeof(sv_type_info_t));
+  c->slot_types = next;
+  c->slot_type_cap = new_cap;
+}
+
+static void mark_slot_type(sv_compiler_t *c, int slot, uint8_t type) {
+  if (slot < 0) return;
+  ensure_slot_type_cap(c, slot);
+  if (!c->slot_types || slot >= c->slot_type_cap) return;
+  uint8_t old = c->slot_types[slot].type;
+  if (!sv_type_is_known(type)) {
+    c->slot_types[slot].type = SV_TI_UNKNOWN;
+    return;
+  }
+  if (!sv_type_is_known(old))
+    c->slot_types[slot].type = type;
+  else if (old != type)
+    c->slot_types[slot].type = SV_TI_UNKNOWN;
+}
+
+static void set_local_inferred_type(sv_compiler_t *c, int local_idx, uint8_t type) {
+  if (local_idx < 0 || local_idx >= c->local_count) return;
+  c->locals[local_idx].inferred_type = type;
+  if (c->locals[local_idx].depth == -1) return; /* params use arg slots */
+  int slot = local_idx - c->param_locals;
+  mark_slot_type(c, slot, type);
+}
+
+static inline uint8_t get_local_inferred_type(sv_compiler_t *c, int local_idx) {
+  if (local_idx < 0 || local_idx >= c->local_count) return SV_TI_UNKNOWN;
+  if (c->locals[local_idx].depth == -1) return SV_TI_UNKNOWN;
+  if (c->locals[local_idx].is_tdz) return SV_TI_UNKNOWN;
+  return c->locals[local_idx].inferred_type;
+}
+
+static const char *typeof_name_for_type(uint8_t type) {
+  switch (type) {
+    case SV_TI_NUM:   return "number";
+    case SV_TI_STR:   return "string";
+    case SV_TI_BOOL:  return "boolean";
+    case SV_TI_UNDEF: return "undefined";
+    case SV_TI_ARR:
+    case SV_TI_OBJ:
+    case SV_TI_NULL:  return "object";
+    default:          return NULL;
+  }
+}
+
+static uint8_t iter_hint_for_type(uint8_t type) {
+  switch (type) {
+    case SV_TI_ARR: return SV_ITER_HINT_ARRAY;
+    case SV_TI_STR: return SV_ITER_HINT_STRING;
+    default:        return SV_ITER_HINT_GENERIC;
+  }
 }
 
 static int ensure_local_at_depth(
@@ -615,6 +699,7 @@ static void emit_with_put(
 
 static void emit_get_local(sv_compiler_t *c, int local_idx);
 static void emit_put_local(sv_compiler_t *c, int local_idx);
+static void emit_put_local_typed(sv_compiler_t *c, int local_idx, uint8_t type);
 
 static void emit_get_var(sv_compiler_t *c, const char *name, uint32_t len) {
   int local = resolve_local(c, name, len);
@@ -697,6 +782,7 @@ static void emit_set_var(sv_compiler_t *c, const char *name, uint32_t len, bool 
       emit_const_assign_error(c, name, len);
       return;
     }
+    set_local_inferred_type(c, local, SV_TI_UNKNOWN);
 
     if (c->with_depth > 0) {
       uint8_t kind = c->locals[local].depth == -1 ? WITH_FB_ARG : WITH_FB_LOCAL;
@@ -747,10 +833,15 @@ static void emit_set_var(sv_compiler_t *c, const char *name, uint32_t len, bool 
   }
 }
 
-static void emit_put_local(sv_compiler_t *c, int local_idx) {
+static void emit_put_local_typed(sv_compiler_t *c, int local_idx, uint8_t type) {
   int slot = local_idx - c->param_locals;
   if (slot <= 255) { emit_op(c, OP_PUT_LOCAL8); emit(c, (uint8_t)slot); }
   else { emit_op(c, OP_PUT_LOCAL); emit_u16(c, (uint16_t)slot); }
+  set_local_inferred_type(c, local_idx, type);
+}
+
+static void emit_put_local(sv_compiler_t *c, int local_idx) {
+  emit_put_local_typed(c, local_idx, SV_TI_UNKNOWN);
 }
 
 static void emit_get_local(sv_compiler_t *c, int local_idx) {
@@ -915,6 +1006,7 @@ static void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
       }
       for (int j = lb; j < c->local_count; j++) {
         c->locals[j].is_tdz = true;
+        set_local_inferred_type(c, j, SV_TI_UNKNOWN);
         int slot = j - c->param_locals;
         emit_op(c, OP_SET_LOCAL_UNDEF);
         emit_u16(c, (uint16_t)slot);
@@ -932,6 +1024,7 @@ static void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
       ensure_local_at_depth(c, decl_node->str, decl_node->len, false, c->scope_depth);
       if (c->local_count > lb) {
         c->locals[c->local_count - 1].is_tdz = true;
+        set_local_inferred_type(c, c->local_count - 1, SV_TI_UNKNOWN);
         int slot = (c->local_count - 1) - c->param_locals;
         emit_op(c, OP_SET_LOCAL_UNDEF);
         emit_u16(c, (uint16_t)slot);
@@ -981,6 +1074,89 @@ static void hoist_func_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
       for (int j = 0; j < funcs.count; j++)
         hoist_one_func(c, funcs.items[j]);
     }
+  }
+}
+
+static uint8_t infer_expr_type(sv_compiler_t *c, sv_ast_t *node) {
+  if (!node) return SV_TI_UNDEF;
+
+  switch (node->type) {
+    case N_NUMBER:   return SV_TI_NUM;
+    case N_STRING:   return SV_TI_STR;
+    case N_BOOL:     return SV_TI_BOOL;
+    case N_NULL:     return SV_TI_NULL;
+    case N_UNDEF:    return SV_TI_UNDEF;
+    case N_ARRAY:    return SV_TI_ARR;
+    case N_OBJECT:   return SV_TI_OBJ;
+    case N_TEMPLATE: return SV_TI_STR;
+    case N_TYPEOF:   return SV_TI_STR;
+    case N_VOID:     return SV_TI_UNDEF;
+    case N_NEW:      return SV_TI_OBJ;
+
+    case N_IDENT: {
+      int local = resolve_local(c, node->str, node->len);
+      if (local >= 0) return get_local_inferred_type(c, local);
+      return SV_TI_UNKNOWN;
+    }
+
+    case N_SEQUENCE:
+      return infer_expr_type(c, node->right);
+
+    case N_TERNARY: {
+      uint8_t lt = infer_expr_type(c, node->left);
+      uint8_t rhs_type = infer_expr_type(c, node->right);
+      if (lt == rhs_type && sv_type_is_known(lt)) return lt;
+      return SV_TI_UNKNOWN;
+    }
+
+    case N_UNARY: {
+      uint8_t rhs_type = infer_expr_type(c, node->right);
+      switch (node->op) {
+        case TOK_UPLUS:
+        case TOK_UMINUS:
+          return sv_type_is_num(rhs_type) ? SV_TI_NUM : SV_TI_UNKNOWN;
+        case TOK_NOT:
+          return SV_TI_BOOL;
+        default:
+          return SV_TI_UNKNOWN;
+      }
+    }
+
+    case N_BINARY: {
+      uint8_t lt = infer_expr_type(c, node->left);
+      uint8_t rhs_type = infer_expr_type(c, node->right);
+      switch (node->op) {
+        case TOK_PLUS:
+          if (lt == SV_TI_NUM && rhs_type == SV_TI_NUM) return SV_TI_NUM;
+          if (lt == SV_TI_STR && rhs_type == SV_TI_STR) return SV_TI_STR;
+          return SV_TI_UNKNOWN;
+        case TOK_MINUS:
+        case TOK_MUL:
+        case TOK_DIV:
+          return (lt == SV_TI_NUM && rhs_type == SV_TI_NUM) ? SV_TI_NUM : SV_TI_UNKNOWN;
+        case TOK_LT:
+        case TOK_LE:
+        case TOK_GT:
+        case TOK_GE:
+        case TOK_EQ:
+        case TOK_NE:
+        case TOK_SEQ:
+        case TOK_SNE:
+        case TOK_INSTANCEOF:
+        case TOK_IN:
+          return SV_TI_BOOL;
+        case TOK_LAND:
+        case TOK_LOR:
+        case TOK_NULLISH:
+          if (lt == rhs_type && sv_type_is_known(lt)) return lt;
+          return SV_TI_UNKNOWN;
+        default:
+          return SV_TI_UNKNOWN;
+      }
+    }
+
+    default:
+      return SV_TI_UNKNOWN;
   }
 }
 
@@ -1256,14 +1432,29 @@ static void compile_binary(sv_compiler_t *c, sv_ast_t *node) {
     return;
   }
 
+  uint8_t left_type = SV_TI_UNKNOWN;
+  uint8_t right_type = SV_TI_UNKNOWN;
+  if (op == TOK_PLUS || op == TOK_MINUS || op == TOK_MUL || op == TOK_DIV) {
+    left_type = infer_expr_type(c, node->left);
+    right_type = infer_expr_type(c, node->right);
+  }
+
   compile_expr(c, node->left);
   compile_expr(c, node->right);
 
   switch (op) {
-    case TOK_PLUS:       emit_op(c, OP_ADD); break;
-    case TOK_MINUS:      emit_op(c, OP_SUB); break;
-    case TOK_MUL:        emit_op(c, OP_MUL); break;
-    case TOK_DIV:        emit_op(c, OP_DIV); break;
+    case TOK_PLUS:
+      emit_op(c, (left_type == SV_TI_NUM && right_type == SV_TI_NUM) ? OP_ADD_NUM : OP_ADD);
+      break;
+    case TOK_MINUS:
+      emit_op(c, (left_type == SV_TI_NUM && right_type == SV_TI_NUM) ? OP_SUB_NUM : OP_SUB);
+      break;
+    case TOK_MUL:
+      emit_op(c, (left_type == SV_TI_NUM && right_type == SV_TI_NUM) ? OP_MUL_NUM : OP_MUL);
+      break;
+    case TOK_DIV:
+      emit_op(c, (left_type == SV_TI_NUM && right_type == SV_TI_NUM) ? OP_DIV_NUM : OP_DIV);
+      break;
     case TOK_REM:        emit_op(c, OP_MOD); break;
     case TOK_EXP:        emit_op(c, OP_EXP); break;
     case TOK_LT:         emit_op(c, OP_LT);  break;
@@ -1379,6 +1570,10 @@ static void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
   }
 
   if (target->type == N_IDENT) {
+    int lhs_local = resolve_local(c, target->str, target->len);
+    uint8_t lhs_type = (lhs_local >= 0) ? get_local_inferred_type(c, lhs_local) : SV_TI_UNKNOWN;
+    uint8_t rhs_type = infer_expr_type(c, node->right);
+
     if (op == TOK_PLUS_ASSIGN) {
       int slot = resolve_local_slot(c, target->str, target->len);
       if (slot >= 0 && !c->locals[slot + c->param_locals].is_const) {
@@ -1393,6 +1588,7 @@ static void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
           emit_op(c, OP_ADD_LOCAL);
           emit(c, (uint8_t)slot);
           emit_get_local(c, c->param_locals + slot);
+          set_local_inferred_type(c, c->param_locals + slot, SV_TI_UNKNOWN);
           return;
         }
       }
@@ -1414,10 +1610,18 @@ static void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
     emit_get_var(c, target->str, target->len);
     compile_expr(c, node->right);
     switch (op) {
-      case TOK_PLUS_ASSIGN:    emit_op(c, OP_ADD); break;
-      case TOK_MINUS_ASSIGN:   emit_op(c, OP_SUB); break;
-      case TOK_MUL_ASSIGN:     emit_op(c, OP_MUL); break;
-      case TOK_DIV_ASSIGN:     emit_op(c, OP_DIV); break;
+      case TOK_PLUS_ASSIGN:
+        emit_op(c, (lhs_type == SV_TI_NUM && rhs_type == SV_TI_NUM) ? OP_ADD_NUM : OP_ADD);
+        break;
+      case TOK_MINUS_ASSIGN:
+        emit_op(c, (lhs_type == SV_TI_NUM && rhs_type == SV_TI_NUM) ? OP_SUB_NUM : OP_SUB);
+        break;
+      case TOK_MUL_ASSIGN:
+        emit_op(c, (lhs_type == SV_TI_NUM && rhs_type == SV_TI_NUM) ? OP_MUL_NUM : OP_MUL);
+        break;
+      case TOK_DIV_ASSIGN:
+        emit_op(c, (lhs_type == SV_TI_NUM && rhs_type == SV_TI_NUM) ? OP_DIV_NUM : OP_DIV);
+        break;
       case TOK_REM_ASSIGN:     emit_op(c, OP_MOD); break;
       case TOK_SHL_ASSIGN:     emit_op(c, OP_SHL); break;
       case TOK_SHR_ASSIGN:     emit_op(c, OP_SHR); break;
@@ -1561,6 +1765,12 @@ static void compile_typeof(sv_compiler_t *c, sv_ast_t *node) {
   if (arg->type == N_IDENT) {
     int local = resolve_local(c, arg->str, arg->len);
     if (local != -1) {
+      uint8_t inferred = get_local_inferred_type(c, local);
+      const char *known = typeof_name_for_type(inferred);
+      if (known) {
+        emit_constant(c, js_mkstr(c->js, known, strlen(known)));
+        return;
+      }
       emit_get_var(c, arg->str, arg->len);
     } else {
       int upval = resolve_upvalue(c, arg->str, arg->len);
@@ -2596,20 +2806,32 @@ static void compile_var_decl(sv_compiler_t *c, sv_ast_t *node) {
       }
     } else if (kind == SV_VAR_VAR) {
       if (decl->right) {
+        uint8_t init_type = infer_expr_type(c, decl->right);
         compile_expr(c, decl->right);
-        compile_lhs_set(c, target, false);
+        if (target->type == N_IDENT) {
+          int idx = resolve_local(c, target->str, target->len);
+          if (idx >= 0 && c->locals[idx].depth != -1)
+            emit_put_local_typed(c, idx, init_type);
+          else
+            compile_lhs_set(c, target, false);
+        } else {
+          compile_lhs_set(c, target, false);
+        }
       }
     } else {
       if (target->type == N_IDENT) {
         int idx = ensure_local_at_depth(c, target->str, target->len,
                                         is_const, c->scope_depth);
+        uint8_t init_type = SV_TI_UNKNOWN;
         if (decl->right) {
+          init_type = infer_expr_type(c, decl->right);
           compile_expr(c, decl->right);
         } else if (!is_const) {
           emit_op(c, OP_UNDEF);
+          init_type = SV_TI_UNDEF;
         }
         if (decl->right || !is_const) {
-          emit_put_local(c, idx);
+          emit_put_local_typed(c, idx, init_type);
           c->locals[idx].is_tdz = false;
         }
       } else {
@@ -2628,8 +2850,49 @@ static void compile_destructure_binding(sv_compiler_t *c, sv_ast_t *pat,
   compile_destructure_pattern(c, pat, false, false, DESTRUCTURE_BIND, kind);
 }
 
+static bool fold_static_typeof_compare(
+  sv_compiler_t *c, sv_ast_t *cond, bool *out_truth
+) {
+  if (!cond || cond->type != N_BINARY) return false;
+  if (!(cond->op == TOK_SEQ || cond->op == TOK_SNE ||
+        cond->op == TOK_EQ  || cond->op == TOK_NE))
+    return false;
+
+  sv_ast_t *typeof_node = NULL;
+  sv_ast_t *str_node = NULL;
+  if (cond->left && cond->left->type == N_TYPEOF &&
+      cond->right && cond->right->type == N_STRING) {
+    typeof_node = cond->left;
+    str_node = cond->right;
+  } else if (cond->right && cond->right->type == N_TYPEOF &&
+             cond->left && cond->left->type == N_STRING) {
+    typeof_node = cond->right;
+    str_node = cond->left;
+  } else return false;
+
+  if (!typeof_node->right || typeof_node->right->type != N_IDENT) return false;
+  sv_ast_t *ident = typeof_node->right;
+  int local = resolve_local(c, ident->str, ident->len);
+  if (local < 0) return false;
+  const char *known = typeof_name_for_type(get_local_inferred_type(c, local));
+  if (!known) return false;
+
+  bool is_equal = (strlen(known) == str_node->len &&
+                   memcmp(known, str_node->str, str_node->len) == 0);
+  bool truth = (cond->op == TOK_SEQ || cond->op == TOK_EQ) ? is_equal : !is_equal;
+  *out_truth = truth;
+  return true;
+}
+
 
 static void compile_if(sv_compiler_t *c, sv_ast_t *node) {
+  bool folded_truth = false;
+  if (fold_static_typeof_compare(c, node->cond, &folded_truth)) {
+    if (folded_truth) compile_stmt(c, node->left);
+    else if (node->right) compile_stmt(c, node->right);
+    return;
+  }
+
   compile_expr(c, node->cond);
   int else_jump = emit_jump(c, OP_JMP_FALSE);
   compile_stmt(c, node->left);
@@ -2816,6 +3079,7 @@ static void compile_for(sv_compiler_t *c, sv_ast_t *node) {
         (slot = resolve_local_slot(c, upd->right->str, upd->right->len)) >= 0) {
       emit_op(c, upd->op == TOK_POSTINC ? OP_INC_LOCAL : OP_DEC_LOCAL);
       emit(c, (uint8_t)slot);
+      set_local_inferred_type(c, c->param_locals + slot, SV_TI_UNKNOWN);
     } else {
       compile_expr(c, upd);
       emit_op(c, OP_POP);
@@ -2900,6 +3164,7 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
     }
     for (int i = lb; i < c->local_count; i++) {
       c->locals[i].is_tdz = true;
+      set_local_inferred_type(c, i, SV_TI_UNKNOWN);
       int slot = i - c->param_locals;
       emit_op(c, OP_SET_LOCAL_UNDEF);
       emit_u16(c, (uint16_t)slot);
@@ -2933,6 +3198,10 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
   int iter_inner_start = -1;
 
   bool is_for_await = (node->type == N_FOR_AWAIT_OF);
+  uint8_t iter_hint = 0;
+  if (is_for_of && !is_for_await)
+    iter_hint = iter_hint_for_type(infer_expr_type(c, node->right));
+
   compile_expr(c, node->right);
   if (is_for_of) {
     emit_op(c, is_for_await ? OP_FOR_AWAIT_OF : OP_FOR_OF);
@@ -2953,7 +3222,12 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
   push_loop(c, loop_start, NULL, 0, false);
 
   if (is_for_of) {
-    emit_op(c, is_for_await ? OP_AWAIT_ITER_NEXT : OP_ITER_NEXT);
+    if (is_for_await) {
+      emit_op(c, OP_AWAIT_ITER_NEXT);
+    } else {
+      emit_op(c, OP_ITER_NEXT);
+      emit(c, iter_hint);
+    }
     exit_jump = emit_jump(c, OP_JMP_TRUE);  
   } else {
     emit_get_local(c, idx_local);
@@ -3447,6 +3721,15 @@ static void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     }
     fn->max_locals = comp.max_local_count;
     fn->max_stack = fn->max_locals + 64;
+    fn->local_type_count = fn->max_locals;
+    if (fn->max_locals > 0) {
+      fn->local_types = code_arena_bump((size_t)fn->max_locals * sizeof(sv_type_info_t));
+      memset(fn->local_types, 0, (size_t)fn->max_locals * sizeof(sv_type_info_t));
+      if (comp.slot_types) {
+        int ncopy = fn->max_locals < comp.slot_type_cap ? fn->max_locals : comp.slot_type_cap;
+        memcpy(fn->local_types, comp.slot_types, (size_t)ncopy * sizeof(sv_type_info_t));
+      }
+    }
     fn->param_count = comp.param_count;
     fn->is_strict = comp.is_strict;
     fn->filename = c->js->filename;
@@ -3459,6 +3742,7 @@ static void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     }
     free(comp.code); free(comp.constants); free(comp.atoms);
     free(comp.locals); free(comp.upval_descs); free(comp.loops);
+    free(comp.slot_types);
 
     int idx = add_constant(c, mkval(T_CFUNC, (uintptr_t)fn));
     emit_op(c, OP_CLOSURE);
@@ -3707,6 +3991,7 @@ static sv_func_t *compile_function_body(
       if (pname && plen) {
         int loc = add_local(&comp, pname, plen, false, 0);
         comp.locals[loc].is_tdz = true;
+        set_local_inferred_type(&comp, loc, SV_TI_UNKNOWN);
         int slot = loc - comp.param_locals;
         emit_op(&comp, OP_SET_LOCAL_UNDEF);
         emit_u16(&comp, (uint16_t)slot);
@@ -3733,6 +4018,7 @@ static sv_func_t *compile_function_body(
           comp.locals[bind_lb].is_tdz = false;
           if (slot <= 255) { emit_op(&comp, OP_PUT_LOCAL8); emit(&comp, (uint8_t)slot); }
           else { emit_op(&comp, OP_PUT_LOCAL); emit_u16(&comp, (uint16_t)slot); }
+          set_local_inferred_type(&comp, bind_lb, SV_TI_UNKNOWN);
         }
       } else if (p->type == N_ASSIGN_PAT) {
         emit_op(&comp, OP_GET_ARG);
@@ -3748,6 +4034,7 @@ static sv_func_t *compile_function_body(
           comp.locals[bind_lb].is_tdz = false;
           if (slot <= 255) { emit_op(&comp, OP_PUT_LOCAL8); emit(&comp, (uint8_t)slot); }
           else { emit_op(&comp, OP_PUT_LOCAL); emit_u16(&comp, (uint16_t)slot); }
+          set_local_inferred_type(&comp, bind_lb, SV_TI_UNKNOWN);
         } else if (p->left) {
           compile_destructure_binding(&comp, p->left, SV_VAR_LET);
           emit_op(&comp, OP_POP);
@@ -3770,6 +4057,7 @@ static sv_func_t *compile_function_body(
         comp.locals[bind_lb].is_tdz = false;
         if (slot <= 255) { emit_op(&comp, OP_PUT_LOCAL8); emit(&comp, (uint8_t)slot); }
         else { emit_op(&comp, OP_PUT_LOCAL); emit_u16(&comp, (uint16_t)slot); }
+        set_local_inferred_type(&comp, bind_lb, SV_TI_UNKNOWN);
       } else if (p->type == N_REST && p->right) {
         emit_op(&comp, OP_REST);
         emit_u16(&comp, (uint16_t)i);
@@ -3896,6 +4184,15 @@ static sv_func_t *compile_function_body(
 
   func->max_locals = max_locals;
   func->max_stack = max_locals + 64;
+  func->local_type_count = max_locals;
+  if (max_locals > 0) {
+    func->local_types = code_arena_bump((size_t)max_locals * sizeof(sv_type_info_t));
+    memset(func->local_types, 0, (size_t)max_locals * sizeof(sv_type_info_t));
+    if (comp.slot_types) {
+      int ncopy = max_locals < comp.slot_type_cap ? max_locals : comp.slot_type_cap;
+      memcpy(func->local_types, comp.slot_types, (size_t)ncopy * sizeof(sv_type_info_t));
+    }
+  }
   func->param_count = comp.param_count;
   func->is_strict = comp.is_strict;
   func->is_arrow = comp.is_arrow;
@@ -3925,6 +4222,7 @@ static sv_func_t *compile_function_body(
   free(comp.upval_descs);
   free(comp.loops);
   free(comp.srcpos);
+  free(comp.slot_types);
 
   return func;
 }

@@ -134,8 +134,9 @@ static inline ant_value_t sv_op_for_await_of(sv_vm_t *vm, ant_t *js) {
   return tov(0);
 }
 
-static inline ant_value_t sv_op_iter_next(sv_vm_t *vm, ant_t *js) {
-  int tag = (int)js_getnum(vm->stack[vm->sp - 1]);
+static inline ant_value_t sv_op_iter_next(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
+  int hint = (int)sv_get_u8(ip + 1);
+  int tag = hint ? hint : (int)js_getnum(vm->stack[vm->sp - 1]);
   switch (tag) {
   case SV_ITER_ARRAY: {
     ant_value_t arr = vm->stack[vm->sp - 3];

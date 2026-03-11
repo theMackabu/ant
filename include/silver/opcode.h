@@ -102,6 +102,10 @@ OP_DEF(  ADD,               1,   2,   1, none)
 OP_DEF(  SUB,               1,   2,   1, none)
 OP_DEF(  MUL,               1,   2,   1, none)
 OP_DEF(  DIV,               1,   2,   1, none)
+OP_DEF(  ADD_NUM,           1,   2,   1, none)      /* numeric-only fast path */
+OP_DEF(  SUB_NUM,           1,   2,   1, none)      /* numeric-only fast path */
+OP_DEF(  MUL_NUM,           1,   2,   1, none)      /* numeric-only fast path */
+OP_DEF(  DIV_NUM,           1,   2,   1, none)      /* numeric-only fast path */
 OP_DEF(  MOD,               1,   2,   1, none)
 OP_DEF(  EXP,               1,   2,   1, none)
 OP_DEF(  NEG,               1,   1,   1, none)      /* unary minus */
@@ -177,7 +181,7 @@ OP_DEF(  NIP_CATCH,         1,   2,   1, none)      /* catch ... a -> a */
 OP_DEF(  FOR_IN,            1,   1,   1, none)      /* obj -> iterator */
 OP_DEF(  FOR_OF,            1,   1,   3, none)      /* iterable -> iter next catch_off */
 OP_DEF(  FOR_AWAIT_OF,      1,   1,   3, none)      /* async iterable -> iter next catch_off */
-OP_DEF(  ITER_NEXT,         1,   3,   5, none)      /* advance iterator */
+OP_DEF(  ITER_NEXT,         2,   3,   5, u8)        /* advance iterator (u8 hint) */
 OP_DEF(  ITER_GET_VALUE,    1,   2,   3, none)      /* catch_off obj -> catch_off value done */
 OP_DEF(  ITER_CLOSE,        1,   3,   0, none)      /* close iterator */
 OP_DEF(  ITER_CALL,         2,   4,   5, u8)        /* call iterator method */

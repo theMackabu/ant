@@ -399,86 +399,10 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   }
   #endif
 
-  // TODO: generate with X-macro
-  #define OP(name) [OP_##name] = &&L_##name
   static const void *dispatch[OP__COUNT] = {
-    OP(INVALID),
-
-    OP(CONST), OP(CONST_I8), OP(CONST8),
-    OP(UNDEF), OP(NULL), OP(TRUE), OP(FALSE),
-    OP(THIS), OP(GLOBAL), OP(OBJECT), OP(ARRAY), OP(REGEXP), OP(CLOSURE),
-
-    OP(POP), OP(DUP), OP(DUP2), OP(SWAP),
-    OP(ROT3L), OP(ROT3R), OP(NIP), OP(NIP2), OP(INSERT2), OP(INSERT3),
-    OP(SWAP_UNDER), OP(ROT4_UNDER),
-
-    OP(GET_LOCAL), OP(PUT_LOCAL), OP(SET_LOCAL),
-    OP(GET_LOCAL8), OP(PUT_LOCAL8), OP(SET_LOCAL8),
-    OP(SET_LOCAL_UNDEF), OP(GET_LOCAL_CHK), OP(PUT_LOCAL_CHK),
-
-    OP(GET_ARG), OP(PUT_ARG), OP(SET_ARG), OP(REST),
-    OP(GET_UPVAL), OP(PUT_UPVAL), OP(SET_UPVAL), OP(CLOSE_UPVAL),
-    OP(GET_GLOBAL), OP(GET_GLOBAL_UNDEF), OP(PUT_GLOBAL),
-
-    OP(GET_FIELD), OP(GET_FIELD2), OP(PUT_FIELD),
-    OP(GET_ELEM), OP(GET_ELEM2), OP(PUT_ELEM),
-    OP(DEFINE_FIELD), OP(GET_LENGTH),
-
-    OP(GET_FIELD_OPT), OP(GET_ELEM_OPT),
-    OP(GET_PRIVATE), OP(PUT_PRIVATE), OP(DEF_PRIVATE),
-    OP(GET_SUPER), OP(GET_SUPER_VAL), OP(PUT_SUPER_VAL),
-
-    OP(ADD), OP(SUB), OP(MUL), OP(DIV), OP(MOD), OP(EXP),
-    OP(NEG), OP(UPLUS),
-    OP(INC), OP(DEC), OP(POST_INC), OP(POST_DEC),
-    OP(INC_LOCAL), OP(DEC_LOCAL), OP(ADD_LOCAL),
-
-    OP(EQ), OP(NE), OP(SEQ), OP(SNE),
-    OP(LT), OP(LE), OP(GT), OP(GE),
-    OP(INSTANCEOF), OP(IN),
-    OP(IS_NULLISH), OP(IS_UNDEF_OR_NULL),
-
-    OP(BAND), OP(BOR), OP(BXOR), OP(BNOT),
-    OP(SHL), OP(SHR), OP(USHR),
-    OP(NOT), OP(TYPEOF), OP(VOID), OP(DELETE), OP(DELETE_VAR),
-
-    OP(JMP), OP(JMP_FALSE), OP(JMP_TRUE),
-    OP(JMP_FALSE_PEEK), OP(JMP_TRUE_PEEK), OP(JMP_NOT_NULLISH),
-    OP(JMP8), OP(JMP_FALSE8), OP(JMP_TRUE8),
-
-    OP(CALL), OP(CALL_METHOD),
-    OP(TAIL_CALL), OP(TAIL_CALL_METHOD),
-    OP(NEW), OP(APPLY), OP(EVAL),
-    OP(RETURN), OP(RETURN_UNDEF), OP(RETURN_ASYNC),
-    OP(CHECK_CTOR), OP(CHECK_CTOR_RET), OP(HALT),
-
-    OP(THROW), OP(THROW_ERROR),
-    OP(TRY_PUSH), OP(TRY_POP),
-    OP(CATCH), OP(FINALLY), OP(FINALLY_RET), OP(NIP_CATCH),
-
-    OP(FOR_IN), OP(FOR_OF), OP(FOR_AWAIT_OF),
-    OP(ITER_NEXT), OP(ITER_GET_VALUE),
-    OP(ITER_CLOSE), OP(ITER_CALL), OP(AWAIT_ITER_NEXT),
-
-    OP(AWAIT), OP(YIELD), OP(YIELD_STAR), OP(INITIAL_YIELD),
-    OP(SPREAD),
-
-    OP(DEFINE_METHOD), OP(DEFINE_METHOD_COMP),
-    OP(SET_NAME), OP(SET_NAME_COMP),
-    OP(SET_PROTO), OP(SET_HOME_OBJ),
-    OP(APPEND), OP(COPY_DATA_PROPS),
-
-    OP(DEFINE_CLASS), OP(DEFINE_CLASS_COMP), OP(ADD_BRAND),
-    OP(TO_OBJECT), OP(TO_PROPKEY), OP(IS_UNDEF), OP(IS_NULL),
-
-    OP(IMPORT), OP(IMPORT_SYNC), OP(IMPORT_DEFAULT), OP(EXPORT), OP(EXPORT_ALL),
-    OP(ENTER_WITH), OP(EXIT_WITH),
-
-    OP(WITH_GET_VAR), OP(WITH_PUT_VAR), OP(WITH_DEL_VAR),
-    OP(SPECIAL_OBJ), OP(EMPTY), OP(DEBUGGER), OP(NOP), OP(PUT_CONST),
-    OP(LABEL), OP(LINE_NUM), OP(COL_NUM),
+    #define OP_DEF(name, size, n_pop, n_push, f) [OP_##name] = &&L_##name,
+    #include "silver/opcode.h"
   };
-  #undef OP
   
   ant_value_t sv_err;
   #define VM_CHECK(expr) do {             \
@@ -492,11 +416,11 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   #define NEXT(n)     do { ip += (n); DISPATCH(); } while (0)
 
   #ifdef ANT_JIT
-  #define JIT_OSR_BACK_EDGE() do {                                            \
+  #define JIT_OSR_BACK_EDGE() do {                                          \
     if (!func->jit_compile_failed) {                                        \
       if (!func->type_feedback) sv_tfb_ensure(func);                        \
       if (++func->back_edge_count >= SV_JIT_OSR_THRESHOLD) {                \
-      ant_value_t osr_r = sv_jit_try_osr(                                       \
+      ant_value_t osr_r = sv_jit_try_osr(                                   \
         vm, js, frame, func,                                                \
          (int)(ip - func->code));                                           \
       if (osr_r != SV_JIT_RETRY_INTERP) {                                   \
@@ -605,6 +529,13 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     }
     VM_CHECK(sv_op_add(vm, js)); NEXT(1);
   }
+
+  L_ADD_NUM: {
+    ant_value_t r = vm->stack[--vm->sp];
+    ant_value_t l = vm->stack[vm->sp - 1];
+    vm->stack[vm->sp - 1] = tov(tod(l) + tod(r));
+    NEXT(1);
+  }
   
   L_SUB: {
     ant_value_t r = vm->stack[vm->sp - 1], l = vm->stack[vm->sp - 2];
@@ -613,6 +544,27 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
       vm->sp--; vm->stack[vm->sp - 1] = tov(tod(l) - tod(r)); NEXT(1);
     }
     VM_CHECK(sv_op_sub(vm, js)); NEXT(1);
+  }
+
+  L_SUB_NUM: {
+    ant_value_t r = vm->stack[--vm->sp];
+    ant_value_t l = vm->stack[vm->sp - 1];
+    vm->stack[vm->sp - 1] = tov(tod(l) - tod(r));
+    NEXT(1);
+  }
+
+  L_MUL_NUM: {
+    ant_value_t r = vm->stack[--vm->sp];
+    ant_value_t l = vm->stack[vm->sp - 1];
+    vm->stack[vm->sp - 1] = tov(tod(l) * tod(r));
+    NEXT(1);
+  }
+
+  L_DIV_NUM: {
+    ant_value_t r = vm->stack[--vm->sp];
+    ant_value_t l = vm->stack[vm->sp - 1];
+    vm->stack[vm->sp - 1] = tov(tod(l) / tod(r));
+    NEXT(1);
   }
   
   L_MUL:        { sv_tfb_record2(func, ip, vm->stack[vm->sp-2], vm->stack[vm->sp-1]); VM_CHECK(sv_op_mul(vm, js));                NEXT(1); }
@@ -1243,7 +1195,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_FOR_IN:           { VM_CHECK(sv_op_for_in(vm, js));           NEXT(1); }
   L_FOR_OF:           { VM_CHECK(sv_op_for_of(vm, js));           NEXT(1); }
   L_FOR_AWAIT_OF:     { VM_CHECK(sv_op_for_await_of(vm, js));     NEXT(1); }
-  L_ITER_NEXT:        { VM_CHECK(sv_op_iter_next(vm, js));        NEXT(1); }
+  L_ITER_NEXT:        { VM_CHECK(sv_op_iter_next(vm, js, ip));    NEXT(2); }
   L_ITER_GET_VALUE:   { sv_op_iter_get_value(vm, js);             NEXT(1); }
   L_ITER_CLOSE:       { sv_op_iter_close(vm, js);                 NEXT(1); }
   L_ITER_CALL:        { VM_CHECK(sv_op_iter_call(vm, js, ip));    NEXT(2); }
