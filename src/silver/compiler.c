@@ -34,6 +34,7 @@ typedef struct {
   int scope_depth;
   const char *label;
   uint32_t label_len;
+  bool is_switch;
 } sv_loop_t;
 
 typedef struct {
@@ -533,7 +534,8 @@ static void patch_list_resolve(sv_compiler_t *c, sv_patch_list_t *pl) {
 
 static void push_loop(
   sv_compiler_t *c, int loop_start,
-  const char *label, uint32_t label_len
+  const char *label, uint32_t label_len,
+  bool is_switch
 ) {
   if (c->loop_count >= c->loop_cap) {
     c->loop_cap = c->loop_cap ? c->loop_cap * 2 : 4;
@@ -549,6 +551,7 @@ static void push_loop(
     .loop_start = loop_start,
     .scope_depth = c->scope_depth,
     .label = label, .label_len = label_len,
+    .is_switch = is_switch,
   };
 }
 
@@ -2643,7 +2646,7 @@ static void compile_if(sv_compiler_t *c, sv_ast_t *node) {
 
 static void compile_while(sv_compiler_t *c, sv_ast_t *node) {
   int loop_start = c->code_len;
-  push_loop(c, loop_start, NULL, 0);
+  push_loop(c, loop_start, NULL, 0, false);
 
   compile_expr(c, node->cond);
   int exit_jump = emit_jump(c, OP_JMP_FALSE);
@@ -2661,7 +2664,7 @@ static void compile_while(sv_compiler_t *c, sv_ast_t *node) {
 
 static void compile_do_while(sv_compiler_t *c, sv_ast_t *node) {
   int loop_start = c->code_len;
-  push_loop(c, loop_start, NULL, 0);
+  push_loop(c, loop_start, NULL, 0, false);
 
   compile_stmt(c, node->body);
 
@@ -2761,7 +2764,7 @@ static void compile_for(sv_compiler_t *c, sv_ast_t *node) {
   }
 
   int loop_start = c->code_len;
-  push_loop(c, loop_start, NULL, 0);
+  push_loop(c, loop_start, NULL, 0, false);
 
   int exit_jump = -1;
   if (node->cond) {
@@ -2947,7 +2950,7 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
   }
 
   int loop_start = c->code_len;
-  push_loop(c, loop_start, NULL, 0);
+  push_loop(c, loop_start, NULL, 0, false);
 
   if (is_for_of) {
     emit_op(c, is_for_await ? OP_AWAIT_ITER_NEXT : OP_ITER_NEXT);
@@ -3068,23 +3071,20 @@ static void compile_break(sv_compiler_t *c, sv_ast_t *node) {
 
 
 static void compile_continue(sv_compiler_t *c, sv_ast_t *node) {
-  if (c->loop_count == 0) return;
-
-  int target = c->loop_count - 1;
+  for (int i = c->loop_count - 1; i >= 0; i--) {
   if (node->str) {
-    for (int i = c->loop_count - 1; i >= 0; i--) {
-      if (c->loops[i].label &&
-          c->loops[i].label_len == node->len &&
-          memcmp(c->loops[i].label, node->str, node->len) == 0) {
-        target = i;
-        break;
-      }
+    if (
+      c->loops[i].label &&
+      c->loops[i].label_len == node->len &&
+      memcmp(c->loops[i].label, node->str, node->len) == 0) {
+      patch_list_add(&c->loops[i].continues, emit_jump(c, OP_JMP));
+      return;
     }
+  } else if (!c->loops[i].is_switch) {
+    patch_list_add(&c->loops[i].continues, emit_jump(c, OP_JMP));
+    return;
   }
-
-  int offset = emit_jump(c, OP_JMP);
-  patch_list_add(&c->loops[target].continues, offset);
-}
+}}
 
 static void compile_finally_block(sv_compiler_t *c, sv_ast_t *finally_body) {
   int finally_jump = emit_jump(c, OP_FINALLY);
@@ -3184,7 +3184,7 @@ static void compile_switch(sv_compiler_t *c, sv_ast_t *node) {
 
   compile_expr(c, node->cond);  
   begin_scope(c);
-  push_loop(c, c->code_len, NULL, 0);  
+  push_loop(c, c->code_len, NULL, 0, true);
 
   for (int i = 0; i < case_count; i++) {
     sv_ast_t *cas = node->args.items[i];
@@ -3250,7 +3250,7 @@ static void compile_label(sv_compiler_t *c, sv_ast_t *node) {
     c->pending_label = NULL;
     c->pending_label_len = 0;
   } else {
-    push_loop(c, c->code_len, node->str, node->len);
+    push_loop(c, c->code_len, node->str, node->len, false);
     compile_stmt(c, node->body);
     pop_loop(c);
   }
