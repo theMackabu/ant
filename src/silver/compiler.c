@@ -216,12 +216,24 @@ static void emit_srcpos(sv_compiler_t *c, sv_ast_t *node) {
   if (end == off && off < (uint32_t)clen) end = off + 1;
   if (end == off) return;
 
-  uint32_t line = 1, col = 1;
-  for (uint32_t i = 0; i < off; i++) {
-    if (code[i] == '\n') { line++; col = 1; }
-    else col++;
-  }
   if (c->srcpos_count > 0 && c->last_srcpos_off == off && c->last_srcpos_end == end) return;
+
+  uint32_t line, col;
+  if (c->srcpos_count > 0 && off >= c->last_srcpos_off) {
+    line = c->srcpos[c->srcpos_count - 1].line;
+    col = c->srcpos[c->srcpos_count - 1].col;
+    for (uint32_t i = c->last_srcpos_off; i < off; i++) {
+      if (code[i] == '\n') { line++; col = 1; }
+      else col++;
+    }
+  } else {
+    line = 1; col = 1;
+    for (uint32_t i = 0; i < off; i++) {
+      if (code[i] == '\n') { line++; col = 1; }
+      else col++;
+    }
+  }
+
   if (c->srcpos_count >= c->srcpos_cap) {
     c->srcpos_cap = c->srcpos_cap ? c->srcpos_cap * 2 : 32;
     c->srcpos = realloc(c->srcpos, (size_t)c->srcpos_cap * sizeof(sv_srcpos_t));
