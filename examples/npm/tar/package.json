@@ -1,0 +1,12 @@
+{
+  "name": "tar",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "ant index.js"
+  },
+  "dependencies": {
+    "tar": "^7.5.11"
+  },
+  "devDependencies": {}
+}
