@@ -744,8 +744,10 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
               callee->is_arrow || vtype(closure->bound_this) != T_UNDEF)
               ? closure->bound_this : js_mkundef();
             frame->ip = ip + 3;
+            sv_jit_enter(js);
             ant_value_t jit_result = ((sv_jit_func_t)callee->jit_code)(
               vm, jit_this, call_args, (int)call_argc, closure);
+            sv_jit_leave(js);
             if (sv_is_jit_bailout(jit_result)) {
               sv_jit_on_bailout(callee);
               goto call_fallback;
@@ -768,7 +770,9 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
                 callee->is_arrow || vtype(closure->bound_this) != T_UNDEF)
                  ? closure->bound_this : js_mkundef();
               frame->ip = ip + 3;
+              sv_jit_enter(js);
               ant_value_t jit_result = jit_fn(vm, jit_this, call_args, (int)call_argc, closure);
+              sv_jit_leave(js);
               if (sv_is_jit_bailout(jit_result)) {
                 sv_jit_on_bailout(callee);
                 goto call_fallback;
@@ -863,8 +867,10 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
               callee->is_arrow || vtype(closure->bound_this) != T_UNDEF)
               ? closure->bound_this : call_this;
             frame->ip = ip + 3;
+            sv_jit_enter(js);
             ant_value_t jit_result = ((sv_jit_func_t)callee->jit_code)(
               vm, jit_this, call_args, (int)call_argc, closure);
+            sv_jit_leave(js);
             if (sv_is_jit_bailout(jit_result)) {
               sv_jit_on_bailout(callee);
               goto call_method_fallback;
@@ -887,7 +893,9 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
                 callee->is_arrow || vtype(closure->bound_this) != T_UNDEF)
                 ? closure->bound_this : call_this;
               frame->ip = ip + 3;
+              sv_jit_enter(js);
               ant_value_t jit_result = jit_fn(vm, jit_this, call_args, (int)call_argc, closure);
+              sv_jit_leave(js);
               if (sv_is_jit_bailout(jit_result)) {
                 sv_jit_on_bailout(callee);
                 goto call_method_fallback;

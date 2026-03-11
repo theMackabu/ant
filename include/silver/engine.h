@@ -470,6 +470,14 @@ static inline bool sv_is_jit_bailout(ant_value_t v) {
   return v == SV_JIT_BAILOUT;
 }
 
+static inline void sv_jit_enter(ant_t *js) {
+  if (js) js->jit_active_depth++;
+}
+
+static inline void sv_jit_leave(ant_t *js) {
+  if (js && js->jit_active_depth > 0) js->jit_active_depth--;
+}
+
 static inline void sv_jit_on_bailout(sv_func_t *fn) {
   fn->jit_code = NULL;
   fn->back_edge_count = 0;
@@ -523,7 +531,11 @@ static inline ant_value_t sv_call_resolve_closure(
   if (!closure->func->is_generator) {
     sv_func_t *fn = closure->func;
     if (fn->jit_code) {
-      ant_value_t result = ((sv_jit_func_t)fn->jit_code)(vm, ctx->this_val, ctx->args, ctx->argc, closure);
+      sv_jit_enter(js);
+      ant_value_t result = ((sv_jit_func_t)fn->jit_code)(
+        vm, ctx->this_val, ctx->args, ctx->argc, closure
+      );
+      sv_jit_leave(js);
       if (sv_is_jit_bailout(result)) {
         sv_jit_on_bailout(fn);
       } else { sv_call_cleanup(js, ctx); return result; }

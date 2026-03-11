@@ -5347,7 +5347,9 @@ ant_value_t sv_jit_try_compile_and_call(
   }
 
   fn->jit_code = (void *)jit;
+  sv_jit_enter(js);
   ant_value_t result = jit(vm, ctx->this_val, ctx->args, ctx->argc, closure);
+  sv_jit_leave(js);
   if (sv_is_jit_bailout(result)) {
     sv_jit_on_bailout(fn);
     return SV_JIT_RETRY_INTERP;
@@ -5394,7 +5396,9 @@ ant_value_t sv_jit_try_osr(
   vm->jit_osr.n_locals  = nl;
   vm->jit_osr.lp        = frame->lp;
 
+  sv_jit_enter(js);
   ant_value_t result = jit(vm, frame->this, frame->bp, frame->argc, closure);
+  sv_jit_leave(js);
 
   if (sv_is_jit_bailout(result)) {
     sv_jit_on_bailout(func);

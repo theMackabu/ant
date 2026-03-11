@@ -1098,6 +1098,9 @@ static void gc_compact(ant_t *js) {
 }
 
 void js_gc_maybe(ant_t *js) {
+#ifdef ANT_JIT
+  if (js->jit_active_depth > 0) return;
+#endif
   ant_offset_t thresh = js->brk / 4;
   
   ant_offset_t min_thresh = gc_throttled 

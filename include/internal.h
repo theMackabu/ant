@@ -124,6 +124,7 @@ struct ant {
 
   #ifdef ANT_JIT
   void *jit_ctx;
+  uint32_t jit_active_depth;
   #endif
 
   const char *code;
