@@ -105,11 +105,17 @@ static ant_value_t esm_eval_commonjs_function(
   ant_value_t filename_val,
   ant_value_t dirname_val
 ) {
-  static const char *cjs_params = "require,module,exports,__filename,__dirname";
-  
-  sv_func_t *compiled = sv_compile_function_parts(
+  static const sv_param_t cjs_params[] = {
+    SV_PARAM("require"),
+    SV_PARAM("module"),
+    SV_PARAM("exports"),
+    SV_PARAM("__filename"),
+    SV_PARAM("__dirname"),
+  };
+
+  sv_func_t *compiled = sv_compile_function_with_params(
     js, cjs_params,
-    strlen(cjs_params),
+    (int)(sizeof(cjs_params) / sizeof(cjs_params[0])),
     code, code_len,
     false
   );

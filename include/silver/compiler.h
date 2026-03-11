@@ -11,6 +11,14 @@ typedef enum {
   SV_COMPILE_REPL   = 3,
 } sv_compile_mode_t;
 
+typedef struct {
+  const char *name;
+  size_t len;
+} sv_param_t;
+
+#define SV_PARAM(name_literal) \
+  ((sv_param_t){ (name_literal), sizeof(name_literal) - 1 })
+
 sv_func_t *sv_compile(
   ant_t *js, sv_ast_t *program,
   sv_compile_mode_t mode,
@@ -22,9 +30,9 @@ sv_func_t *sv_compile_function(
   size_t len, bool is_async
 );
 
-sv_func_t *sv_compile_function_parts(
-  ant_t *js, const char *params,
-  size_t params_len, const char *body,
+sv_func_t *sv_compile_function_with_params(
+  ant_t *js, const sv_param_t *params,
+  int param_count, const char *body,
   size_t body_len, bool is_async
 );
 

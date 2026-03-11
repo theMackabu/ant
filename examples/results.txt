@@ -1323,7 +1323,7 @@ compat-table/es2023/Array.prototype.with.js: OK
 compat-table/es2023/TypedArray.prototype.toReversed.js: OK
 compat-table/es2023/TypedArray.prototype.toSorted.js: OK
 compat-table/es2023/TypedArray.prototype.with.js: OK
-compat-table/es2023/hashbang.js: SyntaxError: private field name expected
+compat-table/es2023/hashbang.js: OK
 compat-table/es2024/ArrayBuffer.prototype.detached.js: OK
 compat-table/es2024/ArrayBuffer.prototype.transferToFixedLength.js: OK
 compat-table/es2024/ArrayBuffer.prototype.transfer.js: OK

@@ -4186,34 +4186,67 @@ sv_func_t *sv_compile_function(ant_t *js, const char *source, size_t len, bool i
   return func;
 }
 
-sv_func_t *sv_compile_function_parts(
+sv_func_t *sv_compile_function_with_params(
   ant_t *js,
-  const char *params,
-  size_t params_len,
+  const sv_param_t *params,
+  int param_count,
   const char *body,
   size_t body_len,
   bool is_async
 ) {
-  size_t source_len = params_len + body_len + 3;
-  char *source = malloc(source_len + 1);
-  if (!source) return NULL;
-
-  size_t pos = 0;
-  source[pos++] = '(';
-  if (params_len > 0 && params) {
-    memcpy(source + pos, params, params_len);
-    pos += params_len;
+  if (!body) {
+    body = "";
+    body_len = 0;
   }
-  source[pos++] = ')';
-  source[pos++] = '{';
-  if (body_len > 0 && body) {
-    memcpy(source + pos, body, body_len);
-    pos += body_len;
-  }
-  source[pos++] = '}';
-  source[pos] = '\0';
 
-  sv_func_t *func = sv_compile_function(js, source, pos, is_async);
-  free(source);
+  bool parse_strict = sv_vm_is_strict(js->vm);
+  sv_ast_t *program = sv_parse(js, body, (ant_offset_t)body_len, parse_strict);
+  if (!program) return NULL;
+
+  static const char *k_top_name_function = "<function>";
+  static const char *k_top_name_async_function = "<async function>";
+  const char *top_name = is_async ? k_top_name_async_function : k_top_name_function;
+
+  sv_ast_t top_fn;
+  memset(&top_fn, 0, sizeof(top_fn));
+
+  top_fn.type = N_FUNC;
+  top_fn.line = 1;
+  top_fn.str = top_name;
+  top_fn.len = (uint32_t)strlen(top_name);
+  top_fn.src_off = 0;
+  top_fn.src_end = (body_len > 0) ? (uint32_t)body_len : 0;
+  if (is_async) top_fn.flags |= FN_ASYNC;
+
+  for (int i = 0; i < param_count; i++) {
+    const char *name = (params && params[i].name) ? params[i].name : "";
+    size_t name_len = 0;
+    if (params && params[i].name) {
+      name_len = params[i].len ? params[i].len : strlen(name);
+    }
+
+    sv_ast_t *ident = sv_ast_new(N_IDENT);
+    if (!ident) return NULL;
+
+    ident->str = name;
+    ident->len = (uint32_t)name_len;
+    ident->line = 1;
+    ident->col = 1;
+    sv_ast_list_push(&top_fn.args, ident);
+  }
+
+  top_fn.body = sv_ast_new(N_BLOCK);
+  if (!top_fn.body) return NULL;
+  top_fn.body->args = program->args;
+
+  sv_compiler_t root = {0};
+  root.js = js;
+  root.source = pin_source_text(body, (ant_offset_t)body_len);
+  root.source_len = (ant_offset_t)body_len;
+  root.mode = SV_COMPILE_SCRIPT;
+  root.is_strict = ((program->flags & FN_PARSE_STRICT) != 0);
+
+  sv_func_t *func = compile_function_body(&root, &top_fn, SV_COMPILE_SCRIPT);
+  if (js->thrown_exists || !func) return NULL;
   return func;
 }
