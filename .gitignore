@@ -28,7 +28,6 @@
 *.todo
 *.trace
 
-ant.txt
 zoo.sh
 AGENTS.md
 
