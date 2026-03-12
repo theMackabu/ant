@@ -111,7 +111,9 @@ static inline void sv_op_closure(
   sv_closure_t *closure = calloc(1, sizeof(sv_closure_t));
   closure->func = child;
   closure->bound_this = child->is_arrow ? frame->this : js_mkundef();
-  closure->call_flags = 0;
+  closure->bound_args = js_mkundef();
+  closure->super_val = js_mkundef();
+  closure->call_flags = child->is_arrow ? SV_CALL_IS_ARROW : 0;
 
   if (child->upvalue_count > 0) {
     closure->upvalues = calloc((size_t)child->upvalue_count, sizeof(sv_upvalue_t *));
@@ -137,10 +139,7 @@ static inline void sv_op_closure(
 
   if (child->is_strict)
     js_set_slot(js, func_obj, SLOT_STRICT, js_true);
-  if (child->is_arrow) {
-    js_set_slot(js, func_obj, SLOT_ARROW, js_true);
-    js_set_slot(js, func_obj, SLOT_BOUND_THIS, frame->this);
-  }
+  
   if (child->is_async) {
     js_set_slot(js, func_obj, SLOT_ASYNC, js_true);
     ant_value_t async_proto = js_get_slot(js, js->global, SLOT_ASYNC_PROTO);

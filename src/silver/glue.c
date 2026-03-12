@@ -157,7 +157,9 @@ ant_value_t jit_helper_closure(
   
   closure->func = child;
   closure->bound_this = child->is_arrow ? this_val : js_mkundef();
-  closure->call_flags = 0;
+  closure->bound_args = js_mkundef();
+  closure->super_val = js_mkundef();
+  closure->call_flags = child->is_arrow ? SV_CALL_IS_ARROW : 0;
 
   // TODO: reduce nesting
   if (child->upvalue_count > 0) {
@@ -197,10 +199,7 @@ ant_value_t jit_helper_closure(
 
   if (child->is_strict)
     js_set_slot(js, func_obj, SLOT_STRICT, js_true);
-  if (child->is_arrow) {
-    js_set_slot(js, func_obj, SLOT_ARROW, js_true);
-    js_set_slot(js, func_obj, SLOT_BOUND_THIS, this_val);
-  }
+  
   if (child->is_async) {
     js_set_slot(js, func_obj, SLOT_ASYNC, js_true);
     ant_value_t async_proto = js_get_slot(js, js->global, SLOT_ASYNC_PROTO);

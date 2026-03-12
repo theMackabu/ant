@@ -91,11 +91,9 @@ static inline void sv_op_set_proto(sv_vm_t *vm, ant_t *js) {
 static inline void sv_op_set_home_obj(sv_vm_t *vm, ant_t *js) {
   ant_value_t home = vm->stack[vm->sp - 1];
   ant_value_t fn = vm->stack[vm->sp - 2];
-  ant_value_t fn_obj = js_func_obj(fn);
-  js_set_slot(js, fn_obj, SLOT_SUPER, home);
   sv_closure_t *c = js_func_closure(fn);
-  if (c->func != NULL)
-    c->call_flags |= SV_CALL_HAS_SUPER;
+  c->super_val = home;
+  c->call_flags |= SV_CALL_HAS_SUPER;
 }
 
 static inline void sv_op_append(sv_vm_t *vm, ant_t *js) {
@@ -223,8 +221,7 @@ static inline void sv_op_define_class(
 
   if (vtype(ctor) == T_UNDEF) {
     ant_value_t ctor_obj = mkobj(js, 0);
-    ctor = js_obj_to_func(ctor_obj);
-    js_set_slot(js, ctor_obj, SLOT_DEFAULT_CTOR, js_true);
+    ctor = js_obj_to_func_ex(ctor_obj, SV_CALL_IS_DEFAULT_CTOR);
     ant_value_t func_proto = js_get_slot(js, js->global, SLOT_FUNC_PROTO);
     if (vtype(func_proto) == T_FUNC)
       js_set_proto(js, ctor_obj, func_proto);
@@ -252,8 +249,14 @@ static inline void sv_op_define_class(
         js_set_proto(js, js_deref(js, hp), object_proto);
     }
   }
-  if (parent_is_callable)
-    js_set_slot(js, js_deref(js, hc), SLOT_SUPER, parent);
+  if (parent_is_callable) {
+    ctor = js_deref(js, hc);
+    if (vtype(ctor) == T_FUNC) {
+      sv_closure_t *c = js_func_closure(ctor);
+      c->super_val = parent;
+      c->call_flags |= SV_CALL_HAS_SUPER;
+    }
+  }
 
   ctor = js_deref(js, hc);
   proto = js_deref(js, hp);

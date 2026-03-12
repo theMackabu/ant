@@ -163,7 +163,14 @@ static inline void gc_update_closure(gc_ctx_t *ctx, sv_closure_t *closure) {
   closure->gc_epoch = gc_epoch_counter;
   closure->func_obj = gc_update_val(ctx, closure->func_obj);
   closure->bound_this = gc_update_val(ctx, closure->bound_this);
-  
+  closure->bound_args = gc_update_val(ctx, closure->bound_args);
+  closure->super_val = gc_update_val(ctx, closure->super_val);
+
+  if (closure->bound_argv && closure->bound_argc > 0) {
+    for (int i = 0; i < closure->bound_argc; i++)
+    closure->bound_argv[i] = gc_update_val(ctx, closure->bound_argv[i]);
+  }
+
   if (!closure->func) return;
   gc_update_func_constants(ctx, closure->func, 0);
   

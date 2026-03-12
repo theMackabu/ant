@@ -165,13 +165,19 @@ struct sv_upvalue {
   uint32_t gc_epoch;
 };
 
-#define SV_CALL_HAS_BOUND_ARGS  (1u << 0)
-#define SV_CALL_HAS_SUPER       (1u << 1)
+#define SV_CALL_HAS_BOUND_ARGS   (1u << 0)
+#define SV_CALL_HAS_SUPER        (1u << 1)
+#define SV_CALL_IS_ARROW         (1u << 2)
+#define SV_CALL_IS_DEFAULT_CTOR  (1u << 3)
 
 typedef struct sv_closure {
   sv_func_t *func;
   sv_upvalue_t **upvalues;
   ant_value_t bound_this;
+  ant_value_t *bound_argv;
+  int bound_argc;
+  ant_value_t bound_args;
+  ant_value_t super_val;
   ant_value_t func_obj;
   uint32_t gc_epoch;
   uint8_t call_flags;
@@ -356,31 +362,34 @@ static inline ant_value_t sv_call_cfunc(
   return js_as_cfunc(func)(js, args, argc);
 }
 
-static inline ant_value_t sv_call_resolve_bound(ant_t *js, ant_value_t func_obj, sv_call_ctx_t *ctx) {
-  ant_value_t bound_this = js_get_slot(js, func_obj, SLOT_BOUND_THIS);
-  if (js_get_slot(js, func_obj, SLOT_ARROW) == js_true) {
-    ctx->this_val = bound_this;
-  } else if (vtype(bound_this) != T_UNDEF) ctx->this_val = bound_this;
+static inline ant_value_t *sv_prepend_bound_args(
+  sv_closure_t *closure, ant_value_t *args, int argc, int *out_total
+) {
+  int total = closure->bound_argc + argc;
+  ant_value_t *combined = malloc(sizeof(ant_value_t) * (size_t)total);
+  if (!combined) { *out_total = argc; return NULL; }
+  memcpy(combined, closure->bound_argv, sizeof(ant_value_t) * (size_t)closure->bound_argc);
+  memcpy(combined + closure->bound_argc, args, sizeof(ant_value_t) * (size_t)argc);
+  *out_total = total;
+  return combined;
+}
 
-  ant_value_t bound_arr = js_get_slot(js, func_obj, SLOT_BOUND_ARGS);
-  if (vtype(bound_arr) == T_ARR) {
-    int bound_argc = (int)js_arr_len(js, bound_arr);
-    if (bound_argc > 0) {
-      int total = bound_argc + ctx->argc;
-      ant_value_t *combined = malloc(sizeof(ant_value_t) * (size_t)total);
-      if (!combined) return js_mkerr(js, "out of memory");
-      for (int i = 0; i < bound_argc; i++)
-        combined[i] = js_arr_get(js, bound_arr, (ant_offset_t)i);
-      for (int i = 0; i < ctx->argc; i++)
-        combined[bound_argc + i] = ctx->args[i];
-      ctx->args  = combined;
-      ctx->argc  = total;
-      ctx->alloc = combined;
-    }
+static inline ant_value_t sv_call_resolve_bound(ant_t *js, sv_closure_t *closure, sv_call_ctx_t *ctx) {
+  uint8_t flags = closure->call_flags;
+
+  if (flags & SV_CALL_IS_ARROW) ctx->this_val = closure->bound_this;
+  else if (vtype(closure->bound_this) != T_UNDEF) ctx->this_val = closure->bound_this;
+
+  if ((flags & SV_CALL_HAS_BOUND_ARGS) && closure->bound_argc > 0) {
+    int total;
+    ant_value_t *combined = sv_prepend_bound_args(closure, ctx->args, ctx->argc, &total);
+    if (!combined) return js_mkerr(js, "out of memory");
+    ctx->args  = combined;
+    ctx->argc  = total;
+    ctx->alloc = combined;
   }
 
-  ant_value_t func_super = js_get_slot(js, func_obj, SLOT_SUPER);
-  if (vtype(func_super) != T_UNDEF) ctx->super_val = func_super;
+  if (flags & SV_CALL_HAS_SUPER) ctx->super_val = closure->super_val;
 
   return js_mkundef();
 }
@@ -390,7 +399,7 @@ static inline void sv_call_cleanup(ant_t *js, sv_call_ctx_t *ctx) {
 }
 
 static inline ant_value_t sv_call_default_ctor(
-  sv_vm_t *vm, ant_t *js, ant_value_t func_obj,
+  sv_vm_t *vm, ant_t *js, sv_closure_t *closure,
   sv_call_ctx_t *ctx, ant_value_t *out_this
 ) {
   if (vtype(js->new_target) == T_UNDEF) {
@@ -401,7 +410,7 @@ static inline ant_value_t sv_call_default_ctor(
     );
   }
 
-  ant_value_t super_ctor = js_get_slot(js, func_obj, SLOT_SUPER);
+  ant_value_t super_ctor = closure->super_val;
   uint8_t st = vtype(super_ctor);
   if (st == T_FUNC || st == T_CFUNC) {
     ant_value_t super_this = ctx->this_val;
@@ -574,21 +583,20 @@ static inline ant_value_t sv_vm_call(
     return sv_call_native(js, func, this_val, args, argc);
 
   sv_closure_t *closure = js_func_closure(func);
-  ant_value_t func_obj = closure->func_obj;
 
   sv_call_ctx_t ctx = {
     .this_val = this_val, .super_val = js_mkundef(),
     .args = args, .argc = argc, .alloc = NULL,
   };
 
-  ant_value_t err = sv_call_resolve_bound(js, func_obj, &ctx);
+  ant_value_t err = sv_call_resolve_bound(js, closure, &ctx);
   if (is_err(err)) return err;
 
   if (is_construct_call) ctx.this_val = this_val;
   if (out_this) *out_this = ctx.this_val;
 
-  if (js_get_slot(js, func_obj, SLOT_DEFAULT_CTOR) == js_true)
-    return sv_call_default_ctor(vm, js, func_obj, &ctx, out_this);
+  if (closure->call_flags & SV_CALL_IS_DEFAULT_CTOR)
+    return sv_call_default_ctor(vm, js, closure, &ctx, out_this);
 
   if (closure->func != NULL)
     return sv_call_resolve_closure(vm, js, closure, func, &ctx, out_this);

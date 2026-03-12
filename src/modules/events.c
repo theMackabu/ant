@@ -553,12 +553,11 @@ ant_value_t events_library(ant_t *js) {
   js_set(js, eventemitter_proto, "eventNames", js_mkfun(js_eventemitter_eventNames));
   js_set_sym(js, eventemitter_proto, get_toStringTag_sym(), js_mkstr(js, "EventEmitter", 12));
   
-  js_set_slot(js, eventemitter_ctor, SLOT_DEFAULT_CTOR, js_true);
   js_mkprop_fast(js, eventemitter_ctor, "prototype", 9, eventemitter_proto);
   js_mkprop_fast(js, eventemitter_ctor, "name", 4, ANT_STRING("EventEmitter"));
   js_set_descriptor(js, eventemitter_ctor, "name", 4, 0);
   
-  ant_value_t ctor_fn = js_obj_to_func(eventemitter_ctor);
+  ant_value_t ctor_fn = js_obj_to_func_ex(eventemitter_ctor, SV_CALL_IS_DEFAULT_CTOR);
   js_set(js, lib, "EventEmitter", ctor_fn);
   js_set(js, lib, "default", ctor_fn);
   js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "events", 6));
@@ -578,7 +577,6 @@ void init_events_module() {
   js_set(js, eventtarget_proto, "dispatchEvent", js_mkfun(js_dispatch_event_method));
   js_set_sym(js, eventtarget_proto, get_toStringTag_sym(), js_mkstr(js, "EventTarget", 11));
   
-  js_set_slot(js, eventtarget_ctor, SLOT_DEFAULT_CTOR, js_true);
   js_mkprop_fast(js, eventtarget_ctor, "prototype", 9, eventtarget_proto);
   js_mkprop_fast(js, eventtarget_ctor, "name", 4, ANT_STRING("EventTarget"));
   js_set_descriptor(js, eventtarget_ctor, "name", 4, 0);
@@ -587,7 +585,7 @@ void init_events_module() {
   js_set(js, global, "removeEventListener", js_mkfun(js_remove_event_listener));
   js_set(js, global, "dispatchEvent", js_mkfun(js_dispatch_event));
   js_set(js, global, "getEventListeners", js_mkfun(js_get_event_listeners));
-  js_set(js, global, "EventTarget", js_obj_to_func(eventtarget_ctor));
+  js_set(js, global, "EventTarget", js_obj_to_func_ex(eventtarget_ctor, SV_CALL_IS_DEFAULT_CTOR));
 }
 
 void events_gc_update_roots(void (*op_val)(void *, ant_value_t *), void *ctx) {

@@ -232,10 +232,18 @@ ant_value_t mkval(uint8_t type, uint64_t data) {
     | (data & NANBOX_DATA_MASK);
 }
 
-ant_value_t js_obj_to_func(ant_value_t obj) {
+ant_value_t js_obj_to_func_ex(ant_value_t obj, uint8_t flags) {
   sv_closure_t *closure = calloc(1, sizeof(sv_closure_t));
   closure->func_obj = (vtype(obj) == T_OBJ) ? obj : mkval(T_OBJ, vdata(obj));
+  closure->bound_this = js_mkundef();
+  closure->bound_args = js_mkundef();
+  closure->super_val = js_mkundef();
+  closure->call_flags = flags;
   return mkval(T_FUNC, (uintptr_t)closure);
+}
+
+ant_value_t js_obj_to_func(ant_value_t obj) {
+  return js_obj_to_func_ex(obj, 0);
 }
 
 ant_value_t js_mktypedarray(void *data) {
@@ -3225,25 +3233,6 @@ ant_offset_t lkp_sym_proto(ant_t *js, ant_value_t obj, ant_offset_t sym_off) {
   return 0;
 }
 
-static ant_value_t *resolve_bound_args(ant_t *js, ant_value_t func_obj, ant_value_t *args, int nargs, int *out_nargs) {
-  *out_nargs = nargs;
-  
-  ant_value_t bound_arr = get_slot(js, func_obj, SLOT_BOUND_ARGS);
-  int bound_argc = 0;
-  
-  if (vtype(bound_arr) == T_ARR) {
-    bound_argc = (int)get_array_length(js, bound_arr);
-  } if (bound_argc <= 0) return NULL;
-  
-  *out_nargs = bound_argc + nargs;
-  ant_value_t *combined = (ant_value_t *)ant_calloc(sizeof(ant_value_t) * (*out_nargs));
-  if (!combined) return NULL;
-  
-  for (int i = 0; i < bound_argc; i++) combined[i] = arr_get(js, bound_arr, (ant_offset_t)i);
-  for (int i = 0; i < nargs; i++) combined[bound_argc + i] = args[i];
-  
-  return combined;
-}
 
 static ant_offset_t lkp_with_getter(ant_t *js, ant_value_t obj, const char *buf, size_t len, ant_value_t *getter_out, bool *has_getter_out) {
   *has_getter_out = false;
@@ -4305,10 +4294,10 @@ static ant_value_t builtin_function_toString(ant_t *js, ant_value_t *args, int n
     
     if (code && code_len > 0) {
       ant_value_t async_slot = get_slot(js, func_obj, SLOT_ASYNC);
-      ant_value_t arrow_slot = get_slot(js, func_obj, SLOT_ARROW);
+      sv_closure_t *closure = js_func_closure(func);
       
       bool is_async = (async_slot == js_true);
-      bool is_arrow = (arrow_slot == js_true);
+      bool is_arrow = (closure->call_flags & SV_CALL_IS_ARROW) != 0;
       
       if (is_arrow) {
         const char *paren_end = memchr(code, ')', code_len);
@@ -4411,18 +4400,18 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
     if (is_err(bound_func)) return bound_func;
     
     set_slot(js, bound_func, SLOT_CFUNC, func);
-    set_slot(js, bound_func, SLOT_BOUND_THIS, this_arg);
-    
-    if (bound_argc > 0) {
-      ant_value_t bound_arr = mkarr(js);
-      for (int i = 0; i < bound_argc; i++) arr_set(js, bound_arr, (ant_offset_t)i, bound_args[i]);
-      set_slot(js, bound_func, SLOT_BOUND_ARGS, bound_arr);
-    }
     
     ant_value_t func_proto = get_slot(js, js_glob(js), SLOT_FUNC_PROTO);
     if (vtype(func_proto) == T_FUNC) set_proto(js, bound_func, func_proto);
     
-    ant_value_t bound = js_obj_to_func(bound_func);
+    ant_value_t bound = js_obj_to_func_ex(bound_func, bound_argc > 0 ? SV_CALL_HAS_BOUND_ARGS : 0);
+    sv_closure_t *bc = js_func_closure(bound);
+    bc->bound_this = this_arg;
+    if (bound_argc > 0) {
+      bc->bound_argv = malloc(sizeof(ant_value_t) * (size_t)bound_argc);
+      memcpy(bc->bound_argv, bound_args, sizeof(ant_value_t) * (size_t)bound_argc);
+      bc->bound_argc = bound_argc;
+    }
     js_setprop(js, bound_func, js->length_str, tov((double) bound_length));
     
     ant_value_t proto_setup = setup_func_prototype(js, bound);
@@ -4446,6 +4435,8 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
   bound_closure->func = orig->func;
   bound_closure->upvalues = orig->upvalues;
   bound_closure->bound_this = this_arg;
+  bound_closure->bound_args = js_mkundef();
+  bound_closure->super_val = orig->super_val;
   bound_closure->func_obj = bound_func;
   bound_closure->call_flags = orig->call_flags;
   if (bound_argc > 0)
@@ -4473,12 +4464,14 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
   }
 
   set_slot(js, bound_func, SLOT_TARGET_FUNC, func);
-  set_slot(js, bound_func, SLOT_BOUND_THIS, this_arg);
   
   if (bound_argc > 0) {
     ant_value_t bound_arr = mkarr(js);
     for (int i = 0; i < bound_argc; i++) arr_set(js, bound_arr, (ant_offset_t)i, bound_args[i]);
-    set_slot(js, bound_func, SLOT_BOUND_ARGS, bound_arr);
+    bound_closure->bound_args = bound_arr;
+    bound_closure->bound_argv = malloc(sizeof(ant_value_t) * (size_t)bound_argc);
+    memcpy(bound_closure->bound_argv, bound_args, sizeof(ant_value_t) * (size_t)bound_argc);
+    bound_closure->bound_argc = bound_argc;
   }
 
   ant_value_t cfunc_slot = get_slot(js, func_obj, SLOT_CFUNC);
@@ -12310,18 +12303,23 @@ ant_value_t sv_call_native(
   }
 
   if (vtype(func) == T_FUNC) {
-    ant_value_t func_obj = js_func_obj(func);
+    sv_closure_t *closure = js_func_closure(func);
+    ant_value_t func_obj = closure->func_obj;
 
     ant_value_t cfunc_slot = get_slot(js, func_obj, SLOT_CFUNC);
     if (vtype(cfunc_slot) == T_CFUNC) {
-      ant_value_t slot_bound_this = get_slot(js, func_obj, SLOT_BOUND_THIS);
-      int final_nargs;
-      ant_value_t *combined = resolve_bound_args(js, func_obj, args, nargs, &final_nargs);
-      ant_value_t *final_args = combined ? combined : args;
+      ant_value_t resolve_this = (vtype(closure->bound_this) != T_UNDEF) ? closure->bound_this : this_val;
+      int final_nargs = nargs;
+      ant_value_t *final_args = args;
+      ant_value_t *combined = NULL;
+      if ((closure->call_flags & SV_CALL_HAS_BOUND_ARGS) && closure->bound_argc > 0) {
+        combined = sv_prepend_bound_args(closure, args, nargs, &final_nargs);
+        if (combined) final_args = combined;
+      }
       ant_value_t saved_func = js->current_func;
       ant_value_t saved_this = js->this_val;
       js->current_func = func;
-      js->this_val = (vtype(slot_bound_this) != T_UNDEF) ? slot_bound_this : this_val;
+      js->this_val = resolve_this;
       ant_value_t (*fn)(ant_t *, ant_value_t *, int) = (ant_value_t(*)(ant_t *, ant_value_t *, int))vdata(cfunc_slot);
       ant_value_t res = fn(js, final_args, final_nargs);
       js->current_func = saved_func;
