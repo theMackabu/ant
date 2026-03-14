@@ -993,6 +993,7 @@ static void gc_forward_func_cb(void *ctx_ptr, sv_func_t *func) {
 
 static void gc_compact(ant_t *js) {
   js->needs_gc = false;
+  return;
   
   if (!js || js->brk == 0) return;
   if (js->brk < 2 * 1024 * 1024) return;

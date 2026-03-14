@@ -276,29 +276,32 @@ static ant_value_t reflect_set_prototype_of(ant_t *js, ant_value_t *args, int na
 }
 
 static ant_value_t reflect_is_extensible(ant_t *js, ant_value_t *args, int nargs) {
+  (void)js;
   if (nargs < 1) return js_false;
   
   ant_value_t target = args[0];
   int t = vtype(target);
   
   if (t != T_OBJ && t != T_FUNC) return js_false;
-  
-  if (js_get_slot(js, target, SLOT_EXTENSIBLE) == js_false) return js_false;
-  if (js_get_slot(js, target, SLOT_FROZEN) == js_true)      return js_false;
-  if (js_get_slot(js, target, SLOT_SEALED) == js_true)      return js_false;
-  
-  return js_true;
+
+  ant_object_t *obj = js_obj_ptr(js_as_obj(target));
+  if (!obj) return js_false;
+  if (obj->frozen || obj->sealed) return js_false;
+  return js_bool(obj->extensible);
 }
 
 static ant_value_t reflect_prevent_extensions(ant_t *js, ant_value_t *args, int nargs) {
+  (void)js;
   if (nargs < 1) return js_false;
   
   ant_value_t target = args[0];
   int t = vtype(target);
   
   if (t != T_OBJ && t != T_FUNC) return js_false;
-  
-  js_set_slot(js, target, SLOT_EXTENSIBLE, js_false);
+
+  ant_object_t *obj = js_obj_ptr(js_as_obj(target));
+  if (!obj) return js_false;
+  obj->extensible = 0;
   return js_true;
 }
 

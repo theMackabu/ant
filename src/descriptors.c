@@ -14,12 +14,17 @@ static descriptor_entry_t arr_length_desc = {
 };
 
 uint64_t make_desc_key(ant_offset_t obj_off, const char *key, size_t klen) {
-  uint32_t key_hash = (uint32_t)hash_key(key, klen) & 0x7FFFFFFFu;
-  return ((uint64_t)obj_off << 32) | key_hash;
+  uint64_t key_hash = hash_key(key, klen);
+  uint64_t h = obj_off ^ (obj_off >> 33);
+  h ^= key_hash + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+  return h;
 }
 
 uint64_t make_sym_desc_key(ant_offset_t obj_off, ant_offset_t sym_off) {
-  return ((uint64_t)obj_off << 32) | ((uint32_t)sym_off | 0x80000000u);
+  uint64_t h = obj_off ^ (obj_off >> 33);
+  h ^= ((uint64_t)sym_off << 1) | 1u;
+  h += 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+  return h;
 }
 
 descriptor_entry_t *lookup_descriptor(ant_t *js, ant_offset_t obj_off, const char *key, size_t klen) {

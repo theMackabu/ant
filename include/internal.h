@@ -3,6 +3,8 @@
 
 #include "ant.h"
 #include "gc.h"
+#include "object.h"
+#include "shapes.h"
 #include "esm/loader.h"
 
 #include <assert.h>
@@ -160,6 +162,11 @@ struct ant {
   ant_handle_t gc_roots_len;
   ant_handle_t gc_roots_cap;
 
+  ant_object_t *gc_objects;
+  ant_prop_ref_t *prop_refs;
+  ant_offset_t prop_refs_len;
+  ant_offset_t prop_refs_cap;
+
   bool owns_mem;
   bool needs_gc;
   
@@ -211,7 +218,9 @@ static inline ant_value_t loadval(ant_t *js, ant_offset_t off) {
 }
 
 static inline bool is_arr_off(ant_t *js, ant_offset_t off) { 
-  return (loadoff(js, off) & ARRMASK) != 0; 
+  if (off < js->brk) return (loadoff(js, off) & ARRMASK) != 0;
+  ant_object_t *obj = (ant_object_t *)(uintptr_t)off;
+  return obj && obj->type_tag == T_ARR;
 }
 
 bool is_internal_prop(const char *key, ant_offset_t klen);
