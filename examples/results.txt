@@ -615,7 +615,7 @@ compat-table/es6/Symbol.global-registry.js: OK
 compat-table/es6/Symbol.hidden-keys.js: OK
 compat-table/es6/Symbol.js: OK
 compat-table/es6/Symbol.no-coerce.js: failed
-compat-table/es6/Symbol.no-new.js: failed
+compat-table/es6/Symbol.no-new.js: OK
 compat-table/es6/Symbol.prototype.js: OK
 compat-table/es6/Symbol.typeof.js: OK
 compat-table/es6/WeakMap.accept-primitives.js: OK

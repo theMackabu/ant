@@ -571,6 +571,11 @@ static inline ant_value_t sv_vm_call(
   if (!is_construct_call) js->new_target = js_mkundef();
   if (out_this) *out_this = this_val;
 
+  if (is_construct_call && vtype(func) == T_OBJ && is_proxy(js, func))
+    return js_proxy_construct(js, func, args, argc, sv_vm_get_new_target(vm, js));
+  if (is_construct_call && !js_is_constructor(js, func))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "not a constructor");
+
   if (!is_construct_call && vtype(func) == T_OBJ && is_proxy(js, func))
     return js_proxy_apply(js, func, this_val, args, argc);
 

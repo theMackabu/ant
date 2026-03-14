@@ -130,6 +130,7 @@ ant_value_t js_tostring_val(ant_t *js, ant_value_t value);
 uint8_t vtype(ant_value_t val);
 size_t vdata(ant_value_t val);
 ant_object_t *js_obj_ptr(ant_value_t val);
+bool js_is_constructor(ant_t *js, ant_value_t value);
 
 double js_getnum(ant_value_t val);
 char *js_getstr(ant_t *js, ant_value_t val, size_t *len);

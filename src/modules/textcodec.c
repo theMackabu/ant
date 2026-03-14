@@ -145,22 +145,26 @@ void init_textcodec_module(void) {
   ant_t *js = rt->js;
   ant_value_t glob = js_glob(js);
   
-  ant_value_t textencoder_constructor = js_mkfun(js_textencoder_constructor);
+  ant_value_t textencoder_ctor_obj = js_mkobj(js);
+  js_set_slot(js, textencoder_ctor_obj, SLOT_CFUNC, js_mkfun(js_textencoder_constructor));
   ant_value_t textencoder_proto = js_mkobj(js);
   
   js_set(js, textencoder_proto, "encode", js_mkfun(js_textencoder_encode));
   js_set(js, textencoder_proto, "encodeInto", js_mkfun(js_textencoder_encodeInto));
   js_set(js, textencoder_proto, "encoding", js_mkstr(js, "utf-8", 5));
-  js_set(js, textencoder_constructor, "prototype", textencoder_proto);
+  js_set(js, textencoder_ctor_obj, "prototype", textencoder_proto);
+  ant_value_t textencoder_constructor = js_obj_to_func(textencoder_ctor_obj);
   js_set(js, glob, "TextEncoder", textencoder_constructor);
   
-  ant_value_t textdecoder_constructor = js_mkfun(js_textdecoder_constructor);
+  ant_value_t textdecoder_ctor_obj = js_mkobj(js);
+  js_set_slot(js, textdecoder_ctor_obj, SLOT_CFUNC, js_mkfun(js_textdecoder_constructor));
   ant_value_t textdecoder_proto = js_mkobj(js);
   
   js_set(js, textdecoder_proto, "decode", js_mkfun(js_textdecoder_decode));
   js_set(js, textdecoder_proto, "encoding", js_mkstr(js, "utf-8", 5));
   js_set(js, textdecoder_proto, "fatal", js_false);
   js_set(js, textdecoder_proto, "ignoreBOM", js_false);
-  js_set(js, textdecoder_constructor, "prototype", textdecoder_proto);
+  js_set(js, textdecoder_ctor_obj, "prototype", textdecoder_proto);
+  ant_value_t textdecoder_constructor = js_obj_to_func(textdecoder_ctor_obj);
   js_set(js, glob, "TextDecoder", textdecoder_constructor);
 }

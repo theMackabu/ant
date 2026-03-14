@@ -260,6 +260,10 @@ static inline void sv_op_define_class(
 
   ctor = js_deref(js, hc);
   proto = js_deref(js, hp);
+  if (vtype(ctor) == T_FUNC) {
+    ant_object_t *ctor_obj = js_obj_ptr(js_func_obj(ctor));
+    if (ctor_obj) ctor_obj->is_constructor = 1;
+  }
   setprop_interned(js, proto, "constructor", 11, ctor);
   setprop_interned(js, ctor, "prototype", 9, proto);
   if (a && a->len > 0)

@@ -129,6 +129,9 @@ static inline void sv_op_closure(
 
   ant_value_t func_obj = mkobj(js, 0);
   closure->func_obj = func_obj;
+  ant_object_t *func_obj_ptr = js_obj_ptr(func_obj);
+  if (func_obj_ptr)
+    func_obj_ptr->is_constructor = (!child->is_arrow && !child->is_method);
   js_setprop(js, func_obj, js->length_str, tov((double)child->param_count));
   js_set_descriptor(js, func_obj, "length", 6, JS_DESC_C);
 
