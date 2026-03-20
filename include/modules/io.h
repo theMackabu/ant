@@ -8,7 +8,7 @@
 extern bool io_no_color;
 
 typedef struct {
-  ant_offset_t *visited;
+  uintptr_t *visited;
   int count;
   int capacity;
 } inspect_visited_t;

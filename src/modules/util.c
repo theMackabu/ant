@@ -315,14 +315,14 @@ static ant_value_t util_style_text(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t util_promisify_callback(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t fn = js_getcurrentfunc(js);
-  ant_value_t ctx = js_get_slot(js, fn, SLOT_DATA);
+  ant_value_t ctx = js_get_slot(fn, SLOT_DATA);
   if (!is_object_type(ctx)) return js_mkundef();
 
-  ant_value_t settled = js_get_slot(js, ctx, SLOT_SETTLED);
+  ant_value_t settled = js_get_slot(ctx, SLOT_SETTLED);
   if (vtype(settled) == T_BOOL && settled == js_true) return js_mkundef();
-  js_set_slot(js, ctx, SLOT_SETTLED, js_true);
+  js_set_slot(ctx, SLOT_SETTLED, js_true);
 
-  ant_value_t promise = js_get_slot(js, ctx, SLOT_DATA);
+  ant_value_t promise = js_get_slot(ctx, SLOT_DATA);
   if (!is_object_type(promise)) return js_mkundef();
 
   if (nargs > 0 && !is_null(args[0]) && !is_undefined(args[0])) {
@@ -348,13 +348,13 @@ static ant_value_t util_promisify_callback(ant_t *js, ant_value_t *args, int nar
 
 static ant_value_t util_promisified_call(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t fn = js_getcurrentfunc(js);
-  ant_value_t original = js_get_slot(js, fn, SLOT_DATA);
+  ant_value_t original = js_get_slot(fn, SLOT_DATA);
   if (!util_is_callable(original)) return js_mkerr(js, "promisified target is not callable");
 
   ant_value_t promise = js_mkpromise(js);
   ant_value_t ctx = js_mkobj(js);
-  js_set_slot(js, ctx, SLOT_DATA, promise);
-  js_set_slot(js, ctx, SLOT_SETTLED, js_false);
+  js_set_slot(ctx, SLOT_DATA, promise);
+  js_set_slot(ctx, SLOT_SETTLED, js_false);
   ant_value_t cb = js_heavy_mkfun(js, util_promisify_callback, ctx);
 
   ant_value_t *call_args = (ant_value_t *)malloc((size_t)(nargs + 1) * sizeof(ant_value_t));
@@ -371,14 +371,14 @@ static ant_value_t util_promisified_call(ant_t *js, ant_value_t *args, int nargs
   );
   free(call_args);
 
-  ant_value_t settled = js_get_slot(js, ctx, SLOT_SETTLED);
+  ant_value_t settled = js_get_slot(ctx, SLOT_SETTLED);
   bool is_settled = (vtype(settled) == T_BOOL && settled == js_true);
   if (!is_settled && (is_err(call_result) || js->thrown_exists)) {
     ant_value_t ex = js->thrown_exists ? js->thrown_value : call_result;
     js->thrown_exists = false;
     js->thrown_value = js_mkundef();
     js->thrown_stack = js_mkundef();
-    js_set_slot(js, ctx, SLOT_SETTLED, js_true);
+    js_set_slot(ctx, SLOT_SETTLED, js_true);
     js_reject_promise(js, promise, ex);
   }
 

@@ -1,11 +1,9 @@
 #ifndef COMMON_H
 #define COMMON_H
 
-#define SLOTMASK ~(((ant_offset_t) ~0) >> 1)
-#define CONSTMASK (~(((ant_offset_t) ~0) >> 1) >> 1)
-#define ARRMASK (~(((ant_offset_t) ~0) >> 1) >> 2)
-#define NONCONFIGMASK (~(((ant_offset_t) ~0) >> 1) >> 3)
-#define FLAGMASK (SLOTMASK | CONSTMASK | ARRMASK | NONCONFIGMASK)
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 typedef enum {
   SLOT_NONE = 0,
@@ -24,9 +22,6 @@ typedef enum {
   SLOT_PROTO,
   SLOT_FUNC_PROTO,
   SLOT_ASYNC_PROTO,
-  SLOT_FROZEN,
-  SLOT_SEALED,
-  SLOT_EXTENSIBLE,
   SLOT_BUFFER,
   SLOT_TARGET_FUNC,
   SLOT_NAME,
@@ -50,7 +45,6 @@ typedef enum {
   SLOT_ITER_STATE,
   SLOT_BYTECODE,
   SLOT_ENTRIES,
-  SLOT_DENSE_BUF,
   SLOT_SETTLED,
   SLOT_WT_ON_MESSAGE,
   SLOT_WT_ONCE_MESSAGE,
@@ -75,5 +69,21 @@ typedef enum {
   BUILTIN_NONE = 0,
   BUILTIN_OBJECT = 1
 } builtin_fn_id_t;
+
+static inline void *mantissa_chk(void *p, const char *func) {
+  if (!p || ((uintptr_t)p >> 47) == 0) goto ok;
+
+  fprintf(
+    stderr,
+    "FATAL: %s returned pointer %p outside 47-bit NaN-boxing range\n"
+    "Please report this issue with your OS/architecture details.\n", func, p
+  );
+  
+  abort();
+  ok: return p;
+}
+
+#define ant_calloc(size)       mantissa_chk(calloc(1, size),    "calloc")
+#define ant_realloc(ptr, size) mantissa_chk(realloc(ptr, size), "realloc")
 
 #endif

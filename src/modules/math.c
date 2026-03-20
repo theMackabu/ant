@@ -283,7 +283,7 @@ void init_math_module(void) {
   ant_value_t object_proto = js->object;
   ant_value_t math_obj = mkobj(js, 0);
   
-  js_set_proto(js, math_obj, object_proto);
+  js_set_proto_init(math_obj, object_proto);
   js_setprop(js, math_obj, js_mkstr(js, "E", 1), tov(M_E));
   js_setprop(js, math_obj, js_mkstr(js, "LN10", 4), tov(M_LN10));
   js_setprop(js, math_obj, js_mkstr(js, "LN2", 3), tov(M_LN2));

@@ -65,6 +65,7 @@ typedef struct sv_compiler {
   sv_atom_t *atoms;
   int atom_count;
   int atom_cap;
+  int ic_count;
 
   sv_local_t *locals;
   int local_count;
@@ -265,6 +266,59 @@ static int add_constant(sv_compiler_t *c, ant_value_t val) {
   return c->const_count++;
 }
 
+static void build_gc_const_tables(sv_func_t *func) {
+  if (!func || func->const_count <= 0 || !func->constants) return;
+
+  int child_count = 0;
+  for (int i = 0; i < func->const_count; i++) {
+    if (vtype(func->constants[i]) == T_CFUNC) child_count++;
+  }
+
+  if (child_count > 0) {
+    func->child_funcs = code_arena_bump((size_t)child_count * sizeof(sv_func_t *));
+    if (func->child_funcs) {
+      int out = 0;
+      for (int i = 0; i < func->const_count; i++) {
+        if (vtype(func->constants[i]) != T_CFUNC) continue;
+        func->child_funcs[out++] = (sv_func_t *)(uintptr_t)vdata(func->constants[i]);
+      } func->child_func_count = child_count;
+    }
+  }
+
+  uint8_t *marked_slots = calloc((size_t)func->const_count, sizeof(uint8_t));
+  if (!marked_slots) return;
+
+  int slot_count = 0;
+  for (int pc = 0; pc < func->code_len;) {
+    sv_op_t op = (sv_op_t)func->code[pc];
+    int size = (op < OP__COUNT) ? sv_op_size[op] : 0;
+    if (size <= 0) break;
+
+    if (op == OP_PUT_CONST) {
+      uint32_t idx = sv_get_u32(func->code + pc + 1);
+      if (idx < (uint32_t)func->const_count && !marked_slots[idx]) {
+        marked_slots[idx] = 1; slot_count++;
+      }
+    }
+
+    pc += size;
+  }
+
+  if (slot_count > 0) {
+    func->gc_const_slots = code_arena_bump((size_t)slot_count * sizeof(uint32_t));
+    if (func->gc_const_slots) {
+      int out = 0;
+      for (int i = 0; i < func->const_count; i++) {
+        if (!marked_slots[i]) continue;
+        func->gc_const_slots[out++] = (uint32_t)i;
+      }
+      func->gc_const_slot_count = slot_count;
+    }
+  }
+
+  free(marked_slots);
+}
+
 static void emit_constant(sv_compiler_t *c, ant_value_t val) {
   int idx = add_constant(c, val);
   if (idx <= 255) {
@@ -291,13 +345,17 @@ static inline bool is_quoted_ident_key(const sv_ast_t *node) {
   return ((open == '\'' && close == '\'') || (open == '"' && close == '"'));
 }
 
+static inline bool is_template_segment(const sv_ast_t *node) {
+  return node && node->type == N_STRING && (node->flags & FN_TEMPLATE_SEGMENT);
+}
+
 static inline bool is_invalid_cooked_string(const sv_ast_t *node) {
-  return node && (node->flags & FN_INVALID_COOKED);
+  return is_template_segment(node) && (node->flags & FN_INVALID_COOKED);
 }
 
 static inline ant_value_t ast_string_const(sv_compiler_t *c, const sv_ast_t *node) {
-  if (!node || !node->str) return js_mkstr(c->js, "", 0);
-  return js_mkstr(c->js, node->str, node->len);
+  if (!node || !node->str) return js_mkstr_permanent(c->js, "", 0);
+  return js_mkstr_permanent(c->js, node->str, node->len);
 }
 
 static inline void compile_static_property_key(sv_compiler_t *c, sv_ast_t *key) {
@@ -314,15 +372,15 @@ static inline void compile_static_property_key(sv_compiler_t *c, sv_ast_t *key) 
   if (key->type == N_NUMBER) {
     char buf[32];
     int n = snprintf(buf, sizeof(buf), "%g", key->num);
-    emit_constant(c, js_mkstr(c->js, buf, (size_t)n));
+    emit_constant(c, js_mkstr_permanent(c->js, buf, (size_t)n));
     return;
   }
 
   if (key->type == N_IDENT) {
     if (is_quoted_ident_key(key))
-      emit_constant(c, js_mkstr(c->js, key->str + 1, key->len - 2));
+      emit_constant(c, js_mkstr_permanent(c->js, key->str + 1, key->len - 2));
     else
-      emit_constant(c, js_mkstr(c->js, key->str, key->len));
+      emit_constant(c, js_mkstr_permanent(c->js, key->str, key->len));
     return;
   }
 
@@ -330,24 +388,71 @@ static inline void compile_static_property_key(sv_compiler_t *c, sv_ast_t *key) 
 }
 
 static int add_atom(sv_compiler_t *c, const char *str, uint32_t len) {
+  const char *interned = intern_string(str, (size_t)len);
+  const char *stored = interned;
+  if (!stored) {
+    char *copy = code_arena_bump(len);
+    memcpy(copy, str, len);
+    stored = copy;
+  }
+
   for (int i = 0; i < c->atom_count; i++) {
-    if (c->atoms[i].len == len && memcmp(c->atoms[i].str, str, len) == 0)
+    if (c->atoms[i].len == len && c->atoms[i].str == stored)
       return i;
   }
   if (c->atom_count >= c->atom_cap) {
     c->atom_cap = c->atom_cap ? c->atom_cap * 2 : 16;
     c->atoms = realloc(c->atoms, (size_t)c->atom_cap * sizeof(sv_atom_t));
   }
-  char *copy = code_arena_bump(len);
-  memcpy(copy, str, len);
-  c->atoms[c->atom_count] = (sv_atom_t){ .str = copy, .len = len };
+  c->atoms[c->atom_count] = (sv_atom_t){ .str = stored, .len = len };
   return c->atom_count++;
+}
+
+static inline bool sv_op_has_ic_slot(sv_op_t op) {
+  return op == OP_GET_GLOBAL || op == OP_GET_GLOBAL_UNDEF ||
+         op == OP_GET_FIELD || op == OP_GET_FIELD2 || op == OP_PUT_FIELD;
+}
+
+static uint16_t alloc_ic_idx(sv_compiler_t *c) {
+  if (!c || c->ic_count >= (int)UINT16_MAX) return UINT16_MAX;
+  return (uint16_t)c->ic_count++;
+}
+
+static void sv_func_init_obj_sites(sv_func_t *func) {
+  if (!func || !func->code || func->code_len <= 0) return;
+
+  uint32_t count = 0;
+  for (int pc = 0; pc < func->code_len; ) {
+    sv_op_t op = (sv_op_t)func->code[pc];
+    if (op == OP_OBJECT) count++;
+    uint8_t size = (op < OP__COUNT) ? sv_op_size[op] : 1;
+    pc += (size > 0) ? size : 1;
+  }
+  if (count == 0) return;
+
+  func->obj_sites = code_arena_bump((size_t)count * sizeof(sv_obj_site_cache_t));
+  memset(func->obj_sites, 0, (size_t)count * sizeof(sv_obj_site_cache_t));
+  func->obj_site_count = (uint16_t)count;
+
+  uint32_t idx = 0;
+  for (int pc = 0; pc < func->code_len && idx < count; ) {
+    sv_op_t op = (sv_op_t)func->code[pc];
+    if (op == OP_OBJECT) func->obj_sites[idx++].bc_off = (uint32_t)pc;
+    uint8_t size = (op < OP__COUNT) ? sv_op_size[op] : 1;
+    pc += (size > 0) ? size : 1;
+  }
+}
+
+static void emit_atom_idx_op(sv_compiler_t *c, sv_op_t op, uint32_t atom_idx) {
+  emit_op(c, op);
+  emit_u32(c, atom_idx);
+  if (sv_op_has_ic_slot(op))
+    emit_u16(c, alloc_ic_idx(c));
 }
 
 static void emit_atom_op(sv_compiler_t *c, sv_op_t op, const char *str, uint32_t len) {
   int idx = add_atom(c, str, len);
-  emit_op(c, op);
-  emit_u32(c, (uint32_t)idx);
+  emit_atom_idx_op(c, op, (uint32_t)idx);
 }
 
 static inline void emit_set_function_name(
@@ -469,7 +574,7 @@ static void mark_slot_type(sv_compiler_t *c, int slot, uint8_t type) {
 static void set_local_inferred_type(sv_compiler_t *c, int local_idx, uint8_t type) {
   if (local_idx < 0 || local_idx >= c->local_count) return;
   c->locals[local_idx].inferred_type = type;
-  if (c->locals[local_idx].depth == -1) return; /* params use arg slots */
+  if (c->locals[local_idx].depth == -1) return;
   int slot = local_idx - c->param_locals;
   mark_slot_type(c, slot, type);
 }
@@ -1338,7 +1443,7 @@ static void compile_expr(sv_compiler_t *c, sv_ast_t *node) {
       int n = tpl->args.count;
       int n_strings = 0, n_exprs = 0;
       for (int i = 0; i < n; i++) {
-        if (tpl->args.items[i]->type == N_STRING) n_strings++;
+        if (is_template_segment(tpl->args.items[i])) n_strings++;
         else n_exprs++;
       }
       int cache_idx = add_constant(c, js_mkundef());
@@ -1348,7 +1453,7 @@ static void compile_expr(sv_compiler_t *c, sv_ast_t *node) {
       emit_op(c, OP_POP);
       for (int i = 0; i < n; i++) {
         sv_ast_t *item = tpl->args.items[i];
-        if (item->type != N_STRING) continue;
+        if (!is_template_segment(item)) continue;
         if (is_invalid_cooked_string(item))
           emit_op(c, OP_UNDEF);
         else emit_constant(c, ast_string_const(c, item));
@@ -1357,10 +1462,10 @@ static void compile_expr(sv_compiler_t *c, sv_ast_t *node) {
       emit_u16(c, (uint16_t)n_strings);
       for (int i = 0; i < n; i++) {
         sv_ast_t *item = tpl->args.items[i];
-        if (item->type != N_STRING) continue;
+        if (!is_template_segment(item)) continue;
         const char *raw = item->aux ? item->aux : item->str;
         uint32_t raw_len = item->aux ? item->aux_len : item->len;
-        emit_constant(c, js_mkstr(c->js, raw ? raw : "", raw_len));
+        emit_constant(c, js_mkstr_permanent(c->js, raw ? raw : "", raw_len));
       }
       emit_op(c, OP_ARRAY);
       emit_u16(c, (uint16_t)n_strings);
@@ -1381,7 +1486,7 @@ static void compile_expr(sv_compiler_t *c, sv_ast_t *node) {
       patch_jump(c, skip_jump);
       for (int i = 0; i < n; i++) {
         sv_ast_t *item = tpl->args.items[i];
-        if (item->type == N_STRING) continue;
+        if (is_template_segment(item)) continue;
         compile_expr(c, item);
       }
       emit_op(c, OP_CALL);
@@ -1395,8 +1500,8 @@ static void compile_expr(sv_compiler_t *c, sv_ast_t *node) {
       break;
 
     case N_REGEXP:
-      emit_constant(c, js_mkstr(c->js, node->str ? node->str : "", node->len));
-      emit_constant(c, js_mkstr(c->js, node->aux ? node->aux : "", node->aux_len));
+      emit_constant(c, js_mkstr_permanent(c->js, node->str ? node->str : "", node->len));
+      emit_constant(c, js_mkstr_permanent(c->js, node->aux ? node->aux : "", node->aux_len));
       emit_op(c, OP_REGEXP);
       break;
 
@@ -1438,7 +1543,7 @@ static void compile_binary(sv_compiler_t *c, sv_ast_t *node) {
 
   if (op == TOK_IN && node->left->type == N_IDENT &&
       node->left->len > 0 && node->left->str[0] == '#') {
-    emit_constant(c, js_mkstr(c->js, node->left->str, node->left->len));
+    emit_constant(c, js_mkstr_permanent(c->js, node->left->str, node->left->len));
     compile_expr(c, node->right);
     emit_op(c, OP_IN);
     return;
@@ -1483,7 +1588,10 @@ static void compile_binary(sv_compiler_t *c, sv_ast_t *node) {
     case TOK_SHL:        emit_op(c, OP_SHL);  break;
     case TOK_SHR:        emit_op(c, OP_SHR);  break;
     case TOK_ZSHR:       emit_op(c, OP_USHR); break;
-    case TOK_INSTANCEOF: emit_op(c, OP_INSTANCEOF); break;
+    case TOK_INSTANCEOF:
+      emit_op(c, OP_INSTANCEOF);
+      emit_u16(c, alloc_ic_idx(c));
+      break;
     case TOK_IN:         emit_op(c, OP_IN);  break;
     default:             emit_op(c, OP_UNDEF); break;
   }
@@ -1520,18 +1628,15 @@ static void compile_update(sv_compiler_t *c, sv_ast_t *node) {
     compile_expr(c, target->left);
     emit_op(c, OP_DUP);
     int atom = add_atom(c, target->right->str, target->right->len);
-    emit_op(c, OP_GET_FIELD);
-    emit_u32(c, (uint32_t)atom);
+    emit_atom_idx_op(c, OP_GET_FIELD, (uint32_t)atom);
     if (prefix) {
       emit_op(c, is_inc ? OP_INC : OP_DEC);
       emit_op(c, OP_INSERT2);
-      emit_op(c, OP_PUT_FIELD);
-      emit_u32(c, (uint32_t)atom);
+      emit_atom_idx_op(c, OP_PUT_FIELD, (uint32_t)atom);
     } else {
       emit_op(c, is_inc ? OP_POST_INC : OP_POST_DEC);
       emit_op(c, OP_SWAP_UNDER);
-      emit_op(c, OP_PUT_FIELD);
-      emit_u32(c, (uint32_t)atom);
+      emit_atom_idx_op(c, OP_PUT_FIELD, (uint32_t)atom);
     }
   } else if (target->type == N_MEMBER && (target->flags & 1)) {
     compile_expr(c, target->left);
@@ -1562,8 +1667,7 @@ static void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
       compile_expr(c, target->left);
       compile_expr(c, node->right);
       emit_op(c, OP_INSERT2);
-      emit_op(c, OP_PUT_FIELD);
-      emit_u32(c, (uint32_t)atom);
+      emit_atom_idx_op(c, OP_PUT_FIELD, (uint32_t)atom);
       return;
     }
 
@@ -1652,16 +1756,14 @@ static void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
         op == TOK_NULLISH_ASSIGN) {
       compile_expr(c, target->left);
       emit_op(c, OP_DUP);
-      emit_op(c, OP_GET_FIELD);
-      emit_u32(c, (uint32_t)atom);
+      emit_atom_idx_op(c, OP_GET_FIELD, (uint32_t)atom);
       int skip = emit_jump(c,
         op == TOK_LOR_ASSIGN ? OP_JMP_TRUE_PEEK :
         op == TOK_LAND_ASSIGN ? OP_JMP_FALSE_PEEK : OP_JMP_NOT_NULLISH);
       emit_op(c, OP_POP);
       compile_expr(c, node->right);
       emit_op(c, OP_INSERT2);
-      emit_op(c, OP_PUT_FIELD);
-      emit_u32(c, (uint32_t)atom);
+      emit_atom_idx_op(c, OP_PUT_FIELD, (uint32_t)atom);
       int end = emit_jump(c, OP_JMP);
       patch_jump(c, skip);
       emit_op(c, OP_NIP);
@@ -1671,8 +1773,7 @@ static void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
 
     compile_expr(c, target->left);
     emit_op(c, OP_DUP);
-    emit_op(c, OP_GET_FIELD);
-    emit_u32(c, (uint32_t)atom);
+    emit_atom_idx_op(c, OP_GET_FIELD, (uint32_t)atom);
     compile_expr(c, node->right);
     switch (op) {
       case TOK_PLUS_ASSIGN:  emit_op(c, OP_ADD); break;
@@ -1690,8 +1791,7 @@ static void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
       default: break;
     }
     emit_op(c, OP_INSERT2);
-    emit_op(c, OP_PUT_FIELD);
-    emit_u32(c, (uint32_t)atom);
+    emit_atom_idx_op(c, OP_PUT_FIELD, (uint32_t)atom);
   } else if (target->type == N_MEMBER && (target->flags & 1)) {
 
     if (op == TOK_LOR_ASSIGN || op == TOK_LAND_ASSIGN ||
@@ -1780,7 +1880,7 @@ static void compile_typeof(sv_compiler_t *c, sv_ast_t *node) {
       uint8_t inferred = get_local_inferred_type(c, local);
       const char *known = typeof_name_for_type(inferred);
       if (known) {
-        emit_constant(c, js_mkstr(c->js, known, strlen(known)));
+        emit_constant(c, js_mkstr_permanent(c->js, known, strlen(known)));
         return;
       }
       emit_get_var(c, arg->str, arg->len);
@@ -1809,7 +1909,7 @@ static void compile_delete(sv_compiler_t *c, sv_ast_t *node) {
   sv_ast_t *arg = node->right;
   if (arg->type == N_MEMBER && !(arg->flags & 1)) {
     compile_expr(c, arg->left);
-    ant_value_t key = js_mkstr(c->js, arg->right->str, arg->right->len);
+    ant_value_t key = js_mkstr_permanent(c->js, arg->right->str, arg->right->len);
     emit_constant(c, key);
     emit_op(c, OP_DELETE);
   } else if (arg->type == N_MEMBER && (arg->flags & 1)) {
@@ -1828,12 +1928,12 @@ static void compile_delete(sv_compiler_t *c, sv_ast_t *node) {
 static void compile_template(sv_compiler_t *c, sv_ast_t *node) {
   int n = node->args.count;
   if (n == 0) {
-    emit_constant(c, js_mkstr(c->js, "", 0));
+    emit_constant(c, js_mkstr_permanent(c->js, "", 0));
     return;
   }
   for (int i = 0; i < n; i++) {
     sv_ast_t *item = node->args.items[i];
-    if (item->type == N_STRING && is_invalid_cooked_string(item)) {
+    if (is_invalid_cooked_string(item)) {
       static const char msg[] = "Invalid or unexpected token";
       int atom = add_atom(c, msg, sizeof(msg) - 1);
       emit_op(c, OP_THROW_ERROR);
@@ -1843,11 +1943,11 @@ static void compile_template(sv_compiler_t *c, sv_ast_t *node) {
     }
   }
   compile_expr(c, node->args.items[0]);
-  if (node->args.items[0]->type != N_STRING)
+  if (!is_template_segment(node->args.items[0]))
     emit_op(c, OP_TO_PROPKEY);
   for (int i = 1; i < n; i++) {
     compile_expr(c, node->args.items[i]);
-    if (node->args.items[i]->type != N_STRING)
+    if (!is_template_segment(node->args.items[i]))
       emit_op(c, OP_TO_PROPKEY);
     emit_op(c, OP_ADD);
   }
@@ -1937,7 +2037,7 @@ static sv_call_kind_t compile_call_setup_non_optional(sv_compiler_t *c, sv_ast_t
     if (callee->flags & 1)
       compile_expr(c, callee->right);
     else
-      emit_constant(c, js_mkstr(c->js, callee->right->str, callee->right->len));
+      emit_constant(c, js_mkstr_permanent(c->js, callee->right->str, callee->right->len));
     emit_op(c, OP_GET_SUPER_VAL);
     return SV_CALL_METHOD;
   }
@@ -1950,6 +2050,25 @@ static sv_call_kind_t compile_call_setup_non_optional(sv_compiler_t *c, sv_ast_t
 
   compile_expr(c, callee);
   return SV_CALL_DIRECT;
+}
+
+static bool compile_call_is_proto_intrinsic(
+  sv_compiler_t *c, sv_ast_t *node, bool has_spread
+) {
+  if (!node || has_spread || node->args.count != 1) return false;
+  sv_ast_t *callee = node->left;
+  if (!callee || callee->type != N_MEMBER) return false;
+  if ((callee->flags & 1) || !callee->right || !callee->right->str) return false;
+  if (is_ident_name(callee->left, "super")) return false;
+  if (!is_ident_str(callee->right->str, callee->right->len, "isPrototypeOf", 13))
+    return false;
+
+  compile_expr(c, callee->left);
+  compile_receiver_property_get(c, callee);
+  compile_expr(c, node->args.items[0]);
+  emit_op(c, OP_CALL_IS_PROTO);
+  emit_u16(c, alloc_ic_idx(c));
+  return true;
 }
 
 static void compile_optional_call_after_setup(
@@ -2020,6 +2139,9 @@ static void compile_call(sv_compiler_t *c, sv_ast_t *node) {
     return;
   }
 
+  if (compile_call_is_proto_intrinsic(c, node, has_spread))
+    return;
+
   if (!has_spread && is_ident_name(callee, "eval")) {
     if (node->args.count > 0)
       compile_expr(c, node->args.items[0]);
@@ -2066,7 +2188,7 @@ static void compile_member(sv_compiler_t *c, sv_ast_t *node) {
     if (node->flags & 1)
       compile_expr(c, node->right);
     else
-      emit_constant(c, js_mkstr(c->js, node->right->str, node->right->len));
+      emit_constant(c, js_mkstr_permanent(c->js, node->right->str, node->right->len));
     emit_op(c, OP_GET_SUPER_VAL);
     return;
   }
@@ -2255,7 +2377,7 @@ static void emit_build_object_rest(sv_compiler_t *c) {
 static void emit_delete_rest_key(sv_compiler_t *c, sv_ast_t *key) {
   emit_op(c, OP_DUP);
   if (key->type == N_IDENT) {
-    emit_constant(c, js_mkstr(c->js, key->str, key->len));
+    emit_constant(c, js_mkstr_permanent(c->js, key->str, key->len));
   } else if (key->type == N_STRING) {
     emit_constant(c, ast_string_const(c, key));
   } else if (key->type == N_NUMBER) {
@@ -3336,6 +3458,16 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
 }
 
 
+static void emit_close_upvals_to_depth(sv_compiler_t *c, int target_depth) {
+for (int i = c->local_count - 1; i >= 0; i--) {
+  if (c->locals[i].depth <= target_depth) break;
+  if (c->locals[i].captured) {
+    int frame_slot = local_to_frame_slot(c, i);
+    emit_op(c, OP_CLOSE_UPVAL);
+    emit_u16(c, (uint16_t)frame_slot);
+  }
+}}
+
 static void compile_break(sv_compiler_t *c, sv_ast_t *node) {
   if (c->loop_count == 0) return;
 
@@ -3351,6 +3483,7 @@ static void compile_break(sv_compiler_t *c, sv_ast_t *node) {
     }
   }
 
+  emit_close_upvals_to_depth(c, c->loops[target].scope_depth);
   int offset = emit_jump(c, OP_JMP);
   patch_list_add(&c->loops[target].breaks, offset);
 }
@@ -3363,10 +3496,12 @@ static void compile_continue(sv_compiler_t *c, sv_ast_t *node) {
       c->loops[i].label &&
       c->loops[i].label_len == node->len &&
       memcmp(c->loops[i].label, node->str, node->len) == 0) {
+      emit_close_upvals_to_depth(c, c->loops[i].scope_depth);
       patch_list_add(&c->loops[i].continues, emit_jump(c, OP_JMP));
       return;
     }
   } else if (!c->loops[i].is_switch) {
+    emit_close_upvals_to_depth(c, c->loops[i].scope_depth);
     patch_list_add(&c->loops[i].continues, emit_jump(c, OP_JMP));
     return;
   }
@@ -3714,15 +3849,22 @@ static void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     fn->code = code_arena_bump((size_t)comp.code_len);
     memcpy(fn->code, comp.code, (size_t)comp.code_len);
     fn->code_len = comp.code_len;
+    sv_func_init_obj_sites(fn);
     if (comp.const_count > 0) {
       fn->constants = code_arena_bump((size_t)comp.const_count * sizeof(ant_value_t));
       memcpy(fn->constants, comp.constants, (size_t)comp.const_count * sizeof(ant_value_t));
       fn->const_count = comp.const_count;
+      build_gc_const_tables(fn);
     }
     if (comp.atom_count > 0) {
       fn->atoms = code_arena_bump((size_t)comp.atom_count * sizeof(sv_atom_t));
       memcpy(fn->atoms, comp.atoms, (size_t)comp.atom_count * sizeof(sv_atom_t));
       fn->atom_count = comp.atom_count;
+    }
+    fn->ic_count = (uint16_t)comp.ic_count;
+    if (fn->ic_count > 0) {
+      fn->ic_slots = code_arena_bump((size_t)fn->ic_count * sizeof(sv_ic_entry_t));
+      memset(fn->ic_slots, 0, (size_t)fn->ic_count * sizeof(sv_ic_entry_t));
     }
     if (comp.upvalue_count > 0) {
       fn->upval_descs = code_arena_bump(
@@ -4159,17 +4301,25 @@ static sv_func_t *compile_function_body(
   func->code = code_arena_bump((size_t)comp.code_len);
   memcpy(func->code, comp.code, (size_t)comp.code_len);
   func->code_len = comp.code_len;
+  sv_func_init_obj_sites(func);
 
   if (comp.const_count > 0) {
     func->constants = code_arena_bump((size_t)comp.const_count * sizeof(ant_value_t));
     memcpy(func->constants, comp.constants, (size_t)comp.const_count * sizeof(ant_value_t));
     func->const_count = comp.const_count;
+    build_gc_const_tables(func);
   }
 
   if (comp.atom_count > 0) {
     func->atoms = code_arena_bump((size_t)comp.atom_count * sizeof(sv_atom_t));
     memcpy(func->atoms, comp.atoms, (size_t)comp.atom_count * sizeof(sv_atom_t));
     func->atom_count = comp.atom_count;
+  }
+
+  func->ic_count = (uint16_t)comp.ic_count;
+  if (func->ic_count > 0) {
+    func->ic_slots = code_arena_bump((size_t)func->ic_count * sizeof(sv_ic_entry_t));
+    memset(func->ic_slots, 0, (size_t)func->ic_count * sizeof(sv_ic_entry_t));
   }
 
   if (comp.upvalue_count > 0) {
@@ -4313,6 +4463,9 @@ void sv_disasm(ant_t *js, sv_func_t *func, const char *label) {
         fprintf(stderr, " [%.*s]", (int)func->atoms[idx].len, func->atoms[idx].str);
       else
         fprintf(stderr, " a%u", idx);
+      if ((op == OP_GET_GLOBAL || op == OP_GET_GLOBAL_UNDEF ||
+           op == OP_GET_FIELD || op == OP_GET_FIELD2 || op == OP_PUT_FIELD) && size >= 7)
+        fprintf(stderr, " ic[%u]", sv_get_u16(func->code + pc + 5));
       break;
     }
     case SVF_atom_u8: {
@@ -4382,7 +4535,7 @@ void sv_disasm(ant_t *js, sv_func_t *func, const char *label) {
     if (t == T_STR) {
       ant_offset_t slen;
       ant_offset_t soff = vstr(js, v, &slen);
-      fprintf(stderr, "           %d: <String[%d]: #%.*s>\n", i, (int)slen, (int)slen, &js->mem[soff]);
+      fprintf(stderr, "           %d: <String[%d]: #%.*s>\n", i, (int)slen, (int)slen, (const char *)(uintptr_t)soff);
     } else if (t == T_NUM) {
       fprintf(stderr, "           %d: <Number [%g]>\n", i, tod(v));
     } else if (t == T_CFUNC) {

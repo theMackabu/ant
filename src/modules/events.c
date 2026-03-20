@@ -6,12 +6,12 @@
 
 #include "ant.h"
 #include "errors.h"
-#include "arena.h"
 #include "runtime.h"
 #include "internal.h"
 #include "descriptors.h"
 #include "silver/engine.h"
 
+#include "gc/modules.h"
 #include "modules/events.h"
 #include "modules/symbol.h"
 
@@ -47,7 +47,7 @@ static inline void remove_listener_at(EventType *evt, int i) {
 }
 
 static EventType **get_or_create_emitter_events(ant_t *js, ant_value_t this_obj) {
-  ant_value_t slot = js_get_slot(js, this_obj, SLOT_DATA);
+  ant_value_t slot = js_get_slot(this_obj, SLOT_DATA);
   
   if (vtype(slot) == T_UNDEF) {
     EventType **events = ant_calloc(sizeof(EventType *));
@@ -61,7 +61,7 @@ static EventType **get_or_create_emitter_events(ant_t *js, ant_value_t this_obj)
     reg->next = emitter_registry;
     emitter_registry = reg;
  
-    js_set_slot(js, this_obj, SLOT_DATA, ANT_PTR(events));
+    js_set_slot(this_obj, SLOT_DATA, ANT_PTR(events));
     return events;
   }
   
@@ -588,13 +588,14 @@ void init_events_module() {
   js_set(js, global, "EventTarget", js_obj_to_func_ex(eventtarget_ctor, SV_CALL_IS_DEFAULT_CTOR));
 }
 
-void events_gc_update_roots(void (*op_val)(void *, ant_value_t *), void *ctx) {
+void gc_mark_events(ant_t *js, gc_mark_fn mark) {
   EventType *evt, *tmp;
   HASH_ITER(hh, global_events, evt, tmp) {
-    for (int i = 0; i < evt->listener_count; i++) op_val(ctx, &evt->listeners[i].listener);
+    for (int i = 0; i < evt->listener_count; i++) mark(js, evt->listeners[i].listener);
   }
   for (emitter_reg_t *reg = emitter_registry; reg; reg = reg->next) {
-    HASH_ITER(hh, *reg->events, evt, tmp) 
-      for (int i = 0; i < evt->listener_count; i++) op_val(ctx, &evt->listeners[i].listener);
+    HASH_ITER(hh, *reg->events, evt, tmp)
+      for (int i = 0; i < evt->listener_count; i++) mark(js, evt->listeners[i].listener);
   }
 }
+

@@ -30,6 +30,7 @@ extern char **environ;
 #include "modules/json.h"
 #include "modules/symbol.h"
 #include "modules/worker_threads.h"
+#include "gc/modules.h"
 
 #define WT_ENV_MODE "ANT_WORKER_THREADS_MODE"
 #define WT_ENV_DATA_JSON "ANT_WORKER_DATA_JSON"
@@ -51,10 +52,14 @@ typedef struct ant_worker_thread {
   char *line_buf;
   size_t line_len;
   size_t line_cap;
-  ant_handle_t self_root;
-  ant_handle_t terminate_root;
-  bool has_terminate_root;
+  ant_value_t self_val;
+  ant_value_t terminate_val;
+  bool has_terminate_val;
+  struct ant_worker_thread *next;
+  struct ant_worker_thread *prev;
 } ant_worker_thread_t;
+
+static ant_worker_thread_t *active_workers_head = NULL;
 
 static inline bool wt_is_callable(ant_value_t v) {
   uint8_t t = vtype(v);
@@ -67,10 +72,10 @@ static bool wt_is_worker_mode(void) {
 }
 
 static ant_value_t wt_get_or_create_env_store(ant_t *js) {
-  ant_value_t store = js_get_slot(js, js->global, SLOT_WT_ENV_STORE);
+  ant_value_t store = js_get_slot(js->global, SLOT_WT_ENV_STORE);
   if (!is_object_type(store)) {
     store = js_mkobj(js);
-    js_set_slot(js, js->global, SLOT_WT_ENV_STORE, store);
+    js_set_slot(js->global, SLOT_WT_ENV_STORE, store);
   }
   return store;
 }
@@ -86,61 +91,61 @@ static void wt_init_env_store(ant_t *js, bool is_worker) {
       if (is_object_type(parsed)) store = parsed;
     }
   }
-  js_set_slot(js, js->global, SLOT_WT_ENV_STORE, store);
+  js_set_slot(js->global, SLOT_WT_ENV_STORE, store);
 }
 
 static ant_worker_thread_t *wt_get_worker(ant_t *js, ant_value_t this_obj) {
   if (!is_object_type(this_obj)) return NULL;
-  ant_value_t data = js_get_slot(js, this_obj, SLOT_DATA);
+  ant_value_t data = js_get_slot(this_obj, SLOT_DATA);
   if (vtype(data) != T_NUM) return NULL;
   return (ant_worker_thread_t *)(uintptr_t)js_getnum(data);
 }
 
 static bool wt_is_message_port(ant_t *js, ant_value_t obj) {
   if (!is_object_type(obj)) return false;
-  ant_value_t tag = js_get_slot(js, obj, SLOT_WT_PORT_TAG);
+  ant_value_t tag = js_get_slot(obj, SLOT_WT_PORT_TAG);
   return js_truthy(js, tag);
 }
 
 static ant_value_t wt_get_message_port_proto(ant_t *js) {
-  ant_value_t proto = js_get_slot(js, js->global, SLOT_WT_PORT_PROTO);
+  ant_value_t proto = js_get_slot(js->global, SLOT_WT_PORT_PROTO);
   if (!is_object_type(proto)) proto = js_mkobj(js);
   return proto;
 }
 
 static ant_value_t wt_make_message_port(ant_t *js) {
   ant_value_t port = js_mkobj(js);
-  js_set_proto(js, port, wt_get_message_port_proto(js));
-  js_set_slot(js, port, SLOT_WT_PORT_TAG, js_true);
-  js_set_slot(js, port, SLOT_WT_PORT_QUEUE, js_mkarr(js));
-  js_set_slot(js, port, SLOT_WT_PORT_HEAD, js_mknum(0));
-  js_set_slot(js, port, SLOT_WT_PORT_PEER, js_mknull());
-  js_set_slot(js, port, SLOT_WT_PORT_CLOSED, js_false);
-  js_set_slot(js, port, SLOT_WT_PORT_STARTED, js_false);
-  js_set_slot(js, port, SLOT_WT_PORT_ON_MESSAGE, js_mkundef());
-  js_set_slot(js, port, SLOT_WT_PORT_ONCE_MESSAGE, js_mkundef());
+  js_set_proto_init(port, wt_get_message_port_proto(js));
+  js_set_slot(port, SLOT_WT_PORT_TAG, js_true);
+  js_set_slot(port, SLOT_WT_PORT_QUEUE, js_mkarr(js));
+  js_set_slot(port, SLOT_WT_PORT_HEAD, js_mknum(0));
+  js_set_slot(port, SLOT_WT_PORT_PEER, js_mknull());
+  js_set_slot(port, SLOT_WT_PORT_CLOSED, js_false);
+  js_set_slot(port, SLOT_WT_PORT_STARTED, js_false);
+  js_set_slot(port, SLOT_WT_PORT_ON_MESSAGE, js_mkundef());
+  js_set_slot(port, SLOT_WT_PORT_ONCE_MESSAGE, js_mkundef());
   js_set(js, port, "onmessage", js_mkundef());
   return port;
 }
 
 static bool wt_port_is_closed(ant_t *js, ant_value_t port) {
-  return js_truthy(js, js_get_slot(js, port, SLOT_WT_PORT_CLOSED));
+  return js_truthy(js, js_get_slot(port, SLOT_WT_PORT_CLOSED));
 }
 
 static void wt_port_set_closed(ant_t *js, ant_value_t port, bool closed) {
-  js_set_slot(js, port, SLOT_WT_PORT_CLOSED, js_bool(closed));
+  js_set_slot(port, SLOT_WT_PORT_CLOSED, js_bool(closed));
 }
 
 static bool wt_port_queue_dequeue(ant_t *js, ant_value_t port, ant_value_t *out) {
-  ant_value_t queue = js_get_slot(js, port, SLOT_WT_PORT_QUEUE);
+  ant_value_t queue = js_get_slot(port, SLOT_WT_PORT_QUEUE);
   if (vtype(queue) != T_ARR) return false;
 
-  ant_value_t head_val = js_get_slot(js, port, SLOT_WT_PORT_HEAD);
+  ant_value_t head_val = js_get_slot(port, SLOT_WT_PORT_HEAD);
   ant_offset_t head = (vtype(head_val) == T_NUM) ? (ant_offset_t)js_getnum(head_val) : 0;
   ant_offset_t len = js_arr_len(js, queue);
   if (len <= 0 || head >= len) {
-    js_set_slot(js, port, SLOT_WT_PORT_QUEUE, js_mkarr(js));
-    js_set_slot(js, port, SLOT_WT_PORT_HEAD, js_mknum(0));
+    js_set_slot(port, SLOT_WT_PORT_QUEUE, js_mkarr(js));
+    js_set_slot(port, SLOT_WT_PORT_HEAD, js_mknum(0));
     return false;
   }
 
@@ -148,29 +153,29 @@ static bool wt_port_queue_dequeue(ant_t *js, ant_value_t port, ant_value_t *out)
   ant_offset_t next_head = head + 1;
 
   if (next_head >= len) {
-    js_set_slot(js, port, SLOT_WT_PORT_QUEUE, js_mkarr(js));
-    js_set_slot(js, port, SLOT_WT_PORT_HEAD, js_mknum(0));
+    js_set_slot(port, SLOT_WT_PORT_QUEUE, js_mkarr(js));
+    js_set_slot(port, SLOT_WT_PORT_HEAD, js_mknum(0));
     return true;
   }
 
   if (next_head > 32 && next_head * 2 >= len) {
     ant_value_t compact = js_mkarr(js);
     for (ant_offset_t i = next_head; i < len; i++) js_arr_push(js, compact, js_arr_get(js, queue, i));
-    js_set_slot(js, port, SLOT_WT_PORT_QUEUE, compact);
-    js_set_slot(js, port, SLOT_WT_PORT_HEAD, js_mknum(0));
+    js_set_slot(port, SLOT_WT_PORT_QUEUE, compact);
+    js_set_slot(port, SLOT_WT_PORT_HEAD, js_mknum(0));
     return true;
   }
 
-  js_set_slot(js, port, SLOT_WT_PORT_HEAD, js_mknum((double)next_head));
+  js_set_slot(port, SLOT_WT_PORT_HEAD, js_mknum((double)next_head));
   return true;
 }
 
 static void wt_port_queue_push(ant_t *js, ant_value_t port, ant_value_t value) {
-  ant_value_t queue = js_get_slot(js, port, SLOT_WT_PORT_QUEUE);
+  ant_value_t queue = js_get_slot(port, SLOT_WT_PORT_QUEUE);
   if (vtype(queue) != T_ARR) {
     queue = js_mkarr(js);
-    js_set_slot(js, port, SLOT_WT_PORT_QUEUE, queue);
-    js_set_slot(js, port, SLOT_WT_PORT_HEAD, js_mknum(0));
+    js_set_slot(port, SLOT_WT_PORT_QUEUE, queue);
+    js_set_slot(port, SLOT_WT_PORT_HEAD, js_mknum(0));
   }
   js_arr_push(js, queue, value);
 }
@@ -184,9 +189,9 @@ static void wt_port_call_listener(ant_t *js, ant_value_t this_obj, ant_value_t f
 
 static bool wt_port_should_deliver(ant_t *js, ant_value_t port) {
   if (wt_port_is_closed(js, port)) return false;
-  bool started = js_truthy(js, js_get_slot(js, port, SLOT_WT_PORT_STARTED));
-  ant_value_t on_fn = js_get_slot(js, port, SLOT_WT_PORT_ON_MESSAGE);
-  ant_value_t once_fn = js_get_slot(js, port, SLOT_WT_PORT_ONCE_MESSAGE);
+  bool started = js_truthy(js, js_get_slot(port, SLOT_WT_PORT_STARTED));
+  ant_value_t on_fn = js_get_slot(port, SLOT_WT_PORT_ON_MESSAGE);
+  ant_value_t once_fn = js_get_slot(port, SLOT_WT_PORT_ONCE_MESSAGE);
   ant_value_t onmessage = js_get(js, port, "onmessage");
 
   bool has_event_listener = wt_is_callable(on_fn) || wt_is_callable(once_fn);
@@ -201,13 +206,13 @@ static void wt_port_drain(ant_t *js, ant_value_t port) {
     ant_value_t msg = js_mkundef();
     if (!wt_port_queue_dequeue(js, port, &msg)) break;
 
-    ant_value_t on_fn = js_get_slot(js, port, SLOT_WT_PORT_ON_MESSAGE);
+    ant_value_t on_fn = js_get_slot(port, SLOT_WT_PORT_ON_MESSAGE);
     wt_port_call_listener(js, port, on_fn, msg);
 
-    ant_value_t once_fn = js_get_slot(js, port, SLOT_WT_PORT_ONCE_MESSAGE);
+    ant_value_t once_fn = js_get_slot(port, SLOT_WT_PORT_ONCE_MESSAGE);
     if (wt_is_callable(once_fn)) {
       wt_port_call_listener(js, port, once_fn, msg);
-      js_set_slot(js, port, SLOT_WT_PORT_ONCE_MESSAGE, js_mkundef());
+      js_set_slot(port, SLOT_WT_PORT_ONCE_MESSAGE, js_mkundef());
     }
 
     ant_value_t onmessage = js_get(js, port, "onmessage");
@@ -237,7 +242,7 @@ static void wt_call_listener(ant_t *js, ant_value_t this_obj, ant_value_t fn, an
 static void wt_emit(ant_worker_thread_t *wt, const char *event, ant_value_t arg) {
   if (!wt || !wt->js) return;
   ant_t *js = wt->js;
-  ant_value_t this_obj = js_deref(js, wt->self_root);
+  ant_value_t this_obj = wt->self_val;
   if (!is_object_type(this_obj)) return;
 
   internal_slot_t on_slot, once_slot;
@@ -249,13 +254,13 @@ static void wt_emit(ant_worker_thread_t *wt, const char *event, ant_value_t arg)
     once_slot = SLOT_WT_ONCE_EXIT;
   } else return;
 
-  ant_value_t on_fn = js_get_slot(js, this_obj, on_slot);
+  ant_value_t on_fn = js_get_slot(this_obj, on_slot);
   wt_call_listener(js, this_obj, on_fn, arg);
 
-  ant_value_t once_fn = js_get_slot(js, this_obj, once_slot);
+  ant_value_t once_fn = js_get_slot(this_obj, once_slot);
   if (wt_is_callable(once_fn)) {
     wt_call_listener(js, this_obj, once_fn, arg);
-    js_set_slot(js, this_obj, once_slot, js_mkundef());
+    js_set_slot(this_obj, once_slot, js_mkundef());
   }
 }
 
@@ -329,23 +334,22 @@ static char **wt_build_worker_env(const char *worker_data_json, const char *env_
 
 static void wt_cleanup(ant_worker_thread_t *wt) {
   if (!wt) return;
-  if (wt->js) {
-    if (wt->self_root) js_unroot(wt->js, wt->self_root);
-    if (wt->has_terminate_root) js_unroot(wt->js, wt->terminate_root);
-  }
   free(wt->line_buf);
   free(wt);
 }
 
 static void wt_detach(ant_worker_thread_t *wt) {
   if (!wt) return;
-  if (wt->js) {
-    if (wt->self_root) js_unroot(wt->js, wt->self_root);
-    if (wt->has_terminate_root) js_unroot(wt->js, wt->terminate_root);
-  }
-  wt->self_root = 0;
-  wt->terminate_root = 0;
-  wt->has_terminate_root = false;
+
+  if (wt->prev) wt->prev->next = wt->next;
+  else active_workers_head = wt->next;
+  if (wt->next) wt->next->prev = wt->prev;
+  wt->prev = NULL;
+  wt->next = NULL;
+
+  wt->self_val = js_mkundef();
+  wt->terminate_val = js_mkundef();
+  wt->has_terminate_val = false;
   free(wt->line_buf);
   wt->line_buf = NULL;
   wt->line_len = 0;
@@ -391,11 +395,11 @@ static void wt_on_process_exit(uv_process_t *proc, int64_t exit_status, int term
   wt->exit_status = exit_status;
   wt->term_signal = term_signal;
 
-  if (wt->has_terminate_root) {
-    ant_value_t p = js_deref(wt->js, wt->terminate_root);
+  if (wt->has_terminate_val) {
+    ant_value_t p = wt->terminate_val;
     js_resolve_promise(wt->js, p, js_mknum((double)exit_status));
-    js_root_update(wt->js, wt->terminate_root, js_mkundef());
-    wt->has_terminate_root = false;
+    wt->terminate_val = js_mkundef();
+    wt->has_terminate_val = false;
   }
 
   wt_emit(wt, "exit", js_mknum((double)exit_status));
@@ -587,9 +591,9 @@ static ant_value_t worker_threads_worker_on(ant_t *js, ant_value_t *args, int na
   if (!event) return js_mkerr(js, "invalid event name");
 
   if (len == 7 && memcmp(event, "message", 7) == 0) {
-    js_set_slot(js, this_obj, SLOT_WT_ON_MESSAGE, args[1]);
+    js_set_slot(this_obj, SLOT_WT_ON_MESSAGE, args[1]);
   } else if (len == 4 && memcmp(event, "exit", 4) == 0) {
-    js_set_slot(js, this_obj, SLOT_WT_ON_EXIT, args[1]);
+    js_set_slot(this_obj, SLOT_WT_ON_EXIT, args[1]);
   }
 
   return this_obj;
@@ -608,9 +612,9 @@ static ant_value_t worker_threads_worker_once(ant_t *js, ant_value_t *args, int 
   if (!event) return js_mkerr(js, "invalid event name");
 
   if (len == 7 && memcmp(event, "message", 7) == 0) {
-    js_set_slot(js, this_obj, SLOT_WT_ONCE_MESSAGE, args[1]);
+    js_set_slot(this_obj, SLOT_WT_ONCE_MESSAGE, args[1]);
   } else if (len == 4 && memcmp(event, "exit", 4) == 0) {
-    js_set_slot(js, this_obj, SLOT_WT_ONCE_EXIT, args[1]);
+    js_set_slot(this_obj, SLOT_WT_ONCE_EXIT, args[1]);
   }
 
   return this_obj;
@@ -647,22 +651,22 @@ static ant_value_t worker_threads_worker_terminate(ant_t *js, ant_value_t *args,
 
   if (wt->exited) return wt_make_resolved_promise(js, js_mknum((double)wt->exit_status));
 
-  if (!wt->has_terminate_root) {
+  if (!wt->has_terminate_val) {
     ant_value_t p = js_mkpromise(js);
-    wt->terminate_root = js_root(js, p);
-    wt->has_terminate_root = true;
+    wt->terminate_val = p;
+    wt->has_terminate_val = true;
   }
 
   int rc = uv_process_kill(&wt->process, SIGTERM);
   if (rc != 0) {
-    ant_value_t p = js_deref(js, wt->terminate_root);
+    ant_value_t p = wt->terminate_val;
     js_reject_promise(js, p, js_mkerr(js, "terminate failed: %s", uv_strerror(rc)));
-    js_root_update(js, wt->terminate_root, js_mkundef());
-    wt->has_terminate_root = false;
+    wt->terminate_val = js_mkundef();
+    wt->has_terminate_val = false;
     return p;
   }
 
-  return js_deref(js, wt->terminate_root);
+  return wt->terminate_val;
 }
 
 static ant_value_t worker_threads_worker_post_message(ant_t *js, ant_value_t *args, int nargs) {
@@ -674,7 +678,7 @@ static ant_value_t worker_threads_message_port_post_message(ant_t *js, ant_value
   if (!wt_is_message_port(js, this_obj)) return js_mkerr(js, "invalid MessagePort receiver");
   if (wt_port_is_closed(js, this_obj)) return js_mkundef();
 
-  ant_value_t peer = js_get_slot(js, this_obj, SLOT_WT_PORT_PEER);
+  ant_value_t peer = js_get_slot(this_obj, SLOT_WT_PORT_PEER);
   if (!wt_is_message_port(js, peer) || wt_port_is_closed(js, peer)) return js_mkundef();
 
   ant_value_t value = (nargs > 0) ? args[0] : js_mkundef();
@@ -694,8 +698,8 @@ static ant_value_t worker_threads_message_port_on(ant_t *js, ant_value_t *args, 
   const char *event = js_getstr(js, args[0], &len);
   if (!event) return js_mkerr(js, "invalid event name");
   if (len == 7 && memcmp(event, "message", 7) == 0) {
-    js_set_slot(js, this_obj, SLOT_WT_PORT_ON_MESSAGE, args[1]);
-    js_set_slot(js, this_obj, SLOT_WT_PORT_STARTED, js_true);
+    js_set_slot(this_obj, SLOT_WT_PORT_ON_MESSAGE, args[1]);
+    js_set_slot(this_obj, SLOT_WT_PORT_STARTED, js_true);
     wt_port_drain(js, this_obj);
   }
   return this_obj;
@@ -712,8 +716,8 @@ static ant_value_t worker_threads_message_port_once(ant_t *js, ant_value_t *args
   const char *event = js_getstr(js, args[0], &len);
   if (!event) return js_mkerr(js, "invalid event name");
   if (len == 7 && memcmp(event, "message", 7) == 0) {
-    js_set_slot(js, this_obj, SLOT_WT_PORT_ONCE_MESSAGE, args[1]);
-    js_set_slot(js, this_obj, SLOT_WT_PORT_STARTED, js_true);
+    js_set_slot(this_obj, SLOT_WT_PORT_ONCE_MESSAGE, args[1]);
+    js_set_slot(this_obj, SLOT_WT_PORT_STARTED, js_true);
     wt_port_drain(js, this_obj);
   }
   return this_obj;
@@ -722,7 +726,7 @@ static ant_value_t worker_threads_message_port_once(ant_t *js, ant_value_t *args
 static ant_value_t worker_threads_message_port_start(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_obj = js_getthis(js);
   if (!wt_is_message_port(js, this_obj)) return js_mkerr(js, "invalid MessagePort receiver");
-  js_set_slot(js, this_obj, SLOT_WT_PORT_STARTED, js_true);
+  js_set_slot(this_obj, SLOT_WT_PORT_STARTED, js_true);
   wt_port_drain(js, this_obj);
   return js_mkundef();
 }
@@ -732,9 +736,9 @@ static ant_value_t worker_threads_message_port_close(ant_t *js, ant_value_t *arg
   if (!wt_is_message_port(js, this_obj)) return js_mkerr(js, "invalid MessagePort receiver");
   wt_port_set_closed(js, this_obj, true);
 
-  ant_value_t peer = js_get_slot(js, this_obj, SLOT_WT_PORT_PEER);
-  js_set_slot(js, this_obj, SLOT_WT_PORT_PEER, js_mknull());
-  if (wt_is_message_port(js, peer)) js_set_slot(js, peer, SLOT_WT_PORT_PEER, js_mknull());
+  ant_value_t peer = js_get_slot(this_obj, SLOT_WT_PORT_PEER);
+  js_set_slot(this_obj, SLOT_WT_PORT_PEER, js_mknull());
+  if (wt_is_message_port(js, peer)) js_set_slot(peer, SLOT_WT_PORT_PEER, js_mknull());
   return js_mkundef();
 }
 
@@ -758,8 +762,8 @@ static ant_value_t worker_threads_message_channel_ctor(ant_t *js, ant_value_t *a
   ant_value_t this_obj = js_getthis(js);
   ant_value_t port1 = wt_make_message_port(js);
   ant_value_t port2 = wt_make_message_port(js);
-  js_set_slot(js, port1, SLOT_WT_PORT_PEER, port2);
-  js_set_slot(js, port2, SLOT_WT_PORT_PEER, port1);
+  js_set_slot(port1, SLOT_WT_PORT_PEER, port2);
+  js_set_slot(port2, SLOT_WT_PORT_PEER, port1);
   js_set(js, this_obj, "port1", port1);
   js_set(js, this_obj, "port2", port2);
   return this_obj;
@@ -835,8 +839,13 @@ static ant_value_t worker_threads_worker_ctor(ant_t *js, ant_value_t *args, int 
   }
 
   wt->js = js;
-  wt->self_root = js_root(js, this_obj);
-  js_set_slot(js, this_obj, SLOT_DATA, ANT_PTR(wt));
+  wt->self_val = this_obj;
+  js_set_slot(this_obj, SLOT_DATA, ANT_PTR(wt));
+
+  wt->prev = NULL;
+  wt->next = active_workers_head;
+  if (active_workers_head) active_workers_head->prev = wt;
+  active_workers_head = wt;
 
   int rc = wt_spawn_worker(wt, script_path, worker_data_json, env_store_json);
   free(script_path);
@@ -844,7 +853,7 @@ static ant_value_t worker_threads_worker_ctor(ant_t *js, ant_value_t *args, int 
   free(env_store_heap);
 
   if (rc != 0) {
-    js_set_slot(js, this_obj, SLOT_DATA, js_mkundef());
+    js_set_slot(this_obj, SLOT_DATA, js_mkundef());
     wt_cleanup(wt);
     return js_mkerr(js, "Failed to spawn Worker: %s", uv_strerror(rc));
   }
@@ -958,6 +967,13 @@ static ant_value_t worker_threads_move_message_port_to_context(ant_t *js, ant_va
   return args[0];
 }
 
+void gc_mark_worker_threads(ant_t *js, gc_mark_fn mark) {
+  for (ant_worker_thread_t *wt = active_workers_head; wt; wt = wt->next) {
+    mark(js, wt->self_val);
+    if (wt->has_terminate_val) mark(js, wt->terminate_val);
+  }
+}
+
 ant_value_t worker_threads_library(ant_t *js) {
   ant_value_t lib = js_mkobj(js);
   bool is_worker = wt_is_worker_mode();
@@ -979,17 +995,17 @@ ant_value_t worker_threads_library(ant_t *js) {
   js_set(js, message_port_proto, "unref", js_mkfun(worker_threads_message_port_unref));
   js_set_sym(js, message_port_proto, get_toStringTag_sym(), js_mkstr(js, "MessagePort", 11));
 
-  js_set_slot(js, message_port_ctor_obj, SLOT_CFUNC, js_mkfun(worker_threads_message_port_ctor));
+  js_set_slot(message_port_ctor_obj, SLOT_CFUNC, js_mkfun(worker_threads_message_port_ctor));
   js_mkprop_fast(js, message_port_ctor_obj, "prototype", 9, message_port_proto);
   js_mkprop_fast(js, message_port_ctor_obj, "name", 4, js_mkstr(js, "MessagePort", 11));
   js_set_descriptor(js, message_port_ctor_obj, "name", 4, 0);
   js_set(js, lib, "MessagePort", js_obj_to_func(message_port_ctor_obj));
-  js_set_slot(js, js->global, SLOT_WT_PORT_PROTO, message_port_proto);
+  js_set_slot(js->global, SLOT_WT_PORT_PROTO, message_port_proto);
 
   ant_value_t message_channel_ctor_obj = js_mkobj(js);
   ant_value_t message_channel_proto = js_mkobj(js);
   js_set_sym(js, message_channel_proto, get_toStringTag_sym(), js_mkstr(js, "MessageChannel", 14));
-  js_set_slot(js, message_channel_ctor_obj, SLOT_CFUNC, js_mkfun(worker_threads_message_channel_ctor));
+  js_set_slot(message_channel_ctor_obj, SLOT_CFUNC, js_mkfun(worker_threads_message_channel_ctor));
   js_mkprop_fast(js, message_channel_ctor_obj, "prototype", 9, message_channel_proto);
   js_mkprop_fast(js, message_channel_ctor_obj, "name", 4, js_mkstr(js, "MessageChannel", 14));
   js_set_descriptor(js, message_channel_ctor_obj, "name", 4, 0);
@@ -1025,7 +1041,7 @@ ant_value_t worker_threads_library(ant_t *js) {
   js_set(js, worker_proto, "postMessage", js_mkfun(worker_threads_worker_post_message));
   js_set_sym(js, worker_proto, get_toStringTag_sym(), js_mkstr(js, "Worker", 6));
 
-  js_set_slot(js, worker_ctor_obj, SLOT_CFUNC, js_mkfun(worker_threads_worker_ctor));
+  js_set_slot(worker_ctor_obj, SLOT_CFUNC, js_mkfun(worker_threads_worker_ctor));
   js_mkprop_fast(js, worker_ctor_obj, "prototype", 9, worker_proto);
   js_mkprop_fast(js, worker_ctor_obj, "name", 4, js_mkstr(js, "Worker", 6));
   js_set_descriptor(js, worker_ctor_obj, "name", 4, 0);

@@ -19,6 +19,8 @@
 #include "runtime.h"
 #include "descriptors.h"
 
+#include "gc/modules.h"
+
 #include "modules/fs.h"
 #include "modules/buffer.h"
 #include "modules/symbol.h"
@@ -405,10 +407,10 @@ static void on_stat_complete(uv_fs_t *uv_req) {
   
   ant_value_t stat_obj = js_mkobj(req->js);
   ant_value_t proto = js_get_ctor_proto(req->js, "Stats", 5);
-  if (is_object_type(proto)) js_set_proto(req->js, stat_obj, proto);
+  if (is_object_type(proto)) js_set_proto_init(stat_obj, proto);
   
   uv_stat_t *st = &uv_req->statbuf;
-  js_set_slot(req->js, stat_obj, SLOT_DATA, js_mknum((double)st->st_mode));
+  js_set_slot(stat_obj, SLOT_DATA, js_mknum((double)st->st_mode));
   js_set(req->js, stat_obj, "size", js_mknum((double)st->st_size));
   js_set(req->js, stat_obj, "mode", js_mknum((double)st->st_mode));
   js_set(req->js, stat_obj, "uid", js_mknum((double)st->st_uid));
@@ -1066,7 +1068,7 @@ static ant_value_t builtin_fs_rmdir(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t stat_isFile(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this = js_getthis(js);
-  ant_value_t mode_val = js_get_slot(js, this, SLOT_DATA);
+  ant_value_t mode_val = js_get_slot(this, SLOT_DATA);
   
   if (vtype(mode_val) != T_NUM) return js_false;
   mode_t mode = (mode_t)js_getnum(mode_val);
@@ -1076,7 +1078,7 @@ static ant_value_t stat_isFile(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t stat_isDirectory(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this = js_getthis(js);
-  ant_value_t mode_val = js_get_slot(js, this, SLOT_DATA);
+  ant_value_t mode_val = js_get_slot(this, SLOT_DATA);
   
   if (vtype(mode_val) != T_NUM) return js_false;
   mode_t mode = (mode_t)js_getnum(mode_val);
@@ -1086,7 +1088,7 @@ static ant_value_t stat_isDirectory(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t stat_isSymbolicLink(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this = js_getthis(js);
-  ant_value_t mode_val = js_get_slot(js, this, SLOT_DATA);
+  ant_value_t mode_val = js_get_slot(this, SLOT_DATA);
   
   if (vtype(mode_val) != T_NUM) return js_false;
   mode_t mode = (mode_t)js_getnum(mode_val);
@@ -1097,9 +1099,9 @@ static ant_value_t stat_isSymbolicLink(ant_t *js, ant_value_t *args, int nargs) 
 static ant_value_t create_stats_object(ant_t *js, struct stat *st) {
   ant_value_t stat_obj = js_mkobj(js);
   ant_value_t proto = js_get_ctor_proto(js, "Stats", 5);
-  if (is_special_object(proto)) js_set_proto(js, stat_obj, proto);
+  if (is_special_object(proto)) js_set_proto_init(stat_obj, proto);
   
-  js_set_slot(js, stat_obj, SLOT_DATA, js_mknum((double)st->st_mode));
+  js_set_slot(stat_obj, SLOT_DATA, js_mknum((double)st->st_mode));
   js_set(js, stat_obj, "size", js_mknum((double)st->st_size));
   js_set(js, stat_obj, "mode", js_mknum((double)st->st_mode));
   js_set(js, stat_obj, "uid", js_mknum((double)st->st_uid));
@@ -1391,7 +1393,7 @@ static ant_value_t builtin_fs_readSync(ant_t *js, ant_value_t *args, int nargs) 
   
   int fd = (int)js_getnum(args[0]);
   
-  ant_value_t ta_data_val = js_get_slot(js, args[1], SLOT_BUFFER);
+  ant_value_t ta_data_val = js_get_slot(args[1], SLOT_BUFFER);
   TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
   if (!ta_data || !ta_data->buffer || !ta_data->buffer->data)
     return js_mkerr(js, "readSync() second argument must be a Buffer, TypedArray, or DataView");
@@ -1455,7 +1457,7 @@ static ant_value_t builtin_fs_writeSync(ant_t *js, ant_value_t *args, int nargs)
     return js_mknum((double)result);
   }
   
-  ant_value_t ta_data_val = js_get_slot(js, args[1], SLOT_BUFFER);
+  ant_value_t ta_data_val = js_get_slot(args[1], SLOT_BUFFER);
   TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
   if (!ta_data || !ta_data->buffer || !ta_data->buffer->data)
     return js_mkerr(js, "writeSync() second argument must be a Buffer, TypedArray, DataView, or string");
@@ -1515,7 +1517,7 @@ static ant_value_t builtin_fs_write_fd(ant_t *js, ant_value_t *args, int nargs) 
     write_data = str;
     write_len = str_len;
   } else {
-    ant_value_t ta_data_val = js_get_slot(js, args[1], SLOT_BUFFER);
+    ant_value_t ta_data_val = js_get_slot(args[1], SLOT_BUFFER);
     TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
     if (!ta_data || !ta_data->buffer || !ta_data->buffer->data)
       return js_mkerr(js, "write() second argument must be a Buffer, TypedArray, DataView, or string");
@@ -1597,7 +1599,7 @@ static ant_value_t builtin_fs_writevSync(ant_t *js, ant_value_t *args, int nargs
   
   for (ant_offset_t i = 0; i < arr_len; i++) {
     ant_value_t item = js_arr_get(js, args[1], i);
-    ant_value_t ta_val = js_get_slot(js, item, SLOT_BUFFER);
+    ant_value_t ta_val = js_get_slot(item, SLOT_BUFFER);
     TypedArrayData *ta = (TypedArrayData *)js_gettypedarray(ta_val);
     if (!ta || !ta->buffer || !ta->buffer->data) {
       free(bufs);
@@ -1635,7 +1637,7 @@ static ant_value_t builtin_fs_writev_fd(ant_t *js, ant_value_t *args, int nargs)
   size_t total_len = 0;
   for (ant_offset_t i = 0; i < arr_len; i++) {
     ant_value_t item = js_arr_get(js, args[1], i);
-    ant_value_t ta_val = js_get_slot(js, item, SLOT_BUFFER);
+    ant_value_t ta_val = js_get_slot(item, SLOT_BUFFER);
     TypedArrayData *ta = (TypedArrayData *)js_gettypedarray(ta_val);
     if (!ta || !ta->buffer || !ta->buffer->data)
       return js_mkerr(js, "writev() buffers must contain ArrayBufferViews");
@@ -1654,7 +1656,7 @@ static ant_value_t builtin_fs_writev_fd(ant_t *js, ant_value_t *args, int nargs)
   size_t off = 0;
   for (ant_offset_t i = 0; i < arr_len; i++) {
     ant_value_t item = js_arr_get(js, args[1], i);
-    ant_value_t ta_val = js_get_slot(js, item, SLOT_BUFFER);
+    ant_value_t ta_val = js_get_slot(item, SLOT_BUFFER);
     TypedArrayData *ta = (TypedArrayData *)js_gettypedarray(ta_val);
     memcpy(req->data + off, ta->buffer->data + ta->byte_offset, ta->byte_length);
     off += ta->byte_length;
@@ -1891,11 +1893,11 @@ static ant_value_t fs_make_constants(ant_t *js) {
 
 static ant_value_t builtin_fs_promises_getter(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t getter_fn = js_getcurrentfunc(js);
-  ant_value_t cached = js_get_slot(js, getter_fn, SLOT_DATA);
+  ant_value_t cached = js_get_slot(getter_fn, SLOT_DATA);
   if (is_object_type(cached)) return cached;
 
   ant_value_t promises = fs_promises_library(js);
-  js_set_slot(js, getter_fn, SLOT_DATA, promises);
+  js_set_slot(getter_fn, SLOT_DATA, promises);
   return promises;
 }
 
@@ -1949,11 +1951,12 @@ int has_pending_fs_ops(void) {
   return pending_requests && utarray_len(pending_requests) > 0;
 }
 
-void fs_gc_update_roots(GC_OP_VAL_ARGS) {
+void gc_mark_fs(ant_t *js, gc_mark_fn mark) {
   if (!pending_requests) return;
   unsigned int len = utarray_len(pending_requests);
   for (unsigned int i = 0; i < len; i++) {
     fs_request_t **reqp = (fs_request_t **)utarray_eltptr(pending_requests, i);
-    if (reqp && *reqp) { op_val(ctx, &(*reqp)->promise); }
+    if (reqp && *reqp) { mark(js, (*reqp)->promise); }
   }
 }
+

@@ -41,10 +41,10 @@ static ant_value_t async_local_storage_run(ant_t *js, ant_value_t *args, int nar
     return js_mkerr(js, "AsyncLocalStorage.run() requires an AsyncLocalStorage instance");
   }
 
-  ant_value_t prev = js_get_slot(js, this_obj, SLOT_DATA);
-  js_set_slot(js, this_obj, SLOT_DATA, args[0]);
+  ant_value_t prev = js_get_slot(this_obj, SLOT_DATA);
+  js_set_slot_wb(js, this_obj, SLOT_DATA, args[0]);
   ant_value_t result = async_hooks_call_with_tail_args(js, args[1], js_mkundef(), args, nargs, 2);
-  js_set_slot(js, this_obj, SLOT_DATA, prev);
+  js_set_slot_wb(js, this_obj, SLOT_DATA, prev);
   return result;
 }
 
@@ -58,10 +58,10 @@ static ant_value_t async_local_storage_exit(ant_t *js, ant_value_t *args, int na
     return js_mkerr(js, "AsyncLocalStorage.exit() requires an AsyncLocalStorage instance");
   }
 
-  ant_value_t prev = js_get_slot(js, this_obj, SLOT_DATA);
-  js_set_slot(js, this_obj, SLOT_DATA, js_mkundef());
+  ant_value_t prev = js_get_slot(this_obj, SLOT_DATA);
+  js_set_slot_wb(js, this_obj, SLOT_DATA, js_mkundef());
   ant_value_t result = async_hooks_call_with_tail_args(js, args[0], js_mkundef(), args, nargs, 1);
-  js_set_slot(js, this_obj, SLOT_DATA, prev);
+  js_set_slot_wb(js, this_obj, SLOT_DATA, prev);
   return result;
 }
 
@@ -70,7 +70,7 @@ static ant_value_t async_local_storage_enterWith(ant_t *js, ant_value_t *args, i
   if (!is_object_type(this_obj)) {
     return js_mkerr(js, "AsyncLocalStorage.enterWith() requires an AsyncLocalStorage instance");
   }
-  js_set_slot(js, this_obj, SLOT_DATA, nargs > 0 ? args[0] : js_mkundef());
+  js_set_slot_wb(js, this_obj, SLOT_DATA, nargs > 0 ? args[0] : js_mkundef());
   return js_mkundef();
 }
 
@@ -78,13 +78,13 @@ static ant_value_t async_local_storage_getStore(ant_t *js, ant_value_t *args, in
   (void)args; (void)nargs;
   ant_value_t this_obj = js_getthis(js);
   if (!is_object_type(this_obj)) return js_mkundef();
-  return js_get_slot(js, this_obj, SLOT_DATA);
+  return js_get_slot(this_obj, SLOT_DATA);
 }
 
 static ant_value_t async_local_storage_disable(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
   ant_value_t this_obj = js_getthis(js);
-  if (is_object_type(this_obj)) js_set_slot(js, this_obj, SLOT_DATA, js_mkundef());
+  if (is_object_type(this_obj)) js_set_slot_wb(js, this_obj, SLOT_DATA, js_mkundef());
   return js_mkundef();
 }
 

@@ -4,10 +4,21 @@
 #include <stdint.h>
 #include <stddef.h>
 
-struct ant;
-
-typedef struct ant ant_t;
 typedef unsigned long long u64;
+
+struct ant_object;
+struct ant_shape;
+struct ant_isolate_t;
+
+typedef struct ant_isolate_t  ant_t;
+typedef struct ant_pool_block ant_pool_block_t;
+
+typedef struct ant_object ant_object_t;
+typedef struct ant_shape  ant_shape_t;
+
+typedef struct sv_vm      sv_vm_t;
+typedef struct sv_func    sv_func_t;
+typedef struct sv_closure sv_closure_t;
 
 typedef size_t   ant_handle_t;
 typedef uint64_t ant_offset_t;

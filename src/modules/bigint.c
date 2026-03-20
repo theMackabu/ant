@@ -72,8 +72,8 @@ static void bigint_normalize_limbs(uint32_t *limbs, size_t *count) {
 }
 
 static inline const bigint_payload_t *bigint_payload(ant_t *js, ant_value_t v) {
-  ant_offset_t ofs = (ant_offset_t)vdata(v);
-  return (const bigint_payload_t *)&js->mem[ofs + sizeof(ant_offset_t)];
+  (void)js;
+  return (const bigint_payload_t *)(uintptr_t)vdata(v);
 }
 
 static inline bool limbs_is_zero(const uint32_t *limbs, size_t count) {
@@ -113,16 +113,11 @@ static ant_value_t js_mkbigint_limbs(ant_t *js, const uint32_t *limbs, size_t co
     return js_mkerr(js, "oom");
   }
 
-  size_t total_size;
-  if (!checked_add_size(sizeof(ant_offset_t), payload_size, &total_size)) return js_mkerr(js, "oom");
+  bigint_payload_t *payload = (bigint_payload_t *)js_type_alloc(
+    js, ANT_ALLOC_BIGINT, payload_size, _Alignof(bigint_payload_t)
+  );
+  if (!payload) return js_mkerr(js, "oom");
 
-  ant_offset_t ofs = js_alloc(js, total_size);
-  if (ofs == (ant_offset_t)~0) return js_mkerr(js, "oom");
-
-  ant_offset_t header = (ant_offset_t)(payload_size << 4);
-  memcpy(&js->mem[ofs], &header, sizeof(header));
-
-  bigint_payload_t *payload = (bigint_payload_t *)&js->mem[ofs + sizeof(ant_offset_t)];
   payload->sign = negative ? 1 : 0;
   payload->pad[0] = 0;
   payload->pad[1] = 0;
@@ -130,7 +125,7 @@ static ant_value_t js_mkbigint_limbs(ant_t *js, const uint32_t *limbs, size_t co
   payload->limb_count = (uint32_t)count;
   memcpy(payload->limbs, limbs, limbs_bytes);
 
-  return mkval(T_BIGINT, ofs);
+  return mkval(T_BIGINT, (uintptr_t)payload);
 }
 
 static ant_value_t bigint_from_u64(ant_t *js, uint64_t value) {
@@ -1306,7 +1301,7 @@ static ant_value_t builtin_BigInt(ant_t *js, ant_value_t *args, int nargs) {
   if (vtype(arg) == T_STR) {
     ant_offset_t slen;
     ant_offset_t off = vstr(js, arg, &slen);
-    const char *str = (const char *)&js->mem[off];
+    const char *str = (const char *)(uintptr_t)(off);
 
     size_t start = 0;
     size_t end = slen;
@@ -1461,16 +1456,16 @@ void init_bigint_module(void) {
 
   ant_value_t glob = js_glob(js);
   ant_value_t object_proto = js->object;
-  ant_value_t function_proto = js_get_slot(js, glob, SLOT_FUNC_PROTO);
+  ant_value_t function_proto = js_get_slot(glob, SLOT_FUNC_PROTO);
   if (vtype(function_proto) == T_UNDEF) function_proto = js_get_ctor_proto(js, "Function", 8);
 
   ant_value_t bigint_proto = js_mkobj(js);
-  js_set_proto(js, bigint_proto, object_proto);
+  js_set_proto_init(bigint_proto, object_proto);
   js_setprop(js, bigint_proto, js_mkstr(js, "toString", 8), js_mkfun(builtin_bigint_toString));
 
   ant_value_t bigint_ctor_obj = mkobj(js, 0);
-  js_set_proto(js, bigint_ctor_obj, function_proto);
-  js_set_slot(js, bigint_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_BigInt));
+  js_set_proto_init(bigint_ctor_obj, function_proto);
+  js_set_slot(bigint_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_BigInt));
   js_setprop(js, bigint_ctor_obj, js_mkstr(js, "asIntN", 6), js_mkfun(builtin_BigInt_asIntN));
   js_setprop(js, bigint_ctor_obj, js_mkstr(js, "asUintN", 7), js_mkfun(builtin_BigInt_asUintN));
   js_setprop_nonconfigurable(js, bigint_ctor_obj, "prototype", 9, bigint_proto);

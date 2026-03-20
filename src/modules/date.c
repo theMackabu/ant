@@ -96,7 +96,7 @@ static bool date_this_time_value(ant_t *js, ant_value_t this_val, double *out, a
     return false;
   }
   
-  ant_value_t t = js_get_slot(js, js_as_obj(this_val), SLOT_DATA);
+  ant_value_t t = js_get_slot(js_as_obj(this_val), SLOT_DATA);
   *out = (vtype(t) == T_NUM) ? tod(t) : JS_NAN;
   return true;
 }
@@ -106,7 +106,7 @@ static ant_value_t date_set_this_time_value(ant_t *js, ant_value_t this_val, dou
     return js_mkerr_typed(js, JS_ERR_TYPE, "not a Date object");
   }
   
-  js_set_slot(js, js_as_obj(this_val), SLOT_DATA, tov(v));
+  js_set_slot(js_as_obj(this_val), SLOT_DATA, tov(v));
   return tov(v);
 }
 
@@ -758,7 +758,7 @@ static bool date_parse_string_to_ms(ant_t *js, ant_value_t arg, double *out_ms) 
     return true;
   }
 
-  memcpy(buf, &js->mem[off], (size_t)len);
+  memcpy(buf, (const void *)(uintptr_t)off, (size_t)len);
   buf[len] = '\0';
 
   int fields[9];
@@ -809,8 +809,8 @@ static ant_value_t builtin_Date(ant_t *js, ant_value_t *args, int nargs) {
     val = (double)date_now();
     ant_value_t tmp = js_mkobj(js);
     ant_value_t date_proto = js_get_ctor_proto(js, "Date", 4);
-    if (is_object_type(date_proto)) js_set_proto(js, tmp, date_proto);
-    js_set_slot(js, tmp, SLOT_DATA, tov(val));
+    if (is_object_type(date_proto)) js_set_proto_init(tmp, date_proto);
+    js_set_slot(tmp, SLOT_DATA, tov(val));
     return get_date_string(js, tmp, kDateToStringSpec);
   }
 
@@ -820,7 +820,7 @@ static ant_value_t builtin_Date(ant_t *js, ant_value_t *args, int nargs) {
     ant_value_t input = args[0];
 
     if (is_object_type(input) && is_date_instance(js, input)) {
-      ant_value_t tv = js_get_slot(js, js_as_obj(input), SLOT_DATA);
+      ant_value_t tv = js_get_slot(js_as_obj(input), SLOT_DATA);
       val = (vtype(tv) == T_NUM) ? tod(tv) : JS_NAN;
       val = date_timeclip(val);
     } else {
@@ -851,7 +851,7 @@ static ant_value_t builtin_Date(ant_t *js, ant_value_t *args, int nargs) {
     val = (i == n) ? date_make_fields(&fields, 1) : JS_NAN;
   }
 
-  js_set_slot(js, js_as_obj(js->this_val), SLOT_DATA, tov(val));
+  js_set_slot(js_as_obj(js->this_val), SLOT_DATA, tov(val));
   return js->this_val;
 }
 
@@ -1280,7 +1280,7 @@ void init_date_module(void) {
   ant_value_t function_proto = js_get_ctor_proto(js, "Function", 8);
 
   ant_value_t date_proto = js_mkobj(js);
-  js_set_proto(js, date_proto, object_proto);
+  js_set_proto_init(date_proto, object_proto);
 
   static const date_method_entry_t kDateProtoMethods[] = {
     DATE_METHOD_ENTRY("valueOf", builtin_Date_valueOf),
@@ -1338,8 +1338,8 @@ void init_date_module(void) {
   }
 
   ant_value_t date_ctor_obj = js_mkobj(js);
-  js_set_proto(js, date_ctor_obj, function_proto);
-  js_set_slot(js, date_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_Date));
+  js_set_proto_init(date_ctor_obj, function_proto);
+  js_set_slot(date_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_Date));
   static const date_method_entry_t kDateCtorMethods[] = {
     DATE_METHOD_ENTRY("now", builtin_Date_now),
     DATE_METHOD_ENTRY("parse", builtin_Date_parse),

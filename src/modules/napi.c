@@ -67,14 +67,14 @@ struct napi_callback_info__ {
 
 struct napi_ref__ {
   ant_napi_env_t *env;
-  ant_handle_t root;
+  ant_value_t ref_val;
   napi_value value;
   uint32_t refcount;
 };
 
 struct napi_deferred__ {
   ant_napi_env_t *env;
-  ant_handle_t promise_root;
+  ant_value_t promise_val;
   bool settled;
 };
 
@@ -128,7 +128,7 @@ typedef struct napi_tsfn_item {
 
 struct napi_threadsafe_function__ {
   ant_napi_env_t *env;
-  ant_handle_t func_root;
+  ant_value_t func_val;
   napi_threadsafe_function_call_js call_js_cb;
   node_api_basic_finalize thread_finalize_cb;
   void *thread_finalize_data;
@@ -254,14 +254,14 @@ static napi_status napi_check_pending_from_result(napi_env env, ant_value_t resu
 }
 
 static bool napi_slot_get_u64(ant_t *js, ant_value_t obj, internal_slot_t slot, uint64_t *out) {
-  ant_value_t value = js_get_slot(js, obj, slot);
+  ant_value_t value = js_get_slot(obj, slot);
   if (vtype(value) != T_NUM) return false;
   *out = (uint64_t)js_getnum(value);
   return true;
 }
 
 static void napi_slot_set_u64(ant_t *js, ant_value_t obj, internal_slot_t slot, uint64_t v) {
-  js_set_slot(js, obj, slot, js_mknum((double)v));
+  js_set_slot(obj, slot, js_mknum((double)v));
 }
 
 static napi_external_entry_t *napi_find_external(ant_t *js, napi_value value) {
@@ -287,7 +287,7 @@ static bool napi_get_typedarray_data(
   napi_value value,
   TypedArrayData **out
 ) {
-  ant_value_t slot = js_get_slot(js, (ant_value_t)value, SLOT_BUFFER);
+  ant_value_t slot = js_get_slot((ant_value_t)value, SLOT_BUFFER);
   if (vtype(slot) != T_TYPEDARRAY) return false;
   TypedArrayData *ta = (TypedArrayData *)js_gettypedarray(slot);
   if (!ta || !ta->buffer || ta->buffer->is_detached) return false;
@@ -359,7 +359,7 @@ static int napi_desc_flags(napi_property_attributes attributes) {
 
 static ant_value_t napi_callback_trampoline(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t current = js_getcurrentfunc(js);
-  ant_value_t data_slot = js_get_slot(js, current, SLOT_DATA);
+  ant_value_t data_slot = js_get_slot(current, SLOT_DATA);
   if (vtype(data_slot) != T_NUM) return js_mkundef();
 
   napi_callback_binding_t *binding = (napi_callback_binding_t *)(uintptr_t)js_getnum(data_slot);
@@ -410,6 +410,7 @@ static napi_status napi_create_function_common(
   binding->data = data;
 
   ant_value_t fn = js_heavy_mkfun(nenv->js, napi_callback_trampoline, ANT_PTR(binding));
+  js_mark_constructor(fn, true);
   if (utf8name && utf8name[0]) {
     size_t nlen = (length == NAPI_AUTO_LENGTH) ? strlen(utf8name) : length;
     js_set(nenv->js, fn, "name", js_mkstr(nenv->js, utf8name, nlen));
@@ -448,7 +449,7 @@ static napi_status napi_make_error_object(
   js_set(js, err, "message", message);
 
   ant_value_t proto = js_get_ctor_proto(js, name, strlen(name));
-  if (is_object_type(proto)) js_set_proto(js, err, proto);
+  if (is_object_type(proto)) js_set_proto_init(err, proto);
 
   *result = (napi_value)err;
   return napi_set_last(env, napi_ok, NULL);
@@ -495,7 +496,7 @@ static void napi_tsfn_async_cb(uv_async_t *handle) {
       break;
     }
 
-    ant_value_t cb = js_deref(js, tsfn->func_root);
+    ant_value_t cb = tsfn->func_val;
     if (tsfn->call_js_cb) {
       tsfn->call_js_cb((napi_env)tsfn->env, (napi_value)cb, tsfn->context, item->data);
     } else if (napi_is_callable(cb)) {
@@ -515,7 +516,7 @@ static void napi_tsfn_close_cb(uv_handle_t *handle) {
   }
 
   if (tsfn->env && tsfn->env->js) {
-    js_root_update(tsfn->env->js, tsfn->func_root, js_mkundef());
+    tsfn->func_val = js_mkundef();
   }
 
   uv_mutex_destroy(&tsfn->mutex);
@@ -641,7 +642,7 @@ ant_value_t napi_load_native_module(ant_t *js, const char *module_path, ant_valu
   if (!is_object_type(ns)) return exports_val;
 
   setprop_cstr(js, ns, "default", 7, exports_val);
-  js_set_slot(js, ns, SLOT_DEFAULT, exports_val);
+  js_set_slot(ns, SLOT_DEFAULT, exports_val);
 
   if (!is_object_type(exports_val)) return exports_val;
   ant_iter_t iter = js_prop_iter_begin(js, exports_val);
@@ -875,7 +876,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_promise(
 
   ant_value_t p = js_mkpromise(nenv->js);
   def->env = nenv;
-  def->promise_root = js_root(nenv->js, p);
+  def->promise_val = p;
   def->settled = false;
 
   *deferred = (napi_deferred)def;
@@ -894,10 +895,10 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_resolve_deferred(
     return napi_set_last(env, napi_invalid_arg, "invalid deferred");
   }
 
-  ant_value_t promise = js_deref(nenv->js, def->promise_root);
+  ant_value_t promise = def->promise_val;
   js_resolve_promise(nenv->js, promise, (ant_value_t)resolution);
   def->settled = true;
-  js_root_update(nenv->js, def->promise_root, js_mkundef());
+  def->promise_val = js_mkundef();
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -912,10 +913,10 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_reject_deferred(
     return napi_set_last(env, napi_invalid_arg, "invalid deferred");
   }
 
-  ant_value_t promise = js_deref(nenv->js, def->promise_root);
+  ant_value_t promise = def->promise_val;
   js_reject_promise(nenv->js, promise, (ant_value_t)rejection);
   def->settled = true;
-  js_root_update(nenv->js, def->promise_root, js_mkundef());
+  def->promise_val = js_mkundef();
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -1018,7 +1019,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_typedarray(
     return napi_set_last(env, napi_invalid_arg, "invalid argument");
   }
 
-  ant_value_t slot = js_get_slot(nenv->js, (ant_value_t)arraybuffer, SLOT_BUFFER);
+  ant_value_t slot = js_get_slot((ant_value_t)arraybuffer, SLOT_BUFFER);
   if (vtype(slot) != T_NUM) return napi_set_last(env, napi_arraybuffer_expected, "arraybuffer expected");
 
   ArrayBufferData *ab = (ArrayBufferData *)(uintptr_t)js_getnum(slot);
@@ -1077,8 +1078,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_reference(
   ref->env = nenv;
   ref->value = value;
   ref->refcount = initial_refcount;
-  ref->root = js_root(nenv->js, (ant_value_t)value);
-  if (initial_refcount == 0) js_root_update(nenv->js, ref->root, js_mkundef());
+  ref->ref_val = (initial_refcount > 0) ? (ant_value_t)value : js_mkundef();
 
   *result = (napi_ref)ref;
   return napi_set_last(env, napi_ok, NULL);
@@ -1091,7 +1091,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_delete_reference(
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   struct napi_ref__ *r = (struct napi_ref__ *)ref;
   if (!nenv || !nenv->js || !r) return napi_set_last((napi_env)env, napi_invalid_arg, "invalid argument");
-  js_root_update(nenv->js, r->root, js_mkundef());
+  r->ref_val = js_mkundef();
   free(r);
   return napi_set_last((napi_env)env, napi_ok, NULL);
 }
@@ -1105,7 +1105,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_reference_ref(
   struct napi_ref__ *r = (struct napi_ref__ *)ref;
   if (!nenv || !nenv->js || !r) return napi_set_last(env, napi_invalid_arg, "invalid argument");
 
-  if (r->refcount == 0) js_root_update(nenv->js, r->root, (ant_value_t)r->value);
+  if (r->refcount == 0) r->ref_val = (ant_value_t)r->value;
   r->refcount++;
   if (result) *result = r->refcount;
 
@@ -1123,7 +1123,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_reference_unref(
   if (r->refcount == 0) return napi_set_last(env, napi_invalid_arg, "reference count already zero");
 
   r->refcount--;
-  if (r->refcount == 0) js_root_update(nenv->js, r->root, js_mkundef());
+  if (r->refcount == 0) r->ref_val = js_mkundef();
   if (result) *result = r->refcount;
 
   return napi_set_last(env, napi_ok, NULL);
@@ -1138,7 +1138,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_reference_value(
   struct napi_ref__ *r = (struct napi_ref__ *)ref;
   if (!nenv || !nenv->js || !r || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
 
-  if (r->refcount > 0) *result = (napi_value)js_deref(nenv->js, r->root);
+  if (r->refcount > 0) *result = (napi_value)r->ref_val;
   else *result = r->value;
 
   return napi_set_last(env, napi_ok, NULL);
@@ -1343,7 +1343,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_arraybuffer_info(
   if (!nenv || !nenv->js) return napi_set_last(env, napi_invalid_arg, "invalid env");
   if (!is_object_type((ant_value_t)arraybuffer)) return napi_set_last(env, napi_arraybuffer_expected, "arraybuffer expected");
 
-  ant_value_t slot = js_get_slot(nenv->js, (ant_value_t)arraybuffer, SLOT_BUFFER);
+  ant_value_t slot = js_get_slot((ant_value_t)arraybuffer, SLOT_BUFFER);
   if (vtype(slot) != T_NUM) return napi_set_last(env, napi_arraybuffer_expected, "arraybuffer expected");
 
   ArrayBufferData *ab = (ArrayBufferData *)(uintptr_t)js_getnum(slot);
@@ -1461,7 +1461,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_property(
   ant_value_t k = (ant_value_t)key;
   if (vtype(k) == T_SYMBOL) {
     ant_offset_t off = lkp_sym_proto(nenv->js, (ant_value_t)object, (ant_offset_t)vdata(k));
-    *result = (napi_value)(off ? resolveprop(nenv->js, mkval(T_PROP, off)) : js_mkundef());
+    *result = (napi_value)(off ? js_propref_load(nenv->js, off) : js_mkundef());
     return napi_set_last(env, napi_ok, NULL);
   }
 
@@ -1706,13 +1706,14 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_define_properties(
       }
 
       int flags = napi_desc_flags(p->attributes);
+      ant_value_t desc_obj = js_as_obj((ant_value_t)object);
       if (is_symbol) {
-        if (p->getter) js_set_sym_getter_desc(nenv->js, (ant_value_t)object, key, (ant_value_t)getter_fn, flags);
-        if (p->setter) js_set_sym_setter_desc(nenv->js, (ant_value_t)object, key, (ant_value_t)setter_fn, flags);
+        if (p->getter) js_set_sym_getter_desc(nenv->js, desc_obj, key, (ant_value_t)getter_fn, flags);
+        if (p->setter) js_set_sym_setter_desc(nenv->js, desc_obj, key, (ant_value_t)setter_fn, flags);
       } else {
         js_set_accessor_desc(
           nenv->js,
-          (ant_value_t)object,
+          desc_obj,
           key_str,
           key_len,
           p->getter ? (ant_value_t)getter_fn : js_mkundef(),
@@ -1729,7 +1730,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_define_properties(
       js_set_sym(nenv->js, (ant_value_t)object, key, value);
     } else {
       js_set(nenv->js, (ant_value_t)object, key_str, value);
-      js_set_descriptor(nenv->js, (ant_value_t)object, key_str, key_len, napi_desc_flags(p->attributes));
+      js_set_descriptor(nenv->js, js_as_obj((ant_value_t)object), key_str, key_len, napi_desc_flags(p->attributes));
     }
   }
 
@@ -1757,6 +1758,8 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_define_class(
   if (st != napi_ok) return st;
 
   ant_value_t ctor = (ant_value_t)*result;
+  js_mark_constructor(ctor, true);
+
   ant_value_t proto = js_get(nenv->js, ctor, "prototype");
   if (!is_object_type(proto)) {
     proto = js_mkobj(nenv->js);
@@ -1850,7 +1853,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_is_arraybuffer(
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
   if (!is_object_type((ant_value_t)value)) { *result = false; return napi_set_last(env, napi_ok, NULL); }
 
-  ant_value_t slot = js_get_slot(nenv->js, (ant_value_t)value, SLOT_BUFFER);
+  ant_value_t slot = js_get_slot((ant_value_t)value, SLOT_BUFFER);
   if (vtype(slot) != T_NUM) {
     *result = false;
   } else {
@@ -1902,7 +1905,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_is_dataview(
   if (!is_object_type((ant_value_t)value)) {
     *result = false;
   } else {
-    ant_value_t slot = js_get_slot(nenv->js, (ant_value_t)value, SLOT_DATA);
+    ant_value_t slot = js_get_slot((ant_value_t)value, SLOT_DATA);
     ant_value_t byte_len = js_get(nenv->js, (ant_value_t)value, "byteLength");
     *result = vtype(slot) == T_NUM && vtype(byte_len) == T_NUM;
   }
@@ -1919,7 +1922,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_is_error(
   if (!is_object_type((ant_value_t)value)) {
     *result = false;
   } else {
-    ant_value_t et = js_get_slot(nenv->js, (ant_value_t)value, SLOT_ERR_TYPE);
+    ant_value_t et = js_get_slot((ant_value_t)value, SLOT_ERR_TYPE);
     *result = vtype(et) == T_NUM;
   }
   return napi_set_last(env, napi_ok, NULL);
@@ -2005,7 +2008,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_new_instance(
   ant_value_t ctor = (ant_value_t)constructor;
   ant_value_t obj = js_mkobj(nenv->js);
   ant_value_t proto = js_get(nenv->js, ctor, "prototype");
-  if (is_object_type(proto)) js_set_proto(nenv->js, obj, proto);
+  if (is_object_type(proto)) js_set_proto_init(obj, proto);
 
   ant_value_t saved = nenv->js->new_target;
   nenv->js->new_target = ctor;
@@ -2235,7 +2238,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_remove_wrap(
   if (result) *result = entry->native_object;
   HASH_DEL(g_napi_wraps, entry);
   free(entry);
-  js_set_slot(nenv->js, (ant_value_t)js_object, SLOT_NAPI_WRAP_ID, js_mkundef());
+  js_set_slot((ant_value_t)js_object, SLOT_NAPI_WRAP_ID, js_mkundef());
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -2396,7 +2399,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_threadsafe_function(
   tsfn->context = context;
   tsfn->max_queue_size = max_queue_size;
   tsfn->thread_count = initial_thread_count > 0 ? initial_thread_count : 1;
-  tsfn->func_root = js_root(nenv->js, (ant_value_t)func);
+  tsfn->func_val = (ant_value_t)func;
 
   uv_mutex_init(&tsfn->mutex);
   int rc = uv_async_init(uv_default_loop(), &tsfn->async, napi_tsfn_async_cb);

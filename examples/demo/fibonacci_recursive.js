@@ -4,8 +4,8 @@ function fib(n) {
 }
 
 const start = performance.now();
-const result = fib(30);
+const result = fib(35);
 const end = performance.now();
 
-console.log(`fibonacci(30) = ${result}`);
+console.log(`fibonacci(35) = ${result}`);
 console.log(`Time: ${(end - start).toFixed(2)} ms`);

@@ -24,24 +24,19 @@ script = ["maid build -q", "./build/ant %{arg.1}"]
 script = "amber build .github/install/install.ab install.sh"
 
 [tasks.setup]
-script = ['meson subprojects download', '''
-   bash -c 'CC="ccache $(which clang)" \
-   CC_LD="$(which ld64.lld)" \
-   meson setup build --wipe'
-''']
+script = ['meson subprojects download', 'meson setup build --wipe']
 
 [tasks.no_jit]
-script = ['meson subprojects download', '''
-   bash -c 'CC="ccache $(which clang)" \
-   CC_LD="$(which ld64.lld)" \
-   meson setup build --wipe -Djit=false'
-''']
+script = ['meson subprojects download', 'meson setup build --wipe -Djit=false']
 
 [tasks.asan]
-script = ['meson subprojects download', '''
-   bash -c 'CC="ccache $(which clang)" \
-   meson setup build --wipe -Db_sanitize=address -Doptimization=0 -Db_lto=false -Dstrip=false -Db_lundef=false'
-''']
+script = ['meson subprojects download', 'meson setup build --wipe -Db_sanitize=address -Doptimization=0 -Db_lto=false -Dstrip=false -Db_lundef=false']
+
+[tasks.debug]
+script = [
+  'meson subprojects download',
+  'meson setup build --wipe --buildtype=debug -Doptimization=0 -Db_lto=false -Dstrip=false -Db_lundef=false -Dunity=off'
+]
 
 [tasks.install]
 script = ["maid build -q", '''
@@ -54,10 +49,4 @@ script = ["maid build -q", '''
      cp ./build/ant ~/.ant/bin/
      ln -sf ~/.ant/bin/ant ~/.ant/bin/antx
    fi'
-''']
-
-[tasks.debug]
-script = ['meson subprojects download', '''
-   bash -c 'CC="ccache $(which clang)" \
-   meson setup build --wipe --buildtype=debug -Doptimization=0 -Db_lto=false -Dstrip=false -Db_lundef=false -Dunity=off'
 ''']

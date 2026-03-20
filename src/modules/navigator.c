@@ -18,6 +18,7 @@
 #include "silver/engine.h"
 #include "modules/navigator.h"
 #include "modules/symbol.h"
+#include "gc/modules.h"
 
 typedef enum {
   LOCK_MODE_EXCLUSIVE,
@@ -124,15 +125,15 @@ static ant_value_t make_lock_handler(ant_t *js, ant_value_t cfunc, ant_value_t l
   ant_value_t data_obj = js_mkobj(js);
   js_set(js, data_obj, "lockName", lock_name);
   js_set(js, data_obj, "outerPromise", outer_promise);
-  js_set_slot(js, fn_obj, SLOT_DATA, data_obj);
-  js_set_slot(js, fn_obj, SLOT_CFUNC, cfunc);
+  js_set_slot(fn_obj, SLOT_DATA, data_obj);
+  js_set_slot(fn_obj, SLOT_CFUNC, cfunc);
   
   return js_obj_to_func(fn_obj);
 }
 
 static ant_value_t lock_then_handler(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t current_func = js_getcurrentfunc(js);
-  ant_value_t data_obj = js_get_slot(js, current_func, SLOT_DATA);
+  ant_value_t data_obj = js_get_slot(current_func, SLOT_DATA);
   
   ant_value_t lock_name_val = js_get(js, data_obj, "lockName");
   ant_value_t outer_promise = js_get(js, data_obj, "outerPromise");
@@ -150,7 +151,7 @@ static ant_value_t lock_then_handler(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t lock_catch_handler(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t current_func = js_getcurrentfunc(js);
-  ant_value_t data_obj = js_get_slot(js, current_func, SLOT_DATA);
+  ant_value_t data_obj = js_get_slot(current_func, SLOT_DATA);
   
   ant_value_t lock_name_val = js_get(js, data_obj, "lockName");
   ant_value_t outer_promise = js_get(js, data_obj, "outerPromise");
@@ -391,9 +392,10 @@ void init_navigator_module(void) {
   js_set(js, js_glob(js), "navigator", navigator_obj);
 }
 
-void navigator_gc_update_roots(GC_OP_VAL_ARGS) {
+void gc_mark_navigator(ant_t *js, gc_mark_fn mark) {
   for (lock_request_t *req = pending_requests; req; req = req->next) {
-    op_val(ctx, &req->callback);
-    op_val(ctx, &req->promise);
+    mark(js, req->callback);
+    mark(js, req->promise);
   }
 }
+

@@ -17,20 +17,20 @@ static ant_value_t esm_cjs_require(ant_t *js, ant_value_t *args, int nargs) {
     return js_mkerr(js, "require() expects a string specifier");
 
   ant_value_t fn = js_getcurrentfunc(js);
-  ant_value_t data = js_get_slot(js, fn, SLOT_DATA);
+  ant_value_t data = js_get_slot(fn, SLOT_DATA);
   const char *base_path = js_module_eval_active_filename(js);
 
   if (vtype(data) == T_STR) {
     ant_offset_t path_len = 0;
     ant_offset_t path_off = vstr(js, data, &path_len);
-    base_path = (const char *)&js->mem[path_off];
+    base_path = (const char *)(uintptr_t)(path_off);
   }
 
   ant_value_t ns = js_esm_import_sync_from(js, args[0], base_path);
   if (is_err(ns)) return ns;
 
   if (vtype(ns) == T_OBJ) {
-    ant_value_t default_export = js_get_slot(js, ns, SLOT_DEFAULT);
+    ant_value_t default_export = js_get_slot(ns, SLOT_DEFAULT);
     if (vtype(default_export) != T_UNDEF) return default_export;
   }
   return ns;
@@ -42,13 +42,13 @@ static ant_value_t esm_cjs_require_resolve(ant_t *js, ant_value_t *args, int nar
   }
 
   ant_value_t fn = js_getcurrentfunc(js);
-  ant_value_t data = js_get_slot(js, fn, SLOT_DATA);
+  ant_value_t data = js_get_slot(fn, SLOT_DATA);
   const char *base_path = js_module_eval_active_filename(js);
 
   if (vtype(data) == T_STR) {
     ant_offset_t data_len = 0;
     ant_offset_t data_off = vstr(js, data, &data_len);
-    base_path = (const char *)&js->mem[data_off];
+    base_path = (const char *)(uintptr_t)(data_off);
   }
 
   ant_value_t resolved = js_esm_resolve_specifier(js, args[0], base_path);
@@ -58,7 +58,7 @@ static ant_value_t esm_cjs_require_resolve(ant_t *js, ant_value_t *args, int nar
   ant_offset_t len = 0;
   ant_offset_t off = vstr(js, resolved, &len);
   
-  const char *s = (const char *)&js->mem[off];
+  const char *s = (const char *)(uintptr_t)(off);
   static const char *prefix = "file://";
 
   if ((size_t)len >= strlen(prefix) && strncmp(s, prefix, strlen(prefix)) == 0) {
@@ -74,7 +74,7 @@ static ant_value_t esm_populate_cjs_namespace(ant_t *js, ant_value_t ns, ant_val
   ant_value_t set_default = setprop_cstr(js, ns, "default", 7, exports_val);
   if (is_err(set_default)) return set_default;
   
-  js_set_slot(js, ns, SLOT_DEFAULT, exports_val);
+  js_set_slot_wb(js, ns, SLOT_DEFAULT, exports_val);
   if (!is_object_type(exports_val)) return js_mkundef();
 
   ant_iter_t iter = js_prop_iter_begin(js, exports_val);

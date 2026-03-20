@@ -598,7 +598,7 @@ static ant_value_t tty_read_stream_constructor(ant_t *js, ant_value_t *args, int
   ant_value_t ctor = js_getcurrentfunc(js);
   ant_value_t proto = js_get(js, ctor, "prototype");
   ant_value_t obj = js_mkobj(js);
-  if (is_special_object(proto)) js_set_proto(js, obj, proto);
+  if (is_special_object(proto)) js_set_proto_init(obj, proto);
 
   ensure_stream_common_props(js, obj, fd);
   js_set(js, obj, "isRaw", js_false);
@@ -627,7 +627,7 @@ static ant_value_t tty_write_stream_constructor(ant_t *js, ant_value_t *args, in
   ant_value_t ctor = js_getcurrentfunc(js);
   ant_value_t proto = js_get(js, ctor, "prototype");
   ant_value_t obj = js_mkobj(js);
-  if (is_special_object(proto)) js_set_proto(js, obj, proto);
+  if (is_special_object(proto)) js_set_proto_init(obj, proto);
 
   ensure_stream_common_props(js, obj, fd);
   return obj;
@@ -701,17 +701,21 @@ void init_tty_module(void) {
 ant_value_t tty_library(ant_t *js) {
   ant_value_t lib = js_mkobj(js);
 
-  ant_value_t read_ctor = js_mkfun(tty_read_stream_constructor);
+  ant_value_t read_ctor_obj = js_mkobj(js);
+  js_set_slot(read_ctor_obj, SLOT_CFUNC, js_mkfun(tty_read_stream_constructor));
   ant_value_t read_proto = js_mkobj(js);
   setup_readstream_proto(js, read_proto);
+  js_set(js, read_ctor_obj, "prototype", read_proto);
+  ant_value_t read_ctor = js_obj_to_func(read_ctor_obj);
   js_set(js, read_proto, "constructor", read_ctor);
-  js_set(js, read_ctor, "prototype", read_proto);
 
-  ant_value_t write_ctor = js_mkfun(tty_write_stream_constructor);
+  ant_value_t write_ctor_obj = js_mkobj(js);
+  js_set_slot(write_ctor_obj, SLOT_CFUNC, js_mkfun(tty_write_stream_constructor));
   ant_value_t write_proto = js_mkobj(js);
   setup_writestream_proto(js, write_proto);
+  js_set(js, write_ctor_obj, "prototype", write_proto);
+  ant_value_t write_ctor = js_obj_to_func(write_ctor_obj);
   js_set(js, write_proto, "constructor", write_ctor);
-  js_set(js, write_ctor, "prototype", write_proto);
 
   js_set(js, lib, "isatty", js_mkfun(tty_isatty));
   js_set(js, lib, "ReadStream", read_ctor);

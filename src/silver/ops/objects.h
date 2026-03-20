@@ -17,14 +17,15 @@ static inline void sv_op_define_method(
   sv_atom_t *a = &func->atoms[atom_idx];
   ant_value_t fn = vm->stack[--vm->sp];
   ant_value_t obj = vm->stack[vm->sp - 1];
+  ant_value_t desc_obj = js_as_obj(obj);
   bool is_getter = (flags & 1) != 0;
   bool is_setter = (flags & 2) != 0;
   if (is_getter) {
-    js_set_getter_desc(js, obj, a->str, a->len, fn, JS_DESC_C);
+    js_set_getter_desc(js, desc_obj, a->str, a->len, fn, JS_DESC_C);
     return;
   }
   if (is_setter) {
-    js_set_setter_desc(js, obj, a->str, a->len, fn, JS_DESC_C);
+    js_set_setter_desc(js, desc_obj, a->str, a->len, fn, JS_DESC_C);
     return;
   }
   ant_value_t key = js_mkstr(js, a->str, a->len);
@@ -39,6 +40,7 @@ static inline void sv_op_define_method_comp(
   ant_value_t fn = vm->stack[--vm->sp];
   ant_value_t key = vm->stack[--vm->sp];
   ant_value_t obj = vm->stack[vm->sp - 1];
+  ant_value_t desc_obj = js_as_obj(obj);
   bool is_getter = (flags & 1) != 0;
   bool is_setter = (flags & 2) != 0;
   if (vtype(key) == T_SYMBOL && !is_getter && !is_setter) {
@@ -49,15 +51,15 @@ static inline void sv_op_define_method_comp(
   if ((is_getter || is_setter) && vtype(key_str) == T_STR) {
     ant_offset_t klen = 0;
     ant_offset_t koff = vstr(js, key_str, &klen);
-    const char *kptr = (const char *)&js->mem[koff];
-    if (is_getter) js_set_getter_desc(js, obj, kptr, klen, fn, JS_DESC_C);
-    else js_set_setter_desc(js, obj, kptr, klen, fn, JS_DESC_C);
+    const char *kptr = (const char *)(uintptr_t)(koff);
+    if (is_getter) js_set_getter_desc(js, desc_obj, kptr, klen, fn, JS_DESC_C);
+    else js_set_setter_desc(js, desc_obj, kptr, klen, fn, JS_DESC_C);
     return;
   }
   if (vtype(key_str) == T_STR) {
     ant_offset_t klen = 0;
     ant_offset_t koff = vstr(js, key_str, &klen);
-    const char *kptr = (const char *)&js->mem[koff];
+    const char *kptr = (const char *)(uintptr_t)(koff);
     js_define_own_prop(js, obj, kptr, (size_t)klen, fn);
   } else mkprop(js, obj, key_str, fn, 0);
 }
@@ -83,9 +85,9 @@ static inline void sv_op_set_name_comp(sv_vm_t *vm, ant_t *js) {
 static inline void sv_op_set_proto(sv_vm_t *vm, ant_t *js) {
   ant_value_t proto = vm->stack[--vm->sp];
   ant_value_t obj = vm->stack[vm->sp - 1];
+  
   uint8_t pt = vtype(proto);
-  if (pt == T_OBJ || pt == T_NULL || pt == T_FUNC || pt == T_ARR)
-    js_set_proto(js, obj, proto);
+  if (pt == T_OBJ || pt == T_NULL || pt == T_FUNC || pt == T_ARR) js_set_proto_wb(js, obj, proto);
 }
 
 static inline void sv_op_set_home_obj(sv_vm_t *vm, ant_t *js) {
@@ -141,7 +143,7 @@ static inline ant_value_t sv_op_spread(sv_vm_t *vm, ant_t *js) {
   }
 
   if (vtype(iterable) == T_STR) {
-    if (is_rope(js, iterable)) {
+    if (str_is_heap_rope(iterable)) {
       iterable = rope_flatten(js, iterable);
       if (is_err(iterable)) return iterable;
     }
@@ -150,10 +152,10 @@ static inline ant_value_t sv_op_spread(sv_vm_t *vm, ant_t *js) {
       ant_offset_t off = vstr(js, iterable, NULL);
       utf8proc_int32_t cp;
       ant_offset_t cb_len = (ant_offset_t)utf8_next(
-        (const utf8proc_uint8_t *)&js->mem[off + i],
+        (const utf8proc_uint8_t *)(uintptr_t)(off + i),
         (utf8proc_ssize_t)(slen - i), &cp
       );
-      js_arr_push(js, arr, js_mkstr(js, (char *)&js->mem[off + i], cb_len));
+      js_arr_push(js, arr, js_mkstr(js, (const void *)(uintptr_t)(off + i), cb_len));
       i += cb_len;
     }
     return tov(0);
@@ -169,19 +171,17 @@ static inline ant_value_t sv_op_spread(sv_vm_t *vm, ant_t *js) {
   if (!is_object_type(iterator))
     return js_mkerr(js, "not iterable");
 
-  ant_handle_t hiter = js_root(js, iterator);
   ant_value_t status = tov(0);
 
   for (;;) {
-    ant_value_t cur_iter = js_deref(js, hiter);
-    ant_value_t next_method = js_getprop_fallback(js, cur_iter, "next");
+    ant_value_t next_method = js_getprop_fallback(js, iterator, "next");
     ft = vtype(next_method);
     if (ft != T_FUNC && ft != T_CFUNC) {
       status = js_mkerr(js, "iterator.next is not a function");
       break;
     }
 
-    ant_value_t result = sv_vm_call(vm, js, next_method, cur_iter, NULL, 0, NULL, false);
+    ant_value_t result = sv_vm_call(vm, js, next_method, iterator, NULL, 0, NULL, false);
     if (is_err(result)) {
       status = result;
       break;
@@ -199,7 +199,6 @@ static inline ant_value_t sv_op_spread(sv_vm_t *vm, ant_t *js) {
     js_arr_push(js, arr, value);
   }
 
-  js_unroot(js, hiter);
   return status;
 }
 
@@ -222,35 +221,29 @@ static inline void sv_op_define_class(
   if (vtype(ctor) == T_UNDEF) {
     ant_value_t ctor_obj = mkobj(js, 0);
     ctor = js_obj_to_func_ex(ctor_obj, SV_CALL_IS_DEFAULT_CTOR);
-    ant_value_t func_proto = js_get_slot(js, js->global, SLOT_FUNC_PROTO);
+    ant_value_t func_proto = js_get_slot(js->global, SLOT_FUNC_PROTO);
     if (vtype(func_proto) == T_FUNC)
-      js_set_proto(js, ctor_obj, func_proto);
+      js_set_proto_init(ctor_obj, func_proto);
   }
 
   ant_value_t proto = mkobj(js, 0);
-  ant_handle_t hp = js_root(js, proto);
-  ant_handle_t hc = js_root(js, ctor);
 
   if (pt == T_NULL) {
-    js_set_proto(js, js_deref(js, hp), js_mknull());
-    ant_value_t func_proto = js_get_slot(js, js->global, SLOT_FUNC_PROTO);
-    if (vtype(func_proto) == T_FUNC)
-      js_set_proto(js, js_deref(js, hc), func_proto);
+    js_set_proto_init(proto, js_mknull());
+    ant_value_t func_proto = js_get_slot(js->global, SLOT_FUNC_PROTO);
+    if (vtype(func_proto) == T_FUNC) js_set_proto_wb(js, ctor, func_proto);
   } else if (parent_is_object) {
     ant_value_t parent_proto = js_getprop_fallback(js, parent, "prototype");
-    if (is_object_type(parent_proto))
-      js_set_proto(js, js_deref(js, hp), parent_proto);
-    js_set_proto(js, js_deref(js, hc), parent);
+    if (is_object_type(parent_proto)) js_set_proto_init(proto, parent_proto);
+    js_set_proto_wb(js, ctor, parent);
   } else {
     ant_value_t object_ctor = js_getprop_fallback(js, js->global, "Object");
     if (vtype(object_ctor) == T_FUNC) {
       ant_value_t object_proto = js_getprop_fallback(js, object_ctor, "prototype");
-      if (is_object_type(object_proto))
-        js_set_proto(js, js_deref(js, hp), object_proto);
+      if (is_object_type(object_proto)) js_set_proto_init(proto, object_proto);
     }
   }
   if (parent_is_callable) {
-    ctor = js_deref(js, hc);
     if (vtype(ctor) == T_FUNC) {
       sv_closure_t *c = js_func_closure(ctor);
       c->super_val = parent;
@@ -258,15 +251,11 @@ static inline void sv_op_define_class(
     }
   }
 
-  ctor = js_deref(js, hc);
-  proto = js_deref(js, hp);
+  if (vtype(ctor) == T_FUNC) js_mark_constructor(js_func_obj(ctor), true);
   setprop_interned(js, proto, "constructor", 11, ctor);
   setprop_interned(js, ctor, "prototype", 9, proto);
   if (a && a->len > 0)
     setprop_cstr(js, ctor, "name", 4, js_mkstr(js, a->str, a->len));
-
-  js_unroot(js, hc);
-  js_unroot(js, hp);
 
   vm->stack[vm->sp - 2] = ctor;
   vm->stack[vm->sp - 1] = proto;

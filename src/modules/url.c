@@ -305,10 +305,10 @@ static ant_value_t url_toString(ant_t *js, ant_value_t *args, int nargs) {
 static ant_value_t js_URLSearchParams(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t usp = js_mkobj(js);
   ant_value_t proto = js_get_ctor_proto(js, "URLSearchParams", 15);
-  if (is_special_object(proto)) js_set_proto(js, usp, proto);
+  if (is_special_object(proto)) js_set_proto_init(usp, proto);
   
   ant_value_t entries = js_mkarr(js);
-  js_set_slot(js, usp, SLOT_ENTRIES, entries);
+  js_set_slot(usp, SLOT_ENTRIES, entries);
 
   if (nargs < 1 || vtype(args[0]) != T_STR) return usp;
   char *init = js_getstr(js, args[0], NULL);
@@ -350,7 +350,7 @@ static ant_value_t js_URL(ant_t *js, ant_value_t *args, int nargs) {
 
   ant_value_t url_obj = js_mkobj(js);
   ant_value_t proto = js_get_ctor_proto(js, "URL", 3);
-  if (is_special_object(proto)) js_set_proto(js, url_obj, proto);
+  if (is_special_object(proto)) js_set_proto_init(url_obj, proto);
 
   js_set(js, url_obj, "protocol", js_mkstr(js, parsed.protocol, strlen(parsed.protocol)));
   js_set(js, url_obj, "username", js_mkstr(js, parsed.username, strlen(parsed.username)));
@@ -365,15 +365,15 @@ static ant_value_t js_URL(ant_t *js, ant_value_t *args, int nargs) {
 
   ant_value_t search_params = js_mkobj(js);
   ant_value_t usp_proto = js_get_ctor_proto(js, "URLSearchParams", 15);
-  if (is_special_object(usp_proto)) js_set_proto(js, search_params, usp_proto);
-  js_set_slot(js, search_params, SLOT_DATA, url_obj);
+  if (is_special_object(usp_proto)) js_set_proto_init(search_params, usp_proto);
+  js_set_slot(search_params, SLOT_DATA, url_obj);
   if (parsed.search && *parsed.search) {
     const char *qs = parsed.search[0] == '?' ? parsed.search + 1 : parsed.search;
     ant_value_t arg = js_mkstr(js, qs, strlen(qs));
     ant_value_t tmp = js_URLSearchParams(js, &arg, 1);
-    js_set_slot(js, search_params, SLOT_ENTRIES, js_get_slot(js, tmp, SLOT_ENTRIES));
+    js_set_slot(search_params, SLOT_ENTRIES, js_get_slot(tmp, SLOT_ENTRIES));
   } else {
-    js_set_slot(js, search_params, SLOT_ENTRIES, js_mkarr(js));
+    js_set_slot(search_params, SLOT_ENTRIES, js_mkarr(js));
   }
   js_set(js, url_obj, "searchParams", search_params);
 
@@ -388,7 +388,7 @@ static ant_value_t usp_get(ant_t *js, ant_value_t *args, int nargs) {
   char *key = js_getstr(js, args[0], NULL);
   if (!key) return js_mknull();
 
-  ant_value_t entries = js_get_slot(js, this_val, SLOT_ENTRIES);
+  ant_value_t entries = js_get_slot(this_val, SLOT_ENTRIES);
   if (!is_special_object(entries)) return js_mknull();
 
   ant_offset_t len = js_arr_len(js, entries);
@@ -409,7 +409,7 @@ static ant_value_t usp_getAll(ant_t *js, ant_value_t *args, int nargs) {
   if (!key) return js_mkarr(js);
 
   ant_value_t result = js_mkarr(js);
-  ant_value_t entries = js_get_slot(js, this_val, SLOT_ENTRIES);
+  ant_value_t entries = js_get_slot(this_val, SLOT_ENTRIES);
   if (!is_special_object(entries)) return result;
 
   ant_offset_t len = js_arr_len(js, entries);
@@ -429,7 +429,7 @@ static ant_value_t usp_has(ant_t *js, ant_value_t *args, int nargs) {
   char *key = js_getstr(js, args[0], NULL);
   if (!key) return js_false;
 
-  ant_value_t entries = js_get_slot(js, this_val, SLOT_ENTRIES);
+  ant_value_t entries = js_get_slot(this_val, SLOT_ENTRIES);
   if (!is_special_object(entries)) return js_false;
 
   ant_offset_t len = js_arr_len(js, entries);
@@ -443,10 +443,10 @@ static ant_value_t usp_has(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static void usp_sync_url(ant_t *js, ant_value_t this_val) {
-  ant_value_t url_obj = js_get_slot(js, this_val, SLOT_DATA);
+  ant_value_t url_obj = js_get_slot(this_val, SLOT_DATA);
   if (!is_special_object(url_obj)) return;
 
-  ant_value_t entries = js_get_slot(js, this_val, SLOT_ENTRIES);
+  ant_value_t entries = js_get_slot(this_val, SLOT_ENTRIES);
   ant_offset_t len = js_arr_len(js, entries);
 
   size_t buf_size = 1024;
@@ -487,7 +487,7 @@ static ant_value_t usp_set(ant_t *js, ant_value_t *args, int nargs) {
   char *key = js_getstr(js, args[0], NULL);
   if (!key) return js_mkundef();
 
-  ant_value_t entries = js_get_slot(js, this_val, SLOT_ENTRIES);
+  ant_value_t entries = js_get_slot(this_val, SLOT_ENTRIES);
   ant_offset_t len = js_arr_len(js, entries);
 
   ant_value_t new_entries = js_mkarr(js);
@@ -514,7 +514,7 @@ static ant_value_t usp_set(ant_t *js, ant_value_t *args, int nargs) {
     js_arr_push(js, new_entries, new_entry);
   }
 
-  js_set_slot(js, this_val, SLOT_ENTRIES, new_entries);
+  js_set_slot_wb(js, this_val, SLOT_ENTRIES, new_entries);
   usp_sync_url(js, this_val);
   
   return js_mkundef();
@@ -524,7 +524,7 @@ static ant_value_t usp_append(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_mkundef();
   ant_value_t this_val = js_getthis(js);
 
-  ant_value_t entries = js_get_slot(js, this_val, SLOT_ENTRIES);
+  ant_value_t entries = js_get_slot(this_val, SLOT_ENTRIES);
   ant_value_t entry = js_mkarr(js);
   js_arr_push(js, entry, args[0]);
   js_arr_push(js, entry, args[1]);
@@ -540,7 +540,7 @@ static ant_value_t usp_delete(ant_t *js, ant_value_t *args, int nargs) {
   char *key = js_getstr(js, args[0], NULL);
   if (!key) return js_mkundef();
 
-  ant_value_t entries = js_get_slot(js, this_val, SLOT_ENTRIES);
+  ant_value_t entries = js_get_slot(this_val, SLOT_ENTRIES);
   ant_offset_t len = js_arr_len(js, entries);
 
   ant_value_t new_entries = js_mkarr(js);
@@ -550,16 +550,15 @@ static ant_value_t usp_delete(ant_t *js, ant_value_t *args, int nargs) {
     if (!ks || strcmp(ks, key) != 0) js_arr_push(js, new_entries, entry);
   }
 
-  js_set_slot(js, this_val, SLOT_ENTRIES, new_entries);
+  js_set_slot_wb(js, this_val, SLOT_ENTRIES, new_entries);
   usp_sync_url(js, this_val);
-  js->needs_gc = true;
   
   return js_mkundef();
 }
 
 static ant_value_t usp_toString(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_val = js_getthis(js);
-  ant_value_t entries = js_get_slot(js, this_val, SLOT_ENTRIES);
+  ant_value_t entries = js_get_slot(this_val, SLOT_ENTRIES);
   ant_offset_t len = js_arr_len(js, entries);
 
   size_t buf_size = 1024;
@@ -605,7 +604,7 @@ void init_url_module(void) {
   js_set(js, url_proto, "toString", js_mkfun(url_toString));
   js_set_sym(js, url_proto, get_toStringTag_sym(), js_mkstr(js, "URL", 3));
   
-  js_set_slot(js, url_ctor, SLOT_CFUNC, js_mkfun(js_URL));
+  js_set_slot(url_ctor, SLOT_CFUNC, js_mkfun(js_URL));
   js_mkprop_fast(js, url_ctor, "prototype", 9, url_proto);
   js_mkprop_fast(js, url_ctor, "name", 4, ANT_STRING("URL"));
   js_set_descriptor(js, url_ctor, "name", 4, 0);
@@ -624,7 +623,7 @@ void init_url_module(void) {
   js_set(js, usp_proto, "toString", js_mkfun(usp_toString));
   js_set_sym(js, usp_proto, get_toStringTag_sym(), js_mkstr(js, "URLSearchParams", 15));
   
-  js_set_slot(js, usp_ctor, SLOT_CFUNC, js_mkfun(js_URLSearchParams));
+  js_set_slot(usp_ctor, SLOT_CFUNC, js_mkfun(js_URLSearchParams));
   js_mkprop_fast(js, usp_ctor, "prototype", 9, usp_proto);
   js_mkprop_fast(js, usp_ctor, "name", 4, ANT_STRING("URLSearchParams"));
   js_set_descriptor(js, usp_ctor, "name", 4, 0);

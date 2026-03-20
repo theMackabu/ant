@@ -28,9 +28,7 @@ static inline ant_value_t sv_op_add(sv_vm_t *vm, ant_t *js) {
   if (is_non_numeric(lu) || is_non_numeric(ru)) {
     ant_value_t l_str = coerce_to_str_concat(js, l);
     if (is_err(l_str)) return l_str;
-    ant_handle_t lh = js_root(js, l_str);
     ant_value_t r_str = coerce_to_str_concat(js, r);
-    l_str = js_deref(js, lh); js_unroot(js, lh);
     if (is_err(r_str)) return r_str;
     ant_value_t res = do_string_op(js, TOK_PLUS, l_str, r_str);
     vm->stack[vm->sp++] = res;
@@ -189,25 +187,28 @@ static inline void sv_op_post_dec(sv_vm_t *vm) {
   vm->stack[vm->sp++] = tov(tod(old) - 1.0);
 }
 
-static inline void sv_op_inc_local(sv_vm_t *vm, ant_value_t *lp, uint8_t *ip) {
+static inline void sv_op_inc_local(sv_vm_t *vm, ant_value_t *lp, sv_func_t *func, uint8_t *ip) {
   uint8_t idx = sv_get_u8(ip + 1);
   ant_value_t *slot = &lp[idx];
   *slot = tov(tod(*slot) + 1.0);
+  sv_tfb_record_local(func, (int)idx, *slot);
 }
 
-static inline void sv_op_dec_local(sv_vm_t *vm, ant_value_t *lp, uint8_t *ip) {
+static inline void sv_op_dec_local(sv_vm_t *vm, ant_value_t *lp, sv_func_t *func, uint8_t *ip) {
   uint8_t idx = sv_get_u8(ip + 1);
   ant_value_t *slot = &lp[idx];
   *slot = tov(tod(*slot) - 1.0);
+  sv_tfb_record_local(func, (int)idx, *slot);
   (void)vm;
 }
 
-static inline ant_value_t sv_op_add_local(sv_vm_t *vm, ant_value_t *lp, ant_t *js, uint8_t *ip) {
+static inline ant_value_t sv_op_add_local(sv_vm_t *vm, ant_value_t *lp, ant_t *js, sv_func_t *func, uint8_t *ip) {
   uint8_t idx = sv_get_u8(ip + 1);
   ant_value_t *slot = &lp[idx];
   ant_value_t val = vm->stack[--vm->sp];
   if (vtype(*slot) == T_NUM && vtype(val) == T_NUM) {
     *slot = tov(tod(*slot) + tod(val));
+    sv_tfb_record_local(func, (int)idx, *slot);
     return tov(0);
   }
   vm->stack[vm->sp++] = *slot;
@@ -215,6 +216,7 @@ static inline ant_value_t sv_op_add_local(sv_vm_t *vm, ant_value_t *lp, ant_t *j
   ant_value_t err = sv_op_add(vm, js);
   if (is_err(err)) return err;
   *slot = vm->stack[--vm->sp];
+  sv_tfb_record_local(func, (int)idx, *slot);
   return tov(0);
 }
 

@@ -1,63 +1,50 @@
-#ifndef GC_H
-#define GC_H
+#ifndef ANT_GC_H
+#define ANT_GC_H
 
-#include <types.h>
+#include "internal.h"
 #include <stdbool.h>
+#include <stdint.h>
 
-#define ROPE_FLAG              (1ULL << 63)
-#define ROPE_DEPTH_SHIFT       56
-#define ROPE_DEPTH_MASK        0x7FULL
-#define ROPE_MAX_DEPTH         64
-#define ROPE_FLATTEN_THRESHOLD (32 * 1024)
+#define GC_MIN_TICK            1024
+#define GC_FORCE_INTERVAL_MS   50
+#define GC_NURSERY_THRESHOLD   4096
+#define GC_MAJOR_EVERY_N_MINOR 8
 
-typedef struct {
-  ant_offset_t header;
-  ant_value_t left;
-  ant_value_t right;
-  ant_value_t cached;
-} rope_node_t;
+#define GC_HEAP_GROWTH(n) ((n) + (n) / 2)
 
-#define GC_FWD_LOAD_FACTOR    70
-#define GC_ROOTS_INITIAL_CAP  32
-#define GC_CB(ret, name, arg) ret (*name)(void *ctx, arg old)
+#define GC_OBJ_TYPE_MASK (JS_TYPE_FLAG(T_OBJ) \
+  | JS_TYPE_FLAG(T_ARR)                       \
+  | JS_TYPE_FLAG(T_PROMISE)                   \
+  | JS_TYPE_FLAG(T_GENERATOR))
 
-#define GC_CTX       void *ctx
-#define GC_FWD_OFF   GC_CB(ant_offset_t, fwd_off, ant_offset_t)
-#define GC_FWD_VAL   GC_CB(ant_value_t, fwd_val, ant_value_t)
-#define GC_WEAK_OFF  GC_CB(ant_offset_t, weak_off, ant_offset_t)
-#define GC_OP_VAL    void (*op_val)(void *ctx, ant_value_t *val)
+typedef struct gc_func_mark_profile {
+  bool enabled;
+  uint64_t collections;
+  uint64_t func_visits;
+  uint64_t child_edges;
+  uint64_t const_slots;
+  uint64_t time_ns;
+} gc_func_mark_profile_t;
 
-#define GC_FWD_ARGS     GC_FWD_VAL, GC_CTX
-#define GC_RESERVE_ARGS ant_t *js, GC_FWD_OFF, GC_FWD_ARGS
-#define GC_UPDATE_ARGS  ant_t *js, GC_FWD_OFF, GC_WEAK_OFF, GC_FWD_ARGS
-#define GC_OP_VAL_ARGS  GC_OP_VAL, GC_CTX
+void gc_run(ant_t *js);
+void gc_run_minor(ant_t *js);
+void gc_maybe(ant_t *js);
+void gc_remember_add(ant_t *js, ant_object_t *obj);
 
-#define FWD_EMPTY     ((ant_offset_t)~0)
-#define FWD_TOMBSTONE ((ant_offset_t)~1)
+void gc_func_mark_profile_enable(bool enabled);
+void gc_func_mark_profile_reset(void);
 
-#define GC_BIGINT_HEADER_SHIFT 4
-#define GC_SYM_HEADER_SHIFT    4
+extern bool gc_disabled;
+gc_func_mark_profile_t gc_func_mark_profile_get(void);
 
-#define GC_BIGINT_HEADER_LOW_MASK ((ant_offset_t)((1u << GC_BIGINT_HEADER_SHIFT) - 1u))
-#define GC_SYM_HEADER_LOW_MASK    ((ant_offset_t)((1u << GC_SYM_HEADER_SHIFT) - 1u))
-#define GC_SYM_HEAP_FIXED         (sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uintptr_t))
-
-#ifdef _WIN32
-#define RELEASE_PAGES(p, sz) VirtualAlloc(p, sz, MEM_RESET, PAGE_READWRITE)
-#elif defined(__APPLE__)
-#define RELEASE_PAGES(p, sz) madvise(p, sz, MADV_FREE)
-#else
-#define RELEASE_PAGES(p, sz) madvise(p, sz, MADV_DONTNEED)
-#endif
-
-#define GC_HEAP_TYPE_MASK ( \
-  (1u << T_OBJ) | (1u << T_PROP) | (1u << T_STR) | \
-  (1u << T_ARR) | (1u << T_PROMISE) | (1u << T_BIGINT) | (1u << T_GENERATOR) | \
-  (1u << T_SYMBOL))
-
-extern uint32_t gc_epoch_counter;
-
-void js_gc_maybe(ant_t *js);
-void js_gc_throttle(bool enabled);
+static inline void gc_write_barrier(ant_t *js, ant_object_t *writer_obj, ant_value_t new_val) {
+  if (writer_obj->generation != 1 || new_val <= NANBOX_PREFIX) return;
+  uint8_t type = (new_val >> NANBOX_TYPE_SHIFT) & NANBOX_TYPE_MASK;
+  if (type == T_FUNC) gc_remember_add(js, writer_obj);
+  else if ((1u << type) & GC_OBJ_TYPE_MASK) {
+    ant_object_t *ref = (ant_object_t *)(uintptr_t)(new_val & NANBOX_DATA_MASK);
+    if (ref && ref->generation == 0) gc_remember_add(js, writer_obj);
+  }
+}
 
 #endif

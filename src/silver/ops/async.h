@@ -163,7 +163,6 @@ static inline ant_value_t sv_start_tla(ant_t *js, sv_func_t *func, ant_value_t t
   if (mco_status(mco) == MCO_DEAD) {
     remove_coroutine(coro);
     free_coroutine(coro);
-    js->needs_gc = true;
   }
 
   return promise;
@@ -270,7 +269,6 @@ static inline ant_value_t sv_start_async_closure(
   if (mco_status(mco) == MCO_DEAD) {
     remove_coroutine(coro);
     free_coroutine(coro);
-    js->needs_gc = true;
   }
 
   return promise;
@@ -295,12 +293,12 @@ static inline ant_value_t sv_await_value(ant_t *js, ant_value_t value) {
   coro->is_ready = false;
 
   ant_value_t resume_obj = mkobj(js, 0);
-  js_set_slot(js, resume_obj, SLOT_CORO, tov((double)(uintptr_t)coro));
-  js_set_slot(js, resume_obj, SLOT_CFUNC, js_mkfun(resume_coroutine_wrapper));
+  js_set_slot(resume_obj, SLOT_CORO, tov((double)(uintptr_t)coro));
+  js_set_slot(resume_obj, SLOT_CFUNC, js_mkfun(resume_coroutine_wrapper));
 
   ant_value_t reject_obj = mkobj(js, 0);
-  js_set_slot(js, reject_obj, SLOT_CORO, tov((double)(uintptr_t)coro));
-  js_set_slot(js, reject_obj, SLOT_CFUNC, js_mkfun(reject_coroutine_wrapper));
+  js_set_slot(reject_obj, SLOT_CORO, tov((double)(uintptr_t)coro));
+  js_set_slot(reject_obj, SLOT_CFUNC, js_mkfun(reject_coroutine_wrapper));
 
   ant_value_t then_fn = js_getprop_fallback(js, value, "then");
   if (vtype(then_fn) == T_FUNC || vtype(then_fn) == T_CFUNC) {
@@ -329,9 +327,5 @@ static inline ant_value_t sv_await_value(ant_t *js, ant_value_t value) {
   return result;
 }
 
-static inline void sv_vm_gc_roots_async(void (*op_val)(void *, ant_value_t *), void *ctx) {
-  for (coroutine_t *c = pending_coroutines.head; c; c = c->next) 
-    if (c->sv_vm) sv_vm_gc_roots(c->sv_vm, op_val, ctx);
-}
 
 #endif

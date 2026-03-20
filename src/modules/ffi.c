@@ -17,6 +17,7 @@
 #include <uthash.h>
 
 #include "errors.h"
+#include "gc/modules.h"
 #include "internal.h"
 #include "silver/engine.h"
 
@@ -993,11 +994,12 @@ ret_undef:
   return js_mkundef();
 }
 
-void ffi_gc_update_roots(GC_OP_VAL_ARGS) {
+void gc_mark_ffi(ant_t *js, gc_mark_fn mark) {
   pthread_mutex_lock(&ffi_callbacks_mutex);
   ffi_callback_t *cb, *tmp;
   HASH_ITER(hh, ffi_callbacks, cb, tmp) {
-    op_val(ctx, &cb->js_func);
+    mark(js, cb->js_func);
   }
   pthread_mutex_unlock(&ffi_callbacks_mutex);
 }
+

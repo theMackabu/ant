@@ -68,6 +68,15 @@ tlsuv_opts = cmake.subproject_options()
 tlsuv_opts.set_override_option('warning_level', '0')
 tlsuv_opts.append_compile_args('c', ['-w'])
 
+zlib_ng_sub = subproject('zlib-ng', default_options: [
+  'b_lto=false',
+  'warning_level=0',
+  'zlib-compat=true'
+])
+zlib_dep = zlib_ng_sub.get_variable('zlib_ng_dep')
+zlib_ng_srcdir = subprojects_src / deps_info['zlib-ng']['dir']
+zlib_ng_builddir = subprojects_build / deps_info['zlib-ng']['dir']
+
 cmake_prefix = get_option('deps_prefix_cmake')
 tlsuv_cmake_defines = {
   'BUILD_TESTING': 'OFF',
@@ -78,6 +87,8 @@ tlsuv_cmake_defines = {
   'CMAKE_POLICY_DEFAULT_CMP0179': 'NEW',
   'llhttp_DIR': subprojects_src / deps_info['llhttp']['dir'] / 'cmake',
   'libuv_DIR': subprojects_src / deps_info['libuv']['dir'] / 'cmake',
+  'ZLIB_INCLUDE_DIR': zlib_ng_srcdir,
+  'ZLIB_LIBRARY': zlib_ng_builddir / 'libz-ng.a',
 }
 if cmake_prefix != ''
   tlsuv_cmake_defines += {'MBEDTLS_DIR': cmake_prefix, 'CMAKE_PREFIX_PATH': cmake_prefix}
@@ -131,11 +142,6 @@ lmdb_dep = subproject('lmdb', default_options: [
   'warning_level=0',
   'programs=disabled'
 ]).get_variable('lmdb_dep')
-
-zlib_dep = subproject('zlib-ng', default_options: [
-  'b_lto=false',
-  'warning_level=0'
-]).get_variable('zlib_ng_dep')
 
 nghttp2_dep = subproject('nghttp2', default_options: [
   'warning_level=0'

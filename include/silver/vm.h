@@ -18,9 +18,6 @@ sv_vm_t *sv_vm_create(ant_t *js, sv_vm_kind_t kind);
 void sv_vm_destroy(sv_vm_t *vm);
 void sv_vm_limits(sv_vm_kind_t kind, int *out_stack_size, int *out_max_frames);
 
-void sv_vm_gc_roots(sv_vm_t *vm, void (*op_val)(void *, ant_value_t *), void *ctx);
-void sv_vm_gc_roots_pending(void (*op_val)(void *, ant_value_t *), void *ctx);
-
 void sv_vm_visit_frame_funcs(sv_vm_t *vm, void (*visitor)(void *, sv_func_t *), void *ctx);
 void sv_disasm(ant_t *js, sv_func_t *func, const char *label);
 

@@ -34,6 +34,7 @@
 #include "descriptors.h"
 #include "runtime.h"
 #include "silver/engine.h"
+#include "gc/modules.h"
 
 #include "modules/process.h"
 #include "modules/symbol.h"
@@ -67,9 +68,16 @@ typedef struct {
 static int max_listeners = DEFAULT_MAX_LISTENERS;
 static ProcessEventType *process_events = NULL;
 
-static ProcessEventType *stdin_events = NULL;
-static ProcessEventType *stdout_events = NULL;
-static ProcessEventType *stderr_events = NULL;
+typedef struct {
+  uv_signal_t handle;
+  int signum;
+  UT_hash_handle hh;
+} SignalHandle;
+
+static SignalHandle     *signal_handles = NULL;
+static ProcessEventType *stdin_events   = NULL;
+static ProcessEventType *stdout_events  = NULL;
+static ProcessEventType *stderr_events  = NULL;
 
 typedef struct {
   uv_tty_t tty;
@@ -105,89 +113,38 @@ static void init_signal_map(void) {
   static bool initialized = false;
   if (initialized) return;
   
+  #define S(sig) { #sig, sig, {0}, {0} }
   static SignalEntry entries[] = {
-#ifdef SIGHUP
-    { "SIGHUP", SIGHUP, {0}, {0} },
-#endif
-#ifdef SIGINT
-    { "SIGINT", SIGINT, {0}, {0} },
-#endif
-#ifdef SIGQUIT
-    { "SIGQUIT", SIGQUIT, {0}, {0} },
-#endif
-#ifdef SIGILL
-    { "SIGILL", SIGILL, {0}, {0} },
-#endif
-#ifdef SIGTRAP
-    { "SIGTRAP", SIGTRAP, {0}, {0} },
-#endif
-#ifdef SIGABRT
-    { "SIGABRT", SIGABRT, {0}, {0} },
-#endif
-#ifdef SIGBUS
-    { "SIGBUS", SIGBUS, {0}, {0} },
-#endif
-#ifdef SIGFPE
-    { "SIGFPE", SIGFPE, {0}, {0} },
-#endif
-#ifdef SIGUSR1
-    { "SIGUSR1", SIGUSR1, {0}, {0} },
-#endif
-#ifdef SIGUSR2
-    { "SIGUSR2", SIGUSR2, {0}, {0} },
-#endif
-#ifdef SIGSEGV
-    { "SIGSEGV", SIGSEGV, {0}, {0} },
-#endif
-#ifdef SIGPIPE
-    { "SIGPIPE", SIGPIPE, {0}, {0} },
-#endif
-#ifdef SIGALRM
-    { "SIGALRM", SIGALRM, {0}, {0} },
-#endif
-#ifdef SIGTERM
-    { "SIGTERM", SIGTERM, {0}, {0} },
-#endif
-#ifdef SIGCHLD
-    { "SIGCHLD", SIGCHLD, {0}, {0} },
-#endif
-#ifdef SIGCONT
-    { "SIGCONT", SIGCONT, {0}, {0} },
-#endif
-#ifdef SIGTSTP
-    { "SIGTSTP", SIGTSTP, {0}, {0} },
-#endif
-#ifdef SIGTTIN
-    { "SIGTTIN", SIGTTIN, {0}, {0} },
-#endif
-#ifdef SIGTTOU
-    { "SIGTTOU", SIGTTOU, {0}, {0} },
-#endif
-#ifdef SIGURG
-    { "SIGURG", SIGURG, {0}, {0} },
-#endif
-#ifdef SIGXCPU
-    { "SIGXCPU", SIGXCPU, {0}, {0} },
-#endif
-#ifdef SIGXFSZ
-    { "SIGXFSZ", SIGXFSZ, {0}, {0} },
-#endif
-#ifdef SIGVTALRM
-    { "SIGVTALRM", SIGVTALRM, {0}, {0} },
-#endif
-#ifdef SIGPROF
-    { "SIGPROF", SIGPROF, {0}, {0} },
-#endif
-#ifdef SIGWINCH
-    { "SIGWINCH", SIGWINCH, {0}, {0} },
-#endif
-#ifdef SIGIO
-    { "SIGIO", SIGIO, {0}, {0} },
-#endif
-#ifdef SIGSYS
-    { "SIGSYS", SIGSYS, {0}, {0} },
-#endif
+    S(SIGHUP),    S(SIGINT),    S(SIGQUIT),   S(SIGILL),
+    S(SIGTRAP),   S(SIGABRT),   S(SIGFPE),    S(SIGKILL),
+    S(SIGBUS),    S(SIGSEGV),   S(SIGSYS),    S(SIGPIPE),
+    S(SIGALRM),   S(SIGTERM),   S(SIGURG),    S(SIGSTOP),
+    S(SIGTSTP),   S(SIGCONT),   S(SIGCHLD),   S(SIGTTIN),
+    S(SIGTTOU),   S(SIGXCPU),   S(SIGXFSZ),   S(SIGVTALRM),
+    S(SIGPROF),   S(SIGUSR1),   S(SIGUSR2),
+    #ifdef SIGEMT
+      S(SIGEMT),
+    #endif
+    #ifdef SIGIO
+      S(SIGIO),
+    #endif
+    #ifdef SIGWINCH
+      S(SIGWINCH),
+    #endif
+    #ifdef SIGINFO
+      S(SIGINFO),
+    #endif
+    #ifdef SIGPWR
+      S(SIGPWR),
+    #endif
+    #ifdef SIGSTKFLT
+      S(SIGSTKFLT),
+    #endif
+    #ifdef SIGPOLL
+      S(SIGPOLL),
+    #endif
   };
+  #undef S
   
   for (size_t i = 0; i < sizeof(entries) / sizeof(entries[0]); i++) {
     HASH_ADD_KEYPTR(hh_name, signals_by_name, entries[i].name, strlen(entries[i].name), &entries[i]);
@@ -261,6 +218,43 @@ static void check_listener_warning(const char *event) {
   );
 }
 
+static void uv_signal_handler(uv_signal_t *handle, int signum) {
+  const char *name = get_signal_name(signum);
+  if (name) {
+    ant_value_t sig_arg = js_mkstr(rt->js, name, strlen(name));
+    emit_process_event(name, &sig_arg, 1);
+  }
+}
+
+static void start_signal_watch(int signum) {
+  SignalHandle *sh = NULL;
+  HASH_FIND_INT(signal_handles, &signum, sh);
+  if (sh) return;
+  
+  sh = malloc(sizeof(SignalHandle));
+  sh->signum = signum;
+  uv_signal_init(uv_default_loop(), &sh->handle);
+  uv_signal_start(&sh->handle, uv_signal_handler, signum);
+  uv_unref((uv_handle_t *)&sh->handle);
+  HASH_ADD_INT(signal_handles, signum, sh);
+}
+
+static void on_signal_handle_close(uv_handle_t *handle) {
+  SignalHandle *sh = (SignalHandle *)handle;
+  free(sh);
+}
+
+static void stop_signal_watch(int signum) {
+  SignalHandle *sh = NULL;
+  HASH_FIND_INT(signal_handles, &signum, sh);
+  if (!sh) return;
+  
+  HASH_DEL(signal_handles, sh);
+  uv_signal_stop(&sh->handle);
+  uv_close((uv_handle_t *)&sh->handle, on_signal_handle_close);
+}
+
+
 void emit_process_event(const char *event_type, ant_value_t *args, int nargs) {
   if (!rt->js) return;
   
@@ -283,20 +277,10 @@ void emit_process_event(const char *event_type, ant_value_t *args, int nargs) {
 
   if (evt->listener_count == 0 || evt->free_deferred) {
     int signum = get_signal_number(event_type);
-    if (signum > 0) signal(signum, SIG_DFL);
+    if (signum > 0) stop_signal_watch(signum);
     if (evt->emitting == 0) free_event_type(&process_events, evt);
   }
 }
-
-static void process_signal_handler(int signum) {
-  const char *name = get_signal_name(signum);
-  if (name) {
-    ant_value_t sig_arg = js_mkstr(rt->js, name, strlen(name));
-    emit_process_event(name, &sig_arg, 1);
-  }
-}
-
-
 
 static void emit_stdio_event(ProcessEventType **events, const char *event_type, ant_value_t *args, int nargs) {
   if (!rt->js) return;
@@ -1489,7 +1473,7 @@ static ant_value_t process_on(ant_t *js, ant_value_t *args, int nargs) {
   
   int signum = get_signal_number(event);
   if (signum > 0) {
-    signal(signum, process_signal_handler);
+    start_signal_watch(signum);
   }
   
   ProcessEventType *evt = find_or_create_event(&process_events, event);
@@ -1515,7 +1499,7 @@ static ant_value_t process_once(ant_t *js, ant_value_t *args, int nargs) {
   
   int signum = get_signal_number(event);
   if (signum > 0) {
-    signal(signum, process_signal_handler);
+    start_signal_watch(signum);
   }
   
   ProcessEventType *evt = find_or_create_event(&process_events, event);
@@ -1554,7 +1538,7 @@ static ant_value_t process_off(ant_t *js, ant_value_t *args, int nargs) {
   
   if (evt->listener_count == 0) {
     int signum = get_signal_number(event);
-    if (signum > 0) signal(signum, SIG_DFL);
+    if (signum > 0) stop_signal_watch(signum);
   }
   
   return process_obj;
@@ -1570,7 +1554,7 @@ static ant_value_t process_remove_all_listeners(ant_t *js, ant_value_t *args, in
       HASH_FIND_STR(process_events, event, evt);
       if (evt) {
         int signum = get_signal_number(event);
-        if (signum > 0) signal(signum, SIG_DFL);
+        if (signum > 0) stop_signal_watch(signum);
         free_event_type(&process_events, evt);
       }
     }
@@ -1578,7 +1562,7 @@ static ant_value_t process_remove_all_listeners(ant_t *js, ant_value_t *args, in
     ProcessEventType *evt, *tmp;
     HASH_ITER(hh, process_events, evt, tmp) {
       int signum = get_signal_number(evt->event_type);
-      if (signum > 0) signal(signum, SIG_DFL);
+      if (signum > 0) stop_signal_watch(signum);
       free_event_type(&process_events, evt);
     }
   }
@@ -1680,14 +1664,14 @@ void init_process_module() {
   
   ant_value_t process_obj = js_mkobj(js);
   ant_value_t env_obj = js_mkobj(js);
-  js_set_proto(js, process_obj, process_proto);
+  js_set_proto_init(process_obj, process_proto);
 
   load_dotenv_file(js, env_obj);
-  js_set_keys(js, env_obj, env_keys);
+  js_set_keys(env_obj, env_keys);
 
-  js_set_getter(js, env_obj, env_getter);
-  js_set_setter(js, env_obj, env_setter);
-  js_set_deleter(js, env_obj, env_deleter);
+  js_set_getter(env_obj, env_getter);
+  js_set_setter(env_obj, env_setter);
+  js_set_deleter(env_obj, env_deleter);
   
   js_set(js, env_obj, "toObject", js_mkfun(env_to_object));
   js_set(js, env_obj, "toString", js_mkfun(env_toString));
@@ -1758,7 +1742,7 @@ void init_process_module() {
   js_set_sym(js, stdin_proto, get_toStringTag_sym(), js_mkstr(js, "ReadStream", 10));
   
   ant_value_t stdin_obj = js_mkobj(js);
-  js_set_proto(js, stdin_obj, stdin_proto);
+  js_set_proto_init(stdin_obj, stdin_proto);
   js_set(js, stdin_obj, "isTTY", js_bool(stdin_is_tty()));
   js_set(js, process_obj, "stdin", stdin_obj);
   
@@ -1773,7 +1757,7 @@ void init_process_module() {
   js_set_sym(js, stdout_proto, get_toStringTag_sym(), js_mkstr(js, "WriteStream", 11));
   
   ant_value_t stdout_obj = js_mkobj(js);
-  js_set_proto(js, stdout_obj, stdout_proto);
+  js_set_proto_init(stdout_obj, stdout_proto);
   js_set(js, stdout_obj, "isTTY", js_bool(stdout_is_tty()));
   js_set_getter_desc(js, stdout_obj, "rows", 4, js_mkfun(js_stdout_rows_getter), JS_DESC_E | JS_DESC_C);
   js_set_getter_desc(js, stdout_obj, "columns", 7, js_mkfun(js_stdout_columns_getter), JS_DESC_E | JS_DESC_C);
@@ -1789,32 +1773,26 @@ void init_process_module() {
   js_set_sym(js, stderr_proto, get_toStringTag_sym(), js_mkstr(js, "WriteStream", 11));
   
   ant_value_t stderr_obj = js_mkobj(js);
-  js_set_proto(js, stderr_obj, stderr_proto);
+  js_set_proto_init(stderr_obj, stderr_proto);
   js_set(js, stderr_obj, "isTTY", js_bool(stderr_is_tty()));
   js_set(js, process_obj, "stderr", stderr_obj);
   
   js_set(js, global, "process", process_obj);
 }
 
-#define GC_OP_EVENTS(events) do { \
-  ProcessEventType *evt, *tmp; \
-  HASH_ITER(hh, events, evt, tmp) { \
-    for (int i = 0; i < evt->listener_count; i++) \
-      op_val(ctx, &evt->listeners[i].listener); \
-  } \
-} while(0)
-
-void process_gc_update_roots(GC_OP_VAL_ARGS) {
-  GC_OP_EVENTS(process_events);
-  GC_OP_EVENTS(stdin_events);
-  GC_OP_EVENTS(stdout_events);
-  GC_OP_EVENTS(stderr_events);
-}
-
-#undef GC_OP_EVENTS
 
 bool has_active_stdin(void) { 
   return stdin_state.reading; 
+}
+
+void gc_mark_process(ant_t *js, gc_mark_fn mark) {
+  ProcessEventType *tables[] = {process_events, stdin_events, stdout_events, stderr_events};
+  for (int t = 0; t < 4; t++) {
+    ProcessEventType *evt, *tmp;
+    HASH_ITER(hh, tables[t], evt, tmp) {
+      for (int i = 0; i < evt->listener_count; i++) mark(js, evt->listeners[i].listener);
+    }
+  }
 }
 
 void process_enable_keypress_events(void) {

@@ -1,11 +1,7 @@
 #ifndef FETCH_H
 #define FETCH_H
 
-#include "gc.h"
-
 void init_fetch_module(void);
-void fetch_gc_update_roots(GC_OP_VAL_ARGS);
-
 int has_pending_fetches(void);
 
 #endif

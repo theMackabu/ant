@@ -27,15 +27,15 @@ for (let frame = 0; frame < 50000; frame++) {
   render();
   const stats = Ant.stats();
   const elapsed = ((Date.now() - t0) / 1000).toFixed(2);
+  const a = stats.alloc, M = 1024 * 1024;
+  const total = (stats.pools.totalUsed + a.total) / M;
   console.log(
-    `frame ${frame}: arena ${(stats.arenaUsed / 1024 / 1024).toFixed(1)}MB / ` +
-      `${(stats.arenaSize / 1024 / 1024).toFixed(1)}MB, ` +
-      `rss ${(stats.rss / 1024 / 1024).toFixed(1)}MB, ` +
-      `elapsed ${elapsed}s`
+    `frame ${frame}: pools ${(stats.pools.totalUsed/M).toFixed(1)}MB obj ${(a.objects/M).toFixed(1)}MB shp ${(a.shapes/M).toFixed(1)}MB arr ${(a.arrays/M).toFixed(1)}MB refs ${(a.propRefs/M).toFixed(1)}MB cls ${(a.closures/M).toFixed(1)}MB uv ${(a.upvalues/M).toFixed(1)}MB ov ${(a.overflow/M).toFixed(1)}MB | ${total.toFixed(1)}MB rss ${(stats.rss/M).toFixed(1)}MB ${elapsed}s`
   );
 }
 
 const total = ((Date.now() - t0) / 1000).toFixed(2);
-const final_stats = Ant.stats();
-console.log(`Done: ${total}s, arena ${(final_stats.arenaUsed / 1024 / 1024).toFixed(1)}MB, ` + `rss ${(final_stats.rss / 1024 / 1024).toFixed(1)}MB`);
+const f = Ant.stats();
+const fmem = (f.pools.totalUsed + f.alloc.total) / 1024 / 1024;
+console.log(`Done: ${total}s, total ${fmem.toFixed(1)}MB, rss ${(f.rss / 1024 / 1024).toFixed(1)}MB`);
 console.log('OK');

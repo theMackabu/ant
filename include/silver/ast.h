@@ -87,19 +87,20 @@ typedef enum {
 } sv_var_kind_t;
 
 enum {
-  FN_ASYNC           = 1 << 0,
-  FN_GENERATOR       = 1 << 1,
-  FN_ARROW           = 1 << 2,
-  FN_GETTER          = 1 << 3,
-  FN_SETTER          = 1 << 4,
-  FN_STATIC          = 1 << 5,
-  FN_COMPUTED        = 1 << 6,
-  FN_METHOD          = 1 << 7,
-  FN_COLON           = 1 << 8,
-  FN_PAREN           = 1 << 9,
-  FN_USES_ARGS       = 1 << 10,
-  FN_INVALID_COOKED  = 1 << 11,
-  FN_PARSE_STRICT    = 1 << 12,
+  FN_ASYNC            = 1 << 0,
+  FN_GENERATOR        = 1 << 1,
+  FN_ARROW            = 1 << 2,
+  FN_GETTER           = 1 << 3,
+  FN_SETTER           = 1 << 4,
+  FN_STATIC           = 1 << 5,
+  FN_COMPUTED         = 1 << 6,
+  FN_METHOD           = 1 << 7,
+  FN_COLON            = 1 << 8,
+  FN_PAREN            = 1 << 9,
+  FN_USES_ARGS        = 1 << 10,
+  FN_INVALID_COOKED   = 1 << 11,
+  FN_PARSE_STRICT     = 1 << 12,
+  FN_TEMPLATE_SEGMENT = 1 << 13,
 };
 
 enum {

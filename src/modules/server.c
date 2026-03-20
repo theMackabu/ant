@@ -6,16 +6,16 @@
 #include <signal.h>
 #include <uv.h>
 
-#include <zlib-ng.h>
+#include <zlib.h>
 #include <utarray.h>
 
 #include "ant.h"
-#include "gc.h"
 #include "reactor.h"
 #include "runtime.h"
 #include "internal.h"
 #include "silver/engine.h"
 
+#include "gc/modules.h"
 #include "modules/server.h"
 #include "modules/json.h"
 
@@ -349,7 +349,7 @@ static ant_value_t js_set_prop(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_mkundef();
   
   ant_value_t fn = js_getcurrentfunc(js);
-  ant_value_t store_obj = js_get_slot(js, fn, SLOT_DATA);
+  ant_value_t store_obj = js_get_slot(fn, SLOT_DATA);
   if (vtype(store_obj) == T_UNDEF) return js_mkundef();
   
   if (vtype(args[0]) == T_STR) {
@@ -365,7 +365,7 @@ static ant_value_t js_get_prop(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
   
   ant_value_t fn = js_getcurrentfunc(js);
-  ant_value_t store_obj = js_get_slot(js, fn, SLOT_DATA);
+  ant_value_t store_obj = js_get_slot(fn, SLOT_DATA);
   if (vtype(store_obj) == T_UNDEF) return js_mkundef();
   
   if (vtype(args[0]) == T_STR) {
@@ -381,7 +381,7 @@ static ant_value_t req_header(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
   
   ant_value_t fn = js_getcurrentfunc(js);
-  ant_value_t headers_val = js_get_slot(js, fn, SLOT_DATA);
+  ant_value_t headers_val = js_get_slot(fn, SLOT_DATA);
   if (vtype(headers_val) != T_NUM) return js_mkundef();
   
   UT_array *headers = (UT_array *)(unsigned long)js_getnum(headers_val);
@@ -405,7 +405,7 @@ static ant_value_t res_header(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_mkundef();
   
   ant_value_t fn = js_getcurrentfunc(js);
-  ant_value_t ctx_val = js_get_slot(js, fn, SLOT_DATA);
+  ant_value_t ctx_val = js_get_slot(fn, SLOT_DATA);
   if (vtype(ctx_val) != T_NUM) return js_mkundef();
   
   response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
@@ -425,7 +425,7 @@ static ant_value_t res_status(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
   
   ant_value_t fn = js_getcurrentfunc(js);
-  ant_value_t ctx_val = js_get_slot(js, fn, SLOT_DATA);
+  ant_value_t ctx_val = js_get_slot(fn, SLOT_DATA);
   if (vtype(ctx_val) != T_NUM) return js_mkundef();
   
   response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
@@ -442,7 +442,7 @@ static ant_value_t res_body(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
   
   ant_value_t fn = js_getcurrentfunc(js);
-  ant_value_t ctx_val = js_get_slot(js, fn, SLOT_DATA);
+  ant_value_t ctx_val = js_get_slot(fn, SLOT_DATA);
   if (vtype(ctx_val) != T_NUM) return js_mkundef();
   
   response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
@@ -471,7 +471,7 @@ static ant_value_t res_html(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
   
   ant_value_t fn = js_getcurrentfunc(js);
-  ant_value_t ctx_val = js_get_slot(js, fn, SLOT_DATA);
+  ant_value_t ctx_val = js_get_slot(fn, SLOT_DATA);
   if (vtype(ctx_val) != T_NUM) return js_mkundef();
   
   response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
@@ -497,7 +497,7 @@ static ant_value_t res_json(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
   
   ant_value_t fn = js_getcurrentfunc(js);
-  ant_value_t ctx_val = js_get_slot(js, fn, SLOT_DATA);
+  ant_value_t ctx_val = js_get_slot(fn, SLOT_DATA);
   if (vtype(ctx_val) != T_NUM) return js_mkundef();
   
   response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
@@ -529,7 +529,7 @@ static ant_value_t res_notFound(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
   
   ant_value_t fn = js_getcurrentfunc(js);
-  ant_value_t ctx_val = js_get_slot(js, fn, SLOT_DATA);
+  ant_value_t ctx_val = js_get_slot(fn, SLOT_DATA);
   if (vtype(ctx_val) != T_NUM) return js_mkundef();
   
   response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
@@ -548,7 +548,7 @@ static ant_value_t res_redirect(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
   
   ant_value_t fn = js_getcurrentfunc(js);
-  ant_value_t ctx_val = js_get_slot(js, fn, SLOT_DATA);
+  ant_value_t ctx_val = js_get_slot(fn, SLOT_DATA);
   if (vtype(ctx_val) != T_NUM) return js_mkundef();
   
   response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
@@ -573,17 +573,17 @@ static ant_value_t res_redirect(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static char* gzip_compress(const char *data, size_t data_len, size_t *compressed_len) {
-  zng_stream stream;
+  z_stream stream;
   memset(&stream, 0, sizeof(stream));
   
-  if (zng_deflateInit2(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
+  if (deflateInit2(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
     return NULL;
   }
   
-  size_t bound = zng_deflateBound(&stream, data_len);
+  size_t bound = deflateBound(&stream, data_len);
   char *compressed = malloc(bound);
   if (!compressed) {
-    zng_deflateEnd(&stream);
+    deflateEnd(&stream);
     return NULL;
   }
   
@@ -592,14 +592,14 @@ static char* gzip_compress(const char *data, size_t data_len, size_t *compressed
   stream.next_out = (Bytef *)compressed;
   stream.avail_out = (uInt)bound;
   
-  if (zng_deflate(&stream, Z_FINISH) != Z_STREAM_END) {
+  if (deflate(&stream, Z_FINISH) != Z_STREAM_END) {
     free(compressed);
-    zng_deflateEnd(&stream);
+    deflateEnd(&stream);
     return NULL;
   }
   
   *compressed_len = stream.total_out;
-  zng_deflateEnd(&stream);
+  deflateEnd(&stream);
   
   return compressed;
 }
@@ -1004,7 +1004,6 @@ ant_value_t js_serve(ant_t *js, ant_value_t *args, int nargs) {
   }
   
   server->pending_responses = NULL;
-  js_gc_throttle(true);
   
   js_reactor_set_poll_hook(
     (reactor_poll_hook_t)
@@ -1014,7 +1013,6 @@ ant_value_t js_serve(ant_t *js, ant_value_t *args, int nargs) {
   
   js_run_event_loop(js);
   js_reactor_set_poll_hook(NULL, NULL);
-  js_gc_throttle(false);
   
   free(server);
   g_server = NULL;
@@ -1022,14 +1020,15 @@ ant_value_t js_serve(ant_t *js, ant_value_t *args, int nargs) {
   return js_mknum(1);
 }
 
+void gc_mark_server(ant_t *js, gc_mark_fn mark) {
+  if (g_server) {
+    mark(js, g_server->handler);
+    mark(js, g_server->store_obj);
+    mark(js, g_server->server_obj);
+  }
+}
+
 void init_server_module() {
   js_set(rt->js, rt->ant_obj, "serve", js_mkfun(js_serve));
 }
 
-void server_gc_update_roots(GC_OP_VAL_ARGS) {
-  if (g_server) {
-    op_val(ctx, &g_server->handler);
-    op_val(ctx, &g_server->store_obj);
-    op_val(ctx, &g_server->server_obj);
-  }
-}

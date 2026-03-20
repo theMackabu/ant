@@ -28,7 +28,7 @@ static inline bool sv_is_map_iter(
   iter_type_t *out_type
 ) {
   if (vtype(obj) != T_OBJ) return false;
-  ant_value_t state_val = js_get_slot(js, obj, SLOT_ITER_STATE);
+  ant_value_t state_val = js_get_slot(obj, SLOT_ITER_STATE);
   if (vtype(state_val) == T_UNDEF) return false;
   
   map_iterator_state_t *st = (map_iterator_state_t *)(uintptr_t)js_getnum(state_val);
@@ -47,7 +47,7 @@ static inline bool sv_is_set_iter(
   iter_type_t *out_type
 ) {
   if (vtype(obj) != T_OBJ) return false;
-  ant_value_t state_val = js_get_slot(js, obj, SLOT_ITER_STATE);
+  ant_value_t state_val = js_get_slot(obj, SLOT_ITER_STATE);
   if (vtype(state_val) == T_UNDEF) return false;
   
   set_iterator_state_t *st = (set_iterator_state_t *)(uintptr_t)js_getnum(state_val);
@@ -73,7 +73,7 @@ static inline ant_value_t sv_op_for_of(sv_vm_t *vm, ant_t *js) {
   }
 
   if (vtype(iterable) == T_STR) {
-    if (is_rope(js, iterable)) {
+    if (str_is_heap_rope(iterable)) {
       iterable = rope_flatten(js, iterable);
       if (is_err(iterable)) return iterable;
     }
@@ -220,8 +220,12 @@ static inline ant_value_t sv_op_iter_next(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
     } else {
       ant_offset_t off = vstr(js, str, NULL);
       utf8proc_int32_t cp;
-      ant_offset_t cb_len = (ant_offset_t)utf8_next((const utf8proc_uint8_t *)&js->mem[off + idx], (utf8proc_ssize_t)(slen - idx), &cp);
-      vm->stack[vm->sp++] = js_mkstr(js, (char *)&js->mem[off + idx], cb_len);
+      ant_offset_t cb_len = (ant_offset_t)utf8_next(
+        (const utf8proc_uint8_t *)(uintptr_t)(off + idx),
+        (utf8proc_ssize_t)(slen - idx),
+        &cp
+      );
+      vm->stack[vm->sp++] = js_mkstr(js, (const void *)(uintptr_t)(off + idx), cb_len);
       vm->stack[vm->sp++] = js_false;
       vm->stack[vm->sp - 4] = tov(idx + (int)cb_len);
     }

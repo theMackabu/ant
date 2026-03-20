@@ -80,7 +80,7 @@ static ant_value_t builtin_shell_text(ant_t *js, ant_value_t *args, int nargs) {
   (void)nargs;
   
   ant_value_t fn = js_getcurrentfunc(js);
-  return js_get_slot(js, fn, SLOT_DATA);
+  return js_get_slot(fn, SLOT_DATA);
 }
 
 static ant_value_t builtin_shell_lines(ant_t *js, ant_value_t *args, int nargs) {
@@ -88,7 +88,7 @@ static ant_value_t builtin_shell_lines(ant_t *js, ant_value_t *args, int nargs) 
   (void)nargs;
   
   ant_value_t fn = js_getcurrentfunc(js);
-  ant_value_t stdout_val = js_get_slot(js, fn, SLOT_DATA);
+  ant_value_t stdout_val = js_get_slot(fn, SLOT_DATA);
   
   size_t text_len;
   char *text = js_getstr(js, stdout_val, &text_len);

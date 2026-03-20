@@ -1,10 +1,10 @@
 {
   "engine": {
-    "patterns": ["src/*.c", "src/highlight/*.c", "src/esm/*.c", "src/cli/*.c", "src/modules/*.c", "src/silver/*.c"],
+    "patterns": ["src/*.c", "src/gc/*.c", "src/highlight/*.c", "src/esm/*.c", "src/cli/*.c", "src/modules/*.c", "src/silver/*.c"],
     "exclude": ["src/main.c", "src/watch.c"]
   },
   "library": {
-    "patterns": ["src/*.c", "src/highlight/*.c", "src/esm/*.c", "src/modules/*.c", "src/silver/*.c"],
+    "patterns": ["src/*.c", "src/gc/*.c", "src/highlight/*.c", "src/esm/*.c", "src/modules/*.c", "src/silver/*.c"],
     "exclude": ["src/main.c", "src/watch.c"]
   },
   "core": {

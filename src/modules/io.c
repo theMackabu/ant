@@ -339,6 +339,11 @@ void print_repl_value(ant_t *js, ant_value_t val, FILE *stream) {
     return;
   }
 
+  if (vtype(val) == T_OBJ && vtype(js_get_slot(val, SLOT_ERR_TYPE)) != T_UNDEF) {
+    const char *stack = get_str_prop(js, val, "stack", 5, NULL);
+    if (stack) { io_print(stack, stream); fputc('\n', stream); return; }
+  }
+
   char cbuf[512];
   js_cstr_t cstr = js_to_cstr(js, val, cbuf, sizeof(cbuf));
 
@@ -501,9 +506,6 @@ static const char *get_slot_name(internal_slot_t slot) {
     [SLOT_PROTO] = "PROTO",
     [SLOT_FUNC_PROTO] = "FUNC_PROTO",
     [SLOT_ASYNC_PROTO] = "ASYNC_PROTO",
-    [SLOT_FROZEN] = "FROZEN",
-    [SLOT_SEALED] = "SEALED",
-    [SLOT_EXTENSIBLE] = "EXTENSIBLE",
     [SLOT_BUFFER] = "BUFFER",
     [SLOT_TARGET_FUNC] = "TARGET_FUNC",
     [SLOT_NAME] = "NAME",
@@ -526,7 +528,6 @@ static const char *get_slot_name(internal_slot_t slot) {
     [SLOT_NO_FUNC_DECLS] = "NO_FUNC_DECLS",
     [SLOT_ITER_STATE] = "ITER_STATE",
     [SLOT_ENTRIES] = "ENTRIES",
-    [SLOT_DENSE_BUF] = "DENSE_BUF",
   };
   
   if (slot < sizeof(slot_names) / sizeof(slot_names[0]) && slot_names[slot]) {
@@ -538,7 +539,6 @@ static const char *get_slot_name(internal_slot_t slot) {
 static const char *get_type_name(int type) {
   static const char *type_names[] = {
     [T_OBJ]        = "object",
-    [T_PROP]       = "property",
     [T_STR]        = "string",
     [T_UNDEF]      = "undefined",
     [T_NULL]       = "null",
@@ -562,7 +562,7 @@ static const char *get_type_name(int type) {
   return type_names[type] ? type_names[type] : "unknown";
 }
 
-static bool inspect_was_visited(inspect_visited_t *v, ant_offset_t off) {
+static bool inspect_was_visited(inspect_visited_t *v, uintptr_t off) {
   for (int i = 0; i < v->count; i++) if (v->visited[i] == off) return true;
   return false;
 }
@@ -571,10 +571,10 @@ static void inspect_print_indent(FILE *stream, int depth) {
   for (int i = 0; i < depth; i++) fprintf(stream, "  ");
 }
 
-static void inspect_mark_visited(inspect_visited_t *v, ant_offset_t off) {
+static void inspect_mark_visited(inspect_visited_t *v, uintptr_t off) {
   if (v->count >= v->capacity) {
     v->capacity = v->capacity ? v->capacity * 2 : 32;
-    v->visited = realloc(v->visited, v->capacity * sizeof(ant_offset_t));
+    v->visited = realloc(v->visited, v->capacity * sizeof(uintptr_t));
   }
   v->visited[v->count++] = off;
 }
@@ -618,7 +618,7 @@ void inspect_value(ant_t *js, ant_value_t val, FILE *stream, int depth, inspect_
 void inspect_object(ant_t *js, ant_value_t obj, FILE *stream, int depth, inspect_visited_t *visited) {
   int type = vtype(obj);
   obj = js_as_obj(obj);
-  ant_offset_t obj_off = (ant_offset_t)vdata(obj);
+  uintptr_t obj_off = (uintptr_t)vdata(obj);
   
   if (inspect_was_visited(visited, obj_off)) {
     fprintf(stream, "[Circular *%llu]", (u64)obj_off);
@@ -634,7 +634,7 @@ void inspect_object(ant_t *js, ant_value_t obj, FILE *stream, int depth, inspect
   fprintf(stream, "[[Slots]]: {\n");
   
   for (int slot = SLOT_NONE + 1; slot < SLOT_MAX; slot++) {
-    ant_value_t slot_val = js_get_slot(js, obj, (internal_slot_t)slot);
+    ant_value_t slot_val = js_get_slot(obj, (internal_slot_t)slot);
     int t = vtype(slot_val);
     if (t == T_UNDEF) continue;
     
@@ -652,7 +652,7 @@ void inspect_object(ant_t *js, ant_value_t obj, FILE *stream, int depth, inspect
         fprintf(stream, "%.0f", js_getnum(slot_val));
         break;
       default:
-        if ((t == T_OBJ || t == T_FUNC || t == T_PROMISE) && inspect_was_visited(visited, (ant_offset_t)vdata(js_as_obj(slot_val))))
+        if ((t == T_OBJ || t == T_FUNC || t == T_PROMISE) && inspect_was_visited(visited, (uintptr_t)vdata(js_as_obj(slot_val))))
           fprintf(stream, "[Circular *%llu]", (u64)vdata(js_as_obj(slot_val)));
         else if (t == T_OBJ || t == T_FUNC || t == T_PROMISE)
           fprintf(stream, "<%s @%llu>", get_type_name(t), (u64)vdata(js_as_obj(slot_val)));

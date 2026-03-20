@@ -111,7 +111,7 @@ typedef struct { char *key; size_t key_len; ant_value_t value; } prop_entry;
 static int should_skip_prop(ant_t *js, const char *key, size_t key_len, ant_value_t value) {
   if (is_internal_prop(key, (ant_offset_t)key_len)) return 1;
   if (!is_special_object(value)) return 0;
-  return vtype(js_get_slot(js, value, SLOT_CODE)) == T_CFUNC;
+  return vtype(js_get_slot(value, SLOT_CODE)) == T_CFUNC;
 }
 
 static prop_entry *collect_props(ant_t *js, ant_value_t val, int *out_count) {
@@ -308,7 +308,7 @@ static ant_value_t apply_reviver(ant_t *js, ant_value_t holder, const char *key,
         char idxstr[32];
         snprintf(idxstr, sizeof(idxstr), "%d", i);
         ant_value_t new_elem = apply_reviver(js, val, idxstr, reviver);
-        if (vtype(new_elem) == T_UNDEF) js_del(js, val, idxstr);
+        if (vtype(new_elem) == T_UNDEF) js_delete_prop(js, val, idxstr, strlen(idxstr));
         else js_set(js, val, idxstr, new_elem);
       }
     } else {
@@ -335,7 +335,7 @@ static ant_value_t apply_reviver(ant_t *js, ant_value_t holder, const char *key,
         size_t klen;
         char *kstr = js_getstr(js, key_str, &klen);
         ant_value_t new_val = apply_reviver(js, val, kstr, reviver);
-        if (vtype(new_val) == T_UNDEF) js_del(js, val, kstr);
+        if (vtype(new_val) == T_UNDEF) js_delete_prop(js, val, kstr, strlen(kstr));
         else js_set(js, val, kstr, new_val);
       }
     }

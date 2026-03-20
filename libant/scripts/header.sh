@@ -20,8 +20,6 @@ HEADERS=(
   "debug.h:$INCLUDE_DIR/debug.h"
   "common.h:$INCLUDE_DIR/common.h"
   "types.h:$INCLUDE_DIR/types.h"
-  "gc.h:$INCLUDE_DIR/gc.h"
-  "roots.h:$INCLUDE_DIR/roots.h"
   "uthash.h:$VENDOR_DIR/uthash-2.3.0/src/uthash.h"
   "errors.h:$INCLUDE_DIR/errors.h"
   "ant.h:$INCLUDE_DIR/ant.h"

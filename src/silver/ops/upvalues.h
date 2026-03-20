@@ -11,36 +11,21 @@ static inline ant_value_t sv_setup_function_prototype(
   ant_value_t proto_obj = mkobj(js, 0);
   if (is_err(proto_obj)) return proto_obj;
 
-  ant_handle_t hproto = js_root(js, proto_obj);
   ant_value_t object_proto = js_get_ctor_proto(js, "Object", 6);
-  if (vtype(object_proto) == T_OBJ)
-    js_set_proto(js, js_deref(js, hproto), object_proto);
+  if (vtype(object_proto) == T_OBJ) js_set_proto_init(proto_obj, object_proto);
 
   ant_value_t ctor_key = js_mkstr(js, "constructor", 11);
-  if (is_err(ctor_key)) {
-    js_unroot(js, hproto);
-    return ctor_key;
-  }
-  ant_value_t set_ctor = js_setprop(js, js_deref(js, hproto), ctor_key, func_val);
-  if (is_err(set_ctor)) {
-    js_unroot(js, hproto);
-    return set_ctor;
-  }
-  js_set_descriptor(js, js_deref(js, hproto), "constructor", 11, JS_DESC_W | JS_DESC_C);
+  if (is_err(ctor_key)) return ctor_key;
+  ant_value_t set_ctor = js_setprop(js, proto_obj, ctor_key, func_val);
+  if (is_err(set_ctor)) return set_ctor;
+  js_set_descriptor(js, proto_obj, "constructor", 11, JS_DESC_W | JS_DESC_C);
 
   ant_value_t proto_key = js_mkstr(js, "prototype", 9);
-  if (is_err(proto_key)) {
-    js_unroot(js, hproto);
-    return proto_key;
-  }
-  ant_value_t set_proto = js_setprop(js, func_obj, proto_key, js_deref(js, hproto));
-  if (is_err(set_proto)) {
-    js_unroot(js, hproto);
-    return set_proto;
-  }
+  if (is_err(proto_key)) return proto_key;
+  ant_value_t set_proto = js_setprop(js, func_obj, proto_key, proto_obj);
+  if (is_err(set_proto)) return set_proto;
   js_set_descriptor(js, func_obj, "prototype", 9, JS_DESC_W);
 
-  js_unroot(js, hproto);
   return js_mkundef();
 }
 
@@ -88,16 +73,13 @@ static inline void sv_op_close_upval(sv_vm_t *vm, sv_frame_t *frame, uint8_t *ip
 
 static inline sv_upvalue_t *sv_capture_upvalue(sv_vm_t *vm, ant_value_t *slot) {
   sv_upvalue_t **pp = &vm->open_upvalues;
-  while (*pp && (*pp)->location > slot)
-    pp = &(*pp)->next;
+  
+  while (*pp && (*pp)->location > slot) pp = &(*pp)->next;
+  if (*pp && (*pp)->location == slot) return *pp;
 
-  if (*pp && (*pp)->location == slot)
-    return *pp;
-
-  sv_upvalue_t *uv = calloc(1, sizeof(sv_upvalue_t));
-  uv->location = slot;
-  uv->next = *pp;
-  *pp = uv;
+  sv_upvalue_t *uv = js_upvalue_alloc();
+  uv->location = slot; uv->next = *pp; *pp = uv;
+  
   return uv;
 }
 
@@ -108,7 +90,7 @@ static inline void sv_op_closure(
   uint32_t idx = sv_get_u32(ip + 1);
   sv_func_t *child = (sv_func_t *)(uintptr_t)vdata(func->constants[idx]);
 
-  sv_closure_t *closure = calloc(1, sizeof(sv_closure_t));
+  sv_closure_t *closure = js_closure_alloc(js);
   closure->func = child;
   closure->bound_this = child->is_arrow ? frame->this : js_mkundef();
   closure->bound_args = js_mkundef();
@@ -129,26 +111,23 @@ static inline void sv_op_closure(
 
   ant_value_t func_obj = mkobj(js, 0);
   closure->func_obj = func_obj;
+  js_mark_constructor(func_obj, !child->is_arrow && !child->is_method);
   js_setprop(js, func_obj, js->length_str, tov((double)child->param_count));
   js_set_descriptor(js, func_obj, "length", 6, JS_DESC_C);
 
   ant_value_t func_val = mkval(T_FUNC, (uintptr_t)closure);
-  if (!child->is_arrow && !child->is_method) {
-    (void)sv_setup_function_prototype(js, func_obj, func_val);
-  }
+  if (!child->is_arrow && !child->is_method) sv_setup_function_prototype(js, func_obj, func_val);
 
   if (child->is_strict)
-    js_set_slot(js, func_obj, SLOT_STRICT, js_true);
+    js_set_slot(func_obj, SLOT_STRICT, js_true);
   
   if (child->is_async) {
-    js_set_slot(js, func_obj, SLOT_ASYNC, js_true);
-    ant_value_t async_proto = js_get_slot(js, js->global, SLOT_ASYNC_PROTO);
-    if (vtype(async_proto) == T_FUNC)
-      js_set_proto(js, func_obj, async_proto);
+    js_set_slot(func_obj, SLOT_ASYNC, js_true);
+    ant_value_t async_proto = js_get_slot(js->global, SLOT_ASYNC_PROTO);
+    if (vtype(async_proto) == T_FUNC) js_set_proto_init(func_obj, async_proto);
   } else {
-    ant_value_t func_proto = js_get_slot(js, js->global, SLOT_FUNC_PROTO);
-    if (vtype(func_proto) == T_FUNC)
-      js_set_proto(js, func_obj, func_proto);
+    ant_value_t func_proto = js_get_slot(js->global, SLOT_FUNC_PROTO);
+    if (vtype(func_proto) == T_FUNC) js_set_proto_init(func_obj, func_proto);
   }
 
   vm->stack[vm->sp++] = func_val;

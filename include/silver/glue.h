@@ -44,17 +44,44 @@ ant_value_t jit_helper_shr(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r)
 ant_value_t jit_helper_ushr(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r);
 ant_value_t jit_helper_not(sv_vm_t *vm, ant_t *js, ant_value_t v);
 
-ant_value_t jit_helper_get_global(ant_t *js, const char *str, uint32_t len);
 ant_value_t jit_helper_to_propkey(sv_vm_t *vm, ant_t *js, ant_value_t v);
 ant_value_t jit_helper_stack_overflow_error(sv_vm_t *vm, ant_t *js);
-ant_value_t jit_helper_instanceof(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r);
+
 ant_value_t jit_helper_delete(sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t key);
 ant_value_t jit_helper_typeof(sv_vm_t *vm, ant_t *js, ant_value_t v);
+
+ant_value_t jit_helper_get_global(
+  ant_t *js, const char *str,
+  sv_func_t *func, int32_t bc_off
+);
+
+ant_value_t jit_helper_instanceof(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t l, ant_value_t r,
+  sv_func_t *func, int32_t bc_off
+);
+
+ant_value_t jit_helper_call_is_proto(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t call_this, ant_value_t call_func, ant_value_t arg,
+  sv_func_t *func, int32_t bc_off
+);
 
 ant_value_t jit_helper_call(
   sv_vm_t *vm, ant_t *js,
   ant_value_t func, ant_value_t this_val,
   ant_value_t *args, int argc
+);
+
+ant_value_t jit_helper_apply(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t func, ant_value_t this_val,
+  ant_value_t *args, int argc
+);
+
+ant_value_t jit_helper_rest(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t *args, int argc, int start
 );
 
 ant_value_t jit_helper_get_field(

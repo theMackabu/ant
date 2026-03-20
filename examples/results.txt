@@ -557,7 +557,7 @@ compat-table/es6/Reflect.construct.RegExp-subclassing.js: OK
 compat-table/es6/Reflect.construct.js: OK
 compat-table/es6/Reflect.construct.new-target.js: OK
 compat-table/es6/Reflect.construct.third-argument.js: OK
-compat-table/es6/Reflect.defineProperty.js: failed
+compat-table/es6/Reflect.defineProperty.js: OK
 compat-table/es6/Reflect.deleteProperty.js: OK
 compat-table/es6/Reflect.getOwnPropertyDescriptor.js: OK
 compat-table/es6/Reflect.getPrototypeOf.js: OK
@@ -615,7 +615,7 @@ compat-table/es6/Symbol.global-registry.js: OK
 compat-table/es6/Symbol.hidden-keys.js: OK
 compat-table/es6/Symbol.js: OK
 compat-table/es6/Symbol.no-coerce.js: failed
-compat-table/es6/Symbol.no-new.js: failed
+compat-table/es6/Symbol.no-new.js: OK
 compat-table/es6/Symbol.prototype.js: OK
 compat-table/es6/Symbol.typeof.js: OK
 compat-table/es6/WeakMap.accept-primitives.js: OK
@@ -1251,7 +1251,7 @@ compat-table/es2020/DataView.prototype.getBigUint64.js: TypeError: undefined is 
 compat-table/es2020/Promise.allSettled.js: TypeError: undefined is not a function
 compat-table/es2020/String.prototype.matchAll.js: TypeError: undefined is not a function
 compat-table/es2020/String.prototype.matchAll.throws-non-global.js: failed
-compat-table/es2020/globalThis.descriptor.js: failed
+compat-table/es2020/globalThis.descriptor.js: OK
 compat-table/es2020/globalThis.js: OK
 compat-table/es2020/nullish-coalescing.js: OK
 compat-table/es2020/optional-chaining.bracket.js: OK

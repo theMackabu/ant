@@ -603,6 +603,7 @@ static sv_ast_t *parse_primary(P) {
         i++;
       }
       sv_ast_t *s = mk(N_STRING);
+      s->flags |= FN_TEMPLATE_SEGMENT;
       s->aux = (const char *)&in[seg_start];
       s->aux_len = (uint32_t)(i - seg_start);
       sv_tpl_cooked_t cooked = decode_template_segment(p, in, seg_start, i);
@@ -1912,7 +1913,7 @@ static sv_ast_t *parse_stmt(P) {
   l_break: {
     CONSUME();
     sv_ast_t *n = mk(N_BREAK);
-    if (NEXT() == TOK_IDENTIFIER && !HAD_NEWLINE) {
+    if ((NEXT() == TOK_IDENTIFIER || is_contextual_ident_tok(TOK)) && !HAD_NEWLINE) {
       n->str = tok_ident_str(p, &n->len);
       CONSUME();
     }
@@ -1923,7 +1924,7 @@ static sv_ast_t *parse_stmt(P) {
   l_continue: {
     CONSUME();
     sv_ast_t *n = mk(N_CONTINUE);
-    if (NEXT() == TOK_IDENTIFIER && !HAD_NEWLINE) {
+    if ((NEXT() == TOK_IDENTIFIER || is_contextual_ident_tok(TOK)) && !HAD_NEWLINE) {
       n->str = tok_ident_str(p, &n->len);
       CONSUME();
     }
@@ -2019,6 +2020,9 @@ static sv_ast_t *parse_stmt(P) {
   }
 
   l_import: {
+    uint8_t la = LA();
+    if (la == TOK_LPAREN || la == TOK_DOT)
+      goto l_expr_stmt;
     CONSUME();
     return parse_import_stmt(p);
   }
@@ -2029,7 +2033,7 @@ static sv_ast_t *parse_stmt(P) {
   }
 
   l_expr_stmt: {
-    if (TOK == TOK_IDENTIFIER) {
+    if (TOK == TOK_IDENTIFIER || is_contextual_ident_tok(TOK)) {
       uint8_t la = LA();
       if (la == TOK_COLON) {
         sv_ast_t *label = mk(N_LABEL);

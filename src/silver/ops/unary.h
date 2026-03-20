@@ -36,7 +36,7 @@ static inline ant_value_t sv_op_delete(sv_vm_t *vm, ant_t *js) {
   if (!is_err(key_str) && vtype(key_str) == T_STR) {
     ant_offset_t klen = 0;
     ant_offset_t koff = vstr(js, key_str, &klen);
-    const char *kptr = (const char *)&js->mem[koff];
+    const char *kptr = (const char *)(uintptr_t)(koff);
     ant_value_t result = js_delete_prop(js, obj, kptr, klen);
     if (is_err(result)) return result;
     vm->stack[vm->sp++] = result;

@@ -10,7 +10,7 @@
 
 typedef struct descriptor_entry {
   uint64_t key;
-  ant_offset_t obj_off;
+  uintptr_t obj_off;
   ant_offset_t sym_off;
   char *prop_name;
   size_t prop_len;
@@ -26,11 +26,11 @@ typedef struct descriptor_entry {
 
 extern descriptor_entry_t *desc_registry;
 
-descriptor_entry_t *lookup_descriptor(ant_t *js, ant_offset_t obj_off, const char *key, size_t klen);
-descriptor_entry_t *lookup_sym_descriptor(ant_offset_t obj_off, ant_offset_t sym_off);
+descriptor_entry_t *lookup_descriptor(ant_value_t obj, const char *key, size_t klen);
+descriptor_entry_t *lookup_sym_descriptor(ant_value_t obj, ant_offset_t sym_off);
 
-uint64_t make_desc_key(ant_offset_t obj_off, const char *key, size_t klen);
-uint64_t make_sym_desc_key(ant_offset_t obj_off, ant_offset_t sym_off);
+uint64_t make_desc_key(ant_value_t obj, const char *key, size_t klen);
+uint64_t make_sym_desc_key(ant_value_t obj, ant_offset_t sym_off);
 
 void js_set_descriptor(ant_t *js, ant_value_t obj, const char *key, size_t klen, int flags);
 void js_set_getter_desc(ant_t *js, ant_value_t obj, const char *key, size_t klen, ant_value_t getter, int flags);

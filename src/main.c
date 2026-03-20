@@ -1,5 +1,4 @@
 #include <compat.h> // IWYU pragma: keep
-#include <arena.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,6 +9,7 @@
 #include <crprintf.h>
 
 #include "ant.h"
+#include "gc.h"
 #include "repl.h"
 #include "debug.h"
 #include "utils.h"
@@ -98,6 +98,10 @@ static const subcommand_t subcommands[] = {
 };
 
 static void ant_debug_apply(const char *key, const char *val) {
+  if (strcmp(key, "gc") == 0) {
+    if (strcmp(val, "disable") == 0) gc_disabled = true;
+  }
+  
   if (strcmp(key, "dump/crprintf") == 0) {
     if (strcmp(val, "bytecode") == 0 || strcmp(val, "all") == 0) crprintf_set_debug(true);
     if (strcmp(val, "hex") == 0      || strcmp(val, "all") == 0) crprintf_set_debug_hex(true);
@@ -110,7 +114,14 @@ static void ant_debug_apply(const char *key, const char *val) {
   }
 }
 
-static void parse_ant_debug_flags(void) {
+static inline void setup_console_colors(void) {
+  crprintf_var("version", ANT_VERSION);
+  crprintf_var("fatal", "<bold+red>FATAL</bold>");
+  crprintf_var("error", "<red>Error</red>");
+  crprintf_var("warn", "<yellow>Warning</yellow>");
+}
+
+static void parse_ant_debug_flags(void) {  
   const char *env = getenv("ANT_DEBUG");
   if (!env || !*env) return;
 
@@ -350,6 +361,7 @@ static int execute_module(ant_t *js, const char *filename) {
 }
 
 int main(int argc, char *argv[]) {
+  setup_console_colors();
   parse_ant_debug_flags();
   
   int filtered_argc = 0; int original_argc = argc;
@@ -357,11 +369,6 @@ int main(int argc, char *argv[]) {
   
   const char *binary_name = strrchr(argv[0], '/');
   binary_name = binary_name ? binary_name + 1 : argv[0];
-  
-  crprintf_var("version", ANT_VERSION);
-  crprintf_var("fatal", "<bold+red>FATAL</bold>");
-  crprintf_var("error", "<red>Error</red>");
-  crprintf_var("warn", "<yellow>Warning</yellow>");
 
   if (strcmp(binary_name, "antx") == 0) {
     char **exec_argv = try_oom(sizeof(char*) * (argc + 2));

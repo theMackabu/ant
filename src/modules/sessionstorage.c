@@ -4,7 +4,6 @@
 
 #include "ant.h"
 #include "errors.h"
-#include "arena.h"
 #include "runtime.h"
 #include "internal.h"
 #include "descriptors.h"

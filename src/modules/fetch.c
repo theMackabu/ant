@@ -16,6 +16,7 @@
 #include "modules/fetch.h"
 #include "modules/json.h"
 #include "modules/timer.h"
+#include "gc/modules.h"
 
 typedef struct {
   char *data;
@@ -74,7 +75,7 @@ static ant_value_t fetch_fail_oom(ant_t *js, ant_value_t promise, fetch_request_
 
 static ant_value_t response_text(ant_t *js, ant_value_t *args, int nargs) {  
   ant_value_t this = js_getthis(js);
-  ant_value_t body = js_get_slot(js, this, SLOT_DATA);
+  ant_value_t body = js_get_slot(this, SLOT_DATA);
   
   ant_value_t promise = js_mkpromise(js);
   js_resolve_promise(js, promise, body);
@@ -84,7 +85,7 @@ static ant_value_t response_text(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t response_json(ant_t *js, ant_value_t *args, int nargs) {  
   ant_value_t this = js_getthis(js);
-  ant_value_t body = js_get_slot(js, this, SLOT_DATA);
+  ant_value_t body = js_get_slot(this, SLOT_DATA);
   ant_value_t parsed = js_json_parse(js, &body, 1);
   ant_value_t promise = js_mkpromise(js);
   
@@ -102,7 +103,7 @@ static ant_value_t create_response(ant_t *js, int status, const char *body, size
   js_set(js, response_obj, "ok", js_bool(status >= 200 && status < 300));
   js_set(js, response_obj, "status", js_mknum(status));
   
-  js_set_slot(js, response_obj, SLOT_DATA, body_str);
+  js_set_slot(response_obj, SLOT_DATA, body_str);
   
   js_set(js, response_obj, "text", js_mkfun(response_text));
   js_set(js, response_obj, "json", js_mkfun(response_json));
@@ -191,7 +192,7 @@ static ant_value_t do_fetch_microtask(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t current_func = js_getcurrentfunc(js);
   ant_value_t url_val = js_get(js, current_func, "url");
   ant_value_t options_val = js_get(js, current_func, "options");
-  ant_value_t promise = js_get_slot(js, current_func, SLOT_DATA);
+  ant_value_t promise = js_get_slot(current_func, SLOT_DATA);
   
   char *url_str = js_getstr(js, url_val, NULL);
   if (!url_str) {
@@ -325,8 +326,8 @@ static ant_value_t js_fetch(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t promise = js_mkpromise(js);
   ant_value_t wrapper_obj = js_mkobj(js);
   
-  js_set_slot(js, wrapper_obj, SLOT_DATA, promise);
-  js_set_slot(js, wrapper_obj, SLOT_CFUNC, js_mkfun(do_fetch_microtask));
+  js_set_slot(wrapper_obj, SLOT_DATA, promise);
+  js_set_slot(wrapper_obj, SLOT_CFUNC, js_mkfun(do_fetch_microtask));
   
   js_set(js, wrapper_obj, "url", url_val);
   js_set(js, wrapper_obj, "options", options_val);
@@ -345,14 +346,15 @@ int has_pending_fetches(void) {
   return pending_requests && utarray_len(pending_requests) > 0;
 }
 
-void fetch_gc_update_roots(GC_OP_VAL_ARGS) {
+void gc_mark_fetch(ant_t *js, gc_mark_fn mark) {
   if (!pending_requests) return;
   unsigned int len = utarray_len(pending_requests);
   for (unsigned int i = 0; i < len; i++) {
     fetch_request_t **reqp = (fetch_request_t **)utarray_eltptr(pending_requests, i);
     if (reqp && *reqp) {
-      op_val(ctx, &(*reqp)->promise);
-      op_val(ctx, &(*reqp)->headers_obj);
+      mark(js, (*reqp)->promise);
+      mark(js, (*reqp)->headers_obj);
     }
   }
 }
+

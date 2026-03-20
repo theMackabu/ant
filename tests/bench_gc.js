@@ -79,7 +79,6 @@ function showStats(label, s) {
   console.log(`  arenaSize: ${fmt(s.arenaSize)}`);
   console.log(`  external.buffers: ${fmt(s.external.buffers)}`);
   console.log(`  external.code: ${fmt(s.external.code)}`);
-  console.log(`  external.collections: ${fmt(s.external.collections)}`);
   console.log(`  external.total: ${fmt(s.external.total)}`);
   console.log(`  cstack: ${fmt(s.cstack)}`);
   console.log(`  rss: ${fmt(s.rss)}`);

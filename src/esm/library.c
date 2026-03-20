@@ -1,7 +1,5 @@
 #include "esm/library.h"
-
 #include "ant.h"
-#include "arena.h"
 
 #include <stdarg.h>
 #include <string.h>

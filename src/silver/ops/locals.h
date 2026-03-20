@@ -9,14 +9,16 @@ static inline void sv_op_get_local(sv_vm_t *vm, ant_value_t *lp, uint8_t *ip) {
   vm->stack[vm->sp++] = lp[idx];
 }
 
-static inline void sv_op_put_local(sv_vm_t *vm, ant_value_t *lp, uint8_t *ip) {
+static inline void sv_op_put_local(sv_vm_t *vm, ant_value_t *lp, sv_func_t *func, uint8_t *ip) {
   uint16_t idx = sv_get_u16(ip + 1);
   lp[idx] = vm->stack[--vm->sp];
+  sv_tfb_record_local(func, (int)idx, lp[idx]);
 }
 
-static inline void sv_op_set_local(sv_vm_t *vm, ant_value_t *lp, uint8_t *ip) {
+static inline void sv_op_set_local(sv_vm_t *vm, ant_value_t *lp, sv_func_t *func, uint8_t *ip) {
   uint16_t idx = sv_get_u16(ip + 1);
   lp[idx] = vm->stack[vm->sp - 1];
+  sv_tfb_record_local(func, (int)idx, lp[idx]);
 }
 
 static inline void sv_op_get_local8(sv_vm_t *vm, ant_value_t *lp, uint8_t *ip) {
@@ -24,14 +26,16 @@ static inline void sv_op_get_local8(sv_vm_t *vm, ant_value_t *lp, uint8_t *ip) {
   vm->stack[vm->sp++] = lp[idx];
 }
 
-static inline void sv_op_put_local8(sv_vm_t *vm, ant_value_t *lp, uint8_t *ip) {
+static inline void sv_op_put_local8(sv_vm_t *vm, ant_value_t *lp, sv_func_t *func, uint8_t *ip) {
   uint8_t idx = sv_get_u8(ip + 1);
   lp[idx] = vm->stack[--vm->sp];
+  sv_tfb_record_local(func, (int)idx, lp[idx]);
 }
 
-static inline void sv_op_set_local8(sv_vm_t *vm, ant_value_t *lp, uint8_t *ip) {
+static inline void sv_op_set_local8(sv_vm_t *vm, ant_value_t *lp, sv_func_t *func, uint8_t *ip) {
   uint8_t idx = sv_get_u8(ip + 1);
   lp[idx] = vm->stack[vm->sp - 1];
+  sv_tfb_record_local(func, (int)idx, lp[idx]);
 }
 
 static inline void sv_op_set_local_undef(ant_value_t *lp, uint8_t *ip) {
@@ -104,13 +108,11 @@ static inline void sv_op_rest(
 ) {
   uint16_t start = sv_get_u16(ip + 1);
   ant_value_t arr = js_mkarr(js);
-  ant_handle_t h = js_root(js, arr);
   if (frame->bp) {
     for (int i = (int)start; i < frame->argc; i++)
-      js_arr_push(js, js_deref(js, h), frame->bp[i]);
+      js_arr_push(js, arr, frame->bp[i]);
   }
-  vm->stack[vm->sp++] = js_deref(js, h);
-  js_unroot(js, h);
+  vm->stack[vm->sp++] = arr;
 }
 
 #endif

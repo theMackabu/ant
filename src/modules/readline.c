@@ -30,6 +30,7 @@
 #include "tty_ctrl.h"
 #include "silver/engine.h"
 
+#include "gc/modules.h"
 #include "modules/readline.h"
 #include "modules/process.h"
 #include "modules/symbol.h"
@@ -1266,22 +1267,6 @@ bool has_active_readline_interfaces(void) {
   return false;
 }
 
-void readline_gc_update_roots(GC_OP_VAL_ARGS) {
-  rl_interface_t *iface, *tmp;
-  HASH_ITER(hh, interfaces, iface, tmp) {
-    op_val(ctx, &iface->input_stream);
-    op_val(ctx, &iface->output_stream);
-    op_val(ctx, &iface->completer);
-    op_val(ctx, &iface->js_obj);
-    op_val(ctx, &iface->pending_question_resolve);
-    op_val(ctx, &iface->pending_question_reject);
-    
-    RLEventType *evt, *evt_tmp;
-    HASH_ITER(hh, iface->events, evt, evt_tmp) {
-      for (int i = 0; i < evt->listener_count; i++) op_val(ctx, &evt->listeners[i].listener);
-    }
-  }
-}
 
 ant_value_t readline_library(ant_t *js) {
   ant_value_t lib = js_mkobj(js);
@@ -1309,4 +1294,21 @@ ant_value_t readline_promises_library(ant_t *js) {
   js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "readline/promises", 17));
   
   return lib;
+}
+
+void gc_mark_readline(ant_t *js, gc_mark_fn mark) {
+  rl_interface_t *iface, *tmp;
+  HASH_ITER(hh, interfaces, iface, tmp) {
+    mark(js, iface->input_stream);
+    mark(js, iface->output_stream);
+    mark(js, iface->completer);
+    mark(js, iface->js_obj);
+    mark(js, iface->pending_question_resolve);
+    mark(js, iface->pending_question_reject);
+
+    RLEventType *evt, *evt_tmp;
+    HASH_ITER(hh, iface->events, evt, evt_tmp) {
+      for (int i = 0; i < evt->listener_count; i++) mark(js, evt->listeners[i].listener);
+    }
+  }
 }

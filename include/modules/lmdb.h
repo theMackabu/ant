@@ -1,7 +1,6 @@
 #ifndef ANT_LMDB_MODULE_H
 #define ANT_LMDB_MODULE_H
 
-#include "gc.h"
 #include "types.h"
 
 typedef struct lmdb_env_handle lmdb_env_handle_t;
@@ -23,7 +22,6 @@ typedef struct {
 } lmdb_js_types_t;
 
 ant_value_t lmdb_library(ant_t *js);
-void lmdb_gc_update_roots(GC_OP_VAL_ARGS);
 void cleanup_lmdb_module(void);
 
 #endif

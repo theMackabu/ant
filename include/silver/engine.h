@@ -3,6 +3,7 @@
 
 #include "silver/vm.h"
 #include "internal.h"
+#include "runtime.h"
 #include "errors.h"
 
 #include <stdbool.h>
@@ -55,8 +56,62 @@ typedef struct {
   uint8_t type;
 } sv_type_info_t;
 
+typedef struct {
+  ant_shape_t *cached_shape;
+  ant_object_t *cached_holder;
+  uint32_t cached_index;
+  uint32_t epoch;
+  uintptr_t cached_aux;
+  ant_shape_t *add_from_shape;
+  ant_shape_t *add_to_shape;
+  uint32_t add_slot;
+  uint32_t add_epoch;
+  bool cached_is_own;
+} sv_ic_entry_t;
+
+typedef struct {
+  uint32_t bc_off;
+  ant_shape_t *shared_shape;
+} sv_obj_site_cache_t;
+
+#define SV_GF_IC_AUX_WARMUP_MASK    ((uintptr_t)0xFFu)
+#define SV_GF_IC_AUX_MISS_MASK      ((uintptr_t)0xFF00u)
+#define SV_GF_IC_AUX_ACTIVE_BIT     ((uintptr_t)0x10000u)
+#define SV_GF_IC_AUX_MISS_SHIFT     8u
+
+#define SV_GF_IC_WARMUP_ENABLE      16u
+#define SV_GF_IC_MISS_DISABLE       4u
+
+static inline uint8_t sv_gf_ic_warmup(uintptr_t aux) {
+  return (uint8_t)(aux & SV_GF_IC_AUX_WARMUP_MASK);
+}
+
+static inline uint8_t sv_gf_ic_miss_streak(uintptr_t aux) {
+  return (uint8_t)((aux & SV_GF_IC_AUX_MISS_MASK) >> SV_GF_IC_AUX_MISS_SHIFT);
+}
+
+static inline bool sv_gf_ic_active(uintptr_t aux) {
+  return (aux & SV_GF_IC_AUX_ACTIVE_BIT) != 0;
+}
+
+static inline uintptr_t sv_gf_ic_pack_aux(uint8_t warmup, uint8_t miss_streak, bool active) {
+  uintptr_t aux = ((uintptr_t)warmup & SV_GF_IC_AUX_WARMUP_MASK) |
+                  ((uintptr_t)miss_streak << SV_GF_IC_AUX_MISS_SHIFT);
+  if (active) aux |= SV_GF_IC_AUX_ACTIVE_BIT;
+  return aux;
+}
+
 bool sv_lookup_srcpos(sv_func_t *func, int bc_offset, uint32_t *line, uint32_t *col);
 bool sv_lookup_srcspan(sv_func_t *func, int bc_offset, uint32_t *src_off, uint32_t *src_end);
+
+#ifdef ANT_JIT
+typedef struct {
+  uint16_t    bc_off;
+  uint8_t     miss_count;
+  uint8_t     disabled;
+  sv_func_t  *target;
+} sv_call_target_fb_t;
+#endif
 
 struct sv_func {
   uint8_t *code;
@@ -65,8 +120,20 @@ struct sv_func {
   ant_value_t *constants;
   int const_count;
   
+  struct sv_func **child_funcs;
+  int child_func_count;
+  
+  uint32_t *gc_const_slots;
+  int gc_const_slot_count;
+  
   sv_atom_t *atoms;
   int atom_count;
+
+  sv_ic_entry_t *ic_slots;
+  uint16_t ic_count;
+  
+  sv_obj_site_cache_t *obj_sites;
+  uint16_t obj_site_count;
   
   sv_upval_desc_t *upval_descs;
   int max_locals;
@@ -84,7 +151,7 @@ struct sv_func {
   bool is_generator;
   bool is_method;
   bool is_tla;
-  uint32_t gc_epoch;
+  uint64_t gc_epoch;
   
   const char *name;
   const char *filename;
@@ -105,9 +172,18 @@ struct sv_func {
   uint32_t back_edge_count;
   
   bool jit_compile_failed;
+  bool jit_compiling;
   uint32_t tfb_version;
   uint32_t jit_compiled_tfb_ver;
   uint8_t *type_feedback;
+  uint8_t *local_type_feedback;
+  uint64_t ctor_prop_samples;
+  uint64_t ctor_prop_hist[17];
+  uint8_t ctor_inobj_limit;
+  uint8_t ctor_inobj_frozen;
+
+  sv_call_target_fb_t *call_target_fb;
+  uint8_t call_target_fb_count;
 #endif
 };
 
@@ -162,8 +238,12 @@ struct sv_upvalue {
   ant_value_t *location;
   ant_value_t closed;
   struct sv_upvalue *next;
-  uint32_t gc_epoch;
+  uint64_t gc_epoch;
 };
+
+static inline sv_upvalue_t *js_upvalue_alloc(void) {
+  return (sv_upvalue_t *)fixed_arena_alloc(&rt->js->upvalue_arena);
+}
 
 #define SV_CALL_HAS_BOUND_ARGS   (1u << 0)
 #define SV_CALL_HAS_SUPER        (1u << 1)
@@ -171,17 +251,23 @@ struct sv_upvalue {
 #define SV_CALL_IS_DEFAULT_CTOR  (1u << 3)
 
 typedef struct sv_closure {
+  uint32_t call_flags;
+  int bound_argc;
   sv_func_t *func;
+  
   sv_upvalue_t **upvalues;
   ant_value_t bound_this;
   ant_value_t *bound_argv;
-  int bound_argc;
   ant_value_t bound_args;
   ant_value_t super_val;
   ant_value_t func_obj;
-  uint32_t gc_epoch;
-  uint8_t call_flags;
+  
+  uint64_t gc_epoch;
 } sv_closure_t;
+
+static inline sv_closure_t *js_closure_alloc(ant_t *js) {
+  return (sv_closure_t *)fixed_arena_alloc(&js->closure_arena);
+}
 
 static inline sv_closure_t *js_func_closure(ant_value_t func) {
   return (sv_closure_t *)(uintptr_t)vdata(func);
@@ -375,7 +461,7 @@ static inline ant_value_t *sv_prepend_bound_args(
 }
 
 static inline ant_value_t sv_call_resolve_bound(ant_t *js, sv_closure_t *closure, sv_call_ctx_t *ctx) {
-  uint8_t flags = closure->call_flags;
+  uint32_t flags = closure->call_flags;
 
   if (flags & SV_CALL_IS_ARROW) ctx->this_val = closure->bound_this;
   else if (vtype(closure->bound_this) != T_UNDEF) ctx->this_val = closure->bound_this;
@@ -463,10 +549,19 @@ static inline ant_value_t sv_call_closure(
 #define SV_TFB_STR   (1 << 1)
 #define SV_TFB_BOOL  (1 << 2)
 #define SV_TFB_OTHER (1 << 3)
+#define SV_TFB_CTOR_PROP_BINS 17
+#define SV_TFB_CTOR_PROP_OVERFLOW_FROM (SV_TFB_CTOR_PROP_BINS - 1)
+#define SV_TFB_INOBJ_SLACK_ALLOCATIONS 32
+#define SV_TFB_INOBJ_P90_NUMERATOR 9
+#define SV_TFB_INOBJ_P90_DENOMINATOR 10
 
 #define SV_JIT_THRESHOLD       100
 #define SV_JIT_RECOMPILE_DELAY 50
 #define SV_TFB_ALLOC_THRESHOLD 2
+
+#define SV_CALL_FB_MAX_SLOTS   32
+#define SV_CALL_FB_MISS_DISABLE 4
+
 #define SV_JIT_RETRY_INTERP    mkval(T_ERR, 1)
 #define SV_JIT_MAGIC           0xBA110ULL
 
@@ -527,6 +622,152 @@ if (func->type_feedback) {
 static inline void sv_tfb_ensure(sv_func_t *fn) {
   if (!fn->type_feedback && fn->code_len > 0)
     fn->type_feedback = calloc((size_t)fn->code_len, 1);
+  if (!fn->local_type_feedback && fn->max_locals > 0)
+    fn->local_type_feedback = calloc((size_t)fn->max_locals, 1);
+}
+
+static inline void sv_tfb_record_call_target(sv_func_t *func, int bc_off, sv_func_t *callee) {
+  if (!callee) return;
+  sv_call_target_fb_t *fb = func->call_target_fb;
+  int count = func->call_target_fb_count;
+  for (int i = 0; i < count; i++) {
+    if (fb[i].bc_off != (uint16_t)bc_off) continue;
+    if (fb[i].disabled) return;
+    if (fb[i].target == callee) return;
+    if (fb[i].target == NULL) { fb[i].target = callee; return; }
+    fb[i].miss_count++;
+    if (fb[i].miss_count >= SV_CALL_FB_MISS_DISABLE) {
+      fb[i].disabled = 1;
+      fb[i].target = NULL;
+    } else {
+      fb[i].target = callee;
+    }
+    func->tfb_version++;
+    return;
+  }
+  if (count >= SV_CALL_FB_MAX_SLOTS) return;
+  if (!fb) {
+    fb = calloc(SV_CALL_FB_MAX_SLOTS, sizeof(sv_call_target_fb_t));
+    if (!fb) return;
+    func->call_target_fb = fb;
+  }
+  fb[count].bc_off = (uint16_t)bc_off;
+  fb[count].target = callee;
+  fb[count].miss_count = 0;
+  fb[count].disabled = 0;
+  func->call_target_fb_count = (uint8_t)(count + 1);
+}
+
+static inline sv_func_t *sv_tfb_get_call_target(sv_func_t *func, int bc_off) {
+  sv_call_target_fb_t *fb = func->call_target_fb;
+  int count = func->call_target_fb_count;
+  for (int i = 0; i < count; i++) {
+    if (fb[i].bc_off == (uint16_t)bc_off && !fb[i].disabled)
+      return fb[i].target;
+  }
+  return NULL;
+}
+
+static inline void sv_tfb_record_local(sv_func_t *func, int idx, ant_value_t v) {
+  if (func->local_type_feedback && idx >= 0 && idx < func->max_locals) {
+    uint8_t old = func->local_type_feedback[idx];
+    uint8_t neu = old | sv_tfb_classify(v);
+    if (neu != old) { func->local_type_feedback[idx] = neu; func->tfb_version++; }
+  }
+}
+
+static inline uint8_t sv_tfb_clamp_inobj_limit(uint32_t limit) {
+  return (limit > ANT_INOBJ_MAX_SLOTS) ? (uint8_t)ANT_INOBJ_MAX_SLOTS : (uint8_t)limit;
+}
+
+static inline uint8_t sv_tfb_infer_inobj_limit(const sv_func_t *func, uint64_t samples) {
+  if (!func || samples == 0) return (uint8_t)ANT_INOBJ_MAX_SLOTS;
+
+  uint64_t target = (
+    (samples * SV_TFB_INOBJ_P90_NUMERATOR)
+    + (SV_TFB_INOBJ_P90_DENOMINATOR - 1)
+  ) / SV_TFB_INOBJ_P90_DENOMINATOR;
+  if (target == 0) target = 1;
+
+  uint64_t seen = 0;
+  for (uint32_t i = 0; i < SV_TFB_CTOR_PROP_BINS; i++) {
+    seen += func->ctor_prop_hist[i];
+    if (seen < target) continue;
+
+    if (i >= SV_TFB_CTOR_PROP_OVERFLOW_FROM) return (uint8_t)ANT_INOBJ_MAX_SLOTS;
+    return sv_tfb_clamp_inobj_limit(i);
+  }
+
+  return (uint8_t)ANT_INOBJ_MAX_SLOTS;
+}
+
+static inline void sv_tfb_record_ctor_prop_count(ant_value_t ctor_func, ant_value_t instance) {
+  if (vtype(ctor_func) != T_FUNC) return;
+  if (!is_object_type(instance)) return;
+  sv_closure_t *closure = js_func_closure(ctor_func);
+  if (!closure || !closure->func) return;
+  ant_object_t *obj = js_obj_ptr(js_as_obj(instance));
+  if (!obj) return;
+
+  sv_func_t *func = closure->func;
+  uint32_t count = obj->prop_count;
+  uint32_t bin = (count < SV_TFB_CTOR_PROP_OVERFLOW_FROM)
+    ? count
+    : SV_TFB_CTOR_PROP_OVERFLOW_FROM;
+  func->ctor_prop_hist[bin]++;
+  uint64_t samples = ++func->ctor_prop_samples;
+  if (!func->ctor_inobj_frozen && samples >= SV_TFB_INOBJ_SLACK_ALLOCATIONS) {
+    func->ctor_inobj_limit = sv_tfb_infer_inobj_limit(func, samples);
+    func->ctor_inobj_frozen = 1;
+  }
+}
+
+static inline uint8_t sv_tfb_ctor_inobj_limit(ant_value_t ctor_func) {
+  if (vtype(ctor_func) != T_FUNC) return (uint8_t)ANT_INOBJ_MAX_SLOTS;
+  sv_closure_t *closure = js_func_closure(ctor_func);
+  if (!closure || !closure->func) return (uint8_t)ANT_INOBJ_MAX_SLOTS;
+
+  sv_func_t *func = closure->func;
+  if (!func->ctor_inobj_frozen) return (uint8_t)ANT_INOBJ_MAX_SLOTS;
+  return sv_tfb_clamp_inobj_limit(func->ctor_inobj_limit);
+}
+
+static inline bool sv_tfb_ctor_inobj_limit_frozen(ant_value_t ctor_func) {
+  if (vtype(ctor_func) != T_FUNC) return false;
+  sv_closure_t *closure = js_func_closure(ctor_func);
+  if (!closure || !closure->func) return false;
+  return closure->func->ctor_inobj_frozen != 0;
+}
+
+static inline uint32_t sv_tfb_ctor_inobj_slack_remaining(ant_value_t ctor_func) {
+  if (vtype(ctor_func) != T_FUNC) return SV_TFB_INOBJ_SLACK_ALLOCATIONS;
+  sv_closure_t *closure = js_func_closure(ctor_func);
+  if (!closure || !closure->func) return SV_TFB_INOBJ_SLACK_ALLOCATIONS;
+  sv_func_t *func = closure->func;
+  if (func->ctor_inobj_frozen || func->ctor_prop_samples >= SV_TFB_INOBJ_SLACK_ALLOCATIONS) return 0;
+  return (uint32_t)(SV_TFB_INOBJ_SLACK_ALLOCATIONS - func->ctor_prop_samples);
+}
+#endif
+
+#ifndef ANT_JIT
+static inline void sv_tfb_record_ctor_prop_count(ant_value_t ctor_func, ant_value_t instance) {
+  (void)ctor_func;
+  (void)instance;
+}
+
+static inline uint8_t sv_tfb_ctor_inobj_limit(ant_value_t ctor_func) {
+  (void)ctor_func;
+  return (uint8_t)ANT_INOBJ_MAX_SLOTS;
+}
+
+static inline bool sv_tfb_ctor_inobj_limit_frozen(ant_value_t ctor_func) {
+  (void)ctor_func;
+  return false;
+}
+
+static inline uint32_t sv_tfb_ctor_inobj_slack_remaining(ant_value_t ctor_func) {
+  (void)ctor_func;
+  return 0;
 }
 #endif
 
@@ -571,7 +812,12 @@ static inline ant_value_t sv_vm_call(
   if (!is_construct_call) js->new_target = js_mkundef();
   if (out_this) *out_this = this_val;
 
-  if (!is_construct_call && vtype(func) == T_OBJ && is_proxy(js, func))
+  if (is_construct_call && vtype(func) == T_OBJ && is_proxy(func))
+    return js_proxy_construct(js, func, args, argc, sv_vm_get_new_target(vm, js));
+  if (is_construct_call && !js_is_constructor(js, func))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "not a constructor");
+
+  if (!is_construct_call && vtype(func) == T_OBJ && is_proxy(func))
     return js_proxy_apply(js, func, this_val, args, argc);
 
   if (vtype(func) == T_CFUNC) {

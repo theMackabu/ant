@@ -6,10 +6,6 @@
 
 void init_symbol_module(void);
 void js_define_species_getter(ant_t *js, ant_value_t ctor);
-void symbol_gc_update_roots(GC_OP_VAL_ARGS);
-
-ant_value_t sym_lookup_by_id(uint32_t id);
-void sym_gc_update_all(void (*op_val)(void *, ant_value_t *), void *ctx);
 
 ant_value_t maybe_call_symbol_method(
   ant_t *js, ant_value_t target, ant_value_t sym,

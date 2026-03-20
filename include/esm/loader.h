@@ -23,7 +23,6 @@ typedef struct ant_module_t {
 } ant_module_t;
 
 void js_esm_cleanup_module_cache(void);
-void js_esm_gc_roots(void (*visit)(void *ctx, ant_value_t *val), void *ctx);
 
 ant_value_t js_esm_import_sync(ant_t *js, ant_value_t specifier);
 ant_value_t js_esm_make_file_url(ant_t *js, const char *path);

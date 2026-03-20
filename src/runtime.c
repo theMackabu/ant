@@ -1,10 +1,11 @@
 #include "ant.h"
+#include "runtime.h"
+#include "descriptors.h"
+#include "silver/engine.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <runtime.h>
-#include <arena.h>
 #include <uthash.h>
 #include <argtable3.h>
 
@@ -172,10 +173,14 @@ struct ant_runtime *ant_runtime_init(ant_t *js, int argc, char **argv, struct ar
   };
 
   ant_value_t global = js_glob(js);
-  js_set(js, global, "global", global);
   js_set(js, global, "window", global);
+  js_set(js, global, "global", global);
   js_set(js, global, "globalThis", global);
   js_set(js, global, "Ant", runtime.ant_obj);
+
+  js_set_descriptor(js, js_as_obj(global), "window", 6, JS_DESC_W | JS_DESC_C);
+  js_set_descriptor(js, js_as_obj(global), "global", 6, JS_DESC_W | JS_DESC_C);
+  js_set_descriptor(js, js_as_obj(global), "globalThis", 10, JS_DESC_W | JS_DESC_C);
 
   return &runtime;
 }

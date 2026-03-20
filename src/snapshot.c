@@ -4,6 +4,7 @@
 #include "snapshot.h"
 #include "internal.h"
 #include "snapshot_data.h"
+#include "gc/objects.h"
 
 ant_value_t ant_load_snapshot(ant_t *js) {
   if (!js) return js_mkundef();
@@ -12,6 +13,7 @@ ant_value_t ant_load_snapshot(ant_t *js) {
   size_t len = ant_snapshot_source_len;
   
   ant_value_t result = js_eval_bytecode(js, src, len);
+  gc_pin_existing_objects(js);
   return vtype(result) == T_ERR ? result : js_true;
 }
 

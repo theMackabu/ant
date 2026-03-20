@@ -390,7 +390,7 @@ function showMemoryModal() {
   modal(screen, {
     id: 'memory',
     width: 40,
-    height: 24,
+    height: 10,
     title: 'Memory Usage',
     titleStyle: colors.bold + colors.yellow,
     borderStyle: box.rounded,
@@ -405,36 +405,10 @@ function showMemoryModal() {
       const mem = Ant.stats();
       let y = 1;
 
-      buf.writeStyled(ox, oy + y++, `${colors.cyan}Arena${codes.reset}`);
-      buf.writeStyled(ox, oy + y++, `  Used:        ${colors.bold}${fmt(mem.arenaUsed)}${codes.reset}`);
-      buf.writeStyled(ox, oy + y++, `  Size:        ${colors.bold}${fmt(mem.arenaSize)}${codes.reset}`);
-      y++;
-
-      if (mem.external) {
-        buf.writeStyled(ox, oy + y++, `${colors.cyan}External${codes.reset}`);
-        buf.writeStyled(ox, oy + y++, `  Buffers:     ${colors.bold}${fmt(mem.external.buffers)}${codes.reset}`);
-        buf.writeStyled(ox, oy + y++, `  Code:        ${colors.bold}${fmt(mem.external.code)}${codes.reset}`);
-        buf.writeStyled(ox, oy + y++, `  Collections: ${colors.bold}${fmt(mem.external.collections)}${codes.reset}`);
-        buf.writeStyled(ox, oy + y++, `  Total:       ${colors.bold}${fmt(mem.external.total)}${codes.reset}`);
-        y++;
-      }
-
-      if (mem.intern) {
-        buf.writeStyled(ox, oy + y++, `${colors.cyan}Intern Table${codes.reset}`);
-        buf.writeStyled(ox, oy + y++, `  Strings:     ${colors.bold}${mem.intern.count}${codes.reset}`);
-        buf.writeStyled(ox, oy + y++, `  Bytes:       ${colors.bold}${fmt(mem.intern.bytes)}${codes.reset}`);
-        y++;
-      }
-
-      buf.writeStyled(ox, oy + y++, `${colors.cyan}Process${codes.reset}`);
-      buf.writeStyled(ox, oy + y++, `  RSS:         ${colors.bold}${fmt(mem.rss)}${codes.reset}`);
-      if (mem.virtualSize) {
-        buf.writeStyled(ox, oy + y++, `  Virtual:     ${colors.bold}${fmt(mem.virtualSize)}${codes.reset}`);
-      }
-      y++;
-
-      buf.writeStyled(ox, oy + y++, `${colors.cyan}C Stack${codes.reset}`);
-      buf.writeStyled(ox, oy + y++, `  Max:         ${colors.bold}${fmt(mem.cstack)}${codes.reset}`);
+      buf.writeStyled(ox, oy + y++, `  Pools:    ${colors.bold}${fmt(mem.pools.totalUsed)} / ${fmt(mem.pools.totalCapacity)}${codes.reset}`);
+      buf.writeStyled(ox, oy + y++, `  Alloc:    ${colors.bold}${fmt(mem.alloc.total)}${codes.reset}  (${mem.alloc.objectCount} objects)`);
+      buf.writeStyled(ox, oy + y++, `  External: ${colors.bold}${fmt(mem.external.total)}${codes.reset}`);
+      buf.writeStyled(ox, oy + y++, `  RSS:      ${colors.bold}${fmt(mem.rss)}${codes.reset}`);
       y++;
 
       buf.writeStyled(ox, oy + y, colors.dim + '  m/Esc: Close' + codes.reset);

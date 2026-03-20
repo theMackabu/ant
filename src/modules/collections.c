@@ -3,9 +3,7 @@
 #include <stdio.h>
 
 #include "ant.h"
-#include "gc.h"
 #include "errors.h"
-#include "arena.h"
 #include "runtime.h"
 #include "internal.h"
 #include "silver/engine.h"
@@ -14,83 +12,51 @@
 #include "modules/collections.h"
 #include "modules/symbol.h"
 
-static map_registry_entry_t *map_registry = NULL;
-static size_t map_registry_count = 0;
-static size_t map_registry_cap = 0;
-
-static set_registry_entry_t *set_registry = NULL;
-static size_t set_registry_count = 0;
-static size_t set_registry_cap = 0;
-
-static void register_map(map_entry_t **head, ant_offset_t obj_offset) {
-  if (!head) return;
-  if (map_registry_count >= map_registry_cap) {
-    size_t new_cap = map_registry_cap ? map_registry_cap * 2 : 64;
-    map_registry_entry_t *new_reg = realloc(map_registry, new_cap * sizeof(map_registry_entry_t));
-    if (!new_reg) return;
-    map_registry = new_reg;
-    map_registry_cap = new_cap;
-  }
-  map_registry[map_registry_count].head = head;
-  map_registry[map_registry_count].obj_offset = obj_offset;
-  map_registry_count++;
-}
-
-static void register_set(set_entry_t **head, ant_offset_t obj_offset) {
-  if (!head) return;
-  if (set_registry_count >= set_registry_cap) {
-    size_t new_cap = set_registry_cap ? set_registry_cap * 2 : 64;
-    set_registry_entry_t *new_reg = realloc(set_registry, new_cap * sizeof(set_registry_entry_t));
-    if (!new_reg) return;
-    set_registry = new_reg;
-    set_registry_cap = new_cap;
-  }
-  set_registry[set_registry_count].head = head;
-  set_registry[set_registry_count].obj_offset = obj_offset;
-  set_registry_count++;
-}
-
 static const char *ant_value_to_key(ant_t *js, ant_value_t val) {
   if (vtype(val) == T_STR) {
     ant_offset_t len;
     ant_offset_t off = vstr(js, val, &len);
-    return (char *)&js->mem[off];
+    return (char *)(uintptr_t)(off);
   }
   return js_str(js, val);
 }
 
 map_entry_t **get_map_from_obj(ant_t *js, ant_value_t obj) {
-  ant_value_t map_val = js_get_slot(js, obj, SLOT_MAP);
-  if (vtype(map_val) == T_UNDEF) return NULL;
-  return (map_entry_t **)(uintptr_t)js_getnum(map_val);
+  (void)js;
+  ant_object_t *ptr = js_obj_ptr(obj);
+  if (!ptr || ptr->type_tag != T_MAP) return NULL;
+  return (map_entry_t **)(uintptr_t)js_getnum(ptr->u.data.value);
 }
 
 set_entry_t **get_set_from_obj(ant_t *js, ant_value_t obj) {
-  ant_value_t set_val = js_get_slot(js, obj, SLOT_SET);
-  if (vtype(set_val) == T_UNDEF) return NULL;
-  return (set_entry_t **)(uintptr_t)js_getnum(set_val);
+  (void)js;
+  ant_object_t *ptr = js_obj_ptr(obj);
+  if (!ptr || ptr->type_tag != T_SET) return NULL;
+  return (set_entry_t **)(uintptr_t)js_getnum(ptr->u.data.value);
 }
 
 static weakmap_entry_t **get_weakmap_from_obj(ant_t *js, ant_value_t obj) {
-  ant_value_t wm_val = js_get_slot(js, obj, SLOT_DATA);
-  if (vtype(wm_val) == T_UNDEF) return NULL;
-  return (weakmap_entry_t **)(uintptr_t)js_getnum(wm_val);
+  (void)js;
+  ant_object_t *ptr = js_obj_ptr(obj);
+  if (!ptr || ptr->type_tag != T_WEAKMAP) return NULL;
+  return (weakmap_entry_t **)(uintptr_t)js_getnum(ptr->u.data.value);
 }
 
 static weakset_entry_t **get_weakset_from_obj(ant_t *js, ant_value_t obj) {
-  ant_value_t ws_val = js_get_slot(js, obj, SLOT_DATA);
-  if (vtype(ws_val) == T_UNDEF) return NULL;
-  return (weakset_entry_t **)(uintptr_t)js_getnum(ws_val);
+  (void)js;
+  ant_object_t *ptr = js_obj_ptr(obj);
+  if (!ptr || ptr->type_tag != T_WEAKSET) return NULL;
+  return (weakset_entry_t **)(uintptr_t)js_getnum(ptr->u.data.value);
 }
 
 static map_iterator_state_t *get_map_iter_state(ant_t *js, ant_value_t obj) {
-  ant_value_t state_val = js_get_slot(js, obj, SLOT_ITER_STATE);
+  ant_value_t state_val = js_get_slot(obj, SLOT_ITER_STATE);
   if (vtype(state_val) == T_UNDEF) return NULL;
   return (map_iterator_state_t *)(uintptr_t)js_getnum(state_val);
 }
 
 static set_iterator_state_t *get_set_iter_state(ant_t *js, ant_value_t obj) {
-  ant_value_t state_val = js_get_slot(js, obj, SLOT_ITER_STATE);
+  ant_value_t state_val = js_get_slot(obj, SLOT_ITER_STATE);
   if (vtype(state_val) == T_UNDEF) return NULL;
   return (set_iterator_state_t *)(uintptr_t)js_getnum(state_val);
 }
@@ -266,7 +232,7 @@ static ant_value_t create_map_iterator(ant_t *js, ant_value_t map_obj, iter_type
   state->type = type;
   
   ant_value_t iter = js_mkobj(js);
-  js_set_slot(js, iter, SLOT_ITER_STATE, ANT_PTR(state));
+  js_set_slot(iter, SLOT_ITER_STATE, ANT_PTR(state));
   js_set(js, iter, "next", js_mkfun(map_iter_next));
   
   js_set_sym(js, iter, get_iterator_sym(), js_mkfun(sym_this_cb));
@@ -339,7 +305,7 @@ static ant_value_t create_set_iterator(ant_t *js, ant_value_t set_obj, iter_type
   state->type = type;
   
   ant_value_t iter = js_mkobj(js);
-  js_set_slot(js, iter, SLOT_ITER_STATE, ANT_PTR(state));
+  js_set_slot(iter, SLOT_ITER_STATE, ANT_PTR(state));
   js_set(js, iter, "next", js_mkfun(set_iter_next));
   
   js_set_sym(js, iter, get_iterator_sym(), js_mkfun(sym_this_cb));
@@ -611,8 +577,8 @@ static ant_value_t builtin_WeakRef(ant_t *js, ant_value_t *args, int nargs) {
   
   ant_value_t wr_obj = js_mkobj(js);
   ant_value_t wr_proto = js_get_ctor_proto(js, "WeakRef", 7);
-  if (is_special_object(wr_proto)) js_set_proto(js, wr_obj, wr_proto);
-  js_set_slot(js, wr_obj, SLOT_DATA, args[0]);
+  if (is_special_object(wr_proto)) js_set_proto_init(wr_obj, wr_proto);
+  js_set_slot(wr_obj, SLOT_DATA, args[0]);
   
   return wr_obj;
 }
@@ -622,7 +588,7 @@ static ant_value_t weakref_deref(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_val = js->this_val;
   if (vtype(this_val) != T_OBJ) return js_mkundef();
   
-  ant_value_t target = js_get_slot(js, this_val, SLOT_DATA);
+  ant_value_t target = js_get_slot(this_val, SLOT_DATA);
   if (vtype(target) != T_OBJ) return js_mkundef();
   
   return target;
@@ -635,10 +601,10 @@ static ant_value_t builtin_FinalizationRegistry(ant_t *js, ant_value_t *args, in
   
   ant_value_t fr_obj = js_mkobj(js);
   ant_value_t fr_proto = js_get_ctor_proto(js, "FinalizationRegistry", 20);
-  if (is_special_object(fr_proto)) js_set_proto(js, fr_obj, fr_proto);
+  if (is_special_object(fr_proto)) js_set_proto_init(fr_obj, fr_proto);
   
-  js_set_slot(js, fr_obj, SLOT_MAP, mkarr(js));
-  js_set_slot(js, fr_obj, SLOT_DATA, args[0]);
+  js_set_slot(fr_obj, SLOT_MAP, mkarr(js));
+  js_set_slot(fr_obj, SLOT_DATA, args[0]);
   
   return fr_obj;
 }
@@ -659,7 +625,7 @@ static ant_value_t finreg_register(ant_t *js, ant_value_t *args, int nargs) {
     return js_mkerr(js, "target and held value must not be the same");
   }
   
-  ant_value_t registrations = js_get_slot(js, this_val, SLOT_MAP);
+  ant_value_t registrations = js_get_slot(this_val, SLOT_MAP);
   if (vtype(registrations) != T_ARR) return js_mkundef();
   
   ant_value_t entry = mkarr(js);
@@ -690,7 +656,7 @@ static ant_value_t finreg_unregister(ant_t *js, ant_value_t *args, int nargs) {
   }
   
   ant_value_t token = args[0];
-  ant_value_t registrations = js_get_slot(js, this_val, SLOT_MAP);
+  ant_value_t registrations = js_get_slot(this_val, SLOT_MAP);
   if (vtype(registrations) != T_ARR) return js_false;
   
   ant_offset_t len = js_arr_len(js, registrations);
@@ -721,16 +687,15 @@ static ant_value_t map_groupBy(ant_t *js, ant_value_t *args, int nargs) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "callback is not a function");
   
   ant_value_t map_obj = js_mkobj(js);
-  ant_offset_t obj_offset = (ant_offset_t)vdata(map_obj);
+  js_obj_ptr(map_obj)->type_tag = T_MAP;
   
   ant_value_t map_proto = js_get_ctor_proto(js, "Map", 3);
-  if (is_special_object(map_proto)) js_set_proto(js, map_obj, map_proto);
+  if (is_special_object(map_proto)) js_set_proto_init(map_obj, map_proto);
   
   map_entry_t **map_head = ant_calloc(sizeof(map_entry_t *));
   if (!map_head) return js_mkerr(js, "out of memory");
   *map_head = NULL;
-  register_map(map_head, obj_offset);
-  js_set_slot(js, map_obj, SLOT_MAP, ANT_PTR(map_head));
+  js_set_slot(map_obj, SLOT_DATA, ANT_PTR(map_head));
   
   ant_offset_t len = js_arr_len(js, items);
   for (ant_offset_t i = 0; i < len; i++) {
@@ -768,22 +733,21 @@ static ant_value_t builtin_Map(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t map_obj = js->this_val;
   if (vtype(map_obj) != T_OBJ) map_obj = js_mkobj(js);
   if (is_err(map_obj)) return map_obj;
-  ant_offset_t obj_offset = (ant_offset_t)vdata(map_obj);
+  js_obj_ptr(map_obj)->type_tag = T_MAP;
   
   ant_value_t map_proto = js_get_ctor_proto(js, "Map", 3);
   ant_value_t instance_proto = js_instance_proto_from_new_target(js, map_proto);
   
-  if (is_special_object(instance_proto)) js_set_proto(js, map_obj, instance_proto);
+  if (is_special_object(instance_proto)) js_set_proto_init(map_obj, instance_proto);
   
   map_entry_t **map_head = ant_calloc(sizeof(map_entry_t *));
   if (!map_head) return js_mkerr(js, "out of memory");
   *map_head = NULL;
   
-  register_map(map_head, obj_offset);
   if (vtype(js->new_target) == T_FUNC || vtype(js->new_target) == T_CFUNC) {
-    js_set_slot(js, map_obj, SLOT_CTOR, js->new_target);
+    js_set_slot(map_obj, SLOT_CTOR, js->new_target);
   }
-  js_set_slot(js, map_obj, SLOT_MAP, ANT_PTR(map_head));
+  js_set_slot(map_obj, SLOT_DATA, ANT_PTR(map_head));
   
   if (nargs == 0 || vtype(args[0]) != T_ARR) return map_obj;
   
@@ -826,22 +790,21 @@ static ant_value_t builtin_Set(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t set_obj = js->this_val;
   if (vtype(set_obj) != T_OBJ) set_obj = js_mkobj(js);
   if (is_err(set_obj)) return set_obj;
-  ant_offset_t obj_offset = (ant_offset_t)vdata(set_obj);
+  js_obj_ptr(set_obj)->type_tag = T_SET;
   
   ant_value_t set_proto = js_get_ctor_proto(js, "Set", 3);
   ant_value_t instance_proto = js_instance_proto_from_new_target(js, set_proto);
-  
-  if (is_special_object(instance_proto)) js_set_proto(js, set_obj, instance_proto);
+
+  if (is_special_object(instance_proto)) js_set_proto_init(set_obj, instance_proto);
   
   set_entry_t **set_head = ant_calloc(sizeof(set_entry_t *));
   if (!set_head) return js_mkerr(js, "out of memory");
   *set_head = NULL;
   
-  register_set(set_head, obj_offset);
   if (vtype(js->new_target) == T_FUNC || vtype(js->new_target) == T_CFUNC) {
-    js_set_slot(js, set_obj, SLOT_CTOR, js->new_target);
+    js_set_slot(set_obj, SLOT_CTOR, js->new_target);
   }
-  js_set_slot(js, set_obj, SLOT_SET, ANT_PTR(set_head));
+  js_set_slot(set_obj, SLOT_DATA, ANT_PTR(set_head));
   
   if (nargs == 0 || vtype(args[0]) != T_ARR) return set_obj;
   
@@ -874,20 +837,21 @@ static ant_value_t builtin_WeakMap(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t wm_obj = js->this_val;
   if (vtype(wm_obj) != T_OBJ) wm_obj = js_mkobj(js);
   if (is_err(wm_obj)) return wm_obj;
+  js_obj_ptr(wm_obj)->type_tag = T_WEAKMAP;
   
   ant_value_t wm_proto = js_get_ctor_proto(js, "WeakMap", 7);
   ant_value_t instance_proto = js_instance_proto_from_new_target(js, wm_proto);
-  
-  if (is_special_object(instance_proto)) js_set_proto(js, wm_obj, instance_proto);
+
+  if (is_special_object(instance_proto)) js_set_proto_init(wm_obj, instance_proto);
   
   weakmap_entry_t **wm_head = ant_calloc(sizeof(weakmap_entry_t *));
   if (!wm_head) return js_mkerr(js, "out of memory");
   *wm_head = NULL;
   
   if (vtype(js->new_target) == T_FUNC || vtype(js->new_target) == T_CFUNC) {
-    js_set_slot(js, wm_obj, SLOT_CTOR, js->new_target);
+    js_set_slot(wm_obj, SLOT_CTOR, js->new_target);
   }
-  js_set_slot(js, wm_obj, SLOT_DATA, ANT_PTR(wm_head));
+  js_set_slot(wm_obj, SLOT_DATA, ANT_PTR(wm_head));
   
   if (nargs == 0 || vtype(args[0]) != T_ARR) return wm_obj;
   
@@ -931,20 +895,21 @@ static ant_value_t builtin_WeakSet(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t ws_obj = js->this_val;
   if (vtype(ws_obj) != T_OBJ) ws_obj = js_mkobj(js);
   if (is_err(ws_obj)) return ws_obj;
+  js_obj_ptr(ws_obj)->type_tag = T_WEAKSET;
   
   ant_value_t ws_proto = js_get_ctor_proto(js, "WeakSet", 7);
   ant_value_t instance_proto = js_instance_proto_from_new_target(js, ws_proto);
-  
-  if (is_special_object(instance_proto)) js_set_proto(js, ws_obj, instance_proto);
+
+  if (is_special_object(instance_proto)) js_set_proto_init(ws_obj, instance_proto);
   
   weakset_entry_t **ws_head = ant_calloc(sizeof(weakset_entry_t *));
   if (!ws_head) return js_mkerr(js, "out of memory");
   *ws_head = NULL;
   
   if (vtype(js->new_target) == T_FUNC || vtype(js->new_target) == T_CFUNC) {
-    js_set_slot(js, ws_obj, SLOT_CTOR, js->new_target);
+    js_set_slot(ws_obj, SLOT_CTOR, js->new_target);
   }
-  js_set_slot(js, ws_obj, SLOT_DATA, ANT_PTR(ws_head));
+  js_set_slot(ws_obj, SLOT_DATA, ANT_PTR(ws_head));
   
   if (nargs == 0 || vtype(args[0]) != T_ARR) return ws_obj;
   
@@ -979,7 +944,7 @@ void init_collections_module(void) {
   ant_value_t tag_sym = get_toStringTag_sym();
   
   ant_value_t map_proto = js_mkobj(js);
-  js_set_proto(js, map_proto, object_proto);
+  js_set_proto_init(map_proto, object_proto);
   js_set(js, map_proto, "set", js_mkfun(map_set));
   js_set(js, map_proto, "get", js_mkfun(map_get));
   js_set(js, map_proto, "has", js_mkfun(map_has));
@@ -994,7 +959,7 @@ void init_collections_module(void) {
   js_set_sym(js, map_proto, tag_sym, js_mkstr(js, "Map", 3));
   
   ant_value_t map_ctor = js_mkobj(js);
-  js_set_slot(js, map_ctor, SLOT_CFUNC, js_mkfun(builtin_Map));
+  js_set_slot(map_ctor, SLOT_CFUNC, js_mkfun(builtin_Map));
   js_mkprop_fast(js, map_ctor, "prototype", 9, map_proto);
   js_mkprop_fast(js, map_ctor, "name", 4, ANT_STRING("Map"));
   js_set_descriptor(js, map_ctor, "name", 4, 0);
@@ -1003,7 +968,7 @@ void init_collections_module(void) {
   js_set(js, glob, "Map", js_obj_to_func(map_ctor));
   
   ant_value_t set_proto = js_mkobj(js);
-  js_set_proto(js, set_proto, object_proto);
+  js_set_proto_init(set_proto, object_proto);
   js_set(js, set_proto, "add", js_mkfun(set_add));
   js_set(js, set_proto, "has", js_mkfun(set_has));
   js_set(js, set_proto, "delete", js_mkfun(set_delete));
@@ -1017,7 +982,7 @@ void init_collections_module(void) {
   js_set_sym(js, set_proto, tag_sym, js_mkstr(js, "Set", 3));
   
   ant_value_t set_ctor = js_mkobj(js);
-  js_set_slot(js, set_ctor, SLOT_CFUNC, js_mkfun(builtin_Set));
+  js_set_slot(set_ctor, SLOT_CFUNC, js_mkfun(builtin_Set));
   js_mkprop_fast(js, set_ctor, "prototype", 9, set_proto);
   js_mkprop_fast(js, set_ctor, "name", 4, ANT_STRING("Set"));
   js_set_descriptor(js, set_ctor, "name", 4, 0);
@@ -1025,7 +990,7 @@ void init_collections_module(void) {
   js_set(js, glob, "Set", js_obj_to_func(set_ctor));
   
   ant_value_t weakmap_proto = js_mkobj(js);
-  js_set_proto(js, weakmap_proto, object_proto);
+  js_set_proto_init(weakmap_proto, object_proto);
   js_set(js, weakmap_proto, "set", js_mkfun(weakmap_set));
   js_set(js, weakmap_proto, "get", js_mkfun(weakmap_get));
   js_set(js, weakmap_proto, "has", js_mkfun(weakmap_has));
@@ -1033,191 +998,48 @@ void init_collections_module(void) {
   js_set_sym(js, weakmap_proto, tag_sym, js_mkstr(js, "WeakMap", 7));
   
   ant_value_t weakmap_ctor = js_mkobj(js);
-  js_set_slot(js, weakmap_ctor, SLOT_CFUNC, js_mkfun(builtin_WeakMap));
+  js_set_slot(weakmap_ctor, SLOT_CFUNC, js_mkfun(builtin_WeakMap));
   js_mkprop_fast(js, weakmap_ctor, "prototype", 9, weakmap_proto);
   js_mkprop_fast(js, weakmap_ctor, "name", 4, ANT_STRING("WeakMap"));
   js_set_descriptor(js, weakmap_ctor, "name", 4, 0);
   js_set(js, glob, "WeakMap", js_obj_to_func(weakmap_ctor));
   
   ant_value_t weakset_proto = js_mkobj(js);
-  js_set_proto(js, weakset_proto, object_proto);
+  js_set_proto_init(weakset_proto, object_proto);
   js_set(js, weakset_proto, "add", js_mkfun(weakset_add));
   js_set(js, weakset_proto, "has", js_mkfun(weakset_has));
   js_set(js, weakset_proto, "delete", js_mkfun(weakset_delete));
   js_set_sym(js, weakset_proto, tag_sym, js_mkstr(js, "WeakSet", 7));
   
   ant_value_t weakset_ctor = js_mkobj(js);
-  js_set_slot(js, weakset_ctor, SLOT_CFUNC, js_mkfun(builtin_WeakSet));
+  js_set_slot(weakset_ctor, SLOT_CFUNC, js_mkfun(builtin_WeakSet));
   js_mkprop_fast(js, weakset_ctor, "prototype", 9, weakset_proto);
   js_mkprop_fast(js, weakset_ctor, "name", 4, ANT_STRING("WeakSet"));
   js_set_descriptor(js, weakset_ctor, "name", 4, 0);
   js_set(js, glob, "WeakSet", js_obj_to_func(weakset_ctor));
   
   ant_value_t weakref_proto = js_mkobj(js);
-  js_set_proto(js, weakref_proto, object_proto);
+  js_set_proto_init(weakref_proto, object_proto);
   js_set(js, weakref_proto, "deref", js_mkfun(weakref_deref));
   js_set_sym(js, weakref_proto, tag_sym, js_mkstr(js, "WeakRef", 7));
   
   ant_value_t weakref_ctor = js_mkobj(js);
-  js_set_slot(js, weakref_ctor, SLOT_CFUNC, js_mkfun(builtin_WeakRef));
+  js_set_slot(weakref_ctor, SLOT_CFUNC, js_mkfun(builtin_WeakRef));
   js_mkprop_fast(js, weakref_ctor, "prototype", 9, weakref_proto);
   js_mkprop_fast(js, weakref_ctor, "name", 4, ANT_STRING("WeakRef"));
   js_set_descriptor(js, weakref_ctor, "name", 4, 0);
   js_set(js, glob, "WeakRef", js_obj_to_func(weakref_ctor));
   
   ant_value_t finreg_proto = js_mkobj(js);
-  js_set_proto(js, finreg_proto, object_proto);
+  js_set_proto_init(finreg_proto, object_proto);
   js_set(js, finreg_proto, "register", js_mkfun(finreg_register));
   js_set(js, finreg_proto, "unregister", js_mkfun(finreg_unregister));
   js_set_sym(js, finreg_proto, tag_sym, js_mkstr(js, "FinalizationRegistry", 20));
   
   ant_value_t finreg_ctor = js_mkobj(js);
-  js_set_slot(js, finreg_ctor, SLOT_CFUNC, js_mkfun(builtin_FinalizationRegistry));
+  js_set_slot(finreg_ctor, SLOT_CFUNC, js_mkfun(builtin_FinalizationRegistry));
   js_mkprop_fast(js, finreg_ctor, "prototype", 9, finreg_proto);
   js_mkprop_fast(js, finreg_ctor, "name", 4, ANT_STRING("FinalizationRegistry"));
   js_set_descriptor(js, finreg_ctor, "name", 4, 0);
   js_set(js, glob, "FinalizationRegistry", js_obj_to_func(finreg_ctor));
 }
-
-void collections_gc_reserve_roots(void (*op_val)(void *, ant_value_t *), void *ctx) {
-  for (size_t i = 0; i < map_registry_count; i++) {
-    ant_value_t map_obj = mkval(T_OBJ, map_registry[i].obj_offset);
-    op_val(ctx, &map_obj); map_entry_t **head = map_registry[i].head;
-    if (head && *head) {
-      map_entry_t *entry, *tmp;
-      HASH_ITER(hh, *head, entry, tmp) op_val(ctx, &entry->value);
-    }
-  }
-  
-  for (size_t i = 0; i < set_registry_count; i++) {
-    ant_value_t set_obj = mkval(T_OBJ, set_registry[i].obj_offset);
-    op_val(ctx, &set_obj); set_entry_t **head = set_registry[i].head;
-    if (head && *head) {
-      set_entry_t *entry, *tmp;
-      HASH_ITER(hh, *head, entry, tmp) op_val(ctx, &entry->value);
-    }
-  }
-}
-
-static void free_map_entries(map_entry_t **head) {
-  if (!head || !*head) return;
-  map_entry_t *entry, *tmp;
-  HASH_ITER(hh, *head, entry, tmp) {
-    HASH_DEL(*head, entry);
-    free(entry->key);
-    free(entry);
-  }
-}
-
-static void free_set_entries(set_entry_t **head) {
-  if (!head || !*head) return;
-  set_entry_t *entry, *tmp;
-  HASH_ITER(hh, *head, entry, tmp) {
-    HASH_DEL(*head, entry);
-    free(entry->key);
-    free(entry);
-  }
-}
-
-void collections_gc_update_roots(ant_offset_t (*weak_off)(void *ctx, ant_offset_t old), GC_OP_VAL_ARGS) {
-  size_t write_idx = 0;
-  
-  for (size_t i = 0; i < map_registry_count; i++) {
-    ant_offset_t old_off = map_registry[i].obj_offset;
-    ant_offset_t new_off = weak_off(ctx, old_off);
-    
-    if (new_off == (ant_offset_t)~0) {
-      free_map_entries(map_registry[i].head);
-      free(map_registry[i].head);
-      continue;
-    }
-    
-    map_registry[i].obj_offset = new_off;
-    
-    map_entry_t **head = map_registry[i].head;
-    if (head && *head) {
-      map_entry_t *entry, *tmp;
-      HASH_ITER(hh, *head, entry, tmp) op_val(ctx, &entry->value);
-    }
-    
-    if (write_idx != i) map_registry[write_idx] = map_registry[i];
-    write_idx++;
-  }
-  map_registry_count = write_idx;
-  
-  write_idx = 0;
-  for (size_t i = 0; i < set_registry_count; i++) {
-    ant_offset_t old_off = set_registry[i].obj_offset;
-    ant_offset_t new_off = weak_off(ctx, old_off);
-    
-    if (new_off == (ant_offset_t)~0) {
-      free_set_entries(set_registry[i].head);
-      free(set_registry[i].head);
-      continue;
-    }
-    
-    set_registry[i].obj_offset = new_off;
-    
-    set_entry_t **head = set_registry[i].head;
-    if (head && *head) {
-      set_entry_t *entry, *tmp;
-      HASH_ITER(hh, *head, entry, tmp) op_val(ctx, &entry->value);
-    }
-    
-    if (write_idx != i) set_registry[write_idx] = set_registry[i];
-    write_idx++;
-  }
-  set_registry_count = write_idx;
-}
-
-void cleanup_collections_module(void) {
-  for (size_t i = 0; i < map_registry_count; i++) {
-    free_map_entries(map_registry[i].head);
-    free(map_registry[i].head);
-  }
-  free(map_registry);
-  map_registry = NULL;
-  map_registry_count = 0;
-  map_registry_cap = 0;
-  
-  for (size_t i = 0; i < set_registry_count; i++) {
-    free_set_entries(set_registry[i].head);
-    free(set_registry[i].head);
-  }
-  free(set_registry);
-  set_registry = NULL;
-  set_registry_count = 0;
-  set_registry_cap = 0;
-}
-
-size_t collections_get_external_memory(void) {
-  size_t total = 0;
-  
-  total += map_registry_cap * sizeof(map_registry_entry_t);
-  for (size_t i = 0; i < map_registry_count; i++) {
-    total += sizeof(map_entry_t *);
-    if (map_registry[i].head) {
-      map_entry_t *entry, *tmp;
-      HASH_ITER(hh, *map_registry[i].head, entry, tmp) {
-        total += sizeof(map_entry_t);
-        if (entry->key) total += strlen(entry->key) + 1;
-      }
-    }
-  }
-  
-  total += set_registry_cap * sizeof(set_registry_entry_t);
-  for (size_t i = 0; i < set_registry_count; i++) {
-    total += sizeof(set_entry_t *);
-    if (set_registry[i].head) {
-      set_entry_t *entry, *tmp;
-      HASH_ITER(hh, *set_registry[i].head, entry, tmp) {
-        total += sizeof(set_entry_t);
-        if (entry->key) total += strlen(entry->key) + 1;
-      }
-    }
-  }
-  
-  return total;
-}
-
-#undef CLEANUP_REGISTRY

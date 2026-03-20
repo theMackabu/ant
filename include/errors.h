@@ -30,6 +30,7 @@ bool print_unhandled_promise_rejection(ant_t *js, ant_value_t value);
 void js_clear_error_site(ant_t *js);
 void js_print_stack_trace_vm(ant_t *js, FILE *stream);
 void js_set_error_site_from_vm_top(ant_t *js);
+void js_capture_stack(ant_t *js, ant_value_t err_obj);
 
 void js_set_error_site_from_bc(
   ant_t *js, sv_func_t *func, 
@@ -44,6 +45,7 @@ void js_set_error_site(
 
 __attribute__((format(printf, 4, 5)))
 ant_value_t js_create_error(ant_t *js, js_err_type_t err_type, ant_value_t props, const char *fmt, ...);
+ant_value_t js_capture_raw_stack(ant_t *js);
 ant_value_t js_throw(ant_t *js, ant_value_t value);
 
 #define js_mkerr(js, ...) js_create_error(js, JS_ERR_TYPE, js_mkundef(), __VA_ARGS__)

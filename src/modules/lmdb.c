@@ -1,13 +1,13 @@
 #include <compat.h> // IWYU pragma: keep
 
 #include "ant.h"
-#include "arena.h"
 #include "errors.h"
 #include "internal.h"
 #include "modules/lmdb.h"
 #include "modules/buffer.h"
 #include "modules/symbol.h"
 #include "descriptors.h"
+#include "gc/modules.h"
 
 #include <lmdb.h>
 #include <stdbool.h>
@@ -298,7 +298,7 @@ static bool js_to_mdb_val(ant_t *js, ant_value_t input, MDB_val *out) {
   }
 
   if (vtype(input) == T_OBJ) {
-    ant_value_t slot = js_get_slot(js, input, SLOT_BUFFER);
+    ant_value_t slot = js_get_slot(input, SLOT_BUFFER);
 
     if (vtype(slot) == T_TYPEDARRAY) {
       TypedArrayData *ta = (TypedArrayData *)js_gettypedarray(slot);
@@ -975,7 +975,7 @@ static void ensure_lmdb_prototypes(ant_t *js) {
   ant_value_t env_ctor_obj = js_mkobj(js);
   ant_value_t env_proto = js_mkobj(js);
   
-  js_set_proto(js, env_proto, object_proto);
+  js_set_proto_init(env_proto, object_proto);
   js_set(js, env_proto, "openDB", js_mkfun(lmdb_env_open_db));
   js_set(js, env_proto, "beginTxn", js_mkfun(lmdb_env_begin_txn));
   js_set(js, env_proto, "close", js_mkfun(lmdb_env_close_method));
@@ -983,7 +983,7 @@ static void ensure_lmdb_prototypes(ant_t *js) {
   js_set(js, env_proto, "stat", js_mkfun(lmdb_env_stat_method));
   js_set(js, env_proto, "info", js_mkfun(lmdb_env_info_method));
   js_set_sym(js, env_proto, get_toStringTag_sym(), js_mkstr(js, "LMDBEnv", 7));
-  js_set_slot(js, env_ctor_obj, SLOT_CFUNC, js_mkfun(lmdb_env_constructor));
+  js_set_slot(env_ctor_obj, SLOT_CFUNC, js_mkfun(lmdb_env_constructor));
   js_mkprop_fast(js, env_ctor_obj, "prototype", 9, env_proto);
   js_mkprop_fast(js, env_ctor_obj, "name", 4, ANT_STRING("LMDBEnv"));
   js_set_descriptor(js, env_ctor_obj, "name", 4, 0);
@@ -991,7 +991,7 @@ static void ensure_lmdb_prototypes(ant_t *js) {
   ant_value_t db_ctor_obj = js_mkobj(js);
   ant_value_t db_proto = js_mkobj(js);
   
-  js_set_proto(js, db_proto, object_proto);
+  js_set_proto_init(db_proto, object_proto);
   js_set(js, db_proto, "get", js_mkfun(lmdb_db_get));
   js_set(js, db_proto, "getBytes", js_mkfun(lmdb_db_get_bytes));
   js_set(js, db_proto, "getString", js_mkfun(lmdb_db_get_string));
@@ -1001,7 +1001,7 @@ static void ensure_lmdb_prototypes(ant_t *js) {
   js_set(js, db_proto, "drop", js_mkfun(lmdb_db_drop));
   js_set(js, db_proto, "close", js_mkfun(lmdb_db_close));
   js_set_sym(js, db_proto, get_toStringTag_sym(), js_mkstr(js, "LMDBDatabase", 12));
-  js_set_slot(js, db_ctor_obj, SLOT_CFUNC, js_mkfun(lmdb_db_constructor));
+  js_set_slot(db_ctor_obj, SLOT_CFUNC, js_mkfun(lmdb_db_constructor));
   js_mkprop_fast(js, db_ctor_obj, "prototype", 9, db_proto);
   js_mkprop_fast(js, db_ctor_obj, "name", 4, ANT_STRING("LMDBDatabase"));
   js_set_descriptor(js, db_ctor_obj, "name", 4, 0);
@@ -1009,7 +1009,7 @@ static void ensure_lmdb_prototypes(ant_t *js) {
   ant_value_t txn_ctor_obj = js_mkobj(js);
   ant_value_t txn_proto = js_mkobj(js);
   
-  js_set_proto(js, txn_proto, object_proto);
+  js_set_proto_init(txn_proto, object_proto);
   js_set(js, txn_proto, "get", js_mkfun(lmdb_txn_get));
   js_set(js, txn_proto, "getBytes", js_mkfun(lmdb_txn_get_bytes));
   js_set(js, txn_proto, "getString", js_mkfun(lmdb_txn_get_string));
@@ -1018,7 +1018,7 @@ static void ensure_lmdb_prototypes(ant_t *js) {
   js_set(js, txn_proto, "commit", js_mkfun(lmdb_txn_commit));
   js_set(js, txn_proto, "abort", js_mkfun(lmdb_txn_abort));
   js_set_sym(js, txn_proto, get_toStringTag_sym(), js_mkstr(js, "LMDBTxn", 7));
-  js_set_slot(js, txn_ctor_obj, SLOT_CFUNC, js_mkfun(lmdb_txn_constructor));
+  js_set_slot(txn_ctor_obj, SLOT_CFUNC, js_mkfun(lmdb_txn_constructor));
   js_mkprop_fast(js, txn_ctor_obj, "prototype", 9, txn_proto);
   js_mkprop_fast(js, txn_ctor_obj, "name", 4, ANT_STRING("LMDBTxn"));
   js_set_descriptor(js, txn_ctor_obj, "name", 4, 0);
@@ -1035,27 +1035,27 @@ static void ensure_lmdb_prototypes(ant_t *js) {
 static ant_value_t make_env_obj(ant_t *js, lmdb_env_handle_t *env) {
   ensure_lmdb_prototypes(js);
   ant_value_t obj = js_mkobj(js);
-  js_set_slot(js, obj, SLOT_DATA, ANT_PTR(env));
+  js_set_slot(obj, SLOT_DATA, ANT_PTR(env));
   register_env_ref(obj, env);
-  if (is_special_object(lmdb_types.env_proto)) js_set_proto(js, obj, lmdb_types.env_proto);
+  if (is_special_object(lmdb_types.env_proto)) js_set_proto_init(obj, lmdb_types.env_proto);
   return obj;
 }
 
 static ant_value_t make_db_obj(ant_t *js, lmdb_db_handle_t *db) {
   ensure_lmdb_prototypes(js);
   ant_value_t obj = js_mkobj(js);
-  js_set_slot(js, obj, SLOT_DATA, ANT_PTR(db));
+  js_set_slot(obj, SLOT_DATA, ANT_PTR(db));
   register_db_ref(obj, db);
-  if (is_special_object(lmdb_types.db_proto)) js_set_proto(js, obj, lmdb_types.db_proto);
+  if (is_special_object(lmdb_types.db_proto)) js_set_proto_init(obj, lmdb_types.db_proto);
   return obj;
 }
 
 static ant_value_t make_txn_obj(ant_t *js, lmdb_txn_handle_t *txn) {
   ensure_lmdb_prototypes(js);
   ant_value_t obj = js_mkobj(js);
-  js_set_slot(js, obj, SLOT_DATA, ANT_PTR(txn));
+  js_set_slot(obj, SLOT_DATA, ANT_PTR(txn));
   register_txn_ref(obj, txn);
-  if (is_special_object(lmdb_types.txn_proto)) js_set_proto(js, obj, lmdb_types.txn_proto);
+  if (is_special_object(lmdb_types.txn_proto)) js_set_proto_init(obj, lmdb_types.txn_proto);
   return obj;
 }
 
@@ -1096,18 +1096,18 @@ ant_value_t lmdb_library(ant_t *js) {
   return lib;
 }
 
-void lmdb_gc_update_roots(GC_OP_VAL_ARGS) {
+void gc_mark_lmdb(ant_t *js, gc_mark_fn mark) {
   if (lmdb_types.ready) {
-    op_val(ctx, &lmdb_types.env_ctor);
-    op_val(ctx, &lmdb_types.db_ctor);
-    op_val(ctx, &lmdb_types.txn_ctor);
-    op_val(ctx, &lmdb_types.env_proto);
-    op_val(ctx, &lmdb_types.db_proto);
-    op_val(ctx, &lmdb_types.txn_proto);
+    mark(js, lmdb_types.env_ctor);
+    mark(js, lmdb_types.db_ctor);
+    mark(js, lmdb_types.txn_ctor);
+    mark(js, lmdb_types.env_proto);
+    mark(js, lmdb_types.db_proto);
+    mark(js, lmdb_types.txn_proto);
   }
-  for (lmdb_env_ref_t *ref = env_refs; ref; ref = ref->next) op_val(ctx, &ref->obj);
-  for (lmdb_db_ref_t *ref = db_refs; ref; ref = ref->next) op_val(ctx, &ref->obj);
-  for (lmdb_txn_ref_t *ref = txn_refs; ref; ref = ref->next) op_val(ctx, &ref->obj);
+  for (lmdb_env_ref_t *ref = env_refs; ref; ref = ref->next) mark(js, ref->obj);
+  for (lmdb_db_ref_t *ref = db_refs; ref; ref = ref->next) mark(js, ref->obj);
+  for (lmdb_txn_ref_t *ref = txn_refs; ref; ref = ref->next) mark(js, ref->obj);
 }
 
 void cleanup_lmdb_module(void) {

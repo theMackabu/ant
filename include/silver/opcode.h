@@ -74,13 +74,13 @@ OP_DEF(  PUT_UPVAL,         3,   1,   0, var_ref)
 OP_DEF(  SET_UPVAL,         3,   1,   1, var_ref)
 OP_DEF(  CLOSE_UPVAL,       3,   0,   0, loc)       /* close upvalues >= loc */
 
-OP_DEF(  GET_GLOBAL,        5,   0,   1, atom)      /* push global[atom] */
-OP_DEF(  GET_GLOBAL_UNDEF,  5,   0,   1, atom)      /* push undefined if missing */
+OP_DEF(  GET_GLOBAL,        7,   0,   1, atom)      /* push global[atom] (atom + ic_idx:u16) */
+OP_DEF(  GET_GLOBAL_UNDEF,  7,   0,   1, atom)      /* push undefined if missing (atom + ic_idx:u16) */
 OP_DEF(  PUT_GLOBAL,        5,   1,   0, atom)      /* global[atom] = TOS */
 
-OP_DEF(  GET_FIELD,         5,   1,   1, atom)      /* obj -> val */
-OP_DEF(  GET_FIELD2,        5,   1,   2, atom)      /* obj -> obj val */
-OP_DEF(  PUT_FIELD,         5,   2,   0, atom)      /* obj val -> */
+OP_DEF(  GET_FIELD,         7,   1,   1, atom)      /* obj -> val (atom + ic_idx:u16) */
+OP_DEF(  GET_FIELD2,        7,   1,   2, atom)      /* obj -> obj val (atom + ic_idx:u16) */
+OP_DEF(  PUT_FIELD,         7,   2,   0, atom)      /* obj val -> (atom + ic_idx:u16) */
 OP_DEF(  GET_ELEM,          1,   2,   1, none)      /* obj key -> val */
 OP_DEF(  GET_ELEM2,         1,   2,   2, none)      /* obj key -> obj val */
 OP_DEF(  PUT_ELEM,          1,   3,   0, none)      /* obj key val -> */
@@ -126,7 +126,7 @@ OP_DEF(  LT,                1,   2,   1, none)
 OP_DEF(  LE,                1,   2,   1, none)
 OP_DEF(  GT,                1,   2,   1, none)
 OP_DEF(  GE,                1,   2,   1, none)
-OP_DEF(  INSTANCEOF,        1,   2,   1, none)
+OP_DEF(  INSTANCEOF,        3,   2,   1, u16)       /* l r -> bool (ic_idx:u16) */
 OP_DEF(  IN,                1,   2,   1, none)
 OP_DEF(  IS_NULLISH,        1,   1,   1, none)      /* TOS is null|undefined? */
 OP_DEF(  IS_UNDEF_OR_NULL,  1,   1,   1, none)      /* same, for ?? chains */
@@ -157,6 +157,7 @@ OP_DEF(  JMP_TRUE8,         2,   1,   0, label8)    /* short conditional */
 
 OP_DEF(  CALL,              3,   1,   1, npop)      /* func args... -> result */
 OP_DEF(  CALL_METHOD,       3,   2,   1, npop)      /* this func args... -> result */
+OP_DEF(  CALL_IS_PROTO,     3,   3,   1, u16)       /* this func arg -> bool (ic_idx:u16) */
 OP_DEF(  TAIL_CALL,         3,   1,   0, npop)      /* tail-position call */
 OP_DEF(  TAIL_CALL_METHOD,  3,   2,   0, npop)
 OP_DEF(  NEW,               3,   2,   1, npop)      /* func new.target args -> obj */

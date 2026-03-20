@@ -12,6 +12,7 @@
 
 /build
 /traces
+/docs
 /todo/*
 
 /src/pkg/.zig-cache

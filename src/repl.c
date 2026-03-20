@@ -9,6 +9,7 @@
 #include "reactor.h"
 #include "runtime.h"
 #include "internal.h"
+#include "descriptors.h"
 
 #include "silver/ast.h"
 #include "silver/engine.h"
@@ -617,6 +618,9 @@ void ant_repl_run() {
   
   js_set(js, js_glob(js), "_", js_mkundef());
   js_set(js, js_glob(js), "_error", js_mkundef());
+  
+  js_set_descriptor(js, js_as_obj(js_glob(js)), "_", 1, JS_DESC_W | JS_DESC_C);
+  js_set_descriptor(js, js_as_obj(js_glob(js)), "_error", 6, JS_DESC_W | JS_DESC_C);
 
   int prev_ctrl_c_count = 0;
   char *multiline_buf = NULL;

@@ -13,7 +13,6 @@ type AntType =
   | 'closure'
   | 'promise'
   | 'generator'
-  | 'prop'
   | 'err'
   | 'typedarray'
   | 'ffi'
@@ -34,35 +33,46 @@ type AntHost =
   | 'sunos'
   | 'os/2';
 
-interface AntGcResult {
-  heapBefore: number;
-  heapAfter: number;
-  usedBefore: number;
-  usedAfter: number;
-  freed: number;
-  arenaBefore: number;
-  arenaAfter: number;
-  arenaFreed: number;
+interface AntPoolInfo {
+  used: number;
+  capacity: number;
+  blocks: number;
 }
 
-interface AntAllocResult {
-  arenaSize: number;
-  heapSize: number;
-  freeBytes: number;
-  usedBytes: number;
-  totalBytes: number;
+interface AntPoolStats {
+  rope: AntPoolInfo;
+  symbol: AntPoolInfo;
+  bigint: AntPoolInfo;
+  string: AntPoolInfo;
+  totalUsed: number;
+  totalCapacity: number;
 }
 
 interface AntExternalMemory {
   buffers: number;
   code: number;
-  collections: number;
+  total: number;
+}
+
+interface AntAllocStats {
+  objectCount: number;
+  objects: number;
+  overflow: number;
+  extraSlots: number;
+  promises: number;
+  proxies: number;
+  exotic: number;
+  arrays: number;
+  shapes: number;
+  closures: number;
+  upvalues: number;
+  propRefs: number;
   total: number;
 }
 
 interface AntStatsResult {
-  arenaUsed: number;
-  arenaSize: number;
+  pools: AntPoolStats;
+  alloc: AntAllocStats;
   external: AntExternalMemory;
   cstack: number;
   rss?: number;
@@ -70,7 +80,33 @@ interface AntStatsResult {
 }
 
 interface AntRaw {
+  readonly stack: string;
   typeof(t: unknown): number;
+  ctorPropFeedback(fn: Function): AntCtorPropFeedback;
+  gcMarkProfile(): AntGcMarkProfile;
+  gcMarkProfileEnable(enabled?: boolean): boolean;
+  gcMarkProfileReset(): void;
+}
+
+interface AntCtorPropFeedback {
+  samples: number;
+  overflowFrom: number;
+  inobjLimit: number;
+  inobjLimitFrozen: boolean;
+  slackRemaining: number;
+  bins: number[];
+  name?: string;
+  filename?: string;
+}
+
+interface AntGcMarkProfile {
+  enabled: boolean;
+  collections: number;
+  funcVisits: number;
+  childEdges: number;
+  constSlots: number;
+  timeNs: number;
+  timeMs: number;
 }
 
 interface HttpContext {
@@ -103,10 +139,8 @@ interface AntStatic {
 
   inspect(...args: unknown[]): void;
   typeof(t: unknown): AntType | '??';
-  raw: AntRaw;
 
-  gc(): AntGcResult;
-  alloc(): AntAllocResult;
+  raw: AntRaw;
   stats(): AntStatsResult;
 
   sleep(seconds: number): void;

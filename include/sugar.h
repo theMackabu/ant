@@ -13,9 +13,9 @@
 #define MCO_RESUME_SAVE(js_, mco_, res_) do {    \
   void *_saved_cstk = (js_)->cstk.base;          \
   size_t _saved_limit = (js_)->cstk.limit;       \
-  volatile char _gc_stk_mark;                    \
+  volatile char _stk_mark;                       \
   if (!mco_running())                            \
-    (js_)->cstk.main_lo = (void *)&_gc_stk_mark; \
+    (js_)->cstk.main_lo = (void *)&_stk_mark;    \
   (res_) = mco_resume((mco_));                   \
   (js_)->cstk.base = _saved_cstk;                \
   (js_)->cstk.limit = _saved_limit;              \

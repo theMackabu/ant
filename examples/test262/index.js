@@ -189,24 +189,50 @@ function buildScreen() {
   } else if (state.mode === 'memory') {
     const mem = Ant.stats();
 
-    lines.push(`${c.cyan}Arena${c.reset}`);
-    lines.push(`  Used:     ${c.bold}${fmt(mem.arenaUsed)}${c.reset}`);
-    lines.push(`  Size:     ${c.bold}${fmt(mem.arenaSize)}${c.reset}`);
+    lines.push(`${c.cyan}Pools${c.reset}`);
+    lines.push(`  Rope:     ${c.bold}${fmt(mem.pools.rope.used)}${c.reset} / ${fmt(mem.pools.rope.capacity)}  (${mem.pools.rope.blocks} blocks)`);
+    lines.push(
+      `  String:   ${c.bold}${fmt(mem.pools.string.used)}${c.reset} / ${fmt(mem.pools.string.capacity)}  (${mem.pools.string.blocks} blocks)`
+    );
+    lines.push(
+      `  Symbol:   ${c.bold}${fmt(mem.pools.symbol.used)}${c.reset} / ${fmt(mem.pools.symbol.capacity)}  (${mem.pools.symbol.blocks} blocks)`
+    );
+    lines.push(
+      `  Bigint:   ${c.bold}${fmt(mem.pools.bigint.used)}${c.reset} / ${fmt(mem.pools.bigint.capacity)}  (${mem.pools.bigint.blocks} blocks)`
+    );
+    lines.push(`  Total:    ${c.bold}${fmt(mem.pools.totalUsed)} / ${fmt(mem.pools.totalCapacity)}${c.reset}`);
     lines.push('');
 
-    if (mem.external) {
-      lines.push(`${c.cyan}External${c.reset}`);
-      lines.push(`  Buffers:  ${c.bold}${fmt(mem.external.buffers)}${c.reset}`);
-      lines.push(`  Code:     ${c.bold}${fmt(mem.external.code)}${c.reset}`);
-      lines.push(`  Collections: ${c.bold}${fmt(mem.external.collections)}${c.reset}`);
-      lines.push(`  Total:    ${c.bold}${fmt(mem.external.total)}${c.reset}`);
-      lines.push('');
-    }
+    lines.push(`${c.cyan}Alloc${c.reset}`);
+    lines.push(`  Objects:    ${c.bold}${fmt(mem.alloc.objects)}${c.reset}  (${mem.alloc.objectCount} objects)`);
+    lines.push(`  Overflow:   ${c.bold}${fmt(mem.alloc.overflow)}${c.reset}`);
+    lines.push(`  ExtraSlots: ${c.bold}${fmt(mem.alloc.extraSlots)}${c.reset}`);
+    lines.push(`  Promises:   ${c.bold}${fmt(mem.alloc.promises)}${c.reset}`);
+    lines.push(`  Proxies:    ${c.bold}${fmt(mem.alloc.proxies)}${c.reset}`);
+    lines.push(`  Exotic:     ${c.bold}${fmt(mem.alloc.exotic)}${c.reset}`);
+    lines.push(`  Arrays:     ${c.bold}${fmt(mem.alloc.arrays)}${c.reset}`);
+    lines.push(`  Shapes:     ${c.bold}${fmt(mem.alloc.shapes)}${c.reset}`);
+    lines.push(`  Closures:   ${c.bold}${fmt(mem.alloc.closures)}${c.reset}`);
+    lines.push(`  Upvalues:   ${c.bold}${fmt(mem.alloc.upvalues)}${c.reset}`);
+    lines.push(`  PropRefs:   ${c.bold}${fmt(mem.alloc.propRefs)}${c.reset}`);
+    lines.push(`  Total:      ${c.bold}${fmt(mem.alloc.total)}${c.reset}`);
+    lines.push('');
 
-    if (mem.intern) {
-      lines.push(`${c.cyan}Intern Table${c.reset}`);
-      lines.push(`  Strings:  ${c.bold}${mem.intern.count}${c.reset}`);
-      lines.push(`  Bytes:    ${c.bold}${fmt(mem.intern.bytes)}${c.reset}`);
+    lines.push(`${c.cyan}External${c.reset}`);
+    lines.push(`  Buffers:     ${c.bold}${fmt(mem.external.buffers)}${c.reset}`);
+    lines.push(`  Code:        ${c.bold}${fmt(mem.external.code)}${c.reset}`);
+    lines.push(`  Total:       ${c.bold}${fmt(mem.external.total)}${c.reset}`);
+    lines.push('');
+
+    lines.push(`${c.cyan}Intern Table${c.reset}`);
+    lines.push(`  Strings:  ${c.bold}${mem.intern.count}${c.reset}`);
+    lines.push(`  Bytes:    ${c.bold}${fmt(mem.intern.bytes)}${c.reset}`);
+    lines.push('');
+
+    if (mem.vm) {
+      lines.push(`${c.cyan}VM${c.reset}`);
+      lines.push(`  Stack:    ${c.bold}${mem.vm.stackUsed} / ${mem.vm.stackSize}${c.reset}`);
+      lines.push(`  Frames:   ${c.bold}${mem.vm.framesUsed} / ${mem.vm.maxFrames}${c.reset}`);
       lines.push('');
     }
 
@@ -215,10 +241,7 @@ function buildScreen() {
     if (mem.virtualSize) {
       lines.push(`  Virtual:  ${c.bold}${fmt(mem.virtualSize)}${c.reset}`);
     }
-    lines.push('');
-
-    lines.push(`${c.cyan}C Stack${c.reset}`);
-    lines.push(`  Max:      ${c.bold}${fmt(mem.cstack)}${c.reset}`);
+    lines.push(`  C Stack:  ${c.bold}${fmt(mem.cstack)}${c.reset}`);
     lines.push('');
 
     while (lines.length < rows - 2) {

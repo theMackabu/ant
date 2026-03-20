@@ -9,7 +9,7 @@ static inline void sv_op_get_private(sv_vm_t *vm, ant_t *js) {
   ant_value_t key_str = coerce_to_str(js, prop);
   ant_offset_t klen;
   ant_offset_t koff = vstr(js, key_str, &klen);
-  const char *kptr = (const char *)&js->mem[koff];
+  const char *kptr = (const char *)(uintptr_t)(koff);
   vm->stack[vm->sp++] = js_getprop_fallback(js, obj, kptr);
 }
 

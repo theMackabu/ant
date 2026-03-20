@@ -151,7 +151,7 @@ static ant_value_t js_crypto_get_random_values(ant_t *js, ant_value_t *args, int
     return js_mkerr(js, "libsodium initialization failed");
   }
   
-  ant_value_t ta_data_val = js_get_slot(js, args[0], SLOT_BUFFER);
+  ant_value_t ta_data_val = js_get_slot(args[0], SLOT_BUFFER);
   TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
   if (!ta_data || !ta_data->buffer) {
     return js_mkerr(js, "argument must be a TypedArray");

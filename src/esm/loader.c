@@ -9,6 +9,7 @@
 #include "modules/napi.h"
 
 #include "errors.h"
+#include "gc/modules.h"
 #include "internal.h"
 #include "reactor.h"
 #include "utils.h"
@@ -134,7 +135,7 @@ static char *esm_try_resolve_index_with_exts(const char *dir, const char *spec) 
 }
 
 static ant_value_t esm_default_export_or_namespace(ant_t *js, ant_value_t ns) {
-  ant_value_t default_val = js_get_slot(js, ns, SLOT_DEFAULT);
+  ant_value_t default_val = js_get_slot(ns, SLOT_DEFAULT);
   return vtype(default_val) != T_UNDEF ? default_val : ns;
 }
 
@@ -888,15 +889,6 @@ void js_esm_cleanup_module_cache(void) {
   global_module_cache.count = 0;
 }
 
-void js_esm_gc_roots(void (*visit)(void *ctx, ant_value_t *val), void *ctx) {
-  if (!visit) return;
-  esm_module_t *mod = NULL, *tmp = NULL;
-  HASH_ITER(hh, global_module_cache.modules, mod, tmp) {
-    visit(ctx, &mod->namespace_obj);
-    visit(ctx, &mod->default_export);
-  }
-}
-
 static ant_value_t esm_read_file(ant_t *js, const char *path, const char *kind, esm_file_data_t *out) {
   FILE *fp = fopen(path, "rb");
   if (!fp) return js_mkerr(js, "Cannot open %s: %s", kind, path);
@@ -1125,6 +1117,7 @@ ant_value_t js_esm_import_sync_cstr_from(
   if (file_url_path) {
     free(spec_copy);
     spec_copy = file_url_path;
+    spec_len = strlen(spec_copy);
   }
 
   bool loaded = false;
@@ -1158,7 +1151,7 @@ ant_value_t js_esm_import_sync_from(ant_t *js, ant_value_t specifier, const char
 
   ant_offset_t spec_len = 0;
   ant_offset_t spec_off = vstr(js, specifier, &spec_len);
-  const char *spec_str = (const char *)&js->mem[spec_off];
+  const char *spec_str = (const char *)(uintptr_t)(spec_off);
 
   return js_esm_import_sync_cstr_from(js, spec_str, (size_t)spec_len, base_path);
 }
@@ -1178,6 +1171,14 @@ ant_value_t js_esm_make_file_url(ant_t *js, const char *path) {
   return val;
 }
 
+void gc_mark_esm(ant_t *js, gc_mark_fn mark) {
+  esm_module_t *mod = NULL, *tmp = NULL;
+  HASH_ITER(hh, global_module_cache.modules, mod, tmp) {
+    mark(js, mod->namespace_obj);
+    mark(js, mod->default_export);
+  }
+}
+
 ant_value_t js_esm_resolve_specifier(ant_t *js, ant_value_t specifier, const char *base_path) {
   if (vtype(specifier) != T_STR) {
     return js_mkerr(js, "import.meta.resolve() requires a string specifier");
@@ -1185,7 +1186,7 @@ ant_value_t js_esm_resolve_specifier(ant_t *js, ant_value_t specifier, const cha
 
   ant_offset_t spec_len = 0;
   ant_offset_t spec_off = vstr(js, specifier, &spec_len);
-  const char *spec_str = (const char *)&js->mem[spec_off];
+  const char *spec_str = (const char *)(uintptr_t)(spec_off);
   char *spec_copy = strndup(spec_str, (size_t)spec_len);
   if (!spec_copy) return js_mkerr(js, "oom");
 

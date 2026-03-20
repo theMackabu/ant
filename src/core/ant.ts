@@ -9,7 +9,6 @@ Ant.typeof = function (t) {
 
   const types = {
     T_OBJ: 'object',
-    T_PROP: 'prop',
     T_STR: 'string',
     T_ARR: 'array',
     T_FUNC: 'function',

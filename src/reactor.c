@@ -42,7 +42,8 @@ void js_reactor_set_poll_hook(reactor_poll_hook_t hook, void *data) {
 
 void js_poll_events(ant_t *js) {
   coros_this_tick = 0;
-  
+  gc_maybe(js);
+
   process_immediates(js);
   process_microtasks(js);
   
@@ -64,7 +65,6 @@ void js_poll_events(ant_t *js) {
     }
   }
   
-  if (js->needs_gc) js_gc_maybe(js);  
   if (g_poll_hook) g_poll_hook(g_poll_hook_data);
 }
 
@@ -76,7 +76,6 @@ drain:
     
     if (work & WORK_BLOCKING) uv_run(uv_default_loop(), UV_RUN_NOWAIT);
     else if ((work & WORK_ASYNC) || UV_CHECK_ALIVE) {
-      js_gc_maybe(js);
       uv_run(uv_default_loop(), UV_RUN_ONCE);
     } else break;
   } 

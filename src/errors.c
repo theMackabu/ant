@@ -1,5 +1,6 @@
 #include "errors.h"
 #include "internal.h"
+#include "descriptors.h"
 #include "silver/engine.h"
 #include "modules/io.h"
 #include "highlight.h"
@@ -29,7 +30,7 @@ static void print_error_value(ant_t *js, ant_value_t value, ant_value_t fallback
   if (!stack && vtype(fallback_stack) == T_STR) {
     ant_offset_t slen;
     ant_offset_t soff = vstr(js, fallback_stack, &slen);
-    stack = (const char *)&js->mem[soff];
+    stack = (const char *)(uintptr_t)(soff);
   }
   
   if (prefix) fputs(prefix, stderr);
@@ -207,7 +208,6 @@ static size_t append_error_value(errbuf_t *eb, ant_t *js, size_t used, ant_value
     [T_ARR] = &&l_type_default,
     [T_PROMISE] = &&l_type_default,
     [T_GENERATOR] = &&l_type_default,
-    [T_PROP] = &&l_type_default,
     [T_BIGINT] = &&l_type_default,
     [T_NUM] = &&l_type_default,
     [T_BOOL] = &&l_type_default,
@@ -227,7 +227,7 @@ static size_t append_error_value(errbuf_t *eb, ant_t *js, size_t used, ant_value
   goto l_type_default;
 
   l_type_str:
-    msg = (const char *)&js->mem[vstr(js, value, &msg_len)];
+    msg = (const char *)(uintptr_t)(vstr(js, value, &msg_len));
     goto l_type_done;
 
   l_type_obj:
@@ -436,6 +436,27 @@ static bool error_visit_frame_append_errbuf(ant_t *js, const js_vm_frame_view_t 
   );
   c->remaining = remaining_capacity(*c->n, c->eb->size);
   return c->remaining > 20;
+}
+
+ant_value_t js_capture_raw_stack(ant_t *js) {
+  errbuf_t eb = { malloc(4096), 4096 };
+  if (!eb.buf) return js_mkundef();
+  eb.buf[0] = '\0';
+
+  size_t n = 0;
+  const char *file = (js->errsite.valid && js->errsite.filename)
+    ? js->errsite.filename
+    : (js->filename ? js->filename : "<eval>");
+
+  sv_vm_t *vm = js->vm;
+  if (vm && vm->fp >= 0) {
+    error_frame_errbuf_ctx_t ctx = { &eb, &n, remaining_capacity(n, eb.size), "", "" };
+    error_visit_vm_stack_frames(js, file, error_visit_frame_append_errbuf, &ctx);
+  }
+
+  ant_value_t stack_str = js_mkstr(js, eb.buf, n);
+  free(eb.buf);
+  return stack_str;
 }
 
 static bool error_visit_frame_print_file(ant_t *js, const js_vm_frame_view_t *view, void *ctx) {
@@ -711,17 +732,18 @@ static ant_value_t js_build_stack_text(ant_t *js, js_stack_text_kind_t kind, ant
   return stack_str;
 }
 
-static void js_capture_stack(ant_t *js, ant_value_t err_obj) {
+void js_capture_stack(ant_t *js, ant_value_t err_obj) {
   ant_value_t stack_str = js_build_stack_text(js, JS_STACK_TEXT_FROM_ERROR_OBJECT, err_obj);
   if (vtype(stack_str) != T_STR) return;
 
   js_set(js, err_obj, "stack", stack_str);
+  js_set_descriptor(js, js_as_obj(err_obj), "stack", 5, JS_DESC_W | JS_DESC_C);
   js_clear_error_site(js);
 }
 
 js_err_type_t get_error_type(ant_t *js) {
   if (!js->thrown_exists) return JS_ERR_GENERIC;
-  ant_value_t err_type = js_get_slot(js, js->thrown_value, SLOT_ERR_TYPE);
+  ant_value_t err_type = js_get_slot(js->thrown_value, SLOT_ERR_TYPE);
   if (vtype(err_type) != T_NUM) return JS_ERR_GENERIC;
   return (js_err_type_t)((int)js_getnum(err_type) & ~JS_ERR_NO_STACK);
 }
@@ -745,7 +767,7 @@ ant_value_t js_create_error(ant_t *js, js_err_type_t err_type, ant_value_t props
   ant_value_t err_obj = js_mkobj(js);
   js_set(js, err_obj, "name", js_mkstr(js, err_name, err_name_len));
   js_set(js, err_obj, "message", js_mkstr(js, error_msg, msg_len));
-  js_set_slot(js, err_obj, SLOT_ERR_TYPE, js_mknum((double)err_type));
+  js_set_slot(err_obj, SLOT_ERR_TYPE, js_mknum((double)err_type));
 
   int props_type = vtype(props);
   if ((JS_TYPE_FLAG(props_type) & T_SPECIAL_OBJECT_MASK) != 0) {
@@ -754,7 +776,7 @@ ant_value_t js_create_error(ant_t *js, js_err_type_t err_type, ant_value_t props
   ant_value_t proto = js_get_ctor_proto(js, err_name, err_name_len);
   int proto_type = vtype(proto);
   if ((JS_TYPE_FLAG(proto_type) & T_SPECIAL_OBJECT_MASK) != 0) {
-    js_set_proto(js, err_obj, proto);
+    js_set_proto_init(err_obj, proto);
   }
 
   js->thrown_exists = true;
@@ -777,7 +799,7 @@ ant_value_t js_throw(ant_t *js, ant_value_t value) {
       js_clear_error_site(js);
       return mkval(T_ERR, vdata(value));
     }
-    ant_value_t slot = js_get_slot(js, value, SLOT_ERR_TYPE);
+    ant_value_t slot = js_get_slot(value, SLOT_ERR_TYPE);
     if (vtype(slot) == T_NUM && ((int)js_getnum(slot) & JS_ERR_NO_STACK)) {
       js->thrown_exists = true;
       js->thrown_value = value;
@@ -791,6 +813,7 @@ ant_value_t js_throw(ant_t *js, ant_value_t value) {
 
   if (vtype(value) == T_OBJ) {
     js_set(js, value, "stack", stack_str);
+    js_set_descriptor(js, js_as_obj(value), "stack", 5, JS_DESC_W | JS_DESC_C);
   }
 
   js->thrown_exists = true;

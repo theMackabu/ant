@@ -3,7 +3,7 @@ const builtin = @import("builtin");
 const linker = @import("linker.zig");
 
 const c = @cImport({
-  @cInclude("zlib-ng.h");
+  @cInclude("zlib.h");
 });
 
 pub const ExtractError = error{
@@ -146,7 +146,7 @@ pub const TarHeader = extern struct {
 };
 
 pub const GzipDecompressor = struct {
-  stream: c.zng_stream,
+  stream: c.z_stream,
   initialized: bool,
   allocator: std.mem.Allocator,
 
@@ -155,10 +155,10 @@ pub const GzipDecompressor = struct {
     errdefer allocator.destroy(self);
 
     self.allocator = allocator;
-    self.stream = std.mem.zeroes(c.zng_stream);
+    self.stream = std.mem.zeroes(c.z_stream);
     self.initialized = false;
 
-    const ret = c.zng_inflateInit2(&self.stream, 15 + 32);
+    const ret = c.inflateInit2(&self.stream, 15 + 32);
     if (ret != c.Z_OK) {
       allocator.destroy(self);
       return error.DecompressionFailed;
@@ -169,7 +169,7 @@ pub const GzipDecompressor = struct {
   }
 
   pub fn deinit(self: *GzipDecompressor) void {
-    if (self.initialized) _ = c.zng_inflateEnd(&self.stream);
+    if (self.initialized) _ = c.inflateEnd(&self.stream);
     self.allocator.destroy(self);
   }
 
@@ -188,7 +188,7 @@ pub const GzipDecompressor = struct {
       self.stream.next_out = &output_buf;
       self.stream.avail_out = output_buf.len;
 
-      const ret = c.zng_inflate(&self.stream, c.Z_NO_FLUSH);
+      const ret = c.inflate(&self.stream, c.Z_NO_FLUSH);
 
       if (ret == c.Z_STREAM_END) {
         const produced = output_buf.len - self.stream.avail_out;

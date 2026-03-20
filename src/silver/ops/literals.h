@@ -43,24 +43,47 @@ static inline void sv_op_global(sv_vm_t *vm, ant_t *js) {
   vm->stack[vm->sp++] = js->global;
 }
 
-static inline void sv_op_object(sv_vm_t *vm, ant_t *js) {
+static inline sv_obj_site_cache_t *sv_obj_site_for_ip(sv_func_t *func, uint8_t *ip) {
+  if (!func || !ip || !func->obj_sites || func->obj_site_count == 0) return NULL;
+  uint32_t off = (uint32_t)(ip - func->code);
+  for (uint16_t i = 0; i < func->obj_site_count; i++) {
+    if (func->obj_sites[i].bc_off == off) return &func->obj_sites[i];
+  }
+  return NULL;
+}
+
+static inline void sv_op_object(sv_vm_t *vm, ant_t *js, sv_func_t *func, uint8_t *ip) {
   ant_value_t obj = mkobj(js, 0);
+  ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
+  sv_obj_site_cache_t *site = sv_obj_site_for_ip(func, ip);
+  if (ptr && ptr->shape && site) {
+    if (site->shared_shape) {
+      if (site->shared_shape != ptr->shape) {
+        ant_shape_retain(site->shared_shape);
+        ant_shape_release(ptr->shape);
+        ptr->shape = site->shared_shape;
+      }
+      uint32_t count = ant_shape_count(ptr->shape);
+      if (count > ptr->prop_count) (void)js_obj_ensure_prop_capacity(ptr, count);
+    } else {
+      site->shared_shape = ptr->shape;
+      ant_shape_retain(site->shared_shape);
+    }
+  }
   ant_value_t proto = js_get_ctor_proto(js, "Object", 6);
-  if (vtype(proto) == T_OBJ) js_set_proto(js, obj, proto);
+  if (vtype(proto) == T_OBJ) js_set_proto_init(obj, proto);
   vm->stack[vm->sp++] = obj;
 }
 
 static inline void sv_op_array(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   uint16_t n = sv_get_u16(ip + 1);
   ant_value_t arr = js_mkarr(js);
-  ant_handle_t h = js_root(js, arr);
   for (uint16_t i = 0; i < n; i++) {
     ant_value_t val = vm->stack[vm->sp - n + i];
-    js_arr_push(js, js_deref(js, h), val);
+    js_arr_push(js, arr, val);
   }
   vm->sp -= n;
-  vm->stack[vm->sp++] = js_deref(js, h);
-  js_unroot(js, h);
+  vm->stack[vm->sp++] = arr;
 }
 
 static inline void sv_op_regexp(sv_vm_t *vm, ant_t *js) {
@@ -69,19 +92,18 @@ static inline void sv_op_regexp(sv_vm_t *vm, ant_t *js) {
   vm->sp -= 2;
 
   ant_value_t regexp_obj = mkobj(js, 0);
-  ant_handle_t h = js_root(js, regexp_obj);
 
   ant_value_t regexp_proto = js_get_ctor_proto(js, "RegExp", 6);
-  if (vtype(regexp_proto) == T_OBJ) js_set_proto(js, js_deref(js, h), regexp_proto);
+  if (vtype(regexp_proto) == T_OBJ) js_set_proto_init(regexp_obj, regexp_proto);
 
-  js_mkprop_fast(js, js_deref(js, h), "source", 6, pattern);
+  js_mkprop_fast(js, regexp_obj, "source", 6, pattern);
 
   ant_offset_t flen = 0;
   const char *fstr = "";
   if (vtype(flags) == T_STR) {
     ant_offset_t foff;
     foff = vstr(js, flags, &flen);
-    fstr = (const char *)&js->mem[foff];
+    fstr = (const char *)(uintptr_t)(foff);
   }
 
   bool g = false, i = false, m = false, s = false, y = false;
@@ -100,17 +122,15 @@ static inline void sv_op_regexp(sv_vm_t *vm, ant_t *js) {
   if (s) sorted[si++] = 's';
   if (y) sorted[si++] = 'y';
 
-  ant_value_t obj = js_deref(js, h);
-  js_mkprop_fast(js, obj, "flags", 5, js_mkstr(js, sorted, si));
-  js_mkprop_fast(js, obj, "global", 6, mkval(T_BOOL, g ? 1 : 0));
-  js_mkprop_fast(js, obj, "ignoreCase", 10, mkval(T_BOOL, i ? 1 : 0));
-  js_mkprop_fast(js, obj, "multiline", 9, mkval(T_BOOL, m ? 1 : 0));
-  js_mkprop_fast(js, obj, "dotAll", 6, mkval(T_BOOL, s ? 1 : 0));
-  js_mkprop_fast(js, obj, "sticky", 6, mkval(T_BOOL, y ? 1 : 0));
-  js_mkprop_fast(js, obj, "lastIndex", 9, tov(0));
+  js_mkprop_fast(js, regexp_obj, "flags", 5, js_mkstr(js, sorted, si));
+  js_mkprop_fast(js, regexp_obj, "global", 6, mkval(T_BOOL, g ? 1 : 0));
+  js_mkprop_fast(js, regexp_obj, "ignoreCase", 10, mkval(T_BOOL, i ? 1 : 0));
+  js_mkprop_fast(js, regexp_obj, "multiline", 9, mkval(T_BOOL, m ? 1 : 0));
+  js_mkprop_fast(js, regexp_obj, "dotAll", 6, mkval(T_BOOL, s ? 1 : 0));
+  js_mkprop_fast(js, regexp_obj, "sticky", 6, mkval(T_BOOL, y ? 1 : 0));
+  js_mkprop_fast(js, regexp_obj, "lastIndex", 9, tov(0));
 
-  vm->stack[vm->sp++] = js_deref(js, h);
-  js_unroot(js, h);
+  vm->stack[vm->sp++] = regexp_obj;
 }
 
 #endif

@@ -79,7 +79,8 @@ static ant_value_t reflect_delete_property(ant_t *js, ant_value_t *args, int nar
   char *key_str = js_getstr(js, key, NULL);
   if (!key_str) return js_false;
   
-  bool deleted = js_del(js, target, key_str);
+  ant_value_t del_result = js_delete_prop(js, target, key_str, strlen(key_str));
+  bool deleted = !is_err(del_result) && js_truthy(js, del_result);
   return js_bool(deleted);
 }
 
@@ -144,7 +145,7 @@ static ant_value_t reflect_construct(ant_t *js, ant_value_t *args, int nargs) {
   
   ant_value_t new_obj = js_mkobj(js);
   ant_value_t proto = js_get(js, new_target, "prototype");
-  if (vtype(proto) == T_OBJ) js_set_proto(js, new_obj, proto);
+  if (vtype(proto) == T_OBJ) js_set_proto_init(new_obj, proto);
 
   ant_value_t saved_new_target = js->new_target;
   js->new_target = new_target;
@@ -225,24 +226,7 @@ static ant_value_t reflect_get_own_property_descriptor(ant_t *js, ant_value_t *a
 
 static ant_value_t reflect_define_property(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 3) return js_false;
-  
-  ant_value_t target = args[0];
-  ant_value_t key = args[1];
-  ant_value_t descriptor = args[2];
-  
-  int t = vtype(target);
-  if (t != T_OBJ && t != T_FUNC) return js_false;
-  
-  if (vtype(key) != T_STR) return js_false;
-  if (!is_special_object(descriptor)) return js_false;
-  
-  char *key_str = js_getstr(js, key, NULL);
-  if (!key_str) return js_false;
-  
-  ant_value_t value = js_get(js, descriptor, "value");
-  js_set(js, target, key_str, value);
-  
-  return js_true;
+  return js_define_property(js, args[0], args[1], args[2], true);
 }
 
 static ant_value_t reflect_get_prototype_of(ant_t *js, ant_value_t *args, int nargs) {
@@ -271,34 +255,37 @@ static ant_value_t reflect_set_prototype_of(ant_t *js, ant_value_t *args, int na
   int pt = vtype(proto);
   if (pt != T_OBJ && pt != T_FUNC && pt != T_NULL) return js_false;
   
-  js_set_proto(js, target, proto);
+  js_set_proto_wb(js, target, proto);
   return js_true;
 }
 
 static ant_value_t reflect_is_extensible(ant_t *js, ant_value_t *args, int nargs) {
+  (void)js;
   if (nargs < 1) return js_false;
   
   ant_value_t target = args[0];
   int t = vtype(target);
   
   if (t != T_OBJ && t != T_FUNC) return js_false;
-  
-  if (js_get_slot(js, target, SLOT_EXTENSIBLE) == js_false) return js_false;
-  if (js_get_slot(js, target, SLOT_FROZEN) == js_true)      return js_false;
-  if (js_get_slot(js, target, SLOT_SEALED) == js_true)      return js_false;
-  
-  return js_true;
+
+  ant_object_t *obj = js_obj_ptr(js_as_obj(target));
+  if (!obj) return js_false;
+  if (obj->frozen || obj->sealed) return js_false;
+  return js_bool(obj->extensible);
 }
 
 static ant_value_t reflect_prevent_extensions(ant_t *js, ant_value_t *args, int nargs) {
+  (void)js;
   if (nargs < 1) return js_false;
   
   ant_value_t target = args[0];
   int t = vtype(target);
   
   if (t != T_OBJ && t != T_FUNC) return js_false;
-  
-  js_set_slot(js, target, SLOT_EXTENSIBLE, js_false);
+
+  ant_object_t *obj = js_obj_ptr(js_as_obj(target));
+  if (!obj) return js_false;
+  obj->extensible = 0;
   return js_true;
 }
 

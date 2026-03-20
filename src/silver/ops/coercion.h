@@ -23,7 +23,7 @@ static inline ant_value_t sv_module_export_cstr(
   if (is_err(set_res)) return set_res;
 
   if (len == 7 && memcmp(name, "default", 7) == 0)
-    js_set_slot(js, module_ns, SLOT_DEFAULT, value);
+    js_set_slot_wb(js, module_ns, SLOT_DEFAULT, value);
 
   return tov(0);
 }
@@ -37,7 +37,7 @@ static inline ant_value_t sv_op_to_object(sv_vm_t *vm, ant_t *js) {
       "Cannot convert undefined or null to object");
   ant_value_t obj = mkobj(js, 0);
   ant_value_t obj_as_obj = js_as_obj(obj);
-  js_set_slot(js, obj_as_obj, SLOT_PRIMITIVE, v);
+  js_set_slot(obj_as_obj, SLOT_PRIMITIVE, v);
   vm->stack[vm->sp - 1] = obj;
   return tov(0);
 }
@@ -80,7 +80,7 @@ static inline ant_value_t sv_op_import_sync(sv_vm_t *vm, ant_t *js) {
 static inline void sv_op_import_default(sv_vm_t *vm, ant_t *js) {
   ant_value_t ns = vm->stack[vm->sp - 1];
   if (vtype(ns) == T_OBJ) {
-    ant_value_t slot_val = js_get_slot(js, ns, SLOT_DEFAULT);
+    ant_value_t slot_val = js_get_slot(ns, SLOT_DEFAULT);
     if (vtype(slot_val) != T_UNDEF) { vm->stack[vm->sp - 1] = slot_val; return;  }
   }
 }
@@ -243,8 +243,8 @@ static inline void sv_op_with_del_var(
     }
   }
   
-  char tmp[256];
-  bool ok = js_del(js, js->global, sv_atom_cstr(a, tmp, sizeof(tmp)));
+  ant_value_t result = js_delete_prop(js, js->global, a->str, a->len);
+  bool ok = !is_err(result) && js_truthy(js, result);
   vm->stack[vm->sp++] = mkval(T_BOOL, ok);
 }
 
@@ -267,29 +267,27 @@ static inline void sv_op_special_obj(
   }
 
   ant_value_t arr = js_mkarr(js);
-  ant_handle_t h = js_root(js, arr);
   
   if (frame->bp && frame->argc > 0) {
     for (int i = 0; i < frame->argc; i++)
-      js_arr_push(js, js_deref(js, h), frame->bp[i]);
+      js_arr_push(js, arr, frame->bp[i]);
   }
 
   if (sv_frame_is_strict(frame))
-    js_set_slot(js, js_deref(js, h), SLOT_STRICT_ARGS, tov(1));
+    js_set_slot(arr, SLOT_STRICT_ARGS, tov(1));
   else if (vtype(frame->callee) == T_FUNC)
-    setprop_cstr(js, js_deref(js, h), "callee", 6, frame->callee);
+    setprop_cstr(js, arr, "callee", 6, frame->callee);
 
-  js_set_sym(js, js_deref(js, h), get_toStringTag_sym(), js_mkstr(js, "Arguments", 9));
+  js_set_sym(js, arr, get_toStringTag_sym(), js_mkstr(js, "Arguments", 9));
   ant_value_t array_proto = js_get_ctor_proto(js, "Array", 5);
   
   if (is_object_type(array_proto)) {
     ant_value_t iter_fn = js_get_sym(js, array_proto, get_iterator_sym());
     if (vtype(iter_fn) == T_FUNC || vtype(iter_fn) == T_CFUNC)
-      js_set_sym(js, js_deref(js, h), get_iterator_sym(), iter_fn);
+      js_set_sym(js, arr, get_iterator_sym(), iter_fn);
   }
 
-  vm->stack[vm->sp++] = js_deref(js, h);
-  js_unroot(js, h);
+  vm->stack[vm->sp++] = arr;
 }
 
 #endif

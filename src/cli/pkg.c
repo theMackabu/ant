@@ -1259,21 +1259,18 @@ int pkg_cmd_exec(int argc, char **argv) {
     printf("Options:\n");
     printf("  --ant    Run with ant instead of node\n\n");
     printf("Available commands:\n");
-    
+
     int count = pkg_list_bins("node_modules", NULL, NULL);
-    if (count < 0) {
-      printf("  (no binaries found - run 'ant install' first)\n");
-    } else if (count == 0) {
-      printf("  (no binaries installed)\n");
-    } else {
-      pkg_list_bins("node_modules", print_bin_name, NULL);
-    }
+    if (count < 0) printf("  (no binaries found - run 'ant install' first)\n");
+    else if (count == 0) printf("  (no binaries installed)\n");
+    else pkg_list_bins("node_modules", print_bin_name, NULL);
+    
     return EXIT_SUCCESS;
   }
-  
+
   bool use_ant = false;
   int cmd_idx = 1;
-  
+
   if (strcmp(argv[1], "--ant") == 0) {
     use_ant = true;
     cmd_idx = 2;
@@ -1282,12 +1279,10 @@ int pkg_cmd_exec(int argc, char **argv) {
       return EXIT_FAILURE;
     }
   }
-  
-  const char *cmd_name = argv[cmd_idx];
-  char bin_path[4096];
-  
+
+  const char *cmd_name = argv[cmd_idx]; char bin_path[4096];
   int path_len = pkg_get_bin_path("node_modules", cmd_name, bin_path, sizeof(bin_path));
-  
+
   if (path_len < 0) {
     const char *global_dir = get_global_dir();
     if (global_dir[0]) {
@@ -1296,31 +1291,33 @@ int pkg_cmd_exec(int argc, char **argv) {
       path_len = pkg_get_bin_path(global_nm, cmd_name, bin_path, sizeof(bin_path));
     }
   }
-  
+
   if (path_len < 0) {
     progress_t progress;
-    
-    if (!pkg_verbose) {
+    bool show_progress = !pkg_verbose;
+
+    if (show_progress) {
       char msg[256];
       snprintf(msg, sizeof(msg), "🔍 Resolving %s", cmd_name);
       progress_start(&progress, msg);
     }
-    
-    pkg_options_t opts = { 
-      .progress_callback = pkg_verbose ? NULL : progress_callback,
-      .user_data = pkg_verbose ? NULL : &progress,
-      .verbose = pkg_verbose 
+
+    pkg_options_t opts = {
+      .progress_callback = show_progress ? progress_callback : NULL,
+      .user_data = show_progress ? &progress : NULL,
+      .verbose = pkg_verbose
     };
+    
     pkg_context_t *ctx = pkg_init(&opts);
     if (!ctx) {
-      if (!pkg_verbose) progress_stop(&progress);
+      if (show_progress) progress_stop(&progress);
       fprintf(stderr, "Error: Failed to initialize package manager\n");
       return EXIT_FAILURE;
     }
-    
+
     pkg_error_t err = pkg_exec_temp(ctx, cmd_name, bin_path, sizeof(bin_path));
-    if (!pkg_verbose) progress_stop(&progress);
-    
+    if (show_progress) progress_stop(&progress);
+
     if (err != PKG_OK) {
       const char *err_msg = pkg_error_string(ctx);
       if (err_msg && err_msg[0]) {
@@ -1333,28 +1330,31 @@ int pkg_cmd_exec(int argc, char **argv) {
     }
     pkg_free(ctx);
   }
-  
-  const char *runtime = use_ant ? "ant" : "node";
+
   int arg_offset = cmd_idx + 1;
-  int new_argc = argc - arg_offset + 2;
+  int extra = use_ant ? 2 : 1;
+  int new_argc = argc - arg_offset + extra;
   
   char **exec_argv = try_oom(sizeof(char*) * (new_argc + 1));
   if (!exec_argv) {
     fprintf(stderr, "Error: out of memory\n");
     return EXIT_FAILURE;
   }
+
+  int idx = 0;
+  if (use_ant) exec_argv[idx++] = (char *)"ant";
+  exec_argv[idx++] = bin_path;
   
-  exec_argv[0] = (char *)runtime;
-  exec_argv[1] = bin_path;
-  for (int i = arg_offset; i < argc; i++) {
-    exec_argv[i - arg_offset + 2] = argv[i];
-  }
-  exec_argv[new_argc] = NULL;
-  
-  execvp(runtime, exec_argv);
-  
+  for (int i = arg_offset; i < argc; i++) exec_argv[idx++] = argv[i];
+  exec_argv[idx] = NULL;
+
+  const char *cmd = use_ant ? "ant" : bin_path;
+  execvp(cmd, exec_argv);
   free(exec_argv);
-  fprintf(stderr, "Error: failed to execute '%s %s' - is %s installed?\n", runtime, bin_path, runtime);
+
+  if (use_ant) fprintf(stderr, "Error: failed to execute 'ant %s' - is ant installed?\n", bin_path);
+  else fprintf(stderr, "Error: failed to execute '%s'\n", bin_path);
+
   return EXIT_FAILURE;
 }
 

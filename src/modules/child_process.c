@@ -28,6 +28,7 @@
 #include "internal.h"
 #include "silver/engine.h"
 
+#include "gc/modules.h"
 #include "modules/child_process.h"
 #include "modules/buffer.h"
 #include "modules/symbol.h"
@@ -60,6 +61,12 @@ typedef struct {
   int count;
   UT_hash_handle hh;
 } child_event_t;
+
+typedef enum {
+  STDIO_PIPE = 0,
+  STDIO_INHERIT,
+  STDIO_IGNORE,
+} stdio_mode_t;
 
 struct child_process_s {
   ant_t *js;
@@ -94,6 +101,7 @@ struct child_process_s {
   bool keep_alive;
   int pending_closes;
   char *cwd;
+  stdio_mode_t stdio_modes[3];
   struct child_process_s *next;
   struct child_process_s *prev;
 };
@@ -109,8 +117,9 @@ static void fprint_js_str_raw(FILE *out, ant_t *js, ant_value_t s) {
 
   ant_offset_t len = 0;
   ant_offset_t off = vstr(js, s, &len);
-  if (off > 0 && len > 0) fwrite(&js->mem[off], 1, (size_t)len, out);
-  if (len == 0 || js->mem[off + len - 1] != '\n') fputc('\n', out);
+  const char *ptr = (const char *)(uintptr_t)off;
+  if (ptr && len > 0) fwrite(ptr, 1, (size_t)len, out);
+  if (len == 0 || ptr[len - 1] != '\n') fputc('\n', out);
 }
 
 static void log_listener_error(ant_t *js, const char *event_name, ant_value_t err) {
@@ -187,11 +196,23 @@ static void emit_stream_event(
   emit_event(cp, full_name, args, nargs);
 }
 
-static ant_value_t make_uint8array_chunk(ant_t *js, const char *data, size_t len) {
+static ant_value_t make_buffer_chunk(ant_t *js, const char *data, size_t len) {
   ArrayBufferData *ab = create_array_buffer_data(len);
   if (!ab) return js_mkerr(js, "Out of memory");
   if (len > 0 && data) memcpy(ab->data, data, len);
-  return create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, len, "Uint8Array");
+  return create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, len, "Buffer");
+}
+
+static uv_pipe_t *child_pipe(child_process_t *cp, child_stream_kind_t kind) {
+switch (kind) {
+  case CHILD_STREAM_STDIN: return &cp->stdin_pipe;
+  case CHILD_STREAM_STDOUT: return &cp->stdout_pipe;
+  case CHILD_STREAM_STDERR: return &cp->stderr_pipe;
+  default: return NULL;
+}}
+
+static bool child_stdio_is_pipe(child_process_t *cp, child_stream_kind_t kind) {
+  return cp->stdio_modes[kind] == STDIO_PIPE;
 }
 
 static void add_pending_child(child_process_t *cp) {
@@ -323,18 +344,18 @@ static void on_process_exit(uv_process_t *proc, int64_t exit_status, int term_si
   cp->pending_closes++;
   uv_close((uv_handle_t *)proc, on_handle_close);
   
-  if (!cp->stdin_closed && !uv_is_closing((uv_handle_t *)&cp->stdin_pipe)) {
+  if (child_stdio_is_pipe(cp, CHILD_STREAM_STDIN) && !cp->stdin_closed && !uv_is_closing((uv_handle_t *)&cp->stdin_pipe)) {
     cp->pending_closes++;
     uv_close((uv_handle_t *)&cp->stdin_pipe, on_handle_close);
     cp->stdin_closed = true;
   }
-  if (!cp->stdout_closed && !uv_is_closing((uv_handle_t *)&cp->stdout_pipe)) {
+  if (child_stdio_is_pipe(cp, CHILD_STREAM_STDOUT) && !cp->stdout_closed && !uv_is_closing((uv_handle_t *)&cp->stdout_pipe)) {
     uv_read_stop((uv_stream_t *)&cp->stdout_pipe);
     cp->pending_closes++;
     uv_close((uv_handle_t *)&cp->stdout_pipe, on_handle_close);
     cp->stdout_closed = true;
   }
-  if (!cp->stderr_closed && !uv_is_closing((uv_handle_t *)&cp->stderr_pipe)) {
+  if (child_stdio_is_pipe(cp, CHILD_STREAM_STDERR) && !cp->stderr_closed && !uv_is_closing((uv_handle_t *)&cp->stderr_pipe)) {
     uv_read_stop((uv_stream_t *)&cp->stderr_pipe);
     cp->pending_closes++;
     uv_close((uv_handle_t *)&cp->stderr_pipe, on_handle_close);
@@ -372,7 +393,7 @@ static void on_stdout_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *b
     ant_value_t text_args[1] = { text_data };
     emit_event(cp, "stdout", text_args, 1);
 
-    ant_value_t byte_data = make_uint8array_chunk(cp->js, buf->base, (size_t)nread);
+    ant_value_t byte_data = make_buffer_chunk(cp->js, buf->base, (size_t)nread);
     ant_value_t byte_args[1] = { byte_data };
     emit_stream_event(cp, CHILD_STREAM_STDOUT, "data", byte_args, 1);
     
@@ -424,7 +445,7 @@ static void on_stderr_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *b
     ant_value_t text_args[1] = { text_data };
     emit_event(cp, "stderr", text_args, 1);
 
-    ant_value_t byte_data = make_uint8array_chunk(cp->js, buf->base, (size_t)nread);
+    ant_value_t byte_data = make_buffer_chunk(cp->js, buf->base, (size_t)nread);
     ant_value_t byte_args[1] = { byte_data };
     emit_stream_event(cp, CHILD_STREAM_STDERR, "data", byte_args, 1);
     
@@ -460,7 +481,7 @@ static ant_value_t child_on(ant_t *js, ant_value_t *args, int nargs) {
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "Event name must be a string");
   if (vtype(args[1]) != T_FUNC) return js_mkerr(js, "Callback must be a function");
   
-  ant_value_t cp_ptr = js_get_slot(js, this_obj, SLOT_DATA);
+  ant_value_t cp_ptr = js_get_slot(this_obj, SLOT_DATA);
   if (vtype(cp_ptr) == T_UNDEF) return js_mkerr(js, "Invalid child process object");
   
   child_process_t *cp = (child_process_t *)(uintptr_t)js_getnum(cp_ptr);
@@ -489,7 +510,7 @@ static ant_value_t child_once(ant_t *js, ant_value_t *args, int nargs) {
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "Event name must be a string");
   if (vtype(args[1]) != T_FUNC) return js_mkerr(js, "Callback must be a function");
   
-  ant_value_t cp_ptr = js_get_slot(js, this_obj, SLOT_DATA);
+  ant_value_t cp_ptr = js_get_slot(this_obj, SLOT_DATA);
   if (vtype(cp_ptr) == T_UNDEF) return js_mkerr(js, "Invalid child process object");
   
   child_process_t *cp = (child_process_t *)(uintptr_t)js_getnum(cp_ptr);
@@ -515,7 +536,7 @@ static ant_value_t child_once(ant_t *js, ant_value_t *args, int nargs) {
 static ant_value_t child_kill(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_obj = js_getthis(js);
   
-  ant_value_t cp_ptr = js_get_slot(js, this_obj, SLOT_DATA);
+  ant_value_t cp_ptr = js_get_slot(this_obj, SLOT_DATA);
   if (vtype(cp_ptr) == T_UNDEF) return js_false;
   
   child_process_t *cp = (child_process_t *)(uintptr_t)js_getnum(cp_ptr);
@@ -550,7 +571,7 @@ static ant_value_t child_write_impl(ant_t *js, child_process_t *cp, ant_value_t 
     data = js_getstr(js, data_arg, &data_len);
     if (!data) return js_mkerr(js, "Data must be a string or Buffer");
   } else {
-    ant_value_t ta_data_val = js_get_slot(js, data_arg, SLOT_BUFFER);
+    ant_value_t ta_data_val = js_get_slot(data_arg, SLOT_BUFFER);
     TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
     if (!ta_data || !ta_data->buffer || !ta_data->buffer->data) {
       return js_mkerr(js, "Data must be a string or Buffer");
@@ -590,7 +611,7 @@ static ant_value_t child_write(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_obj = js_getthis(js);
   if (nargs < 1) return js_mkerr(js, "write() requires data argument");
   
-  ant_value_t cp_ptr = js_get_slot(js, this_obj, SLOT_DATA);
+  ant_value_t cp_ptr = js_get_slot(this_obj, SLOT_DATA);
   if (vtype(cp_ptr) == T_UNDEF) return js_mkerr(js, "Invalid child process object");
   
   child_process_t *cp = (child_process_t *)(uintptr_t)js_getnum(cp_ptr);
@@ -599,40 +620,46 @@ static ant_value_t child_write(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t child_ref(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_obj = js_getthis(js);
-  ant_value_t cp_ptr = js_get_slot(js, this_obj, SLOT_DATA);
+  ant_value_t cp_ptr = js_get_slot(this_obj, SLOT_DATA);
+  
   if (vtype(cp_ptr) == T_UNDEF) return this_obj;
-
   child_process_t *cp = (child_process_t *)(uintptr_t)js_getnum(cp_ptr);
+  
   if (!cp) return this_obj;
   cp->keep_alive = true;
   
   if (!uv_is_closing((uv_handle_t *)&cp->process)) uv_ref((uv_handle_t *)&cp->process);
-  if (!uv_is_closing((uv_handle_t *)&cp->stdin_pipe)) uv_ref((uv_handle_t *)&cp->stdin_pipe);
-  if (!uv_is_closing((uv_handle_t *)&cp->stdout_pipe)) uv_ref((uv_handle_t *)&cp->stdout_pipe);
-  if (!uv_is_closing((uv_handle_t *)&cp->stderr_pipe)) uv_ref((uv_handle_t *)&cp->stderr_pipe);
+  for (int i = CHILD_STREAM_STDIN; i <= CHILD_STREAM_STDERR; i++) {
+    uv_handle_t *h = (uv_handle_t *)child_pipe(cp, i);
+    if (child_stdio_is_pipe(cp, i) && !uv_is_closing(h)) uv_ref(h);
+  }
   
   return this_obj;
 }
 
 static ant_value_t child_unref(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_obj = js_getthis(js);
-  ant_value_t cp_ptr = js_get_slot(js, this_obj, SLOT_DATA);
+  ant_value_t cp_ptr = js_get_slot(this_obj, SLOT_DATA);
+  
   if (vtype(cp_ptr) == T_UNDEF) return this_obj;
-
   child_process_t *cp = (child_process_t *)(uintptr_t)js_getnum(cp_ptr);
+  
   if (!cp) return this_obj;
   cp->keep_alive = false;
+  
   if (!uv_is_closing((uv_handle_t *)&cp->process)) uv_unref((uv_handle_t *)&cp->process);
-  if (!uv_is_closing((uv_handle_t *)&cp->stdin_pipe)) uv_unref((uv_handle_t *)&cp->stdin_pipe);
-  if (!uv_is_closing((uv_handle_t *)&cp->stdout_pipe)) uv_unref((uv_handle_t *)&cp->stdout_pipe);
-  if (!uv_is_closing((uv_handle_t *)&cp->stderr_pipe)) uv_unref((uv_handle_t *)&cp->stderr_pipe);
+  for (int i = CHILD_STREAM_STDIN; i <= CHILD_STREAM_STDERR; i++) {
+    uv_handle_t *h = (uv_handle_t *)child_pipe(cp, i);
+    if (child_stdio_is_pipe(cp, i) && !uv_is_closing(h)) uv_unref(h);
+  }
+  
   return this_obj;
 }
 
 static ant_value_t child_end(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_obj = js_getthis(js);
   
-  ant_value_t cp_ptr = js_get_slot(js, this_obj, SLOT_DATA);
+  ant_value_t cp_ptr = js_get_slot(this_obj, SLOT_DATA);
   if (vtype(cp_ptr) == T_UNDEF) return js_mkundef();
   
   child_process_t *cp = (child_process_t *)(uintptr_t)js_getnum(cp_ptr);
@@ -652,7 +679,7 @@ static uv_handle_t *child_stream_handle(child_process_t *cp, child_stream_kind_t
 static ant_value_t child_stream_write(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_obj = js_getthis(js);
   if (nargs < 1) return js_mkerr(js, "write() requires data argument");
-  ant_value_t ctx_ptr = js_get_slot(js, this_obj, SLOT_DATA);
+  ant_value_t ctx_ptr = js_get_slot(this_obj, SLOT_DATA);
   if (vtype(ctx_ptr) == T_UNDEF) return js_mkerr(js, "Invalid stream object");
   child_stream_ctx_t *ctx = (child_stream_ctx_t *)(uintptr_t)js_getnum(ctx_ptr);
   if (!ctx || !ctx->cp) return js_mkerr(js, "Invalid stream context");
@@ -662,7 +689,7 @@ static ant_value_t child_stream_write(ant_t *js, ant_value_t *args, int nargs) {
 static ant_value_t child_stream_end(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
   ant_value_t this_obj = js_getthis(js);
-  ant_value_t ctx_ptr = js_get_slot(js, this_obj, SLOT_DATA);
+  ant_value_t ctx_ptr = js_get_slot(this_obj, SLOT_DATA);
   if (vtype(ctx_ptr) == T_UNDEF) return js_mkundef();
   child_stream_ctx_t *ctx = (child_stream_ctx_t *)(uintptr_t)js_getnum(ctx_ptr);
   if (!ctx || !ctx->cp) return js_mkundef();
@@ -672,7 +699,7 @@ static ant_value_t child_stream_end(ant_t *js, ant_value_t *args, int nargs) {
 static ant_value_t child_stream_ref(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
   ant_value_t this_obj = js_getthis(js);
-  ant_value_t ctx_ptr = js_get_slot(js, this_obj, SLOT_DATA);
+  ant_value_t ctx_ptr = js_get_slot(this_obj, SLOT_DATA);
   if (vtype(ctx_ptr) == T_UNDEF) return this_obj;
   child_stream_ctx_t *ctx = (child_stream_ctx_t *)(uintptr_t)js_getnum(ctx_ptr);
   if (!ctx || !ctx->cp) return this_obj;
@@ -685,7 +712,7 @@ static ant_value_t child_stream_ref(ant_t *js, ant_value_t *args, int nargs) {
 static ant_value_t child_stream_unref(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
   ant_value_t this_obj = js_getthis(js);
-  ant_value_t ctx_ptr = js_get_slot(js, this_obj, SLOT_DATA);
+  ant_value_t ctx_ptr = js_get_slot(this_obj, SLOT_DATA);
   if (vtype(ctx_ptr) == T_UNDEF) return this_obj;
   child_stream_ctx_t *ctx = (child_stream_ctx_t *)(uintptr_t)js_getnum(ctx_ptr);
   if (!ctx || !ctx->cp) return this_obj;
@@ -698,7 +725,7 @@ static ant_value_t child_stream_unref(ant_t *js, ant_value_t *args, int nargs) {
 static ant_value_t child_stream_destroy(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
   ant_value_t this_obj = js_getthis(js);
-  ant_value_t ctx_ptr = js_get_slot(js, this_obj, SLOT_DATA);
+  ant_value_t ctx_ptr = js_get_slot(this_obj, SLOT_DATA);
   if (vtype(ctx_ptr) == T_UNDEF) return this_obj;
   child_stream_ctx_t *ctx = (child_stream_ctx_t *)(uintptr_t)js_getnum(ctx_ptr);
   if (!ctx || !ctx->cp) return this_obj;
@@ -732,7 +759,7 @@ static ant_value_t child_stream_on(ant_t *js, ant_value_t *args, int nargs) {
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "Event name must be a string");
   if (vtype(args[1]) != T_FUNC) return js_mkerr(js, "Callback must be a function");
 
-  ant_value_t ctx_ptr = js_get_slot(js, this_obj, SLOT_DATA);
+  ant_value_t ctx_ptr = js_get_slot(this_obj, SLOT_DATA);
   if (vtype(ctx_ptr) == T_UNDEF) return js_mkerr(js, "Invalid stream object");
   
   child_stream_ctx_t *ctx = (child_stream_ctx_t *)(uintptr_t)js_getnum(ctx_ptr);
@@ -769,7 +796,7 @@ static ant_value_t child_stream_once(ant_t *js, ant_value_t *args, int nargs) {
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "Event name must be a string");
   if (vtype(args[1]) != T_FUNC) return js_mkerr(js, "Callback must be a function");
 
-  ant_value_t ctx_ptr = js_get_slot(js, this_obj, SLOT_DATA);
+  ant_value_t ctx_ptr = js_get_slot(this_obj, SLOT_DATA);
   if (vtype(ctx_ptr) == T_UNDEF) return js_mkerr(js, "Invalid stream object");
   
   child_stream_ctx_t *ctx = (child_stream_ctx_t *)(uintptr_t)js_getnum(ctx_ptr);
@@ -812,7 +839,7 @@ static ant_value_t create_child_stream_object(ant_t *js, child_process_t *cp, ch
   else if (kind == CHILD_STREAM_STDOUT) cp->stdout_ctx = ctx;
   else cp->stderr_ctx = ctx;
 
-  js_set_slot(js, obj, SLOT_DATA, ANT_PTR(ctx));
+  js_set_slot(obj, SLOT_DATA, ANT_PTR(ctx));
   js_set(js, obj, "on", js_mkfun(child_stream_on));
   js_set(js, obj, "once", js_mkfun(child_stream_once));
   js_set(js, obj, "ref", js_mkfun(child_stream_ref));
@@ -831,20 +858,26 @@ static ant_value_t create_child_stream_object(ant_t *js, child_process_t *cp, ch
 static ant_value_t create_child_object(ant_t *js, child_process_t *cp) {
   ant_value_t obj = js_mkobj(js);
   
-  js_set_slot(js, obj, SLOT_DATA, ANT_PTR(cp));
+  js_set_slot(obj, SLOT_DATA, ANT_PTR(cp));
   js_set(js, obj, "pid", js_mknum((double)cp->process.pid));
   js_set(js, obj, "exitCode", js_mknull());
   js_set(js, obj, "signalCode", js_mknull());
   js_set(js, obj, "killed", js_false);
   js_set(js, obj, "connected", js_true);
 
-  cp->stdin_obj = create_child_stream_object(js, cp, CHILD_STREAM_STDIN);
-  cp->stdout_obj = create_child_stream_object(js, cp, CHILD_STREAM_STDOUT);
-  cp->stderr_obj = create_child_stream_object(js, cp, CHILD_STREAM_STDERR);
+  static const struct { child_stream_kind_t kind; const char *name; } streams[] = {
+    { CHILD_STREAM_STDIN, "stdin" },
+    { CHILD_STREAM_STDOUT, "stdout" },
+    { CHILD_STREAM_STDERR, "stderr" },
+  };
   
-  js_set(js, obj, "stdin", cp->stdin_obj);
-  js_set(js, obj, "stdout", cp->stdout_obj);
-  js_set(js, obj, "stderr", cp->stderr_obj);
+  ant_value_t *stream_objs[] = { &cp->stdin_obj, &cp->stdout_obj, &cp->stderr_obj };
+  for (int i = 0; i < 3; i++) {
+    if (child_stdio_is_pipe(cp, streams[i].kind)) {
+      *stream_objs[i] = create_child_stream_object(js, cp, streams[i].kind);
+    } else *stream_objs[i] = js_mknull();
+    js_set(js, obj, streams[i].name, *stream_objs[i]);
+  }
   
   js_set(js, obj, "on", js_mkfun(child_on));
   js_set(js, obj, "once", js_mkfun(child_once));
@@ -893,6 +926,25 @@ static void free_args_array(char **args, int count) {
   free(args);
 }
 
+static stdio_mode_t parse_stdio_mode(ant_t *js, ant_value_t val) {
+  if (vtype(val) != T_STR) return STDIO_PIPE;
+  char *s = js_getstr(js, val, NULL);
+  if (strcmp(s, "inherit") == 0) return STDIO_INHERIT;
+  if (strcmp(s, "ignore") == 0) return STDIO_IGNORE;
+  return STDIO_PIPE;
+}
+
+static void parse_stdio_option(ant_t *js, ant_value_t stdio_val, stdio_mode_t *modes) {
+if (vtype(stdio_val) == T_STR) {
+  stdio_mode_t mode = parse_stdio_mode(js, stdio_val);
+  for (int i = CHILD_STREAM_STDIN; i <= CHILD_STREAM_STDERR; i++) modes[i] = mode;
+} else if (is_special_object(stdio_val)) {
+  ant_offset_t len = js_arr_len(js, stdio_val);
+  if (len > 3) len = 3;
+  for (ant_offset_t i = 0; i < len; i++) 
+    modes[i] = parse_stdio_mode(js, js_arr_get(js, stdio_val, i));
+}}
+
 static ant_value_t builtin_spawn(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "spawn() requires a command");
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "Command must be a string");
@@ -914,6 +966,10 @@ static ant_value_t builtin_spawn(ant_t *js, ant_value_t *args, int nargs) {
     }
   }
   
+  stdio_mode_t stdio_modes[3] = { 
+    STDIO_PIPE, STDIO_PIPE, STDIO_PIPE 
+  };
+  
   if (nargs >= 3 && is_special_object(args[2])) {
     ant_value_t cwd_val = js_get(js, args[2], "cwd");
     if (vtype(cwd_val) == T_STR) {
@@ -927,6 +983,9 @@ static ant_value_t builtin_spawn(ant_t *js, ant_value_t *args, int nargs) {
     
     ant_value_t detached_val = js_get(js, args[2], "detached");
     detached = js_truthy(js, detached_val);
+    
+    ant_value_t stdio_val = js_get(js, args[2], "stdio");
+    parse_stdio_option(js, stdio_val, stdio_modes);
   }
   
   child_process_t *cp = calloc(1, sizeof(child_process_t));
@@ -943,23 +1002,25 @@ static ant_value_t builtin_spawn(ant_t *js, ant_value_t *args, int nargs) {
   cp->cwd = cwd;
   cp->promise = js_mkundef();
   cp->keep_alive = true;
-  
-  uv_pipe_init(uv_default_loop(), &cp->stdin_pipe, 0);
-  uv_pipe_init(uv_default_loop(), &cp->stdout_pipe, 0);
-  uv_pipe_init(uv_default_loop(), &cp->stderr_pipe, 0);
-  
-  cp->stdin_pipe.data = cp;
-  cp->stdout_pipe.data = cp;
-  cp->stderr_pipe.data = cp;
+  memcpy(cp->stdio_modes, stdio_modes, sizeof(stdio_modes));
   cp->process.data = cp;
   
+  for (int i = CHILD_STREAM_STDIN; i <= CHILD_STREAM_STDERR; i++) {
+  if (stdio_modes[i] == STDIO_PIPE) {
+    uv_pipe_t *p = child_pipe(cp, i);
+    uv_pipe_init(uv_default_loop(), p, 0);
+    p->data = cp;
+  }}
+  
   uv_stdio_container_t stdio[3];
-  stdio[0].flags = UV_CREATE_PIPE | UV_READABLE_PIPE;
-  stdio[0].data.stream = (uv_stream_t *)&cp->stdin_pipe;
-  stdio[1].flags = UV_CREATE_PIPE | UV_WRITABLE_PIPE;
-  stdio[1].data.stream = (uv_stream_t *)&cp->stdout_pipe;
-  stdio[2].flags = UV_CREATE_PIPE | UV_WRITABLE_PIPE;
-  stdio[2].data.stream = (uv_stream_t *)&cp->stderr_pipe;
+  for (int i = CHILD_STREAM_STDIN; i <= CHILD_STREAM_STDERR; i++) {
+  if (stdio_modes[i] == STDIO_INHERIT) {
+    stdio[i].flags = UV_INHERIT_FD;
+    stdio[i].data.fd = i;
+  } else if (stdio_modes[i] == STDIO_IGNORE) stdio[i].flags = UV_IGNORE; else {
+    stdio[i].flags = UV_CREATE_PIPE | (i == CHILD_STREAM_STDIN ? UV_READABLE_PIPE : UV_WRITABLE_PIPE);
+    stdio[i].data.stream = (uv_stream_t *)child_pipe(cp, i);
+  }}
   
   char **final_args;
   int final_argc;
@@ -1027,8 +1088,14 @@ static ant_value_t builtin_spawn(ant_t *js, ant_value_t *args, int nargs) {
     return js_mkerr(js, "Failed to spawn process: %s", uv_strerror(r));
   }
   
-  uv_read_start((uv_stream_t *)&cp->stdout_pipe, alloc_buffer, on_stdout_read);
-  uv_read_start((uv_stream_t *)&cp->stderr_pipe, alloc_buffer, on_stderr_read);
+  static const uv_read_cb read_cbs[] = { NULL, on_stdout_read, on_stderr_read };
+  bool *closed[] = { &cp->stdin_closed, &cp->stdout_closed, &cp->stderr_closed };
+  
+  for (int i = CHILD_STREAM_STDIN; i <= CHILD_STREAM_STDERR; i++) {
+    if (stdio_modes[i] == STDIO_PIPE && read_cbs[i]) {
+      uv_read_start((uv_stream_t *)child_pipe(cp, i), alloc_buffer, read_cbs[i]);
+    } else if (stdio_modes[i] != STDIO_PIPE) *closed[i] = true;
+  }
   
   add_pending_child(cp);
   cp->child_obj = create_child_object(js, cp);
@@ -1540,16 +1607,16 @@ int has_pending_child_processes(void) {
   return 0;
 }
 
-void child_process_gc_update_roots(GC_OP_VAL_ARGS) {
-  for (child_process_t *cp = pending_children_head; cp; cp = cp->next) {
-    op_val(ctx, &cp->child_obj);
-    op_val(ctx, &cp->stdin_obj);
-    op_val(ctx, &cp->stdout_obj);
-    op_val(ctx, &cp->stderr_obj);
-    op_val(ctx, &cp->promise);
-    
-    child_event_t *evt, *tmp;
-    HASH_ITER(hh, cp->events, evt, tmp) 
-      for (int i = 0; i < evt->count; i++) op_val(ctx, &evt->listeners[i].callback);
-  }
-}
+void gc_mark_child_process(ant_t *js, gc_mark_fn mark) {
+for (child_process_t *cp = pending_children_head; cp; cp = cp->next) {
+  mark(js, cp->child_obj);
+  mark(js, cp->stdin_obj);
+  mark(js, cp->stdout_obj);
+  mark(js, cp->stderr_obj);
+  mark(js, cp->promise);
+
+  child_event_t *evt, *tmp;
+  HASH_ITER(hh, cp->events, evt, tmp)
+    for (int i = 0; i < evt->count; i++) mark(js, evt->listeners[i].callback);
+}}
+

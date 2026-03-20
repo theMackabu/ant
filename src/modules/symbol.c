@@ -10,10 +10,8 @@
 #include "silver/engine.h"
 #include "modules/symbol.h"
 #include "descriptors.h"
-
-static ant_value_t g_iterator_proto_obj = {0};
-static ant_value_t g_array_iterator_proto_obj = {0};
-static ant_value_t g_string_iterator_proto_obj = {0};
+#include "gc/roots.h"
+#include "gc/modules.h"
 
 #define DECL_SYM(name, _desc) static ant_value_t g_##name = {0};
 WELLKNOWN_SYMBOLS(DECL_SYM)
@@ -24,6 +22,9 @@ WELLKNOWN_SYMBOLS(DEF_GET_SYM)
 #undef DEF_GET_SYM
 
 static ant_value_t builtin_Symbol(ant_t *js, ant_value_t *args, int nargs) {
+  if (vtype(js->new_target) != T_UNDEF)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Symbol is not a constructor");
+
   const char *desc = NULL;
   if (nargs > 0 && vtype(args[0]) == T_STR) {
     desc = js_getstr(js, args[0], NULL);
@@ -92,24 +93,24 @@ static ant_value_t iterator_next(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t get_iterator_prototype(ant_t *js) {
-  if (vtype(g_iterator_proto_obj) == T_OBJ) return g_iterator_proto_obj;
+  if (vtype(js->sym.iterator_proto) == T_OBJ) return js->sym.iterator_proto;
 
-  g_iterator_proto_obj = js_mkobj(js);
-  js_set_proto(js, g_iterator_proto_obj, js->object);
-  js_set_sym(js, g_iterator_proto_obj, g_iterator, js_mkfun(sym_this_cb));
+  js->sym.iterator_proto = js_mkobj(js);
+  js_set_proto_init(js->sym.iterator_proto, js->object);
+  js_set_sym(js, js->sym.iterator_proto, g_iterator, js_mkfun(sym_this_cb));
   
-  return g_iterator_proto_obj;
+  return js->sym.iterator_proto;
 }
 
 static ant_value_t get_array_iterator_prototype(ant_t *js) {
-  if (vtype(g_array_iterator_proto_obj) == T_OBJ) return g_array_iterator_proto_obj;
+  if (vtype(js->sym.array_iterator_proto) == T_OBJ) return js->sym.array_iterator_proto;
 
   ant_value_t iterator_proto = get_iterator_prototype(js);
-  g_array_iterator_proto_obj = js_mkobj(js);
-  js_set(js, g_array_iterator_proto_obj, "next", js_mkfun(iterator_next));
-  js_set_proto(js, g_array_iterator_proto_obj, iterator_proto);
+  js->sym.array_iterator_proto = js_mkobj(js);
+  js_set(js, js->sym.array_iterator_proto, "next", js_mkfun(iterator_next));
+  js_set_proto_init(js->sym.array_iterator_proto, iterator_proto);
   
-  return g_array_iterator_proto_obj;
+  return js->sym.array_iterator_proto;
 }
 
 static ant_value_t array_iterator(ant_t *js, ant_value_t *args, int nargs) {
@@ -121,7 +122,7 @@ static ant_value_t array_iterator(ant_t *js, ant_value_t *args, int nargs) {
   js_set(js, iter, "__arr", arr);
   js_set(js, iter, "__idx", js_mknum(0));
   js_set(js, iter, "__len", js_mknum(len));
-  js_set_proto(js, iter, get_array_iterator_prototype(js));
+  js_set_proto_init(iter, get_array_iterator_prototype(js));
   
   return iter;
 }
@@ -158,14 +159,14 @@ static ant_value_t string_iterator_next(ant_t *js, ant_value_t *args, int nargs)
 }
 
 static ant_value_t get_string_iterator_prototype(ant_t *js) {
-  if (vtype(g_string_iterator_proto_obj) == T_OBJ) return g_string_iterator_proto_obj;
+  if (vtype(js->sym.string_iterator_proto) == T_OBJ) return js->sym.string_iterator_proto;
 
   ant_value_t iterator_proto = get_iterator_prototype(js);
-  g_string_iterator_proto_obj = js_mkobj(js);
-  js_set(js, g_string_iterator_proto_obj, "next", js_mkfun(string_iterator_next));
-  js_set_proto(js, g_string_iterator_proto_obj, iterator_proto);
+  js->sym.string_iterator_proto = js_mkobj(js);
+  js_set(js, js->sym.string_iterator_proto, "next", js_mkfun(string_iterator_next));
+  js_set_proto_init(js->sym.string_iterator_proto, iterator_proto);
   
-  return g_string_iterator_proto_obj;
+  return js->sym.string_iterator_proto;
 }
 
 static ant_value_t string_iterator(ant_t *js, ant_value_t *args, int nargs) {
@@ -176,7 +177,7 @@ static ant_value_t string_iterator(ant_t *js, ant_value_t *args, int nargs) {
   js_set(js, iter, "__str", str);
   js_set(js, iter, "__idx", js_mknum(0));
   js_set(js, iter, "__len", js_mknum((double)len));
-  js_set_proto(js, iter, get_string_iterator_prototype(js));
+  js_set_proto_init(iter, get_string_iterator_prototype(js));
   
   return iter;
 }
@@ -204,18 +205,22 @@ ant_value_t maybe_call_symbol_method(
 }
 
 void js_define_species_getter(ant_t *js, ant_value_t ctor) {
-  if (vtype(ctor) == T_FUNC) ctor = js_func_obj(ctor);
-  if (vtype(ctor) != T_OBJ || vtype(g_species) != T_SYMBOL) return;
+  if (!is_object_type(ctor) || vtype(g_species) != T_SYMBOL) return;
+  ctor = js_as_obj(ctor);
   js_set_sym_getter_desc(js, ctor, g_species, js_mkfun(sym_this_cb), JS_DESC_C);
 }
 
 void init_symbol_module(void) {
   ant_t *js = rt->js;
 
-  g_iterator_proto_obj = js_mkundef();
-  g_array_iterator_proto_obj = js_mkundef();
-  g_string_iterator_proto_obj = js_mkundef();
+  js->sym.iterator_proto = js_mkundef();
+  js->sym.array_iterator_proto = js_mkundef();
+  js->sym.string_iterator_proto = js_mkundef();
   
+  gc_register_root(&js->sym.iterator_proto);
+  gc_register_root(&js->sym.array_iterator_proto);
+  gc_register_root(&js->sym.string_iterator_proto);
+
   #define INIT_SYM(name, desc) g_##name = js_mksym(js, desc);
   WELLKNOWN_SYMBOLS(INIT_SYM)
   #undef INIT_SYM
@@ -224,7 +229,7 @@ void init_symbol_module(void) {
   js_set(js, symbol_proto, "toString", js_mkfun(builtin_Symbol_toString));
   
   ant_value_t symbol_ctor = js_mkobj(js);
-  js_set_slot(js, symbol_ctor, SLOT_CFUNC, js_mkfun(builtin_Symbol));
+  js_set_slot(symbol_ctor, SLOT_CFUNC, js_mkfun(builtin_Symbol));
   js_setprop(js, symbol_ctor, js_mkstr(js, "for", 3), js_mkfun(builtin_Symbol_for));
   js_set(js, symbol_ctor, "keyFor", js_mkfun(builtin_Symbol_keyFor));
   js_set(js, symbol_ctor, "prototype", symbol_proto);
@@ -273,14 +278,13 @@ void init_symbol_module(void) {
   js_define_species_getter(js, array_ctor);
 }
 
-void symbol_gc_update_roots(GC_OP_VAL_ARGS) {
-  op_val(ctx, &g_iterator_proto_obj);
-  op_val(ctx, &g_array_iterator_proto_obj);
-  op_val(ctx, &g_string_iterator_proto_obj);
+void gc_mark_symbols(ant_t *js, gc_mark_fn mark) {
+  mark(js, js->sym.iterator_proto);
+  mark(js, js->sym.array_iterator_proto);
+  mark(js, js->sym.string_iterator_proto);
 
-  #define GC_SYM(name, _desc) op_val(ctx, &g_##name);
+  #define GC_SYM(name, _desc) mark(js, g_##name);
   WELLKNOWN_SYMBOLS(GC_SYM)
   #undef GC_SYM
-
-  sym_gc_update_all(op_val, ctx);
 }
+

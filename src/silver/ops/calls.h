@@ -60,35 +60,44 @@ static inline ant_value_t sv_op_new(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   ant_value_t *args = &vm->stack[vm->sp - argc];
   ant_value_t new_target = vm->stack[vm->sp - argc - 1];
   ant_value_t func = vm->stack[vm->sp - argc - 2];
+  ant_value_t record_func = func;
   js->new_target = new_target;
 
-  if (vtype(func) == T_OBJ && is_proxy(js, func)) {
+  if (vtype(func) == T_OBJ && is_proxy(func)) {
     ant_value_t result = js_proxy_construct(js, func, args, argc, new_target);
     vm->sp -= argc + 2;
     if (is_err(result)) return result;
     vm->stack[vm->sp++] = result;
     return result;
   }
+  if (!js_is_constructor(js, func)) {
+    vm->sp -= argc + 2;
+    return js_mkerr_typed(js, JS_ERR_TYPE, "not a constructor");
+  }
 
-  ant_value_t obj = mkobj(js, 0);
-
+  ant_value_t proto = js_mkundef();
   if (vtype(func) == T_FUNC) {
     ant_value_t proto_source = func;
     ant_value_t func_obj = js_func_obj(func);
-    ant_value_t target_func = js_get_slot(js, func_obj, SLOT_TARGET_FUNC);
-    if (vtype(target_func) == T_FUNC)
+    ant_value_t target_func = js_get_slot(func_obj, SLOT_TARGET_FUNC);
+    if (vtype(target_func) == T_FUNC) {
       proto_source = target_func;
-    ant_value_t proto = js_getprop_fallback(js, proto_source, "prototype");
-    if (is_object_type(proto)) js_set_proto(js, obj, proto);
+      record_func = target_func;
+    }
+    proto = js_getprop_fallback(js, proto_source, "prototype");
   }
 
+  ant_value_t obj = js_mkobj_with_inobj_limit(js, sv_tfb_ctor_inobj_limit(record_func));
+  if (is_object_type(proto)) js_set_proto_init(obj, proto);
   ant_value_t ctor_this = obj;
   ant_value_t result = sv_vm_call(vm, js, func, obj, args, argc, &ctor_this, true);
   vm->sp -= argc + 2;
   if (is_err(result)) return result;
-  vm->stack[vm->sp++] = 
+  ant_value_t final_obj =
     is_object_type(result) ? result
     : (is_object_type(ctor_this) ? ctor_this : obj);
+  sv_tfb_record_ctor_prop_count(record_func, final_obj);
+  vm->stack[vm->sp++] = final_obj;
   return result;
 }
 
@@ -118,7 +127,7 @@ static inline ant_value_t sv_op_eval(sv_vm_t *vm, ant_t *js, sv_frame_t *frame, 
   }
   ant_offset_t len;
   ant_offset_t off = vstr(js, code, &len);
-  const char *str = (const char *)&js->mem[off];
+  const char *str = (const char *)(uintptr_t)(off);
   ant_value_t result = js_eval_bytecode_eval_with_strict(
     js, str, len, sv_frame_is_strict(frame));
   if (!is_err(result)) vm->stack[vm->sp++] = result;
