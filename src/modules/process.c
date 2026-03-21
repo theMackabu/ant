@@ -115,13 +115,71 @@ static void init_signal_map(void) {
   
   #define S(sig) { #sig, sig, {0}, {0} }
   static SignalEntry entries[] = {
-    S(SIGHUP),    S(SIGINT),    S(SIGQUIT),   S(SIGILL),
-    S(SIGTRAP),   S(SIGABRT),   S(SIGFPE),    S(SIGKILL),
-    S(SIGBUS),    S(SIGSEGV),   S(SIGSYS),    S(SIGPIPE),
-    S(SIGALRM),   S(SIGTERM),   S(SIGURG),    S(SIGSTOP),
-    S(SIGTSTP),   S(SIGCONT),   S(SIGCHLD),   S(SIGTTIN),
-    S(SIGTTOU),   S(SIGXCPU),   S(SIGXFSZ),   S(SIGVTALRM),
-    S(SIGPROF),   S(SIGUSR1),   S(SIGUSR2),
+    S(SIGINT),    S(SIGILL),    S(SIGABRT),   S(SIGFPE),
+    S(SIGSEGV),   S(SIGTERM),
+    #ifdef SIGHUP
+      S(SIGHUP),
+    #endif
+    #ifdef SIGQUIT
+      S(SIGQUIT),
+    #endif
+    #ifdef SIGTRAP
+      S(SIGTRAP),
+    #endif
+    #ifdef SIGKILL
+      S(SIGKILL),
+    #endif
+    #ifdef SIGBUS
+      S(SIGBUS),
+    #endif
+    #ifdef SIGSYS
+      S(SIGSYS),
+    #endif
+    #ifdef SIGPIPE
+      S(SIGPIPE),
+    #endif
+    #ifdef SIGALRM
+      S(SIGALRM),
+    #endif
+    #ifdef SIGURG
+      S(SIGURG),
+    #endif
+    #ifdef SIGSTOP
+      S(SIGSTOP),
+    #endif
+    #ifdef SIGTSTP
+      S(SIGTSTP),
+    #endif
+    #ifdef SIGCONT
+      S(SIGCONT),
+    #endif
+    #ifdef SIGCHLD
+      S(SIGCHLD),
+    #endif
+    #ifdef SIGTTIN
+      S(SIGTTIN),
+    #endif
+    #ifdef SIGTTOU
+      S(SIGTTOU),
+    #endif
+    #ifdef SIGXCPU
+      S(SIGXCPU),
+    #endif
+    #ifdef SIGXFSZ
+      S(SIGXFSZ),
+    #endif
+    #ifdef SIGVTALRM
+      S(SIGVTALRM),
+    #endif
+    #ifdef SIGPROF
+      S(SIGPROF),
+    #endif
+    #ifdef SIGUSR1
+      S(SIGUSR1),
+    #endif
+    #ifdef SIGUSR2
+      S(SIGUSR2),
+    #endif
     #ifdef SIGEMT
       S(SIGEMT),
     #endif
@@ -146,7 +204,8 @@ static void init_signal_map(void) {
   };
   #undef S
   
-  for (size_t i = 0; i < sizeof(entries) / sizeof(entries[0]); i++) {
+  size_t count = sizeof(entries) / sizeof(entries[0]);
+  for (size_t i = 0; i < count; i++) {
     HASH_ADD_KEYPTR(hh_name, signals_by_name, entries[i].name, strlen(entries[i].name), &entries[i]);
     HASH_ADD(hh_num, signals_by_num, signum, sizeof(int), &entries[i]);
   }
@@ -585,7 +644,11 @@ static bool stdin_set_raw_mode(bool enable) {
 static void stdin_alloc_buffer(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
   (void)handle;
   buf->base = malloc(suggested_size);
+#ifdef _WIN32
+  buf->len = (ULONG)suggested_size;
+#else
   buf->len = suggested_size;
+#endif
 }
 
 static void on_stdin_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
