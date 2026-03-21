@@ -1,4 +1,3 @@
-cmake = import('cmake')
 cc = meson.get_compiler('c')
 tls_lib = get_option('tls_library')
 
@@ -64,10 +63,6 @@ subprojects_build = meson.project_build_root() / 'vendor'
 llhttp = subproject('llhttp').get_variable('llhttp_dep')
 libuv_dep = subproject('libuv').get_variable('libuv_dep')
 
-tlsuv_opts = cmake.subproject_options()
-tlsuv_opts.set_override_option('warning_level', '0')
-tlsuv_opts.append_compile_args('c', ['-w'])
-
 zlib_ng_sub = subproject('zlib-ng', default_options: [
   'b_lto=false',
   'warning_level=0',
@@ -78,46 +73,13 @@ zlib_ng_srcdir = subprojects_src / deps_info['zlib-ng']['dir']
 zlib_ng_builddir = subprojects_build / deps_info['zlib-ng']['dir']
 
 cmake_prefix = get_option('deps_prefix_cmake')
-tlsuv_cmake_defines = {
-  'BUILD_TESTING': 'OFF',
-  'TLSUV_TLSLIB': tls_lib,
-  'CMAKE_WARN_DEV': 'OFF',
-  'CMAKE_POLICY_DEFAULT_CMP0200': 'NEW',
-  'CMAKE_POLICY_DEFAULT_CMP0156': 'NEW',
-  'CMAKE_POLICY_DEFAULT_CMP0179': 'NEW',
-  'llhttp_DIR': subprojects_src / deps_info['llhttp']['dir'] / 'cmake',
-  'libuv_DIR': subprojects_src / deps_info['libuv']['dir'] / 'cmake',
-  'ZLIB_INCLUDE_DIR': zlib_ng_srcdir,
-  'ZLIB_LIBRARY': zlib_ng_builddir / 'libz-ng.a',
-}
-if cmake_prefix != ''
-  tlsuv_cmake_defines += {'MBEDTLS_DIR': cmake_prefix, 'CMAKE_PREFIX_PATH': cmake_prefix}
-endif
-tlsuv_opts.add_cmake_defines(tlsuv_cmake_defines)
 
-tlsuv_compile_args = [
-  '-Wno-unused-function',
-  '-Wno-unused-variable',
-  '-Wno-unused-parameter',
-  '-Wno-sign-compare',
-  '-Wno-bitwise-op-parentheses',
-  '-Wno-sometimes-uninitialized',
-  '-Wno-cast-function-type-mismatch',
-  '-Wno-missing-field-initializers',
-  '-I' + subprojects_src / deps_info['libuv']['dir'] / deps_info['libuv']['inc'],
-  '-I' + subprojects_src / deps_info['llhttp']['dir'] / deps_info['llhttp']['inc'],
-]
-
-if tls_lib == 'openssl'
-  tlsuv_compile_args += ['-I' + openssl_dep.get_variable(pkgconfig: 'includedir')]
-endif
-
-if cmake_prefix != ''
-  tlsuv_compile_args += ['-I' + cmake_prefix / 'include']
-endif
-
-tlsuv_opts.append_compile_args('c', tlsuv_compile_args)
-tlsuv_dep = cmake.subproject('tlsuv', options: tlsuv_opts).dependency('tlsuv')
+tlsuv_sub = subproject('tlsuv', default_options: [
+  'tls_backend=' + tls_lib,
+  'deps_prefix_cmake=' + cmake_prefix,
+  'warning_level=0',
+])
+tlsuv_dep = tlsuv_sub.get_variable('tlsuv_dep')
 
 base64_dep = declare_dependency(
   dependencies: subproject('aklomp-base64').get_variable('base64_dep'),
