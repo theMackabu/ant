@@ -84,6 +84,11 @@ if tls_backend == 'openssl'
   tlsuv_c_args += ['-I' + tls_dep.get_variable(pkgconfig: 'includedir')]
 endif
 
+win_deps = []
+if host_machine.system() == 'windows'
+  win_deps = [cc.find_library('crypt32'), cc.find_library('ncrypt')]
+endif
+
 config_data = configuration_data()
 config_data.set('PROJECT_VERSION_MAJOR', meson.project_version().split('.')[0])
 config_data.set('PROJECT_VERSION_MINOR', meson.project_version().split('.')[1])
@@ -98,7 +103,7 @@ tlsuv_lib = static_library(
   'tlsuv',
   tlsuv_sources, tlsuv_config_h,
   c_args: tlsuv_c_args,
-  dependencies: [libuv_dep, llhttp_dep, zlib_dep],
+  dependencies: [libuv_dep, llhttp_dep, zlib_dep] + win_deps,
   include_directories: [
     include_directories('include'),
     include_directories('src'),
