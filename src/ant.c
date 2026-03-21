@@ -3357,7 +3357,8 @@ ant_value_t js_setprop_nonconfigurable(ant_t *js, ant_value_t obj, const char *k
   return result;
 }
 
-#define SYM_FLAG_GLOBAL  1u
+#define SYM_FLAG_GLOBAL      1u
+#define SYM_FLAG_WELL_KNOWN  2u
 
 typedef struct sym_registry_entry {
   const char *key;
@@ -3384,6 +3385,14 @@ ant_value_t js_mksym(ant_t *js, const char *desc) {
   }
 
   return mkval(T_SYMBOL, (uintptr_t)sym_ptr);
+}
+
+ant_value_t js_mksym_well_known(ant_t *js, const char *desc) {
+  ant_value_t sym = js_mksym(js, desc);
+  if (is_err(sym)) return sym;
+  ant_symbol_heap_t *ptr = (ant_symbol_heap_t *)(uintptr_t)vdata(sym);
+  if (ptr) ptr->flags |= SYM_FLAG_WELL_KNOWN;
+  return sym;
 }
 
 static inline ant_symbol_heap_t *sym_ptr(ant_value_t v) {
@@ -3445,7 +3454,8 @@ ant_value_t js_mksym_for(ant_t *js, const char *key) {
 const char *js_sym_key(ant_value_t sym) {
   if (vtype(sym) != T_SYMBOL) return NULL;
   ant_t *js = rt->js;
-  if (!(sym_get_flags(js, sym) & SYM_FLAG_GLOBAL)) return NULL;
+  uint32_t flags = sym_get_flags(js, sym);
+  if (!(flags & SYM_FLAG_GLOBAL) || (flags & SYM_FLAG_WELL_KNOWN)) return NULL;
   return (const char *)sym_get_key_ptr(js, sym);
 }
 

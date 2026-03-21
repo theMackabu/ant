@@ -221,7 +221,7 @@ void init_symbol_module(void) {
   gc_register_root(&js->sym.array_iterator_proto);
   gc_register_root(&js->sym.string_iterator_proto);
 
-  #define INIT_SYM(name, desc) g_##name = js_mksym(js, desc);
+  #define INIT_SYM(name, desc) g_##name = js_mksym_well_known(js, desc);
   WELLKNOWN_SYMBOLS(INIT_SYM)
   #undef INIT_SYM
 

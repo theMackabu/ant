@@ -99,6 +99,7 @@ ant_value_t js_mkstr(ant_t *, const void *, size_t);
 ant_value_t js_mkstr_permanent(ant_t *, const void *, size_t);
 ant_value_t js_mkbigint(ant_t *, const char *digits, size_t len, bool negative);
 ant_value_t js_mksym(ant_t *, const char *desc);
+ant_value_t js_mksym_well_known(ant_t *, const char *desc);
 ant_value_t js_mkfun(ant_value_t (*fn)(ant_t *, ant_value_t *, int));
 ant_value_t js_heavy_mkfun(ant_t *js, ant_value_t (*fn)(ant_t *, ant_value_t *, int), ant_value_t data);
 
