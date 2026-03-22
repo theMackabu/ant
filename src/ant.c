@@ -4564,6 +4564,7 @@ static ant_value_t build_dynamic_function(ant_t *js, ant_value_t *args, int narg
   ant_value_t func = mkval(T_FUNC, (uintptr_t)closure);
   ant_value_t proto_setup = setup_func_prototype(js, func);
   if (is_err(proto_setup)) return proto_setup;
+  
   return func;
 }
 
@@ -4789,13 +4790,16 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
   sv_closure_t *orig = js_func_closure(func);
   sv_closure_t *bound_closure = js_closure_alloc(js);
   if (!bound_closure) return js_mkerr(js, "oom");
+  
   bound_closure->func = orig->func;
+  bound_closure->call_flags = orig->call_flags;
   bound_closure->upvalues = orig->upvalues;
+  if (orig->upvalues) bound_closure->call_flags |= SV_CALL_BORROWED_UPVALS;
   bound_closure->bound_this = this_arg;
   bound_closure->bound_args = js_mkundef();
   bound_closure->super_val = orig->super_val;
   bound_closure->func_obj = bound_func;
-  bound_closure->call_flags = orig->call_flags;
+  
   if (bound_argc > 0)
     bound_closure->call_flags |= SV_CALL_HAS_BOUND_ARGS;
 
@@ -4840,8 +4844,8 @@ static ant_value_t builtin_function_bind(ant_t *js, ant_value_t *args, int nargs
   
   ant_value_t bound = mkval(T_FUNC, (uintptr_t)bound_closure);  
   ant_value_t proto_setup = setup_func_prototype(js, bound);
+  
   if (is_err(proto_setup)) return proto_setup;
-
   js_mark_constructor(bound_func, js_is_constructor(js, func));
   
   return bound;

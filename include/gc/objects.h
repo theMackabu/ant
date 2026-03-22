@@ -6,7 +6,12 @@
 
 #define ANT_GC_DEAD 0xFF
 
-typedef void (*gc_str_mark_fn)(ant_t *js, ant_value_t v);
+typedef void (*gc_str_mark_fn)(
+  ant_t *js, 
+  ant_value_t v
+);
+
+uint64_t gc_get_epoch(void);
 bool gc_obj_is_marked(const ant_object_t *obj);
 
 void gc_mark_value(ant_t *js, ant_value_t v);

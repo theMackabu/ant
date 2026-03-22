@@ -5,6 +5,7 @@
 #include "internal.h"
 #include "runtime.h"
 #include "errors.h"
+#include "gc/objects.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -249,6 +250,7 @@ static inline sv_upvalue_t *js_upvalue_alloc(void) {
 #define SV_CALL_HAS_SUPER        (1u << 1)
 #define SV_CALL_IS_ARROW         (1u << 2)
 #define SV_CALL_IS_DEFAULT_CTOR  (1u << 3)
+#define SV_CALL_BORROWED_UPVALS  (1u << 4)
 
 typedef struct sv_closure {
   uint32_t call_flags;
@@ -266,7 +268,9 @@ typedef struct sv_closure {
 } sv_closure_t;
 
 static inline sv_closure_t *js_closure_alloc(ant_t *js) {
-  return (sv_closure_t *)fixed_arena_alloc(&js->closure_arena);
+  sv_closure_t *c = (sv_closure_t *)fixed_arena_alloc(&js->closure_arena);
+  if (c) c->gc_epoch = gc_get_epoch();
+  return c;
 }
 
 static inline sv_closure_t *js_func_closure(ant_value_t func) {

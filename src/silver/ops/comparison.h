@@ -1,8 +1,8 @@
 #ifndef SV_COMPARISON_H
 #define SV_COMPARISON_H
 
-#include "silver/engine.h"
 #include "shapes.h"
+#include "silver/engine.h"
 #include "modules/bigint.h"
 
 static inline void sv_op_seq(sv_vm_t *vm, ant_t *js) {

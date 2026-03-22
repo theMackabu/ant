@@ -648,22 +648,26 @@ void gc_objects_run(ant_t *js, gc_str_mark_fn str_mark) {
   ant_ic_epoch_bump();
   gc_promote_survivors(js);
 
-
   ant_fixed_arena_t *ca = &js->closure_arena;
   ca->free_list = NULL;
   ca->live_count = 0;
+  
   for (size_t off = 0; off < ca->watermark; off += ca->elem_size) {
-    sv_closure_t *c = (sv_closure_t *)(ca->base + off);
-    if (c->gc_epoch == gc_epoch) ca->live_count++;
-    else {
+  sv_closure_t *c = (sv_closure_t *)(ca->base + off);
+  
+  if (c->gc_epoch == gc_epoch) ca->live_count++;
+  else {
+    if (!(c->call_flags & SV_CALL_BORROWED_UPVALS)) {
       free(c->upvalues);
       c->upvalues = NULL;
-      free(c->bound_argv);
-      c->bound_argv = NULL;
-      *(void **)c = ca->free_list;
-      ca->free_list = c;
     }
-  }
+    
+    free(c->bound_argv);
+    c->bound_argv = NULL;
+    
+    *(void **)c = ca->free_list;
+    ca->free_list = c;
+  }}
 
   ant_fixed_arena_t *ua = &js->upvalue_arena;
   ua->free_list = NULL;
@@ -740,4 +744,8 @@ void gc_objects_run_minor(ant_t *js, gc_str_mark_fn str_mark) {
   // are pre-marked but not traversed unless in the remember set), so their
   // gc_epoch would not be updated and they would be incorrectly freed.
   // closure/upvalue arenas are only swept on major GC `gc_objects_run`
+}
+
+uint64_t gc_get_epoch(void) { 
+  return gc_epoch;
 }

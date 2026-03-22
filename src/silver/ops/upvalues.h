@@ -109,17 +109,18 @@ static inline void sv_op_closure(
     }
   }
 
+  ant_value_t func_val = mkval(T_FUNC, (uintptr_t)closure);
+  vm->stack[vm->sp++] = func_val;
+
   ant_value_t func_obj = mkobj(js, 0);
   closure->func_obj = func_obj;
+  
   js_mark_constructor(func_obj, !child->is_arrow && !child->is_method);
   js_setprop(js, func_obj, js->length_str, tov((double)child->param_count));
   js_set_descriptor(js, func_obj, "length", 6, JS_DESC_C);
 
-  ant_value_t func_val = mkval(T_FUNC, (uintptr_t)closure);
   if (!child->is_arrow && !child->is_method) sv_setup_function_prototype(js, func_obj, func_val);
-
-  if (child->is_strict)
-    js_set_slot(func_obj, SLOT_STRICT, js_true);
+  if (child->is_strict) js_set_slot(func_obj, SLOT_STRICT, js_true);
   
   if (child->is_async) {
     js_set_slot(func_obj, SLOT_ASYNC, js_true);
@@ -129,8 +130,6 @@ static inline void sv_op_closure(
     ant_value_t func_proto = js_get_slot(js->global, SLOT_FUNC_PROTO);
     if (vtype(func_proto) == T_FUNC) js_set_proto_init(func_obj, func_proto);
   }
-
-  vm->stack[vm->sp++] = func_val;
 }
 
 #endif
