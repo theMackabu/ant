@@ -62,7 +62,7 @@ bool ant_shape_clear_accessor_slot(ant_shape_t *shape, uint32_t slot);
 
 void ant_gc_shapes_begin(void);
 void ant_gc_shapes_mark(ant_shape_t *shape);
-void ant_gc_shapes_sweep(void);
+bool ant_gc_shapes_sweep(void);
 
 size_t ant_shape_total_bytes(void);
 extern uint32_t ant_ic_epoch_counter;

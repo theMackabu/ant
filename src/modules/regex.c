@@ -1308,6 +1308,180 @@ ant_value_t do_regex_match_pcre2(
   return result_arr;
 }
 
+static bool str_buf_append(char **buf, size_t *len, size_t *cap, const char *data, size_t n) {
+  if (n == 0) return true;
+  if (*len + n >= *cap) {
+    size_t new_cap = (*len + n + 1) * 2;
+    char *nb = (char *)ant_realloc(*buf, new_cap);
+    if (!nb) return false;
+    *buf = nb;
+    *cap = new_cap;
+  }
+  memcpy(*buf + *len, data, n);
+  *len += n;
+  return true;
+}
+
+static inline ant_value_t emit_str_replacement(
+  ant_t *js, ant_value_t replacement, bool is_func,
+  const char *repl_ptr, ant_offset_t repl_len,
+  const char *str_ptr, ant_value_t str,
+  ant_offset_t pos, ant_offset_t match_len,
+  char **buf, size_t *buf_len, size_t *buf_cap
+) {
+  if (is_func) {
+    ant_value_t cb_args[3] = { js_mkstr(js, str_ptr + pos, match_len), tov((double)pos), str };
+    ant_value_t r = sv_vm_call(js->vm, js, replacement, js_mkundef(), cb_args, 3, NULL, false);
+    
+    if (vtype(r) == T_ERR) return r;
+    ant_value_t r_str = js_tostring_val(js, r);
+    
+    if (is_err(r_str)) return r_str;
+    ant_offset_t rlen, roff = vstr(js, r_str, &rlen);
+    
+    if (!str_buf_append(buf, buf_len, buf_cap, (const char *)(uintptr_t)roff, rlen)) return js_mkerr(js, "oom");
+  } else if (!str_buf_append(buf, buf_len, buf_cap, repl_ptr, repl_len)) return js_mkerr(js, "oom");
+  
+  return js_mkundef();
+}
+
+static ant_value_t string_replace_impl(ant_t *js, ant_value_t *args, int nargs, bool replace_all) {
+  ant_value_t this_unwrapped = unwrap_primitive(js, js->this_val);
+  ant_value_t str = js_tostring_val(js, this_unwrapped);
+  
+  if (is_err(str)) return str;
+  if (nargs < 1) return str;
+
+  if (is_object_type(args[0])) {
+    if (replace_all) {
+      ant_value_t global_val = js_getprop_fallback(js, args[0], "global");
+      if (!js_truthy(js, global_val)) return js_mkerr_typed(js, JS_ERR_TYPE, "String.prototype.replaceAll called with a non-global RegExp");
+    }
+    
+    bool called = false;
+    ant_value_t replacement_arg = nargs > 1 ? args[1] : js_mkundef();
+    ant_value_t call_args[2] = { str, replacement_arg };
+    
+    ant_value_t result = maybe_call_symbol_method(js, args[0], get_replace_sym(), args[0], call_args, 2, &called);
+    if (is_err(result)) return result;
+    if (called) return result;
+  }
+  
+  if (nargs < 2) return str;
+  ant_value_t search = args[0];
+  ant_value_t replacement = args[1];
+  if (vtype(search) != T_STR) return str;
+
+  ant_offset_t str_len, str_off = vstr(js, str, &str_len);
+  const char *str_ptr = (char *)(uintptr_t)(str_off);
+  ant_offset_t search_len, search_off = vstr(js, search, &search_len);
+  const char *search_ptr = (char *)(uintptr_t)(search_off);
+
+  bool is_func = (vtype(replacement) == T_FUNC);
+  ant_offset_t repl_len = 0;
+  const char *repl_ptr = NULL;
+  
+  if (!is_func) {
+    if (vtype(replacement) != T_STR) return str;
+    ant_offset_t repl_off = vstr(js, replacement, &repl_len);
+    repl_ptr = (char *)(uintptr_t)(repl_off);
+  }
+
+  if (!replace_all) {
+    if (search_len > str_len) return str;
+    ant_offset_t match_pos = 0;
+    bool found = false;
+    
+    for (ant_offset_t i = 0; i <= str_len - search_len; i++)
+      if (memcmp(str_ptr + i, search_ptr, search_len) == 0) { 
+        match_pos = i; found = true; break;
+      }
+      
+    if (!found) return str;
+
+    size_t cap = str_len + repl_len + 256, len = 0;
+    char *buf = (char *)ant_calloc(cap);
+    if (!buf) return js_mkerr(js, "oom");
+    
+    if (!str_buf_append(&buf, &len, &cap, str_ptr, match_pos)) { 
+      free(buf);
+      return js_mkerr(js, "oom");
+    }
+    
+    ant_value_t err = emit_str_replacement(
+      js, replacement, is_func, repl_ptr, 
+      repl_len, str_ptr, str, match_pos, 
+      search_len, &buf, &len, &cap
+    );
+    
+    if (vtype(err) == T_ERR) { 
+      free(buf);
+      return err;
+    }
+    
+    if (!str_buf_append(
+      &buf, &len, &cap, str_ptr + match_pos + search_len, 
+      str_len - match_pos - search_len)
+    ) { 
+      free(buf);
+      return js_mkerr(js, "oom");
+    }
+    
+    ant_value_t ret = js_mkstr(js, buf, len);
+    free(buf);
+    
+    return ret;
+  } else {
+    size_t cap = str_len + repl_len + 256, len = 0;
+    char *buf = (char *)ant_calloc(cap);
+    if (!buf) return js_mkerr(js, "oom");
+    
+    ant_offset_t pos = 0;
+    bool replaced = false;
+    
+    while (pos + (ant_offset_t)search_len <= str_len) {
+      if (search_len == 0 || memcmp(str_ptr + pos, search_ptr, search_len) == 0) {
+        replaced = true;
+        ant_value_t err = emit_str_replacement(js, replacement, is_func, repl_ptr, repl_len, str_ptr, str, pos, search_len, &buf, &len, &cap);
+        if (vtype(err) == T_ERR) { free(buf); return err; }
+        if (search_len == 0) {
+          if (pos < str_len && !str_buf_append(&buf, &len, &cap, str_ptr + pos, 1)) { free(buf); return js_mkerr(js, "oom"); }
+          pos++;
+        } else pos += search_len;
+      } else {
+        if (!str_buf_append(&buf, &len, &cap, str_ptr + pos, 1)) { free(buf); return js_mkerr(js, "oom"); }
+        pos++;
+      }
+    }
+    
+    if (!str_buf_append(
+      &buf, &len, &cap, str_ptr + pos, 
+      str_len - pos)
+    ) {
+      free(buf);
+      return js_mkerr(js, "oom");
+    }
+    
+    if (!replaced) { 
+      free(buf);
+      return str;
+    }
+    
+    ant_value_t ret = js_mkstr(js, buf, len);
+    free(buf);
+    
+    return ret;
+  }
+}
+
+static ant_value_t builtin_string_replace(ant_t *js, ant_value_t *args, int nargs) {
+  return string_replace_impl(js, args, nargs, false);
+}
+
+static ant_value_t builtin_string_replaceAll(ant_t *js, ant_value_t *args, int nargs) {
+  return string_replace_impl(js, args, nargs, true);
+}
+
 static ant_value_t builtin_string_search(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_unwrapped = unwrap_primitive(js, js->this_val);
   ant_value_t str = js_tostring_val(js, this_unwrapped);
@@ -1516,6 +1690,8 @@ void init_regex_module(void) {
   ant_value_t string_proto = js_get(js, string_ctor, "prototype");
   js_setprop(js, string_proto, js_mkstr(js, "search", 6), js_mkfun(builtin_string_search));
   js_setprop(js, string_proto, js_mkstr(js, "match", 5), js_mkfun(builtin_string_match));
+  js_setprop(js, string_proto, js_mkstr(js, "replace", 7), js_mkfun(builtin_string_replace));
+  js_setprop(js, string_proto, js_mkstr(js, "replaceAll", 10), js_mkfun(builtin_string_replaceAll));
 }
 
 void gc_sweep_regex_cache(void) {

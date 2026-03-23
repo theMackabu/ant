@@ -173,7 +173,11 @@ void *js_type_alloc(ant_t *js, ant_alloc_kind_t kind, size_t size, size_t align)
   size_t pool_threshold = GC_HEAP_GROWTH(js->gc_pool_last_live);
   
   if (pool_threshold < (4u * 1024u * 1024u)) pool_threshold = 4u * 1024u * 1024u;
-  if (js->gc_pool_alloc >= pool_threshold) gc_run(js);
+#ifdef ANT_JIT
+  if (__builtin_expect(js->jit_active_depth > 0, 0)) { /* suppress GC during JIT */ }
+  else
+#endif
+  { if (js->gc_pool_alloc >= pool_threshold) gc_run(js); } 
 
   ant_pool_t *pool = pool_for_kind(js, kind);
   if (pool->block_size == 0) pool->block_size = pool_default_block_size(kind);

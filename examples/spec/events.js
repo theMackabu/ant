@@ -166,4 +166,31 @@ removeEventListener('global-rem', globalHandler);
 dispatchEvent('global-rem');
 test('global removeEventListener', globalRemoved, 0);
 
+console.log('\nCustomEvent Tests\n');
+
+const ce1 = new CustomEvent('ping');
+test('CustomEvent type', ce1.type, 'ping');
+test('CustomEvent detail defaults to null', ce1.detail, null);
+
+const ce2 = new CustomEvent('animalfound', { detail: { name: 'cat' } });
+test('CustomEvent detail', ce2.detail.name, 'cat');
+
+let ceReceived = null;
+const et5 = new EventTarget();
+et5.addEventListener('animalfound', e => {
+  ceReceived = e.detail.name;
+});
+et5.dispatchEvent(ce2);
+test('EventTarget dispatchEvent with CustomEvent', ceReceived, 'cat');
+
+let ceGlobal = null;
+addEventListener('custom-global', e => {
+  ceGlobal = e.detail.value;
+});
+dispatchEvent(new CustomEvent('custom-global', { detail: { value: 42 } }));
+test('global dispatchEvent with CustomEvent', ceGlobal, 42);
+
+const ce3 = new CustomEvent('tagged');
+test('CustomEvent Symbol.toStringTag', Object.prototype.toString.call(ce3), '[object CustomEvent]');
+
 summary();

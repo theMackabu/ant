@@ -644,8 +644,8 @@ void gc_objects_run(ant_t *js, gc_str_mark_fn str_mark) {
   gc_mark_roots(js);
   gc_sweep_regex_cache();
   gc_sweep(js);
-  ant_gc_shapes_sweep();
-  ant_ic_epoch_bump();
+  
+  if (ant_gc_shapes_sweep()) ant_ic_epoch_bump();
   gc_promote_survivors(js);
 
   ant_fixed_arena_t *ca = &js->closure_arena;

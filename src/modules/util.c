@@ -15,7 +15,6 @@
 #include "modules/symbol.h"
 #include "modules/util.h"
 
-
 typedef struct {
   char *buf;
   size_t len;

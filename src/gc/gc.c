@@ -122,6 +122,9 @@ void gc_run_minor(ant_t *js) {
 
 void gc_maybe(ant_t *js) {
   if (__builtin_expect(gc_disabled, 0)) return;
+#ifdef ANT_JIT
+  if (__builtin_expect(js->jit_active_depth > 0, 0)) return;
+#endif
   if (++gc_tick < GC_MIN_TICK) return;
   size_t live = js->obj_arena.live_count;
 

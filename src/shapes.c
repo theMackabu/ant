@@ -406,26 +406,31 @@ for (; shape; shape = shape->parent) {
   shape->gc_mark = gc_shape_epoch;
 }}
 
-static void shape_prune_dead_children(ant_shape_t *shape) {
+static bool shape_prune_dead_children(ant_shape_t *shape) {
+  bool freed_any = false;
   shape_child_entry_t *ce, *ctmp;
+  
   HASH_ITER(hh, shape->children, ce, ctmp) {
-    shape_prune_dead_children(ce->child);
-
-    if (ce->child->gc_mark != gc_shape_epoch && !ce->child->children) {
-      ant_shape_t *child = ce->child;
-      child->parent = NULL;
-      HASH_DEL(shape->children, ce);
-      shape_entry_free(ce);
-      ant_shape_release(child);
-    }
-  }
+  if (shape_prune_dead_children(ce->child)) freed_any = true;
+  if (ce->child->gc_mark != gc_shape_epoch && !ce->child->children) {
+    ant_shape_t *child = ce->child;
+    child->parent = NULL;
+    HASH_DEL(shape->children, ce);
+    shape_entry_free(ce);
+    ant_shape_release(child);
+    freed_any = true;
+  }}
+  
+  return freed_any;
 }
 
-void ant_gc_shapes_sweep(void) {
+bool ant_gc_shapes_sweep(void) {
+  bool freed_any = false;
   for (int i = 0; i <= (int)ANT_INOBJ_MAX_SLOTS; i++) {
-    if (g_root_shapes[i]) shape_prune_dead_children(g_root_shapes[i]);
+    if (g_root_shapes[i] && shape_prune_dead_children(g_root_shapes[i])) freed_any = true;
   }
   shape_entry_pool_trim();
+  return freed_any;
 }
 
 uint8_t ant_shape_get_inobj_limit(const ant_shape_t *shape) {

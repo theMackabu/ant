@@ -586,11 +586,20 @@ static bool mir_emit_get_field_ic_fastpath(
       MIR_new_reg_op(ctx, r_ic_epoch),
       MIR_new_mem_op(ctx, MIR_T_U32,
         (MIR_disp_t)offsetof(sv_ic_entry_t, epoch), r_ic, 0, 1)));
-  MIR_append_insn(ctx, fn,
-    MIR_new_insn(ctx, MIR_BNE,
-      MIR_new_label_op(ctx, slow),
-      MIR_new_reg_op(ctx, r_ic_epoch),
-      MIR_new_reg_op(ctx, r_global_epoch)));
+  {
+    char ce_name[40];
+    snprintf(ce_name, sizeof(ce_name), "gf_ce_%d_%u", bc_off, (unsigned)ic_idx);
+    MIR_reg_t r_cur_epoch = MIR_new_func_reg(ctx, fn->u.func, MIR_T_I64, ce_name);
+    MIR_append_insn(ctx, fn,
+      MIR_new_insn(ctx, MIR_MOV,
+        MIR_new_reg_op(ctx, r_cur_epoch),
+        MIR_new_mem_op(ctx, MIR_T_U32, 0, r_global_epoch, 0, 1)));
+    MIR_append_insn(ctx, fn,
+      MIR_new_insn(ctx, MIR_BNE,
+        MIR_new_label_op(ctx, slow),
+        MIR_new_reg_op(ctx, r_ic_epoch),
+        MIR_new_reg_op(ctx, r_cur_epoch)));
+  }
 
   mir_emit_value_to_objptr_or_jmp(
     ctx, fn, obj, r_obj_ptr, r_obj_tag, slow);
@@ -2232,16 +2241,11 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 
   MIR_reg_t r_ic_epoch_val = 0;
   if (feat.needs_ic_epoch) {
-    r_ic_epoch_val = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, "ic_epoch");
-    MIR_reg_t r_ep_tmp = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, "ic_ep_ptr");
-    MIR_append_insn(ctx, jit_func,
-      MIR_new_insn(ctx, MIR_MOV,
-        MIR_new_reg_op(ctx, r_ep_tmp),
-        MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)&ant_ic_epoch_counter)));
+    r_ic_epoch_val = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, "ic_ep_ptr");
     MIR_append_insn(ctx, jit_func,
       MIR_new_insn(ctx, MIR_MOV,
         MIR_new_reg_op(ctx, r_ic_epoch_val),
-        MIR_new_mem_op(ctx, MIR_T_U32, 0, r_ep_tmp, 0, 1)));
+        MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)&ant_ic_epoch_counter)));
   }
 
   MIR_reg_t   r_bailout_val = MIR_new_func_reg(ctx, jit_func->u.func, MIR_JSVAL, "bail_val");
@@ -5503,11 +5507,20 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
               MIR_new_reg_op(ctx, r_ic_epoch),
               MIR_new_mem_op(ctx, MIR_T_I32,
                 (MIR_disp_t)offsetof(sv_ic_entry_t, epoch), r_ic, 0, 1)));
-          MIR_append_insn(ctx, jit_func,
-            MIR_new_insn(ctx, MIR_BNE,
-              MIR_new_label_op(ctx, slow),
-              MIR_new_reg_op(ctx, r_ic_epoch),
-              MIR_new_reg_op(ctx, r_ic_epoch_val)));
+          {
+            char ice_cur_name[40];
+            snprintf(ice_cur_name, sizeof(ice_cur_name), "inst_ce_%d_%u", bc_off, (unsigned)ic_idx);
+            MIR_reg_t r_cur_ep = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, ice_cur_name);
+            MIR_append_insn(ctx, jit_func,
+              MIR_new_insn(ctx, MIR_MOV,
+                MIR_new_reg_op(ctx, r_cur_ep),
+                MIR_new_mem_op(ctx, MIR_T_U32, 0, r_ic_epoch_val, 0, 1)));
+            MIR_append_insn(ctx, jit_func,
+              MIR_new_insn(ctx, MIR_BNE,
+                MIR_new_label_op(ctx, slow),
+                MIR_new_reg_op(ctx, r_ic_epoch),
+                MIR_new_reg_op(ctx, r_cur_ep)));
+          }
 
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_URSH,
@@ -5675,11 +5688,20 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
               MIR_new_reg_op(ctx, r_ic_epoch),
               MIR_new_mem_op(ctx, MIR_T_I32,
                 (MIR_disp_t)offsetof(sv_ic_entry_t, epoch), r_ic, 0, 1)));
-          MIR_append_insn(ctx, jit_func,
-            MIR_new_insn(ctx, MIR_BNE,
-              MIR_new_label_op(ctx, slow),
-              MIR_new_reg_op(ctx, r_ic_epoch),
-              MIR_new_reg_op(ctx, r_ic_epoch_val)));
+          {
+            char cip_ce_name[40];
+            snprintf(cip_ce_name, sizeof(cip_ce_name), "cip_ce_%d_%u", bc_off, (unsigned)ic_idx);
+            MIR_reg_t r_cur_ep = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, cip_ce_name);
+            MIR_append_insn(ctx, jit_func,
+              MIR_new_insn(ctx, MIR_MOV,
+                MIR_new_reg_op(ctx, r_cur_ep),
+                MIR_new_mem_op(ctx, MIR_T_U32, 0, r_ic_epoch_val, 0, 1)));
+            MIR_append_insn(ctx, jit_func,
+              MIR_new_insn(ctx, MIR_BNE,
+                MIR_new_label_op(ctx, slow),
+                MIR_new_reg_op(ctx, r_ic_epoch),
+                MIR_new_reg_op(ctx, r_cur_ep)));
+          }
 
           mir_emit_value_to_objptr_or_jmp(
             ctx, jit_func, this_obj, r_proto_ptr, r_proto_tag, slow);

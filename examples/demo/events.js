@@ -95,3 +95,31 @@ temp.removeEventListener('test', handler);
 temp.dispatchEvent('test', 'second call (not shown)');
 
 console.log('  Handler was removed successfully');
+
+console.log('\nExample 8: CustomEvent');
+const catFound = new CustomEvent('animalfound', {
+  detail: {
+    name: 'cat',
+  },
+});
+const dogFound = new CustomEvent('animalfound', {
+  detail: {
+    name: 'dog',
+  },
+});
+
+const element = new EventTarget();
+
+element.addEventListener('animalfound', e => console.log(' ', e.detail.name, 'found'));
+
+element.dispatchEvent(catFound);
+element.dispatchEvent(dogFound);
+
+console.log('\nExample 9: CustomEvent with global dispatch');
+addEventListener('build:complete', e => {
+  console.log('  Build finished:', e.detail.duration + 'ms,', e.detail.files, 'files');
+});
+
+dispatchEvent(new CustomEvent('build:complete', {
+  detail: { duration: 142, files: 37 },
+}));
