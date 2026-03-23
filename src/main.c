@@ -68,6 +68,8 @@
 #include "modules/async_hooks.h"
 #include "modules/net.h"
 #include "modules/dns.h"
+#include "modules/assert.h"
+#include "modules/v8.h"
 #include "modules/worker_threads.h"
 
 int js_result = EXIT_SUCCESS;
@@ -606,6 +608,7 @@ int main(int argc, char *argv[]) {
   ant_standard_library("util", util_library);
   ant_standard_library("net", net_library);
   ant_standard_library("dns", dns_library);
+  ant_standard_library("assert", assert_library);
   ant_standard_library("module", module_library);
   ant_standard_library("buffer", buffer_library);
   ant_standard_library("path", path_library);
@@ -623,6 +626,7 @@ int main(int argc, char *argv[]) {
   ant_standard_library("child_process", child_process_library);
   ant_standard_library("worker_threads", worker_threads_library);
   ant_standard_library("async_hooks", async_hooks_library);
+  ant_standard_library("v8", v8_library);
 
   ant_value_t snapshot_result = ant_load_snapshot(js);
   if (vtype(snapshot_result) == T_ERR) {
