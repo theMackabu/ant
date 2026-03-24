@@ -5,6 +5,8 @@
 #include "errors.h"
 #include "internal.h"
 #include "runtime.h"
+
+#include "modules/symbol.h"
 #include "modules/crypto.h"
 
 #if DBL_MANT_DIG >= 64
@@ -327,5 +329,7 @@ void init_math_module(void) {
   js_setprop(js, math_obj, js_mkstr(js, "tan", 3), js_mkfun(builtin_Math_tan));
   js_setprop(js, math_obj, js_mkstr(js, "tanh", 4), js_mkfun(builtin_Math_tanh));
   js_setprop(js, math_obj, js_mkstr(js, "trunc", 5), js_mkfun(builtin_Math_trunc));
+  
+  js_set_sym(js, math_obj, get_toStringTag_sym(), js_mkstr(js, "Math", 4));
   js_setprop(js, glob, js_mkstr(js, "Math", 4), math_obj);
 }

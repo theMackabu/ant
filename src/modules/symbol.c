@@ -271,9 +271,6 @@ void init_symbol_module(void) {
   ant_value_t promise_proto = js_get(js, promise_ctor, "prototype");
   js_set_sym(js, promise_proto, g_toStringTag, js_mkstr(js, "Promise", 7));
 
-  ant_value_t math_obj = js_get(js, js_glob(js), "Math");
-  if (is_object_type(math_obj)) js_set_sym(js, math_obj, g_toStringTag, js_mkstr(js, "Math", 4));
-
   js_define_species_getter(js, promise_ctor);
   js_define_species_getter(js, array_ctor);
 }

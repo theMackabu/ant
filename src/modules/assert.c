@@ -231,7 +231,7 @@ static ant_value_t assert_does_not_reject(ant_t *js, ant_value_t *args, int narg
 static ant_value_t assert_match(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_mkundef();
   ant_value_t test_fn = js_getprop_fallback(js, args[1], "test");
-  if (vtype(test_fn) != T_FUNC) return js_mkerr(js, "assert.match: second argument must be a RegExp");
+  if (vtype(test_fn) != T_FUNC && vtype(test_fn) != T_CFUNC) return js_mkerr(js, "assert.match: second argument must be a RegExp");
   ant_value_t test_args[1] = {args[0]};
   ant_value_t result = sv_vm_call(js->vm, js, test_fn, args[1], test_args, 1, NULL, false);
   if (!js_truthy(js, result))
@@ -242,7 +242,7 @@ static ant_value_t assert_match(ant_t *js, ant_value_t *args, int nargs) {
 static ant_value_t assert_does_not_match(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_mkundef();
   ant_value_t test_fn = js_getprop_fallback(js, args[1], "test");
-  if (vtype(test_fn) != T_FUNC) return js_mkerr(js, "assert.doesNotMatch: second argument must be a RegExp");
+  if (vtype(test_fn) != T_FUNC && vtype(test_fn) != T_CFUNC) return js_mkerr(js, "assert.doesNotMatch: second argument must be a RegExp");
   ant_value_t test_args[1] = {args[0]};
   ant_value_t result = sv_vm_call(js->vm, js, test_fn, args[1], test_args, 1, NULL, false);
   if (js_truthy(js, result))

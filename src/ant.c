@@ -5052,8 +5052,7 @@ static ant_value_t builtin_object_is(ant_t *js, ant_value_t *args, int nargs) {
   }
   
   if (tx == T_BOOL) return vdata(x) == vdata(y) ? js_true : js_false;
-  
-  return x == y ? js_true : js_false;
+  return strict_eq_values(js, x, y) ? js_true : js_false;
 }
 
 enum obj_enum_mode { 

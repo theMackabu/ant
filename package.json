@@ -2,7 +2,8 @@
   "name": "ant",
   "type": "module",
   "scripts": {
-    "spec": "./build/ant examples/spec/run.js"
+    "spec": "./build/ant examples/spec/run.js",
+    "wpt": "sh -c './build/ant tools/wpt/runner.js wpt/dom/$1.any.js' --"
   },
   "dependencies": {},
   "devDependencies": {}
