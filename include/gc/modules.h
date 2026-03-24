@@ -19,5 +19,7 @@ void gc_mark_lmdb(ant_t *js, gc_mark_fn mark);
 void gc_mark_symbols(ant_t *js, gc_mark_fn mark);
 void gc_mark_esm(ant_t *js, gc_mark_fn mark);
 void gc_mark_worker_threads(ant_t *js, gc_mark_fn mark);
+void gc_mark_abort(ant_t *js, gc_mark_fn mark);
+void gc_mark_domexception(ant_t *js, gc_mark_fn mark);
 
 #endif

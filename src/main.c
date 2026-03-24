@@ -69,6 +69,8 @@
 #include "modules/net.h"
 #include "modules/dns.h"
 #include "modules/assert.h"
+#include "modules/domexception.h"
+#include "modules/abort.h"
 #include "modules/v8.h"
 #include "modules/worker_threads.h"
 
@@ -572,9 +574,12 @@ int main(int argc, char *argv[]) {
   proc_argv = build_process_argv(argc, argv, module_file, script_tail);
   ant_runtime_init(js, proc_argv.argc, proc_argv.argv, localstorage_file);
 
+  init_symbol_module();
+  init_timer_module();
+  init_domexception_module();
+  init_abort_module();
   init_math_module();
   init_bigint_module();
-  init_symbol_module();
   init_date_module();
   init_regex_module();
   init_collections_module();
@@ -587,7 +592,6 @@ int main(int argc, char *argv[]) {
   init_console_module();
   init_json_module();
   init_server_module();
-  init_timer_module();
   init_process_module();
   init_tty_module();
   init_events_module();

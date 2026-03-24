@@ -22,6 +22,9 @@
 /javascript-zoo
 /game-of-life
 
+/wpt
+/tools
+
 /vendor/*/
 /vendor/.wraplock
 !/vendor/packagefiles
