@@ -41,11 +41,13 @@ typedef struct esm_module {
   size_t url_content_len;
   ant_value_t namespace_obj;
   ant_value_t default_export;
+  ant_value_t tla_promise;
   UT_hash_handle hh;
   esm_module_kind_t kind;
   ant_module_format_t format;
   bool is_loaded;
   bool is_loading;
+  bool has_tla;
 } esm_module_t;
 
 typedef struct {
@@ -59,6 +61,7 @@ typedef struct {
 } esm_file_data_t;
 
 static esm_module_cache_t global_module_cache = {NULL, 0};
+static int esm_dynamic_import_depth = 0;
 static char *esm_resolve_node_module(const char *specifier, const char *base_path);
 
 static char *esm_file_url_to_path(const char *specifier) {
@@ -869,6 +872,8 @@ static esm_module_t *esm_create_module(const char *path, const char *resolved_pa
     .format = MODULE_EVAL_FORMAT_UNKNOWN,
     .url_content = NULL,
     .url_content_len = 0,
+    .tla_promise = js_mkundef(),
+    .has_tla = false,
   };
   
   HASH_ADD_STR(global_module_cache.modules, resolved_path, mod);
@@ -1078,7 +1083,11 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod) {
   );
   
   free(content);
-  if (vtype(result) == T_PROMISE) js_run_event_loop(js);
+  if (vtype(result) == T_PROMISE) {
+  if (esm_dynamic_import_depth > 0) {
+    mod->has_tla = true;
+    mod->tla_promise = result;
+  } else js_run_event_loop(js); }
 
   js_module_eval_ctx_pop(js, &eval_ctx);
   js_set_filename(js, prev_filename);
@@ -1160,6 +1169,26 @@ ant_value_t js_esm_import_sync(ant_t *js, ant_value_t specifier) {
   return js_esm_import_sync_from(js, specifier, NULL);
 }
 
+ant_value_t js_esm_import_dynamic(ant_t *js, ant_value_t specifier, ant_value_t *out_tla_promise) {
+  *out_tla_promise = js_mkundef();
+  esm_dynamic_import_depth++;
+  
+  ant_value_t ns = js_esm_import_sync(js, specifier);
+  esm_dynamic_import_depth--;
+  if (is_err(ns)) return ns;
+
+  esm_module_t *mod = NULL, *tmp = NULL;
+  HASH_ITER(hh, global_module_cache.modules, mod, tmp) {
+  if (mod->has_tla && mod->namespace_obj == ns) {
+    *out_tla_promise = mod->tla_promise;
+    mod->has_tla = false;
+    mod->tla_promise = js_mkundef();
+    break;
+  }}
+  
+  return ns;
+}
+
 ant_value_t js_esm_make_file_url(ant_t *js, const char *path) {
   size_t url_len = strlen(path) + 8;
   char *url = malloc(url_len);
@@ -1172,12 +1201,12 @@ ant_value_t js_esm_make_file_url(ant_t *js, const char *path) {
 }
 
 void gc_mark_esm(ant_t *js, gc_mark_fn mark) {
-  esm_module_t *mod = NULL, *tmp = NULL;
-  HASH_ITER(hh, global_module_cache.modules, mod, tmp) {
-    mark(js, mod->namespace_obj);
-    mark(js, mod->default_export);
-  }
-}
+esm_module_t *mod = NULL, *tmp = NULL;
+HASH_ITER(hh, global_module_cache.modules, mod, tmp) {
+  mark(js, mod->namespace_obj);
+  mark(js, mod->default_export);
+  if (mod->has_tla) mark(js, mod->tla_promise);
+}}
 
 ant_value_t js_esm_resolve_specifier(ant_t *js, ant_value_t specifier, const char *base_path) {
   if (vtype(specifier) != T_STR) {

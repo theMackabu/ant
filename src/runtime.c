@@ -1,7 +1,6 @@
 #include "ant.h"
 #include "runtime.h"
 #include "descriptors.h"
-#include "silver/engine.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -164,6 +163,8 @@ void destroy_runtime(ant_t *js) {
 }
 
 struct ant_runtime *ant_runtime_init(ant_t *js, int argc, char **argv, struct arg_file *ls_p) {
+  ant_value_t global = js_glob(js);
+  
   runtime = (struct ant_runtime){
     .js = js,
     .ant_obj = js_newobj(js),
@@ -171,16 +172,21 @@ struct ant_runtime *ant_runtime_init(ant_t *js, int argc, char **argv, struct ar
     .pid = (int)ant_getpid(),
     .ls_fp = (ls_p && ls_p->count > 0) ? ls_p->filename[0] : NULL,
   };
-
-  ant_value_t global = js_glob(js);
+  
+  js_set(js, global, "self", global);
+  js_set_descriptor(js, global, "self", 4, JS_DESC_W | JS_DESC_C);
+  
   js_set(js, global, "window", global);
-  js_set(js, global, "global", global);
-  js_set(js, global, "globalThis", global);
-  js_set(js, global, "Ant", runtime.ant_obj);
+  js_set_descriptor(js, global, "window", 6, JS_DESC_W | JS_DESC_C);
 
-  js_set_descriptor(js, js_as_obj(global), "window", 6, JS_DESC_W | JS_DESC_C);
-  js_set_descriptor(js, js_as_obj(global), "global", 6, JS_DESC_W | JS_DESC_C);
-  js_set_descriptor(js, js_as_obj(global), "globalThis", 10, JS_DESC_W | JS_DESC_C);
+  js_set(js, global, "global", global);
+  js_set_descriptor(js, global, "global", 6, JS_DESC_W | JS_DESC_C);
+
+  js_set(js, global, "globalThis", global);
+  js_set_descriptor(js, global, "globalThis", 10, JS_DESC_W | JS_DESC_C);
+
+  js_set(js, global, "Ant", runtime.ant_obj);
+  js_set_descriptor(js, global, "Ant", 3, JS_DESC_E);
 
   return &runtime;
 }

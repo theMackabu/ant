@@ -4884,6 +4884,13 @@ static ant_value_t builtin_Array(ant_t *js, ant_value_t *args, int nargs) {
   return arr;
 }
 
+static ant_value_t builtin_error_isError(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_false;
+  ant_value_t val = args[0];
+  if (!is_object_type(val)) return js_false;
+  return get_slot(val, SLOT_ERROR_BRAND) == js_true ? js_true : js_false;
+}
+
 static ant_value_t builtin_Error(ant_t *js, ant_value_t *args, int nargs) {
   bool is_new = (vtype(js->new_target) != T_UNDEF);
   ant_value_t this_val = js->this_val;
@@ -10885,10 +10892,30 @@ ant_value_t do_in(ant_t *js, ant_value_t l, ant_value_t r) {
   return mkval(T_BOOL, found != 0 ? 1 : 0);
 }
 
+static ant_value_t builtin_import_tla_resolve(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t me = js->current_func;
+  return get_slot(me, SLOT_DATA);
+}
+
 static ant_value_t builtin_import(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "import() requires a string specifier");
-  ant_value_t ns = js_esm_import_sync(js, args[0]);
+
+  ant_value_t tla_promise = js_mkundef();
+  ant_value_t ns = js_esm_import_dynamic(js, args[0], &tla_promise);
   if (is_err(ns)) return builtin_Promise_reject(js, &ns, 1);
+
+  if (vtype(tla_promise) == T_PROMISE) {
+    ant_value_t resolve_fn = make_data_cfunc(js, ns, builtin_import_tla_resolve);
+    ant_value_t saved = js->this_val;
+    
+    js->this_val = tla_promise;
+    ant_value_t then_args[] = { resolve_fn };
+    
+    ant_value_t result = builtin_promise_then(js, then_args, 1);
+    js->this_val = saved;
+    
+    return result;
+  }
 
   ant_value_t promise_args[] = { ns };
   return builtin_Promise_resolve(js, promise_args, 1);
@@ -11679,6 +11706,7 @@ ant_t *js_create(void *buf, size_t len) {
   js_setprop(js, glob, ANT_STRING("Error"), err_ctor_func);
   js_setprop(js, error_proto, js_mkstr(js, "constructor", 11), err_ctor_func);
   js_set_descriptor(js, error_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
+  js_setprop(js, err_ctor_func, ANT_STRING("isError"), js_mkfun(builtin_error_isError));
   
   #define REGISTER_ERROR_SUBTYPE(name_str) do { \
     ant_value_t proto = js_mkobj(js); \

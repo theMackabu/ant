@@ -196,6 +196,12 @@ static bool promise_was_rejected(ant_value_t result) {
   return obj && obj->promise_state && obj->promise_state->state == 2;
 }
 
+static void promise_mark_handled(ant_value_t result) {
+  if (vtype(result) != T_PROMISE) return;
+  ant_object_t *obj = js_obj_ptr(js_as_obj(result));
+  if (obj && obj->promise_state) obj->promise_state->has_rejection_handler = true;
+}
+
 static bool promise_was_fulfilled(ant_value_t result) {
   if (vtype(result) != T_PROMISE) return false;
   ant_object_t *obj = js_obj_ptr(js_as_obj(result));
@@ -208,10 +214,10 @@ static ant_value_t assert_rejects(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t result = vtype(args[0]) == T_FUNC
     ? sv_vm_call(js->vm, js, args[0], js_mkundef(), NULL, 0, NULL, false)
     : args[0];
-  if (is_err(result) || promise_was_rejected(result))
+  if (is_err(result) || promise_was_rejected(result)) {
+    promise_mark_handled(result);
     js_resolve_promise(js, promise, js_mkundef());
-  else
-    js_reject_promise(js, promise, js_mkerr(js, "Missing expected rejection"));
+  } else js_reject_promise(js, promise, js_mkerr(js, "Missing expected rejection"));
   return promise;
 }
 
@@ -221,10 +227,10 @@ static ant_value_t assert_does_not_reject(ant_t *js, ant_value_t *args, int narg
   ant_value_t result = vtype(args[0]) == T_FUNC
     ? sv_vm_call(js->vm, js, args[0], js_mkundef(), NULL, 0, NULL, false)
     : args[0];
-  if (is_err(result) || promise_was_rejected(result))
+  if (is_err(result) || promise_was_rejected(result)) {
+    promise_mark_handled(result);
     js_reject_promise(js, promise, js_mkerr(js, "Got unwanted rejection"));
-  else
-    js_resolve_promise(js, promise, js_mkundef());
+  } else js_resolve_promise(js, promise, js_mkundef());
   return promise;
 }
 
