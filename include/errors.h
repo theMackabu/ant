@@ -32,6 +32,11 @@ void js_print_stack_trace_vm(ant_t *js, FILE *stream);
 void js_set_error_site_from_vm_top(ant_t *js);
 void js_capture_stack(ant_t *js, ant_value_t err_obj);
 
+void js_get_call_location(
+  ant_t *js, const char **out_filename,
+  int *out_line, int *out_col
+);
+
 void js_set_error_site_from_bc(
   ant_t *js, sv_func_t *func, 
   int bc_offset, const char *filename

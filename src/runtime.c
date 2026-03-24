@@ -172,6 +172,15 @@ struct ant_runtime *ant_runtime_init(ant_t *js, int argc, char **argv, struct ar
     .pid = (int)ant_getpid(),
     .ls_fp = (ls_p && ls_p->count > 0) ? ls_p->filename[0] : NULL,
   };
+
+  js_set(js, global, "onerror", js_mknull());
+  js_set_descriptor(js, global, "onerror", 7, JS_DESC_W | JS_DESC_C);
+
+  js_set(js, global, "onunhandledrejection", js_mknull());
+  js_set_descriptor(js, global, "onunhandledrejection", 20, JS_DESC_W | JS_DESC_C);
+
+  js_set(js, global, "onrejectionhandled", js_mknull());
+  js_set_descriptor(js, global, "onrejectionhandled", 18, JS_DESC_W | JS_DESC_C);
   
   js_set(js, global, "self", global);
   js_set_descriptor(js, global, "self", 4, JS_DESC_W | JS_DESC_C);

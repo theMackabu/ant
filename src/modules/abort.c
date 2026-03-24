@@ -58,49 +58,73 @@ static ant_value_t make_timeout_error(ant_t *js) {
   return make_dom_exception(js, "signal timed out", "TimeoutError");
 }
 
+static void signal_mark_aborted(ant_t *js, ant_value_t signal_obj, ant_value_t reason) {
+  abort_signal_data_t *data = get_signal_data(signal_obj);
+  if (!data || data->aborted) return;
+  
+  data->aborted = true;
+  data->fired = true;
+  data->reason = reason;
+  
+  js_set(js, signal_obj, "aborted", js_true);
+  js_set(js, signal_obj, "reason",  reason);
+}
+
 void signal_do_abort(ant_t *js, ant_value_t signal_obj, ant_value_t reason) {
   abort_signal_data_t *data = get_signal_data(signal_obj);
   if (!data || data->aborted) return;
 
-  data->aborted = true;
-  data->fired = true;
-  data->reason = reason;
+  UT_array *queue;    utarray_new(queue,   &abort_value_icd);
+  UT_array *to_fire;  utarray_new(to_fire, &abort_value_icd);
 
-  js_set(js, signal_obj, "aborted", js_true);
-  js_set(js, signal_obj, "reason", reason);
+  utarray_push_back(queue, &signal_obj);
+
+  for (unsigned int qi = 0; qi < utarray_len(queue); qi++) {
+  ant_value_t *cur = (ant_value_t *)utarray_eltptr(queue, qi);
+  abort_signal_data_t *d = get_signal_data(*cur);
+  if (!d || d->aborted) continue;
+
+  d->aborted = true;
+  d->fired   = true;
+  d->reason  = reason;
+  js_set(js, *cur, "aborted", js_true);
+  js_set(js, *cur, "reason",  reason);
+  utarray_push_back(to_fire, cur);
+
+  unsigned int nf = utarray_len(d->followers);
+  for (unsigned int i = 0; i < nf; i++) {
+    ant_value_t *sig = (ant_value_t *)utarray_eltptr(d->followers, i);
+    utarray_push_back(queue, sig);
+  }}
+  utarray_free(queue);
+
+  for (unsigned int qi = 0; qi < utarray_len(to_fire); qi++) {
+  ant_value_t *cur = (ant_value_t *)utarray_eltptr(to_fire, qi);
+  abort_signal_data_t *d = get_signal_data(*cur);
+  if (!d) continue;
 
   ant_value_t event_obj = js_mkobj(js);
-  js_set(js, event_obj, "type", js_mkstr(js, "abort", 5));
-  js_set(js, event_obj, "target", signal_obj);
+  js_set(js, event_obj, "type",   js_mkstr(js, "abort", 5));
+  js_set(js, event_obj, "target", *cur);
   ant_value_t call_args[1] = { event_obj };
 
-  ant_value_t onabort = js_get(js, signal_obj, "onabort");
+  ant_value_t onabort = js_get(js, *cur, "onabort");
   if (vtype(onabort) == T_FUNC) {
-    sv_vm_call(js->vm, js, onabort, signal_obj, call_args, 1, NULL, false);
+    sv_vm_call(js->vm, js, onabort, *cur, call_args, 1, NULL, false);
     process_microtasks(js);
   }
 
-  unsigned int n = utarray_len(data->listeners);
+  unsigned int n = utarray_len(d->listeners);
   for (unsigned int i = 0; i < n;) {
-    abort_listener_t *entry = (abort_listener_t *)utarray_eltptr(data->listeners, i);
-    ant_value_t cb = entry->callback;
-    bool once = entry->once;
-
-    if (once) {
-      utarray_erase(data->listeners, i, 1);
-      n--;
-    } else i++;
-
+    abort_listener_t *entry = (abort_listener_t *)utarray_eltptr(d->listeners, i);
+    ant_value_t cb   = entry->callback;
+    bool        once = entry->once;
+    if (once) { utarray_erase(d->listeners, i, 1); n--; } else i++;
     if (vtype(cb) != T_FUNC) continue;
-    sv_vm_call(js->vm, js, cb, signal_obj, call_args, 1, NULL, false);
+    sv_vm_call(js->vm, js, cb, *cur, call_args, 1, NULL, false);
     process_microtasks(js);
-  }
-
-  unsigned int nf = utarray_len(data->followers);
-  for (unsigned int i = 0; i < nf; i++) {
-    ant_value_t *sig = (ant_value_t *)utarray_eltptr(data->followers, i);
-    signal_do_abort(js, *sig, reason);
-  }
+  }}
+  utarray_free(to_fire);
 }
 
 static ant_value_t make_new_signal(ant_t *js) {
@@ -135,15 +159,7 @@ static ant_value_t abort_signal_add_event_listener(ant_t *js, ant_value_t *args,
 
   abort_signal_data_t *data = get_signal_data(js_getthis(js));
   if (!data) return js_mkundef();
-
-  if (data->aborted) {
-    ant_value_t event_obj = js_mkobj(js);
-    js_set(js, event_obj, "type", js_mkstr(js, "abort", 5));
-    js_set(js, event_obj, "target", js_getthis(js));
-    ant_value_t call_args[1] = { event_obj };
-    sv_vm_call(js->vm, js, args[1], js_getthis(js), call_args, 1, NULL, false);
-    return js_mkundef();
-  }
+  if (data->aborted) return js_mkundef();
 
   bool once = false;
   if (nargs >= 3 && vtype(args[2]) == T_OBJ) {
@@ -217,7 +233,7 @@ static ant_value_t abort_signal_static_abort(ant_t *js, ant_value_t *args, int n
   ant_value_t signal = make_new_signal(js);
   if (is_err(signal)) return signal;
 
-  signal_do_abort(js, signal, reason);
+  signal_mark_aborted(js, signal, reason);
   return signal;
 }
 
@@ -234,7 +250,7 @@ static ant_value_t abort_signal_static_any(ant_t *js, ant_value_t *args, int nar
   ant_value_t sig = js_arr_get(js, args[0], i);
   abort_signal_data_t *d = get_signal_data(sig);
   if (d && d->aborted) {
-    signal_do_abort(js, composite, d->reason);
+    signal_mark_aborted(js, composite, d->reason);
     return composite;
   }}
 

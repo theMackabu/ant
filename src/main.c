@@ -71,6 +71,7 @@
 #include "modules/assert.h"
 #include "modules/domexception.h"
 #include "modules/abort.h"
+#include "modules/globals.h"
 #include "modules/v8.h"
 #include "modules/worker_threads.h"
 
@@ -577,6 +578,7 @@ int main(int argc, char *argv[]) {
   init_symbol_module();
   init_timer_module();
   init_domexception_module();
+  init_globals_module();
   init_abort_module();
   init_math_module();
   init_bigint_module();

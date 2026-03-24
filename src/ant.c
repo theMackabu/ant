@@ -60,6 +60,7 @@
 #include "modules/collections.h"
 #include "modules/lmdb.h"
 #include "modules/regex.h"
+#include "modules/globals.h"
 
 #define D(x) ((double)(x))
 
@@ -10049,6 +10050,7 @@ static ant_value_t builtin_promise_then(ant_t *js, ant_value_t *args, int nargs)
     gc_write_barrier(js, js_obj_ptr(js_as_obj(p)), onRejected);
 
     if (vtype(onRejected) == T_FUNC || vtype(onRejected) == T_CFUNC) {
+      if (pd->unhandled_reported) js_fire_rejection_handled(js, p, pd->value);
       pd->has_rejection_handler = true;
       pd->unhandled_reported = false;
     }
@@ -12577,7 +12579,9 @@ for (ant_object_t *obj = list; obj; obj = obj->next) {
     js_destroy(js); exit(1);
   }
 
-  print_unhandled_promise_rejection(js, pd->value);
+  ant_value_t promise_val = mkval(T_PROMISE, (uintptr_t)obj);
+  if (!js_fire_unhandled_rejection(js, promise_val, pd->value))
+    print_unhandled_promise_rejection(js, pd->value);
   pd->unhandled_reported = true;
 }}
 

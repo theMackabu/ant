@@ -606,6 +606,20 @@ void js_set_error_site(ant_t *js, const char *src, ant_offset_t src_len, const c
   js->errsite.valid = (src != NULL && src_len >= 0);
 }
 
+void js_get_call_location(ant_t *js, const char **out_filename, int *out_line, int *out_col) {
+  if (!js) return;
+  if (!js->errsite.valid) js_set_error_site_from_vm_top(js);
+  
+  if (out_filename) *out_filename = (js->errsite.valid && js->errsite.filename) ? js->errsite.filename : js->filename;
+  if (out_line) *out_line = 1;
+  if (out_col)  *out_col  = 1;
+  
+  if (js->errsite.valid && js->errsite.src) get_line_col(
+    js->errsite.src, js->errsite.src_len, 
+    js->errsite.off, out_line, out_col
+  );
+}
+
 void js_clear_error_site(ant_t *js) {
   if (!js) return;
   memset(&js->errsite, 0, sizeof(js->errsite));

@@ -251,6 +251,25 @@ static ant_value_t js_dispatch_event(ant_t *js, ant_value_t *args, int nargs) {
   return dispatch_event_to(js, args, nargs, find_global_event_type(event_type), js_mkundef());
 }
 
+void js_dispatch_global_event(ant_t *js, ant_value_t event_obj) {
+  ant_value_t type_val = js_get(js, event_obj, "type");
+  const char *event_type = js_getstr(js, type_val, NULL);
+  if (!event_type) return;
+
+  EventType *evt = find_global_event_type(event_type);
+  if (!evt || evt->listener_count == 0) return;
+
+  js_set(js, event_obj, "target", js_glob(js));
+  ant_value_t call_args[1] = { event_obj };
+
+  for (int i = 0; i < evt->listener_count;) {
+    EventListener *listener = &evt->listeners[i];
+    sv_vm_call(js->vm, js, listener->listener, js_mkundef(), call_args, 1, NULL, false);
+    if (listener->once) remove_listener_at(evt, i);
+    else i++;
+  }
+}
+
 static ant_value_t js_get_event_listeners(ant_t *js, ant_value_t *args, int nargs) {  
   EventType *evt, *tmp;
   ant_value_t result = js_mkobj(js);
