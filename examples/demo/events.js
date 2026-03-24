@@ -2,17 +2,19 @@ console.log('Example 1: Global Events');
 addEventListener('appReady', () => {
   console.log('  App is ready!');
 });
-dispatchEvent('appReady');
+dispatchEvent(new Event('appReady'));
 
 console.log('\nExample 2: Custom Event Data');
 addEventListener('userLogin', event => {
   console.log('  User logged in:', event.detail.username);
   console.log('  Login time:', event.detail.timestamp);
 });
-dispatchEvent('userLogin', {
-  username: 'alice',
-  timestamp: Date.now()
-});
+dispatchEvent(new CustomEvent('userLogin', {
+  detail: {
+    username: 'alice',
+    timestamp: Date.now()
+  }
+}));
 
 console.log('\nExample 3: Object Events');
 const button = new EventTarget();
@@ -23,8 +25,8 @@ button.addEventListener('click', event => {
   console.log('  Button name:', event.target.name);
 });
 
-button.dispatchEvent('click');
-button.dispatchEvent('click');
+button.dispatchEvent(new Event('click'));
+button.dispatchEvent(new Event('click'));
 
 console.log('\nExample 4: Multiple Event Targets');
 const user = new EventTarget();
@@ -41,8 +43,8 @@ socket.addEventListener('message', event => {
   console.log('  Socket message:', event.detail.data);
 });
 
-user.dispatchEvent('statusChange', { status: 'online' });
-socket.dispatchEvent('message', { data: 'Hello!' });
+user.dispatchEvent(new CustomEvent('statusChange', { detail: { status: 'online' } }));
+socket.dispatchEvent(new CustomEvent('message', { detail: { data: 'Hello!' } }));
 
 console.log('\nExample 5: Once Listeners');
 const startup = new EventTarget();
@@ -57,9 +59,9 @@ startup.addEventListener(
   { once: true }
 );
 
-startup.dispatchEvent('init');
-startup.dispatchEvent('init');
-startup.dispatchEvent('init');
+startup.dispatchEvent(new Event('init'));
+startup.dispatchEvent(new Event('init'));
+startup.dispatchEvent(new Event('init'));
 console.log('  Total init calls:', initCount);
 
 console.log('\nExample 6: Event Emitter Pattern');
@@ -78,8 +80,8 @@ emitter.on('data', event => {
   console.log('  Data received:', event.detail);
 });
 
-emitter.emit('data', { value: 42, type: 'number' });
-emitter.emit('data', { value: 'hello', type: 'string' });
+emitter.emit(new CustomEvent('data', { detail: { value: 42, type: 'number' } }));
+emitter.emit(new CustomEvent('data', { detail: { value: 'hello', type: 'string' } }));
 
 console.log('\nExample 7: Removing Listeners');
 const temp = new EventTarget();
@@ -89,10 +91,10 @@ function handler(event) {
 }
 
 temp.addEventListener('test', handler);
-temp.dispatchEvent('test', 'first call');
+temp.dispatchEvent(new CustomEvent('test', { detail: 'first call' }));
 
 temp.removeEventListener('test', handler);
-temp.dispatchEvent('test', 'second call (not shown)');
+temp.dispatchEvent(new CustomEvent('test', { detail: 'second call (not shown)' }));
 
 console.log('  Handler was removed successfully');
 

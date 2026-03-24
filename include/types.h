@@ -24,4 +24,7 @@ typedef size_t   ant_handle_t;
 typedef uint64_t ant_offset_t;
 typedef uint64_t ant_value_t;
 
+typedef ant_value_t (*ant_cfunc_t)
+(ant_t *, ant_value_t *, int);
+
 #endif

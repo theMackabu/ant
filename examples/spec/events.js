@@ -118,7 +118,7 @@ let etReceived = null;
 et.addEventListener('click', e => {
   etReceived = e.type;
 });
-et.dispatchEvent('click');
+et.dispatchEvent(new Event('click'));
 test('EventTarget addEventListener and dispatchEvent', etReceived, 'click');
 
 let etEvent = null;
@@ -126,7 +126,7 @@ const et2 = new EventTarget();
 et2.addEventListener('custom', e => {
   etEvent = e;
 });
-et2.dispatchEvent('custom', { foo: 'bar' });
+et2.dispatchEvent(new CustomEvent('custom', { detail: { foo: 'bar' } }));
 test('event.type', etEvent.type, 'custom');
 test('event.target is EventTarget', etEvent.target, et2);
 test('event.detail', etEvent.detail.foo, 'bar');
@@ -138,14 +138,14 @@ const et3Handler = () => {
 };
 et3.addEventListener('rem', et3Handler);
 et3.removeEventListener('rem', et3Handler);
-et3.dispatchEvent('rem');
+et3.dispatchEvent(new Event('rem'));
 test('EventTarget removeEventListener', et3Val, 0);
 
 const et4 = new EventTarget();
 let et4Count = 0;
 et4.addEventListener('once', () => et4Count++, { once: true });
-et4.dispatchEvent('once');
-et4.dispatchEvent('once');
+et4.dispatchEvent(new Event('once'));
+et4.dispatchEvent(new Event('once'));
 test('EventTarget once option', et4Count, 1);
 
 console.log('\nGlobal Event Tests\n');
@@ -154,7 +154,7 @@ let globalReceived = null;
 addEventListener('global-test', e => {
   globalReceived = e.type;
 });
-dispatchEvent('global-test');
+dispatchEvent(new Event('global-test'));
 test('global addEventListener and dispatchEvent', globalReceived, 'global-test');
 
 let globalRemoved = 0;
@@ -163,7 +163,7 @@ const globalHandler = () => {
 };
 addEventListener('global-rem', globalHandler);
 removeEventListener('global-rem', globalHandler);
-dispatchEvent('global-rem');
+dispatchEvent(new Event('global-rem'));
 test('global removeEventListener', globalRemoved, 0);
 
 console.log('\nCustomEvent Tests\n');
