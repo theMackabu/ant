@@ -9,6 +9,7 @@
 
 #include "silver/engine.h"
 #include "modules/symbol.h"
+#include "modules/abort.h"
 #include "streams/writable.h"
 
 static ant_value_t g_ws_proto;
@@ -184,6 +185,29 @@ static void writable_stream_deal_with_rejection(ant_t *js, ant_value_t stream_ob
 static void writable_stream_update_backpressure(ant_t *js, ant_value_t stream_obj, bool backpressure);
 static ant_value_t js_ws_writer_ctor(ant_t *js, ant_value_t *args, int nargs);
 
+static bool ws_is_thenable(ant_t *js, ant_value_t val) {
+  if (vtype(val) == T_PROMISE) return true;
+  if (!is_object_type(val)) return false;
+  ant_value_t then = js_get(js, val, "then");
+  return is_callable(then);
+}
+
+static void ws_chain_thenable(ant_t *js, ant_value_t val, ant_value_t res_fn, ant_value_t rej_fn) {
+if (vtype(val) == T_PROMISE) {
+  ant_value_t then_fn = js_get(js, val, "then");
+  if (is_callable(then_fn)) {
+    ant_value_t then_args[2] = { res_fn, rej_fn };
+    sv_vm_call(js->vm, js, then_fn, val, then_args, 2, NULL, false);
+  }} else {
+  ant_value_t resolved = js_mkpromise(js);
+  js_resolve_promise(js, resolved, val);
+  ant_value_t then_fn = js_get(js, resolved, "then");
+  if (is_callable(then_fn)) {
+    ant_value_t then_args[2] = { res_fn, rej_fn };
+    sv_vm_call(js->vm, js, then_fn, resolved, then_args, 2, NULL, false);
+  }
+}}
+
 static void ws_default_controller_clear_algorithms(ant_value_t ctrl_obj) {
   js_set_slot(ctrl_obj, SLOT_WS_WRITE, js_mkundef());
   js_set_slot(ctrl_obj, SLOT_WS_CLOSE, js_mkundef());
@@ -232,6 +256,13 @@ static void writable_stream_start_erroring(ant_t *js, ant_value_t stream_obj, an
 
   stream->state = WS_STATE_ERRORING;
   js_set_slot(stream_obj, SLOT_BUFFER, reason);
+
+  ant_value_t signal_ac = ws_ctrl_signal(ctrl_obj);
+  if (is_object_type(signal_ac)) {
+    ant_value_t signal = js_get(js, signal_ac, "signal");
+    if (is_object_type(signal))
+    signal_do_abort(js, signal, reason);
+  }
 
   ant_value_t writer_obj = ws_stream_writer(stream_obj);
   if (is_object_type(writer_obj))
@@ -320,21 +351,20 @@ static void writable_stream_finish_erroring(ant_t *js, ant_value_t stream_obj) {
       ant_value_t thrown = js->thrown_value;
       js_reject_promise(js, abort_promise, is_object_type(thrown) ? thrown : result);
       ws_reject_close_and_closed(js, stream_obj);
-    } else if (vtype(result) == T_PROMISE) {
+    } else {
       ant_value_t wrapper = js_mkobj(js);
       js_set_slot(wrapper, SLOT_DATA, abort_promise);
       js_set_slot(wrapper, SLOT_ENTRIES, stream_obj);
       ant_value_t res_fn = js_heavy_mkfun(js, ws_finish_erroring_abort_resolve, wrapper);
       ant_value_t rej_fn = js_heavy_mkfun(js, ws_finish_erroring_abort_reject, wrapper);
-      ant_value_t then_fn = js_get(js, result, "then");
-      if (is_callable(then_fn)) {
-        ant_value_t then_args[2] = { res_fn, rej_fn };
-        sv_vm_call(js->vm, js, then_fn, result, then_args, 2, NULL, false);
+      if (ws_is_thenable(js, result)) ws_chain_thenable(js, result, res_fn, rej_fn);
+      else {
+        ant_value_t resolved = js_mkpromise(js);
+        js_resolve_promise(js, resolved, js_mkundef());
+        ws_chain_thenable(js, resolved, res_fn, rej_fn);
       }
-    } else {
-      js_resolve_promise(js, abort_promise, js_mkundef());
-      ws_reject_close_and_closed(js, stream_obj);
     }
+    
     return;
   }
 
@@ -486,23 +516,14 @@ static void ws_default_controller_process_write(ant_t *js, ant_value_t ctrl_obj,
     if (stream && stream->state == WS_STATE_WRITABLE)
       ws_default_controller_clear_algorithms(ctrl_obj);
     writable_stream_finish_in_flight_write_with_error(js, stream_obj, err);
-  } else if (vtype(result) == T_PROMISE) {
-    ant_value_t res_fn = js_heavy_mkfun(js, ws_process_write_resolve, ctrl_obj);
-    ant_value_t rej_fn = js_heavy_mkfun(js, ws_process_write_reject, ctrl_obj);
-    ant_value_t then_fn = js_get(js, result, "then");
-    if (is_callable(then_fn)) {
-      ant_value_t then_args[2] = { res_fn, rej_fn };
-      sv_vm_call(js->vm, js, then_fn, result, then_args, 2, NULL, false);
-    }
   } else {
-    ant_value_t resolved = js_mkpromise(js);
-    js_resolve_promise(js, resolved, js_mkundef());
     ant_value_t res_fn = js_heavy_mkfun(js, ws_process_write_resolve, ctrl_obj);
     ant_value_t rej_fn = js_heavy_mkfun(js, ws_process_write_reject, ctrl_obj);
-    ant_value_t then_fn = js_get(js, resolved, "then");
-    if (is_callable(then_fn)) {
-      ant_value_t then_args[2] = { res_fn, rej_fn };
-      sv_vm_call(js->vm, js, then_fn, resolved, then_args, 2, NULL, false);
+    if (ws_is_thenable(js, result)) ws_chain_thenable(js, result, res_fn, rej_fn);
+    else {
+      ant_value_t resolved = js_mkpromise(js);
+      js_resolve_promise(js, resolved, js_mkundef());
+      ws_chain_thenable(js, resolved, res_fn, rej_fn);
     }
   }
 }
@@ -543,23 +564,15 @@ static void ws_default_controller_process_close(ant_t *js, ant_value_t ctrl_obj)
     ant_value_t thrown = js->thrown_value;
     ant_value_t err = is_object_type(thrown) ? thrown : result;
     writable_stream_finish_in_flight_close_with_error(js, stream_obj, err);
-  } else if (vtype(result) == T_PROMISE) {
-    ant_value_t res_fn = js_heavy_mkfun(js, ws_process_close_resolve, stream_obj);
-    ant_value_t rej_fn = js_heavy_mkfun(js, ws_process_close_reject, stream_obj);
-    ant_value_t then_fn = js_get(js, result, "then");
-    if (is_callable(then_fn)) {
-      ant_value_t then_args[2] = { res_fn, rej_fn };
-      sv_vm_call(js->vm, js, then_fn, result, then_args, 2, NULL, false);
-    }
   } else {
-    ant_value_t resolved = js_mkpromise(js);
-    js_resolve_promise(js, resolved, js_mkundef());
     ant_value_t res_fn = js_heavy_mkfun(js, ws_process_close_resolve, stream_obj);
     ant_value_t rej_fn = js_heavy_mkfun(js, ws_process_close_reject, stream_obj);
-    ant_value_t then_fn = js_get(js, resolved, "then");
-    if (is_callable(then_fn)) {
-      ant_value_t then_args[2] = { res_fn, rej_fn };
-      sv_vm_call(js->vm, js, then_fn, resolved, then_args, 2, NULL, false);
+    if (ws_is_thenable(js, result)) {
+      ws_chain_thenable(js, result, res_fn, rej_fn);
+    } else {
+      ant_value_t resolved = js_mkpromise(js);
+      js_resolve_promise(js, resolved, js_mkundef());
+      ws_chain_thenable(js, resolved, res_fn, rej_fn);
     }
   }
 }
@@ -756,6 +769,32 @@ static ant_value_t ws_writer_write(ant_t *js, ant_value_t writer_obj, ant_value_
     ant_value_t p = js_mkpromise(js);
     js_mkerr_typed(js, JS_ERR_TYPE, "Invalid WritableStream");
     js_reject_promise(js, p, js->thrown_value);
+    return p;
+  }
+
+  if (stream->state == WS_STATE_CLOSED) {
+    ant_value_t p = js_mkpromise(js);
+    js_mkerr_typed(js, JS_ERR_TYPE, "Cannot write to a closed WritableStream");
+    js_reject_promise(js, p, js->thrown_value);
+    return p;
+  }
+  
+  if (stream->state == WS_STATE_ERRORED) {
+    ant_value_t p = js_mkpromise(js);
+    js_reject_promise(js, p, ws_stream_stored_error(stream_obj));
+    return p;
+  }
+  
+  if (writable_stream_close_queued_or_in_flight(stream_obj)) {
+    ant_value_t p = js_mkpromise(js);
+    js_mkerr_typed(js, JS_ERR_TYPE, "Cannot write to a closing WritableStream");
+    js_reject_promise(js, p, js->thrown_value);
+    return p;
+  }
+  
+  if (stream->state == WS_STATE_ERRORING) {
+    ant_value_t p = js_mkpromise(js);
+    js_reject_promise(js, p, ws_stream_stored_error(stream_obj));
     return p;
   }
 
@@ -1103,25 +1142,28 @@ static ant_value_t js_ws_ctor(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t start_fn = js_mkundef();
 
   if (is_object_type(underlying_sink)) {
-    ant_value_t wv = js_get(js, underlying_sink, "write");
+    ant_value_t wv = js_getprop_fallback(js, underlying_sink, "write");
     if (is_err(wv)) return wv;
     if (!is_undefined(wv)) {
       if (!is_callable(wv)) return js_mkerr_typed(js, JS_ERR_TYPE, "write must be a function");
       write_fn = wv;
     }
-    ant_value_t cv = js_get(js, underlying_sink, "close");
+    
+    ant_value_t cv = js_getprop_fallback(js, underlying_sink, "close");
     if (is_err(cv)) return cv;
     if (!is_undefined(cv)) {
       if (!is_callable(cv)) return js_mkerr_typed(js, JS_ERR_TYPE, "close must be a function");
       close_fn = cv;
     }
-    ant_value_t av = js_get(js, underlying_sink, "abort");
+    
+    ant_value_t av = js_getprop_fallback(js, underlying_sink, "abort");
     if (is_err(av)) return av;
     if (!is_undefined(av)) {
       if (!is_callable(av)) return js_mkerr_typed(js, JS_ERR_TYPE, "abort must be a function");
       abort_fn = av;
     }
-    ant_value_t sv = js_get(js, underlying_sink, "start");
+    
+    ant_value_t sv = js_getprop_fallback(js, underlying_sink, "start");
     if (is_err(sv)) return sv;
     if (!is_undefined(sv)) {
       if (!is_callable(sv)) return js_mkerr_typed(js, JS_ERR_TYPE, "start must be a function");
