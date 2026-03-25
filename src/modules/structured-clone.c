@@ -168,7 +168,8 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
 
       map_entry_t *ne = ant_calloc(sizeof(map_entry_t));
       if (!ne) return js_mkerr(js, "out of memory");
-      ne->key   = strdup(e->key);
+      ne->key = strdup(e->key);
+      ne->key_val = e->key_val;
       ne->value = vc;
       HASH_ADD_STR(*new_head, key, ne);
     }}

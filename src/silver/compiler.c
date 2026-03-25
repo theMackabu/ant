@@ -118,7 +118,16 @@ typedef struct sv_compiler {
   sv_deferred_export_t *deferred_exports;
   int deferred_export_count;
   int deferred_export_cap;
+
+  struct const_dedup_entry *const_dedup;
 } sv_compiler_t;
+
+typedef struct const_dedup_entry {
+  const char *str;
+  size_t len;
+  int index;
+  UT_hash_handle hh;
+} const_dedup_entry_t;
 
 static sv_func_t *compile_function_body(
   sv_compiler_t *enclosing,
@@ -258,6 +267,32 @@ static void patch_u32(sv_compiler_t *c, int offset, uint32_t val) {
 }
 
 static int add_constant(sv_compiler_t *c, ant_value_t val) {
+  if (vtype(val) == T_STR) {
+    ant_offset_t slen;
+    ant_offset_t off = vstr(c->js, val, &slen);
+    const char *sptr = (const char *)(uintptr_t)off;
+
+    const_dedup_entry_t *found = NULL;
+    HASH_FIND(hh, c->const_dedup, sptr, (size_t)slen, found);
+    if (found) return found->index;
+
+    int idx = c->const_count;
+    if (c->const_count >= c->const_cap) {
+      c->const_cap = c->const_cap ? c->const_cap * 2 : 16;
+      c->constants = realloc(c->constants, (size_t)c->const_cap * sizeof(ant_value_t));
+    }
+    c->constants[c->const_count++] = val;
+
+    const_dedup_entry_t *entry = malloc(sizeof(const_dedup_entry_t));
+    if (entry) {
+      entry->str = sptr;
+      entry->len = (size_t)slen;
+      entry->index = idx;
+      HASH_ADD_KEYPTR(hh, c->const_dedup, entry->str, entry->len, entry);
+    }
+    return idx;
+  }
+
   if (c->const_count >= c->const_cap) {
     c->const_cap = c->const_cap ? c->const_cap * 2 : 16;
     c->constants = realloc(c->constants, (size_t)c->const_cap * sizeof(ant_value_t));
@@ -4385,6 +4420,12 @@ static sv_func_t *compile_function_body(
   free(comp.loops);
   free(comp.srcpos);
   free(comp.slot_types);
+
+  { 
+    const_dedup_entry_t *e, *tmp;
+    HASH_ITER(hh, comp.const_dedup, e, tmp) { 
+    HASH_DEL(comp.const_dedup, e); free(e); 
+  }}
 
   return func;
 }

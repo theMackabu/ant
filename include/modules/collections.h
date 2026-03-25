@@ -7,6 +7,7 @@
 
 typedef struct map_entry {
   char *key;
+  ant_value_t key_val;
   ant_value_t value;
   UT_hash_handle hh;
 } map_entry_t;

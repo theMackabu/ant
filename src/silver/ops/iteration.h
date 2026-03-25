@@ -167,11 +167,11 @@ static inline ant_value_t sv_op_iter_next(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
         value = entry->value;
         break;
       case ITER_TYPE_MAP_KEYS:
-        value = js_mkstr(js, entry->key, strlen(entry->key));
+        value = entry->key_val;
         break;
       case ITER_TYPE_MAP_ENTRIES: {
         ant_value_t pair = js_mkarr(js);
-        js_arr_push(js, pair, js_mkstr(js, entry->key, strlen(entry->key)));
+        js_arr_push(js, pair, entry->key_val);
         js_arr_push(js, pair, entry->value);
         value = pair;
         break;

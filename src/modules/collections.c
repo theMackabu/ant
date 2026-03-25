@@ -75,11 +75,13 @@ static ant_value_t map_set(ant_t *js, ant_value_t *args, int nargs) {
   map_entry_t *entry;
   HASH_FIND_STR(*map_ptr, key_str, entry);
   if (entry) {
+    entry->key_val = args[0];
     entry->value = args[1];
   } else {
     entry = ant_calloc(sizeof(map_entry_t));
     if (!entry) return js_mkerr(js, "out of memory");
     entry->key = strdup(key_str);
+    entry->key_val = args[0];
     entry->value = args[1];
     HASH_ADD_STR(*map_ptr, key, entry);
   }
@@ -171,7 +173,7 @@ static ant_value_t map_forEach(ant_t *js, ant_value_t *args, int nargs) {
   if (map_ptr && *map_ptr) {
   map_entry_t *entry, *tmp;
   HASH_ITER(hh, *map_ptr, entry, tmp) {
-    ant_value_t k = js_mkstr(js, entry->key, strlen(entry->key));
+    ant_value_t k = entry->key_val;
     ant_value_t call_args[3] = { entry->value, k, this_val };
     ant_value_t result = sv_vm_call(js->vm, js, callback, js_mkundef(), call_args, 3, NULL, false);
     if (is_err(result)) return result;
@@ -190,11 +192,11 @@ bool advance_map(ant_t *js, js_iter_t *it, ant_value_t *out) {
       *out = entry->value;
       break;
     case ITER_TYPE_MAP_KEYS:
-      *out = js_mkstr(js, entry->key, strlen(entry->key));
+      *out = entry->key_val;
       break;
     case ITER_TYPE_MAP_ENTRIES: {
       ant_value_t pair = js_mkarr(js);
-      js_arr_push(js, pair, js_mkstr(js, entry->key, strlen(entry->key)));
+      js_arr_push(js, pair, entry->key_val);
       js_arr_push(js, pair, entry->value);
       *out = pair;
       break;
@@ -691,6 +693,7 @@ static ant_value_t map_groupBy(ant_t *js, ant_value_t *args, int nargs) {
       entry = ant_calloc(sizeof(map_entry_t));
       if (!entry) return js_mkerr(js, "out of memory");
       entry->key = strdup(key_str);
+      entry->key_val = key;
       entry->value = group;
       HASH_ADD_STR(*map_head, key, entry);
     }
@@ -743,6 +746,7 @@ static ant_value_t builtin_Map(ant_t *js, ant_value_t *args, int nargs) {
     map_entry_t *map_entry;
     HASH_FIND_STR(*map_head, key_str, map_entry);
     if (map_entry) {
+      map_entry->key_val = key;
       map_entry->value = value;
       continue;
     }
@@ -750,6 +754,7 @@ static ant_value_t builtin_Map(ant_t *js, ant_value_t *args, int nargs) {
     map_entry = ant_calloc(sizeof(map_entry_t));
     if (!map_entry) return js_mkerr(js, "out of memory");
     map_entry->key = strdup(key_str);
+    map_entry->key_val = key;
     map_entry->value = value;
     HASH_ADD_STR(*map_head, key, map_entry);
   }

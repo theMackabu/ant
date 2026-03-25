@@ -1288,11 +1288,7 @@ static size_t strobj(ant_t *js, ant_value_t obj, char *buf, size_t len) {
           if (!first) n += cpy(buf + n, REMAIN(n, len), ",\n", 2);
           first = false;
           n += add_indent(buf + n, REMAIN(n, len), stringify_indent);
-          
-          size_t key_len = strlen(entry->key);
-          n += cpy(buf + n, REMAIN(n, len), "'", 1);
-          n += cpy(buf + n, REMAIN(n, len), entry->key, key_len);
-          n += cpy(buf + n, REMAIN(n, len), "'", 1);
+          n += tostr(js, entry->key_val, buf + n, REMAIN(n, len));
           n += cpy(buf + n, REMAIN(n, len), " => ", 4);
           n += tostr(js, entry->value, buf + n, REMAIN(n, len));
         }
