@@ -74,6 +74,8 @@
 #include "modules/globals.h"
 #include "modules/v8.h"
 #include "modules/worker_threads.h"
+#include "modules/headers.h"
+#include "modules/blob.h"
 
 int js_result = EXIT_SUCCESS;
 typedef int (*cmd_fn)(int argc, char **argv);
@@ -580,6 +582,8 @@ int main(int argc, char *argv[]) {
   init_domexception_module();
   init_globals_module();
   init_abort_module();
+  init_headers_module();
+  init_blob_module();
   init_math_module();
   init_bigint_module();
   init_date_module();

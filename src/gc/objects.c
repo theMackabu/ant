@@ -473,6 +473,8 @@ static void gc_mark_roots(ant_t *js) {
 
 void gc_object_free(ant_t *js, ant_object_t *obj) {
   if (!obj) return;
+  if (obj->finalizer) obj->finalizer(js, obj);
+
   obj->mark_epoch = ANT_GC_DEAD;
 
   if (obj->shape) {

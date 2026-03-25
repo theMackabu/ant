@@ -57,6 +57,7 @@
 #include "modules/ffi.h"
 #include "modules/date.h"
 #include "modules/buffer.h"
+#include "modules/blob.h"
 #include "modules/collections.h"
 #include "modules/lmdb.h"
 #include "modules/regex.h"
@@ -1341,6 +1342,29 @@ static size_t strobj(ant_t *js, ant_value_t obj, char *buf, size_t len) {
     return n;
   }
   
+  if (tag_str) {
+  bool is_blob = (tlen == 4 && memcmp(tag_str, "Blob", 4) == 0);
+  bool is_file = (tlen == 4 && memcmp(tag_str, "File", 4) == 0);
+  if (is_blob || is_file) {
+    blob_data_t *bd = blob_get_data(obj);
+    n += cpy(buf + n, REMAIN(n, len), is_file ? "File" : "Blob", 4);
+    n += cpy(buf + n, REMAIN(n, len), " { size: ", 9);
+    n += (size_t) snprintf(buf + n, REMAIN(n, len), "%zu", bd ? bd->size : 0);
+    n += cpy(buf + n, REMAIN(n, len), ", type: '", 9);
+    if (bd && bd->type) n += cpy(buf + n, REMAIN(n, len), bd->type, strlen(bd->type));
+    n += cpy(buf + n, REMAIN(n, len), "'", 1);
+    if (is_file) {
+      n += cpy(buf + n, REMAIN(n, len), ", name: '", 9);
+      if (bd && bd->name) n += cpy(buf + n, REMAIN(n, len), bd->name, strlen(bd->name));
+      n += cpy(buf + n, REMAIN(n, len), "'", 1);
+      n += cpy(buf + n, REMAIN(n, len), ", lastModified: ", 16);
+      n += (size_t) snprintf(buf + n, REMAIN(n, len), "%" PRId64, bd ? bd->last_modified : 0);
+    }
+    n += cpy(buf + n, REMAIN(n, len), " }", 2);
+    pop_stringify();
+    return n;
+  }}
+
 print_tagged_object:
   n += cpy(buf + n, REMAIN(n, len), "Object [", 8);
   n += cpy(buf + n, REMAIN(n, len), (const char *)(uintptr_t)(toff), tlen);
@@ -7771,72 +7795,117 @@ static ant_value_t builtin_array_with(ant_t *js, ant_value_t *args, int nargs) {
   return mkval(T_ARR, vdata(result));
 }
 
+static ant_value_t arr_values_iter_next(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t iter = js->this_val;
+  ant_value_t array = js_get_slot(iter, SLOT_DATA);
+  ant_value_t idx_v = js_get_slot(iter, SLOT_ITER_STATE);
+  ant_offset_t idx = (vtype(idx_v) == T_NUM) ? (ant_offset_t)js_getnum(idx_v) : 0;
+  ant_value_t result = js_mkobj(js);
+  ant_offset_t len = js_arr_len(js, array);
+  
+  if (idx >= len) {
+    js_set(js, result, "done", js_true);
+    js_set(js, result, "value", js_mkundef());
+    return result;
+  }
+  
+  js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)(idx + 1)));
+  js_set(js, result, "done", js_false);
+  js_set(js, result, "value", js_arr_get(js, array, idx));
+  
+  return result;
+}
+
+static ant_value_t arr_keys_iter_next(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t iter = js->this_val;
+  ant_value_t array = js_get_slot(iter, SLOT_DATA);
+  ant_value_t idx_v = js_get_slot(iter, SLOT_ITER_STATE);
+  ant_offset_t idx = (vtype(idx_v) == T_NUM) ? (ant_offset_t)js_getnum(idx_v) : 0;
+  ant_value_t result = js_mkobj(js);
+  ant_offset_t len = js_arr_len(js, array);
+  
+  if (idx >= len) {
+    js_set(js, result, "done", js_true);
+    js_set(js, result, "value", js_mkundef());
+    return result;
+  }
+  
+  js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)(idx + 1)));
+  js_set(js, result, "done", js_false);
+  js_set(js, result, "value", js_mknum((double)idx));
+  
+  return result;
+}
+
+static ant_value_t arr_entries_iter_next(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t iter = js->this_val;
+  ant_value_t array = js_get_slot(iter, SLOT_DATA);
+  ant_value_t idx_v = js_get_slot(iter, SLOT_ITER_STATE);
+  ant_offset_t idx = (vtype(idx_v) == T_NUM) ? (ant_offset_t)js_getnum(idx_v) : 0;
+  ant_value_t result = js_mkobj(js);
+  ant_offset_t len = js_arr_len(js, array);
+  
+  if (idx >= len) {
+    js_set(js, result, "done", js_true);
+    js_set(js, result, "value", js_mkundef());
+    return result;
+  }
+  
+  ant_value_t pair = js_mkarr(js);
+  js_arr_push(js, pair, js_mknum((double)idx));
+  js_arr_push(js, pair, js_arr_get(js, array, idx));
+  js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)(idx + 1)));
+  js_set(js, result, "done", js_false);
+  js_set(js, result, "value", pair);
+  
+  return result;
+}
+
+static ant_value_t g_arr_values_iter_proto = 0;
+static ant_value_t g_arr_keys_iter_proto   = 0;
+static ant_value_t g_arr_entries_iter_proto = 0;
+
+static void ensure_array_iter_protos(ant_t *js) {
+  if (g_arr_values_iter_proto) return;
+
+  g_arr_values_iter_proto = js_mkobj(js);
+  js_set_proto_init(g_arr_values_iter_proto, js->sym.iterator_proto);
+  js_set(js, g_arr_values_iter_proto, "next", js_mkfun(arr_values_iter_next));
+
+  g_arr_keys_iter_proto = js_mkobj(js);
+  js_set_proto_init(g_arr_keys_iter_proto, js->sym.iterator_proto);
+  js_set(js, g_arr_keys_iter_proto, "next", js_mkfun(arr_keys_iter_next));
+
+  g_arr_entries_iter_proto = js_mkobj(js);
+  js_set_proto_init(g_arr_entries_iter_proto, js->sym.iterator_proto);
+  js_set(js, g_arr_entries_iter_proto, "next", js_mkfun(arr_entries_iter_next));
+}
+
+static ant_value_t make_array_iterator(ant_t *js, ant_value_t iter_proto) {
+  ensure_array_iter_protos(js);
+  ant_value_t iter = js_mkobj(js);
+  js_set_slot_wb(js, iter, SLOT_DATA, js->this_val);
+  js_set_slot(iter, SLOT_ITER_STATE, js_mknum(0));
+  js_set_proto_init(iter, iter_proto);
+  return iter;
+}
+
 static ant_value_t builtin_array_keys(ant_t *js, ant_value_t *args, int nargs) {
-  (void) args;
-  (void) nargs;
-  ant_value_t arr = js->this_val;
-  if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ) {
+  if (vtype(js->this_val) != T_ARR && vtype(js->this_val) != T_OBJ)
     return js_mkerr(js, "keys called on non-array");
-  }
-  
-  ant_offset_t len = get_array_length(js, arr);
-  
-  ant_value_t result = mkarr(js);
-  if (is_err(result)) return result;
-  
-  for (ant_offset_t i = 0; i < len; i++) {
-    arr_set(js, result, i, tov((double) i));
-  }
-  
-  return mkval(T_ARR, vdata(result));
+  return make_array_iterator(js, g_arr_keys_iter_proto);
 }
 
 static ant_value_t builtin_array_values(ant_t *js, ant_value_t *args, int nargs) {
-  (void) args;
-  (void) nargs;
-  ant_value_t arr = js->this_val;
-  if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ) {
+  if (vtype(js->this_val) != T_ARR && vtype(js->this_val) != T_OBJ)
     return js_mkerr(js, "values called on non-array");
-  }
-  
-  ant_offset_t len = get_array_length(js, arr);
-  
-  ant_value_t result = mkarr(js);
-  if (is_err(result)) return result;
-  
-  for (ant_offset_t i = 0; i < len; i++) {
-    arr_set(js, result, i, arr_get(js, arr, i));
-  }
-  
-  return mkval(T_ARR, vdata(result));
+  return make_array_iterator(js, g_arr_values_iter_proto);
 }
 
 static ant_value_t builtin_array_entries(ant_t *js, ant_value_t *args, int nargs) {
-  (void) args;
-  (void) nargs;
-  ant_value_t arr = js->this_val;
-  if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ) {
+  if (vtype(js->this_val) != T_ARR && vtype(js->this_val) != T_OBJ)
     return js_mkerr(js, "entries called on non-array");
-  }
-  
-  ant_offset_t len = get_array_length(js, arr);
-  
-  ant_value_t result = mkarr(js);
-  if (is_err(result)) return result;
-  
-  for (ant_offset_t i = 0; i < len; i++) {
-    ant_value_t entry = mkarr(js);
-    if (is_err(entry)) return entry;
-    
-    ant_value_t elem = arr_get(js, arr, i);
-    
-    arr_set(js, entry, 0, tov((double) i));
-    arr_set(js, entry, 1, elem);
-    
-    arr_set(js, result, i, mkval(T_ARR, vdata(entry)));
-  }
-  
-  return mkval(T_ARR, vdata(result));
+  return make_array_iterator(js, g_arr_entries_iter_proto);
 }
 
 static ant_value_t builtin_array_toString(ant_t *js, ant_value_t *args, int nargs) {
@@ -12622,6 +12691,14 @@ void js_set_deleter(ant_value_t obj, js_deleter_fn deleter) {
   ant_exotic_ops_t *ops = obj_ensure_exotic_ops(ptr);
   if (!ops) return;
   ops->deleter = deleter;
+}
+
+void js_set_finalizer(ant_value_t obj, js_finalizer_fn fn) {
+  if (!is_object_type(obj)) return;
+  if (vtype(obj) != T_OBJ) obj = js_as_obj(obj);
+  ant_object_t *ptr = js_obj_ptr(obj);
+  if (!ptr) return;
+  ptr->finalizer = fn;
 }
 
 void js_set_keys(ant_value_t obj, js_keys_fn keys) {

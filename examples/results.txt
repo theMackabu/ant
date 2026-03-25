@@ -464,7 +464,7 @@ compat-table/es6/Map.constructor-arguments.js: failed
 compat-table/es6/Map.constructor-invokes-set.js: failed
 compat-table/es6/Map.constructor-requires-new.js: OK
 compat-table/es6/Map.iterator-closing.js: failed
-compat-table/es6/Map.iterator-prototype-chain.js: TypeError: Cannot read properties of null (reading 'hasOwnProperty')
+compat-table/es6/Map.iterator-prototype-chain.js: OK
 compat-table/es6/Map.js: OK
 compat-table/es6/Map.prototype-not-instance.js: failed
 compat-table/es6/Map.prototype.Symbol.iterator.js: OK
@@ -581,7 +581,7 @@ compat-table/es6/Set.constructor-arguments.js: OK
 compat-table/es6/Set.constructor-invokes-add.js: failed
 compat-table/es6/Set.constructor-requires-new.js: OK
 compat-table/es6/Set.iterator-closing.js: failed
-compat-table/es6/Set.iterator-prototype-chain.js: TypeError: Cannot read properties of null (reading 'hasOwnProperty')
+compat-table/es6/Set.iterator-prototype-chain.js: OK
 compat-table/es6/Set.js: OK
 compat-table/es6/Set.prototype-not-instance.js: failed
 compat-table/es6/Set.prototype.Symbol.iterator.js: OK
@@ -1343,14 +1343,14 @@ compat-table/es2025/Iterator.from.iterator.js: ReferenceError: 'Iterator' is not
 compat-table/es2025/Iterator.instanceof.js: ReferenceError: 'Iterator' is not defined
 compat-table/es2025/Iterator.prototype.Symbol.toStringTag.js: ReferenceError: 'Iterator' is not defined
 compat-table/es2025/Iterator.prototype.drop.js: TypeError: undefined is not a function
-compat-table/es2025/Iterator.prototype.every.js: OK
-compat-table/es2025/Iterator.prototype.filter.js: OK
-compat-table/es2025/Iterator.prototype.find.js: OK
-compat-table/es2025/Iterator.prototype.flatMap.js: OK
-compat-table/es2025/Iterator.prototype.forEach.js: OK
-compat-table/es2025/Iterator.prototype.map.js: OK
-compat-table/es2025/Iterator.prototype.reduce.js: OK
-compat-table/es2025/Iterator.prototype.some.js: OK
+compat-table/es2025/Iterator.prototype.every.js: TypeError: undefined is not a function
+compat-table/es2025/Iterator.prototype.filter.js: TypeError: undefined is not a function
+compat-table/es2025/Iterator.prototype.find.js: TypeError: undefined is not a function
+compat-table/es2025/Iterator.prototype.flatMap.js: TypeError: undefined is not a function
+compat-table/es2025/Iterator.prototype.forEach.js: TypeError: undefined is not a function
+compat-table/es2025/Iterator.prototype.map.js: TypeError: undefined is not a function
+compat-table/es2025/Iterator.prototype.reduce.js: TypeError: undefined is not a function
+compat-table/es2025/Iterator.prototype.some.js: TypeError: undefined is not a function
 compat-table/es2025/Iterator.prototype.take.js: TypeError: undefined is not a function
 compat-table/es2025/Iterator.prototype.toArray.js: TypeError: undefined is not a function
 compat-table/es2025/Promise.try.js: OK

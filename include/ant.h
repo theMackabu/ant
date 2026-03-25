@@ -160,14 +160,17 @@ void js_process_promise_handlers(ant_t *js, ant_value_t promise);
 void js_setup_import_meta(ant_t *js, const char *filename);
 
 typedef ant_value_t (*js_getter_fn)(ant_t *js, ant_value_t obj, const char *key, size_t key_len);
+typedef ant_value_t (*js_keys_fn)(ant_t *js, ant_value_t obj);
+
 typedef bool (*js_setter_fn)(ant_t *js, ant_value_t obj, const char *key, size_t key_len, ant_value_t value);
 typedef bool (*js_deleter_fn)(ant_t *js, ant_value_t obj, const char *key, size_t key_len);
-typedef ant_value_t (*js_keys_fn)(ant_t *js, ant_value_t obj);
+typedef void (*js_finalizer_fn)(ant_t *js, ant_object_t *obj);
 
 void js_set_getter(ant_value_t obj, js_getter_fn getter);
 void js_set_setter(ant_value_t obj, js_setter_fn setter);
 void js_set_deleter(ant_value_t obj, js_deleter_fn deleter);
 void js_set_keys(ant_value_t obj, js_keys_fn keys);
+void js_set_finalizer(ant_value_t obj, js_finalizer_fn fn);
 
 ant_value_t js_get_slot(ant_value_t obj, internal_slot_t slot);
 void js_set_slot(ant_value_t obj, internal_slot_t slot, ant_value_t value);

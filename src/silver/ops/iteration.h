@@ -28,12 +28,13 @@ static inline bool sv_is_map_iter(
   iter_type_t *out_type
 ) {
   if (vtype(obj) != T_OBJ) return false;
+  if (!g_map_iter_proto || js_get_proto(js, obj) != g_map_iter_proto) return false;
+  
   ant_value_t state_val = js_get_slot(obj, SLOT_ITER_STATE);
   if (vtype(state_val) == T_UNDEF) return false;
   
   map_iterator_state_t *st = (map_iterator_state_t *)(uintptr_t)js_getnum(state_val);
   if (!st) return false;
-  if (st->type > ITER_TYPE_MAP_ENTRIES) return false;
   
   *out_state = st;
   *out_type = st->type;
@@ -47,15 +48,14 @@ static inline bool sv_is_set_iter(
   iter_type_t *out_type
 ) {
   if (vtype(obj) != T_OBJ) return false;
+  if (!g_set_iter_proto || js_get_proto(js, obj) != g_set_iter_proto) return false;
+  
   ant_value_t state_val = js_get_slot(obj, SLOT_ITER_STATE);
   if (vtype(state_val) == T_UNDEF) return false;
   
   set_iterator_state_t *st = (set_iterator_state_t *)(uintptr_t)js_getnum(state_val);
   if (!st) return false;
   
-  if (st->type != ITER_TYPE_SET_VALUES && st->type != ITER_TYPE_SET_ENTRIES)
-    return false;
-    
   *out_state = st;
   *out_type = st->type;
   

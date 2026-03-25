@@ -447,16 +447,7 @@ static ant_value_t js_observable_from(ant_t *js, ant_value_t *args, int nargs) {
   }
   
   ant_value_t iteratorMethod = js_get_sym(js, x, get_iterator_sym());
-  
-  if (!is_callable(iteratorMethod) && vtype(x) == T_ARR) {
-    ant_value_t array_ctor = js_get(js, js_glob(js), "Array");
-    ant_value_t array_proto = js_get(js, array_ctor, "prototype");
-    iteratorMethod = js_get_sym(js, array_proto, get_iterator_sym());
-  }
-  
-  if (!is_callable(iteratorMethod)) {
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Object is not observable or iterable");
-  }
+  if (!is_callable(iteratorMethod)) return js_mkerr_typed(js, JS_ERR_TYPE, "Object is not observable or iterable");
   
   ant_value_t data = js_mkobj(js);
   js_set(js, data, "iterable", x);
