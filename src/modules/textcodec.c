@@ -299,7 +299,7 @@ static utf8proc_ssize_t utf16_decode(td_state_t *st, const uint8_t *src, size_t 
 
   pend_tail:
     if (stream) { st->pending[0] = src[i]; st->pending_len = 1; }
-    else goto err;
+    else { if (st->fatal) return -1; o = u8_fffd(out, o); }
     break;
     
   pend_hi:
