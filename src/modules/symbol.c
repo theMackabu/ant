@@ -64,34 +64,6 @@ static ant_value_t builtin_Symbol_toString(ant_t *js, ant_value_t *args, int nar
   return js_symbol_to_string(js, this_val);
 }
 
-static ant_value_t iterator_next(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t this_val = js_getthis(js);
-  
-  // migrate to slots
-  ant_value_t arr = js_get(js, this_val, "__arr");
-  ant_value_t idx_val = js_get(js, this_val, "__idx");
-  ant_value_t len_val = js_get(js, this_val, "__len");
-  
-  int idx = (int)js_getnum(idx_val);
-  int len = (int)js_getnum(len_val);
-  
-  ant_value_t result = js_mkobj(js);
-  
-  if (idx >= len) {
-    js_set(js, result, "done", js_true);
-    js_set(js, result, "value", js_mkundef());
-  } else {
-    char idxstr[16];
-    snprintf(idxstr, sizeof(idxstr), "%d", idx);
-    ant_value_t value = js_get(js, arr, idxstr);
-    js_set(js, result, "value", value);
-    js_set(js, result, "done", js_false);
-    js_set(js, this_val, "__idx", js_mknum(idx + 1));
-  }
-  
-  return result;
-}
-
 static ant_value_t get_iterator_prototype(ant_t *js) {
   if (vtype(js->sym.iterator_proto) == T_OBJ) return js->sym.iterator_proto;
 
@@ -102,58 +74,91 @@ static ant_value_t get_iterator_prototype(ant_t *js) {
   return js->sym.iterator_proto;
 }
 
+static ant_value_t arr_iter_next(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t iter = js->this_val;
+  ant_value_t array = js_get_slot(iter, SLOT_DATA);
+  ant_value_t state_v = js_get_slot(iter, SLOT_ITER_STATE);
+  
+  uint32_t state = (vtype(state_v) == T_NUM) ? (uint32_t)js_getnum(state_v) : 0;
+  uint32_t kind = ARR_ITER_KIND(state);
+  uint32_t idx  = ARR_ITER_INDEX(state);
+  
+  ant_value_t result = js_mkobj(js);
+  ant_offset_t len = js_arr_len(js, array);
+
+  if (idx >= (uint32_t)len) {
+    js_set(js, result, "done", js_true);
+    js_set(js, result, "value", js_mkundef());
+    return result;
+  }
+
+  ant_value_t value;
+  switch (kind) {
+  case ARR_ITER_KEYS:
+    value = js_mknum((double)idx);
+    break;
+  case ARR_ITER_ENTRIES: {
+    ant_value_t pair = js_mkarr(js);
+    js_arr_push(js, pair, js_mknum((double)idx));
+    js_arr_push(js, pair, js_arr_get(js, array, (ant_offset_t)idx));
+    value = pair;
+    break;
+  }
+  default:
+    value = js_arr_get(js, array, (ant_offset_t)idx);
+    break;
+  }
+
+  js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)ARR_ITER_PACK(kind, idx + 1)));
+  js_set(js, result, "done", js_false);
+  js_set(js, result, "value", value);
+  
+  return result;
+}
+
 static ant_value_t get_array_iterator_prototype(ant_t *js) {
   if (vtype(js->sym.array_iterator_proto) == T_OBJ) return js->sym.array_iterator_proto;
 
   ant_value_t iterator_proto = get_iterator_prototype(js);
   js->sym.array_iterator_proto = js_mkobj(js);
-  js_set(js, js->sym.array_iterator_proto, "next", js_mkfun(iterator_next));
+  js_set(js, js->sym.array_iterator_proto, "next", js_mkfun(arr_iter_next));
   js_set_proto_init(js->sym.array_iterator_proto, iterator_proto);
-  
+
   return js->sym.array_iterator_proto;
 }
 
-static ant_value_t array_iterator(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t arr = js_getthis(js);
-  ant_value_t len_val = js_get(js, arr, "length");
-  int len = vtype(len_val) == T_NUM ? (int)js_getnum(len_val) : 0;
-  
+ant_value_t make_array_iterator(ant_t *js, ant_value_t array, int kind) {
   ant_value_t iter = js_mkobj(js);
-  js_set(js, iter, "__arr", arr);
-  js_set(js, iter, "__idx", js_mknum(0));
-  js_set(js, iter, "__len", js_mknum(len));
+  js_set_slot_wb(js, iter, SLOT_DATA, array);
+  js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)ARR_ITER_PACK(kind, 0)));
   js_set_proto_init(iter, get_array_iterator_prototype(js));
-  
   return iter;
 }
 
-static ant_value_t string_iterator_next(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t this_val = js_getthis(js);
-  
-  ant_value_t str = js_get(js, this_val, "__str");
-  ant_value_t idx_val = js_get(js, this_val, "__idx");
-  ant_value_t len_val = js_get(js, this_val, "__len");
-  
-  int idx = (int)js_getnum(idx_val);
-  int len = (int)js_getnum(len_val);
-  
+static ant_value_t str_iter_next(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t iter = js->this_val;
+  ant_value_t str = js_get_slot(iter, SLOT_DATA);
+  ant_value_t idx_v = js_get_slot(iter, SLOT_ITER_STATE);
+  int idx = (vtype(idx_v) == T_NUM) ? (int)js_getnum(idx_v) : 0;
+
+  size_t slen;
+  char *s = js_getstr(js, str, &slen);
   ant_value_t result = js_mkobj(js);
-  
-  if (idx >= len) {
+
+  if (idx >= (int)slen) {
     js_set(js, result, "done", js_true);
     js_set(js, result, "value", js_mkundef());
-  } else {
-    char *s = js_getstr(js, str, NULL);
-    unsigned char c = (unsigned char)s[idx];
-    
-    int char_bytes = utf8_sequence_length(c);
-    if (char_bytes < 1) char_bytes = 1;
-    if (idx + char_bytes > len) char_bytes = len - idx;
-    
-    js_set(js, result, "value", js_mkstr(js, s + idx, (ant_offset_t)char_bytes));
-    js_set(js, result, "done", js_false);
-    js_set(js, this_val, "__idx", js_mknum(idx + char_bytes));
+    return result;
   }
+
+  unsigned char c = (unsigned char)s[idx];
+  int char_bytes = utf8_sequence_length(c);
+  if (char_bytes < 1) char_bytes = 1;
+  if (idx + char_bytes > (int)slen) char_bytes = (int)slen - idx;
+
+  js_set(js, result, "value", js_mkstr(js, s + idx, (ant_offset_t)char_bytes));
+  js_set(js, result, "done", js_false);
+  js_set_slot(iter, SLOT_ITER_STATE, js_mknum(idx + char_bytes));
   
   return result;
 }
@@ -163,20 +168,17 @@ static ant_value_t get_string_iterator_prototype(ant_t *js) {
 
   ant_value_t iterator_proto = get_iterator_prototype(js);
   js->sym.string_iterator_proto = js_mkobj(js);
-  js_set(js, js->sym.string_iterator_proto, "next", js_mkfun(string_iterator_next));
+  js_set(js, js->sym.string_iterator_proto, "next", js_mkfun(str_iter_next));
   js_set_proto_init(js->sym.string_iterator_proto, iterator_proto);
-  
+
   return js->sym.string_iterator_proto;
 }
 
 static ant_value_t string_iterator(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t str = js_getthis(js);
-  size_t len; js_getstr(js, str, &len);
-  
   ant_value_t iter = js_mkobj(js);
-  js_set(js, iter, "__str", str);
-  js_set(js, iter, "__idx", js_mknum(0));
-  js_set(js, iter, "__len", js_mknum((double)len));
+  
+  js_set_slot_wb(js, iter, SLOT_DATA, js->this_val);
+  js_set_slot(iter, SLOT_ITER_STATE, js_mknum(0));
   js_set_proto_init(iter, get_string_iterator_prototype(js));
   
   return iter;
@@ -240,16 +242,16 @@ void init_symbol_module(void) {
   
   ant_value_t func_symbol = js_obj_to_func(symbol_ctor);
   js_set(js, js_glob(js), "Symbol", func_symbol);
-  
+
   // set internal types before ant module snapshot
-  js_set_sym(js, rt->ant_obj, g_toStringTag, js_mkstr(js, "Ant", 3));
-  
   ant_value_t array_ctor = js_get(js, js_glob(js), "Array");
   ant_value_t array_proto = js_get(js, array_ctor, "prototype");
   
   (void)get_array_iterator_prototype(js);
   (void)get_string_iterator_prototype(js);
-  js_set_sym(js, array_proto, g_iterator, js_mkfun(array_iterator));
+  
+  js_set_sym(js, rt->ant_obj, g_toStringTag, js_mkstr(js, "Ant", 3));
+  js_set_sym(js, array_proto, g_iterator, js_get(js, array_proto, "values"));
 
   ant_value_t array_unscopables = js_mkobj(js);
   js_set(js, array_unscopables, "find", js_true);

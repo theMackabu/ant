@@ -7795,117 +7795,22 @@ static ant_value_t builtin_array_with(ant_t *js, ant_value_t *args, int nargs) {
   return mkval(T_ARR, vdata(result));
 }
 
-static ant_value_t arr_values_iter_next(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t iter = js->this_val;
-  ant_value_t array = js_get_slot(iter, SLOT_DATA);
-  ant_value_t idx_v = js_get_slot(iter, SLOT_ITER_STATE);
-  ant_offset_t idx = (vtype(idx_v) == T_NUM) ? (ant_offset_t)js_getnum(idx_v) : 0;
-  ant_value_t result = js_mkobj(js);
-  ant_offset_t len = js_arr_len(js, array);
-  
-  if (idx >= len) {
-    js_set(js, result, "done", js_true);
-    js_set(js, result, "value", js_mkundef());
-    return result;
-  }
-  
-  js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)(idx + 1)));
-  js_set(js, result, "done", js_false);
-  js_set(js, result, "value", js_arr_get(js, array, idx));
-  
-  return result;
-}
-
-static ant_value_t arr_keys_iter_next(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t iter = js->this_val;
-  ant_value_t array = js_get_slot(iter, SLOT_DATA);
-  ant_value_t idx_v = js_get_slot(iter, SLOT_ITER_STATE);
-  ant_offset_t idx = (vtype(idx_v) == T_NUM) ? (ant_offset_t)js_getnum(idx_v) : 0;
-  ant_value_t result = js_mkobj(js);
-  ant_offset_t len = js_arr_len(js, array);
-  
-  if (idx >= len) {
-    js_set(js, result, "done", js_true);
-    js_set(js, result, "value", js_mkundef());
-    return result;
-  }
-  
-  js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)(idx + 1)));
-  js_set(js, result, "done", js_false);
-  js_set(js, result, "value", js_mknum((double)idx));
-  
-  return result;
-}
-
-static ant_value_t arr_entries_iter_next(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t iter = js->this_val;
-  ant_value_t array = js_get_slot(iter, SLOT_DATA);
-  ant_value_t idx_v = js_get_slot(iter, SLOT_ITER_STATE);
-  ant_offset_t idx = (vtype(idx_v) == T_NUM) ? (ant_offset_t)js_getnum(idx_v) : 0;
-  ant_value_t result = js_mkobj(js);
-  ant_offset_t len = js_arr_len(js, array);
-  
-  if (idx >= len) {
-    js_set(js, result, "done", js_true);
-    js_set(js, result, "value", js_mkundef());
-    return result;
-  }
-  
-  ant_value_t pair = js_mkarr(js);
-  js_arr_push(js, pair, js_mknum((double)idx));
-  js_arr_push(js, pair, js_arr_get(js, array, idx));
-  js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)(idx + 1)));
-  js_set(js, result, "done", js_false);
-  js_set(js, result, "value", pair);
-  
-  return result;
-}
-
-static ant_value_t g_arr_values_iter_proto = 0;
-static ant_value_t g_arr_keys_iter_proto   = 0;
-static ant_value_t g_arr_entries_iter_proto = 0;
-
-static void ensure_array_iter_protos(ant_t *js) {
-  if (g_arr_values_iter_proto) return;
-
-  g_arr_values_iter_proto = js_mkobj(js);
-  js_set_proto_init(g_arr_values_iter_proto, js->sym.iterator_proto);
-  js_set(js, g_arr_values_iter_proto, "next", js_mkfun(arr_values_iter_next));
-
-  g_arr_keys_iter_proto = js_mkobj(js);
-  js_set_proto_init(g_arr_keys_iter_proto, js->sym.iterator_proto);
-  js_set(js, g_arr_keys_iter_proto, "next", js_mkfun(arr_keys_iter_next));
-
-  g_arr_entries_iter_proto = js_mkobj(js);
-  js_set_proto_init(g_arr_entries_iter_proto, js->sym.iterator_proto);
-  js_set(js, g_arr_entries_iter_proto, "next", js_mkfun(arr_entries_iter_next));
-}
-
-static ant_value_t make_array_iterator(ant_t *js, ant_value_t iter_proto) {
-  ensure_array_iter_protos(js);
-  ant_value_t iter = js_mkobj(js);
-  js_set_slot_wb(js, iter, SLOT_DATA, js->this_val);
-  js_set_slot(iter, SLOT_ITER_STATE, js_mknum(0));
-  js_set_proto_init(iter, iter_proto);
-  return iter;
-}
-
 static ant_value_t builtin_array_keys(ant_t *js, ant_value_t *args, int nargs) {
   if (vtype(js->this_val) != T_ARR && vtype(js->this_val) != T_OBJ)
     return js_mkerr(js, "keys called on non-array");
-  return make_array_iterator(js, g_arr_keys_iter_proto);
+  return make_array_iterator(js, js->this_val, ARR_ITER_KEYS);
 }
 
 static ant_value_t builtin_array_values(ant_t *js, ant_value_t *args, int nargs) {
   if (vtype(js->this_val) != T_ARR && vtype(js->this_val) != T_OBJ)
     return js_mkerr(js, "values called on non-array");
-  return make_array_iterator(js, g_arr_values_iter_proto);
+  return make_array_iterator(js, js->this_val, ARR_ITER_VALUES);
 }
 
 static ant_value_t builtin_array_entries(ant_t *js, ant_value_t *args, int nargs) {
   if (vtype(js->this_val) != T_ARR && vtype(js->this_val) != T_OBJ)
     return js_mkerr(js, "entries called on non-array");
-  return make_array_iterator(js, g_arr_entries_iter_proto);
+  return make_array_iterator(js, js->this_val, ARR_ITER_ENTRIES);
 }
 
 static ant_value_t builtin_array_toString(ant_t *js, ant_value_t *args, int nargs) {
