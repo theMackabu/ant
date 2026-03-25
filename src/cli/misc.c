@@ -16,9 +16,9 @@ void print_flag(FILE *fp, flag_help_t f) {
     s && l        ? ", "                       : "",
     l             ? "--"                       : "",
     l             ? l                          : "",
-    d && l && opt ? "[="  :
-    d && l        ? "="   :
-    d && s        ? " "   :                      "",
+    d && l && opt ? "[="                       :
+    d && l        ? "="                        :
+    d && s        ? " "                        : "",
     d             ? d                          : "");
 
   crfprintf(fp, "<space=2/><pad=32>%s</pad> %s</>\n", syn, g);
