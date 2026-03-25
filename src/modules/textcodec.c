@@ -111,20 +111,6 @@ static bool get_buffer_source(ant_t *js, ant_value_t arg, const uint8_t **out, s
   return false;
 }
 
-static ant_value_t make_ctor(ant_t *js, ant_cfunc_t fn, ant_value_t proto, const char *name, size_t nlen) {
-  ant_value_t obj = js_mkobj(js);
-  js_set_slot(obj, SLOT_CFUNC, js_mkfun(fn));
-  js_mkprop_fast(js, obj, "prototype", 9, proto);
-  js_mkprop_fast(js, obj, "name", 4, js_mkstr(js, name, nlen));
-  js_set_descriptor(js, obj, "name", 4, 0);
-  
-  ant_value_t fn_val = js_obj_to_func(obj);
-  js_set(js, proto, "constructor", fn_val);
-  js_set_descriptor(js, proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
-  
-  return fn_val;
-}
-
 static ant_value_t js_textencoder_get_encoding(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkstr(js, "utf-8", 5);
 }
@@ -441,7 +427,7 @@ void init_textcodec_module(void) {
   js_set(js, g_textencoder_proto, "encodeInto", js_mkfun(js_textencoder_encode_into));
   js_set_sym(js, g_textencoder_proto, get_toStringTag_sym(), js_mkstr(js, "TextEncoder", 11));
   
-  ant_value_t te_ctor = make_ctor(js, js_textencoder_ctor, g_textencoder_proto, "TextEncoder", 11);
+  ant_value_t te_ctor = js_make_ctor(js, js_textencoder_ctor, g_textencoder_proto, "TextEncoder", 11);
   js_set(js, g, "TextEncoder", te_ctor);
   js_set_descriptor(js, g, "TextEncoder", 11, JS_DESC_W | JS_DESC_C);
 
@@ -452,7 +438,7 @@ void init_textcodec_module(void) {
   js_set(js, g_textdecoder_proto, "decode", js_mkfun(js_textdecoder_decode));
   js_set_sym(js, g_textdecoder_proto, get_toStringTag_sym(), js_mkstr(js, "TextDecoder", 11));
   
-  ant_value_t td_ctor = make_ctor(js, js_textdecoder_ctor, g_textdecoder_proto, "TextDecoder", 11);
+  ant_value_t td_ctor = js_make_ctor(js, js_textdecoder_ctor, g_textdecoder_proto, "TextDecoder", 11);
   js_set(js, g, "TextDecoder", td_ctor);
   js_set_descriptor(js, g, "TextDecoder", 11, JS_DESC_W | JS_DESC_C);
 }

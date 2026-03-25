@@ -405,20 +405,6 @@ static ant_value_t js_file_ctor(ant_t *js, ant_value_t *args, int nargs) {
   return obj;
 }
 
-static ant_value_t make_ctor(ant_t *js, ant_cfunc_t fn, ant_value_t proto, const char *name, size_t nlen) {
-  ant_value_t obj = js_mkobj(js);
-  js_set_slot(obj, SLOT_CFUNC, js_mkfun(fn));
-  js_mkprop_fast(js, obj, "prototype", 9, proto);
-  js_mkprop_fast(js, obj, "name", 4, js_mkstr(js, name, nlen));
-  js_set_descriptor(js, obj, "name", 4, 0);
-  
-  ant_value_t fn_val = js_obj_to_func(obj);
-  js_set(js, proto, "constructor", fn_val);
-  js_set_descriptor(js, proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
-  
-  return fn_val;
-}
-
 void init_blob_module(void) {
   ant_t *js     = rt->js;
   ant_value_t g = js_glob(js);
@@ -434,7 +420,7 @@ void init_blob_module(void) {
   js_set(js, g_blob_proto, "stream",      js_mkfun(js_blob_stream));
 
   js_set_sym(js, g_blob_proto, get_toStringTag_sym(), js_mkstr(js, "Blob", 4));
-  ant_value_t blob_ctor = make_ctor(js, js_blob_ctor, g_blob_proto, "Blob", 4);
+  ant_value_t blob_ctor = js_make_ctor(js, js_blob_ctor, g_blob_proto, "Blob", 4);
   
   js_set(js, g, "Blob", blob_ctor);
   js_set_descriptor(js, g, "Blob", 4, JS_DESC_W | JS_DESC_C);
@@ -446,7 +432,7 @@ void init_blob_module(void) {
   js_set_getter_desc(js, g_file_proto, "lastModified", 12, js_mkfun(file_get_last_modified),  JS_DESC_C);
 
   js_set_sym(js, g_file_proto, get_toStringTag_sym(), js_mkstr(js, "File", 4));
-  ant_value_t file_ctor = make_ctor(js, js_file_ctor, g_file_proto, "File", 4);
+  ant_value_t file_ctor = js_make_ctor(js, js_file_ctor, g_file_proto, "File", 4);
   
   js_set(js, g, "File", file_ctor);
   js_set_descriptor(js, g, "File", 4, JS_DESC_W | JS_DESC_C);

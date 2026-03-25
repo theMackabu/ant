@@ -5,6 +5,7 @@
 #include "object.h"
 #include "pool.h"
 #include "arena.h"
+#include "descriptors.h"
 #include "esm/loader.h"
 
 #include <assert.h>
@@ -214,6 +215,19 @@ struct ant_isolate_t {
 };
 
 typedef struct {
+  ant_offset_t len;
+  char bytes[];
+} ant_flat_string_t;
+
+typedef struct {
+  ant_offset_t len;
+  uint8_t depth;
+  ant_value_t left;
+  ant_value_t right;
+  ant_value_t cached;
+} ant_rope_heap_t;
+
+typedef struct {
   const char *ptr;
   size_t len;
   bool needs_free;
@@ -361,17 +375,18 @@ static inline bool str_is_heap_rope(ant_value_t value) {
   return vtype(value) == T_STR && ((vdata(value) & 1ULL) != 0);
 }
 
-typedef struct {
-  ant_offset_t len;
-  char bytes[];
-} ant_flat_string_t;
+static inline ant_value_t js_make_ctor(ant_t *js, ant_cfunc_t fn, ant_value_t proto, const char *name, size_t nlen) {
+  ant_value_t obj = js_mkobj(js);
+  js_set_slot(obj, SLOT_CFUNC, js_mkfun(fn));
+  js_mkprop_fast(js, obj, "prototype", 9, proto);
+  js_mkprop_fast(js, obj, "name", 4, js_mkstr(js, name, nlen));
+  js_set_descriptor(js, obj, "name", 4, 0);
 
-typedef struct {
-  ant_offset_t len;
-  uint8_t depth;
-  ant_value_t left;
-  ant_value_t right;
-  ant_value_t cached;
-} ant_rope_heap_t;
+  ant_value_t fn_val = js_obj_to_func(obj);
+  js_set(js, proto, "constructor", fn_val);
+  js_set_descriptor(js, proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
+
+  return fn_val;
+}
 
 #endif

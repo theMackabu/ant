@@ -631,21 +631,6 @@ static ant_value_t js_eventemitter_eventNames(ant_t *js, ant_value_t *args, int 
   return result;
 }
 
-static ant_value_t make_event_ctor(ant_t *js, ant_cfunc_t fn, ant_value_t proto, const char *name, size_t nlen) {
-  ant_value_t ctor_obj = js_mkobj(js);
-  js_set_slot(ctor_obj, SLOT_CFUNC, js_mkfun(fn));
-  
-  js_mkprop_fast(js, ctor_obj, "prototype", 9, proto);
-  js_mkprop_fast(js, ctor_obj, "name", 4, js_mkstr(js, name, nlen));
-  js_set_descriptor(js, ctor_obj, "name", 4, 0);
-  
-  ant_value_t fn_val = js_obj_to_func(ctor_obj);
-  js_set(js, proto, "constructor", fn_val);
-  js_set_descriptor(js, proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
-  
-  return fn_val;
-}
-
 ant_value_t events_library(ant_t *js) {
   ant_value_t lib = js_mkobj(js);
   ant_value_t eventemitter_ctor  = js_mkobj(js);
@@ -691,7 +676,7 @@ void init_events_module(void) {
   js_set(js, g_event_proto, "AT_TARGET",        js_mknum(2));
   js_set(js, g_event_proto, "BUBBLING_PHASE",   js_mknum(3));
 
-  ant_value_t event_fn = make_event_ctor(js, js_event_ctor, g_event_proto, "Event", 5);
+  ant_value_t event_fn = js_make_ctor(js, js_event_ctor, g_event_proto, "Event", 5);
   js_set(js, event_fn, "NONE",            js_mknum(0));
   js_set(js, event_fn, "CAPTURING_PHASE", js_mknum(1));
   js_set(js, event_fn, "AT_TARGET",       js_mknum(2));
@@ -702,21 +687,21 @@ void init_events_module(void) {
   js_set_proto_init(g_customevent_proto, g_event_proto);
   js_set_sym(js, g_customevent_proto, get_toStringTag_sym(), js_mkstr(js, "CustomEvent", 11));
 
-  ant_value_t customevent_fn = make_event_ctor(js, js_customevent_ctor, g_customevent_proto, "CustomEvent", 11);
+  ant_value_t customevent_fn = js_make_ctor(js, js_customevent_ctor, g_customevent_proto, "CustomEvent", 11);
   js_set(js, global, "CustomEvent", customevent_fn);
 
   g_errorevent_proto = js_mkobj(js);
   js_set_proto_init(g_errorevent_proto, g_event_proto);
   js_set_sym(js, g_errorevent_proto, get_toStringTag_sym(), js_mkstr(js, "ErrorEvent", 10));
 
-  ant_value_t errorevent_fn = make_event_ctor(js, js_errorevent_ctor, g_errorevent_proto, "ErrorEvent", 10);
+  ant_value_t errorevent_fn = js_make_ctor(js, js_errorevent_ctor, g_errorevent_proto, "ErrorEvent", 10);
   js_set(js, global, "ErrorEvent", errorevent_fn);
 
   g_promiserejectionevent_proto = js_mkobj(js);
   js_set_proto_init(g_promiserejectionevent_proto, g_event_proto);
   js_set_sym(js, g_promiserejectionevent_proto, get_toStringTag_sym(), js_mkstr(js, "PromiseRejectionEvent", 21));
 
-  ant_value_t pre_fn = make_event_ctor(js, js_promiserejectionevent_ctor, g_promiserejectionevent_proto, "PromiseRejectionEvent", 21);
+  ant_value_t pre_fn = js_make_ctor(js, js_promiserejectionevent_ctor, g_promiserejectionevent_proto, "PromiseRejectionEvent", 21);
   js_set(js, global, "PromiseRejectionEvent", pre_fn);
 
   ant_value_t eventtarget_proto = js_mkobj(js);
