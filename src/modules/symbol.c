@@ -74,15 +74,27 @@ static ant_value_t get_iterator_prototype(ant_t *js) {
   return js->sym.iterator_proto;
 }
 
+static inline ant_value_t iter_get_element(ant_t *js, ant_value_t obj, uint32_t idx) {
+  if (vtype(obj) == T_ARR) return js_arr_get(js, obj, (ant_offset_t)idx);
+  char buf[16]; snprintf(buf, sizeof(buf), "%u", idx);
+  return js_get(js, obj, buf);
+}
+
+static inline ant_offset_t iter_get_length(ant_t *js, ant_value_t obj) {
+  if (vtype(obj) == T_ARR) return js_arr_len(js, obj);
+  ant_value_t v = js_get(js, obj, "length");
+  return (vtype(v) == T_NUM) ? (ant_offset_t)js_getnum(v) : 0;
+}
+
 static bool advance_array(ant_t *js, js_iter_t *it, ant_value_t *out) {
   ant_value_t iter = it->iterator;
   ant_value_t array = js_get_slot(iter, SLOT_DATA);
   ant_value_t state_v = js_get_slot(iter, SLOT_ITER_STATE);
-  
+
   uint32_t state = (vtype(state_v) == T_NUM) ? (uint32_t)js_getnum(state_v) : 0;
   uint32_t kind = ITER_STATE_KIND(state);
   uint32_t idx  = ITER_STATE_INDEX(state);
-  ant_offset_t len = js_arr_len(js, array);
+  ant_offset_t len = iter_get_length(js, array);
   if (idx >= (uint32_t)len) return false;
 
   switch (kind) {
@@ -92,12 +104,12 @@ static bool advance_array(ant_t *js, js_iter_t *it, ant_value_t *out) {
   case ARR_ITER_ENTRIES: {
     ant_value_t pair = js_mkarr(js);
     js_arr_push(js, pair, js_mknum((double)idx));
-    js_arr_push(js, pair, js_arr_get(js, array, (ant_offset_t)idx));
+    js_arr_push(js, pair, iter_get_element(js, array, idx));
     *out = pair;
     break;
   }
   default:
-    *out = js_arr_get(js, array, (ant_offset_t)idx);
+    *out = iter_get_element(js, array, idx);
     break;
   }
 
