@@ -80,6 +80,7 @@
 #include "modules/blob.h"
 #include "modules/formdata.h"
 #include "streams/queuing.h"
+#include "streams/readable.h"
 
 int js_result = EXIT_SUCCESS;
 typedef int (*cmd_fn)(int argc, char **argv);
@@ -597,6 +598,7 @@ int main(int argc, char *argv[]) {
   init_regex_module();
   init_collections_module();
   init_queuing_strategies_module();
+  init_readable_stream_module();
   init_builtin_module();
   init_buffer_module();
   init_fs_module();

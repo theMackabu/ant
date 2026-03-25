@@ -62,6 +62,10 @@ typedef enum {
   SLOT_WT_ENV_STORE,
   SLOT_NAPI_EXTERNAL_ID,
   SLOT_NAPI_WRAP_ID,
+  SLOT_RS_PULL,
+  SLOT_RS_CANCEL,
+  SLOT_RS_SIZE,
+  SLOT_RS_CLOSED,
   SLOT_MAX = 255
 } internal_slot_t;
 
