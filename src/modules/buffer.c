@@ -27,9 +27,90 @@
 static uint8_t *ta_arena = NULL;
 static size_t ta_arena_offset = 0;
 
-static ArrayBufferData **buffer_registry = NULL;
+static ArrayBufferData **buffer_registry   = NULL;
+static ant_value_t g_typedarray_iter_proto = 0;
+
 static size_t buffer_registry_count = 0;
-static size_t buffer_registry_cap = 0;
+static size_t buffer_registry_cap   = 0;
+
+static bool advance_typedarray(ant_t *js, js_iter_t *it, ant_value_t *out) {
+  ant_value_t iter = it->iterator;
+  ant_value_t ta_obj = js_get_slot(iter, SLOT_DATA);
+  ant_value_t state_v = js_get_slot(iter, SLOT_ITER_STATE);
+  uint32_t state = (vtype(state_v) == T_NUM) ? (uint32_t)js_getnum(state_v) : 0;
+  
+  uint32_t kind = ITER_STATE_KIND(state);
+  uint32_t idx  = ITER_STATE_INDEX(state);
+
+  ant_value_t ta_val = js_get_slot(ta_obj, SLOT_BUFFER);
+  TypedArrayData *ta = (TypedArrayData *)js_gettypedarray(ta_val);
+  if (!ta || !ta->buffer || ta->buffer->is_detached || idx >= (uint32_t)ta->length)
+    return false;
+
+  uint8_t *data = ta->buffer->data + ta->byte_offset;
+  double value;
+  switch (ta->type) {
+    case TYPED_ARRAY_INT8:          value = (double)((int8_t *)data)[idx];   break;
+    case TYPED_ARRAY_UINT8:
+    case TYPED_ARRAY_UINT8_CLAMPED: value = (double)data[idx];              break;
+    case TYPED_ARRAY_INT16:         value = (double)((int16_t *)data)[idx];  break;
+    case TYPED_ARRAY_UINT16:        value = (double)((uint16_t *)data)[idx]; break;
+    case TYPED_ARRAY_INT32:         value = (double)((int32_t *)data)[idx];  break;
+    case TYPED_ARRAY_UINT32:        value = (double)((uint32_t *)data)[idx]; break;
+    case TYPED_ARRAY_FLOAT32:       value = (double)((float *)data)[idx];    break;
+    case TYPED_ARRAY_FLOAT64:       value = ((double *)data)[idx];           break;
+    default: return false;
+  }
+
+  switch (kind) {
+  case ARR_ITER_KEYS:
+    *out = js_mknum((double)idx);
+    break;
+  case ARR_ITER_ENTRIES: {
+    ant_value_t pair = js_mkarr(js);
+    js_arr_push(js, pair, js_mknum((double)idx));
+    js_arr_push(js, pair, js_mknum(value));
+    *out = pair;
+    break;
+  }
+  default:
+    *out = js_mknum(value);
+    break;
+  }
+
+  js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)ITER_STATE_PACK(kind, idx + 1)));
+  return true;
+}
+
+static ant_value_t ta_iter_next(ant_t *js, ant_value_t *args, int nargs) {
+  js_iter_t it = { .iterator = js->this_val };
+  ant_value_t value;
+  return js_iter_result(js, advance_typedarray(js, &it, &value), value);
+}
+
+static ant_value_t ta_values(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t iter = js_mkobj(js);
+  js_set_slot_wb(js, iter, SLOT_DATA, js->this_val);
+  js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)ITER_STATE_PACK(ARR_ITER_VALUES, 0)));
+  js_set_proto_init(iter, g_typedarray_iter_proto);
+  return iter;
+}
+
+static ant_value_t ta_keys(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t iter = js_mkobj(js);
+  js_set_slot_wb(js, iter, SLOT_DATA, js->this_val);
+  js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)ITER_STATE_PACK(ARR_ITER_KEYS, 0)));
+  js_set_proto_init(iter, g_typedarray_iter_proto);
+  return iter;
+}
+
+static ant_value_t ta_entries(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t iter = js_mkobj(js);
+  js_set_slot_wb(js, iter, SLOT_DATA, js->this_val);
+  js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)ITER_STATE_PACK(ARR_ITER_ENTRIES, 0)));
+  js_set_proto_init(iter, g_typedarray_iter_proto);
+  return iter;
+}
 
 static void register_buffer(ArrayBufferData *data) {
   if (!data) return;
@@ -1991,10 +2072,16 @@ void init_buffer_module() {
   js_set(js, typedarray_proto, "join", js_mkfun(js_typedarray_join));
   js_set_sym(js, typedarray_proto, get_toStringTag_sym(), js_mkstr(js, "TypedArray", 10));
 
-  ant_value_t array_proto = js_get(js, js_get(js, glob, "Array"), "prototype");
-  ant_value_t iter_fn = js_get_sym(js, array_proto, get_iterator_sym());
-  js_set_sym(js, typedarray_proto, get_iterator_sym(), iter_fn);
-  js_set(js, typedarray_proto, "values", iter_fn);
+  g_typedarray_iter_proto = js_mkobj(js);
+  js_set_proto_init(g_typedarray_iter_proto, js->sym.iterator_proto);
+  js_set(js, g_typedarray_iter_proto, "next", js_mkfun(ta_iter_next));
+  js_iter_register_advance(g_typedarray_iter_proto, advance_typedarray);
+
+  ant_value_t ta_values_fn = js_mkfun(ta_values);
+  js_set(js, typedarray_proto, "values", ta_values_fn);
+  js_set(js, typedarray_proto, "keys", js_mkfun(ta_keys));
+  js_set(js, typedarray_proto, "entries", js_mkfun(ta_entries));
+  js_set_sym(js, typedarray_proto, get_iterator_sym(), ta_values_fn);
   
   #define SETUP_TYPEDARRAY(name) \
     do { \
@@ -2069,9 +2156,10 @@ void init_buffer_module() {
   js_set(js, buffer_proto, "toString", js_mkfun(js_buffer_toString));
   js_set(js, buffer_proto, "toBase64", js_mkfun(js_buffer_toBase64));
   js_set(js, buffer_proto, "write", js_mkfun(js_buffer_write));
+  
   js_set_sym(js, buffer_proto, get_toStringTag_sym(), js_mkstr(js, "Buffer", 6));
-  js_set_sym(js, buffer_proto, get_iterator_sym(), iter_fn);
-  js_set(js, buffer_proto, "values", iter_fn);
+  js_set_sym(js, buffer_proto, get_iterator_sym(), ta_values_fn);
+  js_set(js, buffer_proto, "values", ta_values_fn);
   
   js_set(js, buffer_ctor_obj, "from", js_mkfun(js_buffer_from));
   js_set(js, buffer_ctor_obj, "alloc", js_mkfun(js_buffer_alloc));

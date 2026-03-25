@@ -3,6 +3,7 @@
 
 #include <uthash.h>
 #include "types.h"
+#include "modules/symbol.h"
 
 typedef struct map_entry {
   char *key;
@@ -54,5 +55,8 @@ set_entry_t **get_set_from_obj(ant_t *js, ant_value_t obj);
 
 extern ant_value_t g_map_iter_proto;
 extern ant_value_t g_set_iter_proto;
+
+bool advance_map(ant_t *js, struct js_iter_t *it, ant_value_t *out);
+bool advance_set(ant_t *js, struct js_iter_t *it, ant_value_t *out);
 
 #endif

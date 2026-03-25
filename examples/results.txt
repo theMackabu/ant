@@ -464,7 +464,7 @@ compat-table/es6/Map.constructor-arguments.js: failed
 compat-table/es6/Map.constructor-invokes-set.js: failed
 compat-table/es6/Map.constructor-requires-new.js: OK
 compat-table/es6/Map.iterator-closing.js: failed
-compat-table/es6/Map.iterator-prototype-chain.js: TypeError: Cannot read properties of null (reading 'hasOwnProperty')
+compat-table/es6/Map.iterator-prototype-chain.js: OK
 compat-table/es6/Map.js: OK
 compat-table/es6/Map.prototype-not-instance.js: failed
 compat-table/es6/Map.prototype.Symbol.iterator.js: OK
@@ -581,7 +581,7 @@ compat-table/es6/Set.constructor-arguments.js: OK
 compat-table/es6/Set.constructor-invokes-add.js: failed
 compat-table/es6/Set.constructor-requires-new.js: OK
 compat-table/es6/Set.iterator-closing.js: failed
-compat-table/es6/Set.iterator-prototype-chain.js: TypeError: Cannot read properties of null (reading 'hasOwnProperty')
+compat-table/es6/Set.iterator-prototype-chain.js: OK
 compat-table/es6/Set.js: OK
 compat-table/es6/Set.prototype-not-instance.js: failed
 compat-table/es6/Set.prototype.Symbol.iterator.js: OK
@@ -1065,7 +1065,7 @@ compat-table/es6/typed-arrays.from.js: failed
 compat-table/es6/typed-arrays.of.js: failed
 compat-table/es6/typed-arrays.prototype.Symbol.iterator.js: OK
 compat-table/es6/typed-arrays.prototype.copyWithin.js: OK
-compat-table/es6/typed-arrays.prototype.entries.js: failed
+compat-table/es6/typed-arrays.prototype.entries.js: OK
 compat-table/es6/typed-arrays.prototype.every.js: failed
 compat-table/es6/typed-arrays.prototype.fill.js: OK
 compat-table/es6/typed-arrays.prototype.filter.js: failed
@@ -1074,7 +1074,7 @@ compat-table/es6/typed-arrays.prototype.find.js: failed
 compat-table/es6/typed-arrays.prototype.forEach.js: failed
 compat-table/es6/typed-arrays.prototype.indexOf.js: failed
 compat-table/es6/typed-arrays.prototype.join.js: OK
-compat-table/es6/typed-arrays.prototype.keys.js: failed
+compat-table/es6/typed-arrays.prototype.keys.js: OK
 compat-table/es6/typed-arrays.prototype.lastIndexOf.js: failed
 compat-table/es6/typed-arrays.prototype.map.js: failed
 compat-table/es6/typed-arrays.prototype.reduceRight.js: failed
@@ -1337,12 +1337,12 @@ compat-table/es2024/regex.flags.v.shows-in-flags.js: OK
 compat-table/es2024/regex.flags.v.unicode-15.1.js: OK
 compat-table/es2024/regex.flags.v.unicode-16.0.js: OK
 compat-table/es2024/regex.flags.v.unicode-17.0.js: OK
-compat-table/es2025/Iterator.extends.js: ReferenceError: 'Iterator' is not defined
-compat-table/es2025/Iterator.from.iterable.js: ReferenceError: 'Iterator' is not defined
-compat-table/es2025/Iterator.from.iterator.js: ReferenceError: 'Iterator' is not defined
-compat-table/es2025/Iterator.instanceof.js: ReferenceError: 'Iterator' is not defined
-compat-table/es2025/Iterator.prototype.Symbol.toStringTag.js: ReferenceError: 'Iterator' is not defined
-compat-table/es2025/Iterator.prototype.drop.js: TypeError: undefined is not a function
+compat-table/es2025/Iterator.extends.js: OK
+compat-table/es2025/Iterator.from.iterable.js: OK
+compat-table/es2025/Iterator.from.iterator.js: OK
+compat-table/es2025/Iterator.instanceof.js: OK
+compat-table/es2025/Iterator.prototype.Symbol.toStringTag.js: OK
+compat-table/es2025/Iterator.prototype.drop.js: OK
 compat-table/es2025/Iterator.prototype.every.js: OK
 compat-table/es2025/Iterator.prototype.filter.js: OK
 compat-table/es2025/Iterator.prototype.find.js: OK
@@ -1351,8 +1351,8 @@ compat-table/es2025/Iterator.prototype.forEach.js: OK
 compat-table/es2025/Iterator.prototype.map.js: OK
 compat-table/es2025/Iterator.prototype.reduce.js: OK
 compat-table/es2025/Iterator.prototype.some.js: OK
-compat-table/es2025/Iterator.prototype.take.js: TypeError: undefined is not a function
-compat-table/es2025/Iterator.prototype.toArray.js: TypeError: undefined is not a function
+compat-table/es2025/Iterator.prototype.take.js: OK
+compat-table/es2025/Iterator.prototype.toArray.js: OK
 compat-table/es2025/Promise.try.js: OK
 compat-table/es2025/RegExp.escape.js: OK
 compat-table/es2025/Set.prototype.difference.js: TypeError: undefined is not a function

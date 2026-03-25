@@ -63,6 +63,7 @@
 #include "modules/readline.h"
 #include "modules/observable.h"
 #include "modules/collections.h"
+#include "modules/iterator.h"
 #include "modules/module.h"
 #include "modules/util.h"
 #include "modules/async_hooks.h"
@@ -578,6 +579,7 @@ int main(int argc, char *argv[]) {
   ant_runtime_init(js, proc_argv.argc, proc_argv.argv, localstorage_file);
 
   init_symbol_module();
+  init_iterator_module();
   init_timer_module();
   init_domexception_module();
   init_globals_module();

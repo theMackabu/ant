@@ -169,59 +169,47 @@ static ant_value_t map_forEach(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t callback = args[0];
   
   if (map_ptr && *map_ptr) {
-    map_entry_t *entry, *tmp;
-    HASH_ITER(hh, *map_ptr, entry, tmp) {
-      ant_value_t k = js_mkstr(js, entry->key, strlen(entry->key));
-      ant_value_t call_args[3] = { entry->value, k, this_val };
-      ant_value_t result = sv_vm_call(js->vm, js, callback, js_mkundef(), call_args, 3, NULL, false);
-      if (is_err(result)) return result;
-    }
-  }
+  map_entry_t *entry, *tmp;
+  HASH_ITER(hh, *map_ptr, entry, tmp) {
+    ant_value_t k = js_mkstr(js, entry->key, strlen(entry->key));
+    ant_value_t call_args[3] = { entry->value, k, this_val };
+    ant_value_t result = sv_vm_call(js->vm, js, callback, js_mkundef(), call_args, 3, NULL, false);
+    if (is_err(result)) return result;
+  }}
   
   return js_mkundef();
 }
 
-static ant_value_t map_iter_next(ant_t *js, ant_value_t *args, int nargs) {
-  (void)args; (void)nargs;
-  ant_value_t this_val = js->this_val;
-  
-  map_iterator_state_t *state = get_map_iter_state(js, this_val);
-  if (!state) return js_mkerr(js, "Invalid iterator");
-  
-  ant_value_t result = js_mkobj(js);
-  
-  if (!state->current) {
-    js_set(js, result, "done", js_true);
-    js_set(js, result, "value", js_mkundef());
-    return result;
-  }
-  
+bool advance_map(ant_t *js, js_iter_t *it, ant_value_t *out) {
+  map_iterator_state_t *state = get_map_iter_state(js, it->iterator);
+  if (!state || !state->current) return false;
+
   map_entry_t *entry = state->current;
-  ant_value_t value;
-  
   switch (state->type) {
     case ITER_TYPE_MAP_VALUES:
-      value = entry->value;
+      *out = entry->value;
       break;
     case ITER_TYPE_MAP_KEYS:
-      value = js_mkstr(js, entry->key, strlen(entry->key));
+      *out = js_mkstr(js, entry->key, strlen(entry->key));
       break;
     case ITER_TYPE_MAP_ENTRIES: {
       ant_value_t pair = js_mkarr(js);
       js_arr_push(js, pair, js_mkstr(js, entry->key, strlen(entry->key)));
       js_arr_push(js, pair, entry->value);
-      value = pair;
+      *out = pair;
       break;
     }
-    default:
-      value = js_mkundef();
+    default: *out = js_mkundef();
   }
   
   state->current = entry->hh.next;
-  
-  js_set(js, result, "value", value);
-  js_set(js, result, "done", js_false);
-  return result;
+  return true;
+}
+
+static ant_value_t map_iter_next(ant_t *js, ant_value_t *args, int nargs) {
+  js_iter_t it = { .iterator = js->this_val };
+  ant_value_t value;
+  return js_iter_result(js, advance_map(js, &it, &value), value);
 }
 
 static ant_value_t create_map_iterator(ant_t *js, ant_value_t map_obj, iter_type_t type) {
@@ -261,38 +249,26 @@ static ant_value_t map_iterator(ant_t *js, ant_value_t *args, int nargs) {
   return create_map_iterator(js, js->this_val, ITER_TYPE_MAP_ENTRIES);
 }
 
-static ant_value_t set_iter_next(ant_t *js, ant_value_t *args, int nargs) {
-  (void)args; (void)nargs;
-  ant_value_t this_val = js->this_val;
-  
-  set_iterator_state_t *state = get_set_iter_state(js, this_val);
-  if (!state) return js_mkerr(js, "Invalid iterator");
-  
-  ant_value_t result = js_mkobj(js);
-  
-  if (!state->current) {
-    js_set(js, result, "done", js_true);
-    js_set(js, result, "value", js_mkundef());
-    return result;
-  }
-  
+bool advance_set(ant_t *js, js_iter_t *it, ant_value_t *out) {
+  set_iterator_state_t *state = get_set_iter_state(js, it->iterator);
+  if (!state || !state->current) return false;
+
   set_entry_t *entry = state->current;
-  ant_value_t value;
-  
   if (state->type == ITER_TYPE_SET_ENTRIES) {
     ant_value_t pair = js_mkarr(js);
     js_arr_push(js, pair, entry->value);
     js_arr_push(js, pair, entry->value);
-    value = pair;
-  } else {
-    value = entry->value;
-  }
+    *out = pair;
+  } else *out = entry->value;
   
   state->current = entry->hh.next;
-  
-  js_set(js, result, "value", value);
-  js_set(js, result, "done", js_false);
-  return result;
+  return true;
+}
+
+static ant_value_t set_iter_next(ant_t *js, ant_value_t *args, int nargs) {
+  js_iter_t it = { .iterator = js->this_val };
+  ant_value_t value;
+  return js_iter_result(js, advance_set(js, &it, &value), value);
 }
 
 static ant_value_t create_set_iterator(ant_t *js, ant_value_t set_obj, iter_type_t type) {
@@ -945,10 +921,12 @@ void init_collections_module(void) {
   g_map_iter_proto = js_mkobj(js);
   js_set_proto_init(g_map_iter_proto, js->sym.iterator_proto);
   js_set(js, g_map_iter_proto, "next", js_mkfun(map_iter_next));
+  js_iter_register_advance(g_map_iter_proto, advance_map);
   
   g_set_iter_proto = js_mkobj(js);
   js_set_proto_init(g_set_iter_proto, js->sym.iterator_proto);
   js_set(js, g_set_iter_proto, "next", js_mkfun(set_iter_next));
+  js_iter_register_advance(g_set_iter_proto, advance_set);
   
   ant_value_t map_proto = js_mkobj(js);
   js_set_proto_init(map_proto, object_proto);

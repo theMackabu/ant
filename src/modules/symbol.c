@@ -74,46 +74,61 @@ static ant_value_t get_iterator_prototype(ant_t *js) {
   return js->sym.iterator_proto;
 }
 
-static ant_value_t arr_iter_next(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t iter = js->this_val;
+static bool advance_array(ant_t *js, js_iter_t *it, ant_value_t *out) {
+  ant_value_t iter = it->iterator;
   ant_value_t array = js_get_slot(iter, SLOT_DATA);
   ant_value_t state_v = js_get_slot(iter, SLOT_ITER_STATE);
   
   uint32_t state = (vtype(state_v) == T_NUM) ? (uint32_t)js_getnum(state_v) : 0;
-  uint32_t kind = ARR_ITER_KIND(state);
-  uint32_t idx  = ARR_ITER_INDEX(state);
-  
-  ant_value_t result = js_mkobj(js);
+  uint32_t kind = ITER_STATE_KIND(state);
+  uint32_t idx  = ITER_STATE_INDEX(state);
   ant_offset_t len = js_arr_len(js, array);
+  if (idx >= (uint32_t)len) return false;
 
-  if (idx >= (uint32_t)len) {
-    js_set(js, result, "done", js_true);
-    js_set(js, result, "value", js_mkundef());
-    return result;
-  }
-
-  ant_value_t value;
   switch (kind) {
   case ARR_ITER_KEYS:
-    value = js_mknum((double)idx);
+    *out = js_mknum((double)idx);
     break;
   case ARR_ITER_ENTRIES: {
     ant_value_t pair = js_mkarr(js);
     js_arr_push(js, pair, js_mknum((double)idx));
     js_arr_push(js, pair, js_arr_get(js, array, (ant_offset_t)idx));
-    value = pair;
+    *out = pair;
     break;
   }
   default:
-    value = js_arr_get(js, array, (ant_offset_t)idx);
+    *out = js_arr_get(js, array, (ant_offset_t)idx);
     break;
   }
 
-  js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)ARR_ITER_PACK(kind, idx + 1)));
-  js_set(js, result, "done", js_false);
-  js_set(js, result, "value", value);
-  
-  return result;
+  js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)ITER_STATE_PACK(kind, idx + 1)));
+  return true;
+}
+
+static bool advance_string(ant_t *js, js_iter_t *it, ant_value_t *out) {
+  ant_value_t iter = it->iterator;
+  ant_value_t str = js_get_slot(iter, SLOT_DATA);
+  ant_value_t idx_v = js_get_slot(iter, SLOT_ITER_STATE);
+  int idx = (vtype(idx_v) == T_NUM) ? (int)js_getnum(idx_v) : 0;
+
+  size_t slen;
+  char *s = js_getstr(js, str, &slen);
+  if (idx >= (int)slen) return false;
+
+  unsigned char c = (unsigned char)s[idx];
+  int char_bytes = utf8_sequence_length(c);
+  if (char_bytes < 1) char_bytes = 1;
+  if (idx + char_bytes > (int)slen) char_bytes = (int)slen - idx;
+
+  *out = js_mkstr(js, s + idx, (ant_offset_t)char_bytes);
+  js_set_slot(iter, SLOT_ITER_STATE, js_mknum(idx + char_bytes));
+  return true;
+}
+
+static ant_value_t arr_iter_next(ant_t *js, ant_value_t *args, int nargs) {
+  js_iter_t it = { .iterator = js->this_val };
+  ant_value_t value;
+  return js_iter_result(js, advance_array(js, &it, &value), value);
 }
 
 static ant_value_t get_array_iterator_prototype(ant_t *js) {
@@ -130,37 +145,15 @@ static ant_value_t get_array_iterator_prototype(ant_t *js) {
 ant_value_t make_array_iterator(ant_t *js, ant_value_t array, int kind) {
   ant_value_t iter = js_mkobj(js);
   js_set_slot_wb(js, iter, SLOT_DATA, array);
-  js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)ARR_ITER_PACK(kind, 0)));
+  js_set_slot(iter, SLOT_ITER_STATE, js_mknum((double)ITER_STATE_PACK(kind, 0)));
   js_set_proto_init(iter, get_array_iterator_prototype(js));
   return iter;
 }
 
 static ant_value_t str_iter_next(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t iter = js->this_val;
-  ant_value_t str = js_get_slot(iter, SLOT_DATA);
-  ant_value_t idx_v = js_get_slot(iter, SLOT_ITER_STATE);
-  int idx = (vtype(idx_v) == T_NUM) ? (int)js_getnum(idx_v) : 0;
-
-  size_t slen;
-  char *s = js_getstr(js, str, &slen);
-  ant_value_t result = js_mkobj(js);
-
-  if (idx >= (int)slen) {
-    js_set(js, result, "done", js_true);
-    js_set(js, result, "value", js_mkundef());
-    return result;
-  }
-
-  unsigned char c = (unsigned char)s[idx];
-  int char_bytes = utf8_sequence_length(c);
-  if (char_bytes < 1) char_bytes = 1;
-  if (idx + char_bytes > (int)slen) char_bytes = (int)slen - idx;
-
-  js_set(js, result, "value", js_mkstr(js, s + idx, (ant_offset_t)char_bytes));
-  js_set(js, result, "done", js_false);
-  js_set_slot(iter, SLOT_ITER_STATE, js_mknum(idx + char_bytes));
-  
-  return result;
+  js_iter_t it = { .iterator = js->this_val };
+  ant_value_t value;
+  return js_iter_result(js, advance_string(js, &it, &value), value);
 }
 
 static ant_value_t get_string_iterator_prototype(ant_t *js) {
@@ -182,6 +175,69 @@ static ant_value_t string_iterator(ant_t *js, ant_value_t *args, int nargs) {
   js_set_proto_init(iter, get_string_iterator_prototype(js));
   
   return iter;
+}
+
+static struct { 
+  ant_value_t proto;
+  js_iter_advance_fn fn;
+} g_advance_table[8];
+
+static int g_advance_count = 0;
+
+void js_iter_register_advance(ant_value_t proto, js_iter_advance_fn fn) {
+  if (g_advance_count < 8) 
+    g_advance_table[g_advance_count++] = (typeof(g_advance_table[0])){ proto, fn };
+}
+
+bool js_iter_open(ant_t *js, ant_value_t iterable, js_iter_t *it) {
+  memset(it, 0, sizeof(*it));
+
+  ant_value_t iter_fn = js_get_sym(js, iterable, get_iterator_sym());
+  if (!is_callable(iter_fn)) return false;
+
+  ant_value_t iterator = sv_vm_call(js->vm, js, iter_fn, iterable, NULL, 0, NULL, false);
+  if (is_err(iterator)) return false;
+
+  it->iterator = iterator;
+  it->next_fn = js_getprop_fallback(js, iterator, "next");
+  it->advance = NULL;
+
+  ant_value_t proto = (vtype(iterator) == T_OBJ) ? js_get_proto(js, iterator) : js_mkundef();
+  for (int i = 0; i < g_advance_count; i++)
+    if (proto == g_advance_table[i].proto) { it->advance = g_advance_table[i].fn; break; }
+
+  return true;
+}
+
+bool js_iter_next(ant_t *js, js_iter_t *it, ant_value_t *out) {
+  if (it->advance) return it->advance(js, it, out);
+
+  ant_value_t next_fn = it->next_fn;
+  ant_value_t result;
+
+  if (vtype(next_fn) == T_CFUNC) {
+    ant_value_t old_this = js->this_val;
+    js->this_val = it->iterator;
+    result = js_as_cfunc(next_fn)(js, NULL, 0);
+    js->this_val = old_this;
+  }
+  
+  else if (is_callable(next_fn)) result = sv_vm_call(js->vm, js, next_fn, it->iterator, NULL, 0, NULL, false);
+  else return false;
+
+  if (is_err(result)) return false;
+  ant_value_t done = js_getprop_fallback(js, result, "done");
+  
+  if (js_truthy(js, done)) return false;
+  *out = js_getprop_fallback(js, result, "value");
+  
+  return true;
+}
+
+void js_iter_close(ant_t *js, js_iter_t *it) {
+  if (it->advance) return;
+  ant_value_t return_fn = js_getprop_fallback(js, it->iterator, "return");
+  if (is_callable(return_fn)) sv_vm_call(js->vm, js, return_fn, it->iterator, NULL, 0, NULL, false);
 }
 
 ant_value_t maybe_call_symbol_method(
@@ -249,6 +305,9 @@ void init_symbol_module(void) {
   
   (void)get_array_iterator_prototype(js);
   (void)get_string_iterator_prototype(js);
+  
+  js_iter_register_advance(js->sym.array_iterator_proto, advance_array);
+  js_iter_register_advance(js->sym.string_iterator_proto, advance_string);
   
   js_set_sym(js, rt->ant_obj, g_toStringTag, js_mkstr(js, "Ant", 3));
   js_set_sym(js, array_proto, g_iterator, js_get(js, array_proto, "values"));

@@ -42,8 +42,8 @@ enum {
   ITER_VALUES = 2
 };
 
-static ant_value_t g_headers_proto      = 0;
-static ant_value_t g_headers_iter_proto = 0;
+static ant_value_t g_headers_proto = 0;
+ant_value_t g_headers_iter_proto   = 0;
 
 static hdr_list_t *list_new(void) {
   hdr_list_t *l = ant_calloc(sizeof(hdr_list_t));
@@ -241,37 +241,29 @@ static ant_value_t headers_append_pair(ant_t *js, hdr_list_t *l, ant_value_t nam
 }
 
 static ant_value_t init_from_sequence(ant_t *js, hdr_list_t *l, ant_value_t seq) {
-  ant_value_t iter_fn = js_get_sym(js, seq, get_iterator_sym());
-  if (vtype(iter_fn) != T_FUNC && vtype(iter_fn) != T_CFUNC)
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Headers init is not iterable");
+  js_iter_t it;
+  if (!js_iter_open(js, seq, &it)) return js_mkerr_typed(js, JS_ERR_TYPE, "Headers init is not iterable");
 
-  ant_value_t iter = sv_call_native(js, iter_fn, seq, NULL, 0);
-  if (is_err(iter)) return iter;
-
-  ant_value_t next_fn = js_getprop_fallback(js, iter, "next");
-
-  for (;;) {
-    ant_value_t result = sv_call_native(js, next_fn, iter, NULL, 0);
-    if (is_err(result)) return result;
-    if (js_truthy(js, js_get(js, result, "done"))) break;
-
-    ant_value_t pair = js_get(js, result, "value");
+  ant_value_t pair;
+  while (js_iter_next(js, &it, &pair)) {
     uint8_t pt = vtype(pair);
-    if (pt != T_ARR && pt != T_OBJ)
+    if (pt != T_ARR && pt != T_OBJ) {
+      js_iter_close(js, &it);
       return js_mkerr_typed(js, JS_ERR_TYPE, "Each header init pair must be a sequence");
-
-    if (js_arr_len(js, pair) != 2)
-      return js_mkerr_typed(js, JS_ERR_TYPE,
-        "Each header init pair must have exactly 2 elements");
-
-    ant_value_t r = headers_append_pair(js, l, js_arr_get(js, pair, 0),
-                                               js_arr_get(js, pair, 1));
-    if (is_err(r)) return r;
+    }
+    
+    if (js_arr_len(js, pair) != 2) {
+      js_iter_close(js, &it);
+      return js_mkerr_typed(js, JS_ERR_TYPE, "Each header init pair must have exactly 2 elements");
+    }
+    
+    ant_value_t r = headers_append_pair(js, l, js_arr_get(js, pair, 0), js_arr_get(js, pair, 1));
+    if (is_err(r)) { js_iter_close(js, &it); return r; }
   }
+  
   return js_mkundef();
 }
 
-// iterate own enumerable properties as a record
 static ant_value_t init_from_record(ant_t *js, hdr_list_t *l, ant_value_t obj) {
   ant_iter_t it = js_prop_iter_begin(js, obj);
   const char *key;
@@ -282,50 +274,48 @@ static ant_value_t init_from_record(ant_t *js, hdr_list_t *l, ant_value_t obj) {
     ant_value_t r = headers_append_pair(js, l, js_mkstr(js, key, key_len), val);
     if (is_err(r)) { js_prop_iter_end(&it); return r; }
   }
+  
   js_prop_iter_end(&it);
   return js_mkundef();
 }
 
-static ant_value_t headers_iter_next(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t state_val = js_get_slot(js->this_val, SLOT_ITER_STATE);
-  if (vtype(state_val) == T_UNDEF) return js_mkerr(js, "Invalid iterator");
+bool advance_headers(ant_t *js, js_iter_t *it, ant_value_t *out) {
+  ant_value_t state_val = js_get_slot(it->iterator, SLOT_ITER_STATE);
+  if (vtype(state_val) == T_UNDEF) return false;
   hdr_iter_t *st = (hdr_iter_t *)(uintptr_t)(size_t)js_getnum(state_val);
 
   size_t count = 0;
   sorted_pair_t *view = build_sorted_view(st->list, &count);
 
-  ant_value_t result = js_mkobj(js);
-
   if (st->index >= count) {
     free_sorted_view(view, count);
-    js_set(js, result, "done",  js_true);
-    js_set(js, result, "value", js_mkundef());
-    return result;
+    return false;
   }
 
   sorted_pair_t *e = &view[st->index];
-  ant_value_t value;
-
   switch (st->kind) {
   case ITER_KEYS:
-    value = js_mkstr(js, e->name, strlen(e->name));
+    *out = js_mkstr(js, e->name, strlen(e->name));
     break;
   case ITER_VALUES:
-    value = js_mkstr(js, e->value, strlen(e->value));
+    *out = js_mkstr(js, e->value, strlen(e->value));
     break;
   default: {
-    value = js_mkarr(js);
-    js_arr_push(js, value, js_mkstr(js, e->name,  strlen(e->name)));
-    js_arr_push(js, value, js_mkstr(js, e->value, strlen(e->value)));
+    *out = js_mkarr(js);
+    js_arr_push(js, *out, js_mkstr(js, e->name,  strlen(e->name)));
+    js_arr_push(js, *out, js_mkstr(js, e->value, strlen(e->value)));
     break;
   }}
 
   free_sorted_view(view, count);
   st->index++;
+  return true;
+}
 
-  js_set(js, result, "done",  js_false);
-  js_set(js, result, "value", value);
-  return result;
+static ant_value_t headers_iter_next(ant_t *js, ant_value_t *args, int nargs) {
+  js_iter_t it = { .iterator = js->this_val };
+  ant_value_t value;
+  return js_iter_result(js, advance_headers(js, &it, &value), value);
 }
 
 static ant_value_t make_headers_iter(ant_t *js, ant_value_t headers_obj, int kind) {
@@ -579,6 +569,7 @@ void init_headers_module(void) {
   js_set(js, g_headers_iter_proto, "next", js_mkfun(headers_iter_next));
   js_set_descriptor(js, g_headers_iter_proto, "next", 4, JS_DESC_W | JS_DESC_E | JS_DESC_C);
   js_set_sym(js, g_headers_iter_proto, get_iterator_sym(), js_mkfun(sym_this_cb));
+  js_iter_register_advance(g_headers_iter_proto, advance_headers);
 
   g_headers_proto = js_mkobj(js);
 

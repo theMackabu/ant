@@ -138,38 +138,28 @@ static ant_value_t process_blob_parts(ant_t *js, byte_buf_t *buf, ant_value_t pa
     return js_mkerr_typed(js, JS_ERR_TYPE,
       "Failed to construct 'Blob': The provided value cannot be converted to a sequence.");
 
-  ant_value_t iter_fn = js_get_sym(js, parts, get_iterator_sym());
-  if (vtype(iter_fn) != T_FUNC && vtype(iter_fn) != T_CFUNC)
-    return js_mkerr_typed(js, JS_ERR_TYPE,
-      "Failed to construct 'Blob': The provided value is not of type 'BlobPart'");
+  js_iter_t it;
+  if (!js_iter_open(js, parts, &it))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to construct 'Blob': The provided value is not of type 'BlobPart'");
 
-  ant_value_t iter = sv_call_native(js, iter_fn, parts, NULL, 0);
-  if (is_err(iter)) return iter;
-
-  ant_value_t next_fn = js_getprop_fallback(js, iter, "next");
-
-  for (;;) {
-    ant_value_t result = sv_call_native(js, next_fn, iter, NULL, 0);
-    if (is_err(result)) return result;
-    if (js_truthy(js, js_get(js, result, "done"))) break;
-
-    ant_value_t r = process_blob_part(js, buf, js_get(js, result, "value"));
-    if (is_err(r)) return r;
+  ant_value_t value;
+  while (js_iter_next(js, &it, &value)) {
+    ant_value_t r = process_blob_part(js, buf, value);
+    if (is_err(r)) { js_iter_close(js, &it); return r; }
   }
+  
   return js_mkundef();
 }
 
 static void blob_finalize(ant_t *js, ant_object_t *obj) {
-  (void)js;
   if (!obj->extra_slots) return;
   ant_extra_slot_t *entries = (ant_extra_slot_t *)obj->extra_slots;
   for (uint8_t i = 0; i < obj->extra_count; i++) {
-    if (entries[i].slot == SLOT_DATA && vtype(entries[i].value) == T_NUM) {
-      blob_data_t *bd = (blob_data_t *)(uintptr_t)(size_t)js_getnum(entries[i].value);
-      if (bd) { free(bd->data); free(bd->type); free(bd->name); free(bd); }
-      return;
-    }
-  }
+  if (entries[i].slot == SLOT_DATA && vtype(entries[i].value) == T_NUM) {
+    blob_data_t *bd = (blob_data_t *)(uintptr_t)(size_t)js_getnum(entries[i].value);
+    if (bd) { free(bd->data); free(bd->type); free(bd->name); free(bd); }
+    return;
+  }}
 }
 
 ant_value_t blob_create(ant_t *js, const uint8_t *data, size_t size, const char *type) {
@@ -432,8 +422,7 @@ static ant_value_t make_ctor(ant_t *js, ant_cfunc_t fn, ant_value_t proto, const
 void init_blob_module(void) {
   ant_t *js     = rt->js;
   ant_value_t g = js_glob(js);
-
-  g_blob_proto = js_mkobj(js);
+  g_blob_proto  = js_mkobj(js);
 
   js_set_getter_desc(js, g_blob_proto, "size", 4, js_mkfun(blob_get_size), JS_DESC_C);
   js_set_getter_desc(js, g_blob_proto, "type", 4, js_mkfun(blob_get_type), JS_DESC_C);
