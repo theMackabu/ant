@@ -156,40 +156,51 @@ static ant_value_t extract_file_entry(
   blob_data_t *bd = blob_get_data(val);
   if (!bd) return js_mkerr_typed(js, JS_ERR_TYPE, "FormData value must be a string, Blob, or File");
 
-  const char *fname = NULL;
-  char *fname_owned = NULL;
+  bool is_file = (bd->name != NULL);
+  bool no_filename_override = (vtype(filename_v) == T_UNDEF);
 
-  if (vtype(filename_v) != T_UNDEF) {
-    ant_value_t fv = filename_v;
-    if (vtype(fv) != T_STR) { fv = js_tostring_val(js, fv); if (is_err(fv)) return fv; }
-    fname_owned = strdup(js_getstr(js, fv, NULL));
-    fname = fname_owned;
-  } 
-  
-  else if (bd->name && bd->name[0]) fname = bd->name;
-  else fname = "blob";
+  ant_value_t stored_val;
 
-  int64_t last_modified = bd->last_modified;
-  if (!last_modified) {
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    last_modified = (int64_t)ts.tv_sec * 1000LL + (int64_t)(ts.tv_nsec / 1000000);
+  if (is_file && no_filename_override) {
+    stored_val = val;
+  } else {
+    const char *fname = NULL;
+    char *fname_owned = NULL;
+    
+    if (!no_filename_override) {
+      ant_value_t fv = filename_v;
+      if (vtype(fv) != T_STR) { fv = js_tostring_val(js, fv); if (is_err(fv)) return fv; }
+      fname_owned = strdup(js_getstr(js, fv, NULL));
+      fname = fname_owned;
+    } 
+    
+    else if (bd->name && bd->name[0]) fname = bd->name;
+    else fname = "blob";
+    
+    int64_t last_modified = bd->last_modified;
+    if (!last_modified) {
+      struct timespec ts;
+      clock_gettime(CLOCK_REALTIME, &ts);
+      last_modified = (int64_t)ts.tv_sec * 1000LL + (int64_t)(ts.tv_nsec / 1000000);
+    }
+    
+    ant_value_t file_obj = blob_create(js, bd->data, bd->size, bd->type);
+    if (is_err(file_obj)) { free(fname_owned); return file_obj; }
+    
+    blob_data_t *nbd = blob_get_data(file_obj);
+    if (nbd) {
+      nbd->name = strdup(fname);
+      nbd->last_modified = last_modified;
+    }
+    
+    free(fname_owned);
+    js_set_proto_init(file_obj, g_file_proto);
+    stored_val = file_obj;
   }
 
-  ant_value_t file_obj = blob_create(js, bd->data, bd->size, bd->type);
-  if (is_err(file_obj)) { free(fname_owned); return file_obj; }
-
-  blob_data_t *nbd = blob_get_data(file_obj);
-  if (nbd) {
-    nbd->name = strdup(fname);
-    nbd->last_modified = last_modified;
-  } free(fname_owned);
-  
-  js_set_proto_init(file_obj, g_file_proto);
   if (is_set) fd_delete_name(d, name);
-
   size_t idx = (size_t)js_arr_len(js, values_arr);
-  js_arr_push(js, values_arr, file_obj);
+  js_arr_push(js, values_arr, stored_val);
 
   return fd_append_file(d, name, idx) ? js_mkundef() : js_mkerr(js, "out of memory");
 }
@@ -400,7 +411,7 @@ static ant_value_t js_formdata_values(ant_t *js, ant_value_t *args, int nargs) {
 static ant_value_t js_formdata_ctor(ant_t *js, ant_value_t *args, int nargs) {
   if (vtype(js->new_target) == T_UNDEF)
     return js_mkerr_typed(js, JS_ERR_TYPE, "FormData constructor requires 'new'");
-  if (nargs >= 1 && vtype(args[0]) != T_UNDEF && vtype(args[0]) != T_NULL)
+  if (nargs >= 1 && vtype(args[0]) != T_UNDEF)
     return js_mkerr_typed(js, JS_ERR_TYPE, "FormData does not support a form element argument");
 
   fd_data_t *d = fd_data_new();
