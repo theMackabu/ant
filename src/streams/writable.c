@@ -102,6 +102,10 @@ static inline ant_value_t ws_ctrl_size_fn(ant_value_t ctrl_obj) {
   return js_get_slot(ctrl_obj, SLOT_RS_SIZE);
 }
 
+static inline ant_value_t ws_ctrl_sink(ant_value_t ctrl_obj) {
+  return js_get_slot(ctrl_obj, SLOT_CTOR);
+}
+
 static inline ant_value_t ws_ctrl_queue(ant_value_t ctrl_obj) {
   return js_get_slot(ctrl_obj, SLOT_BUFFER);
 }
@@ -208,21 +212,15 @@ static bool writable_stream_has_operation_in_flight(ant_value_t stream_obj) {
 }
 
 static void ws_writer_ensure_ready_promise_rejected(ant_t *js, ant_value_t writer_obj, ant_value_t error) {
-  ant_value_t ready = ws_writer_ready(writer_obj);
-  if (is_undefined(ready)) {
-    ready = js_mkpromise(js);
-    js_set_slot(writer_obj, SLOT_WS_READY, ready);
-  }
+  ant_value_t ready = js_mkpromise(js);
   js_reject_promise(js, ready, error);
+  js_set_slot(writer_obj, SLOT_WS_READY, ready);
 }
 
 static void ws_writer_ensure_closed_promise_rejected(ant_t *js, ant_value_t writer_obj, ant_value_t error) {
-  ant_value_t closed = ws_writer_closed(writer_obj);
-  if (is_undefined(closed)) {
-    closed = js_mkpromise(js);
-    js_set_slot(writer_obj, SLOT_RS_CLOSED, closed);
-  }
+  ant_value_t closed = js_mkpromise(js);
   js_reject_promise(js, closed, error);
+  js_set_slot(writer_obj, SLOT_RS_CLOSED, closed);
 }
 
 static void writable_stream_start_erroring(ant_t *js, ant_value_t stream_obj, ant_value_t reason) {
@@ -281,11 +279,14 @@ static void writable_stream_finish_erroring(ant_t *js, ant_value_t stream_obj) {
 
   ant_value_t ctrl_obj = ws_stream_controller(stream_obj);
   ws_controller_t *ctrl = ws_get_controller(ctrl_obj);
+
+  ant_value_t saved_abort_fn = ws_ctrl_abort_fn(ctrl_obj);
+  ant_value_t saved_sink = ws_ctrl_sink(ctrl_obj);
+
   if (ctrl) {
     ctrl->queue_total_size = 0;
     ctrl->queue_sizes_len = 0;
   }
-  
   ws_default_controller_clear_algorithms(ctrl_obj);
   ant_value_t stored_error = ws_stream_stored_error(stream_obj);
 
@@ -309,11 +310,10 @@ static void writable_stream_finish_erroring(ant_t *js, ant_value_t stream_obj) {
       return;
     }
 
-    ant_value_t abort_fn = ws_ctrl_abort_fn(ctrl_obj);
     ant_value_t result = js_mkundef();
-    if (is_callable(abort_fn)) {
+    if (is_callable(saved_abort_fn)) {
       ant_value_t abort_args[1] = { stored_error };
-      result = sv_vm_call(js->vm, js, abort_fn, js_mkundef(), abort_args, 1, NULL, false);
+      result = sv_vm_call(js->vm, js, saved_abort_fn, saved_sink, abort_args, 1, NULL, false);
     }
 
     if (is_err(result)) {
@@ -472,10 +472,11 @@ static void ws_default_controller_process_write(ant_t *js, ant_value_t ctrl_obj,
   writable_stream_mark_first_write_in_flight(js, stream_obj);
 
   ant_value_t write_fn = ws_ctrl_write_fn(ctrl_obj);
+  ant_value_t sink = ws_ctrl_sink(ctrl_obj);
   ant_value_t result = js_mkundef();
   if (is_callable(write_fn)) {
     ant_value_t write_args[2] = { chunk, ctrl_obj };
-    result = sv_vm_call(js->vm, js, write_fn, js_mkundef(), write_args, 2, NULL, false);
+    result = sv_vm_call(js->vm, js, write_fn, sink, write_args, 2, NULL, false);
   }
 
   if (is_err(result)) {
@@ -531,11 +532,12 @@ static void ws_default_controller_process_close(ant_t *js, ant_value_t ctrl_obj)
   }
 
   ant_value_t close_fn = ws_ctrl_close_fn(ctrl_obj);
+  ant_value_t sink = ws_ctrl_sink(ctrl_obj);
   ws_default_controller_clear_algorithms(ctrl_obj);
 
   ant_value_t result = js_mkundef();
   if (is_callable(close_fn))
-    result = sv_vm_call(js->vm, js, close_fn, js_mkundef(), NULL, 0, NULL, false);
+    result = sv_vm_call(js->vm, js, close_fn, sink, NULL, 0, NULL, false);
 
   if (is_err(result)) {
     ant_value_t thrown = js->thrown_value;
@@ -1001,7 +1003,7 @@ static ant_value_t js_ws_get_writer(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t setup_ws_default_controller(
-  ant_t *js, ant_value_t stream_obj,
+  ant_t *js, ant_value_t stream_obj, ant_value_t underlying_sink,
   ant_value_t write_fn, ant_value_t close_fn, ant_value_t abort_fn,
   ant_value_t size_fn, double hwm
 ) {
@@ -1017,17 +1019,21 @@ static ant_value_t setup_ws_default_controller(
   js_set_slot(ctrl_obj, SLOT_WS_CLOSE, close_fn);
   js_set_slot(ctrl_obj, SLOT_WS_ABORT, abort_fn);
   js_set_slot(ctrl_obj, SLOT_RS_SIZE, size_fn);
+  js_set_slot(ctrl_obj, SLOT_CTOR, underlying_sink);
   js_set_slot(ctrl_obj, SLOT_BUFFER, js_mkarr(js));
   js_set_finalizer(ctrl_obj, ws_controller_finalize);
 
   ant_value_t ac_ctor = js_get(js, js_glob(js), "AbortController");
   ant_value_t ac = js_mkundef();
   if (is_callable(ac_ctor)) {
+    ant_value_t ac_proto = js_get(js, ac_ctor, "prototype");
+    ac = js_mkobj(js);
+    if (is_object_type(ac_proto)) js_set_proto_init(ac, ac_proto);
     ant_value_t saved = js->new_target;
     js->new_target = ac_ctor;
-    ac = sv_vm_call(js->vm, js, ac_ctor, js_mkundef(), NULL, 0, NULL, false);
+    ant_value_t result = sv_vm_call(js->vm, js, ac_ctor, ac, NULL, 0, NULL, false);
     js->new_target = saved;
-    if (is_err(ac)) ac = js_mkundef();
+    if (is_err(result)) ac = js_mkundef();
   }
   
   js_set_slot(ctrl_obj, SLOT_WS_SIGNAL, ac);
@@ -1123,7 +1129,7 @@ static ant_value_t js_ws_ctor(ant_t *js, ant_value_t *args, int nargs) {
     }
   }
 
-  ant_value_t ctrl_obj = setup_ws_default_controller(js, obj, write_fn, close_fn, abort_fn, size_fn, hwm);
+  ant_value_t ctrl_obj = setup_ws_default_controller(js, obj, underlying_sink, write_fn, close_fn, abort_fn, size_fn, hwm);
   if (is_err(ctrl_obj)) return ctrl_obj;
 
   if (is_callable(start_fn)) {
