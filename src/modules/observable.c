@@ -11,10 +11,7 @@
 #include "modules/symbol.h"
 #include "modules/observable.h"
 
-static inline bool is_callable(ant_value_t val) {
-  uint8_t t = vtype(val);
-  return t == T_FUNC || t == T_CFUNC;
-}
+
 
 static bool subscription_closed(ant_t *js, ant_value_t subscription) {
   ant_value_t observer = js_get_slot(subscription, SLOT_SUBSCRIPTION_OBSERVER);

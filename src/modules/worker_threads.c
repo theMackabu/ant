@@ -61,11 +61,6 @@ typedef struct ant_worker_thread {
 
 static ant_worker_thread_t *active_workers_head = NULL;
 
-static inline bool wt_is_callable(ant_value_t v) {
-  uint8_t t = vtype(v);
-  return t == T_FUNC || t == T_CFUNC;
-}
-
 static bool wt_is_worker_mode(void) {
   const char *mode = getenv(WT_ENV_MODE);
   return mode && strcmp(mode, "1") == 0;
@@ -181,7 +176,7 @@ static void wt_port_queue_push(ant_t *js, ant_value_t port, ant_value_t value) {
 }
 
 static void wt_port_call_listener(ant_t *js, ant_value_t this_obj, ant_value_t fn, ant_value_t arg) {
-  if (!wt_is_callable(fn)) return;
+  if (!is_callable(fn)) return;
   ant_value_t argv[1] = {arg};
   
   sv_vm_call(js->vm, js, fn, this_obj, argv, 1, NULL, false);
@@ -194,8 +189,8 @@ static bool wt_port_should_deliver(ant_t *js, ant_value_t port) {
   ant_value_t once_fn = js_get_slot(port, SLOT_WT_PORT_ONCE_MESSAGE);
   ant_value_t onmessage = js_get(js, port, "onmessage");
 
-  bool has_event_listener = wt_is_callable(on_fn) || wt_is_callable(once_fn);
-  if (wt_is_callable(onmessage)) return true;
+  bool has_event_listener = is_callable(on_fn) || is_callable(once_fn);
+  if (is_callable(onmessage)) return true;
   return started && has_event_listener;
 }
 
@@ -210,13 +205,13 @@ static void wt_port_drain(ant_t *js, ant_value_t port) {
     wt_port_call_listener(js, port, on_fn, msg);
 
     ant_value_t once_fn = js_get_slot(port, SLOT_WT_PORT_ONCE_MESSAGE);
-    if (wt_is_callable(once_fn)) {
+    if (is_callable(once_fn)) {
       wt_port_call_listener(js, port, once_fn, msg);
       js_set_slot(port, SLOT_WT_PORT_ONCE_MESSAGE, js_mkundef());
     }
 
     ant_value_t onmessage = js_get(js, port, "onmessage");
-    if (wt_is_callable(onmessage)) {
+    if (is_callable(onmessage)) {
       ant_value_t event_obj = js_mkobj(js);
       js_set(js, event_obj, "data", msg);
       wt_port_call_listener(js, port, onmessage, event_obj);
@@ -233,7 +228,7 @@ static ant_value_t wt_make_resolved_promise(ant_t *js, ant_value_t value) {
 }
 
 static void wt_call_listener(ant_t *js, ant_value_t this_obj, ant_value_t fn, ant_value_t arg) {
-  if (!wt_is_callable(fn)) return;
+  if (!is_callable(fn)) return;
   ant_value_t argv[1] = {arg};
 
   sv_vm_call(js->vm, js, fn, this_obj, argv, 1, NULL, false);
@@ -258,7 +253,7 @@ static void wt_emit(ant_worker_thread_t *wt, const char *event, ant_value_t arg)
   wt_call_listener(js, this_obj, on_fn, arg);
 
   ant_value_t once_fn = js_get_slot(this_obj, once_slot);
-  if (wt_is_callable(once_fn)) {
+  if (is_callable(once_fn)) {
     wt_call_listener(js, this_obj, once_fn, arg);
     js_set_slot(this_obj, once_slot, js_mkundef());
   }
@@ -579,7 +574,7 @@ static int wt_spawn_worker(
 }
 
 static ant_value_t worker_threads_worker_on(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 2 || vtype(args[0]) != T_STR || !wt_is_callable(args[1])) {
+  if (nargs < 2 || vtype(args[0]) != T_STR || !is_callable(args[1])) {
     return js_mkerr(js, "Worker.on(event, listener) requires (string, function)");
   }
 
@@ -600,7 +595,7 @@ static ant_value_t worker_threads_worker_on(ant_t *js, ant_value_t *args, int na
 }
 
 static ant_value_t worker_threads_worker_once(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 2 || vtype(args[0]) != T_STR || !wt_is_callable(args[1])) {
+  if (nargs < 2 || vtype(args[0]) != T_STR || !is_callable(args[1])) {
     return js_mkerr(js, "Worker.once(event, listener) requires (string, function)");
   }
 
@@ -688,7 +683,7 @@ static ant_value_t worker_threads_message_port_post_message(ant_t *js, ant_value
 }
 
 static ant_value_t worker_threads_message_port_on(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 2 || vtype(args[0]) != T_STR || !wt_is_callable(args[1])) {
+  if (nargs < 2 || vtype(args[0]) != T_STR || !is_callable(args[1])) {
     return js_mkerr(js, "MessagePort.on(event, listener) requires (string, function)");
   }
   ant_value_t this_obj = js_getthis(js);
@@ -706,7 +701,7 @@ static ant_value_t worker_threads_message_port_on(ant_t *js, ant_value_t *args, 
 }
 
 static ant_value_t worker_threads_message_port_once(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 2 || vtype(args[0]) != T_STR || !wt_is_callable(args[1])) {
+  if (nargs < 2 || vtype(args[0]) != T_STR || !is_callable(args[1])) {
     return js_mkerr(js, "MessagePort.once(event, listener) requires (string, function)");
   }
   ant_value_t this_obj = js_getthis(js);

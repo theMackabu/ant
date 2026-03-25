@@ -6393,11 +6393,6 @@ static ant_value_t builtin_object_toLocaleString(ant_t *js, ant_value_t *args, i
   return js_call_toString(js, js->this_val);
 }
 
-static inline bool is_callable(ant_value_t v) {
-  uint8_t t = vtype(v);
-  return t == T_FUNC || t == T_CFUNC;
-}
-
 static inline ant_value_t require_callback(ant_t *js, ant_value_t *args, int nargs, const char *name) {
   if (nargs == 0 || !is_callable(args[0]))
     return js_mkerr(js, "%s requires a function argument", name);

@@ -37,10 +37,7 @@
 #include "modules/symbol.h"
 #include "modules/tty.h"
 
-static inline bool is_callable(ant_value_t value) {
-  uint8_t t = vtype(value);
-  return t == T_FUNC || t == T_CFUNC;
-}
+
 
 static bool parse_fd(ant_value_t value, int *fd_out) {
   int fd = 0;

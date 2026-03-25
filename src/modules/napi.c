@@ -226,11 +226,6 @@ napi_env ant_napi_get_env(ant_t *js) {
   return (napi_env)napi_get_or_create_env(js);
 }
 
-static inline bool napi_is_callable(ant_value_t v) {
-  uint8_t t = vtype(v);
-  return t == T_FUNC || t == T_CFUNC;
-}
-
 static void napi_mark_pending_exception(napi_env env, napi_value exception) {
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv) return;
@@ -499,7 +494,7 @@ static void napi_tsfn_async_cb(uv_async_t *handle) {
     ant_value_t cb = tsfn->func_val;
     if (tsfn->call_js_cb) {
       tsfn->call_js_cb((napi_env)tsfn->env, (napi_value)cb, tsfn->context, item->data);
-    } else if (napi_is_callable(cb)) {
+    } else if (is_callable(cb)) {
       sv_vm_call(js->vm, js, cb, js_mkundef(), NULL, 0, NULL, false);
     }
 
@@ -629,7 +624,7 @@ ant_value_t napi_load_native_module(ant_t *js, const char *module_path, ant_valu
   ant_value_t process_obj = js_get(js, js_glob(js), "process");
   ant_value_t dlopen_fn = is_object_type(process_obj) ? js_get(js, process_obj, "dlopen") : js_mkundef();
 
-  if (napi_is_callable(dlopen_fn)) {
+  if (is_callable(dlopen_fn)) {
     ant_value_t argv[2] = {module_obj, js_mkstr(js, module_path, strlen(module_path))};
     ant_value_t dl_res = sv_vm_call(js->vm, js, dlopen_fn, process_obj, argv, 2, NULL, false);
     if (is_err(dl_res) || js->thrown_exists) return js_throw(js, js->thrown_value);
@@ -1973,7 +1968,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_call_function(
   napi_value *result
 ) {
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
-  if (!nenv || !nenv->js || !napi_is_callable((ant_value_t)func)) {
+  if (!nenv || !nenv->js || !is_callable((ant_value_t)func)) {
     return napi_set_last(env, napi_invalid_arg, "invalid argument");
   }
 
@@ -2001,7 +1996,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_new_instance(
   napi_value *result
 ) {
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
-  if (!nenv || !nenv->js || !result || !napi_is_callable((ant_value_t)constructor)) {
+  if (!nenv || !nenv->js || !result || !is_callable((ant_value_t)constructor)) {
     return napi_set_last(env, napi_invalid_arg, "invalid argument");
   }
 
@@ -2065,7 +2060,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_coerce_to_object(
   }
 
   ant_value_t obj_ctor = js_get(nenv->js, js_glob(nenv->js), "Object");
-  if (!napi_is_callable(obj_ctor)) return napi_set_last(env, napi_generic_failure, "Object constructor missing");
+  if (!is_callable(obj_ctor)) return napi_set_last(env, napi_generic_failure, "Object constructor missing");
   ant_value_t arg = (ant_value_t)value;
   ant_value_t out = sv_vm_call(nenv->js->vm, nenv->js, obj_ctor, js_mkundef(), &arg, 1, NULL, false);
   if (is_err(out) || nenv->js->thrown_exists) return napi_check_pending_from_result(env, out);

@@ -56,11 +56,6 @@ static const util_style_entry_t util_styles[] = {
   {"bgWhite", "\x1b[47m", "\x1b[49m"},
 };
 
-static inline bool util_is_callable(ant_value_t v) {
-  uint8_t t = vtype(v);
-  return t == T_FUNC || t == T_CFUNC;
-}
-
 static bool util_sb_reserve(util_sb_t *sb, size_t extra) {
   size_t need = sb->len + extra + 1;
   if (need <= sb->cap) return true;
@@ -348,7 +343,7 @@ static ant_value_t util_promisify_callback(ant_t *js, ant_value_t *args, int nar
 static ant_value_t util_promisified_call(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t fn = js_getcurrentfunc(js);
   ant_value_t original = js_get_slot(fn, SLOT_DATA);
-  if (!util_is_callable(original)) return js_mkerr(js, "promisified target is not callable");
+  if (!is_callable(original)) return js_mkerr(js, "promisified target is not callable");
 
   ant_value_t promise = js_mkpromise(js);
   ant_value_t ctx = js_mkobj(js);
@@ -385,7 +380,7 @@ static ant_value_t util_promisified_call(ant_t *js, ant_value_t *args, int nargs
 }
 
 static ant_value_t util_promisify(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1 || !util_is_callable(args[0])) {
+  if (nargs < 1 || !is_callable(args[0])) {
     return js_mkerr(js, "promisify(fn) requires a function");
   }
   return js_heavy_mkfun(js, util_promisified_call, args[0]);

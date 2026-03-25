@@ -247,6 +247,11 @@ static inline bool is_empty_slot(ant_value_t v) {
   return v == T_EMPTY; 
 }
 
+static inline bool is_callable(ant_value_t v) {
+  uint8_t t = vtype(v);
+  return t == T_FUNC || t == T_CFUNC;
+}
+
 bool is_internal_prop(const char *key, ant_offset_t klen);
 size_t uint_to_str(char *buf, size_t bufsize, uint64_t val);
 

@@ -11,11 +11,6 @@
 #include "modules/async_hooks.h"
 #include "modules/symbol.h"
 
-static inline bool async_hooks_is_callable(ant_value_t v) {
-  uint8_t t = vtype(v);
-  return t == T_FUNC || t == T_CFUNC;
-}
-
 static ant_value_t async_hooks_call_with_tail_args(
   ant_t *js, ant_value_t fn, ant_value_t this_arg, ant_value_t *args, int nargs, int start_idx
 ) {
@@ -32,7 +27,7 @@ static ant_value_t async_hooks_call_with_tail_args(
 }
 
 static ant_value_t async_local_storage_run(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 2 || !async_hooks_is_callable(args[1])) {
+  if (nargs < 2 || !is_callable(args[1])) {
     return js_mkerr(js, "AsyncLocalStorage.run(store, callback, ...args) requires a callback");
   }
 
@@ -49,7 +44,7 @@ static ant_value_t async_local_storage_run(ant_t *js, ant_value_t *args, int nar
 }
 
 static ant_value_t async_local_storage_exit(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1 || !async_hooks_is_callable(args[0])) {
+  if (nargs < 1 || !is_callable(args[0])) {
     return js_mkerr(js, "AsyncLocalStorage.exit(callback, ...args) requires a callback");
   }
 
@@ -89,7 +84,7 @@ static ant_value_t async_local_storage_disable(ant_t *js, ant_value_t *args, int
 }
 
 static ant_value_t async_resource_runInAsyncScope(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1 || !async_hooks_is_callable(args[0])) {
+  if (nargs < 1 || !is_callable(args[0])) {
     return js_mkerr(js, "AsyncResource.runInAsyncScope(fn[, thisArg, ...args]) requires a function");
   }
   ant_value_t this_arg = nargs > 1 ? args[1] : js_mkundef();
