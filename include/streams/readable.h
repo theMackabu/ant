@@ -12,6 +12,9 @@ typedef enum {
 } rs_state_t;
 
 typedef struct {
+  double *queue_sizes;
+  uint32_t queue_sizes_len;
+  uint32_t queue_sizes_cap;
   double queue_total_size;
   double strategy_hwm;
   bool close_requested;

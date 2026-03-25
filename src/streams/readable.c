@@ -42,52 +42,54 @@ static void rs_controller_finalize(ant_t *js, ant_object_t *obj) {
   ant_extra_slot_t *entries = (ant_extra_slot_t *)obj->extra_slots;
   for (uint8_t i = 0; i < obj->extra_count; i++) {
   if (entries[i].slot == SLOT_DATA && vtype(entries[i].value) == T_NUM) {
-    free((rs_controller_t *)(uintptr_t)(size_t)js_getnum(entries[i].value));
+    rs_controller_t *ctrl = (rs_controller_t *)(uintptr_t)(size_t)js_getnum(entries[i].value);
+    free(ctrl->queue_sizes);
+    free(ctrl);
     return;
   }}
 }
 
-static ant_value_t rs_stream_controller(ant_t *js, ant_value_t stream_obj) {
+static inline ant_value_t rs_stream_controller(ant_t *js, ant_value_t stream_obj) {
   return js_get_slot(stream_obj, SLOT_ENTRIES);
 }
 
-static ant_value_t rs_stream_reader(ant_value_t stream_obj) {
+static inline ant_value_t rs_stream_reader(ant_value_t stream_obj) {
   return js_get_slot(stream_obj, SLOT_CTOR);
 }
 
-static ant_value_t rs_stream_error(ant_value_t stream_obj) {
+static inline ant_value_t rs_stream_error(ant_value_t stream_obj) {
   return js_get_slot(stream_obj, SLOT_BUFFER);
 }
 
-static ant_value_t rs_ctrl_stream(ant_value_t ctrl_obj) {
+static inline ant_value_t rs_ctrl_stream(ant_value_t ctrl_obj) {
   return js_get_slot(ctrl_obj, SLOT_ENTRIES);
 }
 
-static ant_value_t rs_ctrl_pull(ant_value_t ctrl_obj) {
+static inline ant_value_t rs_ctrl_pull(ant_value_t ctrl_obj) {
   return js_get_slot(ctrl_obj, SLOT_RS_PULL);
 }
 
-static ant_value_t rs_ctrl_cancel(ant_value_t ctrl_obj) {
+static inline ant_value_t rs_ctrl_cancel(ant_value_t ctrl_obj) {
   return js_get_slot(ctrl_obj, SLOT_RS_CANCEL);
 }
 
-static ant_value_t rs_ctrl_size(ant_value_t ctrl_obj) {
+static inline ant_value_t rs_ctrl_size(ant_value_t ctrl_obj) {
   return js_get_slot(ctrl_obj, SLOT_RS_SIZE);
 }
 
-static ant_value_t rs_ctrl_queue(ant_t *js, ant_value_t ctrl_obj) {
+static inline ant_value_t rs_ctrl_queue(ant_t *js, ant_value_t ctrl_obj) {
   return js_get_slot(ctrl_obj, SLOT_BUFFER);
 }
 
-static ant_value_t rs_reader_stream(ant_value_t reader_obj) {
+static inline ant_value_t rs_reader_stream(ant_value_t reader_obj) {
   return js_get_slot(reader_obj, SLOT_ENTRIES);
 }
 
-static ant_value_t rs_reader_closed(ant_value_t reader_obj) {
+static inline ant_value_t rs_reader_closed(ant_value_t reader_obj) {
   return js_get_slot(reader_obj, SLOT_RS_CLOSED);
 }
 
-static ant_value_t rs_reader_reqs(ant_value_t reader_obj) {
+static inline ant_value_t rs_reader_reqs(ant_value_t reader_obj) {
   return js_get_slot(reader_obj, SLOT_BUFFER);
 }
 
@@ -217,7 +219,7 @@ static void readable_stream_close(ant_t *js, ant_value_t stream_obj) {
 
 static void readable_stream_error(ant_t *js, ant_value_t stream_obj, ant_value_t e) {
   rs_stream_t *stream = rs_get_stream(stream_obj);
-  if (!stream) return;
+  if (!stream || stream->state != RS_STATE_READABLE) return;
   stream->state = RS_STATE_ERRORED;
   js_set_slot(stream_obj, SLOT_BUFFER, e);
 
@@ -226,6 +228,18 @@ static void readable_stream_error(ant_t *js, ant_value_t stream_obj, ant_value_t
     js_reject_promise(js, rs_reader_closed(reader_obj), e);
     rs_default_reader_error_read_requests(js, reader_obj, e);
   }
+}
+
+static ant_value_t rs_cancel_resolve(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t p = js_get_slot(js->current_func, SLOT_DATA);
+  js_resolve_promise(js, p, js_mkundef());
+  return js_mkundef();
+}
+
+static ant_value_t rs_cancel_reject(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t p = js_get_slot(js->current_func, SLOT_DATA);
+  js_reject_promise(js, p, nargs > 0 ? args[0] : js_mkundef());
+  return js_mkundef();
 }
 
 static ant_value_t readable_stream_cancel(ant_t *js, ant_value_t stream_obj, ant_value_t reason) {
@@ -250,16 +264,26 @@ static ant_value_t readable_stream_cancel(ant_t *js, ant_value_t stream_obj, ant
   ant_value_t cancel_fn = rs_ctrl_cancel(ctrl_obj);
   ant_value_t result = js_mkundef();
   if (is_callable(cancel_fn)) {
-    ant_value_t args[1] = { reason };
-    result = sv_vm_call(js->vm, js, cancel_fn, ctrl_obj, args, 1, NULL, false);
+    ant_value_t cancel_args[1] = { reason };
+    result = sv_vm_call(js->vm, js, cancel_fn, ctrl_obj, cancel_args, 1, NULL, false);
   }
+  
   rs_default_controller_clear_algorithms(ctrl_obj);
-
   ant_value_t p = js_mkpromise(js);
-  if (is_err(result))
-    js_reject_promise(js, p, result);
-  else
-    js_resolve_promise(js, p, js_mkundef());
+
+  if (is_err(result)) {
+    ant_value_t thrown = js->thrown_value;
+    js_reject_promise(js, p, is_object_type(thrown) ? thrown : result);
+  } else if (vtype(result) == T_PROMISE) {
+    ant_value_t res_fn = js_heavy_mkfun(js, rs_cancel_resolve, p);
+    ant_value_t rej_fn = js_heavy_mkfun(js, rs_cancel_reject, p);
+    ant_value_t then_fn = js_get(js, result, "then");
+    if (is_callable(then_fn)) {
+      ant_value_t then_args[2] = { res_fn, rej_fn };
+      sv_vm_call(js->vm, js, then_fn, result, then_args, 2, NULL, false);
+    }
+  } else js_resolve_promise(js, p, js_mkundef());
+
   return p;
 }
 
@@ -352,16 +376,22 @@ static ant_value_t rs_default_reader_read(ant_t *js, ant_value_t reader_obj) {
   rs_controller_t *ctrl = rs_get_controller(ctrl_obj);
   if (ctrl && rs_ctrl_queue_len(js, ctrl_obj) > 0) {
     ant_value_t chunk = rs_ctrl_queue_shift(js, ctrl_obj);
-    ctrl->queue_total_size -= 1;
-    if (ctrl->queue_total_size < 0) ctrl->queue_total_size = 0;
-    if (ctrl->close_requested && rs_ctrl_queue_len(js, ctrl_obj) == 0) {
-      rs_default_controller_clear_algorithms(ctrl_obj);
-      readable_stream_close(js, stream_obj);
-    } else {
-      rs_default_controller_call_pull_if_needed(js, ctrl_obj);
+    double chunk_size = 1;
+    if (ctrl->queue_sizes_len > 0) {
+      chunk_size = ctrl->queue_sizes[0];
+      ctrl->queue_sizes_len--;
+      memmove(ctrl->queue_sizes, ctrl->queue_sizes + 1, ctrl->queue_sizes_len * sizeof(double));
     }
+    ctrl->queue_total_size -= chunk_size;
+    if (ctrl->queue_total_size < 0) ctrl->queue_total_size = 0;
+    bool should_close = ctrl->close_requested && rs_ctrl_queue_len(js, ctrl_obj) == 0;
     ant_value_t p = js_mkpromise(js);
     js_resolve_promise(js, p, js_iter_result(js, true, chunk));
+    if (should_close) {
+      rs_default_controller_clear_algorithms(ctrl_obj);
+      readable_stream_close(js, stream_obj);
+    } else rs_default_controller_call_pull_if_needed(js, ctrl_obj);
+
     return p;
   }
 
@@ -418,7 +448,10 @@ static ant_value_t js_rs_controller_enqueue(ant_t *js, ant_value_t *args, int na
     ant_value_t size_args[1] = { chunk };
     ant_value_t size_result = sv_vm_call(js->vm, js, size_fn, js_mkundef(), size_args, 1, NULL, false);
     if (is_err(size_result)) {
-      readable_stream_error(js, stream_obj, size_result);
+      ant_value_t thrown = js->thrown_value;
+      ant_value_t err = is_object_type(thrown) ? thrown : size_result;
+      readable_stream_error(js, stream_obj, err);
+      if (is_object_type(thrown)) return js_throw(js, thrown);
       return size_result;
     }
     if (vtype(size_result) == T_NUM) chunk_size = js_getnum(size_result);
@@ -426,13 +459,21 @@ static ant_value_t js_rs_controller_enqueue(ant_t *js, ant_value_t *args, int na
   }
 
   if (chunk_size < 0 || chunk_size != chunk_size || chunk_size == (double)INFINITY) {
-    ant_value_t err = js_mkerr_typed(js, JS_ERR_RANGE,
+    js_mkerr_typed(js, JS_ERR_RANGE,
       "The return value of a queuing strategy's size function must be a finite, non-NaN, non-negative number");
+    ant_value_t err = is_object_type(js->thrown_value) ? js->thrown_value : js_mkundef();
     readable_stream_error(js, stream_obj, err);
-    return err;
+    return js_throw(js, err);
   }
 
   rs_ctrl_queue_push(js, js->this_val, chunk);
+  if (ctrl->queue_sizes_len >= ctrl->queue_sizes_cap) {
+    uint32_t new_cap = ctrl->queue_sizes_cap ? ctrl->queue_sizes_cap * 2 : 8;
+    double *ns = realloc(ctrl->queue_sizes, new_cap * sizeof(double));
+    if (ns) { ctrl->queue_sizes = ns; ctrl->queue_sizes_cap = new_cap; }
+  }
+  if (ctrl->queue_sizes_len < ctrl->queue_sizes_cap)
+    ctrl->queue_sizes[ctrl->queue_sizes_len++] = chunk_size;
   ctrl->queue_total_size += chunk_size;
   rs_default_controller_call_pull_if_needed(js, js->this_val);
   return js_mkundef();
@@ -444,10 +485,13 @@ static ant_value_t js_rs_controller_error(ant_t *js, ant_value_t *args, int narg
   ant_value_t stream_obj = rs_ctrl_stream(js->this_val);
   rs_stream_t *stream = rs_get_stream(stream_obj);
   if (!stream || stream->state != RS_STATE_READABLE) return js_mkundef();
+  
   ant_value_t e = (nargs > 0) ? args[0] : js_mkundef();
   ctrl->queue_total_size = 0;
+  ctrl->queue_sizes_len = 0;
   rs_default_controller_clear_algorithms(js->this_val);
   readable_stream_error(js, stream_obj, e);
+  
   return js_mkundef();
 }
 
@@ -469,14 +513,19 @@ static ant_value_t js_rs_reader_release_lock(ant_t *js, ant_value_t *args, int n
   if (!stream) return js_mkundef();
 
   if (rs_reader_has_reqs(js, js->this_val)) {
-    ant_value_t err = js_mkerr_typed(js, JS_ERR_TYPE, "Reader was released");
-    rs_default_reader_error_read_requests(js, js->this_val, err);
+    js_mkerr_typed(js, JS_ERR_TYPE, "Reader was released");
+    rs_default_reader_error_read_requests(js, js->this_val, js->thrown_value);
   }
 
-  if (stream->state == RS_STATE_READABLE) {
-    ant_value_t err = js_mkerr_typed(js, JS_ERR_TYPE, "Reader was released while stream is readable");
-    js_reject_promise(js, rs_reader_closed(js->this_val), err);
-  }
+  ant_value_t new_closed = js_mkpromise(js);
+  js_mkerr_typed(js, JS_ERR_TYPE, "Reader was released");
+  ant_value_t release_err = js->thrown_value;
+
+  if (stream->state == RS_STATE_READABLE)
+    js_reject_promise(js, rs_reader_closed(js->this_val), release_err);
+
+  js_reject_promise(js, new_closed, release_err);
+  js_set_slot(js->this_val, SLOT_RS_CLOSED, new_closed);
 
   js_set_slot(stream_obj, SLOT_CTOR, js_mkundef());
   js_set_slot(js->this_val, SLOT_ENTRIES, js_mkundef());
@@ -485,8 +534,12 @@ static ant_value_t js_rs_reader_release_lock(ant_t *js, ant_value_t *args, int n
 
 static ant_value_t js_rs_reader_cancel(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t stream_obj = rs_reader_stream(js->this_val);
-  if (!is_object_type(stream_obj))
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot cancel a released reader");
+  if (!is_object_type(stream_obj)) {
+    ant_value_t p = js_mkpromise(js);
+    js_mkerr_typed(js, JS_ERR_TYPE, "Cannot cancel a released reader");
+    js_reject_promise(js, p, js->thrown_value);
+    return p;
+  }
   ant_value_t reason = (nargs > 0) ? args[0] : js_mkundef();
   return readable_stream_cancel(js, stream_obj, reason);
 }
@@ -530,8 +583,12 @@ static ant_value_t js_rs_get_locked(ant_t *js, ant_value_t *args, int nargs) {
 static ant_value_t js_rs_cancel(ant_t *js, ant_value_t *args, int nargs) {
   rs_stream_t *stream = rs_get_stream(js->this_val);
   if (!stream) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid ReadableStream");
-  if (is_object_type(rs_stream_reader(js->this_val)))
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot cancel a locked ReadableStream");
+  if (is_object_type(rs_stream_reader(js->this_val))) {
+    ant_value_t p = js_mkpromise(js);
+    js_mkerr_typed(js, JS_ERR_TYPE, "Cannot cancel a locked ReadableStream");
+    js_reject_promise(js, p, js->thrown_value);
+    return p;
+  }
   ant_value_t reason = (nargs > 0) ? args[0] : js_mkundef();
   return readable_stream_cancel(js, js->this_val, reason);
 }
@@ -543,12 +600,15 @@ static ant_value_t js_rs_get_reader(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs > 0 && is_object_type(args[0])) {
     ant_value_t mode = js_get(js, args[0], "mode");
     if (!is_undefined(mode)) {
-      if (vtype(mode) == T_STR) {
-        size_t mode_len;
-        const char *mode_str = js_getstr(js, mode, &mode_len);
-        if (mode_str && mode_len == 4 && memcmp(mode_str, "byob", 4) == 0)
-          return js_mkerr_typed(js, JS_ERR_TYPE, "ReadableStreamBYOBReader is not yet implemented");
+      ant_value_t mode_str_v = mode;
+      if (vtype(mode) != T_STR) {
+        mode_str_v = js_tostring_val(js, mode);
+        if (is_err(mode_str_v)) return mode_str_v;
       }
+      size_t mode_len;
+      const char *mode_str = js_getstr(js, mode_str_v, &mode_len);
+      if (mode_str && mode_len == 4 && memcmp(mode_str, "byob", 4) == 0)
+        return js_mkerr_typed(js, JS_ERR_TYPE, "ReadableStreamBYOBReader is not yet implemented");
       return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid reader mode");
     }
   }
@@ -655,19 +715,19 @@ static ant_value_t js_rs_ctor(ant_t *js, ant_value_t *args, int nargs) {
   double hwm = 1;
   if (is_object_type(strategy)) {
     ant_value_t hwm_val = js_get(js, strategy, "highWaterMark");
+    if (is_err(hwm_val)) return hwm_val;
     if (!is_undefined(hwm_val)) {
       hwm = js_to_number(js, hwm_val);
-      if (hwm != hwm || hwm < 0)
-        return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid highWaterMark");
+      if (hwm != hwm || hwm < 0) return js_mkerr_typed(js, JS_ERR_RANGE, "Invalid highWaterMark");
     }
   }
 
   ant_value_t size_fn = js_mkundef();
   if (is_object_type(strategy)) {
     ant_value_t s = js_get(js, strategy, "size");
+    if (is_err(s)) return s;
     if (!is_undefined(s)) {
-      if (!is_callable(s))
-        return js_mkerr_typed(js, JS_ERR_TYPE, "size must be a function");
+      if (!is_callable(s)) return js_mkerr_typed(js, JS_ERR_TYPE, "size must be a function");
       size_fn = s;
     }
   }
