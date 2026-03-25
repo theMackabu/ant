@@ -15,7 +15,7 @@ static ant_value_t g_rs_proto;
 static ant_value_t g_reader_proto;
 static ant_value_t g_controller_proto;
 
-static rs_stream_t *rs_get_stream(ant_value_t obj) {
+rs_stream_t *rs_get_stream(ant_value_t obj) {
   ant_value_t s = js_get_slot(obj, SLOT_DATA);
   if (vtype(s) != T_NUM) return NULL;
   return (rs_stream_t *)(uintptr_t)(size_t)js_getnum(s);
@@ -49,11 +49,11 @@ static void rs_controller_finalize(ant_t *js, ant_object_t *obj) {
   }}
 }
 
-static inline ant_value_t rs_stream_controller(ant_t *js, ant_value_t stream_obj) {
+ant_value_t rs_stream_controller(ant_t *js, ant_value_t stream_obj) {
   return js_get_slot(stream_obj, SLOT_ENTRIES);
 }
 
-static inline ant_value_t rs_stream_reader(ant_value_t stream_obj) {
+ant_value_t rs_stream_reader(ant_value_t stream_obj) {
   return js_get_slot(stream_obj, SLOT_CTOR);
 }
 
@@ -141,8 +141,6 @@ static ant_value_t rs_reader_reqs_shift(ant_t *js, ant_value_t reader_obj) {
 }
 
 static void rs_default_controller_call_pull_if_needed(ant_t *js, ant_value_t controller_obj);
-static void readable_stream_close(ant_t *js, ant_value_t stream_obj);
-static void readable_stream_error(ant_t *js, ant_value_t stream_obj, ant_value_t e);
 static bool rs_default_controller_can_close_or_enqueue(rs_controller_t *ctrl, rs_stream_t *stream);
 
 static void rs_default_controller_clear_algorithms(ant_value_t ctrl_obj) {
@@ -196,7 +194,7 @@ static void rs_default_reader_error_read_requests(ant_t *js, ant_value_t reader_
   aobj->u.array.len = 0;
 }
 
-static void readable_stream_close(ant_t *js, ant_value_t stream_obj) {
+void readable_stream_close(ant_t *js, ant_value_t stream_obj) {
   rs_stream_t *stream = rs_get_stream(stream_obj);
   if (!stream) return;
   stream->state = RS_STATE_CLOSED;
@@ -217,7 +215,7 @@ static void readable_stream_close(ant_t *js, ant_value_t stream_obj) {
   }
 }
 
-static void readable_stream_error(ant_t *js, ant_value_t stream_obj, ant_value_t e) {
+void readable_stream_error(ant_t *js, ant_value_t stream_obj, ant_value_t e) {
   rs_stream_t *stream = rs_get_stream(stream_obj);
   if (!stream || stream->state != RS_STATE_READABLE) return;
   stream->state = RS_STATE_ERRORED;
@@ -242,7 +240,7 @@ static ant_value_t rs_cancel_reject(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t readable_stream_cancel(ant_t *js, ant_value_t stream_obj, ant_value_t reason) {
+ant_value_t readable_stream_cancel(ant_t *js, ant_value_t stream_obj, ant_value_t reason) {
   rs_stream_t *stream = rs_get_stream(stream_obj);
   if (!stream) return js_mkundef();
   stream->disturbed = true;

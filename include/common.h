@@ -66,6 +66,11 @@ typedef enum {
   SLOT_RS_CANCEL,
   SLOT_RS_SIZE,
   SLOT_RS_CLOSED,
+  SLOT_WS_WRITE,
+  SLOT_WS_CLOSE,
+  SLOT_WS_ABORT,
+  SLOT_WS_READY,
+  SLOT_WS_SIGNAL,
   SLOT_MAX = 255
 } internal_slot_t;
 
