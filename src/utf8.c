@@ -1,5 +1,6 @@
 #include "utf8.h"
 #include <string.h>
+#include <stdbool.h>
 
 static uint32_t utf8_decode(const unsigned char *buf, size_t len, int *seq_len) {
   if (len == 0) { *seq_len = 0; return 0; }
@@ -176,6 +177,91 @@ uint32_t utf16_code_unit_at(const char *str, size_t byte_len, size_t utf16_idx) 
   }
   
   return 0xFFFFFFFF;
+}
+
+utf8proc_ssize_t utf8_whatwg_decode(
+  utf8_dec_t *dec, const uint8_t *src, size_t len,
+  char *out, bool fatal, bool stream
+) {
+  static const void *tbl[256] = {
+    [0x00 ... 0x7F] = &&L_ASCII,
+    [0x80 ... 0xBF] = &&L_LONE,
+    [0xC0 ... 0xC1] = &&L_BAD,
+    [0xC2 ... 0xDF] = &&L_2,
+    [0xE0]          = &&L_E0,
+    [0xE1 ... 0xEC] = &&L_3,
+    [0xED]          = &&L_ED,
+    [0xEE ... 0xEF] = &&L_3,
+    [0xF0]          = &&L_F0,
+    [0xF1 ... 0xF3] = &&L_4,
+    [0xF4]          = &&L_F4,
+    [0xF5 ... 0xFF] = &&L_BAD,
+  };
+
+  size_t i = 0, o = 0;
+  int bc = 0;
+  
+  uint8_t lo = 0x80, hi = 0xBF;
+  utf8proc_int32_t cp = 0;
+  uint8_t pb[4]; int pp = 0;
+
+#define FFFD() do { out[o++]=(char)0xEF; out[o++]=(char)0xBF; out[o++]=(char)0xBD; } while(0)
+#define NEXT() do { i++; if (i < len) goto *tbl[src[i]]; goto done; } while(0)
+
+  if (!len) goto done;
+  goto *tbl[src[0]];
+
+L_ASCII:
+  dec->bom_seen = true;
+  out[o++] = (char)src[i];
+  NEXT();
+
+L_LONE:
+L_BAD:
+  if (fatal) return -1;
+  FFFD(); dec->bom_seen = true;
+  NEXT();
+
+L_E0: bc=2; lo=0xA0; hi=0xBF; cp=src[i]&0x0F; pb[0]=src[i]; pp=1; i++; goto cont;
+L_ED: bc=2; lo=0x80; hi=0x9F; cp=src[i]&0x0F; pb[0]=src[i]; pp=1; i++; goto cont;
+L_3:  bc=2; lo=0x80; hi=0xBF; cp=src[i]&0x0F; pb[0]=src[i]; pp=1; i++; goto cont;
+L_F0: bc=3; lo=0x90; hi=0xBF; cp=src[i]&0x07; pb[0]=src[i]; pp=1; i++; goto cont;
+L_F4: bc=3; lo=0x80; hi=0x8F; cp=src[i]&0x07; pb[0]=src[i]; pp=1; i++; goto cont;
+L_4:  bc=3; lo=0x80; hi=0xBF; cp=src[i]&0x07; pb[0]=src[i]; pp=1; i++; goto cont;
+L_2:  bc=1; lo=0x80; hi=0xBF; cp=src[i]&0x1F; pb[0]=src[i]; pp=1; i++; goto cont;
+
+cont:
+  while (bc > 0) {
+    if (i >= len) {
+      if (stream) { dec->pend_pos = pp; memcpy(dec->pend_buf, pb, pp); }
+      else { if (fatal) return -1; FFFD(); }
+      goto done;
+    }
+    uint8_t b = src[i];
+    if (b < lo || b > hi) {
+      bc = 0; cp = 0; pp = 0;
+      if (fatal) return -1;
+      FFFD(); dec->bom_seen = true;
+      goto *tbl[b];
+    }
+    lo = 0x80; hi = 0xBF;
+    cp = (cp << 6) | (b & 0x3F);
+    pb[pp++] = b; bc--; i++;
+  }
+  pp = 0;
+  if (!dec->bom_seen && cp == 0xFEFF && !dec->ignore_bom) dec->bom_seen = true;
+  else {
+    dec->bom_seen = true;
+    utf8proc_ssize_t n = utf8proc_encode_char(cp, (utf8proc_uint8_t *)(out + o));
+    if (n > 0) o += (size_t)n;
+  }
+  cp = 0;
+  if (i < len) goto *tbl[src[i]];
+
+done:
+#undef FFFD
+#undef NEXT
+  return (utf8proc_ssize_t)o;
 }
 
 uint32_t utf16_codepoint_at(const char *str, size_t byte_len, size_t utf16_idx) {

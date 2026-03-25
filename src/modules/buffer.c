@@ -685,7 +685,10 @@ static ant_value_t js_typedarray_constructor(ant_t *js, ant_value_t *args, int n
           snprintf(idx_str, sizeof(idx_str), "%zu", i);
           elem = js_get(js, args[0], idx_str);
         }
-        double val = vtype(elem) == T_NUM ? js_getnum(elem) : 0;
+        
+        double val = vtype(elem) == T_NUM 
+          ? js_getnum(elem) 
+          : js_to_number(js, elem);
         
         if (type > TYPED_ARRAY_BIGUINT64) goto W_DONE;
         goto *write_dispatch[type];

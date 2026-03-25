@@ -3,7 +3,20 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <utf8proc.h>
+
+typedef struct {
+  bool ignore_bom;
+  bool bom_seen;
+  uint8_t pend_buf[3];
+  int pend_pos;
+} utf8_dec_t;
+
+utf8proc_ssize_t utf8_whatwg_decode(
+  utf8_dec_t *dec, const uint8_t *src, size_t len,
+  char *out, bool fatal, bool stream
+);
 
 size_t utf8_char_len_at(const char *str, size_t byte_len, size_t pos);
 size_t utf8_strlen(const char *str, size_t byte_len);
