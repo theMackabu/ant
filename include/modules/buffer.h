@@ -42,10 +42,11 @@ typedef struct {
   size_t byte_length;
 } DataViewData;
 
+ant_value_t buffer_library(ant_t *js);
+
 void init_buffer_module(void);
 void cleanup_buffer_module(void);
 void free_array_buffer_data(ArrayBufferData *data);
-size_t buffer_get_external_memory(void);
 
 ArrayBufferData *create_array_buffer_data(size_t length);
 ant_value_t create_arraybuffer_obj(ant_t *js, ArrayBufferData *buffer);
@@ -61,6 +62,8 @@ ant_value_t create_typed_array_with_buffer(
   const char *type_name, ant_value_t arraybuffer_obj
 );
 
-ant_value_t buffer_library(ant_t *js);
+size_t buffer_get_external_memory(void);
+bool buffer_is_dataview(ant_value_t obj);
+bool buffer_source_get_bytes(ant_t *js, ant_value_t value, const uint8_t **out, size_t *len);
 
 #endif

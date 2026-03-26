@@ -119,42 +119,6 @@ static void brotli_state_finalize(ant_t *js, ant_object_t *obj) {
   }}
 }
 
-static bool get_chunk_bytes(ant_t *js, ant_value_t chunk, const uint8_t **out, size_t *len) {
-  ant_value_t slot = js_get_slot(chunk, SLOT_BUFFER);
-  TypedArrayData *ta = (TypedArrayData *)js_gettypedarray(slot);
-  if (ta) {
-    if (!ta->buffer || ta->buffer->is_detached) { *out = NULL; *len = 0; return true; }
-    *out = ta->buffer->data + ta->byte_offset;
-    *len = ta->byte_length;
-    return true;
-  }
-
-  if (vtype(slot) == T_NUM) {
-    ArrayBufferData *ab = (ArrayBufferData *)(uintptr_t)(size_t)js_getnum(slot);
-    if (!ab || ab->is_detached) { *out = NULL; *len = 0; return true; }
-    *out = ab->data;
-    *len = ab->length;
-    return true;
-  }
-
-  ant_value_t buf_prop = js_get(js, chunk, "buffer");
-  if (is_object_type(buf_prop)) {
-  ant_value_t buf_slot = js_get_slot(buf_prop, SLOT_BUFFER);
-  if (vtype(buf_slot) == T_NUM) {
-    ArrayBufferData *ab = (ArrayBufferData *)(uintptr_t)(size_t)js_getnum(buf_slot);
-    if (!ab || ab->is_detached) { *out = NULL; *len = 0; return true; }
-    ant_value_t off_v = js_get(js, chunk, "byteOffset");
-    ant_value_t len_v = js_get(js, chunk, "byteLength");
-    size_t off  = (vtype(off_v) == T_NUM) ? (size_t)js_getnum(off_v) : 0;
-    size_t blen = (vtype(len_v) == T_NUM) ? (size_t)js_getnum(len_v) : ab->length - off;
-    *out = ab->data + off;
-    *len = blen;
-    return true;
-  }}
-
-  return false;
-}
-
 static ant_value_t enqueue_buffer(ant_t *js, ant_value_t ctrl_obj, const uint8_t *data, size_t len) {
   ArrayBufferData *ab = create_array_buffer_data(len);
   if (!ab) return js_mkerr(js, "out of memory");
@@ -178,7 +142,7 @@ static ant_value_t cs_transform(ant_t *js, ant_value_t *args, int nargs) {
   const uint8_t *input = NULL;
   size_t input_len = 0;
 
-  if (!is_object_type(chunk) || !get_chunk_bytes(js, chunk, &input, &input_len))
+  if (!is_object_type(chunk) || !buffer_source_get_bytes(js, chunk, &input, &input_len))
     return js_mkerr_typed(js, JS_ERR_TYPE, "The provided value is not of type '(ArrayBuffer or ArrayBufferView)'");
 
   if (!input || input_len == 0) return js_mkundef();
@@ -322,7 +286,7 @@ static ant_value_t ds_transform(ant_t *js, ant_value_t *args, int nargs) {
   const uint8_t *input = NULL;
   size_t input_len = 0;
 
-  if (!is_object_type(chunk) || !get_chunk_bytes(js, chunk, &input, &input_len))
+  if (!is_object_type(chunk) || !buffer_source_get_bytes(js, chunk, &input, &input_len))
     return js_mkerr_typed(js, JS_ERR_TYPE, "The provided value is not of type '(ArrayBuffer or ArrayBufferView)'");
 
   if (!input || input_len == 0) return js_mkundef();

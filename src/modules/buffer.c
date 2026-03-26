@@ -27,11 +27,48 @@
 static uint8_t *ta_arena = NULL;
 static size_t ta_arena_offset = 0;
 
+static size_t buffer_registry_count = 0;
+static size_t buffer_registry_cap   = 0;
+
 static ArrayBufferData **buffer_registry   = NULL;
 static ant_value_t g_typedarray_iter_proto = 0;
 
-static size_t buffer_registry_count = 0;
-static size_t buffer_registry_cap   = 0;
+bool buffer_is_dataview(ant_value_t obj) {
+  ant_value_t brand = js_get_slot(obj, SLOT_BRAND);
+  return vtype(brand) == T_NUM && (int)js_getnum(brand) == BRAND_DATAVIEW;
+}
+
+bool buffer_source_get_bytes(ant_t *js, ant_value_t value, const uint8_t **out, size_t *len) {
+  ant_value_t slot = js_get_slot(value, SLOT_BUFFER);
+  TypedArrayData *ta = (TypedArrayData *)js_gettypedarray(slot);
+  
+  if (ta) {
+    if (!ta->buffer || ta->buffer->is_detached) { *out = NULL; *len = 0; return true; }
+    *out = ta->buffer->data + ta->byte_offset;
+    *len = ta->byte_length;
+    return true;
+  }
+
+  if (vtype(slot) == T_NUM) {
+    ArrayBufferData *ab = (ArrayBufferData *)(uintptr_t)(size_t)js_getnum(slot);
+    if (!ab || ab->is_detached) { *out = NULL; *len = 0; return true; }
+    *out = ab->data;
+    *len = ab->length;
+    return true;
+  }
+
+  if (buffer_is_dataview(value)) {
+    ant_value_t dv_data_val = js_get_slot(value, SLOT_DATA);
+    if (vtype(dv_data_val) != T_NUM) return false;
+    DataViewData *dv = (DataViewData *)(uintptr_t)js_getnum(dv_data_val);
+    if (!dv || !dv->buffer || dv->buffer->is_detached) { *out = NULL; *len = 0; return true; }
+    *out = dv->buffer->data + dv->byte_offset;
+    *len = dv->byte_length;
+    return true;
+  }
+
+  return false;
+}
 
 static bool advance_typedarray(ant_t *js, js_iter_t *it, ant_value_t *out) {
   ant_value_t iter = it->iterator;
@@ -1206,6 +1243,7 @@ static ant_value_t js_dataview_constructor(ant_t *js, ant_value_t *args, int nar
   ant_value_t proto = js_get_ctor_proto(js, "DataView", 8);
   if (is_special_object(proto)) js_set_proto_init(obj, proto);
   
+  js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_DATAVIEW));
   js_set_slot(obj, SLOT_DATA, ANT_PTR(dv_data));
   js_mkprop_fast(js, obj, "buffer", 6, args[0]);
   js_set_descriptor(js, obj, "buffer", 6, 0);

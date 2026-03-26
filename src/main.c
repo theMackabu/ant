@@ -39,6 +39,7 @@
 #include "modules/timer.h"
 #include "modules/json.h"
 #include "modules/fetch.h"
+#include "modules/request.h"
 #include "modules/shell.h"
 #include "modules/process.h"
 #include "modules/tty.h"
@@ -612,6 +613,7 @@ int main(int argc, char *argv[]) {
   init_fs_module();
   init_atomics_module();
   init_crypto_module();
+  init_request_module();
   init_fetch_module();
   init_console_module();
   init_json_module();

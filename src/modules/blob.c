@@ -20,6 +20,13 @@
 ant_value_t g_blob_proto = 0;
 ant_value_t g_file_proto = 0;
 
+bool blob_is_blob(ant_t *js, ant_value_t obj) {
+  ant_value_t brand = js_get_slot(obj, SLOT_BRAND);
+  if (vtype(brand) != T_NUM) return false;
+  int id = (int)js_getnum(brand);
+  return id == BRAND_BLOB || id == BRAND_FILE;
+}
+
 blob_data_t *blob_get_data(ant_value_t obj) {
   ant_value_t slot = js_get_slot(obj, SLOT_DATA);
   if (vtype(slot) != T_NUM) return NULL;
@@ -167,9 +174,12 @@ ant_value_t blob_create(ant_t *js, const uint8_t *data, size_t size, const char 
   blob_data_t *bd = blob_data_new(data, size, type);
   if (!bd) return js_mkerr(js, "out of memory");
   ant_value_t obj = js_mkobj(js);
+  
   js_set_proto_init(obj, g_blob_proto);
+  js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_BLOB));
   js_set_slot(obj, SLOT_DATA, ANT_PTR(bd));
   js_set_finalizer(obj, blob_finalize);
+  
   return obj;
 }
 
@@ -347,8 +357,10 @@ static ant_value_t js_blob_ctor(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t proto = js_instance_proto_from_new_target(js, g_blob_proto);
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
 
+  js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_BLOB));
   js_set_slot(obj, SLOT_DATA, ANT_PTR(bd));
   js_set_finalizer(obj, blob_finalize);
+  
   return obj;
 }
 
@@ -416,6 +428,7 @@ static ant_value_t js_file_ctor(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t proto = js_instance_proto_from_new_target(js, g_file_proto);
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
 
+  js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_FILE));
   js_set_slot(obj, SLOT_DATA, ANT_PTR(bd));
   js_set_finalizer(obj, blob_finalize);
   

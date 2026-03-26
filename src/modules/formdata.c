@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <stdint.h>
 #include <time.h>
 
@@ -14,20 +15,6 @@
 #include "modules/blob.h"
 #include "modules/symbol.h"
 
-typedef struct fd_entry {
-  char *name;
-  bool is_file;
-  char *str_value;
-  size_t val_idx;
-  struct fd_entry *next;
-} fd_entry_t;
-
-typedef struct {
-  fd_entry_t *head;
-  fd_entry_t **tail;
-  size_t count;
-} fd_data_t;
-
 typedef struct {
   size_t index;
   int kind;
@@ -41,6 +28,17 @@ enum {
 
 static ant_value_t g_formdata_proto      = 0;
 static ant_value_t g_formdata_iter_proto = 0;
+static fd_data_t *get_fd_data(ant_value_t obj);
+
+bool formdata_is_formdata(ant_t *js, ant_value_t obj) {
+  ant_value_t brand = js_get_slot(obj, SLOT_BRAND);
+  return vtype(brand) == T_NUM && (int)js_getnum(brand) == BRAND_FORMDATA;
+}
+
+bool formdata_is_empty(ant_value_t fd) {
+  fd_data_t *d = get_fd_data(fd);
+  return d ? d->count == 0 : true;
+}
 
 static fd_data_t *fd_data_new(void) {
   fd_data_t *d = calloc(1, sizeof(fd_data_t));
@@ -135,6 +133,22 @@ static void fd_delete_name(fd_data_t *d, const char *name) {
   }}
 }
 
+ant_value_t formdata_create_empty(ant_t *js) {
+  fd_data_t *d = fd_data_new();
+  if (!d) return js_mkerr(js, "out of memory");
+
+  ant_value_t obj = js_mkobj(js);
+  js_set_proto_init(obj, g_formdata_proto);
+  js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_FORMDATA));
+  js_set_slot(obj, SLOT_DATA, ANT_PTR(d));
+  
+  ant_value_t vals = js_mkarr(js);
+  js_set_slot_wb(js, obj, SLOT_ENTRIES, vals);
+  js_set_finalizer(obj, formdata_finalize);
+  
+  return obj;
+}
+
 static ant_value_t entry_to_js_value(ant_t *js, ant_value_t values_arr, fd_entry_t *e) {
   if (!e->is_file)
     return js_mkstr(js, e->str_value ? e->str_value : "", strlen(e->str_value ? e->str_value : ""));
@@ -203,6 +217,33 @@ static ant_value_t extract_file_entry(
   js_arr_push(js, values_arr, stored_val);
 
   return fd_append_file(d, name, idx) ? js_mkundef() : js_mkerr(js, "out of memory");
+}
+
+ant_value_t formdata_append_string(ant_t *js, ant_value_t fd, ant_value_t name_v, ant_value_t value_v) {
+  fd_data_t *d = get_fd_data(fd);
+  if (!d) return js_mkerr(js, "Invalid FormData object");
+
+  const char *name = resolve_name(js, &name_v);
+  if (!name) return name_v;
+
+  if (vtype(value_v) != T_STR) {
+    value_v = js_tostring_val(js, value_v);
+    if (is_err(value_v)) return value_v;
+  }
+  
+  return fd_append_str(d, name, js_getstr(js, value_v, NULL)) 
+    ? js_mkundef() 
+    : js_mkerr(js, "out of memory"
+  );
+}
+
+ant_value_t formdata_append_file(ant_t *js, ant_value_t fd, ant_value_t name_v, ant_value_t blob_v, ant_value_t filename_v) {
+  fd_data_t *d = get_fd_data(fd);
+  if (!d) return js_mkerr(js, "Invalid FormData object");
+  const char *name = resolve_name(js, &name_v);
+  if (!name) return name_v;
+  ant_value_t values_arr = get_fd_values(fd);
+  return extract_file_entry(js, d, values_arr, name, blob_v, filename_v, false);
 }
 
 static ant_value_t js_formdata_append(ant_t *js, ant_value_t *args, int nargs) {
@@ -419,12 +460,15 @@ static ant_value_t js_formdata_ctor(ant_t *js, ant_value_t *args, int nargs) {
 
   ant_value_t obj = js_mkobj(js);
   ant_value_t proto = js_instance_proto_from_new_target(js, g_formdata_proto);
+  
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
-
+  js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_FORMDATA));
   js_set_slot(obj, SLOT_DATA, ANT_PTR(d));
+  
   ant_value_t vals = js_mkarr(js);
   js_set_slot_wb(js, obj, SLOT_ENTRIES, vals);
   js_set_finalizer(obj, formdata_finalize);
+  
   return obj;
 }
 

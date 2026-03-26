@@ -41,6 +41,9 @@ void gc_mark_readable_streams(ant_t *js, void (*mark)(ant_t *, ant_value_t));
 bool rs_is_stream(ant_value_t obj);
 bool rs_is_reader(ant_value_t obj);
 bool rs_is_controller(ant_value_t obj);
+bool rs_stream_locked(ant_value_t stream_obj);
+bool rs_stream_disturbed(ant_value_t stream_obj);
+bool rs_stream_unusable(ant_value_t stream_obj);
 
 rs_stream_t *rs_get_stream(ant_value_t obj);
 rs_controller_t *rs_get_controller(ant_value_t obj);

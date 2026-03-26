@@ -32,6 +32,11 @@ url_state_t *url_get_state(ant_value_t obj) {
   return (url_state_t *)(uintptr_t)(size_t)js_getnum(slot);
 }
 
+bool usp_is_urlsearchparams(ant_t *js, ant_value_t obj) {
+  ant_value_t brand = js_get_slot(obj, SLOT_BRAND);
+  return vtype(brand) == T_NUM && (int)js_getnum(brand) == BRAND_URLSEARCHPARAMS;
+}
+
 void url_state_clear(url_state_t *s) {
   free(s->protocol); free(s->username); free(s->password);
   free(s->hostname); free(s->port);    free(s->pathname);
@@ -441,6 +446,7 @@ static void url_sync_usp(ant_t *js, ant_value_t url_obj, const char *query) {
 static ant_value_t make_usp_for_url(ant_t *js, ant_value_t url_obj, const char *query) {
   ant_value_t usp = js_mkobj(js);
   js_set_proto_init(usp, g_usp_proto);
+  js_set_slot(usp, SLOT_BRAND, js_mknum(BRAND_URLSEARCHPARAMS));
   js_set_slot_wb(js, usp, SLOT_DATA, url_obj);
   js_set_slot(usp, SLOT_ENTRIES, parse_query_to_arr(js, query));
   return usp;
@@ -1116,11 +1122,13 @@ static ant_value_t usp_values_fn(ant_t *js, ant_value_t *args, int nargs) {
 static ant_value_t js_URLSearchParams(ant_t *js, ant_value_t *args, int nargs) {
   if (is_undefined(js->new_target))
     return js_mkerr_typed(js, JS_ERR_TYPE,
-      "Failed to construct 'URLSearchParams': Please use the 'new' operator.");
+    "Failed to construct 'URLSearchParams': Please use the 'new' operator.");
 
   ant_value_t obj = js_mkobj(js);
   js_set_proto_init(obj, g_usp_proto);
+  js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_URLSEARCHPARAMS));
   js_set_slot(obj, SLOT_DATA, js_mkundef());
+  
   ant_value_t entries = js_mkarr(js);
   js_set_slot(obj, SLOT_ENTRIES, entries);
 

@@ -19,17 +19,27 @@ ant_value_t g_ws_controller_proto;
 static ant_value_t g_close_sentinel;
 
 bool ws_is_stream(ant_value_t obj) {
-  return is_object_type(obj) && ws_get_stream(obj) != NULL;
+  if (!is_object_type(obj)) return false;
+  ant_value_t brand = js_get_slot(obj, SLOT_BRAND);
+  return vtype(brand) == T_NUM
+    && (int)js_getnum(brand) == BRAND_WRITABLE_STREAM
+    && ws_get_stream(obj) != NULL;
 }
 
 bool ws_is_writer(ant_value_t obj) {
-  return is_object_type(obj)
+  if (!is_object_type(obj)) return false;
+  ant_value_t brand = js_get_slot(obj, SLOT_BRAND);
+  return vtype(brand) == T_NUM
+    && (int)js_getnum(brand) == BRAND_WRITABLE_STREAM_WRITER
     && vtype(js_get_slot(obj, SLOT_RS_CLOSED)) == T_PROMISE
     && vtype(js_get_slot(obj, SLOT_WS_READY)) == T_PROMISE;
 }
 
 bool ws_is_controller(ant_value_t obj) {
-  return is_object_type(obj)
+  if (!is_object_type(obj)) return false;
+  ant_value_t brand = js_get_slot(obj, SLOT_BRAND);
+  return vtype(brand) == T_NUM
+    && (int)js_getnum(brand) == BRAND_WRITABLE_STREAM_CONTROLLER
     && ws_get_controller(obj) != NULL
     && ws_is_stream(js_get_slot(obj, SLOT_ENTRIES));
 }
@@ -971,7 +981,9 @@ ant_value_t js_ws_writer_ctor(ant_t *js, ant_value_t *args, int nargs) {
 
   ant_value_t obj = js_mkobj(js);
   ant_value_t proto = js_instance_proto_from_new_target(js, g_ws_writer_proto);
+  
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
+  js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_WRITABLE_STREAM_WRITER));
 
   ant_value_t closed = js_mkpromise(js);
   ant_value_t ready = js_mkpromise(js);
@@ -1072,6 +1084,7 @@ static ant_value_t setup_ws_default_controller(
 
   ant_value_t ctrl_obj = js_mkobj(js);
   js_set_proto_init(ctrl_obj, g_ws_controller_proto);
+  js_set_slot(ctrl_obj, SLOT_BRAND, js_mknum(BRAND_WRITABLE_STREAM_CONTROLLER));
   js_set_slot(ctrl_obj, SLOT_DATA, ANT_PTR(ctrl));
   js_set_slot(ctrl_obj, SLOT_ENTRIES, stream_obj);
   js_set_slot(ctrl_obj, SLOT_WS_WRITE, write_fn);
@@ -1151,7 +1164,9 @@ static ant_value_t js_ws_ctor(ant_t *js, ant_value_t *args, int nargs) {
 
   ant_value_t obj = js_mkobj(js);
   ant_value_t proto = js_instance_proto_from_new_target(js, g_ws_proto);
+  
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
+  js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_WRITABLE_STREAM));
   js_set_slot(obj, SLOT_DATA, ANT_PTR(st));
   js_set_slot(obj, SLOT_SETTLED, js_mkarr(js));
   js_set_finalizer(obj, ws_stream_finalize);

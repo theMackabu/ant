@@ -774,6 +774,16 @@ static ant_value_t js_rs_tee(ant_t *js, ant_value_t *args, int nargs) {
   return result;
 }
 
+ant_value_t readable_stream_tee(ant_t *js, ant_value_t source) {
+  ant_value_t saved_this = js->this_val;
+  js->this_val = source;
+  
+  ant_value_t result = js_rs_tee(js, NULL, 0);
+  js->this_val = saved_this;
+  
+  return result;
+}
+
 void init_pipes_proto(ant_t *js, ant_value_t rs_proto) {
   js_set(js, rs_proto, "pipeTo", js_mkfun(js_rs_pipe_to));
   js_set_descriptor(js, rs_proto, "pipeTo", 6, JS_DESC_W | JS_DESC_C);

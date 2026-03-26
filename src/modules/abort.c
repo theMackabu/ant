@@ -267,6 +267,21 @@ static ant_value_t abort_signal_static_any(ant_t *js, ant_value_t *args, int nar
   return composite;
 }
 
+ant_value_t abort_signal_create_dependent(ant_t *js, ant_value_t source) {
+  ant_value_t composite = make_new_signal(js);
+  
+  if (is_err(composite)) return composite;
+  if (vtype(source) != T_OBJ && vtype(source) != T_ARR) return composite;
+
+  abort_signal_data_t *d = get_signal_data(source);
+  if (!d) return composite;
+
+  if (d->aborted) signal_mark_aborted(js, composite, d->reason);
+  else utarray_push_back(d->followers, &composite);
+
+  return composite;
+}
+
 static void abort_timeout_close_cb(uv_handle_t *h) {
   abort_timeout_entry_t *entry = (abort_timeout_entry_t *)h->data;
   if (entry) entry->closed = 1;

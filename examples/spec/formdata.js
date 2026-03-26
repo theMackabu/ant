@@ -117,4 +117,24 @@ console.log('\ntoStringTag\n');
 
 test('toStringTag', Object.prototype.toString.call(new FormData()), '[object FormData]');
 
+console.log('\nmultipart parameter parsing\n');
+
+const boundary = 'spec-boundary';
+const multipartBody =
+  `--${boundary}\r\n` +
+  `Content-Disposition: form-data; name="field"\r\n\r\n` +
+  `value\r\n` +
+  `--${boundary}--\r\n`;
+
+const multipartReq = new Request('https://example.com/', {
+  method: 'POST',
+  headers: {
+    'Content-Type': `multipart/form-data; boundaryx=wrong; boundary="${boundary}"`,
+  },
+  body: multipartBody,
+});
+
+const multipartFd = await multipartReq.formData();
+test('multipart boundary lookup skips longer prefix match', multipartFd.get('field'), 'value');
+
 summary();

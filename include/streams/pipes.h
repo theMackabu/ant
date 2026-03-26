@@ -5,6 +5,7 @@
 #include <stdbool.h>
 
 void init_pipes_proto(ant_t *js, ant_value_t rs_proto);
+ant_value_t readable_stream_tee(ant_t *js, ant_value_t source);
 
 ant_value_t readable_stream_pipe_to(
   ant_t *js, ant_value_t source, ant_value_t dest,

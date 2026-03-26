@@ -42,8 +42,8 @@ enum {
   ITER_VALUES = 2
 };
 
-static ant_value_t g_headers_proto = 0;
-ant_value_t g_headers_iter_proto   = 0;
+ant_value_t g_headers_proto      = 0;
+ant_value_t g_headers_iter_proto = 0;
 
 static hdr_list_t *list_new(void) {
   hdr_list_t *l = ant_calloc(sizeof(hdr_list_t));
@@ -67,6 +67,17 @@ static hdr_list_t *get_list(ant_value_t obj) {
   ant_value_t slot = js_get_slot(obj, SLOT_DATA);
   if (vtype(slot) != T_NUM) return NULL;
   return (hdr_list_t *)(uintptr_t)(size_t)js_getnum(slot);
+}
+
+static headers_guard_t get_guard(ant_value_t obj) {
+  ant_value_t slot = js_get_slot(obj, SLOT_HEADERS_GUARD);
+  if (vtype(slot) != T_NUM) return HEADERS_GUARD_NONE;
+  return (headers_guard_t)(int)js_getnum(slot);
+}
+
+bool headers_is_headers(ant_value_t obj) {
+  ant_value_t brand = js_get_slot(obj, SLOT_BRAND);
+  return vtype(brand) == T_NUM && (int)js_getnum(brand) == BRAND_HEADERS;
 }
 
 static bool is_token_char(unsigned char c) {
@@ -119,6 +130,141 @@ static char *lowercase_dup(const char *s) {
   for (size_t i = 0; i <= len; i++)
     out[i] = (char)tolower((unsigned char)s[i]);
   return out;
+}
+
+typedef struct {
+  const char *name;
+  bool prefix;
+} header_rule_t;
+
+static const header_rule_t k_forbidden_request_headers[] = {
+  { "accept-charset", false },
+  { "accept-encoding", false },
+  { "access-control-request-headers", false },
+  { "access-control-request-method", false },
+  { "connection", false },
+  { "content-length", false },
+  { "cookie", false },
+  { "cookie2", false },
+  { "date", false },
+  { "dnt", false },
+  { "expect", false },
+  { "host", false },
+  { "keep-alive", false },
+  { "origin", false },
+  { "referer", false },
+  { "set-cookie", false },
+  { "te", false },
+  { "trailer", false },
+  { "transfer-encoding", false },
+  { "upgrade", false },
+  { "via", false },
+  { "proxy-", true },
+  { "sec-", true },
+};
+
+static const char *k_cors_safelisted_content_types[] = {
+  "application/x-www-form-urlencoded",
+  "multipart/form-data",
+  "text/plain",
+};
+
+static const char *k_no_cors_safelisted_names[] = {
+  "accept",
+  "accept-language",
+  "content-language",
+};
+
+static bool matches_rule(const char *name, const header_rule_t *rules, size_t count) {
+  for (size_t i = 0; i < count; i++) {
+    size_t len = strlen(rules[i].name);
+    if (rules[i].prefix) { if (strncmp(name, rules[i].name, len) == 0) return true; }
+    else if (strcmp(name, rules[i].name) == 0) return true;
+  }
+  return false;
+}
+
+static bool matches_string(const char *value, const char *const *list, size_t count) {
+  for (size_t i = 0; i < count; i++) {
+    if (strcmp(value, list[i]) == 0) return true;
+  }
+  return false;
+}
+
+static bool is_forbidden_request_header_name(const char *lower_name) {
+  return matches_rule(lower_name, k_forbidden_request_headers,
+  sizeof(k_forbidden_request_headers) / sizeof(k_forbidden_request_headers[0]));
+}
+
+static bool is_cors_safelisted_content_type_value(const char *value) {
+  char *lower = lowercase_dup(value ? value : "");
+  if (!lower) return false;
+  char *semi = strchr(lower, ';');
+  
+  if (!semi) {
+    bool ok = matches_string(
+      lower,
+      k_cors_safelisted_content_types,
+      sizeof(k_cors_safelisted_content_types) / sizeof(k_cors_safelisted_content_types[0])
+    );
+    free(lower);
+    return ok;
+  }
+
+  *semi++ = '\0';
+  while (*semi == ' ' || *semi == '\t') semi++;
+  bool essence_ok = matches_string(
+    lower,
+    k_cors_safelisted_content_types,
+    sizeof(k_cors_safelisted_content_types) / sizeof(k_cors_safelisted_content_types[0])
+  );
+  
+  bool param_ok = strcmp(semi, "charset=utf-8") == 0;
+  free(lower);
+  
+  return essence_ok && param_ok;
+}
+
+static bool is_no_cors_safelisted_name_value(const char *lower_name, const char *value) {
+  if (
+    matches_string(
+    lower_name, k_no_cors_safelisted_names,
+    sizeof(k_no_cors_safelisted_names) / sizeof(k_no_cors_safelisted_names[0]))
+  ) return true;
+  
+  if (strcmp(lower_name, "content-type") == 0) 
+    return value && value[0] && is_cors_safelisted_content_type_value(value);
+  
+  return false;
+}
+
+static bool header_allowed_for_guard(const char *lower_name, const char *value, headers_guard_t guard) {
+  if (guard == HEADERS_GUARD_NONE) return true;
+  if (is_forbidden_request_header_name(lower_name)) return false;
+  if (guard == HEADERS_GUARD_REQUEST_NO_CORS) return is_no_cors_safelisted_name_value(lower_name, value);
+  return true;
+}
+
+static void list_apply_guard(hdr_list_t *l, headers_guard_t guard) {
+  if (!l || guard == HEADERS_GUARD_NONE) return;
+
+  hdr_entry_t **pp = &l->head;
+  l->tail = &l->head;
+  
+  while (*pp) {
+    hdr_entry_t *cur = *pp;
+    if (!header_allowed_for_guard(cur->name, cur->value, guard)) {
+      *pp = cur->next;
+      free(cur->name);
+      free(cur->value);
+      free(cur);
+      l->count--;
+      continue;
+    }
+    
+    l->tail = &cur->next;
+    pp = &cur->next;
+  }
 }
 
 static void list_append_raw(hdr_list_t *l, const char *lower_name, const char *value) {
@@ -240,6 +386,15 @@ static ant_value_t headers_append_pair(ant_t *js, hdr_list_t *l, ant_value_t nam
   return js_mkundef();
 }
 
+ant_value_t headers_append_value(ant_t *js, ant_value_t hdrs, ant_value_t name_v, ant_value_t value_v) {
+  hdr_list_t *l = get_list(hdrs);
+  if (!l) return js_mkerr(js, "Invalid Headers object");
+  ant_value_t r = headers_append_pair(js, l, name_v, value_v);
+  if (is_err(r)) return r;
+  list_apply_guard(l, get_guard(hdrs));
+  return js_mkundef();
+}
+
 static ant_value_t init_from_sequence(ant_t *js, hdr_list_t *l, ant_value_t seq) {
   js_iter_t it;
   if (!js_iter_open(js, seq, &it)) return js_mkerr_typed(js, JS_ERR_TYPE, "Headers init is not iterable");
@@ -336,7 +491,10 @@ static ant_value_t js_headers_append(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_mkerr_typed(js, JS_ERR_TYPE, "Headers.append requires 2 arguments");
   hdr_list_t *l = get_list(js->this_val);
   if (!l) return js_mkerr(js, "Invalid Headers object");
-  return headers_append_pair(js, l, args[0], args[1]);
+  ant_value_t r = headers_append_pair(js, l, args[0], args[1]);
+  if (is_err(r)) return r;
+  list_apply_guard(l, get_guard(js->this_val));
+  return js_mkundef();
 }
 
 static ant_value_t js_headers_set(ant_t *js, ant_value_t *args, int nargs) {
@@ -363,7 +521,8 @@ static ant_value_t js_headers_set(ant_t *js, ant_value_t *args, int nargs) {
   if (!lower) { free(norm); return js_mkerr(js, "out of memory"); }
 
   list_delete_name(l, lower);
-  list_append_raw(l, lower, norm);
+  if (header_allowed_for_guard(lower, norm, get_guard(js->this_val)))
+    list_append_raw(l, lower, norm);
   free(lower); free(norm);
   return js_mkundef();
 }
@@ -556,8 +715,122 @@ static ant_value_t js_headers_ctor(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t proto = js_instance_proto_from_new_target(js, g_headers_proto);
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
 
+  js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_HEADERS));
   js_set_slot(obj, SLOT_DATA, ANT_PTR(l));
+  js_set_slot(obj, SLOT_HEADERS_GUARD, js_mknum(HEADERS_GUARD_NONE));
+  
   return obj;
+}
+
+ant_value_t headers_create_empty(ant_t *js) {
+  hdr_list_t *l = list_new();
+  if (!l) return js_mkerr(js, "out of memory");
+  
+  ant_value_t obj = js_mkobj(js);
+  js_set_proto_init(obj, g_headers_proto);
+  js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_HEADERS));
+  js_set_slot(obj, SLOT_DATA, ANT_PTR(l));
+  js_set_slot(obj, SLOT_HEADERS_GUARD, js_mknum(HEADERS_GUARD_NONE));
+  
+  return obj;
+}
+
+bool headers_copy_from(ant_t *js, ant_value_t dst, ant_value_t src) {
+  hdr_list_t *src_list = get_list(src);
+  hdr_list_t *dst_list = get_list(dst);
+  
+  if (!dst_list) return false;
+  if (!src_list) return true;
+  
+  for (hdr_entry_t *e = src_list->head; e; e = e->next)
+    list_append_raw(dst_list, e->name, e->value);
+  return true;
+}
+
+void headers_set_guard(ant_value_t hdrs, headers_guard_t guard) {
+  js_set_slot(hdrs, SLOT_HEADERS_GUARD, js_mknum(guard));
+}
+
+headers_guard_t headers_get_guard(ant_value_t hdrs) {
+  return get_guard(hdrs);
+}
+
+void headers_apply_guard(ant_value_t hdrs) {
+  list_apply_guard(get_list(hdrs), get_guard(hdrs));
+}
+
+void headers_append_if_missing(ant_value_t hdrs, const char *name, const char *value) {
+  hdr_list_t *l = get_list(hdrs);
+  if (!l || !name || !value) return;
+  char *lower = lowercase_dup(name);
+  if (!lower) return;
+  for (hdr_entry_t *e = l->head; e; e = e->next) {
+    if (strcmp(e->name, lower) == 0) { free(lower); return; }
+  }
+  list_append_raw(l, lower, value);
+  free(lower);
+}
+
+ant_value_t headers_get_value(ant_t *js, ant_value_t hdrs, const char *name) {
+  hdr_list_t *l = get_list(hdrs);
+  
+  if (!l) return js_mknull();
+  if (!is_valid_name(name)) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid header name");
+
+  char *lower = lowercase_dup(name);
+  if (!lower) return js_mkerr(js, "out of memory");
+
+  if (strcmp(lower, "set-cookie") == 0) {
+    for (hdr_entry_t *e = l->head; e; e = e->next) {
+    if (strcmp(e->name, lower) == 0) {
+      ant_value_t ret = js_mkstr(js, e->value, strlen(e->value));
+      free(lower);
+      return ret;
+    }}
+    free(lower);
+    return js_mknull();
+  }
+
+  size_t total = 0;
+  int count = 0;
+  
+  for (hdr_entry_t *e = l->head; e; e = e->next) {
+  if (strcmp(e->name, lower) == 0) {
+    if (count > 0) total += 2;
+    total += strlen(e->value);
+    count++;
+  }}
+
+  if (count == 0) {
+    free(lower);
+    return js_mknull();
+  }
+
+  char *combined = malloc(total + 1);
+  if (!combined) {
+    free(lower);
+    return js_mkerr(js, "out of memory");
+  }
+
+  size_t pos = 0;
+  int seen = 0;
+  
+  for (hdr_entry_t *e = l->head; e; e = e->next) {
+  if (strcmp(e->name, lower) == 0) {
+    if (seen > 0) { combined[pos++] = ','; combined[pos++] = ' '; }
+    size_t vl = strlen(e->value);
+    memcpy(combined + pos, e->value, vl);
+    pos += vl;
+    seen++;
+  }}
+  
+  combined[pos] = '\0';
+  free(lower);
+
+  ant_value_t ret = js_mkstr(js, combined, pos);
+  free(combined);
+  
+  return ret;
 }
 
 void init_headers_module(void) {

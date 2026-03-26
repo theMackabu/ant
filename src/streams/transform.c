@@ -19,14 +19,19 @@ ant_value_t g_ts_ctrl_proto;
 
 bool ts_is_controller(ant_value_t obj) {
   if (!is_object_type(obj)) return false;
+  ant_value_t brand = js_get_slot(obj, SLOT_BRAND);
+  if (vtype(brand) != T_NUM || (int)js_getnum(brand) != BRAND_TRANSFORM_STREAM_CONTROLLER)
+    return false;
   ant_value_t ts_obj = js_get_slot(obj, SLOT_DATA);
   return is_object_type(ts_obj)
-    && vtype(js_get_slot(ts_obj, SLOT_DATA)) == T_NUM
+    && ts_is_stream(ts_obj)
     && js_get_slot(ts_obj, SLOT_DEFAULT) == obj;
 }
 
 bool ts_is_stream(ant_value_t obj) {
   return is_object_type(obj)
+    && vtype(js_get_slot(obj, SLOT_BRAND)) == T_NUM
+    && (int)js_getnum(js_get_slot(obj, SLOT_BRAND)) == BRAND_TRANSFORM_STREAM
     && vtype(js_get_slot(obj, SLOT_DATA)) == T_NUM
     && rs_is_stream(js_get_slot(obj, SLOT_ENTRIES))
     && ws_is_stream(js_get_slot(obj, SLOT_CTOR))
@@ -919,10 +924,12 @@ ant_value_t js_ts_ctor(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t ts_obj = js_mkobj(js);
   ant_value_t proto = js_instance_proto_from_new_target(js, g_ts_proto);
   if (is_object_type(proto)) js_set_proto_init(ts_obj, proto);
+  js_set_slot(ts_obj, SLOT_BRAND, js_mknum(BRAND_TRANSFORM_STREAM));
   js_set_slot(ts_obj, SLOT_DATA, js_mknum(0));
 
   ant_value_t ctrl_obj = js_mkobj(js);
   js_set_proto_init(ctrl_obj, g_ts_ctrl_proto);
+  js_set_slot(ctrl_obj, SLOT_BRAND, js_mknum(BRAND_TRANSFORM_STREAM_CONTROLLER));
   js_set_slot(ctrl_obj, SLOT_DATA, ts_obj);
   js_set_slot(ctrl_obj, SLOT_ENTRIES, transform_fn);
   js_set_slot(ctrl_obj, SLOT_CTOR, flush_fn);
@@ -950,6 +957,7 @@ ant_value_t js_ts_ctor(ant_t *js, ant_value_t *args, int nargs) {
 
   ant_value_t rs_obj = js_mkobj(js);
   js_set_proto_init(rs_obj, g_rs_proto);
+  js_set_slot(rs_obj, SLOT_BRAND, js_mknum(BRAND_READABLE_STREAM));
   js_set_slot(rs_obj, SLOT_DATA, ANT_PTR(rst));
   js_set_finalizer(rs_obj, ts_rs_finalize);
 
@@ -959,6 +967,7 @@ ant_value_t js_ts_ctor(ant_t *js, ant_value_t *args, int nargs) {
 
   ant_value_t rs_ctrl_obj = js_mkobj(js);
   js_set_proto_init(rs_ctrl_obj, g_controller_proto);
+  js_set_slot(rs_ctrl_obj, SLOT_BRAND, js_mknum(BRAND_READABLE_STREAM_CONTROLLER));
   js_set_slot(rs_ctrl_obj, SLOT_DATA, ANT_PTR(rcc));
   js_set_slot(rs_ctrl_obj, SLOT_ENTRIES, rs_obj);
   js_set_slot(rs_ctrl_obj, SLOT_RS_PULL, source_pull);
@@ -976,6 +985,7 @@ ant_value_t js_ts_ctor(ant_t *js, ant_value_t *args, int nargs) {
 
   ant_value_t ws_obj = js_mkobj(js);
   js_set_proto_init(ws_obj, g_ws_proto);
+  js_set_slot(ws_obj, SLOT_BRAND, js_mknum(BRAND_WRITABLE_STREAM));
   js_set_slot(ws_obj, SLOT_DATA, ANT_PTR(wst));
   js_set_slot(ws_obj, SLOT_SETTLED, js_mkarr(js));
   js_set_finalizer(ws_obj, ts_ws_finalize);
@@ -993,6 +1003,7 @@ ant_value_t js_ts_ctor(ant_t *js, ant_value_t *args, int nargs) {
 
   ant_value_t ws_ctrl_obj = js_mkobj(js);
   js_set_proto_init(ws_ctrl_obj, g_ws_controller_proto);
+  js_set_slot(ws_ctrl_obj, SLOT_BRAND, js_mknum(BRAND_WRITABLE_STREAM_CONTROLLER));
   js_set_slot(ws_ctrl_obj, SLOT_DATA, ANT_PTR(wc));
   js_set_slot(ws_ctrl_obj, SLOT_ENTRIES, ws_obj);
   js_set_slot(ws_ctrl_obj, SLOT_WS_WRITE, sink_write);

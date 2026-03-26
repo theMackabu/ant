@@ -173,6 +173,8 @@ void js_set_keys(ant_value_t obj, js_keys_fn keys);
 void js_set_finalizer(ant_value_t obj, js_finalizer_fn fn);
 
 ant_value_t js_get_slot(ant_value_t obj, internal_slot_t slot);
+ant_value_t js_promise_then(ant_t *js, ant_value_t promise, ant_value_t on_fulfilled, ant_value_t on_rejected);
+
 void js_set_slot(ant_value_t obj, internal_slot_t slot, ant_value_t value);
 void js_set_slot_wb(ant_t *, ant_value_t obj, internal_slot_t slot, ant_value_t value);
 
