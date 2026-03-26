@@ -342,14 +342,23 @@ static inline bool sv_try_string_index_get(ant_t *js, ant_value_t obj, ant_value
   ant_offset_t byte_len = 0;
   ant_offset_t str_off = vstr(js, str, &byte_len);
   const char *str_data = (const char *)(uintptr_t)(str_off);
-  size_t char_bytes = 0;
-  int byte_offset = utf16_index_to_byte_offset(str_data, byte_len, idx, &char_bytes);
-  if (byte_offset < 0 || char_bytes == 0) {
+  
+  uint32_t code_unit = utf16_code_unit_at(str_data, byte_len, idx);
+  if (code_unit == 0xFFFFFFFF) {
     *out = js_mkundef();
     return true;
   }
 
-  *out = js_mkstr(js, str_data + byte_offset, char_bytes);
+  char buf[4];
+  size_t out_len = 0;
+  if (code_unit >= 0xD800 && code_unit <= 0xDFFF) {
+    buf[0] = (char)(0xE0 | (code_unit >> 12));
+    buf[1] = (char)(0x80 | ((code_unit >> 6) & 0x3F));
+    buf[2] = (char)(0x80 | (code_unit & 0x3F));
+    out_len = 3;
+  } else out_len = (size_t)utf8_encode(code_unit, buf);
+  *out = js_mkstr(js, buf, out_len);
+  
   return true;
 }
 
