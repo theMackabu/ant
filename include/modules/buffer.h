@@ -22,6 +22,7 @@ typedef enum {
   TYPED_ARRAY_UINT16,
   TYPED_ARRAY_INT32,
   TYPED_ARRAY_UINT32,
+  TYPED_ARRAY_FLOAT16,
   TYPED_ARRAY_FLOAT32,
   TYPED_ARRAY_FLOAT64,
   TYPED_ARRAY_BIGINT64,
@@ -50,6 +51,7 @@ void free_array_buffer_data(ArrayBufferData *data);
 
 ArrayBufferData *create_array_buffer_data(size_t length);
 ant_value_t create_arraybuffer_obj(ant_t *js, ArrayBufferData *buffer);
+const char *buffer_typedarray_type_name(TypedArrayType type);
 
 ant_value_t create_typed_array(
   ant_t *js, TypedArrayType type, ArrayBufferData *buffer,

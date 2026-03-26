@@ -14,6 +14,9 @@ typedef struct {
 extern const char *const module_resolve_extensions[];
 uint64_t hash_key(const char *key, size_t len);
 
+double half_to_double(uint16_t bits16);
+uint16_t double_to_half(double value);
+
 char hex_char(int v);
 char *resolve_js_file(const char *filename);
 

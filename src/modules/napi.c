@@ -290,23 +290,6 @@ static bool napi_get_typedarray_data(
   return true;
 }
 
-static const char *napi_typed_array_name(TypedArrayType t) {
-  switch (t) {
-    case TYPED_ARRAY_INT8: return "Int8Array";
-    case TYPED_ARRAY_UINT8: return "Uint8Array";
-    case TYPED_ARRAY_UINT8_CLAMPED: return "Uint8ClampedArray";
-    case TYPED_ARRAY_INT16: return "Int16Array";
-    case TYPED_ARRAY_UINT16: return "Uint16Array";
-    case TYPED_ARRAY_INT32: return "Int32Array";
-    case TYPED_ARRAY_UINT32: return "Uint32Array";
-    case TYPED_ARRAY_FLOAT32: return "Float32Array";
-    case TYPED_ARRAY_FLOAT64: return "Float64Array";
-    case TYPED_ARRAY_BIGINT64: return "BigInt64Array";
-    case TYPED_ARRAY_BIGUINT64: return "BigUint64Array";
-    default: return "Uint8Array";
-  }
-}
-
 static bool napi_to_ant_typedarray_type(
   napi_typedarray_type in,
   TypedArrayType *out
@@ -1049,7 +1032,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_typedarray(
     ab,
     byte_offset,
     length,
-    napi_typed_array_name(ta_type),
+    buffer_typedarray_type_name(ta_type),
     (ant_value_t)arraybuffer
   );
 

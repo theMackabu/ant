@@ -11,13 +11,14 @@
 #endif
 
 #include "ant.h"
+#include "utils.h"
 #include "errors.h"
 #include "base64.h"
 #include "internal.h"
-#include "silver/engine.h"
 #include "runtime.h"
 #include "descriptors.h"
 
+#include "silver/engine.h"
 #include "modules/buffer.h"
 #include "modules/symbol.h"
 
@@ -94,6 +95,7 @@ static bool advance_typedarray(ant_t *js, js_iter_t *it, ant_value_t *out) {
     case TYPED_ARRAY_UINT16:        value = (double)((uint16_t *)data)[idx]; break;
     case TYPED_ARRAY_INT32:         value = (double)((int32_t *)data)[idx];  break;
     case TYPED_ARRAY_UINT32:        value = (double)((uint32_t *)data)[idx]; break;
+    case TYPED_ARRAY_FLOAT16:       value = half_to_double(((uint16_t *)data)[idx]); break;
     case TYPED_ARRAY_FLOAT32:       value = (double)((float *)data)[idx];    break;
     case TYPED_ARRAY_FLOAT64:       value = ((double *)data)[idx];           break;
     default: return false;
@@ -277,7 +279,7 @@ void free_array_buffer_data(ArrayBufferData *data) {
 static size_t get_element_size(TypedArrayType type) {
   static const void *dispatch[] = {
     &&L_1, &&L_1, &&L_1, &&L_2, &&L_2,
-    &&L_4, &&L_4, &&L_4, &&L_8, &&L_8, &&L_8
+    &&L_4, &&L_4, &&L_2, &&L_4, &&L_8, &&L_8, &&L_8
   };
   
   if (type > TYPED_ARRAY_BIGUINT64) goto L_1;
@@ -289,21 +291,26 @@ static size_t get_element_size(TypedArrayType type) {
   L_8: return 8;
 }
 
-static const char *typedarray_type_name(TypedArrayType type) {
-switch (type) {
-  case TYPED_ARRAY_INT8: return "Int8Array";
-  case TYPED_ARRAY_UINT8: return "Uint8Array";
-  case TYPED_ARRAY_UINT8_CLAMPED: return "Uint8ClampedArray";
-  case TYPED_ARRAY_INT16: return "Int16Array";
-  case TYPED_ARRAY_UINT16: return "Uint16Array";
-  case TYPED_ARRAY_INT32: return "Int32Array";
-  case TYPED_ARRAY_UINT32: return "Uint32Array";
-  case TYPED_ARRAY_FLOAT32: return "Float32Array";
-  case TYPED_ARRAY_FLOAT64: return "Float64Array";
-  case TYPED_ARRAY_BIGINT64: return "BigInt64Array";
-  case TYPED_ARRAY_BIGUINT64: return "BigUint64Array";
-  default: return "Uint8Array";
-}}
+const char *buffer_typedarray_type_name(TypedArrayType type) {
+  static const char *const names[] = {
+    "Int8Array",
+    "Uint8Array",
+    "Uint8ClampedArray",
+    "Int16Array",
+    "Uint16Array",
+    "Int32Array",
+    "Uint32Array",
+    "Float16Array",
+    "Float32Array",
+    "Float64Array",
+    "BigInt64Array",
+    "BigUint64Array",
+  };
+
+  int i = (int)type;
+  if (i < 0 || i >= (int)(sizeof(names) / sizeof(names[0]))) return "Uint8Array";
+  return names[i];
+}
 
 static ant_value_t create_typed_array_like(
   ant_t *js,
@@ -316,7 +323,7 @@ static ant_value_t create_typed_array_like(
   ant_value_t ab_obj = create_arraybuffer_obj(js, buffer);
   ant_value_t out = create_typed_array_with_buffer(
     js,type, buffer, byte_offset,
-    length, typedarray_type_name(type), ab_obj
+    length, buffer_typedarray_type_name(type), ab_obj
   );
   
   if (is_err(out)) return out;
@@ -470,7 +477,7 @@ static ant_value_t typedarray_index_getter(ant_t *js, ant_value_t obj, const cha
   
   static const void *dispatch[] = {
     &&L_INT8, &&L_UINT8, &&L_UINT8, &&L_INT16, &&L_UINT16,
-    &&L_INT32, &&L_UINT32, &&L_FLOAT32, &&L_FLOAT64, &&L_UNDEF, &&L_UNDEF
+    &&L_INT32, &&L_UINT32, &&L_FLOAT16, &&L_FLOAT32, &&L_FLOAT64, &&L_UNDEF, &&L_UNDEF
   };
   
   if (ta_data->type > TYPED_ARRAY_BIGUINT64) goto L_UNDEF;
@@ -482,6 +489,7 @@ static ant_value_t typedarray_index_getter(ant_t *js, ant_value_t obj, const cha
   L_UINT16:  value = (double)((uint16_t*)data)[index]; goto L_DONE;
   L_INT32:   value = (double)((int32_t*)data)[index];  goto L_DONE;
   L_UINT32:  value = (double)((uint32_t*)data)[index]; goto L_DONE;
+  L_FLOAT16: value = half_to_double(((uint16_t*)data)[index]); goto L_DONE;
   L_FLOAT32: value = (double)((float*)data)[index];    goto L_DONE;
   L_FLOAT64: value = ((double*)data)[index];           goto L_DONE;
   L_UNDEF:   return js_mkundef();
@@ -508,7 +516,7 @@ static bool typedarray_index_setter(ant_t *js, ant_value_t obj, const char *key,
   
   static const void *dispatch[] = {
     &&S_INT8, &&S_UINT8, &&S_UINT8, &&S_INT16, &&S_UINT16,
-    &&S_INT32, &&S_UINT32, &&S_FLOAT32, &&S_FLOAT64, &&S_FAIL, &&S_FAIL
+    &&S_INT32, &&S_UINT32, &&S_FLOAT16, &&S_FLOAT32, &&S_FLOAT64, &&S_FAIL, &&S_FAIL
   };
   
   if (ta_data->type > TYPED_ARRAY_BIGUINT64) goto S_FAIL;
@@ -520,6 +528,7 @@ static bool typedarray_index_setter(ant_t *js, ant_value_t obj, const char *key,
   S_UINT16:  ((uint16_t*)data)[index] = (uint16_t)num_val; goto S_DONE;
   S_INT32:   ((int32_t*)data)[index] = (int32_t)num_val; goto S_DONE;
   S_UINT32:  ((uint32_t*)data)[index] = (uint32_t)num_val; goto S_DONE;
+  S_FLOAT16: ((uint16_t*)data)[index] = double_to_half(num_val); goto S_DONE;
   S_FLOAT32: ((float*)data)[index] = (float)num_val;     goto S_DONE;
   S_FLOAT64: ((double*)data)[index] = num_val;           goto S_DONE;
   S_FAIL:    return false;
@@ -532,7 +541,7 @@ static bool typedarray_read_number(const TypedArrayData *ta_data, size_t index, 
 
   static const void *dispatch[] = {
     &&R_INT8, &&R_UINT8, &&R_UINT8, &&R_INT16, &&R_UINT16,
-    &&R_INT32, &&R_UINT32, &&R_FLOAT32, &&R_FLOAT64, &&R_FAIL, &&R_FAIL
+    &&R_INT32, &&R_UINT32, &&R_FLOAT16, &&R_FLOAT32, &&R_FLOAT64, &&R_FAIL, &&R_FAIL
   };
 
   if (ta_data->type > TYPED_ARRAY_BIGUINT64) goto R_FAIL;
@@ -544,6 +553,7 @@ static bool typedarray_read_number(const TypedArrayData *ta_data, size_t index, 
   R_UINT16:  *out = (double)((uint16_t *)data)[index]; return true;
   R_INT32:   *out = (double)((int32_t *)data)[index];  return true;
   R_UINT32:  *out = (double)((uint32_t *)data)[index]; return true;
+  R_FLOAT16: *out = half_to_double(((uint16_t *)data)[index]); return true;
   R_FLOAT32: *out = (double)((float *)data)[index];    return true;
   R_FLOAT64: *out = ((double *)data)[index];           return true;
   R_FAIL:    return false;
@@ -555,7 +565,7 @@ static bool typedarray_write_number(TypedArrayData *ta_data, size_t index, doubl
 
   static const void *dispatch[] = {
     &&W_INT8, &&W_UINT8, &&W_UINT8, &&W_INT16, &&W_UINT16,
-    &&W_INT32, &&W_UINT32, &&W_FLOAT32, &&W_FLOAT64, &&W_FAIL, &&W_FAIL
+    &&W_INT32, &&W_UINT32, &&W_FLOAT16, &&W_FLOAT32, &&W_FLOAT64, &&W_FAIL, &&W_FAIL
   };
 
   if (ta_data->type > TYPED_ARRAY_BIGUINT64) goto W_FAIL;
@@ -567,6 +577,7 @@ static bool typedarray_write_number(TypedArrayData *ta_data, size_t index, doubl
   W_UINT16:  ((uint16_t *)data)[index] = (uint16_t)value; return true;
   W_INT32:   ((int32_t *)data)[index] = (int32_t)value;   return true;
   W_UINT32:  ((uint32_t *)data)[index] = (uint32_t)value; return true;
+  W_FLOAT16: ((uint16_t *)data)[index] = double_to_half(value); return true;
   W_FLOAT32: ((float *)data)[index] = (float)value;       return true;
   W_FLOAT64: ((double *)data)[index] = value;             return true;
   W_FAIL:    return false;
@@ -739,7 +750,7 @@ static ant_value_t js_typedarray_constructor(ant_t *js, ant_value_t *args, int n
       
       static const void *write_dispatch[] = {
         &&W_INT8, &&W_UINT8, &&W_UINT8, &&W_INT16, &&W_UINT16,
-        &&W_INT32, &&W_UINT32, &&W_FLOAT32, &&W_FLOAT64, &&W_DONE, &&W_DONE
+        &&W_INT32, &&W_UINT32, &&W_FLOAT16, &&W_FLOAT32, &&W_FLOAT64, &&W_DONE, &&W_DONE
       };
       
       for (size_t i = 0; i < length; i++) {
@@ -753,7 +764,7 @@ static ant_value_t js_typedarray_constructor(ant_t *js, ant_value_t *args, int n
         double val = vtype(elem) == T_NUM 
           ? js_getnum(elem) 
           : js_to_number(js, elem);
-        
+          
         if (type > TYPED_ARRAY_BIGUINT64) goto W_DONE;
         goto *write_dispatch[type];
         
@@ -763,6 +774,7 @@ static ant_value_t js_typedarray_constructor(ant_t *js, ant_value_t *args, int n
         W_UINT16:  ((uint16_t*)data)[i] = (uint16_t)val; goto W_NEXT;
         W_INT32:   ((int32_t*)data)[i] = (int32_t)val; goto W_NEXT;
         W_UINT32:  ((uint32_t*)data)[i] = (uint32_t)val; goto W_NEXT;
+        W_FLOAT16: ((uint16_t*)data)[i] = double_to_half(val); goto W_NEXT;
         W_FLOAT32: ((float*)data)[i] = (float)val;    goto W_NEXT;
         W_FLOAT64: ((double*)data)[i] = val;          goto W_NEXT;
         W_NEXT:;
@@ -805,6 +817,7 @@ static ant_value_t js_typedarray_at(ant_t *js, ant_value_t *args, int nargs) {
     case TYPED_ARRAY_UINT16:       value = (double)((uint16_t*)data)[index]; break;
     case TYPED_ARRAY_INT32:        value = (double)((int32_t*)data)[index];  break;
     case TYPED_ARRAY_UINT32:       value = (double)((uint32_t*)data)[index]; break;
+    case TYPED_ARRAY_FLOAT16:      value = half_to_double(((uint16_t*)data)[index]); break;
     case TYPED_ARRAY_FLOAT32:      value = (double)((float*)data)[index];    break;
     case TYPED_ARRAY_FLOAT64:      value = ((double*)data)[index];           break;
     default: return js_mkundef();
@@ -901,7 +914,7 @@ static ant_value_t js_typedarray_fill(ant_t *js, ant_value_t *args, int nargs) {
   
   static const void *dispatch[] = {
     &&L_INT8, &&L_UINT8, &&L_UINT8, &&L_INT16, &&L_UINT16,
-    &&L_INT32, &&L_UINT32, &&L_FLOAT32, &&L_FLOAT64, &&L_DONE, &&L_DONE
+    &&L_INT32, &&L_UINT32, &&L_FLOAT16, &&L_FLOAT32, &&L_FLOAT64, &&L_DONE, &&L_DONE
   };
   
   if (ta_data->type > TYPED_ARRAY_BIGUINT64) goto L_DONE;
@@ -924,6 +937,9 @@ static ant_value_t js_typedarray_fill(ant_t *js, ant_value_t *args, int nargs) {
     goto L_DONE;
   L_UINT32:
     for (ssize_t i = start; i < end; i++) ((uint32_t*)data)[i] = (uint32_t)value;
+    goto L_DONE;
+  L_FLOAT16:
+    for (ssize_t i = start; i < end; i++) ((uint16_t*)data)[i] = double_to_half(value);
     goto L_DONE;
   L_FLOAT32:
     for (ssize_t i = start; i < end; i++) ((float*)data)[i] = (float)value;
@@ -1104,7 +1120,7 @@ static ant_value_t js_typedarray_toSorted(ant_t *js, ant_value_t *args, int narg
       
       static const void *read_dispatch[] = {
         &&R_INT8, &&R_UINT8, &&R_UINT8, &&R_INT16, &&R_UINT16,
-        &&R_INT32, &&R_UINT32, &&R_FLOAT32, &&R_FLOAT64, &&R_DONE, &&R_DONE
+        &&R_INT32, &&R_UINT32, &&R_FLOAT16, &&R_FLOAT32, &&R_FLOAT64, &&R_DONE, &&R_DONE
       };
       
       if (ta_data->type > TYPED_ARRAY_BIGUINT64) goto R_DONE;
@@ -1116,6 +1132,7 @@ static ant_value_t js_typedarray_toSorted(ant_t *js, ant_value_t *args, int narg
       R_UINT16:  a_val = (double)((uint16_t*)data)[j-1]; b_val = (double)((uint16_t*)data)[j]; goto R_COMPARE;
       R_INT32:   a_val = (double)((int32_t*)data)[j-1]; b_val = (double)((int32_t*)data)[j]; goto R_COMPARE;
       R_UINT32:  a_val = (double)((uint32_t*)data)[j-1]; b_val = (double)((uint32_t*)data)[j]; goto R_COMPARE;
+      R_FLOAT16: a_val = half_to_double(((uint16_t*)data)[j-1]); b_val = half_to_double(((uint16_t*)data)[j]); goto R_COMPARE;
       R_FLOAT32: a_val = (double)((float*)data)[j-1]; b_val = (double)((float*)data)[j]; goto R_COMPARE;
       R_FLOAT64: a_val = ((double*)data)[j-1]; b_val = ((double*)data)[j]; goto R_COMPARE;
       R_DONE:    goto SORT_DONE;
@@ -1133,7 +1150,7 @@ static ant_value_t js_typedarray_toSorted(ant_t *js, ant_value_t *args, int narg
       
       static const void *swap_dispatch[] = {
         &&S_INT8, &&S_UINT8, &&S_UINT8, &&S_INT16, &&S_UINT16,
-        &&S_INT32, &&S_UINT32, &&S_FLOAT32, &&S_FLOAT64, &&S_DONE, &&S_DONE
+        &&S_INT32, &&S_UINT32, &&S_FLOAT16, &&S_FLOAT32, &&S_FLOAT64, &&S_DONE, &&S_DONE
       };
       
       if (ta_data->type > TYPED_ARRAY_BIGUINT64) goto S_DONE;
@@ -1145,6 +1162,7 @@ static ant_value_t js_typedarray_toSorted(ant_t *js, ant_value_t *args, int narg
       S_UINT16:  { uint16_t tmp = ((uint16_t*)data)[j-1]; ((uint16_t*)data)[j-1] = ((uint16_t*)data)[j]; ((uint16_t*)data)[j] = tmp; goto S_DONE; }
       S_INT32:   { int32_t tmp = ((int32_t*)data)[j-1]; ((int32_t*)data)[j-1] = ((int32_t*)data)[j]; ((int32_t*)data)[j] = tmp; goto S_DONE; }
       S_UINT32:  { uint32_t tmp = ((uint32_t*)data)[j-1]; ((uint32_t*)data)[j-1] = ((uint32_t*)data)[j]; ((uint32_t*)data)[j] = tmp; goto S_DONE; }
+      S_FLOAT16: { uint16_t tmp = ((uint16_t*)data)[j-1]; ((uint16_t*)data)[j-1] = ((uint16_t*)data)[j]; ((uint16_t*)data)[j] = tmp; goto S_DONE; }
       S_FLOAT32: { float tmp = ((float*)data)[j-1]; ((float*)data)[j-1] = ((float*)data)[j]; ((float*)data)[j] = tmp; goto S_DONE; }
       S_FLOAT64: { double tmp = ((double*)data)[j-1]; ((double*)data)[j-1] = ((double*)data)[j]; ((double*)data)[j] = tmp; goto S_DONE; }
       S_DONE:;
@@ -1184,7 +1202,7 @@ static ant_value_t js_typedarray_with(ant_t *js, ant_value_t *args, int nargs) {
   
   static const void *dispatch[] = {
     &&W_INT8, &&W_UINT8, &&W_UINT8, &&W_INT16, &&W_UINT16,
-    &&W_INT32, &&W_UINT32, &&W_FLOAT32, &&W_FLOAT64, &&W_DONE, &&W_DONE
+    &&W_INT32, &&W_UINT32, &&W_FLOAT16, &&W_FLOAT32, &&W_FLOAT64, &&W_DONE, &&W_DONE
   };
   
   if (ta_data->type > TYPED_ARRAY_BIGUINT64) goto W_DONE;
@@ -1196,6 +1214,7 @@ static ant_value_t js_typedarray_with(ant_t *js, ant_value_t *args, int nargs) {
   W_UINT16:  ((uint16_t*)data)[index] = (uint16_t)value; goto W_DONE;
   W_INT32:   ((int32_t*)data)[index] = (int32_t)value; goto W_DONE;
   W_UINT32:  ((uint32_t*)data)[index] = (uint32_t)value; goto W_DONE;
+  W_FLOAT16: ((uint16_t*)data)[index] = double_to_half(value); goto W_DONE;
   W_FLOAT32: ((float*)data)[index] = (float)value; goto W_DONE;
   W_FLOAT64: ((double*)data)[index] = value; goto W_DONE;
   W_DONE:
@@ -1221,6 +1240,7 @@ DEFINE_TYPEDARRAY_CONSTRUCTOR(Int16Array, TYPED_ARRAY_INT16)
 DEFINE_TYPEDARRAY_CONSTRUCTOR(Uint16Array, TYPED_ARRAY_UINT16)
 DEFINE_TYPEDARRAY_CONSTRUCTOR(Int32Array, TYPED_ARRAY_INT32)
 DEFINE_TYPEDARRAY_CONSTRUCTOR(Uint32Array, TYPED_ARRAY_UINT32)
+DEFINE_TYPEDARRAY_CONSTRUCTOR(Float16Array, TYPED_ARRAY_FLOAT16)
 DEFINE_TYPEDARRAY_CONSTRUCTOR(Float32Array, TYPED_ARRAY_FLOAT32)
 DEFINE_TYPEDARRAY_CONSTRUCTOR(Float64Array, TYPED_ARRAY_FLOAT64)
 DEFINE_TYPEDARRAY_CONSTRUCTOR(BigInt64Array, TYPED_ARRAY_BIGINT64)
@@ -1806,6 +1826,7 @@ static ant_value_t typedarray_join_with(ant_t *js, ant_value_t this_val, const c
       case TYPED_ARRAY_UINT16:        written = snprintf(buf + pos, cap - pos, "%u", ((uint16_t*)data)[i]); break;
       case TYPED_ARRAY_INT32:         written = snprintf(buf + pos, cap - pos, "%d", ((int32_t*)data)[i]); break;
       case TYPED_ARRAY_UINT32:        written = snprintf(buf + pos, cap - pos, "%u", ((uint32_t*)data)[i]); break;
+      case TYPED_ARRAY_FLOAT16:       written = snprintf(buf + pos, cap - pos, "%g", half_to_double(((uint16_t*)data)[i])); break;
       case TYPED_ARRAY_FLOAT32:       written = snprintf(buf + pos, cap - pos, "%g", (double)((float*)data)[i]); break;
       case TYPED_ARRAY_FLOAT64:       written = snprintf(buf + pos, cap - pos, "%g", ((double*)data)[i]); break;
       case TYPED_ARRAY_BIGINT64:      written = snprintf(buf + pos, cap - pos, "%lld", ((long long*)data)[i]); break;
@@ -2178,6 +2199,7 @@ void init_buffer_module() {
   SETUP_TYPEDARRAY(Uint16Array);
   SETUP_TYPEDARRAY(Int32Array);
   SETUP_TYPEDARRAY(Uint32Array);
+  SETUP_TYPEDARRAY(Float16Array);
   SETUP_TYPEDARRAY(Float32Array);
   SETUP_TYPEDARRAY(Float64Array);
   SETUP_TYPEDARRAY(BigInt64Array);

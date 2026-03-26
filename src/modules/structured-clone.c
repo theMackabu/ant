@@ -49,19 +49,6 @@ static void sc_free(sc_entry_t **table) {
   }
 }
 
-static const char *sc_ta_type_name(TypedArrayType type) {
-  static const char *names[] = {
-    "Int8Array", "Uint8Array", "Uint8ClampedArray",
-    "Int16Array", "Uint16Array",
-    "Int32Array", "Uint32Array",
-    "Float32Array", "Float64Array",
-    "BigInt64Array", "BigUint64Array"
-  };
-  int i = (int)type;
-  if (i < 0 || i > 10) return "Uint8Array";
-  return names[i];
-}
-
 static ant_value_t sc_clone_typed_array(
   ant_t *js, ant_value_t key, TypedArrayData *ta_data, sc_entry_t **seen
 ) {
@@ -80,7 +67,7 @@ static ant_value_t sc_clone_typed_array(
 
   ant_value_t clone = create_typed_array(
     js, ta_data->type, new_buf, 0, 
-    ta_data->length, sc_ta_type_name(ta_data->type)
+    ta_data->length, buffer_typedarray_type_name(ta_data->type)
   );
   
   sc_add(seen, key, clone);

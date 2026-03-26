@@ -1130,12 +1130,6 @@ static size_t strobj(ant_t *js, ant_value_t obj, char *buf, size_t len) {
   if (vtype(ta_slot) == T_TYPEDARRAY) {
     TypedArrayData *ta = (TypedArrayData *)vdata(ta_slot);
     if (ta && ta->buffer) {
-      static const char *ta_type_names[] = {
-        "Int8Array", "Uint8Array", "Uint8ClampedArray",
-        "Int16Array", "Uint16Array", "Int32Array", "Uint32Array",
-        "Float32Array", "Float64Array", "BigInt64Array", "BigUint64Array"
-      };
-      
       const char *type_name = NULL;
       size_t type_len = 0;
       
@@ -1145,7 +1139,7 @@ static size_t strobj(ant_t *js, ant_value_t obj, char *buf, size_t len) {
         type_name = "Buffer";
         type_len = 6;
       } else if (ta->type <= TYPED_ARRAY_BIGUINT64) {
-        type_name = ta_type_names[ta->type];
+        type_name = buffer_typedarray_type_name(ta->type);
         type_len = strlen(type_name);
       } else {
         type_name = "TypedArray";
@@ -1180,6 +1174,11 @@ static size_t strobj(ant_t *js, ant_value_t obj, char *buf, size_t len) {
             break;
           case TYPED_ARRAY_UINT32:
             n += (size_t) snprintf(buf + n, REMAIN(n, len), "%u", ((uint32_t*)data)[i]);
+            break;
+          case TYPED_ARRAY_FLOAT16:
+            n += (size_t) snprintf(
+              buf + n, REMAIN(n, len), "%g", half_to_double(((uint16_t*)data)[i])
+            );
             break;
           case TYPED_ARRAY_FLOAT32:
             n += (size_t) snprintf(buf + n, REMAIN(n, len), "%g", (double)((float*)data)[i]);

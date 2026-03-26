@@ -46,6 +46,72 @@ uint64_t hash_key(const char *key, size_t len) {
   return hash;
 }
 
+double half_to_double(uint16_t bits16) {
+  uint32_t sign = ((uint32_t)bits16 & 0x8000u) << 16;
+  uint32_t exp = ((uint32_t)bits16 >> 10) & 0x1fu;
+  uint32_t mant = (uint32_t)bits16 & 0x03ffu;
+  
+  uint32_t bits32 = 0;
+  float out = 0.0f;
+
+  if (exp == 0) {
+  if (mant == 0) {
+    bits32 = sign;
+  } else {
+    uint32_t exp32 = 113;
+    while ((mant & 0x0400u) == 0) {
+      mant <<= 1;
+      exp32--;
+    }
+    mant &= 0x03ffu;
+    bits32 = sign | (exp32 << 23) | (mant << 13);
+  }} 
+  
+  else if (exp == 0x1fu) bits32 = sign | 0x7f800000u | (mant << 13);
+  else bits32 = sign | ((exp + 112u) << 23) | (mant << 13);
+
+  memcpy(&out, &bits32, sizeof(out));
+  return (double)out;
+}
+
+uint16_t double_to_half(double value) {
+  float input = (float)value;
+  
+  uint32_t bits32 = 0;
+  uint32_t sign = 0;
+  uint32_t exp = 0;
+  uint32_t mant = 0;
+  int32_t exp16 = 0;
+  uint16_t out = 0;
+
+  memcpy(&bits32, &input, sizeof(bits32));
+  sign = (bits32 >> 16) & 0x8000u;
+  exp = (bits32 >> 23) & 0xffu;
+  mant = bits32 & 0x007fffffu;
+
+  if (exp == 0xffu) {
+    if (mant != 0) return (uint16_t)(sign | 0x7e00u);
+    return (uint16_t)(sign | 0x7c00u);
+  }
+
+  exp16 = (int32_t)exp - 127 + 15;
+  if (exp16 >= 0x1f) return (uint16_t)(sign | 0x7c00u);
+
+  if (exp16 <= 0) {
+    if (exp16 < -10) return (uint16_t)sign;
+    mant |= 0x00800000u;
+    uint32_t shift = (uint32_t)(14 - exp16);
+    uint16_t sub = (uint16_t)(mant >> shift);
+    if ((mant >> (shift - 1)) & 1u) sub++;
+    return (uint16_t)(sign | sub);
+  }
+
+  out = (uint16_t)(sign | ((uint32_t)exp16 << 10) | (mant >> 13));
+  if (mant & 0x00001000u) out++;
+  
+  return out;
+}
+
 int is_typescript_file(const char *filename) {
   if (filename == NULL) return 0;
   size_t len = strlen(filename);
