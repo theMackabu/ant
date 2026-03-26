@@ -408,7 +408,6 @@ static ant_value_t ts_source_cancel_resolve(ant_t *js, ant_value_t *args, int na
   ant_value_t p = js_get_slot(wrapper, SLOT_DATA);
   ant_value_t ts_obj = js_get_slot(wrapper, SLOT_ENTRIES);
   ant_value_t reason = js_get_slot(wrapper, SLOT_BUFFER);
-  bool started_by_abort = js_get_slot(wrapper, SLOT_CTOR) == js_true;
 
   ant_value_t readable = ts_readable(ts_obj);
   rs_stream_t *rs = rs_get_stream(readable);
@@ -421,13 +420,8 @@ static ant_value_t ts_source_cancel_resolve(ant_t *js, ant_value_t *args, int na
     js_reject_promise(js, p, rs_stream_error(readable));
     return js_mkundef();
   }
-
   ant_value_t writable = ts_writable(ts_obj);
   ws_stream_t *ws = ws_get_stream(writable);
-  if (!started_by_abort && ws && (ws->has_pending_abort || ts_cancel_joined_abort(ts_obj))) {
-    js_reject_promise(js, p, ts_writable_stored_error(ts_obj));
-    return js_mkundef();
-  }
 
   if (ws && ws->state == WS_STATE_WRITABLE)
     ts_error_writable_and_unblock_write(js, ts_obj, reason);
@@ -451,17 +445,11 @@ static ant_value_t ts_abort_cancel_resolve(ant_t *js, ant_value_t *args, int nar
   ant_value_t p = js_get_slot(wrapper, SLOT_DATA);
   ant_value_t ts_obj = js_get_slot(wrapper, SLOT_ENTRIES);
   ant_value_t reason = js_get_slot(wrapper, SLOT_BUFFER);
-  bool started_by_abort = js_get_slot(wrapper, SLOT_CTOR) == js_true;
 
   ant_value_t readable = ts_readable(ts_obj);
   rs_stream_t *rs = rs_get_stream(readable);
   if (rs && rs->state == RS_STATE_ERRORED) {
     js_reject_promise(js, p, rs_stream_error(readable));
-    return js_mkundef();
-  }
-
-  if (!started_by_abort) {
-    js_reject_promise(js, p, ts_writable_stored_error(ts_obj));
     return js_mkundef();
   }
 
@@ -677,7 +665,10 @@ static ant_value_t ts_sink_close(ant_t *js, ant_value_t *args, int nargs) {
     rs_stream_t *rs = rs_get_stream(readable);
     if (rs && rs->state == RS_STATE_READABLE) {
       ant_value_t rs_ctrl = rs_stream_controller(js, readable);
+      rs_controller_t *rc = rs_get_controller(rs_ctrl);
+      if (rc) rc->defer_close = true;
       rs_controller_close(js, rs_ctrl);
+      if (rc) rc->defer_close = false;
     }
     ts_set_flushing(ts_obj, false);
     js_resolve_promise(js, p, js_mkundef());

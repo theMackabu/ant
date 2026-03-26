@@ -17,7 +17,10 @@ typedef struct {
   uint32_t queue_sizes_cap;
   double queue_total_size;
   double strategy_hwm;
+  
   bool close_requested;
+  bool defer_close;
+  bool in_enqueue;
   bool pull_again;
   bool pulling;
   bool started;
