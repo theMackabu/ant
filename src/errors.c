@@ -804,6 +804,22 @@ ant_value_t js_create_error(ant_t *js, js_err_type_t err_type, ant_value_t props
   return mkval(T_ERR, vdata(err_obj));
 }
 
+ant_value_t js_make_error_silent(ant_t *js, js_err_type_t err_type, const char *message) {
+  bool had_throw = js->thrown_exists;
+  
+  ant_value_t saved_value = had_throw ? js->thrown_value : js_mkundef();
+  ant_value_t saved_stack = had_throw ? js->thrown_stack : js_mkundef();
+
+  js_create_error(js, err_type, js_mkundef(), "%s", message);
+  ant_value_t err = js->thrown_value;
+
+  js->thrown_exists = had_throw;
+  js->thrown_value = saved_value;
+  js->thrown_stack = saved_stack;
+  
+  return err;
+}
+
 ant_value_t js_throw(ant_t *js, ant_value_t value) {
   if (vtype(value) == T_OBJ) {
     ant_value_t existing = js_get(js, value, "stack");

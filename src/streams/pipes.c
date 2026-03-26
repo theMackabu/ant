@@ -79,14 +79,14 @@ static void pipes_release_reader(ant_t *js, ant_value_t reader_obj) {
   if (!is_object_type(stream_obj)) return;
 
   if (rs_reader_has_reqs(js, reader_obj)) {
-    js_mkerr_typed(js, JS_ERR_TYPE, "Reader was released");
-    rs_default_reader_error_read_requests(js, reader_obj, js->thrown_value);
+    ant_value_t release_err = js_make_error_silent(js, JS_ERR_TYPE, "Reader was released");
+    rs_default_reader_error_read_requests(js, reader_obj, release_err);
   }
 
   ant_value_t old_closed = rs_reader_closed(reader_obj);
   ant_value_t new_closed = js_mkpromise(js);
-  js_mkerr_typed(js, JS_ERR_TYPE, "Reader was released");
-  ant_value_t release_err = js->thrown_value;
+  
+  ant_value_t release_err = js_make_error_silent(js, JS_ERR_TYPE, "Reader was released");
   rs_stream_t *rs = rs_get_stream(stream_obj);
   
   if (rs && rs->state == RS_STATE_READABLE) {
@@ -105,9 +105,9 @@ static void pipes_release_writer(ant_t *js, ant_value_t writer_obj) {
   ant_value_t ws_obj = js_get_slot(writer_obj, SLOT_ENTRIES);
   if (!is_object_type(ws_obj)) return;
 
-  js_mkerr_typed(js, JS_ERR_TYPE, "Writer was released");
-  ant_value_t rel_err = js->thrown_value;
+  ant_value_t rel_err = js_make_error_silent(js, JS_ERR_TYPE, "Writer was released");
   ant_value_t ready = js_mkpromise(js);
+  
   js_reject_promise(js, ready, rel_err);
   promise_mark_handled(ready);
   js_set_slot(writer_obj, SLOT_WS_READY, ready);

@@ -928,8 +928,7 @@ static ant_value_t js_ws_writer_release_lock(ant_t *js, ant_value_t *args, int n
   ant_value_t stream_obj = ws_writer_stream(js->this_val);
   if (!is_object_type(stream_obj)) return js_mkundef();
 
-  js_mkerr_typed(js, JS_ERR_TYPE, "Writer was released");
-  ant_value_t release_err = js->thrown_value;
+  ant_value_t release_err = js_make_error_silent(js, JS_ERR_TYPE, "Writer was released");
 
   ws_writer_ensure_ready_promise_rejected(js, js->this_val, release_err);
   ws_writer_ensure_closed_promise_rejected(js, js->this_val, release_err);

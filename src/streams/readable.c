@@ -556,13 +556,12 @@ static ant_value_t js_rs_reader_release_lock(ant_t *js, ant_value_t *args, int n
   if (!stream) return js_mkundef();
 
   if (rs_reader_has_reqs(js, js->this_val)) {
-    js_mkerr_typed(js, JS_ERR_TYPE, "Reader was released");
-    rs_default_reader_error_read_requests(js, js->this_val, js->thrown_value);
+    ant_value_t release_err = js_make_error_silent(js, JS_ERR_TYPE, "Reader was released");
+    rs_default_reader_error_read_requests(js, js->this_val, release_err);
   }
 
   ant_value_t new_closed = js_mkpromise(js);
-  js_mkerr_typed(js, JS_ERR_TYPE, "Reader was released");
-  ant_value_t release_err = js->thrown_value;
+  ant_value_t release_err = js_make_error_silent(js, JS_ERR_TYPE, "Reader was released");
 
   if (stream->state == RS_STATE_READABLE) {
     ant_value_t old_closed = rs_reader_closed(js->this_val);

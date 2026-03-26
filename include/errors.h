@@ -50,6 +50,8 @@ void js_set_error_site(
 
 __attribute__((format(printf, 4, 5)))
 ant_value_t js_create_error(ant_t *js, js_err_type_t err_type, ant_value_t props, const char *fmt, ...);
+ant_value_t js_make_error_silent(ant_t *js, js_err_type_t err_type, const char *message);
+
 ant_value_t js_capture_raw_stack(ant_t *js);
 ant_value_t js_throw(ant_t *js, ant_value_t value);
 
