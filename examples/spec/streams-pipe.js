@@ -243,6 +243,9 @@ async function testPipeToWithSignal() {
     test('pipeTo with signal should reject', false, true);
   } catch (e) {
     test('pipeTo aborted by signal', true, true);
+    test('pipeTo signal rejects with abort semantics',
+      !(e instanceof TypeError) && !(e && /AbortSignal/.test(String(e && e.message))),
+      true);
   }
   testDeep('pipeTo signal stops further writes', chunks, ['a']);
 }

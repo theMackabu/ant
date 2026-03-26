@@ -109,7 +109,7 @@ void signal_do_abort(ant_t *js, ant_value_t signal_obj, ant_value_t reason) {
   ant_value_t call_args[1] = { event_obj };
 
   ant_value_t onabort = js_get(js, *cur, "onabort");
-  if (vtype(onabort) == T_FUNC) {
+  if (is_callable(onabort)) {
     sv_vm_call(js->vm, js, onabort, *cur, call_args, 1, NULL, false);
     process_microtasks(js);
   }
@@ -117,13 +117,16 @@ void signal_do_abort(ant_t *js, ant_value_t signal_obj, ant_value_t reason) {
   unsigned int n = utarray_len(d->listeners);
   for (unsigned int i = 0; i < n;) {
     abort_listener_t *entry = (abort_listener_t *)utarray_eltptr(d->listeners, i);
-    ant_value_t cb   = entry->callback;
-    bool        once = entry->once;
+    ant_value_t cb = entry->callback;
+    bool once = entry->once;
+    
     if (once) { utarray_erase(d->listeners, i, 1); n--; } else i++;
-    if (vtype(cb) != T_FUNC) continue;
+    if (!is_callable(cb)) continue;
+    
     sv_vm_call(js->vm, js, cb, *cur, call_args, 1, NULL, false);
     process_microtasks(js);
   }}
+  
   utarray_free(to_fire);
 }
 
@@ -155,7 +158,7 @@ static ant_value_t abort_signal_add_event_listener(ant_t *js, ant_value_t *args,
 
   const char *type = js_getstr(js, args[0], NULL);
   if (!type || strcmp(type, "abort") != 0) return js_mkundef();
-  if (vtype(args[1]) != T_FUNC) return js_mkundef();
+  if (!is_callable(args[1])) return js_mkundef();
 
   abort_signal_data_t *data = get_signal_data(js_getthis(js));
   if (!data) return js_mkundef();
@@ -413,4 +416,3 @@ void abort_signal_add_listener(ant_t *js, ant_value_t signal, ant_value_t callba
   abort_listener_t entry = { callback, false };
   utarray_push_back(data->listeners, &entry);
 }
-

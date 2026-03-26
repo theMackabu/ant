@@ -7,41 +7,10 @@
 
 #include "silver/engine.h"
 #include "modules/assert.h"
-#include "modules/domexception.h"
+#include "modules/abort.h"
 #include "streams/pipes.h"
 #include "streams/readable.h"
 #include "streams/writable.h"
-
-static ant_value_t pipes_call_method(
-  ant_t *js, ant_value_t obj, const char *name,
-  ant_value_t *args, int nargs
-) {
-  ant_value_t fn = js_get(js, obj, name);
-  if (!is_callable(fn)) return js_mkundef();
-  return sv_vm_call(js->vm, js, fn, obj, args, nargs, NULL, false);
-}
-
-static bool pipes_get_bool(ant_t *js, ant_value_t obj, const char *name) {
-  return js_truthy(js, js_get(js, obj, name));
-}
-
-static void pipes_set_bool(ant_t *js, ant_value_t obj, const char *name, bool value) {
-  js_set(js, obj, name, js_bool(value));
-}
-
-static ant_value_t pipes_abort_reason(ant_t *js, ant_value_t signal) {
-  ant_value_t reason = js_get(js, signal, "reason");
-  if (!is_undefined(reason)) return reason;
-  return make_dom_exception(js, "signal is aborted without reason", "AbortError");
-}
-
-static bool pipes_is_abort_signal(ant_t *js, ant_value_t signal) {
-  if (!is_object_type(signal)) return false;
-  ant_value_t aborted = js_get(js, signal, "aborted");
-  ant_value_t add = js_get(js, signal, "addEventListener");
-  ant_value_t remove = js_get(js, signal, "removeEventListener");
-  return vtype(aborted) == T_BOOL && is_callable(add) && is_callable(remove);
-}
 
 static void pipes_chain_thenable(
   ant_t *js, ant_value_t value,
@@ -165,27 +134,12 @@ static void pipes_release_locks(ant_t *js, ant_value_t state) {
   }
 }
 
-static void pipes_remove_abort_listener(ant_t *js, ant_value_t state) {
-  ant_value_t signal = js_get(js, state, "signal");
-  ant_value_t listener = js_get(js, state, "abortListener");
-  if (!is_object_type(signal) || !is_callable(listener)) return;
-
-  ant_value_t args[2] = {
-    js_mkstr(js, "abort", 5),
-    listener
-  };
-  
-  pipes_call_method(js, signal, "removeEventListener", args, 2);
-  js_set(js, state, "abortListener", js_mkundef());
-}
-
 static void pipes_settle(ant_t *js, ant_value_t state, bool ok, ant_value_t value) {
   pipe_state_t *pst = pipe_get_state(state);
   if (!pst || pst->settled) return;
 
   pst->settled = true;
   pst->shutting_down = true;
-  pipes_remove_abort_listener(js, state);
   pipes_release_locks(js, state);
 
   ant_value_t promise = pipe_state_promise(state);
@@ -340,8 +294,8 @@ static ant_value_t pipe_abort_listener(ant_t *js, ant_value_t *args, int nargs) 
   if (!pst || pst->settled || pst->shutting_down)
     return js_mkundef();
 
-  ant_value_t signal = js_get(js, state, "signal");
-  pipes_shutdown_from_abort(js, state, pipes_abort_reason(js, signal));
+  ant_value_t signal = js_get_slot(state, SLOT_RS_CANCEL);
+  pipes_shutdown_from_abort(js, state, abort_signal_get_reason(signal));
   return js_mkundef();
 }
 
@@ -403,7 +357,7 @@ ant_value_t readable_stream_pipe_to(
     return pipe_create_rejected(js, js->thrown_value);
   }
 
-  if (!is_undefined(signal) && !pipes_is_abort_signal(js, signal)) {
+  if (!is_undefined(signal) && !is_object_type(signal)) {
     js_mkerr_typed(js, JS_ERR_TYPE, "pipeTo option 'signal' must be an AbortSignal");
     return pipe_create_rejected(js, js->thrown_value);
   }
@@ -436,26 +390,20 @@ ant_value_t readable_stream_pipe_to(
   js_set_slot(state, SLOT_DEFAULT, writer);
   js_set_slot(state, SLOT_RS_PULL, promise);
   js_set_finalizer(state, pipe_state_finalize);
+  js_set_slot(state, SLOT_RS_CANCEL, signal);
 
-  js_set(js, state, "signal", signal);
-  js_set(js, state, "abortListener", js_mkundef());
+  promise_mark_handled(rs_reader_closed(reader));
+  promise_mark_handled(js_get_slot(writer, SLOT_RS_CLOSED));
+  promise_mark_handled(js_get_slot(writer, SLOT_WS_READY));
 
-  if (is_object_type(signal) && js_truthy(js, js_get(js, signal, "aborted"))) {
-    pipes_shutdown_from_abort(js, state, pipes_abort_reason(js, signal));
+  if (is_object_type(signal) && abort_signal_is_aborted(signal)) {
+    pipes_shutdown_from_abort(js, state, abort_signal_get_reason(signal));
     return promise;
   }
 
   if (is_object_type(signal)) {
     ant_value_t listener = js_heavy_mkfun(js, pipe_abort_listener, state);
-    ant_value_t options = js_mkobj(js);
-    js_set(js, options, "once", js_true);
-    ant_value_t args[3] = {
-      js_mkstr(js, "abort", 5),
-      listener,
-      options
-    };
-    pipes_call_method(js, signal, "addEventListener", args, 3);
-    js_set(js, state, "abortListener", listener);
+    abort_signal_add_listener(js, signal, listener);
   }
 
   pipes_pump(js, state);
@@ -463,6 +411,11 @@ ant_value_t readable_stream_pipe_to(
 }
 
 static ant_value_t js_rs_pipe_to(ant_t *js, ant_value_t *args, int nargs) {
+  if (!is_object_type(js->this_val)) {
+    js_mkerr_typed(js, JS_ERR_TYPE, "Invalid ReadableStream");
+    return pipe_create_rejected(js, js->thrown_value);
+  }
+  
   rs_stream_t *stream = rs_get_stream(js->this_val);
   if (!stream) {
     js_mkerr_typed(js, JS_ERR_TYPE, "Invalid ReadableStream");
@@ -479,7 +432,9 @@ static ant_value_t js_rs_pipe_to(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t js_rs_pipe_through(ant_t *js, ant_value_t *args, int nargs) {
+  if (!is_object_type(js->this_val)) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid ReadableStream");
   rs_stream_t *stream = rs_get_stream(js->this_val);
+  
   if (!stream) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid ReadableStream");
   if (is_object_type(rs_stream_reader(js->this_val)))
     return js_mkerr_typed(js, JS_ERR_TYPE, "ReadableStream is already locked");
@@ -758,7 +713,9 @@ static ant_value_t tee_branch_cancel(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t js_rs_tee(ant_t *js, ant_value_t *args, int nargs) {
+  if (!is_object_type(js->this_val)) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid ReadableStream");
   rs_stream_t *stream = rs_get_stream(js->this_val);
+  
   if (!stream) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid ReadableStream");
   if (is_object_type(rs_stream_reader(js->this_val)))
     return js_mkerr_typed(js, JS_ERR_TYPE, "ReadableStream is already locked");
