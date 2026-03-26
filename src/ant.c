@@ -623,15 +623,16 @@ static ant_value_t to_string_val(ant_t *js, ant_value_t val) {
 
 bool js_truthy(ant_t *js, ant_value_t v) {
   static const void *dispatch[] = {
-    [T_OBJ]    = &&l_true,
-    [T_FUNC]   = &&l_true,
-    [T_CFUNC]  = &&l_true,
-    [T_ARR]    = &&l_true,
-    [T_SYMBOL] = &&l_true,
-    [T_BOOL]   = &&l_bool,
-    [T_STR]    = &&l_str,
-    [T_BIGINT] = &&l_bigint,
-    [T_NUM]    = &&l_num,
+    [T_OBJ]     = &&l_true,
+    [T_FUNC]    = &&l_true,
+    [T_CFUNC]   = &&l_true,
+    [T_ARR]     = &&l_true,
+    [T_PROMISE] = &&l_true,
+    [T_SYMBOL]  = &&l_true,
+    [T_BOOL]    = &&l_bool,
+    [T_STR]     = &&l_str,
+    [T_BIGINT]  = &&l_bigint,
+    [T_NUM]     = &&l_num,
   };
 
   uint8_t t = vtype(v);
@@ -5644,13 +5645,9 @@ static ant_value_t builtin_object_defineProperty(ant_t *js, ant_value_t *args, i
       if (has_get) js_set_sym_getter_desc(js, as_obj, prop, getter, desc_flags);
       if (has_set) js_set_sym_setter_desc(js, as_obj, prop, setter, desc_flags);
     } else {
-      if (has_get && has_set) {
-        js_set_accessor_desc(js, as_obj, prop_str, prop_len, getter, setter, desc_flags);
-      } else if (has_get) {
-        js_set_getter_desc(js, as_obj, prop_str, prop_len, getter, desc_flags);
-      } else {
-        js_set_setter_desc(js, as_obj, prop_str, prop_len, setter, desc_flags);
-      }
+      if (has_get && has_set) js_set_accessor_desc(js, as_obj, prop_str, prop_len, getter, setter, desc_flags);
+      else if (has_get) js_set_getter_desc(js, as_obj, prop_str, prop_len, getter, desc_flags);
+      else js_set_setter_desc(js, as_obj, prop_str, prop_len, setter, desc_flags);
     }
   } else {
     int desc_flags = 

@@ -395,6 +395,10 @@ bool abort_signal_is_aborted(ant_value_t signal) {
   return data && data->aborted;
 }
 
+bool abort_signal_is_signal(ant_value_t signal) {
+  return get_signal_data(signal) != NULL;
+}
+
 ant_value_t abort_signal_get_reason(ant_value_t signal) {
   abort_signal_data_t *data = get_signal_data(signal);
   return data ? data->reason : js_mkundef();

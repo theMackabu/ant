@@ -12,21 +12,21 @@
 #include "streams/readable.h"
 #include "streams/writable.h"
 
-static void pipes_chain_thenable(
+static void pipes_chain_promise(
   ant_t *js, ant_value_t value,
   ant_value_t on_resolve, ant_value_t on_reject
 ) {
-  ant_value_t thenable = value;
-  if (vtype(thenable) != T_PROMISE) {
-    thenable = js_mkpromise(js);
-    js_resolve_promise(js, thenable, value);
+  ant_value_t promise = value;
+  if (vtype(promise) != T_PROMISE) {
+    promise = js_mkpromise(js);
+    js_resolve_promise(js, promise, value);
   }
 
-  ant_value_t then_fn = js_get(js, thenable, "then");
+  ant_value_t then_fn = js_get(js, promise, "then");
   if (!is_callable(then_fn)) return;
 
   ant_value_t then_args[2] = { on_resolve, on_reject };
-  sv_vm_call(js->vm, js, then_fn, thenable, then_args, 2, NULL, false);
+  sv_vm_call(js->vm, js, then_fn, promise, then_args, 2, NULL, false);
 }
 
 typedef struct {
@@ -76,7 +76,7 @@ static ant_value_t pipe_state_promise(ant_value_t state) {
 
 static void pipes_release_reader(ant_t *js, ant_value_t reader_obj) {
   ant_value_t stream_obj = rs_reader_stream(reader_obj);
-  if (!is_object_type(stream_obj)) return;
+  if (!rs_is_stream(stream_obj)) return;
 
   if (rs_reader_has_reqs(js, reader_obj)) {
     ant_value_t release_err = js_make_error_silent(js, JS_ERR_TYPE, "Reader was released");
@@ -103,7 +103,7 @@ static void pipes_release_reader(ant_t *js, ant_value_t reader_obj) {
 
 static void pipes_release_writer(ant_t *js, ant_value_t writer_obj) {
   ant_value_t ws_obj = js_get_slot(writer_obj, SLOT_ENTRIES);
-  if (!is_object_type(ws_obj)) return;
+  if (!ws_is_stream(ws_obj)) return;
 
   ant_value_t rel_err = js_make_error_silent(js, JS_ERR_TYPE, "Writer was released");
   ant_value_t ready = js_mkpromise(js);
@@ -122,13 +122,13 @@ static void pipes_release_writer(ant_t *js, ant_value_t writer_obj) {
 
 static void pipes_release_locks(ant_t *js, ant_value_t state) {
   ant_value_t reader = pipe_state_reader(state);
-  if (is_object_type(reader)) {
+  if (rs_is_reader(reader)) {
     pipes_release_reader(js, reader);
     js_set_slot(state, SLOT_BUFFER, js_mkundef());
   }
 
   ant_value_t writer = pipe_state_writer(state);
-  if (is_object_type(writer)) {
+  if (ws_is_writer(writer)) {
     pipes_release_writer(js, writer);
     js_set_slot(state, SLOT_DEFAULT, js_mkundef());
   }
@@ -230,6 +230,10 @@ static ant_value_t pipe_close_dest_reject(ant_t *js, ant_value_t *args, int narg
   return js_mkundef();
 }
 
+static ant_value_t pipe_ignore(ant_t *js, ant_value_t *args, int nargs) {
+  return js_mkundef();
+}
+
 static ant_value_t pipe_read_resolve(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t state = js_get_slot(js->current_func, SLOT_DATA);
   pipe_state_t *pst = pipe_get_state(state);
@@ -251,7 +255,7 @@ static ant_value_t pipe_read_resolve(ant_t *js, ant_value_t *args, int nargs) {
     ant_value_t close_promise = writable_stream_close(js, pipe_state_dest(state));
     ant_value_t on_resolve = js_heavy_mkfun(js, pipe_close_dest_resolve, state);
     ant_value_t on_reject = js_heavy_mkfun(js, pipe_close_dest_reject, state);
-    pipes_chain_thenable(js, close_promise, on_resolve, on_reject);
+    pipes_chain_promise(js, close_promise, on_resolve, on_reject);
     return js_mkundef();
   }
 
@@ -259,7 +263,7 @@ static ant_value_t pipe_read_resolve(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t write_promise = ws_writer_write(js, pipe_state_writer(state), value);
   ant_value_t on_resolve = js_heavy_mkfun(js, pipe_write_resolve, state);
   ant_value_t on_reject = js_heavy_mkfun(js, pipe_dest_error, state);
-  pipes_chain_thenable(js, write_promise, on_resolve, on_reject);
+  pipes_chain_promise(js, write_promise, on_resolve, on_reject);
   return js_mkundef();
 }
 
@@ -281,7 +285,7 @@ static ant_value_t pipe_ready_resolve(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t read_promise = rs_default_reader_read(js, pipe_state_reader(state));
   ant_value_t on_resolve = js_heavy_mkfun(js, pipe_read_resolve, state);
   ant_value_t on_reject = js_heavy_mkfun(js, pipe_source_error, state);
-  pipes_chain_thenable(js, read_promise, on_resolve, on_reject);
+  pipes_chain_promise(js, read_promise, on_resolve, on_reject);
   return js_mkundef();
 }
 
@@ -306,7 +310,7 @@ static void pipes_pump(ant_t *js, ant_value_t state) {
   ant_value_t ready = ws_writer_ready(writer);
   ant_value_t on_resolve = js_heavy_mkfun(js, pipe_ready_resolve, state);
   ant_value_t on_reject = js_heavy_mkfun(js, pipe_dest_error, state);
-  pipes_chain_thenable(js, ready, on_resolve, on_reject);
+  pipes_chain_promise(js, ready, on_resolve, on_reject);
 }
 
 static ant_value_t pipe_create_rejected(ant_t *js, ant_value_t error) {
@@ -345,16 +349,16 @@ ant_value_t readable_stream_pipe_to(
     return pipe_create_rejected(js, js->thrown_value);
   }
 
-  if (is_object_type(rs_stream_reader(source))) {
+  if (rs_is_reader(rs_stream_reader(source))) {
     js_mkerr_typed(js, JS_ERR_TYPE, "ReadableStream is already locked");
     return pipe_create_rejected(js, js->thrown_value);
   }
-  if (is_object_type(ws_stream_writer(dest))) {
+  if (ws_is_writer(ws_stream_writer(dest))) {
     js_mkerr_typed(js, JS_ERR_TYPE, "WritableStream is already locked");
     return pipe_create_rejected(js, js->thrown_value);
   }
 
-  if (!is_undefined(signal) && !is_object_type(signal)) {
+  if (!is_undefined(signal) && !abort_signal_is_signal(signal)) {
     js_mkerr_typed(js, JS_ERR_TYPE, "pipeTo option 'signal' must be an AbortSignal");
     return pipe_create_rejected(js, js->thrown_value);
   }
@@ -393,12 +397,18 @@ ant_value_t readable_stream_pipe_to(
   promise_mark_handled(js_get_slot(writer, SLOT_RS_CLOSED));
   promise_mark_handled(js_get_slot(writer, SLOT_WS_READY));
 
-  if (is_object_type(signal) && abort_signal_is_aborted(signal)) {
+  ant_value_t ignore_fn = js_heavy_mkfun(js, pipe_ignore, state);
+  ant_value_t source_closed_reject = js_heavy_mkfun(js, pipe_source_error, state);
+  ant_value_t dest_closed_reject = js_heavy_mkfun(js, pipe_dest_error, state);
+  pipes_chain_promise(js, rs_reader_closed(reader), ignore_fn, source_closed_reject);
+  pipes_chain_promise(js, js_get_slot(writer, SLOT_RS_CLOSED), ignore_fn, dest_closed_reject);
+
+  if (abort_signal_is_signal(signal) && abort_signal_is_aborted(signal)) {
     pipes_shutdown_from_abort(js, state, abort_signal_get_reason(signal));
     return promise;
   }
 
-  if (is_object_type(signal)) {
+  if (abort_signal_is_signal(signal)) {
     ant_value_t listener = js_heavy_mkfun(js, pipe_abort_listener, state);
     abort_signal_add_listener(js, signal, listener);
   }
@@ -408,13 +418,7 @@ ant_value_t readable_stream_pipe_to(
 }
 
 static ant_value_t js_rs_pipe_to(ant_t *js, ant_value_t *args, int nargs) {
-  if (!is_object_type(js->this_val)) {
-    js_mkerr_typed(js, JS_ERR_TYPE, "Invalid ReadableStream");
-    return pipe_create_rejected(js, js->thrown_value);
-  }
-  
-  rs_stream_t *stream = rs_get_stream(js->this_val);
-  if (!stream) {
+  if (!rs_is_stream(js->this_val)) {
     js_mkerr_typed(js, JS_ERR_TYPE, "Invalid ReadableStream");
     return pipe_create_rejected(js, js->thrown_value);
   }
@@ -430,11 +434,8 @@ static ant_value_t js_rs_pipe_to(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t js_rs_pipe_through(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t source = js->this_val;
-  if (!is_object_type(source)) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid ReadableStream");
-  rs_stream_t *stream = rs_get_stream(source);
-  
-  if (!stream) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid ReadableStream");
-  if (is_object_type(rs_stream_reader(source)))
+  if (!rs_is_stream(source)) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid ReadableStream");
+  if (rs_is_reader(rs_stream_reader(source)))
     return js_mkerr_typed(js, JS_ERR_TYPE, "ReadableStream is already locked");
   if (nargs < 1 || !is_object_type(args[0]))
     return js_mkerr_typed(js, JS_ERR_TYPE, "pipeThrough requires a transform object");
@@ -443,11 +444,11 @@ static ant_value_t js_rs_pipe_through(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t writable = js_get(js, transform, "writable");
   ant_value_t readable = js_get(js, transform, "readable");
   
-  if (!is_object_type(writable) || !ws_get_stream(writable))
+  if (!ws_is_stream(writable))
     return js_mkerr_typed(js, JS_ERR_TYPE, "pipeThrough transform.writable must be a WritableStream");
-  if (!is_object_type(readable) || !rs_get_stream(readable))
+  if (!rs_is_stream(readable))
     return js_mkerr_typed(js, JS_ERR_TYPE, "pipeThrough transform.readable must be a ReadableStream");
-  if (is_object_type(ws_stream_writer(writable)))
+  if (ws_is_writer(ws_stream_writer(writable)))
     return js_mkerr_typed(js, JS_ERR_TYPE, "WritableStream is already locked");
 
   bool prevent_close, prevent_abort, prevent_cancel;
@@ -496,7 +497,7 @@ static ant_value_t tee_state_reader(ant_value_t state) {
 
 static void tee_release_reader(ant_t *js, ant_value_t state) {
   ant_value_t reader = tee_state_reader(state);
-  if (!is_object_type(reader)) return;
+  if (!rs_is_reader(reader)) return;
   pipes_release_reader(js, reader);
   js_set_slot(state, SLOT_BUFFER, js_mkundef());
 }
@@ -552,7 +553,7 @@ static void tee_enqueue_branch(ant_t *js, ant_value_t branch_stream, ant_value_t
     return;
 
   ant_value_t r = rs_stream_reader(branch_stream);
-  if (is_object_type(r) && rs_reader_has_reqs(js, r)) {
+  if (rs_is_reader(r) && rs_reader_has_reqs(js, r)) {
     rs_fulfill_read_request(js, branch_stream, value, false);
     rs_default_controller_call_pull_if_needed(js, ctrl);
     return;
@@ -654,7 +655,7 @@ static void tee_pull(ant_t *js, ant_value_t state) {
   ant_value_t read_promise = rs_default_reader_read(js, tee_state_reader(state));
   ant_value_t on_resolve = js_heavy_mkfun(js, tee_read_resolve, state);
   ant_value_t on_reject = js_heavy_mkfun(js, tee_read_reject, state);
-  pipes_chain_thenable(js, read_promise, on_resolve, on_reject);
+  pipes_chain_promise(js, read_promise, on_resolve, on_reject);
 }
 
 static ant_value_t tee_branch_pull(ant_t *js, ant_value_t *args, int nargs) {
@@ -711,23 +712,21 @@ static ant_value_t tee_branch_cancel(ant_t *js, ant_value_t *args, int nargs) {
     ant_value_t cancel_promise = readable_stream_cancel(js, orig_stream, reasons);
     ant_value_t on_resolve = js_heavy_mkfun(js, tee_cancel_both_resolve, state);
     ant_value_t on_reject = js_heavy_mkfun(js, tee_cancel_both_reject, state);
-    pipes_chain_thenable(js, cancel_promise, on_resolve, on_reject);
+    pipes_chain_promise(js, cancel_promise, on_resolve, on_reject);
   }
 
   return promise;
 }
 
 static ant_value_t js_rs_tee(ant_t *js, ant_value_t *args, int nargs) {
-  if (!is_object_type(js->this_val)) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid ReadableStream");
-  rs_stream_t *stream = rs_get_stream(js->this_val);
-  
-  if (!stream) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid ReadableStream");
-  if (is_object_type(rs_stream_reader(js->this_val)))
+  if (!rs_is_stream(js->this_val)) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid ReadableStream");
+  if (rs_is_reader(rs_stream_reader(js->this_val)))
     return js_mkerr_typed(js, JS_ERR_TYPE, "ReadableStream is already locked");
 
   ant_value_t reader_args[1] = { js->this_val };
   ant_value_t saved = js->new_target;
   js->new_target = g_reader_proto;
+  
   ant_value_t reader = js_rs_reader_ctor(js, reader_args, 1);
   js->new_target = saved;
   if (is_err(reader)) return reader;

@@ -38,6 +38,10 @@ extern ant_value_t g_controller_proto;
 void init_readable_stream_module(void);
 void gc_mark_readable_streams(ant_t *js, void (*mark)(ant_t *, ant_value_t));
 
+bool rs_is_stream(ant_value_t obj);
+bool rs_is_reader(ant_value_t obj);
+bool rs_is_controller(ant_value_t obj);
+
 rs_stream_t *rs_get_stream(ant_value_t obj);
 rs_controller_t *rs_get_controller(ant_value_t obj);
 ant_offset_t rs_ctrl_queue_len(ant_t *js, ant_value_t ctrl_obj);

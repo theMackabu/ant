@@ -585,12 +585,12 @@ void init_headers_module(void) {
   js_set(js, g_headers_proto, "getSetCookie", js_mkfun(js_headers_get_set_cookie));
   
   js_set_sym(js, g_headers_proto, get_iterator_sym(),    js_mkfun(js_headers_symbol_iterator));
-  js_set_sym_getter_desc(js, g_headers_proto, get_toStringTag_sym(), js_mkfun(sym_this_cb), 0);
+  js_set_sym(js, g_headers_proto, get_toStringTag_sym(), js_mkstr(js, "Headers", 7));
 
   ant_value_t ctor_obj = js_mkobj(js);
   js_set_slot(ctor_obj, SLOT_CFUNC, js_mkfun(js_headers_ctor));
   js_mkprop_fast(js, ctor_obj, "prototype", 9, g_headers_proto);
-  js_mkprop_fast(js, ctor_obj, "name",      4, js_mkstr(js, "Headers", 7));
+  js_mkprop_fast(js, ctor_obj, "name", 4, js_mkstr(js, "Headers", 7));
   js_set_descriptor(js, ctor_obj, "name", 4, 0);
   
   ant_value_t ctor = js_obj_to_func(ctor_obj);

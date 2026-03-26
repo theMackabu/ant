@@ -17,6 +17,22 @@ ant_value_t g_rs_proto;
 ant_value_t g_reader_proto;
 ant_value_t g_controller_proto;
 
+bool rs_is_stream(ant_value_t obj) {
+  return is_object_type(obj) && rs_get_stream(obj) != NULL;
+}
+
+bool rs_is_reader(ant_value_t obj) {
+  return is_object_type(obj)
+    && vtype(js_get_slot(obj, SLOT_RS_CLOSED)) == T_PROMISE
+    && vtype(js_get_slot(obj, SLOT_BUFFER)) == T_ARR;
+}
+
+bool rs_is_controller(ant_value_t obj) {
+  return is_object_type(obj)
+    && rs_get_controller(obj) != NULL
+    && rs_is_stream(js_get_slot(obj, SLOT_ENTRIES));
+}
+
 rs_stream_t *rs_get_stream(ant_value_t obj) {
   ant_value_t s = js_get_slot(obj, SLOT_DATA);
   if (vtype(s) != T_NUM) return NULL;
@@ -164,7 +180,7 @@ static bool rs_default_controller_should_call_pull(ant_t *js, rs_controller_t *c
 
   ant_value_t stream_obj = rs_ctrl_stream(ctrl_obj);
   ant_value_t reader_obj = rs_stream_reader(stream_obj);
-  if (is_object_type(reader_obj) && rs_reader_has_reqs(js, reader_obj)) return true;
+  if (rs_is_reader(reader_obj) && rs_reader_has_reqs(js, reader_obj)) return true;
 
   double desired = rs_default_controller_get_desired_size(ctrl, stream);
   return desired > 0;
@@ -179,7 +195,7 @@ bool rs_default_controller_can_close_or_enqueue(rs_controller_t *ctrl, rs_stream
 
 void rs_fulfill_read_request(ant_t *js, ant_value_t stream_obj, ant_value_t chunk, bool done) {
   ant_value_t reader_obj = rs_stream_reader(stream_obj);
-  if (!is_object_type(reader_obj)) return;
+  if (!rs_is_reader(reader_obj)) return;
   ant_value_t promise = rs_reader_reqs_shift(js, reader_obj);
   if (vtype(promise) == T_UNDEF) return;
   ant_value_t result = js_iter_result(js, !done, chunk);
@@ -202,7 +218,7 @@ void readable_stream_close(ant_t *js, ant_value_t stream_obj) {
   stream->state = RS_STATE_CLOSED;
 
   ant_value_t reader_obj = rs_stream_reader(stream_obj);
-  if (is_object_type(reader_obj)) {
+  if (rs_is_reader(reader_obj)) {
     ant_value_t arr = rs_reader_reqs(reader_obj);
     if (vtype(arr) == T_ARR) {
       ant_offset_t len = js_arr_len(js, arr);
@@ -224,7 +240,7 @@ void readable_stream_error(ant_t *js, ant_value_t stream_obj, ant_value_t e) {
   js_set_slot(stream_obj, SLOT_BUFFER, e);
 
   ant_value_t reader_obj = rs_stream_reader(stream_obj);
-  if (is_object_type(reader_obj)) {
+  if (rs_is_reader(reader_obj)) {
     js_reject_promise(js, rs_reader_closed(reader_obj), e);
     rs_default_reader_error_read_requests(js, reader_obj, e);
   }
@@ -436,7 +452,7 @@ static ant_value_t js_rs_controller_enqueue(ant_t *js, ant_value_t *args, int na
   ant_value_t chunk = (nargs > 0) ? args[0] : js_mkundef();
 
   ant_value_t reader_obj = rs_stream_reader(stream_obj);
-  if (is_object_type(reader_obj) && rs_reader_has_reqs(js, reader_obj)) {
+  if (rs_is_reader(reader_obj) && rs_reader_has_reqs(js, reader_obj)) {
     rs_fulfill_read_request(js, stream_obj, chunk, false);
     rs_default_controller_call_pull_if_needed(js, js->this_val);
     return js_mkundef();
@@ -510,7 +526,7 @@ ant_value_t rs_controller_enqueue(ant_t *js, ant_value_t ctrl_obj, ant_value_t c
     return js_mkerr_typed(js, JS_ERR_TYPE, "The stream is not in a state that permits enqueue");
 
   ant_value_t reader_obj = rs_stream_reader(stream_obj);
-  if (is_object_type(reader_obj) && rs_reader_has_reqs(js, reader_obj)) {
+  if (rs_is_reader(reader_obj) && rs_reader_has_reqs(js, reader_obj)) {
     rs_fulfill_read_request(js, stream_obj, chunk, false);
     rs_default_controller_call_pull_if_needed(js, ctrl_obj);
     return js_mkundef();
@@ -581,16 +597,15 @@ static ant_value_t js_rs_reader_get_closed(ant_t *js, ant_value_t *args, int nar
 
 static ant_value_t js_rs_reader_read(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t stream_obj = rs_reader_stream(js->this_val);
-  if (!is_object_type(stream_obj) || !rs_get_stream(stream_obj))
+  if (!rs_is_stream(stream_obj))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot read from a released reader");
   return rs_default_reader_read(js, js->this_val);
 }
 
 static ant_value_t js_rs_reader_release_lock(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t stream_obj = rs_reader_stream(js->this_val);
-  if (!is_object_type(stream_obj)) return js_mkundef();
+  if (!rs_is_stream(stream_obj)) return js_mkundef();
   rs_stream_t *stream = rs_get_stream(stream_obj);
-  if (!stream) return js_mkundef();
 
   if (rs_reader_has_reqs(js, js->this_val)) {
     ant_value_t release_err = js_make_error_silent(js, JS_ERR_TYPE, "Reader was released");
@@ -617,7 +632,7 @@ static ant_value_t js_rs_reader_release_lock(ant_t *js, ant_value_t *args, int n
 
 static ant_value_t js_rs_reader_cancel(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t stream_obj = rs_reader_stream(js->this_val);
-  if (!is_object_type(stream_obj)) {
+  if (!rs_is_stream(stream_obj)) {
     ant_value_t p = js_mkpromise(js);
     js_mkerr_typed(js, JS_ERR_TYPE, "Cannot cancel a released reader");
     js_reject_promise(js, p, js->thrown_value);
@@ -633,11 +648,11 @@ ant_value_t js_rs_reader_ctor(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "ReadableStreamDefaultReader requires a stream argument");
 
   ant_value_t stream_obj = args[0];
-  if (!is_object_type(stream_obj))
+  if (!rs_is_stream(stream_obj))
     return js_mkerr_typed(js, JS_ERR_TYPE, "ReadableStreamDefaultReader argument must be a ReadableStream");
+    
   rs_stream_t *stream = rs_get_stream(stream_obj);
-  if (!stream) return js_mkerr_typed(js, JS_ERR_TYPE, "ReadableStreamDefaultReader argument must be a ReadableStream");
-  if (is_object_type(rs_stream_reader(stream_obj)))
+  if (rs_is_reader(rs_stream_reader(stream_obj)))
     return js_mkerr_typed(js, JS_ERR_TYPE, "ReadableStream is already locked to a reader");
 
   ant_value_t closed = js_mkpromise(js);
@@ -663,13 +678,13 @@ ant_value_t js_rs_reader_ctor(ant_t *js, ant_value_t *args, int nargs) {
 static ant_value_t js_rs_get_locked(ant_t *js, ant_value_t *args, int nargs) {
   rs_stream_t *stream = rs_get_stream(js->this_val);
   if (!stream) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid ReadableStream");
-  return js_bool(is_object_type(rs_stream_reader(js->this_val)));
+  return js_bool(rs_is_reader(rs_stream_reader(js->this_val)));
 }
 
 static ant_value_t js_rs_cancel(ant_t *js, ant_value_t *args, int nargs) {
   rs_stream_t *stream = rs_get_stream(js->this_val);
   if (!stream) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid ReadableStream");
-  if (is_object_type(rs_stream_reader(js->this_val))) {
+  if (rs_is_reader(rs_stream_reader(js->this_val))) {
     ant_value_t p = js_mkpromise(js);
     js_mkerr_typed(js, JS_ERR_TYPE, "Cannot cancel a locked ReadableStream");
     js_reject_promise(js, p, js->thrown_value);
