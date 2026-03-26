@@ -55,6 +55,14 @@ test('Response.json body', (await jsonRes.json()).hello, 'world');
 testThrows('Response.json rejects symbol', () => Response.json(Symbol('x')));
 testThrows('Response.json null body status rejects', () => Response.json('x', { status: 204 }));
 
+const f16Body = new Float16Array([1.5, -0.5, 2.25]);
+const f16Res = new Response(f16Body);
+const f16Bytes = await f16Res.bytes();
+const f16Expected = Array.from(new Uint8Array(f16Body.buffer, f16Body.byteOffset, f16Body.byteLength)).join(',');
+test('Response bytes from Float16Array type', f16Bytes.constructor, Uint8Array);
+test('Response bytes from Float16Array length', f16Bytes.byteLength, f16Body.byteLength);
+test('Response bytes from Float16Array raw copy', Array.from(f16Bytes).join(','), f16Expected);
+
 const redirectRes = Response.redirect('https://example.com/next', 301);
 test('Response.redirect status', redirectRes.status, 301);
 test('Response.redirect location', redirectRes.headers.get('location'), 'https://example.com/next');

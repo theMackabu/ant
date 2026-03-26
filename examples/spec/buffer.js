@@ -45,6 +45,16 @@ const u32 = new Uint32Array(2);
 test('Uint32Array length', u32.length, 2);
 test('Uint32Array BYTES_PER_ELEMENT', u32.BYTES_PER_ELEMENT, 4);
 
+const f16 = new Float16Array(4);
+test('Float16Array length', f16.length, 4);
+test('Float16Array byteLength', f16.byteLength, 8);
+test('Float16Array BYTES_PER_ELEMENT', f16.BYTES_PER_ELEMENT, 2);
+test('Float16Array constructor', f16.constructor, Float16Array);
+f16[0] = 1.5;
+f16[1] = -0.5;
+test('Float16Array index read approx positive', Math.abs(f16[0] - 1.5) < 0.001, true);
+test('Float16Array index read approx negative', Math.abs(f16[1] + 0.5) < 0.001, true);
+
 const i8 = new Int8Array(8);
 test('Int8Array length', i8.length, 8);
 test('Int8Array BYTES_PER_ELEMENT', i8.BYTES_PER_ELEMENT, 1);
@@ -65,10 +75,12 @@ const buffer = new ArrayBuffer(16);
 const view8 = new Uint8Array(buffer);
 const view16 = new Uint16Array(buffer);
 const view32 = new Uint32Array(buffer);
+const view16f = new Float16Array(buffer);
 
 test('Uint8Array view length', view8.length, 16);
 test('Uint16Array view length', view16.length, 8);
 test('Uint32Array view length', view32.length, 4);
+test('Float16Array view length', view16f.length, 8);
 
 const viewWithOffset = new Uint8Array(buffer, 4);
 test('view with offset length', viewWithOffset.length, 12);
@@ -123,6 +135,18 @@ test('TypedArray slice length', sliced.length, 6);
 const subarrayed = original.subarray(2, 8);
 test('TypedArray subarray length', subarrayed.length, 6);
 test('TypedArray subarray byteOffset', subarrayed.byteOffset, 2);
+
+const f16Source = new Float16Array([1.5, -0.5, 2.25, 4.5]);
+const f16Sliced = f16Source.slice(1, 3);
+test('Float16Array slice length', f16Sliced.length, 2);
+test('Float16Array slice first approx', Math.abs(f16Sliced[0] + 0.5) < 0.001, true);
+test('Float16Array slice second approx', Math.abs(f16Sliced[1] - 2.25) < 0.001, true);
+
+const f16Cloned = structuredClone(f16Source);
+test('Float16Array structuredClone constructor', f16Cloned.constructor, Float16Array);
+test('Float16Array structuredClone distinct', f16Cloned !== f16Source, true);
+test('Float16Array structuredClone first approx', Math.abs(f16Cloned[0] - 1.5) < 0.001, true);
+test('Float16Array structuredClone second approx', Math.abs(f16Cloned[1] + 0.5) < 0.001, true);
 
 test('Buffer.isBuffer with Buffer', Buffer.isBuffer(Buffer.from('test')), true);
 test('Buffer.isBuffer with string', Buffer.isBuffer('test'), false);
