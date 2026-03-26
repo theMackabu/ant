@@ -1018,49 +1018,8 @@ static ant_value_t request_create_ctor_headers(ant_t *js, ant_value_t input) {
 
 static ant_value_t request_apply_init_headers(ant_t *js, ant_value_t init, ant_value_t headers) {
   ant_value_t init_headers = js_get(js, init, "headers");
-  ant_value_t new_hdrs = 0;
-  
-  uint8_t ht = vtype(init_headers);
   if (vtype(init_headers) == T_UNDEF) return headers;
-
-  new_hdrs = headers_create_empty(js);
-  if (is_err(new_hdrs)) return new_hdrs;
-
-  if (headers_is_headers(init_headers)) {
-    headers_copy_from(js, new_hdrs, init_headers);
-    return new_hdrs;
-  }
-
-  if (ht == T_ARR) {
-    ant_offset_t len = js_arr_len(js, init_headers);
-    for (ant_offset_t i = 0; i < len; i++) {
-      ant_value_t pair = js_arr_get(js, init_headers, i);
-      ant_value_t r = 0;
-      if (js_arr_len(js, pair) < 2) continue;
-      r = headers_append_value(js, new_hdrs, js_arr_get(js, pair, 0), js_arr_get(js, pair, 1));
-      if (is_err(r)) return r;
-    }
-    return new_hdrs;
-  }
-
-  if (ht == T_OBJ) {
-    ant_iter_t it = js_prop_iter_begin(js, init_headers);
-    const char *key = NULL;
-    
-    size_t key_len = 0;
-    ant_value_t val = 0;
-
-    while (js_prop_iter_next(&it, &key, &key_len, &val)) {
-    ant_value_t r = headers_append_value(js, new_hdrs, js_mkstr(js, key, key_len), val);
-    if (is_err(r)) {
-      js_prop_iter_end(&it);
-      return r;
-    }}
-    
-    js_prop_iter_end(&it);
-  }
-
-  return new_hdrs;
+  return headers_create_from_init(js, init_headers);
 }
 
 static ant_value_t request_parse_duplex(ant_t *js, ant_value_t init, bool *out_duplex_provided) {

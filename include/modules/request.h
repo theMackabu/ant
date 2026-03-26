@@ -36,8 +36,13 @@ ant_value_t request_get_headers(ant_value_t obj);
 ant_value_t request_get_signal(ant_value_t obj);
 
 ant_value_t request_create(
-  ant_t *js, const char *method, const char *url, ant_value_t headers,
-  const uint8_t *body, size_t body_len, const char *body_type
+  ant_t *js,
+  const char *method,
+  const char *url,
+  ant_value_t headers,
+  const uint8_t *body,
+  size_t body_len,
+  const char *body_type
 );
 
 #endif
