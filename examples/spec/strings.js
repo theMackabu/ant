@@ -64,6 +64,8 @@ test('codePointAt out of bounds', 'ABC'.codePointAt(10), undefined);
 test('codePointAt utf8 2-byte', 'é'.codePointAt(0), 233);
 test('codePointAt utf8 3-byte', '中'.codePointAt(0), 20013);
 test('codePointAt utf8 4-byte', '😀'.codePointAt(0), 128512);
+test('charAt astral leading surrogate', '💙'.charAt(0).charCodeAt(0), 0xD83D);
+test('charAt astral trailing surrogate', '💙'.charAt(1).charCodeAt(0), 0xDC99);
 
 test('replace', 'hello world'.replace('world', 'there'), 'hello there');
 test('replaceAll', 'a-b-c'.replaceAll('-', '_'), 'a_b_c');
@@ -75,6 +77,8 @@ test('at negative', 'hello'.at(-1), 'o');
 
 test('length', 'hello'.length, 5);
 test('bracket access', 'hello'[0], 'h');
+test('bracket access astral leading surrogate', '💙'[0].charCodeAt(0), 0xD83D);
+test('bracket access astral trailing surrogate', '💙'[1].charCodeAt(0), 0xDC99);
 
 test('concat', 'hello'.concat(' ', 'world'), 'hello world');
 

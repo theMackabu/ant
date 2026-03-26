@@ -304,8 +304,11 @@ static utf8proc_ssize_t utf16_decode(td_state_t *st, const uint8_t *src, size_t 
   size_t i = 0, o = 0;
   size_t avail;
 
-  if (!st->bom_seen && len >= 2 && u16_read(src, be) == 0xFEFF && !st->ignore_bom) i = 2;
-  st->bom_seen = true;
+  if (!st->bom_seen) {
+    if (len < 2) goto pend_tail;
+    if (u16_read(src, be) == 0xFEFF && !st->ignore_bom) i = 2;
+    st->bom_seen = true;
+  }
 
   while (i < len) {
     avail = len - i;
