@@ -2460,29 +2460,37 @@ static void compile_destructure_store(sv_compiler_t *c, sv_ast_t *target,
   compile_lhs_set(c, target, false);
 }
 
-static void compile_destructure_pattern(sv_compiler_t *c, sv_ast_t *pat,
-                                        bool keep, bool consume_source,
-                                        sv_destructure_mode_t mode,
-                                        sv_var_kind_t kind) {
+static void compile_destructure_pattern(
+  sv_compiler_t *c, sv_ast_t *pat,
+  bool keep, bool consume_source,
+  sv_destructure_mode_t mode,
+  sv_var_kind_t kind
+) {
   if (!pat) return;
   if (keep) emit_op(c, OP_DUP);
 
   if (pat->type == N_ARRAY_PAT || pat->type == N_ARRAY) {
+    if (!consume_source && !keep) emit_op(c, OP_DUP);
+    emit_op(c, OP_DESTRUCTURE_INIT);
+    
+    int err_local = add_local(c, "", 0, false, c->scope_depth);
+    int try_jump = emit_jump(c, OP_TRY_PUSH);
+    c->try_depth++;
+    
     for (int i = 0; i < pat->args.count; i++) {
       sv_ast_t *elem = pat->args.items[i];
-      if (!elem || elem->type == N_EMPTY) continue;
-
+      if (!elem || elem->type == N_EMPTY) {
+        emit_op(c, OP_DESTRUCTURE_NEXT);
+        emit_op(c, OP_POP);
+        continue;
+      }
+      
       if (elem->type == N_REST || elem->type == N_SPREAD) {
-        emit_op(c, OP_DUP);
-        emit_op(c, OP_DUP);
-        emit_atom_op(c, OP_GET_FIELD, "slice", 5);
-        emit_number(c, (double)i);
-        emit_op(c, OP_CALL_METHOD);
-        emit_u16(c, 1);
+        emit_op(c, OP_DESTRUCTURE_REST);
         compile_destructure_store(c, elem->right, mode, kind);
         continue;
       }
-
+      
       sv_ast_t *target = elem;
       sv_ast_t *default_val = NULL;
       if (elem->type == N_ASSIGN_PAT ||
@@ -2490,11 +2498,9 @@ static void compile_destructure_pattern(sv_compiler_t *c, sv_ast_t *pat,
         target = elem->left;
         default_val = elem->right;
       }
-
-      emit_op(c, OP_DUP);
-      emit_number(c, (double)i);
-      emit_op(c, OP_GET_ELEM);
-
+      
+      emit_op(c, OP_DESTRUCTURE_NEXT);
+      
       if (default_val) {
         emit_op(c, OP_DUP);
         emit_op(c, OP_IS_UNDEF);
@@ -2503,9 +2509,26 @@ static void compile_destructure_pattern(sv_compiler_t *c, sv_ast_t *pat,
         compile_expr(c, default_val);
         patch_jump(c, skip);
       }
-
+      
       compile_destructure_store(c, target, mode, kind);
     }
+
+    emit_op(c, OP_TRY_POP);
+    emit_op(c, OP_DESTRUCTURE_CLOSE);
+    int end_jump = emit_jump(c, OP_JMP);
+
+    patch_jump(c, try_jump);
+    int catch_tag = emit_jump(c, OP_CATCH);
+    
+    emit_put_local(c, err_local);
+    emit_op(c, OP_DESTRUCTURE_CLOSE);
+    emit_get_local(c, err_local);
+    emit_op(c, OP_THROW);
+    patch_jump(c, catch_tag);
+    patch_jump(c, end_jump);
+    c->try_depth--;
+    
+    return;
   } else if (pat->type == N_OBJECT_PAT || pat->type == N_OBJECT) {
     for (int i = 0; i < pat->args.count; i++) {
       sv_ast_t *prop = pat->args.items[i];

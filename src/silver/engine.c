@@ -1200,6 +1200,10 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_ITER_CLOSE:       { sv_op_iter_close(vm, js);                 NEXT(1); }
   L_ITER_CALL:        { VM_CHECK(sv_op_iter_call(vm, js, ip));    NEXT(2); }
   L_AWAIT_ITER_NEXT:  { VM_CHECK(sv_op_await_iter_next(vm, js));  NEXT(1); }
+  L_DESTRUCTURE_INIT: { VM_CHECK(sv_op_destructure_init(vm, js)); NEXT(1); }
+  L_DESTRUCTURE_NEXT: { VM_CHECK(sv_op_destructure_next(vm, js)); NEXT(1); }
+  L_DESTRUCTURE_REST: { VM_CHECK(sv_op_destructure_rest(vm, js)); NEXT(1); }
+  L_DESTRUCTURE_CLOSE:{ sv_op_destructure_close(vm, js);          NEXT(1); }
 
   L_AWAIT: {
     ant_value_t await_val = vm->stack[--vm->sp];

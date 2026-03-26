@@ -19,6 +19,13 @@ const [head, ...tail] = [1, 2, 3, 4];
 test('array rest head', head, 1);
 testDeep('array rest tail', tail, [2, 3, 4]);
 
+const [astral] = '𠮷𠮶';
+test('array destructure astral string', astral, '𠮷');
+
+let astralAssign;
+[astralAssign] = '𠮷𠮶';
+test('array destructure assign astral string', astralAssign, '𠮷');
+
 const { name, age } = { name: 'Alice', age: 30 };
 test('object destructure name', name, 'Alice');
 test('object destructure age', age, 30);
@@ -47,6 +54,11 @@ function arrayParam([x, y]) {
   return x * y;
 }
 test('array param destructure', arrayParam([3, 4]), 12);
+
+function arrayAstralParam([ch]) {
+  return ch;
+}
+test('array param destructure astral string', arrayAstralParam('𠮷𠮶'), '𠮷');
 
 const swap = ([a, b]) => [b, a];
 testDeep('swap via destructure', swap([1, 2]), [2, 1]);

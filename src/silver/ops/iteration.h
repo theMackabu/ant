@@ -134,8 +134,9 @@ static inline ant_value_t sv_op_for_await_of(sv_vm_t *vm, ant_t *js) {
   return tov(0);
 }
 
-static inline ant_value_t sv_op_iter_next(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
-  int hint = (int)sv_get_u8(ip + 1);
+static inline ant_value_t sv_iter_advance(
+  sv_vm_t *vm, ant_t *js, int hint, ant_value_t *out_value, bool *out_done
+) {
   int tag = hint ? hint : (int)js_getnum(vm->stack[vm->sp - 1]);
   switch (tag) {
   case SV_ITER_ARRAY: {
@@ -143,12 +144,12 @@ static inline ant_value_t sv_op_iter_next(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
     int idx = (int)js_getnum(vm->stack[vm->sp - 2]);
     ant_offset_t len = js_arr_len(js, arr);
     if (idx >= (int)len) {
-      vm->stack[vm->sp++] = js_mkundef();
-      vm->stack[vm->sp++] = js_true;
+      *out_value = js_mkundef();
+      *out_done = true;
     } else {
-      vm->stack[vm->sp++] = js_arr_get(js, arr, (ant_offset_t)idx);
-      vm->stack[vm->sp++] = js_false;
-      vm->stack[vm->sp - 4] = tov(idx + 1);
+      *out_value = js_arr_get(js, arr, (ant_offset_t)idx);
+      *out_done = false;
+      vm->stack[vm->sp - 2] = tov(idx + 1);
     }
     return tov(0);
   }
@@ -157,8 +158,8 @@ static inline ant_value_t sv_op_iter_next(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
     map_iterator_state_t *st =
       (map_iterator_state_t *)(uintptr_t)js_getnum(vm->stack[vm->sp - 3]);
     if (!st->current) {
-      vm->stack[vm->sp++] = js_mkundef();
-      vm->stack[vm->sp++] = js_true;
+      *out_value = js_mkundef();
+      *out_done = true;
     } else {
       map_entry_t *entry = st->current;
       ant_value_t value;
@@ -180,8 +181,8 @@ static inline ant_value_t sv_op_iter_next(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
         value = js_mkundef();
       }
       st->current = entry->hh.next;
-      vm->stack[vm->sp++] = value;
-      vm->stack[vm->sp++] = js_false;
+      *out_value = value;
+      *out_done = false;
     }
     return tov(0);
   }
@@ -190,8 +191,8 @@ static inline ant_value_t sv_op_iter_next(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
     set_iterator_state_t *st =
       (set_iterator_state_t *)(uintptr_t)js_getnum(vm->stack[vm->sp - 3]);
     if (!st->current) {
-      vm->stack[vm->sp++] = js_mkundef();
-      vm->stack[vm->sp++] = js_true;
+      *out_value = js_mkundef();
+      *out_done = true;
     } else {
       set_entry_t *entry = st->current;
       ant_value_t value;
@@ -204,8 +205,8 @@ static inline ant_value_t sv_op_iter_next(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
         value = entry->value;
       }
       st->current = entry->hh.next;
-      vm->stack[vm->sp++] = value;
-      vm->stack[vm->sp++] = js_false;
+      *out_value = value;
+      *out_done = false;
     }
     return tov(0);
   }
@@ -215,8 +216,8 @@ static inline ant_value_t sv_op_iter_next(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
     int idx = (int)js_getnum(vm->stack[vm->sp - 2]);
     ant_offset_t slen = str_len_fast(js, str);
     if (idx >= (int)slen) {
-      vm->stack[vm->sp++] = js_mkundef();
-      vm->stack[vm->sp++] = js_true;
+      *out_value = js_mkundef();
+      *out_done = true;
     } else {
       ant_offset_t off = vstr(js, str, NULL);
       utf8proc_int32_t cp;
@@ -225,9 +226,9 @@ static inline ant_value_t sv_op_iter_next(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
         (utf8proc_ssize_t)(slen - idx),
         &cp
       );
-      vm->stack[vm->sp++] = js_mkstr(js, (const void *)(uintptr_t)(off + idx), cb_len);
-      vm->stack[vm->sp++] = js_false;
-      vm->stack[vm->sp - 4] = tov(idx + (int)cb_len);
+      *out_value = js_mkstr(js, (const void *)(uintptr_t)(off + idx), cb_len);
+      *out_done = false;
+      vm->stack[vm->sp - 2] = tov(idx + (int)cb_len);
     }
     return tov(0);
   }
@@ -243,11 +244,23 @@ static inline ant_value_t sv_op_iter_next(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
     if (!is_object_type(result))
       return js_mkerr_typed(js, JS_ERR_TYPE, "Iterator result is not an object");
     ant_value_t done = js_getprop_fallback(js, result, "done");
-    ant_value_t value = js_getprop_fallback(js, result, "value");
-    vm->stack[vm->sp++] = value;
-    vm->stack[vm->sp++] = mkval(T_BOOL, js_truthy(js, done));
+    *out_value = js_getprop_fallback(js, result, "value");
+    *out_done = js_truthy(js, done);
     return tov(0);
   }}
+}
+
+static inline ant_value_t sv_op_iter_next(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
+  int hint = (int)sv_get_u8(ip + 1);
+  ant_value_t value;
+  bool done = false;
+  
+  ant_value_t status = sv_iter_advance(vm, js, hint, &value, &done);
+  if (is_err(status)) return status;
+  vm->stack[vm->sp++] = value;
+  vm->stack[vm->sp++] = done ? js_true : js_false;
+  
+  return tov(0);
 }
 
 static inline void sv_op_iter_get_value(sv_vm_t *vm, ant_t *js) {
@@ -268,6 +281,39 @@ static inline void sv_op_iter_close(sv_vm_t *vm, ant_t *js) {
       sv_vm_call(vm, js, return_fn, iterator, NULL, 0, NULL, false);
   }
   vm->sp -= 3;
+}
+
+static inline ant_value_t sv_op_destructure_init(sv_vm_t *vm, ant_t *js) {
+  return sv_op_for_of(vm, js);
+}
+
+static inline void sv_op_destructure_close(sv_vm_t *vm, ant_t *js) {
+  sv_op_iter_close(vm, js);
+}
+
+static inline ant_value_t sv_op_destructure_next(sv_vm_t *vm, ant_t *js) {
+  ant_value_t value;
+  bool done = false;
+  
+  ant_value_t status = sv_iter_advance(vm, js, 0, &value, &done);
+  if (is_err(status)) return status;
+  vm->stack[vm->sp++] = done ? js_mkundef() : value;
+  
+  return tov(0);
+}
+
+static inline ant_value_t sv_op_destructure_rest(sv_vm_t *vm, ant_t *js) {
+  ant_value_t rest = js_mkarr(js);
+  for (;;) {
+    ant_value_t value;
+    bool done = false;
+    ant_value_t status = sv_iter_advance(vm, js, 0, &value, &done);
+    if (is_err(status)) return status;
+    if (done) break;
+    js_arr_push(js, rest, value);
+  }
+  vm->stack[vm->sp++] = rest;
+  return tov(0);
 }
 
 static inline ant_value_t sv_op_iter_call(sv_vm_t *vm, ant_t *js, uint8_t *ip) {

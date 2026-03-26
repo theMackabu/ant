@@ -187,6 +187,10 @@ OP_DEF(  ITER_GET_VALUE,    1,   2,   3, none)      /* catch_off obj -> catch_of
 OP_DEF(  ITER_CLOSE,        1,   3,   0, none)      /* close iterator */
 OP_DEF(  ITER_CALL,         2,   4,   5, u8)        /* call iterator method */
 OP_DEF(  AWAIT_ITER_NEXT,   1,   3,   4, none)      /* async iterator next */
+OP_DEF(  DESTRUCTURE_INIT,  1,   1,   3, none)      /* iterable -> iter next tag */
+OP_DEF(  DESTRUCTURE_NEXT,  1,   3,   4, none)      /* iter next tag -> iter next tag value|undef */
+OP_DEF(  DESTRUCTURE_REST,  1,   3,   4, none)      /* iter next tag -> iter next tag array */
+OP_DEF(  DESTRUCTURE_CLOSE, 1,   3,   0, none)      /* close destructuring iterator */
 
 OP_DEF(  AWAIT,             1,   1,   1, none)      /* promise -> resolved value */
 OP_DEF(  YIELD,             1,   1,   2, none)      /* val -> received */
