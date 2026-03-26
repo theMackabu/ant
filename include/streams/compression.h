@@ -8,6 +8,7 @@ typedef enum {
   ZFMT_GZIP = 0,
   ZFMT_DEFLATE,
   ZFMT_DEFLATE_RAW,
+  ZFMT_BROTLI,
 } zformat_t;
 
 extern ant_value_t g_cs_proto;

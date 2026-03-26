@@ -2091,6 +2091,9 @@ void init_buffer_module() {
       ant_value_t name##_ctor_obj = js_mkobj(js); \
       ant_value_t name##_proto = js_mkobj(js); \
       js_set_proto_init(name##_proto, typedarray_proto); \
+      js_setprop(js, name##_proto, ANT_STRING("constructor"), js_obj_to_func(name##_ctor_obj)); \
+      js_set_descriptor(js, name##_proto, "constructor", 11, JS_DESC_W | JS_DESC_C); \
+      js_set_sym(js, name##_proto, get_toStringTag_sym(), js_mkstr(js, #name, sizeof(#name) - 1)); \
       js_set_slot(name##_ctor_obj, SLOT_CFUNC, js_mkfun(js_##name##_constructor)); \
       js_setprop(js, name##_ctor_obj, js_mkstr(js, "prototype", 9), name##_proto); \
       js_mkprop_fast(js, name##_ctor_obj, "name", 4, ANT_STRING(#name)); \

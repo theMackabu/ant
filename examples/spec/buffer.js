@@ -12,6 +12,7 @@ const u8 = new Uint8Array(8);
 test('Uint8Array length', u8.length, 8);
 test('Uint8Array byteLength', u8.byteLength, 8);
 test('Uint8Array BYTES_PER_ELEMENT', u8.BYTES_PER_ELEMENT, 1);
+test('Uint8Array constructor', u8.constructor, Uint8Array);
 test('Uint8Array with new', new Uint8Array(5).length, 5);
 test('Uint8Array via Reflect.construct', Reflect.construct(Uint8Array, [5]).length, 5);
 testThrows('Uint8Array without new throws', () => Uint8Array(5));
