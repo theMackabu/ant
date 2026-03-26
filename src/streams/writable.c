@@ -191,14 +191,16 @@ if (vtype(val) == T_PROMISE) {
   ant_value_t then_fn = js_get(js, val, "then");
   if (is_callable(then_fn)) {
     ant_value_t then_args[2] = { res_fn, rej_fn };
-    sv_vm_call(js->vm, js, then_fn, val, then_args, 2, NULL, false);
+    ant_value_t then_result = sv_vm_call(js->vm, js, then_fn, val, then_args, 2, NULL, false);
+    promise_mark_handled(then_result);
   }} else {
   ant_value_t resolved = js_mkpromise(js);
   js_resolve_promise(js, resolved, val);
   ant_value_t then_fn = js_get(js, resolved, "then");
   if (is_callable(then_fn)) {
     ant_value_t then_args[2] = { res_fn, rej_fn };
-    sv_vm_call(js->vm, js, then_fn, resolved, then_args, 2, NULL, false);
+    ant_value_t then_result = sv_vm_call(js->vm, js, then_fn, resolved, then_args, 2, NULL, false);
+    promise_mark_handled(then_result);
   }
 }}
 
@@ -229,18 +231,28 @@ static bool writable_stream_has_operation_in_flight(ant_value_t stream_obj) {
   return !is_undefined(iw) || !is_undefined(ic);
 }
 
-static void ws_writer_ensure_ready_promise_rejected(ant_t *js, ant_value_t writer_obj, ant_value_t error) {
+static void ws_writer_replace_ready_promise_rejected(ant_t *js, ant_value_t writer_obj, ant_value_t error) {
   ant_value_t ready = js_mkpromise(js);
   js_reject_promise(js, ready, error);
   promise_mark_handled(ready);
   js_set_slot(writer_obj, SLOT_WS_READY, ready);
 }
 
-static void ws_writer_ensure_closed_promise_rejected(ant_t *js, ant_value_t writer_obj, ant_value_t error) {
+static void ws_writer_replace_closed_promise_rejected(ant_t *js, ant_value_t writer_obj, ant_value_t error) {
   ant_value_t closed = js_mkpromise(js);
   js_reject_promise(js, closed, error);
   promise_mark_handled(closed);
   js_set_slot(writer_obj, SLOT_RS_CLOSED, closed);
+}
+
+static void ws_writer_reject_ready_promise(ant_t *js, ant_value_t writer_obj, ant_value_t error) {
+  ant_value_t ready = ws_writer_ready(writer_obj);
+  if (!is_undefined(ready)) js_reject_promise(js, ready, error);
+}
+
+static void ws_writer_reject_closed_promise(ant_t *js, ant_value_t writer_obj, ant_value_t error) {
+  ant_value_t closed = ws_writer_closed(writer_obj);
+  if (!is_undefined(closed)) js_reject_promise(js, closed, error);
 }
 
 static void writable_stream_start_erroring(ant_t *js, ant_value_t stream_obj, ant_value_t reason) {
@@ -262,7 +274,7 @@ static void writable_stream_start_erroring(ant_t *js, ant_value_t stream_obj, an
 
   ant_value_t writer_obj = ws_stream_writer(stream_obj);
   if (is_object_type(writer_obj))
-    ws_writer_ensure_ready_promise_rejected(js, writer_obj, reason);
+    ws_writer_reject_ready_promise(js, writer_obj, reason);
 
   if (!writable_stream_has_operation_in_flight(stream_obj) && ctrl && ctrl->started)
     writable_stream_finish_erroring(js, stream_obj);
@@ -277,7 +289,7 @@ static void ws_reject_close_and_closed(ant_t *js, ant_value_t stream_obj) {
   }
   ant_value_t writer_obj = ws_stream_writer(stream_obj);
   if (is_object_type(writer_obj))
-    ws_writer_ensure_closed_promise_rejected(js, writer_obj, stored_error);
+    ws_writer_reject_closed_promise(js, writer_obj, stored_error);
 }
 
 static ant_value_t ws_finish_erroring_abort_resolve(ant_t *js, ant_value_t *args, int nargs) {
@@ -384,7 +396,9 @@ static void writable_stream_update_backpressure(ant_t *js, ant_value_t stream_ob
 
   if (is_object_type(writer_obj) && stream->backpressure != backpressure) {
   if (backpressure) {
-    js_set_slot(writer_obj, SLOT_WS_READY, js_mkpromise(js));
+    ant_value_t ready = js_mkpromise(js);
+    promise_mark_handled(ready);
+    js_set_slot(writer_obj, SLOT_WS_READY, ready);
   } else {
     ant_value_t ready = ws_writer_ready(writer_obj);
     if (!is_undefined(ready)) js_resolve_promise(js, ready, js_mkundef());
@@ -689,13 +703,14 @@ static ant_value_t ws_abort_resolve(ant_t *js, ant_value_t *args, int nargs) {
 
   ant_value_t stored_error = ws_stream_stored_error(stream_obj);
   ant_value_t cr = ws_stream_close_request(stream_obj);
+  
   if (!is_undefined(cr)) {
     js_reject_promise(js, cr, stored_error);
     js_set_slot(stream_obj, SLOT_WS_CLOSE, js_mkundef());
   }
+  
   ant_value_t writer_obj = ws_stream_writer(stream_obj);
-  if (is_object_type(writer_obj))
-    ws_writer_ensure_closed_promise_rejected(js, writer_obj, stored_error);
+  if (is_object_type(writer_obj)) ws_writer_reject_closed_promise(js, writer_obj, stored_error);
 
   return js_mkundef();
 }
@@ -713,13 +728,15 @@ static ant_value_t ws_abort_reject(ant_t *js, ant_value_t *args, int nargs) {
 
   ant_value_t stored_error = ws_stream_stored_error(stream_obj);
   ant_value_t cr = ws_stream_close_request(stream_obj);
+  
   if (!is_undefined(cr)) {
     js_reject_promise(js, cr, stored_error);
     js_set_slot(stream_obj, SLOT_WS_CLOSE, js_mkundef());
   }
+  
   ant_value_t writer_obj = ws_stream_writer(stream_obj);
   if (is_object_type(writer_obj))
-    ws_writer_ensure_closed_promise_rejected(js, writer_obj, stored_error);
+    ws_writer_reject_closed_promise(js, writer_obj, stored_error);
 
   return js_mkundef();
 }
@@ -920,14 +937,20 @@ static ant_value_t js_ws_writer_close(ant_t *js, ant_value_t *args, int nargs) {
 static ant_value_t js_ws_writer_release_lock(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t stream_obj = ws_writer_stream(js->this_val);
   if (!is_object_type(stream_obj)) return js_mkundef();
-
   ant_value_t release_err = js_make_error_silent(js, JS_ERR_TYPE, "Writer was released");
 
-  ws_writer_ensure_ready_promise_rejected(js, js->this_val, release_err);
-  ws_writer_ensure_closed_promise_rejected(js, js->this_val, release_err);
+  ws_writer_reject_ready_promise(js, js->this_val, release_err);
+  ws_writer_reject_closed_promise(js, js->this_val, release_err);
+  
+  promise_mark_handled(ws_writer_ready(js->this_val));
+  promise_mark_handled(ws_writer_closed(js->this_val));
+  
+  ws_writer_replace_ready_promise_rejected(js, js->this_val, release_err);
+  ws_writer_replace_closed_promise_rejected(js, js->this_val, release_err);
 
   js_set_slot(stream_obj, SLOT_CTOR, js_mkundef());
   js_set_slot(js->this_val, SLOT_ENTRIES, js_mkundef());
+  
   return js_mkundef();
 }
 
@@ -964,6 +987,9 @@ ant_value_t js_ws_writer_ctor(ant_t *js, ant_value_t *args, int nargs) {
 
   ant_value_t closed = js_mkpromise(js);
   ant_value_t ready = js_mkpromise(js);
+  
+  promise_mark_handled(closed);
+  promise_mark_handled(ready);
 
   js_set_slot(obj, SLOT_ENTRIES, stream_obj);
   js_set_slot(obj, SLOT_RS_CLOSED, closed);

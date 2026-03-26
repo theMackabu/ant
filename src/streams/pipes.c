@@ -429,11 +429,12 @@ static ant_value_t js_rs_pipe_to(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t js_rs_pipe_through(ant_t *js, ant_value_t *args, int nargs) {
-  if (!is_object_type(js->this_val)) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid ReadableStream");
-  rs_stream_t *stream = rs_get_stream(js->this_val);
+  ant_value_t source = js->this_val;
+  if (!is_object_type(source)) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid ReadableStream");
+  rs_stream_t *stream = rs_get_stream(source);
   
   if (!stream) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid ReadableStream");
-  if (is_object_type(rs_stream_reader(js->this_val)))
+  if (is_object_type(rs_stream_reader(source)))
     return js_mkerr_typed(js, JS_ERR_TYPE, "ReadableStream is already locked");
   if (nargs < 1 || !is_object_type(args[0]))
     return js_mkerr_typed(js, JS_ERR_TYPE, "pipeThrough requires a transform object");
@@ -441,6 +442,7 @@ static ant_value_t js_rs_pipe_through(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t transform = args[0];
   ant_value_t writable = js_get(js, transform, "writable");
   ant_value_t readable = js_get(js, transform, "readable");
+  
   if (!is_object_type(writable) || !ws_get_stream(writable))
     return js_mkerr_typed(js, JS_ERR_TYPE, "pipeThrough transform.writable must be a WritableStream");
   if (!is_object_type(readable) || !rs_get_stream(readable))
@@ -450,11 +452,17 @@ static ant_value_t js_rs_pipe_through(ant_t *js, ant_value_t *args, int nargs) {
 
   bool prevent_close, prevent_abort, prevent_cancel;
   ant_value_t signal;
-  pipes_parse_options(js, nargs > 1 ? args[1] : js_mkundef(),
-    &prevent_close, &prevent_abort, &prevent_cancel, &signal);
+  
+  pipes_parse_options(
+    js, nargs > 1 ? args[1] : js_mkundef(),
+    &prevent_close, &prevent_abort, &prevent_cancel, &signal
+  );
 
-  ant_value_t pipe_promise = readable_stream_pipe_to(js, js->this_val, writable,
-    prevent_close, prevent_abort, prevent_cancel, signal);
+  ant_value_t pipe_promise = readable_stream_pipe_to(
+    js, source, writable,
+    prevent_close, prevent_abort, prevent_cancel, signal
+  );
+  
   promise_mark_handled(pipe_promise);
   return readable;
 }

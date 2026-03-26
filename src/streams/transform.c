@@ -8,6 +8,7 @@
 #include "descriptors.h"
 
 #include "silver/engine.h"
+#include "modules/assert.h"
 #include "modules/symbol.h"
 #include "streams/transform.h"
 #include "streams/readable.h"
@@ -100,6 +101,10 @@ static inline ant_value_t ts_ctrl_cancel_fn(ant_value_t ctrl_obj) {
   return js_get_slot(ctrl_obj, SLOT_BUFFER);
 }
 
+static inline ant_value_t ts_ctrl_transformer(ant_value_t ctrl_obj) {
+  return js_get_slot(ctrl_obj, SLOT_SETTLED);
+}
+
 static inline ant_value_t ts_ctrl_stream(ant_value_t ctrl_obj) {
   return js_get_slot(ctrl_obj, SLOT_DATA);
 }
@@ -114,6 +119,15 @@ static void ts_ctrl_clear_algorithms(ant_value_t ctrl_obj) {
   js_set_slot(ctrl_obj, SLOT_BUFFER, js_mkundef());
 }
 
+static ant_value_t ts_take_thrown_or(ant_t *js, ant_value_t fallback) {
+  ant_value_t thrown = js->thrown_exists ? js->thrown_value : js_mkundef();
+  ant_value_t err = is_object_type(thrown) ? thrown : fallback;
+  js->thrown_exists = false;
+  js->thrown_value = js_mkundef();
+  js->thrown_stack = js_mkundef();
+  return err;
+}
+
 static bool ts_is_thenable(ant_t *js, ant_value_t val) {
   if (vtype(val) == T_PROMISE) return true;
   if (!is_object_type(val)) return false;
@@ -123,20 +137,20 @@ static bool ts_is_thenable(ant_t *js, ant_value_t val) {
 
 static void ts_chain_thenable(ant_t *js, ant_value_t val, ant_value_t res_fn, ant_value_t rej_fn) {
   if (vtype(val) == T_PROMISE) {
-    ant_value_t then_fn = js_get(js, val, "then");
-    if (is_callable(then_fn)) {
-      ant_value_t then_args[2] = { res_fn, rej_fn };
-      sv_vm_call(js->vm, js, then_fn, val, then_args, 2, NULL, false);
-    }
-  } else {
-    ant_value_t resolved = js_mkpromise(js);
-    js_resolve_promise(js, resolved, val);
-    ant_value_t then_fn = js_get(js, resolved, "then");
-    if (is_callable(then_fn)) {
-      ant_value_t then_args[2] = { res_fn, rej_fn };
-      sv_vm_call(js->vm, js, then_fn, resolved, then_args, 2, NULL, false);
-    }
-  }
+  ant_value_t then_fn = js_get(js, val, "then");
+  if (is_callable(then_fn)) {
+    ant_value_t then_args[2] = { res_fn, rej_fn };
+    ant_value_t then_result = sv_vm_call(js->vm, js, then_fn, val, then_args, 2, NULL, false);
+    promise_mark_handled(then_result);
+  }} else {
+  ant_value_t resolved = js_mkpromise(js);
+  js_resolve_promise(js, resolved, val);
+  ant_value_t then_fn = js_get(js, resolved, "then");
+  if (is_callable(then_fn)) {
+    ant_value_t then_args[2] = { res_fn, rej_fn };
+    ant_value_t then_result = sv_vm_call(js->vm, js, then_fn, resolved, then_args, 2, NULL, false);
+    promise_mark_handled(then_result);
+  }}
 }
 
 static void ts_error(ant_t *js, ant_value_t ts_obj, ant_value_t e) {
@@ -213,17 +227,7 @@ static void ts_ctrl_terminate(ant_t *js, ant_value_t ctrl_obj) {
   ant_value_t writable = ts_writable(ts_obj);
   ws_stream_t *ws = ws_get_stream(writable);
   if (ws && ws->state == WS_STATE_WRITABLE) {
-    bool had_throw = js->thrown_exists;
-    ant_value_t saved_value = had_throw ? js->thrown_value : js_mkundef();
-    ant_value_t saved_stack = had_throw ? js->thrown_stack : js_mkundef();
-
-    js_mkerr_typed(js, JS_ERR_TYPE, "TransformStream readable side terminated");
-    ant_value_t err = js->thrown_value;
-
-    js->thrown_exists = had_throw;
-    js->thrown_value = saved_value;
-    js->thrown_stack = saved_stack;
-
+    ant_value_t err = js_make_error_silent(js, JS_ERR_TYPE, "TransformStream readable side terminated");
     ts_error_writable_and_unblock_write(js, ts_obj, err);
   }
 }
@@ -248,14 +252,14 @@ static ant_value_t ts_ctrl_perform_transform(ant_t *js, ant_value_t ctrl_obj, an
   ant_value_t transform_fn = ts_ctrl_transform_fn(ctrl_obj);
   ant_value_t ts_obj = ts_ctrl_stream(ctrl_obj);
   ant_value_t p = js_mkpromise(js);
+  promise_mark_handled(p);
 
   if (is_callable(transform_fn)) {
     ant_value_t call_args[2] = { chunk, ctrl_obj };
-    ant_value_t result = sv_vm_call(js->vm, js, transform_fn, js_mkundef(), call_args, 2, NULL, false);
+    ant_value_t result = sv_vm_call(js->vm, js, transform_fn, ts_ctrl_transformer(ctrl_obj), call_args, 2, NULL, false);
 
     if (is_err(result)) {
-      ant_value_t thrown = js->thrown_value;
-      ant_value_t err = is_object_type(thrown) ? thrown : result;
+      ant_value_t err = ts_take_thrown_or(js, result);
       ts_error(js, ts_obj, err);
       js_reject_promise(js, p, err);
       return p;
@@ -286,21 +290,10 @@ static ant_value_t ts_sink_write_bp_resolve(ant_t *js, ant_value_t *args, int na
   ant_value_t ctrl_obj = js_get_slot(wrapper, SLOT_DATA);
   ant_value_t chunk = js_get_slot(wrapper, SLOT_ENTRIES);
   ant_value_t ts_obj = js_get_slot(wrapper, SLOT_CTOR);
-
   ws_stream_t *ws = ws_get_stream(ts_writable(ts_obj));
 
   if (ws && ws->state == WS_STATE_ERRORING) {
-    bool had_throw = js->thrown_exists;
-    ant_value_t saved_value = had_throw ? js->thrown_value : js_mkundef();
-    ant_value_t saved_stack = had_throw ? js->thrown_stack : js_mkundef();
-
-    js_mkerr_typed(js, JS_ERR_TYPE, "WritableStream is in erroring state");
-    ant_value_t err = js->thrown_value;
-
-    js->thrown_exists = had_throw;
-    js->thrown_value = saved_value;
-    js->thrown_stack = saved_stack;
-
+    ant_value_t err = js_make_error_silent(js, JS_ERR_TYPE, "WritableStream is in erroring state");
     ant_value_t fp = ts_ctrl_finish_promise(ctrl_obj);
     if (vtype(fp) == T_PROMISE) js_reject_promise(js, fp, err);
     return js_mkundef();
@@ -325,6 +318,7 @@ static ant_value_t ts_sink_write(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t ctrl_obj = ts_controller(ts_obj);
 
   ant_value_t finish_p = js_mkpromise(js);
+  promise_mark_handled(finish_p);
   js_set_slot(ctrl_obj, SLOT_RS_PULL, finish_p);
 
   if (ts_get_backpressure(ts_obj)) {
@@ -360,11 +354,8 @@ static ant_value_t ts_sink_abort(ant_t *js, ant_value_t *args, int nargs) {
 
   if (is_callable(cancel_fn)) {
     ant_value_t cancel_args[1] = { reason };
-    ant_value_t result = sv_vm_call(js->vm, js, cancel_fn, js_mkundef(), cancel_args, 1, NULL, false);
-    if (is_err(result)) {
-      ant_value_t thrown = js->thrown_value;
-      reason = is_object_type(thrown) ? thrown : reason;
-    }
+    ant_value_t result = sv_vm_call(js->vm, js, cancel_fn, ts_ctrl_transformer(ctrl_obj), cancel_args, 1, NULL, false);
+    if (is_err(result)) reason = ts_take_thrown_or(js, reason);
   }
 
   ts_error(js, ts_obj, reason);
@@ -380,20 +371,9 @@ static ant_value_t ts_sink_close_resolve(ant_t *js, ant_value_t *args, int nargs
 
   ant_value_t readable = ts_readable(ts_obj);
   rs_stream_t *rs = rs_get_stream(readable);
-  if (rs && rs->state == RS_STATE_READABLE)
-    js_resolve_promise(js, p, js_mkundef());
+  if (rs && rs->state == RS_STATE_READABLE) js_resolve_promise(js, p, js_mkundef());
   else {
-    bool had_throw = js->thrown_exists;
-    ant_value_t saved_value = had_throw ? js->thrown_value : js_mkundef();
-    ant_value_t saved_stack = had_throw ? js->thrown_stack : js_mkundef();
-
-    js_mkerr_typed(js, JS_ERR_TYPE, "TransformStream readable side is not in a readable state");
-    ant_value_t err = js->thrown_value;
-
-    js->thrown_exists = had_throw;
-    js->thrown_value = saved_value;
-    js->thrown_stack = saved_stack;
-
+    ant_value_t err = js_make_error_silent(js, JS_ERR_TYPE, "TransformStream readable side is not in a readable state");
     js_reject_promise(js, p, err);
   }
 
@@ -419,14 +399,14 @@ static ant_value_t ts_sink_close(ant_t *js, ant_value_t *args, int nargs) {
   ts_ctrl_clear_algorithms(ctrl_obj);
 
   ant_value_t p = js_mkpromise(js);
+  promise_mark_handled(p);
 
   if (is_callable(flush_fn)) {
     ant_value_t flush_args[1] = { ctrl_obj };
-    ant_value_t result = sv_vm_call(js->vm, js, flush_fn, js_mkundef(), flush_args, 1, NULL, false);
+    ant_value_t result = sv_vm_call(js->vm, js, flush_fn, ts_ctrl_transformer(ctrl_obj), flush_args, 1, NULL, false);
 
     if (is_err(result)) {
-      ant_value_t thrown = js->thrown_value;
-      ant_value_t err = is_object_type(thrown) ? thrown : result;
+      ant_value_t err = ts_take_thrown_or(js, result);
       ts_error(js, ts_obj, err);
       js_reject_promise(js, p, err);
       return p;
@@ -487,21 +467,19 @@ static ant_value_t ts_source_cancel(ant_t *js, ant_value_t *args, int nargs) {
 
   if (is_callable(cancel_fn)) {
     ant_value_t cancel_args[1] = { reason };
-    ant_value_t result = sv_vm_call(js->vm, js, cancel_fn, js_mkundef(), cancel_args, 1, NULL, false);
-
-    if (is_err(result)) {
-      ant_value_t thrown = js->thrown_value;
-      reason = is_object_type(thrown) ? thrown : reason;
-    } else if (ts_is_thenable(js, result)) {
+    ant_value_t result = sv_vm_call(js->vm, js, cancel_fn, ts_ctrl_transformer(ctrl_obj), cancel_args, 1, NULL, false);
+    
+    if (is_err(result)) reason = ts_take_thrown_or(js, reason);
+    else if (ts_is_thenable(js, result)) {
       ant_value_t p = js_mkpromise(js);
       ant_value_t wrapper = js_mkobj(js);
       js_set_slot(wrapper, SLOT_DATA, p);
       js_set_slot(wrapper, SLOT_ENTRIES, ts_obj);
-
+      
       ant_value_t res_fn = js_heavy_mkfun(js, ts_source_pull_resolve, p);
       ant_value_t rej_fn = js_heavy_mkfun(js, ts_sink_close_reject, wrapper);
       ts_chain_thenable(js, result, res_fn, rej_fn);
-
+      
       ts_error_writable_and_unblock_write(js, ts_obj, reason);
       return p;
     }
@@ -707,6 +685,7 @@ static ant_value_t js_ts_ctor(ant_t *js, ant_value_t *args, int nargs) {
   js_set_slot(ctrl_obj, SLOT_ENTRIES, transform_fn);
   js_set_slot(ctrl_obj, SLOT_CTOR, flush_fn);
   js_set_slot(ctrl_obj, SLOT_BUFFER, cancel_fn);
+  js_set_slot(ctrl_obj, SLOT_SETTLED, transformer);
   js_set_slot(ctrl_obj, SLOT_RS_PULL, js_mkundef());
   js_set_slot(ts_obj, SLOT_DEFAULT, ctrl_obj);
 

@@ -2,6 +2,8 @@ import { test, testDeep, testThrows, summary } from './helpers.js';
 
 console.log('TransformStream / TransformStreamDefaultController Tests\n');
 
+const READABLE_NO_BACKPRESSURE = { highWaterMark: 1 };
+
 test('TS typeof', typeof TransformStream, 'function');
 test('TS toStringTag', Object.prototype.toString.call(new TransformStream()), '[object TransformStream]');
 
@@ -101,7 +103,7 @@ async function testTransformError() {
   const err = new Error('transform boom');
   const ts = new TransformStream({
     transform() { throw err; }
-  });
+  }, undefined, READABLE_NO_BACKPRESSURE);
   const writer = ts.writable.getWriter();
   const reader = ts.readable.getReader();
   try {
@@ -123,7 +125,7 @@ async function testFlushError() {
   const ts = new TransformStream({
     transform() {},
     flush() { throw err; }
-  });
+  }, undefined, READABLE_NO_BACKPRESSURE);
   const writer = ts.writable.getWriter();
   await writer.write('a');
   try {
@@ -272,7 +274,7 @@ async function testSubclass() {
 
 async function testReadableHWM() {
   let ctrl;
-  const ts = new TransformStream({
+  new TransformStream({
     start(c) { ctrl = c; }
   }, undefined, { highWaterMark: 9 });
   test('readable custom HWM desiredSize', ctrl.desiredSize, 9);

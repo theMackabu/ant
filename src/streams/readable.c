@@ -510,6 +510,31 @@ void rs_controller_enqueue(ant_t *js, ant_value_t ctrl_obj, ant_value_t chunk) {
     return;
   }
 
+  double chunk_size = 1;
+  ant_value_t size_fn = rs_ctrl_size(ctrl_obj);
+  if (is_callable(size_fn)) {
+    ant_value_t size_args[1] = { chunk };
+    ant_value_t size_result = sv_vm_call(js->vm, js, size_fn, js_mkundef(), size_args, 1, NULL, false);
+    if (is_err(size_result)) {
+      ant_value_t thrown = js->thrown_value;
+      ant_value_t err = is_object_type(thrown) ? thrown : size_result;
+      js->thrown_exists = false;
+      js->thrown_value = js_mkundef();
+      js->thrown_stack = js_mkundef();
+      readable_stream_error(js, stream_obj, err);
+      return;
+    }
+    if (vtype(size_result) == T_NUM) chunk_size = js_getnum(size_result);
+    else chunk_size = js_to_number(js, size_result);
+  }
+
+  if (chunk_size < 0 || chunk_size != chunk_size || chunk_size == (double)INFINITY) {
+    ant_value_t err = js_make_error_silent(js, JS_ERR_RANGE,
+      "The return value of a queuing strategy's size function must be a finite, non-NaN, non-negative number");
+    readable_stream_error(js, stream_obj, err);
+    return;
+  }
+
   rs_ctrl_queue_push(js, ctrl_obj, chunk);
   if (ctrl->queue_sizes_len >= ctrl->queue_sizes_cap) {
     uint32_t new_cap = ctrl->queue_sizes_cap ? ctrl->queue_sizes_cap * 2 : 4;
@@ -518,8 +543,8 @@ void rs_controller_enqueue(ant_t *js, ant_value_t ctrl_obj, ant_value_t chunk) {
   }
   
   if (ctrl->queue_sizes_len < ctrl->queue_sizes_cap)
-    ctrl->queue_sizes[ctrl->queue_sizes_len++] = 1;
-  ctrl->queue_total_size += 1;
+    ctrl->queue_sizes[ctrl->queue_sizes_len++] = chunk_size;
+  ctrl->queue_total_size += chunk_size;
   rs_default_controller_call_pull_if_needed(js, ctrl_obj);
 }
 
@@ -604,8 +629,11 @@ ant_value_t js_rs_reader_ctor(ant_t *js, ant_value_t *args, int nargs) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "ReadableStream is already locked to a reader");
 
   ant_value_t closed = js_mkpromise(js);
+  promise_mark_handled(closed);
+  
   ant_value_t obj = js_mkobj(js);
   ant_value_t proto = js_instance_proto_from_new_target(js, g_reader_proto);
+  
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
   js_set_slot(obj, SLOT_ENTRIES, stream_obj);
   js_set_slot(obj, SLOT_RS_CLOSED, closed);
