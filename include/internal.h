@@ -375,6 +375,16 @@ static inline bool str_is_heap_rope(ant_value_t value) {
   return vtype(value) == T_STR && ((vdata(value) & 1ULL) != 0);
 }
 
+static inline int js_brand_id(ant_value_t obj) {
+  if (!is_object_type(obj)) return BRAND_NONE;
+  ant_value_t brand = js_get_slot(obj, SLOT_BRAND);
+  return vtype(brand) == T_NUM ? (int)js_getnum(brand) : BRAND_NONE;
+}
+
+static inline bool js_check_brand(ant_value_t obj, int brand) {
+  return js_brand_id(obj) == brand;
+}
+
 static inline ant_value_t js_make_ctor(ant_t *js, ant_cfunc_t fn, ant_value_t proto, const char *name, size_t nlen) {
   ant_value_t obj = js_mkobj(js);
   js_set_slot(obj, SLOT_CFUNC, js_mkfun(fn));

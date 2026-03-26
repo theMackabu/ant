@@ -35,8 +35,7 @@ static ArrayBufferData **buffer_registry   = NULL;
 static ant_value_t g_typedarray_iter_proto = 0;
 
 bool buffer_is_dataview(ant_value_t obj) {
-  ant_value_t brand = js_get_slot(obj, SLOT_BRAND);
-  return vtype(brand) == T_NUM && (int)js_getnum(brand) == BRAND_DATAVIEW;
+  return js_check_brand(obj, BRAND_DATAVIEW);
 }
 
 bool buffer_source_get_bytes(ant_t *js, ant_value_t value, const uint8_t **out, size_t *len) {

@@ -18,27 +18,18 @@ ant_value_t g_reader_proto;
 ant_value_t g_controller_proto;
 
 bool rs_is_stream(ant_value_t obj) {
-  if (!is_object_type(obj)) return false;
-  ant_value_t brand = js_get_slot(obj, SLOT_BRAND);
-  return vtype(brand) == T_NUM
-    && (int)js_getnum(brand) == BRAND_READABLE_STREAM
+  return js_check_brand(obj, BRAND_READABLE_STREAM)
     && rs_get_stream(obj) != NULL;
 }
 
 bool rs_is_reader(ant_value_t obj) {
-  if (!is_object_type(obj)) return false;
-  ant_value_t brand = js_get_slot(obj, SLOT_BRAND);
-  return vtype(brand) == T_NUM
-    && (int)js_getnum(brand) == BRAND_READABLE_STREAM_READER
+  return js_check_brand(obj, BRAND_READABLE_STREAM_READER)
     && vtype(js_get_slot(obj, SLOT_RS_CLOSED)) == T_PROMISE
     && vtype(js_get_slot(obj, SLOT_BUFFER)) == T_ARR;
 }
 
 bool rs_is_controller(ant_value_t obj) {
-  if (!is_object_type(obj)) return false;
-  ant_value_t brand = js_get_slot(obj, SLOT_BRAND);
-  return vtype(brand) == T_NUM
-    && (int)js_getnum(brand) == BRAND_READABLE_STREAM_CONTROLLER
+  return js_check_brand(obj, BRAND_READABLE_STREAM_CONTROLLER)
     && rs_get_controller(obj) != NULL
     && rs_is_stream(js_get_slot(obj, SLOT_ENTRIES));
 }

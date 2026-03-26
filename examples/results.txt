@@ -1234,7 +1234,7 @@ compat-table/es2019/misc.Function-toString.class-implicit-constructor.js: failed
 compat-table/es2019/misc.Function-toString.computed-names.js: failed
 compat-table/es2019/misc.Function-toString.native-code.js: failed
 compat-table/es2019/misc.Function-toString.unicode-escapes.js: failed
-compat-table/es2019/misc.JSON-stringify-well-formed.js: TypeError: JSON.stringify() failed: write error
+compat-table/es2019/misc.JSON-stringify-well-formed.js: OK
 compat-table/es2019/misc.JSON-superset.line-separator.js: OK
 compat-table/es2019/misc.JSON-superset.paragraph-separator.js: OK
 compat-table/es2019/misc.optional-catch-binding.await.js: OK

@@ -21,9 +21,7 @@ ant_value_t g_blob_proto = 0;
 ant_value_t g_file_proto = 0;
 
 bool blob_is_blob(ant_t *js, ant_value_t obj) {
-  ant_value_t brand = js_get_slot(obj, SLOT_BRAND);
-  if (vtype(brand) != T_NUM) return false;
-  int id = (int)js_getnum(brand);
+  int id = js_brand_id(obj);
   return id == BRAND_BLOB || id == BRAND_FILE;
 }
 

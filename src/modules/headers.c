@@ -76,8 +76,7 @@ static headers_guard_t get_guard(ant_value_t obj) {
 }
 
 bool headers_is_headers(ant_value_t obj) {
-  ant_value_t brand = js_get_slot(obj, SLOT_BRAND);
-  return vtype(brand) == T_NUM && (int)js_getnum(brand) == BRAND_HEADERS;
+  return js_check_brand(obj, BRAND_HEADERS);
 }
 
 static bool is_token_char(unsigned char c) {

@@ -19,27 +19,18 @@ ant_value_t g_ws_controller_proto;
 static ant_value_t g_close_sentinel;
 
 bool ws_is_stream(ant_value_t obj) {
-  if (!is_object_type(obj)) return false;
-  ant_value_t brand = js_get_slot(obj, SLOT_BRAND);
-  return vtype(brand) == T_NUM
-    && (int)js_getnum(brand) == BRAND_WRITABLE_STREAM
+  return js_check_brand(obj, BRAND_WRITABLE_STREAM)
     && ws_get_stream(obj) != NULL;
 }
 
 bool ws_is_writer(ant_value_t obj) {
-  if (!is_object_type(obj)) return false;
-  ant_value_t brand = js_get_slot(obj, SLOT_BRAND);
-  return vtype(brand) == T_NUM
-    && (int)js_getnum(brand) == BRAND_WRITABLE_STREAM_WRITER
+  return js_check_brand(obj, BRAND_WRITABLE_STREAM_WRITER)
     && vtype(js_get_slot(obj, SLOT_RS_CLOSED)) == T_PROMISE
     && vtype(js_get_slot(obj, SLOT_WS_READY)) == T_PROMISE;
 }
 
 bool ws_is_controller(ant_value_t obj) {
-  if (!is_object_type(obj)) return false;
-  ant_value_t brand = js_get_slot(obj, SLOT_BRAND);
-  return vtype(brand) == T_NUM
-    && (int)js_getnum(brand) == BRAND_WRITABLE_STREAM_CONTROLLER
+  return js_check_brand(obj, BRAND_WRITABLE_STREAM_CONTROLLER)
     && ws_get_controller(obj) != NULL
     && ws_is_stream(js_get_slot(obj, SLOT_ENTRIES));
 }

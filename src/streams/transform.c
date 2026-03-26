@@ -17,25 +17,31 @@
 ant_value_t g_ts_proto;
 ant_value_t g_ts_ctrl_proto;
 
-bool ts_is_controller(ant_value_t obj) {
-  if (!is_object_type(obj)) return false;
-  ant_value_t brand = js_get_slot(obj, SLOT_BRAND);
-  if (vtype(brand) != T_NUM || (int)js_getnum(brand) != BRAND_TRANSFORM_STREAM_CONTROLLER)
-    return false;
+static inline bool ts_has_stream_shape(ant_value_t obj) {
+  return vtype(js_get_slot(obj, SLOT_DATA)) == T_NUM
+    && rs_is_stream(js_get_slot(obj, SLOT_ENTRIES))
+    && ws_is_stream(js_get_slot(obj, SLOT_CTOR));
+}
+
+static inline bool ts_has_controller_shape(ant_value_t obj) {
   ant_value_t ts_obj = js_get_slot(obj, SLOT_DATA);
   return is_object_type(ts_obj)
-    && ts_is_stream(ts_obj)
+    && js_check_brand(ts_obj, BRAND_TRANSFORM_STREAM)
+    && vtype(js_get_slot(ts_obj, SLOT_DATA)) == T_NUM
     && js_get_slot(ts_obj, SLOT_DEFAULT) == obj;
 }
 
+bool ts_is_controller(ant_value_t obj) {
+  return js_check_brand(obj, BRAND_TRANSFORM_STREAM_CONTROLLER)
+    && ts_has_controller_shape(obj);
+}
+
 bool ts_is_stream(ant_value_t obj) {
-  return is_object_type(obj)
-    && vtype(js_get_slot(obj, SLOT_BRAND)) == T_NUM
-    && (int)js_getnum(js_get_slot(obj, SLOT_BRAND)) == BRAND_TRANSFORM_STREAM
-    && vtype(js_get_slot(obj, SLOT_DATA)) == T_NUM
-    && rs_is_stream(js_get_slot(obj, SLOT_ENTRIES))
-    && ws_is_stream(js_get_slot(obj, SLOT_CTOR))
-    && ts_is_controller(js_get_slot(obj, SLOT_DEFAULT));
+  ant_value_t ctrl_obj = js_get_slot(obj, SLOT_DEFAULT);
+  return js_check_brand(obj, BRAND_TRANSFORM_STREAM)
+    && ts_has_stream_shape(obj)
+    && js_check_brand(ctrl_obj, BRAND_TRANSFORM_STREAM_CONTROLLER)
+    && ts_has_controller_shape(ctrl_obj);
 }
 
 ant_value_t ts_stream_readable(ant_value_t ts_obj) {

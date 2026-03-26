@@ -31,8 +31,7 @@ static ant_value_t g_formdata_iter_proto = 0;
 static fd_data_t *get_fd_data(ant_value_t obj);
 
 bool formdata_is_formdata(ant_t *js, ant_value_t obj) {
-  ant_value_t brand = js_get_slot(obj, SLOT_BRAND);
-  return vtype(brand) == T_NUM && (int)js_getnum(brand) == BRAND_FORMDATA;
+  return js_check_brand(obj, BRAND_FORMDATA);
 }
 
 bool formdata_is_empty(ant_value_t fd) {

@@ -33,8 +33,7 @@ url_state_t *url_get_state(ant_value_t obj) {
 }
 
 bool usp_is_urlsearchparams(ant_t *js, ant_value_t obj) {
-  ant_value_t brand = js_get_slot(obj, SLOT_BRAND);
-  return vtype(brand) == T_NUM && (int)js_getnum(brand) == BRAND_URLSEARCHPARAMS;
+  return js_check_brand(obj, BRAND_URLSEARCHPARAMS);
 }
 
 void url_state_clear(url_state_t *s) {
