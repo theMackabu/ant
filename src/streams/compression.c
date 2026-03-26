@@ -12,7 +12,6 @@
 #include "modules/buffer.h"
 #include "streams/compression.h"
 #include "streams/transform.h"
-#include "streams/readable.h"
 
 ant_value_t g_cs_proto;
 ant_value_t g_ds_proto;
@@ -135,14 +134,14 @@ static bool get_chunk_bytes(ant_t *js, ant_value_t chunk, const uint8_t **out, s
   return false;
 }
 
-static ant_value_t enqueue_buffer(ant_t *js, ant_value_t ts_obj, const uint8_t *data, size_t len) {
+static ant_value_t enqueue_buffer(ant_t *js, ant_value_t ctrl_obj, const uint8_t *data, size_t len) {
   ArrayBufferData *ab = create_array_buffer_data(len);
   if (!ab) return js_mkerr(js, "out of memory");
   memcpy(ab->data, data, len);
   ant_value_t arr = create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, len, "Uint8Array");
-  ant_value_t readable = ts_stream_readable(ts_obj);
-  ant_value_t rs_ctrl = rs_stream_controller(js, readable);
-  return rs_controller_enqueue(js, rs_ctrl, arr);
+  if (!ts_is_controller(ctrl_obj))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid TransformStreamDefaultController");
+  return ts_ctrl_enqueue(js, ctrl_obj, arr);
 }
 
 #define ZCHUNK_SIZE 16384
@@ -150,10 +149,11 @@ static ant_value_t enqueue_buffer(ant_t *js, ant_value_t ts_obj, const uint8_t *
 static ant_value_t cs_transform(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t wrapper = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t state_val = js_get_slot(wrapper, SLOT_DATA);
+  
   zstate_t *st = (zstate_t *)(uintptr_t)(size_t)js_getnum(state_val);
-  ant_value_t ts_obj = js_get_slot(wrapper, SLOT_ENTRIES);
-
+  ant_value_t ctrl_obj = (nargs > 1) ? args[1] : js_mkundef();
   ant_value_t chunk = (nargs > 0) ? args[0] : js_mkundef();
+  
   const uint8_t *input = NULL;
   size_t input_len = 0;
 
@@ -174,7 +174,7 @@ static ant_value_t cs_transform(ant_t *js, ant_value_t *args, int nargs) {
       return js_mkerr_typed(js, JS_ERR_TYPE, "Compression failed");
     size_t have = ZCHUNK_SIZE - st->strm.avail_out;
     if (have > 0) {
-      ant_value_t r = enqueue_buffer(js, ts_obj, out_buf, have);
+      ant_value_t r = enqueue_buffer(js, ctrl_obj, out_buf, have);
       if (is_err(r)) return r;
     }
   } while (st->strm.avail_out == 0);
@@ -186,7 +186,7 @@ static ant_value_t cs_flush(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t wrapper = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t state_val = js_get_slot(wrapper, SLOT_DATA);
   zstate_t *st = (zstate_t *)(uintptr_t)(size_t)js_getnum(state_val);
-  ant_value_t ts_obj = js_get_slot(wrapper, SLOT_ENTRIES);
+  ant_value_t ctrl_obj = (nargs > 0) ? args[0] : js_mkundef();
 
   st->strm.next_in = NULL;
   st->strm.avail_in = 0;
@@ -199,7 +199,7 @@ static ant_value_t cs_flush(ant_t *js, ant_value_t *args, int nargs) {
     ret = deflate(&st->strm, Z_FINISH);
     size_t have = ZCHUNK_SIZE - st->strm.avail_out;
     if (have > 0) {
-      ant_value_t r = enqueue_buffer(js, ts_obj, out_buf, have);
+      ant_value_t r = enqueue_buffer(js, ctrl_obj, out_buf, have);
       if (is_err(r)) return r;
     }
   } while (ret != Z_STREAM_END);
@@ -274,7 +274,7 @@ static ant_value_t ds_transform(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t wrapper = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t state_val = js_get_slot(wrapper, SLOT_DATA);
   zstate_t *st = (zstate_t *)(uintptr_t)(size_t)js_getnum(state_val);
-  ant_value_t ts_obj = js_get_slot(wrapper, SLOT_ENTRIES);
+  ant_value_t ctrl_obj = (nargs > 1) ? args[1] : js_mkundef();
 
   ant_value_t chunk = (nargs > 0) ? args[0] : js_mkundef();
   const uint8_t *input = NULL;
@@ -284,7 +284,6 @@ static ant_value_t ds_transform(ant_t *js, ant_value_t *args, int nargs) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "The provided value is not of type '(ArrayBuffer or ArrayBufferView)'");
 
   if (!input || input_len == 0) return js_mkundef();
-
   st->strm.next_in = (Bytef *)input;
   st->strm.avail_in = (uInt)input_len;
 
@@ -297,7 +296,7 @@ static ant_value_t ds_transform(ant_t *js, ant_value_t *args, int nargs) {
       return js_mkerr_typed(js, JS_ERR_TYPE, "Decompression failed");
     size_t have = ZCHUNK_SIZE - st->strm.avail_out;
     if (have > 0) {
-      ant_value_t r = enqueue_buffer(js, ts_obj, out_buf, have);
+      ant_value_t r = enqueue_buffer(js, ctrl_obj, out_buf, have);
       if (is_err(r)) return r;
     }
     if (ret == Z_STREAM_END) break;

@@ -55,6 +55,10 @@ deps_info = {
     'inc': '',
     'build_dir': true,
   },
+  'google-brotli': {
+    'dir': 'brotli-1.1.0',
+    'inc': 'c/include',
+  },
 }
 
 subprojects_src = src_root / 'vendor'
@@ -71,6 +75,22 @@ zlib_ng_sub = subproject('zlib-ng', default_options: [
 zlib_dep = zlib_ng_sub.get_variable('zlib_ng_dep')
 zlib_ng_srcdir = subprojects_src / deps_info['zlib-ng']['dir']
 zlib_ng_builddir = subprojects_build / deps_info['zlib-ng']['dir']
+
+brotli_common_dep = dependency('libbrotlicommon',
+  fallback: ['google-brotli', 'libbrotlicommon'],
+  required: true,
+  static: is_static,
+)
+brotli_dec_dep = dependency('libbrotlidec',
+  fallback: ['google-brotli', 'libbrotlidec'],
+  required: true,
+  static: is_static,
+)
+brotli_enc_dep = dependency('libbrotlienc',
+  fallback: ['google-brotli', 'libbrotlienc'],
+  required: true,
+  static: is_static,
+)
 
 cmake_prefix = get_option('deps_prefix_cmake')
 
@@ -174,6 +194,10 @@ deps_info = {
     'inc': '',
     'build_dir': true,
   },
+  'google-brotli': {
+    'dir': 'brotli-1.1.0',
+    'inc': 'c/include',
+  },
 }
 
 subprojects_src = src_root / 'vendor'
@@ -184,6 +208,7 @@ yyjson_include_path = subprojects_src / deps_info['yyjson']['dir'] / deps_info['
 libuv_include_path = subprojects_src / deps_info['libuv']['dir'] / deps_info['libuv']['inc']
 llhttp_include_path = subprojects_src / deps_info['llhttp']['dir'] / deps_info['llhttp']['inc']
 zlib_include_path = subprojects_build / deps_info['zlib-ng']['dir'] / deps_info['zlib-ng']['inc']
+brotli_include_path = subprojects_src / deps_info['google-brotli']['dir'] / deps_info['google-brotli']['inc']
 
 pkg_zig_dir = src_root / 'src' / 'pkg'
 pkg_build_dir = meson.current_build_dir()

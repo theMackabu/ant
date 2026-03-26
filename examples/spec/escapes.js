@@ -10,8 +10,8 @@ test('vertical tab (\\v) charCodeAt', '\v'.charCodeAt(0), 11);
 test('form feed (\\f) charCodeAt', '\f'.charCodeAt(0), 12);
 test('carriage return (\\r) charCodeAt', '\r'.charCodeAt(0), 13);
 
-test('escaped quote single', '\''.length, 1);
-test('escaped quote double', "\"".length, 1);
+test('escaped quote single', "'".length, 1);
+test('escaped quote double', '"'.length, 1);
 test('escaped backslash', '\\'.charCodeAt(0), 92);
 
 test('hex escape \\x41', '\x41', 'A');
@@ -23,6 +23,9 @@ test('unicode \\u0000 (null)', '\u0000'.charCodeAt(0), 0);
 test('unicode \\u00e9 (é)', '\u00e9', 'é');
 test('unicode \\u263A (smiley)', '\u263A', '☺');
 test('unicode \\u4e2d (中)', '\u4e2d', '中');
+
+test('unicode code point escape keeps following chars', '\u{1F499} streams', '💙 streams');
+test('unicode code point escape in string body keeps spaces', 'I \u{1F499} streams', 'I 💙 streams');
 
 test('string with null char length', 'a\0b'.length, 3);
 test('string with null indexOf', 'a\0b'.indexOf('\0'), 1);

@@ -12,7 +12,6 @@
 #include "modules/textcodec.h"
 #include "streams/codec.h"
 #include "streams/transform.h"
-#include "streams/readable.h"
 
 ant_value_t g_tes_proto;
 ant_value_t g_tds_proto;
@@ -114,12 +113,22 @@ static bool get_chunk_bytes(ant_t *js, ant_value_t chunk, const uint8_t **out, s
   return false;
 }
 
+static ant_value_t codec_transform_controller(ant_value_t *args, int nargs) {
+  return (nargs > 1) ? args[1] : js_mkundef();
+}
+
+static ant_value_t codec_flush_controller(ant_value_t *args, int nargs) {
+  return (nargs > 0) ? args[0] : js_mkundef();
+}
+
 static ant_value_t tes_transform(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t wrapper = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t state_val = js_get_slot(wrapper, SLOT_DATA);
+  
   tes_state_t *st = (tes_state_t *)(uintptr_t)(size_t)js_getnum(state_val);
-
+  ant_value_t ctrl_obj = codec_transform_controller(args, nargs);
   ant_value_t chunk = (nargs > 0) ? args[0] : js_mkundef();
+  
   size_t str_len = 0;
   const char *str = NULL;
 
@@ -193,18 +202,16 @@ static ant_value_t tes_transform(ant_t *js, ant_value_t *args, int nargs) {
   free(out);
 
   ant_value_t result = create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, o, "Uint8Array");
-  ant_value_t ts_obj = js_get_slot(wrapper, SLOT_ENTRIES);
-  ant_value_t readable = ts_stream_readable(ts_obj);
-  ant_value_t rs_ctrl = rs_stream_controller(js, readable);
-  rs_controller_enqueue(js, rs_ctrl, result);
-
-  return js_mkundef();
+  return ts_is_controller(ctrl_obj)
+    ? ts_ctrl_enqueue(js, ctrl_obj, result)
+    : js_mkerr_typed(js, JS_ERR_TYPE, "Invalid TransformStreamDefaultController");
 }
 
 static ant_value_t tes_flush(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t wrapper = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t state_val = js_get_slot(wrapper, SLOT_DATA);
   tes_state_t *st = (tes_state_t *)(uintptr_t)(size_t)js_getnum(state_val);
+  ant_value_t ctrl_obj = codec_flush_controller(args, nargs);
 
   if (st->pending_len > 0) {
     uint8_t fffd[3] = { 0xEF, 0xBF, 0xBD };
@@ -214,10 +221,9 @@ static ant_value_t tes_flush(ant_t *js, ant_value_t *args, int nargs) {
     st->pending_len = 0;
     
     ant_value_t result = create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, 3, "Uint8Array");
-    ant_value_t ts_obj = js_get_slot(wrapper, SLOT_ENTRIES);
-    ant_value_t readable = ts_stream_readable(ts_obj);
-    ant_value_t rs_ctrl = rs_stream_controller(js, readable);
-    rs_controller_enqueue(js, rs_ctrl, result);
+    if (!ts_is_controller(ctrl_obj))
+      return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid TransformStreamDefaultController");
+    return ts_ctrl_enqueue(js, ctrl_obj, result);
   }
 
   return js_mkundef();
@@ -281,13 +287,14 @@ static ant_value_t tds_transform(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t wrapper = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t state_val = js_get_slot(wrapper, SLOT_DATA);
   td_state_t *st = (td_state_t *)(uintptr_t)(size_t)js_getnum(state_val);
+  ant_value_t ctrl_obj = codec_transform_controller(args, nargs);
 
   ant_value_t chunk = (nargs > 0) ? args[0] : js_mkundef();
   const uint8_t *input = NULL;
   size_t input_len = 0;
 
-  if (is_object_type(chunk))
-    get_chunk_bytes(js, chunk, &input, &input_len);
+  if (!is_object_type(chunk) || !get_chunk_bytes(js, chunk, &input, &input_len))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "The provided value is not of type '(ArrayBuffer or ArrayBufferView)'");
 
   ant_value_t result = td_decode(js, st, input, input_len, true);
   if (is_err(result)) return result;
@@ -295,10 +302,9 @@ static ant_value_t tds_transform(ant_t *js, ant_value_t *args, int nargs) {
   size_t slen = 0;
   const char *sval = js_getstr(js, result, &slen);
   if (sval && slen > 0) {
-    ant_value_t ts_obj = js_get_slot(wrapper, SLOT_ENTRIES);
-    ant_value_t readable = ts_stream_readable(ts_obj);
-    ant_value_t rs_ctrl = rs_stream_controller(js, readable);
-    rs_controller_enqueue(js, rs_ctrl, result);
+    if (!ts_is_controller(ctrl_obj))
+      return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid TransformStreamDefaultController");
+    return ts_ctrl_enqueue(js, ctrl_obj, result);
   }
 
   return js_mkundef();
@@ -308,6 +314,7 @@ static ant_value_t tds_flush(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t wrapper = js_get_slot(js->current_func, SLOT_DATA);
   ant_value_t state_val = js_get_slot(wrapper, SLOT_DATA);
   td_state_t *st = (td_state_t *)(uintptr_t)(size_t)js_getnum(state_val);
+  ant_value_t ctrl_obj = codec_flush_controller(args, nargs);
 
   ant_value_t result = td_decode(js, st, NULL, 0, false);
   if (is_err(result)) return result;
@@ -315,10 +322,9 @@ static ant_value_t tds_flush(ant_t *js, ant_value_t *args, int nargs) {
   size_t slen = 0;
   const char *sval = js_getstr(js, result, &slen);
   if (sval && slen > 0) {
-    ant_value_t ts_obj = js_get_slot(wrapper, SLOT_ENTRIES);
-    ant_value_t readable = ts_stream_readable(ts_obj);
-    ant_value_t rs_ctrl = rs_stream_controller(js, readable);
-    rs_controller_enqueue(js, rs_ctrl, result);
+    if (!ts_is_controller(ctrl_obj))
+      return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid TransformStreamDefaultController");
+    return ts_ctrl_enqueue(js, ctrl_obj, result);
   }
 
   return js_mkundef();
@@ -331,6 +337,8 @@ static ant_value_t js_tds_get_encoding(ant_t *js, ant_value_t *args, int nargs) 
   switch (st->encoding) {
     case TD_ENC_UTF16LE: return js_mkstr(js, "utf-16le", 8);
     case TD_ENC_UTF16BE: return js_mkstr(js, "utf-16be", 8);
+    case TD_ENC_WINDOWS_1252: return js_mkstr(js, "windows-1252", 12);
+    case TD_ENC_ISO_8859_2: return js_mkstr(js, "iso-8859-2", 10);
     default: return js_mkstr(js, "utf-8", 5);
   }
 }
@@ -368,14 +376,16 @@ static const char *tds_trim_label(const char *s, size_t len, size_t *out_len) {
 
 static int tds_resolve_encoding(const char *s, size_t len) {
   static const struct { const char *label; uint8_t label_len; td_encoding_t enc; } map[] = {
-    {"unicode-1-1-utf-8", 18, TD_ENC_UTF8},    {"unicode11utf8", 13, TD_ENC_UTF8},
+    {"unicode-1-1-utf-8", 17, TD_ENC_UTF8},    {"unicode11utf8", 13, TD_ENC_UTF8},
     {"unicode20utf8",     13, TD_ENC_UTF8},    {"utf-8",          5, TD_ENC_UTF8},
     {"utf8",               4, TD_ENC_UTF8},    {"x-unicode20utf8",17, TD_ENC_UTF8},
+    {"windows-1252",      12, TD_ENC_WINDOWS_1252}, {"ascii",           5, TD_ENC_WINDOWS_1252},
     {"unicodefffe",       11, TD_ENC_UTF16BE}, {"utf-16be",        8, TD_ENC_UTF16BE},
     {"csunicode",          9, TD_ENC_UTF16LE}, {"iso-10646-ucs-2",16, TD_ENC_UTF16LE},
     {"ucs-2",              5, TD_ENC_UTF16LE}, {"unicode",         7, TD_ENC_UTF16LE},
     {"unicodefeff",       11, TD_ENC_UTF16LE}, {"utf-16",          6, TD_ENC_UTF16LE},
     {"utf-16le",           8, TD_ENC_UTF16LE},
+    {"iso-8859-2",        10, TD_ENC_ISO_8859_2},
     {NULL, 0, 0}
   };
   for (int i = 0; map[i].label; i++) {
@@ -389,26 +399,32 @@ static ant_value_t js_tds_ctor(ant_t *js, ant_value_t *args, int nargs) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "TextDecoderStream constructor requires 'new'");
 
   td_encoding_t enc = TD_ENC_UTF8;
-  if (nargs > 0 && vtype(args[0]) == T_STR) {
-  size_t llen;
-  const char *raw = js_getstr(js, args[0], &llen);
-  if (raw) {
-    size_t tlen;
-    const char *trimmed = tds_trim_label(raw, llen, &tlen);
-    int resolved = tds_resolve_encoding(trimmed, tlen);
-    if (resolved < 0) return js_mkerr_typed(
-      js, JS_ERR_RANGE, "Failed to construct 'TextDecoderStream': The encoding label provided ('%.*s') is invalid.",
-      (int)tlen, trimmed
-    );
-    enc = (td_encoding_t)resolved;
-  }}
+  if (nargs > 0 && !is_undefined(args[0])) {
+    ant_value_t label = (vtype(args[0]) == T_STR) ? args[0] : coerce_to_str(js, args[0]);
+    if (is_err(label)) return label;
+    
+    size_t llen;
+    const char *raw = js_getstr(js, label, &llen);
+    if (raw) {
+      size_t tlen;
+      const char *trimmed = tds_trim_label(raw, llen, &tlen);
+      int resolved = tds_resolve_encoding(trimmed, tlen);
+      if (resolved < 0) return js_mkerr_typed(
+        js, JS_ERR_RANGE, "Failed to construct 'TextDecoderStream': The encoding label provided ('%.*s') is invalid.",
+        (int)tlen, trimmed
+      );
+      enc = (td_encoding_t)resolved;
+    }
+  }
 
   bool fatal = false;
   bool ignore_bom = false;
   if (nargs > 1 && is_object_type(args[1])) {
-    ant_value_t fv = js_get(js, args[1], "fatal");
+    ant_value_t fv = js_getprop_fallback(js, args[1], "fatal");
+    if (is_err(fv)) return fv;
     if (vtype(fv) != T_UNDEF) fatal = js_truthy(js, fv);
-    ant_value_t bv = js_get(js, args[1], "ignoreBOM");
+    ant_value_t bv = js_getprop_fallback(js, args[1], "ignoreBOM");
+    if (is_err(bv)) return bv;
     if (vtype(bv) != T_UNDEF) ignore_bom = js_truthy(js, bv);
   }
 

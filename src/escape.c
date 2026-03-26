@@ -30,7 +30,7 @@ static size_t decode_unicode_braced(const uint8_t *in, size_t pos, size_t end, u
   while (i < end && is_xdigit(in[i])) { cp = (cp << 4) | unhex(in[i]); i++; }
   if (i < end && in[i] == '}') {
     *out_pos += utf8_encode(cp, (char *)&out[*out_pos]);
-    return i - pos;
+    return i - pos - 1;
   }
   
   out[(*out_pos)++] = 'u';

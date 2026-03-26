@@ -11,6 +11,8 @@ typedef enum {
   TD_ENC_UTF8 = 0,
   TD_ENC_UTF16LE,
   TD_ENC_UTF16BE,
+  TD_ENC_WINDOWS_1252,
+  TD_ENC_ISO_8859_2,
 } td_encoding_t;
 
 typedef struct {

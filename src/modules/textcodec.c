@@ -44,14 +44,16 @@ static void td_finalize(ant_t *js, ant_object_t *obj) {
 
 static int resolve_encoding(const char *s, size_t len) {
   static const struct { const char *label; uint8_t len; td_encoding_t enc; } map[] = {
-    {"unicode-1-1-utf-8", 18, TD_ENC_UTF8},    {"unicode11utf8", 13, TD_ENC_UTF8},
+    {"unicode-1-1-utf-8", 17, TD_ENC_UTF8},    {"unicode11utf8", 13, TD_ENC_UTF8},
     {"unicode20utf8",     13, TD_ENC_UTF8},    {"utf-8",          5, TD_ENC_UTF8},
     {"utf8",               4, TD_ENC_UTF8},    {"x-unicode20utf8",17, TD_ENC_UTF8},
+    {"windows-1252",      12, TD_ENC_WINDOWS_1252}, {"ascii",           5, TD_ENC_WINDOWS_1252},
     {"unicodefffe",       11, TD_ENC_UTF16BE}, {"utf-16be",        8, TD_ENC_UTF16BE},
     {"csunicode",          9, TD_ENC_UTF16LE}, {"iso-10646-ucs-2",16, TD_ENC_UTF16LE},
     {"ucs-2",              5, TD_ENC_UTF16LE}, {"unicode",         7, TD_ENC_UTF16LE},
     {"unicodefeff",       11, TD_ENC_UTF16LE}, {"utf-16",          6, TD_ENC_UTF16LE},
     {"utf-16le",           8, TD_ENC_UTF16LE},
+    {"iso-8859-2",        10, TD_ENC_ISO_8859_2},
     {NULL, 0, 0}
   };
   for (int i = 0; map[i].label; i++) {
@@ -62,9 +64,11 @@ static int resolve_encoding(const char *s, size_t len) {
 
 static const char *encoding_name(td_encoding_t enc) {
 switch (enc) {
-  case TD_ENC_UTF16LE: return "utf-16le";
-  case TD_ENC_UTF16BE: return "utf-16be";
-  default:             return "utf-8";
+  case TD_ENC_UTF16LE:      return "utf-16le";
+  case TD_ENC_UTF16BE:      return "utf-16be";
+  case TD_ENC_WINDOWS_1252: return "windows-1252";
+  case TD_ENC_ISO_8859_2:   return "iso-8859-2";
+  default:                  return "utf-8";
 }}
 
 static const char *trim_label(const char *s, size_t len, size_t *out_len) {
@@ -253,6 +257,48 @@ static inline size_t u8_fffd(char *out, size_t o) {
 #define U16_IS_LOW(cu)  ((cu) >= 0xDC00 && (cu) <= 0xDFFF)
 #define U16_PAIR(hi,lo) (0x10000 + ((uint32_t)((hi) - 0xD800) << 10) + ((lo) - 0xDC00))
 
+static uint32_t decode_windows_1252_byte(uint8_t byte) {
+  static const uint16_t specials[32] = {
+    0x20AC, 0x0081, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,
+    0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0x008D, 0x017D, 0x008F,
+    0x0090, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
+    0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x009D, 0x017E, 0x0178,
+  };
+  if (byte < 0x80) return byte;
+  if (byte < 0xA0) return specials[byte - 0x80];
+  return byte;
+}
+
+static uint32_t decode_iso_8859_2_byte(uint8_t byte) {
+  static const uint16_t upper[96] = {
+    0x00A0, 0x0104, 0x02D8, 0x0141, 0x00A4, 0x013D, 0x015A, 0x00A7,
+    0x00A8, 0x0160, 0x015E, 0x0164, 0x0179, 0x00AD, 0x017D, 0x017B,
+    0x00B0, 0x0105, 0x02DB, 0x0142, 0x00B4, 0x013E, 0x015B, 0x02C7,
+    0x00B8, 0x0161, 0x015F, 0x0165, 0x017A, 0x02DD, 0x017E, 0x017C,
+    0x0154, 0x00C1, 0x00C2, 0x0102, 0x00C4, 0x0139, 0x0106, 0x00C7,
+    0x010C, 0x00C9, 0x0118, 0x00CB, 0x011A, 0x00CD, 0x00CE, 0x010E,
+    0x0110, 0x0143, 0x0147, 0x00D3, 0x00D4, 0x0150, 0x00D6, 0x00D7,
+    0x0158, 0x016E, 0x00DA, 0x0170, 0x00DC, 0x00DD, 0x0162, 0x00DF,
+    0x0155, 0x00E1, 0x00E2, 0x0103, 0x00E4, 0x013A, 0x0107, 0x00E7,
+    0x010D, 0x00E9, 0x0119, 0x00EB, 0x011B, 0x00ED, 0x00EE, 0x010F,
+    0x0111, 0x0144, 0x0148, 0x00F3, 0x00F4, 0x0151, 0x00F6, 0x00F7,
+    0x0159, 0x016F, 0x00FA, 0x0171, 0x00FC, 0x00FD, 0x0163, 0x02D9,
+  };
+  if (byte < 0xA0) return byte;
+  return upper[byte - 0xA0];
+}
+
+static utf8proc_ssize_t decode_single_byte(td_state_t *st, const uint8_t *src, size_t len, char *out) {
+  size_t o = 0;
+  for (size_t i = 0; i < len; i++) {
+    uint32_t cp = (st->encoding == TD_ENC_WINDOWS_1252)
+      ? decode_windows_1252_byte(src[i])
+      : decode_iso_8859_2_byte(src[i]);
+    o = u8_emit(out, o, (utf8proc_int32_t)cp);
+  }
+  return (utf8proc_ssize_t)o;
+}
+
 static utf8proc_ssize_t utf16_decode(td_state_t *st, const uint8_t *src, size_t len, char *out, bool stream) {
   bool be = (st->encoding == TD_ENC_UTF16BE);
   size_t i = 0, o = 0;
@@ -330,6 +376,10 @@ ant_value_t td_decode(ant_t *js, td_state_t *st, const uint8_t *input, size_t in
   utf8proc_ssize_t n;
   if (st->encoding == TD_ENC_UTF16LE || st->encoding == TD_ENC_UTF16BE) {
     n = utf16_decode(st, src, total, out, stream_mode);
+  } else if (st->encoding == TD_ENC_WINDOWS_1252 || st->encoding == TD_ENC_ISO_8859_2) {
+    n = decode_single_byte(st, src, total, out);
+    st->pending_len = 0;
+    st->bom_seen = false;
   } else {
     utf8_dec_t dec = { .ignore_bom = st->ignore_bom, .bom_seen = st->bom_seen };
     n = utf8_whatwg_decode(&dec, src, total, out, st->fatal, stream_mode);
@@ -377,17 +427,19 @@ static ant_value_t js_textdecoder_ctor(ant_t *js, ant_value_t *args, int nargs) 
     return js_mkerr_typed(js, JS_ERR_TYPE, "TextDecoder constructor requires 'new'");
 
   td_encoding_t enc = TD_ENC_UTF8;
-  if (nargs > 0 && vtype(args[0]) == T_STR) {
-    size_t llen;
-    const char *raw = js_getstr(js, args[0], &llen);
-    
+  if (nargs > 0 && !is_undefined(args[0])) {
+  ant_value_t label = (vtype(args[0]) == T_STR) ? args[0] : coerce_to_str(js, args[0]);
+  if (is_err(label)) return label;
+
+  size_t llen;
+  const char *raw = js_getstr(js, label, &llen);
   if (raw) {
     size_t tlen;
     const char *trimmed = trim_label(raw, llen, &tlen);
     int resolved = resolve_encoding(trimmed, tlen);
     
     if (resolved < 0) return js_mkerr_typed(
-      js, JS_ERR_RANGE, "Failed to construct 'TextDecoder': The encoding label provided ('%.*s') is invalid.", 
+      js, JS_ERR_RANGE, "Failed to construct 'TextDecoder': The encoding label provided ('%.*s') is invalid.",
       (int)tlen, trimmed
     );
     
@@ -398,9 +450,11 @@ static ant_value_t js_textdecoder_ctor(ant_t *js, ant_value_t *args, int nargs) 
   bool ignore_bom = false;
   
   if (nargs > 1 && is_object_type(args[1])) {
-    ant_value_t fv = js_get(js, args[1], "fatal");
+    ant_value_t fv = js_getprop_fallback(js, args[1], "fatal");
+    if (is_err(fv)) return fv;
     if (vtype(fv) != T_UNDEF) fatal = js_truthy(js, fv);
-    ant_value_t bv = js_get(js, args[1], "ignoreBOM");
+    ant_value_t bv = js_getprop_fallback(js, args[1], "ignoreBOM");
+    if (is_err(bv)) return bv;
     if (vtype(bv) != T_UNDEF) ignore_bom = js_truthy(js, bv);
   }
 
