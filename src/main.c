@@ -83,6 +83,8 @@
 #include "streams/readable.h"
 #include "streams/writable.h"
 #include "streams/transform.h"
+#include "streams/codec.h"
+#include "streams/compression.h"
 
 int js_result = EXIT_SUCCESS;
 typedef int (*cmd_fn)(int argc, char **argv);
@@ -605,6 +607,8 @@ int main(int argc, char *argv[]) {
   init_readable_stream_module();
   init_writable_stream_module();
   init_transform_stream_module();
+  init_codec_stream_module();
+  init_compression_stream_module();
   init_fs_module();
   init_atomics_module();
   init_crypto_module();

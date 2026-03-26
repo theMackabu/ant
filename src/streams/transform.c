@@ -14,8 +14,8 @@
 #include "streams/readable.h"
 #include "streams/writable.h"
 
-static ant_value_t g_ts_proto;
-static ant_value_t g_ts_ctrl_proto;
+ant_value_t g_ts_proto;
+ant_value_t g_ts_ctrl_proto;
 
 bool ts_is_controller(ant_value_t obj) {
   if (!is_object_type(obj)) return false;
@@ -105,8 +105,12 @@ static inline ant_value_t ts_bp_promise(ant_value_t ts_obj) {
   return js_get_slot(ts_obj, SLOT_BUFFER);
 }
 
-static inline ant_value_t ts_controller(ant_value_t ts_obj) {
+ant_value_t ts_stream_controller(ant_value_t ts_obj) {
   return js_get_slot(ts_obj, SLOT_DEFAULT);
+}
+
+static inline ant_value_t ts_controller(ant_value_t ts_obj) {
+  return ts_stream_controller(ts_obj);
 }
 
 static inline ant_value_t ts_ctrl_transform_fn(ant_value_t ctrl_obj) {
@@ -254,11 +258,12 @@ static void ts_set_backpressure(ant_t *js, ant_value_t ts_obj, bool backpressure
   ts_set_bp_flag(ts_obj, backpressure);
 }
 
-static ant_value_t ts_ctrl_enqueue(ant_t *js, ant_value_t ctrl_obj, ant_value_t chunk) {
+ant_value_t ts_ctrl_enqueue(ant_t *js, ant_value_t ctrl_obj, ant_value_t chunk) {
   ant_value_t ts_obj = ts_ctrl_stream(ctrl_obj);
   ant_value_t readable = ts_readable(ts_obj);
   ant_value_t rs_ctrl = rs_stream_controller(js, readable);
   rs_stream_t *rs = rs_get_stream(readable);
+  
   if (!rs || rs->state != RS_STATE_READABLE)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Readable side is not in a readable state");
 
@@ -271,12 +276,12 @@ static ant_value_t ts_ctrl_enqueue(ant_t *js, ant_value_t ctrl_obj, ant_value_t 
 
   rs_controller_t *rc = rs_get_controller(rs_ctrl);
   bool bp = rc && ((rc->strategy_hwm - rc->queue_total_size) <= 0);
-  if (bp != ts_get_backpressure(ts_obj))
-    ts_set_backpressure(js, ts_obj, bp);
+  if (bp != ts_get_backpressure(ts_obj)) ts_set_backpressure(js, ts_obj, bp);
+    
   return js_mkundef();
 }
 
-static void ts_ctrl_error(ant_t *js, ant_value_t ctrl_obj, ant_value_t e) {
+void ts_ctrl_error(ant_t *js, ant_value_t ctrl_obj, ant_value_t e) {
   ant_value_t ts_obj = ts_ctrl_stream(ctrl_obj);
   if (vtype(ts_cancel_promise(ts_obj)) == T_PROMISE && ts_cancel_has_user_handler(ts_obj))
     js_set_slot(ts_obj, SLOT_RS_SIZE, e);
@@ -284,14 +289,15 @@ static void ts_ctrl_error(ant_t *js, ant_value_t ctrl_obj, ant_value_t e) {
   ts_error_writable_and_unblock_write(js, ts_obj, e);
 }
 
-static void ts_ctrl_terminate(ant_t *js, ant_value_t ctrl_obj) {
+void ts_ctrl_terminate(ant_t *js, ant_value_t ctrl_obj) {
   ant_value_t ts_obj = ts_ctrl_stream(ctrl_obj);
   ant_value_t readable = ts_readable(ts_obj);
   ant_value_t rs_ctrl = rs_stream_controller(js, readable);
+  
   rs_controller_close(js, rs_ctrl);
-
   ant_value_t writable = ts_writable(ts_obj);
   ws_stream_t *ws = ws_get_stream(writable);
+  
   if (ws && ws->state == WS_STATE_WRITABLE) {
     ant_value_t err = js_make_error_silent(js, JS_ERR_TYPE, "TransformStream readable side terminated");
     ts_error_writable_and_unblock_write(js, ts_obj, err);
@@ -817,7 +823,7 @@ static ant_value_t ts_start_reject(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t js_ts_ctor(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t js_ts_ctor(ant_t *js, ant_value_t *args, int nargs) {
   if (vtype(js->new_target) == T_UNDEF)
     return js_mkerr_typed(js, JS_ERR_TYPE, "TransformStream constructor requires 'new'");
 
