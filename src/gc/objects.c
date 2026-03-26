@@ -454,6 +454,7 @@ static void gc_mark_roots(ant_t *js) {
   gc_mark_worker_threads(js, gc_mark_value);
   gc_mark_abort(js, gc_mark_value);
   gc_mark_domexception(js, gc_mark_value);
+  gc_mark_queuing_strategies(js, gc_mark_value);
   gc_mark_readable_streams(js, gc_mark_value);
   gc_mark_writable_streams(js, gc_mark_value);
 

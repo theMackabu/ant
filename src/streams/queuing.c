@@ -109,3 +109,8 @@ void init_queuing_strategies_module(void) {
   js_set(js, g, "ByteLengthQueuingStrategy", blqs_ctor);
   js_set_descriptor(js, g, "ByteLengthQueuingStrategy", 25, JS_DESC_W | JS_DESC_C);
 }
+
+void gc_mark_queuing_strategies(ant_t *js, void (*mark)(ant_t *, ant_value_t)) {
+  mark(js, g_count_qs_proto);
+  mark(js, g_bytelength_qs_proto);
+}
