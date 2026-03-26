@@ -29,6 +29,10 @@ typedef struct {
   bool pending_abort_was_already_erroring;
 } ws_stream_t;
 
+extern ant_value_t g_ws_proto;
+extern ant_value_t g_ws_writer_proto;
+extern ant_value_t g_ws_controller_proto;
+
 void init_writable_stream_module(void);
 void gc_mark_writable_streams(ant_t *js, void (*mark)(ant_t *, ant_value_t));
 
@@ -45,6 +49,8 @@ ant_value_t writable_stream_close(ant_t *js, ant_value_t stream_obj);
 ant_value_t writable_stream_abort(ant_t *js, ant_value_t stream_obj, ant_value_t reason);
 
 bool writable_stream_close_queued_or_in_flight(ant_value_t stream_obj);
+void writable_stream_finish_erroring(ant_t *js, ant_value_t stream_obj);
 void ws_default_controller_error(ant_t *js, ant_value_t ctrl_obj, ant_value_t error);
+void ws_default_controller_advance_queue_if_needed(ant_t *js, ant_value_t ctrl_obj);
 
 #endif

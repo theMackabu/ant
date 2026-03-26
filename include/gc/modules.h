@@ -24,5 +24,6 @@ void gc_mark_domexception(ant_t *js, gc_mark_fn mark);
 void gc_mark_queuing_strategies(ant_t *js, gc_mark_fn mark);
 void gc_mark_readable_streams(ant_t *js, gc_mark_fn mark);
 void gc_mark_writable_streams(ant_t *js, gc_mark_fn mark);
+void gc_mark_transform_streams(ant_t *js, gc_mark_fn mark);
 
 #endif

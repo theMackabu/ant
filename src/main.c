@@ -82,6 +82,7 @@
 #include "streams/queuing.h"
 #include "streams/readable.h"
 #include "streams/writable.h"
+#include "streams/transform.h"
 
 int js_result = EXIT_SUCCESS;
 typedef int (*cmd_fn)(int argc, char **argv);
@@ -588,6 +589,8 @@ int main(int argc, char *argv[]) {
   init_timer_module();
   init_domexception_module();
   init_globals_module();
+  init_builtin_module();
+  init_buffer_module();
   init_structured_clone_module();
   init_abort_module();
   init_headers_module();
@@ -601,8 +604,7 @@ int main(int argc, char *argv[]) {
   init_queuing_strategies_module();
   init_readable_stream_module();
   init_writable_stream_module();
-  init_builtin_module();
-  init_buffer_module();
+  init_transform_stream_module();
   init_fs_module();
   init_atomics_module();
   init_crypto_module();
