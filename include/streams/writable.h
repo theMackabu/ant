@@ -33,8 +33,13 @@ void init_writable_stream_module(void);
 void gc_mark_writable_streams(ant_t *js, void (*mark)(ant_t *, ant_value_t));
 
 ws_stream_t *ws_get_stream(ant_value_t obj);
+ws_controller_t *ws_get_controller(ant_value_t obj);
+
 ant_value_t ws_stream_controller(ant_value_t stream_obj);
 ant_value_t ws_stream_writer(ant_value_t stream_obj);
+
+ant_value_t ws_acquire_writer(ant_t *js, ant_value_t stream_obj);
+ant_value_t ws_writer_write(ant_t *js, ant_value_t writer_obj, ant_value_t chunk);
 
 ant_value_t writable_stream_close(ant_t *js, ant_value_t stream_obj);
 ant_value_t writable_stream_abort(ant_t *js, ant_value_t stream_obj, ant_value_t reason);

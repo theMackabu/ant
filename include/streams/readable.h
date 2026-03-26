@@ -28,15 +28,42 @@ typedef struct {
   bool disturbed;
 } rs_stream_t;
 
+extern ant_value_t g_rs_proto;
+extern ant_value_t g_reader_proto;
+extern ant_value_t g_controller_proto;
+
 void init_readable_stream_module(void);
 void gc_mark_readable_streams(ant_t *js, void (*mark)(ant_t *, ant_value_t));
 
 rs_stream_t *rs_get_stream(ant_value_t obj);
-ant_value_t rs_stream_controller(ant_t *js, ant_value_t stream_obj);
-ant_value_t rs_stream_reader(ant_value_t stream_obj);
+rs_controller_t *rs_get_controller(ant_value_t obj);
+ant_offset_t rs_ctrl_queue_len(ant_t *js, ant_value_t ctrl_obj);
 
+ant_value_t rs_ctrl_size(ant_value_t ctrl_obj);
+ant_value_t rs_reader_reqs(ant_value_t reader_obj);
+ant_value_t rs_stream_error(ant_value_t stream_obj);
+ant_value_t rs_stream_reader(ant_value_t stream_obj);
+ant_value_t rs_reader_stream(ant_value_t reader_obj);
+ant_value_t rs_reader_closed(ant_value_t reader_obj);
+
+ant_value_t rs_stream_controller(ant_t *js, ant_value_t stream_obj);
+ant_value_t rs_default_reader_read(ant_t *js, ant_value_t reader_obj);
+ant_value_t rs_cancel_reject(ant_t *js, ant_value_t *args, int nargs);
+ant_value_t js_rs_reader_ctor(ant_t *js, ant_value_t *args, int nargs);
+ant_value_t rs_cancel_resolve(ant_t *js, ant_value_t *args, int nargs);
+ant_value_t readable_stream_cancel(ant_t *js, ant_value_t stream_obj, ant_value_t reason);
+ant_value_t rs_create_stream(ant_t *js, ant_value_t pull_fn, ant_value_t cancel_fn, double hwm);
+ant_value_t rs_create_stream(ant_t *js, ant_value_t pull_fn, ant_value_t cancel_fn, double hwm);
+
+bool rs_reader_has_reqs(ant_t *js, ant_value_t reader_obj);
+bool rs_default_controller_can_close_or_enqueue(rs_controller_t *ctrl, rs_stream_t *stream);
+
+void rs_default_controller_clear_algorithms(ant_value_t ctrl_obj);
+void rs_default_controller_call_pull_if_needed(ant_t *js, ant_value_t controller_obj);
+void rs_default_reader_error_read_requests(ant_t *js, ant_value_t reader_obj, ant_value_t e);
+void rs_fulfill_read_request(ant_t *js, ant_value_t stream_obj, ant_value_t chunk, bool done);
+void rs_ctrl_queue_push(ant_t *js, ant_value_t ctrl_obj, ant_value_t value);
 void readable_stream_close(ant_t *js, ant_value_t stream_obj);
 void readable_stream_error(ant_t *js, ant_value_t stream_obj, ant_value_t e);
-ant_value_t readable_stream_cancel(ant_t *js, ant_value_t stream_obj, ant_value_t reason);
 
 #endif

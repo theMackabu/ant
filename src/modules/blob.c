@@ -12,9 +12,11 @@
 #include "internal.h"
 #include "descriptors.h"
 
+#include "silver/engine.h"
 #include "modules/blob.h"
 #include "modules/buffer.h"
 #include "modules/symbol.h"
+#include "streams/readable.h"
 
 ant_value_t g_blob_proto = 0;
 ant_value_t g_file_proto = 0;
@@ -279,9 +281,32 @@ static ant_value_t js_blob_slice(ant_t *js, ant_value_t *args, int nargs) {
   return result;
 }
 
+static ant_value_t blob_stream_pull(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t blob_obj = js_get_slot(js->current_func, SLOT_DATA);
+  blob_data_t *bd = blob_get_data(blob_obj);
+  ant_value_t controller = (nargs > 0) ? args[0] : js_mkundef();
+
+  if (bd && bd->size > 0 && bd->data) {
+    ArrayBufferData *ab = create_array_buffer_data(bd->size);
+    if (ab) {
+    memcpy(ab->data, bd->data, bd->size);
+    ant_value_t chunk = create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, bd->size, "Uint8Array");
+    ant_value_t enqueue_fn = js_get(js, controller, "enqueue");
+    if (is_callable(enqueue_fn)) {
+      ant_value_t enq_args[1] = { chunk };
+      sv_vm_call(js->vm, js, enqueue_fn, controller, enq_args, 1, NULL, false);
+    }}
+  }
+
+  ant_value_t close_fn = js_get(js, controller, "close");
+  if (is_callable(close_fn)) sv_vm_call(js->vm, js, close_fn, controller, NULL, 0, NULL, false);
+
+  return js_mkundef();
+}
+
 static ant_value_t js_blob_stream(ant_t *js, ant_value_t *args, int nargs) {
-  (void)args; (void)nargs;
-  return js_mkerr_typed(js, JS_ERR_TYPE, "Blob.stream() is not yet implemented");
+  ant_value_t pull_fn = js_heavy_mkfun(js, blob_stream_pull, js->this_val);
+  return rs_create_stream(js, pull_fn, js_mkundef(), 0);
 }
 
 static ant_value_t js_blob_ctor(ant_t *js, ant_value_t *args, int nargs) {

@@ -347,23 +347,22 @@ void process_microtasks(ant_t *js) {
 }
 
 void process_immediates(ant_t *js) {
-  while (timer_state.immediates != NULL) {
-    immediate_entry_t *entry = timer_state.immediates;
-    timer_state.immediates = entry->next;
-    
-    if (timer_state.immediates == NULL) {
-      timer_state.immediates_tail = NULL;
-    }
-    
-    if (entry->active) {
-      ant_value_t args[0];
-      sv_vm_call(js->vm, js, entry->callback, js_mkundef(), args, 0, NULL, false);
-      process_microtasks(js);
-    }
-    
-    free(entry);
+while (timer_state.immediates != NULL) {
+  immediate_entry_t *entry = timer_state.immediates;
+  timer_state.immediates = entry->next;
+  
+  if (timer_state.immediates == NULL) {
+    timer_state.immediates_tail = NULL;
   }
-}
+  
+  if (entry->active) {
+    ant_value_t args[0];
+    sv_vm_call(js->vm, js, entry->callback, js_mkundef(), args, 0, NULL, false);
+    process_microtasks(js);
+  }
+  
+  free(entry);
+}}
 
 int has_pending_immediates(void) {
   for (

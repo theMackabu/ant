@@ -4,6 +4,8 @@
 #include "ant.h"
 #include "errors.h"
 #include "internal.h"
+
+#include "modules/assert.h"
 #include "silver/engine.h"
 
 static ant_value_t assertion_error(ant_t *js, const char *msg, ant_value_t msg_val) {
@@ -188,24 +190,6 @@ static ant_value_t assert_does_not_throw(ant_t *js, ant_value_t *args, int nargs
   if (is_err(result))
     return js_mkerr(js, "Got unwanted exception: %s", js_str(js, result));
   return js_mkundef();
-}
-
-static bool promise_was_rejected(ant_value_t result) {
-  if (vtype(result) != T_PROMISE) return false;
-  ant_object_t *obj = js_obj_ptr(js_as_obj(result));
-  return obj && obj->promise_state && obj->promise_state->state == 2;
-}
-
-static void promise_mark_handled(ant_value_t result) {
-  if (vtype(result) != T_PROMISE) return;
-  ant_object_t *obj = js_obj_ptr(js_as_obj(result));
-  if (obj && obj->promise_state) obj->promise_state->has_rejection_handler = true;
-}
-
-static bool promise_was_fulfilled(ant_value_t result) {
-  if (vtype(result) != T_PROMISE) return false;
-  ant_object_t *obj = js_obj_ptr(js_as_obj(result));
-  return obj && obj->promise_state && obj->promise_state->state == 1;
 }
 
 static ant_value_t assert_rejects(ant_t *js, ant_value_t *args, int nargs) {

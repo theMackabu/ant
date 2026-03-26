@@ -105,6 +105,32 @@ test('Blob not instanceof File', b1 instanceof File, false);
 const ft = await f1.text();
 test('File.text() works', ft, 'content');
 
+console.log('\nBlob.stream()\n');
+
+{
+  const blob = new Blob(['hello']);
+  const stream = blob.stream();
+  test('stream() returns ReadableStream', stream instanceof ReadableStream, true);
+  test('stream is not locked', stream.locked, false);
+
+  const reader = stream.getReader();
+  const { value, done } = await reader.read();
+  test('stream chunk is Uint8Array', value instanceof Uint8Array, true);
+  test('stream chunk length', value.length, 5);
+  test('stream chunk byte 0', value[0], 104);
+  test('stream chunk byte 4', value[4], 111);
+
+  const end = await reader.read();
+  test('stream done after one chunk', end.done, true);
+}
+
+{
+  const blob = new Blob();
+  const reader = blob.stream().getReader();
+  const { done } = await reader.read();
+  test('empty blob stream closes immediately', done, true);
+}
+
 console.log('\nSymbol.toStringTag\n');
 
 test('Blob toStringTag', Object.prototype.toString.call(b1), '[object Blob]');
