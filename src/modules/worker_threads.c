@@ -81,8 +81,7 @@ static void wt_init_env_store(ant_t *js, bool is_worker) {
     const char *raw = getenv(WT_ENV_STORE_JSON);
     if (raw && raw[0]) {
       ant_value_t input = js_mkstr(js, raw, strlen(raw));
-      ant_value_t parse_args[1] = {input};
-      ant_value_t parsed = js_json_parse(js, parse_args, 1);
+      ant_value_t parsed = json_parse_value(js, input);
       if (is_object_type(parsed)) store = parsed;
     }
   }
@@ -411,8 +410,7 @@ static void wt_emit_message_from_json(ant_worker_thread_t *wt, const char *json,
   ant_t *js = wt->js;
 
   ant_value_t s = js_mkstr(js, json, len);
-  ant_value_t parse_args[1] = {s};
-  ant_value_t msg = js_json_parse(js, parse_args, 1);
+  ant_value_t msg = json_parse_value(js, s);
   if (is_err(msg)) msg = s;
 
   wt_emit(wt, "message", msg);
@@ -914,8 +912,7 @@ static ant_value_t worker_threads_set_environment_data(ant_t *js, ant_value_t *a
   ant_value_t value_json = js_json_stringify(js, value_stringify_args, 1);
   if (vtype(value_json) != T_STR) return js_mkerr(js, "setEnvironmentData value must be JSON-serializable");
 
-  ant_value_t parse_args[1] = {value_json};
-  ant_value_t cloned = js_json_parse(js, parse_args, 1);
+  ant_value_t cloned = json_parse_value(js, value_json);
   if (is_err(cloned)) return js_mkerr(js, "setEnvironmentData value must be JSON-serializable");
 
   size_t key_len = 0;
@@ -1016,8 +1013,7 @@ ant_value_t worker_threads_library(ant_t *js) {
     const char *worker_data_json = getenv(WT_ENV_DATA_JSON);
     if (worker_data_json && worker_data_json[0]) {
       ant_value_t raw = js_mkstr(js, worker_data_json, strlen(worker_data_json));
-      ant_value_t parse_args[1] = {raw};
-      ant_value_t parsed = js_json_parse(js, parse_args, 1);
+      ant_value_t parsed = json_parse_value(js, raw);
       js_set(js, lib, "workerData", is_err(parsed) ? js_mkundef() : parsed);
     } else js_set(js, lib, "workerData", js_mkundef());
   } else {

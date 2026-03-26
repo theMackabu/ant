@@ -304,7 +304,7 @@ static void resolve_body_promise(
   }
   case BODY_JSON: {
     ant_value_t str = (data && size > 0) ? js_mkstr(js, (const char *)data, size) : js_mkstr(js, "", 0);
-    ant_value_t parsed = js_json_parse(js, &str, 1);
+    ant_value_t parsed = json_parse_value(js, str);
     if (is_err(parsed)) js_reject_promise(js, promise, response_rejection_reason(js, parsed));
     else js_resolve_promise(js, promise, parsed);
     break;
@@ -343,27 +343,52 @@ static void resolve_body_promise(
   }}
 }
 
-static uint8_t *concat_chunks(ant_t *js, ant_value_t chunks, size_t *out_size) {
+static bool response_chunk_is_uint8_array(ant_value_t chunk, TypedArrayData **out_ta) {
+  if (!is_object_type(chunk)) return false;
+  ant_value_t slot = js_get_slot(chunk, SLOT_BUFFER);
+  TypedArrayData *ta = (TypedArrayData *)js_gettypedarray(slot);
+  if (!ta || !ta->buffer || ta->buffer->is_detached) return false;
+  if (ta->type != TYPED_ARRAY_UINT8) return false;
+  *out_ta = ta;
+  return true;
+}
+
+static uint8_t *concat_uint8_chunks(
+  ant_t *js, ant_value_t chunks,
+  size_t *out_size, ant_value_t *err_out
+) {
   ant_offset_t n = js_arr_len(js, chunks);
   size_t total = 0;
   size_t pos = 0;
   uint8_t *buf = NULL;
+  TypedArrayData *ta = NULL;
+
+  *out_size = 0;
+  *err_out = js_mkundef();
 
   for (ant_offset_t i = 0; i < n; i++) {
     ant_value_t chunk = js_arr_get(js, chunks, i);
-    if (vtype(chunk) != T_TYPEDARRAY) continue;
-    TypedArrayData *ta = (TypedArrayData *)js_gettypedarray(chunk);
-    if (ta && ta->buffer && !ta->buffer->is_detached) total += ta->byte_length;
+    if (!response_chunk_is_uint8_array(chunk, &ta)) {
+      *err_out = js_mkerr_typed(js, JS_ERR_TYPE, "Response body stream chunk must be a Uint8Array");
+      return NULL;
+    }
+    total += ta->byte_length;
   }
 
   buf = total > 0 ? malloc(total) : NULL;
-  if (total > 0 && !buf) return NULL;
+  if (total > 0 && !buf) {
+    *err_out = js_mkerr(js, "out of memory");
+    return NULL;
+  }
 
   for (ant_offset_t i = 0; i < n; i++) {
     ant_value_t chunk = js_arr_get(js, chunks, i);
-    if (vtype(chunk) != T_TYPEDARRAY) continue;
-    TypedArrayData *ta = (TypedArrayData *)js_gettypedarray(chunk);
-    if (!ta || !ta->buffer || ta->buffer->is_detached || ta->byte_length == 0) continue;
+    if (!response_chunk_is_uint8_array(chunk, &ta)) {
+      free(buf);
+      *err_out = js_mkerr_typed(js, JS_ERR_TYPE, "Response body stream chunk must be a Uint8Array");
+      return NULL;
+    }
+    if (ta->byte_length == 0) continue;
     memcpy(buf + pos, ta->buffer->data + ta->byte_offset, ta->byte_length);
     pos += ta->byte_length;
   }
@@ -402,7 +427,12 @@ static ant_value_t stream_body_read(ant_t *js, ant_value_t *args, int nargs) {
 
   if (vtype(done_val) == T_BOOL && done_val == js_true) {
     size_t size = 0;
-    uint8_t *data = concat_chunks(js, chunks, &size);
+    ant_value_t chunk_err = js_mkundef();
+    uint8_t *data = concat_uint8_chunks(js, chunks, &size, &chunk_err);
+    if (is_err(chunk_err)) {
+      js_reject_promise(js, promise, response_rejection_reason(js, chunk_err));
+      return js_mkundef();
+    }
     ant_value_t type_v = js_get(js, state, "type");
     const char *body_type = (vtype(type_v) == T_STR) ? js_getstr(js, type_v, NULL) : NULL;
     resolve_body_promise(js, promise, data, size, body_type, mode, true);
@@ -461,14 +491,14 @@ static ant_value_t consume_body(ant_t *js, int mode) {
   }
 
   stream = js_get_slot(this, SLOT_RESPONSE_BODY_STREAM);
-  if (d->body_used || (d->body_is_stream && rs_is_stream(stream) && rs_stream_unusable(stream))) {
+  if (d->body_used || (rs_is_stream(stream) && rs_stream_unusable(stream))) {
     js_reject_promise(js, promise, response_rejection_reason(js,
       js_mkerr_typed(js, JS_ERR_TYPE, "body stream is disturbed or locked")));
     return promise;
   }
 
   d->body_used = true;
-  if (rs_is_stream(stream) && d->body_is_stream)
+  if (rs_is_stream(stream))
     return consume_body_from_stream(js, stream, promise, mode, response_effective_body_type(js, this, d));
 
   resolve_body_promise(js, promise, d->body_data, d->body_size, response_effective_body_type(js, this, d), mode, true);
@@ -778,7 +808,7 @@ static ant_value_t js_response_json_static(ant_t *js, ant_value_t *args, int nar
   bool init_has_content_type = false;
 
   if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "Response.json requires 1 argument");
-  stringify = js_json_stringify(js, args, 1);
+  stringify = json_stringify_value(js, args[0]);
   if (is_err(stringify)) return stringify;
   if (vtype(stringify) == T_UNDEF) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Response.json data is not JSON serializable");
@@ -882,7 +912,7 @@ RES_GETTER_END
 
 RES_GETTER_START(body_used)
   ant_value_t stored_stream = js_get_slot(this, SLOT_RESPONSE_BODY_STREAM);
-  bool used = d->body_used || (d->body_is_stream && rs_is_stream(stored_stream) && rs_stream_disturbed(stored_stream));
+  bool used = d->body_used || (rs_is_stream(stored_stream) && rs_stream_disturbed(stored_stream));
   return js_bool(used);
 RES_GETTER_END
 

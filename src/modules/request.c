@@ -364,7 +364,7 @@ static void resolve_body_promise(
     ant_value_t str = (data && size > 0)
       ? js_mkstr(js, (const char *)data, size)
       : js_mkstr(js, "", 0);
-    ant_value_t parsed = js_json_parse(js, &str, 1);
+    ant_value_t parsed = json_parse_value(js, str);
     if (is_err(parsed)) js_reject_promise(js, promise, request_rejection_reason(js, parsed));
     else js_resolve_promise(js, promise, parsed);
     break;

@@ -503,8 +503,7 @@ static ant_value_t res_json(ant_t *js, ant_value_t *args, int nargs) {
   response_ctx_t *ctx = (response_ctx_t *)(unsigned long)js_getnum(ctx_val);
   if (!ctx) return js_mkundef();
   
-  ant_value_t stringify_args[1] = { args[0] };
-  ant_value_t result = js_json_stringify(js, stringify_args, 1);
+  ant_value_t result = json_stringify_value(js, args[0]);
   
   if (vtype(result) == T_STR) {
     size_t len;
@@ -1031,4 +1030,3 @@ void gc_mark_server(ant_t *js, gc_mark_fn mark) {
 void init_server_module() {
   js_set(rt->js, rt->ant_obj, "serve", js_mkfun(js_serve));
 }
-

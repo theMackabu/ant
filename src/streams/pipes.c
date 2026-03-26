@@ -11,6 +11,7 @@
 #include "streams/pipes.h"
 #include "streams/readable.h"
 #include "streams/writable.h"
+#include "modules/structured-clone.h"
 
 static void pipes_chain_promise(
   ant_t *js, ant_value_t value,
@@ -365,10 +366,13 @@ ant_value_t readable_stream_pipe_to(
 
   ant_value_t reader_args[1] = { source };
   ant_value_t saved = js->new_target;
+  
   js->new_target = g_reader_proto;
   ant_value_t reader = js_rs_reader_ctor(js, reader_args, 1);
   js->new_target = saved;
+  
   if (is_err(reader)) return pipe_create_rejected(js, js->thrown_value);
+  rs->disturbed = true;
 
   ant_value_t writer = ws_acquire_writer(js, dest);
   if (is_err(writer)) {
@@ -585,6 +589,7 @@ static void tee_error_branch(ant_t *js, ant_value_t branch_stream, ant_value_t e
 }
 
 static void tee_pull(ant_t *js, ant_value_t state);
+static ant_value_t tee_read_reject(ant_t *js, ant_value_t *args, int nargs);
 
 static ant_value_t tee_cancel_both_resolve(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t state = js_get_slot(js->current_func, SLOT_DATA);
@@ -622,8 +627,19 @@ static ant_value_t tee_read_resolve(ant_t *js, ant_value_t *args, int nargs) {
   }
 
   ant_value_t value = js_get(js, result, "value");
+  ant_value_t clone = value;
+  
+  if (!st->canceled1 && !st->canceled2) {
+  ant_value_t clone_args[1] = { value };
+  clone = js_structured_clone(js, clone_args, 1);
+  if (is_err(clone)) {
+    tee_read_reject(js, &clone, 1);
+    return js_mkundef();
+  }}
+
   if (!st->canceled1) tee_enqueue_branch(js, branch1, value);
-  if (!st->canceled2) tee_enqueue_branch(js, branch2, value);
+  if (!st->canceled2) tee_enqueue_branch(js, branch2, clone);
+  
   return js_mkundef();
 }
 

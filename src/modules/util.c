@@ -97,8 +97,7 @@ static bool util_sb_append_jsval(ant_t *js, util_sb_t *sb, ant_value_t v) {
 }
 
 static bool util_sb_append_json(ant_t *js, util_sb_t *sb, ant_value_t v) {
-  ant_value_t stringify_args[1] = {v};
-  ant_value_t json = js_json_stringify(js, stringify_args, 1);
+  ant_value_t json = json_stringify_value(js, v);
   if (vtype(json) != T_STR) {
     return util_sb_append_n(sb, "[Circular]", 10);
   }

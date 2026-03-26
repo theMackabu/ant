@@ -86,7 +86,7 @@ static ant_value_t response_text(ant_t *js, ant_value_t *args, int nargs) {
 static ant_value_t response_json(ant_t *js, ant_value_t *args, int nargs) {  
   ant_value_t this = js_getthis(js);
   ant_value_t body = js_get_slot(this, SLOT_DATA);
-  ant_value_t parsed = js_json_parse(js, &body, 1);
+  ant_value_t parsed = json_parse_value(js, body);
   ant_value_t promise = js_mkpromise(js);
   
   if (vtype(parsed) == T_ERR) {
@@ -349,12 +349,11 @@ int has_pending_fetches(void) {
 void gc_mark_fetch(ant_t *js, gc_mark_fn mark) {
   if (!pending_requests) return;
   unsigned int len = utarray_len(pending_requests);
+  
   for (unsigned int i = 0; i < len; i++) {
-    fetch_request_t **reqp = (fetch_request_t **)utarray_eltptr(pending_requests, i);
-    if (reqp && *reqp) {
-      mark(js, (*reqp)->promise);
-      mark(js, (*reqp)->headers_obj);
-    }
-  }
+  fetch_request_t **reqp = (fetch_request_t **)utarray_eltptr(pending_requests, i);
+  if (reqp && *reqp) {
+    mark(js, (*reqp)->promise);
+    mark(js, (*reqp)->headers_obj);
+  }}
 }
-

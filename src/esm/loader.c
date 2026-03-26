@@ -924,7 +924,7 @@ static ant_value_t esm_load_json(ant_t *js, const char *path) {
 
   ant_value_t json_str = js_mkstr(js, file.data, file.size);
   free(file.data);
-  return js_json_parse(js, &json_str, 1);
+  return json_parse_value(js, json_str);
 }
 
 static ant_value_t esm_load_text(ant_t *js, const char *path) {
