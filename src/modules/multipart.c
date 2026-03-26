@@ -14,6 +14,10 @@
 #include "modules/multipart.h"
 #include "modules/url.h"
 
+static ant_value_t multipart_invalid(ant_t *js) {
+  return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to parse body as FormData");
+}
+
 static bool ct_is_type(const char *ct, const char *type) {
   size_t type_len = 0;
 
@@ -232,6 +236,107 @@ static const uint8_t *find_bytes(
   return NULL;
 }
 
+typedef struct {
+  char *name;
+  char *filename;
+  char *content_type;
+} multipart_part_info_t;
+
+static void multipart_part_info_clear(multipart_part_info_t *info) {
+  if (!info) return;
+  free(info->name);
+  free(info->filename);
+  free(info->content_type);
+  info->name = NULL;
+  info->filename = NULL;
+  info->content_type = NULL;
+}
+
+static bool multipart_parse_headers(
+  ant_t *js, char *headers, multipart_part_info_t *info, ant_value_t *err_out
+) {
+  char *saveptr = NULL;
+
+  for (
+    char *line = strtok_r(headers, "\r\n", &saveptr);
+    line; line = strtok_r(NULL, "\r\n", &saveptr)
+  ) {
+    char *colon = strchr(line, ':');
+    char *value = NULL;
+    
+    if (!colon) continue;
+    *colon = '\0';
+    
+    value = colon + 1;
+    while (*value == ' ' || *value == '\t') value++;
+    
+    if (strcasecmp(line, "Content-Disposition") == 0) {
+      free(info->name);
+      free(info->filename);
+      
+      info->name = ct_get_param_dup(value, "name");
+      info->filename = ct_get_param_dup(value, "filename");
+      
+      continue;
+    }
+    
+    if (strcasecmp(line, "Content-Type") == 0) {
+    free(info->content_type);
+    info->content_type = strdup(value);
+    if (!info->content_type) {
+      *err_out = js_mkerr(js, "out of memory");
+      return false;
+    }}
+  }
+
+  if (info->name) return true;
+  *err_out = multipart_invalid(js);
+  
+  return false;
+}
+
+static const uint8_t *multipart_find_part_end(
+  const uint8_t *p, const uint8_t *end, const char *delim, size_t delim_len
+) {
+  char *marker = malloc(delim_len + 3);
+  const uint8_t *part_end = NULL;
+  if (!marker) return NULL;
+
+  snprintf(marker, delim_len + 3, "\r\n%s", delim);
+  part_end = find_bytes(
+    p, (size_t)(end - p), 
+    (const uint8_t *)marker, delim_len + 2
+  );
+  
+  free(marker);
+  return part_end;
+}
+
+static ant_value_t multipart_append_part(
+  ant_t *js, ant_value_t fd, const multipart_part_info_t *info,
+  const uint8_t *data, size_t size
+) {
+  if (info->filename) {
+    ant_value_t blob = blob_create(
+      js, data, size, info->content_type 
+      ? info->content_type : ""
+    );
+    
+    if (is_err(blob)) return blob;
+    
+    return formdata_append_file(
+      js, fd, js_mkstr(js, info->name, strlen(info->name)),
+      blob, js_mkstr(js, info->filename, strlen(info->filename))
+    );
+  }
+
+  return formdata_append_string(
+    js, fd,
+    js_mkstr(js, info->name, strlen(info->name)),
+    js_mkstr(js, data, size)
+  );
+}
+
 static ant_value_t parse_formdata_multipart(
   ant_t *js, const uint8_t *data, size_t size, const char *body_type
 ) {
@@ -243,10 +348,7 @@ static ant_value_t parse_formdata_multipart(
   const uint8_t *end = data + size;
   size_t delim_len = 0;
 
-  if (!data || size == 0) {
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to parse body as FormData");
-  }
-
+  if (!data || size == 0) return multipart_invalid(js);
   boundary = ct_get_param_dup(body_type, "boundary");
   if (!boundary || boundary[0] == '\0') goto invalid;
 
@@ -272,15 +374,13 @@ next_part:
 
   {
     ant_value_t r = 0;
+    ant_value_t hdr_err = js_mkundef();
     const uint8_t *hdr_end = find_bytes(
       p, (size_t)(end - p), (const uint8_t *)"\r\n\r\n", 4
     );
     
     char *headers = NULL;
-    char *name = NULL;
-    char *filename = NULL;
-    char *part_type = NULL;
-    char *marker = NULL;
+    multipart_part_info_t info = {0};
     const uint8_t *part_end = NULL;
 
     if (!hdr_end) goto invalid;
@@ -292,108 +392,23 @@ next_part:
     }
     p = hdr_end + 4;
 
-    {
-      char *saveptr = NULL;
-      for (char *line = strtok_r(headers, "\r\n", &saveptr);
-           line;
-           line = strtok_r(NULL, "\r\n", &saveptr)) {
-        char *colon = strchr(line, ':');
-        if (!colon) continue;
-        *colon = '\0';
-
-        char *value = colon + 1;
-        while (*value == ' ' || *value == '\t') value++;
-
-        if (strcasecmp(line, "Content-Disposition") == 0) {
-          char *name_pos = strcasestr(value, "name=");
-          char *file_pos = strcasestr(value, "filename=");
-
-          if (name_pos) {
-            name_pos += 5;
-            if (*name_pos == '"') {
-              char *endq = NULL;
-              name_pos++;
-              endq = strchr(name_pos, '"');
-              if (endq) name = strndup(name_pos, (size_t)(endq - name_pos));
-            }
-          }
-
-          if (file_pos) {
-            file_pos += 9;
-            if (*file_pos == '"') {
-              char *endq = NULL;
-              file_pos++;
-              endq = strchr(file_pos, '"');
-              if (endq) filename = strndup(file_pos, (size_t)(endq - file_pos));
-            } else {
-              char *ende = file_pos;
-              while (*ende && *ende != ';') ende++;
-              filename = strndup(file_pos, (size_t)(ende - file_pos));
-            }
-          }
-        } else if (strcasecmp(line, "Content-Type") == 0) {
-          part_type = strdup(value);
-        }
-      }
+    if (!multipart_parse_headers(js, headers, &info, &hdr_err)) {
+      free(headers);
+      multipart_part_info_clear(&info);
+      if (is_err(hdr_err)) { fd = hdr_err; goto done; }
+      goto invalid;
     }
     free(headers);
-    headers = NULL;
 
-    if (!name) {
-      free(filename);
-      free(part_type);
-      goto invalid;
-    }
-
-    marker = malloc(delim_len + 3);
-    if (!marker) {
-      free(name);
-      free(filename);
-      free(part_type);
-      fd = js_mkerr(js, "out of memory");
-      goto done;
-    }
-    snprintf(marker, delim_len + 3, "\r\n%s", delim);
-    part_end = find_bytes(
-      p, (size_t)(end - p), (const uint8_t *)marker, delim_len + 2
-    );
-    free(marker);
-    marker = NULL;
-
+    part_end = multipart_find_part_end(p, end, delim, delim_len);
     if (!part_end) {
-      free(name);
-      free(filename);
-      free(part_type);
+      multipart_part_info_clear(&info);
       goto invalid;
     }
 
-    if (filename) {
-      ant_value_t blob = blob_create(
-        js, p, (size_t)(part_end - p), part_type ? part_type : ""
-      );
-      r = is_err(blob)
-        ? blob
-        : formdata_append_file(
-            js, fd,
-            js_mkstr(js, name, strlen(name)),
-            blob,
-            js_mkstr(js, filename, strlen(filename))
-          );
-    } else {
-      r = formdata_append_string(
-        js, fd,
-        js_mkstr(js, name, strlen(name)),
-        js_mkstr(js, p, (size_t)(part_end - p))
-      );
-    }
-
-    free(name);
-    free(filename);
-    free(part_type);
-    if (is_err(r)) {
-      fd = r;
-      goto done;
-    }
+    r = multipart_append_part(js, fd, &info, p, (size_t)(part_end - p));
+    multipart_part_info_clear(&info);
+    if (is_err(r)) { fd = r; goto done; }
 
     p = part_end + 2 + delim_len;
     if ((size_t)(end - p) >= 2 && memcmp(p, "--", 2) == 0) goto done;
@@ -402,7 +417,7 @@ next_part:
   goto next_part;
 
 invalid:
-  fd = js_mkerr_typed(js, JS_ERR_TYPE, "Failed to parse body as FormData");
+  fd = multipart_invalid(js);
 
 done:
   free(boundary);
@@ -419,9 +434,7 @@ ant_value_t formdata_parse_body(
   }
 
   if (body_type && ct_is_type(body_type, "multipart/form-data")) {
-    if (!has_body || !data || size == 0) {
-      return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to parse body as FormData");
-    }
+    if (!has_body || !data || size == 0) return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to parse body as FormData");
     return parse_formdata_multipart(js, data, size, body_type);
   }
 
@@ -461,14 +474,66 @@ static bool mp_append_str(mp_buf_t *b, const char *s) {
   return mp_append(b, s, strlen(s));
 }
 
+static bool mp_append_quoted(mp_buf_t *b, const char *s) {
+  const char *p = s ? s : "";
+  if (!mp_append_str(b, "\"")) return false;
+  
+  while (*p) {
+    if (*p == '"' || *p == '\\') if (!mp_append(b, "\\", 1)) return false;
+    if (!mp_append(b, p, 1)) return false;
+    p++;
+  }
+  
+  return mp_append_str(b, "\"");
+}
+
+static bool mp_append_boundary(mp_buf_t *b, const char *boundary, bool closing) {
+  if (!mp_append_str(b, "--")) return false;
+  if (!mp_append_str(b, boundary)) return false;
+  return mp_append_str(b, closing ? "--\r\n" : "\r\n");
+}
+
+static bool mp_append_text_part(mp_buf_t *b, const fd_entry_t *e) {
+  const char *val = e->str_value ? e->str_value : "";
+
+  if (!mp_append_str(b, "Content-Disposition: form-data; name=")) return false;
+  if (!mp_append_quoted(b, e->name ? e->name : "")) return false;
+  if (!mp_append_str(b, "\r\n\r\n")) return false;
+  
+  return mp_append_str(b, val);
+}
+
+static bool mp_append_file_part(ant_t *js, mp_buf_t *b, ant_value_t values_arr, const fd_entry_t *e) {
+  ant_value_t file_val = js_arr_get(js, values_arr, (ant_offset_t)e->val_idx);
+  blob_data_t *bd = blob_get_data(file_val);
+  
+  const char *filename = (bd && bd->name) ? bd->name : "blob";
+  const char *mime = (bd && bd->type && bd->type[0])
+    ? bd->type
+    : "application/octet-stream";
+  
+  if (!mp_append_str(b, "Content-Disposition: form-data; name=")) return false;
+  if (!mp_append_quoted(b, e->name ? e->name : "")) return false;
+  if (!mp_append_str(b, "; filename=")) return false;
+  if (!mp_append_quoted(b, filename)) return false;
+  if (!mp_append_str(b, "\r\nContent-Type: ")) return false;
+  if (!mp_append_str(b, mime)) return false;
+  if (!mp_append_str(b, "\r\n\r\n")) return false;
+  if (!bd || !bd->data || bd->size == 0) return true;
+  
+  return mp_append(b, bd->data, bd->size);
+}
+
 uint8_t *formdata_serialize_multipart(
   ant_t *js, ant_value_t fd, size_t *out_size, char **out_boundary
 ) {
   ant_value_t values_arr = js_get_slot(fd, SLOT_ENTRIES);
   ant_value_t data_slot = js_get_slot(fd, SLOT_DATA);
   char boundary[49];
+  
   mp_buf_t b = {NULL, 0, 0};
   fd_data_t *d = NULL;
+  
   if (vtype(data_slot) != T_NUM) return NULL;
   d = (fd_data_t *)(uintptr_t)(size_t)js_getnum(data_slot);
   if (!d) return NULL;
@@ -481,62 +546,30 @@ uint8_t *formdata_serialize_multipart(
   if (d->count == 0) {
     uint8_t *empty = malloc(1);
     if (!empty) return NULL;
+    
     *out_size = 0;
     *out_boundary = strdup(boundary);
+    
     if (!*out_boundary) {
       free(empty);
       return NULL;
     }
+    
     return empty;
   }
 
   for (fd_entry_t *e = d->head; e; e = e->next) {
-    if (!mp_append_str(&b, "--") ||
-        !mp_append_str(&b, boundary) ||
-        !mp_append_str(&b, "\r\n")) {
-      goto oom;
-    }
-
-    if (!e->is_file) {
-      char disp[512];
-      const char *val = e->str_value ? e->str_value : "";
-
-      snprintf(
-        disp, sizeof(disp),
-        "Content-Disposition: form-data; name=\"%s\"\r\n\r\n",
-        e->name ? e->name : ""
-      );
-      if (!mp_append_str(&b, disp) || !mp_append_str(&b, val)) goto oom;
-    } else {
-      ant_value_t file_val = js_arr_get(js, values_arr, (ant_offset_t)e->val_idx);
-      blob_data_t *bd = blob_get_data(file_val);
-      const char *filename = (bd && bd->name) ? bd->name : "blob";
-      const char *mime = (bd && bd->type && bd->type[0])
-        ? bd->type
-        : "application/octet-stream";
-      char disp[1024];
-
-      snprintf(
-        disp, sizeof(disp),
-        "Content-Disposition: form-data; name=\"%s\"; filename=\"%s\"\r\n"
-        "Content-Type: %s\r\n\r\n",
-        e->name ? e->name : "", filename, mime
-      );
-      if (!mp_append_str(&b, disp)) goto oom;
-      if (bd && bd->data && bd->size > 0 && !mp_append(&b, bd->data, bd->size)) goto oom;
-    }
-
+    if (!mp_append_boundary(&b, boundary, false)) goto oom;
+    if (!e->is_file && !mp_append_text_part(&b, e)) goto oom;
+    if (e->is_file && !mp_append_file_part(js, &b, values_arr, e)) goto oom;
     if (!mp_append_str(&b, "\r\n")) goto oom;
   }
 
-  if (!mp_append_str(&b, "--") ||
-      !mp_append_str(&b, boundary) ||
-      !mp_append_str(&b, "--\r\n")) {
-    goto oom;
-  }
+  if (!mp_append_boundary(&b, boundary, true)) goto oom;
 
   *out_size = b.size;
   *out_boundary = strdup(boundary);
+  
   if (!*out_boundary) goto oom;
   return b.buf;
 

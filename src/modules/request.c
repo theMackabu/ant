@@ -175,6 +175,148 @@ static const char *request_effective_body_type(ant_t *js, ant_value_t req_obj, r
   return d ? d->body_type : NULL;
 }
 
+static bool copy_body_bytes(
+  ant_t *js, const uint8_t *src, size_t src_len,
+  uint8_t **out_data, size_t *out_size, ant_value_t *err_out
+) {
+  uint8_t *buf = NULL;
+
+  *out_data = NULL;
+  *out_size = 0;
+  if (src_len == 0) return true;
+
+  buf = malloc(src_len);
+  if (!buf) {
+    *err_out = js_mkerr(js, "out of memory");
+    return false;
+  }
+
+  memcpy(buf, src, src_len);
+  *out_data = buf;
+  *out_size = src_len;
+  return true;
+}
+
+static bool extract_buffer_source_body(
+  ant_t *js, ant_value_t body_val,
+  uint8_t **out_data, size_t *out_size, ant_value_t *err_out
+) {
+  const uint8_t *src = NULL;
+  size_t src_len = 0;
+
+  if (!((
+    vtype(body_val) == T_TYPEDARRAY || vtype(body_val) == T_OBJ) &&
+    buffer_source_get_bytes(js, body_val, &src, &src_len))
+  ) return false;
+
+  return copy_body_bytes(js, src, src_len, out_data, out_size, err_out);
+}
+
+static bool extract_stream_body(
+  ant_t *js, ant_value_t body_val,
+  ant_value_t *out_stream, ant_value_t *err_out
+) {
+  if (!rs_is_stream(body_val)) return false;
+  if (rs_stream_unusable(body_val)) {
+    *err_out = js_mkerr_typed(js, JS_ERR_TYPE, "body stream is disturbed or locked");
+    return false;
+  }
+
+  *out_stream = body_val;
+  return true;
+}
+
+static bool extract_blob_body(
+  ant_t *js, ant_value_t body_val,
+  uint8_t **out_data, size_t *out_size, char **out_type, ant_value_t *err_out
+) {
+  blob_data_t *bd = blob_is_blob(js, body_val) ? blob_get_data(body_val) : NULL;
+  if (!bd) return false;
+
+  if (!copy_body_bytes(js, bd->data, bd->size, out_data, out_size, err_out)) return false;
+  if (bd->type && bd->type[0]) *out_type = strdup(bd->type);
+  
+  return true;
+}
+
+static bool extract_urlsearchparams_body(
+  ant_t *js, ant_value_t body_val,
+  uint8_t **out_data, size_t *out_size, char **out_type
+) {
+  char *serialized = NULL;
+  if (!usp_is_urlsearchparams(js, body_val)) return false;
+
+  serialized = usp_serialize(js, body_val);
+  if (serialized) {
+    *out_data = (uint8_t *)serialized;
+    *out_size = strlen(serialized);
+    *out_type = strdup("application/x-www-form-urlencoded;charset=UTF-8");
+  }
+  
+  return true;
+}
+
+static bool extract_formdata_body(
+  ant_t *js, ant_value_t body_val,
+  uint8_t **out_data, size_t *out_size, char **out_type, ant_value_t *err_out
+) {
+  char *boundary = NULL;
+  char *content_type = NULL;
+  size_t mp_size = 0;
+  uint8_t *mp = NULL;
+
+  if (!formdata_is_formdata(js, body_val)) return false;
+  mp = formdata_serialize_multipart(js, body_val, &mp_size, &boundary);
+  
+  if (!mp) {
+    *err_out = js_mkerr(js, "out of memory");
+    return false;
+  }
+
+  if (mp_size > 0) *out_data = mp;
+  else free(mp);
+
+  *out_size = mp_size;
+  if (boundary) {
+    size_t ct_len = snprintf(NULL, 0, "multipart/form-data; boundary=%s", boundary);
+    content_type = malloc(ct_len + 1);
+    if (!content_type) {
+      free(boundary);
+      if (mp_size > 0) free(mp);
+      *out_data = NULL;
+      *out_size = 0;
+      *err_out = js_mkerr(js, "out of memory");
+      return false;
+    }
+    snprintf(content_type, ct_len + 1, "multipart/form-data; boundary=%s", boundary);
+    free(boundary);
+    *out_type = content_type;
+  }
+
+  return true;
+}
+
+static bool extract_string_body(
+  ant_t *js, ant_value_t body_val,
+  uint8_t **out_data, size_t *out_size, char **out_type, ant_value_t *err_out
+) {
+  size_t len = 0;
+  const char *s = NULL;
+
+  if (vtype(body_val) != T_STR) {
+  body_val = js_tostring_val(js, body_val);
+  if (is_err(body_val)) {
+    *err_out = body_val;
+    return false;
+  }}
+
+  s = js_getstr(js, body_val, &len);
+  if (!copy_body_bytes(js, (const uint8_t *)s, len, out_data, out_size, err_out)) return false;
+  *out_type = strdup("text/plain;charset=UTF-8");
+  
+  return true;
+}
+
 static bool extract_body(
   ant_t *js, ant_value_t body_val,
   uint8_t **out_data, size_t *out_size, char **out_type,
@@ -186,97 +328,14 @@ static bool extract_body(
   *out_stream = js_mkundef();
   *err_out    = js_mkundef();
 
-  uint8_t t = vtype(body_val);
-  const uint8_t *src = NULL;
-  size_t src_len = 0;
-
-  if (t == T_NULL || t == T_UNDEF) return true;
-
-  if ((t == T_TYPEDARRAY || t == T_OBJ) && buffer_source_get_bytes(js, body_val, &src, &src_len)) {
-    if (src_len > 0) {
-      uint8_t *buf = malloc(src_len);
-      if (!buf) { *err_out = js_mkerr(js, "out of memory"); return false; }
-      memcpy(buf, src, src_len);
-      *out_data = buf;
-      *out_size = src_len;
-    }
-    return true;
-  }
-
-  if (t == T_OBJ) {
-    if (rs_is_stream(body_val)) {
-      if (rs_stream_unusable(body_val)) {
-        *err_out = js_mkerr_typed(js, JS_ERR_TYPE, "body stream is disturbed or locked");
-        return false;
-      }
-      *out_stream = body_val;
-      return true;
-    }
-
-    blob_data_t *bd = blob_is_blob(js, body_val) ? blob_get_data(body_val) : NULL;
-    if (bd) {
-      if (bd->size > 0) {
-        uint8_t *buf = malloc(bd->size);
-        if (!buf) { *err_out = js_mkerr(js, "out of memory"); return false; }
-        memcpy(buf, bd->data, bd->size);
-        *out_data = buf;
-        *out_size = bd->size;
-      }
-      if (bd->type && bd->type[0]) *out_type = strdup(bd->type);
-      return true;
-    }
-
-    if (usp_is_urlsearchparams(js, body_val)) {
-      char *serialized = usp_serialize(js, body_val);
-      if (serialized) {
-        *out_data = (uint8_t *)serialized;
-        *out_size = strlen(serialized);
-        *out_type = strdup("application/x-www-form-urlencoded;charset=UTF-8");
-      }
-      return true;
-    }
-
-    if (formdata_is_formdata(js, body_val)) {
-      char *boundary = NULL;
-      size_t mp_size = 0;
-      uint8_t *mp = formdata_serialize_multipart(js, body_val, &mp_size, &boundary);
-      
-      if (!mp) { *err_out = js_mkerr(js, "out of memory"); return false; }
-      if (mp_size > 0) *out_data = mp;
-      else { free(mp); *out_data = NULL; }
-      
-      *out_size = mp_size;
-      if (boundary) {
-        char ct[256];
-        snprintf(ct, sizeof(ct), "multipart/form-data; boundary=%s", boundary);
-        free(boundary);
-        *out_type = strdup(ct);
-      }
-      
-      return true;
-    }
-  }
-
-  if (t != T_STR) {
-  body_val = js_tostring_val(js, body_val);
-  if (is_err(body_val)) {
-    *err_out = body_val;
-    return false;
-  }}
-
-  size_t len;
-  const char *s = js_getstr(js, body_val, &len);
+  if (vtype(body_val) == T_NULL || vtype(body_val) == T_UNDEF) return true;
+  if (extract_buffer_source_body(js, body_val, out_data, out_size, err_out)) return true;
+  if (vtype(body_val) == T_OBJ && rs_is_stream(body_val)) return extract_stream_body(js, body_val, out_stream, err_out);
+  if (vtype(body_val) == T_OBJ && extract_blob_body(js, body_val, out_data, out_size, out_type, err_out)) return true;
+  if (vtype(body_val) == T_OBJ && extract_urlsearchparams_body(js, body_val, out_data, out_size, out_type)) return true;
+  if (vtype(body_val) == T_OBJ && extract_formdata_body(js, body_val, out_data, out_size, out_type, err_out)) return true;
   
-  if (len > 0) {
-    uint8_t *buf = malloc(len);
-    if (!buf) { *err_out = js_mkerr(js, "out of memory"); return false; }
-    memcpy(buf, s, len);
-    *out_data = buf;
-    *out_size = len;
-  }
-  
-  *out_type = strdup("text/plain;charset=UTF-8");
-  return true;
+  return extract_string_body(js, body_val, out_data, out_size, out_type, err_out);
 }
 
 enum { 
@@ -496,6 +555,88 @@ static ant_value_t js_req_form_data(ant_t *js, ant_value_t *args, int nargs) {
   return consume_body(js, BODY_FORMDATA);
 }
 
+static ant_value_t request_set_extracted_body(
+  ant_t *js, ant_value_t req_obj, ant_value_t headers, request_data_t *req,
+  uint8_t *body_data, size_t body_size, char *body_type,
+  ant_value_t body_stream, bool duplex_provided
+) {
+  free(req->body_data);
+  free(req->body_type);
+
+  req->body_data = body_data;
+  req->body_size = body_size;
+  req->body_type = body_type;
+  req->body_is_stream = rs_is_stream(body_stream);
+  req->has_body = true;
+
+  if (!req->body_is_stream) {
+    if (body_type && body_type[0]) headers_append_if_missing(headers, "content-type", body_type);
+    return js_mkundef();
+  }
+
+  if (req->keepalive) {
+    return js_mkerr_typed(js, JS_ERR_TYPE,
+    "Failed to construct 'Request': keepalive cannot be used with a ReadableStream body");
+  }
+  if (!duplex_provided) {
+    return js_mkerr_typed(js, JS_ERR_TYPE,
+    "Failed to construct 'Request': duplex must be provided for a ReadableStream body");
+  }
+
+  js_set_slot_wb(js, req_obj, SLOT_REQUEST_BODY_STREAM, body_stream);
+  if (body_type && body_type[0]) headers_append_if_missing(headers, "content-type", body_type);
+  return js_mkundef();
+}
+
+static void request_clear_body(ant_t *js, ant_value_t req_obj, request_data_t *req) {
+  free(req->body_data);
+  free(req->body_type);
+  req->body_data = NULL;
+  req->body_size = 0;
+  req->body_type = NULL;
+  req->body_is_stream = false;
+  req->has_body = false;
+  js_set_slot_wb(js, req_obj, SLOT_REQUEST_BODY_STREAM, js_mkundef());
+}
+
+static ant_value_t request_copy_source_body(ant_t *js, ant_value_t req_obj, ant_value_t input, request_data_t *req, request_data_t *src) {
+  ant_value_t src_stream = js_get_slot(input, SLOT_REQUEST_BODY_STREAM);
+
+  if (src->body_used) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot construct Request with unusable body");
+  }
+
+  if (rs_is_stream(src_stream) && rs_stream_unusable(src_stream)) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "body stream is disturbed or locked");
+  }
+
+  if (!src->body_is_stream) {
+    req->body_data = malloc(src->body_size);
+    if (src->body_size > 0 && !req->body_data) return js_mkerr(js, "out of memory");
+    if (src->body_size > 0) memcpy(req->body_data, src->body_data, src->body_size);
+    req->body_size = src->body_size;
+    req->body_type = src->body_type ? strdup(src->body_type) : NULL;
+    req->body_is_stream = false;
+    req->has_body = true;
+    return js_mkundef();
+  }
+
+  if (!rs_is_stream(src_stream)) return js_mkundef();
+  ant_value_t branches = readable_stream_tee(js, src_stream);
+  
+  if (is_err(branches)) return branches;
+  if (vtype(branches) != T_ARR) {
+    return js_mkerr_typed(js, JS_ERR_TYPE,
+    "Failed to construct 'Request': tee() did not return branches");
+  }
+
+  js_set_slot_wb(js, req_obj, SLOT_REQUEST_BODY_STREAM, js_arr_get(js, branches, 1));
+  req->body_is_stream = true;
+  req->has_body = true;
+  
+  return js_mkundef();
+}
+
 #define REQ_GETTER_START(name)                                                    \
   static ant_value_t js_req_get_##name(ant_t *js, ant_value_t *args, int nargs) { \
     ant_value_t this = js_getthis(js);                                            \
@@ -673,6 +814,326 @@ static const char *init_str(ant_t *js, ant_value_t init, const char *key, size_t
   return js_getstr(js, v, NULL);
 }
 
+static ant_value_t request_new_from_input(
+  ant_t *js, ant_value_t input,
+  request_data_t **out_req, request_data_t **out_src,
+  ant_value_t *out_input_signal
+) {
+  request_data_t *req = NULL;
+  request_data_t *src = NULL;
+
+  *out_req = NULL;
+  *out_src = NULL;
+  *out_input_signal = js_mkundef();
+
+  if (vtype(input) == T_OBJ) src = get_data(input);
+
+  if (!src) {
+    size_t ulen = 0;
+    const char *url_str = NULL;
+    url_state_t parsed = {0};
+
+    if (vtype(input) != T_STR) {
+      input = js_tostring_val(js, input);
+      if (is_err(input)) return input;
+    }
+
+    url_str = js_getstr(js, input, &ulen);
+    if (parse_url_to_state(url_str, NULL, &parsed) != 0) {
+      url_state_clear(&parsed);
+      return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to construct 'Request': Invalid URL");
+    }
+    
+    if ((parsed.username && parsed.username[0]) || (parsed.password && parsed.password[0])) {
+      url_state_clear(&parsed);
+      return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to construct 'Request': URL includes credentials");
+    }
+
+    req = data_new();
+    if (!req) {
+      url_state_clear(&parsed);
+      return js_mkerr(js, "out of memory");
+    }
+    
+    req->url = parsed;
+  } else {
+    req = data_dup(src);
+    if (!req) return js_mkerr(js, "out of memory");
+    req->body_used = false;
+    *out_input_signal = js_get_slot(input, SLOT_REQUEST_SIGNAL);
+  }
+
+  *out_req = req;
+  *out_src = src;
+  return js_mkundef();
+}
+
+static ant_value_t request_apply_init_options(
+  ant_t *js, ant_value_t init, request_data_t *req, ant_value_t *input_signal
+) {
+  ant_value_t err = js_mkundef();
+  ant_value_t win = js_get(js, init, "window");
+  
+  const char *ref = NULL;
+  const char *rp = NULL;
+  const char *mode_val = NULL;
+  const char *cred = NULL;
+  const char *cache_val = NULL;
+  const char *redir = NULL;
+  const char *integ = NULL;
+  const char *method_val = NULL;
+
+  if (vtype(win) != T_UNDEF && vtype(win) != T_NULL) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to construct 'Request': 'window' must be null");
+  }
+
+  if (strcmp(req->mode, "navigate") == 0) {
+    free(req->mode);
+    req->mode = strdup("same-origin");
+  }
+  
+  req->reload_navigation = false;
+  req->history_navigation = false;
+  free(req->referrer);
+  req->referrer = strdup("client");
+  free(req->referrer_policy);
+  req->referrer_policy = strdup("");
+
+  ref = init_str(js, init, "referrer", 8, &err);
+  if (is_err(err)) return err;
+  
+  if (ref) {
+  if (ref[0] == '\0') {
+    free(req->referrer);
+    req->referrer = strdup("no-referrer");
+  } else {
+    url_state_t rs = {0};
+    if (parse_url_to_state(ref, NULL, &rs) != 0) {
+      url_state_clear(&rs);
+      return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to construct 'Request': Invalid referrer URL");
+    }
+    free(req->referrer);
+    req->referrer = build_href(&rs);
+    url_state_clear(&rs);
+    if (!req->referrer) req->referrer = strdup("client");
+  }}
+
+  rp = init_str(js, init, "referrerPolicy", 14, &err);
+  if (is_err(err)) return err;
+  if (rp) {
+    free(req->referrer_policy);
+    req->referrer_policy = strdup(rp);
+  }
+
+  mode_val = init_str(js, init, "mode", 4, &err);
+  if (is_err(err)) return err;
+  if (mode_val) {
+    if (strcmp(mode_val, "navigate") == 0) {
+      return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to construct 'Request': mode 'navigate' is not allowed");
+    }
+    free(req->mode);
+    req->mode = strdup(mode_val);
+  }
+
+  cred = init_str(js, init, "credentials", 11, &err);
+  if (is_err(err)) return err;
+  if (cred) {
+    free(req->credentials);
+    req->credentials = strdup(cred);
+  }
+
+  cache_val = init_str(js, init, "cache", 5, &err);
+  if (is_err(err)) return err;
+  
+  if (cache_val) {
+    free(req->cache);
+    req->cache = strdup(cache_val);
+    if (
+      strcmp(req->cache, "only-if-cached") == 0 &&
+      strcmp(req->mode, "same-origin") != 0
+    ) return js_mkerr_typed(js, JS_ERR_TYPE,
+      "Failed to construct 'Request': cache mode 'only-if-cached' requires mode 'same-origin'");
+  }
+
+  redir = init_str(js, init, "redirect", 8, &err);
+  if (is_err(err)) return err;
+  
+  if (redir) {
+    free(req->redirect);
+    req->redirect = strdup(redir);
+  }
+
+  integ = init_str(js, init, "integrity", 9, &err);
+  if (is_err(err)) return err;
+  
+  if (integ) {
+    free(req->integrity);
+    req->integrity = strdup(integ);
+  }
+
+  ant_value_t ka = js_get(js, init, "keepalive");
+  if (vtype(ka) != T_UNDEF) req->keepalive = js_truthy(js, ka);
+
+  method_val = init_str(js, init, "method", 6, &err);
+  if (is_err(err)) return err;
+  
+  if (method_val) {
+    if (!is_valid_method(method_val)) {
+      return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to construct 'Request': Invalid method");
+    }
+    if (is_forbidden_method(method_val)) {
+      return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to construct 'Request': Forbidden method");
+    }
+    
+    free(req->method);
+    req->method = strdup(method_val);
+    normalize_method(req->method);
+  }
+
+  ant_value_t sig_val = js_get(js, init, "signal");
+  if (vtype(sig_val) == T_UNDEF) return js_mkundef();
+  
+  if (vtype(sig_val) == T_NULL) {
+    *input_signal = js_mkundef();
+    return js_mkundef();
+  }
+  
+  if (abort_signal_is_signal(sig_val)) {
+    *input_signal = sig_val;
+    return js_mkundef();
+  }
+
+  return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to construct 'Request': signal must be an AbortSignal");
+}
+
+static ant_value_t request_create_ctor_headers(ant_t *js, ant_value_t input) {
+  ant_value_t headers = headers_create_empty(js);
+  if (is_err(headers)) return headers;
+  if (vtype(input) != T_OBJ) return headers;
+
+  ant_value_t src_hdrs = js_get_slot(input, SLOT_REQUEST_HEADERS);
+  headers_copy_from(js, headers, src_hdrs);
+  return headers;
+}
+
+static ant_value_t request_apply_init_headers(ant_t *js, ant_value_t init, ant_value_t headers) {
+  ant_value_t init_headers = js_get(js, init, "headers");
+  ant_value_t new_hdrs = 0;
+  
+  uint8_t ht = vtype(init_headers);
+  if (vtype(init_headers) == T_UNDEF) return headers;
+
+  new_hdrs = headers_create_empty(js);
+  if (is_err(new_hdrs)) return new_hdrs;
+
+  if (headers_is_headers(init_headers)) {
+    headers_copy_from(js, new_hdrs, init_headers);
+    return new_hdrs;
+  }
+
+  if (ht == T_ARR) {
+    ant_offset_t len = js_arr_len(js, init_headers);
+    for (ant_offset_t i = 0; i < len; i++) {
+      ant_value_t pair = js_arr_get(js, init_headers, i);
+      ant_value_t r = 0;
+      if (js_arr_len(js, pair) < 2) continue;
+      r = headers_append_value(js, new_hdrs, js_arr_get(js, pair, 0), js_arr_get(js, pair, 1));
+      if (is_err(r)) return r;
+    }
+    return new_hdrs;
+  }
+
+  if (ht == T_OBJ) {
+    ant_iter_t it = js_prop_iter_begin(js, init_headers);
+    const char *key = NULL;
+    
+    size_t key_len = 0;
+    ant_value_t val = 0;
+
+    while (js_prop_iter_next(&it, &key, &key_len, &val)) {
+    ant_value_t r = headers_append_value(js, new_hdrs, js_mkstr(js, key, key_len), val);
+    if (is_err(r)) {
+      js_prop_iter_end(&it);
+      return r;
+    }}
+    
+    js_prop_iter_end(&it);
+  }
+
+  return new_hdrs;
+}
+
+static ant_value_t request_parse_duplex(ant_t *js, ant_value_t init, bool *out_duplex_provided) {
+  ant_value_t duplex_val = js_get(js, init, "duplex");
+  ant_value_t duplex_str_v = duplex_val;
+  const char *duplex_str = NULL;
+
+  *out_duplex_provided = vtype(duplex_val) != T_UNDEF;
+  if (!*out_duplex_provided) return js_mkundef();
+
+  if (vtype(duplex_str_v) != T_STR) {
+    duplex_str_v = js_tostring_val(js, duplex_str_v);
+    if (is_err(duplex_str_v)) return duplex_str_v;
+  }
+
+  duplex_str = js_getstr(js, duplex_str_v, NULL);
+  if (duplex_str && strcmp(duplex_str, "half") == 0) return js_mkundef();
+
+  return js_mkerr_typed(js, JS_ERR_TYPE,
+    "Failed to construct 'Request': duplex must be 'half'");
+}
+
+static ant_value_t request_apply_ctor_body(
+  ant_t *js, ant_value_t req_obj, ant_value_t input, ant_value_t init,
+  bool init_provided, bool duplex_provided,
+  request_data_t *req, request_data_t *src, ant_value_t headers
+) {
+  if (init_provided) {
+    ant_value_t body_val = js_get(js, init, "body");
+    bool init_body_present = vtype(body_val) != T_UNDEF;
+    bool input_body_present = src && src->has_body;
+    bool effective_body_present =
+      (init_body_present && vtype(body_val) != T_NULL) ||
+      (input_body_present && (!init_body_present || vtype(body_val) == T_NULL));
+
+    if ((strcmp(req->method, "GET") == 0 || strcmp(req->method, "HEAD") == 0) && effective_body_present) {
+      return js_mkerr_typed(js, JS_ERR_TYPE,
+      "Failed to construct 'Request': Request with GET/HEAD method cannot have body");
+    }
+
+    if (vtype(body_val) == T_UNDEF) return js_mkundef();
+    if (vtype(body_val) == T_NULL) {
+      request_clear_body(js, req_obj, req);
+      return js_mkundef();
+    }
+
+    request_data_t *init_req = get_data(init);
+    ant_value_t body_err = js_mkundef();
+    ant_value_t body_stream = js_mkundef();
+    
+    uint8_t *bd = NULL;
+    size_t bs = 0;
+    char *bt = NULL;
+    
+    if (init_req && !init_req->body_used && !init_req->body_is_stream && init_req->has_body) {
+      bd = malloc(init_req->body_size);
+      if (init_req->body_size > 0 && !bd) return js_mkerr(js, "out of memory");
+      if (init_req->body_size > 0) memcpy(bd, init_req->body_data, init_req->body_size);
+      bs = init_req->body_size;
+      bt = init_req->body_type ? strdup(init_req->body_type) : NULL;
+    } else if (!extract_body(js, body_val, &bd, &bs, &bt, &body_stream, &body_err)) 
+      return is_err(body_err) ? body_err : js_mkerr(js, "Failed to extract body");
+    
+    return request_set_extracted_body(
+      js, req_obj, headers, req, bd, 
+      bs, bt, body_stream, duplex_provided
+    );
+  }
+
+  if (!src) return js_mkundef();
+  return request_copy_source_body(js, req_obj, input, req, src);
+}
+
 static ant_value_t js_request_ctor(ant_t *js, ant_value_t *args, int nargs) {
   if (vtype(js->new_target) == T_UNDEF)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Request constructor requires 'new'");
@@ -682,142 +1143,18 @@ static ant_value_t js_request_ctor(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t input  = args[0];
   ant_value_t init   = (nargs >= 2 && vtype(args[1]) != T_UNDEF) ? args[1] : js_mkundef();
   bool init_provided = (vtype(init) == T_OBJ || vtype(init) == T_ARR);
-
-  request_data_t *req    = NULL;
-  ant_value_t input_signal = js_mkundef();
-
+  
+  request_data_t *req = NULL;
   request_data_t *src = NULL;
-  if (vtype(input) == T_OBJ) src = get_data(input);
-
-  if (!src) {
-    if (vtype(input) != T_STR) {
-      input = js_tostring_val(js, input);
-      if (is_err(input)) return input;
-    }
-    size_t ulen;
-    const char *url_str = js_getstr(js, input, &ulen);
-    url_state_t parsed = {0};
-    if (parse_url_to_state(url_str, NULL, &parsed) != 0) {
-      url_state_clear(&parsed);
-      return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to construct 'Request': Invalid URL");
-    }
-    if ((parsed.username && parsed.username[0]) || (parsed.password && parsed.password[0])) {
-      url_state_clear(&parsed);
-      return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to construct 'Request': URL includes credentials");
-    }
-    req = data_new();
-    if (!req) { url_state_clear(&parsed); return js_mkerr(js, "out of memory"); }
-    req->url = parsed;
-  } else if (vtype(input) == T_OBJ) {
-    req = data_dup(src);
-    if (!req) return js_mkerr(js, "out of memory");
-    req->body_used = false;
-    input_signal = js_get_slot(input, SLOT_REQUEST_SIGNAL);
-  }
-
-  ant_value_t err = js_mkundef();
+  
+  ant_value_t input_signal = js_mkundef();
+  ant_value_t step = request_new_from_input(js, input, &req, &src, &input_signal);
+  
+  if (is_err(step)) return step;
 
   if (init_provided) {
-    ant_value_t win = js_get(js, init, "window");
-    if (vtype(win) != T_UNDEF && vtype(win) != T_NULL) {
-      data_free(req);
-      return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to construct 'Request': 'window' must be null");
-    }
-
-    if (strcmp(req->mode, "navigate") == 0) {
-      free(req->mode); req->mode = strdup("same-origin");
-    }
-    req->reload_navigation  = false;
-    req->history_navigation = false;
-    free(req->referrer); req->referrer = strdup("client");
-    free(req->referrer_policy); req->referrer_policy = strdup("");
-
-    const char *ref = init_str(js, init, "referrer", 8, &err);
-    if (is_err(err)) { data_free(req); return err; }
-    
-    if (ref) {
-    if (ref[0] == '\0') {
-      free(req->referrer); 
-      req->referrer = strdup("no-referrer");
-    } else {
-      url_state_t rs = {0};
-      if (parse_url_to_state(ref, NULL, &rs) == 0) {
-        char *href = build_href(&rs);
-        url_state_clear(&rs);
-        free(req->referrer);
-        req->referrer = href ? href : strdup("client");
-      } else {
-        url_state_clear(&rs);
-        data_free(req);
-        return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to construct 'Request': Invalid referrer URL");
-      }
-    }}
-
-    const char *rp = init_str(js, init, "referrerPolicy", 14, &err);
-    if (is_err(err)) { data_free(req); return err; }
-    if (rp) { free(req->referrer_policy); req->referrer_policy = strdup(rp); }
-
-    const char *mode_val = init_str(js, init, "mode", 4, &err);
-    if (is_err(err)) { data_free(req); return err; }
-    if (mode_val) {
-      if (strcmp(mode_val, "navigate") == 0) {
-        data_free(req);
-        return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to construct 'Request': mode 'navigate' is not allowed");
-      }
-      free(req->mode); req->mode = strdup(mode_val);
-    }
-
-    const char *cred = init_str(js, init, "credentials", 11, &err);
-    if (is_err(err)) { data_free(req); return err; }
-    if (cred) { free(req->credentials); req->credentials = strdup(cred); }
-
-    const char *cache_val = init_str(js, init, "cache", 5, &err);
-    if (is_err(err)) { data_free(req); return err; }
-    if (cache_val) {
-    free(req->cache); req->cache = strdup(cache_val);
-    if (
-      strcmp(req->cache, "only-if-cached") == 0 &&
-      strcmp(req->mode, "same-origin") != 0
-    ) {
-      data_free(req);
-      return js_mkerr_typed(js, JS_ERR_TYPE,
-      "Failed to construct 'Request': cache mode 'only-if-cached' requires mode 'same-origin'");
-    }}
-
-    const char *redir = init_str(js, init, "redirect", 8, &err);
-    if (is_err(err)) { data_free(req); return err; }
-    if (redir) { free(req->redirect); req->redirect = strdup(redir); }
-
-    const char *integ = init_str(js, init, "integrity", 9, &err);
-    if (is_err(err)) { data_free(req); return err; }
-    if (integ) { free(req->integrity); req->integrity = strdup(integ); }
-
-    ant_value_t ka = js_get(js, init, "keepalive");
-    if (vtype(ka) != T_UNDEF) req->keepalive = js_truthy(js, ka);
-
-    const char *method_val = init_str(js, init, "method", 6, &err);
-    if (is_err(err)) { data_free(req); return err; }
-    if (method_val) {
-      if (!is_valid_method(method_val)) {
-        data_free(req);
-        return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to construct 'Request': Invalid method");
-      }
-      if (is_forbidden_method(method_val)) {
-        data_free(req);
-        return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to construct 'Request': Forbidden method");
-      }
-      free(req->method);
-      req->method = strdup(method_val);
-      normalize_method(req->method);
-    }
-
-    ant_value_t sig_val = js_get(js, init, "signal");
-    if (vtype(sig_val) != T_UNDEF) {
-    if (vtype(sig_val) == T_NULL) input_signal = js_mkundef();
-    else if (abort_signal_is_signal(sig_val)) input_signal = sig_val; else {
-      data_free(req);
-      return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to construct 'Request': signal must be an AbortSignal");
-    }}
+    step = request_apply_init_options(js, init, req, &input_signal);
+    if (is_err(step)) { data_free(req); return step; }
   }
 
   if (
@@ -840,46 +1177,14 @@ static ant_value_t js_request_ctor(ant_t *js, ant_value_t *args, int nargs) {
   if (is_err(signal)) { data_free(req); return signal; }
   js_set_slot_wb(js, obj, SLOT_REQUEST_SIGNAL, signal);
 
-  ant_value_t headers;
-  if (vtype(input) == T_OBJ) {
-    ant_value_t src_hdrs = js_get_slot(input, SLOT_REQUEST_HEADERS);
-    headers = headers_create_empty(js);
-    if (is_err(headers)) { data_free(req); return headers; }
-    headers_copy_from(js, headers, src_hdrs);
-  } else {
-    headers = headers_create_empty(js);
+  ant_value_t headers = request_create_ctor_headers(js, input);
+  bool duplex_provided = false;
+  
+  if (is_err(headers)) { data_free(req); return headers; }
+  if (init_provided) {
+    headers = request_apply_init_headers(js, init, headers);
     if (is_err(headers)) { data_free(req); return headers; }
   }
-
-  if (init_provided) {
-  ant_value_t init_headers = js_get(js, init, "headers");
-  
-  if (vtype(init_headers) != T_UNDEF) {
-    ant_value_t new_hdrs = headers_create_empty(js);
-    if (is_err(new_hdrs)) { data_free(req); return new_hdrs; }
-    
-    uint8_t ht = vtype(init_headers);
-    if (headers_is_headers(init_headers)) {
-      headers_copy_from(js, new_hdrs, init_headers);
-    } else if (ht == T_ARR) {
-      ant_offset_t len = js_arr_len(js, init_headers);
-      
-      for (ant_offset_t i = 0; i < len; i++) {
-        ant_value_t pair = js_arr_get(js, init_headers, i);
-        if (js_arr_len(js, pair) < 2) continue;
-        ant_value_t r = headers_append_value(js, new_hdrs, js_arr_get(js, pair, 0), js_arr_get(js, pair, 1));
-        if (is_err(r)) { data_free(req); return r; }
-      }
-    } else if (ht == T_OBJ) {
-      ant_iter_t it = js_prop_iter_begin(js, init_headers);
-      const char *key; size_t key_len; ant_value_t val;
-      
-      while (js_prop_iter_next(&it, &key, &key_len, &val)) {
-        ant_value_t r = headers_append_value(js, new_hdrs, js_mkstr(js, key, key_len), val);
-        if (is_err(r)) { js_prop_iter_end(&it); data_free(req); return r; }
-      } js_prop_iter_end(&it);
-    } headers = new_hdrs;
-  }}
 
   headers_set_guard(headers,
     strcmp(req->mode, "no-cors") == 0 
@@ -890,118 +1195,14 @@ static ant_value_t js_request_ctor(ant_t *js, ant_value_t *args, int nargs) {
   js_set_slot_wb(js, obj, SLOT_REQUEST_HEADERS, headers);
 
   if (init_provided) {
-  ant_value_t duplex_val = js_get(js, init, "duplex");
-  bool duplex_provided = vtype(duplex_val) != T_UNDEF;
-  if (duplex_provided) {
-    ant_value_t duplex_str_v = duplex_val;
-    if (vtype(duplex_str_v) != T_STR) {
-      duplex_str_v = js_tostring_val(js, duplex_str_v);
-      if (is_err(duplex_str_v)) { data_free(req); return duplex_str_v; }
-    }
-    const char *duplex_str = js_getstr(js, duplex_str_v, NULL);
-    if (!duplex_str || strcmp(duplex_str, "half") != 0) {
-      data_free(req);
-      return js_mkerr_typed(js, JS_ERR_TYPE,
-        "Failed to construct 'Request': duplex must be 'half'");
-    }}
+    step = request_parse_duplex(js, init, &duplex_provided);
+    if (is_err(step)) { data_free(req); return step; }
+  }
 
-    ant_value_t body_val = js_get(js, init, "body");
-    bool init_body_present = vtype(body_val) != T_UNDEF;
-    bool input_body_present = src && src->has_body;
-    bool effective_body_present = (init_body_present && vtype(body_val) != T_NULL)
-    
-      || (input_body_present && (!init_body_present || vtype(body_val) == T_NULL));
-    if ((strcmp(req->method, "GET") == 0 || strcmp(req->method, "HEAD") == 0) &&
-        effective_body_present) {
-      data_free(req);
-      return js_mkerr_typed(js, JS_ERR_TYPE,
-      "Failed to construct 'Request': Request with GET/HEAD method cannot have body");
-    }
-    if (vtype(body_val) != T_UNDEF) {
-      if (vtype(body_val) != T_NULL) {
-        request_data_t *init_req = get_data(init);
-        ant_value_t body_err = js_mkundef();
-        uint8_t *bd = NULL; size_t bs = 0; char *bt = NULL;
-        ant_value_t body_stream = js_mkundef();
-        if (init_req && !init_req->body_used && !init_req->body_is_stream && init_req->has_body) {
-          bd = malloc(init_req->body_size);
-          if (init_req->body_size > 0 && !bd) {
-            data_free(req);
-            return js_mkerr(js, "out of memory");
-          }
-          if (init_req->body_size > 0) memcpy(bd, init_req->body_data, init_req->body_size);
-          bs = init_req->body_size;
-          bt = init_req->body_type ? strdup(init_req->body_type) : NULL;
-        } else if (!extract_body(js, body_val, &bd, &bs, &bt, &body_stream, &body_err)) {
-          data_free(req);
-          return is_err(body_err) ? body_err : js_mkerr(js, "Failed to extract body");
-        }
-        free(req->body_data); free(req->body_type);
-        req->body_data = bd;
-        req->body_size = bs;
-        req->body_type = bt;
-        req->body_is_stream = rs_is_stream(body_stream);
-        req->has_body = true;
-        if (rs_is_stream(body_stream)) {
-          if (req->keepalive) {
-            data_free(req);
-            return js_mkerr_typed(js, JS_ERR_TYPE,
-              "Failed to construct 'Request': keepalive cannot be used with a ReadableStream body");
-          }
-          if (!duplex_provided) {
-            data_free(req);
-            return js_mkerr_typed(js, JS_ERR_TYPE,
-              "Failed to construct 'Request': duplex must be provided for a ReadableStream body");
-          }
-          js_set_slot_wb(js, obj, SLOT_REQUEST_BODY_STREAM, body_stream);
-        }
-
-        if (bt && bt[0])
-          headers_append_if_missing(headers, "content-type", bt);
-      } else {
-        free(req->body_data); req->body_data = NULL;
-        req->body_size = 0;
-        free(req->body_type); req->body_type = NULL;
-        req->body_is_stream = false;
-        req->has_body = false;
-        js_set_slot_wb(js, obj, SLOT_REQUEST_BODY_STREAM, js_mkundef());
-      }
-    }
-  } else if (src) {
-    if (src && src->body_used) {
-      data_free(req);
-      return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot construct Request with unusable body");
-    }
-    ant_value_t src_stream = js_get_slot(input, SLOT_REQUEST_BODY_STREAM);
-    if (rs_is_stream(src_stream) && rs_stream_unusable(src_stream)) {
-      data_free(req);
-      return js_mkerr_typed(js, JS_ERR_TYPE, "body stream is disturbed or locked");
-    }
-    if (!src->body_is_stream) {
-      req->body_data = malloc(src->body_size);
-      if (src->body_size > 0 && !req->body_data) { data_free(req); return js_mkerr(js, "out of memory"); }
-      if (src->body_size > 0) memcpy(req->body_data, src->body_data, src->body_size);
-      req->body_size = src->body_size;
-      req->body_type = src->body_type ? strdup(src->body_type) : NULL;
-      req->body_is_stream = false;
-      req->has_body = true;
-    } else if (rs_is_stream(src_stream)) {
-      if (rs_stream_unusable(src_stream)) {
-        data_free(req);
-        return js_mkerr_typed(js, JS_ERR_TYPE, "body stream is disturbed or locked");
-      }
-      ant_value_t branches = readable_stream_tee(js, src_stream);
-      if (is_err(branches)) { data_free(req); return branches; }
-      if (vtype(branches) != T_ARR) {
-        data_free(req);
-        return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to construct 'Request': tee() did not return branches");
-      }
-      ant_value_t b2 = js_arr_get(js, branches, 1);
-      js_set_slot_wb(js, obj, SLOT_REQUEST_BODY_STREAM, b2);
-      
-      req->body_is_stream = true;
-      req->has_body = true;
-    }
+  step = request_apply_ctor_body(js, obj, input, init, init_provided, duplex_provided, req, src, headers);
+  if (is_err(step)) {
+    data_free(req);
+    return step;
   }
 
   if (src && src->has_body && !src->body_used)
