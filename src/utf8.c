@@ -1,4 +1,6 @@
 #include "utf8.h"
+#include "utils.h"
+#include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
 
@@ -7,6 +9,104 @@ static uint32_t utf8_decode(const unsigned char *buf, size_t len, int *seq_len) 
   utf8proc_int32_t cp;
   *seq_len = (int)utf8_next(buf, (utf8proc_ssize_t)len, &cp);
   return cp < 0 ? 0xFFFD : (uint32_t)cp;
+}
+
+static bool utf8_json_quote_reserve(char **buf, size_t *cap, size_t need) {
+  if (need <= *cap) return true;
+
+  size_t next = *cap ? *cap * 2 : 64;
+  while (next < need) next *= 2;
+
+  char *tmp = realloc(*buf, next);
+  if (!tmp) return false;
+  *buf = tmp;
+  *cap = next;
+  return true;
+}
+
+static bool utf8_json_quote_append(
+  char **buf, size_t *len, size_t *cap, const void *src, size_t src_len
+) {
+  if (!utf8_json_quote_reserve(buf, cap, *len + src_len + 1)) return false;
+  memcpy(*buf + *len, src, src_len);
+  *len += src_len;
+  (*buf)[*len] = '\0';
+  return true;
+}
+
+static bool utf8_json_quote_append_char(char **buf, size_t *len, size_t *cap, char ch) {
+  return utf8_json_quote_append(buf, len, cap, &ch, 1);
+}
+
+static bool utf8_json_quote_append_u_escape(
+  char **buf, size_t *len, size_t *cap, uint32_t code_unit
+) {
+  char escape[6] = {
+    '\\', 'u',
+    hex_char((int)(code_unit >> 12)),
+    hex_char((int)(code_unit >> 8)),
+    hex_char((int)(code_unit >> 4)),
+    hex_char((int)code_unit),
+  };
+  return utf8_json_quote_append(buf, len, cap, escape, sizeof(escape));
+}
+
+char *utf8_json_quote(const char *str, size_t byte_len, size_t *out_len) {
+  size_t utf16_len = utf16_strlen(str, byte_len);
+  char *raw = NULL;
+  size_t raw_len = 0;
+  size_t raw_cap = 0;
+
+  if (!utf8_json_quote_append_char(&raw, &raw_len, &raw_cap, '"')) goto oom;
+
+  for (size_t i = 0; i < utf16_len; i++) {
+    uint32_t cu = utf16_code_unit_at(str, byte_len, i);
+
+    if (cu >= 0xD800 && cu <= 0xDBFF && i + 1 < utf16_len) {
+    uint32_t cu2 = utf16_code_unit_at(str, byte_len, i + 1);
+    if (cu2 >= 0xDC00 && cu2 <= 0xDFFF) {
+      uint32_t cp = utf16_codepoint_at(str, byte_len, i);
+      char utf8[4];
+      int n = utf8_encode(cp, utf8);
+      if (n <= 0 || !utf8_json_quote_append(&raw, &raw_len, &raw_cap, utf8, (size_t)n)) goto oom;
+      i++;
+      continue;
+    }}
+    
+    if (cu >= 0xD800 && cu <= 0xDFFF) {
+      if (!utf8_json_quote_append_u_escape(&raw, &raw_len, &raw_cap, cu)) goto oom;
+      continue;
+    }
+    
+    switch (cu) {
+      case '"':  if (!utf8_json_quote_append(&raw, &raw_len, &raw_cap, "\\\"", 2)) goto oom; continue;
+      case '\\': if (!utf8_json_quote_append(&raw, &raw_len, &raw_cap, "\\\\", 2)) goto oom; continue;
+      case '\b': if (!utf8_json_quote_append(&raw, &raw_len, &raw_cap, "\\b", 2)) goto oom; continue;
+      case '\f': if (!utf8_json_quote_append(&raw, &raw_len, &raw_cap, "\\f", 2)) goto oom; continue;
+      case '\n': if (!utf8_json_quote_append(&raw, &raw_len, &raw_cap, "\\n", 2)) goto oom; continue;
+      case '\r': if (!utf8_json_quote_append(&raw, &raw_len, &raw_cap, "\\r", 2)) goto oom; continue;
+      case '\t': if (!utf8_json_quote_append(&raw, &raw_len, &raw_cap, "\\t", 2)) goto oom; continue;
+      default: break;
+    }
+    
+    if (cu < 0x20) {
+      if (!utf8_json_quote_append_u_escape(&raw, &raw_len, &raw_cap, cu)) goto oom;
+      continue;
+    }
+    
+    char utf8[4];
+    int n = utf8_encode(cu, utf8);
+    if (n <= 0 || !utf8_json_quote_append(&raw, &raw_len, &raw_cap, utf8, (size_t)n)) goto oom;
+  }
+
+  if (!utf8_json_quote_append_char(&raw, &raw_len, &raw_cap, '"')) goto oom;
+  if (out_len) *out_len = raw_len;
+  return raw;
+
+oom:
+  free(raw);
+  if (out_len) *out_len = 0;
+  return NULL;
 }
 
 size_t utf8_char_len_at(const char *str, size_t byte_len, size_t pos) {

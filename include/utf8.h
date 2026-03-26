@@ -18,9 +18,10 @@ utf8proc_ssize_t utf8_whatwg_decode(
   char *out, bool fatal, bool stream
 );
 
-size_t utf8_char_len_at(const char *str, size_t byte_len, size_t pos);
 size_t utf8_strlen(const char *str, size_t byte_len);
 size_t utf16_strlen(const char *str, size_t byte_len);
+size_t utf8_char_len_at(const char *str, size_t byte_len, size_t pos);
+char *utf8_json_quote(const char *str, size_t byte_len, size_t *out_len);
 
 int utf16_index_to_byte_offset(
   const char *str,

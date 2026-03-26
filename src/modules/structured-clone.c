@@ -137,22 +137,28 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
     ant_value_t dv_data_val = js_get_slot(val, SLOT_DATA);
     if (vtype(dv_data_val) != T_NUM)
       return js_throw(js, make_dom_exception(js, "DataView could not be cloned", "DataCloneError"));
-
+      
     DataViewData *dv = (DataViewData *)(uintptr_t)js_getnum(dv_data_val);
     if (!dv || !dv->buffer)
       return js_throw(js, make_dom_exception(js, "DataView could not be cloned", "DataCloneError"));
-
-    ArrayBufferData *new_buf = create_array_buffer_data(dv->byte_length);
+      
+    ArrayBufferData *new_buf = create_array_buffer_data(dv->buffer->length);
     if (!new_buf) return js_mkerr(js, "out of memory");
-    if (dv->byte_length > 0) memcpy(new_buf->data, dv->buffer->data + dv->byte_offset, dv->byte_length);
+    if (dv->buffer->length > 0) memcpy(new_buf->data, dv->buffer->data, dv->buffer->length);
 
     ant_value_t ab_obj = create_arraybuffer_obj(js, new_buf);
-    ant_value_t clone = create_dataview_with_buffer(js, new_buf, 0, dv->byte_length, ab_obj);
+    ant_value_t clone = create_dataview_with_buffer(
+      js, new_buf, dv->byte_offset, dv->byte_length, ab_obj
+    );
+    
     if (is_err(clone)) {
       free_array_buffer_data(new_buf);
       return clone;
     }
 
+    js_set(js, clone, "byteOffset", js_mknum((double)dv->byte_offset));
+    js_set(js, clone, "byteLength", js_mknum((double)dv->byte_length));
+    
     sc_add(seen, val, clone);
     free_array_buffer_data(new_buf);
     return clone;
@@ -161,14 +167,14 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
   if (t == T_ARR) {
     ant_value_t clone = js_mkarr(js);
     sc_add(seen, val, clone);
-
+    
     ant_offset_t len = js_arr_len(js, val);
     for (ant_offset_t i = 0; i < len; i++) {
       ant_value_t ic = sc_clone_rec(js, js_arr_get(js, val, i), seen, transfer);
       if (is_err(ic)) return ic;
       js_arr_push(js, clone, ic);
     }
-
+    
     return clone;
   }
 
@@ -185,21 +191,21 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
 
     ant_value_t map_proto = js_get_ctor_proto(js, "Map", 3);
     if (is_special_object(map_proto)) js_set_proto_init(clone, map_proto);
-
+    
     map_entry_t **new_head = ant_calloc(sizeof(map_entry_t *));
     if (!new_head) return js_mkerr(js, "out of memory");
-
+    
     *new_head = NULL;
     js_set_slot(clone, SLOT_DATA, ANT_PTR(new_head));
     sc_add(seen, val, clone);
-
+    
     map_entry_t **src_head = get_map_from_obj(js, val);
     if (src_head && *src_head) {
     map_entry_t *e, *tmp;
     HASH_ITER(hh, *src_head, e, tmp) {
       ant_value_t vc = sc_clone_rec(js, e->value, seen, transfer);
       if (is_err(vc)) return vc;
-
+      
       map_entry_t *ne = ant_calloc(sizeof(map_entry_t));
       if (!ne) return js_mkerr(js, "out of memory");
       ne->key = strdup(e->key);
@@ -207,17 +213,17 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
       ne->value = vc;
       HASH_ADD_STR(*new_head, key, ne);
     }}
-
+    
     return clone;
   }
 
   if (obj_ptr->type_tag == T_SET) {
     ant_value_t clone = js_mkobj(js);
     js_obj_ptr(clone)->type_tag = T_SET;
-
+    
     ant_value_t set_proto = js_get_ctor_proto(js, "Set", 3);
     if (is_special_object(set_proto)) js_set_proto_init(clone, set_proto);
-
+    
     set_entry_t **new_head = ant_calloc(sizeof(set_entry_t *));
     if (!new_head) return js_mkerr(js, "out of memory");
     *new_head = NULL;
