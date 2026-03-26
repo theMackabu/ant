@@ -124,7 +124,7 @@ static inline ant_value_t ws_writer_closed(ant_value_t writer_obj) {
   return js_get_slot(writer_obj, SLOT_RS_CLOSED);
 }
 
-static inline ant_value_t ws_writer_ready(ant_value_t writer_obj) {
+ant_value_t ws_writer_ready(ant_value_t writer_obj) {
   return js_get_slot(writer_obj, SLOT_WS_READY);
 }
 
