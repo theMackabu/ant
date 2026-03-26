@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 
 #include "ant.h"
 #include "errors.h"
@@ -14,6 +15,14 @@
 
 ant_value_t g_map_iter_proto = 0;
 ant_value_t g_set_iter_proto = 0;
+
+static ant_value_t normalize_map_key(ant_value_t key) {
+  if (vtype(key) == T_NUM) {
+    double d = tod(key);
+    if (d == 0.0 && signbit(d)) return js_mknum(0.0);
+  }
+  return key;
+}
 
 static const char *ant_value_to_key(ant_t *js, ant_value_t val) {
   if (vtype(val) == T_STR) {
@@ -72,20 +81,22 @@ static ant_value_t map_set(ant_t *js, ant_value_t *args, int nargs) {
   if (!map_ptr) return js_mkerr(js, "Invalid Map object");
   const char *key_str = ant_value_to_key(js, args[0]);
   
+  ant_value_t key_val = normalize_map_key(args[0]);
   map_entry_t *entry;
+  
   HASH_FIND_STR(*map_ptr, key_str, entry);
   if (entry) {
-    entry->key_val = args[0];
+    entry->key_val = key_val;
     entry->value = args[1];
   } else {
     entry = ant_calloc(sizeof(map_entry_t));
     if (!entry) return js_mkerr(js, "out of memory");
     entry->key = strdup(key_str);
-    entry->key_val = args[0];
+    entry->key_val = key_val;
     entry->value = args[1];
     HASH_ADD_STR(*map_ptr, key, entry);
   }
-  
+
   return this_val;
 }
 
@@ -678,17 +689,20 @@ static ant_value_t map_groupBy(ant_t *js, ant_value_t *args, int nargs) {
   for (ant_offset_t i = 0; i < len; i++) {
     ant_value_t val = js_arr_get(js, items, i);
     ant_value_t cb_args[2] = { val, tov((double)i) };
-    ant_value_t key = sv_vm_call(js->vm, js, callback, js_mkundef(), cb_args, 2, NULL, false);
-    if (is_err(key)) return key;
     
-    const char *key_str = ant_value_to_key(js, key);
+    ant_value_t key = normalize_map_key(
+      sv_vm_call(js->vm, js, callback, 
+      js_mkundef(), cb_args, 2, NULL, false)
+    );
     
     map_entry_t *entry;
-    HASH_FIND_STR(*map_head, key_str, entry);
     ant_value_t group;
-    if (entry) {
-      group = entry->value;
-    } else {
+    
+    if (is_err(key)) return key;
+    const char *key_str = ant_value_to_key(js, key);
+    HASH_FIND_STR(*map_head, key_str, entry);
+    
+    if (entry) group = entry->value; else {
       group = js_mkarr(js);
       entry = ant_calloc(sizeof(map_entry_t));
       if (!entry) return js_mkerr(js, "out of memory");
@@ -697,6 +711,7 @@ static ant_value_t map_groupBy(ant_t *js, ant_value_t *args, int nargs) {
       entry->value = group;
       HASH_ADD_STR(*map_head, key, entry);
     }
+    
     js_arr_push(js, group, val);
   }
   
@@ -739,10 +754,10 @@ static ant_value_t builtin_Map(ant_t *js, ant_value_t *args, int nargs) {
     ant_offset_t entry_len = js_arr_len(js, entry);
     if (entry_len < 2) continue;
     
-    ant_value_t key = js_arr_get(js, entry, 0);
+    ant_value_t key = normalize_map_key(js_arr_get(js, entry, 0));
     ant_value_t value = js_arr_get(js, entry, 1);
     const char *key_str = ant_value_to_key(js, key);
-    
+
     map_entry_t *map_entry;
     HASH_FIND_STR(*map_head, key_str, map_entry);
     if (map_entry) {
@@ -750,7 +765,7 @@ static ant_value_t builtin_Map(ant_t *js, ant_value_t *args, int nargs) {
       map_entry->value = value;
       continue;
     }
-    
+
     map_entry = ant_calloc(sizeof(map_entry_t));
     if (!map_entry) return js_mkerr(js, "out of memory");
     map_entry->key = strdup(key_str);

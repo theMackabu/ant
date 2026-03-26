@@ -147,10 +147,6 @@ static void pipes_settle(ant_t *js, ant_value_t state, bool ok, ant_value_t valu
   else js_reject_promise(js, promise, value);
 }
 
-static void pipes_ignore_promise(ant_value_t maybe_promise) {
-  promise_mark_handled(maybe_promise);
-}
-
 static void pipes_shutdown_from_source_error(ant_t *js, ant_value_t state, ant_value_t error) {
   pipe_state_t *pst = pipe_get_state(state);
   if (!pst || pst->settled || pst->shutting_down) return;
@@ -160,7 +156,7 @@ static void pipes_shutdown_from_source_error(ant_t *js, ant_value_t state, ant_v
 
   if (!pst->prevent_abort) {
     ant_value_t result = writable_stream_abort(js, pipe_state_dest(state), error);
-    pipes_ignore_promise(result);
+    promise_mark_handled(result);
   }
 
   pipes_settle(js, state, false, error);
@@ -175,7 +171,7 @@ static void pipes_shutdown_from_dest_error(ant_t *js, ant_value_t state, ant_val
 
   if (!pst->prevent_cancel) {
     ant_value_t result = readable_stream_cancel(js, pipe_state_source(state), error);
-    pipes_ignore_promise(result);
+    promise_mark_handled(result);
   }
 
   pipes_settle(js, state, false, error);
@@ -190,11 +186,12 @@ static void pipes_shutdown_from_abort(ant_t *js, ant_value_t state, ant_value_t 
 
   if (!pst->prevent_abort) {
     ant_value_t result = writable_stream_abort(js, pipe_state_dest(state), reason);
-    pipes_ignore_promise(result);
+    promise_mark_handled(result);
   }
+  
   if (!pst->prevent_cancel) {
     ant_value_t result = readable_stream_cancel(js, pipe_state_source(state), reason);
-    pipes_ignore_promise(result);
+    promise_mark_handled(result);
   }
 
   pipes_settle(js, state, false, reason);
