@@ -738,11 +738,11 @@ compat-table/es6/destructuring-assign.chained-object.js: OK
 compat-table/es6/destructuring-assign.computed-properties.js: OK
 compat-table/es6/destructuring-assign.defaults.js: OK
 compat-table/es6/destructuring-assign.empty-patterns.js: OK
-compat-table/es6/destructuring-assign.generator.js: TypeError: Cannot read properties of undefined
+compat-table/es6/destructuring-assign.generator.js: TypeError: not iterable
 compat-table/es6/destructuring-assign.iterable-expression.js: OK
-compat-table/es6/destructuring-assign.iterable-instance.js: failed
-compat-table/es6/destructuring-assign.iterable.js: failed
-compat-table/es6/destructuring-assign.iterator-closing.js: failed
+compat-table/es6/destructuring-assign.iterable-instance.js: OK
+compat-table/es6/destructuring-assign.iterable.js: OK
+compat-table/es6/destructuring-assign.iterator-closing.js: OK
 compat-table/es6/destructuring-assign.nested-rest.js: OK
 compat-table/es6/destructuring-assign.nested.js: OK
 compat-table/es6/destructuring-assign.object-expression.js: OK
@@ -763,10 +763,10 @@ compat-table/es6/destructuring-decl.defaults-tdz.js: OK
 compat-table/es6/destructuring-decl.defaults.js: OK
 compat-table/es6/destructuring-decl.for-in.js: OK
 compat-table/es6/destructuring-decl.for-of.js: OK
-compat-table/es6/destructuring-decl.generator.js: TypeError: Cannot read properties of undefined
-compat-table/es6/destructuring-decl.iterable-instance.js: failed
-compat-table/es6/destructuring-decl.iterable.js: failed
-compat-table/es6/destructuring-decl.iterator-closing.js: failed
+compat-table/es6/destructuring-decl.generator.js: TypeError: not iterable
+compat-table/es6/destructuring-decl.iterable-instance.js: OK
+compat-table/es6/destructuring-decl.iterable.js: OK
+compat-table/es6/destructuring-decl.iterator-closing.js: OK
 compat-table/es6/destructuring-decl.multiple-var.js: OK
 compat-table/es6/destructuring-decl.nested.js: OK
 compat-table/es6/destructuring-decl.object-primitives.js: OK
@@ -787,10 +787,10 @@ compat-table/es6/destructuring-params.defaults-separate-scope.js: OK
 compat-table/es6/destructuring-params.defaults.js: OK
 compat-table/es6/destructuring-params.duplicate-identifier.js: OK
 compat-table/es6/destructuring-params.empty-patterns.js: OK
-compat-table/es6/destructuring-params.generator.js: TypeError: Cannot read properties of undefined
-compat-table/es6/destructuring-params.iterable-instance.js: failed
-compat-table/es6/destructuring-params.iterable.js: failed
-compat-table/es6/destructuring-params.iterator-closing.js: failed
+compat-table/es6/destructuring-params.generator.js: TypeError: not iterable
+compat-table/es6/destructuring-params.iterable-instance.js: OK
+compat-table/es6/destructuring-params.iterable.js: OK
+compat-table/es6/destructuring-params.iterator-closing.js: OK
 compat-table/es6/destructuring-params.length.js: OK
 compat-table/es6/destructuring-params.nested.js: OK
 compat-table/es6/destructuring-params.new-function.js: OK
