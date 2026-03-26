@@ -625,6 +625,33 @@ ant_value_t create_typed_array(
   free_array_buffer_data(buffer); return result;
 }
 
+ant_value_t create_dataview_with_buffer(
+  ant_t *js, ArrayBufferData *buffer,
+  size_t byte_offset, size_t byte_length,
+  ant_value_t arraybuffer_obj
+) {
+  DataViewData *dv_data = ta_arena_alloc(sizeof(DataViewData));
+  if (!dv_data) return js_mkerr(js, "Failed to allocate DataView");
+
+  dv_data->buffer = buffer;
+  dv_data->byte_offset = byte_offset;
+  dv_data->byte_length = byte_length;
+  buffer->ref_count++;
+
+  ant_value_t obj = js_mkobj(js);
+  ant_value_t proto = js_get_ctor_proto(js, "DataView", 8);
+  if (is_special_object(proto)) js_set_proto_init(obj, proto);
+
+  js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_DATAVIEW));
+  js_set_slot(obj, SLOT_DATA, ANT_PTR(dv_data));
+  js_mkprop_fast(js, obj, "buffer", 6, arraybuffer_obj);
+  js_set_descriptor(js, obj, "buffer", 6, 0);
+  js_set(js, obj, "byteLength", js_mknum((double)byte_length));
+  js_set(js, obj, "byteOffset", js_mknum((double)byte_offset));
+
+  return obj;
+}
+
 typedef struct {
   ant_value_t *values;
   size_t length;

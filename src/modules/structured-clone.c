@@ -62,28 +62,50 @@ static const char *sc_ta_type_name(TypedArrayType type) {
   return names[i];
 }
 
+static ant_value_t sc_clone_typed_array(
+  ant_t *js, ant_value_t key, TypedArrayData *ta_data, sc_entry_t **seen
+) {
+  ant_value_t existing = sc_lookup(seen, key);
+  if (vtype(existing) != T_UNDEF) return existing;
+  
+  if (!ta_data || !ta_data->buffer) return js_throw(
+    js, make_dom_exception(js, "TypedArray could not be cloned", "DataCloneError")
+  );
+
+  ArrayBufferData *new_buf = create_array_buffer_data(ta_data->byte_length);
+  if (!new_buf) return js_mkerr(js, "out of memory");
+  if (ta_data->byte_length > 0) {
+    memcpy(new_buf->data, ta_data->buffer->data + ta_data->byte_offset, ta_data->byte_length);
+  }
+
+  ant_value_t clone = create_typed_array(
+    js, ta_data->type, new_buf, 0, 
+    ta_data->length, sc_ta_type_name(ta_data->type)
+  );
+  
+  sc_add(seen, key, clone);
+  return clone;
+}
+
 static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, sc_entry_t **transfer) {
   uint8_t t = vtype(val);
+  ant_value_t slot = js_mkundef();
+  TypedArrayData *ta_data = NULL;
 
   if (t == T_UNDEF || t == T_NULL || t == T_BOOL || t == T_NUM || t == T_BIGINT || t == T_STR) return val;
   if (t == T_SYMBOL) return js_throw(js, make_dom_exception(js, "Symbol cannot be serialized", "DataCloneError"));
 
+  if (is_object_type(val)) {
+    slot = js_get_slot(val, SLOT_BUFFER);
+    ta_data = (TypedArrayData *)js_gettypedarray(slot);
+  }
+
+  if (ta_data) {
+    return sc_clone_typed_array(js, val, ta_data, seen);
+  }
+
   if (t == T_TYPEDARRAY) {
-    ant_value_t existing = sc_lookup(seen, val);
-    if (vtype(existing) != T_UNDEF) return existing;
-
-    TypedArrayData *ta = (TypedArrayData *)js_gettypedarray(val);
-    if (!ta || !ta->buffer)
-      return js_throw(js, make_dom_exception(js, "TypedArray could not be cloned", "DataCloneError"));
-
-    ArrayBufferData *new_buf = create_array_buffer_data(ta->byte_length);
-    if (!new_buf) return js_mkerr(js, "out of memory");
-    if (ta->byte_length > 0) memcpy(new_buf->data, ta->buffer->data + ta->byte_offset, ta->byte_length);
-
-    ant_value_t clone = create_typed_array(js, ta->type, new_buf, 0, ta->length, sc_ta_type_name(ta->type));
-    sc_add(seen, val, clone);
-
-    return clone;
+    return sc_clone_typed_array(js, val, (TypedArrayData *)js_gettypedarray(val), seen);
   }
 
   if (t == T_FUNC || t == T_CFUNC || t == T_CLOSURE)
@@ -123,6 +145,31 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
     sc_add(seen, val, clone);
     return clone;
   }}
+
+  if (buffer_is_dataview(val)) {
+    ant_value_t dv_data_val = js_get_slot(val, SLOT_DATA);
+    if (vtype(dv_data_val) != T_NUM)
+      return js_throw(js, make_dom_exception(js, "DataView could not be cloned", "DataCloneError"));
+
+    DataViewData *dv = (DataViewData *)(uintptr_t)js_getnum(dv_data_val);
+    if (!dv || !dv->buffer)
+      return js_throw(js, make_dom_exception(js, "DataView could not be cloned", "DataCloneError"));
+
+    ArrayBufferData *new_buf = create_array_buffer_data(dv->byte_length);
+    if (!new_buf) return js_mkerr(js, "out of memory");
+    if (dv->byte_length > 0) memcpy(new_buf->data, dv->buffer->data + dv->byte_offset, dv->byte_length);
+
+    ant_value_t ab_obj = create_arraybuffer_obj(js, new_buf);
+    ant_value_t clone = create_dataview_with_buffer(js, new_buf, 0, dv->byte_length, ab_obj);
+    if (is_err(clone)) {
+      free_array_buffer_data(new_buf);
+      return clone;
+    }
+
+    sc_add(seen, val, clone);
+    free_array_buffer_data(new_buf);
+    return clone;
+  }
 
   if (t == T_ARR) {
     ant_value_t clone = js_mkarr(js);

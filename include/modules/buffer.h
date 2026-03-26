@@ -62,6 +62,12 @@ ant_value_t create_typed_array_with_buffer(
   const char *type_name, ant_value_t arraybuffer_obj
 );
 
+ant_value_t create_dataview_with_buffer(
+  ant_t *js, ArrayBufferData *buffer,
+  size_t byte_offset, size_t byte_length,
+  ant_value_t arraybuffer_obj
+);
+
 size_t buffer_get_external_memory(void);
 bool buffer_is_dataview(ant_value_t obj);
 bool buffer_source_get_bytes(ant_t *js, ant_value_t value, const uint8_t **out, size_t *len);
