@@ -7,6 +7,7 @@ source_fallback_url = https://github.com/mesonbuild/wrapdb/releases/download/goo
 patch_filename = google-brotli_1.1.0-3_patch.zip
 patch_url = https://wrapdb.mesonbuild.com/v2/google-brotli_1.1.0-3/get_patch
 patch_hash = 77e75a3bb019a4b653195a15af17cc65c56fb8cced2519154fce4e6bb43c74e2
+diff_files = patches/google-brotli-static-link.patch
 wrapdb_version = 1.1.0-3
 
 [provide]

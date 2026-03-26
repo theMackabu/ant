@@ -1,0 +1,67 @@
+--- a/meson.build
++++ b/meson.build
+@@ -65,16 +65,6 @@
+ bcs = []
+ bds = []
+ bes = []
+-install = false
+-if get_option('default_library') == 'shared'
+-  c_args += ['-DBROTLI_SHARED_COMPILATION']
+-  install = true
+-  bcs = '-DBROTLICOMMON_SHARED_COMPILATION'
+-  bds = '-DBROTLIDEC_SHARED_COMPILATION'
+-  bes = '-DBROTLIENC_SHARED_COMPILATION'
+-elif get_option('default_library') == 'both'
+-  error('both not yet supported.')
+-endif
+ 
+ common_src = files(
+   'c/common/constants.c',
+@@ -85,14 +75,12 @@
+   'c/common/transform.c',
+ )
+ 
+-libbrotli_common = library(
++libbrotli_common = static_library(
+   'brotli_common',
+   common_src,
+   gnu_symbol_visibility: 'hidden',
+   c_args: [c_args, bcs],
+   include_directories: inc,
+-  version: meson.project_version(),
+-  install: install,
+ )
+ 
+ brotli_common_dep = declare_dependency(
+@@ -107,14 +95,12 @@
+   'c/dec/state.c',
+ )
+ 
+-libbrotli_decoder = library(
++libbrotli_decoder = static_library(
+   'brotli_decoder',
+   dec_src,
+   gnu_symbol_visibility: 'hidden',
+   c_args: [c_args, bds],
+   dependencies: brotli_common_dep,
+-  version: meson.project_version(),
+-  install: install,
+ )
+ 
+ enc_src = files(
+@@ -141,14 +127,12 @@
+   'c/enc/utf8_util.c',
+ )
+ 
+-libbrotli_encoder = library(
++libbrotli_encoder = static_library(
+   'brotli_encoder',
+   enc_src,
+   c_args: [c_args, bes],
+   gnu_symbol_visibility: 'hidden',
+   dependencies: [dep_m, brotli_common_dep],
+-  version: meson.project_version(),
+-  install: install,
+ )
+ 
+ meson.override_dependency('libbrotlicommon', brotli_common_dep)
