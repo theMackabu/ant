@@ -53,11 +53,11 @@ ant_value_t js_rs_reader_ctor(ant_t *js, ant_value_t *args, int nargs);
 ant_value_t rs_cancel_resolve(ant_t *js, ant_value_t *args, int nargs);
 ant_value_t readable_stream_cancel(ant_t *js, ant_value_t stream_obj, ant_value_t reason);
 ant_value_t rs_create_stream(ant_t *js, ant_value_t pull_fn, ant_value_t cancel_fn, double hwm);
+ant_value_t rs_controller_enqueue(ant_t *js, ant_value_t ctrl_obj, ant_value_t chunk);
 
 void rs_controller_close(ant_t *js, ant_value_t ctrl_obj);
 void rs_default_controller_clear_algorithms(ant_value_t ctrl_obj);
 void rs_ctrl_queue_push(ant_t *js, ant_value_t ctrl_obj, ant_value_t value);
-void rs_controller_enqueue(ant_t *js, ant_value_t ctrl_obj, ant_value_t chunk);
 void rs_default_controller_call_pull_if_needed(ant_t *js, ant_value_t controller_obj);
 void rs_default_reader_error_read_requests(ant_t *js, ant_value_t reader_obj, ant_value_t e);
 void rs_fulfill_read_request(ant_t *js, ant_value_t stream_obj, ant_value_t chunk, bool done);

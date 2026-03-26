@@ -450,9 +450,10 @@ static ant_value_t js_rs_controller_enqueue(ant_t *js, ant_value_t *args, int na
     if (is_err(size_result)) {
       ant_value_t thrown = js->thrown_value;
       ant_value_t err = is_object_type(thrown) ? thrown : size_result;
+      if (stream && stream->state == RS_STATE_ERRORED)
+        err = rs_stream_error(stream_obj);
       readable_stream_error(js, stream_obj, err);
-      if (is_object_type(thrown)) return js_throw(js, thrown);
-      return size_result;
+      return js_throw(js, err);
     }
     if (vtype(size_result) == T_NUM) chunk_size = js_getnum(size_result);
     else chunk_size = js_to_number(js, size_result);
@@ -495,19 +496,20 @@ static ant_value_t js_rs_controller_error(ant_t *js, ant_value_t *args, int narg
   return js_mkundef();
 }
 
-void rs_controller_enqueue(ant_t *js, ant_value_t ctrl_obj, ant_value_t chunk) {
+ant_value_t rs_controller_enqueue(ant_t *js, ant_value_t ctrl_obj, ant_value_t chunk) {
   rs_controller_t *ctrl = rs_get_controller(ctrl_obj);
-  if (!ctrl) return;
+  if (!ctrl) return js_mkundef();
   
   ant_value_t stream_obj = rs_ctrl_stream(ctrl_obj);
   rs_stream_t *stream = rs_get_stream(stream_obj);
-  if (!rs_default_controller_can_close_or_enqueue(ctrl, stream)) return;
+  if (!rs_default_controller_can_close_or_enqueue(ctrl, stream))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "The stream is not in a state that permits enqueue");
 
   ant_value_t reader_obj = rs_stream_reader(stream_obj);
   if (is_object_type(reader_obj) && rs_reader_has_reqs(js, reader_obj)) {
     rs_fulfill_read_request(js, stream_obj, chunk, false);
     rs_default_controller_call_pull_if_needed(js, ctrl_obj);
-    return;
+    return js_mkundef();
   }
 
   double chunk_size = 1;
@@ -518,11 +520,13 @@ void rs_controller_enqueue(ant_t *js, ant_value_t ctrl_obj, ant_value_t chunk) {
     if (is_err(size_result)) {
       ant_value_t thrown = js->thrown_value;
       ant_value_t err = is_object_type(thrown) ? thrown : size_result;
+      if (stream && stream->state == RS_STATE_ERRORED)
+        err = rs_stream_error(stream_obj);
       js->thrown_exists = false;
       js->thrown_value = js_mkundef();
       js->thrown_stack = js_mkundef();
       readable_stream_error(js, stream_obj, err);
-      return;
+      return js_throw(js, err);
     }
     if (vtype(size_result) == T_NUM) chunk_size = js_getnum(size_result);
     else chunk_size = js_to_number(js, size_result);
@@ -532,7 +536,7 @@ void rs_controller_enqueue(ant_t *js, ant_value_t ctrl_obj, ant_value_t chunk) {
     ant_value_t err = js_make_error_silent(js, JS_ERR_RANGE,
       "The return value of a queuing strategy's size function must be a finite, non-NaN, non-negative number");
     readable_stream_error(js, stream_obj, err);
-    return;
+    return js_throw(js, err);
   }
 
   rs_ctrl_queue_push(js, ctrl_obj, chunk);
@@ -546,6 +550,7 @@ void rs_controller_enqueue(ant_t *js, ant_value_t ctrl_obj, ant_value_t chunk) {
     ctrl->queue_sizes[ctrl->queue_sizes_len++] = chunk_size;
   ctrl->queue_total_size += chunk_size;
   rs_default_controller_call_pull_if_needed(js, ctrl_obj);
+  return js_mkundef();
 }
 
 void rs_controller_close(ant_t *js, ant_value_t ctrl_obj) {
