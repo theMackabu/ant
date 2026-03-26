@@ -495,6 +495,49 @@ static ant_value_t js_rs_controller_error(ant_t *js, ant_value_t *args, int narg
   return js_mkundef();
 }
 
+void rs_controller_enqueue(ant_t *js, ant_value_t ctrl_obj, ant_value_t chunk) {
+  rs_controller_t *ctrl = rs_get_controller(ctrl_obj);
+  if (!ctrl) return;
+  
+  ant_value_t stream_obj = rs_ctrl_stream(ctrl_obj);
+  rs_stream_t *stream = rs_get_stream(stream_obj);
+  if (!rs_default_controller_can_close_or_enqueue(ctrl, stream)) return;
+
+  ant_value_t reader_obj = rs_stream_reader(stream_obj);
+  if (is_object_type(reader_obj) && rs_reader_has_reqs(js, reader_obj)) {
+    rs_fulfill_read_request(js, stream_obj, chunk, false);
+    rs_default_controller_call_pull_if_needed(js, ctrl_obj);
+    return;
+  }
+
+  rs_ctrl_queue_push(js, ctrl_obj, chunk);
+  if (ctrl->queue_sizes_len >= ctrl->queue_sizes_cap) {
+    uint32_t new_cap = ctrl->queue_sizes_cap ? ctrl->queue_sizes_cap * 2 : 4;
+    double *new_sizes = realloc(ctrl->queue_sizes, new_cap * sizeof(double));
+    if (new_sizes) { ctrl->queue_sizes = new_sizes; ctrl->queue_sizes_cap = new_cap; }
+  }
+  
+  if (ctrl->queue_sizes_len < ctrl->queue_sizes_cap)
+    ctrl->queue_sizes[ctrl->queue_sizes_len++] = 1;
+  ctrl->queue_total_size += 1;
+  rs_default_controller_call_pull_if_needed(js, ctrl_obj);
+}
+
+void rs_controller_close(ant_t *js, ant_value_t ctrl_obj) {
+  rs_controller_t *ctrl = rs_get_controller(ctrl_obj);
+  if (!ctrl) return;
+  
+  ant_value_t stream_obj = rs_ctrl_stream(ctrl_obj);
+  rs_stream_t *stream = rs_get_stream(stream_obj);
+  if (!rs_default_controller_can_close_or_enqueue(ctrl, stream)) return;
+  ctrl->close_requested = true;
+  
+  if (rs_ctrl_queue_len(js, ctrl_obj) == 0) {
+    rs_default_controller_clear_algorithms(ctrl_obj);
+    readable_stream_close(js, stream_obj);
+  }
+}
+
 static ant_value_t js_rs_reader_get_closed(ant_t *js, ant_value_t *args, int nargs) {
   return rs_reader_closed(js->this_val);
 }

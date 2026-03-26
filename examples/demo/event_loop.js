@@ -19,4 +19,5 @@ process.once('beforeExit', () => {
   else formatted = String(Math.round(rate));
 
   console.log(`\x1b[1;36m${formatted} event loop iterations/sec\x1b[0m \x1b[2m(${count.toLocaleString()} in ${(elapsed / 1000).toFixed(1)}s)\x1b[0m`);
+  if (typeof globalThis.Ant !== 'undefined') console.log('ant version:', Ant.version);
 });
