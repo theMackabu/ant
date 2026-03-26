@@ -24,6 +24,9 @@ const ds0 = new DecompressionStream('gzip');
 test('DS readable is ReadableStream', ds0.readable instanceof ReadableStream, true);
 test('DS writable is WritableStream', ds0.writable instanceof WritableStream, true);
 
+const csBrotli = new CompressionStream('brotli');
+test('CS brotli toStringTag', Object.prototype.toString.call(csBrotli), '[object CompressionStream]');
+
 async function collectStream(readable) {
   const reader = readable.getReader();
   const chunks = [];
@@ -96,6 +99,25 @@ async function testDeflateRawRoundTrip() {
   test('deflate-raw roundtrip', new TextDecoder().decode(decompressed), 'Raw deflate test');
 }
 
+async function testBrotliRoundTrip() {
+  const input = new TextEncoder().encode('brotli stream test data');
+  const cs = new CompressionStream('brotli');
+  const writer = cs.writable.getWriter();
+  writer.write(input);
+  writer.close();
+  const compressed = await collectStream(cs.readable);
+  test('brotli compressed length > 0', compressed.length > 0, true);
+
+  const ds = new DecompressionStream('brotli');
+  const writer2 = ds.writable.getWriter();
+  writer2.write(compressed);
+  writer2.close();
+  const reader = ds.readable.getReader();
+  const first = await reader.read();
+  test('brotli decompressed chunk is Uint8Array', first.value.constructor, Uint8Array);
+  test('brotli roundtrip', new TextDecoder().decode(first.value), 'brotli stream test data');
+}
+
 async function testPipeThrough() {
   const input = 'pipe through compression test';
   const encoded = new TextEncoder().encode(input);
@@ -155,6 +177,7 @@ async function testLargeData() {
 await testGzipRoundTrip();
 await testDeflateRoundTrip();
 await testDeflateRawRoundTrip();
+await testBrotliRoundTrip();
 await testPipeThrough();
 await testMultipleChunks();
 await testLargeData();

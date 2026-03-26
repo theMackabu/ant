@@ -76,21 +76,15 @@ zlib_dep = zlib_ng_sub.get_variable('zlib_ng_dep')
 zlib_ng_srcdir = subprojects_src / deps_info['zlib-ng']['dir']
 zlib_ng_builddir = subprojects_build / deps_info['zlib-ng']['dir']
 
-brotli_common_dep = dependency('libbrotlicommon',
-  fallback: ['google-brotli', 'libbrotlicommon'],
-  required: true,
-  static: is_static,
-)
-brotli_dec_dep = dependency('libbrotlidec',
-  fallback: ['google-brotli', 'libbrotlidec'],
-  required: true,
-  static: is_static,
-)
-brotli_enc_dep = dependency('libbrotlienc',
-  fallback: ['google-brotli', 'libbrotlienc'],
-  required: true,
-  static: is_static,
-)
+brotli_sub = subproject('google-brotli', default_options: [
+  'default_library=static',
+  'b_lto=false',
+  'warning_level=0',
+])
+
+brotli_common_dep = brotli_sub.get_variable('brotli_common_dep')
+brotli_dec_dep = brotli_sub.get_variable('brotli_decoder_dep')
+brotli_enc_dep = brotli_sub.get_variable('brotli_encoder_dep')
 
 cmake_prefix = get_option('deps_prefix_cmake')
 

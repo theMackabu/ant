@@ -2057,7 +2057,10 @@ void init_buffer_module() {
   js_mkprop_fast(js, arraybuffer_ctor_obj, "name", 4, ANT_STRING("ArrayBuffer"));
   js_set_descriptor(js, arraybuffer_ctor_obj, "name", 4, 0);
   js_define_species_getter(js, arraybuffer_ctor_obj);
-  js_set(js, glob, "ArrayBuffer", js_obj_to_func(arraybuffer_ctor_obj));
+  ant_value_t arraybuffer_ctor = js_obj_to_func(arraybuffer_ctor_obj);
+  js_set(js, arraybuffer_proto, "constructor", arraybuffer_ctor);
+  js_set_descriptor(js, arraybuffer_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
+  js_set(js, glob, "ArrayBuffer", arraybuffer_ctor);
   
   ant_value_t typedarray_proto = js_mkobj(js);
   js_set_proto_init(typedarray_proto, object_proto);
@@ -2091,15 +2094,16 @@ void init_buffer_module() {
       ant_value_t name##_ctor_obj = js_mkobj(js); \
       ant_value_t name##_proto = js_mkobj(js); \
       js_set_proto_init(name##_proto, typedarray_proto); \
-      js_setprop(js, name##_proto, ANT_STRING("constructor"), js_obj_to_func(name##_ctor_obj)); \
-      js_set_descriptor(js, name##_proto, "constructor", 11, JS_DESC_W | JS_DESC_C); \
       js_set_sym(js, name##_proto, get_toStringTag_sym(), js_mkstr(js, #name, sizeof(#name) - 1)); \
       js_set_slot(name##_ctor_obj, SLOT_CFUNC, js_mkfun(js_##name##_constructor)); \
       js_setprop(js, name##_ctor_obj, js_mkstr(js, "prototype", 9), name##_proto); \
       js_mkprop_fast(js, name##_ctor_obj, "name", 4, ANT_STRING(#name)); \
       js_set_descriptor(js, name##_ctor_obj, "name", 4, 0); \
       js_define_species_getter(js, name##_ctor_obj); \
-      js_set(js, glob, #name, js_obj_to_func(name##_ctor_obj)); \
+      ant_value_t name##_ctor = js_obj_to_func(name##_ctor_obj); \
+      js_setprop(js, name##_proto, ANT_STRING("constructor"), name##_ctor); \
+      js_set_descriptor(js, name##_proto, "constructor", 11, JS_DESC_W | JS_DESC_C); \
+      js_set(js, glob, #name, name##_ctor); \
     } while(0)
   
   SETUP_TYPEDARRAY(Int8Array);
@@ -2134,7 +2138,11 @@ void init_buffer_module() {
   js_mkprop_fast(js, dataview_ctor_obj, "prototype", 9, dataview_proto);
   js_mkprop_fast(js, dataview_ctor_obj, "name", 4, ANT_STRING("DataView"));
   js_set_descriptor(js, dataview_ctor_obj, "name", 4, 0);
-  js_set(js, glob, "DataView", js_obj_to_func(dataview_ctor_obj));
+  
+  ant_value_t dataview_ctor = js_obj_to_func(dataview_ctor_obj);
+  js_set(js, dataview_proto, "constructor", dataview_ctor);
+  js_set_descriptor(js, dataview_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
+  js_set(js, glob, "DataView", dataview_ctor);
   
   ant_value_t sharedarraybuffer_ctor_obj = js_mkobj(js);
   ant_value_t sharedarraybuffer_proto = js_mkobj(js);
@@ -2147,7 +2155,11 @@ void init_buffer_module() {
   js_mkprop_fast(js, sharedarraybuffer_ctor_obj, "prototype", 9, sharedarraybuffer_proto);
   js_mkprop_fast(js, sharedarraybuffer_ctor_obj, "name", 4, ANT_STRING("SharedArrayBuffer"));
   js_set_descriptor(js, sharedarraybuffer_ctor_obj, "name", 4, 0);
-  js_set(js, glob, "SharedArrayBuffer", js_obj_to_func(sharedarraybuffer_ctor_obj));
+  
+  ant_value_t sharedarraybuffer_ctor = js_obj_to_func(sharedarraybuffer_ctor_obj);
+  js_set(js, sharedarraybuffer_proto, "constructor", sharedarraybuffer_ctor);
+  js_set_descriptor(js, sharedarraybuffer_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
+  js_set(js, glob, "SharedArrayBuffer", sharedarraybuffer_ctor);
   
   ant_value_t buffer_ctor_obj = js_mkobj(js);
   ant_value_t buffer_proto = js_mkobj(js);
@@ -2180,7 +2192,11 @@ void init_buffer_module() {
   js_mkprop_fast(js, buffer_ctor_obj, "prototype", 9, buffer_proto);
   js_mkprop_fast(js, buffer_ctor_obj, "name", 4, ANT_STRING("Buffer"));
   js_set_descriptor(js, buffer_ctor_obj, "name", 4, 0);
-  js_set(js, glob, "Buffer", js_obj_to_func(buffer_ctor_obj));
+  
+  ant_value_t buffer_ctor = js_obj_to_func(buffer_ctor_obj);
+  js_set(js, buffer_proto, "constructor", buffer_ctor);
+  js_set_descriptor(js, buffer_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
+  js_set(js, glob, "Buffer", buffer_ctor);
 }
 
 void cleanup_buffer_module(void) {
