@@ -1,3 +1,5 @@
+#include <compat.h> // IWYU pragma: keep
+
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
