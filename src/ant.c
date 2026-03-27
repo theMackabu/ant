@@ -9986,6 +9986,38 @@ static ant_value_t promise_species_noop_executor(ant_t *js, ant_value_t *args, i
   return js_mkundef();
 }
 
+static inline bool is_same_heap_value(ant_value_t a, ant_value_t b) {
+  return vtype(a) == vtype(b) && vdata(a) == vdata(b);
+}
+
+static inline bool is_constructor_value(ant_value_t value) {
+  return vtype(value) == T_FUNC || vtype(value) == T_CFUNC;
+}
+
+static void promise_init_derived_promise(
+  ant_t *js,
+  ant_value_t next_p,
+  ant_value_t parent_p,
+  ant_value_t species_ctor,
+  ant_value_t promise_ctor
+) {
+  ant_value_t next_obj = js_as_obj(next_p);
+
+  if (is_constructor_value(species_ctor) && !is_same_heap_value(species_ctor, promise_ctor)) {
+    ant_value_t species_proto = js_get(js, species_ctor, "prototype");
+    if (is_object_type(species_proto)) js_set_proto_init(next_obj, species_proto);
+    set_slot(next_obj, SLOT_CTOR, species_ctor);
+    return;
+  }
+
+  ant_value_t parent_obj = js_as_obj(parent_p);
+  ant_value_t parent_proto = get_slot(parent_obj, SLOT_PROTO);
+  if (vtype(parent_proto) == T_OBJ) js_set_proto_init(next_obj, parent_proto);
+
+  ant_value_t parent_ctor = get_slot(parent_obj, SLOT_CTOR);
+  if (is_constructor_value(parent_ctor)) set_slot(next_obj, SLOT_CTOR, parent_ctor);
+}
+
 static ant_value_t builtin_promise_then(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t p = js->this_val;
   if (vtype(p) != T_PROMISE) return js_mkerr(js, "not a promise");
@@ -10026,24 +10058,11 @@ static ant_value_t builtin_promise_then(ant_t *js, ant_value_t *args, int nargs)
 
   ant_value_t nextP = js_mkpromise(js);
   GC_ROOT_PIN(js, nextP);
-  if ((vtype(species_ctor) == T_FUNC || vtype(species_ctor) == T_CFUNC)
-      && !(vtype(species_ctor) == vtype(promise_ctor)
-           && vdata(species_ctor) == vdata(promise_ctor))) {
-    ant_value_t species_proto = js_get(js, species_ctor, "prototype");
-    if (is_object_type(species_proto))
-      js_set_proto_init(js_as_obj(nextP), species_proto);
-    set_slot(js_as_obj(nextP), SLOT_CTOR, species_ctor);
-  } else {
-    ant_value_t p_proto = get_slot(js_as_obj(p), SLOT_PROTO);
-    if (vtype(p_proto) == T_OBJ) {
-      js_set_proto_init(js_as_obj(nextP), p_proto);
-      ant_value_t p_ctor = get_slot(js_as_obj(p), SLOT_CTOR);
-      if (vtype(p_ctor) == T_FUNC) set_slot(js_as_obj(nextP), SLOT_CTOR, p_ctor);
-    }
-  }
+  promise_init_derived_promise(js, nextP, p, species_ctor, promise_ctor);
 
   ant_value_t onFulfilled = nargs > 0 ? args[0] : js_mkundef();
   ant_value_t onRejected = nargs > 1 ? args[1] : js_mkundef();
+  
   GC_ROOT_PIN(js, onFulfilled);
   GC_ROOT_PIN(js, onRejected);
 
