@@ -1,0 +1,13 @@
+{
+  "name": "elysia",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.ts",
+  "scripts": {
+    "start": "ant index.ts"
+  },
+  "dependencies": {
+    "elysia": "^1.4.28"
+  },
+  "devDependencies": {}
+}
