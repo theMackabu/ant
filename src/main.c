@@ -311,15 +311,12 @@ static void eval_code(ant_t *js, const char *script, size_t len, const char *tag
 }
 
 static int execute_module(ant_t *js, const char *filename) {
-  bool looks_like_server = false;
-  
   char *use_path_owned = NULL;
   const char *use_path = filename;
 
   ant_value_t ns = 0;
   ant_value_t specifier = 0;
   ant_value_t default_export = 0;
-  ant_value_t server_result = 0;
   
   if (esm_is_url(filename)) {
     js_set(js, js_glob(js), "__dirname", js_mkundef());
@@ -353,19 +350,7 @@ static int execute_module(ant_t *js, const char *filename) {
   }
 
   default_export = js_get(js, ns, "default");
-  
-  if (server_export_has_fetch_handler(js, default_export, &looks_like_server)) {
-    server_result = server_start_from_export(js, default_export);
-    if (is_err(server_result)) {
-      fprintf(stderr, "%s\n", js_str(js, server_result));
-      return EXIT_FAILURE;
-    }
-  } else if (looks_like_server) {
-    fprintf(stderr, "Module does not export a fetch handler\n");
-    return EXIT_FAILURE;
-  }
-  
-  return EXIT_SUCCESS;
+  return server_maybe_start_from_export(js, default_export);
 }
 
 int main(int argc, char *argv[]) {

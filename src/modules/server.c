@@ -742,11 +742,10 @@ static void server_on_conn_close(ant_conn_t *conn, void *user_data) {
 }
 
 static void server_on_listener_close(ant_listener_t *listener, void *user_data) {
-  (void)listener;
   server_maybe_finish_stop((server_runtime_t *)user_data);
 }
 
-bool server_export_has_fetch_handler(ant_t *js, ant_value_t default_export, bool *looks_like_config) {
+static bool server_export_has_fetch_handler(ant_t *js, ant_value_t default_export, bool *looks_like_config) {
   ant_value_t fetch = 0;
   
   if (looks_like_config) *looks_like_config = false;
@@ -772,6 +771,30 @@ bool server_export_has_fetch_handler(ant_t *js, ant_value_t default_export, bool
   }
 
   return false;
+}
+
+int server_maybe_start_from_export(ant_t *js, ant_value_t default_export) {
+  bool looks_like_server = false;
+  ant_value_t server_result = 0;
+  const char *error = NULL;
+
+  if (!server_export_has_fetch_handler(js, default_export, &looks_like_server)) {
+    if (!looks_like_server) return EXIT_SUCCESS;
+    error = "Module does not export a fetch handler";
+    goto fail;
+  }
+
+  server_result = server_start_from_export(js, default_export);
+  if (is_err(server_result)) {
+    error = js_str(js, server_result);
+    goto fail;
+  }
+
+  return EXIT_SUCCESS;
+
+fail:
+  fprintf(stderr, "%s\n", error);
+  return EXIT_FAILURE;
 }
 
 ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
