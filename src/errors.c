@@ -854,6 +854,102 @@ ant_value_t js_throw(ant_t *js, ant_value_t value) {
   return mkval(T_ERR, 0);
 }
 
+enum { 
+  CS_FILE = 0,
+  CS_LINE,
+  CS_COL,
+  CS_NAME
+};
+
+static ant_value_t callsite_field(ant_t *js, int field) {
+  ant_value_t data = js_get_slot(js->this_val, SLOT_DATA);
+  if (vtype(data) != T_ARR) return js_mkundef();
+  return js_arr_get(js, data, field);
+}
+
+static ant_value_t callsite_getFileName(ant_t *js, ant_value_t *args, int nargs) { return callsite_field(js, CS_FILE); }
+static ant_value_t callsite_getLineNumber(ant_t *js, ant_value_t *args, int nargs) { return callsite_field(js, CS_LINE); }
+static ant_value_t callsite_getColumnNumber(ant_t *js, ant_value_t *args, int nargs) { return callsite_field(js, CS_COL); }
+static ant_value_t callsite_getFunctionName(ant_t *js, ant_value_t *args, int nargs) { return callsite_field(js, CS_NAME); }
+
+static ant_value_t callsite_getTypeName(ant_t *js, ant_value_t *args, int nargs) { return js_mknull(); }
+static ant_value_t callsite_getMethodName(ant_t *js, ant_value_t *args, int nargs) { return callsite_field(js, CS_NAME); }
+
+static ant_value_t callsite_isNative(ant_t *js, ant_value_t *args, int nargs) { return js_false; }
+static ant_value_t callsite_isToplevel(ant_t *js, ant_value_t *args, int nargs) { return js_false; }
+static ant_value_t callsite_isEval(ant_t *js, ant_value_t *args, int nargs) { return js_false; }
+static ant_value_t callsite_isConstructor(ant_t *js, ant_value_t *args, int nargs) { return js_false; }
+static ant_value_t callsite_getEvalOrigin(ant_t *js, ant_value_t *args, int nargs) { return js_mkundef(); }
+static ant_value_t callsite_getThis(ant_t *js, ant_value_t *args, int nargs) { return js_mkundef(); }
+
+static ant_value_t callsite_toString(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t name = callsite_field(js, CS_NAME);
+  ant_value_t file = callsite_field(js, CS_FILE);
+  ant_value_t line = callsite_field(js, CS_LINE);
+  ant_value_t col  = callsite_field(js, CS_COL);
+
+  const char *n = js_str(js, name);
+  const char *f = js_str(js, file);
+  int l = vtype(line) == T_NUM ? (int)js_getnum(line) : 0;
+  int c = vtype(col)  == T_NUM ? (int)js_getnum(col)  : 0;
+
+  char buf[512];
+  int len = snprintf(buf, sizeof(buf), "%s (%s:%d:%d)", n, f, l, c);
+  if (len < 0) len = 0;
+  return js_mkstr(js, buf, (size_t)len);
+}
+
+typedef struct {
+  ant_t *js;
+  ant_value_t arr;
+  ant_value_t proto;
+} callsite_build_ctx_t;
+
+static bool callsite_visit_frame(ant_t *js, const js_vm_frame_view_t *view, void *ctx) {
+  callsite_build_ctx_t *c = (callsite_build_ctx_t *)ctx;
+
+  ant_value_t data = mkarr(js);
+  js_arr_push(js, data, js_mkstr(js, view->file, strlen(view->file)));
+  js_arr_push(js, data, js_mknum((double)view->line));
+  js_arr_push(js, data, js_mknum((double)view->col));
+  js_arr_push(js, data, js_mkstr(js, view->name, strlen(view->name)));
+
+  ant_value_t site = js_mkobj(js);
+  js_set_proto_init(site, c->proto);
+  js_set_slot(site, SLOT_DATA, data);
+
+  js_arr_push(js, c->arr, site);
+  return true;
+}
+
+ant_value_t js_build_callsite_array(ant_t *js) {
+  ant_value_t proto = js_mkobj(js);
+  
+  js_set(js, proto, "getFileName",     js_mkfun(callsite_getFileName));
+  js_set(js, proto, "getLineNumber",   js_mkfun(callsite_getLineNumber));
+  js_set(js, proto, "getColumnNumber", js_mkfun(callsite_getColumnNumber));
+  js_set(js, proto, "getFunctionName", js_mkfun(callsite_getFunctionName));
+  js_set(js, proto, "getTypeName",     js_mkfun(callsite_getTypeName));
+  js_set(js, proto, "getMethodName",   js_mkfun(callsite_getMethodName));
+  js_set(js, proto, "isNative",        js_mkfun(callsite_isNative));
+  js_set(js, proto, "isToplevel",      js_mkfun(callsite_isToplevel));
+  js_set(js, proto, "isEval",          js_mkfun(callsite_isEval));
+  js_set(js, proto, "isConstructor",   js_mkfun(callsite_isConstructor));
+  js_set(js, proto, "getEvalOrigin",   js_mkfun(callsite_getEvalOrigin));
+  js_set(js, proto, "getThis",         js_mkfun(callsite_getThis));
+  js_set(js, proto, "toString",        js_mkfun(callsite_toString));
+
+  ant_value_t arr = mkarr(js);
+  callsite_build_ctx_t ctx = { js, arr, proto };
+
+  const char *file = (js->errsite.valid && js->errsite.filename)
+    ? js->errsite.filename
+    : (js->filename ? js->filename : "<eval>");
+
+  error_visit_vm_stack_frames(js, file, callsite_visit_frame, &ctx);
+  return arr;
+}
+
 void js_print_stack_trace_vm(ant_t *js, FILE *stream) {
   const char *fallback_file = js->filename ? js->filename : "<unknown>";
   if (!stream) return;

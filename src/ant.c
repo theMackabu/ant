@@ -4947,6 +4947,31 @@ static ant_value_t builtin_Array(ant_t *js, ant_value_t *args, int nargs) {
   return arr;
 }
 
+static ant_value_t builtin_error_captureStackTrace(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1 || !is_object_type(args[0])) {
+    return js_mkerr(js, "argument must be an object");
+  }
+
+  ant_value_t target = args[0];
+  ant_value_t error_ctor = lkp_val(js, js->global, "Error", 5);
+  ant_value_t prep = js_mkundef();
+
+  if (vtype(error_ctor) == T_FUNC || vtype(error_ctor) == T_CFUNC) {
+    prep = lkp_val(js, js_func_obj(error_ctor), "prepareStackTrace", 17);
+  }
+
+  if (vtype(prep) == T_FUNC || vtype(prep) == T_CFUNC) {
+    ant_value_t callsites = js_build_callsite_array(js);
+    ant_value_t prep_args[2] = { target, callsites };
+    ant_value_t result = sv_vm_call(js->vm, js, prep, js_mkundef(), prep_args, 2, NULL, false);
+    if (js->thrown_exists) return js_mkundef();
+    js_set(js, target, "stack", result);
+    js_set_descriptor(js, js_as_obj(target), "stack", 5, JS_DESC_W | JS_DESC_C);
+  } else js_capture_stack(js, target);
+
+  return js_mkundef();
+}
+
 static ant_value_t builtin_error_isError(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_false;
   ant_value_t val = args[0];
@@ -11732,11 +11757,14 @@ ant_t *js_create(void *buf, size_t len) {
   set_slot(err_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_Error));
   js_setprop_nonconfigurable(js, err_ctor_obj, "prototype", 9, error_proto);
   js_setprop(js, err_ctor_obj, ANT_STRING("name"), ANT_STRING("Error"));
+  
   ant_value_t err_ctor_func = js_obj_to_func(err_ctor_obj);
   js_setprop(js, glob, ANT_STRING("Error"), err_ctor_func);
   js_setprop(js, error_proto, js_mkstr(js, "constructor", 11), err_ctor_func);
   js_set_descriptor(js, error_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
   js_setprop(js, err_ctor_func, ANT_STRING("isError"), js_mkfun(builtin_error_isError));
+  js_setprop(js, err_ctor_func, ANT_STRING("captureStackTrace"), js_mkfun(builtin_error_captureStackTrace));
+  js_setprop(js, err_ctor_func, ANT_STRING("stackTraceLimit"), js_mknum(10));
   
   #define REGISTER_ERROR_SUBTYPE(name_str) do { \
     ant_value_t proto = js_mkobj(js); \
