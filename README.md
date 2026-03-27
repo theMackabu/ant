@@ -1,13 +1,13 @@
 # 🐜 Ant
 
-**A 7MB JavaScript runtime with 1ms cold starts.**
+**A 8MB JavaScript runtime with 1ms cold starts.**
 
 Ant is a lightweight, high-performance JavaScript runtime built from scratch. <br>
 Fits in your pocket while Delivering near-V8 speeds in a binary smaller than most npm packages.
 
 ```
 $ ls -lh ant
--rwxr-xr-x⠀5.2M⠀ant*
+-rwxr-xr-x⠀8.1M⠀ant*
 ```
 
 ## Table of contents
@@ -24,11 +24,11 @@ $ ls -lh ant
 
 |                     | Ant         | Node      | Bun      | Deno      |
 | ------------------- | ----------- | --------- | -------- | --------- |
-| Binary size         | **~7 MB**   | ~120 MB   | ~60 MB   | ~90 MB    |
+| Binary size         | **~8 MB**   | ~120 MB   | ~60 MB   | ~90 MB    |
 | Cold start          | **~3-5 ms** | ~30-50 ms | ~5-10 ms | ~20-30 ms |
 | Engine              | Ant Silver  | V8        | JSC      | V8        |
 | JIT                 | ✓           | ✓         | ✓        | ✓         |
-| WinterTC conformant | partial     | partial   | ✓        | ✓         |
+| WinterTC conformant | ✓           | partial   | ✓        | ✓         |
 
 Ant is designed for environments where size and startup time matter: serverless functions, edge computing, embedded systems, CLI tools, and anywhere you'd want JavaScript but can't afford a 50MB+ runtime.
 
@@ -45,14 +45,14 @@ curl -fsSL https://ant.themackabu.com/install | MBEDTLS=1 bash
 
 ## Spec conformance
 
-Ant plans to fully target the [WinterTC Minimum Common API](https://min-common-api.proposal.wintertc.org/) specification, the standard for server-side JavaScript interoperability developed by Ecma TC55.
+Ant targets the [WinterTC Minimum Common API](https://min-common-api.proposal.wintertc.org/) specification, the standard for server-side JavaScript interoperability developed by Ecma TC55.
 
 | Suite            | Pass rate | Notes                                      |
 | ---------------- | --------- | ------------------------------------------ |
 | js-zoo (ES1–ES5) | ~100%     |                                            |
 | js-zoo (ES6)     | ~80%\*    | \*Generators unsupported                   |
-| js-zoo (ES2016+) | ~85%      |                                            |
-| test262          | ~40%      | Improving, focus is on real-world coverage |
+| js-zoo (ES2016+) | ~90%      |                                            |
+| test262          | ~50%      | Improving, focus is on real-world coverage |
 
 ## Building Ant
 

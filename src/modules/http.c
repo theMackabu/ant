@@ -43,6 +43,10 @@ static void ant_http_request_free(ant_http_request_t *req) {
   free(req);
 }
 
+static void ant_http_upload_chunk_cb(tlsuv_http_req_t *http_req, char *body, ssize_t len) {
+  free(body);
+}
+
 static char *ant_http_copy_slice(const char *src, size_t len) {
   char *out = malloc(len + 1);
   if (!out) return NULL;
@@ -236,6 +240,27 @@ int ant_http_request_cancel(ant_http_request_t *req) {
   return tlsuv_http_req_cancel(&req->client, req->req);
 }
 
+int ant_http_request_write(ant_http_request_t *req, const uint8_t *chunk, size_t len) {
+  uint8_t *copy = NULL;
+  int rc = 0;
+
+  if (!req || !req->req || req->completed) return UV_EINVAL;
+  if (len == 0) return 0;
+
+  copy = malloc(len);
+  if (!copy) return UV_ENOMEM;
+  memcpy(copy, chunk, len);
+
+  rc = tlsuv_http_req_data(req->req, (const char *)copy, len, ant_http_upload_chunk_cb);
+  if (rc != 0) free(copy);
+  return rc;
+}
+
+void ant_http_request_end(ant_http_request_t *req) {
+  if (!req || !req->req || req->completed) return;
+  tlsuv_http_req_end(req->req);
+}
+
 int ant_http_request_start(
   uv_loop_t *loop,
   const ant_http_request_options_t *options,
@@ -298,12 +323,14 @@ int ant_http_request_start(
   }
 
   req->req->data = req;
+  if (options->chunked_body) tlsuv_http_req_header(req->req, "transfer-encoding", "chunked");
   for (const ant_http_header_t *hdr = options->headers; hdr; hdr = hdr->next) {
     tlsuv_http_req_header(req->req, hdr->name, hdr->value);
   }
 
   if (options->body && options->body_len > 0) {
   rc = tlsuv_http_req_data(req->req, (const char *)options->body, options->body_len, NULL);
+  
   if (rc != 0) {
     ant_http_complete(req, rc, uv_strerror(rc));
     if (out_req) *out_req = req;

@@ -16,6 +16,7 @@
 #include "esm/remote.h"
 #include "gc/modules.h"
 #include "modules/abort.h"
+#include "modules/assert.h"
 #include "modules/buffer.h"
 #include "modules/fetch.h"
 #include "modules/headers.h"
@@ -32,13 +33,20 @@ typedef struct fetch_request_s {
   ant_value_t request_obj;
   ant_value_t response_obj;
   ant_value_t abort_listener;
+  ant_value_t upload_reader;
+  ant_value_t upload_read_promise;
   ant_http_request_t *http_req;
   
+  int refs;
   bool settled;
   bool aborted;
 } fetch_request_t;
 
 static UT_array *pending_requests = NULL;
+
+static void fetch_request_retain(fetch_request_t *req) {
+  if (req) req->refs++;
+}
 
 static void remove_pending_request(fetch_request_t *req) {
   if (!req || !pending_requests) return;
@@ -51,7 +59,7 @@ static void remove_pending_request(fetch_request_t *req) {
   }
 }
 
-static void free_fetch_request(fetch_request_t *req) {
+static void destroy_fetch_request(fetch_request_t *req) {
   if (!req) return;
 
   if (abort_signal_is_signal(request_get_signal(req->request_obj)) && is_callable(req->abort_listener))
@@ -59,6 +67,11 @@ static void free_fetch_request(fetch_request_t *req) {
 
   remove_pending_request(req);
   free(req);
+}
+
+static void fetch_request_release(fetch_request_t *req) {
+  if (!req) return;
+  if (--req->refs == 0) destroy_fetch_request(req);
 }
 
 static ant_value_t fetch_type_error(ant_t *js, const char *message) {
@@ -329,7 +342,7 @@ static void fetch_http_on_complete(ant_http_request_t *http_req, int error_code,
     reason = fetch_type_error(js, error_message ? error_message : "fetch failed");
     if (is_object_type(req->response_obj)) fetch_error_response_body(req, reason);
     else fetch_reject(req, reason);
-    free_fetch_request(req);
+    fetch_request_release(req);
     return;
   }
 
@@ -341,7 +354,7 @@ static void fetch_http_on_complete(ant_http_request_t *http_req, int error_code,
     }
   } else fetch_reject(req, fetch_type_error(js, "fetch completed without a response"));
 
-  free_fetch_request(req);
+  fetch_request_release(req);
 }
 
 static char *fetch_data_url_content_type(const char *url) {
@@ -384,7 +397,7 @@ static bool fetch_handle_data_url(fetch_request_t *req) {
     free(body);
     free(content_type);
     fetch_reject(req, fetch_type_error(js, "Failed to decode data URL"));
-    free_fetch_request(req);
+    fetch_request_release(req);
     return true;
   }
 
@@ -401,8 +414,120 @@ static bool fetch_handle_data_url(fetch_request_t *req) {
     fetch_reject(req, fetch_rejection_reason(js, response));
   } else fetch_resolve(req, response);
 
-  free_fetch_request(req);
+  fetch_request_release(req);
   return true;
+}
+
+static ant_value_t fetch_upload_on_reject(ant_t *js, ant_value_t *args, int nargs) {
+  fetch_request_t *req = (fetch_request_t *)(uintptr_t)(size_t)js_getnum(js_get_slot(js->current_func, SLOT_DATA));
+  ant_value_t reason = (nargs > 0) ? args[0] : js_mkundef();
+
+  if (!req) return js_mkundef();
+  req->upload_read_promise = js_mkundef();
+
+  if (!req->aborted) {
+    if (req->http_req) ant_http_request_cancel(req->http_req);
+    fetch_reject(req, reason);
+    if (!req->http_req) fetch_request_release(req);
+  }
+
+  fetch_request_release(req);
+  return js_mkundef();
+}
+
+static void fetch_upload_schedule_next_read(fetch_request_t *req);
+static ant_value_t fetch_upload_on_read(ant_t *js, ant_value_t *args, int nargs) {
+  fetch_request_t *req = (fetch_request_t *)(uintptr_t)(size_t)js_getnum(js_get_slot(js->current_func, SLOT_DATA));
+  
+  ant_value_t result = (nargs > 0) ? args[0] : js_mkundef();
+  ant_value_t done = 0;
+  ant_value_t value = 0;
+  
+  const uint8_t *chunk = NULL;
+  size_t chunk_len = 0;
+  int rc = 0;
+
+  if (!req) return js_mkundef();
+  req->upload_read_promise = js_mkundef();
+
+  if (req->aborted || !req->http_req) {
+    fetch_request_release(req);
+    return js_mkundef();
+  }
+
+  done = js_get(js, result, "done");
+  value = js_get(js, result, "value");
+  if (done == js_true) {
+    ant_http_request_end(req->http_req);
+    fetch_request_release(req);
+    return js_mkundef();
+  }
+
+  if (!buffer_source_get_bytes(js, value, &chunk, &chunk_len)) {
+    ant_value_t reason = js_mkerr_typed(js, JS_ERR_TYPE, "fetch request body stream chunk must be a BufferSource");
+    ant_http_request_cancel(req->http_req);
+    fetch_reject(req, fetch_rejection_reason(js, reason));
+    fetch_request_release(req);
+    return js_mkundef();
+  }
+
+  rc = ant_http_request_write(req->http_req, chunk, chunk_len);
+  if (rc != 0) {
+    ant_value_t reason = fetch_type_error(js, uv_strerror(rc));
+    ant_http_request_cancel(req->http_req);
+    fetch_reject(req, reason);
+    fetch_request_release(req);
+    return js_mkundef();
+  }
+
+  fetch_upload_schedule_next_read(req);
+  fetch_request_release(req);
+  return js_mkundef();
+}
+
+static void fetch_upload_schedule_next_read(fetch_request_t *req) {
+  ant_t *js = req->js;
+  
+  ant_value_t next_p = 0;
+  ant_value_t fulfill = 0;
+  ant_value_t reject = 0;
+  ant_value_t then_result = 0;
+
+  if (!req || !is_object_type(req->upload_reader)) return;
+  next_p = rs_default_reader_read(js, req->upload_reader);
+  req->upload_read_promise = next_p;
+  
+  fulfill = js_heavy_mkfun(js, fetch_upload_on_read, ANT_PTR(req));
+  reject = js_heavy_mkfun(js, fetch_upload_on_reject, ANT_PTR(req));
+  
+  fetch_request_retain(req);
+  then_result = js_promise_then(js, next_p, fulfill, reject);
+  promise_mark_handled(then_result);
+}
+
+static void fetch_start_upload(fetch_request_t *req) {
+  ant_t *js = req->js;
+  
+  ant_value_t stream = js_get_slot(req->request_obj, SLOT_REQUEST_BODY_STREAM);
+  ant_value_t reader_args[1] = { stream };
+  ant_value_t saved = js->new_target;
+  ant_value_t reader = 0;
+
+  if (!rs_is_stream(stream)) return;
+
+  js->new_target = g_reader_proto;
+  reader = js_rs_reader_ctor(js, reader_args, 1);
+  js->new_target = saved;
+
+  if (is_err(reader)) {
+    if (req->http_req) ant_http_request_cancel(req->http_req);
+    fetch_reject(req, fetch_rejection_reason(js, reader));
+    if (!req->http_req) fetch_request_release(req);
+    return;
+  }
+
+  req->upload_reader = reader;
+  fetch_upload_schedule_next_read(req);
 }
 
 static void fetch_start_http(fetch_request_t *req) {
@@ -414,14 +539,14 @@ static void fetch_start_http(fetch_request_t *req) {
 
   if (!request) {
     fetch_reject(req, fetch_type_error(req->js, "Invalid Request object"));
-    free_fetch_request(req);
+    fetch_request_release(req);
     return;
   }
 
   url = fetch_build_request_url(request);
   if (!url) {
     fetch_reject(req, fetch_type_error(req->js, "Invalid request URL"));
-    free_fetch_request(req);
+    fetch_request_release(req);
     return;
   }
 
@@ -433,7 +558,7 @@ static void fetch_start_http(fetch_request_t *req) {
   if (!fetch_is_http_url(url)) {
     free(url);
     fetch_reject(req, fetch_type_error(req->js, "fetch only supports http:, https:, and data: URLs"));
-    free_fetch_request(req);
+    fetch_request_release(req);
     return;
   }
 
@@ -441,7 +566,7 @@ static void fetch_start_http(fetch_request_t *req) {
   if (!headers) {
     free(url);
     fetch_reject(req, fetch_type_error(req->js, "out of memory"));
-    free_fetch_request(req);
+    fetch_request_release(req);
     return;
   }
 
@@ -450,6 +575,7 @@ static void fetch_start_http(fetch_request_t *req) {
   options.headers = headers;
   options.body = request->body_data;
   options.body_len = request->body_size;
+  options.chunked_body = request->body_is_stream;
 
   rc = ant_http_request_start(
     uv_default_loop(), &options,
@@ -462,8 +588,11 @@ static void fetch_start_http(fetch_request_t *req) {
 
   if (rc != 0) {
     fetch_reject(req, fetch_type_error(req->js, uv_strerror(rc)));
-    free_fetch_request(req);
+    fetch_request_release(req);
+    return;
   }
+
+  if (request->body_is_stream) fetch_start_upload(req);
 }
 
 static ant_value_t fetch_abort_listener(ant_t *js, ant_value_t *args, int nargs) {
@@ -478,7 +607,7 @@ static ant_value_t fetch_abort_listener(ant_t *js, ant_value_t *args, int nargs)
 
   if (req->http_req) ant_http_request_cancel(req->http_req);
   fetch_reject(req, reason);
-  if (!req->http_req) free_fetch_request(req);
+  if (!req->http_req) fetch_request_release(req);
 
   return js_mkundef();
 }
@@ -504,12 +633,6 @@ static ant_value_t js_fetch(ant_t *js, ant_value_t *args, int nargs) {
     return promise;
   }
 
-  if (request->body_is_stream) {
-    js_reject_promise(js, promise,
-      fetch_type_error(js, "fetch does not yet support ReadableStream request bodies"));
-    return promise;
-  }
-
   req = calloc(1, sizeof(fetch_request_t));
   if (!req) {
     js_reject_promise(js, promise, fetch_type_error(js, "out of memory"));
@@ -519,13 +642,18 @@ static ant_value_t js_fetch(ant_t *js, ant_value_t *args, int nargs) {
   req->js = js;
   req->promise = promise;
   req->request_obj = request_obj;
+  req->response_obj = js_mkundef();
+  req->abort_listener = js_mkundef();
+  req->upload_reader = js_mkundef();
+  req->upload_read_promise = js_mkundef();
+  req->refs = 1;
   utarray_push_back(pending_requests, &req);
 
   signal = request_get_signal(request_obj);
   if (abort_signal_is_signal(signal)) {
     if (abort_signal_is_aborted(signal)) {
       fetch_reject(req, abort_signal_get_reason(signal));
-      free_fetch_request(req);
+      fetch_request_release(req);
       return promise;
     }
 
@@ -558,5 +686,7 @@ void gc_mark_fetch(ant_t *js, gc_mark_fn mark) {
     mark(js, (*reqp)->request_obj);
     mark(js, (*reqp)->response_obj);
     mark(js, (*reqp)->abort_listener);
+    mark(js, (*reqp)->upload_reader);
+    mark(js, (*reqp)->upload_read_promise);
   }
 }

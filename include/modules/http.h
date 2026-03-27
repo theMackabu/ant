@@ -5,6 +5,7 @@
 #include <types.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdbool.h>
 
 typedef struct ant_http_header_s {
   char *name;
@@ -18,6 +19,7 @@ typedef struct {
   const ant_http_header_t *headers;
   const uint8_t *body;
   size_t body_len;
+  bool chunked_body;
 } ant_http_request_options_t;
 
 typedef struct {
@@ -57,7 +59,11 @@ int ant_http_request_start(
 );
 
 int ant_http_request_cancel(ant_http_request_t *req);
+int ant_http_request_write(ant_http_request_t *req, const uint8_t *chunk, size_t len);
+
+void ant_http_request_end(ant_http_request_t *req);
 void ant_http_headers_free(ant_http_header_t *headers);
+
 const ant_http_response_t *ant_http_request_response(ant_http_request_t *req);
 
 #endif
