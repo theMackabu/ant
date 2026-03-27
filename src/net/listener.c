@@ -1,7 +1,9 @@
 #include <compat.h> // IWYU pragma: keep
 
+#ifndef _WIN32
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#endif
 #include <stdlib.h>
 #include <string.h>
 
