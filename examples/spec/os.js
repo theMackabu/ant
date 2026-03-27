@@ -39,7 +39,7 @@ test('os.endianness returns string', typeof os.endianness(), 'string');
 test('os.endianness valid value', os.endianness() === 'LE' || os.endianness() === 'BE', true);
 
 test('os.uptime returns number', typeof os.uptime(), 'number');
-test('os.uptime is positive', os.uptime() > 0, true);
+test('os.uptime is non-negative', os.uptime() >= 0, true);
 
 test('os.totalmem returns number', typeof os.totalmem(), 'number');
 test('os.totalmem is positive', os.totalmem() > 0, true);

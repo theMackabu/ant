@@ -53,6 +53,16 @@ const jsonRes = Response.json({ hello: 'world' });
 test('Response.json content-type', jsonRes.headers.get('content-type'), 'application/json');
 test('Response.json body', (await jsonRes.json()).hello, 'world');
 testThrows('Response.json rejects symbol', () => Response.json(Symbol('x')));
+
+testThrows('Response.json propagates serializer errors', () => {
+  class CustomError extends Error {}
+  Response.json({
+    get hello() {
+      throw new CustomError('boom');
+    }
+  });
+});
+
 testThrows('Response.json null body status rejects', () => Response.json('x', { status: 204 }));
 
 const f16Body = new Float16Array([1.5, -0.5, 2.25]);

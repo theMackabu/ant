@@ -129,8 +129,8 @@ test('stdin.removeAllListeners is function', typeof process.stdin.removeAllListe
 
 test('stdout is object', typeof process.stdout, 'object');
 test('stdout.isTTY is boolean', typeof process.stdout.isTTY, 'boolean');
-test('stdout.rows is number', typeof process.stdout.rows, 'number');
-test('stdout.columns is number', typeof process.stdout.columns, 'number');
+test('stdout.rows shape', process.stdout.isTTY ? typeof process.stdout.rows === 'number' : process.stdout.rows === undefined, true);
+test('stdout.columns shape', process.stdout.isTTY ? typeof process.stdout.columns === 'number' : process.stdout.columns === undefined, true);
 test('stdout.write is function', typeof process.stdout.write, 'function');
 test('stdout.on is function', typeof process.stdout.on, 'function');
 test('stdout.once is function', typeof process.stdout.once, 'function');
@@ -215,7 +215,7 @@ if (process.platform !== 'win32') {
   test('setegid is function', typeof process.setegid, 'function');
   test('setgroups is function', typeof process.setgroups, 'function');
   test('initgroups is function', typeof process.initgroups, 'function');
-  
+
   test('getuid returns number', typeof process.getuid(), 'number');
   test('getgid returns number', typeof process.getgid(), 'number');
   test('getgroups returns array', Array.isArray(process.getgroups()), true);

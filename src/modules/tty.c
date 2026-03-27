@@ -178,21 +178,19 @@ static int force_color_depth(const char *force_color) {
 }
 
 static int detect_color_depth(ant_t *js, int fd, ant_value_t env_obj) {
-  if (!is_tty_fd(fd)) return 1;
-
   char scratch[128];
   const char *force_color = get_env_value(js, env_obj, "FORCE_COLOR", scratch, sizeof(scratch));
+  
   int forced = force_color_depth(force_color);
   if (forced > 0) return forced;
 
   const char *no_color = get_env_value(js, env_obj, "NO_COLOR", scratch, sizeof(scratch));
   if (no_color && *no_color) return 1;
+  if (!is_tty_fd(fd)) return 1;
 
   const char *colorterm = get_env_value(js, env_obj, "COLORTERM", scratch, sizeof(scratch));
   if (colorterm) {
-    if (str_case_contains(colorterm, "truecolor") || str_case_contains(colorterm, "24bit")) {
-      return 24;
-    }
+    if (str_case_contains(colorterm, "truecolor") || str_case_contains(colorterm, "24bit")) return 24;
   }
 
 #ifdef _WIN32

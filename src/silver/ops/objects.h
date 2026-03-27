@@ -14,20 +14,25 @@ static inline void sv_op_define_method(
 ) {
   uint32_t atom_idx = sv_get_u32(ip + 1);
   uint8_t flags = sv_get_u8(ip + 5);
+  
   sv_atom_t *a = &func->atoms[atom_idx];
   ant_value_t fn = vm->stack[--vm->sp];
   ant_value_t obj = vm->stack[vm->sp - 1];
   ant_value_t desc_obj = js_as_obj(obj);
+  
   bool is_getter = (flags & 1) != 0;
   bool is_setter = (flags & 2) != 0;
+  
   if (is_getter) {
-    js_set_getter_desc(js, desc_obj, a->str, a->len, fn, JS_DESC_C);
+    js_set_getter_desc(js, desc_obj, a->str, a->len, fn, JS_DESC_E | JS_DESC_C);
     return;
   }
+  
   if (is_setter) {
-    js_set_setter_desc(js, desc_obj, a->str, a->len, fn, JS_DESC_C);
+    js_set_setter_desc(js, desc_obj, a->str, a->len, fn, JS_DESC_E | JS_DESC_C);
     return;
   }
+  
   ant_value_t key = js_mkstr(js, a->str, a->len);
   mkprop(js, obj, key, fn, 0);
 }
@@ -52,8 +57,8 @@ static inline void sv_op_define_method_comp(
     ant_offset_t klen = 0;
     ant_offset_t koff = vstr(js, key_str, &klen);
     const char *kptr = (const char *)(uintptr_t)(koff);
-    if (is_getter) js_set_getter_desc(js, desc_obj, kptr, klen, fn, JS_DESC_C);
-    else js_set_setter_desc(js, desc_obj, kptr, klen, fn, JS_DESC_C);
+    if (is_getter) js_set_getter_desc(js, desc_obj, kptr, klen, fn, JS_DESC_E | JS_DESC_C);
+    else js_set_setter_desc(js, desc_obj, kptr, klen, fn, JS_DESC_E | JS_DESC_C);
     return;
   }
   if (vtype(key_str) == T_STR) {

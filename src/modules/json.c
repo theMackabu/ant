@@ -93,6 +93,11 @@ static inline bool json_has_abort(json_cycle_ctx *ctx) {
   return ctx->has_cycle || vtype(ctx->error) != T_UNDEF;
 }
 
+static inline ant_value_t json_normalize_error(ant_value_t value) {
+  if (is_err(value) && vdata(value) != 0) return js_as_obj(value);
+  return value;
+}
+
 static void json_capture_error(json_cycle_ctx *ctx, ant_value_t value) {
   if (vtype(ctx->error) != T_UNDEF) return;
   if (ctx->js->thrown_exists) {
@@ -101,7 +106,7 @@ static void json_capture_error(json_cycle_ctx *ctx, ant_value_t value) {
     ctx->js->thrown_value = js_mkundef();
     return;
   }
-  ctx->error = value;
+  ctx->error = json_normalize_error(value);
 }
 
 static yyjson_mut_val *json_string_to_yyjson(ant_t *js, yyjson_mut_doc *doc, ant_value_t value) {
@@ -419,7 +424,14 @@ static yyjson_write_flag get_write_flags(ant_value_t *args, int nargs) {
 ant_value_t js_json_stringify(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t result;
   yyjson_mut_doc *doc = NULL;
-  json_cycle_ctx ctx = {0};
+  
+  json_cycle_ctx ctx = {
+    .js = js,
+    .replacer_func = js_mkundef(),
+    .replacer_arr = js_mkundef(),
+    .error = js_mkundef(),
+    .holder = js_mkundef(),
+  };
   
   char *json_str = NULL;
   size_t len;
@@ -442,13 +454,6 @@ ant_value_t js_json_stringify(ant_t *js, ant_value_t *args, int nargs) {
     return result;
   }
   
-  ctx.js = js;
-  ctx.replacer_func = js_mkundef();
-  ctx.replacer_arr = js_mkundef();
-  ctx.replacer_arr_len = 0;
-  ctx.error = js_mkundef();
-  ctx.holder = js_mkundef();
-  
   if (nargs >= 2) {
   ant_value_t replacer = args[1];
   if (vtype(replacer) == T_FUNC) ctx.replacer_func = replacer;
@@ -467,7 +472,8 @@ ant_value_t js_json_stringify(ant_t *js, ant_value_t *args, int nargs) {
   yyjson_mut_val *root = ant_value_to_yyjson(js, doc, args[0], &ctx);
   
   if (vtype(ctx.error) != T_UNDEF) {
-    result = is_err(ctx.error) ? ctx.error : js_throw(js, ctx.error);
+    ant_value_t error = json_normalize_error(ctx.error);
+    result = is_err(error) ? error : js_throw(js, error);
     goto cleanup;
   }
 
