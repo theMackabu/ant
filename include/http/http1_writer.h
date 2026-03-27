@@ -33,7 +33,8 @@ bool ant_http1_write_basic_response(
   const char *status_text,
   const char *content_type,
   const uint8_t *body,
-  size_t body_len
+  size_t body_len,
+  bool keep_alive
 );
 
 bool ant_http1_write_response_head(
@@ -42,7 +43,8 @@ bool ant_http1_write_response_head(
   const char *status_text,
   ant_value_t headers,
   bool body_is_stream,
-  size_t body_size
+  size_t body_size,
+  bool keep_alive
 );
 
 bool ant_http1_write_final_chunk(ant_http1_buffer_t *buf);

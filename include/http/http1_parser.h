@@ -15,6 +15,9 @@ typedef struct {
   uint8_t *body;
   size_t body_len;
   size_t content_length;
+  size_t consumed_len;
+  uint8_t http_major;
+  uint8_t http_minor;
   bool absolute_target;
   bool keep_alive;
 } ant_http1_parsed_request_t;
@@ -29,7 +32,8 @@ ant_http1_parse_result_t ant_http1_parse_request(
   const char *data,
   size_t len,
   ant_http1_parsed_request_t *out,
-  const char **error_reason
+  const char **error_reason,
+  const char **error_code
 );
 
 void ant_http1_free_parsed_request(ant_http1_parsed_request_t *req);

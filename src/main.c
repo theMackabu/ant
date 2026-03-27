@@ -70,6 +70,8 @@
 #include "modules/util.h"
 #include "modules/async_hooks.h"
 #include "modules/net.h"
+#include "modules/http_parser.h"
+#include "modules/http_writer.h"
 #include "modules/dns.h"
 #include "modules/assert.h"
 #include "modules/domexception.h"
@@ -610,6 +612,9 @@ int main(int argc, char *argv[]) {
   ant_register_library(shell_library, "ant:shell", NULL);
   ant_register_library(ffi_library, "ant:ffi", NULL);
   ant_register_library(lmdb_library, "ant:lmdb", NULL);
+  
+  ant_register_library(internal_http_parser_library, "ant:internal/http_parser", NULL);
+  ant_register_library(internal_http_writer_library, "ant:internal/http_writer", NULL);
 
   ant_standard_library("util", util_library);
   ant_standard_library("net", net_library);

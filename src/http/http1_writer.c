@@ -155,7 +155,8 @@ bool ant_http1_write_basic_response(
   const char *status_text,
   const char *content_type,
   const uint8_t *body,
-  size_t body_len
+  size_t body_len,
+  bool keep_alive
 ) {
   ant_http1_buffer_appendf(buf, "HTTP/1.1 %d %s\r\n", status, status_text 
     ? status_text 
@@ -168,9 +169,12 @@ bool ant_http1_write_basic_response(
   );
   
   ant_http1_buffer_appendf(buf, "Content-Length: %zu\r\n", body_len);
-  ant_http1_buffer_append_cstr(buf, "Connection: close\r\n\r\n");
-  if (body_len > 0) ant_http1_buffer_append(buf, body, body_len);
+  ant_http1_buffer_append_cstr(buf, keep_alive 
+    ? "Connection: keep-alive\r\n\r\n" 
+    : "Connection: close\r\n\r\n"
+  );
   
+  if (body_len > 0) ant_http1_buffer_append(buf, body, body_len);
   return !buf->failed;
 }
 
@@ -180,7 +184,8 @@ bool ant_http1_write_response_head(
   const char *status_text,
   ant_value_t headers,
   bool body_is_stream,
-  size_t body_size
+  size_t body_size,
+  bool keep_alive
 ) {
   response_header_ctx_t ctx = { .buf = buf };
 
@@ -192,7 +197,7 @@ bool ant_http1_write_response_head(
   headers_for_each(headers, ant_http1_append_response_header, &ctx);
   if (body_is_stream) ant_http1_buffer_append_cstr(buf, "Transfer-Encoding: chunked\r\n");
   else ant_http1_buffer_appendf(buf, "Content-Length: %zu\r\n", body_size);
-  ant_http1_buffer_append_cstr(buf, "Connection: close\r\n\r\n");
+  ant_http1_buffer_append_cstr(buf, keep_alive ? "Connection: keep-alive\r\n\r\n" : "Connection: close\r\n\r\n");
   
   return !buf->failed;
 }

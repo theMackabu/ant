@@ -318,7 +318,7 @@ static void server_send_basic_response(
   size_t out_len = 0;
 
   ant_http1_buffer_init(&buf);
-  if (!ant_http1_write_basic_response(&buf, status, status_text, content_type, body, body_len)) {
+  if (!ant_http1_write_basic_response(&buf, status, status_text, content_type, body, body_len, false)) {
     ant_http1_buffer_free(&buf);
     ant_conn_close(conn);
     return;
@@ -378,7 +378,7 @@ static void server_finish_with_response(server_request_t *req, ant_value_t respo
   status_text = (resp->status_text && resp->status_text[0]) ? resp->status_text : ant_http1_default_status_text(resp->status);
 
   ant_http1_buffer_init(&buf);
-  if (!ant_http1_write_response_head(&buf, resp->status, status_text, headers, body_is_stream, resp->body_size)) {
+  if (!ant_http1_write_response_head(&buf, resp->status, status_text, headers, body_is_stream, resp->body_size, false)) {
     ant_http1_buffer_free(&buf);
     ant_conn_close(req->conn);
     return;
@@ -716,7 +716,7 @@ static void server_on_read(ant_conn_t *conn, ssize_t nread, void *user_data) {
   ant_http1_parse_result_t parse_result = ANT_HTTP1_PARSE_INCOMPLETE;
   if (!conn) return;
 
-  parse_result = ant_http1_parse_request(ant_conn_buffer(conn), ant_conn_buffer_len(conn), &parsed, NULL);
+  parse_result = ant_http1_parse_request(ant_conn_buffer(conn), ant_conn_buffer_len(conn), &parsed, NULL, NULL);
   if (parse_result == ANT_HTTP1_PARSE_ERROR) {
     ant_http1_free_parsed_request(&parsed);
     server_send_text_response(conn, 400, "Bad Request", "Bad Request");

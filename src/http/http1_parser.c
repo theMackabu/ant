@@ -15,6 +15,7 @@ typedef struct {
   ant_http1_buffer_t header_field;
   ant_http1_buffer_t header_value;
   ant_http1_buffer_t body;
+  ant_http_header_t **header_tail;
   bool message_complete;
 } parser_ctx_t;
 
@@ -47,8 +48,8 @@ static bool parser_copy_header(parser_ctx_t *ctx) {
     return false;
   }
 
-  hdr->next = ctx->req.headers;
-  ctx->req.headers = hdr;
+  *ctx->header_tail = hdr;
+  ctx->header_tail = &hdr->next;
 
   if (strcasecmp(hdr->name, "host") == 0) {
     free(ctx->req.host);
@@ -111,7 +112,8 @@ ant_http1_parse_result_t ant_http1_parse_request(
   const char *data,
   size_t len,
   ant_http1_parsed_request_t *out,
-  const char **error_reason
+  const char **error_reason,
+  const char **error_code
 ) {
   llhttp_t parser;
   llhttp_settings_t settings;
@@ -119,7 +121,10 @@ ant_http1_parse_result_t ant_http1_parse_request(
   parser_ctx_t ctx = {0};
 
   if (error_reason) *error_reason = NULL;
+  if (error_code) *error_code = NULL;
+  
   memset(out, 0, sizeof(*out));
+  ctx.header_tail = &ctx.req.headers;
 
   ant_http1_buffer_init(&ctx.method);
   ant_http1_buffer_init(&ctx.target);
@@ -138,10 +143,13 @@ ant_http1_parse_result_t ant_http1_parse_request(
 
   llhttp_init(&parser, HTTP_REQUEST, &settings);
   parser.data = &ctx;
+  
   err = llhttp_execute(&parser, data, len);
+  if (llhttp_get_error_pos(&parser)) out->consumed_len = (size_t)(llhttp_get_error_pos(&parser) - data);
 
   if (err != HPE_OK && err != HPE_PAUSED) {
     if (error_reason) *error_reason = llhttp_get_error_reason(&parser);
+    if (error_code) *error_code = llhttp_errno_name(err);
     parser_ctx_free(&ctx);
     return ANT_HTTP1_PARSE_ERROR;
   }
@@ -160,13 +168,17 @@ ant_http1_parse_result_t ant_http1_parse_request(
   }
 
   ctx.req.absolute_target =
-    strncmp(ctx.req.target, "http://", 7) == 0 ||
+    strncmp(ctx.req.target, "http://", 7)  == 0 ||
     strncmp(ctx.req.target, "https://", 8) == 0;
+    
   ctx.req.keep_alive = llhttp_should_keep_alive(&parser) == 1;
+  ctx.req.http_major = parser.http_major;
+  ctx.req.http_minor = parser.http_minor;
 
   *out = ctx.req;
   memset(&ctx.req, 0, sizeof(ctx.req));
   parser_ctx_free(&ctx);
+  
   return ANT_HTTP1_PARSE_OK;
 }
 
