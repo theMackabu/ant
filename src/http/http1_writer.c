@@ -49,27 +49,28 @@ bool ant_http1_buffer_append_cstr(ant_http1_buffer_t *buf, const char *str) {
 #pragma GCC diagnostic ignored "-Wformat-nonliteral"
 
 bool ant_http1_buffer_appendfv(ant_http1_buffer_t *buf, const char *fmt, va_list ap) {
+  char stack[256];
   va_list ap_copy;
   int written;
 
   if (!buf || buf->failed) return false;
 
   va_copy(ap_copy, ap);
-  written = vsnprintf(NULL, 0, fmt, ap_copy);
+  written = vsnprintf(stack, sizeof(stack), fmt, ap_copy);
   va_end(ap_copy);
+
   if (written < 0) {
     buf->failed = true;
     return false;
   }
 
-  if (!ant_http1_buffer_reserve(buf, (size_t)written)) return false;
-  written = vsnprintf(buf->data + buf->len, buf->cap - buf->len, fmt, ap);
-  if (written < 0) {
-    buf->failed = true;
-    return false;
-  }
+  if ((size_t)written < sizeof(stack))
+    return ant_http1_buffer_append(buf, stack, (size_t)written);
 
+  if (!ant_http1_buffer_reserve(buf, (size_t)written + 1)) return false;
+  vsnprintf(buf->data + buf->len, buf->cap - buf->len, fmt, ap);
   buf->len += (size_t)written;
+  
   return true;
 }
 
