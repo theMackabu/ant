@@ -311,29 +311,20 @@ static void eval_code(ant_t *js, const char *script, size_t len, const char *tag
 }
 
 static int execute_module(ant_t *js, const char *filename) {
-  char *buffer = NULL;
-  size_t len = 0;
+  bool looks_like_server = false;
   
   char *use_path_owned = NULL;
   const char *use_path = filename;
+
+  ant_value_t ns = 0;
+  ant_value_t specifier = 0;
+  ant_value_t default_export = 0;
+  ant_value_t server_result = 0;
   
   if (esm_is_url(filename)) {
-    char *error = NULL;
-    buffer = esm_fetch_url(filename, &len, &error);
-    
-    if (!buffer) {
-      crfprintf(stderr, msg.failed_to_fetch, filename, error ? error : "unknown error");
-      free(error); return EXIT_FAILURE;
-    }
-    
     js_set(js, js_glob(js), "__dirname", js_mkundef());
+    specifier = js_mkstr(js, filename, strlen(filename));
   } else {
-    buffer = read_file(filename, &len);
-    if (!buffer) {
-      crfprintf(stderr, msg.module_not_found, filename);
-      return EXIT_FAILURE;
-    }
-    
     char *file_path = strdup(filename);
     char *dir = dirname(file_path);
     js_set(js, js_glob(js), "__dirname", js_mkstr(js, dir, strlen(dir)));
@@ -341,22 +332,9 @@ static int execute_module(ant_t *js, const char *filename) {
     
     use_path_owned = realpath(filename, NULL);
     if (use_path_owned) use_path = use_path_owned;
+    specifier = js_esm_make_file_url(js, use_path);
   }
   
-  size_t js_len = len;
-  const char *strip_detail = NULL;
-  
-  int strip_result = strip_typescript_inplace(
-    &buffer, len, filename, &js_len, &strip_detail
-  );
-  
-  if (strip_result < 0) {
-    crfprintf(stderr, msg.type_strip_failed, strip_result, strip_detail);
-    free(buffer); free(use_path_owned);
-    return EXIT_FAILURE;
-  }
-  
-  char *js_code = buffer;
   js_set(js, js_glob(js), 
     "__filename", 
     js_mkstr(js, filename, strlen(filename))
@@ -364,16 +342,28 @@ static int execute_module(ant_t *js, const char *filename) {
   
   js_set_filename(js, use_path);
   js_setup_import_meta(js, use_path);
+  ns = js_esm_import_sync(js, specifier);
   
-  ant_value_t result = js_esm_eval_module_source(
-    js, use_path, js_code, 
-    js_len, mkobj(js, 0)
-  ); 
-  
-  free(js_code);
-  
+  free(use_path_owned);
   if (print_uncaught_throw(js)) return EXIT_FAILURE;
-  if (vtype(result) == T_ERR) fprintf(stderr, "%s\n", js_str(js, result));
+  
+  if (vtype(ns) == T_ERR) {
+    fprintf(stderr, "%s\n", js_str(js, ns));
+    return EXIT_FAILURE;
+  }
+
+  default_export = js_get(js, ns, "default");
+  
+  if (server_export_has_fetch_handler(js, default_export, &looks_like_server)) {
+    server_result = server_start_from_export(js, default_export);
+    if (is_err(server_result)) {
+      fprintf(stderr, "%s\n", js_str(js, server_result));
+      return EXIT_FAILURE;
+    }
+  } else if (looks_like_server) {
+    fprintf(stderr, "Module does not export a fetch handler\n");
+    return EXIT_FAILURE;
+  }
   
   return EXIT_SUCCESS;
 }
@@ -619,7 +609,6 @@ int main(int argc, char *argv[]) {
   init_fetch_module();
   init_console_module();
   init_json_module();
-  init_server_module();
   init_process_module();
   init_tty_module();
   init_events_module();

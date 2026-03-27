@@ -74,6 +74,11 @@ static bool is_special_scheme(const char *proto) {
     strcmp(proto, "wss:") == 0;
 }
 
+static bool uses_authority_syntax(const char *proto) {
+  if (!proto) return false;
+  return is_special_scheme(proto) || strcmp(proto, "file:") == 0;
+}
+
 char *form_urlencode_n(const char *str, size_t len) {
   if (!str) return strdup("");
   char *out = malloc(len * 3 + 1);
@@ -322,7 +327,7 @@ char *build_href(const url_state_t *s) {
     (s->password && *s->password) ||
     (s->port && *s->port);
     
-  bool opaque_like = !has_authority && !is_special_scheme(s->protocol);
+  bool opaque_like = !has_authority && !uses_authority_syntax(s->protocol);
   const char *pathname = s->pathname ? s->pathname : "";
   size_t len = strlen(s->protocol) + strlen(pathname) + strlen(s->search) + strlen(s->hash) + 32;
 

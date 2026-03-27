@@ -124,4 +124,34 @@ for (let i = 0; i < 1000; i = i + 1) {
 }
 console.assert(fast.get() === 1000, "FastCounter should reach 1000");
 
+// Private fields may use keyword-like names
+class KeywordPrivate {
+  #var = 7;
+  #default = 9;
+
+  sum() {
+    return this.#var + this.#default;
+  }
+}
+
+const keywordPrivate = new KeywordPrivate();
+console.assert(keywordPrivate.sum() === 16, "Keyword-named private fields should parse and work");
+
+// Class fields named get/set should remain fields, not accessors
+class FieldNamedAccessor {
+  #value = 0;
+
+  set = (value) => {
+    this.#value = value;
+  };
+
+  get = () => {
+    return this.#value;
+  };
+}
+
+const fieldNamedAccessor = new FieldNamedAccessor();
+fieldNamedAccessor.set(23);
+console.assert(fieldNamedAccessor.get() === 23, "Field names get/set should support arrow initializers");
+
 console.log("All private fields tests passed!");

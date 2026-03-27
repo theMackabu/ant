@@ -11,7 +11,7 @@
 #include "streams/brotli.h"
 #include "streams/transform.h"
 
-#define BROTLI_CHUNK_SIZE (1024 * 32)
+#define BROTLI_CHUNK_SIZE (32 * 1024)
 
 struct brotli_stream_state {
   bool decompress;

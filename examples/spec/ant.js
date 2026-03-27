@@ -48,7 +48,6 @@ test('typeof boolean', Ant.typeof(true), 'boolean');
 test('stats is function', typeof Ant.stats, 'function');
 test('raw is object', typeof Ant.raw, 'object');
 test('raw.typeof is function', typeof Ant.raw.typeof, 'function');
-test('serve is function', typeof Ant.serve, 'function');
 test('sleep is function', typeof Ant.sleep, 'function');
 test('msleep is function', typeof Ant.msleep, 'function');
 test('usleep is function', typeof Ant.usleep, 'function');

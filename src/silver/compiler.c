@@ -3773,12 +3773,20 @@ static sv_ast_t *find_class_constructor(sv_ast_t *node) {
   return NULL;
 }
 
-static void compile_class_method(sv_compiler_t *c, sv_ast_t *m,
-                                 int ctor_local, int proto_local,
-                                 int preeval_key) {
+static inline bool is_class_method_def(const sv_ast_t *m) {
+  return 
+    m && m->right && m->right->type == N_FUNC &&
+    (m->right->flags & FN_METHOD);
+}
+
+static void compile_class_method(
+  sv_compiler_t *c, sv_ast_t *m,
+  int ctor_local, int proto_local,
+  int preeval_key
+) {
   bool is_static = !!(m->flags & FN_STATIC);
   int home_local = is_static ? ctor_local : proto_local;
-  bool is_fn = (m->right && m->right->type == N_FUNC);
+  bool is_fn = is_class_method_def(m);
 
   if (is_fn) {
     compile_func_expr(c, m->right);   
@@ -3824,7 +3832,7 @@ static void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     if (m->type != N_METHOD) continue;
     if (m == ctor_method) continue;
     if (m->flags & FN_STATIC) continue;
-    bool is_fn = (m->right && m->right->type == N_FUNC);
+    bool is_fn = is_class_method_def(m);
     if (!is_fn) field_count++;
   }
 
@@ -3839,7 +3847,7 @@ static void compile_class(sv_compiler_t *c, sv_ast_t *node) {
       if (m->type != N_METHOD) continue;
       if (m == ctor_method) continue;
       if (m->flags & FN_STATIC) continue;
-      bool is_fn = (m->right && m->right->type == N_FUNC);
+      bool is_fn = is_class_method_def(m);
       if (!is_fn) {
         field_inits[fi] = m;
         if (m->flags & FN_COMPUTED) {
@@ -3847,9 +3855,7 @@ static void compile_class(sv_compiler_t *c, sv_ast_t *node) {
           int loc = add_local(c, "", 0, false, c->scope_depth);
           emit_put_local(c, loc);
           computed_key_locals[fi] = loc;
-        } else {
-          computed_key_locals[fi] = -1;
-        }
+        } else computed_key_locals[fi] = -1;
         fi++;
       }
     }
@@ -3861,7 +3867,7 @@ static void compile_class(sv_compiler_t *c, sv_ast_t *node) {
       sv_ast_t *m = node->args.items[i];
       if (m->type != N_METHOD || !(m->flags & FN_COMPUTED)) continue;
       if (m == ctor_method) continue;
-      bool is_fn = (m->right && m->right->type == N_FUNC);
+      bool is_fn = is_class_method_def(m);
       if (!is_fn && !(m->flags & FN_STATIC)) continue;
       if (!method_comp_keys) {
         method_comp_keys = malloc(sizeof(int) * node->args.count);
@@ -4002,12 +4008,17 @@ static void compile_class(sv_compiler_t *c, sv_ast_t *node) {
       end_scope(c);
       continue;
     }
+    
     if (m->type != N_METHOD) continue;
     if (m == ctor_method) continue;
-    bool is_fn = (m->right && m->right->type == N_FUNC);
+    
+    bool is_fn = is_class_method_def(m);
     if (!is_fn && !(m->flags & FN_STATIC)) continue;
-    compile_class_method(c, m, ctor_local, proto_local,
-                         method_comp_keys ? method_comp_keys[i] : -1);
+    
+    compile_class_method(
+      c, m, ctor_local, proto_local, 
+      method_comp_keys ? method_comp_keys[i] : -1
+    );
   }
 
   free(method_comp_keys);
@@ -4027,8 +4038,7 @@ static void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     c->locals[outer_name_local].is_tdz = false;
   }
 
-  if (node->str)
-    end_scope(c);
+  if (node->str) end_scope(c);
 }
 
 static sv_func_t *compile_function_body(

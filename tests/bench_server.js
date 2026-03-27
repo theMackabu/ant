@@ -1,7 +1,5 @@
-function meow(c) {}
-
-function server(c) {
-  c.res.body('meow');
+function server() {
+  return new Response('meow');
 }
 
-Ant.serve(8000, server);
+export default { fetch: server };

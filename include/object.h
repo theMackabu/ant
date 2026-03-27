@@ -49,6 +49,11 @@ typedef struct ant_object {
   struct ant_object *gc_pending_next;
   void (*finalizer)(ant_t *, struct ant_object *);
   ant_value_t inobj[ANT_INOBJ_MAX_SLOTS];
+  
+  struct {
+    void *ptr;
+    uint32_t tag;
+  } native;
 
   union {
     struct { ant_value_t *data; uint32_t len; uint32_t cap; } array;

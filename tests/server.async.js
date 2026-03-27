@@ -1,13 +1,13 @@
 let count = 0;
 
-async function meow(c) {
+async function meow() {
   count++;
-  c.res.body(`count is ${count}`);
+  return new Response(`count is ${count}`);
 }
 
-async function server(c) {
-  return await meow(c);
+async function server() {
+  return await meow();
 }
 
-console.log('server on http://localhost:8000');
-Ant.serve(8000, server);
+console.log('server on http://localhost:3000');
+export default { fetch: server };

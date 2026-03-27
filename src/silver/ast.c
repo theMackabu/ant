@@ -192,6 +192,10 @@ static inline bool is_ident_like_tok(uint8_t tok) {
   return tok == TOK_IDENTIFIER || tok == TOK_DEFAULT || is_contextual_ident_tok(tok);
 }
 
+static inline bool is_private_ident_like_tok(uint8_t tok) {
+  return tok >= TOK_IDENTIFIER && tok < TOK_IDENT_LIKE_END;
+}
+
 static inline bool sv_strict_forbidden_binding_ident(const char *s, uint32_t len) {
   return is_eval_or_arguments_name(s, len) || is_strict_reserved_name(s, len);
 }
@@ -810,7 +814,7 @@ static sv_ast_t *parse_primary(P) {
   l_private_name: {
     CONSUME();
     NEXT();
-    if (!is_ident_like_tok(TOK)) {
+    if (!is_private_ident_like_tok(TOK)) {
       SV_MKERR_TYPED(JS, JS_ERR_SYNTAX, "private field name expected");
       return mk(N_EMPTY);
     }
@@ -1019,7 +1023,7 @@ static sv_ast_t *parse_call(P) {
       if (TOK == TOK_HASH) {
         CONSUME();
         NEXT();
-        if (!is_ident_like_tok(TOK)) {
+        if (!is_private_ident_like_tok(TOK)) {
           SV_MKERR_TYPED(JS, JS_ERR_SYNTAX, "private field name expected");
           return mk(N_EMPTY);
         }
@@ -1062,7 +1066,7 @@ static sv_ast_t *parse_call(P) {
       } else if (TOK == TOK_HASH) {
         CONSUME();
         NEXT();
-        if (!is_ident_like_tok(TOK)) {
+        if (!is_private_ident_like_tok(TOK)) {
           SV_MKERR_TYPED(JS, JS_ERR_SYNTAX, "private field name expected");
           return mk(N_EMPTY);
         }
@@ -1342,7 +1346,7 @@ static sv_ast_t *parse_class(P) {
     if ((TLEN == 3 && memcmp(tok_str(p), "get", 3) == 0) ||
         (TLEN == 3 && memcmp(tok_str(p), "set", 3) == 0)) {
       uint8_t la = LA();
-      if (la != TOK_LPAREN) {
+      if (la != TOK_LPAREN && la != TOK_ASSIGN && la != TOK_SEMICOLON && la != TOK_RBRACE) {
         flags |= (tok_str(p)[0] == 'g') ? FN_GETTER : FN_SETTER;
         CONSUME();
         NEXT();
@@ -1357,7 +1361,7 @@ static sv_ast_t *parse_class(P) {
     } else if (TOK == TOK_HASH) {
       CONSUME();
       NEXT();
-      if (!is_ident_like_tok(TOK)) {
+      if (!is_private_ident_like_tok(TOK)) {
         SV_MKERR_TYPED(JS, JS_ERR_SYNTAX, "private field name expected");
         return mk(N_EMPTY);
       }
