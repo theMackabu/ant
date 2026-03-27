@@ -2123,7 +2123,7 @@ static ant_value_t js_sharedarraybuffer_constructor(ant_t *js, ant_value_t *args
 
 ant_value_t buffer_library(ant_t *js) {
   ant_value_t glob = js_glob(js);
-  ant_value_t lib = js_mkobj(js);
+  ant_value_t lib = js_newobj(js);
 
   js_set(js, lib, "Buffer", js_get(js, glob, "Buffer"));
   js_set(js, lib, "Blob", js_get(js, glob, "Blob"));
