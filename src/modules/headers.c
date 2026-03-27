@@ -793,6 +793,12 @@ void headers_append_if_missing(ant_value_t hdrs, const char *name, const char *v
   free(lower);
 }
 
+void headers_for_each(ant_value_t hdrs, headers_foreach_cb cb, void *ctx) {
+  hdr_list_t *l = get_list(hdrs);
+  if (!l || !cb) return;
+  for (hdr_entry_t *e = l->head; e; e = e->next) cb(e->name, e->value, ctx);
+}
+
 bool headers_set_literal(ant_t *js, ant_value_t hdrs, const char *name, const char *value) {
   hdr_list_t *l = get_list(hdrs);
   headers_guard_t guard = 0;

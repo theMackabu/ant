@@ -414,6 +414,7 @@ ant_value_t readable_stream_pipe_to(
 
   if (abort_signal_is_signal(signal)) {
     ant_value_t listener = js_heavy_mkfun(js, pipe_abort_listener, state);
+    js_set_slot(state, SLOT_PIPE_ABORT_LISTENER, listener);
     abort_signal_add_listener(js, signal, listener);
   }
 

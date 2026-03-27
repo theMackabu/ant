@@ -24,7 +24,6 @@ typedef struct {
 } response_data_t;
 
 extern ant_value_t g_response_proto;
-
 void init_response_module(void);
 
 response_data_t *response_get_data(ant_value_t obj);
@@ -40,6 +39,18 @@ ant_value_t response_create(
   size_t body_len,
   const char *body_type,
   headers_guard_t guard
+);
+
+ant_value_t response_create_fetched(
+  ant_t *js,
+  int status,
+  const char *status_text,
+  const char *url,
+  ant_value_t headers_obj,
+  const uint8_t *body,
+  size_t body_len,
+  ant_value_t body_stream,
+  const char *body_type
 );
 
 #endif

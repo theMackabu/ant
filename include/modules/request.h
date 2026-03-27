@@ -45,4 +45,10 @@ ant_value_t request_create(
   const char *body_type
 );
 
+ant_value_t request_create_from_input_init(
+  ant_t *js,
+  ant_value_t input,
+  ant_value_t init
+);
+
 #endif

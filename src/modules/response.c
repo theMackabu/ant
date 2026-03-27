@@ -1044,6 +1044,77 @@ ant_value_t response_create(
   return obj;
 }
 
+ant_value_t response_create_fetched(
+  ant_t *js,
+  int status,
+  const char *status_text,
+  const char *url,
+  ant_value_t headers_obj,
+  const uint8_t *body,
+  size_t body_len,
+  ant_value_t body_stream,
+  const char *body_type
+) {
+  ant_value_t obj = response_new(HEADERS_GUARD_IMMUTABLE);
+  ant_value_t headers = 0;
+  response_data_t *resp = NULL;
+  url_state_t parsed = {0};
+
+  if (is_err(obj)) return obj;
+  resp = get_data(obj);
+
+  resp->status = status;
+  free(resp->status_text);
+  resp->status_text = strdup(status_text ? status_text : "");
+  if (!resp->status_text) {
+    data_free(resp);
+    return js_mkerr(js, "out of memory");
+  }
+
+  if (url && parse_url_to_state(url, NULL, &parsed) == 0) {
+    url_state_clear(&resp->url);
+    resp->url = parsed;
+    resp->has_url = true;
+    resp->url_list_size = 1;
+  } else url_state_clear(&parsed);
+
+  if (rs_is_stream(body_stream)) {
+    resp->body_is_stream = true;
+    resp->has_body = true;
+    js_set_slot_wb(js, obj, SLOT_RESPONSE_BODY_STREAM, body_stream);
+  } else {
+    if (body_len > 0) {
+      resp->body_data = malloc(body_len);
+      if (!resp->body_data) {
+        data_free(resp);
+        return js_mkerr(js, "out of memory");
+      }
+      memcpy(resp->body_data, body, body_len);
+    }
+    resp->body_size = body_len;
+    resp->body_is_stream = false;
+    resp->has_body = body || body_len > 0;
+  }
+
+  resp->body_type = body_type ? strdup(body_type) : NULL;
+  if (body_type && !resp->body_type) {
+    data_free(resp);
+    return js_mkerr(js, "out of memory");
+  }
+
+  headers = is_object_type(headers_obj) ? headers_obj : headers_create_empty(js);
+  if (is_err(headers)) {
+    data_free(resp);
+    return headers;
+  }
+
+  headers_set_guard(headers, HEADERS_GUARD_IMMUTABLE);
+  headers_apply_guard(headers);
+  js_set_slot_wb(js, obj, SLOT_RESPONSE_HEADERS, headers);
+  
+  return obj;
+}
+
 void init_response_module(void) {
   ant_t *js = rt->js;
   ant_value_t g = js_glob(js);

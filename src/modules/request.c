@@ -1094,21 +1094,30 @@ static ant_value_t request_apply_ctor_body(
 }
 
 static ant_value_t js_request_ctor(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t init = (nargs >= 2 && vtype(args[1]) != T_UNDEF) ? args[1] : js_mkundef();
+
   if (vtype(js->new_target) == T_UNDEF)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Request constructor requires 'new'");
   if (nargs < 1)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Request constructor requires at least 1 argument");
 
   ant_value_t input  = args[0];
-  ant_value_t init   = (nargs >= 2 && vtype(args[1]) != T_UNDEF) ? args[1] : js_mkundef();
-  bool init_provided = (vtype(init) == T_OBJ || vtype(init) == T_ARR);
+  ant_value_t obj = 0;
+  ant_value_t proto = 0;
+  bool init_provided = false;
   
   request_data_t *req = NULL;
   request_data_t *src = NULL;
   
   ant_value_t input_signal = js_mkundef();
-  ant_value_t step = request_new_from_input(js, input, &req, &src, &input_signal);
+  ant_value_t step = js_mkundef();
+  ant_value_t signal = 0;
+  ant_value_t headers = 0;
   
+  bool duplex_provided = false;
+  init_provided = (vtype(init) == T_OBJ || vtype(init) == T_ARR);
+  
+  step = request_new_from_input(js, input, &req, &src, &input_signal);
   if (is_err(step)) return step;
 
   if (init_provided) {
@@ -1125,21 +1134,99 @@ static ant_value_t js_request_ctor(ant_t *js, ant_value_t *args, int nargs) {
     "Failed to construct 'Request': method must be one of GET, HEAD, POST for no-cors mode");
   }
 
-  ant_value_t obj = js_mkobj(js);
-  ant_value_t proto = js_instance_proto_from_new_target(js, g_request_proto);
+  obj = js_mkobj(js);
+  proto = js_instance_proto_from_new_target(js, g_request_proto);
   
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
+  else js_set_proto_init(obj, g_request_proto);
+  
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_REQUEST));
   js_set_slot(obj, SLOT_DATA, ANT_PTR(req));
 
-  ant_value_t signal = abort_signal_create_dependent(js, input_signal);
+  signal = abort_signal_create_dependent(js, input_signal);
   if (is_err(signal)) { data_free(req); return signal; }
   js_set_slot_wb(js, obj, SLOT_REQUEST_SIGNAL, signal);
 
-  ant_value_t headers = request_create_ctor_headers(js, input);
-  bool duplex_provided = false;
-  
+  headers = request_create_ctor_headers(js, input);
   if (is_err(headers)) { data_free(req); return headers; }
+  
+  if (init_provided) {
+    headers = request_apply_init_headers(js, init, headers);
+    if (is_err(headers)) { data_free(req); return headers; }
+  }
+
+  headers_set_guard(headers,
+    strcmp(req->mode, "no-cors") == 0
+    ? HEADERS_GUARD_REQUEST_NO_CORS
+    : HEADERS_GUARD_REQUEST
+  );
+  
+  headers_apply_guard(headers);
+  js_set_slot_wb(js, obj, SLOT_REQUEST_HEADERS, headers);
+
+  if (init_provided) {
+    step = request_parse_duplex(js, init, &duplex_provided);
+    if (is_err(step)) { data_free(req); return step; }
+  }
+
+  step = request_apply_ctor_body(
+    js, obj, input, init, init_provided,
+    duplex_provided, req, src, headers
+  );
+  
+  if (is_err(step)) {
+    data_free(req);
+    return step;
+  }
+
+  if (src && src->has_body && !src->body_used)
+    src->body_used = true;
+
+  return obj;
+}
+
+ant_value_t request_create_from_input_init(ant_t *js, ant_value_t input, ant_value_t init) {
+  bool init_provided = (vtype(init) == T_OBJ || vtype(init) == T_ARR);
+  
+  request_data_t *req = NULL;
+  request_data_t *src = NULL;
+  
+  ant_value_t input_signal = js_mkundef();
+  ant_value_t step = js_mkundef();
+  ant_value_t obj = 0;
+  ant_value_t signal = 0;
+  ant_value_t headers = 0;
+  
+  bool duplex_provided = false;
+  step = request_new_from_input(js, input, &req, &src, &input_signal);
+  if (is_err(step)) return step;
+
+  if (init_provided) {
+    step = request_apply_init_options(js, init, req, &input_signal);
+    if (is_err(step)) { data_free(req); return step; }
+  }
+
+  if (
+    strcmp(req->mode, "no-cors") == 0 &&
+    !is_cors_safelisted_method(req->method)
+  ) {
+    data_free(req);
+    return js_mkerr_typed(js, JS_ERR_TYPE,
+    "Failed to construct 'Request': method must be one of GET, HEAD, POST for no-cors mode");
+  }
+
+  obj = js_mkobj(js);
+  js_set_proto_init(obj, g_request_proto);
+  js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_REQUEST));
+  js_set_slot(obj, SLOT_DATA, ANT_PTR(req));
+
+  signal = abort_signal_create_dependent(js, input_signal);
+  if (is_err(signal)) { data_free(req); return signal; }
+  js_set_slot_wb(js, obj, SLOT_REQUEST_SIGNAL, signal);
+
+  headers = request_create_ctor_headers(js, input);
+  if (is_err(headers)) { data_free(req); return headers; }
+  
   if (init_provided) {
     headers = request_apply_init_headers(js, init, headers);
     if (is_err(headers)) { data_free(req); return headers; }

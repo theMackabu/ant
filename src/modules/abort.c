@@ -130,6 +130,19 @@ void signal_do_abort(ant_t *js, ant_value_t signal_obj, ant_value_t reason) {
   utarray_free(to_fire);
 }
 
+void abort_signal_remove_listener(ant_t *js, ant_value_t signal, ant_value_t callback) {
+  abort_signal_data_t *data = get_signal_data(signal);
+  if (!data) return;
+
+  unsigned int n = utarray_len(data->listeners);
+  for (unsigned int i = 0; i < n; i++) {
+    abort_listener_t *entry = (abort_listener_t *)utarray_eltptr(data->listeners, i);
+    if (entry->callback != callback) continue;
+    utarray_erase(data->listeners, i, 1);
+    return;
+  }
+}
+
 static ant_value_t make_new_signal(ant_t *js) {
   abort_signal_data_t *data = ant_calloc(sizeof(abort_signal_data_t));
   if (!data) return js_mkerr(js, "AbortSignal: out of memory");

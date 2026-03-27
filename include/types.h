@@ -10,8 +10,9 @@ struct ant_object;
 struct ant_shape;
 struct ant_isolate_t;
 
-typedef struct ant_isolate_t  ant_t;
-typedef struct ant_pool_block ant_pool_block_t;
+typedef struct ant_isolate_t      ant_t;
+typedef struct ant_pool_block     ant_pool_block_t;
+typedef struct ant_http_request_s ant_http_request_t;
 
 typedef struct ant_object ant_object_t;
 typedef struct ant_shape  ant_shape_t;

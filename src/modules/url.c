@@ -316,18 +316,35 @@ int parse_url_to_state(const char *url_str, const char *base_str, url_state_t *s
 }
 
 char *build_href(const url_state_t *s) {
-  size_t len = strlen(s->protocol) + 2;
-  len += strlen(s->hostname) + strlen(s->pathname) + strlen(s->search) + strlen(s->hash) + 32;
-  
+  bool has_authority =
+    (s->hostname && *s->hostname) ||
+    (s->username && *s->username) ||
+    (s->password && *s->password) ||
+    (s->port && *s->port);
+    
+  bool opaque_like = !has_authority && !is_special_scheme(s->protocol);
+  const char *pathname = s->pathname ? s->pathname : "";
+  size_t len = strlen(s->protocol) + strlen(pathname) + strlen(s->search) + strlen(s->hash) + 32;
+
+  if (has_authority) len += strlen(s->hostname) + 2;
   if (s->username && *s->username) len += strlen(s->username) + 1;
   if (s->password && *s->password) len += strlen(s->password) + 1;
   if (s->port && *s->port) len += strlen(s->port) + 1;
 
   char *href = malloc(len);
   if (!href) return strdup("");
+  
   size_t pos = 0;
-  pos += (size_t)sprintf(href + pos, "%s//", s->protocol);
+  pos += (size_t)sprintf(href + pos, "%s", s->protocol);
 
+  if (opaque_like) {
+    if (pathname[0] == '/') pathname++;
+    pos += (size_t)sprintf(href + pos, "%s%s%s", pathname, s->search, s->hash);
+    href[pos] = '\0';
+    return href;
+  }
+
+  pos += (size_t)sprintf(href + pos, "//");
   if (s->username && *s->username) {
     pos += (size_t)sprintf(href + pos, "%s", s->username);
     if (s->password && *s->password)
@@ -338,10 +355,9 @@ char *build_href(const url_state_t *s) {
   pos += (size_t)sprintf(href + pos, "%s", s->hostname);
   if (s->port && *s->port)
     pos += (size_t)sprintf(href + pos, ":%s", s->port);
-    
-  pos += (size_t)sprintf(href + pos, "%s%s%s", s->pathname, s->search, s->hash);
+
+  pos += (size_t)sprintf(href + pos, "%s%s%s", pathname, s->search, s->hash);
   href[pos] = '\0';
-  
   return href;
 }
 
