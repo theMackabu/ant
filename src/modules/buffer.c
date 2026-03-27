@@ -39,6 +39,10 @@ bool buffer_is_dataview(ant_value_t obj) {
 }
 
 bool buffer_source_get_bytes(ant_t *js, ant_value_t value, const uint8_t **out, size_t *len) {
+  if (out) *out = NULL;
+  if (len) *len = 0;
+  if (vtype(value) != T_TYPEDARRAY && !is_object_type(value)) return false;
+
   ant_value_t slot = js_get_slot(value, SLOT_BUFFER);
   TypedArrayData *ta = (TypedArrayData *)js_gettypedarray(slot);
   

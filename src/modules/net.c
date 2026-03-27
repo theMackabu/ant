@@ -29,6 +29,9 @@
 typedef struct net_server_s net_server_t;
 typedef struct net_socket_s net_socket_t;
 
+typedef struct net_listen_args_s net_listen_args_t;
+typedef struct net_write_args_s  net_write_args_t;
+
 struct net_socket_s {
   ant_t *js;
   ant_value_t obj;
@@ -61,6 +64,21 @@ struct net_server_s {
   unsigned int keep_alive_initial_delay_secs;
 };
 
+struct net_listen_args_s {
+  const char *host;
+  int port;
+  int backlog;
+  ant_value_t callback;
+  ant_value_t error;
+};
+
+struct net_write_args_s {
+  const uint8_t *bytes;
+  size_t len;
+  ant_value_t callback;
+  ant_value_t error;
+};
+
 static ant_value_t g_net_server_proto = 0;
 static ant_value_t g_net_socket_proto = 0;
 static ant_value_t g_net_server_ctor = 0;
@@ -76,6 +94,8 @@ enum {
   NET_SERVER_NATIVE_TAG = 0x4e455453u,
   NET_SOCKET_NATIVE_TAG = 0x4e45544bu,
 };
+
+static ant_value_t net_not_implemented(ant_t *js, const char *what);
 
 static net_server_t *net_server_data(ant_value_t value) {
   if (!js_check_native_tag(value, NET_SERVER_NATIVE_TAG)) return NULL;
@@ -135,26 +155,131 @@ static ant_value_t net_call_value(
   return result;
 }
 
-static ant_value_t net_call_method(
-  ant_t *js,
-  ant_value_t target,
-  const char *name,
-  ant_value_t *args,
-  int nargs
-) {
-  ant_value_t fn = js_get(js, target, name);
-  if (!is_callable(fn)) return js_mkundef();
-  return net_call_value(js, fn, target, args, nargs);
+static bool net_emit(ant_t *js, ant_value_t target, const char *event, ant_value_t *args, int nargs) {
+  return eventemitter_emit_args(js, target, event, args, nargs);
 }
 
-static void net_emit(ant_t *js, ant_value_t target, const char *event, ant_value_t *args, int nargs) {
-  ant_value_t emit_args[8] = {0};
-  int i = 0;
+static bool net_add_listener(
+  ant_t *js,
+  ant_value_t target,
+  const char *event,
+  ant_value_t listener,
+  bool once
+) {
+  return eventemitter_add_listener(js, target, event, listener, once);
+}
 
-  if (nargs > 7) nargs = 7;
-  emit_args[0] = js_mkstr(js, event, strlen(event));
-  for (i = 0; i < nargs; i++) emit_args[i + 1] = args[i];
-  net_call_method(js, target, "emit", emit_args, nargs + 1);
+static net_server_t *net_require_server(ant_t *js, ant_value_t this_val) {
+  net_server_t *server = net_server_data(this_val);
+  if (!server) {
+    js->thrown_exists = true;
+    js->thrown_value = js_mkerr_typed(js, JS_ERR_TYPE, "Invalid net.Server");
+    return NULL;
+  }
+  return server;
+}
+
+static net_socket_t *net_require_socket(ant_t *js, ant_value_t this_val) {
+  net_socket_t *socket = net_socket_data(this_val);
+  if (!socket) {
+    js->thrown_exists = true;
+    js->thrown_value = js_mkerr_typed(js, JS_ERR_TYPE, "Invalid net.Socket");
+    return NULL;
+  }
+  return socket;
+}
+
+static bool net_parse_write_args(ant_t *js, ant_value_t *args, int nargs, net_write_args_t *out) {
+  ant_value_t value = 0;
+
+  if (!out) return false;
+  memset(out, 0, sizeof(*out));
+  out->callback = js_mkundef();
+  out->error = js_mkundef();
+
+  if (nargs < 1 || vtype(args[0]) == T_UNDEF || vtype(args[0]) == T_NULL) return true;
+  value = args[0];
+
+  if (!buffer_source_get_bytes(js, value, &out->bytes, &out->len)) {
+    size_t slen = 0;
+    ant_value_t str_val = js_tostring_val(js, value);
+    const char *str = NULL;
+
+    if (is_err(str_val)) {
+      out->error = str_val;
+      return false;
+    }
+
+    str = js_getstr(js, str_val, &slen);
+    if (!str) {
+      out->error = js_mkerr_typed(js, JS_ERR_TYPE, "Invalid socket write data");
+      return false;
+    }
+
+    out->bytes = (const uint8_t *)str;
+    out->len = slen;
+  }
+
+  if (nargs > 1 && is_callable(args[1])) out->callback = args[1];
+  else if (nargs > 2 && is_callable(args[2])) out->callback = args[2];
+  return true;
+}
+
+static bool net_parse_listen_args(ant_t *js, ant_value_t *args, int nargs, net_listen_args_t *out) {
+  if (!out) return false;
+  
+  memset(out, 0, sizeof(*out));
+  out->host = "0.0.0.0";
+  out->backlog = 511;
+  out->callback = js_mkundef();
+  out->error = js_mkundef();
+
+  if (nargs == 0) return true;
+
+  if (vtype(args[0]) == T_NUM) {
+    out->port = (int)js_getnum(args[0]);
+    if (nargs > 1 && vtype(args[1]) == T_STR) {
+      size_t len = 0;
+      out->host = js_getstr(js, args[1], &len);
+    }
+    if (nargs > 2 && vtype(args[2]) == T_NUM) out->backlog = (int)js_getnum(args[2]);
+    if (nargs > 3 && is_callable(args[3])) out->callback = args[3];
+    else if (nargs > 2 && is_callable(args[2])) out->callback = args[2];
+    else if (nargs > 1 && is_callable(args[1])) out->callback = args[1];
+    return true;
+  }
+
+  if (vtype(args[0]) == T_OBJ) {
+    ant_value_t value = js_get(js, args[0], "path");
+    if (vtype(value) != T_UNDEF) {
+      out->error = net_not_implemented(js, "IPC server listen");
+      return false;
+    }
+
+    value = js_get(js, args[0], "port");
+    if (vtype(value) == T_NUM) out->port = (int)js_getnum(value);
+    value = js_get(js, args[0], "host");
+    if (vtype(value) == T_STR) {
+      size_t len = 0;
+      out->host = js_getstr(js, value, &len);
+    }
+    value = js_get(js, args[0], "backlog");
+    if (vtype(value) == T_NUM) out->backlog = (int)js_getnum(value);
+    if (nargs > 1 && is_callable(args[1])) out->callback = args[1];
+    return true;
+  }
+
+  if (vtype(args[0]) == T_STR) {
+    out->error = net_not_implemented(js, "IPC server listen");
+    return false;
+  }
+
+  if (is_callable(args[0])) {
+    out->callback = args[0];
+    return true;
+  }
+
+  return true;
 }
 
 static ant_value_t net_make_buffer_chunk(ant_t *js, const char *data, size_t len) {
@@ -487,9 +612,10 @@ static ant_value_t js_net_socket_ctor(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t js_net_socket_address(ant_t *js, ant_value_t *args, int nargs) {
-  net_socket_t *socket = net_socket_data(js_getthis(js));
+  net_socket_t *socket = net_require_socket(js, js_getthis(js));
   ant_value_t out = js_mkobj(js);
 
+  if (!socket) return js->thrown_value;
   if (!socket || !socket->conn || !ant_conn_has_local_addr(socket->conn)) return out;
   js_set(js, out, "address", js_mkstr(js, ant_conn_local_addr(socket->conn), strlen(ant_conn_local_addr(socket->conn))));
   js_set(js, out, "port", js_mknum(ant_conn_local_port(socket->conn)));
@@ -498,116 +624,116 @@ static ant_value_t js_net_socket_address(ant_t *js, ant_value_t *args, int nargs
 }
 
 static ant_value_t js_net_socket_pause(ant_t *js, ant_value_t *args, int nargs) {
-  net_socket_t *socket = net_socket_data(js_getthis(js));
+  net_socket_t *socket = net_require_socket(js, js_getthis(js));
+  if (!socket) return js->thrown_value;
   if (socket && socket->conn) ant_conn_pause_read(socket->conn);
   return js_getthis(js);
 }
 
 static ant_value_t js_net_socket_resume(ant_t *js, ant_value_t *args, int nargs) {
-  net_socket_t *socket = net_socket_data(js_getthis(js));
+  net_socket_t *socket = net_require_socket(js, js_getthis(js));
+  if (!socket) return js->thrown_value;
   if (socket && socket->conn) ant_conn_resume_read(socket->conn);
   return js_getthis(js);
 }
 
 static ant_value_t js_net_socket_setEncoding(ant_t *js, ant_value_t *args, int nargs) {
-  net_socket_t *socket = net_socket_data(js_getthis(js));
-  if (!socket) return js_getthis(js);
+  net_socket_t *socket = net_require_socket(js, js_getthis(js));
+  if (!socket) return js->thrown_value;
   socket->encoding = nargs > 0 && vtype(args[0]) != T_UNDEF ? js_tostring_val(js, args[0]) : js_mkundef();
   return js_getthis(js);
 }
 
 static ant_value_t js_net_socket_setTimeout(ant_t *js, ant_value_t *args, int nargs) {
-  net_socket_t *socket = net_socket_data(js_getthis(js));
+  net_socket_t *socket = net_require_socket(js, js_getthis(js));
   double timeout = 0;
-  ant_value_t once_args[2] = {0};
 
-  if (!socket) return js_getthis(js);
+  if (!socket) return js->thrown_value;
   if (nargs > 0 && vtype(args[0]) == T_NUM) timeout = js_getnum(args[0]);
   if (socket->conn) ant_conn_set_timeout_ms(socket->conn, timeout > 0 ? (uint64_t)timeout : 0);
   net_socket_sync_state(socket);
 
-  if (nargs > 1 && is_callable(args[1])) {
-    once_args[0] = js_mkstr(js, "timeout", 7);
-    once_args[1] = args[1];
-    net_call_method(js, socket->obj, "once", once_args, 2);
-  }
+  if (nargs > 1 && is_callable(args[1]))
+    net_add_listener(js, socket->obj, "timeout", args[1], true);
 
   return js_getthis(js);
 }
 
 static ant_value_t js_net_socket_setNoDelay(ant_t *js, ant_value_t *args, int nargs) {
-  net_socket_t *socket = net_socket_data(js_getthis(js));
+  net_socket_t *socket = net_require_socket(js, js_getthis(js));
   bool enable = nargs == 0 || js_truthy(js, args[0]);
+  if (!socket) return js->thrown_value;
   if (socket && socket->conn) ant_conn_set_no_delay(socket->conn, enable);
   return js_getthis(js);
 }
 
 static ant_value_t js_net_socket_setKeepAlive(ant_t *js, ant_value_t *args, int nargs) {
-  net_socket_t *socket = net_socket_data(js_getthis(js));
+  net_socket_t *socket = net_require_socket(js, js_getthis(js));
   bool enable = nargs > 0 && js_truthy(js, args[0]);
   unsigned int delay = nargs > 1 && vtype(args[1]) == T_NUM ? (unsigned int)(js_getnum(args[1]) / 1000.0) : 0;
+  if (!socket) return js->thrown_value;
   if (socket && socket->conn) ant_conn_set_keep_alive(socket->conn, enable, delay);
   return js_getthis(js);
 }
 
 static ant_value_t js_net_socket_ref(ant_t *js, ant_value_t *args, int nargs) {
-  net_socket_t *socket = net_socket_data(js_getthis(js));
+  net_socket_t *socket = net_require_socket(js, js_getthis(js));
+  if (!socket) return js->thrown_value;
   if (socket && socket->conn) ant_conn_ref(socket->conn);
   return js_getthis(js);
 }
 
 static ant_value_t js_net_socket_unref(ant_t *js, ant_value_t *args, int nargs) {
-  net_socket_t *socket = net_socket_data(js_getthis(js));
+  net_socket_t *socket = net_require_socket(js, js_getthis(js));
+  if (!socket) return js->thrown_value;
   if (socket && socket->conn) ant_conn_unref(socket->conn);
   return js_getthis(js);
 }
 
 static ant_value_t js_net_socket_write(ant_t *js, ant_value_t *args, int nargs) {
-  net_socket_t *socket = net_socket_data(js_getthis(js));
-  const uint8_t *bytes = NULL;
-  size_t len = 0;
+  net_socket_t *socket = net_require_socket(js, js_getthis(js));
+  net_write_args_t parsed;
   char *copy = NULL;
 
-  if (!socket || !socket->conn) return js_false;
-  if (nargs < 1) return js_true;
+  if (!socket) return js->thrown_value;
+  if (!socket->conn) return js_false;
+  if (!net_parse_write_args(js, args, nargs, &parsed)) return parsed.error;
+  if (parsed.len == 0) return js_true;
 
-  if (!buffer_source_get_bytes(js, args[0], &bytes, &len)) {
-    size_t slen = 0;
-    const char *str = js_getstr(js, js_tostring_val(js, args[0]), &slen);
-    if (!str) return js_false;
-    bytes = (const uint8_t *)str;
-    len = slen;
-  }
-
-  copy = malloc(len);
+  copy = malloc(parsed.len);
   if (!copy) return js_mkerr_typed(js, JS_ERR_TYPE, "Out of memory");
-  if (len > 0) memcpy(copy, bytes, len);
+  memcpy(copy, parsed.bytes, parsed.len);
 
-  if (ant_conn_write(socket->conn, copy, len, NULL, NULL) != 0) {
+  if (ant_conn_write(socket->conn, copy, parsed.len, NULL, NULL) != 0) {
     free(copy);
     return js_false;
   }
 
   net_socket_sync_state(socket);
-  if (nargs > 2 && is_callable(args[2])) net_call_value(js, args[2], js_mkundef(), NULL, 0);
+  if (is_callable(parsed.callback)) net_call_value(js, parsed.callback, js_mkundef(), NULL, 0);
   return js_true;
 }
 
 static ant_value_t js_net_socket_end(ant_t *js, ant_value_t *args, int nargs) {
-  net_socket_t *socket = net_socket_data(js_getthis(js));
+  net_socket_t *socket = net_require_socket(js, js_getthis(js));
+  net_write_args_t parsed;
   ant_value_t result = js_getthis(js);
 
-  if (!socket || !socket->conn) return result;
-  if (nargs > 0 && vtype(args[0]) != T_UNDEF && vtype(args[0]) != T_NULL)
-    js_net_socket_write(js, args, nargs);
+  if (!socket) return js->thrown_value;
+  if (!socket->conn) return result;
+  if (!net_parse_write_args(js, args, nargs, &parsed)) return parsed.error;
+  if (parsed.len > 0) {
+    ant_value_t write_result = js_net_socket_write(js, args, nargs);
+    if (is_err(write_result)) return write_result;
+  }
   ant_conn_shutdown(socket->conn);
-  if (nargs > 2 && is_callable(args[2])) net_call_value(js, args[2], js_mkundef(), NULL, 0);
+  if (is_callable(parsed.callback)) net_call_value(js, parsed.callback, js_mkundef(), NULL, 0);
   return result;
 }
 
 static ant_value_t js_net_socket_destroy(ant_t *js, ant_value_t *args, int nargs) {
-  net_socket_t *socket = net_socket_data(js_getthis(js));
-  if (!socket) return js_getthis(js);
+  net_socket_t *socket = net_require_socket(js, js_getthis(js));
+  if (!socket) return js->thrown_value;
 
   if (nargs > 0 && vtype(args[0]) != T_UNDEF && vtype(args[0]) != T_NULL) {
     ant_value_t err = args[0];
@@ -625,70 +751,32 @@ static ant_value_t js_net_socket_connect(ant_t *js, ant_value_t *args, int nargs
 
 static ant_value_t js_net_server_ctor(ant_t *js, ant_value_t *args, int nargs) {
   net_server_t *server = net_server_create(js);
-  ant_value_t on_args[2] = {0};
 
   if (!server) return js_mkerr_typed(js, JS_ERR_TYPE, "Out of memory");
   if (nargs > 0 && vtype(args[0]) == T_OBJ) net_server_apply_options(js, server, args[0]);
-  if (nargs > 0 && is_callable(args[0])) {
-    on_args[0] = js_mkstr(js, "connection", 10);
-    on_args[1] = args[0];
-    net_call_method(js, server->obj, "on", on_args, 2);
-  } else if (nargs > 1 && is_callable(args[1])) {
-    on_args[0] = js_mkstr(js, "connection", 10);
-    on_args[1] = args[1];
-    net_call_method(js, server->obj, "on", on_args, 2);
-  }
+  if (nargs > 0 && is_callable(args[0])) net_add_listener(js, server->obj, "connection", args[0], false);
+  else if (nargs > 1 && is_callable(args[1])) net_add_listener(js, server->obj, "connection", args[1], false);
 
   return server->obj;
 }
 
 static ant_value_t js_net_server_listen(ant_t *js, ant_value_t *args, int nargs) {
-  net_server_t *server = net_server_data(js_getthis(js));
+  net_server_t *server = net_require_server(js, js_getthis(js));
   ant_listener_callbacks_t callbacks = {0};
-  const char *host = "0.0.0.0";
-  ant_value_t cb = js_mkundef();
-  int port = 0;
-  int backlog = 511;
+  net_listen_args_t parsed;
+  const char *host = NULL;
   int rc = 0;
 
-  if (!server) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid net.Server");
+  if (!server) return js->thrown_value;
   if (server->listening) return js_mkerr_typed(js, JS_ERR_TYPE, "Server is already listening");
+  if (!net_parse_listen_args(js, args, nargs, &parsed)) return parsed.error;
 
-  if (nargs > 0 && vtype(args[0]) == T_NUM) {
-    port = (int)js_getnum(args[0]);
-    if (nargs > 1 && vtype(args[1]) == T_STR) {
-      size_t len = 0;
-      host = js_getstr(js, args[1], &len);
-    }
-    if (nargs > 2 && vtype(args[2]) == T_NUM) backlog = (int)js_getnum(args[2]);
-    if (nargs > 3 && is_callable(args[3])) cb = args[3];
-    else if (nargs > 2 && is_callable(args[2])) cb = args[2];
-    else if (nargs > 1 && is_callable(args[1])) cb = args[1];
-  } else if (nargs > 0 && vtype(args[0]) == T_OBJ) {
-    ant_value_t value = js_get(js, args[0], "path");
-    if (vtype(value) != T_UNDEF) return net_not_implemented(js, "IPC server listen");
-
-    value = js_get(js, args[0], "port");
-    if (vtype(value) == T_NUM) port = (int)js_getnum(value);
-    value = js_get(js, args[0], "host");
-    if (vtype(value) == T_STR) {
-      size_t len = 0;
-      host = js_getstr(js, value, &len);
-    }
-    value = js_get(js, args[0], "backlog");
-    if (vtype(value) == T_NUM) backlog = (int)js_getnum(value);
-    if (nargs > 1 && is_callable(args[1])) cb = args[1];
-  } else if (nargs > 0 && vtype(args[0]) == T_STR) {
-    return net_not_implemented(js, "IPC server listen");
-  } else if (nargs > 0 && is_callable(args[0])) {
-    cb = args[0];
-  }
-
+  host = parsed.host;
   net_server_parse_host(host, &host);
   free(server->host);
   server->host = strdup(host ? host : "0.0.0.0");
-  server->port = port;
-  server->backlog = backlog > 0 ? backlog : server->backlog;
+  server->port = parsed.port;
+  server->backlog = parsed.backlog > 0 ? parsed.backlog : server->backlog;
 
   callbacks.on_accept = net_server_on_accept;
   callbacks.on_read = net_socket_on_read;
@@ -702,7 +790,7 @@ static ant_value_t js_net_server_listen(ant_t *js, ant_value_t *args, int nargs)
     &server->listener,
     uv_default_loop(),
     server->host,
-    port,
+    parsed.port,
     server->backlog,
     0,
     &callbacks,
@@ -716,22 +804,17 @@ static ant_value_t js_net_server_listen(ant_t *js, ant_value_t *args, int nargs)
   net_server_sync_state(server);
   net_add_active_server(server);
 
-  if (is_callable(cb)) net_call_value(js, cb, js_mkundef(), NULL, 0);
+  if (is_callable(parsed.callback)) net_call_value(js, parsed.callback, js_mkundef(), NULL, 0);
   net_emit(js, server->obj, "listening", NULL, 0);
   return js_getthis(js);
 }
 
 static ant_value_t js_net_server_close(ant_t *js, ant_value_t *args, int nargs) {
-  net_server_t *server = net_server_data(js_getthis(js));
-  ant_value_t once_args[2] = {0};
+  net_server_t *server = net_require_server(js, js_getthis(js));
 
-  if (!server) return js_getthis(js);
+  if (!server) return js->thrown_value;
 
-  if (nargs > 0 && is_callable(args[0])) {
-    once_args[0] = js_mkstr(js, "close", 5);
-    once_args[1] = args[0];
-    net_call_method(js, server->obj, "once", once_args, 2);
-  }
+  if (nargs > 0 && is_callable(args[0])) net_add_listener(js, server->obj, "close", args[0], true);
 
   if (!server->listening && !server->closing) {
     if (nargs > 0 && is_callable(args[0])) {
@@ -748,8 +831,9 @@ static ant_value_t js_net_server_close(ant_t *js, ant_value_t *args, int nargs) 
 }
 
 static ant_value_t js_net_server_address(ant_t *js, ant_value_t *args, int nargs) {
-  net_server_t *server = net_server_data(js_getthis(js));
+  net_server_t *server = net_require_server(js, js_getthis(js));
   ant_value_t out = js_mknull();
+  if (!server) return js->thrown_value;
   if (!server || !server->listening) return out;
 
   out = js_mkobj(js);
@@ -760,23 +844,26 @@ static ant_value_t js_net_server_address(ant_t *js, ant_value_t *args, int nargs
 }
 
 static ant_value_t js_net_server_getConnections(ant_t *js, ant_value_t *args, int nargs) {
-  net_server_t *server = net_server_data(js_getthis(js));
+  net_server_t *server = net_require_server(js, js_getthis(js));
   ant_value_t cb = nargs > 0 ? args[0] : js_mkundef();
   ant_value_t argv[2] = { js_mknull(), js_mknum((double)net_server_socket_count(server)) };
 
+  if (!server) return js->thrown_value;
   if (is_callable(cb)) net_call_value(js, cb, js_mkundef(), argv, 2);
   return js_getthis(js);
 }
 
 static ant_value_t js_net_server_ref(ant_t *js, ant_value_t *args, int nargs) {
-  net_server_t *server = net_server_data(js_getthis(js));
+  net_server_t *server = net_require_server(js, js_getthis(js));
+  if (!server) return js->thrown_value;
   if (server && !uv_is_closing((uv_handle_t *)&server->listener.handle))
     uv_ref((uv_handle_t *)&server->listener.handle);
   return js_getthis(js);
 }
 
 static ant_value_t js_net_server_unref(ant_t *js, ant_value_t *args, int nargs) {
-  net_server_t *server = net_server_data(js_getthis(js));
+  net_server_t *server = net_require_server(js, js_getthis(js));
+  if (!server) return js->thrown_value;
   if (server && !uv_is_closing((uv_handle_t *)&server->listener.handle))
     uv_unref((uv_handle_t *)&server->listener.handle);
   return js_getthis(js);

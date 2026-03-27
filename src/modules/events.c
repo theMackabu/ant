@@ -539,20 +539,115 @@ void js_dispatch_global_event(ant_t *js, ant_value_t event_obj) {
   dispatch_event_to(js, event_obj, evt, js_glob(js));
 }
 
-static ant_value_t js_eventemitter_add(ant_t *js, ant_value_t *args, int nargs, bool once) {
-  if (nargs < 2) return js_mkerr(js, "requires 2 arguments (event, listener)");
-  const char *event_type = js_getstr(js, args[0], NULL);
-  if (!event_type) return js_mkerr(js, "event must be a string");
-  uint8_t t = vtype(args[1]);
-  if (t != T_FUNC && t != T_CFUNC) return js_mkerr(js, "listener must be a function");
+static bool eventemitter_add_listener_impl(
+  ant_t *js,
+  ant_value_t target, const char *event_type,
+  ant_value_t listener, bool once
+) {
+  EventType *evt = NULL;
+  EventListenerEntry entry = {0};
+  uint8_t t = 0;
 
-  ant_value_t this_obj = js_getthis(js);
-  EventType *evt = find_or_create_emitter_event_type(js, this_obj, event_type);
-  if (!evt) return js_mkerr(js, "failed to create event type");
+  if (!is_object_type(target) || !event_type) return false;
+  t = vtype(listener);
+  if (t != T_FUNC && t != T_CFUNC) return false;
 
-  EventListenerEntry entry = { args[1], js_mkundef(), once, false };
+  evt = find_or_create_emitter_event_type(js, target, event_type);
+  if (!evt) return false;
+
+  entry.callback = listener;
+  entry.signal = js_mkundef();
+  entry.once = once;
+  entry.capture = false;
   utarray_push_back(evt->listeners, &entry);
+
+  return true;
+}
+
+static ant_value_t js_eventemitter_off(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 2) return js_mkerr(js, "off requires 2 arguments (event, listener)");
+  const char *event_type = js_getstr(js, args[0], NULL);
+  
+  if (!event_type) return js_mkerr(js, "event must be a string");
+  ant_value_t this_obj = js_getthis(js);
+  
+  remove_listener_from(
+    js, args, nargs, 
+    find_emitter_event_type(js, this_obj, event_type)
+  );
+  
   return this_obj;
+}
+
+static bool eventemitter_emit_args_impl(
+  ant_t *js,
+  ant_value_t target, const char *event_type,
+  ant_value_t *args, int nargs
+) {
+  EventType *evt = NULL;
+
+  if (!is_object_type(target) || !event_type) return false;
+  evt = find_emitter_event_type(js, target, event_type);
+  if (!evt || utarray_len(evt->listeners) == 0) return false;
+
+  for (unsigned int i = 0; i < utarray_len(evt->listeners);) {
+    EventListenerEntry *entry = (EventListenerEntry *)utarray_eltptr(evt->listeners, i);
+    ant_value_t cb = entry->callback;
+    bool once = entry->once;
+    
+    if (once) utarray_erase(evt->listeners, i, 1);
+    else i++;
+    
+    if (vtype(entry->signal) != T_UNDEF && abort_signal_is_aborted(entry->signal)) continue;
+    if (vtype(cb) != T_FUNC && vtype(cb) != T_CFUNC) continue;
+    
+    ant_value_t result = sv_vm_call(js->vm, js, cb, js_mkundef(), args, nargs, NULL, false);
+    if (vtype(result) == T_ERR) fprintf(stderr, "Error in event listener for '%s': %s\n", event_type, js_str(js, result));
+  }
+
+  return true;
+}
+
+static ant_value_t js_eventemitter_emit(ant_t *js, ant_value_t *args, int nargs) {
+  const char *event_type = NULL;
+
+  if (nargs < 1) return js_mkerr(js, "emit requires at least 1 argument (event)");
+  event_type = js_getstr(js, args[0], NULL);
+  if (!event_type) return js_mkerr(js, "event must be a string");
+  
+  return js_bool(eventemitter_emit_args_impl(
+    js, js_getthis(js), event_type,
+    nargs > 1 ? &args[1] : NULL, nargs - 1
+  ));
+}
+
+bool eventemitter_emit_args(
+  ant_t *js,
+  ant_value_t target, const char *event_type,
+  ant_value_t *args, int nargs
+) {
+  return eventemitter_emit_args_impl(js, target, event_type, args, nargs);
+}
+
+bool eventemitter_add_listener(
+  ant_t *js,
+  ant_value_t target, const char *event_type,
+  ant_value_t listener, bool once
+) {
+  return eventemitter_add_listener_impl(js, target, event_type, listener, once);
+}
+
+static ant_value_t js_eventemitter_add(ant_t *js, ant_value_t *args, int nargs, bool once) {
+  const char *event_type = NULL;
+
+  if (nargs < 2) return js_mkerr(js, "requires 2 arguments (event, listener)");
+  event_type = js_getstr(js, args[0], NULL);
+  
+  if (!event_type) return js_mkerr(js, "event must be a string");
+  if (!eventemitter_add_listener_impl(js, js_getthis(js), event_type, args[1], once))
+    return js_mkerr(js, "listener must be a function");
+    
+  return js_getthis(js);
 }
 
 static ant_value_t js_eventemitter_on(ant_t *js, ant_value_t *args, int nargs) {
@@ -561,41 +656,6 @@ static ant_value_t js_eventemitter_on(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t js_eventemitter_once(ant_t *js, ant_value_t *args, int nargs) {
   return js_eventemitter_add(js, args, nargs, true);
-}
-
-static ant_value_t js_eventemitter_off(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 2) return js_mkerr(js, "off requires 2 arguments (event, listener)");
-  const char *event_type = js_getstr(js, args[0], NULL);
-  if (!event_type) return js_mkerr(js, "event must be a string");
-  ant_value_t this_obj = js_getthis(js);
-  remove_listener_from(js, args, nargs, find_emitter_event_type(js, this_obj, event_type));
-  return this_obj;
-}
-
-static ant_value_t js_eventemitter_emit(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1) return js_mkerr(js, "emit requires at least 1 argument (event)");
-  const char *event_type = js_getstr(js, args[0], NULL);
-  if (!event_type) return js_mkerr(js, "event must be a string");
-
-  ant_value_t this_obj = js_getthis(js);
-  EventType *evt = find_emitter_event_type(js, this_obj, event_type);
-  if (!evt || utarray_len(evt->listeners) == 0) return js_false;
-
-  int listener_nargs = nargs - 1;
-  ant_value_t *listener_args = listener_nargs > 0 ? &args[1] : NULL;
-
-  for (unsigned int i = 0; i < utarray_len(evt->listeners);) {
-    EventListenerEntry *entry = (EventListenerEntry *)utarray_eltptr(evt->listeners, i);
-    ant_value_t cb = entry->callback;
-    bool once = entry->once;
-    if (once) { utarray_erase(evt->listeners, i, 1); } else i++;
-    uint8_t t = vtype(cb);
-    if (t != T_FUNC && t != T_CFUNC) continue;
-    ant_value_t result = sv_vm_call(js->vm, js, cb, js_mkundef(), listener_args, listener_nargs, NULL, false);
-    if (vtype(result) == T_ERR)
-      fprintf(stderr, "Error in event listener for '%s': %s\n", event_type, js_str(js, result));
-  }
-  return js_true;
 }
 
 static ant_value_t js_eventemitter_removeAllListeners(ant_t *js, ant_value_t *args, int nargs) {
