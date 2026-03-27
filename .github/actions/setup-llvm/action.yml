@@ -74,7 +74,7 @@ runs:
             echo "cxx=$LLVM_PREFIX/bin/clang++" >> $GITHUB_OUTPUT
             echo "ar=$LLVM_PREFIX/bin/llvm-ar" >> $GITHUB_OUTPUT
             echo "ranlib=$LLVM_PREFIX/bin/llvm-ranlib" >> $GITHUB_OUTPUT
-            echo "strip=strip" >> $GITHUB_OUTPUT
+            echo "strip=$LLVM_PREFIX/bin/llvm-strip" >> $GITHUB_OUTPUT
             echo "ld=" >> $GITHUB_OUTPUT
             ;;
           windows)
