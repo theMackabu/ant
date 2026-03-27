@@ -259,6 +259,22 @@ static ant_value_t fetch_create_chunk(ant_t *js, const uint8_t *data, size_t len
   return create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, len, "Uint8Array");
 }
 
+static bool fetch_get_upload_chunk(ant_value_t value, const uint8_t **out, size_t *len) {
+  ant_value_t slot = js_get_slot(value, SLOT_BUFFER);
+  TypedArrayData *ta = (TypedArrayData *)js_gettypedarray(slot);
+
+  if (!ta || ta->type != TYPED_ARRAY_UINT8) return false;
+  if (!ta->buffer || ta->buffer->is_detached) {
+    *out = NULL;
+    *len = 0;
+    return true;
+  }
+
+  *out = ta->buffer->data + ta->byte_offset;
+  *len = ta->byte_length;
+  return true;
+}
+
 static void fetch_http_on_response(ant_http_request_t *http_req, const ant_http_response_t *resp, void *user_data) {
   fetch_request_t *req = (fetch_request_t *)user_data;
   
@@ -463,8 +479,8 @@ static ant_value_t fetch_upload_on_read(ant_t *js, ant_value_t *args, int nargs)
     return js_mkundef();
   }
 
-  if (!buffer_source_get_bytes(js, value, &chunk, &chunk_len)) {
-    ant_value_t reason = js_mkerr_typed(js, JS_ERR_TYPE, "fetch request body stream chunk must be a BufferSource");
+  if (!fetch_get_upload_chunk(value, &chunk, &chunk_len)) {
+    ant_value_t reason = js_mkerr_typed(js, JS_ERR_TYPE, "fetch request body stream chunk must be a Uint8Array");
     ant_http_request_cancel(req->http_req);
     fetch_reject(req, fetch_rejection_reason(js, reason));
     fetch_request_release(req);
