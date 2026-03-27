@@ -145,7 +145,11 @@ runs:
           MSYS2_PATH=$(cygpath "$RUNNER_TEMP/msys64/clang64/bin")
           export PATH="$MSYS2_PATH:$PATH"
         fi
-        ${{ inputs.strip }} --strip-unneeded build/${{ inputs.binary_name }}
+        if [[ "$RUNNER_OS" == "macOS" ]]; then
+          ${{ inputs.strip }} -x build/${{ inputs.binary_name }}
+        else
+          ${{ inputs.strip }} --strip-unneeded build/${{ inputs.binary_name }}
+        fi
 
     - name: Bundle Windows DLLs
       if: runner.os == 'Windows'
