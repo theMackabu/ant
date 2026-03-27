@@ -446,6 +446,7 @@ static void gc_mark_roots(ant_t *js) {
   gc_mark_readline(js, gc_mark_value);
   gc_mark_process(js, gc_mark_value);
   gc_mark_navigator(js, gc_mark_value);
+  gc_mark_net(js, gc_mark_value);
   gc_mark_server(js, gc_mark_value);
   gc_mark_events(js, gc_mark_value);
   gc_mark_lmdb(js, gc_mark_value);

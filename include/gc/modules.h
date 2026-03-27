@@ -13,6 +13,7 @@ void gc_mark_child_process(ant_t *js, gc_mark_fn mark);
 void gc_mark_readline(ant_t *js, gc_mark_fn mark);
 void gc_mark_process(ant_t *js, gc_mark_fn mark);
 void gc_mark_navigator(ant_t *js, gc_mark_fn mark);
+void gc_mark_net(ant_t *js, gc_mark_fn mark);
 void gc_mark_server(ant_t *js, gc_mark_fn mark);
 void gc_mark_events(ant_t *js, gc_mark_fn mark);
 void gc_mark_lmdb(ant_t *js, gc_mark_fn mark);

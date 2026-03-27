@@ -18,6 +18,10 @@ typedef struct {
   void *user_data;
 } ant_conn_write_req_t;
 
+typedef struct {
+  uv_shutdown_t req;
+} ant_conn_shutdown_req_t;
+
 static void ant_conn_restart_timer(ant_conn_t *conn);
 static void ant_conn_close_cb(uv_handle_t *handle);
 
@@ -32,42 +36,85 @@ static void ant_listener_remove_conn(ant_listener_t *listener, ant_conn_t *conn)
   }}
 }
 
-static bool ant_conn_store_peer_addr(ant_conn_t *conn) {
+static bool ant_conn_store_addr(
+  uv_tcp_t *handle,
+  int (*get_name)(const uv_tcp_t *, struct sockaddr *, int *),
+  char *out_addr,
+  size_t out_addr_len,
+  char *out_family,
+  size_t out_family_len,
+  int *out_port,
+  bool *out_has_addr
+) {
   struct sockaddr_storage addr;
   int len = sizeof(addr);
 
-  if (uv_tcp_getpeername(&conn->handle, (struct sockaddr *)&addr, &len) != 0) return false;
+  if (get_name(handle, (struct sockaddr *)&addr, &len) != 0) return false;
   if (addr.ss_family == AF_INET) {
     struct sockaddr_in *in = (struct sockaddr_in *)&addr;
-    uv_ip4_name(in, conn->remote_addr, sizeof(conn->remote_addr));
-    conn->remote_port = ntohs(in->sin_port);
-    conn->has_remote_addr = true;
+    uv_ip4_name(in, out_addr, out_addr_len);
+    memcpy(out_family, "IPv4", out_family_len < 5 ? out_family_len : 5);
+    *out_port = ntohs(in->sin_port);
+    *out_has_addr = true;
     return true;
   }
+
   if (addr.ss_family == AF_INET6) {
     struct sockaddr_in6 *in6 = (struct sockaddr_in6 *)&addr;
-    uv_ip6_name(in6, conn->remote_addr, sizeof(conn->remote_addr));
-    conn->remote_port = ntohs(in6->sin6_port);
-    conn->has_remote_addr = true;
+    uv_ip6_name(in6, out_addr, out_addr_len);
+    memcpy(out_family, "IPv6", out_family_len < 5 ? out_family_len : 5);
+    *out_port = ntohs(in6->sin6_port);
+    *out_has_addr = true;
     return true;
   }
+
   return false;
+}
+
+static bool ant_conn_store_peer_addr(ant_conn_t *conn) {
+  return ant_conn_store_addr(
+    &conn->handle,
+    (int (*)(const uv_tcp_t *, struct sockaddr *, int *))uv_tcp_getpeername,
+    conn->remote_addr,
+    sizeof(conn->remote_addr),
+    conn->remote_family,
+    sizeof(conn->remote_family),
+    &conn->remote_port,
+    &conn->has_remote_addr
+  );
+}
+
+static bool ant_conn_store_local_addr(ant_conn_t *conn) {
+  return ant_conn_store_addr(
+    &conn->handle,
+    (int (*)(const uv_tcp_t *, struct sockaddr *, int *))uv_tcp_getsockname,
+    conn->local_addr,
+    sizeof(conn->local_addr),
+    conn->local_family,
+    sizeof(conn->local_family),
+    &conn->local_port,
+    &conn->has_local_addr
+  );
 }
 
 static void ant_conn_timeout_cb(uv_timer_t *handle) {
   ant_conn_t *conn = (ant_conn_t *)handle->data;
+  ant_listener_t *listener = conn ? conn->listener : NULL;
+
+  if (!conn) return;
+  if (listener && listener->callbacks.on_timeout) {
+    listener->callbacks.on_timeout(conn, listener->user_data);
+    return;
+  }
+
   ant_conn_close(conn);
 }
 
 static void ant_conn_restart_timer(ant_conn_t *conn) {
-  uint64_t timeout_ms = 0;
-
   if (!conn || conn->closing) return;
   uv_timer_stop(&conn->timer);
-  if (conn->timeout_secs <= 0) return;
-
-  timeout_ms = (uint64_t)conn->timeout_secs * 1000ULL;
-  uv_timer_start(&conn->timer, ant_conn_timeout_cb, timeout_ms, 0);
+  if (conn->timeout_ms == 0) return;
+  uv_timer_start(&conn->timer, ant_conn_timeout_cb, conn->timeout_ms, 0);
 }
 
 static void ant_conn_alloc_cb(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
@@ -103,15 +150,28 @@ static void ant_conn_alloc_cb(uv_handle_t *handle, size_t suggested_size, uv_buf
 static void ant_conn_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
   ant_conn_t *conn = (ant_conn_t *)stream->data;
   ant_listener_t *listener = conn ? conn->listener : NULL;
-  (void)buf;
-
   if (!conn || !listener) return;
+
   if (nread < 0) {
+    if (nread == UV_EOF) {
+      conn->read_eof = true;
+      uv_read_stop((uv_stream_t *)&conn->handle);
+      if (listener->callbacks.on_end)
+        listener->callbacks.on_end(conn, listener->user_data);
+      return;
+    }
+
+    if (listener->callbacks.on_error) listener->callbacks.on_error(
+      conn, (int)nread, listener->user_data
+    );
+    
     ant_conn_close(conn);
     return;
   }
+
   if (nread == 0) return;
 
+  conn->bytes_read += (uint64_t)nread;
   conn->buffer_len += (size_t)nread;
   ant_conn_restart_timer(conn);
 
@@ -122,9 +182,17 @@ static void ant_conn_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t 
 static void ant_conn_write_cb_impl(uv_write_t *req, int status) {
   ant_conn_write_req_t *wr = (ant_conn_write_req_t *)req;
 
+  if (status >= 0 && wr->conn)
+    wr->conn->bytes_written += (uint64_t)wr->buf.len;
   if (wr->cb) wr->cb(wr->conn, status, wr->user_data);
+  
   free(wr->buf.base);
   free(wr);
+}
+
+static void ant_conn_shutdown_cb(uv_shutdown_t *req, int status) {
+  ant_conn_shutdown_req_t *shutdown_req = (ant_conn_shutdown_req_t *)req;
+  free(shutdown_req);
 }
 
 static void ant_conn_close_cb(uv_handle_t *handle) {
@@ -142,7 +210,7 @@ static void ant_conn_close_cb(uv_handle_t *handle) {
   free(conn);
 }
 
-ant_conn_t *ant_conn_create_tcp(ant_listener_t *listener, int timeout_secs) {
+ant_conn_t *ant_conn_create_tcp(ant_listener_t *listener, uint64_t timeout_ms) {
   ant_conn_t *conn = NULL;
 
   if (!listener || !listener->loop) return NULL;
@@ -151,7 +219,7 @@ ant_conn_t *ant_conn_create_tcp(ant_listener_t *listener, int timeout_secs) {
   if (!conn) return NULL;
 
   conn->listener = listener;
-  conn->timeout_secs = timeout_secs;
+  conn->timeout_ms = timeout_ms;
   conn->buffer_cap = ANT_CONN_READ_BUFFER_SIZE;
   conn->buffer = malloc(conn->buffer_cap);
   if (!conn->buffer) {
@@ -173,6 +241,7 @@ int ant_conn_accept(ant_conn_t *conn, uv_stream_t *server_stream) {
     return UV_ECONNABORTED;
 
   ant_conn_store_peer_addr(conn);
+  ant_conn_store_local_addr(conn);
   conn->next = conn->listener->connections;
   conn->listener->connections = conn;
   return 0;
@@ -180,6 +249,7 @@ int ant_conn_accept(ant_conn_t *conn, uv_stream_t *server_stream) {
 
 void ant_conn_start(ant_conn_t *conn) {
   if (!conn || conn->closing) return;
+  conn->read_paused = false;
   ant_conn_restart_timer(conn);
   uv_read_start((uv_stream_t *)&conn->handle, ant_conn_alloc_cb, ant_conn_read_cb);
 }
@@ -204,26 +274,46 @@ size_t ant_conn_buffer_len(const ant_conn_t *conn) {
   return conn ? conn->buffer_len : 0;
 }
 
-void ant_conn_set_timeout(ant_conn_t *conn, int timeout_secs) {
+void ant_conn_set_timeout_ms(ant_conn_t *conn, uint64_t timeout_ms) {
   if (!conn) return;
-  conn->timeout_secs = timeout_secs < 0 ? 0 : timeout_secs;
+  conn->timeout_ms = timeout_ms;
   ant_conn_restart_timer(conn);
 }
 
-int ant_conn_timeout(const ant_conn_t *conn) {
-  return conn ? conn->timeout_secs : 0;
+uint64_t ant_conn_timeout_ms(const ant_conn_t *conn) {
+  return conn ? conn->timeout_ms : 0;
 }
 
 bool ant_conn_is_closing(const ant_conn_t *conn) {
   return !conn || conn->closing;
 }
 
+bool ant_conn_has_local_addr(const ant_conn_t *conn) {
+  return conn && conn->has_local_addr;
+}
+
 bool ant_conn_has_remote_addr(const ant_conn_t *conn) {
   return conn && conn->has_remote_addr;
 }
 
+const char *ant_conn_local_addr(const ant_conn_t *conn) {
+  return conn ? conn->local_addr : NULL;
+}
+
 const char *ant_conn_remote_addr(const ant_conn_t *conn) {
   return conn ? conn->remote_addr : NULL;
+}
+
+const char *ant_conn_local_family(const ant_conn_t *conn) {
+  return conn ? conn->local_family : NULL;
+}
+
+const char *ant_conn_remote_family(const ant_conn_t *conn) {
+  return conn ? conn->remote_family : NULL;
+}
+
+int ant_conn_local_port(const ant_conn_t *conn) {
+  return conn ? conn->local_port : 0;
 }
 
 int ant_conn_remote_port(const ant_conn_t *conn) {
@@ -232,7 +322,67 @@ int ant_conn_remote_port(const ant_conn_t *conn) {
 
 void ant_conn_pause_read(ant_conn_t *conn) {
   if (!conn || conn->closing) return;
+  conn->read_paused = true;
   uv_read_stop((uv_stream_t *)&conn->handle);
+}
+
+void ant_conn_resume_read(ant_conn_t *conn) {
+  if (!conn || conn->closing || conn->read_eof || !conn->read_paused) return;
+  conn->read_paused = false;
+  ant_conn_restart_timer(conn);
+  uv_read_start((uv_stream_t *)&conn->handle, ant_conn_alloc_cb, ant_conn_read_cb);
+}
+
+void ant_conn_shutdown(ant_conn_t *conn) {
+  ant_conn_shutdown_req_t *req = NULL;
+  int rc = 0;
+
+  if (!conn || conn->closing) return;
+
+  req = calloc(1, sizeof(*req));
+  if (!req) {
+    ant_conn_close(conn);
+    return;
+  }
+
+  rc = uv_shutdown(&req->req, (uv_stream_t *)&conn->handle, ant_conn_shutdown_cb);
+  if (rc != 0) {
+    free(req);
+    ant_conn_close(conn);
+  }
+}
+
+void ant_conn_ref(ant_conn_t *conn) {
+  if (!conn) return;
+  if (!uv_is_closing((uv_handle_t *)&conn->handle)) uv_ref((uv_handle_t *)&conn->handle);
+  if (!uv_is_closing((uv_handle_t *)&conn->timer)) uv_ref((uv_handle_t *)&conn->timer);
+}
+
+void ant_conn_unref(ant_conn_t *conn) {
+  if (!conn) return;
+  if (!uv_is_closing((uv_handle_t *)&conn->handle)) uv_unref((uv_handle_t *)&conn->handle);
+  if (!uv_is_closing((uv_handle_t *)&conn->timer)) uv_unref((uv_handle_t *)&conn->timer);
+}
+
+int ant_conn_set_no_delay(ant_conn_t *conn, bool enable) {
+  if (!conn || conn->closing) return UV_EINVAL;
+  return uv_tcp_nodelay(&conn->handle, enable ? 1 : 0);
+}
+
+int ant_conn_set_keep_alive(ant_conn_t *conn, bool enable, unsigned int delay_secs) {
+  if (!conn || conn->closing) return UV_EINVAL;
+  return uv_tcp_keepalive(&conn->handle, enable ? 1 : 0, delay_secs);
+}
+
+void ant_conn_consume(ant_conn_t *conn, size_t len) {
+  if (!conn || conn->buffer_len == 0 || len == 0) return;
+  if (len >= conn->buffer_len) {
+    conn->buffer_len = 0;
+    return;
+  }
+
+  memmove(conn->buffer, conn->buffer + len, conn->buffer_len - len);
+  conn->buffer_len -= len;
 }
 
 void ant_conn_close(ant_conn_t *conn) {
@@ -283,4 +433,12 @@ int ant_conn_write(ant_conn_t *conn, char *data, size_t len, ant_conn_write_cb c
   }
 
   return 0;
+}
+
+uint64_t ant_conn_bytes_read(const ant_conn_t *conn) {
+  return conn ? conn->bytes_read : 0;
+}
+
+uint64_t ant_conn_bytes_written(const ant_conn_t *conn) {
+  return conn ? conn->bytes_written : 0;
 }

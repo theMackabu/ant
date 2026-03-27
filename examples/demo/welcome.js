@@ -2,14 +2,16 @@ console.log(`Hello from ${navigator.userAgent}! Did you know:\n`);
 
 const rows = [
   ['Feature', 'Description'],
-  ['Async/Await', 'Full coroutine support with minicoro'],
-  ['HTTP Server', 'Built-in Ant.serve() with TLS support'],
-  ['Fetch API', 'HTTP client with TLS via tlsuv'],
-  ['File System', 'Async/sync fs with ant:fs module'],
-  ['FFI', 'Native library integration'],
-  ['Web Locks', 'Navigator.locks API'],
-  ['TypeScript', 'Built-in type stripping via oxc'],
-  ['Garbage Collection', 'Mark-copy compacting + Boehm-Demers'],
+  ['Async/Await', 'Native promises, microtasks, and async functions'],
+  ['HTTP Server', 'Module-first server runtime with export default { fetch }'],
+  ['WinterTC APIs', 'Request, Response, Headers, fetch, streams, Blob, FormData'],
+  ['Fetch API', 'Request/Response/Headers/FormData with streamed bodies'],
+  ['File System', 'Async and sync filesystem APIs for scripts and tooling'],
+  ['FFI', 'Call native libraries directly with libffi-backed bindings'],
+  ['Web Locks', 'Web-standard Navigator.locks coordination primitives'],
+  ['TypeScript', 'Built-in .ts execution with automatic type stripping'],
+  ['Compression', 'CompressionStream, DecompressionStream, gzip, deflate, brotli'],
+  ['Garbage Collection', 'Adaptive generational GC with nursery and major cycles'],
   null,
   [null, 'And more...']
 ];

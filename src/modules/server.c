@@ -625,7 +625,8 @@ static ant_value_t server_timeout(ant_t *js, ant_value_t *args, int nargs) {
   if (!req || !req->conn) return js_mkundef();
 
   timeout = (int)js_getnum(args[1]);
-  ant_conn_set_timeout(req->conn, timeout);
+  ant_conn_set_timeout_ms(req->conn, (uint64_t)timeout * 1000ULL);
+  
   return js_mkundef();
 }
 
@@ -726,6 +727,10 @@ static void server_on_read(ant_conn_t *conn, ssize_t nread, void *user_data) {
     ant_conn_pause_read(conn);
     server_process_client_request(conn, &parsed);
   }
+}
+
+static void server_on_end(ant_conn_t *conn, void *user_data) {
+  if (conn) ant_conn_close(conn);
 }
 
 static void server_on_conn_close(ant_conn_t *conn, void *user_data) {
@@ -899,13 +904,14 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
   server->sigterm_handle.data = server;
 
   callbacks.on_read = server_on_read;
+  callbacks.on_end = server_on_end;
   callbacks.on_conn_close = server_on_conn_close;
   callbacks.on_listener_close = server_on_listener_close;
 
   rc = ant_listener_listen_tcp(
     &server->listener, server->loop,
     server->hostname, server->port,
-    128, server->idle_timeout_secs, &callbacks, server
+    128, (uint64_t)server->idle_timeout_secs * 1000ULL, &callbacks, server
   );
   
   if (rc != 0) {
@@ -915,7 +921,6 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
   }
 
   server->port = ant_listener_port(&server->listener);
-
   uv_signal_start(&server->sigint_handle, server_signal_cb, SIGINT);
   uv_signal_start(&server->sigterm_handle, server_signal_cb, SIGTERM);
 

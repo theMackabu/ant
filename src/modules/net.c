@@ -1,6 +1,8 @@
-// stub: minimal node:net implementation (isIP, isIPv4, isIPv6)
-// just enough for vite to resolve the module and validate hostnames
+#include <compat.h> // IWYU pragma: keep
 
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #ifdef _WIN32
@@ -11,16 +13,312 @@
 #endif
 
 #include "ant.h"
-#include "internal.h" // IWYU pragma: keep
+#include "ptr.h"
+#include "errors.h"
+#include "internal.h"
+
+#include "gc/modules.h"
+#include "net/listener.h"
+#include "silver/engine.h"
+
+#include "modules/buffer.h"
+#include "modules/events.h"
+#include "modules/net.h"
+#include "modules/symbol.h"
+
+typedef struct net_server_s net_server_t;
+typedef struct net_socket_s net_socket_t;
+
+struct net_socket_s {
+  ant_t *js;
+  ant_value_t obj;
+  ant_conn_t *conn;
+  net_server_t *server;
+  ant_value_t encoding;
+  struct net_socket_s *next_active;
+  struct net_socket_s *next_in_server;
+  bool allow_half_open;
+  bool destroyed;
+  bool had_error;
+};
+
+struct net_server_s {
+  ant_t *js;
+  ant_value_t obj;
+  ant_listener_t listener;
+  net_socket_t *sockets;
+  struct net_server_s *next_active;
+  char *host;
+  int port;
+  int backlog;
+  int max_connections;
+  bool listening;
+  bool closing;
+  bool allow_half_open;
+  bool pause_on_connect;
+  bool no_delay;
+  bool keep_alive;
+  unsigned int keep_alive_initial_delay_secs;
+};
+
+static ant_value_t g_net_server_proto = 0;
+static ant_value_t g_net_socket_proto = 0;
+static ant_value_t g_net_server_ctor = 0;
+static ant_value_t g_net_socket_ctor = 0;
+
+static net_server_t *g_active_servers = NULL;
+static net_socket_t *g_active_sockets = NULL;
+
+static bool g_default_auto_select_family = true;
+static double g_default_auto_select_family_attempt_timeout = 250.0;
+
+enum {
+  NET_SERVER_NATIVE_TAG = 0x4e455453u,
+  NET_SOCKET_NATIVE_TAG = 0x4e45544bu,
+};
+
+static net_server_t *net_server_data(ant_value_t value) {
+  if (!js_check_native_tag(value, NET_SERVER_NATIVE_TAG)) return NULL;
+  return (net_server_t *)js_get_native_ptr(value);
+}
+
+static net_socket_t *net_socket_data(ant_value_t value) {
+  if (!js_check_native_tag(value, NET_SOCKET_NATIVE_TAG)) return NULL;
+  return (net_socket_t *)js_get_native_ptr(value);
+}
+
+static void net_add_active_server(net_server_t *server) {
+  server->next_active = g_active_servers;
+  g_active_servers = server;
+}
+
+static void net_remove_active_server(net_server_t *server) {
+  net_server_t **it = NULL;
+  for (it = &g_active_servers; *it; it = &(*it)->next_active) {
+  if (*it == server) {
+    *it = server->next_active;
+    server->next_active = NULL;
+    return;
+  }}
+}
+
+static void net_add_active_socket(net_socket_t *socket) {
+  socket->next_active = g_active_sockets;
+  g_active_sockets = socket;
+}
+
+static void net_remove_active_socket(net_socket_t *socket) {
+  net_socket_t **it = NULL;
+  for (it = &g_active_sockets; *it; it = &(*it)->next_active) {
+  if (*it == socket) {
+    *it = socket->next_active;
+    socket->next_active = NULL;
+    return;
+  }}
+}
+
+static ant_value_t net_call_value(
+  ant_t *js,
+  ant_value_t fn,
+  ant_value_t this_val,
+  ant_value_t *args,
+  int nargs
+) {
+  ant_value_t saved_this = js->this_val;
+  ant_value_t result = js_mkundef();
+
+  js->this_val = this_val;
+  if (vtype(fn) == T_CFUNC)
+    result = ((ant_value_t (*)(ant_t *, ant_value_t *, int))vdata(fn))(js, args, nargs);
+  else result = sv_vm_call(js->vm, js, fn, this_val, args, nargs, NULL, false);
+  js->this_val = saved_this;
+  return result;
+}
+
+static ant_value_t net_call_method(
+  ant_t *js,
+  ant_value_t target,
+  const char *name,
+  ant_value_t *args,
+  int nargs
+) {
+  ant_value_t fn = js_get(js, target, name);
+  if (!is_callable(fn)) return js_mkundef();
+  return net_call_value(js, fn, target, args, nargs);
+}
+
+static void net_emit(ant_t *js, ant_value_t target, const char *event, ant_value_t *args, int nargs) {
+  ant_value_t emit_args[8] = {0};
+  int i = 0;
+
+  if (nargs > 7) nargs = 7;
+  emit_args[0] = js_mkstr(js, event, strlen(event));
+  for (i = 0; i < nargs; i++) emit_args[i + 1] = args[i];
+  net_call_method(js, target, "emit", emit_args, nargs + 1);
+}
+
+static ant_value_t net_make_buffer_chunk(ant_t *js, const char *data, size_t len) {
+  ArrayBufferData *ab = create_array_buffer_data(len);
+  if (!ab) return js_mkerr_typed(js, JS_ERR_TYPE, "Out of memory");
+  if (len > 0 && data) memcpy(ab->data, data, len);
+  return create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, len, "Buffer");
+}
+
+static void net_socket_sync_state(net_socket_t *socket) {
+  ant_value_t obj = 0;
+  const char *ready_state = "open";
+
+  if (!socket) return;
+  obj = socket->obj;
+  if (!is_object_type(obj)) return;
+
+  if (socket->destroyed) ready_state = "closed";
+  js_set(socket->js, obj, "destroyed", js_bool(socket->destroyed));
+  js_set(socket->js, obj, "pending", js_bool(socket->conn == NULL && !socket->destroyed));
+  js_set(socket->js, obj, "connecting", js_false);
+  js_set(socket->js, obj, "readyState", js_mkstr(socket->js, ready_state, strlen(ready_state)));
+  js_set(socket->js, obj, "bytesRead", js_mknum((double)(socket->conn ? ant_conn_bytes_read(socket->conn) : 0)));
+  js_set(socket->js, obj, "bytesWritten", js_mknum((double)(socket->conn ? ant_conn_bytes_written(socket->conn) : 0)));
+  js_set(socket->js, obj, "timeout", js_mknum((double)(socket->conn ? ant_conn_timeout_ms(socket->conn) : 0)));
+}
+
+static void net_server_sync_state(net_server_t *server) {
+  if (!server || !is_object_type(server->obj)) return;
+  js_set(server->js, server->obj, "listening", js_bool(server->listening));
+  js_set(server->js, server->obj, "maxConnections", js_mknum((double)server->max_connections));
+  js_set(server->js, server->obj, "dropMaxConnection", js_false);
+}
+
+static int net_server_socket_count(net_server_t *server) {
+  int count = 0;
+  net_socket_t *socket = NULL;
+
+  for (socket = server ? server->sockets : NULL; socket; socket = socket->next_in_server)
+    count++;
+  return count;
+}
+
+static void net_server_maybe_finish_close(net_server_t *server) {
+  if (!server || !server->closing) return;
+  if (!ant_listener_is_closed(&server->listener)) return;
+  if (server->sockets) return;
+
+  server->closing = false;
+  server->listening = false;
+  net_server_sync_state(server);
+  net_emit(server->js, server->obj, "close", NULL, 0);
+  net_remove_active_server(server);
+}
+
+static void net_socket_detach(net_socket_t *socket) {
+  if (!socket) return;
+
+  if (socket->server) {
+    net_socket_t **it = NULL;
+    for (it = &socket->server->sockets; *it; it = &(*it)->next_in_server) {
+      if (*it == socket) {
+        *it = socket->next_in_server;
+        break;
+      }
+    }
+    socket->next_in_server = NULL;
+  }
+
+  net_remove_active_socket(socket);
+  if (is_object_type(socket->obj)) {
+    js_set_native_ptr(socket->obj, NULL);
+    js_set_native_tag(socket->obj, 0);
+  }
+  net_server_maybe_finish_close(socket->server);
+  free(socket);
+}
+
+static void net_socket_emit_error(net_socket_t *socket, const char *message) {
+  ant_value_t arg = js_mkerr_typed(socket->js, JS_ERR_TYPE, "%s", message);
+  socket->had_error = true;
+  net_emit(socket->js, socket->obj, "error", &arg, 1);
+}
+
+static net_socket_t *net_socket_create(ant_t *js, bool allow_half_open) {
+  ant_value_t obj = js_mkobj(js);
+  ant_value_t proto = js_instance_proto_from_new_target(js, g_net_socket_proto);
+  net_socket_t *socket = calloc(1, sizeof(*socket));
+
+  if (!socket) return NULL;
+  if (is_object_type(proto)) js_set_proto_init(obj, proto);
+
+  socket->js = js;
+  socket->obj = obj;
+  socket->encoding = js_mkundef();
+  socket->allow_half_open = allow_half_open;
+
+  js_set_native_ptr(obj, socket);
+  js_set_native_tag(obj, NET_SOCKET_NATIVE_TAG);
+  js_set(js, obj, "remoteAddress", js_mkundef());
+  js_set(js, obj, "remotePort", js_mkundef());
+  js_set(js, obj, "remoteFamily", js_mkundef());
+  js_set(js, obj, "localAddress", js_mkundef());
+  js_set(js, obj, "localPort", js_mkundef());
+  js_set(js, obj, "localFamily", js_mkundef());
+  net_socket_sync_state(socket);
+  
+  return socket;
+}
+
+static void net_socket_attach_conn(net_socket_t *socket, ant_conn_t *conn) {
+  if (!socket || !conn) return;
+
+  socket->conn = conn;
+  ant_conn_set_user_data(conn, socket);
+  if (ant_conn_has_remote_addr(conn)) {
+    js_set(socket->js, socket->obj, "remoteAddress", js_mkstr(socket->js, ant_conn_remote_addr(conn), strlen(ant_conn_remote_addr(conn))));
+    js_set(socket->js, socket->obj, "remotePort", js_mknum(ant_conn_remote_port(conn)));
+    js_set(socket->js, socket->obj, "remoteFamily", js_mkstr(socket->js, ant_conn_remote_family(conn), strlen(ant_conn_remote_family(conn))));
+  }
+  if (ant_conn_has_local_addr(conn)) {
+    js_set(socket->js, socket->obj, "localAddress", js_mkstr(socket->js, ant_conn_local_addr(conn), strlen(ant_conn_local_addr(conn))));
+    js_set(socket->js, socket->obj, "localPort", js_mknum(ant_conn_local_port(conn)));
+    js_set(socket->js, socket->obj, "localFamily", js_mkstr(socket->js, ant_conn_local_family(conn), strlen(ant_conn_local_family(conn))));
+  }
+  net_socket_sync_state(socket);
+}
+
+static net_server_t *net_server_create(ant_t *js) {
+  ant_value_t obj = js_mkobj(js);
+  ant_value_t proto = js_instance_proto_from_new_target(js, g_net_server_proto);
+  net_server_t *server = calloc(1, sizeof(*server));
+
+  if (!server) return NULL;
+  if (is_object_type(proto)) js_set_proto_init(obj, proto);
+
+  server->js = js;
+  server->obj = obj;
+  server->host = strdup("0.0.0.0");
+  server->backlog = 511;
+  if (!server->host) {
+    free(server);
+    return NULL;
+  }
+
+  js_set_native_ptr(obj, server);
+  js_set_native_tag(obj, NET_SERVER_NATIVE_TAG);
+  net_server_sync_state(server);
+  return server;
+}
+
+static ant_value_t net_not_implemented(ant_t *js, const char *what) {
+  return js_mkerr_typed(js, JS_ERR_TYPE, "%s is not implemented yet", what);
+}
 
 static ant_value_t net_isIP(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1) return js_mknum(0);
-  size_t len;
-  const char *host = js_getstr(js, args[0], &len);
-  if (!host) return js_mknum(0);
-
+  size_t len = 0;
+  const char *host = NULL;
   struct in_addr addr4;
   struct in6_addr addr6;
+
+  if (nargs < 1) return js_mknum(0);
+  host = js_getstr(js, args[0], &len);
+  if (!host) return js_mknum(0);
 
   if (inet_pton(AF_INET, host, &addr4) == 1) return js_mknum(4);
   if (inet_pton(AF_INET6, host, &addr6) == 1) return js_mknum(6);
@@ -28,31 +326,573 @@ static ant_value_t net_isIP(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t net_isIPv4(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1) return js_false;
-  size_t len;
-  const char *host = js_getstr(js, args[0], &len);
-  if (!host) return js_false;
-
-  struct in_addr addr;
-  return inet_pton(AF_INET, host, &addr) == 1 ? js_true : js_false;
+  if (js_getnum(net_isIP(js, args, nargs)) == 4.0) return js_true;
+  return js_false;
 }
 
 static ant_value_t net_isIPv6(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1) return js_false;
-  size_t len;
-  const char *host = js_getstr(js, args[0], &len);
-  if (!host) return js_false;
+  if (js_getnum(net_isIP(js, args, nargs)) == 6.0) return js_true;
+  return js_false;
+}
 
-  struct in6_addr addr;
-  return inet_pton(AF_INET6, host, &addr) == 1 ? js_true : js_false;
+static void net_server_apply_options(ant_t *js, net_server_t *server, ant_value_t options) {
+  ant_value_t value = 0;
+
+  if (!server || vtype(options) != T_OBJ) return;
+
+  value = js_get(js, options, "allowHalfOpen");
+  if (vtype(value) != T_UNDEF) server->allow_half_open = js_truthy(js, value);
+
+  value = js_get(js, options, "pauseOnConnect");
+  if (vtype(value) != T_UNDEF) server->pause_on_connect = js_truthy(js, value);
+
+  value = js_get(js, options, "noDelay");
+  if (vtype(value) != T_UNDEF) server->no_delay = js_truthy(js, value);
+
+  value = js_get(js, options, "keepAlive");
+  if (vtype(value) != T_UNDEF) server->keep_alive = js_truthy(js, value);
+
+  value = js_get(js, options, "keepAliveInitialDelay");
+  if (vtype(value) == T_NUM && js_getnum(value) > 0)
+    server->keep_alive_initial_delay_secs = (unsigned int)(js_getnum(value) / 1000.0);
+
+  value = js_get(js, options, "backlog");
+  if (vtype(value) == T_NUM && js_getnum(value) > 0)
+    server->backlog = (int)js_getnum(value);
+}
+
+static void net_socket_on_read(ant_conn_t *conn, ssize_t nread, void *user_data) {
+  net_socket_t *socket = (net_socket_t *)ant_conn_get_user_data(conn);
+  const char *buffer = NULL;
+  ant_value_t chunk = 0;
+  size_t total = 0;
+  size_t offset = 0;
+
+  if (!socket || !conn || nread <= 0) return;
+
+  total = ant_conn_buffer_len(conn);
+  if ((size_t)nread > total) return;
+  offset = total - (size_t)nread;
+  buffer = ant_conn_buffer(conn) + offset;
+
+  if (vtype(socket->encoding) == T_STR)
+    chunk = js_mkstr(socket->js, buffer, (size_t)nread);
+  else chunk = net_make_buffer_chunk(socket->js, buffer, (size_t)nread);
+
+  ant_conn_consume(conn, total);
+  net_socket_sync_state(socket);
+  net_emit(socket->js, socket->obj, "data", &chunk, 1);
+}
+
+static void net_socket_on_end(ant_conn_t *conn, void *user_data) {
+  net_socket_t *socket = (net_socket_t *)ant_conn_get_user_data(conn);
+
+  if (!socket) return;
+  net_emit(socket->js, socket->obj, "end", NULL, 0);
+  if (!socket->allow_half_open && socket->conn) ant_conn_shutdown(socket->conn);
+}
+
+static void net_socket_on_error(ant_conn_t *conn, int status, void *user_data) {
+  net_socket_t *socket = (net_socket_t *)ant_conn_get_user_data(conn);
+
+  if (!socket) return;
+  socket->had_error = true; {
+    ant_value_t err = js_mkerr_typed(socket->js, JS_ERR_TYPE, "%s", uv_strerror(status));
+    net_emit(socket->js, socket->obj, "error", &err, 1);
+  }
+}
+
+static void net_socket_on_timeout(ant_conn_t *conn, void *user_data) {
+  net_socket_t *socket = (net_socket_t *)ant_conn_get_user_data(conn);
+  if (!socket) return;
+  net_emit(socket->js, socket->obj, "timeout", NULL, 0);
+}
+
+static void net_server_on_conn_close(ant_conn_t *conn, void *user_data) {
+  net_socket_t *socket = (net_socket_t *)ant_conn_get_user_data(conn);
+  ant_value_t arg = 0;
+
+  if (!socket) return;
+  arg = js_bool(socket->had_error);
+  socket->conn = NULL;
+  socket->destroyed = true;
+  net_socket_sync_state(socket);
+  net_emit(socket->js, socket->obj, "close", &arg, 1);
+  ant_conn_set_user_data(conn, NULL);
+  net_socket_detach(socket);
+}
+
+static void net_server_on_listener_close(ant_listener_t *listener, void *user_data) {
+  net_server_maybe_finish_close((net_server_t *)user_data);
+}
+
+static void net_server_on_accept(ant_listener_t *listener, ant_conn_t *conn, void *user_data) {
+  net_server_t *server = (net_server_t *)user_data;
+  net_socket_t *socket = NULL;
+  ant_value_t arg = 0;
+
+  if (!server || !conn) return;
+
+  if (server->max_connections > 0 && net_server_socket_count(server) >= server->max_connections) {
+    ant_conn_close(conn);
+    return;
+  }
+
+  socket = net_socket_create(server->js, server->allow_half_open);
+  if (!socket) {
+    ant_conn_close(conn);
+    return;
+  }
+
+  socket->server = server;
+  socket->next_in_server = server->sockets;
+  server->sockets = socket;
+  net_add_active_socket(socket);
+  net_socket_attach_conn(socket, conn);
+
+  if (server->no_delay) ant_conn_set_no_delay(conn, true);
+  if (server->keep_alive)
+    ant_conn_set_keep_alive(conn, true, server->keep_alive_initial_delay_secs);
+  if (server->pause_on_connect) ant_conn_pause_read(conn);
+
+  arg = socket->obj;
+  net_emit(server->js, server->obj, "connection", &arg, 1);
+}
+
+static bool net_server_parse_host(const char *input, const char **out) {
+  if (!input || !*input) {
+    *out = "0.0.0.0";
+    return true;
+  }
+  if (strcmp(input, "localhost") == 0) {
+    *out = "127.0.0.1";
+    return true;
+  }
+  *out = input;
+  return true;
+}
+
+static ant_value_t js_net_socket_ctor(ant_t *js, ant_value_t *args, int nargs) {
+  net_socket_t *socket = NULL;
+  bool allow_half_open = false;
+
+  if (nargs > 0 && vtype(args[0]) == T_OBJ) {
+    ant_value_t value = js_get(js, args[0], "allowHalfOpen");
+    allow_half_open = js_truthy(js, value);
+  }
+
+  socket = net_socket_create(js, allow_half_open);
+  if (!socket) return js_mkerr_typed(js, JS_ERR_TYPE, "Out of memory");
+  return socket->obj;
+}
+
+static ant_value_t js_net_socket_address(ant_t *js, ant_value_t *args, int nargs) {
+  net_socket_t *socket = net_socket_data(js_getthis(js));
+  ant_value_t out = js_mkobj(js);
+
+  if (!socket || !socket->conn || !ant_conn_has_local_addr(socket->conn)) return out;
+  js_set(js, out, "address", js_mkstr(js, ant_conn_local_addr(socket->conn), strlen(ant_conn_local_addr(socket->conn))));
+  js_set(js, out, "port", js_mknum(ant_conn_local_port(socket->conn)));
+  js_set(js, out, "family", js_mkstr(js, ant_conn_local_family(socket->conn), strlen(ant_conn_local_family(socket->conn))));
+  return out;
+}
+
+static ant_value_t js_net_socket_pause(ant_t *js, ant_value_t *args, int nargs) {
+  net_socket_t *socket = net_socket_data(js_getthis(js));
+  if (socket && socket->conn) ant_conn_pause_read(socket->conn);
+  return js_getthis(js);
+}
+
+static ant_value_t js_net_socket_resume(ant_t *js, ant_value_t *args, int nargs) {
+  net_socket_t *socket = net_socket_data(js_getthis(js));
+  if (socket && socket->conn) ant_conn_resume_read(socket->conn);
+  return js_getthis(js);
+}
+
+static ant_value_t js_net_socket_setEncoding(ant_t *js, ant_value_t *args, int nargs) {
+  net_socket_t *socket = net_socket_data(js_getthis(js));
+  if (!socket) return js_getthis(js);
+  socket->encoding = nargs > 0 && vtype(args[0]) != T_UNDEF ? js_tostring_val(js, args[0]) : js_mkundef();
+  return js_getthis(js);
+}
+
+static ant_value_t js_net_socket_setTimeout(ant_t *js, ant_value_t *args, int nargs) {
+  net_socket_t *socket = net_socket_data(js_getthis(js));
+  double timeout = 0;
+  ant_value_t once_args[2] = {0};
+
+  if (!socket) return js_getthis(js);
+  if (nargs > 0 && vtype(args[0]) == T_NUM) timeout = js_getnum(args[0]);
+  if (socket->conn) ant_conn_set_timeout_ms(socket->conn, timeout > 0 ? (uint64_t)timeout : 0);
+  net_socket_sync_state(socket);
+
+  if (nargs > 1 && is_callable(args[1])) {
+    once_args[0] = js_mkstr(js, "timeout", 7);
+    once_args[1] = args[1];
+    net_call_method(js, socket->obj, "once", once_args, 2);
+  }
+
+  return js_getthis(js);
+}
+
+static ant_value_t js_net_socket_setNoDelay(ant_t *js, ant_value_t *args, int nargs) {
+  net_socket_t *socket = net_socket_data(js_getthis(js));
+  bool enable = nargs == 0 || js_truthy(js, args[0]);
+  if (socket && socket->conn) ant_conn_set_no_delay(socket->conn, enable);
+  return js_getthis(js);
+}
+
+static ant_value_t js_net_socket_setKeepAlive(ant_t *js, ant_value_t *args, int nargs) {
+  net_socket_t *socket = net_socket_data(js_getthis(js));
+  bool enable = nargs > 0 && js_truthy(js, args[0]);
+  unsigned int delay = nargs > 1 && vtype(args[1]) == T_NUM ? (unsigned int)(js_getnum(args[1]) / 1000.0) : 0;
+  if (socket && socket->conn) ant_conn_set_keep_alive(socket->conn, enable, delay);
+  return js_getthis(js);
+}
+
+static ant_value_t js_net_socket_ref(ant_t *js, ant_value_t *args, int nargs) {
+  net_socket_t *socket = net_socket_data(js_getthis(js));
+  if (socket && socket->conn) ant_conn_ref(socket->conn);
+  return js_getthis(js);
+}
+
+static ant_value_t js_net_socket_unref(ant_t *js, ant_value_t *args, int nargs) {
+  net_socket_t *socket = net_socket_data(js_getthis(js));
+  if (socket && socket->conn) ant_conn_unref(socket->conn);
+  return js_getthis(js);
+}
+
+static ant_value_t js_net_socket_write(ant_t *js, ant_value_t *args, int nargs) {
+  net_socket_t *socket = net_socket_data(js_getthis(js));
+  const uint8_t *bytes = NULL;
+  size_t len = 0;
+  char *copy = NULL;
+
+  if (!socket || !socket->conn) return js_false;
+  if (nargs < 1) return js_true;
+
+  if (!buffer_source_get_bytes(js, args[0], &bytes, &len)) {
+    size_t slen = 0;
+    const char *str = js_getstr(js, js_tostring_val(js, args[0]), &slen);
+    if (!str) return js_false;
+    bytes = (const uint8_t *)str;
+    len = slen;
+  }
+
+  copy = malloc(len);
+  if (!copy) return js_mkerr_typed(js, JS_ERR_TYPE, "Out of memory");
+  if (len > 0) memcpy(copy, bytes, len);
+
+  if (ant_conn_write(socket->conn, copy, len, NULL, NULL) != 0) {
+    free(copy);
+    return js_false;
+  }
+
+  net_socket_sync_state(socket);
+  if (nargs > 2 && is_callable(args[2])) net_call_value(js, args[2], js_mkundef(), NULL, 0);
+  return js_true;
+}
+
+static ant_value_t js_net_socket_end(ant_t *js, ant_value_t *args, int nargs) {
+  net_socket_t *socket = net_socket_data(js_getthis(js));
+  ant_value_t result = js_getthis(js);
+
+  if (!socket || !socket->conn) return result;
+  if (nargs > 0 && vtype(args[0]) != T_UNDEF && vtype(args[0]) != T_NULL)
+    js_net_socket_write(js, args, nargs);
+  ant_conn_shutdown(socket->conn);
+  if (nargs > 2 && is_callable(args[2])) net_call_value(js, args[2], js_mkundef(), NULL, 0);
+  return result;
+}
+
+static ant_value_t js_net_socket_destroy(ant_t *js, ant_value_t *args, int nargs) {
+  net_socket_t *socket = net_socket_data(js_getthis(js));
+  if (!socket) return js_getthis(js);
+
+  if (nargs > 0 && vtype(args[0]) != T_UNDEF && vtype(args[0]) != T_NULL) {
+    ant_value_t err = args[0];
+    socket->had_error = true;
+    net_emit(js, socket->obj, "error", &err, 1);
+  }
+
+  if (socket->conn) ant_conn_close(socket->conn);
+  return js_getthis(js);
+}
+
+static ant_value_t js_net_socket_connect(ant_t *js, ant_value_t *args, int nargs) {
+  return net_not_implemented(js, "net.Socket.connect");
+}
+
+static ant_value_t js_net_server_ctor(ant_t *js, ant_value_t *args, int nargs) {
+  net_server_t *server = net_server_create(js);
+  ant_value_t on_args[2] = {0};
+
+  if (!server) return js_mkerr_typed(js, JS_ERR_TYPE, "Out of memory");
+  if (nargs > 0 && vtype(args[0]) == T_OBJ) net_server_apply_options(js, server, args[0]);
+  if (nargs > 0 && is_callable(args[0])) {
+    on_args[0] = js_mkstr(js, "connection", 10);
+    on_args[1] = args[0];
+    net_call_method(js, server->obj, "on", on_args, 2);
+  } else if (nargs > 1 && is_callable(args[1])) {
+    on_args[0] = js_mkstr(js, "connection", 10);
+    on_args[1] = args[1];
+    net_call_method(js, server->obj, "on", on_args, 2);
+  }
+
+  return server->obj;
+}
+
+static ant_value_t js_net_server_listen(ant_t *js, ant_value_t *args, int nargs) {
+  net_server_t *server = net_server_data(js_getthis(js));
+  ant_listener_callbacks_t callbacks = {0};
+  const char *host = "0.0.0.0";
+  ant_value_t cb = js_mkundef();
+  int port = 0;
+  int backlog = 511;
+  int rc = 0;
+
+  if (!server) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid net.Server");
+  if (server->listening) return js_mkerr_typed(js, JS_ERR_TYPE, "Server is already listening");
+
+  if (nargs > 0 && vtype(args[0]) == T_NUM) {
+    port = (int)js_getnum(args[0]);
+    if (nargs > 1 && vtype(args[1]) == T_STR) {
+      size_t len = 0;
+      host = js_getstr(js, args[1], &len);
+    }
+    if (nargs > 2 && vtype(args[2]) == T_NUM) backlog = (int)js_getnum(args[2]);
+    if (nargs > 3 && is_callable(args[3])) cb = args[3];
+    else if (nargs > 2 && is_callable(args[2])) cb = args[2];
+    else if (nargs > 1 && is_callable(args[1])) cb = args[1];
+  } else if (nargs > 0 && vtype(args[0]) == T_OBJ) {
+    ant_value_t value = js_get(js, args[0], "path");
+    if (vtype(value) != T_UNDEF) return net_not_implemented(js, "IPC server listen");
+
+    value = js_get(js, args[0], "port");
+    if (vtype(value) == T_NUM) port = (int)js_getnum(value);
+    value = js_get(js, args[0], "host");
+    if (vtype(value) == T_STR) {
+      size_t len = 0;
+      host = js_getstr(js, value, &len);
+    }
+    value = js_get(js, args[0], "backlog");
+    if (vtype(value) == T_NUM) backlog = (int)js_getnum(value);
+    if (nargs > 1 && is_callable(args[1])) cb = args[1];
+  } else if (nargs > 0 && vtype(args[0]) == T_STR) {
+    return net_not_implemented(js, "IPC server listen");
+  } else if (nargs > 0 && is_callable(args[0])) {
+    cb = args[0];
+  }
+
+  net_server_parse_host(host, &host);
+  free(server->host);
+  server->host = strdup(host ? host : "0.0.0.0");
+  server->port = port;
+  server->backlog = backlog > 0 ? backlog : server->backlog;
+
+  callbacks.on_accept = net_server_on_accept;
+  callbacks.on_read = net_socket_on_read;
+  callbacks.on_end = net_socket_on_end;
+  callbacks.on_error = net_socket_on_error;
+  callbacks.on_timeout = net_socket_on_timeout;
+  callbacks.on_conn_close = net_server_on_conn_close;
+  callbacks.on_listener_close = net_server_on_listener_close;
+
+  rc = ant_listener_listen_tcp(
+    &server->listener,
+    uv_default_loop(),
+    server->host,
+    port,
+    server->backlog,
+    0,
+    &callbacks,
+    server
+  );
+  if (rc != 0) return js_mkerr_typed(js, JS_ERR_TYPE, "%s", uv_strerror(rc));
+
+  server->port = ant_listener_port(&server->listener);
+  server->listening = true;
+  server->closing = false;
+  net_server_sync_state(server);
+  net_add_active_server(server);
+
+  if (is_callable(cb)) net_call_value(js, cb, js_mkundef(), NULL, 0);
+  net_emit(js, server->obj, "listening", NULL, 0);
+  return js_getthis(js);
+}
+
+static ant_value_t js_net_server_close(ant_t *js, ant_value_t *args, int nargs) {
+  net_server_t *server = net_server_data(js_getthis(js));
+  ant_value_t once_args[2] = {0};
+
+  if (!server) return js_getthis(js);
+
+  if (nargs > 0 && is_callable(args[0])) {
+    once_args[0] = js_mkstr(js, "close", 5);
+    once_args[1] = args[0];
+    net_call_method(js, server->obj, "once", once_args, 2);
+  }
+
+  if (!server->listening && !server->closing) {
+    if (nargs > 0 && is_callable(args[0])) {
+      ant_value_t err = js_mkerr_typed(js, JS_ERR_TYPE, "Server is not running");
+      net_call_value(js, args[0], js_mkundef(), &err, 1);
+    }
+    return js_getthis(js);
+  }
+
+  server->closing = true;
+  ant_listener_stop(&server->listener, false);
+  net_server_maybe_finish_close(server);
+  return js_getthis(js);
+}
+
+static ant_value_t js_net_server_address(ant_t *js, ant_value_t *args, int nargs) {
+  net_server_t *server = net_server_data(js_getthis(js));
+  ant_value_t out = js_mknull();
+  if (!server || !server->listening) return out;
+
+  out = js_mkobj(js);
+  js_set(js, out, "port", js_mknum(server->port));
+  js_set(js, out, "family", js_mkstr(js, "IPv4", 4));
+  js_set(js, out, "address", js_mkstr(js, server->host, strlen(server->host)));
+  return out;
+}
+
+static ant_value_t js_net_server_getConnections(ant_t *js, ant_value_t *args, int nargs) {
+  net_server_t *server = net_server_data(js_getthis(js));
+  ant_value_t cb = nargs > 0 ? args[0] : js_mkundef();
+  ant_value_t argv[2] = { js_mknull(), js_mknum((double)net_server_socket_count(server)) };
+
+  if (is_callable(cb)) net_call_value(js, cb, js_mkundef(), argv, 2);
+  return js_getthis(js);
+}
+
+static ant_value_t js_net_server_ref(ant_t *js, ant_value_t *args, int nargs) {
+  net_server_t *server = net_server_data(js_getthis(js));
+  if (server && !uv_is_closing((uv_handle_t *)&server->listener.handle))
+    uv_ref((uv_handle_t *)&server->listener.handle);
+  return js_getthis(js);
+}
+
+static ant_value_t js_net_server_unref(ant_t *js, ant_value_t *args, int nargs) {
+  net_server_t *server = net_server_data(js_getthis(js));
+  if (server && !uv_is_closing((uv_handle_t *)&server->listener.handle))
+    uv_unref((uv_handle_t *)&server->listener.handle);
+  return js_getthis(js);
+}
+
+static ant_value_t js_net_createServer(ant_t *js, ant_value_t *args, int nargs) {
+  return js_net_server_ctor(js, args, nargs);
+}
+
+static ant_value_t js_net_createConnection(ant_t *js, ant_value_t *args, int nargs) {
+  return net_not_implemented(js, "net.createConnection");
+}
+
+static ant_value_t js_net_connect(ant_t *js, ant_value_t *args, int nargs) {
+  return js_net_createConnection(js, args, nargs);
+}
+
+static ant_value_t js_net_getDefaultAutoSelectFamily(ant_t *js, ant_value_t *args, int nargs) {
+  return js_bool(g_default_auto_select_family);
+}
+
+static ant_value_t js_net_setDefaultAutoSelectFamily(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs > 0) g_default_auto_select_family = js_truthy(js, args[0]);
+  return js_mkundef();
+}
+
+static ant_value_t js_net_getDefaultAutoSelectFamilyAttemptTimeout(ant_t *js, ant_value_t *args, int nargs) {
+  return js_mknum(g_default_auto_select_family_attempt_timeout);
+}
+
+static ant_value_t js_net_setDefaultAutoSelectFamilyAttemptTimeout(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs > 0 && vtype(args[0]) == T_NUM) {
+    double value = js_getnum(args[0]);
+    if (value > 0 && value < 10) value = 10;
+    if (value > 0) g_default_auto_select_family_attempt_timeout = value;
+  }
+  return js_mkundef();
+}
+
+static void net_init_constructors(ant_t *js) {
+  ant_value_t events = 0;
+  ant_value_t ee_ctor = 0;
+  ant_value_t ee_proto = 0;
+
+  if (g_net_server_ctor && g_net_socket_ctor) return;
+
+  events = events_library(js);
+  ee_ctor = js_get(js, events, "EventEmitter");
+  ee_proto = js_get(js, ee_ctor, "prototype");
+
+  g_net_socket_proto = js_mkobj(js);
+  js_set_proto_init(g_net_socket_proto, ee_proto);
+  js_set(js, g_net_socket_proto, "address", js_mkfun(js_net_socket_address));
+  js_set(js, g_net_socket_proto, "pause", js_mkfun(js_net_socket_pause));
+  js_set(js, g_net_socket_proto, "resume", js_mkfun(js_net_socket_resume));
+  js_set(js, g_net_socket_proto, "setEncoding", js_mkfun(js_net_socket_setEncoding));
+  js_set(js, g_net_socket_proto, "setTimeout", js_mkfun(js_net_socket_setTimeout));
+  js_set(js, g_net_socket_proto, "setNoDelay", js_mkfun(js_net_socket_setNoDelay));
+  js_set(js, g_net_socket_proto, "setKeepAlive", js_mkfun(js_net_socket_setKeepAlive));
+  js_set(js, g_net_socket_proto, "write", js_mkfun(js_net_socket_write));
+  js_set(js, g_net_socket_proto, "end", js_mkfun(js_net_socket_end));
+  js_set(js, g_net_socket_proto, "destroy", js_mkfun(js_net_socket_destroy));
+  js_set(js, g_net_socket_proto, "connect", js_mkfun(js_net_socket_connect));
+  js_set(js, g_net_socket_proto, "ref", js_mkfun(js_net_socket_ref));
+  js_set(js, g_net_socket_proto, "unref", js_mkfun(js_net_socket_unref));
+  js_set_sym(js, g_net_socket_proto, get_toStringTag_sym(), js_mkstr(js, "Socket", 6));
+  g_net_socket_ctor = js_make_ctor(js, js_net_socket_ctor, g_net_socket_proto, "Socket", 6);
+
+  g_net_server_proto = js_mkobj(js);
+  js_set_proto_init(g_net_server_proto, ee_proto);
+  js_set(js, g_net_server_proto, "listen", js_mkfun(js_net_server_listen));
+  js_set(js, g_net_server_proto, "close", js_mkfun(js_net_server_close));
+  js_set(js, g_net_server_proto, "address", js_mkfun(js_net_server_address));
+  js_set(js, g_net_server_proto, "getConnections", js_mkfun(js_net_server_getConnections));
+  js_set(js, g_net_server_proto, "ref", js_mkfun(js_net_server_ref));
+  js_set(js, g_net_server_proto, "unref", js_mkfun(js_net_server_unref));
+  js_set_sym(js, g_net_server_proto, get_toStringTag_sym(), js_mkstr(js, "Server", 6));
+  g_net_server_ctor = js_make_ctor(js, js_net_server_ctor, g_net_server_proto, "Server", 6);
 }
 
 ant_value_t net_library(ant_t *js) {
   ant_value_t lib = js_mkobj(js);
 
+  net_init_constructors(js);
+
+  js_set(js, lib, "Server", g_net_server_ctor);
+  js_set(js, lib, "Socket", g_net_socket_ctor);
+  js_set(js, lib, "createServer", js_mkfun(js_net_createServer));
+  js_set(js, lib, "createConnection", js_mkfun(js_net_createConnection));
+  js_set(js, lib, "connect", js_mkfun(js_net_connect));
   js_set(js, lib, "isIP", js_mkfun(net_isIP));
   js_set(js, lib, "isIPv4", js_mkfun(net_isIPv4));
   js_set(js, lib, "isIPv6", js_mkfun(net_isIPv6));
-
+  js_set(js, lib, "getDefaultAutoSelectFamily", js_mkfun(js_net_getDefaultAutoSelectFamily));
+  js_set(js, lib, "setDefaultAutoSelectFamily", js_mkfun(js_net_setDefaultAutoSelectFamily));
+  js_set(js, lib, "getDefaultAutoSelectFamilyAttemptTimeout", js_mkfun(js_net_getDefaultAutoSelectFamilyAttemptTimeout));
+  js_set(js, lib, "setDefaultAutoSelectFamilyAttemptTimeout", js_mkfun(js_net_setDefaultAutoSelectFamilyAttemptTimeout));
+  js_set(js, lib, "default", lib);
+  js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "net", 3));
   return lib;
+}
+
+void gc_mark_net(ant_t *js, gc_mark_fn mark) {
+  net_server_t *server = NULL;
+  net_socket_t *socket = NULL;
+
+  if (g_net_server_proto) mark(js, g_net_server_proto);
+  if (g_net_socket_proto) mark(js, g_net_socket_proto);
+  if (g_net_server_ctor) mark(js, g_net_server_ctor);
+  if (g_net_socket_ctor) mark(js, g_net_socket_ctor);
+
+  for (server = g_active_servers; server; server = server->next_active)
+    mark(js, server->obj);
+
+  for (socket = g_active_sockets; socket; socket = socket->next_active) {
+    mark(js, socket->obj);
+    if (vtype(socket->encoding) != T_UNDEF) mark(js, socket->encoding);
+  }
 }

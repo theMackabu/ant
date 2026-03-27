@@ -22,7 +22,7 @@ static void ant_listener_accept_cb(uv_stream_t *server_stream, int status) {
 
   if (status < 0 || !listener || listener->closing) return;
 
-  conn = ant_conn_create_tcp(listener, listener->idle_timeout_secs);
+  conn = ant_conn_create_tcp(listener, listener->idle_timeout_ms);
   if (!conn) return;
 
   if (ant_conn_accept(conn, server_stream) != 0) {
@@ -42,7 +42,7 @@ int ant_listener_listen_tcp(
   const char *hostname,
   int port,
   int backlog,
-  int idle_timeout_secs,
+  uint64_t idle_timeout_ms,
   const ant_listener_callbacks_t *callbacks,
   void *user_data
 ) {
@@ -55,7 +55,7 @@ int ant_listener_listen_tcp(
 
   listener->loop = loop;
   listener->user_data = user_data;
-  listener->idle_timeout_secs = idle_timeout_secs;
+  listener->idle_timeout_ms = idle_timeout_ms;
   listener->port = port;
   listener->backlog = backlog > 0 ? backlog : 128;
   if (callbacks) listener->callbacks = *callbacks;

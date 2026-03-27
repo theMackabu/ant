@@ -1,5 +1,3 @@
-// stub: functional where possible
-
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
