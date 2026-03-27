@@ -28,5 +28,6 @@ void gc_mark_writable_streams(ant_t *js, gc_mark_fn mark);
 void gc_mark_transform_streams(ant_t *js, gc_mark_fn mark);
 void gc_mark_codec_streams(ant_t *js, gc_mark_fn mark);
 void gc_mark_compression_streams(ant_t *js, gc_mark_fn mark);
+void gc_mark_zlib(ant_t *js, gc_mark_fn mark);
 
 #endif

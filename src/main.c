@@ -83,6 +83,7 @@
 #include "modules/headers.h"
 #include "modules/blob.h"
 #include "modules/formdata.h"
+#include "modules/zlib.h"
 #include "streams/queuing.h"
 #include "streams/readable.h"
 #include "streams/writable.h"
@@ -638,6 +639,7 @@ int main(int argc, char *argv[]) {
   ant_standard_library("worker_threads", worker_threads_library);
   ant_standard_library("async_hooks", async_hooks_library);
   ant_standard_library("v8", v8_library);
+  ant_standard_library("zlib", zlib_library);
 
   ant_value_t snapshot_result = ant_load_snapshot(js);
   if (vtype(snapshot_result) == T_ERR) {
