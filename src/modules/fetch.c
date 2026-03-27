@@ -1,339 +1,540 @@
 #include <compat.h> // IWYU pragma: keep
 
-#include <uv.h>
-#include <stdio.h>
+#include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <tlsuv/tlsuv.h>
-#include <tlsuv/http.h>
+#include <strings.h>
+#include <uv.h>
 #include <utarray.h>
 
 #include "ant.h"
-#include "errors.h"
 #include "common.h"
+#include "errors.h"
 #include "internal.h"
 #include "runtime.h"
-#include "modules/fetch.h"
-#include "modules/json.h"
-#include "modules/timer.h"
+#include "esm/remote.h"
 #include "gc/modules.h"
-
-typedef struct {
-  char *data;
-  size_t size;
-  size_t capacity;
-} fetch_buffer_t;
+#include "modules/abort.h"
+#include "modules/buffer.h"
+#include "modules/fetch.h"
+#include "modules/headers.h"
+#include "modules/http.h"
+#include "modules/request.h"
+#include "modules/response.h"
+#include "modules/url.h"
+#include "streams/readable.h"
 
 typedef struct fetch_request_s {
   ant_t *js;
+  
   ant_value_t promise;
-  tlsuv_http_t http_client;
-  tlsuv_http_req_t *http_req;
-  fetch_buffer_t response_buffer;
-  int status_code;
-  int completed;
-  int failed;
-  char *error_msg;
-  ant_value_t headers_obj;
-  char *method;
-  char *body;
-  size_t body_len;
+  ant_value_t request_obj;
+  ant_value_t response_obj;
+  ant_value_t abort_listener;
+  ant_http_request_t *http_req;
+  
+  bool settled;
+  bool aborted;
 } fetch_request_t;
 
 static UT_array *pending_requests = NULL;
 
-static void free_fetch_request(fetch_request_t *req) {
-  if (!req) return;
-  
-  if (req->response_buffer.data) free(req->response_buffer.data);
-  if (req->error_msg) free(req->error_msg);
-  if (req->method) free(req->method);
-  if (req->body) free(req->body);
-  
-  free(req);
-}
-
 static void remove_pending_request(fetch_request_t *req) {
   if (!req || !pending_requests) return;
-  
+
   fetch_request_t **p = NULL;
   unsigned int i = 0;
   
-  while ((p = (fetch_request_t**)utarray_next(pending_requests, p))) {
-    if (*p == req) { utarray_erase(pending_requests, i, 1); break; }
-    i++;
+  while ((p = (fetch_request_t **)utarray_next(pending_requests, p))) {
+    if (*p == req) { utarray_erase(pending_requests, i, 1); return; } i++;
   }
 }
 
-static ant_value_t fetch_fail_oom(ant_t *js, ant_value_t promise, fetch_request_t *req, bool close_http, const char *msg, size_t len) {
-  ant_value_t err = js_mkstr(js, msg, len);
-  js_reject_promise(js, promise, err);
-  if (close_http) tlsuv_http_close(&req->http_client, NULL);
-  remove_pending_request(req); free_fetch_request(req);
-  return js_mkundef();
-}
+static void free_fetch_request(fetch_request_t *req) {
+  if (!req) return;
 
-static ant_value_t response_text(ant_t *js, ant_value_t *args, int nargs) {  
-  ant_value_t this = js_getthis(js);
-  ant_value_t body = js_get_slot(this, SLOT_DATA);
-  
-  ant_value_t promise = js_mkpromise(js);
-  js_resolve_promise(js, promise, body);
-  
-  return promise;
-}
+  if (abort_signal_is_signal(request_get_signal(req->request_obj)) && is_callable(req->abort_listener))
+    abort_signal_remove_listener(req->js, request_get_signal(req->request_obj), req->abort_listener);
 
-static ant_value_t response_json(ant_t *js, ant_value_t *args, int nargs) {  
-  ant_value_t this = js_getthis(js);
-  ant_value_t body = js_get_slot(this, SLOT_DATA);
-  ant_value_t parsed = json_parse_value(js, body);
-  ant_value_t promise = js_mkpromise(js);
-  
-  if (vtype(parsed) == T_ERR) {
-    js_reject_promise(js, promise, parsed);
-  } else js_resolve_promise(js, promise, parsed);
-  
-  return promise;
-}
-
-static ant_value_t create_response(ant_t *js, int status, const char *body, size_t body_len) {
-  ant_value_t response_obj = js_mkobj(js);
-  ant_value_t body_str = js_mkstr(js, body, body_len);
-
-  js_set(js, response_obj, "ok", js_bool(status >= 200 && status < 300));
-  js_set(js, response_obj, "status", js_mknum(status));
-  
-  js_set_slot(response_obj, SLOT_DATA, body_str);
-  
-  js_set(js, response_obj, "text", js_mkfun(response_text));
-  js_set(js, response_obj, "json", js_mkfun(response_json));
-  
-  return response_obj;
-}
-
-static void complete_request(fetch_request_t *req) {
-  if (req->failed) {
-    ant_value_t err = js_mkstr(req->js, req->error_msg ? req->error_msg : "Unknown error", req->error_msg ? strlen(req->error_msg) : 13);
-    js_reject_promise(req->js, req->promise, err);
-  } else {
-    const char *body = req->response_buffer.data ? req->response_buffer.data : "";
-    size_t body_len = req->response_buffer.data ? req->response_buffer.size : 0;
-    ant_value_t response = create_response(req->js, req->status_code, body, body_len);
-    js_resolve_promise(req->js, req->promise, response);
-  }
-  
   remove_pending_request(req);
+  free(req);
+}
+
+static ant_value_t fetch_type_error(ant_t *js, const char *message) {
+  return js_mkerr_typed(js, JS_ERR_TYPE, "%s", message ? message : "fetch failed");
+}
+
+static ant_value_t fetch_rejection_reason(ant_t *js, ant_value_t value) {
+  if (!is_err(value)) return value;
+  if (js->thrown_exists) {
+    ant_value_t reason = js->thrown_value;
+    js->thrown_exists = false;
+    js->thrown_value = js_mkundef();
+    js->thrown_stack = js_mkundef();
+    return reason;
+  }
+  return value;
+}
+
+static void fetch_cancel_request_body(fetch_request_t *req, ant_value_t reason) {
+  request_data_t *data = request_get_data(req->request_obj);
+  ant_value_t stream = js_get_slot(req->request_obj, SLOT_REQUEST_BODY_STREAM);
+
+  if (!data || !data->body_is_stream || !rs_is_stream(stream)) return;
+  readable_stream_cancel(req->js, stream, reason);
+}
+
+static void fetch_error_response_body(fetch_request_t *req, ant_value_t reason) {
+  ant_value_t stream = js_get_slot(req->response_obj, SLOT_RESPONSE_BODY_STREAM);
+  if (rs_is_stream(stream)) readable_stream_error(req->js, stream, reason);
+}
+
+static void fetch_reject(fetch_request_t *req, ant_value_t reason) {
+  if (!req) return;
+
+  if (!req->settled) {
+    req->settled = true;
+    js_reject_promise(req->js, req->promise, reason);
+  }
+
+  fetch_cancel_request_body(req, reason);
+  if (is_object_type(req->response_obj)) fetch_error_response_body(req, reason);
+}
+
+static void fetch_resolve(fetch_request_t *req, ant_value_t response_obj) {
+  if (!req || req->settled) return;
+  req->settled = true;
+  req->response_obj = response_obj;
+  js_resolve_promise(req->js, req->promise, response_obj);
+}
+
+static bool fetch_is_http_url(const char *url) {
+  return strncmp(url, "http://", 7) == 0 || strncmp(url, "https://", 8) == 0;
+}
+
+static char *fetch_build_request_url(request_data_t *request) {
+  if (!request) return NULL;
+  return build_href(&request->url);
+}
+
+typedef struct {
+  ant_http_header_t *head;
+  ant_http_header_t **tail;
+  bool failed;
+  bool has_user_agent;
+  bool has_accept;
+  bool has_accept_language;
+  bool has_sec_fetch_mode;
+  bool has_accept_encoding;
+} fetch_header_builder_t;
+
+static void fetch_collect_header(const char *name, const char *value, void *ctx) {
+  fetch_header_builder_t *builder = (fetch_header_builder_t *)ctx;
+  ant_http_header_t *header = NULL;
+
+  if (!builder || builder->failed) return;
+  if (name && strcasecmp(name, "user-agent") == 0) builder->has_user_agent = true;
+  if (name && strcasecmp(name, "accept") == 0) builder->has_accept = true;
+  if (name && strcasecmp(name, "accept-language") == 0) builder->has_accept_language = true;
+  if (name && strcasecmp(name, "sec-fetch-mode") == 0) builder->has_sec_fetch_mode = true;
+  if (name && strcasecmp(name, "accept-encoding") == 0) builder->has_accept_encoding = true;
+  header = calloc(1, sizeof(ant_http_header_t));
+  if (!header) {
+    builder->failed = true;
+    return;
+  }
+
+  header->name = strdup(name ? name : "");
+  header->value = strdup(value ? value : "");
+  if (!header->name || !header->value) {
+    free(header->name);
+    free(header->value);
+    free(header);
+    builder->failed = true;
+    return;
+  }
+
+  *builder->tail = header;
+  builder->tail = &header->next;
+}
+
+static bool fetch_append_header(fetch_header_builder_t *builder, const char *name, const char *value) {
+  ant_http_header_t *header = NULL;
+
+  if (!builder || builder->failed) return false;
+  header = calloc(1, sizeof(ant_http_header_t));
+  if (!header) {
+    builder->failed = true;
+    return false;
+  }
+
+  header->name = strdup(name);
+  header->value = strdup(value);
+  if (!header->name || !header->value) {
+    free(header->name);
+    free(header->value);
+    free(header);
+    builder->failed = true;
+    return false;
+  }
+
+  *builder->tail = header;
+  builder->tail = &header->next;
+  return true;
+}
+
+static ant_http_header_t *fetch_build_http_headers(ant_value_t request_obj) {
+  fetch_header_builder_t builder = {0};
+  char user_agent[256] = {0};
+
+  builder.tail = &builder.head;
+  headers_for_each(request_get_headers(request_obj), fetch_collect_header, &builder);
+  
+  if (builder.failed) {
+    ant_http_headers_free(builder.head);
+    return NULL;
+  }
+
+  if (!builder.has_accept && !fetch_append_header(&builder, "accept", "*/*")) {
+    ant_http_headers_free(builder.head);
+    return NULL;
+  }
+  if (!builder.has_accept_language && !fetch_append_header(&builder, "accept-language", "*")) {
+    ant_http_headers_free(builder.head);
+    return NULL;
+  }
+  if (!builder.has_sec_fetch_mode && !fetch_append_header(&builder, "sec-fetch-mode", "cors")) {
+    ant_http_headers_free(builder.head);
+    return NULL;
+  }
+  if (!builder.has_accept_encoding && !fetch_append_header(&builder, "accept-encoding", "br, gzip, deflate")) {
+    ant_http_headers_free(builder.head);
+    return NULL;
+  }
+  if (builder.has_user_agent) return builder.head;
+
+  snprintf(user_agent, sizeof(user_agent), "ant/%s", ANT_VERSION);
+  if (!fetch_append_header(&builder, "user-agent", user_agent)) {
+    ant_http_headers_free(builder.head);
+    return NULL;
+  }
+  
+  return builder.head;
+}
+
+static ant_value_t fetch_headers_from_http(ant_t *js, const ant_http_header_t *headers) {
+  ant_value_t hdrs = headers_create_empty(js);
+  if (is_err(hdrs)) return hdrs;
+
+  for (const ant_http_header_t *entry = headers; entry; entry = entry->next) {
+    ant_value_t step = headers_append_value(
+      js, hdrs,
+      js_mkstr(js, entry->name, strlen(entry->name)),
+      js_mkstr(js, entry->value, strlen(entry->value))
+    );
+    if (is_err(step)) return step;
+  }
+
+  return hdrs;
+}
+
+static ant_value_t fetch_create_chunk(ant_t *js, const uint8_t *data, size_t len) {
+  ArrayBufferData *ab = create_array_buffer_data(len);
+  if (!ab) return js_mkerr(js, "out of memory");
+  if (len > 0) memcpy(ab->data, data, len);
+  return create_typed_array(js, TYPED_ARRAY_UINT8, ab, 0, len, "Uint8Array");
+}
+
+static void fetch_http_on_response(ant_http_request_t *http_req, const ant_http_response_t *resp, void *user_data) {
+  fetch_request_t *req = (fetch_request_t *)user_data;
+  
+  ant_t *js = req->js;
+  ant_value_t headers = 0;
+  ant_value_t stream = 0;
+  ant_value_t response = 0;
+  
+  char *url = NULL;
+  if (req->aborted) return;
+
+  headers = fetch_headers_from_http(js, resp->headers);
+  if (is_err(headers)) {
+    fetch_reject(req, fetch_rejection_reason(js, headers));
+    ant_http_request_cancel(http_req);
+    return;
+  }
+
+  stream = rs_create_stream(js, js_mkundef(), js_mkundef(), 1.0);
+  if (is_err(stream)) {
+    fetch_reject(req, fetch_rejection_reason(js, stream));
+    ant_http_request_cancel(http_req);
+    return;
+  }
+
+  url = fetch_build_request_url(request_get_data(req->request_obj));
+  response = response_create_fetched(
+    js, resp->status, resp->status_text, url, headers, NULL, 0, stream, NULL
+  );
+  free(url);
+
+  if (is_err(response)) {
+    fetch_reject(req, fetch_rejection_reason(js, response));
+    ant_http_request_cancel(http_req);
+    return;
+  }
+
+  fetch_resolve(req, response);
+}
+
+static void fetch_http_on_body(ant_http_request_t *http_req, const uint8_t *chunk, size_t len, void *user_data) {
+  fetch_request_t *req = (fetch_request_t *)user_data;
+  ant_t *js = req->js;
+  ant_value_t stream = 0;
+  ant_value_t controller = 0;
+  ant_value_t value = 0;
+  ant_value_t step = 0;
+
+  (void)http_req;
+  if (req->aborted || !is_object_type(req->response_obj)) return;
+
+  stream = js_get_slot(req->response_obj, SLOT_RESPONSE_BODY_STREAM);
+  if (!rs_is_stream(stream)) return;
+
+  controller = rs_stream_controller(js, stream);
+  value = fetch_create_chunk(js, chunk, len);
+  if (is_err(value)) {
+    fetch_error_response_body(req, fetch_rejection_reason(js, value));
+    ant_http_request_cancel(http_req);
+    return;
+  }
+
+  step = rs_controller_enqueue(js, controller, value);
+  if (is_err(step)) {
+    fetch_error_response_body(req, fetch_rejection_reason(js, step));
+    ant_http_request_cancel(http_req);
+  }
+}
+
+static void fetch_http_on_complete(ant_http_request_t *http_req, int error_code, const char *error_message, void *user_data) {
+  fetch_request_t *req = (fetch_request_t *)user_data;
+  ant_t *js = req->js;
+  ant_value_t stream = 0;
+  ant_value_t controller = 0;
+  ant_value_t reason = 0;
+
+  (void)http_req;
+  req->http_req = NULL;
+
+  if (error_code != 0) {
+    reason = fetch_type_error(js, error_message ? error_message : "fetch failed");
+    if (is_object_type(req->response_obj)) fetch_error_response_body(req, reason);
+    else fetch_reject(req, reason);
+    free_fetch_request(req);
+    return;
+  }
+
+  if (is_object_type(req->response_obj)) {
+    stream = js_get_slot(req->response_obj, SLOT_RESPONSE_BODY_STREAM);
+    if (rs_is_stream(stream)) {
+      controller = rs_stream_controller(js, stream);
+      rs_controller_close(js, controller);
+    }
+  } else fetch_reject(req, fetch_type_error(js, "fetch completed without a response"));
+
   free_fetch_request(req);
 }
 
-static void on_http_close(tlsuv_http_t *client) {
-  fetch_request_t *req = (fetch_request_t *)client->data;
-  if (req && req->completed) complete_request(req);
+static char *fetch_data_url_content_type(const char *url) {
+  const char *header = url + 5;
+  const char *comma = strchr(header, ',');
+  const char *base64 = NULL;
+  size_t len = 0;
+
+  if (!comma) return strdup("text/plain;charset=US-ASCII");
+  base64 = strstr(header, ";base64");
+  len = base64 && base64 < comma ? (size_t)(base64 - header) : (size_t)(comma - header);
+  if (len == 0) return strdup("text/plain;charset=US-ASCII");
+  
+  return strndup(header, len);
 }
 
-static void body_cb(tlsuv_http_req_t *http_req, char *body, ssize_t len) {
-  fetch_request_t *req = (fetch_request_t *)http_req->data;
+static bool fetch_handle_data_url(fetch_request_t *req) {
+  ant_t *js = req->js;
+  request_data_t *request = request_get_data(req->request_obj);
   
-  if (len == UV_EOF) {
-    req->completed = 1;
-    tlsuv_http_close(&req->http_client, on_http_close);
-    return;
+  char *url = fetch_build_request_url(request);
+  size_t len = 0;
+  char *body = NULL;
+  char *content_type = NULL;
+  
+  ant_value_t headers = 0;
+  ant_value_t response = 0;
+
+  if (!url || !esm_is_data_url(url)) {
+    free(url);
+    return false;
   }
-  
-  if (len < 0) {
-    req->failed = 1;
-    req->error_msg = strdup(uv_strerror((int)len));
-    req->completed = 1;
-    tlsuv_http_close(&req->http_client, on_http_close);
-    return;
+
+  body = esm_parse_data_url(url, &len);
+  content_type = fetch_data_url_content_type(url);
+  headers = headers_create_empty(js);
+
+  if (!body || !content_type || is_err(headers)) {
+    free(url);
+    free(body);
+    free(content_type);
+    fetch_reject(req, fetch_type_error(js, "Failed to decode data URL"));
+    free_fetch_request(req);
+    return true;
   }
-  
-  if (req->response_buffer.size + len > req->response_buffer.capacity) {
-    size_t new_capacity = req->response_buffer.capacity * 2;
-    while (new_capacity < req->response_buffer.size + len) new_capacity *= 2;
-    char *new_data = realloc(req->response_buffer.data, new_capacity);
-    
-    if (!new_data) {
-      req->failed = 1;
-      req->error_msg = strdup("Out of memory");
-      req->completed = 1;
-      tlsuv_http_close(&req->http_client, on_http_close);
-      return;
-    }
-    
-    req->response_buffer.data = new_data;
-    req->response_buffer.capacity = new_capacity;
-  }
-  
-  memcpy(req->response_buffer.data + req->response_buffer.size, body, len);
-  req->response_buffer.size += len;
+
+  headers_set_literal(js, headers, "content-type", content_type);
+  response = response_create_fetched(
+    js, 200, "OK", url, headers, (const uint8_t *)body, len, js_mkundef(), content_type
+  );
+
+  free(url);
+  free(body);
+  free(content_type);
+
+  if (is_err(response)) {
+    fetch_reject(req, fetch_rejection_reason(js, response));
+  } else fetch_resolve(req, response);
+
+  free_fetch_request(req);
+  return true;
 }
 
-static void resp_cb(tlsuv_http_resp_t *resp, void *data) {
-  (void)data;
-  fetch_request_t *req = (fetch_request_t *)resp->req->data;
-  
-  if (resp->code < 0) {
-    req->failed = 1;
-    req->error_msg = strdup(uv_strerror(resp->code));
-    req->completed = 1;
-    tlsuv_http_close(&req->http_client, on_http_close);
+static void fetch_start_http(fetch_request_t *req) {
+  request_data_t *request = request_get_data(req->request_obj);
+  ant_http_request_options_t options = {0};
+  ant_http_header_t *headers = NULL;
+  char *url = NULL;
+  int rc = 0;
+
+  if (!request) {
+    fetch_reject(req, fetch_type_error(req->js, "Invalid Request object"));
+    free_fetch_request(req);
     return;
   }
-  
-  req->status_code = resp->code;
-  resp->body_cb = body_cb;
+
+  url = fetch_build_request_url(request);
+  if (!url) {
+    fetch_reject(req, fetch_type_error(req->js, "Invalid request URL"));
+    free_fetch_request(req);
+    return;
+  }
+
+  if (esm_is_data_url(url)) {
+    free(url);
+    fetch_handle_data_url(req);
+    return;
+  }
+  if (!fetch_is_http_url(url)) {
+    free(url);
+    fetch_reject(req, fetch_type_error(req->js, "fetch only supports http:, https:, and data: URLs"));
+    free_fetch_request(req);
+    return;
+  }
+
+  headers = fetch_build_http_headers(req->request_obj);
+  if (!headers) {
+    free(url);
+    fetch_reject(req, fetch_type_error(req->js, "out of memory"));
+    free_fetch_request(req);
+    return;
+  }
+
+  options.method = request->method;
+  options.url = url;
+  options.headers = headers;
+  options.body = request->body_data;
+  options.body_len = request->body_size;
+
+  rc = ant_http_request_start(
+    uv_default_loop(), &options,
+    fetch_http_on_response, fetch_http_on_body, fetch_http_on_complete,
+    req, &req->http_req
+  );
+
+  ant_http_headers_free(headers);
+  free(url);
+
+  if (rc != 0) {
+    fetch_reject(req, fetch_type_error(req->js, uv_strerror(rc)));
+    free_fetch_request(req);
+  }
 }
 
-static ant_value_t do_fetch_microtask(ant_t *js, ant_value_t *args, int nargs) {
-  (void)args;
-  (void)nargs;
-  
-  ant_value_t current_func = js_getcurrentfunc(js);
-  ant_value_t url_val = js_get(js, current_func, "url");
-  ant_value_t options_val = js_get(js, current_func, "options");
-  ant_value_t promise = js_get_slot(current_func, SLOT_DATA);
-  
-  char *url_str = js_getstr(js, url_val, NULL);
-  if (!url_str) {
-    ant_value_t err = js_mkstr(js, "Invalid URL", 11);
-    js_reject_promise(js, promise, err);
-    return js_mkundef();
-  }
-  
-  fetch_request_t *req = calloc(1, sizeof(fetch_request_t));
-  if (!req) {
-    ant_value_t err = js_mkstr(js, "Out of memory", 13);
-    js_reject_promise(js, promise, err);
-    return js_mkundef();
-  }
-  
-  req->js = js;
-  req->promise = promise;
-  req->headers_obj = options_val;
-  
-  req->response_buffer.capacity = 16384;
-  req->response_buffer.data = malloc(req->response_buffer.capacity);
-  req->response_buffer.size = 0;
-  
-  if (!req->response_buffer.data) {
-    ant_value_t err = js_mkstr(js, "Out of memory", 13);
-    js_reject_promise(js, promise, err);
-    free(req);
-    return js_mkundef();
-  }
-  
-  utarray_push_back(pending_requests, &req);
-  
-  const char *scheme_end = strstr(url_str, "://");
-  if (!scheme_end) return fetch_fail_oom(js, promise, req, false, "Invalid URL: no scheme", 22);
-  
-  const char *host_start = scheme_end + 3;
-  const char *path_start = strchr(host_start, '/');
-  const char *at_in_host = NULL;
-  
-  for (const char *p = host_start; p < (path_start ? path_start : host_start + strlen(host_start)); p++) {
-    if (*p == '@') at_in_host = p;
-  } if (at_in_host) host_start = at_in_host + 1;
-  
-  size_t scheme_len = scheme_end - url_str;
-  size_t host_len = path_start ? (size_t)(path_start - host_start) : strlen(host_start);
-  
-  const char *path = path_start ? path_start : "/";
-  if (host_len == 0) return fetch_fail_oom(js, promise, req, false, "Invalid URL: no host", 20);
-  
-  char *host_url = calloc(1, scheme_len + 3 + host_len + 1);
-  if (!host_url) return fetch_fail_oom(js, promise, req, false, "Out of memory", 13);
-  snprintf(host_url, scheme_len + 3 + host_len + 1, "%.*s://%.*s", (int)scheme_len, url_str, (int)host_len, host_start);
-  
-  int rc = tlsuv_http_init(uv_default_loop(), &req->http_client, host_url); free(host_url);
-  if (rc != 0) return fetch_fail_oom(js, promise, req, false, "Failed to initialize HTTP client", 33);
-  
-  req->http_client.data = req;
-  req->method = NULL;
-  req->body = NULL;
-  req->body_len = 0;
-  
-  if (is_special_object(options_val)) {
-    ant_value_t method_val = js_get(js, options_val, "method");
-    if (vtype(method_val) == T_STR) {
-      char *str = js_getstr(js, method_val, NULL);
-      if (str) {
-        req->method = strdup(str);
-        if (!req->method) return fetch_fail_oom(js, promise, req, true, "Out of memory", 13);
-      }
-    }
-    
-    ant_value_t body_val = js_get(js, options_val, "body");
-    if (vtype(body_val) == T_STR) {
-      size_t len;
-      char *str = js_getstr(js, body_val, &len);
-      if (str && len > 0) {
-        req->body = malloc(len);
-        if (!req->body) return fetch_fail_oom(js, promise, req, true, "Out of memory", 13);
-        memcpy(req->body, str, len);
-        req->body_len = len;
-      }
-    }
-  }
-  
-  if (!req->method) {
-    req->method = strdup("GET");
-    if (!req->method) return fetch_fail_oom(js, promise, req, true, "Out of memory", 13);
-  }
-  
-  req->http_req = tlsuv_http_req(&req->http_client, req->method, path, resp_cb, req);
-  if (!req->http_req) return fetch_fail_oom(js, promise, req, true, "Failed to create HTTP request", 30);
-  req->http_req->data = req;
-  
-  char user_agent[256];
-  snprintf(user_agent, sizeof(user_agent), "ant/%s", ANT_VERSION);
-  tlsuv_http_req_header(req->http_req, "User-Agent", user_agent);
-  
-  if (is_special_object(options_val)) {
-    ant_value_t headers_val = js_get(js, options_val, "headers");
-    if (is_special_object(headers_val)) {
-      ant_iter_t iter = js_prop_iter_begin(js, headers_val);
-      const char *key;
-      size_t key_len;
-      ant_value_t value;
-      
-      while (js_prop_iter_next(&iter, &key, &key_len, &value)) {
-        char *value_str = js_getstr(js, value, NULL);
-        if (value_str) {
-          char *key_str = strndup(key, key_len);
-          if (key_str) { tlsuv_http_req_header(req->http_req, key_str, value_str); free(key_str); }
-        }
-      }
-      js_prop_iter_end(&iter);
-    }
-  }
-  
-  if (req->body && req->body_len > 0) {
-    tlsuv_http_req_data(req->http_req, req->body, req->body_len, body_cb);
-  }
-  
+static ant_value_t fetch_abort_listener(ant_t *js, ant_value_t *args, int nargs) {
+  fetch_request_t *req = (fetch_request_t *)(uintptr_t)(size_t)js_getnum(js_get_slot(js->current_func, SLOT_DATA));
+  ant_value_t signal = 0;
+  ant_value_t reason = 0;
+
+  if (!req || req->aborted) return js_mkundef();
+  req->aborted = true;
+  signal = request_get_signal(req->request_obj);
+  reason = abort_signal_get_reason(signal);
+
+  if (req->http_req) ant_http_request_cancel(req->http_req);
+  fetch_reject(req, reason);
+  if (!req->http_req) free_fetch_request(req);
+
   return js_mkundef();
 }
 
 static ant_value_t js_fetch(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1) return js_mkerr(js, "fetch requires at least 1 argument");
-  if (vtype(args[0]) != T_STR) return js_mkerr(js, "fetch URL must be a string");
-  
-  ant_value_t url_val = args[0];
-  ant_value_t options_val = nargs > 1 ? args[1] : js_mkundef();
-  
+  ant_value_t input = (nargs >= 1) ? args[0] : js_mkundef();
+  ant_value_t init = (nargs >= 2) ? args[1] : js_mkundef();
   ant_value_t promise = js_mkpromise(js);
-  ant_value_t wrapper_obj = js_mkobj(js);
-  
-  js_set_slot(wrapper_obj, SLOT_DATA, promise);
-  js_set_slot(wrapper_obj, SLOT_CFUNC, js_mkfun(do_fetch_microtask));
-  
-  js_set(js, wrapper_obj, "url", url_val);
-  js_set(js, wrapper_obj, "options", options_val);
-  
-  queue_microtask(js, js_obj_to_func(wrapper_obj));
-  
+  ant_value_t request_obj = 0;
+  request_data_t *request = NULL;
+  fetch_request_t *req = NULL;
+  ant_value_t signal = 0;
+
+  request_obj = request_create_from_input_init(js, input, init);
+  if (is_err(request_obj)) {
+    js_reject_promise(js, promise, fetch_rejection_reason(js, request_obj));
+    return promise;
+  }
+
+  request = request_get_data(request_obj);
+  if (!request) {
+    js_reject_promise(js, promise, fetch_type_error(js, "Invalid Request object"));
+    return promise;
+  }
+
+  if (request->body_is_stream) {
+    js_reject_promise(js, promise,
+      fetch_type_error(js, "fetch does not yet support ReadableStream request bodies"));
+    return promise;
+  }
+
+  req = calloc(1, sizeof(fetch_request_t));
+  if (!req) {
+    js_reject_promise(js, promise, fetch_type_error(js, "out of memory"));
+    return promise;
+  }
+
+  req->js = js;
+  req->promise = promise;
+  req->request_obj = request_obj;
+  utarray_push_back(pending_requests, &req);
+
+  signal = request_get_signal(request_obj);
+  if (abort_signal_is_signal(signal)) {
+    if (abort_signal_is_aborted(signal)) {
+      fetch_reject(req, abort_signal_get_reason(signal));
+      free_fetch_request(req);
+      return promise;
+    }
+
+    req->abort_listener = js_heavy_mkfun(js, fetch_abort_listener, ANT_PTR(req));
+    abort_signal_add_listener(js, signal, req->abort_listener);
+  }
+
+  if (request->has_body) request->body_used = true;
+  fetch_start_http(req);
   return promise;
 }
 
@@ -351,9 +552,11 @@ void gc_mark_fetch(ant_t *js, gc_mark_fn mark) {
   unsigned int len = utarray_len(pending_requests);
   
   for (unsigned int i = 0; i < len; i++) {
-  fetch_request_t **reqp = (fetch_request_t **)utarray_eltptr(pending_requests, i);
-  if (reqp && *reqp) {
+    fetch_request_t **reqp = (fetch_request_t **)utarray_eltptr(pending_requests, i);
+    if (!reqp || !*reqp) continue;
     mark(js, (*reqp)->promise);
-    mark(js, (*reqp)->headers_obj);
-  }}
+    mark(js, (*reqp)->request_obj);
+    mark(js, (*reqp)->response_obj);
+    mark(js, (*reqp)->abort_listener);
+  }
 }
