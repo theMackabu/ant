@@ -328,6 +328,30 @@ static void server_send_basic_response(
   server_queue_write(conn, NULL, out, out_len, SERVER_WRITE_CLOSE_CLIENT);
 }
 
+static inline void server_send_text_response(
+  ant_conn_t *conn,
+  int status,
+  const char *status_text,
+  const char *body
+) {
+  if (!body) body = "";
+  server_send_basic_response(
+    conn, status,
+    status_text,
+    "text/plain;charset=UTF-8",
+    (const uint8_t *)body,
+    strlen(body)
+  );
+}
+
+static inline void server_send_internal_error(ant_conn_t *conn, const char *body) {
+  server_send_text_response(
+    conn, 500,
+    "Internal Server Error",
+    body ? body : "Internal Server Error"
+  );
+}
+
 static void server_finish_with_response(server_request_t *req, ant_value_t response_obj) {
   response_data_t *resp = response_get_data(response_obj);
   ant_value_t headers = response_get_headers(response_obj);
@@ -344,7 +368,7 @@ static void server_finish_with_response(server_request_t *req, ant_value_t respo
 
   if (!req->conn || ant_conn_is_closing(req->conn)) return;
   if (!resp) {
-    server_send_basic_response(req->conn, 500, "Internal Server Error", "text/plain;charset=UTF-8", (const uint8_t *)"Invalid Response", 16);
+    server_send_internal_error(req->conn, "Invalid Response");
     return;
   }
 
@@ -383,7 +407,7 @@ static ant_value_t server_on_response_reject(ant_t *js, ant_value_t *args, int n
 
   if (req->conn && !ant_conn_is_closing(req->conn)) {
     msg = js_str(js, reason);
-    server_send_basic_response(req->conn, 500, "Internal Server Error", "text/plain;charset=UTF-8", (const uint8_t *)(msg ? msg : "Internal Server Error"), strlen(msg ? msg : "Internal Server Error"));
+    server_send_internal_error(req->conn, msg);
   }
 
   server_request_release(req);
@@ -399,7 +423,7 @@ static ant_value_t server_on_response_fulfill(ant_t *js, ant_value_t *args, int 
 
   if (!response_get_data(value)) {
     if (req->conn && !ant_conn_is_closing(req->conn))
-      server_send_basic_response(req->conn, 500, "Internal Server Error", "text/plain;charset=UTF-8", (const uint8_t *)"fetch handler must return a Response", 35);
+      server_send_internal_error(req->conn, "fetch handler must return a Response");
   } else if (req->conn && !ant_conn_is_closing(req->conn)) {
     server_finish_with_response(req, value);
   }
@@ -414,7 +438,7 @@ static void server_handle_fetch_result(server_request_t *req, ant_value_t result
   if (is_err(result)) {
     ant_value_t reason = server_exception_reason(js, result);
     const char *msg = js_str(js, reason);
-    server_send_basic_response(req->conn, 500, "Internal Server Error", "text/plain;charset=UTF-8", (const uint8_t *)(msg ? msg : "Internal Server Error"), strlen(msg ? msg : "Internal Server Error"));
+    server_send_internal_error(req->conn, msg);
     return;
   }
 
@@ -431,7 +455,7 @@ static void server_handle_fetch_result(server_request_t *req, ant_value_t result
   }
 
   if (!response_get_data(result)) {
-    server_send_basic_response(req->conn, 500, "Internal Server Error", "text/plain;charset=UTF-8", (const uint8_t *)"fetch handler must return a Response", 35);
+    server_send_internal_error(req->conn, "fetch handler must return a Response");
     return;
   }
 
@@ -440,13 +464,12 @@ static void server_handle_fetch_result(server_request_t *req, ant_value_t result
 
 static ant_value_t server_stream_read_reject(ant_t *js, ant_value_t *args, int nargs) {
   server_request_t *req = server_current_request(js);
-  (void)args;
-  (void)nargs;
-
   if (!req) return js_mkundef();
+  
   req->response_read_promise = js_mkundef();
   if (req->conn && !ant_conn_is_closing(req->conn)) ant_conn_close(req->conn);
   server_request_release(req);
+  
   return js_mkundef();
 }
 
@@ -632,17 +655,19 @@ static ant_value_t server_stop(ant_t *js, ant_value_t *args, int nargs) {
 
 static void server_process_client_request(ant_conn_t *conn, ant_http1_parsed_request_t *parsed) {
   server_runtime_t *server = (server_runtime_t *)ant_listener_get_user_data(ant_conn_listener(conn));
+  
   ant_t *js = server->js;
   ant_value_t headers = 0;
   ant_value_t request_obj = 0;
   ant_value_t result = 0;
+  
   char *url = NULL;
   server_request_t *req = NULL;
 
   url = server_build_request_url(server, parsed);
   if (!url) {
     ant_http1_free_parsed_request(parsed);
-    server_send_basic_response(conn, 500, "Internal Server Error", "text/plain;charset=UTF-8", (const uint8_t *)"Internal Server Error", 21);
+    server_send_internal_error(conn, NULL);
     return;
   }
 
@@ -650,7 +675,7 @@ static void server_process_client_request(ant_conn_t *conn, ant_http1_parsed_req
   if (is_err(headers)) {
     free(url);
     ant_http1_free_parsed_request(parsed);
-    server_send_basic_response(conn, 500, "Internal Server Error", "text/plain;charset=UTF-8", (const uint8_t *)"Internal Server Error", 21);
+    server_send_internal_error(conn, NULL);
     return;
   }
 
@@ -659,13 +684,13 @@ static void server_process_client_request(ant_conn_t *conn, ant_http1_parsed_req
   ant_http1_free_parsed_request(parsed);
 
   if (is_err(request_obj)) {
-    server_send_basic_response(conn, 500, "Internal Server Error", "text/plain;charset=UTF-8", (const uint8_t *)"Internal Server Error", 21);
+    server_send_internal_error(conn, NULL);
     return;
   }
 
   req = calloc(1, sizeof(*req));
   if (!req) {
-    server_send_basic_response(conn, 500, "Internal Server Error", "text/plain;charset=UTF-8", (const uint8_t *)"Internal Server Error", 21);
+    server_send_internal_error(conn, NULL);
     return;
   }
 
@@ -693,7 +718,7 @@ static void server_on_read(ant_conn_t *conn, ssize_t nread, void *user_data) {
   parse_result = ant_http1_parse_request(ant_conn_buffer(conn), ant_conn_buffer_len(conn), &parsed, NULL);
   if (parse_result == ANT_HTTP1_PARSE_ERROR) {
     ant_http1_free_parsed_request(&parsed);
-    server_send_basic_response(conn, 400, "Bad Request", "text/plain;charset=UTF-8", (const uint8_t *)"Bad Request", 11);
+    server_send_text_response(conn, 400, "Bad Request", "Bad Request");
     return;
   }
 
@@ -723,6 +748,7 @@ static void server_on_listener_close(ant_listener_t *listener, void *user_data) 
 
 bool server_export_has_fetch_handler(ant_t *js, ant_value_t default_export, bool *looks_like_config) {
   ant_value_t fetch = 0;
+  
   if (looks_like_config) *looks_like_config = false;
   if (!is_object_type(default_export)) return false;
 
@@ -737,12 +763,12 @@ bool server_export_has_fetch_handler(ant_t *js, ant_value_t default_export, bool
     ant_value_t tls = js_get(js, default_export, "tls");
 
     *looks_like_config =
-      vtype(fetch) != T_UNDEF ||
-      vtype(port) != T_UNDEF ||
-      vtype(hostname) != T_UNDEF ||
+      vtype(fetch)        != T_UNDEF ||
+      vtype(port)         != T_UNDEF ||
+      vtype(hostname)     != T_UNDEF ||
       vtype(idle_timeout) != T_UNDEF ||
-      vtype(unix_path) != T_UNDEF ||
-      vtype(tls) != T_UNDEF;
+      vtype(unix_path)    != T_UNDEF ||
+      vtype(tls)          != T_UNDEF;
   }
 
   return false;
@@ -750,27 +776,31 @@ bool server_export_has_fetch_handler(ant_t *js, ant_value_t default_export, bool
 
 ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
   server_runtime_t *server = NULL;
+  
   ant_value_t port_v = 0;
   ant_value_t hostname_v = 0;
   ant_value_t timeout_v = 0;
   ant_value_t unix_v = 0;
   ant_value_t tls_v = 0;
+  
   ant_listener_callbacks_t callbacks = {0};
   int rc = 0;
 
   if (g_server) return js_mkerr(js, "server is already running");
   if (!is_object_type(default_export)) return js_mkerr_typed(js, JS_ERR_TYPE, "Module does not export a fetch handler");
 
-  server = calloc(1, sizeof(*server));
+  server = malloc(sizeof(*server));
   if (!server) return js_mkerr(js, "out of memory");
 
-  server->js = js;
-  server->export_obj = default_export;
-  server->fetch_fn = js_get(js, default_export, "fetch");
-  server->hostname = strdup("0.0.0.0");
-  server->port = 3000;
-  server->idle_timeout_secs = 10;
-  server->loop = uv_default_loop();
+  *server = (server_runtime_t){
+    .js = js,
+    .export_obj = default_export,
+    .fetch_fn = js_get(js, default_export, "fetch"),
+    .hostname = strdup("0.0.0.0"),
+    .port = 3000,
+    .idle_timeout_secs = 10,
+    .loop = uv_default_loop(),
+  };
 
   if (!server->hostname) {
     free(server);
@@ -784,6 +814,7 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
     free(server);
     return js_mkerr_typed(js, JS_ERR_TYPE, "unix sockets are not implemented yet");
   }
+  
   if (vtype(tls_v) != T_UNDEF && vtype(tls_v) != T_NULL) {
     free(server->hostname);
     free(server);
