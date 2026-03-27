@@ -40,6 +40,7 @@ typedef struct fetch_request_s {
   int refs;
   bool settled;
   bool aborted;
+  bool response_started;
 } fetch_request_t;
 
 static UT_array *pending_requests = NULL;
@@ -118,6 +119,7 @@ static void fetch_reject(fetch_request_t *req, ant_value_t reason) {
 static void fetch_resolve(fetch_request_t *req, ant_value_t response_obj) {
   if (!req || req->settled) return;
   req->settled = true;
+  req->response_started = true;
   req->response_obj = response_obj;
   js_resolve_promise(req->js, req->promise, response_obj);
 }
@@ -344,18 +346,30 @@ static void fetch_http_on_body(ant_http_request_t *http_req, const uint8_t *chun
   }
 }
 
-static void fetch_http_on_complete(ant_http_request_t *http_req, int error_code, const char *error_message, void *user_data) {
+static ant_value_t fetch_transport_reason(fetch_request_t *req, ant_http_result_t result, const char *error_message) {
+  if (result == ANT_HTTP_RESULT_ABORTED && req->aborted) {
+    ant_value_t signal = request_get_signal(req->request_obj);
+    return abort_signal_get_reason(signal);
+  }
+
+  return fetch_type_error(req->js, error_message ? error_message : "fetch failed");
+}
+
+static void fetch_http_on_complete(
+  ant_http_request_t *http_req,
+  ant_http_result_t result,
+  int error_code, const char *error_message, void *user_data
+) {
   fetch_request_t *req = (fetch_request_t *)user_data;
+  
   ant_t *js = req->js;
   ant_value_t stream = 0;
   ant_value_t controller = 0;
   ant_value_t reason = 0;
-
-  (void)http_req;
   req->http_req = NULL;
 
-  if (error_code != 0) {
-    reason = fetch_type_error(js, error_message ? error_message : "fetch failed");
+  if (result != ANT_HTTP_RESULT_OK || error_code != 0) {
+    reason = fetch_transport_reason(req, result, error_message);
     if (is_object_type(req->response_obj)) fetch_error_response_body(req, reason);
     else fetch_reject(req, reason);
     fetch_request_release(req);

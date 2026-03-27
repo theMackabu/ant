@@ -13,6 +13,13 @@ typedef struct ant_http_header_s {
   struct ant_http_header_s *next;
 } ant_http_header_t;
 
+typedef enum {
+  ANT_HTTP_RESULT_OK = 0,
+  ANT_HTTP_RESULT_NETWORK_ERROR,
+  ANT_HTTP_RESULT_ABORTED,
+  ANT_HTTP_RESULT_PROTOCOL_ERROR,
+} ant_http_result_t;
+
 typedef struct {
   const char *method;
   const char *url;
@@ -43,6 +50,7 @@ typedef void (*ant_http_body_cb)(
 
 typedef void (*ant_http_complete_cb)(
   ant_http_request_t *req,
+  ant_http_result_t result,
   int error_code,
   const char *error_message,
   void *user_data

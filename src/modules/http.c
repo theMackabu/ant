@@ -20,8 +20,11 @@ struct ant_http_request_s {
   char *error_message;
   brotli_stream_state_t *brotli_decoder;
   
+  ant_http_result_t result;
   int error_code;
+  
   bool completed;
+  bool canceled;
   bool decode_brotli;
 };
 
@@ -141,7 +144,7 @@ static void ant_http_on_close(tlsuv_http_t *client) {
   if (!req) return;
 
   if (req->on_complete) req->on_complete(
-    req, req->error_code,
+    req, req->result, req->error_code,
     req->error_message,
     req->user_data
   );
@@ -153,6 +156,10 @@ static void ant_http_complete(ant_http_request_t *req, int error_code, const cha
   if (!req || req->completed) return;
   req->completed = 1;
   req->error_code = error_code;
+  
+  if (error_code == 0) req->result = ANT_HTTP_RESULT_OK;
+  else if (req->canceled) req->result = ANT_HTTP_RESULT_ABORTED;
+  else req->result = ANT_HTTP_RESULT_NETWORK_ERROR;
 
   free(req->error_message);
   req->error_message = error_message ? strdup(error_message) : NULL;
@@ -237,6 +244,7 @@ const ant_http_response_t *ant_http_request_response(ant_http_request_t *req) {
 
 int ant_http_request_cancel(ant_http_request_t *req) {
   if (!req || !req->req || req->completed) return 0;
+  req->canceled = true;
   return tlsuv_http_req_cancel(&req->client, req->req);
 }
 
