@@ -437,6 +437,9 @@ static void gc_mark_roots(ant_t *js) {
     gc_mark_value(js, ctx->prev_import_meta_prop);
   }
 
+  for (size_t i = 0; i < js->pending_rejections.len; i++)
+    gc_mark_value(js, js->pending_rejections.items[i]);
+
   gc_visit_roots(js, gc_mark_value);
   gc_mark_timers(js, gc_mark_value);
   gc_mark_ffi(js, gc_mark_value);
@@ -482,7 +485,6 @@ static void gc_mark_roots(ant_t *js) {
 void gc_object_free(ant_t *js, ant_object_t *obj) {
   if (!obj) return;
   if (obj->finalizer) obj->finalizer(js, obj);
-
   obj->mark_epoch = ANT_GC_DEAD;
 
   if (obj->shape) {

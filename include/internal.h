@@ -209,6 +209,12 @@ struct ant_isolate_t {
   uint32_t jit_active_depth;
   #endif
 
+  struct {
+    ant_value_t *items;
+    size_t len;
+    size_t cap;
+  } pending_rejections;
+
   bool owns_mem;
   bool fatal_error;
   bool thrown_exists;

@@ -9920,7 +9920,15 @@ void js_reject_promise(ant_t *js, ant_value_t p, ant_value_t val) {
   pd->value = val;
   gc_write_barrier(js, js_obj_ptr(js_as_obj(p)), val);
   pd->unhandled_reported = false;
-  
+
+  if (js->pending_rejections.len >= js->pending_rejections.cap) {
+    size_t new_cap = js->pending_rejections.cap ? js->pending_rejections.cap * 2 : 16;
+    ant_value_t *ns = realloc(js->pending_rejections.items, new_cap * sizeof(*ns));
+    if (ns) { js->pending_rejections.items = ns; js->pending_rejections.cap = new_cap; }
+  }
+  if (js->pending_rejections.len < js->pending_rejections.cap)
+    js->pending_rejections.items[js->pending_rejections.len++] = p;
+
   trigger_handlers(js, p);
 }
 
@@ -12040,6 +12048,9 @@ void js_destroy(ant_t *js) {
   free(js->c_roots);
   js->c_roots = NULL;
   js->c_root_count = js->c_root_cap = 0;
+  free(js->pending_rejections.items);
+  js->pending_rejections.items = NULL;
+  js->pending_rejections.len = js->pending_rejections.cap = 0;
 
   js_pool_destroy(&js->pool.rope);
   js_pool_destroy(&js->pool.symbol);
@@ -12615,35 +12626,32 @@ void js_prop_iter_end(ant_iter_t *iter) {
   iter->ctx = NULL;
 }
 
-static void check_unhandled_rejections_list(ant_t *js, ant_object_t *list) {
-for (ant_object_t *obj = list; obj; obj = obj->next) {
-  ant_promise_state_t *pd = obj->promise_state;
-  if (!pd) continue;
-  if (pd->state != 2) continue;
-  if (pd->has_rejection_handler || pd->unhandled_reported) continue;
-
-  if (vtype(pd->trigger_parent) == T_PROMISE) {
-    ant_promise_state_t *parent = get_promise_data(js, pd->trigger_parent, false);
-    if (parent && parent->has_rejection_handler) continue;
-  }
-
-  if (js->fatal_error) {
-    js->thrown_exists = true;
-    js->thrown_value = pd->value;
-    print_uncaught_throw(js);
-    js_destroy(js); exit(1);
-  }
-
-  ant_value_t promise_val = mkval(T_PROMISE, (uintptr_t)obj);
-  if (!js_fire_unhandled_rejection(js, promise_val, pd->value))
-    print_unhandled_promise_rejection(js, pd->value);
-  pd->unhandled_reported = true;
-}}
-
 void js_check_unhandled_rejections(ant_t *js) {
-  check_unhandled_rejections_list(js, js->objects);
-  check_unhandled_rejections_list(js, js->objects_old);
-  check_unhandled_rejections_list(js, js->permanent_objects);
+  size_t keep = 0;
+  
+  for (size_t i = 0; i < js->pending_rejections.len; i++) {
+    ant_value_t p = js->pending_rejections.items[i];
+    ant_promise_state_t *pd = get_promise_data(js, p, false);
+    if (!pd || pd->has_rejection_handler || pd->unhandled_reported) continue;
+    
+    if (vtype(pd->trigger_parent) == T_PROMISE) {
+      ant_promise_state_t *parent = get_promise_data(js, pd->trigger_parent, false);
+      if (parent && parent->has_rejection_handler) continue;
+    }
+    
+    if (js->fatal_error) {
+      js->thrown_exists = true;
+      js->thrown_value = pd->value;
+      print_uncaught_throw(js);
+      js_destroy(js); exit(1);
+    }
+    
+    if (!js_fire_unhandled_rejection(js, p, pd->value))
+      print_unhandled_promise_rejection(js, pd->value);
+    pd->unhandled_reported = true;
+  }
+  
+  js->pending_rejections.len = keep;
 }
 
 void js_set_getter(ant_value_t obj, js_getter_fn getter) {
