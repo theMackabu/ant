@@ -763,10 +763,14 @@ static ant_value_t worker_threads_message_channel_ctor(ant_t *js, ant_value_t *a
 }
 
 static ant_value_t worker_threads_worker_ctor(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
+  ant_value_t proto = js_instance_proto_from_new_target(js, js_mkundef());
+
   if (vtype(js->new_target) == T_UNDEF) {
     return js_mkerr(js, "Worker constructor requires 'new'");
   }
   if (nargs < 1) return js_mkerr(js, "Worker() requires a filename or URL");
+  if (is_object_type(this_obj) && is_object_type(proto)) js_set_proto_init(this_obj, proto);
 
   char *script_path = wt_path_from_specifier(js, args[0]);
   if (!script_path) return js_mkerr(js, "Invalid Worker filename/URL");
@@ -822,7 +826,6 @@ static ant_value_t worker_threads_worker_ctor(ant_t *js, ant_value_t *args, int 
   }
   env_store_json = env_store_heap;
 
-  ant_value_t this_obj = js_getthis(js);
   ant_worker_thread_t *wt = (ant_worker_thread_t *)calloc(1, sizeof(*wt));
   if (!wt) {
     free(script_path);
