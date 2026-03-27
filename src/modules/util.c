@@ -378,6 +378,37 @@ static ant_value_t util_promisified_call(ant_t *js, ant_value_t *args, int nargs
   return promise;
 }
 
+static ant_value_t util_deprecated_call(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t fn = js_getcurrentfunc(js);
+  ant_value_t ctx = js_get_slot(fn, SLOT_DATA);
+  if (!is_object_type(ctx)) return js_mkundef();
+
+  ant_value_t warned = js_get_slot(ctx, SLOT_SETTLED);
+  if (!(vtype(warned) == T_BOOL && warned == js_true)) {
+    js_set_slot(ctx, SLOT_SETTLED, js_true);
+    ant_value_t msg_val = js_get(js, ctx, "msg");
+    const char *msg = js_getstr(js, msg_val, NULL);
+    if (msg) fprintf(stderr, "DeprecationWarning: %s\n", msg);
+  }
+
+  ant_value_t original = js_get_slot(ctx, SLOT_DATA);
+  ant_value_t this_arg = js_getthis(js);
+  return sv_vm_call(js->vm, js, original, this_arg, args, nargs, NULL, false);
+}
+
+static ant_value_t util_deprecate(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1 || !is_callable(args[0])) {
+    return js_mkerr(js, "deprecate(fn, msg) requires a function");
+  }
+
+  ant_value_t ctx = js_mkobj(js);
+  js_set_slot(ctx, SLOT_DATA, args[0]);
+  js_set_slot(ctx, SLOT_SETTLED, js_false);
+  if (nargs >= 2) js_set(js, ctx, "msg", args[1]);
+
+  return js_heavy_mkfun(js, util_deprecated_call, ctx);
+}
+
 static ant_value_t util_promisify(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1 || !is_callable(args[0])) {
     return js_mkerr(js, "promisify(fn) requires a function");
@@ -391,6 +422,7 @@ ant_value_t util_library(ant_t *js) {
   js_set(js, lib, "format", js_mkfun(util_format));
   js_set(js, lib, "formatWithOptions", js_mkfun(util_format_with_options));
   js_set(js, lib, "inspect", js_mkfun(util_inspect));
+  js_set(js, lib, "deprecate", js_mkfun(util_deprecate));
   js_set(js, lib, "promisify", js_mkfun(util_promisify));
   js_set(js, lib, "stripVTControlCharacters", js_mkfun(util_strip_vt_control_characters));
   js_set(js, lib, "styleText", js_mkfun(util_style_text));
