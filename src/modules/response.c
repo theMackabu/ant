@@ -291,6 +291,11 @@ static const char *response_effective_body_type(ant_t *js, ant_value_t resp_obj,
   return d ? d->body_type : NULL;
 }
 
+static void strip_utf8_bom(const uint8_t **data, size_t *size) {
+  if (!data || !*data || !size || *size < 3) return;
+  if ((*data)[0] == 0xEF && (*data)[1] == 0xBB && (*data)[2] == 0xBF) { *data += 3; *size -= 3; }
+}
+
 static void resolve_body_promise(
   ant_t *js, ant_value_t promise,
   const uint8_t *data, size_t size,
@@ -303,10 +308,18 @@ static void resolve_body_promise(
     break;
   }
   case BODY_JSON: {
-    ant_value_t str = (data && size > 0) ? js_mkstr(js, (const char *)data, size) : js_mkstr(js, "", 0);
+    const uint8_t *json_data = data;
+    size_t json_size = size;
+    strip_utf8_bom(&json_data, &json_size);
+    
+    ant_value_t str = (json_data && json_size > 0)
+      ? js_mkstr(js, (const char *)json_data, json_size)
+      : js_mkstr(js, "", 0);
+      
     ant_value_t parsed = json_parse_value(js, str);
     if (is_err(parsed)) js_reject_promise(js, promise, response_rejection_reason(js, parsed));
     else js_resolve_promise(js, promise, parsed);
+    
     break;
   }
   case BODY_ARRAYBUFFER: {
