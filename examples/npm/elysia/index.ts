@@ -1,3 +1,6 @@
 import { Elysia } from 'elysia';
+import { logger } from './logger';
 
-export default new Elysia().get('/', () => 'Hello Elysia!!');
+console.log('started on http://localhost:3000');
+
+export default new Elysia().use(logger()).get('/', () => 'hello elysia!!\n🐜\n');
