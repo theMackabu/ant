@@ -1,14 +1,46 @@
 {
   "engine": {
-    "patterns": ["src/*.c", "src/gc/*.c", "src/highlight/*.c", "src/esm/*.c", "src/cli/*.c", "src/modules/*.c", "src/streams/*.c", "src/silver/*.c", "src/http/*.c", "src/net/*.c"],
+    "patterns": [
+      "src/*.c",
+      "src/gc/*.c",
+      "src/highlight/*.c",
+      "src/esm/*.c",
+      "src/cli/*.c",
+      "src/modules/*.c",
+      "src/streams/*.c",
+      "src/silver/*.c",
+      "src/http/*.c",
+      "src/net/*.c"
+    ],
     "exclude": ["src/main.c", "src/watch.c"]
   },
   "library": {
-    "patterns": ["src/*.c", "src/gc/*.c", "src/highlight/*.c", "src/esm/*.c", "src/modules/*.c", "src/streams/*.c", "src/silver/*.c", "src/http/*.c", "src/net/*.c"],
+    "patterns": [
+      "src/*.c",
+      "src/gc/*.c",
+      "src/highlight/*.c",
+      "src/esm/*.c",
+      "src/modules/*.c",
+      "src/streams/*.c",
+      "src/silver/*.c",
+      "src/http/*.c",
+      "src/net/*.c"
+    ],
     "exclude": ["src/main.c", "src/watch.c"]
   },
   "core": {
     "patterns": ["src/core/**/*.ts"],
     "exclude": ["src/core/index.ts"]
+  },
+  "builtins": {
+    "patterns": [
+      "src/builtins/**/*.cts",
+      "src/builtins/**/*.mts",
+      "src/builtins/**/*.ts",
+      "src/builtins/**/*.cjs",
+      "src/builtins/**/*.mjs",
+      "src/builtins/**/*.js"
+    ],
+    "exclude": []
   }
 }

@@ -39,6 +39,7 @@ lib_sources = files(run_command(
 libant = static_library(
   'ant',
   lib_sources + [
+    builtin_bundle_h,
     snapshot_h,
     messages_h,
     theme_h

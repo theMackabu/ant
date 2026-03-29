@@ -150,6 +150,9 @@ ant_http1_parse_result_t ant_http1_parse_request(
     return ANT_HTTP1_PARSE_INCOMPLETE;
   }
 
+  if (out->consumed_len == 0) ctx.req.consumed_len = len;
+  else ctx.req.consumed_len = out->consumed_len;
+
   ctx.req.method = ant_http1_buffer_take(&ctx.method, NULL);
   ctx.req.target = ant_http1_buffer_take(&ctx.target, NULL);
   ctx.req.body = (uint8_t *)ant_http1_buffer_take(&ctx.body, &ctx.req.body_len);
@@ -256,6 +259,9 @@ ant_http1_parse_result_t ant_http1_conn_parser_execute(
     
   if (!cp->ctx.message_complete)
     return ANT_HTTP1_PARSE_INCOMPLETE;
+
+  if (consumed_out && *consumed_out == 0) *consumed_out = len;
+  cp->ctx.req.consumed_len = consumed_out ? *consumed_out : len;
     
   cp->ctx.req.method = ant_http1_buffer_take(&cp->ctx.method, NULL);
   cp->ctx.req.target = ant_http1_buffer_take(&cp->ctx.target, NULL);

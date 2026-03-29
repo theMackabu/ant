@@ -24,6 +24,7 @@
 
 #include "esm/remote.h"
 #include "esm/loader.h"
+#include "esm/builtin_bundle.h"
 
 #include "silver/lexer.h"
 #include "silver/compiler.h"
@@ -11208,12 +11209,52 @@ static ant_value_t builtin_import_meta_resolve(ant_t *js, ant_value_t *args, int
 
   ant_value_t import_meta = js_get_current_import_meta(js);
   if (vtype(import_meta) == T_OBJ) {
-    ant_value_t filename = js_get(js, import_meta, "filename");
-    if (vtype(filename) == T_STR) {
-      ant_offset_t n = 0; ant_offset_t off = vstr(js, filename, &n);
-      return js_esm_resolve_specifier(js, args[0], (const char *)(uintptr_t)(off));
-    }
-  } return js_esm_resolve_specifier(js, args[0], NULL);
+  ant_value_t filename = js_get(js, import_meta, "filename");
+  
+  if (vtype(filename) == T_STR) {
+    ant_offset_t n = 0; ant_offset_t off = vstr(js, filename, &n);
+    return js_esm_resolve_specifier(js, args[0], (const char *)(uintptr_t)(off));
+  }}
+  
+  return js_esm_resolve_specifier(js, args[0], NULL);
+}
+
+static inline void js_set_import_meta_special_dirname(
+  ant_t *js,
+  ant_value_t import_meta,
+  const char *filename,
+  bool is_builtin
+) {
+  char *filename_copy = strdup(filename);
+  if (!filename_copy) return;
+
+  char *last_slash = strrchr(filename_copy, '/');
+  char *scheme_end = strstr(filename_copy, "://");
+
+  if ((is_builtin && last_slash) || (!is_builtin && last_slash && scheme_end && last_slash > scheme_end + 2)) {
+    *last_slash = '\0';
+    ant_value_t dirname_val = js_mkstr(js, filename_copy, strlen(filename_copy));
+    if (!is_err(dirname_val)) js_setprop(js, import_meta, js_mkstr(js, "dirname", 7), dirname_val);
+  }
+
+  free(filename_copy);
+}
+
+static inline void js_set_import_meta_path_dirname(
+  ant_t *js,
+  ant_value_t import_meta,
+  const char *filename
+) {
+  char *filename_copy = strdup(filename);
+  if (!filename_copy) return;
+
+  char *dir = dirname(filename_copy);
+  if (dir) {
+    ant_value_t dirname_val = js_mkstr(js, dir, strlen(dir));
+    if (!is_err(dirname_val)) js_setprop(js, import_meta, js_mkstr(js, "dirname", 7), dirname_val);
+  }
+
+  free(filename_copy);
 }
 
 ant_value_t js_create_import_meta(ant_t *js, const char *filename, bool is_main) {
@@ -11221,41 +11262,26 @@ ant_value_t js_create_import_meta(ant_t *js, const char *filename, bool is_main)
 
   ant_value_t import_meta = mkobj(js, 0);
   if (is_err(import_meta)) return import_meta;
+  
   bool is_url = esm_is_url(filename);
+  bool is_builtin = esm_is_builtin_specifier(filename);
 
-  ant_value_t url_val = is_url ? js_mkstr(js, filename, strlen(filename)) : js_esm_make_file_url(js, filename);
+  ant_value_t url_val = (is_url || is_builtin)
+    ? js_mkstr(js, filename, strlen(filename))
+    : js_esm_make_file_url(js, filename);
+    
   if (!is_err(url_val)) js_setprop(js, import_meta, js_mkstr(js, "url", 3), url_val);
 
   ant_value_t filename_val = js_mkstr(js, filename, strlen(filename));
   if (!is_err(filename_val)) js_setprop(js, import_meta, js_mkstr(js, "filename", 8), filename_val);
 
-  if (is_url) {
-    char *filename_copy = strdup(filename);
-    if (filename_copy) {
-      char *last_slash = strrchr(filename_copy, '/');
-      char *scheme_end = strstr(filename_copy, "://");
-      if (last_slash && scheme_end && last_slash > scheme_end + 2) {
-        *last_slash = '\0';
-        ant_value_t dirname_val = js_mkstr(js, filename_copy, strlen(filename_copy));
-        if (!is_err(dirname_val)) js_setprop(js, import_meta, js_mkstr(js, "dirname", 7), dirname_val);
-      }
-      free(filename_copy);
-    }
-  } else {
-    char *filename_copy = strdup(filename);
-    if (filename_copy) {
-      char *dir = dirname(filename_copy);
-      if (dir) {
-        ant_value_t dirname_val = js_mkstr(js, dir, strlen(dir));
-        if (!is_err(dirname_val)) js_setprop(js, import_meta, js_mkstr(js, "dirname", 7), dirname_val);
-      }
-      free(filename_copy);
-    }
-  }
+  if (is_url || is_builtin) js_set_import_meta_special_dirname(js, import_meta, filename, is_builtin);
+  else js_set_import_meta_path_dirname(js, import_meta, filename);
 
   js_setprop(js, import_meta, js_mkstr(js, "main", 4), is_main ? js_true : js_false);
   ant_value_t resolve_fn = js_mkfun(builtin_import_meta_resolve);
   js_setprop(js, import_meta, js_mkstr(js, "resolve", 7), resolve_fn);
+  
   return import_meta;
 }
 

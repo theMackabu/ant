@@ -4,6 +4,7 @@
 #include "esm/commonjs.h"
 #include "esm/library.h"
 #include "esm/remote.h"
+#include "esm/builtin_bundle.h"
 
 #include "modules/json.h"
 #include "modules/napi.h"
@@ -36,15 +37,21 @@ typedef enum {
 
 typedef struct esm_module {
   char *path;
+  char *cache_key;
   char *resolved_path;
   char *url_content;
+  
   size_t url_content_len;
+  const uint8_t *embedded_code;
+  size_t embedded_code_len;
+  
   ant_value_t namespace_obj;
   ant_value_t default_export;
   ant_value_t tla_promise;
   UT_hash_handle hh;
   esm_module_kind_t kind;
   ant_module_format_t format;
+  
   bool is_loaded;
   bool is_loading;
   bool has_tla;
@@ -62,7 +69,9 @@ typedef struct {
 
 static esm_module_cache_t global_module_cache = {NULL, 0};
 static int esm_dynamic_import_depth = 0;
+
 static char *esm_resolve_node_module(const char *specifier, const char *base_path);
+static char *esm_canonicalize_path(const char *path);
 
 static char *esm_file_url_to_path(const char *specifier) {
   if (!specifier || strncmp(specifier, "file:", 5) != 0) return NULL;
@@ -73,6 +82,14 @@ static char *esm_file_url_to_path(const char *specifier) {
 
   if (*p == '\0') return NULL;
   return strdup(p);
+}
+
+static char *esm_make_cache_key(const char *module_key) {
+  if (!module_key) return NULL;
+  if (esm_is_builtin_specifier(module_key)) return strdup(module_key);
+  if (esm_is_data_url(module_key)) return strdup(module_key);
+  if (esm_is_url(module_key)) return strdup(module_key);
+  return esm_canonicalize_path(module_key);
 }
 
 static char *esm_get_extension(const char *path) {
@@ -832,51 +849,68 @@ static char *esm_canonicalize_path(const char *path) {
   return canonical;
 }
 
-static esm_module_t *esm_find_module(const char *resolved_path) {
-  char *canonical_path = esm_canonicalize_path(resolved_path);
-  if (!canonical_path) return NULL;
+static esm_module_t *esm_find_module(const char *module_key) {
+  char *cache_key = esm_make_cache_key(module_key);
+  if (!cache_key) return NULL;
 
   esm_module_t *mod = NULL;
-  HASH_FIND_STR(global_module_cache.modules, canonical_path, mod);
+  HASH_FIND_STR(global_module_cache.modules, cache_key, mod);
 
-  free(canonical_path);
+  free(cache_key);
   return mod;
 }
 
-static esm_module_t *esm_create_module(const char *path, const char *resolved_path) {
-  bool is_url = esm_is_url(resolved_path) || esm_is_data_url(resolved_path);
-  char *canonical_path = is_url ? strdup(resolved_path) : esm_canonicalize_path(resolved_path);
-  if (!canonical_path) return NULL;
+static esm_module_t *esm_create_module(
+  const char *path,
+  const char *resolved_path,
+  const char *module_key,
+  ant_module_format_t format,
+  const uint8_t *embedded_code,
+  size_t embedded_code_len
+) {
+  char *cache_key = esm_make_cache_key(module_key);
+  if (!cache_key) return NULL;
 
   esm_module_t *existing_mod = NULL;
-  HASH_FIND_STR(global_module_cache.modules, canonical_path, existing_mod);
+  HASH_FIND_STR(global_module_cache.modules, cache_key, existing_mod);
   if (existing_mod) {
-    free(canonical_path);
+    free(cache_key);
     return existing_mod;
   }
 
   esm_module_t *mod = (esm_module_t *)malloc(sizeof(esm_module_t));
   if (!mod) {
-    free(canonical_path);
+    free(cache_key);
     return NULL;
   }
 
   *mod = (esm_module_t){
     .path = strdup(path),
-    .resolved_path = canonical_path,
+    .cache_key = cache_key,
+    .resolved_path = strdup(resolved_path),
     .namespace_obj = js_mkundef(),
     .default_export = js_mkundef(),
     .is_loaded = false,
     .is_loading = false,
     .kind = esm_classify_module_kind(resolved_path),
-    .format = MODULE_EVAL_FORMAT_UNKNOWN,
+    .format = format,
     .url_content = NULL,
     .url_content_len = 0,
+    .embedded_code = embedded_code,
+    .embedded_code_len = embedded_code_len,
     .tla_promise = js_mkundef(),
     .has_tla = false,
   };
   
-  HASH_ADD_STR(global_module_cache.modules, resolved_path, mod);
+  if (!mod->path || !mod->resolved_path) {
+    free(mod->path);
+    free(mod->cache_key);
+    free(mod->resolved_path);
+    free(mod);
+    return NULL;
+  }
+  
+  HASH_ADD_STR(global_module_cache.modules, cache_key, mod);
   global_module_cache.count++;
 
   return mod;
@@ -887,6 +921,7 @@ void js_esm_cleanup_module_cache(void) {
   HASH_ITER(hh, global_module_cache.modules, current, tmp) {
     HASH_DEL(global_module_cache.modules, current);
     if (current->path) free(current->path);
+    if (current->cache_key) free(current->cache_key);
     if (current->resolved_path) free(current->resolved_path);
     if (current->url_content) free(current->url_content);
     free(current);
@@ -997,7 +1032,15 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod) {
   char *content = NULL;
   size_t size = 0;
 
-  if (mod->kind == ESM_MODULE_KIND_URL && esm_is_data_url(mod->resolved_path)) {
+  if (mod->embedded_code) {
+    content = (char *)malloc(mod->embedded_code_len + 1);
+    if (!content) {
+      mod->is_loading = false;
+      return js_mkerr(js, "OOM loading bundled module");
+    }
+    memcpy(content, mod->embedded_code, mod->embedded_code_len);
+    size = mod->embedded_code_len;
+  } else if (mod->kind == ESM_MODULE_KIND_URL && esm_is_data_url(mod->resolved_path)) {
     content = esm_parse_data_url(mod->resolved_path, &size);
     if (!content) {
       mod->is_loading = false;
@@ -1033,22 +1076,21 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod) {
 
   size_t js_len = size;
   const char *strip_detail = NULL;
-  
+
+  if (!mod->embedded_code) {
   int strip_result = strip_typescript_inplace(
     &content, size, mod->resolved_path, &js_len, &strip_detail
   );
-  
+
   if (strip_result < 0) {
     ant_value_t err = js_mkerr(
       js, "TypeScript error: strip failed (%d): %s",
       strip_result, strip_detail
     );
-    
-    free(content); 
+    free(content);
     mod->is_loading = false;
-    
     return err;
-  }
+  }}
   
   char *js_code = content;
   ant_value_t ns = js_mkobj(js);
@@ -1099,10 +1141,25 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod) {
   return esm_complete_namespace_module(js, mod, ns);
 }
 
-static ant_value_t esm_get_or_load(ant_t *js, const char *specifier, const char *resolved_path) {
-  esm_module_t *mod = esm_find_module(resolved_path);
+static ant_value_t esm_get_or_load(
+  ant_t *js,
+  const char *specifier,
+  const char *resolved_path,
+  const char *module_key,
+  ant_module_format_t format,
+  const uint8_t *embedded_code,
+  size_t embedded_code_len
+) {
+  esm_module_t *mod = esm_find_module(module_key);
   if (!mod) {
-    mod = esm_create_module(specifier, resolved_path);
+    mod = esm_create_module(
+      specifier,
+      resolved_path,
+      module_key,
+      format,
+      embedded_code,
+      embedded_code_len
+    );
     if (!mod) return js_mkerr(js, "Cannot create module");
   }
   return esm_load_module(js, mod);
@@ -1119,6 +1176,7 @@ ant_value_t js_esm_import_sync_cstr_from(
   size_t spec_len,
   const char *base_path
 ) {
+  const ant_builtin_bundle_entry_t *bundle = NULL;
   char *spec_copy = strndup(specifier, spec_len);
   if (!spec_copy) return js_mkerr(js, "oom");
 
@@ -1127,6 +1185,21 @@ ant_value_t js_esm_import_sync_cstr_from(
     free(spec_copy);
     spec_copy = file_url_path;
     spec_len = strlen(spec_copy);
+  }
+
+  bundle = esm_lookup_builtin_bundle(spec_copy, spec_len);
+  if (bundle) {
+    ant_value_t ns = esm_get_or_load(
+      js,
+      spec_copy,
+      bundle->source_name,
+      bundle->specifier,
+      bundle->format,
+      bundle->code,
+      bundle->code_len
+    );
+    free(spec_copy);
+    return ns;
   }
 
   bool loaded = false;
@@ -1144,7 +1217,15 @@ ant_value_t js_esm_import_sync_cstr_from(
     return err;
   }
 
-  ant_value_t ns = esm_get_or_load(js, spec_copy, resolved_path);
+  ant_value_t ns = esm_get_or_load(
+    js,
+    spec_copy,
+    resolved_path,
+    resolved_path,
+    MODULE_EVAL_FORMAT_UNKNOWN,
+    NULL,
+    0
+  );
   free(resolved_path);
   free(spec_copy);
   return ns;
@@ -1209,6 +1290,7 @@ HASH_ITER(hh, global_module_cache.modules, mod, tmp) {
 }}
 
 ant_value_t js_esm_resolve_specifier(ant_t *js, ant_value_t specifier, const char *base_path) {
+  const ant_builtin_bundle_entry_t *bundle = NULL;
   if (vtype(specifier) != T_STR) {
     return js_mkerr(js, "import.meta.resolve() requires a string specifier");
   }
@@ -1218,6 +1300,13 @@ ant_value_t js_esm_resolve_specifier(ant_t *js, ant_value_t specifier, const cha
   const char *spec_str = (const char *)(uintptr_t)(spec_off);
   char *spec_copy = strndup(spec_str, (size_t)spec_len);
   if (!spec_copy) return js_mkerr(js, "oom");
+
+  bundle = esm_lookup_builtin_bundle(spec_copy, (size_t)spec_len);
+  if (bundle) {
+    ant_value_t result = js_mkstr(js, bundle->specifier, strlen(bundle->specifier));
+    free(spec_copy);
+    return result;
+  }
 
   if (!base_path || !base_path[0]) base_path = esm_default_base_path(js);
   char *resolved_path = esm_resolve(spec_copy, base_path, esm_resolve_path);

@@ -31,3 +31,4 @@ endif
 subdir('deps')
 subdir('version')
 subdir('snapshot')
+subdir('builtins')
