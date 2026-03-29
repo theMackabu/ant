@@ -44,14 +44,17 @@ typedef struct immediate_entry {
 static struct {
   ant_t *js;
   timer_entry_t *timers;
+  
   microtask_entry_t *microtasks;
   microtask_entry_t *microtasks_tail;
+  microtask_entry_t *microtasks_processing;
   immediate_entry_t *immediates;
   immediate_entry_t *immediates_tail;
+  
   int next_timer_id;
   int next_immediate_id;
   int active_timer_count;
-} timer_state = {NULL, NULL, NULL, NULL, NULL, NULL, 1, 1, 0};
+} timer_state = {NULL, NULL, NULL, NULL, NULL, NULL, NULL, 1, 1, 0};
 
 static void add_timer_entry(timer_entry_t *entry) {
   entry->next = timer_state.timers;
@@ -321,41 +324,60 @@ void queue_promise_trigger(ant_t *js, ant_value_t promise) {
   }
 }
 
+static inline void process_microtask_entry(ant_t *js, microtask_entry_t *entry) {
+  if (!entry) return;
+
+  if (vtype(entry->promise) == T_PROMISE) {
+    GC_ROOT_SAVE(root_mark, js);
+    ant_value_t promise = entry->promise;
+    
+    GC_ROOT_PIN(js, promise);
+    js_mark_promise_trigger_dequeued(js, promise);
+    js_process_promise_handlers(js, promise);
+    GC_ROOT_RESTORE(js, root_mark);
+    
+    return;
+  }
+
+  GC_ROOT_SAVE(root_mark, js);
+  ant_value_t callback = entry->callback;
+  GC_ROOT_PIN(js, callback);
+  
+  ant_value_t args[0];
+  sv_vm_call(js->vm, js, callback, js_mkundef(), args, 0, NULL, false);
+  GC_ROOT_RESTORE(js, root_mark);
+}
+
+static inline microtask_entry_t *take_microtask_batch(void) {
+  microtask_entry_t *batch = timer_state.microtasks;
+
+  timer_state.microtasks = NULL;
+  timer_state.microtasks_tail = NULL;
+  timer_state.microtasks_processing = batch;
+  return batch;
+}
+
+static inline void process_microtask_batch(ant_t *js, microtask_entry_t *batch) {
+while (batch != NULL) {
+  microtask_entry_t *entry = batch;
+  batch = entry->next;
+  timer_state.microtasks_processing = batch;
+  process_microtask_entry(js, entry);
+  free(entry);
+}}
+
 static void process_microtasks_internal(ant_t *js, bool check_unhandled_rejections) {
+  microtask_entry_t *batch = NULL;
+
   if (!js || js->microtasks_draining) return;
   js->microtasks_draining = true;
 
-  microtask_entry_t *batch_stop = timer_state.microtasks_tail;
-
-  while (timer_state.microtasks != NULL) {
-    microtask_entry_t *entry = timer_state.microtasks;
-    timer_state.microtasks = entry->next;
-    
-    if (timer_state.microtasks == NULL) {
-      timer_state.microtasks_tail = NULL;
-    }
-
-    if (vtype(entry->promise) == T_PROMISE) {
-      GC_ROOT_SAVE(root_mark, js);
-      ant_value_t promise = entry->promise;
-      GC_ROOT_PIN(js, promise);
-      js_mark_promise_trigger_dequeued(js, promise);
-      js_process_promise_handlers(js, promise);
-      GC_ROOT_RESTORE(js, root_mark);
-    } else {
-      GC_ROOT_SAVE(root_mark, js);
-      ant_value_t callback = entry->callback;
-      GC_ROOT_PIN(js, callback);
-      ant_value_t args[0];
-      sv_vm_call(js->vm, js, callback, js_mkundef(), args, 0, NULL, false);
-      GC_ROOT_RESTORE(js, root_mark);
-    }
-    
-    bool reached_batch_end = (entry == batch_stop);
-    free(entry);
-    if (reached_batch_end) break;
+  while ((batch = timer_state.microtasks) != NULL) {
+    batch = take_microtask_batch();
+    process_microtask_batch(js, batch);
   }
 
+  timer_state.microtasks_processing = NULL;
   if (check_unhandled_rejections) js_check_unhandled_rejections(js);
   js->microtasks_draining = false;
 }
@@ -438,6 +460,10 @@ void gc_mark_timers(ant_t *js, gc_mark_fn mark) {
     for (int i = 0; i < t->nargs; i++) mark(js, t->args[i]);
   }
   for (microtask_entry_t *m = timer_state.microtasks; m; m = m->next) {
+    mark(js, m->callback);
+    mark(js, m->promise);
+  }
+  for (microtask_entry_t *m = timer_state.microtasks_processing; m; m = m->next) {
     mark(js, m->callback);
     mark(js, m->promise);
   }

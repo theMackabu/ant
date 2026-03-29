@@ -668,6 +668,7 @@ static void server_write_cb(ant_conn_t *conn, int status, void *user_data) {
       ant_http1_conn_parser_reset(&cs->parser);
       cs->active_req = NULL;
       ant_conn_set_timeout_ms(conn, cs->server->idle_timeout_ms);
+      ant_conn_resume_read(conn);
       server_request_release(req);
       if (ant_conn_buffer_len(conn) > 0) server_schedule_drain(cs);
     }
@@ -801,6 +802,7 @@ static void server_process_client_request(
   req->next = server->requests;
   server->requests = req;
   cs->active_req = req;
+  ant_conn_pause_read(conn);
   ant_conn_set_timeout_ms(conn, server->request_timeout_ms);
 
   result = server_call_fetch(server, request_obj);

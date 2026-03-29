@@ -10019,6 +10019,36 @@ void js_resolve_promise(ant_t *js, ant_value_t p, ant_value_t val) {
     return;
   }
 
+  if (is_object_type(val)) {
+    ant_value_t res_fn = make_data_cfunc(js, p, builtin_resolve_internal);
+    GC_ROOT_PIN(js, res_fn);
+    
+    if (is_err(res_fn)) {
+      js_reject_promise(js, p, res_fn);
+      GC_ROOT_RESTORE(js, root_mark);
+      return;
+    }
+    
+    ant_value_t rej_fn = make_data_cfunc(js, p, builtin_reject_internal);
+    GC_ROOT_PIN(js, rej_fn);
+    
+    if (is_err(rej_fn)) {
+      js_reject_promise(js, p, rej_fn);
+      GC_ROOT_RESTORE(js, root_mark);
+      return;
+    }
+    
+    ant_value_t then_prop = js_get(js, val, "then");
+    GC_ROOT_PIN(js, then_prop);
+    
+    if (vtype(then_prop) == T_FUNC || vtype(then_prop) == T_CFUNC) {
+      ant_value_t call_args[] = { res_fn, rej_fn };
+      sv_vm_call(js->vm, js, then_prop, val, call_args, 2, NULL, false);
+      GC_ROOT_RESTORE(js, root_mark);
+      return;
+    }
+  }
+
   pd->state = 1;
   pd->value = val;
   
