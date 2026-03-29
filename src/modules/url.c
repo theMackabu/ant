@@ -1067,13 +1067,15 @@ static ant_value_t usp_sort(ant_t *js, ant_value_t *args, int nargs) {
   for (ant_offset_t i = 1; i < len; i++) {
     ant_value_t cur = arr[i];
     const char *ck = js_getstr(js, js_arr_get(js, cur, 0), NULL);
-    ant_offset_t j = i - 1;
-    while (j >= 0) {
-      const char *jk = js_getstr(js, js_arr_get(js, arr[j], 0), NULL);
+    ant_offset_t j = i;
+    
+    while (j > 0) {
+      const char *jk = js_getstr(js, js_arr_get(js, arr[j - 1], 0), NULL);
       if (strcmp(jk ? jk : "", ck ? ck : "") <= 0) break;
-      arr[j + 1] = arr[j]; j--;
+      arr[j] = arr[j - 1]; j--;
     }
-    arr[j + 1] = cur;
+    
+    arr[j] = cur;
   }
 
   ant_value_t new_entries = js_mkarr(js);
