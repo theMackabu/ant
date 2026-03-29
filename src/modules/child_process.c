@@ -176,13 +176,12 @@ static void emit_event(child_process_t *cp, const char *name, ant_value_t *args,
 }
 
 static const char *stream_kind_name(child_stream_kind_t kind) {
-  switch (kind) {
-    case CHILD_STREAM_STDIN: return "stdin";
-    case CHILD_STREAM_STDOUT: return "stdout";
-    case CHILD_STREAM_STDERR: return "stderr";
-    default: return "unknown";
-  }
-}
+switch (kind) {
+  case CHILD_STREAM_STDIN: return "stdin";
+  case CHILD_STREAM_STDOUT: return "stdout";
+  case CHILD_STREAM_STDERR: return "stderr";
+  default: return "unknown";
+}}
 
 static void emit_stream_event(
   child_process_t *cp,
@@ -215,6 +214,15 @@ static bool child_stdio_is_pipe(child_process_t *cp, child_stream_kind_t kind) {
   return cp->stdio_modes[kind] == STDIO_PIPE;
 }
 
+static bool *child_closed_flag(child_process_t *cp, child_stream_kind_t kind) {
+  switch (kind) {
+    case CHILD_STREAM_STDIN: return &cp->stdin_closed;
+    case CHILD_STREAM_STDOUT: return &cp->stdout_closed;
+    case CHILD_STREAM_STDERR: return &cp->stderr_closed;
+    default: return NULL;
+  }
+}
+
 static void add_pending_child(child_process_t *cp) {
   cp->next = NULL;
   cp->prev = pending_children_tail;
@@ -235,6 +243,11 @@ static void remove_pending_child(child_process_t *cp) {
 
 static void free_child_process(child_process_t *cp) {
   if (!cp) return;
+
+  if (vtype(cp->child_obj) == T_OBJ) js_set_slot(cp->child_obj, SLOT_DATA, js_mkundef());
+  if (vtype(cp->stdin_obj) == T_OBJ) js_set_slot(cp->stdin_obj, SLOT_DATA, js_mkundef());
+  if (vtype(cp->stdout_obj) == T_OBJ) js_set_slot(cp->stdout_obj, SLOT_DATA, js_mkundef());
+  if (vtype(cp->stderr_obj) == T_OBJ) js_set_slot(cp->stderr_obj, SLOT_DATA, js_mkundef());
   
   if (cp->stdout_buf) free(cp->stdout_buf);
   if (cp->stderr_buf) free(cp->stderr_buf);
@@ -266,6 +279,7 @@ static child_event_t *find_or_create_event(child_process_t *cp, const char *name
 }
 
 static void try_free_child(child_process_t *cp) {
+  if (!cp) return;
   if (cp->exited && cp->stdout_closed && cp->stderr_closed && cp->pending_closes == 0) {
     remove_pending_child(cp);
     free_child_process(cp);
@@ -309,9 +323,7 @@ static void check_completion(child_process_t *cp) {
         snprintf(err_msg, sizeof(err_msg), "Command failed with exit code %lld", (long long)cp->exit_code);
         ant_value_t err = js_mkstr(cp->js, err_msg, strlen(err_msg));
         js_reject_promise(cp->js, cp->promise, err);
-      } else {
-        js_resolve_promise(cp->js, cp->promise, result);
-      }
+      } else js_resolve_promise(cp->js, cp->promise, result);
     }
     
     try_free_child(cp);
@@ -324,6 +336,30 @@ static void on_handle_close(uv_handle_t *handle) {
     cp->pending_closes--;
     try_free_child(cp);
   }
+}
+
+static void close_child_handle(child_process_t *cp, uv_handle_t *handle) {
+  if (!cp || !handle || uv_is_closing(handle)) return;
+  cp->pending_closes++;
+  uv_close(handle, on_handle_close);
+}
+
+static void close_child_pipe(child_process_t *cp, child_stream_kind_t kind, bool stop_read) {
+  bool *closed = NULL;
+  uv_pipe_t *pipe = NULL;
+
+  if (!cp || !child_stdio_is_pipe(cp, kind)) return;
+
+  closed = child_closed_flag(cp, kind);
+  pipe = child_pipe(cp, kind);
+  if (!closed || !pipe || *closed || uv_is_closing((uv_handle_t *)pipe)) return;
+
+  if (stop_read && kind != CHILD_STREAM_STDIN) {
+    uv_read_stop((uv_stream_t *)pipe);
+  }
+
+  *closed = true;
+  close_child_handle(cp, (uv_handle_t *)pipe);
 }
 
 static void on_process_exit(uv_process_t *proc, int64_t exit_status, int term_signal) {
@@ -341,26 +377,10 @@ static void on_process_exit(uv_process_t *proc, int64_t exit_status, int term_si
   ant_value_t exit_args[2] = { js_mknum((double)exit_status), term_signal ? js_mknum((double)term_signal) : js_mknull() };
   emit_event(cp, "exit", exit_args, 2);
   
-  cp->pending_closes++;
-  uv_close((uv_handle_t *)proc, on_handle_close);
-  
-  if (child_stdio_is_pipe(cp, CHILD_STREAM_STDIN) && !cp->stdin_closed && !uv_is_closing((uv_handle_t *)&cp->stdin_pipe)) {
-    cp->pending_closes++;
-    uv_close((uv_handle_t *)&cp->stdin_pipe, on_handle_close);
-    cp->stdin_closed = true;
-  }
-  if (child_stdio_is_pipe(cp, CHILD_STREAM_STDOUT) && !cp->stdout_closed && !uv_is_closing((uv_handle_t *)&cp->stdout_pipe)) {
-    uv_read_stop((uv_stream_t *)&cp->stdout_pipe);
-    cp->pending_closes++;
-    uv_close((uv_handle_t *)&cp->stdout_pipe, on_handle_close);
-    cp->stdout_closed = true;
-  }
-  if (child_stdio_is_pipe(cp, CHILD_STREAM_STDERR) && !cp->stderr_closed && !uv_is_closing((uv_handle_t *)&cp->stderr_pipe)) {
-    uv_read_stop((uv_stream_t *)&cp->stderr_pipe);
-    cp->pending_closes++;
-    uv_close((uv_handle_t *)&cp->stderr_pipe, on_handle_close);
-    cp->stderr_closed = true;
-  }
+  close_child_handle(cp, (uv_handle_t *)proc);
+  close_child_pipe(cp, CHILD_STREAM_STDIN, false);
+  close_child_pipe(cp, CHILD_STREAM_STDOUT, true);
+  close_child_pipe(cp, CHILD_STREAM_STDERR, true);
   
   check_completion(cp);
 }
@@ -415,10 +435,7 @@ static void on_stdout_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *b
     if (nread != UV_EOF) 
       emit_stream_event(cp, CHILD_STREAM_STDOUT, "end", NULL, 0);
     
-    cp->pending_closes++;
-    uv_close((uv_handle_t *)stream, on_handle_close);
-    
-    cp->stdout_closed = true;
+    close_child_pipe(cp, CHILD_STREAM_STDOUT, true);
     check_completion(cp);
   }
 }
@@ -467,10 +484,7 @@ static void on_stderr_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *b
     }
     
     emit_stream_event(cp, CHILD_STREAM_STDERR, "end", NULL, 0);
-    cp->pending_closes++;
-    uv_close((uv_handle_t *)stream, on_handle_close);
-    
-    cp->stderr_closed = true;
+    close_child_pipe(cp, CHILD_STREAM_STDERR, true);
     check_completion(cp);
   }
 }
@@ -599,11 +613,7 @@ static ant_value_t child_write_impl(ant_t *js, child_process_t *cp, ant_value_t 
 }
 
 static ant_value_t child_end_impl(child_process_t *cp) {
-  if (!cp->stdin_closed) {
-    uv_close((uv_handle_t *)&cp->stdin_pipe, NULL);
-    cp->stdin_closed = true;
-  }
-  
+  close_child_pipe(cp, CHILD_STREAM_STDIN, false);
   return js_mkundef();
 }
 
@@ -738,15 +748,8 @@ static ant_value_t child_stream_destroy(ant_t *js, ant_value_t *args, int nargs)
 
   uv_handle_t *h = child_stream_handle(cp, ctx->kind);
   if (h && !uv_is_closing(h)) {
-    if (ctx->kind == CHILD_STREAM_STDOUT) {
-      uv_read_stop((uv_stream_t *)&cp->stdout_pipe);
-      cp->stdout_closed = true;
-    } else if (ctx->kind == CHILD_STREAM_STDERR) {
-      uv_read_stop((uv_stream_t *)&cp->stderr_pipe);
-      cp->stderr_closed = true;
-    }
-    cp->pending_closes++;
-    uv_close(h, on_handle_close);
+    if (ctx->kind == CHILD_STREAM_STDOUT) close_child_pipe(cp, CHILD_STREAM_STDOUT, true);
+    else if (ctx->kind == CHILD_STREAM_STDERR) close_child_pipe(cp, CHILD_STREAM_STDERR, true);
     check_completion(cp);
   }
 
@@ -1134,11 +1137,13 @@ static ant_value_t builtin_exec(ant_t *js, ant_value_t *args, int nargs) {
   cp->promise = js_mkpromise(js);
   cp->keep_alive = true;
   
-  uv_pipe_init(uv_default_loop(), &cp->stdin_pipe, 0);
+  cp->stdio_modes[CHILD_STREAM_STDIN] = STDIO_IGNORE;
+  cp->stdio_modes[CHILD_STREAM_STDOUT] = STDIO_PIPE;
+  cp->stdio_modes[CHILD_STREAM_STDERR] = STDIO_PIPE;
+  
   uv_pipe_init(uv_default_loop(), &cp->stdout_pipe, 0);
   uv_pipe_init(uv_default_loop(), &cp->stderr_pipe, 0);
   
-  cp->stdin_pipe.data = cp;
   cp->stdout_pipe.data = cp;
   cp->stderr_pipe.data = cp;
   cp->process.data = cp;
@@ -1619,4 +1624,3 @@ for (child_process_t *cp = pending_children_head; cp; cp = cp->next) {
   HASH_ITER(hh, cp->events, evt, tmp)
     for (int i = 0; i < evt->count; i++) mark(js, evt->listeners[i].callback);
 }}
-

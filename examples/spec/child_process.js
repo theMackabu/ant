@@ -67,6 +67,19 @@ const childClosedP = new Promise(resolve => child.on('close', () => {
   resolve();
 }));
 
+let stdinRoundTrip = '';
+const stdinChild = spawn('cat');
+stdinChild.on('stdout', data => {
+  stdinRoundTrip += data;
+});
+stdinChild.stdin.write('ping');
+stdinChild.stdin.end();
+
+const stdinChildDoneP = new Promise(resolve => stdinChild.on('close', () => {
+  test('spawn stdin round trip', stdinRoundTrip, 'ping');
+  resolve();
+}));
+
 const shellChildDoneP = childClosedP.then(() => new Promise(resolve => {
   const shellChild = spawn('echo $HOME', [], { shell: true });
   shellChild.on('close', () => {
@@ -89,7 +102,7 @@ longChild.on('close', () => {});
 const killResult = longChild.kill('SIGTERM');
 test('spawn kill returns true', killResult, true);
 
-Promise.all([execDoneP, execFailDoneP, shellChildDoneP]).then(() => {
+Promise.all([execDoneP, execFailDoneP, shellChildDoneP, stdinChildDoneP]).then(() => {
   test('exec async completed', execDone, true);
   test('exec fail async completed', execFailDone, true);
   summary();
