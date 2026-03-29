@@ -908,7 +908,7 @@ compat-table/es6/misc.Proxy.get.IteratorComplete.js: OK
 compat-table/es6/misc.Proxy.get.JSON.stringify.js: OK
 compat-table/es6/misc.Proxy.get.Object.assign.js: failed
 compat-table/es6/misc.Proxy.get.Object.defineProperties.js: failed
-compat-table/es6/misc.Proxy.get.Promise.resolve.js: failed
+compat-table/es6/misc.Proxy.get.Promise.resolve.js: OK
 compat-table/es6/misc.Proxy.get.RegExp-constructor.js: OK
 compat-table/es6/misc.Proxy.get.RegExp.Symbol.match.js: OK
 compat-table/es6/misc.Proxy.get.RegExp.Symbol.replace.js: OK
