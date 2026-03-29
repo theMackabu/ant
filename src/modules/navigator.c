@@ -184,19 +184,11 @@ static void execute_lock_callback(ant_t *js, const char *name, lock_mode_t mode,
   }
   
   if (vtype(result) == T_PROMISE) {
-    ant_value_t then_fn = js_get(js, result, "then");
-    int fn_type = vtype(then_fn);
-    
-    if (fn_type == T_FUNC || fn_type == T_CFUNC) {
-      ant_value_t name_str = js_mkstr(js, name, strlen(name));
-      
-      ant_value_t on_resolve = make_lock_handler(js, js_mkfun(lock_then_handler), name_str, outer_promise);
-      ant_value_t on_reject = make_lock_handler(js, js_mkfun(lock_catch_handler), name_str, outer_promise);
-      
-      ant_value_t then_args[2] = { on_resolve, on_reject };
-      sv_vm_call(js->vm, js, then_fn, result, then_args, 2, NULL, false);
-      return;
-    }
+    ant_value_t name_str = js_mkstr(js, name, strlen(name));
+    ant_value_t on_resolve = make_lock_handler(js, js_mkfun(lock_then_handler), name_str, outer_promise);
+    ant_value_t on_reject = make_lock_handler(js, js_mkfun(lock_catch_handler), name_str, outer_promise);
+    js_promise_then(js, result, on_resolve, on_reject);
+    return;
   }
   
   release_lock(name);
@@ -283,16 +275,12 @@ static ant_value_t locks_request(ant_t *js, ant_value_t *args, int nargs) {
     ant_value_t result = sv_vm_call(js->vm, js, callback, js_mkundef(), &null_val, 1, NULL, false);
     
     if (vtype(result) == T_PROMISE) {
-      ant_value_t then_fn = js_get(js, result, "then");
-      int fn_type = vtype(then_fn);
-      if (fn_type == T_FUNC || fn_type == T_CFUNC) {
-        ant_value_t on_resolve = make_lock_handler(
-          js, js_mkfun(lock_then_handler), 
-          js_mkstr(js, "", 0), promise
-        );
-        sv_vm_call(js->vm, js, then_fn, result, &on_resolve, 1, NULL, false);
-        return promise;
-      }
+      ant_value_t on_resolve = make_lock_handler(
+        js, js_mkfun(lock_then_handler),
+        js_mkstr(js, "", 0), promise
+      );
+      js_promise_then(js, result, on_resolve, js_mkundef());
+      return promise;
     }
     js_resolve_promise(js, promise, result);
     return promise;
@@ -398,4 +386,3 @@ void gc_mark_navigator(ant_t *js, gc_mark_fn mark) {
     mark(js, req->promise);
   }
 }
-

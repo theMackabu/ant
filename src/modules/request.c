@@ -41,8 +41,14 @@ ant_value_t request_get_headers(ant_value_t obj) {
   return js_get_slot(obj, SLOT_REQUEST_HEADERS);
 }
 
-ant_value_t request_get_signal(ant_value_t obj) {
-  return js_get_slot(obj, SLOT_REQUEST_SIGNAL);
+ant_value_t request_get_signal(ant_t *js, ant_value_t obj) {
+  ant_value_t signal = js_get_slot(obj, SLOT_REQUEST_SIGNAL);
+
+  if (vtype(signal) != T_UNDEF) return signal;
+  signal = abort_signal_create_dependent(js, js_mkundef());
+  if (is_err(signal)) return signal;
+  js_set_slot_wb(js, obj, SLOT_REQUEST_SIGNAL, signal);
+  return signal;
 }
 
 static void data_free(request_data_t *d) {
@@ -78,6 +84,102 @@ static request_data_t *data_new(void) {
     return NULL;
   }
   return d;
+}
+
+static request_data_t *data_new_server(const char *method) {
+  request_data_t *d = calloc(1, sizeof(request_data_t));
+  if (!d) return NULL;
+
+  d->method = strdup(method ? method : "GET");
+  d->referrer = strdup("client");
+  d->referrer_policy = strdup("");
+  d->mode = strdup("same-origin");
+  d->credentials = strdup("same-origin");
+  d->cache = strdup("default");
+  d->redirect = strdup("follow");
+  d->integrity = strdup("");
+  
+  if (!d->method
+    || !d->referrer
+    || !d->referrer_policy
+    || !d->mode
+    || !d->credentials
+    || !d->cache
+    || !d->redirect
+    || !d->integrity
+  ) { data_free(d); return NULL; }
+
+  return d;
+}
+
+static ant_value_t request_create_object(ant_t *js, request_data_t *req, ant_value_t headers_obj, bool create_signal) {
+  ant_value_t obj = js_mkobj(js);
+  ant_value_t hdrs = is_object_type(headers_obj)
+    ? headers_obj
+    : headers_create_empty(js);
+
+  js_set_proto_init(obj, g_request_proto);
+  js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_REQUEST));
+  js_set_slot(obj, SLOT_DATA, ANT_PTR(req));
+
+  headers_set_guard(hdrs,
+    strcmp(req->mode, "no-cors") == 0
+    ? HEADERS_GUARD_REQUEST_NO_CORS
+    : HEADERS_GUARD_REQUEST
+  );
+
+  headers_apply_guard(hdrs);
+  js_set_slot_wb(js, obj, SLOT_REQUEST_HEADERS, hdrs);
+  js_set_slot_wb(js, obj, SLOT_REQUEST_SIGNAL, create_signal 
+    ? abort_signal_create_dependent(js, js_mkundef()) 
+    : js_mkundef()
+  );
+  
+  return obj;
+}
+
+static char *request_build_server_base_url(const char *host, const char *server_hostname, int server_port) {
+  const char *authority = (host && host[0]) ? host : server_hostname;
+  size_t authority_len = authority ? strlen(authority) : 0;
+  bool include_port = (!host || !host[0]) && server_port > 0 && server_port != 80;
+  size_t cap = sizeof("http://") - 1 + authority_len + 1 + 16 + 1;
+  
+  char *base = malloc(cap);
+  int written = 0;
+
+  if (!base) return NULL;
+  if (include_port) written = snprintf(base, cap, "http://%s:%d/", authority ? authority : "", server_port);
+  else written = snprintf(base, cap, "http://%s/", authority ? authority : "");
+  
+  if (written < 0 || (size_t)written >= cap) {
+    free(base);
+    return NULL;
+  }
+
+  return base;
+}
+
+static int request_parse_server_url(
+  const char *target,
+  bool absolute_target,
+  const char *host,
+  const char *server_hostname,
+  int server_port,
+  url_state_t *out
+) {
+  char *base = NULL;
+  int rc = 0;
+
+  if (absolute_target)
+    return parse_url_to_state(target, NULL, out);
+
+  base = request_build_server_base_url(host, server_hostname, server_port);
+  if (!base) return -1;
+  
+  rc = parse_url_to_state(target, base, out);
+  free(base);
+  
+  return rc;
 }
 
 static request_data_t *data_dup(const request_data_t *src) {
@@ -713,7 +815,7 @@ REQ_GETTER_START(is_history_navigation)
 REQ_GETTER_END
 
 REQ_GETTER_START(signal)
-  return js_get_slot(this, SLOT_REQUEST_SIGNAL);
+  return request_get_signal(js, this);
 REQ_GETTER_END
 
 REQ_GETTER_START(duplex)
@@ -767,7 +869,7 @@ static ant_value_t js_request_clone(ant_t *js, ant_value_t *args, int nargs) {
   if (!nd) return js_mkerr(js, "out of memory");
 
   ant_value_t src_headers = js_get_slot(this, SLOT_REQUEST_HEADERS);
-  ant_value_t src_signal  = js_get_slot(this, SLOT_REQUEST_SIGNAL);
+  ant_value_t src_signal  = request_get_signal(js, this);
 
   ant_value_t new_headers = headers_create_empty(js);
   if (is_err(new_headers)) { data_free(nd); return new_headers; }
@@ -860,7 +962,7 @@ static ant_value_t request_new_from_input(
     req = data_dup(src);
     if (!req) return js_mkerr(js, "out of memory");
     req->body_used = false;
-    *out_input_signal = js_get_slot(input, SLOT_REQUEST_SIGNAL);
+    *out_input_signal = request_get_signal(js, input);
   }
 
   *out_req = req;
@@ -1283,29 +1385,40 @@ ant_value_t request_create(ant_t *js,
     req->body_type = body_type ? strdup(body_type) : NULL;
   }
   req->body_is_stream = false;
+  return request_create_object(js, req, headers_obj, true);
+}
 
-  ant_value_t obj = js_mkobj(js);
-  js_set_proto_init(obj, g_request_proto);
-  js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_REQUEST));
-  js_set_slot(obj, SLOT_DATA, ANT_PTR(req));
+ant_value_t request_create_server(
+  ant_t *js,
+  const char *method,
+  const char *target,
+  bool absolute_target,
+  const char *host,
+  const char *server_hostname,
+  int server_port,
+  ant_value_t headers_obj,
+  const uint8_t *body,
+  size_t body_len,
+  const char *body_type
+) {
+  request_data_t *req = data_new_server(method);
+  if (!req) return js_mkerr(js, "out of memory");
 
-  ant_value_t hdrs = is_object_type(headers_obj)
-    ? headers_obj
-    : headers_create_empty(js);
-    
-  headers_set_guard(hdrs,
-    strcmp(req->mode, "no-cors") == 0 
-    ? HEADERS_GUARD_REQUEST_NO_CORS 
-    : HEADERS_GUARD_REQUEST
-  );
-  
-  headers_apply_guard(hdrs);
-  js_set_slot_wb(js, obj, SLOT_REQUEST_HEADERS, hdrs);
+  if (target && request_parse_server_url(target, absolute_target, host, server_hostname, server_port, &req->url) != 0)
+    url_state_clear(&req->url);
 
-  ant_value_t sig = abort_signal_create_dependent(js, js_mkundef());
-  js_set_slot_wb(js, obj, SLOT_REQUEST_SIGNAL, sig);
+  if (body) req->has_body = true;
 
-  return obj;
+  if (body && body_len > 0) {
+    req->body_data = malloc(body_len);
+    if (!req->body_data) { data_free(req); return js_mkerr(js, "out of memory"); }
+    memcpy(req->body_data, body, body_len);
+    req->body_size = body_len;
+    req->body_type = body_type ? strdup(body_type) : NULL;
+  }
+  req->body_is_stream = false;
+
+  return request_create_object(js, req, headers_obj, false);
 }
 
 void init_request_module(void) {

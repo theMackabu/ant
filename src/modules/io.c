@@ -10,6 +10,7 @@
 
 #include "common.h"
 #include "errors.h"
+#include "output.h"
 #include "internal.h"
 #include "runtime.h"
 #include "silver/engine.h"
@@ -33,10 +34,9 @@ static inline bool io_is_digit_ascii(char c) {
   return c >= '0' && c <= '9'; 
 }
 
-static void io_print(const char *str, FILE *stream) {
+static bool io_print_to_output(const char *str, ant_output_stream_t *out) {
   if (!io_no_color) {
-    fputs(str, stream);
-    return;
+    return ant_output_stream_append_cstr(out, str);
   }
 
   static void *states[] = {&&normal, &&esc, &&csi, &&done};
@@ -48,7 +48,7 @@ static void io_print(const char *str, FILE *stream) {
     c = *p++;
     if (!c) goto *states[3];
     if (c == '\x1b') goto *states[1];
-    fputc(c, stream);
+    if (!ant_output_stream_putc(out, c)) return false;
     goto *states[0];
   }
 
@@ -56,8 +56,8 @@ static void io_print(const char *str, FILE *stream) {
     c = *p++;
     if (!c) goto *states[3];
     if (c == '[') goto *states[2];
-    fputc('\x1b', stream);
-    fputc(c, stream);
+    if (!ant_output_stream_putc(out, '\x1b')) return false;
+    if (!ant_output_stream_putc(out, c)) return false;
     goto *states[0];
   }
 
@@ -65,11 +65,11 @@ static void io_print(const char *str, FILE *stream) {
     c = *p++;
     if (!c) goto *states[3];
     if ((c >= '0' && c <= '9') || c == ';') goto *states[2];
-    if (c != 'm') fputc(c, stream);
+    if (c != 'm' && !ant_output_stream_putc(out, c)) return false;
     goto *states[0];
   }
   
-  done: return;
+  done: return true;
 }
 
 enum char_class {
@@ -143,24 +143,24 @@ static int io_iso_utc_token_len(const char *p) {
 
 #define KEYWORD(kw, color) \
   if (memcmp(p, kw, sizeof(kw) - 1) == 0 && !isalnum((unsigned char)p[sizeof(kw) - 1]) && p[sizeof(kw) - 1] != '_') { \
-    fputs(color, stream); fputs(kw, stream); fputs(C_RESET, stream); \
+    ant_output_stream_append_cstr(out, color); ant_output_stream_append_cstr(out, kw); ant_output_stream_append_cstr(out, C_RESET); \
     p += sizeof(kw) - 1; goto next; \
   }
 
 #define EMIT_UNTIL(end_char, color) \
-  fputs(color, stream); \
-  while (*p && *p != end_char) fputc(*p++, stream); \
-  if (*p == end_char) fputc(*p++, stream); \
-  fputs(C_RESET, stream); goto next;
+  ant_output_stream_append_cstr(out, color); \
+  while (*p && *p != end_char) ant_output_stream_putc(out, *p++); \
+  if (*p == end_char) ant_output_stream_putc(out, *p++); \
+  ant_output_stream_append_cstr(out, C_RESET); goto next;
   
 #define EMIT_TYPE(tag, len, color) \
   if (!(is_key && brace_depth > 0) && memcmp(p, tag, len) == 0) { \
-    fputs(color, stream); fputs(tag, stream); fputs(C_RESET, stream); \
+    ant_output_stream_append_cstr(out, color); ant_output_stream_append_cstr(out, tag); ant_output_stream_append_cstr(out, C_RESET); \
     p += len; goto next; \
   }
 
-void print_value_colored(const char *str, FILE *stream) {
-  if (io_no_color) { io_print(str, stream); return; }
+static void print_value_colored_to_output(const char *str, ant_output_stream_t *out) {
+  if (io_no_color) { io_print_to_output(str, out); return; }
 
   static void *dispatch[] = {
     [CC_NUL] = &&done, [CC_QUOTE] = &&quote, [CC_ESCAPE] = &&other,
@@ -186,22 +186,22 @@ done:
 
 quote:
   string_char = *p;
-  fputs((is_key && brace_depth > 0) ? JSON_KEY : JSON_STRING, stream);
-  fputc(*p++, stream);
+  ant_output_stream_append_cstr(out, (is_key && brace_depth > 0) ? JSON_KEY : JSON_STRING);
+  ant_output_stream_putc(out, *p++);
   while (*p) {
-    if (*p == '\\' && p[1]) { fputc(*p++, stream); fputc(*p++, stream); continue; }
-    if (*p == string_char) { fputc(*p++, stream); break; }
-    fputc(*p++, stream);
+    if (*p == '\\' && p[1]) { ant_output_stream_putc(out, *p++); ant_output_stream_putc(out, *p++); continue; }
+    if (*p == string_char) { ant_output_stream_putc(out, *p++); break; }
+    ant_output_stream_putc(out, *p++);
   }
-  fputs(C_RESET, stream);
+  ant_output_stream_append_cstr(out, C_RESET);
   goto next;
 
 lbrace:
-  fputs(JSON_BRACE, stream); fputc(*p++, stream); fputs(C_RESET, stream);
+  ant_output_stream_append_cstr(out, JSON_BRACE); ant_output_stream_putc(out, *p++); ant_output_stream_append_cstr(out, C_RESET);
   brace_depth++; is_key = true; goto next;
 
 rbrace:
-  fputs(JSON_BRACE, stream); fputc(*p++, stream); fputs(C_RESET, stream);
+  ant_output_stream_append_cstr(out, JSON_BRACE); ant_output_stream_putc(out, *p++); ant_output_stream_append_cstr(out, C_RESET);
   brace_depth--; is_key = false; goto next;
 
 lbrack:
@@ -218,59 +218,57 @@ lbrack:
     case 'U': if (memcmp(p + 2, "int8Contents]", 13) == 0) { EMIT_UNTIL(']', JSON_FUNC) } break;
     case 'P': if (memcmp(p + 2, "romise]", 7) == 0) { EMIT_UNTIL(']', JSON_TAG) } break;
   }
-  fputs(JSON_BRACE, stream); fputc(*p++, stream); fputs(C_RESET, stream);
+  ant_output_stream_append_cstr(out, JSON_BRACE); ant_output_stream_putc(out, *p++); ant_output_stream_append_cstr(out, C_RESET);
   array_depth++; is_key = false; goto next;
 
 rbrack:
-  fputs(JSON_BRACE, stream); fputc(*p++, stream); fputs(C_RESET, stream);
+  ant_output_stream_append_cstr(out, JSON_BRACE); ant_output_stream_putc(out, *p++); ant_output_stream_append_cstr(out, C_RESET);
   array_depth--; is_key = false; goto next;
 
 colon:
-  fputc(*p++, stream); is_key = false; goto next;
+  ant_output_stream_putc(out, *p++); is_key = false; goto next;
 
 separator:
-  fputc(*p++, stream);
+  ant_output_stream_putc(out, *p++);
   is_key = (brace_depth > 0 && array_depth == 0);
   goto next;
 
-number:
-  {
+number: {
     int iso_len = io_iso_utc_token_len(p);
     if (iso_len > 0) {
-      fputs(C_MAGENTA, stream);
-      for (int k = 0; k < iso_len; k++) fputc(*p++, stream);
-      fputs(C_RESET, stream);
+      ant_output_stream_append_cstr(out, C_MAGENTA);
+      for (int k = 0; k < iso_len; k++) ant_output_stream_putc(out, *p++);
+      ant_output_stream_append_cstr(out, C_RESET);
       goto next;
     }
   }
-  fputs(JSON_NUMBER, stream);
+  ant_output_stream_append_cstr(out, JSON_NUMBER);
   while ((*p >= '0' && *p <= '9') || *p == '.' || *p == 'e' || *p == 'E' || *p == '+' || *p == '-')
-    fputc(*p++, stream);
-  fputs(C_RESET, stream);
+    ant_output_stream_putc(out, *p++);
+  ant_output_stream_append_cstr(out, C_RESET);
   goto next;
 
-minus:
-  {
+minus: {
     int iso_len = io_iso_utc_token_len(p);
     if (iso_len > 0) {
-      fputs(C_MAGENTA, stream);
-      for (int k = 0; k < iso_len; k++) fputc(*p++, stream);
-      fputs(C_RESET, stream);
+      ant_output_stream_append_cstr(out, C_MAGENTA);
+      for (int k = 0; k < iso_len; k++) ant_output_stream_putc(out, *p++);
+      ant_output_stream_append_cstr(out, C_RESET);
       goto next;
     }
   }
   if (memcmp(p + 1, "Infinity", 8) == 0 && !isalnum((unsigned char)p[9]) && p[9] != '_') {
-    fputs(JSON_NUMBER, stream); fputs("-Infinity", stream); fputs(C_RESET, stream);
+    ant_output_stream_append_cstr(out, JSON_NUMBER); ant_output_stream_append_cstr(out, "-Infinity"); ant_output_stream_append_cstr(out, C_RESET);
     p += 9; goto next;
   }
   if (p[1] >= '0' && p[1] <= '9') {
-    fputs(JSON_NUMBER, stream); fputc(*p++, stream);
+    ant_output_stream_append_cstr(out, JSON_NUMBER); ant_output_stream_putc(out, *p++);
     while ((*p >= '0' && *p <= '9') || *p == '.' || *p == 'e' || *p == 'E' || *p == '+' || *p == '-')
-      fputc(*p++, stream);
-    fputs(C_RESET, stream);
+      ant_output_stream_putc(out, *p++);
+    ant_output_stream_append_cstr(out, C_RESET);
     goto next;
   }
-  fputc(*p++, stream); goto next;
+  ant_output_stream_putc(out, *p++); goto next;
 
 lt:
   if (memcmp(p, "<ref", 4) == 0) { EMIT_UNTIL('>', JSON_REF) }
@@ -278,19 +276,19 @@ lt:
   if (memcmp(p, "<rej", 4) == 0) { is_key = false; EMIT_UNTIL('>', C_CYAN) }
   
   if (p[1] == '>' || (isxdigit((unsigned char)p[1]) && isxdigit((unsigned char)p[2]))) {
-    fputs(JSON_BRACE, stream); fputc(*p++, stream);
-    fputs(JSON_WHITE, stream);
-    while (*p && *p != '>') fputc(*p++, stream);
-    fputs(C_RESET, stream);
-    if (*p == '>') { fputs(JSON_BRACE, stream); fputc(*p++, stream); fputs(C_RESET, stream); }
+    ant_output_stream_append_cstr(out, JSON_BRACE); ant_output_stream_putc(out, *p++);
+    ant_output_stream_append_cstr(out, JSON_WHITE);
+    while (*p && *p != '>') ant_output_stream_putc(out, *p++);
+    ant_output_stream_append_cstr(out, C_RESET);
+    if (*p == '>') { ant_output_stream_append_cstr(out, JSON_BRACE); ant_output_stream_putc(out, *p++); ant_output_stream_append_cstr(out, C_RESET); }
     goto next;
   }
   
-  fputs(JSON_BRACE, stream); fputc(*p++, stream); fputs(C_RESET, stream);
+  ant_output_stream_append_cstr(out, JSON_BRACE); ant_output_stream_putc(out, *p++); ant_output_stream_append_cstr(out, C_RESET);
   goto next;
 
 gt:
-  fputs(JSON_BRACE, stream); fputc(*p++, stream); fputs(C_RESET, stream);
+  ant_output_stream_append_cstr(out, JSON_BRACE); ant_output_stream_putc(out, *p++); ant_output_stream_append_cstr(out, C_RESET);
   goto next;
 
 alpha:
@@ -309,80 +307,133 @@ alpha:
 
 ident:
   if (is_key && brace_depth > 0) {
-    fputs(JSON_KEY, stream);
-    while (isalnum((unsigned char)*p) || *p == '_' || *p == '$') fputc(*p++, stream);
-    fputs(C_RESET, stream);
+    ant_output_stream_append_cstr(out, JSON_KEY);
+    while (isalnum((unsigned char)*p) || *p == '_' || *p == '$') ant_output_stream_putc(out, *p++);
+    ant_output_stream_append_cstr(out, C_RESET);
     goto next;
   }
-  fputc(*p++, stream); goto next;
+  ant_output_stream_putc(out, *p++); goto next;
 
 other:
   if (*p == '+') {
     int iso_len = io_iso_utc_token_len(p);
     if (iso_len > 0) {
-      fputs(C_MAGENTA, stream);
-      for (int k = 0; k < iso_len; k++) fputc(*p++, stream);
-      fputs(C_RESET, stream);
+      ant_output_stream_append_cstr(out, C_MAGENTA);
+      for (int k = 0; k < iso_len; k++) ant_output_stream_putc(out, *p++);
+      ant_output_stream_append_cstr(out, C_RESET);
       goto next;
     }
   }
-  fputc(*p++, stream); goto next;
+  ant_output_stream_putc(out, *p++); goto next;
 }
 
 #undef KEYWORD
 #undef EMIT_UNTIL
+#undef EMIT_TYPE
+
+void print_value_colored(const char *str, FILE *stream) {
+  ant_output_stream_t *out = ant_output_stream(stream);
+  ant_output_stream_begin(out);
+  print_value_colored_to_output(str, out);
+  ant_output_stream_flush(out);
+}
 
 void print_repl_value(ant_t *js, ant_value_t val, FILE *stream) {
+  ant_output_stream_t *out = ant_output_stream(stream);
+
   if (vtype(val) == T_STR) {
     char *str = js_getstr(js, val, NULL);
-    fprintf(stream, "%s'%s'%s\n", C(JSON_STRING), str ? str : "", C(C_RESET));
+    ant_output_stream_begin(out);
+    ant_output_stream_append_cstr(out, C(JSON_STRING));
+    ant_output_stream_putc(out, '\'');
+    ant_output_stream_append_cstr(out, str ? str : "");
+    ant_output_stream_putc(out, '\'');
+    ant_output_stream_append_cstr(out, C(C_RESET));
+    ant_output_stream_putc(out, '\n');
+    ant_output_stream_flush(out);
     return;
   }
 
   if (vtype(val) == T_OBJ && vtype(js_get_slot(val, SLOT_ERR_TYPE)) != T_UNDEF) {
-    const char *stack = get_str_prop(js, val, "stack", 5, NULL);
-    if (stack) { io_print(stack, stream); fputc('\n', stream); return; }
-  }
+  const char *stack = get_str_prop(js, val, "stack", 5, NULL);
+  
+  if (stack) {
+    ant_output_stream_begin(out);
+    io_print_to_output(stack, out);
+    ant_output_stream_putc(out, '\n');
+    ant_output_stream_flush(out);
+    return;
+  }}
 
   char cbuf[512];
   js_cstr_t cstr = js_to_cstr(js, val, cbuf, sizeof(cbuf));
 
-  if (vtype(val) == T_ERR) fprintf(stderr, "%s\n", cstr.ptr); else {
-    print_value_colored(cstr.ptr, stream);
-    fputc('\n', stream);
+  if (vtype(val) == T_ERR) {
+    ant_output_stream_t *err_out = ant_output_stream(stderr);
+    ant_output_stream_begin(err_out);
+    ant_output_stream_append_cstr(err_out, cstr.ptr);
+    ant_output_stream_putc(err_out, '\n');
+    ant_output_stream_flush(err_out);
+  } else {
+    ant_output_stream_begin(out);
+    print_value_colored_to_output(cstr.ptr, out);
+    ant_output_stream_putc(out, '\n');
+    ant_output_stream_flush(out);
   }
 
   if (cstr.needs_free) free((void *)cstr.ptr);
 }
 
 ant_value_t console_print(ant_t *js, ant_value_t *args, int nargs, const char *color, FILE *stream) {
-  if (color && !io_no_color) fputs(color, stream);
+  ant_output_stream_t *out = ant_output_stream(stream);
+  ant_output_stream_begin(out);
+  if (color && !io_no_color) ant_output_stream_append_cstr(out, color);
   
   for (int i = 0; i < nargs; i++) {
-    if (i) fputc(' ', stream);
-
+    if (i) ant_output_stream_putc(out, ' ');
     if (vtype(args[i]) == T_OBJ) {
       const char *stack = get_str_prop(js, args[i], "stack", 5, NULL);
-      if (stack) { io_print(stack, stream); continue; }
+      if (stack) { io_print_to_output(stack, out); continue; }
     }
-
+    
     char cbuf[512];
     js_cstr_t cstr = js_to_cstr(js, args[i], cbuf, sizeof(cbuf));
-
-    if (vtype(args[i]) == T_STR) io_print(cstr.ptr, stream); else {
-      if (color && !io_no_color) fputs(C_RESET, stream);
-      print_value_colored(cstr.ptr, stream);
-      if (color && !io_no_color) fputs(color, stream);
+    
+    if (vtype(args[i]) == T_STR) io_print_to_output(cstr.ptr, out); else {
+      if (color && !io_no_color) ant_output_stream_append_cstr(out, C_RESET);
+      print_value_colored_to_output(cstr.ptr, out);
+      if (color && !io_no_color) ant_output_stream_append_cstr(out, color);
     }
     
     if (cstr.needs_free) free((void *)cstr.ptr);
   }
   
-  if (color && !io_no_color) fputs(C_RESET, stream);
-  fputc('\n', stream);
+  if (color && !io_no_color) ant_output_stream_append_cstr(out, C_RESET);
+  ant_output_stream_putc(out, '\n');
+  ant_output_stream_flush(out);
   
   return js_mkundef();
 }
+
+static void console_write_args_to_output(ant_t *js, ant_output_stream_t *out, ant_value_t *args, int nargs) {
+for (int i = 0; i < nargs; i++) {
+  if (i) ant_output_stream_putc(out, ' ');
+  
+  if (vtype(args[i]) == T_OBJ) {
+  const char *stack = get_str_prop(js, args[i], "stack", 5, NULL);
+  if (stack) {
+    io_print_to_output(stack, out);
+    continue;
+  }}
+  
+  char cbuf[512];
+  js_cstr_t cstr = js_to_cstr(js, args[i], cbuf, sizeof(cbuf));
+  
+  if (vtype(args[i]) == T_STR) io_print_to_output(cstr.ptr, out);
+  else print_value_colored_to_output(cstr.ptr, out);
+  
+  if (cstr.needs_free) free((void *)cstr.ptr);
+}}
 
 static ant_value_t js_console_log(ant_t *js, ant_value_t *args, int nargs) {
   return console_print(js, args, nargs, NULL, stdout);
@@ -397,30 +448,45 @@ static ant_value_t js_console_warn(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t js_console_assert(ant_t *js, ant_value_t *args, int nargs) {
+  ant_output_stream_t *out = ant_output_stream(stderr);
+
   if (nargs < 1) return js_mkundef();
   
   bool is_truthy = js_truthy(js, args[0]);
   if (is_truthy) return js_mkundef();
   
-  fputs("Assertion failed", stderr);
+  ant_output_stream_begin(out);
+  ant_output_stream_append_cstr(out, "Assertion failed");
+  
   if (nargs > 1) {
-    fputs(": ", stderr);
-    console_print(js, args + 1, nargs - 1, NULL, stderr);
+    ant_output_stream_append_cstr(out, ": ");
+    console_write_args_to_output(js, out, args + 1, nargs - 1);
+    ant_output_stream_putc(out, '\n');
+    ant_output_stream_flush(out);
     return js_mkundef();
   }
   
-  fputc('\n', stderr);
+  ant_output_stream_putc(out, '\n');
+  ant_output_stream_flush(out);
+  
   return js_mkundef();
 }
 
 static ant_value_t js_console_trace(ant_t *js, ant_value_t *args, int nargs) {
-  fputs("Trace", stderr);
-  if (nargs > 0) {
-    fputs(": ", stderr);
-    console_print(js, args, nargs, NULL, stderr);
-  } else fputc('\n', stderr);
+  ant_output_stream_t *out = ant_output_stream(stderr);
+
+  ant_output_stream_begin(out);
+  ant_output_stream_append_cstr(out, "Trace");
   
+  if (nargs > 0) {
+    ant_output_stream_append_cstr(out, ": ");
+    console_write_args_to_output(js, out, args, nargs);
+    ant_output_stream_putc(out, '\n');
+  } else ant_output_stream_putc(out, '\n');
+  
+  ant_output_stream_flush(out);
   js_print_stack_trace_vm(js, stderr);
+  
   return js_mkundef();
 }
 
@@ -434,8 +500,10 @@ static ant_value_t js_console_debug(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t js_console_clear(ant_t *js, ant_value_t *args, int nargs) {
   if (!io_no_color) {
-    fprintf(stdout, "\033[2J\033[H");
-    fflush(stdout);
+    ant_output_stream_t *out = ant_output_stream(stdout);
+    ant_output_stream_begin(out);
+    ant_output_stream_append_cstr(out, "\033[2J\033[H");
+    ant_output_stream_flush(out);
   }
   return js_mkundef();
 }
@@ -450,11 +518,13 @@ static ant_value_t js_console_time(ant_t *js, ant_value_t *args, int nargs) {
   }
   
   for (int i = 0; i < console_timer_count; i++) {
-    if (strcmp(console_timers[i].label, label) == 0) {
-      fprintf(stderr, "Timer '%s' already exists\n", label);
-      return js_mkundef();
-    }
-  }
+  if (strcmp(console_timers[i].label, label) == 0) {
+    ant_output_stream_t *out = ant_output_stream(stderr);
+    ant_output_stream_begin(out);
+    ant_output_stream_appendf(out, "Timer '%s' already exists\n", label);
+    ant_output_stream_flush(out);
+    return js_mkundef();
+  }}
   
   if (console_timer_count < 64) {
     console_timers[console_timer_count].label = strdup(label);
@@ -472,19 +542,30 @@ static ant_value_t js_console_timeEnd(ant_t *js, ant_value_t *args, int nargs) {
   }
   
   for (int i = 0; i < console_timer_count; i++) {
-    if (strcmp(console_timers[i].label, label) == 0) {
-      double elapsed = ((double)uv_hrtime() / 1e6) - console_timers[i].start_time;
-      fprintf(stdout, "%s: %.3fms\n", label, elapsed);
-      free(console_timers[i].label);
-      for (int j = i; j < console_timer_count - 1; j++) {
-        console_timers[j] = console_timers[j + 1];
-      }
-      console_timer_count--;
-      return js_mkundef();
+  if (strcmp(console_timers[i].label, label) == 0) {
+    double elapsed = ((double)uv_hrtime() / 1e6) - console_timers[i].start_time;
+    ant_output_stream_t *out = ant_output_stream(stdout);
+    
+    ant_output_stream_begin(out);
+    ant_output_stream_appendf(out, "%s: %.3fms\n", label, elapsed);
+    ant_output_stream_flush(out);
+    free(console_timers[i].label);
+    
+    for (int j = i; j < console_timer_count - 1; j++) {
+      console_timers[j] = console_timers[j + 1];
     }
+    
+    console_timer_count--;
+    return js_mkundef();
+  }}
+  
+  {
+    ant_output_stream_t *out = ant_output_stream(stderr);
+    ant_output_stream_begin(out);
+    ant_output_stream_appendf(out, "Timer '%s' does not exist\n", label);
+    ant_output_stream_flush(out);
   }
   
-  fprintf(stderr, "Timer '%s' does not exist\n", label);
   return js_mkundef();
 }
 

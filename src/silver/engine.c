@@ -244,7 +244,7 @@ static inline ant_value_t sv_execute_entry_common(
   ant_value_t result = sv_execute_frame(vm, func, this_val, super_val, args, argc);
   if (out_this) *out_this = vm->frames[vm->fp].this;
 
-  vm->fp = saved_fp;
+  if (!vm->suspended) vm->fp = saved_fp;
 
   return result;
 }
@@ -268,34 +268,54 @@ ant_value_t sv_execute_closure_entry(
 
 ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant_value_t super_val, ant_value_t *args, int argc) {
   ant_t *js = vm->js;
-  uint8_t *ip = func->code;
-  int entry_fp = vm->fp;
+  bool resuming = vm->suspended && vm->suspended_resume_pending;
+  uint8_t *ip = resuming ? NULL : func->code;
+  
+  int entry_fp = resuming ? vm->suspended_entry_fp : vm->fp;
   ant_value_t vm_result = js_mkundef();
+  ant_value_t suspended_resume_value = js_mkundef();
+  
+  bool suspended_resume_is_error = false;
+  js->vm_exec_depth++;
 
   // TODO: shorthand?
   sv_frame_t *frame = &vm->frames[vm->fp];
-  frame->ip = ip;
-  frame->func = func;
-  frame->this = sv_normalize_this_for_frame(js, func, this);
-  frame->new_target = js->new_target;
-  frame->super_val = super_val;
-  frame->prev_sp = vm->sp;
-  frame->handler_base = vm->handler_depth;
-  frame->handler_top = vm->handler_depth;
-  frame->argc = argc;
-  frame->completion.kind = SV_COMPLETION_NONE;
-  frame->completion.value = js_mkundef();
-  frame->with_obj = js_mkundef();
+  if (!resuming) {
+    frame->ip = ip;
+    frame->func = func;
+    frame->this = sv_normalize_this_for_frame(js, func, this);
+    frame->new_target = js->new_target;
+    frame->super_val = super_val;
+    frame->prev_sp = vm->sp;
+    frame->handler_base = vm->handler_depth;
+    frame->handler_top = vm->handler_depth;
+    frame->argc = argc;
+    frame->completion.kind = SV_COMPLETION_NONE;
+    frame->completion.value = js_mkundef();
+    frame->with_obj = js_mkundef();
+  } else {
+    func = frame->func;
+    ip = frame->ip;
+    suspended_resume_value = vm->suspended_resume_value;
+    suspended_resume_is_error = vm->suspended_resume_is_error;
+    vm->suspended = false;
+    vm->suspended_resume_pending = false;
+    vm->suspended_resume_is_error = false;
+    vm->suspended_resume_value = js_mkundef();
+  }
   
   ant_value_t *entry_bp = NULL;
   ant_value_t *entry_lp = NULL;
+  
+  if (!resuming) {
   ant_value_t stage_err = sv_stage_frame_args(vm, js, func, args, argc, &entry_bp, &entry_lp);
   if (is_err(stage_err)) {
     vm_result = stage_err;
     goto sv_leave;
-  }
+  }}
+  
   #ifdef ANT_JIT
-  if (vm->jit_resume.active) {
+  if (!resuming && vm->jit_resume.active) {
     ip = func->code + vm->jit_resume.ip_offset;
     frame->ip = ip;
     int64_t rl = 
@@ -312,14 +332,17 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     }}
   }
   #endif
-  frame->bp = entry_bp;
-  frame->lp = entry_lp;
+  
+  if (!resuming) {
+    frame->bp = entry_bp;
+    frame->lp = entry_lp;
+  }
 
   ant_value_t *bp = frame->bp;
   ant_value_t *lp = frame->lp;
 
   #ifdef ANT_JIT
-  if (vm->jit_resume.active) {
+  if (!resuming && vm->jit_resume.active) {
     for (int64_t i = 0; i < vm->jit_resume.vstack_sp; i++)
       vm->stack[vm->sp++] = vm->jit_resume.vstack[i];
 
@@ -414,6 +437,13 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   #else
   #define JIT_OSR_BACK_EDGE() ((void)0)
   #endif
+  if (resuming) {
+    if (suspended_resume_is_error) {
+      sv_err = js_throw(js, suspended_resume_value);
+      goto sv_throw;
+    }
+    vm->stack[vm->sp++] = suspended_resume_value;
+  }
   DISPATCH();
 
   L_CONST:     { sv_op_const(vm, func, ip);   NEXT(5); }
@@ -1208,6 +1238,12 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_AWAIT: {
     ant_value_t await_val = vm->stack[--vm->sp];
     ant_value_t result = sv_await_value(js, await_val);
+    if (vm->suspended) {
+      vm->suspended_entry_fp = entry_fp;
+      vm->suspended_saved_fp = entry_fp - 1;
+      frame->ip = ip + 1;
+      goto sv_leave;
+    }
     if (is_err(result)) { sv_err = result; goto sv_throw; }
     vm->stack[vm->sp++] = result;
     NEXT(1);
@@ -1284,6 +1320,10 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   }
 
   sv_leave:
+  if (vm->suspended) {
+    if (js->vm_exec_depth > 0) js->vm_exec_depth--;
+    return vm_result;
+  }
   for (int f = vm->fp; f >= entry_fp; f--) {
     ant_value_t *drop_bp = vm->frames[f].bp;
     if (drop_bp) sv_close_upvalues_from_slot(vm, drop_bp);
@@ -1291,6 +1331,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   vm->fp = entry_fp;
   vm->sp = vm->frames[entry_fp].prev_sp;
   vm->handler_depth = vm->frames[entry_fp].handler_base;
+  if (js->vm_exec_depth > 0) js->vm_exec_depth--;
 
   return vm_result;
 
@@ -1302,4 +1343,23 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   //       and sv_op_size values
   (void)bp;
   (void)sv_op_size;
+}
+
+ant_value_t sv_resume_suspended(sv_vm_t *vm) {
+  if (!vm || !vm->suspended || !vm->suspended_resume_pending || vm->fp < 0)
+    return mkval(T_ERR, 0);
+
+  int saved_fp = vm->suspended_saved_fp;
+  sv_frame_t *frame = &vm->frames[vm->fp];
+  ant_value_t result = sv_execute_frame(
+    vm, frame->func, frame->this, frame->super_val, NULL, frame->argc
+  );
+
+  if (!vm->suspended) {
+    vm->fp = saved_fp;
+    vm->suspended_entry_fp = 0;
+    vm->suspended_saved_fp = -1;
+  }
+
+  return result;
 }

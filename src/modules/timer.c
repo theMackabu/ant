@@ -299,9 +299,14 @@ void queue_microtask(ant_t *js, ant_value_t callback) {
   }
 }
 
-void queue_promise_trigger(ant_value_t promise) {
+void queue_promise_trigger(ant_t *js, ant_value_t promise) {
+  if (!js_mark_promise_trigger_queued(js, promise)) return;
+
   microtask_entry_t *entry = ant_calloc(sizeof(microtask_entry_t));
-  if (entry == NULL) return;
+  if (entry == NULL) {
+    js_mark_promise_trigger_dequeued(js, promise);
+    return;
+  }
   
   entry->callback = js_mkundef();
   entry->promise = promise;
@@ -316,7 +321,12 @@ void queue_promise_trigger(ant_value_t promise) {
   }
 }
 
-void process_microtasks(ant_t *js) {
+static void process_microtasks_internal(ant_t *js, bool check_unhandled_rejections) {
+  if (!js || js->microtasks_draining) return;
+  js->microtasks_draining = true;
+
+  microtask_entry_t *batch_stop = timer_state.microtasks_tail;
+
   while (timer_state.microtasks != NULL) {
     microtask_entry_t *entry = timer_state.microtasks;
     timer_state.microtasks = entry->next;
@@ -324,11 +334,12 @@ void process_microtasks(ant_t *js) {
     if (timer_state.microtasks == NULL) {
       timer_state.microtasks_tail = NULL;
     }
-    
+
     if (vtype(entry->promise) == T_PROMISE) {
       GC_ROOT_SAVE(root_mark, js);
       ant_value_t promise = entry->promise;
       GC_ROOT_PIN(js, promise);
+      js_mark_promise_trigger_dequeued(js, promise);
       js_process_promise_handlers(js, promise);
       GC_ROOT_RESTORE(js, root_mark);
     } else {
@@ -340,10 +351,36 @@ void process_microtasks(ant_t *js) {
       GC_ROOT_RESTORE(js, root_mark);
     }
     
+    bool reached_batch_end = (entry == batch_stop);
     free(entry);
+    if (reached_batch_end) break;
   }
-  
-  js_check_unhandled_rejections(js);
+
+  if (check_unhandled_rejections) js_check_unhandled_rejections(js);
+  js->microtasks_draining = false;
+}
+
+void process_microtasks(ant_t *js) {
+  process_microtasks_internal(js, true);
+}
+
+bool js_maybe_drain_microtasks(ant_t *js) {
+  if (!js) return false;
+  if (js->microtasks_draining) return false;
+  if (js->vm_exec_depth != 0) return false;
+  if (!has_pending_microtasks()) return false;
+  process_microtasks_internal(js, true);
+  return true;
+}
+
+bool js_maybe_drain_microtasks_after_async_settle(ant_t *js) {
+  if (!js) return false;
+
+  if (js->microtasks_draining) return false;
+  if (!has_pending_microtasks()) return false;
+
+  process_microtasks_internal(js, false);
+  return true;
 }
 
 void process_immediates(ant_t *js) {

@@ -90,6 +90,7 @@ typedef struct sv_compiler {
   int param_count;
   
   bool is_arrow;
+  bool is_async;
   bool is_strict;
   sv_compile_mode_t mode;
   
@@ -2631,6 +2632,13 @@ static void compile_tail_return_expr(sv_compiler_t *c, sv_ast_t *expr) {
     return;
   }
 
+  if (expr->type == N_AWAIT && c->is_async && c->try_depth == 0 && !c->is_tla) {
+    compile_expr(c, expr->right);
+    emit_close_upvals(c);
+    emit_op(c, OP_RETURN);
+    return;
+  }
+
   if (is_tail_callable(c, expr)) {
     compile_tail_call(c, expr);
     return;
@@ -4053,6 +4061,7 @@ static sv_func_t *compile_function_body(
   comp.enclosing = enclosing;
   comp.scope_depth = 0;
   comp.is_arrow = !!(node->flags & FN_ARROW);
+  comp.is_async = !!(node->flags & FN_ASYNC);
   comp.is_strict = enclosing->is_strict;
   comp.mode = mode;
   comp.strict_args_local = -1;
@@ -4428,6 +4437,7 @@ static sv_func_t *compile_function_body(
   func->is_arrow = comp.is_arrow;
   
   func->is_async = !!(node->flags & FN_ASYNC);
+  func->has_await = false;
   func->is_generator = !!(node->flags & FN_GENERATOR);
   func->is_method = !!(node->flags & FN_METHOD);
   func->is_tla = comp.is_tla;
@@ -4443,6 +4453,21 @@ static sv_func_t *compile_function_body(
     memcpy(name, enclosing->inferred_name, enclosing->inferred_name_len);
     name[enclosing->inferred_name_len] = '\0';
     func->name = name;
+  }
+
+  if (func->is_async) {
+    const uint8_t *ip = func->code;
+    const uint8_t *end = func->code + func->code_len;
+    while (ip < end) {
+      sv_op_t op = (sv_op_t)*ip;
+      if (op == OP_AWAIT || op == OP_FOR_AWAIT_OF || op == OP_AWAIT_ITER_NEXT) {
+        func->has_await = true;
+        break;
+      }
+      int sz = sv_op_size[op];
+      if (sz <= 0) break;
+      ip += sz;
+    }
   }
 
   free(comp.code);

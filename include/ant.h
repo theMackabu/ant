@@ -153,11 +153,13 @@ void *js_gettypedarray(ant_value_t val);
 ant_value_t js_mkffi(unsigned int index);
 int js_getffi(ant_value_t val);
 
-void js_resolve_promise(ant_t *js, ant_value_t promise, ant_value_t value);
-void js_reject_promise(ant_t *js, ant_value_t promise, ant_value_t value);
 void js_check_unhandled_rejections(ant_t *js);
-void js_process_promise_handlers(ant_t *js, ant_value_t promise);
 void js_setup_import_meta(ant_t *js, const char *filename);
+void js_process_promise_handlers(ant_t *js, ant_value_t promise);
+void js_mark_promise_trigger_dequeued(ant_t *js, ant_value_t promise);
+bool js_mark_promise_trigger_queued(ant_t *js, ant_value_t promise);
+void js_reject_promise(ant_t *js, ant_value_t promise, ant_value_t value);
+void js_resolve_promise(ant_t *js, ant_value_t promise, ant_value_t value);
 
 typedef ant_value_t (*js_getter_fn)(ant_t *js, ant_value_t obj, const char *key, size_t key_len);
 typedef ant_value_t (*js_keys_fn)(ant_t *js, ant_value_t obj);

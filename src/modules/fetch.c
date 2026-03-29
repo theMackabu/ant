@@ -61,10 +61,13 @@ static void remove_pending_request(fetch_request_t *req) {
 }
 
 static void destroy_fetch_request(fetch_request_t *req) {
-  if (!req) return;
+  ant_value_t signal = 0;
 
-  if (abort_signal_is_signal(request_get_signal(req->request_obj)) && is_callable(req->abort_listener))
-    abort_signal_remove_listener(req->js, request_get_signal(req->request_obj), req->abort_listener);
+  if (!req) return;
+  signal = request_get_signal(req->js, req->request_obj);
+
+  if (abort_signal_is_signal(signal) && is_callable(req->abort_listener))
+    abort_signal_remove_listener(req->js, signal, req->abort_listener);
 
   remove_pending_request(req);
   free(req);
@@ -348,7 +351,7 @@ static void fetch_http_on_body(ant_http_request_t *http_req, const uint8_t *chun
 
 static ant_value_t fetch_transport_reason(fetch_request_t *req, ant_http_result_t result, const char *error_message) {
   if (result == ANT_HTTP_RESULT_ABORTED && req->aborted) {
-    ant_value_t signal = request_get_signal(req->request_obj);
+    ant_value_t signal = request_get_signal(req->js, req->request_obj);
     return abort_signal_get_reason(signal);
   }
 
@@ -632,7 +635,7 @@ static ant_value_t fetch_abort_listener(ant_t *js, ant_value_t *args, int nargs)
 
   if (!req || req->aborted) return js_mkundef();
   req->aborted = true;
-  signal = request_get_signal(req->request_obj);
+  signal = request_get_signal(js, req->request_obj);
   reason = abort_signal_get_reason(signal);
 
   if (req->http_req) ant_http_request_cancel(req->http_req);
@@ -679,14 +682,14 @@ static ant_value_t js_fetch(ant_t *js, ant_value_t *args, int nargs) {
   req->refs = 1;
   utarray_push_back(pending_requests, &req);
 
-  signal = request_get_signal(request_obj);
+  signal = request_get_signal(js, request_obj);
   if (abort_signal_is_signal(signal)) {
     if (abort_signal_is_aborted(signal)) {
       fetch_reject(req, abort_signal_get_reason(signal));
       fetch_request_release(req);
       return promise;
     }
-
+    
     req->abort_listener = js_heavy_mkfun(js, fetch_abort_listener, ANT_PTR(req));
     abort_signal_add_listener(js, signal, req->abort_listener);
   }

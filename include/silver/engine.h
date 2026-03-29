@@ -6,11 +6,13 @@
 #include "runtime.h"
 #include "errors.h"
 #include "gc/objects.h"
+#include "modules/timer.h"
 
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 typedef enum {
 #define OP_DEF(name, size, n_pop, n_push, f) OP_##name,
@@ -149,6 +151,7 @@ struct sv_func {
   bool is_strict;
   bool is_arrow;
   bool is_async;
+  bool has_await;
   bool is_generator;
   bool is_method;
   bool is_tla;
@@ -326,6 +329,15 @@ struct sv_vm {
   sv_handler_t handler_stack[SV_HANDLER_MAX];
   sv_upvalue_t *open_upvalues;
   int handler_depth;
+  
+  // TODO: move to nested struct
+  bool suspended;
+  bool suspended_resume_pending;
+  bool suspended_resume_is_error;
+  
+  int suspended_entry_fp;
+  int suspended_saved_fp;
+  ant_value_t suspended_resume_value;
 
 #ifdef ANT_JIT
   struct {
@@ -435,6 +447,11 @@ static inline ant_value_t sv_vm_call(
   ant_value_t this_val, ant_value_t *args, int argc,
   ant_value_t *out_this, bool is_construct_call
 );
+
+static inline void sv_vm_maybe_checkpoint_microtasks(ant_t *js) {
+  if (!js || js->microtasks_draining || js->vm_exec_depth != 0) return;
+  js_maybe_drain_microtasks(js);
+}
 
 typedef struct {
   ant_value_t  this_val;
@@ -816,21 +833,33 @@ static inline ant_value_t sv_vm_call(
   if (!is_construct_call) js->new_target = js_mkundef();
   if (out_this) *out_this = this_val;
 
-  if (is_construct_call && vtype(func) == T_OBJ && is_proxy(func))
-    return js_proxy_construct(js, func, args, argc, sv_vm_get_new_target(vm, js));
+  if (is_construct_call && vtype(func) == T_OBJ && is_proxy(func)) {
+    ant_value_t result = js_proxy_construct(js, func, args, argc, sv_vm_get_new_target(vm, js));
+    sv_vm_maybe_checkpoint_microtasks(js);
+    return result;
+  }
+  
   if (is_construct_call && !js_is_constructor(js, func))
     return js_mkerr_typed(js, JS_ERR_TYPE, "not a constructor");
 
-  if (!is_construct_call && vtype(func) == T_OBJ && is_proxy(func))
-    return js_proxy_apply(js, func, this_val, args, argc);
+  if (!is_construct_call && vtype(func) == T_OBJ && is_proxy(func)) {
+    ant_value_t result = js_proxy_apply(js, func, this_val, args, argc);
+    sv_vm_maybe_checkpoint_microtasks(js);
+    return result;
+  }
 
   if (vtype(func) == T_CFUNC) {
     ant_value_t cfunc_this = sv_is_nullish_this(this_val) ? js->global : this_val;
-    return sv_call_cfunc(js, func, cfunc_this, args, argc);
+    ant_value_t result = sv_call_cfunc(js, func, cfunc_this, args, argc);
+    sv_vm_maybe_checkpoint_microtasks(js);
+    return result;
   }
 
-  if (vtype(func) != T_FUNC)
-    return sv_call_native(js, func, this_val, args, argc);
+  if (vtype(func) != T_FUNC) {
+    ant_value_t result = sv_call_native(js, func, this_val, args, argc);
+    sv_vm_maybe_checkpoint_microtasks(js);
+    return result;
+  }
 
   sv_closure_t *closure = js_func_closure(func);
 
@@ -845,14 +874,21 @@ static inline ant_value_t sv_vm_call(
   if (is_construct_call) ctx.this_val = this_val;
   if (out_this) *out_this = ctx.this_val;
 
-  if (closure->call_flags & SV_CALL_IS_DEFAULT_CTOR)
-    return sv_call_default_ctor(vm, js, closure, &ctx, out_this);
+  if (closure->call_flags & SV_CALL_IS_DEFAULT_CTOR) {
+    ant_value_t result = sv_call_default_ctor(vm, js, closure, &ctx, out_this);
+    sv_vm_maybe_checkpoint_microtasks(js);
+    return result;
+  }
 
-  if (closure->func != NULL)
-    return sv_call_resolve_closure(vm, js, closure, func, &ctx, out_this);
+  if (closure->func != NULL) {
+    ant_value_t result = sv_call_resolve_closure(vm, js, closure, func, &ctx, out_this);
+    sv_vm_maybe_checkpoint_microtasks(js);
+    return result;
+  }
 
   ant_value_t result = sv_call_native(js, func, ctx.this_val, ctx.args, ctx.argc);
   sv_call_cleanup(js, &ctx);
+  sv_vm_maybe_checkpoint_microtasks(js);
   
   return result;
 }

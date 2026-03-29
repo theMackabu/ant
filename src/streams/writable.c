@@ -203,11 +203,7 @@ static void ws_chain_promise(ant_t *js, ant_value_t val, ant_value_t res_fn, ant
     js_resolve_promise(js, promise, val);
   }
 
-  ant_value_t then_fn = js_get(js, promise, "then");
-  if (!is_callable(then_fn)) return;
-
-  ant_value_t then_args[2] = { res_fn, rej_fn };
-  ant_value_t then_result = sv_vm_call(js->vm, js, then_fn, promise, then_args, 2, NULL, false);
+  ant_value_t then_result = js_promise_then(js, promise, res_fn, rej_fn);
   promise_mark_handled(then_result);
 }
 
@@ -1208,11 +1204,7 @@ static ant_value_t js_ws_ctor(ant_t *js, ant_value_t *args, int nargs) {
     if (vtype(start_result) == T_PROMISE) {
       ant_value_t resolve_fn = js_heavy_mkfun(js, ws_start_resolve_handler, ctrl_obj);
       ant_value_t reject_fn = js_heavy_mkfun(js, ws_start_reject_handler, ctrl_obj);
-      ant_value_t then_fn = js_get(js, start_result, "then");
-      if (is_callable(then_fn)) {
-        ant_value_t then_args[2] = { resolve_fn, reject_fn };
-        sv_vm_call(js->vm, js, then_fn, start_result, then_args, 2, NULL, false);
-      }
+      js_promise_then(js, start_result, resolve_fn, reject_fn);
     }
 
     if (vtype(start_result) != T_PROMISE) {
@@ -1220,22 +1212,14 @@ static ant_value_t js_ws_ctor(ant_t *js, ant_value_t *args, int nargs) {
       js_resolve_promise(js, resolved, js_mkundef());
       ant_value_t res_fn = js_heavy_mkfun(js, ws_start_resolve_handler, ctrl_obj);
       ant_value_t rej_fn = js_heavy_mkfun(js, ws_start_reject_handler, ctrl_obj);
-      ant_value_t then_fn = js_get(js, resolved, "then");
-      if (is_callable(then_fn)) {
-        ant_value_t then_args[2] = { res_fn, rej_fn };
-        sv_vm_call(js->vm, js, then_fn, resolved, then_args, 2, NULL, false);
-      }
+      js_promise_then(js, resolved, res_fn, rej_fn);
     }
   } else {
     ant_value_t resolved = js_mkpromise(js);
     js_resolve_promise(js, resolved, js_mkundef());
     ant_value_t res_fn = js_heavy_mkfun(js, ws_start_resolve_handler, ctrl_obj);
     ant_value_t rej_fn = js_heavy_mkfun(js, ws_start_reject_handler, ctrl_obj);
-    ant_value_t then_fn = js_get(js, resolved, "then");
-    if (is_callable(then_fn)) {
-      ant_value_t then_args[2] = { res_fn, rej_fn };
-      sv_vm_call(js->vm, js, then_fn, resolved, then_args, 2, NULL, false);
-    }
+    js_promise_then(js, resolved, res_fn, rej_fn);
   }
 
   return obj;

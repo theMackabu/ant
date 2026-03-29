@@ -4,6 +4,7 @@
 #include "ant.h"
 #include "object.h"
 #include "pool.h"
+#include "sugar.h"
 #include "arena.h"
 #include "descriptors.h"
 #include "esm/loader.h"
@@ -208,6 +209,10 @@ struct ant_isolate_t {
   #ifdef ANT_JIT
   uint32_t jit_active_depth;
   #endif
+
+  uint32_t vm_exec_depth;
+  bool microtasks_draining;
+  struct coroutine *active_async_coro;
 
   struct {
     ant_value_t *items;

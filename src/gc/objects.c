@@ -121,14 +121,30 @@ void gc_remember_add(ant_t *js, ant_object_t *obj) {
   js->remember_set[js->remember_set_len++] = obj;
 }
 
-typedef struct {
-  ant_value_t onFulfilled;
-  ant_value_t onRejected;
-  ant_value_t nextPromise;
-} promise_handler_t;
-
 #define GC_MARK_STACK_INIT 4096
 void gc_mark_value(ant_t *js, ant_value_t v);
+
+static inline void gc_mark_promise_handler(ant_t *js, const promise_handler_t *h) {
+  if (!h) return;
+  gc_mark_value(js, h->onFulfilled);
+  gc_mark_value(js, h->onRejected);
+  gc_mark_value(js, h->nextPromise);
+}
+
+static inline void gc_mark_promise_handlers(ant_t *js, ant_promise_state_t *pd) {
+  if (!pd) return;
+
+  if (pd->handler_count == 1) {
+    gc_mark_promise_handler(js, &pd->inline_handler);
+    return;
+  }
+
+  if (pd->handler_count <= 1 || !pd->handlers) return;
+
+  promise_handler_t *h = NULL;
+  while ((h = (promise_handler_t *)utarray_next(pd->handlers, h)))
+    gc_mark_promise_handler(js, h);
+}
 
 static ant_object_t **gc_mark_stack = NULL;
 static size_t gc_mark_sp   = 0;
@@ -250,15 +266,14 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
   }
 
   if (obj->shape) {
-    uint32_t count = ant_shape_count(obj->shape);
-    for (uint32_t i = 0; i < count && i < obj->prop_count; i++)
-      gc_mark_value(js, ant_object_prop_get_unchecked(obj, i));
-    for (uint32_t i = 0; i < count; i++) {
-      const ant_shape_prop_t *prop = ant_shape_prop_at(obj->shape, i);
-      if (prop && prop->has_getter) gc_mark_value(js, prop->getter);
-      if (prop && prop->has_setter) gc_mark_value(js, prop->setter);
-    }
-  }
+  uint32_t count = ant_shape_count(obj->shape);
+  for (uint32_t i = 0; i < count && i < obj->prop_count; i++)
+    gc_mark_value(js, ant_object_prop_get_unchecked(obj, i));
+  for (uint32_t i = 0; i < count; i++) {
+    const ant_shape_prop_t *prop = ant_shape_prop_at(obj->shape, i);
+    if (prop && prop->has_getter) gc_mark_value(js, prop->getter);
+    if (prop && prop->has_setter) gc_mark_value(js, prop->setter);
+  }}
 
   if (obj->extra_slots) {
     ant_extra_slot_t *entries = (ant_extra_slot_t *)obj->extra_slots;
@@ -270,16 +285,11 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
     for (uint32_t i = 0; i < n; i++) gc_mark_value(js, obj->u.array.data[i]);
   }
 
-  if (obj->promise_state) {
-    gc_mark_value(js, obj->promise_state->value);
-    gc_mark_value(js, obj->promise_state->trigger_parent);
-    if (obj->promise_state->handlers) {
-    promise_handler_t *h = NULL;
-    while ((h = (promise_handler_t *)utarray_next(obj->promise_state->handlers, h))) {
-      gc_mark_value(js, h->onFulfilled);
-      gc_mark_value(js, h->onRejected);
-      gc_mark_value(js, h->nextPromise);
-    }}
+  ant_promise_state_t *pd = obj->promise_state;
+  if (pd) {
+    gc_mark_value(js, pd->value);
+    gc_mark_value(js, pd->trigger_parent);
+    gc_mark_promise_handlers(js, pd);
   }
 
   if (obj->proxy_state) {
@@ -404,20 +414,24 @@ static void gc_scan_other_stacks(ant_t *js) {
   }
 }
 
+static void gc_mark_coroutine(ant_t *js, coroutine_t *c) {
+  if (!c) return;
+  gc_scan_vm_stack(js, c->sv_vm);
+  gc_mark_value(js, c->this_val);
+  gc_mark_value(js, c->async_func);
+  gc_mark_value(js, c->async_promise);
+  gc_mark_value(js, c->awaited_promise);
+  gc_mark_value(js, c->result);
+  gc_mark_value(js, c->yield_value);
+  gc_mark_value(js, c->super_val);
+  gc_mark_value(js, c->new_target);
+}
+
 static void gc_mark_roots(ant_t *js) {
   gc_scan_vm_stack(js, js->vm);
 
-  for (coroutine_t *c = pending_coroutines.head; c; c = c->next) {
-    gc_scan_vm_stack(js, c->sv_vm);
-    gc_mark_value(js, c->this_val);
-    gc_mark_value(js, c->async_func);
-    gc_mark_value(js, c->async_promise);
-    gc_mark_value(js, c->awaited_promise);
-    gc_mark_value(js, c->result);
-    gc_mark_value(js, c->yield_value);
-    gc_mark_value(js, c->super_val);
-    gc_mark_value(js, c->new_target);
-  }
+  for (coroutine_t *c = pending_coroutines.head; c; c = c->next) gc_mark_coroutine(js, c);
+  for (coroutine_t *c = js->active_async_coro; c; c = c->active_parent) gc_mark_coroutine(js, c);
 
   gc_mark_value(js, js->global);
   gc_mark_value(js, js->object);

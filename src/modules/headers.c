@@ -370,20 +370,7 @@ static void free_sorted_view(sorted_pair_t *v, size_t n) {
   free(v);
 }
 
-static ant_value_t headers_append_pair(ant_t *js, hdr_list_t *l, ant_value_t name_v, ant_value_t value_v) {
-  if (vtype(name_v) != T_STR) {
-    name_v = js_tostring_val(js, name_v);
-    if (is_err(name_v)) return name_v;
-  }
-  
-  if (vtype(value_v) != T_STR) {
-    value_v = js_tostring_val(js, value_v);
-    if (is_err(value_v)) return value_v;
-  }
-
-  const char *name  = js_getstr(js, name_v, NULL);
-  const char *value = js_getstr(js, value_v, NULL);
-
+static ant_value_t headers_append_name_value(ant_t *js, hdr_list_t *l, const char *name, const char *value) {
   if (!is_valid_name(name))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid header name: %s", name ? name : "");
 
@@ -402,12 +389,48 @@ static ant_value_t headers_append_pair(ant_t *js, hdr_list_t *l, ant_value_t nam
   return js_mkundef();
 }
 
+static ant_value_t headers_append_pair(ant_t *js, hdr_list_t *l, ant_value_t name_v, ant_value_t value_v) {
+  const char *name = NULL;
+  const char *value = NULL;
+
+  if (vtype(name_v) != T_STR) {
+    name_v = js_tostring_val(js, name_v);
+    if (is_err(name_v)) return name_v;
+  }
+  
+  if (vtype(value_v) != T_STR) {
+    value_v = js_tostring_val(js, value_v);
+    if (is_err(value_v)) return value_v;
+  }
+
+  name = js_getstr(js, name_v, NULL);
+  value = js_getstr(js, value_v, NULL);
+  return headers_append_name_value(js, l, name, value);
+}
+
 ant_value_t headers_append_value(ant_t *js, ant_value_t hdrs, ant_value_t name_v, ant_value_t value_v) {
   hdr_list_t *l = get_list(hdrs);
+  ant_value_t r = 0;
+
   if (!l) return js_mkerr(js, "Invalid Headers object");
-  ant_value_t r = headers_append_pair(js, l, name_v, value_v);
+  r = headers_append_pair(js, l, name_v, value_v);
+  
   if (is_err(r)) return r;
   list_apply_guard(l, get_guard(hdrs));
+  
+  return js_mkundef();
+}
+
+ant_value_t headers_append_literal(ant_t *js, ant_value_t hdrs, const char *name, const char *value) {
+  hdr_list_t *l = get_list(hdrs);
+  ant_value_t r = 0;
+
+  if (!l) return js_mkerr(js, "Invalid Headers object");
+  r = headers_append_name_value(js, l, name, value);
+  
+  if (is_err(r)) return r;
+  list_apply_guard(l, get_guard(hdrs));
+  
   return js_mkundef();
 }
 

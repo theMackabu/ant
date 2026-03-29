@@ -33,7 +33,13 @@ void init_request_module(void);
 
 request_data_t *request_get_data(ant_value_t obj);
 ant_value_t request_get_headers(ant_value_t obj);
-ant_value_t request_get_signal(ant_value_t obj);
+ant_value_t request_get_signal(ant_t *js, ant_value_t obj);
+
+ant_value_t request_create_from_input_init(
+  ant_t *js,
+  ant_value_t input,
+  ant_value_t init
+);
 
 ant_value_t request_create(
   ant_t *js,
@@ -45,10 +51,18 @@ ant_value_t request_create(
   const char *body_type
 );
 
-ant_value_t request_create_from_input_init(
+ant_value_t request_create_server(
   ant_t *js,
-  ant_value_t input,
-  ant_value_t init
+  const char *method,
+  const char *target,
+  bool absolute_target,
+  const char *host,
+  const char *server_hostname,
+  int server_port,
+  ant_value_t headers,
+  const uint8_t *body,
+  size_t body_len,
+  const char *body_type
 );
 
 #endif

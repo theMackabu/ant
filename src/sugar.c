@@ -1,5 +1,7 @@
 #include "internal.h"
 #include "sugar.h"
+#include "modules/timer.h"
+#include "silver/engine.h"
 #include "silver/vm.h"
 
 #define MCO_USE_VMEM_ALLOCATOR
@@ -55,7 +57,6 @@ void free_coroutine(coroutine_t *coro) {
   if (!coro) return;
   
   if (coro->mco) {
-    if (mco_running() == coro->mco) fprintf(stderr, "WARNING: Attempting to free a running coroutine\n");
     void *ctx = mco_get_user_data(coro->mco);
     if (ctx) CORO_FREE(ctx);
     mco_destroy(coro->mco);
@@ -90,13 +91,50 @@ static inline void settle_coroutine(coroutine_t *coro, ant_value_t *args, int na
 }
 
 static void resume_coroutine_if_suspended(ant_t *js, coroutine_t *coro) {
-  if (!coro || !coro->mco || mco_status(coro->mco) != MCO_SUSPENDED) return;
+  if (!coro) return;
+
+  if (!coro->mco) {
+    if (!coro->sv_vm || !coro->sv_vm->suspended) return;
+    
+    coro->is_ready = false;
+    coro->sv_vm->suspended_resume_value = coro->result;
+    coro->sv_vm->suspended_resume_is_error = coro->is_error;
+    coro->sv_vm->suspended_resume_pending = true;
+    
+    coro->active_parent = js->active_async_coro;
+    js->active_async_coro = coro;
+    ant_value_t result = sv_resume_suspended(coro->sv_vm);
+    
+    js->active_async_coro = coro->active_parent;
+    coro->active_parent = NULL;
+    
+    coro->is_settled = false;
+    coro->awaited_promise = js_mkundef();
+    if (coro->sv_vm->suspended) return;
+    remove_coroutine(coro);
+    
+    if (is_err(result)) {
+      ant_value_t reject_value = js->thrown_value;
+      if (vtype(reject_value) == T_UNDEF) reject_value = result;
+      js->thrown_exists = false;
+      js->thrown_value = js_mkundef();
+      js_reject_promise(js, coro->async_promise, reject_value);
+    } else js_resolve_promise(js, coro->async_promise, result);
+    
+    js_maybe_drain_microtasks_after_async_settle(js);
+    free_coroutine(coro);
+    
+    return;
+  }
+
+  if (mco_status(coro->mco) != MCO_SUSPENDED) return;
 
   coro->is_ready = false;
   mco_result res;
   MCO_RESUME_SAVE(js, coro->mco, res);
+  mco_state status = mco_status(coro->mco);
 
-  if (res != MCO_SUCCESS || mco_status(coro->mco) == MCO_DEAD) {
+  if (res != MCO_SUCCESS || status == MCO_DEAD) {
     remove_coroutine(coro);
     free_coroutine(coro);
   }
@@ -129,4 +167,11 @@ ant_value_t reject_coroutine_wrapper(ant_t *js, ant_value_t *args, int nargs) {
   resume_coroutine_if_suspended(js, coro);
 
   return js_mkundef();
+}
+
+void settle_and_resume_coroutine(ant_t *js, coroutine_t *coro, ant_value_t value, bool is_error) {
+  if (!coro) return;
+  ant_value_t args[1] = { value };
+  settle_coroutine(coro, args, 1, is_error);
+  resume_coroutine_if_suspended(js, coro);
 }

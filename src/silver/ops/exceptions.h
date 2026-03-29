@@ -150,13 +150,12 @@ static inline uint8_t *sv_vm_throw(sv_vm_t *vm, ant_value_t err, int min_fp) {
       }
 
       ant_value_t caught = err;
-      if (vtype(err) == T_ERR && js->thrown_exists &&
-          vtype(js->thrown_value) != T_UNDEF) {
+      if (vtype(err) == T_ERR && js->thrown_exists) {
         caught = js->thrown_value;
         js->thrown_value = js_mkundef();
         js->thrown_exists = false;
       }
-
+      
       vm->sp = h->saved_sp;
       vm->fp = f;
       vm->frames[f].completion.kind = SV_COMPLETION_THROW;

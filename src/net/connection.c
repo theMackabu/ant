@@ -110,8 +110,7 @@ static void ant_conn_timeout_cb(uv_timer_t *handle) {
 
 static void ant_conn_restart_timer(ant_conn_t *conn) {
   if (!conn || conn->closing) return;
-  uv_timer_stop(&conn->timer);
-  if (conn->timeout_ms == 0) return;
+  if (conn->timeout_ms == 0) { uv_timer_stop(&conn->timer); return; }
   uv_timer_start(&conn->timer, ant_conn_timeout_cb, conn->timeout_ms, 0);
 }
 

@@ -37,6 +37,7 @@ ant_value_t headers_create_empty(ant_t *js);
 ant_value_t headers_create_from_init(ant_t *js, ant_value_t init);
 ant_value_t headers_get_value(ant_t *js, ant_value_t hdrs, const char *name);
 ant_value_t headers_append_value(ant_t *js, ant_value_t hdrs, ant_value_t name_v, ant_value_t value_v);
+ant_value_t headers_append_literal(ant_t *js, ant_value_t hdrs, const char *name, const char *value);
 
 headers_guard_t headers_get_guard(ant_value_t hdrs);
 

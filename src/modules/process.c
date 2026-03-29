@@ -29,6 +29,7 @@
 
 #include "ant.h"
 #include "errors.h"
+#include "output.h"
 #include "utils.h"
 #include "internal.h"
 #include "descriptors.h"
@@ -800,10 +801,15 @@ static ant_value_t js_stdout_write(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_false;
   size_t len = 0;
   char *data = js_getstr(js, args[0], &len);
+  
+  ant_output_stream_t *out = NULL;
   if (!data) return js_false;
-  fwrite(data, 1, len, stdout);
-  fflush(stdout);
-  return js_true;
+  
+  out = ant_output_stream(stdout);
+  ant_output_stream_begin(out);
+  
+  if (!ant_output_stream_append(out, data, len)) return js_false;
+  return ant_output_stream_flush(out) ? js_true : js_false;
 }
 
 static ant_value_t js_stdout_on(ant_t *js, ant_value_t *args, int nargs) {
@@ -900,16 +906,19 @@ static ant_value_t js_stdout_columns_getter(ant_t *js, ant_value_t *args, int na
   return js_mknum(cols);
 }
 
-
-
 static ant_value_t js_stderr_write(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_false;
   size_t len = 0;
   char *data = js_getstr(js, args[0], &len);
+  
+  ant_output_stream_t *out = NULL;
   if (!data) return js_false;
-  fwrite(data, 1, len, stderr);
-  fflush(stderr);
-  return js_true;
+  
+  out = ant_output_stream(stderr);
+  ant_output_stream_begin(out);
+  
+  if (!ant_output_stream_append(out, data, len)) return js_false;
+  return ant_output_stream_flush(out) ? js_true : js_false;
 }
 
 static ant_value_t js_stderr_on(ant_t *js, ant_value_t *args, int nargs) {

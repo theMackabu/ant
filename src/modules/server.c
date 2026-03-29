@@ -27,8 +27,9 @@
 #include "modules/response.h"
 #include "modules/server.h"
 
-typedef struct server_runtime_s server_runtime_t;
-typedef struct server_request_s server_request_t;
+typedef struct server_runtime_s    server_runtime_t;
+typedef struct server_request_s    server_request_t;
+typedef struct server_conn_state_s server_conn_state_t;
 
 static server_runtime_t *g_server = NULL;
 
@@ -41,6 +42,7 @@ typedef enum {
   SERVER_WRITE_NONE = 0,
   SERVER_WRITE_CLOSE_CLIENT,
   SERVER_WRITE_STREAM_READ,
+  SERVER_WRITE_KEEP_ALIVE,
 } server_write_action_t;
 
 typedef struct {
@@ -51,31 +53,55 @@ typedef struct {
 
 struct server_request_s {
   server_runtime_t *server;
+  server_conn_state_t *conn_state;
   ant_conn_t *conn;
+  
   ant_value_t request_obj;
   ant_value_t response_obj;
   ant_value_t response_promise;
   ant_value_t response_reader;
   ant_value_t response_read_promise;
-  int refs;
-  bool response_started;
+  
   struct server_request_s *next;
+  size_t consumed_len;
+  
+  int refs;
+  bool keep_alive;
+  bool response_started;
+};
+
+struct server_conn_state_s {
+  server_runtime_t *server;
+  ant_conn_t *conn;
+  
+  ant_http1_conn_parser_t parser;
+  uv_timer_t drain_timer;
+  server_request_t request;
+  server_request_t *active_req;
+  
+  bool drain_timer_closed;
+  bool drain_scheduled;
 };
 
 struct server_runtime_s {
   ant_t *js;
+  
   ant_value_t export_obj;
   ant_value_t fetch_fn;
   ant_value_t server_ctx;
   uv_loop_t *loop;
+  
   ant_listener_t listener;
   uv_signal_t sigint_handle;
   uv_signal_t sigterm_handle;
   stop_waiter_t *stop_waiters;
   server_request_t *requests;
+  
   char *hostname;
+  uint64_t request_timeout_ms;
+  uint64_t idle_timeout_ms;
+  
   int port;
-  int idle_timeout_secs;
   bool sigint_closed;
   bool sigterm_closed;
   bool stopping;
@@ -136,13 +162,42 @@ static void server_remove_request(server_runtime_t *server, server_request_t *re
   }}
 }
 
+static void server_request_reset(server_request_t *req) {
+  server_runtime_t *server = NULL;
+  server_conn_state_t *conn_state = NULL;
+
+  if (!req) return;
+  server = req->server;
+  conn_state = req->conn_state;
+  
+  *req = (server_request_t){
+    .server = server,
+    .conn_state = conn_state,
+    .conn = conn_state ? conn_state->conn : NULL,
+    .request_obj = js_mkundef(),
+    .response_obj = js_mkundef(),
+    .response_promise = js_mkundef(),
+    .response_reader = js_mkundef(),
+    .response_read_promise = js_mkundef(),
+  };
+}
+
+static void server_conn_state_maybe_free(server_conn_state_t *cs) {
+  if (!cs) return;
+  if (cs->conn) return;
+  if (cs->active_req) return;
+  if (cs->request.refs > 0) return;
+  if (!cs->drain_timer_closed) return;
+  free(cs);
+}
 
 static void server_request_release(server_request_t *req) {
   if (!req) return;
   if (--req->refs > 0) return;
 
   server_remove_request(req->server, req);
-  free(req);
+  server_request_reset(req);
+  server_conn_state_maybe_free(req->conn_state);
 }
 
 static server_request_t *server_find_request(server_runtime_t *server, ant_value_t request_obj) {
@@ -206,41 +261,13 @@ static void server_signal_cb(uv_signal_t *handle, int signum) {
   server_begin_stop(server, false);
 }
 
-static char *server_build_request_url(server_runtime_t *server, const ant_http1_parsed_request_t *req) {
-  ant_http1_buffer_t url;
-  ant_http1_buffer_init(&url);
-
-  if (req->absolute_target) return strdup(req->target);
-  if (!ant_http1_buffer_append_cstr(&url, "http://")) goto oom;
-  if (req->host && req->host[0]) {
-    if (!ant_http1_buffer_append_cstr(&url, req->host)) goto oom;
-  } else {
-    if (!ant_http1_buffer_append_cstr(&url, server->hostname)) goto oom;
-    if (server->port != 80 && server->port > 0) {
-      if (!ant_http1_buffer_appendf(&url, ":%d", server->port)) goto oom;
-    }
-  }
-  
-  if (!ant_http1_buffer_append_cstr(&url, req->target)) goto oom;
-  return ant_http1_buffer_take(&url, NULL);
-
-oom:
-  ant_http1_buffer_free(&url);
-  return NULL;
-}
-
 static ant_value_t server_headers_from_parsed(ant_t *js, const ant_http1_parsed_request_t *parsed) {
   ant_value_t headers = headers_create_empty(js);
   const ant_http_header_t *hdr = NULL;
 
   if (is_err(headers)) return headers;
   for (hdr = parsed->headers; hdr; hdr = hdr->next) {
-    ant_value_t step = headers_append_value(
-      js,
-      headers,
-      js_mkstr(js, hdr->name, strlen(hdr->name)),
-      js_mkstr(js, hdr->value, strlen(hdr->value))
-    );
+    ant_value_t step = headers_append_literal(js, headers, hdr->name, hdr->value);
     if (is_err(step)) return step;
   }
   return headers;
@@ -277,7 +304,39 @@ static bool server_response_chunk(server_request_t *req, ant_value_t value, cons
 }
 
 static void server_start_stream_read(server_request_t *req);
+static void server_on_read(ant_conn_t *conn, ssize_t nread, void *user_data);
 static void server_write_cb(ant_conn_t *conn, int status, void *user_data);
+
+static void server_on_deferred_drain(uv_timer_t *handle) {
+  server_conn_state_t *cs = handle ? (server_conn_state_t *)handle->data : NULL;
+
+  if (!cs) return;
+  cs->drain_scheduled = false;
+
+  if (!cs->conn || cs->active_req) return;
+  if (ant_conn_is_closing(cs->conn)) return;
+  if (ant_conn_buffer_len(cs->conn) == 0) return;
+
+  server_on_read(cs->conn, (ssize_t)ant_conn_buffer_len(cs->conn), cs->server);
+}
+
+static void server_on_drain_timer_close(uv_handle_t *handle) {
+  server_conn_state_t *cs = handle ? (server_conn_state_t *)handle->data : NULL;
+
+  if (!cs) return;
+  cs->drain_timer_closed = true;
+  cs->drain_scheduled = false;
+  server_conn_state_maybe_free(cs);
+}
+
+static void server_schedule_drain(server_conn_state_t *cs) {
+  if (!cs || !cs->conn) return;
+  if (cs->drain_scheduled) return;
+
+  cs->drain_scheduled = true;
+  if (uv_timer_start(&cs->drain_timer, server_on_deferred_drain, 0, 0) != 0)
+    cs->drain_scheduled = false;
+}
 
 static bool server_queue_write(ant_conn_t *conn, server_request_t *req, char *data, size_t len, server_write_action_t action) {
   server_write_req_t *wr = calloc(1, sizeof(*wr));
@@ -378,7 +437,7 @@ static void server_finish_with_response(server_request_t *req, ant_value_t respo
   status_text = (resp->status_text && resp->status_text[0]) ? resp->status_text : ant_http1_default_status_text(resp->status);
 
   ant_http1_buffer_init(&buf);
-  if (!ant_http1_write_response_head(&buf, resp->status, status_text, headers, body_is_stream, resp->body_size, false)) {
+  if (!ant_http1_write_response_head(&buf, resp->status, status_text, headers, body_is_stream, resp->body_size, req->keep_alive)) {
     ant_http1_buffer_free(&buf);
     ant_conn_close(req->conn);
     return;
@@ -391,10 +450,17 @@ static void server_finish_with_response(server_request_t *req, ant_value_t respo
   }
 
   out = ant_http1_buffer_take(&buf, &out_len);
-  if (!server_queue_write(req->conn, req, out, out_len, body_is_stream ? SERVER_WRITE_STREAM_READ : SERVER_WRITE_CLOSE_CLIENT))
+  if (body_is_stream) {
+    if (!server_queue_write(req->conn, req, out, out_len, SERVER_WRITE_STREAM_READ)) return;
+    if (head_only) ant_conn_close(req->conn);
     return;
+  }
 
-  if (body_is_stream && head_only) ant_conn_close(req->conn);
+  server_queue_write(
+    req->conn,
+    req, out, out_len,
+    req->keep_alive ? SERVER_WRITE_KEEP_ALIVE : SERVER_WRITE_CLOSE_CLIENT
+  );
 }
 
 static ant_value_t server_on_response_reject(ant_t *js, ant_value_t *args, int nargs) {
@@ -504,8 +570,14 @@ static ant_value_t server_stream_read_fulfill(ant_t *js, ant_value_t *args, int 
       server_request_release(req);
       return js_mkundef();
     }
+    
     out = ant_http1_buffer_take(&buf, &out_len);
-    server_queue_write(req->conn, req, out, out_len, SERVER_WRITE_CLOSE_CLIENT);
+    server_queue_write(
+      req->conn,
+      req, out, out_len,
+      req->keep_alive ? SERVER_WRITE_KEEP_ALIVE : SERVER_WRITE_CLOSE_CLIENT
+    );
+    
     server_request_release(req);
     return js_mkundef();
   }
@@ -575,6 +647,7 @@ static bool server_request_ensure_reader(server_request_t *req) {
 static void server_write_cb(ant_conn_t *conn, int status, void *user_data) {
   server_write_req_t *wr = (server_write_req_t *)user_data;
   server_request_t *req = wr->request;
+  server_conn_state_t *cs = conn ? (server_conn_state_t *)ant_conn_get_user_data(conn) : NULL;
 
   if (status < 0 && conn && !ant_conn_is_closing(conn))
     ant_conn_close(conn);
@@ -587,6 +660,17 @@ static void server_write_cb(ant_conn_t *conn, int status, void *user_data) {
       break;
     }
     server_start_stream_read(req);
+    break;
+
+  case SERVER_WRITE_KEEP_ALIVE:
+    if (cs && req) {
+      ant_conn_consume(conn, req->consumed_len);
+      ant_http1_conn_parser_reset(&cs->parser);
+      cs->active_req = NULL;
+      ant_conn_set_timeout_ms(conn, cs->server->idle_timeout_ms);
+      server_request_release(req);
+      if (ant_conn_buffer_len(conn) > 0) server_schedule_drain(cs);
+    }
     break;
     
   case SERVER_WRITE_CLOSE_CLIENT:
@@ -654,34 +738,51 @@ static ant_value_t server_stop(ant_t *js, ant_value_t *args, int nargs) {
   return promise;
 }
 
-static void server_process_client_request(ant_conn_t *conn, ant_http1_parsed_request_t *parsed) {
-  server_runtime_t *server = (server_runtime_t *)ant_listener_get_user_data(ant_conn_listener(conn));
+static void server_process_client_request(
+  ant_conn_t *conn,
+  ant_http1_parsed_request_t *parsed,
+  size_t consumed_len
+) {
+  server_conn_state_t *cs = (server_conn_state_t *)ant_conn_get_user_data(conn);
+  server_runtime_t *server = cs ? cs->server : NULL;
+  server_request_t *req = NULL;
   
-  ant_t *js = server->js;
+  ant_t *js = NULL;
   ant_value_t headers = 0;
   ant_value_t request_obj = 0;
   ant_value_t result = 0;
-  
-  char *url = NULL;
-  server_request_t *req = NULL;
+  bool keep_alive = false;
 
-  url = server_build_request_url(server, parsed);
-  if (!url) {
+  if (!server || !cs) {
     ant_http1_free_parsed_request(parsed);
-    server_send_internal_error(conn, NULL);
+    ant_conn_close(conn);
     return;
   }
 
+  js = server->js;
+  req = &cs->request;
+  keep_alive = parsed->keep_alive;
   headers = server_headers_from_parsed(js, parsed);
+  
   if (is_err(headers)) {
-    free(url);
     ant_http1_free_parsed_request(parsed);
     server_send_internal_error(conn, NULL);
     return;
   }
 
-  request_obj = request_create(js, parsed->method, url, headers, parsed->body, parsed->body_len, parsed->content_type);
-  free(url);
+  request_obj = request_create_server(
+    js,
+    parsed->method,
+    parsed->target,
+    parsed->absolute_target,
+    parsed->host,
+    server->hostname,
+    server->port,
+    headers,
+    parsed->body,
+    parsed->body_len,
+    parsed->content_type
+  );
   ant_http1_free_parsed_request(parsed);
 
   if (is_err(request_obj)) {
@@ -689,44 +790,50 @@ static void server_process_client_request(ant_conn_t *conn, ant_http1_parsed_req
     return;
   }
 
-  req = calloc(1, sizeof(*req));
-  if (!req) {
-    server_send_internal_error(conn, NULL);
-    return;
-  }
-
+  server_request_reset(req);
   req->server = server;
+  req->conn_state = cs;
   req->conn = conn;
   req->request_obj = request_obj;
-  req->response_obj = js_mkundef();
-  req->response_promise = js_mkundef();
-  req->response_reader = js_mkundef();
-  req->response_read_promise = js_mkundef();
+  req->consumed_len = consumed_len;
+  req->keep_alive = keep_alive;
   req->refs = 1;
   req->next = server->requests;
   server->requests = req;
-  ant_conn_set_user_data(conn, req);
+  cs->active_req = req;
+  ant_conn_set_timeout_ms(conn, server->request_timeout_ms);
 
   result = server_call_fetch(server, request_obj);
   server_handle_fetch_result(req, result);
 }
 
 static void server_on_read(ant_conn_t *conn, ssize_t nread, void *user_data) {
+  server_conn_state_t *cs = (server_conn_state_t *)ant_conn_get_user_data(conn);
   ant_http1_parsed_request_t parsed = {0};
   ant_http1_parse_result_t parse_result = ANT_HTTP1_PARSE_INCOMPLETE;
-  if (!conn) return;
+  size_t consumed = 0;
 
-  parse_result = ant_http1_parse_request(ant_conn_buffer(conn), ant_conn_buffer_len(conn), &parsed, NULL, NULL);
+  if (!conn || !cs) return;
+  if (cs->active_req) return;
+  if (ant_conn_buffer_len(conn) == 0) return;
+
+  ant_conn_set_timeout_ms(conn, cs->server->request_timeout_ms);
+  parse_result = ant_http1_conn_parser_execute(
+    &cs->parser,
+    ant_conn_buffer(conn),
+    ant_conn_buffer_len(conn),
+    &parsed,
+    &consumed
+  );
+  
   if (parse_result == ANT_HTTP1_PARSE_ERROR) {
     ant_http1_free_parsed_request(&parsed);
     server_send_text_response(conn, 400, "Bad Request", "Bad Request");
     return;
   }
 
-  if (parse_result == ANT_HTTP1_PARSE_OK) {
-    ant_conn_pause_read(conn);
-    server_process_client_request(conn, &parsed);
-  }
+  if (parse_result != ANT_HTTP1_PARSE_OK) return;
+  server_process_client_request(conn, &parsed, consumed);
 }
 
 static void server_on_end(ant_conn_t *conn, void *user_data) {
@@ -735,12 +842,21 @@ static void server_on_end(ant_conn_t *conn, void *user_data) {
 
 static void server_on_conn_close(ant_conn_t *conn, void *user_data) {
   server_runtime_t *server = (server_runtime_t *)user_data;
-  server_request_t *req = (server_request_t *)ant_conn_get_user_data(conn);
+  server_conn_state_t *cs = (server_conn_state_t *)ant_conn_get_user_data(conn);
 
-  if (req) {
-    req->conn = NULL;
+  if (cs) {
     ant_conn_set_user_data(conn, NULL);
-    server_request_release(req);
+    cs->conn = NULL;
+    ant_http1_conn_parser_free(&cs->parser);
+    if (!uv_is_closing((uv_handle_t *)&cs->drain_timer))
+      uv_close((uv_handle_t *)&cs->drain_timer, server_on_drain_timer_close);
+    if (cs->active_req) {
+      cs->active_req->conn = NULL;
+      cs->active_req = NULL;
+      server_request_release(&cs->request);
+      cs = NULL;
+    }
+    if (cs) server_conn_state_maybe_free(cs);
   }
 
   server_maybe_finish_stop(server);
@@ -748,6 +864,39 @@ static void server_on_conn_close(ant_conn_t *conn, void *user_data) {
 
 static void server_on_listener_close(ant_listener_t *listener, void *user_data) {
   server_maybe_finish_stop((server_runtime_t *)user_data);
+}
+
+static void server_on_accept(ant_listener_t *listener, ant_conn_t *conn, void *user_data) {
+  server_runtime_t *server = (server_runtime_t *)user_data;
+  server_conn_state_t *cs = NULL;
+
+  (void)listener;
+  if (!conn || !server) return;
+
+  cs = calloc(1, sizeof(*cs));
+  if (!cs) {
+    ant_conn_close(conn);
+    return;
+  }
+
+  cs->server = server;
+  cs->conn = conn;
+  cs->drain_timer_closed = true;
+  cs->request.server = server;
+  cs->request.conn_state = cs;
+  server_request_reset(&cs->request);
+  
+  if (uv_timer_init(server->loop, &cs->drain_timer) != 0) {
+    free(cs);
+    ant_conn_close(conn);
+    return;
+  }
+  
+  cs->drain_timer.data = cs;
+  cs->drain_timer_closed = false;
+  ant_http1_conn_parser_init(&cs->parser);
+  ant_conn_set_user_data(conn, cs);
+  ant_conn_set_no_delay(conn, true);
 }
 
 static bool server_export_has_fetch_handler(ant_t *js, ant_value_t default_export, bool *looks_like_config) {
@@ -826,7 +975,8 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
     .fetch_fn = js_get(js, default_export, "fetch"),
     .hostname = strdup("0.0.0.0"),
     .port = 3000,
-    .idle_timeout_secs = 10,
+    .request_timeout_ms = 5000,
+    .idle_timeout_ms = 5000,
     .loop = uv_default_loop(),
   };
 
@@ -885,17 +1035,20 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
   }
 
   if (vtype(timeout_v) != T_UNDEF && vtype(timeout_v) != T_NULL) {
+    double timeout = 0;
     if (vtype(timeout_v) != T_NUM) {
       free(server->hostname);
       free(server);
       return js_mkerr_typed(js, JS_ERR_TYPE, "server idleTimeout must be a number");
     }
-    server->idle_timeout_secs = (int)js_getnum(timeout_v);
-    if (server->idle_timeout_secs < 0) {
+    timeout = js_getnum(timeout_v);
+    if (timeout < 0) {
       free(server->hostname);
       free(server);
       return js_mkerr_typed(js, JS_ERR_RANGE, "server idleTimeout must be >= 0");
     }
+    server->request_timeout_ms = (uint64_t)(timeout * 1000.0);
+    server->idle_timeout_ms = server->request_timeout_ms;
   }
 
   uv_signal_init(server->loop, &server->sigint_handle);
@@ -903,6 +1056,7 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
   server->sigint_handle.data = server;
   server->sigterm_handle.data = server;
 
+  callbacks.on_accept = server_on_accept;
   callbacks.on_read = server_on_read;
   callbacks.on_end = server_on_end;
   callbacks.on_conn_close = server_on_conn_close;
@@ -911,7 +1065,7 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
   rc = ant_listener_listen_tcp(
     &server->listener, server->loop,
     server->hostname, server->port,
-    128, (uint64_t)server->idle_timeout_secs * 1000ULL, &callbacks, server
+    128, server->idle_timeout_ms, &callbacks, server
   );
   
   if (rc != 0) {

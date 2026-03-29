@@ -3,6 +3,8 @@
 
 #include "types.h"
 
+#include <stdbool.h>
+#include <stdint.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <minicoro.h>
@@ -49,6 +51,7 @@ typedef struct coroutine {
   ant_value_t awaited_promise;
   ant_value_t async_promise;
   
+  struct coroutine *active_parent;
   struct coroutine *prev;
   struct coroutine *next;
   
@@ -64,12 +67,24 @@ typedef struct coroutine {
   bool is_done;
   bool mco_started;
   bool is_ready;
+  bool did_suspend;
 } coroutine_t;
 
 typedef struct {
   coroutine_t *head;
   coroutine_t *tail;
 } coroutine_queue_t;
+
+typedef enum {
+  JS_AWAIT_PENDING = 0,
+  JS_AWAIT_FULFILLED,
+  JS_AWAIT_REJECTED,
+} js_await_state_t;
+
+typedef struct {
+  js_await_state_t state;
+  ant_value_t value;
+} js_await_result_t;
 
 extern coroutine_queue_t pending_coroutines;
 extern uint32_t coros_this_tick;
@@ -81,6 +96,9 @@ void free_coroutine(coroutine_t *coro);
 ant_value_t start_async_in_coroutine(ant_t *js, const char *code, size_t code_len, ant_value_t closure_scope, ant_value_t *args, int nargs);
 ant_value_t resume_coroutine_wrapper(ant_t *js, ant_value_t *args, int nargs);
 ant_value_t reject_coroutine_wrapper(ant_t *js, ant_value_t *args, int nargs);
+
+js_await_result_t js_promise_await_coroutine(ant_t *js, ant_value_t promise, coroutine_t *coro);
+void settle_and_resume_coroutine(ant_t *js, coroutine_t *coro, ant_value_t value, bool is_error);
 
 bool has_ready_coroutines(void);
 bool has_pending_coroutines(void);

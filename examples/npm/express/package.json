@@ -1,0 +1,13 @@
+{
+  "name": "express",
+  "version": "1.0.0",
+  "type": "commonjs",
+  "main": "index.cjs",
+  "scripts": {
+    "start": "ant index.cjs"
+  },
+  "dependencies": {
+    "express": "^5.2.1"
+  },
+  "devDependencies": {}
+}

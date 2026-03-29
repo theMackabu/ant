@@ -23,11 +23,7 @@ static void pipes_chain_promise(
     js_resolve_promise(js, promise, value);
   }
 
-  ant_value_t then_fn = js_get(js, promise, "then");
-  if (!is_callable(then_fn)) return;
-
-  ant_value_t then_args[2] = { on_resolve, on_reject };
-  sv_vm_call(js->vm, js, then_fn, promise, then_args, 2, NULL, false);
+  js_promise_then(js, promise, on_resolve, on_reject);
 }
 
 typedef struct {

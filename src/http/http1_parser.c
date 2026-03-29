@@ -8,16 +8,7 @@
 #include "http/http1_parser.h"
 #include "http/http1_writer.h"
 
-typedef struct {
-  ant_http1_parsed_request_t req;
-  ant_http1_buffer_t method;
-  ant_http1_buffer_t target;
-  ant_http1_buffer_t header_field;
-  ant_http1_buffer_t header_value;
-  ant_http1_buffer_t body;
-  ant_http_header_t **header_tail;
-  bool message_complete;
-} parser_ctx_t;
+typedef ant_http1_parser_ctx_t parser_ctx_t;
 
 static void parser_ctx_free(parser_ctx_t *ctx) {
   if (!ctx) return;
@@ -108,6 +99,16 @@ static int parser_on_message_complete(llhttp_t *parser) {
   return HPE_PAUSED;
 }
 
+static llhttp_settings_t g_request_settings = {
+  .on_method           = parser_on_method,
+  .on_url              = parser_on_url,
+  .on_header_field     = parser_on_header_field,
+  .on_header_value     = parser_on_header_value,
+  .on_headers_complete = parser_on_headers_complete,
+  .on_body             = parser_on_body,
+  .on_message_complete = parser_on_message_complete,
+};
+
 ant_http1_parse_result_t ant_http1_parse_request(
   const char *data,
   size_t len,
@@ -116,13 +117,12 @@ ant_http1_parse_result_t ant_http1_parse_request(
   const char **error_code
 ) {
   llhttp_t parser;
-  llhttp_settings_t settings;
   llhttp_errno_t err = HPE_OK;
   parser_ctx_t ctx = {0};
 
   if (error_reason) *error_reason = NULL;
   if (error_code) *error_code = NULL;
-  
+
   memset(out, 0, sizeof(*out));
   ctx.header_tail = &ctx.req.headers;
 
@@ -132,16 +132,7 @@ ant_http1_parse_result_t ant_http1_parse_request(
   ant_http1_buffer_init(&ctx.header_value);
   ant_http1_buffer_init(&ctx.body);
 
-  llhttp_settings_init(&settings);
-  settings.on_method = parser_on_method;
-  settings.on_url = parser_on_url;
-  settings.on_header_field = parser_on_header_field;
-  settings.on_header_value = parser_on_header_value;
-  settings.on_headers_complete = parser_on_headers_complete;
-  settings.on_body = parser_on_body;
-  settings.on_message_complete = parser_on_message_complete;
-
-  llhttp_init(&parser, HTTP_REQUEST, &settings);
+  llhttp_init(&parser, HTTP_REQUEST, &g_request_settings);
   parser.data = &ctx;
   
   err = llhttp_execute(&parser, data, len);
@@ -191,4 +182,97 @@ void ant_http1_free_parsed_request(ant_http1_parsed_request_t *req) {
   free(req->body);
   ant_http_headers_free(req->headers);
   memset(req, 0, sizeof(*req));
+}
+
+void ant_http1_conn_parser_init(ant_http1_conn_parser_t *cp) {
+  if (!cp) return;
+
+  memset(cp, 0, sizeof(*cp));
+  cp->ctx.header_tail = &cp->ctx.req.headers;
+  llhttp_init(&cp->parser, HTTP_REQUEST, &g_request_settings);
+  cp->parser.data = &cp->ctx;
+}
+
+void ant_http1_conn_parser_reset(ant_http1_conn_parser_t *cp) {
+  if (!cp) return;
+
+  ant_http1_buffer_free(&cp->ctx.method);
+  ant_http1_buffer_free(&cp->ctx.target);
+  ant_http1_buffer_free(&cp->ctx.header_field);
+  ant_http1_buffer_free(&cp->ctx.header_value);
+  ant_http1_buffer_free(&cp->ctx.body);
+  
+  memset(&cp->ctx, 0, sizeof(cp->ctx));
+  cp->ctx.header_tail = &cp->ctx.req.headers;
+  cp->fed_len = 0;
+  llhttp_reset(&cp->parser);
+  cp->parser.data = &cp->ctx;
+}
+
+void ant_http1_conn_parser_free(ant_http1_conn_parser_t *cp) {
+  if (!cp) return;
+
+  ant_http1_buffer_free(&cp->ctx.method);
+  ant_http1_buffer_free(&cp->ctx.target);
+  ant_http1_buffer_free(&cp->ctx.header_field);
+  ant_http1_buffer_free(&cp->ctx.header_value);
+  ant_http1_buffer_free(&cp->ctx.body);
+  ant_http1_free_parsed_request(&cp->ctx.req);
+}
+
+ant_http1_parse_result_t ant_http1_conn_parser_execute(
+  ant_http1_conn_parser_t *cp,
+  const char *data,
+  size_t len,
+  ant_http1_parsed_request_t *out,
+  size_t *consumed_out
+) {
+  const char *new_data = NULL;
+  size_t new_len = 0;
+  size_t old_fed = 0;
+  
+  const char *errpos = NULL;
+  llhttp_errno_t err = HPE_OK;
+
+  if (!cp || !data || !out) return ANT_HTTP1_PARSE_ERROR;
+
+  memset(out, 0, sizeof(*out));
+  if (consumed_out) *consumed_out = 0;
+  if (cp->fed_len > len) return ANT_HTTP1_PARSE_ERROR;
+
+  new_data = data + cp->fed_len;
+  new_len = len - cp->fed_len;
+  old_fed = cp->fed_len;
+  if (new_len == 0) return ANT_HTTP1_PARSE_INCOMPLETE;
+
+  err = llhttp_execute(&cp->parser, new_data, new_len);
+  errpos = llhttp_get_error_pos(&cp->parser);
+  if (errpos && consumed_out)
+    *consumed_out = (size_t)(errpos - new_data) + old_fed;
+  cp->fed_len = len;
+
+  if (err != HPE_OK && err != HPE_PAUSED)
+    return ANT_HTTP1_PARSE_ERROR;
+    
+  if (!cp->ctx.message_complete)
+    return ANT_HTTP1_PARSE_INCOMPLETE;
+    
+  cp->ctx.req.method = ant_http1_buffer_take(&cp->ctx.method, NULL);
+  cp->ctx.req.target = ant_http1_buffer_take(&cp->ctx.target, NULL);
+  cp->ctx.req.body = (uint8_t *)ant_http1_buffer_take(&cp->ctx.body, &cp->ctx.req.body_len);
+  
+  if (!cp->ctx.req.method || !cp->ctx.req.target)
+    return ANT_HTTP1_PARSE_ERROR;
+    
+  cp->ctx.req.absolute_target =
+    strncmp(cp->ctx.req.target, "http://", 7) == 0 ||
+    strncmp(cp->ctx.req.target, "https://", 8) == 0;
+    
+  cp->ctx.req.keep_alive = llhttp_should_keep_alive(&cp->parser) == 1;
+  cp->ctx.req.http_major = cp->parser.http_major;
+  cp->ctx.req.http_minor = cp->parser.http_minor;
+
+  *out = cp->ctx.req;
+  memset(&cp->ctx.req, 0, sizeof(cp->ctx.req));
+  return ANT_HTTP1_PARSE_OK;
 }

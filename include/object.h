@@ -2,6 +2,7 @@
 #define ANT_OBJECT_H
 
 #include "types.h"
+#include "sugar.h"
 #include "shapes.h"
 
 #include <utarray.h>
@@ -15,12 +16,22 @@ typedef struct {
   bool (*deleter)(ant_t *, ant_value_t, const char *, size_t);
 } ant_exotic_ops_t;
 
+typedef struct promise_handler {
+  ant_value_t onFulfilled;
+  ant_value_t onRejected;
+  ant_value_t nextPromise;
+  struct coroutine *await_coro;
+} promise_handler_t;
+
 typedef struct {
   ant_value_t value;
   ant_value_t trigger_parent;
+  promise_handler_t inline_handler;
   UT_array *handlers;
   uint32_t promise_id;
+  uint16_t handler_count;
   uint8_t state;
+  bool trigger_queued;
   bool has_rejection_handler;
   bool processing;
   bool unhandled_reported;
