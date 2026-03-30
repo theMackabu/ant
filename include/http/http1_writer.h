@@ -26,6 +26,7 @@ bool ant_http1_buffer_appendfv(ant_http1_buffer_t *buf, const char *fmt, va_list
 
 const char *ant_http1_default_status_text(int status);
 char *ant_http1_buffer_take(ant_http1_buffer_t *buf, size_t *len_out);
+char *ant_http1_buffer_take_cstr(ant_http1_buffer_t *buf);
 
 bool ant_http1_write_basic_response(
   ant_http1_buffer_t *buf,

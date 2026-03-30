@@ -317,7 +317,9 @@ static void eval_code(ant_t *js, const char *script, size_t len, const char *tag
 
 static int execute_module(ant_t *js, const char *filename) {
   char *use_path_owned = NULL;
+  
   const char *use_path = filename;
+  const char *stable_use_path = filename;
 
   ant_value_t ns = 0;
   ant_value_t specifier = 0;
@@ -336,14 +338,18 @@ static int execute_module(ant_t *js, const char *filename) {
     if (use_path_owned) use_path = use_path_owned;
     specifier = js_esm_make_file_url(js, use_path);
   }
+
+  const char *interned = intern_string(use_path, strlen(use_path));
+  if (interned) stable_use_path = interned;
+  else stable_use_path = use_path;
   
   js_set(js, js_glob(js), 
     "__filename", 
     js_mkstr(js, filename, strlen(filename))
   );
   
-  js_set_filename(js, use_path);
-  js_setup_import_meta(js, use_path);
+  js_set_filename(js, stable_use_path);
+  js_setup_import_meta(js, stable_use_path);
   ns = js_esm_import_sync(js, specifier);
   
   free(use_path_owned);

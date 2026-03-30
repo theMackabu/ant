@@ -96,6 +96,13 @@ char *ant_http1_buffer_take(ant_http1_buffer_t *buf, size_t *len_out) {
   return data;
 }
 
+char *ant_http1_buffer_take_cstr(ant_http1_buffer_t *buf) {
+  if (!buf) return NULL;
+  if (!ant_http1_buffer_reserve(buf, 1)) return NULL;
+  buf->data[buf->len] = '\0';
+  return ant_http1_buffer_take(buf, NULL);
+}
+
 void ant_http1_buffer_free(ant_http1_buffer_t *buf) {
   free(buf->data);
   buf->data = NULL;

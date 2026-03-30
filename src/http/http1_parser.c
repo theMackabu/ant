@@ -30,8 +30,8 @@ static bool parser_copy_header(parser_ctx_t *ctx) {
   ant_http_header_t *hdr = calloc(1, sizeof(*hdr));
   if (!hdr) return false;
 
-  hdr->name = ant_http1_buffer_take(&ctx->header_field, NULL);
-  hdr->value = ant_http1_buffer_take(&ctx->header_value, NULL);
+  hdr->name = ant_http1_buffer_take_cstr(&ctx->header_field);
+  hdr->value = ant_http1_buffer_take_cstr(&ctx->header_value);
   if (!hdr->name || !hdr->value) {
     free(hdr->name);
     free(hdr->value);
@@ -153,8 +153,8 @@ ant_http1_parse_result_t ant_http1_parse_request(
   if (out->consumed_len == 0) ctx.req.consumed_len = len;
   else ctx.req.consumed_len = out->consumed_len;
 
-  ctx.req.method = ant_http1_buffer_take(&ctx.method, NULL);
-  ctx.req.target = ant_http1_buffer_take(&ctx.target, NULL);
+  ctx.req.method = ant_http1_buffer_take_cstr(&ctx.method);
+  ctx.req.target = ant_http1_buffer_take_cstr(&ctx.target);
   ctx.req.body = (uint8_t *)ant_http1_buffer_take(&ctx.body, &ctx.req.body_len);
   if (!ctx.req.method || !ctx.req.target) {
     parser_ctx_free(&ctx);
@@ -263,8 +263,8 @@ ant_http1_parse_result_t ant_http1_conn_parser_execute(
   if (consumed_out && *consumed_out == 0) *consumed_out = len;
   cp->ctx.req.consumed_len = consumed_out ? *consumed_out : len;
     
-  cp->ctx.req.method = ant_http1_buffer_take(&cp->ctx.method, NULL);
-  cp->ctx.req.target = ant_http1_buffer_take(&cp->ctx.target, NULL);
+  cp->ctx.req.method = ant_http1_buffer_take_cstr(&cp->ctx.method);
+  cp->ctx.req.target = ant_http1_buffer_take_cstr(&cp->ctx.target);
   cp->ctx.req.body = (uint8_t *)ant_http1_buffer_take(&cp->ctx.body, &cp->ctx.req.body_len);
   
   if (!cp->ctx.req.method || !cp->ctx.req.target)
