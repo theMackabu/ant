@@ -83,9 +83,9 @@ static ant_value_t esm_populate_cjs_namespace(ant_t *js, ant_value_t ns, ant_val
   
   while (js_prop_iter_next(&iter, &key, &key_len, NULL)) {
     if (key_len == 7 && memcmp(key, "default", 7) == 0) continue;
-    
-    ant_value_t value = js_get(js, exports_val, key);
-    if (is_err(value)) { js_prop_iter_end(&iter); return value; }
+
+    ant_value_t value = js_mkundef();
+    if (!js_try_get_own_data_prop(js, exports_val, key, key_len, &value)) continue;
     
     ant_value_t res = setprop_cstr(js, ns, key, key_len, value);
     if (is_err(res)) { js_prop_iter_end(&iter); return res; }

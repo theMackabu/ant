@@ -3132,6 +3132,35 @@ static inline bool lookup_string_prop_meta(ant_t *js, ant_value_t cur_obj, const
   return lookup_prop_meta(js, cur_obj, PROP_META_STRING, key, klen, 0, out);
 }
 
+bool js_try_get_own_data_prop(ant_t *js, ant_value_t obj, const char *key, size_t key_len, ant_value_t *out) {
+  if (out) *out = js_mkundef();
+  if (!key || !out) return false;
+
+  uint8_t t = vtype(obj);
+  if (t == T_FUNC) obj = js_func_obj(obj);
+  else if (t != T_OBJ && t != T_ARR) return false;
+
+  ant_value_t as_obj = js_as_obj(obj);
+  if (is_proxy(as_obj)) return false;
+
+  prop_meta_t meta;
+  bool has_meta = lookup_string_prop_meta(js, as_obj, key, key_len, &meta);
+  if (has_meta && (meta.has_getter || meta.has_setter)) return false;
+
+  ant_offset_t off = lkp(js, as_obj, key, (ant_offset_t)key_len);
+  if (off != 0) {
+    *out = propref_load(js, off);
+    return true;
+  }
+
+  if (array_obj_ptr(as_obj) && is_length_key(key, (ant_offset_t)key_len)) {
+    *out = tov((double)get_array_length(js, as_obj));
+    return true;
+  }
+
+  return false;
+}
+
 ant_value_t js_setprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v) {
   uint8_t ot = vtype(obj);
 
