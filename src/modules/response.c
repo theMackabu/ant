@@ -274,6 +274,43 @@ static bool extract_body(
   return extract_string_body(js, body_val, out_data, out_size, out_type, err_out);
 }
 
+static bool response_content_type_has_charset(const char *value) {
+  const char *p = NULL;
+
+  if (!value) return false;
+  p = strchr(value, ';');
+  
+  while (p) {
+    p++;
+    while (*p == ' ' || *p == '\t') p++;
+    if (strncasecmp(p, "charset", 7) == 0) {
+      p += 7;
+      while (*p == ' ' || *p == '\t') p++;
+      if (*p == '=') return true;
+    }
+    p = strchr(p, ';');
+  }
+
+  return false;
+}
+
+static void response_maybe_normalize_text_content_type(
+  ant_t *js, ant_value_t headers, ant_value_t current_type, const char *body_type
+) {
+  const char *current = NULL;
+
+  if (!body_type || !headers_is_headers(headers)) return;
+  if (vtype(current_type) != T_STR) return;
+
+  current = js_getstr(js, current_type, NULL);
+  if (!current) return;
+  if (strncasecmp(current, "text/", 5) != 0) return;
+  if (response_content_type_has_charset(current)) return;
+  if (!response_content_type_has_charset(body_type)) return;
+
+  headers_set_literal(js, headers, "content-type", body_type);
+}
+
 enum {
   BODY_TEXT = 0,
   BODY_JSON,
@@ -643,8 +680,11 @@ static ant_value_t response_apply_body(
 
   if (resp->body_is_stream) js_set_slot_wb(js, resp_obj, SLOT_RESPONSE_BODY_STREAM, body_stream);
   current_type = headers_get_value(js, headers, "content-type");
+  
   if (body_type && !is_err(current_type) && vtype(current_type) == T_NULL)
     headers_append_if_missing(headers, "content-type", body_type);
+  else if (!is_err(current_type))
+    response_maybe_normalize_text_content_type(js, headers, current_type, body_type);
 
   return js_mkundef();
 }
@@ -1036,10 +1076,13 @@ ant_value_t response_create(
 
   headers_set_guard(headers, guard);
   headers_apply_guard(headers);
+  
   ant_value_t current_type = headers_get_value(js, headers, "content-type");
   if (body_type && !is_err(current_type) && vtype(current_type) == T_NULL) {
     headers_append_if_missing(headers, "content-type", body_type);
-  }
+  } else if (!is_err(current_type)) response_maybe_normalize_text_content_type(
+    js, headers, current_type, body_type
+  );
   js_set_slot_wb(js, obj, SLOT_RESPONSE_HEADERS, headers);
   return obj;
 }
