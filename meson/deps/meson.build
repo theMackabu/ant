@@ -214,7 +214,7 @@ ant_deps = [
   yyjson_dep, minicoro_dep, uuidv7_dep,
   uriparser_dep, utf8proc_dep, openssl_dep,
   zlib_dep, brotli_common_dep, brotli_dec_dep,
-  brotli_enc_dep, uthash_dep, lmdb_dep, nghttp2_dep,
+  brotli_enc_dep, uthash_dep, lmdb_dep,
 ] + mbedtls_dep + win_deps
 
 if get_option('jit')
