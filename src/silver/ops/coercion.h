@@ -253,6 +253,10 @@ static inline void sv_op_special_obj(
   sv_frame_t *frame, uint8_t *ip
 ) {
   uint8_t which = sv_get_u8(ip + 1);
+  if (which == 3) {
+    vm->stack[vm->sp++] = js_get_module_import_binding(js);
+    return;
+  }
   if (which == 1) {
     vm->stack[vm->sp++] = frame ? frame->new_target : js_mkundef();
     return;

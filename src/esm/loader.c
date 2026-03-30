@@ -196,16 +196,13 @@ static ant_value_t esm_prepare_eval_ctx(
   const char *fallback_parent_path,
   ant_module_t *out_ctx
 ) {
-  ant_module_t *parent_ctx = js->module;
-  ant_value_t import_meta = js_create_import_meta(js, resolved_path, is_main);
-  if (is_err(import_meta)) return import_meta;
+  ant_value_t module_ctx = js_create_module_context(js, resolved_path, is_main);
+  if (is_err(module_ctx)) return module_ctx;
 
   *out_ctx = (ant_module_t){
     .module_ns = ns,
-    .import_meta = import_meta,
+    .module_ctx = module_ctx,
     .prev_import_meta_prop = js_mkundef(),
-    .filename = resolved_path,
-    .parent_path = parent_ctx ? parent_ctx->filename : fallback_parent_path,
     .format = format,
     .prev = NULL,
   };

@@ -451,7 +451,7 @@ static void gc_mark_roots(ant_t *js) {
 
   for (ant_module_t *ctx = js->module; ctx; ctx = ctx->prev) {
     gc_mark_value(js, ctx->module_ns);
-    gc_mark_value(js, ctx->import_meta);
+    gc_mark_value(js, ctx->module_ctx);
     gc_mark_value(js, ctx->prev_import_meta_prop);
   }
 

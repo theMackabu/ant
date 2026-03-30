@@ -541,6 +541,13 @@ static inline bool has_completion_value(const sv_compiler_t *c) {
   return c && (c->mode == SV_COMPILE_EVAL || c->mode == SV_COMPILE_REPL);
 }
 
+static inline bool has_module_import_binding(const sv_compiler_t *c) {
+  for (const sv_compiler_t *cur = c; cur; cur = cur->enclosing) {
+    if (cur->mode == SV_COMPILE_MODULE) return true;
+  }
+  return false;
+}
+
 static inline bool has_implicit_arguments_obj(const sv_compiler_t *c) {
   return c && !c->is_arrow && c->enclosing;
 }
@@ -1199,7 +1206,7 @@ static void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
 }
 
 static void hoist_one_func(sv_compiler_t *c, sv_ast_t *node) {
-  sv_func_t *fn = compile_function_body(c, node, SV_COMPILE_SCRIPT);
+  sv_func_t *fn = compile_function_body(c, node, c->mode);
   if (!fn) return;
   int idx = add_constant(c, mkval(T_CFUNC, (uintptr_t)fn));
   emit_op(c, OP_CLOSURE);
@@ -1533,7 +1540,12 @@ static void compile_expr(sv_compiler_t *c, sv_ast_t *node) {
 
     case N_IMPORT:
       compile_expr(c, node->right);
-      emit_op(c, OP_IMPORT);
+      if (has_module_import_binding(c)) {
+        emit_get_var(c, "import", 6);
+        emit_op(c, OP_SWAP);
+        emit_op(c, OP_CALL);
+        emit_u16(c, 1);
+      } else emit_op(c, OP_IMPORT);
       break;
 
     case N_REGEXP:
@@ -4301,6 +4313,13 @@ static sv_func_t *compile_function_body(
     }
 
     free(param_bind_locals);
+    if (mode == SV_COMPILE_MODULE && comp.enclosing && !comp.enclosing->enclosing) {
+      int import_local = add_local(&comp, "import", 6, true, comp.scope_depth);
+      emit_op(&comp, OP_SPECIAL_OBJ);
+      emit(&comp, 3);
+      emit_put_local(&comp, import_local);
+    }
+
     if (node->body) {
       if (node->body->type == N_BLOCK) {
         if (!repl_top) {
@@ -4309,9 +4328,7 @@ static sv_func_t *compile_function_body(
           hoist_lexical_decls(&comp, &node->body->args);
         }
         hoist_func_decls(&comp, &node->body->args);
-      } else if (!repl_top) {
-        hoist_var_decls(&comp, node->body);
-      }
+      } else if (!repl_top) hoist_var_decls(&comp, node->body);
     }
   }
 

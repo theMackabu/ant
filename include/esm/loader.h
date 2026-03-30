@@ -14,10 +14,8 @@ typedef enum {
 
 typedef struct ant_module_t {
   ant_value_t module_ns;
-  ant_value_t import_meta;
+  ant_value_t module_ctx;
   ant_value_t prev_import_meta_prop;
-  const char *filename;
-  const char *parent_path;
   ant_module_format_t format;
   struct ant_module_t *prev;
 } ant_module_t;

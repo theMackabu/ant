@@ -229,7 +229,7 @@ OP_DEF(  WITH_GET_VAR,      8,   0,   1, atom)      /* -> val (check with-obj th
 OP_DEF(  WITH_PUT_VAR,      8,   1,   0, atom)      /* val -> (check with-obj then fallback) */
 OP_DEF(  WITH_DEL_VAR,      5,   0,   1, atom)      /* -> bool (delete from with-obj/global) */
 
-OP_DEF(  SPECIAL_OBJ,       2,   0,   1, u8)        /* arguments, mapped args, etc. */
+OP_DEF(  SPECIAL_OBJ,       2,   0,   1, u8)        /* arguments, new.target, super, module import */
 OP_DEF(  EMPTY,             1,   0,   1, none)      /* push T_EMPTY (array hole) */
 OP_DEF(  DEBUGGER,          1,   0,   0, none)
 OP_DEF(  NOP,               1,   0,   0, none)

@@ -114,10 +114,14 @@ static inline void sv_op_closure(
 
   ant_value_t func_obj = mkobj(js, 0);
   closure->func_obj = func_obj;
+  ant_value_t module_ctx = js_module_eval_active_ctx(js);
   
   js_mark_constructor(func_obj, !child->is_arrow && !child->is_method);
   js_setprop(js, func_obj, js->length_str, tov((double)child->param_count));
   js_set_descriptor(js, func_obj, "length", 6, JS_DESC_C);
+  
+  if (is_object_type(module_ctx))
+    js_set_slot_wb(js, func_obj, SLOT_MODULE_CTX, module_ctx);
 
   if (!child->is_arrow && !child->is_method) sv_setup_function_prototype(js, func_obj, func_val);
   if (child->is_strict) js_set_slot(func_obj, SLOT_STRICT, js_true);

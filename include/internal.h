@@ -296,6 +296,8 @@ ant_value_t js_define_property(ant_t *js, ant_value_t obj, ant_value_t prop, ant
 
 ant_value_t js_define_own_prop(ant_t *js, ant_value_t obj, const char *key, size_t klen, ant_value_t v);
 ant_value_t js_create_import_meta(ant_t *js, const char *filename, bool is_main);
+ant_value_t js_create_module_context(ant_t *js, const char *filename, bool is_main);
+ant_value_t js_get_module_import_binding(ant_t *js);
 ant_value_t js_instance_proto_from_new_target(ant_t *js, ant_value_t fallback_proto);
 
 ant_value_t coerce_to_str(ant_t *js, ant_value_t v);
@@ -358,19 +360,23 @@ static inline ant_value_t js_module_eval_active_ns(ant_t *js) {
   return ctx ? ctx->module_ns : js_mkundef();
 }
 
-static inline ant_value_t js_module_eval_active_import_meta(ant_t *js) {
+static inline ant_value_t js_module_eval_active_ctx(ant_t *js) {
   ant_module_t *ctx = js->module;
-  return ctx ? ctx->import_meta : js_mkundef();
+  return ctx ? ctx->module_ctx : js_mkundef();
+}
+
+static inline ant_value_t js_module_eval_active_import_meta(ant_t *js) {
+  ant_value_t module_ctx = js_module_eval_active_ctx(js);
+  return is_object_type(module_ctx) ? js_get(js, module_ctx, "meta") : js_mkundef();
 }
 
 static inline const char *js_module_eval_active_filename(ant_t *js) {
-  ant_module_t *ctx = js->module;
-  return ctx ? ctx->filename : js->filename;
-}
-
-static inline const char *js_module_eval_active_parent_path(ant_t *js) {
-  ant_module_t *ctx = js->module;
-  return ctx ? ctx->parent_path : NULL;
+  ant_value_t module_ctx = js_module_eval_active_ctx(js);
+  if (is_object_type(module_ctx)) {
+    ant_value_t filename = js_get(js, module_ctx, "filename");
+    if (vtype(filename) == T_STR) return js_getstr(js, filename, NULL);
+  }
+  return js->filename;
 }
 
 static inline ant_module_format_t js_module_eval_active_format(ant_t *js) {
