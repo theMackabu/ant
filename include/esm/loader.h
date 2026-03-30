@@ -36,6 +36,6 @@ ant_value_t js_esm_eval_module_source(
 ant_value_t js_esm_import_sync_cstr(ant_t *js, const char *specifier, size_t spec_len);
 ant_value_t js_esm_resolve_specifier(ant_t *js, ant_value_t specifier, const char *base_path);
 ant_value_t js_esm_import_sync_cstr_from(ant_t *js, const char *specifier, size_t spec_len, const char *base_path);
-ant_value_t js_esm_import_dynamic(ant_t *js, ant_value_t specifier, ant_value_t *out_tla_promise);
+ant_value_t js_esm_import_dynamic(ant_t *js, ant_value_t specifier, const char *base_path, ant_value_t *out_tla_promise);
 
 #endif

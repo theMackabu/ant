@@ -10,11 +10,18 @@
 #include "silver/engine.h"
 #include "descriptors.h"
 
+#include "modules/bigint.h"
 #include "modules/collections.h"
 #include "modules/symbol.h"
 
 ant_value_t g_map_iter_proto = 0;
 ant_value_t g_set_iter_proto = 0;
+
+typedef struct {
+  unsigned char stack[32];
+  unsigned char *bytes;
+  size_t len;
+} collection_key_t;
 
 static ant_value_t normalize_map_key(ant_value_t key) {
   if (vtype(key) == T_NUM) {
@@ -24,13 +31,154 @@ static ant_value_t normalize_map_key(ant_value_t key) {
   return key;
 }
 
-static const char *ant_value_to_key(ant_t *js, ant_value_t val) {
-  if (vtype(val) == T_STR) {
-    ant_offset_t len;
-    ant_offset_t off = vstr(js, val, &len);
-    return (char *)(uintptr_t)(off);
+static void collection_key_reset(collection_key_t *key) {
+  key->bytes = key->stack;
+  key->len = 0;
+}
+
+static void collection_key_free(collection_key_t *key) {
+  if (key->bytes != key->stack) free(key->bytes);
+  collection_key_reset(key);
+}
+
+static bool collection_key_reserve(collection_key_t *key, size_t len) {
+  if (len <= sizeof(key->stack)) return true;
+  unsigned char *heap = malloc(len);
+  if (!heap) return false;
+  key->bytes = heap;
+  return true;
+}
+
+static bool collection_key_init(ant_t *js, ant_value_t input, collection_key_t *out) {
+  collection_key_reset(out);
+
+  ant_value_t key = normalize_map_key(input);
+  uint8_t tag = (uint8_t)vtype(key);
+
+  if (vtype(key) == T_STR) {
+    size_t str_len = 0;
+    const char *str = js_getstr(js, key, &str_len);
+    out->len = 1 + str_len;
+    if (!collection_key_reserve(out, out->len)) return false;
+    out->bytes[0] = tag;
+    if (str_len > 0) memcpy(out->bytes + 1, str, str_len);
+    return true;
   }
-  return js_str(js, val);
+
+  if (vtype(key) == T_BIGINT) {
+    size_t str_len = bigint_digits_len(js, key) + (bigint_is_negative(js, key) ? 1 : 0);
+    out->len = 1 + str_len;
+    if (!collection_key_reserve(out, out->len)) return false;
+    out->bytes[0] = tag;
+    if (str_len > 0) strbigint(js, key, (char *)(out->bytes + 1), str_len + 1);
+    return true;
+  }
+
+  out->len = 1 + sizeof(ant_value_t);
+  if (!collection_key_reserve(out, out->len)) return false;
+  out->bytes[0] = tag;
+  memcpy(out->bytes + 1, &key, sizeof(ant_value_t));
+  
+  return true;
+}
+
+static map_entry_t *map_find_entry(ant_t *js, map_entry_t **map_ptr, ant_value_t key_val) {
+  collection_key_t key;
+  if (!collection_key_init(js, key_val, &key)) return NULL;
+  
+  map_entry_t *entry = NULL;
+  HASH_FIND(hh, *map_ptr, key.bytes, key.len, entry);
+  collection_key_free(&key);
+  
+  return entry;
+}
+
+static set_entry_t *set_find_entry(ant_t *js, set_entry_t **set_ptr, ant_value_t value) {
+  collection_key_t key;
+  if (!collection_key_init(js, value, &key)) return NULL;
+  
+  set_entry_t *entry = NULL;
+  HASH_FIND(hh, *set_ptr, key.bytes, key.len, entry);
+  collection_key_free(&key);
+  
+  return entry;
+}
+
+static bool map_store_entry(
+  ant_t *js,
+  map_entry_t **map_ptr,
+  ant_value_t raw_key,
+  ant_value_t key_val,
+  ant_value_t value
+) {
+  collection_key_t key;
+  if (!collection_key_init(js, raw_key, &key)) return false;
+
+  map_entry_t *entry = NULL;
+  HASH_FIND(hh, *map_ptr, key.bytes, key.len, entry);
+  if (entry) {
+    entry->key_val = key_val;
+    entry->value = value;
+    collection_key_free(&key);
+    return true;
+  }
+
+  entry = ant_calloc(sizeof(map_entry_t));
+  if (!entry) {
+    collection_key_free(&key);
+    return false;
+  }
+
+  entry->key = malloc(key.len);
+  if (!entry->key) {
+    collection_key_free(&key);
+    free(entry);
+    return false;
+  }
+
+  memcpy(entry->key, key.bytes, key.len);
+  entry->key_len = key.len;
+  entry->key_val = key_val;
+  entry->value = value;
+  
+  HASH_ADD_KEYPTR(hh, *map_ptr, entry->key, entry->key_len, entry);
+  collection_key_free(&key);
+  
+  return true;
+}
+
+static bool set_store_entry(ant_t *js, set_entry_t **set_ptr, ant_value_t value) {
+  collection_key_t key;
+  if (!collection_key_init(js, value, &key)) return false;
+
+  set_entry_t *entry = NULL;
+  HASH_FIND(hh, *set_ptr, key.bytes, key.len, entry);
+  if (entry) {
+    collection_key_free(&key);
+    return true;
+  }
+
+  entry = ant_calloc(sizeof(set_entry_t));
+  if (!entry) {
+    collection_key_free(&key);
+    return false;
+  }
+
+  entry->key = malloc(key.len);
+  if (!entry->key) {
+    collection_key_free(&key);
+    free(entry);
+    return false;
+  }
+
+  memcpy(entry->key, key.bytes, key.len);
+  entry->key_len = key.len;
+  entry->value = value;
+  
+  HASH_ADD_KEYPTR(hh, *set_ptr, entry->key, entry->key_len, entry);
+  collection_key_free(&key);
+  
+  return true;
 }
 
 map_entry_t **get_map_from_obj(ant_t *js, ant_value_t obj) {
@@ -79,23 +227,10 @@ static ant_value_t map_set(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_val = js->this_val;
   map_entry_t **map_ptr = get_map_from_obj(js, this_val);
   if (!map_ptr) return js_mkerr(js, "Invalid Map object");
-  const char *key_str = ant_value_to_key(js, args[0]);
   
   ant_value_t key_val = normalize_map_key(args[0]);
-  map_entry_t *entry;
-  
-  HASH_FIND_STR(*map_ptr, key_str, entry);
-  if (entry) {
-    entry->key_val = key_val;
-    entry->value = args[1];
-  } else {
-    entry = ant_calloc(sizeof(map_entry_t));
-    if (!entry) return js_mkerr(js, "out of memory");
-    entry->key = strdup(key_str);
-    entry->key_val = key_val;
-    entry->value = args[1];
-    HASH_ADD_STR(*map_ptr, key, entry);
-  }
+  if (!map_store_entry(js, map_ptr, args[0], key_val, args[1]))
+    return js_mkerr(js, "out of memory");
 
   return this_val;
 }
@@ -106,11 +241,8 @@ static ant_value_t map_get(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_val = js->this_val;
   map_entry_t **map_ptr = get_map_from_obj(js, this_val);
   if (!map_ptr) return js_mkundef();
-  
-  const char *key_str = ant_value_to_key(js, args[0]);
-  
-  map_entry_t *entry;
-  HASH_FIND_STR(*map_ptr, key_str, entry);
+
+  map_entry_t *entry = map_find_entry(js, map_ptr, args[0]);
   return entry ? entry->value : js_mkundef();
 }
 
@@ -121,10 +253,7 @@ static ant_value_t map_has(ant_t *js, ant_value_t *args, int nargs) {
   map_entry_t **map_ptr = get_map_from_obj(js, this_val);
   
   if (!map_ptr) return js_false;
-  const char *key_str = ant_value_to_key(js, args[0]);
-  
-  map_entry_t *entry;
-  HASH_FIND_STR(*map_ptr, key_str, entry);
+  map_entry_t *entry = map_find_entry(js, map_ptr, args[0]);
   return js_bool(entry != NULL);
 }
 
@@ -135,10 +264,7 @@ static ant_value_t map_delete(ant_t *js, ant_value_t *args, int nargs) {
   map_entry_t **map_ptr = get_map_from_obj(js, this_val);
   
   if (!map_ptr) return js_false;
-  const char *key_str = ant_value_to_key(js, args[0]);
-  
-  map_entry_t *entry;
-  HASH_FIND_STR(*map_ptr, key_str, entry);
+  map_entry_t *entry = map_find_entry(js, map_ptr, args[0]);
   if (entry) {
     HASH_DEL(*map_ptr, entry);
     free(entry->key);
@@ -308,18 +434,8 @@ static ant_value_t set_add(ant_t *js, ant_value_t *args, int nargs) {
   set_entry_t **set_ptr = get_set_from_obj(js, this_val);
   if (!set_ptr) return js_mkerr(js, "Invalid Set object");
   
-  const char *key_str = ant_value_to_key(js, args[0]);
-  
-  set_entry_t *entry;
-  HASH_FIND_STR(*set_ptr, key_str, entry);
-  
-  if (!entry) {
-    entry = ant_calloc(sizeof(set_entry_t));
-    if (!entry) return js_mkerr(js, "out of memory");
-    entry->value = args[0];
-    entry->key = strdup(key_str);
-    HASH_ADD_KEYPTR(hh, *set_ptr, entry->key, strlen(entry->key), entry);
-  }
+  if (!set_store_entry(js, set_ptr, args[0]))
+    return js_mkerr(js, "out of memory");
   
   return this_val;
 }
@@ -330,11 +446,8 @@ static ant_value_t set_has(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_val = js->this_val;
   set_entry_t **set_ptr = get_set_from_obj(js, this_val);
   if (!set_ptr) return js_false;
-  
-  const char *key_str = ant_value_to_key(js, args[0]);
-  
-  set_entry_t *entry;
-  HASH_FIND_STR(*set_ptr, key_str, entry);
+
+  set_entry_t *entry = set_find_entry(js, set_ptr, args[0]);
   return js_bool(entry != NULL);
 }
 
@@ -344,10 +457,8 @@ static ant_value_t set_delete(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_val = js->this_val;
   set_entry_t **set_ptr = get_set_from_obj(js, this_val);
   if (!set_ptr) return js_false;
-  
-  const char *key_str = ant_value_to_key(js, args[0]);
-  set_entry_t *entry;
-  HASH_FIND_STR(*set_ptr, key_str, entry);
+
+  set_entry_t *entry = set_find_entry(js, set_ptr, args[0]);
   
   if (entry) {
     HASH_DEL(*set_ptr, entry);
@@ -427,7 +538,7 @@ static ant_value_t weakmap_set(ant_t *js, ant_value_t *args, int nargs) {
   weakmap_entry_t **wm_ptr = get_weakmap_from_obj(js, this_val);
   if (!wm_ptr) return js_mkerr(js, "Invalid WeakMap object");
   
-  if (vtype(args[0]) != T_OBJ)
+  if (!is_object_type(args[0]))
     return js_mkerr(js, "WeakMap key must be an object");
   
   ant_value_t key_obj = args[0];
@@ -453,8 +564,7 @@ static ant_value_t weakmap_get(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_val = js->this_val;
   weakmap_entry_t **wm_ptr = get_weakmap_from_obj(js, this_val);
   if (!wm_ptr) return js_mkundef();
-  
-  if (vtype(args[0]) != T_OBJ) return js_mkundef();
+  if (!is_object_type(args[0])) return js_mkundef();
   
   ant_value_t key_obj = args[0];
   weakmap_entry_t *entry;
@@ -468,8 +578,7 @@ static ant_value_t weakmap_has(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_val = js->this_val;
   weakmap_entry_t **wm_ptr = get_weakmap_from_obj(js, this_val);
   if (!wm_ptr) return js_false;
-  
-  if (vtype(args[0]) != T_OBJ) return js_false;
+  if (!is_object_type(args[0])) return js_false;
   
   ant_value_t key_obj = args[0];
   weakmap_entry_t *entry;
@@ -483,8 +592,7 @@ static ant_value_t weakmap_delete(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_val = js->this_val;
   weakmap_entry_t **wm_ptr = get_weakmap_from_obj(js, this_val);
   if (!wm_ptr) return js_false;
-  
-  if (vtype(args[0]) != T_OBJ) return js_false;
+  if (!is_object_type(args[0])) return js_false;
   
   ant_value_t key_obj = args[0];
   weakmap_entry_t *entry;
@@ -504,7 +612,7 @@ static ant_value_t weakset_add(ant_t *js, ant_value_t *args, int nargs) {
   weakset_entry_t **ws_ptr = get_weakset_from_obj(js, this_val);
   if (!ws_ptr) return js_mkerr(js, "Invalid WeakSet object");
   
-  if (vtype(args[0]) != T_OBJ)
+  if (!is_object_type(args[0]))
     return js_mkerr(js, "WeakSet value must be an object");
   
   ant_value_t value_obj = args[0];
@@ -528,8 +636,7 @@ static ant_value_t weakset_has(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_val = js->this_val;
   weakset_entry_t **ws_ptr = get_weakset_from_obj(js, this_val);
   if (!ws_ptr) return js_false;
-  
-  if (vtype(args[0]) != T_OBJ) return js_false;
+  if (!is_object_type(args[0])) return js_false;
   
   ant_value_t value_obj = args[0];
   weakset_entry_t *entry;
@@ -543,8 +650,7 @@ static ant_value_t weakset_delete(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_val = js->this_val;
   weakset_entry_t **ws_ptr = get_weakset_from_obj(js, this_val);
   if (!ws_ptr) return js_false;
-  
-  if (vtype(args[0]) != T_OBJ) return js_false;
+  if (!is_object_type(args[0])) return js_false;
   
   ant_value_t value_obj = args[0];
   weakset_entry_t *entry;
@@ -559,7 +665,7 @@ static ant_value_t weakset_delete(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t builtin_WeakRef(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1 || vtype(args[0]) != T_OBJ) {
+  if (nargs < 1 || !is_object_type(args[0])) {
     return js_mkerr(js, "WeakRef target must be an object");
   }
   
@@ -695,21 +801,13 @@ static ant_value_t map_groupBy(ant_t *js, ant_value_t *args, int nargs) {
       js_mkundef(), cb_args, 2, NULL, false)
     );
     
-    map_entry_t *entry;
-    ant_value_t group;
-    
     if (is_err(key)) return key;
-    const char *key_str = ant_value_to_key(js, key);
-    HASH_FIND_STR(*map_head, key_str, entry);
-    
+    map_entry_t *entry = map_find_entry(js, map_head, key);
+    ant_value_t group;
+
     if (entry) group = entry->value; else {
       group = js_mkarr(js);
-      entry = ant_calloc(sizeof(map_entry_t));
-      if (!entry) return js_mkerr(js, "out of memory");
-      entry->key = strdup(key_str);
-      entry->key_val = key;
-      entry->value = group;
-      HASH_ADD_STR(*map_head, key, entry);
+      if (!map_store_entry(js, map_head, key, key, group)) return js_mkerr(js, "out of memory");
     }
     
     js_arr_push(js, group, val);
@@ -756,22 +854,8 @@ static ant_value_t builtin_Map(ant_t *js, ant_value_t *args, int nargs) {
     
     ant_value_t key = normalize_map_key(js_arr_get(js, entry, 0));
     ant_value_t value = js_arr_get(js, entry, 1);
-    const char *key_str = ant_value_to_key(js, key);
-
-    map_entry_t *map_entry;
-    HASH_FIND_STR(*map_head, key_str, map_entry);
-    if (map_entry) {
-      map_entry->key_val = key;
-      map_entry->value = value;
-      continue;
-    }
-
-    map_entry = ant_calloc(sizeof(map_entry_t));
-    if (!map_entry) return js_mkerr(js, "out of memory");
-    map_entry->key = strdup(key_str);
-    map_entry->key_val = key;
-    map_entry->value = value;
-    HASH_ADD_STR(*map_head, key, map_entry);
+    if (!map_store_entry(js, map_head, key, key, value))
+      return js_mkerr(js, "out of memory");
   }
   
   return map_obj;
@@ -808,17 +892,7 @@ static ant_value_t builtin_Set(ant_t *js, ant_value_t *args, int nargs) {
   
   for (ant_offset_t i = 0; i < length; i++) {
     ant_value_t value = js_arr_get(js, iterable, i);
-    const char *key_str = ant_value_to_key(js, value);
-    
-    set_entry_t *entry;
-    HASH_FIND_STR(*set_head, key_str, entry);
-    if (entry) continue;
-    
-    entry = ant_calloc(sizeof(set_entry_t));
-    if (!entry) return js_mkerr(js, "out of memory");
-    entry->value = value;
-    entry->key = strdup(key_str);
-    HASH_ADD_KEYPTR(hh, *set_head, entry->key, strlen(entry->key), entry);
+    if (!set_store_entry(js, set_head, value)) return js_mkerr(js, "out of memory");
   }
   
   return set_obj;
@@ -862,11 +936,11 @@ static ant_value_t builtin_WeakMap(ant_t *js, ant_value_t *args, int nargs) {
     
     ant_value_t key = js_arr_get(js, entry, 0);
     ant_value_t value = js_arr_get(js, entry, 1);
-    
-    if (vtype(key) != T_OBJ) return js_mkerr(js, "WeakMap key must be an object");
+    if (!is_object_type(key)) return js_mkerr(js, "WeakMap key must be an object");
     
     weakmap_entry_t *wm_entry;
     HASH_FIND(hh, *wm_head, &key, sizeof(ant_value_t), wm_entry);
+    
     if (wm_entry) {
       wm_entry->value = value;
       continue;
@@ -874,6 +948,7 @@ static ant_value_t builtin_WeakMap(ant_t *js, ant_value_t *args, int nargs) {
     
     wm_entry = ant_calloc(sizeof(weakmap_entry_t));
     if (!wm_entry) return js_mkerr(js, "out of memory");
+    
     wm_entry->key_obj = key;
     wm_entry->value = value;
     HASH_ADD(hh, *wm_head, key_obj, sizeof(ant_value_t), wm_entry);
@@ -913,8 +988,7 @@ static ant_value_t builtin_WeakSet(ant_t *js, ant_value_t *args, int nargs) {
   
   for (ant_offset_t i = 0; i < length; i++) {
     ant_value_t value = js_arr_get(js, iterable, i);
-    
-    if (vtype(value) != T_OBJ) return js_mkerr(js, "WeakSet value must be an object");
+    if (!is_object_type(value)) return js_mkerr(js, "WeakSet value must be an object");
     
     weakset_entry_t *entry;
     HASH_FIND(hh, *ws_head, &value, sizeof(ant_value_t), entry);

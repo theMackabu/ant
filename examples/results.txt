@@ -460,7 +460,7 @@ compat-table/es6/Function.name.symbol-keyed.js: failed
 compat-table/es6/Function.name.variable.js: failed
 compat-table/es6/Map.Symbol.species.js: OK
 compat-table/es6/Map.constructor-accepts-null.js: OK
-compat-table/es6/Map.constructor-arguments.js: failed
+compat-table/es6/Map.constructor-arguments.js: OK
 compat-table/es6/Map.constructor-invokes-set.js: failed
 compat-table/es6/Map.constructor-requires-new.js: OK
 compat-table/es6/Map.iterator-closing.js: failed
@@ -527,7 +527,7 @@ compat-table/es6/Proxy.handler.defineProperty.js: failed
 compat-table/es6/Proxy.handler.deleteProperty.invariants.js: OK
 compat-table/es6/Proxy.handler.deleteProperty.js: OK
 compat-table/es6/Proxy.handler.getOwnPropertyDescriptor.invariants.js: failed
-compat-table/es6/Proxy.handler.getOwnPropertyDescriptor.js: TypeError: Cannot read properties of undefined (reading 'value')
+compat-table/es6/Proxy.handler.getOwnPropertyDescriptor.js: failed
 compat-table/es6/Proxy.handler.getPrototypeOf.invariants.js: failed
 compat-table/es6/Proxy.handler.getPrototypeOf.js: failed
 compat-table/es6/Proxy.handler.get.instances.js: failed
@@ -887,7 +887,7 @@ compat-table/es6/misc.Proxy.deleteProperty.Array.splice.js: failed
 compat-table/es6/misc.Proxy.deleteProperty.Array.unshift.js: failed
 compat-table/es6/misc.Proxy.getOwnPropertyDescriptor.Function.bind.js: TypeError: bind requires a function
 compat-table/es6/misc.Proxy.getOwnPropertyDescriptor.Object.assign.js: failed
-compat-table/es6/misc.Proxy.getOwnPropertyDescriptor.Object.hasOwnProperty.js: failed
+compat-table/es6/misc.Proxy.getOwnPropertyDescriptor.Object.hasOwnProperty.js: OK
 compat-table/es6/misc.Proxy.getOwnPropertyDescriptor.Set.js: failed
 compat-table/es6/misc.Proxy.get.Array.concat.js: OK
 compat-table/es6/misc.Proxy.get.Array.from.js: failed
@@ -1072,7 +1072,7 @@ compat-table/es6/typed-arrays.prototype.filter.js: failed
 compat-table/es6/typed-arrays.prototype.findIndex.js: failed
 compat-table/es6/typed-arrays.prototype.find.js: failed
 compat-table/es6/typed-arrays.prototype.forEach.js: failed
-compat-table/es6/typed-arrays.prototype.indexOf.js: failed
+compat-table/es6/typed-arrays.prototype.indexOf.js: OK
 compat-table/es6/typed-arrays.prototype.join.js: OK
 compat-table/es6/typed-arrays.prototype.keys.js: OK
 compat-table/es6/typed-arrays.prototype.lastIndexOf.js: failed

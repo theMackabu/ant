@@ -106,5 +106,4 @@ void init_globals_module(void) {
 
   js_set(js, global, "reportError", js_mkfun(js_report_error));
   js_set_descriptor(js, global, "reportError", 11, JS_DESC_W | JS_DESC_C);
-
 }

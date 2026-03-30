@@ -52,6 +52,7 @@ struct net_server_s {
   net_socket_t *sockets;
   struct net_server_s *next_active;
   char *host;
+  char *path;
   int port;
   int backlog;
   int max_connections;
@@ -66,6 +67,7 @@ struct net_server_s {
 
 struct net_listen_args_s {
   const char *host;
+  const char *path;
   int port;
   int backlog;
   ant_value_t callback;
@@ -251,9 +253,8 @@ static bool net_parse_listen_args(ant_t *js, ant_value_t *args, int nargs, net_l
 
   if (vtype(args[0]) == T_OBJ) {
     ant_value_t value = js_get(js, args[0], "path");
-    if (vtype(value) != T_UNDEF) {
-      out->error = net_not_implemented(js, "IPC server listen");
-      return false;
+    if (vtype(value) == T_STR) {
+      out->path = js_getstr(js, value, NULL);
     }
 
     value = js_get(js, args[0], "port");
@@ -263,15 +264,20 @@ static bool net_parse_listen_args(ant_t *js, ant_value_t *args, int nargs, net_l
       size_t len = 0;
       out->host = js_getstr(js, value, &len);
     }
+    
     value = js_get(js, args[0], "backlog");
     if (vtype(value) == T_NUM) out->backlog = (int)js_getnum(value);
     if (nargs > 1 && is_callable(args[1])) out->callback = args[1];
+    
     return true;
   }
 
   if (vtype(args[0]) == T_STR) {
-    out->error = net_not_implemented(js, "IPC server listen");
-    return false;
+    out->path = js_getstr(js, args[0], NULL);
+    if (nargs > 1 && vtype(args[1]) == T_NUM) out->backlog = (int)js_getnum(args[1]);
+    if (nargs > 2 && is_callable(args[2])) out->callback = args[2];
+    else if (nargs > 1 && is_callable(args[1])) out->callback = args[1];
+    return true;
   }
 
   if (is_callable(args[0])) {
@@ -760,21 +766,52 @@ static ant_value_t js_net_server_ctor(ant_t *js, ant_value_t *args, int nargs) {
   return server->obj;
 }
 
+static ant_value_t net_server_bind_listener(
+  ant_t *js,
+  net_server_t *server,
+  const net_listen_args_t *parsed,
+  const ant_listener_callbacks_t *callbacks
+) {
+  uv_loop_t *loop = uv_default_loop();
+  int rc = 0;
+
+  if (parsed->path) {
+    server->path = strdup(parsed->path);
+    if (!server->path) return js_mkerr_typed(js, JS_ERR_TYPE, "Out of memory");
+    
+    rc = ant_listener_listen_pipe(
+      &server->listener, loop, server->path, 
+      server->backlog, 0, callbacks, server
+    );
+  } else {
+    const char *host = parsed->host;
+    net_server_parse_host(host, &host);
+    
+    free(server->host);
+    server->host = strdup(host ? host : "0.0.0.0");
+    if (!server->host) return js_mkerr_typed(js, JS_ERR_TYPE, "Out of memory");
+    
+    rc = ant_listener_listen_tcp(
+      &server->listener, loop, server->host, parsed->port, 
+      server->backlog, 0, callbacks, server
+    );
+  }
+
+  if (rc != 0) return js_mkerr_typed(js, JS_ERR_TYPE, "%s", uv_strerror(rc));
+  return js_mkundef();
+}
+
 static ant_value_t js_net_server_listen(ant_t *js, ant_value_t *args, int nargs) {
   net_server_t *server = net_require_server(js, js_getthis(js));
   ant_listener_callbacks_t callbacks = {0};
   net_listen_args_t parsed;
-  const char *host = NULL;
-  int rc = 0;
 
   if (!server) return js->thrown_value;
   if (server->listening) return js_mkerr_typed(js, JS_ERR_TYPE, "Server is already listening");
   if (!net_parse_listen_args(js, args, nargs, &parsed)) return parsed.error;
 
-  host = parsed.host;
-  net_server_parse_host(host, &host);
-  free(server->host);
-  server->host = strdup(host ? host : "0.0.0.0");
+  free(server->path);
+  server->path = NULL;
   server->port = parsed.port;
   server->backlog = parsed.backlog > 0 ? parsed.backlog : server->backlog;
 
@@ -786,17 +823,8 @@ static ant_value_t js_net_server_listen(ant_t *js, ant_value_t *args, int nargs)
   callbacks.on_conn_close = net_server_on_conn_close;
   callbacks.on_listener_close = net_server_on_listener_close;
 
-  rc = ant_listener_listen_tcp(
-    &server->listener,
-    uv_default_loop(),
-    server->host,
-    parsed.port,
-    server->backlog,
-    0,
-    &callbacks,
-    server
-  );
-  if (rc != 0) return js_mkerr_typed(js, JS_ERR_TYPE, "%s", uv_strerror(rc));
+  ant_value_t bind_result = net_server_bind_listener(js, server, &parsed, &callbacks);
+  if (is_err(bind_result)) return bind_result;
 
   server->port = ant_listener_port(&server->listener);
   server->listening = true;
@@ -813,7 +841,6 @@ static ant_value_t js_net_server_close(ant_t *js, ant_value_t *args, int nargs) 
   net_server_t *server = net_require_server(js, js_getthis(js));
 
   if (!server) return js->thrown_value;
-
   if (nargs > 0 && is_callable(args[0])) net_add_listener(js, server->obj, "close", args[0], true);
 
   if (!server->listening && !server->closing) {
@@ -833,8 +860,10 @@ static ant_value_t js_net_server_close(ant_t *js, ant_value_t *args, int nargs) 
 static ant_value_t js_net_server_address(ant_t *js, ant_value_t *args, int nargs) {
   net_server_t *server = net_require_server(js, js_getthis(js));
   ant_value_t out = js_mknull();
+  
   if (!server) return js->thrown_value;
   if (!server || !server->listening) return out;
+  if (server->path) return js_mkstr(js, server->path, strlen(server->path));
 
   out = js_mkobj(js);
   js_set(js, out, "port", js_mknum(server->port));
@@ -856,16 +885,14 @@ static ant_value_t js_net_server_getConnections(ant_t *js, ant_value_t *args, in
 static ant_value_t js_net_server_ref(ant_t *js, ant_value_t *args, int nargs) {
   net_server_t *server = net_require_server(js, js_getthis(js));
   if (!server) return js->thrown_value;
-  if (server && !uv_is_closing((uv_handle_t *)&server->listener.handle))
-    uv_ref((uv_handle_t *)&server->listener.handle);
+  if (server) ant_listener_ref(&server->listener);
   return js_getthis(js);
 }
 
 static ant_value_t js_net_server_unref(ant_t *js, ant_value_t *args, int nargs) {
   net_server_t *server = net_require_server(js, js_getthis(js));
   if (!server) return js->thrown_value;
-  if (server && !uv_is_closing((uv_handle_t *)&server->listener.handle))
-    uv_unref((uv_handle_t *)&server->listener.handle);
+  if (server) ant_listener_unref(&server->listener);
   return js_getthis(js);
 }
 
@@ -948,7 +975,6 @@ ant_value_t net_library(ant_t *js) {
   ant_value_t lib = js_mkobj(js);
 
   net_init_constructors(js);
-
   js_set(js, lib, "Server", g_net_server_ctor);
   js_set(js, lib, "Socket", g_net_socket_ctor);
   js_set(js, lib, "createServer", js_mkfun(js_net_createServer));
@@ -963,6 +989,7 @@ ant_value_t net_library(ant_t *js) {
   js_set(js, lib, "setDefaultAutoSelectFamilyAttemptTimeout", js_mkfun(js_net_setDefaultAutoSelectFamilyAttemptTimeout));
   js_set(js, lib, "default", lib);
   js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "net", 3));
+  
   return lib;
 }
 
@@ -977,7 +1004,7 @@ void gc_mark_net(ant_t *js, gc_mark_fn mark) {
 
   for (server = g_active_servers; server; server = server->next_active)
     mark(js, server->obj);
-
+    
   for (socket = g_active_sockets; socket; socket = socket->next_active) {
     mark(js, socket->obj);
     if (vtype(socket->encoding) != T_UNDEF) mark(js, socket->encoding);

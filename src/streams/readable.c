@@ -16,6 +16,7 @@
 ant_value_t g_rs_proto;
 ant_value_t g_reader_proto;
 ant_value_t g_controller_proto;
+ant_value_t g_rs_async_iter_proto;
 
 bool rs_is_stream(ant_value_t obj) {
   return js_check_brand(obj, BRAND_READABLE_STREAM)
@@ -604,32 +605,37 @@ static ant_value_t js_rs_reader_read(ant_t *js, ant_value_t *args, int nargs) {
   return rs_default_reader_read(js, js->this_val);
 }
 
-static ant_value_t js_rs_reader_release_lock(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t stream_obj = rs_reader_stream(js->this_val);
+static ant_value_t rs_release_reader_lock(ant_t *js, ant_value_t reader_obj) {
+  ant_value_t stream_obj = rs_reader_stream(reader_obj);
   if (!rs_is_stream(stream_obj)) return js_mkundef();
   rs_stream_t *stream = rs_get_stream(stream_obj);
 
-  if (rs_reader_has_reqs(js, js->this_val)) {
+  if (rs_reader_has_reqs(js, reader_obj)) {
     ant_value_t release_err = js_make_error_silent(js, JS_ERR_TYPE, "Reader was released");
-    rs_default_reader_error_read_requests(js, js->this_val, release_err);
+    rs_default_reader_error_read_requests(js, reader_obj, release_err);
   }
 
   ant_value_t new_closed = js_mkpromise(js);
   ant_value_t release_err = js_make_error_silent(js, JS_ERR_TYPE, "Reader was released");
 
   if (stream->state == RS_STATE_READABLE) {
-    ant_value_t old_closed = rs_reader_closed(js->this_val);
+    ant_value_t old_closed = rs_reader_closed(reader_obj);
     js_reject_promise(js, old_closed, release_err);
     promise_mark_handled(old_closed);
   }
 
   js_reject_promise(js, new_closed, release_err);
   promise_mark_handled(new_closed);
-  js_set_slot(js->this_val, SLOT_RS_CLOSED, new_closed);
+  js_set_slot(reader_obj, SLOT_RS_CLOSED, new_closed);
 
   js_set_slot(stream_obj, SLOT_CTOR, js_mkundef());
-  js_set_slot(js->this_val, SLOT_ENTRIES, js_mkundef());
+  js_set_slot(reader_obj, SLOT_ENTRIES, js_mkundef());
+  
   return js_mkundef();
+}
+
+static ant_value_t js_rs_reader_release_lock(ant_t *js, ant_value_t *args, int nargs) {
+  return rs_release_reader_lock(js, js->this_val);
 }
 
 static ant_value_t js_rs_reader_cancel(ant_t *js, ant_value_t *args, int nargs) {
@@ -725,18 +731,56 @@ static ant_value_t js_rs_get_reader(ant_t *js, ant_value_t *args, int nargs) {
   return reader;
 }
 
+static ant_value_t js_rs_async_iter_next(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t reader = js_get_slot(js->this_val, SLOT_DATA);
+  if (!rs_is_reader(reader)) return js_mkerr_typed(
+    js, JS_ERR_TYPE, "ReadableStream async iterator has no reader"
+  );
+  return rs_default_reader_read(js, reader);
+}
+
+static ant_value_t js_rs_async_iter_return(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t reader = js_get_slot(js->this_val, SLOT_DATA);
+  
+  if (!rs_is_reader(reader)) {
+    ant_value_t p = js_mkpromise(js);
+    js_resolve_promise(js, p, js_iter_result(js, false, js_mkundef()));
+    return p;
+  }
+
+  ant_value_t stream_obj = rs_reader_stream(reader);
+  ant_value_t reason = (nargs > 0) ? args[0] : js_mkundef();
+  
+  readable_stream_cancel(js, stream_obj, reason);
+  rs_release_reader_lock(js, reader);
+
+  ant_value_t p = js_mkpromise(js);
+  js_resolve_promise(js, p, js_iter_result(js, false, js_mkundef()));
+  
+  return p;
+}
+
 static ant_value_t js_rs_values(ant_t *js, ant_value_t *args, int nargs) {
-  return js_mkerr_typed(js, JS_ERR_TYPE, "ReadableStream async iteration is not yet implemented");
+  ant_value_t reader = js_rs_get_reader(js, NULL, 0);
+  if (is_err(reader)) return reader;
+
+  ant_value_t iterator = js_mkobj(js);
+  js_set_proto_init(iterator, g_rs_async_iter_proto);
+  js_set_slot(iterator, SLOT_DATA, reader);
+  
+  return iterator;
 }
 
 static ant_value_t rs_start_resolve_handler(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t ctrl_obj = js_get_slot(js->current_func, SLOT_DATA);
   rs_controller_t *ctrl = rs_get_controller(ctrl_obj);
+  
   if (!ctrl) return js_mkundef();
   ctrl->started = true;
   ctrl->pulling = false;
   ctrl->pull_again = false;
   rs_default_controller_call_pull_if_needed(js, ctrl_obj);
+  
   return js_mkundef();
 }
 
@@ -744,10 +788,15 @@ static ant_value_t rs_start_reject_handler(ant_t *js, ant_value_t *args, int nar
   ant_value_t ctrl_obj = js_get_slot(js->current_func, SLOT_DATA);
   rs_controller_t *ctrl = rs_get_controller(ctrl_obj);
   if (!ctrl) return js_mkundef();
+  
   ant_value_t stream_obj = rs_ctrl_stream(ctrl_obj);
   rs_stream_t *stream = rs_get_stream(stream_obj);
-  if (stream && stream->state == RS_STATE_READABLE)
-    readable_stream_error(js, stream_obj, nargs > 0 ? args[0] : js_mkundef());
+  
+  if (stream && stream->state == RS_STATE_READABLE) readable_stream_error(
+    js, stream_obj, 
+    nargs > 0 ? args[0] : js_mkundef()
+  );
+    
   return js_mkundef();
 }
 
@@ -780,6 +829,7 @@ static ant_value_t js_rs_ctor(ant_t *js, ant_value_t *args, int nargs) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "ReadableStream constructor requires 'new'");
 
   ant_value_t underlying_source = js_mkundef();
+  bool is_bytes_source = false;
   if (nargs > 0 && !is_undefined(args[0])) {
     if (is_null(args[0]))
       return js_mkerr_typed(js, JS_ERR_TYPE, "The underlying source cannot be null");
@@ -796,9 +846,11 @@ static ant_value_t js_rs_ctor(ant_t *js, ant_value_t *args, int nargs) {
     }
     size_t tlen;
     const char *tstr = js_getstr(js, coerced, &tlen);
-    if (tstr && tlen == 5 && memcmp(tstr, "bytes", 5) == 0)
-      return js_mkerr_typed(js, JS_ERR_RANGE, "ReadableStream byte sources are not yet implemented");
-    return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid type is specified");
+    if (tstr && tlen == 5 && memcmp(tstr, "bytes", 5) == 0) {
+      // TODO: accept byte sources, but currently back them with the default
+      // controller path until BYOB readers/controllers are implemented
+      is_bytes_source = true;
+    } else return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid type is specified");
   }}
 
   ant_value_t strategy = js_mkundef();
@@ -836,6 +888,9 @@ static ant_value_t js_rs_ctor(ant_t *js, ant_value_t *args, int nargs) {
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_READABLE_STREAM));
   js_set_slot(obj, SLOT_DATA, ANT_PTR(st));
   js_set_finalizer(obj, rs_stream_finalize);
+
+  if (is_bytes_source)
+    js_set(js, obj, "supportsBYOB", js_false);
 
   ant_value_t pull_fn = js_mkundef();
   ant_value_t cancel_fn = js_mkundef();
@@ -925,6 +980,7 @@ void gc_mark_readable_streams(ant_t *js, void (*mark)(ant_t *, ant_value_t)) {
   mark(js, g_rs_proto);
   mark(js, g_reader_proto);
   mark(js, g_controller_proto);
+  mark(js, g_rs_async_iter_proto);
 }
 
 void init_readable_stream_module(void) {
@@ -959,6 +1015,13 @@ void init_readable_stream_module(void) {
   js_set(js, g, "ReadableStreamDefaultReader", reader_ctor);
   js_set_descriptor(js, g, "ReadableStreamDefaultReader", 27, JS_DESC_W | JS_DESC_C);
 
+  g_rs_async_iter_proto = js_mkobj(js);
+  js_set(js, g_rs_async_iter_proto, "next", js_mkfun(js_rs_async_iter_next));
+  js_set_descriptor(js, g_rs_async_iter_proto, "next", 4, JS_DESC_W | JS_DESC_C);
+  js_set(js, g_rs_async_iter_proto, "return", js_mkfun(js_rs_async_iter_return));
+  js_set_descriptor(js, g_rs_async_iter_proto, "return", 6, JS_DESC_W | JS_DESC_C);
+  js_set_sym(js, g_rs_async_iter_proto, get_asyncIterator_sym(), js_mkfun(sym_this_cb));
+
   g_rs_proto = js_mkobj(js);
   js_set_getter_desc(js, g_rs_proto, "locked", 6, js_mkfun(js_rs_get_locked), JS_DESC_C);
   js_set(js, g_rs_proto, "cancel", js_mkfun(js_rs_cancel));
@@ -969,6 +1032,7 @@ void init_readable_stream_module(void) {
   
   js_set(js, g_rs_proto, "values", js_mkfun(js_rs_values));
   js_set_descriptor(js, g_rs_proto, "values", 6, JS_DESC_W | JS_DESC_C);
+  js_set_sym(js, g_rs_proto, get_asyncIterator_sym(), js_get(js, g_rs_proto, "values"));
   js_set_sym(js, g_rs_proto, get_toStringTag_sym(), js_mkstr(js, "ReadableStream", 14));
 
   ant_value_t rs_ctor = js_make_ctor(js, js_rs_ctor, g_rs_proto, "ReadableStream", 14);

@@ -7,25 +7,23 @@ declare module 'path' {
     name: string;
   }
 
-  const sep: string;
-  const delimiter: string;
+  interface PathModule {
+    sep: string;
+    delimiter: string;
+    basename(path: string, ext?: string): string;
+    dirname(path: string): string;
+    extname(path: string): string;
+    join(...paths: string[]): string;
+    normalize(path: string): string;
+    resolve(...paths: string[]): string;
+    relative(from: string, to: string): string;
+    isAbsolute(path: string): boolean;
+    parse(path: string): ParsedPath;
+    format(pathObject: Partial<ParsedPath>): string;
+    posix: PathModule;
+    win32: PathModule;
+  }
 
-  function basename(path: string, ext?: string): string;
-  function dirname(path: string): string;
-  function extname(path: string): string;
-  function join(...paths: string[]): string;
-  function normalize(path: string): string;
-  function resolve(...paths: string[]): string;
-  function relative(from: string, to: string): string;
-  function isAbsolute(path: string): boolean;
-  function parse(path: string): ParsedPath;
-  function format(pathObject: Partial<ParsedPath>): string;
-}
-
-declare module 'ant:path' {
-  export * from 'path';
-}
-
-declare module 'node:path' {
-  export * from 'path';
+  const path: PathModule;
+  export = path;
 }

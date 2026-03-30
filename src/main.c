@@ -70,6 +70,7 @@
 #include "modules/util.h"
 #include "modules/async_hooks.h"
 #include "modules/net.h"
+#include "modules/tls.h"
 #include "modules/http_metadata.h"
 #include "modules/http_parser.h"
 #include "modules/http_writer.h"
@@ -615,6 +616,7 @@ int main(int argc, char *argv[]) {
   ant_register_library(ffi_library, "ant:ffi", NULL);
   ant_register_library(lmdb_library, "ant:lmdb", NULL);
   
+  ant_register_library(internal_tls_library, "ant:internal/tls", NULL);
   ant_register_library(internal_http_parser_library, "ant:internal/http_parser", NULL);
   ant_register_library(internal_http_writer_library, "ant:internal/http_writer", NULL);
   ant_register_library(internal_http_metadata_library, "ant:internal/http_metadata", NULL);
@@ -627,7 +629,6 @@ int main(int argc, char *argv[]) {
   ant_standard_library("buffer", buffer_library);
   ant_standard_library("path", path_library);
   ant_standard_library("fs", fs_library);
-  ant_standard_library("fs/promises", fs_promises_library);
   ant_standard_library("os", os_library);
   ant_standard_library("url", url_library);
   ant_standard_library("perf_hooks", perf_hooks_library);
@@ -636,12 +637,15 @@ int main(int argc, char *argv[]) {
   ant_standard_library("events", events_library);
   ant_standard_library("tty", tty_library);
   ant_standard_library("readline", readline_library);
-  ant_standard_library("readline/promises", readline_promises_library);
   ant_standard_library("child_process", child_process_library);
   ant_standard_library("worker_threads", worker_threads_library);
   ant_standard_library("async_hooks", async_hooks_library);
   ant_standard_library("v8", v8_library);
   ant_standard_library("zlib", zlib_library);
+  
+  ant_standard_library("fs/promises", fs_promises_library);
+  ant_standard_library("timers/promises", timers_promises_library);
+  ant_standard_library("readline/promises", readline_promises_library);
 
   ant_value_t snapshot_result = ant_load_snapshot(js);
   if (vtype(snapshot_result) == T_ERR) {

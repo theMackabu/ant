@@ -74,7 +74,7 @@ static int decode_escape_sequence(const char *str, size_t len, size_t *pos, unsi
 }
 
 // encodeURIComponent()
-static ant_value_t js_encodeURIComponent(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t js_encodeURIComponent(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t result;
   char *out = NULL;
   
@@ -127,7 +127,7 @@ malformed:
 }
 
 // encodeURI()
-static ant_value_t js_encodeURI(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t js_encodeURI(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t result;
   char *out = NULL;
   
@@ -180,7 +180,7 @@ malformed:
 }
 
 // decodeURIComponent()
-static ant_value_t js_decodeURIComponent(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t js_decodeURIComponent(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t result;
   char *out = NULL;
   
@@ -229,7 +229,7 @@ malformed:
 }
 
 // decodeURI()
-static ant_value_t js_decodeURI(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t js_decodeURI(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t result;
   char *out = NULL;
   

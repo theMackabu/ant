@@ -1858,6 +1858,51 @@ static ant_value_t js_typedarray_join(ant_t *js, ant_value_t *args, int nargs) {
   return typedarray_join_with(js, js_getthis(js), sep, sep_len);
 }
 
+static ant_value_t js_typedarray_indexOf(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_val = js_getthis(js);
+  ant_value_t ta_data_val = js_get_slot(this_val, SLOT_BUFFER);
+  
+  TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
+  if (!ta_data || !ta_data->buffer || ta_data->buffer->is_detached) return js_mknum(-1);
+
+  size_t len = ta_data->length;
+  if (len == 0 || nargs < 1) return js_mknum(-1);
+
+  int64_t from_index = 0;
+  if (nargs > 1 && vtype(args[1]) != T_UNDEF) {
+  from_index = (int64_t)js_to_number(js, args[1]);
+  if (from_index < 0) {
+    from_index += (int64_t)len;
+    if (from_index < 0) from_index = 0;
+  }}
+  
+  if ((size_t)from_index >= len) return js_mknum(-1);
+  uint8_t *data = ta_data->buffer->data + ta_data->byte_offset;
+  double needle_num = js_to_number(js, args[0]);
+
+  for (size_t i = (size_t)from_index; i < len; i++) {
+    bool match = false;
+    switch (ta_data->type) {
+      case TYPED_ARRAY_INT8:          match = ((int8_t *)data)[i] == (int8_t)needle_num; break;
+      case TYPED_ARRAY_UINT8:
+      case TYPED_ARRAY_UINT8_CLAMPED: match = data[i] == (uint8_t)needle_num; break;
+      case TYPED_ARRAY_INT16:         match = ((int16_t *)data)[i] == (int16_t)needle_num; break;
+      case TYPED_ARRAY_UINT16:        match = ((uint16_t *)data)[i] == (uint16_t)needle_num; break;
+      case TYPED_ARRAY_INT32:         match = ((int32_t *)data)[i] == (int32_t)needle_num; break;
+      case TYPED_ARRAY_UINT32:        match = ((uint32_t *)data)[i] == (uint32_t)needle_num; break;
+      case TYPED_ARRAY_FLOAT16:       match = half_to_double(((uint16_t *)data)[i]) == needle_num; break;
+      case TYPED_ARRAY_FLOAT32:       match = ((float *)data)[i] == (float)needle_num; break;
+      case TYPED_ARRAY_FLOAT64:       match = ((double *)data)[i] == needle_num; break;
+      case TYPED_ARRAY_BIGINT64:      match = ((int64_t *)data)[i] == (int64_t)needle_num; break;
+      case TYPED_ARRAY_BIGUINT64:     match = ((uint64_t *)data)[i] == (uint64_t)needle_num; break;
+      default: break;
+    }
+    if (match) return js_mknum((double)i);
+  }
+
+  return js_mknum(-1);
+}
+
 // Buffer.prototype.toString(encoding)
 static ant_value_t js_buffer_slice(ant_t *js, ant_value_t *args, int nargs) {
   return js_typedarray_subarray(js, args, nargs);
@@ -2174,6 +2219,7 @@ void init_buffer_module() {
   js_set(js, typedarray_proto, "with", js_mkfun(js_typedarray_with));
   js_set(js, typedarray_proto, "toString", js_mkfun(js_typedarray_toString));
   js_set(js, typedarray_proto, "join", js_mkfun(js_typedarray_join));
+  js_set(js, typedarray_proto, "indexOf", js_mkfun(js_typedarray_indexOf));
   js_set_sym(js, typedarray_proto, get_toStringTag_sym(), js_mkstr(js, "TypedArray", 10));
 
   g_typedarray_iter_proto = js_mkobj(js);

@@ -5,6 +5,7 @@
 #include <yyjson.h>
 #include <uthash.h>
 
+#include "gc.h"
 #include "utf8.h"
 #include "errors.h"
 #include "runtime.h"
@@ -40,9 +41,11 @@ static ant_value_t yyjson_to_jsval(ant_t *js, yyjson_val *val) {
     size_t idx, max;
     yyjson_val *item;
     
-    yyjson_arr_foreach(val, idx, max, item)
-      js_arr_push(js, arr, yyjson_to_jsval(js, item));
-      
+    yyjson_arr_foreach(val, idx, max, item) {
+      ant_value_t elem = yyjson_to_jsval(js, item);
+      js_arr_push(js, arr, elem);
+    }
+    
     return arr;
   }
   
@@ -53,18 +56,18 @@ static ant_value_t yyjson_to_jsval(ant_t *js, yyjson_val *val) {
     json_key_entry_t *hash = NULL, *entry, *tmp;
     
     yyjson_obj_foreach(val, idx, max, key, item) {
-      const char *k = yyjson_get_str(key);
-      size_t klen = yyjson_get_len(key);
-      ant_value_t v = yyjson_to_jsval(js, item);
-      
-      HASH_FIND(hh, hash, k, klen, entry);
-      if (entry) js_saveval(js, entry->prop_off, v); else {
-        ant_offset_t off = js_mkprop_fast_off(js, obj, k, klen, v);
-        entry = malloc(sizeof(json_key_entry_t));
-        entry->key = k; entry->key_len = klen; entry->prop_off = off;
-        HASH_ADD_KEYPTR(hh, hash, entry->key, entry->key_len, entry);
-      }
-    }
+    const char *k = yyjson_get_str(key);
+    
+    size_t klen = yyjson_get_len(key);
+    ant_value_t v = yyjson_to_jsval(js, item);
+    
+    HASH_FIND(hh, hash, k, klen, entry);
+    if (entry) js_saveval(js, entry->prop_off, v); else {
+      ant_offset_t off = js_mkprop_fast_off(js, obj, k, klen, v);
+      entry = malloc(sizeof(json_key_entry_t));
+      entry->key = k; entry->key_len = klen; entry->prop_off = off;
+      HASH_ADD_KEYPTR(hh, hash, entry->key, entry->key_len, entry);
+    }}
     
     HASH_ITER(hh, hash, entry, tmp) {
       HASH_DEL(hash, entry); free(entry);
@@ -188,6 +191,66 @@ static ant_value_t apply_reviver(
   const char *key, ant_value_t reviver
 );
 
+static ant_value_t json_apply_tojson(
+  ant_t *js,
+  const char *key,
+  ant_value_t val,
+  json_cycle_ctx *ctx
+) {
+  if (!is_special_object(val)) return val;
+  ant_value_t toJSON = js_get(js, val, "toJSON");
+  
+  if (is_err(toJSON)) {
+    json_capture_error(ctx, toJSON);
+    return js_mkundef();
+  }
+  
+  if (!is_callable(toJSON)) return val;
+  ant_value_t args[1] = { js_mkstr(js, key, strlen(key)) };
+  
+  ant_value_t transformed = sv_vm_call(
+    js->vm, js,
+    toJSON, val,
+    args, 1, NULL, false
+  );
+  
+  if (is_err(transformed)) {
+    json_capture_error(ctx, transformed);
+    return js_mkundef();
+  }
+
+  return transformed;
+}
+
+static ant_value_t json_apply_replacer(
+  ant_t *js,
+  const char *key,
+  ant_value_t val,
+  json_cycle_ctx *ctx
+) {
+  if (!is_callable(ctx->replacer_func)) return val;
+  ant_value_t args[2] = { js_mkstr(js, key, strlen(key)), val };
+  
+  ant_value_t transformed = sv_vm_call(
+    js->vm, js, 
+    ctx->replacer_func, ctx->holder, 
+    args, 2, NULL, false
+  );
+  
+  if (is_err(transformed)) {
+    json_capture_error(ctx, transformed);
+    return js_mkundef();
+  }
+
+  return transformed;
+}
+
+static inline ant_value_t json_create_root_holder(ant_t *js, ant_value_t value) {
+  ant_value_t holder = js_mkobj(js);
+  if (!is_err(holder)) js_set(js, holder, "", value);
+  return holder;
+}
+
 static yyjson_mut_val *json_array_to_yyjson(
   ant_t *js, yyjson_mut_doc *doc, ant_value_t val, json_cycle_ctx *ctx
 ) {
@@ -241,9 +304,7 @@ static yyjson_mut_val *json_object_to_yyjson(
       ctx->holder = saved_holder;
       return NULL;
     }
-    int ptype = vtype(prop);
-    if (ptype == T_UNDEF || ptype == T_FUNC) continue;
-
+    
     yyjson_mut_val *jval = ant_value_to_yyjson_with_key(js, doc, key, prop, ctx, 0);
     if (json_has_abort(ctx)) {
       ctx->holder = saved_holder;
@@ -262,25 +323,13 @@ static yyjson_mut_val *ant_value_to_yyjson_impl(ant_t *js, yyjson_mut_doc *doc, 
   int type = vtype(val);
   yyjson_mut_val *result = NULL;
   
-  if (is_special_object(val)) {
-  ant_value_t toJSON = js_get(js, val, "toJSON");
-  if (is_err(toJSON)) {
-    json_capture_error(ctx, toJSON);
-    return NULL;
-  }
-  
-  if (vtype(toJSON) == T_FUNC) {
-    ant_value_t r = sv_vm_call(js->vm, js, toJSON, js_mkundef(), &val, 1, NULL, false);
-    if (vtype(r) == T_ERR) { json_capture_error(ctx, r); return NULL; }
-    return ant_value_to_yyjson_impl(js, doc, r, ctx, in_array);
-  }}
-  
   switch (type) {
     case T_NULL:   return yyjson_mut_null(doc);
     case T_BOOL:   return yyjson_mut_bool(doc, val == js_true);
     
     case T_UNDEF:  return in_array ? yyjson_mut_null(doc) : YYJSON_SKIP_VALUE;
     case T_FUNC:   return in_array ? yyjson_mut_null(doc) : YYJSON_SKIP_VALUE;
+    case T_SYMBOL: return in_array ? yyjson_mut_null(doc) : YYJSON_SKIP_VALUE;
     
     case T_NUM: {
       double num = js_getnum(val);
@@ -317,19 +366,13 @@ static yyjson_mut_val *ant_value_to_yyjson_with_key(
   ant_t *js, yyjson_mut_doc *doc, const char *key,
   ant_value_t val, json_cycle_ctx *ctx, int in_array
 ) {
-  if (vtype(ctx->replacer_func) != T_FUNC)
-    return ant_value_to_yyjson_impl(js, doc, val, ctx, in_array);
-  
-  ant_value_t key_str = js_mkstr(js, key, strlen(key));
-  ant_value_t call_args[2] = { key_str, val };
-  ant_value_t transformed = sv_vm_call(js->vm, js, ctx->replacer_func, js_mkundef(), call_args, 2, NULL, false);
-  
-  if (vtype(transformed) == T_ERR) {
-    json_capture_error(ctx, transformed);
-    return NULL;
-  }
-  
-  return ant_value_to_yyjson_impl(js, doc, transformed, ctx, in_array);
+  val = json_apply_tojson(js, key, val, ctx);
+  if (json_has_abort(ctx)) return NULL;
+
+  val = json_apply_replacer(js, key, val, ctx);
+  if (json_has_abort(ctx)) return NULL;
+
+  return ant_value_to_yyjson_impl(js, doc, val, ctx, in_array);
 }
 
 static yyjson_mut_val *ant_value_to_yyjson(ant_t *js, yyjson_mut_doc *doc, ant_value_t val, json_cycle_ctx *ctx) {
@@ -338,20 +381,29 @@ static yyjson_mut_val *ant_value_to_yyjson(ant_t *js, yyjson_mut_doc *doc, ant_v
 
 static ant_value_t apply_reviver_call(ant_t *js, ant_value_t holder, const char *key, ant_value_t reviver) {
   ant_value_t key_str = js_mkstr(js, key, strlen(key));
-  ant_value_t call_args[2] = { key_str, js_get(js, holder, key) };
-  return sv_vm_call(js->vm, js, reviver, holder, call_args, 2, NULL, false);
+  ant_value_t current_value = js_get(js, holder, key);
+  ant_value_t call_args[2] = { key_str, current_value };
+  
+  ant_value_t result = sv_vm_call(
+    js->vm, js, reviver, holder,
+    call_args, 2, NULL, false
+  );
+  
+  return result;
 }
 
 static void apply_reviver_to_array(ant_t *js, ant_value_t value, ant_value_t reviver) {
   ant_offset_t length = js_arr_len(js, value);
 
   for (ant_offset_t i = 0; i < length; i++) {
-    char idxstr[32];
-    size_t idx_len = uint_to_str(idxstr, sizeof(idxstr), (uint64_t)i);
-    ant_value_t new_elem = apply_reviver(js, value, idxstr, reviver);
-    if (vtype(new_elem) == T_UNDEF) js_delete_prop(js, value, idxstr, idx_len);
-    else js_set(js, value, idxstr, new_elem);
-  }
+  char idxstr[32];
+  size_t idx_len = uint_to_str(idxstr, sizeof(idxstr), (uint64_t)i);
+  ant_value_t new_elem = apply_reviver(js, value, idxstr, reviver);
+  if (vtype(new_elem) == T_UNDEF) js_delete_prop(js, value, idxstr, idx_len);
+  else {
+    ant_value_t key_val = js_mkstr(js, idxstr, idx_len);
+    js_setprop(js, value, key_val, new_elem);
+  }}
 }
 
 static void apply_reviver_to_object(ant_t *js, ant_value_t value, ant_value_t reviver) {
@@ -382,23 +434,30 @@ static ant_value_t apply_reviver(ant_t *js, ant_value_t holder, const char *key,
 ant_value_t js_json_parse(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "JSON.parse() requires at least 1 argument");
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "JSON.parse() argument must be a string");
+  bool saved_gc_disabled = gc_disabled;
   
   size_t len;
   char *json_str = js_getstr(js, args[0], &len);
   
+  gc_disabled = true;
   yyjson_doc *doc = yyjson_read(json_str, len, 0);
-  if (!doc) return js_mkerr_typed(js, JS_ERR_SYNTAX, "JSON.parse: unexpected character");
+  
+  if (!doc) {
+    gc_disabled = saved_gc_disabled;
+    return js_mkerr_typed(js, JS_ERR_SYNTAX, "JSON.parse: unexpected character");
+  }
   
   ant_value_t result = yyjson_to_jsval(js, yyjson_doc_get_root(doc));
   yyjson_doc_free(doc);
   
-  if (nargs >= 2 && vtype(args[1]) == T_FUNC) {
+  if (nargs >= 2 && is_callable(args[1])) {
     ant_value_t reviver = args[1];
     ant_value_t root = js_mkobj(js);
     js_set(js, root, "", result);
     result = apply_reviver(js, root, "", reviver);
   }
   
+  gc_disabled = saved_gc_disabled;
   return result;
 }
 
@@ -424,6 +483,7 @@ static yyjson_write_flag get_write_flags(ant_value_t *args, int nargs) {
 ant_value_t js_json_stringify(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t result;
   yyjson_mut_doc *doc = NULL;
+  bool saved_gc_disabled = gc_disabled;
   
   json_cycle_ctx ctx = {
     .js = js,
@@ -435,10 +495,10 @@ ant_value_t js_json_stringify(ant_t *js, ant_value_t *args, int nargs) {
   
   char *json_str = NULL;
   size_t len;
+  ant_value_t root_holder = js_mkundef();
   
   if (nargs < 1) return js_mkerr(js, "JSON.stringify() requires at least 1 argument");
   int top_type = vtype(args[0]);
-  if (top_type == T_UNDEF || top_type == T_FUNC || top_type == T_SYMBOL) return js_mkundef();
   
   if (nargs < 2 && top_type == T_STR) {
     size_t byte_len = 0;
@@ -453,10 +513,12 @@ ant_value_t js_json_stringify(ant_t *js, ant_value_t *args, int nargs) {
     
     return result;
   }
+
+  gc_disabled = true;
   
   if (nargs >= 2) {
   ant_value_t replacer = args[1];
-  if (vtype(replacer) == T_FUNC) ctx.replacer_func = replacer;
+  if (is_callable(replacer)) ctx.replacer_func = replacer;
   
   else if (is_special_object(replacer)) {
   ant_value_t len_val = js_get(js, replacer, "length");
@@ -468,6 +530,13 @@ ant_value_t js_json_stringify(ant_t *js, ant_value_t *args, int nargs) {
   
   doc = yyjson_mut_doc_new(NULL);
   if (!doc) return js_mkerr(js, "JSON.stringify() failed: out of memory");
+
+  root_holder = json_create_root_holder(js, args[0]);
+  if (is_err(root_holder)) {
+    result = root_holder;
+    goto cleanup;
+  }
+  ctx.holder = root_holder;
   
   yyjson_mut_val *root = ant_value_to_yyjson(js, doc, args[0], &ctx);
   
@@ -498,6 +567,7 @@ ant_value_t js_json_stringify(ant_t *js, ant_value_t *args, int nargs) {
   result = js_mkstr(js, json_str, len);
 
 cleanup:
+  gc_disabled = saved_gc_disabled;
   free(json_str);
   free(ctx.stack);
   yyjson_mut_doc_free(doc);

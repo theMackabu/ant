@@ -50,6 +50,12 @@ static abort_signal_data_t *get_signal_data(ant_value_t obj) {
   return (abort_signal_data_t *)(uintptr_t)js_getnum(slot);
 }
 
+static abort_signal_data_t *get_signal_data_if_signal_object(ant_value_t obj) {
+  if (!g_initialized || !is_object_type(obj)) return NULL;
+  if (js_get_slot(obj, SLOT_PROTO) != g_signal_proto) return NULL;
+  return get_signal_data(obj);
+}
+
 static ant_value_t make_abort_error(ant_t *js) {
   return make_dom_exception(js, "signal is aborted without reason", "AbortError");
 }
@@ -416,6 +422,27 @@ void gc_mark_abort(ant_t *js, gc_mark_fn mark) {
   if (g_initialized) mark(js, g_signal_proto);
   for (abort_timeout_entry_t *e = timeout_entries; e; e = e->next)
     if (!e->closed) mark(js, e->signal);
+}
+
+void gc_mark_abort_signal_object(ant_t *js, ant_value_t signal, gc_mark_fn mark) {
+  abort_signal_data_t *data = get_signal_data_if_signal_object(signal);
+  
+  if (!data) return;
+  mark(js, data->reason);
+
+  unsigned int listener_count = utarray_len(data->listeners);
+  for (unsigned int i = 0; i < listener_count; i++) {
+    abort_listener_t *entry = (abort_listener_t *)utarray_eltptr(data->listeners, i);
+    if (!entry) continue;
+    mark(js, entry->callback);
+  }
+
+  unsigned int follower_count = utarray_len(data->followers);
+  for (unsigned int i = 0; i < follower_count; i++) {
+    ant_value_t *follower = (ant_value_t *)utarray_eltptr(data->followers, i);
+    if (!follower) continue;
+    mark(js, *follower);
+  }
 }
 
 bool abort_signal_is_aborted(ant_value_t signal) {

@@ -211,10 +211,10 @@ ant_deps = [
   libffi_dep, uuid_dep, crprintf_dep,
   llhttp, pcre2_dep, libuv_dep, base64_dep,
   argtable3_dep, tlsuv_dep, libsodium_dep,
-  yyjson_dep, minicoro_dep, uuidv7_dep, 
+  yyjson_dep, minicoro_dep, uuidv7_dep,
   uriparser_dep, utf8proc_dep, openssl_dep,
   zlib_dep, brotli_common_dep, brotli_dec_dep,
-  brotli_enc_dep, uthash_dep, lmdb_dep,
+  brotli_enc_dep, uthash_dep, lmdb_dep, nghttp2_dep,
 ] + mbedtls_dep + win_deps
 
 if get_option('jit')

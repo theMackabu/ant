@@ -5,7 +5,7 @@
 #include <assert.h>
 #include <stdbool.h>
 
-#define GC_MAX_STATIC_ROOTS 64
+#define GC_MAX_STATIC_ROOTS 128
 
 typedef void (*gc_root_visitor_t)(ant_t *js, ant_value_t v);
 

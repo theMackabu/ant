@@ -70,8 +70,9 @@ static bool ant_conn_store_addr(
 }
 
 static bool ant_conn_store_peer_addr(ant_conn_t *conn) {
+  if (!conn || conn->kind != ANT_CONN_KIND_TCP) return false;
   return ant_conn_store_addr(
-    &conn->handle,
+    &conn->handle.tcp,
     (int (*)(const uv_tcp_t *, struct sockaddr *, int *))uv_tcp_getpeername,
     conn->remote_addr,
     sizeof(conn->remote_addr),
@@ -83,8 +84,9 @@ static bool ant_conn_store_peer_addr(ant_conn_t *conn) {
 }
 
 static bool ant_conn_store_local_addr(ant_conn_t *conn) {
+  if (!conn || conn->kind != ANT_CONN_KIND_TCP) return false;
   return ant_conn_store_addr(
-    &conn->handle,
+    &conn->handle.tcp,
     (int (*)(const uv_tcp_t *, struct sockaddr *, int *))uv_tcp_getsockname,
     conn->local_addr,
     sizeof(conn->local_addr),
@@ -116,7 +118,6 @@ static void ant_conn_restart_timer(ant_conn_t *conn) {
 
 static void ant_conn_alloc_cb(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
   ant_conn_t *conn = (ant_conn_t *)handle->data;
-  size_t need = 0;
   size_t next_cap = 0;
   char *next = NULL;
 
@@ -126,10 +127,14 @@ static void ant_conn_alloc_cb(uv_handle_t *handle, size_t suggested_size, uv_buf
     return;
   }
 
-  need = conn->buffer_len + suggested_size;
-  if (need > conn->buffer_cap) {
+  if (conn->buffer_len + suggested_size > conn->buffer_cap - conn->buffer_offset) {
+  if (conn->buffer_offset > 0 && conn->buffer_len > 0) memmove(conn->buffer, conn->buffer + conn->buffer_offset, conn->buffer_len);
+  else if (conn->buffer_offset > 0) conn->buffer_len = 0;
+  conn->buffer_offset = 0;
+
+  if (conn->buffer_len + suggested_size > conn->buffer_cap) {
     next_cap = conn->buffer_cap ? conn->buffer_cap * 2 : ANT_CONN_READ_BUFFER_SIZE;
-    while (next_cap < need) next_cap *= 2;
+    while (next_cap < conn->buffer_len + suggested_size) next_cap *= 2;
     next = realloc(conn->buffer, next_cap);
     if (!next) {
       buf->base = NULL;
@@ -138,10 +143,10 @@ static void ant_conn_alloc_cb(uv_handle_t *handle, size_t suggested_size, uv_buf
     }
     conn->buffer = next;
     conn->buffer_cap = next_cap;
-  }
+  }}
 
-  buf->base = conn->buffer + conn->buffer_len;
-  buf->len = conn->buffer_cap - conn->buffer_len;
+  buf->base = conn->buffer + conn->buffer_offset + conn->buffer_len;
+  buf->len = conn->buffer_cap - conn->buffer_offset - conn->buffer_len;
 }
 
 static void ant_conn_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
@@ -152,7 +157,7 @@ static void ant_conn_read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t 
   if (nread < 0) {
     if (nread == UV_EOF) {
       conn->read_eof = true;
-      uv_read_stop((uv_stream_t *)&conn->handle);
+      uv_read_stop(ant_conn_stream(conn));
       if (listener->callbacks.on_end)
         listener->callbacks.on_end(conn, listener->user_data);
       return;
@@ -215,32 +220,66 @@ ant_conn_t *ant_conn_create_tcp(ant_listener_t *listener, uint64_t timeout_ms) {
   conn = calloc(1, sizeof(*conn));
   if (!conn) return NULL;
 
+  conn->kind = ANT_CONN_KIND_TCP;
   conn->listener = listener;
   conn->timeout_ms = timeout_ms;
   conn->buffer_cap = ANT_CONN_READ_BUFFER_SIZE;
   conn->buffer = malloc(conn->buffer_cap);
+  
   if (!conn->buffer) {
     free(conn);
     return NULL;
   }
 
-  uv_tcp_init(listener->loop, &conn->handle);
+  uv_tcp_init(listener->loop, &conn->handle.tcp);
   uv_timer_init(listener->loop, &conn->timer);
-  conn->handle.data = conn;
+  conn->handle.tcp.data = conn;
   conn->timer.data = conn;
+  
+  return conn;
+}
+
+ant_conn_t *ant_conn_create_pipe(ant_listener_t *listener, uint64_t timeout_ms) {
+  ant_conn_t *conn = NULL;
+
+  if (!listener || !listener->loop) return NULL;
+
+  conn = calloc(1, sizeof(*conn));
+  if (!conn) return NULL;
+
+  conn->kind = ANT_CONN_KIND_PIPE;
+  conn->listener = listener;
+  conn->timeout_ms = timeout_ms;
+  conn->buffer_cap = ANT_CONN_READ_BUFFER_SIZE;
+  conn->buffer = malloc(conn->buffer_cap);
+  
+  if (!conn->buffer) {
+    free(conn);
+    return NULL;
+  }
+
+  uv_pipe_init(listener->loop, &conn->handle.pipe, 0);
+  uv_timer_init(listener->loop, &conn->timer);
+  conn->handle.pipe.data = conn;
+  conn->timer.data = conn;
+  
   return conn;
 }
 
 int ant_conn_accept(ant_conn_t *conn, uv_stream_t *server_stream) {
   if (!conn || !server_stream) return UV_EINVAL;
 
-  if (uv_accept(server_stream, (uv_stream_t *)&conn->handle) != 0)
+  if (uv_accept(server_stream, ant_conn_stream(conn)) != 0)
     return UV_ECONNABORTED;
 
-  ant_conn_store_peer_addr(conn);
-  ant_conn_store_local_addr(conn);
+  if (conn->kind == ANT_CONN_KIND_TCP) {
+    ant_conn_store_peer_addr(conn);
+    ant_conn_store_local_addr(conn);
+  }
+  
   conn->next = conn->listener->connections;
   conn->listener->connections = conn;
+  
   return 0;
 }
 
@@ -248,7 +287,7 @@ void ant_conn_start(ant_conn_t *conn) {
   if (!conn || conn->closing) return;
   conn->read_paused = false;
   ant_conn_restart_timer(conn);
-  uv_read_start((uv_stream_t *)&conn->handle, ant_conn_alloc_cb, ant_conn_read_cb);
+  uv_read_start(ant_conn_stream(conn), ant_conn_alloc_cb, ant_conn_read_cb);
 }
 
 void ant_conn_set_user_data(ant_conn_t *conn, void *user_data) {
@@ -264,7 +303,7 @@ ant_listener_t *ant_conn_listener(const ant_conn_t *conn) {
 }
 
 const char *ant_conn_buffer(const ant_conn_t *conn) {
-  return conn ? conn->buffer : NULL;
+  return conn ? conn->buffer + conn->buffer_offset : NULL;
 }
 
 size_t ant_conn_buffer_len(const ant_conn_t *conn) {
@@ -320,14 +359,14 @@ int ant_conn_remote_port(const ant_conn_t *conn) {
 void ant_conn_pause_read(ant_conn_t *conn) {
   if (!conn || conn->closing) return;
   conn->read_paused = true;
-  uv_read_stop((uv_stream_t *)&conn->handle);
+  uv_read_stop(ant_conn_stream(conn));
 }
 
 void ant_conn_resume_read(ant_conn_t *conn) {
   if (!conn || conn->closing || conn->read_eof || !conn->read_paused) return;
   conn->read_paused = false;
   ant_conn_restart_timer(conn);
-  uv_read_start((uv_stream_t *)&conn->handle, ant_conn_alloc_cb, ant_conn_read_cb);
+  uv_read_start(ant_conn_stream(conn), ant_conn_alloc_cb, ant_conn_read_cb);
 }
 
 void ant_conn_shutdown(ant_conn_t *conn) {
@@ -342,7 +381,7 @@ void ant_conn_shutdown(ant_conn_t *conn) {
     return;
   }
 
-  rc = uv_shutdown(&req->req, (uv_stream_t *)&conn->handle, ant_conn_shutdown_cb);
+  rc = uv_shutdown(&req->req, ant_conn_stream(conn), ant_conn_shutdown_cb);
   if (rc != 0) {
     free(req);
     ant_conn_close(conn);
@@ -351,34 +390,37 @@ void ant_conn_shutdown(ant_conn_t *conn) {
 
 void ant_conn_ref(ant_conn_t *conn) {
   if (!conn) return;
-  if (!uv_is_closing((uv_handle_t *)&conn->handle)) uv_ref((uv_handle_t *)&conn->handle);
+  if (!uv_is_closing((uv_handle_t *)ant_conn_stream(conn))) uv_ref((uv_handle_t *)ant_conn_stream(conn));
   if (!uv_is_closing((uv_handle_t *)&conn->timer)) uv_ref((uv_handle_t *)&conn->timer);
 }
 
 void ant_conn_unref(ant_conn_t *conn) {
   if (!conn) return;
-  if (!uv_is_closing((uv_handle_t *)&conn->handle)) uv_unref((uv_handle_t *)&conn->handle);
+  if (!uv_is_closing((uv_handle_t *)ant_conn_stream(conn))) uv_unref((uv_handle_t *)ant_conn_stream(conn));
   if (!uv_is_closing((uv_handle_t *)&conn->timer)) uv_unref((uv_handle_t *)&conn->timer);
 }
 
 int ant_conn_set_no_delay(ant_conn_t *conn, bool enable) {
   if (!conn || conn->closing) return UV_EINVAL;
-  return uv_tcp_nodelay(&conn->handle, enable ? 1 : 0);
+  if (conn->kind != ANT_CONN_KIND_TCP) return UV_ENOTSUP;
+  return uv_tcp_nodelay(&conn->handle.tcp, enable ? 1 : 0);
 }
 
 int ant_conn_set_keep_alive(ant_conn_t *conn, bool enable, unsigned int delay_secs) {
   if (!conn || conn->closing) return UV_EINVAL;
-  return uv_tcp_keepalive(&conn->handle, enable ? 1 : 0, delay_secs);
+  if (conn->kind != ANT_CONN_KIND_TCP) return UV_ENOTSUP;
+  return uv_tcp_keepalive(&conn->handle.tcp, enable ? 1 : 0, delay_secs);
 }
 
 void ant_conn_consume(ant_conn_t *conn, size_t len) {
   if (!conn || conn->buffer_len == 0 || len == 0) return;
   if (len >= conn->buffer_len) {
+    conn->buffer_offset = 0;
     conn->buffer_len = 0;
     return;
   }
 
-  memmove(conn->buffer, conn->buffer + len, conn->buffer_len - len);
+  conn->buffer_offset += len;
   conn->buffer_len -= len;
 }
 
@@ -393,12 +435,12 @@ void ant_conn_close(ant_conn_t *conn) {
     conn->close_handles++;
   }
 
-  if (!uv_is_closing((uv_handle_t *)&conn->handle)) {
-    uv_close((uv_handle_t *)&conn->handle, ant_conn_close_cb);
+  if (!uv_is_closing((uv_handle_t *)ant_conn_stream(conn))) {
+    uv_close((uv_handle_t *)ant_conn_stream(conn), ant_conn_close_cb);
     conn->close_handles++;
   }
 
-  if (conn->close_handles == 0) ant_conn_close_cb((uv_handle_t *)&conn->handle);
+  if (conn->close_handles == 0) ant_conn_close_cb((uv_handle_t *)ant_conn_stream(conn));
 }
 
 int ant_conn_write(ant_conn_t *conn, char *data, size_t len, ant_conn_write_cb cb, void *user_data) {
@@ -422,7 +464,7 @@ int ant_conn_write(ant_conn_t *conn, char *data, size_t len, ant_conn_write_cb c
   wr->user_data = user_data;
 
   ant_conn_restart_timer(conn);
-  rc = uv_write(&wr->req, (uv_stream_t *)&conn->handle, &wr->buf, 1, ant_conn_write_cb_impl);
+  rc = uv_write(&wr->req, ant_conn_stream(conn), &wr->buf, 1, ant_conn_write_cb_impl);
   if (rc != 0) {
     free(wr->buf.base);
     free(wr);

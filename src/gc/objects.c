@@ -296,6 +296,10 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
     gc_mark_value(js, obj->proxy_state->target);
     gc_mark_value(js, obj->proxy_state->handler);
   }
+
+  gc_mark_abort_signal_object(
+    js, js_obj_from_ptr(obj), gc_mark_value
+  );
 }
 
 static void gc_drain_mark_stack(ant_t *js) {

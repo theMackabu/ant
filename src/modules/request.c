@@ -46,8 +46,13 @@ ant_value_t request_get_signal(ant_t *js, ant_value_t obj) {
 
   if (vtype(signal) != T_UNDEF) return signal;
   signal = abort_signal_create_dependent(js, js_mkundef());
+  
   if (is_err(signal)) return signal;
+  ant_value_t abort_reason = js_get_slot(obj, SLOT_REQUEST_ABORT_REASON);
+  
+  if (vtype(abort_reason) != T_UNDEF) signal_do_abort(js, signal, abort_reason);
   js_set_slot_wb(js, obj, SLOT_REQUEST_SIGNAL, signal);
+  
   return signal;
 }
 
@@ -67,33 +72,14 @@ static void data_free(request_data_t *d) {
   free(d);
 }
 
-static request_data_t *data_new(void) {
-  request_data_t *d = calloc(1, sizeof(request_data_t));
-  if (!d) return NULL;
-  d->method         = strdup("GET");
-  d->referrer       = strdup("client");
-  d->referrer_policy = strdup("");
-  d->mode           = strdup("cors");
-  d->credentials    = strdup("same-origin");
-  d->cache          = strdup("default");
-  d->redirect       = strdup("follow");
-  d->integrity      = strdup("");
-  if (!d->method || !d->referrer || !d->referrer_policy ||
-      !d->mode || !d->credentials || !d->cache || !d->redirect || !d->integrity) {
-    data_free(d);
-    return NULL;
-  }
-  return d;
-}
-
-static request_data_t *data_new_server(const char *method) {
+static request_data_t *data_new_with(const char *method, const char *mode) {
   request_data_t *d = calloc(1, sizeof(request_data_t));
   if (!d) return NULL;
 
   d->method = strdup(method ? method : "GET");
   d->referrer = strdup("client");
   d->referrer_policy = strdup("");
-  d->mode = strdup("same-origin");
+  d->mode = strdup(mode);
   d->credentials = strdup("same-origin");
   d->cache = strdup("default");
   d->redirect = strdup("follow");
@@ -111,6 +97,9 @@ static request_data_t *data_new_server(const char *method) {
 
   return d;
 }
+
+static request_data_t *data_new(void) { return data_new_with("GET", "cors"); }
+static request_data_t *data_new_server(const char *method) { return data_new_with(method, "same-origin"); }
 
 static ant_value_t request_create_object(ant_t *js, request_data_t *req, ant_value_t headers_obj, bool create_signal) {
   ant_value_t obj = js_mkobj(js);
@@ -130,6 +119,8 @@ static ant_value_t request_create_object(ant_t *js, request_data_t *req, ant_val
 
   headers_apply_guard(hdrs);
   js_set_slot_wb(js, obj, SLOT_REQUEST_HEADERS, hdrs);
+  js_set_slot(obj, SLOT_REQUEST_ABORT_REASON, js_mkundef());
+  
   js_set_slot_wb(js, obj, SLOT_REQUEST_SIGNAL, create_signal 
     ? abort_signal_create_dependent(js, js_mkundef()) 
     : js_mkundef()
@@ -891,6 +882,7 @@ static ant_value_t js_request_clone(ant_t *js, ant_value_t *args, int nargs) {
   js_set_slot(obj, SLOT_DATA, ANT_PTR(nd));
   
   js_set_slot_wb(js, obj, SLOT_REQUEST_HEADERS, new_headers);
+  js_set_slot(obj, SLOT_REQUEST_ABORT_REASON, js_mkundef());
   js_set_slot_wb(js, obj, SLOT_REQUEST_SIGNAL,  new_signal);
 
   ant_value_t src_stream = js_get_slot(this, SLOT_REQUEST_BODY_STREAM);
@@ -928,7 +920,10 @@ static ant_value_t request_new_from_input(
   *out_src = NULL;
   *out_input_signal = js_mkundef();
 
-  if (vtype(input) == T_OBJ) src = get_data(input);
+  if (
+    vtype(input) == T_OBJ && 
+    js_check_brand(input, BRAND_REQUEST)
+  ) src = get_data(input);
 
   if (!src) {
     size_t ulen = 0;
@@ -1244,6 +1239,7 @@ static ant_value_t js_request_ctor(ant_t *js, ant_value_t *args, int nargs) {
   
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_REQUEST));
   js_set_slot(obj, SLOT_DATA, ANT_PTR(req));
+  js_set_slot(obj, SLOT_REQUEST_ABORT_REASON, js_mkundef());
 
   signal = abort_signal_create_dependent(js, input_signal);
   if (is_err(signal)) { data_free(req); return signal; }
@@ -1321,6 +1317,7 @@ ant_value_t request_create_from_input_init(ant_t *js, ant_value_t input, ant_val
   js_set_proto_init(obj, g_request_proto);
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_REQUEST));
   js_set_slot(obj, SLOT_DATA, ANT_PTR(req));
+  js_set_slot(obj, SLOT_REQUEST_ABORT_REASON, js_mkundef());
 
   signal = abort_signal_create_dependent(js, input_signal);
   if (is_err(signal)) { data_free(req); return signal; }

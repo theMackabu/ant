@@ -148,6 +148,7 @@ typedef enum {
   FS_OP_EXISTS,
   FS_OP_READDIR,
   FS_OP_ACCESS,
+  FS_OP_REALPATH,
   FS_OP_WRITE_FD,
   FS_OP_OPEN,
   FS_OP_CLOSE
@@ -221,6 +222,8 @@ static void complete_request(fs_request_t *req) {
         result = encode_data(req->js, req->data, req->data_len, req->encoding);
       else result = fs_read_to_uint8array(req->js, req->data, req->data_len);
     } else if (req->op_type == FS_OP_READ_BYTES && req->data)
+      result = js_mkstr(req->js, req->data, req->data_len);
+    else if (req->op_type == FS_OP_REALPATH && req->data)
       result = js_mkstr(req->js, req->data, req->data_len);
     js_resolve_promise(req->js, req->promise, result);
   }
@@ -420,6 +423,31 @@ static void on_stat_complete(uv_fs_t *uv_req) {
   js_resolve_promise(req->js, req->promise, stat_obj);
   remove_pending_request(req);
   free_fs_request(req);
+}
+
+static void on_realpath_complete(uv_fs_t *uv_req) {
+  fs_request_t *req = (fs_request_t *)uv_req->data;
+
+  if (uv_req->result < 0 || !uv_req->ptr) {
+    req->failed = 1;
+    req->error_msg = strdup(uv_strerror((int)uv_req->result));
+    req->completed = 1;
+    complete_request(req);
+    return;
+  }
+
+  req->data = strdup((const char *)uv_req->ptr);
+  if (!req->data) {
+    req->failed = 1;
+    req->error_msg = strdup("Out of memory");
+    req->completed = 1;
+    complete_request(req);
+    return;
+  }
+
+  req->data_len = strlen(req->data);
+  req->completed = 1;
+  complete_request(req);
 }
 
 static void on_exists_complete(uv_fs_t *uv_req) {
@@ -1304,6 +1332,61 @@ static ant_value_t builtin_fs_access(ant_t *js, ant_value_t *args, int nargs) {
   return req->promise;
 }
 
+static ant_value_t builtin_fs_realpathSync(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "realpathSync() requires a path argument");
+
+  ant_value_t path_val = fs_coerce_path(js, args[0]);
+  if (vtype(path_val) != T_STR) return js_mkerr(js, "realpathSync() path must be a string");
+
+  size_t path_len = 0;
+  const char *path = js_getstr(js, path_val, &path_len);
+  if (!path) return js_mkerr(js, "Failed to get path string");
+
+  char *resolved = realpath(path, NULL);
+  if (!resolved) return js_mkerr(js, "realpathSync failed for '%s'", path);
+
+  ant_value_t result = js_mkstr(js, resolved, strlen(resolved));
+  free(resolved);
+  return result;
+}
+
+static ant_value_t builtin_fs_realpath(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "realpath() requires a path argument");
+
+  ant_value_t path_val = fs_coerce_path(js, args[0]);
+  if (vtype(path_val) != T_STR) return js_mkerr(js, "realpath() path must be a string");
+
+  size_t path_len = 0;
+  const char *path = js_getstr(js, path_val, &path_len);
+  if (!path) return js_mkerr(js, "Failed to get path string");
+
+  fs_request_t *req = calloc(1, sizeof(fs_request_t));
+  if (!req) return js_mkerr(js, "Out of memory");
+
+  req->js = js;
+  req->op_type = FS_OP_REALPATH;
+  req->promise = js_mkpromise(js);
+  req->path = strndup(path, path_len);
+  req->uv_req.data = req;
+
+  if (!req->path) {
+    free_fs_request(req);
+    return js_mkerr(js, "Out of memory");
+  }
+
+  utarray_push_back(pending_requests, &req);
+  int result = uv_fs_realpath(uv_default_loop(), &req->uv_req, req->path, on_realpath_complete);
+
+  if (result < 0) {
+    req->failed = 1;
+    req->error_msg = strdup(uv_strerror(result));
+    req->completed = 1;
+    complete_request(req);
+  }
+
+  return req->promise;
+}
+
 static ant_value_t builtin_fs_readdirSync(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "readdirSync() requires a path argument");
   
@@ -1873,6 +1956,7 @@ static void fs_set_promise_methods(ant_t *js, ant_value_t lib) {
   js_set(js, lib, "exists", js_mkfun(builtin_fs_exists));
   js_set(js, lib, "access", js_mkfun(builtin_fs_access));
   js_set(js, lib, "readdir", js_mkfun(builtin_fs_readdir));
+  js_set(js, lib, "realpath", js_mkfun(builtin_fs_realpath));
 }
 
 static ant_value_t fs_make_constants(ant_t *js) {
@@ -1903,6 +1987,7 @@ static ant_value_t builtin_fs_promises_getter(ant_t *js, ant_value_t *args, int 
 
 ant_value_t fs_library(ant_t *js) {
   ant_value_t lib = js_mkobj(js);
+  ant_value_t realpath_sync = js_mkfun(builtin_fs_realpathSync);
   fs_set_promise_methods(js, lib);
 
   js_set(js, lib, "readFileSync", js_mkfun(builtin_fs_readFileSync));
@@ -1923,6 +2008,8 @@ ant_value_t fs_library(ant_t *js) {
   js_set(js, lib, "existsSync", js_mkfun(builtin_fs_existsSync));
   js_set(js, lib, "accessSync", js_mkfun(builtin_fs_accessSync));
   js_set(js, lib, "readdirSync", js_mkfun(builtin_fs_readdirSync));
+  js_set(js, lib, "realpathSync", realpath_sync);
+  js_set(js, realpath_sync, "native", realpath_sync);
   
   js_set_getter_desc(
     js, lib,
@@ -1959,4 +2046,3 @@ void gc_mark_fs(ant_t *js, gc_mark_fn mark) {
     if (reqp && *reqp) { mark(js, (*reqp)->promise); }
   }
 }
-

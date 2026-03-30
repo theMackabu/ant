@@ -22,10 +22,11 @@
 typedef struct { char *buf; size_t size; } errbuf_t;
 
 static void print_error_value(ant_t *js, ant_value_t value, ant_value_t fallback_stack, const char *prefix) {
+  ant_value_t obj = is_err(value) ? js_as_obj(value) : value;
   const char *stack = NULL;
   
-  if (vtype(value) == T_OBJ)
-    stack = get_str_prop(js, value, "stack", 5, NULL);
+  if (vtype(obj) == T_OBJ)
+    stack = get_str_prop(js, obj, "stack", 5, NULL);
   
   if (!stack && vtype(fallback_stack) == T_STR) {
     ant_offset_t slen;
@@ -39,13 +40,16 @@ static void print_error_value(ant_t *js, ant_value_t value, ant_value_t fallback
     fputs(stack, stderr);
     size_t n = strlen(stack);
     if (n == 0 || stack[n - 1] != '\n') fputc('\n', stderr);
-  } else if (vtype(value) == T_OBJ) {
-    const char *name = get_str_prop(js, value, "name", 4, NULL);
-    const char *msg = get_str_prop(js, value, "message", 7, NULL);
+  } else if (vtype(obj) == T_OBJ) {
+    const char *name = get_str_prop(js, obj, "name", 4, NULL);
+    const char *msg = get_str_prop(js, obj, "message", 7, NULL);
+    
     if (name && msg) fprintf(stderr, "%s%s%s: %s%s%s\n", C_RED, name, C_RESET, C_BOLD, msg, C_RESET);
     else if (name) fprintf(stderr, "%s%s%s\n", C_RED, name, C_RESET);
-    else fprintf(stderr, "%s\n", js_str(js, value));
-  } else fprintf(stderr, "%s\n", js_str(js, value));
+    else fprintf(stderr, "[object Error]\n");
+  } 
+  
+  else fprintf(stderr, "%s\n", js_str(js, value));
 }
 
 bool print_uncaught_throw(ant_t *js) {

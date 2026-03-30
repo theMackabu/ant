@@ -21,6 +21,11 @@ function toSpecifier(rootDir, filePath) {
   throw new Error(`Unsupported builtin module path: ${relativePath}`);
 }
 
+function toAliasSpecifiers(specifier) {
+  if (specifier.startsWith('node:')) return [specifier.slice('node:'.length)];
+  return [];
+}
+
 function toFormat(filePath) {
   if (/\.(cts|cjs)$/u.test(filePath)) return 'MODULE_EVAL_FORMAT_CJS';
   if (/\.(mts|mjs)$/u.test(filePath)) return 'MODULE_EVAL_FORMAT_ESM';
@@ -81,16 +86,25 @@ function generateHeader(rootDir, bundles) {
     lines.push('');
   });
 
-  lines.push('static const ant_builtin_bundle_entry_t ant_builtin_bundle_data[] = {');
+  lines.push('static const ant_builtin_bundle_module_t ant_builtin_bundle_modules[] = {');
   bundles.forEach((bundle, index) => {
-    lines.push(
-      `  { ${cString(bundle.specifier)}, ${cString(bundle.specifier)}, ant_builtin_bundle_${index}, sizeof(ant_builtin_bundle_${index}), ${bundle.format} },`
-    );
+    lines.push(`  { ant_builtin_bundle_${index}, sizeof(ant_builtin_bundle_${index}), ${bundle.format} },`);
   });
   lines.push('};');
   lines.push('');
-  lines.push('static const size_t ant_builtin_bundle_data_count =');
-  lines.push('  sizeof(ant_builtin_bundle_data) / sizeof(ant_builtin_bundle_data[0]);');
+  lines.push('static const ant_builtin_bundle_alias_t ant_builtin_bundle_aliases[] = {');
+  bundles.forEach((bundle, index) => {
+    for (const specifier of bundle.specifiers) {
+      lines.push(`  { ${cString(specifier)}, ${specifier.length}, ${cString(bundle.specifier)}, ${index} },`);
+    }
+  });
+  lines.push('};');
+  lines.push('');
+  lines.push('static const size_t ant_builtin_bundle_module_count =');
+  lines.push('  sizeof(ant_builtin_bundle_modules) / sizeof(ant_builtin_bundle_modules[0]);');
+  lines.push('');
+  lines.push('static const size_t ant_builtin_bundle_alias_count =');
+  lines.push('  sizeof(ant_builtin_bundle_aliases) / sizeof(ant_builtin_bundle_aliases[0]);');
   lines.push('');
   lines.push('#endif');
 
@@ -111,7 +125,8 @@ async function main() {
     const specifier = toSpecifier(builtinsRoot, entryPath);
     const format = toFormat(entryPath);
     const bytes = await bundleBuiltin(entryPath, format);
-    bundles.push({ entryPath, specifier, format, bytes });
+    const specifiers = [specifier, ...toAliasSpecifiers(specifier)];
+    bundles.push({ entryPath, specifier, specifiers, format, bytes });
   }
 
   const header = generateHeader(builtinsRoot, bundles);

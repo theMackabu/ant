@@ -243,7 +243,6 @@ static inline ant_value_t sv_execute_entry_common(
 
   ant_value_t result = sv_execute_frame(vm, func, this_val, super_val, args, argc);
   if (out_this) *out_this = vm->frames[vm->fp].this;
-
   if (!vm->suspended) vm->fp = saved_fp;
 
   return result;

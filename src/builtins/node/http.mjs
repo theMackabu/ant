@@ -1,10 +1,10 @@
-const net = require('node:net');
-const httpMetadata = require('ant:internal/http_metadata');
-const httpParser = require('ant:internal/http_parser');
-const httpWriter = require('ant:internal/http_writer');
+import net from 'node:net';
 
-const METHODS = httpMetadata.METHODS;
-const STATUS_CODES = httpMetadata.STATUS_CODES;
+import httpParser from 'ant:internal/http_parser';
+import httpWriter from 'ant:internal/http_writer';
+
+import { EventEmitter } from 'node:events';
+import { STATUS_CODES } from 'ant:internal/http_metadata';
 
 function createHeadersObject() {
   return Object.create(null);
@@ -106,7 +106,7 @@ function handleClientError(server, socket, error) {
   }
 }
 
-class IncomingMessage extends EventEmitter {
+export class IncomingMessage extends EventEmitter {
   constructor(socket, parsed) {
     super();
     this.socket = socket;
@@ -124,16 +124,53 @@ class IncomingMessage extends EventEmitter {
     this.destroyed = false;
     this.readableEnded = false;
     this._body = bufferFrom(parsed.body);
+    this._bodyConsumed = false;
+  }
+
+  _takeBody() {
+    if (this._bodyConsumed) return Buffer.alloc(0);
+    this._bodyConsumed = true;
+    return this._body;
   }
 
   _deliverBody() {
     if (this.destroyed || this.complete) return;
 
-    if (this._body.length > 0) this.emit('data', this._body);
+    const body = this._takeBody();
+    if (body.length > 0) this.emit('data', body);
     this.complete = true;
     this.readableEnded = true;
     this.emit('end');
     this.emit('close');
+  }
+
+  [Symbol.asyncIterator]() {
+    const body = this._takeBody();
+    let emitted = false;
+    let finished = false;
+
+    return {
+      next: async () => {
+        if (finished) return { done: true, value: undefined };
+        if (!emitted && body.length > 0) {
+          emitted = true;
+          return { done: false, value: body };
+        }
+        finished = true;
+        this.complete = true;
+        this.readableEnded = true;
+        return { done: true, value: undefined };
+      },
+      return: async () => {
+        finished = true;
+        this.complete = true;
+        this.readableEnded = true;
+        return { done: true, value: undefined };
+      },
+      [Symbol.asyncIterator]() {
+        return this;
+      }
+    };
   }
 
   destroy(error) {
@@ -150,7 +187,7 @@ class IncomingMessage extends EventEmitter {
   }
 }
 
-class ServerResponse extends EventEmitter {
+export class ServerResponse extends EventEmitter {
   constructor(req, socket, socketState) {
     super();
     this.req = req;
@@ -311,7 +348,7 @@ class ServerResponse extends EventEmitter {
   }
 }
 
-class Server extends net.Server {
+export class Server extends net.Server {
   constructor(options, requestListener) {
     const serverOptions = typeof options === 'function' ? undefined : options;
     const onRequest = typeof options === 'function' ? options : requestListener;
@@ -395,15 +432,8 @@ class Server extends net.Server {
   }
 }
 
-function createServer(options, requestListener) {
+export function createServer(options, requestListener) {
   return new Server(options, requestListener);
 }
 
-module.exports = {
-  METHODS,
-  STATUS_CODES,
-  IncomingMessage,
-  Server,
-  ServerResponse,
-  createServer
-};
+export { METHODS, STATUS_CODES } from 'ant:internal/http_metadata';

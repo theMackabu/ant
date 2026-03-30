@@ -21,11 +21,14 @@
 #include "http/http1_writer.h"
 
 #include "modules/assert.h"
+#include "modules/abort.h"
 #include "modules/buffer.h"
 #include "modules/headers.h"
 #include "modules/request.h"
 #include "modules/response.h"
 #include "modules/server.h"
+#include "modules/timer.h"
+#include "modules/domexception.h"
 
 typedef struct server_runtime_s    server_runtime_t;
 typedef struct server_request_s    server_request_t;
@@ -98,6 +101,8 @@ struct server_runtime_s {
   server_request_t *requests;
   
   char *hostname;
+  char *unix_path;
+  
   uint64_t request_timeout_ms;
   uint64_t idle_timeout_ms;
   
@@ -285,6 +290,56 @@ static ant_value_t server_call_fetch(server_runtime_t *server, ant_value_t reque
   else result = sv_vm_call(js->vm, js, server->fetch_fn, server->export_obj, args, 2, NULL, false);
   js->this_val = saved_this;
   return result;
+}
+
+static ant_value_t server_abort_signal_task(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t payload = js_get_slot(js->current_func, SLOT_DATA);
+  ant_value_t signal = 0; ant_value_t reason = 0;
+  if (vtype(payload) != T_OBJ) return js_mkundef();
+
+  signal = js_get(js, payload, "signal");
+  reason = js_get(js, payload, "reason");
+
+  if (abort_signal_is_signal(signal) && !abort_signal_is_aborted(signal))
+    signal_do_abort(js, signal, reason);
+
+  return js_mkundef();
+}
+
+static void server_queue_abort_signal(ant_t *js, ant_value_t signal, ant_value_t reason) {
+  ant_value_t callback = 0;
+  ant_value_t payload = 0;
+
+  if (!abort_signal_is_signal(signal) || abort_signal_is_aborted(signal)) return;
+  payload = js_mkobj(js);
+  if (is_err(payload)) return;
+
+  js_set(js, payload, "signal", signal);
+  js_set(js, payload, "reason", reason);
+  callback = js_heavy_mkfun(js, server_abort_signal_task, payload);
+  
+  queue_microtask(js, callback);
+}
+
+static void server_abort_request(server_request_t *req, const char *message) {
+  ant_t *js = NULL;
+  
+  ant_value_t signal = 0; ant_value_t reason = 0; ant_value_t abort_reason = 0;
+  if (!req || !req->server || !is_object_type(req->request_obj)) return;
+
+  js = req->server->js;
+  abort_reason = js_get_slot(req->request_obj, SLOT_REQUEST_ABORT_REASON);
+  if (vtype(abort_reason) != T_UNDEF) return;
+
+  reason = make_dom_exception(js, 
+    message ? message : "The request was aborted", "AbortError"
+  );
+  
+  js_set_slot_wb(js, req->request_obj, SLOT_REQUEST_ABORT_REASON, reason);
+  signal = js_get_slot(req->request_obj, SLOT_REQUEST_SIGNAL);
+  
+  if (!abort_signal_is_signal(signal) || abort_signal_is_aborted(signal)) return;
+  server_queue_abort_signal(js, signal, reason);
 }
 
 static bool server_response_chunk(server_request_t *req, ant_value_t value, const uint8_t **out, size_t *len) {
@@ -853,6 +908,7 @@ static void server_on_conn_close(ant_conn_t *conn, void *user_data) {
     if (!uv_is_closing((uv_handle_t *)&cs->drain_timer))
       uv_close((uv_handle_t *)&cs->drain_timer, server_on_drain_timer_close);
     if (cs->active_req) {
+      server_abort_request(cs->active_req, "Client disconnected");
       cs->active_req->conn = NULL;
       cs->active_req = NULL;
       server_request_release(&cs->request);
@@ -976,6 +1032,7 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
     .export_obj = default_export,
     .fetch_fn = js_get(js, default_export, "fetch"),
     .hostname = strdup("0.0.0.0"),
+    .unix_path = NULL,
     .port = 3000,
     .request_timeout_ms = 5000,
     .idle_timeout_ms = 5000,
@@ -989,13 +1046,24 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
 
   unix_v = js_get(js, default_export, "unix");
   tls_v = js_get(js, default_export, "tls");
+  
   if (vtype(unix_v) != T_UNDEF && vtype(unix_v) != T_NULL) {
-    free(server->hostname);
-    free(server);
-    return js_mkerr_typed(js, JS_ERR_TYPE, "unix sockets are not implemented yet");
+    if (vtype(unix_v) != T_STR) {
+      free(server->hostname);
+      free(server);
+      return js_mkerr_typed(js, JS_ERR_TYPE, "server unix must be a string");
+    }
+
+    server->unix_path = strdup(js_getstr(js, unix_v, NULL));
+    if (!server->unix_path) {
+      free(server->hostname);
+      free(server);
+      return js_mkerr(js, "out of memory");
+    }
   }
   
   if (vtype(tls_v) != T_UNDEF && vtype(tls_v) != T_NULL) {
+    free(server->unix_path);
     free(server->hostname);
     free(server);
     return js_mkerr_typed(js, JS_ERR_TYPE, "tls server config is not implemented yet");
@@ -1007,12 +1075,14 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
 
   if (vtype(port_v) != T_UNDEF && vtype(port_v) != T_NULL) {
     if (vtype(port_v) != T_NUM) {
+      free(server->unix_path);
       free(server->hostname);
       free(server);
       return js_mkerr_typed(js, JS_ERR_TYPE, "server port must be a number");
     }
     server->port = (int)js_getnum(port_v);
     if (server->port < 0 || server->port > 65535) {
+      free(server->unix_path);
       free(server->hostname);
       free(server);
       return js_mkerr_typed(js, JS_ERR_RANGE, "server port must be between 0 and 65535");
@@ -1022,12 +1092,14 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
   if (vtype(hostname_v) != T_UNDEF && vtype(hostname_v) != T_NULL) {
     char *next_hostname = NULL;
     if (vtype(hostname_v) != T_STR) {
+      free(server->unix_path);
       free(server->hostname);
       free(server);
       return js_mkerr_typed(js, JS_ERR_TYPE, "server hostname must be a string");
     }
     next_hostname = strdup(js_getstr(js, hostname_v, NULL));
     if (!next_hostname) {
+      free(server->unix_path);
       free(server->hostname);
       free(server);
       return js_mkerr(js, "out of memory");
@@ -1039,12 +1111,14 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
   if (vtype(timeout_v) != T_UNDEF && vtype(timeout_v) != T_NULL) {
     double timeout = 0;
     if (vtype(timeout_v) != T_NUM) {
+      free(server->unix_path);
       free(server->hostname);
       free(server);
       return js_mkerr_typed(js, JS_ERR_TYPE, "server idleTimeout must be a number");
     }
     timeout = js_getnum(timeout_v);
     if (timeout < 0) {
+      free(server->unix_path);
       free(server->hostname);
       free(server);
       return js_mkerr_typed(js, JS_ERR_RANGE, "server idleTimeout must be >= 0");
@@ -1064,13 +1138,22 @@ ant_value_t server_start_from_export(ant_t *js, ant_value_t default_export) {
   callbacks.on_conn_close = server_on_conn_close;
   callbacks.on_listener_close = server_on_listener_close;
 
-  rc = ant_listener_listen_tcp(
-    &server->listener, server->loop,
-    server->hostname, server->port,
-    128, server->idle_timeout_ms, &callbacks, server
-  );
+  if (server->unix_path) {
+    rc = ant_listener_listen_pipe(
+      &server->listener, server->loop,
+      server->unix_path,
+      128, server->idle_timeout_ms, &callbacks, server
+    );
+  } else {
+    rc = ant_listener_listen_tcp(
+      &server->listener, server->loop,
+      server->hostname, server->port,
+      128, server->idle_timeout_ms, &callbacks, server
+    );
+  }
   
   if (rc != 0) {
+    free(server->unix_path);
     free(server->hostname);
     free(server);
     return js_mkerr_typed(js, JS_ERR_TYPE, "%s", uv_strerror(rc));

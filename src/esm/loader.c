@@ -8,6 +8,7 @@
 
 #include "modules/json.h"
 #include "modules/napi.h"
+#include "modules/uri.h"
 
 #include "errors.h"
 #include "gc/modules.h"
@@ -73,7 +74,7 @@ static int esm_dynamic_import_depth = 0;
 static char *esm_resolve_node_module(const char *specifier, const char *base_path);
 static char *esm_canonicalize_path(const char *path);
 
-static char *esm_file_url_to_path(const char *specifier) {
+static char *esm_file_url_to_path(ant_t *js, const char *specifier) {
   if (!specifier || strncmp(specifier, "file:", 5) != 0) return NULL;
 
   const char *p = specifier + 5;
@@ -81,12 +82,19 @@ static char *esm_file_url_to_path(const char *specifier) {
   else if (strncmp(p, "//localhost/", 12) == 0) p += 11;
 
   if (*p == '\0') return NULL;
-  return strdup(p);
+
+  ant_value_t encoded = js_mkstr(js, p, strlen(p));
+  ant_value_t decoded = js_decodeURI(js, &encoded, 1);
+
+  size_t len = 0;
+  char *str = js_getstr(js, decoded, &len);
+  
+  return str ? strndup(str, len) : NULL;
 }
 
 static char *esm_make_cache_key(const char *module_key) {
   if (!module_key) return NULL;
-  if (esm_is_builtin_specifier(module_key)) return strdup(module_key);
+  if (esm_has_builtin_scheme(module_key)) return strdup(module_key);
   if (esm_is_data_url(module_key)) return strdup(module_key);
   if (esm_is_url(module_key)) return strdup(module_key);
   return esm_canonicalize_path(module_key);
@@ -1176,28 +1184,36 @@ ant_value_t js_esm_import_sync_cstr_from(
   size_t spec_len,
   const char *base_path
 ) {
-  const ant_builtin_bundle_entry_t *bundle = NULL;
+  const ant_builtin_bundle_alias_t *bundle = NULL;
+  const ant_builtin_bundle_module_t *module = NULL;
+  
   char *spec_copy = strndup(specifier, spec_len);
   if (!spec_copy) return js_mkerr(js, "oom");
 
-  char *file_url_path = esm_file_url_to_path(spec_copy);
+  char *file_url_path = esm_file_url_to_path(js, spec_copy);
   if (file_url_path) {
     free(spec_copy);
     spec_copy = file_url_path;
     spec_len = strlen(spec_copy);
   }
 
-  bundle = esm_lookup_builtin_bundle(spec_copy, spec_len);
+  bundle = esm_lookup_builtin_alias(spec_copy, spec_len);
   if (bundle) {
+    module = esm_lookup_builtin_module(bundle->module_id);
+    if (!module) {
+      free(spec_copy);
+      return js_mkerr(js, "Invalid builtin module id");
+    }
+
     ant_value_t ns = esm_get_or_load(
-      js,
-      spec_copy,
+      js, spec_copy,
       bundle->source_name,
-      bundle->specifier,
-      bundle->format,
-      bundle->code,
-      bundle->code_len
+      bundle->source_name,
+      module->format,
+      module->code,
+      module->code_len
     );
+    
     free(spec_copy);
     return ns;
   }
@@ -1250,11 +1266,11 @@ ant_value_t js_esm_import_sync(ant_t *js, ant_value_t specifier) {
   return js_esm_import_sync_from(js, specifier, NULL);
 }
 
-ant_value_t js_esm_import_dynamic(ant_t *js, ant_value_t specifier, ant_value_t *out_tla_promise) {
+ant_value_t js_esm_import_dynamic(ant_t *js, ant_value_t specifier, const char *base_path, ant_value_t *out_tla_promise) {
   *out_tla_promise = js_mkundef();
   esm_dynamic_import_depth++;
   
-  ant_value_t ns = js_esm_import_sync(js, specifier);
+  ant_value_t ns = js_esm_import_sync_from(js, specifier, base_path);
   esm_dynamic_import_depth--;
   if (is_err(ns)) return ns;
 
@@ -1271,14 +1287,17 @@ ant_value_t js_esm_import_dynamic(ant_t *js, ant_value_t specifier, ant_value_t 
 }
 
 ant_value_t js_esm_make_file_url(ant_t *js, const char *path) {
-  size_t url_len = strlen(path) + 8;
-  char *url = malloc(url_len);
-  if (!url) return js_mkerr(js, "oom");
+  size_t path_len = strlen(path);
+  size_t raw_len = 7 + path_len;
+  
+  char *raw = malloc(raw_len + 1);
+  if (!raw) return js_mkerr(js, "oom");
 
-  snprintf(url, url_len, "file://%s", path);
-  ant_value_t val = js_mkstr(js, url, strlen(url));
-  free(url);
-  return val;
+  snprintf(raw, raw_len + 1, "file://%s", path);
+  ant_value_t raw_val = js_mkstr(js, raw, raw_len);
+  free(raw);
+
+  return js_encodeURI(js, &raw_val, 1);
 }
 
 void gc_mark_esm(ant_t *js, gc_mark_fn mark) {
@@ -1290,7 +1309,7 @@ HASH_ITER(hh, global_module_cache.modules, mod, tmp) {
 }}
 
 ant_value_t js_esm_resolve_specifier(ant_t *js, ant_value_t specifier, const char *base_path) {
-  const ant_builtin_bundle_entry_t *bundle = NULL;
+  const ant_builtin_bundle_alias_t *bundle = NULL;
   if (vtype(specifier) != T_STR) {
     return js_mkerr(js, "import.meta.resolve() requires a string specifier");
   }
@@ -1301,9 +1320,9 @@ ant_value_t js_esm_resolve_specifier(ant_t *js, ant_value_t specifier, const cha
   char *spec_copy = strndup(spec_str, (size_t)spec_len);
   if (!spec_copy) return js_mkerr(js, "oom");
 
-  bundle = esm_lookup_builtin_bundle(spec_copy, (size_t)spec_len);
+  bundle = esm_lookup_builtin_alias(spec_copy, (size_t)spec_len);
   if (bundle) {
-    ant_value_t result = js_mkstr(js, bundle->specifier, strlen(bundle->specifier));
+    ant_value_t result = js_mkstr(js, bundle->source_name, strlen(bundle->source_name));
     free(spec_copy);
     return result;
   }

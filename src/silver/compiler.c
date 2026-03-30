@@ -51,6 +51,7 @@ typedef struct {
 
 typedef struct sv_compiler {
   ant_t *js;
+  const char *filename;
   const char *source;
   ant_offset_t source_len;
 
@@ -3906,6 +3907,7 @@ static void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     c->computed_key_locals = computed_key_locals;
     sv_compiler_t comp = {0};
     comp.js = c->js;
+    comp.filename = c->filename;
     comp.source = c->source;
     comp.source_len = c->source_len;
     comp.enclosing = c;
@@ -4056,6 +4058,7 @@ static sv_func_t *compile_function_body(
 ) {
   sv_compiler_t comp = {0};
   comp.js = enclosing->js;
+  comp.filename = enclosing->filename;
   comp.source = enclosing->source;
   comp.source_len = enclosing->source_len;
   comp.enclosing = enclosing;
@@ -4441,7 +4444,7 @@ static sv_func_t *compile_function_body(
   func->is_generator = !!(node->flags & FN_GENERATOR);
   func->is_method = !!(node->flags & FN_METHOD);
   func->is_tla = comp.is_tla;
-  func->filename = enclosing->js->filename;
+  func->filename = enclosing->filename ? enclosing->filename : enclosing->js->filename;
   func->source_line = (int)node->line;
   if (node->str && node->len > 0) {
     char *name = code_arena_bump(node->len + 1);
@@ -4696,6 +4699,7 @@ sv_func_t *sv_compile(ant_t *js, sv_ast_t *program, sv_compile_mode_t mode, cons
 
   sv_compiler_t root = {0};
   root.js = js;
+  root.filename = js->filename;
   root.source = pin_source_text(source, source_len);
   root.source_len = source_len;
   root.mode = mode;
@@ -4736,6 +4740,7 @@ sv_func_t *sv_compile_function(ant_t *js, const char *source, size_t len, bool i
 
   sv_compiler_t root = {0};
   root.js = js;
+  root.filename = js->filename;
   root.source = pin_source_text(wrapped, (ant_offset_t)wrapped_len);
   root.source_len = (ant_offset_t)wrapped_len;
   root.mode = SV_COMPILE_SCRIPT;
@@ -4803,6 +4808,7 @@ sv_func_t *sv_compile_function_with_params(
 
   sv_compiler_t root = {0};
   root.js = js;
+  root.filename = js->filename;
   root.source = pin_source_text(body, (ant_offset_t)body_len);
   root.source_len = (ant_offset_t)body_len;
   root.mode = SV_COMPILE_SCRIPT;

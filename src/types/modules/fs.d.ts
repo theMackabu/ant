@@ -59,6 +59,11 @@ declare module 'fs' {
   function accessSync(path: string, mode?: number): void;
   function readdir(path: string): Promise<string[]>;
   function readdirSync(path: string): string[];
+  function realpath(path: string): Promise<string>;
+  function realpathSync(path: string): string;
+  namespace realpathSync {
+    function native(path: string): string;
+  }
 }
 
 declare module 'ant:fs' {
@@ -110,6 +115,7 @@ declare module 'fs/promises' {
   function exists(path: string): Promise<boolean>;
   function access(path: string, mode?: number): Promise<void>;
   function readdir(path: string): Promise<string[]>;
+  function realpath(path: string): Promise<string>;
 }
 
 declare module 'ant:fs/promises' {

@@ -6,7 +6,8 @@
 #include "modules/symbol.h"
 
 typedef struct map_entry {
-  char *key;
+  unsigned char *key;
+  size_t key_len;
   ant_value_t key_val;
   ant_value_t value;
   UT_hash_handle hh;
@@ -14,7 +15,8 @@ typedef struct map_entry {
 
 typedef struct set_entry {
   ant_value_t value;
-  char *key;
+  unsigned char *key;
+  size_t key_len;
   UT_hash_handle hh;
 } set_entry_t;
 

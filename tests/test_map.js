@@ -39,4 +39,22 @@ console.log('Get boolean key:', map.get(true)); // Should be 'boolean key'
 console.log('Get null key:', map.get(null)); // Should be 'null key'
 console.log('Final map size:', map.size); // Should be 3
 
+const obj1 = {};
+const obj2 = {};
+map.set(obj1, 'obj1');
+map.set(obj2, 'obj2');
+console.log('Object key 1:', map.get(obj1));
+console.log('Object key 2:', map.get(obj2));
+console.log('Distinct object keys:', map.get(obj1) !== map.get(obj2));
+
+map.set('1', 'string one');
+map.set(1, 'number one');
+console.log('String/number split:', map.get('1'), map.get(1));
+
+map.set(NaN, 'nan key');
+console.log('NaN key:', map.get(NaN));
+
+map.set(-0, 'minus zero');
+console.log('Zero key normalized:', map.get(0), map.get(-0));
+
 console.log('Map tests completed!');
