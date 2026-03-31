@@ -12,6 +12,7 @@
 #include <string.h>
 #include <stdio.h>
 
+
 enum {
   SV_ITER_HINT_GENERIC = 0,
   SV_ITER_HINT_ARRAY = 1,
@@ -122,6 +123,7 @@ typedef struct sv_compiler {
   int deferred_export_cap;
 
   struct const_dedup_entry *const_dedup;
+  struct sv_line_table *line_table;
 } sv_compiler_t;
 
 typedef struct const_dedup_entry {
@@ -130,6 +132,50 @@ typedef struct const_dedup_entry {
   int index;
   UT_hash_handle hh;
 } const_dedup_entry_t;
+
+typedef struct sv_line_table {
+  uint32_t *offsets;
+  int count;
+} sv_line_table_t;
+
+static sv_line_table_t *build_line_table(const char *source, ant_offset_t source_len) {
+  if (!source || source_len <= 0) return NULL;
+  sv_line_table_t *lt = malloc(sizeof(sv_line_table_t));
+  if (!lt) return NULL;
+
+  int cap = (int)(source_len / 32) + 64;
+  lt->offsets = malloc((size_t)cap * sizeof(uint32_t));
+  lt->count = 0;
+  lt->offsets[lt->count++] = 0;
+
+  for (ant_offset_t i = 0; i < source_len; i++) {
+    if (source[i] == '\n') {
+      if (lt->count >= cap) {
+        cap *= 2;
+        lt->offsets = realloc(lt->offsets, (size_t)cap * sizeof(uint32_t));
+      }
+      lt->offsets[lt->count++] = (uint32_t)(i + 1);
+    }
+  }
+  return lt;
+}
+
+static void free_line_table(sv_line_table_t *lt) {
+  if (!lt) return;
+  free(lt->offsets);
+  free(lt);
+}
+
+static void line_table_lookup(sv_line_table_t *lt, uint32_t off, uint32_t *out_line, uint32_t *out_col) {
+  int lo = 0, hi = lt->count - 1;
+  while (lo < hi) {
+    int mid = lo + (hi - lo + 1) / 2;
+    if (lt->offsets[mid] <= off) lo = mid;
+    else hi = mid - 1;
+  }
+  *out_line = (uint32_t)(lo + 1);
+  *out_col = off - lt->offsets[lo] + 1;
+}
 
 static sv_func_t *compile_function_body(
   sv_compiler_t *enclosing,
@@ -231,7 +277,9 @@ static void emit_srcpos(sv_compiler_t *c, sv_ast_t *node) {
   if (c->srcpos_count > 0 && c->last_srcpos_off == off && c->last_srcpos_end == end) return;
 
   uint32_t line, col;
-  if (c->srcpos_count > 0 && off >= c->last_srcpos_off) {
+  if (c->line_table) {
+    line_table_lookup(c->line_table, off, &line, &col);
+  } else if (c->srcpos_count > 0 && off >= c->last_srcpos_off) {
     line = c->srcpos[c->srcpos_count - 1].line;
     col = c->srcpos[c->srcpos_count - 1].col;
     for (uint32_t i = c->last_srcpos_off; i < off; i++) {
@@ -4075,6 +4123,7 @@ static sv_func_t *compile_function_body(
   comp.filename = enclosing->filename;
   comp.source = enclosing->source;
   comp.source_len = enclosing->source_len;
+  comp.line_table = enclosing->line_table;
   comp.enclosing = enclosing;
   comp.scope_depth = 0;
   comp.is_arrow = !!(node->flags & FN_ARROW);
@@ -4724,7 +4773,9 @@ sv_func_t *sv_compile(ant_t *js, sv_ast_t *program, sv_compile_mode_t mode, cons
   root.mode = mode;
   root.is_strict = ((program->flags & FN_PARSE_STRICT) != 0);
 
+  root.line_table = build_line_table(root.source, source_len);
   sv_func_t *func = compile_function_body(&root, &top_fn, mode);
+  free_line_table(root.line_table);
   if (js->thrown_exists || !func) return NULL;
   return func;
 }

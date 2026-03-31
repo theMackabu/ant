@@ -236,6 +236,23 @@ int utf16_range_to_byte_range(
   return 0;
 }
 
+size_t byte_offset_to_utf16(const char *str, size_t byte_off) {
+  const unsigned char *p = (const unsigned char *)str;
+  const unsigned char *end = p + byte_off;
+  size_t utf16_pos = 0;
+
+  while (p < end) {
+    unsigned char c = *p;
+    if (c < 0x80) { p++; utf16_pos++; }
+    else if ((c & 0xE0) == 0xC0) { p += 2; utf16_pos++; }
+    else if ((c & 0xF0) == 0xE0) { p += 3; utf16_pos++; }
+    else if ((c & 0xF8) == 0xF0) { p += 4; utf16_pos += 2; }
+    else { p++; utf16_pos++; }
+    if (p > end) p = end;
+  }
+  return utf16_pos;
+}
+
 uint32_t utf16_code_unit_at(const char *str, size_t byte_len, size_t utf16_idx) {
   const unsigned char *p = (const unsigned char *)str;
   const unsigned char *end = p + byte_len;

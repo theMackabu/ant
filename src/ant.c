@@ -8246,23 +8246,32 @@ static ant_value_t builtin_string_indexOf(ant_t *js, ant_value_t *args, int narg
   ant_offset_t str_len, str_off = vstr(js, str, &str_len);
   ant_offset_t search_len, search_off = vstr(js, search, &search_len);
   
-  ant_offset_t start = 0;
-  double dstr_len = D(str_len);
+  const char *str_ptr = (char *)(uintptr_t)(str_off);
+  const char *search_ptr = (char *)(uintptr_t)(search_off);
+  size_t utf16_len = utf16_strlen(str_ptr, str_len);
+
+  ant_offset_t start_utf16 = 0;
   if (nargs >= 2 && vtype(args[1]) == T_NUM) {
     double pos = tod(args[1]);
     if (pos < 0) pos = 0;
-    if (pos > dstr_len) pos = dstr_len;
-    start = (ant_offset_t) pos;
+    if (pos > D(utf16_len)) pos = D(utf16_len);
+    start_utf16 = (ant_offset_t) pos;
   }
   
-  if (search_len == 0) return tov(D(start));
-  if (start + search_len > str_len) return tov(-1);
+  if (search_len == 0) return tov(D(start_utf16));
 
-  const char *str_ptr = (char *)(uintptr_t)(str_off);
-  const char *search_ptr = (char *)(uintptr_t)(search_off);
+  size_t byte_start = 0;
+  if (start_utf16 > 0) {
+    int off = utf16_index_to_byte_offset(str_ptr, str_len, start_utf16, NULL);
+    if (off < 0) return tov(-1);
+    byte_start = (size_t)off;
+  }
 
-  for (ant_offset_t i = start; i <= str_len - search_len; i++) {
-    if (memcmp(str_ptr + i, search_ptr, search_len) == 0) return tov(D(i));
+  if (byte_start + search_len > (size_t)str_len) return tov(-1);
+
+  for (size_t i = byte_start; i <= (size_t)str_len - search_len; i++) {
+    if (memcmp(str_ptr + i, search_ptr, search_len) == 0)
+      return tov(D(byte_offset_to_utf16(str_ptr, i)));
   }
   return tov(-1);
 }
