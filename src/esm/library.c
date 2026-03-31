@@ -1,4 +1,5 @@
 #include "esm/library.h"
+#include "gc/roots.h"
 #include "ant.h"
 
 #include <stdarg.h>
@@ -70,6 +71,7 @@ ant_value_t js_esm_load_registered_library(ant_t *js, const char *specifier, siz
 
   canon->cached_ns = canon->init_fn(js);
   canon->ns_initialized = true;
+  gc_register_root(&canon->cached_ns);
   
   return canon->cached_ns;
 }
