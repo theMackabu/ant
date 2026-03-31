@@ -236,6 +236,7 @@ static void enter_raw_mode(rl_interface_t *iface) {
   raw = iface->saved_termios;
   cfmakeraw(&raw);
   raw.c_lflag |= ISIG;
+  raw.c_oflag |= OPOST | ONLCR;
 
   if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) == -1) return;
   iface->raw_mode = true;
