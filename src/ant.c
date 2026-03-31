@@ -214,19 +214,6 @@ static inline void promise_handlers_clear(ant_promise_state_t *pd) {
   if (pd->handlers) utarray_clear(pd->handlers);
 }
 
-typedef struct {
-  bool has_getter;
-  bool has_setter;
-  bool writable;
-  bool enumerable;
-  bool configurable;
-  ant_value_t getter;
-  ant_value_t setter;
-} prop_meta_t;
-
-static bool lookup_symbol_prop_meta(ant_value_t cur_obj, ant_offset_t sym_off, prop_meta_t *out);
-static bool lookup_string_prop_meta(ant_t *js, ant_value_t cur_obj, const char *key, size_t klen, prop_meta_t *out);
-
 ant_value_t tov(double d) {
   union { double d; ant_value_t v; } u = {d};
   if (__builtin_expect(isnan(d), 0)) 
@@ -3038,11 +3025,6 @@ static ant_value_t js_setprop_array_fast(ant_t *js, ant_value_t obj, ant_value_t
   return v;
 }
 
-typedef enum {
-  PROP_META_STRING = 0,
-  PROP_META_SYMBOL = 1,
-} prop_meta_key_t;
-
 static inline void prop_meta_defaults(prop_meta_t *out) {
   *out = (prop_meta_t){
     .has_getter = false,
@@ -3075,7 +3057,7 @@ static inline void prop_meta_from_desc(prop_meta_t *out, const descriptor_entry_
   out->setter = desc->setter;
 }
 
-static bool lookup_prop_meta(
+bool lookup_prop_meta(
   ant_t *js,
   ant_value_t cur_obj,
   prop_meta_key_t key_kind,
@@ -3132,14 +3114,6 @@ static bool lookup_prop_meta(
   if (!desc) return false;
   prop_meta_from_desc(out, desc);
   return true;
-}
-
-static inline bool lookup_symbol_prop_meta(ant_value_t cur_obj, ant_offset_t sym_off, prop_meta_t *out) {
-  return lookup_prop_meta(NULL, cur_obj, PROP_META_SYMBOL, NULL, 0, sym_off, out);
-}
-
-static inline bool lookup_string_prop_meta(ant_t *js, ant_value_t cur_obj, const char *key, size_t klen, prop_meta_t *out) {
-  return lookup_prop_meta(js, cur_obj, PROP_META_STRING, key, klen, 0, out);
 }
 
 bool js_try_get_own_data_prop(ant_t *js, ant_value_t obj, const char *key, size_t key_len, ant_value_t *out) {

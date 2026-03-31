@@ -249,6 +249,21 @@ typedef struct {
   size_t bytes;
 } js_intern_stats_t;
 
+typedef struct {
+  bool has_getter;
+  bool has_setter;
+  bool writable;
+  bool enumerable;
+  bool configurable;
+  ant_value_t getter;
+  ant_value_t setter;
+} prop_meta_t;
+
+typedef enum {
+  PROP_META_STRING = 0,
+  PROP_META_SYMBOL = 1,
+} prop_meta_key_t;
+
 typedef ant_value_t 
   (*js_cfunc_fn_t)(ant_t *, ant_value_t *, int);
 
@@ -355,6 +370,13 @@ ant_value_t builtin_object_isPrototypeOf(ant_t *js, ant_value_t *args, int nargs
 void js_module_eval_ctx_push(ant_t *js, ant_module_t *ctx);
 void js_module_eval_ctx_pop(ant_t *js, ant_module_t *ctx);
 
+bool lookup_prop_meta(
+  ant_t *js, ant_value_t cur_obj,
+  prop_meta_key_t key_kind, 
+  const char *key, size_t klen,
+  ant_offset_t sym_off, prop_meta_t *out
+);
+
 static inline ant_value_t js_module_eval_active_ns(ant_t *js) {
   ant_module_t *ctx = js->module;
   return ctx ? ctx->module_ns : js_mkundef();
@@ -400,6 +422,14 @@ static inline int js_brand_id(ant_value_t obj) {
 
 static inline bool js_check_brand(ant_value_t obj, int brand) {
   return js_brand_id(obj) == brand;
+}
+
+static inline bool lookup_symbol_prop_meta(ant_value_t cur_obj, ant_offset_t sym_off, prop_meta_t *out) {
+  return lookup_prop_meta(NULL, cur_obj, PROP_META_SYMBOL, NULL, 0, sym_off, out);
+}
+
+static inline bool lookup_string_prop_meta(ant_t *js, ant_value_t cur_obj, const char *key, size_t klen, prop_meta_t *out) {
+  return lookup_prop_meta(js, cur_obj, PROP_META_STRING, key, klen, 0, out);
 }
 
 static inline void js_set_module_default(ant_t *js, ant_value_t lib, ant_value_t ctor_fn, const char *name) {

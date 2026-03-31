@@ -6,7 +6,7 @@
 #include "errors.h"
 
 #include "silver/compiler.h"
-#include "silver/vm.h"
+#include "silver/engine.h"
 
 #include <libgen.h>
 #include <string.h>
@@ -71,6 +71,37 @@ static ant_value_t esm_cjs_require_resolve(ant_t *js, ant_value_t *args, int nar
   return resolved;
 }
 
+static bool copy_own_prop(
+  ant_t *js, ant_value_t dst, ant_value_t src,
+  const char *key, size_t key_len, ant_value_t *err
+) {
+  ant_value_t value = js_mkundef();
+
+  if (js_try_get_own_data_prop(js, src, key, key_len, &value)) {
+    ant_value_t res = setprop_cstr(js, dst, key, key_len, value);
+    if (is_err(res)) { *err = res; return false; }
+    return true;
+  }
+
+  prop_meta_t meta;
+  if (lookup_string_prop_meta(js, src, key, key_len, &meta) && (meta.has_getter || meta.has_setter)) {
+    ant_value_t ns = js_as_obj(dst);
+    int flags = (meta.enumerable   ? JS_DESC_E : 0) | (meta.configurable ? JS_DESC_C : 0);
+    if (meta.has_getter) js_set_getter_desc(js, ns, key, key_len, meta.getter, flags);
+    if (meta.has_setter) js_set_setter_desc(js, ns, key, key_len, meta.setter, flags);
+    return true;
+  }
+
+  value = js_get(js, src, key);
+  if (is_err(value)) { *err = value; return false; }
+  if (vtype(value) == T_UNDEF) return true;
+
+  ant_value_t res = setprop_cstr(js, dst, key, key_len, value);
+  if (is_err(res)) { *err = res; return false; }
+  
+  return true;
+}
+
 static ant_value_t esm_populate_cjs_namespace(ant_t *js, ant_value_t ns, ant_value_t exports_val) {
   ant_value_t set_default = setprop_cstr(js, ns, "default", 7, exports_val);
   if (is_err(set_default)) return set_default;
@@ -83,18 +114,12 @@ static ant_value_t esm_populate_cjs_namespace(ant_t *js, ant_value_t ns, ant_val
   size_t key_len = 0;
   
   while (js_prop_iter_next(&iter, &key, &key_len, NULL)) {
-    if (key_len == 7 && memcmp(key, "default", 7) == 0) continue;
-
-    ant_value_t value = js_mkundef();
-    if (!js_try_get_own_data_prop(js, exports_val, key, key_len, &value)) {
-      value = js_get(js, exports_val, key);
-      if (is_err(value)) { js_prop_iter_end(&iter); return value; }
-      if (vtype(value) == T_UNDEF) continue;
-    }
-    
-    ant_value_t res = setprop_cstr(js, ns, key, key_len, value);
-    if (is_err(res)) { js_prop_iter_end(&iter); return res; }
-  }
+  if (key_len == 7 && memcmp(key, "default", 7) == 0) continue;
+  
+  ant_value_t err = js_mkundef();
+  if (!copy_own_prop(js, ns, exports_val, key, key_len, &err)) {
+    if (is_err(err)) { js_prop_iter_end(&iter); return err; }
+  }}
 
   js_prop_iter_end(&iter);
   return js_mkundef();
