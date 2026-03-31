@@ -80,6 +80,7 @@
 #include "modules/abort.h"
 #include "modules/globals.h"
 #include "modules/wasm.h"
+#include "modules/string_decoder.h"
 #include "modules/structured-clone.h"
 #include "modules/v8.h"
 #include "modules/worker_threads.h"
@@ -650,6 +651,7 @@ int main(int argc, char *argv[]) {
   ant_standard_library("async_hooks", async_hooks_library);
   ant_standard_library("v8", v8_library);
   ant_standard_library("zlib", zlib_library);
+  ant_standard_library("string_decoder", string_decoder_library);
   
   ant_standard_library("fs/promises", fs_promises_library);
   ant_standard_library("timers/promises", timers_promises_library);

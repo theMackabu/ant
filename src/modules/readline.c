@@ -536,7 +536,10 @@ static void on_stdin_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *bu
       } else if (process_has_event_listeners("SIGINT")) {
         ant_value_t sig_arg = js_mkstr(js, "SIGINT", 6);
         emit_process_event("SIGINT", &sig_arg, 1);
-      } else raise(SIGINT);
+      } else {
+        uv_tty_reset_mode();
+        raise(SIGINT);
+      }
     } else if (c == 4) {
       if (iface->line_len == 0) {
         emit_event(js, iface, "close", NULL, 0);
