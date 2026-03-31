@@ -33,6 +33,8 @@ typedef struct microtask_entry {
   ant_value_t callback;
   ant_value_t promise;
   struct microtask_entry *next;
+  uint8_t argc;
+  ant_value_t argv[];
 } microtask_entry_t;
 
 typedef struct immediate_entry {
@@ -513,6 +515,15 @@ static ant_value_t js_timers_promises_scheduler_yield(ant_t *js, ant_value_t *ar
   return js_timers_promises_setImmediate(js, args, nargs);
 }
 
+static void queue_microtask_entry(microtask_entry_t *entry) {
+if (timer_state.microtasks_tail == NULL) {
+  timer_state.microtasks = entry;
+  timer_state.microtasks_tail = entry;
+} else {
+  timer_state.microtasks_tail->next = entry;
+  timer_state.microtasks_tail = entry;
+}}
+
 void queue_microtask(ant_t *js, ant_value_t callback) {
   microtask_entry_t *entry = ant_calloc(sizeof(microtask_entry_t));
   if (entry == NULL) return;
@@ -520,14 +531,24 @@ void queue_microtask(ant_t *js, ant_value_t callback) {
   entry->callback = callback;
   entry->promise = js_mkundef();
   entry->next = NULL;
+  entry->argc = 0;
   
-  if (timer_state.microtasks_tail == NULL) {
-    timer_state.microtasks = entry;
-    timer_state.microtasks_tail = entry;
-  } else {
-    timer_state.microtasks_tail->next = entry;
-    timer_state.microtasks_tail = entry;
-  }
+  queue_microtask_entry(entry);
+}
+
+void queue_microtask_with_args(ant_t *js, ant_value_t callback, ant_value_t *args, int nargs) {
+  if (nargs <= 0) { queue_microtask(js, callback); return; }
+  
+  microtask_entry_t *entry = ant_calloc(sizeof(microtask_entry_t) + (size_t)nargs * sizeof(ant_value_t));
+  if (entry == NULL) return;
+  
+  entry->callback = callback;
+  entry->promise = js_mkundef();
+  entry->next = NULL;
+  entry->argc = (uint8_t)nargs;
+  
+  for (int i = 0; i < nargs; i++) entry->argv[i] = args[i];
+  queue_microtask_entry(entry);
 }
 
 void queue_promise_trigger(ant_t *js, ant_value_t promise) {
@@ -571,8 +592,7 @@ static inline void process_microtask_entry(ant_t *js, microtask_entry_t *entry) 
   ant_value_t callback = entry->callback;
   GC_ROOT_PIN(js, callback);
   
-  ant_value_t args[0];
-  sv_vm_call(js->vm, js, callback, js_mkundef(), args, 0, NULL, false);
+  sv_vm_call(js->vm, js, callback, js_mkundef(), entry->argv, entry->argc, NULL, false);
   GC_ROOT_RESTORE(js, root_mark);
 }
 

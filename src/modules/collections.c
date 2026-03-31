@@ -4,6 +4,7 @@
 #include <math.h>
 
 #include "ant.h"
+#include "gc.h"
 #include "errors.h"
 #include "runtime.h"
 #include "internal.h"
@@ -232,6 +233,12 @@ static ant_value_t map_set(ant_t *js, ant_value_t *args, int nargs) {
   if (!map_store_entry(js, map_ptr, args[0], key_val, args[1]))
     return js_mkerr(js, "out of memory");
 
+  ant_object_t *map_obj = js_obj_ptr(this_val);
+  if (map_obj) {
+    gc_write_barrier(js, map_obj, key_val);
+    gc_write_barrier(js, map_obj, args[1]);
+  }
+
   return this_val;
 }
 
@@ -436,7 +443,10 @@ static ant_value_t set_add(ant_t *js, ant_value_t *args, int nargs) {
   
   if (!set_store_entry(js, set_ptr, args[0]))
     return js_mkerr(js, "out of memory");
-  
+
+  ant_object_t *set_obj = js_obj_ptr(this_val);
+  if (set_obj) gc_write_barrier(js, set_obj, args[0]);
+
   return this_val;
 }
 

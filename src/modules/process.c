@@ -41,6 +41,7 @@
 #include "modules/symbol.h"
 #include "modules/buffer.h"
 #include "modules/napi.h"
+#include "modules/timer.h"
 
 #ifndef _WIN32
 extern char **environ;
@@ -1690,6 +1691,19 @@ ant_value_t process_library(ant_t *js) {
   return js_get(js, js_glob(js), "process");
 }
 
+static ant_value_t process_next_tick(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "process.nextTick requires a callback");
+    
+  ant_value_t cb = args[0];
+  if (vtype(cb) != T_FUNC && vtype(cb) != T_CFUNC)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "process.nextTick callback is not a function");
+    
+  if (nargs <= 1) queue_microtask(js, cb);
+  else queue_microtask_with_args(js, cb, args + 1, nargs - 1);
+  
+  return js_mkundef();
+}
+
 void init_process_module() {
   ant_t *js = rt->js;
   ant_value_t global = js_glob(js);
@@ -1715,6 +1729,7 @@ void init_process_module() {
   js_set(js, process_proto, "kill", js_mkfun(process_kill));
   js_set(js, process_proto, "abort", js_mkfun(process_abort));
   js_set(js, process_proto, "umask", js_mkfun(process_umask));
+  js_set(js, process_proto, "nextTick", js_mkfun(process_next_tick));
   
   ant_value_t mem_usage_fn = js_heavy_mkfun(js, process_memory_usage, js_mkundef());
   js_set(js, mem_usage_fn, "rss", js_mkfun(process_memory_usage_rss));

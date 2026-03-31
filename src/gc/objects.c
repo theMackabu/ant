@@ -254,9 +254,11 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
   if (obj->type_tag == T_MAP) {
     map_entry_t **head = (map_entry_t **)(uintptr_t)js_getnum(obj->u.data.value);
     if (head) {
-      map_entry_t *e, *tmp;
-      HASH_ITER(hh, *head, e, tmp) { gc_mark_value(js, e->value); }
-    }
+    map_entry_t *e, *tmp;
+    HASH_ITER(hh, *head, e, tmp) { 
+      gc_mark_value(js, e->key_val); 
+      gc_mark_value(js, e->value); 
+    }}
   } else if (obj->type_tag == T_SET) {
     set_entry_t **head = (set_entry_t **)(uintptr_t)js_getnum(obj->u.data.value);
     if (head) {

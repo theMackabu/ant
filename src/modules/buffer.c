@@ -11,6 +11,7 @@
 #endif
 
 #include "ant.h"
+#include "utf8.h"
 #include "utils.h"
 #include "errors.h"
 #include "base64.h"
@@ -2067,6 +2068,10 @@ static ant_value_t js_buffer_toString(ant_t *js, ant_value_t *args, int nargs) {
     if (encoding == ENC_UNKNOWN) encoding = ENC_UTF8;
   }
   
+  if (!ta_data->buffer || ta_data->buffer->is_detached) {
+    return js_mkerr(js, "Cannot read from detached buffer");
+  }
+  
   uint8_t *data = ta_data->buffer->data + ta_data->byte_offset;
   size_t len = ta_data->byte_length;
   
@@ -2100,7 +2105,24 @@ static ant_value_t js_buffer_toString(ant_t *js, ant_value_t *args, int nargs) {
     ant_value_t result = js_mkstr(js, str, char_count);
     free(str);
     return result;
-  } else return js_mkstr(js, (char *)data, len);
+  } else {
+    size_t out_cap = len * 3 + 1;
+    char *out = malloc(out_cap);
+    if (!out) return js_mkerr(js, "Failed to allocate string");
+    
+    utf8_dec_t dec = { .bom_seen = true, .ignore_bom = true };
+    utf8proc_ssize_t out_len = utf8_whatwg_decode(&dec, data, len, out, false, false);
+    
+    if (out_len < 0) {
+      free(out);
+      return js_mkerr(js, "Failed to decode buffer as UTF-8");
+    }
+    
+    ant_value_t result = js_mkstr(js, out, (size_t)out_len);
+    free(out);
+    
+    return result;
+  }
 }
 
 // Buffer.prototype.toBase64()
