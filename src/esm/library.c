@@ -8,6 +8,9 @@
 typedef struct ant_library_entry {
   char name[256];
   ant_library_init_fn init_fn;
+  ant_value_t cached_ns;
+  bool ns_initialized;
+  struct ant_library_entry *canonical;
   UT_hash_handle hh;
 } ant_library_entry_t;
 
@@ -16,6 +19,7 @@ static ant_library_entry_t *library_registry = NULL;
 void ant_register_library(ant_library_init_fn init_fn, const char *name, ...) {
   va_list args;
   const char *alias = name;
+  ant_library_entry_t *canonical_entry = NULL;
 
   va_start(args, name);
   while (alias != NULL) {
@@ -25,6 +29,10 @@ void ant_register_library(ant_library_init_fn init_fn, const char *name, ...) {
     strncpy(lib->name, alias, sizeof(lib->name) - 1);
     lib->name[sizeof(lib->name) - 1] = '\0';
     lib->init_fn = init_fn;
+    lib->ns_initialized = false;
+
+    if (!canonical_entry) canonical_entry = lib;
+    lib->canonical = canonical_entry;
 
     HASH_ADD_STR(library_registry, name, lib);
     alias = va_arg(args, const char *);
@@ -46,9 +54,7 @@ static ant_library_entry_t *find_library(const char *specifier, size_t spec_len)
 
 void ant_library_foreach(ant_library_iter_fn cb, void *userdata) {
   ant_library_entry_t *lib, *tmp;
-  HASH_ITER(hh, library_registry, lib, tmp) {
-    if (!strchr(lib->name, ':')) cb(lib->name, userdata);
-  }
+  HASH_ITER(hh, library_registry, lib, tmp) if (!strchr(lib->name, ':')) cb(lib->name, userdata);
 }
 
 ant_value_t js_esm_load_registered_library(ant_t *js, const char *specifier, size_t spec_len, bool *loaded) {
@@ -58,5 +64,12 @@ ant_value_t js_esm_load_registered_library(ant_t *js, const char *specifier, siz
     return js_mkundef();
   }
   if (loaded) *loaded = true;
-  return lib->init_fn(js);
+
+  ant_library_entry_t *canon = lib->canonical;
+  if (canon->ns_initialized) return canon->cached_ns;
+
+  canon->cached_ns = canon->init_fn(js);
+  canon->ns_initialized = true;
+  
+  return canon->cached_ns;
 }
