@@ -99,6 +99,8 @@ typedef struct rl_interface {
 #ifndef _WIN32
   struct termios saved_termios;
   bool raw_mode;
+  uv_signal_t sigint_watcher;
+  bool sigint_watcher_active;
 #endif
 } rl_interface_t;
 
@@ -232,10 +234,9 @@ static void enter_raw_mode(rl_interface_t *iface) {
   if (tcgetattr(STDIN_FILENO, &iface->saved_termios) == -1) return;
   
   raw = iface->saved_termios;
-  raw.c_lflag &= ~(ICANON | ECHO | ISIG);
-  raw.c_cc[VMIN] = 1;
-  raw.c_cc[VTIME] = 0;
-  
+  cfmakeraw(&raw);
+  raw.c_lflag |= ISIG;
+
   if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) == -1) return;
   iface->raw_mode = true;
 }
@@ -445,160 +446,21 @@ static void handle_escape_sequence(rl_interface_t *iface, const char *seq, int l
 }
 
 static void alloc_buffer(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
-  (void)handle;
   buf->base = malloc(suggested_size);
   buf->len = suggested_size;
 }
 
-static void on_stdin_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
-  rl_interface_t *iface = (rl_interface_t *)stream->data;
-  ant_t *js = rt->js;
-
-  if (!iface) {
-    if (buf->base) free(buf->base);
-    return;
-  }
-
-  if (iface->closed || iface->paused) {
-    if (buf->base) free(buf->base);
-    return;
-  }
-  
-  if (nread < 0) {
-    if (nread == UV_EOF) {
-      emit_event(js, iface, "close", NULL, 0);
-      iface->closed = true;
-    }
-    if (buf->base) free(buf->base);
-    return;
-  }
-  
-  for (ssize_t i = 0; i < nread; i++) {
-    char c = buf->base[i];
-    
-    if (iface->escape_state > 0) {
-      iface->escape_buf[iface->escape_len++] = c;
-      
-      if (iface->escape_state == 1) {
-        if (c == '[' || c == 'O') {
-          iface->escape_state = 2;
-        } else {
-          iface->escape_state = 0;
-          iface->escape_len = 0;
-        }
-      } else if (iface->escape_state == 2) {
-        if ((c >= 'A' && c <= 'Z') || c == '~') {
-          handle_escape_sequence(iface, iface->escape_buf, iface->escape_len);
-          iface->escape_state = 0;
-          iface->escape_len = 0;
-        } else if (iface->escape_len >= 15) {
-          iface->escape_state = 0;
-          iface->escape_len = 0;
-        }
-      }
-      continue;
-    }
-    
-    if (c == 27) {
-      iface->escape_state = 1;
-      iface->escape_len = 0;
-      continue;
-    }
-    
-    if (c == '\r' || c == '\n') {
-      printf("\n");
-      fflush(stdout);
-      
-      char *line = strdup(iface->line_buffer);
-      rl_history_add(&iface->history, line, iface->remove_history_duplicates);
-      emit_history_event(js, iface);
-      
-      ant_value_t line_val = js_mkstr(js, line, strlen(line));
-      emit_event(js, iface, "line", &line_val, 1);
-      
-      if (vtype(iface->pending_question_resolve) == T_FUNC) {
-        sv_vm_call(js->vm, js, iface->pending_question_resolve, js_mkundef(), &line_val, 1, NULL, false);
-        iface->pending_question_resolve = js_mkundef();
-        iface->pending_question_reject = js_mkundef();
-      }
-      
-      iface->line_buffer[0] = '\0';
-      iface->line_pos = 0;
-      iface->line_len = 0;
-      iface->history.current = iface->history.count;
-      
-      free(line);
-    } else if (c == 127 || c == 8) {
-      handle_backspace(iface);
-    } else if (c == 3) {
-      if (rl_has_event_listener(iface, "SIGINT")) {
-        emit_event(js, iface, "SIGINT", NULL, 0);
-      } else if (process_has_event_listeners("SIGINT")) {
-        ant_value_t sig_arg = js_mkstr(js, "SIGINT", 6);
-        emit_process_event("SIGINT", &sig_arg, 1);
-      } else {
-        uv_tty_reset_mode();
-        raise(SIGINT);
-      }
-    } else if (c == 4) {
-      if (iface->line_len == 0) {
-        emit_event(js, iface, "close", NULL, 0);
-        iface->closed = true;
-        uv_read_stop(stream);
-      } else handle_delete(iface);
-    } else if (c == 1) {
-      iface->line_pos = 0;
-      refresh_line(iface);
-    } else if (c == 5) {
-      iface->line_pos = iface->line_len;
-      refresh_line(iface);
-    } else if (c == 11) {
-      iface->line_buffer[iface->line_pos] = '\0';
-      iface->line_len = iface->line_pos;
-      refresh_line(iface);
-    } else if (c == 21) {
-      iface->line_buffer[0] = '\0';
-      iface->line_pos = 0;
-      iface->line_len = 0;
-      refresh_line(iface);
-    } else if (c == 12) {
-      printf("\033[2J\033[H");
-      refresh_line(iface);
-    } else if (c >= 32 && c < 127) {
-      handle_char_input(iface, c);
-    }
-  }
-  
-  if (buf->base) free(buf->base);
-}
-
-static void start_reading(rl_interface_t *iface) {
-  if (iface->reading || iface->closed) return;
-  
-  if (!iface->tty_initialized) {
-    uv_loop_t *loop = uv_default_loop();
-    int is_tty = uv_guess_handle(STDIN_FILENO) == UV_TTY;
-    
-    if (is_tty) {
-      if (uv_tty_init(loop, &iface->tty_in, STDIN_FILENO, 1) != 0) return;
-      uv_tty_set_mode(&iface->tty_in, UV_TTY_MODE_RAW);
-    } else {
-      if (uv_tty_init(loop, &iface->tty_in, STDIN_FILENO, 1) != 0) return;
-    }
-    
-    iface->tty_in.data = iface;
-    iface->tty_initialized = true;
-  }
-  
-  iface->reading = true;
-  uv_read_start((uv_stream_t *)&iface->tty_in, alloc_buffer, on_stdin_read);
-}
-
 static void stop_reading(rl_interface_t *iface) {
   if (!iface->reading) return;
-  
+
   uv_read_stop((uv_stream_t *)&iface->tty_in);
   iface->reading = false;
+#ifndef _WIN32
+  if (iface->sigint_watcher_active) {
+    uv_signal_stop(&iface->sigint_watcher);
+    iface->sigint_watcher_active = false;
+  }
+#endif
 }
 
 static void process_line(ant_t *js, rl_interface_t *iface) {
@@ -621,6 +483,107 @@ static void process_line(ant_t *js, rl_interface_t *iface) {
   iface->line_len = 0;
   
   free(line);
+}
+
+static void feed_escape(rl_interface_t *iface, char c) {
+  iface->escape_buf[iface->escape_len++] = c;
+  if (iface->escape_state == 1) {
+    iface->escape_state = (c == '[' || c == 'O') ? 2 : 0;
+    if (!iface->escape_state) iface->escape_len = 0;
+    return;
+  }
+  bool done = (c >= 'A' && c <= 'Z') || c == '~';
+  if (done) handle_escape_sequence(iface, iface->escape_buf, iface->escape_len);
+  if (done || iface->escape_len >= 15) { iface->escape_state = 0; iface->escape_len = 0; }
+}
+
+static void process_byte(ant_t *js, rl_interface_t *iface, char c) {
+  if (iface->escape_state > 0) { feed_escape(iface, c); return; }
+  if (c == 27) { iface->escape_state = 1; iface->escape_len = 0; return; }
+
+  switch (c) {
+    case '\r': case '\n':
+      putchar('\n'); fflush(stdout);
+      process_line(js, iface);
+      break;
+    case 127: case 8: handle_backspace(iface); break;
+    case 4:
+      if (iface->line_len == 0) { emit_event(js, iface, "close", NULL, 0); iface->closed = true; }
+      else handle_delete(iface);
+      break;
+    case 1:  iface->line_pos = 0; refresh_line(iface); break;
+    case 5:  iface->line_pos = iface->line_len; refresh_line(iface); break;
+    case 11: iface->line_buffer[iface->line_pos] = '\0'; iface->line_len = iface->line_pos; refresh_line(iface); break;
+    case 21: iface->line_buffer[0] = '\0'; iface->line_pos = 0; iface->line_len = 0; refresh_line(iface); break;
+    case 12: printf("\033[2J\033[H"); refresh_line(iface); break;
+    default: if (c >= 32 && c < 127) handle_char_input(iface, c); break;
+  }
+}
+
+static void on_stdin_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
+  rl_interface_t *iface = (rl_interface_t *)stream->data;
+  ant_t *js = rt->js;
+
+  if (!iface || iface->closed || iface->paused) goto cleanup;
+
+  if (nread < 0) {
+    if (nread == UV_EOF) { emit_event(js, iface, "close", NULL, 0); iface->closed = true; }
+    goto cleanup;
+  }
+
+  for (ssize_t i = 0; i < nread; i++) {
+    process_byte(js, iface, buf->base[i]);
+    if (iface->closed) break;
+  }
+
+  if (iface->closed) stop_reading(iface);
+
+cleanup:
+  free(buf->base);
+}
+
+#ifndef _WIN32
+static void on_sigint(uv_signal_t *handle, int signum) {
+  rl_interface_t *iface = (rl_interface_t *)handle->data;
+  ant_t *js = rt->js;
+
+  if (rl_has_event_listener(iface, "SIGINT")) {
+    emit_event(js, iface, "SIGINT", NULL, 0);
+  } else if (process_has_event_listeners("SIGINT")) {
+    ant_value_t sig_arg = js_mkstr(js, "SIGINT", 6);
+    emit_process_event("SIGINT", &sig_arg, 1);
+  } else {
+    uv_signal_stop(handle);
+    raise(SIGINT);
+  }
+}
+#endif
+
+static void start_reading(rl_interface_t *iface) {
+  if (iface->reading || iface->closed) return;
+
+  if (!iface->tty_initialized) {
+    uv_loop_t *loop = uv_default_loop();
+    int is_tty = uv_guess_handle(STDIN_FILENO) == UV_TTY;
+
+    if (uv_tty_init(loop, &iface->tty_in, STDIN_FILENO, 1) != 0) return;
+
+    if (is_tty) {
+#ifndef _WIN32
+      enter_raw_mode(iface);
+      uv_signal_init(loop, &iface->sigint_watcher);
+      iface->sigint_watcher.data = iface;
+      uv_signal_start(&iface->sigint_watcher, on_sigint, SIGINT);
+      iface->sigint_watcher_active = true;
+#endif
+    }
+
+    iface->tty_in.data = iface;
+    iface->tty_initialized = true;
+  }
+
+  iface->reading = true;
+  uv_read_start((uv_stream_t *)&iface->tty_in, alloc_buffer, on_stdin_read);
 }
 
 static rl_interface_t *get_interface(ant_t *js, ant_value_t this_obj) {
@@ -763,14 +726,15 @@ static ant_value_t rl_interface_close(ant_t *js, ant_value_t *args, int nargs) {
   stop_reading(iface);
   
   if (iface->tty_initialized) {
-    uv_tty_reset_mode();
     uv_close((uv_handle_t *)&iface->tty_in, NULL);
+#ifndef _WIN32
+    if (!iface->sigint_watcher_active && uv_is_active((uv_handle_t *)&iface->sigint_watcher)) {
+      uv_close((uv_handle_t *)&iface->sigint_watcher, NULL);
+    }
+    exit_raw_mode(iface);
+#endif
     iface->tty_initialized = false;
   }
-  
-#ifndef _WIN32
-  exit_raw_mode(iface);
-#endif
   
   iface->closed = true;
   emit_event(js, iface, "close", NULL, 0);
@@ -1349,10 +1313,9 @@ void gc_mark_readline(ant_t *js, gc_mark_fn mark) {
     mark(js, iface->js_obj);
     mark(js, iface->pending_question_resolve);
     mark(js, iface->pending_question_reject);
-
+    
     RLEventType *evt, *evt_tmp;
-    HASH_ITER(hh, iface->events, evt, evt_tmp) {
-      for (int i = 0; i < evt->listener_count; i++) mark(js, evt->listeners[i].listener);
-    }
+    HASH_ITER(hh, iface->events, evt, evt_tmp) for (int i = 0; i < evt->listener_count; i++) 
+      mark(js, evt->listeners[i].listener);
   }
 }
