@@ -2105,9 +2105,8 @@ ant_value_t js_tostring_val(ant_t *js, ant_value_t value) {
   }
     
   L_DEFAULT: {
-    buf = (char *)ant_calloc(64);
-    len = tostr(js, value, buf, 64);
-    ant_value_t result = js_mkstr(js, buf, len);
+    buf = tostr_alloc(js, value);
+    ant_value_t result = js_mkstr(js, buf, strlen(buf));
     free(buf); return result;
   }
 }
