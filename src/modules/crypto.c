@@ -1,6 +1,7 @@
 #include <sodium.h>
 #include <string.h>
 #include <time.h>
+#include <openssl/evp.h>
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wimplicit-int-conversion"
@@ -14,11 +15,221 @@
 #endif
 
 #include "ant.h"
+#include "base64.h"
 #include "errors.h"
 #include "runtime.h"
 #include "modules/crypto.h"
 #include "modules/buffer.h"
 #include "modules/symbol.h"
+
+typedef enum {
+  CRYPTO_TEXT_UTF8 = 0,
+  CRYPTO_TEXT_HEX,
+  CRYPTO_TEXT_BASE64,
+  CRYPTO_TEXT_LATIN1
+} crypto_text_encoding_t;
+
+typedef struct {
+  EVP_MD_CTX *ctx;
+  const EVP_MD *md;
+  unsigned char digest[EVP_MAX_MD_SIZE];
+  unsigned int digest_len;
+  bool finalized;
+} ant_hash_state_t;
+
+static ant_value_t crypto_make_buffer(ant_t *js, const uint8_t *data, size_t len) {
+  ArrayBufferData *buffer = create_array_buffer_data(len);
+  if (!buffer) return js_mkerr(js, "Failed to allocate Buffer");
+  if (len > 0 && data) memcpy(buffer->data, data, len);
+  return create_typed_array(js, TYPED_ARRAY_UINT8, buffer, 0, len, "Buffer");
+}
+
+static bool crypto_get_mutable_bytes(ant_value_t value, uint8_t **out, size_t *len) {
+  ant_value_t slot = js_get_slot(value, SLOT_BUFFER);
+  if (vtype(slot) == T_TYPEDARRAY) {
+    TypedArrayData *ta = (TypedArrayData *)js_gettypedarray(slot);
+    if (!ta || !ta->buffer || ta->buffer->is_detached) return false;
+    *out = ta->buffer->data + ta->byte_offset;
+    *len = ta->byte_length;
+    return true;
+  }
+
+  if (vtype(slot) == T_NUM) {
+    ArrayBufferData *ab = (ArrayBufferData *)(uintptr_t)(size_t)js_getnum(slot);
+    if (!ab || ab->is_detached) return false;
+    *out = ab->data;
+    *len = ab->length;
+    return true;
+  }
+
+  return false;
+}
+
+static crypto_text_encoding_t crypto_parse_encoding(const char *str, size_t len) {
+  if (len == 3 && strncasecmp(str, "hex", 3) == 0) return CRYPTO_TEXT_HEX;
+  if (len == 6 && strncasecmp(str, "base64", 6) == 0) return CRYPTO_TEXT_BASE64;
+  if (len == 9 && strncasecmp(str, "base64url", 9) == 0) return CRYPTO_TEXT_BASE64;
+  
+  if (
+    (len == 5 && strncasecmp(str, "ascii", 5)  == 0) ||
+    (len == 6 && strncasecmp(str, "latin1", 6) == 0) ||
+    (len == 6 && strncasecmp(str, "binary", 6) == 0)
+  ) return CRYPTO_TEXT_LATIN1;
+  
+  return CRYPTO_TEXT_UTF8;
+}
+
+static uint8_t crypto_hex_nibble(char ch) {
+  if (ch >= '0' && ch <= '9') return (uint8_t)(ch - '0');
+  if (ch >= 'a' && ch <= 'f') return (uint8_t)(10 + ch - 'a');
+  if (ch >= 'A' && ch <= 'F') return (uint8_t)(10 + ch - 'A');
+  return 0xFFu;
+}
+
+static uint8_t *crypto_decode_hex(const char *str, size_t len, size_t *out_len) {
+  if ((len & 1u) != 0) return NULL;
+
+  uint8_t *buf = malloc(len / 2u);
+  if (!buf) return NULL;
+
+  for (size_t i = 0; i < len; i += 2u) {
+    uint8_t hi = crypto_hex_nibble(str[i]);
+    uint8_t lo = crypto_hex_nibble(str[i + 1u]);
+    if (hi == 0xFFu || lo == 0xFFu) {
+      free(buf);
+      return NULL;
+    }
+    buf[i / 2u] = (uint8_t)((hi << 4u) | lo);
+  }
+
+  *out_len = len / 2u;
+  return buf;
+}
+
+static ant_value_t crypto_get_input_bytes(
+  ant_t *js, ant_value_t value, ant_value_t encoding_val,
+  const uint8_t **out_bytes, size_t *out_len, uint8_t **owned
+) {
+  const uint8_t *bytes = NULL;
+  size_t len = 0;
+  uint8_t *buf = NULL;
+  
+  ant_value_t string_val;
+  size_t str_len = 0;
+  
+  const char *str = NULL;
+  crypto_text_encoding_t enc = CRYPTO_TEXT_UTF8;
+
+  if (buffer_source_get_bytes(js, value, &bytes, &len)) {
+    *out_bytes = bytes;
+    *out_len = len;
+    *owned = NULL;
+    return js_mkundef();
+  }
+
+  string_val = js_tostring_val(js, value);
+  if (is_err(string_val)) return string_val;
+
+  str = js_getstr(js, string_val, &str_len);
+  if (!str) return js_mkerr(js, "Failed to convert hash input to string");
+
+  if (vtype(encoding_val) == T_STR) {
+    size_t enc_len = 0;
+    const char *enc_str = js_getstr(js, encoding_val, &enc_len);
+    if (enc_str) enc = crypto_parse_encoding(enc_str, enc_len);
+  }
+
+  switch (enc) {
+    case CRYPTO_TEXT_HEX:
+      buf = crypto_decode_hex(str, str_len, &len);
+      if (!buf) return js_mkerr(js, "Invalid hex string");
+      bytes = buf;
+      break;
+    case CRYPTO_TEXT_BASE64:
+      buf = ant_base64_decode(str, str_len, &len);
+      if (!buf) return js_mkerr(js, "Invalid base64 string");
+      bytes = buf;
+      break;
+    case CRYPTO_TEXT_LATIN1:
+      buf = malloc(str_len);
+      if (!buf) return js_mkerr(js, "Out of memory");
+      for (size_t i = 0; i < str_len; i++) buf[i] = (uint8_t)str[i];
+      bytes = buf;
+      len = str_len;
+      break;
+    case CRYPTO_TEXT_UTF8:
+    default:
+      bytes = (const uint8_t *)str;
+      len = str_len;
+      break;
+  }
+
+  *out_bytes = bytes;
+  *out_len = len;
+  *owned = buf;
+  return js_mkundef();
+}
+
+static ant_hash_state_t *crypto_get_hash_state(ant_value_t value) {
+  ant_value_t slot = js_get_slot(value, SLOT_DATA);
+  if (vtype(slot) != T_NUM) return NULL;
+
+  ant_hash_state_t *state = (ant_hash_state_t *)(uintptr_t)js_getnum(slot);
+  return (state && state->ctx) ? state : NULL;
+}
+
+static ant_value_t crypto_require_hash_state(
+  ant_t *js, ant_value_t value, ant_hash_state_t **out_state
+) {
+  ant_hash_state_t *state = crypto_get_hash_state(value);
+  if (!state) return js_mkerr(js, "Invalid Hash state");
+  *out_state = state;
+  return js_mkundef();
+}
+
+static ant_value_t crypto_digest_result(
+  ant_t *js, const uint8_t *digest, size_t digest_len, ant_value_t encoding_val
+) {
+  if (vtype(encoding_val) != T_STR) return crypto_make_buffer(js, digest, digest_len);
+
+  size_t enc_len = 0;
+  const char *enc = js_getstr(js, encoding_val, &enc_len);
+  if (!enc) return crypto_make_buffer(js, digest, digest_len);
+
+  crypto_text_encoding_t encoding = crypto_parse_encoding(enc, enc_len);
+
+  if (encoding == CRYPTO_TEXT_HEX) {
+    char *hex = malloc(digest_len * 2u + 1u);
+    if (!hex) return js_mkerr(js, "Out of memory");
+    for (size_t i = 0; i < digest_len; i++) {
+      snprintf(hex + (i * 2u), 3, "%02x", digest[i]);
+    }
+    ant_value_t result = js_mkstr(js, hex, digest_len * 2u);
+    free(hex);
+    return result;
+  }
+
+  if (encoding == CRYPTO_TEXT_BASE64) {
+    size_t out_len = 0;
+    char *encoded = ant_base64_encode(digest, digest_len, &out_len);
+    if (!encoded) return js_mkerr(js, "Failed to encode base64");
+    
+    if (enc_len == 9 && strncasecmp(enc, "base64url", 9) == 0) {
+      for (size_t i = 0; i < out_len; i++) {
+        if (encoded[i] == '+') encoded[i] = '-';
+        else if (encoded[i] == '/') encoded[i] = '_';
+      }
+      while (out_len > 0 && encoded[out_len - 1u] == '=') out_len--;
+    }
+    
+    ant_value_t result = js_mkstr(js, encoded, out_len);
+    free(encoded);
+    
+    return result;
+  }
+
+  return crypto_make_buffer(js, digest, digest_len);
+}
 
 int ensure_crypto_init(void) {
   static int crypto_initialized = 0;
@@ -83,17 +294,9 @@ static ant_value_t js_crypto_random_bytes(ant_t *js, ant_value_t *args, int narg
   }
   
   randombytes_buf(random_bytes, length);
-  
-  ant_value_t array = js_mkobj(js);
-  js_set(js, array, "length", js_mknum((double)length));
-  
-  for (int i = 0; i < length; i++) {
-    char key[16];
-    snprintf(key, sizeof(key), "%d", i);
-    js_set(js, array, key, js_mknum((double)random_bytes[i]));
-  }
-  
+  ant_value_t array = crypto_make_buffer(js, random_bytes, (size_t)length);
   free(random_bytes);
+  
   return array;
 }
 
@@ -167,11 +370,180 @@ static ant_value_t js_crypto_get_random_values(ant_t *js, ant_value_t *args, int
   return args[0];
 }
 
+static ant_value_t js_crypto_random_fill_sync(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "randomFillSync requires a target");
+  if (ensure_crypto_init() < 0) return js_mkerr(js, "libsodium initialization failed");
+
+  uint8_t *bytes = NULL;
+  size_t len = 0;
+  if (!crypto_get_mutable_bytes(args[0], &bytes, &len)) {
+    return js_mkerr(js, "randomFillSync target must be a Buffer, TypedArray, or ArrayBuffer");
+  }
+
+  size_t offset = 0;
+  if (nargs >= 2 && vtype(args[1]) != T_UNDEF) {
+    double num = js_to_number(js, args[1]);
+    if (num < 0) return js_mkerr(js, "randomFillSync offset must be non-negative");
+    offset = (size_t)num;
+  }
+
+  size_t size = len - offset;
+  if (nargs >= 3 && vtype(args[2]) != T_UNDEF) {
+    double num = js_to_number(js, args[2]);
+    if (num < 0) return js_mkerr(js, "randomFillSync size must be non-negative");
+    size = (size_t)num;
+  }
+
+  if (offset > len || size > len - offset) {
+    return js_mkerr(js, "randomFillSync range is out of bounds");
+  }
+
+  randombytes_buf(bytes + offset, size);
+  return args[0];
+}
+
+static ant_value_t js_hash_update(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_val = js_getthis(js);
+  ant_hash_state_t *state = NULL;
+  
+  const uint8_t *bytes = NULL;
+  size_t len = 0;
+  
+  uint8_t *owned = NULL;
+  ant_value_t err;
+
+  err = crypto_require_hash_state(js, this_val, &state);
+  if (is_err(err)) return err;
+  if (state->finalized) return js_mkerr(js, "Hash digest already called");
+  if (nargs < 1) return js_mkerr(js, "Hash.update requires data");
+
+  ant_value_t encoding = (nargs >= 2) ? args[1] : js_mkundef();
+  err = crypto_get_input_bytes(js, args[0], encoding, &bytes, &len, &owned);
+  if (is_err(err)) goto cleanup;
+
+  if (EVP_DigestUpdate(state->ctx, bytes, len) != 1) {
+    err = js_mkerr(js, "Hash update failed");
+    goto cleanup;
+  }
+
+  err = this_val;
+
+cleanup:
+  if (owned) free(owned);
+  return err;
+}
+
+static ant_value_t js_hash_digest(ant_t *js, ant_value_t *args, int nargs) {
+  ant_hash_state_t *state = NULL;
+  ant_value_t err = crypto_require_hash_state(js, js_getthis(js), &state);
+  
+  if (is_err(err)) return err;
+  if (state->finalized) return js_mkerr(js, "Hash digest already called");
+
+  if (EVP_DigestFinal_ex(state->ctx, state->digest, &state->digest_len) != 1) {
+    return js_mkerr(js, "Hash digest failed");
+  }
+
+  state->finalized = true;
+  EVP_MD_CTX_free(state->ctx);
+  state->ctx = NULL;
+
+  return crypto_digest_result(js, state->digest, state->digest_len, nargs >= 1 ? args[0] : js_mkundef());
+}
+
+static ant_value_t js_crypto_create_hash(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "createHash requires an algorithm");
+
+  ant_value_t algo_val = js_tostring_val(js, args[0]);
+  if (is_err(algo_val)) return algo_val;
+
+  size_t algo_len = 0;
+  const char *algo = js_getstr(js, algo_val, &algo_len);
+  if (!algo || algo_len == 0) return js_mkerr(js, "Invalid hash algorithm");
+
+  char *algo_name = strndup(algo, algo_len);
+  if (!algo_name) return js_mkerr(js, "Out of memory");
+
+  const EVP_MD *md = EVP_get_digestbyname(algo_name);
+  free(algo_name);
+  if (!md) return js_mkerr_typed(js, JS_ERR_TYPE, "Unsupported hash algorithm");
+
+  ant_hash_state_t *state = calloc(1, sizeof(*state));
+  if (!state) return js_mkerr(js, "Out of memory");
+
+  state->ctx = EVP_MD_CTX_new();
+  state->md = md;
+  if (!state->ctx || EVP_DigestInit_ex(state->ctx, md, NULL) != 1) {
+    if (state->ctx) EVP_MD_CTX_free(state->ctx);
+    free(state);
+    return js_mkerr(js, "Failed to initialize hash");
+  }
+
+  ant_value_t obj = js_mkobj(js);
+  js_set(js, obj, "update", js_mkfun(js_hash_update));
+  js_set(js, obj, "digest", js_mkfun(js_hash_digest));
+  
+  js_set_slot(obj, SLOT_DATA, ANT_PTR(state));
+  js_set_sym(js, obj, get_toStringTag_sym(), js_mkstr(js, "Hash", 4));
+  
+  return obj;
+}
+
+static ant_value_t js_crypto_hash(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t algo_val;
+  ant_value_t output_encoding;
+  
+  const char *algo;
+  size_t algo_len = 0;
+  char *algo_name = NULL;
+  
+  const EVP_MD *md = NULL;
+  const uint8_t *bytes = NULL;
+  
+  size_t len = 0;
+  uint8_t *owned = NULL;
+  
+  unsigned char digest[EVP_MAX_MD_SIZE];
+  unsigned int digest_len = 0;
+  ant_value_t err;
+
+  if (nargs < 2) return js_mkerr(js, "hash requires algorithm and data");
+  output_encoding = nargs >= 3 ? args[2] : js_mkundef();
+
+  algo_val = js_tostring_val(js, args[0]);
+  if (is_err(algo_val)) return algo_val;
+
+  algo = js_getstr(js, algo_val, &algo_len);
+  if (!algo || algo_len == 0) return js_mkerr(js, "Invalid hash algorithm");
+
+  algo_name = strndup(algo, algo_len);
+  if (!algo_name) return js_mkerr(js, "Out of memory");
+
+  md = EVP_get_digestbyname(algo_name);
+  free(algo_name);
+  if (!md) return js_mkerr_typed(js, JS_ERR_TYPE, "Unsupported hash algorithm");
+
+  err = crypto_get_input_bytes(js, args[1], js_mkundef(), &bytes, &len, &owned);
+  if (is_err(err)) goto cleanup;
+
+  if (EVP_Digest(bytes, len, digest, &digest_len, md, NULL) != 1) {
+    err = js_mkerr(js, "Hash failed");
+    goto cleanup;
+  }
+
+  err = crypto_digest_result(js, digest, digest_len, output_encoding);
+
+cleanup:
+  if (owned) free(owned);
+  return err;
+}
+
 static ant_value_t create_crypto_obj(ant_t *js) {
   ant_value_t crypto_obj = js_mkobj(js);
   
   js_set(js, crypto_obj, "random", js_mkfun(js_crypto_random));
   js_set(js, crypto_obj, "randomBytes", js_mkfun(js_crypto_random_bytes));
+  js_set(js, crypto_obj, "randomFillSync", js_mkfun(js_crypto_random_fill_sync));
   js_set(js, crypto_obj, "randomUUID", js_mkfun(js_crypto_random_uuid));
   js_set(js, crypto_obj, "randomUUIDv7", js_mkfun(js_crypto_random_uuidv7));
   js_set(js, crypto_obj, "getRandomValues", js_mkfun(js_crypto_get_random_values));
@@ -191,7 +563,10 @@ ant_value_t crypto_library(ant_t *js) {
   ant_value_t webcrypto = create_crypto_obj(js);
   
   js_set(js, lib, "webcrypto", webcrypto);
+  js_set(js, lib, "hash", js_mkfun(js_crypto_hash));
+  js_set(js, lib, "createHash", js_mkfun(js_crypto_create_hash));
   js_set(js, lib, "randomBytes", js_mkfun(js_crypto_random_bytes));
+  js_set(js, lib, "randomFillSync", js_mkfun(js_crypto_random_fill_sync));
   js_set(js, lib, "randomUUID", js_mkfun(js_crypto_random_uuid));
   js_set(js, lib, "getRandomValues", js_mkfun(js_crypto_get_random_values));
   js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "crypto", 6));

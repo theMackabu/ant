@@ -483,6 +483,7 @@ static void gc_mark_roots(ant_t *js) {
   gc_mark_codec_streams(js, gc_mark_value);
   gc_mark_compression_streams(js, gc_mark_value);
   gc_mark_zlib(js, gc_mark_value);
+  gc_mark_wasm(js, gc_mark_value);
 
   for (
     ant_object_t *obj = g_pending_promises; 

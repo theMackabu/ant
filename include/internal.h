@@ -402,6 +402,14 @@ static inline bool js_check_brand(ant_value_t obj, int brand) {
   return js_brand_id(obj) == brand;
 }
 
+static inline void js_set_module_default(ant_t *js, ant_value_t lib, ant_value_t ctor_fn, const char *name) {
+  js_set(js, ctor_fn, name, ctor_fn);
+  js_set(js, lib, name, ctor_fn);
+  js_set(js, lib, "default", ctor_fn);
+  js_set(js, ctor_fn, "default", ctor_fn);
+  js_set_slot_wb(js, lib, SLOT_DEFAULT, ctor_fn);
+}
+
 static inline ant_value_t js_make_ctor(ant_t *js, ant_cfunc_t fn, ant_value_t proto, const char *name, size_t nlen) {
   ant_value_t obj = js_mkobj(js);
   js_set_slot(obj, SLOT_CFUNC, js_mkfun(fn));

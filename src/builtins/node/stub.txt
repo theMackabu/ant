@@ -1,0 +1,7 @@
+// TODO:
+the following builtins are currently compatibility stubs, not full node.js implementations:
+
+- https.mjs
+- http2.mjs
+- tls.mjs
+- stream.cjs

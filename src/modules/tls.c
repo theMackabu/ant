@@ -23,7 +23,7 @@ typedef struct ant_tls_context_wrap_s {
   bool closed;
 } ant_tls_context_wrap_t;
 
-enum { TLS_CONTEXT_NATIVE_TAG = 0x544c5343u };
+enum { TLS_CONTEXT_NATIVE_TAG = 0x544c5343u }; // TLSC
 static ant_value_t g_tls_context_proto = 0;
 
 static void tls_context_free(ant_tls_context_wrap_t *wrap) {

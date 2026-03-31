@@ -33,6 +33,7 @@ static ant_value_t esm_cjs_require(ant_t *js, ant_value_t *args, int nargs) {
     ant_value_t default_export = js_get_slot(ns, SLOT_DEFAULT);
     if (vtype(default_export) != T_UNDEF) return default_export;
   }
+  
   return ns;
 }
 

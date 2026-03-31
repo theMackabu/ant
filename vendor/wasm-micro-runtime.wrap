@@ -1,0 +1,8 @@
+[wrap-git]
+url = https://github.com/bytecodealliance/wasm-micro-runtime.git
+revision = 92f40918bbfad35546a1512b10bd25eaa31add4d
+depth = 1
+patch_directory = wasm-micro-runtime
+
+[provide]
+wasm-micro-runtime = wamr_dep

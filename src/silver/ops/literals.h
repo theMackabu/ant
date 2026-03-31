@@ -86,13 +86,13 @@ static inline void sv_op_array(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   vm->stack[vm->sp++] = arr;
 }
 
+// TODO: reduce duplication with regex.c
 static inline void sv_op_regexp(sv_vm_t *vm, ant_t *js) {
   ant_value_t pattern = vm->stack[vm->sp - 2];
-  ant_value_t flags   = vm->stack[vm->sp - 1];
+  ant_value_t flags = vm->stack[vm->sp - 1];
   vm->sp -= 2;
 
   ant_value_t regexp_obj = mkobj(js, 0);
-
   ant_value_t regexp_proto = js_get_ctor_proto(js, "RegExp", 6);
   if (vtype(regexp_proto) == T_OBJ) js_set_proto_init(regexp_obj, regexp_proto);
 
@@ -106,27 +106,38 @@ static inline void sv_op_regexp(sv_vm_t *vm, ant_t *js) {
     fstr = (const char *)(uintptr_t)(foff);
   }
 
-  bool g = false, i = false, m = false, s = false, y = false;
+  bool d = false, g = false, i = false, m = false;
+  bool s = false, u = false, v = false, y = false;
+  
   for (ant_offset_t k = 0; k < flen; k++) {
+    if (fstr[k] == 'd') d = true;
     if (fstr[k] == 'g') g = true;
     if (fstr[k] == 'i') i = true;
     if (fstr[k] == 'm') m = true;
     if (fstr[k] == 's') s = true;
+    if (fstr[k] == 'u') u = true;
+    if (fstr[k] == 'v') v = true;
     if (fstr[k] == 'y') y = true;
   }
 
-  char sorted[8]; int si = 0;
+  char sorted[10]; int si = 0;
+  if (d) sorted[si++] = 'd';
   if (g) sorted[si++] = 'g';
   if (i) sorted[si++] = 'i';
   if (m) sorted[si++] = 'm';
   if (s) sorted[si++] = 's';
+  if (u) sorted[si++] = 'u';
+  if (v) sorted[si++] = 'v';
   if (y) sorted[si++] = 'y';
 
   js_mkprop_fast(js, regexp_obj, "flags", 5, js_mkstr(js, sorted, si));
+  js_mkprop_fast(js, regexp_obj, "hasIndices", 10, mkval(T_BOOL, d ? 1 : 0));
   js_mkprop_fast(js, regexp_obj, "global", 6, mkval(T_BOOL, g ? 1 : 0));
   js_mkprop_fast(js, regexp_obj, "ignoreCase", 10, mkval(T_BOOL, i ? 1 : 0));
   js_mkprop_fast(js, regexp_obj, "multiline", 9, mkval(T_BOOL, m ? 1 : 0));
   js_mkprop_fast(js, regexp_obj, "dotAll", 6, mkval(T_BOOL, s ? 1 : 0));
+  js_mkprop_fast(js, regexp_obj, "unicode", 7, mkval(T_BOOL, u ? 1 : 0));
+  js_mkprop_fast(js, regexp_obj, "unicodeSets", 11, mkval(T_BOOL, v ? 1 : 0));
   js_mkprop_fast(js, regexp_obj, "sticky", 6, mkval(T_BOOL, y ? 1 : 0));
   js_mkprop_fast(js, regexp_obj, "lastIndex", 9, tov(0));
 

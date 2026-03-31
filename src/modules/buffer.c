@@ -221,32 +221,6 @@ static void *ta_arena_alloc(size_t size) {
   return ptr;
 }
 
-static ant_value_t js_arraybuffer_slice(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t js_typedarray_slice(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t js_typedarray_subarray(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t js_typedarray_fill(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t js_typedarray_at(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t js_typedarray_set(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t js_typedarray_copyWithin(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t js_typedarray_toReversed(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t js_typedarray_toSorted(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t js_typedarray_with(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t js_dataview_getUint8(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t js_dataview_setUint8(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t js_dataview_getInt16(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t js_dataview_setInt16(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t js_dataview_getInt32(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t js_dataview_setInt32(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t js_dataview_getFloat32(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t js_dataview_setFloat32(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t js_dataview_getFloat64(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t js_dataview_setFloat64(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t js_typedarray_toString(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t js_buffer_slice(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t js_buffer_toString(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t js_buffer_toBase64(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t js_buffer_write(ant_t *js, ant_value_t *args, int nargs);
-
 ArrayBufferData *create_array_buffer_data(size_t length) {
   ArrayBufferData *data = ant_calloc(sizeof(ArrayBufferData) + length);
   if (!data) return NULL;
@@ -1305,6 +1279,51 @@ static ant_value_t js_dataview_constructor(ant_t *js, ant_value_t *args, int nar
 }
 
 // DataView.prototype.getUint8(byteOffset)
+static ant_value_t js_dataview_getInt8(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "getInt8 requires byteOffset");
+  
+  ant_value_t this_val = js_getthis(js);
+  ant_value_t dv_data_val = js_get_slot(this_val, SLOT_DATA);
+  
+  if (vtype(dv_data_val) != T_NUM) {
+    return js_mkerr(js, "Not a DataView");
+  }
+  
+  DataViewData *dv = (DataViewData *)(uintptr_t)js_getnum(dv_data_val);
+  size_t offset = (size_t)js_getnum(args[0]);
+  
+  if (offset >= dv->byte_length) {
+    return js_mkerr(js, "Offset out of bounds");
+  }
+  
+  int8_t value = (int8_t)dv->buffer->data[dv->byte_offset + offset];
+  return js_mknum((double)value);
+}
+
+// DataView.prototype.setInt8(byteOffset, value)
+static ant_value_t js_dataview_setInt8(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 2) return js_mkerr(js, "setInt8 requires byteOffset and value");
+  
+  ant_value_t this_val = js_getthis(js);
+  ant_value_t dv_data_val = js_get_slot(this_val, SLOT_DATA);
+  
+  if (vtype(dv_data_val) != T_NUM) {
+    return js_mkerr(js, "Not a DataView");
+  }
+  
+  DataViewData *dv = (DataViewData *)(uintptr_t)js_getnum(dv_data_val);
+  size_t offset = (size_t)js_getnum(args[0]);
+  int8_t value = (int8_t)js_to_int32(js_getnum(args[1]));
+  
+  if (offset >= dv->byte_length) {
+    return js_mkerr(js, "Offset out of bounds");
+  }
+  
+  dv->buffer->data[dv->byte_offset + offset] = (uint8_t)value;
+  return js_mkundef();
+}
+
+// DataView.prototype.getUint8(byteOffset)
 static ant_value_t js_dataview_getUint8(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "getUint8 requires byteOffset");
   
@@ -1378,6 +1397,67 @@ static ant_value_t js_dataview_getInt16(ant_t *js, ant_value_t *args, int nargs)
   }
   
   return js_mknum((double)value);
+}
+
+// DataView.prototype.getUint16(byteOffset, littleEndian)
+static ant_value_t js_dataview_getUint16(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "getUint16 requires byteOffset");
+  
+  ant_value_t this_val = js_getthis(js);
+  ant_value_t dv_data_val = js_get_slot(this_val, SLOT_DATA);
+  
+  if (vtype(dv_data_val) != T_NUM) {
+    return js_mkerr(js, "Not a DataView");
+  }
+  
+  DataViewData *dv = (DataViewData *)(uintptr_t)js_getnum(dv_data_val);
+  size_t offset = (size_t)js_getnum(args[0]);
+  bool little_endian = (nargs > 1 && js_truthy(js, args[1]));
+  
+  if (offset + 2 > dv->byte_length) {
+    return js_mkerr(js, "Offset out of bounds");
+  }
+  
+  uint8_t *ptr = dv->buffer->data + dv->byte_offset + offset;
+  uint16_t value;
+  
+  if (little_endian) value = (uint16_t)(ptr[0] | (ptr[1] << 8));
+  else value = (uint16_t)((ptr[0] << 8) | ptr[1]);
+  
+  return js_mknum((double)value);
+}
+
+// DataView.prototype.setUint16(byteOffset, value, littleEndian)
+static ant_value_t js_dataview_setUint16(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 2) return js_mkerr(js, "setUint16 requires byteOffset and value");
+  
+  ant_value_t this_val = js_getthis(js);
+  ant_value_t dv_data_val = js_get_slot(this_val, SLOT_DATA);
+  
+  if (vtype(dv_data_val) != T_NUM) {
+    return js_mkerr(js, "Not a DataView");
+  }
+  
+  DataViewData *dv = (DataViewData *)(uintptr_t)js_getnum(dv_data_val);
+  size_t offset = (size_t)js_getnum(args[0]);
+  uint16_t value = (uint16_t)js_to_uint32(js_getnum(args[1]));
+  bool little_endian = (nargs > 2 && js_truthy(js, args[2]));
+  
+  if (offset + 2 > dv->byte_length) {
+    return js_mkerr(js, "Offset out of bounds");
+  }
+  
+  uint8_t *ptr = dv->buffer->data + dv->byte_offset + offset;
+  
+  if (little_endian) {
+    ptr[0] = (uint8_t)(value & 0xFF);
+    ptr[1] = (uint8_t)((value >> 8) & 0xFF);
+  } else {
+    ptr[0] = (uint8_t)((value >> 8) & 0xFF);
+    ptr[1] = (uint8_t)(value & 0xFF);
+  }
+  
+  return js_mkundef();
 }
 
 // DataView.prototype.getInt32(byteOffset, littleEndian)
@@ -1497,6 +1577,69 @@ static ant_value_t js_dataview_setInt32(ant_t *js, ant_value_t *args, int nargs)
     return js_mkerr(js, "Offset out of bounds");
   }
   
+  uint8_t *ptr = dv->buffer->data + dv->byte_offset + offset;
+  
+  if (little_endian) {
+    ptr[0] = (uint8_t)(value & 0xFF);
+    ptr[1] = (uint8_t)((value >> 8) & 0xFF);
+    ptr[2] = (uint8_t)((value >> 16) & 0xFF);
+    ptr[3] = (uint8_t)((value >> 24) & 0xFF);
+  } else {
+    ptr[0] = (uint8_t)((value >> 24) & 0xFF);
+    ptr[1] = (uint8_t)((value >> 16) & 0xFF);
+    ptr[2] = (uint8_t)((value >> 8) & 0xFF);
+    ptr[3] = (uint8_t)(value & 0xFF);
+  }
+  
+  return js_mkundef();
+}
+
+// DataView.prototype.getUint32(byteOffset, littleEndian)
+static ant_value_t js_dataview_getUint32(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "getUint32 requires byteOffset");
+  
+  ant_value_t this_val = js_getthis(js);
+  ant_value_t dv_data_val = js_get_slot(this_val, SLOT_DATA);
+  
+  if (vtype(dv_data_val) != T_NUM) {
+    return js_mkerr(js, "Not a DataView");
+  }
+  
+  DataViewData *dv = (DataViewData *)(uintptr_t)js_getnum(dv_data_val);
+  size_t offset = (size_t)js_getnum(args[0]);
+  bool little_endian = (nargs > 1 && js_truthy(js, args[1]));
+  
+  if (offset + 4 > dv->byte_length) {
+    return js_mkerr(js, "Offset out of bounds");
+  }
+  
+  uint8_t *ptr = dv->buffer->data + dv->byte_offset + offset;
+  uint32_t value;
+  
+  if (little_endian) value = (uint32_t)(ptr[0] | (ptr[1] << 8) | (ptr[2] << 16) | (ptr[3] << 24));
+  else value = (uint32_t)((ptr[0] << 24) | (ptr[1] << 16) | (ptr[2] << 8) | ptr[3]);
+  
+  return js_mknum((double)value);
+}
+
+// DataView.prototype.setUint32(byteOffset, value, littleEndian)
+static ant_value_t js_dataview_setUint32(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 2) return js_mkerr(js, "setUint32 requires byteOffset and value");
+  
+  ant_value_t this_val = js_getthis(js);
+  ant_value_t dv_data_val = js_get_slot(this_val, SLOT_DATA);
+  
+  if (vtype(dv_data_val) != T_NUM) {
+    return js_mkerr(js, "Not a DataView");
+  }
+  
+  DataViewData *dv = (DataViewData *)(uintptr_t)js_getnum(dv_data_val);
+  size_t offset = (size_t)js_getnum(args[0]);
+  
+  uint32_t value = js_to_uint32(js_getnum(args[1]));
+  bool little_endian = (nargs > 2 && js_truthy(js, args[2]));
+  
+  if (offset + 4 > dv->byte_length) return js_mkerr(js, "Offset out of bounds");  
   uint8_t *ptr = dv->buffer->data + dv->byte_offset + offset;
   
   if (little_endian) {
@@ -2267,12 +2410,18 @@ void init_buffer_module() {
   ant_value_t dataview_proto = js_mkobj(js);
   js_set_proto_init(dataview_proto, object_proto);
   
+  js_set(js, dataview_proto, "getInt8", js_mkfun(js_dataview_getInt8));
+  js_set(js, dataview_proto, "setInt8", js_mkfun(js_dataview_setInt8));
   js_set(js, dataview_proto, "getUint8", js_mkfun(js_dataview_getUint8));
   js_set(js, dataview_proto, "setUint8", js_mkfun(js_dataview_setUint8));
   js_set(js, dataview_proto, "getInt16", js_mkfun(js_dataview_getInt16));
   js_set(js, dataview_proto, "setInt16", js_mkfun(js_dataview_setInt16));
+  js_set(js, dataview_proto, "getUint16", js_mkfun(js_dataview_getUint16));
+  js_set(js, dataview_proto, "setUint16", js_mkfun(js_dataview_setUint16));
   js_set(js, dataview_proto, "getInt32", js_mkfun(js_dataview_getInt32));
   js_set(js, dataview_proto, "setInt32", js_mkfun(js_dataview_setInt32));
+  js_set(js, dataview_proto, "getUint32", js_mkfun(js_dataview_getUint32));
+  js_set(js, dataview_proto, "setUint32", js_mkfun(js_dataview_setUint32));
   js_set(js, dataview_proto, "getFloat32", js_mkfun(js_dataview_getFloat32));
   js_set(js, dataview_proto, "setFloat32", js_mkfun(js_dataview_setFloat32));
   js_set(js, dataview_proto, "getFloat64", js_mkfun(js_dataview_getFloat64));

@@ -7,21 +7,13 @@ declare module 'util' {
   }
 
   function format(format?: unknown, ...args: unknown[]): string;
-  function formatWithOptions(
-    inspectOptions: unknown,
-    format?: unknown,
-    ...args: unknown[]
-  ): string;
+  function formatWithOptions(inspectOptions: unknown, format?: unknown, ...args: unknown[]): string;
   function inspect(value: unknown, options?: unknown): string;
-  function promisify(
-    fn: (...args: unknown[]) => unknown
-  ): (...args: unknown[]) => Promise<unknown>;
+  function inherits(ctor: (...args: unknown[]) => unknown, superCtor: (...args: unknown[]) => unknown): void;
+  function parseEnv(content: string): Record<string, string>;
+  function promisify(fn: (...args: unknown[]) => unknown): (...args: unknown[]) => Promise<unknown>;
   function stripVTControlCharacters(str: string): string;
-  function styleText(
-    format: StyleTextFormat,
-    text: string,
-    options?: StyleTextOptions
-  ): string;
+  function styleText(format: StyleTextFormat, text: string, options?: StyleTextOptions): string;
 }
 
 declare module 'ant:util' {

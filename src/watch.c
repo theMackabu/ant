@@ -44,7 +44,7 @@ static void watch_clear_screen(void) {
   fflush(stdout);
 }
 
-static char *watch_resolve_path(const char *path) {
+char *ant_watch_resolve_path(const char *path) {
 #ifdef _WIN32
   char *resolved = _fullpath(NULL, path, 0);
   if (resolved) return resolved;
@@ -54,6 +54,44 @@ static char *watch_resolve_path(const char *path) {
   const char *resolved = realpath(path, abs_path);
   return strdup(resolved ? resolved : path);
 #endif
+}
+
+int ant_watch_start(
+  uv_loop_t *loop,
+  uv_fs_event_t *event,
+  const char *path,
+  uv_fs_event_cb callback,
+  void *data,
+  unsigned int flags,
+  char **resolved_path_out
+) {
+  char *watch_path = NULL;
+  int rc = 0;
+
+  if (!loop || !event || !path || !callback) return UV_EINVAL;
+
+  watch_path = ant_watch_resolve_path(path);
+  if (!watch_path) return UV_ENOMEM;
+
+  rc = uv_fs_event_init(loop, event);
+  if (rc != 0) goto cleanup;
+
+  event->data = data;
+  rc = uv_fs_event_start(event, callback, watch_path, flags);
+  if (rc != 0) goto cleanup;
+
+  if (resolved_path_out) *resolved_path_out = watch_path;
+  else free(watch_path);
+  return 0;
+
+cleanup:
+  free(watch_path);
+  return rc;
+}
+
+void ant_watch_stop(uv_fs_event_t *event) {
+  if (!event) return;
+  uv_fs_event_stop(event);
 }
 
 static char **watch_build_child_argv(int argc, char **argv) {
@@ -238,7 +276,7 @@ int ant_watch_run(int argc, char **argv, const char *entry_file, bool no_clear_s
 
   watch_state_t state = {0};
   state.child_argv = watch_build_child_argv(argc, argv);
-  state.watch_path = watch_resolve_path(entry_file);
+  state.watch_path = ant_watch_resolve_path(entry_file);
   state.no_clear_screen = no_clear_screen;
   state.final_exit_code = EXIT_SUCCESS;
 
@@ -256,13 +294,15 @@ int ant_watch_run(int argc, char **argv, const char *entry_file, bool no_clear_s
     return EXIT_FAILURE;
   }
 
-  rc = uv_fs_event_init(&state.loop, &state.fs_event);
-  if (rc == 0) state.fs_event_inited = true;
+  rc = ant_watch_start(
+    &state.loop,
+    &state.fs_event,
+    state.watch_path,
+    watch_on_fs_event,
+    &state, 0, NULL
+  );
   
-  if (rc == 0) {
-    state.fs_event.data = &state;
-    rc = uv_fs_event_start(&state.fs_event, watch_on_fs_event, state.watch_path, 0);
-  }
+  if (rc == 0) state.fs_event_inited = true;
   
   if (rc != 0) {
     crfprintf(stderr, msg.watch_file_failed, state.watch_path, uv_strerror(rc));

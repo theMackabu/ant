@@ -10,6 +10,26 @@ declare module 'fs' {
   }
 
   type Encoding = 'utf8' | 'utf-8' | 'utf16le' | 'ucs2' | 'ucs-2' | 'latin1' | 'binary' | 'base64' | 'base64url' | 'hex' | 'ascii';
+  type WatchEventType = 'rename' | 'change';
+
+  interface FSWatcher {
+    close(): this;
+    ref(): this;
+    unref(): this;
+    on(event: 'change', listener: (eventType: WatchEventType, filename?: string) => void): this;
+    on(event: 'error', listener: (error: Error) => void): this;
+  }
+
+  interface WatchOptions {
+    persistent?: boolean;
+    recursive?: boolean;
+    encoding?: Encoding | 'buffer';
+  }
+
+  interface WatchFileOptions {
+    persistent?: boolean;
+    interval?: number;
+  }
 
   const constants: {
     F_OK: number;
@@ -45,7 +65,9 @@ declare module 'fs' {
   function appendFileSync(path: string, data: string): void;
   function copyFileSync(src: string, dest: string): void;
   function renameSync(oldPath: string, newPath: string): void;
+  function rm(path: string, options?: { recursive?: boolean; force?: boolean }): Promise<void>;
   function unlink(path: string): Promise<void>;
+  function rmSync(path: string, options?: { recursive?: boolean; force?: boolean }): void;
   function unlinkSync(path: string): void;
   function mkdir(path: string, options?: { recursive?: boolean; mode?: number }): Promise<void>;
   function mkdirSync(path: string, options?: number | { recursive?: boolean; mode?: number }): void;
@@ -64,6 +86,18 @@ declare module 'fs' {
   namespace realpathSync {
     function native(path: string): string;
   }
+  function watch(path: string, listener?: (eventType: WatchEventType, filename?: string) => void): FSWatcher;
+  function watch(
+    path: string,
+    options: WatchOptions | Encoding | 'buffer',
+    listener?: (eventType: WatchEventType, filename?: string) => void
+  ): FSWatcher;
+  function watchFile(path: string, listener: (curr: Stats, prev: Stats) => void): void;
+  function watchFile(path: string, options: WatchFileOptions, listener: (curr: Stats, prev: Stats) => void): void;
+  function unwatchFile(path: string, listener?: (curr: Stats, prev: Stats) => void): void;
+  const FSWatcher: {
+    prototype: FSWatcher;
+  };
 }
 
 declare module 'ant:fs' {
@@ -108,6 +142,7 @@ declare module 'fs/promises' {
   function writeFile(path: string, data: string | ArrayBufferView): Promise<void>;
   function write(fd: number, data: string | ArrayBufferView, offset?: number, length?: number, position?: number | null): Promise<number>;
   function writev(fd: number, buffers: ArrayBufferView[], position?: number): Promise<number>;
+  function rm(path: string, options?: { recursive?: boolean; force?: boolean }): Promise<void>;
   function unlink(path: string): Promise<void>;
   function mkdir(path: string, options?: { recursive?: boolean; mode?: number }): Promise<void>;
   function rmdir(path: string): Promise<void>;

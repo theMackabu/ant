@@ -342,6 +342,13 @@ void emit_process_event(const char *event_type, ant_value_t *args, int nargs) {
   }
 }
 
+bool process_has_event_listeners(const char *event_type) {
+  ProcessEventType *evt = NULL;
+  if (!event_type) return false;
+  HASH_FIND_STR(process_events, event_type, evt);
+  return evt && evt->listener_count > 0;
+}
+
 static void emit_stdio_event(ProcessEventType **events, const char *event_type, ant_value_t *args, int nargs) {
   if (!rt->js) return;
   ProcessEventType *evt = NULL;

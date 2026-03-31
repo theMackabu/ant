@@ -1,3 +1,5 @@
+// TODO: cleanup module, make cleaner
+
 #include <compat.h> // IWYU pragma: keep
 
 #include <stdlib.h>
@@ -199,11 +201,18 @@ static void emit_event(ant_t *js, rl_interface_t *iface, const char *event_type,
   }
 }
 
+static bool rl_has_event_listener(rl_interface_t *iface, const char *event_type) {
+  RLEventType *evt = NULL;
+  if (!iface || !event_type) return false;
+  HASH_FIND_STR(iface->events, event_type, evt);
+  return evt != NULL && evt->listener_count > 0;
+}
+
 static ant_value_t get_history_array(ant_t *js, rl_interface_t *iface) {
   ant_value_t arr = js_mkarr(js);
-  for (int i = 0; i < iface->history.count; i++) {
-    js_arr_push(js, arr, js_mkstr(js, iface->history.lines[i], strlen(iface->history.lines[i])));
-  }
+  for (int i = 0; i < iface->history.count; i++) js_arr_push(
+    js, arr, js_mkstr(js, iface->history.lines[i], strlen(iface->history.lines[i]))
+  );
   return arr;
 }
 
@@ -522,15 +531,18 @@ static void on_stdin_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *bu
     } else if (c == 127 || c == 8) {
       handle_backspace(iface);
     } else if (c == 3) {
-      emit_event(js, iface, "SIGINT", NULL, 0);
+      if (rl_has_event_listener(iface, "SIGINT")) {
+        emit_event(js, iface, "SIGINT", NULL, 0);
+      } else if (process_has_event_listeners("SIGINT")) {
+        ant_value_t sig_arg = js_mkstr(js, "SIGINT", 6);
+        emit_process_event("SIGINT", &sig_arg, 1);
+      } else raise(SIGINT);
     } else if (c == 4) {
       if (iface->line_len == 0) {
         emit_event(js, iface, "close", NULL, 0);
         iface->closed = true;
         uv_read_stop(stream);
-      } else {
-        handle_delete(iface);
-      }
+      } else handle_delete(iface);
     } else if (c == 1) {
       iface->line_pos = 0;
       refresh_line(iface);
@@ -562,18 +574,13 @@ static void start_reading(rl_interface_t *iface) {
   
   if (!iface->tty_initialized) {
     uv_loop_t *loop = uv_default_loop();
-    
     int is_tty = uv_guess_handle(STDIN_FILENO) == UV_TTY;
     
     if (is_tty) {
-      if (uv_tty_init(loop, &iface->tty_in, STDIN_FILENO, 1) != 0) {
-        return;
-      }
+      if (uv_tty_init(loop, &iface->tty_in, STDIN_FILENO, 1) != 0) return;
       uv_tty_set_mode(&iface->tty_in, UV_TTY_MODE_RAW);
     } else {
-      if (uv_tty_init(loop, &iface->tty_in, STDIN_FILENO, 1) != 0) {
-        return;
-      }
+      if (uv_tty_init(loop, &iface->tty_in, STDIN_FILENO, 1) != 0) return;
     }
     
     iface->tty_in.data = iface;
@@ -694,6 +701,37 @@ static ant_value_t rl_interface_off(ant_t *js, ant_value_t *args, int nargs) {
       break;
     }
   }
+  
+  return this_obj;
+}
+
+static ant_value_t rl_interface_remove_all_listeners(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
+  rl_interface_t *iface = get_interface(js, this_obj);
+  
+  RLEventType *evt = NULL;
+  RLEventType *tmp = NULL;
+  char *event = NULL;
+
+  if (!iface) return js_mkerr(js, "Invalid Interface");
+  if (nargs < 1 || vtype(args[0]) == T_UNDEF) {
+    HASH_ITER(hh, iface->events, evt, tmp) {
+      HASH_DEL(iface->events, evt);
+      free(evt->event_type);
+      free(evt);
+    }
+    return this_obj;
+  }
+
+  event = js_getstr(js, args[0], NULL);
+  if (!event) return this_obj;
+
+  HASH_FIND_STR(iface->events, event, evt);
+  if (!evt) return this_obj;
+
+  HASH_DEL(iface->events, evt);
+  free(evt->event_type);
+  free(evt);
   
   return this_obj;
 }
@@ -1162,6 +1200,7 @@ static ant_value_t rl_create_interface(ant_t *js, ant_value_t *args, int nargs) 
   js_set(js, obj, "off", js_mkfun(rl_interface_off));
   js_set(js, obj, "addListener", js_mkfun(rl_interface_on));
   js_set(js, obj, "removeListener", js_mkfun(rl_interface_off));
+  js_set(js, obj, "removeAllListeners", js_mkfun(rl_interface_remove_all_listeners));
   js_set(js, obj, "emit", js_mkfun(rl_interface_emit));
   
   js_set(js, obj, "close", js_mkfun(rl_interface_close));
@@ -1181,6 +1220,8 @@ static ant_value_t rl_create_interface(ant_t *js, ant_value_t *args, int nargs) 
   js_set(js, obj, "terminal", js_bool(iface->terminal));
   js_set_sym(js, obj, get_asyncIterator_sym(), js_mkfun(rl_interface_async_iterator));
   js_set_sym(js, obj, get_toStringTag_sym(), js_mkstr(js, "Interface", 9));
+
+  start_reading(iface);
   
   return obj;
 }

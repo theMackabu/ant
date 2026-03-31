@@ -1113,6 +1113,7 @@ static void hoist_lexical_pattern(sv_compiler_t *c, sv_ast_t *pat,
       ensure_local_at_depth(c, pat->str, pat->len, is_const, c->scope_depth);
       break;
     case N_ASSIGN_PAT:
+    case N_ASSIGN:
       hoist_lexical_pattern(c, pat->left, is_const);
       break;
     case N_REST:
@@ -3183,6 +3184,7 @@ static void for_collect_pattern_slots(sv_compiler_t *c, sv_ast_t *pat,
       break;
     }
     case N_ASSIGN_PAT:
+    case N_ASSIGN:
       for_collect_pattern_slots(c, pat->left, slots, count, cap);
       break;
     case N_REST:

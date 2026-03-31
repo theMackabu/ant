@@ -1189,6 +1189,79 @@ static ant_value_t builtin_exec(ant_t *js, ant_value_t *args, int nargs) {
   return cp->promise;
 }
 
+static ant_value_t exec_file_close_callback(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t fn = js_getcurrentfunc(js);
+  ant_value_t ctx = js_get_slot(fn, SLOT_DATA);
+  
+  ant_value_t callback = js_get(js, ctx, "callback");
+  ant_value_t child = js_get(js, ctx, "child");
+  
+  ant_value_t stdout_val = js_get(js, child, "stdoutText");
+  ant_value_t stderr_val = js_get(js, child, "stderrText");
+  ant_value_t exit_code_val = js_get(js, child, "exitCode");
+  ant_value_t cb_args[3];
+
+  if (!is_callable(callback)) return js_mkundef();
+
+  if (vtype(exit_code_val) == T_NUM && (int)js_getnum(exit_code_val) != 0) {
+    char err_msg[256];
+    snprintf(err_msg, sizeof(err_msg), "Command failed with exit code %d", (int)js_getnum(exit_code_val));
+    cb_args[0] = js_make_error_silent(js, JS_ERR_GENERIC, err_msg);
+  } else cb_args[0] = js_mknull();
+
+  cb_args[1] = stdout_val;
+  cb_args[2] = stderr_val;
+
+  ant_value_t result = sv_vm_call(js->vm, js, callback, js_mkundef(), cb_args, 3, NULL, false);
+  if (vtype(result) == T_ERR) log_listener_error(js, "execFile", result);
+  return js_mkundef();
+}
+
+static ant_value_t builtin_execFile(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t argv = js_mkundef();
+  ant_value_t options = js_mkundef();
+  ant_value_t callback = js_mkundef();
+  
+  ant_value_t spawn_args[3];
+  ant_value_t child;
+
+  if (nargs < 1) return js_mkerr(js, "execFile() requires a file");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "File must be a string");
+
+  if (nargs >= 2 && is_callable(args[nargs - 1])) {
+    callback = args[nargs - 1];
+    nargs--;
+  }
+
+  if (nargs >= 2) {
+    if (vtype(args[1]) == T_ARR) {
+      argv = args[1];
+      if (nargs >= 3 && is_special_object(args[2])) options = args[2];
+    } else if (is_special_object(args[1])) options = args[1];
+  }
+
+  spawn_args[0] = args[0];
+  spawn_args[1] = argv;
+  spawn_args[2] = options;
+
+  child = builtin_spawn(js, spawn_args, 3);
+  if (vtype(child) != T_OBJ || !is_callable(callback)) return child;
+
+  ant_value_t ctx = js_mkobj(js);
+  js_set(js, ctx, "callback", callback);
+  js_set(js, ctx, "child", child);
+
+  // TODO: reduce duck-typing
+  ant_value_t close_listener = js_heavy_mkfun(js, exec_file_close_callback, ctx);
+  ant_value_t once_fn = js_get(js, child, "once");
+  ant_value_t once_args[2] = { js_mkstr(js, "close", 5), close_listener };
+  
+  ant_value_t once_result = sv_vm_call(js->vm, js, once_fn, child, once_args, 2, NULL, false);
+  if (vtype(once_result) == T_ERR) return once_result;
+
+  return child;
+}
+
 static ant_value_t builtin_execSync(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "execSync() requires a command");
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "Command must be a string");
@@ -1539,6 +1612,38 @@ static ant_value_t builtin_spawnSync(ant_t *js, ant_value_t *args, int nargs) {
 }
 #endif
 
+static ant_value_t builtin_execFileSync(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t argv = js_mkundef();
+  ant_value_t options = js_mkundef();
+  
+  ant_value_t spawn_args[3];
+  ant_value_t result;
+  ant_value_t status;
+
+  if (nargs < 1) return js_mkerr(js, "execFileSync() requires a file");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "File must be a string");
+
+  if (nargs >= 2) {
+    if (vtype(args[1]) == T_ARR) {
+      argv = args[1];
+      if (nargs >= 3 && is_special_object(args[2])) options = args[2];
+    } else if (is_special_object(args[1])) options = args[1];
+  }
+
+  spawn_args[0] = args[0];
+  spawn_args[1] = argv;
+  spawn_args[2] = options;
+
+  result = builtin_spawnSync(js, spawn_args, 3);
+  if (vtype(result) != T_OBJ) return result;
+
+  status = js_get(js, result, "status");
+  if (vtype(status) == T_NUM && (int)js_getnum(status) != 0)
+    return js_mkerr(js, "Command failed with exit code %d", (int)js_getnum(status));
+
+  return js_get(js, result, "stdout");
+}
+
 static ant_value_t builtin_fork(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "fork() requires a module path");
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "Module path must be a string");
@@ -1598,7 +1703,9 @@ ant_value_t child_process_library(ant_t *js) {
   
   js_set(js, lib, "spawn", js_mkfun(builtin_spawn));
   js_set(js, lib, "exec", js_mkfun(builtin_exec));
+  js_set(js, lib, "execFile", js_mkfun(builtin_execFile));
   js_set(js, lib, "execSync", js_mkfun(builtin_execSync));
+  js_set(js, lib, "execFileSync", js_mkfun(builtin_execFileSync));
   js_set(js, lib, "spawnSync", js_mkfun(builtin_spawnSync));
   js_set(js, lib, "fork", js_mkfun(builtin_fork));
   js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "child_process", 13));

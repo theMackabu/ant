@@ -44,6 +44,10 @@ static abort_timeout_entry_t *timeout_entries = NULL;
 static ant_value_t g_signal_proto = 0;
 static bool g_initialized = false;
 
+static inline unsigned int abort_array_len(UT_array *arr) {
+  return arr ? utarray_len(arr) : 0;
+}
+
 static abort_signal_data_t *get_signal_data(ant_value_t obj) {
   ant_value_t slot = js_get_slot(obj, SLOT_DATA);
   if (vtype(slot) != T_NUM) return NULL;
@@ -80,8 +84,18 @@ void signal_do_abort(ant_t *js, ant_value_t signal_obj, ant_value_t reason) {
   abort_signal_data_t *data = get_signal_data(signal_obj);
   if (!data || data->aborted) return;
 
-  UT_array *queue;    utarray_new(queue,   &abort_value_icd);
-  UT_array *to_fire;  utarray_new(to_fire, &abort_value_icd);
+  UT_array *queue = NULL;
+  UT_array *to_fire = NULL;
+  
+  utarray_new(queue, &abort_value_icd);
+  utarray_new(to_fire, &abort_value_icd);
+  
+  if (!queue || !to_fire) {
+    if (queue) utarray_free(queue);
+    if (to_fire) utarray_free(to_fire);
+    signal_mark_aborted(js, signal_obj, reason);
+    return;
+  }
 
   utarray_push_back(queue, &signal_obj);
 
@@ -93,17 +107,18 @@ void signal_do_abort(ant_t *js, ant_value_t signal_obj, ant_value_t reason) {
   d->aborted = true;
   d->fired   = true;
   d->reason  = reason;
+  
   js_set(js, *cur, "aborted", js_true);
   js_set(js, *cur, "reason",  reason);
   utarray_push_back(to_fire, cur);
 
-  unsigned int nf = utarray_len(d->followers);
+  unsigned int nf = abort_array_len(d->followers);
   for (unsigned int i = 0; i < nf; i++) {
     ant_value_t *sig = (ant_value_t *)utarray_eltptr(d->followers, i);
     utarray_push_back(queue, sig);
   }}
+  
   utarray_free(queue);
-
   for (unsigned int qi = 0; qi < utarray_len(to_fire); qi++) {
   ant_value_t *cur = (ant_value_t *)utarray_eltptr(to_fire, qi);
   abort_signal_data_t *d = get_signal_data(*cur);
@@ -120,9 +135,12 @@ void signal_do_abort(ant_t *js, ant_value_t signal_obj, ant_value_t reason) {
     process_microtasks(js);
   }
 
-  unsigned int n = utarray_len(d->listeners);
-  for (unsigned int i = 0; i < n;) {
+  for (unsigned int i = 0;;) {
+    unsigned int n = abort_array_len(d->listeners);
+    if (i >= n) break;
     abort_listener_t *entry = (abort_listener_t *)utarray_eltptr(d->listeners, i);
+    
+    if (!entry) break;
     ant_value_t cb = entry->callback;
     bool once = entry->once;
     
@@ -140,7 +158,7 @@ void abort_signal_remove_listener(ant_t *js, ant_value_t signal, ant_value_t cal
   abort_signal_data_t *data = get_signal_data(signal);
   if (!data) return;
 
-  unsigned int n = utarray_len(data->listeners);
+  unsigned int n = abort_array_len(data->listeners);
   for (unsigned int i = 0; i < n; i++) {
     abort_listener_t *entry = (abort_listener_t *)utarray_eltptr(data->listeners, i);
     if (entry->callback != callback) continue;
@@ -156,8 +174,16 @@ static ant_value_t make_new_signal(ant_t *js) {
   data->aborted = false;
   data->fired = false;
   data->reason = js_mkundef();
+  
   utarray_new(data->listeners, &abort_listener_icd);
   utarray_new(data->followers, &abort_value_icd);
+  
+  if (!data->listeners || !data->followers) {
+    if (data->listeners) utarray_free(data->listeners);
+    if (data->followers) utarray_free(data->followers);
+    free(data);
+    return js_mkerr(js, "AbortSignal: out of memory");
+  }
 
   ant_value_t obj = js_mkobj(js);
   js_set_slot(obj, SLOT_DATA, ANT_PTR(data));
@@ -189,14 +215,14 @@ static ant_value_t abort_signal_add_event_listener(ant_t *js, ant_value_t *args,
     if (vtype(once_val) != T_UNDEF) once = js_truthy(js, once_val);
   } else if (nargs >= 3 && vtype(args[2]) == T_BOOL) once = js_truthy(js, args[2]);
 
-  unsigned int n = utarray_len(data->listeners);
+  unsigned int n = abort_array_len(data->listeners);
   for (unsigned int i = 0; i < n; i++) {
     abort_listener_t *e = (abort_listener_t *)utarray_eltptr(data->listeners, i);
     if (e->callback == args[1] && e->once == once) return js_mkundef();
   }
 
   abort_listener_t entry = { args[1], once };
-  utarray_push_back(data->listeners, &entry);
+  if (data->listeners) utarray_push_back(data->listeners, &entry);
   
   return js_mkundef();
 }
@@ -211,7 +237,7 @@ static ant_value_t abort_signal_remove_event_listener(ant_t *js, ant_value_t *ar
   abort_signal_data_t *data = get_signal_data(js_getthis(js));
   if (!data) return js_mkundef();
 
-  unsigned int n = utarray_len(data->listeners);
+  unsigned int n = abort_array_len(data->listeners);
   for (unsigned int i = 0; i < n; i++) {
     abort_listener_t *e = (abort_listener_t *)utarray_eltptr(data->listeners, i);
     if (e->callback != args[1]) continue;
@@ -280,7 +306,7 @@ static ant_value_t abort_signal_static_any(ant_t *js, ant_value_t *args, int nar
     ant_value_t sig = js_arr_get(js, args[0], i);
     abort_signal_data_t *d = get_signal_data(sig);
     if (!d) continue;
-    utarray_push_back(d->followers, &composite);
+    if (d->followers) utarray_push_back(d->followers, &composite);
   }
 
   return composite;
@@ -296,7 +322,7 @@ ant_value_t abort_signal_create_dependent(ant_t *js, ant_value_t source) {
   if (!d) return composite;
 
   if (d->aborted) signal_mark_aborted(js, composite, d->reason);
-  else utarray_push_back(d->followers, &composite);
+  else if (d->followers) utarray_push_back(d->followers, &composite);
 
   return composite;
 }
@@ -430,14 +456,14 @@ void gc_mark_abort_signal_object(ant_t *js, ant_value_t signal, gc_mark_fn mark)
   if (!data) return;
   mark(js, data->reason);
 
-  unsigned int listener_count = utarray_len(data->listeners);
+  unsigned int listener_count = abort_array_len(data->listeners);
   for (unsigned int i = 0; i < listener_count; i++) {
     abort_listener_t *entry = (abort_listener_t *)utarray_eltptr(data->listeners, i);
     if (!entry) continue;
     mark(js, entry->callback);
   }
 
-  unsigned int follower_count = utarray_len(data->followers);
+  unsigned int follower_count = abort_array_len(data->followers);
   for (unsigned int i = 0; i < follower_count; i++) {
     ant_value_t *follower = (ant_value_t *)utarray_eltptr(data->followers, i);
     if (!follower) continue;
@@ -473,5 +499,5 @@ void abort_signal_add_listener(ant_t *js, ant_value_t signal, ant_value_t callba
   }
 
   abort_listener_t entry = { callback, false };
-  utarray_push_back(data->listeners, &entry);
+  if (data->listeners) utarray_push_back(data->listeners, &entry);
 }

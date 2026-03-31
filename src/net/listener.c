@@ -2,7 +2,9 @@
 
 #ifndef _WIN32
 #include <arpa/inet.h>
+#include <netdb.h>
 #include <netinet/in.h>
+#include <sys/socket.h>
 #include <unistd.h>
 #endif
 #include <stdlib.h>
@@ -10,6 +12,38 @@
 
 #include "net/connection.h"
 #include "net/listener.h"
+
+static int sockaddr_from_addrinfo(const struct addrinfo *ai, int port, struct sockaddr_storage *out) {
+  if (ai->ai_family == AF_INET) {
+    struct sockaddr_in sa;
+    memcpy(&sa, ai->ai_addr, sizeof(sa));
+    sa.sin_port = htons((uint16_t)port);
+    memcpy(out, &sa, sizeof(sa));
+    return 0;
+  }
+  
+  if (ai->ai_family == AF_INET6) {
+    struct sockaddr_in6 sa6;
+    memcpy(&sa6, ai->ai_addr, sizeof(sa6));
+    sa6.sin6_port = htons((uint16_t)port);
+    memcpy(out, &sa6, sizeof(sa6));
+    return 0;
+  }
+  
+  return UV_ENOENT;
+}
+
+static int resolve_hostname(const char *hostname, int port, struct sockaddr_storage *out) {
+  struct addrinfo hints = {0}, *res = NULL;
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+  
+  if (getaddrinfo(hostname, NULL, &hints, &res) != 0 || !res) return UV_ENOENT;
+  int rc = sockaddr_from_addrinfo(res, port, out);
+  freeaddrinfo(res);
+  
+  return rc;
+}
 
 static void ant_listener_close_cb(uv_handle_t *handle) {
   ant_listener_t *listener = (ant_listener_t *)handle->data;
@@ -54,13 +88,14 @@ int ant_listener_listen_tcp(
   ant_listener_t *listener,
   uv_loop_t *loop,
   const char *hostname,
-  int port,
-  int backlog,
+  int port, int backlog,
   uint64_t idle_timeout_ms,
   const ant_listener_callbacks_t *callbacks,
   void *user_data
 ) {
-  struct sockaddr_in addr;
+  struct sockaddr_storage addr;
+  struct sockaddr *sockaddr = (struct sockaddr *)&addr;
+  
   int rc = 0;
   int addr_len = sizeof(addr);
 
@@ -78,18 +113,24 @@ int ant_listener_listen_tcp(
   uv_tcp_init(loop, &listener->handle.tcp);
   listener->handle.tcp.data = listener;
 
-  rc = uv_ip4_addr(hostname, port, &addr);
+  memset(&addr, 0, sizeof(addr));
+  rc = uv_ip4_addr(hostname, port, (struct sockaddr_in *)&addr);
+  
+  if (rc != 0) rc = uv_ip6_addr(hostname, port, (struct sockaddr_in6 *)&addr);
+  if (rc != 0) rc = resolve_hostname(hostname, port, &addr);
   if (rc != 0) return rc;
 
-  rc = uv_tcp_bind(&listener->handle.tcp, (const struct sockaddr *)&addr, 0);
+  rc = uv_tcp_bind(&listener->handle.tcp, sockaddr, 0);
   if (rc != 0) return rc;
 
   rc = uv_listen((uv_stream_t *)&listener->handle.tcp, listener->backlog, ant_listener_accept_cb);
   if (rc != 0) return rc;
 
   listener->started = true;
-  if (port == 0 && uv_tcp_getsockname(&listener->handle.tcp, (struct sockaddr *)&addr, &addr_len) == 0)
-    listener->port = ntohs(addr.sin_port);
+  if (port == 0 && uv_tcp_getsockname(&listener->handle.tcp, sockaddr, &addr_len) == 0) {
+    if (addr.ss_family == AF_INET) listener->port = ntohs(((struct sockaddr_in *)sockaddr)->sin_port);
+    else if (addr.ss_family == AF_INET6) listener->port = ntohs(((struct sockaddr_in6 *)sockaddr)->sin6_port);
+  }
 
   return 0;
 }

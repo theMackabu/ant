@@ -53,15 +53,17 @@ static bool utf8_json_quote_append_u_escape(
 
 char *utf8_json_quote(const char *str, size_t byte_len, size_t *out_len) {
   size_t utf16_len = utf16_strlen(str, byte_len);
-  char *raw = NULL;
   size_t raw_len = 0;
-  size_t raw_cap = 0;
+  size_t raw_cap = byte_len + 4;
+  
+  char *raw = malloc(raw_cap);
+  if (!raw) return NULL;
 
   if (!utf8_json_quote_append_char(&raw, &raw_len, &raw_cap, '"')) goto oom;
 
   for (size_t i = 0; i < utf16_len; i++) {
     uint32_t cu = utf16_code_unit_at(str, byte_len, i);
-
+    
     if (cu >= 0xD800 && cu <= 0xDBFF && i + 1 < utf16_len) {
     uint32_t cu2 = utf16_code_unit_at(str, byte_len, i + 1);
     if (cu2 >= 0xDC00 && cu2 <= 0xDFFF) {

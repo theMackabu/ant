@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <uthash.h>
@@ -11,18 +12,23 @@
 #include <errno.h>
 
 #include "ant.h"
+#include "ptr.h"
 #include "utf8.h"
 #include "utils.h"
 #include "base64.h"
 #include "errors.h"
+#include "watch.h"
 #include "internal.h"
 #include "runtime.h"
 #include "descriptors.h"
 
+#include "gc/roots.h"
 #include "gc/modules.h"
+#include "silver/engine.h"
 
 #include "modules/fs.h"
 #include "modules/buffer.h"
+#include "modules/events.h"
 #include "modules/symbol.h"
 
 #define fs_err_code(js, code, op, path) ({ \
@@ -42,6 +48,553 @@ typedef enum {
   FS_ENC_ASCII,
 } fs_encoding_t;
 
+typedef enum {
+  FS_OP_READ,
+  FS_OP_WRITE,
+  FS_OP_UNLINK,
+  FS_OP_MKDIR,
+  FS_OP_RMDIR,
+  FS_OP_STAT,
+  FS_OP_READ_BYTES,
+  FS_OP_EXISTS,
+  FS_OP_READDIR,
+  FS_OP_ACCESS,
+  FS_OP_REALPATH,
+  FS_OP_WRITE_FD,
+  FS_OP_OPEN,
+  FS_OP_CLOSE
+} fs_op_type_t;
+
+typedef struct fs_request_s {
+  uv_fs_t uv_req;
+  ant_t *js;
+  ant_value_t promise;
+  
+  char *path;
+  char *data;
+  char *error_msg;
+  size_t data_len;
+  
+  fs_op_type_t op_type;
+  fs_encoding_t encoding;
+  uv_file fd;
+  
+  int completed;
+  int failed;
+  int recursive;
+  int error_code;
+} fs_request_t;
+
+typedef enum {
+  FS_WATCH_MODE_EVENT = 0,
+  FS_WATCH_MODE_STAT
+} fs_watch_mode_t;
+
+typedef union {
+  uv_fs_event_t event;
+  uv_fs_poll_t poll;
+} fs_watcher_handle_t;
+
+typedef struct fs_watcher_s {
+  ant_t *js;
+  ant_value_t obj;
+  ant_value_t callback;
+  fs_watcher_handle_t handle;
+  uv_stat_t last_stat;
+  
+  struct fs_watcher_s *next_active;
+  char *path;
+  
+  bool last_stat_valid;
+  bool in_active_list;
+  bool closing;
+  bool handle_closed;
+  bool finalized;
+  bool persistent;
+  
+  fs_watch_mode_t mode;
+} fs_watcher_t;
+
+typedef struct {
+  bool persistent;
+  bool recursive;
+  ant_value_t listener;
+} fs_watch_options_t;
+
+typedef struct {
+  bool persistent;
+  unsigned int interval_ms;
+  ant_value_t listener;
+} fs_watchfile_options_t;
+
+static ant_value_t g_fswatcher_proto = 0;
+static ant_value_t g_fswatcher_ctor  = 0;
+
+static fs_watcher_t *active_watchers = NULL;
+static UT_array *pending_requests    = NULL;
+
+enum { FS_WATCHER_NATIVE_TAG = 0x46535754u }; // FSWT
+
+static fs_watcher_t *fs_watcher_data(ant_value_t value) {
+  if (!js_check_native_tag(value, FS_WATCHER_NATIVE_TAG)) return NULL;
+  return (fs_watcher_t *)js_get_native_ptr(value);
+}
+
+static void fs_add_active_watcher(fs_watcher_t *watcher) {
+  if (!watcher || watcher->in_active_list) return;
+  watcher->next_active = active_watchers;
+  active_watchers = watcher;
+  watcher->in_active_list = true;
+}
+
+static void fs_remove_active_watcher(fs_watcher_t *watcher) {
+  fs_watcher_t **it = NULL;
+  if (!watcher || !watcher->in_active_list) return;
+
+  for (it = &active_watchers; *it; it = &(*it)->next_active) {
+    if (*it != watcher) continue;
+    *it = watcher->next_active;
+    watcher->next_active = NULL;
+    watcher->in_active_list = false;
+    return;
+  }
+}
+
+static ant_value_t fs_call_value(
+  ant_t *js,
+  ant_value_t fn,
+  ant_value_t this_val,
+  ant_value_t *args,
+  int nargs
+) {
+  ant_value_t saved_this = js->this_val;
+  ant_value_t result = js_mkundef();
+
+  js->this_val = this_val;
+  if (vtype(fn) == T_CFUNC)
+    result = ((ant_value_t (*)(ant_t *, ant_value_t *, int))vdata(fn))(js, args, nargs);
+  else result = sv_vm_call(js->vm, js, fn, this_val, args, nargs, NULL, false);
+  js->this_val = saved_this;
+  
+  return result;
+}
+
+static ant_value_t fs_stats_object_new(
+  ant_t *js,
+  mode_t mode,
+  double size,
+  double uid,
+  double gid
+) {
+  ant_value_t stat_obj = js_mkobj(js);
+  ant_value_t proto = js_get_ctor_proto(js, "Stats", 5);
+
+  if (is_object_type(proto) || is_special_object(proto))
+    js_set_proto_init(stat_obj, proto);
+
+  js_set_slot(stat_obj, SLOT_DATA, js_mknum((double)mode));
+  js_set(js, stat_obj, "size", js_mknum(size));
+  js_set(js, stat_obj, "mode", js_mknum((double)mode));
+  js_set(js, stat_obj, "uid", js_mknum(uid));
+  js_set(js, stat_obj, "gid", js_mknum(gid));
+  
+  return stat_obj;
+}
+
+static ant_value_t fs_stats_object_from_uv(ant_t *js, const uv_stat_t *st) {
+  if (!st) return fs_stats_object_new(js, 0, 0.0, 0.0, 0.0);
+  return fs_stats_object_new(
+    js, (mode_t)st->st_mode,
+    (double)st->st_size, (double)st->st_uid, (double)st->st_gid
+  );
+}
+
+static ant_value_t fs_stats_object_from_posix(ant_t *js, const struct stat *st) {
+  if (!st) return fs_stats_object_new(js, 0, 0.0, 0.0, 0.0);
+  return fs_stats_object_new(
+    js, st->st_mode,
+    (double)st->st_size, (double)st->st_uid, (double)st->st_gid
+  );
+}
+
+static bool fs_stat_path_sync(const char *path, uv_stat_t *out) {
+  uv_fs_t req;
+  int rc = 0;
+
+  if (!path || !out) return false;
+  memset(out, 0, sizeof(*out));
+
+  rc = uv_fs_stat(NULL, &req, path, NULL);
+  if (rc < 0) {
+    uv_fs_req_cleanup(&req);
+    return false;
+  }
+
+  *out = req.statbuf;
+  uv_fs_req_cleanup(&req);
+  return true;
+}
+
+static const char *fs_watch_basename(const char *path) {
+  const char *name = NULL;
+
+  if (!path || !*path) return NULL;
+  name = strrchr(path, '/');
+#ifdef _WIN32
+  {
+    const char *alt = strrchr(path, '\\');
+    if (!name || (alt && alt > name)) name = alt;
+  }
+#endif
+  return name ? name + 1 : path;
+}
+
+static ant_value_t fs_watch_error(ant_t *js, int status, const char *path) {
+  ant_value_t props = js_mkobj(js);
+  const char *code = uv_err_name(status);
+  js_set(js, props, "code", js_mkstr(js, code, strlen(code)));
+  
+  return js_mkerr_props(
+    js, JS_ERR_TYPE,
+    props, "%s: %s",
+    path ? path : "watch",
+    uv_strerror(status)
+  );
+}
+
+static void fs_watcher_free(fs_watcher_t *watcher) {
+  if (!watcher) return;
+  free(watcher->path);
+  free(watcher);
+}
+
+static uv_handle_t *fs_watcher_uv_handle(fs_watcher_t *watcher) {
+  if (!watcher) return NULL;
+  if (watcher->mode == FS_WATCH_MODE_STAT) return (uv_handle_t *)&watcher->handle.poll;
+  return (uv_handle_t *)&watcher->handle.event;
+}
+
+static void fs_watcher_on_handle_closed(uv_handle_t *handle) {
+  fs_watcher_t *watcher = (fs_watcher_t *)handle->data;
+
+  if (!watcher) return;
+  watcher->handle_closed = true;
+  watcher->closing = false;
+  if (watcher->finalized) fs_watcher_free(watcher);
+}
+
+static void fs_watcher_close_native(fs_watcher_t *watcher) {
+  uv_handle_t *handle = NULL;
+
+  if (!watcher) return;
+  if (watcher->closing || watcher->handle_closed) return;
+
+  handle = fs_watcher_uv_handle(watcher);
+  if (!handle) return;
+
+  fs_remove_active_watcher(watcher);
+  if (watcher->mode == FS_WATCH_MODE_STAT) uv_fs_poll_stop(&watcher->handle.poll);
+  else ant_watch_stop(&watcher->handle.event);
+  watcher->closing = true;
+  uv_close(handle, fs_watcher_on_handle_closed);
+}
+
+static void fs_watcher_emit_error(fs_watcher_t *watcher, int status) {
+  ant_value_t args[1];
+
+  if (!watcher || vtype(watcher->obj) != T_OBJ) return;
+  args[0] = fs_watch_error(watcher->js, status, watcher->path);
+  eventemitter_emit_args(watcher->js, watcher->obj, "error", args, 1);
+}
+
+static void fs_watcher_emit_change(fs_watcher_t *watcher, const char *filename, int events) {
+  ant_value_t args[2];
+  const char *event_name = "change";
+  const char *name = filename;
+
+  if (!watcher || vtype(watcher->obj) != T_OBJ) return;
+  if ((events & UV_RENAME) != 0) event_name = "rename";
+  if (!name || !*name) name = fs_watch_basename(watcher->path);
+
+  args[0] = js_mkstr(watcher->js, event_name, strlen(event_name));
+  args[1] = name ? js_mkstr(watcher->js, name, strlen(name)) : js_mkundef();
+  eventemitter_emit_args(watcher->js, watcher->obj, "change", args, 2);
+}
+
+static void fs_watcher_invoke_watchfile_stats(
+  fs_watcher_t *watcher,
+  const uv_stat_t *curr,
+  const uv_stat_t *prev
+) {
+  uv_stat_t curr_stat;
+  uv_stat_t prev_stat;
+  ant_value_t args[2];
+
+  if (!watcher || !is_callable(watcher->callback)) return;
+
+  memset(&curr_stat, 0, sizeof(curr_stat));
+  memset(&prev_stat, 0, sizeof(prev_stat));
+  if (curr) curr_stat = *curr;
+  if (prev) prev_stat = *prev;
+
+  watcher->last_stat = curr_stat;
+  watcher->last_stat_valid = curr != NULL;
+
+  args[0] = fs_stats_object_from_uv(watcher->js, &curr_stat);
+  args[1] = fs_stats_object_from_uv(watcher->js, &prev_stat);
+  fs_call_value(watcher->js, watcher->callback, js_mkundef(), args, 2);
+}
+
+static void fs_watcher_on_event(
+  uv_fs_event_t *handle,
+  const char *filename,
+  int events,
+  int status
+) {
+  fs_watcher_t *watcher = (fs_watcher_t *)handle->data;
+
+  if (!watcher) return;
+  if (status < 0) {
+    fs_watcher_emit_error(watcher, status);
+    return;
+  }
+
+  if ((events & (UV_CHANGE | UV_RENAME)) == 0) return;
+  fs_watcher_emit_change(watcher, filename, events);
+}
+
+static void fs_watcher_on_poll(
+  uv_fs_poll_t *handle,
+  int status,
+  const uv_stat_t *prev,
+  const uv_stat_t *curr
+) {
+  fs_watcher_t *watcher = (fs_watcher_t *)handle->data;
+  uv_stat_t missing = {0};
+
+  if (!watcher) return;
+  if (status < 0 && status != UV_ENOENT) return;
+  if (status == UV_ENOENT) {
+    if (watcher->last_stat_valid) fs_watcher_invoke_watchfile_stats(watcher, &missing, &watcher->last_stat);
+    else fs_watcher_invoke_watchfile_stats(watcher, &missing, &missing);
+    return;
+  }
+
+  fs_watcher_invoke_watchfile_stats(watcher, curr, prev);
+}
+
+static ant_value_t js_fswatcher_close(ant_t *js, ant_value_t *args, int nargs) {
+  fs_watcher_t *watcher = fs_watcher_data(js->this_val);
+
+  if (!watcher) return js->this_val;
+  fs_watcher_close_native(watcher);
+  return js->this_val;
+}
+
+static ant_value_t js_fswatcher_ref(ant_t *js, ant_value_t *args, int nargs) {
+  fs_watcher_t *watcher = fs_watcher_data(js->this_val);
+  uv_handle_t *handle = NULL;
+
+  if (!watcher || watcher->handle_closed) return js->this_val;
+  handle = fs_watcher_uv_handle(watcher);
+  if (handle) uv_ref(handle);
+  watcher->persistent = true;
+  return js->this_val;
+}
+
+static ant_value_t js_fswatcher_unref(ant_t *js, ant_value_t *args, int nargs) {
+  fs_watcher_t *watcher = fs_watcher_data(js->this_val);
+  uv_handle_t *handle = NULL;
+
+  if (!watcher || watcher->handle_closed) return js->this_val;
+  handle = fs_watcher_uv_handle(watcher);
+  if (handle) uv_unref(handle);
+  watcher->persistent = false;
+  return js->this_val;
+}
+
+static ant_value_t js_fswatcher_ctor(ant_t *js, ant_value_t *args, int nargs) {
+  return js_mkerr_typed(js, JS_ERR_TYPE, "FSWatcher cannot be constructed directly");
+}
+
+static void fs_watcher_finalize(ant_t *js, ant_object_t *obj) {
+  fs_watcher_t *watcher = NULL;
+  if (!obj) return;
+
+  watcher = (fs_watcher_t *)obj->native.ptr;
+  obj->native.ptr = NULL;
+  if (!watcher) return;
+
+  watcher->finalized = true;
+  fs_watcher_close_native(watcher);
+  if (watcher->handle_closed) fs_watcher_free(watcher);
+}
+
+static void fs_init_watch_constructors(ant_t *js) {
+  ant_value_t events = 0;
+  ant_value_t ee_ctor = 0;
+  ant_value_t ee_proto = 0;
+
+  if (g_fswatcher_proto && g_fswatcher_ctor) return;
+
+  events = events_library(js);
+  ee_ctor = js_get(js, events, "EventEmitter");
+  ee_proto = js_get(js, ee_ctor, "prototype");
+
+  g_fswatcher_proto = js_mkobj(js);
+  js_set_proto_init(g_fswatcher_proto, ee_proto);
+  
+  js_set(js, g_fswatcher_proto, "close", js_mkfun(js_fswatcher_close));
+  js_set(js, g_fswatcher_proto, "ref", js_mkfun(js_fswatcher_ref));
+  js_set(js, g_fswatcher_proto, "unref", js_mkfun(js_fswatcher_unref));
+  
+  js_set_sym(js, g_fswatcher_proto, get_toStringTag_sym(), js_mkstr(js, "FSWatcher", 9));
+  g_fswatcher_ctor = js_make_ctor(js, js_fswatcher_ctor, g_fswatcher_proto, "FSWatcher", 9);
+}
+
+static bool fs_parse_watch_options(ant_t *js, ant_value_t *args, int nargs, fs_watch_options_t *out) {
+  ant_value_t options = js_mkundef();
+  ant_value_t persistent_val = js_mkundef();
+
+  if (!out) return false;
+
+  memset(out, 0, sizeof(*out));
+  out->persistent = true;
+  out->listener = js_mkundef();
+
+  if (nargs > 1) {
+    if (is_callable(args[1])) out->listener = args[1];
+    else options = args[1];
+  }
+
+  if (nargs > 2 && is_callable(args[2])) out->listener = args[2];
+  if (vtype(options) == T_UNDEF || vtype(options) == T_NULL || vtype(options) == T_STR) return true;
+  if (vtype(options) != T_OBJ) return false;
+
+  persistent_val = js_get(js, options, "persistent");
+  if (vtype(persistent_val) != T_UNDEF) out->persistent = js_truthy(js, persistent_val);
+  out->recursive = js_truthy(js, js_get(js, options, "recursive"));
+  return true;
+}
+
+static bool fs_parse_watchfile_options(
+  ant_t *js,
+  ant_value_t *args,
+  int nargs,
+  fs_watchfile_options_t *out
+) {
+  ant_value_t options = js_mkundef();
+  ant_value_t persistent_val = js_mkundef();
+
+  if (!out) return false;
+
+  memset(out, 0, sizeof(*out));
+  out->persistent = true;
+  out->interval_ms = 5007;
+  out->listener = js_mkundef();
+
+  if (nargs > 1) {
+    if (is_callable(args[1])) {
+      out->listener = args[1];
+      return true;
+    }
+    options = args[1];
+  }
+
+  if (nargs > 2 && is_callable(args[2])) out->listener = args[2];
+  if (!is_callable(out->listener)) return false;
+  if (vtype(options) == T_UNDEF || vtype(options) == T_NULL) return true;
+  if (vtype(options) != T_OBJ) return false;
+
+  persistent_val = js_get(js, options, "persistent");
+  if (vtype(persistent_val) != T_UNDEF) out->persistent = js_truthy(js, persistent_val);
+  {
+    ant_value_t interval_val = js_get(js, options, "interval");
+    if (vtype(interval_val) == T_NUM && js_getnum(interval_val) > 0)
+      out->interval_ms = (unsigned int)js_getnum(interval_val);
+  }
+  return true;
+}
+
+static fs_watcher_t *fs_watcher_new(ant_t *js, fs_watch_mode_t mode) {
+  fs_watcher_t *watcher = calloc(1, sizeof(*watcher));
+
+  if (!watcher) return NULL;
+  watcher->js = js;
+  watcher->obj = js_mkundef();
+  watcher->callback = js_mkundef();
+  watcher->persistent = true;
+  watcher->mode = mode;
+  
+  return watcher;
+}
+
+static int fs_watcher_start_event(fs_watcher_t *watcher, const char *path, bool persistent, bool recursive) {
+  unsigned int flags = 0;
+
+  if (!watcher || !path) return UV_EINVAL;
+#ifdef UV_FS_EVENT_RECURSIVE
+  if (recursive) flags |= UV_FS_EVENT_RECURSIVE;
+#else
+  (void)recursive;
+#endif
+
+  watcher->persistent = persistent;
+  return ant_watch_start(
+    uv_default_loop(),
+    &watcher->handle.event,
+    path, fs_watcher_on_event,
+    watcher, flags, &watcher->path
+  );
+}
+
+static int fs_watcher_start_poll(fs_watcher_t *watcher, const char *path, bool persistent, unsigned int interval_ms) {
+  int rc = 0;
+
+  if (!watcher || !path) return UV_EINVAL;
+
+  watcher->path = ant_watch_resolve_path(path);
+  if (!watcher->path) return UV_ENOMEM;
+
+  rc = uv_fs_poll_init(uv_default_loop(), &watcher->handle.poll);
+  if (rc != 0) goto fail;
+
+  watcher->handle.poll.data = watcher;
+  rc = uv_fs_poll_start(&watcher->handle.poll, fs_watcher_on_poll, watcher->path, interval_ms);
+  if (rc != 0) goto fail;
+
+  watcher->persistent = persistent;
+  return 0;
+
+fail:
+  free(watcher->path);
+  watcher->path = NULL;
+  return rc;
+}
+
+static ant_value_t fs_watcher_make_object(ant_t *js, fs_watcher_t *watcher) {
+  ant_value_t obj = 0;
+
+  if (!watcher) return js_mkerr(js, "Out of memory");
+  fs_init_watch_constructors(js);
+
+  obj = js_mkobj(js);
+  js_set_proto_init(obj, g_fswatcher_proto);
+  js_set_native_ptr(obj, watcher);
+  js_set_native_tag(obj, FS_WATCHER_NATIVE_TAG);
+  js_set_finalizer(obj, fs_watcher_finalize);
+  watcher->obj = obj;
+  
+  return obj;
+}
+
+static void fs_request_fail(fs_request_t *req, int uv_code) {
+  req->failed = 1;
+  req->error_code = uv_code;
+  if (req->error_msg) free(req->error_msg);
+  req->error_msg = strdup(uv_strerror(uv_code));
+}
+
 static ant_value_t fs_coerce_path(ant_t *js, ant_value_t arg) {
   if (vtype(arg) == T_STR) return arg;
   if (is_object_type(arg)) {
@@ -49,6 +602,134 @@ static ant_value_t fs_coerce_path(ant_t *js, ant_value_t arg) {
     if (vtype(pathname) == T_STR) return pathname;
   }
   return js_mkundef();
+}
+
+static int fs_remove_path_recursive(const char *path, bool recursive, bool force) {
+  uv_fs_t req;
+  
+  int result = uv_fs_lstat(NULL, &req, path, NULL);
+  if (result < 0) {
+    uv_fs_req_cleanup(&req);
+    return (force && result == UV_ENOENT) ? 0 : result;
+  }
+
+  uv_stat_t statbuf = req.statbuf;
+  uv_fs_req_cleanup(&req);
+
+  if ((statbuf.st_mode & S_IFMT) != S_IFDIR) {
+    result = uv_fs_unlink(NULL, &req, path, NULL);
+    uv_fs_req_cleanup(&req);
+    return (force && result == UV_ENOENT) ? 0 : result;
+  }
+
+  if (!recursive) return UV_EISDIR;
+  result = uv_fs_scandir(NULL, &req, path, 0, NULL);
+  
+  if (result < 0) {
+    uv_fs_req_cleanup(&req);
+    return (force && result == UV_ENOENT) ? 0 : result;
+  }
+
+  for (;;) {
+    uv_dirent_t entry;
+    result = uv_fs_scandir_next(&req, &entry);
+    if (result == UV_EOF) break;
+    if (result < 0) {
+      uv_fs_req_cleanup(&req);
+      return result;
+    }
+    
+    size_t path_len = strlen(path);
+    size_t name_len = strlen(entry.name);
+    
+    bool needs_sep = path_len > 0 && path[path_len - 1] != '/';
+    char *child = malloc(path_len + (needs_sep ? 1u : 0u) + name_len + 1u);
+    if (!child) {
+      uv_fs_req_cleanup(&req);
+      return UV_ENOMEM;
+    }
+    
+    memcpy(child, path, path_len);
+    if (needs_sep) child[path_len++] = '/';
+    memcpy(child + path_len, entry.name, name_len + 1u);
+    
+    result = fs_remove_path_recursive(child, true, force);
+    free(child);
+    if (result < 0) {
+      uv_fs_req_cleanup(&req);
+      return result;
+    }
+  }
+
+  uv_fs_req_cleanup(&req);
+  result = uv_fs_rmdir(NULL, &req, path, NULL);
+  uv_fs_req_cleanup(&req);
+  return (force && result == UV_ENOENT) ? 0 : result;
+}
+
+static bool fs_parse_rm_options(ant_t *js, ant_value_t options, bool *recursive_out, bool *force_out) {
+  if (recursive_out) *recursive_out = false;
+  if (force_out) *force_out = false;
+
+  if (vtype(options) == T_UNDEF || vtype(options) == T_NULL) return true;
+  if (vtype(options) != T_OBJ) return false;
+
+  if (recursive_out) *recursive_out = js_truthy(js, js_get(js, options, "recursive"));
+  if (force_out) *force_out = js_truthy(js, js_get(js, options, "force"));
+  return true;
+}
+
+static ant_value_t fs_rm_impl(ant_t *js, ant_value_t *args, int nargs, bool return_promise) {
+  ant_value_t promise = 0;
+  ant_value_t path_val;
+  size_t path_len = 0;
+  const char *path = NULL;
+  bool recursive = false;
+  bool force = false;
+  int result;
+
+  if (return_promise) promise = js_mkpromise(js);
+  if (nargs < 1) {
+    ant_value_t err = js_mkerr(js, "rm() requires a path argument");
+    if (!return_promise) return err;
+    js_reject_promise(js, promise, err);
+    return promise;
+  }
+
+  path_val = fs_coerce_path(js, args[0]);
+  if (vtype(path_val) != T_STR) {
+    ant_value_t err = js_mkerr(js, "rm() path must be a string");
+    if (!return_promise) return err;
+    js_reject_promise(js, promise, err);
+    return promise;
+  }
+
+  path = js_getstr(js, path_val, &path_len);
+  if (!path) {
+    ant_value_t err = js_mkerr(js, "Failed to get path string");
+    if (!return_promise) return err;
+    js_reject_promise(js, promise, err);
+    return promise;
+  }
+
+  if (!fs_parse_rm_options(js, nargs >= 2 ? args[1] : js_mkundef(), &recursive, &force)) {
+    ant_value_t err = js_mkerr_typed(js, JS_ERR_TYPE, "rm() options must be an object");
+    if (!return_promise) return err;
+    js_reject_promise(js, promise, err);
+    return promise;
+  }
+
+  result = fs_remove_path_recursive(path, recursive, force);
+  if (result < 0) {
+    ant_value_t err = js_mkerr(js, "%s", uv_strerror(result));
+    if (!return_promise) return err;
+    js_reject_promise(js, promise, err);
+    return promise;
+  }
+
+  if (!return_promise) return js_mkundef();
+  js_resolve_promise(js, promise, js_mkundef());
+  return promise;
 }
 
 static fs_encoding_t parse_encoding(ant_t *js, ant_value_t arg) {
@@ -137,44 +818,9 @@ static ant_value_t encode_data(ant_t *js, const char *data, size_t len, fs_encod
   }
 }
 
-typedef enum {
-  FS_OP_READ,
-  FS_OP_WRITE,
-  FS_OP_UNLINK,
-  FS_OP_MKDIR,
-  FS_OP_RMDIR,
-  FS_OP_STAT,
-  FS_OP_READ_BYTES,
-  FS_OP_EXISTS,
-  FS_OP_READDIR,
-  FS_OP_ACCESS,
-  FS_OP_REALPATH,
-  FS_OP_WRITE_FD,
-  FS_OP_OPEN,
-  FS_OP_CLOSE
-} fs_op_type_t;
-
-typedef struct fs_request_s {
-  uv_fs_t uv_req;
-  ant_t *js;
-  ant_value_t promise;
-  char *path;
-  char *data;
-  char *error_msg;
-  size_t data_len;
-  fs_op_type_t op_type;
-  fs_encoding_t encoding;
-  uv_file fd;
-  int completed;
-  int failed;
-  int recursive;
-} fs_request_t;
-
-static UT_array *pending_requests = NULL;
-
 static void free_fs_request(fs_request_t *req) {
   if (!req) return;
-  
+
   if (req->path) free(req->path);
   if (req->data) free(req->data);
   if (req->error_msg) free(req->error_msg);
@@ -204,13 +850,25 @@ static ant_value_t fs_read_to_uint8array(ant_t *js, const char *data, size_t len
 
 static void complete_request(fs_request_t *req) {
   if (req->failed) {
-    const char *err_msg = req->error_msg ? req->error_msg : "Unknown error";
-    ant_value_t reject_value = js_mkerr(req->js, "%s", err_msg);
+    const char *err_msg = req->error_msg 
+      ? req->error_msg 
+      : "Unknown error";
+      
+    ant_value_t props = js_mkobj(req->js);
+    ant_value_t reject_value;
+
+    if (req->error_code) {
+      const char *code = uv_err_name(req->error_code);
+      js_set(req->js, props, "code", js_mkstr(req->js, code, strlen(code)));
+      js_set(req->js, props, "errno", js_mknum((double)req->error_code));
+      if (req->path) js_set(req->js, props, "path", js_mkstr(req->js, req->path, strlen(req->path)));
+      reject_value = js_mkerr_props(req->js, JS_ERR_TYPE, props, "%s", err_msg);
+    } else reject_value = js_mkerr(req->js, "%s", err_msg);
+
     if (is_err(reject_value)) {
       reject_value = req->js->thrown_value;
-      if (vtype(reject_value) == T_UNDEF) {
+      if (vtype(reject_value) == T_UNDEF)
         reject_value = js_mkstr(req->js, err_msg, strlen(err_msg));
-      }
       req->js->thrown_exists = false;
       req->js->thrown_value = js_mkundef();
     }
@@ -236,8 +894,7 @@ static void on_read_complete(uv_fs_t *uv_req) {
   fs_request_t *req = (fs_request_t *)uv_req->data;
   
   if (uv_req->result < 0) {
-    req->failed = 1;
-    req->error_msg = strdup(uv_strerror((int)uv_req->result));
+    fs_request_fail(req, (int)uv_req->result);
     req->completed = 1;
     complete_request(req);
     return;
@@ -257,8 +914,7 @@ static void on_open_for_read(uv_fs_t *uv_req) {
   fs_request_t *req = (fs_request_t *)uv_req->data;
   
   if (uv_req->result < 0) {
-    req->failed = 1;
-    req->error_msg = strdup(uv_strerror((int)uv_req->result));
+    fs_request_fail(req, (int)uv_req->result);
     req->completed = 1;
     complete_request(req);
     return;
@@ -271,8 +927,7 @@ static void on_open_for_read(uv_fs_t *uv_req) {
   int stat_result = uv_fs_fstat(uv_default_loop(), &stat_req, req->fd, NULL);
   
   if (stat_result < 0) {
-    req->failed = 1;
-    req->error_msg = strdup(uv_strerror(stat_result));
+    fs_request_fail(req, stat_result);
     req->completed = 1;
     uv_fs_t close_req;
     uv_fs_close(uv_default_loop(), &close_req, req->fd, NULL);
@@ -301,8 +956,7 @@ static void on_open_for_read(uv_fs_t *uv_req) {
   int read_result = uv_fs_read(uv_default_loop(), uv_req, req->fd, &buf, 1, 0, on_read_complete);
   
   if (read_result < 0) {
-    req->failed = 1;
-    req->error_msg = strdup(uv_strerror(read_result));
+    fs_request_fail(req, read_result);
     req->completed = 1;
     uv_fs_t close_req;
     uv_fs_close(uv_default_loop(), &close_req, req->fd, NULL);
@@ -316,8 +970,7 @@ static void on_write_complete(uv_fs_t *uv_req) {
   fs_request_t *req = (fs_request_t *)uv_req->data;
   
   if (uv_req->result < 0) {
-    req->failed = 1;
-    req->error_msg = strdup(uv_strerror((int)uv_req->result));
+    fs_request_fail(req, (int)uv_req->result);
   }
   
   uv_fs_t close_req;
@@ -332,8 +985,7 @@ static void on_open_for_write(uv_fs_t *uv_req) {
   fs_request_t *req = (fs_request_t *)uv_req->data;
   
   if (uv_req->result < 0) {
-    req->failed = 1;
-    req->error_msg = strdup(uv_strerror((int)uv_req->result));
+    fs_request_fail(req, (int)uv_req->result);
     req->completed = 1;
     complete_request(req);
     return;
@@ -346,8 +998,7 @@ static void on_open_for_write(uv_fs_t *uv_req) {
   int write_result = uv_fs_write(uv_default_loop(), uv_req, req->fd, &buf, 1, 0, on_write_complete);
   
   if (write_result < 0) {
-    req->failed = 1;
-    req->error_msg = strdup(uv_strerror(write_result));
+    fs_request_fail(req, write_result);
     req->completed = 1;
     uv_fs_t close_req;
     uv_fs_close(uv_default_loop(), &close_req, req->fd, NULL);
@@ -361,8 +1012,7 @@ static void on_unlink_complete(uv_fs_t *uv_req) {
   fs_request_t *req = (fs_request_t *)uv_req->data;
   
   if (uv_req->result < 0) {
-    req->failed = 1;
-    req->error_msg = strdup(uv_strerror((int)uv_req->result));
+    fs_request_fail(req, (int)uv_req->result);
   }
   
   uv_fs_req_cleanup(uv_req);
@@ -375,8 +1025,7 @@ static void on_mkdir_complete(uv_fs_t *uv_req) {
   
   if (uv_req->result < 0) {
   if (!req->recursive || uv_req->result != UV_EEXIST) {
-    req->failed = 1;
-    req->error_msg = strdup(uv_strerror((int)uv_req->result));
+    fs_request_fail(req, (int)uv_req->result);
   }}
   
   uv_fs_req_cleanup(uv_req);
@@ -388,8 +1037,7 @@ static void on_rmdir_complete(uv_fs_t *uv_req) {
   fs_request_t *req = (fs_request_t *)uv_req->data;
   
   if (uv_req->result < 0) {
-    req->failed = 1;
-    req->error_msg = strdup(uv_strerror((int)uv_req->result));
+    fs_request_fail(req, (int)uv_req->result);
   }
   
   uv_fs_req_cleanup(uv_req);
@@ -401,23 +1049,13 @@ static void on_stat_complete(uv_fs_t *uv_req) {
   fs_request_t *req = (fs_request_t *)uv_req->data;
   
   if (uv_req->result < 0) {
-    req->failed = 1;
-    req->error_msg = strdup(uv_strerror((int)uv_req->result));
+    fs_request_fail(req, (int)uv_req->result);
     req->completed = 1;
     complete_request(req);
     return;
   }
   
-  ant_value_t stat_obj = js_mkobj(req->js);
-  ant_value_t proto = js_get_ctor_proto(req->js, "Stats", 5);
-  if (is_object_type(proto)) js_set_proto_init(stat_obj, proto);
-  
-  uv_stat_t *st = &uv_req->statbuf;
-  js_set_slot(stat_obj, SLOT_DATA, js_mknum((double)st->st_mode));
-  js_set(req->js, stat_obj, "size", js_mknum((double)st->st_size));
-  js_set(req->js, stat_obj, "mode", js_mknum((double)st->st_mode));
-  js_set(req->js, stat_obj, "uid", js_mknum((double)st->st_uid));
-  js_set(req->js, stat_obj, "gid", js_mknum((double)st->st_gid));
+  ant_value_t stat_obj = fs_stats_object_from_uv(req->js, &uv_req->statbuf);
   
   req->completed = 1;
   js_resolve_promise(req->js, req->promise, stat_obj);
@@ -429,8 +1067,7 @@ static void on_realpath_complete(uv_fs_t *uv_req) {
   fs_request_t *req = (fs_request_t *)uv_req->data;
 
   if (uv_req->result < 0 || !uv_req->ptr) {
-    req->failed = 1;
-    req->error_msg = strdup(uv_strerror((int)uv_req->result));
+    fs_request_fail(req, (int)uv_req->result);
     req->completed = 1;
     complete_request(req);
     return;
@@ -464,8 +1101,7 @@ static void on_access_complete(uv_fs_t *uv_req) {
   fs_request_t *req = (fs_request_t *)uv_req->data;
   
   if (uv_req->result < 0) {
-    req->failed = 1;
-    req->error_msg = strdup(uv_strerror((int)uv_req->result));
+    fs_request_fail(req, (int)uv_req->result);
     req->completed = 1;
     complete_request(req);
     return;
@@ -481,8 +1117,7 @@ static void on_readdir_complete(uv_fs_t *uv_req) {
   fs_request_t *req = (fs_request_t *)uv_req->data;
   
   if (uv_req->result < 0) {
-    req->failed = 1;
-    req->error_msg = strdup(uv_strerror((int)uv_req->result));
+    fs_request_fail(req, (int)uv_req->result);
     req->completed = 1;
     complete_request(req);
     return;
@@ -631,8 +1266,7 @@ static ant_value_t builtin_fs_readFile(ant_t *js, ant_value_t *args, int nargs) 
   int result = uv_fs_open(uv_default_loop(), &req->uv_req, req->path, O_RDONLY, 0, on_open_for_read);
   
   if (result < 0) {
-    req->failed = 1;
-    req->error_msg = strdup(uv_strerror(result));
+    fs_request_fail(req, result);
     req->completed = 1;
     complete_request(req);
   }
@@ -663,8 +1297,7 @@ static ant_value_t builtin_fs_readBytes(ant_t *js, ant_value_t *args, int nargs)
   int result = uv_fs_open(uv_default_loop(), &req->uv_req, req->path, O_RDONLY, 0, on_open_for_read);
   
   if (result < 0) {
-    req->failed = 1;
-    req->error_msg = strdup(uv_strerror(result));
+    fs_request_fail(req, result);
     req->completed = 1;
     complete_request(req);
   }
@@ -863,8 +1496,7 @@ static ant_value_t builtin_fs_writeFile(ant_t *js, ant_value_t *args, int nargs)
   int result = uv_fs_open(uv_default_loop(), &req->uv_req, req->path, O_WRONLY | O_CREAT | O_TRUNC, 0644, on_open_for_write);
   
   if (result < 0) {
-    req->failed = 1;
-    req->error_msg = strdup(uv_strerror(result));
+    fs_request_fail(req, result);
     req->completed = 1;
     complete_request(req);
   }
@@ -919,8 +1551,7 @@ static ant_value_t builtin_fs_unlink(ant_t *js, ant_value_t *args, int nargs) {
   int result = uv_fs_unlink(uv_default_loop(), &req->uv_req, req->path, on_unlink_complete);
   
   if (result < 0) {
-    req->failed = 1;
-    req->error_msg = strdup(uv_strerror(result));
+    fs_request_fail(req, result);
     req->completed = 1;
     complete_request(req);
   }
@@ -1024,8 +1655,7 @@ static ant_value_t builtin_fs_mkdir(ant_t *js, ant_value_t *args, int nargs) {
       req->completed = 1;
       complete_request(req);
     } else {
-      req->failed = 1;
-      req->error_msg = strdup(uv_strerror(result));
+      fs_request_fail(req, result);
       req->completed = 1;
       complete_request(req);
     }
@@ -1085,13 +1715,20 @@ static ant_value_t builtin_fs_rmdir(ant_t *js, ant_value_t *args, int nargs) {
   int result = uv_fs_rmdir(uv_default_loop(), &req->uv_req, req->path, on_rmdir_complete);
   
   if (result < 0) {
-    req->failed = 1;
-    req->error_msg = strdup(uv_strerror(result));
+    fs_request_fail(req, result);
     req->completed = 1;
     complete_request(req);
   }
   
   return req->promise;
+}
+
+static ant_value_t builtin_fs_rmSync(ant_t *js, ant_value_t *args, int nargs) {
+  return fs_rm_impl(js, args, nargs, false);
+}
+
+static ant_value_t builtin_fs_rm(ant_t *js, ant_value_t *args, int nargs) {
+  return fs_rm_impl(js, args, nargs, true);
 }
 
 static ant_value_t stat_isFile(ant_t *js, ant_value_t *args, int nargs) {
@@ -1125,17 +1762,7 @@ static ant_value_t stat_isSymbolicLink(ant_t *js, ant_value_t *args, int nargs) 
 }
 
 static ant_value_t create_stats_object(ant_t *js, struct stat *st) {
-  ant_value_t stat_obj = js_mkobj(js);
-  ant_value_t proto = js_get_ctor_proto(js, "Stats", 5);
-  if (is_special_object(proto)) js_set_proto_init(stat_obj, proto);
-  
-  js_set_slot(stat_obj, SLOT_DATA, js_mknum((double)st->st_mode));
-  js_set(js, stat_obj, "size", js_mknum((double)st->st_size));
-  js_set(js, stat_obj, "mode", js_mknum((double)st->st_mode));
-  js_set(js, stat_obj, "uid", js_mknum((double)st->st_uid));
-  js_set(js, stat_obj, "gid", js_mknum((double)st->st_gid));
-  
-  return stat_obj;
+  return fs_stats_object_from_posix(js, st);
 }
 
 static const char *errno_to_code(int err_num) {
@@ -1161,7 +1788,6 @@ static const char *errno_to_code(int err_num) {
 
 static ant_value_t builtin_fs_statSync(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "statSync() requires a path argument");
-  
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "statSync() path must be a string");
   
   size_t path_len;
@@ -1186,7 +1812,6 @@ static ant_value_t builtin_fs_statSync(ant_t *js, ant_value_t *args, int nargs) 
 
 static ant_value_t builtin_fs_stat(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "stat() requires a path argument");
-  
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "stat() path must be a string");
   
   size_t path_len;
@@ -1207,8 +1832,61 @@ static ant_value_t builtin_fs_stat(ant_t *js, ant_value_t *args, int nargs) {
   int result = uv_fs_stat(uv_default_loop(), &req->uv_req, req->path, on_stat_complete);
   
   if (result < 0) {
-    req->failed = 1;
-    req->error_msg = strdup(uv_strerror(result));
+    fs_request_fail(req, result);
+    req->completed = 1;
+    complete_request(req);
+  }
+  
+  return req->promise;
+}
+
+static ant_value_t builtin_fs_lstatSync(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "lstatSync() requires a path argument");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "lstatSync() path must be a string");
+  
+  size_t path_len;
+  char *path = js_getstr(js, args[0], &path_len);
+  if (!path) return js_mkerr(js, "Failed to get path string");
+  
+  char *path_cstr = strndup(path, path_len);
+  if (!path_cstr) return js_mkerr(js, "Out of memory");
+  
+  struct stat st;
+  int result = lstat(path_cstr, &st);
+  
+  if (result != 0) {
+    const char *code = errno_to_code(errno);
+    ant_value_t err = fs_err_code(js, code, "lstat", path_cstr);
+    free(path_cstr); return err;
+  }
+  
+  free(path_cstr);
+  return create_stats_object(js, &st);
+}
+
+static ant_value_t builtin_fs_lstat(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "lstat() requires a path argument");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "lstat() path must be a string");
+  
+  size_t path_len;
+  char *path = js_getstr(js, args[0], &path_len);
+  if (!path) return js_mkerr(js, "Failed to get path string");
+  
+  
+  fs_request_t *req = calloc(1, sizeof(fs_request_t));
+  if (!req) return js_mkerr(js, "Out of memory");
+  
+  req->js = js;
+  req->op_type = FS_OP_STAT;
+  req->promise = js_mkpromise(js);
+  req->path = strndup(path, path_len);
+  req->uv_req.data = req;
+  
+  utarray_push_back(pending_requests, &req);
+  int result = uv_fs_lstat(uv_default_loop(), &req->uv_req, req->path, on_stat_complete);
+  
+  if (result < 0) {
+    fs_request_fail(req, result);
     req->completed = 1;
     complete_request(req);
   }
@@ -1218,7 +1896,6 @@ static ant_value_t builtin_fs_stat(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t builtin_fs_existsSync(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "existsSync() requires a path argument");
-  
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "existsSync() path must be a string");
   
   size_t path_len;
@@ -1237,7 +1914,6 @@ static ant_value_t builtin_fs_existsSync(ant_t *js, ant_value_t *args, int nargs
 
 static ant_value_t builtin_fs_exists(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "exists() requires a path argument");
-  
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "exists() path must be a string");
   
   size_t path_len;
@@ -1269,7 +1945,6 @@ static ant_value_t builtin_fs_exists(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t builtin_fs_accessSync(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "accessSync() requires a path argument");
-  
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "accessSync() path must be a string");
   
   size_t path_len;
@@ -1297,7 +1972,6 @@ static ant_value_t builtin_fs_accessSync(ant_t *js, ant_value_t *args, int nargs
 
 static ant_value_t builtin_fs_access(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "access() requires a path argument");
-  
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "access() path must be a string");
   
   size_t path_len;
@@ -1323,8 +1997,7 @@ static ant_value_t builtin_fs_access(ant_t *js, ant_value_t *args, int nargs) {
   int result = uv_fs_access(uv_default_loop(), &req->uv_req, req->path, mode, on_access_complete);
   
   if (result < 0) {
-    req->failed = 1;
-    req->error_msg = strdup(uv_strerror(result));
+    fs_request_fail(req, result);
     req->completed = 1;
     complete_request(req);
   }
@@ -1378,8 +2051,7 @@ static ant_value_t builtin_fs_realpath(ant_t *js, ant_value_t *args, int nargs) 
   int result = uv_fs_realpath(uv_default_loop(), &req->uv_req, req->path, on_realpath_complete);
 
   if (result < 0) {
-    req->failed = 1;
-    req->error_msg = strdup(uv_strerror(result));
+    fs_request_fail(req, result);
     req->completed = 1;
     complete_request(req);
   }
@@ -1389,7 +2061,6 @@ static ant_value_t builtin_fs_realpath(ant_t *js, ant_value_t *args, int nargs) 
 
 static ant_value_t builtin_fs_readdirSync(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "readdirSync() requires a path argument");
-  
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "readdirSync() path must be a string");
   
   size_t path_len;
@@ -1423,7 +2094,6 @@ static ant_value_t builtin_fs_readdirSync(ant_t *js, ant_value_t *args, int narg
 
 static ant_value_t builtin_fs_readdir(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "readdir() requires a path argument");
-  
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "readdir() path must be a string");
   
   size_t path_len;
@@ -1444,8 +2114,7 @@ static ant_value_t builtin_fs_readdir(ant_t *js, ant_value_t *args, int nargs) {
   int result = uv_fs_scandir(uv_default_loop(), &req->uv_req, req->path, 0, on_readdir_complete);
   
   if (result < 0) {
-    req->failed = 1;
-    req->error_msg = strdup(uv_strerror(result));
+    fs_request_fail(req, result);
     req->completed = 1;
     complete_request(req);
   }
@@ -1457,8 +2126,7 @@ static void on_write_fd_complete(uv_fs_t *uv_req) {
   fs_request_t *req = (fs_request_t *)uv_req->data;
   
   if (uv_req->result < 0) {
-    req->failed = 1;
-    req->error_msg = strdup(uv_strerror((int)uv_req->result));
+    fs_request_fail(req, (int)uv_req->result);
     req->completed = 1;
     complete_request(req);
     return;
@@ -1488,21 +2156,20 @@ static ant_value_t builtin_fs_readSync(ant_t *js, ant_value_t *args, int nargs) 
   int64_t position = -1;
   
   if (nargs >= 3) {
-    if (vtype(args[2]) == T_OBJ) {
-      ant_value_t off_val = js_get(js, args[2], "offset");
-      ant_value_t len_val = js_get(js, args[2], "length");
-      ant_value_t pos_val = js_get(js, args[2], "position");
-      if (vtype(off_val) == T_NUM) offset = (size_t)js_getnum(off_val);
-      if (vtype(len_val) == T_NUM) length = (size_t)js_getnum(len_val);
-      else length = buf_len - offset;
-      if (vtype(pos_val) == T_NUM) position = (int64_t)js_getnum(pos_val);
-    } else if (vtype(args[2]) == T_NUM) {
-      offset = (size_t)js_getnum(args[2]);
-      length = buf_len - offset;
-      if (nargs >= 4 && vtype(args[3]) == T_NUM) length = (size_t)js_getnum(args[3]);
-      if (nargs >= 5 && vtype(args[4]) == T_NUM) position = (int64_t)js_getnum(args[4]);
-    }
-  }
+  if (vtype(args[2]) == T_OBJ) {
+    ant_value_t off_val = js_get(js, args[2], "offset");
+    ant_value_t len_val = js_get(js, args[2], "length");
+    ant_value_t pos_val = js_get(js, args[2], "position");
+    if (vtype(off_val) == T_NUM) offset = (size_t)js_getnum(off_val);
+    if (vtype(len_val) == T_NUM) length = (size_t)js_getnum(len_val);
+    else length = buf_len - offset;
+    if (vtype(pos_val) == T_NUM) position = (int64_t)js_getnum(pos_val);
+  } else if (vtype(args[2]) == T_NUM) {
+    offset = (size_t)js_getnum(args[2]);
+    length = buf_len - offset;
+    if (nargs >= 4 && vtype(args[3]) == T_NUM) length = (size_t)js_getnum(args[3]);
+    if (nargs >= 5 && vtype(args[4]) == T_NUM) position = (int64_t)js_getnum(args[4]);
+  }}
   
   if (offset > buf_len) return js_mkerr(js, "offset is out of bounds");
   if (offset + length > buf_len) return js_mkerr(js, "length extends beyond buffer");
@@ -1611,21 +2278,20 @@ static ant_value_t builtin_fs_write_fd(ant_t *js, ant_value_t *args, int nargs) 
     size_t length = buf_len;
     
     if (nargs >= 3) {
-      if (vtype(args[2]) == T_OBJ) {
-        ant_value_t off_val = js_get(js, args[2], "offset");
-        ant_value_t len_val = js_get(js, args[2], "length");
-        ant_value_t pos_val = js_get(js, args[2], "position");
-        if (vtype(off_val) == T_NUM) offset = (size_t)js_getnum(off_val);
-        if (vtype(len_val) == T_NUM) length = (size_t)js_getnum(len_val);
-        else length = buf_len - offset;
-        if (vtype(pos_val) == T_NUM) position = (int64_t)js_getnum(pos_val);
-      } else if (vtype(args[2]) == T_NUM) {
-        offset = (size_t)js_getnum(args[2]);
-        length = buf_len - offset;
-        if (nargs >= 4 && vtype(args[3]) == T_NUM) length = (size_t)js_getnum(args[3]);
-        if (nargs >= 5 && vtype(args[4]) == T_NUM) position = (int64_t)js_getnum(args[4]);
-      }
-    }
+    if (vtype(args[2]) == T_OBJ) {
+      ant_value_t off_val = js_get(js, args[2], "offset");
+      ant_value_t len_val = js_get(js, args[2], "length");
+      ant_value_t pos_val = js_get(js, args[2], "position");
+      if (vtype(off_val) == T_NUM) offset = (size_t)js_getnum(off_val);
+      if (vtype(len_val) == T_NUM) length = (size_t)js_getnum(len_val);
+      else length = buf_len - offset;
+      if (vtype(pos_val) == T_NUM) position = (int64_t)js_getnum(pos_val);
+    } else if (vtype(args[2]) == T_NUM) {
+      offset = (size_t)js_getnum(args[2]);
+      length = buf_len - offset;
+      if (nargs >= 4 && vtype(args[3]) == T_NUM) length = (size_t)js_getnum(args[3]);
+      if (nargs >= 5 && vtype(args[4]) == T_NUM) position = (int64_t)js_getnum(args[4]);
+    }}
     
     if (offset > buf_len) return js_mkerr(js, "offset is out of bounds");
     if (offset + length > buf_len) return js_mkerr(js, "length extends beyond buffer");
@@ -1656,8 +2322,7 @@ static ant_value_t builtin_fs_write_fd(ant_t *js, ant_value_t *args, int nargs) 
   int result = uv_fs_write(uv_default_loop(), &req->uv_req, req->fd, &buf, 1, position, on_write_fd_complete);
   
   if (result < 0) {
-    req->failed = 1;
-    req->error_msg = strdup(uv_strerror(result));
+    fs_request_fail(req, result);
     req->completed = 1;
     complete_request(req);
   }
@@ -1758,8 +2423,7 @@ static ant_value_t builtin_fs_writev_fd(ant_t *js, ant_value_t *args, int nargs)
   int result = uv_fs_write(uv_default_loop(), &req->uv_req, req->fd, &buf, 1, position, on_write_fd_complete);
   
   if (result < 0) {
-    req->failed = 1;
-    req->error_msg = strdup(uv_strerror(result));
+    fs_request_fail(req, result);
     req->completed = 1;
     complete_request(req);
   }
@@ -1830,8 +2494,7 @@ static void on_open_fd_complete(uv_fs_t *uv_req) {
   fs_request_t *req = (fs_request_t *)uv_req->data;
   
   if (uv_req->result < 0) {
-    req->failed = 1;
-    req->error_msg = strdup(uv_strerror((int)uv_req->result));
+    fs_request_fail(req, (int)uv_req->result);
     req->completed = 1;
     complete_request(req);
     return;
@@ -1867,8 +2530,7 @@ static ant_value_t builtin_fs_open_fd(ant_t *js, ant_value_t *args, int nargs) {
   int result = uv_fs_open(uv_default_loop(), &req->uv_req, req->path, flags, mode, on_open_fd_complete);
   
   if (result < 0) {
-    req->failed = 1;
-    req->error_msg = strdup(uv_strerror(result));
+    fs_request_fail(req, result);
     req->completed = 1;
     complete_request(req);
   }
@@ -1880,8 +2542,7 @@ static void on_close_fd_complete(uv_fs_t *uv_req) {
   fs_request_t *req = (fs_request_t *)uv_req->data;
   
   if (uv_req->result < 0) {
-    req->failed = 1;
-    req->error_msg = strdup(uv_strerror((int)uv_req->result));
+    fs_request_fail(req, (int)uv_req->result);
     req->completed = 1;
     complete_request(req);
     return;
@@ -1912,13 +2573,135 @@ static ant_value_t builtin_fs_close_fd(ant_t *js, ant_value_t *args, int nargs) 
   int result = uv_fs_close(uv_default_loop(), &req->uv_req, req->fd, on_close_fd_complete);
   
   if (result < 0) {
-    req->failed = 1;
-    req->error_msg = strdup(uv_strerror(result));
+    fs_request_fail(req, result);
     req->completed = 1;
     complete_request(req);
   }
   
   return req->promise;
+}
+
+static ant_value_t builtin_fs_watch(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t path_val = 0;
+  ant_value_t watcher_obj = 0;
+  fs_watch_options_t opts;
+  fs_watcher_t *watcher = NULL;
+  uv_handle_t *handle = NULL;
+  const char *path = NULL;
+  size_t path_len = 0;
+  int rc = 0;
+
+  if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "watch() requires a path argument");
+  if (!fs_parse_watch_options(js, args, nargs, &opts))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "watch() options must be a string, object, or callback");
+
+  path_val = fs_coerce_path(js, args[0]);
+  if (vtype(path_val) != T_STR) return js_mkerr_typed(js, JS_ERR_TYPE, "watch() path must be a string or URL");
+
+  path = js_getstr(js, path_val, &path_len);
+  if (!path || path_len == 0) return js_mkerr(js, "watch() path must not be empty");
+
+  watcher = fs_watcher_new(js, FS_WATCH_MODE_EVENT);
+  if (!watcher) return js_mkerr(js, "Out of memory");
+
+  watcher_obj = fs_watcher_make_object(js, watcher);
+  if (is_err(watcher_obj)) {
+    fs_watcher_free(watcher);
+    return watcher_obj;
+  }
+
+  rc = fs_watcher_start_event(watcher, path, opts.persistent, opts.recursive);
+  if (rc != 0) {
+    js_set_native_ptr(watcher_obj, NULL);
+    fs_watcher_free(watcher);
+    return fs_watch_error(js, rc, path);
+  }
+
+  fs_add_active_watcher(watcher);
+  if (!opts.persistent) {
+    handle = fs_watcher_uv_handle(watcher);
+    if (handle) uv_unref(handle);
+  }
+  if (is_callable(opts.listener))
+    eventemitter_add_listener(js, watcher_obj, "change", opts.listener, false);
+  return watcher_obj;
+}
+
+static ant_value_t builtin_fs_watchFile(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t path_val = 0;
+  fs_watchfile_options_t opts;
+  
+  fs_watcher_t *watcher = NULL;
+  uv_handle_t *handle = NULL;
+  
+  const char *path = NULL;
+  size_t path_len = 0;
+  int rc = 0;
+
+  if (nargs < 2)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "watchFile() requires a path and listener");
+  if (!fs_parse_watchfile_options(js, args, nargs, &opts))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "watchFile() requires a listener callback");
+
+  path_val = fs_coerce_path(js, args[0]);
+  if (vtype(path_val) != T_STR) return js_mkerr_typed(js, JS_ERR_TYPE, "watchFile() path must be a string or URL");
+
+  path = js_getstr(js, path_val, &path_len);
+  if (!path || path_len == 0) return js_mkerr(js, "watchFile() path must not be empty");
+
+  watcher = fs_watcher_new(js, FS_WATCH_MODE_STAT);
+  if (!watcher) return js_mkerr(js, "Out of memory");
+
+  watcher->callback = opts.listener;
+  watcher->last_stat_valid = fs_stat_path_sync(path, &watcher->last_stat);
+
+  rc = fs_watcher_start_poll(watcher, path, opts.persistent, opts.interval_ms);
+  if (rc != 0) {
+    fs_watcher_free(watcher);
+    return fs_watch_error(js, rc, path);
+  }
+
+  fs_add_active_watcher(watcher);
+  if (!opts.persistent) {
+    handle = fs_watcher_uv_handle(watcher);
+    if (handle) uv_unref(handle);
+  }
+  return js_mkundef();
+}
+
+static ant_value_t builtin_fs_unwatchFile(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t path_val = 0;
+  ant_value_t listener = js_mkundef();
+  
+  char *resolved = NULL;
+  fs_watcher_t *watcher = NULL;
+  fs_watcher_t *next = NULL;
+  
+  const char *path = NULL;
+  size_t path_len = 0;
+
+  if (nargs < 1) return js_mkundef();
+
+  path_val = fs_coerce_path(js, args[0]);
+  if (vtype(path_val) != T_STR) return js_mkundef();
+
+  path = js_getstr(js, path_val, &path_len);
+  if (!path || path_len == 0) return js_mkundef();
+  if (nargs > 1 && is_callable(args[1])) listener = args[1];
+
+  resolved = ant_watch_resolve_path(path);
+  if (!resolved) return js_mkundef();
+
+  for (watcher = active_watchers; watcher; watcher = next) {
+    next = watcher->next_active;
+    if (watcher->mode != FS_WATCH_MODE_STAT) continue;
+    if (!watcher->path || strcmp(watcher->path, resolved) != 0) continue;
+    if (is_callable(listener) && watcher->callback != listener) continue;
+    fs_watcher_close_native(watcher);
+  }
+
+  free(resolved);
+  return js_mkundef();
 }
 
 void init_fs_module(void) {
@@ -1942,6 +2725,164 @@ void init_fs_module(void) {
   js_set(js, glob, "Stats", js_obj_to_func(stats_ctor));
 }
 
+static ant_value_t fs_callback_success_handler(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t ctx = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t callback = js_get_slot(ctx, SLOT_DATA);
+
+  if (!is_callable(callback)) return js_mkundef();
+
+  if (js_truthy(js, js_get(js, ctx, "existsStyle"))) {
+    ant_value_t cb_args[1] = { nargs > 0 ? args[0] : js_false };
+    fs_call_value(js, callback, js_mkundef(), cb_args, 1);
+    return js_mkundef();
+  }
+
+  ant_value_t cb_args[2] = { js_mknull(), nargs > 0 ? args[0] : js_mkundef() };
+  fs_call_value(js, callback, js_mkundef(), cb_args, 2);
+  return js_mkundef();
+}
+
+static ant_value_t fs_callback_error_handler(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t ctx = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t callback = js_get_slot(ctx, SLOT_DATA);
+  ant_value_t cb_args[1];
+
+  if (!is_callable(callback)) return js_mkundef();
+
+  if (js_truthy(js, js_get(js, ctx, "existsStyle"))) {
+    cb_args[0] = js_false;
+    fs_call_value(js, callback, js_mkundef(), cb_args, 1);
+    return js_mkundef();
+  }
+
+  cb_args[0] = nargs > 0 ? args[0] : js_mkundef();
+  fs_call_value(js, callback, js_mkundef(), cb_args, 1);
+  return js_mkundef();
+}
+
+static void fs_callback_emit_success(
+  ant_t *js,
+  ant_value_t callback,
+  bool exists_style,
+  ant_value_t value
+) {
+  if (exists_style) {
+    ant_value_t cb_args[1] = { value };
+    fs_call_value(js, callback, js_mkundef(), cb_args, 1);
+    return;
+  }
+
+  ant_value_t cb_args[2] = { js_mknull(), value };
+  fs_call_value(js, callback, js_mkundef(), cb_args, 2);
+}
+
+static void fs_callback_emit_error(
+  ant_t *js,
+  ant_value_t callback,
+  bool exists_style,
+  ant_value_t error
+) {
+  ant_value_t cb_args[1];
+
+  cb_args[0] = exists_style ? js_false : error;
+  fs_call_value(js, callback, js_mkundef(), cb_args, 1);
+}
+
+static ant_value_t fs_callback_attach_promise(
+  ant_t *js,
+  ant_value_t promise,
+  ant_value_t callback,
+  bool exists_style
+) {
+  GC_ROOT_SAVE(root_mark, js);
+  ant_value_t success_ctx = js_mkobj(js);
+  ant_value_t error_ctx = js_mkobj(js);
+  ant_value_t success_fn = js_mkundef();
+  ant_value_t error_fn = js_mkundef();
+
+  GC_ROOT_PIN(js, promise);
+  GC_ROOT_PIN(js, callback);
+  GC_ROOT_PIN(js, success_ctx);
+  GC_ROOT_PIN(js, error_ctx);
+
+  js_set_slot(success_ctx, SLOT_DATA, callback);
+  js_set_slot(error_ctx, SLOT_DATA, callback);
+  if (exists_style) {
+    js_set(js, success_ctx, "existsStyle", js_true);
+    js_set(js, error_ctx, "existsStyle", js_true);
+  }
+
+  success_fn = js_heavy_mkfun(js, fs_callback_success_handler, success_ctx);
+  error_fn = js_heavy_mkfun(js, fs_callback_error_handler, error_ctx);
+  GC_ROOT_PIN(js, success_fn);
+  GC_ROOT_PIN(js, error_fn);
+
+  js_promise_then(js, promise, success_fn, error_fn);
+  GC_ROOT_RESTORE(js, root_mark);
+  return js_mkundef();
+}
+
+static ant_value_t fs_callback_wrapper_call(ant_t *js, ant_value_t *args, int nargs) {
+  GC_ROOT_SAVE(root_mark, js);
+  ant_value_t wrapper = js_getcurrentfunc(js);
+  ant_value_t config = js_get_slot(wrapper, SLOT_DATA);
+  ant_value_t original = js_get_slot(config, SLOT_DATA);
+  
+  ant_value_t callback = js_mkundef();
+  ant_value_t result = js_mkundef();
+  ant_value_t this_arg = js_getthis(js);
+  ant_value_t ex = js_mkundef();
+  
+  bool exists_style = false;
+  int call_nargs = nargs;
+
+  GC_ROOT_PIN(js, original);
+  GC_ROOT_PIN(js, this_arg);
+
+  exists_style = js_truthy(js, js_get(js, config, "existsStyle"));
+  if (nargs > 0 && is_callable(args[nargs - 1])) {
+    callback = args[nargs - 1];
+    GC_ROOT_PIN(js, callback);
+    call_nargs--;
+  }
+
+  result = fs_call_value(js, original, this_arg, args, call_nargs);
+  GC_ROOT_PIN(js, result);
+
+  if (!is_callable(callback)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return result;
+  }
+
+  if (is_err(result) || js->thrown_exists) {
+    ex = js->thrown_exists ? js->thrown_value : result;
+    GC_ROOT_PIN(js, ex);
+    js->thrown_exists = false;
+    js->thrown_value = js_mkundef();
+    js->thrown_stack = js_mkundef();
+    fs_callback_emit_error(js, callback, exists_style, ex);
+    GC_ROOT_RESTORE(js, root_mark);
+    return js_mkundef();
+  }
+
+  if (vtype(result) != T_PROMISE) {
+    fs_callback_emit_success(js, callback, exists_style, result);
+    GC_ROOT_RESTORE(js, root_mark);
+    return js_mkundef();
+  }
+
+  GC_ROOT_RESTORE(js, root_mark);
+  return fs_callback_attach_promise(js, result, callback, exists_style);
+}
+
+static ant_value_t fs_make_callback_wrapper(ant_t *js, ant_value_t original, bool exists_style) {
+  ant_value_t config = js_mkobj(js);
+
+  js_set_slot(config, SLOT_DATA, original);
+  if (exists_style) js_set(js, config, "existsStyle", js_true);
+  return js_heavy_mkfun(js, fs_callback_wrapper_call, config);
+}
+
 static void fs_set_promise_methods(ant_t *js, ant_value_t lib) {
   js_set(js, lib, "readFile", js_mkfun(builtin_fs_readFile));
   js_set(js, lib, "open", js_mkfun(builtin_fs_open_fd));
@@ -1949,14 +2890,35 @@ static void fs_set_promise_methods(ant_t *js, ant_value_t lib) {
   js_set(js, lib, "writeFile", js_mkfun(builtin_fs_writeFile));
   js_set(js, lib, "write", js_mkfun(builtin_fs_write_fd));
   js_set(js, lib, "writev", js_mkfun(builtin_fs_writev_fd));
+  js_set(js, lib, "rm", js_mkfun(builtin_fs_rm));
   js_set(js, lib, "unlink", js_mkfun(builtin_fs_unlink));
   js_set(js, lib, "mkdir", js_mkfun(builtin_fs_mkdir));
   js_set(js, lib, "rmdir", js_mkfun(builtin_fs_rmdir));
   js_set(js, lib, "stat", js_mkfun(builtin_fs_stat));
+  js_set(js, lib, "lstat", js_mkfun(builtin_fs_lstat));
   js_set(js, lib, "exists", js_mkfun(builtin_fs_exists));
   js_set(js, lib, "access", js_mkfun(builtin_fs_access));
   js_set(js, lib, "readdir", js_mkfun(builtin_fs_readdir));
   js_set(js, lib, "realpath", js_mkfun(builtin_fs_realpath));
+}
+
+static void fs_set_callback_compatible_methods(ant_t *js, ant_value_t lib) {
+  js_set(js, lib, "readFile", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_readFile), false));
+  js_set(js, lib, "open", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_open_fd), false));
+  js_set(js, lib, "close", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_close_fd), false));
+  js_set(js, lib, "writeFile", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_writeFile), false));
+  js_set(js, lib, "write", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_write_fd), false));
+  js_set(js, lib, "writev", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_writev_fd), false));
+  js_set(js, lib, "rm", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_rm), false));
+  js_set(js, lib, "unlink", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_unlink), false));
+  js_set(js, lib, "mkdir", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_mkdir), false));
+  js_set(js, lib, "rmdir", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_rmdir), false));
+  js_set(js, lib, "stat", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_stat), false));
+  js_set(js, lib, "lstat", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_lstat), false));
+  js_set(js, lib, "exists", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_exists), true));
+  js_set(js, lib, "access", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_access), false));
+  js_set(js, lib, "readdir", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_readdir), false));
+  js_set(js, lib, "realpath", fs_make_callback_wrapper(js, js_mkfun(builtin_fs_realpath), false));
 }
 
 static ant_value_t fs_make_constants(ant_t *js) {
@@ -1988,7 +2950,9 @@ static ant_value_t builtin_fs_promises_getter(ant_t *js, ant_value_t *args, int 
 ant_value_t fs_library(ant_t *js) {
   ant_value_t lib = js_mkobj(js);
   ant_value_t realpath_sync = js_mkfun(builtin_fs_realpathSync);
-  fs_set_promise_methods(js, lib);
+  
+  fs_set_callback_compatible_methods(js, lib);
+  fs_init_watch_constructors(js);
 
   js_set(js, lib, "readFileSync", js_mkfun(builtin_fs_readFileSync));
   js_set(js, lib, "readSync", js_mkfun(builtin_fs_readSync));
@@ -2001,14 +2965,20 @@ ant_value_t fs_library(ant_t *js) {
   js_set(js, lib, "appendFileSync", js_mkfun(builtin_fs_appendFileSync));
   js_set(js, lib, "copyFileSync", js_mkfun(builtin_fs_copyFileSync));
   js_set(js, lib, "renameSync", js_mkfun(builtin_fs_renameSync));
+  js_set(js, lib, "rmSync", js_mkfun(builtin_fs_rmSync));
   js_set(js, lib, "unlinkSync", js_mkfun(builtin_fs_unlinkSync));
   js_set(js, lib, "mkdirSync", js_mkfun(builtin_fs_mkdirSync));
   js_set(js, lib, "rmdirSync", js_mkfun(builtin_fs_rmdirSync));
   js_set(js, lib, "statSync", js_mkfun(builtin_fs_statSync));
+  js_set(js, lib, "lstatSync", js_mkfun(builtin_fs_lstatSync));
   js_set(js, lib, "existsSync", js_mkfun(builtin_fs_existsSync));
   js_set(js, lib, "accessSync", js_mkfun(builtin_fs_accessSync));
   js_set(js, lib, "readdirSync", js_mkfun(builtin_fs_readdirSync));
   js_set(js, lib, "realpathSync", realpath_sync);
+  js_set(js, lib, "watch", js_mkfun(builtin_fs_watch));
+  js_set(js, lib, "watchFile", js_mkfun(builtin_fs_watchFile));
+  js_set(js, lib, "unwatchFile", js_mkfun(builtin_fs_unwatchFile));
+  js_set(js, lib, "FSWatcher", g_fswatcher_ctor);
   js_set(js, realpath_sync, "native", realpath_sync);
   
   js_set_getter_desc(
@@ -2039,10 +3009,20 @@ int has_pending_fs_ops(void) {
 }
 
 void gc_mark_fs(ant_t *js, gc_mark_fn mark) {
+  fs_watcher_t *watcher = NULL;
+
+  if (g_fswatcher_proto) mark(js, g_fswatcher_proto);
+  if (g_fswatcher_ctor) mark(js, g_fswatcher_ctor);
   if (!pending_requests) return;
+  
   unsigned int len = utarray_len(pending_requests);
   for (unsigned int i = 0; i < len; i++) {
     fs_request_t **reqp = (fs_request_t **)utarray_eltptr(pending_requests, i);
     if (reqp && *reqp) { mark(js, (*reqp)->promise); }
+  }
+
+  for (watcher = active_watchers; watcher; watcher = watcher->next_active) {
+    if (vtype(watcher->obj) == T_OBJ) mark(js, watcher->obj);
+    if (vtype(watcher->callback) != T_UNDEF) mark(js, watcher->callback);
   }
 }

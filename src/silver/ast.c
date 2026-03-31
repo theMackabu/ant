@@ -795,8 +795,9 @@ static sv_ast_t *parse_primary(P) {
     ant_offset_t flags_start = POS;
     while (POS < CLEN) {
       char c = CODE[POS];
-      if (c == 'g' || c == 'i' || c == 'm' || c == 's' || c == 'u' || c == 'y')
-        POS++;
+      if (
+        c == 'd' || c == 'g' || c == 'i' || c == 'm' ||
+        c == 's' || c == 'u' || c == 'v' || c == 'y') POS++;
       else break;
     }
     

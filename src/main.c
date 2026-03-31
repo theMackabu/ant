@@ -79,6 +79,7 @@
 #include "modules/domexception.h"
 #include "modules/abort.h"
 #include "modules/globals.h"
+#include "modules/wasm.h"
 #include "modules/structured-clone.h"
 #include "modules/v8.h"
 #include "modules/worker_threads.h"
@@ -579,6 +580,7 @@ int main(int argc, char *argv[]) {
   init_timer_module();
   init_domexception_module();
   init_globals_module();
+  init_wasm_module();
   init_builtin_module();
   init_buffer_module();
   init_structured_clone_module();

@@ -60,9 +60,7 @@ static struct {
 static void add_timer_entry(timer_entry_t *entry) {
   entry->next = timer_state.timers;
   entry->prev = NULL;
-  if (timer_state.timers) {
-    timer_state.timers->prev = entry;
-  }
+  if (timer_state.timers) timer_state.timers->prev = entry;
   timer_state.timers = entry;
 }
 
@@ -73,10 +71,15 @@ static void remove_timer_entry(timer_entry_t *entry) {
 }
 
 static int timer_entry_is_registered(timer_entry_t *entry) {
-  for (timer_entry_t *it = timer_state.timers; it != NULL; it = it->next) {
+  for (timer_entry_t *it = timer_state.timers; it != NULL; it = it->next)
     if (it == entry) return 1;
-  }
   return 0;
+}
+
+static timer_entry_t *find_timer_entry_by_id(int timer_id) {
+  for (timer_entry_t *entry = timer_state.timers; entry != NULL; entry = entry->next)
+    if (entry->timer_id == timer_id) return entry;
+  return NULL;
 }
 
 static int timer_copy_args(timer_entry_t *entry, ant_value_t *args, int nargs) {
@@ -90,26 +93,63 @@ static int timer_copy_args(timer_entry_t *entry, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t timer_to_primitive(ant_t *js, ant_value_t *args, int nargs) {
-  return js_get(js, js_getthis(js), "id");
+  return js_get_slot(js_getthis(js), SLOT_DATA);
+}
+
+static ant_value_t js_timer_ref(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
+  timer_entry_t *entry = find_timer_entry_by_id((int)js_getnum(js_get_slot(this_obj, SLOT_DATA)));
+  if (entry && !entry->closed && !uv_is_closing((uv_handle_t *)&entry->handle))
+    uv_ref((uv_handle_t *)&entry->handle);
+  return this_obj;
+}
+
+static ant_value_t js_timer_unref(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
+  timer_entry_t *entry = find_timer_entry_by_id((int)js_getnum(js_get_slot(this_obj, SLOT_DATA)));
+  if (entry && !entry->closed && !uv_is_closing((uv_handle_t *)&entry->handle))
+    uv_unref((uv_handle_t *)&entry->handle);
+  return this_obj;
+}
+
+static ant_value_t js_timer_has_ref(ant_t *js, ant_value_t *args, int nargs) {
+  timer_entry_t *entry = find_timer_entry_by_id((int)js_getnum(js_get_slot(js_getthis(js), SLOT_DATA)));
+  if (!entry || entry->closed || uv_is_closing((uv_handle_t *)&entry->handle)) return js_false;
+  return js_bool(uv_has_ref((const uv_handle_t *)&entry->handle) != 0);
 }
 
 static ant_value_t timer_make_object(ant_t *js, int id, double delay_ms, int is_interval, ant_value_t callback) {
   ant_value_t obj = js_mkobj(js);
-  
-  js_set(js, obj, "id", js_mknum((double)id));
+
   js_set(js, obj, "delay", js_mknum(delay_ms));
   js_set(js, obj, "repeat", is_interval ? js_mknum(delay_ms) : js_mknull());
+  
   js_set(js, obj, "callback", callback);
+  js_set_descriptor(js, obj, "callback", 8, JS_DESC_W | JS_DESC_C);
   
-  js_set_sym(js, obj, get_toStringTag_sym(), js_mkstr(js, is_interval ? "Interval" : "Timeout", is_interval ? 8 : 7));
+  js_set(js, obj, "ref", js_mkfun(js_timer_ref));
+  js_set_descriptor(js, obj, "ref", 3, JS_DESC_W | JS_DESC_C);
+  
+  js_set(js, obj, "unref", js_mkfun(js_timer_unref));
+  js_set_descriptor(js, obj, "unref", 5, JS_DESC_W | JS_DESC_C);
+  
+  js_set(js, obj, "hasRef", js_mkfun(js_timer_has_ref));
+  js_set_descriptor(js, obj, "hasRef", 6, JS_DESC_W | JS_DESC_C);
+
+  js_set_sym(js, obj, get_toStringTag_sym(), js_mkstr(js, is_interval 
+    ? "Interval" 
+    : "Timeout", is_interval ? 8 : 7)
+  );
+  
+  js_set_slot(obj, SLOT_DATA, js_mknum((double)id));
   js_set_sym(js, obj, get_toPrimitive_sym(), js_mkfun(timer_to_primitive));
-  
+
   return obj;
 }
 
 static int timer_id_from_arg(ant_t *js, ant_value_t arg) {
   if (vtype(arg) == T_NUM) return (int)js_getnum(arg);
-  return (int)js_getnum(js_get(js, arg, "id"));
+  return (int)js_getnum(js_get_slot(arg, SLOT_DATA));
 }
 
 static void timer_close_cb(uv_handle_t *h) {
@@ -143,11 +183,9 @@ static void timer_callback(uv_timer_t *handle) {
   sv_vm_call(js->vm, js, entry->callback, js_mkundef(), entry->args, entry->nargs, NULL, false);
   process_microtasks(js);
   
-  if (!entry->is_interval) {
-    if (!uv_is_closing((uv_handle_t *)&entry->handle)) {
-      uv_close((uv_handle_t *)&entry->handle, timer_close_cb);
-    }
-  }
+  if (!entry->is_interval) if (!uv_is_closing((uv_handle_t *)&entry->handle)) uv_close(
+    (uv_handle_t *)&entry->handle, timer_close_cb
+  );
 }
 
 // setTimeout(callback, delay, ...args)

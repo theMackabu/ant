@@ -4,9 +4,9 @@ let app = express();
 let port = 3000;
 
 app.get('/', (_req, res) => {
-  res.send('Hello World!');
+  res.type('txt').send(`hello express!!\n\n🐜 ${Ant.version}\n`);
 });
 
 app.listen(port, () => {
-  console.log(`Example app listening on port ${port}`);
+  console.log(`started on http://localhost:${port}`);
 });

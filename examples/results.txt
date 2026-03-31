@@ -607,7 +607,7 @@ compat-table/es6/String.prototype.startsWith.js: OK
 compat-table/es6/String.prototype.startsWith.throws-regex.js: OK
 compat-table/es6/String.raw.js: OK
 compat-table/es6/Symbol.JSON.stringify.object.js: TypeError: Object.defineProperty called on non-object
-compat-table/es6/Symbol.JSON.stringify.primitive.js: failed
+compat-table/es6/Symbol.JSON.stringify.primitive.js: OK
 compat-table/es6/Symbol.Object.js: failed
 compat-table/es6/Symbol.String.js: OK
 compat-table/es6/Symbol.defineProperty.js: OK
@@ -1042,12 +1042,12 @@ compat-table/es6/template.toString.js: OK
 compat-table/es6/typed-arrays.ArrayBuffer.Symbol.species.js: OK
 compat-table/es6/typed-arrays.DataView.Float32.js: failed
 compat-table/es6/typed-arrays.DataView.Float64.js: OK
-compat-table/es6/typed-arrays.DataView.Int8.js: TypeError: undefined is not a function
+compat-table/es6/typed-arrays.DataView.Int8.js: OK
 compat-table/es6/typed-arrays.DataView.Int16.js: OK
 compat-table/es6/typed-arrays.DataView.Int32.js: OK
 compat-table/es6/typed-arrays.DataView.Uint8.js: OK
-compat-table/es6/typed-arrays.DataView.Uint16.js: TypeError: undefined is not a function
-compat-table/es6/typed-arrays.DataView.Uint32.js: TypeError: undefined is not a function
+compat-table/es6/typed-arrays.DataView.Uint16.js: OK
+compat-table/es6/typed-arrays.DataView.Uint32.js: OK
 compat-table/es6/typed-arrays.Float32Array.js: failed
 compat-table/es6/typed-arrays.Float64Array.js: OK
 compat-table/es6/typed-arrays.Int8Array.js: OK
@@ -1248,7 +1248,7 @@ compat-table/es2020/BigInt.js: OK
 compat-table/es2020/BigUint64Array.js: failed
 compat-table/es2020/DataView.prototype.getBigInt64.js: TypeError: undefined is not a function
 compat-table/es2020/DataView.prototype.getBigUint64.js: TypeError: undefined is not a function
-compat-table/es2020/Promise.allSettled.js: TypeError: undefined is not a function
+compat-table/es2020/Promise.allSettled.js: OK
 compat-table/es2020/String.prototype.matchAll.js: TypeError: undefined is not a function
 compat-table/es2020/String.prototype.matchAll.throws-non-global.js: failed
 compat-table/es2020/globalThis.descriptor.js: OK

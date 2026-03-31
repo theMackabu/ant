@@ -1,3 +1,5 @@
+// TODO: split module into smaller files
+
 #include <compat.h> // IWYU pragma: keep
 
 #include <ctype.h>
@@ -254,6 +256,196 @@ static ant_value_t util_strip_vt_control_characters(ant_t *js, ant_value_t *args
   return out;
 }
 
+static inline bool util_env_is_inline_ws(char ch) {
+  return ch == ' ' || ch == '\t' || ch == '\r';
+}
+
+static inline bool util_env_is_ident_start(char ch) {
+  return 
+    (ch >= 'A' && ch <= 'Z') ||
+    (ch >= 'a' && ch <= 'z') ||
+    ch == '_';
+}
+
+static inline bool util_env_is_ident_continue(char ch) {
+  return util_env_is_ident_start(ch) || (ch >= '0' && ch <= '9');
+}
+
+static void util_env_skip_inline_ws(const char *src, size_t len, size_t *cursor) {
+  while (*cursor < len && util_env_is_inline_ws(src[*cursor])) (*cursor)++;
+}
+
+static void util_env_skip_line(const char *src, size_t len, size_t *cursor) {
+  while (*cursor < len && src[*cursor] != '\n') (*cursor)++;
+  if (*cursor < len && src[*cursor] == '\n') (*cursor)++;
+}
+
+static bool util_env_consume_export(const char *src, size_t len, size_t *cursor) {
+  if (*cursor + 6 > len) return false;
+  if (memcmp(src + *cursor, "export", 6) != 0) return false;
+  
+  if (
+    *cursor + 6 < len &&
+    !util_env_is_inline_ws(src[*cursor + 6]) &&
+    src[*cursor + 6] != '\n'
+  ) return false;
+
+  *cursor += 6;
+  util_env_skip_inline_ws(src, len, cursor);
+  return true;
+}
+
+static bool util_env_parse_key(
+  const char *src, size_t len, size_t *cursor,
+  size_t *key_start, size_t *key_end
+) {
+  if (*cursor >= len || !util_env_is_ident_start(src[*cursor])) return false;
+  *key_start = *cursor; (*cursor)++;
+  
+  while (*cursor < len && util_env_is_ident_continue(src[*cursor])) (*cursor)++;
+  *key_end = *cursor;
+  
+  return true;
+}
+
+static void util_env_set_entry(
+  ant_t *js, ant_value_t obj, const char *key,
+  size_t key_len, ant_value_t value
+) {
+  ant_value_t key_str = js_mkstr(js, key, key_len);
+  js_setprop(js, obj, key_str, value);
+}
+
+static ant_value_t util_env_parse_quoted_value(
+  ant_t *js, const char *src,
+  size_t len, size_t *cursor
+) {
+  util_sb_t sb = {0};
+  ant_value_t value = js_mkstr(js, "", 0);
+  char quote;
+
+  if (*cursor >= len) return value;
+  quote = src[(*cursor)++];
+
+  while (*cursor < len) {
+    char ch = src[(*cursor)++];
+    if (ch == quote) goto done;
+    if (ch != '\\' || *cursor >= len) {
+      util_sb_append_c(&sb, ch);
+      continue;
+    }
+
+    char esc = src[(*cursor)++];
+    if (quote != '"') {
+      util_sb_append_c(&sb, esc);
+      continue;
+    }
+
+    switch (esc) {
+      case 'n': util_sb_append_c(&sb, '\n'); break;
+      case 'r': util_sb_append_c(&sb, '\r'); break;
+      case 't': util_sb_append_c(&sb, '\t'); break;
+      case '\\': util_sb_append_c(&sb, '\\'); break;
+      case '"': util_sb_append_c(&sb, '"'); break;
+      default: util_sb_append_c(&sb, esc); break;
+    }
+  }
+
+done:
+  value = js_mkstr(js, sb.buf ? sb.buf : "", sb.len);
+  free(sb.buf);
+
+  while (*cursor < len && src[*cursor] != '\n') {
+    if (src[*cursor] == '#') break;
+    (*cursor)++;
+  }
+
+  return value;
+}
+
+static ant_value_t util_env_parse_unquoted_value(
+  ant_t *js, const char *src,
+  size_t len, size_t *cursor
+) {
+  size_t value_start = *cursor;
+  size_t value_end = *cursor;
+  bool saw_space = false;
+
+  while (*cursor < len && src[*cursor] != '\n' && src[*cursor] != '\r') {
+    if (src[*cursor] == '#') {
+      if (*cursor == value_start || saw_space) goto done;
+    }
+
+    saw_space = util_env_is_inline_ws(src[*cursor]);
+    (*cursor)++;
+    value_end = *cursor;
+  }
+
+done:
+  while (value_start < value_end && util_env_is_inline_ws(src[value_start])) {
+    value_start++;
+  }
+  while (value_end > value_start && util_env_is_inline_ws(src[value_end - 1])) {
+    value_end--;
+  }
+
+  return js_mkstr(js, src + value_start, value_end - value_start);
+}
+
+static ant_value_t util_parse_env(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t out = js_mkobj(js);
+  if (nargs < 1) return out;
+
+  char cbuf[512];
+  js_cstr_t cstr = js_to_cstr(js, args[0], cbuf, sizeof(cbuf));
+  const char *src = cstr.ptr;
+  size_t len = strlen(src);
+  size_t i = 0;
+
+  if (len >= 3 &&
+      (unsigned char)src[0] == 0xEF &&
+      (unsigned char)src[1] == 0xBB &&
+      (unsigned char)src[2] == 0xBF) {
+    i = 3;
+  }
+
+  while (i < len) {
+    size_t key_start = 0;
+    size_t key_end = 0;
+    ant_value_t value = js_mkstr(js, "", 0);
+
+    util_env_skip_inline_ws(src, len, &i);
+    if (i >= len) break;
+    if (src[i] == '\n') {
+      i++;
+      continue;
+    }
+    if (src[i] == '#') goto skip_line;
+
+    util_env_consume_export(src, len, &i);
+    if (!util_env_parse_key(src, len, &i, &key_start, &key_end)) goto skip_line;
+
+    util_env_skip_inline_ws(src, len, &i);
+    if (i >= len || src[i] != '=') goto skip_line;
+    i++;
+    util_env_skip_inline_ws(src, len, &i);
+
+    if (i < len && (src[i] == '"' || src[i] == '\'' || src[i] == '`')) {
+      value = util_env_parse_quoted_value(js, src, len, &i);
+    } else {
+      value = util_env_parse_unquoted_value(js, src, len, &i);
+    }
+
+    util_env_set_entry(js, out, src + key_start, key_end - key_start, value);
+
+skip_line:
+    util_env_skip_line(src, len, &i);
+  }
+
+  if (cstr.needs_free) free((void *)cstr.ptr);
+  return out;
+}
+
 static const util_style_entry_t *util_find_style(const char *name) {
   for (size_t i = 0; i < sizeof(util_styles) / sizeof(util_styles[0]); i++) {
     if (strcmp(name, util_styles[i].name) == 0) return &util_styles[i];
@@ -416,6 +608,26 @@ static ant_value_t util_promisify(ant_t *js, ant_value_t *args, int nargs) {
   return js_heavy_mkfun(js, util_promisified_call, args[0]);
 }
 
+static ant_value_t util_inherits(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 2 || !is_callable(args[0]) || !is_callable(args[1])) {
+    return js_mkerr(js, "inherits(ctor, superCtor) requires constructor functions");
+  }
+
+  ant_value_t ctor = args[0];
+  ant_value_t super_ctor = args[1];
+  ant_value_t ctor_proto = js_get(js, ctor, "prototype");
+  ant_value_t super_proto = js_get(js, super_ctor, "prototype");
+
+  if (!is_object_type(ctor_proto) || !is_object_type(super_proto)) {
+    return js_mkerr(js, "inherits(ctor, superCtor) requires prototype objects");
+  }
+
+  js_set(js, ctor, "super_", super_ctor);
+  js_set_proto_init(ctor_proto, super_proto);
+  
+  return js_mkundef();
+}
+
 ant_value_t util_library(ant_t *js) {
   ant_value_t lib = js_mkobj(js);
 
@@ -423,6 +635,8 @@ ant_value_t util_library(ant_t *js) {
   js_set(js, lib, "formatWithOptions", js_mkfun(util_format_with_options));
   js_set(js, lib, "inspect", js_mkfun(util_inspect));
   js_set(js, lib, "deprecate", js_mkfun(util_deprecate));
+  js_set(js, lib, "inherits", js_mkfun(util_inherits));
+  js_set(js, lib, "parseEnv", js_mkfun(util_parse_env));
   js_set(js, lib, "promisify", js_mkfun(util_promisify));
   js_set(js, lib, "stripVTControlCharacters", js_mkfun(util_strip_vt_control_characters));
   js_set(js, lib, "styleText", js_mkfun(util_style_text));

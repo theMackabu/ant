@@ -93,8 +93,8 @@ static bool g_default_auto_select_family = true;
 static double g_default_auto_select_family_attempt_timeout = 250.0;
 
 enum {
-  NET_SERVER_NATIVE_TAG = 0x4e455453u,
-  NET_SOCKET_NATIVE_TAG = 0x4e45544bu,
+  NET_SERVER_NATIVE_TAG = 0x4e455453u, // NETS
+  NET_SOCKET_NATIVE_TAG = 0x4e45544bu, // NETK
 };
 
 static ant_value_t net_not_implemented(ant_t *js, const char *what);
@@ -595,10 +595,6 @@ static bool net_server_parse_host(const char *input, const char **out) {
     *out = "0.0.0.0";
     return true;
   }
-  if (strcmp(input, "localhost") == 0) {
-    *out = "127.0.0.1";
-    return true;
-  }
   *out = input;
   return true;
 }
@@ -865,10 +861,48 @@ static ant_value_t js_net_server_address(ant_t *js, ant_value_t *args, int nargs
   if (!server || !server->listening) return out;
   if (server->path) return js_mkstr(js, server->path, strlen(server->path));
 
+  struct sockaddr_storage saddr;
+  int saddr_len = sizeof(saddr);
+  
+  if (uv_tcp_getsockname(&server->listener.handle.tcp, (struct sockaddr *)&saddr, &saddr_len) == 0) {
+    char addr_str[INET6_ADDRSTRLEN] = {0};
+    const char *family = "IPv4";
+    int port = server->port;
+
+    if (saddr.ss_family == AF_INET) {
+      struct sockaddr_in *sa = (struct sockaddr_in *)&saddr;
+      inet_ntop(AF_INET, &sa->sin_addr, addr_str, sizeof(addr_str));
+      port = ntohs(sa->sin_port);
+    } else if (saddr.ss_family == AF_INET6) {
+      struct sockaddr_in6 *sa6 = (struct sockaddr_in6 *)&saddr;
+      inet_ntop(AF_INET6, &sa6->sin6_addr, addr_str, sizeof(addr_str));
+      port = ntohs(sa6->sin6_port);
+      family = "IPv6";
+    }
+
+    out = js_mkobj(js);
+    js_set(js, out, "port", js_mknum((double)port));
+    js_set(js, out, "family", js_mkstr(js, family, strlen(family)));
+    js_set(js, out, "address", js_mkstr(js, addr_str, strlen(addr_str)));
+    
+    return out;
+  }
+
+  struct in6_addr addr6;
   out = js_mkobj(js);
   js_set(js, out, "port", js_mknum(server->port));
-  js_set(js, out, "family", js_mkstr(js, "IPv4", 4));
-  js_set(js, out, "address", js_mkstr(js, server->host, strlen(server->host)));
+  
+  if (server->host && inet_pton(AF_INET6, server->host, &addr6) == 1) {
+    char normalized[INET6_ADDRSTRLEN];
+    inet_ntop(AF_INET6, &addr6, normalized, sizeof(normalized));
+    js_set(js, out, "family", js_mkstr(js, "IPv6", 4));
+    js_set(js, out, "address", js_mkstr(js, normalized, strlen(normalized)));
+  } else {
+    const char *h = server->host ? server->host : "0.0.0.0";
+    js_set(js, out, "family", js_mkstr(js, "IPv4", 4));
+    js_set(js, out, "address", js_mkstr(js, h, strlen(h)));
+  }
+  
   return out;
 }
 
