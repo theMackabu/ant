@@ -92,6 +92,21 @@ static const uint32_t *bigint_limbs(ant_t *js, ant_value_t v, size_t *count) {
   return payload->limbs;
 }
 
+double bigint_to_double(ant_t *js, ant_value_t v) {
+  size_t count;
+  const uint32_t *limbs = bigint_limbs(js, v, &count);
+  if (limbs_is_zero(limbs, count)) return 0.0;
+
+  double result = 0.0;
+  double base = 1.0;
+  for (size_t i = 0; i < count; i++) {
+    result += (double)limbs[i] * base;
+    base *= (double)BIGINT_BASE;
+  }
+
+  return bigint_is_negative(js, v) ? -result : result;
+}
+
 static ant_value_t js_mkbigint_limbs(ant_t *js, const uint32_t *limbs, size_t count, bool negative) {
   uint32_t zero = 0;
 

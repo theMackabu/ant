@@ -2642,11 +2642,13 @@ static const char *get_func_code(ant_t *js, ant_value_t func_obj, ant_offset_t *
 }
 
 double js_to_number(ant_t *js, ant_value_t arg) {
-  if (vtype(arg) == T_NUM) return tod(arg);
-  if (vtype(arg) == T_BOOL) return vdata(arg) ? 1.0 : 0.0;
   if (vtype(arg) == T_NULL) return 0.0;
   if (vtype(arg) == T_UNDEF) return JS_NAN;
   
+  if (vtype(arg) == T_NUM) return tod(arg);
+  if (vtype(arg) == T_BOOL) return vdata(arg) ? 1.0 : 0.0;
+  if (vtype(arg) == T_BIGINT) return bigint_to_double(js, arg);
+
   if (vtype(arg) == T_STR) {
     ant_offset_t len, off = vstr(js, arg, &len);
     const char *s = (char *)(uintptr_t)(off), *end;
@@ -2656,7 +2658,7 @@ double js_to_number(ant_t *js, ant_value_t arg) {
     while (*end == ' ' || *end == '\t' || *end == '\n' || *end == '\r') end++;
     return (end == s || *end) ? JS_NAN : val;
   }
-  
+
   if (vtype(arg) == T_OBJ || vtype(arg) == T_ARR) {
     if (vtype(arg) == T_OBJ) {
       ant_value_t prim = js_call_valueOf(js, arg);
