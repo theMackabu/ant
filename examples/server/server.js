@@ -6,82 +6,78 @@ import { createRouter, addRoute, findRoute } from '../rou3';
 
 const router = createRouter();
 
-addRoute(router, 'GET', '/', c => c.res.body(`Welcome to Ant ${Ant.version}!`));
-
-addRoute(router, 'GET', '/meow', async c => {
-  const userAgent = c.req.header('User-Agent');
-  c.res.header('X-Ant', 'meow');
-  return c.res.body(`${meow}\n\n${userAgent}`);
+addRoute(router, 'GET', '/', () => {
+  return new Response(`Welcome to Ant ${Ant.version}!`);
 });
 
-addRoute(router, 'GET', '/echo', c => {
-  c.res.header('X-Ant', 'meow');
-  fetch('http://localhost:8000/meow')
-    .then(res => res.text())
-    .then(c.res.body);
+addRoute(router, 'GET', '/meow', req => {
+  const userAgent = req.headers.get('User-Agent');
+  return new Response(`${meow}\n\n${userAgent}`, {
+    headers: { 'X-Ant': 'meow' }
+  });
 });
 
-addRoute(router, 'GET', '/get/:id', c => {
-  c.res.body(decodeURIComponent(c.get(c.params.id)));
+addRoute(router, 'GET', '/echo', async () => {
+  const res = await fetch('http://localhost:8000/meow');
+  return new Response(await res.text(), {
+    headers: { 'X-Ant': 'meow' }
+  });
 });
 
-addRoute(router, 'GET', '/set/:id/**:val', c => {
-  c.set(c.params.id, c.params.val);
-  c.res.body(`${c.params.id} = ${c.params.val}`);
-});
-
-addRoute(router, 'GET', '/fs/meow', async c => {
+addRoute(router, 'GET', '/fs/meow', async () => {
   const file = await readFile(join(import.meta.dirname, 'meow.txt'));
-  return c.res.body(file || 'none');
+  return new Response(file || 'none');
 });
 
-addRoute(router, 'GET', '/hello', async c => {
-  return c.res.body('Hello, World!');
+addRoute(router, 'GET', '/hello', () => {
+  return new Response('Hello, World!');
 });
 
-addRoute(router, 'GET', '/status', async c => {
+addRoute(router, 'GET', '/status', async () => {
   await new Promise(resolve => setTimeout(resolve, 1000));
   const result = await Promise.resolve('Hello');
-  return c.res.body(`server is responding with ${result}`);
+  return new Response(`server is responding with ${result}`);
 });
 
-addRoute(router, 'POST', '/users/:id', async c => {
-  return c.res.body(`User ID: ${c.params.id}`);
+addRoute(router, 'POST', '/users/:id', (_req, params) => {
+  return new Response(`User ID: ${params.id}`);
 });
 
-addRoute(router, 'GET', '/users/:id/posts', async c => {
-  return c.res.body(`Posts for user: ${c.params.id}`);
+addRoute(router, 'GET', '/users/:id/posts', (_req, params) => {
+  return new Response(`Posts for user: ${params.id}`);
 });
 
-addRoute(router, 'GET', '/api/v1/users', async c => {
-  return c.res.json({ users: [] });
+addRoute(router, 'GET', '/api/v1/users', () => {
+  return Response.json({ users: [] });
 });
 
-addRoute(router, 'GET', '/zen', async c => {
+addRoute(router, 'GET', '/zen', async () => {
   const response = await fetch('https://api.github.com/zen');
-  return c.res.body(await response.text());
+  return new Response(await response.text());
 });
 
-addRoute(router, 'GET', '/api/v2/demo', async c => {
+addRoute(router, 'GET', '/api/v2/demo', async () => {
   const data = await fetch('https://themackabu.dev/test.json');
-  return c.res.json(await data.json());
+  return Response.json(await data.json());
 });
 
-addRoute(router, 'GET', '/files/**:path', async c => {
-  return c.res.html(html`<div>${c.params.path}</div>`);
+addRoute(router, 'GET', '/files/**:path', (_req, params) => {
+  return new Response(html`<div>${params.path}</div>`, {
+    headers: { 'Content-Type': 'text/html' }
+  });
 });
-
-async function handleRequest(c) {
-  console.log('request:', c.req.method, c.req.uri);
-  const result = findRoute(router, c.req.method, c.req.uri);
-
-  if (result?.data) {
-    c.params = result.params;
-    return await result.data(c);
-  }
-
-  c.res.body('not found: ' + c.req.uri, 404);
-}
 
 console.log('started on http://localhost:8000');
-Ant.serve(8000, handleRequest);
+
+export default {
+  port: 8000,
+  fetch(req) {
+    const url = new URL(req.url);
+
+    console.log('request:', req.method, url.pathname);
+    const result = findRoute(router, req.method, url.pathname);
+
+    if (result?.data) return result.data(req, result.params);
+    return new Response('not found: ' + url.pathname, { status: 404 });
+  }
+};
