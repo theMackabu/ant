@@ -1961,12 +1961,34 @@ export fn pkg_get_bin_path(
   out_path_len: usize,
 ) c_int {
   const nm_path = std.mem.span(node_modules_path);
-  const name = std.mem.span(bin_name);
+  const full = std.mem.span(bin_name);
+
+  const start: usize = if (full.len > 0 and full[0] == '@')
+    (std.mem.indexOfScalar(u8, full[1..], '/') orelse return -1) + 2
+  else 0;
+  const name, const constraint_str = if (std.mem.indexOfScalar(u8, full[start..], '@')) |i|
+    .{ full[0..start + i], full[start + i + 1..] }
+  else
+    .{ full, @as([]const u8, "") };
 
   var path_buf: [std.fs.max_path_bytes]u8 = undefined;
   const bin_path = std.fmt.bufPrint(&path_buf, "{s}/.bin/{s}", .{ nm_path, name }) catch return -1;
 
   std.fs.cwd().access(bin_path, .{}) catch return -1;
+
+  if (constraint_str.len > 0) {
+    const constraint = resolver.Constraint.parse(constraint_str) catch return -1;
+    if (constraint.kind != .any) {
+      var pkg_buf: [std.fs.max_path_bytes]u8 = undefined;
+      const pkg_path = std.fmt.bufPrint(&pkg_buf, "{s}/{s}/package.json", .{ nm_path, name }) catch return -1;
+      const pkg_path_z = pkg_buf[0..pkg_path.len :0];
+      var doc = json.JsonDoc.parseFile(pkg_path_z) catch return -1;
+      defer doc.deinit();
+      const version_str = doc.root().getString("version") orelse return -1;
+      const installed = resolver.Version.parse(version_str) catch return -1;
+      if (!constraint.satisfies(installed)) return -1;
+    }
+  }
 
   var real_path_buf: [std.fs.max_path_bytes]u8 = undefined;
   const real_path = std.fs.cwd().realpath(bin_path, &real_path_buf) catch return -1;
