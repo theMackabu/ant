@@ -233,7 +233,7 @@ static inline ant_value_t sv_execute_entry_common(
   if (!vm || !vm->js || !func) return mkval(T_ERR, 0);
   ant_t *js = vm->js;
   if (vm->fp + 1 >= vm->max_frames && !sv_vm_grow_frames(vm))
-    return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum AOT call stack size exceeded");
+    return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
 
   int saved_fp = vm->fp;
   vm->fp = saved_fp + 1;
@@ -788,7 +788,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
         }
         #endif
         if (vm->fp + 1 >= vm->max_frames && !sv_vm_grow_frames(vm)) {
-          sv_err = js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum AOT call stack size exceeded");
+          sv_err = js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
           goto sv_throw;
         }
         if (closure->func->is_arrow || vtype(closure->bound_this) != T_UNDEF) call_this = closure->bound_this;
@@ -911,7 +911,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
         }
         #endif
         if (vm->fp + 1 >= vm->max_frames && !sv_vm_grow_frames(vm)) {
-          sv_err = js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum AOT call stack size exceeded");
+          sv_err = js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
           goto sv_throw;
         }
         if (closure->func->is_arrow || vtype(closure->bound_this) != T_UNDEF)

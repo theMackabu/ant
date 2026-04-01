@@ -825,11 +825,23 @@ static inline ant_value_t sv_call_resolve_closure(
   return sv_call_closure(vm, js, closure, callee_func, ctx, out_this);
 }
 
+static inline bool sv_check_c_stack_overflow(ant_t *js) {
+  volatile char marker;
+  if (js->cstk.limit == 0 || js->cstk.base == NULL) return false;
+  uintptr_t base = (uintptr_t)js->cstk.base;
+  uintptr_t curr = (uintptr_t)&marker;
+  size_t used = (base > curr) ? (base - curr) : (curr - base);
+  return used > js->cstk.limit;
+}
+
 static inline ant_value_t sv_vm_call(
   sv_vm_t *vm, ant_t *js, ant_value_t func,
   ant_value_t this_val, ant_value_t *args, int argc,
   ant_value_t *out_this, bool is_construct_call
 ) {
+  if (sv_check_c_stack_overflow(js))
+    return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
+
   if (!is_construct_call) js->new_target = js_mkundef();
   if (out_this) *out_this = this_val;
 
