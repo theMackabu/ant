@@ -122,13 +122,11 @@ void gc_run_minor(ant_t *js) {
 
 void gc_maybe(ant_t *js) {
   if (__builtin_expect(gc_disabled, 0)) return;
-#ifdef ANT_JIT
-  if (__builtin_expect(js->jit_active_depth > 0, 0)) return;
-#endif
   if (++gc_tick < GC_MIN_TICK) return;
+  
   size_t live = js->obj_arena.live_count;
-
   size_t young_count = live > js->old_live_count ? live - js->old_live_count : 0;
+  
   if (young_count >= gc_nursery_threshold) {
     gc_tick = 0;
     gc_run_minor(js);

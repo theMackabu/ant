@@ -418,14 +418,10 @@ static ant_exotic_ops_t *obj_ensure_exotic_ops(ant_object_t *obj) {
 }
 
 static ant_object_t *obj_alloc(ant_t *js, uint8_t type_tag, uint8_t inobj_limit) {
-#ifdef ANT_JIT
-  if (__builtin_expect(js->jit_active_depth == 0, 1))
-#endif
-  {
-    size_t threshold = GC_HEAP_GROWTH(js->gc_last_live);
-    if (threshold < 2048) threshold = 2048;
-    if (js->obj_arena.live_count >= threshold) gc_run(js);
-  }
+  size_t threshold = GC_HEAP_GROWTH(js->gc_last_live);
+  
+  if (threshold < 2048) threshold = 2048;
+  if (js->obj_arena.live_count >= threshold) gc_run(js);
 
   ant_object_t *obj = (ant_object_t *)fixed_arena_alloc(&js->obj_arena);
   if (!obj) return NULL;
