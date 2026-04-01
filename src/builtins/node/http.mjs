@@ -235,6 +235,21 @@ export class ServerResponse extends EventEmitter {
     return this._headers[normalizeHeaderName(name)] !== undefined;
   }
 
+  appendHeader(name, value) {
+    const key = normalizeHeaderName(name);
+    const existing = this._headers[key];
+    if (existing === undefined) {
+      this._headers[key] = value;
+    } else if (Array.isArray(existing)) {
+      if (Array.isArray(value)) existing.push(...value);
+      else existing.push(value);
+    } else {
+      this._headers[key] = Array.isArray(value) ? [existing, ...value] : [existing, value];
+    }
+    if (!this._headerNames[key]) this._headerNames[key] = String(name);
+    return this;
+  }
+
   removeHeader(name) {
     const key = normalizeHeaderName(name);
     delete this._headers[key];
