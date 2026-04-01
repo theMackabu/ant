@@ -122,10 +122,10 @@ static inline void sv_op_copy_data_props(
   
   const char *key = NULL;
   size_t key_len = 0;
-  ant_value_t val = js_mkundef();
   ant_iter_t iter = js_prop_iter_begin(js, src);
   
-  while (js_prop_iter_next(&iter, &key, &key_len, &val)) {
+  while (js_prop_iter_next(&iter, &key, &key_len, NULL)) {
+    ant_value_t val = js_get(js, src, key);
     ant_value_t prop_key = js_mkstr(js, key, key_len);
     js_setprop(js, dst, prop_key, val);
   }

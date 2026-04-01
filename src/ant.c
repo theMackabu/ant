@@ -1510,6 +1510,21 @@ continue_object_print:;
       if (lookup_string_prop_meta(js, as_obj, key, (size_t)klen, &meta) && !meta.enumerable) continue;
     }
 
+    if (prop->has_getter || prop->has_setter) {
+      if (!first) n += cpy(buf + n, REMAIN(n, len), inline_mode ? ", " : ",\n", 2);
+      first = false;
+      if (!inline_mode) n += add_indent(buf + n, REMAIN(n, len), stringify_indent);
+      n += strkey_interned(js, key, (size_t)klen, buf + n, REMAIN(n, len));
+      n += cpy(buf + n, REMAIN(n, len), ": ", 2);
+      if (prop->has_getter && prop->has_setter)
+        n += cpy(buf + n, REMAIN(n, len), "[Getter/Setter]", 15);
+      else if (prop->has_getter)
+        n += cpy(buf + n, REMAIN(n, len), "[Getter]", 8);
+      else
+        n += cpy(buf + n, REMAIN(n, len), "[Setter]", 8);
+      continue;
+    }
+
     if (!first) n += cpy(buf + n, REMAIN(n, len), inline_mode ? ", " : ",\n", 2);
     first = false;
     if (!inline_mode) n += add_indent(buf + n, REMAIN(n, len), stringify_indent);
@@ -3139,22 +3154,27 @@ bool js_try_get_own_data_prop(ant_t *js, ant_value_t obj, const char *key, size_
   return false;
 }
 
+// TODO: decompose into smaller helpers
 ant_value_t js_setprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v) {
   uint8_t ot = vtype(obj);
 
-  if (ot == T_STR || ot == T_NUM || ot == T_BOOL) {
+  if (ot == T_STR || ot == T_NUM || ot == T_BOOL || ot == T_CFUNC) {
     ant_offset_t klen; ant_offset_t koff = vstr(js, k, &klen);
     const char *key = (char *)(uintptr_t)(koff);
-    ant_value_t proto = get_prototype_for_type(js, ot);
-    if (is_object_type(proto)) {
-      ant_value_t setter = js_mkundef();
-      bool has_setter = false;
-      lkp_with_setter(js, proto, key, klen, &setter, &has_setter);
-      if (has_setter && (vtype(setter) == T_FUNC || vtype(setter) == T_CFUNC)) {
-        call_proto_accessor(js, obj, setter, true, &v, 1, true);
-        return v;
+    
+    if (ot != T_CFUNC) {
+      ant_value_t proto = get_prototype_for_type(js, ot);
+      if (is_object_type(proto)) {
+        ant_value_t setter = js_mkundef();
+        bool has_setter = false;
+        lkp_with_setter(js, proto, key, klen, &setter, &has_setter);
+        if (has_setter && (vtype(setter) == T_FUNC || vtype(setter) == T_CFUNC)) {
+          call_proto_accessor(js, obj, setter, true, &v, 1, true);
+          return v;
+        }
       }
     }
+    
     if (sv_vm_is_strict(js->vm))
       return js_mkerr_typed(js, JS_ERR_TYPE,
         "Cannot create property '%.*s' on %s",
@@ -5761,8 +5781,16 @@ static ant_value_t builtin_object_defineProperty(ant_t *js, ant_value_t *args, i
   ant_value_t obj = args[0];
   ant_value_t prop = args[1];
   ant_value_t descriptor = args[2];
-  
   uint8_t t = vtype(obj);
+  
+  if (t == T_CFUNC) {
+    ant_value_t fn_obj = mkobj(js, 0);
+    set_slot(fn_obj, SLOT_CFUNC, obj);
+    obj = js_obj_to_func(fn_obj);
+    args[0] = obj;
+    t = T_FUNC;
+  }
+  
   if (t != T_OBJ && t != T_ARR && t != T_FUNC) {
     return js_mkerr(js, "Object.defineProperty called on non-object");
   }
