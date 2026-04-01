@@ -1077,6 +1077,37 @@ static void on_unlink_complete(uv_fs_t *uv_req) {
   complete_request(req);
 }
 
+static int mkdirp(const char *path, mode_t mode) {
+  int result = -1;
+  char *tmp = strdup(path);
+  if (!tmp) goto done;
+
+  size_t len = strlen(tmp);
+  if (len > 0 && tmp[len - 1] == '/') tmp[len - 1] = '\0';
+
+  for (char *p = tmp + 1; *p; p++) {
+    if (*p != '/') continue;
+    *p = '\0';
+#ifdef _WIN32
+    _mkdir(tmp);
+#else
+    mkdir(tmp, mode);
+#endif
+    *p = '/';
+  }
+
+#ifdef _WIN32
+  result = _mkdir(tmp);
+#else
+  result = mkdir(tmp, mode);
+#endif
+  if (result != 0 && errno == EEXIST) result = 0;
+
+  free(tmp);
+done:
+  return result;
+}
+
 static void on_mkdir_complete(uv_fs_t *uv_req) {
   fs_request_t *req = (fs_request_t *)uv_req->data;
   
@@ -1733,18 +1764,20 @@ do_mkdir:
   char *path_cstr = strndup(path, path_len);
   if (!path_cstr) return js_mkerr(js, "Out of memory");
   
+  int result;
+  if (recursive) {
+    result = mkdirp(path_cstr, (mode_t)mode);
+  } else {
 #ifdef _WIN32
-  (void)mode;
-  int result = _mkdir(path_cstr);
+    (void)mode;
+    result = _mkdir(path_cstr);
 #else
-  int result = mkdir(path_cstr, (mode_t)mode);
+    result = mkdir(path_cstr, (mode_t)mode);
 #endif
+  }
   free(path_cstr);
   
   if (result != 0) {
-    if (recursive && errno == EEXIST) {
-      return js_mkundef();
-    }
     char err_msg[256];
     snprintf(err_msg, sizeof(err_msg), "Failed to create directory: %s", strerror(errno));
     return js_mkerr(js, "%s", err_msg);
@@ -1779,9 +1812,24 @@ static ant_value_t builtin_fs_mkdir(ant_t *js, ant_value_t *args, int nargs) {
     }
   }
 
+  if (recursive) {
+    ant_value_t promise = js_mkpromise(js);
+    char *path_cstr = strndup(path, path_len);
+    
+    if (!path_cstr) return js_mkerr(js, "Out of memory");
+    int result = mkdirp(path_cstr, (mode_t)mode);
+    
+    free(path_cstr);
+    if (result != 0) {
+      js_reject_promise(js, promise, js_mkerr(js, "Failed to create directory: %s", strerror(errno)));
+    } else js_resolve_promise(js, promise, js_mkundef());
+    
+    return promise;
+  }
+
   fs_request_t *req = calloc(1, sizeof(fs_request_t));
   if (!req) return js_mkerr(js, "Out of memory");
-  
+
   req->js = js;
   req->op_type = FS_OP_MKDIR;
   req->promise = js_mkpromise(js);
@@ -1793,14 +1841,9 @@ static ant_value_t builtin_fs_mkdir(ant_t *js, ant_value_t *args, int nargs) {
   int result = uv_fs_mkdir(uv_default_loop(), &req->uv_req, req->path, mode, on_mkdir_complete);
   
   if (result < 0) {
-    if (recursive && result == UV_EEXIST) {
-      req->completed = 1;
-      complete_request(req);
-    } else {
-      fs_request_fail(req, result);
-      req->completed = 1;
-      complete_request(req);
-    }
+    fs_request_fail(req, result);
+    req->completed = 1;
+    complete_request(req);
   }
   
   return req->promise;
