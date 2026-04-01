@@ -332,11 +332,18 @@ static char* normalize_path_full(path_style_t style, const char *path, size_t pa
   }
   
   if (pos == 0) result[pos++] = '.';
-  result[pos] = '\0';
+  if (path_len > root_len && path_is_sep(style, path[path_len - 1])
+      && pos > 0 && !path_is_sep(style, result[pos - 1])) {
+    result = realloc(result, pos + 2);
+    if (!result) goto fail;
+    result[pos++] = sep;
+  }
   
+  result[pos] = '\0';
   free(segments);
   free(seg_lens);
   free(normalized);
+  
   return result;
 
 fail:
@@ -413,7 +420,7 @@ static ant_value_t builtin_path_join(ant_t *js, ant_value_t *args, int nargs) {
     if (i > 0 && path_is_sep(style, segments[i][0])) start = 1;
     
     size_t seg_len = lengths[i];
-    while (seg_len > start && path_is_sep(style, segments[i][seg_len - 1])) seg_len--;
+    while (seg_len > start + 1 && path_is_sep(style, segments[i][seg_len - 1])) seg_len--;
     
     if (seg_len > start) {
       memcpy(result + pos, segments[i] + start, seg_len - start);
@@ -421,17 +428,23 @@ static ant_value_t builtin_path_join(ant_t *js, ant_value_t *args, int nargs) {
     }
   }
   
-  result[pos] = '\0';
+  if (
+    valid_segments > 0 && lengths[valid_segments - 1] > 0
+    && path_is_sep(style, segments[valid_segments - 1][lengths[valid_segments - 1] - 1])
+    && pos > 0 && !path_is_sep(style, result[pos - 1]) 
+  ) result[pos++] = sep;
   
+  result[pos] = '\0';
   char *normalized = normalize_path_full(style, result, pos);
+
   free(result);
   free(segments);
   free(lengths);
   
   if (!normalized) return js_mkerr(js, "Out of memory");
-  
   ant_value_t ret = js_mkstr(js, normalized, strlen(normalized));
   free(normalized);
+  
   return ret;
 }
 
