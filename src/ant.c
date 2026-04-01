@@ -5252,8 +5252,7 @@ static ant_value_t builtin_object_is(ant_t *js, ant_value_t *args, int nargs) {
 enum obj_enum_mode { 
   OBJ_ENUM_KEYS,
   OBJ_ENUM_VALUES,
-  OBJ_ENUM_ENTRIES,
-  OBJ_ENUM_KEYS_ALL
+  OBJ_ENUM_ENTRIES
 };
 
 static ant_value_t map_to_entry(ant_t *js, ant_value_t key, ant_value_t val) {
@@ -5290,7 +5289,7 @@ static ant_value_t object_enum(ant_t *js, ant_value_t obj, enum obj_enum_mode mo
       char idxstr[16]; size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)i);
       ant_value_t key_val = js_mkstr(js, idxstr, idxlen);
       
-      if (mode == OBJ_ENUM_KEYS || mode == OBJ_ENUM_KEYS_ALL) arr_set(js, arr, idx, key_val);
+      if (mode == OBJ_ENUM_KEYS) arr_set(js, arr, idx, key_val);
       else if (mode == OBJ_ENUM_VALUES) arr_set(js, arr, idx, v);
       else arr_set(js, arr, idx, map_to_entry(js, key_val, v));
       
@@ -5310,25 +5309,22 @@ static ant_value_t object_enum(ant_t *js, ant_value_t obj, enum obj_enum_mode mo
 
     if (is_internal_prop(key, klen)) continue;
     if (is_arr && is_array_index(key, klen)) {
-      ant_offset_t doff = get_dense_buf(obj);
-      if (doff) {
-        unsigned long pidx = 0;
-        for (ant_offset_t ci = 0; ci < klen; ci++) pidx = pidx * 10 + (key[ci] - '0');
-        if (pidx < dense_iterable_length(js, obj)) continue;
-      }
+    ant_offset_t doff = get_dense_buf(obj);
+    if (doff) {
+      unsigned long pidx = 0;
+      for (ant_offset_t ci = 0; ci < klen; ci++) pidx = pidx * 10 + (key[ci] - '0');
+      if (pidx < dense_iterable_length(js, obj)) continue;
+    }}
+    
+    bool should_include = (ant_shape_get_attrs(ptr->shape, i) & ANT_PROP_ATTR_ENUMERABLE) != 0;
+    if (should_include && ptr->is_exotic) {
+      descriptor_entry_t *desc = lookup_descriptor(js_as_obj(obj), key, (size_t)klen);
+      if (desc) should_include = desc->enumerable;
     }
-
-    if (mode != OBJ_ENUM_KEYS_ALL) {
-      bool should_include = (ant_shape_get_attrs(ptr->shape, i) & ANT_PROP_ATTR_ENUMERABLE) != 0;
-      if (should_include && ptr->is_exotic) {
-        descriptor_entry_t *desc = lookup_descriptor(js_as_obj(obj), key, (size_t)klen);
-        if (desc) should_include = desc->enumerable;
-      }
-      if (!should_include) continue;
-    }
+    if (!should_include) continue;
 
     ant_value_t key_val = js_mkstr(js, key, (size_t)klen);
-    if (mode == OBJ_ENUM_KEYS || mode == OBJ_ENUM_KEYS_ALL) arr_set(js, arr, idx, key_val);
+    if (mode == OBJ_ENUM_KEYS) arr_set(js, arr, idx, key_val);
     else if (mode == OBJ_ENUM_VALUES) arr_set(js, arr, idx, val);
     else arr_set(js, arr, idx, map_to_entry(js, key_val, val));
     
@@ -5439,32 +5435,87 @@ static inline ant_value_t for_in_keys_collect_chain(
 
   for (int depth = 0; is_object_type(cur) && depth < MAX_PROTO_CHAIN_DEPTH; depth++) {
     GC_ROOT_SAVE(iter_mark, js);
-    ant_value_t all_keys = object_enum(js, cur, OBJ_ENUM_KEYS_ALL);
-    GC_ROOT_PIN(js, all_keys);
-    
-    if (is_err(all_keys)) { GC_ROOT_RESTORE(js, iter_mark); return all_keys; }
-    if (vtype(all_keys) != T_ARR) goto next;
-    
-    ant_offset_t len = js_arr_len(js, all_keys);
-    for (ant_offset_t i = 0; i < len; i++) {
-      ant_value_t key = js_arr_get(js, all_keys, i);
+    ant_value_t as_cur = (vtype(cur) == T_FUNC) ? js_func_obj(cur) : cur;
+    ant_object_t *cur_ptr = js_obj_ptr(as_cur);
+    ant_value_t key, r, proto;
+    ant_offset_t doff, dense_len, klen;
+    bool is_arr;
+
+    if (!cur_ptr) goto next_proto;
+    if (!cur_ptr->is_exotic || !cur_ptr->exotic_keys) goto shape_props;
+
+    {
+      ant_value_t ekeys = cur_ptr->exotic_keys(js, as_cur);
+      GC_ROOT_PIN(js, ekeys);
+      if (vtype(ekeys) != T_ARR) goto next_proto;
+      ant_offset_t elen = js_arr_len(js, ekeys);
+      for (ant_offset_t i = 0; i < elen; i++) {
+        key = js_arr_get(js, ekeys, i);
+        GC_ROOT_PIN(js, key);
+        r = for_in_keys_add(js, out, seen, key);
+        if (is_err(r)) goto err;
+      }
+    }
+    goto next_proto;
+
+shape_props:
+    if (!cur_ptr->shape) goto next_proto;
+    is_arr = (vtype(as_cur) == T_ARR);
+    if (!is_arr) goto shape_iter;
+
+    doff = get_dense_buf(as_cur);
+    dense_len = doff ? dense_iterable_length(js, as_cur) : 0;
+    for (ant_offset_t i = 0; i < dense_len; i++) {
+      if (is_empty_slot(dense_get(doff, i))) continue;
+      char idxstr[16];
+      size_t idxlen = uint_to_str(idxstr, sizeof(idxstr), (unsigned)i);
+      key = js_mkstr(js, idxstr, idxlen);
       GC_ROOT_PIN(js, key);
-      
-      prop_meta_t meta;
-      ant_offset_t klen = 0;
-      const char *kptr = (const char *)(uintptr_t)vstr(js, key, &klen);
-      bool enumerable = lookup_string_prop_meta(js, cur, kptr, klen, &meta) && meta.enumerable;
-      
-      ant_value_t r = for_in_keys_add(js, enumerable ? out : js_mkundef(), seen, key);
-      if (is_err(r)) { GC_ROOT_RESTORE(js, iter_mark); return r; }
+      r = for_in_keys_add(js, out, seen, key);
+      if (is_err(r)) goto err;
     }
 
-next:
+shape_iter:
+    for (uint32_t i = 0; i < ant_shape_count(cur_ptr->shape); i++) {
+      const ant_shape_prop_t *prop = ant_shape_prop_at(cur_ptr->shape, i);
+      if (!prop || prop->type == ANT_SHAPE_KEY_SYMBOL) continue;
+      if (i >= cur_ptr->prop_count) continue;
+
+      const char *kstr = prop->key.interned;
+      klen = (ant_offset_t)strlen(kstr);
+      if (is_internal_prop(kstr, klen)) continue;
+
+      if (is_arr && is_array_index(kstr, klen)) {
+      doff = get_dense_buf(as_cur);
+      if (doff) {
+        unsigned long pidx = 0;
+        for (ant_offset_t ci = 0; ci < klen; ci++) pidx = pidx * 10 + (kstr[ci] - '0');
+        if (pidx < (unsigned long)dense_iterable_length(js, as_cur)) continue;
+      }}
+
+      bool enumerable = (ant_shape_get_attrs(cur_ptr->shape, i) & ANT_PROP_ATTR_ENUMERABLE) != 0;
+      if (cur_ptr->is_exotic) {
+        descriptor_entry_t *desc = lookup_descriptor(js_as_obj(as_cur), kstr, (size_t)klen);
+        if (desc) enumerable = desc->enumerable;
+      }
+
+      key = js_mkstr(js, kstr, (size_t)klen);
+      GC_ROOT_PIN(js, key);
+      r = for_in_keys_add(js, enumerable ? out : js_mkundef(), seen, key);
+      if (is_err(r)) goto err;
+    }
+
+next_proto:
     GC_ROOT_RESTORE(js, iter_mark);
-    ant_value_t proto = js_get_proto(js, cur);
+    proto = js_get_proto(js, cur);
     if (!is_object_type(proto)) break;
     cur = proto;
+    continue;
+err:
+    GC_ROOT_RESTORE(js, iter_mark);
+    return r;
   }
+
   return out;
 }
 
