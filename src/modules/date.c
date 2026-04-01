@@ -806,10 +806,14 @@ static ant_value_t builtin_Date(ant_t *js, ant_value_t *args, int nargs) {
 
   if (vtype(js->new_target) == T_UNDEF) {
     val = (double)date_now();
+    
     ant_value_t tmp = js_mkobj(js);
     ant_value_t date_proto = js_get_ctor_proto(js, "Date", 4);
     if (is_object_type(date_proto)) js_set_proto_init(tmp, date_proto);
+    
     js_set_slot(tmp, SLOT_DATA, tov(val));
+    js_set_slot(tmp, SLOT_BRAND, js_mknum(BRAND_DATE));
+    
     return get_date_string(js, tmp, kDateToStringSpec);
   }
 
