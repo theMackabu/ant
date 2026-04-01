@@ -1703,24 +1703,21 @@ static ant_value_t builtin_string_match(ant_t *js, ant_value_t *args, int nargs)
 
     ant_offset_t flags_off = lkp(js, pattern, "flags", 5);
     if (flags_off != 0) {
-      ant_value_t flags_val = js_propref_load(js, flags_off);
-      if (vtype(flags_val) == T_STR) {
-        ant_offset_t flen, foff = vstr(js, flags_val, &flen);
-        const char *flags_str = (char *)(uintptr_t)(foff);
-        for (ant_offset_t i = 0; i < flen; i++) {
-          if (flags_str[i] == 'g') global_flag = true;
-          if (flags_str[i] == 'i') ignore_case = true;
-          if (flags_str[i] == 'm') multiline = true;
-        }
-      }
+    ant_value_t flags_val = js_propref_load(js, flags_off);
+    if (vtype(flags_val) == T_STR) {
+      ant_offset_t flen, foff = vstr(js, flags_val, &flen);
+      const char *flags_str = (char *)(uintptr_t)(foff);
+      for (ant_offset_t i = 0; i < flen; i++) {
+        if (flags_str[i] == 'g') global_flag = true;
+        if (flags_str[i] == 'i') ignore_case = true;
+        if (flags_str[i] == 'm') multiline = true;
+      }}
     }
   } else if (vtype(pattern) == T_STR) {
     ant_offset_t poff;
     poff = vstr(js, pattern, &pattern_len);
     pattern_ptr = (char *)(uintptr_t)(poff);
-  } else {
-    return js_mknull();
-  }
+  } else return js_mknull();
 
   ant_offset_t str_len, str_off = vstr(js, str, &str_len);
   const char *str_ptr = (char *)(uintptr_t)(str_off);
@@ -1745,9 +1742,10 @@ void init_regex_module(void) {
 
   ant_value_t regexp_proto = js_mkobj(js);
   js_set_proto_init(regexp_proto, object_proto);
-  js_setprop(js, regexp_proto, js_mkstr(js, "test", 4), js_mkfun(builtin_regexp_test));
-  js_setprop(js, regexp_proto, js_mkstr(js, "exec", 4), js_mkfun(builtin_regexp_exec));
-  js_setprop(js, regexp_proto, js_mkstr(js, "toString", 8), js_mkfun(builtin_regexp_toString));
+  
+  defmethod(js, regexp_proto, "test", 4, js_mkfun(builtin_regexp_test));
+  defmethod(js, regexp_proto, "exec", 4, js_mkfun(builtin_regexp_exec));
+  defmethod(js, regexp_proto, "toString", 8, js_mkfun(builtin_regexp_toString));
 
   js_mkprop_fast(js, regexp_proto, "global", 6, js_false);
   js_mkprop_fast(js, regexp_proto, "ignoreCase", 10, js_false);
@@ -1764,7 +1762,7 @@ void init_regex_module(void) {
   js_set_sym(js, regexp_proto, get_search_sym(), js_mkfun(builtin_regexp_symbol_search));
   js_set_sym(js, regexp_proto, get_toStringTag_sym(), js_mkstr(js, "RegExp", 6));
   js_set_getter_desc(js, regexp_proto, "flags", 5, js_mkfun(builtin_regexp_flags_getter), JS_DESC_C);
-  js_setprop(js, regexp_proto, js_mkstr(js, "compile", 7), js_mkfun(builtin_regexp_compile));
+  defmethod(js, regexp_proto, "compile", 7, js_mkfun(builtin_regexp_compile));
 
   ant_value_t regexp_ctor = js_mkobj(js);
   js_set_slot(regexp_ctor, SLOT_CFUNC, js_mkfun(builtin_RegExp));
@@ -1784,17 +1782,18 @@ void init_regex_module(void) {
     char key[3] = {'$', (char)('0' + i), '\0'};
     js_set(js, regexp_ctor, key, empty);
   }
+  
   js_set(js, regexp_ctor, "lastMatch", empty);
   js_set(js, regexp_ctor, "$&", empty);
-
   js_set(js, glob, "RegExp", regexp_func);
 
   ant_value_t string_ctor = js_get(js, glob, "String");
   ant_value_t string_proto = js_get(js, string_ctor, "prototype");
-  js_setprop(js, string_proto, js_mkstr(js, "search", 6), js_mkfun(builtin_string_search));
-  js_setprop(js, string_proto, js_mkstr(js, "match", 5), js_mkfun(builtin_string_match));
-  js_setprop(js, string_proto, js_mkstr(js, "replace", 7), js_mkfun(builtin_string_replace));
-  js_setprop(js, string_proto, js_mkstr(js, "replaceAll", 10), js_mkfun(builtin_string_replaceAll));
+  
+  defmethod(js, string_proto, "search", 6, js_mkfun(builtin_string_search));
+  defmethod(js, string_proto, "match", 5, js_mkfun(builtin_string_match));
+  defmethod(js, string_proto, "replace", 7, js_mkfun(builtin_string_replace));
+  defmethod(js, string_proto, "replaceAll", 10, js_mkfun(builtin_string_replaceAll));
 }
 
 void gc_sweep_regex_cache(void) {

@@ -1476,7 +1476,7 @@ void init_bigint_module(void) {
 
   ant_value_t bigint_proto = js_mkobj(js);
   js_set_proto_init(bigint_proto, object_proto);
-  js_setprop(js, bigint_proto, js_mkstr(js, "toString", 8), js_mkfun(builtin_bigint_toString));
+  defmethod(js, bigint_proto, "toString", 8, js_mkfun(builtin_bigint_toString));
 
   ant_value_t bigint_ctor_obj = mkobj(js, 0);
   js_set_proto_init(bigint_ctor_obj, function_proto);

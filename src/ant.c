@@ -12361,23 +12361,12 @@ ant_t *js_create(void *buf, size_t len) {
   ant_value_t object_proto = js_mkobj(js);
   set_proto(js, object_proto, js_mknull());
   
-  js_setprop(js, object_proto, js_mkstr(js, "toString", 8), js_mkfun(builtin_object_toString));
-  js_set_descriptor(js, object_proto, "toString", 8, JS_DESC_W | JS_DESC_C);
-  
-  js_setprop(js, object_proto, js_mkstr(js, "valueOf", 7), js_mkfun(builtin_object_valueOf));
-  js_set_descriptor(js, object_proto, "valueOf", 7, JS_DESC_W | JS_DESC_C);
-  
-  js_setprop(js, object_proto, js_mkstr(js, "toLocaleString", 14), js_mkfun(builtin_object_toLocaleString));
-  js_set_descriptor(js, object_proto, "toLocaleString", 14, JS_DESC_W | JS_DESC_C);
-  
-  js_setprop(js, object_proto, js_mkstr(js, "hasOwnProperty", 14), js_mkfun(builtin_object_hasOwnProperty));
-  js_set_descriptor(js, object_proto, "hasOwnProperty", 14, JS_DESC_W | JS_DESC_C);
-  
-  js_setprop(js, object_proto, js_mkstr(js, "isPrototypeOf", 13), js_mkfun(builtin_object_isPrototypeOf));
-  js_set_descriptor(js, object_proto, "isPrototypeOf", 13, JS_DESC_W | JS_DESC_C);
-  
-  js_setprop(js, object_proto, js_mkstr(js, "propertyIsEnumerable", 20), js_mkfun(builtin_object_propertyIsEnumerable));
-  js_set_descriptor(js, object_proto, "propertyIsEnumerable", 20, JS_DESC_W | JS_DESC_C);
+  defmethod(js, object_proto, "toString", 8, js_mkfun(builtin_object_toString));
+  defmethod(js, object_proto, "valueOf", 7, js_mkfun(builtin_object_valueOf));
+  defmethod(js, object_proto, "toLocaleString", 14, js_mkfun(builtin_object_toLocaleString));
+  defmethod(js, object_proto, "hasOwnProperty", 14, js_mkfun(builtin_object_hasOwnProperty));
+  defmethod(js, object_proto, "isPrototypeOf", 13, js_mkfun(builtin_object_isPrototypeOf));
+  defmethod(js, object_proto, "propertyIsEnumerable", 20, js_mkfun(builtin_object_propertyIsEnumerable));
   
   ant_value_t proto_getter = js_mkfun(builtin_proto_getter);
   ant_value_t proto_setter = js_mkfun(builtin_proto_setter);
@@ -12386,105 +12375,112 @@ ant_t *js_create(void *buf, size_t len) {
   ant_value_t function_proto_obj = js_mkobj(js);
   set_proto(js, function_proto_obj, object_proto);
   set_slot(function_proto_obj, SLOT_CFUNC, js_mkfun(builtin_function_empty));
-  js_setprop(js, function_proto_obj, ANT_STRING("call"), js_mkfun(builtin_function_call));
-  js_setprop(js, function_proto_obj, ANT_STRING("apply"), js_mkfun(builtin_function_apply));
-  js_setprop(js, function_proto_obj, ANT_STRING("bind"), js_mkfun(builtin_function_bind));
-  js_setprop(js, function_proto_obj, ANT_STRING("toString"), js_mkfun(builtin_function_toString));
+  
+  defmethod(js, function_proto_obj, "call", 4, js_mkfun(builtin_function_call));
+  defmethod(js, function_proto_obj, "apply", 5, js_mkfun(builtin_function_apply));
+  defmethod(js, function_proto_obj, "bind", 4, js_mkfun(builtin_function_bind));
+  defmethod(js, function_proto_obj, "toString", 8, js_mkfun(builtin_function_toString));
+  
   ant_value_t function_proto = js_obj_to_func(function_proto_obj);
   set_slot(glob, SLOT_FUNC_PROTO, function_proto);
   
   ant_value_t array_proto = js_mkobj(js);
   set_proto(js, array_proto, object_proto);
-  js_setprop(js, array_proto, js_mkstr(js, "push", 4), js_mkfun(builtin_array_push));
-  js_setprop(js, array_proto, js_mkstr(js, "pop", 3), js_mkfun(builtin_array_pop));
-  js_setprop(js, array_proto, js_mkstr(js, "slice", 5), js_mkfun(builtin_array_slice));
-  js_setprop(js, array_proto, js_mkstr(js, "join", 4), js_mkfun(builtin_array_join));
-  js_setprop(js, array_proto, js_mkstr(js, "includes", 8), js_mkfun(builtin_array_includes));
-  js_setprop(js, array_proto, js_mkstr(js, "every", 5), js_mkfun(builtin_array_every));
-  js_setprop(js, array_proto, js_mkstr(js, "reverse", 7), js_mkfun(builtin_array_reverse));
-  js_setprop(js, array_proto, js_mkstr(js, "map", 3), js_mkfun(builtin_array_map));
-  js_setprop(js, array_proto, js_mkstr(js, "filter", 6), js_mkfun(builtin_array_filter));
-  js_setprop(js, array_proto, js_mkstr(js, "reduce", 6), js_mkfun(builtin_array_reduce));
-  js_setprop(js, array_proto, js_mkstr(js, "flat", 4), js_mkfun(builtin_array_flat));
-  js_setprop(js, array_proto, js_mkstr(js, "concat", 6), js_mkfun(builtin_array_concat));
-  js_setprop(js, array_proto, js_mkstr(js, "at", 2), js_mkfun(builtin_array_at));
-  js_setprop(js, array_proto, js_mkstr(js, "fill", 4), js_mkfun(builtin_array_fill));
-  js_setprop(js, array_proto, js_mkstr(js, "find", 4), js_mkfun(builtin_array_find));
-  js_setprop(js, array_proto, js_mkstr(js, "findIndex", 9), js_mkfun(builtin_array_findIndex));
-  js_setprop(js, array_proto, js_mkstr(js, "findLast", 8), js_mkfun(builtin_array_findLast));
-  js_setprop(js, array_proto, js_mkstr(js, "findLastIndex", 13), js_mkfun(builtin_array_findLastIndex));
-  js_setprop(js, array_proto, js_mkstr(js, "flatMap", 7), js_mkfun(builtin_array_flatMap));
-  js_setprop(js, array_proto, js_mkstr(js, "forEach", 7), js_mkfun(builtin_array_forEach));
-  js_setprop(js, array_proto, js_mkstr(js, "indexOf", 7), js_mkfun(builtin_array_indexOf));
-  js_setprop(js, array_proto, js_mkstr(js, "lastIndexOf", 11), js_mkfun(builtin_array_lastIndexOf));
-  js_setprop(js, array_proto, js_mkstr(js, "reduceRight", 11), js_mkfun(builtin_array_reduceRight));
-  js_setprop(js, array_proto, js_mkstr(js, "shift", 5), js_mkfun(builtin_array_shift));
-  js_setprop(js, array_proto, js_mkstr(js, "unshift", 7), js_mkfun(builtin_array_unshift));
-  js_setprop(js, array_proto, js_mkstr(js, "some", 4), js_mkfun(builtin_array_some));
-  js_setprop(js, array_proto, js_mkstr(js, "sort", 4), js_mkfun(builtin_array_sort));
-  js_setprop(js, array_proto, js_mkstr(js, "splice", 6), js_mkfun(builtin_array_splice));
-  js_setprop(js, array_proto, js_mkstr(js, "copyWithin", 10), js_mkfun(builtin_array_copyWithin));
-  js_setprop(js, array_proto, js_mkstr(js, "toReversed", 10), js_mkfun(builtin_array_toReversed));
-  js_setprop(js, array_proto, js_mkstr(js, "toSorted", 8), js_mkfun(builtin_array_toSorted));
-  js_setprop(js, array_proto, js_mkstr(js, "toSpliced", 9), js_mkfun(builtin_array_toSpliced));
-  js_setprop(js, array_proto, js_mkstr(js, "with", 4), js_mkfun(builtin_array_with));
-  js_setprop(js, array_proto, js_mkstr(js, "keys", 4), js_mkfun(builtin_array_keys));
-  js_setprop(js, array_proto, js_mkstr(js, "values", 6), js_mkfun(builtin_array_values));
-  js_setprop(js, array_proto, js_mkstr(js, "entries", 7), js_mkfun(builtin_array_entries));
-  js_setprop(js, array_proto, js_mkstr(js, "toString", 8), js_mkfun(builtin_array_toString));
-  js_setprop(js, array_proto, js_mkstr(js, "toLocaleString", 14), js_mkfun(builtin_array_toLocaleString));
+  
+  defmethod(js, array_proto, "push", 4, js_mkfun(builtin_array_push));
+  defmethod(js, array_proto, "pop", 3, js_mkfun(builtin_array_pop));
+  defmethod(js, array_proto, "slice", 5, js_mkfun(builtin_array_slice));
+  defmethod(js, array_proto, "join", 4, js_mkfun(builtin_array_join));
+  defmethod(js, array_proto, "includes", 8, js_mkfun(builtin_array_includes));
+  defmethod(js, array_proto, "every", 5, js_mkfun(builtin_array_every));
+  defmethod(js, array_proto, "reverse", 7, js_mkfun(builtin_array_reverse));
+  defmethod(js, array_proto, "map", 3, js_mkfun(builtin_array_map));
+  defmethod(js, array_proto, "filter", 6, js_mkfun(builtin_array_filter));
+  defmethod(js, array_proto, "reduce", 6, js_mkfun(builtin_array_reduce));
+  defmethod(js, array_proto, "flat", 4, js_mkfun(builtin_array_flat));
+  defmethod(js, array_proto, "concat", 6, js_mkfun(builtin_array_concat));
+  defmethod(js, array_proto, "at", 2, js_mkfun(builtin_array_at));
+  defmethod(js, array_proto, "fill", 4, js_mkfun(builtin_array_fill));
+  defmethod(js, array_proto, "find", 4, js_mkfun(builtin_array_find));
+  defmethod(js, array_proto, "findIndex", 9, js_mkfun(builtin_array_findIndex));
+  defmethod(js, array_proto, "findLast", 8, js_mkfun(builtin_array_findLast));
+  defmethod(js, array_proto, "findLastIndex", 13, js_mkfun(builtin_array_findLastIndex));
+  defmethod(js, array_proto, "flatMap", 7, js_mkfun(builtin_array_flatMap));
+  defmethod(js, array_proto, "forEach", 7, js_mkfun(builtin_array_forEach));
+  defmethod(js, array_proto, "indexOf", 7, js_mkfun(builtin_array_indexOf));
+  defmethod(js, array_proto, "lastIndexOf", 11, js_mkfun(builtin_array_lastIndexOf));
+  defmethod(js, array_proto, "reduceRight", 11, js_mkfun(builtin_array_reduceRight));
+  defmethod(js, array_proto, "shift", 5, js_mkfun(builtin_array_shift));
+  defmethod(js, array_proto, "unshift", 7, js_mkfun(builtin_array_unshift));
+  defmethod(js, array_proto, "some", 4, js_mkfun(builtin_array_some));
+  defmethod(js, array_proto, "sort", 4, js_mkfun(builtin_array_sort));
+  defmethod(js, array_proto, "splice", 6, js_mkfun(builtin_array_splice));
+  defmethod(js, array_proto, "copyWithin", 10, js_mkfun(builtin_array_copyWithin));
+  defmethod(js, array_proto, "toReversed", 10, js_mkfun(builtin_array_toReversed));
+  defmethod(js, array_proto, "toSorted", 8, js_mkfun(builtin_array_toSorted));
+  defmethod(js, array_proto, "toSpliced", 9, js_mkfun(builtin_array_toSpliced));
+  defmethod(js, array_proto, "with", 4, js_mkfun(builtin_array_with));
+  defmethod(js, array_proto, "keys", 4, js_mkfun(builtin_array_keys));
+  defmethod(js, array_proto, "values", 6, js_mkfun(builtin_array_values));
+  defmethod(js, array_proto, "entries", 7, js_mkfun(builtin_array_entries));
+  defmethod(js, array_proto, "toString", 8, js_mkfun(builtin_array_toString));
+  defmethod(js, array_proto, "toLocaleString", 14, js_mkfun(builtin_array_toLocaleString));
   
   ant_value_t string_proto = js_mkobj(js);
   set_proto(js, string_proto, object_proto);
-  js_setprop(js, string_proto, js_mkstr(js, "indexOf", 7), js_mkfun(builtin_string_indexOf));
-  js_setprop(js, string_proto, js_mkstr(js, "substring", 9), js_mkfun(builtin_string_substring));
-  js_setprop(js, string_proto, js_mkstr(js, "substr", 6), js_mkfun(builtin_string_substr));
-  js_setprop(js, string_proto, js_mkstr(js, "split", 5), js_mkfun(builtin_string_split));
-  js_setprop(js, string_proto, js_mkstr(js, "slice", 5), js_mkfun(builtin_string_slice));
-  js_setprop(js, string_proto, js_mkstr(js, "includes", 8), js_mkfun(builtin_string_includes));
-  js_setprop(js, string_proto, js_mkstr(js, "startsWith", 10), js_mkfun(builtin_string_startsWith));
-  js_setprop(js, string_proto, js_mkstr(js, "endsWith", 8), js_mkfun(builtin_string_endsWith));
-  js_setprop(js, string_proto, js_mkstr(js, "template", 8), js_mkfun(builtin_string_template));
-  js_setprop(js, string_proto, js_mkstr(js, "charCodeAt", 10), js_mkfun(builtin_string_charCodeAt));
-  js_setprop(js, string_proto, js_mkstr(js, "codePointAt", 11), js_mkfun(builtin_string_codePointAt));
-  js_setprop(js, string_proto, js_mkstr(js, "toLowerCase", 11), js_mkfun(builtin_string_toLowerCase));
-  js_setprop(js, string_proto, js_mkstr(js, "toUpperCase", 11), js_mkfun(builtin_string_toUpperCase));
-  js_setprop(js, string_proto, js_mkstr(js, "toLocaleLowerCase", 17), js_mkfun(builtin_string_toLowerCase));
-  js_setprop(js, string_proto, js_mkstr(js, "toLocaleUpperCase", 17), js_mkfun(builtin_string_toUpperCase));
-  js_setprop(js, string_proto, js_mkstr(js, "trim", 4), js_mkfun(builtin_string_trim));
-  js_setprop(js, string_proto, js_mkstr(js, "trimStart", 9), js_mkfun(builtin_string_trimStart));
-  js_setprop(js, string_proto, js_mkstr(js, "trimEnd", 7), js_mkfun(builtin_string_trimEnd));
-  js_setprop(js, string_proto, js_mkstr(js, "repeat", 6), js_mkfun(builtin_string_repeat));
-  js_setprop(js, string_proto, js_mkstr(js, "padStart", 8), js_mkfun(builtin_string_padStart));
-  js_setprop(js, string_proto, js_mkstr(js, "padEnd", 6), js_mkfun(builtin_string_padEnd));
-  js_setprop(js, string_proto, js_mkstr(js, "charAt", 6), js_mkfun(builtin_string_charAt));
-  js_setprop(js, string_proto, js_mkstr(js, "at", 2), js_mkfun(builtin_string_at));
-  js_setprop(js, string_proto, js_mkstr(js, "lastIndexOf", 11), js_mkfun(builtin_string_lastIndexOf));
-  js_setprop(js, string_proto, js_mkstr(js, "concat", 6), js_mkfun(builtin_string_concat));
-  js_setprop(js, string_proto, js_mkstr(js, "localeCompare", 13), js_mkfun(builtin_string_localeCompare));
-  js_setprop(js, string_proto, js_mkstr(js, "normalize", 9), js_mkfun(builtin_string_normalize));
-  js_setprop(js, string_proto, js_mkstr(js, "valueOf", 7), js_mkfun(builtin_string_valueOf));
-  js_setprop(js, string_proto, js_mkstr(js, "toString", 8), js_mkfun(builtin_string_toString));
+  
+  defmethod(js, string_proto, "indexOf", 7, js_mkfun(builtin_string_indexOf));
+  defmethod(js, string_proto, "substring", 9, js_mkfun(builtin_string_substring));
+  defmethod(js, string_proto, "substr", 6, js_mkfun(builtin_string_substr));
+  defmethod(js, string_proto, "split", 5, js_mkfun(builtin_string_split));
+  defmethod(js, string_proto, "slice", 5, js_mkfun(builtin_string_slice));
+  defmethod(js, string_proto, "includes", 8, js_mkfun(builtin_string_includes));
+  defmethod(js, string_proto, "startsWith", 10, js_mkfun(builtin_string_startsWith));
+  defmethod(js, string_proto, "endsWith", 8, js_mkfun(builtin_string_endsWith));
+  defmethod(js, string_proto, "template", 8, js_mkfun(builtin_string_template));
+  defmethod(js, string_proto, "charCodeAt", 10, js_mkfun(builtin_string_charCodeAt));
+  defmethod(js, string_proto, "codePointAt", 11, js_mkfun(builtin_string_codePointAt));
+  defmethod(js, string_proto, "toLowerCase", 11, js_mkfun(builtin_string_toLowerCase));
+  defmethod(js, string_proto, "toUpperCase", 11, js_mkfun(builtin_string_toUpperCase));
+  defmethod(js, string_proto, "toLocaleLowerCase", 17, js_mkfun(builtin_string_toLowerCase));
+  defmethod(js, string_proto, "toLocaleUpperCase", 17, js_mkfun(builtin_string_toUpperCase));
+  defmethod(js, string_proto, "trim", 4, js_mkfun(builtin_string_trim));
+  defmethod(js, string_proto, "trimStart", 9, js_mkfun(builtin_string_trimStart));
+  defmethod(js, string_proto, "trimEnd", 7, js_mkfun(builtin_string_trimEnd));
+  defmethod(js, string_proto, "repeat", 6, js_mkfun(builtin_string_repeat));
+  defmethod(js, string_proto, "padStart", 8, js_mkfun(builtin_string_padStart));
+  defmethod(js, string_proto, "padEnd", 6, js_mkfun(builtin_string_padEnd));
+  defmethod(js, string_proto, "charAt", 6, js_mkfun(builtin_string_charAt));
+  defmethod(js, string_proto, "at", 2, js_mkfun(builtin_string_at));
+  defmethod(js, string_proto, "lastIndexOf", 11, js_mkfun(builtin_string_lastIndexOf));
+  defmethod(js, string_proto, "concat", 6, js_mkfun(builtin_string_concat));
+  defmethod(js, string_proto, "localeCompare", 13, js_mkfun(builtin_string_localeCompare));
+  defmethod(js, string_proto, "normalize", 9, js_mkfun(builtin_string_normalize));
+  defmethod(js, string_proto, "valueOf", 7, js_mkfun(builtin_string_valueOf));
+  defmethod(js, string_proto, "toString", 8, js_mkfun(builtin_string_toString));
 
   ant_value_t number_proto = js_mkobj(js);
   set_proto(js, number_proto, object_proto);
-  js_setprop(js, number_proto, js_mkstr(js, "toString", 8), js_mkfun(builtin_number_toString));
-  js_setprop(js, number_proto, js_mkstr(js, "toFixed", 7), js_mkfun(builtin_number_toFixed));
-  js_setprop(js, number_proto, js_mkstr(js, "toPrecision", 11), js_mkfun(builtin_number_toPrecision));
-  js_setprop(js, number_proto, js_mkstr(js, "toExponential", 13), js_mkfun(builtin_number_toExponential));
-  js_setprop(js, number_proto, js_mkstr(js, "valueOf", 7), js_mkfun(builtin_number_valueOf));
-  js_setprop(js, number_proto, js_mkstr(js, "toLocaleString", 14), js_mkfun(builtin_number_toLocaleString));
+  
+  defmethod(js, number_proto, "toString", 8, js_mkfun(builtin_number_toString));
+  defmethod(js, number_proto, "toFixed", 7, js_mkfun(builtin_number_toFixed));
+  defmethod(js, number_proto, "toPrecision", 11, js_mkfun(builtin_number_toPrecision));
+  defmethod(js, number_proto, "toExponential", 13, js_mkfun(builtin_number_toExponential));
+  defmethod(js, number_proto, "valueOf", 7, js_mkfun(builtin_number_valueOf));
+  defmethod(js, number_proto, "toLocaleString", 14, js_mkfun(builtin_number_toLocaleString));
   
   ant_value_t boolean_proto = js_mkobj(js);
   set_proto(js, boolean_proto, object_proto);
-  js_setprop(js, boolean_proto, js_mkstr(js, "valueOf", 7), js_mkfun(builtin_boolean_valueOf));
-  js_setprop(js, boolean_proto, js_mkstr(js, "toString", 8), js_mkfun(builtin_boolean_toString));
+  
+  defmethod(js, boolean_proto, "valueOf", 7, js_mkfun(builtin_boolean_valueOf));
+  defmethod(js, boolean_proto, "toString", 8, js_mkfun(builtin_boolean_toString));
   
   ant_value_t error_proto = js_mkobj(js);
   set_proto(js, error_proto, object_proto);
+  
   js_setprop(js, error_proto, ANT_STRING("name"), ANT_STRING("Error"));
   js_setprop(js, error_proto, ANT_STRING("message"), js_mkstr(js, "", 0));
-  js_setprop(js, error_proto, js_mkstr(js, "toString", 8), js_mkfun(builtin_Error_toString));
+  defmethod(js, error_proto, "toString", 8, js_mkfun(builtin_Error_toString));
   
   ant_value_t err_ctor_obj = mkobj(js, 0);
   set_proto(js, err_ctor_obj, function_proto);
@@ -12496,8 +12492,8 @@ ant_t *js_create(void *buf, size_t len) {
   js_setprop(js, glob, ANT_STRING("Error"), err_ctor_func);
   js_setprop(js, error_proto, js_mkstr(js, "constructor", 11), err_ctor_func);
   js_set_descriptor(js, error_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
-  js_setprop(js, err_ctor_func, ANT_STRING("isError"), js_mkfun(builtin_error_isError));
-  js_setprop(js, err_ctor_func, ANT_STRING("captureStackTrace"), js_mkfun(builtin_error_captureStackTrace));
+  defmethod(js, err_ctor_func, "isError", 7, js_mkfun(builtin_error_isError));
+  defmethod(js, err_ctor_func, "captureStackTrace", 17, js_mkfun(builtin_error_captureStackTrace));
   js_setprop(js, err_ctor_func, ANT_STRING("stackTraceLimit"), js_mknum(10));
   
   #define REGISTER_ERROR_SUBTYPE(name_str) do { \
@@ -12539,36 +12535,38 @@ ant_t *js_create(void *buf, size_t len) {
   
   ant_value_t promise_proto = js_mkobj(js);
   set_proto(js, promise_proto, object_proto);
-  js_setprop(js, promise_proto, js_mkstr(js, "then", 4), js_mkfun(builtin_promise_then));
-  js_setprop(js, promise_proto, js_mkstr(js, "catch", 5), js_mkfun(builtin_promise_catch));
-  js_setprop(js, promise_proto, js_mkstr(js, "finally", 7), js_mkfun(builtin_promise_finally));
+  defmethod(js, promise_proto, "then", 4, js_mkfun(builtin_promise_then));
+  defmethod(js, promise_proto, "catch", 5, js_mkfun(builtin_promise_catch));
+  defmethod(js, promise_proto, "finally", 7, js_mkfun(builtin_promise_finally));
   
   ant_value_t obj_func_obj = mkobj(js, 0);
   set_proto(js, obj_func_obj, function_proto);
   set_slot(obj_func_obj, SLOT_BUILTIN, tov(BUILTIN_OBJECT));
   js_mark_constructor(obj_func_obj, true);
-  js_setprop(js, obj_func_obj, js_mkstr(js, "keys", 4), js_mkfun(builtin_object_keys));
-  js_setprop(js, obj_func_obj, js_mkstr(js, "values", 6), js_mkfun(builtin_object_values));
-  js_setprop(js, obj_func_obj, js_mkstr(js, "entries", 7), js_mkfun(builtin_object_entries));
-  js_setprop(js, obj_func_obj, js_mkstr(js, "is", 2), js_mkfun(builtin_object_is));
-  js_setprop(js, obj_func_obj, js_mkstr(js, "getPrototypeOf", 14), js_mkfun(builtin_object_getPrototypeOf));
-  js_setprop(js, obj_func_obj, js_mkstr(js, "setPrototypeOf", 14), js_mkfun(builtin_object_setPrototypeOf));
-  js_setprop(js, obj_func_obj, js_mkstr(js, "create", 6), js_mkfun(builtin_object_create));
-  js_setprop(js, obj_func_obj, js_mkstr(js, "hasOwn", 6), js_mkfun(builtin_object_hasOwn));
-  js_setprop(js, obj_func_obj, js_mkstr(js, "groupBy", 7), js_mkfun(builtin_object_groupBy));
-  js_setprop(js, obj_func_obj, js_mkstr(js, "defineProperty", 14), js_mkfun(builtin_object_defineProperty));
-  js_setprop(js, obj_func_obj, js_mkstr(js, "defineProperties", 16), js_mkfun(builtin_object_defineProperties));
-  js_setprop(js, obj_func_obj, js_mkstr(js, "assign", 6), js_mkfun(builtin_object_assign));
-  js_setprop(js, obj_func_obj, js_mkstr(js, "freeze", 6), js_mkfun(builtin_object_freeze));
-  js_setprop(js, obj_func_obj, js_mkstr(js, "isFrozen", 8), js_mkfun(builtin_object_isFrozen));
-  js_setprop(js, obj_func_obj, js_mkstr(js, "seal", 4), js_mkfun(builtin_object_seal));
-  js_setprop(js, obj_func_obj, js_mkstr(js, "isSealed", 8), js_mkfun(builtin_object_isSealed));
-  js_setprop(js, obj_func_obj, js_mkstr(js, "fromEntries", 11), js_mkfun(builtin_object_fromEntries));
-  js_setprop(js, obj_func_obj, js_mkstr(js, "getOwnPropertyDescriptor", 24), js_mkfun(builtin_object_getOwnPropertyDescriptor));
-  js_setprop(js, obj_func_obj, js_mkstr(js, "getOwnPropertyNames", 19), js_mkfun(builtin_object_getOwnPropertyNames));
-  js_setprop(js, obj_func_obj, js_mkstr(js, "getOwnPropertySymbols", 21), js_mkfun(builtin_object_getOwnPropertySymbols));
-  js_setprop(js, obj_func_obj, js_mkstr(js, "isExtensible", 12), js_mkfun(builtin_object_isExtensible));
-  js_setprop(js, obj_func_obj, js_mkstr(js, "preventExtensions", 17), js_mkfun(builtin_object_preventExtensions));
+  
+  defmethod(js, obj_func_obj, "keys", 4, js_mkfun(builtin_object_keys));
+  defmethod(js, obj_func_obj, "values", 6, js_mkfun(builtin_object_values));
+  defmethod(js, obj_func_obj, "entries", 7, js_mkfun(builtin_object_entries));
+  defmethod(js, obj_func_obj, "is", 2, js_mkfun(builtin_object_is));
+  defmethod(js, obj_func_obj, "getPrototypeOf", 14, js_mkfun(builtin_object_getPrototypeOf));
+  defmethod(js, obj_func_obj, "setPrototypeOf", 14, js_mkfun(builtin_object_setPrototypeOf));
+  defmethod(js, obj_func_obj, "create", 6, js_mkfun(builtin_object_create));
+  defmethod(js, obj_func_obj, "hasOwn", 6, js_mkfun(builtin_object_hasOwn));
+  defmethod(js, obj_func_obj, "groupBy", 7, js_mkfun(builtin_object_groupBy));
+  defmethod(js, obj_func_obj, "defineProperty", 14, js_mkfun(builtin_object_defineProperty));
+  defmethod(js, obj_func_obj, "defineProperties", 16, js_mkfun(builtin_object_defineProperties));
+  defmethod(js, obj_func_obj, "assign", 6, js_mkfun(builtin_object_assign));
+  defmethod(js, obj_func_obj, "freeze", 6, js_mkfun(builtin_object_freeze));
+  defmethod(js, obj_func_obj, "isFrozen", 8, js_mkfun(builtin_object_isFrozen));
+  defmethod(js, obj_func_obj, "seal", 4, js_mkfun(builtin_object_seal));
+  defmethod(js, obj_func_obj, "isSealed", 8, js_mkfun(builtin_object_isSealed));
+  defmethod(js, obj_func_obj, "fromEntries", 11, js_mkfun(builtin_object_fromEntries));
+  defmethod(js, obj_func_obj, "getOwnPropertyDescriptor", 24, js_mkfun(builtin_object_getOwnPropertyDescriptor));
+  defmethod(js, obj_func_obj, "getOwnPropertyNames", 19, js_mkfun(builtin_object_getOwnPropertyNames));
+  defmethod(js, obj_func_obj, "getOwnPropertySymbols", 21, js_mkfun(builtin_object_getOwnPropertySymbols));
+  defmethod(js, obj_func_obj, "isExtensible", 12, js_mkfun(builtin_object_isExtensible));
+  defmethod(js, obj_func_obj, "preventExtensions", 17, js_mkfun(builtin_object_preventExtensions));
+  
   js_setprop(js, obj_func_obj, ANT_STRING("name"), ANT_STRING("Object"));
   js_setprop_nonconfigurable(js, obj_func_obj, "prototype", 9, object_proto);
   ant_value_t obj_func = js_obj_to_func(obj_func_obj);
@@ -12606,9 +12604,9 @@ ant_t *js_create(void *buf, size_t len) {
   set_proto(js, str_ctor_obj, function_proto);
   set_slot(str_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_String));
   js_setprop_nonconfigurable(js, str_ctor_obj, "prototype", 9, string_proto);
-  js_setprop(js, str_ctor_obj, js_mkstr(js, "fromCharCode", 12), js_mkfun(builtin_string_fromCharCode));
-  js_setprop(js, str_ctor_obj, js_mkstr(js, "fromCodePoint", 13), js_mkfun(builtin_string_fromCodePoint));
-  js_setprop(js, str_ctor_obj, js_mkstr(js, "raw", 3), js_mkfun(builtin_string_raw));
+  defmethod(js, str_ctor_obj, "fromCharCode", 12, js_mkfun(builtin_string_fromCharCode));
+  defmethod(js, str_ctor_obj, "fromCodePoint", 13, js_mkfun(builtin_string_fromCodePoint));
+  defmethod(js, str_ctor_obj, "raw", 3, js_mkfun(builtin_string_raw));
   js_setprop(js, str_ctor_obj, ANT_STRING("name"), ANT_STRING("String"));
   ant_value_t str_ctor_func = js_obj_to_func(str_ctor_obj);
   js_setprop(js, glob, js_mkstr(js, "String", 6), str_ctor_func);
@@ -12617,12 +12615,12 @@ ant_t *js_create(void *buf, size_t len) {
   set_proto(js, number_ctor_obj, function_proto);
   
   set_slot(number_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_Number));
-  js_setprop(js, number_ctor_obj, js_mkstr(js, "isNaN", 5), js_mkfun(builtin_Number_isNaN));
-  js_setprop(js, number_ctor_obj, js_mkstr(js, "isFinite", 8), js_mkfun(builtin_Number_isFinite));
-  js_setprop(js, number_ctor_obj, js_mkstr(js, "isInteger", 9), js_mkfun(builtin_Number_isInteger));
-  js_setprop(js, number_ctor_obj, js_mkstr(js, "isSafeInteger", 13), js_mkfun(builtin_Number_isSafeInteger));
-  js_setprop(js, number_ctor_obj, js_mkstr(js, "parseInt", 8), js_mkfun(builtin_parseInt));
-  js_setprop(js, number_ctor_obj, js_mkstr(js, "parseFloat", 10), js_mkfun(builtin_parseFloat));
+  defmethod(js, number_ctor_obj, "isNaN", 5, js_mkfun(builtin_Number_isNaN));
+  defmethod(js, number_ctor_obj, "isFinite", 8, js_mkfun(builtin_Number_isFinite));
+  defmethod(js, number_ctor_obj, "isInteger", 9, js_mkfun(builtin_Number_isInteger));
+  defmethod(js, number_ctor_obj, "isSafeInteger", 13, js_mkfun(builtin_Number_isSafeInteger));
+  defmethod(js, number_ctor_obj, "parseInt", 8, js_mkfun(builtin_parseInt));
+  defmethod(js, number_ctor_obj, "parseFloat", 10, js_mkfun(builtin_parseFloat));
   
   js_setprop(js, number_ctor_obj, js_mkstr(js, "MAX_VALUE", 9), tov(1.7976931348623157e+308));
   js_setprop(js, number_ctor_obj, js_mkstr(js, "MIN_VALUE", 9), tov(5e-324));
@@ -12650,9 +12648,9 @@ ant_t *js_create(void *buf, size_t len) {
   set_proto(js, arr_ctor_obj, function_proto);
   set_slot(arr_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_Array));
   js_setprop_nonconfigurable(js, arr_ctor_obj, "prototype", 9, array_proto);
-  js_setprop(js, arr_ctor_obj, js_mkstr(js, "isArray", 7), js_mkfun(builtin_Array_isArray));
-  js_setprop(js, arr_ctor_obj, js_mkstr(js, "from", 4), js_mkfun(builtin_Array_from));
-  js_setprop(js, arr_ctor_obj, js_mkstr(js, "of", 2), js_mkfun(builtin_Array_of));
+  defmethod(js, arr_ctor_obj, "isArray", 7, js_mkfun(builtin_Array_isArray));
+  defmethod(js, arr_ctor_obj, "from", 4, js_mkfun(builtin_Array_from));
+  defmethod(js, arr_ctor_obj, "of", 2, js_mkfun(builtin_Array_of));
   js_setprop(js, arr_ctor_obj, js->length_str, tov(1.0));
   js_set_descriptor(js, arr_ctor_obj, "length", 6, JS_DESC_C);
   js_setprop(js, arr_ctor_obj, ANT_STRING("name"), ANT_STRING("Array"));
@@ -12663,32 +12661,35 @@ ant_t *js_create(void *buf, size_t len) {
   set_proto(js, proxy_ctor_obj, function_proto);
   set_slot(proxy_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_Proxy));
   js_mark_constructor(proxy_ctor_obj, true);
-  js_setprop(js, proxy_ctor_obj, js_mkstr(js, "revocable", 9), js_mkfun(builtin_Proxy_revocable));
+  defmethod(js, proxy_ctor_obj, "revocable", 9, js_mkfun(builtin_Proxy_revocable));
   js_setprop(js, proxy_ctor_obj, ANT_STRING("name"), ANT_STRING("Proxy"));
   js_setprop(js, glob, js_mkstr(js, "Proxy", 5), js_obj_to_func(proxy_ctor_obj));
   
   ant_value_t p_ctor_obj = mkobj(js, 0);
   set_proto(js, p_ctor_obj, function_proto);
   set_slot(p_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_Promise));
-  js_setprop(js, p_ctor_obj, js_mkstr(js, "resolve", 7), js_mkfun(builtin_Promise_resolve));
-  js_setprop(js, p_ctor_obj, js_mkstr(js, "reject", 6), js_mkfun(builtin_Promise_reject));
-  js_setprop(js, p_ctor_obj, js_mkstr(js, "try", 3), js_mkfun(builtin_Promise_try));
-  js_setprop(js, p_ctor_obj, js_mkstr(js, "withResolvers", 13), js_mkfun(builtin_Promise_withResolvers));
-  js_setprop(js, p_ctor_obj, js_mkstr(js, "all", 3), js_mkfun(builtin_Promise_all));
-  js_setprop(js, p_ctor_obj, js_mkstr(js, "allSettled", 10), js_mkfun(builtin_Promise_allSettled));
-  js_setprop(js, p_ctor_obj, js_mkstr(js, "race", 4), js_mkfun(builtin_Promise_race));
-  js_setprop(js, p_ctor_obj, js_mkstr(js, "any", 3), js_mkfun(builtin_Promise_any));
+  
+  defmethod(js, p_ctor_obj, "resolve", 7, js_mkfun(builtin_Promise_resolve));
+  defmethod(js, p_ctor_obj, "reject", 6, js_mkfun(builtin_Promise_reject));
+  defmethod(js, p_ctor_obj, "try", 3, js_mkfun(builtin_Promise_try));
+  defmethod(js, p_ctor_obj, "withResolvers", 13, js_mkfun(builtin_Promise_withResolvers));
+  defmethod(js, p_ctor_obj, "all", 3, js_mkfun(builtin_Promise_all));
+  defmethod(js, p_ctor_obj, "allSettled", 10, js_mkfun(builtin_Promise_allSettled));
+  defmethod(js, p_ctor_obj, "race", 4, js_mkfun(builtin_Promise_race));
+  defmethod(js, p_ctor_obj, "any", 3, js_mkfun(builtin_Promise_any));
+  
   js_setprop_nonconfigurable(js, p_ctor_obj, "prototype", 9, promise_proto);
   js_setprop(js, p_ctor_obj, ANT_STRING("name"), ANT_STRING("Promise"));
   js_setprop(js, glob, js_mkstr(js, "Promise", 7), js_obj_to_func(p_ctor_obj));
   
-  js_setprop(js, glob, js_mkstr(js, "parseInt", 8), js_mkfun(builtin_parseInt));
-  js_setprop(js, glob, js_mkstr(js, "parseFloat", 10), js_mkfun(builtin_parseFloat));
-  js_setprop(js, glob, js_mkstr(js, "eval", 4), js_mkfun(builtin_eval));
-  js_setprop(js, glob, js_mkstr(js, "isNaN", 5), js_mkfun(builtin_global_isNaN));
-  js_setprop(js, glob, js_mkstr(js, "isFinite", 8), js_mkfun(builtin_global_isFinite));
-  js_setprop(js, glob, js_mkstr(js, "btoa", 4), js_mkfun(builtin_btoa));
-  js_setprop(js, glob, js_mkstr(js, "atob", 4), js_mkfun(builtin_atob));
+  defmethod(js, glob, "parseInt", 8, js_mkfun(builtin_parseInt));
+  defmethod(js, glob, "parseFloat", 10, js_mkfun(builtin_parseFloat));
+  defmethod(js, glob, "eval", 4, js_mkfun(builtin_eval));
+  defmethod(js, glob, "isNaN", 5, js_mkfun(builtin_global_isNaN));
+  defmethod(js, glob, "isFinite", 8, js_mkfun(builtin_global_isFinite));
+  defmethod(js, glob, "btoa", 4, js_mkfun(builtin_btoa));
+  defmethod(js, glob, "atob", 4, js_mkfun(builtin_atob));
+  
   js_setprop(js, glob, js_mkstr(js, "NaN", 3), tov(JS_NAN));
   js_set_descriptor(js, glob, "NaN", 3, 0);
   js_setprop(js, glob, js_mkstr(js, "Infinity", 8), tov(JS_INF));

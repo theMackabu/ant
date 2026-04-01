@@ -432,6 +432,12 @@ static inline bool lookup_string_prop_meta(ant_t *js, ant_value_t cur_obj, const
   return lookup_prop_meta(js, cur_obj, PROP_META_STRING, key, klen, 0, out);
 }
 
+static inline ant_value_t defmethod(ant_t *js, ant_value_t obj, const char *name, size_t len, ant_value_t fn) {
+  ant_value_t k = js_mkstr(js, name, len);
+  if (is_err(k)) return k;
+  return mkprop(js, obj, k, fn, ANT_PROP_ATTR_WRITABLE | ANT_PROP_ATTR_CONFIGURABLE);
+}
+
 static inline void js_set_module_default(ant_t *js, ant_value_t lib, ant_value_t ctor_fn, const char *name) {
   js_set(js, ctor_fn, name, ctor_fn);
   js_set(js, lib, name, ctor_fn);
