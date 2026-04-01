@@ -5791,7 +5791,7 @@ static ant_value_t builtin_object_defineProperty(ant_t *js, ant_value_t *args, i
     t = T_FUNC;
   }
   
-  if (t != T_OBJ && t != T_ARR && t != T_FUNC) {
+  if (!is_object_type(obj)) {
     return js_mkerr(js, "Object.defineProperty called on non-object");
   }
   
@@ -10268,6 +10268,12 @@ void js_resolve_promise(ant_t *js, ant_value_t p, ant_value_t val) {
 }
 
 void js_reject_promise(ant_t *js, ant_value_t p, ant_value_t val) {
+  if (vtype(val) == T_ERR) {
+    if (vdata(val) != 0) val = mkval(T_OBJ, vdata(val));
+    else if (js->thrown_exists && is_object_type(js->thrown_value)) val = js->thrown_value;
+    else val = js_make_error_silent(js, JS_ERR_INTERNAL, "unknown error");
+  }
+
   ant_promise_state_t *pd = get_promise_data(js, p, false);
   if (!pd || pd->state != 0) return;
 

@@ -843,7 +843,12 @@ ant_value_t js_throw(ant_t *js, ant_value_t value) {
   }
 
   ant_value_t stack_str = js_build_stack_text(js, JS_STACK_TEXT_FROM_THROW_VALUE, value);
-  if (vtype(stack_str) != T_STR) return mkval(T_ERR, 0);
+  if (vtype(stack_str) != T_STR) {
+    js->thrown_exists = true;
+    js->thrown_value = value;
+    js_clear_error_site(js);
+    return mkval(T_ERR, 0);
+  }
 
   if (vtype(value) == T_OBJ) {
     js_set(js, value, "stack", stack_str);
