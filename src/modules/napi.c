@@ -1,3 +1,5 @@
+// TODO: split into multiple files
+
 #include <compat.h> // IWYU pragma: keep
 
 #ifdef _WIN32
@@ -33,6 +35,8 @@
 
 #include "modules/buffer.h"
 #include "modules/napi.h"
+#include "gc/roots.h"
+#include "gc/modules.h"
 
 typedef struct napi_cleanup_hook_entry {
   napi_cleanup_hook hook;
@@ -48,6 +52,13 @@ typedef struct ant_napi_env__ {
   napi_value pending_exception;
   uint32_t version;
   napi_cleanup_hook_entry_t *cleanup_hooks;
+  struct napi_ref__ *refs;
+  struct napi_deferred__ *deferreds;
+  struct napi_threadsafe_function__ *tsfns;
+  int open_handle_scopes;
+  ant_value_t *handle_slots;
+  size_t handle_slots_len;
+  size_t handle_slots_cap;
 } ant_napi_env_t;
 
 typedef struct napi_callback_binding {
@@ -70,21 +81,30 @@ struct napi_ref__ {
   ant_value_t ref_val;
   napi_value value;
   uint32_t refcount;
+  struct napi_ref__ *next;
+  struct napi_ref__ *prev;
 };
 
 struct napi_deferred__ {
   ant_napi_env_t *env;
   ant_value_t promise_val;
   bool settled;
+  struct napi_deferred__ *next;
+  struct napi_deferred__ *prev;
 };
 
 struct napi_handle_scope__ {
   ant_napi_env_t *env;
+  size_t gc_root_mark;
+  size_t handle_slots_mark;
 };
 
 struct napi_escapable_handle_scope__ {
   ant_napi_env_t *env;
+  size_t gc_root_mark;
+  size_t handle_slots_mark;
   bool escaped;
+  ant_value_t escaped_val;
 };
 
 struct napi_async_context__ {
@@ -142,9 +162,13 @@ struct napi_threadsafe_function__ {
   uv_mutex_t mutex;
   napi_tsfn_item_t *head;
   napi_tsfn_item_t *tail;
+  struct napi_threadsafe_function__ *next;
+  struct napi_threadsafe_function__ *prev;
 };
 
-typedef napi_value(NAPI_CDECL* napi_register_module_v1_fn)(napi_env env, napi_value exports);
+typedef napi_value(NAPI_CDECL* napi_register_module_v1_fn)(
+  napi_env env, napi_value exports
+);
 
 typedef struct napi_native_lib {
   void *handle;
@@ -158,43 +182,43 @@ static uint64_t g_napi_external_next_id = 1;
 static uint64_t g_napi_wrap_next_id = 1;
 static napi_native_lib_t *g_napi_native_libs = NULL;
 static napi_module *g_pending_napi_module = NULL;
+static int64_t g_napi_external_memory = 0;
+
 static const napi_node_version g_napi_node_version = {
   .major = 25,
   .minor = 0,
   .patch = 0,
   .release = "ant",
 };
-static int64_t g_napi_external_memory = 0;
 
 static const char *napi_status_text(napi_status status) {
-  switch (status) {
-    case napi_ok: return "ok";
-    case napi_invalid_arg: return "invalid argument";
-    case napi_object_expected: return "object expected";
-    case napi_string_expected: return "string expected";
-    case napi_name_expected: return "name expected";
-    case napi_function_expected: return "function expected";
-    case napi_number_expected: return "number expected";
-    case napi_boolean_expected: return "boolean expected";
-    case napi_array_expected: return "array expected";
-    case napi_generic_failure: return "generic failure";
-    case napi_pending_exception: return "pending exception";
-    case napi_cancelled: return "cancelled";
-    case napi_escape_called_twice: return "escape called twice";
-    case napi_handle_scope_mismatch: return "handle scope mismatch";
-    case napi_callback_scope_mismatch: return "callback scope mismatch";
-    case napi_queue_full: return "queue full";
-    case napi_closing: return "closing";
-    case napi_bigint_expected: return "bigint expected";
-    case napi_date_expected: return "date expected";
-    case napi_arraybuffer_expected: return "arraybuffer expected";
-    case napi_detachable_arraybuffer_expected: return "detachable arraybuffer expected";
-    case napi_would_deadlock: return "would deadlock";
-    case napi_no_external_buffers_allowed: return "no external buffers allowed";
-    case napi_cannot_run_js: return "cannot run js";
-    default: return "unknown";
-  }
-}
+switch (status) {
+  case napi_ok: return "ok";
+  case napi_invalid_arg: return "invalid argument";
+  case napi_object_expected: return "object expected";
+  case napi_string_expected: return "string expected";
+  case napi_name_expected: return "name expected";
+  case napi_function_expected: return "function expected";
+  case napi_number_expected: return "number expected";
+  case napi_boolean_expected: return "boolean expected";
+  case napi_array_expected: return "array expected";
+  case napi_generic_failure: return "generic failure";
+  case napi_pending_exception: return "pending exception";
+  case napi_cancelled: return "cancelled";
+  case napi_escape_called_twice: return "escape called twice";
+  case napi_handle_scope_mismatch: return "handle scope mismatch";
+  case napi_callback_scope_mismatch: return "callback scope mismatch";
+  case napi_queue_full: return "queue full";
+  case napi_closing: return "closing";
+  case napi_bigint_expected: return "bigint expected";
+  case napi_date_expected: return "date expected";
+  case napi_arraybuffer_expected: return "arraybuffer expected";
+  case napi_detachable_arraybuffer_expected: return "detachable arraybuffer expected";
+  case napi_would_deadlock: return "would deadlock";
+  case napi_no_external_buffers_allowed: return "no external buffers allowed";
+  case napi_cannot_run_js: return "cannot run js";
+  default: return "unknown";
+}}
 
 static napi_status napi_set_last(napi_env env, napi_status status, const char *message) {
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
@@ -207,6 +231,9 @@ static napi_status napi_set_last(napi_env env, napi_status status, const char *m
   nenv->last_error.engine_reserved = NULL;
   nenv->last_error.engine_error_code = 0;
   nenv->last_error.error_code = status;
+
+  if (status != napi_ok) {
+  }
 
   return status;
 }
@@ -225,6 +252,42 @@ static ant_napi_env_t *napi_get_or_create_env(ant_t *js) {
 napi_env ant_napi_get_env(ant_t *js) {
   return (napi_env)napi_get_or_create_env(js);
 }
+
+void gc_mark_napi(ant_t *js, gc_mark_fn mark) {
+  if (!g_napi_env || g_napi_env->js != js) return;
+  ant_napi_env_t *nenv = g_napi_env;
+
+  if (nenv->has_pending_exception)
+    mark(js, (ant_value_t)nenv->pending_exception);
+
+  for (struct napi_ref__ *r = nenv->refs; r; r = r->next) {
+    if (r->refcount > 0) mark(js, r->ref_val);
+    mark(js, (ant_value_t)r->value);
+  }
+
+  for (struct napi_deferred__ *d = nenv->deferreds; d; d = d->next) 
+    if (!d->settled) mark(js, d->promise_val);
+
+  for (struct napi_threadsafe_function__ *t = nenv->tsfns; t; t = t->next) mark(js, t->func_val);
+  for (size_t i = 0; i < nenv->handle_slots_len; i++) mark(js, nenv->handle_slots[i]);
+}
+
+static inline napi_value napi_scope_pin(ant_napi_env_t *nenv, napi_value val) {
+  ant_value_t v = (ant_value_t)val;
+  if (!nenv || !is_object_type(v)) return val;
+
+  if (nenv->handle_slots_len >= nenv->handle_slots_cap) {
+    size_t new_cap = nenv->handle_slots_cap ? nenv->handle_slots_cap * 2 : 256;
+    ant_value_t *new_slots = realloc(nenv->handle_slots, new_cap * sizeof(ant_value_t));
+    if (!new_slots) return val;
+    nenv->handle_slots = new_slots;
+    nenv->handle_slots_cap = new_cap;
+  }
+  nenv->handle_slots[nenv->handle_slots_len++] = v;
+  return val;
+}
+
+#define NAPI_RETURN(nenv, val) napi_scope_pin((nenv), (napi_value)(val))
 
 static void napi_mark_pending_exception(napi_env env, napi_value exception) {
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
@@ -394,7 +457,7 @@ static napi_status napi_create_function_common(
     js_set(nenv->js, fn, "name", js_mkstr(nenv->js, utf8name, nlen));
   }
 
-  *result = (napi_value)fn;
+  *result = NAPI_RETURN(nenv, fn);
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -429,7 +492,7 @@ static napi_status napi_make_error_object(
   ant_value_t proto = js_get_ctor_proto(js, name, strlen(name));
   if (is_object_type(proto)) js_set_proto_init(err, proto);
 
-  *result = (napi_value)err;
+  *result = NAPI_RETURN(nenv, err);
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -491,6 +554,12 @@ static void napi_tsfn_close_cb(uv_handle_t *handle) {
 
   if (tsfn->thread_finalize_cb) {
     tsfn->thread_finalize_cb((napi_env)tsfn->env, tsfn->thread_finalize_data, NULL);
+  }
+
+  if (tsfn->env) {
+    if (tsfn->prev) tsfn->prev->next = tsfn->next;
+    else if (tsfn->env->tsfns == tsfn) tsfn->env->tsfns = tsfn->next;
+    if (tsfn->next) tsfn->next->prev = tsfn->prev;
   }
 
   if (tsfn->env && tsfn->env->js) {
@@ -661,7 +730,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_null(napi_env env, napi_value *resul
 NAPI_EXTERN napi_status NAPI_CDECL napi_get_global(napi_env env, napi_value *result) {
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  *result = (napi_value)js_glob(nenv->js);
+  *result = NAPI_RETURN(nenv, js_glob(nenv->js));
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -674,14 +743,14 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_boolean(napi_env env, bool value, na
 NAPI_EXTERN napi_status NAPI_CDECL napi_create_object(napi_env env, napi_value *result) {
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  *result = (napi_value)js_mkobj(nenv->js);
+  *result = NAPI_RETURN(nenv, js_mkobj(nenv->js));
   return napi_set_last(env, napi_ok, NULL);
 }
 
 NAPI_EXTERN napi_status NAPI_CDECL napi_create_array(napi_env env, napi_value *result) {
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  *result = (napi_value)js_mkarr(nenv->js);
+  *result = NAPI_RETURN(nenv, js_mkarr(nenv->js));
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -699,7 +768,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_array_with_length(
     js_mknum((double)length)
   );
   if (is_err(r)) return napi_check_pending_from_result(env, r);
-  *result = (napi_value)arr;
+  *result = NAPI_RETURN(nenv, arr);
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -735,7 +804,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_string_latin1(
 ) {
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result || !str) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  *result = (napi_value)napi_make_string(nenv->js, str, length);
+  *result = NAPI_RETURN(nenv, napi_make_string(nenv->js, str, length));
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -747,7 +816,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_string_utf8(
 ) {
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result || !str) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  *result = (napi_value)napi_make_string(nenv->js, str, length);
+  *result = NAPI_RETURN(nenv, napi_make_string(nenv->js, str, length));
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -768,7 +837,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_symbol(
     desc = js_getstr(nenv->js, s, NULL);
   }
 
-  *result = (napi_value)js_mksym(nenv->js, desc);
+  *result = NAPI_RETURN(nenv, js_mksym(nenv->js, desc));
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -834,7 +903,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_external(
 
   ant_value_t obj = js_mkobj(nenv->js);
   napi_slot_set_u64(nenv->js, obj, SLOT_NAPI_EXTERNAL_ID, entry->id);
-  *result = (napi_value)obj;
+  *result = NAPI_RETURN(nenv, obj);
 
   return napi_set_last(env, napi_ok, NULL);
 }
@@ -857,6 +926,11 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_promise(
   def->promise_val = p;
   def->settled = false;
 
+  def->prev = NULL;
+  def->next = nenv->deferreds;
+  if (nenv->deferreds) nenv->deferreds->prev = def;
+  nenv->deferreds = def;
+
   *deferred = (napi_deferred)def;
   *promise = (napi_value)p;
   return napi_set_last(env, napi_ok, NULL);
@@ -877,6 +951,11 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_resolve_deferred(
   js_resolve_promise(nenv->js, promise, (ant_value_t)resolution);
   def->settled = true;
   def->promise_val = js_mkundef();
+
+  if (def->prev) def->prev->next = def->next;
+  else if (nenv->deferreds == def) nenv->deferreds = def->next;
+  if (def->next) def->next->prev = def->prev;
+
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -895,6 +974,11 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_reject_deferred(
   js_reject_promise(nenv->js, promise, (ant_value_t)rejection);
   def->settled = true;
   def->promise_val = js_mkundef();
+
+  if (def->prev) def->prev->next = def->next;
+  else if (nenv->deferreds == def) nenv->deferreds = def->next;
+  if (def->next) def->next->prev = def->prev;
+
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -914,7 +998,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_buffer(
   if (is_err(value)) return napi_check_pending_from_result(env, value);
 
   if (data) *data = buf->data;
-  *result = (napi_value)value;
+  *result = NAPI_RETURN(nenv, value);
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -963,7 +1047,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_arraybuffer(
   free_array_buffer_data(ab);
 
   if (data) *data = ab->data;
-  *result = (napi_value)ab_obj;
+  *result = NAPI_RETURN(nenv, ab_obj);
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -1037,7 +1121,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_typedarray(
   );
 
   if (is_err(out)) return napi_check_pending_from_result(env, out);
-  *result = (napi_value)out;
+  *result = NAPI_RETURN(nenv, out);
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -1058,6 +1142,11 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_reference(
   ref->refcount = initial_refcount;
   ref->ref_val = (initial_refcount > 0) ? (ant_value_t)value : js_mkundef();
 
+  ref->prev = NULL;
+  ref->next = nenv->refs;
+  if (nenv->refs) nenv->refs->prev = ref;
+  nenv->refs = ref;
+
   *result = (napi_ref)ref;
   return napi_set_last(env, napi_ok, NULL);
 }
@@ -1069,6 +1158,11 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_delete_reference(
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   struct napi_ref__ *r = (struct napi_ref__ *)ref;
   if (!nenv || !nenv->js || !r) return napi_set_last((napi_env)env, napi_invalid_arg, "invalid argument");
+
+  if (r->prev) r->prev->next = r->next;
+  else if (nenv->refs == r) nenv->refs = r->next;
+  if (r->next) r->next->prev = r->prev;
+
   r->ref_val = js_mkundef();
   free(r);
   return napi_set_last((napi_env)env, napi_ok, NULL);
@@ -1116,7 +1210,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_reference_value(
   struct napi_ref__ *r = (struct napi_ref__ *)ref;
   if (!nenv || !nenv->js || !r || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
 
-  if (r->refcount > 0) *result = (napi_value)r->ref_val;
+  if (r->refcount > 0) *result = NAPI_RETURN(nenv, r->ref_val);
   else *result = r->value;
 
   return napi_set_last(env, napi_ok, NULL);
@@ -1364,7 +1458,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_prototype(
 ) {
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  *result = (napi_value)js_get_proto(nenv->js, (ant_value_t)object);
+  *result = NAPI_RETURN(nenv, js_get_proto(nenv->js, (ant_value_t)object));
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -1388,7 +1482,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_property_names(
   }
   js_prop_iter_end(&iter);
 
-  *result = (napi_value)out;
+  *result = NAPI_RETURN(nenv, out);
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -1439,7 +1533,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_property(
   ant_value_t k = (ant_value_t)key;
   if (vtype(k) == T_SYMBOL) {
     ant_offset_t off = lkp_sym_proto(nenv->js, (ant_value_t)object, (ant_offset_t)vdata(k));
-    *result = (napi_value)(off ? js_propref_load(nenv->js, off) : js_mkundef());
+    *result = NAPI_RETURN(nenv, (off ? js_propref_load(nenv->js, off) : js_mkundef()));
     return napi_set_last(env, napi_ok, NULL);
   }
 
@@ -1455,7 +1549,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_property(
   memcpy(name, ks, klen);
   name[klen] = '\0';
   
-  *result = (napi_value)js_getprop_fallback(nenv->js, (ant_value_t)object, name);
+  *result = NAPI_RETURN(nenv, js_getprop_fallback(nenv->js, (ant_value_t)object, name));
   free(name);
   
   return napi_set_last(env, napi_ok, NULL);
@@ -1591,7 +1685,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_element(
   }
   char idx[32];
   snprintf(idx, sizeof(idx), "%u", index);
-  *result = (napi_value)js_get(nenv->js, (ant_value_t)object, idx);
+  *result = NAPI_RETURN(nenv, js_get(nenv->js, (ant_value_t)object, idx));
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -1930,6 +2024,8 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_instanceof(
   return napi_set_last(env, napi_ok, NULL);
 }
 
+static _Thread_local int napi_strict_eq_call_count = 0;
+
 NAPI_EXTERN napi_status NAPI_CDECL napi_strict_equals(
   napi_env env,
   napi_value lhs,
@@ -1939,6 +2035,16 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_strict_equals(
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
   *result = strict_eq_values(nenv->js, (ant_value_t)lhs, (ant_value_t)rhs);
+  if (getenv("ANT_NAPI_TRACE")) {
+    napi_strict_eq_call_count++;
+    if (napi_strict_eq_call_count >= 2000 && napi_strict_eq_call_count < 2030) {
+      fprintf(stderr, "[napi-seq] call#%d lhs=0x%llx(vt=%d) rhs=0x%llx(vt=%d) => %d\n",
+              napi_strict_eq_call_count,
+              (unsigned long long)(ant_value_t)lhs, vtype((ant_value_t)lhs),
+              (unsigned long long)(ant_value_t)rhs, vtype((ant_value_t)rhs),
+              *result);
+    }
+  }
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -1967,7 +2073,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_call_function(
   );
 
   if (is_err(out) || nenv->js->thrown_exists) return napi_check_pending_from_result(env, out);
-  if (result) *result = (napi_value)out;
+  if (result) *result = NAPI_RETURN(nenv, out);
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -2003,7 +2109,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_new_instance(
   nenv->js->new_target = saved;
 
   if (is_err(out) || nenv->js->thrown_exists) return napi_check_pending_from_result(env, out);
-  *result = (napi_value)(is_object_type(out) ? out : obj);
+  *result = NAPI_RETURN(nenv, (is_object_type(out) ? out : obj));
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -2014,7 +2120,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_coerce_to_bool(
 ) {
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  *result = (napi_value)js_bool(js_truthy(nenv->js, (ant_value_t)value));
+  *result = NAPI_RETURN(nenv, js_bool(js_truthy(nenv->js, (ant_value_t)value)));
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -2025,7 +2131,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_coerce_to_number(
 ) {
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  *result = (napi_value)js_mknum(js_to_number(nenv->js, (ant_value_t)value));
+  *result = NAPI_RETURN(nenv, js_mknum(js_to_number(nenv->js, (ant_value_t)value)));
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -2047,7 +2153,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_coerce_to_object(
   ant_value_t arg = (ant_value_t)value;
   ant_value_t out = sv_vm_call(nenv->js->vm, nenv->js, obj_ctor, js_mkundef(), &arg, 1, NULL, false);
   if (is_err(out) || nenv->js->thrown_exists) return napi_check_pending_from_result(env, out);
-  *result = (napi_value)out;
+  *result = NAPI_RETURN(nenv, out);
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -2060,7 +2166,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_coerce_to_string(
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
   ant_value_t out = coerce_to_str(nenv->js, (ant_value_t)value);
   if (is_err(out) || nenv->js->thrown_exists) return napi_check_pending_from_result(env, out);
-  *result = (napi_value)out;
+  *result = NAPI_RETURN(nenv, out);
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -2121,12 +2227,12 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_and_clear_last_exception(
     nenv->has_pending_exception = false;
     nenv->pending_exception = (napi_value)js_mkundef();
   } else if (nenv->js->thrown_exists) {
-    *result = (napi_value)nenv->js->thrown_value;
+    *result = NAPI_RETURN(nenv, nenv->js->thrown_value);
     nenv->js->thrown_exists = false;
     nenv->js->thrown_value = js_mkundef();
     nenv->js->thrown_stack = js_mkundef();
   } else {
-    *result = (napi_value)js_mkundef();
+    *result = NAPI_RETURN(nenv, js_mkundef());
   }
 
   return napi_set_last(env, napi_ok, NULL);
@@ -2224,10 +2330,14 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_open_handle_scope(
   napi_env env,
   napi_handle_scope *result
 ) {
-  if (!env || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
+  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
+  if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
   struct napi_handle_scope__ *scope = (struct napi_handle_scope__ *)calloc(1, sizeof(*scope));
   if (!scope) return napi_set_last(env, napi_generic_failure, "out of memory");
-  scope->env = (ant_napi_env_t *)env;
+  scope->env = nenv;
+  scope->gc_root_mark = gc_root_scope(nenv->js);
+  scope->handle_slots_mark = nenv->handle_slots_len;
+  nenv->open_handle_scopes++;
   *result = (napi_handle_scope)scope;
   return napi_set_last(env, napi_ok, NULL);
 }
@@ -2236,8 +2346,12 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_close_handle_scope(
   napi_env env,
   napi_handle_scope scope
 ) {
-  (void)env;
-  if (!scope) return napi_set_last(env, napi_invalid_arg, "invalid argument");
+  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
+  if (!nenv || !scope) return napi_set_last(env, napi_invalid_arg, "invalid argument");
+  struct napi_handle_scope__ *s = (struct napi_handle_scope__ *)scope;
+  if (nenv->js) gc_pop_roots(nenv->js, s->gc_root_mark);
+  nenv->handle_slots_len = s->handle_slots_mark;
+  if (nenv->open_handle_scopes > 0) nenv->open_handle_scopes--;
   free(scope);
   return napi_set_last(env, napi_ok, NULL);
 }
@@ -2246,11 +2360,16 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_open_escapable_handle_scope(
   napi_env env,
   napi_escapable_handle_scope *result
 ) {
-  if (!env || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
+  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
+  if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
   struct napi_escapable_handle_scope__ *scope = (struct napi_escapable_handle_scope__ *)calloc(1, sizeof(*scope));
   if (!scope) return napi_set_last(env, napi_generic_failure, "out of memory");
-  scope->env = (ant_napi_env_t *)env;
+  scope->env = nenv;
+  scope->gc_root_mark = gc_root_scope(nenv->js);
+  scope->handle_slots_mark = nenv->handle_slots_len;
   scope->escaped = false;
+  scope->escaped_val = js_mkundef();
+  nenv->open_handle_scopes++;
   *result = (napi_escapable_handle_scope)scope;
   return napi_set_last(env, napi_ok, NULL);
 }
@@ -2259,8 +2378,12 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_close_escapable_handle_scope(
   napi_env env,
   napi_escapable_handle_scope scope
 ) {
-  (void)env;
-  if (!scope) return napi_set_last(env, napi_invalid_arg, "invalid argument");
+  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
+  if (!nenv || !scope) return napi_set_last(env, napi_invalid_arg, "invalid argument");
+  struct napi_escapable_handle_scope__ *s = (struct napi_escapable_handle_scope__ *)scope;
+  if (nenv->js) gc_pop_roots(nenv->js, s->gc_root_mark);
+  nenv->handle_slots_len = s->handle_slots_mark;
+  if (nenv->open_handle_scopes > 0) nenv->open_handle_scopes--;
   free(scope);
   return napi_set_last(env, napi_ok, NULL);
 }
@@ -2271,10 +2394,13 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_escape_handle(
   napi_value escapee,
   napi_value *result
 ) {
+  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   struct napi_escapable_handle_scope__ *esc = (struct napi_escapable_handle_scope__ *)scope;
-  if (!env || !esc || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
+  if (!nenv || !nenv->js || !esc || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
   if (esc->escaped) return napi_set_last(env, napi_escape_called_twice, "escape already called");
   esc->escaped = true;
+  esc->escaped_val = (ant_value_t)escapee;
+  gc_push_root(nenv->js, &esc->escaped_val);
   *result = escapee;
   return napi_set_last(env, napi_ok, NULL);
 }
@@ -2377,7 +2503,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_threadsafe_function(
   tsfn->context = context;
   tsfn->max_queue_size = max_queue_size;
   tsfn->thread_count = initial_thread_count > 0 ? initial_thread_count : 1;
-  tsfn->func_val = (ant_value_t)func;
+  tsfn->func_val = func ? (ant_value_t)func : js_mkundef();
 
   uv_mutex_init(&tsfn->mutex);
   int rc = uv_async_init(uv_default_loop(), &tsfn->async, napi_tsfn_async_cb);
@@ -2387,6 +2513,11 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_threadsafe_function(
     return napi_set_last(env, napi_generic_failure, "uv_async_init failed");
   }
   tsfn->async.data = tsfn;
+
+  tsfn->prev = NULL;
+  tsfn->next = nenv->tsfns;
+  if (nenv->tsfns) nenv->tsfns->prev = tsfn;
+  nenv->tsfns = tsfn;
 
   *result = (napi_threadsafe_function)tsfn;
   return napi_set_last(env, napi_ok, NULL);
@@ -2506,7 +2637,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_run_script(
 
   ant_value_t out = js_eval_bytecode_eval(nenv->js, src, len);
   if (is_err(out) || nenv->js->thrown_exists) return napi_check_pending_from_result(env, out);
-  *result = (napi_value)out;
+  *result = NAPI_RETURN(nenv, out);
   return napi_set_last(env, napi_ok, NULL);
 }
 
