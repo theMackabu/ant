@@ -2005,9 +2005,39 @@ static void compile_typeof(sv_compiler_t *c, sv_ast_t *node) {
   emit_op(c, OP_TYPEOF);
 }
 
+static bool sv_node_has_optional_base(sv_ast_t *n) {
+  while (n) {
+    if (n->type == N_OPTIONAL) return true;
+    if (n->type == N_MEMBER || n->type == N_CALL) n = n->left;
+    else break;
+  }
+  return false;
+}
+
+static void compile_delete_optional(sv_compiler_t *c, sv_ast_t *arg) {
+  compile_expr(c, arg->left);
+  int ok_jump = emit_jump(c, OP_JMP_NOT_NULLISH);
+  emit_op(c, OP_POP);
+  emit_op(c, OP_TRUE);
+  int end_jump = emit_jump(c, OP_JMP);
+  patch_jump(c, ok_jump);
+  if (arg->flags & 1) {
+    compile_expr(c, arg->right);
+  } else {
+    ant_value_t key = js_mkstr_permanent(c->js, arg->right->str, arg->right->len);
+    emit_constant(c, key);
+  }
+  emit_op(c, OP_DELETE);
+  patch_jump(c, end_jump);
+}
+
 static void compile_delete(sv_compiler_t *c, sv_ast_t *node) {
   sv_ast_t *arg = node->right;
-  if (arg->type == N_MEMBER && !(arg->flags & 1)) {
+  if (arg->type == N_OPTIONAL) {
+    compile_delete_optional(c, arg);
+  } else if (arg->type == N_MEMBER && sv_node_has_optional_base(arg->left)) {
+    compile_delete_optional(c, arg);
+  } else if (arg->type == N_MEMBER && !(arg->flags & 1)) {
     compile_expr(c, arg->left);
     ant_value_t key = js_mkstr_permanent(c->js, arg->right->str, arg->right->len);
     emit_constant(c, key);
@@ -2258,6 +2288,19 @@ static void compile_call(sv_compiler_t *c, sv_ast_t *node) {
     return;
   }
 
+  if (callee->type == N_MEMBER && sv_node_has_optional_base(callee->left)) {
+    compile_expr(c, callee->left);
+    int ok_jump  = emit_jump(c, OP_JMP_NOT_NULLISH);
+    emit_op(c, OP_POP);
+    emit_op(c, OP_UNDEF);
+    int end_jump = emit_jump(c, OP_JMP);
+    patch_jump(c, ok_jump);
+    compile_receiver_property_get(c, callee);
+    compile_call_emit_invoke(c, node, SV_CALL_METHOD, has_spread);
+    patch_jump(c, end_jump);
+    return;
+  }
+
   sv_call_kind_t kind = compile_call_setup_non_optional(c, callee);
   compile_call_emit_invoke(c, node, kind, has_spread);
 }
@@ -2276,15 +2319,6 @@ static void compile_new(sv_compiler_t *c, sv_ast_t *node) {
     emit_op(c, OP_NEW);
     emit_u16(c, (uint16_t)argc);
   }
-}
-
-static bool sv_node_has_optional_base(sv_ast_t *n) {
-  while (n) {
-    if (n->type == N_OPTIONAL) return true;
-    if (n->type == N_MEMBER || n->type == N_CALL) n = n->left;
-    else break;
-  }
-  return false;
 }
 
 static void compile_member(sv_compiler_t *c, sv_ast_t *node) {

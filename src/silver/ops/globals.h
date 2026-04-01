@@ -7,9 +7,14 @@
 
 static inline ant_value_t sv_global_get(ant_t *js, const char *str, uint32_t len) {
   if (!str) return js_mkundef();
+  
   const char *interned = intern_string(str, len);
   if (!interned) return js_mkundef();
-  return lkp_interned_val(js, js->global, interned);
+  
+  ant_value_t val = lkp_interned_val(js, js->global, interned);
+  if (is_undefined(val)) val = js_getprop_fallback(js, js->global, interned);
+  
+  return val;
 }
 
 static inline sv_ic_entry_t *sv_global_ic_slot_for_ip(sv_func_t *func, uint8_t *ip) {
@@ -85,9 +90,14 @@ static inline ant_value_t sv_global_get_interned_ic(
 ) {
   ant_value_t out = js_mkundef();
   sv_ic_entry_t *ic = sv_global_ic_slot_for_ip(func, ip);
+  
   if (sv_global_ic_try_get_hit(js, ic, interned, &out)) return out;
   if (sv_global_ic_try_fill(js, ic, interned, &out)) return out;
-  return lkp_interned_val(js, js->global, interned);
+  
+  ant_value_t val = lkp_interned_val(js, js->global, interned);
+  if (is_undefined(val)) val = js_getprop_fallback(js, js->global, interned);
+  
+  return val;
 }
 
 static inline ant_value_t sv_op_get_global(
