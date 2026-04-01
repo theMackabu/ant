@@ -27,6 +27,8 @@ typedef struct {
 } regex_cache_entry_t;
 
 static regex_cache_entry_t *regex_cache = NULL;
+static ant_value_t regexp_matchall_iter_proto_val = 0;
+
 static size_t regex_cache_count = 0;
 static size_t regex_cache_cap = 0;
 
@@ -1037,6 +1039,119 @@ static ant_value_t builtin_regexp_symbol_match(ant_t *js, ant_value_t *args, int
   }
 }
 
+
+static ant_value_t regexp_matchall_next(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t iter = js->this_val;
+  ant_value_t rx = js_get_slot(iter, SLOT_MATCHALL_RX);
+  ant_value_t str = js_get_slot(iter, SLOT_MATCHALL_STR);
+  ant_value_t done_val = js_get_slot(iter, SLOT_MATCHALL_DONE);
+  
+  if (js_truthy(js, done_val))
+    return js_iter_result(js, false, js_mkundef());
+
+  ant_value_t result = regexp_exec_abstract(js, rx, str);
+  if (is_err(result)) return result;
+
+  if (vtype(result) == T_NULL) {
+    js_set_slot(iter, SLOT_MATCHALL_DONE, js_true);
+    return js_iter_result(js, false, js_mkundef());
+  }
+
+  ant_value_t global_val = js_getprop_fallback(js, rx, "global");
+  if (js_truthy(js, global_val)) {
+    ant_value_t match_str = js_tostring_val(js, js_arr_get(js, result, 0));
+    if (is_err(match_str)) return match_str;
+    ant_offset_t mlen;
+    vstr(js, match_str, &mlen);
+    if (mlen == 0) {
+      ant_value_t li_val = js_getprop_fallback(js, rx, "lastIndex");
+      double li = vtype(li_val) == T_NUM ? tod(li_val) : 0;
+      js_setprop(js, rx, js_mkstr(js, "lastIndex", 9), tov(li + 1));
+    }
+  } else js_set_slot(iter, SLOT_MATCHALL_DONE, js_true);
+
+  return js_iter_result(js, true, result);
+}
+
+static ant_value_t builtin_regexp_symbol_matchAll(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t rx = js->this_val;
+  if (!is_object_type(rx))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "RegExp.prototype[@@matchAll] called on non-object");
+
+  ant_value_t str = nargs > 0 ? js_tostring_val(js, args[0]) : js_mkstr(js, "undefined", 9);
+  if (is_err(str)) return str;
+
+  ant_value_t flags_val = js_getprop_fallback(js, rx, "flags");
+  if (is_err(flags_val)) return flags_val;
+  ant_value_t flags_str = js_tostring_val(js, flags_val);
+  if (is_err(flags_str)) return flags_str;
+
+  ant_value_t source_val = js_getprop_fallback(js, rx, "source");
+  if (is_err(source_val)) return source_val;
+
+  ant_value_t ctor_args[2] = { source_val, flags_str };
+  ant_value_t regexp_ctor = js_get(js, js_glob(js), "RegExp");
+  ant_value_t new_rx = sv_vm_call(js->vm, js, regexp_ctor, js_mkundef(), ctor_args, 2, NULL, true);
+  if (is_err(new_rx)) return new_rx;
+
+  ant_value_t li_val = js_getprop_fallback(js, rx, "lastIndex");
+  js_setprop(js, new_rx, js_mkstr(js, "lastIndex", 9), li_val);
+
+  ant_value_t iter = js_mkobj(js);
+  js_set_slot(iter, SLOT_MATCHALL_RX, new_rx);
+  js_set_slot(iter, SLOT_MATCHALL_STR, str);
+  js_set_slot(iter, SLOT_MATCHALL_DONE, js_false);
+
+  js_set_proto_init(iter, regexp_matchall_iter_proto_val);
+
+  return iter;
+}
+
+static ant_value_t builtin_string_matchAll(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_unwrapped = unwrap_primitive(js, js->this_val);
+  ant_value_t str = js_tostring_val(js, this_unwrapped);
+  if (is_err(str)) return str;
+  if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "matchAll requires at least 1 argument");
+
+  if (is_object_type(args[0])) {
+    ant_value_t is_re = is_regexp_like(js, args[0]);
+    if (js_truthy(js, is_re)) {
+      ant_value_t flags_val = js_getprop_fallback(js, args[0], "flags");
+      if (is_err(flags_val)) return flags_val;
+      
+      ant_value_t flags_str = js_tostring_val(js, flags_val);
+      ant_offset_t flen, foff = vstr(js, flags_str, &flen);
+      
+      const char *fp = (const char *)(uintptr_t)(foff);
+      bool has_g = false;
+      for (ant_offset_t i = 0; i < flen; i++) if (fp[i] == 'g') has_g = true;
+      if (!has_g) return js_mkerr_typed(js, JS_ERR_TYPE, "String.prototype.matchAll called with a non-global RegExp");
+    }
+
+    bool called = false;
+    ant_value_t call_args[1] = { str };
+    ant_value_t dispatched = maybe_call_symbol_method(
+      js, args[0], get_matchAll_sym(), args[0], call_args, 1, &called
+    );
+    
+    if (is_err(dispatched)) return dispatched;
+    if (called) return dispatched;
+  }
+
+  ant_value_t pattern_str = js_tostring_val(js, args[0]);
+  if (is_err(pattern_str)) return pattern_str;
+
+  ant_value_t ctor_args[2] = { pattern_str, js_mkstr(js, "g", 1) };
+  ant_value_t regexp_ctor = js_get(js, js_glob(js), "RegExp");
+  ant_value_t rx = sv_vm_call(js->vm, js, regexp_ctor, js_mkundef(), ctor_args, 2, NULL, true);
+  if (is_err(rx)) return rx;
+
+  ant_value_t ma_args[1] = { str };
+  js->this_val = rx;
+  
+  return builtin_regexp_symbol_matchAll(js, ma_args, 1);
+}
+
 static ant_value_t builtin_regexp_symbol_replace(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t rx = js->this_val;
   if (!is_object_type(rx))
@@ -1758,6 +1873,12 @@ void init_regex_module(void) {
 
   js_set_sym(js, regexp_proto, get_split_sym(), js_mkfun(builtin_regexp_symbol_split));
   js_set_sym(js, regexp_proto, get_match_sym(), js_mkfun(builtin_regexp_symbol_match));
+  js_set_sym(js, regexp_proto, get_matchAll_sym(), js_mkfun(builtin_regexp_symbol_matchAll));
+
+  regexp_matchall_iter_proto_val = js_mkobj(js);
+  js_set_proto_init(regexp_matchall_iter_proto_val, js->sym.iterator_proto);
+  defmethod(js, regexp_matchall_iter_proto_val, "next", 4, js_mkfun(regexp_matchall_next));
+  js_set_sym(js, regexp_matchall_iter_proto_val, get_iterator_sym(), js_mkfun(sym_this_cb));
   js_set_sym(js, regexp_proto, get_replace_sym(), js_mkfun(builtin_regexp_symbol_replace));
   js_set_sym(js, regexp_proto, get_search_sym(), js_mkfun(builtin_regexp_symbol_search));
   js_set_sym(js, regexp_proto, get_toStringTag_sym(), js_mkstr(js, "RegExp", 6));
@@ -1792,6 +1913,7 @@ void init_regex_module(void) {
   
   defmethod(js, string_proto, "search", 6, js_mkfun(builtin_string_search));
   defmethod(js, string_proto, "match", 5, js_mkfun(builtin_string_match));
+  defmethod(js, string_proto, "matchAll", 8, js_mkfun(builtin_string_matchAll));
   defmethod(js, string_proto, "replace", 7, js_mkfun(builtin_string_replace));
   defmethod(js, string_proto, "replaceAll", 10, js_mkfun(builtin_string_replaceAll));
 }

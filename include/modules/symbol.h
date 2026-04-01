@@ -43,6 +43,7 @@ ant_value_t maybe_call_symbol_method(
   X(replace,             "Symbol.replace")             \
   X(search,              "Symbol.search")              \
   X(split,               "Symbol.split")               \
+  X(matchAll,            "Symbol.matchAll")            \
   X(isConcatSpreadable,  "Symbol.isConcatSpreadable")  \
   X(observable,          "Symbol.observable")          \
   X(toPrimitive,         "Symbol.toPrimitive")         \
