@@ -1079,9 +1079,10 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     DISPATCH();
   }
   
-  L_NEW:    { VM_CHECK(sv_op_new(vm, js, ip));          NEXT(3); }
-  L_APPLY:  { VM_CHECK(sv_op_apply(vm, js, ip));        NEXT(3); }
-  L_EVAL:   { VM_CHECK(sv_op_eval(vm, js, frame, ip));  NEXT(5); }
+  L_NEW:       { VM_CHECK(sv_op_new(vm, js, ip));          NEXT(3); }
+  L_APPLY:     { VM_CHECK(sv_op_apply(vm, js, ip));        NEXT(3); }
+  L_NEW_APPLY: { VM_CHECK(sv_op_new_apply(vm, js, ip));    NEXT(3); }
+  L_EVAL:      { VM_CHECK(sv_op_eval(vm, js, frame, ip));  NEXT(5); }
 
   // TODO: make the methods below DRY
   L_RETURN: {

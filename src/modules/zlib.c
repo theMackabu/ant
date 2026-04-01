@@ -119,10 +119,19 @@ static void zlib_emit_data(ant_t *js, ant_value_t obj, const uint8_t *data, size
 }
 
 typedef struct { ant_t *js; ant_value_t obj; } brotli_emit_ctx_t;
+typedef struct { ant_t *js; ant_value_t arr; bool error; } brotli_collect_ctx_t;
 
 static int brotli_emit_cb(void *ctx, const uint8_t *chunk, size_t len) {
   brotli_emit_ctx_t *ec = (brotli_emit_ctx_t *)ctx;
   zlib_emit_data(ec->js, ec->obj, chunk, len);
+  return 0;
+}
+
+static int brotli_collect_cb(void *ctx, const uint8_t *chunk, size_t len) {
+  brotli_collect_ctx_t *ec = (brotli_collect_ctx_t *)ctx;
+  ant_value_t buf = zlib_make_buffer(ec->js, chunk, len);
+  if (is_err(buf)) { ec->error = true; return -1; }
+  js_arr_push(ec->js, ec->arr, buf);
   return 0;
 }
 
@@ -177,6 +186,73 @@ static ant_value_t zlib_do_process(
   } while (st->strm.avail_out == 0);
 
   return js_mkundef();
+}
+
+static ant_value_t zlib_process_chunk_sync(
+  ant_t *js, zlib_stream_t *st,
+  const uint8_t *input, size_t input_len,
+  int flush_flag
+) {
+  ant_value_t arr = js_mkarr(js);
+
+  if (st->brotli) {
+    brotli_collect_ctx_t ctx = { js, arr, false };
+    int rc = 0;
+    if (input && input_len > 0)
+      rc = brotli_stream_process(st->brotli, input, input_len, brotli_collect_cb, &ctx);
+    if (rc >= 0 && flush_flag == Z_FINISH)
+      rc = brotli_stream_finish(st->brotli, brotli_collect_cb, &ctx);
+    if (rc < 0 || ctx.error) return js_mkerr(js, "brotli operation failed");
+    return arr;
+  }
+
+  bool compress = zlib_kind_is_compress(st->kind);
+  uint8_t out[ZLIB_CHUNK];
+
+  st->strm.next_in  = input ? (Bytef *)input : NULL;
+  st->strm.avail_in = input ? (uInt)input_len : 0;
+
+  int ret;
+  do {
+    st->strm.next_out  = out;
+    st->strm.avail_out = ZLIB_CHUNK;
+
+    if (compress) {
+      ret = deflate(&st->strm, flush_flag);
+      if (ret == Z_STREAM_ERROR) return js_mkerr(js, "zlib deflate error");
+    } else {
+      ret = inflate(&st->strm, flush_flag);
+      if (ret == Z_NEED_DICT || ret == Z_DATA_ERROR || ret == Z_MEM_ERROR)
+        return js_mkerr(js, "zlib inflate error");
+    }
+
+    size_t have = ZLIB_CHUNK - st->strm.avail_out;
+    if (have > 0) {
+      ant_value_t buf = zlib_make_buffer(js, out, have);
+      if (is_err(buf)) return buf;
+      js_arr_push(js, arr, buf);
+    }
+    if (ret == Z_STREAM_END) break;
+  } while (st->strm.avail_out == 0);
+
+  return arr;
+}
+
+static ant_value_t js_zlib_process_chunk(ant_t *js, ant_value_t *args, int nargs) {
+  zlib_stream_t *st = zlib_stream_ptr(js_getthis(js));
+  if (!st) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid zlib stream");
+  if (st->destroyed || st->ended) return js_mkarr(js);
+
+  const uint8_t *input = NULL;
+  size_t input_len = 0;
+  if (nargs >= 1 && is_object_type(args[0]))
+    buffer_source_get_bytes(js, args[0], &input, &input_len);
+
+  int flush_flag = Z_NO_FLUSH;
+  if (nargs >= 2 && vtype(args[1]) == T_NUM)
+    flush_flag = (int)js_getnum(args[1]);
+
+  return zlib_process_chunk_sync(js, st, input, input_len, flush_flag);
 }
 
 static ant_value_t js_zlib_write(ant_t *js, ant_value_t *args, int nargs) {
@@ -353,6 +429,11 @@ static ant_value_t zlib_create_stream(ant_t *js, zlib_kind_t kind) {
 
   js_set(js, obj, "readable", js_true);
   js_set(js, obj, "writable", js_true);
+  js_set(js, obj, "_processChunk", js_mkfun(js_zlib_process_chunk));
+
+  ant_value_t handle_obj = js_mkobj(js);
+  js_set(js, handle_obj, "close", js_mkfun(js_zlib_destroy));
+  js_set(js, obj, "_handle", handle_obj);
 
   st->obj = obj;
   zlib_add_active(st);
@@ -407,12 +488,15 @@ static int zbuf_append(zbuf_t *b, const uint8_t *chunk, size_t n) {
     size_t newcap = b->cap ? b->cap * 2 : 4096;
     while (newcap < b->len + n) newcap *= 2;
     uint8_t *p = realloc(b->data, newcap);
+    
     if (!p) { b->error = 1; return -1; }
     b->data = p;
     b->cap = newcap;
   }
+  
   memcpy(b->data + b->len, chunk, n);
   b->len += n;
+  
   return 0;
 }
 
@@ -652,48 +736,68 @@ static void zlib_init_proto(ant_t *js) {
   js_mkfun(js_zlib_get_bytes_written), JS_DESC_C);
 }
 
+static ant_value_t zlib_mkctor(ant_t *js, ant_value_t (*fn)(ant_t *, ant_value_t *, int)) {
+  ant_value_t ctor = js_heavy_mkfun(js, fn, js_mkundef());
+  js_mark_constructor(ctor, true);
+  return ctor;
+}
+
 ant_value_t zlib_library(ant_t *js) {
   zlib_init_proto(js);
 
   ant_value_t lib = js_mkobj(js);
   ant_value_t consts = make_constants(js);
 
-  js_set(js, lib, "constants",            consts);
+  js_set(js, lib, "gzip", js_mkfun(js_gzip));
+  js_set(js, lib, "gzipSync", js_mkfun(js_gzipSync));
+  js_set(js, lib, "Gzip", zlib_mkctor(js, js_create_gzip));
+  js_set(js, lib, "createGzip", js_mkfun(js_create_gzip));
 
-  js_set(js, lib, "createGzip",             js_mkfun(js_create_gzip));
-  js_set(js, lib, "createGunzip",           js_mkfun(js_create_gunzip));
-  js_set(js, lib, "createDeflate",          js_mkfun(js_create_deflate));
-  js_set(js, lib, "createInflate",          js_mkfun(js_create_inflate));
-  js_set(js, lib, "createDeflateRaw",       js_mkfun(js_create_deflate_raw));
-  js_set(js, lib, "createInflateRaw",       js_mkfun(js_create_inflate_raw));
-  js_set(js, lib, "createUnzip",            js_mkfun(js_create_unzip));
-  js_set(js, lib, "createBrotliCompress",   js_mkfun(js_create_brotli_compress));
-  js_set(js, lib, "createBrotliDecompress", js_mkfun(js_create_brotli_decompress));
+  js_set(js, lib, "gunzip", js_mkfun(js_gunzip));
+  js_set(js, lib, "gunzipSync", js_mkfun(js_gunzipSync));
+  js_set(js, lib, "Gunzip", zlib_mkctor(js, js_create_gunzip));
+  js_set(js, lib, "createGunzip", js_mkfun(js_create_gunzip));
 
-  js_set(js, lib, "gzip",             js_mkfun(js_gzip));
-  js_set(js, lib, "gunzip",           js_mkfun(js_gunzip));
-  js_set(js, lib, "deflate",          js_mkfun(js_deflate));
-  js_set(js, lib, "inflate",          js_mkfun(js_inflate));
-  js_set(js, lib, "deflateRaw",       js_mkfun(js_deflateRaw));
-  js_set(js, lib, "inflateRaw",       js_mkfun(js_inflateRaw));
-  js_set(js, lib, "unzip",            js_mkfun(js_unzip));
-  js_set(js, lib, "brotliCompress",   js_mkfun(js_brotliCompress));
+  js_set(js, lib, "deflate", js_mkfun(js_deflate));
+  js_set(js, lib, "deflateSync", js_mkfun(js_deflateSync));
+  js_set(js, lib, "Deflate", zlib_mkctor(js, js_create_deflate));
+  js_set(js, lib, "createDeflate", js_mkfun(js_create_deflate));
+
+  js_set(js, lib, "inflate", js_mkfun(js_inflate));
+  js_set(js, lib, "inflateSync", js_mkfun(js_inflateSync));
+  js_set(js, lib, "Inflate", zlib_mkctor(js, js_create_inflate));
+  js_set(js, lib, "createInflate", js_mkfun(js_create_inflate));
+
+  js_set(js, lib, "deflateRaw", js_mkfun(js_deflateRaw));
+  js_set(js, lib, "deflateRawSync", js_mkfun(js_deflateRawSync));
+  js_set(js, lib, "DeflateRaw", zlib_mkctor(js, js_create_deflate_raw));
+  js_set(js, lib, "createDeflateRaw", js_mkfun(js_create_deflate_raw));
+
+  js_set(js, lib, "inflateRaw", js_mkfun(js_inflateRaw));
+  js_set(js, lib, "inflateRawSync", js_mkfun(js_inflateRawSync));
+  js_set(js, lib, "InflateRaw", zlib_mkctor(js, js_create_inflate_raw));
+  js_set(js, lib, "createInflateRaw", js_mkfun(js_create_inflate_raw));
+
+  js_set(js, lib, "unzip", js_mkfun(js_unzip));
+  js_set(js, lib, "unzipSync", js_mkfun(js_unzipSync));
+  js_set(js, lib, "Unzip", zlib_mkctor(js, js_create_unzip));
+  js_set(js, lib, "createUnzip", js_mkfun(js_create_unzip));
+
+  js_set(js, lib, "brotliCompress", js_mkfun(js_brotliCompress));
+  js_set(js, lib, "brotliCompressSync", js_mkfun(js_brotliCompressSync));
+  js_set(js, lib, "BrotliCompress", zlib_mkctor(js, js_create_brotli_compress));
+  js_set(js, lib, "createBrotliCompress", js_mkfun(js_create_brotli_compress));
+
   js_set(js, lib, "brotliDecompress", js_mkfun(js_brotliDecompress));
-
-  js_set(js, lib, "gzipSync",             js_mkfun(js_gzipSync));
-  js_set(js, lib, "gunzipSync",           js_mkfun(js_gunzipSync));
-  js_set(js, lib, "deflateSync",          js_mkfun(js_deflateSync));
-  js_set(js, lib, "inflateSync",          js_mkfun(js_inflateSync));
-  js_set(js, lib, "deflateRawSync",       js_mkfun(js_deflateRawSync));
-  js_set(js, lib, "inflateRawSync",       js_mkfun(js_inflateRawSync));
-  js_set(js, lib, "unzipSync",            js_mkfun(js_unzipSync));
-  js_set(js, lib, "brotliCompressSync",   js_mkfun(js_brotliCompressSync));
   js_set(js, lib, "brotliDecompressSync", js_mkfun(js_brotliDecompressSync));
-
-  js_set(js, lib, "crc32",  js_mkfun(js_zlib_crc32));
+  js_set(js, lib, "BrotliDecompress", zlib_mkctor(js, js_create_brotli_decompress));
+  js_set(js, lib, "createBrotliDecompress", js_mkfun(js_create_brotli_decompress));
+  
   js_set(js, lib, "default", lib);
-
+  js_set(js, lib, "constants", consts);
+  js_set(js, lib, "crc32", js_mkfun(js_zlib_crc32));
   js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "zlib", 4));
+  
   return lib;
 }
 

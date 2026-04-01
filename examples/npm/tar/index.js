@@ -20,7 +20,7 @@ async function run() {
     console.log('FAIL — archive not created');
     process.exit(1);
   }
-  console.log('   OK — archive created (%d bytes)', fs.statSync(archive).size);
+  console.log(`   OK — archive created (${fs.statSync(archive).size} bytes)`);
 
   console.log('2. Extracting tarball...');
   await tar.extract({ file: archive, cwd: dest });

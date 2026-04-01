@@ -90,6 +90,7 @@ const char *js_sym_key(ant_value_t sym);
 ant_value_t js_mksym_for(ant_t *, const char *key);
 ant_value_t js_symbol_to_string(ant_t *js, ant_value_t sym);
 ant_value_t js_get_sym(ant_t *, ant_value_t obj, ant_value_t sym);
+ant_value_t js_get_sym_with_receiver(ant_t *, ant_value_t obj, ant_value_t sym, ant_value_t receiver);
 
 ant_value_t js_mkobj(ant_t *);
 ant_value_t js_mkobj_with_inobj_limit(ant_t *, uint8_t inobj_limit);
@@ -142,9 +143,10 @@ typedef struct {
 } ant_iter_t;
 
 ant_iter_t js_prop_iter_begin(ant_t *js, ant_value_t obj);
+void js_prop_iter_end(ant_iter_t *iter);
 
 bool js_prop_iter_next(ant_iter_t *iter, const char **key, size_t *key_len, ant_value_t *value);
-void js_prop_iter_end(ant_iter_t *iter);
+bool js_prop_iter_next_val(ant_iter_t *iter, ant_value_t *key_out, ant_value_t *value);
 
 ant_value_t js_obj_to_func(ant_value_t obj);
 ant_value_t js_obj_to_func_ex(ant_value_t obj, uint8_t flags);

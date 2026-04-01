@@ -1675,7 +1675,7 @@ static jit_features_t jit_prescan_features(sv_func_t *func) {
       case OP_CALL: case OP_CALL_METHOD:
       case OP_TAIL_CALL: case OP_TAIL_CALL_METHOD:
       case OP_ARRAY: case OP_NEW:
-      case OP_APPLY:
+      case OP_APPLY: case OP_NEW_APPLY:
         f.needs_args_buf = true;
         if (op == OP_TAIL_CALL || op == OP_TAIL_CALL_METHOD)
           f.needs_tco_args = true;
@@ -1741,7 +1741,7 @@ static bool jit_is_eligible(sv_func_t *func) {
       case OP_CALL: case OP_CALL_METHOD:
       case OP_CALL_IS_PROTO:
       case OP_TAIL_CALL: case OP_TAIL_CALL_METHOD:
-      case OP_APPLY:
+      case OP_APPLY: case OP_NEW_APPLY:
       case OP_GET_GLOBAL: case OP_GET_GLOBAL_UNDEF:
       case OP_PUT_GLOBAL:
       case OP_GET_FIELD: case OP_GET_FIELD2: case OP_PUT_FIELD:

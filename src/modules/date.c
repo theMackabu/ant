@@ -80,18 +80,14 @@ static inline bool date_is_primitive(ant_value_t v) {
     || t == T_BIGINT;
 }
 
-static bool is_date_instance(ant_t *js, ant_value_t value) {
+bool is_date_instance(ant_value_t value) {
   if (!is_object_type(value)) return false;
-  ant_value_t date_proto = js_get_ctor_proto(js, "Date", 4);
-  
-  if (!is_object_type(date_proto)) return false;
-  if (value == date_proto) return true;
-  
-  return proto_chain_contains(js, value, date_proto);
+  ant_value_t brand = js_get_slot(js_as_obj(value), SLOT_BRAND);
+  return vtype(brand) == T_NUM && (int)js_getnum(brand) == BRAND_DATE;
 }
 
 static bool date_this_time_value(ant_t *js, ant_value_t this_val, double *out, ant_value_t *err) {
-  if (!is_date_instance(js, this_val)) {
+  if (!is_date_instance(this_val)) {
     if (err) *err = js_mkerr_typed(js, JS_ERR_TYPE, "not a Date object");
     return false;
   }
@@ -102,7 +98,7 @@ static bool date_this_time_value(ant_t *js, ant_value_t this_val, double *out, a
 }
 
 static ant_value_t date_set_this_time_value(ant_t *js, ant_value_t this_val, double v) {
-  if (!is_date_instance(js, this_val)) {
+  if (!is_date_instance(this_val)) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "not a Date object");
   }
   
@@ -763,9 +759,11 @@ static bool date_parse_string_to_ms(ant_t *js, ant_value_t arg, double *out_ms) 
 
   int fields[9];
   date_fields_t fields1 = {0};
+  
   bool is_local = false;
-  bool ok = parse_isostring((const uint8_t *)buf, fields, &is_local)
-         || parse_otherstring((const uint8_t *)buf, fields, &is_local);
+  bool ok = 
+    parse_isostring((const uint8_t *)buf, fields, &is_local) || 
+    parse_otherstring((const uint8_t *)buf, fields, &is_local);
 
   free(buf);
 
@@ -795,6 +793,7 @@ static bool date_parse_string_to_ms(ant_t *js, ant_value_t arg, double *out_ms) 
   fields1.second = (double)fields[5];
   fields1.millisecond = (double)fields[6];
   *out_ms = date_make_fields(&fields1, is_local ? 1 : 0) - (double)fields[8] * 60000.0;
+  
   return true;
 }
 
@@ -818,8 +817,8 @@ static ant_value_t builtin_Date(ant_t *js, ant_value_t *args, int nargs) {
     val = (double)date_now();
   } else if (nargs == 1) {
     ant_value_t input = args[0];
-
-    if (is_object_type(input) && is_date_instance(js, input)) {
+    
+    if (is_object_type(input) && is_date_instance(input)) {
       ant_value_t tv = js_get_slot(js_as_obj(input), SLOT_DATA);
       val = (vtype(tv) == T_NUM) ? tod(tv) : JS_NAN;
       val = date_timeclip(val);
@@ -828,9 +827,7 @@ static ant_value_t builtin_Date(ant_t *js, ant_value_t *args, int nargs) {
       if (is_err(prim)) return prim;
       if (vtype(prim) == T_STR) {
         if (!date_parse_string_to_ms(js, prim, &val)) return js_mkerr_typed(js, JS_ERR_INTERNAL, "Date parse failed");
-      } else {
-        val = js_to_number(js, prim);
-      }
+      } else val = js_to_number(js, prim);
       val = date_timeclip(val);
     }
   } else {
@@ -852,6 +849,8 @@ static ant_value_t builtin_Date(ant_t *js, ant_value_t *args, int nargs) {
   }
 
   js_set_slot(js_as_obj(js->this_val), SLOT_DATA, tov(val));
+  js_set_slot(js_as_obj(js->this_val), SLOT_BRAND, js_mknum(BRAND_DATE));
+  
   return js->this_val;
 }
 

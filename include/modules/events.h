@@ -15,9 +15,21 @@ bool eventemitter_add_listener(
   ant_value_t listener, bool once
 );
 
+bool eventemitter_add_listener_val(
+  ant_t *js,
+  ant_value_t target, ant_value_t key,
+  ant_value_t listener, bool once
+);
+
 bool eventemitter_emit_args(
   ant_t *js,
   ant_value_t target, const char *event_type,
+  ant_value_t *args, int nargs
+);
+
+bool eventemitter_emit_args_val(
+  ant_t *js,
+  ant_value_t target, ant_value_t key,
   ant_value_t *args, int nargs
 );
 

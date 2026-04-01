@@ -1,6 +1,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 
 #include "ant.h"
 #include "errors.h"
@@ -100,10 +101,60 @@ void js_fire_rejection_handled(ant_t *js, ant_value_t promise_val, ant_value_t r
   sv_vm_call(js->vm, js, handler, global, call_args, 1, NULL, false);
 }
 
+// stub: minimal Intl
+static ant_value_t intl_dtf_format(ant_t *js, ant_value_t *args, int nargs) {
+  time_t t;
+  
+  if (nargs >= 1 && vtype(args[0]) == T_NUM) {
+    t = (time_t)(js_getnum(args[0]) / 1000.0);
+  } else t = time(NULL);
+
+  struct tm local;
+  localtime_r(&t, &local);
+
+  char buf[64];
+  int hour12 = local.tm_hour % 12;
+  if (hour12 == 0) hour12 = 12;
+  
+  const char *ampm = local.tm_hour < 12 ? "AM" : "PM";
+  snprintf(buf, sizeof(buf), "%d:%02d:%02d %s", hour12, local.tm_min, local.tm_sec, ampm);
+
+  return js_mkstr(js, buf, strlen(buf));
+}
+
+static ant_value_t intl_dtf_resolvedOptions(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t obj = js_mkobj(js);
+  js_set(js, obj, "locale", js_mkstr(js, "en-US", 5));
+  js_set(js, obj, "timeZone", js_mkstr(js, "UTC", 3));
+  return obj;
+}
+
+static ant_value_t intl_dtf_formatToParts(ant_t *js, ant_value_t *args, int nargs) {
+  return js_mkarr(js);
+}
+
+static ant_value_t intl_dtf_constructor(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this = js_getthis(js);
+
+  ant_value_t format_fn = js_heavy_mkfun(js, intl_dtf_format, js_mkundef());
+  js_set(js, this, "format", format_fn);
+  js_set(js, this, "resolvedOptions", js_mkfun(intl_dtf_resolvedOptions));
+  js_set(js, this, "formatToParts", js_mkfun(intl_dtf_formatToParts));
+
+  return this;
+}
+
 void init_globals_module(void) {
   ant_t *js = rt->js;
   ant_value_t global = js_glob(js);
 
   js_set(js, global, "reportError", js_mkfun(js_report_error));
   js_set_descriptor(js, global, "reportError", 11, JS_DESC_W | JS_DESC_C);
+
+  ant_value_t intl = js_mkobj(js);
+  ant_value_t dtf_ctor = js_heavy_mkfun(js, intl_dtf_constructor, js_mkundef());
+  
+  js_mark_constructor(dtf_ctor, true);
+  js_set(js, intl, "DateTimeFormat", dtf_ctor);
+  js_set(js, global, "Intl", intl);
 }

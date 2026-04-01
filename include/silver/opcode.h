@@ -162,6 +162,7 @@ OP_DEF(  TAIL_CALL,         3,   1,   0, npop)      /* tail-position call */
 OP_DEF(  TAIL_CALL_METHOD,  3,   2,   0, npop)
 OP_DEF(  NEW,               3,   2,   1, npop)      /* func new.target args -> obj */
 OP_DEF(  APPLY,             3,   3,   1, u16)       /* func this [args] -> result */
+OP_DEF(  NEW_APPLY,         3,   2,   1, u16)       /* func new.target [args] -> obj */
 OP_DEF(  EVAL,              5,   1,   1, npop)      /* direct eval */
 OP_DEF(  RETURN,            1,   1,   0, none)
 OP_DEF(  RETURN_UNDEF,      1,   0,   0, none)

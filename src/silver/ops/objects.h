@@ -48,7 +48,9 @@ static inline void sv_op_define_method_comp(
   ant_value_t desc_obj = js_as_obj(obj);
   bool is_getter = (flags & 1) != 0;
   bool is_setter = (flags & 2) != 0;
-  if (vtype(key) == T_SYMBOL && !is_getter && !is_setter) {
+  if (vtype(key) == T_SYMBOL) {
+    if (is_getter) { js_set_sym_getter_desc(js, desc_obj, key, fn, JS_DESC_E | JS_DESC_C); return; }
+    if (is_setter) { js_set_sym_setter_desc(js, desc_obj, key, fn, JS_DESC_E | JS_DESC_C); return; }
     js_set_sym(js, obj, key, fn);
     return;
   }

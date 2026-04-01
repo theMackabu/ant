@@ -165,11 +165,14 @@ static inline ant_value_t sv_start_tla(ant_t *js, sv_func_t *func, ant_value_t t
     coro->active_parent = js->active_async_coro;
     js->active_async_coro = coro;
     
-    ant_value_t result = sv_execute_entry(async_vm, func, this_val, NULL, 0);
-    js->active_async_coro = coro->active_parent;
-    coro->active_parent = NULL;
+    ant_value_t result = sv_execute_entry(
+      async_vm, func, 
+      this_val, NULL, 0
+    );
     
     if (async_vm->suspended) {
+      js->active_async_coro = coro->active_parent;
+      coro->active_parent = NULL;
       enqueue_coroutine(coro);
       GC_ROOT_RESTORE(js, root_mark);
       return promise;
@@ -182,6 +185,9 @@ static inline ant_value_t sv_start_tla(ant_t *js, sv_func_t *func, ant_value_t t
       js->thrown_value = js_mkundef();
       js_reject_promise(js, promise, reject_value);
     } else js_resolve_promise(js, promise, result);
+    
+    js->active_async_coro = coro->active_parent;
+    coro->active_parent = NULL;
     
     free_coroutine(coro);
     GC_ROOT_RESTORE(js, root_mark);
@@ -365,13 +371,13 @@ static inline ant_value_t sv_start_async_closure(
     js->active_async_coro = coro;
     
     ant_value_t result = sv_execute_closure_entry(
-      async_vm, closure, callee_func, super_val, this_val, args, argc, NULL
+      async_vm, closure, callee_func, 
+      super_val, this_val, args, argc, NULL
     );
     
-    js->active_async_coro = coro->active_parent;
-    coro->active_parent = NULL;
-    
     if (async_vm->suspended) {
+      js->active_async_coro = coro->active_parent;
+      coro->active_parent = NULL;
       enqueue_coroutine(coro);
       GC_ROOT_RESTORE(js, root_mark);
       return promise;
@@ -385,6 +391,9 @@ static inline ant_value_t sv_start_async_closure(
       js_reject_promise(js, promise, reject_value);
     } else js_resolve_promise(js, promise, result);
 
+    js->active_async_coro = coro->active_parent;
+    coro->active_parent = NULL;
+    
     free_coroutine(coro);
     GC_ROOT_RESTORE(js, root_mark);
     

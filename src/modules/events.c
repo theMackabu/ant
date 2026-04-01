@@ -56,9 +56,17 @@ static const UT_icd event_listener_icd = {
 };
 
 typedef struct {
-  UT_array *listeners;
-  char *event_type;
-  UT_hash_handle hh;
+  unsigned char buf[48];
+  unsigned char *ptr;
+  size_t len;
+} evt_key_t;
+
+typedef struct {
+  UT_array       *listeners;
+  ant_value_t     js_key;
+  unsigned char  *hash_key;
+  size_t          hash_key_len;
+  UT_hash_handle  hh;
 } EventType;
 
 typedef struct emitter_reg {
@@ -69,14 +77,71 @@ typedef struct emitter_reg {
 static EventType *global_events     = NULL;
 static emitter_reg_t *emitter_registry = NULL;
 
-static EventType *make_event_type(const char *event_type) {
-  size_t etlen = strlen(event_type);
-  EventType *evt = ant_calloc(sizeof(EventType) + etlen + 1);
+static EventType *make_event_type(ant_value_t js_key, const evt_key_t *ek) {
+  EventType *evt = ant_calloc(sizeof(EventType) + ek->len);
   if (!evt) return NULL;
-  evt->event_type = (char *)(evt + 1);
-  memcpy(evt->event_type, event_type, etlen + 1);
+  evt->js_key       = js_key;
+  evt->hash_key     = (unsigned char *)(evt + 1);
+  evt->hash_key_len = ek->len;
+  memcpy(evt->hash_key, ek->ptr, ek->len);
   utarray_new(evt->listeners, &event_listener_icd);
   return evt;
+}
+
+static EventType *evt_find(EventType *table, const evt_key_t *ek) {
+  EventType *evt = NULL;
+  HASH_FIND(hh, table, ek->ptr, ek->len, evt);
+  return evt;
+}
+
+static EventType *evt_find_or_create(EventType **table, ant_value_t js_key, const evt_key_t *ek) {
+  EventType *evt = evt_find(*table, ek);
+  if (!evt) {
+    evt = make_event_type(js_key, ek);
+    if (!evt) return NULL;
+    HASH_ADD_KEYPTR(hh, *table, evt->hash_key, evt->hash_key_len, evt);
+  }
+  return evt;
+}
+
+static void evt_key_reset(evt_key_t *k) { 
+  k->ptr = k->buf; 
+  k->len = 0;
+}
+
+static void evt_key_free(evt_key_t *k) {
+  if (k->ptr != k->buf) free(k->ptr);
+  evt_key_reset(k);
+}
+
+static bool evt_key_init(ant_t *js, ant_value_t arg, evt_key_t *out) {
+  evt_key_reset(out);
+  uint8_t tag = (uint8_t)vtype(arg);
+
+  if (tag == T_STR) {
+    size_t slen = 0;
+    const char *s = js_getstr(js, arg, &slen);
+    out->len = 1 + slen;
+    
+    if (out->len > sizeof(out->buf)) {
+      out->ptr = malloc(out->len);
+      if (!out->ptr) { evt_key_reset(out); return false; }
+    }
+    
+    out->ptr[0] = tag;
+    if (slen) memcpy(out->ptr + 1, s, slen);
+    
+    return true;
+  }
+
+  if (tag == T_SYMBOL) {
+    out->len = 1 + sizeof(ant_value_t);
+    out->ptr[0] = tag;
+    memcpy(out->ptr + 1, &arg, sizeof(ant_value_t));
+    return true;
+  }
+
+  return false;
 }
 
 static EventType **get_or_create_emitter_events(ant_t *js, ant_value_t this_obj) {
@@ -98,42 +163,45 @@ static EventType **get_or_create_emitter_events(ant_t *js, ant_value_t this_obj)
   return (EventType **)(uintptr_t)js_getnum(slot);
 }
 
-static EventType *find_or_create_global_event_type(const char *event_type) {
-  EventType *evt = NULL;
-  HASH_FIND_STR(global_events, event_type, evt);
-  if (!evt) {
-    evt = make_event_type(event_type);
-    if (!evt) return NULL;
-    HASH_ADD_KEYPTR(hh, global_events, evt->event_type, strlen(evt->event_type), evt);
-  }
+static EventType *find_or_create_global_event_type(ant_t *js, ant_value_t js_key) {
+  evt_key_t ek;
+  if (!evt_key_init(js, js_key, &ek)) return NULL;
+  EventType *evt = evt_find_or_create(&global_events, js_key, &ek);
+  evt_key_free(&ek);
   return evt;
 }
 
-static EventType *find_global_event_type(const char *event_type) {
-  EventType *evt = NULL;
-  HASH_FIND_STR(global_events, event_type, evt);
+static EventType *find_global_event_type(ant_t *js, ant_value_t js_key) {
+  evt_key_t ek;
+  if (!evt_key_init(js, js_key, &ek)) return NULL;
+  EventType *evt = evt_find(global_events, &ek);
+  evt_key_free(&ek);
   return evt;
 }
 
-static EventType *find_or_create_emitter_event_type(ant_t *js, ant_value_t this_obj, const char *event_type) {
+static EventType *find_or_create_emitter_event_type(ant_t *js, ant_value_t this_obj, ant_value_t js_key) {
   EventType **events = get_or_create_emitter_events(js, this_obj);
   if (!events) return NULL;
-  EventType *evt = NULL;
-  HASH_FIND_STR(*events, event_type, evt);
-  if (!evt) {
-    evt = make_event_type(event_type);
-    if (!evt) return NULL;
-    HASH_ADD_KEYPTR(hh, *events, evt->event_type, strlen(evt->event_type), evt);
-  }
+  evt_key_t ek;
+  if (!evt_key_init(js, js_key, &ek)) return NULL;
+  EventType *evt = evt_find_or_create(events, js_key, &ek);
+  evt_key_free(&ek);
   return evt;
 }
 
-static EventType *find_emitter_event_type(ant_t *js, ant_value_t this_obj, const char *event_type) {
+static EventType *find_emitter_event_type(ant_t *js, ant_value_t this_obj, ant_value_t js_key) {
   EventType **events = get_or_create_emitter_events(js, this_obj);
   if (!events) return NULL;
-  EventType *evt = NULL;
-  HASH_FIND_STR(*events, event_type, evt);
+  evt_key_t ek;
+  if (!evt_key_init(js, js_key, &ek)) return NULL;
+  EventType *evt = evt_find(*events, &ek);
+  evt_key_free(&ek);
   return evt;
+}
+
+static inline ant_value_t evt_key_from_arg(ant_value_t arg) {
+  uint8_t t = vtype(arg);
+  return (t == T_STR || t == T_SYMBOL) ? arg : 0;
 }
 
 static void js_init_event_obj(ant_t *js, ant_value_t obj, ant_value_t type_val, bool bubbles, bool cancelable) {
@@ -483,76 +551,73 @@ static ant_value_t dispatch_event_to(ant_t *js, ant_value_t event_obj, EventType
 
 static ant_value_t js_add_event_listener_method(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
-  const char *event_type = js_getstr(js, args[0], NULL);
-  if (!event_type) return js_mkundef();
+  ant_value_t key = evt_key_from_arg(args[0]);
+  if (!key) return js_mkundef();
   return add_listener_to(js, args, nargs,
-    find_or_create_emitter_event_type(js, js_getthis(js), event_type));
+    find_or_create_emitter_event_type(js, js_getthis(js), key));
 }
 
 static ant_value_t js_add_event_listener(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
-  const char *event_type = js_getstr(js, args[0], NULL);
-  if (!event_type) return js_mkundef();
-  return add_listener_to(js, args, nargs, find_or_create_global_event_type(event_type));
+  ant_value_t key = evt_key_from_arg(args[0]);
+  if (!key) return js_mkundef();
+  return add_listener_to(js, args, nargs, find_or_create_global_event_type(js, key));
 }
 
 static ant_value_t js_remove_event_listener_method(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
-  const char *event_type = js_getstr(js, args[0], NULL);
-  if (!event_type) return js_mkundef();
+  ant_value_t key = evt_key_from_arg(args[0]);
+  if (!key) return js_mkundef();
   return remove_listener_from(js, args, nargs,
-    find_emitter_event_type(js, js_getthis(js), event_type));
+    find_emitter_event_type(js, js_getthis(js), key));
 }
 
 static ant_value_t js_remove_event_listener(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkundef();
-  const char *event_type = js_getstr(js, args[0], NULL);
-  if (!event_type) return js_mkundef();
-  return remove_listener_from(js, args, nargs, find_global_event_type(event_type));
+  ant_value_t key = evt_key_from_arg(args[0]);
+  if (!key) return js_mkundef();
+  return remove_listener_from(js, args, nargs, find_global_event_type(js, key));
 }
 
 static ant_value_t js_dispatch_event_method(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1 || !is_object_type(args[0])) return js_false;
   ant_value_t this_obj = js_getthis(js);
-  ant_value_t type_val = js_get(js, args[0], "type");
-  const char *event_type = js_getstr(js, type_val, NULL);
-  if (!event_type) return js_false;
+  ant_value_t key = js_get(js, args[0], "type");
+  if (!evt_key_from_arg(key)) return js_false;
   return dispatch_event_to(js, args[0],
-    find_emitter_event_type(js, this_obj, event_type), this_obj);
+    find_emitter_event_type(js, this_obj, key), this_obj);
 }
 
 static ant_value_t js_dispatch_event(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1 || !is_object_type(args[0])) return js_false;
-  ant_value_t type_val = js_get(js, args[0], "type");
-  const char *event_type = js_getstr(js, type_val, NULL);
-  if (!event_type) return js_false;
+  ant_value_t key = js_get(js, args[0], "type");
+  if (!evt_key_from_arg(key)) return js_false;
   return dispatch_event_to(js, args[0],
-    find_global_event_type(event_type), js_glob(js));
+    find_global_event_type(js, key), js_glob(js));
 }
 
 void js_dispatch_global_event(ant_t *js, ant_value_t event_obj) {
-  ant_value_t type_val = js_get(js, event_obj, "type");
-  const char *event_type = js_getstr(js, type_val, NULL);
-  if (!event_type) return;
-  EventType *evt = find_global_event_type(event_type);
+  ant_value_t key = js_get(js, event_obj, "type");
+  if (!evt_key_from_arg(key)) return;
+  EventType *evt = find_global_event_type(js, key);
   if (!evt || utarray_len(evt->listeners) == 0) return;
   dispatch_event_to(js, event_obj, evt, js_glob(js));
 }
 
 static bool eventemitter_add_listener_impl(
   ant_t *js,
-  ant_value_t target, const char *event_type,
+  ant_value_t target, ant_value_t key,
   ant_value_t listener, bool once, bool prepend
 ) {
   EventType *evt = NULL;
   EventListenerEntry entry = {0};
   uint8_t t = 0;
 
-  if (!is_object_type(target) || !event_type) return false;
+  if (!is_object_type(target) || !key) return false;
   t = vtype(listener);
   if (t != T_FUNC && t != T_CFUNC) return false;
 
-  evt = find_or_create_emitter_event_type(js, target, event_type);
+  evt = find_or_create_emitter_event_type(js, target, key);
   if (!evt) return false;
 
   entry.callback = listener;
@@ -574,14 +639,14 @@ static bool eventemitter_add_listener_impl(
 
 static ant_value_t js_eventemitter_off(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "off requires 2 arguments (event, listener)");
-  const char *event_type = js_getstr(js, args[0], NULL);
+  ant_value_t key = evt_key_from_arg(args[0]);
   
-  if (!event_type) return js_mkerr(js, "event must be a string");
+  if (!key) return js_mkerr(js, "event must be a string or Symbol");
   ant_value_t this_obj = js_getthis(js);
   
   remove_listener_from(
     js, args, nargs, 
-    find_emitter_event_type(js, this_obj, event_type)
+    find_emitter_event_type(js, this_obj, key)
   );
   
   return this_obj;
@@ -589,13 +654,13 @@ static ant_value_t js_eventemitter_off(ant_t *js, ant_value_t *args, int nargs) 
 
 static bool eventemitter_emit_args_impl(
   ant_t *js,
-  ant_value_t target, const char *event_type,
+  ant_value_t target, ant_value_t key,
   ant_value_t *args, int nargs
 ) {
   EventType *evt = NULL;
 
-  if (!is_object_type(target) || !event_type) return false;
-  evt = find_emitter_event_type(js, target, event_type);
+  if (!is_object_type(target) || !key) return false;
+  evt = find_emitter_event_type(js, target, key);
   if (!evt || utarray_len(evt->listeners) == 0) return false;
 
   for (unsigned int i = 0; i < utarray_len(evt->listeners);) {
@@ -610,23 +675,32 @@ static bool eventemitter_emit_args_impl(
     if (vtype(cb) != T_FUNC && vtype(cb) != T_CFUNC) continue;
     
     ant_value_t result = sv_vm_call(js->vm, js, cb, js_mkundef(), args, nargs, NULL, false);
-    if (vtype(result) == T_ERR) fprintf(stderr, "Error in event listener for '%s': %s\n", event_type, js_str(js, result));
+    if (vtype(result) == T_ERR) {
+      if (vtype(key) == T_STR) fprintf(stderr, "Error in event listener for '%s': %s\n", js_str(js, key), js_str(js, result));
+      else fprintf(stderr, "Error in event listener: %s\n", js_str(js, result));
+    }
   }
 
   return true;
 }
 
 static ant_value_t js_eventemitter_emit(ant_t *js, ant_value_t *args, int nargs) {
-  const char *event_type = NULL;
-
   if (nargs < 1) return js_mkerr(js, "emit requires at least 1 argument (event)");
-  event_type = js_getstr(js, args[0], NULL);
-  if (!event_type) return js_mkerr(js, "event must be a string");
+  ant_value_t key = evt_key_from_arg(args[0]);
+  if (!key) return js_mkerr(js, "event must be a string or Symbol");
   
   return js_bool(eventemitter_emit_args_impl(
-    js, js_getthis(js), event_type,
+    js, js_getthis(js), key,
     nargs > 1 ? &args[1] : NULL, nargs - 1
   ));
+}
+
+bool eventemitter_emit_args_val(
+  ant_t *js,
+  ant_value_t target, ant_value_t key,
+  ant_value_t *args, int nargs
+) {
+  return eventemitter_emit_args_impl(js, target, key, args, nargs);
 }
 
 bool eventemitter_emit_args(
@@ -634,7 +708,15 @@ bool eventemitter_emit_args(
   ant_value_t target, const char *event_type,
   ant_value_t *args, int nargs
 ) {
-  return eventemitter_emit_args_impl(js, target, event_type, args, nargs);
+  return eventemitter_emit_args_val(js, target, js_mkstr(js, event_type, strlen(event_type)), args, nargs);
+}
+
+bool eventemitter_add_listener_val(
+  ant_t *js,
+  ant_value_t target, ant_value_t key,
+  ant_value_t listener, bool once
+) {
+  return eventemitter_add_listener_impl(js, target, key, listener, once, false);
 }
 
 bool eventemitter_add_listener(
@@ -642,17 +724,15 @@ bool eventemitter_add_listener(
   ant_value_t target, const char *event_type,
   ant_value_t listener, bool once
 ) {
-  return eventemitter_add_listener_impl(js, target, event_type, listener, once, false);
+  return eventemitter_add_listener_val(js, target, js_mkstr(js, event_type, strlen(event_type)), listener, once);
 }
 
 static ant_value_t js_eventemitter_add(ant_t *js, ant_value_t *args, int nargs, bool once, bool prepend) {
-  const char *event_type = NULL;
-
   if (nargs < 2) return js_mkerr(js, "requires 2 arguments (event, listener)");
-  event_type = js_getstr(js, args[0], NULL);
+  ant_value_t key = evt_key_from_arg(args[0]);
   
-  if (!event_type) return js_mkerr(js, "event must be a string");
-  if (!eventemitter_add_listener_impl(js, js_getthis(js), event_type, args[1], once, prepend))
+  if (!key) return js_mkerr(js, "event must be a string or Symbol");
+  if (!eventemitter_add_listener_impl(js, js_getthis(js), key, args[1], once, prepend))
     return js_mkerr(js, "listener must be a function");
     
   return js_getthis(js);
@@ -677,18 +757,23 @@ static ant_value_t js_eventemitter_prepend_once_listener(ant_t *js, ant_value_t 
 static ant_value_t js_eventemitter_removeAllListeners(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_obj = js_getthis(js);
   if (nargs < 1) return this_obj;
-  const char *event_type = js_getstr(js, args[0], NULL);
-  if (!event_type) return this_obj;
-  EventType *evt = find_emitter_event_type(js, this_obj, event_type);
+  
+  ant_value_t key = evt_key_from_arg(args[0]);
+  if (!key) return this_obj;
+  
+  EventType *evt = find_emitter_event_type(js, this_obj, key);
   if (evt) utarray_clear(evt->listeners);
+  
   return this_obj;
 }
 
 static ant_value_t js_eventemitter_listenerCount(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mknum(0);
-  const char *event_type = js_getstr(js, args[0], NULL);
-  if (!event_type) return js_mknum(0);
-  EventType *evt = find_emitter_event_type(js, js_getthis(js), event_type);
+  ant_value_t key = evt_key_from_arg(args[0]);
+  
+  if (!key) return js_mknum(0);
+  EventType *evt = find_emitter_event_type(js, js_getthis(js), key);
+  
   if (!evt) return js_mknum(0);
   return js_mknum((double)utarray_len(evt->listeners));
 }
@@ -700,9 +785,8 @@ static ant_value_t js_eventemitter_eventNames(ant_t *js, ant_value_t *args, int 
   EventType **events = get_or_create_emitter_events(js, this_obj);
   if (events && *events) {
     EventType *evt, *tmp;
-    HASH_ITER(hh, *events, evt, tmp) if (utarray_len(evt->listeners) > 0) js_arr_push(
-      js, result, js_mkstr(js, evt->event_type, strlen(evt->event_type))
-    );
+    HASH_ITER(hh, *events, evt, tmp) if (utarray_len(evt->listeners) > 0)
+      js_arr_push(js, result, evt->js_key);
   }
   
   return result;
@@ -805,6 +889,7 @@ void init_events_module(void) {
 static void mark_event_type_listeners(ant_t *js, gc_mark_fn mark, EventType *events) {
   EventType *evt, *tmp;
   HASH_ITER(hh, events, evt, tmp) {
+  if (vtype(evt->js_key) == T_STR) mark(js, evt->js_key);
   for (unsigned int i = 0; i < utarray_len(evt->listeners); i++) {
     EventListenerEntry *e = (EventListenerEntry *)utarray_eltptr(evt->listeners, i);
     mark(js, e->callback);

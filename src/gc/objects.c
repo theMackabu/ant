@@ -122,31 +122,10 @@ void gc_remember_add(ant_t *js, ant_object_t *obj) {
 }
 
 #define GC_MARK_STACK_INIT 4096
-void gc_mark_value(ant_t *js, ant_value_t v);
-
-static inline void gc_mark_promise_handler(ant_t *js, const promise_handler_t *h) {
-  if (!h) return;
-  gc_mark_value(js, h->onFulfilled);
-  gc_mark_value(js, h->onRejected);
-  gc_mark_value(js, h->nextPromise);
-}
-
-static inline void gc_mark_promise_handlers(ant_t *js, ant_promise_state_t *pd) {
-  if (!pd) return;
-
-  if (pd->handler_count == 1) {
-    gc_mark_promise_handler(js, &pd->inline_handler);
-    return;
-  }
-
-  if (pd->handler_count <= 1 || !pd->handlers) return;
-
-  promise_handler_t *h = NULL;
-  while ((h = (promise_handler_t *)utarray_next(pd->handlers, h)))
-    gc_mark_promise_handler(js, h);
-}
 
 static ant_object_t **gc_mark_stack = NULL;
+static void gc_mark_promise_handlers(ant_t *js, ant_promise_state_t *pd);
+
 static size_t gc_mark_sp   = 0;
 static size_t gc_mark_cap  = 0;
 
@@ -258,6 +237,14 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
     HASH_ITER(hh, *head, e, tmp) { 
       gc_mark_value(js, e->key_val); 
       gc_mark_value(js, e->value); 
+    }}
+  } else if (obj->type_tag == T_WEAKMAP) {
+    weakmap_entry_t **head = (weakmap_entry_t **)(uintptr_t)js_getnum(obj->u.data.value);
+    if (head) {
+    weakmap_entry_t *e, *tmp;
+    HASH_ITER(hh, *head, e, tmp) {
+      gc_mark_value(js, e->key_obj);
+      gc_mark_value(js, e->value);
     }}
   } else if (obj->type_tag == T_SET) {
     set_entry_t **head = (set_entry_t **)(uintptr_t)js_getnum(obj->u.data.value);
@@ -433,6 +420,31 @@ static void gc_mark_coroutine(ant_t *js, coroutine_t *c) {
   gc_mark_value(js, c->new_target);
 }
 
+static inline void gc_mark_promise_handler(ant_t *js, const promise_handler_t *h) {
+  if (!h) return;
+  
+  gc_mark_value(js, h->onFulfilled);
+  gc_mark_value(js, h->onRejected);
+  gc_mark_value(js, h->nextPromise);
+  
+  if (h->await_coro) gc_mark_coroutine(js, h->await_coro);
+}
+
+static inline void gc_mark_promise_handlers(ant_t *js, ant_promise_state_t *pd) {
+  if (!pd) return;
+
+  if (pd->handler_count == 1) {
+    gc_mark_promise_handler(js, &pd->inline_handler);
+    return;
+  }
+
+  if (pd->handler_count <= 1 || !pd->handlers) return;
+  promise_handler_t *h = NULL;
+  
+  while ((h = (promise_handler_t *)utarray_next(pd->handlers, h)))
+    gc_mark_promise_handler(js, h);
+}
+
 static void gc_mark_roots(ant_t *js) {
   gc_scan_vm_stack(js, js->vm);
 
@@ -486,6 +498,7 @@ static void gc_mark_roots(ant_t *js) {
   gc_mark_compression_streams(js, gc_mark_value);
   gc_mark_zlib(js, gc_mark_value);
   gc_mark_wasm(js, gc_mark_value);
+  gc_mark_napi(js, gc_mark_value);
 
   for (
     ant_object_t *obj = g_pending_promises; 

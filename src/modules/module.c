@@ -44,24 +44,8 @@ static ant_value_t builtin_createRequire_call(ant_t *js, ant_value_t *args, int 
   return ns;
 }
 
-// require.resolve(specifier)
-static ant_value_t builtin_createRequire_resolve(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1 || vtype(args[0]) != T_STR)
-    return js_mkerr(js, "require.resolve() expects a string specifier");
-
-  ant_value_t fn = js_getcurrentfunc(js);
-  ant_value_t data = js_get_slot(fn, SLOT_DATA);
-  const char *base_path = js_module_eval_active_filename(js);
-
-  if (vtype(data) == T_STR) {
-    ant_offset_t dlen = 0;
-    ant_offset_t doff = vstr(js, data, &dlen);
-    base_path = (const char *)(uintptr_t)(doff);
-  }
-
-  ant_value_t resolved = js_esm_resolve_specifier(js, args[0], base_path);
-  if (is_err(resolved)) return resolved;
-  if (vtype(resolved) != T_STR) return resolved;
+static ant_value_t resolve_strip_file_url(ant_t *js, ant_value_t resolved) {
+  if (is_err(resolved) || vtype(resolved) != T_STR) return resolved;
 
   ant_offset_t len = 0;
   ant_offset_t off = vstr(js, resolved, &len);
@@ -76,6 +60,45 @@ static ant_value_t builtin_createRequire_resolve(ant_t *js, ant_value_t *args, i
   }
 
   return resolved;
+}
+
+// require.resolve(specifier, options?)
+static ant_value_t builtin_createRequire_resolve(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1 || vtype(args[0]) != T_STR)
+    return js_mkerr(js, "require.resolve() expects a string specifier");
+
+  ant_value_t fn = js_getcurrentfunc(js);
+  ant_value_t data = js_get_slot(fn, SLOT_DATA);
+  const char *base_path = js_module_eval_active_filename(js);
+
+  if (vtype(data) == T_STR) {
+    ant_offset_t dlen = 0;
+    ant_offset_t doff = vstr(js, data, &dlen);
+    base_path = (const char *)(uintptr_t)(doff);
+  }
+
+  ant_value_t paths_val = (nargs >= 2 && is_object_type(args[1]))
+    ? js_get(js, args[1], "paths") : js_mkundef();
+
+  if (vtype(paths_val) != T_ARR) {
+    ant_value_t resolved = js_esm_resolve_specifier(js, args[0], base_path);
+    return resolve_strip_file_url(js, resolved);
+  }
+
+  ant_offset_t path_count = js_arr_len(js, paths_val);
+  for (ant_offset_t i = 0; i < path_count; i++) {
+    ant_value_t p = js_arr_get(js, paths_val, i);
+    if (vtype(p) != T_STR) continue;
+    
+    char *dir = js_getstr(js, p, NULL);
+    if (!dir) continue;
+    
+    ant_value_t resolved = js_esm_resolve_specifier(js, args[0], dir);
+    if (!is_err(resolved) && vtype(resolved) == T_STR)
+      return resolve_strip_file_url(js, resolved);
+  }
+
+  return js_mkerr(js, "Cannot resolve module");
 }
 
 // createRequire(filename)

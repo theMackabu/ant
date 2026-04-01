@@ -72,14 +72,16 @@ void free_coroutine(coroutine_t *coro) {
 static size_t calculate_coro_stack_size(void) {
   static size_t cached_size = 0;
   if (coro_stack_size_initialized) return cached_size;
+  
   coro_stack_size_initialized = true;
   const char *env_stack = getenv("ANT_CORO_STACK_SIZE");
+  
   if (env_stack) {
-    size_t size = (size_t)atoi(env_stack) * 1024;
-    if (size >= 32 * 1024 && size <= 8 * 1024 * 1024) { 
-      cached_size = size; return cached_size; 
-    }
-  }
+  size_t size = (size_t)atoi(env_stack) * 1024;
+  if (size >= 32 * 1024 && size <= 8 * 1024 * 1024) { 
+    cached_size = size; return cached_size; 
+  }}
+  
   return cached_size;
 }
 
@@ -105,13 +107,14 @@ static void resume_coroutine_if_suspended(ant_t *js, coroutine_t *coro) {
     js->active_async_coro = coro;
     ant_value_t result = sv_resume_suspended(coro->sv_vm);
     
-    js->active_async_coro = coro->active_parent;
-    coro->active_parent = NULL;
-    
     coro->is_settled = false;
     coro->awaited_promise = js_mkundef();
-    if (coro->sv_vm->suspended) return;
-    remove_coroutine(coro);
+    
+    if (coro->sv_vm->suspended) {
+      js->active_async_coro = coro->active_parent;
+      coro->active_parent = NULL;
+      return;
+    } remove_coroutine(coro);
     
     if (is_err(result)) {
       ant_value_t reject_value = js->thrown_value;
@@ -122,6 +125,9 @@ static void resume_coroutine_if_suspended(ant_t *js, coroutine_t *coro) {
     } else js_resolve_promise(js, coro->async_promise, result);
     
     js_maybe_drain_microtasks_after_async_settle(js);
+    js->active_async_coro = coro->active_parent;
+    
+    coro->active_parent = NULL;
     free_coroutine(coro);
     
     return;

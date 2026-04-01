@@ -565,6 +565,12 @@ static ant_value_t weakmap_set(ant_t *js, ant_value_t *args, int nargs) {
     HASH_ADD(hh, *wm_ptr, key_obj, sizeof(ant_value_t), entry);
   }
   
+  ant_object_t *wm_obj = js_obj_ptr(this_val);
+  if (wm_obj) {
+    gc_write_barrier(js, wm_obj, key_obj);
+    gc_write_barrier(js, wm_obj, args[1]);
+  }
+  
   return this_val;
 }
 

@@ -1180,6 +1180,8 @@ static void hoist_lexical_pattern(sv_compiler_t *c, sv_ast_t *pat,
         if (!prop) continue;
         if (prop->type == N_PROPERTY)
           hoist_lexical_pattern(c, prop->right, is_const);
+        else if (prop->type == N_REST || prop->type == N_SPREAD)
+          hoist_lexical_pattern(c, prop->right, is_const);
       }
       break;
     default:
@@ -2263,11 +2265,17 @@ static void compile_call(sv_compiler_t *c, sv_ast_t *node) {
 static void compile_new(sv_compiler_t *c, sv_ast_t *node) {
   compile_expr(c, node->left);
   emit_op(c, OP_DUP);
-  int argc = node->args.count;
-  for (int i = 0; i < argc; i++)
-    compile_expr(c, node->args.items[i]);
-  emit_op(c, OP_NEW);
-  emit_u16(c, (uint16_t)argc);
+  if (call_has_spread_arg(node)) {
+    compile_call_args_array(c, node);
+    emit_op(c, OP_NEW_APPLY);
+    emit_u16(c, 1);
+  } else {
+    int argc = node->args.count;
+    for (int i = 0; i < argc; i++)
+      compile_expr(c, node->args.items[i]);
+    emit_op(c, OP_NEW);
+    emit_u16(c, (uint16_t)argc);
+  }
 }
 
 static bool sv_node_has_optional_base(sv_ast_t *n) {

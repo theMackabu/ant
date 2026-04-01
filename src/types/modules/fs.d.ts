@@ -50,6 +50,7 @@ declare module 'fs' {
   function readFile(path: string): Promise<Uint8Array>;
   function readFileSync(path: string, encoding: Encoding | { encoding: Encoding }): string;
   function readFileSync(path: string): Uint8Array;
+  function read(fd: number, buffer: ArrayBufferView, offset?: number, length?: number, position?: number | null, callback?: (err: Error | null, bytesRead: number, buffer: ArrayBufferView) => void): Promise<number>;
   function readSync(fd: number, buffer: ArrayBufferView, offset?: number, length?: number, position?: number | null): number;
   function stream(path: string): Promise<string>;
   function open(path: string, flags?: string, mode?: number): Promise<number>;
@@ -71,6 +72,8 @@ declare module 'fs' {
   function unlinkSync(path: string): void;
   function mkdir(path: string, options?: { recursive?: boolean; mode?: number }): Promise<void>;
   function mkdirSync(path: string, options?: number | { recursive?: boolean; mode?: number }): void;
+  function mkdtemp(prefix: string): Promise<string>;
+  function mkdtempSync(prefix: string): string;
   function rmdir(path: string): Promise<void>;
   function rmdirSync(path: string): void;
   function stat(path: string): Promise<Stats>;

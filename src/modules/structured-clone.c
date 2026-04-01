@@ -9,6 +9,7 @@
 #include "internal.h"
 #include "descriptors.h"
 
+#include "modules/date.h"
 #include "modules/buffer.h"
 #include "modules/collections.h"
 #include "modules/domexception.h"
@@ -276,15 +277,13 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
     return clone;
   }
 
-  ant_value_t date_proto = js_get_ctor_proto(js, "Date", 4);
-  if (
-    vtype(date_proto) != T_UNDEF
-    && is_object_type(date_proto)
-    && js_is_prototype_of(js, date_proto, val)
-  ) {
+  if (is_date_instance(val)) {
     ant_value_t clone = js_mkobj(js);
-    js_set_proto_init(clone, date_proto);
+    ant_value_t date_proto = js_get_ctor_proto(js, "Date", 4);
+    if (is_object_type(date_proto)) js_set_proto_init(clone, date_proto);
+    
     js_set_slot(clone, SLOT_DATA, js_get_slot(val, SLOT_DATA));
+    js_set_slot(clone, SLOT_BRAND, js_mknum(BRAND_DATE));
     sc_add(seen, val, clone);
 
     return clone;
