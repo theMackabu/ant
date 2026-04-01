@@ -4253,6 +4253,12 @@ static sv_func_t *compile_function_body(
   }
   
   bool repl_top = is_repl_top_level(&comp);
+  if (mode == SV_COMPILE_MODULE && comp.enclosing && !comp.enclosing->enclosing) {
+    int import_local = add_local(&comp, "import", 6, true, comp.scope_depth);
+    emit_op(&comp, OP_SPECIAL_OBJ);
+    emit(&comp, 3);
+    emit_put_local(&comp, import_local);
+  }
   if (!has_non_simple_params && node->body) {
     if (node->body->type == N_BLOCK) {
       if (!repl_top) {
@@ -4406,12 +4412,6 @@ static sv_func_t *compile_function_body(
     }
 
     free(param_bind_locals);
-    if (mode == SV_COMPILE_MODULE && comp.enclosing && !comp.enclosing->enclosing) {
-      int import_local = add_local(&comp, "import", 6, true, comp.scope_depth);
-      emit_op(&comp, OP_SPECIAL_OBJ);
-      emit(&comp, 3);
-      emit_put_local(&comp, import_local);
-    }
 
     if (node->body) {
       if (node->body->type == N_BLOCK) {
