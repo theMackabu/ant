@@ -2,6 +2,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <inttypes.h>
+#include <wasm_c_api.h>
+#include <wasm_export.h>
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wundef"
+#pragma clang diagnostic ignored "-Wimplicit-int-conversion"
+#include <wasm_c_api_internal.h>
+#include <wasm_runtime.h>
+#pragma clang diagnostic pop
 
 #include "ant.h"
 #include "errors.h"
@@ -14,7 +23,6 @@
 #include "modules/buffer.h"
 #include "modules/wasm.h"
 #include "modules/wasi.h"
-#include "wasm_c_api.h"
 
 typedef struct {
   wasm_store_t *store;
@@ -813,7 +821,7 @@ static ant_value_t wasm_instantiate_module(ant_t *js, ant_value_t module_obj, an
     if (imports && import_types.size > 0)
       import_vec = (wasm_extern_vec_t){ import_types.size, imports, import_types.size, sizeof(*imports), NULL };
 
-    instance = wasm_instance_new(module_handle->store, module_handle->module, &import_vec, &trap);
+    instance = wasm_instance_new_with_args(module_handle->store, module_handle->module, &import_vec, &trap, KILOBYTE(32), 0);
   }
 
   free(imports);
@@ -1013,7 +1021,33 @@ static ant_value_t js_wasm_memory_buffer_getter(ant_t *js, ant_value_t *args, in
 }
 
 static ant_value_t js_wasm_memory_grow(ant_t *js, ant_value_t *args, int nargs) {
-  return js_mkerr_typed(js, JS_ERR_TYPE, "The current WAMR backend does not support host-side memory.grow");
+  wasm_extern_handle_t *handle = wasm_extern_handle(js->this_val, WASM_EXTERN_WRAP_MEMORY);
+  wasm_memory_pages_t old_size;
+  uint32_t delta;
+
+  if (!handle || !handle->as.memory)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Expected a WebAssembly.Memory");
+
+  delta = (uint32_t)(nargs > 0 ? js_to_number(js, args[0]) : 0);
+  old_size = wasm_memory_size(handle->as.memory);
+
+  if (delta == 0) return js_mknum((double)old_size);
+
+  wasm_module_inst_t inst = (wasm_module_inst_t)handle->as.memory->inst_comm_rt;
+  if (!inst)
+    return js_mkerr_typed(js, JS_ERR_RANGE, "Memory instance not available");
+
+  if (inst->module_type == Wasm_Module_Bytecode) {
+    WASMModuleInstance *wasm_inst = (WASMModuleInstance *)inst;
+    WASMMemoryInstance *mem_inst = wasm_inst->memories[handle->as.memory->memory_idx_rt];
+    uint32_t needed = mem_inst->cur_page_count + delta;
+    if (needed > mem_inst->max_page_count) mem_inst->max_page_count = needed;
+  }
+
+  if (!wasm_runtime_enlarge_memory(inst, (uint64_t)delta))
+    return js_mkerr_typed(js, JS_ERR_RANGE, "Failed to grow memory by %u pages", delta);
+
+  return js_mknum((double)old_size);
 }
 
 static ant_value_t js_wasm_memory_ctor(ant_t *js, ant_value_t *args, int nargs) {
