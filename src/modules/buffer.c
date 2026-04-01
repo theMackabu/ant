@@ -1224,6 +1224,110 @@ DEFINE_TYPEDARRAY_CONSTRUCTOR(Float64Array, TYPED_ARRAY_FLOAT64)
 DEFINE_TYPEDARRAY_CONSTRUCTOR(BigInt64Array, TYPED_ARRAY_BIGINT64)
 DEFINE_TYPEDARRAY_CONSTRUCTOR(BigUint64Array, TYPED_ARRAY_BIGUINT64)
 
+static ant_value_t js_typedarray_from(ant_t *js, ant_value_t *args, int nargs, TypedArrayType type, const char *type_name) {
+  if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "%s.from requires at least 1 argument", type_name);
+
+  ant_value_t source = args[0];
+  bool has_map = nargs >= 2 && vtype(args[1]) != T_UNDEF;
+  ant_value_t map_fn = js_mkundef();
+  ant_value_t this_arg = nargs >= 3 ? args[2] : js_mkundef();
+
+  if (has_map) {
+    if (!is_callable(args[1]))
+      return js_mkerr_typed(js, JS_ERR_TYPE, "%s.from: mapFn is not a function", type_name);
+    map_fn = args[1];
+  }
+
+  ant_value_t *collected = NULL;
+  size_t count = 0, cap = 16;
+  collected = malloc(cap * sizeof(ant_value_t));
+  if (!collected) return js_mkerr(js, "oom");
+
+  js_iter_t it;
+  if (js_iter_open(js, source, &it)) {
+    ant_value_t item;
+    while (js_iter_next(js, &it, &item)) {
+      if (count >= cap) {
+        cap *= 2;
+        ant_value_t *tmp = realloc(collected, cap * sizeof(ant_value_t));
+        if (!tmp) { free(collected); return js_mkerr(js, "oom"); }
+        collected = tmp;
+      }
+      if (has_map) {
+        ant_value_t map_args[2] = { item, js_mknum((double)count) };
+        item = sv_vm_call(js->vm, js, map_fn, this_arg, map_args, 2, NULL, false);
+        if (is_err(item)) { free(collected); return item; }
+      }
+      collected[count++] = item;
+    }
+    js_iter_close(js, &it);
+  } else {
+    ant_value_t len_val = js_get(js, source, "length");
+    size_t len = vtype(len_val) == T_NUM ? (size_t)js_getnum(len_val) : 0;
+    for (size_t i = 0; i < len; i++) {
+      char idx[16];
+      snprintf(idx, sizeof(idx), "%zu", i);
+      ant_value_t item = js_get(js, source, idx);
+      if (count >= cap) {
+        cap *= 2;
+        ant_value_t *tmp = realloc(collected, cap * sizeof(ant_value_t));
+        if (!tmp) { free(collected); return js_mkerr(js, "oom"); }
+        collected = tmp;
+      }
+      if (has_map) {
+        ant_value_t map_args[2] = { item, js_mknum((double)i) };
+        item = sv_vm_call(js->vm, js, map_fn, this_arg, map_args, 2, NULL, false);
+        if (is_err(item)) { free(collected); return item; }
+      }
+      collected[count++] = item;
+    }
+  }
+
+  size_t elem_size = get_element_size(type);
+  ArrayBufferData *buffer = create_array_buffer_data(count * elem_size);
+  if (!buffer) { free(collected); return js_mkerr(js, "oom"); }
+
+  ant_value_t result = create_typed_array(js, type, buffer, 0, count, type_name);
+  uint8_t *data = buffer->data;
+
+  for (size_t i = 0; i < count; i++) {
+  double val = vtype(collected[i]) == T_NUM ? js_getnum(collected[i]) : js_to_number(js, collected[i]);
+  switch (type) {
+    case TYPED_ARRAY_INT8:          ((int8_t *)data)[i] = (int8_t)val; break;
+    case TYPED_ARRAY_UINT8:
+    case TYPED_ARRAY_UINT8_CLAMPED: data[i] = (uint8_t)val; break;
+    case TYPED_ARRAY_INT16:         ((int16_t *)data)[i] = (int16_t)val; break;
+    case TYPED_ARRAY_UINT16:        ((uint16_t *)data)[i] = (uint16_t)val; break;
+    case TYPED_ARRAY_INT32:         ((int32_t *)data)[i] = (int32_t)val; break;
+    case TYPED_ARRAY_UINT32:        ((uint32_t *)data)[i] = (uint32_t)val; break;
+    case TYPED_ARRAY_FLOAT16:       ((uint16_t *)data)[i] = double_to_half(val); break;
+    case TYPED_ARRAY_FLOAT32:       ((float *)data)[i] = (float)val; break;
+    case TYPED_ARRAY_FLOAT64:       ((double *)data)[i] = val; break;
+    default: break;
+  }}
+
+  free(collected);
+  return result;
+}
+
+#define DEFINE_TYPEDARRAY_FROM(name, type) \
+  static ant_value_t js_##name##_from(ant_t *js, ant_value_t *args, int nargs) { \
+    return js_typedarray_from(js, args, nargs, type, #name); \
+  }
+
+DEFINE_TYPEDARRAY_FROM(Int8Array, TYPED_ARRAY_INT8)
+DEFINE_TYPEDARRAY_FROM(Uint8Array, TYPED_ARRAY_UINT8)
+DEFINE_TYPEDARRAY_FROM(Uint8ClampedArray, TYPED_ARRAY_UINT8_CLAMPED)
+DEFINE_TYPEDARRAY_FROM(Int16Array, TYPED_ARRAY_INT16)
+DEFINE_TYPEDARRAY_FROM(Uint16Array, TYPED_ARRAY_UINT16)
+DEFINE_TYPEDARRAY_FROM(Int32Array, TYPED_ARRAY_INT32)
+DEFINE_TYPEDARRAY_FROM(Uint32Array, TYPED_ARRAY_UINT32)
+DEFINE_TYPEDARRAY_FROM(Float16Array, TYPED_ARRAY_FLOAT16)
+DEFINE_TYPEDARRAY_FROM(Float32Array, TYPED_ARRAY_FLOAT32)
+DEFINE_TYPEDARRAY_FROM(Float64Array, TYPED_ARRAY_FLOAT64)
+DEFINE_TYPEDARRAY_FROM(BigInt64Array, TYPED_ARRAY_BIGINT64)
+DEFINE_TYPEDARRAY_FROM(BigUint64Array, TYPED_ARRAY_BIGUINT64)
+
 static ant_value_t js_dataview_constructor(ant_t *js, ant_value_t *args, int nargs) {
   if (vtype(js->new_target) == T_UNDEF) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "DataView constructor requires 'new'");
@@ -2409,6 +2513,7 @@ void init_buffer_module() {
       js_mkprop_fast(js, name##_ctor_obj, "name", 4, ANT_STRING(#name)); \
       js_set_descriptor(js, name##_ctor_obj, "name", 4, 0); \
       js_define_species_getter(js, name##_ctor_obj); \
+      js_set(js, name##_ctor_obj, "from", js_mkfun(js_##name##_from)); \
       ant_value_t name##_ctor = js_obj_to_func(name##_ctor_obj); \
       js_setprop(js, name##_proto, ANT_STRING("constructor"), name##_ctor); \
       js_set_descriptor(js, name##_proto, "constructor", 11, JS_DESC_W | JS_DESC_C); \

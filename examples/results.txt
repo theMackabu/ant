@@ -1061,7 +1061,7 @@ compat-table/es6/typed-arrays.Uint32Array.js: failed
 compat-table/es6/typed-arrays.constructor-iterables.js: OK
 compat-table/es6/typed-arrays.constructor-requires-new.js: OK
 compat-table/es6/typed-arrays.correct-prototype-chains.js: failed
-compat-table/es6/typed-arrays.from.js: failed
+compat-table/es6/typed-arrays.from.js: OK
 compat-table/es6/typed-arrays.of.js: failed
 compat-table/es6/typed-arrays.prototype.Symbol.iterator.js: OK
 compat-table/es6/typed-arrays.prototype.copyWithin.js: OK
@@ -1249,8 +1249,8 @@ compat-table/es2020/BigUint64Array.js: failed
 compat-table/es2020/DataView.prototype.getBigInt64.js: TypeError: undefined is not a function
 compat-table/es2020/DataView.prototype.getBigUint64.js: TypeError: undefined is not a function
 compat-table/es2020/Promise.allSettled.js: OK
-compat-table/es2020/String.prototype.matchAll.js: TypeError: undefined is not a function
-compat-table/es2020/String.prototype.matchAll.throws-non-global.js: failed
+compat-table/es2020/String.prototype.matchAll.js: OK
+compat-table/es2020/String.prototype.matchAll.throws-non-global.js: OK
 compat-table/es2020/globalThis.descriptor.js: OK
 compat-table/es2020/globalThis.js: OK
 compat-table/es2020/nullish-coalescing.js: OK
