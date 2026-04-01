@@ -1344,6 +1344,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_cb_info(
     if (argv) {
       size_t ncopy = requested < info->argc ? requested : info->argc;
       if (ncopy > 0) memcpy(argv, info->argv, ncopy * sizeof(napi_value));
+      for (size_t i = ncopy; i < requested; i++) argv[i] = (napi_value)js_mkundef();
     }
     *argc = info->argc;
   }
