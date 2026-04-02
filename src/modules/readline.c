@@ -33,6 +33,7 @@
 #include "silver/engine.h"
 
 #include "gc/modules.h"
+#include "modules/events.h"
 #include "modules/readline.h"
 #include "modules/process.h"
 #include "modules/symbol.h"
@@ -42,21 +43,6 @@
 #define DEFAULT_PROMPT "> "
 #define DEFAULT_HISTORY_SIZE 30
 #define DEFAULT_TAB_SIZE 8
-#define MAX_INTERFACES 64
-
-typedef struct {
-  ant_value_t listener;
-  bool once;
-} RLEventListener;
-
-#define MAX_LISTENERS_PER_EVENT 16
-
-typedef struct {
-  char *event_type;
-  RLEventListener listeners[MAX_LISTENERS_PER_EVENT];
-  int listener_count;
-  UT_hash_handle hh;
-} RLEventType;
 
 typedef struct {
   char **lines;
@@ -87,7 +73,6 @@ typedef struct rl_interface {
   int tab_size;
   ant_value_t pending_question_resolve;
   ant_value_t pending_question_reject;
-  RLEventType *events;
   uv_tty_t tty_in;
   uv_tty_t tty_out;
   bool tty_initialized;
@@ -104,8 +89,10 @@ typedef struct rl_interface {
 #endif
 } rl_interface_t;
 
-static rl_interface_t *interfaces = NULL;
 static uint64_t next_interface_id = 1;
+static rl_interface_t *interfaces = NULL;
+static ant_value_t g_rl_async_iter_proto = 0;
+static ant_value_t g_rl_interface_proto = 0;
 
 static void rl_history_init(rl_history_t *hist, int capacity) {
   hist->capacity = capacity > 0 ? capacity : DEFAULT_HISTORY_SIZE;
@@ -114,29 +101,35 @@ static void rl_history_init(rl_history_t *hist, int capacity) {
   hist->current = -1;
 }
 
+static void rl_history_remove_at(rl_history_t *hist, int index) {
+  if (!hist || index < 0 || index >= hist->count) return;
+
+  free(hist->lines[index]);
+  if (index < hist->count - 1) memmove(
+    hist->lines + index,
+    hist->lines + index + 1,
+    sizeof(char *) * (size_t)(hist->count - index - 1)
+  );
+  
+  hist->count--;
+}
+
 static void rl_history_add(rl_history_t *hist, const char *line, bool remove_duplicates) {
-  if (!line || strlen(line) == 0) return;
-  
+  int duplicate_index = -1;
+
+  if (!line || line[0] == '\0') return;
+  if (!remove_duplicates && hist->count > 0 && strcmp(hist->lines[hist->count - 1], line) == 0) return;
+
   if (remove_duplicates) {
-    for (int i = 0; i < hist->count; i++) {
-      if (strcmp(hist->lines[i], line) == 0) {
-        free(hist->lines[i]);
-        for (int j = i; j < hist->count - 1; j++) {
-          hist->lines[j] = hist->lines[j + 1];
-        }
-        hist->count--; break;
-      }
-    }
-  } else if (hist->count > 0 && strcmp(hist->lines[hist->count - 1], line) == 0) {
-    return;
-  }
-  
-  if (hist->count >= hist->capacity) {
-    free(hist->lines[0]);
-    memmove(hist->lines, hist->lines + 1, sizeof(char*) * (hist->capacity - 1));
-    hist->count--;
-  }
-  
+  for (int i = 0; i < hist->count; i++) {
+    if (strcmp(hist->lines[i], line) != 0) continue;
+    duplicate_index = i;
+    break;
+  }}
+
+  if (duplicate_index >= 0) rl_history_remove_at(hist, duplicate_index);
+  if (hist->count >= hist->capacity) rl_history_remove_at(hist, 0);
+
   hist->lines[hist->count++] = strdup(line);
   hist->current = hist->count;
 }
@@ -168,63 +161,6 @@ static void rl_history_free(rl_history_t *hist) {
   hist->count = 0;
   hist->current = -1;
 }
-
-static RLEventType *find_or_create_event_type(rl_interface_t *iface, const char *event_type) {
-  RLEventType *evt = NULL;
-  HASH_FIND_STR(iface->events, event_type, evt);
-  
-  if (evt == NULL) {
-    evt = malloc(sizeof(RLEventType));
-    evt->event_type = strdup(event_type);
-    evt->listener_count = 0;
-    HASH_ADD_KEYPTR(hh, iface->events, evt->event_type, strlen(evt->event_type), evt);
-  }
-  
-  return evt;
-}
-
-static void emit_event(ant_t *js, rl_interface_t *iface, const char *event_type, ant_value_t *args, int nargs) {
-  RLEventType *evt = NULL;
-  HASH_FIND_STR(iface->events, event_type, evt);
-  
-  if (evt == NULL || evt->listener_count == 0) return;
-  
-  int i = 0;
-  while (i < evt->listener_count) {
-    RLEventListener *listener = &evt->listeners[i];
-    sv_vm_call(js->vm, js, listener->listener, js_mkundef(), args, nargs, NULL, false);
-    
-    if (listener->once) {
-      for (int j = i; j < evt->listener_count - 1; j++) {
-        evt->listeners[j] = evt->listeners[j + 1];
-      }
-      evt->listener_count--;
-    } else i++;
-  }
-}
-
-static bool rl_has_event_listener(rl_interface_t *iface, const char *event_type) {
-  RLEventType *evt = NULL;
-  if (!iface || !event_type) return false;
-  HASH_FIND_STR(iface->events, event_type, evt);
-  return evt != NULL && evt->listener_count > 0;
-}
-
-static ant_value_t get_history_array(ant_t *js, rl_interface_t *iface) {
-  ant_value_t arr = js_mkarr(js);
-  for (int i = 0; i < iface->history.count; i++) js_arr_push(
-    js, arr, js_mkstr(js, iface->history.lines[i], strlen(iface->history.lines[i]))
-  );
-  return arr;
-}
-
-static void emit_history_event(ant_t *js, rl_interface_t *iface) {
-  ant_value_t history_arr = get_history_array(js, iface);
-  emit_event(js, iface, "history", &history_arr, 1);
-}
-
-static void alloc_buffer(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf);
-static void on_stdin_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf);
 
 #ifndef _WIN32
 static void enter_raw_mode(rl_interface_t *iface) {
@@ -412,44 +348,62 @@ static void handle_delete(rl_interface_t *iface) {
 
 static void handle_escape_sequence(rl_interface_t *iface, const char *seq, int len) {
   if (len >= 2 && seq[0] == '[') {
-    switch (seq[1]) {
-      case 'A': handle_history_up(iface); break;
-      case 'B': handle_history_down(iface); break;
-      case 'C': 
-        if (iface->line_pos < iface->line_len) {
-          iface->line_pos++;
-          printf("\033[C");
-          fflush(stdout);
-        }
-        break;
-      case 'D':
-        if (iface->line_pos > 0) {
-          iface->line_pos--;
-          printf("\033[D");
-          fflush(stdout);
-        }
-        break;
-      case 'H':
-        iface->line_pos = 0;
-        refresh_line(iface);
-        break;
-      case 'F':
-        iface->line_pos = iface->line_len;
-        refresh_line(iface);
-        break;
-      case '3':
-        if (len >= 3 && seq[2] == '~') {
-          handle_delete(iface);
-        }
-        break;
-    }
-  }
+  switch (seq[1]) {
+    case 'A': handle_history_up(iface); break;
+    case 'B': handle_history_down(iface); break;
+    case 'C': 
+      if (iface->line_pos < iface->line_len) {
+        iface->line_pos++;
+        printf("\033[C");
+        fflush(stdout);
+      }
+      break;
+    case 'D':
+      if (iface->line_pos > 0) {
+        iface->line_pos--;
+        printf("\033[D");
+        fflush(stdout);
+      }
+      break;
+    case 'H':
+      iface->line_pos = 0;
+      refresh_line(iface);
+      break;
+    case 'F':
+      iface->line_pos = iface->line_len;
+      refresh_line(iface);
+      break;
+    case '3':
+      if (len >= 3 && seq[2] == '~') {
+        handle_delete(iface);
+      }
+      break;
+  }}
 }
 
 static void alloc_buffer(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
   buf->base = malloc(suggested_size);
   buf->len = suggested_size;
 }
+
+static void emit_event(ant_t *js, rl_interface_t *iface, const char *event_type, ant_value_t *args, int nargs) {
+  if (!iface || vtype(iface->js_obj) == T_UNDEF) return;
+  eventemitter_emit_args(js, iface->js_obj, event_type, args, nargs);
+}
+
+static ant_value_t get_history_array(ant_t *js, rl_interface_t *iface) {
+  ant_value_t arr = js_mkarr(js);
+  for (int i = 0; i < iface->history.count; i++) js_arr_push(
+    js, arr, js_mkstr(js, iface->history.lines[i], strlen(iface->history.lines[i]))
+  );
+  return arr;
+}
+
+static void emit_history_event(ant_t *js, rl_interface_t *iface) {
+  ant_value_t history_arr = get_history_array(js, iface);
+  emit_event(js, iface, "history", &history_arr, 1);
+}
+
 
 static void stop_reading(rl_interface_t *iface) {
   if (!iface->reading) return;
@@ -462,6 +416,59 @@ static void stop_reading(rl_interface_t *iface) {
     iface->sigint_watcher_active = false;
   }
 #endif
+}
+
+static bool rl_has_event_listener(ant_t *js, rl_interface_t *iface, const char *event_type) {
+  if (!iface || !event_type || vtype(iface->js_obj) == T_UNDEF) return false;
+  return eventemitter_listener_count(js, iface->js_obj, event_type) > 0;
+}
+
+static bool rl_add_listener(ant_t *js, rl_interface_t *iface, const char *event_type, ant_value_t listener, bool once) {
+  if (!iface || !event_type || vtype(iface->js_obj) == T_UNDEF) return false;
+  return eventemitter_add_listener(js, iface->js_obj, event_type, listener, once);
+}
+
+static void rl_remove_listener(ant_t *js, rl_interface_t *iface, const char *event_type, ant_value_t listener) {
+  if (!iface || !event_type || vtype(iface->js_obj) == T_UNDEF) return;
+  eventemitter_remove_listener(js, iface->js_obj, event_type, listener);
+}
+
+static ant_value_t rl_async_iter_state(ant_t *js, ant_value_t iterator) {
+  ant_value_t state = is_object_type(iterator) ? js_get_slot(iterator, SLOT_DATA) : js_mkundef();
+  return is_object_type(state) ? state : js_mkundef();
+}
+
+static ant_value_t rl_async_iter_queue(ant_t *js, ant_value_t state, const char *queue_key) {
+  ant_value_t queue = is_object_type(state) ? js_get(js, state, queue_key) : js_mkundef();
+  return vtype(queue) == T_ARR ? queue : js_mkundef();
+}
+
+static ant_offset_t rl_async_iter_queue_head(ant_t *js, ant_value_t state, const char *head_key) {
+  ant_value_t head = is_object_type(state) ? js_get(js, state, head_key) : js_mkundef();
+  return vtype(head) == T_NUM ? (ant_offset_t)js_getnum(head) : 0;
+}
+
+static void rl_async_iter_set_queue_head(ant_t *js, ant_value_t state, const char *head_key, ant_offset_t head) {
+  if (is_object_type(state)) js_set(js, state, head_key, js_mknum((double)head));
+}
+
+static void rl_close_interface(ant_t *js, rl_interface_t *iface) {
+  if (!iface || iface->closed) return;
+  stop_reading(iface);
+
+  if (iface->tty_initialized) {
+    uv_close((uv_handle_t *)&iface->tty_in, NULL);
+#ifndef _WIN32
+    if (!iface->sigint_watcher_active && uv_is_active((uv_handle_t *)&iface->sigint_watcher)) {
+      uv_close((uv_handle_t *)&iface->sigint_watcher, NULL);
+    }
+    exit_raw_mode(iface);
+#endif
+    iface->tty_initialized = false;
+  }
+
+  iface->closed = true;
+  emit_event(js, iface, "close", NULL, 0);
 }
 
 static void process_line(ant_t *js, rl_interface_t *iface) {
@@ -548,7 +555,7 @@ static void on_sigint(uv_signal_t *handle, int signum) {
   rl_interface_t *iface = (rl_interface_t *)handle->data;
   ant_t *js = rt->js;
 
-  if (rl_has_event_listener(iface, "SIGINT")) {
+  if (rl_has_event_listener(js, iface, "SIGINT")) {
     emit_event(js, iface, "SIGINT", NULL, 0);
   } else if (process_has_event_listeners("SIGINT")) {
     ant_value_t sig_arg = js_mkstr(js, "SIGINT", 6);
@@ -597,157 +604,19 @@ static rl_interface_t *get_interface(ant_t *js, ant_value_t this_obj) {
   return iface;
 }
 
-static ant_value_t rl_interface_on(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t this_obj = js_getthis(js);
-  rl_interface_t *iface = get_interface(js, this_obj);
-  
-  if (!iface) return js_mkerr(js, "Invalid Interface");
-  if (nargs < 2) return js_mkerr(js, "on requires 2 arguments");
-  
-  char *event = js_getstr(js, args[0], NULL);
-  if (!event) return js_mkerr(js, "event must be a string");
-  int t = vtype(args[1]);
-  if (t != T_FUNC && t != T_CFUNC) return js_mkerr(js, "listener must be a function");
-  
-  RLEventType *evt = find_or_create_event_type(iface, event);
-  if (evt->listener_count >= MAX_LISTENERS_PER_EVENT) {
-    return js_mkerr(js, "maximum listeners reached");
-  }
-  
-  evt->listeners[evt->listener_count].listener = args[1];
-  evt->listeners[evt->listener_count].once = false;
-  evt->listener_count++;
-  
-  return this_obj;
-}
-
-static ant_value_t rl_interface_once(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t this_obj = js_getthis(js);
-  rl_interface_t *iface = get_interface(js, this_obj);
-  
-  if (!iface) return js_mkerr(js, "Invalid Interface");
-  if (nargs < 2) return js_mkerr(js, "once requires 2 arguments");
-  
-  char *event = js_getstr(js, args[0], NULL);
-  if (!event) return js_mkerr(js, "event must be a string");
-  int t = vtype(args[1]);
-  if (t != T_FUNC && t != T_CFUNC) return js_mkerr(js, "listener must be a function");
-  
-  RLEventType *evt = find_or_create_event_type(iface, event);
-  if (evt->listener_count >= MAX_LISTENERS_PER_EVENT) {
-    return js_mkerr(js, "maximum listeners reached");
-  }
-  
-  evt->listeners[evt->listener_count].listener = args[1];
-  evt->listeners[evt->listener_count].once = true;
-  evt->listener_count++;
-  
-  return this_obj;
-}
-
-static ant_value_t rl_interface_off(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t this_obj = js_getthis(js);
-  rl_interface_t *iface = get_interface(js, this_obj);
-  
-  if (!iface) return js_mkerr(js, "Invalid Interface");
-  if (nargs < 2) return this_obj;
-  
-  char *event = js_getstr(js, args[0], NULL);
-  if (!event) return this_obj;
-  
-  RLEventType *evt = NULL;
-  HASH_FIND_STR(iface->events, event, evt);
-  if (!evt) return this_obj;
-  
-  for (int i = 0; i < evt->listener_count; i++) {
-    if (evt->listeners[i].listener == args[1]) {
-      for (int j = i; j < evt->listener_count - 1; j++) {
-        evt->listeners[j] = evt->listeners[j + 1];
-      }
-      evt->listener_count--;
-      break;
-    }
-  }
-  
-  return this_obj;
-}
-
-static ant_value_t rl_interface_remove_all_listeners(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t this_obj = js_getthis(js);
-  rl_interface_t *iface = get_interface(js, this_obj);
-  
-  RLEventType *evt = NULL;
-  RLEventType *tmp = NULL;
-  char *event = NULL;
-
-  if (!iface) return js_mkerr(js, "Invalid Interface");
-  if (nargs < 1 || vtype(args[0]) == T_UNDEF) {
-    HASH_ITER(hh, iface->events, evt, tmp) {
-      HASH_DEL(iface->events, evt);
-      free(evt->event_type);
-      free(evt);
-    }
-    return this_obj;
-  }
-
-  event = js_getstr(js, args[0], NULL);
-  if (!event) return this_obj;
-
-  HASH_FIND_STR(iface->events, event, evt);
-  if (!evt) return this_obj;
-
-  HASH_DEL(iface->events, evt);
-  free(evt->event_type);
-  free(evt);
-  
-  return this_obj;
-}
-
-static ant_value_t rl_interface_emit(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t this_obj = js_getthis(js);
-  rl_interface_t *iface = get_interface(js, this_obj);
-  
-  if (!iface) return js_mkerr(js, "Invalid Interface");
-  if (nargs < 1) return js_false;
-  
-  char *event = js_getstr(js, args[0], NULL);
-  if (!event) return js_false;
-  
-  emit_event(js, iface, event, nargs > 1 ? &args[1] : NULL, nargs - 1);
-  return js_true;
-}
-
 static ant_value_t rl_interface_close(ant_t *js, ant_value_t *args, int nargs) {
-  (void)args; (void)nargs;
   ant_value_t this_obj = js_getthis(js);
   rl_interface_t *iface = get_interface(js, this_obj);
   
   if (!iface || iface->closed) return js_mkundef();
-  
-  stop_reading(iface);
-  
-  if (iface->tty_initialized) {
-    uv_close((uv_handle_t *)&iface->tty_in, NULL);
-#ifndef _WIN32
-    if (!iface->sigint_watcher_active && uv_is_active((uv_handle_t *)&iface->sigint_watcher)) {
-      uv_close((uv_handle_t *)&iface->sigint_watcher, NULL);
-    }
-    exit_raw_mode(iface);
-#endif
-    iface->tty_initialized = false;
-  }
-  
-  iface->closed = true;
-  emit_event(js, iface, "close", NULL, 0);
+  rl_close_interface(js, iface);
   
   return js_mkundef();
 }
 
 static ant_value_t rl_interface_pause(ant_t *js, ant_value_t *args, int nargs) {
-  (void)args; (void)nargs;
   ant_value_t this_obj = js_getthis(js);
   rl_interface_t *iface = get_interface(js, this_obj);
-  
   if (!iface) return js_mkerr(js, "Invalid Interface");
   
   if (!iface->paused) {
@@ -760,10 +629,8 @@ static ant_value_t rl_interface_pause(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t rl_interface_resume(ant_t *js, ant_value_t *args, int nargs) {
-  (void)args; (void)nargs;
   ant_value_t this_obj = js_getthis(js);
   rl_interface_t *iface = get_interface(js, this_obj);
-  
   if (!iface) return js_mkerr(js, "Invalid Interface");
   
   if (iface->paused) {
@@ -822,10 +689,8 @@ static ant_value_t rl_interface_set_prompt(ant_t *js, ant_value_t *args, int nar
 }
 
 static ant_value_t rl_interface_get_prompt(ant_t *js, ant_value_t *args, int nargs) {
-  (void)args; (void)nargs;
   ant_value_t this_obj = js_getthis(js);
   rl_interface_t *iface = get_interface(js, this_obj);
-  
   if (!iface) return js_mkerr(js, "Invalid Interface");
   
   return js_mkstr(js, iface->prompt, strlen(iface->prompt));
@@ -928,7 +793,6 @@ static ant_value_t rl_interface_write(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t rl_interface_line_getter(ant_t *js, ant_value_t *args, int nargs) {
-  (void)args; (void)nargs;
   ant_value_t this_obj = js_getthis(js);
   rl_interface_t *iface = get_interface(js, this_obj);
   
@@ -937,7 +801,6 @@ static ant_value_t rl_interface_line_getter(ant_t *js, ant_value_t *args, int na
 }
 
 static ant_value_t rl_interface_cursor_getter(ant_t *js, ant_value_t *args, int nargs) {
-  (void)args; (void)nargs;
   ant_value_t this_obj = js_getthis(js);
   rl_interface_t *iface = get_interface(js, this_obj);
   
@@ -962,15 +825,7 @@ static ant_value_t rl_interface_question_callback(ant_t *js, ant_value_t *args, 
   }
   
   write_output(iface, query);
-  
-  RLEventType *evt = find_or_create_event_type(iface, "line");
-  if (evt->listener_count >= MAX_LISTENERS_PER_EVENT) {
-    return js_mkerr(js, "maximum listeners reached");
-  }
-  
-  evt->listeners[evt->listener_count].listener = args[1];
-  evt->listeners[evt->listener_count].once = true;
-  evt->listener_count++;
+  if (!rl_add_listener(js, iface, "line", args[1], true)) return js_mkerr(js, "listener must be a function");
   
   return js_mkundef();
 }
@@ -997,7 +852,6 @@ static ant_value_t rl_interface_question_promise(ant_t *js, ant_value_t *args, i
 }
 
 static ant_value_t rl_interface_get_cursor_pos(ant_t *js, ant_value_t *args, int nargs) {
-  (void)args; (void)nargs;
   ant_value_t this_obj = js_getthis(js);
   rl_interface_t *iface = get_interface(js, this_obj);
   
@@ -1034,27 +888,11 @@ static ant_value_t rl_interface_get_cursor_pos(ant_t *js, ant_value_t *args, int
 }
 
 static ant_value_t rl_interface_closed_getter(ant_t *js, ant_value_t *args, int nargs) {
-  (void)args; (void)nargs;
   ant_value_t this_obj = js_getthis(js);
   rl_interface_t *iface = get_interface(js, this_obj);
   
   if (!iface) return js_true;
   return js_bool(iface->closed);
-}
-
-static ant_value_t rl_interface_async_iterator(ant_t *js, ant_value_t *args, int nargs) {
-  (void)args; (void)nargs;
-  ant_value_t this_obj = js_getthis(js);
-  rl_interface_t *iface = get_interface(js, this_obj);
-  
-  if (!iface) return js_mkerr(js, "Invalid Interface");
-  
-  ant_value_t iterator = js_mkobj(js);
-  js_set(js, iterator, "_rl_id", js_mknum((double)iface->id));
-  js_set(js, iterator, "_lines", js_mkarr(js));
-  js_set(js, iterator, "_done", js_false);
-  
-  return iterator;
 }
 
 static void free_interface(rl_interface_t *iface) {
@@ -1065,141 +903,7 @@ static void free_interface(rl_interface_t *iface) {
   free(iface->prompt);
   free(iface->line_buffer);
   rl_history_free(&iface->history);
-  
-  RLEventType *evt, *tmp;
-  HASH_ITER(hh, iface->events, evt, tmp) {
-    HASH_DEL(iface->events, evt);
-    free(evt->event_type);
-    free(evt);
-  }
-  
   free(iface);
-}
-
-static ant_value_t rl_create_interface(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1) return js_mkerr(js, "createInterface requires options");
-  
-  ant_value_t options = args[0];
-  if (!is_special_object(options)) return js_mkerr(js, "options must be an object");
-  
-  rl_interface_t *iface = calloc(1, sizeof(rl_interface_t));
-  if (!iface) return js_mkerr(js, "out of memory");
-  
-  iface->id = next_interface_id++;
-  iface->prompt = strdup(DEFAULT_PROMPT);
-  iface->line_buffer = calloc(MAX_LINE_LENGTH, 1);
-  iface->line_pos = 0;
-  iface->line_len = 0;
-  iface->paused = false;
-  iface->closed = false;
-  iface->reading = false;
-  iface->pending_question_resolve = js_mkundef();
-  iface->pending_question_reject = js_mkundef();
-  iface->events = NULL;
-  iface->tty_initialized = false;
-  iface->escape_state = 0;
-  iface->escape_len = 0;
-  iface->last_render_rows = 1;
-  iface->js_obj = js_mkundef();
-#ifndef _WIN32
-  iface->raw_mode = false;
-#endif
-  
-  iface->input_stream = js_get(js, options, "input");
-  iface->output_stream = js_get(js, options, "output");
-  
-  ant_value_t terminal_val = js_get(js, options, "terminal");
-  iface->terminal = terminal_val == js_true || vtype(terminal_val) == T_UNDEF;
-  
-  ant_value_t history_size_val = js_get(js, options, "historySize");
-  iface->history_size = (vtype(history_size_val) == T_NUM) 
-    ? (int)js_getnum(history_size_val) 
-    : DEFAULT_HISTORY_SIZE;
-  
-  ant_value_t remove_dup_val = js_get(js, options, "removeHistoryDuplicates");
-  iface->remove_history_duplicates = js_truthy(js, remove_dup_val);
-  
-  ant_value_t prompt_val = js_get(js, options, "prompt");
-  if (vtype(prompt_val) == T_STR) {
-    free(iface->prompt);
-    iface->prompt = strdup(js_getstr(js, prompt_val, NULL));
-  }
-  
-  ant_value_t crlf_delay_val = js_get(js, options, "crlfDelay");
-  iface->crlf_delay = (vtype(crlf_delay_val) == T_NUM) 
-    ? (int)js_getnum(crlf_delay_val) 
-    : 100;
-  if (iface->crlf_delay < 100) iface->crlf_delay = 100;
-  
-  ant_value_t tab_size_val = js_get(js, options, "tabSize");
-  iface->tab_size = (vtype(tab_size_val) == T_NUM) 
-    ? (int)js_getnum(tab_size_val) 
-    : DEFAULT_TAB_SIZE;
-  if (iface->tab_size < 1) iface->tab_size = 1;
-  
-  ant_value_t completer_val = js_get(js, options, "completer");
-  int ctype = vtype(completer_val);
-  iface->completer = (ctype == T_FUNC || ctype == T_CFUNC) ? completer_val : js_mkundef();
-  
-  ant_value_t history_val = js_get(js, options, "history");
-  if (is_special_object(history_val)) {
-    ant_value_t len_val = js_get(js, history_val, "length");
-    int len = (vtype(len_val) == T_NUM) ? (int)js_getnum(len_val) : 0;
-    
-    rl_history_init(&iface->history, iface->history_size);
-    
-    for (int i = 0; i < len; i++) {
-      char key[16];
-      snprintf(key, sizeof(key), "%d", i);
-      ant_value_t item = js_get(js, history_val, key);
-      if (vtype(item) == T_STR) {
-        char *line = js_getstr(js, item, NULL);
-        if (line) rl_history_add(&iface->history, line, false);
-      }
-    }
-  } else rl_history_init(&iface->history, iface->history_size);
-  HASH_ADD(hh, interfaces, id, sizeof(uint64_t), iface);
-  
-  ant_value_t obj = js_mkobj(js);
-  js_set(js, obj, "_rl_id", js_mknum((double)iface->id));
-  
-  js_set(js, obj, "on", js_mkfun(rl_interface_on));
-  js_set(js, obj, "once", js_mkfun(rl_interface_once));
-  js_set(js, obj, "off", js_mkfun(rl_interface_off));
-  js_set(js, obj, "addListener", js_mkfun(rl_interface_on));
-  js_set(js, obj, "removeListener", js_mkfun(rl_interface_off));
-  js_set(js, obj, "removeAllListeners", js_mkfun(rl_interface_remove_all_listeners));
-  js_set(js, obj, "emit", js_mkfun(rl_interface_emit));
-  
-  js_set(js, obj, "close", js_mkfun(rl_interface_close));
-  js_set(js, obj, "pause", js_mkfun(rl_interface_pause));
-  js_set(js, obj, "resume", js_mkfun(rl_interface_resume));
-  js_set(js, obj, "prompt", js_mkfun(rl_interface_prompt));
-  js_set(js, obj, "setPrompt", js_mkfun(rl_interface_set_prompt));
-  js_set(js, obj, "getPrompt", js_mkfun(rl_interface_get_prompt));
-  js_set(js, obj, "write", js_mkfun(rl_interface_write));
-  js_set(js, obj, "question", js_mkfun(rl_interface_question_callback));
-  js_set(js, obj, "getCursorPos", js_mkfun(rl_interface_get_cursor_pos));
-  
-  js_set_getter_desc(js, obj, "line", 4, js_mkfun(rl_interface_line_getter), JS_DESC_E | JS_DESC_C);
-  js_set_getter_desc(js, obj, "cursor", 6, js_mkfun(rl_interface_cursor_getter), JS_DESC_E | JS_DESC_C);
-  js_set_getter_desc(js, obj, "closed", 6, js_mkfun(rl_interface_closed_getter), JS_DESC_E | JS_DESC_C);
-  
-  js_set(js, obj, "terminal", js_bool(iface->terminal));
-  js_set_sym(js, obj, get_asyncIterator_sym(), js_mkfun(rl_interface_async_iterator));
-  js_set_sym(js, obj, get_toStringTag_sym(), js_mkstr(js, "Interface", 9));
-
-  start_reading(iface);
-  
-  return obj;
-}
-
-static ant_value_t rl_create_interface_promises(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t iface_obj = rl_create_interface(js, args, nargs);
-  if (vtype(iface_obj) == T_ERR) return iface_obj;
-  js_set(js, iface_obj, "question", js_mkfun(rl_interface_question_promise));
-  
-  return iface_obj;
 }
 
 static ant_value_t rl_clear_line(ant_t *js, ant_value_t *args, int nargs) {
@@ -1276,6 +980,318 @@ bool has_active_readline_interfaces(void) {
   return false;
 }
 
+static void rl_async_iter_compact_queue(ant_t *js, ant_value_t state, const char *queue_key, const char *head_key) {
+  ant_value_t queue = rl_async_iter_queue(js, state, queue_key);
+  ant_offset_t head = rl_async_iter_queue_head(js, state, head_key);
+  ant_offset_t len = vtype(queue) == T_ARR ? js_arr_len(js, queue) : 0;
+  ant_value_t compact = 0;
+
+  if (vtype(queue) != T_ARR || head == 0) return;
+
+  if (head >= len) {
+    js_set(js, state, queue_key, js_mkarr(js));
+    js_set(js, state, head_key, js_mknum(0));
+    return;
+  }
+
+  if (head <= 32 && head * 2 < len) return;
+
+  compact = js_mkarr(js);
+  for (ant_offset_t i = head; i < len; i++) js_arr_push(js, compact, js_arr_get(js, queue, i));
+  js_set(js, state, queue_key, compact);
+  js_set(js, state, head_key, js_mknum(0));
+}
+
+static void rl_async_iter_queue_push(ant_t *js, ant_value_t state, const char *queue_key, ant_value_t value) {
+  ant_value_t queue = rl_async_iter_queue(js, state, queue_key);
+  if (vtype(queue) == T_ARR) js_arr_push(js, queue, value);
+}
+
+static ant_value_t rl_async_iter_queue_shift(ant_t *js, ant_value_t state, const char *queue_key, const char *head_key) {
+  ant_value_t queue = rl_async_iter_queue(js, state, queue_key);
+  ant_offset_t head = rl_async_iter_queue_head(js, state, head_key);
+  ant_offset_t len = vtype(queue) == T_ARR ? js_arr_len(js, queue) : 0;
+  ant_value_t value = js_mkundef();
+
+  if (vtype(queue) != T_ARR || head >= len) return js_mkundef();
+  value = js_arr_get(js, queue, head);
+  rl_async_iter_set_queue_head(js, state, head_key, head + 1);
+  rl_async_iter_compact_queue(js, state, queue_key, head_key);
+  
+  return value;
+}
+
+static void rl_async_iter_cleanup(ant_t *js, ant_value_t state) {
+  ant_value_t iface_obj = is_object_type(state) ? js_get(js, state, "iface") : js_mkundef();
+  rl_interface_t *iface = get_interface(js, iface_obj);
+  if (!iface) return;
+
+  rl_remove_listener(js, iface, "line", js_get(js, state, "onLine"));
+  rl_remove_listener(js, iface, "close", js_get(js, state, "onClose"));
+}
+
+static void rl_async_iter_finish(ant_t *js, ant_value_t state) {
+  if (!is_object_type(state)) return;
+
+  js_set(js, state, "done", js_true);
+  rl_async_iter_cleanup(js, state);
+
+  for (;;) {
+    ant_value_t pending = rl_async_iter_queue_shift(js, state, "pending", "pendingHead");
+    if (vtype(pending) != T_PROMISE) break;
+    js_resolve_promise(js, pending, js_iter_result(js, false, js_mkundef()));
+  }
+}
+
+static ant_value_t rl_async_iter_on_line(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t state = rl_async_iter_state(js, js_getcurrentfunc(js));
+  ant_value_t line = nargs > 0 ? args[0] : js_mkundef();
+  ant_value_t pending = 0;
+
+  if (!is_object_type(state)) return js_mkundef();
+  if (js_truthy(js, js_get(js, state, "done"))) return js_mkundef();
+
+  pending = rl_async_iter_queue_shift(js, state, "pending", "pendingHead");
+  if (vtype(pending) == T_PROMISE) {
+    js_resolve_promise(js, pending, js_iter_result(js, true, line));
+  } else rl_async_iter_queue_push(js, state, "buffer", line);
+
+  return js_mkundef();
+}
+
+static ant_value_t rl_async_iter_on_close(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t state = rl_async_iter_state(js, js_getcurrentfunc(js));
+  rl_async_iter_finish(js, state);
+  return js_mkundef();
+}
+
+static ant_value_t rl_async_iter_next(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t state = rl_async_iter_state(js, js_getthis(js));
+  ant_value_t promise = js_mkpromise(js);
+  ant_value_t value = 0;
+
+  if (!is_object_type(state)) {
+    js_resolve_promise(js, promise, js_iter_result(js, false, js_mkundef()));
+    return promise;
+  }
+
+  value = rl_async_iter_queue_shift(js, state, "buffer", "bufferHead");
+  if (vtype(value) != T_UNDEF) {
+    js_resolve_promise(js, promise, js_iter_result(js, true, value));
+    return promise;
+  }
+
+  if (js_truthy(js, js_get(js, state, "done"))) {
+    js_resolve_promise(js, promise, js_iter_result(js, false, js_mkundef()));
+    return promise;
+  }
+
+  rl_async_iter_queue_push(js, state, "pending", promise);
+  return promise;
+}
+
+static ant_value_t rl_async_iter_return(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t state = rl_async_iter_state(js, js_getthis(js));
+  ant_value_t promise = js_mkpromise(js);
+
+  if (!is_object_type(state)) {
+    js_resolve_promise(js, promise, js_iter_result(js, false, js_mkundef()));
+    return promise;
+  }
+
+  if (!js_truthy(js, js_get(js, state, "done"))) {
+    ant_value_t iface_obj = js_get(js, state, "iface");
+    rl_interface_t *iface = get_interface(js, iface_obj);
+    
+    if (iface && !iface->closed) {
+      ant_value_t old_this = js_getthis(js);
+      js_setthis(js, iface_obj);
+      rl_interface_close(js, NULL, 0);
+      js_setthis(js, old_this);
+    } else rl_async_iter_finish(js, state);
+  }
+
+  js_resolve_promise(js, promise, js_iter_result(js, false, js_mkundef()));
+  return promise;
+}
+
+static ant_value_t rl_get_async_iter_proto(ant_t *js) {
+  if (is_object_type(g_rl_async_iter_proto)) return g_rl_async_iter_proto;
+
+  g_rl_async_iter_proto = js_mkobj(js);
+  js_set(js, g_rl_async_iter_proto, "next", js_mkfun(rl_async_iter_next));
+  js_set(js, g_rl_async_iter_proto, "return", js_mkfun(rl_async_iter_return));
+  js_set_sym(js, g_rl_async_iter_proto, get_asyncIterator_sym(), js_mkfun(sym_this_cb));
+  js_set_sym(js, g_rl_async_iter_proto, get_toStringTag_sym(), js_mkstr(js, "AsyncIterator", 13));
+
+  return g_rl_async_iter_proto;
+}
+
+static ant_value_t rl_interface_async_iterator(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
+  rl_interface_t *iface = get_interface(js, this_obj);
+  
+  ant_value_t iterator = 0;
+  ant_value_t state = 0;
+  ant_value_t on_line = 0;
+  ant_value_t on_close = 0;
+  
+  if (!iface) return js_mkerr(js, "Invalid Interface");
+
+  iterator = js_mkobj(js);
+  state = js_mkobj(js);
+
+  js_set_proto_init(iterator, rl_get_async_iter_proto(js));
+  js_set_slot_wb(js, iterator, SLOT_DATA, state);
+
+  js_set(js, state, "iface", this_obj);
+  js_set(js, state, "buffer", js_mkarr(js));
+  js_set(js, state, "bufferHead", js_mknum(0));
+  js_set(js, state, "pending", js_mkarr(js));
+  js_set(js, state, "pendingHead", js_mknum(0));
+  js_set(js, state, "done", js_bool(iface->closed));
+
+  if (!iface->closed) {
+    on_line = js_heavy_mkfun(js, rl_async_iter_on_line, state);
+    on_close = js_heavy_mkfun(js, rl_async_iter_on_close, state);
+    js_set(js, state, "onLine", on_line);
+    js_set(js, state, "onClose", on_close);
+    
+  if (!rl_add_listener(js, iface, "line", on_line, false) || !rl_add_listener(js, iface, "close", on_close, false)) {
+    rl_remove_listener(js, iface, "line", on_line);
+    rl_remove_listener(js, iface, "close", on_close);
+    return js_mkerr(js, "listener must be a function");
+  }}
+
+  return iterator;
+}
+
+static ant_value_t rl_get_interface_proto(ant_t *js) {
+  if (is_object_type(g_rl_interface_proto)) return g_rl_interface_proto;
+
+  g_rl_interface_proto = js_mkobj(js);
+  js_set_proto_init(g_rl_interface_proto, eventemitter_prototype(js));
+
+  js_set(js, g_rl_interface_proto, "close", js_mkfun(rl_interface_close));
+  js_set(js, g_rl_interface_proto, "pause", js_mkfun(rl_interface_pause));
+  js_set(js, g_rl_interface_proto, "resume", js_mkfun(rl_interface_resume));
+  js_set(js, g_rl_interface_proto, "prompt", js_mkfun(rl_interface_prompt));
+  js_set(js, g_rl_interface_proto, "setPrompt", js_mkfun(rl_interface_set_prompt));
+  js_set(js, g_rl_interface_proto, "getPrompt", js_mkfun(rl_interface_get_prompt));
+  js_set(js, g_rl_interface_proto, "write", js_mkfun(rl_interface_write));
+  js_set(js, g_rl_interface_proto, "question", js_mkfun(rl_interface_question_callback));
+  js_set(js, g_rl_interface_proto, "getCursorPos", js_mkfun(rl_interface_get_cursor_pos));
+
+  js_set_getter_desc(js, g_rl_interface_proto, "line", 4, js_mkfun(rl_interface_line_getter), JS_DESC_E | JS_DESC_C);
+  js_set_getter_desc(js, g_rl_interface_proto, "cursor", 6, js_mkfun(rl_interface_cursor_getter), JS_DESC_E | JS_DESC_C);
+  js_set_getter_desc(js, g_rl_interface_proto, "closed", 6, js_mkfun(rl_interface_closed_getter), JS_DESC_E | JS_DESC_C);
+  js_set_sym(js, g_rl_interface_proto, get_asyncIterator_sym(), js_mkfun(rl_interface_async_iterator));
+  js_set_sym(js, g_rl_interface_proto, get_toStringTag_sym(), js_mkstr(js, "Interface", 9));
+
+  return g_rl_interface_proto;
+}
+
+static ant_value_t rl_create_interface(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "createInterface requires options");
+  
+  ant_value_t options = args[0];
+  if (!is_special_object(options)) return js_mkerr(js, "options must be an object");
+  
+  rl_interface_t *iface = calloc(1, sizeof(rl_interface_t));
+  if (!iface) return js_mkerr(js, "out of memory");
+  
+  iface->id = next_interface_id++;
+  iface->prompt = strdup(DEFAULT_PROMPT);
+  iface->line_buffer = calloc(MAX_LINE_LENGTH, 1);
+  iface->line_pos = 0;
+  iface->line_len = 0;
+  iface->paused = false;
+  iface->closed = false;
+  iface->reading = false;
+  iface->pending_question_resolve = js_mkundef();
+  iface->pending_question_reject = js_mkundef();
+  iface->tty_initialized = false;
+  iface->escape_state = 0;
+  iface->escape_len = 0;
+  iface->last_render_rows = 1;
+  iface->js_obj = js_mkundef();
+#ifndef _WIN32
+  iface->raw_mode = false;
+#endif
+  
+  iface->input_stream = js_get(js, options, "input");
+  iface->output_stream = js_get(js, options, "output");
+  
+  ant_value_t terminal_val = js_get(js, options, "terminal");
+  iface->terminal = terminal_val == js_true || vtype(terminal_val) == T_UNDEF;
+  
+  ant_value_t history_size_val = js_get(js, options, "historySize");
+  iface->history_size = (vtype(history_size_val) == T_NUM) 
+    ? (int)js_getnum(history_size_val) 
+    : DEFAULT_HISTORY_SIZE;
+  
+  ant_value_t remove_dup_val = js_get(js, options, "removeHistoryDuplicates");
+  iface->remove_history_duplicates = js_truthy(js, remove_dup_val);
+  
+  ant_value_t prompt_val = js_get(js, options, "prompt");
+  if (vtype(prompt_val) == T_STR) {
+    free(iface->prompt);
+    iface->prompt = strdup(js_getstr(js, prompt_val, NULL));
+  }
+  
+  ant_value_t crlf_delay_val = js_get(js, options, "crlfDelay");
+  iface->crlf_delay = (vtype(crlf_delay_val) == T_NUM) 
+    ? (int)js_getnum(crlf_delay_val) 
+    : 100;
+  if (iface->crlf_delay < 100) iface->crlf_delay = 100;
+  
+  ant_value_t tab_size_val = js_get(js, options, "tabSize");
+  iface->tab_size = (vtype(tab_size_val) == T_NUM) 
+    ? (int)js_getnum(tab_size_val) 
+    : DEFAULT_TAB_SIZE;
+  if (iface->tab_size < 1) iface->tab_size = 1;
+  
+  ant_value_t completer_val = js_get(js, options, "completer");
+  int ctype = vtype(completer_val);
+  iface->completer = (ctype == T_FUNC || ctype == T_CFUNC) ? completer_val : js_mkundef();
+  
+  ant_value_t history_val = js_get(js, options, "history");
+  if (is_special_object(history_val)) {
+    ant_value_t len_val = js_get(js, history_val, "length");
+    int len = (vtype(len_val) == T_NUM) ? (int)js_getnum(len_val) : 0;
+    
+    rl_history_init(&iface->history, iface->history_size);
+    
+    for (int i = 0; i < len; i++) {
+      char key[16];
+      snprintf(key, sizeof(key), "%d", i);
+      ant_value_t item = js_get(js, history_val, key);
+      if (vtype(item) == T_STR) {
+        char *line = js_getstr(js, item, NULL);
+        if (line) rl_history_add(&iface->history, line, false);
+      }
+    }
+  } else rl_history_init(&iface->history, iface->history_size);
+  HASH_ADD(hh, interfaces, id, sizeof(uint64_t), iface);
+  
+  ant_value_t obj = js_mkobj(js);
+  js_set_proto_init(obj, rl_get_interface_proto(js));
+  iface->js_obj = obj;
+  js_set(js, obj, "_rl_id", js_mknum((double)iface->id));
+  js_set(js, obj, "terminal", js_bool(iface->terminal));
+
+  start_reading(iface);
+  
+  return obj;
+}
+
+static ant_value_t rl_create_interface_promises(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t iface_obj = rl_create_interface(js, args, nargs);
+  if (vtype(iface_obj) == T_ERR) return iface_obj;
+  js_set(js, iface_obj, "question", js_mkfun(rl_interface_question_promise));
+  
+  return iface_obj;
+}
 
 ant_value_t readline_library(ant_t *js) {
   ant_value_t lib = js_mkobj(js);
@@ -1306,6 +1322,9 @@ ant_value_t readline_promises_library(ant_t *js) {
 }
 
 void gc_mark_readline(ant_t *js, gc_mark_fn mark) {
+  if (g_rl_async_iter_proto) mark(js, g_rl_async_iter_proto);
+  if (g_rl_interface_proto) mark(js, g_rl_interface_proto);
+  
   rl_interface_t *iface, *tmp;
   HASH_ITER(hh, interfaces, iface, tmp) {
     mark(js, iface->input_stream);
@@ -1314,9 +1333,5 @@ void gc_mark_readline(ant_t *js, gc_mark_fn mark) {
     mark(js, iface->js_obj);
     mark(js, iface->pending_question_resolve);
     mark(js, iface->pending_question_reject);
-    
-    RLEventType *evt, *evt_tmp;
-    HASH_ITER(hh, iface->events, evt, evt_tmp) for (int i = 0; i < evt->listener_count; i++) 
-      mark(js, evt->listeners[i].listener);
   }
 }

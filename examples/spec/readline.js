@@ -1,4 +1,4 @@
-import { test, summary } from './helpers.js';
+import { test, testDeep, summary } from './helpers.js';
 import * as readline from 'node:readline';
 import * as readlinePromises from 'node:readline/promises';
 
@@ -192,5 +192,25 @@ rl5.write(null, { name: 'u', ctrl: true });
 test('ctrl+u clears line', rl5.line, '');
 
 rl5.close();
+
+const rlAsync = readlinePromises.createInterface({
+  input: process.stdin,
+  output: process.stdout
+});
+
+const asyncLines = [];
+const consumeAsyncLines = (async () => {
+  for await (const line of rlAsync) {
+    asyncLines.push(line);
+    if (asyncLines.length === 2) break;
+  }
+})();
+
+rlAsync.write('alpha\n');
+rlAsync.write('beta\n');
+await consumeAsyncLines;
+
+testDeep('async iterator yields lines', asyncLines, ['alpha', 'beta']);
+test('async iterator closes interface after break', rlAsync.closed, true);
 
 summary();

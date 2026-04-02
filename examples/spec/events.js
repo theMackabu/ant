@@ -111,6 +111,20 @@ eeA.emit('x');
 test('separate instances are isolated (A)', aVal, 1);
 test('separate instances are isolated (B)', bVal, 0);
 
+const eeC = new EventEmitter();
+eeC.on('a', () => {});
+eeC.on('b', () => {});
+eeC.removeAllListeners();
+test('removeAllListeners without event clears all listeners', eeC.listenerCount('a') + eeC.listenerCount('b'), 0);
+
+const eeD = new EventEmitter();
+let listenerThis = null;
+eeD.on('ctx', function () {
+  listenerThis = this;
+});
+eeD.emit('ctx');
+test('EventEmitter listeners receive emitter as this', listenerThis, eeD);
+
 console.log('\nEventTarget Tests\n');
 
 const et = new EventTarget();

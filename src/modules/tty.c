@@ -37,8 +37,6 @@
 #include "modules/symbol.h"
 #include "modules/tty.h"
 
-
-
 static bool parse_fd(ant_value_t value, int *fd_out) {
   int fd = 0;
   if (!tty_ctrl_parse_int_value(value, &fd)) return false;

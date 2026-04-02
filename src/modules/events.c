@@ -26,6 +26,8 @@ typedef struct {
 } event_data_t;
 
 static ant_value_t g_isTrusted_getter            = 0;
+static ant_value_t g_eventemitter_ctor           = 0;
+static ant_value_t g_eventemitter_proto          = 0;
 static ant_value_t g_event_proto                 = 0;
 static ant_value_t g_customevent_proto           = 0;
 static ant_value_t g_errorevent_proto            = 0;
@@ -637,6 +639,44 @@ static bool eventemitter_add_listener_impl(
   return true;
 }
 
+static bool eventemitter_remove_listener_impl(
+  ant_t *js,
+  ant_value_t target, ant_value_t key,
+  ant_value_t listener
+) {
+  EventType *evt = NULL;
+  uint8_t t = 0;
+
+  if (!is_object_type(target) || !key) return false;
+  t = vtype(listener);
+  if (t != T_FUNC && t != T_CFUNC) return false;
+
+  evt = find_emitter_event_type(js, target, key);
+  if (!evt) return false;
+
+  for (unsigned int i = 0; i < utarray_len(evt->listeners); i++) {
+  EventListenerEntry *entry = (EventListenerEntry *)utarray_eltptr(evt->listeners, i);
+  if (entry->callback == listener) {
+    utarray_erase(evt->listeners, i, 1);
+    return true;
+  }}
+
+  return false;
+}
+
+static ant_offset_t eventemitter_listener_count_impl(
+  ant_t *js,
+  ant_value_t target, ant_value_t key
+) {
+  EventType *evt = NULL;
+
+  if (!is_object_type(target) || !key) return 0;
+  evt = find_emitter_event_type(js, target, key);
+  if (!evt) return 0;
+
+  return (ant_offset_t)utarray_len(evt->listeners);
+}
+
 static ant_value_t js_eventemitter_off(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_mkerr(js, "off requires 2 arguments (event, listener)");
   ant_value_t key = evt_key_from_arg(args[0]);
@@ -674,7 +714,7 @@ static bool eventemitter_emit_args_impl(
     if (vtype(entry->signal) != T_UNDEF && abort_signal_is_aborted(entry->signal)) continue;
     if (vtype(cb) != T_FUNC && vtype(cb) != T_CFUNC) continue;
     
-    ant_value_t result = sv_vm_call(js->vm, js, cb, js_mkundef(), args, nargs, NULL, false);
+    ant_value_t result = sv_vm_call(js->vm, js, cb, target, args, nargs, NULL, false);
     if (vtype(result) == T_ERR) {
       if (vtype(key) == T_STR) fprintf(stderr, "Error in event listener for '%s': %s\n", js_str(js, key), js_str(js, result));
       else fprintf(stderr, "Error in event listener: %s\n", js_str(js, result));
@@ -727,6 +767,36 @@ bool eventemitter_add_listener(
   return eventemitter_add_listener_val(js, target, js_mkstr(js, event_type, strlen(event_type)), listener, once);
 }
 
+bool eventemitter_remove_listener_val(
+  ant_t *js,
+  ant_value_t target, ant_value_t key,
+  ant_value_t listener
+) {
+  return eventemitter_remove_listener_impl(js, target, key, listener);
+}
+
+bool eventemitter_remove_listener(
+  ant_t *js,
+  ant_value_t target, const char *event_type,
+  ant_value_t listener
+) {
+  return eventemitter_remove_listener_val(js, target, js_mkstr(js, event_type, strlen(event_type)), listener);
+}
+
+ant_offset_t eventemitter_listener_count_val(
+  ant_t *js,
+  ant_value_t target, ant_value_t key
+) {
+  return eventemitter_listener_count_impl(js, target, key);
+}
+
+ant_offset_t eventemitter_listener_count(
+  ant_t *js,
+  ant_value_t target, const char *event_type
+) {
+  return eventemitter_listener_count_val(js, target, js_mkstr(js, event_type, strlen(event_type)));
+}
+
 static ant_value_t js_eventemitter_add(ant_t *js, ant_value_t *args, int nargs, bool once, bool prepend) {
   if (nargs < 2) return js_mkerr(js, "requires 2 arguments (event, listener)");
   ant_value_t key = evt_key_from_arg(args[0]);
@@ -756,11 +826,20 @@ static ant_value_t js_eventemitter_prepend_once_listener(ant_t *js, ant_value_t 
 
 static ant_value_t js_eventemitter_removeAllListeners(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_obj = js_getthis(js);
-  if (nargs < 1) return this_obj;
-  
+  EventType **events = NULL;
+
+  if (nargs < 1 || vtype(args[0]) == T_UNDEF) {
+    events = get_or_create_emitter_events(js, this_obj);
+    if (!events || !*events) return this_obj;
+
+    EventType *evt, *tmp;
+    HASH_ITER(hh, *events, evt, tmp) utarray_clear(evt->listeners);
+    return this_obj;
+  }
+
   ant_value_t key = evt_key_from_arg(args[0]);
   if (!key) return this_obj;
-  
+
   EventType *evt = find_emitter_event_type(js, this_obj, key);
   if (evt) utarray_clear(evt->listeners);
   
@@ -794,7 +873,18 @@ static ant_value_t js_eventemitter_eventNames(ant_t *js, ant_value_t *args, int 
 
 ant_value_t events_library(ant_t *js) {
   ant_value_t lib = js_mkobj(js);
-  ant_value_t eventemitter_ctor  = js_mkobj(js);
+  
+  eventemitter_prototype(js);
+  js_set_module_default(js, lib, g_eventemitter_ctor, "EventEmitter");
+  js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "events", 6));
+  
+  return lib;
+}
+
+ant_value_t eventemitter_prototype(ant_t *js) {
+  if (g_eventemitter_proto) return g_eventemitter_proto;
+
+  ant_value_t eventemitter_ctor = js_mkobj(js);
   ant_value_t eventemitter_proto = js_mkobj(js);
 
   js_set(js, eventemitter_proto, "on",                 js_mkfun(js_eventemitter_on));
@@ -814,11 +904,10 @@ ant_value_t events_library(ant_t *js) {
   js_mkprop_fast(js, eventemitter_ctor, "name", 4, ANT_STRING("EventEmitter"));
   js_set_descriptor(js, eventemitter_ctor, "name", 4, 0);
 
-  ant_value_t ctor_fn = js_obj_to_func_ex(eventemitter_ctor, SV_CALL_IS_DEFAULT_CTOR);
-  js_set_module_default(js, lib, ctor_fn, "EventEmitter");
-  js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "events", 6));
+  g_eventemitter_proto = eventemitter_proto;
+  g_eventemitter_ctor = js_obj_to_func_ex(eventemitter_ctor, SV_CALL_IS_DEFAULT_CTOR);
   
-  return lib;
+  return g_eventemitter_proto;
 }
 
 void init_events_module(void) {
@@ -903,6 +992,8 @@ void gc_mark_events(ant_t *js, gc_mark_fn mark) {
     if (*reg->events) mark_event_type_listeners(js, mark, *reg->events);
   }
   if (g_isTrusted_getter)            mark(js, g_isTrusted_getter);
+  if (g_eventemitter_ctor)           mark(js, g_eventemitter_ctor);
+  if (g_eventemitter_proto)          mark(js, g_eventemitter_proto);
   if (g_event_proto)                 mark(js, g_event_proto);
   if (g_customevent_proto)           mark(js, g_customevent_proto);
   if (g_errorevent_proto)            mark(js, g_errorevent_proto);
