@@ -210,6 +210,23 @@ static ant_value_t util_inspect(ant_t *js, ant_value_t *args, int nargs) {
   return out;
 }
 
+static ant_value_t util_debuglog_call(ant_params_t) {
+  return js_mkundef();
+}
+
+static ant_value_t util_debuglog(ant_params_t) {
+  ant_value_t logger = js_mkfun(util_debuglog_call);
+  js_set(js, logger, "enabled", js_false);
+
+  if (nargs >= 2 && is_callable(args[1])) {
+    ant_value_t cb_args[1] = { logger };
+    ant_value_t result = sv_vm_call(js->vm, js, args[1], js_mkundef(), cb_args, 1, NULL, false);
+    if (is_err(result) || js->thrown_exists) return result;
+  }
+
+  return logger;
+}
+
 static ant_value_t util_strip_vt_control_characters(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkstr(js, "", 0);
 
@@ -633,6 +650,7 @@ ant_value_t util_library(ant_t *js) {
 
   js_set(js, lib, "format", js_mkfun(util_format));
   js_set(js, lib, "formatWithOptions", js_mkfun(util_format_with_options));
+  js_set(js, lib, "debuglog", js_mkfun(util_debuglog));
   js_set(js, lib, "inspect", js_mkfun(util_inspect));
   js_set(js, lib, "deprecate", js_mkfun(util_deprecate));
   js_set(js, lib, "inherits", js_mkfun(util_inherits));
