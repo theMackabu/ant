@@ -255,15 +255,19 @@ static ant_value_t v8_get_heap_statistics(ant_t *js, ant_value_t *args, int narg
   size_t arena_reserved   = js->obj_arena.reserved;
   size_t arena_live_bytes = js->obj_arena.live_count * js->obj_arena.elem_size;
 
-  size_t pool_live    = js->gc_pool_last_live;
-  size_t pool_alloc   = js->gc_pool_alloc;
+  size_t closure_committed = js->closure_arena.committed;
+  size_t closure_reserved  = js->closure_arena.reserved;
+  size_t closure_live      = js->closure_arena.live_count * js->closure_arena.elem_size;
 
-  size_t closure_live = js->closure_arena.live_count * js->closure_arena.elem_size;
-  size_t extra_alloc  = js->alloc_bytes.closures + js->alloc_bytes.upvalues;
+  size_t pool_live  = js->gc_pool_last_live;
+  size_t pool_alloc = js->gc_pool_alloc;
+  size_t pool_total = pool_live + pool_alloc;
 
-  size_t used_heap  = arena_live_bytes + pool_live + closure_live;
-  size_t total_heap = arena_committed  + pool_alloc + extra_alloc;
-  size_t heap_limit = arena_reserved;
+  size_t extra_alloc = js->alloc_bytes.closures + js->alloc_bytes.upvalues;
+
+  size_t used_heap  = arena_live_bytes + closure_live + pool_total + extra_alloc;
+  size_t total_heap = arena_committed + closure_committed + pool_total + extra_alloc;
+  size_t heap_limit = arena_reserved + closure_reserved;
 
   ant_value_t obj = js_mkobj(js);
   js_set(js, obj, "total_heap_size",             js_mknum((double)total_heap));
