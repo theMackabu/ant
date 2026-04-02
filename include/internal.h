@@ -227,8 +227,15 @@ struct ant_isolate_t {
 
 typedef struct {
   ant_offset_t len;
+  uint8_t is_ascii;
   char bytes[];
 } ant_flat_string_t;
+
+enum {
+  STR_ASCII_UNKNOWN = 0,
+  STR_ASCII_YES = 1,
+  STR_ASCII_NO = 2,
+};
 
 typedef struct {
   ant_offset_t len;
@@ -436,6 +443,31 @@ static inline ant_value_t defmethod(ant_t *js, ant_value_t obj, const char *name
   ant_value_t k = js_mkstr(js, name, len);
   if (is_err(k)) return k;
   return mkprop(js, obj, k, fn, ANT_PROP_ATTR_WRITABLE | ANT_PROP_ATTR_CONFIGURABLE);
+}
+
+static inline ant_flat_string_t *str_flat_from_bytes(const char *str) {
+  return (ant_flat_string_t *)((char *)str - offsetof(ant_flat_string_t, bytes));
+}
+
+static inline uint8_t str_detect_ascii_bytes(const char *str, size_t len) {
+  const unsigned char *s = (const unsigned char *)str;
+  for (size_t i = 0; i < len; i++) {
+    if (s[i] >= 0x80) return STR_ASCII_NO;
+  }
+  return STR_ASCII_YES;
+}
+
+static inline void str_set_ascii_state(const char *str, uint8_t state) {
+  ant_flat_string_t *flat = str_flat_from_bytes(str);
+  flat->is_ascii = state;
+}
+
+static inline bool str_is_ascii(const char *str) {
+  ant_flat_string_t *flat = str_flat_from_bytes(str);
+  if (flat->is_ascii == STR_ASCII_UNKNOWN) {
+    flat->is_ascii = str_detect_ascii_bytes(flat->bytes, (size_t)flat->len);
+  }
+  return flat->is_ascii == STR_ASCII_YES;
 }
 
 static inline void js_set_module_default(ant_t *js, ant_value_t lib, ant_value_t ctor_fn, const char *name) {

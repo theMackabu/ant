@@ -1,8 +1,170 @@
 #include "utf8.h"
 #include "utils.h"
+#include "internal.h"
+#include "gc/objects.h"
+
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <stddef.h>
+
+typedef struct {
+  uint64_t epoch;
+  const char *str;
+  size_t byte_len;
+  size_t byte_pos;
+  size_t utf16_pos;
+} utf16_scan_cache_t;
+
+typedef struct {
+  const char *str;
+  size_t byte_len;
+  const unsigned char *start;
+  const unsigned char *end;
+  const unsigned char *p;
+  size_t utf16_pos;
+} utf16_scan_cursor_t;
+
+static _Thread_local utf16_scan_cache_t utf16_scan_cache = { 0 };
+
+static inline void utf16_scan_cache_sync_epoch(void) {
+  uint64_t epoch = gc_get_epoch();
+  if (utf16_scan_cache.epoch == epoch) return;
+  utf16_scan_cache = (utf16_scan_cache_t){ .epoch = epoch };
+}
+
+static inline void utf16_scan_cursor_init(
+  utf16_scan_cursor_t *cursor,
+  const char *str,
+  size_t byte_len
+) {
+  utf16_scan_cache_sync_epoch();
+  cursor->str = str;
+  cursor->byte_len = byte_len;
+  cursor->start = (const unsigned char *)str;
+  cursor->end = cursor->start + byte_len;
+  cursor->p = cursor->start;
+  cursor->utf16_pos = 0;
+}
+
+static inline bool utf16_scan_cache_matches(const utf16_scan_cursor_t *cursor) {
+  return utf16_scan_cache.str == cursor->str
+    && utf16_scan_cache.byte_pos <= cursor->byte_len;
+}
+
+static inline void utf16_scan_cursor_resume_cached(utf16_scan_cursor_t *cursor) {
+  if (!utf16_scan_cache_matches(cursor)) return;
+  cursor->p = cursor->start + utf16_scan_cache.byte_pos;
+  cursor->utf16_pos = utf16_scan_cache.utf16_pos;
+}
+
+static inline void utf16_scan_cursor_resume_utf16(
+  utf16_scan_cursor_t *cursor,
+  size_t target_utf16
+) {
+  if (!utf16_scan_cache_matches(cursor)) return;
+  if (target_utf16 < utf16_scan_cache.utf16_pos) return;
+  cursor->p = cursor->start + utf16_scan_cache.byte_pos;
+  cursor->utf16_pos = utf16_scan_cache.utf16_pos;
+}
+
+static inline void utf16_scan_cursor_resume_byte(
+  utf16_scan_cursor_t *cursor,
+  size_t target_byte
+) {
+  if (!utf16_scan_cache_matches(cursor)) return;
+  if (target_byte < utf16_scan_cache.byte_pos) return;
+  cursor->p = cursor->start + utf16_scan_cache.byte_pos;
+  cursor->utf16_pos = utf16_scan_cache.utf16_pos;
+}
+
+static inline void utf16_scan_cursor_store(const utf16_scan_cursor_t *cursor) {
+  utf16_scan_cache.str = cursor->str;
+  utf16_scan_cache.byte_len = cursor->byte_len;
+  utf16_scan_cache.byte_pos = (size_t)(cursor->p - cursor->start);
+  utf16_scan_cache.utf16_pos = cursor->utf16_pos;
+}
+
+static inline void utf16_scan_decode(
+  const unsigned char *p,
+  const unsigned char *end,
+  size_t *slen_out,
+  size_t *units_out,
+  uint32_t *cp_out
+) {
+  unsigned char c = *p;
+  if (c < 0x80) {
+    if (cp_out) *cp_out = c;
+    *slen_out = 1;
+    *units_out = 1;
+    return;
+  }
+
+  if ((c & 0xE0) == 0xC0) {
+    if (cp_out && p + 1 < end) {
+      *cp_out = ((uint32_t)(c & 0x1F) << 6) | (uint32_t)(p[1] & 0x3F);
+      *slen_out = 2;
+      *units_out = 1;
+      return;
+    }
+    if (!cp_out) {
+      *slen_out = 2;
+      *units_out = 1;
+      return;
+    }
+  } else if ((c & 0xF0) == 0xE0) {
+    if (cp_out && p + 2 < end) {
+      *cp_out = ((uint32_t)(c & 0x0F) << 12)
+        | ((uint32_t)(p[1] & 0x3F) << 6)
+        | (uint32_t)(p[2] & 0x3F);
+      *slen_out = 3;
+      *units_out = 1;
+      return;
+    }
+    if (!cp_out) {
+      *slen_out = 3;
+      *units_out = 1;
+      return;
+    }
+  } else if ((c & 0xF8) == 0xF0) {
+    if (cp_out && p + 3 < end) {
+      *cp_out = ((uint32_t)(c & 0x07) << 18)
+        | ((uint32_t)(p[1] & 0x3F) << 12)
+        | ((uint32_t)(p[2] & 0x3F) << 6)
+        | (uint32_t)(p[3] & 0x3F);
+      *slen_out = 4;
+      *units_out = 2;
+      return;
+    }
+    if (!cp_out) {
+      *slen_out = 4;
+      *units_out = 2;
+      return;
+    }
+  }
+
+  if (cp_out) *cp_out = c;
+  *slen_out = 1;
+  *units_out = 1;
+}
+
+static inline bool utf16_scan_cursor_advance(
+  utf16_scan_cursor_t *cursor,
+  const unsigned char *bound_end
+) {
+  size_t slen, units;
+  const unsigned char *next;
+
+  utf16_scan_decode(cursor->p, cursor->end, &slen, &units, NULL);
+  next = cursor->p + slen;
+  cursor->utf16_pos += units;
+  if (next > bound_end) {
+    cursor->p = bound_end;
+    return false;
+  }
+  cursor->p = next;
+  return true;
+}
 
 static uint32_t utf8_decode(const unsigned char *buf, size_t len, int *seq_len) {
   if (len == 0) { *seq_len = 0; return 0; }
@@ -133,32 +295,18 @@ size_t utf8_strlen(const char *str, size_t byte_len) {
 }
 
 size_t utf16_strlen(const char *str, size_t byte_len) {
-  const unsigned char *p = (const unsigned char *)str;
-  const unsigned char *end = p + byte_len;
-  
-  size_t i = 0;
-  for (; i + 8 <= byte_len; i += 8) {
-    uint64_t chunk;
-    memcpy(&chunk, p + i, 8);
-    if (chunk & 0x8080808080808080ULL) goto slow_path;
+  if (str_is_ascii(str)) return byte_len;
+
+  utf16_scan_cursor_t cursor;
+  utf16_scan_cursor_init(&cursor, str, byte_len);
+  utf16_scan_cursor_resume_cached(&cursor);
+
+  while (cursor.p < cursor.end) {
+    utf16_scan_cursor_advance(&cursor, cursor.end);
   }
-  for (; i < byte_len; i++) {
-    if (p[i] & 0x80) goto slow_path;
-  }
-  return byte_len;
-  
-slow_path:;
-  size_t count = i;
-  p += i;
-  while (p < end) {
-    unsigned char c = *p;
-    if ((c & 0xC0) != 0x80) {
-      count++;
-      if ((c & 0xF8) == 0xF0) count++;
-    }
-    p++;
-  }
-  return count;
+
+  utf16_scan_cursor_store(&cursor);
+  return cursor.utf16_pos;
 }
 
 int utf16_index_to_byte_offset(
@@ -167,36 +315,36 @@ int utf16_index_to_byte_offset(
   size_t utf16_idx,
   size_t *out_char_bytes
 ) {
-  const unsigned char *p = (const unsigned char *)str;
-  const unsigned char *end = p + byte_len;
-  size_t utf16_pos = 0;
+  if (str_is_ascii(str)) {
+    if (utf16_idx > byte_len) return -1;
+    if (out_char_bytes) *out_char_bytes = (utf16_idx < byte_len) ? 1 : 0;
+    return (int)utf16_idx;
+  }
+
+  utf16_scan_cursor_t cursor;
+  utf16_scan_cursor_init(&cursor, str, byte_len);
+  utf16_scan_cursor_resume_utf16(&cursor, utf16_idx);
   
-  while (p < end && utf16_pos < utf16_idx) {
-    unsigned char c = *p;
-    if (c < 0x80) { p++; utf16_pos++; }
-    else if ((c & 0xE0) == 0xC0) { p += 2; utf16_pos++; }
-    else if ((c & 0xF0) == 0xE0) { p += 3; utf16_pos++; }
-    else if ((c & 0xF8) == 0xF0) { p += 4; utf16_pos += 2; }
-    else { p++; utf16_pos++; }
-    if (p > end) p = end;
+  while (cursor.p < cursor.end && cursor.utf16_pos < utf16_idx) {
+    utf16_scan_cursor_advance(&cursor, cursor.end);
   }
   
-  if (p >= end) {
-    if (utf16_pos == utf16_idx) {
+  if (cursor.p >= cursor.end) {
+    if (cursor.utf16_pos == utf16_idx) {
       if (out_char_bytes) *out_char_bytes = 0;
+      utf16_scan_cursor_store(&cursor);
       return (int)byte_len;
-    } return -1;
+    }
+    utf16_scan_cursor_store(&cursor);
+    return -1;
   }
   
-  unsigned char c = *p;
-  size_t slen = (c < 0x80) 
-    ? 1 : ((c & 0xE0) == 0xC0) 
-    ? 2 : ((c & 0xF0) == 0xE0) 
-    ? 3 : ((c & 0xF8) == 0xF0) 
-    ? 4 : 1;
+  size_t slen, units;
+  utf16_scan_decode(cursor.p, cursor.end, &slen, &units, NULL);
     
   if (out_char_bytes) *out_char_bytes = slen;
-  return (int)(p - (const unsigned char *)str);
+  utf16_scan_cursor_store(&cursor);
+  return (int)(cursor.p - cursor.start);
 }
 
 int utf16_range_to_byte_range(
@@ -207,94 +355,94 @@ int utf16_range_to_byte_range(
   size_t *byte_start,
   size_t *byte_end
 ) {
-  const unsigned char *p = (const unsigned char *)str;
-  const unsigned char *end = p + byte_len;
-  
-  size_t utf16_pos = 0;
+  if (str_is_ascii(str)) {
+    *byte_start = (utf16_start <= byte_len) ? utf16_start : byte_len;
+    *byte_end = (utf16_end <= byte_len) ? utf16_end : byte_len;
+    return 0;
+  }
+
+  utf16_scan_cursor_t cursor;
+  utf16_scan_cursor_init(&cursor, str, byte_len);
+  utf16_scan_cursor_resume_utf16(&cursor, utf16_start);
+
   size_t b_start = 0, b_end = byte_len;
   int found_start = 0, found_end = 0;
   
-  while (p < end) {
-    if (utf16_pos == utf16_start) { b_start = p - (const unsigned char *)str; found_start = 1; }
-    if (utf16_pos == utf16_end) { b_end = p - (const unsigned char *)str; found_end = 1; break; }
-    
-    unsigned char c = *p;
-    if (c < 0x80) { p++; utf16_pos++; }
-    else if ((c & 0xE0) == 0xC0) { p += 2; utf16_pos++; }
-    else if ((c & 0xF0) == 0xE0) { p += 3; utf16_pos++; }
-    else if ((c & 0xF8) == 0xF0) { p += 4; utf16_pos += 2; }
-    else { p++; utf16_pos++; }
-    if (p > end) p = end;
+  while (cursor.p < cursor.end) {
+    if (cursor.utf16_pos == utf16_start) {
+      b_start = (size_t)(cursor.p - cursor.start);
+      found_start = 1;
+    }
+    if (cursor.utf16_pos == utf16_end) {
+      b_end = (size_t)(cursor.p - cursor.start);
+      found_end = 1;
+      break;
+    }
+    utf16_scan_cursor_advance(&cursor, cursor.end);
   }
   
-  if (!found_start && utf16_start >= utf16_pos) b_start = byte_len;
-  if (!found_end && utf16_end >= utf16_pos) b_end = byte_len;
+  if (!found_start && utf16_start >= cursor.utf16_pos) b_start = byte_len;
+  if (!found_end && utf16_end >= cursor.utf16_pos) b_end = byte_len;
   
   *byte_start = b_start;
   *byte_end = b_end;
+  utf16_scan_cursor_store(&cursor);
   
   return 0;
 }
 
 size_t byte_offset_to_utf16(const char *str, size_t byte_off) {
-  const unsigned char *p = (const unsigned char *)str;
-  const unsigned char *end = p + byte_off;
-  size_t utf16_pos = 0;
+  if (str_is_ascii(str)) return byte_off;
 
-  while (p < end) {
-    unsigned char c = *p;
-    if (c < 0x80) { p++; utf16_pos++; }
-    else if ((c & 0xE0) == 0xC0) { p += 2; utf16_pos++; }
-    else if ((c & 0xF0) == 0xE0) { p += 3; utf16_pos++; }
-    else if ((c & 0xF8) == 0xF0) { p += 4; utf16_pos += 2; }
-    else { p++; utf16_pos++; }
-    if (p > end) p = end;
+  utf16_scan_cursor_t cursor;
+  const unsigned char *bound_end;
+  bool ended_on_boundary = true;
+
+  utf16_scan_cursor_init(&cursor, str, byte_off);
+  utf16_scan_cursor_resume_byte(&cursor, byte_off);
+  bound_end = cursor.start + byte_off;
+
+  while (cursor.p < bound_end) {
+    if (!utf16_scan_cursor_advance(&cursor, bound_end)) {
+      ended_on_boundary = false;
+      break;
+    }
   }
-  return utf16_pos;
+
+  if (ended_on_boundary) utf16_scan_cursor_store(&cursor);
+  return cursor.utf16_pos;
 }
 
 uint32_t utf16_code_unit_at(const char *str, size_t byte_len, size_t utf16_idx) {
-  const unsigned char *p = (const unsigned char *)str;
-  const unsigned char *end = p + byte_len;
-  size_t utf16_pos = 0;
+  if (str_is_ascii(str)) {
+    if (utf16_idx >= byte_len) return 0xFFFFFFFF;
+    return (unsigned char)str[utf16_idx];
+  }
+
+  utf16_scan_cursor_t cursor;
+  utf16_scan_cursor_init(&cursor, str, byte_len);
+  utf16_scan_cursor_resume_utf16(&cursor, utf16_idx);
   
-  while (p < end) {
-    unsigned char c = *p;
-    size_t units, slen;
+  while (cursor.p < cursor.end) {
+    size_t slen, units;
     uint32_t cp;
     
-    if (c < 0x80) { cp = c; slen = 1; units = 1; }
-    else if ((c & 0xE0) == 0xC0 && p + 1 < end) {
-      cp = ((c & 0x1F) << 6)
-      | (p[1] & 0x3F); 
-      slen = 2; units = 1;
-    }
-    else if ((c & 0xF0) == 0xE0 && p + 2 < end) {
-      cp = ((c & 0x0F) << 12)
-      | ((p[1] & 0x3F) << 6)
-      | (p[2] & 0x3F); 
-      slen = 3; units = 1;
-    }
-    else if ((c & 0xF8) == 0xF0 && p + 3 < end) {
-      cp = ((c & 0x07) << 18) 
-      | ((p[1] & 0x3F) << 12) 
-      | ((p[2] & 0x3F) << 6)
-      | (p[3] & 0x3F); 
-      slen = 4; units = 2;
-    }
-    else { cp = c; slen = 1; units = 1; }
+    utf16_scan_decode(cursor.p, cursor.end, &slen, &units, &cp);
     
-    if (utf16_pos == utf16_idx) {
+    if (cursor.utf16_pos == utf16_idx) {
+      utf16_scan_cursor_store(&cursor);
       if (units == 2) return 0xD800 + ((cp - 0x10000) >> 10);
       return cp;
     }
-    if (units == 2 && utf16_pos + 1 == utf16_idx) {
+    if (units == 2 && cursor.utf16_pos + 1 == utf16_idx) {
+      utf16_scan_cursor_store(&cursor);
       return 0xDC00 + ((cp - 0x10000) & 0x3FF);
     }
-    p += slen;
-    utf16_pos += units;
+    cursor.p += slen;
+    cursor.utf16_pos += units;
   }
   
+  utf16_scan_cursor_store(&cursor);
   return 0xFFFFFFFF;
 }
 
@@ -384,44 +532,34 @@ done:
 }
 
 uint32_t utf16_codepoint_at(const char *str, size_t byte_len, size_t utf16_idx) {
-  const unsigned char *p = (const unsigned char *)str;
-  const unsigned char *end = p + byte_len;
-  size_t utf16_pos = 0;
+  if (str_is_ascii(str)) {
+    if (utf16_idx >= byte_len) return 0xFFFFFFFF;
+    return (unsigned char)str[utf16_idx];
+  }
+
+  utf16_scan_cursor_t cursor;
+  utf16_scan_cursor_init(&cursor, str, byte_len);
+  utf16_scan_cursor_resume_utf16(&cursor, utf16_idx);
   
-  while (p < end) {
-    unsigned char c = *p;
-    size_t units, slen;
+  while (cursor.p < cursor.end) {
+    size_t slen, units;
     uint32_t cp;
     
-    if (c < 0x80) { cp = c; slen = 1; units = 1; }
-    else if ((c & 0xE0) == 0xC0 && p + 1 < end) {
-      cp = ((c & 0x1F) << 6)
-      | (p[1] & 0x3F); 
-      slen = 2; units = 1;
-    }
-    else if ((c & 0xF0) == 0xE0 && p + 2 < end) {
-      cp = ((c & 0x0F) << 12)
-      | ((p[1] & 0x3F) << 6)
-      | (p[2] & 0x3F); 
-      slen = 3; units = 1;
-    }
-    else if ((c & 0xF8) == 0xF0 && p + 3 < end) {
-      cp = ((c & 0x07) << 18)
-      | ((p[1] & 0x3F) << 12)
-      | ((p[2] & 0x3F) << 6)
-      | (p[3] & 0x3F); 
-      slen = 4; units = 2;
-    }
-    else { cp = c; slen = 1; units = 1; }
+    utf16_scan_decode(cursor.p, cursor.end, &slen, &units, &cp);
     
-    if (utf16_pos == utf16_idx) return cp;
-    if (units == 2 && utf16_pos + 1 == utf16_idx) {
+    if (cursor.utf16_pos == utf16_idx) {
+      utf16_scan_cursor_store(&cursor);
+      return cp;
+    }
+    if (units == 2 && cursor.utf16_pos + 1 == utf16_idx) {
+      utf16_scan_cursor_store(&cursor);
       return 0xDC00 + ((cp - 0x10000) & 0x3FF);
     }
     
-    p += slen;
-    utf16_pos += units;
+    cursor.p += slen;
+    cursor.utf16_pos += units;
   }
   
+  utf16_scan_cursor_store(&cursor);
   return 0xFFFFFFFF;
 }

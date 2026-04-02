@@ -2307,7 +2307,12 @@ ant_value_t js_mkstr(ant_t *js, const void *ptr, size_t len) {
 
   flat->len = (ant_offset_t)len;
   if (ptr && len > 0) memcpy(flat->bytes, ptr, len);
+  
   flat->bytes[len] = '\0';
+  flat->is_ascii = (ptr || len == 0)
+    ? str_detect_ascii_bytes(flat->bytes, len)
+    : STR_ASCII_UNKNOWN;
+
   return mkval(T_STR, (uintptr_t)flat);
 }
 
@@ -2324,7 +2329,12 @@ ant_value_t js_mkstr_permanent(ant_t *js, const void *ptr, size_t len) {
 
   flat->len = (ant_offset_t)len;
   if (ptr && len > 0) memcpy(flat->bytes, ptr, len);
+  
   flat->bytes[len] = '\0';
+  flat->is_ascii = (ptr || len == 0)
+    ? str_detect_ascii_bytes(flat->bytes, len)
+    : STR_ASCII_UNKNOWN;
+
   return mkval(T_STR, (uintptr_t)flat);
 }
 
@@ -8832,7 +8842,6 @@ static ant_value_t builtin_string_codePointAt(ant_t *js, ant_value_t *args, int 
 }
 
 static ant_value_t builtin_string_toLowerCase(ant_t *js, ant_value_t *args, int nargs) {
-  (void) args; (void) nargs;
   ant_value_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "toLowerCase called on non-string");
   
@@ -8845,6 +8854,7 @@ static ant_value_t builtin_string_toLowerCase(ant_t *js, ant_value_t *args, int 
 
   ant_offset_t out_len = 0;
   utf8proc_ssize_t pos = 0;
+  
   while (pos < src_len) {
     utf8proc_int32_t cp;
     utf8proc_ssize_t n = utf8_next(src + pos, src_len - pos, &cp);
@@ -8856,24 +8866,37 @@ static ant_value_t builtin_string_toLowerCase(ant_t *js, ant_value_t *args, int 
 
   ant_value_t result = js_mkstr(js, NULL, out_len);
   if (is_err(result)) return result;
+  
   ant_offset_t result_len, result_off = vstr(js, result, &result_len);
   char *result_ptr = (char *)(uintptr_t)(result_off);
+  uint8_t ascii_state = STR_ASCII_YES;
 
   pos = 0;
   ant_offset_t wpos = 0;
+  
   while (pos < src_len) {
     utf8proc_int32_t cp;
     utf8proc_ssize_t n = utf8_next(src + pos, src_len - pos, &cp);
-    if (cp < 0) { result_ptr[wpos++] = (char)src[pos]; pos++; continue; }
-    wpos += (ant_offset_t)utf8proc_encode_char(utf8proc_tolower(cp), (utf8proc_uint8_t *)(result_ptr + wpos));
+    
+    if (cp < 0) {
+      unsigned char byte = src[pos];
+      if (byte >= 0x80) ascii_state = STR_ASCII_NO;
+      result_ptr[wpos++] = (char)byte;
+      pos++; continue;
+    }
+    
+    utf8proc_int32_t mapped = utf8proc_tolower(cp);
+    if (mapped >= 0x80) ascii_state = STR_ASCII_NO;
+    
+    wpos += (ant_offset_t)utf8proc_encode_char(mapped, (utf8proc_uint8_t *)(result_ptr + wpos));
     pos += n;
   }
-
+  
+  str_set_ascii_state(result_ptr, ascii_state);
   return result;
 }
 
 static ant_value_t builtin_string_toUpperCase(ant_t *js, ant_value_t *args, int nargs) {
-  (void) args; (void) nargs;
   ant_value_t str = to_string_val(js, js->this_val);
   if (vtype(str) != T_STR) return js_mkerr(js, "toUpperCase called on non-string");
   
@@ -8886,6 +8909,7 @@ static ant_value_t builtin_string_toUpperCase(ant_t *js, ant_value_t *args, int 
 
   ant_offset_t out_len = 0;
   utf8proc_ssize_t pos = 0;
+  
   while (pos < src_len) {
     utf8proc_int32_t cp;
     utf8proc_ssize_t n = utf8_next(src + pos, src_len - pos, &cp);
@@ -8897,19 +8921,33 @@ static ant_value_t builtin_string_toUpperCase(ant_t *js, ant_value_t *args, int 
 
   ant_value_t result = js_mkstr(js, NULL, out_len);
   if (is_err(result)) return result;
+  
   ant_offset_t result_len, result_off = vstr(js, result, &result_len);
   char *result_ptr = (char *)(uintptr_t)(result_off);
+  uint8_t ascii_state = STR_ASCII_YES;
 
   pos = 0;
   ant_offset_t wpos = 0;
+  
   while (pos < src_len) {
     utf8proc_int32_t cp;
     utf8proc_ssize_t n = utf8_next(src + pos, src_len - pos, &cp);
-    if (cp < 0) { result_ptr[wpos++] = (char)src[pos]; pos++; continue; }
-    wpos += (ant_offset_t)utf8proc_encode_char(utf8proc_toupper(cp), (utf8proc_uint8_t *)(result_ptr + wpos));
+    
+    if (cp < 0) {
+      unsigned char byte = src[pos];
+      if (byte >= 0x80) ascii_state = STR_ASCII_NO;
+      result_ptr[wpos++] = (char)byte;
+      pos++; continue;
+    }
+    
+    utf8proc_int32_t mapped = utf8proc_toupper(cp);
+    if (mapped >= 0x80) ascii_state = STR_ASCII_NO;
+    
+    wpos += (ant_offset_t)utf8proc_encode_char(mapped, (utf8proc_uint8_t *)(result_ptr + wpos));
     pos += n;
   }
-
+  
+  str_set_ascii_state(result_ptr, ascii_state);
   return result;
 }
 
@@ -8979,6 +9017,10 @@ static ant_value_t builtin_string_repeat(ant_t *js, ant_value_t *args, int nargs
   for (ant_offset_t i = 0; i < count; i++) {
     memcpy(result_ptr + i * str_len, str_ptr, str_len);
   }
+  str_set_ascii_state(
+    result_ptr,
+    str_is_ascii(str_ptr) ? STR_ASCII_YES : STR_ASCII_NO
+  );
   
   return result;
 }
@@ -9035,6 +9077,10 @@ static ant_value_t builtin_string_padStart(ant_t *js, ant_value_t *args, int nar
     pos += rem_bytes;
   }
   memcpy(result_ptr + pos, str_ptr, (size_t)str_len);
+  str_set_ascii_state(
+    result_ptr,
+    (str_is_ascii(pad_str) && str_is_ascii(str_ptr)) ? STR_ASCII_YES : STR_ASCII_NO
+  );
   
   return result;
 }
@@ -9091,6 +9137,10 @@ static ant_value_t builtin_string_padEnd(ant_t *js, ant_value_t *args, int nargs
     memcpy(result_ptr + pos, pad_str, rem_bytes);
     pos += rem_bytes;
   }
+  str_set_ascii_state(
+    result_ptr,
+    (str_is_ascii(str_ptr) && str_is_ascii(pad_str)) ? STR_ASCII_YES : STR_ASCII_NO
+  );
   
   return result;
 }
