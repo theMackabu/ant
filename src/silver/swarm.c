@@ -59,6 +59,7 @@ static void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_apply);
   LOAD_EXT(jit_helper_rest);
   LOAD_EXT(jit_helper_tov);
+  LOAD_EXT(jit_helper_special_obj);
   LOAD_EXT(jit_helper_get_global);
   LOAD_EXT(jit_helper_get_field);
   LOAD_EXT(jit_helper_to_propkey);
@@ -1761,7 +1762,7 @@ static bool jit_is_eligible(sv_func_t *func) {
       case OP_LINE_NUM: case OP_COL_NUM: case OP_LABEL:
         break;
       case OP_SPECIAL_OBJ:
-        if (sv_get_u8(ip + 1) != 1) {
+        if (sv_get_u8(ip + 1) != 1 && sv_get_u8(ip + 1) != 3) {
           if (sv_jit_warn_unlikely)
             fprintf(stderr, "jit: ineligible op SPECIAL_OBJ(%d) in %s\n",
                     sv_get_u8(ip + 1),
@@ -2031,6 +2032,11 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
     MIR_T_P,    "args",
     MIR_T_I32,  "argc");
 
+  MIR_type_t special_obj_ret = MIR_JSVAL;
+  MIR_item_t special_obj_proto = MIR_new_proto(ctx, "soj_proto",
+    1, &special_obj_ret, 2,
+    MIR_T_I64, "js",
+    MIR_T_I32, "which");
 
   MIR_item_t imp_add   = MIR_new_import(ctx, "jit_helper_add");
   MIR_item_t imp_sub   = MIR_new_import(ctx, "jit_helper_sub");
@@ -2045,6 +2051,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   MIR_item_t imp_apply = MIR_new_import(ctx, "jit_helper_apply");
   MIR_item_t imp_rest  = MIR_new_import(ctx, "jit_helper_rest");
   MIR_item_t imp_tov   = MIR_new_import(ctx, "jit_helper_tov");
+  MIR_item_t imp_special_obj = MIR_new_import(ctx, "jit_helper_special_obj");
   MIR_item_t imp_gg         = MIR_new_import(ctx, "jit_helper_get_global");
   MIR_item_t imp_get_field  = MIR_new_import(ctx, "jit_helper_get_field");
   MIR_item_t imp_to_propkey = MIR_new_import(ctx, "jit_helper_to_propkey");
@@ -4564,9 +4571,20 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         break;
       }
 
-      case OP_SPECIAL_OBJ:
-        mir_load_imm(ctx, jit_func, vstack_push(&vs), mkval(T_UNDEF, 0));
+      case OP_SPECIAL_OBJ: {
+        uint8_t which = sv_get_u8(ip + 1);
+        MIR_reg_t dst = vstack_push(&vs);
+        if (which == 3) {
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_call_insn(ctx, 5,
+              MIR_new_ref_op(ctx, special_obj_proto),
+              MIR_new_ref_op(ctx, imp_special_obj),
+              MIR_new_reg_op(ctx, dst),
+              MIR_new_reg_op(ctx, r_js),
+              MIR_new_int_op(ctx, (int64_t)which)));
+        } else mir_load_imm(ctx, jit_func, dst, mkval(T_UNDEF, 0));
         break;
+      }
 
       case OP_GET_UPVAL: {
         uint16_t idx = sv_get_u16(ip + 1);

@@ -49,6 +49,7 @@ ant_value_t jit_helper_stack_overflow_error(sv_vm_t *vm, ant_t *js);
 
 ant_value_t jit_helper_delete(sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t key);
 ant_value_t jit_helper_typeof(sv_vm_t *vm, ant_t *js, ant_value_t v);
+ant_value_t jit_helper_special_obj(ant_t *js, uint32_t which);
 
 ant_value_t jit_helper_get_global(
   ant_t *js, const char *str,

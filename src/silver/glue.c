@@ -102,6 +102,11 @@ ant_value_t jit_helper_get_global(
   return sv_global_get_interned_ic(js, str, func, ip);
 }
 
+ant_value_t jit_helper_special_obj(ant_t *js, uint32_t which) {
+  if (which == 3) return js_get_module_import_binding(js);
+  return js_mkundef();
+}
+
 ant_value_t jit_helper_seq(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
   return mkval(T_BOOL, strict_eq_values(js, l, r));
 }
