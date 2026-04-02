@@ -799,8 +799,7 @@ static ant_value_t js_console_inspect(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-void init_console_module() {
-  ant_t *js = rt->js;
+ant_value_t console_library(ant_t *js) {
   ant_value_t console_obj = js_mkobj(js);
   
   js_set(js, console_obj, "log", js_mkfun(js_console_log));
@@ -816,5 +815,11 @@ void init_console_module() {
   js_set(js, console_obj, "inspect", js_mkfun(js_console_inspect));
   
   js_set_sym(js, console_obj, get_toStringTag_sym(), js_mkstr(js, "console", 7));
+  return console_obj;
+}
+
+void init_console_module() {
+  ant_t *js = rt->js;
+  ant_value_t console_obj = console_library(js);
   js_set(js, js_glob(js), "console", console_obj);
 }

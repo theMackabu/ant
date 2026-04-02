@@ -687,6 +687,31 @@ int has_pending_microtasks(void) {
   return timer_state.microtasks != NULL ? 1 : 0;
 }
 
+static void timers_define_common(ant_t *js, ant_value_t obj) {
+  js_set(js, obj, "setTimeout", js_mkfun(js_set_timeout));
+  js_set(js, obj, "clearTimeout", js_mkfun(js_clear_timeout));
+  js_set(js, obj, "setInterval", js_mkfun(js_set_interval));
+  js_set(js, obj, "clearInterval", js_mkfun(js_clear_timeout));
+  js_set(js, obj, "setImmediate", js_mkfun(js_set_immediate));
+  js_set(js, obj, "clearImmediate", js_mkfun(js_clear_immediate));
+  js_set(js, obj, "queueMicrotask", js_mkfun(js_queue_microtask));
+}
+
+void init_timer_module() {  
+  ant_t *js = rt->js;
+  timer_state.js = js;
+  timers_define_common(js, js_glob(js));
+}
+
+ant_value_t timers_library(ant_t *js) {
+  ant_value_t lib = js_mkobj(js);
+
+  timers_define_common(js, lib);
+  js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "timers", 6));
+
+  return lib;
+}
+
 // TODO: mostly stubbed
 ant_value_t timers_promises_library(ant_t *js) {
   ant_value_t lib = js_mkobj(js);
@@ -701,21 +726,6 @@ ant_value_t timers_promises_library(ant_t *js) {
   js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "timers/promises", 16));
 
   return lib;
-}
-
-void init_timer_module() {  
-  ant_t *js = rt->js;
-
-  timer_state.js = js;
-  ant_value_t global = js_glob(js);
-  
-  js_set(js, global, "setTimeout", js_mkfun(js_set_timeout));
-  js_set(js, global, "clearTimeout", js_mkfun(js_clear_timeout));
-  js_set(js, global, "setInterval", js_mkfun(js_set_interval));
-  js_set(js, global, "clearInterval", js_mkfun(js_clear_timeout));
-  js_set(js, global, "setImmediate", js_mkfun(js_set_immediate));
-  js_set(js, global, "clearImmediate", js_mkfun(js_clear_immediate));
-  js_set(js, global, "queueMicrotask", js_mkfun(js_queue_microtask));
 }
 
 void gc_mark_timers(ant_t *js, gc_mark_fn mark) {

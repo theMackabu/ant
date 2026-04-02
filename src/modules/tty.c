@@ -27,6 +27,7 @@
 #endif
 
 #include "ant.h"
+#include "gc/roots.h"
 #include "descriptors.h"
 #include "errors.h"
 #include "internal.h"
@@ -34,8 +35,14 @@
 #include "tty_ctrl.h"
 #include "silver/engine.h"
 
+#include "modules/stream.h"
 #include "modules/symbol.h"
 #include "modules/tty.h"
+
+static ant_value_t g_tty_readstream_proto = 0;
+static ant_value_t g_tty_readstream_ctor = 0;
+static ant_value_t g_tty_writestream_proto = 0;
+static ant_value_t g_tty_writestream_ctor = 0;
 
 static bool parse_fd(ant_value_t value, int *fd_out) {
   int fd = 0;
@@ -588,10 +595,8 @@ static ant_value_t tty_read_stream_constructor(ant_t *js, ant_value_t *args, int
     }
   }
 
-  ant_value_t ctor = js_getcurrentfunc(js);
-  ant_value_t proto = js_get(js, ctor, "prototype");
-  ant_value_t obj = js_mkobj(js);
-  if (is_special_object(proto)) js_set_proto_init(obj, proto);
+  ant_value_t obj = stream_construct_readable(js, g_tty_readstream_proto, js_mkundef());
+  if (is_err(obj)) return obj;
 
   ensure_stream_common_props(js, obj, fd);
   js_set(js, obj, "isRaw", js_false);
@@ -617,10 +622,8 @@ static ant_value_t tty_write_stream_constructor(ant_t *js, ant_value_t *args, in
     }
   }
 
-  ant_value_t ctor = js_getcurrentfunc(js);
-  ant_value_t proto = js_get(js, ctor, "prototype");
-  ant_value_t obj = js_mkobj(js);
-  if (is_special_object(proto)) js_set_proto_init(obj, proto);
+  ant_value_t obj = stream_construct_writable(js, g_tty_writestream_proto, js_mkundef());
+  if (is_err(obj)) return obj;
 
   ensure_stream_common_props(js, obj, fd);
   return obj;
@@ -648,9 +651,35 @@ static void setup_writestream_proto(ant_t *js, ant_value_t proto) {
   js_set_sym(js, proto, get_toStringTag_sym(), js_mkstr(js, "WriteStream", 11));
 }
 
+static void tty_init_stream_constructors(ant_t *js) {
+  if (g_tty_readstream_ctor && g_tty_writestream_ctor) return;
+  stream_init_constructors(js);
+
+  g_tty_readstream_proto = js_mkobj(js);
+  js_set_proto_init(g_tty_readstream_proto, stream_readable_prototype(js));
+  setup_readstream_proto(js, g_tty_readstream_proto);
+  
+  g_tty_readstream_ctor = js_make_ctor(js, tty_read_stream_constructor, g_tty_readstream_proto, "ReadStream", 10);
+  js_set_proto_init(g_tty_readstream_ctor, stream_readable_constructor(js));
+  
+  gc_register_root(&g_tty_readstream_proto);
+  gc_register_root(&g_tty_readstream_ctor);
+
+  g_tty_writestream_proto = js_mkobj(js);
+  js_set_proto_init(g_tty_writestream_proto, stream_writable_prototype(js));
+  setup_writestream_proto(js, g_tty_writestream_proto);
+  
+  g_tty_writestream_ctor = js_make_ctor(js, tty_write_stream_constructor, g_tty_writestream_proto, "WriteStream", 11);
+  js_set_proto_init(g_tty_writestream_ctor, stream_writable_constructor(js));
+  
+  gc_register_root(&g_tty_writestream_proto);
+  gc_register_root(&g_tty_writestream_ctor);
+}
+
 void init_tty_module(void) {
   ant_t *js = rt->js;
   if (!js) return;
+  tty_init_stream_constructors(js);
 
   ant_value_t process_obj = js_get(js, js_glob(js), "process");
   if (!is_special_object(process_obj)) return;
@@ -666,8 +695,10 @@ void init_tty_module(void) {
       if (is_callable(native_set_raw)) {
         js_set(js, stdin_proto, "__antNativeSetRawMode", native_set_raw);
       }
+      js_set_proto_init(stdin_proto, stream_readable_prototype(js));
       setup_readstream_proto(js, stdin_proto);
     }
+    stream_init_readable_object(js, stdin_obj, js_mkundef());
   }
 
   ant_value_t stdout_obj = js_get(js, process_obj, "stdout");
@@ -677,7 +708,9 @@ void init_tty_module(void) {
     js_set_getter_desc(js, stdout_obj, "columns", 7, js_mkfun(tty_write_stream_columns_getter), JS_DESC_E | JS_DESC_C);
 
     ant_value_t stdout_proto = js_get_proto(js, stdout_obj);
+    if (is_special_object(stdout_proto)) js_set_proto_init(stdout_proto, stream_writable_prototype(js));
     setup_writestream_proto(js, stdout_proto);
+    stream_init_writable_object(js, stdout_obj, js_mkundef());
   }
 
   ant_value_t stderr_obj = js_get(js, process_obj, "stderr");
@@ -685,34 +718,21 @@ void init_tty_module(void) {
     ensure_stream_common_props(js, stderr_obj, ANT_STDERR_FD);
     js_set_getter_desc(js, stderr_obj, "rows", 4, js_mkfun(tty_write_stream_rows_getter), JS_DESC_E | JS_DESC_C);
     js_set_getter_desc(js, stderr_obj, "columns", 7, js_mkfun(tty_write_stream_columns_getter), JS_DESC_E | JS_DESC_C);
-
+    
     ant_value_t stderr_proto = js_get_proto(js, stderr_obj);
+    if (is_special_object(stderr_proto)) js_set_proto_init(stderr_proto, stream_writable_prototype(js));
     setup_writestream_proto(js, stderr_proto);
+    stream_init_writable_object(js, stderr_obj, js_mkundef());
   }
 }
 
 ant_value_t tty_library(ant_t *js) {
   ant_value_t lib = js_mkobj(js);
-
-  ant_value_t read_ctor_obj = js_mkobj(js);
-  js_set_slot(read_ctor_obj, SLOT_CFUNC, js_mkfun(tty_read_stream_constructor));
-  ant_value_t read_proto = js_mkobj(js);
-  setup_readstream_proto(js, read_proto);
-  js_set(js, read_ctor_obj, "prototype", read_proto);
-  ant_value_t read_ctor = js_obj_to_func(read_ctor_obj);
-  js_set(js, read_proto, "constructor", read_ctor);
-
-  ant_value_t write_ctor_obj = js_mkobj(js);
-  js_set_slot(write_ctor_obj, SLOT_CFUNC, js_mkfun(tty_write_stream_constructor));
-  ant_value_t write_proto = js_mkobj(js);
-  setup_writestream_proto(js, write_proto);
-  js_set(js, write_ctor_obj, "prototype", write_proto);
-  ant_value_t write_ctor = js_obj_to_func(write_ctor_obj);
-  js_set(js, write_proto, "constructor", write_ctor);
+  tty_init_stream_constructors(js);
 
   js_set(js, lib, "isatty", js_mkfun(tty_isatty));
-  js_set(js, lib, "ReadStream", read_ctor);
-  js_set(js, lib, "WriteStream", write_ctor);
+  js_set(js, lib, "ReadStream", g_tty_readstream_ctor);
+  js_set(js, lib, "WriteStream", g_tty_writestream_ctor);
   js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "tty", 3));
 
   return lib;

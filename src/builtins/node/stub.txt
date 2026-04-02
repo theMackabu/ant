@@ -4,4 +4,3 @@ the following builtins are currently compatibility stubs, not full node.js imple
 - https.mjs
 - http2.mjs
 - tls.mjs
-- stream.cjs

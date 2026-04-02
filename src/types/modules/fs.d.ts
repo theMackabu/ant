@@ -1,4 +1,6 @@
 declare module 'fs' {
+  import type { Readable, Writable } from 'stream';
+
   interface Stats {
     size: number;
     mode: number;
@@ -31,6 +33,24 @@ declare module 'fs' {
     interval?: number;
   }
 
+  interface ReadStream extends Readable {
+    readonly path: string;
+    readonly bytesRead: number;
+    readonly pending: boolean;
+    readonly closed: boolean;
+    readonly fd?: number | null;
+    close(callback?: () => void): this;
+  }
+
+  interface WriteStream extends Writable {
+    readonly path: string;
+    readonly bytesWritten: number;
+    readonly pending: boolean;
+    readonly closed: boolean;
+    readonly fd?: number | null;
+    close(callback?: () => void): this;
+  }
+
   const constants: {
     F_OK: number;
     R_OK: number;
@@ -50,9 +70,41 @@ declare module 'fs' {
   function readFile(path: string): Promise<Uint8Array>;
   function readFileSync(path: string, encoding: Encoding | { encoding: Encoding }): string;
   function readFileSync(path: string): Uint8Array;
-  function read(fd: number, buffer: ArrayBufferView, offset?: number, length?: number, position?: number | null, callback?: (err: Error | null, bytesRead: number, buffer: ArrayBufferView) => void): Promise<number>;
+  function read(
+    fd: number,
+    buffer: ArrayBufferView,
+    offset?: number,
+    length?: number,
+    position?: number | null,
+    callback?: (err: Error | null, bytesRead: number, buffer: ArrayBufferView) => void
+  ): Promise<number>;
   function readSync(fd: number, buffer: ArrayBufferView, offset?: number, length?: number, position?: number | null): number;
   function stream(path: string): Promise<string>;
+  function createReadStream(
+    path: string,
+    options?: {
+      fd?: number;
+      flags?: string | number;
+      mode?: number;
+      start?: number;
+      end?: number;
+      autoClose?: boolean;
+      emitClose?: boolean;
+      highWaterMark?: number;
+    }
+  ): ReadStream;
+  function createWriteStream(
+    path: string,
+    options?: {
+      fd?: number;
+      flags?: string | number;
+      mode?: number;
+      start?: number;
+      autoClose?: boolean;
+      emitClose?: boolean;
+      highWaterMark?: number;
+    }
+  ): WriteStream;
   function open(path: string, flags?: string, mode?: number): Promise<number>;
   function openSync(path: string, flags?: string, mode?: number): number;
   function close(fd: number): Promise<void>;
@@ -100,6 +152,37 @@ declare module 'fs' {
   function unwatchFile(path: string, listener?: (curr: Stats, prev: Stats) => void): void;
   const FSWatcher: {
     prototype: FSWatcher;
+  };
+  const ReadStream: {
+    prototype: ReadStream;
+    new (
+      path: string,
+      options?: {
+        fd?: number;
+        flags?: string | number;
+        mode?: number;
+        start?: number;
+        end?: number;
+        autoClose?: boolean;
+        emitClose?: boolean;
+        highWaterMark?: number;
+      }
+    ): ReadStream;
+  };
+  const WriteStream: {
+    prototype: WriteStream;
+    new (
+      path: string,
+      options?: {
+        fd?: number;
+        flags?: string | number;
+        mode?: number;
+        start?: number;
+        autoClose?: boolean;
+        emitClose?: boolean;
+        highWaterMark?: number;
+      }
+    ): WriteStream;
   };
 }
 

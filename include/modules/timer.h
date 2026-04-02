@@ -3,6 +3,7 @@
 
 #include "types.h"
 
+ant_value_t timers_library(ant_t *js);
 ant_value_t timers_promises_library(ant_t *js);
 
 void init_timer_module(void);

@@ -35,6 +35,17 @@ typedef struct {
   wasm_function_inst_t func;
 } wasi_func_env_t;
 
+static inline bool wasi_is_proc_exit_exception(const char *exception) {
+  return exception != NULL && strstr(exception, "wasi proc exit") != NULL;
+}
+
+static ant_value_t wasi_handle_proc_exit(wasm_module_inst_t inst) {
+  uint32_t exit_code = wasm_runtime_get_wasi_exit_code(inst);
+  wasm_runtime_clear_exception(inst);
+  if (exit_code != 0) exit((int)exit_code);
+  return js_mkundef();
+}
+
 static ant_value_t wasi_exported_func_call(ant_t *js, ant_value_t *args, int nargs) {
   if (!js_check_native_tag(js->current_func, WASI_FUNC_TAG))
     return js_mkerr(js, "Invalid WASI function");
@@ -53,6 +64,7 @@ static ant_value_t wasi_exported_func_call(ant_t *js, ant_value_t *args, int nar
 
   if (!wasm_runtime_call_wasm(env->exec_env, env->func, param_count, wasm_argv)) {
     const char *exception = wasm_runtime_get_exception(env->inst);
+    if (wasi_is_proc_exit_exception(exception)) return wasi_handle_proc_exit(env->inst);
     return js_mkerr(js, "%s", exception ? exception : "WASI function call failed");
   }
 

@@ -81,6 +81,7 @@
 #include "modules/globals.h"
 #include "modules/wasm.h"
 #include "modules/string_decoder.h"
+#include "modules/stream.h"
 #include "modules/structured-clone.h"
 #include "modules/v8.h"
 #include "modules/worker_threads.h"
@@ -631,6 +632,8 @@ int main(int argc, char *argv[]) {
   ant_register_library(internal_http_metadata_library, "ant:internal/http_metadata", NULL);
 
   ant_standard_library("util", util_library);
+  ant_standard_library("util/types", util_types_library);
+  ant_standard_library("console", console_library);
   ant_standard_library("net", net_library);
   ant_standard_library("dns", dns_library);
   ant_standard_library("assert", assert_library);
@@ -652,10 +655,13 @@ int main(int argc, char *argv[]) {
   ant_standard_library("v8", v8_library);
   ant_standard_library("zlib", zlib_library);
   ant_standard_library("string_decoder", string_decoder_library);
+  ant_standard_library("stream", stream_library);
+  ant_standard_library("timers", timers_library);
   
   ant_standard_library("fs/promises", fs_promises_library);
   ant_standard_library("timers/promises", timers_promises_library);
   ant_standard_library("readline/promises", readline_promises_library);
+  ant_standard_library("stream/promises", stream_promises_library);
 
   ant_value_t snapshot_result = ant_load_snapshot(js);
   if (vtype(snapshot_result) == T_ERR) {

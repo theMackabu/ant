@@ -11,11 +11,15 @@
 
 #include "ant.h"
 #include "internal.h"
+#include "esm/library.h"
 #include "silver/engine.h"
 
+#include "modules/buffer.h"
+#include "modules/date.h"
 #include "modules/json.h"
 #include "modules/symbol.h"
 #include "modules/util.h"
+#include "modules/collections.h"
 
 typedef struct {
   char *buf;
@@ -208,6 +212,304 @@ static ant_value_t util_inspect(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t out = js_mkstr(js, cstr.ptr, strlen(cstr.ptr));
   if (cstr.needs_free) free((void *)cstr.ptr);
   return out;
+}
+
+static bool util_has_proto_in_chain(ant_t *js, ant_value_t value, ant_value_t proto) {
+  if (!is_special_object(proto)) return false;
+
+  ant_value_t current = value;
+  while (is_special_object(current)) {
+    current = js_get_proto(js, current);
+    if (current == proto) return true;
+  }
+
+  return false;
+}
+
+static bool util_is_typed_array_value(ant_value_t value, TypedArrayData **out) {
+  ant_value_t slot;
+
+  if (vtype(value) == T_TYPEDARRAY) {
+    if (out) *out = (TypedArrayData *)js_gettypedarray(value);
+    return true;
+  }
+
+  if (!is_object_type(value)) return false;
+  slot = js_get_slot(value, SLOT_BUFFER);
+  if (vtype(slot) != T_TYPEDARRAY) return false;
+
+  if (out) *out = (TypedArrayData *)js_gettypedarray(slot);
+  return true;
+}
+
+static ArrayBufferData *util_get_arraybuffer_data(ant_value_t value) {
+  ant_value_t slot;
+
+  if (!is_object_type(value) || buffer_is_dataview(value)) return NULL;
+  slot = js_get_slot(value, SLOT_BUFFER);
+  if (vtype(slot) != T_NUM) return NULL;
+
+  return (ArrayBufferData *)(uintptr_t)(size_t)js_getnum(slot);
+}
+
+static bool util_is_boxed_primitive(ant_value_t value, uint8_t *type_out) {
+  ant_value_t primitive;
+
+  if (!is_object_type(value)) return false;
+  primitive = js_get_slot(value, SLOT_PRIMITIVE);
+  if (vtype(primitive) == T_UNDEF) return false;
+
+  if (type_out) *type_out = vtype(primitive);
+  return true;
+}
+
+static bool util_has_to_string_tag(ant_t *js, ant_value_t value, const char *tag, size_t tag_len) {
+  ant_value_t to_string_tag;
+  size_t actual_len = 0;
+  const char *actual;
+
+  if (!is_object_type(value)) return false;
+
+  to_string_tag = js_get_sym(js, value, get_toStringTag_sym());
+  if (vtype(to_string_tag) != T_STR) return false;
+
+  actual = js_getstr(js, to_string_tag, &actual_len);
+  return actual != NULL && actual_len == tag_len && memcmp(actual, tag, tag_len) == 0;
+}
+
+static bool util_is_arguments_object_value(ant_t *js, ant_value_t value) {
+  ant_value_t callee = js_mkundef();
+
+  if (vtype(value) != T_ARR) return false;
+  if (vtype(js_get_slot(value, SLOT_STRICT_ARGS)) != T_UNDEF) return true;
+  if (!util_has_to_string_tag(js, value, "Arguments", 9)) return false;
+
+  return js_try_get_own_data_prop(js, value, "callee", 6, &callee);
+}
+
+static ant_value_t util_types_is_any_array_buffer(ant_t *js, ant_value_t *args, int nargs) {
+  ArrayBufferData *buffer = (nargs > 0) ? util_get_arraybuffer_data(args[0]) : NULL;
+  return js_bool(buffer != NULL);
+}
+
+static ant_value_t util_types_is_array_buffer(ant_t *js, ant_value_t *args, int nargs) {
+  ArrayBufferData *buffer = (nargs > 0) ? util_get_arraybuffer_data(args[0]) : NULL;
+  return js_bool(buffer != NULL && !buffer->is_shared);
+}
+
+static ant_value_t util_types_is_shared_array_buffer(ant_t *js, ant_value_t *args, int nargs) {
+  ArrayBufferData *buffer = (nargs > 0) ? util_get_arraybuffer_data(args[0]) : NULL;
+  return js_bool(buffer != NULL && buffer->is_shared);
+}
+
+static ant_value_t util_types_is_array_buffer_view(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_false;
+  return js_bool(buffer_is_dataview(args[0]) || util_is_typed_array_value(args[0], NULL));
+}
+
+static ant_value_t util_types_is_data_view(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_false;
+  return js_bool(buffer_is_dataview(args[0]));
+}
+
+static ant_value_t util_types_is_typed_array(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_false;
+  return js_bool(util_is_typed_array_value(args[0], NULL));
+}
+
+static ant_value_t util_types_is_float16_array(ant_t *js, ant_value_t *args, int nargs) {
+  TypedArrayData *typed_array = NULL;
+  if (nargs < 1 || !util_is_typed_array_value(args[0], &typed_array)) return js_false;
+  return js_bool(typed_array != NULL && typed_array->type == TYPED_ARRAY_FLOAT16);
+}
+
+#define DEFINE_TYPED_ARRAY_CHECK(fn_name, typed_array_kind)                           \
+  static ant_value_t fn_name(ant_t *js, ant_value_t *args, int nargs) {              \
+    TypedArrayData *typed_array = NULL;                                               \
+    if (nargs < 1 || !util_is_typed_array_value(args[0], &typed_array)) return js_false; \
+    return js_bool(typed_array != NULL && typed_array->type == typed_array_kind);     \
+  }
+
+DEFINE_TYPED_ARRAY_CHECK(util_types_is_int8_array, TYPED_ARRAY_INT8)
+DEFINE_TYPED_ARRAY_CHECK(util_types_is_uint8_array, TYPED_ARRAY_UINT8)
+DEFINE_TYPED_ARRAY_CHECK(util_types_is_uint8_clamped_array, TYPED_ARRAY_UINT8_CLAMPED)
+DEFINE_TYPED_ARRAY_CHECK(util_types_is_int16_array, TYPED_ARRAY_INT16)
+DEFINE_TYPED_ARRAY_CHECK(util_types_is_uint16_array, TYPED_ARRAY_UINT16)
+DEFINE_TYPED_ARRAY_CHECK(util_types_is_int32_array, TYPED_ARRAY_INT32)
+DEFINE_TYPED_ARRAY_CHECK(util_types_is_uint32_array, TYPED_ARRAY_UINT32)
+DEFINE_TYPED_ARRAY_CHECK(util_types_is_float32_array, TYPED_ARRAY_FLOAT32)
+DEFINE_TYPED_ARRAY_CHECK(util_types_is_float64_array, TYPED_ARRAY_FLOAT64)
+DEFINE_TYPED_ARRAY_CHECK(util_types_is_bigint64_array, TYPED_ARRAY_BIGINT64)
+DEFINE_TYPED_ARRAY_CHECK(util_types_is_biguint64_array, TYPED_ARRAY_BIGUINT64)
+
+static ant_value_t util_types_is_promise(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_false;
+  return js_bool(vtype(args[0]) == T_PROMISE);
+}
+
+static ant_value_t util_types_is_proxy(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1 || !is_object_type(args[0])) return js_false;
+  return js_bool(is_proxy(args[0]));
+}
+
+static ant_value_t util_types_is_regexp(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t regexp_proto;
+  if (nargs < 1 || !is_object_type(args[0])) return js_false;
+  regexp_proto = js_get_ctor_proto(js, "RegExp", 6);
+  return js_bool(util_has_proto_in_chain(js, args[0], regexp_proto));
+}
+
+static ant_value_t util_types_is_date(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_false;
+  return js_bool(is_date_instance(args[0]));
+}
+
+static ant_value_t util_types_is_map(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1 || vtype(args[0]) != T_OBJ) return js_false;
+  return js_bool(js_obj_ptr(args[0])->type_tag == T_MAP);
+}
+
+static ant_value_t util_types_is_set(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1 || vtype(args[0]) != T_OBJ) return js_false;
+  return js_bool(js_obj_ptr(args[0])->type_tag == T_SET);
+}
+
+static ant_value_t util_types_is_weak_map(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1 || vtype(args[0]) != T_OBJ) return js_false;
+  return js_bool(js_obj_ptr(args[0])->type_tag == T_WEAKMAP);
+}
+
+static ant_value_t util_types_is_weak_set(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1 || vtype(args[0]) != T_OBJ) return js_false;
+  return js_bool(js_obj_ptr(args[0])->type_tag == T_WEAKSET);
+}
+
+static ant_value_t util_types_is_async_function(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t func_obj;
+  if (nargs < 1 || vtype(args[0]) != T_FUNC) return js_false;
+  func_obj = js_func_obj(args[0]);
+  return js_bool(js_get_slot(func_obj, SLOT_ASYNC) == js_true);
+}
+
+static ant_value_t util_types_is_generator_function(ant_t *js, ant_value_t *args, int nargs) {
+  sv_closure_t *closure;
+
+  if (nargs < 1 || vtype(args[0]) != T_FUNC) return js_false;
+
+  closure = js_func_closure(args[0]);
+  return js_bool(closure != NULL && closure->func != NULL && closure->func->is_generator);
+}
+
+static ant_value_t util_types_is_generator_object(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_false;
+  return js_bool(vtype(args[0]) == T_GENERATOR);
+}
+
+static ant_value_t util_types_is_arguments_object(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_false;
+  return js_bool(util_is_arguments_object_value(js, args[0]));
+}
+
+static ant_value_t util_types_is_native_error(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1 || !is_object_type(args[0])) return js_false;
+  return js_bool(js_get_slot(args[0], SLOT_ERROR_BRAND) == js_true);
+}
+
+static ant_value_t util_types_is_boxed_primitive(ant_t *js, ant_value_t *args, int nargs) {
+  return js_bool(nargs > 0 && util_is_boxed_primitive(args[0], NULL));
+}
+
+static ant_value_t util_types_is_boolean_object(ant_t *js, ant_value_t *args, int nargs) {
+  uint8_t type = T_UNDEF;
+  return js_bool(nargs > 0 && util_is_boxed_primitive(args[0], &type) && type == T_BOOL);
+}
+
+static ant_value_t util_types_is_number_object(ant_t *js, ant_value_t *args, int nargs) {
+  uint8_t type = T_UNDEF;
+  return js_bool(nargs > 0 && util_is_boxed_primitive(args[0], &type) && type == T_NUM);
+}
+
+static ant_value_t util_types_is_string_object(ant_t *js, ant_value_t *args, int nargs) {
+  uint8_t type = T_UNDEF;
+  return js_bool(nargs > 0 && util_is_boxed_primitive(args[0], &type) && type == T_STR);
+}
+
+static ant_value_t util_types_is_symbol_object(ant_t *js, ant_value_t *args, int nargs) {
+  uint8_t type = T_UNDEF;
+  return js_bool(nargs > 0 && util_is_boxed_primitive(args[0], &type) && type == T_SYMBOL);
+}
+
+static ant_value_t util_types_is_bigint_object(ant_t *js, ant_value_t *args, int nargs) {
+  uint8_t type = T_UNDEF;
+  return js_bool(nargs > 0 && util_is_boxed_primitive(args[0], &type) && type == T_BIGINT);
+}
+
+static ant_value_t util_types_is_map_iterator(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1 || !is_object_type(args[0])) return js_false;
+  return js_bool(util_has_proto_in_chain(js, args[0], g_map_iter_proto));
+}
+
+static ant_value_t util_types_is_set_iterator(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1 || !is_object_type(args[0])) return js_false;
+  return js_bool(util_has_proto_in_chain(js, args[0], g_set_iter_proto));
+}
+
+static ant_value_t util_types_is_module_namespace_object(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_false;
+  return js_bool(js_check_brand(args[0], BRAND_MODULE_NAMESPACE));
+}
+
+ant_value_t util_types_library(ant_t *js) {
+  ant_value_t types = js_mkobj(js);
+
+  js_set(js, types, "isAnyArrayBuffer", js_mkfun(util_types_is_any_array_buffer));
+  js_set(js, types, "isArrayBuffer", js_mkfun(util_types_is_array_buffer));
+  js_set(js, types, "isArgumentsObject", js_mkfun(util_types_is_arguments_object));
+  js_set(js, types, "isArrayBufferView", js_mkfun(util_types_is_array_buffer_view));
+  js_set(js, types, "isAsyncFunction", js_mkfun(util_types_is_async_function));
+  js_set(js, types, "isBigInt64Array", js_mkfun(util_types_is_bigint64_array));
+  js_set(js, types, "isBigIntObject", js_mkfun(util_types_is_bigint_object));
+  js_set(js, types, "isBigUint64Array", js_mkfun(util_types_is_biguint64_array));
+  js_set(js, types, "isBooleanObject", js_mkfun(util_types_is_boolean_object));
+  js_set(js, types, "isBoxedPrimitive", js_mkfun(util_types_is_boxed_primitive));
+  js_set(js, types, "isDataView", js_mkfun(util_types_is_data_view));
+  js_set(js, types, "isDate", js_mkfun(util_types_is_date));
+  js_set(js, types, "isFloat16Array", js_mkfun(util_types_is_float16_array));
+  js_set(js, types, "isFloat32Array", js_mkfun(util_types_is_float32_array));
+  js_set(js, types, "isFloat64Array", js_mkfun(util_types_is_float64_array));
+  js_set(js, types, "isGeneratorFunction", js_mkfun(util_types_is_generator_function));
+  js_set(js, types, "isGeneratorObject", js_mkfun(util_types_is_generator_object));
+  js_set(js, types, "isInt8Array", js_mkfun(util_types_is_int8_array));
+  js_set(js, types, "isInt16Array", js_mkfun(util_types_is_int16_array));
+  js_set(js, types, "isInt32Array", js_mkfun(util_types_is_int32_array));
+  js_set(js, types, "isMap", js_mkfun(util_types_is_map));
+  js_set(js, types, "isMapIterator", js_mkfun(util_types_is_map_iterator));
+  js_set(js, types, "isModuleNamespaceObject", js_mkfun(util_types_is_module_namespace_object));
+  js_set(js, types, "isNativeError", js_mkfun(util_types_is_native_error));
+  js_set(js, types, "isNumberObject", js_mkfun(util_types_is_number_object));
+  js_set(js, types, "isPromise", js_mkfun(util_types_is_promise));
+  js_set(js, types, "isProxy", js_mkfun(util_types_is_proxy));
+  js_set(js, types, "isRegExp", js_mkfun(util_types_is_regexp));
+  js_set(js, types, "isSet", js_mkfun(util_types_is_set));
+  js_set(js, types, "isSetIterator", js_mkfun(util_types_is_set_iterator));
+  js_set(js, types, "isSharedArrayBuffer", js_mkfun(util_types_is_shared_array_buffer));
+  js_set(js, types, "isStringObject", js_mkfun(util_types_is_string_object));
+  js_set(js, types, "isSymbolObject", js_mkfun(util_types_is_symbol_object));
+  js_set(js, types, "isTypedArray", js_mkfun(util_types_is_typed_array));
+  js_set(js, types, "isUint8Array", js_mkfun(util_types_is_uint8_array));
+  js_set(js, types, "isUint8ClampedArray", js_mkfun(util_types_is_uint8_clamped_array));
+  js_set(js, types, "isUint16Array", js_mkfun(util_types_is_uint16_array));
+  js_set(js, types, "isUint32Array", js_mkfun(util_types_is_uint32_array));
+  js_set(js, types, "isWeakMap", js_mkfun(util_types_is_weak_map));
+  js_set(js, types, "isWeakSet", js_mkfun(util_types_is_weak_set));
+
+  return types;
+}
+
+static ant_value_t util_get_types_object(ant_t *js) {
+  bool loaded = false;
+  ant_value_t types = js_esm_load_registered_library(js, "util/types", 10, &loaded);
+  return loaded ? types : util_types_library(js);
 }
 
 static ant_value_t util_debuglog_call(ant_params_t) {
@@ -645,8 +947,9 @@ static ant_value_t util_inherits(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-ant_value_t util_library(ant_t *js) {
+ant_value_t util_library(ant_t *js) {  
   ant_value_t lib = js_mkobj(js);
+  ant_value_t types = util_get_types_object(js);
 
   js_set(js, lib, "format", js_mkfun(util_format));
   js_set(js, lib, "formatWithOptions", js_mkfun(util_format_with_options));
@@ -658,6 +961,7 @@ ant_value_t util_library(ant_t *js) {
   js_set(js, lib, "promisify", js_mkfun(util_promisify));
   js_set(js, lib, "stripVTControlCharacters", js_mkfun(util_strip_vt_control_characters));
   js_set(js, lib, "styleText", js_mkfun(util_style_text));
+  js_set(js, lib, "types", types);
 
   js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "util", 4));
   return lib;

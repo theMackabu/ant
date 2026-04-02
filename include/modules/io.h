@@ -29,6 +29,8 @@ typedef struct {
 #define C_RED     C("\x1b[31m")
 
 void init_console_module(void);
+ant_value_t console_library(ant_t *js);
+
 void print_value_colored(const char *str, FILE *stream);
 void print_repl_value(ant_t *js, ant_value_t val, FILE *stream);
 bool print_uncaught_throw(ant_t *js);

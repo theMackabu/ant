@@ -516,7 +516,7 @@ static void process_byte(ant_t *js, rl_interface_t *iface, char c) {
       break;
     case 127: case 8: handle_backspace(iface); break;
     case 4:
-      if (iface->line_len == 0) { emit_event(js, iface, "close", NULL, 0); iface->closed = true; }
+      if (iface->line_len == 0) rl_close_interface(js, iface);
       else handle_delete(iface);
       break;
     case 1:  iface->line_pos = 0; refresh_line(iface); break;
@@ -535,7 +535,7 @@ static void on_stdin_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *bu
   if (!iface || iface->closed || iface->paused) goto cleanup;
 
   if (nread < 0) {
-    if (nread == UV_EOF) { emit_event(js, iface, "close", NULL, 0); iface->closed = true; }
+    if (nread == UV_EOF) rl_close_interface(js, iface);
     goto cleanup;
   }
 

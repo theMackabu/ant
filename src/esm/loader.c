@@ -167,6 +167,12 @@ static ant_value_t esm_default_export_or_namespace(ant_t *js, ant_value_t ns) {
   return vtype(default_val) != T_UNDEF ? default_val : ns;
 }
 
+static ant_value_t esm_make_namespace_object(ant_t *js) {
+  ant_value_t ns = js_mkobj(js);
+  js_set_slot(ns, SLOT_BRAND, js_mknum(BRAND_MODULE_NAMESPACE));
+  return ns;
+}
+
 static ant_value_t esm_complete_value_module(esm_module_t *mod, ant_value_t value) {
   if (is_err(value)) {
     mod->is_loading = false;
@@ -1020,7 +1026,7 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod) {
       return esm_complete_value_module(mod, img_val);
     }
     case ESM_MODULE_KIND_NATIVE: {
-      ant_value_t ns = js_mkobj(js);
+      ant_value_t ns = esm_make_namespace_object(js);
       mod->namespace_obj = ns;
 
       ant_value_t native_exports = napi_load_native_module(js, mod->resolved_path, ns);
@@ -1098,7 +1104,7 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod) {
   }}
   
   char *js_code = content;
-  ant_value_t ns = js_mkobj(js);
+  ant_value_t ns = esm_make_namespace_object(js);
   mod->namespace_obj = ns;
 
   const char *prev_filename = js->filename;
