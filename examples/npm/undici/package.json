@@ -1,0 +1,13 @@
+{
+  "name": "undici",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "ant index.js"
+  },
+  "dependencies": {
+    "undici": "^7.24.7"
+  },
+  "devDependencies": {}
+}
