@@ -442,50 +442,72 @@ static inline ant_value_t *sv_frame_slot_ptr(sv_frame_t *frame, uint16_t slot_id
   return &frame->lp[slot_idx - param_count];
 }
 
-static inline ant_value_t sv_vm_call(
-  sv_vm_t *vm, ant_t *js, ant_value_t func,
-  ant_value_t this_val, ant_value_t *args, int argc,
-  ant_value_t *out_this, bool is_construct_call
-);
-
 static inline void sv_vm_maybe_checkpoint_microtasks(ant_t *js) {
   if (!js || js->microtasks_draining || js->vm_exec_depth != 0) return;
   js_maybe_drain_microtasks(js);
 }
 
 typedef struct {
-  ant_value_t  this_val;
-  ant_value_t  super_val;
+  ant_value_t this_val;
+  ant_value_t super_val;
   ant_value_t *args;
-  int      argc;
+  int argc;
   ant_value_t *alloc;
 } sv_call_ctx_t;
 
-static inline ant_value_t sv_call_cfunc(
-  ant_t *js, ant_value_t func,
-  ant_value_t this_val, ant_value_t *args, int argc
-) {
-  js->this_val = this_val;
-  return js_as_cfunc(func)(js, args, argc);
-}
+typedef enum {
+  SV_CALL_MODE_NORMAL = 0,
+  SV_CALL_MODE_EXPLICIT_THIS,
+  SV_CALL_MODE_CONSTRUCT,
+} sv_call_mode_t;
+
+typedef enum {
+  SV_CALL_EXEC_NATIVE = 0,
+  SV_CALL_EXEC_PROXY_APPLY,
+  SV_CALL_EXEC_PROXY_CONSTRUCT,
+  SV_CALL_EXEC_DEFAULT_CTOR,
+  SV_CALL_EXEC_CLOSURE,
+} sv_call_exec_kind_t;
+
+typedef struct {
+  sv_call_exec_kind_t kind;
+  ant_value_t func;
+  sv_closure_t *closure;
+  sv_call_ctx_t ctx;
+} sv_call_plan_t;
 
 static inline ant_value_t *sv_prepend_bound_args(
   sv_closure_t *closure, ant_value_t *args, int argc, int *out_total
 ) {
   int total = closure->bound_argc + argc;
   ant_value_t *combined = malloc(sizeof(ant_value_t) * (size_t)total);
+  
   if (!combined) { *out_total = argc; return NULL; }
   memcpy(combined, closure->bound_argv, sizeof(ant_value_t) * (size_t)closure->bound_argc);
   memcpy(combined + closure->bound_argc, args, sizeof(ant_value_t) * (size_t)argc);
+  
   *out_total = total;
   return combined;
 }
 
-static inline ant_value_t sv_call_resolve_bound(ant_t *js, sv_closure_t *closure, sv_call_ctx_t *ctx) {
+static inline bool sv_call_mode_is_construct(sv_call_mode_t mode) {
+  return mode == SV_CALL_MODE_CONSTRUCT;
+}
+
+static inline ant_value_t sv_call_normalize_this(ant_t *js, ant_value_t this_val, sv_call_mode_t mode) {
+  if (mode == SV_CALL_MODE_NORMAL && sv_is_nullish_this(this_val)) return js->global;
+  return this_val;
+}
+
+static inline ant_value_t sv_call_resolve_bound(
+  ant_t *js, sv_closure_t *closure,
+  sv_call_ctx_t *ctx, sv_call_mode_t mode
+) {
   uint32_t flags = closure->call_flags;
 
   if (flags & SV_CALL_IS_ARROW) ctx->this_val = closure->bound_this;
-  else if (vtype(closure->bound_this) != T_UNDEF) ctx->this_val = closure->bound_this;
+  else if (!sv_call_mode_is_construct(mode) && vtype(closure->bound_this) != T_UNDEF)
+    ctx->this_val = closure->bound_this;
 
   if ((flags & SV_CALL_HAS_BOUND_ARGS) && closure->bound_argc > 0) {
     int total;
@@ -497,7 +519,6 @@ static inline ant_value_t sv_call_resolve_bound(ant_t *js, sv_closure_t *closure
   }
 
   if (flags & SV_CALL_HAS_SUPER) ctx->super_val = closure->super_val;
-
   return js_mkundef();
 }
 
@@ -508,25 +529,190 @@ static inline void sv_call_cleanup(ant_t *js, sv_call_ctx_t *ctx) {
 static inline ant_value_t sv_call_default_ctor(
   sv_vm_t *vm, ant_t *js, sv_closure_t *closure,
   sv_call_ctx_t *ctx, ant_value_t *out_this
+);
+
+static inline ant_value_t sv_call_resolve_closure(
+  sv_vm_t *vm, ant_t *js, sv_closure_t *closure,
+  ant_value_t callee_func, sv_call_ctx_t *ctx, ant_value_t *out_this
+);
+
+static inline ant_value_t sv_prepare_call(
+  sv_vm_t *vm, ant_t *js, ant_value_t func,
+  ant_value_t this_val, ant_value_t *args, int argc,
+  ant_value_t *out_this, sv_call_mode_t mode, sv_call_plan_t *plan
+) {
+  bool is_construct_call = sv_call_mode_is_construct(mode);
+
+  plan->kind = SV_CALL_EXEC_NATIVE;
+  plan->func = func;
+  plan->closure = NULL;
+  
+  plan->ctx = (sv_call_ctx_t){
+    .this_val = this_val,
+    .super_val = js_mkundef(),
+    .args = args,
+    .argc = argc,
+    .alloc = NULL,
+  };
+
+  if (!is_construct_call) js->new_target = js_mkundef();
+  if (out_this) *out_this = this_val;
+
+  if (is_construct_call && vtype(func) == T_OBJ && is_proxy(func)) {
+    plan->kind = SV_CALL_EXEC_PROXY_CONSTRUCT;
+    return js_mkundef();
+  }
+
+  if (is_construct_call && !js_is_constructor(js, func))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "not a constructor");
+
+  if (!is_construct_call && vtype(func) == T_OBJ && is_proxy(func)) {
+    plan->kind = SV_CALL_EXEC_PROXY_APPLY;
+    return js_mkundef();
+  }
+
+  if (vtype(func) == T_CFUNC || vtype(func) == T_FFI) {
+    plan->ctx.this_val = sv_call_normalize_this(js, this_val, mode);
+    if (out_this) *out_this = plan->ctx.this_val;
+    return js_mkundef();
+  }
+
+  if (vtype(func) != T_FUNC)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "%s is not a function", typestr(vtype(func)));
+
+  sv_closure_t *closure = js_func_closure(func);
+  plan->closure = closure;
+
+  ant_value_t err = sv_call_resolve_bound(js, closure, &plan->ctx, mode);
+  if (is_err(err)) return err;
+
+  if (is_construct_call) plan->ctx.this_val = this_val;
+  if (out_this) *out_this = plan->ctx.this_val;
+
+  if (closure->call_flags & SV_CALL_IS_DEFAULT_CTOR) {
+    plan->kind = SV_CALL_EXEC_DEFAULT_CTOR;
+    return js_mkundef();
+  }
+
+  if (closure->func != NULL) {
+    plan->kind = SV_CALL_EXEC_CLOSURE;
+    return js_mkundef();
+  }
+
+  return js_mkundef();
+}
+
+static inline ant_value_t sv_execute_call_plan(
+  sv_vm_t *vm, ant_t *js, sv_call_plan_t *plan, ant_value_t *out_this
+) {
+  switch (plan->kind) {
+  case SV_CALL_EXEC_PROXY_APPLY: return js_proxy_apply(
+    js, plan->func, plan->ctx.this_val, plan->ctx.args, plan->ctx.argc
+  );
+  
+  case SV_CALL_EXEC_PROXY_CONSTRUCT: return js_proxy_construct(
+    js, plan->func, plan->ctx.args, plan->ctx.argc, sv_vm_get_new_target(vm, js)
+  );
+  
+  case SV_CALL_EXEC_DEFAULT_CTOR: return sv_call_default_ctor(
+    vm, js, plan->closure, &plan->ctx, out_this
+  );
+  
+  case SV_CALL_EXEC_CLOSURE: return sv_call_resolve_closure(
+    vm, js, plan->closure, plan->func, &plan->ctx, out_this
+  );
+  
+  case SV_CALL_EXEC_NATIVE: {
+    ant_value_t result = sv_call_native(
+      js, plan->func, plan->ctx.this_val, plan->ctx.args, plan->ctx.argc
+    );
+    sv_call_cleanup(js, &plan->ctx);
+    return result;
+  }}
+
+  return js_mkerr(js, "invalid call plan");
+}
+
+static inline bool sv_check_c_stack_overflow(ant_t *js) {
+  volatile char marker;
+  if (js->cstk.limit == 0 || js->cstk.base == NULL) return false;
+  
+  uintptr_t base = (uintptr_t)js->cstk.base;
+  uintptr_t curr = (uintptr_t)&marker;
+  
+  size_t used = (base > curr) ? (base - curr) : (curr - base);
+  return used > js->cstk.limit;
+}
+
+static inline ant_value_t sv_vm_call(
+  sv_vm_t *vm, ant_t *js, ant_value_t func,
+  ant_value_t this_val, ant_value_t *args, int argc,
+  ant_value_t *out_this, bool is_construct_call
+) {
+  if (sv_check_c_stack_overflow(js))
+    return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
+
+  sv_call_mode_t mode = is_construct_call 
+    ? SV_CALL_MODE_CONSTRUCT 
+    : SV_CALL_MODE_NORMAL;
+  
+  sv_call_plan_t plan;
+  ant_value_t err = sv_prepare_call(
+    vm, js, func, this_val, args, argc,
+    out_this, mode, &plan
+  );
+  
+  if (is_err(err)) return err;
+  ant_value_t result = sv_execute_call_plan(vm, js, &plan, out_this);
+  sv_vm_maybe_checkpoint_microtasks(js);
+  
+  return result;
+}
+
+static inline ant_value_t sv_vm_call_explicit_this(
+  sv_vm_t *vm, ant_t *js, ant_value_t func,
+  ant_value_t this_val, ant_value_t *args, int argc
+) {
+  if (sv_check_c_stack_overflow(js))
+    return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
+
+  sv_call_plan_t plan;
+  ant_value_t err = sv_prepare_call(
+    vm, js, func, this_val, args, argc, NULL,
+    SV_CALL_MODE_EXPLICIT_THIS, &plan
+  );
+  
+  if (is_err(err)) return err;
+  ant_value_t result = sv_execute_call_plan(vm, js, &plan, NULL);
+  sv_vm_maybe_checkpoint_microtasks(js);
+  
+  return result;
+}
+
+static inline ant_value_t sv_call_default_ctor(
+  sv_vm_t *vm, ant_t *js, sv_closure_t *closure,
+  sv_call_ctx_t *ctx, ant_value_t *out_this
 ) {
   if (vtype(js->new_target) == T_UNDEF) {
-    sv_call_cleanup(js, ctx);
-    return js_mkerr_typed(
-      js, JS_ERR_TYPE, 
-      "Class constructor cannot be invoked without 'new'"
-    );
-  }
+  sv_call_cleanup(js, ctx);
+  return js_mkerr_typed(
+    js, JS_ERR_TYPE, 
+    "Class constructor cannot be invoked without 'new'"
+  );}
 
   ant_value_t super_ctor = closure->super_val;
   uint8_t st = vtype(super_ctor);
+  
   if (st == T_FUNC || st == T_CFUNC) {
     ant_value_t super_this = ctx->this_val;
     ant_value_t result = sv_vm_call(
       vm, js, super_ctor, ctx->this_val,
       ctx->args, ctx->argc, &super_this, true
     );
+    
     if (out_this) *out_this = super_this;
     sv_call_cleanup(js, ctx);
+    
     return result;
   }
 
@@ -823,86 +1009,6 @@ static inline ant_value_t sv_call_resolve_closure(
   }
 #endif
   return sv_call_closure(vm, js, closure, callee_func, ctx, out_this);
-}
-
-static inline bool sv_check_c_stack_overflow(ant_t *js) {
-  volatile char marker;
-  if (js->cstk.limit == 0 || js->cstk.base == NULL) return false;
-  uintptr_t base = (uintptr_t)js->cstk.base;
-  uintptr_t curr = (uintptr_t)&marker;
-  size_t used = (base > curr) ? (base - curr) : (curr - base);
-  return used > js->cstk.limit;
-}
-
-static inline ant_value_t sv_vm_call(
-  sv_vm_t *vm, ant_t *js, ant_value_t func,
-  ant_value_t this_val, ant_value_t *args, int argc,
-  ant_value_t *out_this, bool is_construct_call
-) {
-  if (sv_check_c_stack_overflow(js))
-    return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
-
-  if (!is_construct_call) js->new_target = js_mkundef();
-  if (out_this) *out_this = this_val;
-
-  if (is_construct_call && vtype(func) == T_OBJ && is_proxy(func)) {
-    ant_value_t result = js_proxy_construct(js, func, args, argc, sv_vm_get_new_target(vm, js));
-    sv_vm_maybe_checkpoint_microtasks(js);
-    return result;
-  }
-  
-  if (is_construct_call && !js_is_constructor(js, func))
-    return js_mkerr_typed(js, JS_ERR_TYPE, "not a constructor");
-
-  if (!is_construct_call && vtype(func) == T_OBJ && is_proxy(func)) {
-    ant_value_t result = js_proxy_apply(js, func, this_val, args, argc);
-    sv_vm_maybe_checkpoint_microtasks(js);
-    return result;
-  }
-
-  if (vtype(func) == T_CFUNC) {
-    ant_value_t cfunc_this = sv_is_nullish_this(this_val) ? js->global : this_val;
-    ant_value_t result = sv_call_cfunc(js, func, cfunc_this, args, argc);
-    sv_vm_maybe_checkpoint_microtasks(js);
-    return result;
-  }
-
-  if (vtype(func) != T_FUNC) {
-    ant_value_t result = sv_call_native(js, func, this_val, args, argc);
-    sv_vm_maybe_checkpoint_microtasks(js);
-    return result;
-  }
-
-  sv_closure_t *closure = js_func_closure(func);
-
-  sv_call_ctx_t ctx = {
-    .this_val = this_val, .super_val = js_mkundef(),
-    .args = args, .argc = argc, .alloc = NULL,
-  };
-
-  ant_value_t err = sv_call_resolve_bound(js, closure, &ctx);
-  if (is_err(err)) return err;
-
-  if (is_construct_call) ctx.this_val = this_val;
-  if (out_this) *out_this = ctx.this_val;
-
-  if (closure->call_flags & SV_CALL_IS_DEFAULT_CTOR) {
-    ant_value_t result = sv_call_default_ctor(vm, js, closure, &ctx, out_this);
-    sv_vm_maybe_checkpoint_microtasks(js);
-    return result;
-  }
-
-  if (closure->func != NULL) {
-    ant_value_t result = sv_call_resolve_closure(vm, js, closure, func, &ctx, out_this);
-    sv_vm_maybe_checkpoint_microtasks(js);
-    return result;
-  }
-
-  ant_value_t result = sv_call_native(js, func, ctx.this_val, ctx.args, ctx.argc);
-  sv_call_cleanup(js, &ctx);
-  sv_vm_maybe_checkpoint_microtasks(js);
-  
-  return result;
 }
 
 #endif

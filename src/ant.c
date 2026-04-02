@@ -2830,16 +2830,17 @@ static inline bool proto_walk_overflow_guard_hit_cycle(
 
 ant_value_t js_instance_proto_from_new_target(ant_t *js, ant_value_t fallback_proto) {
   ant_value_t instance_proto = js_mkundef();
-  
+
   if (vtype(js->new_target) == T_FUNC || vtype(js->new_target) == T_CFUNC) {
     ant_value_t nt_obj = js_as_obj(js->new_target);
     ant_value_t nt_proto = lkp_interned_val(js, nt_obj, INTERN_PROTOTYPE);
     if (is_object_type(nt_proto)) instance_proto = nt_proto;
   }
-  
-  if (!is_object_type(instance_proto) && is_object_type(fallback_proto)) {
+
+  if (!is_object_type(instance_proto) && is_object_type(fallback_proto)) 
     instance_proto = fallback_proto;
-  } return instance_proto;
+  
+  return instance_proto;
 }
 
 bool proto_chain_contains(ant_t *js, ant_value_t obj, ant_value_t proto_target) {
@@ -4750,27 +4751,7 @@ static ant_value_t builtin_AsyncFunction(ant_t *js, ant_value_t *args, int nargs
 }
 
 static ant_value_t builtin_function_empty(ant_t *js, ant_value_t *args, int nargs) {
-  (void)js; (void)args; (void)nargs;
   return js_mkundef();
-}
-
-static bool function_uses_native_call(ant_value_t func) {
-  if (vtype(func) == T_CFUNC) return true;
-  if (vtype(func) != T_FUNC) return false;
-
-  ant_value_t func_obj = js_func_obj(func);
-  return vtype(get_slot(func_obj, SLOT_CFUNC)) == T_CFUNC;
-}
-
-static ant_value_t function_call_dispatch(
-  ant_t *js,
-  ant_value_t func,
-  ant_value_t this_arg,
-  ant_value_t *call_args,
-  int call_nargs
-) {
-  if (function_uses_native_call(func)) return sv_call_native(js, func, this_arg, call_args, call_nargs);
-  return sv_vm_call(js->vm, js, func, this_arg, call_args, call_nargs, NULL, false);
 }
 
 static ant_value_t builtin_function_call(ant_t *js, ant_value_t *args, int nargs) {
@@ -4785,7 +4766,7 @@ static ant_value_t builtin_function_call(ant_t *js, ant_value_t *args, int nargs
   int call_nargs = (nargs > 1) ? nargs - 1 : 0;
   if (call_nargs > 0) call_args = &args[1];
 
-  return function_call_dispatch(js, func, this_arg, call_args, call_nargs);
+  return sv_vm_call_explicit_this(js->vm, js, func, this_arg, call_args, call_nargs);
 }
 
 static int extract_array_args(ant_t *js, ant_value_t arr, ant_value_t **out_args) {
@@ -4908,7 +4889,7 @@ static ant_value_t builtin_function_apply(ant_t *js, ant_value_t *args, int narg
     } else if (t != T_UNDEF && t != T_NULL) {}
   }
   
-  ant_value_t result = function_call_dispatch(js, func, this_arg, call_args, call_nargs);
+  ant_value_t result = sv_vm_call_explicit_this(js->vm, js, func, this_arg, call_args, call_nargs);
   if (call_args) free(call_args);
   
   return result;
@@ -13383,56 +13364,51 @@ ant_value_t js_eval_bytecode_repl(ant_t *js, const char *buf, size_t len) {
   return js_eval_bytecode_mode(js, buf, len, SV_COMPILE_REPL, false);
 }
 
+ant_value_t inline sv_call_cfunc(ant_params_t, ant_bind_t) {
+  ant_value_t saved_this = js->this_val;
+  js->this_val = this_val;
+  ant_value_t res = js_as_cfunc(func)(js, args, nargs);
+  js->this_val = saved_this;
+  return res;
+}
+
+ant_value_t inline sv_call_slot_cfunc(ant_params_t, ant_bind_t, ant_value_t cfunc_slot) {
+  ant_value_t saved_func = js->current_func;
+  ant_value_t saved_this = js->this_val;
+  js->current_func = func;
+  js->this_val = this_val;
+  ant_value_t res = js_as_cfunc(cfunc_slot)(js, args, nargs);
+  js->current_func = saved_func;
+  js->this_val = saved_this;
+  return res;
+}
+
+
+ant_value_t inline sv_call_object_builtin(ant_params_t, ant_value_t this_val) {
+  ant_value_t saved_this = js->this_val;
+  js->this_val = this_val;
+  ant_value_t res = builtin_Object(js, args, nargs);
+  js->this_val = saved_this;
+  return res;
+}
+
 ant_value_t sv_call_native(
   ant_t *js, ant_value_t func, ant_value_t this_val,
   ant_value_t *args, int nargs
 ) {
-  if (vtype(func) == T_FFI)
-    return ffi_call_by_index(js, (unsigned int)vdata(func), args, nargs);
-
-  if (vtype(func) == T_CFUNC) {
-    ant_value_t saved_this = js->this_val;
-    js->this_val = this_val;
-    ant_value_t (*fn)(ant_t *, ant_value_t *, int) = (ant_value_t(*)(ant_t *, ant_value_t *, int))vdata(func);
-    ant_value_t res = fn(js, args, nargs);
-    js->this_val = saved_this;
-    return res;
-  }
-
+  if (vtype(func) == T_CFUNC) return sv_call_cfunc(js, args, nargs, func, this_val);
+  if (vtype(func) == T_FFI) return ffi_call_by_index(js, (unsigned int)vdata(func), args, nargs);
+  
   if (vtype(func) == T_FUNC) {
-    sv_closure_t *closure = js_func_closure(func);
-    ant_value_t func_obj = closure->func_obj;
-
+    ant_value_t func_obj = js_func_obj(func);
     ant_value_t cfunc_slot = get_slot(func_obj, SLOT_CFUNC);
-    if (vtype(cfunc_slot) == T_CFUNC) {
-      ant_value_t resolve_this = (vtype(closure->bound_this) != T_UNDEF) ? closure->bound_this : this_val;
-      int final_nargs = nargs;
-      ant_value_t *final_args = args;
-      ant_value_t *combined = NULL;
-      if ((closure->call_flags & SV_CALL_HAS_BOUND_ARGS) && closure->bound_argc > 0) {
-        combined = sv_prepend_bound_args(closure, args, nargs, &final_nargs);
-        if (combined) final_args = combined;
-      }
-      ant_value_t saved_func = js->current_func;
-      ant_value_t saved_this = js->this_val;
-      js->current_func = func;
-      js->this_val = resolve_this;
-      ant_value_t (*fn)(ant_t *, ant_value_t *, int) = (ant_value_t(*)(ant_t *, ant_value_t *, int))vdata(cfunc_slot);
-      ant_value_t res = fn(js, final_args, final_nargs);
-      js->current_func = saved_func;
-      js->this_val = saved_this;
-      if (combined) free(combined);
-      return res;
-    }
-
+    
+    if (vtype(cfunc_slot) == T_CFUNC) 
+      return sv_call_slot_cfunc(js, args, nargs, func, this_val, cfunc_slot);
+      
     ant_value_t builtin_slot = get_slot(func_obj, SLOT_BUILTIN);
-    if (vtype(builtin_slot) == T_NUM && (int)tod(builtin_slot) == BUILTIN_OBJECT) {
-      ant_value_t saved_this = js->this_val;
-      js->this_val = this_val;
-      ant_value_t res = builtin_Object(js, args, nargs);
-      js->this_val = saved_this;
-      return res;
-    }
+    if (vtype(builtin_slot) == T_NUM && (int)tod(builtin_slot) == BUILTIN_OBJECT) 
+      return sv_call_object_builtin(js, args, nargs, this_val);
   }
 
   return js_mkerr_typed(js, JS_ERR_TYPE, "%s is not a function", typestr(vtype(func)));

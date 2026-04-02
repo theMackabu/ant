@@ -831,12 +831,14 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     }
     call_fallback:;
     frame->ip = ip;
+    ant_value_t super_this_c = call_this;
     ant_value_t call_result = sv_vm_call(
-      vm, js, call_func, call_this, call_args, call_argc, NULL, false);
+      vm, js, call_func, call_this, call_args, call_argc,
+      is_super_call ? &super_this_c : NULL, is_super_call);
     vm->sp -= call_argc + 1;
     if (is_err(call_result)) { sv_err = call_result; goto sv_throw; }
-    if (is_super_call && is_object_type(call_result))
-      frame->this = call_result;
+    if (is_super_call)
+      frame->this = is_object_type(call_result) ? call_result : super_this_c;
     vm->stack[vm->sp++] = call_result;
     NEXT(3);
   }
@@ -955,12 +957,14 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     call_method_fallback:;
     frame->ip = ip;
     if (is_super_call) js->new_target = frame->new_target;
+    ant_value_t super_this_cm = call_this;
     ant_value_t call_result = sv_vm_call(
-      vm, js, call_func, call_this, call_args, call_argc, NULL, is_super_call);
+      vm, js, call_func, call_this, call_args, call_argc,
+      is_super_call ? &super_this_cm : NULL, is_super_call);
     vm->sp -= call_argc + 2;
     if (is_err(call_result)) { sv_err = call_result; goto sv_throw; }
-    if (is_super_call && is_object_type(call_result))
-      frame->this = call_result;
+    if (is_super_call)
+      frame->this = is_object_type(call_result) ? call_result : super_this_cm;
     vm->stack[vm->sp++] = call_result;
     NEXT(3);
   }

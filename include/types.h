@@ -26,6 +26,8 @@ typedef uint64_t ant_offset_t;
 typedef uint64_t ant_value_t;
 
 typedef ant_value_t (*ant_cfunc_t) (ant_t *, ant_value_t *, int);
+
+#define ant_bind_t   ant_value_t func, ant_value_t this_val
 #define ant_params_t ant_t *js, ant_value_t *args, int nargs
 
 #endif
