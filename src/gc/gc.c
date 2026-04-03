@@ -88,7 +88,7 @@ void gc_run(ant_t *js) {
   gc_ropes_sweep(js);
 
   js->gc_last_live = js->obj_arena.live_count;
-  js->old_live_count = js->obj_arena.live_count; /* after major GC all live = old */
+  js->old_live_count = js->obj_arena.live_count;
   js->minor_gc_count = 0;
 
   ant_pool_stats_t pool_stats = js_class_pool_stats(&js->pool.string);

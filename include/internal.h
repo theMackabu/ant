@@ -5,6 +5,7 @@
 #include "object.h"
 #include "pool.h"
 #include "sugar.h"
+#include "errors.h"
 #include "arena.h"
 #include "descriptors.h"
 #include "esm/loader.h"
@@ -440,9 +441,13 @@ static inline bool lookup_string_prop_meta(ant_t *js, ant_value_t cur_obj, const
 }
 
 static inline ant_value_t defmethod(ant_t *js, ant_value_t obj, const char *name, size_t len, ant_value_t fn) {
-  ant_value_t k = js_mkstr(js, name, len);
-  if (is_err(k)) return k;
-  return mkprop(js, obj, k, fn, ANT_PROP_ATTR_WRITABLE | ANT_PROP_ATTR_CONFIGURABLE);
+  const char *interned = intern_string(name, len);
+  if (!interned) return js_mkerr(js, "oom");
+  
+  return mkprop_interned(
+    js, obj, interned, fn,
+    ANT_PROP_ATTR_WRITABLE | ANT_PROP_ATTR_CONFIGURABLE
+  );
 }
 
 static inline ant_flat_string_t *str_flat_from_bytes(const char *str) {
