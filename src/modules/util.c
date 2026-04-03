@@ -181,7 +181,9 @@ static ant_value_t util_format_impl(ant_t *js, ant_value_t *args, int nargs, int
       util_sb_append_json(js, &sb, v);
     } else if (spec == 'o' || spec == 'O') {
       util_sb_append_jsval(js, &sb, v);
-    } else if (spec == 'c') // style placeholder: consume arg, emit nothing
+    } else if (spec == 'c') {
+      // style placeholder: consume arg, emit nothing.
+    }
 
     i++;
   }
