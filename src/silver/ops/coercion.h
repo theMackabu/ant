@@ -85,6 +85,70 @@ static inline void sv_op_import_default(sv_vm_t *vm, ant_t *js) {
   }
 }
 
+static inline bool sv_module_namespace_has_export(
+  ant_t *js,
+  ant_value_t ns,
+  const char *name,
+  size_t len
+) {
+  if (!is_object_type(ns)) return false;
+
+  ant_value_t as_obj = js_as_obj(ns);
+  if (is_proxy(as_obj)) return false;
+  if (lkp(js, as_obj, name, len) != 0) return true;
+
+  prop_meta_t meta;
+  return lookup_string_prop_meta(js, as_obj, name, len, &meta);
+}
+
+static inline const char *sv_module_namespace_filename(ant_t *js, ant_value_t ns) {
+  if (!is_object_type(ns)) return NULL;
+
+  ant_value_t module_ctx = js_get_slot(ns, SLOT_MODULE_CTX);
+  if (!is_object_type(module_ctx)) return NULL;
+
+  ant_value_t filename = js_get(js, module_ctx, "filename");
+  if (vtype(filename) != T_STR) return NULL;
+  
+  return js_getstr(js, filename, NULL);
+}
+
+static inline ant_value_t sv_missing_named_export_error(
+  ant_t *js,
+  ant_value_t ns,
+  const char *name,
+  size_t len
+) {
+  const char *filename = sv_module_namespace_filename(js, ns);
+  if (!filename) filename = "<unknown>";
+  return js_mkerr_typed(
+    js, JS_ERR_SYNTAX,
+    "The requested module '%s' does not provide an export named '%.*s'",
+    filename, (int)len, name
+  );
+}
+
+static inline ant_value_t sv_op_import_named(
+  sv_vm_t *vm,
+  ant_t *js,
+  sv_func_t *func,
+  uint8_t *ip
+) {
+  uint32_t atom_idx = sv_get_u32(ip + 1);
+  if (atom_idx >= (uint32_t)func->atom_count)
+    return js_mkerr(js, "invalid import atom index");
+
+  ant_value_t ns = vm->stack[vm->sp - 1];
+  sv_atom_t *a = &func->atoms[atom_idx];
+  if (!sv_module_namespace_has_export(js, ns, a->str, a->len))
+    return sv_missing_named_export_error(js, ns, a->str, a->len);
+
+  ant_value_t value = js_get(js, ns, a->str);
+  if (is_err(value)) return value;
+  vm->stack[vm->sp - 1] = value;
+  return tov(0);
+}
+
 static inline ant_value_t sv_op_export(sv_vm_t *vm, ant_t *js, sv_func_t *func, uint8_t *ip) {
   uint32_t atom_idx = sv_get_u32(ip + 1);
   if (atom_idx >= (uint32_t)func->atom_count)

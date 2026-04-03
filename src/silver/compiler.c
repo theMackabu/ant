@@ -2919,7 +2919,7 @@ static void compile_import_decl(sv_compiler_t *c, sv_ast_t *node) {
           !spec->left || spec->left->type != N_IDENT) {
         emit_op(c, OP_IMPORT_DEFAULT);
       } else {
-        emit_atom_op(c, OP_GET_FIELD, spec->left->str, spec->left->len);
+        emit_atom_op(c, OP_IMPORT_NAMED, spec->left->str, spec->left->len);
       }
     }
 
@@ -3089,7 +3089,7 @@ static void compile_export_decl(sv_compiler_t *c, sv_ast_t *node) {
       if (spec->left->len == 7 && memcmp(spec->left->str, "default", 7) == 0)
         emit_op(c, OP_IMPORT_DEFAULT);
       else
-        emit_atom_op(c, OP_GET_FIELD, spec->left->str, spec->left->len);
+        emit_atom_op(c, OP_IMPORT_NAMED, spec->left->str, spec->left->len);
       emit_atom_op(c, OP_EXPORT, spec->right->str, spec->right->len);
     } else {
       emit_get_var(c, spec->left->str, spec->left->len);

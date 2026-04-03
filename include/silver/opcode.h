@@ -220,6 +220,7 @@ OP_DEF(  IS_NULL,           1,   1,   1, none)      /* TOS === null */
 OP_DEF(  IMPORT,            1,   2,   1, none)      /* dynamic import(specifier) */
 OP_DEF(  IMPORT_SYNC,       1,   1,   1, none)      /* sync module load for static import */
 OP_DEF(  IMPORT_DEFAULT,    1,   1,   1, none)      /* ns -> default (SLOT_DEFAULT or ns) */
+OP_DEF(  IMPORT_NAMED,      5,   1,   1, atom)      /* ns -> named export (throw if missing) */
 OP_DEF(  EXPORT,            5,   1,   0, atom)      /* value -> (module namespace[name] = value) */
 OP_DEF(  EXPORT_ALL,        1,   1,   0, none)      /* ns -> (export all properties) */
 

@@ -106,6 +106,10 @@ function handleClientError(server, socket, error) {
   }
 }
 
+function clientNotImplemented() {
+  throw new Error('node:http client transport is not implemented yet');
+}
+
 export class IncomingMessage extends EventEmitter {
   constructor(socket, parsed) {
     super();
@@ -449,6 +453,14 @@ export class Server extends net.Server {
 
 export function createServer(options, requestListener) {
   return new Server(options, requestListener);
+}
+
+export function request() {
+  clientNotImplemented();
+}
+
+export function get() {
+  clientNotImplemented();
 }
 
 export { METHODS, STATUS_CODES } from 'ant:internal/http_metadata';
