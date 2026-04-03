@@ -910,6 +910,11 @@ static void emit_get_local(sv_compiler_t *c, int local_idx);
 static void emit_put_local(sv_compiler_t *c, int local_idx);
 static void emit_put_local_typed(sv_compiler_t *c, int local_idx, uint8_t type);
 
+static inline void emit_get_module_import_binding(sv_compiler_t *c) {
+  emit_op(c, OP_SPECIAL_OBJ);
+  emit(c, 3);
+}
+
 static void emit_get_var(sv_compiler_t *c, const char *name, uint32_t len) {
   int local = resolve_local(c, name, len);
   if (local != -1) {
@@ -978,6 +983,10 @@ static void emit_get_var(sv_compiler_t *c, const char *name, uint32_t len) {
       return;
     }
   }
+  if (has_module_import_binding(c) && is_ident_str(name, len, "import", 6)) {
+    emit_get_module_import_binding(c);
+    return;
+  }
   if (c->with_depth > 0)
     emit_with_get(c, name, len, WITH_FB_GLOBAL, 0);
   else
@@ -1029,6 +1038,10 @@ static void emit_set_var(sv_compiler_t *c, const char *name, uint32_t len, bool 
     }
     emit_op(c, keep ? OP_SET_UPVAL : OP_PUT_UPVAL);
     emit_u16(c, (uint16_t)upval);
+    return;
+  }
+  if (has_module_import_binding(c) && is_ident_str(name, len, "import", 6)) {
+    emit_const_assign_error(c, name, len);
     return;
   }
   if (c->with_depth > 0) {
@@ -1592,7 +1605,7 @@ static void compile_expr(sv_compiler_t *c, sv_ast_t *node) {
     case N_IMPORT:
       compile_expr(c, node->right);
       if (has_module_import_binding(c)) {
-        emit_get_var(c, "import", 6);
+        emit_get_module_import_binding(c);
         emit_op(c, OP_SWAP);
         emit_op(c, OP_CALL);
         emit_u16(c, 1);
@@ -4253,12 +4266,6 @@ static sv_func_t *compile_function_body(
   }
   
   bool repl_top = is_repl_top_level(&comp);
-  if (mode == SV_COMPILE_MODULE && comp.enclosing && !comp.enclosing->enclosing) {
-    int import_local = add_local(&comp, "import", 6, true, comp.scope_depth);
-    emit_op(&comp, OP_SPECIAL_OBJ);
-    emit(&comp, 3);
-    emit_put_local(&comp, import_local);
-  }
   if (!has_non_simple_params && node->body) {
     if (node->body->type == N_BLOCK) {
       if (!repl_top) {

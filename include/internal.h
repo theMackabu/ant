@@ -318,10 +318,12 @@ ant_value_t setprop_interned(ant_t *js, ant_value_t obj, const char *key, size_t
 ant_value_t js_define_property(ant_t *js, ant_value_t obj, ant_value_t prop, ant_value_t descriptor, bool reflect_mode);
 
 ant_value_t js_define_own_prop(ant_t *js, ant_value_t obj, const char *key, size_t klen, ant_value_t v);
+ant_value_t js_instance_proto_from_new_target(ant_t *js, ant_value_t fallback_proto);
+
+ant_value_t js_get_module_import_binding(ant_t *js);
+ant_value_t js_builtin_import(ant_t *js, ant_value_t *args, int nargs);
 ant_value_t js_create_import_meta(ant_t *js, const char *filename, bool is_main);
 ant_value_t js_create_module_context(ant_t *js, const char *filename, bool is_main);
-ant_value_t js_get_module_import_binding(ant_t *js);
-ant_value_t js_instance_proto_from_new_target(ant_t *js, ant_value_t fallback_proto);
 
 ant_value_t coerce_to_str(ant_t *js, ant_value_t v);
 ant_value_t coerce_to_str_concat(ant_t *js, ant_value_t v);
