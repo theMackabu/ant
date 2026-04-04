@@ -6,10 +6,10 @@
 #include "internal.h"
 #include "silver/engine.h"
 #include "esm/loader.h"
-
 #include "gc/roots.h"
 
 #include "modules/assert.h"
+#include "modules/buffer.h"
 #include "modules/events.h"
 #include "modules/stream.h"
 #include "modules/symbol.h"
@@ -33,6 +33,11 @@ static ant_value_t g_transform_ctor  = 0;
 
 static ant_value_t g_passthrough_proto = 0;
 static ant_value_t g_passthrough_ctor  = 0;
+
+static ant_value_t stream_readable_maybe_read(ant_t *js, ant_value_t stream_obj);
+static ant_value_t stream_readable_flush(ant_t *js, ant_value_t stream_obj);
+static ant_value_t stream_readable_push_value(ant_t *js, ant_value_t stream_obj, ant_value_t chunk, ant_value_t encoding);
+static ant_value_t stream_readable_continue_flowing(ant_t *js, ant_value_t *args, int nargs);
 
 static ant_value_t stream_noop(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
@@ -134,13 +139,16 @@ static ant_value_t stream_normalize_chunk(
 ) {
   ant_value_t str_val = 0;
 
-  if (object_mode || is_null(chunk) || is_undefined(chunk) || vtype(chunk) == T_TYPEDARRAY)
-    return chunk;
+  if (
+    object_mode || is_null(chunk) || is_undefined(chunk) ||
+    vtype(chunk) == T_TYPEDARRAY || buffer_is_binary_source(chunk)
+  ) return chunk;
 
   if (vtype(chunk) == T_STR) return stream_make_buffer(js, chunk, encoding);
 
   str_val = js_tostring_val(js, chunk);
   if (is_err(str_val)) return str_val;
+  
   return stream_make_buffer(js, str_val, encoding);
 }
 
@@ -285,6 +293,7 @@ static void stream_init_readable(ant_t *js, ant_value_t obj, ant_value_t raw_opt
   js_set(js, state, "ended", js_false);
   js_set(js, state, "endEmitted", js_false);
   js_set(js, state, "flowing", js_false);
+  js_set(js, state, "flowingReadScheduled", js_false);
   js_set(js, state, "reading", js_false);
   js_set(js, state, "highWaterMark", js_mknum(high_water_mark));
   js_set(js, state, "buffer", js_mkarr(js));
@@ -341,9 +350,19 @@ static void stream_emit_error(ant_t *js, ant_value_t stream_obj, ant_value_t err
   eventemitter_emit_args(js, stream_obj, "error", args, 1);
 }
 
-static ant_value_t stream_readable_maybe_read(ant_t *js, ant_value_t stream_obj);
-static ant_value_t stream_readable_flush(ant_t *js, ant_value_t stream_obj);
-static ant_value_t stream_readable_push_value(ant_t *js, ant_value_t stream_obj, ant_value_t chunk, ant_value_t encoding);
+static void stream_readable_schedule_continue_flowing(ant_t *js, ant_value_t stream_obj) {
+  ant_value_t state = stream_readable_state(js, stream_obj);
+
+  if (!is_object_type(state)) return;
+  if (!js_truthy(js, js_get(js, state, "flowing"))) return;
+  if (js_truthy(js, js_get(js, stream_obj, "destroyed"))) return;
+  if (js_truthy(js, js_get(js, state, "ended"))) return;
+  if (stream_readable_buffer_len(js, stream_obj) > 0) return;
+  if (js_truthy(js, js_get(js, state, "flowingReadScheduled"))) return;
+
+  js_set(js, state, "flowingReadScheduled", js_true);
+  stream_schedule_microtask(js, stream_readable_continue_flowing, stream_obj);
+}
 
 static ant_value_t js_stream_pause(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t stream_obj = stream_require_this(js, js_getthis(js), "stream");
@@ -598,13 +617,32 @@ static ant_value_t stream_readable_start_flowing(ant_t *js, ant_value_t *args, i
   return js_mkundef();
 }
 
+static ant_value_t stream_readable_continue_flowing(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t stream_obj = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  ant_value_t state = stream_readable_state(js, stream_obj);
+
+  if (!is_object_type(state)) return js_mkundef();
+  js_set(js, state, "flowingReadScheduled", js_false);
+
+  if (!js_truthy(js, js_get(js, state, "flowing"))) return js_mkundef();
+  if (js_truthy(js, js_get(js, stream_obj, "destroyed"))) return js_mkundef();
+  if (js_truthy(js, js_get(js, state, "ended"))) return js_mkundef();
+
+  stream_readable_maybe_read(js, stream_obj);
+  stream_readable_flush(js, stream_obj);
+  
+  return js_mkundef();
+}
+
 static ant_value_t stream_readable_flush(ant_t *js, ant_value_t stream_obj) {
   ant_value_t state = stream_readable_state(js, stream_obj);
+  bool emitted_data = false;
 
   if (!is_object_type(state)) return js_mkundef();
 
   while (js_truthy(js, js_get(js, state, "flowing")) && stream_readable_buffer_len(js, stream_obj) > 0) {
     ant_value_t chunk = stream_buffer_shift(js, stream_obj);
+    emitted_data = true;
     eventemitter_emit_args(js, stream_obj, "data", &chunk, 1);
   }
 
@@ -617,7 +655,7 @@ static ant_value_t stream_readable_flush(ant_t *js, ant_value_t stream_obj) {
     js_set(js, stream_obj, "readableEnded", js_true);
     stream_emit_named(js, stream_obj, "end");
     stream_emit_named(js, stream_obj, "close");
-  }
+  } else if (emitted_data) stream_readable_schedule_continue_flowing(js, stream_obj);
 
   return js_mkundef();
 }

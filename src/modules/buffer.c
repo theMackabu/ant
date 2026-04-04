@@ -39,10 +39,21 @@ bool buffer_is_dataview(ant_value_t obj) {
   return js_check_brand(obj, BRAND_DATAVIEW);
 }
 
+bool buffer_is_binary_source(ant_value_t value) {
+  ant_value_t slot = 0;
+
+  if (vtype(value) == T_TYPEDARRAY) return true;
+  if (!is_object_type(value)) return false;
+  if (buffer_is_dataview(value)) return true;
+
+  slot = js_get_slot(value, SLOT_BUFFER);
+  return vtype(slot) == T_TYPEDARRAY || vtype(slot) == T_NUM;
+}
+
 bool buffer_source_get_bytes(ant_t *js, ant_value_t value, const uint8_t **out, size_t *len) {
   if (out) *out = NULL;
   if (len) *len = 0;
-  if (vtype(value) != T_TYPEDARRAY && !is_object_type(value)) return false;
+  if (!buffer_is_binary_source(value)) return false;
 
   ant_value_t slot = js_get_slot(value, SLOT_BUFFER);
   TypedArrayData *ta = (TypedArrayData *)js_gettypedarray(slot);

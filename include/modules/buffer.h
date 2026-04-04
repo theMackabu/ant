@@ -72,6 +72,7 @@ ant_value_t create_dataview_with_buffer(
 
 size_t buffer_get_external_memory(void);
 bool buffer_is_dataview(ant_value_t obj);
+bool buffer_is_binary_source(ant_value_t value);
 bool buffer_source_get_bytes(ant_t *js, ant_value_t value, const uint8_t **out, size_t *len);
 
 #endif
