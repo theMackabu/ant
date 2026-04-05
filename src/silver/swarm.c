@@ -888,9 +888,10 @@ static jit_child_kind_t classify_child_closure_kind(sv_func_t *parent, sv_func_t
     else has_local = true;
   }
 
-  if (has_param && !has_local && !has_inherited) return JIT_CHILD_PARAM_ONLY;
-  if (has_local && !has_param && !has_inherited) return JIT_CHILD_LOCAL_ONLY;
-  if (has_inherited && !has_param && !has_local) return JIT_CHILD_INHERITED_ONLY;
+  if (!has_param && !has_local) return has_inherited ? JIT_CHILD_INHERITED_ONLY : JIT_CHILD_PLAIN;
+  if (has_param && !has_local) return JIT_CHILD_PARAM_ONLY;
+  if (has_local && !has_param) return JIT_CHILD_LOCAL_ONLY;
+  
   return JIT_CHILD_MIXED;
 }
 
@@ -2427,7 +2428,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
     for (int i = 0; i < n_locals; i++)
       if (captured_locals[i]) { has_captures = true; break; }
   }
-  bool has_captured_slots = has_captured_params;
+  bool has_captured_slots = has_captured_params || has_captures;
   bool use_unified_slotbuf = has_captured_slots && has_captures;
   int slotbuf_count = use_unified_slotbuf ? (param_count + n_locals) : param_count;
 
@@ -2685,7 +2686,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       case OP_GET_ARG: {
         uint16_t idx = sv_get_u16(ip + 1);
         MIR_reg_t dst = vstack_push(&vs);
-        if (has_captured_slots && idx < (uint16_t)param_count) {
+        if (has_captured_params && captured_params && idx < (uint16_t)param_count && captured_params[idx]) {
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
               MIR_new_reg_op(ctx, dst),
@@ -2719,7 +2720,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         uint16_t idx = sv_get_u16(ip + 1);
         vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
         MIR_reg_t val = vstack_top(&vs);
-        if (has_captured_slots && idx < (uint16_t)param_count) {
+        if (has_captured_params && captured_params && idx < (uint16_t)param_count && captured_params[idx]) {
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
               MIR_new_mem_op(ctx, MIR_JSVAL,
@@ -4938,7 +4939,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
                   (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1),
                 MIR_new_reg_op(ctx, local_regs[i])));
         }
-        if (has_captured_slots && idx < (uint16_t)param_count)
+        if (has_captured_params && idx < (uint16_t)param_count)
           mir_emit_close_marked_slots(ctx, jit_func,
             close_upval_proto, imp_close_upval,
             r_vm, r_slotbuf, captured_params, (int)idx, param_count);
