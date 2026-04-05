@@ -864,6 +864,36 @@ static sv_func_t *scan_closure_child(sv_func_t *func, uint8_t *ip) {
   return (sv_func_t *)(uintptr_t)vdata(cv);
 }
 
+typedef enum {
+  JIT_CHILD_PLAIN = 0,
+  JIT_CHILD_INHERITED_ONLY,
+  JIT_CHILD_LOCAL_ONLY,
+  JIT_CHILD_PARAM_ONLY,
+  JIT_CHILD_MIXED,
+} jit_child_kind_t;
+
+static jit_child_kind_t classify_child_closure_kind(sv_func_t *parent, sv_func_t *child) {
+  if (!parent || !child || child->upvalue_count <= 0) return JIT_CHILD_PLAIN;
+
+  bool has_inherited = false;
+  bool has_param = false;
+  bool has_local = false;
+  for (int i = 0; i < child->upvalue_count; i++) {
+    sv_upval_desc_t *desc = &child->upval_descs[i];
+    if (!desc->is_local) {
+      has_inherited = true;
+      continue;
+    }
+    if (desc->index < (uint16_t)parent->param_count) has_param = true;
+    else has_local = true;
+  }
+
+  if (has_param && !has_local && !has_inherited) return JIT_CHILD_PARAM_ONLY;
+  if (has_local && !has_param && !has_inherited) return JIT_CHILD_LOCAL_ONLY;
+  if (has_inherited && !has_param && !has_local) return JIT_CHILD_INHERITED_ONLY;
+  return JIT_CHILD_MIXED;
+}
+
 static bool *scan_captured_locals(sv_func_t *func, int n_locals) {
   if (n_locals <= 0) return NULL;
   bool *captured = calloc((size_t)n_locals, sizeof(bool));
@@ -2335,7 +2365,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   MIR_reg_t r_tmp2 = MIR_new_func_reg(ctx, jit_func->u.func, MIR_JSVAL, "tmp2");
   MIR_reg_t r_bool = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, "bool_tmp");
   MIR_reg_t r_err_tmp = MIR_new_func_reg(ctx, jit_func->u.func, MIR_JSVAL, "err_tmp");
-  (void)r_tmp2;
+  mir_load_imm(ctx, jit_func, r_tmp2, 0);
 
   jit_features_t feat = jit_prescan_features(func);
 
@@ -7109,9 +7139,33 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         MIR_reg_t dst = vstack_push(&vs);
         ant_value_t cv = func->constants[idx];
         sv_func_t *child = (sv_func_t *)(uintptr_t)vdata(cv);
+        jit_child_kind_t child_kind = classify_child_closure_kind(func, child);
+        MIR_reg_t r_child_slots = r_tmp2;
+        int child_slot_base = 0;
+        int child_slot_count = 0;
         vs.known_func[vs.sp - 1] = (sv_func_t *)(uintptr_t)vdata(cv);
-        mir_emit_spill_child_captured_locals(
-          ctx, jit_func, func, child, local_regs, n_locals, r_lbuf);
+        switch (child_kind) {
+          case JIT_CHILD_PLAIN:
+          case JIT_CHILD_INHERITED_ONLY:
+            break;
+          case JIT_CHILD_PARAM_ONLY:
+            r_child_slots = r_slotbuf;
+            child_slot_count = param_count;
+            break;
+          case JIT_CHILD_LOCAL_ONLY:
+            mir_emit_spill_child_captured_locals(
+              ctx, jit_func, func, child, local_regs, n_locals, r_lbuf);
+            r_child_slots = r_lbuf;
+            child_slot_base = param_count;
+            child_slot_count = n_locals;
+            break;
+          case JIT_CHILD_MIXED:
+            mir_emit_spill_child_captured_locals(
+              ctx, jit_func, func, child, local_regs, n_locals, r_lbuf);
+            r_child_slots = r_slotbuf;
+            child_slot_count = slotbuf_count;
+            break;
+        }
         MIR_append_insn(ctx, jit_func,
           MIR_new_call_insn(ctx, 11,
             MIR_new_ref_op(ctx, closure_proto),
@@ -7121,9 +7175,9 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_reg_op(ctx, r_js),
             MIR_new_reg_op(ctx, r_closure),
             MIR_new_reg_op(ctx, r_this),
-            MIR_new_reg_op(ctx, has_captured_slots ? r_slotbuf : r_lbuf),
-            MIR_new_int_op(ctx, has_captured_slots ? 0 : param_count),
-            MIR_new_int_op(ctx, has_captured_slots ? slotbuf_count : n_locals),
+            MIR_new_reg_op(ctx, r_child_slots),
+            MIR_new_int_op(ctx, child_slot_base),
+            MIR_new_int_op(ctx, child_slot_count),
             MIR_new_uint_op(ctx, (uint64_t)idx)));
         break;
       }
