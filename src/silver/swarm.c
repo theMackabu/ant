@@ -2439,14 +2439,15 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
     MIR_finish_func(ctx); MIR_finish_module(ctx); func->jit_compiling = false; return NULL;
   }
 
-  MIR_reg_t r_slotbuf = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, "slotbuf");
+  MIR_reg_t r_slotbuf = r_tmp2;
   if (has_captured_slots && slotbuf_count > 0) {
+    r_slotbuf = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, "slotbuf");
     MIR_append_insn(ctx, jit_func,
       MIR_new_insn(ctx, MIR_ALLOCA,
         MIR_new_reg_op(ctx, r_slotbuf),
         MIR_new_uint_op(ctx, (uint64_t)slotbuf_count * sizeof(ant_value_t))));
     mir_emit_fill_param_slots_from_args(ctx, jit_func, r_slotbuf, r_args, r_argc, captured_params, param_count);
-  } else mir_load_imm(ctx, jit_func, r_slotbuf, 0);
+  }
 
   bool needs_lbuf = needs_bailout || feat.needs_close_upval || has_captures;
   MIR_reg_t r_lbuf = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, "lbuf");
