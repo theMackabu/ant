@@ -70,6 +70,8 @@ static bool sv_vm_grow_stack(sv_vm_t *vm) {
   if (new_size <= vm->stack_size) return false;
   
   ant_value_t *old = vm->stack;
+  int old_size = vm->stack_size;
+  
   ant_value_t *ns = realloc(vm->stack, (size_t)new_size * sizeof(ant_value_t));
   if (!ns) return false;
   
@@ -82,10 +84,11 @@ static bool sv_vm_grow_stack(sv_vm_t *vm) {
       if (vm->frames[i].bp) vm->frames[i].bp += delta;
       if (vm->frames[i].lp) vm->frames[i].lp += delta;
     }
-    for (sv_upvalue_t *uv = vm->open_upvalues; uv; uv = uv->next) {
-      if (uv->location != &uv->closed)
-        uv->location += delta;
-    }
+    for (sv_upvalue_t *uv = vm->open_upvalues; uv; uv = uv->next) if (
+      uv->location != &uv->closed &&
+      uv->location >= old &&
+      uv->location < old + old_size
+    ) uv->location += delta;
   }
   
   return true;

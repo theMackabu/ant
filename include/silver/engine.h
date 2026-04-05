@@ -383,6 +383,13 @@ static inline bool sv_frame_is_strict(const sv_frame_t *frame) {
   return frame && frame->func && frame->func->is_strict;
 }
 
+static inline bool sv_slot_in_vm_stack(const sv_vm_t *vm, const ant_value_t *slot) {
+  return 
+    vm && vm->stack && slot &&
+    slot >= vm->stack &&
+    slot < vm->stack + vm->stack_size;
+}
+
 static inline bool sv_is_nullish_this(ant_value_t v) {
   return 
     vtype(v) == T_UNDEF || vtype(v) == T_NULL ||
