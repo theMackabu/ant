@@ -520,20 +520,8 @@ static sv_ast_t *parse_primary(P) {
   l_globalthis: { CONSUME(); return mk(N_GLOBAL_THIS); }
 
   l_ident: {
-    uint32_t ident_off = (uint32_t)TOFF;
     CONSUME();
-    sv_ast_t *id = mk_ident_from_tok(p);
-    if (LA() == TOK_ARROW) {
-      NEXT(); CONSUME();
-      sv_ast_t *fn = mk(N_FUNC);
-      fn->flags = FN_ARROW;
-      fn->src_off = ident_off;
-      sv_ast_list_push(&fn->args, id);
-      fn->body = parse_arrow_body(p);
-      fn->src_end = (uint32_t)(TOFF + TLEN);
-      return fn;
-    }
-    return id;
+    return mk_ident_from_tok(p);
   }
 
   l_paren: {
@@ -541,30 +529,15 @@ static sv_ast_t *parse_primary(P) {
     CONSUME();
     if (NEXT() == TOK_RPAREN) {
       CONSUME();
-      if (LA() == TOK_ARROW) {
-        NEXT(); CONSUME();
-        sv_ast_t *fn = mk(N_FUNC);
-        fn->flags = FN_ARROW;
-        fn->src_off = paren_off;
-        fn->body = parse_arrow_body(p);
-        fn->src_end = (uint32_t)(TOFF + TLEN);
-        return fn;
-      }
-      return mk(N_UNDEF);
+      sv_ast_t *n = mk(N_UNDEF);
+      n->flags |= FN_PAREN;
+      n->src_off = paren_off;
+      return n;
     }
     sv_ast_t *expr = parse_expr(p);
     expect(p, TOK_RPAREN);
-    if (LA() == TOK_ARROW) {
-      NEXT(); CONSUME();
-      sv_ast_t *fn = mk(N_FUNC);
-      fn->flags = FN_ARROW;
-      fn->src_off = paren_off;
-      push_arrow_params_from_expr(fn, expr);
-      fn->body = parse_arrow_body(p);
-      fn->src_end = (uint32_t)(TOFF + TLEN);
-      return fn;
-    }
     expr->flags |= FN_PAREN;
+    expr->src_off = paren_off;
     return expr;
   }
 
@@ -1186,6 +1159,24 @@ static bool is_assign_op(uint8_t tok) {
 static sv_ast_t *parse_assign(P) {
   sv_ast_t *left = parse_ternary(p);
   uint8_t op = NEXT();
+  if (op == TOK_ARROW) {
+    CONSUME();
+    sv_ast_t *fn = mk(N_FUNC);
+    fn->flags = FN_ARROW;
+    fn->src_off = left->src_off;
+    if (left->type == N_IDENT) {
+      sv_ast_list_push(&fn->args, left);
+    } else if (left->flags & FN_PAREN) {
+      if (left->type != N_UNDEF)
+        push_arrow_params_from_expr(fn, left);
+    } else {
+      SV_MKERR_TYPED(JS, JS_ERR_SYNTAX, "Malformed arrow function parameter list");
+      return mk(N_EMPTY);
+    }
+    fn->body = parse_arrow_body(p);
+    fn->src_end = (uint32_t)(TOFF + TLEN);
+    return fn;
+  }
   if (is_assign_op(op)) {
     if (left->type == N_NEW_TARGET) {
       SV_MKERR_TYPED(JS, JS_ERR_SYNTAX, "Invalid left-hand side in assignment");

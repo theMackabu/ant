@@ -680,7 +680,7 @@ compat-table/es6/arrow.lexical-this.js: OK
 compat-table/es6/arrow.new-target.js: OK
 compat-table/es6/arrow.no-line-break.js: failed
 compat-table/es6/arrow.no-prototype.js: OK
-compat-table/es6/arrow.precedence.js: failed
+compat-table/es6/arrow.precedence.js: OK
 compat-table/es6/arrow.this-call-apply.js: OK
 compat-table/es6/class.accessor-properties.js: OK
 compat-table/es6/class.anonymous.js: OK
