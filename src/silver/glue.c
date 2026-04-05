@@ -280,6 +280,7 @@ void jit_helper_close_upval(sv_vm_t *vm, uint16_t slot_idx, ant_value_t *slots, 
   
   while (*pp) {
     sv_upvalue_t *uv = *pp;
+    if (uv->location < lo) break;
     if (uv->location >= lo && uv->location < hi) {
       uv->closed = *uv->location;
       uv->location = &uv->closed;
