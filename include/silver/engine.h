@@ -403,6 +403,17 @@ static inline bool sv_vm_is_strict(const sv_vm_t *vm) {
   return false;
 }
 
+static inline sv_vm_t *sv_vm_get_active(ant_t *js) {
+  if (!js) return NULL;
+  if (js->active_async_coro && js->active_async_coro->sv_vm)
+    return js->active_async_coro->sv_vm;
+  return js->vm;
+}
+
+static inline bool sv_is_strict_context(ant_t *js) {
+  return sv_vm_is_strict(sv_vm_get_active(js));
+}
+
 static inline ant_value_t sv_vm_get_new_target(const sv_vm_t *vm, ant_t *js) {
   if (vm && vm->fp >= 0) return vm->frames[vm->fp].new_target;
   return js->new_target;

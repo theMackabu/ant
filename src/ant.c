@@ -2973,19 +2973,19 @@ static inline ant_value_t check_object_extensibility(ant_t *js, ant_value_t obj)
   if (!ptr) return js_mkundef();
 
   if (ptr->frozen) {
-    return sv_vm_is_strict(js->vm)
+    return sv_is_strict_context(js)
       ? js_mkerr(js, "cannot add property to frozen object")
       : js_false;
   }
 
   if (ptr->sealed) {
-    return sv_vm_is_strict(js->vm)
+    return sv_is_strict_context(js)
       ? js_mkerr(js, "cannot add property to sealed object")
       : js_false;
   }
 
   if (!ptr->extensible) {
-    return sv_vm_is_strict(js->vm)
+    return sv_is_strict_context(js)
       ? js_mkerr(js, "cannot add property to non-extensible object")
       : js_false;
   }
@@ -3186,7 +3186,7 @@ ant_value_t js_setprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v)
       }
     }
     
-    if (sv_vm_is_strict(js->vm))
+    if (sv_is_strict_context(js))
       return js_mkerr_typed(js, JS_ERR_TYPE,
         "Cannot create property '%.*s' on %s",
         (int)klen, key, typestr(ot));
@@ -3207,17 +3207,17 @@ ant_value_t js_setprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v)
         if (meta.has_setter) {
           ant_value_t setter = meta.setter;
           if (vtype(setter) == T_FUNC || vtype(setter) == T_CFUNC) {
-            ant_value_t result = sv_vm_call(js->vm, js, setter, obj, &v, 1, NULL, false);
+            ant_value_t result = sv_vm_call(sv_vm_get_active(js), js, setter, obj, &v, 1, NULL, false);
             if (is_err(result)) return result;
             return v;
           }
         }
         if (meta.has_getter && !meta.has_setter) {
-          if (sv_vm_is_strict(js->vm)) return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot set property which has only a getter");
+          if (sv_is_strict_context(js)) return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot set property which has only a getter");
           return v;
         }
         if (!meta.has_getter && !meta.has_setter && !meta.writable) {
-          if (sv_vm_is_strict(js->vm)) return js_mkerr(js, "assignment to read-only property");
+          if (sv_is_strict_context(js)) return js_mkerr(js, "assignment to read-only property");
           return v;
         }
         break;
@@ -3346,7 +3346,7 @@ ant_value_t js_setprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v)
       uint8_t setter_type = vtype(setter);
       if (setter_type == T_FUNC || setter_type == T_CFUNC) {
         js_error_site_t saved_errsite = js->errsite;
-        ant_value_t result = sv_vm_call(js->vm, js, setter, obj, &v, 1, NULL, false);
+        ant_value_t result = sv_vm_call(sv_vm_get_active(js), js, setter, obj, &v, 1, NULL, false);
         js->errsite = saved_errsite;
         if (is_err(result)) return result;
         return v;
@@ -3354,12 +3354,12 @@ ant_value_t js_setprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v)
     }
     
     if (desc_has_getter && !desc_has_setter) {
-      if (sv_vm_is_strict(js->vm)) return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot set property which has only a getter");
+      if (sv_is_strict_context(js)) return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot set property which has only a getter");
       return v;
     }
     
     if (!desc_writable) {
-      if (sv_vm_is_strict(js->vm)) return js_mkerr(js, "assignment to read-only property");
+      if (sv_is_strict_context(js)) return js_mkerr(js, "assignment to read-only property");
       return v;
     }
     
@@ -3440,14 +3440,14 @@ ant_value_t js_define_own_prop(ant_t *js, ant_value_t obj, const char *key, size
 
     if (has_desc) {
       if (!desc_writable && !desc_has_setter) {
-        if (sv_vm_is_strict(js->vm)) return js_mkerr(js, "assignment to read-only property");
+        if (sv_is_strict_context(js)) return js_mkerr(js, "assignment to read-only property");
         return v;
       }
       if (desc_has_setter) {
         ant_value_t setter = desc_setter;
         uint8_t setter_type = vtype(setter);
         if (setter_type == T_FUNC || setter_type == T_CFUNC) {
-          ant_value_t result = sv_vm_call(js->vm, js, setter, obj, &v, 1, NULL, false);
+          ant_value_t result = sv_vm_call(sv_vm_get_active(js), js, setter, obj, &v, 1, NULL, false);
           if (is_err(result)) return result;
           return v;
         }
@@ -3771,11 +3771,15 @@ static uintptr_t lkp_with_setter(ant_t *js, ant_value_t obj, const char *buf, si
   return 0;
 }
 
-static ant_value_t call_proto_accessor(ant_t *js, ant_value_t prim, ant_value_t accessor, bool has_accessor, ant_value_t *arg, int arg_count, bool is_setter) {
-  if (!has_accessor || (vtype(accessor) != T_FUNC && vtype(accessor) != T_CFUNC)) return js_mkundef();
+static ant_value_t call_proto_accessor(
+  ant_t *js, ant_value_t prim, ant_value_t accessor, bool has_accessor,
+  ant_value_t *arg, int arg_count, bool is_setter
+) {
+  if (!has_accessor || (vtype(accessor) != T_FUNC && vtype(accessor) != T_CFUNC)) 
+    return js_mkundef();
   
   js_error_site_t saved_errsite = js->errsite;
-  ant_value_t result = sv_vm_call(js->vm, js, accessor, prim, arg, arg_count, NULL, false);
+  ant_value_t result = sv_vm_call(sv_vm_get_active(js), js, accessor, prim, arg, arg_count, NULL, false);
   
   bool had_throw = js->thrown_exists;
   ant_value_t thrown = js->thrown_value;
@@ -4305,11 +4309,11 @@ static ant_value_t check_frozen_sealed(ant_t *js, ant_value_t obj, const char *a
   if (!ptr) return js_mkundef();
 
   if (ptr->frozen) {
-    if (sv_vm_is_strict(js->vm)) return js_mkerr(js, "cannot %s property of frozen object", action);
+    if (sv_is_strict_context(js)) return js_mkerr(js, "cannot %s property of frozen object", action);
     return js_false;
   }
   if (ptr->sealed) {
-    if (sv_vm_is_strict(js->vm)) return js_mkerr(js, "cannot %s property of sealed object", action);
+    if (sv_is_strict_context(js)) return js_mkerr(js, "cannot %s property of sealed object", action);
     return js_false;
   }
   return js_mkundef();
@@ -4329,7 +4333,7 @@ ant_value_t js_delete_prop(ant_t *js, ant_value_t obj, const char *key, size_t l
   if (vtype(err) != T_UNDEF) return err;
 
   if (array_obj_ptr(original_obj) && is_length_key(key, len)) {
-    if (sv_vm_is_strict(js->vm)) return js_mkerr_typed(js, JS_ERR_TYPE, "cannot delete non-configurable property");
+    if (sv_is_strict_context(js)) return js_mkerr_typed(js, JS_ERR_TYPE, "cannot delete non-configurable property");
     return js_false;
   }
 
@@ -4356,14 +4360,14 @@ ant_value_t js_delete_prop(ant_t *js, ant_value_t obj, const char *key, size_t l
 
   uint8_t attrs = ant_shape_get_attrs(ptr->shape, (uint32_t)shape_slot);
   if ((attrs & ANT_PROP_ATTR_CONFIGURABLE) == 0) {
-    if (sv_vm_is_strict(js->vm)) return js_mkerr_typed(js, JS_ERR_TYPE, "cannot delete non-configurable property");
+    if (sv_is_strict_context(js)) return js_mkerr_typed(js, JS_ERR_TYPE, "cannot delete non-configurable property");
     return js_false;
   }
 
   if (ptr->is_exotic) {
     descriptor_entry_t *desc = lookup_descriptor(obj, key, len);
     if (desc && !desc->configurable) {
-      if (sv_vm_is_strict(js->vm)) return js_mkerr_typed(js, JS_ERR_TYPE, "cannot delete non-configurable property");
+      if (sv_is_strict_context(js)) return js_mkerr_typed(js, JS_ERR_TYPE, "cannot delete non-configurable property");
       return js_false;
     }
   }
@@ -4396,7 +4400,7 @@ ant_value_t js_delete_sym_prop(ant_t *js, ant_value_t obj, ant_value_t sym) {
 
   uint8_t attrs = ant_shape_get_attrs(ptr->shape, (uint32_t)shape_slot);
   if ((attrs & ANT_PROP_ATTR_CONFIGURABLE) == 0) {
-    if (sv_vm_is_strict(js->vm)) return js_mkerr_typed(js, JS_ERR_TYPE, "cannot delete non-configurable property");
+    if (sv_is_strict_context(js)) return js_mkerr_typed(js, JS_ERR_TYPE, "cannot delete non-configurable property");
     return js_false;
   }
 
@@ -11604,13 +11608,6 @@ static const char *js_get_module_ctx_filename(ant_t *js, ant_value_t module_ctx)
   return js_getstr(js, filename, NULL);
 }
 
-static sv_vm_t *js_get_active_vm(ant_t *js) {
-  if (!js) return NULL;
-  if (js->active_async_coro && js->active_async_coro->sv_vm)
-    return js->active_async_coro->sv_vm;
-  return js->vm;
-}
-
 static ant_value_t js_module_ctx_from_func(ant_value_t func) {
   if (vtype(func) != T_FUNC) return js_mkundef();
   ant_value_t module_ctx = get_slot(js_func_obj(func), SLOT_MODULE_CTX);
@@ -11618,7 +11615,7 @@ static ant_value_t js_module_ctx_from_func(ant_value_t func) {
 }
 
 static ant_value_t js_get_execution_module_ctx(ant_t *js) {
-  sv_vm_t *vm = js_get_active_vm(js);
+  sv_vm_t *vm = sv_vm_get_active(js);
   if (vm && vm->fp >= 0) {
     ant_value_t module_ctx = js_module_ctx_from_func(vm->frames[vm->fp].callee);
     if (is_object_type(module_ctx)) return module_ctx;
@@ -13330,7 +13327,7 @@ static ant_value_t js_eval_bytecode_mode(ant_t *js, const char *buf, size_t len,
 
   if (sv_dump_bytecode_unlikely) sv_disasm(js, func, js->filename);
   if (func->is_tla) result = sv_execute_entry_tla(js, func, js->this_val);
-  else result = sv_execute_entry(js_get_active_vm(js), func, js->this_val, NULL, 0);
+  else result = sv_execute_entry(sv_vm_get_active(js), func, js->this_val, NULL, 0);
 
   js->this_val = saved_this;
   return result;
