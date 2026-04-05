@@ -248,6 +248,57 @@ static inline ant_value_t sv_execute_entry_common(
   return result;
 }
 
+#ifdef ANT_JIT
+static inline ant_value_t sv_try_direct_closure_jit(
+  sv_vm_t *vm, ant_t *js, sv_func_t *caller_func, uint8_t *caller_ip, sv_frame_t *caller_frame,
+  sv_closure_t *closure, ant_value_t jit_this, ant_value_t *call_args, int call_argc
+) {
+  sv_func_t *callee = closure->func;
+  if (!callee) return SV_JIT_RETRY_INTERP;
+
+  if (caller_func && caller_func->type_feedback && caller_ip)
+    sv_tfb_record_call_target(caller_func, (int)(caller_ip - caller_func->code), callee);
+
+  if (callee->jit_code) {
+    if (caller_frame && caller_ip) caller_frame->ip = caller_ip + 3;
+    sv_jit_enter(js);
+    ant_value_t jit_result = ((sv_jit_func_t)callee->jit_code)(
+      vm, jit_this, call_args, call_argc, closure);
+    sv_jit_leave(js);
+    if (sv_is_jit_bailout(jit_result)) {
+      sv_jit_on_bailout(callee);
+      return SV_JIT_RETRY_INTERP;
+    }
+    return jit_result;
+  }
+
+  if (callee->is_generator) return SV_JIT_RETRY_INTERP;
+
+  uint32_t cc = ++callee->call_count;
+  if (__builtin_expect(cc == SV_TFB_ALLOC_THRESHOLD, 0))
+    sv_tfb_ensure(callee);
+  if (cc <= SV_JIT_THRESHOLD) return SV_JIT_RETRY_INTERP;
+
+  sv_jit_func_t jit_fn = sv_jit_compile(js, callee, closure);
+  if (!jit_fn) {
+    callee->call_count = 0;
+    callee->back_edge_count = 0;
+    return SV_JIT_RETRY_INTERP;
+  }
+
+  callee->jit_code = (void *)jit_fn;
+  if (caller_frame && caller_ip) caller_frame->ip = caller_ip + 3;
+  sv_jit_enter(js);
+  ant_value_t jit_result = jit_fn(vm, jit_this, call_args, call_argc, closure);
+  sv_jit_leave(js);
+  if (sv_is_jit_bailout(jit_result)) {
+    sv_jit_on_bailout(callee);
+    return SV_JIT_RETRY_INTERP;
+  }
+  return jit_result;
+}
+#endif
+
 ant_value_t sv_execute_entry(
   sv_vm_t *vm, sv_func_t *func, ant_value_t this_val, ant_value_t *args, int argc
 ) {
@@ -716,7 +767,6 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     DISPATCH();
   }
 
-  // TODO: make the methods below DRY
   L_CALL: {
     uint16_t call_argc = sv_get_u16(ip + 1);
     ant_value_t *call_args = &vm->stack[vm->sp - call_argc];
@@ -734,56 +784,17 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
         if (closure->func->is_async) goto call_fallback;
         #ifdef ANT_JIT
         {
-          sv_func_t *callee = closure->func;
-          if (func->type_feedback)
-            sv_tfb_record_call_target(func, (int)(ip - func->code), callee);
-          if (callee->jit_code) {
-            ant_value_t jit_this = (
-              callee->is_arrow || vtype(closure->bound_this) != T_UNDEF)
-              ? closure->bound_this : js_mkundef();
-            frame->ip = ip + 3;
-            sv_jit_enter(js);
-            ant_value_t jit_result = ((sv_jit_func_t)callee->jit_code)(
-              vm, jit_this, call_args, (int)call_argc, closure);
-            sv_jit_leave(js);
-            if (sv_is_jit_bailout(jit_result)) {
-              sv_jit_on_bailout(callee);
-              goto call_fallback;
-            }
+          ant_value_t jit_this = (
+            closure->func->is_arrow || vtype(closure->bound_this) != T_UNDEF)
+            ? closure->bound_this : js_mkundef();
+          ant_value_t jit_result = sv_try_direct_closure_jit(
+            vm, js, func, ip, frame, closure, jit_this, call_args, (int)call_argc);
+          if (jit_result != SV_JIT_RETRY_INTERP) {
             vm->sp -= call_argc + 1;
             if (is_err(jit_result)) { sv_err = jit_result; goto sv_throw; }
             vm->stack[vm->sp++] = jit_result;
             ip = frame->ip;
             DISPATCH();
-          }
-          if (!callee->is_generator) {
-            uint32_t cc = ++callee->call_count;
-            if (__builtin_expect(cc == SV_TFB_ALLOC_THRESHOLD, 0))
-              sv_tfb_ensure(callee);
-            if (cc > SV_JIT_THRESHOLD) {
-            sv_jit_func_t jit_fn = sv_jit_compile(js, callee, closure);
-            if (jit_fn) {
-              callee->jit_code = (void *)jit_fn;
-              ant_value_t jit_this = (
-                callee->is_arrow || vtype(closure->bound_this) != T_UNDEF)
-                 ? closure->bound_this : js_mkundef();
-              frame->ip = ip + 3;
-              sv_jit_enter(js);
-              ant_value_t jit_result = jit_fn(vm, jit_this, call_args, (int)call_argc, closure);
-              sv_jit_leave(js);
-              if (sv_is_jit_bailout(jit_result)) {
-                sv_jit_on_bailout(callee);
-                goto call_fallback;
-              }
-              vm->sp -= call_argc + 1;
-              if (is_err(jit_result)) { sv_err = jit_result; goto sv_throw; }
-              vm->stack[vm->sp++] = jit_result;
-              ip = frame->ip;
-              DISPATCH();
-            } else {
-              callee->call_count = 0;
-              callee->back_edge_count = 0;
-            }}
           }
         }
         #endif
@@ -861,54 +872,17 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
         if (closure->func->is_async) goto call_method_fallback;
         #ifdef ANT_JIT
         {
-          sv_func_t *callee = closure->func;
-          if (callee->jit_code) {
-            ant_value_t jit_this = (
-              callee->is_arrow || vtype(closure->bound_this) != T_UNDEF)
-              ? closure->bound_this : call_this;
-            frame->ip = ip + 3;
-            sv_jit_enter(js);
-            ant_value_t jit_result = ((sv_jit_func_t)callee->jit_code)(
-              vm, jit_this, call_args, (int)call_argc, closure);
-            sv_jit_leave(js);
-            if (sv_is_jit_bailout(jit_result)) {
-              sv_jit_on_bailout(callee);
-              goto call_method_fallback;
-            }
+          ant_value_t jit_this = (
+            closure->func->is_arrow || vtype(closure->bound_this) != T_UNDEF)
+            ? closure->bound_this : call_this;
+          ant_value_t jit_result = sv_try_direct_closure_jit(
+            vm, js, func, ip, frame, closure, jit_this, call_args, (int)call_argc);
+          if (jit_result != SV_JIT_RETRY_INTERP) {
             vm->sp -= call_argc + 2;
             if (is_err(jit_result)) { sv_err = jit_result; goto sv_throw; }
             vm->stack[vm->sp++] = jit_result;
             ip = frame->ip;
             DISPATCH();
-          }
-          if (!callee->is_generator) {
-            uint32_t cc = ++callee->call_count;
-            if (__builtin_expect(cc == SV_TFB_ALLOC_THRESHOLD, 0))
-              sv_tfb_ensure(callee);
-            if (cc > SV_JIT_THRESHOLD) {
-            sv_jit_func_t jit_fn = sv_jit_compile(js, callee, closure);
-            if (jit_fn) {
-              callee->jit_code = (void *)jit_fn;
-              ant_value_t jit_this = (
-                callee->is_arrow || vtype(closure->bound_this) != T_UNDEF)
-                ? closure->bound_this : call_this;
-              frame->ip = ip + 3;
-              sv_jit_enter(js);
-              ant_value_t jit_result = jit_fn(vm, jit_this, call_args, (int)call_argc, closure);
-              sv_jit_leave(js);
-              if (sv_is_jit_bailout(jit_result)) {
-                sv_jit_on_bailout(callee);
-                goto call_method_fallback;
-              }
-              vm->sp -= call_argc + 2;
-              if (is_err(jit_result)) { sv_err = jit_result; goto sv_throw; }
-              vm->stack[vm->sp++] = jit_result;
-              ip = frame->ip;
-              DISPATCH();
-            } else {
-              callee->call_count = 0;
-              callee->back_edge_count = 0;
-            }}
           }
         }
         #endif
@@ -1052,7 +1026,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     ant_value_t *call_args = &vm->stack[vm->sp - call_argc];
     ant_value_t call_func = vm->stack[vm->sp - call_argc - 1];
     sv_closure_t *closure = js_func_closure(call_func);
-    if (frame->bp) sv_close_upvalues_from_slot(vm, frame->bp);
+    if (frame->bp && vm->open_upvalues) sv_close_upvalues_from_slot(vm, frame->bp);
     vm->sp = frame->prev_sp;
     int arg_slots = (
       (int)call_argc > closure->func->param_count)
@@ -1329,10 +1303,11 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     if (js->vm_exec_depth > 0) js->vm_exec_depth--;
     return vm_result;
   }
+  if (vm->open_upvalues) {
   for (int f = vm->fp; f >= entry_fp; f--) {
     ant_value_t *drop_bp = vm->frames[f].bp;
     if (drop_bp) sv_close_upvalues_from_slot(vm, drop_bp);
-  }
+  }}
   vm->fp = entry_fp;
   vm->sp = vm->frames[entry_fp].prev_sp;
   vm->handler_depth = vm->frames[entry_fp].handler_base;
