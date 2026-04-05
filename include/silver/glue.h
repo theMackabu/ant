@@ -85,9 +85,9 @@ ant_value_t jit_helper_get_field(
 );
 
 ant_value_t jit_helper_closure(
-  sv_vm_t *vm, ant_t *js,
-  sv_closure_t *parent_closure, ant_value_t this_val,
-  ant_value_t *slots, int slot_count, uint32_t const_idx
+  sv_vm_t *vm, ant_t *js, sv_closure_t *parent_closure,
+  ant_value_t this_val, ant_value_t *slots,
+  int slot_base, int slot_count, uint32_t const_idx
 );
 
 ant_value_t jit_helper_bailout_resume(

@@ -205,9 +205,9 @@ static inline sv_upvalue_t *jit_make_undef_upvalue(void) {
 }
 
 ant_value_t jit_helper_closure(
-  sv_vm_t *vm, ant_t *js,
-  sv_closure_t *parent_closure, ant_value_t this_val,
-  ant_value_t *slots, int slot_count, uint32_t const_idx
+  sv_vm_t *vm, ant_t *js, sv_closure_t *parent_closure,
+  ant_value_t this_val, ant_value_t *slots,
+  int slot_base, int slot_count, uint32_t const_idx
 ) {
   sv_func_t *parent_func = parent_closure->func;
   sv_func_t *child = (sv_func_t *)(uintptr_t)vdata(parent_func->constants[const_idx]);
@@ -231,7 +231,7 @@ ant_value_t jit_helper_closure(
       continue;
     }
     
-    int idx = (int)desc->index;
+    int idx = (int)desc->index - slot_base;
     if (!slots || idx < 0 || idx >= slot_count) {
       closure->upvalues[i] = jit_make_undef_upvalue();
       continue;

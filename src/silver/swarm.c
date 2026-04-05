@@ -353,18 +353,18 @@ static void mir_emit_fill_param_slots_from_args(
 static void mir_emit_close_captured_slots(
   MIR_context_t ctx, MIR_item_t fn,
   MIR_item_t close_upval_proto, MIR_item_t imp_close_upval,
-  MIR_reg_t r_vm, MIR_reg_t r_slotbuf,
-  int captured_slot_count
+  MIR_reg_t r_vm, MIR_reg_t r_slots,
+  int slot_count
 ) {
-  if (captured_slot_count <= 0) return;
+  if (slot_count <= 0) return;
   MIR_append_insn(ctx, fn,
     MIR_new_call_insn(ctx, 6,
       MIR_new_ref_op(ctx, close_upval_proto),
       MIR_new_ref_op(ctx, imp_close_upval),
       MIR_new_reg_op(ctx, r_vm),
       MIR_new_uint_op(ctx, 0),
-      MIR_new_reg_op(ctx, r_slotbuf),
-      MIR_new_int_op(ctx, captured_slot_count)));
+      MIR_new_reg_op(ctx, r_slots),
+      MIR_new_int_op(ctx, slot_count)));
 }
 
 static inline void mir_emit_self_tail(
@@ -2022,12 +2022,13 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 
   MIR_type_t cl_ret = MIR_JSVAL;
   MIR_item_t closure_proto = MIR_new_proto(ctx, "closure_proto",
-    1, &cl_ret, 7,
+    1, &cl_ret, 8,
     MIR_T_I64,  "vm",
     MIR_T_I64,  "js",
     MIR_T_P,    "parent",
     MIR_JSVAL,  "this_val",
     MIR_T_P,    "slots",
+    MIR_T_I32,  "slot_base",
     MIR_T_I32,  "slot_count",
     MIR_T_I32,  "const_idx");
 
@@ -2367,7 +2368,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
     for (int i = 0; i < n_locals; i++)
       if (captured_locals[i]) { has_captures = true; break; }
   }
-  bool has_captured_slots = has_captured_params || has_captures;
+  bool has_captured_slots = has_captured_params;
   int captured_slot_count = param_count + n_locals;
 
   if (has_captured_params && needs_bailout) {
@@ -2393,7 +2394,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           MIR_new_uint_op(ctx, mkval(T_UNDEF, 0))));
   } else mir_load_imm(ctx, jit_func, r_slotbuf, 0);
 
-  bool needs_lbuf = needs_bailout || feat.needs_close_upval || has_captured_slots;
+  bool needs_lbuf = needs_bailout || feat.needs_close_upval || has_captures || has_captured_slots;
   MIR_reg_t r_lbuf = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, "lbuf");
   if (has_captured_slots && n_locals > 0) {
     MIR_append_insn(ctx, jit_func,
@@ -4937,6 +4938,10 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           mir_emit_close_captured_slots(ctx, jit_func,
             close_upval_proto, imp_close_upval,
             r_vm, r_slotbuf, captured_slot_count);
+        else if (has_captures)
+          mir_emit_close_captured_slots(ctx, jit_func,
+            close_upval_proto, imp_close_upval,
+            r_vm, r_lbuf, n_locals);
         MIR_append_insn(ctx, jit_func,
           MIR_new_ret_insn(ctx, 1, MIR_new_reg_op(ctx, ret_val)));
         break;
@@ -4947,6 +4952,10 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           mir_emit_close_captured_slots(ctx, jit_func,
             close_upval_proto, imp_close_upval,
             r_vm, r_slotbuf, captured_slot_count);
+        else if (has_captures)
+          mir_emit_close_captured_slots(ctx, jit_func,
+            close_upval_proto, imp_close_upval,
+            r_vm, r_lbuf, n_locals);
         MIR_append_insn(ctx, jit_func,
           MIR_new_ret_insn(ctx, 1,
             MIR_new_uint_op(ctx, mkval(T_UNDEF, 0))));
@@ -7083,7 +7092,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
                 MIR_new_reg_op(ctx, local_regs[i])));
         }
         MIR_append_insn(ctx, jit_func,
-          MIR_new_call_insn(ctx, 10,
+          MIR_new_call_insn(ctx, 11,
             MIR_new_ref_op(ctx, closure_proto),
             MIR_new_ref_op(ctx, imp_closure),
             MIR_new_reg_op(ctx, dst),
@@ -7091,8 +7100,9 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_reg_op(ctx, r_js),
             MIR_new_reg_op(ctx, r_closure),
             MIR_new_reg_op(ctx, r_this),
-            MIR_new_reg_op(ctx, r_slotbuf),
-            MIR_new_int_op(ctx, captured_slot_count),
+            MIR_new_reg_op(ctx, has_captured_slots ? r_slotbuf : r_lbuf),
+            MIR_new_int_op(ctx, has_captured_slots ? 0 : param_count),
+            MIR_new_int_op(ctx, has_captured_slots ? captured_slot_count : n_locals),
             MIR_new_uint_op(ctx, (uint64_t)idx)));
         break;
       }
