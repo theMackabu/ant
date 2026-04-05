@@ -24,6 +24,7 @@
 
 #include "esm/remote.h"
 #include "esm/loader.h"
+#include "esm/exports.h"
 #include "esm/builtin_bundle.h"
 
 #include "silver/lexer.h"
@@ -13312,6 +13313,11 @@ static ant_value_t js_eval_bytecode_mode(ant_t *js, const char *buf, size_t len,
   if (!program) {
     if (js->thrown_exists) return mkval(T_ERR, 0);
     return js_mkerr_typed(js, JS_ERR_INTERNAL | JS_ERR_NO_STACK, "Unexpected parse error");
+  }
+
+  if (mode == SV_COMPILE_MODULE) {
+    ant_value_t ns = js_module_eval_active_ns(js);
+    if (is_object_type(ns)) esm_predeclare_exports(js, program, ns);
   }
 
   sv_func_t *func = sv_compile(js, program, mode, buf, (ant_offset_t)len);
