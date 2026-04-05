@@ -170,6 +170,7 @@ static ant_value_t esm_default_export_or_namespace(ant_t *js, ant_value_t ns) {
 static ant_value_t esm_make_namespace_object(ant_t *js) {
   ant_value_t ns = js_mkobj(js);
   js_set_slot(ns, SLOT_BRAND, js_mknum(BRAND_MODULE_NAMESPACE));
+  js_set_slot(ns, SLOT_MODULE_LOADING, js_true);
   return ns;
 }
 
@@ -190,6 +191,7 @@ static ant_value_t esm_complete_namespace_module(ant_t *js, esm_module_t *mod, a
   mod->default_export = esm_default_export_or_namespace(js, ns);
   mod->is_loaded = true;
   mod->is_loading = false;
+  js_set_slot(ns, SLOT_MODULE_LOADING, js_mkundef());
   return ns;
 }
 

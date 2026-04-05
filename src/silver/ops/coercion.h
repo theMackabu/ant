@@ -140,12 +140,16 @@ static inline ant_value_t sv_op_import_named(
 
   ant_value_t ns = vm->stack[vm->sp - 1];
   sv_atom_t *a = &func->atoms[atom_idx];
-  if (!sv_module_namespace_has_export(js, ns, a->str, a->len))
-    return sv_missing_named_export_error(js, ns, a->str, a->len);
+
+  if (
+    !sv_module_namespace_has_export(js, ns, a->str, a->len) &&
+    js_get_slot(ns, SLOT_MODULE_LOADING) != js_true
+  ) return sv_missing_named_export_error(js, ns, a->str, a->len);
 
   ant_value_t value = js_get(js, ns, a->str);
   if (is_err(value)) return value;
   vm->stack[vm->sp - 1] = value;
+  
   return tov(0);
 }
 
