@@ -17,6 +17,7 @@
 #include "errors.h"
 #include "internal.h"
 
+#include "gc/roots.h"
 #include "gc/modules.h"
 #include "net/listener.h"
 #include "silver/engine.h"
@@ -711,8 +712,13 @@ static ant_value_t js_net_socket_write(ant_t *js, ant_value_t *args, int nargs) 
     return js_false;
   }
 
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, parsed.callback);
   net_socket_sync_state(socket);
+  
   if (is_callable(parsed.callback)) net_call_value(js, parsed.callback, js_mkundef(), NULL, 0);
+  GC_ROOT_RESTORE(js, root_mark);
+  
   return js_true;
 }
 
@@ -724,12 +730,21 @@ static ant_value_t js_net_socket_end(ant_t *js, ant_value_t *args, int nargs) {
   if (!socket) return js->thrown_value;
   if (!socket->conn) return result;
   if (!net_parse_write_args(js, args, nargs, &parsed)) return parsed.error;
+  
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, parsed.callback);
+  
   if (parsed.len > 0) {
-    ant_value_t write_result = js_net_socket_write(js, args, nargs);
-    if (is_err(write_result)) return write_result;
-  }
+  ant_value_t write_result = js_net_socket_write(js, args, nargs);
+  if (is_err(write_result)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return write_result;
+  }}
+  
   ant_conn_shutdown(socket->conn);
   if (is_callable(parsed.callback)) net_call_value(js, parsed.callback, js_mkundef(), NULL, 0);
+  GC_ROOT_RESTORE(js, root_mark);
+  
   return result;
 }
 
@@ -819,8 +834,14 @@ static ant_value_t js_net_server_listen(ant_t *js, ant_value_t *args, int nargs)
   callbacks.on_conn_close = net_server_on_conn_close;
   callbacks.on_listener_close = net_server_on_listener_close;
 
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, parsed.callback);
+  
   ant_value_t bind_result = net_server_bind_listener(js, server, &parsed, &callbacks);
-  if (is_err(bind_result)) return bind_result;
+  if (is_err(bind_result)) {
+    GC_ROOT_RESTORE(js, root_mark);
+    return bind_result;
+  }
 
   server->port = ant_listener_port(&server->listener);
   server->listening = true;
@@ -830,6 +851,8 @@ static ant_value_t js_net_server_listen(ant_t *js, ant_value_t *args, int nargs)
 
   if (is_callable(parsed.callback)) net_call_value(js, parsed.callback, js_mkundef(), NULL, 0);
   net_emit(js, server->obj, "listening", NULL, 0);
+  GC_ROOT_RESTORE(js, root_mark);
+  
   return js_getthis(js);
 }
 

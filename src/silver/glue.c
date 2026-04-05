@@ -173,11 +173,6 @@ int64_t jit_helper_is_truthy(ant_t *js, ant_value_t v) {
   return (int64_t)js_truthy(js, v);
 }
 
-sv_closure_t *jit_helper_get_closure(ant_value_t v) {
-  if (vtype(v) != T_FUNC) return NULL;
-  return js_func_closure(v);
-}
-
 static inline void jit_set_error_site_from_func(ant_t *js, sv_func_t *func, int32_t bc_off) {
   if (!func) return;
   js_set_error_site_from_bc(js, func, (int)bc_off, func->filename);
@@ -202,16 +197,17 @@ ant_value_t jit_helper_to_propkey(sv_vm_t *vm, ant_t *js, ant_value_t v) {
   return coerce_to_str(js, v);
 }
 
-uint64_t jit_helper_vtype(ant_value_t v) { return vtype(v); }
-double   jit_helper_tod(ant_value_t v)   { return tod(v); }
-ant_value_t  jit_helper_tov(double d)    { return tov(d); }
-ant_value_t  jit_helper_mkbool(int b)    { return js_bool(b); }
+static inline sv_upvalue_t *jit_make_undef_upvalue(void) {
+  sv_upvalue_t *uv = js_upvalue_alloc();
+  uv->closed = js_mkundef();
+  uv->location = &uv->closed;
+  return uv;
+}
 
 ant_value_t jit_helper_closure(
   sv_vm_t *vm, ant_t *js,
   sv_closure_t *parent_closure, ant_value_t this_val,
-  ant_value_t *args, int argc,
-  uint32_t const_idx, ant_value_t *locals, int n_locals
+  ant_value_t *slots, int slot_count, uint32_t const_idx
 ) {
   sv_func_t *parent_func = parent_closure->func;
   sv_func_t *child = (sv_func_t *)(uintptr_t)vdata(parent_func->constants[const_idx]);
@@ -225,31 +221,23 @@ ant_value_t jit_helper_closure(
   closure->super_val = js_mkundef();
   closure->call_flags = child->is_arrow ? SV_CALL_IS_ARROW : 0;
 
-  // TODO: reduce nesting
-  if (child->upvalue_count > 0) {
+  if (child->upvalue_count > 0)
     closure->upvalues = calloc((size_t)child->upvalue_count, sizeof(sv_upvalue_t *));
-    for (int i = 0; i < child->upvalue_count; i++) {
-      sv_upval_desc_t *desc = &child->upval_descs[i];
-      if (desc->is_local) {
-        int idx = (int)desc->index;
-        if (idx < parent_func->param_count) {
-          sv_upvalue_t *uv = js_upvalue_alloc();
-          uv->closed = (idx < argc && args) ? args[idx] : js_mkundef();
-          uv->location = &uv->closed;
-          closure->upvalues[i] = uv;
-        } else {
-          int li = idx - parent_func->param_count;
-          if (li >= 0 && li < n_locals && locals) {
-            closure->upvalues[i] = sv_capture_upvalue(vm, &locals[li]);
-          } else {
-            sv_upvalue_t *uv = js_upvalue_alloc();
-            uv->closed = js_mkundef();
-            uv->location = &uv->closed;
-            closure->upvalues[i] = uv;
-          }
-        }
-      } else closure->upvalues[i] = parent_closure->upvalues[desc->index];
+
+  for (int i = 0; i < child->upvalue_count; i++) {
+    sv_upval_desc_t *desc = &child->upval_descs[i];
+    if (!desc->is_local) {
+      closure->upvalues[i] = parent_closure->upvalues[desc->index];
+      continue;
     }
+    
+    int idx = (int)desc->index;
+    if (!slots || idx < 0 || idx >= slot_count) {
+      closure->upvalues[i] = jit_make_undef_upvalue();
+      continue;
+    }
+    
+    closure->upvalues[i] = sv_capture_upvalue(vm, &slots[idx]);
   }
 
   ant_value_t func_obj = mkobj(js, 0);
@@ -282,12 +270,12 @@ ant_value_t jit_helper_closure(
   return func_val;
 }
 
-void jit_helper_close_upval(sv_vm_t *vm, uint16_t slot_idx, ant_value_t *locals, int n_locals) {
-  (void)slot_idx; // TODO: use value
-  if (!locals || n_locals <= 0) return;
+void jit_helper_close_upval(sv_vm_t *vm, uint16_t slot_idx, ant_value_t *slots, int slot_count) {
+  if (!slots || slot_count <= 0) return;
+  if ((int)slot_idx >= slot_count) return;
 
-  ant_value_t *lo = locals;
-  ant_value_t *hi = locals + n_locals;
+  ant_value_t *lo = slots + slot_idx;
+  ant_value_t *hi = slots + slot_count;
   sv_upvalue_t **pp = &vm->open_upvalues;
   
   while (*pp) {
@@ -296,7 +284,8 @@ void jit_helper_close_upval(sv_vm_t *vm, uint16_t slot_idx, ant_value_t *locals,
       uv->closed = *uv->location;
       uv->location = &uv->closed;
       *pp = uv->next;
-    } else pp = &uv->next;
+    } 
+    else pp = &uv->next;
   }
 }
 
@@ -328,7 +317,6 @@ void jit_helper_define_field(
   sv_vm_t *vm, ant_t *js, ant_value_t obj,
   ant_value_t val, const char *str, uint32_t len
 ) {
-  (void)vm;
   if (!sv_try_define_field_fast(js, obj, str, val))
     js_define_own_prop(js, obj, str, len, val);
 }

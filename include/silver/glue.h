@@ -4,15 +4,8 @@
 #ifdef ANT_JIT
 #include "silver/engine.h"
 
-double jit_helper_tod(ant_value_t v);
-uint64_t jit_helper_vtype(ant_value_t v);
-int64_t jit_helper_is_truthy(ant_t *js, ant_value_t v);
-
-ant_value_t jit_helper_tov(double d);
-ant_value_t jit_helper_mkbool(int b);
-
 bool jit_helper_stack_overflow(ant_t *js);
-sv_closure_t *jit_helper_get_closure(ant_value_t v);
+int64_t jit_helper_is_truthy(ant_t *js, ant_value_t v);
 
 ant_value_t jit_helper_add(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r);
 ant_value_t jit_helper_sub(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r);
@@ -94,8 +87,7 @@ ant_value_t jit_helper_get_field(
 ant_value_t jit_helper_closure(
   sv_vm_t *vm, ant_t *js,
   sv_closure_t *parent_closure, ant_value_t this_val,
-  ant_value_t *args, int argc,
-  uint32_t const_idx, ant_value_t *locals, int n_locals
+  ant_value_t *slots, int slot_count, uint32_t const_idx
 );
 
 ant_value_t jit_helper_bailout_resume(
