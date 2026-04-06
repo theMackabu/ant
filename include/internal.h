@@ -221,6 +221,13 @@ struct ant_isolate_t {
     size_t cap;
   } pending_rejections;
 
+  struct {
+    uintptr_t *cfunc_ptr;
+    ant_value_t *promoted;
+    uint8_t len;
+    uint8_t cap;
+  } cfunc_promote_cache;
+
   bool owns_mem;
   bool fatal_error;
   bool thrown_exists;
@@ -483,6 +490,17 @@ static inline void js_set_module_default(ant_t *js, ant_value_t lib, ant_value_t
   js_set(js, lib, "default", ctor_fn);
   js_set(js, ctor_fn, "default", ctor_fn);
   js_set_slot_wb(js, lib, SLOT_DEFAULT, ctor_fn);
+}
+
+ant_value_t js_cfunc_promote(ant_t *js, ant_value_t cfunc);
+
+static inline ant_value_t js_cfunc_lookup_promoted(ant_t *js, ant_value_t cfunc) {
+  uintptr_t ptr = vdata(cfunc);
+  for (uint8_t i = 0; i < js->cfunc_promote_cache.len; i++) {
+    if (js->cfunc_promote_cache.cfunc_ptr[i] == ptr)
+      return js->cfunc_promote_cache.promoted[i];
+  }
+  return cfunc;
 }
 
 static inline ant_value_t js_make_ctor(ant_t *js, ant_cfunc_t fn, ant_value_t proto, const char *name, size_t nlen) {

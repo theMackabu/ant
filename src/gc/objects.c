@@ -472,6 +472,9 @@ static void gc_mark_roots(ant_t *js) {
   for (size_t i = 0; i < js->pending_rejections.len; i++)
     gc_mark_value(js, js->pending_rejections.items[i]);
 
+  for (uint8_t i = 0; i < js->cfunc_promote_cache.len; i++)
+    gc_mark_value(js, js->cfunc_promote_cache.promoted[i]);
+
   gc_visit_roots(js, gc_mark_value);
   gc_mark_timers(js, gc_mark_value);
   gc_mark_ffi(js, gc_mark_value);
