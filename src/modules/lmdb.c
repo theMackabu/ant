@@ -298,19 +298,17 @@ static bool js_to_mdb_val(ant_t *js, ant_value_t input, MDB_val *out) {
   }
 
   if (vtype(input) == T_OBJ) {
-    ant_value_t slot = js_get_slot(input, SLOT_BUFFER);
-
-    if (vtype(slot) == T_TYPEDARRAY) {
-      TypedArrayData *ta = (TypedArrayData *)js_gettypedarray(slot);
-      if (!ta || !ta->buffer || !ta->buffer->data) return false;
+    TypedArrayData *ta = buffer_get_typedarray_data(input);
+    if (ta) {
+      if (!ta->buffer || !ta->buffer->data) return false;
       out->mv_data = (void *)(ta->buffer->data + ta->byte_offset);
       out->mv_size = ta->byte_length;
       return true;
     }
-
-    if (vtype(slot) == T_NUM) {
-      ArrayBufferData *ab = (ArrayBufferData *)(uintptr_t)js_getnum(slot);
-      if (!ab || !ab->data) return false;
+    
+    ArrayBufferData *ab = buffer_get_arraybuffer_data(input);
+    if (ab) {
+      if (!ab->data) return false;
       out->mv_data = (void *)ab->data;
       out->mv_size = ab->length;
       return true;

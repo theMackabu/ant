@@ -2868,8 +2868,7 @@ static void on_read_fd_complete(uv_fs_t *uv_req) {
   ssize_t bytes_read = uv_req->result;
 
   if (req->data && bytes_read > 0) {
-    ant_value_t ta_val = js_get_slot(req->target_buffer, SLOT_BUFFER);
-    TypedArrayData *ta = (TypedArrayData *)js_gettypedarray(ta_val);
+    TypedArrayData *ta = buffer_get_typedarray_data(req->target_buffer);
     if (ta && ta->buffer && ta->buffer->data) {
       uint8_t *dest = ta->buffer->data + ta->byte_offset + req->buf_offset;
       memcpy(dest, req->data, (size_t)bytes_read);
@@ -2897,8 +2896,7 @@ static ant_value_t builtin_fs_read_fd(ant_t *js, ant_value_t *args, int nargs) {
   int fd = (int)js_getnum(args[0]);
 
   ant_value_t buf_arg = args[1];
-  ant_value_t ta_data_val = js_get_slot(buf_arg, SLOT_BUFFER);
-  TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
+  TypedArrayData *ta_data = buffer_get_typedarray_data(buf_arg);
   if (!ta_data || !ta_data->buffer || !ta_data->buffer->data)
     return js_mkerr(js, "read() buffer argument must be a Buffer or TypedArray");
 
@@ -2959,8 +2957,7 @@ static ant_value_t builtin_fs_readSync(ant_t *js, ant_value_t *args, int nargs) 
   
   int fd = (int)js_getnum(args[0]);
   
-  ant_value_t ta_data_val = js_get_slot(args[1], SLOT_BUFFER);
-  TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
+  TypedArrayData *ta_data = buffer_get_typedarray_data(args[1]);
   if (!ta_data || !ta_data->buffer || !ta_data->buffer->data)
     return js_mkerr(js, "readSync() second argument must be a Buffer, TypedArray, or DataView");
   
@@ -3022,8 +3019,7 @@ static ant_value_t builtin_fs_writeSync(ant_t *js, ant_value_t *args, int nargs)
     return js_mknum((double)result);
   }
   
-  ant_value_t ta_data_val = js_get_slot(args[1], SLOT_BUFFER);
-  TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
+  TypedArrayData *ta_data = buffer_get_typedarray_data(args[1]);
   if (!ta_data || !ta_data->buffer || !ta_data->buffer->data)
     return js_mkerr(js, "writeSync() second argument must be a Buffer, TypedArray, DataView, or string");
   
@@ -3082,8 +3078,7 @@ static ant_value_t builtin_fs_write_fd(ant_t *js, ant_value_t *args, int nargs) 
     write_data = str;
     write_len = str_len;
   } else {
-    ant_value_t ta_data_val = js_get_slot(args[1], SLOT_BUFFER);
-    TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
+    TypedArrayData *ta_data = buffer_get_typedarray_data(args[1]);
     if (!ta_data || !ta_data->buffer || !ta_data->buffer->data)
       return js_mkerr(js, "write() second argument must be a Buffer, TypedArray, DataView, or string");
     
@@ -3162,8 +3157,7 @@ static ant_value_t builtin_fs_writevSync(ant_t *js, ant_value_t *args, int nargs
   
   for (ant_offset_t i = 0; i < arr_len; i++) {
     ant_value_t item = js_arr_get(js, args[1], i);
-    ant_value_t ta_val = js_get_slot(item, SLOT_BUFFER);
-    TypedArrayData *ta = (TypedArrayData *)js_gettypedarray(ta_val);
+    TypedArrayData *ta = buffer_get_typedarray_data(item);
     if (!ta || !ta->buffer || !ta->buffer->data) {
       free(bufs);
       return js_mkerr(js, "writevSync() buffers must contain ArrayBufferViews");
@@ -3200,8 +3194,7 @@ static ant_value_t builtin_fs_writev_fd(ant_t *js, ant_value_t *args, int nargs)
   size_t total_len = 0;
   for (ant_offset_t i = 0; i < arr_len; i++) {
     ant_value_t item = js_arr_get(js, args[1], i);
-    ant_value_t ta_val = js_get_slot(item, SLOT_BUFFER);
-    TypedArrayData *ta = (TypedArrayData *)js_gettypedarray(ta_val);
+    TypedArrayData *ta = buffer_get_typedarray_data(item);
     if (!ta || !ta->buffer || !ta->buffer->data)
       return js_mkerr(js, "writev() buffers must contain ArrayBufferViews");
     total_len += ta->byte_length;
@@ -3219,8 +3212,7 @@ static ant_value_t builtin_fs_writev_fd(ant_t *js, ant_value_t *args, int nargs)
   size_t off = 0;
   for (ant_offset_t i = 0; i < arr_len; i++) {
     ant_value_t item = js_arr_get(js, args[1], i);
-    ant_value_t ta_val = js_get_slot(item, SLOT_BUFFER);
-    TypedArrayData *ta = (TypedArrayData *)js_gettypedarray(ta_val);
+    TypedArrayData *ta = buffer_get_typedarray_data(item);
     memcpy(req->data + off, ta->buffer->data + ta->byte_offset, ta->byte_length);
     off += ta->byte_length;
   }

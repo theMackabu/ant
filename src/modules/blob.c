@@ -99,27 +99,19 @@ static ant_value_t process_blob_part(ant_t *js, byte_buf_t *buf, ant_value_t par
   }
 
   if (t == T_OBJ) {
-    ant_value_t buf_slot = js_get_slot(part, SLOT_BUFFER);
-    if (vtype(buf_slot) == T_TYPEDARRAY) {
-      TypedArrayData *ta = (TypedArrayData *)js_gettypedarray(buf_slot);
-      if (ta && ta->buffer && !ta->buffer->is_detached) {
-        if (!byte_buf_append(buf, ta->buffer->data + ta->byte_offset, ta->byte_length))
-          return js_mkerr(js, "out of memory");
-      }
+    TypedArrayData *ta = buffer_get_typedarray_data(part);
+    if (ta && ta->buffer && !ta->buffer->is_detached) {
+      if (!byte_buf_append(buf, ta->buffer->data + ta->byte_offset, ta->byte_length)) return js_mkerr(js, "out of memory");
       return js_mkundef();
     }
-    if (vtype(buf_slot) == T_NUM) {
-      ArrayBufferData *abd = (ArrayBufferData *)(uintptr_t)(size_t)js_getnum(buf_slot);
-      if (abd && !abd->is_detached) {
-        if (!byte_buf_append(buf, abd->data, abd->length))
-          return js_mkerr(js, "out of memory");
-        return js_mkundef();
-      }
+    ArrayBufferData *abd = buffer_get_arraybuffer_data(part);
+    if (abd && !abd->is_detached) {
+      if (!byte_buf_append(buf, abd->data, abd->length)) return js_mkerr(js, "out of memory");
+      return js_mkundef();
     }
     blob_data_t *bd = blob_get_data(part);
     if (bd && bd->size > 0) {
-      if (!byte_buf_append(buf, bd->data, bd->size))
-        return js_mkerr(js, "out of memory");
+      if (!byte_buf_append(buf, bd->data, bd->size)) return js_mkerr(js, "out of memory");
       return js_mkundef();
     }
   }

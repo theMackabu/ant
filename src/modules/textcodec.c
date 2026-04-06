@@ -132,7 +132,7 @@ static ant_value_t js_textencoder_encode_into(ant_t *js, ant_value_t *args, int 
     if (!str) { str = ""; str_len = 0; }
   }
 
-  TypedArrayData *ta = (TypedArrayData *)js_gettypedarray(js_get_slot(args[1], SLOT_BUFFER));
+  TypedArrayData *ta = buffer_get_typedarray_data(args[1]);
   if (!ta) return js_mkerr_typed(js, JS_ERR_TYPE, "Second argument must be a Uint8Array");
 
   uint8_t *dest = (ta->buffer && !ta->buffer->is_detached)

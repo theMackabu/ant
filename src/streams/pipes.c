@@ -60,7 +60,7 @@ static ant_value_t pipe_state_dest(ant_value_t state) {
 }
 
 static ant_value_t pipe_state_reader(ant_value_t state) {
-  return js_get_slot(state, SLOT_BUFFER);
+  return js_get_slot(state, SLOT_AUX);
 }
 
 static ant_value_t pipe_state_writer(ant_value_t state) {
@@ -121,7 +121,7 @@ static void pipes_release_locks(ant_t *js, ant_value_t state) {
   ant_value_t reader = pipe_state_reader(state);
   if (rs_is_reader(reader)) {
     pipes_release_reader(js, reader);
-    js_set_slot(state, SLOT_BUFFER, js_mkundef());
+    js_set_slot(state, SLOT_AUX, js_mkundef());
   }
 
   ant_value_t writer = pipe_state_writer(state);
@@ -387,7 +387,7 @@ ant_value_t readable_stream_pipe_to(
   js_set_slot(state, SLOT_DATA, ANT_PTR(pst));
   js_set_slot(state, SLOT_ENTRIES, source);
   js_set_slot(state, SLOT_CTOR, dest);
-  js_set_slot(state, SLOT_BUFFER, reader);
+  js_set_slot(state, SLOT_AUX, reader);
   js_set_slot(state, SLOT_DEFAULT, writer);
   js_set_slot(state, SLOT_RS_PULL, promise);
   js_set_finalizer(state, pipe_state_finalize);
@@ -493,14 +493,14 @@ static tee_state_t *tee_get_state(ant_value_t state) {
 }
 
 static ant_value_t tee_state_reader(ant_value_t state) {
-  return js_get_slot(state, SLOT_BUFFER);
+  return js_get_slot(state, SLOT_AUX);
 }
 
 static void tee_release_reader(ant_t *js, ant_value_t state) {
   ant_value_t reader = tee_state_reader(state);
   if (!rs_is_reader(reader)) return;
   pipes_release_reader(js, reader);
-  js_set_slot(state, SLOT_BUFFER, js_mkundef());
+  js_set_slot(state, SLOT_AUX, js_mkundef());
 }
 
 static void tee_resolve_cancel_promises(ant_t *js, ant_value_t state) {
@@ -750,7 +750,7 @@ static ant_value_t js_rs_tee(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t state = js_mkobj(js);
   js_set_slot(state, SLOT_DATA, ANT_PTR(st));
   js_set_slot(state, SLOT_ENTRIES, js->this_val);
-  js_set_slot(state, SLOT_BUFFER, reader);
+  js_set_slot(state, SLOT_AUX, reader);
   js_set_slot(state, SLOT_RS_PULL, js_mkundef());
   js_set_slot(state, SLOT_RS_CANCEL, js_mkundef());
   js_set_slot(state, SLOT_RS_CLOSED, js_mkundef());

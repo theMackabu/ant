@@ -343,8 +343,7 @@ static void server_abort_request(server_request_t *req, const char *message) {
 }
 
 static bool server_response_chunk(server_request_t *req, ant_value_t value, const uint8_t **out, size_t *len) {
-  ant_value_t slot = js_get_slot(value, SLOT_BUFFER);
-  TypedArrayData *ta = (TypedArrayData *)js_gettypedarray(slot);
+  TypedArrayData *ta = buffer_get_typedarray_data(value);
 
   if (!ta || ta->type != TYPED_ARRAY_UINT8) return false;
   if (!ta->buffer || ta->buffer->is_detached) {

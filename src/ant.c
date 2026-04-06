@@ -1166,89 +1166,85 @@ static size_t strobj(ant_t *js, ant_value_t obj, char *buf, size_t len) {
   is_set = (tlen == 3 && memcmp(tag_str, "Set", 3) == 0);
   is_arraybuffer = (tlen >= 11 && memcmp(tag_str + tlen - 11, "ArrayBuffer", 11) == 0);
   
-  ant_value_t ta_slot = js_get_slot(obj, SLOT_BUFFER);
-  if (vtype(ta_slot) == T_TYPEDARRAY) {
-    TypedArrayData *ta = (TypedArrayData *)vdata(ta_slot);
-    if (ta && ta->buffer) {
-      const char *type_name = NULL;
-      size_t type_len = 0;
-      
-      ant_value_t proto = js_get_proto(js, obj);
-      ant_value_t buffer_proto = get_ctor_proto(js, "Buffer", 6);
-      if (vtype(proto) == T_OBJ && vtype(buffer_proto) == T_OBJ && vdata(proto) == vdata(buffer_proto)) {
-        type_name = "Buffer";
-        type_len = 6;
-      } else if (ta->type <= TYPED_ARRAY_BIGUINT64) {
-        type_name = buffer_typedarray_type_name(ta->type);
-        type_len = strlen(type_name);
-      } else {
-        type_name = "TypedArray";
-        type_len = 10;
-      }
-      
-      n += cpy(buf + n, REMAIN(n, len), type_name, type_len);
-      n += (size_t) snprintf(buf + n, REMAIN(n, len), "(%zu) ", ta->length);
-      n += cpy(buf + n, REMAIN(n, len), "[ ", 2);
-      
-      uint8_t *data = ta->buffer->data + ta->byte_offset;
-      
-      for (size_t i = 0; i < ta->length && i < 100; i++) {
-        if (i > 0) n += cpy(buf + n, REMAIN(n, len), ", ", 2);
-        
-        switch (ta->type) {
-          case TYPED_ARRAY_INT8:
-            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%d", (int)((int8_t*)data)[i]);
-            break;
-          case TYPED_ARRAY_UINT8:
-          case TYPED_ARRAY_UINT8_CLAMPED:
-            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%u", (unsigned)data[i]);
-            break;
-          case TYPED_ARRAY_INT16:
-            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%d", (int)((int16_t*)data)[i]);
-            break;
-          case TYPED_ARRAY_UINT16:
-            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%u", (unsigned)((uint16_t*)data)[i]);
-            break;
-          case TYPED_ARRAY_INT32:
-            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%d", ((int32_t*)data)[i]);
-            break;
-          case TYPED_ARRAY_UINT32:
-            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%u", ((uint32_t*)data)[i]);
-            break;
-          case TYPED_ARRAY_FLOAT16:
-            n += (size_t) snprintf(
-              buf + n, REMAIN(n, len), "%g", half_to_double(((uint16_t*)data)[i])
-            );
-            break;
-          case TYPED_ARRAY_FLOAT32:
-            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%g", (double)((float*)data)[i]);
-            break;
-          case TYPED_ARRAY_FLOAT64:
-            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%g", ((double*)data)[i]);
-            break;
-          case TYPED_ARRAY_BIGINT64:
-            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%lldn", (long long)((int64_t*)data)[i]);
-            break;
-          case TYPED_ARRAY_BIGUINT64:
-            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%llun", (unsigned long long)((uint64_t*)data)[i]);
-            break;
-          default:
-            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%u", (unsigned)data[i]);
-            break;
-        }
-      }
-      
-      if (ta->length > 100) n += cpy(buf + n, REMAIN(n, len), ", ...", 5);
-      n += cpy(buf + n, REMAIN(n, len), " ]", 2);
-      pop_stringify();
-      return n;
+  TypedArrayData *ta = buffer_get_typedarray_data(obj);
+  if (ta && ta->buffer) {
+    const char *type_name = NULL;
+    size_t type_len = 0;
+    
+    ant_value_t proto = js_get_proto(js, obj);
+    ant_value_t buffer_proto = get_ctor_proto(js, "Buffer", 6);
+    if (vtype(proto) == T_OBJ && vtype(buffer_proto) == T_OBJ && vdata(proto) == vdata(buffer_proto)) {
+      type_name = "Buffer";
+      type_len = 6;
+    } else if (ta->type <= TYPED_ARRAY_BIGUINT64) {
+      type_name = buffer_typedarray_type_name(ta->type);
+      type_len = strlen(type_name);
+    } else {
+      type_name = "TypedArray";
+      type_len = 10;
     }
+    
+    n += cpy(buf + n, REMAIN(n, len), type_name, type_len);
+    n += (size_t) snprintf(buf + n, REMAIN(n, len), "(%zu) ", ta->length);
+    n += cpy(buf + n, REMAIN(n, len), "[ ", 2);
+    
+    uint8_t *data = ta->buffer->data + ta->byte_offset;
+    
+    for (size_t i = 0; i < ta->length && i < 100; i++) {
+      if (i > 0) n += cpy(buf + n, REMAIN(n, len), ", ", 2);
+      
+      switch (ta->type) {
+        case TYPED_ARRAY_INT8:
+          n += (size_t) snprintf(buf + n, REMAIN(n, len), "%d", (int)((int8_t*)data)[i]);
+          break;
+        case TYPED_ARRAY_UINT8:
+        case TYPED_ARRAY_UINT8_CLAMPED:
+          n += (size_t) snprintf(buf + n, REMAIN(n, len), "%u", (unsigned)data[i]);
+          break;
+        case TYPED_ARRAY_INT16:
+          n += (size_t) snprintf(buf + n, REMAIN(n, len), "%d", (int)((int16_t*)data)[i]);
+          break;
+        case TYPED_ARRAY_UINT16:
+          n += (size_t) snprintf(buf + n, REMAIN(n, len), "%u", (unsigned)((uint16_t*)data)[i]);
+          break;
+        case TYPED_ARRAY_INT32:
+          n += (size_t) snprintf(buf + n, REMAIN(n, len), "%d", ((int32_t*)data)[i]);
+          break;
+        case TYPED_ARRAY_UINT32:
+          n += (size_t) snprintf(buf + n, REMAIN(n, len), "%u", ((uint32_t*)data)[i]);
+          break;
+        case TYPED_ARRAY_FLOAT16:
+          n += (size_t) snprintf(
+            buf + n, REMAIN(n, len), "%g", half_to_double(((uint16_t*)data)[i])
+          );
+          break;
+        case TYPED_ARRAY_FLOAT32:
+          n += (size_t) snprintf(buf + n, REMAIN(n, len), "%g", (double)((float*)data)[i]);
+          break;
+        case TYPED_ARRAY_FLOAT64:
+          n += (size_t) snprintf(buf + n, REMAIN(n, len), "%g", ((double*)data)[i]);
+          break;
+        case TYPED_ARRAY_BIGINT64:
+          n += (size_t) snprintf(buf + n, REMAIN(n, len), "%lldn", (long long)((int64_t*)data)[i]);
+          break;
+        case TYPED_ARRAY_BIGUINT64:
+          n += (size_t) snprintf(buf + n, REMAIN(n, len), "%llun", (unsigned long long)((uint64_t*)data)[i]);
+          break;
+        default:
+          n += (size_t) snprintf(buf + n, REMAIN(n, len), "%u", (unsigned)data[i]);
+          break;
+      }
+    }
+    
+    if (ta->length > 100) n += cpy(buf + n, REMAIN(n, len), ", ...", 5);
+    n += cpy(buf + n, REMAIN(n, len), " ]", 2);
+    pop_stringify();
+    return n;
   }
   
   if (is_arraybuffer) {
-    ant_value_t buf_val = js_get_slot(obj, SLOT_BUFFER);
-    if (vtype(buf_val) == T_NUM) {
-      ArrayBufferData *ab_data = (ArrayBufferData *)(uintptr_t)tod(buf_val);
+    ArrayBufferData *ab_data = buffer_get_arraybuffer_data(obj);
+    if (ab_data) {
       size_t bytelen = ab_data ? ab_data->length : 0;
       
       n += cpy(buf + n, REMAIN(n, len), tag_str, tlen);
@@ -1273,34 +1269,31 @@ static size_t strobj(ant_t *js, ant_value_t obj, char *buf, size_t len) {
   
   bool is_dataview = (tlen == 8 && memcmp(tag_str, "DataView", 8) == 0);
   if (is_dataview) {
-    ant_value_t dv_data_val = js_get_slot(obj, SLOT_DATA);
-    if (vtype(dv_data_val) == T_NUM) {
-      DataViewData *dv = (DataViewData *)(uintptr_t)tod(dv_data_val);
-      if (dv && dv->buffer) {
-        n += cpy(buf + n, REMAIN(n, len), "DataView {\n", 11);
-        n += cpy(buf + n, REMAIN(n, len), "  [byteLength]: ", 16);
-        n += (size_t) snprintf(buf + n, REMAIN(n, len), "%zu", dv->byte_length);
-        n += cpy(buf + n, REMAIN(n, len), ",\n", 2);
-        n += cpy(buf + n, REMAIN(n, len), "  [byteOffset]: ", 16);
-        n += (size_t) snprintf(buf + n, REMAIN(n, len), "%zu", dv->byte_offset);
-        n += cpy(buf + n, REMAIN(n, len), ",\n", 2);
-        n += cpy(buf + n, REMAIN(n, len), "  [buffer]: ArrayBuffer {\n", 26);
-        n += cpy(buf + n, REMAIN(n, len), "    [Uint8Contents]: <", 22);
-        
-        if (dv->buffer->data && dv->buffer->length > 0) {
-          for (size_t i = 0; i < dv->buffer->length; i++) {
-            if (i > 0) n += cpy(buf + n, REMAIN(n, len), " ", 1);
-            n += (size_t) snprintf(buf + n, REMAIN(n, len), "%02x", dv->buffer->data[i]);
-          }
+    DataViewData *dv = buffer_get_dataview_data(obj);
+    if (dv && dv->buffer) {
+      n += cpy(buf + n, REMAIN(n, len), "DataView {\n", 11);
+      n += cpy(buf + n, REMAIN(n, len), "  [byteLength]: ", 16);
+      n += (size_t) snprintf(buf + n, REMAIN(n, len), "%zu", dv->byte_length);
+      n += cpy(buf + n, REMAIN(n, len), ",\n", 2);
+      n += cpy(buf + n, REMAIN(n, len), "  [byteOffset]: ", 16);
+      n += (size_t) snprintf(buf + n, REMAIN(n, len), "%zu", dv->byte_offset);
+      n += cpy(buf + n, REMAIN(n, len), ",\n", 2);
+      n += cpy(buf + n, REMAIN(n, len), "  [buffer]: ArrayBuffer {\n", 26);
+      n += cpy(buf + n, REMAIN(n, len), "    [Uint8Contents]: <", 22);
+      
+      if (dv->buffer->data && dv->buffer->length > 0) {
+        for (size_t i = 0; i < dv->buffer->length; i++) {
+          if (i > 0) n += cpy(buf + n, REMAIN(n, len), " ", 1);
+          n += (size_t) snprintf(buf + n, REMAIN(n, len), "%02x", dv->buffer->data[i]);
         }
-        
-        n += cpy(buf + n, REMAIN(n, len), ">,\n", 3);
-        n += cpy(buf + n, REMAIN(n, len), "    [byteLength]: ", 18);
-        n += (size_t) snprintf(buf + n, REMAIN(n, len), "%zu", dv->buffer->length);
-        n += cpy(buf + n, REMAIN(n, len), "\n  }\n}", 6);
-        pop_stringify();
-        return n;
       }
+      
+      n += cpy(buf + n, REMAIN(n, len), ">,\n", 3);
+      n += cpy(buf + n, REMAIN(n, len), "    [byteLength]: ", 18);
+      n += (size_t) snprintf(buf + n, REMAIN(n, len), "%zu", dv->buffer->length);
+      n += cpy(buf + n, REMAIN(n, len), "\n  }\n}", 6);
+      pop_stringify();
+      return n;
     }
   }
   
@@ -12865,20 +12858,20 @@ void js_destroy(ant_t *js) {
   
   js_esm_cleanup_module_cache();
   code_arena_reset();
-  cleanup_buffer_module();
   cleanup_lmdb_module();
 
   ant_object_t *lists[] = { js->objects, js->objects_old, js->permanent_objects };
-  for (int i = 0; i < 3; i++)
-    for (ant_object_t *obj = lists[i]; obj;) {
-      ant_object_t *next = obj->next;
-      gc_object_free(js, obj);
-      obj = next;
-    }
+  for (int i = 0; i < 3; i++) for (ant_object_t *obj = lists[i]; obj;) {
+    ant_object_t *next = obj->next;
+    gc_object_free(js, obj);
+    obj = next;
+  }
 
   js->objects = NULL;
   js->objects_old = NULL;
   js->permanent_objects = NULL;
+  
+  cleanup_buffer_module();
   fixed_arena_destroy(&js->obj_arena);
   fixed_arena_destroy(&js->closure_arena);
   fixed_arena_destroy(&js->upvalue_arena);
@@ -12886,9 +12879,11 @@ void js_destroy(ant_t *js) {
   free(js->prop_refs);
   js->prop_refs = NULL;
   js->prop_refs_len = js->prop_refs_cap = 0;
+  
   free(js->c_roots);
   js->c_roots = NULL;
   js->c_root_count = js->c_root_cap = 0;
+  
   free(js->pending_rejections.items);
   js->pending_rejections.items = NULL;
   js->pending_rejections.len = js->pending_rejections.cap = 0;
@@ -12896,6 +12891,7 @@ void js_destroy(ant_t *js) {
   js_pool_destroy(&js->pool.rope);
   js_pool_destroy(&js->pool.symbol);
   js_pool_destroy(&js->pool.permanent);
+  
   js_class_pool_destroy(&js->pool.bigint);
   js_class_pool_destroy(&js->pool.string);
 

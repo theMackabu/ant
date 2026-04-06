@@ -585,8 +585,7 @@ static ant_value_t child_write_impl(ant_t *js, child_process_t *cp, ant_value_t 
     data = js_getstr(js, data_arg, &data_len);
     if (!data) return js_mkerr(js, "Data must be a string or Buffer");
   } else {
-    ant_value_t ta_data_val = js_get_slot(data_arg, SLOT_BUFFER);
-    TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
+    TypedArrayData *ta_data = buffer_get_typedarray_data(data_arg);
     if (!ta_data || !ta_data->buffer || !ta_data->buffer->data) {
       return js_mkerr(js, "Data must be a string or Buffer");
     }

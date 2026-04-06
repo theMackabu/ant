@@ -26,7 +26,7 @@ bool rs_is_stream(ant_value_t obj) {
 bool rs_is_reader(ant_value_t obj) {
   return js_check_brand(obj, BRAND_READABLE_STREAM_READER)
     && vtype(js_get_slot(obj, SLOT_RS_CLOSED)) == T_PROMISE
-    && vtype(js_get_slot(obj, SLOT_BUFFER)) == T_ARR;
+    && vtype(js_get_slot(obj, SLOT_AUX)) == T_ARR;
 }
 
 bool rs_is_controller(ant_value_t obj) {
@@ -91,7 +91,7 @@ ant_value_t rs_stream_reader(ant_value_t stream_obj) {
 }
 
 ant_value_t rs_stream_error(ant_value_t stream_obj) {
-  return js_get_slot(stream_obj, SLOT_BUFFER);
+  return js_get_slot(stream_obj, SLOT_AUX);
 }
 
 static inline ant_value_t rs_ctrl_stream(ant_value_t ctrl_obj) {
@@ -111,7 +111,7 @@ ant_value_t rs_ctrl_size(ant_value_t ctrl_obj) {
 }
 
 static inline ant_value_t rs_ctrl_queue(ant_t *js, ant_value_t ctrl_obj) {
-  return js_get_slot(ctrl_obj, SLOT_BUFFER);
+  return js_get_slot(ctrl_obj, SLOT_AUX);
 }
 
 ant_value_t rs_reader_stream(ant_value_t reader_obj) {
@@ -123,7 +123,7 @@ ant_value_t rs_reader_closed(ant_value_t reader_obj) {
 }
 
 ant_value_t rs_reader_reqs(ant_value_t reader_obj) {
-  return js_get_slot(reader_obj, SLOT_BUFFER);
+  return js_get_slot(reader_obj, SLOT_AUX);
 }
 
 bool rs_reader_has_reqs(ant_t *js, ant_value_t reader_obj) {
@@ -252,7 +252,7 @@ void readable_stream_error(ant_t *js, ant_value_t stream_obj, ant_value_t e) {
   rs_stream_t *stream = rs_get_stream(stream_obj);
   if (!stream || stream->state != RS_STATE_READABLE) return;
   stream->state = RS_STATE_ERRORED;
-  js_set_slot(stream_obj, SLOT_BUFFER, e);
+  js_set_slot(stream_obj, SLOT_AUX, e);
 
   ant_value_t reader_obj = rs_stream_reader(stream_obj);
   if (rs_is_reader(reader_obj)) {
@@ -673,7 +673,7 @@ ant_value_t js_rs_reader_ctor(ant_t *js, ant_value_t *args, int nargs) {
   js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_READABLE_STREAM_READER));
   js_set_slot(obj, SLOT_ENTRIES, stream_obj);
   js_set_slot(obj, SLOT_RS_CLOSED, closed);
-  js_set_slot(obj, SLOT_BUFFER, js_mkarr(js));
+  js_set_slot(obj, SLOT_AUX, js_mkarr(js));
   js_set_slot(stream_obj, SLOT_CTOR, obj);
 
   if (stream->state == RS_STATE_CLOSED)
@@ -817,7 +817,7 @@ static ant_value_t setup_default_controller(
   js_set_slot(ctrl_obj, SLOT_RS_PULL, pull_fn);
   js_set_slot(ctrl_obj, SLOT_RS_CANCEL, cancel_fn);
   js_set_slot(ctrl_obj, SLOT_RS_SIZE, size_fn);
-  js_set_slot(ctrl_obj, SLOT_BUFFER, js_mkarr(js));
+  js_set_slot(ctrl_obj, SLOT_AUX, js_mkarr(js));
   js_set_finalizer(ctrl_obj, rs_controller_finalize);
 
   js_set_slot(stream_obj, SLOT_ENTRIES, ctrl_obj);

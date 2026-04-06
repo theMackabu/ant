@@ -45,18 +45,17 @@ static ant_value_t crypto_make_buffer(ant_t *js, const uint8_t *data, size_t len
 }
 
 static bool crypto_get_mutable_bytes(ant_value_t value, uint8_t **out, size_t *len) {
-  ant_value_t slot = js_get_slot(value, SLOT_BUFFER);
-  if (vtype(slot) == T_TYPEDARRAY) {
-    TypedArrayData *ta = (TypedArrayData *)js_gettypedarray(slot);
-    if (!ta || !ta->buffer || ta->buffer->is_detached) return false;
+  TypedArrayData *ta = buffer_get_typedarray_data(value);
+  if (ta) {
+    if (!ta->buffer || ta->buffer->is_detached) return false;
     *out = ta->buffer->data + ta->byte_offset;
     *len = ta->byte_length;
     return true;
   }
 
-  if (vtype(slot) == T_NUM) {
-    ArrayBufferData *ab = (ArrayBufferData *)(uintptr_t)(size_t)js_getnum(slot);
-    if (!ab || ab->is_detached) return false;
+  ArrayBufferData *ab = buffer_get_arraybuffer_data(value);
+  if (ab) {
+    if (ab->is_detached) return false;
     *out = ab->data;
     *len = ab->length;
     return true;
@@ -354,8 +353,7 @@ static ant_value_t js_crypto_get_random_values(ant_t *js, ant_value_t *args, int
     return js_mkerr(js, "libsodium initialization failed");
   }
   
-  ant_value_t ta_data_val = js_get_slot(args[0], SLOT_BUFFER);
-  TypedArrayData *ta_data = (TypedArrayData *)js_gettypedarray(ta_data_val);
+  TypedArrayData *ta_data = buffer_get_typedarray_data(args[0]);
   if (!ta_data || !ta_data->buffer) {
     return js_mkerr(js, "argument must be a TypedArray");
   }

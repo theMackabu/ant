@@ -705,12 +705,9 @@ static ant_value_t js_net_socket_write(ant_t *js, ant_value_t *args, int nargs) 
 
   copy = malloc(parsed.len);
   if (!copy) return js_mkerr_typed(js, JS_ERR_TYPE, "Out of memory");
+  
   memcpy(copy, parsed.bytes, parsed.len);
-
-  if (ant_conn_write(socket->conn, copy, parsed.len, NULL, NULL) != 0) {
-    free(copy);
-    return js_false;
-  }
+  if (ant_conn_write(socket->conn, copy, parsed.len, NULL, NULL) != 0) return js_false;
 
   GC_ROOT_SAVE(root_mark, js);
   GC_ROOT_PIN(js, parsed.callback);

@@ -233,8 +233,7 @@ static ant_value_t des_val(ant_t *js, dec_t *d, int depth) {
 static ant_value_t v8_deserialize(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "deserialize: Buffer required");
 
-  ant_value_t buf_slot = js_get_slot(args[0], SLOT_BUFFER);
-  TypedArrayData *ta = (TypedArrayData *)js_gettypedarray(buf_slot);
+  TypedArrayData *ta = buffer_get_typedarray_data(args[0]);
   if (!ta || !ta->buffer) return js_mkerr(js, "deserialize: expected a Buffer");
 
   const uint8_t *data = ta->buffer->data + ta->byte_offset;

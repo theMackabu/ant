@@ -228,32 +228,6 @@ static bool util_has_proto_in_chain(ant_t *js, ant_value_t value, ant_value_t pr
   return false;
 }
 
-static bool util_is_typed_array_value(ant_value_t value, TypedArrayData **out) {
-  ant_value_t slot;
-
-  if (vtype(value) == T_TYPEDARRAY) {
-    if (out) *out = (TypedArrayData *)js_gettypedarray(value);
-    return true;
-  }
-
-  if (!is_object_type(value)) return false;
-  slot = js_get_slot(value, SLOT_BUFFER);
-  if (vtype(slot) != T_TYPEDARRAY) return false;
-
-  if (out) *out = (TypedArrayData *)js_gettypedarray(slot);
-  return true;
-}
-
-static ArrayBufferData *util_get_arraybuffer_data(ant_value_t value) {
-  ant_value_t slot;
-
-  if (!is_object_type(value) || buffer_is_dataview(value)) return NULL;
-  slot = js_get_slot(value, SLOT_BUFFER);
-  if (vtype(slot) != T_NUM) return NULL;
-
-  return (ArrayBufferData *)(uintptr_t)(size_t)js_getnum(slot);
-}
-
 static bool util_is_boxed_primitive(ant_value_t value, uint8_t *type_out) {
   ant_value_t primitive;
 
@@ -290,23 +264,23 @@ static bool util_is_arguments_object_value(ant_t *js, ant_value_t value) {
 }
 
 static ant_value_t util_types_is_any_array_buffer(ant_t *js, ant_value_t *args, int nargs) {
-  ArrayBufferData *buffer = (nargs > 0) ? util_get_arraybuffer_data(args[0]) : NULL;
+  ArrayBufferData *buffer = (nargs > 0) ? buffer_get_arraybuffer_data(args[0]) : NULL;
   return js_bool(buffer != NULL);
 }
 
 static ant_value_t util_types_is_array_buffer(ant_t *js, ant_value_t *args, int nargs) {
-  ArrayBufferData *buffer = (nargs > 0) ? util_get_arraybuffer_data(args[0]) : NULL;
+  ArrayBufferData *buffer = (nargs > 0) ? buffer_get_arraybuffer_data(args[0]) : NULL;
   return js_bool(buffer != NULL && !buffer->is_shared);
 }
 
 static ant_value_t util_types_is_shared_array_buffer(ant_t *js, ant_value_t *args, int nargs) {
-  ArrayBufferData *buffer = (nargs > 0) ? util_get_arraybuffer_data(args[0]) : NULL;
+  ArrayBufferData *buffer = (nargs > 0) ? buffer_get_arraybuffer_data(args[0]) : NULL;
   return js_bool(buffer != NULL && buffer->is_shared);
 }
 
 static ant_value_t util_types_is_array_buffer_view(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_false;
-  return js_bool(buffer_is_dataview(args[0]) || util_is_typed_array_value(args[0], NULL));
+  return js_bool(buffer_is_dataview(args[0]) || buffer_get_typedarray_data(args[0]) != NULL);
 }
 
 static ant_value_t util_types_is_data_view(ant_t *js, ant_value_t *args, int nargs) {
@@ -316,25 +290,24 @@ static ant_value_t util_types_is_data_view(ant_t *js, ant_value_t *args, int nar
 
 static ant_value_t util_types_is_typed_array(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_false;
-  return js_bool(util_is_typed_array_value(args[0], NULL));
+  return js_bool(buffer_get_typedarray_data(args[0]) != NULL);
 }
 
 static ant_value_t util_types_is_float16_array(ant_t *js, ant_value_t *args, int nargs) {
-  TypedArrayData *typed_array = NULL;
-  if (nargs < 1 || !util_is_typed_array_value(args[0], &typed_array)) return js_false;
+  TypedArrayData *typed_array = (nargs > 0) ? buffer_get_typedarray_data(args[0]) : NULL;
+  if (!typed_array) return js_false;
   return js_bool(typed_array != NULL && typed_array->type == TYPED_ARRAY_FLOAT16);
 }
 
-#define DEFINE_TYPED_ARRAY_CHECK(fn_name, typed_array_kind)                           \
-  static ant_value_t fn_name(ant_t *js, ant_value_t *args, int nargs) {              \
-    TypedArrayData *typed_array = NULL;                                               \
-    if (nargs < 1 || !util_is_typed_array_value(args[0], &typed_array)) return js_false; \
-    return js_bool(typed_array != NULL && typed_array->type == typed_array_kind);     \
+#define DEFINE_TYPED_ARRAY_CHECK(fn_name, typed_array_kind)                                   \
+  static ant_value_t fn_name(ant_t *js, ant_value_t *args, int nargs) {                       \
+    TypedArrayData *typed_array = (nargs > 0) ? buffer_get_typedarray_data(args[0]) : NULL;   \
+    if (!typed_array) return js_false;                                                        \
+    return js_bool(typed_array != NULL && typed_array->type == typed_array_kind);             \
   }
 
 DEFINE_TYPED_ARRAY_CHECK(util_types_is_int8_array, TYPED_ARRAY_INT8)
 DEFINE_TYPED_ARRAY_CHECK(util_types_is_uint8_array, TYPED_ARRAY_UINT8)
-DEFINE_TYPED_ARRAY_CHECK(util_types_is_uint8_clamped_array, TYPED_ARRAY_UINT8_CLAMPED)
 DEFINE_TYPED_ARRAY_CHECK(util_types_is_int16_array, TYPED_ARRAY_INT16)
 DEFINE_TYPED_ARRAY_CHECK(util_types_is_uint16_array, TYPED_ARRAY_UINT16)
 DEFINE_TYPED_ARRAY_CHECK(util_types_is_int32_array, TYPED_ARRAY_INT32)
@@ -343,6 +316,7 @@ DEFINE_TYPED_ARRAY_CHECK(util_types_is_float32_array, TYPED_ARRAY_FLOAT32)
 DEFINE_TYPED_ARRAY_CHECK(util_types_is_float64_array, TYPED_ARRAY_FLOAT64)
 DEFINE_TYPED_ARRAY_CHECK(util_types_is_bigint64_array, TYPED_ARRAY_BIGINT64)
 DEFINE_TYPED_ARRAY_CHECK(util_types_is_biguint64_array, TYPED_ARRAY_BIGUINT64)
+DEFINE_TYPED_ARRAY_CHECK(util_types_is_uint8_clamped_array, TYPED_ARRAY_UINT8_CLAMPED)
 
 static ant_value_t util_types_is_promise(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_false;

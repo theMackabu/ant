@@ -49,9 +49,15 @@ void init_buffer_module(void);
 void cleanup_buffer_module(void);
 void free_array_buffer_data(ArrayBufferData *data);
 
-ArrayBufferData *create_array_buffer_data(size_t length);
+size_t buffer_get_external_memory(void);
+
 ant_value_t create_arraybuffer_obj(ant_t *js, ArrayBufferData *buffer);
 const char *buffer_typedarray_type_name(TypedArrayType type);
+
+ArrayBufferData *create_array_buffer_data(size_t length);
+ArrayBufferData *buffer_get_arraybuffer_data(ant_value_t value);
+TypedArrayData *buffer_get_typedarray_data(ant_value_t value);
+DataViewData *buffer_get_dataview_data(ant_value_t value);
 
 ant_value_t create_typed_array(
   ant_t *js, TypedArrayType type, ArrayBufferData *buffer,
@@ -70,7 +76,6 @@ ant_value_t create_dataview_with_buffer(
   ant_value_t arraybuffer_obj
 );
 
-size_t buffer_get_external_memory(void);
 bool buffer_is_dataview(ant_value_t obj);
 bool buffer_is_binary_source(ant_value_t value);
 bool buffer_source_get_bytes(ant_t *js, ant_value_t value, const uint8_t **out, size_t *len);

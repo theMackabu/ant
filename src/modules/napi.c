@@ -345,9 +345,7 @@ static bool napi_get_typedarray_data(
   napi_value value,
   TypedArrayData **out
 ) {
-  ant_value_t slot = js_get_slot((ant_value_t)value, SLOT_BUFFER);
-  if (vtype(slot) != T_TYPEDARRAY) return false;
-  TypedArrayData *ta = (TypedArrayData *)js_gettypedarray(slot);
+  TypedArrayData *ta = buffer_get_typedarray_data((ant_value_t)value);
   if (!ta || !ta->buffer || ta->buffer->is_detached) return false;
   *out = ta;
   return true;
@@ -1081,10 +1079,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_typedarray(
     return napi_set_last(env, napi_invalid_arg, "invalid argument");
   }
 
-  ant_value_t slot = js_get_slot((ant_value_t)arraybuffer, SLOT_BUFFER);
-  if (vtype(slot) != T_NUM) return napi_set_last(env, napi_arraybuffer_expected, "arraybuffer expected");
-
-  ArrayBufferData *ab = (ArrayBufferData *)(uintptr_t)js_getnum(slot);
+  ArrayBufferData *ab = buffer_get_arraybuffer_data((ant_value_t)arraybuffer);
   if (!ab || ab->is_detached) return napi_set_last(env, napi_arraybuffer_expected, "invalid arraybuffer");
 
   TypedArrayType ta_type;
@@ -1416,10 +1411,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_arraybuffer_info(
   if (!nenv || !nenv->js) return napi_set_last(env, napi_invalid_arg, "invalid env");
   if (!is_object_type((ant_value_t)arraybuffer)) return napi_set_last(env, napi_arraybuffer_expected, "arraybuffer expected");
 
-  ant_value_t slot = js_get_slot((ant_value_t)arraybuffer, SLOT_BUFFER);
-  if (vtype(slot) != T_NUM) return napi_set_last(env, napi_arraybuffer_expected, "arraybuffer expected");
-
-  ArrayBufferData *ab = (ArrayBufferData *)(uintptr_t)js_getnum(slot);
+  ArrayBufferData *ab = buffer_get_arraybuffer_data((ant_value_t)arraybuffer);
   if (!ab || ab->is_detached) return napi_set_last(env, napi_arraybuffer_expected, "arraybuffer expected");
 
   if (data) *data = ab->data;
@@ -1926,13 +1918,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_is_arraybuffer(
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
   if (!is_object_type((ant_value_t)value)) { *result = false; return napi_set_last(env, napi_ok, NULL); }
 
-  ant_value_t slot = js_get_slot((ant_value_t)value, SLOT_BUFFER);
-  if (vtype(slot) != T_NUM) {
-    *result = false;
-  } else {
-    ant_value_t buf_prop = js_get(nenv->js, (ant_value_t)value, "buffer");
-    *result = vtype(buf_prop) == T_UNDEF;
-  }
+  *result = buffer_get_arraybuffer_data((ant_value_t)value) != NULL;
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -1978,9 +1964,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_is_dataview(
   if (!is_object_type((ant_value_t)value)) {
     *result = false;
   } else {
-    ant_value_t slot = js_get_slot((ant_value_t)value, SLOT_DATA);
-    ant_value_t byte_len = js_get(nenv->js, (ant_value_t)value, "byteLength");
-    *result = vtype(slot) == T_NUM && vtype(byte_len) == T_NUM;
+    *result = buffer_get_dataview_data((ant_value_t)value) != NULL;
   }
   return napi_set_last(env, napi_ok, NULL);
 }

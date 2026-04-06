@@ -78,7 +78,7 @@ ant_value_t ws_stream_writer(ant_value_t stream_obj) {
 }
 
 static inline ant_value_t ws_stream_stored_error(ant_value_t stream_obj) {
-  return js_get_slot(stream_obj, SLOT_BUFFER);
+  return js_get_slot(stream_obj, SLOT_AUX);
 }
 
 static inline ant_value_t ws_stream_write_requests(ant_t *js, ant_value_t stream_obj) {
@@ -126,7 +126,7 @@ static inline ant_value_t ws_ctrl_sink(ant_value_t ctrl_obj) {
 }
 
 static inline ant_value_t ws_ctrl_queue(ant_value_t ctrl_obj) {
-  return js_get_slot(ctrl_obj, SLOT_BUFFER);
+  return js_get_slot(ctrl_obj, SLOT_AUX);
 }
 
 static inline ant_value_t ws_ctrl_signal(ant_value_t ctrl_obj) {
@@ -266,7 +266,7 @@ static void writable_stream_start_erroring(ant_t *js, ant_value_t stream_obj, an
   ws_controller_t *ctrl = ws_get_controller(ctrl_obj);
 
   stream->state = WS_STATE_ERRORING;
-  js_set_slot(stream_obj, SLOT_BUFFER, reason);
+  js_set_slot(stream_obj, SLOT_AUX, reason);
 
   ant_value_t signal_ac = ws_ctrl_signal(ctrl_obj);
   if (is_object_type(signal_ac)) {
@@ -427,7 +427,7 @@ static void writable_stream_finish_in_flight_close(ant_t *js, ant_value_t stream
   if (!stream) return;
 
   if (stream->state == WS_STATE_ERRORING) {
-    js_set_slot(stream_obj, SLOT_BUFFER, js_mkundef());
+    js_set_slot(stream_obj, SLOT_AUX, js_mkundef());
     if (stream->has_pending_abort) {
       ant_value_t ap = ws_stream_pending_abort_promise(stream_obj);
       js_resolve_promise(js, ap, js_mkundef());
@@ -1079,7 +1079,7 @@ static ant_value_t setup_ws_default_controller(
   js_set_slot(ctrl_obj, SLOT_WS_ABORT, abort_fn);
   js_set_slot(ctrl_obj, SLOT_RS_SIZE, size_fn);
   js_set_slot(ctrl_obj, SLOT_CTOR, underlying_sink);
-  js_set_slot(ctrl_obj, SLOT_BUFFER, js_mkarr(js));
+  js_set_slot(ctrl_obj, SLOT_AUX, js_mkarr(js));
   js_set_finalizer(ctrl_obj, ws_controller_finalize);
 
   ant_value_t ac_ctor = js_get(js, js_glob(js), "AbortController");

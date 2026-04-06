@@ -587,7 +587,7 @@ static const char *get_slot_name(internal_slot_t slot) {
     [SLOT_PROTO] = "PROTO",
     [SLOT_FUNC_PROTO] = "FUNC_PROTO",
     [SLOT_ASYNC_PROTO] = "ASYNC_PROTO",
-    [SLOT_BUFFER] = "BUFFER",
+    [SLOT_AUX] = "AUX",
     [SLOT_TARGET_FUNC] = "TARGET_FUNC",
     [SLOT_NAME] = "NAME",
     [SLOT_MODULE_CTX] = "MODULE_CTX",

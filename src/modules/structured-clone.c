@@ -77,15 +77,13 @@ static ant_value_t sc_clone_typed_array(
 
 static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, sc_entry_t **transfer) {
   uint8_t t = vtype(val);
-  ant_value_t slot = js_mkundef();
   TypedArrayData *ta_data = NULL;
 
   if (t == T_UNDEF || t == T_NULL || t == T_BOOL || t == T_NUM || t == T_BIGINT || t == T_STR) return val;
   if (t == T_SYMBOL) return js_throw(js, make_dom_exception(js, "Symbol cannot be serialized", "DataCloneError"));
 
   if (is_object_type(val)) {
-    slot = js_get_slot(val, SLOT_BUFFER);
-    ta_data = (TypedArrayData *)js_gettypedarray(slot);
+    ta_data = buffer_get_typedarray_data(val);
   }
 
   if (ta_data) {
@@ -106,9 +104,8 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
   ant_value_t existing = sc_lookup(seen, val);
   if (vtype(existing) != T_UNDEF) return existing;
 
-  ant_value_t buf_slot_v = js_get_slot(val, SLOT_BUFFER);
-  if (vtype(buf_slot_v) == T_NUM) {
-    ArrayBufferData *abd = (ArrayBufferData *)(uintptr_t)(size_t)js_getnum(buf_slot_v);
+  ArrayBufferData *abd = buffer_get_arraybuffer_data(val);
+  if (abd) {
     if (abd && !abd->is_detached) {
     if (transfer && sc_has(transfer, val)) {
       ArrayBufferData *new_abd = calloc(1, sizeof(ArrayBufferData));
@@ -135,11 +132,7 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
   }}
 
   if (buffer_is_dataview(val)) {
-    ant_value_t dv_data_val = js_get_slot(val, SLOT_DATA);
-    if (vtype(dv_data_val) != T_NUM)
-      return js_throw(js, make_dom_exception(js, "DataView could not be cloned", "DataCloneError"));
-      
-    DataViewData *dv = (DataViewData *)(uintptr_t)js_getnum(dv_data_val);
+    DataViewData *dv = buffer_get_dataview_data(val);
     if (!dv || !dv->buffer)
       return js_throw(js, make_dom_exception(js, "DataView could not be cloned", "DataCloneError"));
       
