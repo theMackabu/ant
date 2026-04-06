@@ -144,6 +144,7 @@ struct ant_isolate_t {
   ant_value_t **c_roots;
   size_t c_root_count;
   size_t c_root_cap;
+  struct gc_temp_root_scope *temp_roots;
 
   const char *code;
   const char *filename;
