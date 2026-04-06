@@ -27,7 +27,7 @@ static inline void sv_close_upvalues_from_slot(sv_vm_t *vm, ant_value_t *slot) {
   while (*pp) {
   sv_upvalue_t *uv = *pp;
   ant_value_t *loc = uv->location;
-  if (loc >= slot && sv_slot_in_vm_stack(vm, loc)) {
+  if (sv_slot_in_vm_stack(vm, loc) && loc >= slot) {
     uv->closed = *loc;
     uv->location = &uv->closed;
     *pp = uv->next;

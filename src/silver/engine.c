@@ -86,8 +86,7 @@ static bool sv_vm_grow_stack(sv_vm_t *vm) {
     }
     for (sv_upvalue_t *uv = vm->open_upvalues; uv; uv = uv->next) if (
       uv->location != &uv->closed &&
-      uv->location >= old &&
-      uv->location < old + old_size
+      sv_slot_in_range(old, (size_t)old_size, uv->location)
     ) uv->location += delta;
   }
   

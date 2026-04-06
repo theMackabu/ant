@@ -383,11 +383,20 @@ static inline bool sv_frame_is_strict(const sv_frame_t *frame) {
   return frame && frame->func && frame->func->is_strict;
 }
 
+static inline bool sv_slot_in_range(
+  const ant_value_t *base, size_t count, 
+  const ant_value_t *slot
+) {
+  if (!base || !slot || count == 0) return false;
+
+  uintptr_t lo = (uintptr_t)base;
+  uintptr_t hi = lo + count * sizeof(*base);
+  uintptr_t addr = (uintptr_t)slot;
+  return addr >= lo && addr < hi;
+}
+
 static inline bool sv_slot_in_vm_stack(const sv_vm_t *vm, const ant_value_t *slot) {
-  return 
-    vm && vm->stack && slot &&
-    slot >= vm->stack &&
-    slot < vm->stack + vm->stack_size;
+  return vm && sv_slot_in_range(vm->stack, (size_t)vm->stack_size, slot);
 }
 
 static inline bool sv_is_nullish_this(ant_value_t v) {

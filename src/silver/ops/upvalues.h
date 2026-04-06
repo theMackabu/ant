@@ -62,14 +62,15 @@ static inline void sv_op_close_upval(sv_vm_t *vm, sv_frame_t *frame, uint8_t *ip
 
   sv_upvalue_t **pp = &vm->open_upvalues;
   while (*pp) {
-    sv_upvalue_t *uv = *pp;
-    if (uv->location >= slot) {
-      uv->closed = *uv->location;
-      uv->location = &uv->closed;
-      *pp = uv->next;
-    } else pp = &uv->next;
+  sv_upvalue_t *uv = *pp;
+  ant_value_t *loc = uv->location;
+  if (sv_slot_in_vm_stack(vm, loc) && loc >= slot) {
+    uv->closed = *loc;
+    uv->location = &uv->closed;
+    *pp = uv->next;
   }
-}
+  else pp = &uv->next;
+}}
 
 static inline sv_upvalue_t *sv_capture_upvalue(sv_vm_t *vm, ant_value_t *slot) {
   sv_upvalue_t **pp = &vm->open_upvalues;
