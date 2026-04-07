@@ -159,6 +159,23 @@ struct ant_isolate_t {
   ant_value_t new_target;
   ant_value_t current_func;
   ant_value_t length_str;
+  
+  struct {
+    const char *length;
+    const char *buffer;
+    const char *prototype;
+    const char *constructor;
+    const char *name;
+    const char *message;
+    const char *done;
+    const char *value;
+    const char *get;
+    const char *set;
+    const char *arguments;
+    const char *callee;
+    const char *idx[10];
+  } intern;
+  
   ant_value_t thrown_value;
   ant_value_t thrown_stack;
 

@@ -4,6 +4,7 @@
 #include "ant.h"
 #include "async.h"
 #include "utf8.h"
+#include "property.h"
 #include "silver/engine.h"
 #include "modules/symbol.h"
 #include "modules/collections.h"
@@ -134,6 +135,32 @@ static inline ant_value_t sv_op_for_await_of(sv_vm_t *vm, ant_t *js) {
   return tov(0);
 }
 
+static inline ant_value_t sv_iter_result_get_named(
+  ant_t *js,
+  ant_value_t result,
+  const char *interned,
+  const char *key,
+  ant_offset_t key_len
+) {
+  ant_object_t *ptr = is_object_type(result) 
+    ? js_obj_ptr(js_as_obj(result)) 
+    : NULL;
+    
+  ant_value_t out = js_mkundef();
+  bool should_fallback = false;
+
+  if (interned && sv_try_get_shape_data_prop(js, ptr, interned, &out, &should_fallback)) return out;
+  return sv_getprop_fallback_len(js, result, key, key_len);
+}
+
+static inline void sv_iter_result_unpack(
+  ant_t *js, ant_value_t result,
+  ant_value_t *out_done, ant_value_t *out_value
+) {
+  *out_done = sv_iter_result_get_named(js, result, js->intern.done, "done", 4);
+  *out_value = sv_iter_result_get_named(js, result, js->intern.value, "value", 5);
+}
+
 static inline ant_value_t sv_iter_advance(
   sv_vm_t *vm, ant_t *js, int hint, ant_value_t *out_value, bool *out_done
 ) {
@@ -243,8 +270,10 @@ static inline ant_value_t sv_iter_advance(
     if (is_err(result)) return result;
     if (!is_object_type(result))
       return js_mkerr_typed(js, JS_ERR_TYPE, "Iterator result is not an object");
-    ant_value_t done = js_getprop_fallback(js, result, "done");
-    *out_value = js_getprop_fallback(js, result, "value");
+    ant_value_t done = js_mkundef();
+    sv_iter_result_unpack(js, result, &done, out_value);
+    if (is_err(done)) return done;
+    if (is_err(*out_value)) return *out_value;
     *out_done = js_truthy(js, done);
     return tov(0);
   }}
@@ -265,8 +294,9 @@ static inline ant_value_t sv_op_iter_next(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
 
 static inline void sv_op_iter_get_value(sv_vm_t *vm, ant_t *js) {
   ant_value_t obj = vm->stack[--vm->sp];
-  ant_value_t done = js_getprop_fallback(js, obj, "done");
-  ant_value_t value = js_getprop_fallback(js, obj, "value");
+  ant_value_t done = js_mkundef();
+  ant_value_t value = js_mkundef();
+  sv_iter_result_unpack(js, obj, &done, &value);
   vm->stack[vm->sp++] = value;
   vm->stack[vm->sp++] = mkval(T_BOOL, js_truthy(js, done));
 }
@@ -341,8 +371,11 @@ static inline ant_value_t sv_op_await_iter_next(sv_vm_t *vm, ant_t *js) {
     if (is_err(awaited)) return awaited;
     result = awaited;
   }
-  ant_value_t done = js_getprop_fallback(js, result, "done");
-  ant_value_t value = js_getprop_fallback(js, result, "value");
+  ant_value_t done = js_mkundef();
+  ant_value_t value = js_mkundef();
+  sv_iter_result_unpack(js, result, &done, &value);
+  if (is_err(done)) return done;
+  if (is_err(value)) return value;
   if (vtype(value) == T_PROMISE) {
     ant_value_t awaited_val = sv_await_value(js, value);
     if (is_err(awaited_val)) return awaited_val;
