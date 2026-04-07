@@ -195,6 +195,13 @@ ant_value_t sv_execute_entry_tla(ant_t *js, sv_func_t *func, ant_value_t this_va
   return sv_start_tla(js, func, this_val);
 }
 
+static inline void sv_sync_frame_locals(
+  sv_vm_t *vm, sv_frame_t **frame, sv_func_t **func,
+  ant_value_t **bp, ant_value_t **lp
+) {
+  *frame = &vm->frames[vm->fp]; *func = (*frame)->func;
+  *bp = (*frame)->bp; *lp = (*frame)->lp;
+}
 
 static inline ant_value_t sv_stage_frame_args(
   sv_vm_t *vm, ant_t *js, sv_func_t *func, ant_value_t *args, int argc,
@@ -449,15 +456,16 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   };
   
   ant_value_t sv_err;
-  #define VM_CHECK(expr) do {             \
-    frame->ip = ip;                     \
-    sv_err = (expr);                    \
-    if (is_err(sv_err)) goto sv_throw;  \
-  } while (0)
   ant_value_t  tc_this = js_mkundef();
+  
+  #define VM_CHECK(expr) ({            \
+    frame->ip = ip;                    \
+    sv_err = (expr);                   \
+    if (is_err(sv_err)) goto sv_throw; \
+  })
 
-  #define DISPATCH()  goto *dispatch[*ip]
-  #define NEXT(n)     do { ip += (n); DISPATCH(); } while (0)
+  #define DISPATCH() goto *dispatch[*ip]
+  #define NEXT(n)    ({ ip += (n); DISPATCH(); })
 
   #ifdef ANT_JIT
   #define JIT_OSR_BACK_EDGE() do {                                          \
@@ -848,6 +856,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     ant_value_t call_result = sv_vm_call(
       vm, js, call_func, call_this, call_args, call_argc,
       is_super_call ? &super_this_c : NULL, is_super_call);
+    sv_sync_frame_locals(vm, &frame, &func, &bp, &lp);
     vm->sp -= call_argc + 1;
     if (is_err(call_result)) { sv_err = call_result; goto sv_throw; }
     if (is_super_call)
@@ -937,6 +946,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     ant_value_t call_result = sv_vm_call(
       vm, js, call_func, call_this, call_args, call_argc,
       is_super_call ? &super_this_cm : NULL, is_super_call);
+    sv_sync_frame_locals(vm, &frame, &func, &bp, &lp);
     vm->sp -= call_argc + 2;
     if (is_err(call_result)) { sv_err = call_result; goto sv_throw; }
     if (is_super_call)
@@ -960,6 +970,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
       ant_value_t call_args[1] = { call_arg };
       frame->ip = ip;
       call_result = sv_vm_call(vm, js, call_func, call_this, call_args, 1, NULL, false);
+      sv_sync_frame_locals(vm, &frame, &func, &bp, &lp);
     }
 
     vm->sp -= 3;
@@ -990,6 +1001,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     frame->ip = ip;
     ant_value_t call_result = sv_vm_call(
       vm, js, call_func, tc_this, call_args, call_argc, NULL, false);
+    sv_sync_frame_locals(vm, &frame, &func, &bp, &lp);
     vm->sp -= call_argc + 1;
     if (is_err(call_result)) { sv_err = call_result; goto sv_throw; }
     vm->stack[vm->sp++] = call_result;
@@ -1017,6 +1029,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     ant_value_t *call_args = &vm->stack[vm->sp - call_argc];
     ant_value_t call_result = sv_vm_call(
       vm, js, call_func, tc_this, call_args, call_argc, NULL, false);
+    sv_sync_frame_locals(vm, &frame, &func, &bp, &lp);
     vm->sp -= call_argc + 2;
     if (is_err(call_result)) { sv_err = call_result; goto sv_throw; }
     vm->stack[vm->sp++] = call_result;
