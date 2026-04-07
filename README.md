@@ -24,7 +24,7 @@ $ ls -lh ant
 
 |                     | Ant         | Node      | Bun      | Deno      |
 | ------------------- | ----------- | --------- | -------- | --------- |
-| Binary size         | **~8 MB**   | ~120 MB   | ~60 MB   | ~90 MB    |
+| Binary size         | **~8 MB**   | ~120 MB   | ~60 MB   | ~120 MB   |
 | Cold start          | **~3-5 ms** | ~30-50 ms | ~5-10 ms | ~20-30 ms |
 | Engine              | Ant Silver  | V8        | JSC      | V8        |
 | JIT                 | ✓           | ✓         | ✓        | ✓         |
