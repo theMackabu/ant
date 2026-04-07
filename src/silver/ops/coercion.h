@@ -239,6 +239,27 @@ static inline void sv_with_fallback_put(
   }
 }
 
+static inline bool sv_try_get_with_bound_value(
+  ant_t *js,
+  ant_value_t with_obj,
+  const sv_atom_t *a,
+  ant_value_t *out
+) {
+  ant_object_t *ptr = is_object_type(with_obj) ? js_obj_ptr(js_as_obj(with_obj)) : NULL;
+  const char *interned = intern_string(a->str, a->len);
+
+  if (ptr && interned) {
+    bool should_fallback = false;
+    if (sv_try_get_shape_data_prop(js, ptr, interned, out, &should_fallback)) return true;
+    if (!should_fallback) return false;
+  }
+
+  if (lkp(js, with_obj, a->str, a->len) == 0) return false;
+  *out = sv_getprop_fallback_len(js, with_obj, a->str, (ant_offset_t)a->len);
+  
+  return true;
+}
+
 static inline ant_value_t sv_op_with_get_var(
   sv_vm_t *vm, ant_t *js,
   sv_frame_t *frame,
@@ -250,14 +271,12 @@ static inline ant_value_t sv_op_with_get_var(
   sv_atom_t *a = &func->atoms[atom_idx];
 
   if (vtype(frame->with_obj) != T_UNDEF) {
-    if (lkp(js, frame->with_obj, a->str, a->len) != 0) {
-      ant_value_t val = sv_getprop_fallback_len(
-        js, frame->with_obj, a->str, (ant_offset_t)a->len);
-      if (is_err(val)) return val;
-      vm->stack[vm->sp++] = val;
-      return js_mkundef();
-    }
-  }
+  ant_value_t val = js_mkundef();
+  if (sv_try_get_with_bound_value(js, frame->with_obj, a, &val)) {
+    if (is_err(val)) return val;
+    vm->stack[vm->sp++] = val;
+    return js_mkundef();
+  }}
 
   if (fb_kind == WITH_FB_GLOBAL) {
     ant_value_t val = sv_global_get(js, a->str, a->len);
