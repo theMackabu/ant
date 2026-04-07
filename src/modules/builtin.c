@@ -23,6 +23,7 @@
 #include "silver/engine.h"
 #include "modules/builtin.h"
 #include "modules/buffer.h"
+#include "modules/symbol.h"
 
 static struct {
   ant_t *js;
@@ -305,10 +306,63 @@ static ant_value_t js_stats_fn(ant_t *js, ant_value_t *args, int nargs) {
   return result;
 }
 
+static inline ant_value_t match_resolve_arm(ant_t *js, ant_value_t arm, ant_value_t value) {
+  if (!is_callable(arm)) return arm;
+  return sv_vm_call(js->vm, js, arm, js_mkundef(), &value, 1, NULL, false);
+}
+
+static ant_value_t js_match(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 2) return js_mkerr(js, "Ant.match() requires 2 arguments");
+
+  ant_value_t value = args[0];
+  ant_value_t arms = args[1];
+
+  if (is_callable(arms)) {
+    arms = sv_vm_call(js->vm, js, arms, js_mkundef(), &value, 1, NULL, false);
+    if (is_err(arms)) return arms;
+  }
+
+  if (!is_object_type(arms)) return js_mkundef();
+  ant_value_t value_str = js_tostring_val(js, value);
+  const char *vs = js_getstr(js, value_str, NULL);
+
+  ant_iter_t iter = js_prop_iter_begin(js, arms);
+  ant_value_t guard_arm = js_mkundef();
+  
+  ant_value_t key = js_mkundef();
+  ant_value_t arm = js_mkundef();
+
+  while (js_prop_iter_next_val(&iter, &key, &arm)) {
+    if (vtype(key) == T_SYMBOL) continue;
+    
+    const char *ks = js_getstr(js, key, NULL);
+    if (!ks) continue;
+    
+    if (strcmp(ks, vs) == 0) {
+      js_prop_iter_end(&iter);
+      return match_resolve_arm(js, arm, value);
+    }
+    
+    if (
+      strcmp(ks, "true") == 0 
+      && vtype(guard_arm) == T_UNDEF
+    ) guard_arm = arm;
+  }
+
+  js_prop_iter_end(&iter);
+  if (vtype(guard_arm) != T_UNDEF) return match_resolve_arm(js, guard_arm, value);
+  
+  ant_value_t fallback = js_get_sym(js, arms, get_default_sym());
+  if (vtype(fallback) != T_UNDEF) return match_resolve_arm(js, fallback, value);
+
+  return js_mkundef();
+}
+
 void init_builtin_module() {
   ant_t *js = rt->js;
   ant_value_t ant_obj = rt->ant_obj;
 
+  js_set(js, ant_obj, "match", js_mkfun(js_match));
   js_set(js, ant_obj, "stats", js_mkfun(js_stats_fn));
   js_set(js, ant_obj, "signal", js_mkfun(js_signal));
   js_set(js, ant_obj, "sleep", js_mkfun(js_sleep));

@@ -48,7 +48,8 @@ ant_value_t maybe_call_symbol_method(
   X(observable,          "Symbol.observable")          \
   X(toPrimitive,         "Symbol.toPrimitive")         \
   X(species,             "Symbol.species")             \
-  X(unscopables,         "Symbol.unscopables")
+  X(unscopables,         "Symbol.unscopables")         \
+  X(default,             "Symbol.default")
 
 #define DECL_GET_SYM(name, _desc) ant_value_t get_##name##_sym(void);
 WELLKNOWN_SYMBOLS(DECL_GET_SYM)

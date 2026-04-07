@@ -6150,7 +6150,7 @@ static ant_value_t builtin_object_assign(ant_t *js, ant_value_t *args, int nargs
   return target;
 }
 
-static ant_value_t builtin_object_freeze(ant_t *js, ant_value_t *args, int nargs) {
+ant_value_t builtin_object_freeze(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return js_mkundef();
   
   ant_value_t obj = args[0];
@@ -6167,19 +6167,17 @@ static ant_value_t builtin_object_freeze(ant_t *js, ant_value_t *args, int nargs
   for (uint32_t i = 0; i < count; i++) {
     const ant_shape_prop_t *prop = ant_shape_prop_at(ptr->shape, i);
     if (!prop) continue;
-
+    
     uint8_t attrs = ant_shape_get_attrs(ptr->shape, i);
     attrs &= (uint8_t)~ANT_PROP_ATTR_WRITABLE;
     attrs &= (uint8_t)~ANT_PROP_ATTR_CONFIGURABLE;
-
+    
     if (prop->type == ANT_SHAPE_KEY_STRING) {
       const char *key = prop->key.interned;
       size_t klen = strlen(key);
       if (is_internal_prop(key, klen)) continue;
       ant_shape_set_attrs_interned(ptr->shape, key, attrs);
-    } else {
-      ant_shape_set_attrs_symbol(ptr->shape, prop->key.sym_off, attrs);
-    }
+    } else ant_shape_set_attrs_symbol(ptr->shape, prop->key.sym_off, attrs);
   }
   
   ptr->frozen = 1;

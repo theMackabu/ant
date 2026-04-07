@@ -2285,6 +2285,30 @@ static void compile_call(sv_compiler_t *c, sv_ast_t *node) {
   if (compile_call_is_proto_intrinsic(c, node, has_spread))
     return;
 
+  if (
+    !has_spread && node->args.count >= 2 &&
+    callee->type == N_MEMBER &&
+    is_ident_name(callee->left, "Ant") &&
+    resolve_local(c, "Ant", 3) == -1 &&
+    callee->right && callee->right->type == N_IDENT &&
+    callee->right->len == 5 && memcmp(callee->right->str, "match", 5) == 0 &&
+    node->args.items[1]->type == N_OBJECT
+  ) {
+    sv_ast_t *obj = node->args.items[1];
+    sv_ast_t *param = sv_ast_new(N_IDENT);
+    
+    param->str = "$"; param->len = 1;
+    sv_ast_t *arrow = sv_ast_new(N_FUNC);
+    
+    arrow->flags = FN_ARROW;
+    arrow->body = obj;
+    arrow->line = obj->line; arrow->col = obj->col;
+    arrow->src_off = obj->src_off; arrow->src_end = obj->src_end;
+    
+    sv_ast_list_push(&arrow->args, param);
+    node->args.items[1] = arrow;
+  }
+
   if (!has_spread && is_ident_name(callee, "eval")) {
     if (node->args.count > 0)
       compile_expr(c, node->args.items[0]);
