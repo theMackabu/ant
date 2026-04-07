@@ -38,6 +38,7 @@
 #include "gc/modules.h"
 
 #include "modules/process.h"
+#include "modules/tty.h"
 #include "modules/symbol.h"
 #include "modules/buffer.h"
 #include "modules/napi.h"
@@ -95,8 +96,6 @@ static stdin_state_t stdin_state = {0};
 static uint64_t process_start_time = 0;
 
 #ifndef _WIN32
-static struct termios stdin_saved_termios;
-static bool stdin_raw_mode = false;
 static uv_signal_t sigwinch_handle;
 static bool sigwinch_initialized = false;
 #endif
@@ -624,31 +623,10 @@ static void get_tty_size(int fd, int *rows, int *cols) {
   if (cols) *cols = out_cols;
 }
 
-#ifndef _WIN32
 static bool stdin_set_raw_mode(bool enable) {
   if (!stdin_is_tty()) return false;
-  if (enable) {
-    if (stdin_raw_mode) return true;
-    if (tcgetattr(STDIN_FILENO, &stdin_saved_termios) == -1) return false;
-    struct termios raw = stdin_saved_termios;
-    raw.c_lflag &= ~(ICANON | ECHO | ISIG);
-    raw.c_cc[VMIN] = 1;
-    raw.c_cc[VTIME] = 0;
-    if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) == -1) return false;
-    stdin_raw_mode = true;
-    return true;
-  }
-  if (!stdin_raw_mode) return true;
-  if (tcsetattr(STDIN_FILENO, TCSANOW, &stdin_saved_termios) == -1) return false;
-  stdin_raw_mode = false;
-  return true;
+  return tty_set_raw_mode(STDIN_FILENO, enable);
 }
-#else
-static bool stdin_set_raw_mode(bool enable) {
-  (void)enable;
-  return false;
-}
-#endif
 
 static void stdin_alloc_buffer(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
   (void)handle;
@@ -680,13 +658,13 @@ static void stdin_start_reading(void) {
     uv_loop_t *loop = uv_default_loop();
     if (uv_tty_init(loop, &stdin_state.tty, STDIN_FILENO, 1) != 0) return;
 #ifndef _WIN32
-    uv_tty_set_mode(&stdin_state.tty, stdin_raw_mode ? UV_TTY_MODE_RAW : UV_TTY_MODE_NORMAL);
+    uv_tty_set_mode(&stdin_state.tty, tty_is_raw_mode(STDIN_FILENO) ? UV_TTY_MODE_RAW : UV_TTY_MODE_NORMAL);
 #endif
     stdin_state.tty.data = NULL;
     stdin_state.tty_initialized = true;
   } else {
 #ifndef _WIN32
-    uv_tty_set_mode(&stdin_state.tty, stdin_raw_mode ? UV_TTY_MODE_RAW : UV_TTY_MODE_NORMAL);
+    uv_tty_set_mode(&stdin_state.tty, tty_is_raw_mode(STDIN_FILENO) ? UV_TTY_MODE_RAW : UV_TTY_MODE_NORMAL);
 #endif
   }
   stdin_state.reading = true;

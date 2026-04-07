@@ -266,7 +266,7 @@ static struct {
 } raw_state = { .fd = -1, .active = false };
 #endif
 
-static bool set_raw_mode_fd(int fd, bool enable) {
+bool tty_set_raw_mode(int fd, bool enable) {
 #ifdef _WIN32
   intptr_t os_handle = _get_osfhandle(fd);
   if (os_handle == -1) return false;
@@ -296,7 +296,12 @@ static bool set_raw_mode_fd(int fd, bool enable) {
     raw.c_iflag &= ~(IXON | ICRNL);
     raw.c_cc[VMIN] = 1;
     raw.c_cc[VTIME] = 0;
-
+#ifdef VDISCARD
+    raw.c_cc[VDISCARD] = _POSIX_VDISABLE;
+#endif
+#ifdef VLNEXT
+    raw.c_cc[VLNEXT] = _POSIX_VDISABLE;
+#endif
     if (tcsetattr(fd, TCSANOW, &raw) == -1) return false;
     raw_state.fd = fd;
     raw_state.saved = saved;
@@ -309,6 +314,14 @@ static bool set_raw_mode_fd(int fd, bool enable) {
   raw_state.fd = -1;
   raw_state.active = false;
   return true;
+#endif
+}
+
+bool tty_is_raw_mode(int fd) {
+#ifdef _WIN32
+  return false;
+#else
+  return raw_state.active && raw_state.fd == fd;
 #endif
 }
 
@@ -548,27 +561,8 @@ static ant_value_t tty_read_stream_set_raw_mode(ant_t *js, ant_value_t *args, in
   }
 
   bool enable = nargs > 0 ? js_truthy(js, args[0]) : true;
-
-  ant_value_t native_fn = js_get(js, this_obj, "__antNativeSetRawMode");
-  if (is_callable(native_fn)) {
-    ant_value_t call_args[1];
-    int call_nargs = 0;
-    if (nargs > 0) {
-      call_args[0] = args[0];
-      call_nargs = 1;
-    }
-    ant_value_t result = sv_vm_call(
-      js->vm, js, native_fn, this_obj,
-      call_nargs > 0 ? call_args : NULL, call_nargs,
-      NULL, false
-    );
-    if (vtype(result) == T_ERR) return result;
-    js_set(js, this_obj, "isRaw", js_bool(js_truthy(js, result) && enable));
-    return this_obj;
-  }
-
   int fd = stream_fd_from_this(js, ANT_STDIN_FD);
-  if (!set_raw_mode_fd(fd, enable)) {
+  if (!tty_set_raw_mode(fd, enable)) {
     return js_mkerr_typed(js, JS_ERR_GENERIC, "Failed to set raw mode for fd %d", fd);
   }
   js_set(js, this_obj, "isRaw", js_bool(enable));
@@ -691,10 +685,6 @@ void init_tty_module(void) {
 
     ant_value_t stdin_proto = js_get_proto(js, stdin_obj);
     if (is_special_object(stdin_proto)) {
-      ant_value_t native_set_raw = js_get(js, stdin_proto, "setRawMode");
-      if (is_callable(native_set_raw)) {
-        js_set(js, stdin_proto, "__antNativeSetRawMode", native_set_raw);
-      }
       js_set_proto_init(stdin_proto, stream_readable_prototype(js));
       setup_readstream_proto(js, stdin_proto);
     }
