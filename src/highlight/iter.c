@@ -356,6 +356,13 @@ bool hl_iter_next(hl_iter *it, hl_span *out) {
     return true;
   }
 
+  if (i == 0 && c == '#' && i + 1 < input_len && input[i + 1] == '!') {
+    while (i < input_len && input[i] != '\n') i++;
+    *out = (hl_span){ 0, i, HL_COMMENT };
+    it->pos = i;
+    return true;
+  }
+
   if (it->state.mode == HL_STATE_STRING_SINGLE || it->state.mode == HL_STATE_STRING_DOUBLE) {
     char quote = (it->state.mode == HL_STATE_STRING_SINGLE) ? '\'' : '"';
     size_t start = i;

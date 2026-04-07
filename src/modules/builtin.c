@@ -6,6 +6,7 @@
 #include <string.h>
 #include <time.h>
 #include <errno.h>
+#include <crprintf.h>
 
 #ifdef __APPLE__
 #include <mach/mach.h>
@@ -18,6 +19,7 @@
 #include "errors.h"
 #include "runtime.h"
 #include "internal.h"
+#include "highlight.h"
 #include "descriptors.h"
 
 #include "silver/engine.h"
@@ -358,6 +360,57 @@ static ant_value_t js_match(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
+static ant_value_t hl_get_tagged(ant_t *js, ant_value_t *args, int nargs) {
+  size_t input_len;
+  char *input = js_getstr(js, args[0], &input_len);
+
+  size_t out_size = input_len * 8 + 1;
+  char *out = malloc(out_size);
+  if (!out) return js_mkerr(js, "out of memory");
+
+  int len = ant_highlight(input, input_len, out, out_size);
+  ant_value_t result = js_mkstr(js, out, (size_t)len);
+  free(out);
+  
+  return result;
+}
+
+static ant_value_t hl_render_tagged(ant_t *js, ant_value_t tagged) {
+  size_t tagged_len;
+  char *tagged_str = js_getstr(js, tagged, &tagged_len);
+
+  size_t ansi_size = tagged_len * 2 + 1;
+  char *ansi = malloc(ansi_size);
+  if (!ansi) return js_mkerr(js, "out of memory");
+
+  int len = crsprintf_stateful(ansi, ansi_size, NULL, tagged_str);
+  ant_value_t result = js_mkstr(js, ansi, len < 0 ? 0 : (size_t)len);
+  free(ansi);
+  
+  return result;
+}
+
+static ant_value_t js_highlight(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "Ant.highlight() requires 1 argument");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "Ant.highlight() argument must be a string");
+
+  ant_value_t tagged = hl_get_tagged(js, args, nargs);
+  if (is_err(tagged)) return tagged;
+  return hl_render_tagged(js, tagged);
+}
+
+static ant_value_t js_highlight_render(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "Ant.highlight.render() requires 1 argument");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "Ant.highlight.render() argument must be a string");
+  return hl_render_tagged(js, args[0]);
+}
+
+static ant_value_t js_highlight_tags(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "Ant.highlight.tags() requires 1 argument");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "Ant.highlight.tags() argument must be a string");
+  return hl_get_tagged(js, args, nargs);
+}
+
 void init_builtin_module() {
   ant_t *js = rt->js;
   ant_value_t ant_obj = rt->ant_obj;
@@ -368,6 +421,14 @@ void init_builtin_module() {
   js_set(js, ant_obj, "sleep", js_mkfun(js_sleep));
   js_set(js, ant_obj, "msleep", js_mkfun(js_msleep));
   js_set(js, ant_obj, "usleep", js_mkfun(js_usleep));
+  
+  ant_value_t hl_obj = js_newobj(js);
+  ant_value_t hl_fn = js_obj_to_func(hl_obj);
+  
+  js_set_slot(hl_obj, SLOT_CFUNC, js_mkfun(js_highlight));
+  js_set(js, hl_fn, "render", js_mkfun(js_highlight_render));
+  js_set(js, hl_fn, "tags", js_mkfun(js_highlight_tags));
+  js_set(js, ant_obj, "highlight", hl_fn);
 
   ant_value_t raw_obj = js_newobj(js);
   js_set_getter_desc(js, js_as_obj(raw_obj), "stack", 5, js_mkfun(js_raw_stack), JS_DESC_C);

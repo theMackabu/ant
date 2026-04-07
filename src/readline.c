@@ -308,24 +308,20 @@ static void refresh_line(const char *line, int len, int pos, const char *prompt)
   repl_clear_to_end();
   if (crprintf_get_color() && len > 0) {
     if (len <= 2048) {
-      char tagged[8192];
-      char rendered[8192];
-
-      highlight_state state = hl_line_state;
-      ant_highlight_stateful(line, (size_t)len, tagged, sizeof(tagged), &state);
-
-      hl_prog = crprintf_recompile(hl_prog, tagged);
-      crprintf_state *rs = crprintf_state_new();
-      crsprintf_compiled(rendered, sizeof(rendered), rs, hl_prog);
-      crprintf_state_free(rs);
-
-      fputs(rendered, stdout);
-    } else {
-      fwrite(line, 1, (size_t)len, stdout);
-    }
-  } else if (len > 0) {
-    fwrite(line, 1, (size_t)len, stdout);
-  }
+    char tagged[8192];
+    char rendered[8192];
+    
+    highlight_state state = hl_line_state;
+    ant_highlight_stateful(line, (size_t)len, tagged, sizeof(tagged), &state);
+    
+    hl_prog = crprintf_recompile(hl_prog, tagged);
+    crprintf_state *rs = crprintf_state_new();
+    crsprintf_compiled(rendered, sizeof(rendered), rs, hl_prog);
+    crprintf_state_free(rs);
+    
+    fputs(rendered, stdout);
+    } else fwrite(line, 1, (size_t)len, stdout);
+  } else if (len > 0) fwrite(line, 1, (size_t)len, stdout);
   
 #ifndef _WIN32
   if ((x_end == 0) && (y_end > 0) && (len > 0) && (line[len - 1] != '\n')) {
