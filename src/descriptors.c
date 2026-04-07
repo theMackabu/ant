@@ -41,6 +41,14 @@ static inline bool desc_registry_allowed(ant_value_t obj) {
   return false;
 }
 
+static bool ensure_added_shape_slot_storage(ant_object_t *ptr, uint32_t slot) {
+  if (!ptr || !ptr->shape) return false;
+  if (!js_obj_ensure_prop_capacity(ptr, ant_shape_count(ptr->shape))) return false;
+  if (slot >= ptr->prop_count && !js_obj_ensure_prop_capacity(ptr, slot + 1)) return false;
+  
+  return true;
+}
+
 static inline uint8_t attrs_from_flags(int flags, bool include_writable) {
   uint8_t attrs = 0;
   if (include_writable && (flags & JS_DESC_W)) attrs |= ANT_PROP_ATTR_WRITABLE;
@@ -161,11 +169,10 @@ static bool ensure_string_shape_slot(ant_t *js, ant_value_t obj, const char *key
 
   int32_t slot = ant_shape_lookup_interned(ptr->shape, interned);
   if (slot < 0) {
-    ant_value_t key_val = js_mkstr(js, key, klen);
-    if (is_err(key_val)) return false;
-    if (is_err(mkprop(js, obj, key_val, js_mkundef(), 0))) return false;
-    slot = ant_shape_lookup_interned(ptr->shape, interned);
-    if (slot < 0) return false;
+    uint32_t added_slot = 0;
+    if (!ant_shape_add_interned_tr(&ptr->shape, interned, ANT_PROP_ATTR_DEFAULT, &added_slot)) return false;
+    if (!ensure_added_shape_slot_storage(ptr, added_slot)) return false;
+    slot = (int32_t)added_slot;
   }
 
   if (out_slot) *out_slot = (uint32_t)slot;
