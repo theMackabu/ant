@@ -3883,7 +3883,7 @@ ant_offset_t lkp_proto(ant_t *js, ant_value_t obj, const char *key, size_t len) 
       ant_value_t func_proto = get_ctor_proto(js, "Function", 8);
       uint8_t ft = vtype(func_proto);
       if (ft == T_OBJ || ft == T_ARR || ft == T_FUNC) {
-        ant_offset_t off = lkp(js, js_as_obj(func_proto), key, len);
+        ant_offset_t off = lkp_interned(js, js_as_obj(func_proto), key_intern, len);
         if (off != 0) return off;
       }
       break;
