@@ -88,11 +88,21 @@ if get_option('static_link')
   link_args += ['-static']
 endif
 
+ant_link_args = link_args
+if get_option('linker_map')
+  ant_linkmap = meson.project_build_root() + '/ant.linkmap'
+  if host_machine.system() == 'darwin'
+    ant_link_args += ['-Wl,-map,' + ant_linkmap]
+  else
+    ant_link_args += ['-Wl,-Map=' + ant_linkmap]
+  endif
+endif
+
 executable(
   'ant',
   files('src/main.c', 'src/watch.c') + [messages_h],
   dependencies: libant_dep,
-  link_args: link_args,
+  link_args: ant_link_args,
   export_dynamic: true
 )
 
