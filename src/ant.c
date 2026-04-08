@@ -13399,7 +13399,7 @@ ant_value_t js_eval_bytecode_repl(ant_t *js, const char *buf, size_t len) {
   return js_eval_bytecode_mode(js, buf, len, SV_COMPILE_REPL, false);
 }
 
-ant_value_t inline sv_call_cfunc(ant_params_t, ant_bind_t) {
+static inline ant_value_t sv_call_cfunc(ant_params_t, ant_bind_t) {
   ant_value_t saved_this = js->this_val;
   js->this_val = this_val;
   ant_value_t res = js_as_cfunc(func)(js, args, nargs);
@@ -13407,7 +13407,7 @@ ant_value_t inline sv_call_cfunc(ant_params_t, ant_bind_t) {
   return res;
 }
 
-ant_value_t inline sv_call_slot_cfunc(ant_params_t, ant_bind_t, ant_value_t cfunc_slot) {
+static inline ant_value_t sv_call_slot_cfunc(ant_params_t, ant_bind_t, ant_value_t cfunc_slot) {
   ant_value_t saved_func = js->current_func;
   ant_value_t saved_this = js->this_val;
   js->current_func = func;
@@ -13419,7 +13419,7 @@ ant_value_t inline sv_call_slot_cfunc(ant_params_t, ant_bind_t, ant_value_t cfun
 }
 
 
-ant_value_t inline sv_call_object_builtin(ant_params_t, ant_value_t this_val) {
+static inline ant_value_t sv_call_object_builtin(ant_params_t, ant_value_t this_val) {
   ant_value_t saved_this = js->this_val;
   js->this_val = this_val;
   ant_value_t res = builtin_Object(js, args, nargs);

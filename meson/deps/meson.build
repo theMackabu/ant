@@ -12,6 +12,7 @@ boringssl_warning_flag = cc.get_argument_syntax() == 'msvc' ? '/W0' : '-w'
 boringssl_opts.append_compile_args('c', boringssl_warning_flag)
 boringssl_opts.append_compile_args('cpp', boringssl_warning_flag)
 boringssl_opts.set_override_option('warning_level', '0')
+boringssl_opts.set_override_option('optimization', 's')
 
 boringssl_sub = cmake.subproject('boringssl', options: boringssl_opts)
 ssl_dep = boringssl_sub.dependency('ssl')
@@ -137,6 +138,7 @@ libffi_dep = subproject('libffi', default_options: [
 ]).get_variable('ffi_dep')
 
 pcre2_dep = subproject('pcre2', default_options: [
+  'optimization=s',
   'warning_level=0',
   'grep=false',
   'test=false'
