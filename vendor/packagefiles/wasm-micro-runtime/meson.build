@@ -72,6 +72,7 @@ wamr_inc = include_directories(
   'core/shared/platform/include',
   'core/shared/platform/common/libc-util',
   'core/shared/platform/common/memory',
+  'core/shared/platform/common/posix',
 )
 
 if wamr_platform == 'windows'
@@ -90,7 +91,6 @@ if wamr_platform == 'windows'
     'core/shared/platform/common/memory/mremap.c',
   )
 else
-  wamr_inc += include_directories('core/shared/platform/common/posix')
   wamr_sources = files(
   'core/shared/platform/' + wamr_platform + '/platform_init.c',
   'core/shared/platform/common/libc-util/libc_errno.c',

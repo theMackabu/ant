@@ -5,89 +5,82 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#define ANT_INTERNAL_SLOT_LIST(X) \
+  X(SLOT_NONE)                    \
+  X(SLOT_ASYNC)                   \
+  X(SLOT_CODE)                    \
+  X(SLOT_CODE_LEN)                \
+  X(SLOT_CFUNC)                   \
+  X(SLOT_CORO)                    \
+  X(SLOT_PROTO)                   \
+  X(SLOT_FUNC_PROTO)              \
+  X(SLOT_ASYNC_PROTO)             \
+  X(SLOT_AUX)                     \
+  X(SLOT_TARGET_FUNC)             \
+  X(SLOT_MODULE_CTX)              \
+  X(SLOT_MODULE_LOADING)          \
+  X(SLOT_MAP)                     \
+  X(SLOT_SET)                     \
+  X(SLOT_PRIMITIVE)               \
+  X(SLOT_PROXY_REF)               \
+  X(SLOT_BUILTIN)                 \
+  X(SLOT_BRAND)                   \
+  X(SLOT_DATA)                    \
+  X(SLOT_CTOR)                    \
+  X(SLOT_FS_FLAGS)                \
+  X(SLOT_DEFAULT)                 \
+  X(SLOT_ERROR_BRAND)             \
+  X(SLOT_ERR_TYPE)                \
+  X(SLOT_OBSERVABLE_SUBSCRIBER)   \
+  X(SLOT_SUBSCRIPTION_OBSERVER)   \
+  X(SLOT_SUBSCRIPTION_CLEANUP)    \
+  X(SLOT_STRICT_ARGS)             \
+  X(SLOT_ITER_STATE)              \
+  X(SLOT_ENTRIES)                 \
+  X(SLOT_SETTLED)                 \
+  X(SLOT_WT_ON_MESSAGE)           \
+  X(SLOT_WT_ONCE_MESSAGE)         \
+  X(SLOT_WT_ON_EXIT)              \
+  X(SLOT_WT_ONCE_EXIT)            \
+  X(SLOT_WT_PORT_TAG)             \
+  X(SLOT_WT_PORT_QUEUE)           \
+  X(SLOT_WT_PORT_HEAD)            \
+  X(SLOT_WT_PORT_PEER)            \
+  X(SLOT_WT_PORT_CLOSED)          \
+  X(SLOT_WT_PORT_STARTED)         \
+  X(SLOT_WT_PORT_ON_MESSAGE)      \
+  X(SLOT_WT_PORT_ONCE_MESSAGE)    \
+  X(SLOT_WT_PORT_PROTO)           \
+  X(SLOT_WT_ENV_STORE)            \
+  X(SLOT_NAPI_EXTERNAL_ID)        \
+  X(SLOT_NAPI_WRAP_ID)            \
+  X(SLOT_RS_PULL)                 \
+  X(SLOT_RS_CANCEL)               \
+  X(SLOT_RS_SIZE)                 \
+  X(SLOT_RS_CLOSED)               \
+  X(SLOT_WS_WRITE)                \
+  X(SLOT_WS_CLOSE)                \
+  X(SLOT_WS_ABORT)                \
+  X(SLOT_WS_READY)                \
+  X(SLOT_WS_SIGNAL)               \
+  X(SLOT_HEADERS_GUARD)           \
+  X(SLOT_REQUEST_HEADERS)         \
+  X(SLOT_REQUEST_SIGNAL)          \
+  X(SLOT_REQUEST_ABORT_REASON)    \
+  X(SLOT_REQUEST_BODY_STREAM)     \
+  X(SLOT_RESPONSE_HEADERS)        \
+  X(SLOT_RESPONSE_BODY_STREAM)    \
+  X(SLOT_PIPE_ABORT_LISTENER)     \
+  X(SLOT_MATCHALL_RX)             \
+  X(SLOT_MATCHALL_STR)            \
+  X(SLOT_MATCHALL_DONE)
+
+#define ANT_DECLARE_INTERNAL_SLOT(name) name,
 typedef enum {
-  SLOT_NONE = 0,
-  SLOT_PID,
-  SLOT_ASYNC,
-  SLOT_WITH,
-  SLOT_THIS,
-  SLOT_NEW_TARGET,
-  SLOT_FIELD_COUNT,
-  SLOT_FIELDS,
-  SLOT_STRICT,
-  SLOT_CODE,
-  SLOT_CODE_LEN,
-  SLOT_CFUNC,
-  SLOT_CORO,
-  SLOT_PROTO,
-  SLOT_FUNC_PROTO,
-  SLOT_ASYNC_PROTO,
-  SLOT_AUX,
-  SLOT_TARGET_FUNC,
-  SLOT_NAME,
-  SLOT_MODULE_CTX,
-  SLOT_MODULE_LOADING,
-  SLOT_MAP,
-  SLOT_SET,
-  SLOT_PRIMITIVE,
-  SLOT_PROXY_REF,
-  SLOT_BUILTIN,
-  SLOT_BRAND,
-  SLOT_DATA,
-  SLOT_CTOR,
-  SLOT_FS_FLAGS,
-  SLOT_DEFAULT,
-  SLOT_ERROR_BRAND,
-  SLOT_ERR_TYPE,
-  SLOT_OBSERVABLE_SUBSCRIBER,
-  SLOT_SUBSCRIPTION_OBSERVER,
-  SLOT_SUBSCRIPTION_CLEANUP,
-  SLOT_HOISTED_VARS,
-  SLOT_HOISTED_VARS_LEN,
-  SLOT_STRICT_ARGS,
-  SLOT_NO_FUNC_DECLS,
-  SLOT_ITER_STATE,
-  SLOT_BYTECODE,
-  SLOT_ENTRIES,
-  SLOT_SETTLED,
-  SLOT_WT_ON_MESSAGE,
-  SLOT_WT_ONCE_MESSAGE,
-  SLOT_WT_ON_EXIT,
-  SLOT_WT_ONCE_EXIT,
-  SLOT_WT_PORT_TAG,
-  SLOT_WT_PORT_QUEUE,
-  SLOT_WT_PORT_HEAD,
-  SLOT_WT_PORT_PEER,
-  SLOT_WT_PORT_CLOSED,
-  SLOT_WT_PORT_STARTED,
-  SLOT_WT_PORT_ON_MESSAGE,
-  SLOT_WT_PORT_ONCE_MESSAGE,
-  SLOT_WT_PORT_PROTO,
-  SLOT_WT_ENV_STORE,
-  SLOT_NAPI_EXTERNAL_ID,
-  SLOT_NAPI_WRAP_ID,
-  SLOT_RS_PULL,
-  SLOT_RS_CANCEL,
-  SLOT_RS_SIZE,
-  SLOT_RS_CLOSED,
-  SLOT_WS_WRITE,
-  SLOT_WS_CLOSE,
-  SLOT_WS_ABORT,
-  SLOT_WS_READY,
-  SLOT_WS_SIGNAL,
-  SLOT_HEADERS_GUARD,
-  SLOT_REQUEST_HEADERS,
-  SLOT_REQUEST_SIGNAL,
-  SLOT_REQUEST_ABORT_REASON,
-  SLOT_REQUEST_BODY_STREAM,
-  SLOT_RESPONSE_HEADERS,
-  SLOT_RESPONSE_BODY_STREAM,
-  SLOT_PIPE_ABORT_LISTENER,
-  SLOT_MATCHALL_RX,
-  SLOT_MATCHALL_STR,
-  SLOT_MATCHALL_DONE,
+  ANT_INTERNAL_SLOT_LIST(ANT_DECLARE_INTERNAL_SLOT)
   SLOT_MAX = 255
 } internal_slot_t;
+#undef ANT_DECLARE_INTERNAL_SLOT
 
 typedef enum {
   BUILTIN_NONE = 0,

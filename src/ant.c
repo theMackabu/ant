@@ -32,7 +32,6 @@
 #include "silver/engine.h"
 
 #include <uv.h>
-#include <oxc.h>
 #include <assert.h>
 #include <pcre2.h>
 #include <stdio.h>
@@ -2609,16 +2608,6 @@ static void set_func_code(ant_t *js, ant_value_t func_obj, const char *code, siz
   const char *arena_code = code_arena_alloc(code, len);
   if (!arena_code) return;
   set_func_code_ptr(js, func_obj, arena_code, len);
-  
-  if (!memmem(code, len, "var", 3)) return;
-  
-  size_t vars_buf_len;
-  char *vars = OXC_get_func_hoisted_vars(code, len, &vars_buf_len);
-  
-  if (vars) {
-    set_slot(func_obj, SLOT_HOISTED_VARS, mkval(T_CFUNC, (size_t)vars));
-    set_slot(func_obj, SLOT_HOISTED_VARS_LEN, tov((double)vars_buf_len));
-  }
 }
 
 static const char *get_func_code(ant_t *js, ant_value_t func_obj, ant_offset_t *len) {

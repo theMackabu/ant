@@ -570,51 +570,16 @@ static ant_value_t js_console_timeEnd(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static const char *get_slot_name(internal_slot_t slot) {
+  #define ANT_SLOT_NAME(name) [name] = &#name[5],
   static const char *slot_names[] = {
-    [SLOT_NONE] = "NONE",
-    [SLOT_PID] = "PID",
-    [SLOT_ASYNC] = "ASYNC",
-    [SLOT_WITH] = "WITH",
-    [SLOT_THIS] = "THIS",
-    [SLOT_NEW_TARGET] = "NEW_TARGET",
-    [SLOT_FIELD_COUNT] = "FIELD_COUNT",
-    [SLOT_FIELDS] = "FIELDS",
-    [SLOT_STRICT] = "STRICT",
-    [SLOT_CODE] = "CODE",
-    [SLOT_CODE_LEN] = "CODE_LEN",
-    [SLOT_CFUNC] = "CFUNC",
-    [SLOT_CORO] = "CORO",
-    [SLOT_PROTO] = "PROTO",
-    [SLOT_FUNC_PROTO] = "FUNC_PROTO",
-    [SLOT_ASYNC_PROTO] = "ASYNC_PROTO",
-    [SLOT_AUX] = "AUX",
-    [SLOT_TARGET_FUNC] = "TARGET_FUNC",
-    [SLOT_NAME] = "NAME",
-    [SLOT_MODULE_CTX] = "MODULE_CTX",
-    [SLOT_MAP] = "MAP",
-    [SLOT_SET] = "SET",
-    [SLOT_PRIMITIVE] = "PRIMITIVE",
-    [SLOT_PROXY_REF] = "PROXY_REF",
-    [SLOT_BUILTIN] = "BUILTIN",
-    [SLOT_DATA] = "DATA",
-    [SLOT_CTOR] = "CTOR",
-    [SLOT_DEFAULT] = "DEFAULT",
-    [SLOT_ERROR_BRAND] = "ERROR_BRAND",
-    [SLOT_ERR_TYPE] = "ERR_TYPE",
-    [SLOT_OBSERVABLE_SUBSCRIBER] = "OBSERVABLE_SUBSCRIBER",
-    [SLOT_SUBSCRIPTION_OBSERVER] = "SUBSCRIPTION_OBSERVER",
-    [SLOT_SUBSCRIPTION_CLEANUP] = "SUBSCRIPTION_CLEANUP",
-    [SLOT_HOISTED_VARS] = "HOISTED_VARS",
-    [SLOT_HOISTED_VARS_LEN] = "HOISTED_VARS_LEN",
-    [SLOT_STRICT_ARGS] = "STRICT_ARGS",
-    [SLOT_NO_FUNC_DECLS] = "NO_FUNC_DECLS",
-    [SLOT_ITER_STATE] = "ITER_STATE",
-    [SLOT_ENTRIES] = "ENTRIES",
+    ANT_INTERNAL_SLOT_LIST(ANT_SLOT_NAME)
   };
-  
+  #undef ANT_SLOT_NAME
+
   if (slot < sizeof(slot_names) / sizeof(slot_names[0]) && slot_names[slot]) {
     return slot_names[slot];
   }
+  
   return "UNKNOWN";
 }
 
@@ -622,20 +587,26 @@ static const char *get_type_name(int type) {
   static const char *type_names[] = {
     [T_OBJ]        = "object",
     [T_STR]        = "string",
-    [T_UNDEF]      = "undefined",
-    [T_NULL]       = "null",
-    [T_NUM]        = "number",
-    [T_BOOL]       = "boolean",
+    [T_ARR]        = "array",
     [T_FUNC]       = "function",
     [T_CFUNC]      = "function",
-    [T_ERR]        = "error",
-    [T_ARR]        = "array",
+    [T_CLOSURE]    = "closure",
     [T_PROMISE]    = "Promise",
-    [T_TYPEDARRAY] = "TypedArray",
+    [T_GENERATOR]  = "Generator",
+    [T_UNDEF]      = "undefined",
+    [T_NULL]       = "null",
+    [T_BOOL]       = "boolean",
+    [T_NUM]        = "number",
     [T_BIGINT]     = "bigint",
     [T_SYMBOL]     = "symbol",
-    [T_GENERATOR]  = "Generator",
-    [T_FFI]        = "ffi"
+    [T_ERR]        = "error",
+    [T_TYPEDARRAY] = "TypedArray",
+    [T_FFI]        = "ffi",
+    [T_NTARG]      = "ntarg",
+    [T_MAP]        = "map",
+    [T_SET]        = "set",
+    [T_WEAKMAP]    = "weakmap",
+    [T_WEAKSET]    = "weakset"
   };
   
   size_t num_types = sizeof(type_names) / sizeof(type_names[0]);
@@ -726,11 +697,9 @@ void inspect_object(ant_t *js, ant_value_t obj, FILE *stream, int depth, inspect
     switch (slot) {
       case SLOT_CODE:
       case SLOT_CFUNC:
-      case SLOT_HOISTED_VARS:
         fprintf(stream, "<native ptr 0x%" PRIx64 ">", (uint64_t)vdata(slot_val));
         break;
       case SLOT_CODE_LEN:
-      case SLOT_HOISTED_VARS_LEN:
         fprintf(stream, "%.0f", js_getnum(slot_val));
         break;
       default:

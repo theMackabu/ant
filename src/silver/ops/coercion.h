@@ -358,17 +358,11 @@ static inline void sv_op_special_obj(
   }
 
   ant_value_t arr = js_mkarr(js);
-  
   if (frame->bp && frame->argc > 0) {
-    for (int i = 0; i < frame->argc; i++)
-      js_arr_push(js, arr, frame->bp[i]);
+    for (int i = 0; i < frame->argc; i++) js_arr_push(js, arr, frame->bp[i]);
   }
-
-  if (sv_frame_is_strict(frame))
-    js_set_slot(arr, SLOT_STRICT_ARGS, tov(1));
-  else if (vtype(frame->callee) == T_FUNC)
-    setprop_cstr(js, arr, "callee", 6, frame->callee);
-
+  if (vtype(frame->callee) == T_FUNC) setprop_cstr(js, arr, "callee", 6, frame->callee);
+  
   js_set_sym(js, arr, get_toStringTag_sym(), js_mkstr(js, "Arguments", 9));
   ant_value_t array_proto = js_get_ctor_proto(js, "Array", 5);
   

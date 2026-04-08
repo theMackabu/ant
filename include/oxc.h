@@ -18,19 +18,4 @@ char *OXC_strip_types_owned(
   size_t error_output_len
 );
 
-char *OXC_get_hoisted_vars(
-  const char *input,
-  size_t input_len,
-  size_t *out_len
-);
-
-char *OXC_get_func_hoisted_vars(
-  const char *input,
-  size_t input_len,
-  size_t *out_len
-);
-
-void OXC_free_hoisted_vars(char *ptr, size_t len);
-void OXC_free_stripped_output(char *ptr, size_t len);
-
 #endif

@@ -254,10 +254,7 @@ ant_value_t jit_helper_closure(
   ant_value_t func_val = mkval(T_FUNC, (uintptr_t)closure);
   if (!child->is_arrow && !child->is_method)
     sv_setup_function_prototype(js, func_obj, func_val);
-
-  if (child->is_strict)
-    js_set_slot(func_obj, SLOT_STRICT, js_true);
-  
+      
   if (child->is_async) {
     js_set_slot(func_obj, SLOT_ASYNC, js_true);
     ant_value_t async_proto = js_get_slot(js->global, SLOT_ASYNC_PROTO);

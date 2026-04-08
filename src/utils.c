@@ -169,13 +169,13 @@ int strip_typescript_inplace(
 
   char *next = realloc(input, stripped_len + 1);
   if (!next) {
-    OXC_free_stripped_output(stripped, stripped_len);
+    free(stripped);
     if (error_detail) *error_detail = "out of memory while resizing strip output buffer";
     return OXC_ERR_OUTPUT_TOO_LARGE;
   }
 
   memcpy(next, stripped, stripped_len + 1);
-  OXC_free_stripped_output(stripped, stripped_len);
+  free(stripped);
 
   *buffer = next;
   if (out_len) *out_len = stripped_len;
