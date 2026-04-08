@@ -1,6 +1,25 @@
 cc = meson.get_compiler('c')
+cmake = import('cmake')
 
-openssl_dep = dependency('openssl', required: true, static: is_static)
+boringssl_opts = cmake.subproject_options()
+boringssl_opts.add_cmake_defines({
+  'BUILD_SHARED_LIBS': 'OFF',
+  'BUILD_TESTING': 'OFF',
+  'INSTALL_ENABLED': '0',
+})
+
+boringssl_warning_flag = cc.get_argument_syntax() == 'msvc' ? '/W0' : '-w'
+boringssl_opts.append_compile_args('c', boringssl_warning_flag)
+boringssl_opts.append_compile_args('cpp', boringssl_warning_flag)
+boringssl_opts.set_override_option('warning_level', '0')
+
+boringssl_sub = cmake.subproject('boringssl', options: boringssl_opts)
+ssl_dep = boringssl_sub.dependency('ssl')
+crypto_dep = boringssl_sub.dependency('crypto')
+
+meson.override_dependency('ssl', ssl_dep)
+meson.override_dependency('crypto', crypto_dep)
+
 libsodium_dep = dependency('libsodium', required: true, static: is_static)
 
 if host_machine.system() == 'windows'
@@ -77,7 +96,7 @@ brotli_enc_dep = brotli_sub.get_variable('brotli_encoder_dep')
 cmake_prefix = get_option('deps_prefix_cmake')
 
 tlsuv_sub = subproject('tlsuv', default_options: [
-  'tls_backend=openssl',
+  'tls_backend=boringssl',
   'deps_prefix_cmake=' + cmake_prefix,
   'warning_level=0',
 ])
@@ -201,7 +220,7 @@ ant_deps = [
   llhttp, pcre2_dep, libuv_dep, base64_dep,
   argtable3_dep, tlsuv_dep, libsodium_dep,
   yyjson_dep, minicoro_dep, uuidv7_dep,
-  uriparser_dep, utf8proc_dep, openssl_dep,
+  uriparser_dep, utf8proc_dep, ssl_dep, crypto_dep,
   zlib_dep, brotli_common_dep, brotli_dec_dep,
   brotli_enc_dep, uthash_dep, lmdb_dep, wamr_dep,
 ] + win_deps

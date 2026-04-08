@@ -29,7 +29,6 @@ If you can reproduce a test failure, search for it in the <br>
     - [Windows prerequisites](#windows-prerequisites)
     - [Building Ant](#building-ant-2)
 - [Meson build options](#meson-build-options)
-- [TLS library selection](#tls-library-selection)
 
 ## Supported platforms
 
@@ -90,26 +89,33 @@ The following tools are required to build Ant regardless of platform:
 
 System libraries required:
 
-- **OpenSSL**
 - **libsodium**
 - **libuuid** (Linux/macOS)
-- **llhttp** (if not building from source via cmake)
 
 The remaining dependencies are vendored as Meson subprojects under `vendor/`
 and are fetched automatically:
 
+- aklomp-base64 0.5.2
+- argtable3 3.3.1
+- BoringSSL `297b11798a0ed6bc7736aa57328909a4afbbf67a`
+- crprintf `HEAD`
+- google-brotli 1.1.0
+- libffi 3.5.2
 - libuv 1.52.0
+- llhttp 9.3.1
+- LMDB (OpenLDAP LMDB 0.9.33)
+- minicoro `HEAD`
+- MIR `HEAD`
+- nghttp2 1.68.0
+- PCRE2 10.47
+- tlsuv 0.40.13
+- uriparser 1.0.0
+- utf8proc 2.10.0
+- uthash 2.3.0
+- uuidv7-h `HEAD`
+- wasm-micro-runtime `92f40918bbfad35546a1512b10bd25eaa31add4d`
 - yyjson 0.12.0
 - zlib-ng 2.3.3
-- nghttp2
-- pcre2
-- libffi
-- lmdb (OpenLDAP LMDB 0.9.33)
-- minicoro
-- argtable3
-- uthash
-- uuidv7
-- tlsuv (cmake subproject)
 
 ### Unix and macOS
 
@@ -121,7 +127,7 @@ Installation via package manager:
 
   ```bash
   sudo apt-get install python3 python3-pip gcc-14 g++-14 ninja-build cmake \
-    pkg-config uuid-dev libssl-dev libsodium-dev nodejs npm
+    pkg-config uuid-dev libsodium-dev nodejs npm
   pip3 install meson
   ```
 
@@ -129,14 +135,14 @@ Installation via package manager:
 
   ```bash
   sudo dnf install python3 gcc gcc-c++ ninja-build cmake pkgconf \
-    libuuid-devel openssl-devel libsodium-devel nodejs npm
+    libuuid-devel libsodium-devel nodejs npm
   pip3 install meson
   ```
 
 - Alpine (musl):
   ```sh
   apk add clang lld llvm meson ninja cmake pkgconf nodejs npm \
-    musl-dev openssl-dev openssl-libs-static libsodium-dev libsodium-static \
+    musl-dev libsodium-dev libsodium-static \
     util-linux-dev util-linux-static linux-headers libunwind-dev libunwind-static
   ```
 
@@ -161,7 +167,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 - Install remaining tools via [Homebrew](https://brew.sh):
 
   ```bash
-  brew install meson ninja llvm openssl@3 libsodium node
+  brew install meson ninja llvm libsodium node
   ```
 
 - Rust and Zig:
@@ -372,7 +378,7 @@ Ant on Windows is built using the MSYS2 MINGW64 toolchain.
    ```bash
    pacman -S mingw-w64-x86_64-toolchain mingw-w64-x86_64-meson \
      mingw-w64-x86_64-ninja mingw-w64-x86_64-cmake \
-     mingw-w64-x86_64-openssl mingw-w64-x86_64-libsodium \
+     mingw-w64-x86_64-libsodium \
      mingw-w64-x86_64-lld mingw-w64-x86_64-nodejs git
    ```
 3. Install Rust via [rustup](https://rustup.rs/) (select the

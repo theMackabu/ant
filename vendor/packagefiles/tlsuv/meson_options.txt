@@ -1,2 +1,2 @@
-option('tls_backend', type: 'combo', choices: ['openssl'], value: 'openssl', description: 'TLS backend library')
+option('tls_backend', type: 'combo', choices: ['openssl', 'boringssl'], value: 'boringssl', description: 'TLS backend library')
 option('deps_prefix_cmake', type: 'string', value: '', description: 'Prefix for cmake-built dependencies')

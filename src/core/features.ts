@@ -1,6 +1,6 @@
 process.features = {
   uv: true,
-  tls: 'openssl',
+  tls: 'BoringSSL',
   typescript: 'transform'
 };
 

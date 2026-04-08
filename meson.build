@@ -95,3 +95,10 @@ executable(
   link_args: link_args,
   export_dynamic: true
 )
+
+executable(
+  'tlsuv-boringssl-smoke',
+  files('tests/tlsuv_boringssl_smoke.c'),
+  dependencies: [tlsuv_dep, libuv_dep, llhttp, zlib_dep] + (host_machine.system() == 'darwin' ? [security_dep] : []),
+  build_by_default: false
+)

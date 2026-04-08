@@ -1,0 +1,13 @@
+diff --git a/src/alloc.c b/src/alloc.c
+index 6a9adf7..2d3a5ab 100644
+--- a/src/alloc.c
++++ b/src/alloc.c
+@@ -63,7 +63,7 @@ void tlsuv_set_allocator(uv_malloc_func malloc_f,
+     ALLOC.free_f = free_f;
+ 
+     uv_replace_allocator(malloc_f, realloc_f, calloc_f, free_f);
+-#if USE_OPENSSL
++#if USE_OPENSSL && !defined(OPENSSL_IS_BORINGSSL)
+     CRYPTO_set_mem_functions(crypto_malloc, crypto_realloc, crypto_free);
+ #endif
+ 

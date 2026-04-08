@@ -8,7 +8,7 @@ inputs = {
 outputs = { self, nixpkgs, flake-utils }: flake-utils.lib.eachDefaultSystem (system:
 let pkgs = nixpkgs.legacyPackages.${system}; in {
   devShells.default = pkgs.mkShell {
-  packages = with pkgs; [ pkg-config libossp_uuid libsodium openssl ];
+  packages = with pkgs; [ pkg-config libossp_uuid libsodium ];
   
   shellHook = ''
     export CC="ccache clang"

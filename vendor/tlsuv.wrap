@@ -3,6 +3,7 @@ url = https://github.com/openziti/tlsuv.git
 revision = v0.40.13
 depth = 1
 patch_directory = tlsuv
+diff_files = patches/tlsuv-boringssl.patch
 
 [provide]
 tlsuv = tlsuv_dep
