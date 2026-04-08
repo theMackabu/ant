@@ -25,8 +25,8 @@ add_project_arguments(
 )
 
 if host_machine.system() == 'linux'
-  add_project_arguments('-fno-pie', language: 'c')
-  add_project_link_arguments('-no-pie', language: 'c')
+  add_project_arguments('-fno-pie', language: ['c', 'cpp'])
+  add_project_link_arguments('-no-pie', language: ['c', 'cpp'])
 endif
 
 subdir('deps')

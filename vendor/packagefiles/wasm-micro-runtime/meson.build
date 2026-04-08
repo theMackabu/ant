@@ -94,7 +94,6 @@ else
   wamr_sources = files(
   'core/shared/platform/' + wamr_platform + '/platform_init.c',
   'core/shared/platform/common/libc-util/libc_errno.c',
-  'core/shared/platform/common/memory/mremap.c',
   'core/shared/platform/common/posix/posix_blocking_op.c',
   'core/shared/platform/common/posix/posix_clock.c',
   'core/shared/platform/common/posix/posix_malloc.c',
@@ -103,6 +102,10 @@ else
   'core/shared/platform/common/posix/posix_thread.c',
   'core/shared/platform/common/posix/posix_time.c',
   )
+endif
+
+if wamr_platform == 'darwin'
+  wamr_sources += files('core/shared/platform/common/memory/mremap.c')
 endif
 
 wamr_sources += files(
