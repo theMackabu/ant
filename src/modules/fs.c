@@ -629,6 +629,10 @@ static double uv_ts_to_ms(uv_timespec_t ts) {
   #define POSIX_TS_MS(st, field) \
     ((double)(st)->st_##field##spec.tv_sec * 1000.0 + (double)(st)->st_##field##spec.tv_nsec / 1e6)
   #define POSIX_BIRTH_MS(st) POSIX_TS_MS(st, birthtime)
+#elif defined(__linux__)
+  #define POSIX_TS_MS(st, field) \
+    ((double)(st)->st_##field##im.tv_sec * 1000.0 + (double)(st)->st_##field##im.tv_nsec / 1e6)
+  #define POSIX_BIRTH_MS(st) 0.0
 #else
   #define POSIX_TS_MS(st, field) \
     ((double)(st)->st_##field.tv_sec * 1000.0 + (double)(st)->st_##field.tv_nsec / 1e6)

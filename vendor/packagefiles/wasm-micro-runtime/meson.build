@@ -41,7 +41,7 @@ if wamr_platform == 'windows'
 elif wamr_platform == 'darwin'
   common_c_args += ['-DBH_PLATFORM_DARWIN', '-DWASM_HAVE_MREMAP=0']
 else
-  common_c_args += ['-DBH_PLATFORM_LINUX', '-DWASM_HAVE_MREMAP=1']
+  common_c_args += ['-DBH_PLATFORM_LINUX', '-DWASM_HAVE_MREMAP=1', '-D_GNU_SOURCE']
 endif
 
 if host_machine.cpu_family() == 'aarch64'
