@@ -262,8 +262,8 @@ static int set_ca_bundle(tls_context *tls, const char *ca, size_t ca_len) {
     SSL_CTX_set0_verify_cert_store(ctx, store);
   } else {
 #if _WIN32
-    if (!SSL_CTX_load_verify_store(ctx, "org.openssl.winstore:")) {
-      X509_STORE *sys_ca = load_system_certs();
+    X509_STORE *sys_ca = load_system_certs();
+    if (sys_ca != NULL) {
       SSL_CTX_set0_verify_cert_store(ctx, sys_ca);
     }
 #elif __APPLE__
