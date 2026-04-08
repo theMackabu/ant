@@ -2,7 +2,6 @@
 url = https://github.com/openziti/tlsuv.git
 revision = v0.40.13
 depth = 1
-diff_files = patches/tlsuv-fix-fd-type.patch
 patch_directory = tlsuv
 
 [provide]
