@@ -1,4 +1,4 @@
-project('wasm-micro-runtime', 'c', default_options: ['c_std=gnu11', 'warning_level=0'])
+project('wasm-micro-runtime', ['c', 'cpp'], default_options: ['c_std=gnu11', 'warning_level=0'])
 
 cc = meson.get_compiler('c')
 
@@ -37,7 +37,12 @@ common_c_args = [
 ]
 
 if wamr_platform == 'windows'
-  common_c_args += ['-DBH_PLATFORM_WINDOWS', '-DWASM_HAVE_MREMAP=0']
+  common_c_args += [
+    '-DBH_PLATFORM_WINDOWS',
+    '-DHAVE_STRUCT_TIMESPEC',
+    '-D_WINSOCK_DEPRECATED_NO_WARNINGS',
+    '-DWASM_HAVE_MREMAP=0',
+  ]
 elif wamr_platform == 'darwin'
   common_c_args += ['-DBH_PLATFORM_DARWIN', '-DWASM_HAVE_MREMAP=0']
 else
@@ -67,10 +72,26 @@ wamr_inc = include_directories(
   'core/shared/platform/include',
   'core/shared/platform/common/libc-util',
   'core/shared/platform/common/memory',
-  'core/shared/platform/common/posix',
 )
 
-wamr_sources = files(
+if wamr_platform == 'windows'
+  wamr_sources = files(
+    'core/shared/platform/windows/platform_init.c',
+    'core/shared/platform/windows/win_clock.c',
+    'core/shared/platform/windows/win_file.c',
+    'core/shared/platform/windows/win_malloc.c',
+    'core/shared/platform/windows/win_memmap.c',
+    'core/shared/platform/windows/win_socket.c',
+    'core/shared/platform/windows/win_thread.c',
+    'core/shared/platform/windows/win_time.c',
+    'core/shared/platform/windows/win_util.c',
+    'core/shared/platform/windows/win_atomic.cpp',
+    'core/shared/platform/common/libc-util/libc_errno.c',
+    'core/shared/platform/common/memory/mremap.c',
+  )
+else
+  wamr_inc += include_directories('core/shared/platform/common/posix')
+  wamr_sources = files(
   'core/shared/platform/' + wamr_platform + '/platform_init.c',
   'core/shared/platform/common/libc-util/libc_errno.c',
   'core/shared/platform/common/memory/mremap.c',
@@ -81,6 +102,10 @@ wamr_sources = files(
   'core/shared/platform/common/posix/posix_sleep.c',
   'core/shared/platform/common/posix/posix_thread.c',
   'core/shared/platform/common/posix/posix_time.c',
+  )
+endif
+
+wamr_sources += files(
   'core/shared/utils/bh_assert.c',
   'core/shared/utils/bh_bitmap.c',
   'core/shared/utils/bh_common.c',
@@ -127,12 +152,7 @@ else
   wamr_sources += files('core/iwasm/common/arch/invokeNative_general.c')
 endif
 
-if wamr_platform == 'windows'
-  wamr_sources += files(
-    'core/shared/platform/windows/win_file.c',
-    'core/shared/platform/windows/win_socket.c',
-  )
-else
+if wamr_platform != 'windows'
   wamr_sources += files(
     'core/shared/platform/common/posix/posix_file.c',
     'core/shared/platform/common/posix/posix_socket.c',
@@ -144,7 +164,13 @@ wamr_lib = static_library(
   wamr_sources,
   include_directories: wamr_inc,
   c_args: common_c_args,
+  cpp_args: common_c_args,
 )
+
+wamr_link_deps = [dependency('threads')]
+if host_machine.system() != 'windows'
+  wamr_link_deps += [cc.find_library('m', required: true)]
+endif
 
 wamr_dep = declare_dependency(
   link_with: wamr_lib,
@@ -162,8 +188,5 @@ wamr_dep = declare_dependency(
     '-DWASM_ENABLE_TAGS=0',
     '-DWASM_CONFIGURABLE_BOUNDS_CHECKS=0',
   ],
-  dependencies: [
-    cc.find_library('m', required: true),
-    dependency('threads'),
-  ],
+  dependencies: wamr_link_deps,
 )
