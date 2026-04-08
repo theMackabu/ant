@@ -625,17 +625,24 @@ static double uv_ts_to_ms(uv_timespec_t ts) {
   return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1e6;
 }
 
+static double posix_ts_to_ms(struct timespec ts) {
+  return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1e6;
+}
+
 #ifdef __APPLE__
-  #define POSIX_TS_MS(st, field) \
-    ((double)(st)->st_##field##spec.tv_sec * 1000.0 + (double)(st)->st_##field##spec.tv_nsec / 1e6)
-  #define POSIX_BIRTH_MS(st) POSIX_TS_MS(st, birthtime)
+  #define POSIX_ATIME_MS(st) posix_ts_to_ms((st)->st_atimespec)
+  #define POSIX_MTIME_MS(st) posix_ts_to_ms((st)->st_mtimespec)
+  #define POSIX_CTIME_MS(st) posix_ts_to_ms((st)->st_ctimespec)
+  #define POSIX_BIRTH_MS(st) posix_ts_to_ms((st)->st_birthtimespec)
 #elif defined(__linux__)
-  #define POSIX_TS_MS(st, field) \
-    ((double)(st)->st_##field##im.tv_sec * 1000.0 + (double)(st)->st_##field##im.tv_nsec / 1e6)
+  #define POSIX_ATIME_MS(st) posix_ts_to_ms((st)->st_atim)
+  #define POSIX_MTIME_MS(st) posix_ts_to_ms((st)->st_mtim)
+  #define POSIX_CTIME_MS(st) posix_ts_to_ms((st)->st_ctim)
   #define POSIX_BIRTH_MS(st) 0.0
 #else
-  #define POSIX_TS_MS(st, field) \
-    ((double)(st)->st_##field.tv_sec * 1000.0 + (double)(st)->st_##field.tv_nsec / 1e6)
+  #define POSIX_ATIME_MS(st) posix_ts_to_ms((st)->st_atim)
+  #define POSIX_MTIME_MS(st) posix_ts_to_ms((st)->st_mtim)
+  #define POSIX_CTIME_MS(st) posix_ts_to_ms((st)->st_ctim)
   #define POSIX_BIRTH_MS(st) 0.0
 #endif
 
@@ -662,9 +669,9 @@ static ant_value_t fs_stats_object_from_posix(ant_t *js, const struct stat *st) 
     .size         = (double)st->st_size,
     .uid          = (double)st->st_uid,
     .gid          = (double)st->st_gid,
-    .atime_ms     = POSIX_TS_MS(st, atime),
-    .mtime_ms     = POSIX_TS_MS(st, mtime),
-    .ctime_ms     = POSIX_TS_MS(st, ctime),
+    .atime_ms     = POSIX_ATIME_MS(st),
+    .mtime_ms     = POSIX_MTIME_MS(st),
+    .ctime_ms     = POSIX_CTIME_MS(st),
     .birthtime_ms = POSIX_BIRTH_MS(st),
   });
 }
