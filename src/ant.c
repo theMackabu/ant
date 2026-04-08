@@ -3475,6 +3475,16 @@ ant_value_t js_setprop_nonconfigurable(ant_t *js, ant_value_t obj, const char *k
   return result;
 }
 
+static ant_value_t js_setprop_readonly_nonconfigurable(ant_t *js, ant_value_t obj, const char *key, size_t keylen, ant_value_t v) {
+  ant_value_t k = js_mkstr(js, key, keylen);
+  if (is_err(k)) return k;
+  ant_value_t result = js_setprop(js, obj, k, v);
+  if (is_err(result)) return result;
+
+  js_set_descriptor(js, js_as_obj(obj), key, keylen, 0);
+  return result;
+}
+
 #define SYM_FLAG_GLOBAL      1u
 #define SYM_FLAG_WELL_KNOWN  2u
 
@@ -5942,8 +5952,6 @@ static ant_value_t builtin_object_defineProperty(ant_t *js, ant_value_t *args, i
     if (enumerable) attrs |= ANT_PROP_ATTR_ENUMERABLE;
     if (configurable) attrs |= ANT_PROP_ATTR_CONFIGURABLE;
 
-    if (!sym_key) js_set_descriptor(js, as_obj, prop_str, prop_len, desc_flags);
-    
     if (existing_off > 0) {
       bool is_frozen = obj_ptr ? obj_ptr->frozen : false;
       bool is_nonconfig = is_nonconfig_prop(js, existing_off) || is_frozen;
@@ -5964,6 +5972,7 @@ static ant_value_t builtin_object_defineProperty(ant_t *js, ant_value_t *args, i
       if (is_nonconfig && is_readonly && has_value)
         return js_mkerr(js, "Cannot assign to read-only property '%.*s'", (int)prop_len, prop_str);
       if (has_value) js_saveval(js, existing_off, value);
+      if (!sym_key) js_set_descriptor(js, as_obj, prop_str, prop_len, desc_flags);
 
       ant_prop_ref_t *ref = propref_get(js, existing_off);
       if (ref && ref->obj) {
@@ -5979,6 +5988,7 @@ static ant_value_t builtin_object_defineProperty(ant_t *js, ant_value_t *args, i
         | (writable ? ANT_PROP_ATTR_WRITABLE : 0)
         | (configurable ? ANT_PROP_ATTR_CONFIGURABLE : 0);
       mkprop(js, as_obj, prop_key, value, prop_attrs);
+      if (!sym_key) js_set_descriptor(js, as_obj, prop_str, prop_len, desc_flags);
 
       if (obj_ptr && obj_ptr->shape) {
         if (!js_obj_ensure_unique_shape(obj_ptr)) return js_mkerr(js, "oom");
@@ -12662,7 +12672,7 @@ ant_t *js_create(void *buf, size_t len) {
   defmethod(js, obj_func_obj, "preventExtensions", 17, js_mkfun(builtin_object_preventExtensions));
   
   js_setprop(js, obj_func_obj, ANT_STRING("name"), ANT_STRING("Object"));
-  js_setprop_nonconfigurable(js, obj_func_obj, "prototype", 9, object_proto);
+  js_setprop_readonly_nonconfigurable(js, obj_func_obj, "prototype", 9, object_proto);
   ant_value_t obj_func = js_obj_to_func(obj_func_obj);
   js_setprop(js, glob, js_mkstr(js, "Object", 6), obj_func);
   
@@ -12741,7 +12751,7 @@ ant_t *js_create(void *buf, size_t len) {
   ant_value_t arr_ctor_obj = mkobj(js, 0);
   set_proto(js, arr_ctor_obj, function_proto);
   set_slot(arr_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_Array));
-  js_setprop_nonconfigurable(js, arr_ctor_obj, "prototype", 9, array_proto);
+  js_setprop_readonly_nonconfigurable(js, arr_ctor_obj, "prototype", 9, array_proto);
   defmethod(js, arr_ctor_obj, "isArray", 7, js_mkfun(builtin_Array_isArray));
   defmethod(js, arr_ctor_obj, "from", 4, js_mkfun(builtin_Array_from));
   defmethod(js, arr_ctor_obj, "of", 2, js_mkfun(builtin_Array_of));

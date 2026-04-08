@@ -41,6 +41,10 @@ try {
   {
     const altProto = { mark: 'object-assign' };
     BuiltinObject.prototype = altProto;
+    assert(
+      BuiltinObject.prototype === originalObjectCtorProto,
+      'Object.prototype assignment should not replace the built-in constructor prototype property'
+    );
     const obj = {};
     assert(BuiltinObject.getPrototypeOf(obj) === primordialObjectProto, 'object literal should keep primordial Object prototype');
     assertEq(obj.mark, undefined, 'object literal should ignore assigned ctor prototype');
@@ -67,17 +71,14 @@ try {
   console.log('\nTest 3: object literal ignores Object.defineProperty on ctor prototype');
   {
     const altProto = { mark: 'object-define' };
-    if (!tryRedefineCtorPrototype(BuiltinObject, altProto)) {
-      console.log('SKIP');
-    } else {
-    assertEq(BuiltinObject.prototype.mark, 'object-define', 'defineProperty should update Object.prototype property');
+    assertEq(tryRedefineCtorPrototype(BuiltinObject, altProto), false, 'defineProperty should reject redefining Object.prototype');
+    assert(BuiltinObject.prototype === originalObjectCtorProto, 'Object.prototype should stay unchanged after rejected defineProperty');
     const obj = {};
     assert(
       BuiltinObject.getPrototypeOf(obj) === primordialObjectProto,
-      'object literal should keep primordial Object prototype after defineProperty'
+      'object literal should keep primordial Object prototype after rejected defineProperty'
     );
-    assertEq(obj.mark, undefined, 'object literal should ignore defineProperty-updated ctor prototype');
-    }
+    assertEq(obj.mark, undefined, 'object literal should ignore rejected defineProperty-updated ctor prototype');
   }
   restore();
   console.log('PASS');
@@ -87,6 +88,10 @@ try {
     const altProto = [];
     altProto.mark = 'array-assign';
     BuiltinArray.prototype = altProto;
+    assert(
+      BuiltinArray.prototype === originalArrayCtorProto,
+      'Array.prototype assignment should not replace the built-in constructor prototype property'
+    );
     const arr = [];
     assert(BuiltinObject.getPrototypeOf(arr) === primordialArrayProto, 'array literal should keep primordial Array prototype');
     assertEq(arr.mark, undefined, 'array literal should ignore assigned ctor prototype');
@@ -111,14 +116,11 @@ try {
   {
     const altProto = [];
     altProto.mark = 'array-define';
-    if (!tryRedefineCtorPrototype(BuiltinArray, altProto)) {
-      console.log('SKIP');
-    } else {
-      assertEq(BuiltinArray.prototype.mark, 'array-define', 'defineProperty should update Array.prototype property');
-      const arr = [];
-      assert(BuiltinObject.getPrototypeOf(arr) === primordialArrayProto, 'array literal should keep primordial Array prototype after defineProperty');
-      assertEq(arr.mark, undefined, 'array literal should ignore defineProperty-updated ctor prototype');
-    }
+    assertEq(tryRedefineCtorPrototype(BuiltinArray, altProto), false, 'defineProperty should reject redefining Array.prototype');
+    assert(BuiltinArray.prototype === originalArrayCtorProto, 'Array.prototype should stay unchanged after rejected defineProperty');
+    const arr = [];
+    assert(BuiltinObject.getPrototypeOf(arr) === primordialArrayProto, 'array literal should keep primordial Array prototype after rejected defineProperty');
+    assertEq(arr.mark, undefined, 'array literal should ignore rejected defineProperty-updated ctor prototype');
   }
   restore();
   console.log('PASS');
