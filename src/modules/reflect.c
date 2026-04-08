@@ -249,13 +249,12 @@ static ant_value_t reflect_set_prototype_of(ant_t *js, ant_value_t *args, int na
   ant_value_t target = args[0];
   ant_value_t proto = args[1];
   
-  int t = vtype(target);
-  if (t != T_OBJ && t != T_FUNC) return js_false;
-  
-  int pt = vtype(proto);
-  if (pt != T_OBJ && pt != T_FUNC && pt != T_NULL) return js_false;
+  if (!is_object_type(target)) return js_false;
+  if (!is_object_type(proto) && vtype(proto) != T_NULL) return js_false;
+  if (vtype(proto) != T_NULL && proto_chain_contains(js, proto, target)) return js_false;
   
   js_set_proto_wb(js, target, proto);
+  
   return js_true;
 }
 

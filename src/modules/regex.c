@@ -1010,7 +1010,7 @@ static ant_value_t builtin_regexp_symbol_match(ant_t *js, ant_value_t *args, int
   bool full_unicode = js_truthy(js, unicode_val);
   js_setprop(js, rx, js_mkstr(js, "lastIndex", 9), tov(0));
 
-  ant_value_t A = mkarr(js);
+  ant_value_t A = js_mkarr(js);
   if (is_err(A)) return A;
   ant_offset_t n = 0;
 
@@ -1179,7 +1179,7 @@ static ant_value_t builtin_regexp_symbol_replace(ant_t *js, ant_value_t *args, i
     js_setprop(js, rx, js_mkstr(js, "lastIndex", 9), tov(0));
   }
 
-  ant_value_t results = mkarr(js);
+  ant_value_t results = js_mkarr(js);
   if (is_err(results)) return results;
   ant_offset_t nresults = 0;
 
@@ -1374,7 +1374,7 @@ static ant_value_t builtin_regexp_symbol_split(ant_t *js, ant_value_t *args, int
   ant_value_t splitter = regexp_species_construct(js, rx, C, ctor_args, 2);
   if (is_err(splitter)) return splitter;
 
-  ant_value_t A = mkarr(js);
+  ant_value_t A = js_mkarr(js);
   if (is_err(A)) return A;
   ant_offset_t lengthA = 0;
 

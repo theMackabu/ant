@@ -260,7 +260,8 @@ static inline void sv_op_define_class(
 
   if (vtype(ctor) == T_FUNC) js_mark_constructor(js_func_obj(ctor), true);
   setprop_interned(js, proto, "constructor", 11, ctor);
-  setprop_interned(js, ctor, "prototype", 9, proto);
+  ant_value_t ctor_obj = (vtype(ctor) == T_FUNC) ? js_func_obj(ctor) : ctor;
+  js_mkprop_fast(js, ctor_obj, "prototype", 9, proto);
   if (a && a->len > 0)
     setprop_cstr(js, ctor, "name", 4, js_mkstr(js, a->str, a->len));
 

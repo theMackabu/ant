@@ -713,7 +713,7 @@ static ant_value_t builtin_FinalizationRegistry(ant_t *js, ant_value_t *args, in
   ant_value_t fr_proto = js_get_ctor_proto(js, "FinalizationRegistry", 20);
   if (is_special_object(fr_proto)) js_set_proto_init(fr_obj, fr_proto);
   
-  js_set_slot(fr_obj, SLOT_MAP, mkarr(js));
+  js_set_slot(fr_obj, SLOT_MAP, js_mkarr(js));
   js_set_slot(fr_obj, SLOT_DATA, args[0]);
   
   return fr_obj;
@@ -738,7 +738,7 @@ static ant_value_t finreg_register(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t registrations = js_get_slot(this_val, SLOT_MAP);
   if (vtype(registrations) != T_ARR) return js_mkundef();
   
-  ant_value_t entry = mkarr(js);
+  ant_value_t entry = js_mkarr(js);
   ant_offset_t len = js_arr_len(js, registrations);
   
   char idx[16];

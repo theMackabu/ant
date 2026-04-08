@@ -917,7 +917,7 @@ typedef struct {
 static bool callsite_visit_frame(ant_t *js, const js_vm_frame_view_t *view, void *ctx) {
   callsite_build_ctx_t *c = (callsite_build_ctx_t *)ctx;
 
-  ant_value_t data = mkarr(js);
+  ant_value_t data = js_mkarr(js);
   js_arr_push(js, data, js_mkstr(js, view->file, strlen(view->file)));
   js_arr_push(js, data, js_mknum((double)view->line));
   js_arr_push(js, data, js_mknum((double)view->col));
@@ -948,7 +948,7 @@ ant_value_t js_build_callsite_array(ant_t *js) {
   js_set(js, proto, "getThis",         js_mkfun(callsite_getThis));
   js_set(js, proto, "toString",        js_mkfun(callsite_toString));
 
-  ant_value_t arr = mkarr(js);
+  ant_value_t arr = js_mkarr(js);
   callsite_build_ctx_t ctx = { js, arr, proto };
 
   const char *file = (js->errsite.valid && js->errsite.filename)

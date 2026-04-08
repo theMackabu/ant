@@ -2349,16 +2349,17 @@ ant_value_t js_mkobj_with_inobj_limit(ant_t *js, uint8_t inobj_limit) {
   return mkobj_with_inobj_limit(js, 0, inobj_limit);
 }
 
-ant_value_t mkarr(ant_t *js) {
+static ant_value_t alloc_array_with_proto(ant_t *js, ant_value_t proto) {
   ant_object_t *obj = obj_alloc(js, T_ARR, (uint8_t)ANT_INOBJ_MAX_SLOTS);
   if (!obj) return js_mkerr(js, "oom");
+  
   ant_value_t arr = mkval(T_ARR, (uintptr_t)obj);
-  ant_value_t array_proto = js->array_proto;
-  if (vtype(array_proto) == T_OBJ) js_set_proto_init(arr, array_proto);
+  if (is_object_type(proto)) js_set_proto_init(arr, proto);
 
   obj->u.array.cap = MAX_DENSE_INITIAL_CAP;
   obj->u.array.len = 0;
   obj->u.array.data = malloc(sizeof(*obj->u.array.data) * (size_t)obj->u.array.cap);
+  
   if (obj->u.array.data) {
     for (uint32_t i = 0; i < obj->u.array.cap; i++) obj->u.array.data[i] = T_EMPTY;
     obj->fast_array = 1;
@@ -2369,6 +2370,10 @@ ant_value_t mkarr(ant_t *js) {
   }
 
   return arr;
+}
+
+static inline ant_value_t mkarr(ant_t *js) {
+  return alloc_array_with_proto(js, js->array_proto);
 }
 
 ant_value_t js_mkarr(ant_t *js) { 
@@ -12488,8 +12493,7 @@ ant_t *js_create(void *buf, size_t len) {
   ant_value_t function_proto = js_obj_to_func(function_proto_obj);
   set_slot(glob, SLOT_FUNC_PROTO, function_proto);
   
-  ant_value_t array_proto = js_mkobj(js);
-  set_proto(js, array_proto, object_proto);
+  ant_value_t array_proto = alloc_array_with_proto(js, object_proto);
   
   defmethod(js, array_proto, "push", 4, js_mkfun(builtin_array_push));
   defmethod(js, array_proto, "pop", 3, js_mkfun(builtin_array_pop));
@@ -12814,7 +12818,7 @@ ant_t *js_create(void *buf, size_t len) {
   js_set_descriptor(js, js_as_obj(function_proto), "constructor", 11, JS_DESC_W | JS_DESC_C);
   
   js_setprop(js, array_proto, js_mkstr(js, "constructor", 11), arr_ctor_func);
-  js_set_descriptor(js, array_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
+  js_set_descriptor(js, js_as_obj(array_proto), "constructor", 11, JS_DESC_W | JS_DESC_C);
   
   js_setprop(js, string_proto, js_mkstr(js, "constructor", 11), str_ctor_func);
   js_set_descriptor(js, string_proto, "constructor", 11, JS_DESC_W | JS_DESC_C);
