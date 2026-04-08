@@ -1,13 +1,13 @@
 # 🐜 Ant
 
-**A 8MB JavaScript runtime with 1ms cold starts.**
+**A 9MB JavaScript runtime with 1ms cold starts.**
 
 Ant is a lightweight, high-performance JavaScript runtime built from scratch. <br>
 Fits in your pocket while Delivering near-V8 speeds in a binary smaller than most npm packages.
 
 ```
 $ ls -lh ant
--rwxr-xr-x⠀8.1M⠀ant*
+-rwxr-xr-x⠀9.4M⠀ant*
 ```
 
 ## Table of contents
@@ -24,7 +24,7 @@ $ ls -lh ant
 
 |                     | Ant         | Node      | Bun      | Deno      |
 | ------------------- | ----------- | --------- | -------- | --------- |
-| Binary size         | **~8 MB**   | ~120 MB   | ~60 MB   | ~90 MB    |
+| Binary size         | **~9 MB**   | ~120 MB   | ~60 MB   | ~90 MB    |
 | Cold start          | **~3-5 ms** | ~30-50 ms | ~5-10 ms | ~20-30 ms |
 | Engine              | Ant Silver  | V8        | JSC      | V8        |
 | JIT                 | ✓           | ✓         | ✓        | ✓         |
