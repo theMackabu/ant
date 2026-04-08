@@ -47,24 +47,15 @@ elif host_machine.system() == 'windows'
   tlsuv_sources += files('src/win32/win32_keychain.c')
 endif
 
-if tls_backend == 'openssl'
-  tlsuv_sources += files('src/openssl/engine.c', 'src/openssl/keys.c')
-elif tls_backend == 'mbedtls'
-  tlsuv_sources += files('src/mbedtls/engine.c', 'src/mbedtls/keys.c')
-endif
+tlsuv_sources += files('src/openssl/engine.c', 'src/openssl/keys.c')
 
 tlsuv_c_args = [
   '-DTLSUV_VERSION=v' + meson.project_version(),
   '-DTLSUV_HTTP',
   '-DTLS_IMPL=' + tls_backend,
+  '-DUSE_OPENSSL',
   '-w',
 ]
-
-if tls_backend == 'openssl'
-  tlsuv_c_args += '-DUSE_OPENSSL'
-elif tls_backend == 'mbedtls'
-  tlsuv_c_args += '-DUSE_MBEDTLS'
-endif
 
 if cmake_prefix != ''
   tlsuv_c_args += ['-I' + cmake_prefix / 'include']
@@ -78,11 +69,8 @@ elif host_machine.system() == 'linux'
   tlsuv_c_args += ['-D_POSIX_C_SOURCE=200112', '-D_GNU_SOURCE']
 endif
 
-tls_dep = []
-if tls_backend == 'openssl'
-  tls_dep = dependency('openssl', required: true)
-  tlsuv_c_args += ['-I' + tls_dep.get_variable(pkgconfig: 'includedir')]
-endif
+tls_dep = dependency('openssl', required: true)
+tlsuv_c_args += ['-I' + tls_dep.get_variable(pkgconfig: 'includedir')]
 
 win_deps = []
 if host_machine.system() == 'windows'

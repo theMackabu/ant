@@ -38,9 +38,6 @@ The engine, Ant Silver is hand-built, not a wrapper around V8, JSC, or SpiderMon
 
 ```bash
 curl -fsSL https://ant.themackabu.com/install | bash
-
-# or with MbedTLS
-curl -fsSL https://ant.themackabu.com/install | MBEDTLS=1 bash
 ```
 
 ## Spec conformance

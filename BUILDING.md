@@ -44,10 +44,8 @@ produced for each platform listed below.
 | GNU/Linux        | aarch64       | glibc      | No     | Ubuntu 22.04 (CI)            |
 | GNU/Linux        | x64           | musl       | Yes    | Alpine Edge (CI)             |
 | GNU/Linux        | aarch64       | musl       | Yes    | Alpine Edge (CI)             |
-| macOS            | x64           | openssl    | No     | macOS 15 (CI)                |
-| macOS            | aarch64       | openssl    | No     | macOS 15 (CI)                |
-| macOS            | x64           | mbedtls    | No     | macOS 15 (CI)                |
-| macOS            | aarch64       | mbedtls    | No     | macOS 15 (CI)                |
+| macOS            | x64           | darwin     | No     | macOS 15 (CI)                |
+| macOS            | aarch64       | darwin     | No     | macOS 15 (CI)                |
 | Windows          | x64           | mingw/msys | No     | MSYS2 MINGW64 toolchain (CI) |
 
 ### Supported toolchains
@@ -65,17 +63,15 @@ C23 support is required.
 
 CI binaries are produced using:
 
-| Binary package             | Platform and Toolchain                       |
-| -------------------------- | -------------------------------------------- |
-| ant-linux-x64              | Ubuntu 22.04 (glibc), LLVM/Clang             |
-| ant-linux-aarch64          | Ubuntu 22.04 (glibc), LLVM/Clang             |
-| ant-linux-x64-musl         | Alpine Edge (musl), statically linked, Clang |
-| ant-linux-aarch64-musl     | Alpine Edge (musl), statically linked, Clang |
-| ant-darwin-x64             | macOS 15 Intel, LLVM/Clang                   |
-| ant-darwin-aarch64         | macOS 15 ARM, LLVM/Clang                     |
-| ant-darwin-x64-mbedtls     | macOS 15 Intel, LLVM/Clang, mbedTLS          |
-| ant-darwin-aarch64-mbedtls | macOS 15 ARM, LLVM/Clang, mbedTLS            |
-| ant-windows-x64            | MSYS2 MINGW64 toolchain                      |
+| Binary package         | Platform and Toolchain                       |
+| ---------------------- | -------------------------------------------- |
+| ant-linux-x64          | Ubuntu 22.04 (glibc), LLVM/Clang             |
+| ant-linux-aarch64      | Ubuntu 22.04 (glibc), LLVM/Clang             |
+| ant-linux-x64-musl     | Alpine Edge (musl), statically linked, Clang |
+| ant-linux-aarch64-musl | Alpine Edge (musl), statically linked, Clang |
+| ant-darwin-x64         | macOS 15 Intel, LLVM/Clang                   |
+| ant-darwin-aarch64     | macOS 15 ARM, LLVM/Clang                     |
+| ant-windows-x64        | MSYS2 MINGW64 toolchain                      |
 
 ## Building Ant on supported platforms
 
@@ -94,7 +90,7 @@ The following tools are required to build Ant regardless of platform:
 
 System libraries required:
 
-- **OpenSSL** (default) or **mbedTLS** (alternative TLS backend)
+- **OpenSSL**
 - **libsodium**
 - **libuuid** (Linux/macOS)
 - **llhttp** (if not building from source via cmake)
@@ -419,12 +415,11 @@ To verify:
 
 Configure options are set via `meson setup` or `meson configure`:
 
-| Option              | Type    | Default   | Description                                |
-| ------------------- | ------- | --------- | ------------------------------------------ |
-| `static_link`       | boolean | `false`   | Statically link the final binary           |
-| `build_timestamp`   | string  | (auto)    | Build timestamp (defaults to current time) |
-| `tls_library`       | combo   | `openssl` | TLS backend: `openssl` or `mbedtls`        |
-| `deps_prefix_cmake` | string  | (empty)   | Prefix path for cmake dependency lookup    |
+| Option              | Type    | Default | Description                                |
+| ------------------- | ------- | ------- | ------------------------------------------ |
+| `static_link`       | boolean | `false` | Statically link the final binary           |
+| `build_timestamp`   | string  | (auto)  | Build timestamp (defaults to current time) |
+| `deps_prefix_cmake` | string  | (empty) | Prefix path for cmake dependency lookup    |
 
 Standard Meson built-in options used by Ant:
 
@@ -441,22 +436,5 @@ Standard Meson built-in options used by Ant:
 Example:
 
 ```bash
-meson setup build -Dtls_library=mbedtls -Dstatic_link=true --prefer-static
+meson setup build -Dstatic_link=true --prefer-static
 ```
-
-## TLS library selection
-
-Ant supports two TLS backends:
-
-- **OpenSSL** (default): Widely available, used on all platforms by default.
-- **mbedTLS**: Lighter alternative, useful for embedded or constrained
-  environments. Currently only tested on macOS CI.
-
-To build with mbedTLS:
-
-```bash
-meson setup build -Dtls_library=mbedtls
-```
-
-When using mbedTLS, the target triple in the version string will include
-`-mbedtls` as a suffix.

@@ -20,5 +20,5 @@ mkdir -p "$BUILD_DIR/vendor/$tlsuv_dir"
 rm -rf "$tlsuv_prefix"
 cp -RL "$BUILD_DIR/deps" "$tlsuv_prefix"
 
-meson setup build --prefer-static -Dtls_library=mbedtls -Ddeps_prefix_cmake="$tlsuv_prefix" "$@"
+meson setup build --prefer-static -Ddeps_prefix_cmake="$tlsuv_prefix" "$@"
 meson compile -C build

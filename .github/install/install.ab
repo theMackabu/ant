@@ -185,26 +185,11 @@ main(args) {
     echo_error("unzip is required to install ant")
   }
 
-  if len(args) > 3 {
-    echo_error("Too many arguments. Usage: install.ab [tag] [--mbedtls]")
+  if len(args) > 2 {
+    echo_error("Too many arguments. Usage: install.ab [tag]")
   }
 
   let target = get_target()
-
-  let mbedtls_env = env_var_get("MBEDTLS") failed { "" }
-  let use_mbedtls = mbedtls_env != ""
-
-  for arg in args {
-    if arg == "--mbedtls" { use_mbedtls = true }
-  }
-
-  if use_mbedtls {
-    if starts_with(target, "darwin") {
-      target = "{target}-mbedtls"
-    } else {
-      echo_error("--mbedtls option is only supported on macOS")
-    }
-  }
 
   let github = env_var_get("GITHUB") failed {
     "https://github.com"
@@ -217,7 +202,7 @@ main(args) {
   let ant_uri = ""
   let tag = ""
   for arg in args {
-    if arg != "--mbedtls" and arg != args[0] { tag = arg }
+    if arg != args[0] { tag = arg }
   }
 
   if tag == "" {

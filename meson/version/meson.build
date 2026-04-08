@@ -16,8 +16,6 @@ if triple_parts.length() == 4 and triple_parts[1] != 'unknown' and triple_parts[
   target_triple = triple_parts[0] + '-unknown-' + triple_parts[2] + '-' + triple_parts[3]
 endif
 
-target_triple = target_triple + (tls_lib == 'mbedtls' ? '-mbedtls' : '')
-
 add_project_arguments(
   '-DANT_VERSION="' + ant_version + '"',
   '-DANT_BUILD_TIMESTAMP=' + timestamp,

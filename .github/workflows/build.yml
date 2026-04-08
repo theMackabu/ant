@@ -44,30 +44,11 @@ jobs:
       platform: ${{ matrix.platform }}
       build_timestamp: ${{ needs.prepare.outputs.timestamp }}
 
-  build-mbedtls:
-    needs: prepare
-    strategy:
-      fail-fast: false
-      matrix:
-        platform:
-          - linux-glibc-x64
-          - linux-glibc-aarch64
-          - linux-musl-x64
-          - linux-musl-aarch64
-          - macos-x64
-          - macos-aarch64
-          - windows-x64
-    uses: ./.github/workflows/build-platform.yml
-    with:
-      platform: ${{ matrix.platform }}
-      tls_library: mbedtls
-      build_timestamp: ${{ needs.prepare.outputs.timestamp }}
-
   summary:
     name: Version
-    needs: [build, build-mbedtls]
+    needs: [build]
     runs-on: ubuntu-latest
-    if: ${{ !cancelled() && (needs.build.result != 'skipped' || needs.build-mbedtls.result != 'skipped') }}
+    if: ${{ !cancelled() && needs.build.result != 'skipped' }}
     steps:
       - name: Download version artifacts
         uses: actions/download-artifact@v4

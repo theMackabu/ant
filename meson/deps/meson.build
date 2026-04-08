@@ -1,18 +1,6 @@
 cc = meson.get_compiler('c')
-tls_lib = get_option('tls_library')
 
-if tls_lib == 'openssl'
-  openssl_dep = dependency('openssl', required: true, static: is_static)
-  mbedtls_dep = []
-else
-  openssl_dep = dependency('', required: false)
-  mbedtls_dep = [
-    dependency('mbedtls', required: true, static: is_static),
-    dependency('mbedx509', required: true, static: is_static),
-    dependency('mbedcrypto', required: true, static: is_static),
-  ]
-endif
-
+openssl_dep = dependency('openssl', required: true, static: is_static)
 libsodium_dep = dependency('libsodium', required: true, static: is_static)
 
 if host_machine.system() == 'windows'
@@ -89,7 +77,7 @@ brotli_enc_dep = brotli_sub.get_variable('brotli_encoder_dep')
 cmake_prefix = get_option('deps_prefix_cmake')
 
 tlsuv_sub = subproject('tlsuv', default_options: [
-  'tls_backend=' + tls_lib,
+  'tls_backend=openssl',
   'deps_prefix_cmake=' + cmake_prefix,
   'warning_level=0',
 ])
@@ -216,7 +204,7 @@ ant_deps = [
   uriparser_dep, utf8proc_dep, openssl_dep,
   zlib_dep, brotli_common_dep, brotli_dec_dep,
   brotli_enc_dep, uthash_dep, lmdb_dep, wamr_dep,
-] + mbedtls_dep + win_deps
+] + win_deps
 
 if get_option('jit')
   mir_dep = subproject('mir').get_variable('mir_dep')

@@ -36,10 +36,6 @@ inputs:
   build_timestamp:
     description: Build timestamp
     required: true
-  tls_library:
-    description: TLS library (openssl or mbedtls)
-    required: false
-    default: 'openssl'
   static_link:
     description: Enable static linking
     required: false
@@ -109,10 +105,6 @@ runs:
         MESON_ARGS="-Db_lto=true --buildtype=release"
         MESON_ARGS="$MESON_ARGS -Dbuild_timestamp=${{ inputs.build_timestamp }}"
         MESON_ARGS="$MESON_ARGS -Ddeps_prefix_cmake=$DEPS_PREFIX"
-
-        if [[ "${{ inputs.tls_library }}" == "mbedtls" ]]; then
-          MESON_ARGS="$MESON_ARGS -Dtls_library=mbedtls"
-        fi
 
         if [[ "${{ inputs.static_link }}" == "true" ]]; then
           MESON_ARGS="$MESON_ARGS --prefer-static -Dstatic_link=true"

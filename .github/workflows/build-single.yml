@@ -15,14 +15,6 @@ on:
           - macos-x64
           - macos-aarch64
           - windows-x64
-      tls_library:
-        description: 'TLS library'
-        required: false
-        type: choice
-        default: 'openssl'
-        options:
-          - openssl
-          - mbedtls
 
 jobs:
   prepare:
@@ -38,5 +30,4 @@ jobs:
     uses: ./.github/workflows/build-platform.yml
     with:
       platform: ${{ inputs.platform }}
-      tls_library: ${{ inputs.tls_library }}
       build_timestamp: ${{ needs.prepare.outputs.timestamp }}

@@ -7,13 +7,16 @@ type ProcessEnv = {
 
 interface Features {
   uv: boolean;
-  tls_mbedtls: boolean;
+  tls: string;
   typescript: 'transform' | 'none';
 }
 
 interface Versions {
+  node: string;
   ant: string;
+  v8: string;
   uv: string;
+  modules: string;
 }
 
 interface Release {

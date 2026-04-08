@@ -1,5 +1,4 @@
 option('jit', type: 'boolean', value: true, description: 'enable JIT compiler')
 option('static_link', type: 'boolean', value: false, description: 'statically link the binary')
-option('tls_library', type: 'combo', choices: ['openssl', 'mbedtls'], value: 'openssl', description: 'TLS library to use')
 option('build_timestamp', type: 'string', value: '', description: 'build timestamp (defaults to current time if empty)')
 option('deps_prefix_cmake', type: 'string', value: '', description: 'prefix path for finding dependencies in cmake subprojects')

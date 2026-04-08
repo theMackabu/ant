@@ -6,7 +6,6 @@ set -e
 build_deps() {
   if [ -f "$DEPS_DIR/lib/libllhttp.a" ] && \
      [ -f "$DEPS_DIR/lib/libz.a" ] && \
-     [ -f "$DEPS_DIR/lib/libmbedtls.a" ] && \
      [ -f "$DEPS_DIR/lib/libsodium.a" ]; then
     echo "Dependencies already built, skipping..."
     return
@@ -41,22 +40,6 @@ build_deps() {
     cmake --build build -j$NCPU
     cmake --install build
     rm -f "$DEPS_DIR/lib/libz.so"* "$DEPS_DIR/lib/libz.dylib"* 2>/dev/null || true
-  fi
-
-  if [ ! -f "$DEPS_DIR/lib/libmbedtls.a" ]; then
-    echo "Building mbedTLS..."
-    rm -rf "$CACHE_DIR/mbedtls"
-    git clone --depth 1 --branch mbedtls-3.6.5 --recurse-submodules https://github.com/Mbed-TLS/mbedtls.git "$CACHE_DIR/mbedtls"
-    cd "$CACHE_DIR/mbedtls"
-    cmake -B build \
-      -DCMAKE_INSTALL_PREFIX="$DEPS_DIR" \
-      -DENABLE_PROGRAMS=OFF \
-      -DENABLE_TESTING=OFF \
-      -DCMAKE_BUILD_TYPE=Release \
-      -DUSE_STATIC_MBEDTLS_LIBRARY=ON \
-      -DUSE_SHARED_MBEDTLS_LIBRARY=OFF
-    cmake --build build -j$NCPU
-    cmake --install build
   fi
 
   if [ ! -f "$DEPS_DIR/lib/libsodium.a" ]; then

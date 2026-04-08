@@ -7,11 +7,6 @@ on:
         description: 'Platform key from versions.json targets'
         required: true
         type: string
-      tls_library:
-        description: 'TLS library (openssl or mbedtls)'
-        required: false
-        type: string
-        default: 'openssl'
       build_timestamp:
         required: true
         type: string
@@ -98,9 +93,7 @@ jobs:
           for pkg in meson ninja llvm jq; do
             brew list "$pkg" &>/dev/null || brew install "$pkg"
           done
-          if [[ "${{ inputs.tls_library }}" != "mbedtls" ]]; then
-            brew list openssl@3 &>/dev/null || brew install openssl@3
-          fi
+          brew list openssl@3 &>/dev/null || brew install openssl@3
 
       # === WINDOWS SETUP ===
       - name: Disable Windows Defender real-time monitoring
@@ -153,27 +146,14 @@ jobs:
           echo "cmake_generator=$(echo $CONFIG | jq -r '.cmake_generator // empty')" >> $GITHUB_OUTPUT
           echo "extra_meson_args=$(echo $CONFIG | jq -r '.extra_meson_args // empty')" >> $GITHUB_OUTPUT
 
-          # TLS library from workflow input (overrides versions.json)
-          TLS_LIBRARY="${{ inputs.tls_library }}"
-          echo "tls_library=$TLS_LIBRARY" >> $GITHUB_OUTPUT
-
-          # Artifact name: append -mbedtls suffix when using mbedtls
           ARTIFACT_NAME=$(echo $CONFIG | jq -r '.artifact_name')
-          if [[ "$TLS_LIBRARY" == "mbedtls" ]]; then
-            ARTIFACT_NAME="${ARTIFACT_NAME}-mbedtls"
-          fi
           echo "artifact_name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
 
-          # Deps: add mbedtls to deps list when using mbedtls
           DEPS_LIST=$(echo $CONFIG | jq -r '.deps | join(" ")')
-          if [[ "$TLS_LIBRARY" == "mbedtls" ]]; then
-            DEPS_LIST="$DEPS_LIST mbedtls"
-          fi
           echo "deps=$DEPS_LIST" >> $GITHUB_OUTPUT
 
           # Dep versions
           echo "libsodium_version=$(echo $DEPS | jq -r '.libsodium')" >> $GITHUB_OUTPUT
-          echo "mbedtls_version=$(echo $DEPS | jq -r '.mbedtls')" >> $GITHUB_OUTPUT
           echo "zlib_version=$(echo $DEPS | jq -r '.zlib')" >> $GITHUB_OUTPUT
 
       # === SETUP ZIG ===
@@ -213,7 +193,6 @@ jobs:
           ranlib: ${{ steps.llvm.outputs.ranlib }}
           cmake_generator: ${{ steps.config.outputs.cmake_generator }}
           libsodium_version: ${{ steps.config.outputs.libsodium_version }}
-          mbedtls_version: ${{ steps.config.outputs.mbedtls_version }}
           zlib_version: ${{ steps.config.outputs.zlib_version }}
 
       # === BUILD PROJECT ===
@@ -229,7 +208,6 @@ jobs:
           strip: ${{ steps.llvm.outputs.strip }}
           deps_prefix: ${{ github.workspace }}/.deps-cache
           build_timestamp: ${{ inputs.build_timestamp }}
-          tls_library: ${{ steps.config.outputs.tls_library }}
           static_link: ${{ steps.config.outputs.static_link }}
           extra_meson_args: ${{ steps.config.outputs.extra_meson_args }}
           binary_name: ${{ steps.config.outputs.binary_name }}

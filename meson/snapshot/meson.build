@@ -18,7 +18,6 @@ snapshot_h = custom_target(
     'GIT_HASH=' + git_hash,
     'BUILD_TIMESTAMP=' + timestamp,
     'TARGET=' + target_triple,
-    'MBEDTLS=' + (tls_lib == 'mbedtls').to_string(),
     'HOST=' + host_machine.system(),
   ],
 )
