@@ -1239,13 +1239,13 @@ void init_wasm_module(void) {
   g_wasm_linkerror_proto = js_mkobj(js);
   g_wasm_runtimeerror_proto = js_mkobj(js);
 
-  js_set_proto_init(g_wasm_module_proto, js_get_ctor_proto(js, "Object", 6));
-  js_set_proto_init(g_wasm_instance_proto, js_get_ctor_proto(js, "Object", 6));
-  js_set_proto_init(g_wasm_global_proto, js_get_ctor_proto(js, "Object", 6));
-  js_set_proto_init(g_wasm_memory_proto, js_get_ctor_proto(js, "Object", 6));
-  js_set_proto_init(g_wasm_table_proto, js_get_ctor_proto(js, "Object", 6));
-  js_set_proto_init(g_wasm_tag_proto, js_get_ctor_proto(js, "Object", 6));
-  js_set_proto_init(g_wasm_exception_proto, js_get_ctor_proto(js, "Object", 6));
+  js_set_proto_init(g_wasm_module_proto, js->object);
+  js_set_proto_init(g_wasm_instance_proto, js->object);
+  js_set_proto_init(g_wasm_global_proto, js->object);
+  js_set_proto_init(g_wasm_memory_proto, js->object);
+  js_set_proto_init(g_wasm_table_proto, js->object);
+  js_set_proto_init(g_wasm_tag_proto, js->object);
+  js_set_proto_init(g_wasm_exception_proto, js->object);
 
   js_set_proto_init(g_wasm_compileerror_proto, error_proto);
   js_set_proto_init(g_wasm_linkerror_proto, error_proto);

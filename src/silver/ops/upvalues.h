@@ -11,7 +11,7 @@ static inline ant_value_t sv_setup_function_prototype(
   ant_value_t proto_obj = mkobj(js, 0);
   if (is_err(proto_obj)) return proto_obj;
 
-  ant_value_t object_proto = js_get_ctor_proto(js, "Object", 6);
+  ant_value_t object_proto = js->object;
   if (vtype(object_proto) == T_OBJ) js_set_proto_init(proto_obj, object_proto);
 
   ant_value_t ctor_key = js_mkstr(js, "constructor", 11);

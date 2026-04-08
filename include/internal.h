@@ -152,9 +152,13 @@ struct ant_isolate_t {
   #ifdef ANT_JIT
   void *jit_ctx;
   #endif
-
-  ant_value_t global;
+  
+  // TODO: should be under sym struct
+  // rename object to object_proto
   ant_value_t object;
+  ant_value_t array_proto;
+  
+  ant_value_t global;
   ant_value_t this_val;
   ant_value_t new_target;
   ant_value_t current_func;

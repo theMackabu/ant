@@ -1278,11 +1278,12 @@ static void date_define_methods(
 
 void init_date_module(void) {
   ant_t *js = rt->js;
-  ant_value_t glob = js_glob(js);
-  ant_value_t object_proto = js_get_ctor_proto(js, "Object", 6);
+  ant_value_t glob = js->global;
+  ant_value_t object_proto = js->object;
+  
   ant_value_t function_proto = js_get_ctor_proto(js, "Function", 8);
-
   ant_value_t date_proto = js_mkobj(js);
+  
   js_set_proto_init(date_proto, object_proto);
 
   static const date_method_entry_t kDateProtoMethods[] = {
@@ -1343,11 +1344,13 @@ void init_date_module(void) {
   ant_value_t date_ctor_obj = js_mkobj(js);
   js_set_proto_init(date_ctor_obj, function_proto);
   js_set_slot(date_ctor_obj, SLOT_CFUNC, js_mkfun(builtin_Date));
+  
   static const date_method_entry_t kDateCtorMethods[] = {
     DATE_METHOD_ENTRY("now", builtin_Date_now),
     DATE_METHOD_ENTRY("parse", builtin_Date_parse),
     DATE_METHOD_ENTRY("UTC", builtin_Date_UTC),
   };
+  
   date_define_methods(js, date_ctor_obj, kDateCtorMethods, DATE_COUNT_OF(kDateCtorMethods));
   js_setprop_nonconfigurable(js, date_ctor_obj, "prototype", 9, date_proto);
   js_setprop(js, date_ctor_obj, ANT_STRING("name"), ANT_STRING("Date"));

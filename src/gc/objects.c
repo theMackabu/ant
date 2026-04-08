@@ -453,6 +453,7 @@ static void gc_mark_roots(ant_t *js) {
 
   gc_mark_value(js, js->global);
   gc_mark_value(js, js->object);
+  gc_mark_value(js, js->array_proto);
   gc_mark_value(js, js->this_val);
   gc_mark_value(js, js->new_target);
   gc_mark_value(js, js->current_func);

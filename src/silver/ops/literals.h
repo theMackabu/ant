@@ -70,7 +70,7 @@ static inline void sv_op_object(sv_vm_t *vm, ant_t *js, sv_func_t *func, uint8_t
       ant_shape_retain(site->shared_shape);
     }
   }
-  ant_value_t proto = js_get_ctor_proto(js, "Object", 6);
+  ant_value_t proto = js->object;
   if (vtype(proto) == T_OBJ) js_set_proto_init(obj, proto);
   vm->stack[vm->sp++] = obj;
 }

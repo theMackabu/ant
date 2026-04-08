@@ -1412,7 +1412,7 @@ print_plain_object:
     if (pt != T_OBJ && pt != T_FUNC) break;
     
     ant_value_t proto_proto = js_get_proto(js, proto_val);
-    ant_value_t object_proto = get_ctor_proto(js, "Object", 6);
+    ant_value_t object_proto = js->object;
     proto_is_null_proto = (vtype(proto_proto) == T_NULL) && 
                           (vdata(proto_val) != vdata(object_proto));
     
@@ -2353,7 +2353,7 @@ ant_value_t mkarr(ant_t *js) {
   ant_object_t *obj = obj_alloc(js, T_ARR, (uint8_t)ANT_INOBJ_MAX_SLOTS);
   if (!obj) return js_mkerr(js, "oom");
   ant_value_t arr = mkval(T_ARR, (uintptr_t)obj);
-  ant_value_t array_proto = get_ctor_proto(js, "Array", 5);
+  ant_value_t array_proto = js->array_proto;
   if (vtype(array_proto) == T_OBJ) js_set_proto_init(arr, array_proto);
 
   obj->u.array.cap = MAX_DENSE_INITIAL_CAP;
@@ -2377,7 +2377,7 @@ ant_value_t js_mkarr(ant_t *js) {
 
 ant_value_t js_newobj(ant_t *js) {
   ant_value_t obj = mkobj(js, 0);
-  ant_value_t proto = get_ctor_proto(js, "Object", 6);
+  ant_value_t proto = js->object;
   if (vtype(proto) == T_OBJ) js_set_proto_init(obj, proto);
   return obj;
 }
@@ -2666,7 +2666,7 @@ static ant_value_t setup_func_prototype(ant_t *js, ant_value_t func) {
   ant_value_t proto_obj = mkobj(js, 0);
   if (is_err(proto_obj)) return proto_obj;
   
-  ant_value_t object_proto = get_ctor_proto(js, "Object", 6);
+  ant_value_t object_proto = js->object;
   if (vtype(object_proto) == T_OBJ) {
     js_set_proto_init(proto_obj, object_proto);
   }
@@ -3839,13 +3839,13 @@ static inline ant_value_t get_ctor_proto(ant_t *js, const char *name, size_t len
 
 static ant_value_t get_prototype_for_type(ant_t *js, uint8_t type) {
 switch (type) {
+  case T_OBJ:     return js->object;
+  case T_ARR:     return js->array_proto;
   case T_STR:     return get_ctor_proto(js, "String", 6);
   case T_NUM:     return get_ctor_proto(js, "Number", 6);
   case T_BOOL:    return get_ctor_proto(js, "Boolean", 7);
-  case T_ARR:     return get_ctor_proto(js, "Array", 5);
   case T_FUNC:    return get_ctor_proto(js, "Function", 8);
   case T_PROMISE: return get_ctor_proto(js, "Promise", 7);
-  case T_OBJ:     return get_ctor_proto(js, "Object", 6);
   case T_BIGINT:  return get_ctor_proto(js, "BigInt", 6);
   case T_SYMBOL:  return get_ctor_proto(js, "Symbol", 6);
   default:        return js_mknull();
@@ -4597,7 +4597,7 @@ static ant_value_t builtin_Boolean(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t builtin_Object(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0 || vtype(args[0]) == T_NULL || vtype(args[0]) == T_UNDEF) {
-    ant_value_t obj_proto = js_get_ctor_proto(js, "Object", 6);
+    ant_value_t obj_proto = js->object;
     if (is_unboxed_obj(js, js->this_val, obj_proto)) return js->this_val;
     return js_mkobj(js);
   }
@@ -12818,6 +12818,7 @@ ant_t *js_create(void *buf, size_t len) {
   set_proto(js, glob, object_proto);
   
   js->object = object_proto;
+  js->array_proto = array_proto;
   js->owns_mem = false;
   js->max_size = 0;
   
