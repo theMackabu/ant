@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <uv.h>
 
 #include "../alloc.h"
 #include "../keychain.h"
@@ -48,6 +49,7 @@ struct boringssl_engine {
 };
 
 static int is_self_signed(X509 *cert);
+static bool host_is_ip_literal(const char *host);
 static const char *name_str(const X509_NAME *n);
 static void init_ssl_context(struct boringssl_ctx *c, const char *cabuf, size_t cabuf_len);
 static int tls_set_own_cert(tls_context *ctx, tlsuv_private_key_t key, tlsuv_certificate_t cert);
@@ -450,12 +452,27 @@ tlsuv_engine_t new_boringssl_engine(tls_context *ctx, const char *host) {
   engine->api = boringssl_engine_api;
   engine->ssl = SSL_new(context->ctx);
 
-  SSL_set_tlsext_host_name(engine->ssl, host);
-  SSL_set1_host(engine->ssl, host);
+  if (host && *host) {
+    if (host_is_ip_literal(host)) {
+      X509_VERIFY_PARAM_set1_ip_asc(SSL_get0_param(engine->ssl), host);
+    } else {
+      SSL_set_tlsext_host_name(engine->ssl, host);
+      SSL_set1_host(engine->ssl, host);
+    }
+  }
   SSL_set_connect_state(engine->ssl);
   SSL_set_app_data(engine->ssl, engine);
 
   return &engine->api;
+}
+
+static bool host_is_ip_literal(const char *host) {
+  struct sockaddr_in addr4;
+  struct sockaddr_in6 addr6;
+
+  return host != NULL &&
+    (uv_inet_pton(AF_INET, host, &addr4.sin_addr) == 0 ||
+     uv_inet_pton(AF_INET6, host, &addr6.sin6_addr) == 0);
 }
 
 static void set_io(tlsuv_engine_t self, io_ctx io, io_read rdf, io_write wrtf) {
