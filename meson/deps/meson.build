@@ -8,6 +8,12 @@ boringssl_opts.add_cmake_defines({
   'INSTALL_ENABLED': '0',
 })
 
+if host_machine.system() == 'windows'
+  boringssl_opts.add_cmake_defines({
+    'OPENSSL_NO_ASM': '1',
+  })
+endif
+
 if host_machine.system() == 'darwin'
   deployment_flag = '-mmacosx-version-min=15.0'
   boringssl_opts.add_cmake_defines({
@@ -37,7 +43,8 @@ if host_machine.system() == 'windows'
   userenv_dep = cc.find_library('userenv', required: true)
   ws2_32_dep = cc.find_library('ws2_32', required: true)
   iphlpapi_dep = cc.find_library('iphlpapi', required: true)
-  win_deps = [secur32_dep, ntdll_dep, crypt32_dep, userenv_dep, ws2_32_dep, iphlpapi_dep]
+  pathcch_dep = cc.find_library('pathcch', required: true)
+  win_deps = [secur32_dep, ntdll_dep, crypt32_dep, userenv_dep, ws2_32_dep, iphlpapi_dep, pathcch_dep]
 elif host_machine.system() == 'darwin'
   security_dep = dependency('appleframeworks', modules: ['Security', 'CoreFoundation'], required: true)
   win_deps = []
