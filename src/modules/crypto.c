@@ -1,3 +1,5 @@
+#include <compat.h> // IWYU pragma: keep
+
 #include <string.h>
 #include <time.h>
 #include <limits.h>
