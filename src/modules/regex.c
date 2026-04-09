@@ -1853,7 +1853,7 @@ static ant_value_t builtin_string_match(ant_t *js, ant_value_t *args, int nargs)
 void init_regex_module(void) {
   ant_t *js = rt->js;
   ant_value_t glob = js->global;
-  ant_value_t object_proto = js->object;
+  ant_value_t object_proto = js->sym.object_proto;
 
   ant_value_t regexp_proto = js_mkobj(js);
   js_set_proto_init(regexp_proto, object_proto);

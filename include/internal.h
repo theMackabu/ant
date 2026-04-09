@@ -153,11 +153,6 @@ struct ant_isolate_t {
   void *jit_ctx;
   #endif
   
-  // TODO: should be under sym struct
-  // rename object to object_proto
-  ant_value_t object;
-  ant_value_t array_proto;
-  
   ant_value_t global;
   ant_value_t this_val;
   ant_value_t new_target;
@@ -194,6 +189,8 @@ struct ant_isolate_t {
     uint64_t counter;
     struct sym_registry_entry *registry;
     
+    ant_value_t object_proto;
+    ant_value_t array_proto;
     ant_value_t iterator_proto;
     ant_value_t array_iterator_proto;
     ant_value_t string_iterator_proto;

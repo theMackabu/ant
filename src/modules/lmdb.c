@@ -968,7 +968,7 @@ static ant_value_t lmdb_txn_constructor(ant_t *js, ant_value_t *args, int nargs)
 
 static void ensure_lmdb_prototypes(ant_t *js) {
   if (lmdb_types.ready) return;
-  ant_value_t object_proto = js->object;
+  ant_value_t object_proto = js->sym.object_proto;
 
   ant_value_t env_ctor_obj = js_mkobj(js);
   ant_value_t env_proto = js_mkobj(js);

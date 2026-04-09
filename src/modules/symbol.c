@@ -68,7 +68,7 @@ static ant_value_t get_iterator_prototype(ant_t *js) {
   if (vtype(js->sym.iterator_proto) == T_OBJ) return js->sym.iterator_proto;
 
   js->sym.iterator_proto = js_mkobj(js);
-  js_set_proto_init(js->sym.iterator_proto, js->object);
+  js_set_proto_init(js->sym.iterator_proto, js->sym.object_proto);
   js_set_sym(js, js->sym.iterator_proto, g_iterator, js_mkfun(sym_this_cb));
   
   return js->sym.iterator_proto;

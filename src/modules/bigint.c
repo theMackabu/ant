@@ -1470,7 +1470,7 @@ void init_bigint_module(void) {
   ant_t *js = rt->js;
 
   ant_value_t glob = js_glob(js);
-  ant_value_t object_proto = js->object;
+  ant_value_t object_proto = js->sym.object_proto;
   ant_value_t function_proto = js_get_slot(glob, SLOT_FUNC_PROTO);
   if (vtype(function_proto) == T_UNDEF) function_proto = js_get_ctor_proto(js, "Function", 8);
 

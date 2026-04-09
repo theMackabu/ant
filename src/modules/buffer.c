@@ -2379,7 +2379,7 @@ void init_buffer_module() {
   ant_t *js = rt->js;
   
   ant_value_t glob = js->global;
-  ant_value_t object_proto = js->object;
+  ant_value_t object_proto = js->sym.object_proto;
 
   ant_value_t arraybuffer_ctor_obj = js_mkobj(js);
   ant_value_t arraybuffer_proto = js_mkobj(js);

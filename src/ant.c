@@ -1411,7 +1411,7 @@ print_plain_object:
     if (pt != T_OBJ && pt != T_FUNC) break;
     
     ant_value_t proto_proto = js_get_proto(js, proto_val);
-    ant_value_t object_proto = js->object;
+    ant_value_t object_proto = js->sym.object_proto;
     proto_is_null_proto = (vtype(proto_proto) == T_NULL) && 
                           (vdata(proto_val) != vdata(object_proto));
     
@@ -2372,7 +2372,7 @@ static ant_value_t alloc_array_with_proto(ant_t *js, ant_value_t proto) {
 }
 
 static inline ant_value_t mkarr(ant_t *js) {
-  return alloc_array_with_proto(js, js->array_proto);
+  return alloc_array_with_proto(js, js->sym.array_proto);
 }
 
 ant_value_t js_mkarr(ant_t *js) { 
@@ -2381,7 +2381,7 @@ ant_value_t js_mkarr(ant_t *js) {
 
 ant_value_t js_newobj(ant_t *js) {
   ant_value_t obj = mkobj(js, 0);
-  ant_value_t proto = js->object;
+  ant_value_t proto = js->sym.object_proto;
   if (vtype(proto) == T_OBJ) js_set_proto_init(obj, proto);
   return obj;
 }
@@ -2660,7 +2660,7 @@ static ant_value_t setup_func_prototype(ant_t *js, ant_value_t func) {
   ant_value_t proto_obj = mkobj(js, 0);
   if (is_err(proto_obj)) return proto_obj;
   
-  ant_value_t object_proto = js->object;
+  ant_value_t object_proto = js->sym.object_proto;
   if (vtype(object_proto) == T_OBJ) {
     js_set_proto_init(proto_obj, object_proto);
   }
@@ -3843,8 +3843,8 @@ static inline ant_value_t get_ctor_proto(ant_t *js, const char *name, size_t len
 
 static ant_value_t get_prototype_for_type(ant_t *js, uint8_t type) {
 switch (type) {
-  case T_OBJ:     return js->object;
-  case T_ARR:     return js->array_proto;
+  case T_OBJ:     return js->sym.object_proto;
+  case T_ARR:     return js->sym.array_proto;
   case T_STR:     return get_ctor_proto(js, "String", 6);
   case T_NUM:     return get_ctor_proto(js, "Number", 6);
   case T_BOOL:    return get_ctor_proto(js, "Boolean", 7);
@@ -4601,7 +4601,7 @@ static ant_value_t builtin_Boolean(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t builtin_Object(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0 || vtype(args[0]) == T_NULL || vtype(args[0]) == T_UNDEF) {
-    ant_value_t obj_proto = js->object;
+    ant_value_t obj_proto = js->sym.object_proto;
     if (is_unboxed_obj(js, js->this_val, obj_proto)) return js->this_val;
     return js_mkobj(js);
   }
@@ -12807,8 +12807,8 @@ ant_t *js_create(void *buf, size_t len) {
   
   set_proto(js, glob, object_proto);
   
-  js->object = object_proto;
-  js->array_proto = array_proto;
+  js->sym.object_proto = object_proto;
+  js->sym.array_proto = array_proto;
   js->owns_mem = false;
   js->max_size = 0;
   

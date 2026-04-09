@@ -2,6 +2,7 @@
 .nova
 .maid
 .cache
+.superset
 
 .claude
 .github/artifacts

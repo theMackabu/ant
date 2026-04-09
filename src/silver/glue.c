@@ -390,7 +390,7 @@ ant_value_t jit_helper_put_global(
 
 ant_value_t jit_helper_object(sv_vm_t *vm, ant_t *js) {
   ant_value_t obj = mkobj(js, 0);
-  ant_value_t proto = js->object;
+  ant_value_t proto = js->sym.object_proto;
   if (vtype(proto) == T_OBJ) js_set_proto_init(obj, proto);
   return obj;
 }
