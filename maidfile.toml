@@ -1,3 +1,6 @@
+[env]
+CC = "ccache clang"
+
 [tasks.build]
 path = "build"
 script = "meson compile"

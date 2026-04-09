@@ -8,6 +8,15 @@ boringssl_opts.add_cmake_defines({
   'INSTALL_ENABLED': '0',
 })
 
+if host_machine.system() == 'darwin'
+  deployment_flag = '-mmacosx-version-min=15.0'
+  boringssl_opts.add_cmake_defines({
+    'CMAKE_EXE_LINKER_FLAGS': deployment_flag,
+    'CMAKE_SHARED_LINKER_FLAGS': deployment_flag,
+    'CMAKE_MODULE_LINKER_FLAGS': deployment_flag,
+  })
+endif
+
 boringssl_warning_flag = cc.get_argument_syntax() == 'msvc' ? '/W0' : '-w'
 boringssl_opts.append_compile_args('c', boringssl_warning_flag)
 boringssl_opts.append_compile_args('cpp', boringssl_warning_flag)
@@ -21,10 +30,7 @@ crypto_dep = boringssl_sub.dependency('crypto')
 meson.override_dependency('ssl', ssl_dep)
 meson.override_dependency('crypto', crypto_dep)
 
-libsodium_dep = dependency('libsodium', required: true, static: is_static)
-
 if host_machine.system() == 'windows'
-  uuid_dep = cc.find_library('rpcrt4', required: true)
   secur32_dep = cc.find_library('secur32', required: true)
   ntdll_dep = cc.find_library('ntdll', required: true)
   crypt32_dep = cc.find_library('crypt32', required: true)
@@ -33,11 +39,9 @@ if host_machine.system() == 'windows'
   iphlpapi_dep = cc.find_library('iphlpapi', required: true)
   win_deps = [secur32_dep, ntdll_dep, crypt32_dep, userenv_dep, ws2_32_dep, iphlpapi_dep]
 elif host_machine.system() == 'darwin'
-  uuid_dep = dependency('uuid', required: true)
   security_dep = dependency('appleframeworks', modules: ['Security', 'CoreFoundation'], required: true)
   win_deps = []
 else
-  uuid_dep = dependency('uuid', required: true, static: is_static)
   win_deps = []
 endif
 
@@ -218,10 +222,9 @@ pkg_zig_dir = src_root / 'src' / 'pkg'
 pkg_build_dir = meson.current_build_dir()
 
 ant_deps = [
-  libffi_dep, uuid_dep, crprintf_dep,
+  libffi_dep, crprintf_dep, argtable3_dep,
   llhttp, pcre2_dep, libuv_dep, base64_dep,
-  argtable3_dep, tlsuv_dep, libsodium_dep,
-  yyjson_dep, minicoro_dep, uuidv7_dep,
+  yyjson_dep, minicoro_dep, uuidv7_dep, tlsuv_dep,
   uriparser_dep, utf8proc_dep, ssl_dep, crypto_dep,
   zlib_dep, brotli_common_dep, brotli_dec_dep,
   brotli_enc_dep, uthash_dep, lmdb_dep, wamr_dep,

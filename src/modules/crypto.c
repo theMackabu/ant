@@ -1,18 +1,13 @@
-#include <sodium.h>
 #include <string.h>
 #include <time.h>
+#include <limits.h>
 #include <openssl/evp.h>
+#include <openssl/rand.h>
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wimplicit-int-conversion"
 #include <uuidv7.h>
 #pragma GCC diagnostic pop
-
-#ifdef _WIN32
-#include <rpc.h>
-#else
-#include <uuid/uuid.h>
-#endif
 
 #include "ant.h"
 #include "base64.h"
@@ -36,6 +31,58 @@ typedef struct {
   unsigned int digest_len;
   bool finalized;
 } ant_hash_state_t;
+
+int crypto_fill_random(void *buf, size_t len) {
+  if (len == 0) return 0;
+  if (len > (size_t)INT_MAX) return -1;
+  return RAND_bytes((uint8_t *)buf, (int)len) == 1 ? 0 : -1;
+}
+
+static inline ant_value_t crypto_random_error(ant_t *js) {
+  return js_mkerr(js, "secure random generation failed");
+}
+
+static ant_value_t crypto_format_uuid_v4(ant_t *js, const uint8_t uuid[16]) {
+  static char lut[256][2];
+  static bool lut_init = false;
+  char uuid_str[36];
+
+  if (!lut_init) {
+    static const char hex[] = "0123456789abcdef";
+    for (int i = 0; i < 256; i++) {
+      lut[i][0] = hex[(unsigned)i >> 4];
+      lut[i][1] = hex[(unsigned)i & 0x0f];
+    }
+    lut_init = true;
+  }
+
+  memcpy(uuid_str + 0,  lut[uuid[0]], 2);
+  memcpy(uuid_str + 2,  lut[uuid[1]], 2);
+  memcpy(uuid_str + 4,  lut[uuid[2]], 2);
+  memcpy(uuid_str + 6,  lut[uuid[3]], 2);
+  
+  uuid_str[8] = '-';
+  memcpy(uuid_str + 9,  lut[uuid[4]], 2);
+  memcpy(uuid_str + 11, lut[uuid[5]], 2);
+  
+  uuid_str[13] = '-';
+  memcpy(uuid_str + 14, lut[uuid[6]], 2);
+  memcpy(uuid_str + 16, lut[uuid[7]], 2);
+  
+  uuid_str[18] = '-';
+  memcpy(uuid_str + 19, lut[uuid[8]], 2);
+  memcpy(uuid_str + 21, lut[uuid[9]], 2);
+  
+  uuid_str[23] = '-';
+  memcpy(uuid_str + 24, lut[uuid[10]], 2);
+  memcpy(uuid_str + 26, lut[uuid[11]], 2);
+  memcpy(uuid_str + 28, lut[uuid[12]], 2);
+  memcpy(uuid_str + 30, lut[uuid[13]], 2);
+  memcpy(uuid_str + 32, lut[uuid[14]], 2);
+  memcpy(uuid_str + 34, lut[uuid[15]], 2);
+
+  return js_mkstr(js, uuid_str, sizeof(uuid_str));
+}
 
 static ant_value_t crypto_make_buffer(ant_t *js, const uint8_t *data, size_t len) {
   ArrayBufferData *buffer = create_array_buffer_data(len);
@@ -230,16 +277,6 @@ static ant_value_t crypto_digest_result(
   return crypto_make_buffer(js, digest, digest_len);
 }
 
-int ensure_crypto_init(void) {
-  static int crypto_initialized = 0;
-  
-  if (!crypto_initialized) {
-    if (sodium_init() < 0) return -1;
-    crypto_initialized = 1;
-  }
-  return 0;
-}
-
 int uuidv7_new(uint8_t *uuid_out) {
   static uint8_t uuid_prev[16] = {0};
   static uint8_t rand_bytes[256] = {0};
@@ -250,7 +287,7 @@ int uuidv7_new(uint8_t *uuid_out) {
   uint64_t unix_ts_ms = (uint64_t)tp.tv_sec * 1000 + tp.tv_nsec / 1000000;
   
   if (n_rand_consumed > sizeof(rand_bytes) - 10) {
-    randombytes_buf(rand_bytes, sizeof(rand_bytes));
+    if (crypto_fill_random(rand_bytes, sizeof(rand_bytes)) < 0) return -1;
     n_rand_consumed = 0;
   }
   
@@ -263,11 +300,8 @@ int uuidv7_new(uint8_t *uuid_out) {
 
 // crypto.random()
 static ant_value_t js_crypto_random(ant_t *js, ant_value_t *args, int nargs) {
-  if (ensure_crypto_init() < 0) {
-    return js_mkerr(js, "libsodium initialization failed");
-  }
-  
-  unsigned int value = randombytes_random();
+  unsigned int value = 0;
+  if (crypto_fill_random(&value, sizeof(value)) < 0) return crypto_random_error(js);
   return js_mknum((double)value);
 }
 
@@ -276,13 +310,8 @@ static ant_value_t js_crypto_random_bytes(ant_t *js, ant_value_t *args, int narg
   if (nargs < 1) {
     return js_mkerr(js, "randomBytes requires a length argument");
   }
-  
-  if (ensure_crypto_init() < 0) {
-    return js_mkerr(js, "libsodium initialization failed");
-  }
-  
+
   int length = (int)js_getnum(args[0]);
-  
   if (length <= 0 || length > 65536) {
     return js_mkerr(js, "invalid length");
   }
@@ -292,7 +321,11 @@ static ant_value_t js_crypto_random_bytes(ant_t *js, ant_value_t *args, int narg
     return js_mkerr(js, "memory allocation failed");
   }
   
-  randombytes_buf(random_bytes, length);
+  if (crypto_fill_random(random_bytes, (size_t)length) < 0) {
+    free(random_bytes);
+    return crypto_random_error(js);
+  }
+  
   ant_value_t array = crypto_make_buffer(js, random_bytes, (size_t)length);
   free(random_bytes);
   
@@ -301,45 +334,24 @@ static ant_value_t js_crypto_random_bytes(ant_t *js, ant_value_t *args, int narg
 
 // crypto.randomUUID()
 static ant_value_t js_crypto_random_uuid(ant_t *js, ant_value_t *args, int nargs) {
-  if (ensure_crypto_init() < 0) {
-    return js_mkerr(js, "libsodium initialization failed");
-  }
-  
-  char uuid_str[37];
-  
-#ifdef _WIN32
-  UUID uuid;
-  UuidCreate(&uuid);
-  snprintf(uuid_str, sizeof(uuid_str),
-    "%08lx-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x",
-    uuid.Data1, uuid.Data2, uuid.Data3,
-    uuid.Data4[0], uuid.Data4[1], uuid.Data4[2], uuid.Data4[3],
-    uuid.Data4[4], uuid.Data4[5], uuid.Data4[6], uuid.Data4[7]);
-#else
-  uuid_t uuid;
-  uuid_generate_random(uuid);
-  uuid_unparse_lower(uuid, uuid_str);
-#endif
-  
-  return js_mkstr(js, uuid_str, strlen(uuid_str));
+  uint8_t uuid[16];
+  if (crypto_fill_random(uuid, sizeof(uuid)) < 0) return crypto_random_error(js);
+
+  uuid[6] = (uint8_t)((uuid[6] & 0x0f) | 0x40);
+  uuid[8] = (uint8_t)((uuid[8] & 0x3f) | 0x80);
+
+  return crypto_format_uuid_v4(js, uuid);
 }
 
 // crypto.randomUUIDv7()
 static ant_value_t js_crypto_random_uuidv7(ant_t *js, ant_value_t *args, int nargs) {
-  if (ensure_crypto_init() < 0) {
-    return js_mkerr(js, "libsodium initialization failed");
-  }
-  
   uint8_t uuid[16];
   char uuid_str[37];
   
   int result = uuidv7_new(uuid);
-  if (result < 0) {
-    return js_mkerr(js, "UUIDv7 generation failed");
-  }
+  if (result < 0) return js_mkerr(js, "UUIDv7 generation failed");
   
   uuidv7_to_string(uuid, uuid_str);
-  
   return js_mkstr(js, uuid_str, strlen(uuid_str));
 }
 
@@ -348,11 +360,7 @@ static ant_value_t js_crypto_get_random_values(ant_t *js, ant_value_t *args, int
   if (nargs < 1) {
     return js_mkerr(js, "getRandomValues requires a TypedArray argument");
   }
-  
-  if (ensure_crypto_init() < 0) {
-    return js_mkerr(js, "libsodium initialization failed");
-  }
-  
+
   TypedArrayData *ta_data = buffer_get_typedarray_data(args[0]);
   if (!ta_data || !ta_data->buffer) {
     return js_mkerr(js, "argument must be a TypedArray");
@@ -363,14 +371,13 @@ static ant_value_t js_crypto_get_random_values(ant_t *js, ant_value_t *args, int
   }
   
   uint8_t *ptr = ta_data->buffer->data + ta_data->byte_offset;
-  randombytes_buf(ptr, ta_data->byte_length);
+  if (crypto_fill_random(ptr, ta_data->byte_length) < 0) return crypto_random_error(js);
   
   return args[0];
 }
 
 static ant_value_t js_crypto_random_fill_sync(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "randomFillSync requires a target");
-  if (ensure_crypto_init() < 0) return js_mkerr(js, "libsodium initialization failed");
 
   uint8_t *bytes = NULL;
   size_t len = 0;
@@ -396,7 +403,7 @@ static ant_value_t js_crypto_random_fill_sync(ant_t *js, ant_value_t *args, int 
     return js_mkerr(js, "randomFillSync range is out of bounds");
   }
 
-  randombytes_buf(bytes + offset, size);
+  if (crypto_fill_random(bytes + offset, size) < 0) return crypto_random_error(js);
   return args[0];
 }
 

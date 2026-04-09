@@ -87,12 +87,7 @@ The following tools are required to build Ant regardless of platform:
 - **[Zig](https://ziglang.org/)** >= 0.15 (builds the package manager component)
 - **Git**
 
-System libraries required:
-
-- **libsodium**
-- **libuuid** (Linux/macOS)
-
-The remaining dependencies are vendored as Meson subprojects under `vendor/`
+Dependencies are vendored as Meson subprojects under `vendor/`
 and are fetched automatically:
 
 - aklomp-base64 0.5.2
@@ -127,7 +122,7 @@ Installation via package manager:
 
   ```bash
   sudo apt-get install python3 python3-pip gcc-14 g++-14 ninja-build cmake \
-    pkg-config uuid-dev libsodium-dev nodejs npm
+    pkg-config nodejs npm
   pip3 install meson
   ```
 
@@ -135,14 +130,14 @@ Installation via package manager:
 
   ```bash
   sudo dnf install python3 gcc gcc-c++ ninja-build cmake pkgconf \
-    libuuid-devel libsodium-devel nodejs npm
+    nodejs npm
   pip3 install meson
   ```
 
 - Alpine (musl):
   ```sh
   apk add clang lld llvm meson ninja cmake pkgconf nodejs npm \
-    musl-dev libsodium-dev libsodium-static \
+    musl-dev \
     util-linux-dev util-linux-static linux-headers libunwind-dev libunwind-static
   ```
 
@@ -167,7 +162,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 - Install remaining tools via [Homebrew](https://brew.sh):
 
   ```bash
-  brew install meson ninja llvm libsodium node
+  brew install meson ninja llvm node
   ```
 
 - Rust and Zig:
@@ -378,7 +373,6 @@ Ant on Windows is built using the MSYS2 MINGW64 toolchain.
    ```bash
    pacman -S mingw-w64-x86_64-toolchain mingw-w64-x86_64-meson \
      mingw-w64-x86_64-ninja mingw-w64-x86_64-cmake \
-     mingw-w64-x86_64-libsodium \
      mingw-w64-x86_64-lld mingw-w64-x86_64-nodejs git
    ```
 3. Install Rust via [rustup](https://rustup.rs/) (select the
@@ -406,16 +400,6 @@ To verify:
 ```bash
 ./build/ant.exe --version
 ```
-
-> [!WARNING]
-> Windows builds require bundling the following DLLs alongside `ant.exe`:
->
-> - `libssl-3-x64.dll`
-> - `libcrypto-3-x64.dll`
-> - `libsodium-26.dll`
->
-> These are found in the MSYS2 MINGW64 bin directory
-> (`/mingw64/bin/` or equivalent).
 
 ## Meson build options
 

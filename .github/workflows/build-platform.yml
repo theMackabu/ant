@@ -70,7 +70,7 @@ jobs:
           fi
           apt-get update
           apt-get install -y git ca-certificates gnupg wget software-properties-common curl \
-            python3-pip ninja-build cmake pkg-config uuid-dev libsodium-dev jq
+            python3-pip ninja-build cmake pkg-config jq
           curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
           apt-get install -y nodejs
           pip3 install meson tomli
@@ -81,7 +81,7 @@ jobs:
         if: startsWith(inputs.platform, 'linux-musl')
         run: |
           apk add --no-cache git clang lld llvm meson ninja cmake pkgconf curl npm nodejs \
-            musl-dev libsodium-dev libsodium-static \
+            musl-dev \
             util-linux-dev util-linux-static linux-headers libunwind-dev libunwind-static \
             py3-tomli tar xz zstd jq bash
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -108,7 +108,7 @@ jobs:
           cache: true
           install: >-
             mingw-w64-clang-x86_64-toolchain mingw-w64-clang-x86_64-meson mingw-w64-clang-x86_64-ninja
-            mingw-w64-clang-x86_64-cmake mingw-w64-clang-x86_64-libsodium
+            mingw-w64-clang-x86_64-cmake
             mingw-w64-clang-x86_64-lld mingw-w64-clang-x86_64-nodejs git jq
 
       - name: Configure git line endings
@@ -152,7 +152,6 @@ jobs:
           echo "deps=$DEPS_LIST" >> $GITHUB_OUTPUT
 
           # Dep versions
-          echo "libsodium_version=$(echo $DEPS | jq -r '.libsodium')" >> $GITHUB_OUTPUT
           echo "zlib_version=$(echo $DEPS | jq -r '.zlib')" >> $GITHUB_OUTPUT
 
       # === SETUP ZIG ===
@@ -191,7 +190,6 @@ jobs:
           ar: ${{ steps.llvm.outputs.ar }}
           ranlib: ${{ steps.llvm.outputs.ranlib }}
           cmake_generator: ${{ steps.config.outputs.cmake_generator }}
-          libsodium_version: ${{ steps.config.outputs.libsodium_version }}
           zlib_version: ${{ steps.config.outputs.zlib_version }}
 
       # === BUILD PROJECT ===

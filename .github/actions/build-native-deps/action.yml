@@ -1,9 +1,9 @@
 name: Build Native Dependencies
-description: Build libsodium and zlib as needed
+description: Build zlib as needed
 
 inputs:
   deps:
-    description: Space-separated list of deps to build (libsodium zlib)
+    description: Space-separated list of deps to build (zlib)
     required: true
   prefix:
     description: Install prefix
@@ -27,8 +27,6 @@ inputs:
     description: CMake generator (Ninja, MinGW Makefiles, etc)
     required: false
     default: ''
-  libsodium_version:
-    required: true
   zlib_version:
     required: true
 
@@ -59,16 +57,6 @@ runs:
         fi
         echo "prefix=$PREFIX" >> $GITHUB_OUTPUT
         mkdir -p "$PREFIX"
-
-    - name: Build libsodium
-      if: steps.cache.outputs.cache-hit != 'true' && contains(inputs.deps, 'libsodium')
-      shell: bash
-      run: |
-        git clone --depth 1 --branch ${{ inputs.libsodium_version }}-RELEASE https://github.com/jedisct1/libsodium.git /tmp/libsodium
-        cd /tmp/libsodium
-        ./configure CC=${{ inputs.cc }} --prefix=${{ steps.prep.outputs.prefix }} --disable-shared --enable-static
-        make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
-        make install
 
     - name: Build zlib
       if: steps.cache.outputs.cache-hit != 'true' && contains(inputs.deps, 'zlib')
