@@ -333,6 +333,10 @@ static bool is_function_argument_identifier(const char *input, size_t input_len,
   return is_likely_function_param_paren(input, input_len, open_paren, close_paren);
 }
 
+static inline bool is_line_comment_terminator(unsigned char c) {
+  return c == '\n' || c == '\r';
+}
+
 bool hl_iter_next(hl_iter *it, hl_span *out) {
   const char *input = it->input;
   size_t input_len = it->input_len;
@@ -421,8 +425,10 @@ bool hl_iter_next(hl_iter *it, hl_span *out) {
 
   if (c == '/' && i + 1 < input_len && input[i + 1] == '/') {
     it->ctx = HL_CTX_NONE;
-    *out = (hl_span){ i, input_len - i, HL_COMMENT };
-    it->pos = input_len;
+    size_t start = i; i += 2;
+    while (i < input_len && !is_line_comment_terminator((unsigned char)input[i])) i++;
+    *out = (hl_span){ start, i - start, HL_COMMENT };
+    it->pos = i;
     return true;
   }
 

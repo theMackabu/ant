@@ -1,6 +1,10 @@
 const hl = Ant.highlight;
 const render = hl.render;
 
+function assertEq(actual, expected, label) {
+  if (actual !== expected) throw new Error(`${label}: expected ${JSON.stringify(expected)} got ${JSON.stringify(actual)}`);
+}
+
 console.log(render('<red>Red text</red> and back to normal'));
 console.log(render('<green>Green</green>, <blue>Blue</blue>, <yellow>Yellow</yellow>'));
 
@@ -34,3 +38,11 @@ function greet(name) {
 }`;
 
 console.log(hl(code));
+
+const lineComment = hl.tags('//hello\nworld');
+assertEq(lineComment, '<#758CA3>//hello</>\nworld', 'line comment stops at newline');
+
+const blockComment = hl.tags('/*hello\nworld');
+assertEq(blockComment, '<#758CA3>/*hello\nworld</>', 'block comment continues across newline');
+
+console.log('highlight comment specs ok');

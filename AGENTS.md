@@ -18,13 +18,13 @@ entire repository into context.
 
 ## Fast Path
 
+- Start here for most changes: `maid preflight`
 - Build from an existing configured tree: `meson compile -C build`
 - Fresh local setup: `maid setup`
 - Run a focused test file: `./build/ant tests/test_<name>.cjs`
 - Run the spec suite: `./build/ant examples/spec/run.js`
-- Validate repo knowledge docs: `maid knowledge`
-- Validate changed-file boundaries: `maid structure`
-- Route the current diff to the right checks: `maid validate_changes`
+- Run the individual harness steps when needed:
+  `maid validate_changes`, `maid structure`, `maid knowledge`
 
 ## Codebase Map
 
@@ -48,14 +48,17 @@ guidance.
 ## Change Rules
 
 - Prefer changes in `src/`, `include/`, `meson/`, `tests/`, `tools/`, and `.github/agents/`.
-- Treat `vendor/`, `build/ as generated or third-party surfaces.
-  Only edit them when the task explicitly requires it.
+- Treat `vendor/` and `build/` as generated or third-party surfaces. Only edit
+  them when the task explicitly requires it.
 - Keep durable design notes and execution history in versioned markdown under
   `docs/`. Treat `todo/` as scratch space, not the source of truth.
 - Add or update tests when behavior changes.
 - When touching build or runtime invariants, document the reasoning in
   [docs/exec-plans/index.md](docs/exec-plans/index.md) or a linked plan if the
   work spans multiple steps.
+- Before finalizing most code changes, run `maid preflight` and then execute any
+  additional build or spec commands it recommends, or explain why they were not
+  run.
 
 ## Which Doc To Open Next
 

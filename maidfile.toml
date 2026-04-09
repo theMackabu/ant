@@ -23,7 +23,7 @@ script = [".github/download.sh", "open .github/artifacts"]
 [tasks.run]
 script = ["maid build -q", "./build/ant %{arg.1}"]
 
-[tasks.check]
+[tasks.preflight]
 script = "ant .github/agents/check_all.js"
 
 [tasks.knowledge]
