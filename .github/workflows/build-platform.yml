@@ -117,7 +117,7 @@ jobs:
         shell: bash
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: recursive
 
@@ -211,7 +211,7 @@ jobs:
 
       # === UPLOAD ARTIFACTS ===
       - name: Upload binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ steps.config.outputs.artifact_name }}
           path: |
@@ -223,7 +223,7 @@ jobs:
         run: echo "${{ steps.build.outputs.version }}" > version.txt
 
       - name: Upload version info
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: version-${{ steps.config.outputs.artifact_name }}
           path: version.txt

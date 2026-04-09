@@ -58,12 +58,12 @@ runs:
       working-directory: src/tools
 
     - name: Cache vendor deps
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: |
           vendor/*/
           build/vendor
-        key: vendor-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vendor/*.wrap') }}
+        key: vendor-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vendor/*.wrap', 'vendor/packagefiles/**', 'meson/deps/meson.build') }}
 
     - name: Configure and build
       shell: bash

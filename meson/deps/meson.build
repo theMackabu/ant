@@ -20,6 +20,10 @@ endif
 boringssl_warning_flag = cc.get_argument_syntax() == 'msvc' ? '/W0' : '-w'
 boringssl_opts.append_compile_args('c', boringssl_warning_flag)
 boringssl_opts.append_compile_args('cpp', boringssl_warning_flag)
+if host_machine.system() == 'windows'
+  boringssl_opts.append_compile_args('c', '-DOPENSSL_WINDOWS')
+  boringssl_opts.append_compile_args('cpp', '-DOPENSSL_WINDOWS')
+endif
 boringssl_opts.set_override_option('warning_level', '0')
 boringssl_opts.set_override_option('optimization', 's')
 

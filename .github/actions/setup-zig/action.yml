@@ -25,7 +25,7 @@ runs:
 
     - name: Cache Zig
       id: cache
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ${{ steps.platform.outputs.install_path }}
         key: zig-${{ steps.platform.outputs.slug }}-${{ inputs.version }}
