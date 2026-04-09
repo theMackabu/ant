@@ -5,9 +5,12 @@
 Ant is a lightweight, high-performance JavaScript runtime built from scratch. <br>
 Fits in your pocket while Delivering near-V8 speeds in a binary smaller than most npm packages.
 
-```
+```bash
 $ ls -lh ant
--rwxr-xr-x⠀9.4M⠀ant*
+-rwxr-xr-x⠀9.3M⠀ant*
+
+# built with -Os
+-rwxr-xr-x⠀6.5M⠀ant*
 ```
 
 ## Table of contents
