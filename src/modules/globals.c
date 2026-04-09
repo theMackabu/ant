@@ -1,3 +1,5 @@
+#include <compat.h> // IWYU pragma: keep
+
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -110,7 +112,11 @@ static ant_value_t intl_dtf_format(ant_t *js, ant_value_t *args, int nargs) {
   } else t = time(NULL);
 
   struct tm local;
+#ifdef _WIN32
+  localtime_s(&local, &t);
+#else
   localtime_r(&t, &local);
+#endif
 
   char buf[64];
   int hour12 = local.tm_hour % 12;

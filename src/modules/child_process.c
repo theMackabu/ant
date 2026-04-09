@@ -388,7 +388,11 @@ static void on_process_exit(uv_process_t *proc, int64_t exit_status, int term_si
 static void alloc_buffer(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
   (void)handle;
   buf->base = malloc(suggested_size);
+#ifdef _WIN32
+  buf->len = buf->base ? (ULONG)(suggested_size > (size_t)ULONG_MAX ? ULONG_MAX : suggested_size) : 0;
+#else
   buf->len = buf->base ? suggested_size : 0;
+#endif
 }
 
 static void on_stdout_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {

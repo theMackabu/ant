@@ -629,7 +629,12 @@ static double posix_ts_to_ms(struct timespec ts) {
   return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1e6;
 }
 
-#ifdef __APPLE__
+#ifdef _WIN32
+  #define POSIX_ATIME_MS(st) ((double)(st)->st_atime * 1000.0)
+  #define POSIX_MTIME_MS(st) ((double)(st)->st_mtime * 1000.0)
+  #define POSIX_CTIME_MS(st) ((double)(st)->st_ctime * 1000.0)
+  #define POSIX_BIRTH_MS(st) 0.0
+#elif defined(__APPLE__)
   #define POSIX_ATIME_MS(st) posix_ts_to_ms((st)->st_atimespec)
   #define POSIX_MTIME_MS(st) posix_ts_to_ms((st)->st_mtimespec)
   #define POSIX_CTIME_MS(st) posix_ts_to_ms((st)->st_ctimespec)
@@ -2553,17 +2558,21 @@ static ant_value_t builtin_fs_lstatSync(ant_t *js, ant_value_t *args, int nargs)
   char *path_cstr = strndup(path, path_len);
   if (!path_cstr) return js_mkerr(js, "Out of memory");
   
-  struct stat st;
-  int result = lstat(path_cstr, &st);
-  
-  if (result != 0) {
-    const char *code = errno_to_code(errno);
-    ant_value_t err = fs_err_code(js, code, "lstat", path_cstr);
-    free(path_cstr); return err;
+  uv_fs_t req;
+  int result = uv_fs_lstat(NULL, &req, path_cstr, NULL);
+
+  if (result < 0) {
+    ant_value_t err = fs_err_code(js, uv_err_name(result), "lstat", path_cstr);
+    uv_fs_req_cleanup(&req);
+    free(path_cstr);
+    return err;
   }
-  
+
+  ant_value_t stat_obj = fs_stats_object_from_uv(js, &req.statbuf);
+  uv_fs_req_cleanup(&req);
   free(path_cstr);
-  return create_stats_object(js, &st);
+  
+  return stat_obj;
 }
 
 static ant_value_t builtin_fs_lstat(ant_t *js, ant_value_t *args, int nargs) {

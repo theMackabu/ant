@@ -180,13 +180,21 @@ static int get_timezone_offset(int64_t time_ms) {
   }
 
   ti = (time_t)time_s;
+#ifdef _WIN32
+  localtime_s(&tm_local, &ti);
+#else
   localtime_r(&ti, &tm_local);
+#endif
 
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__DragonFly__) || defined(__GLIBC__)
   return (int)(-tm_local.tm_gmtoff / 60);
 #else
   struct tm tm_gmt;
+#ifdef _WIN32
+  gmtime_s(&tm_gmt, &ti);
+#else
   gmtime_r(&ti, &tm_gmt);
+#endif
   tm_local.tm_isdst = 0;
   return (int)(difftime(mktime(&tm_gmt), mktime(&tm_local)) / 60);
 #endif

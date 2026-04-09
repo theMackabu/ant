@@ -1,0 +1,19 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -765,8 +765,6 @@
+   target_link_libraries(entropy_modulewrapper crypto)
+ endif()
+ 
+-add_executable(bssl ${BSSL_SOURCES})
+-target_link_libraries(bssl ssl crypto)
+ 
+ if(BUILD_TESTING)
+   add_executable(generate_mldsa_certs pki/testdata/verify_unittest/generate_mldsa_certs.cc)
+@@ -865,7 +863,6 @@
+ 
+ if(INSTALL_ENABLED)
+   install(TARGETS crypto ssl EXPORT OpenSSLTargets)
+-  install(TARGETS bssl)
+   install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+   install(EXPORT OpenSSLTargets
+           FILE OpenSSLTargets.cmake

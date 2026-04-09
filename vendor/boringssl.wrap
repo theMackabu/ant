@@ -2,3 +2,4 @@
 url = https://github.com/google/boringssl.git
 revision = 297b11798a0ed6bc7736aa57328909a4afbbf67a
 depth = 1
+diff_files = patches/boringssl-disable-bssl-on-windows.patch
