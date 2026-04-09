@@ -1,0 +1,45 @@
+diff --git a/core/shared/platform/windows/platform_internal.h b/core/shared/platform/windows/platform_internal.h
+index 6cf8f4b..d35cc99 100644
+--- a/core/shared/platform/windows/platform_internal.h
++++ b/core/shared/platform/windows/platform_internal.h
+@@ -98,7 +98,11 @@ os_mem_commit(void *ptr, size_t size, int flags);
+ void
+ os_mem_decommit(void *ptr, size_t size);
+ 
++#if defined(__clang__)
++#define os_thread_local_attribute __thread
++#else
+ #define os_thread_local_attribute __declspec(thread)
++#endif
+ 
+ #define strncasecmp _strnicmp
+ #define strcasecmp _stricmp
+diff --git a/core/shared/platform/windows/win_file.c b/core/shared/platform/windows/win_file.c
+index ef6ca15..b893f9e 100644
+--- a/core/shared/platform/windows/win_file.c
++++ b/core/shared/platform/windows/win_file.c
+@@ -1295,12 +1295,12 @@ os_realpath(const char *path, char *resolved_path)
+ 
+         if (wbufsize >= 4 && wbuf[0] == L'\\' && wbuf[1] == L'?'
+             && wbuf[2] == L'?' && wbuf[3] == L'\\') {
+-            // Starts with \??\ 
++            // Starts with \??\
+             if (wbufsize >= 6
+                 && ((wbuf[4] >= L'A' && wbuf[4] <= L'Z')
+                     || (wbuf[4] >= L'a' && wbuf[4] <= L'z'))
+                 && wbuf[5] == L':' && (wbufsize == 6 || wbuf[6] == L'\\'))
+                 {
+-                    // \??\<drive>:\ 
++                    // \??\<drive>:\
+                     wbuf += 4;
+                     wbufsize -= 4;
+                 }
+@@ -1310,7 +1310,7 @@ os_realpath(const char *path, char *resolved_path)
+                          && (wbuf[6] == L'C' || wbuf[6] == L'c')
+                          && wbuf[7] == L'\\')
+                 {
+-                    // \??\UNC\<server>\<share>\ - make sure the final path looks like \\<server>\<share>\ 
++                    // \??\UNC\<server>\<share>\ - make sure the final path looks like \\<server>\<share>\
+                     wbuf += 6;
+                     wbuf[0] = L'\\';
+                     wbufsize -= 6;
