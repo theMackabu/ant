@@ -12,7 +12,6 @@
 
 /build
 /traces
-/docs
 /todo/*
 
 /src/pkg/.zig-cache
@@ -24,6 +23,7 @@
 
 /wpt
 /tools
+/zoo.sh
 
 /vendor/*/
 /vendor/.wraplock
@@ -31,9 +31,6 @@
 
 *.todo
 *.trace
-
-zoo.sh
-AGENTS.md
 
 node_modules
 bun.lock

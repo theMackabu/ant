@@ -1,0 +1,74 @@
+# AGENTS.md
+
+Status: active
+Last reviewed: 2026-04-09
+Owner: Ant maintainers
+
+This file is the table of contents for agent work in Ant. Start here, then
+open the smallest linked document that matches the task instead of loading the
+entire repository into context.
+
+## Start Here
+
+- Repository map: [ARCHITECTURE.md](ARCHITECTURE.md)
+- Knowledge index: [docs/repo/index.md](docs/repo/index.md)
+- Build setup: [BUILDING.md](BUILDING.md)
+- Contribution rules: [CONTRIBUTING.md](CONTRIBUTING.md)
+- Durable execution plans: [docs/exec-plans/index.md](docs/exec-plans/index.md)
+
+## Fast Path
+
+- Build from an existing configured tree: `meson compile -C build`
+- Fresh local setup: `maid setup`
+- Run a focused test file: `./build/ant tests/test_<name>.cjs`
+- Run the spec suite: `./build/ant examples/spec/run.js`
+- Validate repo knowledge docs: `maid knowledge`
+- Validate changed-file boundaries: `maid structure`
+- Route the current diff to the right checks: `maid validate_changes`
+
+## Codebase Map
+
+- `src/main.c`, `src/ant.c`, and `src/runtime.c` wire process startup and the
+  runtime entrypoints.
+- `src/silver/` contains the parser, compiler, VM, and JIT-facing execution
+  logic for the Ant Silver engine.
+- `src/gc/` contains heap layout, roots, strings, ropes, and collection logic.
+- `src/modules/` and `src/builtins/` implement built-in modules and host APIs.
+- `src/http/`, `src/net/`, and `src/streams/` are the transport and I/O stack.
+- `src/pkg/` is the Zig package manager; `src/strip/` is the Rust type-stripper.
+- `meson/` and `meson.build` define the build graph and generated headers.
+- `.github/agents/` contains the lightweight repo-harness checks and validation
+  router used by local tasks and CI.
+- `tests/`, `examples/spec/`, and `tools/wpt/` cover targeted
+  runtime tests, the spec suite, and conformance harnesses.
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for subsystem boundaries and change
+guidance.
+
+## Change Rules
+
+- Prefer changes in `src/`, `include/`, `meson/`, `tests/`, `tools/`, and `.github/agents/`.
+- Treat `vendor/`, `build/ as generated or third-party surfaces.
+  Only edit them when the task explicitly requires it.
+- Keep durable design notes and execution history in versioned markdown under
+  `docs/`. Treat `todo/` as scratch space, not the source of truth.
+- Add or update tests when behavior changes.
+- When touching build or runtime invariants, document the reasoning in
+  [docs/exec-plans/index.md](docs/exec-plans/index.md) or a linked plan if the
+  work spans multiple steps.
+
+## Which Doc To Open Next
+
+- Build, toolchain, or platform issue:
+  [BUILDING.md](BUILDING.md)
+- Runtime or subsystem question:
+  [ARCHITECTURE.md](ARCHITECTURE.md)
+- Test selection or validation scope:
+  [docs/repo/testing.md](docs/repo/testing.md)
+- Long-running or multi-step task:
+  [docs/exec-plans/index.md](docs/exec-plans/index.md)
+
+## Keep This File Small
+
+`AGENTS.md` should stay a concise entrypoint. Add durable detail to the linked
+documents instead of expanding this file into a manual.

@@ -23,6 +23,15 @@ script = [".github/download.sh", "open .github/artifacts"]
 [tasks.run]
 script = ["maid build -q", "./build/ant %{arg.1}"]
 
+[tasks.knowledge]
+script = "ant .github/agents/check_repo_knowledge.js"
+
+[tasks.structure]
+script = "ant .github/agents/check_repo_structure.js"
+
+[tasks.validate_changes]
+script = "ant .github/agents/route_validation.js"
+
 [tasks.amber]
 script = "amber build .github/install/install.ab install.sh"
 

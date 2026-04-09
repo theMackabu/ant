@@ -1,0 +1,31 @@
+name: Repo Knowledge
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Validate repo knowledge docs
+        run: node .github/agents/check_repo_knowledge.js
+      - name: Collect changed files
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch origin "${{ github.base_ref }}" --depth=1
+            git diff --name-only "origin/${{ github.base_ref }}...HEAD" > .changed-files
+          elif [ -n "${{ github.event.before }}" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" > .changed-files
+          else
+            git ls-files > .changed-files
+          fi
+      - name: Validate changed-file structure
+        run: node .github/agents/check_repo_structure.js --files-from .changed-files
+      - name: Suggest validation commands
+        run: node .github/agents/route_validation.js --files-from .changed-files
