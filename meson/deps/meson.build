@@ -8,12 +8,6 @@ boringssl_opts.add_cmake_defines({
   'INSTALL_ENABLED': '0',
 })
 
-if host_machine.system() == 'windows'
-  boringssl_opts.add_cmake_defines({
-    'OPENSSL_NO_ASM': '1',
-  })
-endif
-
 if host_machine.system() == 'darwin'
   deployment_flag = '-mmacosx-version-min=15.0'
   boringssl_opts.add_cmake_defines({
