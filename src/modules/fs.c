@@ -33,12 +33,6 @@
 #include "modules/stream.h"
 #include "modules/symbol.h"
 
-#define fs_err_code(js, code, op, path) ({ \
-  ant_value_t _props = js_mkobj(js); \
-  js_set(js, _props, "code", js_mkstr(js, code, strlen(code))); \
-  js_mkerr_props(js, JS_ERR_TYPE, _props, "%s: %s, %s '%s'", code, strerror(errno), op, path); \
-})
-
 typedef enum {
   FS_ENC_NONE = 0,
   FS_ENC_UTF8,
@@ -200,6 +194,11 @@ static ant_value_t fs_call_value(
 
 static int parse_open_flags(ant_t *js, ant_value_t arg);
 static ant_value_t fs_coerce_path(ant_t *js, ant_value_t arg);
+
+static ant_value_t fs_mk_errno_error(
+  ant_t *js, int err_num,
+  const char *syscall, const char *path, const char *dest
+);
 
 static ant_value_t fs_stream_error(ant_t *js, ant_value_t stream_obj, const char *op, int uv_code) {
   ant_value_t props = js_mkobj(js);
@@ -1688,9 +1687,9 @@ static ant_value_t builtin_fs_readFileSync(ant_t *js, ant_value_t *args, int nar
   
   FILE *file = fopen(path_cstr, "rb");
   if (!file) {
-    char err_msg[256];
-    snprintf(err_msg, sizeof(err_msg), "Failed to open file: %s", strerror(errno));
-    free(path_cstr); return js_mkerr(js, "%s", err_msg);
+    ant_value_t err = fs_mk_errno_error(js, errno, "open", path_cstr, NULL);
+    free(path_cstr);
+    return err;
   }
   
   fseek(file, 0, SEEK_END);
@@ -1741,9 +1740,9 @@ static ant_value_t builtin_fs_readBytesSync(ant_t *js, ant_value_t *args, int na
   
   FILE *file = fopen(path_cstr, "rb");
   if (!file) {
-    char err_msg[256];
-    snprintf(err_msg, sizeof(err_msg), "Failed to open file: %s", strerror(errno));
-    free(path_cstr); return js_mkerr(js, "%s", err_msg);
+    ant_value_t err = fs_mk_errno_error(js, errno, "open", path_cstr, NULL);
+    free(path_cstr);
+    return err;
   }
   
   fseek(file, 0, SEEK_END);
@@ -1858,9 +1857,9 @@ static ant_value_t builtin_fs_writeFileSync(ant_t *js, ant_value_t *args, int na
   
   FILE *file = fopen(path_cstr, "wb");
   if (!file) {
-    char err_msg[256];
-    snprintf(err_msg, sizeof(err_msg), "Failed to open file: %s", strerror(errno));
-    free(path_cstr); return js_mkerr(js, "%s", err_msg);
+    ant_value_t err = fs_mk_errno_error(js, errno, "open", path_cstr, NULL);
+    free(path_cstr);
+    return err;
   }
   
   size_t bytes_written = fwrite(data, 1, data_len, file);
@@ -1896,37 +1895,32 @@ static ant_value_t builtin_fs_copyFileSync(ant_t *js, ant_value_t *args, int nar
   
   FILE *in = fopen(src_cstr, "rb");
   if (!in) {
-    char err_msg[256];
-    snprintf(err_msg, sizeof(err_msg), "Failed to open source file: %s", strerror(errno));
+    ant_value_t err = fs_mk_errno_error(js, errno, "copyfile", src_cstr, dest_cstr);
     free(src_cstr); free(dest_cstr);
-    return js_mkerr(js, "%s", err_msg);  
+    return err;  
   }
   
   FILE *out = fopen(dest_cstr, "wb");
   if (!out) {
-    char err_msg[256];
-    snprintf(err_msg, sizeof(err_msg), "Failed to open dest file: %s", strerror(errno));
+    ant_value_t err = fs_mk_errno_error(js, errno, "copyfile", src_cstr, dest_cstr);
     fclose(in);
     free(src_cstr); free(dest_cstr);
-    return js_mkerr(js, "%s", err_msg);
+    return err;
   }
   
   char buf[8192];
   size_t n;
-  while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
-    if (fwrite(buf, 1, n, out) != n) {
-      fclose(in);
-      fclose(out);
-      free(src_cstr);
-      free(dest_cstr);
-      return js_mkerr(js, "Failed to write to dest file");
-    }
-  }
   
-  fclose(in);
-  fclose(out);
-  free(src_cstr);
-  free(dest_cstr);
+  while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
+  if (fwrite(buf, 1, n, out) != n) {
+    ant_value_t err = fs_mk_errno_error(js, errno ? errno : EIO, "copyfile", src_cstr, dest_cstr);
+    fclose(in); fclose(out);
+    free(src_cstr); free(dest_cstr);
+    return err;
+  }}
+  
+  fclose(in); fclose(out);
+  free(src_cstr); free(dest_cstr);
   
   return js_mkundef();
 }
@@ -1952,14 +1946,16 @@ static ant_value_t builtin_fs_renameSync(ant_t *js, ant_value_t *args, int nargs
   }
   
   int result = rename(old_cstr, new_cstr);
-  free(old_cstr);
-  free(new_cstr);
   
   if (result != 0) {
-    char err_msg[256];
-    snprintf(err_msg, sizeof(err_msg), "Failed to rename: %s", strerror(errno));
-    return js_mkerr(js, "%s", err_msg);
+    ant_value_t err = fs_mk_errno_error(js, errno, "rename", old_cstr, new_cstr);
+    free(old_cstr);
+    free(new_cstr);
+    return err;
   }
+  
+  free(old_cstr);
+  free(new_cstr);
   
   return js_mkundef();
 }
@@ -2027,9 +2023,9 @@ static ant_value_t builtin_fs_appendFileSync(ant_t *js, ant_value_t *args, int n
   
   FILE *file = fopen(path_cstr, "ab");
   if (!file) {
-    char err_msg[256];
-    snprintf(err_msg, sizeof(err_msg), "Failed to open file: %s", strerror(errno));
-    free(path_cstr); return js_mkerr(js, "%s", err_msg);
+    ant_value_t err = fs_mk_errno_error(js, errno, "open", path_cstr, NULL);
+    free(path_cstr);
+    return err;
   }
   
   size_t bytes_written = fwrite(data, 1, data_len, file);
@@ -2097,16 +2093,15 @@ static ant_value_t builtin_fs_unlinkSync(ant_t *js, ant_value_t *args, int nargs
   
   char *path_cstr = strndup(path, path_len);
   if (!path_cstr) return js_mkerr(js, "Out of memory");
-  
   int result = unlink(path_cstr);
-  free(path_cstr);
   
   if (result != 0) {
-    char err_msg[256];
-    snprintf(err_msg, sizeof(err_msg), "Failed to unlink file: %s", strerror(errno));
-    return js_mkerr(js, "%s", err_msg);
+    ant_value_t err = fs_mk_errno_error(js, errno, "unlink", path_cstr, NULL);
+    free(path_cstr);
+    return err;
   }
   
+  free(path_cstr);
   return js_mkundef();
 }
 
@@ -2184,13 +2179,13 @@ do_mkdir:
     result = mkdir(path_cstr, (mode_t)mode);
 #endif
   }
-  free(path_cstr);
-  
   if (result != 0) {
-    char err_msg[256];
-    snprintf(err_msg, sizeof(err_msg), "Failed to create directory: %s", strerror(errno));
-    return js_mkerr(js, "%s", err_msg);
+    ant_value_t err = fs_mk_errno_error(js, errno, "mkdir", path_cstr, NULL);
+    free(path_cstr);
+    return err;
   }
+  
+  free(path_cstr);
   
   return js_mkundef();
 }
@@ -2207,18 +2202,17 @@ static ant_value_t builtin_fs_mkdir(ant_t *js, ant_value_t *args, int nargs) {
   int mode = 0755;
   int recursive = 0;
   if (nargs >= 2) {
-    switch (vtype(args[1])) {
-      case T_NUM:
-        mode = (int)js_getnum(args[1]);
-        break;
-      case T_OBJ: {
-        ant_value_t opt = args[1];
-        recursive = js_get(js, opt, "recursive") == js_true;
-        ant_value_t mode_val = js_get(js, opt, "mode");
-        if (vtype(mode_val) == T_NUM) mode = (int)js_getnum(mode_val);
-        break;
-      }
-    }
+  switch (vtype(args[1])) {
+    case T_NUM:
+      mode = (int)js_getnum(args[1]);
+      break;
+    case T_OBJ: {
+      ant_value_t opt = args[1];
+      recursive = js_get(js, opt, "recursive") == js_true;
+      ant_value_t mode_val = js_get(js, opt, "mode");
+      if (vtype(mode_val) == T_NUM) mode = (int)js_getnum(mode_val);
+      break;
+    }}
   }
 
   if (recursive) {
@@ -2339,14 +2333,13 @@ static ant_value_t builtin_fs_rmdirSync(ant_t *js, ant_value_t *args, int nargs)
 #else
   int result = rmdir(path_cstr);
 #endif
-  free(path_cstr);
-  
   if (result != 0) {
-    char err_msg[256];
-    snprintf(err_msg, sizeof(err_msg), "Failed to remove directory: %s", strerror(errno));
-    return js_mkerr(js, "%s", err_msg);
+    ant_value_t err = fs_mk_errno_error(js, errno, "rmdir", path_cstr, NULL);
+    free(path_cstr);
+    return err;
   }
   
+  free(path_cstr);
   return js_mkundef();
 }
 
@@ -2473,24 +2466,86 @@ static ant_value_t create_stats_object(ant_t *js, struct stat *st) {
 }
 
 static const char *errno_to_code(int err_num) {
-  switch (err_num) {
-    case ENOENT: return "ENOENT";
-    case EACCES: return "EACCES";
-    case ENOTDIR: return "ENOTDIR";
-    case ELOOP: return "ELOOP";
-    case ENAMETOOLONG: return "ENAMETOOLONG";
-    case EOVERFLOW: return "EOVERFLOW";
-    case EROFS: return "EROFS";
-    case ETXTBSY: return "ETXTBSY";
-    case EEXIST: return "EEXIST";
-    case ENOTEMPTY: return "ENOTEMPTY";
-    case EISDIR: return "EISDIR";
-    case EBUSY: return "EBUSY";
-    case EINVAL: return "EINVAL";
-    case EPERM: return "EPERM";
-    case EIO: return "EIO";
-    default: return "UNKNOWN";
-  }
+switch (err_num) {
+  case ENOENT: return "ENOENT";
+  case EACCES: return "EACCES";
+  case ENOTDIR: return "ENOTDIR";
+  case ELOOP: return "ELOOP";
+  case ENAMETOOLONG: return "ENAMETOOLONG";
+  case EOVERFLOW: return "EOVERFLOW";
+  case EROFS: return "EROFS";
+  case ETXTBSY: return "ETXTBSY";
+  case EEXIST: return "EEXIST";
+  case ENOTEMPTY: return "ENOTEMPTY";
+  case EISDIR: return "EISDIR";
+  case EBUSY: return "EBUSY";
+  case EINVAL: return "EINVAL";
+  case EPERM: return "EPERM";
+  case EIO: return "EIO";
+  default: return "UNKNOWN";
+}}
+
+static ant_value_t fs_mk_syscall_error(
+  ant_t *js, const char *code, double err_num,
+  const char *message, const char *syscall,
+  const char *path, const char *dest
+) {
+  ant_value_t props = js_mkobj(js);
+
+  if (!code) code = "UNKNOWN";
+  if (!message) message = "Unknown error";
+
+  js_set(js, props, "code", js_mkstr(js, code, strlen(code)));
+  js_set(js, props, "errno", js_mknum(err_num));
+  
+  if (syscall) js_set(js, props, "syscall", js_mkstr(js, syscall, strlen(syscall)));
+  if (path) js_set(js, props, "path", js_mkstr(js, path, strlen(path)));
+  if (dest) js_set(js, props, "dest", js_mkstr(js, dest, strlen(dest)));
+
+  if (path && dest) return js_mkerr_props(
+    js, JS_ERR_GENERIC,
+    props, "%s: %s, %s '%s' -> '%s'",
+    code, message, syscall, path, dest
+  );
+    
+  if (path) return js_mkerr_props(
+    js, JS_ERR_GENERIC,
+    props, "%s: %s, %s '%s'",
+    code, message, syscall, path
+  );
+  
+  return js_mkerr_props(
+    js, JS_ERR_GENERIC, 
+    props, "%s: %s, %s",
+    code, message, syscall
+  );
+}
+
+static ant_value_t fs_mk_errno_error(
+  ant_t *js, int err_num,
+  const char *syscall, const char *path, const char *dest
+) {
+  int uv_code = uv_translate_sys_error(err_num);
+  if (uv_code == 0) uv_code = -err_num;
+  
+  return fs_mk_syscall_error(
+    js, errno_to_code(err_num),
+    (double)uv_code,
+    uv_strerror(uv_code),
+    syscall, path, dest
+  );
+}
+
+static ant_value_t fs_mk_uv_error(
+  ant_t *js, int uv_code,
+  const char *syscall, const char *path, const char *dest
+) {
+  return fs_mk_syscall_error(
+    js, uv_err_name(uv_code),
+    (double)uv_code,
+    uv_strerror(uv_code),
+    syscall, path, dest
+  );
 }
 
 static ant_value_t builtin_fs_statSync(ant_t *js, ant_value_t *args, int nargs) {
@@ -2508,8 +2563,7 @@ static ant_value_t builtin_fs_statSync(ant_t *js, ant_value_t *args, int nargs) 
   int result = stat(path_cstr, &st);
   
   if (result != 0) {
-    const char *code = errno_to_code(errno);
-    ant_value_t err = fs_err_code(js, code, "stat", path_cstr);
+    ant_value_t err = fs_mk_errno_error(js, errno, "stat", path_cstr, NULL);
     free(path_cstr); return err;
   }
   
@@ -2562,7 +2616,7 @@ static ant_value_t builtin_fs_lstatSync(ant_t *js, ant_value_t *args, int nargs)
   int result = uv_fs_lstat(NULL, &req, path_cstr, NULL);
 
   if (result < 0) {
-    ant_value_t err = fs_err_code(js, uv_err_name(result), "lstat", path_cstr);
+    ant_value_t err = fs_mk_uv_error(js, result, "lstat", path_cstr, NULL);
     uv_fs_req_cleanup(&req);
     free(path_cstr);
     return err;
@@ -2672,8 +2726,7 @@ static ant_value_t builtin_fs_accessSync(ant_t *js, ant_value_t *args, int nargs
   int result = access(path_cstr, mode);
   
   if (result != 0) {
-    const char *code = errno_to_code(errno);
-    ant_value_t err = fs_err_code(js, code, "access", path_cstr);
+    ant_value_t err = fs_mk_errno_error(js, errno, "access", path_cstr, NULL);
     free(path_cstr); return err;
   }
   
@@ -2789,26 +2842,27 @@ static ant_value_t builtin_fs_readdirSync(ant_t *js, ant_value_t *args, int narg
   
   uv_fs_t req;
   int result = uv_fs_scandir(NULL, &req, path_cstr, 0, NULL);
-  free(path_cstr);
   
   if (result < 0) {
-    char err_msg[256];
-    snprintf(err_msg, sizeof(err_msg), "Failed to read directory: %s", uv_strerror(result));
-    uv_fs_req_cleanup(&req); return js_mkerr(js, "%s", err_msg);
+    ant_value_t err = fs_mk_uv_error(js, result, "scandir", path_cstr, NULL);
+    uv_fs_req_cleanup(&req);
+    free(path_cstr);
+    return err;
   }
+  
+  free(path_cstr);
   
   ant_value_t arr = js_mkarr(js);
   uv_dirent_t dirent;
   
   while (uv_fs_scandir_next(&req, &dirent) != UV_EOF) {
-    if (with_file_types) {
-      ant_value_t entry = create_dirent_object(js, dirent.name, strlen(dirent.name), dirent.type);
-      js_arr_push(js, arr, entry);
-    } else {
-      ant_value_t name = js_mkstr(js, dirent.name, strlen(dirent.name));
-      js_arr_push(js, arr, name);
-    }
-  }
+  if (with_file_types) {
+    ant_value_t entry = create_dirent_object(js, dirent.name, strlen(dirent.name), dirent.type);
+    js_arr_push(js, arr, entry);
+  } else {
+    ant_value_t name = js_mkstr(js, dirent.name, strlen(dirent.name));
+    js_arr_push(js, arr, name);
+  }}
   
   uv_fs_req_cleanup(&req);
   return arr;
@@ -3296,10 +3350,17 @@ static ant_value_t builtin_fs_openSync(ant_t *js, ant_value_t *args, int nargs) 
   
   uv_fs_t req;
   int result = uv_fs_open(uv_default_loop(), &req, path_cstr, flags, mode, NULL);
+  
+  if (result < 0) {
+    ant_value_t err = fs_mk_uv_error(js, result, "open", path_cstr, NULL);
+    uv_fs_req_cleanup(&req);
+    free(path_cstr);
+    return err;
+  }
+  
   uv_fs_req_cleanup(&req);
   free(path_cstr);
   
-  if (result < 0) return js_mkerr(js, "openSync failed: %s", uv_strerror(result));
   return js_mknum((double)result);
 }
 

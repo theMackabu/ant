@@ -133,7 +133,7 @@ function main() {
       filePath.startsWith('src/streams/')
     ) {
       addRecommendation(recommendations, 'meson compile -C build', 'runtime-facing modules or I/O code changed');
-      addRecommendation(recommendations, './build/ant examples/spec/run.js', 'shared runtime semantics may have shifted');
+      addRecommendation(recommendations, './build/ant examples/spec/run.js <spec_name or --all>', 'shared runtime semantics may have shifted');
 
       const stem = path.basename(filePath, path.extname(filePath));
       if (stem) {

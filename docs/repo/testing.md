@@ -41,5 +41,9 @@ This guide keeps validation proportional to the change while still protecting ru
 
 - Keep new tests close to the behavior they protect so future agent runs can
   discover the expected pattern quickly.
+- In sandboxed agent sessions, `./build/ant examples/spec/run.js --all` can fail
+  in the `fetch` spec because outbound network access is blocked. Treat that as
+  an expected sandbox limitation, and prefer targeted spec files when the
+  change does not need networked coverage.
 - If the right validation is expensive or unavailable, document the gap in the
   associated [execution plan](../exec-plans/index.md).
