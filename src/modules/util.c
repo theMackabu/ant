@@ -257,7 +257,7 @@ static bool util_is_arguments_object_value(ant_t *js, ant_value_t value) {
   ant_value_t callee = js_mkundef();
 
   if (vtype(value) != T_ARR) return false;
-  if (vtype(js_get_slot(value, SLOT_STRICT_ARGS)) != T_UNDEF) return true;
+  if (js_get_slot(value, SLOT_STRICT_ARGS) == js_true) return true;
   if (!util_has_to_string_tag(js, value, "Arguments", 9)) return false;
 
   return js_try_get_own_data_prop(js, value, "callee", 6, &callee);

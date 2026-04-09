@@ -9171,8 +9171,9 @@ static ant_value_t builtin_string_localeCompare(ant_t *js, ant_value_t *args, in
   const char *that_ptr = (char *)(uintptr_t)(that_off);
   
   int result = strcoll(str_ptr, that_ptr);
-  if (result < 0) return tov(-1);
-  if (result > 0) return tov(1);
+  if (result < 0) return tov(-1.0);
+  if (result > 0) return tov(1.0);
+  
   return tov(0);
 }
 
@@ -13108,12 +13109,12 @@ static bool js_try_get(ant_t *js, ant_value_t obj, const char *key, ant_value_t 
   }
   
   if (array_obj_ptr(obj)) {
-    if (((key_len == 6 && memcmp(key, "callee", 6) == 0) ||
-         (key_len == 6 && memcmp(key, "caller", 6) == 0)) &&
-        vtype(get_slot(obj, SLOT_STRICT_ARGS)) != T_UNDEF) {
-      *out = js_mkerr_typed(js, JS_ERR_TYPE,
-                            "'%.*s' not allowed on strict arguments",
-                            (int)key_len, key);
+    if (
+      ((key_len == 6 && memcmp(key, "callee", 6) == 0) ||
+      (key_len == 6 && memcmp(key, "caller", 6) == 0)) &&
+      get_slot(obj, SLOT_STRICT_ARGS) == js_true
+    ) {
+      *out = js_mkerr_typed(js, JS_ERR_TYPE, "'%.*s' not allowed on strict arguments", (int)key_len, key);
       return true;
     }
 
@@ -13121,31 +13122,38 @@ static bool js_try_get(ant_t *js, ant_value_t obj, const char *key, ant_value_t 
       *out = tov((double)get_array_length(js, obj));
       return true;
     }
+    
     unsigned long idx;
     ant_offset_t arr_len = get_array_length(js, obj);
+    
     if (parse_array_index(key, key_len, arr_len, &idx)) {
       if (arr_has(js, obj, (ant_offset_t)idx)) {
         *out = arr_get(js, obj, (ant_offset_t)idx);
         return true;
-      } return false;
+      } 
+      
+      return false;
     }
     
     ant_value_t arr_obj = js_as_obj(obj);
     ant_offset_t off = lkp(js, arr_obj, key, key_len);
+    
     if (off == 0) {
       ant_value_t accessor_result;
       if (try_accessor_getter(js, arr_obj, key, key_len, &accessor_result)) {
         *out = accessor_result; return true;
-      } return false;
+      }
+      
+      return false;
     }
     
     const ant_shape_prop_t *prop_meta = prop_shape_meta(js, off);
     if (prop_meta && prop_meta->has_getter) {
-      ant_value_t accessor_result;
-      if (try_accessor_getter(js, arr_obj, key, key_len, &accessor_result)) {
-        *out = accessor_result; return true;
-      }
-    }
+    ant_value_t accessor_result;
+    if (try_accessor_getter(js, arr_obj, key, key_len, &accessor_result)) {
+      *out = accessor_result; 
+      return true;
+    }}
     
     *out = propref_load(js, off);
     return true;

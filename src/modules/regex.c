@@ -725,7 +725,7 @@ static ant_value_t builtin_regexp_exec(ant_t *js, ant_value_t *args, int nargs) 
   if (sticky_flag) match_options |= PCRE2_ANCHORED;
 
   int rc;
-  if (compiled.jit_ready) {
+  if (compiled.jit_ready && !sticky_flag) {
     rc = pcre2_jit_match(compiled.code, (PCRE2_SPTR)str_ptr, str_len, start_offset, match_options, compiled.match_data, NULL);
   } else rc = pcre2_match(compiled.code, (PCRE2_SPTR)str_ptr, str_len, start_offset, match_options, compiled.match_data, NULL);
 
