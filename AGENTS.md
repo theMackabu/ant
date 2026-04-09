@@ -2,7 +2,7 @@
 
 Status: active
 Last reviewed: 2026-04-09
-Owner: Ant maintainers
+Owner: theMackabu
 
 This file is the table of contents for agent work in Ant. Start here, then
 open the smallest linked document that matches the task instead of loading the
