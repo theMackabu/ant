@@ -150,7 +150,11 @@ if host_machine.cpu_family() == 'aarch64'
     wamr_sources += files('core/iwasm/common/arch/invokeNative_aarch64.s')
   endif
 elif host_machine.cpu_family() == 'x86_64'
-  wamr_sources += files('core/iwasm/common/arch/invokeNative_em64.s')
+  if wamr_platform == 'windows'
+    wamr_sources += files('core/iwasm/common/arch/invokeNative_mingw_x64.s')
+  else
+    wamr_sources += files('core/iwasm/common/arch/invokeNative_em64.s')
+  endif
 else
   wamr_sources += files('core/iwasm/common/arch/invokeNative_general.c')
 endif
