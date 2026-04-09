@@ -518,14 +518,8 @@ static inline ant_value_t sv_await_value(ant_t *js, ant_value_t value) {
   coro->is_settled = false;
   coro->is_ready = false;
   js_await_result_t await_result = js_promise_await_coroutine(js, value, coro);
-  
-  if (await_result.state == JS_AWAIT_FULFILLED) {
-    coro->is_settled = false;
-    coro->awaited_promise = js_mkundef();
-    return await_result.value;
-  }
-  
-  if (await_result.state == JS_AWAIT_REJECTED) {
+
+  if (await_result.state == JS_AWAIT_ERROR) {
     coro->is_settled = false;
     coro->awaited_promise = js_mkundef();
     return js_throw(js, await_result.value);

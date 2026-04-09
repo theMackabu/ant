@@ -22,7 +22,7 @@ entire repository into context.
 - Build from an existing configured tree: `meson compile -C build`
 - Fresh local setup: `maid setup`
 - Run a focused test file: `./build/ant tests/test_<name>.cjs`
-- Run the spec suite: `./build/ant examples/spec/run.js`
+- Run the spec suite: `./build/ant examples/spec/run.js --all`
 - Run the individual harness steps when needed:
   `maid validate_changes`, `maid structure`, `maid knowledge`
 
@@ -56,6 +56,11 @@ guidance.
 - When touching build or runtime invariants, document the reasoning in
   [docs/exec-plans/index.md](docs/exec-plans/index.md) or a linked plan if the
   work spans multiple steps.
+- Builds and broad validation runs (for example `maid build` or
+  spec runs with `--all`) may need broader system access; pause and get
+  explicit user approval before proceeding when sandbox escalation is required.
+- Check [docs/repo/testing.md](docs/repo/testing.md) before choosing validation
+  scope or retrying a failing broad test command.
 - Before finalizing most code changes, run `maid preflight` and then execute any
   additional build or spec commands it recommends, or explain why they were not
   run.

@@ -10098,28 +10098,14 @@ js_await_result_t js_promise_await_coroutine(ant_t *js, ant_value_t promise, cor
   ant_promise_state_t *pd = get_promise_data(js, promise, false);
   
   if (!pd) {
-    result.state = JS_AWAIT_FULFILLED;
+    result.state = JS_AWAIT_ERROR;
+    result.value = js_mkerr(js, "invalid promise state");
     return result;
   }
 
-  // if (pd->state == 1) {
-  //   result.state = JS_AWAIT_FULFILLED;
-  //   result.value = pd->value;
-  //     return result;
-  // }
-  //
-  // if (pd->state == 2) {
-  //   if (pd->unhandled_reported) js_fire_rejection_handled(js, promise, pd->value);
-  //   pd->has_rejection_handler = true;
-  //   pd->unhandled_reported = false;
-  //   result.state = JS_AWAIT_REJECTED;
-  //   result.value = pd->value;
-  //   return result;
-  // }
-
   promise_handler_t h = { js_mkundef(), js_mkundef(), js_mkundef(), coro };
   if (!promise_handler_append(pd, &h)) {
-    result.state = JS_AWAIT_REJECTED;
+    result.state = JS_AWAIT_ERROR;
     result.value = js_mkerr(js, "out of memory");
     return result;
   }

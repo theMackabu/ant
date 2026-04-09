@@ -41,6 +41,10 @@ This guide keeps validation proportional to the change while still protecting ru
 
 - Keep new tests close to the behavior they protect so future agent runs can
   discover the expected pattern quickly.
+- In sandboxed agent sessions, builds and broad validation commands such as
+  `maid build`, or `./build/ant examples/spec/run.js --all` may need broader system access.
+  Pause and get explicit user approval before retrying them with sandbox
+  escalation.
 - In sandboxed agent sessions, `./build/ant examples/spec/run.js --all` can fail
   in the `fetch` spec because outbound network access is blocked. Treat that as
   an expected sandbox limitation, and prefer targeted spec files when the

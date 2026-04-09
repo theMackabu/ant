@@ -77,8 +77,7 @@ typedef struct {
 
 typedef enum {
   JS_AWAIT_PENDING = 0,
-  JS_AWAIT_FULFILLED,
-  JS_AWAIT_REJECTED,
+  JS_AWAIT_ERROR,
 } js_await_state_t;
 
 typedef struct {

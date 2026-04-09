@@ -121,7 +121,11 @@ function main() {
       filePath === 'src/shapes.c'
     ) {
       addRecommendation(recommendations, 'meson compile -C build', 'runtime or engine core changed');
-      addRecommendation(recommendations, './build/ant examples/spec/run.js', 'engine-level behavior can affect broad language semantics');
+      addRecommendation(
+        recommendations,
+        './build/ant examples/spec/run.js <spec_name or --all>',
+        'engine-level behavior can affect broad language semantics'
+      );
     }
 
     if (

@@ -2,7 +2,8 @@
   "name": "ant",
   "type": "module",
   "scripts": {
-    "spec": "./build/ant examples/spec/run.js"
+    "spec": "./build/ant examples/spec/run.js",
+    "jit": "./build/ant examples/jit/run.js"
   },
   "dependencies": {},
   "devDependencies": {}
