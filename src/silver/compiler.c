@@ -12,7 +12,6 @@
 #include <string.h>
 #include <stdio.h>
 
-
 enum {
   SV_ITER_HINT_GENERIC = 0,
   SV_ITER_HINT_ARRAY = 1,
@@ -3997,72 +3996,82 @@ static void compile_class_method(
   emit_op(c, OP_POP);
 }
 
+static inline int compile_class_precompute_key(sv_compiler_t *c, sv_ast_t *key_expr) {
+  compile_expr(c, key_expr);
+  int loc = add_local(c, "", 0, false, c->scope_depth);
+  emit_put_local(c, loc);
+  return loc;
+}
+
 static void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   int outer_name_local = -1;
   bool class_repl_top = is_repl_top_level(c);
-  if (node->str)
-    outer_name_local = resolve_local(c, node->str, node->len);
-
-  if (node->left)
-    compile_expr(c, node->left);
-  else
-    emit_op(c, OP_UNDEF);
-
-  sv_ast_t *ctor_method = find_class_constructor(node);
-
+  sv_ast_t *ctor_method = NULL;
+  bool has_static_name = false;
   int field_count = 0;
+  int computed_method_count = 0;
+
+  if (node->str) outer_name_local = resolve_local(c, node->str, node->len);
+  if (node->left) compile_expr(c, node->left);
+  else emit_op(c, OP_UNDEF);
+
   for (int i = 0; i < node->args.count; i++) {
     sv_ast_t *m = node->args.items[i];
     if (m->type != N_METHOD) continue;
-    if (m == ctor_method) continue;
-    if (m->flags & FN_STATIC) continue;
+    
+    if (
+      !(m->flags & FN_STATIC) &&
+      !(m->flags & FN_COMPUTED) &&
+      m->left && m->left->type == N_IDENT &&
+      m->left->len == 11 &&
+      memcmp(m->left->str, "constructor", 11) == 0
+    ) { ctor_method = m; continue; }
+    
+    if (
+      (m->flags & FN_STATIC) &&
+      !(m->flags & FN_COMPUTED) &&
+      m->left && m->left->str &&
+      m->left->len == 4 &&
+      memcmp(m->left->str, "name", 4) == 0
+    ) has_static_name = true;
+    
     bool is_fn = is_class_method_def(m);
-    if (!is_fn) field_count++;
+    if (!(m->flags & FN_STATIC) && !is_fn) field_count++;
+    if (node->str && (m->flags & FN_COMPUTED) && (is_fn || (m->flags & FN_STATIC))) computed_method_count++;
   }
 
   sv_ast_t **field_inits = NULL;
   int *computed_key_locals = NULL;
+  int *method_comp_keys = NULL;
   if (field_count > 0) {
     field_inits = malloc(sizeof(sv_ast_t *) * field_count);
     computed_key_locals = malloc(sizeof(int) * field_count);
-    int fi = 0;
-    for (int i = 0; i < node->args.count; i++) {
-      sv_ast_t *m = node->args.items[i];
-      if (m->type != N_METHOD) continue;
-      if (m == ctor_method) continue;
-      if (m->flags & FN_STATIC) continue;
-      bool is_fn = is_class_method_def(m);
-      if (!is_fn) {
-        field_inits[fi] = m;
-        if (m->flags & FN_COMPUTED) {
-          compile_expr(c, m->left);
-          int loc = add_local(c, "", 0, false, c->scope_depth);
-          emit_put_local(c, loc);
-          computed_key_locals[fi] = loc;
-        } else computed_key_locals[fi] = -1;
-        fi++;
-      }
-    }
+  }
+  if (computed_method_count > 0) {
+    method_comp_keys = malloc(sizeof(int) * node->args.count);
+    for (int i = 0; i < node->args.count; i++) method_comp_keys[i] = -1;
   }
 
-  int *method_comp_keys = NULL;
-  if (node->str) {
-    for (int i = 0; i < node->args.count; i++) {
-      sv_ast_t *m = node->args.items[i];
-      if (m->type != N_METHOD || !(m->flags & FN_COMPUTED)) continue;
-      if (m == ctor_method) continue;
-      bool is_fn = is_class_method_def(m);
-      if (!is_fn && !(m->flags & FN_STATIC)) continue;
-      if (!method_comp_keys) {
-        method_comp_keys = malloc(sizeof(int) * node->args.count);
-        for (int j = 0; j < node->args.count; j++) method_comp_keys[j] = -1;
-      }
-      compile_expr(c, m->left);
-      int loc = add_local(c, "", 0, false, c->scope_depth);
-      emit_put_local(c, loc);
-      method_comp_keys[i] = loc;
+  if (field_count > 0 || method_comp_keys) {
+  int fi = 0;
+  for (int i = 0; i < node->args.count; i++) {
+    sv_ast_t *m = node->args.items[i];
+    if (m->type != N_METHOD || m == ctor_method) continue;
+    
+    bool is_fn = is_class_method_def(m);
+    bool is_instance_field = !(m->flags & FN_STATIC) && !is_fn;
+    
+    if (is_instance_field) {
+      if (field_inits) field_inits[fi] = m;
+      if (computed_key_locals) computed_key_locals[fi] = (m->flags & FN_COMPUTED)
+        ? compile_class_precompute_key(c, m->left) : -1;
+      fi++;
+      continue;
     }
-  }
+    
+    if (!method_comp_keys || !(m->flags & FN_COMPUTED)) continue;
+    method_comp_keys[i] = compile_class_precompute_key(c, m->left);
+  }}
 
   int inner_name_local = -1;
   if (node->str) {
@@ -4085,6 +4094,7 @@ static void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     comp.filename = c->filename;
     comp.source = c->source;
     comp.source_len = c->source_len;
+    comp.line_table = c->line_table;
     comp.enclosing = c;
     comp.scope_depth = 0;
     comp.is_strict = c->is_strict;
@@ -4155,19 +4165,6 @@ static void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   free(field_inits);
   free(computed_key_locals);
   c->computed_key_locals = NULL;
-
-  bool has_static_name = false;
-  for (int i = 0; i < node->args.count; i++) {
-    sv_ast_t *m = node->args.items[i];
-    if (m->type != N_METHOD) continue;
-    if (!(m->flags & FN_STATIC)) continue;
-    if (m->flags & FN_COMPUTED) continue;
-    if (m->left && m->left->str && m->left->len == 4 &&
-        memcmp(m->left->str, "name", 4) == 0) {
-      has_static_name = true;
-      break;
-    }
-  }
 
   if (node->str && !has_static_name) {
     int atom = add_atom(c, node->str, node->len);
@@ -4262,13 +4259,12 @@ static sv_func_t *compile_function_body(
   comp.param_locals = comp.local_count;
 
   if (!comp.is_strict && node->body && node->body->type == N_BLOCK) {
-    for (int i = 0; i < node->body->args.count; i++) {
-      sv_ast_t *stmt = node->body->args.items[i];
-      if (!stmt || stmt->type == N_EMPTY) continue;
-      if (stmt->type != N_STRING) break;
-      if (sv_ast_is_use_strict(comp.js, stmt)) comp.is_strict = true;
-    }
-  }
+  for (int i = 0; i < node->body->args.count; i++) {
+    sv_ast_t *stmt = node->body->args.items[i];
+    if (!stmt || stmt->type == N_EMPTY) continue;
+    if (stmt->type != N_STRING) break;
+    if (sv_ast_is_use_strict(comp.js, stmt)) comp.is_strict = true;
+  }}
 
   if (comp.is_strict) {
     const char *param_names[256];
@@ -4879,11 +4875,11 @@ sv_func_t *sv_compile(ant_t *js, sv_ast_t *program, sv_compile_mode_t mode, cons
   root.source_len = source_len;
   root.mode = mode;
   root.is_strict = ((program->flags & FN_PARSE_STRICT) != 0);
-
   root.line_table = build_line_table(root.source, source_len);
   sv_func_t *func = compile_function_body(&root, &top_fn, mode);
   free_line_table(root.line_table);
   if (js->thrown_exists || !func) return NULL;
+  
   return func;
 }
 
