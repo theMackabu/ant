@@ -1,13 +1,14 @@
+#include <stdlib.h>
 #include <string.h>
 
 #include "ant.h"
+#include "ptr.h"
 #include "errors.h"
 #include "internal.h"
 #include "runtime.h"
-#include "silver/engine.h"
-#include "silver/vm.h"
 #include "sugar.h"
 
+#include "silver/engine.h"
 #include "modules/generator.h"
 #include "modules/symbol.h"
 
@@ -18,6 +19,14 @@ typedef enum {
   GEN_COMPLETED       = 3,
 } generator_state_t;
 
+enum { GENERATOR_NATIVE_TAG = 0x47454e52u }; // GENR
+
+typedef struct generator_data {
+  coroutine_t *coro;
+  generator_state_t state;
+  bool is_async;
+} generator_data_t;
+
 static ant_value_t generator_result(ant_t *js, bool done, ant_value_t value) {
   ant_value_t result = js_mkobj(js);
   js_set(js, result, "done", js_bool(done));
@@ -25,18 +34,24 @@ static ant_value_t generator_result(ant_t *js, bool done, ant_value_t value) {
   return result;
 }
 
+static generator_data_t *generator_data(ant_value_t gen) {
+  if (!js_check_native_tag(gen, GENERATOR_NATIVE_TAG)) return NULL;
+  return (generator_data_t *)js_get_native_ptr(gen);
+}
+
 static generator_state_t generator_state(ant_value_t gen) {
-  ant_value_t state = js_get_slot(gen, SLOT_GENERATOR_STATE);
-  if (vtype(state) != T_NUM) return GEN_COMPLETED;
-  return (generator_state_t)(int)js_getnum(state);
+  generator_data_t *data = generator_data(gen);
+  return data ? data->state : GEN_COMPLETED;
 }
 
 static void generator_set_state(ant_value_t gen, generator_state_t state) {
-  js_set_slot(gen, SLOT_GENERATOR_STATE, js_mknum((double)state));
+  generator_data_t *data = generator_data(gen);
+  if (data) data->state = state;
 }
 
 static bool generator_is_async(ant_value_t gen) {
-  return js_get_slot(gen, SLOT_ASYNC) == js_true;
+  generator_data_t *data = generator_data(gen);
+  return data && data->is_async;
 }
 
 static ant_value_t generator_async_wrap_result(ant_t *js, ant_value_t result) {
@@ -54,23 +69,33 @@ static ant_value_t generator_async_wrap_result(ant_t *js, ant_value_t result) {
 }
 
 static coroutine_t *generator_coro(ant_value_t gen) {
-  ant_value_t coro_val = js_get_slot(gen, SLOT_CORO);
-  if (vtype(coro_val) != T_NUM) return NULL;
-  return (coroutine_t *)(uintptr_t)js_getnum(coro_val);
+  generator_data_t *data = generator_data(gen);
+  return data ? data->coro : NULL;
+}
+
+coroutine_t *generator_get_coro_for_gc(ant_value_t gen) {
+  return generator_coro(gen);
 }
 
 static void generator_clear_coro(ant_value_t gen, coroutine_t *coro) {
-  js_set_slot(gen, SLOT_CORO, js_mkundef());
+  generator_data_t *data = generator_data(gen);
+  if (data && data->coro == coro) data->coro = NULL;
   if (coro) free_coroutine(coro);
 }
 
 static void generator_finalize(ant_t *js, ant_object_t *obj) {
   ant_value_t gen = js_obj_from_ptr(obj);
-  ant_value_t coro_val = js_get_slot(gen, SLOT_CORO);
-  if (vtype(coro_val) != T_NUM) return;
-  coroutine_t *coro = (coroutine_t *)(uintptr_t)js_getnum(coro_val);
-  js_set_slot(gen, SLOT_CORO, js_mkundef());
-  free_coroutine(coro);
+  generator_data_t *data = (generator_data_t *)js_get_native_ptr(gen);
+  if (!data) return;
+
+  if (data->coro) {
+    free_coroutine(data->coro);
+    data->coro = NULL;
+  }
+  
+  js_set_native_ptr(gen, NULL);
+  js_set_native_tag(gen, 0);
+  free(data);
 }
 
 static ant_value_t generator_resume_kind(
@@ -240,11 +265,12 @@ ant_value_t sv_call_generator_closure_dispatch(
     return gen;
   }
 
-  ant_value_t instance_proto = js_get(js, callee_func, "prototype");
-  if (is_object_type(instance_proto)) js_set_proto_wb(js, gen, instance_proto);
-  if (closure->func->is_async) {
-    js_set_slot(gen, SLOT_ASYNC, js_true);
-    js_set_sym(js, gen, get_asyncIterator_sym(), js_mkfun(sym_this_cb));
+  generator_data_t *data = (generator_data_t *)calloc(1, sizeof(*data));
+  if (!data) {
+    if (copied_args) CORO_FREE(copied_args);
+    sv_vm_destroy(gen_vm);
+    CORO_FREE(coro);
+    return js_mkerr(js, "out of memory for generator data");
   }
 
   *coro = (coroutine_t){
@@ -273,9 +299,20 @@ ant_value_t sv_call_generator_closure_dispatch(
     .sv_vm = gen_vm,
   };
 
-  js_set_slot(gen, SLOT_GENERATOR_STATE, js_mknum((double)GEN_SUSPENDED_START));
-  js_set_slot(gen, SLOT_CORO, ANT_PTR(coro));
+  *data = (generator_data_t){
+    .coro = coro,
+    .state = GEN_SUSPENDED_START,
+    .is_async = closure->func->is_async,
+  };
+
+  js_set_native_ptr(gen, data);
+  js_set_native_tag(gen, GENERATOR_NATIVE_TAG);
   js_set_finalizer(gen, generator_finalize);
+
+  ant_value_t instance_proto = js_get(js, callee_func, "prototype");
+  if (is_object_type(instance_proto)) js_set_proto_wb(js, gen, instance_proto);
+  if (data->is_async)
+    js_set_sym(js, gen, get_asyncIterator_sym(), js_mkfun(sym_this_cb));
 
   return gen;
 }

@@ -8,6 +8,7 @@
 #include "shapes.h"
 #include "runtime.h"
 #include "modules/collections.h"
+#include "modules/generator.h"
 #include "modules/regex.h"
 
 #include <stdlib.h>
@@ -232,8 +233,8 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
 
   if (obj->type_tag != T_ARR) gc_mark_value(js, obj->u.data.value);
   if (obj->type_tag == T_GENERATOR) {
-    ant_value_t coro_val = js_get_slot(js_obj_from_ptr(obj), SLOT_CORO);
-    if (vtype(coro_val) == T_NUM) gc_mark_coroutine(js, (coroutine_t *)(uintptr_t)js_getnum(coro_val));
+    coroutine_t *coro = generator_get_coro_for_gc(js_obj_from_ptr(obj));
+    if (coro) gc_mark_coroutine(js, coro);
   }
 
   if (obj->type_tag == T_MAP) {

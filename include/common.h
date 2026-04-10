@@ -74,8 +74,7 @@
   X(SLOT_PIPE_ABORT_LISTENER)     \
   X(SLOT_MATCHALL_RX)             \
   X(SLOT_MATCHALL_STR)            \
-  X(SLOT_MATCHALL_DONE)           \
-  X(SLOT_GENERATOR_STATE)
+  X(SLOT_MATCHALL_DONE)
 
 #define ANT_DECLARE_INTERNAL_SLOT(name) name,
 typedef enum {
