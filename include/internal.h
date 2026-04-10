@@ -59,8 +59,8 @@
 #define NANBOX_PREFIX      0xFFF0000000000000ULL
 #define NANBOX_DATA_MASK   0x00007FFFFFFFFFFFULL
 
-#define JS_ERR_NO_STACK      (1 << 8)
-#define JS_TYPE_FLAG(t)      (1u << (t))
+#define JS_ERR_NO_STACK  (1 << 8)
+#define JS_TPFLG(t)      (1u << (t))
 
 #define MAX_STRINGIFY_DEPTH   64
 #define MAX_PROTO_CHAIN_DEPTH 256
@@ -74,10 +74,10 @@
 #define ROPE_FLATTEN_THRESHOLD (32 * 1024)
 
 #define T_EMPTY                (NANBOX_PREFIX | ((ant_value_t)T_SENTINEL << NANBOX_TYPE_SHIFT) | 0xDEADULL)
-#define T_SPECIAL_OBJECT_MASK  (JS_TYPE_FLAG(T_OBJ)  | JS_TYPE_FLAG(T_ARR))
-#define T_NEEDS_PROTO_FALLBACK (JS_TYPE_FLAG(T_FUNC) | JS_TYPE_FLAG(T_ARR) | JS_TYPE_FLAG(T_PROMISE))
-#define T_OBJECT_MASK          (JS_TYPE_FLAG(T_OBJ)  | JS_TYPE_FLAG(T_ARR) | JS_TYPE_FLAG(T_FUNC) | JS_TYPE_FLAG(T_PROMISE))
-#define T_NON_NUMERIC_MASK     (JS_TYPE_FLAG(T_STR)  | JS_TYPE_FLAG(T_ARR) | JS_TYPE_FLAG(T_FUNC) | JS_TYPE_FLAG(T_CFUNC) | JS_TYPE_FLAG(T_OBJ))
+#define T_SPECIAL_OBJECT_MASK  (JS_TPFLG(T_OBJ)  | JS_TPFLG(T_ARR))
+#define T_NEEDS_PROTO_FALLBACK (JS_TPFLG(T_FUNC) | JS_TPFLG(T_ARR) | JS_TPFLG(T_PROMISE) | JS_TPFLG(T_GENERATOR))
+#define T_OBJECT_MASK          (JS_TPFLG(T_OBJ)  | JS_TPFLG(T_ARR) | JS_TPFLG(T_FUNC) | JS_TPFLG(T_PROMISE) | JS_TPFLG(T_GENERATOR))
+#define T_NON_NUMERIC_MASK     (JS_TPFLG(T_STR)  | JS_TPFLG(T_ARR) | JS_TPFLG(T_FUNC) | JS_TPFLG(T_CFUNC) | JS_TPFLG(T_OBJ) | JS_TPFLG(T_GENERATOR))
 
 #define is_non_numeric(v)    ((1u << vtype(v)) & T_NON_NUMERIC_MASK)
 #define is_object_type(v)    ((1u << vtype(v)) & T_OBJECT_MASK)
@@ -194,6 +194,7 @@ struct ant_isolate_t {
     ant_value_t iterator_proto;
     ant_value_t array_iterator_proto;
     ant_value_t string_iterator_proto;
+    ant_value_t generator_proto;
   } sym;
   
   ant_offset_t max_size;

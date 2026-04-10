@@ -55,6 +55,8 @@ static inline bool gc_get_stack_bounds(
 }
 
 static gc_func_mark_profile_t g_gc_func_mark_profile = {0};
+static void gc_mark_coroutine(ant_t *js, coroutine_t *c);
+
 static uint32_t g_gc_func_mark_profile_depth = 0;
 static uint64_t g_gc_func_mark_profile_start_ns = 0;
 
@@ -229,6 +231,10 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
   gc_mark_value(js, obj->proto);
 
   if (obj->type_tag != T_ARR) gc_mark_value(js, obj->u.data.value);
+  if (obj->type_tag == T_GENERATOR) {
+    ant_value_t coro_val = js_get_slot(js_obj_from_ptr(obj), SLOT_CORO);
+    if (vtype(coro_val) == T_NUM) gc_mark_coroutine(js, (coroutine_t *)(uintptr_t)js_getnum(coro_val));
+  }
 
   if (obj->type_tag == T_MAP) {
     map_entry_t **head = (map_entry_t **)(uintptr_t)js_getnum(obj->u.data.value);
@@ -418,6 +424,7 @@ static void gc_mark_coroutine(ant_t *js, coroutine_t *c) {
   gc_mark_value(js, c->yield_value);
   gc_mark_value(js, c->super_val);
   gc_mark_value(js, c->new_target);
+  if (c->args) for (int i = 0; i < c->nargs; i++) gc_mark_value(js, c->args[i]);
 }
 
 static inline void gc_mark_promise_handler(ant_t *js, const promise_handler_t *h) {

@@ -195,8 +195,10 @@ OP_DEF(  DESTRUCTURE_CLOSE, 1,   3,   0, none)      /* close destructuring itera
 
 OP_DEF(  AWAIT,             1,   1,   1, none)      /* promise -> resolved value */
 OP_DEF(  YIELD,             1,   1,   2, none)      /* val -> received */
-OP_DEF(  YIELD_STAR,        1,   1,   2, none)      /* delegate to sub-iterator */
-OP_DEF(  INITIAL_YIELD,     1,   0,   0, none)      /* generator entry point */
+OP_DEF(  YIELD_STAR_INIT,   3,   1,   0, loc)       /* iterable -> delegate locals */
+OP_DEF(  YIELD_STAR_NEXT,   3,   1,   2, loc)       /* sent -> final value | suspend */
+OP_DEF(  YIELD_STAR_THROW,  3,   1,   2, loc)       /* thrown -> final value | suspend */
+OP_DEF(  YIELD_STAR_RETURN, 3,   1,   2, loc)       /* return value -> final value | suspend */
 OP_DEF(  SPREAD,            1,   1,   0, none)      /* arr iterable -> arr */
 
 OP_DEF(  DEFINE_METHOD,     6,   2,   1, atom_u8)   /* obj func -> obj (flags: get/set/static) */

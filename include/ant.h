@@ -66,6 +66,7 @@ ant_value_t js_mkundef(void);
 ant_value_t js_mknull(void);
 ant_value_t js_mknum(double);
 ant_value_t js_mkpromise(ant_t *js);
+ant_value_t js_mkgenerator(ant_t *js);
 
 ant_value_t js_getthis(ant_t *);
 void js_setthis(ant_t *, ant_value_t);

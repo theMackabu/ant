@@ -35,8 +35,9 @@ static inline bool sv_async_func_supports_lazy_start(sv_func_t *func) {
     if (
       op == OP_AWAIT_ITER_NEXT ||
       op == OP_YIELD ||
-      op == OP_YIELD_STAR ||
-      op == OP_INITIAL_YIELD
+      op == OP_YIELD_STAR_NEXT ||
+      op == OP_YIELD_STAR_THROW ||
+      op == OP_YIELD_STAR_RETURN
     ) return false;
     
     int size = sv_op_size[op];

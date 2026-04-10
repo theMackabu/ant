@@ -146,8 +146,7 @@ static ant_value_t esm_eval_commonjs_function(
   sv_func_t *compiled = sv_compile_function_with_params(
     js, cjs_params,
     (int)(sizeof(cjs_params) / sizeof(cjs_params[0])),
-    code, code_len,
-    false
+    code, code_len, false
   );
 
   if (!compiled) {

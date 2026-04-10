@@ -286,10 +286,12 @@ void init_symbol_module(void) {
   js->sym.iterator_proto = js_mkundef();
   js->sym.array_iterator_proto = js_mkundef();
   js->sym.string_iterator_proto = js_mkundef();
+  js->sym.generator_proto = js_mkundef();
   
   gc_register_root(&js->sym.iterator_proto);
   gc_register_root(&js->sym.array_iterator_proto);
   gc_register_root(&js->sym.string_iterator_proto);
+  gc_register_root(&js->sym.generator_proto);
 
   #define INIT_SYM(name, desc) g_##name = js_mksym_well_known(js, desc);
   WELLKNOWN_SYMBOLS(INIT_SYM)
@@ -352,9 +354,9 @@ void gc_mark_symbols(ant_t *js, gc_mark_fn mark) {
   mark(js, js->sym.iterator_proto);
   mark(js, js->sym.array_iterator_proto);
   mark(js, js->sym.string_iterator_proto);
+  mark(js, js->sym.generator_proto);
 
   #define GC_SYM(name, _desc) mark(js, g_##name);
   WELLKNOWN_SYMBOLS(GC_SYM)
   #undef GC_SYM
 }
-

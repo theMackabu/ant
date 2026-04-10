@@ -15,6 +15,7 @@
   X(SLOT_PROTO)                   \
   X(SLOT_FUNC_PROTO)              \
   X(SLOT_ASYNC_PROTO)             \
+  X(SLOT_GENERATOR_PROTO)         \
   X(SLOT_AUX)                     \
   X(SLOT_TARGET_FUNC)             \
   X(SLOT_MODULE_CTX)              \
@@ -73,7 +74,8 @@
   X(SLOT_PIPE_ABORT_LISTENER)     \
   X(SLOT_MATCHALL_RX)             \
   X(SLOT_MATCHALL_STR)            \
-  X(SLOT_MATCHALL_DONE)
+  X(SLOT_MATCHALL_DONE)           \
+  X(SLOT_GENERATOR_STATE)
 
 #define ANT_DECLARE_INTERNAL_SLOT(name) name,
 typedef enum {

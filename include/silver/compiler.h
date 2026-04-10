@@ -27,7 +27,7 @@ sv_func_t *sv_compile(
 
 sv_func_t *sv_compile_function(
   ant_t *js, const char *source,
-  size_t len, bool is_async
+  size_t len, bool is_async, bool is_generator
 );
 
 sv_func_t *sv_compile_function_with_params(

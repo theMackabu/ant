@@ -101,6 +101,7 @@ static void resume_coroutine_if_suspended(ant_t *js, coroutine_t *coro) {
     coro->is_ready = false;
     coro->sv_vm->suspended_resume_value = coro->result;
     coro->sv_vm->suspended_resume_is_error = coro->is_error;
+    coro->sv_vm->suspended_resume_kind = coro->is_error ? SV_RESUME_THROW : SV_RESUME_NEXT;
     coro->sv_vm->suspended_resume_pending = true;
     
     coro->active_parent = js->active_async_coro;

@@ -66,6 +66,7 @@
 #include "modules/observable.h"
 #include "modules/collections.h"
 #include "modules/iterator.h"
+#include "modules/generator.h"
 #include "modules/module.h"
 #include "modules/util.h"
 #include "modules/async_hooks.h"
@@ -579,6 +580,7 @@ int main(int argc, char *argv[]) {
 
   init_symbol_module();
   init_iterator_module();
+  init_generator_module();
   init_timer_module();
   init_domexception_module();
   init_globals_module();

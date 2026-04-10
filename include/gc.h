@@ -12,10 +12,10 @@
 
 #define GC_HEAP_GROWTH(n) ((n) + (n) / 2)
 
-#define GC_OBJ_TYPE_MASK (JS_TYPE_FLAG(T_OBJ) \
-  | JS_TYPE_FLAG(T_ARR)                       \
-  | JS_TYPE_FLAG(T_PROMISE)                   \
-  | JS_TYPE_FLAG(T_GENERATOR))
+#define GC_OBJ_TYPE_MASK (JS_TPFLG(T_OBJ) \
+  | JS_TPFLG(T_ARR)                       \
+  | JS_TPFLG(T_PROMISE)                   \
+  | JS_TPFLG(T_GENERATOR))
 
 typedef struct gc_func_mark_profile {
   bool enabled;

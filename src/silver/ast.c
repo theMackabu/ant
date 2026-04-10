@@ -844,6 +844,34 @@ static sv_ast_t *parse_object(P) {
       expect(p, TOK_RBRACKET);
       prop->flags |= FN_COMPUTED;
     }
+    else if (TOK == TOK_MUL) {
+      prop->flags |= FN_GENERATOR;
+      CONSUME();
+      NEXT();
+
+      if (TOK == TOK_LBRACKET) {
+        CONSUME();
+        prop->left = parse_assign(p);
+        expect(p, TOK_RBRACKET);
+        prop->flags |= FN_COMPUTED;
+      } else if (TOK == TOK_NUMBER) {
+        CONSUME();
+        prop->left = mk_num(tod(TVAL));
+      } else if (TOK == TOK_STRING) {
+        prop->left = mk(N_STRING);
+        sv_ast_set_string(prop->left, sv_lexer_str_literal(&p->lx));
+        CONSUME();
+      } else {
+        prop->left = mk_ident_from_tok(p);
+        CONSUME();
+      }
+
+      prop->right = parse_func(p);
+      prop->right->flags |= FN_GENERATOR | FN_METHOD;
+      sv_ast_list_push(&n->args, prop);
+      if (NEXT() == TOK_COMMA) CONSUME();
+      continue;
+    }
     else if (
       (TLEN == 3 && memcmp(tok_str(p), "get", 3) == 0) ||
       (TLEN == 3 && memcmp(tok_str(p), "set", 3) == 0)) {
@@ -873,6 +901,7 @@ static sv_ast_t *parse_object(P) {
         }
 
         prop->right = parse_func(p);
+        prop->right->flags |= FN_METHOD;
         sv_ast_list_push(&n->args, prop);
         if (NEXT() == TOK_COMMA) CONSUME();
         continue;
@@ -911,7 +940,7 @@ static sv_ast_t *parse_object(P) {
         }
 
         prop->right = parse_func(p);
-        prop->right->flags |= FN_ASYNC;
+        prop->right->flags |= FN_ASYNC | FN_METHOD;
         if (prop->flags & FN_GENERATOR)
           prop->right->flags |= FN_GENERATOR;
         sv_ast_list_push(&n->args, prop);
@@ -946,6 +975,7 @@ static sv_ast_t *parse_object(P) {
       prop->right = parse_assign(p);
     } else if (TOK == TOK_LPAREN) {
       prop->right = parse_func(p);
+      prop->right->flags |= FN_METHOD;
     } else {
       prop->right = mk_ident(prop->left->str, prop->left->len);
       if (NEXT() == TOK_ASSIGN) {
@@ -1365,6 +1395,14 @@ static sv_ast_t *parse_class(P) {
     }
 
     method->flags = flags;
+
+    if (!(flags & FN_STATIC) && (flags & FN_GENERATOR) &&
+        method->left && method->left->type == N_IDENT &&
+        method->left->len == 11 &&
+        memcmp(method->left->str, "constructor", 11) == 0) {
+      SV_MKERR_TYPED(JS, JS_ERR_SYNTAX, "Class constructor may not be a generator");
+      return cls;
+    }
 
     if (NEXT() == TOK_LPAREN) {
       method->right = parse_func(p);

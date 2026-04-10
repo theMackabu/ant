@@ -628,6 +628,13 @@ static int add_local(
   return idx;
 }
 
+static int reserve_hidden_locals(sv_compiler_t *c, int count) {
+  int base = c->local_count;
+  for (int i = 0; i < count; i++)
+    add_local(c, "", 0, false, c->scope_depth);
+  return base;
+}
+
 static inline bool sv_type_is_known(uint8_t t) {
   return t != SV_TI_UNKNOWN;
 }
@@ -1385,6 +1392,21 @@ static uint8_t infer_expr_type(sv_compiler_t *c, sv_ast_t *node) {
   }
 }
 
+static void compile_yield_star_expr(sv_compiler_t *c, sv_ast_t *node) {
+  if (node->right) compile_expr(c, node->right);
+  else emit_op(c, OP_UNDEF);
+
+  int base_local = reserve_hidden_locals(c, 4);
+  uint16_t base_slot = (uint16_t)(base_local - c->param_locals);
+
+  emit_op(c, OP_YIELD_STAR_INIT);
+  emit_u16(c, base_slot);
+
+  emit_op(c, OP_UNDEF);
+  emit_op(c, OP_YIELD_STAR_NEXT);
+  emit_u16(c, base_slot);
+}
+
 static void compile_expr(sv_compiler_t *c, sv_ast_t *node) {
   if (!node) { emit_op(c, OP_UNDEF); return; }
   emit_srcpos(c, node);
@@ -1540,9 +1562,12 @@ static void compile_expr(sv_compiler_t *c, sv_ast_t *node) {
       break;
 
     case N_YIELD:
-      if (node->right) compile_expr(c, node->right);
-      else emit_op(c, OP_UNDEF);
-      emit_op(c, node->flags ? OP_YIELD_STAR : OP_YIELD);
+      if (node->flags) compile_yield_star_expr(c, node);
+      else {
+        if (node->right) compile_expr(c, node->right);
+        else emit_op(c, OP_UNDEF);
+        emit_op(c, OP_YIELD);
+      }
       break;
 
     case N_TAGGED_TEMPLATE: {
@@ -4853,8 +4878,11 @@ sv_func_t *sv_compile(ant_t *js, sv_ast_t *program, sv_compile_mode_t mode, cons
   return func;
 }
 
-sv_func_t *sv_compile_function(ant_t *js, const char *source, size_t len, bool is_async) {
-  const char *prefix = is_async ? "(async function" : "(function";
+sv_func_t *sv_compile_function(ant_t *js, const char *source, size_t len, bool is_async, bool is_generator) {
+  const char *prefix = is_async
+    ? "(async function"
+    : (is_generator ? "(function*" : "(function");
+    
   size_t prefix_len = strlen(prefix);
   size_t wrapped_len = prefix_len + len + 1;
 
@@ -4873,10 +4901,8 @@ sv_func_t *sv_compile_function(ant_t *js, const char *source, size_t len, bool i
   sv_ast_t *func_node = NULL;
   if (program->args.count > 0) {
     sv_ast_t *stmt = program->args.items[0];
-    if (stmt && stmt->type == N_FUNC)
-      func_node = stmt;
-    else if (stmt && stmt->left && stmt->left->type == N_FUNC)
-      func_node = stmt->left;
+    if (stmt && stmt->type == N_FUNC)  func_node = stmt;
+    else if (stmt && stmt->left && stmt->left->type == N_FUNC) func_node = stmt->left;
   }
 
   if (!func_node) { free(wrapped); return NULL; }
@@ -4959,5 +4985,6 @@ sv_func_t *sv_compile_function_with_params(
 
   sv_func_t *func = compile_function_body(&root, &top_fn, SV_COMPILE_SCRIPT);
   if (js->thrown_exists || !func) return NULL;
+  
   return func;
 }

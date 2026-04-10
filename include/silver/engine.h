@@ -202,6 +202,12 @@ typedef struct {
   ant_value_t              value;
 } sv_completion_t;
 
+typedef enum {
+  SV_RESUME_NEXT = 0,
+  SV_RESUME_THROW = 1,
+  SV_RESUME_RETURN = 2,
+} sv_resume_kind_t;
+
 typedef struct 
   sv_upvalue sv_upvalue_t;
 
@@ -334,6 +340,7 @@ struct sv_vm {
   bool suspended;
   bool suspended_resume_pending;
   bool suspended_resume_is_error;
+  sv_resume_kind_t suspended_resume_kind;
   
   int suspended_entry_fp;
   int suspended_saved_fp;
@@ -753,11 +760,29 @@ ant_value_t sv_call_async_closure_dispatch(
   ant_value_t this_val, ant_value_t *args, int argc
 );
 
+ant_value_t sv_call_generator_closure_dispatch(
+  sv_vm_t *vm, ant_t *js, sv_closure_t *closure,
+  ant_value_t callee_func, ant_value_t super_val,
+  ant_value_t this_val, ant_value_t *args, int argc
+);
+
 static inline ant_value_t sv_call_async_closure(
   sv_vm_t *vm, ant_t *js, sv_closure_t *closure,
   ant_value_t callee_func, sv_call_ctx_t *ctx
 ) {
   ant_value_t result = sv_call_async_closure_dispatch(
+    vm, js, closure, callee_func,
+    ctx->super_val, ctx->this_val, ctx->args, ctx->argc
+  );
+  sv_call_cleanup(js, ctx);
+  return result;
+}
+
+static inline ant_value_t sv_call_generator_closure(
+  sv_vm_t *vm, ant_t *js, sv_closure_t *closure,
+  ant_value_t callee_func, sv_call_ctx_t *ctx
+) {
+  ant_value_t result = sv_call_generator_closure_dispatch(
     vm, js, closure, callee_func,
     ctx->super_val, ctx->this_val, ctx->args, ctx->argc
   );
@@ -1009,6 +1034,8 @@ static inline ant_value_t sv_call_resolve_closure(
   sv_vm_t *vm, ant_t *js, sv_closure_t *closure,
   ant_value_t callee_func, sv_call_ctx_t *ctx, ant_value_t *out_this
 ) {
+  if (closure->func->is_generator)
+    return sv_call_generator_closure(vm, js, closure, callee_func, ctx);
   if (closure->func->is_async)
     return sv_call_async_closure(vm, js, closure, callee_func, ctx);
 #ifdef ANT_JIT
