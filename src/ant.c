@@ -5604,6 +5604,7 @@ static ant_value_t builtin_object_getPrototypeOf(ant_t *js, ant_value_t *args, i
   uint8_t t = vtype(obj);
   
   if (t == T_STR || t == T_NUM || t == T_BOOL || t == T_BIGINT) return get_prototype_for_type(js, t);
+  if (t == T_CFUNC) return get_prototype_for_type(js, t);
   if (is_object_type(obj)) return get_proto(js, obj);
   
   return js_mknull();
@@ -5616,11 +5617,21 @@ static ant_value_t builtin_object_setPrototypeOf(ant_t *js, ant_value_t *args, i
   ant_value_t proto = args[1];
   
   uint8_t t = vtype(obj);
+  if (t == T_CFUNC) {
+    obj = js_cfunc_promote(js, obj);
+    t = T_FUNC;
+  }
+
   if (t != T_OBJ && t != T_ARR && t != T_FUNC) {
     return js_mkerr(js, "Object.setPrototypeOf: first argument must be an object");
   }
   
   uint8_t pt = vtype(proto);
+  if (pt == T_CFUNC) {
+    proto = js_cfunc_promote(js, proto);
+    pt = T_FUNC;
+  }
+
   if (pt != T_OBJ && pt != T_ARR && pt != T_FUNC && pt != T_NULL) {
     return js_mkerr(js, "Object.setPrototypeOf: prototype must be an object or null");
   }
@@ -6327,6 +6338,19 @@ static ant_value_t builtin_object_getOwnPropertyDescriptor(ant_t *js, ant_value_
     return proxy_get_own_property_descriptor(js, as_obj, key);
   }
 
+  bool is_arr_obj = array_obj_ptr(as_obj) != NULL;
+  bool is_arr_length = !is_sym && is_arr_obj && is_length_key(key_str, key_len);
+  bool has_arr_index = false;
+  ant_value_t arr_index_val = js_mkundef();
+  
+  if (!is_sym && is_arr_obj && is_array_index(key_str, key_len)) {
+    unsigned long idx;
+    if (
+      parse_array_index(key_str, key_len, get_array_length(js, as_obj), &idx) &&
+      arr_has(js, as_obj, (ant_offset_t)idx)
+    ) { has_arr_index = true; arr_index_val = arr_get(js, as_obj, (ant_offset_t)idx); }
+  }
+
   ant_offset_t sym_off = is_sym ? (ant_offset_t)vdata(key) : 0;
   prop_meta_t sym_meta; prop_meta_t str_meta;
   
@@ -6334,7 +6358,7 @@ static ant_value_t builtin_object_getOwnPropertyDescriptor(ant_t *js, ant_value_
   bool has_str_meta = is_sym ? false : lookup_string_prop_meta(js, as_obj, key_str, (size_t)key_len, &str_meta);
 
   ant_offset_t prop_off = is_sym ? lkp_sym(js, as_obj, sym_off) : lkp(js, as_obj, key_str, key_len);
-  if (prop_off == 0 && !(is_sym ? has_sym_meta : has_str_meta)) {
+  if (prop_off == 0 && !(is_sym ? has_sym_meta : has_str_meta) && !is_arr_length && !has_arr_index) {
     return js_mkundef();
   }
 
@@ -6378,7 +6402,10 @@ static ant_value_t builtin_object_getOwnPropertyDescriptor(ant_t *js, ant_value_
     if (prop_off != 0) {
       prop_val = propref_load(js, prop_off);
       has_value_out = true;
-    } else if (!is_sym && is_length_key(key_str, key_len) && array_obj_ptr(as_obj)) {
+    } else if (has_arr_index) {
+      prop_val = arr_index_val;
+      has_value_out = true;
+    } else if (is_arr_length) {
       prop_val = tov((double)get_array_length(js, as_obj));
       has_value_out = true;
     }
@@ -6471,6 +6498,51 @@ static ant_value_t builtin_object_getOwnPropertySymbols(ant_t *js, ant_value_t *
   }
 
   return mkval(T_ARR, vdata(arr));
+}
+
+static ant_value_t object_add_descriptors_for_keys(
+  ant_t *js,
+  ant_value_t result,
+  ant_value_t obj,
+  ant_value_t keys
+) {
+  ant_offset_t len = get_array_length(js, keys);
+
+  for (ant_offset_t i = 0; i < len; i++) {
+    ant_value_t key = arr_get(js, keys, i);
+    if (vtype(key) == T_UNDEF) continue;
+
+    ant_value_t desc_args[2] = { obj, key };
+    ant_value_t desc = builtin_object_getOwnPropertyDescriptor(js, desc_args, 2);
+    if (is_err(desc)) return desc;
+    if (vtype(desc) == T_UNDEF) continue;
+
+    ant_value_t set_result = js_setprop(js, result, key, desc);
+    if (is_err(set_result)) return set_result;
+  }
+
+  return js_mkundef();
+}
+
+static ant_value_t builtin_object_getOwnPropertyDescriptors(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t result = js_mkobj(js);
+  if (nargs == 0) return result;
+
+  ant_value_t obj = args[0];
+  uint8_t t = vtype(obj);
+  if (t != T_OBJ && t != T_ARR && t != T_FUNC) return result;
+
+  ant_value_t names = builtin_object_getOwnPropertyNames(js, &obj, 1);
+  if (is_err(names)) return names;
+  ant_value_t err = object_add_descriptors_for_keys(js, result, obj, names);
+  if (is_err(err)) return err;
+
+  ant_value_t symbols = builtin_object_getOwnPropertySymbols(js, &obj, 1);
+  if (is_err(symbols)) return symbols;
+  err = object_add_descriptors_for_keys(js, result, obj, symbols);
+  if (is_err(err)) return err;
+
+  return result;
 }
 
 static ant_value_t builtin_object_isExtensible(ant_t *js, ant_value_t *args, int nargs) {
@@ -11819,18 +11891,21 @@ ant_value_t js_create_module_context(ant_t *js, const char *filename, bool is_ma
     GC_ROOT_RESTORE(js, root_mark);
     return filename_val;
   }
+  
   GC_ROOT_PIN(js, filename_val);
   setprop_cstr(js, module_ctx, "filename", 8, filename_val);
+  setprop_cstr(js, module_ctx, "displayName", 11, filename_val);
 
   ant_value_t import_meta = js_create_import_meta_for_context(js, module_ctx, filename, is_main);
   if (is_err(import_meta)) {
     GC_ROOT_RESTORE(js, root_mark);
     return import_meta;
   }
+  
   GC_ROOT_PIN(js, import_meta);
   setprop_cstr(js, module_ctx, "meta", 4, import_meta);
-
   GC_ROOT_RESTORE(js, root_mark);
+  
   return module_ctx;
 }
 
@@ -12688,6 +12763,7 @@ ant_t *js_create(void *buf, size_t len) {
   defmethod(js, obj_func_obj, "isSealed", 8, js_mkfun(builtin_object_isSealed));
   defmethod(js, obj_func_obj, "fromEntries", 11, js_mkfun(builtin_object_fromEntries));
   defmethod(js, obj_func_obj, "getOwnPropertyDescriptor", 24, js_mkfun(builtin_object_getOwnPropertyDescriptor));
+  defmethod(js, obj_func_obj, "getOwnPropertyDescriptors", 25, js_mkfun(builtin_object_getOwnPropertyDescriptors));
   defmethod(js, obj_func_obj, "getOwnPropertyNames", 19, js_mkfun(builtin_object_getOwnPropertyNames));
   defmethod(js, obj_func_obj, "getOwnPropertySymbols", 21, js_mkfun(builtin_object_getOwnPropertySymbols));
   defmethod(js, obj_func_obj, "isExtensible", 12, js_mkfun(builtin_object_isExtensible));

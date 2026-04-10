@@ -38,4 +38,39 @@ Atomics.store(int32, 0, 5);
 test('Atomics.compareExchange no match', Atomics.compareExchange(int32, 0, 99, 10), 5);
 test('after no match', Atomics.load(int32, 0), 5);
 
+Atomics.store(int32, 0, 1);
+const asyncNotEqual = Atomics.waitAsync(int32, 0, 2);
+test('Atomics.waitAsync not-equal sync', asyncNotEqual.async, false);
+test('Atomics.waitAsync not-equal value', asyncNotEqual.value, 'not-equal');
+
+const asyncTimedOutSync = Atomics.waitAsync(int32, 0, 1, 0);
+test('Atomics.waitAsync zero timeout sync', asyncTimedOutSync.async, false);
+test('Atomics.waitAsync zero timeout value', asyncTimedOutSync.value, 'timed-out');
+
+const timedWait = Atomics.waitAsync(int32, 0, 1, 5);
+test('Atomics.waitAsync timeout is async', timedWait.async, true);
+test('Atomics.waitAsync timeout value', await timedWait.value, 'timed-out');
+
+Atomics.store(int32, 0, 3);
+const notifiedWait = Atomics.waitAsync(int32, 0, 3, 1000);
+test('Atomics.waitAsync notify is async', notifiedWait.async, true);
+test('Atomics.notify resolves async waiter count', Atomics.notify(int32, 0, 1), 1);
+test('Atomics.waitAsync notify value', await notifiedWait.value, 'ok');
+
+Atomics.store(int32, 0, 4);
+let keepChecking = true;
+let waitAsyncChecks = 0;
+function checkWithoutSpinning() {
+  if (!keepChecking) return;
+  waitAsyncChecks++;
+  const result = Atomics.waitAsync(int32, 0, 4, 1000);
+  if (result.async) result.value.then(checkWithoutSpinning);
+  else setImmediate(checkWithoutSpinning);
+}
+checkWithoutSpinning();
+await new Promise(resolve => setImmediate(resolve));
+test('pending waitAsync yields to immediates', waitAsyncChecks, 1);
+keepChecking = false;
+Atomics.notify(int32, 0, 1);
+
 summary();

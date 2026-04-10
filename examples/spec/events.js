@@ -1,5 +1,6 @@
-import { test, summary } from './helpers.js';
+import { test, testDeep, summary } from './helpers.js';
 import { EventEmitter } from 'ant:events';
+import { once as nodeOnce, addAbortListener, getMaxListeners, setMaxListeners } from 'node:events';
 
 console.log('EventEmitter Tests\n');
 
@@ -206,5 +207,81 @@ test('global dispatchEvent with CustomEvent', ceGlobal, 42);
 
 const ce3 = new CustomEvent('tagged');
 test('CustomEvent Symbol.toStringTag', Object.prototype.toString.call(ce3), '[object CustomEvent]');
+
+console.log('\nnode:events Helper Tests\n');
+
+const eeNodeOnce = new EventEmitter();
+const eeNodeOncePromise = nodeOnce(eeNodeOnce, 'ready');
+eeNodeOnce.emit('ready', 'ok', 7);
+testDeep('events.once resolves emitted args', await eeNodeOncePromise, ['ok', 7]);
+
+const etNodeOnce = new EventTarget();
+const etNodeOncePromise = nodeOnce(etNodeOnce, 'ping');
+etNodeOnce.dispatchEvent(new Event('ping'));
+const etNodeOnceArgs = await etNodeOncePromise;
+test('events.once supports EventTarget', etNodeOnceArgs[0].type, 'ping');
+
+const abortController = new AbortController();
+const abortPromise = nodeOnce(abortController.signal, 'abort');
+abortController.abort('stop');
+const abortArgs = await abortPromise;
+test('events.once supports AbortSignal', abortArgs[0].type, 'abort');
+
+let duckOnceRejected = false;
+try {
+  await nodeOnce(
+    {
+      once(_name, listener) {
+        listener('bad');
+      }
+    },
+    'ready'
+  );
+} catch {
+  duckOnceRejected = true;
+}
+test('events.once rejects once-shaped plain objects', duckOnceRejected, true);
+
+let protoEmitterRejected = false;
+try {
+  await nodeOnce(Object.create(EventEmitter.prototype), 'ready');
+} catch {
+  protoEmitterRejected = true;
+}
+test('events.once rejects EventEmitter prototype spoofing', protoEmitterRejected, true);
+
+let duckTargetRejected = false;
+try {
+  await nodeOnce(
+    {
+      addEventListener(_name, listener) {
+        listener(new Event('bad'));
+      }
+    },
+    'ready'
+  );
+} catch {
+  duckTargetRejected = true;
+}
+test('events.once rejects EventTarget-shaped plain objects', duckTargetRejected, true);
+
+let protoTargetRejected = false;
+try {
+  await nodeOnce(Object.create(EventTarget.prototype), 'ready');
+} catch {
+  protoTargetRejected = true;
+}
+test('events.once rejects EventTarget prototype spoofing', protoTargetRejected, true);
+
+let addAbortValue = 0;
+const addAbortController = new AbortController();
+const disposable = addAbortListener(addAbortController.signal, () => {
+  addAbortValue++;
+});
+addAbortController.abort();
+test('events.addAbortListener fires on abort', addAbortValue, 1);
+test('events.addAbortListener returns disposable', typeof disposable.dispose, 'function');
+test('events.getMaxListeners default', getMaxListeners(eeNodeOnce), 10);
+test('events.setMaxListeners no-op return', setMaxListeners(20, eeNodeOnce), undefined);
 
 summary();

@@ -17,6 +17,15 @@ test('arrow no params', noParams(), 42);
 const implicit = (a, b) => a - b;
 test('arrow implicit return', implicit(10, 3), 7);
 
+const trailingSingle = a => a + 1;
+test('arrow trailing comma single param', trailingSingle(4), 5);
+
+const trailingMulti = (a, b) => a * b;
+test('arrow trailing comma multi param', trailingMulti(4, 5), 20);
+
+const trailingDestructure = ({ value }, extra) => value + extra;
+test('arrow trailing comma destructuring param', trailingDestructure({ value: 7 }, 3), 10);
+
 const block = (a, b) => {
   const sum = a + b;
   return sum * 2;

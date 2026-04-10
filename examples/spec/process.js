@@ -1,8 +1,16 @@
 import { test, summary } from './helpers.js';
+import nodeProcess, { cwd as nodeCwd, execPath as nodeExecPath, hrtime as nodeHrtime, stdout as nodeStdout } from 'node:process';
 
 console.log('Process Tests\n');
 
 test('process exists', typeof process, 'object');
+test('node:process default is global process', nodeProcess, process);
+test('node:process named cwd is function', typeof nodeCwd, 'function');
+test('node:process named execPath is string', typeof nodeExecPath, 'string');
+test('node:process named hrtime is function', typeof nodeHrtime, 'function');
+test('node:process named hrtime.bigint is function', typeof nodeHrtime.bigint, 'function');
+test('node:process named hrtime matches process.hrtime', nodeHrtime, process.hrtime);
+test('node:process named stdout is global stdout', nodeStdout, process.stdout);
 test('process toStringTag', Object.prototype.toString.call(process), '[object process]');
 
 test('pid is number', typeof process.pid, 'number');

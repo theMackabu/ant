@@ -11,3 +11,20 @@ interface BufferMethods {
 }
 
 declare const Buffer: BufferStatic;
+
+declare module 'buffer' {
+  const Buffer: BufferStatic;
+  const constants: {
+    MAX_LENGTH: number;
+    MAX_STRING_LENGTH: number;
+  };
+  const kMaxLength: number;
+  const kStringMaxLength: number;
+  const INSPECT_MAX_BYTES: number;
+  function atob(data: string): string;
+  function btoa(data: string): string;
+}
+
+declare module 'node:buffer' {
+  export * from 'buffer';
+}

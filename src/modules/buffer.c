@@ -19,6 +19,12 @@
 
 #define BUFFER_REGISTRY_INITIAL_CAP 64
 
+// Node compatibility exports only
+// Ant does not enforce these as allocation limits
+#define BUFFER_COMPAT_MAX_LENGTH 4294967296.0
+#define BUFFER_COMPAT_MAX_STRING_LENGTH 536870888.0
+#define BUFFER_COMPAT_INSPECT_MAX_BYTES 50.0
+
 static size_t ta_metadata_bytes     = 0;
 static size_t buffer_registry_count = 0;
 static size_t buffer_registry_cap   = 0;
@@ -2362,6 +2368,13 @@ static ant_value_t js_sharedarraybuffer_constructor(ant_t *js, ant_value_t *args
   return obj;
 }
 
+static ant_value_t buffer_make_constants(ant_t *js) {
+  ant_value_t constants = js_newobj(js);
+  js_set(js, constants, "MAX_LENGTH", js_mknum(BUFFER_COMPAT_MAX_LENGTH));
+  js_set(js, constants, "MAX_STRING_LENGTH", js_mknum(BUFFER_COMPAT_MAX_STRING_LENGTH));
+  return constants;
+}
+
 ant_value_t buffer_library(ant_t *js) {
   ant_value_t glob = js_glob(js);
   ant_value_t lib = js_newobj(js);
@@ -2371,6 +2384,10 @@ ant_value_t buffer_library(ant_t *js) {
   js_set(js, lib, "File", js_get(js, glob, "File"));
   js_set(js, lib, "atob", js_get(js, glob, "atob"));
   js_set(js, lib, "btoa", js_get(js, glob, "btoa"));
+  js_set(js, lib, "constants", buffer_make_constants(js));
+  js_set(js, lib, "kMaxLength", js_mknum(BUFFER_COMPAT_MAX_LENGTH));
+  js_set(js, lib, "kStringMaxLength", js_mknum(BUFFER_COMPAT_MAX_STRING_LENGTH));
+  js_set(js, lib, "INSPECT_MAX_BYTES", js_mknum(BUFFER_COMPAT_INSPECT_MAX_BYTES));
 
   return lib;
 }

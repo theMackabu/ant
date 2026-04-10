@@ -34,6 +34,9 @@ static ant_value_t g_transform_ctor  = 0;
 static ant_value_t g_passthrough_proto = 0;
 static ant_value_t g_passthrough_ctor  = 0;
 
+static double g_default_high_water_mark = 16384.0;
+static double g_default_object_high_water_mark = 16.0;
+
 static ant_value_t stream_readable_maybe_read(ant_t *js, ant_value_t stream_obj);
 static ant_value_t stream_readable_flush(ant_t *js, ant_value_t stream_obj);
 static ant_value_t stream_readable_push_value(ant_t *js, ant_value_t stream_obj, ant_value_t chunk, ant_value_t encoding);
@@ -260,6 +263,17 @@ static ant_value_t stream_get_option(ant_t *js, ant_value_t options, const char 
   return js_get(js, options, name);
 }
 
+static double stream_default_high_water_mark(bool object_mode) {
+  return object_mode ? g_default_object_high_water_mark : g_default_high_water_mark;
+}
+
+static double stream_high_water_mark_from_options(ant_t *js, ant_value_t options, bool object_mode) {
+  ant_value_t hwm = stream_get_option(js, options, "highWaterMark");
+  return (vtype(hwm) == T_NUM && js_getnum(hwm) > 0)
+    ? js_getnum(hwm)
+    : stream_default_high_water_mark(object_mode);
+}
+
 static ant_value_t stream_make_base_object(ant_t *js, ant_value_t proto) {
   ant_value_t obj = js_mkobj(js);
   if (is_object_type(proto)) js_set_proto_init(obj, proto);
@@ -281,15 +295,16 @@ static void stream_init_readable(ant_t *js, ant_value_t obj, ant_value_t raw_opt
   ant_value_t options = is_object_type(raw_options) ? raw_options : js_mkobj(js);
   ant_value_t state = js_mkobj(js);
   ant_value_t read_fn = stream_get_option(js, options, "read");
-  ant_value_t hwm = stream_get_option(js, options, "highWaterMark");
-  double high_water_mark = (vtype(hwm) == T_NUM && js_getnum(hwm) > 0) ? js_getnum(hwm) : 16384.0;
+
+  bool object_mode = js_truthy(js, stream_get_option(js, options, "objectMode"));
+  double high_water_mark = stream_high_water_mark_from_options(js, options, object_mode);
 
   stream_init_base(js, obj, raw_options);
   js_set(js, obj, "readable", js_true);
   js_set(js, obj, "writable", js_false);
   js_set(js, obj, "readableEnded", js_false);
 
-  js_set(js, state, "objectMode", js_bool(js_truthy(js, stream_get_option(js, options, "objectMode"))));
+  js_set(js, state, "objectMode", js_bool(object_mode));
   js_set(js, state, "ended", js_false);
   js_set(js, state, "endEmitted", js_false);
   js_set(js, state, "flowing", js_false);
@@ -1588,6 +1603,22 @@ ant_value_t stream_readable_push(ant_t *js, ant_value_t stream_obj, ant_value_t 
   return stream_readable_push_value(js, stream_obj, chunk, encoding);
 }
 
+static ant_value_t js_stream_get_default_high_water_mark(ant_t *js, ant_value_t *args, int nargs) {
+  bool object_mode = nargs > 0 && js_truthy(js, args[0]);
+  return js_mknum(stream_default_high_water_mark(object_mode));
+}
+
+static ant_value_t js_stream_set_default_high_water_mark(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 2 || vtype(args[1]) != T_NUM || js_getnum(args[1]) < 0)
+    return js_mkerr_typed(js, JS_ERR_RANGE, "setDefaultHighWaterMark requires a non-negative number");
+
+  bool object_mode = js_truthy(js, args[0]);
+  if (object_mode) g_default_object_high_water_mark = js_getnum(args[1]);
+  else g_default_high_water_mark = js_getnum(args[1]);
+
+  return js_mkundef();
+}
+
 ant_value_t stream_library(ant_t *js) {
   ant_value_t lib = js_mkobj(js);
   ant_value_t promises = js_mkobj(js);
@@ -1604,6 +1635,8 @@ ant_value_t stream_library(ant_t *js) {
   js_set(js, lib, "PassThrough", g_passthrough_ctor);
   js_set(js, lib, "pipeline", js_mkfun(js_stream_pipeline));
   js_set(js, lib, "finished", js_mkfun(js_stream_finished));
+  js_set(js, lib, "getDefaultHighWaterMark", js_mkfun(js_stream_get_default_high_water_mark));
+  js_set(js, lib, "setDefaultHighWaterMark", js_mkfun(js_stream_set_default_high_water_mark));
   js_set(js, lib, "promises", promises);
 
   js_set(js, g_stream_ctor, "Readable", g_readable_ctor);
@@ -1613,6 +1646,8 @@ ant_value_t stream_library(ant_t *js) {
   js_set(js, g_stream_ctor, "PassThrough", g_passthrough_ctor);
   js_set(js, g_stream_ctor, "pipeline", js_get(js, lib, "pipeline"));
   js_set(js, g_stream_ctor, "finished", js_get(js, lib, "finished"));
+  js_set(js, g_stream_ctor, "getDefaultHighWaterMark", js_get(js, lib, "getDefaultHighWaterMark"));
+  js_set(js, g_stream_ctor, "setDefaultHighWaterMark", js_get(js, lib, "setDefaultHighWaterMark"));
   js_set(js, g_stream_ctor, "promises", promises);
 
   js_set(js, promises, "default", promises);

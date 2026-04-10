@@ -1,5 +1,8 @@
 import { test, summary } from './helpers.js';
 import path from 'ant:path';
+import nodePathPosix from 'node:path/posix';
+import antPathPosix from 'ant:path/posix';
+import barePathPosix from 'path/posix';
 
 console.log('Path Tests\n');
 
@@ -32,5 +35,9 @@ test('path.format', path.format({ dir: '/home/user', base: 'file.txt' }), '/home
 
 test('path.sep', path.sep, '/');
 test('path.delimiter', path.delimiter, ':');
+
+test('node:path/posix join', nodePathPosix.join('a', 'b'), 'a/b');
+test('ant:path/posix sep', antPathPosix.sep, '/');
+test('path/posix dirname', barePathPosix.dirname('/a/b/c.txt'), '/a/b');
 
 summary();

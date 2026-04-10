@@ -114,7 +114,10 @@ typedef enum {
   BRAND_WASM_TAG,
   BRAND_WASM_EXCEPTION,
   BRAND_DATE,
-  BRAND_MODULE_NAMESPACE
+  BRAND_MODULE_NAMESPACE,
+  BRAND_ABORT_SIGNAL,
+  BRAND_EVENTEMITTER,
+  BRAND_EVENTTARGET
 } object_brand_id_t;
 
 static inline void *mantissa_chk(void *p, const char *func) {

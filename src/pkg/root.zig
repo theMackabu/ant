@@ -2637,6 +2637,118 @@ export fn pkg_info_get_dependency(ctx: ?*const PkgContext, index: u32, out: *Dep
   return .ok;
 }
 
+const BinSelection = struct {
+  err: PkgError,
+  name: []const u8 = "",
+};
+
+fn packageSimpleName(pkg_name: []const u8) []const u8 {
+  if (std.mem.lastIndexOfScalar(u8, pkg_name, '/')) |slash| {
+    return pkg_name[slash + 1 ..];
+  }
+  return pkg_name;
+}
+
+fn normalizedBinTarget(path: []const u8) []const u8 {
+  if (std.mem.startsWith(u8, path, "./")) return path[2..];
+  return path;
+}
+
+fn appendBinName(list: *std.ArrayList(u8), allocator: std.mem.Allocator, name: []const u8) !void {
+  if (list.items.len > 0) try list.appendSlice(allocator, ", ");
+  try list.appendSlice(allocator, name);
+}
+
+fn selectPackageBinName(
+  c: *PkgContext,
+  allocator: std.mem.Allocator,
+  node_modules_path: []const u8,
+  pkg_name: []const u8,
+) BinSelection {
+  const simple_name = packageSimpleName(pkg_name);
+
+  const pkg_json_path = std.fmt.allocPrint(allocator, "{s}/{s}/package.json", .{
+    node_modules_path,
+    pkg_name,
+  }) catch return .{ .err = .out_of_memory };
+
+  const file = std.fs.cwd().openFile(pkg_json_path, .{}) catch {
+    c.setErrorFmt("Package '{s}' was installed, but its package.json could not be opened", .{pkg_name});
+    return .{ .err = .io_error };
+  };
+  defer file.close();
+
+  const content = file.readToEndAlloc(allocator, 1024 * 1024) catch {
+    c.setErrorFmt("Package '{s}' was installed, but its package.json could not be read", .{pkg_name});
+    return .{ .err = .io_error };
+  };
+
+  var doc = json.JsonDoc.parse(content) catch {
+    c.setErrorFmt("Package '{s}' was installed, but its package.json could not be parsed", .{pkg_name});
+    return .{ .err = .io_error };
+  };
+  defer doc.deinit();
+
+  const root_val = doc.root();
+
+  if (root_val.getString("bin")) |_| {
+    const selected = allocator.dupe(u8, simple_name) catch return .{ .err = .out_of_memory };
+    return .{ .err = .ok, .name = selected };
+  }
+
+  const bin_obj = root_val.getObject("bin") orelse {
+    c.setErrorFmt("Package '{s}' does not declare any binaries", .{pkg_name});
+    return .{ .err = .not_found };
+  };
+
+  var iter = bin_obj.objectIterator() orelse {
+    c.setErrorFmt("Package '{s}' does not declare any usable binaries", .{pkg_name});
+    return .{ .err = .not_found };
+  };
+
+  var valid_count: usize = 0;
+  var first_name: []const u8 = "";
+  var first_target: []const u8 = "";
+  var package_named_bin: ?[]const u8 = null;
+  var all_targets_same = true;
+  var names: std.ArrayList(u8) = .empty;
+
+  while (iter.next()) |entry| {
+    const target = entry.value.asString() orelse continue;
+
+    if (valid_count == 0) {
+      first_name = entry.key;
+      first_target = normalizedBinTarget(target);
+    } else if (!std.mem.eql(u8, normalizedBinTarget(target), first_target)) {
+      all_targets_same = false;
+    }
+
+    appendBinName(&names, allocator, entry.key) catch return .{ .err = .out_of_memory };
+    valid_count += 1;
+
+    if (std.mem.eql(u8, entry.key, simple_name)) {
+      package_named_bin = entry.key;
+    }
+  }
+
+  const selected = package_named_bin orelse if (valid_count == 1 or all_targets_same) first_name else "";
+  if (selected.len > 0) {
+    const selected_copy = allocator.dupe(u8, selected) catch return .{ .err = .out_of_memory };
+    return .{ .err = .ok, .name = selected_copy };
+  }
+
+  if (valid_count == 0) {
+    c.setErrorFmt("Package '{s}' does not declare any usable binaries", .{pkg_name});
+  } else {
+    c.setErrorFmt("Package '{s}' exposes multiple binaries ({s}) and no default could be inferred", .{
+      pkg_name,
+      names.items,
+    });
+  }
+
+  return .{ .err = .not_found };
+}
+
 export fn pkg_exec_temp(
   ctx: ?*PkgContext,
   package_spec: [*:0]const u8,
@@ -2776,14 +2888,16 @@ export fn pkg_exec_temp(
   var resolved_iter = res.resolved.valueIterator();
   while (resolved_iter.next()) |pkg_ptr| {
     const pkg = pkg_ptr.*;
-    if (db.hasIntegrity(&pkg.integrity)) {
-      const pkg_cache_path = db.getPackagePath(&pkg.integrity, arena_alloc) catch continue;
+    if (db.lookup(&pkg.integrity)) |cache_entry| {
+      var entry = cache_entry;
+      defer entry.deinit();
+      const pkg_cache_path = arena_alloc.dupe(u8, entry.path) catch continue;
       pkg_linker.linkPackage(.{
         .cache_path = pkg_cache_path,
         .node_modules_path = temp_nm_dir,
         .name = pkg.name.slice(),
         .parent_path = pkg.parent_path,
-        .file_count = 0,
+        .file_count = entry.file_count,
         .has_bin = pkg.has_bin,
       }) catch continue;
     }
@@ -2797,6 +2911,10 @@ export fn pkg_exec_temp(
     trusted.put(pkg_ptr.*.name.slice(), {}) catch continue;
   }
   runTrustedPostinstall(c, &trusted, temp_nm_dir, arena_alloc);
+
+  const selected_bin = selectPackageBinName(c, arena_alloc, temp_nm_dir, pkg_name);
+  if (selected_bin.err != .ok) return selected_bin.err;
+  bin_name = selected_bin.name;
 
   var bin_path_buf: [std.fs.max_path_bytes]u8 = undefined;
   const bin_link_path = std.fmt.bufPrint(&bin_path_buf, "{s}/.bin/{s}", .{ temp_nm_dir, bin_name }) catch return .io_error;

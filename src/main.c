@@ -643,6 +643,7 @@ int main(int argc, char *argv[]) {
   ant_standard_library("buffer", buffer_library);
   ant_standard_library("path", path_library);
   ant_standard_library("fs", fs_library);
+  ant_standard_library("constants", fs_constants_library);
   ant_standard_library("os", os_library);
   ant_standard_library("url", url_library);
   ant_standard_library("perf_hooks", perf_hooks_library);
@@ -659,6 +660,9 @@ int main(int argc, char *argv[]) {
   ant_standard_library("string_decoder", string_decoder_library);
   ant_standard_library("stream", stream_library);
   ant_standard_library("timers", timers_library);
+  
+  ant_register_library(path_posix_library, "path/posix", "ant:path/posix", "node:path/posix", NULL);
+  ant_register_library(path_win32_library, "path/win32", "ant:path/win32", "node:path/win32", NULL);
   
   ant_standard_library("fs/promises", fs_promises_library);
   ant_standard_library("timers/promises", timers_promises_library);

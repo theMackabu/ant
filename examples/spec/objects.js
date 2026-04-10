@@ -60,8 +60,8 @@ test('destructuring rename', renamed, 5);
 let { y = 10 } = {};
 test('destructuring default', y, 10);
 
-test('hasOwnProperty true', ({ a: 1 }).hasOwnProperty('a'), true);
-test('hasOwnProperty false', ({ a: 1 }).hasOwnProperty('b'), false);
+test('hasOwnProperty true', { a: 1 }.hasOwnProperty('a'), true);
+test('hasOwnProperty false', { a: 1 }.hasOwnProperty('b'), false);
 
 let frozen = Object.freeze({ a: 1 });
 test('Object.isFrozen', Object.isFrozen(frozen), true);
@@ -75,6 +75,46 @@ test('Object.create inherits', child.inherited, true);
 
 test('Object.getPrototypeOf', Object.getPrototypeOf([]) === Array.prototype, true);
 
-testDeep('Object.fromEntries', Object.fromEntries([['a', 1], ['b', 2]]), { a: 1, b: 2 });
+testDeep(
+  'Object.fromEntries',
+  Object.fromEntries([
+    ['a', 1],
+    ['b', 2]
+  ]),
+  { a: 1, b: 2 }
+);
+
+let descriptorSource = {};
+const descriptorSymbol = Symbol('descriptor');
+Object.defineProperty(descriptorSource, 'hidden', {
+  value: 42,
+  enumerable: false,
+  writable: false,
+  configurable: false
+});
+Object.defineProperty(descriptorSource, 'computed', {
+  get() {
+    return 7;
+  },
+  enumerable: true,
+  configurable: true
+});
+descriptorSource.visible = 'yes';
+descriptorSource[descriptorSymbol] = 'symbol value';
+
+const descriptors = Object.getOwnPropertyDescriptors(descriptorSource);
+test('Object.getOwnPropertyDescriptors exists', typeof Object.getOwnPropertyDescriptors, 'function');
+test('descriptors data value', descriptors.visible.value, 'yes');
+test('descriptors hidden value', descriptors.hidden.value, 42);
+test('descriptors hidden enumerable', descriptors.hidden.enumerable, false);
+test('descriptors hidden writable', descriptors.hidden.writable, false);
+test('descriptors hidden configurable', descriptors.hidden.configurable, false);
+test('descriptors accessor getter', typeof descriptors.computed.get, 'function');
+test('descriptors accessor enumerable', descriptors.computed.enumerable, true);
+test('descriptors symbol value', descriptors[descriptorSymbol].value, 'symbol value');
+
+const arrayDescriptors = Object.getOwnPropertyDescriptors(['item']);
+test('array descriptor index value', arrayDescriptors[0].value, 'item');
+test('array descriptor length value', arrayDescriptors.length.value, 1);
 
 summary();

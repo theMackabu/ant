@@ -251,6 +251,58 @@ pub const Constraint = struct {
   }
 };
 
+const DependencySpec = struct {
+  install_name: []const u8,
+  package_name: []const u8,
+  constraint: []const u8,
+};
+
+const NpmAliasSpec = struct {
+  package_name: []const u8,
+  constraint: []const u8,
+};
+
+fn parseNpmAliasSpec(spec: []const u8) ?NpmAliasSpec {
+  if (!std.mem.startsWith(u8, spec, "npm:")) return null;
+
+  const rest = spec["npm:".len..];
+  if (rest.len == 0) return null;
+
+  const version_at: ?usize = if (rest[0] == '@') blk: {
+    const slash = std.mem.indexOfScalar(u8, rest, '/') orelse return null;
+    if (slash + 1 >= rest.len) return null;
+    if (std.mem.indexOfScalar(u8, rest[slash + 1 ..], '@')) |rel_at| {
+      break :blk slash + 1 + rel_at;
+    }
+    break :blk null;
+  } else std.mem.indexOfScalar(u8, rest, '@');
+
+  const package_name = if (version_at) |at| rest[0..at] else rest;
+  if (package_name.len == 0) return null;
+
+  const constraint = if (version_at) |at| blk: {
+    const alias_constraint = rest[at + 1 ..];
+    break :blk if (alias_constraint.len > 0) alias_constraint else "latest";
+  } else "latest";
+
+  return .{ .package_name = package_name, .constraint = constraint };
+}
+
+fn dependencySpec(install_name: []const u8, constraint: []const u8) DependencySpec {
+  if (parseNpmAliasSpec(constraint)) |alias| {
+    return .{
+      .install_name = install_name,
+      .package_name = alias.package_name,
+      .constraint = alias.constraint,
+    };
+  }
+  return .{
+    .install_name = install_name,
+    .package_name = install_name,
+    .constraint = constraint,
+  };
+}
+
 pub const VersionInfo = struct {
   version: Version,
   version_str: []const u8,
@@ -260,7 +312,9 @@ pub const VersionInfo = struct {
   optional_dependencies: std.StringHashMap([]const u8),
   peer_dependencies: std.StringHashMap([]const u8),
   peer_dependencies_meta: std.StringHashMap(bool),
-  os: ?[]const u8, cpu: ?[]const u8, libc: ?[]const u8,
+  os: ?[]const u8,
+  cpu: ?[]const u8,
+  libc: ?[]const u8,
   bin: std.StringHashMap([]const u8),
   allocator: std.mem.Allocator,
 
@@ -311,7 +365,7 @@ pub const VersionInfo = struct {
       .freebsd => "freebsd",
       else => "unknown",
     };
-    
+
     const current_cpu = comptime switch (builtin.cpu.arch) {
       .aarch64 => "arm64",
       .x86_64 => "x64",
@@ -319,11 +373,8 @@ pub const VersionInfo = struct {
       .arm => "arm",
       else => "unknown",
     };
-    
-    const current_libc: ?[]const u8 = comptime if (builtin.os.tag != .linux) null
-    else if (builtin.abi == .gnu or builtin.abi == .gnueabi or builtin.abi == .gnueabihf) "glibc"
-    else if (builtin.abi == .musl or builtin.abi == .musleabi or builtin.abi == .musleabihf) "musl"
-    else null;
+
+    const current_libc: ?[]const u8 = comptime if (builtin.os.tag != .linux) null else if (builtin.abi == .gnu or builtin.abi == .gnueabi or builtin.abi == .gnueabihf) "glibc" else if (builtin.abi == .musl or builtin.abi == .musleabi or builtin.abi == .musleabihf) "musl" else null;
 
     if (self.os) |os_filter| if (!matchesFilter(os_filter, current_os)) return false;
     if (self.cpu) |cpu_filter| if (!matchesFilter(cpu_filter, current_cpu)) return false;
@@ -356,7 +407,7 @@ pub const VersionInfo = struct {
   }
 };
 
- fn parseDepsMap(
+fn parseDepsMap(
   allocator: std.mem.Allocator,
   maybe_obj: ?std.json.Value,
 ) std.StringHashMap([]const u8) {
@@ -367,19 +418,19 @@ pub const VersionInfo = struct {
 
   for (deps_obj.object.keys(), deps_obj.object.values()) |dep_name, dep_ver| {
     if (dep_ver != .string) continue;
-    
+
     const key = allocator.dupe(u8, dep_name) catch continue;
     const val = allocator.dupe(u8, dep_ver.string) catch {
       allocator.free(key);
       continue;
     };
-    
+
     map.put(key, val) catch {
-    allocator.free(key);
-    allocator.free(val);
+      allocator.free(key);
+      allocator.free(val);
     };
   }
-  
+
   return map;
 }
 
@@ -388,16 +439,15 @@ fn parsePeerMeta(
   maybe_obj: ?std.json.Value,
 ) std.StringHashMap(bool) {
   var map = std.StringHashMap(bool).init(allocator);
-    
+
   const meta_obj = maybe_obj orelse return map;
   if (meta_obj != .object) return map;
-  
+
   for (meta_obj.object.keys(), meta_obj.object.values()) |dep_name, meta_val| {
     if (meta_val != .object) continue;
-    
-    const is_optional = if (meta_val.object.get("optional")) |opt| (opt == .bool and opt.bool)
-    else false;
-    
+
+    const is_optional = if (meta_val.object.get("optional")) |opt| (opt == .bool and opt.bool) else false;
+
     if (is_optional) {
       const key = allocator.dupe(u8, dep_name) catch continue;
       map.put(key, true) catch allocator.free(key);
@@ -436,7 +486,8 @@ pub const PackageMetadata = struct {
   pub fn parseFromJson(allocator: std.mem.Allocator, json_data: []const u8) !PackageMetadata {
     const parsed = std.json.parseFromSlice(std.json.Value, allocator, json_data, .{}) catch {
       return error.ParseError;
-    }; defer parsed.deinit();
+    };
+    defer parsed.deinit();
 
     const root = parsed.value;
     if (root != .object) return error.ParseError;
@@ -557,13 +608,13 @@ pub const PackageMetadata = struct {
       if (version_data.object.get("bin")) |bin_val| {
         if (bin_val == .object) {
           for (bin_val.object.keys(), bin_val.object.values()) |key, val| {
-            if (val == .string) bin.put(allocator.dupe(u8, key) 
-            catch continue, allocator.dupe(u8, val.string) catch continue) catch {};
+            if (val == .string) bin.put(allocator.dupe(u8, key) catch continue, allocator.dupe(u8, val.string) catch continue) catch {};
           }
         } else if (bin_val == .string) {
           const bin_name = allocator.dupe(u8, name) catch continue;
           const bin_path = allocator.dupe(u8, bin_val.string) catch {
-            allocator.free(bin_name); continue;
+            allocator.free(bin_name);
+            continue;
           };
           bin.put(bin_name, bin_path) catch {
             allocator.free(bin_name);
@@ -581,8 +632,11 @@ pub const PackageMetadata = struct {
         .optional_dependencies = opt_deps,
         .peer_dependencies = peer_deps,
         .peer_dependencies_meta = peer_meta,
-        .os = os_filter, .cpu = cpu_filter, .libc = libc_filter,
-        .bin = bin, .allocator = allocator,
+        .os = os_filter,
+        .cpu = cpu_filter,
+        .libc = libc_filter,
+        .bin = bin,
+        .allocator = allocator,
       });
     }
 
@@ -626,15 +680,12 @@ pub const ResolvedPackage = struct {
   pub fn installPath(self: *const ResolvedPackage, allocator: std.mem.Allocator) ![]const u8 {
     if (self.parent_path) |parent| {
       return std.fmt.allocPrint(allocator, "{s}/node_modules/{s}", .{ parent, self.name.slice() });
-    } return allocator.dupe(u8, self.name.slice());
+    }
+    return allocator.dupe(u8, self.name.slice());
   }
 };
 
-
-pub const OnPackageResolvedFn = *const fn (
-  pkg: *const ResolvedPackage,
-  user_data: ?*anyopaque
-) void;
+pub const OnPackageResolvedFn = *const fn (pkg: *const ResolvedPackage, user_data: ?*anyopaque) void;
 
 pub const Resolver = struct {
   allocator: std.mem.Allocator,
@@ -685,18 +736,19 @@ pub const Resolver = struct {
     while (key_iter.next()) |key| {
       self.allocator.free(key.*);
     }
-    
+
     var iter = self.resolved.valueIterator();
     while (iter.next()) |pkg| {
       pkg.*.deinit();
       self.allocator.destroy(pkg.*);
-    } self.resolved.deinit();
+    }
+    self.resolved.deinit();
 
     var cons_key_iter = self.constraints.keyIterator();
     while (cons_key_iter.next()) |key| {
       self.allocator.free(key.*);
     }
-    
+
     var cons_iter = self.constraints.valueIterator();
     while (cons_iter.next()) |list| {
       list.deinit(self.allocator);
@@ -733,7 +785,8 @@ pub const Resolver = struct {
         }
         entry.value_ptr.deinit(self.allocator);
         self.allocator.free(entry.key_ptr.*);
-      } all_constraints.deinit();
+      }
+      all_constraints.deinit();
     }
 
     const CollectItem = struct {
@@ -762,7 +815,7 @@ pub const Resolver = struct {
         .depth = 0,
       });
     }
-    
+
     var dev_iter = pkg_json.dev_dependencies.iterator();
     while (dev_iter.next()) |entry| {
       try collect_queue.append(self.allocator, .{
@@ -781,16 +834,17 @@ pub const Resolver = struct {
       defer to_fetch.deinit(self.allocator);
 
       for (collect_queue.items) |item| {
-        if (!self.metadata_cache.contains(item.name)) {
+        const spec = dependencySpec(item.name, item.constraint_str);
+        if (!self.metadata_cache.contains(spec.package_name)) {
           var loaded_from_disk = false;
           if (self.cache_db) |db| {
-            if (db.lookupMetadata(item.name, self.allocator)) |json_data| {
+            if (db.lookupMetadata(spec.package_name, self.allocator)) |json_data| {
               const metadata = PackageMetadata.parseFromJson(self.cache_allocator, json_data) catch {
                 self.allocator.free(json_data);
                 continue;
               };
               self.allocator.free(json_data);
-              const cache_key = self.cache_allocator.dupe(u8, item.name) catch continue;
+              const cache_key = self.cache_allocator.dupe(u8, spec.package_name) catch continue;
               self.metadata_cache.put(cache_key, metadata) catch {
                 self.cache_allocator.free(cache_key);
                 continue;
@@ -801,12 +855,12 @@ pub const Resolver = struct {
           if (!loaded_from_disk) {
             var already_listed = false;
             for (to_fetch.items) |f| {
-              if (std.mem.eql(u8, f, item.name)) {
+              if (std.mem.eql(u8, f, spec.package_name)) {
                 already_listed = true;
                 break;
               }
             }
-            if (!already_listed) try to_fetch.append(self.allocator, item.name);
+            if (!already_listed) try to_fetch.append(self.allocator, spec.package_name);
           }
         }
       }
@@ -833,25 +887,28 @@ pub const Resolver = struct {
           };
 
           for (ctx.collect_queue_items) |item| {
-            if (!std.mem.eql(u8, item.name, name)) continue;
+            const spec = dependencySpec(item.name, item.constraint_str);
+            if (!std.mem.eql(u8, spec.package_name, name)) continue;
 
-            const constraint = Constraint.parse(item.constraint_str) catch continue;
+            const constraint = Constraint.parse(spec.constraint) catch continue;
             const best = ctx.resolver.selectBestVersion(&metadata, constraint) orelse continue;
             if (!best.matchesPlatform()) continue;
 
             var dep_it = best.dependencies.iterator();
             while (dep_it.next()) |entry| {
-              const dep_name = entry.key_ptr.*;
-              if (ctx.resolver.metadata_cache.contains(dep_name)) continue;
+              const dep_spec = dependencySpec(entry.key_ptr.*, entry.value_ptr.*);
+              if (ctx.resolver.metadata_cache.contains(dep_spec.package_name)) continue;
 
               var already_queued = false;
               for (ctx.prefetch_queue.items) |q| {
-                if (std.mem.eql(u8, q, dep_name)) {
-                  already_queued = true;  break;
+                if (std.mem.eql(u8, q, dep_spec.package_name)) {
+                  already_queued = true;
+                  break;
                 }
               }
-              if (!already_queued) ctx.prefetch_queue.append(ctx.allocator, dep_name) catch {};
-            } break;
+              if (!already_queued) ctx.prefetch_queue.append(ctx.allocator, dep_spec.package_name) catch {};
+            }
+            break;
           }
         }
       };
@@ -896,20 +953,21 @@ pub const Resolver = struct {
         }
         try seen_collect.put(seen_key, {});
 
-        const constraint = Constraint.parse(item.constraint_str) catch continue;
-        const gop = try all_constraints.getOrPut(item.name);
+        const spec = dependencySpec(item.name, item.constraint_str);
+        const constraint = Constraint.parse(spec.constraint) catch continue;
+        const gop = try all_constraints.getOrPut(spec.package_name);
         if (!gop.found_existing) {
-          gop.key_ptr.* = try self.allocator.dupe(u8, item.name);
+          gop.key_ptr.* = try self.allocator.dupe(u8, spec.package_name);
           gop.value_ptr.* = .{};
         }
         try gop.value_ptr.append(self.allocator, .{
           .constraint = constraint,
-          .constraint_str = try self.allocator.dupe(u8, item.constraint_str),
+          .constraint_str = try self.allocator.dupe(u8, spec.constraint),
           .requester = try self.allocator.dupe(u8, item.requester),
           .depth = item.depth,
         });
 
-        if (self.metadata_cache.get(item.name)) |metadata| {
+        if (self.metadata_cache.get(spec.package_name)) |metadata| {
           const best = self.selectBestVersion(&metadata, constraint) orelse continue;
           if (!best.matchesPlatform()) continue;
 
@@ -925,8 +983,9 @@ pub const Resolver = struct {
 
           var opt_it = best.optional_dependencies.iterator();
           while (opt_it.next()) |entry| {
-            if (self.metadata_cache.get(entry.key_ptr.*)) |opt_meta| {
-              const opt_con = Constraint.parse(entry.value_ptr.*) catch continue;
+            const opt_spec = dependencySpec(entry.key_ptr.*, entry.value_ptr.*);
+            if (self.metadata_cache.get(opt_spec.package_name)) |opt_meta| {
+              const opt_con = Constraint.parse(opt_spec.constraint) catch continue;
               const opt_best = self.selectBestVersion(&opt_meta, opt_con) orelse continue;
               if (!opt_best.matchesPlatform()) continue;
             }
@@ -982,12 +1041,12 @@ pub const Resolver = struct {
           if (best) |b| {
             if (b.version.prerelease) |pre| {
               debug.log("  {s}: optimal={d}.{d}.{d}-{s} (satisfies {d}/{d} constraints)", .{
-                pkg_name, b.version.major, b.version.minor, b.version.patch, pre,
+                pkg_name,                                           b.version.major,     b.version.minor, b.version.patch, pre,
                 self.countSatisfied(&metadata, b, constraint_list), constraint_list.len,
               });
             } else {
               debug.log("  {s}: optimal={d}.{d}.{d} (satisfies {d}/{d} constraints)", .{
-                pkg_name, b.version.major, b.version.minor, b.version.patch,
+                pkg_name,                                           b.version.major,     b.version.minor, b.version.patch,
                 self.countSatisfied(&metadata, b, constraint_list), constraint_list.len,
               });
             }
@@ -1051,7 +1110,11 @@ pub const Resolver = struct {
       errdefer next_queue.deinit(self.allocator);
 
       for (queue.items) |item| {
-        const key = std.fmt.allocPrint(self.allocator, "{s}@{s}", .{ item.name, item.constraint }) catch continue;
+        const key = std.fmt.allocPrint(self.allocator, "{s}|{s}@{s}", .{
+          item.parent_name orelse "",
+          item.name,
+          item.constraint,
+        }) catch continue;
         if (processed.contains(key)) {
           self.allocator.free(key);
           continue;
@@ -1067,7 +1130,11 @@ pub const Resolver = struct {
         defer self.allocator.free(pkg_install_path);
 
         for (pkg.dependencies.items) |dep| {
-          const dep_key = std.fmt.allocPrint(self.allocator, "{s}@{s}", .{ dep.name.slice(), dep.constraint }) catch continue;
+          const dep_key = std.fmt.allocPrint(self.allocator, "{s}|{s}@{s}", .{
+            pkg_install_path,
+            dep.name.slice(),
+            dep.constraint,
+          }) catch continue;
           defer self.allocator.free(dep_key);
           if (!processed.contains(dep_key)) {
             try next_queue.append(self.allocator, .{
@@ -1108,7 +1175,10 @@ pub const Resolver = struct {
 
     var want_prerelease = false;
     for (constraint_list) |info| {
-      if (info.constraint.version.prerelease != null) { want_prerelease = true; break; }
+      if (info.constraint.version.prerelease != null) {
+        want_prerelease = true;
+        break;
+      }
     }
 
     for (metadata.versions.items) |*v| {
@@ -1141,9 +1211,10 @@ pub const Resolver = struct {
     parent_name: ?[]const u8,
     optimal_versions: *std.StringHashMap(*const VersionInfo),
   ) !*ResolvedPackage {
-    const constraint = try Constraint.parse(constraint_str);
+    const dep_spec = dependencySpec(name, constraint_str);
+    const constraint = try Constraint.parse(dep_spec.constraint);
 
-    if (self.resolved.get(name)) |existing_pkg| {
+    if (self.resolved.get(dep_spec.install_name)) |existing_pkg| {
       if (constraint.satisfies(existing_pkg.version)) {
         if (direct) existing_pkg.direct = true;
         if (depth < existing_pkg.depth) existing_pkg.depth = depth;
@@ -1151,12 +1222,12 @@ pub const Resolver = struct {
       }
 
       if (parent_name) |parent| {
-        var metadata = try self.fetchMetadata(name);
+        var metadata = try self.fetchMetadata(dep_spec.package_name);
         const nested_best = self.selectBestVersion(&metadata, constraint) orelse return existing_pkg;
         if (!nested_best.matchesPlatform()) return existing_pkg;
 
         debug.log("  nested: {s}@{d}.{d}.{d} under {s} (hoisted: {d}.{d}.{d})", .{
-          name,
+          dep_spec.install_name,
           nested_best.version.major,
           nested_best.version.minor,
           nested_best.version.patch,
@@ -1166,15 +1237,15 @@ pub const Resolver = struct {
           existing_pkg.version.patch,
         });
 
-        return try self.createNestedPackage(name, nested_best, depth, parent);
+        return try self.createNestedPackage(dep_spec.install_name, nested_best, depth, parent);
       }
 
       return existing_pkg;
     }
 
-    var metadata = try self.fetchMetadata(name);
+    var metadata = try self.fetchMetadata(dep_spec.package_name);
     const version_info = blk: {
-      if (optimal_versions.get(name)) |optimal| {
+      if (optimal_versions.get(dep_spec.package_name)) |optimal| {
         if (constraint.satisfies(optimal.version) and optimal.matchesPlatform()) break :blk optimal;
       }
       break :blk self.selectBestVersion(&metadata, constraint) orelse return error.NoMatchingVersion;
@@ -1182,17 +1253,18 @@ pub const Resolver = struct {
 
     if (!version_info.matchesPlatform()) return error.PlatformMismatch;
 
-    const cons_gop = try self.constraints.getOrPut(name);
+    const cons_gop = try self.constraints.getOrPut(dep_spec.package_name);
     if (!cons_gop.found_existing) {
-      cons_gop.key_ptr.* = try self.allocator.dupe(u8, name);
+      cons_gop.key_ptr.* = try self.allocator.dupe(u8, dep_spec.package_name);
       cons_gop.value_ptr.* = .{};
-    } try cons_gop.value_ptr.append(self.allocator, constraint);
+    }
+    try cons_gop.value_ptr.append(self.allocator, constraint);
 
     const pkg = try self.allocator.create(ResolvedPackage);
     errdefer self.allocator.destroy(pkg);
 
     pkg.* = .{
-      .name = try self.string_pool.intern(name),
+      .name = try self.string_pool.intern(dep_spec.install_name),
       .version = version_info.version,
       .integrity = version_info.integrity,
       .tarball_url = try self.allocator.dupe(u8, version_info.tarball_url),
@@ -1204,7 +1276,7 @@ pub const Resolver = struct {
       .allocator = self.allocator,
     };
 
-    const name_key = try self.allocator.dupe(u8, name);
+    const name_key = try self.allocator.dupe(u8, dep_spec.install_name);
     errdefer self.allocator.free(name_key);
     try self.resolved.put(name_key, pkg);
 
@@ -1219,8 +1291,9 @@ pub const Resolver = struct {
 
     var opt_it = version_info.optional_dependencies.iterator();
     while (opt_it.next()) |entry| {
-      if (self.metadata_cache.get(entry.key_ptr.*)) |opt_meta| {
-        const opt_con = Constraint.parse(entry.value_ptr.*) catch continue;
+      const opt_spec = dependencySpec(entry.key_ptr.*, entry.value_ptr.*);
+      if (self.metadata_cache.get(opt_spec.package_name)) |opt_meta| {
+        const opt_con = Constraint.parse(opt_spec.constraint) catch continue;
         const opt_best = self.selectBestVersion(&opt_meta, opt_con) orelse continue;
         if (!opt_best.matchesPlatform()) continue;
       }
@@ -1249,23 +1322,24 @@ pub const Resolver = struct {
   }
 
   fn resolveSingle(self: *Resolver, name: []const u8, constraint_str: []const u8, depth: u32, direct: bool, parent_name: ?[]const u8) !*ResolvedPackage {
-    const constraint = try Constraint.parse(constraint_str);
+    const dep_spec = dependencySpec(name, constraint_str);
+    const constraint = try Constraint.parse(dep_spec.constraint);
 
-    if (self.resolved.get(name)) |existing_pkg| {
+    if (self.resolved.get(dep_spec.install_name)) |existing_pkg| {
       if (constraint.satisfies(existing_pkg.version)) {
         if (direct) existing_pkg.direct = true;
         if (depth < existing_pkg.depth) existing_pkg.depth = depth;
         return existing_pkg;
       }
 
-      const cons_gop = try self.constraints.getOrPut(name);
+      const cons_gop = try self.constraints.getOrPut(dep_spec.package_name);
       if (!cons_gop.found_existing) {
-        cons_gop.key_ptr.* = try self.allocator.dupe(u8, name);
+        cons_gop.key_ptr.* = try self.allocator.dupe(u8, dep_spec.package_name);
         cons_gop.value_ptr.* = .{};
       }
       try cons_gop.value_ptr.append(self.allocator, constraint);
 
-      var metadata = try self.fetchMetadata(name);
+      var metadata = try self.fetchMetadata(dep_spec.package_name);
       const all_constraints = cons_gop.value_ptr.items;
       const best = self.selectBestVersionForConstraints(&metadata, all_constraints);
 
@@ -1276,7 +1350,7 @@ pub const Resolver = struct {
 
         if (b.version.order(existing_pkg.version) != .eq) {
           debug.log("  re-resolve {s}: {d}.{d}.{d} -> {d}.{d}.{d}", .{
-            name,
+            dep_spec.install_name,
             existing_pkg.version.major,
             existing_pkg.version.minor,
             existing_pkg.version.patch,
@@ -1302,13 +1376,13 @@ pub const Resolver = struct {
       } else {
         if (parent_name) |parent| {
           const nested_best = self.selectBestVersion(&metadata, constraint) orelse {
-            debug.log("  nested: no version for {s} {s}", .{ name, constraint_str });
+            debug.log("  nested: no version for {s} {s}", .{ dep_spec.install_name, dep_spec.constraint });
             return existing_pkg;
           };
 
           if (!nested_best.matchesPlatform()) return existing_pkg;
           debug.log("  nested: {s}@{d}.{d}.{d} under {s} (hoisted: {d}.{d}.{d})", .{
-            name,
+            dep_spec.install_name,
             nested_best.version.major,
             nested_best.version.minor,
             nested_best.version.patch,
@@ -1318,22 +1392,22 @@ pub const Resolver = struct {
             existing_pkg.version.patch,
           });
 
-          return try self.createNestedPackage(name, nested_best, depth, parent);
+          return try self.createNestedPackage(dep_spec.install_name, nested_best, depth, parent);
         } else {
-          debug.log("  version conflict for {s}: no version satisfies all constraints", .{name});
+          debug.log("  version conflict for {s}: no version satisfies all constraints", .{dep_spec.install_name});
           return existing_pkg;
         }
       }
     }
 
-    const cons_gop = try self.constraints.getOrPut(name);
+    const cons_gop = try self.constraints.getOrPut(dep_spec.package_name);
     if (!cons_gop.found_existing) {
-      cons_gop.key_ptr.* = try self.allocator.dupe(u8, name);
+      cons_gop.key_ptr.* = try self.allocator.dupe(u8, dep_spec.package_name);
       cons_gop.value_ptr.* = .{};
     }
     try cons_gop.value_ptr.append(self.allocator, constraint);
 
-    var metadata = try self.fetchMetadata(name);
+    var metadata = try self.fetchMetadata(dep_spec.package_name);
     const best = self.selectBestVersion(&metadata, constraint) orelse {
       return error.NoMatchingVersion;
     };
@@ -1346,7 +1420,7 @@ pub const Resolver = struct {
     errdefer self.allocator.destroy(pkg);
 
     pkg.* = .{
-      .name = try self.string_pool.intern(name),
+      .name = try self.string_pool.intern(dep_spec.install_name),
       .version = best.version,
       .integrity = best.integrity,
       .tarball_url = try self.allocator.dupe(u8, best.tarball_url),
@@ -1358,7 +1432,7 @@ pub const Resolver = struct {
       .allocator = self.allocator,
     };
 
-    const name_key = try self.allocator.dupe(u8, name);
+    const name_key = try self.allocator.dupe(u8, dep_spec.install_name);
     errdefer self.allocator.free(name_key);
     try self.resolved.put(name_key, pkg);
 
@@ -1378,9 +1452,10 @@ pub const Resolver = struct {
     while (opt_iter.next()) |entry| {
       const dep_name = entry.key_ptr.*;
       const dep_constraint = entry.value_ptr.*;
+      const opt_spec = dependencySpec(dep_name, dep_constraint);
 
-      if (self.metadata_cache.get(dep_name)) |opt_metadata| {
-        const opt_constraint = Constraint.parse(dep_constraint) catch continue;
+      if (self.metadata_cache.get(opt_spec.package_name)) |opt_metadata| {
+        const opt_constraint = Constraint.parse(opt_spec.constraint) catch continue;
         const opt_best = self.selectBestVersion(&opt_metadata, opt_constraint) orelse continue;
 
         if (!opt_best.matchesPlatform()) continue;
@@ -1453,9 +1528,10 @@ pub const Resolver = struct {
     while (opt_iter.next()) |entry| {
       const dep_name = entry.key_ptr.*;
       const dep_constraint = entry.value_ptr.*;
+      const opt_spec = dependencySpec(dep_name, dep_constraint);
 
-      if (self.metadata_cache.get(dep_name)) |opt_metadata| {
-        const opt_constraint = Constraint.parse(dep_constraint) catch continue;
+      if (self.metadata_cache.get(opt_spec.package_name)) |opt_metadata| {
+        const opt_constraint = Constraint.parse(opt_spec.constraint) catch continue;
         const opt_best = self.selectBestVersion(&opt_metadata, opt_constraint) orelse continue;
         if (!opt_best.matchesPlatform()) continue;
       }
@@ -1485,32 +1561,33 @@ pub const Resolver = struct {
       self.allocator.free(in_progress_key);
     }
 
-    const constraint = try Constraint.parse(constraint_str);
-    const cons_gop = try self.constraints.getOrPut(name);
-    
+    const dep_spec = dependencySpec(name, constraint_str);
+    const constraint = try Constraint.parse(dep_spec.constraint);
+    const cons_gop = try self.constraints.getOrPut(dep_spec.package_name);
+
     if (!cons_gop.found_existing) {
-      cons_gop.key_ptr.* = try self.allocator.dupe(u8, name);
+      cons_gop.key_ptr.* = try self.allocator.dupe(u8, dep_spec.package_name);
       cons_gop.value_ptr.* = .{};
     }
     try cons_gop.value_ptr.append(self.allocator, constraint);
 
-    if (self.resolved.get(name)) |existing_pkg| {
+    if (self.resolved.get(dep_spec.install_name)) |existing_pkg| {
       if (constraint.satisfies(existing_pkg.version)) {
         if (depth == 0) existing_pkg.direct = true;
         if (depth < existing_pkg.depth) existing_pkg.depth = depth;
         return existing_pkg;
       }
 
-      var metadata = try self.fetchMetadata(name);
+      var metadata = try self.fetchMetadata(dep_spec.package_name);
       const all_constraints = cons_gop.value_ptr.items;
       const best = self.selectBestVersionForConstraints(&metadata, all_constraints) orelse {
-        debug.log("  version conflict for {s}: no version satisfies all constraints", .{name});
+        debug.log("  version conflict for {s}: no version satisfies all constraints", .{dep_spec.install_name});
         return existing_pkg;
       };
 
       if (best.version.order(existing_pkg.version) != .eq) {
         debug.log("  re-resolve {s}: {d}.{d}.{d} -> {d}.{d}.{d}", .{
-          name,
+          dep_spec.install_name,
           existing_pkg.version.major,
           existing_pkg.version.minor,
           existing_pkg.version.patch,
@@ -1531,7 +1608,7 @@ pub const Resolver = struct {
       return existing_pkg;
     }
 
-    var metadata = try self.fetchMetadata(name);
+    var metadata = try self.fetchMetadata(dep_spec.package_name);
     const all_constraints = cons_gop.value_ptr.items;
     const best = self.selectBestVersionForConstraints(&metadata, all_constraints) orelse {
       return error.NoMatchingVersion;
@@ -1541,7 +1618,7 @@ pub const Resolver = struct {
     errdefer self.allocator.destroy(pkg);
 
     pkg.* = .{
-      .name = try self.string_pool.intern(name),
+      .name = try self.string_pool.intern(dep_spec.install_name),
       .version = best.version,
       .integrity = best.integrity,
       .tarball_url = try self.allocator.dupe(u8, best.tarball_url),
@@ -1553,7 +1630,7 @@ pub const Resolver = struct {
       .allocator = self.allocator,
     };
 
-    const name_key = try self.allocator.dupe(u8, name);
+    const name_key = try self.allocator.dupe(u8, dep_spec.install_name);
     errdefer self.allocator.free(name_key);
     try self.resolved.put(name_key, pkg);
 
@@ -1583,12 +1660,13 @@ pub const Resolver = struct {
         continue;
       };
 
-      const opt_metadata = self.fetchMetadata(dep_name) catch continue;
-      const opt_constraint = Constraint.parse(dep_constraint) catch continue;
+      const opt_spec = dependencySpec(dep_name, dep_constraint);
+      const opt_metadata = self.fetchMetadata(opt_spec.package_name) catch continue;
+      const opt_constraint = Constraint.parse(opt_spec.constraint) catch continue;
       const opt_best = self.selectBestVersion(&opt_metadata, opt_constraint) orelse continue;
 
       if (!opt_best.matchesPlatform()) {
-        if (self.resolved.fetchRemove(dep_name)) |kv| {
+        if (self.resolved.fetchRemove(opt_spec.install_name)) |kv| {
           self.allocator.free(kv.key);
           kv.value.deinit();
           self.allocator.destroy(kv.value);
@@ -1659,7 +1737,7 @@ pub const Resolver = struct {
 
     const metadata = try PackageMetadata.parseFromJson(self.cache_allocator, json_data);
     const cache_key = try self.cache_allocator.dupe(u8, name);
-    
+
     try self.metadata_cache.put(cache_key, metadata);
     return self.metadata_cache.get(name).?;
   }
@@ -1711,7 +1789,8 @@ pub const Resolver = struct {
       var satisfies_all = true;
       for (all_constraints) |c| {
         if (!c.satisfies(v.version)) {
-          satisfies_all = false; break;
+          satisfies_all = false;
+          break;
         }
       }
 
@@ -1725,7 +1804,10 @@ pub const Resolver = struct {
     for (metadata.versions.items) |*v| {
       var satisfies_all = true;
       for (all_constraints) |c| {
-        if (!c.satisfies(v.version)) { satisfies_all = false; break; }
+        if (!c.satisfies(v.version)) {
+          satisfies_all = false;
+          break;
+        }
       }
       if (satisfies_all and (best == null or v.version.order(best.?.version) == .gt)) best = v;
     }
@@ -1760,10 +1842,12 @@ pub const Resolver = struct {
       const url_ref = try writer.internString(pkg.tarball_url);
       const prerelease_ref = if (pkg.version.prerelease) |pre|
         try writer.internString(pre)
-      else lockfile.StringRef.empty;
+      else
+        lockfile.StringRef.empty;
       const parent_ref = if (pkg.parent_path) |parent|
         try writer.internString(parent)
-      else lockfile.StringRef.empty;
+      else
+        lockfile.StringRef.empty;
 
       const deps_start: u32 = @intCast(writer.dependencies.items.len);
       const pkg_install_path = try pkg.installPath(self.allocator);
@@ -1790,7 +1874,8 @@ pub const Resolver = struct {
               .dev = dep.flags.dev,
               .optional = dep.flags.optional,
             },
-          }); deps_written += 1;
+          });
+          deps_written += 1;
         }
       }
 

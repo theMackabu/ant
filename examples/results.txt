@@ -1143,7 +1143,7 @@ compat-table/es2017/Atomics.sub.js: OK
 compat-table/es2017/Atomics.wait.js: OK
 compat-table/es2017/Atomics.xor.js: OK
 compat-table/es2017/Object.entries.js: OK
-compat-table/es2017/Object.getOwnPropertyDescriptors.js: TypeError: undefined is not a function
+compat-table/es2017/Object.getOwnPropertyDescriptors.js: OK
 compat-table/es2017/Object.getOwnPropertyDescriptors.no-undefined.js: TypeError: undefined is not a function
 compat-table/es2017/Object.values.js: OK
 compat-table/es2017/SharedArrayBuffer.Symbol.species.js: failed

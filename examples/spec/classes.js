@@ -160,6 +160,21 @@ class Bird extends Animal {
 let bird = new Bird('Tweety');
 test('super[method]()', bird.speak(), 'Tweety makes a sound - chirp!');
 
+class SpreadBase {
+  constructor(a, b) {
+    this.sum = a + b;
+  }
+}
+
+class SpreadDerived extends SpreadBase {
+  constructor() {
+    super(...arguments);
+  }
+}
+
+let spreadDerived = new SpreadDerived(3, 4);
+test('super spread arguments', spreadDerived.sum, 7);
+
 class Static {
   static value = 42;
   static method() {
@@ -169,6 +184,22 @@ class Static {
 
 test('static property', Static.value, 42);
 test('static method', Static.method(), 'static');
+
+class StaticNamedElements {
+  static(value) {
+    return value + 1;
+  }
+}
+
+let staticNamedElements = new StaticNamedElements();
+test('instance method named static', staticNamedElements.static(4), 5);
+
+class StaticNamedField {
+  static = 7;
+}
+
+let staticNamedField = new StaticNamedField();
+test('instance field named static', staticNamedField.static, 7);
 
 class BankAccount {
   #balance = 0;

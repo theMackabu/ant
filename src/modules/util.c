@@ -19,6 +19,7 @@
 #include "modules/json.h"
 #include "modules/symbol.h"
 #include "modules/util.h"
+#include "modules/abort.h"
 #include "modules/collections.h"
 
 typedef struct {
@@ -33,7 +34,7 @@ typedef struct {
   const char *close;
 } util_style_entry_t;
 
-// migrate to crprintf
+// TODO: migrate to crprintf
 static const util_style_entry_t util_styles[] = {
   {"bold", "\x1b[1m", "\x1b[22m"},
   {"dim", "\x1b[2m", "\x1b[22m"},
@@ -865,6 +866,79 @@ static ant_value_t util_promisified_call(ant_t *js, ant_value_t *args, int nargs
   return promise;
 }
 
+static ant_value_t util_callbackify_success(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  if (!is_object_type(state)) return js_mkundef();
+
+  ant_value_t callback = js_get_slot(state, SLOT_DATA);
+  if (!is_callable(callback)) return js_mkundef();
+
+  ant_value_t cb_args[2] = {
+    js_mknull(),
+    nargs > 0 ? args[0] : js_mkundef()
+  };
+  
+  return sv_vm_call(js->vm, js, callback, js_mkundef(), cb_args, 2, NULL, false);
+}
+
+static ant_value_t util_callbackify_error(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  if (!is_object_type(state)) return js_mkundef();
+
+  ant_value_t callback = js_get_slot(state, SLOT_DATA);
+  if (!is_callable(callback)) return js_mkundef();
+
+  ant_value_t err = nargs > 0 ? args[0] : js_mkerr(js, "Promise was rejected");
+  ant_value_t cb_args[1] = { err };
+  return sv_vm_call(js->vm, js, callback, js_mkundef(), cb_args, 1, NULL, false);
+}
+
+static ant_value_t util_callbackified_call(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t fn = js_getcurrentfunc(js);
+  ant_value_t original = js_get_slot(fn, SLOT_DATA);
+  
+  if (!is_callable(original)) return js_mkerr(js, "callbackified target is not callable");
+  if (nargs < 1 || !is_callable(args[nargs - 1]))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "callbackified function requires a callback");
+
+  ant_value_t callback = args[nargs - 1];
+  int call_nargs = nargs - 1;
+  ant_value_t *call_args = NULL;
+
+  if (call_nargs > 0) {
+    call_args = (ant_value_t *)malloc((size_t)call_nargs * sizeof(ant_value_t));
+    if (!call_args) return js_mkerr(js, "Out of memory");
+    for (int i = 0; i < call_nargs; i++) call_args[i] = args[i];
+  }
+
+  ant_value_t result = sv_vm_call(js->vm, js, original, js_getthis(js), call_args, call_nargs, NULL, false);
+  free(call_args);
+
+  if (is_err(result) || js->thrown_exists) {
+    ant_value_t ex = js->thrown_exists ? js->thrown_value : result;
+    js->thrown_exists = false;
+    js->thrown_value = js_mkundef();
+    js->thrown_stack = js_mkundef();
+    ant_value_t cb_args[1] = { ex };
+    sv_vm_call(js->vm, js, callback, js_mkundef(), cb_args, 1, NULL, false);
+    return js_mkundef();
+  }
+
+  if (vtype(result) != T_PROMISE) {
+    ant_value_t cb_args[2] = { js_mknull(), result };
+    sv_vm_call(js->vm, js, callback, js_mkundef(), cb_args, 2, NULL, false);
+    return js_mkundef();
+  }
+
+  ant_value_t state = js_mkobj(js);
+  js_set_slot(state, SLOT_DATA, callback);
+  ant_value_t success = js_heavy_mkfun(js, util_callbackify_success, state);
+  ant_value_t error = js_heavy_mkfun(js, util_callbackify_error, state);
+  js_promise_then(js, result, success, error);
+  
+  return js_mkundef();
+}
+
 static ant_value_t util_deprecated_call(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t fn = js_getcurrentfunc(js);
   ant_value_t ctx = js_get_slot(fn, SLOT_DATA);
@@ -903,6 +977,33 @@ static ant_value_t util_promisify(ant_t *js, ant_value_t *args, int nargs) {
   return js_heavy_mkfun(js, util_promisified_call, args[0]);
 }
 
+static ant_value_t util_callbackify(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1 || !is_callable(args[0])) {
+    return js_mkerr(js, "callbackify(fn) requires a function");
+  }
+  return js_heavy_mkfun(js, util_callbackified_call, args[0]);
+}
+
+static ant_value_t util_aborted_listener(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t promise = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  if (vtype(promise) == T_PROMISE) js_resolve_promise(js, promise, js_mkundef());
+  return js_mkundef();
+}
+
+static ant_value_t util_aborted(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1 || !abort_signal_is_signal(args[0]))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "aborted(signal, resource) requires an AbortSignal");
+
+  ant_value_t promise = js_mkpromise(js);
+  if (abort_signal_is_aborted(args[0])) {
+    js_resolve_promise(js, promise, js_mkundef());
+    return promise;
+  }
+
+  abort_signal_add_listener(js, args[0], js_heavy_mkfun(js, util_aborted_listener, promise));
+  return promise;
+}
+
 static ant_value_t util_inherits(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2 || !is_callable(args[0]) || !is_callable(args[1])) {
     return js_mkerr(js, "inherits(ctor, superCtor) requires constructor functions");
@@ -935,6 +1036,8 @@ ant_value_t util_library(ant_t *js) {
   js_set(js, lib, "inherits", js_mkfun(util_inherits));
   js_set(js, lib, "parseEnv", js_mkfun(util_parse_env));
   js_set(js, lib, "promisify", js_mkfun(util_promisify));
+  js_set(js, lib, "callbackify", js_mkfun(util_callbackify));
+  js_set(js, lib, "aborted", js_mkfun(util_aborted));
   js_set(js, lib, "stripVTControlCharacters", js_mkfun(util_strip_vt_control_characters));
   js_set(js, lib, "styleText", js_mkfun(util_style_text));
   js_set(js, lib, "types", types);

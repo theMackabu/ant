@@ -76,6 +76,7 @@ typedef struct {
 
 static sv_ast_t *parse_stmt(P);
 static sv_ast_t *parse_expr(P);
+static sv_ast_t *parse_paren_expr(P);
 static sv_ast_t *parse_assign(P);
 static sv_ast_t *parse_ternary(P);
 static sv_ast_t *parse_binary(P, int min_prec);
@@ -409,7 +410,7 @@ static sv_ast_t *try_parse_async_arrow(P) {
     }
     sv_lexer_restore_state(&p->lx, &saved);
     NEXT(); CONSUME();
-    sv_ast_t *expr = parse_expr(p);
+    sv_ast_t *expr = parse_paren_expr(p);
     expect(p, TOK_RPAREN);
     if (LA() == TOK_ARROW) {
       NEXT(); CONSUME();
@@ -534,7 +535,7 @@ static sv_ast_t *parse_primary(P) {
       n->src_off = paren_off;
       return n;
     }
-    sv_ast_t *expr = parse_expr(p);
+    sv_ast_t *expr = parse_paren_expr(p);
     expect(p, TOK_RPAREN);
     expr->flags |= FN_PAREN;
     expr->src_off = paren_off;
@@ -1248,6 +1249,20 @@ static sv_ast_t *parse_expr(P) {
   return left;
 }
 
+static sv_ast_t *parse_paren_expr(P) {
+  sv_ast_t *left = parse_assign(p);
+  while (NEXT() == TOK_COMMA) {
+    CONSUME();
+    if (NEXT() == TOK_RPAREN && LA() == TOK_ARROW) break;
+
+    sv_ast_t *n = mk(N_SEQUENCE);
+    n->left = left;
+    n->right = parse_assign(p);
+    left = n;
+  }
+  return left;
+}
+
 bool ast_references_arguments(const sv_ast_t *node) {
   if (!node) return false;
   if (node->type == N_IDENT && node->len == 9 && memcmp(node->str, "arguments", 9) == 0)
@@ -1336,7 +1351,13 @@ static sv_ast_t *parse_class(P) {
 
     uint8_t flags = 0;
 
-    if (TOK == TOK_STATIC) {
+    if (
+      TOK == TOK_STATIC &&
+      LA() != TOK_LPAREN &&
+      LA() != TOK_ASSIGN &&
+      LA() != TOK_SEMICOLON &&
+      LA() != TOK_RBRACE
+    ) {
       flags |= FN_STATIC;
       CONSUME();
       NEXT();

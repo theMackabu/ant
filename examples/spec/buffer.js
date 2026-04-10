@@ -1,4 +1,5 @@
 import { test, testThrows, summary } from './helpers.js';
+import * as buffer from 'node:buffer';
 
 console.log('Buffer Tests\n');
 
@@ -71,34 +72,34 @@ const bu64 = new BigUint64Array(2);
 test('BigUint64Array length', bu64.length, 2);
 test('BigUint64Array BYTES_PER_ELEMENT', bu64.BYTES_PER_ELEMENT, 8);
 
-const buffer = new ArrayBuffer(16);
-const view8 = new Uint8Array(buffer);
-const view16 = new Uint16Array(buffer);
-const view32 = new Uint32Array(buffer);
-const view16f = new Float16Array(buffer);
+const backingBuffer = new ArrayBuffer(16);
+const view8 = new Uint8Array(backingBuffer);
+const view16 = new Uint16Array(backingBuffer);
+const view32 = new Uint32Array(backingBuffer);
+const view16f = new Float16Array(backingBuffer);
 
 test('Uint8Array view length', view8.length, 16);
 test('Uint16Array view length', view16.length, 8);
 test('Uint32Array view length', view32.length, 4);
 test('Float16Array view length', view16f.length, 8);
 
-const viewWithOffset = new Uint8Array(buffer, 4);
+const viewWithOffset = new Uint8Array(backingBuffer, 4);
 test('view with offset length', viewWithOffset.length, 12);
 test('view with offset byteOffset', viewWithOffset.byteOffset, 4);
 
-const viewWithOffsetAndLength = new Uint8Array(buffer, 4, 8);
+const viewWithOffsetAndLength = new Uint8Array(backingBuffer, 4, 8);
 test('view offset+length length', viewWithOffsetAndLength.length, 8);
 test('view offset+length byteOffset', viewWithOffsetAndLength.byteOffset, 4);
 
-const dv = new DataView(buffer);
+const dv = new DataView(backingBuffer);
 test('DataView byteLength', dv.byteLength, 16);
 test('DataView byteOffset', dv.byteOffset, 0);
 
-const dv2 = new DataView(buffer, 4);
+const dv2 = new DataView(backingBuffer, 4);
 test('DataView offset byteLength', dv2.byteLength, 12);
 test('DataView offset byteOffset', dv2.byteOffset, 4);
 
-const dv3 = new DataView(buffer, 4, 8);
+const dv3 = new DataView(backingBuffer, 4, 8);
 test('DataView offset+length byteLength', dv3.byteLength, 8);
 test('DataView offset+length byteOffset', dv3.byteOffset, 4);
 
@@ -167,6 +168,10 @@ test('Buffer.isEncoding empty', Buffer.isEncoding(''), false);
 test('Buffer.byteLength string', Buffer.byteLength('Hello'), 5);
 test('Buffer.byteLength buffer', Buffer.byteLength(Buffer.from('Hello')), 5);
 test('Buffer.byteLength empty', Buffer.byteLength(''), 0);
+test('buffer.constants exists', typeof buffer.constants, 'object');
+test('buffer.constants.MAX_STRING_LENGTH exists', typeof buffer.constants.MAX_STRING_LENGTH, 'number');
+test('buffer kStringMaxLength mirrors constants', buffer.kStringMaxLength, buffer.constants.MAX_STRING_LENGTH);
+test('buffer kMaxLength mirrors constants', buffer.kMaxLength, buffer.constants.MAX_LENGTH);
 
 const concatBuf1 = Buffer.from('Hello');
 const concatBuf2 = Buffer.from(' ');

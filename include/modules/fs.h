@@ -5,6 +5,7 @@
 
 ant_value_t fs_library(ant_t *js);
 ant_value_t fs_promises_library(ant_t *js);
+ant_value_t fs_constants_library(ant_t *js);
 
 int has_pending_fs_ops(void);
 void init_fs_module(void);

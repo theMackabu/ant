@@ -1638,6 +1638,96 @@ static ant_value_t process_emit(ant_t *js, ant_value_t *args, int nargs) {
   return js_true;
 }
 
+static bool process_is_error_object(ant_value_t value) {
+  if (is_err(value)) return true;
+  return is_object_type(value) && js_get_slot(value, SLOT_ERROR_BRAND) == js_true;
+}
+
+static void process_get_warning_options(
+  ant_t *js, ant_value_t options,
+  const char **type, const char **code, const char **detail,
+  ant_offset_t *detail_len
+) {
+  if (!is_object_type(options)) return;
+
+  ant_value_t type_val = js_get(js, options, "type");
+  ant_value_t code_val = js_get(js, options, "code");
+  ant_value_t detail_val = js_get(js, options, "detail");
+
+  if (vtype(type_val) == T_STR) *type = js_getstr(js, type_val, NULL);
+  if (vtype(code_val) == T_STR) *code = js_getstr(js, code_val, NULL);
+  if (vtype(detail_val) == T_STR) *detail = (const char *)(uintptr_t)vstr(js, detail_val, detail_len);
+}
+
+static ant_value_t process_make_warning_object(
+  ant_t *js, const char *type, js_cstr_t msg, const char *code,
+  const char *detail, ant_offset_t detail_len
+) {
+  ant_value_t warning_obj = js_mkobj(js);
+  js_set_proto_init(warning_obj, js_get_ctor_proto(js, "Error", 5));
+  js_set_slot(warning_obj, SLOT_ERROR_BRAND, js_true);
+  js_set(js, warning_obj, "name", js_mkstr(js, type, strlen(type)));
+  js_set(js, warning_obj, "message", js_mkstr(js, msg.ptr, msg.len));
+
+  if (code) js_set(js, warning_obj, "code", js_mkstr(js, code, strlen(code)));
+  if (detail) js_set(js, warning_obj, "detail", js_mkstr(js, detail, detail_len));
+
+  js_capture_stack(js, warning_obj);
+  return warning_obj;
+}
+
+static ant_value_t process_emit_warning(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_mkundef();
+
+  ant_value_t warning = args[0];
+  const char *type = "Warning";
+  const char *code = NULL;
+  const char *detail = NULL;
+  ant_offset_t detail_len = 0;
+
+  if (nargs >= 2) {
+    if (vtype(args[1]) == T_STR) type = js_getstr(js, args[1], NULL);
+    else process_get_warning_options(js, args[1], &type, &code, &detail, &detail_len);
+  }
+
+  if (nargs >= 3 && vtype(args[2]) == T_STR) code = js_getstr(js, args[2], NULL);
+
+  char msg_buf[512];
+  js_cstr_t msg = {0};
+  ant_value_t warning_event_arg = warning;
+  bool is_error = process_is_error_object(warning);
+
+  if (is_error) {
+    ant_value_t warning_obj = js_as_obj(warning);
+    ant_offset_t prop_len = 0;
+    const char *name_prop = get_str_prop(js, warning_obj, "name", 4, &prop_len);
+    if (name_prop) type = name_prop;
+    
+    const char *message_prop = get_str_prop(js, warning_obj, "message", 7, &prop_len);
+    msg.ptr = message_prop ? message_prop : "";
+    msg.len = message_prop ? prop_len : 0;
+    msg.needs_free = false;
+    
+    code = get_str_prop(js, warning_obj, "code", 4, NULL);
+    detail = get_str_prop(js, warning_obj, "detail", 6, &detail_len);
+    warning_event_arg = warning_obj;
+  } else {
+    msg = js_to_cstr(js, warning, msg_buf, sizeof(msg_buf));
+    warning_event_arg = process_make_warning_object(js, type, msg, code, detail, detail_len);
+  }
+
+  fprintf(stderr, "(%s:%d) ", "ant", (int)getpid());
+  if (code) fprintf(stderr, "[%s] ", code);
+  
+  fprintf(stderr, "%s: %.*s\n", type ? type : "Warning", (int)msg.len, msg.ptr);
+  if (detail) fprintf(stderr, "%.*s\n", (int)detail_len, detail);
+
+  emit_process_event("warning", &warning_event_arg, 1);
+  if (msg.needs_free) free((void *)msg.ptr);
+  
+  return js_mkundef();
+}
+
 static ant_value_t process_listener_count(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mknum(0);
   
@@ -1665,10 +1755,6 @@ static ant_value_t process_get_max_listeners(ant_t *js, ant_value_t *args, int n
   return js_mknum(max_listeners);
 }
 
-ant_value_t process_library(ant_t *js) {
-  return js_get(js, js_glob(js), "process");
-}
-
 static ant_value_t process_next_tick(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "process.nextTick requires a callback");
     
@@ -1682,61 +1768,76 @@ static ant_value_t process_next_tick(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
+static void process_set_methods(ant_t *js, ant_value_t obj, bool include_event_methods) {
+  js_set(js, obj, "exit", js_mkfun(process_exit));
+  js_set(js, obj, "cwd", js_mkfun(process_cwd));
+  js_set(js, obj, "chdir", js_mkfun(process_chdir));
+  js_set(js, obj, "uptime", js_mkfun(process_uptime));
+  js_set(js, obj, "cpuUsage", js_mkfun(process_cpu_usage));
+  js_set(js, obj, "kill", js_mkfun(process_kill));
+  js_set(js, obj, "abort", js_mkfun(process_abort));
+  js_set(js, obj, "umask", js_mkfun(process_umask));
+  js_set(js, obj, "nextTick", js_mkfun(process_next_tick));
+  js_set(js, obj, "emitWarning", js_mkfun(process_emit_warning));
+  js_set(js, obj, "dlopen", js_mkfun(napi_process_dlopen_js));
+
+  ant_value_t mem_usage_fn = js_heavy_mkfun(js, process_memory_usage, js_mkundef());
+  js_set(js, mem_usage_fn, "rss", js_mkfun(process_memory_usage_rss));
+  js_set(js, obj, "memoryUsage", mem_usage_fn);
+
+  ant_value_t hrtime_fn = js_heavy_mkfun(js, process_hrtime, js_mkundef());
+  js_set(js, hrtime_fn, "bigint", js_mkfun(process_hrtime_bigint));
+  js_set(js, obj, "hrtime", hrtime_fn);
+
+  if (include_event_methods) {
+    js_set(js, obj, "on", js_mkfun(process_on));
+    js_set(js, obj, "addListener", js_mkfun(process_on));
+    js_set(js, obj, "once", js_mkfun(process_once));
+    js_set(js, obj, "off", js_mkfun(process_off));
+    js_set(js, obj, "removeListener", js_mkfun(process_off));
+    js_set(js, obj, "removeAllListeners", js_mkfun(process_remove_all_listeners));
+    js_set(js, obj, "emit", js_mkfun(process_emit));
+    js_set(js, obj, "listenerCount", js_mkfun(process_listener_count));
+    js_set(js, obj, "setMaxListeners", js_mkfun(process_set_max_listeners));
+    js_set(js, obj, "getMaxListeners", js_mkfun(process_get_max_listeners));
+  }
+
+#ifndef _WIN32
+  js_set(js, obj, "getuid", js_mkfun(process_getuid));
+  js_set(js, obj, "geteuid", js_mkfun(process_geteuid));
+  js_set(js, obj, "getgid", js_mkfun(process_getgid));
+  js_set(js, obj, "getegid", js_mkfun(process_getegid));
+  js_set(js, obj, "getgroups", js_mkfun(process_getgroups));
+  js_set(js, obj, "setuid", js_mkfun(process_setuid));
+  js_set(js, obj, "setgid", js_mkfun(process_setgid));
+  js_set(js, obj, "seteuid", js_mkfun(process_seteuid));
+  js_set(js, obj, "setegid", js_mkfun(process_setegid));
+  js_set(js, obj, "setgroups", js_mkfun(process_setgroups));
+  js_set(js, obj, "initgroups", js_mkfun(process_initgroups));
+#endif
+}
+
+ant_value_t process_library(ant_t *js) {
+  ant_value_t process_obj = js_get(js, js_glob(js), "process");
+  js_set_slot_wb(js, process_obj, SLOT_DEFAULT, process_obj);
+  return process_obj;
+}
+
 void init_process_module() {
   ant_t *js = rt->js;
   ant_value_t global = js_glob(js);
-  
+
   process_start_time = uv_hrtime();
   ant_value_t process_proto = js_mkobj(js);
-  
-  js_set(js, process_proto, "exit", js_mkfun(process_exit));
-  js_set(js, process_proto, "on", js_mkfun(process_on));
-  js_set(js, process_proto, "addListener", js_mkfun(process_on));
-  js_set(js, process_proto, "once", js_mkfun(process_once));
-  js_set(js, process_proto, "off", js_mkfun(process_off));
-  js_set(js, process_proto, "removeListener", js_mkfun(process_off));
-  js_set(js, process_proto, "removeAllListeners", js_mkfun(process_remove_all_listeners));
-  js_set(js, process_proto, "emit", js_mkfun(process_emit));
-  js_set(js, process_proto, "listenerCount", js_mkfun(process_listener_count));
-  js_set(js, process_proto, "setMaxListeners", js_mkfun(process_set_max_listeners));
-  js_set(js, process_proto, "getMaxListeners", js_mkfun(process_get_max_listeners));
-  js_set(js, process_proto, "cwd", js_mkfun(process_cwd));
-  js_set(js, process_proto, "chdir", js_mkfun(process_chdir));
-  js_set(js, process_proto, "uptime", js_mkfun(process_uptime));
-  js_set(js, process_proto, "cpuUsage", js_mkfun(process_cpu_usage));
-  js_set(js, process_proto, "kill", js_mkfun(process_kill));
-  js_set(js, process_proto, "abort", js_mkfun(process_abort));
-  js_set(js, process_proto, "umask", js_mkfun(process_umask));
-  js_set(js, process_proto, "nextTick", js_mkfun(process_next_tick));
-  
-  ant_value_t mem_usage_fn = js_heavy_mkfun(js, process_memory_usage, js_mkundef());
-  js_set(js, mem_usage_fn, "rss", js_mkfun(process_memory_usage_rss));
-  js_set(js, process_proto, "memoryUsage", mem_usage_fn);
-  
-  ant_value_t hrtime_fn = js_heavy_mkfun(js, process_hrtime, js_mkundef());
-  js_set(js, hrtime_fn, "bigint", js_mkfun(process_hrtime_bigint));
-  js_set(js, process_proto, "hrtime", hrtime_fn);
-  js_set(js, process_proto, "dlopen", js_mkfun(napi_process_dlopen_js));
-  
-#ifndef _WIN32
-  js_set(js, process_proto, "getuid", js_mkfun(process_getuid));
-  js_set(js, process_proto, "geteuid", js_mkfun(process_geteuid));
-  js_set(js, process_proto, "getgid", js_mkfun(process_getgid));
-  js_set(js, process_proto, "getegid", js_mkfun(process_getegid));
-  js_set(js, process_proto, "getgroups", js_mkfun(process_getgroups));
-  js_set(js, process_proto, "setuid", js_mkfun(process_setuid));
-  js_set(js, process_proto, "setgid", js_mkfun(process_setgid));
-  js_set(js, process_proto, "seteuid", js_mkfun(process_seteuid));
-  js_set(js, process_proto, "setegid", js_mkfun(process_setegid));
-  js_set(js, process_proto, "setgroups", js_mkfun(process_setgroups));
-  js_set(js, process_proto, "initgroups", js_mkfun(process_initgroups));
-#endif
-  
+
+  process_set_methods(js, process_proto, true);
   js_set_sym(js, process_proto, get_toStringTag_sym(), js_mkstr(js, "process", 7));
-  
+
   ant_value_t process_obj = js_mkobj(js);
   ant_value_t env_obj = js_mkobj(js);
+  
   js_set_proto_init(process_obj, process_proto);
+  process_set_methods(js, process_obj, false);
 
   load_dotenv_file(js, env_obj);
   js_set_keys(env_obj, env_keys);
@@ -1861,9 +1962,8 @@ void gc_mark_process(ant_t *js, gc_mark_fn mark) {
   ProcessEventType *tables[] = {process_events, stdin_events, stdout_events, stderr_events};
   for (int t = 0; t < 4; t++) {
     ProcessEventType *evt, *tmp;
-    HASH_ITER(hh, tables[t], evt, tmp) {
+    HASH_ITER(hh, tables[t], evt, tmp) 
       for (int i = 0; i < evt->listener_count; i++) mark(js, evt->listeners[i].listener);
-    }
   }
 }
 

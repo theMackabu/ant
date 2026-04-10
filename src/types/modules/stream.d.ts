@@ -56,6 +56,8 @@ declare module 'stream' {
 
   function pipeline(...streams: Array<Stream | ((error?: Error | null) => void)>): Stream;
   function finished(stream: Stream, callback?: (error?: Error | null) => void): Stream;
+  function getDefaultHighWaterMark(objectMode: boolean): number;
+  function setDefaultHighWaterMark(objectMode: boolean, value: number): void;
 
   const promises: {
     pipeline(...streams: Stream[]): Promise<void>;
@@ -63,7 +65,19 @@ declare module 'stream' {
   };
 
   export default Stream;
-  export { Stream, Readable, Writable, Duplex, Transform, PassThrough, pipeline, finished, promises };
+  export {
+    Stream,
+    Readable,
+    Writable,
+    Duplex,
+    Transform,
+    PassThrough,
+    pipeline,
+    finished,
+    getDefaultHighWaterMark,
+    setDefaultHighWaterMark,
+    promises
+  };
 }
 
 declare module 'ant:stream' {

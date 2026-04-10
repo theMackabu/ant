@@ -2158,7 +2158,12 @@ static void compile_call_args_array(sv_compiler_t *c, sv_ast_t *call_node) {
 typedef enum {
   SV_CALL_DIRECT = 0,
   SV_CALL_METHOD = 1,
+  SV_CALL_SUPER = 2,
 } sv_call_kind_t;
+
+static inline bool sv_call_kind_has_receiver(sv_call_kind_t kind) {
+  return kind == SV_CALL_METHOD || kind == SV_CALL_SUPER;
+}
 
 static void compile_receiver_property_get(sv_compiler_t *c, sv_ast_t *node) {
   emit_op(c, OP_DUP);
@@ -2177,17 +2182,17 @@ static void compile_call_emit_invoke(
 ) {
   int argc = node->args.count;
   if (has_spread) {
-    if (kind == SV_CALL_METHOD) emit_op(c, OP_SWAP);
+    if (sv_call_kind_has_receiver(kind)) emit_op(c, OP_SWAP);
     else emit_op(c, OP_GLOBAL);
     compile_call_args_array(c, node);
-    emit_op(c, OP_APPLY);
+    emit_op(c, kind == SV_CALL_SUPER ? OP_SUPER_APPLY : OP_APPLY);
     emit_u16(c, 1);
     return;
   }
 
   for (int i = 0; i < argc; i++)
     compile_expr(c, node->args.items[i]);
-  emit_op(c, kind == SV_CALL_METHOD ? OP_CALL_METHOD : OP_CALL);
+  emit_op(c, sv_call_kind_has_receiver(kind) ? OP_CALL_METHOD : OP_CALL);
   emit_u16(c, (uint16_t)argc);
 }
 
@@ -2195,7 +2200,7 @@ static sv_call_kind_t compile_call_setup_non_optional(sv_compiler_t *c, sv_ast_t
   if (is_ident_name(callee, "super")) {
     emit_op(c, OP_THIS);
     emit_get_var(c, "super", 5);
-    return SV_CALL_METHOD;
+    return SV_CALL_SUPER;
   }
 
   if (callee->type == N_MEMBER && is_ident_name(callee->left, "super")) {
@@ -2247,7 +2252,7 @@ static void compile_optional_call_after_setup(
   emit_op(c, OP_IS_UNDEF_OR_NULL);
   int j_do_call = emit_jump(c, OP_JMP_FALSE);
   emit_op(c, OP_POP);
-  if (kind == SV_CALL_METHOD)
+  if (sv_call_kind_has_receiver(kind))
     emit_op(c, OP_POP);
   emit_op(c, OP_UNDEF);
   int j_end = emit_jump(c, OP_JMP);
@@ -3649,13 +3654,13 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
   emit_loop(c, loop_start);
   patch_jump(c, exit_jump);
 
-  int skip_break_cleanup = -1;
-  if (break_close_slot >= 0)
-    skip_break_cleanup = emit_jump(c, OP_JMP);
-
   if (is_for_of) {
     emit_op(c, OP_POP);
     emit_op(c, OP_TRY_POP);
+
+    int skip_break_cleanup = -1;
+    if (break_close_slot >= 0)
+      skip_break_cleanup = emit_jump(c, OP_JMP);
 
     pop_loop(c);
     if (break_close_slot >= 0) {
@@ -3678,6 +3683,10 @@ static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of) {
     patch_jump(c, end_jump);
     c->try_depth--;
   } else {
+    int skip_break_cleanup = -1;
+    if (break_close_slot >= 0)
+      skip_break_cleanup = emit_jump(c, OP_JMP);
+
     pop_loop(c);
     if (break_close_slot >= 0) {
       emit_op(c, OP_CLOSE_UPVAL);

@@ -55,6 +55,8 @@ declare module 'util' {
   function inherits(ctor: (...args: unknown[]) => unknown, superCtor: (...args: unknown[]) => unknown): void;
   function parseEnv(content: string): Record<string, string>;
   function promisify(fn: (...args: unknown[]) => unknown): (...args: unknown[]) => Promise<unknown>;
+  function callbackify(fn: (...args: unknown[]) => Promise<unknown>): (...args: unknown[]) => void;
+  function aborted(signal: AbortSignal, resource: object): Promise<void>;
   function stripVTControlCharacters(str: string): string;
   function styleText(format: StyleTextFormat, text: string, options?: StyleTextOptions): string;
 

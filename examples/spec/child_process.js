@@ -1,5 +1,6 @@
 import { test, testThrows, summary } from './helpers.js';
 import { spawn, exec, execSync, spawnSync } from 'child_process';
+import { ChildProcess as NodeChildProcess } from 'node:child_process';
 
 console.log('Child Process Tests\n');
 
@@ -45,11 +46,21 @@ let spawnClosed = false;
 
 const child = spawn('sh', ['-c', 'echo line1; echo line2']);
 
+test('node:child_process exports ChildProcess', typeof NodeChildProcess, 'function');
 test('spawn returns object', typeof child, 'object');
+test('spawn returns ChildProcess instance', child instanceof NodeChildProcess, true);
 test('spawn has pid', child.pid > 0, true);
 test('spawn has on method', typeof child.on, 'function');
 test('spawn has once method', typeof child.once, 'function');
 test('spawn has kill method', typeof child.kill, 'function');
+
+const constructedChild = new NodeChildProcess();
+let constructedChildEvent = false;
+constructedChild.on('ping', () => {
+  constructedChildEvent = true;
+});
+constructedChild.emit('ping');
+test('new ChildProcess has EventEmitter behavior', constructedChildEvent, true);
 
 child.on('stdout', data => {
   spawnStdout += data;
@@ -59,13 +70,15 @@ child.on('exit', code => {
   spawnExitCode = code;
 });
 
-const childClosedP = new Promise(resolve => child.on('close', () => {
-  spawnClosed = true;
-  test('spawn collects stdout', spawnStdout.trim(), 'line1\nline2');
-  test('spawn exit code', spawnExitCode, 0);
-  test('spawn close event fired', spawnClosed, true);
-  resolve();
-}));
+const childClosedP = new Promise(resolve =>
+  child.on('close', () => {
+    spawnClosed = true;
+    test('spawn collects stdout', spawnStdout.trim(), 'line1\nline2');
+    test('spawn exit code', spawnExitCode, 0);
+    test('spawn close event fired', spawnClosed, true);
+    resolve();
+  })
+);
 
 let stdinRoundTrip = '';
 const stdinChild = spawn('cat');
@@ -75,18 +88,23 @@ stdinChild.on('stdout', data => {
 stdinChild.stdin.write('ping');
 stdinChild.stdin.end();
 
-const stdinChildDoneP = new Promise(resolve => stdinChild.on('close', () => {
-  test('spawn stdin round trip', stdinRoundTrip, 'ping');
-  resolve();
-}));
-
-const shellChildDoneP = childClosedP.then(() => new Promise(resolve => {
-  const shellChild = spawn('echo $HOME', [], { shell: true });
-  shellChild.on('close', () => {
-    test('spawn with shell option', shellChild.stdout.length > 0, true);
+const stdinChildDoneP = new Promise(resolve =>
+  stdinChild.on('close', () => {
+    test('spawn stdin round trip', stdinRoundTrip, 'ping');
     resolve();
-  });
-}));
+  })
+);
+
+const shellChildDoneP = childClosedP.then(
+  () =>
+    new Promise(resolve => {
+      const shellChild = spawn('echo $HOME', [], { shell: true });
+      shellChild.on('close', () => {
+        test('spawn with shell option', shellChild.stdout.length > 0, true);
+        resolve();
+      });
+    })
+);
 
 const stderrChild = spawn('sh', ['-c', 'echo err >&2']);
 let stderrData = '';

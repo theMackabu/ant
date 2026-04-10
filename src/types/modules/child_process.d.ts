@@ -1,4 +1,6 @@
 declare module 'child_process' {
+  import { EventEmitter } from 'events';
+
   interface SpawnResult {
     stdout: string;
     stderr: string;
@@ -7,7 +9,7 @@ declare module 'child_process' {
     pid: number;
   }
 
-  interface ChildProcess {
+  class ChildProcess extends EventEmitter {
     stdout: string;
     stderr: string;
     exitCode: number | null;

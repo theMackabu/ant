@@ -872,3 +872,17 @@ ant_value_t path_library(ant_t *js) {
   
   return lib;
 }
+
+ant_value_t path_posix_library(ant_t *js) {
+  path_api_t api = path_build_api_for_style(js, PATH_STYLE_POSIX);
+  ant_value_t lib = path_make_variant(js, &api, PATH_STYLE_POSIX);
+  js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "path", 4));
+  return lib;
+}
+
+ant_value_t path_win32_library(ant_t *js) {
+  path_api_t api = path_build_api_for_style(js, PATH_STYLE_WIN32);
+  ant_value_t lib = path_make_variant(js, &api, PATH_STYLE_WIN32);
+  js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "path", 4));
+  return lib;
+}

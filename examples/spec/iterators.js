@@ -16,7 +16,10 @@ test('string iterator second', strIter.next().value, 'b');
 test('string iterator third', strIter.next().value, 'c');
 test('string iterator done', strIter.next().done, true);
 
-const map = new Map([['a', 1], ['b', 2]]);
+const map = new Map([
+  ['a', 1],
+  ['b', 2]
+]);
 const mapIter = map.entries();
 testDeep('map entries first', mapIter.next().value, ['a', 1]);
 testDeep('map entries second', mapIter.next().value, ['b', 2]);
@@ -58,5 +61,16 @@ for (const n of custom) {
   customSum += n;
 }
 test('custom iterator', customSum, 60);
+
+let capturedNestedForOf = 0;
+const capturedFns = {};
+for (const { values = [] } of [{ values: ['a', 'bb'] }]) {
+  for (const value of values) {
+    capturedFns[value] = () => value.length;
+    capturedNestedForOf++;
+  }
+}
+test('captured nested for-of count', capturedNestedForOf, 2);
+test('captured nested for-of closure', capturedFns.bb(), 2);
 
 summary();

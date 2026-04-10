@@ -193,7 +193,7 @@ pub const Linker = struct {
     var has_existing_package = false;
     
     {
-      const existing = node_modules.openDir(install_path, .{}) catch null;
+      const existing = node_modules.openDir(install_path, .{ .iterate = true }) catch null;
       if (existing) |dir| {
         has_existing_install = true;
         var installed_dir = dir;
@@ -202,7 +202,8 @@ pub const Linker = struct {
         const installed_version = readPackageVersion(self.allocator, installed_dir);
         defer if (installed_version) |v| self.allocator.free(v);
         has_existing_package = installed_version != null;
-        should_skip = packageVersionsMatch(source_version, installed_version);
+        should_skip = packageVersionsMatch(source_version, installed_version) and
+          installedFileCountMatches(installed_dir, pkg.file_count);
       }
     }
 
@@ -281,6 +282,28 @@ pub const Linker = struct {
     const src = source_version orelse return false;
     const dst = installed_version orelse return false;
     return std.mem.eql(u8, src, dst);
+  }
+
+  fn installedFileCountMatches(dir: std.fs.Dir, expected_files: u32) bool {
+    if (expected_files == 0) return true;
+    const actual_files = countFilesRecursive(dir) catch return false;
+    return actual_files >= expected_files;
+  }
+
+  fn countFilesRecursive(dir: std.fs.Dir) !u32 {
+    var count: u32 = 0;
+    var iter = dir.iterate();
+    while (try iter.next()) |entry| {
+    switch (entry.kind) {
+      .file => count += 1,
+      .directory => {
+        var child = dir.openDir(entry.name, .{ .iterate = true }) catch continue;
+        defer child.close();
+        count += try countFilesRecursive(child);
+      },
+      else => {},
+    }}
+    return count;
   }
 
   fn createBinSymlink(self: *Linker, pkg_name: []const u8, cmd_name: []const u8, bin_path: []const u8, bin_dir: std.fs.Dir) !void {

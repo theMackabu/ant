@@ -56,7 +56,7 @@ static abort_signal_data_t *get_signal_data(ant_value_t obj) {
 
 static abort_signal_data_t *get_signal_data_if_signal_object(ant_value_t obj) {
   if (!g_initialized || !is_object_type(obj)) return NULL;
-  if (js_get_slot(obj, SLOT_PROTO) != g_signal_proto) return NULL;
+  if (!js_check_brand(obj, BRAND_ABORT_SIGNAL)) return NULL;
   return get_signal_data(obj);
 }
 
@@ -155,7 +155,7 @@ void signal_do_abort(ant_t *js, ant_value_t signal_obj, ant_value_t reason) {
 }
 
 void abort_signal_remove_listener(ant_t *js, ant_value_t signal, ant_value_t callback) {
-  abort_signal_data_t *data = get_signal_data(signal);
+  abort_signal_data_t *data = get_signal_data_if_signal_object(signal);
   if (!data) return;
 
   unsigned int n = abort_array_len(data->listeners);
@@ -187,6 +187,7 @@ static ant_value_t make_new_signal(ant_t *js) {
 
   ant_value_t obj = js_mkobj(js);
   js_set_slot(obj, SLOT_DATA, ANT_PTR(data));
+  js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_ABORT_SIGNAL));
   if (g_initialized) js_set_slot_wb(js, obj, SLOT_PROTO, g_signal_proto);
 
   js_set(js, obj, "aborted", js_false);
@@ -472,21 +473,21 @@ void gc_mark_abort_signal_object(ant_t *js, ant_value_t signal, gc_mark_fn mark)
 }
 
 bool abort_signal_is_aborted(ant_value_t signal) {
-  abort_signal_data_t *data = get_signal_data(signal);
+  abort_signal_data_t *data = get_signal_data_if_signal_object(signal);
   return data && data->aborted;
 }
 
 bool abort_signal_is_signal(ant_value_t signal) {
-  return get_signal_data(signal) != NULL;
+  return get_signal_data_if_signal_object(signal) != NULL;
 }
 
 ant_value_t abort_signal_get_reason(ant_value_t signal) {
-  abort_signal_data_t *data = get_signal_data(signal);
+  abort_signal_data_t *data = get_signal_data_if_signal_object(signal);
   return data ? data->reason : js_mkundef();
 }
 
 void abort_signal_add_listener(ant_t *js, ant_value_t signal, ant_value_t callback) {
-  abort_signal_data_t *data = get_signal_data(signal);
+  abort_signal_data_t *data = get_signal_data_if_signal_object(signal);
   if (!data) return;
 
   if (data->aborted) {

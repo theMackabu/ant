@@ -6,6 +6,7 @@
 typedef void (*gc_mark_fn)(ant_t *js, ant_value_t v);
 
 void gc_mark_timers(ant_t *js, gc_mark_fn mark);
+void gc_mark_atomics(ant_t *js, gc_mark_fn mark);
 void gc_mark_ffi(ant_t *js, gc_mark_fn mark);
 void gc_mark_fetch(ant_t *js, gc_mark_fn mark);
 void gc_mark_fs(ant_t *js, gc_mark_fn mark);
