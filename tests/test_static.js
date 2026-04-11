@@ -115,6 +115,21 @@ class MathHelper {
 test('static computed value TWO_PI', MathHelper.TWO_PI, 3.14159 * 2);
 test('static method using static property', MathHelper.circleArea(1), 3.14159);
 
+console.log('\n=== Named Class Self-Reference in Static Fields ===');
+
+const FilterTranslator = class _FilterTranslator {
+  static LOGICAL_OPERATORS = ["$and", "$or"];
+  static DEFAULT_OPERATORS = {
+    logical: _FilterTranslator.LOGICAL_OPERATORS
+  };
+};
+
+test(
+  'named class expression static self-reference',
+  FilterTranslator.DEFAULT_OPERATORS.logical[1],
+  "$or"
+);
+
 console.log('\n=== Summary ===');
 console.log('Passed:', passed);
 console.log('Failed:', failed);

@@ -1,6 +1,7 @@
 #include <compat.h> // IWYU pragma: keep
 
 #include <stdbool.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,6 +18,7 @@
 #define ANT_STDOUT_FD 1
 #define ANT_STDERR_FD 2
 #else
+#include <signal.h>
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
@@ -264,6 +266,23 @@ static struct {
   bool active;
   struct termios saved;
 } raw_state = { .fd = -1, .active = false };
+
+static int tty_tcsetattr_no_sigtou(int fd, int optional_actions, const struct termios *tio) {
+#ifdef SIGTTOU
+  sigset_t block_set;
+  sigset_t prev_set;
+  if (sigemptyset(&block_set) == 0
+      && sigaddset(&block_set, SIGTTOU) == 0
+      && sigprocmask(SIG_BLOCK, &block_set, &prev_set) == 0) {
+    int rc = tcsetattr(fd, optional_actions, tio);
+    int saved_errno = errno;
+    sigprocmask(SIG_SETMASK, &prev_set, NULL);
+    errno = saved_errno;
+    return rc;
+  }
+#endif
+  return tcsetattr(fd, optional_actions, tio);
+}
 #endif
 
 bool tty_set_raw_mode(int fd, bool enable) {
@@ -302,7 +321,7 @@ bool tty_set_raw_mode(int fd, bool enable) {
 #ifdef VLNEXT
     raw.c_cc[VLNEXT] = _POSIX_VDISABLE;
 #endif
-    if (tcsetattr(fd, TCSANOW, &raw) == -1) return false;
+    if (tty_tcsetattr_no_sigtou(fd, TCSANOW, &raw) == -1) return false;
     raw_state.fd = fd;
     raw_state.saved = saved;
     raw_state.active = true;
@@ -310,7 +329,7 @@ bool tty_set_raw_mode(int fd, bool enable) {
   }
 
   if (!(raw_state.active && raw_state.fd == fd)) return true;
-  if (tcsetattr(fd, TCSANOW, &raw_state.saved) == -1) return false;
+  if (tty_tcsetattr_no_sigtou(fd, TCSANOW, &raw_state.saved) == -1) return false;
   raw_state.fd = -1;
   raw_state.active = false;
   return true;

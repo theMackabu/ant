@@ -329,6 +329,7 @@ static inline bool is_callable(ant_value_t v) {
 
 bool is_internal_prop(const char *key, ant_offset_t klen);
 size_t uint_to_str(char *buf, size_t bufsize, uint64_t val);
+int extract_array_args(ant_t *js, ant_value_t arr, ant_value_t **out_args);
 
 ant_value_t tov(double d);
 double tod(ant_value_t v);
@@ -387,6 +388,7 @@ ant_value_t js_delete_sym_prop(ant_t *js, ant_value_t obj, ant_value_t sym);
 
 bool is_proxy(ant_value_t obj);
 bool strict_eq_values(ant_t *js, ant_value_t l, ant_value_t r);
+bool js_deep_equal(ant_t *js, ant_value_t a, ant_value_t b, bool strict);
 
 ant_value_t js_proxy_apply(ant_t *js, ant_value_t proxy, ant_value_t this_arg, ant_value_t *args, int argc);
 ant_value_t js_proxy_construct(ant_t *js, ant_value_t proxy, ant_value_t *args, int argc, ant_value_t new_target);

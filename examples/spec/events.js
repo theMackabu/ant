@@ -281,6 +281,16 @@ const disposable = addAbortListener(addAbortController.signal, () => {
 addAbortController.abort();
 test('events.addAbortListener fires on abort', addAbortValue, 1);
 test('events.addAbortListener returns disposable', typeof disposable.dispose, 'function');
+
+let disposedAbortValue = 0;
+const disposedAbortController = new AbortController();
+const disposedAbort = addAbortListener(disposedAbortController.signal, () => {
+  disposedAbortValue++;
+});
+disposedAbort.dispose();
+disposedAbortController.abort();
+test('events.addAbortListener dispose removes listener', disposedAbortValue, 0);
+
 test('events.getMaxListeners default', getMaxListeners(eeNodeOnce), 10);
 test('events.setMaxListeners no-op return', setMaxListeners(20, eeNodeOnce), undefined);
 

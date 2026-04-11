@@ -1,4 +1,12 @@
 declare module 'events' {
+  interface Disposable {
+    dispose(): void;
+  }
+
+  interface EventListenerOptions {
+    signal?: AbortSignal;
+  }
+
   class EventEmitter {
     on(event: string, listener: (...args: unknown[]) => void): this;
     addListener(event: string, listener: (...args: unknown[]) => void): this;
@@ -10,6 +18,20 @@ declare module 'events' {
     listenerCount(event: string): number;
     eventNames(): string[];
   }
+
+  function once(
+    emitter: EventEmitter | EventTarget | AbortSignal,
+    eventName: string | symbol,
+    options?: EventListenerOptions
+  ): Promise<unknown[]>;
+  function on(
+    emitter: EventEmitter | EventTarget,
+    eventName: string | symbol,
+    options?: EventListenerOptions
+  ): AsyncIterableIterator<unknown[]>;
+  function addAbortListener(signal: AbortSignal, listener: (event: Event) => void): Disposable;
+  function setMaxListeners(n: number, ...eventTargets: Array<EventEmitter | EventTarget>): void;
+  function getMaxListeners(eventTarget: EventEmitter | EventTarget): number;
 }
 
 declare module 'ant:events' {

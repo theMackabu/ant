@@ -36,6 +36,31 @@ static code_block_t *code_arena_head = NULL;
 static code_block_t *code_arena_current = NULL;
 static intern_entry_t *code_interns = NULL;
 
+static void code_interns_prune_for_block_range(
+  const code_block_t *block,
+  size_t start_offset
+) {
+  if (!block) return;
+
+  const char *start = block->data + start_offset;
+  const char *end = block->data + block->capacity;
+  intern_entry_t *entry = NULL;
+  intern_entry_t *tmp = NULL;
+
+  HASH_ITER(hh, code_interns, entry, tmp)
+  if (entry->ptr >= start && entry->ptr < end) {
+    HASH_DEL(code_interns, entry);
+    free(entry);
+  }
+}
+
+static void code_interns_prune_for_blocks(code_block_t *first) {
+  for (
+    code_block_t *block = first; 
+    block; block = block->next
+  ) code_interns_prune_for_block_range(block, 0);
+}
+
 static code_block_t *code_arena_new_block(size_t min_size) {
   size_t capacity = CODE_ARENA_BLOCK_SIZE;
   if (min_size > capacity) capacity = min_size;
@@ -60,10 +85,8 @@ const char *code_arena_alloc(const char *code, size_t len) {
   if (!code_arena_current || code_arena_current->used + alloc_size > code_arena_current->capacity) {
     code_block_t *new_block = code_arena_new_block(alloc_size);
     if (!new_block) return NULL;
-
     if (!code_arena_head) code_arena_head = new_block;
     else if (code_arena_current) code_arena_current->next = new_block;
-
     code_arena_current = new_block;
   }
 
@@ -114,6 +137,7 @@ void code_arena_rewind(code_arena_mark_t mark) {
   code_block_t *target = (code_block_t *)mark.block;
 
   if (!target) {
+    code_interns_prune_for_blocks(code_arena_head);
     code_block_t *block = code_arena_head;
     
     while (block) {
@@ -126,6 +150,10 @@ void code_arena_rewind(code_arena_mark_t mark) {
     
     return;
   }
+
+  size_t clamped_used = mark.used <= target->capacity ? mark.used : target->capacity;
+  code_interns_prune_for_block_range(target, clamped_used);
+  code_interns_prune_for_blocks(target->next);
 
   if (mark.used <= target->capacity) target->used = mark.used;
   code_block_t *b = target->next;

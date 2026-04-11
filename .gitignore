@@ -22,6 +22,9 @@
 /javascript-zoo
 /game-of-life
 
+node_modules
+!/tests/node_modules
+
 /wpt
 /tools
 /zoo.sh
@@ -33,7 +36,6 @@
 *.todo
 *.trace
 
-node_modules
 bun.lock
 pnpm-lock.yaml
 package-lock.json

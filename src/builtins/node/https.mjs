@@ -105,6 +105,18 @@ export class Server extends http.Server {
   }
 }
 
+export class Agent extends http.Agent {
+  constructor(options) {
+    super(options);
+    this.defaultPort = 443;
+    this.protocol = 'https:';
+    this.maxCachedSessions = this.options.maxCachedSessions ?? 100;
+    this._sessionCache = { map: Object.create(null), list: [] };
+  }
+}
+
+export const globalAgent = new Agent();
+
 export function createSecureContext(options) {
   return tls.createContext(options);
 }

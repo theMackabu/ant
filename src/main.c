@@ -128,12 +128,20 @@ static void ant_debug_apply(const char *key, const char *val) {
   if (strcmp(key, "gc") == 0) {
     if (strcmp(val, "disable") == 0) gc_disabled = true;
   }
-  
-  if (strcmp(key, "dump/crprintf") == 0) {
+
+  else if (strcmp(key, "dump/parse") == 0) {
+    if (strcmp(val, "trace") == 0) sv_debug_enable(SV_DEBUG_PARSE);
+  }
+
+  else if (strcmp(key, "dump/compile") == 0) {
+    if (strcmp(val, "trace") == 0) sv_debug_enable(SV_DEBUG_COMPILE);
+  }
+
+  else if (strcmp(key, "dump/crprintf") == 0) {
     if (strcmp(val, "bytecode") == 0 || strcmp(val, "all") == 0) crprintf_set_debug(true);
     if (strcmp(val, "hex") == 0      || strcmp(val, "all") == 0) crprintf_set_debug_hex(true);
-  } 
-  
+  }
+
   else if (strcmp(key, "dump/vm") == 0) {
     if (strcmp(val, "bytecode") == 0 || strcmp(val, "all") == 0) sv_debug_enable(SV_DEBUG_DUMP_BYTECODE);
     if (strcmp(val, "jit") == 0      || strcmp(val, "all") == 0) sv_debug_enable(SV_DEBUG_DUMP_JIT);
@@ -668,6 +676,7 @@ int main(int argc, char *argv[]) {
   ant_standard_library("timers/promises", timers_promises_library);
   ant_standard_library("readline/promises", readline_promises_library);
   ant_standard_library("stream/promises", stream_promises_library);
+  ant_standard_library("stream/web", stream_web_library);
 
   ant_value_t snapshot_result = ant_load_snapshot(js);
   if (vtype(snapshot_result) == T_ERR) {

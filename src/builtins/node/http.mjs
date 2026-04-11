@@ -110,6 +110,76 @@ function clientNotImplemented() {
   throw new Error('node:http client transport is not implemented yet');
 }
 
+// compatibility stub only
+function createAgentState() {
+  return Object.create(null);
+}
+
+export class OutgoingMessage extends EventEmitter {}
+
+export class ClientRequest extends OutgoingMessage {
+  constructor() {
+    super();
+    clientNotImplemented();
+  }
+}
+
+export class Agent extends EventEmitter {
+  constructor(options = {}) {
+    super();
+    this.options = options && typeof options === 'object' ? options : {};
+    this.requests = createAgentState();
+    this.sockets = createAgentState();
+    this.freeSockets = createAgentState();
+    this.keepAlive = !!this.options.keepAlive;
+    this.keepAliveMsecs = this.options.keepAliveMsecs ?? 1000;
+    this.maxSockets = this.options.maxSockets ?? Infinity;
+    this.maxFreeSockets = this.options.maxFreeSockets ?? 256;
+    this.maxTotalSockets = this.options.maxTotalSockets ?? Infinity;
+    this.totalSocketCount = 0;
+    this.defaultPort = 80;
+    this.protocol = 'http:';
+    this.scheduling = this.options.scheduling ?? 'lifo';
+  }
+
+  createConnection() {
+    clientNotImplemented();
+  }
+
+  createSocket(options, callback) {
+    const error = new Error('node:http Agent client transport is not implemented yet');
+    if (typeof callback === 'function') callback(error);
+    else throw error;
+  }
+
+  addRequest() {
+    clientNotImplemented();
+  }
+
+  removeSocket() {}
+
+  keepSocketAlive() {
+    return false;
+  }
+
+  reuseSocket() {}
+
+  destroy() {
+    return this;
+  }
+
+  getName(options = {}) {
+    if (options.socketPath) return String(options.socketPath);
+    const host = options.host ?? 'localhost';
+    const port = options.port ?? this.defaultPort;
+    const localAddress = options.localAddress ? `:${options.localAddress}` : '';
+    const family = options.family ? `:${options.family}` : '';
+    return `${host}:${port}${localAddress}${family}`;
+  }
+}
+
+export const globalAgent = new Agent();
+
 export class IncomingMessage extends EventEmitter {
   constructor(socket, parsed) {
     super();

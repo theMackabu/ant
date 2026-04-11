@@ -27,9 +27,16 @@
   X(SLOT_BUILTIN)                 \
   X(SLOT_BRAND)                   \
   X(SLOT_DATA)                    \
+  X(SLOT_EVENT_MAX_LISTENERS)     \
   X(SLOT_CTOR)                    \
   X(SLOT_FS_FLAGS)                \
   X(SLOT_DEFAULT)                 \
+  X(SLOT_CONSOLE_STDOUT)          \
+  X(SLOT_CONSOLE_STDERR)          \
+  X(SLOT_CONSOLE_COUNTS)          \
+  X(SLOT_CONSOLE_TIMERS)          \
+  X(SLOT_CONSOLE_GROUP_INDENT)    \
+  X(SLOT_CONSOLE_GROUP_LEVEL)     \
   X(SLOT_ERROR_BRAND)             \
   X(SLOT_ERR_TYPE)                \
   X(SLOT_OBSERVABLE_SUBSCRIBER)   \

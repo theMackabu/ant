@@ -32,6 +32,29 @@ static inline ant_value_t sv_key_to_propstr(ant_t *js, ant_value_t key) {
   return coerce_to_str(js, key);
 }
 
+static inline ant_value_t sv_mk_nullish_read_error_by_key(
+  ant_t *js, ant_value_t obj, ant_value_t key
+) {
+  uint8_t ot = vtype(obj);
+  ant_value_t key_str = sv_key_to_propstr(js, key);
+
+  if (!is_err(key_str) && vtype(key_str) == T_STR) {
+    ant_offset_t klen = 0;
+    ant_offset_t koff = vstr(js, key_str, &klen);
+    const char *kptr = (const char *)(uintptr_t)(koff);
+    
+    return js_mkerr_typed(js, JS_ERR_TYPE,
+      "Cannot read properties of %s (reading '%.*s')",
+      ot == T_NULL ? "null" : "undefined", (int)klen, kptr
+    );
+  }
+
+  return js_mkerr_typed(js, JS_ERR_TYPE,
+    "Cannot read properties of %s",
+    ot == T_NULL ? "null" : "undefined"
+  );
+}
+
 static inline ant_object_t *sv_array_obj_ptr(ant_value_t obj) {
   if (!is_object_type(obj)) return NULL;
   ant_object_t *ptr = js_obj_ptr(js_as_obj(obj));
@@ -622,8 +645,7 @@ static inline ant_value_t sv_op_get_elem(
 
   if (ot == T_NULL || ot == T_UNDEF) {
     if (func && ip) js_set_error_site_from_bc(js, func, (int)(ip - func->code), func->filename);
-    return js_mkerr_typed(js, JS_ERR_TYPE,
-      "Cannot read properties of %s", ot == T_NULL ? "null" : "undefined");
+    return sv_mk_nullish_read_error_by_key(js, obj, key);
   }
 
   if (vtype(obj) == T_ARR && vtype(key) == T_NUM) {
@@ -656,8 +678,7 @@ static inline ant_value_t sv_op_get_elem2(
   uint8_t ot = vtype(obj);
   if (ot == T_NULL || ot == T_UNDEF) {
     if (func && ip) js_set_error_site_from_bc(js, func, (int)(ip - func->code), func->filename);
-    return js_mkerr_typed(js, JS_ERR_TYPE,
-      "Cannot read properties of %s", ot == T_NULL ? "null" : "undefined");
+    return sv_mk_nullish_read_error_by_key(js, obj, key);
   }
 
   if (vtype(obj) == T_ARR && vtype(key) == T_NUM) {

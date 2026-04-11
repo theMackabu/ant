@@ -1,4 +1,4 @@
-import { test, testDeep, summary } from './helpers.js';
+import { test, testDeep, testThrows, summary } from './helpers.js';
 
 console.log('Object Tests\n');
 
@@ -116,5 +116,8 @@ test('descriptors symbol value', descriptors[descriptorSymbol].value, 'symbol va
 const arrayDescriptors = Object.getOwnPropertyDescriptors(['item']);
 test('array descriptor index value', arrayDescriptors[0].value, 'item');
 test('array descriptor length value', arrayDescriptors.length.value, 1);
+testThrows('Object.getOwnPropertyDescriptors throws without argument', () => Object.getOwnPropertyDescriptors());
+testThrows('Object.getOwnPropertyDescriptors throws on null', () => Object.getOwnPropertyDescriptors(null));
+test('Object.getOwnPropertyDescriptors boxes number primitive', typeof Object.getOwnPropertyDescriptors(1), 'object');
 
 summary();

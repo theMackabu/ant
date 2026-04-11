@@ -171,6 +171,23 @@ static ant_value_t reflect_apply(ant_t *js, ant_value_t *args, int nargs) {
   if (vtype(target) != T_FUNC && vtype(target) != T_CFUNC) {
     return js_mkerr(js, "Reflect.apply: first argument must be a function");
   }
+
+  if (vtype(args_arr) == T_UNDEF || vtype(args_arr) == T_NULL) return js_mkerr_typed(
+    js, JS_ERR_TYPE,
+    "Reflect.apply: third argument must be an array-like object"
+  );
+
+  ant_value_t result;
+  if (vtype(args_arr) == T_ARR) {
+    ant_value_t *call_args = NULL;
+    int arg_count = extract_array_args(js, args_arr, &call_args);
+    result = sv_vm_call_explicit_this(
+      js->vm, js, target, this_arg, 
+      call_args, arg_count
+    );
+    if (call_args) free(call_args);
+    return result;
+  }
   
   ant_value_t length_val = js_get(js, args_arr, "length");
   int arg_count = 0;
@@ -190,7 +207,10 @@ static ant_value_t reflect_apply(ant_t *js, ant_value_t *args, int nargs) {
     }
   }
   
-  ant_value_t result = sv_vm_call(js->vm, js, target, this_arg, call_args, arg_count, NULL, false);
+  result = sv_vm_call_explicit_this(
+    js->vm, js, target, this_arg, 
+    call_args, arg_count
+  );
   
   if (call_args) free(call_args);
   return result;

@@ -47,9 +47,16 @@ void inspect_value(
   inspect_visited_t *visited
 );
 
-ant_value_t console_print(
-  ant_t *js, ant_value_t *args,
-  int nargs, const char *color, FILE *stream
+ant_value_t console_emit(
+  ant_t *js,
+  bool use_stderr, const char *prefix,
+  ant_value_t *args, int nargs
+);
+
+ant_value_t console_emit_current(
+  ant_t *js,
+  bool use_stderr, const char *prefix,
+  ant_value_t *args, int nargs
 );
 
 #endif

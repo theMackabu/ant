@@ -360,8 +360,7 @@ ant_value_t jit_helper_get_elem(
   uint8_t ot = vtype(obj);
   if (ot == T_NULL || ot == T_UNDEF) {
     jit_set_error_site_from_func(js, func, bc_off);
-    return js_mkerr_typed(js, JS_ERR_TYPE,
-      "Cannot read properties of %s", ot == T_NULL ? "null" : "undefined");
+    return sv_mk_nullish_read_error_by_key(js, obj, key);
   }
   if (vtype(obj) == T_ARR && vtype(key) == T_NUM) {
     double d = tod(key);

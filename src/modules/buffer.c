@@ -2207,6 +2207,130 @@ static ant_value_t js_buffer_write(ant_t *js, ant_value_t *args, int nargs) {
   return js_mknum((double)to_write);
 }
 
+static ant_value_t js_buffer_copy(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "copy requires a target buffer");
+
+  TypedArrayData *src = buffer_get_typedarray_data(js_getthis(js));
+  TypedArrayData *dst = buffer_get_typedarray_data(args[0]);
+  if (!src || !dst) return js_mkerr(js, "copy requires Buffer arguments");
+
+  size_t target_start = (nargs > 1 && vtype(args[1]) == T_NUM) ? (size_t)js_getnum(args[1]) : 0;
+  size_t source_start = (nargs > 2 && vtype(args[2]) == T_NUM) ? (size_t)js_getnum(args[2]) : 0;
+  size_t source_end = (nargs > 3 && vtype(args[3]) == T_NUM) ? (size_t)js_getnum(args[3]) : src->byte_length;
+
+  if (target_start > dst->byte_length) target_start = dst->byte_length;
+  if (source_start > src->byte_length) source_start = src->byte_length;
+  if (source_end > src->byte_length) source_end = src->byte_length;
+  if (source_end < source_start) source_end = source_start;
+
+  size_t src_len = source_end - source_start;
+  size_t dst_len = dst->byte_length - target_start;
+  size_t copy_len = src_len < dst_len ? src_len : dst_len;
+  if (copy_len == 0) return js_mknum(0);
+
+  uint8_t *src_ptr = src->buffer->data + src->byte_offset + source_start;
+  uint8_t *dst_ptr = dst->buffer->data + dst->byte_offset + target_start;
+  memmove(dst_ptr, src_ptr, copy_len);
+  
+  return js_mknum((double)copy_len);
+}
+
+static ant_value_t js_buffer_writeInt16BE(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "writeInt16BE requires a value");
+
+  TypedArrayData *ta = buffer_get_typedarray_data(js_getthis(js));
+  if (!ta) return js_mkerr(js, "Invalid Buffer");
+
+  int16_t value = (int16_t)js_to_int32(js_getnum(args[0]));
+  size_t offset = (nargs > 1 && vtype(args[1]) == T_NUM) ? (size_t)js_getnum(args[1]) : 0;
+  if (offset + 2 > ta->byte_length) return js_mkerr(js, "Offset out of bounds");
+
+  uint8_t *ptr = ta->buffer->data + ta->byte_offset + offset;
+  ptr[0] = (uint8_t)((value >> 8) & 0xff);
+  ptr[1] = (uint8_t)(value & 0xff);
+  
+  return js_mknum((double)(offset + 2));
+}
+
+static ant_value_t js_buffer_writeInt32BE(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "writeInt32BE requires a value");
+
+  TypedArrayData *ta = buffer_get_typedarray_data(js_getthis(js));
+  if (!ta) return js_mkerr(js, "Invalid Buffer");
+
+  int32_t value = js_to_int32(js_getnum(args[0]));
+  size_t offset = (nargs > 1 && vtype(args[1]) == T_NUM) ? (size_t)js_getnum(args[1]) : 0;
+  if (offset + 4 > ta->byte_length) return js_mkerr(js, "Offset out of bounds");
+
+  uint8_t *ptr = ta->buffer->data + ta->byte_offset + offset;
+  ptr[0] = (uint8_t)((value >> 24) & 0xff);
+  ptr[1] = (uint8_t)((value >> 16) & 0xff);
+  ptr[2] = (uint8_t)((value >> 8) & 0xff);
+  ptr[3] = (uint8_t)(value & 0xff);
+  
+  return js_mknum((double)(offset + 4));
+}
+
+static ant_value_t js_buffer_writeUInt32BE(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "writeUInt32BE requires a value");
+
+  TypedArrayData *ta = buffer_get_typedarray_data(js_getthis(js));
+  if (!ta) return js_mkerr(js, "Invalid Buffer");
+
+  uint32_t value = js_to_uint32(js_getnum(args[0]));
+  size_t offset = (nargs > 1 && vtype(args[1]) == T_NUM) ? (size_t)js_getnum(args[1]) : 0;
+  if (offset + 4 > ta->byte_length) return js_mkerr(js, "Offset out of bounds");
+
+  uint8_t *ptr = ta->buffer->data + ta->byte_offset + offset;
+  ptr[0] = (uint8_t)((value >> 24) & 0xff);
+  ptr[1] = (uint8_t)((value >> 16) & 0xff);
+  ptr[2] = (uint8_t)((value >> 8) & 0xff);
+  ptr[3] = (uint8_t)(value & 0xff);
+  
+  return js_mknum((double)(offset + 4));
+}
+
+static ant_value_t js_buffer_readInt16BE(ant_t *js, ant_value_t *args, int nargs) {
+  TypedArrayData *ta = buffer_get_typedarray_data(js_getthis(js));
+  if (!ta) return js_mkerr(js, "Invalid Buffer");
+
+  size_t offset = (nargs > 0 && vtype(args[0]) == T_NUM) ? (size_t)js_getnum(args[0]) : 0;
+  if (offset + 2 > ta->byte_length) return js_mkerr(js, "Offset out of bounds");
+
+  uint8_t *ptr = ta->buffer->data + ta->byte_offset + offset;
+  int16_t value = (int16_t)((ptr[0] << 8) | ptr[1]);
+  
+  return js_mknum((double)value);
+}
+
+static ant_value_t js_buffer_readInt32BE(ant_t *js, ant_value_t *args, int nargs) {
+  TypedArrayData *ta = buffer_get_typedarray_data(js_getthis(js));
+  if (!ta) return js_mkerr(js, "Invalid Buffer");
+
+  size_t offset = (nargs > 0 && vtype(args[0]) == T_NUM) ? (size_t)js_getnum(args[0]) : 0;
+  if (offset + 4 > ta->byte_length) return js_mkerr(js, "Offset out of bounds");
+
+  uint8_t *ptr = ta->buffer->data + ta->byte_offset + offset;
+  int32_t value = (int32_t)(((uint32_t)ptr[0] << 24) | ((uint32_t)ptr[1] << 16) |
+    ((uint32_t)ptr[2] << 8) | (uint32_t)ptr[3]);
+    
+  return js_mknum((double)value);
+}
+
+static ant_value_t js_buffer_readUInt32BE(ant_t *js, ant_value_t *args, int nargs) {
+  TypedArrayData *ta = buffer_get_typedarray_data(js_getthis(js));
+  if (!ta) return js_mkerr(js, "Invalid Buffer");
+
+  size_t offset = (nargs > 0 && vtype(args[0]) == T_NUM) ? (size_t)js_getnum(args[0]) : 0;
+  if (offset + 4 > ta->byte_length) return js_mkerr(js, "Offset out of bounds");
+
+  uint8_t *ptr = ta->buffer->data + ta->byte_offset + offset;
+  uint32_t value = ((uint32_t)ptr[0] << 24) | ((uint32_t)ptr[1] << 16) |
+    ((uint32_t)ptr[2] << 8) | (uint32_t)ptr[3];
+    
+  return js_mknum((double)value);
+}
+
 // Buffer.isBuffer(obj)
 static ant_value_t js_buffer_isBuffer(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_false;
@@ -2539,6 +2663,13 @@ void init_buffer_module() {
   js_set(js, buffer_proto, "toString", js_mkfun(js_buffer_toString));
   js_set(js, buffer_proto, "toBase64", js_mkfun(js_buffer_toBase64));
   js_set(js, buffer_proto, "write", js_mkfun(js_buffer_write));
+  js_set(js, buffer_proto, "copy", js_mkfun(js_buffer_copy));
+  js_set(js, buffer_proto, "writeInt16BE", js_mkfun(js_buffer_writeInt16BE));
+  js_set(js, buffer_proto, "writeInt32BE", js_mkfun(js_buffer_writeInt32BE));
+  js_set(js, buffer_proto, "writeUInt32BE", js_mkfun(js_buffer_writeUInt32BE));
+  js_set(js, buffer_proto, "readInt16BE", js_mkfun(js_buffer_readInt16BE));
+  js_set(js, buffer_proto, "readInt32BE", js_mkfun(js_buffer_readInt32BE));
+  js_set(js, buffer_proto, "readUInt32BE", js_mkfun(js_buffer_readUInt32BE));
   
   js_set_sym(js, buffer_proto, get_toStringTag_sym(), js_mkstr(js, "Buffer", 6));
   js_set_sym(js, buffer_proto, get_iterator_sym(), ta_values_fn);

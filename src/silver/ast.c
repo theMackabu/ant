@@ -3,11 +3,13 @@
 #include "silver/directives.h"
 
 #include "escape.h"
+#include "debug.h"
 #include "errors.h"
 #include "internal.h"
 #include "tokens.h"
 
 #include <runtime.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -1293,7 +1295,7 @@ static sv_ast_t *parse_func(P) {
     fn->flags |= FN_GENERATOR;
   }
 
-  if (NEXT() == TOK_IDENTIFIER) {
+  if (is_ident_like_tok(NEXT())) {
     fn->str = tok_ident_str(p, &fn->len);
     sv_strict_check_binding_ident(p, fn->str, fn->len);
     CONSUME();
@@ -1334,7 +1336,7 @@ static sv_ast_t *parse_func(P) {
 static sv_ast_t *parse_class(P) {
   sv_ast_t *cls = mk(N_CLASS);
 
-  if (NEXT() == TOK_IDENTIFIER &&
+  if (is_ident_like_tok(NEXT()) &&
       !(TLEN == 7 && memcmp(tok_str(p), "extends", 7) == 0)) {
     cls->str = tok_ident_str(p, &cls->len);
     CONSUME();
@@ -2107,14 +2109,33 @@ static sv_ast_t *parse_stmt(P) {
 }
 
 sv_ast_t *sv_parse(ant_t *js, const char *code, ant_offset_t clen, bool strict){
+  if (sv_parse_trace_unlikely) {
+    fprintf(stderr, "[parse] start len=%u strict=%d\n", (unsigned)clen, strict ? 1 : 0);
+  }
+
   sv_parser_t parser = { .js = js };
   sv_parser_t *p = &parser;
   sv_lexer_init(&p->lx, js, code, clen, strict);
 
   sv_ast_t *program = mk(N_PROGRAM);
   sv_parse_stmt_list(p, &program->args, false, true);
-  if (js->thrown_exists) return NULL;
+  if (sv_parse_trace_unlikely) fprintf(
+    stderr, "[parse] after-stmt-list thrown=%d strict=%d body=%d\n",
+    js->thrown_exists ? 1 : 0,
+    p->lx.strict ? 1 : 0,
+    program ? program->args.count : -1
+  );
+
+  if (js->thrown_exists) {
+    if (sv_parse_trace_unlikely) fprintf(stderr, "[parse] return null\n");
+    return NULL;
+  }
+  
   if (p->lx.strict) program->flags |= FN_PARSE_STRICT;
+  if (sv_parse_trace_unlikely) fprintf(stderr,
+    "[parse] return program strict=%d body=%d\n",
+    p->lx.strict ? 1 : 0, program->args.count
+  );
 
   return program;
 }

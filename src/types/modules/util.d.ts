@@ -53,6 +53,18 @@ declare module 'util' {
   function formatWithOptions(inspectOptions: unknown, format?: unknown, ...args: unknown[]): string;
   function inspect(value: unknown, options?: unknown): string;
   function inherits(ctor: (...args: unknown[]) => unknown, superCtor: (...args: unknown[]) => unknown): void;
+  function isDeepStrictEqual(a: unknown, b: unknown): boolean;
+  function parseArgs(config: {
+    args?: string[];
+    options?: Record<string, {
+      type?: 'boolean' | 'string';
+      short?: string;
+      multiple?: boolean;
+      default?: unknown;
+    }>;
+    strict?: boolean;
+    allowPositionals?: boolean;
+  }): { values: Record<string, unknown>; positionals: string[] };
   function parseEnv(content: string): Record<string, string>;
   function promisify(fn: (...args: unknown[]) => unknown): (...args: unknown[]) => Promise<unknown>;
   function callbackify(fn: (...args: unknown[]) => Promise<unknown>): (...args: unknown[]) => void;

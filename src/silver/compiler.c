@@ -1,9 +1,11 @@
 #include "silver/ast.h"
+#include "silver/compile_ctx.h"
 #include "silver/engine.h"
 #include "silver/compiler.h"
 #include "silver/directives.h"
 
 #include "internal.h"
+#include "debug.h"
 #include "tokens.h"
 #include "runtime.h"
 #include "ops/coercion.h"
@@ -17,211 +19,6 @@ enum {
   SV_ITER_HINT_ARRAY = 1,
   SV_ITER_HINT_STRING = 4,
 };
-
-typedef struct {
-  const char *name;
-  uint32_t name_len;
-  int  depth;
-  bool is_const;
-  bool captured;
-  bool is_tdz;
-  uint8_t inferred_type;
-} sv_local_t;
-
-typedef struct {
-  int *offsets;
-  int  count;
-  int  cap;
-} sv_patch_list_t;
-
-typedef struct {
-  int loop_start;
-  sv_patch_list_t breaks;
-  sv_patch_list_t continues;
-  int scope_depth;
-  const char *label;
-  uint32_t label_len;
-  bool is_switch;
-} sv_loop_t;
-
-typedef struct {
-  const char *name;
-  uint32_t len;
-} sv_deferred_export_t;
-
-typedef struct sv_compiler {
-  ant_t *js;
-  const char *filename;
-  const char *source;
-  ant_offset_t source_len;
-
-  uint8_t *code;
-  int code_len;
-  int code_cap;
-
-  ant_value_t *constants;
-  int const_count;
-  int const_cap;
-
-  sv_atom_t *atoms;
-  int atom_count;
-  int atom_cap;
-  int ic_count;
-
-  sv_local_t *locals;
-  int local_count;
-  int local_cap;
-  int max_local_count;
-  int scope_depth;
-  int param_locals;
-
-  sv_upval_desc_t *upval_descs;
-  int upvalue_count;
-  int upvalue_cap;
-
-  sv_loop_t *loops;
-  int loop_count;
-  int loop_cap;
-
-  struct sv_compiler *enclosing;
-  sv_ast_t **field_inits;
-  
-  int field_init_count;
-  int *computed_key_locals;
-  int param_count;
-  
-  bool is_arrow;
-  bool is_async;
-  bool is_strict;
-  sv_compile_mode_t mode;
-  
-  bool is_tla;
-  int try_depth;
-  int with_depth;
-  int strict_args_local;
-  int new_target_local;
-  int super_local;
-
-  const char *pending_label;
-  uint32_t pending_label_len;
-
-  const char *inferred_name;
-  uint32_t inferred_name_len;
-
-  sv_srcpos_t *srcpos;
-  int srcpos_count;
-  int srcpos_cap;
-  uint32_t last_srcpos_off;
-  uint32_t last_srcpos_end;
-
-  sv_type_info_t *slot_types;
-  int slot_type_cap;
-
-  sv_deferred_export_t *deferred_exports;
-  int deferred_export_count;
-  int deferred_export_cap;
-
-  struct const_dedup_entry *const_dedup;
-  struct sv_line_table *line_table;
-} sv_compiler_t;
-
-typedef struct const_dedup_entry {
-  const char *str;
-  size_t len;
-  int index;
-  UT_hash_handle hh;
-} const_dedup_entry_t;
-
-typedef struct sv_line_table {
-  uint32_t *offsets;
-  int count;
-} sv_line_table_t;
-
-static sv_line_table_t *build_line_table(const char *source, ant_offset_t source_len) {
-  if (!source || source_len <= 0) return NULL;
-  sv_line_table_t *lt = malloc(sizeof(sv_line_table_t));
-  if (!lt) return NULL;
-
-  int cap = (int)(source_len / 32) + 64;
-  lt->offsets = malloc((size_t)cap * sizeof(uint32_t));
-  lt->count = 0;
-  lt->offsets[lt->count++] = 0;
-
-  for (ant_offset_t i = 0; i < source_len; i++) {
-    if (source[i] == '\n') {
-      if (lt->count >= cap) {
-        cap *= 2;
-        lt->offsets = realloc(lt->offsets, (size_t)cap * sizeof(uint32_t));
-      }
-      lt->offsets[lt->count++] = (uint32_t)(i + 1);
-    }
-  }
-  return lt;
-}
-
-static void free_line_table(sv_line_table_t *lt) {
-  if (!lt) return;
-  free(lt->offsets);
-  free(lt);
-}
-
-static void line_table_lookup(sv_line_table_t *lt, uint32_t off, uint32_t *out_line, uint32_t *out_col) {
-  int lo = 0, hi = lt->count - 1;
-  while (lo < hi) {
-    int mid = lo + (hi - lo + 1) / 2;
-    if (lt->offsets[mid] <= off) lo = mid;
-    else hi = mid - 1;
-  }
-  *out_line = (uint32_t)(lo + 1);
-  *out_col = off - lt->offsets[lo] + 1;
-}
-
-static sv_func_t *compile_function_body(
-  sv_compiler_t *enclosing,
-  sv_ast_t *node, sv_compile_mode_t mode
-);
-
-static void compile_expr(sv_compiler_t *c, sv_ast_t *node);
-static void compile_stmt(sv_compiler_t *c, sv_ast_t *node);
-static void compile_stmts(sv_compiler_t *c, sv_ast_list_t *list);
-static void compile_binary(sv_compiler_t *c, sv_ast_t *node);
-static void compile_unary(sv_compiler_t *c, sv_ast_t *node);
-static void compile_update(sv_compiler_t *c, sv_ast_t *node);
-static void compile_assign(sv_compiler_t *c, sv_ast_t *node);
-static void compile_lhs_set(sv_compiler_t *c, sv_ast_t *target, bool keep);
-static void compile_ternary(sv_compiler_t *c, sv_ast_t *node);
-static void compile_tail_return_expr(sv_compiler_t *c, sv_ast_t *expr);
-static void compile_typeof(sv_compiler_t *c, sv_ast_t *node);
-static void compile_delete(sv_compiler_t *c, sv_ast_t *node);
-static void compile_template(sv_compiler_t *c, sv_ast_t *node);
-static void compile_call(sv_compiler_t *c, sv_ast_t *node);
-static void compile_new(sv_compiler_t *c, sv_ast_t *node);
-static void compile_member(sv_compiler_t *c, sv_ast_t *node);
-static void compile_optional(sv_compiler_t *c, sv_ast_t *node);
-static void compile_optional_get(sv_compiler_t *c, sv_ast_t *node);
-static void compile_array(sv_compiler_t *c, sv_ast_t *node);
-static void compile_object(sv_compiler_t *c, sv_ast_t *node);
-static void compile_func_expr(sv_compiler_t *c, sv_ast_t *node);
-static void compile_array_destructure(sv_compiler_t *c, sv_ast_t *pat, bool keep);
-static void compile_object_destructure(sv_compiler_t *c, sv_ast_t *pat, bool keep);
-static void compile_var_decl(sv_compiler_t *c, sv_ast_t *node);
-static void compile_import_decl(sv_compiler_t *c, sv_ast_t *node);
-static void compile_export_decl(sv_compiler_t *c, sv_ast_t *node);
-static void compile_destructure_binding(sv_compiler_t *c, sv_ast_t *pat, sv_var_kind_t kind);
-static void compile_if(sv_compiler_t *c, sv_ast_t *node);
-static void compile_while(sv_compiler_t *c, sv_ast_t *node);
-static void compile_do_while(sv_compiler_t *c, sv_ast_t *node);
-static void compile_for(sv_compiler_t *c, sv_ast_t *node);
-static void compile_for_in(sv_compiler_t *c, sv_ast_t *node);
-static void compile_for_of(sv_compiler_t *c, sv_ast_t *node);
-static void compile_break(sv_compiler_t *c, sv_ast_t *node);
-static void compile_continue(sv_compiler_t *c, sv_ast_t *node);
-static void compile_try(sv_compiler_t *c, sv_ast_t *node);
-static void compile_switch(sv_compiler_t *c, sv_ast_t *node);
-static void compile_label(sv_compiler_t *c, sv_ast_t *node);
-static void compile_class(sv_compiler_t *c, sv_ast_t *node);
-
-static uint8_t infer_expr_type(sv_compiler_t *c, sv_ast_t *node);
 
 static const char *pin_source_text(const char *source, ant_offset_t source_len) {
   if (!source || source_len <= 0) return source;
@@ -276,9 +73,8 @@ static void emit_srcpos(sv_compiler_t *c, sv_ast_t *node) {
   if (c->srcpos_count > 0 && c->last_srcpos_off == off && c->last_srcpos_end == end) return;
 
   uint32_t line, col;
-  if (c->line_table) {
-    line_table_lookup(c->line_table, off, &line, &col);
-  } else if (c->srcpos_count > 0 && off >= c->last_srcpos_off) {
+  if (c->line_table) sv_compile_ctx_line_table_lookup(c->line_table, off, &line, &col);
+  else if (c->srcpos_count > 0 && off >= c->last_srcpos_off) {
     line = c->srcpos[c->srcpos_count - 1].line;
     col = c->srcpos[c->srcpos_count - 1].col;
     for (uint32_t i = c->last_srcpos_off; i < off; i++) {
@@ -600,11 +396,25 @@ static inline bool has_implicit_arguments_obj(const sv_compiler_t *c) {
 }
 
 static int resolve_local(sv_compiler_t *c, const char *name, uint32_t len) {
+  if (c->local_lookup_heads && c->local_lookup_cap > 0) {
+    uint32_t hash = sv_compile_ctx_hash_local_name(name, len);
+    int bucket = (int)(hash & (uint32_t)(c->local_lookup_cap - 1));
+    for (int i = c->local_lookup_heads[bucket]; i != -1; i = c->locals[i].lookup_next) {
+      sv_local_t *loc = &c->locals[i];
+      if (
+        loc->name_hash == hash &&
+        loc->name_len == len &&
+        memcmp(loc->name, name, len) == 0
+      ) return i;
+    }
+    return -1;
+  }
+
   for (int i = c->local_count - 1; i >= 0; i--) {
     sv_local_t *loc = &c->locals[i];
-    if (loc->name_len == len && memcmp(loc->name, name, len) == 0)
-      return i;
+    if (loc->name_len == len && memcmp(loc->name, name, len) == 0) return i;
   }
+  
   return -1;
 }
 
@@ -612,6 +422,7 @@ static int add_local(
   sv_compiler_t *c, const char *name, uint32_t len,
   bool is_const, int depth
 ) {
+  sv_compile_ctx_ensure_local_lookup_capacity(c, c->local_count + 1);
   if (c->local_count >= c->local_cap) {
     c->local_cap = c->local_cap ? c->local_cap * 2 : 16;
     c->locals = realloc(c->locals, (size_t)c->local_cap * sizeof(sv_local_t));
@@ -621,9 +432,12 @@ static int add_local(
     c->max_local_count = c->local_count;
   c->locals[idx] = (sv_local_t){
     .name = name, .name_len = len,
+    .name_hash = sv_compile_ctx_hash_local_name(name, len),
+    .lookup_next = -1,
     .depth = depth, .is_const = is_const, .captured = false,
     .inferred_type = SV_TI_UNKNOWN,
   };
+  sv_compile_ctx_local_lookup_insert(c, idx);
   return idx;
 }
 
@@ -875,6 +689,7 @@ static void end_scope(sv_compiler_t *c) {
       emit_op(c, OP_CLOSE_UPVAL);
       emit_u16(c, (uint16_t)frame_slot);
     }
+    sv_compile_ctx_local_lookup_remove(c, c->local_count - 1);
     c->local_count--;
   }
   c->scope_depth--;
@@ -1406,7 +1221,7 @@ static void compile_yield_star_expr(sv_compiler_t *c, sv_ast_t *node) {
   emit_u16(c, base_slot);
 }
 
-static void compile_expr(sv_compiler_t *c, sv_ast_t *node) {
+void compile_expr(sv_compiler_t *c, sv_ast_t *node) {
   if (!node) { emit_op(c, OP_UNDEF); return; }
   emit_srcpos(c, node);
 
@@ -1648,7 +1463,7 @@ static void compile_expr(sv_compiler_t *c, sv_ast_t *node) {
   }
 }
 
-static void compile_binary(sv_compiler_t *c, sv_ast_t *node) {
+void compile_binary(sv_compiler_t *c, sv_ast_t *node) {
   uint8_t op = node->op;
 
   if (op == TOK_LAND) {
@@ -1734,7 +1549,7 @@ static void compile_binary(sv_compiler_t *c, sv_ast_t *node) {
   }
 }
 
-static void compile_unary(sv_compiler_t *c, sv_ast_t *node) {
+void compile_unary(sv_compiler_t *c, sv_ast_t *node) {
   compile_expr(c, node->right);
   switch (node->op) {
     case TOK_NOT:    emit_op(c, OP_NOT);   break;
@@ -1746,7 +1561,7 @@ static void compile_unary(sv_compiler_t *c, sv_ast_t *node) {
 }
 
 
-static void compile_update(sv_compiler_t *c, sv_ast_t *node) {
+void compile_update(sv_compiler_t *c, sv_ast_t *node) {
   bool prefix = (node->flags & 1);
   bool is_inc = (node->op == TOK_POSTINC);
   sv_ast_t *target = node->right;
@@ -1794,7 +1609,7 @@ static void compile_update(sv_compiler_t *c, sv_ast_t *node) {
   }
 }
 
-static void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
+void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
   sv_ast_t *target = node->left;
   uint8_t op = node->op;
 
@@ -1978,7 +1793,7 @@ static void compile_assign(sv_compiler_t *c, sv_ast_t *node) {
   }
 }
 
-static void compile_lhs_set(sv_compiler_t *c, sv_ast_t *target, bool keep) {
+void compile_lhs_set(sv_compiler_t *c, sv_ast_t *target, bool keep) {
   if (target->type == N_IDENT) {
     emit_set_var(c, target->str, target->len, keep);
   } else if (target->type == N_MEMBER && !(target->flags & 1)) {
@@ -1999,7 +1814,7 @@ static void compile_lhs_set(sv_compiler_t *c, sv_ast_t *target, bool keep) {
   }
 }
 
-static void compile_ternary(sv_compiler_t *c, sv_ast_t *node) {
+void compile_ternary(sv_compiler_t *c, sv_ast_t *node) {
   compile_expr(c, node->cond);
   int else_jump = emit_jump(c, OP_JMP_FALSE);
   compile_expr(c, node->left);
@@ -2009,7 +1824,7 @@ static void compile_ternary(sv_compiler_t *c, sv_ast_t *node) {
   patch_jump(c, end_jump);
 }
 
-static void compile_typeof(sv_compiler_t *c, sv_ast_t *node) {
+void compile_typeof(sv_compiler_t *c, sv_ast_t *node) {
   sv_ast_t *arg = node->right;
   if (arg->type == N_IDENT) {
     int local = resolve_local(c, arg->str, arg->len);
@@ -2068,7 +1883,7 @@ static void compile_delete_optional(sv_compiler_t *c, sv_ast_t *arg) {
   patch_jump(c, end_jump);
 }
 
-static void compile_delete(sv_compiler_t *c, sv_ast_t *node) {
+void compile_delete(sv_compiler_t *c, sv_ast_t *node) {
   sv_ast_t *arg = node->right;
   if (arg->type == N_OPTIONAL) {
     compile_delete_optional(c, arg);
@@ -2092,7 +1907,7 @@ static void compile_delete(sv_compiler_t *c, sv_ast_t *node) {
   }
 }
 
-static void compile_template(sv_compiler_t *c, sv_ast_t *node) {
+void compile_template(sv_compiler_t *c, sv_ast_t *node) {
   int n = node->args.count;
   if (n == 0) {
     emit_constant(c, js_mkstr_permanent(c->js, "", 0));
@@ -2302,7 +2117,7 @@ static void compile_call_optional(
   compile_optional_call_after_setup(c, node, kind, has_spread);
 }
 
-static void compile_call(sv_compiler_t *c, sv_ast_t *node) {
+void compile_call(sv_compiler_t *c, sv_ast_t *node) {
   sv_ast_t *callee = node->left;
   bool has_spread = call_has_spread_arg(node);
 
@@ -2371,7 +2186,7 @@ static void compile_call(sv_compiler_t *c, sv_ast_t *node) {
   compile_call_emit_invoke(c, node, kind, has_spread);
 }
 
-static void compile_new(sv_compiler_t *c, sv_ast_t *node) {
+void compile_new(sv_compiler_t *c, sv_ast_t *node) {
   compile_expr(c, node->left);
   emit_op(c, OP_DUP);
   if (call_has_spread_arg(node)) {
@@ -2387,7 +2202,7 @@ static void compile_new(sv_compiler_t *c, sv_ast_t *node) {
   }
 }
 
-static void compile_member(sv_compiler_t *c, sv_ast_t *node) {
+void compile_member(sv_compiler_t *c, sv_ast_t *node) {
   if (is_ident_name(node->left, "super")) {
     emit_op(c, OP_THIS);
     emit_get_var(c, "super", 5);
@@ -2423,7 +2238,7 @@ static void compile_member(sv_compiler_t *c, sv_ast_t *node) {
   if (end_jump >= 0) patch_jump(c, end_jump);
 }
 
-static void compile_optional_get(sv_compiler_t *c, sv_ast_t *node) {
+void compile_optional_get(sv_compiler_t *c, sv_ast_t *node) {
   if (node->flags & 1) {
     compile_expr(c, node->right);
     emit_op(c, OP_GET_ELEM_OPT);
@@ -2433,12 +2248,12 @@ static void compile_optional_get(sv_compiler_t *c, sv_ast_t *node) {
   }
 }
 
-static void compile_optional(sv_compiler_t *c, sv_ast_t *node) {
+void compile_optional(sv_compiler_t *c, sv_ast_t *node) {
   compile_expr(c, node->left);
   compile_optional_get(c, node);
 }
 
-static void compile_array(sv_compiler_t *c, sv_ast_t *node) {
+void compile_array(sv_compiler_t *c, sv_ast_t *node) {
   int count = node->args.count;
   bool has_spread = false;
   for (int i = 0; i < count; i++) {
@@ -2471,7 +2286,7 @@ static void compile_array(sv_compiler_t *c, sv_ast_t *node) {
   }
 }
 
-static void compile_object(sv_compiler_t *c, sv_ast_t *node) {
+void compile_object(sv_compiler_t *c, sv_ast_t *node) {
   emit_op(c, OP_OBJECT);
   for (int i = 0; i < node->args.count; i++) {
     sv_ast_t *prop = node->args.items[i];
@@ -2528,7 +2343,7 @@ static void compile_object(sv_compiler_t *c, sv_ast_t *node) {
   }
 }
 
-static void compile_func_expr(sv_compiler_t *c, sv_ast_t *node) {
+void compile_func_expr(sv_compiler_t *c, sv_ast_t *node) {
   bool has_name = node->str && node->len > 0 && !(node->flags & FN_ARROW);
   int name_local = -1;
 
@@ -2753,12 +2568,12 @@ static void compile_destructure_pattern(
   if (consume_source) emit_op(c, OP_POP);
 }
 
-static void compile_array_destructure(sv_compiler_t *c, sv_ast_t *pat,
+void compile_array_destructure(sv_compiler_t *c, sv_ast_t *pat,
                                       bool keep) {
   compile_destructure_pattern(c, pat, keep, true, DESTRUCTURE_ASSIGN, SV_VAR_LET);
 }
 
-static void compile_object_destructure(sv_compiler_t *c, sv_ast_t *pat,
+void compile_object_destructure(sv_compiler_t *c, sv_ast_t *pat,
                                        bool keep) {
   compile_destructure_pattern(c, pat, keep, true, DESTRUCTURE_ASSIGN, SV_VAR_LET);
 }
@@ -2792,7 +2607,7 @@ static void compile_tail_call(sv_compiler_t *c, sv_ast_t *node) {
   emit_u16(c, (uint16_t)argc);
 }
 
-static void compile_tail_return_expr(sv_compiler_t *c, sv_ast_t *expr) {
+void compile_tail_return_expr(sv_compiler_t *c, sv_ast_t *expr) {
   if (expr->type == N_TERNARY) {
     compile_expr(c, expr->cond);
     int else_jump = emit_jump(c, OP_JMP_FALSE);
@@ -2819,12 +2634,12 @@ static void compile_tail_return_expr(sv_compiler_t *c, sv_ast_t *expr) {
   emit_op(c, OP_RETURN);
 }
 
-static void compile_stmts(sv_compiler_t *c, sv_ast_list_t *list) {
+void compile_stmts(sv_compiler_t *c, sv_ast_list_t *list) {
   for (int i = 0; i < list->count; i++)
     compile_stmt(c, list->items[i]);
 }
 
-static void compile_stmt(sv_compiler_t *c, sv_ast_t *node) {
+void compile_stmt(sv_compiler_t *c, sv_ast_t *node) {
   if (!node) return;
   emit_srcpos(c, node);
 
@@ -2944,7 +2759,7 @@ enum {
   IMPORT_BIND_NAMESPACE = 1 << 1,
 };
 
-static void compile_import_decl(sv_compiler_t *c, sv_ast_t *node) {
+void compile_import_decl(sv_compiler_t *c, sv_ast_t *node) {
   if (!node->right) return;
   bool repl_top = is_repl_top_level(c);
 
@@ -3065,7 +2880,7 @@ static void compile_export_pattern(sv_compiler_t *c, sv_ast_t *pat) {
   }
 }
 
-static void compile_export_decl(sv_compiler_t *c, sv_ast_t *node) {
+void compile_export_decl(sv_compiler_t *c, sv_ast_t *node) {
   if (!node) return;
 
   if (node->flags & EX_DEFAULT) {
@@ -3151,7 +2966,7 @@ static void compile_export_decl(sv_compiler_t *c, sv_ast_t *node) {
   }
 }
 
-static void compile_var_decl(sv_compiler_t *c, sv_ast_t *node) {
+void compile_var_decl(sv_compiler_t *c, sv_ast_t *node) {
   sv_var_kind_t kind = node->var_kind;
   bool is_const = (kind == SV_VAR_CONST);
   bool repl_top = is_repl_top_level(c);
@@ -3215,7 +3030,7 @@ static void compile_var_decl(sv_compiler_t *c, sv_ast_t *node) {
   }
 }
 
-static void compile_destructure_binding(sv_compiler_t *c, sv_ast_t *pat,
+void compile_destructure_binding(sv_compiler_t *c, sv_ast_t *pat,
                                          sv_var_kind_t kind) {
   compile_destructure_pattern(c, pat, false, false, DESTRUCTURE_BIND, kind);
 }
@@ -3255,7 +3070,7 @@ static bool fold_static_typeof_compare(
 }
 
 
-static void compile_if(sv_compiler_t *c, sv_ast_t *node) {
+void compile_if(sv_compiler_t *c, sv_ast_t *node) {
   bool folded_truth = false;
   if (fold_static_typeof_compare(c, node->cond, &folded_truth)) {
     if (folded_truth) compile_stmt(c, node->left);
@@ -3277,7 +3092,7 @@ static void compile_if(sv_compiler_t *c, sv_ast_t *node) {
 }
 
 
-static void compile_while(sv_compiler_t *c, sv_ast_t *node) {
+void compile_while(sv_compiler_t *c, sv_ast_t *node) {
   int loop_start = c->code_len;
   push_loop(c, loop_start, NULL, 0, false);
 
@@ -3295,7 +3110,7 @@ static void compile_while(sv_compiler_t *c, sv_ast_t *node) {
 }
 
 
-static void compile_do_while(sv_compiler_t *c, sv_ast_t *node) {
+void compile_do_while(sv_compiler_t *c, sv_ast_t *node) {
   int loop_start = c->code_len;
   push_loop(c, loop_start, NULL, 0, false);
 
@@ -3378,7 +3193,7 @@ static void for_collect_var_decl_slots(sv_compiler_t *c, sv_ast_t *init_var,
   }
 }
 
-static void compile_for(sv_compiler_t *c, sv_ast_t *node) {
+void compile_for(sv_compiler_t *c, sv_ast_t *node) {
   begin_scope(c);
 
   int *iter_slots = NULL;
@@ -3408,20 +3223,17 @@ static void compile_for(sv_compiler_t *c, sv_ast_t *node) {
 
   int iter_inner_start = -1;
   if (iter_count > 0) {
-    begin_scope(c);
-    iter_inner_start = c->local_count;
-    for (int i = 0; i < iter_count; i++) {
-      int outer_idx = iter_slots[i];
-      sv_local_t outer = c->locals[outer_idx];
-      emit_get_local(c, outer_idx);
-      int inner_idx = add_local(c, outer.name, outer.name_len,
-                                outer.is_const, c->scope_depth);
-      emit_put_local(c, inner_idx);
-    }
-  }
+  begin_scope(c);
+  iter_inner_start = c->local_count;
+  for (int i = 0; i < iter_count; i++) {
+    int outer_idx = iter_slots[i];
+    sv_local_t outer = c->locals[outer_idx];
+    emit_get_local(c, outer_idx);
+    int inner_idx = add_local(c, outer.name, outer.name_len, outer.is_const, c->scope_depth);
+    emit_put_local(c, inner_idx);
+  }}
 
   compile_stmt(c, node->body);
-
   sv_loop_t *loop = &c->loops[c->loop_count - 1];
   for (int i = 0; i < loop->continues.count; i++)
     patch_jump(c, loop->continues.offsets[i]);
@@ -3479,12 +3291,12 @@ static void compile_for(sv_compiler_t *c, sv_ast_t *node) {
 
 static void compile_for_each(sv_compiler_t *c, sv_ast_t *node, bool is_for_of);
 
-static void compile_for_in(sv_compiler_t *c, sv_ast_t *node) {
+void compile_for_in(sv_compiler_t *c, sv_ast_t *node) {
   compile_for_each(c, node, false);
 }
 
 
-static void compile_for_of(sv_compiler_t *c, sv_ast_t *node) {
+void compile_for_of(sv_compiler_t *c, sv_ast_t *node) {
   compile_for_each(c, node, true);
 }
 
@@ -3709,7 +3521,7 @@ for (int i = c->local_count - 1; i >= 0; i--) {
   }
 }}
 
-static void compile_break(sv_compiler_t *c, sv_ast_t *node) {
+void compile_break(sv_compiler_t *c, sv_ast_t *node) {
   if (c->loop_count == 0) return;
 
   int target = c->loop_count - 1;
@@ -3730,7 +3542,7 @@ static void compile_break(sv_compiler_t *c, sv_ast_t *node) {
 }
 
 
-static void compile_continue(sv_compiler_t *c, sv_ast_t *node) {
+void compile_continue(sv_compiler_t *c, sv_ast_t *node) {
   for (int i = c->loop_count - 1; i >= 0; i--) {
   if (node->str) {
     if (
@@ -3758,20 +3570,18 @@ static void compile_finally_block(sv_compiler_t *c, sv_ast_t *finally_body) {
 static void compile_catch_body(sv_compiler_t *c, sv_ast_t *node) {
   begin_scope(c);
   if (node->catch_param && node->catch_param->type == N_IDENT) {
-    int loc = add_local(c, node->catch_param->str,
-                        node->catch_param->len, false, c->scope_depth);
+    int loc = add_local(c, node->catch_param->str, node->catch_param->len, false, c->scope_depth);
     emit_put_local(c, loc);
   } else if (node->catch_param && is_destructure_pattern_node(node->catch_param)) {
     compile_destructure_binding(c, node->catch_param, SV_VAR_LET);
     emit_op(c, OP_POP);
-  } else {
-    emit_op(c, OP_POP);  
-  }
+  } else emit_op(c, OP_POP);  
+  
   compile_stmt(c, node->catch_body);
   end_scope(c);
 }
 
-static void compile_try(sv_compiler_t *c, sv_ast_t *node) {
+void compile_try(sv_compiler_t *c, sv_ast_t *node) {
   c->try_depth++;
   int try_jump = emit_jump(c, OP_TRY_PUSH);
 
@@ -3829,7 +3639,7 @@ static void compile_try(sv_compiler_t *c, sv_ast_t *node) {
 }
 
 
-static void compile_switch(sv_compiler_t *c, sv_ast_t *node) {
+void compile_switch(sv_compiler_t *c, sv_ast_t *node) {
   int case_count = node->args.count;
   int default_case = -1;
   int *match_to_stub = NULL;
@@ -3899,12 +3709,13 @@ static void compile_switch(sv_compiler_t *c, sv_ast_t *node) {
 
 
 static inline bool is_loop_node(sv_ast_t *n) {
-  return n && (n->type == N_WHILE || n->type == N_DO_WHILE ||
-               n->type == N_FOR   || n->type == N_FOR_IN  ||
-               n->type == N_FOR_OF || n->type == N_FOR_AWAIT_OF);
+  return n && 
+    (n->type == N_WHILE || n->type == N_DO_WHILE ||
+    n->type == N_FOR    || n->type == N_FOR_IN   ||
+    n->type == N_FOR_OF || n->type == N_FOR_AWAIT_OF);
 }
 
-static void compile_label(sv_compiler_t *c, sv_ast_t *node) {
+void compile_label(sv_compiler_t *c, sv_ast_t *node) {
   if (is_loop_node(node->body)) {
     c->pending_label = node->str;
     c->pending_label_len = node->len;
@@ -4003,11 +3814,13 @@ static inline int compile_class_precompute_key(sv_compiler_t *c, sv_ast_t *key_e
   return loc;
 }
 
-static void compile_class(sv_compiler_t *c, sv_ast_t *node) {
+void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   int outer_name_local = -1;
   bool class_repl_top = is_repl_top_level(c);
+
   sv_ast_t *ctor_method = NULL;
   bool has_static_name = false;
+
   int field_count = 0;
   int computed_method_count = 0;
 
@@ -4089,16 +3902,20 @@ static void compile_class(sv_compiler_t *c, sv_ast_t *node) {
     c->computed_key_locals = NULL;
   } else if (field_count > 0) {
     c->computed_key_locals = computed_key_locals;
-    sv_compiler_t comp = {0};
-    comp.js = c->js;
-    comp.filename = c->filename;
-    comp.source = c->source;
-    comp.source_len = c->source_len;
-    comp.line_table = c->line_table;
-    comp.enclosing = c;
-    comp.scope_depth = 0;
-    comp.is_strict = c->is_strict;
-    comp.param_count = 0;
+    sv_compiler_t comp;
+    sv_compile_ctx_init_child(&comp, c, NULL, c->mode);
+
+    if (node->left) {
+      emit_op(&comp, OP_THIS);
+      emit_op(&comp, OP_SPECIAL_OBJ);
+      emit(&comp, 2);
+      emit_op(&comp, OP_SWAP);
+      emit_op(&comp, OP_SPECIAL_OBJ);
+      emit(&comp, 0);
+      emit_op(&comp, OP_SUPER_APPLY);
+      emit_u16(&comp, 1);
+      emit_op(&comp, OP_POP);
+    }
 
     emit_field_inits(&comp, field_inits, field_count);
     emit_op(&comp, OP_RETURN_UNDEF);
@@ -4153,9 +3970,7 @@ static void compile_class(sv_compiler_t *c, sv_ast_t *node) {
       name[node->len] = '\0';
       fn->name = name;
     }
-    free(comp.code); free(comp.constants); free(comp.atoms);
-    free(comp.locals); free(comp.upval_descs); free(comp.loops);
-    free(comp.slot_types);
+    sv_compile_ctx_cleanup(&comp);
 
     int idx = add_constant(c, mkval(T_CFUNC, (uintptr_t)fn));
     emit_op(c, OP_CLOSURE);
@@ -4182,6 +3997,11 @@ static void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   emit_put_local(c, proto_local);
   emit_put_local(c, ctor_local);
 
+  if (inner_name_local >= 0) {
+    emit_get_local(c, ctor_local);
+    emit_put_local(c, inner_name_local);
+  }
+
   for (int i = 0; i < node->args.count; i++) {
     sv_ast_t *m = node->args.items[i];
     if (m->type == N_STATIC_BLOCK) {
@@ -4206,11 +4026,6 @@ static void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   free(method_comp_keys);
   emit_get_local(c, ctor_local);
 
-  if (inner_name_local >= 0) {
-    emit_op(c, OP_DUP);
-    emit_put_local(c, inner_name_local);
-  }
-
   if (class_repl_top && node->str) {
     emit_op(c, OP_DUP);
     emit_atom_op(c, OP_PUT_GLOBAL, node->str, node->len);
@@ -4223,27 +4038,13 @@ static void compile_class(sv_compiler_t *c, sv_ast_t *node) {
   if (node->str) end_scope(c);
 }
 
-static sv_func_t *compile_function_body(
+sv_func_t *compile_function_body(
   sv_compiler_t *enclosing,
   sv_ast_t *node,
   sv_compile_mode_t mode
 ) {
-  sv_compiler_t comp = {0};
-  comp.js = enclosing->js;
-  comp.filename = enclosing->filename;
-  comp.source = enclosing->source;
-  comp.source_len = enclosing->source_len;
-  comp.line_table = enclosing->line_table;
-  comp.enclosing = enclosing;
-  comp.scope_depth = 0;
-  comp.is_arrow = !!(node->flags & FN_ARROW);
-  comp.is_async = !!(node->flags & FN_ASYNC);
-  comp.is_strict = enclosing->is_strict;
-  comp.mode = mode;
-  comp.strict_args_local = -1;
-  comp.new_target_local = -1;
-  comp.super_local = -1;
-  comp.param_count = node->args.count;
+  sv_compiler_t comp;
+  sv_compile_ctx_init_child(&comp, enclosing, node, mode);
 
   for (int i = 0; i < node->args.count; i++) {
     sv_ast_t *p = node->args.items[i];
@@ -4473,16 +4274,17 @@ static sv_func_t *compile_function_body(
     }
 
     free(param_bind_locals);
+    sv_ast_t *body = node->body;
 
-    if (node->body) {
-      if (node->body->type == N_BLOCK) {
-        if (!repl_top) {
-          for (int i = 0; i < node->body->args.count; i++)
-            hoist_var_decls(&comp, node->body->args.items[i]);
-          hoist_lexical_decls(&comp, &node->body->args);
-        }
-        hoist_func_decls(&comp, &node->body->args);
-      } else if (!repl_top) hoist_var_decls(&comp, node->body);
+    if (body && body->type != N_BLOCK) {
+      if (!repl_top) hoist_var_decls(&comp, body);
+    } else if (body) {
+      if (!repl_top) {
+        for (int i = 0; i < body->args.count; i++)
+          hoist_var_decls(&comp, body->args.items[i]);
+        hoist_lexical_decls(&comp, &body->args);
+      }
+      hoist_func_decls(&comp, &body->args);
     }
   }
 
@@ -4630,35 +4432,20 @@ static sv_func_t *compile_function_body(
   }
 
   if (func->is_async) {
-    const uint8_t *ip = func->code;
-    const uint8_t *end = func->code + func->code_len;
-    while (ip < end) {
-      sv_op_t op = (sv_op_t)*ip;
-      if (op == OP_AWAIT || op == OP_FOR_AWAIT_OF || op == OP_AWAIT_ITER_NEXT) {
-        func->has_await = true;
-        break;
-      }
-      int sz = sv_op_size[op];
-      if (sz <= 0) break;
-      ip += sz;
+  const uint8_t *ip = func->code;
+  const uint8_t *end = func->code + func->code_len;
+  while (ip < end) {
+    sv_op_t op = (sv_op_t)*ip;
+    if (op == OP_AWAIT || op == OP_FOR_AWAIT_OF || op == OP_AWAIT_ITER_NEXT) {
+      func->has_await = true;
+      break;
     }
-  }
-
-  free(comp.code);
-  free(comp.constants);
-  free(comp.atoms);
-  free(comp.locals);
-  free(comp.upval_descs);
-  free(comp.loops);
-  free(comp.srcpos);
-  free(comp.slot_types);
-
-  { 
-    const_dedup_entry_t *e, *tmp;
-    HASH_ITER(hh, comp.const_dedup, e, tmp) { 
-    HASH_DEL(comp.const_dedup, e); free(e); 
+    int sz = sv_op_size[op];
+    if (sz <= 0) break;
+    ip += sz;
   }}
 
+  sv_compile_ctx_cleanup(&comp);
   return func;
 }
 
@@ -4830,17 +4617,21 @@ void sv_disasm(ant_t *js, sv_func_t *func, const char *label) {
   fprintf(stderr, "\n");
 
   for (int i = 0; i < func->const_count; i++) {
-    if (vtype(func->constants[i]) == T_CFUNC) {
-      sv_func_t *child = (sv_func_t *)(uintptr_t)vdata(func->constants[i]);
-      char child_label[256];
-      snprintf(child_label, sizeof(child_label), "%s/closure[%d]", label, i);
-      sv_disasm(js, child, child_label);
-    }
-  }
+  if (vtype(func->constants[i]) == T_CFUNC) {
+    sv_func_t *child = (sv_func_t *)(uintptr_t)vdata(func->constants[i]);
+    char child_label[256];
+    snprintf(child_label, sizeof(child_label), "%s/closure[%d]", label, i);
+    sv_disasm(js, child, child_label);
+  }}
 }
 
 sv_func_t *sv_compile(ant_t *js, sv_ast_t *program, sv_compile_mode_t mode, const char *source, ant_offset_t source_len) {
   if (!program || program->type != N_PROGRAM) return NULL;
+  if (sv_compile_trace_unlikely) fprintf(
+    stderr, "[compile] start kind=program mode=%d len=%u body=%d strict=%d\n",
+    (int)mode, (unsigned)source_len,
+    program->args.count, (program->flags & FN_PARSE_STRICT) != 0 ? 1 : 0
+  );
   
   static const char *k_top_name_script = "<script>";
   static const char *k_top_name_module = "<module>";
@@ -4868,22 +4659,33 @@ sv_func_t *sv_compile(ant_t *js, sv_ast_t *program, sv_compile_mode_t mode, cons
   top_fn.body = sv_ast_new(N_BLOCK);
   top_fn.body->args = program->args;
 
-  sv_compiler_t root = {0};
-  root.js = js;
-  root.filename = js->filename;
-  root.source = pin_source_text(source, source_len);
-  root.source_len = source_len;
-  root.mode = mode;
-  root.is_strict = ((program->flags & FN_PARSE_STRICT) != 0);
-  root.line_table = build_line_table(root.source, source_len);
-  sv_func_t *func = compile_function_body(&root, &top_fn, mode);
-  free_line_table(root.line_table);
-  if (js->thrown_exists || !func) return NULL;
+  sv_compiler_t root;
+  sv_compile_ctx_init_root(
+    &root, js, js->filename,
+    pin_source_text(source, source_len),
+    source_len, mode,
+    (program->flags & FN_PARSE_STRICT) != 0,  NULL
+  );
   
+  root.line_table = sv_compile_ctx_build_line_table(root.source, source_len);
+  sv_func_t *func = compile_function_body(&root, &top_fn, mode);
+  sv_compile_ctx_free_line_table(root.line_table);
+  
+  if (sv_compile_trace_unlikely) fprintf(
+    stderr, "[compile] end kind=program mode=%d thrown=%d func=%p\n",
+    (int)mode, js->thrown_exists ? 1 : 0, (void *)func
+  );
+  
+  if (js->thrown_exists || !func) return NULL;
   return func;
 }
 
 sv_func_t *sv_compile_function(ant_t *js, const char *source, size_t len, bool is_async, bool is_generator) {
+  if (sv_compile_trace_unlikely) fprintf(
+    stderr, "[compile] start kind=function len=%u async=%d generator=%d\n",
+    (unsigned)len, is_async ? 1 : 0, is_generator ? 1 : 0
+  );
+  
   const char *prefix = is_async
     ? "(async function"
     : (is_generator ? "(function*" : "(function");
@@ -4912,17 +4714,24 @@ sv_func_t *sv_compile_function(ant_t *js, const char *source, size_t len, bool i
 
   if (!func_node) { free(wrapped); return NULL; }
 
-  sv_compiler_t root = {0};
-  root.js = js;
-  root.filename = js->filename;
-  root.source = pin_source_text(wrapped, (ant_offset_t)wrapped_len);
-  root.source_len = (ant_offset_t)wrapped_len;
-  root.mode = SV_COMPILE_SCRIPT;
-  root.is_strict = (program->flags & FN_PARSE_STRICT) != 0;
-
+  sv_compiler_t root;
+  sv_compile_ctx_init_root(
+    &root, js, js->filename,
+    pin_source_text(wrapped, (ant_offset_t)wrapped_len),
+    (ant_offset_t)wrapped_len, SV_COMPILE_SCRIPT,
+    (program->flags & FN_PARSE_STRICT) != 0, NULL
+  );
+  
+  root.line_table = sv_compile_ctx_build_line_table(root.source, (ant_offset_t)wrapped_len);
   sv_func_t *func = compile_function_body(&root, func_node, SV_COMPILE_SCRIPT);
+  sv_compile_ctx_free_line_table(root.line_table);
   free(wrapped);
 
+  if (sv_compile_trace_unlikely) fprintf(
+    stderr, "[compile] end kind=function thrown=%d func=%p\n",
+    js->thrown_exists ? 1 : 0, (void *)func
+  );
+    
   if (js->thrown_exists || !func) return NULL;
   return func;
 }
@@ -4935,6 +4744,11 @@ sv_func_t *sv_compile_function_with_params(
   size_t body_len,
   bool is_async
 ) {
+  if (sv_compile_trace_unlikely) fprintf(
+    stderr, "[compile] start kind=function-with-params len=%u params=%d async=%d\n",
+    (unsigned)body_len, param_count, is_async ? 1 : 0
+  );
+
   if (!body) {
     body = "";
     body_len = 0;
@@ -4980,16 +4794,23 @@ sv_func_t *sv_compile_function_with_params(
   if (!top_fn.body) return NULL;
   top_fn.body->args = program->args;
 
-  sv_compiler_t root = {0};
-  root.js = js;
-  root.filename = js->filename;
-  root.source = pin_source_text(body, (ant_offset_t)body_len);
-  root.source_len = (ant_offset_t)body_len;
-  root.mode = SV_COMPILE_SCRIPT;
-  root.is_strict = ((program->flags & FN_PARSE_STRICT) != 0);
-
-  sv_func_t *func = compile_function_body(&root, &top_fn, SV_COMPILE_SCRIPT);
-  if (js->thrown_exists || !func) return NULL;
+  sv_compiler_t root;
+  sv_compile_ctx_init_root(
+    &root, js, js->filename,
+    pin_source_text(body, (ant_offset_t)body_len),
+    (ant_offset_t)body_len, SV_COMPILE_SCRIPT,
+    (program->flags & FN_PARSE_STRICT) != 0, NULL
+  );
   
+  root.line_table = sv_compile_ctx_build_line_table(root.source, (ant_offset_t)body_len);
+  sv_func_t *func = compile_function_body(&root, &top_fn, SV_COMPILE_SCRIPT);
+  sv_compile_ctx_free_line_table(root.line_table);
+  
+  if (sv_compile_trace_unlikely) fprintf(
+    stderr, "[compile] end kind=function-with-params thrown=%d func=%p\n",
+    js->thrown_exists ? 1 : 0, (void *)func
+  );
+  
+  if (js->thrown_exists || !func) return NULL;
   return func;
 }

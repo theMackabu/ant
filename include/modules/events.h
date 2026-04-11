@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include "types.h"
 
+#define EVENTS_DEFAULT_MAX_LISTENERS 10
+
 ant_value_t events_library(ant_t *js);
 ant_value_t eventemitter_prototype(ant_t *js);
 

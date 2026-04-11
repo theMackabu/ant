@@ -4787,7 +4787,7 @@ static ant_value_t builtin_function_call(ant_t *js, ant_value_t *args, int nargs
   return sv_vm_call_explicit_this(js->vm, js, func, this_arg, call_args, call_nargs);
 }
 
-static int extract_array_args(ant_t *js, ant_value_t arr, ant_value_t **out_args) {
+int extract_array_args(ant_t *js, ant_value_t arr, ant_value_t **out_args) {
   int len = (int) get_array_length(js, arr);
   if (len <= 0) return 0;
   
@@ -5686,6 +5686,153 @@ static ant_value_t builtin_proto_setter(ant_t *js, ant_value_t *args, int nargs)
   return js_mkundef();
 }
 
+static ant_value_t legacy_accessor_this_obj(ant_t *js, ant_value_t this_val) {
+  uint8_t t = vtype(this_val);
+  if (t == T_UNDEF || t == T_NULL) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert undefined or null to object");
+  }
+  if (t == T_CFUNC) return js_cfunc_promote(js, this_val);
+  if (t == T_OBJ || t == T_ARR || t == T_FUNC) return js_as_obj(this_val);
+  return js_mkerr_typed(js, JS_ERR_TYPE, "Legacy accessor methods require an object receiver");
+}
+
+static bool legacy_accessor_key(
+  ant_t *js, ant_value_t key,
+  ant_value_t *key_val_out,
+  const char **key_str_out,
+  ant_offset_t *key_len_out,
+  ant_offset_t *sym_off_out
+) {
+  if (key_val_out) *key_val_out = key;
+  if (key_str_out) *key_str_out = NULL;
+  if (key_len_out) *key_len_out = 0;
+  if (sym_off_out) *sym_off_out = 0;
+
+  if (vtype(key) == T_SYMBOL) {
+    if (sym_off_out) *sym_off_out = (ant_offset_t)vdata(key);
+    return true;
+  }
+
+  ant_value_t key_val = (vtype(key) == T_STR) ? key : coerce_to_str(js, key);
+  if (is_err(key_val)) return false;
+  if (key_val_out) *key_val_out = key_val;
+  
+  ant_offset_t key_len = 0;
+  ant_offset_t key_off = vstr(js, key_val, &key_len);
+  
+  if (key_str_out) *key_str_out = (const char *)(uintptr_t)key_off;
+  if (key_len_out) *key_len_out = key_len;
+  
+  return true;
+}
+
+static ant_value_t builtin_object___defineGetter__(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t obj = legacy_accessor_this_obj(js, js->this_val);
+  if (is_err(obj)) return obj;
+  if (nargs < 2) return js_mkundef();
+
+  ant_value_t getter = args[1];
+  uint8_t gt = vtype(getter);
+  
+  if (gt != T_FUNC && gt != T_CFUNC) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Object.prototype.__defineGetter__: Expecting function");
+  }
+
+  ant_value_t key_val = js_mkundef();
+  const char *key_str = NULL;
+  ant_offset_t key_len = 0;
+  ant_offset_t sym_off = 0;
+  
+  if (!legacy_accessor_key(js, args[0], &key_val, &key_str, &key_len, &sym_off)) {
+    return key_val;
+  }
+
+  if (vtype(key_val) == T_SYMBOL) {
+    js_set_sym_getter_desc(js, js_as_obj(obj), key_val, getter, JS_DESC_E | JS_DESC_C);
+  } else js_set_getter_desc(js, js_as_obj(obj), key_str, (size_t)key_len, getter, JS_DESC_E | JS_DESC_C);
+  
+  return js_mkundef();
+}
+
+static ant_value_t builtin_object___defineSetter__(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t obj = legacy_accessor_this_obj(js, js->this_val);
+  if (is_err(obj)) return obj;
+  if (nargs < 2) return js_mkundef();
+
+  ant_value_t setter = args[1];
+  uint8_t st = vtype(setter);
+  
+  if (st != T_FUNC && st != T_CFUNC) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Object.prototype.__defineSetter__: Expecting function");
+  }
+
+  ant_value_t key_val = js_mkundef();
+  const char *key_str = NULL;
+  ant_offset_t key_len = 0;
+  ant_offset_t sym_off = 0;
+  
+  if (!legacy_accessor_key(js, args[0], &key_val, &key_str, &key_len, &sym_off)) {
+    return key_val;
+  }
+
+  if (vtype(key_val) == T_SYMBOL) {
+    js_set_sym_setter_desc(js, js_as_obj(obj), key_val, setter, JS_DESC_E | JS_DESC_C);
+  } else js_set_setter_desc(js, js_as_obj(obj), key_str, (size_t)key_len, setter, JS_DESC_E | JS_DESC_C);
+  
+  return js_mkundef();
+}
+
+static ant_value_t legacy_lookup_accessor(ant_t *js, ant_value_t this_val, ant_value_t key, bool want_getter) {
+  ant_value_t obj = legacy_accessor_this_obj(js, this_val);
+  if (is_err(obj)) return obj;
+
+  ant_value_t key_val = js_mkundef();
+  const char *key_str = NULL;
+  ant_offset_t key_len = 0;
+  ant_offset_t sym_off = 0;
+  
+  if (!legacy_accessor_key(js, key, &key_val, &key_str, &key_len, &sym_off)) {
+    return key_val;
+  }
+
+  for (ant_value_t cur = obj; is_object_type(cur); cur = get_proto(js, cur)) {
+    prop_meta_t meta;
+    bool has_meta = (vtype(key_val) == T_SYMBOL)
+      ? lookup_symbol_prop_meta(cur, sym_off, &meta)
+      : lookup_string_prop_meta(js, cur, key_str, (size_t)key_len, &meta);
+    if (has_meta) {
+      if (want_getter) return meta.has_getter ? meta.getter : js_mkundef();
+      return meta.has_setter ? meta.setter : js_mkundef();
+    }
+    
+    if (vtype(key_val) == T_SYMBOL) {
+      if (lkp_sym(js, cur, sym_off) != 0) return js_mkundef();
+    } else {
+      if (array_obj_ptr(cur) && is_length_key(key_str, key_len)) return js_mkundef();
+      if (array_obj_ptr(cur) && is_array_index(key_str, key_len)) {
+        unsigned long idx = 0;
+        if (
+          parse_array_index(key_str, key_len, get_array_length(js, cur), &idx) &&
+          arr_has(js, cur, (ant_offset_t)idx)
+        ) return js_mkundef();
+      }
+      if (lkp(js, cur, key_str, key_len) != 0) return js_mkundef();
+    }
+  }
+
+  return js_mkundef();
+}
+
+static ant_value_t builtin_object___lookupGetter__(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_mkundef();
+  return legacy_lookup_accessor(js, js->this_val, args[0], true);
+}
+
+static ant_value_t builtin_object___lookupSetter__(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_mkundef();
+  return legacy_lookup_accessor(js, js->this_val, args[0], false);
+}
+
 static ant_value_t builtin_object_create(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs == 0) return js_mkerr(js, "Object.create requires a prototype argument");
   
@@ -6526,19 +6673,29 @@ static ant_value_t object_add_descriptors_for_keys(
 
 static ant_value_t builtin_object_getOwnPropertyDescriptors(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t result = js_mkobj(js);
-  if (nargs == 0) return result;
+  if (nargs == 0 || vtype(args[0]) == T_NULL || vtype(args[0]) == T_UNDEF) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Cannot convert undefined or null to object");
+  }
 
   ant_value_t obj = args[0];
   uint8_t t = vtype(obj);
+  
+  if (t != T_OBJ && t != T_ARR && t != T_FUNC) {
+    obj = builtin_Object(js, &obj, 1);
+    if (is_err(obj)) return obj;
+    t = vtype(obj);
+  }
+  
   if (t != T_OBJ && t != T_ARR && t != T_FUNC) return result;
-
   ant_value_t names = builtin_object_getOwnPropertyNames(js, &obj, 1);
   if (is_err(names)) return names;
+  
   ant_value_t err = object_add_descriptors_for_keys(js, result, obj, names);
   if (is_err(err)) return err;
-
+  
   ant_value_t symbols = builtin_object_getOwnPropertySymbols(js, &obj, 1);
   if (is_err(symbols)) return symbols;
+  
   err = object_add_descriptors_for_keys(js, result, obj, symbols);
   if (is_err(err)) return err;
 
@@ -6939,37 +7096,49 @@ static ant_value_t builtin_array_pop(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t builtin_array_slice(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t arr = js->this_val;
-  if (vtype(arr) != T_ARR && vtype(arr) != T_OBJ) {
+  ant_value_t string_val = unwrap_primitive(js, arr);
+  bool string_like = (vtype(string_val) == T_STR);
+
+  if (!string_like && vtype(arr) != T_ARR && vtype(arr) != T_OBJ) {
     return js_mkerr(js, "slice called on non-array");
   }
   
-  ant_offset_t len = get_array_length(js, arr);
+  ant_offset_t len = 0;
+  ant_offset_t string_byte_len = 0;
+  ant_offset_t string_off = 0;
+  
+  if (string_like) {
+    string_off = vstr(js, string_val, &string_byte_len);
+    len = (ant_offset_t)utf16_strlen((const char *)(uintptr_t)string_off, string_byte_len);
+  } else len = get_array_length(js, arr);
   
   ant_offset_t start = 0, end = len;
   double dlen = D(len);
   if (nargs >= 1 && vtype(args[0]) == T_NUM) {
     double d = tod(args[0]);
-    if (d < 0) {
-      start = (ant_offset_t) (d + dlen < 0 ? 0 : d + dlen);
-    } else start = (ant_offset_t) (d > dlen ? dlen : d);
+    if (d < 0) start = (ant_offset_t) (d + dlen < 0 ? 0 : d + dlen);
+    else start = (ant_offset_t) (d > dlen ? dlen : d);
   }
   
   if (nargs >= 2 && vtype(args[1]) == T_NUM) {
     double d = tod(args[1]);
-    if (d < 0) {
-      end = (ant_offset_t) (d + dlen < 0 ? 0 : d + dlen);
-    } else {
-      end = (ant_offset_t) (d > dlen ? dlen : d);
-    }
+    if (d < 0) end = (ant_offset_t) (d + dlen < 0 ? 0 : d + dlen);
+    else end = (ant_offset_t) (d > dlen ? dlen : d);
   }
   
   if (start > end) start = end;
   ant_value_t result = array_alloc_like(js, arr);
+  
   if (is_err(result)) return result;
   ant_offset_t result_idx = 0;
   
   for (ant_offset_t i = start; i < end; i++) {
-    ant_value_t elem = arr_get(js, arr, i);
+    ant_value_t elem = js_mkundef();
+    if (string_like) {
+      uint32_t code_unit = utf16_code_unit_at((const char *)(uintptr_t)string_off, string_byte_len, i);
+      if (code_unit == 0xFFFFFFFF) break;
+      elem = js_string_from_utf16_code_unit(js, code_unit);
+    } else elem = arr_get(js, arr, i);
     arr_set(js, result, result_idx, elem);
     result_idx++;
   }
@@ -12569,6 +12738,10 @@ ant_t *js_create(void *buf, size_t len) {
   defmethod(js, object_proto, "hasOwnProperty", 14, js_mkfun(builtin_object_hasOwnProperty));
   defmethod(js, object_proto, "isPrototypeOf", 13, js_mkfun(builtin_object_isPrototypeOf));
   defmethod(js, object_proto, "propertyIsEnumerable", 20, js_mkfun(builtin_object_propertyIsEnumerable));
+  defmethod(js, object_proto, "__defineGetter__", 16, js_mkfun(builtin_object___defineGetter__));
+  defmethod(js, object_proto, "__defineSetter__", 16, js_mkfun(builtin_object___defineSetter__));
+  defmethod(js, object_proto, "__lookupGetter__", 16, js_mkfun(builtin_object___lookupGetter__));
+  defmethod(js, object_proto, "__lookupSetter__", 16, js_mkfun(builtin_object___lookupSetter__));
   
   ant_value_t proto_getter = js_mkfun(builtin_proto_getter);
   ant_value_t proto_setter = js_mkfun(builtin_proto_setter);

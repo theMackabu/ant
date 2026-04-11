@@ -34,6 +34,19 @@ typedef struct {
   const char *close;
 } util_style_entry_t;
 
+typedef enum {
+  UTIL_PARSE_ARG_TYPE_BOOLEAN = 0,
+  UTIL_PARSE_ARG_TYPE_STRING,
+} util_parse_arg_type_t;
+
+typedef struct {
+  char *name;
+  char short_name;
+  util_parse_arg_type_t type;
+  bool multiple;
+  ant_value_t default_value;
+} util_parse_arg_option_t;
+
 // TODO: migrate to crprintf
 static const util_style_entry_t util_styles[] = {
   {"bold", "\x1b[1m", "\x1b[22m"},
@@ -111,6 +124,288 @@ static bool util_sb_append_json(ant_t *js, util_sb_t *sb, ant_value_t v) {
   size_t len = 0;
   const char *s = js_getstr(js, json, &len);
   return s ? util_sb_append_n(sb, s, len) : util_sb_append_n(sb, "[Circular]", 10);
+}
+
+static bool util_set_named_value(
+  ant_t *js,
+  ant_value_t values,
+  const char *name,
+  ant_value_t value,
+  bool multiple
+) {
+  if (!multiple) {
+    js_set(js, values, name, value);
+    return !js->thrown_exists;
+  }
+
+  ant_value_t existing = js_get(js, values, name);
+  if (is_err(existing)) return false;
+
+  if (vtype(existing) == T_UNDEF) {
+    ant_value_t arr = js_mkarr(js);
+    js_arr_push(js, arr, value);
+    js_set(js, values, name, arr);
+    return !js->thrown_exists;
+  }
+
+  if (vtype(existing) == T_ARR) {
+    js_arr_push(js, existing, value);
+    return !js->thrown_exists;
+  }
+
+  ant_value_t arr = js_mkarr(js);
+  js_arr_push(js, arr, existing);
+  js_arr_push(js, arr, value);
+  js_set(js, values, name, arr);
+  return !js->thrown_exists;
+}
+
+static util_parse_arg_option_t *util_find_option_by_name(
+  util_parse_arg_option_t *options,
+  size_t option_count,
+  const char *name
+) {
+  for (size_t i = 0; i < option_count; i++) {
+    if (strcmp(options[i].name, name) == 0) return &options[i];
+  }
+  return NULL;
+}
+
+static util_parse_arg_option_t *util_find_option_by_short(
+  util_parse_arg_option_t *options,
+  size_t option_count,
+  char short_name
+) {
+  for (size_t i = 0; i < option_count; i++) {
+    if (options[i].short_name == short_name) return &options[i];
+  }
+  return NULL;
+}
+
+static void util_free_parse_options(util_parse_arg_option_t *options, size_t option_count) {
+  if (!options) return;
+  for (size_t i = 0; i < option_count; i++) free(options[i].name);
+  free(options);
+}
+
+static ant_value_t util_parse_args(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t config = nargs > 0 ? args[0] : js_mkundef();
+  if (!is_object_type(config)) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "parseArgs(config) requires an options object");
+  }
+
+  ant_value_t args_list = js_get(js, config, "args");
+  if (is_err(args_list)) return args_list;
+  if (vtype(args_list) == T_UNDEF) {
+    ant_value_t process_obj = js_get(js, js_glob(js), "process");
+    if (is_err(process_obj)) return process_obj;
+    args_list = js_get(js, process_obj, "argv");
+    if (is_err(args_list)) return args_list;
+  }
+
+  ant_value_t options_obj = js_get(js, config, "options");
+  if (is_err(options_obj)) return options_obj;
+  if (!is_object_type(options_obj)) options_obj = js_mkobj(js);
+
+  bool strict = js_truthy(js, js_get(js, config, "strict"));
+  if (vtype(js_get(js, config, "strict")) == T_UNDEF) strict = true;
+  bool allow_positionals = js_truthy(js, js_get(js, config, "allowPositionals"));
+
+  size_t option_count = 0;
+  {
+    ant_iter_t iter = js_prop_iter_begin(js, options_obj);
+    const char *key = NULL;
+    size_t key_len = 0;
+    while (js_prop_iter_next(&iter, &key, &key_len, NULL)) option_count++;
+    js_prop_iter_end(&iter);
+  }
+
+  util_parse_arg_option_t *options = NULL;
+  if (option_count > 0) {
+    options = calloc(option_count, sizeof(*options));
+    if (!options) return js_mkerr(js, "Out of memory");
+    
+    ant_iter_t iter = js_prop_iter_begin(js, options_obj);
+    const char *key = NULL;
+    size_t key_len = 0;
+    size_t idx = 0;
+    
+    while (idx < option_count && js_prop_iter_next(&iter, &key, &key_len, NULL)) {
+      ant_value_t spec = js_get(js, options_obj, key);
+      ant_value_t type_val = is_object_type(spec) ? js_get(js, spec, "type") : js_mkundef();
+      ant_value_t short_val = is_object_type(spec) ? js_get(js, spec, "short") : js_mkundef();
+      ant_value_t multiple_val = is_object_type(spec) ? js_get(js, spec, "multiple") : js_mkundef();
+      ant_value_t default_val = is_object_type(spec) ? js_get(js, spec, "default") : js_mkundef();
+      
+      options[idx].name = strndup(key, key_len);
+      if (!options[idx].name) {
+        js_prop_iter_end(&iter);
+        util_free_parse_options(options, option_count);
+        return js_mkerr(js, "Out of memory");
+      }
+      
+      options[idx].type = UTIL_PARSE_ARG_TYPE_BOOLEAN;
+      if (vtype(type_val) == T_STR) {
+        size_t type_len = 0;
+        const char *type_str = js_getstr(js, type_val, &type_len);
+        if (type_str && type_len == 6 && memcmp(type_str, "string", 6) == 0) {
+          options[idx].type = UTIL_PARSE_ARG_TYPE_STRING;
+        }
+      }
+      
+      if (vtype(short_val) == T_STR) {
+        size_t short_len = 0;
+        const char *short_str = js_getstr(js, short_val, &short_len);
+        if (short_str && short_len > 0) options[idx].short_name = short_str[0];
+      }
+      
+      options[idx].multiple = js_truthy(js, multiple_val);
+      options[idx].default_value = default_val;
+      idx++;
+    }
+    
+    js_prop_iter_end(&iter);
+  }
+
+  ant_value_t values = js_mkobj(js);
+  ant_value_t positionals = js_mkarr(js);
+  ant_value_t out = js_mkobj(js);
+
+  for (size_t i = 0; i < option_count; i++) {
+  if (vtype(options[i].default_value) != T_UNDEF) {
+  if (!util_set_named_value(js, values, options[i].name, options[i].default_value, options[i].multiple)) {
+    util_free_parse_options(options, option_count);
+    return js->thrown_exists ? js->thrown_value : js_mkerr(js, "parseArgs failed to set default");
+  }}}
+
+  ant_offset_t arg_len = js_arr_len(js, args_list);
+  bool stop_parsing = false;
+
+  for (ant_offset_t i = 0; i < arg_len; i++) {
+    ant_value_t arg_val = js_arr_get(js, args_list, i);
+    if (vtype(arg_val) != T_STR) continue;
+    
+    size_t arg_slen = 0;
+    const char *arg = js_getstr(js, arg_val, &arg_slen);
+    if (!arg) continue;
+    
+    if (stop_parsing) {
+      js_arr_push(js, positionals, arg_val);
+      continue;
+    }
+    
+    if (arg_slen == 2 && memcmp(arg, "--", 2) == 0) {
+      stop_parsing = true;
+      continue;
+    }
+    
+    if (arg_slen > 2 && arg[0] == '-' && arg[1] == '-') {
+      const char *name = arg + 2;
+      size_t name_len = arg_slen - 2;
+      const char *inline_value = NULL;
+      size_t inline_len = 0;
+      const char *eq = memchr(name, '=', name_len);
+      
+      if (eq) {
+        name_len = (size_t)(eq - name);
+        inline_value = eq + 1;
+        inline_len = (size_t)(arg + arg_slen - inline_value);
+      }
+      
+      char *name_buf = strndup(name, name_len);
+      if (!name_buf) {
+        util_free_parse_options(options, option_count);
+        return js_mkerr(js, "Out of memory");
+      }
+      
+      util_parse_arg_option_t *opt = util_find_option_by_name(options, option_count, name_buf);
+      if (!opt) {
+        if (strict) {
+          free(name_buf);
+          util_free_parse_options(options, option_count);
+          return js_mkerr_typed(js, JS_ERR_TYPE, "Unknown option '--%.*s'", (int)name_len, name);
+        }
+        
+        ant_value_t unknown = inline_value
+          ? js_mkstr(js, inline_value, inline_len)
+          : js_true;
+          
+        js_set(js, values, name_buf, unknown);
+        free(name_buf);
+        
+        continue;
+      }
+
+      ant_value_t parsed_value = js_true;
+      if (opt->type == UTIL_PARSE_ARG_TYPE_STRING) {
+        if (inline_value) parsed_value = js_mkstr(js, inline_value, inline_len);
+        else if (i + 1 < arg_len) parsed_value = js_arr_get(js, args_list, ++i);
+        else {
+          free(name_buf);
+          util_free_parse_options(options, option_count);
+          return js_mkerr_typed(js, JS_ERR_TYPE, "Option '--%s' requires a value", opt->name);
+        }
+      } else if (inline_value) parsed_value = js_mkstr(js, inline_value, inline_len);
+      
+      if (!util_set_named_value(js, values, opt->name, parsed_value, opt->multiple)) {
+        free(name_buf);
+        util_free_parse_options(options, option_count);
+        return js->thrown_exists ? js->thrown_value : js_mkerr(js, "parseArgs failed");
+      }
+      
+      free(name_buf);
+      continue;
+    }
+
+    if (arg_slen > 1 && arg[0] == '-') {
+      for (size_t j = 1; j < arg_slen; j++) {
+        util_parse_arg_option_t *opt = util_find_option_by_short(options, option_count, arg[j]);
+        if (!opt) {
+          if (strict) {
+            util_free_parse_options(options, option_count);
+            return js_mkerr_typed(js, JS_ERR_TYPE, "Unknown option '-%c'", arg[j]);
+          }
+          char key[2] = {arg[j], '\0'};
+          js_set(js, values, key, js_true);
+          continue;
+        }
+
+        ant_value_t parsed_value = js_true;
+        if (opt->type == UTIL_PARSE_ARG_TYPE_STRING) {
+          if (j + 1 < arg_slen) {
+            parsed_value = js_mkstr(js, arg + j + 1, arg_slen - (j + 1));
+            j = arg_slen;
+          } else if (i + 1 < arg_len) {
+            parsed_value = js_arr_get(js, args_list, ++i);
+            j = arg_slen;
+          } else {
+            util_free_parse_options(options, option_count);
+            return js_mkerr_typed(js, JS_ERR_TYPE, "Option '-%c' requires a value", arg[j]);
+          }
+        }
+        
+        if (!util_set_named_value(js, values, opt->name, parsed_value, opt->multiple)) {
+          util_free_parse_options(options, option_count);
+          return js->thrown_exists ? js->thrown_value : js_mkerr(js, "parseArgs failed");
+        }
+        
+        if (opt->type == UTIL_PARSE_ARG_TYPE_STRING) break;
+      }
+      continue;
+    }
+    
+    if (!allow_positionals) {
+      util_free_parse_options(options, option_count);
+      return js_mkerr_typed(js, JS_ERR_TYPE, "Unexpected positional argument '%s'", arg);
+    }
+    js_arr_push(js, positionals, arg_val);
+  }
+  
+  util_free_parse_options(options, option_count);
+  js_set(js, out, "values", values);
+  js_set(js, out, "positionals", positionals);
+  
+  return out;
 }
 
 static ant_value_t util_format_impl(ant_t *js, ant_value_t *args, int nargs, int fmt_index) {
@@ -1024,6 +1319,11 @@ static ant_value_t util_inherits(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
+static ant_value_t util_is_deep_strict_equal(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 2) return js_bool(true);
+  return js_bool(js_deep_equal(js, args[0], args[1], true));
+}
+
 ant_value_t util_library(ant_t *js) {  
   ant_value_t lib = js_mkobj(js);
   ant_value_t types = util_get_types_object(js);
@@ -1034,6 +1334,8 @@ ant_value_t util_library(ant_t *js) {
   js_set(js, lib, "inspect", js_mkfun(util_inspect));
   js_set(js, lib, "deprecate", js_mkfun(util_deprecate));
   js_set(js, lib, "inherits", js_mkfun(util_inherits));
+  js_set(js, lib, "isDeepStrictEqual", js_mkfun(util_is_deep_strict_equal));
+  js_set(js, lib, "parseArgs", js_mkfun(util_parse_args));
   js_set(js, lib, "parseEnv", js_mkfun(util_parse_env));
   js_set(js, lib, "promisify", js_mkfun(util_promisify));
   js_set(js, lib, "callbackify", js_mkfun(util_callbackify));

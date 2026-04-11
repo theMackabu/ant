@@ -42,7 +42,6 @@ static ant_value_t assert_if_error(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkerr(js, "ifError got unwanted exception: %s", msg ? msg : "(unknown)");
 }
 
-// TODO: make into global helper
 static bool values_strict_equal(ant_t *js, ant_value_t a, ant_value_t b) {
   uint8_t ta = vtype(a), tb = vtype(b);
   if (ta != tb) return false;
@@ -76,8 +75,7 @@ static bool values_loose_equal(ant_t *js, ant_value_t a, ant_value_t b) {
   return false;
 }
 
-// TODO: make into global helper
-static bool deep_equal(ant_t *js, ant_value_t a, ant_value_t b, bool strict, int depth) {
+static bool deep_equal_impl(ant_t *js, ant_value_t a, ant_value_t b, bool strict, int depth) {
   if (depth > 64) return false;
   uint8_t ta = vtype(a), tb = vtype(b);
 
@@ -85,7 +83,7 @@ static bool deep_equal(ant_t *js, ant_value_t a, ant_value_t b, bool strict, int
     ant_offset_t la = js_arr_len(js, a), lb = js_arr_len(js, b);
     if (la != lb) return false;
     for (ant_offset_t i = 0; i < la; i++) {
-      if (!deep_equal(js, js_arr_get(js, a, i), js_arr_get(js, b, i), strict, depth + 1))
+      if (!deep_equal_impl(js, js_arr_get(js, a, i), js_arr_get(js, b, i), strict, depth + 1))
         return false;
     }
     return true;
@@ -97,7 +95,7 @@ static bool deep_equal(ant_t *js, ant_value_t a, ant_value_t b, bool strict, int
     const char *key; size_t key_len; ant_value_t va;
     while (js_prop_iter_next(&iter, &key, &key_len, &va)) {
       ant_value_t vb = js_get(js, b, key);
-      if (!deep_equal(js, va, vb, strict, depth + 1)) {
+      if (!deep_equal_impl(js, va, vb, strict, depth + 1)) {
         js_prop_iter_end(&iter);
         return false;
       }
@@ -116,6 +114,10 @@ static bool deep_equal(ant_t *js, ant_value_t a, ant_value_t b, bool strict, int
   }
 
   return strict ? values_strict_equal(js, a, b) : values_loose_equal(js, a, b);
+}
+
+bool js_deep_equal(ant_t *js, ant_value_t a, ant_value_t b, bool strict) {
+  return deep_equal_impl(js, a, b, strict, 0);
 }
 
 static ant_value_t assert_equal(ant_t *js, ant_value_t *args, int nargs) {
@@ -148,28 +150,28 @@ static ant_value_t assert_not_strict_equal(ant_t *js, ant_value_t *args, int nar
 
 static ant_value_t assert_deep_equal(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_mkundef();
-  if (!deep_equal(js, args[0], args[1], false, 0))
+  if (!js_deep_equal(js, args[0], args[1], false))
     return assertion_error(js, "Expected values to be deeply equal", nargs >= 3 ? args[2] : js_mkundef());
   return js_mkundef();
 }
 
 static ant_value_t assert_not_deep_equal(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_mkundef();
-  if (deep_equal(js, args[0], args[1], false, 0))
+  if (js_deep_equal(js, args[0], args[1], false))
     return assertion_error(js, "Expected values to not be deeply equal", nargs >= 3 ? args[2] : js_mkundef());
   return js_mkundef();
 }
 
 static ant_value_t assert_deep_strict_equal(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_mkundef();
-  if (!deep_equal(js, args[0], args[1], true, 0))
+  if (!js_deep_equal(js, args[0], args[1], true))
     return assertion_error(js, "Expected values to be deeply strictly equal", nargs >= 3 ? args[2] : js_mkundef());
   return js_mkundef();
 }
 
 static ant_value_t assert_not_deep_strict_equal(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 2) return js_mkundef();
-  if (deep_equal(js, args[0], args[1], true, 0))
+  if (js_deep_equal(js, args[0], args[1], true))
     return assertion_error(js, "Expected values to not be deeply strictly equal", nargs >= 3 ? args[2] : js_mkundef());
   return js_mkundef();
 }

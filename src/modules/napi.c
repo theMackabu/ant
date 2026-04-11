@@ -24,8 +24,19 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include <uthash.h>
 #include <uv.h>
+
+#if defined(__has_include)
+#if __has_include(<uchar.h>)
+#include <uchar.h>
+#else
+typedef uint16_t char16_t;
+#endif
+#else
+typedef uint16_t char16_t;
+#endif
 
 #include "ant.h"
 #include "descriptors.h"
@@ -34,9 +45,11 @@
 #include "silver/engine.h"
 
 #include "modules/buffer.h"
+#include "modules/date.h"
 #include "modules/napi.h"
 #include "gc/roots.h"
 #include "gc/modules.h"
+#include "utf8.h"
 
 typedef struct napi_cleanup_hook_entry {
   napi_cleanup_hook hook;
@@ -51,6 +64,9 @@ typedef struct ant_napi_env__ {
   bool has_pending_exception;
   napi_value pending_exception;
   uint32_t version;
+  void *instance_data;
+  node_api_basic_finalize instance_data_finalize_cb;
+  void *instance_data_finalize_hint;
   napi_cleanup_hook_entry_t *cleanup_hooks;
   struct napi_ref__ *refs;
   struct napi_deferred__ *deferreds;
@@ -128,6 +144,10 @@ typedef struct napi_wrap_entry {
   void *native_object;
   node_api_basic_finalize finalize_cb;
   void *finalize_hint;
+  void *attached_data;
+  node_api_basic_finalize attached_finalize_cb;
+  void *attached_finalize_hint;
+  bool has_wrap;
   UT_hash_handle hh;
 } napi_wrap_entry_t;
 
@@ -175,6 +195,32 @@ typedef struct napi_native_lib {
   struct napi_native_lib *next;
 } napi_native_lib_t;
 
+typedef enum {
+  napi_key_include_prototypes = 0,
+  napi_key_own_only = 1,
+} napi_key_collection_mode;
+
+typedef enum {
+  napi_key_all_properties = 0,
+  napi_key_writable = 1 << 0,
+  napi_key_enumerable = 1 << 1,
+  napi_key_configurable = 1 << 2,
+  napi_key_skip_strings = 1 << 3,
+  napi_key_skip_symbols = 1 << 4,
+} napi_key_filter;
+
+typedef enum {
+  napi_key_keep_numbers = 0,
+  napi_key_numbers_to_strings = 1,
+} napi_key_conversion;
+
+typedef struct {
+  uint8_t sign;
+  uint8_t pad[3];
+  uint32_t limb_count;
+  uint32_t limbs[];
+} napi_bigint_payload_t;
+
 static ant_napi_env_t *g_napi_env = NULL;
 static napi_external_entry_t *g_napi_externals = NULL;
 static napi_wrap_entry_t *g_napi_wraps = NULL;
@@ -220,7 +266,7 @@ switch (status) {
   default: return "unknown";
 }}
 
-static napi_status napi_set_last(napi_env env, napi_status status, const char *message) {
+static napi_status napi_set_last_raw(napi_env env, napi_status status, const char *message) {
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv) return status;
 
@@ -236,6 +282,16 @@ static napi_status napi_set_last(napi_env env, napi_status status, const char *m
   }
 
   return status;
+}
+
+static napi_status napi_set_last(napi_env env, napi_status status, const char *message) {
+  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
+  if (status == napi_ok && nenv && (
+      nenv->has_pending_exception
+      || (nenv->js && nenv->js->thrown_exists)
+    )
+  ) return napi_set_last_raw(env, napi_pending_exception, "pending exception");
+  return napi_set_last_raw(env, status, message);
 }
 
 static ant_napi_env_t *napi_get_or_create_env(ant_t *js) {
@@ -297,6 +353,14 @@ static void napi_mark_pending_exception(napi_env env, napi_value exception) {
   napi_set_last(env, napi_pending_exception, "pending exception");
 }
 
+NAPI_EXTERN napi_status NAPI_CDECL napi_throw(napi_env env, napi_value error) {
+  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
+  if (!nenv || !nenv->js) return napi_set_last(env, napi_invalid_arg, "invalid env");
+  js_throw(nenv->js, (ant_value_t)error);
+  napi_mark_pending_exception(env, error);
+  return napi_pending_exception;
+}
+
 static napi_status napi_check_pending_from_result(napi_env env, ant_value_t result) {
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js) return napi_set_last(env, napi_invalid_arg, "invalid env");
@@ -308,6 +372,23 @@ static napi_status napi_check_pending_from_result(napi_env env, ant_value_t resu
     );
     return napi_pending_exception;
   }
+  return napi_set_last(env, napi_ok, NULL);
+}
+
+static napi_status napi_return_pending_if_any(napi_env env) {
+  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
+  if (!nenv || !nenv->js) return napi_set_last(env, napi_invalid_arg, "invalid env");
+
+  if (nenv->has_pending_exception) {
+    napi_set_last(env, napi_pending_exception, "pending exception");
+    return napi_pending_exception;
+  }
+
+  if (nenv->js->thrown_exists) {
+    napi_mark_pending_exception(env, (napi_value)nenv->js->thrown_value);
+    return napi_pending_exception;
+  }
+
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -424,6 +505,10 @@ static ant_value_t napi_callback_trampoline(ant_t *js, ant_value_t *args, int na
     return js_throw(js, ex);
   }
 
+  if (js->thrown_exists) {
+    return js_throw(js, js->thrown_value);
+  }
+
   if ((ant_value_t)ret == 0) return js_mkundef();
   return (ant_value_t)ret;
 }
@@ -463,6 +548,173 @@ static ant_value_t napi_make_string(ant_t *js, const char *s, size_t len) {
   if (!s) return js_mkstr(js, "", 0);
   if (len == NAPI_AUTO_LENGTH) len = strlen(s);
   return js_mkstr(js, s, len);
+}
+
+static bool napi_checked_add_size(size_t a, size_t b, size_t *out) {
+  if (a > SIZE_MAX - b) return false;
+  *out = a + b;
+  return true;
+}
+
+static bool napi_checked_mul_size(size_t a, size_t b, size_t *out) {
+  if (a != 0 && b > SIZE_MAX / a) return false;
+  *out = a * b;
+  return true;
+}
+
+static bool napi_make_bigint_limbs(
+  ant_t *js,
+  const uint32_t *limbs,
+  size_t count,
+  bool negative,
+  ant_value_t *out
+) {
+  uint32_t zero = 0;
+  if (!out) return false;
+
+  if (!limbs || count == 0) {
+    limbs = &zero;
+    count = 1;
+  }
+
+  while (count > 1 && limbs[count - 1] == 0) count--;
+  if (count == 1 && limbs[0] == 0) negative = false;
+  if (count > UINT32_MAX) return false;
+
+  size_t limbs_bytes = 0;
+  if (!napi_checked_mul_size(count, sizeof(uint32_t), &limbs_bytes)) return false;
+
+  size_t payload_size = 0;
+  if (!napi_checked_add_size(offsetof(napi_bigint_payload_t, limbs), limbs_bytes, &payload_size)) {
+    return false;
+  }
+
+  napi_bigint_payload_t *payload = (napi_bigint_payload_t *)js_type_alloc(
+    js, ANT_ALLOC_BIGINT, payload_size, 
+    _Alignof(napi_bigint_payload_t)
+  );
+  
+  if (!payload) return false;
+  payload->sign = negative ? 1 : 0;
+  payload->pad[0] = 0;
+  payload->pad[1] = 0;
+  payload->pad[2] = 0;
+  payload->limb_count = (uint32_t)count;
+  memcpy(payload->limbs, limbs, limbs_bytes);
+  *out = mkval(T_BIGINT, (uint64_t)(uintptr_t)payload);
+  
+  return true;
+}
+
+static const napi_bigint_payload_t *napi_bigint_payload(napi_value value) {
+  return (const napi_bigint_payload_t *)(uintptr_t)vdata((ant_value_t)value);
+}
+
+static const uint32_t *napi_bigint_limbs(napi_value value, size_t *count) {
+  const napi_bigint_payload_t *payload = napi_bigint_payload(value);
+  if (!payload) {
+    if (count) *count = 0;
+    return NULL;
+  }
+
+  size_t limb_count = payload->limb_count;
+  if (limb_count == 0) limb_count = 1;
+  
+  while (limb_count > 1 && payload->limbs[limb_count - 1] == 0) limb_count--;
+  if (count) *count = limb_count;
+  
+  return payload->limbs;
+}
+
+static bool napi_bigint_is_negative(napi_value value) {
+  const napi_bigint_payload_t *payload = napi_bigint_payload(value);
+  return payload && payload->sign == 1;
+}
+
+static bool napi_bigint_limbs_is_zero(const uint32_t *limbs, size_t count) {
+  return count <= 1 && (!limbs || limbs[0] == 0);
+}
+
+static uint64_t napi_bigint_low_u64(const uint32_t *limbs, size_t count) {
+  uint64_t out = 0;
+  if (count > 0 && limbs) out |= (uint64_t)limbs[0];
+  if (count > 1 && limbs) out |= ((uint64_t)limbs[1] << 32);
+  return out;
+}
+
+static bool napi_parse_index_key(const char *str, size_t len, uint32_t *out) {
+  if (!str || len == 0) return false;
+  if (len > 1 && str[0] == '0') return false;
+
+  uint64_t acc = 0;
+  for (size_t i = 0; i < len; i++) {
+    if (str[i] < '0' || str[i] > '9') return false;
+    acc = (acc * 10) + (uint64_t)(str[i] - '0');
+    if (acc > UINT32_MAX) return false;
+  }
+
+  if (out) *out = (uint32_t)acc;
+  return true;
+}
+
+static bool napi_seen_has_key(ant_t *js, ant_value_t seen, ant_value_t key) {
+  if (vtype(key) == T_SYMBOL) {
+    return lkp_sym(js, seen, (ant_offset_t)vdata(key)) != 0;
+  }
+
+  size_t len = 0;
+  const char *str = js_getstr(js, key, &len);
+  return str && lkp(js, seen, str, len) != 0;
+}
+
+static bool napi_seen_add_key(ant_t *js, ant_value_t seen, ant_value_t key) {
+  ant_value_t res = js_setprop(js, seen, key, js_true);
+  return !is_err(res);
+}
+
+static bool napi_key_passes_filter(const ant_shape_prop_t *prop, napi_key_filter key_filter) {
+  if (!prop) return false;
+  if ((key_filter & napi_key_writable) && !(prop->attrs & ANT_PROP_ATTR_WRITABLE)) return false;
+  if ((key_filter & napi_key_enumerable) && !(prop->attrs & ANT_PROP_ATTR_ENUMERABLE)) return false;
+  if ((key_filter & napi_key_configurable) && !(prop->attrs & ANT_PROP_ATTR_CONFIGURABLE)) return false;
+  return true;
+}
+
+static ant_value_t napi_convert_property_key(
+  ant_t *js,
+  ant_value_t key,
+  napi_key_conversion key_conversion
+) {
+  if (key_conversion != napi_key_keep_numbers || vtype(key) != T_STR) return key;
+
+  size_t len = 0;
+  const char *str = js_getstr(js, key, &len);
+  uint32_t idx = 0;
+  if (!str || !napi_parse_index_key(str, len, &idx)) return key;
+  return js_mknum((double)idx);
+}
+
+static napi_status napi_create_date_common(napi_env env, double time, napi_value *result) {
+  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
+  if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
+
+  ant_t *js = nenv->js;
+  ant_value_t ctor = js_get(js, js_glob(js), "Date");
+  if (!is_callable(ctor)) return napi_set_last(env, napi_generic_failure, "Date constructor unavailable");
+
+  ant_value_t obj = js_mkobj(js);
+  ant_value_t proto = js_get(js, ctor, "prototype");
+  if (is_object_type(proto)) js_set_proto_init(obj, proto);
+
+  ant_value_t argv[1] = {js_mknum(time)};
+  ant_value_t saved = js->new_target;
+  js->new_target = ctor;
+  ant_value_t out = sv_vm_call(js->vm, js, ctor, obj, argv, 1, NULL, true);
+  js->new_target = saved;
+
+  if (is_err(out) || js->thrown_exists) return napi_check_pending_from_result(env, out);
+  *result = NAPI_RETURN(nenv, is_object_type(out) ? out : obj);
+  return napi_set_last(env, napi_ok, NULL);
 }
 
 static napi_status napi_make_error_object(
@@ -507,7 +759,8 @@ static napi_status napi_throw_with_message(
     napi_mark_pending_exception(env, (napi_value)nenv->js->thrown_value);
     return napi_pending_exception;
   }
-  return napi_set_last(env, napi_generic_failure, "failed to throw");
+  if (is_err(error)) return napi_set_last(env, napi_generic_failure, "failed to create error");
+  return napi_throw(env, (napi_value)error);
 }
 
 static void napi_tsfn_maybe_finish(struct napi_threadsafe_function__ *tsfn);
@@ -599,29 +852,26 @@ static ant_value_t napi_dlopen_common(ant_t *js, ant_value_t module_obj, const c
   if (!is_object_type(module_obj)) return js_mkerr(js, "process.dlopen module must be an object");
   if (!filename || !filename[0]) return js_mkerr(js, "process.dlopen filename must be a non-empty string");
 
+  g_pending_napi_module = NULL;
   void *handle = NAPI_DLOPEN(filename, NAPI_RTLD_NOW | NAPI_RTLD_GLOBAL | NAPI_RTLD_LOCAL);
   if (!handle) {
     const char *msg = NAPI_DLERROR();
     return js_mkerr(js, "Failed to load native module '%s': %s", filename, msg ? msg : "unknown");
   }
 
-  g_pending_napi_module = NULL;
   napi_register_module_v1_fn reg_fn = (napi_register_module_v1_fn)NAPI_DLSYM(handle, "napi_register_module_v1");
-
   ant_value_t exports = js_get(js, module_obj, "exports");
+  
   if (!is_object_type(exports)) {
     exports = js_mkobj(js);
     js_set(js, module_obj, "exports", exports);
   }
 
   ant_value_t ret = js_mkundef();
-  if (reg_fn) {
-    ret = (ant_value_t)reg_fn(env, (napi_value)exports);
-  } else if (g_pending_napi_module && g_pending_napi_module->nm_register_func) {
+  if (reg_fn) ret = (ant_value_t)reg_fn(env, (napi_value)exports);
+  else if (g_pending_napi_module && g_pending_napi_module->nm_register_func) {
     ret = (ant_value_t)g_pending_napi_module->nm_register_func(env, (napi_value)exports);
-  } else {
-    return js_mkerr(js, "No N-API registration entrypoint found in '%s'", filename);
-  }
+  } else return js_mkerr(js, "No N-API registration entrypoint found in '%s'", filename);
 
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (nenv->has_pending_exception || js->thrown_exists) {
@@ -765,7 +1015,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_array_with_length(
     js_mkstr(nenv->js, "length", 6),
     js_mknum((double)length)
   );
-  if (is_err(r)) return napi_check_pending_from_result(env, r);
+  if (is_err(r) || nenv->js->thrown_exists) return napi_check_pending_from_result(env, r);
   *result = NAPI_RETURN(nenv, arr);
   return napi_set_last(env, napi_ok, NULL);
 }
@@ -818,6 +1068,99 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_string_utf8(
   return napi_set_last(env, napi_ok, NULL);
 }
 
+NAPI_EXTERN napi_status NAPI_CDECL napi_create_date(
+  napi_env env,
+  double time,
+  napi_value *result
+) {
+  return napi_create_date_common(env, time, result);
+}
+
+NAPI_EXTERN napi_status NAPI_CDECL napi_create_bigint_int64(
+  napi_env env,
+  int64_t value,
+  napi_value *result
+) {
+  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
+  if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
+
+  uint64_t magnitude = value < 0
+    ? (uint64_t)(-(value + 1)) + 1
+    : (uint64_t)value;
+    
+  uint32_t limbs[2] = {
+    (uint32_t)(magnitude & 0xffffffffu),
+    (uint32_t)(magnitude >> 32)
+  };
+  
+  size_t count = limbs[1] == 0 ? 1 : 2;
+  ant_value_t out = js_mkundef();
+  
+  if (!napi_make_bigint_limbs(nenv->js, limbs, count, value < 0, &out)) {
+    return napi_set_last(env, napi_generic_failure, "out of memory");
+  }
+
+  *result = NAPI_RETURN(nenv, out);
+  return napi_set_last(env, napi_ok, NULL);
+}
+
+NAPI_EXTERN napi_status NAPI_CDECL napi_create_bigint_uint64(
+  napi_env env,
+  uint64_t value,
+  napi_value *result
+) {
+  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
+  if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
+
+  uint32_t limbs[2] = {
+    (uint32_t)(value & 0xffffffffu),
+    (uint32_t)(value >> 32)
+  };
+  size_t count = limbs[1] == 0 ? 1 : 2;
+
+  ant_value_t out = js_mkundef();
+  if (!napi_make_bigint_limbs(nenv->js, limbs, count, false, &out)) {
+    return napi_set_last(env, napi_generic_failure, "out of memory");
+  }
+
+  *result = NAPI_RETURN(nenv, out);
+  return napi_set_last(env, napi_ok, NULL);
+}
+
+NAPI_EXTERN napi_status NAPI_CDECL napi_create_bigint_words(
+  napi_env env,
+  int sign_bit,
+  size_t word_count,
+  const uint64_t *words,
+  napi_value *result
+) {
+  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
+  if (!nenv || !nenv->js || !result || (word_count > 0 && !words)) {
+    return napi_set_last(env, napi_invalid_arg, "invalid argument");
+  }
+
+  size_t limb_count = 1;
+  if (word_count > 0 && !napi_checked_mul_size(word_count, 2, &limb_count)) {
+    return napi_set_last(env, napi_invalid_arg, "word count overflow");
+  }
+  uint32_t *limbs = (uint32_t *)calloc(limb_count, sizeof(uint32_t));
+  if (!limbs) return napi_set_last(env, napi_generic_failure, "out of memory");
+
+  if (word_count == 0) limbs[0] = 0;
+  else for (size_t i = 0; i < word_count; i++) {
+    limbs[i * 2] = (uint32_t)(words[i] & 0xffffffffu);
+    limbs[(i * 2) + 1] = (uint32_t)(words[i] >> 32);
+  }
+
+  ant_value_t out = js_mkundef();
+  bool ok = napi_make_bigint_limbs(nenv->js, limbs, limb_count, sign_bit != 0, &out);
+  free(limbs);
+  if (!ok) return napi_set_last(env, napi_generic_failure, "out of memory");
+
+  *result = NAPI_RETURN(nenv, out);
+  return napi_set_last(env, napi_ok, NULL);
+}
+
 NAPI_EXTERN napi_status NAPI_CDECL napi_create_symbol(
   napi_env env,
   napi_value description,
@@ -831,7 +1174,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_symbol(
     desc = js_getstr(nenv->js, (ant_value_t)description, NULL);
   } else if (!is_undefined((ant_value_t)description) && !is_null((ant_value_t)description)) {
     ant_value_t s = coerce_to_str(nenv->js, (ant_value_t)description);
-    if (is_err(s)) return napi_check_pending_from_result(env, s);
+    if (is_err(s) || nenv->js->thrown_exists) return napi_check_pending_from_result(env, s);
     desc = js_getstr(nenv->js, s, NULL);
   }
 
@@ -856,7 +1199,6 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_error(
   napi_value msg,
   napi_value *result
 ) {
-  (void)code;
   return napi_make_error_object(env, "Error", msg, result);
 }
 
@@ -866,7 +1208,6 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_type_error(
   napi_value msg,
   napi_value *result
 ) {
-  (void)code;
   return napi_make_error_object(env, "TypeError", msg, result);
 }
 
@@ -876,7 +1217,6 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_range_error(
   napi_value msg,
   napi_value *result
 ) {
-  (void)code;
   return napi_make_error_object(env, "RangeError", msg, result);
 }
 
@@ -1063,6 +1403,32 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_create_external_arraybuffer(
   napi_status st = napi_create_arraybuffer(env, byte_length, &out, result);
   if (st != napi_ok) return st;
   if (external_data && out && byte_length > 0) memcpy(out, external_data, byte_length);
+  return napi_set_last(env, napi_ok, NULL);
+}
+
+NAPI_EXTERN napi_status NAPI_CDECL napi_set_instance_data(
+  napi_env env,
+  void *data,
+  node_api_basic_finalize finalize_cb,
+  void *finalize_hint
+) {
+  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
+  if (!nenv) return napi_set_last(env, napi_invalid_arg, "invalid env");
+
+  nenv->instance_data = data;
+  nenv->instance_data_finalize_cb = finalize_cb;
+  nenv->instance_data_finalize_hint = finalize_hint;
+  return napi_set_last(env, napi_ok, NULL);
+}
+
+NAPI_EXTERN napi_status NAPI_CDECL napi_get_instance_data(
+  napi_env env,
+  void **data
+) {
+  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
+  if (!nenv || !data) return napi_set_last(env, napi_invalid_arg, "invalid argument");
+
+  *data = nenv->instance_data;
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -1310,6 +1676,117 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_value_string_latin1(
   return napi_get_string_common(env, value, buf, bufsize, result);
 }
 
+NAPI_EXTERN napi_status NAPI_CDECL napi_get_value_string_utf16(
+  napi_env env,
+  napi_value value,
+  char16_t *buf,
+  size_t bufsize,
+  size_t *result
+) {
+  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
+  if (!nenv || !nenv->js) return napi_set_last(env, napi_invalid_arg, "invalid env");
+  if (vtype((ant_value_t)value) != T_STR) return napi_set_last(env, napi_string_expected, "string expected");
+
+  size_t byte_len = 0;
+  const char *str = js_getstr(nenv->js, (ant_value_t)value, &byte_len);
+  if (!str) return napi_set_last(env, napi_string_expected, "string expected");
+
+  size_t utf16_len = utf16_strlen(str, byte_len);
+  if (result) *result = utf16_len;
+  if (!buf || bufsize == 0) return napi_set_last(env, napi_ok, NULL);
+
+  size_t n = utf16_len < (bufsize - 1) ? utf16_len : (bufsize - 1);
+  for (size_t i = 0; i < n; i++) buf[i] = (char16_t)utf16_code_unit_at(str, byte_len, i);
+  buf[n] = 0;
+  return napi_set_last(env, napi_ok, NULL);
+}
+
+NAPI_EXTERN napi_status NAPI_CDECL napi_get_date_value(
+  napi_env env,
+  napi_value value,
+  double *result
+) {
+  if (!env || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
+  if (!is_date_instance((ant_value_t)value)) return napi_set_last(env, napi_date_expected, "date expected");
+
+  ant_value_t time_val = js_get_slot((ant_value_t)value, SLOT_DATA);
+  *result = vtype(time_val) == T_NUM ? js_getnum(time_val) : JS_NAN;
+  return napi_set_last(env, napi_ok, NULL);
+}
+
+NAPI_EXTERN napi_status NAPI_CDECL napi_get_value_bigint_int64(
+  napi_env env,
+  napi_value value,
+  int64_t *result,
+  bool *lossless
+) {
+  if (!env || !result || !lossless) return napi_set_last(env, napi_invalid_arg, "invalid argument");
+  if (vtype((ant_value_t)value) != T_BIGINT) return napi_set_last(env, napi_bigint_expected, "bigint expected");
+
+  size_t limb_count = 0;
+  const uint32_t *limbs = napi_bigint_limbs(value, &limb_count);
+  uint64_t magnitude = napi_bigint_low_u64(limbs, limb_count);
+  bool negative = napi_bigint_is_negative(value) && !napi_bigint_limbs_is_zero(limbs, limb_count);
+  uint64_t bits = negative ? (uint64_t)(~magnitude + 1) : magnitude;
+
+  *result = (int64_t)bits;
+  *lossless = limb_count <= 2
+    && ((!negative && magnitude <= (uint64_t)INT64_MAX)
+      || (negative && magnitude <= (UINT64_C(1) << 63)));
+  return napi_set_last(env, napi_ok, NULL);
+}
+
+NAPI_EXTERN napi_status NAPI_CDECL napi_get_value_bigint_uint64(
+  napi_env env,
+  napi_value value,
+  uint64_t *result,
+  bool *lossless
+) {
+  if (!env || !result || !lossless) return napi_set_last(env, napi_invalid_arg, "invalid argument");
+  if (vtype((ant_value_t)value) != T_BIGINT) return napi_set_last(env, napi_bigint_expected, "bigint expected");
+
+  size_t limb_count = 0;
+  const uint32_t *limbs = napi_bigint_limbs(value, &limb_count);
+  uint64_t magnitude = napi_bigint_low_u64(limbs, limb_count);
+  bool negative = napi_bigint_is_negative(value) && !napi_bigint_limbs_is_zero(limbs, limb_count);
+
+  *result = negative ? (uint64_t)(~magnitude + 1) : magnitude;
+  *lossless = !negative && limb_count <= 2;
+  return napi_set_last(env, napi_ok, NULL);
+}
+
+NAPI_EXTERN napi_status NAPI_CDECL napi_get_value_bigint_words(
+  napi_env env,
+  napi_value value,
+  int *sign_bit,
+  size_t *word_count,
+  uint64_t *words
+) {
+  if (!env || !word_count) return napi_set_last(env, napi_invalid_arg, "invalid argument");
+  if (vtype((ant_value_t)value) != T_BIGINT) return napi_set_last(env, napi_bigint_expected, "bigint expected");
+
+  size_t limb_count = 0;
+  const uint32_t *limbs = napi_bigint_limbs(value, &limb_count);
+  size_t actual_words = limb_count == 0 ? 0 : (limb_count + 1) / 2;
+  size_t capacity = words ? *word_count : 0;
+
+  if (sign_bit) {
+    bool negative = napi_bigint_is_negative(value) && !napi_bigint_limbs_is_zero(limbs, limb_count);
+    *sign_bit = negative ? 1 : 0;
+  }
+
+  if (words) {
+  size_t n = capacity < actual_words ? capacity : actual_words;
+  for (size_t i = 0; i < n; i++) {
+    uint64_t lo = i * 2 < limb_count ? (uint64_t)limbs[i * 2] : 0;
+    uint64_t hi = (i * 2 + 1) < limb_count ? (uint64_t)limbs[i * 2 + 1] : 0;
+    words[i] = lo | (hi << 32);
+  }}
+
+  *word_count = actual_words;
+  return napi_set_last(env, napi_ok, NULL);
+}
+
 NAPI_EXTERN napi_status NAPI_CDECL napi_get_value_external(
   napi_env env,
   napi_value value,
@@ -1377,6 +1854,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_array_length(
   }
 
   ant_value_t len = js_get(nenv->js, v, "length");
+  if (is_err(len) || nenv->js->thrown_exists) return napi_check_pending_from_result(env, len);
   if (vtype(len) != T_NUM) return napi_set_last(env, napi_array_expected, "array expected");
   *result = (uint32_t)js_getnum(len);
   return napi_set_last(env, napi_ok, NULL);
@@ -1439,7 +1917,11 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_typedarray_info(
   if (type) *type = napi_from_ant_typedarray_type(ta->type);
   if (length) *length = ta->length;
   if (data) *data = ta->buffer->data + ta->byte_offset;
-  if (arraybuffer) *arraybuffer = (napi_value)js_get(nenv->js, (ant_value_t)typedarray, "buffer");
+  if (arraybuffer) {
+    ant_value_t buffer = js_get(nenv->js, (ant_value_t)typedarray, "buffer");
+    if (is_err(buffer) || nenv->js->thrown_exists) return napi_check_pending_from_result(env, buffer);
+    *arraybuffer = NAPI_RETURN(nenv, buffer);
+  }
   if (byte_offset) *byte_offset = ta->byte_offset;
   return napi_set_last(env, napi_ok, NULL);
 }
@@ -1451,7 +1933,9 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_prototype(
 ) {
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  *result = NAPI_RETURN(nenv, js_get_proto(nenv->js, (ant_value_t)object));
+  ant_value_t proto = js_get_proto(nenv->js, (ant_value_t)object);
+  if (is_err(proto) || nenv->js->thrown_exists) return napi_check_pending_from_result(env, proto);
+  *result = NAPI_RETURN(nenv, proto);
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -1474,6 +1958,60 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_property_names(
     js_arr_push(nenv->js, out, js_mkstr(nenv->js, key, key_len));
   }
   js_prop_iter_end(&iter);
+
+  *result = NAPI_RETURN(nenv, out);
+  return napi_set_last(env, napi_ok, NULL);
+}
+
+NAPI_EXTERN napi_status NAPI_CDECL napi_get_all_property_names(
+  napi_env env,
+  napi_value object,
+  napi_key_collection_mode key_mode,
+  napi_key_filter key_filter,
+  napi_key_conversion key_conversion,
+  napi_value *result
+) {
+  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
+  if (!nenv || !nenv->js || !result || !is_object_type((ant_value_t)object)) {
+    return napi_set_last(env, napi_invalid_arg, "invalid argument");
+  }
+
+  ant_t *js = nenv->js;
+  ant_value_t out = js_mkarr(js);
+  ant_value_t seen = js_mkobj(js);
+  ant_value_t current = (ant_value_t)object;
+
+  while (is_object_type(current)) {
+    ant_iter_t iter = js_prop_iter_begin(js, current);
+    ant_value_t key = js_mkundef();
+    
+    while (js_prop_iter_next_val(&iter, &key, NULL)) {
+    ant_object_t *obj_ptr = js_obj_ptr(js_as_obj(current));
+    if (!obj_ptr || !obj_ptr->shape || iter.off == 0) continue;
+    
+    const ant_shape_prop_t *prop = ant_shape_prop_at(obj_ptr->shape, (uint32_t)(iter.off - 1));
+    if (!napi_key_passes_filter(prop, key_filter)) continue;
+    
+    uint8_t key_type = vtype(key);
+    if ((key_filter & napi_key_skip_strings) && key_type != T_SYMBOL) continue;
+    if ((key_filter & napi_key_skip_symbols) && key_type == T_SYMBOL) continue;
+    if (napi_seen_has_key(js, seen, key)) continue;
+    if (!napi_seen_add_key(js, seen, key)) {
+      js_prop_iter_end(&iter);
+      return napi_set_last(env, napi_generic_failure, "failed to collect property names");
+    }
+    
+    js_arr_push(js, out, napi_convert_property_key(js, key, key_conversion));
+    if (js->thrown_exists) {
+      js_prop_iter_end(&iter);
+      return napi_check_pending_from_result(env, js_mkundef());
+    }}
+    
+    js_prop_iter_end(&iter);
+    if (key_mode == napi_key_own_only) break;
+    current = js_get_proto(js, current);
+    if (is_err(current) || js->thrown_exists) return napi_check_pending_from_result(env, current);
+  }
 
   *result = NAPI_RETURN(nenv, out);
   return napi_set_last(env, napi_ok, NULL);
@@ -1508,7 +2046,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_set_property(
     return napi_set_last(env, napi_invalid_arg, "invalid argument");
   }
   ant_value_t r = js_setprop(nenv->js, (ant_value_t)object, (ant_value_t)key, (ant_value_t)value);
-  if (is_err(r)) return napi_check_pending_from_result(env, r);
+  if (is_err(r) || nenv->js->thrown_exists) return napi_check_pending_from_result(env, r);
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -1526,7 +2064,9 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_property(
   ant_value_t k = (ant_value_t)key;
   if (vtype(k) == T_SYMBOL) {
     ant_offset_t off = lkp_sym_proto(nenv->js, (ant_value_t)object, (ant_offset_t)vdata(k));
-    *result = NAPI_RETURN(nenv, (off ? js_propref_load(nenv->js, off) : js_mkundef()));
+    ant_value_t out = off ? js_propref_load(nenv->js, off) : js_mkundef();
+    if (is_err(out) || nenv->js->thrown_exists) return napi_check_pending_from_result(env, out);
+    *result = NAPI_RETURN(nenv, out);
     return napi_set_last(env, napi_ok, NULL);
   }
 
@@ -1542,9 +2082,10 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_property(
   memcpy(name, ks, klen);
   name[klen] = '\0';
   
-  *result = NAPI_RETURN(nenv, js_getprop_fallback(nenv->js, (ant_value_t)object, name));
+  ant_value_t out = js_getprop_fallback(nenv->js, (ant_value_t)object, name);
   free(name);
-  
+  if (is_err(out) || nenv->js->thrown_exists) return napi_check_pending_from_result(env, out);
+  *result = NAPI_RETURN(nenv, out);
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -1566,7 +2107,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_has_property(
   }
 
   ant_value_t kstr = coerce_to_str(nenv->js, k);
-  if (is_err(kstr)) return napi_check_pending_from_result(env, kstr);
+  if (is_err(kstr) || nenv->js->thrown_exists) return napi_check_pending_from_result(env, kstr);
   size_t len = 0;
   const char *s = js_getstr(nenv->js, kstr, &len);
   *result = s && lkp_proto(nenv->js, (ant_value_t)object, s, len) != 0;
@@ -1591,13 +2132,13 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_delete_property(
     del_result = js_delete_sym_prop(nenv->js, (ant_value_t)object, k);
   } else {
     ant_value_t kstr = coerce_to_str(nenv->js, k);
-    if (is_err(kstr)) return napi_check_pending_from_result(env, kstr);
+    if (is_err(kstr) || nenv->js->thrown_exists) return napi_check_pending_from_result(env, kstr);
     size_t len = 0;
     const char *s = js_getstr(nenv->js, kstr, &len);
     del_result = js_delete_prop(nenv->js, (ant_value_t)object, s, len);
   }
 
-  if (is_err(del_result)) return napi_check_pending_from_result(env, del_result);
+  if (is_err(del_result) || nenv->js->thrown_exists) return napi_check_pending_from_result(env, del_result);
   *result = js_truthy(nenv->js, del_result);
   return napi_set_last(env, napi_ok, NULL);
 }
@@ -1613,7 +2154,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_set_named_property(
     return napi_set_last(env, napi_invalid_arg, "invalid argument");
   }
   js_set(nenv->js, (ant_value_t)object, utf8name, (ant_value_t)value);
-  return napi_set_last(env, napi_ok, NULL);
+  return napi_return_pending_if_any(env);
 }
 
 NAPI_EXTERN napi_status NAPI_CDECL napi_get_named_property(
@@ -1626,7 +2167,9 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_named_property(
   if (!nenv || !nenv->js || !result || !utf8name || !is_object_type((ant_value_t)object)) {
     return napi_set_last(env, napi_invalid_arg, "invalid argument");
   }
-  *result = (napi_value)js_getprop_fallback(nenv->js, (ant_value_t)object, utf8name);
+  ant_value_t out = js_getprop_fallback(nenv->js, (ant_value_t)object, utf8name);
+  if (is_err(out) || nenv->js->thrown_exists) return napi_check_pending_from_result(env, out);
+  *result = NAPI_RETURN(nenv, out);
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -1662,7 +2205,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_set_element(
     nenv->js, (ant_value_t)object,
     key, (ant_value_t)value
   );
-  if (is_err(r)) return napi_check_pending_from_result(env, r);
+  if (is_err(r) || nenv->js->thrown_exists) return napi_check_pending_from_result(env, r);
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -1678,7 +2221,9 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_get_element(
   }
   char idx[32];
   snprintf(idx, sizeof(idx), "%u", index);
-  *result = NAPI_RETURN(nenv, js_get(nenv->js, (ant_value_t)object, idx));
+  ant_value_t out = js_get(nenv->js, (ant_value_t)object, idx);
+  if (is_err(out) || nenv->js->thrown_exists) return napi_check_pending_from_result(env, out);
+  *result = NAPI_RETURN(nenv, out);
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -1711,7 +2256,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_delete_element(
   char idx[32];
   snprintf(idx, sizeof(idx), "%u", index);
   ant_value_t del = js_delete_prop(nenv->js, (ant_value_t)object, idx, strlen(idx));
-  if (is_err(del)) return napi_check_pending_from_result(env, del);
+  if (is_err(del) || nenv->js->thrown_exists) return napi_check_pending_from_result(env, del);
   *result = js_truthy(nenv->js, del);
   return napi_set_last(env, napi_ok, NULL);
 }
@@ -1749,22 +2294,21 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_define_properties(
     if (p->method) {
       napi_value fn = 0;
       napi_status st = napi_create_function_common(
-        env,
-        p->utf8name,
+        env,  p->utf8name,
         NAPI_AUTO_LENGTH,
-        p->method,
-        p->data,
-        &fn
+        p->method, p->data, &fn
       );
       if (st != napi_ok) return st;
       value = (ant_value_t)fn;
     } else if (p->getter || p->setter) {
       napi_value getter_fn = 0;
       napi_value setter_fn = 0;
+      
       if (p->getter) {
         napi_status st = napi_create_function_common(env, p->utf8name, NAPI_AUTO_LENGTH, p->getter, p->data, &getter_fn);
         if (st != napi_ok) return st;
       }
+      
       if (p->setter) {
         napi_status st = napi_create_function_common(env, p->utf8name, NAPI_AUTO_LENGTH, p->setter, p->data, &setter_fn);
         if (st != napi_ok) return st;
@@ -1772,31 +2316,29 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_define_properties(
 
       int flags = napi_desc_flags(p->attributes);
       ant_value_t desc_obj = js_as_obj((ant_value_t)object);
+      
       if (is_symbol) {
         if (p->getter) js_set_sym_getter_desc(nenv->js, desc_obj, key, (ant_value_t)getter_fn, flags);
         if (p->setter) js_set_sym_setter_desc(nenv->js, desc_obj, key, (ant_value_t)setter_fn, flags);
-      } else {
-        js_set_accessor_desc(
-          nenv->js,
-          desc_obj,
-          key_str,
-          key_len,
-          p->getter ? (ant_value_t)getter_fn : js_mkundef(),
-          p->setter ? (ant_value_t)setter_fn : js_mkundef(),
-          flags
-        );
-      }
+      } else js_set_accessor_desc(
+        nenv->js, desc_obj,
+        key_str, key_len,
+        p->getter ? (ant_value_t)getter_fn : js_mkundef(),
+        p->setter ? (ant_value_t)setter_fn : js_mkundef(),
+        flags
+      );
+      
+      if (nenv->js->thrown_exists) return napi_check_pending_from_result(env, js_mkundef());
       continue;
-    } else {
-      value = (ant_value_t)p->value;
-    }
+    } else value = (ant_value_t)p->value;
 
-    if (is_symbol) {
-      js_set_sym(nenv->js, (ant_value_t)object, key, value);
-    } else {
+    if (is_symbol) js_set_sym(nenv->js, (ant_value_t)object, key, value);
+    else {
       js_set(nenv->js, (ant_value_t)object, key_str, value);
       js_set_descriptor(nenv->js, js_as_obj((ant_value_t)object), key_str, key_len, napi_desc_flags(p->attributes));
     }
+    
+    if (nenv->js->thrown_exists) return napi_check_pending_from_result(env, js_mkundef());
   }
 
   return napi_set_last(env, napi_ok, NULL);
@@ -1826,9 +2368,11 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_define_class(
   js_mark_constructor(ctor, true);
 
   ant_value_t proto = js_get(nenv->js, ctor, "prototype");
+  if (is_err(proto) || nenv->js->thrown_exists) return napi_check_pending_from_result(env, proto);
   if (!is_object_type(proto)) {
     proto = js_mkobj(nenv->js);
     js_set(nenv->js, ctor, "prototype", proto);
+    if (nenv->js->thrown_exists) return napi_check_pending_from_result(env, js_mkundef());
   }
 
   for (size_t i = 0; i < property_count; i++) {
@@ -1860,7 +2404,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_has_own_property(
   }
 
   ant_value_t kstr = coerce_to_str(nenv->js, k);
-  if (is_err(kstr)) return napi_check_pending_from_result(env, kstr);
+  if (is_err(kstr) || nenv->js->thrown_exists) return napi_check_pending_from_result(env, kstr);
   size_t len = 0;
   const char *s = js_getstr(nenv->js, kstr, &len);
   *result = s && lkp(nenv->js, (ant_value_t)object, s, len) != 0;
@@ -1906,6 +2450,16 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_is_array(
 ) {
   if (!env || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
   *result = vtype((ant_value_t)value) == T_ARR;
+  return napi_set_last(env, napi_ok, NULL);
+}
+
+NAPI_EXTERN napi_status NAPI_CDECL napi_is_date(
+  napi_env env,
+  napi_value value,
+  bool *result
+) {
+  if (!env || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
+  *result = is_date_instance((ant_value_t)value);
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -2004,12 +2558,10 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_instanceof(
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
   ant_value_t r = do_instanceof(nenv->js, (ant_value_t)object, (ant_value_t)constructor);
-  if (is_err(r)) return napi_check_pending_from_result(env, r);
+  if (is_err(r) || nenv->js->thrown_exists) return napi_check_pending_from_result(env, r);
   *result = js_truthy(nenv->js, r);
   return napi_set_last(env, napi_ok, NULL);
 }
-
-static _Thread_local int napi_strict_eq_call_count = 0;
 
 NAPI_EXTERN napi_status NAPI_CDECL napi_strict_equals(
   napi_env env,
@@ -2020,16 +2572,6 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_strict_equals(
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
   *result = strict_eq_values(nenv->js, (ant_value_t)lhs, (ant_value_t)rhs);
-  if (getenv("ANT_NAPI_TRACE")) {
-    napi_strict_eq_call_count++;
-    if (napi_strict_eq_call_count >= 2000 && napi_strict_eq_call_count < 2030) {
-      fprintf(stderr, "[napi-seq] call#%d lhs=0x%llx(vt=%d) rhs=0x%llx(vt=%d) => %d\n",
-              napi_strict_eq_call_count,
-              (unsigned long long)(ant_value_t)lhs, vtype((ant_value_t)lhs),
-              (unsigned long long)(ant_value_t)rhs, vtype((ant_value_t)rhs),
-              *result);
-    }
-  }
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -2105,7 +2647,9 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_coerce_to_bool(
 ) {
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  *result = NAPI_RETURN(nenv, js_bool(js_truthy(nenv->js, (ant_value_t)value)));
+  bool truthy = js_truthy(nenv->js, (ant_value_t)value);
+  if (nenv->js->thrown_exists) return napi_check_pending_from_result(env, js_mkundef());
+  *result = NAPI_RETURN(nenv, js_bool(truthy));
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -2116,7 +2660,9 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_coerce_to_number(
 ) {
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
-  *result = NAPI_RETURN(nenv, js_mknum(js_to_number(nenv->js, (ant_value_t)value)));
+  double num = js_to_number(nenv->js, (ant_value_t)value);
+  if (nenv->js->thrown_exists) return napi_check_pending_from_result(env, js_mkundef());
+  *result = NAPI_RETURN(nenv, js_mknum(num));
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -2134,6 +2680,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_coerce_to_object(
   }
 
   ant_value_t obj_ctor = js_get(nenv->js, js_glob(nenv->js), "Object");
+  if (is_err(obj_ctor) || nenv->js->thrown_exists) return napi_check_pending_from_result(env, obj_ctor);
   if (!is_callable(obj_ctor)) return napi_set_last(env, napi_generic_failure, "Object constructor missing");
   ant_value_t arg = (ant_value_t)value;
   ant_value_t out = sv_vm_call(nenv->js->vm, nenv->js, obj_ctor, js_mkundef(), &arg, 1, NULL, false);
@@ -2153,14 +2700,6 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_coerce_to_string(
   if (is_err(out) || nenv->js->thrown_exists) return napi_check_pending_from_result(env, out);
   *result = NAPI_RETURN(nenv, out);
   return napi_set_last(env, napi_ok, NULL);
-}
-
-NAPI_EXTERN napi_status NAPI_CDECL napi_throw(napi_env env, napi_value error) {
-  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
-  if (!nenv || !nenv->js) return napi_set_last(env, napi_invalid_arg, "invalid env");
-  js_throw(nenv->js, (ant_value_t)error);
-  napi_mark_pending_exception(env, error);
-  return napi_pending_exception;
 }
 
 NAPI_EXTERN napi_status NAPI_CDECL napi_throw_error(
@@ -2197,7 +2736,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_is_exception_pending(
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js || !result) return napi_set_last(env, napi_invalid_arg, "invalid argument");
   *result = nenv->has_pending_exception || nenv->js->thrown_exists;
-  return napi_set_last(env, napi_ok, NULL);
+  return napi_set_last_raw(env, napi_ok, NULL);
 }
 
 NAPI_EXTERN napi_status NAPI_CDECL napi_get_and_clear_last_exception(
@@ -2269,10 +2808,41 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_wrap(
   entry->native_object = native_object;
   entry->finalize_cb = finalize_cb;
   entry->finalize_hint = finalize_hint;
+  entry->has_wrap = true;
 
   if (result) {
     return napi_create_reference(env, js_object, 0, result);
   }
+  return napi_set_last(env, napi_ok, NULL);
+}
+
+NAPI_EXTERN napi_status NAPI_CDECL napi_add_finalizer(
+  napi_env env,
+  napi_value js_object,
+  void *finalize_data,
+  node_api_basic_finalize finalize_cb,
+  void *finalize_hint,
+  napi_ref *result
+) {
+  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
+  if (!nenv || !nenv->js || !is_object_type((ant_value_t)js_object)) {
+    return napi_set_last(env, napi_invalid_arg, "invalid argument");
+  }
+
+  napi_wrap_entry_t *entry = napi_find_wrap(nenv->js, js_object);
+  if (!entry) {
+    entry = (napi_wrap_entry_t *)calloc(1, sizeof(*entry));
+    if (!entry) return napi_set_last(env, napi_generic_failure, "out of memory");
+    entry->id = g_napi_wrap_next_id++;
+    HASH_ADD(hh, g_napi_wraps, id, sizeof(entry->id), entry);
+    napi_slot_set_u64(nenv->js, (ant_value_t)js_object, SLOT_NAPI_WRAP_ID, entry->id);
+  }
+
+  entry->attached_data = finalize_data;
+  entry->attached_finalize_cb = finalize_cb;
+  entry->attached_finalize_hint = finalize_hint;
+
+  if (result) return napi_create_reference(env, js_object, 0, result);
   return napi_set_last(env, napi_ok, NULL);
 }
 
@@ -2286,7 +2856,7 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_unwrap(
     return napi_set_last(env, napi_invalid_arg, "invalid argument");
   }
   napi_wrap_entry_t *entry = napi_find_wrap(nenv->js, js_object);
-  if (!entry) return napi_set_last(env, napi_invalid_arg, "object not wrapped");
+  if (!entry || !entry->has_wrap) return napi_set_last(env, napi_invalid_arg, "object not wrapped");
   *result = entry->native_object;
   return napi_set_last(env, napi_ok, NULL);
 }
@@ -2302,12 +2872,19 @@ NAPI_EXTERN napi_status NAPI_CDECL napi_remove_wrap(
   }
 
   napi_wrap_entry_t *entry = napi_find_wrap(nenv->js, js_object);
-  if (!entry) return napi_set_last(env, napi_invalid_arg, "object not wrapped");
+  if (!entry || !entry->has_wrap) return napi_set_last(env, napi_invalid_arg, "object not wrapped");
 
   if (result) *result = entry->native_object;
-  HASH_DEL(g_napi_wraps, entry);
-  free(entry);
-  js_set_slot((ant_value_t)js_object, SLOT_NAPI_WRAP_ID, js_mkundef());
+  entry->native_object = NULL;
+  entry->finalize_cb = NULL;
+  entry->finalize_hint = NULL;
+  entry->has_wrap = false;
+
+  if (!entry->attached_finalize_cb) {
+    HASH_DEL(g_napi_wraps, entry);
+    free(entry);
+    js_set_slot((ant_value_t)js_object, SLOT_NAPI_WRAP_ID, js_mkundef());
+  }
   return napi_set_last(env, napi_ok, NULL);
 }
 

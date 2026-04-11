@@ -1619,6 +1619,30 @@ static ant_value_t js_stream_set_default_high_water_mark(ant_t *js, ant_value_t 
   return js_mkundef();
 }
 
+static void stream_web_copy_global(ant_t *js, ant_value_t obj, const char *name) {
+  ant_value_t value = js_get(js, js->global, name);
+  if (is_err(value)) return;
+  js_set(js, obj, name, value);
+}
+
+// TODO: remove copy-on-start
+static void stream_web_define_common(ant_t *js, ant_value_t obj) {
+  stream_web_copy_global(js, obj, "ReadableStream");
+  stream_web_copy_global(js, obj, "ReadableStreamDefaultReader");
+  stream_web_copy_global(js, obj, "ReadableStreamDefaultController");
+  stream_web_copy_global(js, obj, "WritableStream");
+  stream_web_copy_global(js, obj, "WritableStreamDefaultWriter");
+  stream_web_copy_global(js, obj, "WritableStreamDefaultController");
+  stream_web_copy_global(js, obj, "TransformStream");
+  stream_web_copy_global(js, obj, "TransformStreamDefaultController");
+  stream_web_copy_global(js, obj, "ByteLengthQueuingStrategy");
+  stream_web_copy_global(js, obj, "CountQueuingStrategy");
+  stream_web_copy_global(js, obj, "TextEncoderStream");
+  stream_web_copy_global(js, obj, "TextDecoderStream");
+  stream_web_copy_global(js, obj, "CompressionStream");
+  stream_web_copy_global(js, obj, "DecompressionStream");
+}
+
 ant_value_t stream_library(ant_t *js) {
   ant_value_t lib = js_mkobj(js);
   ant_value_t promises = js_mkobj(js);
@@ -1669,4 +1693,15 @@ ant_value_t stream_promises_library(ant_t *js) {
   js_set_slot_wb(js, promises, SLOT_DEFAULT, promises);
   
   return promises;
+}
+
+ant_value_t stream_web_library(ant_t *js) {
+  ant_value_t lib = js_mkobj(js);
+
+  stream_web_define_common(js, lib);
+  js_set(js, lib, "default", lib);
+  js_set_slot_wb(js, lib, SLOT_DEFAULT, lib);
+  js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "stream/web", 10));
+
+  return lib;
 }

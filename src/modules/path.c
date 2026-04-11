@@ -853,6 +853,7 @@ static ant_value_t path_make_variant(ant_t *js, const path_api_t *api, path_styl
   
   js_set(js, variant, "sep", js_mkstr(js, path_sep_str(style), 1));
   js_set(js, variant, "delimiter", js_mkstr(js, path_delimiter_str(style), 1));
+  js_set(js, variant, "default", variant);
   
   return variant;
 }
@@ -869,6 +870,7 @@ ant_value_t path_library(ant_t *js) {
   js_set(js, lib, "posix", posix);
   js_set(js, lib, "win32", win32);
   js_set_sym(js, lib, get_toStringTag_sym(), js_mkstr(js, "path", 4));
+  js_set(js, lib, "default", lib);
   
   return lib;
 }

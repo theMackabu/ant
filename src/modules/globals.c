@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <time.h>
 
 #include "ant.h"
@@ -150,6 +151,108 @@ static ant_value_t intl_dtf_constructor(ant_t *js, ant_value_t *args, int nargs)
   return this;
 }
 
+static size_t intl_utf8_segment_len(const char *input, size_t remaining) {
+  if (remaining == 0) return 0;
+
+  const unsigned char *s = (const unsigned char *)input;
+  unsigned char c = s[0];
+  size_t len = 1;
+
+  if ((c & 0x80) == 0) return 1;
+  if ((c & 0xe0) == 0xc0) len = 2;
+  else if ((c & 0xf0) == 0xe0) len = 3;
+  else if ((c & 0xf8) == 0xf0) len = 4;
+
+  if (len > remaining) return 1;
+  for (size_t i = 1; i < len; i++) if ((s[i] & 0xc0) != 0x80) return 1;
+
+  return len;
+}
+
+static bool intl_ascii_is_word_byte(const char *segment, size_t len) {
+  if (len != 1) return true;
+
+  unsigned char c = (unsigned char)segment[0];
+  return 
+    (c >= '0' && c <= '9') ||
+    (c >= 'A' && c <= 'Z') ||
+    (c >= 'a' && c <= 'z') ||
+    c == '_';
+}
+
+static const char *intl_segmenter_granularity(ant_t *js, ant_value_t segmenter, size_t *len) {
+  ant_value_t granularity = js_get(js, segmenter, "granularity");
+  if (vtype(granularity) != T_STR) {
+    if (len) *len = 8;
+    return "grapheme";
+  }
+
+  return js_getstr(js, granularity, len);
+}
+
+static ant_value_t intl_segmenter_segment(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t input = nargs > 0 ? js_tostring_val(js, args[0]) : js_mkstr(js, "", 0);
+  if (is_err(input)) return input;
+
+  size_t input_len = 0;
+  char *input_str = js_getstr(js, input, &input_len);
+  ant_value_t segments = js_mkarr(js);
+
+  ant_value_t this = js_getthis(js);
+  size_t granularity_len = 0;
+  const char *granularity = intl_segmenter_granularity(js, this, &granularity_len);
+  bool word_granularity = granularity_len == 4 && memcmp(granularity, "word", 4) == 0;
+
+  for (size_t offset = 0; offset < input_len;) {
+    size_t segment_len = intl_utf8_segment_len(input_str + offset, input_len - offset);
+    ant_value_t record = js_mkobj(js);
+    
+    js_set(js, record, "segment", js_mkstr(js, input_str + offset, segment_len));
+    js_set(js, record, "index", js_mknum((double)offset));
+    js_set(js, record, "input", input);
+    
+    if (word_granularity) js_set(
+      js, record, "isWordLike",
+      js_bool(intl_ascii_is_word_byte(input_str + offset, segment_len))
+    );
+    
+    js_arr_push(js, segments, record);
+    offset += segment_len;
+  }
+
+  return segments;
+}
+
+static ant_value_t intl_segmenter_resolvedOptions(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t obj = js_mkobj(js);
+  ant_value_t this = js_getthis(js);
+  
+  size_t granularity_len = 0;
+  const char *granularity = intl_segmenter_granularity(js, this, &granularity_len);
+
+  js_set(js, obj, "locale", js_mkstr(js, "en-US", 5));
+  js_set(js, obj, "granularity", js_mkstr(js, granularity, granularity_len));
+  
+  return obj;
+}
+
+static ant_value_t intl_segmenter_constructor(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this = js_getthis(js);
+  const char *granularity = "grapheme";
+  size_t granularity_len = 8;
+
+  if (nargs >= 2 && vtype(args[1]) == T_OBJ) {
+    ant_value_t option = js_get(js, args[1], "granularity");
+    if (vtype(option) == T_STR) granularity = js_getstr(js, option, &granularity_len);
+  }
+
+  js_set(js, this, "granularity", js_mkstr(js, granularity, granularity_len));
+  js_set(js, this, "segment", js_mkfun(intl_segmenter_segment));
+  js_set(js, this, "resolvedOptions", js_mkfun(intl_segmenter_resolvedOptions));
+
+  return this;
+}
+
 void init_globals_module(void) {
   ant_t *js = rt->js;
   ant_value_t global = js_glob(js);
@@ -159,8 +262,12 @@ void init_globals_module(void) {
 
   ant_value_t intl = js_mkobj(js);
   ant_value_t dtf_ctor = js_heavy_mkfun(js, intl_dtf_constructor, js_mkundef());
+  ant_value_t segmenter_ctor = js_heavy_mkfun(js, intl_segmenter_constructor, js_mkundef());
   
   js_mark_constructor(dtf_ctor, true);
+  js_mark_constructor(segmenter_ctor, true);
+  
   js_set(js, intl, "DateTimeFormat", dtf_ctor);
+  js_set(js, intl, "Segmenter", segmenter_ctor);
   js_set(js, global, "Intl", intl);
 }

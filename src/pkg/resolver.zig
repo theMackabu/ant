@@ -769,6 +769,7 @@ pub const Resolver = struct {
     self.http.initiateTarballConnectionsAsync();
 
     const ConstraintInfo = struct {
+      package_name: []const u8,
       constraint: Constraint,
       constraint_str: []const u8,
       requester: []const u8,
@@ -780,6 +781,7 @@ pub const Resolver = struct {
       var iter = all_constraints.iterator();
       while (iter.next()) |entry| {
         for (entry.value_ptr.items) |info| {
+          self.allocator.free(info.package_name);
           self.allocator.free(info.constraint_str);
           self.allocator.free(info.requester);
         }
@@ -955,12 +957,13 @@ pub const Resolver = struct {
 
         const spec = dependencySpec(item.name, item.constraint_str);
         const constraint = Constraint.parse(spec.constraint) catch continue;
-        const gop = try all_constraints.getOrPut(spec.package_name);
+        const gop = try all_constraints.getOrPut(spec.install_name);
         if (!gop.found_existing) {
-          gop.key_ptr.* = try self.allocator.dupe(u8, spec.package_name);
+          gop.key_ptr.* = try self.allocator.dupe(u8, spec.install_name);
           gop.value_ptr.* = .{};
         }
         try gop.value_ptr.append(self.allocator, .{
+          .package_name = try self.allocator.dupe(u8, spec.package_name),
           .constraint = constraint,
           .constraint_str = try self.allocator.dupe(u8, spec.constraint),
           .requester = try self.allocator.dupe(u8, item.requester),
@@ -1024,10 +1027,12 @@ pub const Resolver = struct {
 
     var pkg_iter = all_constraints.iterator();
     while (pkg_iter.next()) |entry| {
-      const pkg_name = entry.key_ptr.*;
+      const install_name = entry.key_ptr.*;
       const constraint_list = entry.value_ptr.items;
+      if (constraint_list.len == 0) continue;
 
-      if (self.metadata_cache.get(pkg_name)) |metadata| {
+      const package_name = constraint_list[0].package_name;
+      if (self.metadata_cache.get(package_name)) |metadata| {
         var plain_constraints = try self.allocator.alloc(Constraint, constraint_list.len);
         defer self.allocator.free(plain_constraints);
         for (constraint_list, 0..) |info, i| {
@@ -1035,22 +1040,22 @@ pub const Resolver = struct {
         }
 
         if (self.selectBestVersionForConstraints(&metadata, plain_constraints)) |best| {
-          try optimal_versions.put(pkg_name, best);
+          try optimal_versions.put(install_name, best);
         } else {
           const best = self.selectVersionSatisfyingMost(&metadata, constraint_list);
           if (best) |b| {
             if (b.version.prerelease) |pre| {
               debug.log("  {s}: optimal={d}.{d}.{d}-{s} (satisfies {d}/{d} constraints)", .{
-                pkg_name,                                           b.version.major,     b.version.minor, b.version.patch, pre,
+                install_name,                                       b.version.major,     b.version.minor, b.version.patch, pre,
                 self.countSatisfied(&metadata, b, constraint_list), constraint_list.len,
               });
             } else {
               debug.log("  {s}: optimal={d}.{d}.{d} (satisfies {d}/{d} constraints)", .{
-                pkg_name,                                           b.version.major,     b.version.minor, b.version.patch,
+                install_name,                                       b.version.major,     b.version.minor, b.version.patch,
                 self.countSatisfied(&metadata, b, constraint_list), constraint_list.len,
               });
             }
-            try optimal_versions.put(pkg_name, b);
+            try optimal_versions.put(install_name, b);
           }
         }
       }
@@ -1245,7 +1250,7 @@ pub const Resolver = struct {
 
     var metadata = try self.fetchMetadata(dep_spec.package_name);
     const version_info = blk: {
-      if (optimal_versions.get(dep_spec.package_name)) |optimal| {
+      if (optimal_versions.get(dep_spec.install_name)) |optimal| {
         if (constraint.satisfies(optimal.version) and optimal.matchesPlatform()) break :blk optimal;
       }
       break :blk self.selectBestVersion(&metadata, constraint) orelse return error.NoMatchingVersion;
@@ -1253,9 +1258,9 @@ pub const Resolver = struct {
 
     if (!version_info.matchesPlatform()) return error.PlatformMismatch;
 
-    const cons_gop = try self.constraints.getOrPut(dep_spec.package_name);
+    const cons_gop = try self.constraints.getOrPut(dep_spec.install_name);
     if (!cons_gop.found_existing) {
-      cons_gop.key_ptr.* = try self.allocator.dupe(u8, dep_spec.package_name);
+      cons_gop.key_ptr.* = try self.allocator.dupe(u8, dep_spec.install_name);
       cons_gop.value_ptr.* = .{};
     }
     try cons_gop.value_ptr.append(self.allocator, constraint);
@@ -1332,9 +1337,9 @@ pub const Resolver = struct {
         return existing_pkg;
       }
 
-      const cons_gop = try self.constraints.getOrPut(dep_spec.package_name);
+      const cons_gop = try self.constraints.getOrPut(dep_spec.install_name);
       if (!cons_gop.found_existing) {
-        cons_gop.key_ptr.* = try self.allocator.dupe(u8, dep_spec.package_name);
+        cons_gop.key_ptr.* = try self.allocator.dupe(u8, dep_spec.install_name);
         cons_gop.value_ptr.* = .{};
       }
       try cons_gop.value_ptr.append(self.allocator, constraint);
@@ -1400,9 +1405,9 @@ pub const Resolver = struct {
       }
     }
 
-    const cons_gop = try self.constraints.getOrPut(dep_spec.package_name);
+    const cons_gop = try self.constraints.getOrPut(dep_spec.install_name);
     if (!cons_gop.found_existing) {
-      cons_gop.key_ptr.* = try self.allocator.dupe(u8, dep_spec.package_name);
+      cons_gop.key_ptr.* = try self.allocator.dupe(u8, dep_spec.install_name);
       cons_gop.value_ptr.* = .{};
     }
     try cons_gop.value_ptr.append(self.allocator, constraint);
@@ -1563,10 +1568,10 @@ pub const Resolver = struct {
 
     const dep_spec = dependencySpec(name, constraint_str);
     const constraint = try Constraint.parse(dep_spec.constraint);
-    const cons_gop = try self.constraints.getOrPut(dep_spec.package_name);
+    const cons_gop = try self.constraints.getOrPut(dep_spec.install_name);
 
     if (!cons_gop.found_existing) {
-      cons_gop.key_ptr.* = try self.allocator.dupe(u8, dep_spec.package_name);
+      cons_gop.key_ptr.* = try self.allocator.dupe(u8, dep_spec.install_name);
       cons_gop.value_ptr.* = .{};
     }
     try cons_gop.value_ptr.append(self.allocator, constraint);

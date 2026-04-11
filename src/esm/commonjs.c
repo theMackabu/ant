@@ -26,7 +26,7 @@ static ant_value_t esm_cjs_require(ant_t *js, ant_value_t *args, int nargs) {
     base_path = (const char *)(uintptr_t)(path_off);
   }
 
-  ant_value_t ns = js_esm_import_sync_from(js, args[0], base_path);
+  ant_value_t ns = js_esm_import_sync_from_require(js, args[0], base_path);
   if (is_err(ns)) return ns;
 
   if (vtype(ns) == T_OBJ) {
@@ -52,7 +52,7 @@ static ant_value_t esm_cjs_require_resolve(ant_t *js, ant_value_t *args, int nar
     base_path = (const char *)(uintptr_t)(data_off);
   }
 
-  ant_value_t resolved = js_esm_resolve_specifier(js, args[0], base_path);
+  ant_value_t resolved = js_esm_resolve_specifier_require(js, args[0], base_path);
   if (is_err(resolved)) return resolved;
   if (vtype(resolved) != T_STR) return resolved;
 

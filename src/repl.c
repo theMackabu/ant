@@ -425,7 +425,7 @@ static cmd_result_t cmd_save(ant_t *js, history_t *history, const char *arg) {
 static cmd_result_t cmd_stats(ant_t *js, history_t *history, const char *arg) {
   ant_value_t stats_fn = js_get(js, rt->ant_obj, "stats");
   ant_value_t result = sv_vm_call(js->vm, js, stats_fn, js_mkundef(), NULL, 0, NULL, false);
-  console_print(js, &result, 1, NULL, stdout);
+  console_emit(js, false, NULL, &result, 1);
   return CMD_OK;
 }
 

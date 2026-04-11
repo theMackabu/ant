@@ -69,6 +69,7 @@ typedef struct {
   ant_value_t     js_key;
   unsigned char  *hash_key;
   size_t          hash_key_len;
+  bool            warned_max_listeners;
   UT_hash_handle  hh;
 } EventType;
 
@@ -213,6 +214,32 @@ static bool is_eventemitter_instance(ant_value_t target) {
 
 static bool is_eventtarget_instance(ant_value_t target) {
   return js_check_brand(target, BRAND_EVENTTARGET);
+}
+
+static int eventemitter_get_max_listeners_impl(ant_value_t target) {
+  ant_value_t slot = js_get_slot(target, SLOT_EVENT_MAX_LISTENERS);
+  if (vtype(slot) == T_NUM) {
+    int n = (int)js_getnum(slot);
+    return n >= 0 ? n : EVENTS_DEFAULT_MAX_LISTENERS;
+  }
+  return EVENTS_DEFAULT_MAX_LISTENERS;
+}
+
+static ant_value_t eventemitter_get_listeners_array(ant_t *js, ant_value_t target, ant_value_t key) {
+  ant_value_t result = js_mkarr(js);
+  EventType *evt = NULL;
+
+  if (!is_object_type(target) || !key) return result;
+  evt = find_emitter_event_type(js, target, key);
+  if (!evt) return result;
+
+  for (unsigned int i = 0; i < utarray_len(evt->listeners); i++) {
+    EventListenerEntry *entry = (EventListenerEntry *)utarray_eltptr(evt->listeners, i);
+    if (!entry) continue;
+    js_arr_push(js, result, entry->callback);
+  }
+
+  return result;
 }
 
 static void js_init_event_obj(ant_t *js, ant_value_t obj, ant_value_t type_val, bool bubbles, bool cancelable) {
@@ -663,6 +690,31 @@ static bool eventemitter_add_listener_impl(
     items[0] = entry;
   }
 
+  int max_listeners = eventemitter_get_max_listeners_impl(target);
+  if (
+    max_listeners > 0 &&
+    !evt->warned_max_listeners &&
+    (int)utarray_len(evt->listeners) > max_listeners
+  ) {
+    evt->warned_max_listeners = true;
+    if (vtype(key) == T_STR) {
+      fprintf(
+        stderr,
+        "Warning: Possible EventEmitter memory leak detected. "
+        "%u '%s' listeners added. Use emitter.setMaxListeners() to increase limit.\n",
+        (unsigned)utarray_len(evt->listeners),
+        js_str(js, key)
+      );
+    } else {
+      fprintf(
+        stderr,
+        "Warning: Possible EventEmitter memory leak detected. "
+        "%u listeners added for a Symbol event. Use emitter.setMaxListeners() to increase limit.\n",
+        (unsigned)utarray_len(evt->listeners)
+      );
+    }
+  }
+
   return true;
 }
 
@@ -884,6 +936,32 @@ static ant_value_t js_eventemitter_listenerCount(ant_t *js, ant_value_t *args, i
   return js_mknum((double)utarray_len(evt->listeners));
 }
 
+static ant_value_t js_eventemitter_setMaxListeners(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "setMaxListeners requires 1 argument");
+  if (vtype(args[0]) != T_NUM) return js_mkerr(js, "n must be a number");
+
+  int n = (int)js_getnum(args[0]);
+  if (n < 0) return js_mkerr(js, "n must be non-negative");
+
+  ant_value_t this_obj = js_getthis(js);
+  if (!is_object_type(this_obj)) return js_mkerr_typed(js, JS_ERR_TYPE, "setMaxListeners requires an object receiver");
+  js_set_slot(this_obj, SLOT_EVENT_MAX_LISTENERS, js_mknum(n));
+  return this_obj;
+}
+
+static ant_value_t js_eventemitter_getMaxListeners(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
+  if (!is_object_type(this_obj)) return js_mknum(EVENTS_DEFAULT_MAX_LISTENERS);
+  return js_mknum(eventemitter_get_max_listeners_impl(this_obj));
+}
+
+static ant_value_t js_eventemitter_rawListeners(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_mkarr(js);
+  ant_value_t key = evt_key_from_arg(args[0]);
+  if (!key) return js_mkarr(js);
+  return eventemitter_get_listeners_array(js, js_getthis(js), key);
+}
+
 static ant_value_t js_eventemitter_eventNames(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_obj = js_getthis(js);
   ant_value_t result = js_mkarr(js);
@@ -1017,8 +1095,19 @@ static ant_value_t js_events_once(ant_t *js, ant_value_t *args, int nargs) {
   return js_events_once_attach(js, promise, target, key, listener, signal);
 }
 
-// TODO: fix stub
 static ant_value_t js_events_disposable_dispose(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  if (!is_object_type(state)) return js_mkundef();
+
+  ant_value_t disposed = js_get_slot(state, SLOT_SETTLED);
+  if (vtype(disposed) == T_BOOL && disposed == js_true) return js_mkundef();
+  js_set_slot(state, SLOT_SETTLED, js_true);
+
+  ant_value_t signal = js_get(js, state, "signal");
+  ant_value_t listener = js_get(js, state, "listener");
+  if (abort_signal_is_signal(signal) && is_callable(listener))
+    abort_signal_remove_listener(js, signal, listener);
+
   return js_mkundef();
 }
 
@@ -1026,26 +1115,43 @@ static ant_value_t js_events_add_abort_listener(ant_t *js, ant_value_t *args, in
   if (nargs < 2 || !abort_signal_is_signal(args[0]) || !is_callable(args[1]))
     return js_mkerr_typed(js, JS_ERR_TYPE, "events.addAbortListener requires an AbortSignal and listener");
 
-  if (abort_signal_is_aborted(args[0])) {
+  bool already_aborted = abort_signal_is_aborted(args[0]);
+  if (already_aborted) {
     ant_value_t event = js_mkobj(js);
     js_set(js, event, "type", js_mkstr(js, "abort", 5));
     sv_vm_call(js->vm, js, args[1], args[0], &event, 1, NULL, false);
   } else abort_signal_add_listener(js, args[0], args[1]);
 
+  ant_value_t state = js_mkobj(js);
+  js_set_slot(state, SLOT_SETTLED, js_bool(already_aborted));
+  js_set(js, state, "signal", args[0]);
+  js_set(js, state, "listener", args[1]);
+
   ant_value_t disposable = js_mkobj(js);
-  js_set(js, disposable, "dispose", js_mkfun(js_events_disposable_dispose));
+  js_set(js, disposable, "dispose", js_heavy_mkfun(js, js_events_disposable_dispose, state));
   
   return disposable;
 }
 
-// TODO: fix stub
 static ant_value_t js_events_set_max_listeners(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "setMaxListeners requires at least 1 argument");
+  if (vtype(args[0]) != T_NUM) return js_mkerr(js, "n must be a number");
+
+  int n = (int)js_getnum(args[0]);
+  if (n < 0) return js_mkerr(js, "n must be non-negative");
+
+  for (int i = 1; i < nargs; i++) {
+    if (!is_object_type(args[i])) continue;
+    js_set_slot(args[i], SLOT_EVENT_MAX_LISTENERS, js_mknum(n));
+  }
+
   return js_mkundef();
 }
 
-// TODO: fix stub
 static ant_value_t js_events_get_max_listeners(ant_t *js, ant_value_t *args, int nargs) {
-  return js_mknum(10);
+  if (nargs < 1) return js_mknum(EVENTS_DEFAULT_MAX_LISTENERS);
+  if (!is_object_type(args[0])) return js_mknum(EVENTS_DEFAULT_MAX_LISTENERS);
+  return js_mknum(eventemitter_get_max_listeners_impl(args[0]));
 }
 
 // TODO: fix stub
@@ -1084,6 +1190,9 @@ ant_value_t eventemitter_prototype(ant_t *js) {
   js_set(js, eventemitter_proto, "emit",               js_mkfun(js_eventemitter_emit));
   js_set(js, eventemitter_proto, "removeAllListeners", js_mkfun(js_eventemitter_removeAllListeners));
   js_set(js, eventemitter_proto, "listenerCount",      js_mkfun(js_eventemitter_listenerCount));
+  js_set(js, eventemitter_proto, "setMaxListeners",    js_mkfun(js_eventemitter_setMaxListeners));
+  js_set(js, eventemitter_proto, "getMaxListeners",    js_mkfun(js_eventemitter_getMaxListeners));
+  js_set(js, eventemitter_proto, "rawListeners",       js_mkfun(js_eventemitter_rawListeners));
   js_set(js, eventemitter_proto, "eventNames",         js_mkfun(js_eventemitter_eventNames));
   js_set_sym(js, eventemitter_proto, get_toStringTag_sym(), js_mkstr(js, "EventEmitter", 12));
 

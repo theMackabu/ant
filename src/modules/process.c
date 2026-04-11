@@ -1819,6 +1819,7 @@ static void process_set_methods(ant_t *js, ant_value_t obj, bool include_event_m
 
 ant_value_t process_library(ant_t *js) {
   ant_value_t process_obj = js_get(js, js_glob(js), "process");
+  js_set(js, process_obj, "default", process_obj);
   js_set_slot_wb(js, process_obj, SLOT_DEFAULT, process_obj);
   return process_obj;
 }
@@ -1862,11 +1863,7 @@ void init_process_module() {
   
   js_set(js, process_obj, "pid", js_mknum((double)getpid()));
   js_set(js, process_obj, "ppid", js_mknum((double)getppid()));
-  
-  char version_str[128];
-  snprintf(version_str, sizeof(version_str), "v%s", ANT_VERSION);
-  js_set(js, process_obj, "version", js_mkstr(js, version_str, strlen(version_str)));
-  
+    
   ant_value_t versions_obj = js_mkobj(js);
   js_set(js, versions_obj, "ant", js_mkstr(js, ANT_VERSION, strlen(ANT_VERSION)));
   char uv_ver[32];

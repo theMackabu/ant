@@ -12,11 +12,23 @@ interface Features {
 }
 
 interface Versions {
-  node: string;
   ant: string;
+  node: string;
+  brotli: string;
+  llhttp: string;
+  nghttp2: string;
+  simdjson: string;
+  pcre2: string;
+  libffi: string;
+  lmdb: string;
+  utf8proc: string;
+  zlib: string;
   v8: string;
   uv: string;
   modules: string;
+  napi: string;
+  wamr: string;
+  boringssl: string;
 }
 
 interface Release {

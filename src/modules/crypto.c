@@ -409,6 +409,84 @@ static ant_value_t js_crypto_random_fill_sync(ant_t *js, ant_value_t *args, int 
   return args[0];
 }
 
+// TODO: extend subtle
+static ant_value_t crypto_subtle_get_algorithm_name(ant_t *js, ant_value_t algorithm) {
+  if (vtype(algorithm) == T_STR) return js_tostring_val(js, algorithm);
+  if (is_object_type(algorithm)) {
+    ant_value_t name = js_get(js, algorithm, "name");
+    if (is_err(name)) return name;
+    return js_tostring_val(js, name);
+  }
+  return js_mkerr_typed(js, JS_ERR_TYPE, "Algorithm must be a string or object with a name");
+}
+
+static ant_value_t crypto_subtle_digest_impl(
+  ant_t *js, ant_value_t algorithm, ant_value_t data
+) {
+  ant_value_t algo_val = crypto_subtle_get_algorithm_name(js, algorithm);
+  if (is_err(algo_val)) return algo_val;
+
+  size_t algo_len = 0;
+  const char *algo = js_getstr(js, algo_val, &algo_len);
+  if (!algo || algo_len == 0) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid digest algorithm");
+  }
+
+  char algo_name[16];
+  if (algo_len >= sizeof(algo_name)) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Unsupported digest algorithm");
+  }
+
+  for (size_t i = 0; i < algo_len; i++) {
+    char ch = algo[i];
+    if (ch >= 'a' && ch <= 'z') ch = (char)(ch - ('a' - 'A'));
+    algo_name[i] = ch;
+  }
+  algo_name[algo_len] = '\0';
+
+  const char *evp_name = NULL;
+  if (strcmp(algo_name, "SHA-1") == 0 || strcmp(algo_name, "SHA1") == 0) evp_name = "sha1";
+  else if (strcmp(algo_name, "SHA-256") == 0 || strcmp(algo_name, "SHA256") == 0) evp_name = "sha256";
+  else if (strcmp(algo_name, "SHA-384") == 0 || strcmp(algo_name, "SHA384") == 0) evp_name = "sha384";
+  else if (strcmp(algo_name, "SHA-512") == 0 || strcmp(algo_name, "SHA512") == 0) evp_name = "sha512";
+  else return js_mkerr_typed(js, JS_ERR_TYPE, "Unsupported digest algorithm");
+
+  const EVP_MD *md = EVP_get_digestbyname(evp_name);
+  if (!md) return js_mkerr_typed(js, JS_ERR_TYPE, "Unsupported digest algorithm");
+
+  const uint8_t *bytes = NULL;
+  size_t len = 0;
+  if (!buffer_source_get_bytes(js, data, &bytes, &len)) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "digest data must be an ArrayBuffer, TypedArray, DataView, or Buffer");
+  }
+
+  unsigned char digest[EVP_MAX_MD_SIZE];
+  unsigned int digest_len = 0;
+  if (EVP_Digest(bytes, len, digest, &digest_len, md, NULL) != 1) {
+    return js_mkerr(js, "Digest failed");
+  }
+
+  ArrayBufferData *buffer = create_array_buffer_data(digest_len);
+  if (!buffer) return js_mkerr(js, "Out of memory");
+  if (digest_len > 0) memcpy(buffer->data, digest, digest_len);
+  
+  return create_arraybuffer_obj(js, buffer);
+}
+
+static ant_value_t js_crypto_subtle_digest(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t promise = js_mkpromise(js);
+  if (nargs < 2) {
+    js_reject_promise(js, promise, js_mkerr_typed(js, JS_ERR_TYPE, "subtle.digest requires algorithm and data"));
+    return promise;
+  }
+
+  ant_value_t result = crypto_subtle_digest_impl(js, args[0], args[1]);
+  if (is_err(result)) js_reject_promise(js, promise, result);
+  else js_resolve_promise(js, promise, result);
+  
+  return promise;
+}
+
 static ant_value_t js_hash_update(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_val = js_getthis(js);
   ant_hash_state_t *state = NULL;
@@ -547,6 +625,7 @@ cleanup:
 
 static ant_value_t create_crypto_obj(ant_t *js) {
   ant_value_t crypto_obj = js_mkobj(js);
+  ant_value_t subtle_obj = js_mkobj(js);
   
   js_set(js, crypto_obj, "random", js_mkfun(js_crypto_random));
   js_set(js, crypto_obj, "randomBytes", js_mkfun(js_crypto_random_bytes));
@@ -554,6 +633,9 @@ static ant_value_t create_crypto_obj(ant_t *js) {
   js_set(js, crypto_obj, "randomUUID", js_mkfun(js_crypto_random_uuid));
   js_set(js, crypto_obj, "randomUUIDv7", js_mkfun(js_crypto_random_uuidv7));
   js_set(js, crypto_obj, "getRandomValues", js_mkfun(js_crypto_get_random_values));
+  js_set(js, subtle_obj, "digest", js_mkfun(js_crypto_subtle_digest));
+  js_set_sym(js, subtle_obj, get_toStringTag_sym(), js_mkstr(js, "SubtleCrypto", 12));
+  js_set(js, crypto_obj, "subtle", subtle_obj);
   
   js_set_sym(js, crypto_obj, get_toStringTag_sym(), js_mkstr(js, "Crypto", 6));
   return crypto_obj;

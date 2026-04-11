@@ -22,18 +22,19 @@ typedef struct ant_module_t {
 
 void js_esm_cleanup_module_cache(void);
 
-ant_value_t js_esm_import_sync(ant_t *js, ant_value_t specifier);
 ant_value_t js_esm_make_file_url(ant_t *js, const char *path);
-ant_value_t js_esm_import_sync_from(ant_t *js, ant_value_t specifier, const char *base_path);
-
-ant_value_t js_esm_eval_module_source(
-  ant_t *js, const char *resolved_path, 
-  const char *js_code, size_t js_len, ant_value_t ns
-);
+ant_value_t js_esm_import_sync(ant_t *js, ant_value_t specifier);
 
 ant_value_t js_esm_import_sync_cstr(ant_t *js, const char *specifier, size_t spec_len);
+ant_value_t js_esm_import_sync_from(ant_t *js, ant_value_t specifier, const char *base_path);
 ant_value_t js_esm_resolve_specifier(ant_t *js, ant_value_t specifier, const char *base_path);
+
+ant_value_t js_esm_import_sync_from_require(ant_t *js, ant_value_t specifier, const char *base_path);
+ant_value_t js_esm_resolve_specifier_require(ant_t *js, ant_value_t specifier, const char *base_path);
+
 ant_value_t js_esm_import_sync_cstr_from(ant_t *js, const char *specifier, size_t spec_len, const char *base_path);
 ant_value_t js_esm_import_dynamic(ant_t *js, ant_value_t specifier, const char *base_path, ant_value_t *out_tla_promise);
+ant_value_t js_esm_import_sync_cstr_from_require(ant_t *js, const char *specifier, size_t spec_len, const char *base_path);
+ant_value_t js_esm_eval_module_source(ant_t *js, const char *resolved_path, const char *js_code, size_t js_len, ant_value_t ns);
 
 #endif
