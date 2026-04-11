@@ -48,6 +48,7 @@ static double get_timestamp_ms(void) {
 
 typedef struct {
   ant_value_t callback;
+  ant_value_t raw_callback;
   ant_value_t signal;
   bool once;
   bool capture;
@@ -225,7 +226,13 @@ static int eventemitter_get_max_listeners_impl(ant_value_t target) {
   return EVENTS_DEFAULT_MAX_LISTENERS;
 }
 
-static ant_value_t eventemitter_get_listeners_array(ant_t *js, ant_value_t target, ant_value_t key) {
+static ant_value_t js_eventemitter_once_wrapper(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t listener = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  if (!is_callable(listener)) return js_mkundef();
+  return sv_vm_call(js->vm, js, listener, js->this_val, args, nargs, NULL, false);
+}
+
+static ant_value_t eventemitter_get_listeners_array(ant_t *js, ant_value_t target, ant_value_t key, bool raw) {
   ant_value_t result = js_mkarr(js);
   EventType *evt = NULL;
 
@@ -236,7 +243,10 @@ static ant_value_t eventemitter_get_listeners_array(ant_t *js, ant_value_t targe
   for (unsigned int i = 0; i < utarray_len(evt->listeners); i++) {
     EventListenerEntry *entry = (EventListenerEntry *)utarray_eltptr(evt->listeners, i);
     if (!entry) continue;
-    js_arr_push(js, result, entry->callback);
+    js_arr_push(js, result, raw && entry->once && is_callable(entry->raw_callback) 
+      ? entry->raw_callback 
+      : entry->callback
+    );
   }
 
   return result;
@@ -535,7 +545,7 @@ static ant_value_t add_listener_to(ant_t *js, ant_value_t *args, int nargs, Even
     if (e->callback == cb && e->capture == capture) return js_mkundef();
   }
 
-  EventListenerEntry entry = { cb, signal, once, capture };
+  EventListenerEntry entry = { cb, js_mkundef(), signal, once, capture };
   utarray_push_back(evt->listeners, &entry);
   return js_mkundef();
 }
@@ -677,9 +687,15 @@ static bool eventemitter_add_listener_impl(
   if (!evt) return false;
 
   entry.callback = listener;
+  entry.raw_callback = js_mkundef();
   entry.signal = js_mkundef();
   entry.once = once;
   entry.capture = false;
+
+  if (once) {
+    entry.raw_callback = js_heavy_mkfun(js, js_eventemitter_once_wrapper, listener);
+    if (is_callable(entry.raw_callback)) js_set(js, entry.raw_callback, "listener", listener);
+  }
 
   if (!prepend || utarray_len(evt->listeners) == 0) utarray_push_back(evt->listeners, &entry);
   else {
@@ -735,7 +751,7 @@ static bool eventemitter_remove_listener_impl(
 
   for (unsigned int i = 0; i < utarray_len(evt->listeners); i++) {
   EventListenerEntry *entry = (EventListenerEntry *)utarray_eltptr(evt->listeners, i);
-  if (entry->callback == listener) {
+  if (entry->callback == listener || entry->raw_callback == listener) {
     utarray_erase(evt->listeners, i, 1);
     return true;
   }}
@@ -959,7 +975,7 @@ static ant_value_t js_eventemitter_rawListeners(ant_t *js, ant_value_t *args, in
   if (nargs < 1) return js_mkarr(js);
   ant_value_t key = evt_key_from_arg(args[0]);
   if (!key) return js_mkarr(js);
-  return eventemitter_get_listeners_array(js, js_getthis(js), key);
+  return eventemitter_get_listeners_array(js, js_getthis(js), key, true);
 }
 
 static ant_value_t js_eventemitter_eventNames(ant_t *js, ant_value_t *args, int nargs) {
@@ -987,6 +1003,11 @@ static ant_value_t js_events_once_listener(ant_t *js, ant_value_t *args, int nar
   if (vtype(settled) == T_BOOL && settled == js_true) return js_mkundef();
   js_set_slot(state, SLOT_SETTLED, js_true);
 
+  ant_value_t signal = js_get(js, state, "signal");
+  ant_value_t abort_listener = js_get(js, state, "abortListener");
+  if (abort_signal_is_signal(signal) && is_callable(abort_listener))
+    abort_signal_remove_listener(js, signal, abort_listener);
+    
   ant_value_t values = js_mkarr(js);
   for (int i = 0; i < nargs; i++) js_arr_push(js, values, args[i]);
   js_resolve_promise(js, promise, values);
@@ -1006,6 +1027,10 @@ static ant_value_t js_events_once_abort_listener(ant_t *js, ant_value_t *args, i
   js_set_slot(state, SLOT_SETTLED, js_true);
 
   ant_value_t signal = js_get(js, state, "signal");
+  ant_value_t abort_listener = js_get(js, state, "abortListener");
+  if (abort_signal_is_signal(signal) && is_callable(abort_listener))
+    abort_signal_remove_listener(js, signal, abort_listener);
+    
   ant_value_t reason = abort_signal_get_reason(signal);
   if (vtype(reason) == T_UNDEF) reason = js_mkerr(js, "The operation was aborted");
   js_reject_promise(js, promise, reason);
@@ -1088,8 +1113,10 @@ static ant_value_t js_events_once(ant_t *js, ant_value_t *args, int nargs) {
       js_events_once_reject_aborted(js, promise, signal);
       return promise;
     }
+    ant_value_t abort_listener = js_heavy_mkfun(js, js_events_once_abort_listener, state);
     js_set(js, state, "signal", signal);
-    abort_signal_add_listener(js, signal, js_heavy_mkfun(js, js_events_once_abort_listener, state));
+    js_set(js, state, "abortListener", abort_listener);
+    abort_signal_add_listener(js, signal, abort_listener);
   }
 
   return js_events_once_attach(js, promise, target, key, listener, signal);
@@ -1283,6 +1310,7 @@ static void mark_event_type_listeners(ant_t *js, gc_mark_fn mark, EventType *eve
   for (unsigned int i = 0; i < utarray_len(evt->listeners); i++) {
     EventListenerEntry *e = (EventListenerEntry *)utarray_eltptr(evt->listeners, i);
     mark(js, e->callback);
+    if (vtype(e->raw_callback) != T_UNDEF) mark(js, e->raw_callback);
     if (vtype(e->signal) != T_UNDEF) mark(js, e->signal);
   }
 }}

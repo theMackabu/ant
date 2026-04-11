@@ -1863,7 +1863,7 @@ void init_process_module() {
   
   js_set(js, process_obj, "pid", js_mknum((double)getpid()));
   js_set(js, process_obj, "ppid", js_mknum((double)getppid()));
-    
+  
   ant_value_t versions_obj = js_mkobj(js);
   js_set(js, versions_obj, "ant", js_mkstr(js, ANT_VERSION, strlen(ANT_VERSION)));
   char uv_ver[32];

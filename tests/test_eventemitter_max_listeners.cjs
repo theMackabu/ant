@@ -22,7 +22,11 @@ ee.on('x', a);
 ee.prependOnceListener('x', b);
 
 assert.equal(ee.listenerCount('x'), 2);
-assert.deepEqual(ee.rawListeners('x'), [b, a]);
+const raw = ee.rawListeners('x');
+assert.equal(raw.length, 2);
+assert.notEqual(raw[0], b);
+assert.equal(raw[0].listener, b);
+assert.equal(raw[1], a);
 
 const pt = new PassThrough();
 assert.equal(typeof pt.setMaxListeners, 'function');

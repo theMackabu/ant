@@ -74,6 +74,7 @@ instance.count('hits');
 instance.error('problem');
 instance.warn('warning');
 instance.assert(false, 'boom');
+instance.trace('trace');
 
 testDeep('Console instance stdout routing', stdoutSink.chunks, [
   'hello world\n',
@@ -88,7 +89,10 @@ testDeep('Console instance stdout routing', stdoutSink.chunks, [
 testDeep('Console instance stderr routing', stderrSink.chunks, [
   'problem\n',
   'warning\n',
-  'Assertion failed: boom\n'
+  'Assertion failed: boom\n',
+  'Trace: trace\n'
 ]);
+
+test('Console instance trace writes stack to stderr sink', stderrSink.chunks.some(chunk => chunk.includes('at ')), true);
 
 summary();

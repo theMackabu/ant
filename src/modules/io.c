@@ -628,8 +628,12 @@ static ant_value_t js_console_assert(ant_t *js, ant_value_t *args, int nargs) {
 static ant_value_t js_console_trace(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_obj = console_get_effective_this(js, js_getthis(js));
   console_emit_current(js, true, "Trace:", args, nargs);
-  if (console_get_target_stream(js, this_obj, true) == js_mkundef()) js_print_stack_trace_vm(js, stderr);
-  else js_print_stack_trace_vm(js, stderr);
+  ant_value_t stack = js_capture_raw_stack(js);
+  if (vtype(stack) == T_STR) {
+    size_t stack_len = 0;
+    const char *stack_str = js_getstr(js, stack, &stack_len);
+    console_write_string(js, this_obj, true, stack_str, stack_len);
+  } else js_print_stack_trace_vm(js, stderr);
   return js_mkundef();
 }
 

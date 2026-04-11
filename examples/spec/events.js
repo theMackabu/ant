@@ -215,6 +215,16 @@ const eeNodeOncePromise = nodeOnce(eeNodeOnce, 'ready');
 eeNodeOnce.emit('ready', 'ok', 7);
 testDeep('events.once resolves emitted args', await eeNodeOncePromise, ['ok', 7]);
 
+const eeRaw = new EventEmitter();
+function rawOnce() {}
+function rawOn() {}
+eeRaw.once('raw', rawOnce);
+eeRaw.on('raw', rawOn);
+const rawListeners = eeRaw.rawListeners('raw');
+test('rawListeners returns wrapper for once listeners', rawListeners[0] !== rawOnce, true);
+test('rawListeners wrapper exposes original listener', rawListeners[0].listener, rawOnce);
+test('rawListeners keeps non-once listeners unchanged', rawListeners[1], rawOn);
+
 const etNodeOnce = new EventTarget();
 const etNodeOncePromise = nodeOnce(etNodeOnce, 'ping');
 etNodeOnce.dispatchEvent(new Event('ping'));
@@ -290,6 +300,19 @@ const disposedAbort = addAbortListener(disposedAbortController.signal, () => {
 disposedAbort.dispose();
 disposedAbortController.abort();
 test('events.addAbortListener dispose removes listener', disposedAbortValue, 0);
+
+let onceAbortCalls = 0;
+const onceAbortController = new AbortController();
+const onceAbortListener = () => {
+  onceAbortCalls++;
+};
+addAbortListener(onceAbortController.signal, onceAbortListener);
+const onceAbortEmitter = new EventEmitter();
+const onceAbortPromise = nodeOnce(onceAbortEmitter, 'done', { signal: onceAbortController.signal });
+onceAbortEmitter.emit('done', 'ok');
+await onceAbortPromise;
+onceAbortController.abort();
+test('events.once removes abort listener after resolve', onceAbortCalls, 1);
 
 test('events.getMaxListeners default', getMaxListeners(eeNodeOnce), 10);
 test('events.setMaxListeners no-op return', setMaxListeners(20, eeNodeOnce), undefined);
