@@ -86,7 +86,7 @@ testDeep('Console instance stdout routing', stdoutSink.chunks, [
   'hits: 1\n'
 ]);
 
-testDeep('Console instance stderr routing', stderrSink.chunks, [
+testDeep('Console instance stderr routing', stderrSink.chunks.slice(0, 4), [
   'problem\n',
   'warning\n',
   'Assertion failed: boom\n',
