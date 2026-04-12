@@ -110,6 +110,138 @@ function clientNotImplemented() {
   throw new Error('node:http client transport is not implemented yet');
 }
 
+function isURLLike(value) {
+  return !!value && typeof value === 'object' && typeof value.href === 'string';
+}
+
+function cloneOptionObject(value) {
+  return value && typeof value === 'object' ? { ...value } : {};
+}
+
+function normalizeRequestArgs(input, options, callback) {
+  let resolvedInput = input;
+  let resolvedOptions = options;
+  let resolvedCallback = callback;
+
+  if (typeof resolvedOptions === 'function') {
+    resolvedCallback = resolvedOptions;
+    resolvedOptions = undefined;
+  }
+
+  if (typeof resolvedInput === 'function' || resolvedInput === undefined || resolvedInput === null) {
+    resolvedCallback = typeof resolvedInput === 'function' ? resolvedInput : resolvedCallback;
+    resolvedInput = undefined;
+  }
+
+  return {
+    input: resolvedInput,
+    options: cloneOptionObject(resolvedOptions),
+    callback: resolvedCallback
+  };
+}
+
+function defaultPortForProtocol(protocol) {
+  return protocol === 'https:' ? 443 : 80;
+}
+
+function hostIncludesExplicitPort(host) {
+  if (host === undefined || host === null) return false;
+  const value = String(host);
+  const bracketEnd = value.lastIndexOf(']');
+  const colonIndex = value.lastIndexOf(':');
+  return colonIndex > bracketEnd;
+}
+
+function buildRequestOptions(input, options) {
+  const requestOptions = cloneOptionObject(options);
+
+  if (typeof input === 'string' || isURLLike(input)) {
+    const url = new URL(String(input));
+    if (requestOptions.protocol === undefined) requestOptions.protocol = url.protocol;
+    if (requestOptions.hostname === undefined && requestOptions.host === undefined) {
+      requestOptions.hostname = url.hostname;
+    }
+    if (requestOptions.port === undefined && url.port) requestOptions.port = url.port;
+    if (requestOptions.path === undefined) requestOptions.path = `${url.pathname}${url.search}`;
+    if (requestOptions.auth === undefined && url.username) {
+      requestOptions.auth = url.password ? `${url.username}:${url.password}` : url.username;
+    }
+  } else if (input && typeof input === 'object') {
+    Object.assign(requestOptions, input);
+  }
+
+  if (!requestOptions.protocol) requestOptions.protocol = 'http:';
+  if (!requestOptions.method) requestOptions.method = 'GET';
+  if (!requestOptions.path) requestOptions.path = '/';
+  if (
+    (requestOptions.port === undefined || requestOptions.port === null || requestOptions.port === '') &&
+    !hostIncludesExplicitPort(requestOptions.host)
+  ) {
+    requestOptions.port = defaultPortForProtocol(requestOptions.protocol);
+  }
+
+  return requestOptions;
+}
+
+function buildRequestUrl(options) {
+  const protocol = options.protocol || 'http:';
+  const base = new URL(`${protocol}//localhost/`);
+
+  if (options.hostname !== undefined && options.hostname !== null) base.hostname = String(options.hostname);
+  else if (options.host !== undefined && options.host !== null) base.host = String(options.host);
+
+  if (options.port !== undefined && options.port !== null && options.port !== '') {
+    base.port = String(options.port);
+  }
+
+  if (options.auth) {
+    const auth = String(options.auth);
+    const sep = auth.indexOf(':');
+    if (sep === -1) base.username = auth;
+    else {
+      base.username = auth.slice(0, sep);
+      base.password = auth.slice(sep + 1);
+    }
+  }
+
+  return new URL(String(options.path || '/'), base).toString();
+}
+
+function createAbortError(message) {
+  const error = new Error(message || 'The operation was aborted');
+  error.name = 'AbortError';
+  return error;
+}
+
+function buildRequestHeadersObject(headers) {
+  const normalized = createHeadersObject();
+
+  if (!headers) return normalized;
+  Object.keys(headers).forEach(name => {
+    const value = headers[name];
+    normalized[name] = Array.isArray(value) ? value.join(', ') : String(value);
+  });
+  return normalized;
+}
+
+function buildHeadersFromFetch(response) {
+  const headers = createHeadersObject();
+  const rawHeaders = [];
+
+  for (const [name, value] of response.headers.entries()) {
+    rawHeaders.push(name, value);
+    appendHeaderValue(headers, normalizeHeaderName(name), value);
+  }
+
+  return { headers, rawHeaders };
+}
+
+function getFetchBody(chunks) {
+  if (!chunks || chunks.length === 0) return undefined;
+  if (chunks.length === 1) return chunks[0];
+  return Buffer.concat(chunks);
+}
+
 // compatibility stub only
 function createAgentState() {
   return Object.create(null);
@@ -117,10 +249,293 @@ function createAgentState() {
 
 export class OutgoingMessage extends EventEmitter {}
 
-export class ClientRequest extends OutgoingMessage {
-  constructor() {
+class FetchIncomingMessage extends EventEmitter {
+  constructor(response) {
     super();
-    clientNotImplemented();
+
+    const { headers, rawHeaders } = buildHeadersFromFetch(response);
+
+    this.socket = null;
+    this.connection = null;
+    this.statusCode = response.status;
+    this.statusMessage = response.statusText || STATUS_CODES[response.status] || '';
+    this.headers = headers;
+    this.rawHeaders = rawHeaders;
+    this.httpVersion = '1.1';
+    this.httpVersionMajor = 1;
+    this.httpVersionMinor = 1;
+    this.complete = false;
+    this.aborted = false;
+    this.destroyed = false;
+    this.readableEnded = false;
+    this.url = response.url;
+    this._reader = response.body && typeof response.body.getReader === 'function' ? response.body.getReader() : null;
+    this._encoding = null;
+    this._decoder = null;
+    this._pumpStarted = false;
+    this._closeEmitted = false;
+  }
+
+  _emitClose() {
+    if (this._closeEmitted) return;
+    this._closeEmitted = true;
+    this.emit('close');
+  }
+
+  async _pumpBody() {
+    if (this._pumpStarted) return;
+    this._pumpStarted = true;
+
+    if (!this._reader) {
+      this.complete = true;
+      this.readableEnded = true;
+      this.emit('end');
+      this._emitClose();
+      return;
+    }
+
+    try {
+      for (;;) {
+        const { done, value } = await this._reader.read();
+        if (done) break;
+        if (!value || value.byteLength === 0) continue;
+
+        const chunk = Buffer.from(value);
+        if (this._decoder) {
+          const text = this._decoder.decode(chunk, { stream: true });
+          if (text.length > 0) this.emit('data', text);
+        } else if (this._encoding) {
+          this.emit('data', chunk.toString(this._encoding));
+        } else {
+          this.emit('data', chunk);
+        }
+      }
+
+      if (this._decoder) {
+        const finalChunk = this._decoder.decode();
+        if (finalChunk.length > 0) this.emit('data', finalChunk);
+      }
+
+      this.complete = true;
+      this.readableEnded = true;
+      this.emit('end');
+      this._emitClose();
+    } catch (error) {
+      if (this.destroyed) return;
+      this.destroyed = true;
+      this.aborted = true;
+      this.emit('error', error);
+      this._emitClose();
+    }
+  }
+
+  setEncoding(encoding) {
+    this._encoding = encoding || 'utf8';
+    if (typeof TextDecoder === 'function') {
+      try {
+        this._decoder = new TextDecoder(this._encoding === 'utf8' ? 'utf-8' : this._encoding);
+      } catch {
+        this._decoder = null;
+      }
+    }
+    return this;
+  }
+
+  resume() {
+    queueMicrotask(() => {
+      this._pumpBody();
+    });
+    return this;
+  }
+
+  destroy(error) {
+    if (this.destroyed) return this;
+    this.destroyed = true;
+    this.aborted = true;
+    if (this._reader && typeof this._reader.cancel === 'function') {
+      Promise.resolve(this._reader.cancel(error)).catch(() => {});
+    }
+    if (error) this.emit('error', error);
+    this._emitClose();
+    return this;
+  }
+}
+
+export class ClientRequest extends OutgoingMessage {
+  constructor(options = {}, callback) {
+    super();
+
+    this.agent = options.agent ?? globalAgent;
+    this.method = String(options.method || 'GET').toUpperCase();
+    this.protocol = options.protocol || 'http:';
+    this.host = options.host ?? options.hostname ?? 'localhost';
+    this.hostname = options.hostname ?? options.host ?? 'localhost';
+    this.port = options.port ?? defaultPortForProtocol(this.protocol);
+    this.path = options.path || '/';
+    this.socket = null;
+    this.connection = null;
+    this.destroyed = false;
+    this.aborted = false;
+    this.finished = false;
+    this.reusedSocket = false;
+    this._headers = createHeadersObject();
+    this._bodyChunks = [];
+    this._controller = typeof AbortController === 'function' ? new AbortController() : null;
+    this._timeout = 0;
+    this._timeoutHandle = null;
+    this._dispatchStarted = false;
+    this._requestUrl = buildRequestUrl(options);
+    this._closeEmitted = false;
+    this._timedOut = false;
+
+    if (options.headers) {
+      Object.keys(options.headers).forEach(name => {
+        this.setHeader(name, options.headers[name]);
+      });
+    }
+
+    if (typeof callback === 'function') this.once('response', callback);
+    if (options.timeout !== undefined) this.setTimeout(options.timeout);
+  }
+
+  _emitClose() {
+    if (this._closeEmitted) return;
+    this._closeEmitted = true;
+    this.emit('close');
+  }
+
+  _clearTimeoutTimer() {
+    if (!this._timeoutHandle) return;
+    clearTimeout(this._timeoutHandle);
+    this._timeoutHandle = null;
+  }
+
+  _armTimeoutTimer() {
+    this._clearTimeoutTimer();
+    if (!(this._timeout > 0)) return;
+
+    this._timeoutHandle = setTimeout(() => {
+      if (this.destroyed) return;
+      this._timedOut = true;
+      this.emit('timeout');
+      if (this._controller) this._controller.abort(createAbortError('Request timed out'));
+    }, this._timeout);
+  }
+
+  _dispatch() {
+    if (this._dispatchStarted || this.destroyed) return;
+    this._dispatchStarted = true;
+    this._armTimeoutTimer();
+
+    Promise.resolve()
+      .then(async () => {
+        const response = await fetch(this._requestUrl, {
+          method: this.method,
+          headers: buildRequestHeadersObject(this._headers),
+          body: getFetchBody(this._bodyChunks),
+          signal: this._controller ? this._controller.signal : undefined
+        });
+
+        if (this.destroyed) return;
+        this._clearTimeoutTimer();
+
+        const incoming = new FetchIncomingMessage(response);
+        incoming.on('close', () => {
+          this._emitClose();
+        });
+
+        this.emit('response', incoming);
+        queueMicrotask(() => {
+          incoming._pumpBody();
+        });
+      })
+      .catch(error => {
+        this._clearTimeoutTimer();
+        if (this.destroyed || this._timedOut) {
+          this._emitClose();
+          return;
+        }
+        this.emit('error', error);
+        this._emitClose();
+      });
+  }
+
+  setHeader(name, value) {
+    this._headers[normalizeHeaderName(name)] = value;
+    return this;
+  }
+
+  getHeader(name) {
+    return this._headers[normalizeHeaderName(name)];
+  }
+
+  getHeaders() {
+    return { ...this._headers };
+  }
+
+  removeHeader(name) {
+    delete this._headers[normalizeHeaderName(name)];
+    return this;
+  }
+
+  setTimeout(msecs, callback) {
+    this._timeout = Number(msecs) || 0;
+    if (typeof callback === 'function') this.on('timeout', callback);
+    if (this._dispatchStarted && !this.destroyed) this._armTimeoutTimer();
+    return this;
+  }
+
+  setNoDelay() {
+    return this;
+  }
+
+  setSocketKeepAlive() {
+    return this;
+  }
+
+  write(chunk, encoding, callback) {
+    if (this.finished) throw new Error('write after end');
+    this._bodyChunks.push(bufferFrom(chunk, typeof encoding === 'string' ? encoding : undefined));
+    if (typeof encoding === 'function') callback = encoding;
+    if (typeof callback === 'function') callback();
+    return true;
+  }
+
+  end(chunk, encoding, callback) {
+    if (this.finished) return this;
+    if (typeof chunk === 'function') {
+      callback = chunk;
+      chunk = undefined;
+      encoding = undefined;
+    } else if (typeof encoding === 'function') {
+      callback = encoding;
+      encoding = undefined;
+    }
+
+    if (chunk !== undefined && chunk !== null) {
+      this.write(chunk, encoding);
+    }
+
+    this.finished = true;
+    this.emit('finish');
+    if (typeof callback === 'function') callback();
+    this._dispatch();
+    return this;
+  }
+
+  abort() {
+    return this.destroy(createAbortError('Request aborted'));
+  }
+
+  destroy(error) {
+    if (this.destroyed) return this;
+    this.destroyed = true;
+    this.aborted = true;
+    this._clearTimeoutTimer();
+    if (this._controller) this._controller.abort(error || createAbortError('Request destroyed'));
+    if (error) this.emit('error', error);
+    this._emitClose();
+    return this;
   }
 }
 
@@ -525,12 +940,16 @@ export function createServer(options, requestListener) {
   return new Server(options, requestListener);
 }
 
-export function request() {
-  clientNotImplemented();
+export function request(input, options, callback) {
+  const normalized = normalizeRequestArgs(input, options, callback);
+  const requestOptions = buildRequestOptions(normalized.input, normalized.options);
+  return new ClientRequest(requestOptions, normalized.callback);
 }
 
-export function get() {
-  clientNotImplemented();
+export function get(input, options, callback) {
+  const req = request(input, options, callback);
+  req.end();
+  return req;
 }
 
 export { METHODS, STATUS_CODES } from 'ant:internal/http_metadata';

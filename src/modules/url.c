@@ -1602,6 +1602,7 @@ ant_value_t url_library(ant_t *js) {
   js_set(js, lib, "URLSearchParams",js_get(js, glob, "URLSearchParams"));
   js_set(js, lib, "fileURLToPath",  js_mkfun(builtin_fileURLToPath));
   js_set(js, lib, "pathToFileURL",  js_mkfun(builtin_pathToFileURL));
+  js_set(js, lib, "parse",          js_mkfun(url_parse));
   js_set(js, lib, "format",         js_mkfun(builtin_url_format));
   js_set(js, lib, "default", lib);
   

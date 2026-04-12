@@ -51,6 +51,8 @@ static void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_mul);
   LOAD_EXT(jit_helper_div);
   LOAD_EXT(jit_helper_mod);
+  LOAD_EXT(jit_helper_str_append_local);
+  LOAD_EXT(jit_helper_str_append_local_snapshot);
   LOAD_EXT(jit_helper_lt);
   LOAD_EXT(jit_helper_le);
   LOAD_EXT(jit_helper_gt);
@@ -1819,6 +1821,9 @@ static jit_features_t jit_prescan_features(sv_func_t *func) {
       case OP_SHL:  case OP_SHR: case OP_USHR:
       case OP_TYPEOF:
       case OP_ADD_LOCAL:
+      case OP_STR_APPEND_LOCAL:
+      case OP_STR_ALC_SNAPSHOT:
+      case OP_STR_FLUSH_LOCAL:
         f.needs_bailout = true;
         break;
       case OP_INC_LOCAL: case OP_DEC_LOCAL:
@@ -1869,6 +1874,7 @@ static bool jit_is_eligible(sv_func_t *func) {
       case OP_GET_LOCAL:  case OP_PUT_LOCAL:  case OP_SET_LOCAL:
       case OP_GET_LOCAL8: case OP_PUT_LOCAL8: case OP_SET_LOCAL8:
       case OP_SET_LOCAL_UNDEF:                  
+      case OP_GET_SLOT_RAW:
       case OP_GET_UPVAL: case OP_PUT_UPVAL: case OP_SET_UPVAL:
       case OP_CLOSE_UPVAL:
       case OP_REST:
@@ -1903,6 +1909,8 @@ static bool jit_is_eligible(sv_func_t *func) {
       case OP_IN: case OP_GET_LENGTH:
       case OP_DEFINE_FIELD: case OP_SEQ: case OP_EQ:
       case OP_INC_LOCAL: case OP_DEC_LOCAL: case OP_ADD_LOCAL:
+      case OP_STR_APPEND_LOCAL:
+      case OP_STR_ALC_SNAPSHOT:
       case OP_TO_PROPKEY:
       case OP_RETURN: case OP_RETURN_UNDEF:
       case OP_SET_NAME:
@@ -2060,6 +2068,27 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
     MIR_T_I64, "js",
     MIR_JSVAL,  "v");
 
+  MIR_type_t sal_ret = MIR_JSVAL;
+  MIR_item_t str_append_local_proto = MIR_new_proto(ctx, "sal_proto",
+    1, &sal_ret, 6,
+    MIR_T_I64, "vm",
+    MIR_T_I64, "js",
+    MIR_T_P,   "func",
+    MIR_T_P,   "locals",
+    MIR_T_I32, "local_idx",
+    MIR_JSVAL, "rhs");
+
+  MIR_type_t sals_ret = MIR_JSVAL;
+  MIR_item_t str_append_local_snapshot_proto = MIR_new_proto(ctx, "sals_proto",
+    1, &sals_ret, 7,
+    MIR_T_I64, "vm",
+    MIR_T_I64, "js",
+    MIR_T_P,   "func",
+    MIR_T_P,   "locals",
+    MIR_T_I32, "local_idx",
+    MIR_JSVAL, "lhs",
+    MIR_JSVAL, "rhs");
+
   MIR_type_t truthy_ret = MIR_T_I64;
   MIR_item_t truthy_proto = MIR_new_proto(ctx, "truthy_proto",
     1, &truthy_ret, 2,
@@ -2200,6 +2229,10 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   MIR_item_t imp_mul   = MIR_new_import(ctx, "jit_helper_mul");
   MIR_item_t imp_div   = MIR_new_import(ctx, "jit_helper_div");
   MIR_item_t imp_mod   = MIR_new_import(ctx, "jit_helper_mod");
+  MIR_item_t imp_str_append_local =
+    MIR_new_import(ctx, "jit_helper_str_append_local");
+  MIR_item_t imp_str_append_local_snapshot =
+    MIR_new_import(ctx, "jit_helper_str_append_local_snapshot");
   MIR_item_t imp_lt    = MIR_new_import(ctx, "jit_helper_lt");
   MIR_item_t imp_le    = MIR_new_import(ctx, "jit_helper_le");
   MIR_item_t imp_gt    = MIR_new_import(ctx, "jit_helper_gt");
@@ -2830,6 +2863,65 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
               MIR_new_reg_op(ctx, vs.d_regs[vs.sp - 1]),
               MIR_new_reg_op(ctx, local_d_regs[idx])));
           if (vs.slot_type) vs.slot_type[vs.sp - 1] = SLOT_NUM;
+        }
+        break;
+      }
+
+      case OP_GET_SLOT_RAW: {
+        uint16_t slot_idx = sv_get_u16(ip + 1);
+        if ((int)slot_idx < param_count) {
+          uint16_t idx = slot_idx;
+          MIR_reg_t dst = vstack_push(&vs);
+          if (has_captured_params && captured_params && idx < (uint16_t)param_count &&
+              captured_params[idx]) {
+            MIR_append_insn(ctx, jit_func,
+              MIR_new_insn(ctx, MIR_MOV,
+                MIR_new_reg_op(ctx, dst),
+                MIR_new_mem_op(ctx, MIR_JSVAL,
+                  (MIR_disp_t)(idx * (int)sizeof(ant_value_t)),
+                  r_slotbuf, 0, 1)));
+          } else {
+            MIR_label_t arg_in_range = MIR_new_label(ctx);
+            MIR_label_t arg_done = MIR_new_label(ctx);
+            MIR_append_insn(ctx, jit_func,
+              MIR_new_insn(ctx, MIR_UBGT,
+                MIR_new_label_op(ctx, arg_in_range),
+                MIR_new_reg_op(ctx, r_argc),
+                MIR_new_int_op(ctx, (int64_t)idx)));
+            mir_load_imm(ctx, jit_func, dst, mkval(T_UNDEF, 0));
+            MIR_append_insn(ctx, jit_func,
+              MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, arg_done)));
+            MIR_append_insn(ctx, jit_func, arg_in_range);
+            MIR_append_insn(ctx, jit_func,
+              MIR_new_insn(ctx, MIR_MOV,
+                MIR_new_reg_op(ctx, dst),
+                MIR_new_mem_op(ctx, MIR_JSVAL,
+                  (MIR_disp_t)(idx * (int)sizeof(ant_value_t)),
+                  r_args, 0, 1)));
+            MIR_append_insn(ctx, jit_func, arg_done);
+          }
+        } else {
+          uint16_t idx = (uint16_t)(slot_idx - (uint16_t)param_count);
+          if (idx >= (uint16_t)n_locals) { ok = false; break; }
+          if (has_captures && captured_locals && captured_locals[idx])
+            MIR_append_insn(ctx, jit_func,
+              MIR_new_insn(ctx, MIR_MOV,
+                MIR_new_reg_op(ctx, local_regs[idx]),
+                MIR_new_mem_op(ctx, MIR_T_I64,
+                  (MIR_disp_t)((int)idx * (int)sizeof(ant_value_t)), r_lbuf, 0, 1)));
+          MIR_reg_t dst = vstack_push(&vs);
+          if (known_func_locals) vs.known_func[vs.sp - 1] = known_func_locals[idx];
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_MOV,
+              MIR_new_reg_op(ctx, dst),
+              MIR_new_reg_op(ctx, local_regs[idx])));
+          if (known_type_locals && known_type_locals[idx] == SV_TI_NUM) {
+            MIR_append_insn(ctx, jit_func,
+              MIR_new_insn(ctx, MIR_DMOV,
+                MIR_new_reg_op(ctx, vs.d_regs[vs.sp - 1]),
+                MIR_new_reg_op(ctx, local_d_regs[idx])));
+            if (vs.slot_type) vs.slot_type[vs.sp - 1] = SLOT_NUM;
+          }
         }
         break;
       }
@@ -5156,6 +5248,171 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         break;
       }
 
+      case OP_STR_APPEND_LOCAL: {
+        uint16_t slot_idx = sv_get_u16(ip + 1);
+        int pre_op_sp = vs.sp;
+        if ((int)slot_idx < param_count) {
+          mir_load_imm(ctx, jit_func, r_bailout_val, (uint64_t)SV_JIT_BAILOUT);
+          mir_emit_bailout_check(ctx, jit_func, r_bailout_val,
+            0, r_bailout_off, bc_off,
+            r_bailout_sp, pre_op_sp, bailout_tramp,
+            r_args_buf, &vs, local_regs, n_locals, r_lbuf, r_d_slot);
+          break;
+        }
+
+        uint16_t local_idx = (uint16_t)(slot_idx - (uint16_t)param_count);
+        if (local_idx >= (uint16_t)n_locals) { ok = false; break; }
+
+        vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
+        MIR_reg_t rhs = vstack_pop(&vs);
+
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_call_insn(ctx, 9,
+            MIR_new_ref_op(ctx, str_append_local_proto),
+            MIR_new_ref_op(ctx, imp_str_append_local),
+            MIR_new_reg_op(ctx, r_err_tmp),
+            MIR_new_reg_op(ctx, r_vm),
+            MIR_new_reg_op(ctx, r_js),
+            MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)func),
+            MIR_new_reg_op(ctx, r_lbuf),
+            MIR_new_int_op(ctx, (int64_t)local_idx),
+            MIR_new_reg_op(ctx, rhs)));
+
+        mir_emit_bailout_check(ctx, jit_func, r_err_tmp,
+          0, r_bailout_off, bc_off,
+          r_bailout_sp, pre_op_sp, bailout_tramp,
+          r_args_buf, &vs, local_regs, n_locals, r_lbuf, r_d_slot);
+
+        if (has_captures) {
+          for (int i = 0; i < n_locals; i++)
+            if (captured_locals[i])
+              MIR_append_insn(ctx, jit_func,
+                MIR_new_insn(ctx, MIR_MOV,
+                  MIR_new_reg_op(ctx, local_regs[i]),
+                  MIR_new_mem_op(ctx, MIR_T_I64,
+                    (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1)));
+        }
+
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_MOV,
+            MIR_new_reg_op(ctx, local_regs[local_idx]),
+            MIR_new_mem_op(ctx, MIR_T_I64,
+              (MIR_disp_t)((int)local_idx * (int)sizeof(ant_value_t)), r_lbuf, 0, 1)));
+        if (known_func_locals) known_func_locals[local_idx] = NULL;
+        if (known_type_locals) known_type_locals[local_idx] = SV_TI_UNKNOWN;
+
+        MIR_label_t no_err = MIR_new_label(ctx);
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_URSH,
+            MIR_new_reg_op(ctx, r_bool),
+            MIR_new_reg_op(ctx, r_err_tmp),
+            MIR_new_int_op(ctx, NANBOX_TYPE_SHIFT)));
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_BNE,
+            MIR_new_label_op(ctx, no_err),
+            MIR_new_reg_op(ctx, r_bool),
+            MIR_new_uint_op(ctx, JIT_ERR_TAG)));
+        if (jit_try_depth > 0) {
+          jit_try_entry_t *h = &jit_try_stack[jit_try_depth - 1];
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_MOV,
+              MIR_new_reg_op(ctx, vs.regs[h->saved_sp]),
+              MIR_new_reg_op(ctx, r_err_tmp)));
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_JMP,
+              MIR_new_label_op(ctx, h->catch_label)));
+        } else {
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_ret_insn(ctx, 1, MIR_new_reg_op(ctx, r_err_tmp)));
+        }
+        MIR_append_insn(ctx, jit_func, no_err);
+        break;
+      }
+
+      case OP_STR_ALC_SNAPSHOT: {
+        uint16_t slot_idx = sv_get_u16(ip + 1);
+        int pre_op_sp = vs.sp;
+        if ((int)slot_idx < param_count) {
+          mir_load_imm(ctx, jit_func, r_bailout_val, (uint64_t)SV_JIT_BAILOUT);
+          mir_emit_bailout_check(ctx, jit_func, r_bailout_val,
+            0, r_bailout_off, bc_off,
+            r_bailout_sp, pre_op_sp, bailout_tramp,
+            r_args_buf, &vs, local_regs, n_locals, r_lbuf, r_d_slot);
+          break;
+        }
+
+        uint16_t local_idx = (uint16_t)(slot_idx - (uint16_t)param_count);
+        if (local_idx >= (uint16_t)n_locals) { ok = false; break; }
+
+        vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
+        vstack_ensure_boxed(&vs, vs.sp - 2, ctx, jit_func, r_d_slot);
+        MIR_reg_t rhs = vstack_pop(&vs);
+        MIR_reg_t lhs = vstack_pop(&vs);
+
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_call_insn(ctx, 10,
+            MIR_new_ref_op(ctx, str_append_local_snapshot_proto),
+            MIR_new_ref_op(ctx, imp_str_append_local_snapshot),
+            MIR_new_reg_op(ctx, r_err_tmp),
+            MIR_new_reg_op(ctx, r_vm),
+            MIR_new_reg_op(ctx, r_js),
+            MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)func),
+            MIR_new_reg_op(ctx, r_lbuf),
+            MIR_new_int_op(ctx, (int64_t)local_idx),
+            MIR_new_reg_op(ctx, lhs),
+            MIR_new_reg_op(ctx, rhs)));
+
+        mir_emit_bailout_check(ctx, jit_func, r_err_tmp,
+          0, r_bailout_off, bc_off,
+          r_bailout_sp, pre_op_sp, bailout_tramp,
+          r_args_buf, &vs, local_regs, n_locals, r_lbuf, r_d_slot);
+
+        if (has_captures) {
+          for (int i = 0; i < n_locals; i++)
+            if (captured_locals[i])
+              MIR_append_insn(ctx, jit_func,
+                MIR_new_insn(ctx, MIR_MOV,
+                  MIR_new_reg_op(ctx, local_regs[i]),
+                  MIR_new_mem_op(ctx, MIR_T_I64,
+                    (MIR_disp_t)(i * (int)sizeof(ant_value_t)), r_lbuf, 0, 1)));
+        }
+
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_MOV,
+            MIR_new_reg_op(ctx, local_regs[local_idx]),
+            MIR_new_mem_op(ctx, MIR_T_I64,
+              (MIR_disp_t)((int)local_idx * (int)sizeof(ant_value_t)), r_lbuf, 0, 1)));
+        if (known_func_locals) known_func_locals[local_idx] = NULL;
+        if (known_type_locals) known_type_locals[local_idx] = SV_TI_UNKNOWN;
+
+        MIR_label_t no_err = MIR_new_label(ctx);
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_URSH,
+            MIR_new_reg_op(ctx, r_bool),
+            MIR_new_reg_op(ctx, r_err_tmp),
+            MIR_new_int_op(ctx, NANBOX_TYPE_SHIFT)));
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_BNE,
+            MIR_new_label_op(ctx, no_err),
+            MIR_new_reg_op(ctx, r_bool),
+            MIR_new_uint_op(ctx, JIT_ERR_TAG)));
+        if (jit_try_depth > 0) {
+          jit_try_entry_t *h = &jit_try_stack[jit_try_depth - 1];
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_MOV,
+              MIR_new_reg_op(ctx, vs.regs[h->saved_sp]),
+              MIR_new_reg_op(ctx, r_err_tmp)));
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_JMP,
+              MIR_new_label_op(ctx, h->catch_label)));
+        } else {
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_ret_insn(ctx, 1, MIR_new_reg_op(ctx, r_err_tmp)));
+        }
+        MIR_append_insn(ctx, jit_func, no_err);
+        break;
+      }
+
       case OP_TO_PROPKEY: {
         vstack_ensure_boxed(&vs, vs.sp - 1, ctx, jit_func, r_d_slot);
         MIR_reg_t src = vstack_pop(&vs);
@@ -7001,6 +7258,9 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       case OP_LINE_NUM:
       case OP_COL_NUM:
       case OP_LABEL:
+        break;
+      case OP_STR_FLUSH_LOCAL:
+        ok = false;
         break;
 
       case OP_SET_NAME: {

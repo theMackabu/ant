@@ -2,8 +2,6 @@
 #define SV_COERCION_H
 
 #include "silver/engine.h"
-#include "modules/symbol.h"
-
 #include "esm/loader.h"
 #include <string.h>
 
@@ -230,7 +228,7 @@ static inline void sv_with_fallback_put(
       if (frame->lp) frame->lp[idx] = val;
       break;
     case WITH_FB_ARG:
-      sv_frame_set_arg_value(frame, idx, val);
+      sv_frame_set_arg_value(js, frame, idx, val);
       break;
     case WITH_FB_UPVAL:
       if (frame->upvalues && (int)idx < frame->upvalue_count) {
@@ -360,24 +358,16 @@ static inline void sv_op_special_obj(
     return;
   }
 
-  ant_value_t arr = js_mkarr(js);
-  if (frame->bp && frame->argc > 0) {
-    for (int i = 0; i < frame->argc; i++) js_arr_push(js, arr, frame->bp[i]);
-  }
-  
-  if (sv_frame_is_strict(frame)) js_set_slot(arr, SLOT_STRICT_ARGS, js_true);
-  else if (vtype(frame->callee) == T_FUNC) setprop_cstr(js, arr, "callee", 6, frame->callee);
-  
-  js_set_sym(js, arr, get_toStringTag_sym(), js_mkstr(js, "Arguments", 9));
-  ant_value_t array_proto = js_get_ctor_proto(js, "Array", 5);
-  
-  if (is_object_type(array_proto)) {
-    ant_value_t iter_fn = js_get_sym(js, array_proto, get_iterator_sym());
-    if (vtype(iter_fn) == T_FUNC || vtype(iter_fn) == T_CFUNC)
-      js_set_sym(js, arr, get_iterator_sym(), iter_fn);
+  if (vtype(frame->arguments_obj) == T_UNDEF) {
+    int mapped_count = sv_frame_is_strict(frame) || !frame->func ? 0 : frame->func->param_count;
+    if (mapped_count > frame->argc) mapped_count = frame->argc;
+    frame->arguments_obj = js_create_arguments_object(
+      js, frame->callee, frame, frame->argc, 
+      mapped_count, sv_frame_is_strict(frame)
+    );
   }
 
-  vm->stack[vm->sp++] = arr;
+  vm->stack[vm->sp++] = frame->arguments_obj;
 }
 
 #endif

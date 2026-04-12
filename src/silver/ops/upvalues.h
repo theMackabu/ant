@@ -36,9 +36,14 @@ static inline ant_value_t sv_op_get_upval(
   uint16_t idx = sv_get_u16(ip + 1);
   sv_upvalue_t *uv = frame->upvalues[idx];
   ant_value_t val = *uv->location;
-  if (val == SV_TDZ)
-    return js_mkerr_typed(js, JS_ERR_REFERENCE,
-      "Cannot access variable before initialization");
+  if (val == SV_TDZ) return js_mkerr_typed(js, 
+    JS_ERR_REFERENCE, 
+    "Cannot access variable before initialization"
+  );
+  if (vtype(val) == T_STR && str_is_heap_builder(val)) {
+    val = str_materialize(js, val);
+    if (is_err(val)) return val;
+  }
   vm->stack[vm->sp++] = val;
   return js_mkundef();
 }
@@ -55,22 +60,25 @@ static inline void sv_op_set_upval(sv_vm_t *vm, sv_frame_t *frame, uint8_t *ip) 
   *uv->location = vm->stack[vm->sp - 1];
 }
 
-static inline void sv_op_close_upval(sv_vm_t *vm, sv_frame_t *frame, uint8_t *ip) {
+static inline ant_value_t sv_op_close_upval(sv_vm_t *vm, sv_frame_t *frame, uint8_t *ip) {
   uint16_t idx = sv_get_u16(ip + 1);
   ant_value_t *slot = sv_frame_slot_ptr(frame, idx);
-  if (!slot) return;
+  if (!slot) return js_mkundef();
 
   sv_upvalue_t **pp = &vm->open_upvalues;
   while (*pp) {
-  sv_upvalue_t *uv = *pp;
-  ant_value_t *loc = uv->location;
-  if (sv_slot_in_vm_stack(vm, loc) && loc >= slot) {
-    uv->closed = *loc;
-    uv->location = &uv->closed;
-    *pp = uv->next;
+    sv_upvalue_t *uv = *pp;
+    ant_value_t *loc = uv->location;
+    if (sv_slot_in_vm_stack(vm, loc) && loc >= slot) {
+      uv->closed = *loc;
+      uv->location = &uv->closed;
+      *pp = uv->next;
+    }
+    else pp = &uv->next;
   }
-  else pp = &uv->next;
-}}
+  
+  return js_mkundef();
+}
 
 static inline sv_upvalue_t *sv_capture_upvalue(sv_vm_t *vm, ant_value_t *slot) {
   sv_upvalue_t **pp = &vm->open_upvalues;
@@ -84,7 +92,7 @@ static inline sv_upvalue_t *sv_capture_upvalue(sv_vm_t *vm, ant_value_t *slot) {
   return uv;
 }
 
-static inline void sv_op_closure(
+static inline ant_value_t sv_op_closure(
   sv_vm_t *vm, ant_t *js, sv_frame_t *frame,
   sv_func_t *func, uint8_t *ip
 ) {
@@ -99,16 +107,15 @@ static inline void sv_op_closure(
   closure->call_flags = child->is_arrow ? SV_CALL_IS_ARROW : 0;
 
   if (child->upvalue_count > 0) {
-    closure->upvalues = calloc((size_t)child->upvalue_count, sizeof(sv_upvalue_t *));
-    for (int i = 0; i < child->upvalue_count; i++) {
-      sv_upval_desc_t *desc = &child->upval_descs[i];
-      if (desc->is_local) {
-        ant_value_t *slot = sv_frame_slot_ptr(frame, desc->index);
-        if (!slot) slot = frame->bp;
-        closure->upvalues[i] = sv_capture_upvalue(vm, slot);
-      } else closure->upvalues[i] = frame->upvalues[desc->index];
-    }
-  }
+  closure->upvalues = calloc((size_t)child->upvalue_count, sizeof(sv_upvalue_t *));
+  for (int i = 0; i < child->upvalue_count; i++) {
+    sv_upval_desc_t *desc = &child->upval_descs[i];
+    if (desc->is_local) {
+      ant_value_t *slot = sv_frame_slot_ptr(frame, desc->index);
+      if (!slot) slot = frame->bp;
+      closure->upvalues[i] = sv_capture_upvalue(vm, slot);
+    } else closure->upvalues[i] = frame->upvalues[desc->index];
+  }}
 
   ant_value_t func_val = mkval(T_FUNC, (uintptr_t)closure);
   vm->stack[vm->sp++] = func_val;
@@ -138,6 +145,8 @@ static inline void sv_op_closure(
     ant_value_t func_proto = js_get_slot(js->global, SLOT_FUNC_PROTO);
     if (vtype(func_proto) == T_FUNC) js_set_proto_init(func_obj, func_proto);
   }
+  
+  return js_mkundef();
 }
 
 #endif

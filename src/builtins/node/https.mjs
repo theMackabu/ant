@@ -94,6 +94,42 @@ function clientNotImplemented() {
   throw new Error('node:https client transport is not implemented yet');
 }
 
+function createInvalidProtocolError(protocol) {
+  const error = new TypeError(`Protocol "${protocol}" not supported. Expected "https:"`);
+  error.code = 'ERR_INVALID_PROTOCOL';
+  return error;
+}
+
+function getProtocolFromInput(input) {
+  if (typeof input === 'string') return new URL(input).protocol;
+  if (!input || typeof input !== 'object') return undefined;
+  if (typeof input.href === 'string') return new URL(String(input)).protocol;
+  if (input.protocol === undefined || input.protocol === null) return undefined;
+  return String(input.protocol);
+}
+
+function assertHttpsProtocol(protocol) {
+  if (protocol === undefined || protocol === null || protocol === '') return;
+  if (String(protocol) !== 'https:') throw createInvalidProtocolError(String(protocol));
+}
+
+function applyDefaultHttpsProtocol(input, options) {
+  const optionProtocol = options && typeof options === 'object' ? options.protocol : undefined;
+  assertHttpsProtocol(optionProtocol);
+
+  if (typeof input === 'string' || (input && typeof input === 'object' && typeof input.href === 'string')) {
+    if (optionProtocol === undefined) assertHttpsProtocol(getProtocolFromInput(input));
+    return [input, options];
+  }
+
+  if (typeof input === 'function' || input === undefined || input === null) {
+    return [{ protocol: 'https:' }, options];
+  }
+
+  assertHttpsProtocol(getProtocolFromInput(input));
+  return [{ ...input, protocol: input.protocol ?? 'https:' }, options];
+}
+
 // compatibility stub only
 export class Server extends http.Server {
   constructor(options, requestListener) {
@@ -133,12 +169,14 @@ export function createServer(options, requestListener) {
   return new Server(options, requestListener);
 }
 
-export function request() {
-  clientNotImplemented();
+export function request(input, options, callback) {
+  const [resolvedInput, resolvedOptions] = applyDefaultHttpsProtocol(input, options);
+  return http.request(resolvedInput, resolvedOptions, callback);
 }
 
-export function get() {
-  clientNotImplemented();
+export function get(input, options, callback) {
+  const [resolvedInput, resolvedOptions] = applyDefaultHttpsProtocol(input, options);
+  return http.get(resolvedInput, resolvedOptions, callback);
 }
 
 export { METHODS, STATUS_CODES } from 'ant:internal/http_metadata';

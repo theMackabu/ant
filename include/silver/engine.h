@@ -211,7 +211,7 @@ typedef enum {
 typedef struct 
   sv_upvalue sv_upvalue_t;
 
-typedef struct {
+typedef struct sv_frame {
   uint8_t *ip;
   ant_value_t *bp;
   ant_value_t *lp;
@@ -230,7 +230,9 @@ typedef struct {
   sv_completion_t completion;
   sv_upvalue_t **upvalues;
   int upvalue_count;
+  
   ant_value_t with_obj;
+  ant_value_t arguments_obj;
 } sv_frame_t;
 
 typedef enum {
@@ -254,6 +256,8 @@ struct sv_upvalue {
 static inline sv_upvalue_t *js_upvalue_alloc(void) {
   return (sv_upvalue_t *)fixed_arena_alloc(&rt->js->upvalue_arena);
 }
+
+bool sv_slot_has_open_upvalue(sv_vm_t *vm, ant_value_t *slot);
 
 #define SV_CALL_HAS_BOUND_ARGS   (1u << 0)
 #define SV_CALL_HAS_SUPER        (1u << 1)
@@ -458,10 +462,12 @@ static inline ant_value_t sv_frame_get_arg_value(const sv_frame_t *frame, uint16
   return frame->bp[idx];
 }
 
-static inline void sv_frame_set_arg_value(sv_frame_t *frame, uint16_t idx, ant_value_t val) {
+static inline void sv_frame_set_arg_value(ant_t *js, sv_frame_t *frame, uint16_t idx, ant_value_t val) {
   int arg_slots = sv_frame_arg_slots(frame);
   if (!frame || !frame->bp || (int)idx >= arg_slots) return;
   frame->bp[idx] = val;
+  if (vtype(frame->arguments_obj) != T_UNDEF)
+    js_arguments_sync_slot(js, frame->arguments_obj, idx, val);
 }
 
 static inline ant_value_t *sv_frame_slot_ptr(sv_frame_t *frame, uint16_t slot_idx) {
@@ -476,10 +482,35 @@ static inline ant_value_t *sv_frame_slot_ptr(sv_frame_t *frame, uint16_t slot_id
   return &frame->lp[slot_idx - param_count];
 }
 
+static inline uint16_t sv_frame_total_slots(const sv_frame_t *frame) {
+  if (!frame || !frame->func) return 0;
+  int total = frame->func->param_count + frame->func->max_locals;
+  return total > 0 ? (uint16_t)total : 0;
+}
+
 static inline void sv_vm_maybe_checkpoint_microtasks(ant_t *js) {
   if (!js || js->microtasks_draining || js->vm_exec_depth != 0) return;
   js_maybe_drain_microtasks(js);
 }
+
+ant_value_t sv_string_builder_read_value(
+  ant_t *js, ant_value_t value
+);
+
+ant_value_t sv_string_builder_flush_slot(
+  sv_vm_t *vm, ant_t *js, 
+  sv_frame_t *frame, uint16_t slot_idx
+);
+
+ant_value_t sv_string_builder_append_slot(
+  sv_vm_t *vm, ant_t *js, sv_frame_t *frame,
+  sv_func_t *func, uint16_t slot_idx, ant_value_t rhs
+);
+
+ant_value_t sv_string_builder_append_snapshot_slot(
+  sv_vm_t *vm, ant_t *js, sv_frame_t *frame,
+  sv_func_t *func, uint16_t slot_idx, ant_value_t lhs, ant_value_t rhs
+);
 
 typedef struct {
   ant_value_t this_val;

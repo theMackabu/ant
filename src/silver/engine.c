@@ -176,7 +176,270 @@ void js_set_error_site_from_vm_top(ant_t *js) {
   js_set_error_site_from_bc(js, func, bc_off, func->filename);
 }
 
+// TODO: move to strings.c
+static inline bool sv_builder_has_cached_value(const ant_string_builder_t *builder) {
+  return builder && builder->cached != js_mkundef();
+}
 
+static inline ant_flat_string_t *sv_string_builder_flat_ptr(ant_value_t value) {
+  if (vtype(value) != T_STR || str_is_heap_rope(value) || str_is_heap_builder(value)) return NULL;
+  return (ant_flat_string_t *)(uintptr_t)vdata(value);
+}
+
+static inline ant_string_builder_t *sv_string_builder_heap_ptr(ant_value_t value) {
+  if (vtype(value) != T_STR || !str_is_heap_builder(value)) return NULL;
+  return ant_str_builder_ptr(value);
+}
+
+static inline uint8_t sv_builder_chunk_ascii_state(ant_flat_string_t *flat) {
+  if (!flat) return STR_ASCII_UNKNOWN;
+  if (flat->is_ascii == STR_ASCII_UNKNOWN)
+    flat->is_ascii = str_detect_ascii_bytes(flat->bytes, (size_t)flat->len);
+  return flat->is_ascii;
+}
+
+static inline void sv_builder_note_ascii(ant_string_builder_t *builder, uint8_t state) {
+  if (!builder) return;
+  if (state == STR_ASCII_NO) builder->ascii_state = STR_ASCII_NO;
+  else if (builder->ascii_state != STR_ASCII_NO && state == STR_ASCII_YES)
+    builder->ascii_state = STR_ASCII_YES;
+}
+
+static inline void sv_builder_record_flat(ant_string_builder_t *builder, ant_flat_string_t *flat) {
+  if (!builder || !flat) return;
+  builder->len += flat->len;
+  sv_builder_note_ascii(builder, sv_builder_chunk_ascii_state(flat));
+}
+
+static ant_value_t sv_builder_normalize_chunk(ant_t *js, ant_value_t value) {
+  if (vtype(value) != T_STR) return js_mkerr(js, "string builder expects string chunk");
+  return str_materialize(js, value);
+}
+
+static ant_value_t sv_builder_push_chunk_value(
+  ant_t *js, ant_string_builder_t *builder, ant_value_t chunk
+) {
+  if (!builder) return js_mkerr(js, "string builder chunk allocation failed");
+  ant_builder_chunk_t *node = (ant_builder_chunk_t *)js_type_alloc(
+    js, ANT_ALLOC_ROPE, sizeof(*node), _Alignof(ant_builder_chunk_t)
+  );
+  if (!node) return js_mkerr(js, "string builder chunk allocation failed");
+  node->next = NULL;
+  node->value = chunk;
+  if (builder->chunk_tail) builder->chunk_tail->next = node;
+  else builder->head = node;
+  builder->chunk_tail = node;
+  return js_mkundef();
+}
+
+static ant_value_t sv_builder_flush_tail(
+  ant_t *js, ant_string_builder_t *builder
+) {
+  if (!builder || builder->tail_len == 0) return js_mkundef();
+  ant_value_t tail = js_mkstr(js, builder->tail, builder->tail_len);
+  if (is_err(tail)) return tail;
+  ant_value_t push = sv_builder_push_chunk_value(js, builder, tail);
+  if (is_err(push)) return push;
+  builder->tail_len = 0;
+  return js_mkundef();
+}
+
+static ant_value_t sv_builder_append_flat(
+  ant_t *js, ant_string_builder_t *builder, ant_value_t chunk
+) {
+  ant_flat_string_t *flat = sv_string_builder_flat_ptr(chunk);
+  if (!flat) return js_mkerr(js, "string builder received non-flat string");
+  if (flat->len == 0) return js_mkundef();
+
+  if (
+    flat->len <= STR_BUILDER_TAIL_CAP &&
+    builder->tail_len + flat->len <= STR_BUILDER_TAIL_CAP
+  ) {
+    memcpy(builder->tail + builder->tail_len, flat->bytes, (size_t)flat->len);
+    builder->tail_len = (uint16_t)(builder->tail_len + flat->len);
+    sv_builder_record_flat(builder, flat);
+    return js_mkundef();
+  }
+
+  ant_value_t flush = sv_builder_flush_tail(js, builder);
+  if (is_err(flush)) return flush;
+  ant_value_t push = sv_builder_push_chunk_value(js, builder, chunk);
+  
+  if (is_err(push)) return push;
+  sv_builder_record_flat(builder, flat);
+  
+  return js_mkundef();
+}
+
+static ant_value_t sv_string_builder_new(ant_t *js) {
+  ant_string_builder_t *builder = (ant_string_builder_t *)js_type_alloc(
+    js, ANT_ALLOC_ROPE, sizeof(*builder), _Alignof(ant_string_builder_t)
+  );
+  if (!builder) return js_mkerr(js, "string builder allocation failed");
+  memset(builder, 0, sizeof(*builder));
+  builder->cached = js_mkundef();
+  builder->ascii_state = STR_ASCII_YES;
+  return ant_mkbuilder_value(builder);
+}
+
+static inline void sv_record_slot_feedback(
+  sv_frame_t *frame, sv_func_t *func, uint16_t slot_idx, ant_value_t value
+) {
+  if (!frame || !func) return;
+  if ((int)slot_idx < func->param_count) return;
+  sv_tfb_record_local(func, (int)(slot_idx - func->param_count), value);
+}
+
+bool sv_slot_has_open_upvalue(sv_vm_t *vm, ant_value_t *slot) {
+  if (!vm || !slot) return false;
+  for (sv_upvalue_t *uv = vm->open_upvalues; uv; uv = uv->next)
+    if (uv->location == slot) return true;
+  return false;
+}
+
+ant_value_t sv_string_builder_read_value(ant_t *js, ant_value_t value) {
+  if (vtype(value) == T_STR && str_is_heap_builder(value))
+    return str_materialize(js, value);
+  return value;
+}
+
+static ant_value_t sv_slot_generic_add_store(
+  sv_vm_t *vm, ant_t *js, ant_value_t *slot, ant_value_t lhs, ant_value_t rhs
+) {
+  vm->stack[vm->sp++] = lhs;
+  vm->stack[vm->sp++] = rhs;
+  ant_value_t err = sv_op_add(vm, js);
+  if (is_err(err)) return err;
+  *slot = vm->stack[--vm->sp];
+  return js_mkundef();
+}
+
+ant_value_t sv_string_builder_flush_slot(
+  sv_vm_t *vm, ant_t *js, sv_frame_t *frame, uint16_t slot_idx
+) {
+  ant_value_t *slot = sv_frame_slot_ptr(frame, slot_idx);
+  if (!slot || vtype(*slot) != T_STR || !str_is_heap_builder(*slot)) return js_mkundef();
+
+  ant_value_t out = str_materialize(js, *slot);
+  if (is_err(out)) return out;
+  *slot = out;
+  sv_record_slot_feedback(frame, frame->func, slot_idx, out);
+  return out;
+}
+
+ant_value_t sv_string_builder_append_slot(
+  sv_vm_t *vm, ant_t *js, sv_frame_t *frame,
+  sv_func_t *func, uint16_t slot_idx, ant_value_t rhs
+) {
+  ant_value_t *slot = sv_frame_slot_ptr(frame, slot_idx);
+  if (!slot) return js_mkerr(js, "invalid string builder slot");
+
+  ant_value_t lhs = *slot;
+  ant_string_builder_t *builder = sv_string_builder_heap_ptr(lhs);
+
+  if (builder) {
+    ant_value_t rhs_str = coerce_to_str_concat(js, rhs);
+    if (is_err(rhs_str)) return rhs_str;
+    rhs_str = sv_builder_normalize_chunk(js, rhs_str);
+    if (is_err(rhs_str)) return rhs_str;
+    builder->cached = js_mkundef();
+    ant_value_t append_err = sv_builder_append_flat(js, builder, rhs_str);
+    if (is_err(append_err)) return append_err;
+    sv_record_slot_feedback(frame, func, slot_idx, lhs);
+    return js_mkundef();
+  }
+
+  if (vtype(lhs) == T_NUM && vtype(rhs) == T_NUM) {
+    *slot = tov(tod(lhs) + tod(rhs));
+    sv_record_slot_feedback(frame, func, slot_idx, *slot);
+    return js_mkundef();
+  }
+
+  ant_value_t lu = unwrap_primitive(js, lhs);
+  ant_value_t ru = unwrap_primitive(js, rhs);
+  bool string_concat = is_non_numeric(lu) || is_non_numeric(ru);
+  if (!string_concat) {
+    ant_value_t add_err = sv_slot_generic_add_store(vm, js, slot, lhs, rhs);
+    if (is_err(add_err)) return add_err;
+    sv_record_slot_feedback(frame, func, slot_idx, *slot);
+    return js_mkundef();
+  }
+
+  ant_value_t lhs_str = coerce_to_str_concat(js, lhs);
+  if (is_err(lhs_str)) return lhs_str;
+  ant_value_t rhs_str = coerce_to_str_concat(js, rhs);
+  if (is_err(rhs_str)) return rhs_str;
+  lhs_str = sv_builder_normalize_chunk(js, lhs_str);
+  if (is_err(lhs_str)) return lhs_str;
+  rhs_str = sv_builder_normalize_chunk(js, rhs_str);
+  if (is_err(rhs_str)) return rhs_str;
+
+  ant_value_t builder_value = sv_string_builder_new(js);
+  if (is_err(builder_value)) return builder_value;
+  builder = sv_string_builder_heap_ptr(builder_value);
+
+  ant_value_t append_lhs = sv_builder_append_flat(js, builder, lhs_str);
+  if (is_err(append_lhs)) return append_lhs;
+  ant_value_t append_rhs = sv_builder_append_flat(js, builder, rhs_str);
+  if (is_err(append_rhs)) return append_rhs;
+  *slot = builder_value;
+  sv_record_slot_feedback(frame, func, slot_idx, *slot);
+  
+  return js_mkundef();
+}
+
+ant_value_t sv_string_builder_append_snapshot_slot(
+  sv_vm_t *vm, ant_t *js, sv_frame_t *frame,
+  sv_func_t *func, uint16_t slot_idx, ant_value_t lhs, ant_value_t rhs
+) {
+  ant_value_t *slot = sv_frame_slot_ptr(frame, slot_idx);
+  if (!slot) return js_mkerr(js, "invalid string builder slot");
+
+  // the snapshot path is only semantically required if the slot changed while
+  // evaluating the RHS. when it did not, delegate to the normal append path so
+  // active builders can keep appending in place instead of rebuilding.
+  if (*slot == lhs)
+    return sv_string_builder_append_slot(vm, js, frame, func, slot_idx, rhs);
+
+  if (vtype(lhs) == T_NUM && vtype(rhs) == T_NUM) {
+    *slot = tov(tod(lhs) + tod(rhs));
+    sv_record_slot_feedback(frame, func, slot_idx, *slot);
+    return js_mkundef();
+  }
+
+  ant_value_t lu = unwrap_primitive(js, lhs);
+  ant_value_t ru = unwrap_primitive(js, rhs);
+  
+  bool string_concat = is_non_numeric(lu) || is_non_numeric(ru);
+  if (!string_concat) {
+    ant_value_t add_err = sv_slot_generic_add_store(vm, js, slot, lhs, rhs);
+    if (is_err(add_err)) return add_err;
+    sv_record_slot_feedback(frame, func, slot_idx, *slot);
+    return js_mkundef();
+  }
+
+  ant_value_t lhs_str = coerce_to_str_concat(js, lhs);
+  if (is_err(lhs_str)) return lhs_str;
+  ant_value_t rhs_str = coerce_to_str_concat(js, rhs);
+  if (is_err(rhs_str)) return rhs_str;
+  lhs_str = sv_builder_normalize_chunk(js, lhs_str);
+  if (is_err(lhs_str)) return lhs_str;
+  rhs_str = sv_builder_normalize_chunk(js, rhs_str);
+  if (is_err(rhs_str)) return rhs_str;
+
+  ant_value_t builder_value = sv_string_builder_new(js);
+  if (is_err(builder_value)) return builder_value;
+  ant_string_builder_t *builder = sv_string_builder_heap_ptr(builder_value);
+
+  ant_value_t append_lhs = sv_builder_append_flat(js, builder, lhs_str);
+  if (is_err(append_lhs)) return append_lhs;
+  ant_value_t append_rhs = sv_builder_append_flat(js, builder, rhs_str);
+  if (is_err(append_rhs)) return append_rhs;
+  *slot = builder_value;
+  sv_record_slot_feedback(frame, func, slot_idx, *slot);
+  
+  return js_mkundef();
+}
 
 void sv_vm_visit_frame_funcs(sv_vm_t *vm, void (*visitor)(void *, sv_func_t *), void *ctx) {
   if (!vm) return;
@@ -202,6 +465,12 @@ static inline void sv_sync_frame_locals(
   *frame = &vm->frames[vm->fp]; *func = (*frame)->func;
   *bp = (*frame)->bp; *lp = (*frame)->lp;
 }
+
+static inline void sv_drop_frame_runtime_state(ant_t *js, sv_frame_t *frame) {
+if (frame && vtype(frame->arguments_obj) != T_UNDEF) {
+  js_arguments_detach(js, frame->arguments_obj);
+  frame->arguments_obj = js_mkundef();
+}}
 
 static inline ant_value_t sv_stage_frame_args(
   sv_vm_t *vm, ant_t *js, sv_func_t *func, ant_value_t *args, int argc,
@@ -486,6 +755,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   // TODO: shorthand?
   sv_frame_t *frame = &vm->frames[vm->fp];
   if (!resuming) {
+    sv_drop_frame_runtime_state(js, frame);
     frame->ip = ip;
     frame->func = func;
     frame->this = sv_normalize_this_for_frame(js, func, this);
@@ -498,6 +768,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     frame->completion.kind = SV_COMPLETION_NONE;
     frame->completion.value = js_mkundef();
     frame->with_obj = js_mkundef();
+    frame->arguments_obj = js_mkundef();
   } else {
     func = frame->func;
     ip = frame->ip;
@@ -675,7 +946,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_ARRAY:     { sv_op_array(vm, js, ip);     NEXT(3); }
   
   L_REGEXP:   { sv_op_regexp(vm, js);                    NEXT(1); }
-  L_CLOSURE:  { sv_op_closure(vm, js, frame, func, ip);  NEXT(5); }
+  L_CLOSURE:  { VM_CHECK(sv_op_closure(vm, js, frame, func, ip));  NEXT(5); }
 
   L_POP:      { sv_op_pop(vm);      NEXT(1); }
   L_DUP:      { sv_op_dup(vm);      NEXT(1); }
@@ -691,26 +962,27 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_SWAP_UNDER:  { sv_op_swap_under(vm);   NEXT(1); }
   L_ROT4_UNDER:  { sv_op_rot4_under(vm);   NEXT(1); }
 
-  L_GET_LOCAL:        { sv_op_get_local(vm, lp, ip);    NEXT(3); }
-  L_PUT_LOCAL:        { sv_op_put_local(vm, lp, func, ip);    NEXT(3); }
-  L_SET_LOCAL:        { sv_op_set_local(vm, lp, func, ip);    NEXT(3); }
-  L_GET_LOCAL8:       { sv_op_get_local8(vm, lp, ip);   NEXT(2); }
-  L_PUT_LOCAL8:       { sv_op_put_local8(vm, lp, func, ip);   NEXT(2); }
-  L_SET_LOCAL8:       { sv_op_set_local8(vm, lp, func, ip);   NEXT(2); }
-  L_SET_LOCAL_UNDEF:  { sv_op_set_local_undef(lp, ip);  NEXT(3); }
+  L_GET_LOCAL:        { VM_CHECK(sv_op_get_local(vm, lp, js, frame, ip));   NEXT(3); }
+  L_PUT_LOCAL:        { sv_op_put_local(vm, lp, frame, func, ip);           NEXT(3); }
+  L_SET_LOCAL:        { sv_op_set_local(vm, lp, frame, func, ip);           NEXT(3); }
+  L_GET_LOCAL8:       { VM_CHECK(sv_op_get_local8(vm, lp, js, frame, ip));  NEXT(2); }
+  L_PUT_LOCAL8:       { sv_op_put_local8(vm, lp, frame, func, ip);          NEXT(2); }
+  L_SET_LOCAL8:       { sv_op_set_local8(vm, lp, frame, func, ip);          NEXT(2); }
+  L_SET_LOCAL_UNDEF:  { sv_op_set_local_undef(frame, lp, ip);               NEXT(3); }
   
-  L_GET_LOCAL_CHK:  { VM_CHECK(sv_op_get_local_chk(vm, lp, js, func, ip));  NEXT(7); }
-  L_PUT_LOCAL_CHK:  { VM_CHECK(sv_op_put_local_chk(vm, lp, js, func, ip));  NEXT(7); }
+  L_GET_LOCAL_CHK:  { VM_CHECK(sv_op_get_local_chk(vm, lp, js, frame, func, ip));  NEXT(7); }
+  L_PUT_LOCAL_CHK:  { VM_CHECK(sv_op_put_local_chk(vm, lp, js, frame, func, ip));  NEXT(7); }
+  L_GET_SLOT_RAW:   { VM_CHECK(sv_op_get_slot_raw(vm, js, frame, ip));             NEXT(3); }
 
-  L_GET_ARG:  { sv_op_get_arg(vm, frame, ip);   NEXT(3); }
-  L_PUT_ARG:  { sv_op_put_arg(vm, frame, ip);   NEXT(3); }
-  L_SET_ARG:  { sv_op_set_arg(vm, frame, ip);   NEXT(3); }
-  L_REST:     { sv_op_rest(vm, frame, js, ip);  NEXT(3); }
+  L_GET_ARG:  { VM_CHECK(sv_op_get_arg(vm, js, frame, ip));  NEXT(3); }
+  L_PUT_ARG:  { sv_op_put_arg(vm, js, frame, ip);            NEXT(3); }
+  L_SET_ARG:  { sv_op_set_arg(vm, js, frame, ip);            NEXT(3); }
+  L_REST:     { sv_op_rest(vm, frame, js, ip);               NEXT(3); }
 
   L_GET_UPVAL:    { VM_CHECK(sv_op_get_upval(vm, frame, js, ip));  NEXT(3); }
   L_PUT_UPVAL:    { sv_op_put_upval(vm, frame, ip);                NEXT(3); }
   L_SET_UPVAL:    { sv_op_set_upval(vm, frame, ip);                NEXT(3); }
-  L_CLOSE_UPVAL:  { sv_op_close_upval(vm, frame, ip);              NEXT(3); }
+  L_CLOSE_UPVAL:  { VM_CHECK(sv_op_close_upval(vm, frame, ip));    NEXT(3); }
 
   L_GET_GLOBAL:        { VM_CHECK(sv_op_get_global(vm, js, func, ip));         NEXT(7); }
   L_GET_GLOBAL_UNDEF:  { sv_op_get_global_undef(vm, js, func, ip);             NEXT(7); }
@@ -782,11 +1054,15 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     NEXT(1);
   }
   
-  L_MUL:        { sv_tfb_record2(func, ip, vm->stack[vm->sp-2], vm->stack[vm->sp-1]); VM_CHECK(sv_op_mul(vm, js));                NEXT(1); }
-  L_DIV:        { sv_tfb_record2(func, ip, vm->stack[vm->sp-2], vm->stack[vm->sp-1]); VM_CHECK(sv_op_div(vm, js));                NEXT(1); }
-  L_MOD:        { sv_tfb_record2(func, ip, vm->stack[vm->sp-2], vm->stack[vm->sp-1]); VM_CHECK(sv_op_mod(vm, js));                NEXT(1); }
-  L_NEG:        { sv_tfb_record1(func, ip, vm->stack[vm->sp-1]); VM_CHECK(sv_op_neg(vm, js));                                     NEXT(1); }
+  L_MUL:        { sv_tfb_record2(func, ip, vm->stack[vm->sp-2], vm->stack[vm->sp-1]); VM_CHECK(sv_op_mul(vm, js));                      NEXT(1); }
+  L_DIV:        { sv_tfb_record2(func, ip, vm->stack[vm->sp-2], vm->stack[vm->sp-1]); VM_CHECK(sv_op_div(vm, js));                      NEXT(1); }
+  L_MOD:        { sv_tfb_record2(func, ip, vm->stack[vm->sp-2], vm->stack[vm->sp-1]); VM_CHECK(sv_op_mod(vm, js));                      NEXT(1); }
+  L_NEG:        { sv_tfb_record1(func, ip, vm->stack[vm->sp-1]); VM_CHECK(sv_op_neg(vm, js));                                           NEXT(1); }
   L_ADD_LOCAL:  { sv_tfb_record2(func, ip, lp[sv_get_u8(ip+1)], vm->stack[vm->sp-1]); VM_CHECK(sv_op_add_local(vm, lp, js, func, ip));  NEXT(2); }
+  
+  L_STR_APPEND_LOCAL: { VM_CHECK(sv_op_str_append_local(vm, js, frame, func, ip));           NEXT(3); }
+  L_STR_ALC_SNAPSHOT: { VM_CHECK(sv_op_str_append_local_snapshot(vm, js, frame, func, ip));  NEXT(3); }
+  L_STR_FLUSH_LOCAL:  { VM_CHECK(sv_op_str_flush_local(vm, js, frame, ip));                  NEXT(3); }
 
   L_EXP:        { VM_CHECK(sv_op_exp(vm, js));    NEXT(1); }
   L_UPLUS:      { VM_CHECK(sv_op_uplus(vm, js));  NEXT(1); }
@@ -794,8 +1070,9 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_DEC:        { sv_op_dec(vm);                  NEXT(1); }
   L_POST_INC:   { sv_op_post_inc(vm);             NEXT(1); }
   L_POST_DEC:   { sv_op_post_dec(vm);             NEXT(1); }
-  L_INC_LOCAL:  { sv_op_inc_local(vm, lp, func, ip);    NEXT(2); }
-  L_DEC_LOCAL:  { sv_op_dec_local(vm, lp, func, ip);    NEXT(2); }
+  
+  L_INC_LOCAL:  { VM_CHECK(sv_op_inc_local(lp, js, func, ip));  NEXT(2); }
+  L_DEC_LOCAL:  { VM_CHECK(sv_op_dec_local(lp, js, func, ip));  NEXT(2); }
 
   L_EQ:   { sv_op_eq(vm, js);   NEXT(1); }
   L_NE:   { sv_op_ne(vm, js);   NEXT(1); }
@@ -984,6 +1261,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
         frame->handler_base = vm->handler_depth;
         frame->handler_top = vm->handler_depth;
         frame->argc = call_argc;
+        frame->arguments_obj = js_mkundef();
         ant_value_t *call_bp = NULL;
         ant_value_t *call_lp = NULL;
         ant_value_t call_stage_err = sv_stage_frame_args(
@@ -1074,6 +1352,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
         frame->handler_base = vm->handler_depth;
         frame->handler_top = vm->handler_depth;
         frame->argc = call_argc;
+        frame->arguments_obj = js_mkundef();
         ant_value_t *call_bp = NULL;
         ant_value_t *call_lp = NULL;
         ant_value_t call_stage_err = sv_stage_frame_args(
@@ -1198,6 +1477,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     ant_value_t call_func = vm->stack[vm->sp - call_argc - 1];
     sv_closure_t *closure = js_func_closure(call_func);
     if (frame->bp && vm->open_upvalues) sv_close_upvalues_from_slot(vm, frame->bp);
+    sv_drop_frame_runtime_state(js, frame);
     vm->sp = frame->prev_sp;
     int arg_slots = (
       (int)call_argc > closure->func->param_count)
@@ -1218,6 +1498,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     frame->argc = call_argc;
     frame->handler_base = vm->handler_depth;
     frame->handler_top = vm->handler_depth;
+    frame->arguments_obj = js_mkundef();
     frame->bp = base;
     frame->lp = new_lp;
     frame->upvalues = closure->upvalues;
@@ -1255,6 +1536,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
       vm_result = r;
       goto sv_leave;
     }
+    sv_drop_frame_runtime_state(js, frame);
     vm->fp--;
     frame = &vm->frames[vm->fp];
     func = frame->func;
@@ -1285,6 +1567,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
       vm_result = r;
       goto sv_leave;
     }
+    sv_drop_frame_runtime_state(js, frame);
     vm->fp--;
     frame = &vm->frames[vm->fp];
     func = frame->func;
@@ -1315,6 +1598,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
       vm_result = r;
       goto sv_leave;
     }
+    sv_drop_frame_runtime_state(js, frame);
     vm->fp--;
     frame = &vm->frames[vm->fp];
     func = frame->func;
@@ -1357,6 +1641,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
         vm_result = completion;
         goto sv_leave;
       }
+      sv_drop_frame_runtime_state(js, frame);
       vm->fp--;
       frame = &vm->frames[vm->fp];
       func = frame->func;
@@ -1543,6 +1828,8 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     ant_value_t *drop_bp = vm->frames[f].bp;
     if (drop_bp) sv_close_upvalues_from_slot(vm, drop_bp);
   }}
+  for (int f = vm->fp; f >= entry_fp; f--)
+    sv_drop_frame_runtime_state(js, &vm->frames[f]);
   vm->fp = entry_fp;
   vm->sp = vm->frames[entry_fp].prev_sp;
   vm->handler_depth = vm->frames[entry_fp].handler_base;

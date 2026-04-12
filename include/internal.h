@@ -70,8 +70,14 @@
 #define PROTO_WALK_F_OBJECT_ONLY (1u << 0)
 #define PROTO_WALK_F_LOOKUP      (1u << 1)
 
-#define ROPE_MAX_DEPTH         255
+#define ROPE_MAX_DEPTH         4096
 #define ROPE_FLATTEN_THRESHOLD (512 * 1024)
+
+#define STR_BUILDER_TAIL_CAP 256u
+#define STR_HEAP_TAG_MASK    0x3ULL
+#define STR_HEAP_TAG_FLAT    0x0ULL
+#define STR_HEAP_TAG_ROPE    0x1ULL
+#define STR_HEAP_TAG_BUILDER 0x2ULL
 
 #define T_EMPTY                (NANBOX_PREFIX | ((ant_value_t)T_SENTINEL << NANBOX_TYPE_SHIFT) | 0xDEADULL)
 #define T_SPECIAL_OBJECT_MASK  (JS_TPFLG(T_OBJ)  | JS_TPFLG(T_ARR))
@@ -265,6 +271,21 @@ typedef struct {
   char bytes[];
 } ant_flat_string_t;
 
+typedef struct ant_builder_chunk {
+  struct ant_builder_chunk *next;
+  ant_value_t value;
+} ant_builder_chunk_t;
+
+typedef struct {
+  ant_offset_t len;
+  ant_builder_chunk_t *head;
+  ant_builder_chunk_t *chunk_tail;
+  ant_value_t cached;
+  uint16_t tail_len;
+  uint8_t ascii_state;
+  char tail[STR_BUILDER_TAIL_CAP];
+} ant_string_builder_t;
+
 typedef struct {
   const char *ptr;
   size_t len;
@@ -344,6 +365,10 @@ ant_value_t js_get_module_import_binding(ant_t *js);
 ant_value_t js_builtin_import(ant_t *js, ant_value_t *args, int nargs);
 ant_value_t js_create_import_meta(ant_t *js, const char *filename, bool is_main);
 ant_value_t js_create_module_context(ant_t *js, const char *filename, bool is_main);
+ant_value_t js_create_arguments_object(ant_t *js, ant_value_t callee, sv_frame_t *frame, int argc, int mapped_count, bool is_strict);
+
+void js_arguments_detach(ant_t *js, ant_value_t obj);
+void js_arguments_sync_slot(ant_t *js, ant_value_t obj, uint32_t idx, ant_value_t value);
 
 ant_value_t coerce_to_str(ant_t *js, ant_value_t v);
 ant_value_t coerce_to_str_concat(ant_t *js, ant_value_t v);
@@ -373,6 +398,7 @@ ant_value_t mkval(uint8_t type, uint64_t data);
 ant_value_t mkobj(ant_t *js, ant_offset_t parent);
 ant_value_t js_mkobj_with_inobj_limit(ant_t *js, uint8_t inobj_limit);
 ant_value_t rope_flatten(ant_t *js, ant_value_t rope);
+ant_value_t str_materialize(ant_t *js, ant_value_t value);
 
 ant_value_t js_for_in_keys(ant_t *js, ant_value_t obj);
 ant_value_t js_delete_prop(ant_t *js, ant_value_t obj, const char *key, size_t len);
@@ -441,8 +467,29 @@ static inline bool is_length_key(const char *key, size_t len) {
   return len == 6 && !memcmp(key, "length", 6);
 }
 
+// TODO: move strings helpers to strings.h
 static inline bool str_is_heap_rope(ant_value_t value) {
-  return vtype(value) == T_STR && ((vdata(value) & 1ULL) != 0);
+  return vtype(value) == T_STR && ((vdata(value) & STR_HEAP_TAG_MASK) == STR_HEAP_TAG_ROPE);
+}
+
+static inline bool str_is_heap_builder(ant_value_t value) {
+  return vtype(value) == T_STR && ((vdata(value) & STR_HEAP_TAG_MASK) == STR_HEAP_TAG_BUILDER);
+}
+
+static inline ant_rope_heap_t *ant_str_rope_ptr(ant_value_t value) {
+  return (ant_rope_heap_t *)(uintptr_t)(vdata(value) & ~STR_HEAP_TAG_MASK);
+}
+
+static inline ant_string_builder_t *ant_str_builder_ptr(ant_value_t value) {
+  return (ant_string_builder_t *)(uintptr_t)(vdata(value) & ~STR_HEAP_TAG_MASK);
+}
+
+static inline ant_value_t ant_mkrope_value(ant_rope_heap_t *rope) {
+  return mkval(T_STR, ((uintptr_t)rope) | STR_HEAP_TAG_ROPE);
+}
+
+static inline ant_value_t ant_mkbuilder_value(ant_string_builder_t *builder) {
+  return mkval(T_STR, ((uintptr_t)builder) | STR_HEAP_TAG_BUILDER);
 }
 
 static inline int js_brand_id(ant_value_t obj) {

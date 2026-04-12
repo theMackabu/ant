@@ -58,7 +58,7 @@ typedef struct ant_large_string_alloc {
 
 typedef struct {
   ant_offset_t len;
-  uint8_t depth;
+  uint16_t depth;
   ant_value_t left;
   ant_value_t right;
   ant_value_t cached;

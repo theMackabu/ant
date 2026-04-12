@@ -51,6 +51,41 @@ ant_value_t jit_helper_mod(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r)
   return SV_JIT_BAILOUT;
 }
 
+ant_value_t jit_helper_str_append_local(
+  sv_vm_t *vm, ant_t *js, sv_func_t *func,
+  ant_value_t *locals, uint16_t local_idx, ant_value_t rhs
+) {
+  if (!func || !locals || local_idx >= (uint16_t)func->max_locals)
+    return SV_JIT_BAILOUT;
+    
+  sv_frame_t frame = {
+    .func = func,
+    .lp = locals,
+    .argc = func->param_count,
+  };
+  
+  uint16_t slot_idx = (uint16_t)(func->param_count + local_idx);
+  return sv_string_builder_append_slot(vm, js, &frame, func, slot_idx, rhs);
+}
+
+ant_value_t jit_helper_str_append_local_snapshot(
+  sv_vm_t *vm, ant_t *js, sv_func_t *func,
+  ant_value_t *locals, uint16_t local_idx,
+  ant_value_t lhs, ant_value_t rhs
+) {
+  if (!func || !locals || local_idx >= (uint16_t)func->max_locals)
+    return SV_JIT_BAILOUT;
+    
+  sv_frame_t frame = {
+    .func = func,
+    .lp = locals,
+    .argc = func->param_count,
+  };
+  
+  uint16_t slot_idx = (uint16_t)(func->param_count + local_idx);
+  return sv_string_builder_append_snapshot_slot(vm, js, &frame, func, slot_idx, lhs, rhs);
+}
+
 ant_value_t jit_helper_lt(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
   if (vtype(l) == T_NUM && vtype(r) == T_NUM) return js_bool(tod(l) < tod(r));
   return SV_JIT_BAILOUT;

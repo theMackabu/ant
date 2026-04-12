@@ -150,10 +150,11 @@ static inline ant_value_t sv_op_spread(sv_vm_t *vm, ant_t *js) {
   }
 
   if (vtype(iterable) == T_STR) {
-    if (str_is_heap_rope(iterable)) {
-      iterable = rope_flatten(js, iterable);
+    if (str_is_heap_rope(iterable) || str_is_heap_builder(iterable)) {
+      iterable = str_materialize(js, iterable);
       if (is_err(iterable)) return iterable;
     }
+    
     ant_offset_t slen = str_len_fast(js, iterable);
     for (ant_offset_t i = 0; i < slen; ) {
       ant_offset_t off = vstr(js, iterable, NULL);
@@ -165,6 +166,7 @@ static inline ant_value_t sv_op_spread(sv_vm_t *vm, ant_t *js) {
       js_arr_push(js, arr, js_mkstr(js, (const void *)(uintptr_t)(off + i), cb_len));
       i += cb_len;
     }
+    
     return tov(0);
   }
 

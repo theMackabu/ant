@@ -74,8 +74,8 @@ static inline ant_value_t sv_op_for_of(sv_vm_t *vm, ant_t *js) {
   }
 
   if (vtype(iterable) == T_STR) {
-    if (str_is_heap_rope(iterable)) {
-      iterable = rope_flatten(js, iterable);
+    if (str_is_heap_rope(iterable) || str_is_heap_builder(iterable)) {
+      iterable = str_materialize(js, iterable);
       if (is_err(iterable)) return iterable;
     }
     vm->stack[vm->sp++] = iterable;

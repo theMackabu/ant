@@ -187,36 +187,63 @@ static inline void sv_op_post_dec(sv_vm_t *vm) {
   vm->stack[vm->sp++] = tov(tod(old) - 1.0);
 }
 
-static inline void sv_op_inc_local(sv_vm_t *vm, ant_value_t *lp, sv_func_t *func, uint8_t *ip) {
+static inline ant_value_t sv_op_inc_local(ant_value_t *lp, ant_t *js, sv_func_t *func, uint8_t *ip) {
   uint8_t idx = sv_get_u8(ip + 1);
   ant_value_t *slot = &lp[idx];
+  
+  if (vtype(*slot) == T_STR && str_is_heap_builder(*slot)) {
+    ant_value_t out = str_materialize(js, *slot);
+    if (is_err(out)) return out;
+    *slot = out;
+  }
+  
   *slot = tov(tod(*slot) + 1.0);
   sv_tfb_record_local(func, (int)idx, *slot);
+  
+  return js_mkundef();
 }
 
-static inline void sv_op_dec_local(sv_vm_t *vm, ant_value_t *lp, sv_func_t *func, uint8_t *ip) {
+static inline ant_value_t sv_op_dec_local(ant_value_t *lp, ant_t *js, sv_func_t *func, uint8_t *ip) {
   uint8_t idx = sv_get_u8(ip + 1);
   ant_value_t *slot = &lp[idx];
+  
+  if (vtype(*slot) == T_STR && str_is_heap_builder(*slot)) {
+    ant_value_t out = str_materialize(js, *slot);
+    if (is_err(out)) return out;
+    *slot = out;
+  }
+  
   *slot = tov(tod(*slot) - 1.0);
   sv_tfb_record_local(func, (int)idx, *slot);
-  (void)vm;
+  
+  return js_mkundef();
 }
 
 static inline ant_value_t sv_op_add_local(sv_vm_t *vm, ant_value_t *lp, ant_t *js, sv_func_t *func, uint8_t *ip) {
   uint8_t idx = sv_get_u8(ip + 1);
   ant_value_t *slot = &lp[idx];
+  
+  if (vtype(*slot) == T_STR && str_is_heap_builder(*slot)) {
+    ant_value_t out = str_materialize(js, *slot);
+    if (is_err(out)) return out;
+    *slot = out;
+  }
+  
   ant_value_t val = vm->stack[--vm->sp];
   if (vtype(*slot) == T_NUM && vtype(val) == T_NUM) {
     *slot = tov(tod(*slot) + tod(val));
     sv_tfb_record_local(func, (int)idx, *slot);
     return tov(0);
   }
+  
   vm->stack[vm->sp++] = *slot;
   vm->stack[vm->sp++] = val;
+  
   ant_value_t err = sv_op_add(vm, js);
   if (is_err(err)) return err;
   *slot = vm->stack[--vm->sp];
   sv_tfb_record_local(func, (int)idx, *slot);
+  
   return tov(0);
 }
 

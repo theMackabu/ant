@@ -159,5 +159,16 @@ ant_value_t jit_helper_new(
   ant_value_t *args, int argc
 );
 
+ant_value_t jit_helper_str_append_local(
+  sv_vm_t *vm, ant_t *js, sv_func_t *func,
+  ant_value_t *locals, uint16_t local_idx, ant_value_t rhs
+);
+
+ant_value_t jit_helper_str_append_local_snapshot(
+  sv_vm_t *vm, ant_t *js, sv_func_t *func,
+  ant_value_t *locals, uint16_t local_idx,
+  ant_value_t lhs, ant_value_t rhs
+);
+
 #endif
 #endif

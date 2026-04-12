@@ -53,23 +53,45 @@ static void gc_adapt_major_interval(size_t live_before, size_t live_after) {
 }
 
 static void gc_mark_str(ant_t *js, ant_value_t v) {
+  static const void *dispatch[] = {
+    [STR_HEAP_TAG_FLAT] = &&l_flat,
+    [STR_HEAP_TAG_ROPE] = &&l_rope,
+    [STR_HEAP_TAG_BUILDER] = &&l_builder,
+  };
+
   if (v <= NANBOX_PREFIX) return;
   uint8_t t = (v >> NANBOX_TYPE_SHIFT) & NANBOX_TYPE_MASK;
-  
   if (t != T_STR) return;
+
   uintptr_t data = (uintptr_t)(v & NANBOX_DATA_MASK);
-  
-  if (data & 1ULL) {
-    ant_rope_heap_t *rope = (ant_rope_heap_t *)(data & ~1ULL);
-    
-    if (!rope) return;
-    if (!gc_ropes_mark(rope)) return;
-    
+  uintptr_t tag = data & STR_HEAP_TAG_MASK;
+
+  if (tag < sizeof(dispatch) / sizeof(*dispatch) && dispatch[tag])
+    goto *dispatch[tag];
+  goto l_flat;
+
+  l_rope: {
+    ant_rope_heap_t *rope = (ant_rope_heap_t *)(data & ~STR_HEAP_TAG_MASK);
+    if (!rope || !gc_ropes_mark(rope)) return;
     gc_mark_str(js, rope->left);
     gc_mark_str(js, rope->right);
     gc_mark_str(js, rope->cached);
-    
-  } else if (data) gc_strings_mark(js, (const void *)data);
+    return;
+  }
+
+  l_builder: {
+    ant_string_builder_t *builder = (ant_string_builder_t *)(data & ~STR_HEAP_TAG_MASK);
+    if (!builder || !gc_ropes_mark(builder)) return;
+    gc_mark_value(js, builder->cached);
+    for (ant_builder_chunk_t *chunk = builder->head; chunk; chunk = chunk->next) {
+      if (gc_ropes_mark(chunk)) gc_mark_value(js, chunk->value);
+    }
+    return;
+  }
+
+  l_flat:
+    if (data) gc_strings_mark(js, (const void *)data);
+    return;
 }
 
 void gc_run(ant_t *js) {

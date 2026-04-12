@@ -63,6 +63,7 @@ OP_DEF(  SET_LOCAL8,        2,   1,   1, loc8)
 OP_DEF(  SET_LOCAL_UNDEF,   3,   0,   0, loc)       /* mark TDZ uninitialized */
 OP_DEF(  GET_LOCAL_CHK,     7,   0,   1, loc_atom)  /* get + TDZ check (u16 slot, u32 atom) */
 OP_DEF(  PUT_LOCAL_CHK,     7,   1,   0, loc_atom)  /* put + TDZ check (u16 slot, u32 atom) */
+OP_DEF(  GET_SLOT_RAW,      3,   0,   1, loc)       /* push raw frame slot value (no builder read) */
 
 OP_DEF(  GET_ARG,           3,   0,   1, arg)
 OP_DEF(  PUT_ARG,           3,   1,   0, arg)
@@ -117,6 +118,9 @@ OP_DEF(  POST_DEC,          1,   1,   2, none)      /* -> old new */
 OP_DEF(  INC_LOCAL,         2,   0,   0, loc8)      /* locals[i]++ in-place */
 OP_DEF(  DEC_LOCAL,         2,   0,   0, loc8)      /* locals[i]-- in-place */
 OP_DEF(  ADD_LOCAL,         2,   1,   0, loc8)      /* locals[i] += TOS */
+OP_DEF(  STR_APPEND_LOCAL,  3,   1,   0, loc)       /* logical slot += TOS via builder */
+OP_DEF(  STR_ALC_SNAPSHOT,  3,   2,   0, loc)       /* logical slot = snapshot + TOS */
+OP_DEF(  STR_FLUSH_LOCAL,   3,   0,   0, loc)       /* materialize logical slot builder */
 
 OP_DEF(  EQ,                1,   2,   1, none)      /* == (abstract) */
 OP_DEF(  NE,                1,   2,   1, none)      /* != */
