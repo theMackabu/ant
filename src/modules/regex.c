@@ -1266,6 +1266,10 @@ static ant_value_t builtin_regexp_symbol_replace(ant_t *js, ant_value_t *args, i
         ant_offset_t ncap = js_arr_len(js, result);
         int num_caps = ncap > 1 ? (int)(ncap - 1) : 0;
         repl_capture_t caps_buf[16], *caps = num_caps <= 16 ? caps_buf : ant_calloc(sizeof(repl_capture_t) * (size_t)num_caps);
+        if (num_caps > 16 && !caps) {
+          free(buf);
+          return js_mkerr(js, "oom");
+        }
         for (int ci = 0; ci < num_caps; ci++) {
           ant_value_t cap = js_arr_get(js, result, (ant_offset_t)(ci + 1));
           if (vtype(cap) == T_STR) { ant_offset_t cl, co = vstr(js, cap, &cl); caps[ci] = (repl_capture_t){ (const char *)(uintptr_t)(co), cl }; }
@@ -1273,9 +1277,17 @@ static ant_value_t builtin_regexp_symbol_replace(ant_t *js, ant_value_t *args, i
         }
         ant_offset_t mlen, moff = vstr(js, matched, &mlen);
         str_off = vstr(js, str, &str_len);
-        repl_template((const char *)(uintptr_t)(rep_off), rep_len, (const char *)(uintptr_t)(moff), mlen,
-          (const char *)(uintptr_t)(str_off), str_len, position, caps, num_caps, &buf, &buf_len, &buf_cap);
+        bool ok = repl_template(
+          (const char *)(uintptr_t)(rep_off), rep_len,
+          (const char *)(uintptr_t)(moff), mlen,
+          (const char *)(uintptr_t)(str_off), str_len, position,
+          caps, num_caps, &buf, &buf_len, &buf_cap
+        );
         if (caps != caps_buf) free(caps);
+        if (!ok) {
+          free(buf);
+          return js_mkerr(js, "oom");
+        }
       }
       next_src_pos = position + matched_len;
     }

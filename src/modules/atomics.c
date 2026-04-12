@@ -5,18 +5,51 @@
 #include <pthread.h>
 #include <time.h>
 #include <errno.h>
+#include <math.h>
+#include <uv.h>
 
 #include "ant.h"
 #include "errors.h"
 #include "internal.h"
 #include "runtime.h"
 
+#include "gc/modules.h"
 #include "modules/buffer.h"
 #include "modules/atomics.h"
 #include "modules/symbol.h"
+#include "modules/timer.h"
+
+typedef enum {
+  ASYNC_WAIT_SETTLE_NONE = 0,
+  ASYNC_WAIT_SETTLE_OK,
+  ASYNC_WAIT_SETTLE_TIMED_OUT,
+} async_wait_settle_t;
+
+typedef struct AsyncWaitEntry {
+  ant_t *js;
+  ant_value_t promise;
+  ArrayBufferData *buffer;
+  int32_t *address;
+  uv_timer_t timer;
+  uv_async_t async;
+  bool timer_initialized;
+  bool async_initialized;
+  uint8_t pending_handles;
+  _Atomic int settle_state;
+  _Atomic bool settle_drain_microtasks;
+  struct AsyncWaitEntry *next;
+  struct AsyncWaitEntry *prev;
+} AsyncWaitEntry;
 
 static WaitQueue global_wait_queue;
+static AsyncWaitEntry *async_waiters_head = NULL;
+
 static pthread_once_t wait_queue_init_once = PTHREAD_ONCE_INIT;
+static pthread_mutex_t async_waiters_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static inline bool async_waiter_is_linked_locked(AsyncWaitEntry *entry) {
+  return entry && (entry == async_waiters_head || entry->next || entry->prev);
+}
 
 static void init_wait_queue(void) {
   wait_queue_init(&global_wait_queue);
@@ -25,6 +58,125 @@ static void init_wait_queue(void) {
 void wait_queue_init(WaitQueue *queue) {
   queue->head = NULL;
   pthread_mutex_init(&queue->lock, NULL);
+}
+
+static void async_waiter_add_locked(AsyncWaitEntry *entry) {
+  entry->next = async_waiters_head;
+  entry->prev = NULL;
+  if (async_waiters_head) async_waiters_head->prev = entry;
+  async_waiters_head = entry;
+}
+
+static void async_waiter_remove_locked(AsyncWaitEntry *entry) {
+  if (entry->prev) entry->prev->next = entry->next;
+  else async_waiters_head = entry->next;
+  if (entry->next) entry->next->prev = entry->prev;
+  entry->next = NULL;
+  entry->prev = NULL;
+}
+
+static void async_waiter_release_buffer(AsyncWaitEntry *entry) {
+  if (!entry || !entry->buffer) return;
+  free_array_buffer_data(entry->buffer);
+  entry->buffer = NULL;
+}
+
+static void async_waiter_release_handle(AsyncWaitEntry *entry) {
+  if (!entry) return;
+  if (entry->pending_handles > 0) entry->pending_handles--;
+  if (entry->pending_handles == 0) {
+    async_waiter_release_buffer(entry);
+    free(entry);
+  }
+}
+
+static void async_waiter_close_cb(uv_handle_t *handle) {
+  AsyncWaitEntry *entry = handle ? handle->data : NULL;
+  async_waiter_release_handle(entry);
+}
+
+static void async_waiter_close_handles(AsyncWaitEntry *entry) {
+  bool closed = false;
+
+  if (entry->timer_initialized && !uv_is_closing((uv_handle_t *)&entry->timer)) {
+    uv_timer_stop(&entry->timer);
+    uv_close((uv_handle_t *)&entry->timer, async_waiter_close_cb);
+    entry->timer_initialized = false;
+    closed = true;
+  }
+
+  if (entry->async_initialized && !uv_is_closing((uv_handle_t *)&entry->async)) {
+    uv_close((uv_handle_t *)&entry->async, async_waiter_close_cb);
+    entry->async_initialized = false;
+    closed = true;
+  }
+
+  if (!closed) {
+    async_waiter_release_buffer(entry);
+    free(entry);
+  }
+}
+
+static void async_waiter_queue_settle(AsyncWaitEntry *entry, async_wait_settle_t state, bool drain_microtasks) {
+  if (!entry) return;
+  atomic_store(&entry->settle_drain_microtasks, drain_microtasks);
+  atomic_store(&entry->settle_state, state);
+  if (entry->async_initialized) uv_async_send(&entry->async);
+}
+
+static void async_waiter_async_cb(uv_async_t *handle) {
+  AsyncWaitEntry *entry = handle ? handle->data : NULL;
+  if (!entry || !entry->js) return;
+
+  async_wait_settle_t state = (async_wait_settle_t)atomic_exchange(&entry->settle_state, ASYNC_WAIT_SETTLE_NONE);
+  if (state == ASYNC_WAIT_SETTLE_NONE) return;
+
+  const char *result = state == ASYNC_WAIT_SETTLE_OK ? "ok" : "timed-out";
+  js_resolve_promise(entry->js, entry->promise, js_mkstr(entry->js, result, strlen(result)));
+  if (atomic_load(&entry->settle_drain_microtasks))
+    js_maybe_drain_microtasks_after_async_settle(entry->js);
+
+  async_waiter_close_handles(entry);
+}
+
+static void async_waiter_timeout_cb(uv_timer_t *timer) {
+  AsyncWaitEntry *entry = timer ? timer->data : NULL;
+  if (!entry) return;
+
+  pthread_mutex_lock(&async_waiters_lock);
+  bool linked = async_waiter_is_linked_locked(entry);
+  if (linked) async_waiter_remove_locked(entry);
+  pthread_mutex_unlock(&async_waiters_lock);
+
+  if (linked) async_waiter_queue_settle(entry, ASYNC_WAIT_SETTLE_TIMED_OUT, true);
+}
+
+static int async_waiter_notify(int32_t *address, int count) {
+  int notified = 0;
+  AsyncWaitEntry *ready = NULL;
+
+  pthread_mutex_lock(&async_waiters_lock);
+  AsyncWaitEntry *current = async_waiters_head;
+  while (current && (count == -1 || notified < count)) {
+    AsyncWaitEntry *next = current->next;
+    if (current->address == address) {
+      async_waiter_remove_locked(current);
+      current->next = ready;
+      current->prev = NULL;
+      ready = current;
+      notified++;
+    } current = next;
+  }
+  
+  pthread_mutex_unlock(&async_waiters_lock);
+  while (ready) {
+    AsyncWaitEntry *next = ready->next;
+    ready->next = NULL;
+    async_waiter_queue_settle(ready, ASYNC_WAIT_SETTLE_OK, false);
+    ready = next;
+  }
+
+  return notified;
 }
 
 void wait_queue_cleanup(WaitQueue *queue) {
@@ -74,12 +226,44 @@ int wait_queue_notify(WaitQueue *queue, int32_t *address, int count) {
       pthread_cond_signal(&current->cond);
       pthread_mutex_unlock(&current->mutex);
       notified++;
-    }
-    current = current->next;
+    } current = current->next;
   }
   
   pthread_mutex_unlock(&queue->lock);
+  if (count == -1 || notified < count)
+    notified += async_waiter_notify(address, count == -1 ? -1 : count - notified);
+    
   return notified;
+}
+
+void cleanup_atomics_module(ant_t *js) {
+  if (!js) return;
+  AsyncWaitEntry *removed = NULL;
+
+  pthread_mutex_lock(&async_waiters_lock);
+  AsyncWaitEntry *current = async_waiters_head;
+  
+  while (current) {
+    AsyncWaitEntry *next = current->next;
+    if (current->js == js) {
+      async_waiter_remove_locked(current);
+      current->next = removed;
+      current->prev = NULL;
+      removed = current;
+    } current = next;
+  }
+  
+  pthread_mutex_unlock(&async_waiters_lock);
+  while (removed) {
+    AsyncWaitEntry *next = removed->next;
+    removed->next = NULL;
+    removed->prev = NULL;
+    removed->js = NULL;
+    removed->promise = js_mkundef();
+    async_waiter_release_buffer(removed);
+    async_waiter_close_handles(removed);
+    removed = next;
+  }
 }
 
 static bool get_atomic_array_data(ant_t *js, ant_value_t this_val, TypedArrayData **out_data, uint8_t **out_ptr) {
@@ -782,6 +966,13 @@ static ant_value_t js_atomics_waitAsync(ant_t *js, ant_value_t *args, int nargs)
   int32_t expected_value = (int32_t)js_getnum(args[2]);
   _Atomic int32_t *atomic_ptr = (_Atomic int32_t *)(ptr + index * 4);
   int32_t current_value = atomic_load(atomic_ptr);
+  double timeout_ms = HUGE_VAL;
+
+  if (nargs > 3 && vtype(args[3]) == T_NUM) {
+    timeout_ms = js_getnum(args[3]);
+    if (isnan(timeout_ms)) timeout_ms = HUGE_VAL;
+    else if (timeout_ms < 0) timeout_ms = 0;
+  }
   
   ant_value_t result_obj = js_mkobj(js);
   if (current_value != expected_value) {
@@ -790,20 +981,60 @@ static ant_value_t js_atomics_waitAsync(ant_t *js, ant_value_t *args, int nargs)
     return result_obj;
   }
   
+  if (timeout_ms == 0) {
+    js_set(js, result_obj, "async", js_false);
+    js_set(js, result_obj, "value", js_mkstr(js, "timed-out", 9));
+    return result_obj;
+  }
+
   ant_value_t promise = js_mkpromise(js);
+  AsyncWaitEntry *entry = calloc(1, sizeof(*entry));
+  if (!entry) return js_mkerr(js, "Out of memory");
+
+  entry->js = js;
+  entry->promise = promise;
+  entry->buffer = ta_data->buffer;
+  entry->buffer->ref_count++;
+  entry->address = (int32_t *)atomic_ptr;
+  atomic_store(&entry->settle_state, ASYNC_WAIT_SETTLE_NONE);
+  atomic_store(&entry->settle_drain_microtasks, false);
+
+  if (uv_async_init(uv_default_loop(), &entry->async, async_waiter_async_cb) != 0) {
+    async_waiter_close_handles(entry);
+    return js_mkerr(js, "Failed to initialize Atomics.waitAsync notifier");
+  }
+  
+  entry->async_initialized = true;
+  entry->async.data = entry;
+  entry->pending_handles++;
+
+  if (isfinite(timeout_ms)) {
+    uint64_t delay = timeout_ms > (double)UINT64_MAX ? UINT64_MAX : (uint64_t)timeout_ms;
+    if (uv_timer_init(uv_default_loop(), &entry->timer) != 0) {
+      async_waiter_close_handles(entry);
+      return js_mkerr(js, "Failed to initialize Atomics.waitAsync timer");
+    }
+    entry->timer_initialized = true;
+    entry->timer.data = entry;
+    entry->pending_handles++;
+    if (uv_timer_start(&entry->timer, async_waiter_timeout_cb, delay, 0) != 0) {
+      async_waiter_close_handles(entry);
+      return js_mkerr(js, "Failed to start Atomics.waitAsync timer");
+    }
+  }
+
+  pthread_mutex_lock(&async_waiters_lock);
+  async_waiter_add_locked(entry);
+  pthread_mutex_unlock(&async_waiters_lock);
+
   js_set(js, result_obj, "async", js_true);
   js_set(js, result_obj, "value", promise);
-  js_resolve_promise(js, promise, js_mkstr(js, "ok", 2));
-  
+
   return result_obj;
 }
 
 // Atomics.pause()
 static ant_value_t js_atomics_pause(ant_t *js, ant_value_t *args, int nargs) {
-  (void)js;
-  (void)args;
-  (void)nargs;
-  
 #if defined(__x86_64__) || defined(__i386__)
   __builtin_ia32_pause();
 #elif defined(__aarch64__) || defined(__arm__)
@@ -836,4 +1067,12 @@ void init_atomics_module(void) {
   
   js_set_sym(js, atomics, get_toStringTag_sym(), js_mkstr(js, "Atomics", 7));
   js_set(js, glob, "Atomics", atomics);
+}
+
+void gc_mark_atomics(ant_t *js, gc_mark_fn mark) {
+  pthread_mutex_lock(&async_waiters_lock);
+  for (AsyncWaitEntry *entry = async_waiters_head; entry; entry = entry->next) {
+    if (entry->js == js) mark(js, entry->promise);
+  }
+  pthread_mutex_unlock(&async_waiters_lock);
 }

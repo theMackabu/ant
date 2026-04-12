@@ -70,8 +70,8 @@
 #define PROTO_WALK_F_OBJECT_ONLY (1u << 0)
 #define PROTO_WALK_F_LOOKUP      (1u << 1)
 
-#define ROPE_MAX_DEPTH         64
-#define ROPE_FLATTEN_THRESHOLD (32 * 1024)
+#define ROPE_MAX_DEPTH         255
+#define ROPE_FLATTEN_THRESHOLD (512 * 1024)
 
 #define T_EMPTY                (NANBOX_PREFIX | ((ant_value_t)T_SENTINEL << NANBOX_TYPE_SHIFT) | 0xDEADULL)
 #define T_SPECIAL_OBJECT_MASK  (JS_TPFLG(T_OBJ)  | JS_TPFLG(T_ARR))
@@ -207,7 +207,7 @@ struct ant_isolate_t {
     ant_pool_t symbol;
     ant_pool_t permanent;
     ant_class_pool_t bigint;
-    ant_class_pool_t string;
+    ant_string_pool_t string;
   } pool;
 
   struct {
@@ -253,12 +253,6 @@ struct ant_isolate_t {
   bool thrown_exists;
 };
 
-typedef struct {
-  ant_offset_t len;
-  uint8_t is_ascii;
-  char bytes[];
-} ant_flat_string_t;
-
 enum {
   STR_ASCII_UNKNOWN = 0,
   STR_ASCII_YES = 1,
@@ -267,11 +261,9 @@ enum {
 
 typedef struct {
   ant_offset_t len;
-  uint8_t depth;
-  ant_value_t left;
-  ant_value_t right;
-  ant_value_t cached;
-} ant_rope_heap_t;
+  uint8_t is_ascii;
+  char bytes[];
+} ant_flat_string_t;
 
 typedef struct {
   const char *ptr;
@@ -483,6 +475,14 @@ static inline ant_value_t defmethod(ant_t *js, ant_value_t obj, const char *name
 
 static inline ant_flat_string_t *str_flat_from_bytes(const char *str) {
   return (ant_flat_string_t *)((char *)str - offsetof(ant_flat_string_t, bytes));
+}
+
+static inline ant_flat_string_t *large_string_flat_ptr(ant_large_string_alloc_t *alloc) {
+  return alloc ? (ant_flat_string_t *)&alloc->len : NULL;
+}
+
+static inline ant_large_string_alloc_t *large_string_alloc_from_flat(ant_flat_string_t *flat) {
+  return flat ? (ant_large_string_alloc_t *)((char *)flat - offsetof(ant_large_string_alloc_t, len)) : NULL;
 }
 
 static inline uint8_t str_detect_ascii_bytes(const char *str, size_t len) {

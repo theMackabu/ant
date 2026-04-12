@@ -44,6 +44,39 @@ typedef struct {
   ant_pool_bucket_t classes[ANT_POOL_SIZE_CLASS_COUNT];
 } ant_class_pool_t;
 
+typedef struct ant_large_string_alloc {
+  struct ant_large_string_alloc *next;
+  struct ant_large_string_alloc *prev;
+  size_t capacity;
+  size_t alloc_size;
+  uint32_t quarantine_epoch;
+  uint8_t marked;
+  ant_offset_t len;
+  uint8_t is_ascii;
+  char bytes[];
+} ant_large_string_alloc_t;
+
+typedef struct {
+  ant_offset_t len;
+  uint8_t depth;
+  ant_value_t left;
+  ant_value_t right;
+  ant_value_t cached;
+} ant_rope_heap_t;
+
+typedef struct {
+  ant_large_string_alloc_t *live;
+  ant_large_string_alloc_t *reusable;
+  ant_large_string_alloc_t *quarantine;
+  uint32_t gc_epoch;
+} ant_large_string_space_t;
+
+typedef struct ant_string_pool {
+  size_t block_size;
+  ant_pool_bucket_t classes[ANT_POOL_SIZE_CLASS_COUNT];
+  ant_large_string_space_t large;
+} ant_string_pool_t;
+
 typedef enum {
   ANT_ALLOC_ROPE = 0,
   ANT_ALLOC_SYMBOL = 1,
@@ -56,6 +89,14 @@ typedef struct {
   size_t capacity;
   size_t blocks;
 } ant_pool_stats_t;
+
+typedef struct {
+  ant_pool_stats_t pooled;
+  ant_pool_stats_t large_live;
+  ant_pool_stats_t large_reusable;
+  ant_pool_stats_t large_quarantine;
+  ant_pool_stats_t total;
+} ant_string_pool_stats_t;
 
 static inline ant_pool_block_t *pool_free_next(ant_pool_block_t *b) {
   ant_pool_block_t *p; memcpy(&p, b->data, sizeof(ant_pool_block_t *)); return p;
@@ -101,6 +142,7 @@ static inline void pool_block_madvise_free(ant_pool_block_t *block) {
 
 void js_pool_destroy(ant_pool_t *pool);
 void js_class_pool_destroy(ant_class_pool_t *pool);
+void js_string_pool_destroy(ant_string_pool_t *pool);
 
 void *js_type_alloc(
   ant_t *js, ant_alloc_kind_t kind,
@@ -114,5 +156,6 @@ void *pool_alloc_chain(
 
 ant_pool_stats_t js_pool_stats(ant_pool_t *pool);
 ant_pool_stats_t js_class_pool_stats(ant_class_pool_t *pool);
+ant_string_pool_stats_t js_string_pool_stats(ant_string_pool_t *pool);
 
 #endif

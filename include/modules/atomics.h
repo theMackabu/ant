@@ -4,7 +4,10 @@
 #include <stdint.h>
 #include <pthread.h>
 
+#include "types.h"
+
 void init_atomics_module(void);
+void cleanup_atomics_module(ant_t *js);
 
 typedef struct WaitQueueEntry {
   pthread_cond_t cond;

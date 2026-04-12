@@ -16,12 +16,23 @@ static ant_value_t reflect_get(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t target = args[0];
   ant_value_t key = args[1];
   
-  int t = vtype(target);
-  if (t != T_OBJ && t != T_FUNC) return js_mkundef();
-  
-  if (vtype(key) != T_STR) return js_mkundef();
-  
-  char *key_str = js_getstr(js, key, NULL);
+  if (!is_object_type(target)) return js_mkundef();
+
+  ant_value_t prop_key = key;
+  if (is_object_type(prop_key)) {
+    prop_key = js_to_primitive(js, prop_key, 1);
+    if (is_err(prop_key)) return prop_key;
+  }
+
+  if (vtype(prop_key) == T_SYMBOL)
+    return js_get_sym(js, target, prop_key);
+
+  if (vtype(prop_key) != T_STR) {
+    prop_key = js_tostring_val(js, prop_key);
+    if (is_err(prop_key)) return prop_key;
+  }
+
+  char *key_str = js_getstr(js, prop_key, NULL);
   if (!key_str) return js_mkundef();
   
   return js_get(js, target, key_str);

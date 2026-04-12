@@ -4,14 +4,15 @@
 #include <ctype.h>
 
 #include "ant.h"
+#include "ptr.h"
 #include "utf8.h"
 #include "utils.h"
 #include "errors.h"
 #include "base64.h"
 #include "internal.h"
 #include "runtime.h"
+#include "gc/roots.h"
 #include "descriptors.h"
-#include "ptr.h"
 
 #include "silver/engine.h"
 #include "modules/buffer.h"
@@ -1252,19 +1253,32 @@ static ant_value_t js_typedarray_from(ant_t *js, ant_value_t *args, int nargs, T
 
   ant_value_t source = args[0];
   bool has_map = nargs >= 2 && vtype(args[1]) != T_UNDEF;
+  
   ant_value_t map_fn = js_mkundef();
   ant_value_t this_arg = nargs >= 3 ? args[2] : js_mkundef();
+  ant_value_t result = js_mkundef();
+  ant_value_t *collected = NULL;
+  
+  gc_temp_root_scope_t temp_roots = {0};
+  bool temp_roots_active = false;
 
   if (has_map) {
-    if (!is_callable(args[1]))
-      return js_mkerr_typed(js, JS_ERR_TYPE, "%s.from: mapFn is not a function", type_name);
+    if (!is_callable(args[1])) return js_mkerr_typed(
+      js, JS_ERR_TYPE, "%s.from: mapFn is not a function", type_name
+    );
     map_fn = args[1];
   }
 
-  ant_value_t *collected = NULL;
+  gc_temp_root_scope_begin(js, &temp_roots);
+  temp_roots_active = true;
+  
+  if (!gc_temp_root_handle_valid(gc_temp_root_add(&temp_roots, source))) goto oom;
+  if (!gc_temp_root_handle_valid(gc_temp_root_add(&temp_roots, map_fn))) goto oom;
+  if (!gc_temp_root_handle_valid(gc_temp_root_add(&temp_roots, this_arg))) goto oom;
+
   size_t count = 0, cap = 16;
   collected = malloc(cap * sizeof(ant_value_t));
-  if (!collected) return js_mkerr(js, "oom");
+  if (!collected) goto oom;
 
   js_iter_t it;
   if (js_iter_open(js, source, &it)) {
@@ -1273,15 +1287,19 @@ static ant_value_t js_typedarray_from(ant_t *js, ant_value_t *args, int nargs, T
       if (count >= cap) {
         cap *= 2;
         ant_value_t *tmp = realloc(collected, cap * sizeof(ant_value_t));
-        if (!tmp) { free(collected); return js_mkerr(js, "oom"); }
+        if (!tmp) goto oom;
         collected = tmp;
       }
       if (has_map) {
         ant_value_t map_args[2] = { item, js_mknum((double)count) };
         item = sv_vm_call(js->vm, js, map_fn, this_arg, map_args, 2, NULL, false);
-        if (is_err(item)) { free(collected); return item; }
+        if (is_err(item)) {
+          result = item;
+          goto done;
+        }
       }
       collected[count++] = item;
+      if (!gc_temp_root_handle_valid(gc_temp_root_add(&temp_roots, item))) goto oom;
     }
     js_iter_close(js, &it);
   } else {
@@ -1294,23 +1312,29 @@ static ant_value_t js_typedarray_from(ant_t *js, ant_value_t *args, int nargs, T
       if (count >= cap) {
         cap *= 2;
         ant_value_t *tmp = realloc(collected, cap * sizeof(ant_value_t));
-        if (!tmp) { free(collected); return js_mkerr(js, "oom"); }
+        if (!tmp) goto oom;
         collected = tmp;
       }
       if (has_map) {
         ant_value_t map_args[2] = { item, js_mknum((double)i) };
         item = sv_vm_call(js->vm, js, map_fn, this_arg, map_args, 2, NULL, false);
-        if (is_err(item)) { free(collected); return item; }
+        if (is_err(item)) {
+          result = item;
+          goto done;
+        }
       }
       collected[count++] = item;
+      if (!gc_temp_root_handle_valid(gc_temp_root_add(&temp_roots, item))) goto oom;
     }
   }
 
   size_t elem_size = get_element_size(type);
   ArrayBufferData *buffer = create_array_buffer_data(count * elem_size);
-  if (!buffer) { free(collected); return js_mkerr(js, "oom"); }
+  if (!buffer) goto oom;
 
-  ant_value_t result = create_typed_array(js, type, buffer, 0, count, type_name);
+  result = create_typed_array(js, type, buffer, 0, count, type_name);
+  if (is_err(result)) goto done;
+  if (!gc_temp_root_handle_valid(gc_temp_root_add(&temp_roots, result))) goto oom;
   uint8_t *data = buffer->data;
 
   for (size_t i = 0; i < count; i++) {
@@ -1329,8 +1353,14 @@ static ant_value_t js_typedarray_from(ant_t *js, ant_value_t *args, int nargs, T
     default: break;
   }}
 
+done:
+  if (temp_roots_active) gc_temp_root_scope_end(&temp_roots);
   free(collected);
   return result;
+
+oom:
+  result = js_mkerr(js, "oom");
+  goto done;
 }
 
 #define DEFINE_TYPEDARRAY_FROM(name, type) \

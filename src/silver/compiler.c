@@ -4343,7 +4343,6 @@ sv_func_t *compile_function_body(
     compile_export_emit(&comp, e->name, e->len);
   }
   
-  free(comp.deferred_exports);
   emit_close_upvals(&comp);
   emit_op(&comp, OP_RETURN_UNDEF);
 

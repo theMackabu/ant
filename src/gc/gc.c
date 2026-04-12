@@ -91,8 +91,8 @@ void gc_run(ant_t *js) {
   js->old_live_count = js->obj_arena.live_count;
   js->minor_gc_count = 0;
 
-  ant_pool_stats_t pool_stats = js_class_pool_stats(&js->pool.string);
-  js->gc_pool_last_live = pool_stats.used;
+  ant_string_pool_stats_t pool_stats = js_string_pool_stats(&js->pool.string);
+  js->gc_pool_last_live = pool_stats.total.used;
   js->gc_pool_alloc = 0;
 
   gc_adapt_major_interval(live_before, js->obj_arena.live_count);

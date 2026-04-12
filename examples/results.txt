@@ -523,13 +523,13 @@ compat-table/es6/Proxy.handler.apply.js: OK
 compat-table/es6/Proxy.handler.construct.invariants.js: OK
 compat-table/es6/Proxy.handler.construct.js: OK
 compat-table/es6/Proxy.handler.defineProperty.invariants.js: failed
-compat-table/es6/Proxy.handler.defineProperty.js: failed
+compat-table/es6/Proxy.handler.defineProperty.js: OK
 compat-table/es6/Proxy.handler.deleteProperty.invariants.js: OK
 compat-table/es6/Proxy.handler.deleteProperty.js: OK
 compat-table/es6/Proxy.handler.getOwnPropertyDescriptor.invariants.js: failed
 compat-table/es6/Proxy.handler.getOwnPropertyDescriptor.js: failed
 compat-table/es6/Proxy.handler.getPrototypeOf.invariants.js: failed
-compat-table/es6/Proxy.handler.getPrototypeOf.js: failed
+compat-table/es6/Proxy.handler.getPrototypeOf.js: OK
 compat-table/es6/Proxy.handler.get.instances.js: failed
 compat-table/es6/Proxy.handler.get.invariants.js: OK
 compat-table/es6/Proxy.handler.get.js: OK
@@ -896,7 +896,7 @@ compat-table/es6/misc.Proxy.get.Array.pop.js: failed
 compat-table/es6/misc.Proxy.get.Array.reverse.js: failed
 compat-table/es6/misc.Proxy.get.Array.shift.js: failed
 compat-table/es6/misc.Proxy.get.Array.splice.js: failed
-compat-table/es6/misc.Proxy.get.Array.toString.js: failed
+compat-table/es6/misc.Proxy.get.Array.toString.js: OK
 compat-table/es6/misc.Proxy.get.ClassDefinitionEvaluation.js: OK
 compat-table/es6/misc.Proxy.get.CreateDynamicFunction.js: failed
 compat-table/es6/misc.Proxy.get.CreateListFromArrayLike.js: failed
@@ -922,7 +922,7 @@ compat-table/es6/misc.Proxy.get.String.raw.js: OK
 compat-table/es6/misc.Proxy.get.String.replace.js: failed
 compat-table/es6/misc.Proxy.get.String.search.js: failed
 compat-table/es6/misc.Proxy.get.String.split.js: failed
-compat-table/es6/misc.Proxy.get.ToPrimitive.js: TypeError: Cannot convert object to primitive value
+compat-table/es6/misc.Proxy.get.ToPrimitive.js: OK
 compat-table/es6/misc.Proxy.get.ToPropertyDescriptor.js: failed
 compat-table/es6/misc.Proxy.get.instanceof.js: OK
 compat-table/es6/misc.Proxy.ownKeys.SerializeJSONObject.js: failed
@@ -1153,26 +1153,26 @@ compat-table/es2017/SharedArrayBuffer.prototype.byteLength.js: failed
 compat-table/es2017/SharedArrayBuffer.prototype.slice.js: OK
 compat-table/es2017/String.prototype.padEnd.js: OK
 compat-table/es2017/String.prototype.padStart.js: OK
-compat-table/es2017/annex-b.Object.prototype.__defineGetter__.ToObject.js: ReferenceError: '__defineGetter__' is not defined
-compat-table/es2017/annex-b.Object.prototype.__defineGetter__.js: TypeError: Cannot read properties of undefined (reading 'call')
-compat-table/es2017/annex-b.Object.prototype.__defineGetter__.symbols.js: TypeError: Cannot read properties of undefined (reading 'call')
-compat-table/es2017/annex-b.Object.prototype.__defineSetter__.ToObject.js: ReferenceError: '__defineSetter__' is not defined
-compat-table/es2017/annex-b.Object.prototype.__defineSetter__.js: TypeError: Cannot read properties of undefined (reading 'call')
-compat-table/es2017/annex-b.Object.prototype.__defineSetter__.symbols.js: TypeError: Cannot read properties of undefined (reading 'call')
-compat-table/es2017/annex-b.Object.prototype.__lookupGetter__.ToObject.js: ReferenceError: '__lookupGetter__' is not defined
-compat-table/es2017/annex-b.Object.prototype.__lookupGetter__.js: TypeError: Cannot read properties of undefined (reading 'call')
-compat-table/es2017/annex-b.Object.prototype.__lookupGetter__.prototype-chain.js: TypeError: Cannot read properties of undefined (reading 'call')
-compat-table/es2017/annex-b.Object.prototype.__lookupGetter__.shadow-accessors.js: TypeError: undefined is not a function
-compat-table/es2017/annex-b.Object.prototype.__lookupGetter__.symbols.js: TypeError: Cannot read properties of undefined (reading 'call')
-compat-table/es2017/annex-b.Object.prototype.__lookupSetter__.ToObject.js: ReferenceError: '__lookupSetter__' is not defined
-compat-table/es2017/annex-b.Object.prototype.__lookupSetter__.js: TypeError: Cannot read properties of undefined (reading 'call')
-compat-table/es2017/annex-b.Object.prototype.__lookupSetter__.prototype-chain.js: TypeError: Cannot read properties of undefined (reading 'call')
-compat-table/es2017/annex-b.Object.prototype.__lookupSetter__.shadow-accessors.js: TypeError: undefined is not a function
-compat-table/es2017/annex-b.Object.prototype.__lookupSetter__.symbols.js: TypeError: Cannot read properties of undefined (reading 'call')
-compat-table/es2017/annex-b.Proxy.__defineGetter__.js: TypeError: Cannot read properties of undefined (reading 'call')
-compat-table/es2017/annex-b.Proxy.__defineSetter__.js: TypeError: Cannot read properties of undefined (reading 'call')
-compat-table/es2017/annex-b.Proxy.__lookupGetter__.js: TypeError: Cannot read properties of undefined (reading 'call')
-compat-table/es2017/annex-b.Proxy.__lookupSetter__.js: TypeError: Cannot read properties of undefined (reading 'call')
+compat-table/es2017/annex-b.Object.prototype.__defineGetter__.ToObject.js: OK
+compat-table/es2017/annex-b.Object.prototype.__defineGetter__.js: OK
+compat-table/es2017/annex-b.Object.prototype.__defineGetter__.symbols.js: OK
+compat-table/es2017/annex-b.Object.prototype.__defineSetter__.ToObject.js: OK
+compat-table/es2017/annex-b.Object.prototype.__defineSetter__.js: OK
+compat-table/es2017/annex-b.Object.prototype.__defineSetter__.symbols.js: OK
+compat-table/es2017/annex-b.Object.prototype.__lookupGetter__.ToObject.js: OK
+compat-table/es2017/annex-b.Object.prototype.__lookupGetter__.js: OK
+compat-table/es2017/annex-b.Object.prototype.__lookupGetter__.prototype-chain.js: OK
+compat-table/es2017/annex-b.Object.prototype.__lookupGetter__.shadow-accessors.js: OK
+compat-table/es2017/annex-b.Object.prototype.__lookupGetter__.symbols.js: OK
+compat-table/es2017/annex-b.Object.prototype.__lookupSetter__.ToObject.js: OK
+compat-table/es2017/annex-b.Object.prototype.__lookupSetter__.js: OK
+compat-table/es2017/annex-b.Object.prototype.__lookupSetter__.prototype-chain.js: OK
+compat-table/es2017/annex-b.Object.prototype.__lookupSetter__.shadow-accessors.js: OK
+compat-table/es2017/annex-b.Object.prototype.__lookupSetter__.symbols.js: OK
+compat-table/es2017/annex-b.Proxy.__defineGetter__.js: OK
+compat-table/es2017/annex-b.Proxy.__defineSetter__.js: OK
+compat-table/es2017/annex-b.Proxy.__lookupGetter__.js: OK
+compat-table/es2017/annex-b.Proxy.__lookupSetter__.js: OK
 compat-table/es2017/annex-b.for-in-assignment-non-strict.js: OK
 compat-table/es2017/async.Symbol.toStringTag.js: failed
 compat-table/es2017/async.arrow-in-class.js: OK

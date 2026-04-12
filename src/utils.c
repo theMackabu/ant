@@ -256,40 +256,70 @@ typedef struct {
   char **buf; size_t *buf_len; size_t *buf_cap;
 } rt_ctx_t;
 
-#define RT_APPEND(c, data, dlen) do { \
-  if (*(c)->buf_len + (dlen) >= *(c)->buf_cap) { \
-    *(c)->buf_cap = (*(c)->buf_len + (dlen) + 1) * 2; \
-    *(c)->buf = realloc(*(c)->buf, *(c)->buf_cap); \
-  } \
-  memcpy(*(c)->buf + *(c)->buf_len, data, dlen); *(c)->buf_len += (dlen); \
-} while(0)
+static bool rt_append(rt_ctx_t *c, const char *data, size_t dlen) {
+  if (dlen == 0) return true;
+  if (*c->buf_len > SIZE_MAX - dlen - 1) return false;
 
-static void rt_dollar(rt_ctx_t *c)  { RT_APPEND(c, "$", 1); *c->ri += 2; }
-static void rt_match(rt_ctx_t *c)   { RT_APPEND(c, c->matched, c->matched_len); *c->ri += 2; }
-static void rt_prefix(rt_ctx_t *c)  { RT_APPEND(c, c->str, c->position); *c->ri += 2; }
+  if (*c->buf_len + dlen >= *c->buf_cap) {
+    size_t needed = *c->buf_len + dlen + 1;
+    size_t new_cap = needed * 2;
+    if (new_cap < needed) new_cap = needed;
+    
+    char *next = realloc(*c->buf, new_cap);
+    if (!next) return false;
+    *c->buf = next;
+    *c->buf_cap = new_cap;
+  }
 
-static void rt_suffix(rt_ctx_t *c) {
-  size_t after = c->position + c->matched_len;
-  if (after < c->str_len) RT_APPEND(c, c->str + after, c->str_len - after);
-  *c->ri += 2;
+  memcpy(*c->buf + *c->buf_len, data, dlen);
+  *c->buf_len += dlen;
+  return true;
 }
 
-static void rt_capture(rt_ctx_t *c) {
+static bool rt_dollar(rt_ctx_t *c) {
+  *c->ri += 2;
+  return rt_append(c, "$", 1);
+}
+
+static bool rt_match(rt_ctx_t *c) { 
+  *c->ri += 2;
+  return rt_append(c, c->matched, c->matched_len);
+}
+
+static bool rt_prefix(rt_ctx_t *c) { 
+  *c->ri += 2;
+  return rt_append(c, c->str, c->position);
+}
+
+static bool rt_suffix(rt_ctx_t *c) {
+  size_t after = c->position + c->matched_len;
+  bool ok = true;
+  if (after < c->str_len)
+    ok = rt_append(c, c->str + after, c->str_len - after);
+  *c->ri += 2;
+  return ok;
+}
+
+static bool rt_capture(rt_ctx_t *c) {
   char nc = c->repl[*c->ri + 1];
   int gn = nc - '0';
   *c->ri += 2;
+  
   if (*c->ri < c->repl_len && c->repl[*c->ri] >= '0' && c->repl[*c->ri] <= '9') {
     int two = gn * 10 + (c->repl[*c->ri] - '0');
     if (two <= c->ncaptures) { gn = two; (*c->ri)++; }
   }
-  if (gn > 0 && gn <= c->ncaptures && c->caps[gn - 1].ptr) {
-    RT_APPEND(c, c->caps[gn - 1].ptr, c->caps[gn - 1].len);
-  } else if (gn == 0 || gn > c->ncaptures) {
-    RT_APPEND(c, "$", 1); RT_APPEND(c, &nc, 1);
-  }
+  
+  if (gn > 0 && gn <= c->ncaptures && c->caps[gn - 1].ptr)
+    return rt_append(c, c->caps[gn - 1].ptr, c->caps[gn - 1].len);
+    
+  if (gn == 0 || gn > c->ncaptures)
+    return rt_append(c, "$", 1) && rt_append(c, &nc, 1);
+    
+  return true;
 }
 
-typedef void (*rt_handler_t)(rt_ctx_t *);
+typedef bool (*rt_handler_t)(rt_ctx_t *);
 static rt_handler_t rt_dispatch[128];
 static bool rt_dispatch_init = false;
 
@@ -303,7 +333,7 @@ static void rt_init_dispatch(void) {
   rt_dispatch_init = true;
 }
 
-void repl_template(
+bool repl_template(
   const char *repl, size_t repl_len,
   const char *matched, size_t matched_len,
   const char *str, size_t str_len, size_t position,
@@ -324,13 +354,14 @@ void repl_template(
       unsigned char nc = (unsigned char)repl[ri + 1];
       c.ri = &ri;
       rt_handler_t h = nc < 128 ? rt_dispatch[nc] : NULL;
-      if (h) { h(&c); continue; }
+      if (h) { if (!h(&c)) return false; continue; }
     }
-    RT_APPEND(&c, &repl[ri], 1); ri++;
+    if (!rt_append(&c, &repl[ri], 1)) return false;
+    ri++;
   }
-}
 
-#undef RT_APPEND
+  return true;
+}
 
 void *try_oom(size_t size) {
   void *p = malloc(size);

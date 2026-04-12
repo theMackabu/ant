@@ -166,13 +166,12 @@ static ant_value_t js_usleep(ant_t *js, ant_value_t *args, int nargs) {
 
 // Ant.stats()
 static ant_value_t js_stats_fn(ant_t *js, ant_value_t *args, int nargs) {
-  (void) args; (void) nargs;
   ant_value_t result = js_newobj(js);
   
   ant_pool_stats_t rope_s = js_pool_stats(&js->pool.rope);
   ant_pool_stats_t sym_s = js_pool_stats(&js->pool.symbol);
   ant_pool_stats_t bigint_s = js_class_pool_stats(&js->pool.bigint);
-  ant_pool_stats_t string_s = js_class_pool_stats(&js->pool.string);
+  ant_string_pool_stats_t string_s = js_string_pool_stats(&js->pool.string);
 
   ant_value_t pools = js_newobj(js);
   ant_value_t rope_obj = js_newobj(js);
@@ -194,16 +193,41 @@ static ant_value_t js_stats_fn(ant_t *js, ant_value_t *args, int nargs) {
   js_set(js, pools, "bigint", bigint_obj);
 
   ant_value_t string_obj = js_newobj(js);
-  js_set(js, string_obj, "used", js_mknum((double)string_s.used));
-  js_set(js, string_obj, "capacity", js_mknum((double)string_s.capacity));
-  js_set(js, string_obj, "blocks", js_mknum((double)string_s.blocks));
-  js_set(js, pools, "string", string_obj);
+  js_set(js, string_obj, "used", js_mknum((double)string_s.total.used));
+  js_set(js, string_obj, "capacity", js_mknum((double)string_s.total.capacity));
+  js_set(js, string_obj, "blocks", js_mknum((double)string_s.total.blocks));
 
-  size_t pool_used = rope_s.used + sym_s.used + bigint_s.used + string_s.used;
-  size_t pool_cap = rope_s.capacity + sym_s.capacity + bigint_s.capacity + string_s.capacity;
+  ant_value_t string_pooled_obj = js_newobj(js);
+  js_set(js, string_pooled_obj, "used", js_mknum((double)string_s.pooled.used));
+  js_set(js, string_pooled_obj, "capacity", js_mknum((double)string_s.pooled.capacity));
+  js_set(js, string_pooled_obj, "blocks", js_mknum((double)string_s.pooled.blocks));
+  js_set(js, string_obj, "pooled", string_pooled_obj);
+
+  ant_value_t string_large_live_obj = js_newobj(js);
+  js_set(js, string_large_live_obj, "used", js_mknum((double)string_s.large_live.used));
+  js_set(js, string_large_live_obj, "capacity", js_mknum((double)string_s.large_live.capacity));
+  js_set(js, string_large_live_obj, "blocks", js_mknum((double)string_s.large_live.blocks));
+  js_set(js, string_obj, "largeLive", string_large_live_obj);
+
+  ant_value_t string_large_reusable_obj = js_newobj(js);
+  js_set(js, string_large_reusable_obj, "used", js_mknum((double)string_s.large_reusable.used));
+  js_set(js, string_large_reusable_obj, "capacity", js_mknum((double)string_s.large_reusable.capacity));
+  js_set(js, string_large_reusable_obj, "blocks", js_mknum((double)string_s.large_reusable.blocks));
+  js_set(js, string_obj, "largeReusable", string_large_reusable_obj);
+
+  ant_value_t string_large_quarantine_obj = js_newobj(js);
+  js_set(js, string_large_quarantine_obj, "used", js_mknum((double)string_s.large_quarantine.used));
+  js_set(js, string_large_quarantine_obj, "capacity", js_mknum((double)string_s.large_quarantine.capacity));
+  js_set(js, string_large_quarantine_obj, "blocks", js_mknum((double)string_s.large_quarantine.blocks));
+  js_set(js, string_obj, "largeQuarantine", string_large_quarantine_obj);
+  
+  size_t pool_used = rope_s.used + sym_s.used + bigint_s.used + string_s.total.used;
+  size_t pool_cap = rope_s.capacity + sym_s.capacity + bigint_s.capacity + string_s.total.capacity;
+  
   js_set(js, pools, "totalUsed", js_mknum((double)pool_used));
   js_set(js, pools, "totalCapacity", js_mknum((double)pool_cap));
   js_set(js, result, "pools", pools);
+  js_set(js, pools, "string", string_obj);
 
   size_t obj_count      = 0;
   size_t obj_bytes      = 0;

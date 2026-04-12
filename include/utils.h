@@ -54,7 +54,7 @@ typedef struct {
   size_t len;
 } repl_capture_t;
 
-void repl_template(
+bool repl_template(
   const char *repl, size_t repl_len,
   const char *matched, size_t matched_len,
   const char *str, size_t str_len, size_t position,

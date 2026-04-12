@@ -28,6 +28,16 @@ static inline ant_value_t sv_getprop_fallback_len(
   return out;
 }
 
+static inline ant_value_t sv_key_to_property_key(ant_t *js, ant_value_t key) {
+  if (vtype(key) == T_SYMBOL) return key;
+
+  ant_value_t prim = is_object_type(key) ? js_to_primitive(js, key, 1) : key;
+  if (is_err(prim)) return prim;
+  if (vtype(prim) == T_SYMBOL) return prim;
+
+  return js_tostring_val(js, prim);
+}
+
 static inline ant_value_t sv_key_to_propstr(ant_t *js, ant_value_t key) {
   return coerce_to_str(js, key);
 }
@@ -251,12 +261,16 @@ static inline void sv_gf_ic_note_miss(sv_ic_entry_t *ic) {
 }
 
 static inline ant_value_t sv_getprop_by_key(ant_t *js, ant_value_t obj, ant_value_t key) {
-  if (vtype(key) == T_SYMBOL) return js_get_sym(js, obj, key);
-  ant_value_t key_str = sv_key_to_propstr(js, key);
+  ant_value_t prop_key = sv_key_to_property_key(js, key);
+  if (is_err(prop_key)) return prop_key;
+  if (vtype(prop_key) == T_SYMBOL) return js_get_sym(js, obj, prop_key);
+
+  ant_value_t key_str = prop_key;
   if (is_err(key_str) || vtype(key_str) != T_STR) return js_mkundef();
 
   ant_offset_t klen = 0;
   ant_offset_t koff = vstr(js, key_str, &klen);
+  
   const char *kptr = (const char *)(uintptr_t)(koff);
   return sv_getprop_fallback_len(js, obj, kptr, klen);
 }
@@ -705,9 +719,9 @@ static inline ant_value_t sv_op_put_elem(sv_vm_t *vm, ant_t *js) {
   ant_value_t val = vm->stack[--vm->sp];
   ant_value_t key = vm->stack[--vm->sp];
   ant_value_t obj = vm->stack[--vm->sp];
-  if (vtype(key) == T_SYMBOL) return js_setprop(js, obj, key, val);
-  ant_value_t key_jv = sv_key_to_propstr(js, key);
-  return js_setprop(js, obj, key_jv, val);
+  ant_value_t prop_key = sv_key_to_property_key(js, key);
+  if (is_err(prop_key)) return prop_key;
+  return js_setprop(js, obj, prop_key, val);
 }
 
 static inline bool sv_try_define_field_fast(
