@@ -463,7 +463,7 @@ compat-table/es6/Map.constructor-accepts-null.js: OK
 compat-table/es6/Map.constructor-arguments.js: OK
 compat-table/es6/Map.constructor-invokes-set.js: failed
 compat-table/es6/Map.constructor-requires-new.js: OK
-compat-table/es6/Map.iterator-closing.js: failed
+compat-table/es6/Map.iterator-closing.js: OK
 compat-table/es6/Map.iterator-prototype-chain.js: OK
 compat-table/es6/Map.js: OK
 compat-table/es6/Map.prototype-not-instance.js: failed
@@ -624,7 +624,7 @@ compat-table/es6/WeakMap.constructor-arguments.js: OK
 compat-table/es6/WeakMap.constructor-invokes-set.js: failed
 compat-table/es6/WeakMap.constructor-requires-new.js: OK
 compat-table/es6/WeakMap.frozen-keys.js: OK
-compat-table/es6/WeakMap.iterator-closing.js: failed
+compat-table/es6/WeakMap.iterator-closing.js: OK
 compat-table/es6/WeakMap.js: OK
 compat-table/es6/WeakMap.no-clear.js: OK
 compat-table/es6/WeakMap.prototype-not-instance.js: failed
@@ -635,7 +635,7 @@ compat-table/es6/WeakSet.constructor-accepts-null.js: OK
 compat-table/es6/WeakSet.constructor-arguments.js: OK
 compat-table/es6/WeakSet.constructor-invokes-add.js: failed
 compat-table/es6/WeakSet.constructor-requires-new.js: OK
-compat-table/es6/WeakSet.iterator-closing.js: failed
+compat-table/es6/WeakSet.iterator-closing.js: OK
 compat-table/es6/WeakSet.js: OK
 compat-table/es6/WeakSet.no-clear.js: OK
 compat-table/es6/WeakSet.prototype-not-instance.js: failed

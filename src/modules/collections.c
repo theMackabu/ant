@@ -182,6 +182,129 @@ static bool set_store_entry(ant_t *js, set_entry_t **set_ptr, ant_value_t value)
   return true;
 }
 
+static ant_value_t map_init_from_iterable(ant_t *js, map_entry_t **map_head, ant_value_t iterable) {
+  js_iter_t it;
+  if (!js_iter_open(js, iterable, &it)) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Map constructor argument is not iterable");
+  }
+
+  ant_value_t entry;
+  while (js_iter_next(js, &it, &entry)) {
+  uint8_t entry_t = vtype(entry);
+  if (entry_t != T_ARR && entry_t != T_OBJ) {
+    js_iter_close(js, &it);
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Map iterable entries must be pair sequences");
+  }
+
+  ant_offset_t entry_len = js_arr_len(js, entry);
+  if (entry_len < 2) {
+    js_iter_close(js, &it);
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Map iterable entries must have at least 2 items");
+  }
+
+  ant_value_t key = normalize_map_key(js_arr_get(js, entry, 0));
+  ant_value_t value = js_arr_get(js, entry, 1);
+  if (!map_store_entry(js, map_head, key, key, value)) {
+    js_iter_close(js, &it);
+    return js_mkerr(js, "out of memory");
+  }}
+
+  return js_mkundef();
+}
+
+static ant_value_t set_init_from_iterable(ant_t *js, set_entry_t **set_head, ant_value_t iterable) {
+  js_iter_t it;
+  if (!js_iter_open(js, iterable, &it)) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Set constructor argument is not iterable");
+  }
+
+  ant_value_t value;
+  while (js_iter_next(js, &it, &value)) if (!set_store_entry(js, set_head, value)) {
+    js_iter_close(js, &it);
+    return js_mkerr(js, "out of memory");
+  }
+
+  return js_mkundef();
+}
+
+static ant_value_t weakmap_init_from_iterable(ant_t *js, weakmap_entry_t **wm_head, ant_value_t iterable) {
+  js_iter_t it;
+  if (!js_iter_open(js, iterable, &it)) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "WeakMap constructor argument is not iterable");
+  }
+
+  ant_value_t entry;
+  while (js_iter_next(js, &it, &entry)) {
+    uint8_t entry_t = vtype(entry);
+    if (entry_t != T_ARR && entry_t != T_OBJ) {
+      js_iter_close(js, &it);
+      return js_mkerr_typed(js, JS_ERR_TYPE, "WeakMap iterable entries must be pair sequences");
+    }
+    
+    ant_offset_t entry_len = js_arr_len(js, entry);
+    if (entry_len < 2) {
+      js_iter_close(js, &it);
+      return js_mkerr_typed(js, JS_ERR_TYPE, "WeakMap iterable entries must have at least 2 items");
+    }
+    
+    ant_value_t key = js_arr_get(js, entry, 0);
+    ant_value_t value = js_arr_get(js, entry, 1);
+    if (!is_object_type(key)) {
+      js_iter_close(js, &it);
+      return js_mkerr(js, "WeakMap key must be an object");
+    }
+    
+    weakmap_entry_t *wm_entry;
+    HASH_FIND(hh, *wm_head, &key, sizeof(ant_value_t), wm_entry);
+    if (wm_entry) {
+      wm_entry->value = value;
+      continue;
+    }
+    
+    wm_entry = ant_calloc(sizeof(weakmap_entry_t));
+    if (!wm_entry) {
+      js_iter_close(js, &it);
+      return js_mkerr(js, "out of memory");
+    }
+    
+    wm_entry->key_obj = key;
+    wm_entry->value = value;
+    HASH_ADD(hh, *wm_head, key_obj, sizeof(ant_value_t), wm_entry);
+  }
+
+  return js_mkundef();
+}
+
+static ant_value_t weakset_init_from_iterable(ant_t *js, weakset_entry_t **ws_head, ant_value_t iterable) {
+  js_iter_t it;
+  if (!js_iter_open(js, iterable, &it)) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "WeakSet constructor argument is not iterable");
+  }
+
+  ant_value_t value;
+  while (js_iter_next(js, &it, &value)) {
+    if (!is_object_type(value)) {
+      js_iter_close(js, &it);
+      return js_mkerr(js, "WeakSet value must be an object");
+    }
+    
+    weakset_entry_t *entry;
+    HASH_FIND(hh, *ws_head, &value, sizeof(ant_value_t), entry);
+    if (entry) continue;
+    
+    entry = ant_calloc(sizeof(weakset_entry_t));
+    if (!entry) {
+      js_iter_close(js, &it);
+      return js_mkerr(js, "out of memory");
+    }
+    
+    entry->value_obj = value;
+    HASH_ADD(hh, *ws_head, value_obj, sizeof(ant_value_t), entry);
+  }
+
+  return js_mkundef();
+}
+
 map_entry_t **get_map_from_obj(ant_t *js, ant_value_t obj) {
   (void)js;
   ant_object_t *ptr = js_obj_ptr(obj);
@@ -851,28 +974,13 @@ static ant_value_t builtin_Map(ant_t *js, ant_value_t *args, int nargs) {
   if (!map_head) return js_mkerr(js, "out of memory");
   *map_head = NULL;
   
-  if (vtype(js->new_target) == T_FUNC || vtype(js->new_target) == T_CFUNC) {
+  if (vtype(js->new_target) == T_FUNC || vtype(js->new_target) == T_CFUNC)
     js_set_slot(map_obj, SLOT_CTOR, js->new_target);
-  }
   js_set_slot(map_obj, SLOT_DATA, ANT_PTR(map_head));
   
-  if (nargs == 0 || vtype(args[0]) != T_ARR) return map_obj;
-  
-  ant_value_t iterable = args[0];
-  ant_offset_t length = js_arr_len(js, iterable);
-  
-  for (ant_offset_t i = 0; i < length; i++) {
-    ant_value_t entry = js_arr_get(js, iterable, i);
-    if (vtype(entry) != T_ARR) continue;
-    
-    ant_offset_t entry_len = js_arr_len(js, entry);
-    if (entry_len < 2) continue;
-    
-    ant_value_t key = normalize_map_key(js_arr_get(js, entry, 0));
-    ant_value_t value = js_arr_get(js, entry, 1);
-    if (!map_store_entry(js, map_head, key, key, value))
-      return js_mkerr(js, "out of memory");
-  }
+  if (nargs == 0 || vtype(args[0]) == T_UNDEF || vtype(args[0]) == T_NULL) return map_obj;
+  ant_value_t init_result = map_init_from_iterable(js, map_head, args[0]);
+  if (is_err(init_result)) return init_result;
   
   return map_obj;
 }
@@ -896,20 +1004,13 @@ static ant_value_t builtin_Set(ant_t *js, ant_value_t *args, int nargs) {
   if (!set_head) return js_mkerr(js, "out of memory");
   *set_head = NULL;
   
-  if (vtype(js->new_target) == T_FUNC || vtype(js->new_target) == T_CFUNC) {
+  if (vtype(js->new_target) == T_FUNC || vtype(js->new_target) == T_CFUNC)
     js_set_slot(set_obj, SLOT_CTOR, js->new_target);
-  }
   js_set_slot(set_obj, SLOT_DATA, ANT_PTR(set_head));
   
-  if (nargs == 0 || vtype(args[0]) != T_ARR) return set_obj;
-  
-  ant_value_t iterable = args[0];
-  ant_offset_t length = js_arr_len(js, iterable);
-  
-  for (ant_offset_t i = 0; i < length; i++) {
-    ant_value_t value = js_arr_get(js, iterable, i);
-    if (!set_store_entry(js, set_head, value)) return js_mkerr(js, "out of memory");
-  }
+  if (nargs == 0 || vtype(args[0]) == T_UNDEF || vtype(args[0]) == T_NULL) return set_obj;
+  ant_value_t init_result = set_init_from_iterable(js, set_head, args[0]);
+  if (is_err(init_result)) return init_result;
   
   return set_obj;
 }
@@ -933,42 +1034,13 @@ static ant_value_t builtin_WeakMap(ant_t *js, ant_value_t *args, int nargs) {
   if (!wm_head) return js_mkerr(js, "out of memory");
   *wm_head = NULL;
   
-  if (vtype(js->new_target) == T_FUNC || vtype(js->new_target) == T_CFUNC) {
+  if (vtype(js->new_target) == T_FUNC || vtype(js->new_target) == T_CFUNC)
     js_set_slot(wm_obj, SLOT_CTOR, js->new_target);
-  }
   js_set_slot(wm_obj, SLOT_DATA, ANT_PTR(wm_head));
   
-  if (nargs == 0 || vtype(args[0]) != T_ARR) return wm_obj;
-  
-  ant_value_t iterable = args[0];
-  ant_offset_t length = js_arr_len(js, iterable);
-  
-  for (ant_offset_t i = 0; i < length; i++) {
-    ant_value_t entry = js_arr_get(js, iterable, i);
-    if (vtype(entry) != T_ARR) continue;
-    
-    ant_offset_t entry_len = js_arr_len(js, entry);
-    if (entry_len < 2) continue;
-    
-    ant_value_t key = js_arr_get(js, entry, 0);
-    ant_value_t value = js_arr_get(js, entry, 1);
-    if (!is_object_type(key)) return js_mkerr(js, "WeakMap key must be an object");
-    
-    weakmap_entry_t *wm_entry;
-    HASH_FIND(hh, *wm_head, &key, sizeof(ant_value_t), wm_entry);
-    
-    if (wm_entry) {
-      wm_entry->value = value;
-      continue;
-    }
-    
-    wm_entry = ant_calloc(sizeof(weakmap_entry_t));
-    if (!wm_entry) return js_mkerr(js, "out of memory");
-    
-    wm_entry->key_obj = key;
-    wm_entry->value = value;
-    HASH_ADD(hh, *wm_head, key_obj, sizeof(ant_value_t), wm_entry);
-  }
+  if (nargs == 0 || vtype(args[0]) == T_UNDEF || vtype(args[0]) == T_NULL) return wm_obj;
+  ant_value_t init_result = weakmap_init_from_iterable(js, wm_head, args[0]);
+  if (is_err(init_result)) return init_result;
   
   return wm_obj;
 }
@@ -992,29 +1064,13 @@ static ant_value_t builtin_WeakSet(ant_t *js, ant_value_t *args, int nargs) {
   if (!ws_head) return js_mkerr(js, "out of memory");
   *ws_head = NULL;
   
-  if (vtype(js->new_target) == T_FUNC || vtype(js->new_target) == T_CFUNC) {
+  if (vtype(js->new_target) == T_FUNC || vtype(js->new_target) == T_CFUNC)
     js_set_slot(ws_obj, SLOT_CTOR, js->new_target);
-  }
   js_set_slot(ws_obj, SLOT_DATA, ANT_PTR(ws_head));
   
-  if (nargs == 0 || vtype(args[0]) != T_ARR) return ws_obj;
-  
-  ant_value_t iterable = args[0];
-  ant_offset_t length = js_arr_len(js, iterable);
-  
-  for (ant_offset_t i = 0; i < length; i++) {
-    ant_value_t value = js_arr_get(js, iterable, i);
-    if (!is_object_type(value)) return js_mkerr(js, "WeakSet value must be an object");
-    
-    weakset_entry_t *entry;
-    HASH_FIND(hh, *ws_head, &value, sizeof(ant_value_t), entry);
-    if (entry) continue;
-    
-    entry = ant_calloc(sizeof(weakset_entry_t));
-    if (!entry) return js_mkerr(js, "out of memory");
-    entry->value_obj = value;
-    HASH_ADD(hh, *ws_head, value_obj, sizeof(ant_value_t), entry);
-  }
+  if (nargs == 0 || vtype(args[0]) == T_UNDEF || vtype(args[0]) == T_NULL) return ws_obj;
+  ant_value_t init_result = weakset_init_from_iterable(js, ws_head, args[0]);
+  if (is_err(init_result)) return init_result;
   
   return ws_obj;
 }
