@@ -50,8 +50,9 @@ Ant targets the [WinterTC Minimum Common API](https://min-common-api.proposal.wi
 | Suite            | Pass rate | Notes                                      |
 | ---------------- | --------- | ------------------------------------------ |
 | js-zoo (ES1–ES5) | ~100%     |                                            |
-| js-zoo (ES6)     | ~80%\*    | \*Generators unsupported                   |
-| js-zoo (ES2016+) | ~90%      |                                            |
+| js-zoo (ES6)     | ~82%      |                                            |
+| js-zoo (ES2016+) | ~86%      |                                            |
+| js-zoo (overall) | **88%**   | 1211/1368 passing                          |
 | test262          | ~50%      | Improving, focus is on real-world coverage |
 
 ## Building Ant
