@@ -67,6 +67,9 @@ declare module 'util' {
   }): { values: Record<string, unknown>; positionals: string[] };
   function parseEnv(content: string): Record<string, string>;
   function promisify(fn: (...args: unknown[]) => unknown): (...args: unknown[]) => Promise<unknown>;
+  namespace promisify {
+    const custom: symbol;
+  }
   function callbackify(fn: (...args: unknown[]) => Promise<unknown>): (...args: unknown[]) => void;
   function aborted(signal: AbortSignal, resource: object): Promise<void>;
   function stripVTControlCharacters(str: string): string;

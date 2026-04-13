@@ -68,8 +68,7 @@ static void sv_mco_async_entry(mco_coro *mco) {
   ant_value_t promise = ctx->coro->async_promise;
 
   if (is_err(result)) {
-    ant_value_t reject_value = js->thrown_value;
-    if (vtype(reject_value) == T_UNDEF) reject_value = result;
+    ant_value_t reject_value = js->thrown_exists ? js->thrown_value : result;
     js->thrown_exists = false;
     js->thrown_value = js_mkundef();
     js_reject_promise(js, promise, reject_value);
@@ -98,8 +97,7 @@ static void sv_mco_tla_entry(mco_coro *mco) {
   ant_value_t promise = ctx->coro->async_promise;
 
   if (is_err(result)) {
-    ant_value_t reject_value = js->thrown_value;
-    if (vtype(reject_value) == T_UNDEF) reject_value = result;
+    ant_value_t reject_value = js->thrown_exists ? js->thrown_value : result;
     js->thrown_exists = false;
     js->thrown_value = js_mkundef();
     js_reject_promise(js, promise, reject_value);
@@ -180,15 +178,17 @@ static inline ant_value_t sv_start_tla(ant_t *js, sv_func_t *func, ant_value_t t
     }
     
     if (is_err(result)) {
-      ant_value_t reject_value = js->thrown_value;
-      if (vtype(reject_value) == T_UNDEF) reject_value = result;
+      ant_value_t reject_value = js->thrown_exists ? js->thrown_value : result;
       js->thrown_exists = false;
       js->thrown_value = js_mkundef();
+      js->active_async_coro = coro->active_parent;
+      coro->active_parent = NULL;
       js_reject_promise(js, promise, reject_value);
-    } else js_resolve_promise(js, promise, result);
-    
-    js->active_async_coro = coro->active_parent;
-    coro->active_parent = NULL;
+    } else {
+      js->active_async_coro = coro->active_parent;
+      coro->active_parent = NULL;
+      js_resolve_promise(js, promise, result);
+    }
     
     free_coroutine(coro);
     GC_ROOT_RESTORE(js, root_mark);
@@ -306,8 +306,7 @@ static inline ant_value_t sv_start_async_closure(
     );
     
     if (is_err(result)) {
-      ant_value_t reject_value = js->thrown_value;
-      if (vtype(reject_value) == T_UNDEF) reject_value = result;
+      ant_value_t reject_value = js->thrown_exists ? js->thrown_value : result;
       js->thrown_exists = false;
       js->thrown_value = js_mkundef();
       js_reject_promise(js, promise, reject_value);
@@ -385,15 +384,17 @@ static inline ant_value_t sv_start_async_closure(
     }
     
     if (is_err(result)) {
-      ant_value_t reject_value = js->thrown_value;
-      if (vtype(reject_value) == T_UNDEF) reject_value = result;
+      ant_value_t reject_value = js->thrown_exists ? js->thrown_value : result;
       js->thrown_exists = false;
       js->thrown_value = js_mkundef();
+      js->active_async_coro = coro->active_parent;
+      coro->active_parent = NULL;
       js_reject_promise(js, promise, reject_value);
-    } else js_resolve_promise(js, promise, result);
-
-    js->active_async_coro = coro->active_parent;
-    coro->active_parent = NULL;
+    } else {
+      js->active_async_coro = coro->active_parent;
+      coro->active_parent = NULL;
+      js_resolve_promise(js, promise, result);
+    }
     
     free_coroutine(coro);
     GC_ROOT_RESTORE(js, root_mark);

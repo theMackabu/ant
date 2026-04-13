@@ -36,6 +36,11 @@ declare module 'child_process' {
     cwd?: string;
   }
 
+  interface ExecFileResult {
+    stdout: string;
+    stderr: string;
+  }
+
   interface SpawnSyncOptions {
     input?: string;
   }
@@ -46,6 +51,13 @@ declare module 'child_process' {
 
   function spawn(command: string, args?: string[], options?: SpawnOptions): ChildProcess & Promise<SpawnResult>;
   function exec(command: string, options?: ExecOptions): Promise<SpawnResult>;
+  function execFile(file: string, args?: string[], options?: ExecOptions): ChildProcess;
+  function execFile(
+    file: string,
+    args: string[] | undefined,
+    options: ExecOptions | undefined,
+    callback: (err: Error | null, stdout: string, stderr: string) => void
+  ): ChildProcess;
   function execSync(command: string): string;
   function spawnSync(command: string, args?: string[], options?: SpawnSyncOptions): SpawnResult;
   function fork(modulePath: string, options?: ForkOptions): ChildProcess & Promise<SpawnResult>;

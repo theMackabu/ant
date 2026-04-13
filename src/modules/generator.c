@@ -8,9 +8,12 @@
 #include "runtime.h"
 #include "sugar.h"
 
+#include "gc/roots.h"
 #include "silver/engine.h"
 #include "modules/generator.h"
 #include "modules/symbol.h"
+
+enum { GENERATOR_NATIVE_TAG = 0x47454e52u }; // GENR
 
 typedef enum {
   GEN_SUSPENDED_START = 0,
@@ -19,13 +22,25 @@ typedef enum {
   GEN_COMPLETED       = 3,
 } generator_state_t;
 
-enum { GENERATOR_NATIVE_TAG = 0x47454e52u }; // GENR
+typedef struct generator_request {
+  sv_resume_kind_t kind;
+  ant_value_t value;
+  ant_value_t promise;
+  struct generator_request *next;
+} generator_request_t;
 
 typedef struct generator_data {
   coroutine_t *coro;
   generator_state_t state;
+  generator_request_t *queue_head;
+  generator_request_t *queue_tail;
   bool is_async;
 } generator_data_t;
+
+static ant_value_t generator_resume_kind(
+  ant_t *js, ant_value_t gen, 
+  ant_value_t resume_value, sv_resume_kind_t resume_kind
+);
 
 static ant_value_t generator_result(ant_t *js, bool done, ant_value_t value) {
   ant_value_t result = js_mkobj(js);
@@ -68,13 +83,100 @@ static ant_value_t generator_async_wrap_result(ant_t *js, ant_value_t result) {
   return promise;
 }
 
+static generator_request_t *generator_dequeue_request(generator_data_t *data) {
+  if (!data || !data->queue_head) return NULL;
+  generator_request_t *req = data->queue_head;
+  data->queue_head = req->next;
+  if (!data->queue_head) data->queue_tail = NULL;
+  req->next = NULL;
+  return req;
+}
+
+static void generator_free_queue(generator_data_t *data) {
+  if (!data) return;
+  generator_request_t *req = data->queue_head;
+  
+  while (req) {
+    generator_request_t *next = req->next;
+    free(req);
+    req = next;
+  }
+  
+  data->queue_head = NULL;
+  data->queue_tail = NULL;
+}
+
+static ant_value_t generator_enqueue_request(
+  ant_t *js, ant_value_t gen, sv_resume_kind_t kind, ant_value_t value
+) {
+  generator_data_t *data = generator_data(gen);
+  if (!data || !data->is_async) return js_mkerr_typed(js, JS_ERR_TYPE, "Generator is already executing");
+
+  ant_value_t promise = js_mkpromise(js);
+  if (is_err(promise)) return promise;
+
+  generator_request_t *req = (generator_request_t *)calloc(1, sizeof(*req));
+  if (!req) return js_mkerr(js, "out of memory for generator request");
+
+  *req = (generator_request_t){
+    .kind = kind,
+    .value = value,
+    .promise = promise,
+    .next = NULL,
+  };
+
+  if (data->queue_tail) data->queue_tail->next = req;
+  else data->queue_head = req;
+  data->queue_tail = req;
+  
+  return promise;
+}
+
+static void generator_settle_request_promise(ant_t *js, ant_value_t promise, ant_value_t result) {
+  if (is_err(result)) {
+    ant_value_t reject_value = js->thrown_exists ? js->thrown_value : result;
+    js->thrown_exists = false;
+    js->thrown_value = js_mkundef();
+    js_reject_promise(js, promise, reject_value);
+  } else js_resolve_promise(js, promise, result);
+}
+
+static void generator_process_queue(ant_t *js, ant_value_t gen) {
+  generator_data_t *data = generator_data(gen);
+  if (!data || !data->is_async) return;
+
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, gen);
+
+  while (data->state != GEN_EXECUTING && data->queue_head) {
+    generator_request_t *req = generator_dequeue_request(data);
+    if (!req) break;
+    
+    GC_ROOT_PIN(js, req->value);
+    GC_ROOT_PIN(js, req->promise);
+    
+    coroutine_t *coro = data->coro;
+    if (coro) coro->async_promise = req->promise;
+    
+    ant_value_t result = generator_resume_kind(js, gen, req->value, req->kind);
+    GC_ROOT_PIN(js, result);
+    
+    if (vtype(result) != T_PROMISE || result != req->promise) {
+      generator_settle_request_promise(js, req->promise, result);
+      js_maybe_drain_microtasks_after_async_settle(js);
+    }
+    
+    free(req);
+    data = generator_data(gen);
+    if (!data) break;
+  }
+
+  GC_ROOT_RESTORE(js, root_mark);
+}
+
 static coroutine_t *generator_coro(ant_value_t gen) {
   generator_data_t *data = generator_data(gen);
   return data ? data->coro : NULL;
-}
-
-coroutine_t *generator_get_coro_for_gc(ant_value_t gen) {
-  return generator_coro(gen);
 }
 
 static void generator_clear_coro(ant_value_t gen, coroutine_t *coro) {
@@ -83,51 +185,192 @@ static void generator_clear_coro(ant_value_t gen, coroutine_t *coro) {
   if (coro) free_coroutine(coro);
 }
 
+coroutine_t *generator_get_coro_for_gc(ant_value_t gen) {
+  return generator_coro(gen);
+}
+
+void generator_mark_for_gc(ant_t *js, ant_value_t gen) {
+  generator_data_t *data = generator_data(gen);
+  if (!data) return;
+  for (generator_request_t *req = data->queue_head; req; req = req->next) {
+    gc_mark_value(js, req->value);
+    gc_mark_value(js, req->promise);
+  }
+}
+
+static ant_value_t generator_find_owner_in_list(ant_object_t *head, coroutine_t *coro) {
+  for (ant_object_t *obj = head; obj; obj = obj->next) {
+    ant_value_t candidate = js_obj_from_ptr(obj);
+    generator_data_t *data = generator_data(candidate);
+    if (data && data->coro == coro) return candidate;
+  }
+  return js_mkundef();
+}
+
+static ant_value_t generator_find_owner(ant_t *js, coroutine_t *coro) {
+  ant_value_t gen = generator_find_owner_in_list(js->objects, coro);
+  if (vtype(gen) != T_UNDEF) return gen;
+  gen = generator_find_owner_in_list(js->objects_old, coro);
+  if (vtype(gen) != T_UNDEF) return gen;
+  return generator_find_owner_in_list(js->permanent_objects, coro);
+}
+
+bool generator_resume_pending_request(ant_t *js, coroutine_t *coro, ant_value_t result) {
+  if (!coro || coro->type != CORO_GENERATOR || vtype(coro->async_promise) != T_PROMISE) return false;
+
+  ant_value_t gen = generator_find_owner(js, coro);
+  generator_data_t *data = generator_data(gen);
+  if (!data || !data->is_async) return false;
+
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, gen);
+  GC_ROOT_PIN(js, result);
+
+  ant_value_t pending = coro->async_promise;
+  GC_ROOT_PIN(js, pending);
+
+  if (is_err(result)) {
+    ant_value_t reject_value = js->thrown_exists ? js->thrown_value : result;
+    js->thrown_exists = false;
+    js->thrown_value = js_mkundef();
+    
+    GC_ROOT_PIN(js, reject_value);
+    coro->async_promise = js_mkundef();
+    generator_set_state(gen, GEN_COMPLETED);
+    generator_clear_coro(gen, coro);
+    
+    js_reject_promise(js, pending, reject_value);
+    js_maybe_drain_microtasks_after_async_settle(js);
+    generator_process_queue(js, gen);
+    GC_ROOT_RESTORE(js, root_mark);
+    
+    return true;
+  }
+
+  if (coro->sv_vm && coro->sv_vm->suspended) {
+    if (vtype(coro->awaited_promise) != T_UNDEF) {
+      generator_set_state(gen, GEN_EXECUTING);
+      GC_ROOT_RESTORE(js, root_mark);
+      return true;
+    }
+
+    ant_value_t out = generator_result(js, false, result);
+    GC_ROOT_PIN(js, out);
+    coro->async_promise = js_mkundef();
+    generator_set_state(gen, GEN_SUSPENDED_YIELD);
+    
+    js_resolve_promise(js, pending, out);
+    js_maybe_drain_microtasks_after_async_settle(js);
+    generator_process_queue(js, gen);
+    GC_ROOT_RESTORE(js, root_mark);
+    
+    return true;
+  }
+
+  ant_value_t out = generator_result(js, true, result);
+  GC_ROOT_PIN(js, out);
+  coro->async_promise = js_mkundef();
+  
+  generator_set_state(gen, GEN_COMPLETED);
+  generator_clear_coro(gen, coro);
+  
+  js_resolve_promise(js, pending, out);
+  js_maybe_drain_microtasks_after_async_settle(js);
+  generator_process_queue(js, gen);
+  GC_ROOT_RESTORE(js, root_mark);
+  
+  return true;
+}
+
 static void generator_finalize(ant_t *js, ant_object_t *obj) {
   ant_value_t gen = js_obj_from_ptr(obj);
   generator_data_t *data = (generator_data_t *)js_get_native_ptr(gen);
   if (!data) return;
 
   if (data->coro) {
-    free_coroutine(data->coro);
+    coroutine_t *coro = data->coro;
+    bool linked_active = false;
+    bool linked_pending =
+      coro->prev || coro->next ||
+      pending_coroutines.head == coro ||
+      pending_coroutines.tail == coro;
+      
+    for (coroutine_t *it = js->active_async_coro; it; it = it->active_parent) if (it == coro) {
+      linked_active = true;
+      break;
+    }
+    
+    bool awaiting = vtype(coro->awaited_promise) != T_UNDEF;
+    if (!linked_pending && !linked_active && !awaiting) free_coroutine(coro);
     data->coro = NULL;
   }
   
   js_set_native_ptr(gen, NULL);
   js_set_native_tag(gen, 0);
+  
+  generator_free_queue(data);
   free(data);
 }
 
 static ant_value_t generator_resume_kind(
   ant_t *js, ant_value_t gen, ant_value_t resume_value, sv_resume_kind_t resume_kind
 ) {
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, gen);
+  GC_ROOT_PIN(js, resume_value);
   coroutine_t *coro = generator_coro(gen);
+  
   if (!coro || !coro->sv_vm) {
     generator_set_state(gen, GEN_COMPLETED);
-    if (resume_kind == SV_RESUME_THROW) return js_throw(js, resume_value);
-    return generator_result(js, true, resume_kind == SV_RESUME_RETURN ? resume_value : js_mkundef());
+    if (resume_kind == SV_RESUME_THROW) {
+      GC_ROOT_RESTORE(js, root_mark);
+      return js_throw(js, resume_value);
+    }
+    
+    ant_value_t out = generator_result(
+      js, true, resume_kind == SV_RESUME_RETURN 
+      ? resume_value : js_mkundef()
+    );
+    
+    GC_ROOT_RESTORE(js, root_mark);
+    return out;
   }
 
   generator_state_t state = generator_state(gen);
-  if (state == GEN_EXECUTING) return js_mkerr_typed(
-    js, JS_ERR_TYPE, "Generator is already executing"
-  );
+  if (state == GEN_EXECUTING) {
+    ant_value_t queued = generator_enqueue_request(js, gen, resume_kind, resume_value);
+    GC_ROOT_RESTORE(js, root_mark);
+    return queued;
+  }
     
   if (state == GEN_COMPLETED) {
-    if (resume_kind == SV_RESUME_THROW) return js_throw(js, resume_value);
-    return generator_result(js, true, resume_kind == SV_RESUME_RETURN ? resume_value : js_mkundef());
+    if (resume_kind == SV_RESUME_THROW) {
+      GC_ROOT_RESTORE(js, root_mark);
+      return js_throw(js, resume_value);
+    }
+    
+    ant_value_t out = generator_result(
+      js, true, resume_kind == SV_RESUME_RETURN
+      ? resume_value : js_mkundef()
+    );
+    
+    GC_ROOT_RESTORE(js, root_mark);
+    return out;
   }
   
   if (state == GEN_SUSPENDED_START && resume_kind == SV_RESUME_THROW) {
     generator_set_state(gen, GEN_COMPLETED);
     generator_clear_coro(gen, coro);
+    GC_ROOT_RESTORE(js, root_mark);
     return js_throw(js, resume_value);
   }
   
   if (state == GEN_SUSPENDED_START && resume_kind == SV_RESUME_RETURN) {
     generator_set_state(gen, GEN_COMPLETED);
     generator_clear_coro(gen, coro);
-    return generator_result(js, true, resume_value);
+    ant_value_t out = generator_result(js, true, resume_value);
+    GC_ROOT_RESTORE(js, root_mark);
+    return out;
   }
 
   generator_set_state(gen, GEN_EXECUTING);
@@ -151,25 +394,45 @@ static ant_value_t generator_resume_kind(
     coro->sv_vm->suspended_resume_pending = true;
     result = sv_resume_suspended(coro->sv_vm);
   }
-
+  
+  GC_ROOT_PIN(js, result);
   js->active_async_coro = saved_active;
   coro->active_parent = NULL;
 
   if (is_err(result)) {
     generator_set_state(gen, GEN_COMPLETED);
     generator_clear_coro(gen, coro);
+    GC_ROOT_RESTORE(js, root_mark);
     return result;
   }
 
   if (coro->sv_vm && coro->sv_vm->suspended) {
+    if (generator_is_async(gen) && vtype(coro->awaited_promise) != T_UNDEF) {
+      generator_set_state(gen, GEN_EXECUTING);
+      if (vtype(coro->async_promise) != T_PROMISE) {
+        coro->async_promise = js_mkpromise(js);
+        GC_ROOT_PIN(js, coro->async_promise);
+      }
+      
+      ant_value_t out = coro->async_promise;
+      GC_ROOT_RESTORE(js, root_mark);
+      return out;
+    }
+    
     generator_set_state(gen, GEN_SUSPENDED_YIELD);
-    return generator_result(js, false, result);
+    ant_value_t out = generator_result(js, false, result);
+    GC_ROOT_RESTORE(js, root_mark);
+    
+    return out;
   }
 
   generator_set_state(gen, GEN_COMPLETED);
   generator_clear_coro(gen, coro);
   
-  return generator_result(js, true, result);
+  ant_value_t out = generator_result(js, true, result);
+  GC_ROOT_RESTORE(js, root_mark);
+  
+  return out;
 }
 
 static ant_value_t generator_resume(ant_t *js, ant_value_t gen, ant_value_t resume_value) {
@@ -180,10 +443,11 @@ static ant_value_t generator_next(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t gen = js->this_val;
   if (vtype(gen) != T_GENERATOR)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Generator.prototype.next called on incompatible receiver");
-
+    
   ant_value_t resume_value = nargs > 0 ? args[0] : js_mkundef();
   ant_value_t result = generator_resume(js, gen, resume_value);
   
+  if (generator_is_async(gen) && vtype(result) == T_PROMISE) return result;
   return generator_is_async(gen) ? generator_async_wrap_result(js, result) : result;
 }
 
@@ -193,12 +457,13 @@ static ant_value_t generator_return(ant_t *js, ant_value_t *args, int nargs) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Generator.prototype.return called on incompatible receiver");
 
   generator_state_t state = generator_state(gen);
-  if (state == GEN_EXECUTING)
+  if (state == GEN_EXECUTING && !generator_is_async(gen))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Generator is already executing");
-
+    
   ant_value_t value = nargs > 0 ? args[0] : js_mkundef();
   ant_value_t result = generator_resume_kind(js, gen, value, SV_RESUME_RETURN);
   
+  if (generator_is_async(gen) && vtype(result) == T_PROMISE) return result;
   return generator_is_async(gen) ? generator_async_wrap_result(js, result) : result;
 }
 
@@ -206,14 +471,15 @@ static ant_value_t generator_throw(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t gen = js->this_val;
   if (vtype(gen) != T_GENERATOR)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Generator.prototype.throw called on incompatible receiver");
-
+    
   generator_state_t state = generator_state(gen);
-  if (state == GEN_EXECUTING)
+  if (state == GEN_EXECUTING && !generator_is_async(gen))
     return js_mkerr_typed(js, JS_ERR_TYPE, "Generator is already executing");
-
+    
   ant_value_t value = nargs > 0 ? args[0] : js_mkundef();
   ant_value_t result = generator_resume_kind(js, gen, value, SV_RESUME_THROW);
   
+  if (generator_is_async(gen) && vtype(result) == T_PROMISE) return result;
   return generator_is_async(gen) ? generator_async_wrap_result(js, result) : result;
 }
 

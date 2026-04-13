@@ -1256,6 +1256,78 @@ static ant_value_t exec_file_close_callback(ant_t *js, ant_value_t *args, int na
   return js_mkundef();
 }
 
+static ant_value_t exec_file_promisify_callback(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t state = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  if (!is_object_type(state)) return js_mkundef();
+
+  ant_value_t settled = js_get_slot(state, SLOT_SETTLED);
+  if (vtype(settled) == T_BOOL && settled == js_true) return js_mkundef();
+  js_set_slot(state, SLOT_SETTLED, js_true);
+
+  ant_value_t promise = js_get_slot(state, SLOT_DATA);
+  if (vtype(promise) != T_PROMISE) return js_mkundef();
+
+  ant_value_t stdout_val = nargs > 1 ? args[1] : js_mkstr(js, "", 0);
+  ant_value_t stderr_val = nargs > 2 ? args[2] : js_mkstr(js, "", 0);
+
+  if (nargs > 0 && !is_null(args[0]) && !is_undefined(args[0])) {
+    if (is_object_type(args[0])) {
+      js_set(js, args[0], "stdout", stdout_val);
+      js_set(js, args[0], "stderr", stderr_val);
+    }
+    js_reject_promise(js, promise, args[0]);
+    return js_mkundef();
+  }
+
+  ant_value_t result = js_mkobj(js);
+  js_set(js, result, "stdout", stdout_val);
+  js_set(js, result, "stderr", stderr_val);
+  js_resolve_promise(js, promise, result);
+  
+  return js_mkundef();
+}
+
+static ant_value_t exec_file_promisified_call(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t original = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  if (!is_callable(original)) return js_mkerr(js, "execFile promisify target is not callable");
+
+  ant_value_t promise = js_mkpromise(js);
+  ant_value_t state = js_mkobj(js);
+  
+  js_set_slot(state, SLOT_DATA, promise);
+  js_set_slot(state, SLOT_SETTLED, js_false);
+  
+  ant_value_t callback = js_heavy_mkfun(js, exec_file_promisify_callback, state);
+  ant_value_t *call_args = malloc((size_t)(nargs + 1) * sizeof(ant_value_t));
+  
+  if (!call_args) {
+    js_reject_promise(js, promise, js_mkerr(js, "Out of memory"));
+    return promise;
+  }
+
+  for (int i = 0; i < nargs; i++) call_args[i] = args[i];
+  call_args[nargs] = callback;
+
+  ant_value_t call_result = sv_vm_call(
+    js->vm, js, original, js_getthis(js), 
+    call_args, nargs + 1, NULL, false
+  ); free(call_args);
+
+  ant_value_t settled = js_get_slot(state, SLOT_SETTLED);
+  bool is_settled = (vtype(settled) == T_BOOL && settled == js_true);
+  
+  if (!is_settled && (is_err(call_result) || js->thrown_exists)) {
+    ant_value_t ex = js->thrown_exists ? js->thrown_value : call_result;
+    js->thrown_exists = false;
+    js->thrown_value = js_mkundef();
+    js->thrown_stack = js_mkundef();
+    js_set_slot(state, SLOT_SETTLED, js_true);
+    js_reject_promise(js, promise, ex);
+  }
+
+  return promise;
+}
+
 static ant_value_t builtin_execFile(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t argv = js_mkundef();
   ant_value_t options = js_mkundef();
@@ -1739,12 +1811,19 @@ static ant_value_t builtin_fork(ant_t *js, ant_value_t *args, int nargs) {
 
 ant_value_t child_process_library(ant_t *js) {
   ant_value_t lib = js_mkobj(js);
+  ant_value_t exec_fn = js_mkfun(builtin_exec);
+  ant_value_t exec_file_fn = js_heavy_mkfun(js, builtin_execFile, js_mkundef());
   child_process_init_constructor(js);
+  
+  js_set_symbol(js, exec_file_fn,
+    "nodejs.util.promisify.custom",
+    js_heavy_mkfun(js, exec_file_promisified_call, exec_file_fn)
+  );
   
   js_set(js, lib, "ChildProcess", g_child_process_ctor);
   js_set(js, lib, "spawn", js_mkfun(builtin_spawn));
-  js_set(js, lib, "exec", js_mkfun(builtin_exec));
-  js_set(js, lib, "execFile", js_mkfun(builtin_execFile));
+  js_set(js, lib, "exec", exec_fn);
+  js_set(js, lib, "execFile", exec_file_fn);
   js_set(js, lib, "execSync", js_mkfun(builtin_execSync));
   js_set(js, lib, "execFileSync", js_mkfun(builtin_execFileSync));
   js_set(js, lib, "spawnSync", js_mkfun(builtin_spawnSync));

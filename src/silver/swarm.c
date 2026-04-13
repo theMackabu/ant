@@ -515,6 +515,61 @@ static void mir_emit_get_closure(MIR_context_t ctx, MIR_item_t fn,
       MIR_new_uint_op(ctx, NANBOX_DATA_MASK)));
 }
 
+static void mir_emit_resolve_call_this(MIR_context_t ctx, MIR_item_t fn,
+                                       MIR_reg_t dst, MIR_reg_t r_closure,
+                                       MIR_reg_t fallback_this,
+                                       MIR_reg_t r_flags, MIR_reg_t r_bound) {
+  MIR_label_t not_arrow = MIR_new_label(ctx);
+  MIR_label_t done = MIR_new_label(ctx);
+
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, r_flags),
+      MIR_new_mem_op(ctx, MIR_T_U32,
+        (MIR_disp_t)offsetof(sv_closure_t, call_flags),
+        r_closure, 0, 1)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_AND,
+      MIR_new_reg_op(ctx, r_flags),
+      MIR_new_reg_op(ctx, r_flags),
+      MIR_new_uint_op(ctx, SV_CALL_IS_ARROW)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BEQ,
+      MIR_new_label_op(ctx, not_arrow),
+      MIR_new_reg_op(ctx, r_flags),
+      MIR_new_uint_op(ctx, 0)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, dst),
+      MIR_new_mem_op(ctx, MIR_JSVAL,
+        (MIR_disp_t)offsetof(sv_closure_t, bound_this),
+        r_closure, 0, 1)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, done)));
+
+  MIR_append_insn(ctx, fn, not_arrow);
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, dst),
+      MIR_new_reg_op(ctx, fallback_this)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, r_bound),
+      MIR_new_mem_op(ctx, MIR_JSVAL,
+        (MIR_disp_t)offsetof(sv_closure_t, bound_this),
+        r_closure, 0, 1)));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_BEQ,
+      MIR_new_label_op(ctx, done),
+      MIR_new_reg_op(ctx, r_bound),
+      MIR_new_uint_op(ctx, mkval(T_UNDEF, 0))));
+  MIR_append_insn(ctx, fn,
+    MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, dst),
+      MIR_new_reg_op(ctx, r_bound)));
+  MIR_append_insn(ctx, fn, done);
+}
+
 static void mir_emit_value_to_objptr_or_jmp(
   MIR_context_t ctx, MIR_item_t fn,
   MIR_reg_t v, MIR_reg_t out_ptr,
@@ -4526,6 +4581,16 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_label_t inl_join = MIR_new_label(ctx);
 
             MIR_reg_t r_inl_cl = 0;
+            char inl_this_rn[32], inl_flags_rn[32], inl_bound_rn[32];
+            snprintf(inl_this_rn, sizeof(inl_this_rn), "inl%d_this", cn);
+            snprintf(inl_flags_rn, sizeof(inl_flags_rn), "inl%d_flags", cn);
+            snprintf(inl_bound_rn, sizeof(inl_bound_rn), "inl%d_bound", cn);
+            MIR_reg_t r_inl_this = MIR_new_func_reg(ctx, jit_func->u.func,
+                                                    MIR_JSVAL, inl_this_rn);
+            MIR_reg_t r_inl_flags = MIR_new_func_reg(ctx, jit_func->u.func,
+                                                     MIR_T_I64, inl_flags_rn);
+            MIR_reg_t r_inl_bound = MIR_new_func_reg(ctx, jit_func->u.func,
+                                                     MIR_JSVAL, inl_bound_rn);
             {
               char cl_rn[32]; snprintf(cl_rn, sizeof(cl_rn), "inl%d_cl", cn);
               r_inl_cl = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, cl_rn);
@@ -4567,12 +4632,15 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
                   MIR_new_uint_op(ctx, (uint64_t)(uintptr_t)inline_callee)));
             }
 
+            mir_emit_resolve_call_this(ctx, jit_func, r_inl_this, r_inl_cl,
+                                       r_this, r_inl_flags, r_inl_bound);
+
             bool inlined = jit_emit_inline_body(
               ctx, jit_func, inline_callee,
               inl_arg_regs, (int)call_argc,
               r_call_res, inl_slow, inl_join,
               r_bool, &r_d_slot, cn,
-              r_inl_cl, r_this,
+              r_inl_cl, r_inl_this,
               r_vm, r_js,
               helper2_proto, imp_seq, imp_sne, imp_eq, imp_ne,
               gf_proto, imp_get_field,
@@ -4729,6 +4797,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_mem_op(ctx, MIR_T_P,
               (MIR_disp_t)offsetof(sv_closure_t, func),
               r_callee_cl, 0, 1)));
+        mir_emit_resolve_call_this(ctx, jit_func, r_call_this, r_callee_cl,
+                                   r_call_this, r_bool, r_tmp2);
 
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, MIR_BEQ,
@@ -7054,6 +7124,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_mem_op(ctx, MIR_T_P,
               (MIR_disp_t)offsetof(sv_closure_t, func),
               r_callee_cl, 0, 1)));
+        mir_emit_resolve_call_this(ctx, jit_func, r_call_this, r_callee_cl,
+                                   r_call_this, r_bool, r_tmp2);
 
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, MIR_BEQ,

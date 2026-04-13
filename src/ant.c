@@ -10819,7 +10819,9 @@ void js_process_promise_handlers(ant_t *js, ant_value_t promise) {
     if (!h) continue;
     
     if (h->await_coro) {
-      settle_and_resume_coroutine(js, h->await_coro, val, state != 1);
+      coroutine_t *await_coro = h->await_coro;
+      h->await_coro = NULL;
+      settle_and_resume_coroutine(js, await_coro, val, state != 1);
       continue;
     }
     
@@ -10906,7 +10908,6 @@ void js_resolve_promise(ant_t *js, ant_value_t p, ant_value_t val) {
 
     if (src_pd->state == 0) gc_root_pending_promise(js_obj_ptr(js_as_obj(val)));
     else queue_promise_trigger(js, val);
-    
     GC_ROOT_RESTORE(js, root_mark);
     
     return;
@@ -10953,7 +10954,7 @@ void js_resolve_promise(ant_t *js, ant_value_t p, ant_value_t val) {
 void js_reject_promise(ant_t *js, ant_value_t p, ant_value_t val) {
   if (vtype(val) == T_ERR) {
     if (vdata(val) != 0) val = mkval(T_OBJ, vdata(val));
-    else if (js->thrown_exists && is_object_type(js->thrown_value)) val = js->thrown_value;
+    else if (js->thrown_exists) val = js->thrown_value;
     else val = js_make_error_silent(js, JS_ERR_INTERNAL, "unknown error");
   }
 
@@ -11038,7 +11039,15 @@ static ant_value_t builtin_Promise(ant_t *js, ant_value_t *args, int nargs) {
   }
 
   ant_value_t exec_args[] = { res_fn, rej_fn };
-  sv_vm_call(js->vm, js, executor, js_mkundef(), exec_args, 2, NULL, false);
+  ant_value_t exec_result = sv_vm_call(js->vm, js, executor, js_mkundef(), exec_args, 2, NULL, false);
+  
+  if (is_err(exec_result) || js->thrown_exists) {
+    ant_value_t reject_val = js->thrown_exists ? js->thrown_value : exec_result;
+    js->thrown_exists = false;
+    js->thrown_value = js_mkundef();
+    js->thrown_stack = js_mkundef();
+    js_reject_promise(js, p, reject_val);
+  }
 
   GC_ROOT_RESTORE(js, root_mark);
   return p;
@@ -13776,6 +13785,12 @@ void js_set_sym(ant_t *js, ant_value_t obj, ant_value_t sym, ant_value_t val) {
   } else mkprop(js, obj, sym, val, 0);
 }
 
+void js_set_symbol(ant_t *js, ant_value_t obj, const char *key, ant_value_t val) {
+  ant_value_t sym = js_mksym_for(js, key);
+  if (is_err(sym)) return;
+  js_set_sym(js, obj, sym, val);
+}
+
 ant_value_t js_get_sym_with_receiver(ant_t *js, ant_value_t obj, ant_value_t sym, ant_value_t receiver) {
   if (vtype(sym) != T_SYMBOL) return js_mkundef();
   ant_offset_t sym_off = (ant_offset_t)vdata(sym);
@@ -13825,6 +13840,12 @@ ant_value_t js_get_sym_with_receiver(ant_t *js, ant_value_t obj, ant_value_t sym
 
 ant_value_t js_get_sym(ant_t *js, ant_value_t obj, ant_value_t sym) {
   return js_get_sym_with_receiver(js, obj, sym, obj);
+}
+
+ant_value_t js_get_symbol(ant_t *js, ant_value_t obj, const char *key) {
+  ant_value_t sym = js_mksym_for(js, key);
+  if (is_err(sym)) return sym;
+  return js_get_sym(js, obj, sym);
 }
 
 static bool js_try_get(ant_t *js, ant_value_t obj, const char *key, ant_value_t *out) {

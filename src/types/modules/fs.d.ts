@@ -199,6 +199,26 @@ declare module 'node:fs' {
 }
 
 declare module 'fs/promises' {
+  interface FileHandle {
+    readonly fd: number;
+    close(): Promise<void>;
+    stat(): Promise<Stats>;
+    sync(): Promise<void>;
+    read(
+      buffer: ArrayBufferView,
+      offset?: number,
+      length?: number,
+      position?: number | null
+    ): Promise<{ bytesRead: number; buffer: ArrayBufferView }>;
+    write(
+      data: string | ArrayBufferView,
+      offsetOrOptions?: number | { offset?: number; length?: number; position?: number | null },
+      length?: number,
+      position?: number | null
+    ): Promise<{ bytesWritten: number; buffer: string | ArrayBufferView }>;
+    writeFile(data: string | ArrayBufferView): Promise<void>;
+  }
+
   interface Stats {
     size: number;
     mode: number;
@@ -227,7 +247,7 @@ declare module 'fs/promises' {
 
   function readFile(path: string, encoding: Encoding): Promise<string>;
   function readFile(path: string): Promise<Uint8Array>;
-  function open(path: string, flags?: string, mode?: number): Promise<number>;
+  function open(path: string, flags?: string, mode?: number): Promise<FileHandle>;
   function close(fd: number): Promise<void>;
   function writeFile(path: string, data: string | ArrayBufferView): Promise<void>;
   function write(fd: number, data: string | ArrayBufferView, offset?: number, length?: number, position?: number | null): Promise<number>;

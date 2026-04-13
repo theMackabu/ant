@@ -235,6 +235,7 @@ static void gc_scan_obj(ant_t *js, ant_object_t *obj) {
   if (obj->type_tag == T_GENERATOR) {
     coroutine_t *coro = generator_get_coro_for_gc(js_obj_from_ptr(obj));
     if (coro) gc_mark_coroutine(js, coro);
+    generator_mark_for_gc(js, js_obj_from_ptr(obj));
   }
 
   if (obj->type_tag == T_MAP) {

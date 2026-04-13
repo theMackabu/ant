@@ -31,6 +31,7 @@
 #include "errors.h"
 #include "output.h"
 #include "utils.h"
+#include "tty_ctrl.h"
 #include "internal.h"
 #include "descriptors.h"
 #include "runtime.h"
@@ -783,19 +784,27 @@ static ant_value_t js_stdin_remove_listener(ant_t *js, ant_value_t *args, int na
   return this_obj;
 }
 
-static ant_value_t js_stdout_write(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t process_write_stream(ant_t *js, ant_value_t *args, int nargs, FILE *stream, int fd) {
   if (nargs < 1) return js_false;
+
   size_t len = 0;
   char *data = js_getstr(js, args[0], &len);
-  
   ant_output_stream_t *out = NULL;
+
   if (!data) return js_false;
-  
-  out = ant_output_stream(stdout);
+  if (uv_guess_handle(fd) == UV_TTY) {
+    return js_bool(tty_ctrl_write_fd(fd, data, len));
+  }
+
+  out = ant_output_stream(stream);
   ant_output_stream_begin(out);
-  
+
   if (!ant_output_stream_append(out, data, len)) return js_false;
   return ant_output_stream_flush(out) ? js_true : js_false;
+}
+
+static ant_value_t js_stdout_write(ant_t *js, ant_value_t *args, int nargs) {
+  return process_write_stream(js, args, nargs, stdout, STDOUT_FILENO);
 }
 
 static ant_value_t js_stdout_on(ant_t *js, ant_value_t *args, int nargs) {
@@ -886,25 +895,13 @@ static ant_value_t js_stdout_rows_getter(ant_t *js, ant_value_t *args, int nargs
 }
 
 static ant_value_t js_stdout_columns_getter(ant_t *js, ant_value_t *args, int nargs) {
-  (void)args; (void)nargs;
   int rows = 0, cols = 0;
   get_tty_size(STDOUT_FILENO, &rows, &cols);
   return js_mknum(cols);
 }
 
 static ant_value_t js_stderr_write(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1) return js_false;
-  size_t len = 0;
-  char *data = js_getstr(js, args[0], &len);
-  
-  ant_output_stream_t *out = NULL;
-  if (!data) return js_false;
-  
-  out = ant_output_stream(stderr);
-  ant_output_stream_begin(out);
-  
-  if (!ant_output_stream_append(out, data, len)) return js_false;
-  return ant_output_stream_flush(out) ? js_true : js_false;
+  return process_write_stream(js, args, nargs, stderr, STDERR_FILENO);
 }
 
 static ant_value_t js_stderr_on(ant_t *js, ant_value_t *args, int nargs) {
@@ -1762,8 +1759,8 @@ static ant_value_t process_next_tick(ant_t *js, ant_value_t *args, int nargs) {
   if (vtype(cb) != T_FUNC && vtype(cb) != T_CFUNC)
     return js_mkerr_typed(js, JS_ERR_TYPE, "process.nextTick callback is not a function");
     
-  if (nargs <= 1) queue_microtask(js, cb);
-  else queue_microtask_with_args(js, cb, args + 1, nargs - 1);
+  if (nargs <= 1) queue_next_tick(js, cb);
+  else queue_next_tick_with_args(js, cb, args + 1, nargs - 1);
   
   return js_mkundef();
 }

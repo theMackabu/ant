@@ -72,6 +72,7 @@ void js_run_event_loop(ant_t *js) {
 drain:
   while (event_loop_alive()) {
     js_poll_events(js);
+    reap_retired_coroutines();
     work_flags_t work = get_pending_work();
     
     if (work & WORK_BLOCKING) uv_run(uv_default_loop(), UV_RUN_NOWAIT);
@@ -81,6 +82,7 @@ drain:
   } 
   
   js_poll_events(js);
+  reap_retired_coroutines();
   ant_value_t code = js_mknum(0);
   emit_process_event("beforeExit", &code, 1);
   

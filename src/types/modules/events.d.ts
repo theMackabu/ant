@@ -16,6 +16,7 @@ declare module 'events' {
     emit(event: string, ...args: unknown[]): boolean;
     removeAllListeners(event?: string): this;
     listenerCount(event: string): number;
+    listeners(event: string): Array<(...args: unknown[]) => void>;
     eventNames(): string[];
   }
 

@@ -68,6 +68,7 @@ typedef struct coroutine {
   bool mco_started;
   bool is_ready;
   bool did_suspend;
+  bool free_pending;
 } coroutine_t;
 
 typedef struct {
@@ -91,6 +92,7 @@ extern uint32_t coros_this_tick;
 void enqueue_coroutine(coroutine_t *coro);
 void remove_coroutine(coroutine_t *coro);
 void free_coroutine(coroutine_t *coro);
+void reap_retired_coroutines(void);
 
 ant_value_t start_async_in_coroutine(ant_t *js, const char *code, size_t code_len, ant_value_t closure_scope, ant_value_t *args, int nargs);
 ant_value_t resume_coroutine_wrapper(ant_t *js, ant_value_t *args, int nargs);

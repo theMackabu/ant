@@ -141,6 +141,7 @@ typedef struct {
 static ant_value_t g_dirent_proto      = 0;
 static ant_value_t g_fswatcher_proto   = 0;
 static ant_value_t g_fswatcher_ctor    = 0;
+static ant_value_t g_filehandle_proto  = 0;
 static ant_value_t g_readstream_proto  = 0;
 static ant_value_t g_readstream_ctor   = 0;
 static ant_value_t g_writestream_proto = 0;
@@ -149,7 +150,10 @@ static ant_value_t g_writestream_ctor  = 0;
 static fs_watcher_t *active_watchers = NULL;
 static UT_array *pending_requests    = NULL;
 
-enum { FS_WATCHER_NATIVE_TAG = 0x46535754u }; // FSWT
+enum { 
+  FS_WATCHER_NATIVE_TAG = 0x46535754u,   // FSWT
+  FS_FILEHANDLE_NATIVE_TAG = 0x46534648u // FSFH
+};
 
 static fs_watcher_t *fs_watcher_data(ant_value_t value) {
   if (!js_check_native_tag(value, FS_WATCHER_NATIVE_TAG)) return NULL;
@@ -1329,6 +1333,256 @@ static void free_fs_request(fs_request_t *req) {
   free(req);
 }
 
+static ant_value_t fs_rejected_promise(ant_t *js, ant_value_t err) {
+  ant_value_t promise = js_mkpromise(js);
+  js_reject_promise(js, promise, err);
+  return promise;
+}
+
+static ant_value_t fs_resolved_promise(ant_t *js, ant_value_t value) {
+  ant_value_t promise = js_mkpromise(js);
+  js_resolve_promise(js, promise, value);
+  return promise;
+}
+
+static ant_value_t fs_filehandle_require_this(ant_t *js) {
+  ant_value_t this_obj = js_getthis(js);
+  if (!is_object_type(this_obj) || !js_check_native_tag(this_obj, FS_FILEHANDLE_NATIVE_TAG))
+    return js_mkerr_typed(js, JS_ERR_TYPE, "FileHandle method called on incompatible receiver");
+  return this_obj;
+}
+
+static ant_value_t fs_filehandle_fd_value(ant_t *js, ant_value_t handle_obj) {
+  ant_value_t fd_val = js_get_slot(handle_obj, SLOT_DATA);
+  if (vtype(fd_val) != T_NUM) fd_val = js_get(js, handle_obj, "fd");
+  return fd_val;
+}
+
+static ant_value_t fs_filehandle_get_fd(ant_t *js, ant_value_t handle_obj) {
+  ant_value_t fd_val = fs_filehandle_fd_value(js, handle_obj);
+  if (vtype(fd_val) != T_NUM || js_getnum(fd_val) < 0)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "FileHandle is closed");
+  return fd_val;
+}
+
+static void fs_filehandle_mark_closed(ant_t *js, ant_value_t handle_obj) {
+  js_set_slot(handle_obj, SLOT_DATA, js_mkundef());
+  js_set(js, handle_obj, "fd", js_mknum(-1));
+}
+
+static ant_value_t builtin_fs_filehandle_close(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t handle_obj = fs_filehandle_require_this(js);
+  if (is_err(handle_obj)) return fs_rejected_promise(js, handle_obj);
+
+  ant_value_t fd_val = fs_filehandle_fd_value(js, handle_obj);
+  if (vtype(fd_val) != T_NUM || js_getnum(fd_val) < 0)
+    return fs_resolved_promise(js, js_mkundef());
+    
+  uv_fs_t req;
+  int result = uv_fs_close(uv_default_loop(), &req, (uv_file)(int)js_getnum(fd_val), NULL);
+  uv_fs_req_cleanup(&req);
+  if (result < 0) return fs_rejected_promise(js, fs_mk_uv_error(js, result, "close", NULL, NULL));
+
+  fs_filehandle_mark_closed(js, handle_obj);
+  return fs_resolved_promise(js, js_mkundef());
+}
+
+static ant_value_t builtin_fs_filehandle_stat(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t handle_obj = fs_filehandle_require_this(js);
+  if (is_err(handle_obj)) return fs_rejected_promise(js, handle_obj);
+
+  ant_value_t fd_val = fs_filehandle_get_fd(js, handle_obj);
+  if (is_err(fd_val)) return fs_rejected_promise(js, fd_val);
+
+  uv_fs_t req;
+  int result = uv_fs_fstat(NULL, &req, (uv_file)(int)js_getnum(fd_val), NULL);
+  if (result < 0) {
+    ant_value_t err = fs_mk_uv_error(js, result, "fstat", NULL, NULL);
+    uv_fs_req_cleanup(&req);
+    return fs_rejected_promise(js, err);
+  }
+
+  ant_value_t stat_obj = fs_stats_object_from_uv(js, &req.statbuf);
+  uv_fs_req_cleanup(&req);
+  return fs_resolved_promise(js, stat_obj);
+}
+
+static ant_value_t builtin_fs_filehandle_sync(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t handle_obj = fs_filehandle_require_this(js);
+  if (is_err(handle_obj)) return fs_rejected_promise(js, handle_obj);
+
+  ant_value_t fd_val = fs_filehandle_get_fd(js, handle_obj);
+  if (is_err(fd_val)) return fs_rejected_promise(js, fd_val);
+
+  uv_fs_t req;
+  int result = uv_fs_fsync(uv_default_loop(), &req, (uv_file)(int)js_getnum(fd_val), NULL);
+  uv_fs_req_cleanup(&req);
+  if (result < 0) return fs_rejected_promise(js, fs_mk_uv_error(js, result, "fsync", NULL, NULL));
+
+  return fs_resolved_promise(js, js_mkundef());
+}
+
+static ant_value_t builtin_fs_filehandle_read(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t handle_obj = fs_filehandle_require_this(js);
+  if (is_err(handle_obj)) return fs_rejected_promise(js, handle_obj);
+
+  ant_value_t fd_val = fs_filehandle_get_fd(js, handle_obj);
+  if (is_err(fd_val)) return fs_rejected_promise(js, fd_val);
+  if (nargs < 1) return fs_rejected_promise(js, js_mkerr(js, "FileHandle.read() requires a buffer argument"));
+
+  TypedArrayData *ta_data = buffer_get_typedarray_data(args[0]);
+  if (!ta_data || !ta_data->buffer || !ta_data->buffer->data)
+    return fs_rejected_promise(js, js_mkerr(js, "FileHandle.read() buffer must be a Buffer or TypedArray"));
+
+  size_t buf_len = ta_data->byte_length;
+  size_t offset = 0;
+  size_t length = buf_len;
+  int64_t position = -1;
+
+  if (nargs >= 2 && vtype(args[1]) == T_NUM) offset = (size_t)js_getnum(args[1]);
+  if (nargs >= 3 && vtype(args[2]) == T_NUM) length = (size_t)js_getnum(args[2]);
+  if (nargs >= 4 && vtype(args[3]) == T_NUM) position = (int64_t)js_getnum(args[3]);
+
+  if (offset > buf_len) return fs_rejected_promise(js, js_mkerr(js, "offset is out of bounds"));
+  if (offset + length > buf_len) return fs_rejected_promise(js, js_mkerr(js, "length extends beyond buffer"));
+
+  uint8_t *buf_data = ta_data->buffer->data + ta_data->byte_offset;
+  uv_buf_t buf = uv_buf_init((char *)(buf_data + offset), (unsigned int)length);
+  
+  uv_fs_t req;
+  int result = uv_fs_read(uv_default_loop(), &req, (uv_file)(int)js_getnum(fd_val), &buf, 1, position, NULL);
+  uv_fs_req_cleanup(&req);
+  if (result < 0) return fs_rejected_promise(js, fs_mk_uv_error(js, result, "read", NULL, NULL));
+
+  ant_value_t out = js_mkobj(js);
+  js_set(js, out, "bytesRead", js_mknum((double)result));
+  js_set(js, out, "buffer", args[0]);
+  
+  return fs_resolved_promise(js, out);
+}
+
+static ant_value_t builtin_fs_filehandle_write(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t handle_obj = fs_filehandle_require_this(js);
+  if (is_err(handle_obj)) return fs_rejected_promise(js, handle_obj);
+
+  ant_value_t fd_val = fs_filehandle_get_fd(js, handle_obj);
+  if (is_err(fd_val)) return fs_rejected_promise(js, fd_val);
+  if (nargs < 1) return fs_rejected_promise(js, js_mkerr(js, "FileHandle.write() requires a data argument"));
+
+  const char *write_data = NULL;
+  size_t write_len = 0;
+  int64_t position = -1;
+
+  if (vtype(args[0]) == T_STR) {
+    write_data = js_getstr(js, args[0], &write_len);
+    if (!write_data) return fs_rejected_promise(js, js_mkerr(js, "Failed to get string"));
+    if (nargs >= 2 && vtype(args[1]) == T_NUM) position = (int64_t)js_getnum(args[1]);
+  } else {
+    TypedArrayData *ta_data = buffer_get_typedarray_data(args[0]);
+    if (!ta_data || !ta_data->buffer || !ta_data->buffer->data)
+      return fs_rejected_promise(js, js_mkerr(js, "FileHandle.write() data must be a Buffer, TypedArray, DataView, or string"));
+      
+    uint8_t *buf_data = ta_data->buffer->data + ta_data->byte_offset;
+    size_t buf_len = ta_data->byte_length;
+    size_t offset = 0;
+    size_t length = buf_len;
+
+    if (nargs >= 2) {
+    if (vtype(args[1]) == T_OBJ) {
+      ant_value_t off_val = js_get(js, args[1], "offset");
+      ant_value_t len_val = js_get(js, args[1], "length");
+      ant_value_t pos_val = js_get(js, args[1], "position");
+      if (vtype(off_val) == T_NUM) offset = (size_t)js_getnum(off_val);
+      if (vtype(len_val) == T_NUM) length = (size_t)js_getnum(len_val);
+      else length = buf_len - offset;
+      if (vtype(pos_val) == T_NUM) position = (int64_t)js_getnum(pos_val);
+    } else if (vtype(args[1]) == T_NUM) {
+      offset = (size_t)js_getnum(args[1]);
+      length = buf_len - offset;
+      if (nargs >= 3 && vtype(args[2]) == T_NUM) length = (size_t)js_getnum(args[2]);
+      if (nargs >= 4 && vtype(args[3]) == T_NUM) position = (int64_t)js_getnum(args[3]);
+    }}
+
+    if (offset > buf_len) return fs_rejected_promise(js, js_mkerr(js, "offset is out of bounds"));
+    if (offset + length > buf_len) return fs_rejected_promise(js, js_mkerr(js, "length extends beyond buffer"));
+    write_data = (const char *)(buf_data + offset);
+    write_len = length;
+  }
+
+  uv_buf_t buf = uv_buf_init((char *)write_data, (unsigned int)write_len);
+  uv_fs_t req;
+  int result = uv_fs_write(uv_default_loop(), &req, (uv_file)(int)js_getnum(fd_val), &buf, 1, position, NULL);
+  uv_fs_req_cleanup(&req);
+  if (result < 0) return fs_rejected_promise(js, fs_mk_uv_error(js, result, "write", NULL, NULL));
+
+  ant_value_t out = js_mkobj(js);
+  js_set(js, out, "bytesWritten", js_mknum((double)result));
+  js_set(js, out, "buffer", args[0]);
+  
+  return fs_resolved_promise(js, out);
+}
+
+static ant_value_t builtin_fs_filehandle_writeFile(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t handle_obj = fs_filehandle_require_this(js);
+  if (is_err(handle_obj)) return fs_rejected_promise(js, handle_obj);
+
+  ant_value_t fd_val = fs_filehandle_get_fd(js, handle_obj);
+  if (is_err(fd_val)) return fs_rejected_promise(js, fd_val);
+  if (nargs < 1) return fs_rejected_promise(js, js_mkerr(js, "FileHandle.writeFile() requires data"));
+
+  const char *data = NULL;
+  size_t len = 0;
+
+  if (vtype(args[0]) == T_STR) {
+    data = js_getstr(js, args[0], &len);
+    if (!data) return fs_rejected_promise(js, js_mkerr(js, "Failed to get string"));
+  } else {
+    TypedArrayData *ta_data = buffer_get_typedarray_data(args[0]);
+    if (!ta_data || !ta_data->buffer || !ta_data->buffer->data)
+      return fs_rejected_promise(js, js_mkerr(js, "FileHandle.writeFile() data must be a Buffer, TypedArray, DataView, or string"));
+    data = (const char *)(ta_data->buffer->data + ta_data->byte_offset);
+    len = ta_data->byte_length;
+  }
+
+  size_t written = 0;
+  while (written < len) {
+    uv_buf_t buf = uv_buf_init((char *)(data + written), (unsigned int)(len - written));
+    uv_fs_t req;
+    int result = uv_fs_write(uv_default_loop(), &req, (uv_file)(int)js_getnum(fd_val), &buf, 1, -1, NULL);
+    uv_fs_req_cleanup(&req);
+    if (result < 0) return fs_rejected_promise(js, fs_mk_uv_error(js, result, "write", NULL, NULL));
+    if (result == 0) return fs_rejected_promise(js, js_mkerr(js, "short write"));
+    written += (size_t)result;
+  }
+
+  return fs_resolved_promise(js, js_mkundef());
+}
+
+static void fs_init_filehandle_proto(ant_t *js) {
+  if (is_object_type(g_filehandle_proto)) return;
+  g_filehandle_proto = js_mkobj(js);
+  js_set_native_tag(g_filehandle_proto, FS_FILEHANDLE_NATIVE_TAG);
+  js_set(js, g_filehandle_proto, "close", js_mkfun(builtin_fs_filehandle_close));
+  js_set(js, g_filehandle_proto, "stat", js_mkfun(builtin_fs_filehandle_stat));
+  js_set(js, g_filehandle_proto, "sync", js_mkfun(builtin_fs_filehandle_sync));
+  js_set(js, g_filehandle_proto, "read", js_mkfun(builtin_fs_filehandle_read));
+  js_set(js, g_filehandle_proto, "write", js_mkfun(builtin_fs_filehandle_write));
+  js_set(js, g_filehandle_proto, "writeFile", js_mkfun(builtin_fs_filehandle_writeFile));
+  js_set_sym(js, g_filehandle_proto, get_toStringTag_sym(), js_mkstr(js, "FileHandle", 10));
+}
+
+static ant_value_t fs_make_filehandle(ant_t *js, int fd) {
+  fs_init_filehandle_proto(js);
+  ant_value_t handle = js_mkobj(js);
+  
+  js_set_native_tag(handle, FS_FILEHANDLE_NATIVE_TAG);
+  js_set_proto_init(handle, g_filehandle_proto);
+  js_set_slot(handle, SLOT_DATA, js_mknum((double)fd));
+  js_set(js, handle, "fd", js_mknum((double)fd));
+  
+  return handle;
+}
+
 static void remove_pending_request(fs_request_t *req) {
   if (!req || !pending_requests) return;
   unsigned int len = utarray_len(pending_requests);
@@ -1367,8 +1621,8 @@ static void complete_request(fs_request_t *req) {
     } else reject_value = js_mkerr(req->js, "%s", err_msg);
 
     if (is_err(reject_value)) {
-      reject_value = req->js->thrown_value;
-      if (vtype(reject_value) == T_UNDEF)
+      reject_value = req->js->thrown_exists ? req->js->thrown_value : js_mkundef();
+      if (!req->js->thrown_exists)
         reject_value = js_mkstr(req->js, err_msg, strlen(err_msg));
       req->js->thrown_exists = false;
       req->js->thrown_value = js_mkundef();
@@ -3892,6 +4146,26 @@ static void on_open_fd_complete(uv_fs_t *uv_req) {
   free_fs_request(req);
 }
 
+static void on_open_filehandle_complete(uv_fs_t *uv_req) {
+  fs_request_t *req = (fs_request_t *)uv_req->data;
+
+  if (uv_req->result < 0) {
+    fs_request_fail(req, (int)uv_req->result);
+    req->completed = 1;
+    complete_request(req);
+    return;
+  }
+
+  req->completed = 1;
+  js_resolve_promise(
+    req->js, req->promise, 
+    fs_make_filehandle(req->js, (int)uv_req->result)
+  );
+  
+  remove_pending_request(req);
+  free_fs_request(req);
+}
+
 static ant_value_t builtin_fs_open_fd(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "open() requires a path argument");
   if (vtype(args[0]) != T_STR) return js_mkerr(js, "open() path must be a string");
@@ -3921,6 +4195,41 @@ static ant_value_t builtin_fs_open_fd(ant_t *js, ant_value_t *args, int nargs) {
     complete_request(req);
   }
   
+  return req->promise;
+}
+
+static ant_value_t builtin_fs_open_filehandle(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_mkerr(js, "open() requires a path argument");
+  if (vtype(args[0]) != T_STR) return js_mkerr(js, "open() path must be a string");
+
+  size_t path_len;
+  char *path = js_getstr(js, args[0], &path_len);
+  if (!path) return js_mkerr(js, "Failed to get path string");
+
+  int flags = (nargs >= 2) ? parse_open_flags(js, args[1]) : O_RDONLY;
+  int mode = (nargs >= 3 && vtype(args[2]) == T_NUM) ? (int)js_getnum(args[2]) : 0666;
+
+  fs_request_t *req = calloc(1, sizeof(fs_request_t));
+  if (!req) return js_mkerr(js, "Out of memory");
+
+  req->js = js;
+  req->op_type = FS_OP_OPEN;
+  req->promise = js_mkpromise(js);
+  req->path = strndup(path, path_len);
+  req->uv_req.data = req;
+
+  utarray_push_back(pending_requests, &req);
+  int result = uv_fs_open(
+    uv_default_loop(), &req->uv_req, req->path, 
+    flags, mode, on_open_filehandle_complete
+  );
+
+  if (result < 0) {
+    fs_request_fail(req, result);
+    req->completed = 1;
+    complete_request(req);
+  }
+
   return req->promise;
 }
 
@@ -3973,6 +4282,7 @@ static ant_value_t builtin_fs_watch(ant_t *js, ant_value_t *args, int nargs) {
   fs_watch_options_t opts;
   fs_watcher_t *watcher = NULL;
   uv_handle_t *handle = NULL;
+  
   const char *path = NULL;
   size_t path_len = 0;
   int rc = 0;
@@ -4287,7 +4597,7 @@ static void fs_set_promise_methods(ant_t *js, ant_value_t lib) {
   js_set(js, lib, "cp", js_mkfun(builtin_fs_cp));
   js_set(js, lib, "copyFile", js_mkfun(builtin_fs_copyFile));
   js_set(js, lib, "readFile", js_mkfun(builtin_fs_readFile));
-  js_set(js, lib, "open", js_mkfun(builtin_fs_open_fd));
+  js_set(js, lib, "open", js_mkfun(builtin_fs_open_filehandle));
   js_set(js, lib, "close", js_mkfun(builtin_fs_close_fd));
   js_set(js, lib, "writeFile", js_mkfun(builtin_fs_writeFile));
   js_set(js, lib, "write", js_mkfun(builtin_fs_write_fd));
@@ -4475,6 +4785,7 @@ void gc_mark_fs(ant_t *js, gc_mark_fn mark) {
 
   if (g_fswatcher_proto) mark(js, g_fswatcher_proto);
   if (g_fswatcher_ctor) mark(js, g_fswatcher_ctor);
+  if (g_filehandle_proto) mark(js, g_filehandle_proto);
   if (g_readstream_proto) mark(js, g_readstream_proto);
   if (g_readstream_ctor) mark(js, g_readstream_ctor);
   if (g_writestream_proto) mark(js, g_writestream_proto);

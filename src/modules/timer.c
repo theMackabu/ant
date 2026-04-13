@@ -48,6 +48,9 @@ static struct {
   ant_t *js;
   timer_entry_t *timers;
   
+  microtask_entry_t *next_ticks;
+  microtask_entry_t *next_ticks_tail;
+  microtask_entry_t *next_ticks_processing;
   microtask_entry_t *microtasks;
   microtask_entry_t *microtasks_tail;
   microtask_entry_t *microtasks_processing;
@@ -57,7 +60,21 @@ static struct {
   int next_timer_id;
   int next_immediate_id;
   int active_timer_count;
-} timer_state = {NULL, NULL, NULL, NULL, NULL, NULL, NULL, 1, 1, 0};
+} timer_state = {
+  .js = NULL,
+  .timers = NULL,
+  .next_ticks = NULL,
+  .next_ticks_tail = NULL,
+  .next_ticks_processing = NULL,
+  .microtasks = NULL,
+  .microtasks_tail = NULL,
+  .microtasks_processing = NULL,
+  .immediates = NULL,
+  .immediates_tail = NULL,
+  .next_timer_id = 1,
+  .next_immediate_id = 1,
+  .active_timer_count = 0,
+};
 
 static void add_timer_entry(timer_entry_t *entry) {
   entry->next = timer_state.timers;
@@ -515,14 +532,21 @@ static ant_value_t js_timers_promises_scheduler_yield(ant_t *js, ant_value_t *ar
   return js_timers_promises_setImmediate(js, args, nargs);
 }
 
-static void queue_microtask_entry(microtask_entry_t *entry) {
-if (timer_state.microtasks_tail == NULL) {
-  timer_state.microtasks = entry;
-  timer_state.microtasks_tail = entry;
-} else {
-  timer_state.microtasks_tail->next = entry;
-  timer_state.microtasks_tail = entry;
-}}
+static void queue_microtask_entry(
+  microtask_entry_t **head,
+  microtask_entry_t **tail,
+  microtask_entry_t *entry
+) {
+  if (*tail == NULL) goto empty;
+
+  (*tail)->next = entry;
+  *tail = entry;
+  return;
+
+empty:
+  *head = entry;
+  *tail = entry;
+}
 
 void queue_microtask(ant_t *js, ant_value_t callback) {
   microtask_entry_t *entry = ant_calloc(sizeof(microtask_entry_t));
@@ -533,7 +557,7 @@ void queue_microtask(ant_t *js, ant_value_t callback) {
   entry->next = NULL;
   entry->argc = 0;
   
-  queue_microtask_entry(entry);
+  queue_microtask_entry(&timer_state.microtasks, &timer_state.microtasks_tail, entry);
 }
 
 void queue_microtask_with_args(ant_t *js, ant_value_t callback, ant_value_t *args, int nargs) {
@@ -548,7 +572,34 @@ void queue_microtask_with_args(ant_t *js, ant_value_t callback, ant_value_t *arg
   entry->argc = (uint8_t)nargs;
   
   for (int i = 0; i < nargs; i++) entry->argv[i] = args[i];
-  queue_microtask_entry(entry);
+  queue_microtask_entry(&timer_state.microtasks, &timer_state.microtasks_tail, entry);
+}
+
+void queue_next_tick(ant_t *js, ant_value_t callback) {
+  microtask_entry_t *entry = ant_calloc(sizeof(microtask_entry_t));
+  if (entry == NULL) return;
+
+  entry->callback = callback;
+  entry->promise = js_mkundef();
+  entry->next = NULL;
+  entry->argc = 0;
+
+  queue_microtask_entry(&timer_state.next_ticks, &timer_state.next_ticks_tail, entry);
+}
+
+void queue_next_tick_with_args(ant_t *js, ant_value_t callback, ant_value_t *args, int nargs) {
+  if (nargs <= 0) { queue_next_tick(js, callback); return; }
+
+  microtask_entry_t *entry = ant_calloc(sizeof(microtask_entry_t) + (size_t)nargs * sizeof(ant_value_t));
+  if (entry == NULL) return;
+
+  entry->callback = callback;
+  entry->promise = js_mkundef();
+  entry->next = NULL;
+  entry->argc = (uint8_t)nargs;
+
+  for (int i = 0; i < nargs; i++) entry->argv[i] = args[i];
+  queue_microtask_entry(&timer_state.next_ticks, &timer_state.next_ticks_tail, entry);
 }
 
 void queue_promise_trigger(ant_t *js, ant_value_t promise) {
@@ -564,13 +615,7 @@ void queue_promise_trigger(ant_t *js, ant_value_t promise) {
   entry->promise = promise;
   entry->next = NULL;
   
-  if (timer_state.microtasks_tail == NULL) {
-    timer_state.microtasks = entry;
-    timer_state.microtasks_tail = entry;
-  } else {
-    timer_state.microtasks_tail->next = entry;
-    timer_state.microtasks_tail = entry;
-  }
+  queue_microtask_entry(&timer_state.microtasks, &timer_state.microtasks_tail, entry);
 }
 
 static inline void process_microtask_entry(ant_t *js, microtask_entry_t *entry) {
@@ -592,6 +637,7 @@ static inline void process_microtask_entry(ant_t *js, microtask_entry_t *entry) 
   ant_value_t callback = entry->callback;
   GC_ROOT_PIN(js, callback);
   
+  for (uint8_t i = 0; i < entry->argc; i++) GC_ROOT_PIN(js, entry->argv[i]);
   sv_vm_call(js->vm, js, callback, js_mkundef(), entry->argv, entry->argc, NULL, false);
   GC_ROOT_RESTORE(js, root_mark);
 }
@@ -602,6 +648,17 @@ static inline microtask_entry_t *take_microtask_batch(void) {
   timer_state.microtasks = NULL;
   timer_state.microtasks_tail = NULL;
   timer_state.microtasks_processing = batch;
+  
+  return batch;
+}
+
+static inline microtask_entry_t *take_next_tick_batch(void) {
+  microtask_entry_t *batch = timer_state.next_ticks;
+
+  timer_state.next_ticks = NULL;
+  timer_state.next_ticks_tail = NULL;
+  timer_state.next_ticks_processing = batch;
+  
   return batch;
 }
 
@@ -614,20 +671,36 @@ while (batch != NULL) {
   free(entry);
 }}
 
+static inline void process_next_tick_batch(ant_t *js, microtask_entry_t *batch) {
+while (batch != NULL) {
+  microtask_entry_t *entry = batch;
+  batch = entry->next;
+  timer_state.next_ticks_processing = batch;
+  process_microtask_entry(js, entry);
+  free(entry);
+}}
+
 static void process_microtasks_internal(ant_t *js, bool check_unhandled_rejections) {
   microtask_entry_t *batch = NULL;
 
   if (!js || js->microtasks_draining) return;
   js->microtasks_draining = true;
 
+  while (timer_state.next_ticks != NULL || timer_state.microtasks != NULL) {
+  while ((batch = timer_state.next_ticks) != NULL) {
+    batch = take_next_tick_batch();
+    process_next_tick_batch(js, batch);
+  }
   while ((batch = timer_state.microtasks) != NULL) {
     batch = take_microtask_batch();
     process_microtask_batch(js, batch);
-  }
+  }}
 
+  timer_state.next_ticks_processing = NULL;
   timer_state.microtasks_processing = NULL;
   if (check_unhandled_rejections) js_check_unhandled_rejections(js);
   js->microtasks_draining = false;
+  reap_retired_coroutines();
 }
 
 void process_microtasks(ant_t *js) {
@@ -684,7 +757,7 @@ int has_pending_timers(void) {
 }
 
 int has_pending_microtasks(void) {
-  return timer_state.microtasks != NULL ? 1 : 0;
+  return (timer_state.next_ticks != NULL || timer_state.microtasks != NULL) ? 1 : 0;
 }
 
 static void timers_define_common(ant_t *js, ant_value_t obj) {
@@ -736,10 +809,22 @@ void gc_mark_timers(ant_t *js, gc_mark_fn mark) {
   for (microtask_entry_t *m = timer_state.microtasks; m; m = m->next) {
     mark(js, m->callback);
     mark(js, m->promise);
+    for (uint8_t i = 0; i < m->argc; i++) mark(js, m->argv[i]);
   }
   for (microtask_entry_t *m = timer_state.microtasks_processing; m; m = m->next) {
     mark(js, m->callback);
     mark(js, m->promise);
+    for (uint8_t i = 0; i < m->argc; i++) mark(js, m->argv[i]);
+  }
+  for (microtask_entry_t *m = timer_state.next_ticks; m; m = m->next) {
+    mark(js, m->callback);
+    mark(js, m->promise);
+    for (uint8_t i = 0; i < m->argc; i++) mark(js, m->argv[i]);
+  }
+  for (microtask_entry_t *m = timer_state.next_ticks_processing; m; m = m->next) {
+    mark(js, m->callback);
+    mark(js, m->promise);
+    for (uint8_t i = 0; i < m->argc; i++) mark(js, m->argv[i]);
   }
   for (immediate_entry_t *i = timer_state.immediates; i; i = i->next) {
     mark(js, i->callback);

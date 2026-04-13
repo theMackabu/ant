@@ -97,6 +97,7 @@ const char *js_sym_key(ant_value_t sym);
 ant_value_t js_mksym_for(ant_t *, const char *key);
 ant_value_t js_symbol_to_string(ant_t *js, ant_value_t sym);
 ant_value_t js_get_sym(ant_t *, ant_value_t obj, ant_value_t sym);
+ant_value_t js_get_symbol(ant_t *, ant_value_t obj, const char *key);
 ant_value_t js_get_sym_with_receiver(ant_t *, ant_value_t obj, ant_value_t sym, ant_value_t receiver);
 
 ant_value_t js_mkobj(ant_t *);
@@ -116,6 +117,7 @@ ant_offset_t js_mkprop_fast_off(ant_t *js, ant_value_t obj, const char *key, siz
 
 void js_set(ant_t *, ant_value_t, const char *, ant_value_t);
 void js_set_sym(ant_t *, ant_value_t obj, ant_value_t sym, ant_value_t val);
+void js_set_symbol(ant_t *, ant_value_t obj, const char *key, ant_value_t val);
 void js_saveval(ant_t *js, ant_offset_t off, ant_value_t v);
 void js_merge_obj(ant_t *, ant_value_t dst, ant_value_t src);
 void js_arr_push(ant_t *, ant_value_t arr, ant_value_t val);

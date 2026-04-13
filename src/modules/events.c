@@ -226,10 +226,31 @@ static int eventemitter_get_max_listeners_impl(ant_value_t target) {
   return EVENTS_DEFAULT_MAX_LISTENERS;
 }
 
+static ant_value_t eventemitter_call_listener(
+  ant_t *js,
+  ant_value_t listener,
+  ant_value_t this_val,
+  ant_value_t *args,
+  int nargs
+) {
+  if (!is_callable(listener)) return js_mkundef();
+  if (sv_check_c_stack_overflow(js))
+    return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum call stack size exceeded");
+
+  sv_call_plan_t plan;
+  ant_value_t err = sv_prepare_call(
+    js->vm, js, listener, this_val, args, nargs, 
+    NULL, SV_CALL_MODE_NORMAL, &plan
+  );
+  
+  if (is_err(err)) return err;
+  return sv_execute_call_plan(js->vm, js, &plan, NULL);
+}
+
 static ant_value_t js_eventemitter_once_wrapper(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t listener = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
   if (!is_callable(listener)) return js_mkundef();
-  return sv_vm_call(js->vm, js, listener, js->this_val, args, nargs, NULL, false);
+  return eventemitter_call_listener(js, listener, js->this_val, args, nargs);
 }
 
 static ant_value_t eventemitter_get_listeners_array(ant_t *js, ant_value_t target, ant_value_t key, bool raw) {
@@ -590,20 +611,20 @@ static ant_value_t dispatch_event_to(ant_t *js, ant_value_t event_obj, EventType
 
   for (unsigned int i = 0; i < n;) {
     EventListenerEntry *entry = (EventListenerEntry *)utarray_eltptr(evt->listeners, i);
-
+    
     if (vtype(entry->signal) != T_UNDEF && abort_signal_is_aborted(entry->signal)) {
       utarray_erase(evt->listeners, i, 1);
       n--; continue;
     }
-
-    ant_value_t cb   = entry->callback;
-    bool        once = entry->once;
+    
+    ant_value_t cb = entry->callback;
+    bool once = entry->once;
     if (once) { utarray_erase(evt->listeners, i, 1); n--; } else i++;
     
     uint8_t t = vtype(cb);
     if (t != T_FUNC && t != T_CFUNC) continue;
-
-    sv_vm_call(js->vm, js, cb, js_mkundef(), call_args, 1, NULL, false);
+    
+    eventemitter_call_listener(js, cb, js_mkundef(), call_args, 1);
     if (data && data->stop_immediate) break;
   }
 
@@ -809,7 +830,7 @@ static bool eventemitter_emit_args_impl(
     if (vtype(entry->signal) != T_UNDEF && abort_signal_is_aborted(entry->signal)) continue;
     if (vtype(cb) != T_FUNC && vtype(cb) != T_CFUNC) continue;
     
-    ant_value_t result = sv_vm_call(js->vm, js, cb, target, args, nargs, NULL, false);
+    ant_value_t result = eventemitter_call_listener(js, cb, target, args, nargs);
     if (vtype(result) == T_ERR) {
       if (vtype(key) == T_STR) fprintf(stderr, "Error in event listener for '%s': %s\n", js_str(js, key), js_str(js, result));
       else fprintf(stderr, "Error in event listener: %s\n", js_str(js, result));
@@ -976,6 +997,13 @@ static ant_value_t js_eventemitter_rawListeners(ant_t *js, ant_value_t *args, in
   ant_value_t key = evt_key_from_arg(args[0]);
   if (!key) return js_mkarr(js);
   return eventemitter_get_listeners_array(js, js_getthis(js), key, true);
+}
+
+static ant_value_t js_eventemitter_listeners(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_mkarr(js);
+  ant_value_t key = evt_key_from_arg(args[0]);
+  if (!key) return js_mkarr(js);
+  return eventemitter_get_listeners_array(js, js_getthis(js), key, false);
 }
 
 static ant_value_t js_eventemitter_eventNames(ant_t *js, ant_value_t *args, int nargs) {
@@ -1146,7 +1174,7 @@ static ant_value_t js_events_add_abort_listener(ant_t *js, ant_value_t *args, in
   if (already_aborted) {
     ant_value_t event = js_mkobj(js);
     js_set(js, event, "type", js_mkstr(js, "abort", 5));
-    sv_vm_call(js->vm, js, args[1], args[0], &event, 1, NULL, false);
+    eventemitter_call_listener(js, args[1], args[0], &event, 1);
   } else abort_signal_add_listener(js, args[0], args[1]);
 
   ant_value_t state = js_mkobj(js);
@@ -1219,6 +1247,7 @@ ant_value_t eventemitter_prototype(ant_t *js) {
   js_set(js, eventemitter_proto, "listenerCount",      js_mkfun(js_eventemitter_listenerCount));
   js_set(js, eventemitter_proto, "setMaxListeners",    js_mkfun(js_eventemitter_setMaxListeners));
   js_set(js, eventemitter_proto, "getMaxListeners",    js_mkfun(js_eventemitter_getMaxListeners));
+  js_set(js, eventemitter_proto, "listeners",          js_mkfun(js_eventemitter_listeners));
   js_set(js, eventemitter_proto, "rawListeners",       js_mkfun(js_eventemitter_rawListeners));
   js_set(js, eventemitter_proto, "eventNames",         js_mkfun(js_eventemitter_eventNames));
   js_set_sym(js, eventemitter_proto, get_toStringTag_sym(), js_mkstr(js, "EventEmitter", 12));

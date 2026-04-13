@@ -1269,6 +1269,10 @@ static ant_value_t util_promisify(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1 || !is_callable(args[0])) {
     return js_mkerr(js, "promisify(fn) requires a function");
   }
+
+  ant_value_t custom = js_get_symbol(js, args[0], "nodejs.util.promisify.custom");
+  if (is_callable(custom)) return custom;
+
   return js_heavy_mkfun(js, util_promisified_call, args[0]);
 }
 
@@ -1324,9 +1328,12 @@ static ant_value_t util_is_deep_strict_equal(ant_t *js, ant_value_t *args, int n
   return js_bool(js_deep_equal(js, args[0], args[1], true));
 }
 
-ant_value_t util_library(ant_t *js) {  
+ant_value_t util_library(ant_t *js) {
   ant_value_t lib = js_mkobj(js);
   ant_value_t types = util_get_types_object(js);
+  
+  ant_value_t promisify = js_heavy_mkfun(js, util_promisify, js_mkundef());
+  js_set(js, promisify, "custom", js_mksym_for(js, "nodejs.util.promisify.custom"));
 
   js_set(js, lib, "format", js_mkfun(util_format));
   js_set(js, lib, "formatWithOptions", js_mkfun(util_format_with_options));
@@ -1337,7 +1344,7 @@ ant_value_t util_library(ant_t *js) {
   js_set(js, lib, "isDeepStrictEqual", js_mkfun(util_is_deep_strict_equal));
   js_set(js, lib, "parseArgs", js_mkfun(util_parse_args));
   js_set(js, lib, "parseEnv", js_mkfun(util_parse_env));
-  js_set(js, lib, "promisify", js_mkfun(util_promisify));
+  js_set(js, lib, "promisify", promisify);
   js_set(js, lib, "callbackify", js_mkfun(util_callbackify));
   js_set(js, lib, "aborted", js_mkfun(util_aborted));
   js_set(js, lib, "stripVTControlCharacters", js_mkfun(util_strip_vt_control_characters));
