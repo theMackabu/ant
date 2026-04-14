@@ -205,13 +205,10 @@ static ant_value_t js_sd_end(ant_t *js, ant_value_t *args, int nargs) {
   return sd_do_write(js, st, src, len, true);
 }
 
-static ant_value_t js_sd_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF)
-    return js_mkerr_typed(js, JS_ERR_TYPE, "StringDecoder constructor requires 'new'");
-
+ant_value_t string_decoder_create(ant_t *js, ant_value_t encoding) {
   int enc = SD_ENC_UTF8;
-  if (nargs > 0 && !is_undefined(args[0])) {
-  ant_value_t label_val = (vtype(args[0]) == T_STR) ? args[0] : coerce_to_str(js, args[0]);
+  if (!is_undefined(encoding)) {
+  ant_value_t label_val = (vtype(encoding) == T_STR) ? encoding : coerce_to_str(js, encoding);
   if (!is_err(label_val) && vtype(label_val) == T_STR) {
     size_t llen;
     const char *label = js_getstr(js, label_val, &llen);
@@ -236,6 +233,44 @@ static ant_value_t js_sd_ctor(ant_t *js, ant_value_t *args, int nargs) {
   js_set_finalizer(obj, sd_finalize);
 
   return obj;
+}
+
+ant_value_t string_decoder_decode_bytes(
+  ant_t *js, ant_value_t decoder,
+  const uint8_t *src, size_t len, bool flush
+) {
+  sd_state_t *st = sd_get_state(decoder);
+  if (!st) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid StringDecoder");
+  return sd_do_write(js, st, src, len, flush);
+}
+
+ant_value_t string_decoder_decode_value(
+  ant_t *js, ant_value_t decoder,
+  ant_value_t chunk, bool flush
+) {
+  sd_state_t *st = sd_get_state(decoder);
+  if (!st) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid StringDecoder");
+
+  if (vtype(chunk) == T_STR) {
+    size_t slen = 0;
+    const char *s = js_getstr(js, chunk, &slen);
+    return s ? js_mkstr(js, s, slen) : js_mkstr(js, "", 0);
+  }
+
+  const uint8_t *src = NULL;
+  size_t len = 0;
+  if (is_object_type(chunk))
+    buffer_source_get_bytes(js, chunk, &src, &len);
+    
+  return sd_do_write(js, st, src, len, flush);
+}
+
+static ant_value_t js_sd_ctor(ant_t *js, ant_value_t *args, int nargs) {
+  if (vtype(js->new_target) == T_UNDEF)
+    return js_mkerr_typed(js, JS_ERR_TYPE, "StringDecoder constructor requires 'new'");
+    
+  ant_value_t encoding = nargs > 0 ? args[0] : js_mkundef();
+  return string_decoder_create(js, encoding);
 }
 
 ant_value_t string_decoder_library(ant_t *js) {

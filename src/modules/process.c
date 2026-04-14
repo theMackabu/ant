@@ -44,6 +44,7 @@
 #include "modules/buffer.h"
 #include "modules/napi.h"
 #include "modules/timer.h"
+#include "modules/string_decoder.h"
 
 #ifndef _WIN32
 extern char **environ;
@@ -88,6 +89,7 @@ typedef struct {
   bool tty_initialized;
   bool reading;
   bool keypress_enabled;
+  ant_value_t decoder;
   int escape_state;
   int escape_len;
   char escape_buf[16];
@@ -644,9 +646,13 @@ static void on_stdin_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *bu
   if (nread > 0 && rt->js) {
     ArrayBufferData *ab = create_array_buffer_data((size_t)nread);
     if (ab) memcpy(ab->data, buf->base, (size_t)nread);
-    ant_value_t data_val = ab
+    ant_value_t raw_val = ab
       ? create_typed_array(rt->js, TYPED_ARRAY_UINT8, ab, 0, (size_t)nread, "Buffer")
       : js_mkstr(rt->js, buf->base, (size_t)nread);
+    ant_value_t data_val = is_object_type(stdin_state.decoder)
+      ? string_decoder_decode_value(rt->js, stdin_state.decoder, raw_val, false)
+      : raw_val;
+    if (is_err(data_val)) data_val = raw_val;
     emit_stdio_event(&stdin_events, "data", &data_val, 1);
     if (stdin_state.keypress_enabled) process_keypress_data(rt->js, buf->base, (size_t)nread);
   }
@@ -715,6 +721,23 @@ static void start_sigwinch_handler(void) {
 static ant_value_t js_stdin_set_raw_mode(ant_t *js, ant_value_t *args, int nargs) {
   bool enable = nargs > 0 ? js_truthy(js, args[0]) : true;
   return js_bool(stdin_set_raw_mode(enable));
+}
+
+static ant_value_t js_stdin_set_encoding(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
+  
+  ant_value_t encoding = nargs > 0 && !is_undefined(args[0]) ? args[0] : js_mkstr(js, "utf8", 4);
+  ant_value_t decoder = string_decoder_create(js, encoding);
+  ant_value_t encoding_str = 0;
+
+  if (is_err(decoder)) return decoder;
+  encoding_str = js_tostring_val(js, encoding);
+  if (is_err(encoding_str)) return encoding_str;
+
+  stdin_state.decoder = decoder;
+  js_set(js, this_obj, "encoding", encoding_str);
+  
+  return this_obj;
 }
 
 static ant_value_t js_stdin_resume(ant_t *js, ant_value_t *args, int nargs) {
@@ -801,18 +824,6 @@ static ant_value_t process_write_stream(ant_t *js, ant_value_t *args, int nargs,
 
   if (!ant_output_stream_append(out, data, len)) return js_false;
   return ant_output_stream_flush(out) ? js_true : js_false;
-}
-
-static ant_value_t process_write_stream_set_encoding(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t this_obj = js_getthis(js);
-  ant_value_t encoding = nargs > 0 && vtype(args[0]) != T_UNDEF
-    ? js_tostring_val(js, args[0])
-    : js_mkstr(js, "utf8", 4);
-    
-  if (is_err(encoding)) return encoding;
-  js_set(js, this_obj, "encoding", encoding);
-  
-  return this_obj;
 }
 
 static ant_value_t js_stdout_write(ant_t *js, ant_value_t *args, int nargs) {
@@ -1837,6 +1848,7 @@ void init_process_module() {
   ant_t *js = rt->js;
   ant_value_t global = js_glob(js);
 
+  stdin_state.decoder = js_mkundef();
   process_start_time = uv_hrtime();
   ant_value_t process_proto = js_mkobj(js);
 
@@ -1912,6 +1924,7 @@ void init_process_module() {
   
   ant_value_t stdin_proto = js_mkobj(js);
   js_set(js, stdin_proto, "setRawMode", js_mkfun(js_stdin_set_raw_mode));
+  js_set(js, stdin_proto, "setEncoding", js_mkfun(js_stdin_set_encoding));
   js_set(js, stdin_proto, "resume", js_mkfun(js_stdin_resume));
   js_set(js, stdin_proto, "pause", js_mkfun(js_stdin_pause));
   js_set(js, stdin_proto, "on", js_mkfun(js_stdin_on));
@@ -1923,11 +1936,11 @@ void init_process_module() {
   ant_value_t stdin_obj = js_mkobj(js);
   js_set_proto_init(stdin_obj, stdin_proto);
   js_set(js, stdin_obj, "isTTY", js_bool(stdin_is_tty()));
+  js_set(js, stdin_obj, "encoding", js_mkundef());
   js_set(js, process_obj, "stdin", stdin_obj);
   
   ant_value_t stdout_proto = js_mkobj(js);
   js_set(js, stdout_proto, "write", js_mkfun(js_stdout_write));
-  js_set(js, stdout_proto, "setEncoding", js_mkfun(process_write_stream_set_encoding));
   js_set(js, stdout_proto, "on", js_mkfun(js_stdout_on));
   js_set(js, stdout_proto, "once", js_mkfun(js_stdout_once));
   js_set(js, stdout_proto, "removeListener", js_mkfun(js_stdout_remove_listener));
@@ -1945,7 +1958,6 @@ void init_process_module() {
   
   ant_value_t stderr_proto = js_mkobj(js);
   js_set(js, stderr_proto, "write", js_mkfun(js_stderr_write));
-  js_set(js, stderr_proto, "setEncoding", js_mkfun(process_write_stream_set_encoding));
   js_set(js, stderr_proto, "on", js_mkfun(js_stderr_on));
   js_set(js, stderr_proto, "once", js_mkfun(js_stderr_once));
   js_set(js, stderr_proto, "removeListener", js_mkfun(js_stderr_remove_listener));
@@ -1973,6 +1985,7 @@ void gc_mark_process(ant_t *js, gc_mark_fn mark) {
     HASH_ITER(hh, tables[t], evt, tmp) 
       for (int i = 0; i < evt->listener_count; i++) mark(js, evt->listeners[i].listener);
   }
+  if (is_object_type(stdin_state.decoder)) mark(js, stdin_state.decoder);
 }
 
 void process_enable_keypress_events(void) {

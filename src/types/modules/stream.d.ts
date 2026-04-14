@@ -18,6 +18,7 @@ declare module 'stream' {
     _read(size?: number): void;
     read(size?: number): Uint8Array | string | null;
     push(chunk: Uint8Array | string | null): boolean;
+    setEncoding(encoding?: string): this;
     on(event: 'data', listener: (chunk: Uint8Array | string) => void): this;
     on(event: 'end' | 'close' | 'readable', listener: () => void): this;
     on(event: 'error', listener: (error: Error) => void): this;

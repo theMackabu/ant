@@ -13,6 +13,7 @@
 #include "modules/events.h"
 #include "modules/stream.h"
 #include "modules/symbol.h"
+#include "modules/string_decoder.h"
 
 enum { STREAM_NATIVE_TAG = 0x5354524Du }; // STRM
 
@@ -62,6 +63,18 @@ static ant_value_t stream_require_this(ant_t *js, ant_value_t value, const char 
 
 static ant_value_t stream_truthy_or_object(ant_t *js, ant_value_t value) {
   return js_truthy(js, value) ? value : js_mkobj(js);
+}
+
+static ant_value_t stream_readable_state(ant_t *js, ant_value_t stream_obj) {
+  return js_get(js, stream_obj, "_readableState");
+}
+
+static ant_value_t stream_writable_state(ant_t *js, ant_value_t stream_obj) {
+  return js_get(js, stream_obj, "_writableState");
+}
+
+static ant_value_t stream_pipes(ant_t *js, ant_value_t stream_obj) {
+  return js_get(js, stream_obj, "_pipes");
 }
 
 static bool stream_key_is_cstr(ant_t *js, ant_value_t value, const char *expected) {
@@ -164,6 +177,28 @@ static ant_value_t stream_buffer_ctor(ant_t *js) {
   return js_get(js, ns, "Buffer");
 }
 
+static ant_value_t stream_readable_decoder(ant_t *js, ant_value_t stream_obj) {
+  ant_value_t state = stream_readable_state(js, stream_obj);
+  if (!is_object_type(state)) return js_mkundef();
+  return js_get(js, state, "decoder");
+}
+
+static ant_value_t stream_readable_decode_chunk(
+  ant_t *js, ant_value_t stream_obj,
+  ant_value_t chunk, bool flush
+) {
+  ant_value_t decoder = stream_readable_decoder(js, stream_obj);
+  if (!is_object_type(decoder)) return chunk;
+  return string_decoder_decode_value(js, decoder, chunk, flush);
+}
+
+static bool stream_value_is_empty_string(ant_t *js, ant_value_t value) {
+  size_t len = 0;
+  if (vtype(value) != T_STR) return false;
+  (void)js_getstr(js, value, &len);
+  return len == 0;
+}
+
 static ant_value_t stream_make_buffer(ant_t *js, ant_value_t value, ant_value_t encoding) {
   ant_value_t buffer_ctor = stream_buffer_ctor(js);
   ant_value_t from_fn = 0;
@@ -173,7 +208,7 @@ static ant_value_t stream_make_buffer(ant_t *js, ant_value_t value, ant_value_t 
   from_fn = js_get(js, buffer_ctor, "from");
   if (is_err(from_fn) || !is_callable(from_fn))
     return js_mkerr(js, "Buffer.from is not available");
-
+    
   args[0] = value;
   args[1] = encoding;
   return stream_call(js, from_fn, buffer_ctor, args, 2, false);
@@ -198,18 +233,6 @@ static ant_value_t stream_normalize_chunk(
   if (is_err(str_val)) return str_val;
   
   return stream_make_buffer(js, str_val, encoding);
-}
-
-static ant_value_t stream_readable_state(ant_t *js, ant_value_t stream_obj) {
-  return js_get(js, stream_obj, "_readableState");
-}
-
-static ant_value_t stream_writable_state(ant_t *js, ant_value_t stream_obj) {
-  return js_get(js, stream_obj, "_writableState");
-}
-
-static ant_value_t stream_pipes(ant_t *js, ant_value_t stream_obj) {
-  return js_get(js, stream_obj, "_pipes");
 }
 
 static ant_value_t stream_readable_buffer(ant_t *js, ant_value_t stream_obj) {
@@ -715,6 +738,8 @@ ant_value_t stream_readable_flush(ant_t *js, ant_value_t stream_obj) {
 
   while (js_truthy(js, js_get(js, state, "flowing")) && stream_readable_buffer_len(js, stream_obj) > 0) {
     ant_value_t chunk = stream_buffer_shift(js, stream_obj);
+    chunk = stream_readable_decode_chunk(js, stream_obj, chunk, false);
+    if (is_err(chunk)) return chunk;
     emitted_data = true;
     eventemitter_emit_args(js, stream_obj, "data", &chunk, 1);
   }
@@ -724,6 +749,12 @@ ant_value_t stream_readable_flush(ant_t *js, ant_value_t stream_obj) {
     stream_readable_buffer_len(js, stream_obj) == 0 &&
     !js_truthy(js, js_get(js, state, "endEmitted"))
   ) {
+    ant_value_t tail = stream_readable_decode_chunk(js, stream_obj, js_mkundef(), true);
+    if (is_err(tail)) return tail;
+    if (!is_undefined(tail) && !stream_value_is_empty_string(js, tail)) {
+      emitted_data = true;
+      eventemitter_emit_args(js, stream_obj, "data", &tail, 1);
+    }
     js_set(js, state, "endEmitted", js_true);
     js_set(js, stream_obj, "readableEnded", js_true);
     stream_emit_named(js, stream_obj, "end");
@@ -806,9 +837,34 @@ static ant_value_t js_readable_read(ant_t *js, ant_value_t *args, int nargs) {
   if (stream_readable_buffer_len(js, stream_obj) == 0) return js_mknull();
 
   chunk = stream_buffer_shift(js, stream_obj);
+  chunk = stream_readable_decode_chunk(js, stream_obj, chunk, false);
+  if (is_err(chunk)) return chunk;
   if (js_truthy(js, js_get(js, state, "flowing"))) stream_readable_flush(js, stream_obj);
   
   return chunk;
+}
+
+static ant_value_t js_readable_set_encoding(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t stream_obj = stream_require_this(js, js_getthis(js), "Readable");
+  ant_value_t state = 0; ant_value_t decoder = 0;
+
+  ant_value_t encoding = nargs > 0 && !is_undefined(args[0]) ? args[0] : js_mkstr(js, "utf8", 4);
+  ant_value_t encoding_str = 0;
+
+  if (is_err(stream_obj)) return stream_obj;
+  state = stream_readable_state(js, stream_obj);
+  if (!is_object_type(state)) return stream_obj;
+
+  decoder = string_decoder_create(js, encoding);
+  if (is_err(decoder)) return decoder;
+  encoding_str = js_tostring_val(js, encoding);
+  if (is_err(encoding_str)) return encoding_str;
+
+  js_set(js, state, "decoder", decoder);
+  js_set(js, stream_obj, "encoding", encoding_str);
+  js_set(js, stream_obj, "readableEncoding", encoding_str);
+  
+  return stream_obj;
 }
 
 static ant_value_t js_readable_on(ant_t *js, ant_value_t *args, int nargs) {
@@ -1648,6 +1704,7 @@ void stream_init_constructors(ant_t *js) {
   js_set(js, g_readable_proto, "_read", js_mkfun(js_readable__read));
   js_set(js, g_readable_proto, "push", js_mkfun(js_readable_push));
   js_set(js, g_readable_proto, "read", js_mkfun(js_readable_read));
+  js_set(js, g_readable_proto, "setEncoding", js_mkfun(js_readable_set_encoding));
   js_set(js, g_readable_proto, "on", js_mkfun(js_readable_on));
   js_set(js, g_readable_proto, "resume", js_mkfun(js_readable_resume));
   js_set(js, g_readable_proto, "pause", js_mkfun(js_readable_pause));
@@ -1726,6 +1783,11 @@ ant_value_t stream_writable_prototype(ant_t *js) {
   return g_writable_proto;
 }
 
+ant_value_t stream_duplex_prototype(ant_t *js) {
+  stream_init_constructors(js);
+  return g_duplex_proto;
+}
+
 ant_value_t stream_construct_readable(ant_t *js, ant_value_t base_proto, ant_value_t options) {
   stream_init_constructors(js);
   return stream_construct(js, base_proto, options, stream_init_readable);
@@ -1747,6 +1809,14 @@ void stream_init_writable_object(ant_t *js, ant_value_t obj, ant_value_t options
   stream_init_constructors(js);
   if (!is_object_type(obj)) return;
   js_set_native_tag(obj, STREAM_NATIVE_TAG);
+  stream_init_writable(js, obj, options);
+}
+
+void stream_init_duplex_object(ant_t *js, ant_value_t obj, ant_value_t options) {
+  stream_init_constructors(js);
+  if (!is_object_type(obj)) return;
+  js_set_native_tag(obj, STREAM_NATIVE_TAG);
+  stream_init_readable(js, obj, options);
   stream_init_writable(js, obj, options);
 }
 

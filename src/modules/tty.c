@@ -886,9 +886,10 @@ void init_tty_module(void) {
     js_set_getter_desc(js, stdout_obj, "columns", 7, js_mkfun(tty_write_stream_columns_getter), JS_DESC_E | JS_DESC_C);
 
     ant_value_t stdout_proto = js_get_proto(js, stdout_obj);
-    if (is_special_object(stdout_proto)) js_set_proto_init(stdout_proto, stream_writable_prototype(js));
+    if (is_special_object(stdout_proto)) js_set_proto_init(stdout_proto, stream_duplex_prototype(js));
     setup_writestream_proto(js, stdout_proto);
-    stream_init_writable_object(js, stdout_obj, js_mkundef());
+    stream_init_duplex_object(js, stdout_obj, js_mkundef());
+    js_set(js, stdout_obj, "readable", js_false);
   }
 
   ant_value_t stderr_obj = js_get(js, process_obj, "stderr");
@@ -898,9 +899,10 @@ void init_tty_module(void) {
     js_set_getter_desc(js, stderr_obj, "columns", 7, js_mkfun(tty_write_stream_columns_getter), JS_DESC_E | JS_DESC_C);
     
     ant_value_t stderr_proto = js_get_proto(js, stderr_obj);
-    if (is_special_object(stderr_proto)) js_set_proto_init(stderr_proto, stream_writable_prototype(js));
+    if (is_special_object(stderr_proto)) js_set_proto_init(stderr_proto, stream_duplex_prototype(js));
     setup_writestream_proto(js, stderr_proto);
-    stream_init_writable_object(js, stderr_obj, js_mkundef());
+    stream_init_duplex_object(js, stderr_obj, js_mkundef());
+    js_set(js, stderr_obj, "readable", js_false);
   }
 }
 

@@ -51,6 +51,7 @@ interface CpuUsage {
 interface ReadStream {
   isTTY: boolean;
   setRawMode(enable?: boolean): boolean;
+  setEncoding(encoding?: string): this;
   resume(): this;
   pause(): this;
   on(event: string, listener: EventListener): this;
@@ -63,6 +64,8 @@ interface WriteStream {
   isTTY: boolean;
   rows: number;
   columns: number;
+  readableEncoding?: string;
+  setEncoding(encoding?: string): this;
   write(data: string): boolean;
   on(event: string, listener: EventListener): this;
   once(event: string, listener: EventListener): this;
