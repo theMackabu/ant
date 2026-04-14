@@ -548,6 +548,12 @@ static inline ant_flat_string_t *str_flat_from_bytes(const char *str) {
   return (ant_flat_string_t *)((char *)str - offsetof(ant_flat_string_t, bytes));
 }
 
+static inline ant_flat_string_t *ant_str_flat_ptr(ant_value_t value) {
+  if (vtype(value) != T_STR) return NULL;
+  if ((vdata(value) & STR_HEAP_TAG_MASK) != STR_HEAP_TAG_FLAT) return NULL;
+  return (ant_flat_string_t *)(uintptr_t)vdata(value);
+}
+
 static inline ant_flat_string_t *large_string_flat_ptr(ant_large_string_alloc_t *alloc) {
   return alloc ? (ant_flat_string_t *)&alloc->len : NULL;
 }

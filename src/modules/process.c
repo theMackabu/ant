@@ -803,6 +803,18 @@ static ant_value_t process_write_stream(ant_t *js, ant_value_t *args, int nargs,
   return ant_output_stream_flush(out) ? js_true : js_false;
 }
 
+static ant_value_t process_write_stream_set_encoding(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
+  ant_value_t encoding = nargs > 0 && vtype(args[0]) != T_UNDEF
+    ? js_tostring_val(js, args[0])
+    : js_mkstr(js, "utf8", 4);
+    
+  if (is_err(encoding)) return encoding;
+  js_set(js, this_obj, "encoding", encoding);
+  
+  return this_obj;
+}
+
 static ant_value_t js_stdout_write(ant_t *js, ant_value_t *args, int nargs) {
   return process_write_stream(js, args, nargs, stdout, STDOUT_FILENO);
 }
@@ -1915,6 +1927,7 @@ void init_process_module() {
   
   ant_value_t stdout_proto = js_mkobj(js);
   js_set(js, stdout_proto, "write", js_mkfun(js_stdout_write));
+  js_set(js, stdout_proto, "setEncoding", js_mkfun(process_write_stream_set_encoding));
   js_set(js, stdout_proto, "on", js_mkfun(js_stdout_on));
   js_set(js, stdout_proto, "once", js_mkfun(js_stdout_once));
   js_set(js, stdout_proto, "removeListener", js_mkfun(js_stdout_remove_listener));
@@ -1932,6 +1945,7 @@ void init_process_module() {
   
   ant_value_t stderr_proto = js_mkobj(js);
   js_set(js, stderr_proto, "write", js_mkfun(js_stderr_write));
+  js_set(js, stderr_proto, "setEncoding", js_mkfun(process_write_stream_set_encoding));
   js_set(js, stderr_proto, "on", js_mkfun(js_stderr_on));
   js_set(js, stderr_proto, "once", js_mkfun(js_stderr_once));
   js_set(js, stderr_proto, "removeListener", js_mkfun(js_stderr_remove_listener));

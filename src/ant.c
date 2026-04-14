@@ -239,12 +239,6 @@ void js_mark_constructor(ant_value_t value, bool is_constructor) {
   if (obj) obj->is_constructor = is_constructor ? 1u : 0u;
 }
 
-static inline ant_flat_string_t *str_flat_ptr(ant_value_t value) {
-  if (vtype(value) != T_STR) return NULL;
-  if ((vdata(value) & STR_HEAP_TAG_MASK) != STR_HEAP_TAG_FLAT) return NULL;
-  return (ant_flat_string_t *)(uintptr_t)vdata(value);
-}
-
 static inline ant_extra_slot_t *obj_extra_slots(ant_object_t *obj) {
   return (ant_extra_slot_t *)obj->extra_slots;
 }
@@ -564,7 +558,7 @@ ant_offset_t vstrlen(ant_t *js, ant_value_t v) {
     ant_string_builder_t *builder = ant_str_builder_ptr(v);
     return builder ? builder->len : 0;
   }
-  ant_flat_string_t *flat = str_flat_ptr(v);
+  ant_flat_string_t *flat = ant_str_flat_ptr(v);
   return flat ? flat->len : 0;
 }
 
@@ -1866,7 +1860,7 @@ static size_t strnum(ant_value_t value, char *buf, size_t len) {
 
 static inline ant_offset_t assert_flat_string_len(ant_t *js, ant_value_t value, const char **out_ptr) {
   (void)js;
-  ant_flat_string_t *flat = str_flat_ptr(value);
+  ant_flat_string_t *flat = ant_str_flat_ptr(value);
   assert(flat != NULL);
   ant_offset_t len = flat->len;
   if (out_ptr) *out_ptr = flat->bytes;
@@ -2055,7 +2049,7 @@ static ant_value_t builder_flatten(ant_t *js, ant_value_t builder) {
       return chunk_value;
     }}
     
-    ant_flat_string_t *chunk_flat = str_flat_ptr(chunk_value);
+    ant_flat_string_t *chunk_flat = ant_str_flat_ptr(chunk_value);
     if (!chunk_flat || chunk_flat->len == 0) continue;
     memcpy(flat_ptr->bytes + cursor, chunk_flat->bytes, (size_t)chunk_flat->len);
     cursor += (size_t)chunk_flat->len;
@@ -3116,6 +3110,50 @@ static const char *get_func_code(ant_t *js, ant_value_t func_obj, ant_offset_t *
   return (const char *)vdata(code_val);
 }
 
+static inline bool js_is_trim_space(char ch) {
+  return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r';
+}
+
+static inline bool js_try_parse_ascii_decimal_fast(const char *str, size_t len, double *out) {
+  size_t i = 0;
+  int sign = 1;
+  int int_digits = 0;
+  int frac_digits = 0;
+  
+  double value = 0.0;
+  double scale = 1.0;
+  bool saw_digit = false;
+
+  if (len == 0) return false;
+  if (str[i] == '+' || str[i] == '-') {
+    sign = (str[i] == '-') ? -1 : 1;
+    i++;
+    if (i == len) return false;
+  }
+
+  while (i < len && str[i] >= '0' && str[i] <= '9') {
+    if (int_digits >= 18) return false;
+    value = value * 10.0 + (double)(str[i] - '0');
+    saw_digit = true;
+    int_digits++; i++;
+  }
+
+  if (i < len && str[i] == '.') {
+  i++;
+  while (i < len && str[i] >= '0' && str[i] <= '9') {
+    if (frac_digits >= 18) return false;
+    scale *= 0.1;
+    value += (double)(str[i] - '0') * scale;
+    saw_digit = true;
+    frac_digits++; i++;
+  }}
+
+  if (!saw_digit || i != len) return false;
+  *out = (sign < 0) ? -value : value;
+  
+  return true;
+}
+
 double js_to_number(ant_t *js, ant_value_t arg) {
   if (vtype(arg) == T_NULL) return 0.0;
   if (vtype(arg) == T_UNDEF) return JS_NAN;
@@ -3125,13 +3163,35 @@ double js_to_number(ant_t *js, ant_value_t arg) {
   if (vtype(arg) == T_BIGINT) return bigint_to_double(js, arg);
 
   if (vtype(arg) == T_STR) {
-    ant_offset_t len, off = vstr(js, arg, &len);
-    const char *s = (char *)(uintptr_t)(off), *end;
-    while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r') s++;
-    if (!*s) return 0.0;
-    double val = strtod(s, (char **)&end);
-    while (*end == ' ' || *end == '\t' || *end == '\n' || *end == '\r') end++;
-    return (end == s || *end) ? JS_NAN : val;
+    ant_flat_string_t *flat = ant_str_flat_ptr(arg);
+    const char *base = NULL;
+    const char *s = NULL;
+    const char *end = NULL;
+
+    if (flat) {
+      base = flat->bytes;
+      s = base;
+      end = base + flat->len;
+    } else {
+      ant_offset_t len = 0;
+      ant_offset_t off = vstr(js, arg, &len);
+      base = (const char *)(uintptr_t)off;
+      s = base;
+      end = base + len;
+    }
+    
+    while (s < end && js_is_trim_space(*s)) s++;
+    if (s == end) return 0.0;
+    
+    double fast_val = 0.0;
+    if (js_try_parse_ascii_decimal_fast(s, (size_t)(end - s), &fast_val))
+      return fast_val;
+      
+    char *parse_end = NULL;
+    double val = strtod(s, &parse_end);
+    while (parse_end < end && js_is_trim_space(*parse_end)) parse_end++;
+    
+    return (parse_end == s || parse_end != end) ? JS_NAN : val;
   }
 
   if (vtype(arg) == T_OBJ || vtype(arg) == T_ARR) {

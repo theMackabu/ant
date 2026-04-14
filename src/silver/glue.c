@@ -34,6 +34,11 @@ ant_value_t jit_helper_add(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r)
 
 ant_value_t jit_helper_sub(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
   if (vtype(l) == T_NUM && vtype(r) == T_NUM) return tov(tod(l) - tod(r));
+  if ((vtype(l) == T_NUM || vtype(l) == T_STR) && (vtype(r) == T_NUM || vtype(r) == T_STR)) {
+    double ld = (vtype(l) == T_NUM) ? tod(l) : js_to_number(js, l);
+    double rd = (vtype(r) == T_NUM) ? tod(r) : js_to_number(js, r);
+    return tov(ld - rd);
+  }
   return SV_JIT_BAILOUT;
 }
 
@@ -708,6 +713,16 @@ ant_value_t jit_helper_get_length(sv_vm_t *vm, ant_t *js, ant_value_t obj) {
   if (vtype(obj) == T_ARR)
     return tov((double)(uint32_t)js_arr_len(js, obj));
   if (vtype(obj) == T_STR) {
+    ant_flat_string_t *flat = ant_str_flat_ptr(obj);
+    if (flat) {
+      const char *str_data = flat->bytes;
+      ant_offset_t byte_len = flat->len;
+      return tov((double)(uint32_t)(
+        str_is_ascii(str_data) 
+          ? byte_len 
+          : utf16_strlen(str_data, byte_len)
+      ));
+    }
     ant_offset_t byte_len = 0;
     ant_offset_t off = vstr(js, obj, &byte_len);
     const char *str_data = (const char *)(uintptr_t)(off);
@@ -819,9 +834,9 @@ ant_value_t jit_helper_band(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r
 }
 
 ant_value_t jit_helper_bor(sv_vm_t *vm, ant_t *js, ant_value_t l, ant_value_t r) {
-  if (vtype(l) != T_NUM || vtype(r) != T_NUM) return SV_JIT_BAILOUT;
-  int32_t ai = js_to_int32(tod(l));
-  int32_t bi = js_to_int32(tod(r));
+  if (!((vtype(l) == T_NUM || vtype(l) == T_STR) && (vtype(r) == T_NUM || vtype(r) == T_STR))) return SV_JIT_BAILOUT;
+  int32_t ai = js_to_int32((vtype(l) == T_NUM) ? tod(l) : js_to_number(js, l));
+  int32_t bi = js_to_int32((vtype(r) == T_NUM) ? tod(r) : js_to_number(js, r));
   return tov((double)(ai | bi));
 }
 

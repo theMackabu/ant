@@ -776,6 +776,18 @@ static inline ant_value_t sv_op_get_length(sv_vm_t *vm, ant_t *js) {
   }
   
   if (vtype(obj) == T_STR) {
+    ant_flat_string_t *flat = ant_str_flat_ptr(obj);
+    if (flat) {
+      const char *str_data = flat->bytes;
+      ant_offset_t byte_len = flat->len;
+      vm->stack[vm->sp++] = tov((double)(uint32_t)(
+        str_is_ascii(str_data) 
+          ? byte_len 
+          : utf16_strlen(str_data, byte_len)
+      ));
+      return js_mkundef();
+    }
+
     ant_offset_t byte_len = 0;
     ant_offset_t off = vstr(js, obj, &byte_len);
     const char *str_data = (const char *)(uintptr_t)(off);
