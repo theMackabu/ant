@@ -23,37 +23,6 @@ bool jit_helper_stack_overflow(ant_t *js) {
   return used > js->cstk.limit;
 }
 
-static bool jit_vm_ensure_stack(sv_vm_t *vm, int need) {
-  while (vm->sp + need > vm->stack_size) {
-    int new_size = vm->stack_size * 2;
-    if (new_size > SV_STACK_HARD_MAX) new_size = SV_STACK_HARD_MAX;
-    if (new_size <= vm->stack_size) return false;
-    
-    ant_value_t *old = vm->stack;
-    int old_size = vm->stack_size;
-    
-    ant_value_t *ns = realloc(vm->stack, (size_t)new_size * sizeof(ant_value_t));
-    if (!ns) return false;
-    
-    ptrdiff_t delta = ns - old;
-    vm->stack = ns;
-    vm->stack_size = new_size;
-    
-    if (delta != 0) {
-      for (int i = 0; i <= vm->fp; i++) {
-        if (vm->frames[i].bp) vm->frames[i].bp += delta;
-        if (vm->frames[i].lp) vm->frames[i].lp += delta;
-      }
-      for (sv_upvalue_t *uv = vm->open_upvalues; uv; uv = uv->next) if (
-        uv->location != &uv->closed &&
-        sv_slot_in_range(old, (size_t)old_size, uv->location)
-      ) uv->location += delta;
-    }
-  }
-  
-  return true;
-}
-
 ant_value_t jit_helper_stack_overflow_error(sv_vm_t *vm, ant_t *js) {
   return js_mkerr_typed(js, JS_ERR_RANGE | JS_ERR_NO_STACK, "Maximum JIT call stack size exceeded");
 }
@@ -377,6 +346,25 @@ static ant_value_t jit_iter_advance_from_buf(
   }}
 }
 
+void jit_helper_destructure_close(
+  sv_vm_t *vm, ant_t *js, ant_value_t *iter_buf
+) {
+  GC_ROOT_SAVE(root_mark, js);
+
+  int tag = (int)js_getnum(iter_buf[2]);
+  if (tag == SV_ITER_GENERIC) {
+    ant_value_t iterator = iter_buf[0];
+    GC_ROOT_PIN(js, iterator);
+    ant_value_t return_fn = js_getprop_fallback(js, iterator, "return");
+    GC_ROOT_PIN(js, return_fn);
+    uint8_t ft = vtype(return_fn);
+    if (ft == T_FUNC || ft == T_CFUNC)
+      sv_vm_call(vm, js, return_fn, iterator, NULL, 0, NULL, false);
+  }
+
+  GC_ROOT_RESTORE(js, root_mark);
+}
+
 ant_value_t jit_helper_for_of(
   sv_vm_t *vm, ant_t *js,
   ant_value_t iterable, ant_value_t *iter_buf
@@ -451,46 +439,16 @@ ant_value_t jit_helper_for_of(
   return tov(0);
 }
 
-void jit_helper_destructure_close(
-  sv_vm_t *vm, ant_t *js,
-  ant_value_t *iter_buf
-) {
-  int old_sp = vm->sp;
-  if (!jit_vm_ensure_stack(vm, 3))
-    return;
-
-  vm->stack[vm->sp++] = iter_buf[0];
-  vm->stack[vm->sp++] = iter_buf[1];
-  vm->stack[vm->sp++] = iter_buf[2];
-  sv_op_iter_close(vm, js);
-  vm->sp = old_sp;
-}
-
 ant_value_t jit_helper_destructure_next(
   sv_vm_t *vm, ant_t *js,
   ant_value_t *iter_buf
 ) {
-  int old_sp = vm->sp;
-  if (!jit_vm_ensure_stack(vm, 4))
-    return js_mkerr(js, "stack overflow");
-
-  vm->stack[vm->sp++] = iter_buf[0];
-  vm->stack[vm->sp++] = iter_buf[1];
-  vm->stack[vm->sp++] = iter_buf[2];
-
   ant_value_t value = js_mkundef();
   bool done = false;
-  ant_value_t status = sv_iter_advance(vm, js, 0, &value, &done);
-  if (is_err(status)) {
-    vm->sp = old_sp;
-    return status;
-  }
+  ant_value_t status = jit_iter_advance_from_buf(vm, js, iter_buf, 0, &value, &done);
+  if (is_err(status)) return status;
 
-  iter_buf[0] = vm->stack[old_sp + 0];
-  iter_buf[1] = vm->stack[old_sp + 1];
-  iter_buf[2] = vm->stack[old_sp + 2];
   iter_buf[3] = done ? js_mkundef() : value;
-  vm->sp = old_sp;
   return status;
 }
 
