@@ -878,8 +878,14 @@ static inline void sv_jit_on_bailout(sv_func_t *fn) {
   fn->call_count = SV_JIT_THRESHOLD - SV_JIT_RECOMPILE_DELAY;
 }
 
-typedef ant_value_t (*sv_jit_func_t)
-  (sv_vm_t *, ant_value_t, ant_value_t *, int, sv_closure_t *);
+typedef ant_value_t (*sv_jit_func_t)(
+  sv_vm_t *,
+  ant_value_t,
+  ant_value_t,
+  ant_value_t,
+  ant_value_t *,
+  int, sv_closure_t *
+);
 
 ant_value_t sv_jit_try_compile_and_call(sv_vm_t *vm, ant_t *js,
   sv_closure_t *closure, ant_value_t callee_func,
@@ -1075,7 +1081,8 @@ static inline ant_value_t sv_call_resolve_closure(
     if (fn->jit_code) {
       sv_jit_enter(js);
       ant_value_t result = ((sv_jit_func_t)fn->jit_code)(
-        vm, ctx->this_val, ctx->args, ctx->argc, closure
+        vm, ctx->this_val, js->new_target,
+        ctx->super_val, ctx->args, ctx->argc, closure
       );
       sv_jit_leave(js);
       if (sv_is_jit_bailout(result)) {

@@ -131,6 +131,32 @@ ant_value_t jit_helper_call(
   return sv_vm_call(vm, js, func, this_val, args, argc, NULL, false);
 }
 
+ant_value_t jit_helper_call_method(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t func, ant_value_t this_val,
+  ant_value_t *args, int argc,
+  ant_value_t super_val, ant_value_t new_target,
+  ant_value_t *out_this
+) {
+  bool is_super_call = (vtype(super_val) != T_UNDEF && func == super_val);
+  ant_value_t call_this = this_val;
+
+  if (is_super_call) js->new_target = new_target;
+
+  ant_value_t super_this = call_this;
+  ant_value_t result = sv_vm_call(
+    vm, js, func, call_this, args, argc,
+    is_super_call ? &super_this : NULL, is_super_call
+  );
+
+  if (out_this) {
+    if (is_super_call && !is_err(result)) *out_this = is_object_type(result) ? result : super_this;
+    else *out_this = call_this;
+  }
+
+  return result;
+}
+
 ant_value_t jit_helper_apply(
   sv_vm_t *vm, ant_t *js,
   ant_value_t func, ant_value_t this_val,

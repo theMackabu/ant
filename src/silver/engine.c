@@ -683,7 +683,9 @@ static inline ant_value_t sv_try_direct_closure_jit(
     if (caller_frame && caller_ip) caller_frame->ip = caller_ip + 3;
     sv_jit_enter(js);
     ant_value_t jit_result = ((sv_jit_func_t)callee->jit_code)(
-      vm, jit_this, call_args, call_argc, closure);
+      vm, jit_this, js_mkundef(), closure->super_val, 
+      call_args, call_argc, closure
+    );
     sv_jit_leave(js);
     if (sv_is_jit_bailout(jit_result)) {
       sv_jit_on_bailout(callee);
@@ -709,7 +711,10 @@ static inline ant_value_t sv_try_direct_closure_jit(
   callee->jit_code = (void *)jit_fn;
   if (caller_frame && caller_ip) caller_frame->ip = caller_ip + 3;
   sv_jit_enter(js);
-  ant_value_t jit_result = jit_fn(vm, jit_this, call_args, call_argc, closure);
+  ant_value_t jit_result = jit_fn(
+    vm, jit_this, js_mkundef(), closure->super_val,
+    call_args, call_argc, closure
+  );
   sv_jit_leave(js);
   if (sv_is_jit_bailout(jit_result)) {
     sv_jit_on_bailout(callee);

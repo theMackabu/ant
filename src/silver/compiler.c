@@ -737,6 +737,21 @@ static inline void emit_get_module_import_binding(sv_compiler_t *c) {
 }
 
 static void emit_get_var(sv_compiler_t *c, const char *name, uint32_t len) {
+  bool is_super = is_ident_str(name, len, "super", 5);
+
+  if (is_super && c->super_local >= 0) {
+    emit_get_local(c, c->super_local);
+    return;
+  }
+  
+  if (is_super && c->is_arrow) {
+  int super_upval = resolve_super_upvalue(c);
+  if (super_upval != -1) {
+    emit_op(c, OP_GET_UPVAL);
+    emit_u16(c, (uint16_t)super_upval);
+    return;
+  }}
+
   int local = resolve_local(c, name, len);
   if (local != -1) {
     if (c->with_depth > 0) {
@@ -767,6 +782,7 @@ static void emit_get_var(sv_compiler_t *c, const char *name, uint32_t len) {
     }
     return;
   }
+  
   int upval = resolve_upvalue(c, name, len);
   if (upval != -1) {
     if (c->with_depth > 0) {
@@ -777,6 +793,7 @@ static void emit_get_var(sv_compiler_t *c, const char *name, uint32_t len) {
     emit_u16(c, (uint16_t)upval);
     return;
   }
+  
   if (is_ident_str(name, len, "arguments", 9)) {
     if (has_implicit_arguments_obj(c)) {
       if (c->strict_args_local >= 0) {
@@ -796,22 +813,14 @@ static void emit_get_var(sv_compiler_t *c, const char *name, uint32_t len) {
       }
     }
   }
-  if (c->is_arrow && is_ident_str(name, len, "super", 5)) {
-    int super_upval = resolve_super_upvalue(c);
-    if (super_upval != -1) {
-      emit_op(c, OP_GET_UPVAL);
-      emit_u16(c, (uint16_t)super_upval);
-      return;
-    }
-  }
+  
   if (has_module_import_binding(c) && is_ident_str(name, len, "import", 6)) {
     emit_get_module_import_binding(c);
     return;
   }
-  if (c->with_depth > 0)
-    emit_with_get(c, name, len, WITH_FB_GLOBAL, 0);
-  else
-    emit_atom_op(c, OP_GET_GLOBAL, name, len);
+  
+  if (c->with_depth > 0) emit_with_get(c, name, len, WITH_FB_GLOBAL, 0);
+  else emit_atom_op(c, OP_GET_GLOBAL, name, len);
 }
 
 static void emit_set_var(sv_compiler_t *c, const char *name, uint32_t len, bool keep) {

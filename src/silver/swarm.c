@@ -59,6 +59,7 @@ static void jit_load_externals_once(sv_jit_ctx_t *jc) {
   LOAD_EXT(jit_helper_gt);
   LOAD_EXT(jit_helper_ge);
   LOAD_EXT(jit_helper_call);
+  LOAD_EXT(jit_helper_call_method);
   LOAD_EXT(jit_helper_apply);
   LOAD_EXT(jit_helper_rest);
   LOAD_EXT(jit_helper_special_obj);
@@ -1051,12 +1052,8 @@ static bool jit_inlineable(sv_func_t *f) {
       case OP_JMP_TRUE8: case OP_JMP_FALSE8:
       case OP_JMP_TRUE_PEEK: case OP_JMP_FALSE_PEEK:
       case OP_RETURN: case OP_RETURN_UNDEF:
-        break;
       case OP_GET_FIELD: case OP_GET_FIELD2: case OP_GET_GLOBAL:
-        break;
       case OP_SPECIAL_OBJ:
-        // TODO: RE_ENABLE once SPECIAL_OBJ semantics match the interpreter in JIT.
-        return false;
       case OP_NOP: case OP_LINE_NUM: case OP_COL_NUM: case OP_LABEL:
         break;
       default:
@@ -1132,7 +1129,8 @@ static bool jit_emit_inline_body(
   MIR_item_t helper2_proto, MIR_item_t imp_seq,
   MIR_item_t imp_sne, MIR_item_t imp_eq, MIR_item_t imp_ne,
   MIR_item_t gf_proto, MIR_item_t imp_get_field,
-  MIR_item_t gg_proto, MIR_item_t imp_gg
+  MIR_item_t gg_proto, MIR_item_t imp_gg,
+  MIR_item_t special_obj_proto, MIR_item_t imp_special_obj
 ) {
   int inl_max_stack = callee->max_stack > 0 ? callee->max_stack : 4;
   MIR_reg_t inl_vs[inl_max_stack];
@@ -1804,9 +1802,32 @@ static bool jit_emit_inline_body(
           MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, join)));
         break;
 
-      case OP_SPECIAL_OBJ:
-        mir_load_imm(ctx, jit_func, inl_vs[isp++], mkval(T_UNDEF, 0));
+      case OP_SPECIAL_OBJ: {
+        uint8_t which = sv_get_u8(ip + 1);
+        MIR_reg_t dst = inl_vs[isp++];
+        if (which == 1) {
+          mir_load_imm(ctx, jit_func, dst, mkval(T_UNDEF, 0));
+        } else if (which == 2) {
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_MOV,
+              MIR_new_reg_op(ctx, dst),
+              MIR_new_mem_op(ctx, MIR_T_I64,
+                (MIR_disp_t)offsetof(sv_closure_t, super_val),
+                r_inl_closure, 0, 1)));
+        } else if (which == 3) {
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_call_insn(ctx, 6,
+              MIR_new_ref_op(ctx, special_obj_proto),
+              MIR_new_ref_op(ctx, imp_special_obj),
+              MIR_new_reg_op(ctx, dst),
+              MIR_new_reg_op(ctx, r_vm),
+              MIR_new_reg_op(ctx, r_js),
+              MIR_new_int_op(ctx, (int64_t)which)));
+        } else {
+          mir_load_imm(ctx, jit_func, dst, mkval(T_UNDEF, 0));
+        }
         break;
+      }
 
       case OP_NOP: case OP_LINE_NUM: case OP_COL_NUM: case OP_LABEL:
         break;
@@ -1979,6 +2000,7 @@ static bool jit_is_eligible(sv_func_t *func) {
       case OP_STR_ALC_SNAPSHOT:
       case OP_TO_PROPKEY:
       case OP_RETURN: case OP_RETURN_UNDEF:
+      case OP_SPECIAL_OBJ:
       case OP_SET_NAME:
       case OP_TRY_PUSH: case OP_TRY_POP:
       case OP_THROW: case OP_THROW_ERROR:
@@ -1993,14 +2015,6 @@ static bool jit_is_eligible(sv_func_t *func) {
         if (vtype(cv) != T_CFUNC) return false;
         break;
       }
-      case OP_SPECIAL_OBJ:
-        // TODO: RE_ENABLE once SPECIAL_OBJ semantics match the interpreter in JIT.
-        if (sv_jit_warn_unlikely)
-          fprintf(stderr, "jit: ineligible op SPECIAL_OBJ(%d) in %s\n",
-                  sv_get_u8(ip + 1),
-                  func->name ? func->name : "<anonymous>");
-        eligible = false;
-        break;
       default:
         if (sv_jit_warn_unlikely)
           fprintf(stderr, "jit: ineligible op %s in %s\n",
@@ -2041,9 +2055,11 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 
   MIR_item_t self_proto = MIR_new_proto(ctx, "jit_proto",
     1, &ret_type,
-    5,
+    7,
     MIR_T_I64, "vm",
     MIR_JSVAL,  "this_val",
+    MIR_JSVAL,  "new_target",
+    MIR_JSVAL,  "super_val",
     MIR_T_P,    "args",
     MIR_T_I32,  "argc",
     MIR_T_P,    "closure");
@@ -2066,6 +2082,20 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
     MIR_JSVAL,  "this_val",
     MIR_T_P,    "args",
     MIR_T_I32,  "argc");
+
+  MIR_type_t call_method_ret = MIR_JSVAL;
+  MIR_item_t call_method_proto = MIR_new_proto(ctx, "callm_proto",
+    1, &call_method_ret,
+    9,
+    MIR_T_I64, "vm",
+    MIR_T_I64, "js",
+    MIR_JSVAL, "func",
+    MIR_JSVAL, "this_val",
+    MIR_T_P,   "args",
+    MIR_T_I32, "argc",
+    MIR_JSVAL, "super_val",
+    MIR_JSVAL, "new_target",
+    MIR_T_P,   "out_this");
 
   MIR_type_t gg_ret = MIR_JSVAL;
   MIR_item_t gg_proto = MIR_new_proto(ctx, "gg_proto",
@@ -2350,6 +2380,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
   MIR_item_t imp_gt    = MIR_new_import(ctx, "jit_helper_gt");
   MIR_item_t imp_ge    = MIR_new_import(ctx, "jit_helper_ge");
   MIR_item_t imp_call  = MIR_new_import(ctx, "jit_helper_call");
+  MIR_item_t imp_call_method = MIR_new_import(ctx, "jit_helper_call_method");
   MIR_item_t imp_apply = MIR_new_import(ctx, "jit_helper_apply");
   MIR_item_t imp_rest  = MIR_new_import(ctx, "jit_helper_rest");
   MIR_item_t imp_special_obj = MIR_new_import(ctx, "jit_helper_special_obj");
@@ -2401,18 +2432,28 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 
   MIR_item_t jit_func = MIR_new_func(ctx, fname,
     1, &ret_type,
-    5,
+    7,
     MIR_T_I64, "vm",
     MIR_JSVAL,  "this_val",
+    MIR_JSVAL,  "new_target",
+    MIR_JSVAL,  "super_val",
     MIR_T_P,    "args",
     MIR_T_I32,  "argc",
     MIR_T_P,    "closure");
 
   MIR_reg_t r_vm       = MIR_reg(ctx, "vm",       jit_func->u.func);
   MIR_reg_t r_this     = MIR_reg(ctx, "this_val", jit_func->u.func);
+  MIR_reg_t r_new_target = MIR_reg(ctx, "new_target", jit_func->u.func);
+  MIR_reg_t r_super_val = MIR_reg(ctx, "super_val", jit_func->u.func);
   MIR_reg_t r_args     = MIR_reg(ctx, "args",     jit_func->u.func);
   MIR_reg_t r_argc     = MIR_reg(ctx, "argc",     jit_func->u.func);
   MIR_reg_t r_closure  = MIR_reg(ctx, "closure",  jit_func->u.func);
+
+  MIR_reg_t r_this_curr = MIR_new_func_reg(ctx, jit_func->u.func, MIR_JSVAL, "this_curr");
+  MIR_append_insn(ctx, jit_func,
+    MIR_new_insn(ctx, MIR_MOV,
+      MIR_new_reg_op(ctx, r_this_curr),
+      MIR_new_reg_op(ctx, r_this)));
 
   MIR_reg_t r_js = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, "js_ptr");
   MIR_append_insn(ctx, jit_func,
@@ -2845,7 +2886,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, MIR_MOV,
             MIR_new_reg_op(ctx, dst),
-            MIR_new_reg_op(ctx, r_this)));
+            MIR_new_reg_op(ctx, r_this_curr)));
         break;
       }
 
@@ -4711,7 +4752,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             }
 
             mir_emit_resolve_call_this(ctx, jit_func, r_inl_this, r_inl_cl,
-                                       r_this, r_inl_flags, r_inl_bound);
+                                       r_this_curr, r_inl_flags, r_inl_bound);
 
             bool inlined = jit_emit_inline_body(
               ctx, jit_func, inline_callee,
@@ -4722,7 +4763,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
               r_vm, r_js,
               helper2_proto, imp_seq, imp_sne, imp_eq, imp_ne,
               gf_proto, imp_get_field,
-              gg_proto, imp_gg);
+              gg_proto, imp_gg,
+              special_obj_proto, imp_special_obj);
 
             if (inlined) {
               MIR_append_insn(ctx, jit_func, inl_slow);
@@ -4764,12 +4806,14 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 
         int cn = call_n++;
 
-        char rn_arr[32], rn_this[32], rn_ccl[32], rn_cfn[32], rn_jptr[32];
+        char rn_arr[32], rn_this[32], rn_ccl[32], rn_cfn[32], rn_jptr[32], rn_csup[32], rn_out_this[32];
         snprintf(rn_arr,  sizeof(rn_arr),  "arg_arr%d",       cn);
         snprintf(rn_this, sizeof(rn_this), "call_this%d",     cn);
         snprintf(rn_ccl,  sizeof(rn_ccl),  "callee_cl%d",     cn);
         snprintf(rn_cfn,  sizeof(rn_cfn),  "callee_func%d",   cn);
         snprintf(rn_jptr, sizeof(rn_jptr), "jit_ptr%d",       cn);
+        snprintf(rn_csup, sizeof(rn_csup), "callee_super%d",  cn);
+        snprintf(rn_out_this, sizeof(rn_out_this), "call_out_this%d", cn);
 
         MIR_reg_t r_arg_arr = r_args_buf;
 
@@ -4802,12 +4846,14 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             break;
           }
           MIR_append_insn(ctx, jit_func,
-            MIR_new_call_insn(ctx, 8,
+            MIR_new_call_insn(ctx, 10,
               MIR_new_ref_op(ctx, self_proto),
               MIR_new_ref_op(ctx, jit_func),
               MIR_new_reg_op(ctx, r_call_res),
               MIR_new_reg_op(ctx, r_vm),
               MIR_new_reg_op(ctx, r_call_this),
+              MIR_new_uint_op(ctx, mkval(T_UNDEF, 0)),
+              MIR_new_reg_op(ctx, r_super_val),
               MIR_new_reg_op(ctx, r_arg_arr),
               MIR_new_int_op(ctx, (int64_t)call_argc),
               MIR_new_reg_op(ctx, r_closure)));
@@ -4860,20 +4906,40 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
           break;
         }
 
+        MIR_reg_t r_out_this = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, rn_out_this);
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_ALLOCA,
+            MIR_new_reg_op(ctx, r_out_this),
+            MIR_new_uint_op(ctx, sizeof(ant_value_t))));
+
         MIR_label_t lbl_self_call   = MIR_new_label(ctx);
+        MIR_label_t lbl_super_call  = MIR_new_label(ctx);
         MIR_label_t lbl_interp_call = MIR_new_label(ctx);
         MIR_label_t lbl_call_done   = MIR_new_label(ctx);
+
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_BEQ,
+            MIR_new_label_op(ctx, lbl_super_call),
+            MIR_new_reg_op(ctx, r_call_func),
+            MIR_new_reg_op(ctx, r_super_val)));
 
         MIR_reg_t r_callee_cl = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, rn_ccl);
         mir_emit_get_closure(ctx, jit_func, r_callee_cl, r_call_func,
                              r_bool, lbl_interp_call);
 
         MIR_reg_t r_callee_fn = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, rn_cfn);
+        MIR_reg_t r_callee_super = MIR_new_func_reg(ctx, jit_func->u.func, MIR_JSVAL, rn_csup);
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, MIR_MOV,
             MIR_new_reg_op(ctx, r_callee_fn),
             MIR_new_mem_op(ctx, MIR_T_P,
               (MIR_disp_t)offsetof(sv_closure_t, func),
+              r_callee_cl, 0, 1)));
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_MOV,
+            MIR_new_reg_op(ctx, r_callee_super),
+            MIR_new_mem_op(ctx, MIR_T_I64,
+              (MIR_disp_t)offsetof(sv_closure_t, super_val),
               r_callee_cl, 0, 1)));
         mir_emit_resolve_call_this(ctx, jit_func, r_call_this, r_callee_cl,
                                    r_call_this, r_bool, r_tmp2);
@@ -4905,12 +4971,14 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_int_op(ctx, 0)));
 
         MIR_append_insn(ctx, jit_func,
-          MIR_new_call_insn(ctx, 8,
+          MIR_new_call_insn(ctx, 10,
             MIR_new_ref_op(ctx, self_proto),
             MIR_new_reg_op(ctx, r_jit_ptr),   
             MIR_new_reg_op(ctx, r_call_res),
             MIR_new_reg_op(ctx, r_vm),
             MIR_new_reg_op(ctx, r_call_this),
+            MIR_new_uint_op(ctx, mkval(T_UNDEF, 0)),
+            MIR_new_reg_op(ctx, r_callee_super),
             MIR_new_reg_op(ctx, r_arg_arr),
             MIR_new_int_op(ctx, (int64_t)call_argc),
             MIR_new_reg_op(ctx, r_callee_cl)));
@@ -4926,16 +4994,44 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
                              captured_locals, r_lbuf, self_tail_entry);
         } else {
           MIR_append_insn(ctx, jit_func,
-            MIR_new_call_insn(ctx, 8,
+            MIR_new_call_insn(ctx, 10,
               MIR_new_ref_op(ctx, self_proto),
               MIR_new_ref_op(ctx, jit_func),    
               MIR_new_reg_op(ctx, r_call_res),
               MIR_new_reg_op(ctx, r_vm),
               MIR_new_reg_op(ctx, r_call_this),
+              MIR_new_uint_op(ctx, mkval(T_UNDEF, 0)),
+              MIR_new_reg_op(ctx, r_super_val),
               MIR_new_reg_op(ctx, r_arg_arr),
               MIR_new_int_op(ctx, (int64_t)call_argc),
               MIR_new_reg_op(ctx, r_closure)));
         }
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, lbl_call_done)));
+
+        MIR_append_insn(ctx, jit_func, lbl_super_call);
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_MOV,
+            MIR_new_mem_op(ctx, MIR_T_I64, 0, r_out_this, 0, 1),
+            MIR_new_reg_op(ctx, r_this_curr)));
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_call_insn(ctx, 12,
+            MIR_new_ref_op(ctx, call_method_proto),
+            MIR_new_ref_op(ctx, imp_call_method),
+            MIR_new_reg_op(ctx, r_call_res),
+            MIR_new_reg_op(ctx, r_vm),
+            MIR_new_reg_op(ctx, r_js),
+            MIR_new_reg_op(ctx, r_call_func),
+            MIR_new_reg_op(ctx, r_this_curr),
+            MIR_new_reg_op(ctx, r_arg_arr),
+            MIR_new_int_op(ctx, (int64_t)call_argc),
+            MIR_new_reg_op(ctx, r_super_val),
+            MIR_new_reg_op(ctx, r_new_target),
+            MIR_new_reg_op(ctx, r_out_this)));
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_MOV,
+            MIR_new_reg_op(ctx, r_this_curr),
+            MIR_new_mem_op(ctx, MIR_T_I64, 0, r_out_this, 0, 1)));
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, lbl_call_done)));
 
@@ -5012,10 +5108,19 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
       }
 
       case OP_SPECIAL_OBJ: {
-        // TODO: RE_ENABLE once SPECIAL_OBJ semantics match the interpreter in JIT.
         uint8_t which = sv_get_u8(ip + 1);
         MIR_reg_t dst = vstack_push(&vs);
-        if (which == 2 || which == 3) {
+        if (which == 1) {
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_MOV,
+              MIR_new_reg_op(ctx, dst),
+              MIR_new_reg_op(ctx, r_new_target)));
+        } else if (which == 2) {
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_MOV,
+              MIR_new_reg_op(ctx, dst),
+              MIR_new_reg_op(ctx, r_super_val)));
+        } else if (which == 3) {
           MIR_append_insn(ctx, jit_func,
             MIR_new_call_insn(ctx, 6,
               MIR_new_ref_op(ctx, special_obj_proto),
@@ -7330,9 +7435,9 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
               MIR_new_reg_op(ctx, areg)));
         }
 
-        MIR_reg_t r_new_target = vstack_pop(&vs);
-        MIR_reg_t r_new_func   = vstack_pop(&vs);
-        MIR_reg_t r_new_res    = vstack_push(&vs);
+        MIR_reg_t r_ctor_target = vstack_pop(&vs);
+        MIR_reg_t r_new_func    = vstack_pop(&vs);
+        MIR_reg_t r_new_res     = vstack_push(&vs);
 
         MIR_append_insn(ctx, jit_func,
           MIR_new_call_insn(ctx, 9,
@@ -7342,7 +7447,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_reg_op(ctx, r_vm),
             MIR_new_reg_op(ctx, r_js),
             MIR_new_reg_op(ctx, r_new_func),
-            MIR_new_reg_op(ctx, r_new_target),
+            MIR_new_reg_op(ctx, r_ctor_target),
             MIR_new_reg_op(ctx, r_args_buf),
             MIR_new_int_op(ctx, (int64_t)new_argc)));
 
@@ -7393,11 +7498,13 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 
         int cn = call_n++;
 
-        char rn_arr[32], rn_ccl[32], rn_cfn[32], rn_jptr[32];
+        char rn_arr[32], rn_ccl[32], rn_cfn[32], rn_jptr[32], rn_sup[32], rn_out_this[32];
         snprintf(rn_arr,  sizeof(rn_arr),  "cm_arr%d",  cn);
         snprintf(rn_ccl,  sizeof(rn_ccl),  "cm_cl%d",   cn);
         snprintf(rn_cfn,  sizeof(rn_cfn),  "cm_fn%d",   cn);
         snprintf(rn_jptr, sizeof(rn_jptr), "cm_jptr%d", cn);
+        snprintf(rn_sup, sizeof(rn_sup), "cm_sup%d", cn);
+        snprintf(rn_out_this, sizeof(rn_out_this), "cm_out_this%d", cn);
 
         MIR_reg_t r_arg_arr = r_args_buf;
 
@@ -7414,10 +7521,23 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         MIR_reg_t r_call_func = vstack_pop(&vs);
         MIR_reg_t r_call_this = vstack_pop(&vs); 
         MIR_reg_t r_call_res  = vstack_push(&vs);
+        MIR_reg_t r_callee_super = MIR_new_func_reg(ctx, jit_func->u.func, MIR_JSVAL, rn_sup);
+        MIR_reg_t r_out_this = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, rn_out_this);
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_ALLOCA,
+            MIR_new_reg_op(ctx, r_out_this),
+            MIR_new_uint_op(ctx, sizeof(ant_value_t))));
 
         MIR_label_t lbl_cm_self   = MIR_new_label(ctx);
+        MIR_label_t lbl_cm_super  = MIR_new_label(ctx);
         MIR_label_t lbl_cm_interp = MIR_new_label(ctx);
         MIR_label_t lbl_cm_done   = MIR_new_label(ctx);
+
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_BEQ,
+            MIR_new_label_op(ctx, lbl_cm_super),
+            MIR_new_reg_op(ctx, r_call_func),
+            MIR_new_reg_op(ctx, r_super_val)));
 
         MIR_reg_t r_callee_cl = MIR_new_func_reg(ctx, jit_func->u.func, MIR_T_I64, rn_ccl);
         mir_emit_get_closure(ctx, jit_func, r_callee_cl, r_call_func,
@@ -7429,6 +7549,12 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_reg_op(ctx, r_callee_fn),
             MIR_new_mem_op(ctx, MIR_T_P,
               (MIR_disp_t)offsetof(sv_closure_t, func),
+              r_callee_cl, 0, 1)));
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_MOV,
+            MIR_new_reg_op(ctx, r_callee_super),
+            MIR_new_mem_op(ctx, MIR_T_I64,
+              (MIR_disp_t)offsetof(sv_closure_t, super_val),
               r_callee_cl, 0, 1)));
         mir_emit_resolve_call_this(ctx, jit_func, r_call_this, r_callee_cl,
                                    r_call_this, r_bool, r_tmp2);
@@ -7459,12 +7585,14 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_int_op(ctx, 0)));
 
         MIR_append_insn(ctx, jit_func,
-          MIR_new_call_insn(ctx, 8,
+          MIR_new_call_insn(ctx, 10,
             MIR_new_ref_op(ctx, self_proto),
             MIR_new_reg_op(ctx, r_jit_ptr),
             MIR_new_reg_op(ctx, r_call_res),
             MIR_new_reg_op(ctx, r_vm),
             MIR_new_reg_op(ctx, r_call_this),
+            MIR_new_uint_op(ctx, mkval(T_UNDEF, 0)),
+            MIR_new_reg_op(ctx, r_callee_super),
             MIR_new_reg_op(ctx, r_arg_arr),
             MIR_new_int_op(ctx, (int64_t)call_argc),
             MIR_new_reg_op(ctx, r_callee_cl)));
@@ -7473,15 +7601,43 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
 
         MIR_append_insn(ctx, jit_func, lbl_cm_self);
         MIR_append_insn(ctx, jit_func,
-          MIR_new_call_insn(ctx, 8,
+          MIR_new_call_insn(ctx, 10,
             MIR_new_ref_op(ctx, self_proto),
             MIR_new_ref_op(ctx, jit_func),
             MIR_new_reg_op(ctx, r_call_res),
             MIR_new_reg_op(ctx, r_vm),
             MIR_new_reg_op(ctx, r_call_this),
+            MIR_new_uint_op(ctx, mkval(T_UNDEF, 0)),
+            MIR_new_reg_op(ctx, r_super_val),
             MIR_new_reg_op(ctx, r_arg_arr),
             MIR_new_int_op(ctx, (int64_t)call_argc),
             MIR_new_reg_op(ctx, r_closure)));
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, lbl_cm_done)));
+
+        MIR_append_insn(ctx, jit_func, lbl_cm_super);
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_MOV,
+            MIR_new_mem_op(ctx, MIR_T_I64, 0, r_out_this, 0, 1),
+            MIR_new_reg_op(ctx, r_call_this)));
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_call_insn(ctx, 12,
+            MIR_new_ref_op(ctx, call_method_proto),
+            MIR_new_ref_op(ctx, imp_call_method),
+            MIR_new_reg_op(ctx, r_call_res),
+            MIR_new_reg_op(ctx, r_vm),
+            MIR_new_reg_op(ctx, r_js),
+            MIR_new_reg_op(ctx, r_call_func),
+            MIR_new_reg_op(ctx, r_call_this),
+            MIR_new_reg_op(ctx, r_arg_arr),
+            MIR_new_int_op(ctx, (int64_t)call_argc),
+            MIR_new_reg_op(ctx, r_super_val),
+            MIR_new_reg_op(ctx, r_new_target),
+            MIR_new_reg_op(ctx, r_out_this)));
+        MIR_append_insn(ctx, jit_func,
+          MIR_new_insn(ctx, MIR_MOV,
+            MIR_new_reg_op(ctx, r_this_curr),
+            MIR_new_mem_op(ctx, MIR_T_I64, 0, r_out_this, 0, 1)));
         MIR_append_insn(ctx, jit_func,
           MIR_new_insn(ctx, MIR_JMP, MIR_new_label_op(ctx, lbl_cm_done)));
 
@@ -7891,7 +8047,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_new_reg_op(ctx, r_vm),
             MIR_new_reg_op(ctx, r_js),
             MIR_new_reg_op(ctx, r_closure),
-            MIR_new_reg_op(ctx, r_this),
+            MIR_new_reg_op(ctx, r_this_curr),
             MIR_new_reg_op(ctx, r_child_slots),
             MIR_new_int_op(ctx, child_slot_base),
             MIR_new_int_op(ctx, child_slot_count),
@@ -7926,7 +8082,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
         MIR_new_reg_op(ctx, r_resume_res),
         MIR_new_reg_op(ctx, r_vm),
         MIR_new_reg_op(ctx, r_closure),
-        MIR_new_reg_op(ctx, r_this),
+        MIR_new_reg_op(ctx, r_this_curr),
         MIR_new_reg_op(ctx, r_args),
         MIR_new_reg_op(ctx, r_argc),
         MIR_new_reg_op(ctx, r_args_buf),
@@ -7996,7 +8152,9 @@ ant_value_t sv_jit_try_compile_and_call(
   fn->jit_code = (void *)jit;
   sv_jit_compile_callees(js, fn);
   sv_jit_enter(js);
-  ant_value_t result = jit(vm, ctx->this_val, ctx->args, ctx->argc, closure);
+  ant_value_t result = jit(
+    vm, ctx->this_val, js->new_target,
+    ctx->super_val, ctx->args, ctx->argc, closure);
   sv_jit_leave(js);
   if (sv_is_jit_bailout(result)) {
     sv_jit_on_bailout(fn);
@@ -8051,7 +8209,9 @@ ant_value_t sv_jit_try_osr(
   vm->jit_osr.lp        = frame->lp;
 
   sv_jit_enter(js);
-  ant_value_t result = jit(vm, frame->this, frame->bp, frame->argc, closure);
+  ant_value_t result = jit(
+    vm, frame->this, frame->new_target, frame->super_val,
+    frame->bp, frame->argc, closure);
   sv_jit_leave(js);
 
   if (sv_is_jit_bailout(result)) {
