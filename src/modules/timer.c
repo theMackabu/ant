@@ -8,6 +8,7 @@
 
 #include "errors.h"
 #include "runtime.h"
+#include "internal.h"
 
 #include "silver/engine.h"
 #include "gc/roots.h"
@@ -76,6 +77,9 @@ static struct {
   .active_timer_count = 0,
 };
 
+static ant_value_t g_timeout_proto = 0;
+static ant_value_t g_interval_proto = 0;
+
 static void add_timer_entry(timer_entry_t *entry) {
   entry->next = timer_state.timers;
   entry->prev = NULL;
@@ -115,6 +119,31 @@ static ant_value_t timer_to_primitive(ant_t *js, ant_value_t *args, int nargs) {
   return js_get_slot(js_getthis(js), SLOT_DATA);
 }
 
+static ant_value_t timer_inspect(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
+  ant_value_t id_val = js_get_slot(this_obj, SLOT_DATA);
+  int timer_id = vtype(id_val) == T_NUM ? (int)js_getnum(id_val) : 0;
+
+  ant_value_t tag_val = js_get_sym(js, this_obj, get_toStringTag_sym());
+  const char *tag = vtype(tag_val) == T_STR ? js_getstr(js, tag_val, NULL) : "Timeout";
+
+  js_inspect_builder_t builder;
+  if (!js_inspect_builder_init_dynamic(&builder, js, 128)) {
+    return js_mkerr(js, "out of memory");
+  }
+
+  bool ok = js_inspect_header(&builder, "%s (%d)", tag, timer_id);
+  if (ok) ok = js_inspect_object_body(&builder, this_obj);
+  if (ok) ok = js_inspect_close(&builder);
+  
+  if (!ok) {
+    js_inspect_builder_dispose(&builder);
+    return js_mkerr(js, "out of memory");
+  }
+
+  return js_inspect_builder_result(&builder);
+}
+
 static ant_value_t js_timer_ref(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_obj = js_getthis(js);
   timer_entry_t *entry = find_timer_entry_by_id((int)js_getnum(js_get_slot(this_obj, SLOT_DATA)));
@@ -139,26 +168,15 @@ static ant_value_t js_timer_has_ref(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t timer_make_object(ant_t *js, int id, double delay_ms, int is_interval, ant_value_t callback) {
   ant_value_t obj = js_mkobj(js);
+  ant_value_t proto = is_interval ? g_interval_proto : g_timeout_proto;
+
+  if (is_object_type(proto)) js_set_proto_init(obj, proto);
 
   js_set(js, obj, "delay", js_mknum(delay_ms));
   js_set(js, obj, "repeat", is_interval ? js_mknum(delay_ms) : js_mknull());
   
   js_set(js, obj, "callback", callback);
   js_set_descriptor(js, obj, "callback", 8, JS_DESC_W | JS_DESC_C);
-  
-  js_set(js, obj, "ref", js_mkfun(js_timer_ref));
-  js_set_descriptor(js, obj, "ref", 3, JS_DESC_W | JS_DESC_C);
-  
-  js_set(js, obj, "unref", js_mkfun(js_timer_unref));
-  js_set_descriptor(js, obj, "unref", 5, JS_DESC_W | JS_DESC_C);
-  
-  js_set(js, obj, "hasRef", js_mkfun(js_timer_has_ref));
-  js_set_descriptor(js, obj, "hasRef", 6, JS_DESC_W | JS_DESC_C);
-
-  js_set_sym(js, obj, get_toStringTag_sym(), js_mkstr(js, is_interval 
-    ? "Interval" 
-    : "Timeout", is_interval ? 8 : 7)
-  );
   
   js_set_slot(obj, SLOT_DATA, js_mknum((double)id));
   js_set_sym(js, obj, get_toPrimitive_sym(), js_mkfun(timer_to_primitive));
@@ -773,6 +791,26 @@ static void timers_define_common(ant_t *js, ant_value_t obj) {
 void init_timer_module() {  
   ant_t *js = rt->js;
   timer_state.js = js;
+
+  g_timeout_proto = js_mkobj(js);
+  g_interval_proto = js_mkobj(js);
+  gc_register_root(&g_timeout_proto);
+  gc_register_root(&g_interval_proto);
+
+  js_set_proto_init(g_timeout_proto, js->sym.object_proto);
+  js_set(js, g_timeout_proto, "ref", js_mkfun(js_timer_ref));
+  js_set(js, g_timeout_proto, "unref", js_mkfun(js_timer_unref));
+  js_set(js, g_timeout_proto, "hasRef", js_mkfun(js_timer_has_ref));
+  js_set_sym(js, g_timeout_proto, get_toStringTag_sym(), js_mkstr(js, "Timeout", 7));
+  js_set_sym(js, g_timeout_proto, get_inspect_sym(), js_mkfun(timer_inspect));
+
+  js_set_proto_init(g_interval_proto, js->sym.object_proto);
+  js_set(js, g_interval_proto, "ref", js_mkfun(js_timer_ref));
+  js_set(js, g_interval_proto, "unref", js_mkfun(js_timer_unref));
+  js_set(js, g_interval_proto, "hasRef", js_mkfun(js_timer_has_ref));
+  js_set_sym(js, g_interval_proto, get_toStringTag_sym(), js_mkstr(js, "Interval", 8));
+  js_set_sym(js, g_interval_proto, get_inspect_sym(), js_mkfun(timer_inspect));
+
   timers_define_common(js, js_glob(js));
 }
 
@@ -802,6 +840,8 @@ ant_value_t timers_promises_library(ant_t *js) {
 }
 
 void gc_mark_timers(ant_t *js, gc_mark_fn mark) {
+  if (is_object_type(g_timeout_proto)) mark(js, g_timeout_proto);
+  if (is_object_type(g_interval_proto)) mark(js, g_interval_proto);
   for (timer_entry_t *t = timer_state.timers; t; t = t->next) {
     mark(js, t->callback);
     for (int i = 0; i < t->nargs; i++) mark(js, t->args[i]);

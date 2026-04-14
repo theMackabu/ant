@@ -33,6 +33,10 @@ type AntHost =
   | 'sunos'
   | 'os/2';
 
+interface SymbolConstructor {
+  readonly inspect: symbol;
+}
+
 interface AntPoolInfo {
   used: number;
   capacity: number;

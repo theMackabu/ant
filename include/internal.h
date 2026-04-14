@@ -358,6 +358,30 @@ ant_value_t setprop_cstr(ant_t *js, ant_value_t obj, const char *key, size_t len
 ant_value_t setprop_interned(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v);
 ant_value_t js_define_property(ant_t *js, ant_value_t obj, ant_value_t prop, ant_value_t descriptor, bool reflect_mode);
 
+// TODO: move into builder.c
+typedef struct {
+  ant_t *js;
+  char *buf;
+  size_t len;
+  size_t n;
+  bool growable;
+  bool inline_mode;
+  bool first;
+  bool closed;
+  bool did_indent;
+} js_inspect_builder_t;
+
+void js_inspect_builder_init_fixed(js_inspect_builder_t *builder, ant_t *js, char *buf, size_t len, size_t initial_n);
+bool js_inspect_builder_init_dynamic(js_inspect_builder_t *builder, ant_t *js, size_t initial_cap);
+void js_inspect_builder_dispose(js_inspect_builder_t *builder);
+ant_value_t js_inspect_builder_result(js_inspect_builder_t *builder);
+
+__attribute__((format(printf, 2, 3)))
+bool js_inspect_header(js_inspect_builder_t *builder, const char *fmt, ...);
+bool js_inspect_tagged_header(js_inspect_builder_t *builder, const char *tag, size_t tag_len);
+bool js_inspect_object_body(js_inspect_builder_t *builder, ant_value_t obj);
+bool js_inspect_close(js_inspect_builder_t *builder);
+
 ant_value_t js_define_own_prop(ant_t *js, ant_value_t obj, const char *key, size_t klen, ant_value_t v);
 ant_value_t js_instance_proto_from_new_target(ant_t *js, ant_value_t fallback_proto);
 
