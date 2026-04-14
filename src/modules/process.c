@@ -664,16 +664,11 @@ static void stdin_start_reading(void) {
   if (!stdin_state.tty_initialized) {
     uv_loop_t *loop = uv_default_loop();
     if (uv_tty_init(loop, &stdin_state.tty, STDIN_FILENO, 1) != 0) return;
-#ifndef _WIN32
-    uv_tty_set_mode(&stdin_state.tty, tty_is_raw_mode(STDIN_FILENO) ? UV_TTY_MODE_RAW : UV_TTY_MODE_NORMAL);
-#endif
     stdin_state.tty.data = NULL;
     stdin_state.tty_initialized = true;
-  } else {
-#ifndef _WIN32
-    uv_tty_set_mode(&stdin_state.tty, tty_is_raw_mode(STDIN_FILENO) ? UV_TTY_MODE_RAW : UV_TTY_MODE_NORMAL);
-#endif
+    uv_unref((uv_handle_t *)&stdin_state.tty);
   }
+  uv_ref((uv_handle_t *)&stdin_state.tty);
   stdin_state.reading = true;
   uv_read_start((uv_stream_t *)&stdin_state.tty, stdin_alloc_buffer, on_stdin_read);
 }
@@ -682,6 +677,7 @@ static void stdin_stop_reading(void) {
   if (!stdin_state.reading) return;
   uv_read_stop((uv_stream_t *)&stdin_state.tty);
   stdin_state.reading = false;
+  uv_unref((uv_handle_t *)&stdin_state.tty);
 }
 
 #ifndef _WIN32

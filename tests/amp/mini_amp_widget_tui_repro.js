@@ -344,7 +344,7 @@ process.stdin.on("data", (chunk) => {
   for (const ch of chunk) {
     if (ch === "q" || ch === "\u0003") {
       clearInterval(timer);
-      process.stdout.write("\x1b[0m\x1b[2J\x1b[H");
+      process.stdout.write("\x1b[0m\x1b[2J\x1b[H\x1b[?25h");
       process.exit(0);
     }
     if (ch === "m") {

@@ -197,9 +197,6 @@ static ant_value_t tty_readstream__read(ant_t *js, ant_value_t *args, int nargs)
       tty_read_stream_emit_error(state, "open", rc);
       return js_mkundef();
     }
-  #ifndef _WIN32
-    uv_tty_set_mode(&state->tty, tty_is_raw_mode(state->fd) ? UV_TTY_MODE_RAW : UV_TTY_MODE_NORMAL);
-  #endif
     state->tty.data = state;
     state->initialized = true;
   }
@@ -727,7 +724,6 @@ static ant_value_t tty_write_stream_has_colors(ant_t *js, ant_value_t *args, int
 
 static ant_value_t tty_read_stream_set_raw_mode(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this_obj = js_getthis(js);
-  tty_read_stream_state_t *state = tty_read_stream_state_from_obj(this_obj);
   if (!is_special_object(this_obj)) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "setRawMode() requires a ReadStream receiver");
   }
@@ -737,11 +733,6 @@ static ant_value_t tty_read_stream_set_raw_mode(ant_t *js, ant_value_t *args, in
   if (!tty_set_raw_mode(fd, enable)) {
     return js_mkerr_typed(js, JS_ERR_GENERIC, "Failed to set raw mode for fd %d", fd);
   }
-#ifndef _WIN32
-  if (state && state->initialized && !state->closing) {
-    uv_tty_set_mode(&state->tty, enable ? UV_TTY_MODE_RAW : UV_TTY_MODE_NORMAL);
-  }
-#endif
   js_set(js, this_obj, "isRaw", js_bool(enable));
   return this_obj;
 }

@@ -170,7 +170,7 @@ function shutdown() {
   if (!running) return;
   running = false;
   clearInterval(timer);
-  process.stdout.write("\x1b[0m\x1b[2J\x1b[H");
+  process.stdout.write("\x1b[0m\x1b[2J\x1b[H\x1b[?25h");
   if (process.stdin.isTTY && typeof process.stdin.setRawMode === "function") {
     process.stdin.setRawMode(false);
   }
