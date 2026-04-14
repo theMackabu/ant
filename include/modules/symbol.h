@@ -37,6 +37,7 @@ ant_value_t maybe_call_symbol_method(
 #define WELLKNOWN_SYMBOLS(X)                           \
   X(iterator,            "Symbol.iterator")            \
   X(asyncIterator,       "Symbol.asyncIterator")       \
+  X(inspect,             "Symbol.inspect")             \
   X(toStringTag,         "Symbol.toStringTag")         \
   X(hasInstance,         "Symbol.hasInstance")         \
   X(match,               "Symbol.match")               \

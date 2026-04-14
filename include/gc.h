@@ -6,8 +6,8 @@
 #include <stdint.h>
 
 #define GC_MIN_TICK            1024
+#define GC_NURSERY_THRESHOLD   32768
 #define GC_FORCE_INTERVAL_MS   50
-#define GC_NURSERY_THRESHOLD   4096
 #define GC_MAJOR_EVERY_N_MINOR 8
 
 #define GC_HEAP_GROWTH(n) ((n) + (n) / 2)

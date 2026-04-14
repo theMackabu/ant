@@ -42,7 +42,7 @@ ant_value_t jit_helper_stack_overflow_error(sv_vm_t *vm, ant_t *js);
 
 ant_value_t jit_helper_delete(sv_vm_t *vm, ant_t *js, ant_value_t obj, ant_value_t key);
 ant_value_t jit_helper_typeof(sv_vm_t *vm, ant_t *js, ant_value_t v);
-ant_value_t jit_helper_special_obj(ant_t *js, uint32_t which);
+ant_value_t jit_helper_special_obj(sv_vm_t *vm, ant_t *js, uint32_t which);
 
 ant_value_t jit_helper_get_global(
   ant_t *js, const char *str,
@@ -108,6 +108,11 @@ void jit_helper_define_field(
   ant_value_t val, const char *str, uint32_t len
 );
 
+void jit_helper_define_method_comp(
+  ant_t *js,
+  ant_value_t obj, ant_value_t key, ant_value_t fn, uint8_t flags
+);
+
 void jit_helper_set_name(
   sv_vm_t *vm, ant_t *js, ant_value_t fn,
   const char *str, uint32_t len
@@ -138,6 +143,21 @@ ant_value_t jit_helper_array(
   ant_value_t *elements, int count
 );
 
+ant_value_t jit_helper_for_of(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t iterable, ant_value_t *iter_buf
+);
+
+void jit_helper_destructure_close(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t *iter_buf
+);
+
+ant_value_t jit_helper_destructure_next(
+  sv_vm_t *vm, ant_t *js,
+  ant_value_t *iter_buf
+);
+
 ant_value_t jit_helper_throw_error(
   sv_vm_t *vm, ant_t *js,
   const char *str, uint32_t len, int err_type
@@ -161,13 +181,22 @@ ant_value_t jit_helper_new(
 
 ant_value_t jit_helper_str_append_local(
   sv_vm_t *vm, ant_t *js, sv_func_t *func,
-  ant_value_t *locals, uint16_t local_idx, ant_value_t rhs
+  ant_value_t *args, int argc,
+  ant_value_t *locals, uint16_t slot_idx,
+  ant_value_t rhs
 );
 
 ant_value_t jit_helper_str_append_local_snapshot(
   sv_vm_t *vm, ant_t *js, sv_func_t *func,
-  ant_value_t *locals, uint16_t local_idx,
+  ant_value_t *args, int argc,
+  ant_value_t *locals, uint16_t slot_idx,
   ant_value_t lhs, ant_value_t rhs
+);
+
+ant_value_t jit_helper_str_flush_local(
+  sv_vm_t *vm, ant_t *js, sv_func_t *func,
+  ant_value_t *args, int argc,
+  ant_value_t *locals, uint16_t slot_idx
 );
 
 #endif

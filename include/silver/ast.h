@@ -101,6 +101,7 @@ enum {
   FN_INVALID_COOKED   = 1 << 11,
   FN_PARSE_STRICT     = 1 << 12,
   FN_TEMPLATE_SEGMENT = 1 << 13,
+  FN_USES_NEW_TARGET  = 1 << 14,
 };
 
 enum {

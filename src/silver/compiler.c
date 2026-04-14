@@ -911,7 +911,7 @@ static bool match_self_append_local(
   int local = resolve_local(c, node->left->str, node->left->len);
   if (local < 0 || c->locals[local].is_const) return false;
   if (c->locals[local].is_tdz) return false;
-  if (c->locals[local].depth == -1 && has_implicit_arguments_obj(c)) return false;
+  if (c->locals[local].depth == -1 && c->strict_args_local >= 0) return false;
 
   sv_ast_t *rhs = NULL;
   if (node->op == TOK_PLUS_ASSIGN) rhs = node->right;
@@ -4447,7 +4447,7 @@ sv_func_t *compile_function_body(
     emit_put_local(&comp, comp.strict_args_local);
   }
 
-  if (!comp.is_arrow && comp.enclosing) {
+  if (!comp.is_arrow && comp.enclosing && (node->flags & FN_USES_NEW_TARGET)) {
     static const char nt_name[] = "\x01new.target";
     comp.new_target_local = add_local(&comp, nt_name, sizeof(nt_name) - 1, false, comp.scope_depth);
     emit_op(&comp, OP_SPECIAL_OBJ);

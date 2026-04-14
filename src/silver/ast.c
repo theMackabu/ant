@@ -1287,6 +1287,27 @@ bool ast_references_arguments(const sv_ast_t *node) {
   return false;
 }
 
+static bool ast_references_new_target(const sv_ast_t *node) {
+  if (!node) return false;
+  if (node->type == N_NEW_TARGET) return true;
+  if (node->type == N_FUNC && !(node->flags & FN_ARROW)) return false;
+
+  if (ast_references_new_target(node->left))         return true;
+  if (ast_references_new_target(node->right))        return true;
+  if (ast_references_new_target(node->cond))         return true;
+  if (ast_references_new_target(node->body))         return true;
+  if (ast_references_new_target(node->catch_body))   return true;
+  if (ast_references_new_target(node->finally_body)) return true;
+  if (ast_references_new_target(node->catch_param))  return true;
+  if (ast_references_new_target(node->init))         return true;
+  if (ast_references_new_target(node->update))       return true;
+  
+  for (int i = 0; i < node->args.count; i++)
+    if (ast_references_new_target(node->args.items[i])) return true;
+    
+  return false;
+}
+
 static sv_ast_t *parse_func(P) {
   sv_ast_t *fn = mk(N_FUNC);
 
@@ -1330,6 +1351,8 @@ static sv_ast_t *parse_func(P) {
   fn->src_end = (uint32_t)(TOFF + TLEN);
   if (!(fn->flags & FN_ARROW) && ast_references_arguments(fn->body))
     fn->flags |= FN_USES_ARGS;
+  if (!(fn->flags & FN_ARROW) && ast_references_new_target(fn->body))
+    fn->flags |= FN_USES_NEW_TARGET;
   return fn;
 }
 
