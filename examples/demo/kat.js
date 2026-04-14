@@ -3,6 +3,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+function exit(message) {
+  console.log(message);
+  process.exit(1);
+}
+
 const file = process.argv[2];
 if (!file) exit('usage: kat <file>');
 
@@ -12,6 +17,5 @@ try {
     console.log(Ant.highlight(content));
   } else console.log(content);
 } catch (err) {
-  console.log(`file '${err.path}' not found`);
-  process.exit(1);
+  exit(`file '${err.path}' not found`);
 }

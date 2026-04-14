@@ -27,11 +27,85 @@ typedef struct {
   bool jit_ready;
 } regex_cache_entry_t;
 
+enum {
+  REGEXP_FLAG_HAS_INDICES = 1 << 0,
+  REGEXP_FLAG_GLOBAL      = 1 << 1,
+  REGEXP_FLAG_IGNORE_CASE = 1 << 2,
+  REGEXP_FLAG_MULTILINE   = 1 << 3,
+  REGEXP_FLAG_DOTALL      = 1 << 4,
+  REGEXP_FLAG_UNICODE     = 1 << 5,
+  REGEXP_FLAG_UNICODE_SET = 1 << 6,
+  REGEXP_FLAG_STICKY      = 1 << 7,
+};
+
 static regex_cache_entry_t *regex_cache = NULL;
 static ant_value_t regexp_matchall_iter_proto_val = 0;
 
 static size_t regex_cache_count = 0;
 static size_t regex_cache_cap = 0;
+
+static inline uint8_t regexp_parse_flags_mask(const char *fstr, ant_offset_t flen) {
+  uint8_t mask = 0;
+  for (ant_offset_t k = 0; k < flen; k++) {
+  switch (fstr[k]) {
+    case 'd': mask |= REGEXP_FLAG_HAS_INDICES; break;
+    case 'g': mask |= REGEXP_FLAG_GLOBAL; break;
+    case 'i': mask |= REGEXP_FLAG_IGNORE_CASE; break;
+    case 'm': mask |= REGEXP_FLAG_MULTILINE; break;
+    case 's': mask |= REGEXP_FLAG_DOTALL; break;
+    case 'u': mask |= REGEXP_FLAG_UNICODE; break;
+    case 'v': mask |= REGEXP_FLAG_UNICODE_SET; break;
+    case 'y': mask |= REGEXP_FLAG_STICKY; break;
+    default: break;
+  }}
+  return mask;
+}
+
+static inline uint8_t regexp_flags_mask(ant_t *js, ant_value_t regexp) {
+  ant_offset_t flags_off = lkp(js, regexp, "flags", 5);
+  if (flags_off == 0) return 0;
+
+  ant_value_t flags_val = js_propref_load(js, flags_off);
+  if (vtype(flags_val) != T_STR) return 0;
+
+  ant_value_t cached_flags = js_get_slot(regexp, SLOT_REGEXP_FLAGS_STRING);
+  ant_value_t cached = js_get_slot(regexp, SLOT_REGEXP_FLAGS_MASK);
+  if (flags_val == cached_flags && vtype(cached) == T_NUM) return (uint8_t)tod(cached);
+
+  ant_offset_t flen, foff = vstr(js, flags_val, &flen);
+  uint8_t mask = regexp_parse_flags_mask((const char *)(uintptr_t)foff, flen);
+  js_set_slot(regexp, SLOT_REGEXP_FLAGS_MASK, tov((double)mask));
+  js_set_slot(regexp, SLOT_REGEXP_FLAGS_STRING, flags_val);
+  
+  return mask;
+}
+
+static ant_value_t regexp_build_named_groups_meta(ant_t *js, pcre2_code *code) {
+  uint32_t namecount = 0;
+  pcre2_pattern_info(code, PCRE2_INFO_NAMECOUNT, &namecount);
+  if (namecount == 0) return js_mkundef();
+
+  uint32_t nameentrysize = 0;
+  PCRE2_SPTR nametable = NULL;
+  pcre2_pattern_info(code, PCRE2_INFO_NAMEENTRYSIZE, &nameentrysize);
+  pcre2_pattern_info(code, PCRE2_INFO_NAMETABLE, (void *)&nametable);
+
+  ant_value_t meta = js_mkarr(js);
+  if (is_err(meta)) return meta;
+
+  PCRE2_SPTR tabptr = nametable;
+  for (uint32_t i = 0; i < namecount; i++) {
+    int n = (tabptr[0] << 8) | tabptr[1];
+    const char *name = (const char *)(tabptr + 2);
+    ant_value_t name_val = js_mkstr(js, name, strlen(name));
+    if (is_err(name_val)) return name_val;
+    js_arr_push(js, meta, name_val);
+    js_arr_push(js, meta, tov((double)n));
+    tabptr += nameentrysize;
+  }
+
+  return meta;
+}
 
 static void update_regexp_statics(ant_t *js, const char *str_ptr, PCRE2_SIZE *ovector, uint32_t ovcount) {
   ant_value_t regexp_ctor = js_get(js, js_glob(js), "RegExp");
@@ -43,14 +117,14 @@ static void update_regexp_statics(ant_t *js, const char *str_ptr, PCRE2_SIZE *ov
     ant_value_t val = empty;
     if ((uint32_t)i < ovcount && ovector[2*i] != PCRE2_UNSET)
       val = js_mkstr(js, str_ptr + ovector[2*i], ovector[2*i+1] - ovector[2*i]);
-    js_set(js, regexp_ctor, key, val);
+    if (is_err(setprop_cstr(js, regexp_ctor, key, 2, val))) return;
   }
 
   ant_value_t match0 = empty;
   if (ovcount > 0 && ovector[0] != PCRE2_UNSET)
     match0 = js_mkstr(js, str_ptr + ovector[0], ovector[1] - ovector[0]);
-  js_set(js, regexp_ctor, "lastMatch", match0);
-  js_set(js, regexp_ctor, "$&", match0);
+  if (is_err(setprop_cstr(js, regexp_ctor, "lastMatch", 9, match0))) return;
+  (void)setprop_cstr(js, regexp_ctor, "$&", 2, match0);
 }
 
 static inline bool is_pcre2_passthrough_escape(char c) {
@@ -415,19 +489,15 @@ size_t js_to_pcre2_pattern(const char *src, size_t src_len, char *dst, size_t ds
             : js_setprop(js, obj, js_mkstr(js, key, klen), val))
 
 static void regexp_init_flags(ant_t *js, ant_value_t obj, const char *fstr, ant_offset_t flen, bool is_new) {
-  bool d = false, g = false, i = false, m = false;
-  bool s = false, u = false, v = false, y = false;
-  
-  for (ant_offset_t k = 0; k < flen; k++) {
-    if (fstr[k] == 'd') d = true;
-    if (fstr[k] == 'g') g = true;
-    if (fstr[k] == 'i') i = true;
-    if (fstr[k] == 'm') m = true;
-    if (fstr[k] == 's') s = true;
-    if (fstr[k] == 'u') u = true;
-    if (fstr[k] == 'v') v = true;
-    if (fstr[k] == 'y') y = true;
-  }
+  uint8_t mask = regexp_parse_flags_mask(fstr, flen);
+  bool d = (mask & REGEXP_FLAG_HAS_INDICES) != 0;
+  bool g = (mask & REGEXP_FLAG_GLOBAL) != 0;
+  bool i = (mask & REGEXP_FLAG_IGNORE_CASE) != 0;
+  bool m = (mask & REGEXP_FLAG_MULTILINE) != 0;
+  bool s = (mask & REGEXP_FLAG_DOTALL) != 0;
+  bool u = (mask & REGEXP_FLAG_UNICODE) != 0;
+  bool v = (mask & REGEXP_FLAG_UNICODE_SET) != 0;
+  bool y = (mask & REGEXP_FLAG_STICKY) != 0;
 
   char sorted[10]; int si = 0;
   if (d) sorted[si++] = 'd';
@@ -439,7 +509,8 @@ static void regexp_init_flags(ant_t *js, ant_value_t obj, const char *fstr, ant_
   if (v) sorted[si++] = 'v';
   if (y) sorted[si++] = 'y';
 
-  REGEXP_SET_PROP(js, obj, "flags", 5, js_mkstr(js, sorted, si), is_new);
+  ant_value_t flags_value = js_mkstr(js, sorted, si);
+  REGEXP_SET_PROP(js, obj, "flags", 5, flags_value, is_new);
   REGEXP_SET_PROP(js, obj, "hasIndices", 10, mkval(T_BOOL, d ? 1 : 0), is_new);
   REGEXP_SET_PROP(js, obj, "global", 6, mkval(T_BOOL, g ? 1 : 0), is_new);
   REGEXP_SET_PROP(js, obj, "ignoreCase", 10, mkval(T_BOOL, i ? 1 : 0), is_new);
@@ -449,6 +520,9 @@ static void regexp_init_flags(ant_t *js, ant_value_t obj, const char *fstr, ant_
   REGEXP_SET_PROP(js, obj, "unicodeSets", 11, mkval(T_BOOL, v ? 1 : 0), is_new);
   REGEXP_SET_PROP(js, obj, "sticky", 6, mkval(T_BOOL, y ? 1 : 0), is_new);
   REGEXP_SET_PROP(js, obj, "lastIndex", 9, tov(0), is_new);
+  js_set_slot(obj, SLOT_REGEXP_FLAGS_MASK, tov((double)mask));
+  js_set_slot(obj, SLOT_REGEXP_FLAGS_STRING, flags_value);
+  js_set_slot(obj, SLOT_REGEXP_NAMED_GROUPS, js_mkundef());
 }
 
 ant_value_t is_regexp_like(ant_t *js, ant_value_t value) {
@@ -554,6 +628,7 @@ typedef struct {
 
 static bool regex_get_or_compile(ant_t *js, ant_value_t regexp_obj, compiled_regex_t *out) {
   ant_object_t *obj_ptr = js_obj_ptr(regexp_obj);
+  uint8_t flags_mask = regexp_flags_mask(js, regexp_obj);
 
   regex_cache_entry_t *cached = regex_cache_lookup(obj_ptr);
   if (cached) {
@@ -571,28 +646,16 @@ static bool regex_get_or_compile(ant_t *js, ant_value_t regexp_obj, compiled_reg
   ant_offset_t plen, poff = vstr(js, source_val, &plen);
   const char *pattern_ptr = (char *)(uintptr_t)(poff);
 
-  bool ignore_case = false, multiline = false, dotall = false, v_flag = false;
-  ant_offset_t flags_off = lkp(js, regexp_obj, "flags", 5);
-  if (flags_off != 0) {
-    ant_value_t flags_val = js_propref_load(js, flags_off);
-    if (vtype(flags_val) == T_STR) {
-    ant_offset_t flen, foff = vstr(js, flags_val, &flen);
-    const char *flags_str = (char *)(uintptr_t)(foff);
-    for (ant_offset_t i = 0; i < flen; i++) {
-      if (flags_str[i] == 'i') ignore_case = true;
-      if (flags_str[i] == 'm') multiline = true;
-      if (flags_str[i] == 's') dotall = true;
-      if (flags_str[i] == 'v') v_flag = true;
-    }}
-  }
-
   char pcre2_pattern[4096];
-  size_t pcre2_len = js_to_pcre2_pattern(pattern_ptr, plen, pcre2_pattern, sizeof(pcre2_pattern), v_flag);
+  size_t pcre2_len = js_to_pcre2_pattern(
+    pattern_ptr, plen, pcre2_pattern, sizeof(pcre2_pattern),
+    (flags_mask & REGEXP_FLAG_UNICODE_SET) != 0
+  );
 
   uint32_t options = PCRE2_UTF | PCRE2_UCP | PCRE2_MATCH_UNSET_BACKREF | PCRE2_DUPNAMES;
-  if (ignore_case) options |= PCRE2_CASELESS;
-  if (multiline) options |= PCRE2_MULTILINE;
-  if (dotall) options |= PCRE2_DOTALL;
+  if (flags_mask & REGEXP_FLAG_IGNORE_CASE) options |= PCRE2_CASELESS;
+  if (flags_mask & REGEXP_FLAG_MULTILINE) options |= PCRE2_MULTILINE;
+  if (flags_mask & REGEXP_FLAG_DOTALL) options |= PCRE2_DOTALL;
 
   int errcode;
   PCRE2_SIZE erroffset;
@@ -602,10 +665,20 @@ static bool regex_get_or_compile(ant_t *js, ant_value_t regexp_obj, compiled_reg
   pcre2_match_data *match_data = pcre2_match_data_create_from_pattern(re, NULL);
   bool jit_ready = pcre2_jit_compile(re, PCRE2_JIT_COMPLETE) == 0;
   regex_cache_insert(obj_ptr, re, match_data, jit_ready);
-
+  ant_value_t groups_meta = regexp_build_named_groups_meta(js, re);
+  
+  if (is_err(groups_meta)) {
+    pcre2_match_data_free(match_data);
+    pcre2_code_free(re);
+    regex_cache_count--;
+    return false;
+  }
+  
+  js_set_slot(regexp_obj, SLOT_REGEXP_NAMED_GROUPS, groups_meta);
   out->code = re;
   out->match_data = match_data;
   out->jit_ready = jit_ready;
+  
   return true;
 }
 
@@ -677,31 +750,45 @@ static ant_value_t builtin_RegExp(ant_t *js, ant_value_t *args, int nargs) {
   return regexp_obj;
 }
 
-static ant_value_t builtin_regexp_exec(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t regexp = js->this_val;
-  if (vtype(regexp) != T_OBJ) return js_mkerr(js, "exec called on non-regexp");
-  if (nargs < 1) return js_mknull();
+static ant_value_t builtin_regexp_groups_getter(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t result_arr = js->this_val;
+  if (!is_object_type(result_arr)) return js_mkundef();
 
-  ant_value_t str_arg = args[0];
-  if (vtype(str_arg) != T_STR) return js_mknull();
+  ant_value_t cached = js_get_slot(result_arr, SLOT_REGEXP_GROUPS_CACHE);
+  if (is_object_type(cached)) return cached;
 
-  ant_offset_t str_len, str_off = vstr(js, str_arg, &str_len);
-  const char *str_ptr = (char *)(uintptr_t)(str_off);
+  ant_value_t meta = js_get_slot(result_arr, SLOT_REGEXP_RESULT_GROUPS);
+  if (!is_object_type(meta)) return js_mkundef();
 
-  bool global_flag = false, sticky_flag = false;
-  ant_offset_t flags_off = lkp(js, regexp, "flags", 5);
-  if (flags_off != 0) {
-    ant_value_t flags_val = js_propref_load(js, flags_off);
-    if (vtype(flags_val) == T_STR) {
-      ant_offset_t flen, foff = vstr(js, flags_val, &flen);
-      const char *flags_str = (char *)(uintptr_t)(foff);
-      for (ant_offset_t i = 0; i < flen; i++) {
-        if (flags_str[i] == 'g') global_flag = true;
-        if (flags_str[i] == 'y') sticky_flag = true;
-      }
-    }
+  ant_value_t groups = js_mkobj(js);
+  if (is_err(groups)) return groups;
+  js_set_proto_init(groups, js_mknull());
+
+  for (ant_offset_t i = 0; ; i += 2) {
+    ant_value_t name = js_arr_get(js, meta, i);
+    if (vtype(name) == T_UNDEF) break;
+    ant_value_t index_val = js_arr_get(js, meta, i + 1);
+    ant_offset_t index = (vtype(index_val) == T_NUM) ? (ant_offset_t)tod(index_val) : 0;
+    char idxstr[16];
+    (void)uint_to_str(idxstr, sizeof(idxstr), (uint64_t)index);
+    ant_value_t value = js_getprop_fallback(js, result_arr, idxstr);
+    ant_offset_t name_len, name_off = vstr(js, name, &name_len);
+    ant_value_t status = setprop_cstr(js, groups, (const char *)(uintptr_t)name_off, (size_t)name_len, value);
+    if (is_err(status)) return status;
   }
 
+  js_set_slot(result_arr, SLOT_REGEXP_GROUPS_CACHE, groups);
+  return groups;
+}
+
+static ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value_t str_arg, bool truthy_only) {
+  ant_offset_t str_len, str_off = vstr(js, str_arg, &str_len);
+  const char *str_ptr = (char *)(uintptr_t)(str_off);
+  uint8_t flags_mask = regexp_flags_mask(js, regexp);
+  bool global_flag = (flags_mask & REGEXP_FLAG_GLOBAL) != 0;
+  bool sticky_flag = (flags_mask & REGEXP_FLAG_STICKY) != 0;
+
+  // TODO: reduce nesting
   PCRE2_SIZE start_offset = 0;
   if (global_flag || sticky_flag) {
     ant_offset_t lastindex_off = lkp(js, regexp, "lastIndex", 9);
@@ -711,7 +798,7 @@ static ant_value_t builtin_regexp_exec(ant_t *js, ant_value_t *args, int nargs) 
         double li = tod(li_val);
         if (li >= 0 && li <= (double)str_len) start_offset = (PCRE2_SIZE)li;
         else {
-          js_setprop(js, regexp, js_mkstr(js, "lastIndex", 9), tov(0));
+          if (is_err(setprop_cstr(js, regexp, "lastIndex", 9, tov(0)))) return js_mkerr(js, "oom");
           return js_mknull();
         }
       }
@@ -730,14 +817,26 @@ static ant_value_t builtin_regexp_exec(ant_t *js, ant_value_t *args, int nargs) 
   } else rc = pcre2_match(compiled.code, (PCRE2_SPTR)str_ptr, str_len, start_offset, match_options, compiled.match_data, NULL);
 
   if (rc < 0) {
-    if (global_flag || sticky_flag) js_setprop(js, regexp, js_mkstr(js, "lastIndex", 9), tov(0));
+    if ((global_flag || sticky_flag) && is_err(setprop_cstr(js, regexp, "lastIndex", 9, tov(0)))) {
+      return js_mkerr(js, "oom");
+    }
     return js_mknull();
   }
 
   PCRE2_SIZE *ovector = pcre2_get_ovector_pointer(compiled.match_data);
   uint32_t ovcount = pcre2_get_ovector_count(compiled.match_data);
 
+  update_regexp_statics(js, str_ptr, ovector, ovcount);
+
+  if (global_flag || sticky_flag) {
+    ant_value_t next_idx = tov((double)ovector[1]);
+    if (is_err(setprop_cstr(js, regexp, "lastIndex", 9, next_idx))) return js_mkerr(js, "oom");
+  }
+
+  if (truthy_only) return js_true;
+
   ant_value_t result_arr = js_mkarr(js);
+  if (is_err(result_arr)) return result_arr;
   for (uint32_t i = 0; i < ovcount && i < 32; i++) {
     PCRE2_SIZE start = ovector[2*i];
     PCRE2_SIZE end = ovector[2*i+1];
@@ -749,42 +848,31 @@ static ant_value_t builtin_regexp_exec(ant_t *js, ant_value_t *args, int nargs) 
     }
   }
 
-  js_setprop(js, result_arr, js_mkstr(js, "index", 5), tov((double)ovector[0]));
-  js_setprop(js, result_arr, js_mkstr(js, "input", 5), str_arg);
+  if (is_err(setprop_cstr(js, result_arr, "index", 5, tov((double)ovector[0])))) return js_mkerr(js, "oom");
+  if (is_err(setprop_cstr(js, result_arr, "input", 5, str_arg))) return js_mkerr(js, "oom");
 
-  uint32_t namecount = 0;
-  pcre2_pattern_info(compiled.code, PCRE2_INFO_NAMECOUNT, &namecount);
-  if (namecount > 0) {
-    uint32_t nameentrysize = 0;
-    PCRE2_SPTR nametable = NULL;
-    pcre2_pattern_info(compiled.code, PCRE2_INFO_NAMEENTRYSIZE, &nameentrysize);
-    pcre2_pattern_info(compiled.code, PCRE2_INFO_NAMETABLE, (void *)&nametable);
-
-    ant_value_t groups = js_mkobj(js);
-    js_set_proto_init(groups, js_mknull());
-
-    PCRE2_SPTR tabptr = nametable;
-    for (uint32_t i = 0; i < namecount; i++) {
-      int n = (tabptr[0] << 8) | tabptr[1];
-      const char *name = (const char *)(tabptr + 2);
-      ant_value_t val = ((uint32_t)n < ovcount) ? js_arr_get(js, result_arr, n) : js_mkundef();
-      js_setprop(js, groups, js_mkstr(js, name, strlen(name)), val);
-      tabptr += nameentrysize;
-    }
-    js_setprop(js, result_arr, js_mkstr(js, "groups", 6), groups);
-  } else js_setprop(js, result_arr, js_mkstr(js, "groups", 6), js_mkundef());
-
-  update_regexp_statics(js, str_ptr, ovector, ovcount);
-
-  if (global_flag || sticky_flag) {
-    js_setprop(js, regexp, js_mkstr(js, "lastIndex", 9), tov((double)ovector[1]));
-  }
+  ant_value_t groups_meta = js_get_slot(regexp, SLOT_REGEXP_NAMED_GROUPS);
+  if (is_object_type(groups_meta)) {
+    js_set_slot(result_arr, SLOT_REGEXP_RESULT_GROUPS, groups_meta);
+    js_set_slot(result_arr, SLOT_REGEXP_GROUPS_CACHE, js_mkundef());
+    js_set_getter_desc(js, js_as_obj(result_arr), "groups", 6, js_mkfun(builtin_regexp_groups_getter), JS_DESC_E | JS_DESC_C);
+  } else if (is_err(setprop_cstr(js, result_arr, "groups", 6, js_mkundef()))) return js_mkerr(js, "oom");
 
   return result_arr;
 }
 
+static ant_value_t builtin_regexp_exec(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t regexp = js->this_val;
+  if (vtype(regexp) != T_OBJ) return js_mkerr(js, "exec called on non-regexp");
+  if (nargs < 1) return js_mknull();
+
+  ant_value_t str_arg = args[0];
+  if (vtype(str_arg) != T_STR) return js_mknull();
+
+  return regexp_exec_internal(js, regexp, str_arg, false);
+}
+
 static ant_value_t builtin_regexp_toString(ant_t *js, ant_value_t *args, int nargs) {
-  (void)args; (void)nargs;
   ant_value_t regexp = js->this_val;
   if (!is_object_type(regexp))
     return js_mkerr_typed(js, JS_ERR_TYPE, "toString called on non-object");
@@ -955,13 +1043,42 @@ static ant_value_t regexp_exec_abstract(ant_t *js, ant_value_t rx, ant_value_t s
   return result;
 }
 
+bool regexp_exec_truthy_try_fast(
+  ant_t *js,
+  ant_value_t call_func,
+  ant_value_t regexp,
+  ant_value_t arg,
+  ant_value_t *out_result
+) {
+  if (!out_result || vtype(call_func) != T_CFUNC) return false;
+  if (js_as_cfunc(call_func) != builtin_regexp_exec) return false;
+  if (!is_object_type(regexp) || vtype(arg) != T_STR) return false;
+
+  ant_value_t result = regexp_exec_internal(js, regexp, arg, true);
+  if (is_err(result)) {
+    *out_result = result;
+    return true;
+  }
+
+  *out_result = mkval(T_BOOL, vtype(result) != T_NULL ? 1 : 0);
+  return true;
+}
+
 static ant_value_t builtin_regexp_test(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t regexp = js->this_val;
   if (!is_object_type(regexp))
     return js_mkerr_typed(js, JS_ERR_TYPE, "test called on non-object");
   ant_value_t str_arg = nargs > 0 ? js_tostring_val(js, args[0]) : js_mkstr(js, "undefined", 9);
   if (is_err(str_arg)) return str_arg;
-  ant_value_t result = regexp_exec_abstract(js, regexp, str_arg);
+  ant_value_t exec_fn = js_get(js, regexp, "exec");
+  if (is_err(exec_fn)) return exec_fn;
+
+  ant_value_t result;
+  if (vtype(exec_fn) == T_CFUNC && js_as_cfunc(exec_fn) == builtin_regexp_exec) {
+    result = regexp_exec_internal(js, regexp, str_arg, true);
+  } else {
+    result = regexp_exec_abstract(js, regexp, str_arg);
+  }
   if (is_err(result)) return result;
   return mkval(T_BOOL, vtype(result) != T_NULL ? 1 : 0);
 }
@@ -974,18 +1091,16 @@ static ant_value_t builtin_regexp_flags_getter(ant_t *js, ant_value_t *args, int
 
   char buf[16];
   int n = 0;
+  uint8_t mask = regexp_flags_mask(js, rx);
 
-  static const struct { const char *name; size_t len; char flag; } flag_props[] = {
-    {"hasIndices", 10, 'd'}, {"global", 6, 'g'}, {"ignoreCase", 10, 'i'},
-    {"multiline", 9, 'm'}, {"dotAll", 6, 's'}, {"unicode", 7, 'u'},
-    {"unicodeSets", 11, 'v'}, {"sticky", 6, 'y'},
-  };
-
-  for (int i = 0; i < 8; i++) {
-    ant_value_t v = js_getprop_fallback(js, rx, flag_props[i].name);
-    if (is_err(v)) return v;
-    if (js_truthy(js, v)) buf[n++] = flag_props[i].flag;
-  }
+  if (mask & REGEXP_FLAG_HAS_INDICES) buf[n++] = 'd';
+  if (mask & REGEXP_FLAG_GLOBAL) buf[n++] = 'g';
+  if (mask & REGEXP_FLAG_IGNORE_CASE) buf[n++] = 'i';
+  if (mask & REGEXP_FLAG_MULTILINE) buf[n++] = 'm';
+  if (mask & REGEXP_FLAG_DOTALL) buf[n++] = 's';
+  if (mask & REGEXP_FLAG_UNICODE) buf[n++] = 'u';
+  if (mask & REGEXP_FLAG_UNICODE_SET) buf[n++] = 'v';
+  if (mask & REGEXP_FLAG_STICKY) buf[n++] = 'y';
 
   return js_mkstr(js, buf, n);
 }

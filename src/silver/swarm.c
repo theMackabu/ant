@@ -2015,6 +2015,9 @@ static bool jit_is_eligible(sv_func_t *func) {
         if (vtype(cv) != T_CFUNC) return false;
         break;
       }
+      case OP_RE_EXEC_TRUTHY:
+        eligible = false;
+        break;
       default:
         if (sv_jit_warn_unlikely)
           fprintf(stderr, "jit: ineligible op %s in %s\n",

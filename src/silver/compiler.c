@@ -56,6 +56,9 @@ static void emit_op(sv_compiler_t *c, sv_op_t op) {
   emit(c, (uint8_t)op);
 }
 
+static void compile_receiver_property_get(sv_compiler_t *c, sv_ast_t *node);
+static void compile_truthy_test_expr(sv_compiler_t *c, sv_ast_t *node);
+
 static void emit_srcpos(sv_compiler_t *c, sv_ast_t *node) {
   if (!node) return;
   const char *code = c->source;
@@ -1969,7 +1972,7 @@ void compile_lhs_set(sv_compiler_t *c, sv_ast_t *target, bool keep) {
 }
 
 void compile_ternary(sv_compiler_t *c, sv_ast_t *node) {
-  compile_expr(c, node->cond);
+  compile_truthy_test_expr(c, node->cond);
   int else_jump = emit_jump(c, OP_JMP_FALSE);
   compile_expr(c, node->left);
   int end_jump = emit_jump(c, OP_JMP);
@@ -2210,6 +2213,32 @@ static bool compile_call_is_proto_intrinsic(
   emit_op(c, OP_CALL_IS_PROTO);
   emit_u16(c, alloc_ic_idx(c));
   return true;
+}
+
+static bool compile_regexp_exec_truthy_intrinsic(
+  sv_compiler_t *c, sv_ast_t *node
+) {
+  if (!node || node->type != N_CALL || call_has_spread_arg(node) || node->args.count != 1)
+    return false;
+    
+  sv_ast_t *callee = node->left;
+  if (!callee || callee->type != N_MEMBER) return false;
+  if ((callee->flags & 1) || !callee->right || !callee->right->str) return false;
+  if (is_ident_name(callee->left, "super")) return false;
+  if (!is_ident_str(callee->right->str, callee->right->len, "exec", 4))
+    return false;
+
+  compile_expr(c, callee->left);
+  compile_receiver_property_get(c, callee);
+  compile_expr(c, node->args.items[0]);
+  emit_op(c, OP_RE_EXEC_TRUTHY);
+  
+  return true;
+}
+
+static void compile_truthy_test_expr(sv_compiler_t *c, sv_ast_t *node) {
+  if (compile_regexp_exec_truthy_intrinsic(c, node)) return;
+  compile_expr(c, node);
 }
 
 static void compile_optional_call_after_setup(
@@ -2763,7 +2792,7 @@ static void compile_tail_call(sv_compiler_t *c, sv_ast_t *node) {
 
 void compile_tail_return_expr(sv_compiler_t *c, sv_ast_t *expr) {
   if (expr->type == N_TERNARY) {
-    compile_expr(c, expr->cond);
+    compile_truthy_test_expr(c, expr->cond);
     int else_jump = emit_jump(c, OP_JMP_FALSE);
     compile_tail_return_expr(c, expr->left);
     patch_jump(c, else_jump);
@@ -3190,8 +3219,7 @@ void compile_var_decl(sv_compiler_t *c, sv_ast_t *node) {
   }
 }
 
-void compile_destructure_binding(sv_compiler_t *c, sv_ast_t *pat,
-                                         sv_var_kind_t kind) {
+void compile_destructure_binding(sv_compiler_t *c, sv_ast_t *pat, sv_var_kind_t kind) {
   compile_destructure_pattern(c, pat, false, false, DESTRUCTURE_BIND, kind);
 }
 
@@ -3229,7 +3257,6 @@ static bool fold_static_typeof_compare(
   return true;
 }
 
-
 void compile_if(sv_compiler_t *c, sv_ast_t *node) {
   bool folded_truth = false;
   if (fold_static_typeof_compare(c, node->cond, &folded_truth)) {
@@ -3238,7 +3265,7 @@ void compile_if(sv_compiler_t *c, sv_ast_t *node) {
     return;
   }
 
-  compile_expr(c, node->cond);
+  compile_truthy_test_expr(c, node->cond);
   int else_jump = emit_jump(c, OP_JMP_FALSE);
   compile_stmt(c, node->left);
   if (node->right) {
@@ -3251,12 +3278,11 @@ void compile_if(sv_compiler_t *c, sv_ast_t *node) {
   }
 }
 
-
 void compile_while(sv_compiler_t *c, sv_ast_t *node) {
   int loop_start = c->code_len;
   push_loop(c, loop_start, NULL, 0, false);
 
-  compile_expr(c, node->cond);
+  compile_truthy_test_expr(c, node->cond);
   int exit_jump = emit_jump(c, OP_JMP_FALSE);
   compile_stmt(c, node->body);
 
@@ -3268,27 +3294,22 @@ void compile_while(sv_compiler_t *c, sv_ast_t *node) {
   patch_jump(c, exit_jump);
   pop_loop(c);
 }
-
 
 void compile_do_while(sv_compiler_t *c, sv_ast_t *node) {
   int loop_start = c->code_len;
   push_loop(c, loop_start, NULL, 0, false);
-
   compile_stmt(c, node->body);
 
   sv_loop_t *loop = &c->loops[c->loop_count - 1];
-  int cond_start = c->code_len;
   for (int i = 0; i < loop->continues.count; i++)
     patch_jump(c, loop->continues.offsets[i]);
 
-  compile_expr(c, node->cond);
+  compile_truthy_test_expr(c, node->cond);
   int exit_jump = emit_jump(c, OP_JMP_FALSE);
   emit_loop(c, loop_start);
   patch_jump(c, exit_jump);
   pop_loop(c);
-  (void)cond_start;
 }
-
 
 static void for_add_slot_unique(int **slots, int *count, int *cap, int slot) {
   if (slot < 0) return;
@@ -3305,8 +3326,7 @@ static void for_add_slot_unique(int **slots, int *count, int *cap, int slot) {
   (*slots)[(*count)++] = slot;
 }
 
-static void for_collect_pattern_slots(sv_compiler_t *c, sv_ast_t *pat,
-                                      int **slots, int *count, int *cap) {
+static void for_collect_pattern_slots(sv_compiler_t *c, sv_ast_t *pat, int **slots, int *count, int *cap) {
   if (!pat) return;
   switch (pat->type) {
     case N_IDENT: {
@@ -3343,8 +3363,7 @@ static void for_collect_pattern_slots(sv_compiler_t *c, sv_ast_t *pat,
   }
 }
 
-static void for_collect_var_decl_slots(sv_compiler_t *c, sv_ast_t *init_var,
-                                       int **slots, int *count, int *cap) {
+static void for_collect_var_decl_slots(sv_compiler_t *c, sv_ast_t *init_var, int **slots, int *count, int *cap) {
   if (!init_var || init_var->type != N_VAR) return;
   for (int i = 0; i < init_var->args.count; i++) {
     sv_ast_t *decl = init_var->args.items[i];
@@ -3377,7 +3396,7 @@ void compile_for(sv_compiler_t *c, sv_ast_t *node) {
 
   int exit_jump = -1;
   if (node->cond) {
-    compile_expr(c, node->cond);
+    compile_truthy_test_expr(c, node->cond);
     exit_jump = emit_jump(c, OP_JMP_FALSE);
   }
 

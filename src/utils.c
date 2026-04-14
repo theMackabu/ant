@@ -191,7 +191,9 @@ static bool is_entrypoint_script_extension(const char *ext) {
 }
 
 static bool has_js_extension(const char *filename) {
-  const char *dot = strrchr(filename, '.');
+  const char *slash = strrchr(filename, '/');
+  const char *base = slash ? slash + 1 : filename;
+  const char *dot = strrchr(base, '.');
   if (!dot) return false;
   for (const char *const *ext = module_resolve_extensions; *ext; ext++) {
     if (!is_entrypoint_script_extension(*ext)) continue;
@@ -208,7 +210,9 @@ char *resolve_js_file(const char *filename) {
   struct stat st;
   if (stat(filename, &st) == 0) {
     if (S_ISREG(st.st_mode)) {
-      const char *dot = strrchr(filename, '.');
+      const char *slash = strrchr(filename, '/');
+      const char *base = slash ? slash + 1 : filename;
+      const char *dot = strrchr(base, '.');
       if (dot && !has_js_extension(filename)) return NULL;
       return strdup(filename);
     }

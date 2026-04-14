@@ -4,6 +4,7 @@
 
 #include "silver/engine.h"
 #include "silver/swarm.h"
+#include "modules/regex.h"
 
 #include "ops/literals.h"
 #include "ops/stack.h"
@@ -1417,6 +1418,26 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     if (is_err(call_result)) { sv_err = call_result; goto sv_throw; }
     vm->stack[vm->sp++] = call_result;
     NEXT(3);
+  }
+
+  L_RE_EXEC_TRUTHY: {
+    ant_value_t call_arg  = vm->stack[vm->sp - 1];
+    ant_value_t call_func = vm->stack[vm->sp - 2];
+    ant_value_t call_this = vm->stack[vm->sp - 3];
+    ant_value_t call_result;
+
+    if (!regexp_exec_truthy_try_fast(js, call_func, call_this, call_arg, &call_result)) {
+      ant_value_t call_args[1] = { call_arg }; frame->ip = ip;
+      ant_value_t raw_result = sv_vm_call(vm, js, call_func, call_this, call_args, 1, NULL, false);
+      sv_sync_frame_locals(vm, &frame, &func, &bp, &lp);
+      if (is_err(raw_result)) call_result = raw_result;
+      else call_result = mkval(T_BOOL, js_truthy(js, raw_result) ? 1 : 0);
+    }
+    
+    vm->sp -= 3;
+    if (is_err(call_result)) { sv_err = call_result; goto sv_throw; }
+    vm->stack[vm->sp++] = call_result;
+    NEXT(1);
   }
 
   L_TAIL_CALL: {
