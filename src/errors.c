@@ -410,7 +410,7 @@ static void error_visit_vm_stack_frames(
   ant_t *js, const char *fallback_file, js_vm_frame_visitor_fn visitor, void *ctx
 ) {
   if (!js || !visitor) return;
-  sv_vm_t *vm = js->vm;
+  sv_vm_t *vm = sv_vm_get_active(js);
   if (!vm) return;
 
   int depth = vm->fp;
@@ -452,7 +452,7 @@ ant_value_t js_capture_raw_stack(ant_t *js) {
     ? js->errsite.filename
     : (js->filename ? js->filename : "<eval>");
 
-  sv_vm_t *vm = js->vm;
+  sv_vm_t *vm = sv_vm_get_active(js);
   if (vm && vm->fp >= 0) {
     error_frame_errbuf_ctx_t ctx = { &eb, &n, remaining_capacity(n, eb.size), "", "" };
     error_visit_vm_stack_frames(js, file, error_visit_frame_append_errbuf, &ctx);
@@ -566,7 +566,7 @@ static void format_error_stack(errbuf_t *eb, ant_t *js, size_t *n, int line, int
       ? js->errsite.filename
       : (js->filename ? js->filename : "<eval>");
       
-    sv_vm_t *vm = js->vm;
+    sv_vm_t *vm = sv_vm_get_active(js);
     int depth = vm ? vm->fp : -1;
     
     if (depth >= 0) {

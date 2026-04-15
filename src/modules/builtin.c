@@ -297,8 +297,8 @@ static ant_value_t js_stats_fn(ant_t *js, ant_value_t *args, int nargs) {
   js_set(js, intern, "bytes", js_mknum((double)intern_stats.bytes));
   js_set(js, result, "intern", intern);
   
-  if (js->vm) {
-    sv_vm_t *vm = js->vm;
+  sv_vm_t *vm = sv_vm_get_active(js);
+  if (vm) {
     ant_value_t vmobj = js_newobj(js);
     js_set(js, vmobj, "stackSize", js_mknum((double)vm->stack_size));
     js_set(js, vmobj, "stackUsed", js_mknum((double)vm->sp));

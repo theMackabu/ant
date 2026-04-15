@@ -177,8 +177,10 @@ void js_set_error_site_from_bc(ant_t *js, sv_func_t *func, int bc_offset, const 
 }
 
 void js_set_error_site_from_vm_top(ant_t *js) {
-  if (!js || !js->vm || js->vm->fp < 0) return;
-  sv_frame_t *frame = &js->vm->frames[js->vm->fp];
+  sv_vm_t *vm = sv_vm_get_active(js);
+  if (!js || !vm || vm->fp < 0) return;
+  
+  sv_frame_t *frame = &vm->frames[vm->fp];
   sv_func_t *func = frame->func;
   if (!func) return;
   
