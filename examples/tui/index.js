@@ -1,20 +1,4 @@
-import {
-  Screen,
-  List,
-  ProgressBar,
-  Input,
-  Table,
-  colors,
-  box,
-  keys,
-  codes,
-  modal,
-  confirm,
-  pad,
-  padCenter,
-  truncate,
-  visibleLength
-} from './tuey.js';
+import { Screen, List, ProgressBar, Input, colors, box, keys, codes, modal, confirm, pad, padCenter, truncate, visibleLength } from './tuey.js';
 
 const screen = new Screen({ fullscreen: true, hideCursor: true });
 
@@ -386,11 +370,12 @@ function showMemoryModal() {
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(2) + ' KB';
     return (bytes / 1024 / 1024).toFixed(2) + ' MB';
   };
+  const fmtMaybe = value => (typeof value === 'number' ? fmt(value) : 'n/a');
 
   modal(screen, {
     id: 'memory',
     width: 40,
-    height: 10,
+    height: 11,
     title: 'Memory Usage',
     titleStyle: colors.bold + colors.yellow,
     borderStyle: box.rounded,
@@ -408,7 +393,9 @@ function showMemoryModal() {
       buf.writeStyled(ox, oy + y++, `  Pools:    ${colors.bold}${fmt(mem.pools.totalUsed)} / ${fmt(mem.pools.totalCapacity)}${codes.reset}`);
       buf.writeStyled(ox, oy + y++, `  Alloc:    ${colors.bold}${fmt(mem.alloc.total)}${codes.reset}  (${mem.alloc.objectCount} objects)`);
       buf.writeStyled(ox, oy + y++, `  External: ${colors.bold}${fmt(mem.external.total)}${codes.reset}`);
-      buf.writeStyled(ox, oy + y++, `  RSS:      ${colors.bold}${fmt(mem.rss)}${codes.reset}`);
+      buf.writeStyled(ox, oy + y++, `  RSS:      ${colors.bold}${fmtMaybe(mem.rss)}${codes.reset}`);
+      buf.writeStyled(ox, oy + y++, `  Resident: ${colors.bold}${fmtMaybe(mem.residentSize)}${codes.reset}`);
+      buf.writeStyled(ox, oy + y++, `  Footprint:${colors.bold}${fmtMaybe(mem.physFootprint)}${codes.reset}`);
       y++;
 
       buf.writeStyled(ox, oy + y, colors.dim + '  m/Esc: Close' + codes.reset);
@@ -613,7 +600,7 @@ function handleKey(key) {
             }
             return false;
           },
-          render: (buf, w, h, ox, oy) => {
+          render: (buf, _w, _h, ox, oy) => {
             buf.writeStyled(ox, oy + 1, ' Name: ' + nameInput.render());
             buf.writeStyled(ox, oy + 3, colors.dim + ' Enter: Save  Esc: Cancel' + codes.reset);
           }

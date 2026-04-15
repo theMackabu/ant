@@ -58,6 +58,7 @@ let state = {
   memoryOffset: 0,
   memoryStatus: '',
   memoryStatusAt: 0,
+  fullClearNextRender: false,
   searchMode: false,
   searchQuery: ''
 };
@@ -123,6 +124,8 @@ const byteStatSuffixes = new Set([
   'bytes',
   'cstack',
   'rss',
+  'residentSize',
+  'physFootprint',
   'virtualSize'
 ]);
 
@@ -208,6 +211,40 @@ function ensureMemoryCache() {
   }
 
   return state.memoryCache;
+}
+
+function hasGcMarkProfileControls() {
+  return Ant.raw
+    && typeof Ant.raw.gcMarkProfile === 'function'
+    && typeof Ant.raw.gcMarkProfileEnable === 'function'
+    && typeof Ant.raw.gcMarkProfileReset === 'function';
+}
+
+function toggleGcMarkProfile() {
+  if (!hasGcMarkProfileControls()) {
+    setMemoryStatus(`${c.red}GC mark profiler unavailable${c.reset}`);
+    return false;
+  }
+
+  const current = Ant.raw.gcMarkProfile();
+  const enabled = Ant.raw.gcMarkProfileEnable(!current.enabled);
+  refreshMemoryCache();
+  setMemoryStatus(enabled
+    ? `${c.green}GC mark profiler enabled${c.reset}`
+    : `${c.yellow}GC mark profiler disabled${c.reset}`);
+  return true;
+}
+
+function resetGcMarkProfile() {
+  if (!hasGcMarkProfileControls()) {
+    setMemoryStatus(`${c.red}GC mark profiler unavailable${c.reset}`);
+    return false;
+  }
+
+  Ant.raw.gcMarkProfileReset();
+  refreshMemoryCache();
+  setMemoryStatus(`${c.green}GC mark profiler reset${c.reset}`);
+  return true;
 }
 
 function memoryStatusText() {
@@ -361,7 +398,7 @@ function buildScreen() {
     lines.push(' '.repeat(cols));
     const status = memoryStatusText();
     lines.push(pad(
-      `${c.dim}↑↓ scroll · PgUp/PgDn · g/G top/bottom · r refresh · c copy · m browse · q quit${c.reset}  ${c.dim}[${state.memoryOffset + 1}-${end}/${memoryLines.length}]${c.reset}  ${status}${status ? '  ' : ''}${c.cyan}${fps.current} fps${c.reset}`,
+      `${c.dim}↑↓ scroll · PgUp/PgDn · g/G top/bottom · r refresh · e profiler · R reset profiler · c copy · m browse · q quit${c.reset}  ${c.dim}[${state.memoryOffset + 1}-${end}/${memoryLines.length}]${c.reset}  ${status}${status ? '  ' : ''}${c.cyan}${fps.current} fps${c.reset}`,
       cols
     ));
     linesArePadded = true;
@@ -374,7 +411,9 @@ function render() {
   if (pendingRender) return;
   fps.update();
   const screen = buildScreen();
-  const ok = process.stdout.write(`${term.syncStart}${term.hideCursor}${term.home}${screen}${term.syncEnd}`);
+  const clear = state.fullClearNextRender ? term.clearScreen : '';
+  state.fullClearNextRender = false;
+  const ok = process.stdout.write(`${term.syncStart}${term.hideCursor}${term.home}${clear}${screen}${term.syncEnd}`);
   if (!ok) pendingRender = true;
 }
 
@@ -503,6 +542,7 @@ function handleKey(key) {
         state.mode = 'browse';
       } else {
         state.mode = 'memory';
+        state.fullClearNextRender = true;
         state.memoryOffset = 0;
         refreshMemoryCache();
         setMemoryStatus(`${c.green}Refreshed memory stats${c.reset}`);
@@ -514,6 +554,16 @@ function handleKey(key) {
         refreshMemoryCache();
         setMemoryStatus(`${c.green}Refreshed memory stats${c.reset}`);
         needsRender = true;
+      }
+      break;
+    case 'e':
+      if (state.mode === 'memory') {
+        needsRender = toggleGcMarkProfile() || needsRender;
+      }
+      break;
+    case 'R':
+      if (state.mode === 'memory') {
+        needsRender = resetGcMarkProfile() || needsRender;
       }
       break;
     case 'c':

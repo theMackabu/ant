@@ -319,8 +319,18 @@ static ant_value_t js_stats_fn(ant_t *js, ant_value_t *args, int nargs) {
   struct mach_task_basic_info info;
   mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
   if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t)&info, &count) == KERN_SUCCESS) {
-    js_set(js, result, "rss", js_mknum((double)info.resident_size));
+    js_set(js, result, "residentSize", js_mknum((double)info.resident_size));
     js_set(js, result, "virtualSize", js_mknum((double)info.virtual_size));
+  }
+
+  task_vm_info_data_t vm_info;
+  mach_msg_type_number_t vm_count = TASK_VM_INFO_COUNT;
+  if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vm_info, &vm_count) == KERN_SUCCESS) {
+    js_set(js, result, "rss", js_mknum((double)vm_info.phys_footprint));
+    js_set(js, result, "physFootprint", js_mknum((double)vm_info.phys_footprint));
+  } else if (vtype(js_get(js, result, "rss")) == T_UNDEF) {
+    ant_value_t resident = js_get(js, result, "residentSize");
+    if (vtype(resident) != T_UNDEF) js_set(js, result, "rss", resident);
   }
 #elif defined(__linux__)
   struct rusage usage;
