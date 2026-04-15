@@ -12,7 +12,6 @@
 #include "streams/pipes.h"
 #include "streams/readable.h"
 #include "streams/writable.h"
-#include "modules/structured-clone.h"
 
 typedef struct {
   bool settled;
@@ -635,18 +634,8 @@ static ant_value_t tee_read_resolve(ant_t *js, ant_value_t *args, int nargs) {
   }
 
   ant_value_t value = js_get(js, result, "value");
-  ant_value_t clone = value;
-  
-  if (!st->canceled1 && !st->canceled2) {
-  ant_value_t clone_args[1] = { value };
-  clone = js_structured_clone(js, clone_args, 1);
-  if (is_err(clone)) {
-    tee_read_reject(js, &clone, 1);
-    return js_mkundef();
-  }}
-
   if (!st->canceled1) tee_enqueue_branch(js, branch1, value);
-  if (!st->canceled2) tee_enqueue_branch(js, branch2, clone);
+  if (!st->canceled2) tee_enqueue_branch(js, branch2, value);
   
   return js_mkundef();
 }
