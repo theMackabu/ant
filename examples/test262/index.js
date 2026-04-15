@@ -54,6 +54,7 @@ let state = {
   index: 0,
   filter: '',
   filtered: entries,
+  memoryCache: null,
   memoryOffset: 0,
   memoryStatus: '',
   memoryStatusAt: 0,
@@ -151,22 +152,62 @@ function flattenStats(value, prefix = '', out = [], styled = true) {
   return out;
 }
 
-function buildMemoryLines(styled = true) {
+function collectMemorySnapshot() {
   const mem = Ant.stats();
+  const gcProfile = Ant.raw && typeof Ant.raw.gcMarkProfile === 'function'
+    ? Ant.raw.gcMarkProfile()
+    : null;
+
+  return { mem, gcProfile };
+}
+
+function buildMemoryLinesFromSnapshot(snapshot, styled = true) {
+  const { mem, gcProfile } = snapshot;
   const lines = styled
     ? [`${c.cyan}Ant.stats()${c.reset}`, `${c.dim}Raw runtime stats dump${c.reset}`, '']
     : ['Ant.stats()', 'Raw runtime stats dump', ''];
   lines.push(...flattenStats(mem, '', [], styled));
 
-  if (Ant.raw && typeof Ant.raw.gcMarkProfile === 'function') {
+  if (gcProfile) {
     lines.push('');
     lines.push(styled ? `${c.cyan}Ant.raw.gcMarkProfile()${c.reset}` : 'Ant.raw.gcMarkProfile()');
     lines.push(styled ? `${c.dim}Extra GC mark profiler stats${c.reset}` : 'Extra GC mark profiler stats');
     lines.push('');
-    lines.push(...flattenStats(Ant.raw.gcMarkProfile(), 'gcMarkProfile', [], styled));
+    lines.push(...flattenStats(gcProfile, 'gcMarkProfile', [], styled));
   }
 
   return lines;
+}
+
+function rebuildMemoryDisplayCache() {
+  if (!state.memoryCache) return;
+
+  const cols = getCols();
+  state.memoryCache.cols = cols;
+  state.memoryCache.displayLines = state.memoryCache.styledLines.map(line => pad(line, cols));
+}
+
+function refreshMemoryCache() {
+  const snapshot = collectMemorySnapshot();
+  state.memoryCache = {
+    snapshot,
+    styledLines: buildMemoryLinesFromSnapshot(snapshot, true),
+    plainLines: buildMemoryLinesFromSnapshot(snapshot, false),
+    displayLines: [],
+    cols: 0,
+    updatedAt: Date.now(),
+  };
+  rebuildMemoryDisplayCache();
+}
+
+function ensureMemoryCache() {
+  if (!state.memoryCache) {
+    refreshMemoryCache();
+  } else if (state.memoryCache.cols !== getCols()) {
+    rebuildMemoryDisplayCache();
+  }
+
+  return state.memoryCache;
 }
 
 function memoryStatusText() {
@@ -184,7 +225,7 @@ function setMemoryStatus(message) {
 }
 
 function copyMemoryStats() {
-  const text = buildMemoryLines(false).join('\n') + '\n';
+  const text = ensureMemoryCache().plainLines.join('\n') + '\n';
   const commands = process.platform === 'win32'
     ? [{ command: 'clip', args: [] }]
     : [
@@ -212,6 +253,7 @@ function buildScreen() {
   const rows = getRows();
   const cols = getCols();
   const lines = [];
+  let linesArePadded = false;
 
   if (state.mode === 'browse') {
     const rateColor = stats.rate >= 80 ? c.green : stats.rate >= 50 ? c.yellow : c.red;
@@ -300,7 +342,8 @@ function buildScreen() {
     lines.push(`${c.dim}s browse · q quit${c.reset}`);
   } else if (state.mode === 'memory') {
     const footerLines = 2;
-    const memoryLines = buildMemoryLines();
+    const memoryCache = ensureMemoryCache();
+    const memoryLines = memoryCache.displayLines;
     const viewHeight = Math.max(1, rows - footerLines);
     const maxOffset = Math.max(0, memoryLines.length - viewHeight);
 
@@ -312,17 +355,19 @@ function buildScreen() {
     lines.push(...memoryLines.slice(state.memoryOffset, end));
 
     while (lines.length < rows - footerLines) {
-      lines.push('');
+      lines.push(' '.repeat(cols));
     }
 
-    lines.push('');
+    lines.push(' '.repeat(cols));
     const status = memoryStatusText();
-    lines.push(
-      `${c.dim}↑↓ scroll · PgUp/PgDn · g/G top/bottom · c copy · m browse · q quit${c.reset}  ${c.dim}[${state.memoryOffset + 1}-${end}/${memoryLines.length}]${c.reset}  ${status}${status ? '  ' : ''}${c.cyan}${fps.current} fps${c.reset}`
-    );
+    lines.push(pad(
+      `${c.dim}↑↓ scroll · PgUp/PgDn · g/G top/bottom · r refresh · c copy · m browse · q quit${c.reset}  ${c.dim}[${state.memoryOffset + 1}-${end}/${memoryLines.length}]${c.reset}  ${status}${status ? '  ' : ''}${c.cyan}${fps.current} fps${c.reset}`,
+      cols
+    ));
+    linesArePadded = true;
   }
 
-  return lines.map(l => pad(l, cols)).join('\n');
+  return linesArePadded ? lines.join('\n') : lines.map(l => pad(l, cols)).join('\n');
 }
 
 function render() {
@@ -454,8 +499,22 @@ function handleKey(key) {
       needsRender = true;
       break;
     case 'm':
-      state.mode = state.mode === 'memory' ? 'browse' : 'memory';
+      if (state.mode === 'memory') {
+        state.mode = 'browse';
+      } else {
+        state.mode = 'memory';
+        state.memoryOffset = 0;
+        refreshMemoryCache();
+        setMemoryStatus(`${c.green}Refreshed memory stats${c.reset}`);
+      }
       needsRender = true;
+      break;
+    case 'r':
+      if (state.mode === 'memory') {
+        refreshMemoryCache();
+        setMemoryStatus(`${c.green}Refreshed memory stats${c.reset}`);
+        needsRender = true;
+      }
       break;
     case 'c':
       if (state.mode === 'memory') {
