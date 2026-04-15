@@ -1020,9 +1020,9 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_PUT_PRIVATE:  { sv_op_put_private(vm, js);  NEXT(1); }
   L_DEF_PRIVATE:  { sv_op_def_private(vm, js);  NEXT(1); }
 
-  L_GET_SUPER:      { sv_op_get_super(vm, js);      NEXT(1); }
-  L_GET_SUPER_VAL:  { sv_op_get_super_val(vm, js);  NEXT(1); }
-  L_PUT_SUPER_VAL:  { sv_op_put_super_val(vm, js);  NEXT(1); }
+  L_GET_SUPER:      { sv_op_get_super(vm, js);             NEXT(1); }
+  L_GET_SUPER_VAL:  { sv_op_get_super_val(vm, js, frame);  NEXT(1); }
+  L_PUT_SUPER_VAL:  { sv_op_put_super_val(vm, js);         NEXT(1); }
 
   L_ADD: {
     ant_value_t r = vm->stack[vm->sp - 1], l = vm->stack[vm->sp - 2];

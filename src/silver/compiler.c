@@ -3962,6 +3962,7 @@ static void compile_class_method(
   bool is_fn = is_class_method_def(m);
 
   if (is_fn) {
+    if (is_static) m->right->flags |= FN_STATIC;
     compile_func_expr(c, m->right);   
     emit_get_local(c, home_local);    
     emit_op(c, OP_SET_HOME_OBJ);      
@@ -4594,9 +4595,11 @@ sv_func_t *compile_function_body(
   func->has_await = false;
   func->is_generator = !!(node->flags & FN_GENERATOR);
   func->is_method = !!(node->flags & FN_METHOD);
+  func->is_static = !!(node->flags & FN_STATIC);
   func->is_tla = comp.is_tla;
   func->filename = enclosing->filename ? enclosing->filename : enclosing->js->filename;
   func->source_line = (int)node->line;
+  
   if (node->str && node->len > 0) {
     char *name = code_arena_bump(node->len + 1);
     memcpy(name, node->str, node->len);

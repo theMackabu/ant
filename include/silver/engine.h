@@ -154,6 +154,7 @@ struct sv_func {
   bool has_await;
   bool is_generator;
   bool is_method;
+  bool is_static;
   bool is_tla;
   uint64_t gc_epoch;
   

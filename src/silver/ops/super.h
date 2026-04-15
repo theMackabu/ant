@@ -8,15 +8,21 @@ static inline void sv_op_get_super(sv_vm_t *vm, ant_t *js) {
   vm->stack[vm->sp - 1] = js_get_proto(js, obj);
 }
 
-static inline void sv_op_get_super_val(sv_vm_t *vm, ant_t *js) {
+static inline void sv_op_get_super_val(sv_vm_t *vm, ant_t *js, sv_frame_t *frame) {
   ant_value_t prop = vm->stack[--vm->sp];
   ant_value_t obj = vm->stack[--vm->sp];
   ant_value_t receiver = vm->stack[--vm->sp];
-  ant_value_t proto;
   
-  if (vtype(obj) == T_FUNC && vtype(receiver) != T_FUNC) {
-    proto = js_getprop_fallback(js, obj, "prototype");
-  } else proto = js_get_proto(js, obj);
+  sv_func_t *current_func = frame ? frame->func : NULL;
+  bool use_ctor_prototype =
+    vtype(obj) == T_FUNC &&
+    vtype(receiver) != T_FUNC &&
+    current_func &&
+    !current_func->is_static;
+
+  ant_value_t proto;
+  if (use_ctor_prototype) proto = js_getprop_fallback(js, obj, "prototype");
+  else proto = js_get_proto(js, obj);
   
   if (vtype(prop) == T_SYMBOL) {
     vm->stack[vm->sp++] = js_get_sym_with_receiver(js, proto, prop, receiver);

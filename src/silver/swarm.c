@@ -1053,13 +1053,13 @@ static bool jit_inlineable(sv_func_t *f) {
       case OP_JMP_TRUE_PEEK: case OP_JMP_FALSE_PEEK:
       case OP_RETURN: case OP_RETURN_UNDEF:
       case OP_GET_FIELD: case OP_GET_FIELD2: case OP_GET_GLOBAL:
+      case OP_NOP: case OP_LINE_NUM: case OP_COL_NUM: case OP_LABEL:
+        break;
       case OP_SPECIAL_OBJ:
         // OP_SPECIAL_OBJ(0) materializes `arguments`. keep these functions on
         // the interpreter until JIT routes a real per-call activation/object
         // with matching lifetime and semantics.
         if (sv_get_u8(ip + 1) == 0) return false;
-        break;
-      case OP_NOP: case OP_LINE_NUM: case OP_COL_NUM: case OP_LABEL:
         break;
       default:
         return false;
@@ -1130,6 +1130,7 @@ static bool jit_emit_inline_body(
   MIR_reg_t result, MIR_label_t slow, MIR_label_t join,
   MIR_reg_t r_bool, MIR_reg_t *p_d_slot, int id,
   MIR_reg_t r_inl_closure, MIR_reg_t r_inl_this,
+  MIR_reg_t r_inl_new_target, MIR_reg_t r_inl_super,
   MIR_reg_t r_vm, MIR_reg_t r_js,
   MIR_item_t helper2_proto, MIR_item_t imp_seq,
   MIR_item_t imp_sne, MIR_item_t imp_eq, MIR_item_t imp_ne,
@@ -1811,14 +1812,15 @@ static bool jit_emit_inline_body(
         uint8_t which = sv_get_u8(ip + 1);
         MIR_reg_t dst = inl_vs[isp++];
         if (which == 1) {
-          mir_load_imm(ctx, jit_func, dst, mkval(T_UNDEF, 0));
+          MIR_append_insn(ctx, jit_func,
+            MIR_new_insn(ctx, MIR_MOV,
+              MIR_new_reg_op(ctx, dst),
+              MIR_new_reg_op(ctx, r_inl_new_target)));
         } else if (which == 2) {
           MIR_append_insn(ctx, jit_func,
             MIR_new_insn(ctx, MIR_MOV,
               MIR_new_reg_op(ctx, dst),
-              MIR_new_mem_op(ctx, MIR_T_I64,
-                (MIR_disp_t)offsetof(sv_closure_t, super_val),
-                r_inl_closure, 0, 1)));
+              MIR_new_reg_op(ctx, r_inl_super)));
         } else if (which == 3) {
           MIR_append_insn(ctx, jit_func,
             MIR_new_call_insn(ctx, 6,
@@ -4724,6 +4726,8 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
             MIR_label_t inl_join = MIR_new_label(ctx);
 
             MIR_reg_t r_inl_cl = 0;
+            MIR_reg_t r_inl_new_target = 0;
+            MIR_reg_t r_inl_super = 0;
             char inl_this_rn[32], inl_flags_rn[32], inl_bound_rn[32];
             snprintf(inl_this_rn, sizeof(inl_this_rn), "inl%d_this", cn);
             snprintf(inl_flags_rn, sizeof(inl_flags_rn), "inl%d_flags", cn);
@@ -4742,6 +4746,22 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
                   MIR_new_reg_op(ctx, r_inl_cl),
                   MIR_new_reg_op(ctx, r_inl_callee),
                   MIR_new_uint_op(ctx, NANBOX_DATA_MASK)));
+            }
+            {
+              char nt_rn[32], sup_rn[32];
+              snprintf(nt_rn, sizeof(nt_rn), "inl%d_nt", cn);
+              snprintf(sup_rn, sizeof(sup_rn), "inl%d_sup", cn);
+              r_inl_new_target = MIR_new_func_reg(ctx, jit_func->u.func,
+                                                  MIR_JSVAL, nt_rn);
+              r_inl_super = MIR_new_func_reg(ctx, jit_func->u.func,
+                                             MIR_JSVAL, sup_rn);
+              mir_load_imm(ctx, jit_func, r_inl_new_target, mkval(T_UNDEF, 0));
+              MIR_append_insn(ctx, jit_func,
+                MIR_new_insn(ctx, MIR_MOV,
+                  MIR_new_reg_op(ctx, r_inl_super),
+                  MIR_new_mem_op(ctx, MIR_T_I64,
+                    (MIR_disp_t)offsetof(sv_closure_t, super_val),
+                    r_inl_cl, 0, 1)));
             }
 
             if (speculative) {
@@ -4783,7 +4803,7 @@ sv_jit_func_t sv_jit_compile(ant_t *js, sv_func_t *func, sv_closure_t *hint_clos
               inl_arg_regs, (int)call_argc,
               r_call_res, inl_slow, inl_join,
               r_bool, &r_d_slot, cn,
-              r_inl_cl, r_inl_this,
+              r_inl_cl, r_inl_this, r_inl_new_target, r_inl_super,
               r_vm, r_js,
               helper2_proto, imp_seq, imp_sne, imp_eq, imp_ne,
               gf_proto, imp_get_field,
