@@ -100,6 +100,19 @@ static inline void sv_async_unlink_activation(ant_t *js, coroutine_t *coro) {
   coro->active_parent = NULL;
 }
 
+static inline coroutine_t *sv_async_get_active_coro_for_vm(ant_t *js, sv_vm_t *vm) {
+  if (!js || !js->active_async_coro) return NULL;
+
+  coroutine_t *fallback = js->active_async_coro;
+  if (!vm) return fallback;
+
+  for (coroutine_t *it = fallback; it; it = it->active_parent) {
+    if (it->owner_vm == vm) return it;
+  }
+
+  return fallback;
+}
+
 static inline void sv_async_init_activation(
   coroutine_t *coro, ant_t *js, sv_vm_t *owner_vm, ant_value_t promise,
   ant_value_t this_val, ant_value_t super_val, ant_value_t new_target,
@@ -614,6 +627,8 @@ static inline ant_value_t sv_start_async_closure(
   return promise;
 }
 
+
+
 static inline ant_value_t sv_await_value(sv_vm_t *vm, ant_t *js, ant_value_t value) {
   value = js_promise_assimilate_awaitable(js, value);
   if (is_err(value)) return value;
@@ -626,7 +641,7 @@ static inline ant_value_t sv_await_value(sv_vm_t *vm, ant_t *js, ant_value_t val
   if (current_mco) {
     sv_coro_header_t *hdr = (sv_coro_header_t *)mco_get_user_data(current_mco);
     if (hdr) coro = hdr->coro;
-  } else if (js->active_async_coro) coro = js->active_async_coro;
+  } else coro = sv_async_get_active_coro_for_vm(js, vm);
 
   if (!coro)
     return js_mkerr(js, "await can only be used inside async functions");

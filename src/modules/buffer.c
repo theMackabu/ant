@@ -473,6 +473,12 @@ static ant_value_t js_arraybuffer_detached_getter(ant_t *js, ant_value_t *args, 
   return js_bool(data->is_detached);
 }
 
+// ArrayBuffer.isView(value)
+static ant_value_t js_arraybuffer_isView(ant_t *js, ant_value_t *args, int nargs) {
+  if (nargs < 1) return js_false;
+  return js_bool(buffer_is_dataview(args[0]) || buffer_get_typedarray_data(args[0]) != NULL);
+}
+
 static ant_value_t typedarray_index_getter(ant_t *js, ant_value_t obj, const char *key, size_t key_len) {
   if (key_len == 0 || key_len > 10) return js_mkundef();
   
@@ -2566,6 +2572,7 @@ void init_buffer_module() {
   js_mkprop_fast(js, arraybuffer_ctor_obj, "prototype", 9, arraybuffer_proto);
   js_mkprop_fast(js, arraybuffer_ctor_obj, "name", 4, ANT_STRING("ArrayBuffer"));
   js_set_descriptor(js, arraybuffer_ctor_obj, "name", 4, 0);
+  js_set(js, arraybuffer_ctor_obj, "isView", js_mkfun(js_arraybuffer_isView));
   js_define_species_getter(js, arraybuffer_ctor_obj);
   ant_value_t arraybuffer_ctor = js_obj_to_func(arraybuffer_ctor_obj);
   js_set(js, arraybuffer_proto, "constructor", arraybuffer_ctor);
