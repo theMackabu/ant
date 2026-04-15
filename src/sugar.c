@@ -91,11 +91,37 @@ static void retire_coroutine_storage(coroutine_t *coro) {
   retired_coroutines = coro;
 }
 
+static void destroy_coroutine_resources(coroutine_t *coro) {
+  if (!coro) return;
+
+  if (coro->mco) {
+    void *ctx = mco_get_user_data(coro->mco);
+    if (ctx) CORO_FREE(ctx);
+    mco_destroy(coro->mco);
+    coro->mco = NULL;
+  }
+
+  if (coro->args) {
+    CORO_FREE(coro->args);
+    coro->args = NULL;
+  }
+
+  if (coro->sv_vm) {
+    sv_vm_destroy(coro->sv_vm);
+    coro->sv_vm = NULL;
+  }
+
+  coro->js = NULL;
+  coro->active_parent = NULL;
+}
+
 void reap_retired_coroutines(void) {
   coroutine_t *coro = retired_coroutines;
   retired_coroutines = NULL;
+  
   while (coro) {
     coroutine_t *next = coro->next;
+    destroy_coroutine_resources(coro);
     CORO_FREE(coro);
     coro = next;
   }
@@ -120,26 +146,10 @@ void free_coroutine(coroutine_t *coro) {
     if (js->active_async_coro == coro) js->active_async_coro = coro->active_parent;
     coro->active_parent = NULL;
   }
-  
-  if (coro->mco) {
-    void *ctx = mco_get_user_data(coro->mco);
-    if (ctx) CORO_FREE(ctx);
-    mco_destroy(coro->mco);
-    coro->mco = NULL;
-  }
-  
-  if (coro->args) {
-    CORO_FREE(coro->args);
-    coro->args = NULL;
-  }
-  
-  if (coro->sv_vm) { 
-    sv_vm_destroy(coro->sv_vm);
-    coro->sv_vm = NULL;
-  }
-  
-  coro->js = NULL;
-  coro->active_parent = NULL;
+
+  if (!js || js->vm_exec_depth == 0)
+    destroy_coroutine_resources(coro);
+
   retire_coroutine_storage(coro);
 }
 
