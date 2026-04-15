@@ -561,7 +561,7 @@ export class Agent extends EventEmitter {
     clientNotImplemented();
   }
 
-  createSocket(options, callback) {
+  createSocket(_options, callback) {
     const error = new Error('node:http Agent client transport is not implemented yet');
     if (typeof callback === 'function') callback(error);
     else throw error;

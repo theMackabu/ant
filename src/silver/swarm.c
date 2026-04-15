@@ -1054,8 +1054,11 @@ static bool jit_inlineable(sv_func_t *f) {
       case OP_RETURN: case OP_RETURN_UNDEF:
       case OP_GET_FIELD: case OP_GET_FIELD2: case OP_GET_GLOBAL:
       case OP_SPECIAL_OBJ:
-        if (op == OP_SPECIAL_OBJ && sv_get_u8(ip + 1) == 0 &&
-            !f->is_strict && f->param_count > 0) return false;
+        // OP_SPECIAL_OBJ(0) materializes `arguments`. keep these functions on
+        // the interpreter until JIT routes a real per-call activation/object
+        // with matching lifetime and semantics.
+        if (sv_get_u8(ip + 1) == 0) return false;
+        break;
       case OP_NOP: case OP_LINE_NUM: case OP_COL_NUM: case OP_LABEL:
         break;
       default:
@@ -2004,10 +2007,6 @@ static bool jit_is_eligible(sv_func_t *func) {
       case OP_STR_ALC_SNAPSHOT:
       case OP_TO_PROPKEY:
       case OP_RETURN: case OP_RETURN_UNDEF:
-      case OP_SPECIAL_OBJ: if (
-        op == OP_SPECIAL_OBJ && sv_get_u8(ip + 1) == 0 
-        && !func->is_strict && func->param_count > 0
-      ) eligible = false;
       case OP_SET_NAME:
       case OP_TRY_PUSH: case OP_TRY_POP:
       case OP_THROW: case OP_THROW_ERROR:
@@ -2024,6 +2023,15 @@ static bool jit_is_eligible(sv_func_t *func) {
       }
       case OP_RE_EXEC_TRUTHY:
         eligible = false;
+        break;
+      case OP_SPECIAL_OBJ:
+        if (sv_get_u8(ip + 1) == 0) {
+          if (sv_jit_warn_unlikely)
+            fprintf(stderr, "jit: ineligible op SPECIAL_OBJ(%d) in %s\n",
+                    sv_get_u8(ip + 1),
+                    func->name ? func->name : "<anonymous>");
+          eligible = false;
+        }
         break;
       default:
         if (sv_jit_warn_unlikely)
