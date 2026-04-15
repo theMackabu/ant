@@ -266,7 +266,7 @@ ant_value_t maybe_call_symbol_method(
 
   uint8_t mt = vtype(method);
   if (mt == T_UNDEF || mt == T_NULL) return js_mkundef();
-  if (mt != T_FUNC && mt != T_CFUNC) {
+  if (!is_callable(method)) {
     return js_mkerr_typed(js, JS_ERR_TYPE, "Symbol method is not callable");
   }
 

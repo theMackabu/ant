@@ -261,8 +261,7 @@ static inline ant_value_t sv_iter_advance(
   default: {
     ant_value_t next_method = vm->stack[vm->sp - 2];
     ant_value_t iterator = vm->stack[vm->sp - 3];
-    uint8_t ft = vtype(next_method);
-    if (ft != T_FUNC && ft != T_CFUNC)
+    if (!is_callable(next_method))
       return js_mkerr(js, "iterator.next is not a function");
     ant_value_t result = sv_vm_call(vm, js, next_method, iterator, NULL, 0, NULL, false);
     if (is_err(result)) return result;
@@ -304,8 +303,7 @@ static inline void sv_op_iter_close(sv_vm_t *vm, ant_t *js) {
   if (tag == SV_ITER_GENERIC) {
     ant_value_t iterator = vm->stack[vm->sp - 3];
     ant_value_t return_fn = js_getprop_fallback(js, iterator, "return");
-    uint8_t ft = vtype(return_fn);
-    if (ft == T_FUNC || ft == T_CFUNC)
+    if (is_callable(return_fn))
       sv_vm_call(vm, js, return_fn, iterator, NULL, 0, NULL, false);
   }
   vm->sp -= 3;
@@ -347,8 +345,7 @@ static inline ant_value_t sv_op_destructure_rest(sv_vm_t *vm, ant_t *js) {
 static inline ant_value_t sv_op_iter_call(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   ant_value_t method = vm->stack[vm->sp - 1];
   ant_value_t iterator = vm->stack[vm->sp - 4];
-  uint8_t ft = vtype(method);
-  if (ft != T_FUNC && ft != T_CFUNC)
+  if (!is_callable(method))
     return js_mkerr(js, "iterator method is not callable");
   ant_value_t result = sv_vm_call(vm, js, method, iterator, NULL, 0, NULL, false);
   if (is_err(result)) return result;
@@ -364,8 +361,7 @@ static inline sv_await_result_t sv_op_await_iter_next(sv_vm_t *vm, ant_t *js) {
   };
   ant_value_t next_method = vm->stack[vm->sp - 2];
   ant_value_t iterator = vm->stack[vm->sp - 3];
-  uint8_t ft = vtype(next_method);
-  if (ft != T_FUNC && ft != T_CFUNC)
+  if (!is_callable(next_method))
     return (sv_await_result_t){ .state = SV_AWAIT_ERROR, .value = js_mkerr(js, "iterator.next is not a function"), .handoff = false };
   ant_value_t result = sv_vm_call(vm, js, next_method, iterator, NULL, 0, NULL, false);
   if (is_err(result))

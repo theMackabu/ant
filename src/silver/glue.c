@@ -344,8 +344,7 @@ static ant_value_t jit_iter_advance_from_buf(
     ant_value_t next_method = iter_buf[1];
     GC_ROOT_PIN(js, iterator);
     GC_ROOT_PIN(js, next_method);
-    uint8_t ft = vtype(next_method);
-    if (ft != T_FUNC && ft != T_CFUNC) {
+    if (!is_callable(next_method)) {
       GC_ROOT_RESTORE(js, root_mark);
       return js_mkerr(js, "iterator.next is not a function");
     }
@@ -388,8 +387,7 @@ void jit_helper_destructure_close(
     GC_ROOT_PIN(js, iterator);
     ant_value_t return_fn = js_getprop_fallback(js, iterator, "return");
     GC_ROOT_PIN(js, return_fn);
-    uint8_t ft = vtype(return_fn);
-    if (ft == T_FUNC || ft == T_CFUNC)
+    if (is_callable(return_fn))
       sv_vm_call(vm, js, return_fn, iterator, NULL, 0, NULL, false);
   }
 
@@ -429,8 +427,7 @@ ant_value_t jit_helper_for_of(
 
   ant_value_t iter_fn = js_get_sym(js, iterable, get_iterator_sym());
   GC_ROOT_PIN(js, iter_fn);
-  uint8_t ft = vtype(iter_fn);
-  if (ft != T_FUNC && ft != T_CFUNC) {
+  if (!is_callable(iter_fn)) {
     GC_ROOT_RESTORE(js, root_mark);
     return js_mkerr(js, "not iterable");
   }

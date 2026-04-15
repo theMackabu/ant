@@ -5024,7 +5024,7 @@ static ant_value_t iter_close_iterator(ant_t *js, ant_value_t iterator) {
   ant_offset_t return_off = lkp_proto(js, iterator, "return", 6);
   if (return_off == 0) return js_mkundef();
   ant_value_t return_method = propref_load(js, return_off);
-  if (vtype(return_method) != T_FUNC && vtype(return_method) != T_CFUNC) {
+  if (!is_callable(return_method)) {
     return js_mkerr(js, "iterator.return is not a function");
   }
   return iter_call_noargs_with_this(js, iterator, return_method);
@@ -5046,7 +5046,7 @@ static ant_value_t iter_foreach(ant_t *js, ant_value_t iterable, iter_callback_t
     if (next_off == 0) { return js_mkerr(js, "iterator.next is not a function"); }
     
     ant_value_t next_method = propref_load(js, next_off);
-    if (vtype(next_method) != T_FUNC && vtype(next_method) != T_CFUNC) {
+    if (!is_callable(next_method)) {
       return js_mkerr(js, "iterator.next is not a function");
     }
     
