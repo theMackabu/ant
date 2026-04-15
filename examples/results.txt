@@ -1503,7 +1503,7 @@ compat-table/next/Uint8Array.toBase64.js: TypeError: undefined is not a function
 compat-table/next/Uint8Array.toHex.js: TypeError: undefined is not a function
 compat-table/next/WeakMap.prototype.upsert.js: TypeError: undefined is not a function
 compat-table/next/await-using.for-of.js: ReferenceError: 'using' is not defined
-compat-table/next/await-using.js: OK
+compat-table/next/await-using.js: ReferenceError: 'using' is not defined
 compat-table/next/class-decorators.js: failed
 compat-table/next/function.sent.js: failed
 compat-table/next/throw-expr.arrow.js: SyntaxError: Unexpected token 'throw'
