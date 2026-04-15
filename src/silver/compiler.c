@@ -2872,7 +2872,11 @@ void compile_stmt(sv_compiler_t *c, sv_ast_t *node) {
       break;
 
     case N_FOR_OF:
+      compile_for_of(c, node);
+      break;
+
     case N_FOR_AWAIT_OF:
+      if (c->enclosing && !c->enclosing->enclosing) c->is_tla = true;
       compile_for_of(c, node);
       break;
 
@@ -4612,7 +4616,7 @@ sv_func_t *compile_function_body(
     func->name = name;
   }
 
-  if (func->is_async) {
+  if (func->is_async || func->is_tla) {
   const uint8_t *ip = func->code;
   const uint8_t *end = func->code + func->code_len;
   while (ip < end) {

@@ -85,8 +85,8 @@ static inline ant_value_t sv_op_for_of(sv_vm_t *vm, ant_t *js) {
   }
 
   ant_value_t iter_fn = js_get_sym(js, iterable, get_iterator_sym());
-  uint8_t ft = vtype(iter_fn);
-  if (ft != T_FUNC && ft != T_CFUNC) return js_mkerr(js, "not iterable");
+  if (!is_callable(iter_fn)) return js_mkerr(js, "not iterable");
+  
   ant_value_t iterator = sv_vm_call(vm, js, iter_fn, iterable, NULL, 0, NULL, false);
   if (is_err(iterator)) return iterator;
 
@@ -119,11 +119,9 @@ static inline ant_value_t sv_op_for_await_of(sv_vm_t *vm, ant_t *js) {
   ant_value_t iterable = vm->stack[--vm->sp];
   ant_value_t iter_fn = js_get_sym(js, iterable, get_asyncIterator_sym());
 
-  uint8_t ft = vtype(iter_fn);
-  if (ft != T_FUNC && ft != T_CFUNC) {
+  if (!is_callable(iter_fn)) {
     iter_fn = js_get_sym(js, iterable, get_iterator_sym());
-    ft = vtype(iter_fn);
-    if (ft != T_FUNC && ft != T_CFUNC) return js_mkerr(js, "not iterable");
+    if (!is_callable(iter_fn)) return js_mkerr(js, "not iterable");
   }
 
   ant_value_t iterator = sv_vm_call(vm, js, iter_fn, iterable, NULL, 0, NULL, false);
