@@ -23,3 +23,154 @@ index 77378fc..d310eb3 100644
  #include <openssl/ecdsa.h>
  #endif
  
+diff --git a/include/tlsuv/http.h b/include/tlsuv/http.h
+index 8af05fe..fa56144 100644
+--- a/include/tlsuv/http.h
++++ b/include/tlsuv/http.h
+@@ -117,6 +117,10 @@ struct tlsuv_http_req_s {
+     llhttp_t parser;
+     enum http_request_state state;
+     bool keepalive;
++    bool parser_active;
++    bool cancel_pending;
++    int cancel_error;
++    char *cancel_status;
+ 
+     bool req_chunked;
+     ssize_t req_body_size;
+diff --git a/src/http.c b/src/http.c
+index 3a82e49..953b065 100644
+--- a/src/http.c
++++ b/src/http.c
+@@ -47,6 +47,8 @@ static void tr_read_cb(uv_stream_t *s, ssize_t nread, const uv_buf_t *buf);
+ static void tr_alloc_cb(uv_handle_t *s, size_t suggested_size, uv_buf_t *buf);
+ 
+ static void fail_active_request(tlsuv_http_t *c, int code, const char *msg);
++static void clear_req_body(tlsuv_http_req_t *req, int code);
++static void finalize_canceled_request(tlsuv_http_t *c, tlsuv_http_req_t *req);
+ 
+ #define close_connection(c) close_connection1(c, __FUNCTION__, __LINE__)
+ static void close_connection1(tlsuv_http_t *c, const char *src_fn, int src_line);
+@@ -133,6 +135,9 @@ static void clt_read_cb(tlsuv_http_t *c, ssize_t nread, const uv_buf_t *buf) {
+             DUMP_REQ(ERR, ar, "failed to parse HTTP response");
+             fail_active_request(c, UV_EINVAL, "failed to parse HTTP response");
+             keepalive = false;
++        } else if (ar->cancel_pending) {
++            keepalive = false;
++            finalize_canceled_request(c, ar);
+         } else if (ar->state == completed) {
+             keepalive = c->keepalive && ar->keepalive;
+             c->active = NULL;
+@@ -179,6 +184,34 @@ static void clear_req_body(tlsuv_http_req_t *req, int code) {
+     req->req_body = NULL;
+ }
+ 
++static void finalize_canceled_request(tlsuv_http_t *c, tlsuv_http_req_t *req) {
++    if (req == NULL || !req->cancel_pending) return;
++
++    req->cancel_pending = false;
++    if (c->active == req) {
++        c->active = NULL;
++    }
++
++    req->resp.code = req->cancel_error;
++    if (req->resp.status) {
++        tlsuv__free(req->resp.status);
++    }
++    req->resp.status = req->cancel_status;
++    req->cancel_status = NULL;
++
++    clear_req_body(req, req->resp.code);
++
++    if (req->state < headers_received && req->resp_cb != NULL) {
++        req->resp_cb(&req->resp, req->data);
++        req->resp_cb = NULL;
++    } else if (req->resp.body_cb != NULL) {
++        req->resp.body_cb(req, NULL, req->resp.code);
++    }
++
++    http_req_free(req);
++    tlsuv__free(req);
++}
++
+ static void fail_active_request(tlsuv_http_t *c, int code, const char *msg) {
+     tlsuv_http_req_t *req = c->active;
+ 
+@@ -918,6 +951,16 @@ int http_req_cancel_err(tlsuv_http_t *clt, tlsuv_http_req_t *req, int error, con
+ 
+     if (r == req || req == clt->active) { // req is in the queue
+         if (req == clt->active) {
++            if (req->parser_active) {
++                req->cancel_pending = true;
++                req->cancel_error = error;
++                if (req->cancel_status) {
++                    tlsuv__free(req->cancel_status);
++                }
++                req->cancel_status = tlsuv__strdup(msg ? msg : uv_strerror(error));
++                llhttp_pause(&req->parser);
++                return 0;
++            }
+             clt->active = NULL;
+             // since active request is being canceled we don't want to consume what's left on the wire for it
+             // and need to close connection
+@@ -1053,4 +1096,3 @@ static void free_http(tlsuv_http_t *clt) {
+         tlsuv_tls_link_free(&clt->tls_link);
+     }
+ }
+-
+diff --git a/src/http_req.c b/src/http_req.c
+index 302cad1..d34182e 100644
+--- a/src/http_req.c
++++ b/src/http_req.c
+@@ -46,6 +46,10 @@ void http_req_init(tlsuv_http_req_t* r, const char* method, const char* path) {
+     r->req_body_size = -1;
+     r->body_sent_size = 0;
+     r->state = created;
++    r->parser_active = false;
++    r->cancel_pending = false;
++    r->cancel_error = 0;
++    r->cancel_status = NULL;
+     r->resp.req = r;
+ 
+     llhttp_init(&r->parser, HTTP_RESPONSE, &HTTP_PROC);
+@@ -57,9 +61,15 @@ void http_req_free(tlsuv_http_req_t* req) {
+ 
+     free_hdr_list(&req->req_headers);
+     free_hdr_list(&req->resp.headers);
++    if (req->resp.curr_header) {
++        tlsuv__free(req->resp.curr_header);
++    }
+     if (req->resp.status) {
+         tlsuv__free(req->resp.status);
+     }
++    if (req->cancel_status) {
++        tlsuv__free(req->cancel_status);
++    }
+     if (req->inflater) {
+         um_free_inflater(req->inflater);
+     }
+@@ -89,11 +99,17 @@ int http_req_finish(tlsuv_http_req_t* req) {
+ 
+ ssize_t http_req_process(tlsuv_http_req_t* req, const char* buf, ssize_t len) {
+     UM_LOG(TRACE, "processing %zd bytes\n%.*s", len, printable_len((const unsigned char*)buf, len), buf);
++    req->parser_active = true;
+     llhttp_errno_t err = llhttp_execute(&req->parser, buf, len);
++    req->parser_active = false;
+     ssize_t processed = -1;
+     if (err == HPE_OK) {
+         processed = len;
+         UM_LOG(VERB, "processed %zd of %zd", processed, len);
++    } else if (err == HPE_PAUSED && req->cancel_pending) {
++        processed = llhttp_get_error_pos(&req->parser) - buf;
++        UM_LOG(VERB, "request[%s %s] canceled after processing %zd of %zd",
++               req->method, req->path, processed, len);
+     } else if (err == HPE_PAUSED_UPGRADE) {
+         processed = llhttp_get_error_pos(&req->parser) - buf;
+         UM_LOG(VERB, "websocket upgrade: processed %zd out of %zd", processed, len);
+@@ -420,4 +436,4 @@ static int http_body_cb(llhttp_t* parser, const char* body, size_t len) {
+         }
+     }
+     return 0;
+-}
+\ No newline at end of file
++}
