@@ -182,6 +182,87 @@ static char *uri_range_dup(const UriTextRangeA *r) {
   return strndup(r->first, (size_t)(r->afterLast - r->first));
 }
 
+static char *url_escape_brackets_in_query_or_fragment(const char *url_str, bool *changed_out) {
+  size_t len = strlen(url_str);
+  size_t extra = 0;
+  bool in_query = false;
+  bool in_fragment = false;
+
+  for (size_t i = 0; i < len; i++) {
+    char c = url_str[i];
+    if (c == '#' && !in_fragment) {
+      in_query = false;
+      in_fragment = true;
+      continue;
+    }
+    if (c == '?' && !in_query && !in_fragment) {
+      in_query = true;
+      continue;
+    }
+    if ((in_query || in_fragment) && (c == '[' || c == ']')) extra += 2;
+  }
+
+  if (changed_out) *changed_out = (extra != 0);
+  if (extra == 0) return NULL;
+
+  char *escaped = malloc(len + extra + 1);
+  size_t pos = 0;
+  in_query = false;
+  in_fragment = false;
+
+  if (!escaped) return NULL;
+
+  for (size_t i = 0; i < len; i++) {
+    char c = url_str[i];
+    if (c == '#' && !in_fragment) {
+      in_query = false;
+      in_fragment = true;
+      escaped[pos++] = c;
+      continue;
+    }
+    if (c == '?' && !in_query && !in_fragment) {
+      in_query = true;
+      escaped[pos++] = c;
+      continue;
+    }
+    if ((in_query || in_fragment) && c == '[') {
+      memcpy(escaped + pos, "%5B", 3);
+      pos += 3;
+      continue;
+    }
+    if ((in_query || in_fragment) && c == ']') {
+      memcpy(escaped + pos, "%5D", 3);
+      pos += 3;
+      continue;
+    }
+    escaped[pos++] = c;
+  }
+
+  escaped[pos] = '\0';
+  return escaped;
+}
+
+static void url_override_search_hash_from_input(url_state_t *s, const char *url_str) {
+  const char *hash = strchr(url_str, '#');
+  const char *query = strchr(url_str, '?');
+  size_t search_len = 0;
+  size_t hash_len = 0;
+
+  if (query && hash && hash < query) query = NULL;
+
+  if (query) {
+    const char *search_end = hash && hash > query ? hash : url_str + strlen(url_str);
+    search_len = (size_t)(search_end - query);
+  }
+  if (hash) hash_len = strlen(hash);
+
+  free(s->search);
+  s->search = search_len > 0 ? strndup(query, search_len) : strdup("");
+
+  free(s->hash);
+  s->hash = hash_len > 0 ? strndup(hash, hash_len) : strdup("");
+}
+
 static void uri_to_state(const UriUriA *uri, url_state_t *s) {
   char *scheme = uri_range_dup(&uri->scheme);
   size_t slen = strlen(scheme);
@@ -307,15 +388,30 @@ int parse_url_to_state(const char *url_str, const char *base_str, url_state_t *s
   }
 
   UriUriA uri;
-  if (uriParseSingleUriA(&uri, url_str, &errpos) != URI_SUCCESS) return -1;
+  char *escaped_url = NULL;
+  bool used_relaxed_query_parse = false;
+
+  if (uriParseSingleUriA(&uri, url_str, &errpos) != URI_SUCCESS) {
+    escaped_url = url_escape_brackets_in_query_or_fragment(url_str, &used_relaxed_query_parse);
+    if (!escaped_url) return -1;
+    if (uriParseSingleUriA(&uri, escaped_url, &errpos) != URI_SUCCESS) {
+      free(escaped_url);
+      return -1;
+    }
+  }
+  
   if (!uri.scheme.first || uri.scheme.first == uri.scheme.afterLast) {
     uriFreeUriMembersA(&uri);
+    free(escaped_url);
     return -1;
   }
   
   uriNormalizeSyntaxA(&uri);
   uri_to_state(&uri, s);
+  if (used_relaxed_query_parse) url_override_search_hash_from_input(s, url_str);
+  
   uriFreeUriMembersA(&uri);
+  free(escaped_url);
   
   return 0;
 }
