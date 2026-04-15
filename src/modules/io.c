@@ -779,7 +779,6 @@ static const char *get_type_name(int type) {
     [T_ARR]        = "array",
     [T_FUNC]       = "function",
     [T_CFUNC]      = "function",
-    [T_CLOSURE]    = "closure",
     [T_PROMISE]    = "Promise",
     [T_GENERATOR]  = "Generator",
     [T_UNDEF]      = "undefined",

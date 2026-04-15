@@ -13,7 +13,6 @@ Ant.typeof = function (t) {
     T_ARR: 'array',
     T_FUNC: 'function',
     T_CFUNC: 'cfunc',
-    T_CLOSURE: 'closure',
     T_PROMISE: 'promise',
     T_GENERATOR: 'generator',
     T_UNDEF: 'undefined',

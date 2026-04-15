@@ -443,7 +443,7 @@ const char *typestr(uint8_t t) {
     [T_UNDEF] = "undefined", [T_NULL] = "object", [T_BOOL] = "boolean",
     [T_NUM] = "number", [T_BIGINT] = "bigint", [T_STR] = "string",
     [T_SYMBOL] = "symbol", [T_OBJ] = "object", [T_ARR] = "object",
-    [T_FUNC] = "function", [T_CFUNC] = "function", [T_CLOSURE] = "closure",
+    [T_FUNC] = "function", [T_CFUNC] = "function",
     [T_PROMISE] = "object", [T_GENERATOR] = "object",
     [T_ERR] = "err", [T_TYPEDARRAY] = "typedarray",
     [T_FFI] = "ffi", [T_NTARG] = "ntarg"

@@ -94,7 +94,7 @@ static ant_value_t sc_clone_rec(ant_t *js, ant_value_t val, sc_entry_t **seen, s
     return sc_clone_typed_array(js, val, (TypedArrayData *)js_gettypedarray(val), seen);
   }
 
-  if (t == T_FUNC || t == T_CFUNC || t == T_CLOSURE)
+  if (t == T_FUNC || t == T_CFUNC)
     return js_throw(js, make_dom_exception(js, "() => {} could not be cloned", "DataCloneError"));
   if (t == T_PROMISE || t == T_GENERATOR)
     return js_throw(js, make_dom_exception(js, "Value could not be cloned", "DataCloneError"));

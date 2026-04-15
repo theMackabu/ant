@@ -98,7 +98,6 @@ enum {
   // objects
   T_FUNC,
   T_CFUNC,
-  T_CLOSURE,
   T_PROMISE,
   T_GENERATOR,
 
