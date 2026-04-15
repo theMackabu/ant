@@ -7,6 +7,7 @@
 #include "internal.h"
 #include "descriptors.h"
 
+#include "gc/roots.h"
 #include "silver/engine.h"
 #include "modules/assert.h"
 #include "modules/symbol.h"
@@ -180,8 +181,8 @@ static inline void ts_set_flushing(ant_value_t ts_obj, bool flushing) {
   js_set_slot(ts_obj, SLOT_WS_CLOSE, flushing ? js_true : js_false);
 }
 
-static inline void ts_set_cancel_state(ant_value_t ts_obj, ant_value_t promise, bool started_by_abort, bool has_user_handler) {
-  js_set_slot(ts_obj, SLOT_RS_CANCEL, promise);
+static inline void ts_set_cancel_state(ant_t *js, ant_value_t ts_obj, ant_value_t promise, bool started_by_abort, bool has_user_handler) {
+  js_set_slot_wb(js, ts_obj, SLOT_RS_CANCEL, promise);
   js_set_slot(ts_obj, SLOT_WS_ABORT, started_by_abort ? js_true : js_false);
   js_set_slot(ts_obj, SLOT_RS_SIZE, js_mkundef());
   js_set_slot(ts_obj, SLOT_WS_WRITE, js_false);
@@ -211,14 +212,23 @@ static ant_value_t ts_take_thrown_or(ant_t *js, ant_value_t fallback) {
 }
 
 static void ts_chain_promise(ant_t *js, ant_value_t val, ant_value_t res_fn, ant_value_t rej_fn) {
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, val);
+  GC_ROOT_PIN(js, res_fn);
+  GC_ROOT_PIN(js, rej_fn);
+
   ant_value_t promise = val;
+  GC_ROOT_PIN(js, promise);
   if (vtype(promise) != T_PROMISE) {
     promise = js_mkpromise(js);
+    GC_ROOT_PIN(js, promise);
     js_resolve_promise(js, promise, val);
   }
 
   ant_value_t then_result = js_promise_then(js, promise, res_fn, rej_fn);
+  GC_ROOT_PIN(js, then_result);
   promise_mark_handled(then_result);
+  GC_ROOT_RESTORE(js, root_mark);
 }
 
 static void ts_error(ant_t *js, ant_value_t ts_obj, ant_value_t e) {
@@ -261,7 +271,7 @@ static void ts_set_backpressure(ant_t *js, ant_value_t ts_obj, bool backpressure
     if (vtype(bp) == T_PROMISE) js_resolve_promise(js, bp, js_mkundef());
   }
   ant_value_t new_bp = js_mkpromise(js);
-  js_set_slot(ts_obj, SLOT_AUX, new_bp);
+  js_set_slot_wb(js, ts_obj, SLOT_AUX, new_bp);
   ts_set_bp_flag(ts_obj, backpressure);
 }
 
@@ -291,7 +301,7 @@ ant_value_t ts_ctrl_enqueue(ant_t *js, ant_value_t ctrl_obj, ant_value_t chunk) 
 void ts_ctrl_error(ant_t *js, ant_value_t ctrl_obj, ant_value_t e) {
   ant_value_t ts_obj = ts_ctrl_stream(ctrl_obj);
   if (vtype(ts_cancel_promise(ts_obj)) == T_PROMISE && ts_cancel_has_user_handler(ts_obj))
-    js_set_slot(ts_obj, SLOT_RS_SIZE, e);
+    js_set_slot_wb(js, ts_obj, SLOT_RS_SIZE, e);
   ts_error(js, ts_obj, e);
   ts_error_writable_and_unblock_write(js, ts_obj, e);
 }
@@ -389,7 +399,7 @@ static ant_value_t ts_run_cancel_algorithm(ant_t *js, ant_value_t ts_obj, ant_va
 
   ant_value_t p = js_mkpromise(js);
   promise_mark_handled(p);
-  ts_set_cancel_state(ts_obj, p, started_by_abort, is_callable(cancel_fn));
+  ts_set_cancel_state(js, ts_obj, p, started_by_abort, is_callable(cancel_fn));
   ts_ctrl_clear_algorithms(ts_controller(ts_obj));
 
   ant_value_t result = js_mkundef();
@@ -467,7 +477,7 @@ static ant_value_t ts_abort_cancel_resolve(ant_t *js, ant_value_t *args, int nar
     return js_mkundef();
   }
 
-  if (ts_cancel_joined_abort(ts_obj)) js_set_slot(ts_obj, SLOT_RS_SIZE, reason);  
+  if (ts_cancel_joined_abort(ts_obj)) js_set_slot_wb(js, ts_obj, SLOT_RS_SIZE, reason);
   ts_error(js, ts_obj, reason);
   
   if (ts_cancel_joined_abort(ts_obj)) js_reject_promise(js, p, reason);
@@ -549,7 +559,7 @@ static ant_value_t ts_sink_write(ant_t *js, ant_value_t *args, int nargs) {
 
   ant_value_t finish_p = js_mkpromise(js);
   promise_mark_handled(finish_p);
-  js_set_slot(ctrl_obj, SLOT_RS_PULL, finish_p);
+  js_set_slot_wb(js, ctrl_obj, SLOT_RS_PULL, finish_p);
 
   if (ts_get_backpressure(ts_obj)) {
     ant_value_t wrapper = js_mkobj(js);
@@ -995,7 +1005,7 @@ ant_value_t js_ts_ctor(ant_t *js, ant_value_t *args, int nargs) {
   js_set_slot(ts_obj, SLOT_CTOR, ws_obj);
 
   ant_value_t bp_promise = js_mkpromise(js);
-  js_set_slot(ts_obj, SLOT_AUX, bp_promise);
+  js_set_slot_wb(js, ts_obj, SLOT_AUX, bp_promise);
 
   ts_set_backpressure(js, ts_obj, true);
 

@@ -618,7 +618,7 @@ ant_value_t jit_helper_closure(
 
   ant_value_t func_obj = mkobj(js, 0);
   closure->func_obj = func_obj;
-  ant_value_t module_ctx = js_module_eval_active_ctx(js);
+  ant_value_t module_ctx = sv_get_current_closure_module_ctx(js, mkval(T_FUNC, (uintptr_t)parent_closure));
   
   js_mark_constructor(func_obj, !child->is_arrow && !child->is_method && !child->is_generator);
   js_setprop(js, func_obj, js->length_str, tov((double)child->param_count));

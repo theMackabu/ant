@@ -7,6 +7,7 @@
 #include "internal.h"
 #include "descriptors.h"
 
+#include "gc/roots.h"
 #include "silver/engine.h"
 #include "modules/symbol.h"
 #include "modules/assert.h"
@@ -197,14 +198,23 @@ static ant_value_t ws_write_reqs_shift(ant_t *js, ant_value_t stream_obj) {
 }
 
 static void ws_chain_promise(ant_t *js, ant_value_t val, ant_value_t res_fn, ant_value_t rej_fn) {
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, val);
+  GC_ROOT_PIN(js, res_fn);
+  GC_ROOT_PIN(js, rej_fn);
+
   ant_value_t promise = val;
+  GC_ROOT_PIN(js, promise);
   if (vtype(promise) != T_PROMISE) {
     promise = js_mkpromise(js);
+    GC_ROOT_PIN(js, promise);
     js_resolve_promise(js, promise, val);
   }
 
   ant_value_t then_result = js_promise_then(js, promise, res_fn, rej_fn);
+  GC_ROOT_PIN(js, then_result);
   promise_mark_handled(then_result);
+  GC_ROOT_RESTORE(js, root_mark);
 }
 
 static void ws_default_controller_clear_algorithms(ant_value_t ctrl_obj) {
@@ -238,14 +248,14 @@ static void ws_writer_replace_ready_promise_rejected(ant_t *js, ant_value_t writ
   ant_value_t ready = js_mkpromise(js);
   js_reject_promise(js, ready, error);
   promise_mark_handled(ready);
-  js_set_slot(writer_obj, SLOT_WS_READY, ready);
+  js_set_slot_wb(js, writer_obj, SLOT_WS_READY, ready);
 }
 
 static void ws_writer_replace_closed_promise_rejected(ant_t *js, ant_value_t writer_obj, ant_value_t error) {
   ant_value_t closed = js_mkpromise(js);
   js_reject_promise(js, closed, error);
   promise_mark_handled(closed);
-  js_set_slot(writer_obj, SLOT_RS_CLOSED, closed);
+  js_set_slot_wb(js, writer_obj, SLOT_RS_CLOSED, closed);
 }
 
 static void ws_writer_reject_ready_promise(ant_t *js, ant_value_t writer_obj, ant_value_t error) {
@@ -266,7 +276,7 @@ static void writable_stream_start_erroring(ant_t *js, ant_value_t stream_obj, an
   ws_controller_t *ctrl = ws_get_controller(ctrl_obj);
 
   stream->state = WS_STATE_ERRORING;
-  js_set_slot(stream_obj, SLOT_AUX, reason);
+  js_set_slot_wb(js, stream_obj, SLOT_AUX, reason);
 
   ant_value_t signal_ac = ws_ctrl_signal(ctrl_obj);
   if (is_object_type(signal_ac)) {
@@ -396,7 +406,7 @@ static void writable_stream_update_backpressure(ant_t *js, ant_value_t stream_ob
   if (backpressure) {
     ant_value_t ready = js_mkpromise(js);
     promise_mark_handled(ready);
-    js_set_slot(writer_obj, SLOT_WS_READY, ready);
+    js_set_slot_wb(js, writer_obj, SLOT_WS_READY, ready);
   } else {
     ant_value_t ready = ws_writer_ready(writer_obj);
     if (!is_undefined(ready)) js_resolve_promise(js, ready, js_mkundef());
@@ -453,12 +463,12 @@ static void writable_stream_finish_in_flight_close_with_error(ant_t *js, ant_val
 
 static void writable_stream_mark_first_write_in_flight(ant_t *js, ant_value_t stream_obj) {
   ant_value_t wr = ws_write_reqs_shift(js, stream_obj);
-  js_set_slot(stream_obj, SLOT_DEFAULT, wr);
+  js_set_slot_wb(js, stream_obj, SLOT_DEFAULT, wr);
 }
 
-static void writable_stream_mark_close_in_flight(ant_value_t stream_obj) {
+static void writable_stream_mark_close_in_flight(ant_t *js, ant_value_t stream_obj) {
   ant_value_t cr = ws_stream_close_request(stream_obj);
-  js_set_slot(stream_obj, SLOT_WS_ABORT, cr);
+  js_set_slot_wb(js, stream_obj, SLOT_WS_ABORT, cr);
   js_set_slot(stream_obj, SLOT_WS_CLOSE, js_mkundef());
 }
 
@@ -546,7 +556,7 @@ static ant_value_t ws_process_close_reject(ant_t *js, ant_value_t *args, int nar
 
 static void ws_default_controller_process_close(ant_t *js, ant_value_t ctrl_obj) {
   ant_value_t stream_obj = ws_ctrl_stream(ctrl_obj);
-  writable_stream_mark_close_in_flight(stream_obj);
+  writable_stream_mark_close_in_flight(js, stream_obj);
 
   ws_ctrl_queue_shift(js, ctrl_obj);
   ws_controller_t *ctrl = ws_get_controller(ctrl_obj);
@@ -664,7 +674,7 @@ ant_value_t writable_stream_close(ant_t *js, ant_value_t stream_obj) {
   }
 
   ant_value_t promise = js_mkpromise(js);
-  js_set_slot(stream_obj, SLOT_WS_CLOSE, promise);
+  js_set_slot_wb(js, stream_obj, SLOT_WS_CLOSE, promise);
 
   ant_value_t writer_obj = ws_stream_writer(stream_obj);
   if (ws_is_writer(writer_obj) && stream->backpressure && stream->state == WS_STATE_WRITABLE) {
@@ -747,7 +757,7 @@ ant_value_t writable_stream_abort(ant_t *js, ant_value_t stream_obj, ant_value_t
   ant_value_t promise = js_mkpromise(js);
   stream->has_pending_abort = true;
   stream->pending_abort_was_already_erroring = was_already_erroring;
-  js_set_slot(stream_obj, SLOT_WS_READY, promise);
+  js_set_slot_wb(js, stream_obj, SLOT_WS_READY, promise);
 
   if (!was_already_erroring)
     writable_stream_start_erroring(js, stream_obj, reason);

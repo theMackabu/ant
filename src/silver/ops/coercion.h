@@ -58,12 +58,17 @@ static inline void sv_op_is_null(sv_vm_t *vm) {
 
 static inline ant_value_t sv_op_import(sv_vm_t *vm, ant_t *js) {
   ant_value_t specifier = vm->stack[--vm->sp];
-  ant_value_t import_fn = js_getprop_fallback(js, js->global, "import");
+  ant_value_t import_fn = js_get_module_import_binding(js);
+  
+  if (vtype(import_fn) != T_FUNC && vtype(import_fn) != T_CFUNC)
+    import_fn = js_getprop_fallback(js, js->global, "import");
+    
   if (vtype(import_fn) == T_FUNC || vtype(import_fn) == T_CFUNC) {
     ant_value_t result = sv_vm_call(vm, js, import_fn, js->global, &specifier, 1, NULL, false);
     if (!is_err(result)) vm->stack[vm->sp++] = result;
     return result;
   }
+  
   vm->stack[vm->sp++] = mkval(T_UNDEF, 0);
   return tov(0);
 }

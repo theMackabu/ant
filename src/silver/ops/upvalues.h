@@ -1,8 +1,9 @@
 #ifndef SV_UPVALUES_H
 #define SV_UPVALUES_H
 
-#include "silver/engine.h"
+#include "internal.h"
 #include "descriptors.h"
+#include "silver/engine.h"
 
 static inline ant_value_t sv_setup_function_prototype_with_parent(
   ant_t *js, ant_value_t func_obj,
@@ -27,6 +28,15 @@ static inline ant_value_t sv_setup_function_prototype_with_parent(
   js_set_descriptor(js, func_obj, "prototype", 9, JS_DESC_W);
 
   return js_mkundef();
+}
+
+static inline ant_value_t sv_get_current_closure_module_ctx(ant_t *js, ant_value_t parent_func) {
+  if (vtype(parent_func) == T_FUNC) {
+    ant_value_t module_ctx = js_get_slot(js_func_obj(parent_func), SLOT_MODULE_CTX);
+    if (is_object_type(module_ctx)) return module_ctx;
+  }
+
+  return js_module_eval_active_ctx(js);
 }
 
 static inline ant_value_t sv_op_get_upval(
@@ -122,7 +132,7 @@ static inline ant_value_t sv_op_closure(
 
   ant_value_t func_obj = mkobj(js, 0);
   closure->func_obj = func_obj;
-  ant_value_t module_ctx = js_module_eval_active_ctx(js);
+  ant_value_t module_ctx = sv_get_current_closure_module_ctx(js, frame->callee);
   
   js_mark_constructor(func_obj, !child->is_arrow && !child->is_method && !child->is_generator);
   js_setprop(js, func_obj, js->length_str, tov((double)child->param_count));

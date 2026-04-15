@@ -5,6 +5,7 @@
 #include "internal.h"
 #include "descriptors.h"
 
+#include "gc/roots.h"
 #include "silver/engine.h"
 #include "modules/assert.h"
 #include "modules/abort.h"
@@ -12,19 +13,6 @@
 #include "streams/readable.h"
 #include "streams/writable.h"
 #include "modules/structured-clone.h"
-
-static void pipes_chain_promise(
-  ant_t *js, ant_value_t value,
-  ant_value_t on_resolve, ant_value_t on_reject
-) {
-  ant_value_t promise = value;
-  if (vtype(promise) != T_PROMISE) {
-    promise = js_mkpromise(js);
-    js_resolve_promise(js, promise, value);
-  }
-
-  js_promise_then(js, promise, on_resolve, on_reject);
-}
 
 typedef struct {
   bool settled;
@@ -34,6 +22,29 @@ typedef struct {
   bool prevent_abort;
   bool prevent_cancel;
 } pipe_state_t;
+
+static void pipes_chain_promise(
+  ant_t *js, ant_value_t value,
+  ant_value_t on_resolve, ant_value_t on_reject
+) {
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, value);
+  GC_ROOT_PIN(js, on_resolve);
+  GC_ROOT_PIN(js, on_reject);
+
+  ant_value_t promise = value;
+  GC_ROOT_PIN(js, promise);
+  if (vtype(promise) != T_PROMISE) {
+    promise = js_mkpromise(js);
+    GC_ROOT_PIN(js, promise);
+    js_resolve_promise(js, promise, value);
+  }
+
+  ant_value_t then_result = js_promise_then(js, promise, on_resolve, on_reject);
+  GC_ROOT_PIN(js, then_result);
+  promise_mark_handled(then_result);
+  GC_ROOT_RESTORE(js, root_mark);
+}
 
 static void pipe_state_finalize(ant_t *js, ant_object_t *obj) {
   if (!obj->extra_slots) return;
@@ -93,7 +104,7 @@ static void pipes_release_reader(ant_t *js, ant_value_t reader_obj) {
   
   js_reject_promise(js, new_closed, release_err);
   promise_mark_handled(new_closed);
-  js_set_slot(reader_obj, SLOT_RS_CLOSED, new_closed);
+  js_set_slot_wb(js, reader_obj, SLOT_RS_CLOSED, new_closed);
   js_set_slot(stream_obj, SLOT_CTOR, js_mkundef());
   js_set_slot(reader_obj, SLOT_ENTRIES, js_mkundef());
 }
@@ -107,12 +118,12 @@ static void pipes_release_writer(ant_t *js, ant_value_t writer_obj) {
   
   js_reject_promise(js, ready, rel_err);
   promise_mark_handled(ready);
-  js_set_slot(writer_obj, SLOT_WS_READY, ready);
+  js_set_slot_wb(js, writer_obj, SLOT_WS_READY, ready);
   
   ant_value_t closed = js_mkpromise(js);
   js_reject_promise(js, closed, rel_err);
   promise_mark_handled(closed);
-  js_set_slot(writer_obj, SLOT_RS_CLOSED, closed);
+  js_set_slot_wb(js, writer_obj, SLOT_RS_CLOSED, closed);
   js_set_slot(ws_obj, SLOT_CTOR, js_mkundef());
   js_set_slot(writer_obj, SLOT_ENTRIES, js_mkundef());
 }
@@ -705,10 +716,10 @@ static ant_value_t tee_branch_cancel(ant_t *js, ant_value_t *args, int nargs) {
 
   if (is_b1) st->canceled1 = true;
   else st->canceled2 = true;
-  js_set_slot(state, reason_slot, reason);
+  js_set_slot_wb(js, state, reason_slot, reason);
 
   ant_value_t promise = js_mkpromise(js);
-  js_set_slot(state, promise_slot, promise);
+  js_set_slot_wb(js, state, promise_slot, promise);
 
   if (st->done) {
     js_resolve_promise(js, promise, js_mkundef());

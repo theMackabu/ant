@@ -11267,6 +11267,20 @@ ant_value_t js_promise_then(ant_t *js, ant_value_t promise, ant_value_t on_fulfi
   return result;
 }
 
+static void js_mark_promise_rejection_handled_chain(ant_t *js, ant_value_t promise) {
+  ant_value_t current = promise;
+
+  while (vtype(current) == T_PROMISE) {
+    ant_promise_state_t *pd = get_promise_data(js, current, false);
+    if (!pd) break;
+    
+    if (pd->unhandled_reported) js_fire_rejection_handled(js, current, pd->value);
+    pd->has_rejection_handler = true;
+    pd->unhandled_reported = false;
+    current = pd->trigger_parent;
+  }
+}
+
 static inline ant_value_t js_get_thenable_then(ant_t *js, ant_value_t value) {
   if (!is_object_type(value)) return js_mkundef();
   return js_getprop_fallback(js, value, "then");
@@ -11294,10 +11308,7 @@ js_await_result_t js_promise_await_coroutine(ant_t *js, ant_value_t promise, cor
     return result;
   }
 
-  if (pd->unhandled_reported) js_fire_rejection_handled(js, promise, pd->value);
-  pd->has_rejection_handler = true;
-  pd->unhandled_reported = false;
-
+  js_mark_promise_rejection_handled_chain(js, promise);
   if (pd->state == 0) gc_root_pending_promise(js_obj_ptr(js_as_obj(promise)));
   else queue_promise_trigger(js, promise);
 
@@ -11405,11 +11416,8 @@ void js_resolve_promise(ant_t *js, ant_value_t p, ant_value_t val) {
     }
     
     gc_write_barrier(js, js_obj_ptr(js_as_obj(val)), p);
-    if (src_pd->unhandled_reported) js_fire_rejection_handled(js, val, src_pd->value);
+    js_mark_promise_rejection_handled_chain(js, val);
     
-    src_pd->has_rejection_handler = true;
-    src_pd->unhandled_reported = false;
-
     if (src_pd->state == 0) gc_root_pending_promise(js_obj_ptr(js_as_obj(val)));
     else queue_promise_trigger(js, val);
     GC_ROOT_RESTORE(js, root_mark);
@@ -11666,17 +11674,14 @@ static ant_value_t builtin_promise_then(ant_t *js, ant_value_t *args, int nargs)
       GC_ROOT_RESTORE(js, root_mark);
       return js_mkerr(js, "out of memory");
     }
-
+    
     gc_write_barrier(js, js_obj_ptr(js_as_obj(p)), nextP);
     gc_write_barrier(js, js_obj_ptr(js_as_obj(p)), onFulfilled);
     gc_write_barrier(js, js_obj_ptr(js_as_obj(p)), onRejected);
-
-    if (vtype(onRejected) == T_FUNC || vtype(onRejected) == T_CFUNC) {
-      if (pd->unhandled_reported) js_fire_rejection_handled(js, p, pd->value);
-      pd->has_rejection_handler = true;
-      pd->unhandled_reported = false;
-    }
-
+    
+    if (vtype(onRejected) == T_FUNC || vtype(onRejected) == T_CFUNC)
+      js_mark_promise_rejection_handled_chain(js, p);
+      
     if (pd->state == 0)
       gc_root_pending_promise(js_obj_ptr(p));
   }
@@ -12469,9 +12474,7 @@ static ant_value_t builtin_Promise_any(ant_t *js, ant_value_t *args, int nargs) 
 
     ant_promise_state_t *pd = get_promise_data(js, item, false);
     if (pd) {
-      pd->has_rejection_handler = true;
-      pd->unhandled_reported = false;
-      
+      js_mark_promise_rejection_handled_chain(js, item);
       if (pd->state == 1) {
         promise_any_try_resolve(js, tracker, pd->value);
         GC_ROOT_RESTORE(js, root_mark);
@@ -12999,7 +13002,7 @@ ant_value_t js_get_module_import_binding(ant_t *js) {
   
   ant_value_t module_ctx = js_get_execution_module_ctx(js);
   ant_value_t import_meta = js_get_module_ctx_import_meta(js, module_ctx);
-  
+
   GC_ROOT_PIN(js, module_ctx);
   GC_ROOT_PIN(js, import_meta);
 
