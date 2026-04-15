@@ -1054,6 +1054,8 @@ static bool jit_inlineable(sv_func_t *f) {
       case OP_RETURN: case OP_RETURN_UNDEF:
       case OP_GET_FIELD: case OP_GET_FIELD2: case OP_GET_GLOBAL:
       case OP_SPECIAL_OBJ:
+        if (op == OP_SPECIAL_OBJ && sv_get_u8(ip + 1) == 0 &&
+            !f->is_strict && f->param_count > 0) return false;
       case OP_NOP: case OP_LINE_NUM: case OP_COL_NUM: case OP_LABEL:
         break;
       default:
@@ -2002,7 +2004,10 @@ static bool jit_is_eligible(sv_func_t *func) {
       case OP_STR_ALC_SNAPSHOT:
       case OP_TO_PROPKEY:
       case OP_RETURN: case OP_RETURN_UNDEF:
-      case OP_SPECIAL_OBJ:
+      case OP_SPECIAL_OBJ: if (
+        op == OP_SPECIAL_OBJ && sv_get_u8(ip + 1) == 0 
+        && !func->is_strict && func->param_count > 0
+      ) eligible = false;
       case OP_SET_NAME:
       case OP_TRY_PUSH: case OP_TRY_POP:
       case OP_THROW: case OP_THROW_ERROR:
