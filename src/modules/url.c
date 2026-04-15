@@ -79,6 +79,17 @@ static bool uses_authority_syntax(const char *proto) {
   return is_special_scheme(proto) || strcmp(proto, "file:") == 0;
 }
 
+static bool url_base_is_opaque(const char *base_str, const char *proto) {
+  const char *after_colon = NULL;
+
+  if (!base_str || is_special_scheme(proto)) return false;
+  after_colon = strchr(base_str, ':');
+  if (!after_colon) return false;
+  after_colon++;
+  
+  return *after_colon != '/' && *after_colon != '\0';
+}
+
 char *form_urlencode_n(const char *str, size_t len) {
   if (!str) return strdup("");
   char *out = malloc(len * 3 + 1);
@@ -182,7 +193,29 @@ static char *uri_range_dup(const UriTextRangeA *r) {
   return strndup(r->first, (size_t)(r->afterLast - r->first));
 }
 
-static char *url_escape_brackets_in_query_or_fragment(const char *url_str, bool *changed_out) {
+static bool url_has_brackets_in_query_or_fragment(const char *url_str) {
+  size_t len = strlen(url_str);
+  bool in_query = false;
+  bool in_fragment = false;
+
+  for (size_t i = 0; i < len; i++) {
+    char c = url_str[i];
+    if (c == '#' && !in_fragment) {
+      in_query = false;
+      in_fragment = true;
+      continue;
+    }
+    if (c == '?' && !in_query && !in_fragment) {
+      in_query = true;
+      continue;
+    }
+    if ((in_query || in_fragment) && (c == '[' || c == ']')) return true;
+  }
+
+  return false;
+}
+
+static char *url_escape_brackets_in_query_or_fragment(const char *url_str) {
   size_t len = strlen(url_str);
   size_t extra = 0;
   bool in_query = false;
@@ -201,9 +234,6 @@ static char *url_escape_brackets_in_query_or_fragment(const char *url_str, bool 
     }
     if ((in_query || in_fragment) && (c == '[' || c == ']')) extra += 2;
   }
-
-  if (changed_out) *changed_out = (extra != 0);
-  if (extra == 0) return NULL;
 
   char *escaped = malloc(len + extra + 1);
   size_t pos = 0;
@@ -242,6 +272,29 @@ static char *url_escape_brackets_in_query_or_fragment(const char *url_str, bool 
   return escaped;
 }
 
+static int url_parse_single_uri_relaxed(
+  UriUriA *uri,
+  const char *url_str,
+  const char **errpos,
+  char **owned_input_out,
+  bool *used_relaxed_out
+) {
+  char *escaped = NULL;
+
+  if (owned_input_out) *owned_input_out = NULL;
+  if (used_relaxed_out) *used_relaxed_out = false;
+  if (uriParseSingleUriA(uri, url_str, errpos) == URI_SUCCESS) return 0;
+
+  if (!url_has_brackets_in_query_or_fragment(url_str)) return -1;
+  escaped = url_escape_brackets_in_query_or_fragment(url_str);
+  
+  if (!escaped) return -1;
+  if (owned_input_out) *owned_input_out = escaped;
+  if (used_relaxed_out) *used_relaxed_out = true;
+
+  return uriParseSingleUriA(uri, escaped, errpos) == URI_SUCCESS ? 0 : -1;
+}
+
 static void url_override_search_hash_from_input(url_state_t *s, const char *url_str) {
   const char *hash = strchr(url_str, '#');
   const char *query = strchr(url_str, '?');
@@ -261,6 +314,28 @@ static void url_override_search_hash_from_input(url_state_t *s, const char *url_
 
   free(s->hash);
   s->hash = hash_len > 0 ? strndup(hash, hash_len) : strdup("");
+}
+
+static void url_override_search_hash_from_reference(url_state_t *s, const char *url_str) {
+  const char *hash = strchr(url_str, '#');
+  const char *query = strchr(url_str, '?');
+  size_t search_len = 0;
+  size_t hash_len = 0;
+
+  if (query && hash && hash < query) query = NULL;
+
+  if (query) {
+    const char *search_end = hash && hash > query ? hash : url_str + strlen(url_str);
+    search_len = (size_t)(search_end - query);
+    free(s->search);
+    s->search = strndup(query, search_len);
+  }
+
+  if (hash) {
+    hash_len = strlen(hash);
+    free(s->hash);
+    s->hash = strndup(hash, hash_len);
+  }
 }
 
 static void uri_to_state(const UriUriA *uri, url_state_t *s) {
@@ -339,8 +414,15 @@ int parse_url_to_state(const char *url_str, const char *base_str, url_state_t *s
 
   if (base_str) {
     UriUriA base_uri, ref_uri, resolved;
-    if (uriParseSingleUriA(&base_uri, base_str, &errpos) != URI_SUCCESS) return -1;
-      
+    char *escaped_base = NULL;
+    char *escaped_ref = NULL;
+    bool used_relaxed_ref_parse = false;
+    
+    if (url_parse_single_uri_relaxed(&base_uri, base_str, &errpos, &escaped_base, NULL) != 0) {
+      free(escaped_base);
+      return -1;
+    }
+    
     char *base_scheme = uri_range_dup(&base_uri.scheme);
     size_t bslen = strlen(base_scheme);
     for (size_t i = 0; i < bslen; i++) base_scheme[i] = (char)tolower((unsigned char)base_scheme[i]);
@@ -351,23 +433,24 @@ int parse_url_to_state(const char *url_str, const char *base_str, url_state_t *s
     proto_buf[bslen + 1] = '\0';
     free(base_scheme);
     
-    bool base_special = is_special_scheme(proto_buf);
-    if (!base_special) {
-    const char *after_colon = strchr(base_str, ':');
-    if (after_colon) {
-      after_colon++;
-      bool is_opaque = (*after_colon != '/' && *after_colon != '\0');
-      if (is_opaque) { uriFreeUriMembersA(&base_uri); return -1; }
-    }}
-
-    if (uriParseSingleUriA(&ref_uri, url_str, &errpos) != URI_SUCCESS) {
+    if (url_base_is_opaque(base_str, proto_buf)) {
       uriFreeUriMembersA(&base_uri);
+      free(escaped_base);
+      return -1;
+    }
+    
+    if (url_parse_single_uri_relaxed(&ref_uri, url_str, &errpos, &escaped_ref, &used_relaxed_ref_parse) != 0) {
+      uriFreeUriMembersA(&base_uri);
+      free(escaped_base);
+      free(escaped_ref);
       return -1;
     }
     
     if (uriAddBaseUriA(&resolved, &ref_uri, &base_uri) != URI_SUCCESS) {
       uriFreeUriMembersA(&base_uri);
       uriFreeUriMembersA(&ref_uri);
+      free(escaped_base);
+      free(escaped_ref);
       return -1;
     }
     
@@ -376,13 +459,18 @@ int parse_url_to_state(const char *url_str, const char *base_str, url_state_t *s
       uriFreeUriMembersA(&resolved);
       uriFreeUriMembersA(&ref_uri);
       uriFreeUriMembersA(&base_uri);
+      free(escaped_base);
+      free(escaped_ref);
       return -1;
     }
     
     uri_to_state(&resolved, s);
+    if (used_relaxed_ref_parse) url_override_search_hash_from_reference(s, url_str);
     uriFreeUriMembersA(&resolved);
     uriFreeUriMembersA(&ref_uri);
     uriFreeUriMembersA(&base_uri);
+    free(escaped_ref);
+    free(escaped_base);
     
     return 0;
   }
@@ -391,13 +479,9 @@ int parse_url_to_state(const char *url_str, const char *base_str, url_state_t *s
   char *escaped_url = NULL;
   bool used_relaxed_query_parse = false;
 
-  if (uriParseSingleUriA(&uri, url_str, &errpos) != URI_SUCCESS) {
-    escaped_url = url_escape_brackets_in_query_or_fragment(url_str, &used_relaxed_query_parse);
-    if (!escaped_url) return -1;
-    if (uriParseSingleUriA(&uri, escaped_url, &errpos) != URI_SUCCESS) {
-      free(escaped_url);
-      return -1;
-    }
+  if (url_parse_single_uri_relaxed(&uri, url_str, &errpos, &escaped_url, &used_relaxed_query_parse) != 0) {
+    free(escaped_url);
+    return -1;
   }
   
   if (!uri.scheme.first || uri.scheme.first == uri.scheme.afterLast) {
