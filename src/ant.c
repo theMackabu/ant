@@ -394,9 +394,7 @@ static ant_exotic_ops_t *obj_ensure_exotic_ops(ant_object_t *obj) {
 }
 
 static ant_object_t *obj_alloc(ant_t *js, uint8_t type_tag, uint8_t inobj_limit) {
-  size_t threshold = GC_HEAP_GROWTH(js->gc_last_live);
-  
-  if (threshold < 2048) threshold = 2048;
+  size_t threshold = gc_live_major_threshold(js);
   if (js->obj_arena.live_count >= threshold) gc_run(js);
 
   ant_object_t *obj = (ant_object_t *)fixed_arena_alloc(&js->obj_arena);
@@ -1859,12 +1857,32 @@ static size_t fix_exponent(char *buf, size_t n) {
   return n;
 }
 
+static size_t strnum_safe_integer(double dv, char *buf, size_t len) {
+  char temp[32];
+  size_t pos = sizeof(temp);
+  uint64_t value = 0;
+  bool negative = signbit(dv) != 0;
+
+  if (negative) dv = -dv;
+  value = (uint64_t)dv;
+
+  do {
+    temp[--pos] = (char)('0' + (value % 10u));
+    value /= 10u;
+  } while (value != 0);
+
+  if (negative) temp[--pos] = '-';
+  return cpy(buf, len, temp + pos, sizeof(temp) - pos);
+}
+
 static size_t strnum(ant_value_t value, char *buf, size_t len) {
   double dv = tod(value);
-  
-  if (isnan(dv)) return cpy(buf, len, "NaN", 3);
-  if (isinf(dv)) return cpy(buf, len, dv > 0 ? "Infinity" : "-Infinity", dv > 0 ? 8 : 9);
   if (dv == 0.0) return cpy(buf, len, "0", 1);
+
+  if (__builtin_expect(isnan(dv), 0)) 
+    return cpy(buf, len, "NaN", 3);
+  if (__builtin_expect(isinf(dv), 0)) 
+    return cpy(buf, len, dv > 0 ? "Infinity" : "-Infinity", dv > 0 ? 8 : 9);
   
   char temp[64];
   int sign = dv < 0 ? 1 : 0;
@@ -1873,9 +1891,7 @@ static size_t strnum(ant_value_t value, char *buf, size_t len) {
   double iv;
   double frac = modf(adv, &iv);
   if (frac == 0.0 && adv < 9007199254740992.0) {
-    int result = snprintf(temp, sizeof(temp), "%.0f", dv);
-    fix_exponent(temp, (size_t)result);
-    return cpy(buf, len, temp, strlen(temp));
+    return strnum_safe_integer(dv, buf, len);
   }
   
   for (int prec = 1; prec <= 17; prec++) {
@@ -1885,7 +1901,6 @@ static size_t strnum(ant_value_t value, char *buf, size_t len) {
       fix_exponent(temp, (size_t)n);
       return cpy(buf, len, temp, strlen(temp));
     }
-    (void)n;
   }
   
   int result = snprintf(temp, sizeof(temp), "%.17g", dv);
@@ -8053,9 +8068,8 @@ static ant_value_t builtin_array_join(ant_t *js, ant_value_t *args, int nargs) {
         elem_str = (const char *)(uintptr_t)(soff);
         elem_len = slen;
       } else if (et == T_NUM) {
-        snprintf(numstr, sizeof(numstr), "%g", tod(elem));
+        elem_len = strnum(elem, numstr, sizeof(numstr));
         elem_str = numstr;
-        elem_len = strlen(numstr);
       } else if (et == T_BOOL) {
         elem_str = vdata(elem) ? "true" : "false";
         elem_len = strlen(elem_str);
@@ -11284,6 +11298,27 @@ static void js_mark_promise_rejection_handled_chain(ant_t *js, ant_value_t promi
 static inline ant_value_t js_get_thenable_then(ant_t *js, ant_value_t value) {
   if (!is_object_type(value)) return js_mkundef();
   return js_getprop_fallback(js, value, "then");
+}
+
+ant_value_t js_promise_assimilate_awaitable(ant_t *js, ant_value_t value) {
+  if (vtype(value) == T_PROMISE || !is_object_type(value)) return value;
+
+  GC_ROOT_SAVE(root_mark, js);
+  GC_ROOT_PIN(js, value);
+
+  ant_value_t then_prop = js_get_thenable_then(js, value);
+  GC_ROOT_PIN(js, then_prop);
+
+  if (vtype(then_prop) == T_FUNC || vtype(then_prop) == T_CFUNC) {
+    ant_value_t promise = js_mkpromise(js);
+    GC_ROOT_PIN(js, promise);
+    js_resolve_promise(js, promise, value);
+    GC_ROOT_RESTORE(js, root_mark);
+    return promise;
+  }
+
+  GC_ROOT_RESTORE(js, root_mark);
+  return value;
 }
 
 js_await_result_t js_promise_await_coroutine(ant_t *js, ant_value_t promise, coroutine_t *coro) {

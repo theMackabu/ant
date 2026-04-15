@@ -16,6 +16,9 @@ static uint64_t gc_last_run_ms = 0;
 static size_t   gc_nursery_threshold = GC_NURSERY_THRESHOLD;
 static uint32_t gc_major_every_n     = GC_MAJOR_EVERY_N_MINOR;
 
+static uint32_t gc_major_live_growth_x256 = 384;
+static uint32_t gc_major_pool_growth_x256 = 384;
+
 static uint32_t gc_minor_surv_ewma = 128;
 static uint32_t gc_major_recl_ewma =  26;
 
@@ -23,6 +26,22 @@ static uint64_t gc_now_ms(void) {
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
   return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)ts.tv_nsec / 1000000ULL;
+}
+
+static size_t gc_scaled_threshold(size_t base_live, uint32_t growth_x256, size_t floor) {
+  size_t scaled = (base_live * (size_t)growth_x256) / 256u;
+  if (scaled < floor) scaled = floor;
+  return scaled;
+}
+
+size_t gc_live_major_threshold(ant_t *js) {
+  size_t base_live = js ? js->gc_last_live : 0;
+  return gc_scaled_threshold(base_live, gc_major_live_growth_x256, 2048u);
+}
+
+size_t gc_pool_major_threshold(ant_t *js) {
+  size_t base_live = js ? js->gc_pool_last_live : 0;
+  return gc_scaled_threshold(base_live, gc_major_pool_growth_x256, 4u * 1024u * 1024u);
 }
 
 static void gc_adapt_nursery(size_t young_before, size_t survivors) {
@@ -49,6 +68,22 @@ static void gc_adapt_major_interval(size_t live_before, size_t live_after) {
     if (gc_major_every_n > 2) gc_major_every_n--;
   } else if (!gen_ineffective && low_reclaim) {
     if (gc_major_every_n < GC_MAJOR_EVERY_N_MINOR * 4) gc_major_every_n++;
+  }
+
+  if (gen_ineffective && low_reclaim) {
+    if (gc_major_live_growth_x256 < 1024) gc_major_live_growth_x256 += 96;
+    if (gc_major_pool_growth_x256 < 1536) gc_major_pool_growth_x256 += 128;
+  } else if (low_reclaim) {
+    if (gc_major_live_growth_x256 < 896) gc_major_live_growth_x256 += 48;
+    if (gc_major_pool_growth_x256 < 1280) gc_major_pool_growth_x256 += 64;
+  } else if (high_reclaim) {
+    if (gc_major_live_growth_x256 > 320) gc_major_live_growth_x256 -= 32;
+    if (gc_major_pool_growth_x256 > 320) gc_major_pool_growth_x256 -= 32;
+  } else {
+    if (gc_major_live_growth_x256 > 384) gc_major_live_growth_x256 -= 16;
+    else if (gc_major_live_growth_x256 < 384) gc_major_live_growth_x256 += 16;
+    if (gc_major_pool_growth_x256 > 384) gc_major_pool_growth_x256 -= 16;
+    else if (gc_major_pool_growth_x256 < 384) gc_major_pool_growth_x256 += 16;
   }
 }
 
@@ -153,16 +188,17 @@ void gc_maybe(ant_t *js) {
     gc_tick = 0;
     gc_run_minor(js);
     if (js->minor_gc_count >= gc_major_every_n) {
-      js->minor_gc_count = 0; gc_run(js);
+      js->minor_gc_count = 0;
+      gc_run(js);
     }
     return;
   }
 
-  size_t threshold = GC_HEAP_GROWTH(js->gc_last_live);
-  if (threshold < 2048) threshold = 2048;
+  size_t threshold = gc_live_major_threshold(js);
   
   if (live >= threshold) {
-    gc_tick = 0; gc_run(js);
+    gc_tick = 0;
+    gc_run(js);
     return;
   }
 

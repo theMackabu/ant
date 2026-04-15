@@ -320,6 +320,7 @@ static void gc_scan_vm_stack(ant_t *js, sv_vm_t *vm) {
     gc_mark_value(js, frame->super_val);
     gc_mark_value(js, frame->with_obj);
     gc_mark_value(js, frame->completion.value);
+    gc_mark_value(js, frame->arguments_obj);
   }
 
   for (sv_upvalue_t *uv = vm->open_upvalues; uv; uv = uv->next) {

@@ -307,9 +307,7 @@ void *js_type_alloc(ant_t *js, ant_alloc_kind_t kind, size_t size, size_t align)
   if (align == 0) align = sizeof(void *);
 
   js->gc_pool_alloc += size;
-  size_t pool_threshold = GC_HEAP_GROWTH(js->gc_pool_last_live);
-  
-  if (pool_threshold < (4u * 1024u * 1024u)) pool_threshold = 4u * 1024u * 1024u;
+  size_t pool_threshold = gc_pool_major_threshold(js);
   if (js->gc_pool_alloc >= pool_threshold) gc_run(js);
   if (kind == ANT_ALLOC_STRING) return string_pool_alloc(js, size, align);
 

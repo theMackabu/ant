@@ -66,6 +66,7 @@ static void sv_mco_async_entry(mco_coro *mco) {
   );
 
   ant_value_t promise = ctx->coro->async_promise;
+  if (vm && vm->suspended) return;
 
   if (is_err(result)) {
     ant_value_t reject_value = js->thrown_exists ? js->thrown_value : result;
@@ -95,6 +96,7 @@ static void sv_mco_tla_entry(mco_coro *mco) {
 
   ant_value_t result = sv_execute_entry(vm, ctx->func, ctx->this_val, NULL, 0);
   ant_value_t promise = ctx->coro->async_promise;
+  if (vm && vm->suspended) return;
 
   if (is_err(result)) {
     ant_value_t reject_value = js->thrown_exists ? js->thrown_value : result;
@@ -501,11 +503,12 @@ static inline ant_value_t sv_start_async_closure(
 }
 
 static inline ant_value_t sv_await_value(ant_t *js, ant_value_t value) {
+  value = js_promise_assimilate_awaitable(js, value);
+  if (is_err(value)) return value;
   if (vtype(value) != T_PROMISE) return value;
 
   mco_coro *current_mco = mco_running();
-  if (!current_mco)
-    current_mco = NULL;
+  if (!current_mco) current_mco = NULL;
 
   coroutine_t *coro = NULL;
   if (current_mco) {

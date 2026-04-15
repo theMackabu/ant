@@ -10,8 +10,6 @@
 #define GC_FORCE_INTERVAL_MS   50
 #define GC_MAJOR_EVERY_N_MINOR 8
 
-#define GC_HEAP_GROWTH(n) ((n) + (n) / 2)
-
 #define GC_OBJ_TYPE_MASK (JS_TPFLG(T_OBJ) \
   | JS_TPFLG(T_ARR)                       \
   | JS_TPFLG(T_PROMISE)                   \
@@ -30,6 +28,9 @@ void gc_run(ant_t *js);
 void gc_run_minor(ant_t *js);
 void gc_maybe(ant_t *js);
 void gc_remember_add(ant_t *js, ant_object_t *obj);
+
+size_t gc_live_major_threshold(ant_t *js);
+size_t gc_pool_major_threshold(ant_t *js);
 
 void gc_func_mark_profile_enable(bool enabled);
 void gc_func_mark_profile_reset(void);
