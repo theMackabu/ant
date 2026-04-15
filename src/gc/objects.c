@@ -418,7 +418,7 @@ static void gc_scan_other_stacks(ant_t *js) {
 
 static void gc_mark_coroutine(ant_t *js, coroutine_t *c) {
   if (!c) return;
-  gc_scan_vm_stack(js, c->sv_vm);
+  gc_scan_vm_stack(js, c->sv_vm ? c->sv_vm : c->owner_vm);
   gc_mark_value(js, c->this_val);
   gc_mark_value(js, c->async_func);
   gc_mark_value(js, c->async_promise);

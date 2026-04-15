@@ -112,7 +112,9 @@ static void destroy_coroutine_resources(coroutine_t *coro) {
   }
 
   coro->js = NULL;
+  coro->owner_vm = NULL;
   coro->active_parent = NULL;
+  coro->materialized = false;
 }
 
 void reap_retired_coroutines(void) {

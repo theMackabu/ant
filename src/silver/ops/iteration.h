@@ -367,7 +367,7 @@ static inline ant_value_t sv_op_await_iter_next(sv_vm_t *vm, ant_t *js) {
   ant_value_t result = sv_vm_call(vm, js, next_method, iterator, NULL, 0, NULL, false);
   if (is_err(result)) return result;
   if (vtype(result) == T_PROMISE) {
-    ant_value_t awaited = sv_await_value(js, result);
+    ant_value_t awaited = sv_await_value(vm, js, result);
     if (is_err(awaited)) return awaited;
     result = awaited;
   }
@@ -377,7 +377,7 @@ static inline ant_value_t sv_op_await_iter_next(sv_vm_t *vm, ant_t *js) {
   if (is_err(done)) return done;
   if (is_err(value)) return value;
   if (vtype(value) == T_PROMISE) {
-    ant_value_t awaited_val = sv_await_value(js, value);
+    ant_value_t awaited_val = sv_await_value(vm, js, value);
     if (is_err(awaited_val)) return awaited_val;
     value = awaited_val;
   }

@@ -56,15 +56,20 @@ typedef struct coroutine {
   struct coroutine *next;
   
   mco_coro *mco;
+  struct sv_vm *owner_vm;
   struct sv_vm *sv_vm;
   
   ant_offset_t resume_point;
   coroutine_type_t type;
   
+  int owner_entry_fp;
+  int owner_saved_fp;
   int nargs;
+  
   bool is_settled;
   bool is_error;
   bool is_done;
+  bool materialized;
   bool mco_started;
   bool is_ready;
   bool did_suspend;

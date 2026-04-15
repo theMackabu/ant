@@ -342,6 +342,7 @@ struct sv_vm {
   
   // TODO: move to nested struct
   bool suspended;
+  bool async_handoff_pending;
   bool suspended_resume_pending;
   bool suspended_resume_is_error;
   sv_resume_kind_t suspended_resume_kind;
@@ -432,8 +433,10 @@ static inline bool sv_vm_is_strict(const sv_vm_t *vm) {
 
 static inline sv_vm_t *sv_vm_get_active(ant_t *js) {
   if (!js) return NULL;
-  if (js->active_async_coro && js->active_async_coro->sv_vm)
-    return js->active_async_coro->sv_vm;
+  if (js->active_async_coro) {
+    if (js->active_async_coro->sv_vm) return js->active_async_coro->sv_vm;
+    if (js->active_async_coro->owner_vm) return js->active_async_coro->owner_vm;
+  }
   return js->vm;
 }
 

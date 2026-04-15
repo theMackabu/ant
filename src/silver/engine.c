@@ -1712,7 +1712,12 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     vm->suspended_entry_fp = entry_fp;
     vm->suspended_saved_fp = entry_fp - 1;
     
-    ant_value_t result = sv_await_value(js, await_val);
+    ant_value_t result = sv_await_value(vm, js, await_val);
+    if (vm->async_handoff_pending) {
+      vm->async_handoff_pending = false;
+      vm_result = js_mkundef();
+      goto sv_leave;
+    }
     if (vm->suspended) goto sv_leave;
     
     vm->suspended_entry_fp = -1;
