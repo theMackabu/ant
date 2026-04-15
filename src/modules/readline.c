@@ -342,6 +342,18 @@ static void handle_char_input(rl_interface_t *iface, char c) {
 
 static void handle_backspace(rl_interface_t *iface) {
   if (iface->line_pos > 0) {
+    if (iface->line_pos == iface->line_len) {
+      iface->line_pos--;
+      iface->line_len--;
+      iface->line_buffer[iface->line_len] = '\0';
+      write_output(iface, "\b \b");
+      int cols = get_terminal_cols();
+      int prompt_len = (int)strlen(rl_render_prompt(iface));
+      int total_cols = prompt_len + iface->line_len;
+      iface->last_render_rows = total_cols > 0 ? total_cols / cols + 1 : 1;
+      return;
+    }
+
     memmove(
       iface->line_buffer + iface->line_pos - 1,
       iface->line_buffer + iface->line_pos,

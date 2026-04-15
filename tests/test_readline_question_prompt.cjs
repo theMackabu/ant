@@ -1,8 +1,24 @@
 const { spawnSync } = require('child_process');
+const fs = require('fs');
 const path = require('path');
 
 function fail(message) {
   throw new Error(message);
+}
+
+function resolveExecutable(execPath) {
+  if (path.isAbsolute(execPath)) return execPath;
+
+  const localPath = path.resolve(execPath);
+  if (fs.existsSync(localPath)) return localPath;
+
+  for (const dir of (process.env.PATH || '').split(path.delimiter)) {
+    if (!dir) continue;
+    const candidate = path.join(dir, execPath);
+    if (fs.existsSync(candidate)) return candidate;
+  }
+
+  return execPath;
 }
 
 function runInPty() {
@@ -70,7 +86,7 @@ sys.exit(exit_code)
     process.exit(0);
   }
 
-  return spawnSync('python3', ['-c', script, process.execPath, helper], {
+  return spawnSync('python3', ['-c', script, resolveExecutable(process.execPath), helper], {
     encoding: 'utf8',
     timeout: 9000,
   });

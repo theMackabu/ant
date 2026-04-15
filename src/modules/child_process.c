@@ -1836,8 +1836,10 @@ static ant_value_t builtin_fork(ant_t *js, ant_value_t *args, int nargs) {
 
 ant_value_t child_process_library(ant_t *js) {
   ant_value_t lib = js_mkobj(js);
-  ant_value_t exec_fn = js_mkfun(builtin_exec);
+  
+  ant_value_t exec_fn = js_heavy_mkfun(js, builtin_exec, js_mkundef());
   ant_value_t exec_file_fn = js_heavy_mkfun(js, builtin_execFile, js_mkundef());
+  
   child_process_init_constructor(js);
   
   js_set_symbol(js, exec_fn,
