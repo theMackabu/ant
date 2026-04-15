@@ -46,6 +46,7 @@ ant_value_t response_create_fetched(
   int status,
   const char *status_text,
   const char *url,
+  int url_list_size,
   ant_value_t headers_obj,
   const uint8_t *body,
   size_t body_len,

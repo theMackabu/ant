@@ -38,12 +38,16 @@ typedef struct fetch_request_s {
   ant_http_request_t *http_req;
   
   int refs;
+  int redirect_count;
   bool settled;
   bool aborted;
+  bool restart_pending;
   bool response_started;
 } fetch_request_t;
 
 static UT_array *pending_requests = NULL;
+static const int k_fetch_max_redirects = 20;
+static void fetch_start_http(fetch_request_t *req);
 
 static void fetch_request_retain(fetch_request_t *req) {
   if (req) req->refs++;
@@ -94,6 +98,15 @@ static ant_value_t fetch_rejection_reason(ant_t *js, ant_value_t value) {
   return value;
 }
 
+static bool fetch_is_redirect_status(int status) {
+  return 
+    status == 301 ||
+    status == 302 ||
+    status == 303 ||
+    status == 307 ||
+    status == 308;
+}
+
 static void fetch_cancel_request_body(fetch_request_t *req, ant_value_t reason) {
   request_data_t *data = request_get_data(req->request_obj);
   ant_value_t stream = js_get_slot(req->request_obj, SLOT_REQUEST_BODY_STREAM);
@@ -134,6 +147,154 @@ static bool fetch_is_http_url(const char *url) {
 static char *fetch_build_request_url(request_data_t *request) {
   if (!request) return NULL;
   return build_href(&request->url);
+}
+
+static const char *fetch_find_header_value(const ant_http_header_t *headers, const char *name) {
+  for (const ant_http_header_t *entry = headers; entry; entry = entry->next) {
+    if (entry->name && strcasecmp(entry->name, name) == 0) return entry->value;
+  }
+  return NULL;
+}
+
+static bool fetch_redirect_rewrites_to_get(int status, const char *method) {
+  if (!method) return false;
+  if (status == 303) return strcasecmp(method, "HEAD") != 0;
+  return (status == 301 || status == 302) && strcasecmp(method, "POST") == 0;
+}
+
+typedef struct {
+  ant_t *js;
+  ant_value_t headers;
+  bool drop_body_headers;
+  bool failed;
+} fetch_redirect_headers_ctx_t;
+
+static void fetch_copy_redirect_header(const char *name, const char *value, void *ctx) {
+  fetch_redirect_headers_ctx_t *copy = (fetch_redirect_headers_ctx_t *)ctx;
+  ant_value_t step = 0;
+
+  if (!copy || copy->failed) return;
+  if (copy->drop_body_headers && name && strcasecmp(name, "content-type") == 0) return;
+
+  step = headers_append_literal(copy->js, copy->headers, name, value);
+  if (is_err(step)) copy->failed = true;
+}
+
+static ant_value_t fetch_replace_request_headers(fetch_request_t *req, bool drop_body_headers) {
+  ant_t *js = req->js;
+  
+  request_data_t *request = request_get_data(req->request_obj);
+  ant_value_t current = request_get_headers(req->request_obj);
+  ant_value_t headers = headers_create_empty(js);
+  
+  fetch_redirect_headers_ctx_t ctx = {
+    .js = js,
+    .headers = headers,
+    .drop_body_headers = drop_body_headers,
+    .failed = false,
+  };
+
+  if (is_err(headers)) return headers;
+  headers_for_each(current, fetch_copy_redirect_header, &ctx);
+  if (ctx.failed) return js_mkerr(js, "out of memory");
+
+  headers_set_guard(headers,
+    strcmp(request->mode, "no-cors") == 0
+    ? HEADERS_GUARD_REQUEST_NO_CORS
+    : HEADERS_GUARD_REQUEST
+  );
+  
+  headers_apply_guard(headers);
+  js_set_slot_wb(js, req->request_obj, SLOT_REQUEST_HEADERS, headers);
+  
+  return js_mkundef();
+}
+
+static ant_value_t fetch_clear_redirect_request_body(fetch_request_t *req) {
+  request_data_t *request = request_get_data(req->request_obj);
+  ant_value_t headers_step = 0;
+  
+  if (!request)
+    return fetch_type_error(req->js, "Invalid Request object");
+  
+  free(request->body_data);
+  free(request->body_type);
+  request->body_data = NULL;
+  request->body_size = 0;
+  request->body_type = NULL;
+  request->body_is_stream = false;
+  request->has_body = false;
+  request->body_used = false;
+  js_set_slot_wb(req->js, req->request_obj, SLOT_REQUEST_BODY_STREAM, js_mkundef());
+
+  headers_step = fetch_replace_request_headers(req, true);
+  if (is_err(headers_step)) return headers_step;
+  
+  return js_mkundef();
+}
+
+static ant_value_t fetch_set_redirect_method(fetch_request_t *req, const char *method) {
+  request_data_t *request = request_get_data(req->request_obj);
+  char *dup = NULL;
+
+  if (!request) return fetch_type_error(req->js, "Invalid Request object");
+  dup = strdup(method);
+  if (!dup) return js_mkerr(req->js, "out of memory");
+  free(request->method);
+  request->method = dup;
+  return js_mkundef();
+}
+
+static ant_value_t fetch_update_request_url(fetch_request_t *req, const char *location) {
+  request_data_t *request = request_get_data(req->request_obj);
+  url_state_t next = {0};
+  char *base = NULL;
+
+  if (!request || !location) return fetch_type_error(req->js, "Invalid redirect URL");
+  base = fetch_build_request_url(request);
+  if (!base) return fetch_type_error(req->js, "Invalid request URL");
+
+  if (parse_url_to_state(location, base, &next) != 0) {
+    free(base);
+    url_state_clear(&next);
+    return fetch_type_error(req->js, "Invalid redirect URL");
+  }
+
+  free(base);
+  url_state_clear(&request->url);
+  request->url = next;
+  return js_mkundef();
+}
+
+static ant_value_t fetch_prepare_redirect(fetch_request_t *req, const ant_http_response_t *resp) {
+  request_data_t *request = request_get_data(req->request_obj);
+  const char *location = fetch_find_header_value(resp->headers, "location");
+  ant_value_t step = 0;
+  bool rewrite_to_get = false;
+
+  if (!request || !location || location[0] == '\0') return js_mkundef();
+  if (req->redirect_count >= k_fetch_max_redirects) {
+    return fetch_type_error(req->js, "fetch failed: too many redirects");
+  }
+
+  rewrite_to_get = fetch_redirect_rewrites_to_get(resp->status, request->method);
+  if (!rewrite_to_get && request->body_is_stream) {
+    return fetch_type_error(req->js, "fetch failed: cannot follow redirect with a streamed request body");
+  }
+
+  if (rewrite_to_get) {
+    step = fetch_set_redirect_method(req, strcasecmp(request->method, "HEAD") == 0 ? "HEAD" : "GET");
+    if (is_err(step)) return step;
+    step = fetch_clear_redirect_request_body(req);
+    if (is_err(step)) return step;
+  }
+
+  step = fetch_update_request_url(req, location);
+  if (is_err(step)) return step;
+
+  req->redirect_count++;
+  req->restart_pending = true;
+  return js_mkundef();
 }
 
 typedef struct {
@@ -283,12 +444,45 @@ static void fetch_http_on_response(ant_http_request_t *http_req, const ant_http_
   fetch_request_t *req = (fetch_request_t *)user_data;
   
   ant_t *js = req->js;
+  request_data_t *request = request_get_data(req->request_obj);
+  
   ant_value_t headers = 0;
+  ant_value_t step = 0;
   ant_value_t stream = 0;
   ant_value_t response = 0;
   
   char *url = NULL;
   if (req->aborted) return;
+  if (!request) {
+    fetch_reject(req, fetch_type_error(js, "Invalid Request object"));
+    ant_http_request_cancel(http_req);
+    return;
+  }
+
+  if (fetch_is_redirect_status(resp->status)) {
+    const char *location = fetch_find_header_value(resp->headers, "location");
+    const char *redirect_mode = request->redirect ? request->redirect : "follow";
+    
+    if (location && location[0] != '\0' && strcmp(redirect_mode, "error") == 0) {
+      fetch_reject(req, fetch_type_error(js, "fetch failed: redirect mode is set to error"));
+      ant_http_request_cancel(http_req);
+      return;
+    }
+    
+    if (strcmp(redirect_mode, "follow") == 0) {
+    step = fetch_prepare_redirect(req, resp);
+    
+    if (is_err(step)) {
+      fetch_reject(req, fetch_rejection_reason(js, step));
+      ant_http_request_cancel(http_req);
+      return;
+    }
+    
+    if (req->restart_pending) {
+      ant_http_request_cancel(http_req);
+      return;
+    }}
+  }
 
   headers = fetch_headers_from_http(js, resp->headers);
   if (is_err(headers)) {
@@ -306,8 +500,10 @@ static void fetch_http_on_response(ant_http_request_t *http_req, const ant_http_
 
   url = fetch_build_request_url(request_get_data(req->request_obj));
   response = response_create_fetched(
-    js, resp->status, resp->status_text, url, headers, NULL, 0, stream, NULL
+    js, resp->status, resp->status_text, url, 
+    req->redirect_count + 1, headers, NULL, 0, stream, NULL
   );
+  
   free(url);
 
   if (is_err(response)) {
@@ -369,6 +565,12 @@ static void fetch_http_on_complete(
   ant_value_t controller = 0;
   ant_value_t reason = 0;
   req->http_req = NULL;
+
+  if (req->restart_pending) {
+    req->restart_pending = false;
+    fetch_start_http(req);
+    return;
+  }
 
   if (result != ANT_HTTP_RESULT_OK || error_code != 0) {
     reason = fetch_transport_reason(req, result, error_message);
@@ -435,7 +637,8 @@ static bool fetch_handle_data_url(fetch_request_t *req) {
 
   headers_set_literal(js, headers, "content-type", content_type);
   response = response_create_fetched(
-    js, 200, "OK", url, headers, (const uint8_t *)body, len, js_mkundef(), content_type
+    js, 200, "OK", url, 1, headers, 
+    (const uint8_t *)body, len, js_mkundef(), content_type
   );
 
   free(url);

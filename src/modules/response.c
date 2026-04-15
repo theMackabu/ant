@@ -1142,6 +1142,7 @@ ant_value_t response_create_fetched(
   int status,
   const char *status_text,
   const char *url,
+  int url_list_size,
   ant_value_t headers_obj,
   const uint8_t *body,
   size_t body_len,
@@ -1168,7 +1169,7 @@ ant_value_t response_create_fetched(
     url_state_clear(&resp->url);
     resp->url = parsed;
     resp->has_url = true;
-    resp->url_list_size = 1;
+    resp->url_list_size = url_list_size > 0 ? url_list_size : 1;
   } else url_state_clear(&parsed);
 
   if (rs_is_stream(body_stream)) {
