@@ -36,11 +36,21 @@ sv_vm_t *sv_vm_create(ant_t *js, sv_vm_kind_t kind) {
   if (!vm) return NULL;
   
   vm->js = js;
+  vm->fp = -1;
+  
   vm->stack_size = stack_size;
-  vm->stack = calloc((size_t)stack_size, sizeof(ant_value_t));
   vm->max_frames = max_frames;
+  
+  vm->suspended_entry_fp = -1;
+  vm->suspended_saved_fp = -1;
+  
+  vm->stack = calloc((size_t)stack_size, sizeof(ant_value_t));
   vm->frames = calloc((size_t)max_frames, sizeof(sv_frame_t));
-  if (!vm->stack || !vm->frames) { sv_vm_destroy(vm); return NULL; }
+  
+  if (!vm->stack || !vm->frames) { 
+    sv_vm_destroy(vm);
+    return NULL;
+  }
   
   return vm;
 }
@@ -1698,14 +1708,21 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
 
   L_AWAIT: {
     ant_value_t await_val = vm->stack[--vm->sp];
+    frame->ip = ip + 1;
+    vm->suspended_entry_fp = entry_fp;
+    vm->suspended_saved_fp = entry_fp - 1;
+    
     ant_value_t result = sv_await_value(js, await_val);
-    if (vm->suspended) {
-      vm->suspended_entry_fp = entry_fp;
-      vm->suspended_saved_fp = entry_fp - 1;
-      frame->ip = ip + 1;
-      goto sv_leave;
+    if (vm->suspended) goto sv_leave;
+    
+    vm->suspended_entry_fp = -1;
+    vm->suspended_saved_fp = -1;
+    
+    if (is_err(result)) { 
+      sv_err = result;
+      goto sv_throw;
     }
-    if (is_err(result)) { sv_err = result; goto sv_throw; }
+    
     vm->stack[vm->sp++] = result;
     NEXT(1);
   }
@@ -1726,6 +1743,7 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     vm_result = yielded;
     goto sv_leave;
   }
+  
   L_YIELD_STAR_INIT: {
     uint16_t base = sv_get_u16(ip + 1);
     ant_value_t iterable = vm->stack[--vm->sp];
@@ -1877,15 +1895,45 @@ ant_value_t sv_resume_suspended(sv_vm_t *vm) {
   if (!vm || !vm->suspended || !vm->suspended_resume_pending || vm->fp < 0)
     return mkval(T_ERR, 0);
 
+  // crash-resistance for missing frames 
+  if (vm->suspended_entry_fp < 0 || vm->suspended_entry_fp > vm->fp) {
+    vm->suspended = false;
+    vm->suspended_resume_pending = false;
+    vm->suspended_resume_is_error = false;
+    vm->suspended_resume_kind = SV_RESUME_NEXT;
+    vm->suspended_resume_value = js_mkundef();
+    vm->suspended_entry_fp = -1;
+    vm->suspended_saved_fp = -1;
+    
+    return vm->js
+      ? js_mkerr(vm->js, "invalid suspended entry frame")
+      : mkval(T_ERR, 0);
+  }
+
   int saved_fp = vm->suspended_saved_fp;
   sv_frame_t *frame = &vm->frames[vm->fp];
+  
+  if (!vm->js || !frame->func || !frame->ip) {
+    vm->suspended = false;
+    vm->suspended_resume_pending = false;
+    vm->suspended_resume_is_error = false;
+    vm->suspended_resume_kind = SV_RESUME_NEXT;
+    vm->suspended_resume_value = js_mkundef();
+    vm->suspended_entry_fp = -1;
+    vm->suspended_saved_fp = -1;
+    
+    return vm->js
+      ? js_mkerr(vm->js, "invalid suspended frame state")
+      : mkval(T_ERR, 0);
+  }
+
   ant_value_t result = sv_execute_frame(
     vm, frame->func, frame->this, frame->super_val, NULL, frame->argc
   );
 
   if (!vm->suspended) {
     vm->fp = saved_fp;
-    vm->suspended_entry_fp = 0;
+    vm->suspended_entry_fp = -1;
     vm->suspended_saved_fp = -1;
   }
 
