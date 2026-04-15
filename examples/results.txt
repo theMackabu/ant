@@ -418,6 +418,79 @@ es5/strict.this-primitive-not-coerced.js: OK
 es5/strict.this-undefined-in-function.js: OK
 es5/strict.unmapped-arguments.js: OK
 es5/this.thrown-function.js: OK
+compat-table/es5/Array.isArray.js: OK
+compat-table/es5/Array.prototype.every.js: OK
+compat-table/es5/Array.prototype.filter.js: OK
+compat-table/es5/Array.prototype.forEach.js: OK
+compat-table/es5/Array.prototype.indexOf.js: OK
+compat-table/es5/Array.prototype.lastIndexOf.js: OK
+compat-table/es5/Array.prototype.map.js: OK
+compat-table/es5/Array.prototype.reduceRight.js: OK
+compat-table/es5/Array.prototype.reduce.js: OK
+compat-table/es5/Array.prototype.some.js: OK
+compat-table/es5/Array.prototype.sort.compareFn-type.js: OK
+compat-table/es5/Array.prototype.sort.compareFn-undefined.js: OK
+compat-table/es5/Array.prototype.unshift.return-count.js: OK
+compat-table/es5/Date.now.js: OK
+compat-table/es5/Date.prototype.toISOString.js: OK
+compat-table/es5/Date.prototype.toJSON.js: OK
+compat-table/es5/Function.prototype.bind.js: OK
+compat-table/es5/JSON.js: OK
+compat-table/es5/Number.prototype.toExponential.no-throw-edge-cases.js: OK
+compat-table/es5/Number.prototype.toExponential.rounds-properly.js: OK
+compat-table/es5/Number.prototype.toExponential.throws-infinity.js: OK
+compat-table/es5/Object.create.js: OK
+compat-table/es5/Object.defineProperties.js: OK
+compat-table/es5/Object.defineProperty.js: OK
+compat-table/es5/Object.freeze.js: OK
+compat-table/es5/Object.getOwnPropertyDescriptor.js: OK
+compat-table/es5/Object.getOwnPropertyNames.js: OK
+compat-table/es5/Object.getPrototypeOf.js: OK
+compat-table/es5/Object.isExtensible.js: OK
+compat-table/es5/Object.isFrozen.js: OK
+compat-table/es5/Object.isSealed.js: OK
+compat-table/es5/Object.keys.js: OK
+compat-table/es5/Object.preventExtensions.js: OK
+compat-table/es5/Object.seal.js: OK
+compat-table/es5/String.property-access.js: OK
+compat-table/es5/String.prototype.split.js: OK
+compat-table/es5/String.prototype.trim.js: OK
+compat-table/es5/annex-b.String.prototype.substr.js: OK
+compat-table/es5/immutable-globals.Infinity.js: OK
+compat-table/es5/immutable-globals.NaN.js: OK
+compat-table/es5/immutable-globals.undefined.js: OK
+compat-table/es5/literals.getter-accessors.js: OK
+compat-table/es5/literals.reserved-words-properties.js: OK
+compat-table/es5/literals.setter-accessors.js: OK
+compat-table/es5/literals.trailing-comma-array.js: OK
+compat-table/es5/literals.trailing-comma-object.js: OK
+compat-table/es5/misc.Arguments.toStringTag.js: OK
+compat-table/es5/misc.Function.apply.array-likes.js: OK
+compat-table/es5/misc.Function.prototype.non-enumerable.js: OK
+compat-table/es5/misc.enumerable-shadow.js: OK
+compat-table/es5/misc.parseInt.ignores-leading-zeros.js: OK
+compat-table/es5/misc.thrown-functions-this.js: OK
+compat-table/es5/misc.unreserved-words.js: OK
+compat-table/es5/misc.zero-width-identifiers.js: OK
+compat-table/es5/strict.arguments-callee-error.js: OK
+compat-table/es5/strict.arguments-caller-error.js: OK
+compat-table/es5/strict.arguments-unmapped.js: OK
+compat-table/es5/strict.assignment-eval-arguments-error.js: OK
+compat-table/es5/strict.assignment-non-writable-error.js: OK
+compat-table/es5/strict.assignment-unresolvable-error.js: OK
+compat-table/es5/strict.delete-bindings-error.js: OK
+compat-table/es5/strict.delete-non-configurable-error.js: OK
+compat-table/es5/strict.eval-arguments-bindings-error.js: OK
+compat-table/es5/strict.eval-no-bindings.js: OK
+compat-table/es5/strict.function-caller-arguments-error.js: OK
+compat-table/es5/strict.function-expr-matching-name-arg.js: OK
+compat-table/es5/strict.legacy-octal-error.js: OK
+compat-table/es5/strict.repeated-params-error.js: OK
+compat-table/es5/strict.reserved-words.js: OK
+compat-table/es5/strict.this-not-coerced-accessors.js: OK
+compat-table/es5/strict.this-not-coerced-methods.js: OK
+compat-table/es5/strict.this-undefined.js: OK
+compat-table/es5/strict.with-error.js: OK
 compat-table/es6/Array.Symbol.species.js: OK
 compat-table/es6/Array.from.array-like.js: OK
 compat-table/es6/Array.from.generator.js: OK
@@ -749,6 +822,7 @@ compat-table/es6/destructuring-assign.object-expression.js: OK
 compat-table/es6/destructuring-assign.object-primitives.js: OK
 compat-table/es6/destructuring-assign.object.js: OK
 compat-table/es6/destructuring-assign.parenthesised-error.js: OK
+compat-table/es6/destructuring-assign.rest.identical.js: OK
 compat-table/es6/destructuring-assign.rest.js: OK
 compat-table/es6/destructuring-assign.sparse-array.js: OK
 compat-table/es6/destructuring-assign.string.js: OK
@@ -771,6 +845,7 @@ compat-table/es6/destructuring-decl.multiple-var.js: OK
 compat-table/es6/destructuring-decl.nested.js: OK
 compat-table/es6/destructuring-decl.object-primitives.js: OK
 compat-table/es6/destructuring-decl.object.js: OK
+compat-table/es6/destructuring-decl.rest.identical.js: OK
 compat-table/es6/destructuring-decl.rest.js: OK
 compat-table/es6/destructuring-decl.sparse-array.js: OK
 compat-table/es6/destructuring-decl.string.js: OK
@@ -1366,3 +1441,74 @@ compat-table/es2025/regex.duplicate-named-groups.js: OK
 compat-table/es2025/regex.pattern-modifiers.i.js: OK
 compat-table/es2025/regex.pattern-modifiers.m.js: OK
 compat-table/es2025/regex.pattern-modifiers.s.js: OK
+compat-table/intl/Array.prototype.toLocaleString.js: OK
+compat-table/intl/Date.prototype.toLocaleDateString.js: OK
+compat-table/intl/Date.prototype.toLocaleString.js: OK
+compat-table/intl/Date.prototype.toLocaleTimeString.js: OK
+compat-table/intl/Intl.Collator.js: failed
+compat-table/intl/Intl.Collator.new-instances.js: TypeError: not a constructor
+compat-table/intl/Intl.Collator.prototype.compare.js: TypeError: undefined is not a function
+compat-table/intl/Intl.Collator.prototype.resolvedOptions.js: TypeError: undefined is not a function
+compat-table/intl/Intl.Collator.rejects-invalid-tags.js: failed
+compat-table/intl/Intl.Collator.valid-tags.js: failed
+compat-table/intl/Intl.Collator.without-new.js: TypeError: undefined is not a function
+compat-table/intl/Intl.DateTimeFormat.iana-timezones.js: OK
+compat-table/intl/Intl.DateTimeFormat.js: OK
+compat-table/intl/Intl.DateTimeFormat.new-instances.js: failed
+compat-table/intl/Intl.DateTimeFormat.rejects-invalid-tags.js: failed
+compat-table/intl/Intl.DateTimeFormat.resolvedOptions.timeZone-default.js: OK
+compat-table/intl/Intl.DateTimeFormat.valid-tags.js: OK
+compat-table/intl/Intl.DateTimeFormat.without-new.js: failed
+compat-table/intl/Intl.NumberFormat.js: failed
+compat-table/intl/Intl.NumberFormat.new-instances.js: TypeError: not a constructor
+compat-table/intl/Intl.NumberFormat.rejects-invalid-tags.js: failed
+compat-table/intl/Intl.NumberFormat.valid-tags.js: failed
+compat-table/intl/Intl.NumberFormat.without-new.js: TypeError: undefined is not a function
+compat-table/intl/Intl.js: OK
+compat-table/intl/Intl.prototype.js: failed
+compat-table/intl/Number.prototype.toLocaleString.js: OK
+compat-table/intl/Object.prototype.toLocaleString.js: OK
+compat-table/intl/String.prototype.localeCompare.js: OK
+compat-table/next/Array.isTemplateObject.js: TypeError: undefined is not a function
+compat-table/next/AsyncDisposableStack.js: ReferenceError: 'AsyncDisposableStack' is not defined
+compat-table/next/AsyncIterator.extends.js: ReferenceError: 'AsyncIterator' is not defined
+compat-table/next/AsyncIterator.from.async-iterable.js: ReferenceError: 'AsyncIterator' is not defined
+compat-table/next/AsyncIterator.from.iterable.js: ReferenceError: 'AsyncIterator' is not defined
+compat-table/next/AsyncIterator.from.iterator.js: ReferenceError: 'AsyncIterator' is not defined
+compat-table/next/AsyncIterator.instanceof.js: ReferenceError: 'AsyncIterator' is not defined
+compat-table/next/AsyncIterator.prototype.Symbol.toStringTag.js: ReferenceError: 'AsyncIterator' is not defined
+compat-table/next/AsyncIterator.prototype.drop.js: TIMEOUT: >5s
+compat-table/next/AsyncIterator.prototype.every.js: TypeError: undefined is not a function
+compat-table/next/AsyncIterator.prototype.filter.js: TIMEOUT: >5s
+compat-table/next/AsyncIterator.prototype.find.js: TIMEOUT: >5s
+compat-table/next/AsyncIterator.prototype.flatMap.js: TIMEOUT: >5s
+compat-table/next/AsyncIterator.prototype.forEach.js: TIMEOUT: >5s
+compat-table/next/AsyncIterator.prototype.map.js: TIMEOUT: >5s
+compat-table/next/AsyncIterator.prototype.reduce.js: TIMEOUT: >5s
+compat-table/next/AsyncIterator.prototype.some.js: TIMEOUT: >5s
+compat-table/next/AsyncIterator.prototype.take.js: failed
+compat-table/next/AsyncIterator.prototype.toArray.js: TIMEOUT: >5s
+compat-table/next/DisposableStack.js: ReferenceError: 'DisposableStack' is not defined
+compat-table/next/Map.prototype.upsert.js: TypeError: undefined is not a function
+compat-table/next/RegExp.1-9.js: OK
+compat-table/next/RegExp.lastMatch.js: OK
+compat-table/next/ShadowRealm.js: failed
+compat-table/next/SuppressedError.js: ReferenceError: 'SuppressedError' is not defined
+compat-table/next/Symbol.dispose.bound.js: ReferenceError: 'using' is not defined
+compat-table/next/Uint8Array.fromBase64.js: TypeError: undefined is not a function
+compat-table/next/Uint8Array.fromHex.js: TypeError: undefined is not a function
+compat-table/next/Uint8Array.setFromBase64.js: TypeError: undefined is not a function
+compat-table/next/Uint8Array.setFromHex.js: TypeError: undefined is not a function
+compat-table/next/Uint8Array.toBase64.js: TypeError: undefined is not a function
+compat-table/next/Uint8Array.toHex.js: TypeError: undefined is not a function
+compat-table/next/WeakMap.prototype.upsert.js: TypeError: undefined is not a function
+compat-table/next/await-using.for-of.js: ReferenceError: 'using' is not defined
+compat-table/next/await-using.js: OK
+compat-table/next/class-decorators.js: failed
+compat-table/next/function.sent.js: failed
+compat-table/next/throw-expr.arrow.js: SyntaxError: Unexpected token 'throw'
+compat-table/next/throw-expr.conditional.js: SyntaxError: Unexpected token 'throw'
+compat-table/next/throw-expr.logical.js: SyntaxError: Unexpected token 'throw'
+compat-table/next/throw-expr.param-init.js: SyntaxError: Unexpected token 'throw'
+compat-table/next/using.for-of.js: ReferenceError: 'using' is not defined
+compat-table/next/using.js: ReferenceError: 'using' is not defined
