@@ -682,7 +682,6 @@ static void stdin_stop_reading(void) {
 
 #ifndef _WIN32
 static void on_sigwinch(uv_signal_t *handle, int signum) {
-  (void)handle; (void)signum;
   if (!rt->js) return;
   
   ant_value_t process_obj = js_get(rt->js, js_glob(rt->js), "process");
@@ -690,11 +689,6 @@ static void on_sigwinch(uv_signal_t *handle, int signum) {
   
   ant_value_t stdout_obj = js_get(rt->js, process_obj, "stdout");
   if (!is_special_object(stdout_obj)) return;
-  
-  int rows = 0, cols = 0;
-  get_tty_size(STDOUT_FILENO, &rows, &cols);
-  js_set(rt->js, stdout_obj, "rows", js_mknum(rows));
-  js_set(rt->js, stdout_obj, "columns", js_mknum(cols));
   
   emit_stdio_event(&stdout_events, "resize", NULL, 0);
 }
