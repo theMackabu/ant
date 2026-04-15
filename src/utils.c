@@ -129,6 +129,7 @@ int strip_typescript_inplace(
   char **buffer,
   size_t len,
   const char *filename,
+  int is_module,
   size_t *out_len,
   const char **error_detail
 ) {
@@ -147,7 +148,7 @@ int strip_typescript_inplace(
   
   int strip_error = OXC_ERR_TRANSFORM_FAILED;
   char *stripped = OXC_strip_types_owned(
-    input, filename,
+    input, filename, is_module,
     &stripped_len, &strip_error,
     error_buf, sizeof(error_buf)
   );

@@ -43,11 +43,18 @@ interface AntPoolInfo {
   blocks: number;
 }
 
+interface AntStringPoolInfo extends AntPoolInfo {
+  pooled: AntPoolInfo;
+  largeLive: AntPoolInfo;
+  largeReusable: AntPoolInfo;
+  largeQuarantine: AntPoolInfo;
+}
+
 interface AntPoolStats {
   rope: AntPoolInfo;
   symbol: AntPoolInfo;
   bigint: AntPoolInfo;
-  string: AntPoolInfo;
+  string: AntStringPoolInfo;
   totalUsed: number;
   totalCapacity: number;
 }
@@ -78,6 +85,16 @@ interface AntStatsResult {
   pools: AntPoolStats;
   alloc: AntAllocStats;
   external: AntExternalMemory;
+  intern: {
+    count: number;
+    bytes: number;
+  };
+  vm?: {
+    stackSize: number;
+    stackUsed: number;
+    maxFrames: number;
+    framesUsed: number;
+  };
   cstack: number;
   rss?: number;
   virtualSize?: number;

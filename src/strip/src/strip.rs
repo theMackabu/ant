@@ -7,9 +7,9 @@ use oxc_semantic::SemanticBuilder;
 use oxc_span::SourceType;
 use oxc_transformer::{TransformOptions, Transformer, TypeScriptOptions};
 
-pub fn strip_types_internal(source: &str, filename: &str) -> Result<String, String> {
+pub fn strip_types_internal(source: &str, filename: &str, is_module: bool) -> Result<String, String> {
   let allocator = Allocator::default();
-  let source_type = SourceType::from_path(filename).unwrap_or_else(|_| SourceType::ts());
+  let source_type = SourceType::from_path(filename).unwrap_or_else(|_| SourceType::ts()).with_module(is_module);
   let parser_ret = Parser::new(&allocator, source, source_type).parse();
 
   if !parser_ret.errors.is_empty() {

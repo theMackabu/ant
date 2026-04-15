@@ -36,7 +36,7 @@ unsafe fn write_error(output: *mut c_char, output_len: usize, msg: &str) {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn OXC_strip_types_owned(
-  input: *const c_char, filename: *const c_char, out_len: *mut usize, out_error: *mut c_int, error_output: *mut c_char, error_output_len: usize,
+  input: *const c_char, filename: *const c_char, is_module: c_int, out_len: *mut usize, out_error: *mut c_int, error_output: *mut c_char, error_output_len: usize,
 ) -> *mut c_char {
   if !out_error.is_null() {
     unsafe { *out_error = OXC_ERR_NULL_INPUT };
@@ -73,7 +73,7 @@ pub unsafe extern "C" fn OXC_strip_types_owned(
     }
   };
 
-  match strip_types_internal(input_str, filename_str) {
+  match strip_types_internal(input_str, filename_str, is_module != 0) {
     Ok(result) => {
       let bytes = result.as_bytes();
       let alloc_len = bytes.len() + 1;

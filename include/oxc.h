@@ -12,6 +12,7 @@
 char *OXC_strip_types_owned(
   const char *input,
   const char *filename,
+  int is_module,
   size_t *out_len,
   int *out_error,
   char *error_output,

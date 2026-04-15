@@ -1147,7 +1147,9 @@ static ant_value_t esm_load_module(ant_t *js, esm_module_t *mod) {
 
   if (!mod->embedded_code) {
   int strip_result = strip_typescript_inplace(
-    &content, size, mod->resolved_path, &js_len, &strip_detail
+    &content, size, mod->resolved_path,
+    mod->format != MODULE_EVAL_FORMAT_CJS,
+    &js_len, &strip_detail
   );
 
   if (strip_result < 0) {

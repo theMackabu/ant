@@ -1,5 +1,6 @@
 import fs from 'fs';
 import { join } from 'path';
+import { spawnSync } from 'child_process';
 
 const basePath = import.meta.dirname;
 const indexPath = join(basePath, 'ant.json');
@@ -53,6 +54,9 @@ let state = {
   index: 0,
   filter: '',
   filtered: entries,
+  memoryOffset: 0,
+  memoryStatus: '',
+  memoryStatusAt: 0,
   searchMode: false,
   searchQuery: ''
 };
@@ -94,6 +98,114 @@ function pad(str, len) {
 function truncate(str, len) {
   if (str.length <= len) return str;
   return str.slice(0, len - 1) + '…';
+}
+
+const byteStatSuffixes = new Set([
+  'used',
+  'capacity',
+  'totalUsed',
+  'totalCapacity',
+  'objects',
+  'overflow',
+  'extraSlots',
+  'promises',
+  'proxies',
+  'exotic',
+  'arrays',
+  'shapes',
+  'closures',
+  'upvalues',
+  'propRefs',
+  'total',
+  'buffers',
+  'code',
+  'bytes',
+  'cstack',
+  'rss',
+  'virtualSize'
+]);
+
+function formatStatValue(path, value, styled = true) {
+  if (typeof value === 'number') {
+    const key = path.split('.').pop();
+    if (byteStatSuffixes.has(key)) {
+      return styled ? `${fmt(value)} ${c.dim}(${value})${c.reset}` : `${fmt(value)} (${value})`;
+    }
+  }
+  return String(value);
+}
+
+function flattenStats(value, prefix = '', out = [], styled = true) {
+  if (value && typeof value === 'object') {
+    for (const [key, child] of Object.entries(value)) {
+      flattenStats(child, prefix ? `${prefix}.${key}` : key, out, styled);
+    }
+    return out;
+  }
+
+  if (styled) {
+    out.push(`${c.gray}${prefix}${c.reset}: ${c.bold}${formatStatValue(prefix, value, true)}${c.reset}`);
+  } else {
+    out.push(`${prefix}: ${formatStatValue(prefix, value, false)}`);
+  }
+  return out;
+}
+
+function buildMemoryLines(styled = true) {
+  const mem = Ant.stats();
+  const lines = styled
+    ? [`${c.cyan}Ant.stats()${c.reset}`, `${c.dim}Raw runtime stats dump${c.reset}`, '']
+    : ['Ant.stats()', 'Raw runtime stats dump', ''];
+  lines.push(...flattenStats(mem, '', [], styled));
+
+  if (Ant.raw && typeof Ant.raw.gcMarkProfile === 'function') {
+    lines.push('');
+    lines.push(styled ? `${c.cyan}Ant.raw.gcMarkProfile()${c.reset}` : 'Ant.raw.gcMarkProfile()');
+    lines.push(styled ? `${c.dim}Extra GC mark profiler stats${c.reset}` : 'Extra GC mark profiler stats');
+    lines.push('');
+    lines.push(...flattenStats(Ant.raw.gcMarkProfile(), 'gcMarkProfile', [], styled));
+  }
+
+  return lines;
+}
+
+function memoryStatusText() {
+  if (!state.memoryStatus) return '';
+  if (Date.now() - state.memoryStatusAt > 4000) {
+    state.memoryStatus = '';
+    return '';
+  }
+  return state.memoryStatus;
+}
+
+function setMemoryStatus(message) {
+  state.memoryStatus = message;
+  state.memoryStatusAt = Date.now();
+}
+
+function copyMemoryStats() {
+  const text = buildMemoryLines(false).join('\n') + '\n';
+  const commands = process.platform === 'win32'
+    ? [{ command: 'clip', args: [] }]
+    : [
+        { command: 'pbcopy', args: [] },
+        { command: 'wl-copy', args: [] },
+        { command: 'xclip', args: ['-selection', 'clipboard'] },
+        { command: 'xsel', args: ['--clipboard', '--input'] }
+      ];
+
+  for (const { command, args } of commands) {
+    try {
+      const result = spawnSync(command, args, { input: text });
+      if (result.status === 0 || result.exitCode === 0) {
+        setMemoryStatus(`${c.green}Copied stats to clipboard with ${command}${c.reset}`);
+        return true;
+      }
+    } catch {}
+  }
+
+  setMemoryStatus(`${c.red}Clipboard copy failed${c.reset}`);
+  return false;
 }
 
 function buildScreen() {
@@ -187,69 +299,27 @@ function buildScreen() {
     lines.push('');
     lines.push(`${c.dim}s browse · q quit${c.reset}`);
   } else if (state.mode === 'memory') {
-    const mem = Ant.stats();
+    const footerLines = 2;
+    const memoryLines = buildMemoryLines();
+    const viewHeight = Math.max(1, rows - footerLines);
+    const maxOffset = Math.max(0, memoryLines.length - viewHeight);
 
-    lines.push(`${c.cyan}Pools${c.reset}`);
-    lines.push(`  Rope:     ${c.bold}${fmt(mem.pools.rope.used)}${c.reset} / ${fmt(mem.pools.rope.capacity)}  (${mem.pools.rope.blocks} blocks)`);
-    lines.push(
-      `  String:   ${c.bold}${fmt(mem.pools.string.used)}${c.reset} / ${fmt(mem.pools.string.capacity)}  (${mem.pools.string.blocks} blocks)`
-    );
-    lines.push(
-      `  Symbol:   ${c.bold}${fmt(mem.pools.symbol.used)}${c.reset} / ${fmt(mem.pools.symbol.capacity)}  (${mem.pools.symbol.blocks} blocks)`
-    );
-    lines.push(
-      `  Bigint:   ${c.bold}${fmt(mem.pools.bigint.used)}${c.reset} / ${fmt(mem.pools.bigint.capacity)}  (${mem.pools.bigint.blocks} blocks)`
-    );
-    lines.push(`  Total:    ${c.bold}${fmt(mem.pools.totalUsed)} / ${fmt(mem.pools.totalCapacity)}${c.reset}`);
-    lines.push('');
-
-    lines.push(`${c.cyan}Alloc${c.reset}`);
-    lines.push(`  Objects:    ${c.bold}${fmt(mem.alloc.objects)}${c.reset}  (${mem.alloc.objectCount} objects)`);
-    lines.push(`  Overflow:   ${c.bold}${fmt(mem.alloc.overflow)}${c.reset}`);
-    lines.push(`  ExtraSlots: ${c.bold}${fmt(mem.alloc.extraSlots)}${c.reset}`);
-    lines.push(`  Promises:   ${c.bold}${fmt(mem.alloc.promises)}${c.reset}`);
-    lines.push(`  Proxies:    ${c.bold}${fmt(mem.alloc.proxies)}${c.reset}`);
-    lines.push(`  Exotic:     ${c.bold}${fmt(mem.alloc.exotic)}${c.reset}`);
-    lines.push(`  Arrays:     ${c.bold}${fmt(mem.alloc.arrays)}${c.reset}`);
-    lines.push(`  Shapes:     ${c.bold}${fmt(mem.alloc.shapes)}${c.reset}`);
-    lines.push(`  Closures:   ${c.bold}${fmt(mem.alloc.closures)}${c.reset}`);
-    lines.push(`  Upvalues:   ${c.bold}${fmt(mem.alloc.upvalues)}${c.reset}`);
-    lines.push(`  PropRefs:   ${c.bold}${fmt(mem.alloc.propRefs)}${c.reset}`);
-    lines.push(`  Total:      ${c.bold}${fmt(mem.alloc.total)}${c.reset}`);
-    lines.push('');
-
-    lines.push(`${c.cyan}External${c.reset}`);
-    lines.push(`  Buffers:     ${c.bold}${fmt(mem.external.buffers)}${c.reset}`);
-    lines.push(`  Code:        ${c.bold}${fmt(mem.external.code)}${c.reset}`);
-    lines.push(`  Total:       ${c.bold}${fmt(mem.external.total)}${c.reset}`);
-    lines.push('');
-
-    lines.push(`${c.cyan}Intern Table${c.reset}`);
-    lines.push(`  Strings:  ${c.bold}${mem.intern.count}${c.reset}`);
-    lines.push(`  Bytes:    ${c.bold}${fmt(mem.intern.bytes)}${c.reset}`);
-    lines.push('');
-
-    if (mem.vm) {
-      lines.push(`${c.cyan}VM${c.reset}`);
-      lines.push(`  Stack:    ${c.bold}${mem.vm.stackUsed} / ${mem.vm.stackSize}${c.reset}`);
-      lines.push(`  Frames:   ${c.bold}${mem.vm.framesUsed} / ${mem.vm.maxFrames}${c.reset}`);
-      lines.push('');
+    if (state.memoryOffset > maxOffset) {
+      state.memoryOffset = maxOffset;
     }
 
-    lines.push(`${c.cyan}Process${c.reset}`);
-    lines.push(`  RSS:      ${c.bold}${fmt(mem.rss)}${c.reset}`);
-    if (mem.virtualSize) {
-      lines.push(`  Virtual:  ${c.bold}${fmt(mem.virtualSize)}${c.reset}`);
-    }
-    lines.push(`  C Stack:  ${c.bold}${fmt(mem.cstack)}${c.reset}`);
-    lines.push('');
+    const end = Math.min(memoryLines.length, state.memoryOffset + viewHeight);
+    lines.push(...memoryLines.slice(state.memoryOffset, end));
 
-    while (lines.length < rows - 2) {
+    while (lines.length < rows - footerLines) {
       lines.push('');
     }
 
     lines.push('');
-    lines.push(`${c.dim}m browse · q quit${c.reset}  ${c.cyan}${fps.current} fps${c.reset}`);
+    const status = memoryStatusText();
+    lines.push(
+      `${c.dim}↑↓ scroll · PgUp/PgDn · g/G top/bottom · c copy · m browse · q quit${c.reset}  ${c.dim}[${state.memoryOffset + 1}-${end}/${memoryLines.length}]${c.reset}  ${status}${status ? '  ' : ''}${c.cyan}${fps.current} fps${c.reset}`
+    );
   }
 
   return lines.map(l => pad(l, cols)).join('\n');
@@ -313,28 +383,52 @@ function handleKey(key) {
       break;
     case '\x1b[A':
     case 'k':
-      state.index = Math.max(0, state.index - 1);
+      if (state.mode === 'memory') {
+        state.memoryOffset = Math.max(0, state.memoryOffset - 1);
+      } else {
+        state.index = Math.max(0, state.index - 1);
+      }
       needsRender = true;
       break;
     case '\x1b[B':
     case 'j':
-      state.index = Math.min(state.filtered.length - 1, state.index + 1);
+      if (state.mode === 'memory') {
+        state.memoryOffset++;
+      } else {
+        state.index = Math.min(state.filtered.length - 1, state.index + 1);
+      }
       needsRender = true;
       break;
     case '\x1b[5~':
-      state.index = Math.max(0, state.index - 10);
+      if (state.mode === 'memory') {
+        state.memoryOffset = Math.max(0, state.memoryOffset - Math.max(1, getRows() - 4));
+      } else {
+        state.index = Math.max(0, state.index - 10);
+      }
       needsRender = true;
       break;
     case '\x1b[6~':
-      state.index = Math.min(state.filtered.length - 1, state.index + 10);
+      if (state.mode === 'memory') {
+        state.memoryOffset += Math.max(1, getRows() - 4);
+      } else {
+        state.index = Math.min(state.filtered.length - 1, state.index + 10);
+      }
       needsRender = true;
       break;
     case 'g':
-      state.index = 0;
+      if (state.mode === 'memory') {
+        state.memoryOffset = 0;
+      } else {
+        state.index = 0;
+      }
       needsRender = true;
       break;
     case 'G':
-      state.index = state.filtered.length - 1;
+      if (state.mode === 'memory') {
+        state.memoryOffset = Number.MAX_SAFE_INTEGER;
+      } else {
+        state.index = state.filtered.length - 1;
+      }
       needsRender = true;
       break;
     case 'p':
@@ -362,6 +456,12 @@ function handleKey(key) {
     case 'm':
       state.mode = state.mode === 'memory' ? 'browse' : 'memory';
       needsRender = true;
+      break;
+    case 'c':
+      if (state.mode === 'memory') {
+        copyMemoryStats();
+        needsRender = true;
+      }
       break;
     case '/':
       if (state.mode === 'browse') {
