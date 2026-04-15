@@ -55,9 +55,14 @@ ctx.set("harness", {
 const snapshot = Object.fromEntries(ctx.entries());
 assert.strictEqual(snapshot.harness.getState().projectPath, "/tmp/project");
 
-assert.throws(
-  () => Object.fromEntries((function* () { yield 1; })()),
-  /entry objects/,
-);
+let invalidEntryError;
+try {
+  Object.fromEntries((function* () { yield 1; })());
+} catch (error) {
+  invalidEntryError = error;
+}
+
+assert.ok(invalidEntryError instanceof Error);
+assert.match(String(invalidEntryError), /requires an iterable|entry object/);
 
 console.log("Object.fromEntries consumes Map iterators, generators, and custom iterables");

@@ -971,6 +971,57 @@ RES_GETTER_END
 #undef RES_GETTER_START
 #undef RES_GETTER_END
 
+static ant_value_t response_inspect_finish(ant_t *js, ant_value_t this_obj, ant_value_t body_obj) {
+  ant_value_t tag_val = js_get_sym(js, this_obj, get_toStringTag_sym());
+  const char *tag = vtype(tag_val) == T_STR ? js_getstr(js, tag_val, NULL) : "Response";
+
+  js_inspect_builder_t builder;
+  if (!js_inspect_builder_init_dynamic(&builder, js, 128)) {
+    return js_mkerr(js, "out of memory");
+  }
+
+  bool ok = js_inspect_header_for(&builder, body_obj, "%s", tag);
+  if (ok) ok = js_inspect_object_body(&builder, body_obj);
+  if (ok) ok = js_inspect_close(&builder);
+
+  if (!ok) {
+    js_inspect_builder_dispose(&builder);
+    return js_mkerr(js, "out of memory");
+  }
+
+  return js_inspect_builder_result(&builder);
+}
+
+// TODO: make dry
+static bool response_inspect_set(
+  ant_t *js, ant_value_t obj, const char *key,
+  ant_value_t value, ant_value_t *err_out
+) {
+  if (is_err(value)) {
+    *err_out = value;
+    return false;
+  }
+
+  js_set(js, obj, key, value);
+  return true;
+}
+
+static ant_value_t response_inspect(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
+  ant_value_t out = js_mkobj(js);
+  ant_value_t err = 0;
+
+  if (!response_inspect_set(js, out, "type", js_res_get_type(js, NULL, 0), &err)) return err;
+  if (!response_inspect_set(js, out, "url", js_res_get_url(js, NULL, 0), &err)) return err;
+  if (!response_inspect_set(js, out, "redirected", js_res_get_redirected(js, NULL, 0), &err)) return err;
+  if (!response_inspect_set(js, out, "status", js_res_get_status(js, NULL, 0), &err)) return err;
+  if (!response_inspect_set(js, out, "ok", js_res_get_ok(js, NULL, 0), &err)) return err;
+  if (!response_inspect_set(js, out, "statusText", js_res_get_status_text(js, NULL, 0), &err)) return err;
+  if (!response_inspect_set(js, out, "headers", js_res_get_headers(js, NULL, 0), &err)) return err;
+
+  return response_inspect_finish(js, this_obj, out);
+}
+
 static ant_value_t js_response_clone(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this = js_getthis(js);
   response_data_t *d = get_data(this);
@@ -1185,6 +1236,7 @@ void init_response_module(void) {
   GETTER("bodyUsed", body_used);
 #undef GETTER
 
+  js_set_sym(js, g_response_proto, get_inspect_sym(), js_mkfun(response_inspect));
   js_set_sym(js, g_response_proto, get_toStringTag_sym(), js_mkstr(js, "Response", 8));
   ctor = js_make_ctor(js, js_response_ctor, g_response_proto, "Response", 8);
   js_set(js, ctor, "error", js_mkfun(js_response_error));

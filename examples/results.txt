@@ -1294,7 +1294,7 @@ compat-table/es2018/regex.unicode-property-escapes.unicode-17.0.js: OK
 compat-table/es2019/Array.prototype.flatMap.js: OK
 compat-table/es2019/Array.prototype.flat-flatMap.unscopables.js: OK
 compat-table/es2019/Array.prototype.flat.js: OK
-compat-table/es2019/Object.fromEntries.js: failed
+compat-table/es2019/Object.fromEntries.js: OK
 compat-table/es2019/String.prototype.trimEnd.js: OK
 compat-table/es2019/String.prototype.trimStart.js: OK
 compat-table/es2019/Symbol.prototype.description.empty.js: failed

@@ -848,6 +848,65 @@ REQ_GETTER_END
 #undef REQ_GETTER_START
 #undef REQ_GETTER_END
 
+static ant_value_t request_inspect_finish(ant_t *js, ant_value_t this_obj, ant_value_t body_obj) {
+  ant_value_t tag_val = js_get_sym(js, this_obj, get_toStringTag_sym());
+  const char *tag = vtype(tag_val) == T_STR ? js_getstr(js, tag_val, NULL) : "Request";
+
+  js_inspect_builder_t builder;
+  if (!js_inspect_builder_init_dynamic(&builder, js, 128)) {
+    return js_mkerr(js, "out of memory");
+  }
+
+  bool ok = js_inspect_header_for(&builder, body_obj, "%s", tag);
+  if (ok) ok = js_inspect_object_body(&builder, body_obj);
+  if (ok) ok = js_inspect_close(&builder);
+
+  if (!ok) {
+    js_inspect_builder_dispose(&builder);
+    return js_mkerr(js, "out of memory");
+  }
+
+  return js_inspect_builder_result(&builder);
+}
+
+// TODO: make dry
+static bool request_inspect_set(
+  ant_t *js, ant_value_t obj, const char *key, 
+  ant_value_t value, ant_value_t *err_out
+) {
+  if (is_err(value)) {
+    *err_out = value;
+    return false;
+  }
+
+  js_set(js, obj, key, value);
+  return true;
+}
+
+static ant_value_t request_inspect(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
+  ant_value_t out = js_mkobj(js);
+  ant_value_t err = 0;
+
+  if (!request_inspect_set(js, out, "method", js_req_get_method(js, NULL, 0), &err)) return err;
+  if (!request_inspect_set(js, out, "url", js_req_get_url(js, NULL, 0), &err)) return err;
+  if (!request_inspect_set(js, out, "headers", js_req_get_headers(js, NULL, 0), &err)) return err;
+  if (!request_inspect_set(js, out, "destination", js_req_get_destination(js, NULL, 0), &err)) return err;
+  if (!request_inspect_set(js, out, "referrer", js_req_get_referrer(js, NULL, 0), &err)) return err;
+  if (!request_inspect_set(js, out, "referrerPolicy", js_req_get_referrer_policy(js, NULL, 0), &err)) return err;
+  if (!request_inspect_set(js, out, "mode", js_req_get_mode(js, NULL, 0), &err)) return err;
+  if (!request_inspect_set(js, out, "credentials", js_req_get_credentials(js, NULL, 0), &err)) return err;
+  if (!request_inspect_set(js, out, "cache", js_req_get_cache(js, NULL, 0), &err)) return err;
+  if (!request_inspect_set(js, out, "redirect", js_req_get_redirect(js, NULL, 0), &err)) return err;
+  if (!request_inspect_set(js, out, "integrity", js_req_get_integrity(js, NULL, 0), &err)) return err;
+  if (!request_inspect_set(js, out, "keepalive", js_req_get_keepalive(js, NULL, 0), &err)) return err;
+  if (!request_inspect_set(js, out, "isReloadNavigation", js_req_get_is_reload_navigation(js, NULL, 0), &err)) return err;
+  if (!request_inspect_set(js, out, "isHistoryNavigation", js_req_get_is_history_navigation(js, NULL, 0), &err)) return err;
+  if (!request_inspect_set(js, out, "signal", js_req_get_signal(js, NULL, 0), &err)) return err;
+
+  return request_inspect_finish(js, this_obj, out);
+}
+
 static ant_value_t js_request_clone(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t this = js_getthis(js);
   request_data_t *d = get_data(this);
@@ -1453,6 +1512,7 @@ void init_request_module(void) {
   GETTER("bodyUsed",          body_used);
 #undef GETTER
 
+  js_set_sym(js, g_request_proto, get_inspect_sym(), js_mkfun(request_inspect));
   js_set_sym(js, g_request_proto, get_toStringTag_sym(), js_mkstr(js, "Request", 7));
   ant_value_t ctor = js_make_ctor(js, js_request_ctor, g_request_proto, "Request", 7);
   

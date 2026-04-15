@@ -729,6 +729,61 @@ static ant_value_t js_headers_symbol_iterator(ant_t *js, ant_value_t *args, int 
   return make_headers_iter(js, js->this_val, ITER_ENTRIES);
 }
 
+static ant_value_t headers_inspect_finish(ant_t *js, ant_value_t this_obj, ant_value_t body_obj) {
+  ant_value_t tag_val = js_get_sym(js, this_obj, get_toStringTag_sym());
+  const char *tag = vtype(tag_val) == T_STR ? js_getstr(js, tag_val, NULL) : "Headers";
+
+  js_inspect_builder_t builder;
+  if (!js_inspect_builder_init_dynamic(&builder, js, 128)) {
+    return js_mkerr(js, "out of memory");
+  }
+
+  bool ok = js_inspect_header_for(&builder, body_obj, "%s", tag);
+  if (ok) ok = js_inspect_object_body(&builder, body_obj);
+  if (ok) ok = js_inspect_close(&builder);
+
+  if (!ok) {
+    js_inspect_builder_dispose(&builder);
+    return js_mkerr(js, "out of memory");
+  }
+
+  return js_inspect_builder_result(&builder);
+}
+
+static ant_value_t headers_inspect(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj = js_getthis(js);
+  hdr_list_t *list = get_list(this_obj);
+  ant_value_t out = js_mkobj(js);
+
+  if (!list) return js_mkerr(js, "Invalid Headers object");
+
+  for (hdr_entry_t *e = list->head; e; e = e->next) {
+    ant_value_t existing = js_get(js, out, e->name);
+    if (vtype(existing) == T_UNDEF) {
+      js_set(js, out, e->name, js_mkstr(js, e->value, strlen(e->value)));
+      continue;
+    }
+    
+    size_t existing_len = 0;
+    const char *existing_str = js_getstr(js, existing, &existing_len);
+    size_t value_len = strlen(e->value);
+    size_t combined_len = existing_len + 2 + value_len;
+    char *combined = malloc(combined_len + 1);
+    if (!combined) return js_mkerr(js, "out of memory");
+    
+    memcpy(combined, existing_str, existing_len);
+    combined[existing_len] = ',';
+    combined[existing_len + 1] = ' ';
+    memcpy(combined + existing_len + 2, e->value, value_len);
+    combined[combined_len] = '\0';
+    
+    js_set(js, out, e->name, js_mkstr(js, combined, combined_len));
+    free(combined);
+  }
+
+  return headers_inspect_finish(js, this_obj, out);
+}
+
 static ant_value_t js_headers_ctor(ant_t *js, ant_value_t *args, int nargs) {
   if (vtype(js->new_target) == T_UNDEF)
     return js_mkerr_typed(js, JS_ERR_TYPE, "Headers constructor requires 'new'");
@@ -1041,6 +1096,7 @@ void init_headers_module(void) {
   js_set(js, g_headers_proto, "getSetCookie", js_mkfun(js_headers_get_set_cookie));
   
   js_set_sym(js, g_headers_proto, get_iterator_sym(),    js_mkfun(js_headers_symbol_iterator));
+  js_set_sym(js, g_headers_proto, get_inspect_sym(),     js_mkfun(headers_inspect));
   js_set_sym(js, g_headers_proto, get_toStringTag_sym(), js_mkstr(js, "Headers", 7));
 
   ant_value_t ctor_obj = js_mkobj(js);
