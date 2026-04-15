@@ -285,12 +285,6 @@ static napi_status napi_set_last_raw(napi_env env, napi_status status, const cha
 }
 
 static napi_status napi_set_last(napi_env env, napi_status status, const char *message) {
-  ant_napi_env_t *nenv = (ant_napi_env_t *)env;
-  if (status == napi_ok && nenv && (
-      nenv->has_pending_exception
-      || (nenv->js && nenv->js->thrown_exists)
-    )
-  ) return napi_set_last_raw(env, napi_pending_exception, "pending exception");
   return napi_set_last_raw(env, status, message);
 }
 
@@ -350,15 +344,16 @@ static void napi_mark_pending_exception(napi_env env, napi_value exception) {
   if (!nenv) return;
   nenv->has_pending_exception = true;
   nenv->pending_exception = exception;
-  napi_set_last(env, napi_pending_exception, "pending exception");
 }
 
 NAPI_EXTERN napi_status NAPI_CDECL napi_throw(napi_env env, napi_value error) {
   ant_napi_env_t *nenv = (ant_napi_env_t *)env;
   if (!nenv || !nenv->js) return napi_set_last(env, napi_invalid_arg, "invalid env");
+  if (nenv->has_pending_exception || nenv->js->thrown_exists)
+    return napi_set_last(env, napi_pending_exception, "pending exception");
   js_throw(nenv->js, (ant_value_t)error);
   napi_mark_pending_exception(env, error);
-  return napi_pending_exception;
+  return napi_set_last_raw(env, napi_ok, NULL);
 }
 
 static napi_status napi_check_pending_from_result(napi_env env, ant_value_t result) {
@@ -370,6 +365,7 @@ static napi_status napi_check_pending_from_result(napi_env env, ant_value_t resu
       env,
       nenv->js->thrown_exists ? nenv->js->thrown_value : result
     );
+    napi_set_last_raw(env, napi_pending_exception, "pending exception");
     return napi_pending_exception;
   }
   return napi_set_last(env, napi_ok, NULL);
@@ -380,12 +376,13 @@ static napi_status napi_return_pending_if_any(napi_env env) {
   if (!nenv || !nenv->js) return napi_set_last(env, napi_invalid_arg, "invalid env");
 
   if (nenv->has_pending_exception) {
-    napi_set_last(env, napi_pending_exception, "pending exception");
+    napi_set_last_raw(env, napi_pending_exception, "pending exception");
     return napi_pending_exception;
   }
 
   if (nenv->js->thrown_exists) {
     napi_mark_pending_exception(env, (napi_value)nenv->js->thrown_value);
+    napi_set_last_raw(env, napi_pending_exception, "pending exception");
     return napi_pending_exception;
   }
 
