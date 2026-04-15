@@ -398,38 +398,6 @@ static inline bool has_implicit_arguments_obj(const sv_compiler_t *c) {
   return c && !c->is_arrow && c->enclosing;
 }
 
-static bool ast_arguments_captured_by_arrow(const sv_ast_t *node, bool in_arrow) {
-  if (!node) return false;
-  if (in_arrow && node->type == N_IDENT &&
-      is_ident_str(node->str, node->len, "arguments", 9))
-    return true;
-
-  if (node->type == N_FUNC) {
-    if (!(node->flags & FN_ARROW)) return false;
-
-    for (int i = 0; i < node->args.count; i++) {
-      if (ast_arguments_captured_by_arrow(node->args.items[i], true)) return true;
-    }
-    return ast_arguments_captured_by_arrow(node->body, true);
-  }
-
-  if (ast_arguments_captured_by_arrow(node->left, in_arrow))         return true;
-  if (ast_arguments_captured_by_arrow(node->right, in_arrow))        return true;
-  if (ast_arguments_captured_by_arrow(node->cond, in_arrow))         return true;
-  if (ast_arguments_captured_by_arrow(node->body, in_arrow))         return true;
-  if (ast_arguments_captured_by_arrow(node->catch_body, in_arrow))   return true;
-  if (ast_arguments_captured_by_arrow(node->finally_body, in_arrow)) return true;
-  if (ast_arguments_captured_by_arrow(node->catch_param, in_arrow))  return true;
-  if (ast_arguments_captured_by_arrow(node->init, in_arrow))         return true;
-  if (ast_arguments_captured_by_arrow(node->update, in_arrow))       return true;
-
-  for (int i = 0; i < node->args.count; i++) {
-    if (ast_arguments_captured_by_arrow(node->args.items[i], in_arrow)) return true;
-  }
-
-  return false;
-}
-
 static int resolve_local(sv_compiler_t *c, const char *name, uint32_t len) {
   if (c->local_lookup_heads && c->local_lookup_cap > 0) {
     uint32_t hash = sv_compile_ctx_hash_local_name(name, len);
@@ -4499,10 +4467,9 @@ sv_func_t *compile_function_body(
     }
   }
 
-  if (!comp.is_arrow && has_implicit_arguments_obj(&comp) &&
-      (node->flags & FN_USES_ARGS) &&
-      ast_arguments_captured_by_arrow(node->body, false)) {
-    comp.strict_args_local = add_local(&comp, "", 0, false, comp.scope_depth);
+  if (!comp.is_arrow && has_implicit_arguments_obj(&comp) && (node->flags & FN_USES_ARGS)) {
+    static const char args_name[] = "\x01arguments";
+    comp.strict_args_local = add_local(&comp, args_name, sizeof(args_name) - 1, false, comp.scope_depth);
     emit_op(&comp, OP_SPECIAL_OBJ);
     emit(&comp, 0);
     emit_put_local(&comp, comp.strict_args_local);
