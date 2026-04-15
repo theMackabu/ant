@@ -32,14 +32,40 @@ class FallbackConnection {
 
 const blob = new Blob(['hi'], { type: 'text/plain' });
 const file = new File(['hi'], 'note.txt', { type: 'text/plain', lastModified: 42 });
+const headers = new Headers({ 'content-type': 'text/plain' });
+const request = new Request('https://google.com');
+const response = new Response('ok', { headers });
 const timeout = setTimeout(() => {}, 1);
 const interval = setInterval(() => {}, 5);
+const headersInspect = inspect(headers);
 const timeoutInspect = inspect(timeout);
 const intervalInspect = inspect(interval);
+const requestInspect = inspect(request);
+const responseInspect = inspect(response);
+
+assert(typeof Headers.prototype[Symbol.inspect] === 'function', 'expected Headers.prototype[Symbol.inspect] to exist');
+assert(typeof Request.prototype[Symbol.inspect] === 'function', 'expected Request.prototype[Symbol.inspect] to exist');
+assert(typeof Response.prototype[Symbol.inspect] === 'function', 'expected Response.prototype[Symbol.inspect] to exist');
 
 assert(inspect(new Connection('localhost', 3000, 'open')) === 'Connection { localhost:3000 (open) }', 'expected custom inspect result');
 assert(inspect(blob) === "Blob { size: 2, type: 'text/plain' }", 'expected Blob custom inspect output');
 assert(inspect(file) === "File { size: 2, type: 'text/plain', name: 'note.txt', lastModified: 42 }", 'expected File custom inspect output');
+assert(
+  Headers.prototype[Symbol.inspect].call(headers) === headersInspect,
+  `expected Headers Symbol.inspect output, got: ${Headers.prototype[Symbol.inspect].call(headers)}`
+);
+assert(
+  requestInspect === "Request {\n  method: 'GET',\n  url: 'https://google.com/',\n  headers: Headers {},\n  destination: '',\n  referrer: 'about:client',\n  referrerPolicy: '',\n  mode: 'cors',\n  credentials: 'same-origin',\n  cache: 'default',\n  redirect: 'follow',\n  integrity: '',\n  keepalive: false,\n  isReloadNavigation: false,\n  isHistoryNavigation: false,\n  signal: AbortSignal { aborted: false }\n}",
+  `expected Request inspect output, got: ${requestInspect}`
+);
+assert(
+  Request.prototype[Symbol.inspect].call(request) === requestInspect,
+  `expected Request Symbol.inspect output, got: ${Request.prototype[Symbol.inspect].call(request)}`
+);
+assert(
+  Response.prototype[Symbol.inspect].call(response) === responseInspect,
+  `expected Response Symbol.inspect output, got: ${Response.prototype[Symbol.inspect].call(response)}`
+);
 assert(
   timeoutInspect === 'Timeout (1) {\n  delay: 1,\n  repeat: null,\n  [Symbol(Symbol.toPrimitive)]: [native code]\n}',
   `expected legacy Timeout inspect output, got: ${timeoutInspect}`

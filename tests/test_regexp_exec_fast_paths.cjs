@@ -59,4 +59,50 @@ assert(
   'custom exec truthiness lowering should preserve getter/arg/call order'
 );
 
+const testGets = [];
+const testProxy = new Proxy(
+  {
+    exec() {
+      return null;
+    }
+  },
+  {
+    get(target, key) {
+      testGets.push(key);
+      return target[key];
+    }
+  }
+);
+
+assert(RegExp.prototype.test.call(testProxy) === false, 'proxy-backed test should return false');
+assert(testGets.join(',') === 'exec', 'RegExp.prototype.test should only Get("exec") once');
+
+const flagKeys = [];
+const flagProxy = new Proxy(
+  {},
+  {
+    get(target, key) {
+      flagKeys.push(key);
+      return target[key];
+    }
+  }
+);
+
+Object.getOwnPropertyDescriptor(RegExp.prototype, 'flags').get.call(flagProxy);
+
+const expectedFlagKeys = [];
+if ('hasIndices' in RegExp.prototype) expectedFlagKeys.push('hasIndices');
+if ('global' in RegExp.prototype) expectedFlagKeys.push('global');
+if ('ignoreCase' in RegExp.prototype) expectedFlagKeys.push('ignoreCase');
+if ('multiline' in RegExp.prototype) expectedFlagKeys.push('multiline');
+if ('dotAll' in RegExp.prototype) expectedFlagKeys.push('dotAll');
+if ('unicode' in RegExp.prototype) expectedFlagKeys.push('unicode');
+if ('unicodeSets' in RegExp.prototype) expectedFlagKeys.push('unicodeSets');
+if ('sticky' in RegExp.prototype) expectedFlagKeys.push('sticky');
+
+assert(
+  flagKeys.join(',') === expectedFlagKeys.join(','),
+  'RegExp.prototype.flags should read observable flag properties in spec order'
+);
+
 console.log('regex exec fast path semantics ok');
