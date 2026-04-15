@@ -58,6 +58,7 @@ typedef struct rl_interface {
   ant_value_t completer;
   ant_value_t js_obj;
   char *prompt;
+  char *active_prompt;
   char *line_buffer;
   int line_pos;
   int line_len;
@@ -93,6 +94,23 @@ static uint64_t next_interface_id = 1;
 static rl_interface_t *interfaces = NULL;
 static ant_value_t g_rl_async_iter_proto = 0;
 static ant_value_t g_rl_interface_proto = 0;
+
+static const char *rl_render_prompt(const rl_interface_t *iface) {
+  if (!iface) return "";
+  return iface->active_prompt ? iface->active_prompt : iface->prompt;
+}
+
+static void rl_set_active_prompt(rl_interface_t *iface, const char *prompt) {
+  if (!iface) return;
+  free(iface->active_prompt);
+  iface->active_prompt = prompt ? strdup(prompt) : NULL;
+}
+
+static void rl_clear_active_prompt(rl_interface_t *iface) {
+  if (!iface) return;
+  free(iface->active_prompt);
+  iface->active_prompt = NULL;
+}
 
 static void rl_history_init(rl_history_t *hist, int capacity) {
   hist->capacity = capacity > 0 ? capacity : DEFAULT_HISTORY_SIZE;
@@ -207,7 +225,7 @@ static int get_terminal_cols(void) {
 }
 
 static void move_cursor_to_line_start(rl_interface_t *iface, int cols) {
-  int prompt_len = (int)strlen(iface->prompt);
+  int prompt_len = (int)strlen(rl_render_prompt(iface));
   int cursor_cols = prompt_len + iface->line_pos;
   int cursor_row = cursor_cols / cols;
   if (cursor_cols > 0 && cursor_cols % cols == 0) cursor_row--;
@@ -222,7 +240,7 @@ static void move_cursor_to_line_start(rl_interface_t *iface, int cols) {
 
 static void clear_line_display(rl_interface_t *iface) {
   int cols = get_terminal_cols();
-  int prompt_len = (int)strlen(iface->prompt);
+  int prompt_len = (int)strlen(rl_render_prompt(iface));
   int line_cols = prompt_len + iface->line_len;
   int current_rows = line_cols > 0 ? (line_cols - 1) / cols + 1 : 1;
   int rows = iface->last_render_rows > current_rows ? iface->last_render_rows : current_rows;
@@ -243,12 +261,13 @@ static void clear_line_display(rl_interface_t *iface) {
 static void refresh_line(rl_interface_t *iface) {
   char buf[MAX_LINE_LENGTH + 256];
   int cols = get_terminal_cols();
+  const char *prompt = rl_render_prompt(iface);
 
   clear_line_display(iface);
-  snprintf(buf, sizeof(buf), "%s%s", iface->prompt, iface->line_buffer);
+  snprintf(buf, sizeof(buf), "%s%s", prompt, iface->line_buffer);
   write_output(iface, buf);
 
-  int prompt_len = (int)strlen(iface->prompt);
+  int prompt_len = (int)strlen(prompt);
   int end_cols = prompt_len + iface->line_len;
   int end_row = end_cols > 0 ? end_cols / cols : 0;
   int cursor_cols = prompt_len + iface->line_pos;
@@ -311,7 +330,7 @@ static void handle_char_input(rl_interface_t *iface, char c) {
     
     if (iface->line_pos == iface->line_len) {
       int cols = get_terminal_cols();
-      int prompt_len = (int)strlen(iface->prompt);
+      int prompt_len = (int)strlen(rl_render_prompt(iface));
       int total_cols = prompt_len + iface->line_len;
       int rows = total_cols > 0 ? total_cols / cols + 1 : 1;
       if (rows > iface->last_render_rows) iface->last_render_rows = rows;
@@ -476,6 +495,7 @@ static void process_line(ant_t *js, rl_interface_t *iface) {
   
   rl_history_add(&iface->history, line, iface->remove_history_duplicates);
   emit_history_event(js, iface);
+  rl_clear_active_prompt(iface);
   
   ant_value_t line_val = js_mkstr(js, line, strlen(line));
   emit_event(js, iface, "line", &line_val, 1);
@@ -662,13 +682,12 @@ static ant_value_t rl_interface_prompt(ant_t *js, ant_value_t *args, int nargs) 
     iface->line_len = 0;
   }
   
-  write_output(iface, iface->prompt);
+  write_output(iface, rl_render_prompt(iface));
   if (iface->line_len > 0) {
     write_output(iface, iface->line_buffer);
   }
   
   start_reading(iface);
-  
   return js_mkundef();
 }
 
@@ -824,7 +843,8 @@ static ant_value_t rl_interface_question_callback(ant_t *js, ant_value_t *args, 
     return js_mkerr(js, "callback must be a function");
   }
   
-  write_output(iface, query);
+  rl_set_active_prompt(iface, query);
+  write_output(iface, rl_render_prompt(iface));
   if (!rl_add_listener(js, iface, "line", args[1], true)) return js_mkerr(js, "listener must be a function");
   
   return js_mkundef();
@@ -843,7 +863,8 @@ static ant_value_t rl_interface_question_promise(ant_t *js, ant_value_t *args, i
   
   ant_value_t promise = js_mkpromise(js);
   
-  write_output(iface, query);
+  rl_set_active_prompt(iface, query);
+  write_output(iface, rl_render_prompt(iface));
   
   iface->pending_question_resolve = js_get(js, promise, "_resolve");
   iface->pending_question_reject = js_get(js, promise, "_reject");
@@ -862,7 +883,7 @@ static ant_value_t rl_interface_get_cursor_pos(ant_t *js, ant_value_t *args, int
     return result;
   }
   
-  int prompt_len = (int)strlen(iface->prompt);
+  int prompt_len = (int)strlen(rl_render_prompt(iface));
   int total_cols = prompt_len + iface->line_pos;
   
   int cols = 80;
@@ -901,6 +922,7 @@ static void free_interface(rl_interface_t *iface) {
   HASH_DEL(interfaces, iface);
   
   free(iface->prompt);
+  free(iface->active_prompt);
   free(iface->line_buffer);
   rl_history_free(&iface->history);
   free(iface);
@@ -1202,6 +1224,7 @@ static ant_value_t rl_create_interface(ant_t *js, ant_value_t *args, int nargs) 
   
   iface->id = next_interface_id++;
   iface->prompt = strdup(DEFAULT_PROMPT);
+  iface->active_prompt = NULL;
   iface->line_buffer = calloc(MAX_LINE_LENGTH, 1);
   iface->line_pos = 0;
   iface->line_len = 0;

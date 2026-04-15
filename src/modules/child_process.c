@@ -1328,6 +1328,31 @@ static ant_value_t exec_file_promisified_call(ant_t *js, ant_value_t *args, int 
   return promise;
 }
 
+static ant_value_t exec_promisified_call(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t original = js_get_slot(js_getcurrentfunc(js), SLOT_DATA);
+  if (!is_callable(original)) return js_mkerr(js, "exec promisify target is not callable");
+
+  ant_value_t call_result = sv_vm_call(
+    js->vm, js, original, js_getthis(js),
+    args, nargs, NULL, false
+  );
+
+  if (vtype(call_result) == T_PROMISE) return call_result;
+  if (is_err(call_result) || js->thrown_exists) {
+    ant_value_t promise = js_mkpromise(js);
+    ant_value_t ex = js->thrown_exists ? js->thrown_value : call_result;
+    js->thrown_exists = false;
+    js->thrown_value = js_mkundef();
+    js->thrown_stack = js_mkundef();
+    js_reject_promise(js, promise, ex);
+    return promise;
+  }
+
+  ant_value_t promise = js_mkpromise(js);
+  js_resolve_promise(js, promise, call_result);
+  return promise;
+}
+
 static ant_value_t builtin_execFile(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t argv = js_mkundef();
   ant_value_t options = js_mkundef();
@@ -1815,6 +1840,11 @@ ant_value_t child_process_library(ant_t *js) {
   ant_value_t exec_file_fn = js_heavy_mkfun(js, builtin_execFile, js_mkundef());
   child_process_init_constructor(js);
   
+  js_set_symbol(js, exec_fn,
+    "nodejs.util.promisify.custom",
+    js_heavy_mkfun(js, exec_promisified_call, exec_fn)
+  );
+
   js_set_symbol(js, exec_file_fn,
     "nodejs.util.promisify.custom",
     js_heavy_mkfun(js, exec_file_promisified_call, exec_file_fn)
