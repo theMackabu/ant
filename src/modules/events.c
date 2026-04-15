@@ -1232,8 +1232,15 @@ ant_value_t events_library(ant_t *js) {
 ant_value_t eventemitter_prototype(ant_t *js) {
   if (g_eventemitter_proto) return g_eventemitter_proto;
 
+  ant_value_t object_proto = js->sym.object_proto;
+  ant_value_t function_proto = js_get_slot(js_glob(js), SLOT_FUNC_PROTO);
+  if (vtype(function_proto) == T_UNDEF) function_proto = js_get_ctor_proto(js, "Function", 8);
+
   ant_value_t eventemitter_ctor = js_mkobj(js);
   ant_value_t eventemitter_proto = js_mkobj(js);
+  
+  if (is_object_type(object_proto)) js_set_proto_init(eventemitter_proto, object_proto);
+  if (is_object_type(function_proto)) js_set_proto_init(eventemitter_ctor, function_proto);
 
   js_set(js, eventemitter_proto, "on",                 js_mkfun(js_eventemitter_on));
   js_set(js, eventemitter_proto, "addListener",        js_mkfun(js_eventemitter_on));
@@ -1310,14 +1317,20 @@ void init_events_module(void) {
   ant_value_t pre_fn = js_make_ctor(js, js_promiserejectionevent_ctor, g_promiserejectionevent_proto, "PromiseRejectionEvent", 21);
   js_set(js, global, "PromiseRejectionEvent", pre_fn);
 
+  ant_value_t object_proto = js->sym.object_proto;
+  ant_value_t function_proto = js_get_slot(global, SLOT_FUNC_PROTO);
+  if (vtype(function_proto) == T_UNDEF) function_proto = js_get_ctor_proto(js, "Function", 8);
+
   ant_value_t eventtarget_proto = js_mkobj(js);
   g_eventtarget_proto = eventtarget_proto;
+  if (is_object_type(object_proto)) js_set_proto_init(eventtarget_proto, object_proto);
   js_set(js, eventtarget_proto, "addEventListener",    js_mkfun(js_add_event_listener_method));
   js_set(js, eventtarget_proto, "removeEventListener", js_mkfun(js_remove_event_listener_method));
   js_set(js, eventtarget_proto, "dispatchEvent",       js_mkfun(js_dispatch_event_method));
   js_set_sym(js, eventtarget_proto, get_toStringTag_sym(), js_mkstr(js, "EventTarget", 11));
 
   ant_value_t eventtarget_ctor = js_mkobj(js);
+  if (is_object_type(function_proto)) js_set_proto_init(eventtarget_ctor, function_proto);
   js_set_slot(eventtarget_ctor, SLOT_CFUNC, js_mkfun(js_eventtarget_ctor));
   js_mkprop_fast(js, eventtarget_ctor, "prototype", 9, eventtarget_proto);
   js_mkprop_fast(js, eventtarget_ctor, "name", 4, ANT_STRING("EventTarget"));
