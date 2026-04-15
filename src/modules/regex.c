@@ -1021,10 +1021,7 @@ static ant_value_t builtin_regexp_escape(ant_t *js, ant_value_t *args, int nargs
   return result;
 }
 
-static ant_value_t regexp_exec_abstract(ant_t *js, ant_value_t rx, ant_value_t str) {
-  ant_value_t exec_fn = js_get(js, rx, "exec");
-  if (is_err(exec_fn)) return exec_fn;
-
+static ant_value_t regexp_exec_with_exec_fn(ant_t *js, ant_value_t rx, ant_value_t str, ant_value_t exec_fn) {
   if (vtype(exec_fn) == T_FUNC || vtype(exec_fn) == T_CFUNC) {
     ant_value_t call_args[1] = { str };
     ant_value_t result = sv_vm_call(js->vm, js, exec_fn, rx, call_args, 1, NULL, false);
@@ -1041,6 +1038,12 @@ static ant_value_t regexp_exec_abstract(ant_t *js, ant_value_t rx, ant_value_t s
   js->this_val = saved;
 
   return result;
+}
+
+static ant_value_t regexp_exec_abstract(ant_t *js, ant_value_t rx, ant_value_t str) {
+  ant_value_t exec_fn = js_get(js, rx, "exec");
+  if (is_err(exec_fn)) return exec_fn;
+  return regexp_exec_with_exec_fn(js, rx, str, exec_fn);
 }
 
 bool regexp_exec_truthy_try_fast(
@@ -1076,31 +1079,50 @@ static ant_value_t builtin_regexp_test(ant_t *js, ant_value_t *args, int nargs) 
   ant_value_t result;
   if (vtype(exec_fn) == T_CFUNC && js_as_cfunc(exec_fn) == builtin_regexp_exec) {
     result = regexp_exec_internal(js, regexp, str_arg, true);
-  } else {
-    result = regexp_exec_abstract(js, regexp, str_arg);
-  }
+  } else result = regexp_exec_with_exec_fn(js, regexp, str_arg, exec_fn);
+  
   if (is_err(result)) return result;
   return mkval(T_BOOL, vtype(result) != T_NULL ? 1 : 0);
 }
 
 static ant_value_t builtin_regexp_flags_getter(ant_t *js, ant_value_t *args, int nargs) {
-  (void)args; (void)nargs;
   ant_value_t rx = js->this_val;
   if (!is_object_type(rx))
     return js_mkerr_typed(js, JS_ERR_TYPE, "RegExp.prototype.flags called on non-object");
+    
+  char buf[16]; int n = 0;
+  ant_value_t v = js_getprop_fallback(js, rx, "hasIndices");
+  
+  if (is_err(v)) return v;
+  if (js_truthy(js, v)) buf[n++] = 'd';
 
-  char buf[16];
-  int n = 0;
-  uint8_t mask = regexp_flags_mask(js, rx);
+  v = js_getprop_fallback(js, rx, "global");
+  if (is_err(v)) return v;
+  if (js_truthy(js, v)) buf[n++] = 'g';
 
-  if (mask & REGEXP_FLAG_HAS_INDICES) buf[n++] = 'd';
-  if (mask & REGEXP_FLAG_GLOBAL) buf[n++] = 'g';
-  if (mask & REGEXP_FLAG_IGNORE_CASE) buf[n++] = 'i';
-  if (mask & REGEXP_FLAG_MULTILINE) buf[n++] = 'm';
-  if (mask & REGEXP_FLAG_DOTALL) buf[n++] = 's';
-  if (mask & REGEXP_FLAG_UNICODE) buf[n++] = 'u';
-  if (mask & REGEXP_FLAG_UNICODE_SET) buf[n++] = 'v';
-  if (mask & REGEXP_FLAG_STICKY) buf[n++] = 'y';
+  v = js_getprop_fallback(js, rx, "ignoreCase");
+  if (is_err(v)) return v;
+  if (js_truthy(js, v)) buf[n++] = 'i';
+
+  v = js_getprop_fallback(js, rx, "multiline");
+  if (is_err(v)) return v;
+  if (js_truthy(js, v)) buf[n++] = 'm';
+
+  v = js_getprop_fallback(js, rx, "dotAll");
+  if (is_err(v)) return v;
+  if (js_truthy(js, v)) buf[n++] = 's';
+
+  v = js_getprop_fallback(js, rx, "unicode");
+  if (is_err(v)) return v;
+  if (js_truthy(js, v)) buf[n++] = 'u';
+
+  v = js_getprop_fallback(js, rx, "unicodeSets");
+  if (is_err(v)) return v;
+  if (js_truthy(js, v)) buf[n++] = 'v';
+
+  v = js_getprop_fallback(js, rx, "sticky");
+  if (is_err(v)) return v;
+  if (js_truthy(js, v)) buf[n++] = 'y';
 
   return js_mkstr(js, buf, n);
 }
