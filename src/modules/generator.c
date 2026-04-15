@@ -182,7 +182,7 @@ static coroutine_t *generator_coro(ant_value_t gen) {
 static void generator_clear_coro(ant_value_t gen, coroutine_t *coro) {
   generator_data_t *data = generator_data(gen);
   if (data && data->coro == coro) data->coro = NULL;
-  if (coro) free_coroutine(coro);
+  if (coro) coroutine_unhold(coro, CORO_HOLD_GENERATOR);
 }
 
 coroutine_t *generator_get_coro_for_gc(ant_value_t gen) {
@@ -285,25 +285,9 @@ bool generator_resume_pending_request(ant_t *js, coroutine_t *coro, ant_value_t 
 static void generator_finalize(ant_t *js, ant_object_t *obj) {
   ant_value_t gen = js_obj_from_ptr(obj);
   generator_data_t *data = (generator_data_t *)js_get_native_ptr(gen);
+  
   if (!data) return;
-
-  if (data->coro) {
-    coroutine_t *coro = data->coro;
-    bool linked_active = false;
-    bool linked_pending =
-      coro->prev || coro->next ||
-      pending_coroutines.head == coro ||
-      pending_coroutines.tail == coro;
-      
-    for (coroutine_t *it = js->active_async_coro; it; it = it->active_parent) if (it == coro) {
-      linked_active = true;
-      break;
-    }
-    
-    bool awaiting = vtype(coro->awaited_promise) != T_UNDEF;
-    if (!linked_pending && !linked_active && !awaiting) free_coroutine(coro);
-    data->coro = NULL;
-  }
+  if (data->coro) generator_clear_coro(gen, data->coro);
   
   js_set_native_ptr(gen, NULL);
   js_set_native_tag(gen, 0);
@@ -378,6 +362,7 @@ static ant_value_t generator_resume_kind(
   
   coro->active_parent = saved_active;
   js->active_async_coro = coro;
+  coroutine_hold(coro, CORO_HOLD_ACTIVE);
 
   ant_value_t result;
   if (state == GEN_SUSPENDED_START) {
@@ -398,6 +383,7 @@ static ant_value_t generator_resume_kind(
   GC_ROOT_PIN(js, result);
   js->active_async_coro = saved_active;
   coro->active_parent = NULL;
+  coroutine_unhold(coro, CORO_HOLD_ACTIVE);
 
   if (is_err(result)) {
     generator_set_state(gen, GEN_COMPLETED);
@@ -559,10 +545,15 @@ ant_value_t sv_call_generator_closure_dispatch(
     .async_promise = js_mkundef(),
     .next = NULL,
     .mco = NULL,
+    .owner_vm = gen_vm,
+    .sv_vm = gen_vm,
     .mco_started = false,
     .is_ready = false,
     .did_suspend = false,
-    .sv_vm = gen_vm,
+    .refcount = 1,
+    .hold_bits = 0,
+    .await_registered = false,
+    .destroy_requested = false,
   };
 
   *data = (generator_data_t){
@@ -570,6 +561,8 @@ ant_value_t sv_call_generator_closure_dispatch(
     .state = GEN_SUSPENDED_START,
     .is_async = closure->func->is_async,
   };
+  coroutine_hold(coro, CORO_HOLD_GENERATOR);
+  coroutine_release(coro);
 
   js_set_native_ptr(gen, data);
   js_set_native_tag(gen, GENERATOR_NATIVE_TAG);

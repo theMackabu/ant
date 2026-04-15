@@ -49,20 +49,19 @@ void js_poll_events(ant_t *js) {
   
   for (;;) {
     coroutine_t *temp = NULL;
-    for (coroutine_t *c = pending_coroutines.head; c; c = c->next) {
+    for (coroutine_t *c = pending_coroutines.head; c; c = c->next) 
       if (c->is_ready && c->mco && mco_status(c->mco) == MCO_SUSPENDED) { temp = c; break; }
-    }
     
     if (!temp) break;
     temp->is_ready = false;
-
+    coroutine_retain(temp);
+    
     mco_result res;
     MCO_RESUME_SAVE(js, temp->mco, res);
-
-    if (res != MCO_SUCCESS || mco_status(temp->mco) == MCO_DEAD) {
+    
+    if (res != MCO_SUCCESS || mco_status(temp->mco) == MCO_DEAD) 
       remove_coroutine(temp);
-      free_coroutine(temp);
-    }
+    coroutine_release(temp);
   }
   
   if (g_poll_hook) g_poll_hook(g_poll_hook_data);

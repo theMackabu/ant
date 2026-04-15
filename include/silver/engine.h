@@ -343,7 +343,6 @@ struct sv_vm {
   
   // TODO: move to nested struct
   bool suspended;
-  bool async_handoff_pending;
   bool suspended_resume_pending;
   bool suspended_resume_is_error;
   sv_resume_kind_t suspended_resume_kind;

@@ -88,29 +88,48 @@ typedef struct {
   sv_vm_t *vm;
 } sv_tla_ctx_t;
 
+typedef enum {
+  SV_AWAIT_READY = 0,
+  SV_AWAIT_ERROR,
+  SV_AWAIT_SUSPENDED,
+} sv_await_state_t;
+
+typedef struct {
+  sv_await_state_t state;
+  ant_value_t value;
+  bool handoff;
+} sv_await_result_t;
+
 static inline void sv_async_link_activation(ant_t *js, coroutine_t *coro) {
   if (!js || !coro) return;
   coro->active_parent = js->active_async_coro;
   js->active_async_coro = coro;
+  coroutine_hold(coro, CORO_HOLD_ACTIVE);
 }
 
 static inline void sv_async_unlink_activation(ant_t *js, coroutine_t *coro) {
   if (!js || !coro) return;
   if (js->active_async_coro == coro) js->active_async_coro = coro->active_parent;
   coro->active_parent = NULL;
+  coroutine_unhold(coro, CORO_HOLD_ACTIVE);
+}
+
+static inline bool sv_async_coro_matches_vm(const coroutine_t *coro, const sv_vm_t *vm) {
+  if (!coro || !vm) return false;
+  if (coro->sv_vm == vm) return true;
+  return coro->owner_vm == vm;
 }
 
 static inline coroutine_t *sv_async_get_active_coro_for_vm(ant_t *js, sv_vm_t *vm) {
   if (!js || !js->active_async_coro) return NULL;
 
-  coroutine_t *fallback = js->active_async_coro;
-  if (!vm) return fallback;
+  if (!vm) return js->active_async_coro;
 
-  for (coroutine_t *it = fallback; it; it = it->active_parent) {
-    if (it->owner_vm == vm) return it;
+  for (coroutine_t *it = js->active_async_coro; it; it = it->active_parent) {
+    if (sv_async_coro_matches_vm(it, vm)) return it;
   }
 
-  return fallback;
+  return NULL;
 }
 
 static inline void sv_async_init_activation(
@@ -141,6 +160,8 @@ static inline void sv_async_init_activation(
     .owner_entry_fp = owner_vm ? owner_vm->fp : -1,
     .owner_saved_fp = owner_vm ? owner_vm->fp - 1 : -1,
     .nargs = nargs,
+    .refcount = 1,
+    .hold_bits = 0,
     .is_settled = false,
     .is_error = false,
     .is_done = false,
@@ -148,7 +169,8 @@ static inline void sv_async_init_activation(
     .mco_started = false,
     .is_ready = false,
     .did_suspend = false,
-    .free_pending = false,
+    .await_registered = false,
+    .destroy_requested = false,
   };
 }
 
@@ -183,14 +205,23 @@ static inline sv_vm_t *sv_async_prepare_materialization(
   if (!source_vm || !js || !coro || coro->sv_vm) return coro ? coro->sv_vm : NULL;
   if (source_vm->fp < 0) return NULL;
 
-  sv_frame_t *source_frame = &source_vm->frames[source_vm->fp];
-  int stack_base = source_frame->prev_sp;
+  int entry_fp = source_vm->suspended_entry_fp;
+  if (entry_fp < 0 || entry_fp > source_vm->fp) entry_fp = source_vm->fp;
+
+  sv_frame_t *entry_frame = &source_vm->frames[entry_fp];
+  int frame_count = source_vm->fp - entry_fp + 1;
+  int stack_base = entry_frame->prev_sp;
   int stack_count = source_vm->sp - stack_base;
-  int handler_count = source_vm->handler_depth - source_frame->handler_base;
+  int handler_base = entry_frame->handler_base;
+  int handler_count = source_vm->handler_depth - handler_base;
 
   sv_vm_t *async_vm = sv_vm_create(js, SV_VM_ASYNC);
   if (!async_vm) return NULL;
   if (stack_count < 0 || stack_count > async_vm->stack_size) {
+    sv_vm_destroy(async_vm);
+    return NULL;
+  }
+  if (frame_count < 1 || frame_count > async_vm->max_frames) {
     sv_vm_destroy(async_vm);
     return NULL;
   }
@@ -207,22 +238,26 @@ static inline sv_vm_t *sv_async_prepare_materialization(
     );
   }
   async_vm->sp = stack_count;
+  async_vm->fp = frame_count - 1;
 
-  async_vm->fp = 0;
-  async_vm->frames[0] = *source_frame;
-  async_vm->frames[0].prev_sp = 0;
-  async_vm->frames[0].handler_base = 0;
-  async_vm->frames[0].handler_top = handler_count;
+  for (int i = 0; i < frame_count; i++) {
+    sv_frame_t *src = &source_vm->frames[entry_fp + i];
+    sv_frame_t *dst = &async_vm->frames[i];
+    *dst = *src;
+    dst->prev_sp = src->prev_sp - stack_base;
+    dst->handler_base = src->handler_base - handler_base;
+    dst->handler_top = src->handler_top - handler_base;
 
-  if (source_frame->bp)
-    async_vm->frames[0].bp = async_vm->stack + (source_frame->bp - &source_vm->stack[stack_base]);
-  if (source_frame->lp)
-    async_vm->frames[0].lp = async_vm->stack + (source_frame->lp - &source_vm->stack[stack_base]);
+    if (src->bp)
+      dst->bp = async_vm->stack + (src->bp - &source_vm->stack[stack_base]);
+    if (src->lp)
+      dst->lp = async_vm->stack + (src->lp - &source_vm->stack[stack_base]);
+  }
 
   if (handler_count > 0) {
     memcpy(
       async_vm->handler_stack,
-      &source_vm->handler_stack[source_frame->handler_base],
+      &source_vm->handler_stack[handler_base],
       sizeof(sv_handler_t) * (size_t)handler_count
     );
   }
@@ -239,47 +274,25 @@ static inline sv_vm_t *sv_async_prepare_materialization(
   return async_vm;
 }
 
-static inline coroutine_t *sv_async_create_materialized_coro(
-  sv_vm_t *async_vm, coroutine_t *coro
+static inline bool sv_async_materialize_activation(
+  sv_vm_t *source_vm, sv_vm_t *async_vm, coroutine_t *coro
 ) {
-  if (!async_vm || !coro) return NULL;
+  if (!source_vm || !async_vm || !coro || source_vm->fp < 0) return false;
 
-  coroutine_t *heap_coro = (coroutine_t *)CORO_MALLOC(sizeof(coroutine_t));
-  if (!heap_coro) {
-    sv_vm_destroy(async_vm);
-    return NULL;
-  }
-
-  *heap_coro = *coro;
-  heap_coro->prev = NULL;
-  heap_coro->next = NULL;
-  heap_coro->sv_vm = async_vm;
-  heap_coro->materialized = true;
-  heap_coro->free_pending = false;
-  return heap_coro;
-}
-
-static inline void sv_async_finalize_materialization(
-  sv_vm_t *source_vm, sv_vm_t *async_vm,
-  coroutine_t *pending_coro, coroutine_t *heap_coro
-) {
-  if (!source_vm || !async_vm || !pending_coro || !heap_coro || source_vm->fp < 0) return;
-
-  sv_frame_t *source_frame = &source_vm->frames[source_vm->fp];
-  ant_value_t *source_base = &source_vm->stack[source_frame->prev_sp];
-  size_t stack_count = (size_t)(source_vm->sp - source_frame->prev_sp);
-
+  int entry_fp = source_vm->suspended_entry_fp;
+  if (entry_fp < 0 || entry_fp > source_vm->fp) entry_fp = source_vm->fp;
+  sv_frame_t *entry_frame = &source_vm->frames[entry_fp];
+  ant_value_t *source_base = &source_vm->stack[entry_frame->prev_sp];
+  size_t stack_count = (size_t)(source_vm->sp - entry_frame->prev_sp);
   sv_async_move_open_upvalues(
     source_vm, async_vm, source_base, async_vm->stack, stack_count
   );
 
-  pending_coro->owner_entry_fp = source_vm->fp;
-  pending_coro->owner_saved_fp = source_vm->fp - 1;
-  pending_coro->sv_vm = async_vm;
-  pending_coro->materialized = true;
-  heap_coro->owner_entry_fp = source_vm->fp;
-  heap_coro->owner_saved_fp = source_vm->fp - 1;
-  source_vm->async_handoff_pending = true;
+  coro->owner_entry_fp = source_vm->suspended_entry_fp;
+  coro->owner_saved_fp = source_vm->suspended_saved_fp;
+  coro->sv_vm = async_vm;
+  coro->materialized = true;
+  return true;
 }
 
 static void sv_mco_tla_entry(mco_coro *mco) {
@@ -317,35 +330,26 @@ static inline ant_value_t sv_start_tla(ant_t *js, sv_func_t *func, ant_value_t t
     GC_ROOT_PIN(js, this_val);
     GC_ROOT_PIN(js, promise);
 
-    sv_vm_t *async_vm = sv_vm_create(js, SV_VM_ASYNC);
-    if (!async_vm) {
-      GC_ROOT_RESTORE(js, root_mark);
-      return js_mkerr(js, "out of memory for TLA VM");
-    }
-
     coroutine_t *coro = (coroutine_t *)CORO_MALLOC(sizeof(coroutine_t));
     if (!coro) {
-      sv_vm_destroy(async_vm);
       GC_ROOT_RESTORE(js, root_mark);
       return js_mkerr(js, "out of memory for TLA coroutine");
     }
 
     sv_async_init_activation(
-      coro, js, async_vm, promise, this_val,
+      coro, js, js->vm, promise, this_val,
       js_mkundef(), js_mkundef(), js_mkundef(), 0
     );
-    coro->sv_vm = async_vm;
-    coro->materialized = true;
     sv_async_link_activation(js, coro);
 
     ant_value_t result = sv_execute_entry(
-      async_vm, func,
+      js->vm, func,
       this_val, NULL, 0
     );
+    sv_async_unlink_activation(js, coro);
 
-    if (async_vm->suspended) {
-      sv_async_unlink_activation(js, coro);
-      enqueue_coroutine(coro);
+    if (coro->sv_vm && coro->sv_vm->suspended) {
+      coroutine_release(coro);
       GC_ROOT_RESTORE(js, root_mark);
       return promise;
     }
@@ -358,8 +362,7 @@ static inline ant_value_t sv_start_tla(ant_t *js, sv_func_t *func, ant_value_t t
     } else {
       js_resolve_promise(js, promise, result);
     }
-    sv_async_unlink_activation(js, coro);
-    free_coroutine(coro);
+    coroutine_release(coro);
     GC_ROOT_RESTORE(js, root_mark);
     
     return promise;
@@ -421,10 +424,15 @@ static inline ant_value_t sv_start_tla(ant_t *js, sv_func_t *func, ant_value_t t
     .async_promise = promise,
     .next = NULL,
     .mco = mco,
+    .owner_vm = async_vm,
+    .sv_vm = async_vm,
     .mco_started = false,
     .is_ready = true,
     .did_suspend = false,
-    .sv_vm = async_vm,
+    .refcount = 1,
+    .hold_bits = 0,
+    .await_registered = false,
+    .destroy_requested = false,
   };
 
   ctx->coro = coro;
@@ -433,15 +441,16 @@ static inline ant_value_t sv_start_tla(ant_t *js, sv_func_t *func, ant_value_t t
 
   if (res != MCO_SUCCESS && mco_status(mco) != MCO_DEAD) {
     remove_coroutine(coro);
-    free_coroutine(coro);
+    coroutine_release(coro);
     return js_mkerr(js, "failed to start TLA coroutine");
   }
 
   coro->mco_started = true;
   if (mco_status(mco) == MCO_DEAD) {
     remove_coroutine(coro);
-    free_coroutine(coro);
   }
+
+  coroutine_release(coro);
 
   return promise;
 }
@@ -497,21 +506,27 @@ static inline ant_value_t sv_start_async_closure(
     
     ant_value_t promise = js_mkpromise(js);
     GC_ROOT_PIN(js, promise);
-    coroutine_t pending_coro;
+    coroutine_t *coro = (coroutine_t *)CORO_MALLOC(sizeof(coroutine_t));
+    if (!coro) {
+      GC_ROOT_RESTORE(js, root_mark);
+      return js_mkerr(js, "out of memory for async coroutine");
+    }
+
     sv_async_init_activation(
-      &pending_coro, js, caller_vm, promise, this_val,
+      coro, js, caller_vm, promise, this_val,
       super_val, js->new_target, callee_func, argc
     );
-    sv_async_link_activation(js, &pending_coro);
+    sv_async_link_activation(js, coro);
     
     ant_value_t result = sv_execute_closure_entry(
       caller_vm, closure, callee_func, 
       super_val, this_val, args, argc, NULL
     );
 
-    sv_async_unlink_activation(js, &pending_coro);
+    sv_async_unlink_activation(js, coro);
 
-    if (pending_coro.materialized && pending_coro.sv_vm) {
+    if (coro->sv_vm && coro->sv_vm->suspended) {
+      coroutine_release(coro);
       GC_ROOT_RESTORE(js, root_mark);
       return promise;
     }
@@ -524,6 +539,7 @@ static inline ant_value_t sv_start_async_closure(
     } else {
       js_resolve_promise(js, promise, result);
     }
+    coroutine_release(coro);
     GC_ROOT_RESTORE(js, root_mark);
     
     return promise;
@@ -601,10 +617,15 @@ static inline ant_value_t sv_start_async_closure(
     .async_promise = promise,
     .next = NULL,
     .mco = mco,
+    .owner_vm = async_vm,
+    .sv_vm = async_vm,
     .mco_started = false,
     .is_ready = true,
     .did_suspend = false,
-    .sv_vm = async_vm,
+    .refcount = 1,
+    .hold_bits = 0,
+    .await_registered = false,
+    .destroy_requested = false,
   };
 
   ctx->coro = coro;
@@ -614,25 +635,39 @@ static inline ant_value_t sv_start_async_closure(
 
   if (res != MCO_SUCCESS && start_status != MCO_DEAD) {
     remove_coroutine(coro);
-    free_coroutine(coro);
+    coroutine_release(coro);
     return js_mkerr(js, "failed to start async coroutine");
   }
 
   coro->mco_started = true;
   if (start_status == MCO_DEAD) {
     remove_coroutine(coro);
-    free_coroutine(coro);
   }
+
+  coroutine_release(coro);
 
   return promise;
 }
 
 
 
-static inline ant_value_t sv_await_value(sv_vm_t *vm, ant_t *js, ant_value_t value) {
+static inline sv_await_result_t sv_await_value(sv_vm_t *vm, ant_t *js, ant_value_t value) {
+  sv_await_result_t out = {
+    .state = SV_AWAIT_READY,
+    .value = js_mkundef(),
+    .handoff = false,
+  };
+
   value = js_promise_assimilate_awaitable(js, value);
-  if (is_err(value)) return value;
-  if (vtype(value) != T_PROMISE) return value;
+  if (is_err(value)) {
+    out.state = SV_AWAIT_ERROR;
+    out.value = value;
+    return out;
+  }
+  if (vtype(value) != T_PROMISE) {
+    out.value = value;
+    return out;
+  }
 
   mco_coro *current_mco = mco_running();
   if (!current_mco) current_mco = NULL;
@@ -643,52 +678,79 @@ static inline ant_value_t sv_await_value(sv_vm_t *vm, ant_t *js, ant_value_t val
     if (hdr) coro = hdr->coro;
   } else coro = sv_async_get_active_coro_for_vm(js, vm);
 
-  if (!coro)
-    return js_mkerr(js, "await can only be used inside async functions");
-
-  sv_vm_t *prepared_vm = NULL;
-  coroutine_t *pending_coro = coro;
-  if (!current_mco && vm && coro->owner_vm == vm && !coro->sv_vm) {
-    prepared_vm = sv_async_prepare_materialization(vm, js, coro);
-    if (!prepared_vm) return js_mkerr(js, "out of memory for async VM");
-    coroutine_t *materialized_coro = sv_async_create_materialized_coro(prepared_vm, coro);
-    if (!materialized_coro) return js_mkerr(js, "out of memory for coroutine");
-    coro = materialized_coro;
-    enqueue_coroutine(coro);
+  if (!coro) {
+    out.state = SV_AWAIT_ERROR;
+    out.value = js_mkerr(js, "await can only be used inside async functions");
+    return out;
   }
 
-  coro->awaited_promise = value;
+  sv_vm_t *prepared_vm = NULL;
+  bool handoff = false;
+  if (!current_mco && vm && coro->owner_vm == vm && !coro->sv_vm) {
+    prepared_vm = sv_async_prepare_materialization(vm, js, coro);
+    if (!prepared_vm) {
+      out.state = SV_AWAIT_ERROR;
+      out.value = js_mkerr(js, "out of memory for async VM");
+      return out;
+    }
+    handoff = true;
+  }
+
   coro->is_settled = false;
   coro->is_ready = false;
   js_await_result_t await_result = js_promise_await_coroutine(js, value, coro);
 
   if (await_result.state == JS_AWAIT_ERROR) {
-    if (prepared_vm) free_coroutine(coro);
+    if (prepared_vm) {
+      sv_vm_destroy(prepared_vm);
+      coro->sv_vm = NULL;
+      coro->materialized = false;
+    }
     coro->is_settled = false;
-    coro->awaited_promise = js_mkundef();
-    return js_throw(js, await_result.value);
+    out.state = SV_AWAIT_ERROR;
+    out.value = js_throw(js, await_result.value);
+    return out;
   }
 
   coro->did_suspend = true;
   if (!current_mco) {
-    if (prepared_vm) sv_async_finalize_materialization(vm, prepared_vm, pending_coro, coro);
-    if (coro->sv_vm) coro->sv_vm->suspended = true;
-    return js_mkundef();
+    if (prepared_vm) {
+      if (!sv_async_materialize_activation(vm, prepared_vm, coro)) {
+        coroutine_clear_await_registration(coro);
+        sv_vm_destroy(prepared_vm);
+        out.state = SV_AWAIT_ERROR;
+        out.value = js_mkerr(js, "failed to materialize async activation");
+        return out;
+      }
+    }
+    out.state = SV_AWAIT_SUSPENDED;
+    out.handoff = handoff;
+    if (handoff) coro->sv_vm->suspended = true;
+    else if (coro->sv_vm) coro->sv_vm->suspended = true;
+    return out;
   }
   
   mco_result mco_res = mco_yield(current_mco);
-  if (mco_res != MCO_SUCCESS)
-    return js_mkerr(js, "failed to yield coroutine");
+  if (mco_res != MCO_SUCCESS) {
+    out.state = SV_AWAIT_ERROR;
+    out.value = js_mkerr(js, "failed to yield coroutine");
+    return out;
+  }
 
   MCO_CORO_STACK_ENTER(js, current_mco);
-  ant_value_t result = coro->result;
+  out.value = coro->result;
   bool is_error = coro->is_error;
   
   coro->is_settled = false;
   coro->awaited_promise = js_mkundef();
-  if (is_error) return js_throw(js, result);
+  if (is_error) {
+    out.state = SV_AWAIT_ERROR;
+    out.value = js_throw(js, out.value);
+    return out;
+  }
 
-  return result;
+  out.state = SV_AWAIT_READY;
+  return out;
 }
 
 

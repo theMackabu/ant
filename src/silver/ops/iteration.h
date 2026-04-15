@@ -358,32 +358,52 @@ static inline ant_value_t sv_op_iter_call(sv_vm_t *vm, ant_t *js, uint8_t *ip) {
   return tov(0);
 }
 
-static inline ant_value_t sv_op_await_iter_next(sv_vm_t *vm, ant_t *js) {
+static inline sv_await_result_t sv_op_await_iter_next(sv_vm_t *vm, ant_t *js) {
+  sv_await_result_t out = {
+    .state = SV_AWAIT_READY,
+    .value = js_mkundef(),
+    .handoff = false,
+  };
   ant_value_t next_method = vm->stack[vm->sp - 2];
   ant_value_t iterator = vm->stack[vm->sp - 3];
   uint8_t ft = vtype(next_method);
   if (ft != T_FUNC && ft != T_CFUNC)
-    return js_mkerr(js, "iterator.next is not a function");
+    return (sv_await_result_t){ .state = SV_AWAIT_ERROR, .value = js_mkerr(js, "iterator.next is not a function"), .handoff = false };
   ant_value_t result = sv_vm_call(vm, js, next_method, iterator, NULL, 0, NULL, false);
-  if (is_err(result)) return result;
+  if (is_err(result))
+    return (sv_await_result_t){ .state = SV_AWAIT_ERROR, .value = result, .handoff = false };
   if (vtype(result) == T_PROMISE) {
-    ant_value_t awaited = sv_await_value(vm, js, result);
-    if (is_err(awaited)) return awaited;
-    result = awaited;
+    vm->suspended_entry_fp = vm->fp;
+    vm->suspended_saved_fp = vm->fp - 1;
+    sv_await_result_t awaited = sv_await_value(vm, js, result);
+    if (awaited.state != SV_AWAIT_SUSPENDED || awaited.handoff) {
+      vm->suspended_entry_fp = -1;
+      vm->suspended_saved_fp = -1;
+    }
+    if (awaited.state != SV_AWAIT_READY) return awaited;
+    result = awaited.value;
   }
   ant_value_t done = js_mkundef();
   ant_value_t value = js_mkundef();
   sv_iter_result_unpack(js, result, &done, &value);
-  if (is_err(done)) return done;
-  if (is_err(value)) return value;
+  if (is_err(done))
+    return (sv_await_result_t){ .state = SV_AWAIT_ERROR, .value = done, .handoff = false };
+  if (is_err(value))
+    return (sv_await_result_t){ .state = SV_AWAIT_ERROR, .value = value, .handoff = false };
   if (vtype(value) == T_PROMISE) {
-    ant_value_t awaited_val = sv_await_value(vm, js, value);
-    if (is_err(awaited_val)) return awaited_val;
-    value = awaited_val;
+    vm->suspended_entry_fp = vm->fp;
+    vm->suspended_saved_fp = vm->fp - 1;
+    sv_await_result_t awaited_val = sv_await_value(vm, js, value);
+    if (awaited_val.state != SV_AWAIT_SUSPENDED || awaited_val.handoff) {
+      vm->suspended_entry_fp = -1;
+      vm->suspended_saved_fp = -1;
+    }
+    if (awaited_val.state != SV_AWAIT_READY) return awaited_val;
+    value = awaited_val.value;
   }
   vm->stack[vm->sp++] = value;
   vm->stack[vm->sp++] = mkval(T_BOOL, js_truthy(js, done));
-  return tov(0);
+  return out;
 }
 
 #endif

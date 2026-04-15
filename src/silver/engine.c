@@ -1702,7 +1702,20 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
   L_ITER_GET_VALUE:   { sv_op_iter_get_value(vm, js);             NEXT(1); }
   L_ITER_CLOSE:       { sv_op_iter_close(vm, js);                 NEXT(1); }
   L_ITER_CALL:        { VM_CHECK(sv_op_iter_call(vm, js, ip));    NEXT(2); }
-  L_AWAIT_ITER_NEXT:  { VM_CHECK(sv_op_await_iter_next(vm, js));  NEXT(1); }
+  
+  L_AWAIT_ITER_NEXT:  {
+    sv_await_result_t await_result = sv_op_await_iter_next(vm, js);
+    if (await_result.state == SV_AWAIT_ERROR) {
+      sv_err = await_result.value;
+      goto sv_throw;
+    }
+    if (await_result.state == SV_AWAIT_SUSPENDED) {
+      if (await_result.handoff) vm_result = js_mkundef();
+      goto sv_leave;
+    }
+    NEXT(1);
+  }
+  
   L_DESTRUCTURE_INIT: { VM_CHECK(sv_op_destructure_init(vm, js)); NEXT(1); }
   L_DESTRUCTURE_NEXT: { VM_CHECK(sv_op_destructure_next(vm, js)); NEXT(1); }
   L_DESTRUCTURE_REST: { VM_CHECK(sv_op_destructure_rest(vm, js)); NEXT(1); }
@@ -1714,23 +1727,24 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
     vm->suspended_entry_fp = entry_fp;
     vm->suspended_saved_fp = entry_fp - 1;
     
-    ant_value_t result = sv_await_value(vm, js, await_val);
-    if (vm->async_handoff_pending) {
-      vm->async_handoff_pending = false;
+    sv_await_result_t await_result = sv_await_value(vm, js, await_val);
+    if (await_result.state == SV_AWAIT_SUSPENDED && await_result.handoff) {
+      vm->suspended_entry_fp = -1;
+      vm->suspended_saved_fp = -1;
       vm_result = js_mkundef();
       goto sv_leave;
     }
-    if (vm->suspended) goto sv_leave;
     
+    if (await_result.state == SV_AWAIT_SUSPENDED) goto sv_leave;
     vm->suspended_entry_fp = -1;
     vm->suspended_saved_fp = -1;
     
-    if (is_err(result)) { 
-      sv_err = result;
+    if (await_result.state == SV_AWAIT_ERROR) {
+      sv_err = await_result.value;
       goto sv_throw;
     }
     
-    vm->stack[vm->sp++] = result;
+    vm->stack[vm->sp++] = await_result.value;
     NEXT(1);
   }
   

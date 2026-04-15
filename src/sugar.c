@@ -32,6 +32,7 @@ bool has_ready_coroutines(void) {
 
 void enqueue_coroutine(coroutine_t *coro) {
   if (!coro) return;
+  if (coro->hold_bits & CORO_HOLD_PENDING) return;
   coro->next = NULL;
   coro->prev = pending_coroutines.tail;
   
@@ -39,10 +40,11 @@ void enqueue_coroutine(coroutine_t *coro) {
     pending_coroutines.tail->next = coro;
   } else pending_coroutines.head = coro;
   pending_coroutines.tail = coro;
+  coroutine_hold(coro, CORO_HOLD_PENDING);
 }
 
 void remove_coroutine(coroutine_t *coro) {
-  if (!coro) return;
+  if (!coro || !(coro->hold_bits & CORO_HOLD_PENDING)) return;
   
   if (coro->prev) {
     coro->prev->next = coro->next;
@@ -54,34 +56,7 @@ void remove_coroutine(coroutine_t *coro) {
   
   coro->prev = NULL;
   coro->next = NULL;
-}
-
-static void clear_await_coro_from_promise_state(ant_promise_state_t *pd, coroutine_t *coro) {
-  if (!pd || !coro || pd->handler_count == 0) return;
-
-  if (pd->handler_count == 1) {
-    if (pd->inline_handler.await_coro == coro) pd->inline_handler.await_coro = NULL;
-    return;
-  }
-
-  if (!pd->handlers) return;
-  promise_handler_t *h = NULL;
-  
-  while ((h = (promise_handler_t *)utarray_next(pd->handlers, h))) 
-    if (h->await_coro == coro) h->await_coro = NULL;
-}
-
-static void clear_await_coro_from_object_list(ant_object_t *head, coroutine_t *coro) {
-  for (ant_object_t *obj = head; obj; obj = obj->next)
-    if (obj->promise_state) clear_await_coro_from_promise_state(obj->promise_state, coro);
-}
-
-static inline bool coroutine_is_queued(coroutine_t *coro) {
-  return coro && (
-    coro->prev || coro->next ||
-    pending_coroutines.head == coro ||
-    pending_coroutines.tail == coro
-  );
+  coroutine_unhold(coro, CORO_HOLD_PENDING);
 }
 
 static void retire_coroutine_storage(coroutine_t *coro) {
@@ -117,6 +92,41 @@ static void destroy_coroutine_resources(coroutine_t *coro) {
   coro->materialized = false;
 }
 
+void coroutine_retain(coroutine_t *coro) {
+  if (!coro) return;
+  coro->refcount++;
+}
+
+static void coroutine_release_storage(coroutine_t *coro) {
+  if (!coro) return;
+
+  ant_t *js = coro->js;
+  if (js && js->vm_exec_depth > 0) retire_coroutine_storage(coro);
+  else {
+    destroy_coroutine_resources(coro);
+    CORO_FREE(coro);
+  }
+}
+
+void coroutine_release(coroutine_t *coro) {
+  if (!coro || coro->refcount == 0) return;
+  coro->refcount--;
+  if (coro->refcount != 0) return;
+  coroutine_release_storage(coro);
+}
+
+void coroutine_hold(coroutine_t *coro, uint8_t hold) {
+  if (!coro || (coro->hold_bits & hold)) return;
+  coro->hold_bits |= hold;
+  coroutine_retain(coro);
+}
+
+void coroutine_unhold(coroutine_t *coro, uint8_t hold) {
+  if (!coro || !(coro->hold_bits & hold)) return;
+  coro->hold_bits &= (uint8_t)~hold;
+  coroutine_release(coro);
+}
+
 void reap_retired_coroutines(void) {
   coroutine_t *coro = retired_coroutines;
   retired_coroutines = NULL;
@@ -129,30 +139,24 @@ void reap_retired_coroutines(void) {
   }
 }
 
-void free_coroutine(coroutine_t *coro) {
-  if (!coro || coro->free_pending) return;
-  coro->free_pending = true;
+void coroutine_clear_await_registration(coroutine_t *coro) {
+  if (!coro || !coro->await_registered) return;
 
   ant_t *js = coro->js;
-  if (js) {
-    clear_await_coro_from_object_list(js->objects, coro);
-    clear_await_coro_from_object_list(js->objects_old, coro);
-    clear_await_coro_from_object_list(js->permanent_objects, coro);
-    
-    if (
-      coro->prev || coro->next ||
-      pending_coroutines.head == coro ||
-      pending_coroutines.tail == coro
-    ) remove_coroutine(coro);
-    
-    if (js->active_async_coro == coro) js->active_async_coro = coro->active_parent;
-    coro->active_parent = NULL;
-  }
+  ant_value_t promise = coro->awaited_promise;
+  coro->await_registered = false;
+  coro->awaited_promise = js_mkundef();
 
-  if (!js || js->vm_exec_depth == 0)
-    destroy_coroutine_resources(coro);
+  if (js && vtype(promise) == T_PROMISE)
+    js_promise_clear_await_coroutine(js, promise, coro);
 
-  retire_coroutine_storage(coro);
+  coroutine_unhold(coro, CORO_HOLD_AWAIT);
+}
+
+void free_coroutine(coroutine_t *coro) {
+  if (!coro) return;
+  coroutine_clear_await_registration(coro);
+  coroutine_release(coro);
 }
 
 static size_t calculate_coro_stack_size(void) {
@@ -180,9 +184,13 @@ static inline void settle_coroutine(coroutine_t *coro, ant_value_t *args, int na
 
 static void resume_coroutine_if_suspended(ant_t *js, coroutine_t *coro) {
   if (!coro) return;
+  coroutine_retain(coro);
 
   if (!coro->mco) {
-    if (!coro->sv_vm || !coro->sv_vm->suspended) return;
+    if (!coro->sv_vm || !coro->sv_vm->suspended) {
+      coroutine_release(coro);
+      return;
+    }
     
     coro->is_ready = false;
     coro->sv_vm->suspended_resume_value = coro->result;
@@ -192,21 +200,27 @@ static void resume_coroutine_if_suspended(ant_t *js, coroutine_t *coro) {
     
     coro->active_parent = js->active_async_coro;
     js->active_async_coro = coro;
+    coroutine_hold(coro, CORO_HOLD_ACTIVE);
     ant_value_t result = sv_resume_suspended(coro->sv_vm);
     
     coro->is_settled = false;
     if (coro->sv_vm->suspended) {
       js->active_async_coro = coro->active_parent;
       coro->active_parent = NULL;
+      coroutine_unhold(coro, CORO_HOLD_ACTIVE);
       if (generator_resume_pending_request(js, coro, result)) return;
+      coroutine_release(coro);
       return;
     }
     
     js->active_async_coro = coro->active_parent;
     coro->active_parent = NULL;
+    coroutine_unhold(coro, CORO_HOLD_ACTIVE);
     
-    if (generator_resume_pending_request(js, coro, result)) return;
-    if (coroutine_is_queued(coro)) remove_coroutine(coro);
+    if (generator_resume_pending_request(js, coro, result)) {
+      coroutine_release(coro);
+      return;
+    }
     
     if (is_err(result)) {
       ant_value_t reject_value = js->thrown_exists ? js->thrown_value : result;
@@ -216,22 +230,25 @@ static void resume_coroutine_if_suspended(ant_t *js, coroutine_t *coro) {
     } else js_resolve_promise(js, coro->async_promise, result);
     
     js_maybe_drain_microtasks_after_async_settle(js);
-    free_coroutine(coro);
+    coroutine_release(coro);
     
     return;
   }
 
-  if (mco_status(coro->mco) != MCO_SUSPENDED) return;
+  if (mco_status(coro->mco) != MCO_SUSPENDED) {
+    coroutine_release(coro);
+    return;
+  }
 
   coro->is_ready = false;
   mco_result res;
   MCO_RESUME_SAVE(js, coro->mco, res);
   mco_state status = mco_status(coro->mco);
 
-  if (res != MCO_SUCCESS || status == MCO_DEAD) {
+  if (res != MCO_SUCCESS || status == MCO_DEAD)
     remove_coroutine(coro);
-    free_coroutine(coro);
-  }
+
+  coroutine_release(coro);
 }
 
 ant_value_t resume_coroutine_wrapper(ant_t *js, ant_value_t *args, int nargs) {
@@ -265,8 +282,11 @@ ant_value_t reject_coroutine_wrapper(ant_t *js, ant_value_t *args, int nargs) {
 
 void settle_and_resume_coroutine(ant_t *js, coroutine_t *coro, ant_value_t value, bool is_error) {
   if (!coro) return;
+  coroutine_retain(coro);
+  coroutine_clear_await_registration(coro);
+  
   ant_value_t args[1] = { value };
   settle_coroutine(coro, args, 1, is_error);
-  coro->awaited_promise = js_mkundef();
   resume_coroutine_if_suspended(js, coro);
+  coroutine_release(coro);
 }

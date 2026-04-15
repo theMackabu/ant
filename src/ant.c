@@ -11321,6 +11321,25 @@ ant_value_t js_promise_assimilate_awaitable(ant_t *js, ant_value_t value) {
   return value;
 }
 
+void js_promise_clear_await_coroutine(ant_t *js, ant_value_t promise, coroutine_t *coro) {
+  (void)js;
+  if (vtype(promise) != T_PROMISE || !coro) return;
+
+  ant_promise_state_t *pd = get_promise_data(js, promise, false);
+  if (!pd || pd->handler_count == 0) return;
+
+  if (pd->handler_count == 1) {
+    if (pd->inline_handler.await_coro == coro) pd->inline_handler.await_coro = NULL;
+    return;
+  }
+
+  if (!pd->handlers) return;
+  promise_handler_t *h = NULL;
+  while ((h = (promise_handler_t *)utarray_next(pd->handlers, h))) {
+    if (h->await_coro == coro) h->await_coro = NULL;
+  }
+}
+
 js_await_result_t js_promise_await_coroutine(ant_t *js, ant_value_t promise, coroutine_t *coro) {
   js_await_result_t result = {
     .state = JS_AWAIT_PENDING,
@@ -11342,6 +11361,10 @@ js_await_result_t js_promise_await_coroutine(ant_t *js, ant_value_t promise, cor
     result.value = js_mkerr(js, "out of memory");
     return result;
   }
+
+  coro->awaited_promise = promise;
+  coro->await_registered = true;
+  coroutine_hold(coro, CORO_HOLD_AWAIT);
 
   js_mark_promise_rejection_handled_chain(js, promise);
   if (pd->state == 0) gc_root_pending_promise(js_obj_ptr(js_as_obj(promise)));
