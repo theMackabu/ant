@@ -162,6 +162,21 @@ static char *esm_try_resolve_index_with_exts(const char *dir, const char *spec) 
   return esm_try_resolve_with_exts(dir, idx, false);
 }
 
+static char *esm_try_resolve_relative_typescript_source_fallback(
+  const char *dir,
+  const char *spec,
+  const char *base_path
+) {
+  if (!is_typescript_file(base_path)) return NULL;
+
+  char *ts_spec = resolve_typescript_source_fallback(spec);
+  if (!ts_spec) return NULL;
+
+  char *resolved = esm_try_resolve(dir, ts_spec, "");
+  free(ts_spec);
+  return resolved;
+}
+
 static ant_value_t esm_default_export_or_namespace(ant_t *js, ant_value_t ns) {
   ant_value_t default_val = js_get_slot(ns, SLOT_DEFAULT);
   return vtype(default_val) != T_UNDEF ? default_val : ns;
@@ -631,10 +646,14 @@ static char *esm_resolve_relative_path(const char *specifier, const char *base_p
 
   const char *spec = specifier;
   if (strncmp(specifier, "./", 2) == 0) spec = specifier + 2;
+  
   bool has_ext = esm_has_extension(spec);
-
   if ((result = esm_try_resolve(dir, spec, ""))) goto cleanup;
-  if (has_ext) goto cleanup;
+  
+  if (has_ext) {
+    result = esm_try_resolve_relative_typescript_source_fallback(dir, spec, base_path);
+    goto cleanup;
+  }
 
   char *base_ext = esm_get_extension(base_path);
   if (!base_ext) goto cleanup;

@@ -252,6 +252,32 @@ char *resolve_js_file(const char *filename) {
   return NULL;
 }
 
+char *resolve_typescript_source_fallback(const char *filename) {
+  if (!filename) return NULL;
+
+  const char *mapped_ext = NULL;
+  size_t trim_len = 0;
+
+  size_t len = strlen(filename);
+  if (len > 3 && strcmp(filename + len - 3, ".js") == 0) {
+    mapped_ext = ".ts";
+    trim_len = 3;
+  } else if (len > 4 && strcmp(filename + len - 4, ".mjs") == 0) {
+    mapped_ext = ".mts";
+    trim_len = 4;
+  } else if (len > 4 && strcmp(filename + len - 4, ".cjs") == 0) {
+    mapped_ext = ".cts";
+    trim_len = 4;
+  } else return NULL;
+
+  size_t mapped_len = strlen(mapped_ext);
+  char *mapped = try_oom(len - trim_len + mapped_len + 1);
+  memcpy(mapped, filename, len - trim_len);
+  memcpy(mapped + len - trim_len, mapped_ext, mapped_len + 1);
+  
+  return mapped;
+}
+
 typedef struct {
   const char *repl; size_t repl_len; size_t *ri;
   const char *matched; size_t matched_len;
