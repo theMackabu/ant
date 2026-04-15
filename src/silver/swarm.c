@@ -1916,12 +1916,14 @@ static jit_features_t jit_prescan_features(sv_func_t *func) {
       case OP_TAIL_CALL: case OP_TAIL_CALL_METHOD:
       case OP_ARRAY: case OP_NEW:
       case OP_APPLY: case OP_NEW_APPLY:
+        f.needs_args_buf = true;
+        if (op == OP_TAIL_CALL || op == OP_TAIL_CALL_METHOD)
+          f.needs_tco_args = true;
+        break;
       case OP_FOR_OF:
       case OP_DESTRUCTURE_INIT: case OP_DESTRUCTURE_NEXT: case OP_DESTRUCTURE_CLOSE:
         f.needs_args_buf = true;
         f.needs_iter_roots = true;
-        if (op == OP_TAIL_CALL || op == OP_TAIL_CALL_METHOD)
-          f.needs_tco_args = true;
         break;
       case OP_CLOSE_UPVAL: case OP_CLOSURE:
         f.needs_close_upval = true;
