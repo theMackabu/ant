@@ -119,17 +119,25 @@ static inline void sv_op_copy_data_props(
   ant_value_t src = vm->stack[vm->sp - 1];
   ant_value_t dst = vm->stack[vm->sp - 2];
   if (!is_object_type(src) || !is_object_type(dst)) return;
-  
-  const char *key = NULL;
-  size_t key_len = 0;
+
   ant_iter_t iter = js_prop_iter_begin(js, src);
+  ant_object_t *source_ptr = js_obj_ptr(js_as_obj(src));
   
-  while (js_prop_iter_next(&iter, &key, &key_len, NULL)) {
-    ant_value_t val = js_get(js, src, key);
-    ant_value_t prop_key = js_mkstr(js, key, key_len);
-    js_setprop(js, dst, prop_key, val);
+  ant_iter_key_t key = {0};
+  ant_value_t val = js_mkundef();
+
+  while (js_prop_iter_next_key(&iter, &key, NULL)) {
+    if (!js_is_own_enumerable_prop(js, src, source_ptr, &key)) continue;
+    if (key.is_symbol) {
+      ant_value_t prop_key = mkval(T_SYMBOL, key.sym_off);
+      val = js_get_sym(js, src, prop_key);
+      js_setprop(js, dst, prop_key, val);
+    } else {
+      val = js_get(js, src, key.str);
+      js_setprop(js, dst, js_mkstr(js, key.str, key.key_len), val);
+    }
   }
-  
+
   js_prop_iter_end(&iter);
 }
 

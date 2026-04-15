@@ -7095,22 +7095,28 @@ static ant_value_t builtin_object_defineProperties(ant_t *js, ant_value_t *args,
   return obj;
 }
 
-static inline bool is_enumerable_prop(
+bool js_is_own_enumerable_prop(
   ant_t *js, ant_value_t source, ant_object_t *source_ptr,
-  ant_value_t prop_key, uint32_t slot
+  const ant_iter_key_t *key
 ) {
-  if (vtype(prop_key) == T_STR) {
-  size_t klen = 0;
-  
-  const char *kstr = js_getstr(js, prop_key, &klen);
-  if (is_internal_prop(kstr, klen)) return false;
-  
+  if (!key) return false;
+
+  if (key->is_symbol) {
+    if (!source_ptr || source_ptr->is_exotic) {
+      prop_meta_t meta;
+      return !lookup_symbol_prop_meta(js_as_obj(source), key->sym_off, &meta) || meta.enumerable;
+    }
+    return (ant_shape_get_attrs(source_ptr->shape, key->slot) & ANT_PROP_ATTR_ENUMERABLE) != 0;
+  }
+
+  if (!key->str || is_internal_prop(key->str, key->key_len)) return false;
+
   if (!source_ptr || source_ptr->is_exotic) {
-    descriptor_entry_t *desc = lookup_descriptor(js_as_obj(source), kstr, klen);
+    descriptor_entry_t *desc = lookup_descriptor(js_as_obj(source), key->str, key->key_len);
     return !desc || desc->enumerable;
-  }}
-  
-  return (ant_shape_get_attrs(source_ptr->shape, slot) & ANT_PROP_ATTR_ENUMERABLE) != 0;
+  }
+
+  return (ant_shape_get_attrs(source_ptr->shape, key->slot) & ANT_PROP_ATTR_ENUMERABLE) != 0;
 }
 
 static ant_value_t builtin_object_assign(ant_t *js, ant_value_t *args, int nargs) {
@@ -7139,12 +7145,14 @@ static ant_value_t builtin_object_assign(ant_t *js, ant_value_t *args, int nargs
     ant_iter_t iter = js_prop_iter_begin(js, source);
     ant_object_t *source_ptr = js_obj_ptr(js_as_obj(source));
     
-    ant_value_t prop_key = js_mkundef();
+    ant_iter_key_t key = {0};
     ant_value_t val = js_mkundef();
     
-    while (js_prop_iter_next_val(&iter, &prop_key, &val)) if (
-      is_enumerable_prop(js, source, source_ptr, prop_key, (uint32_t)(iter.off - 1))
-    ) js_setprop(js, as_obj, prop_key, val);
+    while (js_prop_iter_next_key(&iter, &key, &val)) {
+      if (!js_is_own_enumerable_prop(js, source, source_ptr, &key)) continue;
+      ant_value_t prop_key = key.is_symbol ? mkval(T_SYMBOL, key.sym_off) : js_mkstr(js, key.str, key.key_len);
+      js_setprop(js, as_obj, prop_key, val);
+    }
     
     js_prop_iter_end(&iter);
   }
@@ -14842,6 +14850,19 @@ ant_iter_t js_prop_iter_begin(ant_t *js, ant_value_t obj) {
 }
 
 bool js_prop_iter_next(ant_iter_t *iter, const char **key, size_t *key_len, ant_value_t *value) {
+  ant_iter_key_t meta = {0};
+  
+  while (js_prop_iter_next_key(iter, &meta, value)) {
+    if (meta.is_symbol) continue;
+    if (key) *key = meta.str;
+    if (key_len) *key_len = meta.key_len;
+    return true;
+  }
+
+  return false;
+}
+
+bool js_prop_iter_next_key(ant_iter_t *iter, ant_iter_key_t *key_out, ant_value_t *value) {
   if (!iter || !iter->ctx) return false;
   prop_iter_ctx_t *ctx = (prop_iter_ctx_t *)iter->ctx;
   
@@ -14853,12 +14874,20 @@ bool js_prop_iter_next(ant_iter_t *iter, const char **key, size_t *key_len, ant_
     uint32_t i = ctx->index++;
     const ant_shape_prop_t *prop = ant_shape_prop_at(obj->shape, i);
     if (!prop) continue;
-    if (prop->type == ANT_SHAPE_KEY_SYMBOL) continue;
     if (i >= obj->prop_count) continue;
-
-    if (key) {
-      *key = prop->key.interned;
-      if (key_len) *key_len = strlen(prop->key.interned);
+    
+    if (key_out) {
+      key_out->slot = i;
+      key_out->is_symbol = (prop->type == ANT_SHAPE_KEY_SYMBOL);
+      if (key_out->is_symbol) {
+        key_out->str = NULL;
+        key_out->key_len = 0;
+        key_out->sym_off = prop->key.sym_off;
+      } else {
+        key_out->str = prop->key.interned;
+        key_out->key_len = strlen(prop->key.interned);
+        key_out->sym_off = 0;
+      }
     }
     
     if (value) *value = ant_object_prop_get_unchecked(obj, i);
@@ -14871,32 +14900,19 @@ bool js_prop_iter_next(ant_iter_t *iter, const char **key, size_t *key_len, ant_
 }
 
 bool js_prop_iter_next_val(ant_iter_t *iter, ant_value_t *key_out, ant_value_t *value) {
-  if (!iter || !iter->ctx) return false;
-  prop_iter_ctx_t *ctx = (prop_iter_ctx_t *)iter->ctx;
-  
-  ant_object_t *obj = ctx->obj;
-  if (!obj || !obj->shape) return false;
-  uint32_t count = ant_shape_count(obj->shape);
-  
-  while (ctx->index < count) {
-    uint32_t i = ctx->index++;
-    const ant_shape_prop_t *prop = ant_shape_prop_at(obj->shape, i);
-    
-    if (!prop) continue;
-    if (i >= obj->prop_count) continue;
+  ant_iter_key_t meta = {0};
+  ant_t *js = NULL;
 
-    if (key_out) {
-      if (prop->type == ANT_SHAPE_KEY_SYMBOL) *key_out = mkval(T_SYMBOL, prop->key.sym_off);
-      else *key_out = js_mkstr(ctx->js, prop->key.interned, strlen(prop->key.interned));
-    }
-    
-    if (value) *value = ant_object_prop_get_unchecked(obj, i);
-    iter->off = i + 1;
-    
-    return true;
+  if (!iter || !iter->ctx) return false;
+  js = ((prop_iter_ctx_t *)iter->ctx)->js;
+  if (!js_prop_iter_next_key(iter, &meta, value)) return false;
+
+  if (key_out) {
+    if (meta.is_symbol) *key_out = mkval(T_SYMBOL, meta.sym_off);
+    else *key_out = js_mkstr(js, meta.str, meta.key_len);
   }
 
-  return false;
+  return true;
 }
 
 void js_prop_iter_end(ant_iter_t *iter) {

@@ -151,11 +151,21 @@ typedef struct {
   ant_offset_t off;
 } ant_iter_t;
 
+typedef struct {
+  uint32_t slot;
+  bool is_symbol;
+  const char *str;
+  size_t key_len;
+  ant_offset_t sym_off;
+} ant_iter_key_t;
+
 ant_iter_t js_prop_iter_begin(ant_t *js, ant_value_t obj);
 void js_prop_iter_end(ant_iter_t *iter);
 
+bool js_prop_iter_next_key(ant_iter_t *iter, ant_iter_key_t *key_out, ant_value_t *value);
 bool js_prop_iter_next(ant_iter_t *iter, const char **key, size_t *key_len, ant_value_t *value);
 bool js_prop_iter_next_val(ant_iter_t *iter, ant_value_t *key_out, ant_value_t *value);
+bool js_is_own_enumerable_prop(ant_t *js, ant_value_t source, ant_object_t *source_ptr, const ant_iter_key_t *key);
 
 ant_value_t js_obj_to_func(ant_value_t obj);
 ant_value_t js_obj_to_func_ex(ant_value_t obj, uint8_t flags);
