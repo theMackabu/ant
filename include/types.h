@@ -26,7 +26,16 @@ typedef size_t   ant_handle_t;
 typedef uint64_t ant_offset_t;
 typedef uint64_t ant_value_t;
 
-typedef ant_value_t (*ant_cfunc_t) (ant_t *, ant_value_t *, int);
+typedef ant_value_t 
+  (*ant_cfunc_t) 
+  (ant_t *, ant_value_t *, int);
+
+typedef struct ant_cfunc_meta {
+  ant_cfunc_t fn;
+  const char *name;
+  uint32_t length;
+  uint8_t flags;
+} ant_cfunc_meta_t;
 
 #define ant_bind_t   ant_value_t func, ant_value_t this_val
 #define ant_params_t ant_t *js, ant_value_t *args, int nargs

@@ -922,7 +922,7 @@ static sv_func_t *scan_closure_child(sv_func_t *func, uint8_t *ip) {
   if (idx >= (uint32_t)func->const_count) return NULL;
 
   ant_value_t cv = func->constants[idx];
-  if (vtype(cv) != T_CFUNC) return NULL;
+  if (vtype(cv) != T_NTARG) return NULL;
 
   return (sv_func_t *)(uintptr_t)vdata(cv);
 }
@@ -2020,7 +2020,7 @@ static bool jit_is_eligible(sv_func_t *func) {
         uint32_t idx = sv_get_u32(ip + 1);
         if (idx >= (uint32_t)func->const_count) return false;
         ant_value_t cv = func->constants[idx];
-        if (vtype(cv) != T_CFUNC) return false;
+        if (vtype(cv) != T_NTARG) return false;
         break;
       }
       case OP_RE_EXEC_TRUTHY:

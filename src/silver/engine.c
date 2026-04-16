@@ -1416,10 +1416,8 @@ ant_value_t sv_execute_frame(sv_vm_t *vm, sv_func_t *func, ant_value_t this, ant
 
     if (
       vtype(call_func) == T_CFUNC &&
-      js_as_cfunc(call_func) == builtin_object_isPrototypeOf
-    ) {
-      call_result = sv_isproto_ic_eval(js, call_this, call_arg, func, ip);
-    } else {
+      js_cfunc_same_entrypoint(call_func, builtin_object_isPrototypeOf)
+    ) call_result = sv_isproto_ic_eval(js, call_this, call_arg, func, ip); else {
       ant_value_t call_args[1] = { call_arg };
       frame->ip = ip;
       call_result = sv_vm_call(vm, js, call_func, call_this, call_args, 1, NULL, false);

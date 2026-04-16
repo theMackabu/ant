@@ -1845,12 +1845,12 @@ static void process_set_methods(ant_t *js, ant_value_t obj, bool include_event_m
 
   if (include_event_methods) {
     js_set(js, obj, "on", js_mkfun(process_on));
-    js_set(js, obj, "addListener", js_mkfun(process_on));
+    js_set_exact(js, obj, "addListener", js_get(js, obj, "on"));
     js_set(js, obj, "once", js_mkfun(process_once));
     js_set(js, obj, "prependListener", js_mkfun(process_prepend_listener));
     js_set(js, obj, "prependOnceListener", js_mkfun(process_prepend_once_listener));
     js_set(js, obj, "off", js_mkfun(process_off));
-    js_set(js, obj, "removeListener", js_mkfun(process_off));
+    js_set_exact(js, obj, "removeListener", js_get(js, obj, "off"));
     js_set(js, obj, "removeAllListeners", js_mkfun(process_remove_all_listeners));
     js_set(js, obj, "emit", js_mkfun(process_emit));
     js_set(js, obj, "listenerCount", js_mkfun(process_listener_count));
@@ -1967,8 +1967,8 @@ void init_process_module() {
   js_set(js, stdin_proto, "resume", js_mkfun(js_stdin_resume));
   js_set(js, stdin_proto, "pause", js_mkfun(js_stdin_pause));
   js_set(js, stdin_proto, "on", js_mkfun(js_stdin_on));
-  js_set(js, stdin_proto, "removeListener", js_mkfun(js_stdin_remove_listener));
   js_set(js, stdin_proto, "off", js_mkfun(js_stdin_remove_listener));
+  js_set_exact(js, stdin_proto, "removeListener", js_get(js, stdin_proto, "off"));
   js_set(js, stdin_proto, "removeAllListeners", js_mkfun(js_stdin_remove_all_listeners));
   js_set_sym(js, stdin_proto, get_toStringTag_sym(), js_mkstr(js, "ReadStream", 10));
   
@@ -1982,8 +1982,8 @@ void init_process_module() {
   js_set(js, stdout_proto, "write", js_mkfun(js_stdout_write));
   js_set(js, stdout_proto, "on", js_mkfun(js_stdout_on));
   js_set(js, stdout_proto, "once", js_mkfun(js_stdout_once));
-  js_set(js, stdout_proto, "removeListener", js_mkfun(js_stdout_remove_listener));
   js_set(js, stdout_proto, "off", js_mkfun(js_stdout_remove_listener));
+  js_set_exact(js, stdout_proto, "removeListener", js_get(js, stdout_proto, "off"));
   js_set(js, stdout_proto, "removeAllListeners", js_mkfun(js_stdout_remove_all_listeners));
   js_set(js, stdout_proto, "getWindowSize", js_mkfun(js_stdout_get_window_size));
   js_set_sym(js, stdout_proto, get_toStringTag_sym(), js_mkstr(js, "WriteStream", 11));
@@ -1999,8 +1999,8 @@ void init_process_module() {
   js_set(js, stderr_proto, "write", js_mkfun(js_stderr_write));
   js_set(js, stderr_proto, "on", js_mkfun(js_stderr_on));
   js_set(js, stderr_proto, "once", js_mkfun(js_stderr_once));
-  js_set(js, stderr_proto, "removeListener", js_mkfun(js_stderr_remove_listener));
   js_set(js, stderr_proto, "off", js_mkfun(js_stderr_remove_listener));
+  js_set_exact(js, stderr_proto, "removeListener", js_get(js, stderr_proto, "off"));
   js_set(js, stderr_proto, "removeAllListeners", js_mkfun(js_stderr_remove_all_listeners));
   js_set_sym(js, stderr_proto, get_toStringTag_sym(), js_mkstr(js, "WriteStream", 11));
   

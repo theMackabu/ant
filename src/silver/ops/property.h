@@ -103,13 +103,6 @@ static inline bool sv_try_get_shape_data_prop(
   }
 
   *out = (idx < ptr->prop_count) ? ant_object_prop_get_unchecked(ptr, idx) : js_mkundef();
-  if (vtype(*out) == T_CFUNC && js->cfunc_promote_cache.len > 0) {
-  ant_value_t promoted = js_cfunc_lookup_promoted(js, *out);
-  if (vtype(promoted) != T_CFUNC) {
-    ant_object_prop_set_unchecked(ptr, idx, promoted);
-    gc_write_barrier(js, ptr, promoted);
-    *out = promoted;
-  }}
   
   return true;
 }
@@ -280,11 +273,6 @@ static inline ant_value_t sv_prop_get_at(
   sv_func_t *func, uint8_t *ip
 ) {
   uint8_t t = vtype(obj);
-
-  if (t == T_CFUNC && js->cfunc_promote_cache.len > 0) {
-    ant_value_t promoted = js_cfunc_lookup_promoted(js, obj);
-    if (vtype(promoted) != T_CFUNC) return sv_prop_get_at(js, promoted, str, len, func, ip);
-  }
 
   if (t == T_NULL || t == T_UNDEF) {
     if (func && ip) js_set_error_site_from_bc(js, func, (int)(ip - func->code), func->filename);

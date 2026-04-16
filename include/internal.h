@@ -253,6 +253,14 @@ struct ant_isolate_t {
     uint8_t cap;
   } cfunc_promote_cache;
 
+  struct {
+    const ant_cfunc_meta_t **base_meta;
+    const char **name_ptr;
+    ant_value_t *named;
+    uint16_t len;
+    uint16_t cap;
+  } cfunc_name_cache;
+
   bool owns_mem;
   bool fatal_error;
   bool thrown_exists;
@@ -311,13 +319,6 @@ typedef enum {
   PROP_META_SYMBOL = 1,
 } prop_meta_key_t;
 
-typedef ant_value_t 
-  (*js_cfunc_fn_t)(ant_t *, ant_value_t *, int);
-
-static inline js_cfunc_fn_t js_as_cfunc(ant_value_t fn_val) {
-  return (js_cfunc_fn_t)(uintptr_t)vdata(fn_val);
-}
-
 static inline bool is_err(ant_value_t v) { 
   return vtype(v) == T_ERR; 
 }
@@ -339,6 +340,25 @@ static inline bool is_callable(ant_value_t v) {
   return t == T_FUNC || t == T_CFUNC;
 }
 
+static inline const ant_cfunc_meta_t *js_as_cfunc_meta(ant_value_t fn_val) {
+  return (const ant_cfunc_meta_t *)(uintptr_t)vdata(fn_val);
+}
+
+static inline ant_cfunc_t js_as_cfunc(ant_value_t fn_val) {
+  const ant_cfunc_meta_t *meta = js_as_cfunc_meta(fn_val);
+  return meta ? meta->fn : NULL;
+}
+
+static inline uint32_t js_cfunc_length(ant_value_t fn_val) {
+  const ant_cfunc_meta_t *meta = js_as_cfunc_meta(fn_val);
+  return meta ? meta->length : 0;
+}
+
+static inline bool js_cfunc_same_entrypoint(ant_value_t fn_val, ant_cfunc_t fn) {
+  const ant_cfunc_meta_t *meta = js_as_cfunc_meta(fn_val);
+  return meta && meta->fn == fn;
+}
+
 bool is_internal_prop(const char *key, ant_offset_t klen);
 size_t uint_to_str(char *buf, size_t bufsize, uint64_t val);
 int extract_array_args(ant_t *js, ant_value_t arr, ant_value_t **out_args);
@@ -353,6 +373,7 @@ bool js_obj_ensure_unique_shape(ant_object_t *obj);
 ant_value_t js_propref_load(ant_t *js, ant_offset_t handle);
 ant_value_t mkprop(ant_t *js, ant_value_t obj, ant_value_t k, ant_value_t v, uint8_t attrs);
 ant_value_t mkprop_interned(ant_t *js, ant_value_t obj, const char *interned_key, ant_value_t v, uint8_t attrs);
+ant_value_t mkprop_interned_exact(ant_t *js, ant_value_t obj, const char *interned_key, ant_value_t v, uint8_t attrs);
 ant_value_t setprop_cstr(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v);
 ant_value_t setprop_interned(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v);
 ant_value_t js_define_property(ant_t *js, ant_value_t obj, ant_value_t prop, ant_value_t descriptor, bool reflect_mode);
@@ -546,6 +567,16 @@ static inline ant_value_t defmethod(ant_t *js, ant_value_t obj, const char *name
   );
 }
 
+static inline ant_value_t defalias(ant_t *js, ant_value_t obj, const char *name, size_t len, ant_value_t fn) {
+  const char *interned = intern_string(name, len);
+  if (!interned) return js_mkerr(js, "oom");
+
+  return mkprop_interned_exact(
+    js, obj, interned, fn,
+    ANT_PROP_ATTR_WRITABLE | ANT_PROP_ATTR_CONFIGURABLE
+  );
+}
+
 static inline ant_flat_string_t *str_flat_from_bytes(const char *str) {
   return (ant_flat_string_t *)((char *)str - offsetof(ant_flat_string_t, bytes));
 }
@@ -594,19 +625,19 @@ static inline void js_set_module_default(ant_t *js, ant_value_t lib, ant_value_t
 }
 
 ant_value_t js_cfunc_promote(ant_t *js, ant_value_t cfunc);
+ant_value_t js_cfunc_expose_named(ant_t *js, ant_value_t cfunc, const char *name, size_t name_len);
 
 static inline ant_value_t js_cfunc_lookup_promoted(ant_t *js, ant_value_t cfunc) {
   uintptr_t ptr = vdata(cfunc);
-  for (uint8_t i = 0; i < js->cfunc_promote_cache.len; i++) {
-    if (js->cfunc_promote_cache.cfunc_ptr[i] == ptr)
-      return js->cfunc_promote_cache.promoted[i];
-  }
+  for (uint8_t i = 0; i < js->cfunc_promote_cache.len; i++) if (
+    js->cfunc_promote_cache.cfunc_ptr[i] == ptr
+  ) return js->cfunc_promote_cache.promoted[i];
   return cfunc;
 }
 
 static inline ant_value_t js_make_ctor(ant_t *js, ant_cfunc_t fn, ant_value_t proto, const char *name, size_t nlen) {
   ant_value_t obj = js_mkobj(js);
-  js_set_slot(obj, SLOT_CFUNC, js_mkfun(fn));
+  js_set_slot(obj, SLOT_CFUNC, js_mkfun_dyn(fn));
   js_mkprop_fast(js, obj, "prototype", 9, proto);
   js_mkprop_fast(js, obj, "name", 4, js_mkstr(js, name, nlen));
   js_set_descriptor(js, obj, "name", 4, 0);

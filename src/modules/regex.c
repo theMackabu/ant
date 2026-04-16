@@ -1054,7 +1054,7 @@ bool regexp_exec_truthy_try_fast(
   ant_value_t *out_result
 ) {
   if (!out_result || vtype(call_func) != T_CFUNC) return false;
-  if (js_as_cfunc(call_func) != builtin_regexp_exec) return false;
+  if (!js_cfunc_same_entrypoint(call_func, builtin_regexp_exec)) return false;
   if (!is_object_type(regexp) || vtype(arg) != T_STR) return false;
 
   ant_value_t result = regexp_exec_internal(js, regexp, arg, true);
@@ -1077,7 +1077,7 @@ static ant_value_t builtin_regexp_test(ant_t *js, ant_value_t *args, int nargs) 
   if (is_err(exec_fn)) return exec_fn;
 
   ant_value_t result;
-  if (vtype(exec_fn) == T_CFUNC && js_as_cfunc(exec_fn) == builtin_regexp_exec) {
+  if (vtype(exec_fn) == T_CFUNC && js_cfunc_same_entrypoint(exec_fn, builtin_regexp_exec)) {
     result = regexp_exec_internal(js, regexp, str_arg, true);
   } else result = regexp_exec_with_exec_fn(js, regexp, str_arg, exec_fn);
   

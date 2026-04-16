@@ -2601,11 +2601,10 @@ void init_buffer_module() {
   js_set(js, g_typedarray_iter_proto, "next", js_mkfun(ta_iter_next));
   js_iter_register_advance(g_typedarray_iter_proto, advance_typedarray);
 
-  ant_value_t ta_values_fn = js_mkfun(ta_values);
-  js_set(js, typedarray_proto, "values", ta_values_fn);
+  js_set(js, typedarray_proto, "values", js_mkfun(ta_values));
   js_set(js, typedarray_proto, "keys", js_mkfun(ta_keys));
   js_set(js, typedarray_proto, "entries", js_mkfun(ta_entries));
-  js_set_sym(js, typedarray_proto, get_iterator_sym(), ta_values_fn);
+  js_set_sym(js, typedarray_proto, get_iterator_sym(), js_get(js, typedarray_proto, "values"));
   
   #define SETUP_TYPEDARRAY(name) \
     do { \
@@ -2709,8 +2708,8 @@ void init_buffer_module() {
   js_set(js, buffer_proto, "readUInt32BE", js_mkfun(js_buffer_readUInt32BE));
   
   js_set_sym(js, buffer_proto, get_toStringTag_sym(), js_mkstr(js, "Buffer", 6));
-  js_set_sym(js, buffer_proto, get_iterator_sym(), ta_values_fn);
-  js_set(js, buffer_proto, "values", ta_values_fn);
+  js_set(js, buffer_proto, "values", js_get(js, typedarray_proto, "values"));
+  js_set_sym(js, buffer_proto, get_iterator_sym(), js_get(js, buffer_proto, "values"));
   
   js_set(js, buffer_ctor_obj, "from", js_mkfun(js_buffer_from));
   js_set(js, buffer_ctor_obj, "alloc", js_mkfun(js_buffer_alloc));

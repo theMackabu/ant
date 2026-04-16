@@ -76,7 +76,7 @@ static ant_value_t js_bytelength_qs_ctor(ant_t *js, ant_value_t *args, int nargs
 static ant_value_t make_size_fn(ant_t *js, ant_cfunc_t cfunc, int length) {
   ant_value_t obj = js_mkobj(js);
   
-  js_set_slot(obj, SLOT_CFUNC, js_mkfun(cfunc));
+  js_set_slot(obj, SLOT_CFUNC, js_mkfun_dyn(cfunc));
   js_mkprop_fast(js, obj, "name", 4, js_mkstr(js, "size", 4));
   js_set_descriptor(js, obj, "name", 4, 0);
   js_mkprop_fast(js, obj, "length", 6, js_mknum(length));

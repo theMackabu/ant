@@ -285,10 +285,10 @@ static ant_value_t server_call_fetch(server_runtime_t *server, ant_value_t reque
   ant_value_t result = js_mkundef();
 
   js->this_val = server->export_obj;
-  if (vtype(server->fetch_fn) == T_CFUNC)
-    result = ((ant_value_t (*)(ant_t *, ant_value_t *, int))vdata(server->fetch_fn))(js, args, 2);
+  if (vtype(server->fetch_fn) == T_CFUNC) result = js_as_cfunc(server->fetch_fn)(js, args, 2);
   else result = sv_vm_call(js->vm, js, server->fetch_fn, server->export_obj, args, 2, NULL, false);
   js->this_val = saved_this;
+  
   return result;
 }
 

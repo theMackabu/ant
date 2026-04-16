@@ -725,10 +725,6 @@ static ant_value_t js_headers_entries(ant_t *js, ant_value_t *args, int nargs) {
   return make_headers_iter(js, js->this_val, ITER_ENTRIES);
 }
 
-static ant_value_t js_headers_symbol_iterator(ant_t *js, ant_value_t *args, int nargs) {
-  return make_headers_iter(js, js->this_val, ITER_ENTRIES);
-}
-
 static ant_value_t headers_inspect_finish(ant_t *js, ant_value_t this_obj, ant_value_t body_obj) {
   ant_value_t tag_val = js_get_sym(js, this_obj, get_toStringTag_sym());
   const char *tag = vtype(tag_val) == T_STR ? js_getstr(js, tag_val, NULL) : "Headers";
@@ -1095,7 +1091,7 @@ void init_headers_module(void) {
   js_set(js, g_headers_proto, "entries",      js_mkfun(js_headers_entries));
   js_set(js, g_headers_proto, "getSetCookie", js_mkfun(js_headers_get_set_cookie));
   
-  js_set_sym(js, g_headers_proto, get_iterator_sym(),    js_mkfun(js_headers_symbol_iterator));
+  js_set_sym(js, g_headers_proto, get_iterator_sym(),    js_get(js, g_headers_proto, "entries"));
   js_set_sym(js, g_headers_proto, get_inspect_sym(),     js_mkfun(headers_inspect));
   js_set_sym(js, g_headers_proto, get_toStringTag_sym(), js_mkstr(js, "Headers", 7));
 

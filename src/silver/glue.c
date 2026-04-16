@@ -527,10 +527,7 @@ ant_value_t jit_helper_call_is_proto(
 ) {
   uint8_t *ip = NULL;
   if (func && bc_off >= 0 && bc_off < func->code_len) ip = func->code + bc_off;
-  if (
-    vtype(call_func) == T_CFUNC &&
-    js_as_cfunc(call_func) == builtin_object_isPrototypeOf
-  ) {
+  if (vtype(call_func) == T_CFUNC && js_cfunc_same_entrypoint(call_func, builtin_object_isPrototypeOf)) {
     return sv_isproto_ic_eval(js, call_this, arg, func, ip);
   }
   ant_value_t args[1] = { arg };

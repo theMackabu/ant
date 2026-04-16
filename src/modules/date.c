@@ -1280,7 +1280,7 @@ static void date_define_methods(
 ) {
   for (size_t i = 0; i < count; i++) js_setprop(js,target,
     js_mkstr(js, methods[i].name, methods[i].len),
-    js_mkfun(methods[i].fn)
+    js_mkfun_dyn(methods[i].fn)
   );
 }
 

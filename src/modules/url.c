@@ -1437,11 +1437,11 @@ void init_url_module(void) {
   js_set(js, g_usp_proto, "forEach",  js_mkfun(usp_forEach));
   js_set_getter_desc(js, g_usp_proto, "size", 4, js_mkfun(usp_size_get), JS_DESC_C);
 
-  ant_value_t entries_fn = js_mkfun(usp_entries_fn);
-  js_set(js, g_usp_proto, "entries", entries_fn);
+  js_set(js, g_usp_proto, "entries", js_mkfun(usp_entries_fn));
   js_set(js, g_usp_proto, "keys",    js_mkfun(usp_keys_fn));
   js_set(js, g_usp_proto, "values",  js_mkfun(usp_values_fn));
-  js_set_sym(js, g_usp_proto, get_iterator_sym(), entries_fn);
+  
+  js_set_sym(js, g_usp_proto, get_iterator_sym(), js_get(js, g_usp_proto, "entries"));
   js_set_sym(js, g_usp_proto, get_toStringTag_sym(), js_mkstr(js, "URLSearchParams", 15));
 
   ant_value_t usp_ctor = js_make_ctor(js, js_URLSearchParams, g_usp_proto, "URLSearchParams", 15);

@@ -487,7 +487,7 @@ void init_formdata_module(void) {
   js_set(js, g_formdata_proto, "keys",    js_mkfun(js_formdata_keys));
   js_set(js, g_formdata_proto, "values",  js_mkfun(js_formdata_values));
 
-  js_set_sym(js, g_formdata_proto, get_iterator_sym(),    js_mkfun(js_formdata_entries));
+  js_set_sym(js, g_formdata_proto, get_iterator_sym(),    js_get(js, g_formdata_proto, "entries"));
   js_set_sym(js, g_formdata_proto, get_toStringTag_sym(), js_mkstr(js, "FormData", 8));
 
   ant_value_t ctor_obj = js_mkobj(js);

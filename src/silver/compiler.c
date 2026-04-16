@@ -154,7 +154,7 @@ static void build_gc_const_tables(sv_func_t *func) {
 
   int child_count = 0;
   for (int i = 0; i < func->const_count; i++) {
-    if (vtype(func->constants[i]) == T_CFUNC) child_count++;
+    if (vtype(func->constants[i]) == T_NTARG) child_count++;
   }
 
   if (child_count > 0) {
@@ -162,7 +162,7 @@ static void build_gc_const_tables(sv_func_t *func) {
     if (func->child_funcs) {
       int out = 0;
       for (int i = 0; i < func->const_count; i++) {
-        if (vtype(func->constants[i]) != T_CFUNC) continue;
+        if (vtype(func->constants[i]) != T_NTARG) continue;
         func->child_funcs[out++] = (sv_func_t *)(uintptr_t)vdata(func->constants[i]);
       } func->child_func_count = child_count;
     }
@@ -1214,7 +1214,7 @@ static void hoist_lexical_decls(sv_compiler_t *c, sv_ast_list_t *stmts) {
 static void hoist_one_func(sv_compiler_t *c, sv_ast_t *node) {
   sv_func_t *fn = compile_function_body(c, node, c->mode);
   if (!fn) return;
-  int idx = add_constant(c, mkval(T_CFUNC, (uintptr_t)fn));
+  int idx = add_constant(c, mkval(T_NTARG, (uintptr_t)fn));
   emit_op(c, OP_CLOSURE);
   emit_u32(c, (uint32_t)idx);
   emit_set_function_name(c, node->str, node->len);
@@ -2543,7 +2543,8 @@ void compile_func_expr(sv_compiler_t *c, sv_ast_t *node) {
     if (has_name) end_scope(c);
     return;
   }
-  int idx = add_constant(c, mkval(T_CFUNC, (uintptr_t)fn));
+  
+  int idx = add_constant(c, mkval(T_NTARG, (uintptr_t)fn));
   emit_op(c, OP_CLOSURE);
   emit_u32(c, (uint32_t)idx);
 
@@ -4155,8 +4156,7 @@ void compile_class(sv_compiler_t *c, sv_ast_t *node) {
       fn->name = name;
     }
     sv_compile_ctx_cleanup(&comp);
-
-    int idx = add_constant(c, mkval(T_CFUNC, (uintptr_t)fn));
+    int idx = add_constant(c, mkval(T_NTARG, (uintptr_t)fn));
     emit_op(c, OP_CLOSURE);
     emit_u32(c, (uint32_t)idx);
   } else emit_op(c, OP_UNDEF);
@@ -4802,7 +4802,7 @@ void sv_disasm(ant_t *js, sv_func_t *func, const char *label) {
   fprintf(stderr, "\n");
 
   for (int i = 0; i < func->const_count; i++) {
-  if (vtype(func->constants[i]) == T_CFUNC) {
+  if (vtype(func->constants[i]) == T_NTARG) {
     sv_func_t *child = (sv_func_t *)(uintptr_t)vdata(func->constants[i]);
     char child_label[256];
     snprintf(child_label, sizeof(child_label), "%s/closure[%d]", label, i);

@@ -513,11 +513,6 @@ static ant_value_t map_entries(ant_t *js, ant_value_t *args, int nargs) {
   return create_map_iterator(js, js->this_val, ITER_TYPE_MAP_ENTRIES);
 }
 
-static ant_value_t map_iterator(ant_t *js, ant_value_t *args, int nargs) {
-  (void)args; (void)nargs;
-  return create_map_iterator(js, js->this_val, ITER_TYPE_MAP_ENTRIES);
-}
-
 bool advance_set(ant_t *js, js_iter_t *it, ant_value_t *out) {
   set_iterator_state_t *state = get_set_iter_state(js, it->iterator);
   if (!state || !state->current) return false;
@@ -636,11 +631,6 @@ static ant_value_t set_values(ant_t *js, ant_value_t *args, int nargs) {
 static ant_value_t set_entries(ant_t *js, ant_value_t *args, int nargs) {
   (void)args; (void)nargs;
   return create_set_iterator(js, js->this_val, ITER_TYPE_SET_ENTRIES);
-}
-
-static ant_value_t set_iterator(ant_t *js, ant_value_t *args, int nargs) {
-  (void)args; (void)nargs;
-  return create_set_iterator(js, js->this_val, ITER_TYPE_SET_VALUES);
 }
 
 static ant_value_t set_forEach(ant_t *js, ant_value_t *args, int nargs) {
@@ -1106,7 +1096,7 @@ void init_collections_module(void) {
   js_set(js, map_proto, "keys", js_mkfun(map_keys));
   js_set(js, map_proto, "values", js_mkfun(map_values));
   js_set(js, map_proto, "forEach", js_mkfun(map_forEach));
-  js_set_sym(js, map_proto, iter_sym, js_mkfun(map_iterator));
+  js_set_sym(js, map_proto, iter_sym, js_get(js, map_proto, "entries"));
   js_set_sym(js, map_proto, tag_sym, js_mkstr(js, "Map", 3));
   
   ant_value_t map_ctor = js_mkobj(js);
@@ -1126,10 +1116,10 @@ void init_collections_module(void) {
   js_set(js, set_proto, "clear", js_mkfun(set_clear));
   js_set_getter_desc(js, set_proto, "size", 4, js_mkfun(set_size), JS_DESC_C);
   js_set(js, set_proto, "values", js_mkfun(set_values));
-  js_set(js, set_proto, "keys", js_mkfun(set_values));
+  js_set_exact(js, set_proto, "keys", js_get(js, set_proto, "values"));
   js_set(js, set_proto, "entries", js_mkfun(set_entries));
   js_set(js, set_proto, "forEach", js_mkfun(set_forEach));
-  js_set_sym(js, set_proto, iter_sym, js_mkfun(set_iterator));
+  js_set_sym(js, set_proto, iter_sym, js_get(js, set_proto, "values"));
   js_set_sym(js, set_proto, tag_sym, js_mkstr(js, "Set", 3));
   
   ant_value_t set_ctor = js_mkobj(js);

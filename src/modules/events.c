@@ -1253,12 +1253,12 @@ ant_value_t eventemitter_prototype(ant_t *js) {
   if (is_object_type(function_proto)) js_set_proto_init(eventemitter_ctor, function_proto);
 
   js_set(js, eventemitter_proto, "on",                 js_mkfun(js_eventemitter_on));
-  js_set(js, eventemitter_proto, "addListener",        js_mkfun(js_eventemitter_on));
+  js_set_exact(js, eventemitter_proto, "addListener",  js_get(js, eventemitter_proto, "on"));
   js_set(js, eventemitter_proto, "once",               js_mkfun(js_eventemitter_once));
   js_set(js, eventemitter_proto, "prependListener",    js_mkfun(js_eventemitter_prepend_listener));
   js_set(js, eventemitter_proto, "prependOnceListener", js_mkfun(js_eventemitter_prepend_once_listener));
   js_set(js, eventemitter_proto, "off",                js_mkfun(js_eventemitter_off));
-  js_set(js, eventemitter_proto, "removeListener",     js_mkfun(js_eventemitter_off));
+  js_set_exact(js, eventemitter_proto, "removeListener", js_get(js, eventemitter_proto, "off"));
   js_set(js, eventemitter_proto, "emit",               js_mkfun(js_eventemitter_emit));
   js_set(js, eventemitter_proto, "removeAllListeners", js_mkfun(js_eventemitter_removeAllListeners));
   js_set(js, eventemitter_proto, "listenerCount",      js_mkfun(js_eventemitter_listenerCount));

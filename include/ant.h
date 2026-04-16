@@ -102,20 +102,34 @@ ant_value_t js_get_sym_with_receiver(ant_t *, ant_value_t obj, ant_value_t sym, 
 
 ant_value_t js_mkobj(ant_t *);
 ant_value_t js_mkobj_with_inobj_limit(ant_t *, uint8_t inobj_limit);
+
 ant_value_t js_newobj(ant_t *);
 ant_value_t js_mkarr(ant_t *);
 ant_value_t js_mkstr(ant_t *, const void *, size_t);
 ant_value_t js_mkstr_permanent(ant_t *, const void *, size_t);
 ant_value_t js_mkbigint(ant_t *, const char *digits, size_t len, bool negative);
+
 ant_value_t js_mksym(ant_t *, const char *desc);
 ant_value_t js_mksym_well_known(ant_t *, const char *desc);
-ant_value_t js_mkfun(ant_value_t (*fn)(ant_t *, ant_value_t *, int));
-ant_value_t js_heavy_mkfun(ant_t *js, ant_value_t (*fn)(ant_t *, ant_value_t *, int), ant_value_t data);
+ant_value_t js_mkfun_meta(const ant_cfunc_meta_t *meta);
+ant_value_t js_mkfun_dyn(ant_cfunc_t fn);
 
+ant_value_t js_heavy_mkfun(ant_t *js, ant_value_t (*fn)(ant_t *, ant_value_t *, int), ant_value_t data);
 ant_value_t js_mkprop_fast(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v);
 ant_offset_t js_mkprop_fast_off(ant_t *js, ant_value_t obj, const char *key, size_t len, ant_value_t v);
 
+#define js_mkfun(fn) ({                                                 \
+  static const ant_cfunc_meta_t _ant_cfunc_meta = { (fn), NULL, 0, 0 }; \
+  js_mkfun_meta(&_ant_cfunc_meta);                                      \
+})
+
+#define js_mkfun_arity(fn, arity) ({                                          \
+  static const ant_cfunc_meta_t _ant_cfunc_meta = { (fn), NULL, (arity), 0 }; \
+  js_mkfun_meta(&_ant_cfunc_meta);                                            \
+})
+
 void js_set(ant_t *, ant_value_t, const char *, ant_value_t);
+void js_set_exact(ant_t *, ant_value_t, const char *, ant_value_t);
 void js_set_sym(ant_t *, ant_value_t obj, ant_value_t sym, ant_value_t val);
 void js_set_symbol(ant_t *, ant_value_t obj, const char *key, ant_value_t val);
 void js_saveval(ant_t *js, ant_offset_t off, ant_value_t v);
