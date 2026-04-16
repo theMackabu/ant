@@ -16,6 +16,7 @@
 
 #define STR_PROTO "__proto__"
 #define STR_PROTO_LEN 9
+#define CFUNC_HAS_PROTOTYPE 0x01u
 
 #define ANT_ASSERT(cond, msg) ({                                            \
 if (!(cond)) {                                                              \
@@ -126,6 +127,16 @@ ant_offset_t js_mkprop_fast_off(ant_t *js, ant_value_t obj, const char *key, siz
 #define js_mkfun_arity(fn, arity) ({                                          \
   static const ant_cfunc_meta_t _ant_cfunc_meta = { (fn), NULL, (arity), 0 }; \
   js_mkfun_meta(&_ant_cfunc_meta);                                            \
+})
+
+#define js_mkfun_flags(fn, flags) ({                                          \
+  static const ant_cfunc_meta_t _ant_cfunc_meta = { (fn), NULL, 0, (flags) }; \
+  js_mkfun_meta(&_ant_cfunc_meta);                                            \
+})
+
+#define js_mkfun_arity_flags(fn, arity, flags) ({                                   \
+  static const ant_cfunc_meta_t _ant_cfunc_meta = { (fn), NULL, (arity), (flags) }; \
+  js_mkfun_meta(&_ant_cfunc_meta);                                                  \
 })
 
 void js_set(ant_t *, ant_value_t, const char *, ant_value_t);

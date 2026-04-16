@@ -578,6 +578,8 @@ static uintptr_t lkp_with_setter(ant_t *js, ant_value_t obj, const char *buf, si
 static ant_value_t get_prototype_for_type(ant_t *js, uint8_t type);
 static ant_value_t js_cfunc_name_value(ant_t *js, ant_value_t cfunc);
 static ant_value_t js_cfunc_length_value(ant_value_t cfunc);
+static bool js_cfunc_has_prototype(ant_value_t cfunc);
+static ant_value_t setup_func_prototype_property(ant_t *js, ant_value_t func, bool mark_constructor);
 static ant_value_t js_expose_cfunc_for_key(ant_t *js, ant_value_t value, const char *key, size_t key_len);
 
 static inline ant_value_t lkp_val(ant_t *js, ant_value_t obj, const char *buf, size_t len);
@@ -974,6 +976,16 @@ static bool js_cfunc_try_get_own(ant_t *js, ant_value_t cfunc, const char *key, 
 
   if (key_len == 6 && memcmp(key, "length", 6) == 0) {
     *out = js_cfunc_length_value(cfunc);
+    return true;
+  }
+
+  if (key_len == 9 && memcmp(key, "prototype", 9) == 0 && js_cfunc_has_prototype(cfunc)) {
+    ant_value_t promoted = js_cfunc_promote(js, cfunc);
+    if (is_err(promoted)) {
+      *out = promoted;
+      return true;
+    }
+    *out = js_get(js, promoted, "prototype");
     return true;
   }
 
@@ -3326,31 +3338,7 @@ double js_to_number(ant_t *js, ant_value_t arg) {
 }
 
 static ant_value_t setup_func_prototype(ant_t *js, ant_value_t func) {
-  ant_value_t proto_obj = mkobj(js, 0);
-  if (is_err(proto_obj)) return proto_obj;
-  
-  ant_value_t object_proto = js->sym.object_proto;
-  if (vtype(object_proto) == T_OBJ) {
-    js_set_proto_init(proto_obj, object_proto);
-  }
-  
-  ant_value_t constructor_key = js_mkstr(js, "constructor", 11);
-  if (is_err(constructor_key)) return constructor_key;
-  
-  ant_value_t res = mkprop(js, proto_obj, constructor_key, func, 0);
-  if (is_err(res)) return res;
-  js_set_descriptor(js, proto_obj, "constructor", 11, JS_DESC_W | JS_DESC_C);
-  
-  ant_value_t prototype_key = js_mkstr(js, "prototype", 9);
-  if (is_err(prototype_key)) return prototype_key;
-  
-  res = js_setprop(js, func, prototype_key, proto_obj);
-  if (is_err(res)) return res;
-  js_set_descriptor(js, js_as_obj(func), "prototype", 9, JS_DESC_W);
-
-  js_mark_constructor(func, true);
-  
-  return js_mkundef();
+  return setup_func_prototype_property(js, func, true);
 }
 
 static inline bool same_object_identity(ant_value_t a, ant_value_t b) {
@@ -7633,9 +7621,10 @@ static ant_value_t builtin_object_getOwnPropertyNames(ant_t *js, ant_value_t *ar
     ant_value_t arr = mkarr(js);
     ant_offset_t idx = 0;
     arr_set(js, arr, idx++, js->length_str);
-    if (vtype(js_cfunc_name_value(js, obj)) == T_STR) {
-      arr_set(js, arr, idx++, ANT_STRING("name"));
-    }
+    
+    if (vtype(js_cfunc_name_value(js, obj)) == T_STR) arr_set(js, arr, idx++, ANT_STRING("name"));
+    if (js_cfunc_has_prototype(obj)) arr_set(js, arr, idx++, ANT_STRING("prototype"));
+    
     return mkval(T_ARR, vdata(arr));
   }
   
@@ -14518,6 +14507,37 @@ static ant_value_t js_cfunc_length_value(ant_value_t cfunc) {
   return tov((double)js_cfunc_length(cfunc));
 }
 
+static bool js_cfunc_has_prototype(ant_value_t cfunc) {
+  const ant_cfunc_meta_t *meta = js_as_cfunc_meta(cfunc);
+  return meta && (meta->flags & CFUNC_HAS_PROTOTYPE) != 0;
+}
+
+static ant_value_t setup_func_prototype_property(ant_t *js, ant_value_t func, bool mark_constructor) {
+  ant_value_t proto_obj = mkobj(js, 0);
+  if (is_err(proto_obj)) return proto_obj;
+  
+  ant_value_t object_proto = js->sym.object_proto;
+  if (vtype(object_proto) == T_OBJ) js_set_proto_init(proto_obj, object_proto);
+  
+  ant_value_t constructor_key = js_mkstr(js, "constructor", 11);
+  if (is_err(constructor_key)) return constructor_key;
+  
+  ant_value_t res = mkprop(js, proto_obj, constructor_key, func, 0);
+  if (is_err(res)) return res;
+  js_set_descriptor(js, proto_obj, "constructor", 11, JS_DESC_W | JS_DESC_C);
+  
+  ant_value_t prototype_key = js_mkstr(js, "prototype", 9);
+  if (is_err(prototype_key)) return prototype_key;
+  
+  res = js_setprop(js, func, prototype_key, proto_obj);
+  if (is_err(res)) return res;
+  js_set_descriptor(js, js_as_obj(func), "prototype", 9, JS_DESC_W);
+
+  if (mark_constructor) js_mark_constructor(func, true);
+  
+  return js_mkundef();
+}
+
 ant_value_t js_cfunc_expose_named(ant_t *js, ant_value_t cfunc, const char *name, size_t name_len) {
   if (vtype(cfunc) != T_CFUNC || !name || is_internal_prop(name, (ant_offset_t)name_len)) return cfunc;
 
@@ -14611,6 +14631,11 @@ ant_value_t js_cfunc_promote(ant_t *js, ant_value_t cfunc) {
   }
 
   ant_value_t promoted = js_obj_to_func(fn_obj);
+
+  if (js_cfunc_has_prototype(cfunc)) {
+    ant_value_t proto_result = setup_func_prototype_property(js, promoted, false);
+    if (is_err(proto_result)) return proto_result;
+  }
 
   if (js->cfunc_promote_cache.len >= js->cfunc_promote_cache.cap) {
     uint8_t new_cap = js->cfunc_promote_cache.cap ? js->cfunc_promote_cache.cap * 2 : 4;

@@ -849,7 +849,25 @@ void inspect_value(ant_t *js, ant_value_t val, FILE *stream, int depth, inspect_
   }
   
   if (t == T_CFUNC) {
-    fprintf(stream, "<native function 0x%" PRIx64 ">", (uint64_t)vdata(val));
+    ant_value_t promoted = js_cfunc_lookup_promoted(js, val);
+    if (vtype(promoted) == T_FUNC) {
+      if (depth > 10) fprintf(stream, "<Function @%" PRIu64 " ...>", (uint64_t)vdata(js_as_obj(promoted)));
+      else inspect_object(js, promoted, stream, depth, visited);
+      return;
+    }
+    
+    const ant_cfunc_meta_t *meta = js_as_cfunc_meta(val);
+    const char *name = (meta && meta->name) ? meta->name : NULL;
+    uint32_t length = js_cfunc_length(val);
+    bool has_prototype = meta && (meta->flags & CFUNC_HAS_PROTOTYPE) != 0;
+    
+    if (name) fprintf(stream, "[Function: %s]", name);
+    else fprintf(stream, "[Function]");
+    
+    fprintf(stream, " <native ptr 0x%" PRIx64 ", length=%u", (uint64_t)vdata(val), length);
+    if (has_prototype) fprintf(stream, ", prototype");
+    fprintf(stream, ">");
+    
     return;
   }
   

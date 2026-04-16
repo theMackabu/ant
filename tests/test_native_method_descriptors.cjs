@@ -202,6 +202,11 @@ if (Object.getPrototypeOf(fetch) !== customFetchProto || fetch.fromCustomProto !
 const fetchOwnNames = Object.getOwnPropertyNames(fetch);
 const fetchOwnSymbols = Object.getOwnPropertySymbols(fetch);
 
+if (!fetchOwnNames.includes('prototype')) {
+  console.log('FAIL: native functions with prototype metadata should expose prototype in own property names');
+  pass = false;
+}
+
 if (!fetchOwnNames.includes('extra') || !fetchOwnNames.includes('defined')) {
   console.log('FAIL: native function own property names should include promoted writes');
   pass = false;
@@ -215,6 +220,7 @@ if (!fetchOwnSymbols.includes(nativeReproSym)) {
 const extraDesc = Object.getOwnPropertyDescriptor(fetch, 'extra');
 const definedDesc = Object.getOwnPropertyDescriptor(fetch, 'defined');
 const symDesc = Object.getOwnPropertyDescriptor(fetch, nativeReproSym);
+const prototypeDesc = Object.getOwnPropertyDescriptor(fetch, 'prototype');
 
 if (!extraDesc || extraDesc.value !== 'value-from-set' || !extraDesc.enumerable || !extraDesc.configurable || !extraDesc.writable) {
   console.log('FAIL: promoted native string properties should keep their descriptors');
@@ -228,6 +234,11 @@ if (!definedDesc || definedDesc.value !== 'value-from-defineProperty' || !define
 
 if (!symDesc || symDesc.value !== 'symbol-value' || !symDesc.enumerable || !symDesc.configurable || !symDesc.writable) {
   console.log('FAIL: promoted native symbol properties should keep their descriptors');
+  pass = false;
+}
+
+if (!prototypeDesc || prototypeDesc.enumerable || prototypeDesc.configurable || !prototypeDesc.writable) {
+  console.log('FAIL: native function prototype descriptors should match built-in function defaults');
   pass = false;
 }
 

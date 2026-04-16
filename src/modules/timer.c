@@ -779,12 +779,12 @@ int has_pending_microtasks(void) {
 }
 
 static void timers_define_common(ant_t *js, ant_value_t obj) {
-  js_set(js, obj, "setTimeout", js_mkfun(js_set_timeout));
-  js_set(js, obj, "clearTimeout", js_mkfun(js_clear_timeout));
-  js_set(js, obj, "setInterval", js_mkfun(js_set_interval));
-  js_set(js, obj, "clearInterval", js_mkfun(js_clear_timeout));
-  js_set(js, obj, "setImmediate", js_mkfun(js_set_immediate));
-  js_set(js, obj, "clearImmediate", js_mkfun(js_clear_immediate));
+  js_set(js, obj, "setTimeout", js_mkfun_flags(js_set_timeout, CFUNC_HAS_PROTOTYPE));
+  js_set(js, obj, "clearTimeout", js_mkfun_flags(js_clear_timeout, CFUNC_HAS_PROTOTYPE));
+  js_set(js, obj, "setInterval", js_mkfun_flags(js_set_interval, CFUNC_HAS_PROTOTYPE));
+  js_set(js, obj, "clearInterval", js_mkfun_flags(js_clear_timeout, CFUNC_HAS_PROTOTYPE));
+  js_set(js, obj, "setImmediate", js_mkfun_flags(js_set_immediate, CFUNC_HAS_PROTOTYPE));
+  js_set(js, obj, "clearImmediate", js_mkfun_flags(js_clear_immediate, CFUNC_HAS_PROTOTYPE));
   js_set(js, obj, "queueMicrotask", js_mkfun(js_queue_microtask));
 }
 
