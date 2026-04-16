@@ -740,7 +740,7 @@ static inline bool sv_try_define_field_fast(
     return true;
   }
 
-  return !is_err(mkprop_interned(js, as_obj, interned_key, val, 0));
+  return !is_err(mkprop_interned_exact(js, as_obj, interned_key, val, 0));
 }
 
 static inline void sv_op_define_field(

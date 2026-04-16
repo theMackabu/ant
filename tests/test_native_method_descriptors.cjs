@@ -146,4 +146,94 @@ if (wrapped.name !== 'toString') {
   pass = false;
 }
 
+const aliasedFetch = fetch;
+const aliasTarget = {};
+aliasTarget.a = aliasedFetch;
+aliasTarget.b = aliasedFetch;
+
+if (
+  aliasTarget.a !== aliasedFetch ||
+  aliasTarget.b !== aliasedFetch ||
+  aliasTarget.a !== aliasTarget.b
+) {
+  console.log('FAIL: ordinary assignment should preserve native function identity');
+  pass = false;
+}
+
+if (aliasTarget.a.name !== 'fetch' || aliasTarget.b.name !== 'fetch') {
+  console.log('FAIL: ordinary assignment should not rename native functions');
+  pass = false;
+}
+
+const nativeReproSym = Symbol('native-method-descriptors');
+const originalFetchProto = Object.getPrototypeOf(fetch);
+const customFetchProto = { fromCustomProto: 42 };
+
+fetch.extra = 'value-from-set';
+Object.defineProperty(fetch, 'defined', {
+  value: 'value-from-defineProperty',
+  enumerable: true,
+  configurable: true,
+  writable: true,
+});
+Object.defineProperty(fetch, nativeReproSym, {
+  value: 'symbol-value',
+  enumerable: true,
+  configurable: true,
+  writable: true,
+});
+Object.setPrototypeOf(fetch, customFetchProto);
+
+if (fetch.extra !== 'value-from-set' || fetch.defined !== 'value-from-defineProperty') {
+  console.log('FAIL: promoted native functions should preserve own string properties on later reads');
+  pass = false;
+}
+
+if (fetch[nativeReproSym] !== 'symbol-value') {
+  console.log('FAIL: promoted native functions should preserve own symbol properties on later reads');
+  pass = false;
+}
+
+if (Object.getPrototypeOf(fetch) !== customFetchProto || fetch.fromCustomProto !== 42) {
+  console.log('FAIL: promoted native functions should preserve prototype updates');
+  pass = false;
+}
+
+const fetchOwnNames = Object.getOwnPropertyNames(fetch);
+const fetchOwnSymbols = Object.getOwnPropertySymbols(fetch);
+
+if (!fetchOwnNames.includes('extra') || !fetchOwnNames.includes('defined')) {
+  console.log('FAIL: native function own property names should include promoted writes');
+  pass = false;
+}
+
+if (!fetchOwnSymbols.includes(nativeReproSym)) {
+  console.log('FAIL: native function own property symbols should include promoted writes');
+  pass = false;
+}
+
+const extraDesc = Object.getOwnPropertyDescriptor(fetch, 'extra');
+const definedDesc = Object.getOwnPropertyDescriptor(fetch, 'defined');
+const symDesc = Object.getOwnPropertyDescriptor(fetch, nativeReproSym);
+
+if (!extraDesc || extraDesc.value !== 'value-from-set' || !extraDesc.enumerable || !extraDesc.configurable || !extraDesc.writable) {
+  console.log('FAIL: promoted native string properties should keep their descriptors');
+  pass = false;
+}
+
+if (!definedDesc || definedDesc.value !== 'value-from-defineProperty' || !definedDesc.enumerable || !definedDesc.configurable || !definedDesc.writable) {
+  console.log('FAIL: defineProperty on native functions should be reflected later');
+  pass = false;
+}
+
+if (!symDesc || symDesc.value !== 'symbol-value' || !symDesc.enumerable || !symDesc.configurable || !symDesc.writable) {
+  console.log('FAIL: promoted native symbol properties should keep their descriptors');
+  pass = false;
+}
+
+delete fetch.extra;
+delete fetch.defined;
+delete fetch[nativeReproSym];
+Object.setPrototypeOf(fetch, originalFetchProto);
+
 if (pass) console.log('PASS');
