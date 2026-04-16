@@ -1,0 +1,12 @@
+{
+  "name": "djot",
+  "type": "module",
+  "main": "index.ts",
+  "scripts": {
+    "start": "ant index.ts"
+  },
+  "dependencies": {
+    "@djot/djot": "^0.3.2"
+  },
+  "devDependencies": {}
+}

@@ -781,11 +781,76 @@ static ant_value_t builtin_regexp_groups_getter(ant_t *js, ant_value_t *args, in
   return groups;
 }
 
+static ant_value_t regexp_build_indices_pair(ant_t *js, PCRE2_SIZE start, PCRE2_SIZE end) {
+  if (start == PCRE2_UNSET) return js_mkundef();
+
+  ant_value_t pair = js_mkarr(js);
+  if (is_err(pair)) return pair;
+  js_arr_push(js, pair, tov((double)start));
+  js_arr_push(js, pair, tov((double)end));
+  
+  return pair;
+}
+
+static ant_value_t regexp_build_indices_groups(
+  ant_t *js,
+  ant_value_t groups_meta,
+  ant_value_t indices_arr
+) {
+  ant_value_t groups = js_mkobj(js);
+  if (is_err(groups)) return groups;
+  js_set_proto_init(groups, js_mknull());
+
+  for (ant_offset_t i = 0; ; i += 2) {
+    ant_value_t name = js_arr_get(js, groups_meta, i);
+    if (vtype(name) == T_UNDEF) break;
+    
+    ant_value_t index_val = js_arr_get(js, groups_meta, i + 1);
+    ant_offset_t index = (vtype(index_val) == T_NUM) ? (ant_offset_t)tod(index_val) : 0;
+    char idxstr[16];
+    (void)uint_to_str(idxstr, sizeof(idxstr), (uint64_t)index);
+    
+    ant_value_t value = js_getprop_fallback(js, indices_arr, idxstr);
+    ant_offset_t name_len, name_off = vstr(js, name, &name_len);
+    ant_value_t status = setprop_cstr(js, groups, (const char *)(uintptr_t)name_off, (size_t)name_len, value);
+    if (is_err(status)) return status;
+  }
+
+  return groups;
+}
+
+static ant_value_t regexp_build_indices_result(
+  ant_t *js,
+  ant_value_t regexp,
+  PCRE2_SIZE *ovector,
+  uint32_t ovcount
+) {
+  ant_value_t indices_arr = js_mkarr(js);
+  if (is_err(indices_arr)) return indices_arr;
+
+  for (uint32_t i = 0; i < ovcount && i < 32; i++) {
+    ant_value_t pair = regexp_build_indices_pair(js, ovector[2*i], ovector[2*i+1]);
+    if (is_err(pair)) return pair;
+    js_arr_push(js, indices_arr, pair);
+  }
+
+  ant_value_t groups_meta = js_get_slot(regexp, SLOT_REGEXP_NAMED_GROUPS);
+  if (is_object_type(groups_meta)) {
+    ant_value_t groups = regexp_build_indices_groups(js, groups_meta, indices_arr);
+    if (is_err(groups)) return groups;
+    if (is_err(setprop_cstr(js, indices_arr, "groups", 6, groups))) return js_mkerr(js, "oom");
+  } else if (is_err(setprop_cstr(js, indices_arr, "groups", 6, js_mkundef()))) return js_mkerr(js, "oom");
+
+  return indices_arr;
+}
+
 static ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value_t str_arg, bool truthy_only) {
   ant_offset_t str_len, str_off = vstr(js, str_arg, &str_len);
   const char *str_ptr = (char *)(uintptr_t)(str_off);
   uint8_t flags_mask = regexp_flags_mask(js, regexp);
+  
   bool global_flag = (flags_mask & REGEXP_FLAG_GLOBAL) != 0;
+  bool has_indices = (flags_mask & REGEXP_FLAG_HAS_INDICES) != 0;
   bool sticky_flag = (flags_mask & REGEXP_FLAG_STICKY) != 0;
 
   // TODO: reduce nesting
@@ -857,6 +922,12 @@ static ant_value_t regexp_exec_internal(ant_t *js, ant_value_t regexp, ant_value
     js_set_slot(result_arr, SLOT_REGEXP_GROUPS_CACHE, js_mkundef());
     js_set_getter_desc(js, js_as_obj(result_arr), "groups", 6, js_mkfun(builtin_regexp_groups_getter), JS_DESC_E | JS_DESC_C);
   } else if (is_err(setprop_cstr(js, result_arr, "groups", 6, js_mkundef()))) return js_mkerr(js, "oom");
+
+  if (has_indices) {
+    ant_value_t indices = regexp_build_indices_result(js, regexp, ovector, ovcount);
+    if (is_err(indices)) return indices;
+    if (is_err(setprop_cstr(js, result_arr, "indices", 7, indices))) return js_mkerr(js, "oom");
+  }
 
   return result_arr;
 }

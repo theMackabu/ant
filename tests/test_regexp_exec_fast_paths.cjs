@@ -105,4 +105,18 @@ assert(
   'RegExp.prototype.flags should read observable flag properties in spec order'
 );
 
+const indicesMatch = /(?<word>a)(b)?/d.exec('ab');
+assert(indicesMatch !== null, 'expected hasIndices regexp to match');
+assert(Array.isArray(indicesMatch.indices), 'match.indices should be an array');
+assert(indicesMatch.indices.length === 3, 'match.indices should include the full match and captures');
+assert(indicesMatch.indices[0][0] === 0 && indicesMatch.indices[0][1] === 2, 'full match indices mismatch');
+assert(indicesMatch.indices[1][0] === 0 && indicesMatch.indices[1][1] === 1, 'first capture indices mismatch');
+assert(indicesMatch.indices[2][0] === 1 && indicesMatch.indices[2][1] === 2, 'second capture indices mismatch');
+assert(indicesMatch.indices.groups.word[0] === 0 && indicesMatch.indices.groups.word[1] === 1,
+  'named capture indices mismatch');
+
+const unmatchedIndices = /a(b)?/d.exec('a');
+assert(unmatchedIndices !== null, 'expected optional capture regexp to match');
+assert(unmatchedIndices.indices[1] === undefined, 'unmatched capture should expose undefined indices');
+
 console.log('regex exec fast path semantics ok');

@@ -1211,6 +1211,17 @@ ant_value_t js_inspect_builder_result(js_inspect_builder_t *builder) {
   return out;
 }
 
+static inline char *js_inspect_builder_write_ptr(js_inspect_builder_t *builder, size_t *avail) {
+  if (!builder->buf || builder->len == 0) {
+    if (avail) *avail = 0;
+    return NULL;
+  }
+
+  size_t write_index = builder->n < builder->len ? builder->n : builder->len - 1;
+  if (avail) *avail = builder->len - write_index;
+  return builder->buf + write_index;
+}
+
 static bool js_inspect_builder_reserve(js_inspect_builder_t *builder, size_t extra) {
   if (!builder->growable) return true;
 
@@ -1238,7 +1249,10 @@ static bool js_inspect_append(js_inspect_builder_t *builder, const char *src, si
     return true;
   }
 
-  builder->n += cpy(builder->buf + builder->n, REMAIN(builder->n, builder->len), src, srclen);
+  size_t avail = 0;
+  char *dst = js_inspect_builder_write_ptr(builder, &avail);
+  builder->n += cpy(dst, avail, src, srclen);
+  
   return true;
 }
 
@@ -1256,7 +1270,10 @@ js_inspect_vappendf(js_inspect_builder_t *builder, const char *fmt, va_list args
     return true;
   }
 
-  int needed = vsnprintf(builder->buf + builder->n, REMAIN(builder->n, builder->len), fmt, args);
+  size_t avail = 0;
+  char *dst = js_inspect_builder_write_ptr(builder, &avail);
+  int needed = vsnprintf(dst, avail, fmt, args);
+  
   if (needed < 0) return false;
   builder->n += (size_t)needed;
   
@@ -1279,7 +1296,9 @@ static bool js_inspect_append_indent(js_inspect_builder_t *builder, int indent) 
 
 static bool js_inspect_append_tostr(js_inspect_builder_t *builder, ant_value_t value) {
   if (!builder->growable) {
-    builder->n += tostr(builder->js, value, builder->buf + builder->n, REMAIN(builder->n, builder->len));
+    size_t avail = 0;
+    char *dst = js_inspect_builder_write_ptr(builder, &avail);
+    builder->n += tostr(builder->js, value, dst, avail);
     return true;
   }
 
@@ -1308,7 +1327,9 @@ static bool js_inspect_append_tostr(js_inspect_builder_t *builder, ant_value_t v
 
 static bool js_inspect_append_key_interned(js_inspect_builder_t *builder, const char *key, size_t klen) {
   if (!builder->growable) {
-    builder->n += strkey_interned(builder->js, key, klen, builder->buf + builder->n, REMAIN(builder->n, builder->len));
+    size_t avail = 0;
+    char *dst = js_inspect_builder_write_ptr(builder, &avail);
+    builder->n += strkey_interned(builder->js, key, klen, dst, avail);
     return true;
   }
 
@@ -2190,17 +2211,37 @@ static size_t strstring(ant_t *js, ant_value_t value, char *buf, size_t len) {
   ant_offset_t slen, off = vstr(js, value, &slen);
   const char *str = (const char *)(uintptr_t)off;
   size_t n = 0;
-  n += cpy(buf + n, REMAIN(n, len), "'", 1);
-  for (ant_offset_t i = 0; i < slen && n < len - 1; i++) {
+
+  size_t avail = 0;
+  char *dst = NULL;
+
+  dst = (len == 0) ? NULL : (buf + (n < len ? n : len - 1));
+  avail = (len == 0) ? 0 : (len - (n < len ? n : len - 1));
+  n += cpy(dst, avail, "'", 1);
+
+  for (ant_offset_t i = 0; i < slen; i++) {
     char c = str[i];
-    if (c == '\n') { n += cpy(buf + n, REMAIN(n, len), "\\n", 2); }
-    else if (c == '\r') { n += cpy(buf + n, REMAIN(n, len), "\\r", 2); }
-    else if (c == '\t') { n += cpy(buf + n, REMAIN(n, len), "\\t", 2); }
-    else if (c == '\\') { n += cpy(buf + n, REMAIN(n, len), "\\\\", 2); }
-    else if (c == '\'') { n += cpy(buf + n, REMAIN(n, len), "\\'", 2); }
-    else { if (n < len) buf[n++] = c; }
+    dst = (len == 0) ? NULL : (buf + (n < len ? n : len - 1));
+    avail = (len == 0) ? 0 : (len - (n < len ? n : len - 1));
+    
+    if (c == '\n') n += cpy(dst, avail, "\\n", 2);
+    else if (c == '\r') n += cpy(dst, avail, "\\r", 2);
+    else if (c == '\t') n += cpy(dst, avail, "\\t", 2);
+    else if (c == '\\') n += cpy(dst, avail, "\\\\", 2);
+    else if (c == '\'') n += cpy(dst, avail, "\\'", 2);
+    
+    else {
+      if (avail > 1) {
+        *dst = c;
+        dst[1] = '\0';
+      } else if (avail == 1) *dst = '\0';
+      n++;
+    }
   }
-  n += cpy(buf + n, REMAIN(n, len), "'", 1);
+
+  dst = (len == 0) ? NULL : (buf + (n < len ? n : len - 1));
+  avail = (len == 0) ? 0 : (len - (n < len ? n : len - 1));
+  n += cpy(dst, avail, "'", 1);
   
   return n;
 }
