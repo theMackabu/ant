@@ -328,12 +328,22 @@ static ant_value_t js_event_get_isTrusted(ant_t *js, ant_value_t *args, int narg
 }
 
 static ant_value_t js_eventemitter_ctor(ant_t *js, ant_value_t *args, int nargs) {
-  if (vtype(js->new_target) == T_UNDEF)
-    return js_mkerr_typed(js, JS_ERR_TYPE, "EventEmitter constructor requires 'new'");
-
   ant_value_t this_obj = js_getthis(js);
-  if (is_object_type(this_obj)) js_set_slot(this_obj, SLOT_BRAND, js_mknum(BRAND_EVENTEMITTER));
-  return js_mkundef();
+  
+  if (is_object_type(this_obj)) {
+    js_set_slot(this_obj, SLOT_BRAND, js_mknum(BRAND_EVENTEMITTER));
+    return this_obj;
+  }
+
+  if (vtype(js->new_target) != T_UNDEF) {
+    ant_value_t obj = js_mkobj(js);
+    ant_value_t proto = js_instance_proto_from_new_target(js, g_eventemitter_proto);
+    if (is_object_type(proto)) js_set_proto_init(obj, proto);
+    js_set_slot(obj, SLOT_BRAND, js_mknum(BRAND_EVENTEMITTER));
+    return obj;
+  }
+
+  return js_mkerr_typed(js, JS_ERR_TYPE, "EventEmitter constructor requires an object receiver or 'new'");
 }
 
 static ant_value_t js_event_preventDefault(ant_t *js, ant_value_t *args, int nargs) {

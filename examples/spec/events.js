@@ -126,6 +126,19 @@ eeD.on('ctx', function () {
 eeD.emit('ctx');
 test('EventEmitter listeners receive emitter as this', listenerThis, eeD);
 
+function LegacyEmitter() {
+  EventEmitter.call(this);
+}
+LegacyEmitter.prototype = {};
+LegacyEmitter.prototype.__proto__ = EventEmitter.prototype;
+LegacyEmitter.prototype.constructor = LegacyEmitter;
+
+const legacy = new LegacyEmitter();
+let legacyCount = 0;
+legacy.on('legacy', () => legacyCount++);
+legacy.emit('legacy');
+test('EventEmitter.call(this) initializes classic inherited receivers', legacyCount, 1);
+
 console.log('\nEventTarget Tests\n');
 
 const et = new EventTarget();
