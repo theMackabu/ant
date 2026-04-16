@@ -167,8 +167,14 @@ ant_value_t esm_load_commonjs_module(
   char *path_copy = strdup(module_path);
   if (!path_copy) return js_mkerr(js, "OOM loading CommonJS module");
 
+  ant_value_t object_proto = js->sym.object_proto;
   ant_value_t module_obj = js_mkobj(js);
   ant_value_t exports_obj = js_mkobj(js);
+  
+  if (is_object_type(object_proto)) {
+    js_set_proto_init(module_obj, object_proto);
+    js_set_proto_init(exports_obj, object_proto);
+  }
   
   js_set(js, module_obj, "exports", exports_obj);
   js_set(js, module_obj, "loaded", js_false);
