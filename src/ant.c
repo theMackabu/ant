@@ -1211,15 +1211,19 @@ ant_value_t js_inspect_builder_result(js_inspect_builder_t *builder) {
   return out;
 }
 
-static inline char *js_inspect_builder_write_ptr(js_inspect_builder_t *builder, size_t *avail) {
-  if (!builder->buf || builder->len == 0) {
+static inline char *fixed_buf_write_ptr(char *buf, size_t len, size_t n, size_t *avail) {
+  if (!buf || len == 0) {
     if (avail) *avail = 0;
     return NULL;
   }
 
-  size_t write_index = builder->n < builder->len ? builder->n : builder->len - 1;
-  if (avail) *avail = builder->len - write_index;
-  return builder->buf + write_index;
+  size_t write_index = n < len ? n : len - 1;
+  if (avail) *avail = len - write_index;
+  return buf + write_index;
+}
+
+static inline char *js_inspect_builder_write_ptr(js_inspect_builder_t *builder, size_t *avail) {
+  return fixed_buf_write_ptr(builder->buf, builder->len, builder->n, avail);
 }
 
 static bool js_inspect_builder_reserve(js_inspect_builder_t *builder, size_t extra) {
@@ -2210,37 +2214,40 @@ ant_offset_t vstr(ant_t *js, ant_value_t value, ant_offset_t *len) {
 static size_t strstring(ant_t *js, ant_value_t value, char *buf, size_t len) {
   ant_offset_t slen, off = vstr(js, value, &slen);
   const char *str = (const char *)(uintptr_t)off;
+  
   size_t n = 0;
-
   size_t avail = 0;
-  char *dst = NULL;
+  char *dst = fixed_buf_write_ptr(buf, len, n, &avail);
 
-  dst = (len == 0) ? NULL : (buf + (n < len ? n : len - 1));
-  avail = (len == 0) ? 0 : (len - (n < len ? n : len - 1));
   n += cpy(dst, avail, "'", 1);
 
   for (ant_offset_t i = 0; i < slen; i++) {
     char c = str[i];
-    dst = (len == 0) ? NULL : (buf + (n < len ? n : len - 1));
-    avail = (len == 0) ? 0 : (len - (n < len ? n : len - 1));
-    
-    if (c == '\n') n += cpy(dst, avail, "\\n", 2);
-    else if (c == '\r') n += cpy(dst, avail, "\\r", 2);
-    else if (c == '\t') n += cpy(dst, avail, "\\t", 2);
-    else if (c == '\\') n += cpy(dst, avail, "\\\\", 2);
-    else if (c == '\'') n += cpy(dst, avail, "\\'", 2);
-    
-    else {
-      if (avail > 1) {
-        *dst = c;
-        dst[1] = '\0';
-      } else if (avail == 1) *dst = '\0';
-      n++;
+    const char *escaped = NULL;
+
+    dst = fixed_buf_write_ptr(buf, len, n, &avail);
+    switch (c) {
+      case '\n': escaped = "\\n"; break;
+      case '\r': escaped = "\\r"; break;
+      case '\t': escaped = "\\t"; break;
+      case '\\': escaped = "\\\\"; break;
+      case '\'': escaped = "\\'"; break;
+      default: break;
     }
+    
+    if (escaped) {
+      n += cpy(dst, avail, escaped, 2);
+      continue;
+    }
+    
+    if (avail > 1) {
+      *dst = c;
+      dst[1] = '\0';
+    } else if (avail == 1) *dst = '\0';
+    n++;
   }
 
-  dst = (len == 0) ? NULL : (buf + (n < len ? n : len - 1));
-  avail = (len == 0) ? 0 : (len - (n < len ? n : len - 1));
+  dst = fixed_buf_write_ptr(buf, len, n, &avail);
   n += cpy(dst, avail, "'", 1);
   
   return n;
