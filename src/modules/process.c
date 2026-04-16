@@ -1532,56 +1532,57 @@ static ant_value_t process_cwd(ant_t *js, ant_value_t *args, int nargs) {
   return js_mkundef();
 }
 
-static ant_value_t process_on(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 2) return js_mkerr(js, "process.on requires 2 arguments");
-  
+static ant_value_t process_add(ant_t *js, ant_value_t *args, int nargs, bool once, bool prepend) {
+  if (nargs < 2) {
+    return js_mkerr(js, once ? "process.once requires 2 arguments" : "process.on requires 2 arguments");
+  }
+
   char *event = js_getstr(js, args[0], NULL);
   if (!event) return js_mkerr(js, "event must be a string");
-  if (vtype(args[1]) != T_FUNC) return js_mkerr(js, "listener must be a function");
-  
+
+  uint8_t listener_type = vtype(args[1]);
+  if (listener_type != T_FUNC && listener_type != T_CFUNC) {
+    return js_mkerr(js, "listener must be a function");
+  }
+
   int signum = get_signal_number(event);
-  if (signum > 0) {
-    start_signal_watch(signum);
-  }
-  
+  if (signum > 0) start_signal_watch(signum);
+
   ProcessEventType *evt = find_or_create_event(&process_events, event);
-  if (!ensure_listener_capacity(evt)) {
-    return js_mkerr(js, "failed to allocate listener");
+  if (!ensure_listener_capacity(evt)) return js_mkerr(js, "failed to allocate listener");
+
+  if (prepend && evt->listener_count > 0) {
+    memmove(
+      &evt->listeners[1],
+      &evt->listeners[0],
+      (size_t)evt->listener_count * sizeof(ProcessEventListener)
+    );
+    evt->listeners[0].listener = args[1];
+    evt->listeners[0].once = once;
+  } else {
+    evt->listeners[evt->listener_count].listener = args[1];
+    evt->listeners[evt->listener_count].once = once;
   }
-  
-  evt->listeners[evt->listener_count].listener = args[1];
-  evt->listeners[evt->listener_count].once = false;
+
   evt->listener_count++;
-  
   check_listener_warning(event);
-  
   return js_get(js, js_glob(js), "process");
 }
 
+static ant_value_t process_on(ant_t *js, ant_value_t *args, int nargs) {
+  return process_add(js, args, nargs, false, false);
+}
+
 static ant_value_t process_once(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 2) return js_mkerr(js, "process.once requires 2 arguments");
-  
-  char *event = js_getstr(js, args[0], NULL);
-  if (!event) return js_mkerr(js, "event must be a string");
-  if (vtype(args[1]) != T_FUNC) return js_mkerr(js, "listener must be a function");
-  
-  int signum = get_signal_number(event);
-  if (signum > 0) {
-    start_signal_watch(signum);
-  }
-  
-  ProcessEventType *evt = find_or_create_event(&process_events, event);
-  if (!ensure_listener_capacity(evt)) {
-    return js_mkerr(js, "failed to allocate listener");
-  }
-  
-  evt->listeners[evt->listener_count].listener = args[1];
-  evt->listeners[evt->listener_count].once = true;
-  evt->listener_count++;
-  
-  check_listener_warning(event);
-  
-  return js_get(js, js_glob(js), "process");
+  return process_add(js, args, nargs, true, false);
+}
+
+static ant_value_t process_prepend_listener(ant_t *js, ant_value_t *args, int nargs) {
+  return process_add(js, args, nargs, false, true);
+}
+
+static ant_value_t process_prepend_once_listener(ant_t *js, ant_value_t *args, int nargs) {
+  return process_add(js, args, nargs, true, true);
 }
 
 static ant_value_t process_off(ant_t *js, ant_value_t *args, int nargs) {
@@ -1750,6 +1751,49 @@ static ant_value_t process_listener_count(ant_t *js, ant_value_t *args, int narg
   return js_mknum(evt ? evt->listener_count : 0);
 }
 
+static ant_value_t process_listeners_impl(ant_t *js, ant_value_t *args, int nargs, bool raw) {
+  (void)raw;
+  ant_value_t result = js_mkarr(js);
+  if (nargs < 1) return result;
+
+  char *event = js_getstr(js, args[0], NULL);
+  if (!event) return result;
+
+  ProcessEventType *evt = NULL;
+  HASH_FIND_STR(process_events, event, evt);
+  if (!evt) return result;
+
+  for (int i = 0; i < evt->listener_count; i++) {
+    js_arr_push(js, result, evt->listeners[i].listener);
+  }
+
+  return result;
+}
+
+static ant_value_t process_listeners(ant_t *js, ant_value_t *args, int nargs) {
+  return process_listeners_impl(js, args, nargs, false);
+}
+
+static ant_value_t process_raw_listeners(ant_t *js, ant_value_t *args, int nargs) {
+  return process_listeners_impl(js, args, nargs, true);
+}
+
+static ant_value_t process_event_names(ant_t *js, ant_value_t *args, int nargs) {
+  (void)args;
+  (void)nargs;
+  ant_value_t result = js_mkarr(js);
+  ProcessEventType *evt = NULL;
+  ProcessEventType *tmp = NULL;
+
+  HASH_ITER(hh, process_events, evt, tmp) {
+    if (evt->listener_count > 0) {
+      js_arr_push(js, result, js_mkstr(js, evt->event_type, strlen(evt->event_type)));
+    }
+  }
+
+  return result;
+}
+
 static ant_value_t process_set_max_listeners(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "setMaxListeners requires 1 argument");
   if (vtype(args[0]) != T_NUM) return js_mkerr(js, "n must be a number");
@@ -1803,11 +1847,16 @@ static void process_set_methods(ant_t *js, ant_value_t obj, bool include_event_m
     js_set(js, obj, "on", js_mkfun(process_on));
     js_set(js, obj, "addListener", js_mkfun(process_on));
     js_set(js, obj, "once", js_mkfun(process_once));
+    js_set(js, obj, "prependListener", js_mkfun(process_prepend_listener));
+    js_set(js, obj, "prependOnceListener", js_mkfun(process_prepend_once_listener));
     js_set(js, obj, "off", js_mkfun(process_off));
     js_set(js, obj, "removeListener", js_mkfun(process_off));
     js_set(js, obj, "removeAllListeners", js_mkfun(process_remove_all_listeners));
     js_set(js, obj, "emit", js_mkfun(process_emit));
     js_set(js, obj, "listenerCount", js_mkfun(process_listener_count));
+    js_set(js, obj, "listeners", js_mkfun(process_listeners));
+    js_set(js, obj, "rawListeners", js_mkfun(process_raw_listeners));
+    js_set(js, obj, "eventNames", js_mkfun(process_event_names));
     js_set(js, obj, "setMaxListeners", js_mkfun(process_set_max_listeners));
     js_set(js, obj, "getMaxListeners", js_mkfun(process_get_max_listeners));
   }

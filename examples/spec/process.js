@@ -48,6 +48,11 @@ test('removeListener is function', typeof process.removeListener, 'function');
 test('removeAllListeners is function', typeof process.removeAllListeners, 'function');
 test('emit is function', typeof process.emit, 'function');
 test('listenerCount is function', typeof process.listenerCount, 'function');
+test('listeners is function', typeof process.listeners, 'function');
+test('rawListeners is function', typeof process.rawListeners, 'function');
+test('eventNames is function', typeof process.eventNames, 'function');
+test('prependListener is function', typeof process.prependListener, 'function');
+test('prependOnceListener is function', typeof process.prependOnceListener, 'function');
 test('setMaxListeners is function', typeof process.setMaxListeners, 'function');
 test('getMaxListeners is function', typeof process.getMaxListeners, 'function');
 
@@ -100,6 +105,44 @@ process.on('testCount', () => {});
 test('listenerCount returns count', process.listenerCount('testCount'), 2);
 process.removeAllListeners('testCount');
 test('removeAllListeners clears', process.listenerCount('testCount'), 0);
+
+const listenersSeen = [];
+const listenersFirst = () => {
+  listenersSeen.push('first');
+};
+const listenersSecond = () => {
+  listenersSeen.push('second');
+};
+process.on('testListeners', listenersFirst);
+process.prependListener('testListeners', listenersSecond);
+const processListeners = process.listeners('testListeners');
+test('listeners returns array', Array.isArray(processListeners), true);
+test('listeners includes prepended handler first', processListeners[0], listenersSecond);
+test('listeners includes appended handler second', processListeners[1], listenersFirst);
+const processRawListeners = process.rawListeners('testListeners');
+test('rawListeners returns array', Array.isArray(processRawListeners), true);
+test('rawListeners includes prepended handler first', processRawListeners[0], listenersSecond);
+test('rawListeners includes appended handler second', processRawListeners[1], listenersFirst);
+test('eventNames includes active process event', process.eventNames().includes('testListeners'), true);
+process.emit('testListeners');
+test('prependListener affects emit order', listenersSeen.join(','), 'second,first');
+process.removeAllListeners('testListeners');
+test('eventNames excludes removed process event', process.eventNames().includes('testListeners'), false);
+
+let prependOnceCount = 0;
+const prependOnceMarker = [];
+process.on('testPrependOnce', () => {
+  prependOnceMarker.push('on');
+});
+process.prependOnceListener('testPrependOnce', () => {
+  prependOnceCount++;
+  prependOnceMarker.push('once');
+});
+process.emit('testPrependOnce');
+process.emit('testPrependOnce');
+test('prependOnceListener fires once', prependOnceCount, 1);
+test('prependOnceListener runs before on listener', prependOnceMarker[0], 'once');
+process.removeAllListeners('testPrependOnce');
 
 let receivedArg = null;
 process.on('testArgs', arg => {
