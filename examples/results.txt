@@ -1445,27 +1445,27 @@ compat-table/intl/Array.prototype.toLocaleString.js: OK
 compat-table/intl/Date.prototype.toLocaleDateString.js: OK
 compat-table/intl/Date.prototype.toLocaleString.js: OK
 compat-table/intl/Date.prototype.toLocaleTimeString.js: OK
-compat-table/intl/Intl.Collator.js: failed
-compat-table/intl/Intl.Collator.new-instances.js: TypeError: not a constructor
-compat-table/intl/Intl.Collator.prototype.compare.js: TypeError: undefined is not a function
-compat-table/intl/Intl.Collator.prototype.resolvedOptions.js: TypeError: undefined is not a function
-compat-table/intl/Intl.Collator.rejects-invalid-tags.js: failed
-compat-table/intl/Intl.Collator.valid-tags.js: failed
-compat-table/intl/Intl.Collator.without-new.js: TypeError: undefined is not a function
+compat-table/intl/Intl.Collator.js: OK
+compat-table/intl/Intl.Collator.new-instances.js: OK
+compat-table/intl/Intl.Collator.prototype.compare.js: OK
+compat-table/intl/Intl.Collator.prototype.resolvedOptions.js: OK
+compat-table/intl/Intl.Collator.rejects-invalid-tags.js: OK
+compat-table/intl/Intl.Collator.valid-tags.js: OK
+compat-table/intl/Intl.Collator.without-new.js: OK
 compat-table/intl/Intl.DateTimeFormat.iana-timezones.js: OK
 compat-table/intl/Intl.DateTimeFormat.js: OK
-compat-table/intl/Intl.DateTimeFormat.new-instances.js: failed
-compat-table/intl/Intl.DateTimeFormat.rejects-invalid-tags.js: failed
+compat-table/intl/Intl.DateTimeFormat.new-instances.js: OK
+compat-table/intl/Intl.DateTimeFormat.rejects-invalid-tags.js: OK
 compat-table/intl/Intl.DateTimeFormat.resolvedOptions.timeZone-default.js: OK
 compat-table/intl/Intl.DateTimeFormat.valid-tags.js: OK
-compat-table/intl/Intl.DateTimeFormat.without-new.js: failed
-compat-table/intl/Intl.NumberFormat.js: failed
-compat-table/intl/Intl.NumberFormat.new-instances.js: TypeError: not a constructor
-compat-table/intl/Intl.NumberFormat.rejects-invalid-tags.js: failed
-compat-table/intl/Intl.NumberFormat.valid-tags.js: failed
-compat-table/intl/Intl.NumberFormat.without-new.js: TypeError: undefined is not a function
+compat-table/intl/Intl.DateTimeFormat.without-new.js: OK
+compat-table/intl/Intl.NumberFormat.js: OK
+compat-table/intl/Intl.NumberFormat.new-instances.js: OK
+compat-table/intl/Intl.NumberFormat.rejects-invalid-tags.js: OK
+compat-table/intl/Intl.NumberFormat.valid-tags.js: OK
+compat-table/intl/Intl.NumberFormat.without-new.js: OK
 compat-table/intl/Intl.js: OK
-compat-table/intl/Intl.prototype.js: failed
+compat-table/intl/Intl.prototype.js: OK
 compat-table/intl/Number.prototype.toLocaleString.js: OK
 compat-table/intl/Object.prototype.toLocaleString.js: OK
 compat-table/intl/String.prototype.localeCompare.js: OK
