@@ -80,6 +80,7 @@
 #include "modules/domexception.h"
 #include "modules/abort.h"
 #include "modules/globals.h"
+#include "modules/intl.h"
 #include "modules/wasm.h"
 #include "modules/string_decoder.h"
 #include "modules/stream.h"
@@ -592,6 +593,7 @@ int main(int argc, char *argv[]) {
   init_timer_module();
   init_domexception_module();
   init_globals_module();
+  init_intl_module();
   init_wasm_module();
   init_builtin_module();
   init_buffer_module();
