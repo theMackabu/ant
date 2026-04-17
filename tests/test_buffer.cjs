@@ -66,11 +66,15 @@ console.log('Uint8ClampedArray BYTES_PER_ELEMENT:', u8c.BYTES_PER_ELEMENT);
 const bi64 = new BigInt64Array(2);
 console.log('BigInt64Array length:', bi64.length);
 console.log('BigInt64Array BYTES_PER_ELEMENT:', bi64.BYTES_PER_ELEMENT);
+bi64[0] = 0x8000000000000000n;
+console.log('BigInt64Array wraps signed 64-bit:', bi64[0] === -0x8000000000000000n);
 
 // Test BigUint64Array
 const bu64 = new BigUint64Array(2);
 console.log('BigUint64Array length:', bu64.length);
 console.log('BigUint64Array BYTES_PER_ELEMENT:', bu64.BYTES_PER_ELEMENT);
+bu64[0] = 0x10000000000000000n;
+console.log('BigUint64Array wraps unsigned 64-bit:', bu64[0] === 0n);
 
 console.log('\n=== TypedArray from ArrayBuffer ===');
 
@@ -142,6 +146,12 @@ dv.setUint8(2, 0x00);
 dv.setUint8(3, 0x00);
 const float32 = dv.getFloat32(0, false); // 1.0 in IEEE 754
 console.log('Float32:', float32);
+
+// Test BigInt64 / BigUint64 DataView operations
+dv.setBigInt64(0, 1n);
+console.log('DataView getBigInt64:', dv.getBigInt64(0) === 1n);
+dv.setBigUint64(0, 1n);
+console.log('DataView getBigUint64:', dv.getBigUint64(0) === 1n);
 
 console.log('\n=== Buffer Tests (Node.js-style) ===');
 

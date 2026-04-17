@@ -143,7 +143,7 @@ static ant_value_t js_mkbigint_limbs(ant_t *js, const uint32_t *limbs, size_t co
   return mkval(T_BIGINT, (uintptr_t)payload);
 }
 
-static ant_value_t bigint_from_u64(ant_t *js, uint64_t value) {
+ant_value_t bigint_from_uint64(ant_t *js, uint64_t value) {
   uint32_t limbs[2] = {
     (uint32_t)(value & 0xffffffffu),
     (uint32_t)(value >> 32)
@@ -151,6 +151,43 @@ static ant_value_t bigint_from_u64(ant_t *js, uint64_t value) {
 
   size_t count = limbs[1] == 0 ? 1 : 2;
   return js_mkbigint_limbs(js, limbs, count, false);
+}
+
+ant_value_t bigint_from_int64(ant_t *js, int64_t value) {
+  uint64_t magnitude = value < 0
+    ? (uint64_t)(-(value + 1)) + 1
+    : (uint64_t)value;
+  
+  uint32_t limbs[2] = {
+    (uint32_t)(magnitude & 0xffffffffu),
+    (uint32_t)(magnitude >> 32)
+  };
+
+  size_t count = limbs[1] == 0 ? 1 : 2;
+  return js_mkbigint_limbs(js, limbs, count, value < 0);
+}
+
+static uint64_t bigint_low_u64(ant_t *js, ant_value_t value) {
+  size_t count = 0;
+  const uint32_t *limbs = bigint_limbs(js, value, &count);
+  uint64_t out = count > 0 ? (uint64_t)limbs[0] : 0;
+  if (count > 1) out |= ((uint64_t)limbs[1] << 32);
+  return out;
+}
+
+bool bigint_to_uint64_wrapping(ant_t *js, ant_value_t value, uint64_t *out) {
+  if (!out || vtype(value) != T_BIGINT) return false;
+  uint64_t low = bigint_low_u64(js, value);
+  *out = bigint_is_negative(js, value) ? (uint64_t)(0 - low) : low;
+  return true;
+}
+
+bool bigint_to_int64_wrapping(ant_t *js, ant_value_t value, int64_t *out) {
+  if (!out) return false;
+  uint64_t bits = 0;
+  if (!bigint_to_uint64_wrapping(js, value, &bits)) return false;
+  *out = (int64_t)bits;
+  return true;
 }
 
 static bool bigint_parse_abs_u64(ant_t *js, ant_value_t value, uint64_t *out) {

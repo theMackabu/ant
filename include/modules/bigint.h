@@ -21,6 +21,11 @@ ant_value_t bigint_bitor(ant_t *js, ant_value_t a, ant_value_t b);
 ant_value_t bigint_bitxor(ant_t *js, ant_value_t a, ant_value_t b);
 ant_value_t bigint_bitnot(ant_t *js, ant_value_t value);
 ant_value_t bigint_asint_bits(ant_t *js, ant_value_t arg, uint64_t *bits_out);
+ant_value_t bigint_from_int64(ant_t *js, int64_t value);
+ant_value_t bigint_from_uint64(ant_t *js, uint64_t value);
+
+bool bigint_to_int64_wrapping(ant_t *js, ant_value_t value, int64_t *out);
+bool bigint_to_uint64_wrapping(ant_t *js, ant_value_t value, uint64_t *out);
 
 bool bigint_is_negative(ant_t *js, ant_value_t v);
 bool bigint_is_zero(ant_t *js, ant_value_t v);

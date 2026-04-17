@@ -1315,14 +1315,14 @@ compat-table/es2019/misc.JSON-superset.paragraph-separator.js: OK
 compat-table/es2019/misc.optional-catch-binding.await.js: OK
 compat-table/es2019/misc.optional-catch-binding.js: OK
 compat-table/es2019/misc.optional-catch-binding.yield.js: OK
-compat-table/es2020/BigInt64Array.js: failed
+compat-table/es2020/BigInt64Array.js: OK
 compat-table/es2020/BigInt.asIntN.js: OK
 compat-table/es2020/BigInt.asUintN.js: OK
 compat-table/es2020/BigInt.constructor.js: OK
 compat-table/es2020/BigInt.js: OK
-compat-table/es2020/BigUint64Array.js: failed
-compat-table/es2020/DataView.prototype.getBigInt64.js: TypeError: undefined is not a function
-compat-table/es2020/DataView.prototype.getBigUint64.js: TypeError: undefined is not a function
+compat-table/es2020/BigUint64Array.js: OK
+compat-table/es2020/DataView.prototype.getBigInt64.js: OK
+compat-table/es2020/DataView.prototype.getBigUint64.js: OK
 compat-table/es2020/Promise.allSettled.js: OK
 compat-table/es2020/String.prototype.matchAll.js: OK
 compat-table/es2020/String.prototype.matchAll.throws-non-global.js: OK
