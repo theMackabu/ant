@@ -72,6 +72,14 @@ static ant_value_t wasi_exported_func_call(ant_t *js, ant_value_t *args, int nar
   return js_mknum((double)(int32_t)wasm_argv[0]);
 }
 
+static void wasi_func_finalize(ant_t *js, ant_object_t *obj) {
+  if (obj->native.tag != WASI_FUNC_TAG) return;
+
+  free(obj->native.ptr);
+  obj->native.ptr = NULL;
+  obj->native.tag = 0;
+}
+
 static void wasi_instance_finalize(ant_t *js, ant_object_t *obj) {
   if (obj->native.tag != WASI_INSTANCE_TAG) return;
   wasi_instance_handle_t *handle = (wasi_instance_handle_t *)obj->native.ptr;
@@ -102,9 +110,8 @@ bool wasi_module_has_wasi_imports(void *c_api_module) {
 }
 
 static void wasi_bind_func_export(
-  ant_t *js, ant_value_t exports_obj,
-  wasm_module_inst_t inst, wasm_exec_env_t exec_env,
-  const char *name
+  ant_t *js, ant_value_t exports_obj, ant_value_t instance_obj,
+  wasm_module_inst_t inst, wasm_exec_env_t exec_env, const char *name
 ) {
   wasm_function_inst_t func = wasm_runtime_lookup_function(inst, name);
   if (!func) return;
@@ -123,6 +130,8 @@ static void wasi_bind_func_export(
   js_set_slot(obj, SLOT_CFUNC, js_mkfun(wasi_exported_func_call));
   js_set_native_ptr(obj, fenv);
   js_set_native_tag(obj, WASI_FUNC_TAG);
+  js_set_slot_wb(js, obj, SLOT_ENTRIES, instance_obj);
+  js_set_finalizer(obj, wasi_func_finalize);
   js_set(js, exports_obj, name, js_obj_to_func(obj));
   GC_ROOT_RESTORE(js, root_mark);
 }
@@ -229,9 +238,9 @@ ant_value_t wasi_instantiate(
   for (int32_t i = 0; i < export_count; i++) {
     wasm_export_t export_info;
     wasm_runtime_get_export_type(rt_module, i, &export_info);
-
+    
     if (export_info.kind == WASM_IMPORT_EXPORT_KIND_FUNC)
-      wasi_bind_func_export(js, exports_obj, inst, exec_env, export_info.name);
+      wasi_bind_func_export(js, exports_obj, instance_obj, inst, exec_env, export_info.name);
     else if (export_info.kind == WASM_IMPORT_EXPORT_KIND_MEMORY)
       wasi_bind_memory_export(js, exports_obj, instance_obj, inst, export_info.name);
   }

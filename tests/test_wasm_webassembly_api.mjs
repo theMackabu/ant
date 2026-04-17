@@ -12,22 +12,16 @@ const api = globalThis.WebAssembly;
 
 assert(api && typeof api === 'object', 'globalThis.WebAssembly should exist');
 
-for (const name of [
-  'Global',
-  'Instance',
-  'Memory',
-  'Module',
-  'Table',
-  'Tag',
-  'Exception',
-  'CompileError',
-  'LinkError',
-  'RuntimeError',
-]) {
+for (const name of ['Global', 'Instance', 'Memory', 'Module', 'Table', 'Tag', 'Exception', 'CompileError', 'LinkError', 'RuntimeError']) {
   assert(typeof api[name] === 'function', `WebAssembly.${name} should exist`);
 }
 
 const incrementer = fixture('wpt/wasm/webapi/resources/incrementer.wasm');
+const tableExportFixture = new Uint8Array([
+  0, 97, 115, 109, 1, 0, 0, 0, 1, 9, 2, 96, 0, 1, 127, 96, 0, 1, 127, 3, 3, 2, 0, 1, 4, 4, 1, 112, 0, 2, 7, 24, 3, 5, 115, 101, 118, 101, 110, 0, 0,
+  4, 110, 105, 110, 101, 0, 1, 5, 116, 97, 98, 108, 101, 1, 0, 9, 8, 1, 0, 65, 0, 11, 2, 0, 1, 10, 11, 2, 4, 0, 65, 7, 11, 4, 0, 65, 9, 11, 0, 21, 4,
+  110, 97, 109, 101, 1, 14, 2, 0, 5, 115, 101, 118, 101, 110, 1, 4, 110, 105, 110, 101
+]);
 
 assert(WebAssembly.validate(incrementer) === true, 'incrementer.wasm should validate');
 
@@ -36,12 +30,24 @@ const descriptors = WebAssembly.Module.exports(module);
 assert(Array.isArray(descriptors), 'WebAssembly.Module.exports() should return an array');
 assert(
   descriptors.some(entry => entry && entry.name === 'increment' && entry.kind === 'function'),
-  'incrementer.wasm should export increment()',
+  'incrementer.wasm should export increment()'
 );
 
 const instance = new WebAssembly.Instance(module);
 assert(typeof instance.exports.increment === 'function', 'instance.exports.increment should exist');
 assert(instance.exports.increment(41) === 42, 'increment(41) should return 42');
+
+const tableModule = new WebAssembly.Module(tableExportFixture);
+const tableInstance = new WebAssembly.Instance(tableModule);
+assert(tableInstance.exports.table.length === 2, 'exported table should expose its length');
+const firstTableEntry = tableInstance.exports.table.get(0);
+const secondTableEntry = tableInstance.exports.table.get(1);
+assert(typeof firstTableEntry === 'function', 'table.get(0) should return a callable function');
+assert(typeof secondTableEntry === 'function', 'table.get(1) should return a callable function');
+assert(firstTableEntry() === 7, 'table.get(0) should invoke the first table function');
+assert(secondTableEntry() === 9, 'table.get(1) should invoke the second table function');
+tableInstance.exports.table.set(0, tableInstance.exports.nine);
+assert(tableInstance.exports.table.get(0)() === 9, 'table.set() should accept wasm-exported functions');
 
 const compiled = await WebAssembly.compile(incrementer);
 assert(compiled instanceof WebAssembly.Module, 'WebAssembly.compile() should resolve a module');
@@ -65,10 +71,7 @@ try {
   new WebAssembly.Module(invalid);
 } catch (error) {
   sawCompileError = true;
-  assert(
-    error instanceof WebAssembly.CompileError || error?.name === 'CompileError',
-    'invalid module should throw CompileError',
-  );
+  assert(error instanceof WebAssembly.CompileError || error?.name === 'CompileError', 'invalid module should throw CompileError');
 }
 assert(sawCompileError, 'invalid module construction should fail');
 

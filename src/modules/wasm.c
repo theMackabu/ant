@@ -13,6 +13,7 @@
 #pragma clang diagnostic pop
 
 #include "ant.h"
+#include "ptr.h"
 #include "errors.h"
 #include "runtime.h"
 #include "internal.h"
@@ -62,11 +63,30 @@ typedef struct {
   ant_value_t fn;
 } wasm_import_func_env_t;
 
-static wasm_engine_t *g_wasm_engine = NULL;
+typedef struct {
+  wasm_func_t *func;
+  bool own_func;
+} wasm_func_handle_t;
 
-static wasm_import_func_env_t **g_wasm_import_envs = NULL;
+enum { WASM_FUNC_STATE_TAG = 0x57465354u }; // WFST
+
 static size_t g_wasm_import_env_count = 0;
-static size_t g_wasm_import_env_cap = 0;
+static size_t g_wasm_import_env_cap   = 0;
+
+static ant_value_t g_wasm_module_proto    = 0;
+static ant_value_t g_wasm_instance_proto  = 0;
+static ant_value_t g_wasm_global_proto    = 0;
+static ant_value_t g_wasm_memory_proto    = 0;
+static ant_value_t g_wasm_table_proto     = 0;
+static ant_value_t g_wasm_tag_proto       = 0;
+static ant_value_t g_wasm_exception_proto = 0;
+
+static ant_value_t g_wasm_compileerror_proto = 0;
+static ant_value_t g_wasm_linkerror_proto    = 0;
+static ant_value_t g_wasm_runtimeerror_proto = 0;
+
+static wasm_engine_t *g_wasm_engine                = NULL;
+static wasm_import_func_env_t **g_wasm_import_envs = NULL;
 
 static void wasm_register_import_env(wasm_import_func_env_t *env) {
   if (g_wasm_import_env_count == g_wasm_import_env_cap) {
@@ -93,17 +113,10 @@ static void wasm_import_func_env_finalizer(void *env_ptr) {
   free(env);
 }
 
-static ant_value_t g_wasm_module_proto = 0;
-static ant_value_t g_wasm_instance_proto = 0;
-static ant_value_t g_wasm_global_proto = 0;
-static ant_value_t g_wasm_memory_proto = 0;
-static ant_value_t g_wasm_table_proto = 0;
-static ant_value_t g_wasm_tag_proto = 0;
-static ant_value_t g_wasm_exception_proto = 0;
-
-static ant_value_t g_wasm_compileerror_proto = 0;
-static ant_value_t g_wasm_linkerror_proto = 0;
-static ant_value_t g_wasm_runtimeerror_proto = 0;
+static ant_value_t wasm_wrap_func(
+  ant_t *js, wasm_func_t *func, 
+  ant_value_t owner, bool own_func
+);
 
 static bool ensure_wasm_engine(void) {
   if (g_wasm_engine) return true;
@@ -118,14 +131,13 @@ static size_t wasm_name_len(const wasm_name_t *name) {
 }
 
 static const char *wasm_extern_kind_name(wasm_externkind_t kind) {
-  switch (kind) {
-    case WASM_EXTERN_FUNC: return "function";
-    case WASM_EXTERN_GLOBAL: return "global";
-    case WASM_EXTERN_TABLE: return "table";
-    case WASM_EXTERN_MEMORY: return "memory";
-    default: return "unknown";
-  }
-}
+switch (kind) {
+  case WASM_EXTERN_FUNC: return "function";
+  case WASM_EXTERN_GLOBAL: return "global";
+  case WASM_EXTERN_TABLE: return "table";
+  case WASM_EXTERN_MEMORY: return "memory";
+  default: return "unknown";
+}}
 
 static wasm_valkind_t wasm_valkind_from_string(const char *name, size_t len, bool *ok) {
   *ok = true;
@@ -230,10 +242,15 @@ static ant_value_t wasm_value_to_js(ant_t *js, const wasm_val_t *value) {
     case WASM_F32: return js_mknum((double)value->of.f32);
     case WASM_F64: return js_mknum(value->of.f64);
     case WASM_EXTERNREF:
-    case WASM_FUNCREF:
       return value->of.ref ? js_mkundef() : js_mknull();
-    default:
-      return js_mkundef();
+    case WASM_FUNCREF: {
+      wasm_func_t *func;
+      if (!value->of.ref) return js_mknull();
+      func = wasm_ref_as_func(value->of.ref);
+      if (!func) return js_mkundef();
+      return wasm_wrap_func(js, func, js_mkundef(), true);
+    }
+    default: return js_mkundef();
   }
 }
 
@@ -273,11 +290,25 @@ static bool js_value_to_wasm(ant_t *js, ant_value_t value, wasm_valkind_t kind, 
       out->of.f64 = js_to_number(js, value);
       return true;
     case WASM_EXTERNREF:
-    case WASM_FUNCREF:
       out->of.ref = NULL;
       return vtype(value) == T_NULL || vtype(value) == T_UNDEF;
-    default:
-      return false;
+    case WASM_FUNCREF: {
+      ant_value_t state;
+      wasm_func_handle_t *handle;
+      if (vtype(value) == T_NULL || vtype(value) == T_UNDEF) {
+        out->of.ref = NULL;
+        return true;
+      }
+      if (!is_callable(value)) return false;
+      state = js_get_slot(value, SLOT_DATA);
+      if (!is_object_type(state) || !js_check_native_tag(state, WASM_FUNC_STATE_TAG))
+        return false;
+      handle = (wasm_func_handle_t *)js_get_native_ptr(state);
+      if (!handle || !handle->func) return false;
+      out->of.ref = wasm_func_as_ref(handle->func);
+      return out->of.ref != NULL;
+    }
+    default: return false;
   }
 }
 
@@ -420,12 +451,14 @@ static void wasm_extern_finalize(ant_t *js, ant_object_t *obj) {
 
 static ant_value_t js_wasm_exported_func_call(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t state = js_get_slot(js->current_func, SLOT_DATA);
-  if (vtype(state) != T_OBJ) return js_mkerr(js, "Invalid WebAssembly function");
+  wasm_func_handle_t *handle;
+  wasm_func_t *func;
 
-  ant_value_t func_ptr = js_get_slot(state, SLOT_DATA);
-  if (vtype(func_ptr) != T_NUM) return js_mkerr(js, "Invalid WebAssembly function");
+  if (!is_object_type(state) || !js_check_native_tag(state, WASM_FUNC_STATE_TAG))
+    return js_mkerr(js, "Invalid WebAssembly function");
 
-  wasm_func_t *func = (wasm_func_t *)(uintptr_t)(size_t)js_getnum(func_ptr);
+  handle = (wasm_func_handle_t *)js_get_native_ptr(state);
+  func = handle ? handle->func : NULL;
   if (!func) return js_mkerr(js, "Invalid WebAssembly function");
 
   wasm_functype_t *type = wasm_func_type(func);
@@ -475,13 +508,47 @@ static ant_value_t js_wasm_exported_func_call(ant_t *js, ant_value_t *args, int 
   return result;
 }
 
+static void wasm_func_state_finalize(ant_t *js, ant_object_t *obj) {
+  if (obj->native.tag != WASM_FUNC_STATE_TAG) return;
+
+  wasm_func_handle_t *handle = (wasm_func_handle_t *)obj->native.ptr;
+  if (!handle) return;
+
+  if (handle->own_func && handle->func) wasm_func_delete(handle->func);
+  free(handle);
+  obj->native.ptr = NULL;
+  obj->native.tag = 0;
+}
+
+static ant_value_t wasm_wrap_func(ant_t *js, wasm_func_t *func, ant_value_t owner, bool own_func) {
+  wasm_func_handle_t *handle;
+  ant_value_t state;
+
+  if (!func) return js_mkundef();
+
+  handle = calloc(1, sizeof(*handle));
+  if (!handle) {
+    if (own_func) wasm_func_delete(func);
+    return js_mkerr(js, "out of memory");
+  }
+
+  handle->func = func;
+  handle->own_func = own_func;
+
+  state = js_mkobj(js);
+  js_set_native_ptr(state, handle);
+  js_set_native_tag(state, WASM_FUNC_STATE_TAG);
+  
+  if (is_object_type(owner)) js_set_slot_wb(js, state, SLOT_ENTRIES, owner);
+  js_set_finalizer(state, wasm_func_state_finalize);
+
+  return js_heavy_mkfun(js, js_wasm_exported_func_call, state);
+}
+
 static ant_value_t wasm_wrap_export_value(ant_t *js, ant_value_t instance_obj, const wasm_exporttype_t *export_type, wasm_extern_t *external) {
   switch (wasm_extern_kind(external)) {
     case WASM_EXTERN_FUNC: {
-      ant_value_t state = js_mkobj(js);
-      js_set_slot(state, SLOT_DATA, ANT_PTR(wasm_extern_as_func(external)));
-      js_set_slot_wb(js, state, SLOT_ENTRIES, instance_obj);
-      return js_heavy_mkfun(js, js_wasm_exported_func_call, state);
+      return wasm_wrap_func(js, wasm_extern_as_func(external), instance_obj, false);
     }
     case WASM_EXTERN_GLOBAL: {
       ant_value_t obj = wasm_wrap_extern_object(
@@ -1064,6 +1131,7 @@ static ant_value_t js_wasm_table_length_getter(ant_t *js, ant_value_t *args, int
 static ant_value_t js_wasm_table_get(ant_t *js, ant_value_t *args, int nargs) {
   wasm_extern_handle_t *handle = wasm_extern_handle(js->this_val, WASM_EXTERN_WRAP_TABLE);
   wasm_ref_t *ref;
+  wasm_func_t *func;
   uint32_t index;
 
   if (!handle || !handle->as.table)
@@ -1071,22 +1139,53 @@ static ant_value_t js_wasm_table_get(ant_t *js, ant_value_t *args, int nargs) {
 
   index = (uint32_t)(nargs > 0 ? js_to_number(js, args[0]) : 0);
   ref = wasm_table_get(handle->as.table, index);
-  
+
   if (!ref) return js_mknull();
-  wasm_ref_delete(ref);
+  func = wasm_ref_as_func(ref);
   
+  if (func) {
+    ant_value_t owner = js_get_slot(js->this_val, SLOT_ENTRIES);
+    ant_value_t wrapped = wasm_wrap_func(js, func, owner, true);
+    wasm_ref_delete(ref);
+    return wrapped;
+  }
+  
+  wasm_ref_delete(ref);
   return js_mknull();
 }
 
 static ant_value_t js_wasm_table_set(ant_t *js, ant_value_t *args, int nargs) {
   wasm_extern_handle_t *handle = wasm_extern_handle(js->this_val, WASM_EXTERN_WRAP_TABLE);
+  wasm_ref_t *ref = NULL;
   uint32_t index;
 
   if (!handle || !handle->as.table) return js_mkerr_typed(js, JS_ERR_TYPE, "Expected a WebAssembly.Table");
   if (nargs < 2) return js_mkerr_typed(js, JS_ERR_TYPE, "WebAssembly.Table.set requires 2 arguments");
 
   index = (uint32_t)js_to_number(js, args[0]);
-  if (!wasm_table_set(handle->as.table, index, NULL)) return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to update WebAssembly.Table");
+  if (!(vtype(args[1]) == T_NULL || vtype(args[1]) == T_UNDEF)) {
+    ant_value_t state;
+    wasm_func_handle_t *func_handle;
+    
+    if (!is_callable(args[1]))
+      return js_mkerr_typed(js, JS_ERR_TYPE, "WebAssembly.Table.set expects a WebAssembly function or null");
+    
+    state = js_get_slot(args[1], SLOT_DATA);
+    if (!is_object_type(state) || !js_check_native_tag(state, WASM_FUNC_STATE_TAG))
+      return js_mkerr_typed(js, JS_ERR_TYPE, "WebAssembly.Table.set expects a WebAssembly function or null");
+    
+    func_handle = (wasm_func_handle_t *)js_get_native_ptr(state);
+    if (!func_handle || !func_handle->func)
+      return js_mkerr_typed(js, JS_ERR_TYPE, "WebAssembly.Table.set expects a WebAssembly function or null");
+    
+    ref = wasm_func_as_ref(func_handle->func);
+    if (!ref) return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to materialize WebAssembly function reference");
+  }
+
+  if (!wasm_table_set(handle->as.table, index, ref)) {
+    if (ref) wasm_ref_delete(ref);
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to update WebAssembly.Table");
+  }
   
   return js_mkundef();
 }
