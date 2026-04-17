@@ -361,6 +361,9 @@ static ant_value_t generator_resume_kind(
   coroutine_t *saved_active = js->active_async_coro;
   
   coro->active_parent = saved_active;
+  coro->active_prev = NULL;
+  
+  if (saved_active) saved_active->active_prev = coro;
   js->active_async_coro = coro;
   coroutine_hold(coro, CORO_HOLD_ACTIVE);
 
@@ -382,7 +385,10 @@ static ant_value_t generator_resume_kind(
   
   GC_ROOT_PIN(js, result);
   js->active_async_coro = saved_active;
+  if (saved_active) saved_active->active_prev = NULL;
+  
   coro->active_parent = NULL;
+  coro->active_prev = NULL;
   coroutine_unhold(coro, CORO_HOLD_ACTIVE);
 
   if (is_err(result)) {

@@ -103,14 +103,22 @@ typedef struct {
 static inline void sv_async_link_activation(ant_t *js, coroutine_t *coro) {
   if (!js || !coro) return;
   coro->active_parent = js->active_async_coro;
+  coro->active_prev = NULL;
+  
+  if (js->active_async_coro) js->active_async_coro->active_prev = coro;
   js->active_async_coro = coro;
   coroutine_hold(coro, CORO_HOLD_ACTIVE);
 }
 
 static inline void sv_async_unlink_activation(ant_t *js, coroutine_t *coro) {
   if (!js || !coro) return;
-  if (js->active_async_coro == coro) js->active_async_coro = coro->active_parent;
+  
+  if (coro->active_prev) coro->active_prev->active_parent = coro->active_parent;
+  else if (js->active_async_coro == coro) js->active_async_coro = coro->active_parent;
+  if (coro->active_parent) coro->active_parent->active_prev = coro->active_prev;
+  
   coro->active_parent = NULL;
+  coro->active_prev = NULL;
   coroutine_unhold(coro, CORO_HOLD_ACTIVE);
 }
 
@@ -648,8 +656,6 @@ static inline ant_value_t sv_start_async_closure(
 
   return promise;
 }
-
-
 
 static inline sv_await_result_t sv_await_value(sv_vm_t *vm, ant_t *js, ant_value_t value) {
   sv_await_result_t out = {

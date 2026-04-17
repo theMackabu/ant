@@ -59,6 +59,8 @@ typedef struct coroutine {
   ant_value_t async_promise;
   
   struct coroutine *active_parent;
+  struct coroutine *active_prev;
+  
   struct coroutine *prev;
   struct coroutine *next;
   

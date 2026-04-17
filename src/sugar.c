@@ -199,22 +199,34 @@ static void resume_coroutine_if_suspended(ant_t *js, coroutine_t *coro) {
     coro->sv_vm->suspended_resume_pending = true;
     
     coro->active_parent = js->active_async_coro;
+    coro->active_prev = NULL;
+    if (js->active_async_coro) js->active_async_coro->active_prev = coro;
+    
     js->active_async_coro = coro;
     coroutine_hold(coro, CORO_HOLD_ACTIVE);
     ant_value_t result = sv_resume_suspended(coro->sv_vm);
     
     coro->is_settled = false;
     if (coro->sv_vm->suspended) {
-      js->active_async_coro = coro->active_parent;
+      if (coro->active_prev) coro->active_prev->active_parent = coro->active_parent;
+      else if (js->active_async_coro == coro) js->active_async_coro = coro->active_parent;
+      if (coro->active_parent) coro->active_parent->active_prev = coro->active_prev;
+      
       coro->active_parent = NULL;
+      coro->active_prev = NULL;
       coroutine_unhold(coro, CORO_HOLD_ACTIVE);
       if (generator_resume_pending_request(js, coro, result)) return;
       coroutine_release(coro);
+      
       return;
     }
     
-    js->active_async_coro = coro->active_parent;
+    if (coro->active_prev) coro->active_prev->active_parent = coro->active_parent;
+    else if (js->active_async_coro == coro) js->active_async_coro = coro->active_parent;
+    if (coro->active_parent) coro->active_parent->active_prev = coro->active_prev;
+    
     coro->active_parent = NULL;
+    coro->active_prev = NULL;
     coroutine_unhold(coro, CORO_HOLD_ACTIVE);
     
     if (generator_resume_pending_request(js, coro, result)) {
