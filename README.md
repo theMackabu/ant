@@ -1,13 +1,13 @@
 # 🐜 Ant
 
-**A 9MB JavaScript runtime with 1ms cold starts.**
+_An ant carries 50× its weight. So does this one._
 
 Ant is a lightweight, high-performance JavaScript runtime built from scratch. <br>
-Fits in your pocket while Delivering near-V8 speeds in a binary smaller than most npm packages.
+Built to carry more than it weighs while delivering near-V8 speeds.
 
 ```bash
 $ ls -lh ant
--rwxr-xr-x⠀9.3M⠀ant*
+-rwxr-xr-x⠀9.0M⠀ant*
 
 # built with -Os
 -rwxr-xr-x⠀6.5M⠀ant*
