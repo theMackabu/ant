@@ -1,5 +1,6 @@
 [env]
 CC = "ccache clang"
+CXX = "ccache clang++"
 
 [tasks.build]
 path = "build"
