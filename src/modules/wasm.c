@@ -596,12 +596,6 @@ static ant_value_t wasm_module_from_bytes(ant_t *js, ant_value_t value, ant_valu
     return js_mkerr_typed(js, JS_ERR_TYPE, "%s", error_buf);
   }
 
-  if (!wasm_module_validate(store, &binary)) {
-    wasm_byte_vec_delete(&binary);
-    wasm_store_delete(store);
-    return wasm_make_compile_error(js, "Invalid WebAssembly binary");
-  }
-
   module = wasm_module_new(store, &binary);
   wasm_byte_vec_delete(&binary);
   if (!module) {
