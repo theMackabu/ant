@@ -16,6 +16,7 @@
 #include <utarray.h>
 #include <uthash.h>
 
+#include "ptr.h"
 #include "errors.h"
 #include "gc/modules.h"
 #include "internal.h"
@@ -66,6 +67,8 @@ typedef struct ffi_callback {
   UT_hash_handle hh;
 } ffi_callback_t;
 
+enum { FFI_LIBRARY_NATIVE_TAG = 0x4646494Cu }; // FFIL
+
 static ffi_lib_t *ffi_libraries = NULL;
 static ffi_ptr_t *ffi_pointers = NULL;
 static ffi_callback_t *ffi_callbacks = NULL;
@@ -83,67 +86,16 @@ static const UT_icd ffi_func_icd = {
   .dtor = NULL,
 };
 
-static ant_value_t ffi_dlopen(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t ffi_define(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t ffi_lib_call(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t ffi_call_function(ant_t *js, ffi_func_t *func, ant_value_t *args, int nargs);
-static ant_value_t ffi_alloc_memory(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t ffi_free_memory(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t ffi_read_memory(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t ffi_write_memory(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t ffi_get_pointer(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t ffi_create_callback(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t ffi_free_callback(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t ffi_read_ptr(ant_t *js, ant_value_t *args, int nargs);
-
 static ffi_type *get_ffi_type(const char *type_str);
 static void *js_to_ffi_value(ant_t *js, ant_value_t val, ffi_type *type, void *buffer);
+
+static ant_value_t ffi_define(ant_t *js, ant_value_t *args, int nargs);
+static ant_value_t ffi_lib_call(ant_t *js, ant_value_t *args, int nargs);
 static ant_value_t ffi_to_js_value(ant_t *js, void *val, ffi_type *type, const char *type_str);
-static void ffi_callback_handler(ffi_cif *cif, void *ret, void **args, void *user_data);
 
-ant_value_t ffi_library(ant_t *js) {
-  ant_value_t ffi_obj = js_mkobj(js);
-
-  js_set(js, ffi_obj, "dlopen", js_mkfun(ffi_dlopen));
-  js_set(js, ffi_obj, "alloc", js_mkfun(ffi_alloc_memory));
-  js_set(js, ffi_obj, "free", js_mkfun(ffi_free_memory));
-  js_set(js, ffi_obj, "read", js_mkfun(ffi_read_memory));
-  js_set(js, ffi_obj, "write", js_mkfun(ffi_write_memory));
-  js_set(js, ffi_obj, "pointer", js_mkfun(ffi_get_pointer));
-  js_set(js, ffi_obj, "callback", js_mkfun(ffi_create_callback));
-  js_set(js, ffi_obj, "freeCallback", js_mkfun(ffi_free_callback));
-  js_set(js, ffi_obj, "readPtr", js_mkfun(ffi_read_ptr));
-
-  const char *suffix;
-#ifdef __APPLE__
-  suffix = "dylib";
-#elif defined(__linux__)
-  suffix = "so";
-#elif defined(_WIN32)
-  suffix = "dll";
-#else
-  suffix = "so";
-#endif
-  js_set(js, ffi_obj, "suffix", js_mkstr(js, suffix, strlen(suffix)));
-
-  ant_value_t ffi_types = js_mkobj(js);
-  js_set(js, ffi_types, "void", js_mkstr(js, "void", 4));
-  js_set(js, ffi_types, "int8", js_mkstr(js, "int8", 4));
-  js_set(js, ffi_types, "int16", js_mkstr(js, "int16", 5));
-  js_set(js, ffi_types, "int", js_mkstr(js, "int", 3));
-  js_set(js, ffi_types, "int64", js_mkstr(js, "int64", 5));
-  js_set(js, ffi_types, "uint8", js_mkstr(js, "uint8", 5));
-  js_set(js, ffi_types, "uint16", js_mkstr(js, "uint16", 6));
-  js_set(js, ffi_types, "uint64", js_mkstr(js, "uint64", 6));
-  js_set(js, ffi_types, "float", js_mkstr(js, "float", 5));
-  js_set(js, ffi_types, "double", js_mkstr(js, "double", 6));
-  js_set(js, ffi_types, "pointer", js_mkstr(js, "pointer", 7));
-  js_set(js, ffi_types, "string", js_mkstr(js, "string", 6));
-  js_set(js, ffi_types, "spread", js_mkstr(js, "...", 3));
-  js_set(js, ffi_obj, "FFIType", ffi_types);
-  js_set_sym(js, ffi_obj, get_toStringTag_sym(), js_mkstr(js, "FFI", 3));
-
-  return ffi_obj;
+static ffi_lib_t *ffi_get_library_this(ant_t *js, ant_value_t this_obj) {
+  if (!is_object_type(this_obj) || !js_check_native_tag(this_obj, FFI_LIBRARY_NATIVE_TAG)) return NULL;
+  return (ffi_lib_t *)js_get_native_ptr(this_obj);
 }
 
 static void ffi_init_array(void) {
@@ -193,7 +145,9 @@ static ant_value_t ffi_dlopen(ant_t *js, ant_value_t *args, int nargs) {
   lib->handle = handle;
 
   lib->js_obj = js_mkobj(js);
-  js_set(js, lib->js_obj, "__lib_ptr", js_mknum((double)(uint64_t)lib));
+  js_set_native_ptr(lib->js_obj, lib);
+  js_set_native_tag(lib->js_obj, FFI_LIBRARY_NATIVE_TAG);
+  
   js_set(js, lib->js_obj, "define", js_mkfun(ffi_define));
   js_set(js, lib->js_obj, "call", js_mkfun(ffi_lib_call));
 
@@ -205,27 +159,26 @@ static ant_value_t ffi_dlopen(ant_t *js, ant_value_t *args, int nargs) {
 }
 
 static ant_value_t ffi_define(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t this_obj;
+  ffi_lib_t *lib;
+
   if (nargs < 2 || vtype(args[0]) != T_STR) {
     return js_mkerr(js, "define() requires function name string and signature");
   }
 
-  ant_value_t this_obj = js_getthis(js);
-  ant_value_t lib_ptr_val = js_get(js, this_obj, "__lib_ptr");
-  if (vtype(lib_ptr_val) != T_NUM) {
-    return js_mkerr(js, "Invalid library object");
-  }
+  this_obj = js_getthis(js);
+  lib = ffi_get_library_this(js, this_obj);
+  if (!lib) return js_mkerr(js, "Invalid library object");
 
   size_t func_name_len;
   const char *func_name = js_getstr(js, args[0], &func_name_len);
 
   ant_value_t sig = args[1];
   int sig_type = vtype(sig);
-  if (sig_type == T_STR || sig_type == T_NUM || sig_type == T_NULL ||
-      sig_type == T_UNDEF) {
-    return js_mkerr(js,
-                    "Signature must be an array [returnType, [argTypes...]] or "
-                    "an object {args: [...], returns: type}");
-  }
+  
+  if (sig_type == T_STR || sig_type == T_NUM || sig_type == T_NULL || sig_type == T_UNDEF) return js_mkerr(js,
+    "Signature must be an array [returnType, [argTypes...]] or an object {args: [...], returns: type}"
+  );
 
   const char *ret_type_str;
   ant_value_t arg_types_arr;
@@ -273,7 +226,6 @@ static ant_value_t ffi_define(ant_t *js, ant_value_t *args, int nargs) {
     return js_mkerr(js, "Unknown return type: %s", ret_type_str);
   }
 
-  ffi_lib_t *lib = (ffi_lib_t *)(uint64_t)js_getnum(lib_ptr_val);
   void *func_ptr = dlsym(lib->handle, func_name);
   if (!func_ptr) {
     return js_mkerr(js, "Function '%s' not found", func_name);
@@ -353,17 +305,16 @@ static ant_value_t ffi_define(ant_t *js, ant_value_t *args, int nargs) {
 
 static ant_value_t ffi_lib_call(ant_t *js, ant_value_t *args, int nargs) {
   ant_value_t lib_obj = js_getthis(js);
-  if (nargs < 1 || vtype(args[0]) != T_STR)
-    return js_mkerr(js, "call() requires function name string");
+  
+  if (!ffi_get_library_this(js, lib_obj)) return js_mkerr(js, "Invalid library object");
+  if (nargs < 1 || vtype(args[0]) != T_STR)  return js_mkerr(js, "call() requires function name string");
 
   size_t func_name_len;
   const char *func_name = js_getstr(js, args[0], &func_name_len);
 
   ant_value_t ffi_val = js_get(js, lib_obj, func_name);
   int func_index = js_getffi(ffi_val);
-  if (func_index < 0) {
-    return js_mkerr(js, "Function '%s' not defined", func_name);
-  }
+  if (func_index < 0) return js_mkerr(js, "Function '%s' not defined", func_name);
 
   return ffi_call_by_index(js, (unsigned int)func_index, args + 1, nargs - 1);
 }
@@ -994,6 +945,51 @@ ret_undef:
   return js_mkundef();
 }
 
+ant_value_t ffi_library(ant_t *js) {
+  ant_value_t ffi_obj = js_mkobj(js);
+
+  js_set(js, ffi_obj, "dlopen", js_mkfun(ffi_dlopen));
+  js_set(js, ffi_obj, "alloc", js_mkfun(ffi_alloc_memory));
+  js_set(js, ffi_obj, "free", js_mkfun(ffi_free_memory));
+  js_set(js, ffi_obj, "read", js_mkfun(ffi_read_memory));
+  js_set(js, ffi_obj, "write", js_mkfun(ffi_write_memory));
+  js_set(js, ffi_obj, "pointer", js_mkfun(ffi_get_pointer));
+  js_set(js, ffi_obj, "callback", js_mkfun(ffi_create_callback));
+  js_set(js, ffi_obj, "freeCallback", js_mkfun(ffi_free_callback));
+  js_set(js, ffi_obj, "readPtr", js_mkfun(ffi_read_ptr));
+
+  const char *suffix;
+#ifdef __APPLE__
+  suffix = "dylib";
+#elif defined(__linux__)
+  suffix = "so";
+#elif defined(_WIN32)
+  suffix = "dll";
+#else
+  suffix = "so";
+#endif
+  js_set(js, ffi_obj, "suffix", js_mkstr(js, suffix, strlen(suffix)));
+
+  ant_value_t ffi_types = js_mkobj(js);
+  js_set(js, ffi_types, "void", js_mkstr(js, "void", 4));
+  js_set(js, ffi_types, "int8", js_mkstr(js, "int8", 4));
+  js_set(js, ffi_types, "int16", js_mkstr(js, "int16", 5));
+  js_set(js, ffi_types, "int", js_mkstr(js, "int", 3));
+  js_set(js, ffi_types, "int64", js_mkstr(js, "int64", 5));
+  js_set(js, ffi_types, "uint8", js_mkstr(js, "uint8", 5));
+  js_set(js, ffi_types, "uint16", js_mkstr(js, "uint16", 6));
+  js_set(js, ffi_types, "uint64", js_mkstr(js, "uint64", 6));
+  js_set(js, ffi_types, "float", js_mkstr(js, "float", 5));
+  js_set(js, ffi_types, "double", js_mkstr(js, "double", 6));
+  js_set(js, ffi_types, "pointer", js_mkstr(js, "pointer", 7));
+  js_set(js, ffi_types, "string", js_mkstr(js, "string", 6));
+  js_set(js, ffi_types, "spread", js_mkstr(js, "...", 3));
+  js_set(js, ffi_obj, "FFIType", ffi_types);
+  js_set_sym(js, ffi_obj, get_toStringTag_sym(), js_mkstr(js, "FFI", 3));
+
+  return ffi_obj;
+}
+
 void gc_mark_ffi(ant_t *js, gc_mark_fn mark) {
   pthread_mutex_lock(&ffi_callbacks_mutex);
   ffi_callback_t *cb, *tmp;
@@ -1002,4 +998,3 @@ void gc_mark_ffi(ant_t *js, gc_mark_fn mark) {
   }
   pthread_mutex_unlock(&ffi_callbacks_mutex);
 }
-

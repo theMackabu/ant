@@ -2293,13 +2293,6 @@ js_intern_stats_t js_intern_stats(void) {
   };
 }
 
-bool is_internal_prop(const char *key, ant_offset_t klen) {
-  if (klen < 2) return false;
-  if (key[0] != '_' || key[1] != '_') return false;
-  if (klen == STR_PROTO_LEN && memcmp(key, STR_PROTO, STR_PROTO_LEN) == 0) return false;
-  return true;
-}
-
 struct func_format {
   const char *prefix;
   size_t prefix_len;
@@ -6031,7 +6024,7 @@ static ant_value_t object_enum(ant_t *js, ant_value_t obj, enum obj_enum_mode mo
   ant_object_t *ptr = js_obj_ptr(obj);
   if (!ptr || !ptr->shape) return mkarr(js);
   if (ptr->is_exotic && ptr->exotic_keys) {
-    if (mode == OBJ_ENUM_KEYS && (!ptr->exotic_ops || !ptr->exotic_ops->getter)) return ptr->exotic_keys(js, obj);
+    if (mode == OBJ_ENUM_KEYS) return ptr->exotic_keys(js, obj);
     if (ptr->exotic_ops && ptr->exotic_ops->getter) {
       dynamic_kv_mapper_fn mapper = (mode == OBJ_ENUM_ENTRIES) ? map_to_entry : NULL;
       return iterate_dynamic_keys(js, obj, mapper);
@@ -6069,7 +6062,6 @@ static ant_value_t object_enum(ant_t *js, ant_value_t obj, enum obj_enum_mode mo
     ant_offset_t klen = (ant_offset_t)strlen(key);
     ant_value_t val = ant_object_prop_get_unchecked(ptr, i);
 
-    if (is_internal_prop(key, klen)) continue;
     if (is_arr && is_array_index(key, klen)) {
     ant_offset_t doff = get_dense_buf(obj);
     if (doff) {
@@ -6259,7 +6251,6 @@ static ant_value_t for_in_keys_add(ant_t *js, ant_value_t out, ant_value_t seen,
   ant_offset_t key_off = vstr(js, key, &key_len);
   const char *key_ptr = (const char *)(uintptr_t)(key_off);
 
-  if (is_internal_prop(key_ptr, key_len)) goto done;
   if (lkp(js, seen, key_ptr, key_len) != 0) goto done;
 
   ant_value_t mark = setprop_cstr(js, seen, key_ptr, key_len, js_true);
@@ -6352,8 +6343,6 @@ shape_iter:
 
       const char *kstr = prop->key.interned;
       klen = (ant_offset_t)strlen(kstr);
-      if (is_internal_prop(kstr, klen)) continue;
-
       if (is_arr && is_array_index(kstr, klen)) {
       doff = get_dense_buf(as_cur);
       if (doff) {
@@ -7245,7 +7234,6 @@ static ant_value_t builtin_object_defineProperties(ant_t *js, ant_value_t *args,
   ant_value_t descriptor = js_mkundef();
 
   while (js_prop_iter_next(&iter, &key, &key_len, &descriptor)) {
-    if (is_internal_prop(key, key_len)) continue;
     ant_value_t prop_key = js_mkstr(js, key, key_len);
     ant_value_t define_args[3] = { obj, prop_key, descriptor };
     ant_value_t result = builtin_object_defineProperty(js, define_args, 3);
@@ -7273,7 +7261,7 @@ bool js_is_own_enumerable_prop(
     return (ant_shape_get_attrs(source_ptr->shape, key->slot) & ANT_PROP_ATTR_ENUMERABLE) != 0;
   }
 
-  if (!key->str || is_internal_prop(key->str, key->key_len)) return false;
+  if (!key->str) return false;
 
   if (!source_ptr || source_ptr->is_exotic) {
     descriptor_entry_t *desc = lookup_descriptor(js_as_obj(source), key->str, key->key_len);
@@ -7348,8 +7336,6 @@ ant_value_t builtin_object_freeze(ant_t *js, ant_value_t *args, int nargs) {
     
     if (prop->type == ANT_SHAPE_KEY_STRING) {
       const char *key = prop->key.interned;
-      size_t klen = strlen(key);
-      if (is_internal_prop(key, klen)) continue;
       ant_shape_set_attrs_interned(ptr->shape, key, attrs);
     } else ant_shape_set_attrs_symbol(ptr->shape, prop->key.sym_off, attrs);
   }
@@ -7395,8 +7381,6 @@ static ant_value_t builtin_object_seal(ant_t *js, ant_value_t *args, int nargs) 
 
     if (prop->type == ANT_SHAPE_KEY_STRING) {
       const char *key = prop->key.interned;
-      size_t klen = strlen(key);
-      if (is_internal_prop(key, klen)) continue;
       ant_shape_set_attrs_interned(ptr->shape, key, attrs);
     } else {
       ant_shape_set_attrs_symbol(ptr->shape, prop->key.sym_off, attrs);
@@ -7708,7 +7692,6 @@ static ant_value_t builtin_object_getOwnPropertyNames(ant_t *js, ant_value_t *ar
     const char *key = prop->key.interned;
     ant_offset_t klen = (ant_offset_t)strlen(key);
 
-    if (is_internal_prop(key, klen)) continue;
     if (is_arr_obj && own_prop_names_is_dense_shadow(js, obj, key, klen)) continue;
     arr_set(js, arr, idx++, js_mkstr(js, key, (size_t)klen));
   }
@@ -14587,7 +14570,7 @@ static ant_value_t setup_func_prototype_property(ant_t *js, ant_value_t func, bo
 }
 
 ant_value_t js_cfunc_expose_named(ant_t *js, ant_value_t cfunc, const char *name, size_t name_len) {
-  if (vtype(cfunc) != T_CFUNC || !name || is_internal_prop(name, (ant_offset_t)name_len)) return cfunc;
+  if (vtype(cfunc) != T_CFUNC || !name) return cfunc;
 
   const ant_cfunc_meta_t *base = js_as_cfunc_meta(cfunc);
   if (!base) return cfunc;

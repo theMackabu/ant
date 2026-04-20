@@ -1446,7 +1446,6 @@ static void env_foreach(ant_t *js, ant_value_t env_obj, env_iter_cb cb, void *ct
   const char *key; size_t key_len; ant_value_t value;
   
   while (js_prop_iter_next(&iter, &key, &key_len, &value)) {
-    if (key_len >= 2 && key[0] == '_' && key[1] == '_') continue;
     if (vtype(value) != T_STR) continue;
     
     CSTR_BUF(buf, 256);
