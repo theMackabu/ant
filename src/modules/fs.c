@@ -32,6 +32,7 @@
 #include "modules/events.h"
 #include "modules/stream.h"
 #include "modules/symbol.h"
+#include "modules/url.h"
 
 typedef enum {
   FS_ENC_NONE = 0,
@@ -1097,12 +1098,38 @@ static void fs_request_fail(fs_request_t *req, int uv_code) {
   req->error_msg = strdup(uv_strerror(uv_code));
 }
 
+static ant_value_t fs_coerce_file_url_path(ant_t *js, ant_value_t arg) {
+  ant_value_t href = js_getprop_fallback(js, arg, "href");
+  if (vtype(href) != T_STR) return js_mkundef();
+
+  const char *href_str = js_getstr(js, href, NULL);
+  if (!href_str) return js_mkundef();
+
+  url_state_t parsed = {0};
+  if (parse_url_to_state(href_str, NULL, &parsed) != 0) return js_mkundef();
+
+  ant_value_t path = js_mkundef();
+  if (parsed.protocol && strcmp(parsed.protocol, "file:") == 0) {
+  char *decoded = url_decode_component(parsed.pathname);
+  if (decoded) {
+    path = js_mkstr(js, decoded, strlen(decoded));
+    free(decoded);
+  }}
+
+  url_state_clear(&parsed);
+  return path;
+}
+
 static ant_value_t fs_coerce_path(ant_t *js, ant_value_t arg) {
   if (vtype(arg) == T_STR) return arg;
-  if (is_object_type(arg)) {
-    ant_value_t pathname = js_get(js, arg, "pathname");
-    if (vtype(pathname) == T_STR) return pathname;
-  }
+  if (!is_object_type(arg)) return js_mkundef();
+
+  ant_value_t path = fs_coerce_file_url_path(js, arg);
+  if (!is_undefined(path)) return path;
+
+  path = js_get(js, arg, "pathname");
+  if (vtype(path) == T_STR) return path;
+
   return js_mkundef();
 }
 
@@ -2099,10 +2126,11 @@ static ant_value_t builtin_fs_readBytesSync(ant_t *js, ant_value_t *args, int na
 static ant_value_t builtin_fs_readFile(ant_t *js, ant_value_t *args, int nargs) {
   if (nargs < 1) return js_mkerr(js, "readFile() requires a path argument");
   
-  if (vtype(args[0]) != T_STR) return js_mkerr(js, "readFile() path must be a string");
+  ant_value_t path_val = fs_coerce_path(js, args[0]);
+  if (vtype(path_val) != T_STR) return js_mkerr(js, "readFile() path must be a string or URL");
   
   size_t path_len;
-  char *path = js_getstr(js, args[0], &path_len);
+  char *path = js_getstr(js, path_val, &path_len);
   if (!path) return js_mkerr(js, "Failed to get path string");
   
   

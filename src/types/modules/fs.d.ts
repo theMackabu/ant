@@ -66,10 +66,10 @@ declare module 'fs' {
   };
   const promises: typeof import('fs/promises');
 
-  function readFile(path: string, encoding: Encoding): Promise<string>;
-  function readFile(path: string): Promise<Uint8Array>;
-  function readFileSync(path: string, encoding: Encoding | { encoding: Encoding }): string;
-  function readFileSync(path: string): Uint8Array;
+  function readFile(path: string | URL, encoding: Encoding): Promise<string>;
+  function readFile(path: string | URL): Promise<Uint8Array>;
+  function readFileSync(path: string | URL, encoding: Encoding | { encoding: Encoding }): string;
+  function readFileSync(path: string | URL): Uint8Array;
   function read(
     fd: number,
     buffer: ArrayBufferView,
@@ -245,8 +245,8 @@ declare module 'fs/promises' {
     O_APPEND: number;
   };
 
-  function readFile(path: string, encoding: Encoding): Promise<string>;
-  function readFile(path: string): Promise<Uint8Array>;
+  function readFile(path: string | URL, encoding: Encoding): Promise<string>;
+  function readFile(path: string | URL): Promise<Uint8Array>;
   function open(path: string, flags?: string, mode?: number): Promise<FileHandle>;
   function close(fd: number): Promise<void>;
   function writeFile(path: string, data: string | ArrayBufferView): Promise<void>;
