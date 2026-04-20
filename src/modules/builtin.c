@@ -312,7 +312,10 @@ static ant_value_t js_stats_fn(ant_t *js, ant_value_t *args, int nargs) {
     uintptr_t base = (uintptr_t)js->cstk.base;
     uintptr_t curr = (uintptr_t)&marker;
     size_t used = (base > curr) ? (base - curr) : (curr - base);
-    js_set(js, result, "cstack", js_mknum((double)used));
+    ant_value_t cstk = js_newobj(js);
+    js_set(js, cstk, "used", js_mknum((double)used));
+    js_set(js, cstk, "limit", js_mknum((double)js->cstk.limit));
+    js_set(js, result, "cstack", cstk);
   } else js_set(js, result, "cstack", js_mknum(0));
   
 #ifdef __APPLE__
