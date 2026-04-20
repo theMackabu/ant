@@ -60,7 +60,7 @@ Ant targets the [WinterTC Minimum Common API](https://min-common-api.proposal.wi
 
 ### Cold start
 
-Measures the time to import [Hono](https://hono.dev), register routes, and exit. Each runtime loads he same `bench-coldstart.js` script from `examples/npm/hono/` that creates a Hono app with two routes, prints "ready", and calls `process.exit(0)`. No HTTP server is actually started, this isolates module resolution and initialization overhead.
+Measures the time to import [Hono](https://hono.dev), register routes, and exit. Each runtime loads the same `bench-coldstart.js` script from `examples/npm/hono/` that creates a Hono app with two routes, prints "ready", and calls `process.exit(0)`. No HTTP server is actually started, this isolates module resolution and initialization overhead.
 
 Measured with hyperfine (10 warmup runs, 100 timed runs):
 
