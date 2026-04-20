@@ -584,7 +584,9 @@ static ant_value_t wasm_module_from_bytes(ant_t *js, ant_value_t value, ant_valu
   wasm_byte_vec_t binary = WASM_EMPTY_VEC;
   wasm_store_t *store = NULL;
   wasm_module_t *module = NULL;
+  
   char error_buf[128] = {0};
+  bool suppress_wasi_warning = false;
 
   *out_module = js_mkundef();
 
@@ -596,8 +598,16 @@ static ant_value_t wasm_module_from_bytes(ant_t *js, ant_value_t value, ant_valu
     return js_mkerr_typed(js, JS_ERR_TYPE, "%s", error_buf);
   }
 
+  suppress_wasi_warning = wasi_bytes_need_wasi_command_warning_suppression(
+    (const uint8_t *)binary.data, binary.size
+  );
+  
+  if (suppress_wasi_warning) wasm_runtime_set_log_level(WASM_LOG_LEVEL_ERROR);
   module = wasm_module_new(store, &binary);
+  
+  if (suppress_wasi_warning) wasm_runtime_set_log_level(WASM_LOG_LEVEL_WARNING);
   wasm_byte_vec_delete(&binary);
+  
   if (!module) {
     wasm_store_delete(store);
     return wasm_make_compile_error(js, "Failed to compile WebAssembly module");
@@ -768,12 +778,13 @@ static ant_value_t wasm_instantiate_module(ant_t *js, ant_value_t module_obj, an
   wasm_instance_t *instance = NULL;
   ant_value_t instance_obj = js_mkundef();
   ant_value_t exports_obj = js_mkobj(js);
-
   *out_instance = js_mkundef();
 
-  if (!module_handle) return js_mkerr_typed(js, JS_ERR_TYPE, "Expected a WebAssembly.Module");
+  if (!module_handle) 
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Expected a WebAssembly.Module");
 
-  if (wasi_module_has_wasi_imports(module_handle->module)) {
+  if (wasi_module_has_wasi_imports(module_handle->module)
+      && wasi_module_is_command_or_reactor(module_handle->module)) {
     ant_value_t wasi_opts = is_object_type(import_obj) ? js_get(js, import_obj, "wasi") : js_mkundef();
     if (!is_object_type(import_obj) || is_object_type(wasi_opts)) {
       ant_value_t bytes_src = js_get_slot(module_obj, SLOT_MAP);
@@ -1205,8 +1216,9 @@ static ant_value_t js_wasm_validate(ant_t *js, ant_value_t *args, int nargs) {
   wasm_byte_vec_t binary = WASM_EMPTY_VEC;
   wasm_store_t *store;
   
-  char error_buf[128] = {0};
   bool ok;
+  char error_buf[128] = {0};
+  bool suppress_wasi_warning = false;
 
   if (nargs < 1) return js_false;
   if (!ensure_wasm_engine()) return js_false;
@@ -1217,7 +1229,14 @@ static ant_value_t js_wasm_validate(ant_t *js, ant_value_t *args, int nargs) {
     return js_false;
   }
 
+  suppress_wasi_warning = wasi_bytes_need_wasi_command_warning_suppression(
+    (const uint8_t *)binary.data, binary.size
+  );
+  
+  if (suppress_wasi_warning) wasm_runtime_set_log_level(WASM_LOG_LEVEL_ERROR);
   ok = wasm_module_validate(store, &binary);
+  
+  if (suppress_wasi_warning) wasm_runtime_set_log_level(WASM_LOG_LEVEL_WARNING);
   wasm_byte_vec_delete(&binary);
   wasm_store_delete(store);
   

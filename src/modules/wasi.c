@@ -35,6 +35,181 @@ typedef struct {
   wasm_function_inst_t func;
 } wasi_func_env_t;
 
+enum {
+  WASM_SECTION_IMPORT = 2,
+  WASM_SECTION_EXPORT = 7,
+};
+
+static bool wasm_read_u32_leb(const uint8_t *buf, size_t len, size_t *offset, uint32_t *out) {
+  uint32_t value = 0;
+  uint32_t shift = 0;
+
+  while (*offset < len && shift < 35) {
+    uint8_t byte = buf[(*offset)++];
+    value |= (uint32_t)(byte & 0x7f) << shift;
+    
+    if ((byte & 0x80) == 0) {
+      *out = value;
+      return true;
+    }
+    
+    shift += 7;
+  }
+
+  return false;
+}
+
+static bool wasm_read_name(const uint8_t *buf, size_t len, size_t *offset, const uint8_t **data, uint32_t *name_len) {
+  uint32_t size = 0;
+  
+  if (
+    !wasm_read_u32_leb(buf, len, offset, &size) 
+    || *offset + size > len
+  ) return false;
+  
+  *data = buf + *offset;
+  *name_len = size;
+  *offset += size;
+  
+  return true;
+}
+
+static bool wasm_name_equals(const uint8_t *data, uint32_t len, const char *expected) {
+  size_t expected_len = strlen(expected);
+  return len == expected_len && memcmp(data, expected, expected_len) == 0;
+}
+
+static bool wasi_bytes_have_wasi_imports(const uint8_t *wasm_bytes, size_t wasm_len) {
+  size_t offset = 8;
+
+  if (!wasm_bytes || wasm_len < 8 || memcmp(wasm_bytes, "\0asm\x01\0\0\0", 8) != 0)
+    return false;
+
+  while (offset < wasm_len) {
+    uint8_t section_id = wasm_bytes[offset++];
+    uint32_t section_size = 0;
+    const uint8_t *section;
+    size_t section_offset = 0;
+    size_t section_len;
+    
+    if (
+      !wasm_read_u32_leb(wasm_bytes, wasm_len, &offset, &section_size)
+      || offset + section_size > wasm_len
+    ) return false;
+    
+    section = wasm_bytes + offset;
+    section_len = section_size;
+    offset += section_size;
+
+    if (section_id != WASM_SECTION_IMPORT) continue;
+    if (!wasm_read_u32_leb(section, section_size, &section_offset, &section_size))
+      return false;
+    
+    for (uint32_t i = 0; i < section_size; i++) {
+      const uint8_t *module_name = NULL;
+      const uint8_t *field_name = NULL;
+      uint32_t module_name_len = 0;
+      uint32_t field_name_len = 0;
+      uint32_t discard = 0;
+      uint32_t flags = 0;
+      
+      if (!wasm_read_name(section, section_len, &section_offset, &module_name, &module_name_len)
+          || !wasm_read_name(section, section_len, &section_offset, &field_name, &field_name_len)
+          || section_offset >= section_len)
+        return false;
+      
+      if (wasm_name_equals(module_name, module_name_len, "wasi_snapshot_preview1"))
+        return true;
+      
+      switch (section[section_offset++]) {
+        case 0:
+          if (!wasm_read_u32_leb(section, section_len, &section_offset, &discard))
+            return false;
+          break;
+        case 1: {
+          if (section_offset >= section_len) return false;
+          section_offset++;
+          if (!wasm_read_u32_leb(section, section_len, &section_offset, &flags)
+              || !wasm_read_u32_leb(section, section_len, &section_offset, &discard))
+            return false;
+          if ((flags & 0x1) != 0
+              && !wasm_read_u32_leb(section, section_len, &section_offset, &discard))
+            return false;
+          break;
+        }
+        case 2:
+          if (!wasm_read_u32_leb(section, section_len, &section_offset, &flags)
+              || !wasm_read_u32_leb(section, section_len, &section_offset, &discard))
+            return false;
+          if ((flags & 0x1) != 0
+              && !wasm_read_u32_leb(section, section_len, &section_offset, &discard))
+            return false;
+          break;
+        case 3:
+          if (section_offset + 2 > section_len) return false;
+          section_offset += 2;
+          break;
+        default:
+          return false;
+      }
+    }
+  }
+
+  return false;
+}
+
+static bool wasi_bytes_have_command_or_reactor_entry(const uint8_t *wasm_bytes, size_t wasm_len) {
+  size_t offset = 8;
+
+  if (!wasm_bytes || wasm_len < 8 || memcmp(wasm_bytes, "\0asm\x01\0\0\0", 8) != 0)
+    return false;
+
+  while (offset < wasm_len) {
+    uint8_t section_id = wasm_bytes[offset++];
+    uint32_t section_size = 0;
+    const uint8_t *section;
+    size_t section_offset = 0;
+    size_t section_len;
+
+    if (!wasm_read_u32_leb(wasm_bytes, wasm_len, &offset, &section_size)
+        || offset + section_size > wasm_len)
+      return false;
+
+    section = wasm_bytes + offset;
+    section_len = section_size;
+    offset += section_size;
+
+    if (section_id != WASM_SECTION_EXPORT) continue;
+    if (!wasm_read_u32_leb(section, section_len, &section_offset, &section_size))
+      return false;
+
+    for (uint32_t i = 0; i < section_size; i++) {
+      const uint8_t *name = NULL;
+      uint32_t name_len = 0;
+      uint32_t discard = 0;
+
+      if (!wasm_read_name(section, section_len, &section_offset, &name, &name_len)
+          || section_offset >= section_len)
+        return false;
+
+      if (section[section_offset++] != 0) {
+        if (!wasm_read_u32_leb(section, section_len, &section_offset, &discard))
+          return false;
+        continue;
+      }
+
+      if (!wasm_read_u32_leb(section, section_len, &section_offset, &discard))
+        return false;
+
+      if (wasm_name_equals(name, name_len, "_start")
+          || wasm_name_equals(name, name_len, "_initialize"))
+        return true;
+    }
+  }
+
+  return false;
+}
+
 static inline bool wasi_is_proc_exit_exception(const char *exception) {
   return exception != NULL && strstr(exception, "wasi proc exit") != NULL;
 }
@@ -107,6 +282,43 @@ bool wasi_module_has_wasi_imports(void *c_api_module) {
 
   wasm_importtype_vec_delete(&import_types);
   return has_wasi;
+}
+
+bool wasi_module_is_command_or_reactor(void *c_api_module) {
+  wasm_exporttype_vec_t export_types = {0};
+  bool has_entry = false;
+
+  wasm_module_exports((wasm_module_t *)c_api_module, &export_types);
+
+  for (size_t i = 0; i < export_types.size; i++) {
+    const wasm_name_t *name = wasm_exporttype_name(export_types.data[i]);
+    const wasm_externtype_t *type = wasm_exporttype_type(export_types.data[i]);
+    const wasm_functype_t *func_type;
+    size_t name_len;
+
+    if (!name || wasm_externtype_kind(type) != WASM_EXTERN_FUNC) continue;
+    name_len = name->size;
+    if (name_len > 0 && name->data[name_len - 1] == '\0') name_len--;
+
+    if (!((name_len == 6 && memcmp(name->data, "_start", 6) == 0)
+          || (name_len == 11 && memcmp(name->data, "_initialize", 11) == 0)))
+      continue;
+
+    func_type = wasm_externtype_as_functype_const(type);
+    if (!func_type) continue;
+    if (wasm_functype_params(func_type)->size == 0 && wasm_functype_results(func_type)->size == 0) {
+      has_entry = true;
+      break;
+    }
+  }
+
+  wasm_exporttype_vec_delete(&export_types);
+  return has_entry;
+}
+
+bool wasi_bytes_need_wasi_command_warning_suppression(const uint8_t *wasm_bytes, size_t wasm_len) {
+  return wasi_bytes_have_wasi_imports(wasm_bytes, wasm_len)
+      && !wasi_bytes_have_command_or_reactor_entry(wasm_bytes, wasm_len);
 }
 
 static void wasi_bind_func_export(
