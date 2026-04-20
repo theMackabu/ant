@@ -23,6 +23,11 @@
 #define ARENA_GROW_INCREMENT  (8ULL * 1024 * 1024)
 #define ANT_CLOSURE_ARENA_MAX (2ULL * 1024 * 1024 * 1024)
 
+// preferred base for mmap on platforms where the kernel may hand out
+// addresses above the 47-bit NaN-boxing ceiling. We pick 0x100000000
+// inside the 47-bit range and above the typical text/data segments.
+#define ANT_MMAP_HINT ((void *)0x100000000ULL)
+
 typedef struct {
   uint8_t *base;
   size_t committed;
@@ -65,8 +70,13 @@ static inline int ant_arena_decommit(void *base, size_t old_size, size_t new_siz
 #else
 
 static inline void *ant_arena_reserve(size_t max_size) {
-  void *p = mmap(NULL, max_size, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
+  void *p = mmap(ANT_MMAP_HINT, max_size, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
   if (p == MAP_FAILED) return NULL;
+  if ((uintptr_t)p >> 47) {
+    munmap(p, max_size);
+    p = mmap(NULL, max_size, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (p == MAP_FAILED) return NULL;
+  }
   return mantissa_chk(p, "mmap");
 }
 
@@ -95,8 +105,14 @@ static inline void ant_arena_free(void *base, size_t reserved_size) {
 }
 
 static inline void *ant_os_alloc(size_t size) {
-  void *p = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
-  return (p == MAP_FAILED) ? NULL : p;
+  void *p = mmap(ANT_MMAP_HINT, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+  if (p == MAP_FAILED) return NULL;
+  if ((uintptr_t)p >> 47) {
+    munmap(p, size);
+    p = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (p == MAP_FAILED) return NULL;
+  }
+  return mantissa_chk(p, "mmap");
 }
 
 static inline int ant_arena_decommit(void *base, size_t old_size, size_t new_size) {
