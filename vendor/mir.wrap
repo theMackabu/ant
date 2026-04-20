@@ -1,7 +1,6 @@
 [wrap-git]
-url = https://github.com/vnmakarov/mir.git
+url = https://github.com/themackabu/mir.git
 revision = head
-patch_directory = mir
 depth = 1
 
 [provide]
