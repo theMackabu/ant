@@ -22,18 +22,20 @@ size_t os_thread_stack_size(void) {
   ULONG_PTR low, high;
   GetCurrentThreadStackLimits(&low, &high);
   return (size_t)(high - low);
+#elif defined(__APPLE__)
+  return pthread_get_stacksize_np(pthread_self());
 #else
-  struct rlimit rl;
-  if (getrlimit(RLIMIT_STACK, &rl) == 0 && rl.rlim_cur != RLIM_INFINITY)
-    return (size_t)rl.rlim_cur;
-
   pthread_attr_t attr;
   size_t sz = 0;
-  if (pthread_attr_init(&attr) == 0) {
+  if (pthread_getattr_np(pthread_self(), &attr) == 0) {
     pthread_attr_getstacksize(&attr, &sz);
     pthread_attr_destroy(&attr);
     if (sz > 0) return sz;
   }
+
+  struct rlimit rl;
+  if (getrlimit(RLIMIT_STACK, &rl) == 0 && rl.rlim_cur != RLIM_INFINITY)
+    return (size_t)rl.rlim_cur;
 
   return 8 * 1024 * 1024;
 #endif
