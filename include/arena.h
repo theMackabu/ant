@@ -16,18 +16,6 @@
 #include <errno.h>
 #endif
 
-#define ANT_ARENA_MIN (32 * 1024)
-#define ANT_ARENA_MAX (64ULL * 1024 * 1024 * 1024)
-
-#define ANT_ARENA_THRESHOLD   (256ULL * 1024 * 1024)
-#define ARENA_GROW_INCREMENT  (8ULL * 1024 * 1024)
-#define ANT_CLOSURE_ARENA_MAX (2ULL * 1024 * 1024 * 1024)
-
-// preferred base for mmap on platforms where the kernel may hand out
-// addresses above the 47-bit NaN-boxing ceiling. We pick 0x100000000
-// inside the 47-bit range and above the typical text/data segments.
-#define ANT_MMAP_HINT ((void *)0x100000000ULL)
-
 typedef struct {
   uint8_t *base;
   size_t committed;
@@ -38,6 +26,44 @@ typedef struct {
   size_t epoch_offset;
   void *free_list;
 } ant_fixed_arena_t;
+
+#define ANT_ARENA_MIN (32 * 1024)
+#define ANT_ARENA_MAX (64ULL * 1024 * 1024 * 1024)
+
+#define ANT_ARENA_THRESHOLD   (256ULL * 1024 * 1024)
+#define ARENA_GROW_INCREMENT  (8ULL * 1024 * 1024)
+#define ANT_CLOSURE_ARENA_MAX (2ULL * 1024 * 1024 * 1024)
+
+// the kernel can hand out mmap addresses above the 47-bit NaN-boxing ceiling.
+// ant_mmap_low() probes the low VA range with MAP_FIXED_NOREPLACE
+// before falling back to an unpinned mmap. only needed on Linux
+#ifdef __linux__s
+
+#ifndef MAP_FIXED_NOREPLACE
+#define MAP_FIXED_NOREPLACE 0x100000
+#endif
+
+#define ANT_MMAP_LOW_START  0x10000000000ULL
+#define ANT_MMAP_LOW_END    0x7F0000000000ULL
+#define ANT_MMAP_LOW_STEP   0x10000000000ULL
+
+static inline void *ant_mmap_low(size_t size, int prot, int extra_flags) {
+  int flags = MAP_PRIVATE | MAP_ANON | extra_flags;
+  
+  for (
+    uintptr_t addr = ANT_MMAP_LOW_START;
+    addr + size <= ANT_MMAP_LOW_END;
+    addr += ANT_MMAP_LOW_STEP
+  ) {
+    void *p = mmap((void *)addr, size, prot, flags | MAP_FIXED_NOREPLACE, -1, 0);
+    if (p != MAP_FAILED) return p;
+  }
+  
+  void *p = mmap(NULL, size, prot, flags, -1, 0);
+  return (p == MAP_FAILED) ? NULL : p;
+}
+
+#endif
 
 #ifdef _WIN32
 
@@ -70,14 +96,13 @@ static inline int ant_arena_decommit(void *base, size_t old_size, size_t new_siz
 #else
 
 static inline void *ant_arena_reserve(size_t max_size) {
-  void *p = mmap(ANT_MMAP_HINT, max_size, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
-  if (p == MAP_FAILED) return NULL;
-  if ((uintptr_t)p >> 47) {
-    munmap(p, max_size);
-    p = mmap(NULL, max_size, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
-    if (p == MAP_FAILED) return NULL;
-  }
-  return mantissa_chk(p, "mmap");
+#ifdef __linux__
+  void *p = ant_mmap_low(max_size, PROT_NONE, 0);
+#else
+  void *p = mmap(NULL, max_size, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
+  if (p == MAP_FAILED) p = NULL;
+#endif
+  return p ? mantissa_chk(p, "mmap") : NULL;
 }
 
 static inline int ant_arena_commit(void *base, size_t old_size, size_t new_size) {
@@ -105,14 +130,13 @@ static inline void ant_arena_free(void *base, size_t reserved_size) {
 }
 
 static inline void *ant_os_alloc(size_t size) {
-  void *p = mmap(ANT_MMAP_HINT, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
-  if (p == MAP_FAILED) return NULL;
-  if ((uintptr_t)p >> 47) {
-    munmap(p, size);
-    p = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
-    if (p == MAP_FAILED) return NULL;
-  }
-  return mantissa_chk(p, "mmap");
+#ifdef __linux__
+  void *p = ant_mmap_low(size, PROT_READ | PROT_WRITE, 0);
+#else
+  void *p = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+  if (p == MAP_FAILED) p = NULL;
+#endif
+  return p ? mantissa_chk(p, "mmap") : NULL;
 }
 
 static inline int ant_arena_decommit(void *base, size_t old_size, size_t new_size) {

@@ -94,7 +94,7 @@ if host_machine.system() == 'windows'
 elif host_machine.system() == 'darwin'
   ant_link_args += ['-Wl,-stack_size,0x2000000']
 else
-  ant_link_args += ['-Wl,-z,stacksize=134217728']
+  ant_link_args += ['-Wl,-z,stack-size=134217728']
 endif
 if get_option('linker_map')
   ant_linkmap = meson.project_build_root() + '/ant.linkmap'

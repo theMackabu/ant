@@ -17,6 +17,7 @@ $ ls -lh ant
 
 - [Why Ant?](#why-ant)
 - [Installation](#installation)
+- [Benchmarks](#benchmarks)
 - [Spec conformance](#spec-conformance)
 - [Building Ant](#building-ant)
 - [Security](#security)
@@ -25,13 +26,13 @@ $ ls -lh ant
 
 ## Why Ant?
 
-|                     | Ant         | Node      | Bun      | Deno      |
-| ------------------- | ----------- | --------- | -------- | --------- |
-| Binary size         | **~9 MB**   | ~120 MB   | ~60 MB   | ~90 MB    |
-| Cold start          | **~3-5 ms** | ~30-50 ms | ~5-10 ms | ~20-30 ms |
-| Engine              | Ant Silver  | V8        | JSC      | V8        |
-| JIT                 | ✓           | ✓         | ✓        | ✓         |
-| WinterTC conformant | ✓           | partial   | ✓        | ✓         |
+|                     | Ant        | Node    | Bun    | Deno   |
+| ------------------- | ---------- | ------- | ------ | ------ |
+| Binary size         | **~9 MB**  | ~120 MB | ~60 MB | ~90 MB |
+| Cold start          | **~5 ms**  | ~31 ms  | ~13 ms | ~25 ms |
+| Engine              | Ant Silver | V8      | JSC    | V8     |
+| JIT                 | ✓          | ✓       | ✓      | ✓      |
+| WinterTC conformant | ✓          | partial | ✓      | ✓      |
 
 Ant is designed for environments where size and startup time matter: serverless functions, edge computing, embedded systems, CLI tools, and anywhere you'd want JavaScript but can't afford a 50MB+ runtime.
 
@@ -54,6 +55,43 @@ Ant targets the [WinterTC Minimum Common API](https://min-common-api.proposal.wi
 | js-zoo (ES2016+) | ~86%      |                                            |
 | js-zoo (overall) | **88%**   | 1211/1368 passing                          |
 | test262          | ~50%      | Improving, focus is on real-world coverage |
+
+## Benchmarks
+
+### Cold start
+
+Measures the time to import [Hono](https://hono.dev), register routes, and exit. Each runtime loads he same `bench-coldstart.js` script from `examples/npm/hono/` that creates a Hono app with two routes, prints "ready", and calls `process.exit(0)`. No HTTP server is actually started, this isolates module resolution and initialization overhead.
+
+Measured with hyperfine (10 warmup runs, 100 timed runs):
+
+```bash
+hyperfine --warmup 10 --runs 100 \
+  'ant  examples/npm/hono/bench-coldstart.js' \
+  'node examples/npm/hono/bench-coldstart.js' \
+  'bun  examples/npm/hono/bench-coldstart.js' \
+  'deno run --allow-read --allow-env examples/npm/hono/bench-coldstart.js'
+```
+
+| Runtime | Mean       | Min     | Max      | Relative     |
+| ------- | ---------- | ------- | -------- | ------------ |
+| **Ant** | **5.7 ms** | 5.0 ms  | 7.3 ms   | **1.00**     |
+| Bun     | 12.8 ms    | 11.6 ms | 16.4 ms  | 2.24× slower |
+| Deno    | 24.8 ms    | 22.2 ms | 29.4 ms  | 4.32× slower |
+| Node    | 31.1 ms    | 27.1 ms | 151.7 ms | 5.41× slower |
+
+<details>
+<summary>Environment</summary>
+
+| Detail   | Value                             |
+| -------- | --------------------------------- |
+| Hardware | Apple M4 Pro, 24 GB RAM, 14 cores |
+| OS       | macOS 15.7.5 (arm64)              |
+| Ant      | 0.9.1                             |
+| Node     | 25.9.0                            |
+| Bun      | 1.3.13                            |
+| Deno     | 2.7.12                            |
+
+</details>
 
 ## Building Ant
 
