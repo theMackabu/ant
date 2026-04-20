@@ -36,7 +36,7 @@ $ ls -lh ant
 
 Ant is designed for environments where size and startup time matter: serverless functions, edge computing, embedded systems, CLI tools, and anywhere you'd want JavaScript but can't afford a 50MB+ runtime.
 
-The engine, Ant Silver is hand-built, not a wrapper around V8, JSC, or SpiderMonkey. The JIT compiler uses [MIR](https://github.com/vnmakarov/mir), a lightweight JIT backend that enables compiled performance in a fraction of the binary size of traditional JIT engines.
+The engine, Ant Silver is hand-built, not a wrapper around V8, JSC, or SpiderMonkey. The JIT compiler uses a fork of [MIR](https://github.com/themackabu/mir), a lightweight backend that enables near compiled performance.
 
 ## Installation
 
