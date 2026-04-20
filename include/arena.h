@@ -37,7 +37,7 @@ typedef struct {
 // the kernel can hand out mmap addresses above the 47-bit NaN-boxing ceiling.
 // ant_mmap_low() probes the low VA range with MAP_FIXED_NOREPLACE
 // before falling back to an unpinned mmap. only needed on Linux
-#ifdef __linux__s
+#ifdef __linux__
 
 #ifndef MAP_FIXED_NOREPLACE
 #define MAP_FIXED_NOREPLACE 0x100000
