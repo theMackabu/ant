@@ -81,12 +81,32 @@ static ant_value_t g_wasm_table_proto     = 0;
 static ant_value_t g_wasm_tag_proto       = 0;
 static ant_value_t g_wasm_exception_proto = 0;
 
-static ant_value_t g_wasm_compileerror_proto = 0;
-static ant_value_t g_wasm_linkerror_proto    = 0;
-static ant_value_t g_wasm_runtimeerror_proto = 0;
+static ant_value_t g_wasm_compileerror_proto   = 0;
+static ant_value_t g_wasm_linkerror_proto      = 0;
+static ant_value_t g_wasm_runtimeerror_proto   = 0;
+static ant_value_t g_wasm_pending_import_throw = 0;
 
 static wasm_engine_t *g_wasm_engine                = NULL;
 static wasm_import_func_env_t **g_wasm_import_envs = NULL;
+static bool g_wasm_pending_import_throw_exists     = false;
+
+static void wasm_clear_pending_import_throw(void) {
+  g_wasm_pending_import_throw_exists = false;
+  g_wasm_pending_import_throw = js_mkundef();
+}
+
+static void wasm_set_pending_import_throw(ant_value_t value) {
+  g_wasm_pending_import_throw_exists = true;
+  g_wasm_pending_import_throw = value;
+}
+
+static ant_value_t wasm_consume_pending_import_throw(void) {
+  ant_value_t value = g_wasm_pending_import_throw_exists
+    ? g_wasm_pending_import_throw
+    : js_mkundef();
+  wasm_clear_pending_import_throw();
+  return value;
+}
 
 static void wasm_register_import_env(wasm_import_func_env_t *env) {
   if (g_wasm_import_env_count == g_wasm_import_env_cap) {
@@ -491,20 +511,33 @@ static ant_value_t js_wasm_exported_func_call(ant_t *js, ant_value_t *args, int 
     }
   }
 
+  wasm_clear_pending_import_throw();
   trap = wasm_func_call(func, &wasm_args, &wasm_results);
+  
   if (trap) {
+    if (g_wasm_pending_import_throw_exists) {
+      result = wasm_consume_pending_import_throw();
+      wasm_val_vec_delete(&wasm_args);
+      wasm_val_vec_delete(&wasm_results);
+      wasm_functype_delete(type);
+      wasm_trap_delete(trap);
+      return js_throw(js, result);
+    }
+    
     result = wasm_trap_to_error(js, trap);
     wasm_val_vec_delete(&wasm_args);
     wasm_val_vec_delete(&wasm_results);
     wasm_functype_delete(type);
     return js_throw(js, result);
   }
-
+  
+  wasm_clear_pending_import_throw();
   result = wasm_js_from_result_vec(js, &wasm_results);
 
   wasm_val_vec_delete(&wasm_args);
   wasm_val_vec_delete(&wasm_results);
   wasm_functype_delete(type);
+  
   return result;
 }
 
@@ -718,18 +751,26 @@ static wasm_trap_t *wasm_import_func_callback(void *env_ptr, const wasm_val_vec_
     js_args[i] = wasm_value_to_js(js, &args->data[i]);
   }
 
-  result = sv_vm_call(js->vm, js, env->fn, js_mkundef(), js_args, args ? (int)args->size : 0, NULL, false);
+  result = sv_vm_call(
+    js->vm, js, env->fn, js_mkundef(), 
+    js_args, args ? (int)args->size : 0, NULL, false
+  );
   free(js_args);
 
   if (is_err(result)) {
+    ant_value_t thrown = js->thrown_exists ? js->thrown_value : result;
+    wasm_set_pending_import_throw(thrown);
+    
     const char *msg = "WebAssembly import threw";
     if (vtype(js->thrown_value) == T_OBJ) {
       const char *message = get_str_prop(js, js->thrown_value, "message", 7, NULL);
       if (message && *message) msg = message;
     }
+    
     wasm_name_new_from_string_nt(&trap_msg, msg);
     wasm_trap_t *trap = wasm_trap_new(env->store, &trap_msg);
     wasm_byte_vec_delete(&trap_msg);
+    
     return trap;
   }
 
@@ -893,6 +934,7 @@ static ant_value_t wasm_instantiate_module(ant_t *js, ant_value_t module_obj, an
     if (imports && import_types.size > 0)
       import_vec = (wasm_extern_vec_t){ import_types.size, imports, import_types.size, sizeof(*imports), NULL };
 
+    wasm_clear_pending_import_throw();
     instance = wasm_instance_new_with_args(module_handle->store, module_handle->module, &import_vec, &trap, KILOBYTE(32), 0);
   }
 
@@ -904,10 +946,20 @@ static ant_value_t wasm_instantiate_module(ant_t *js, ant_value_t module_obj, an
       if (owned_host_funcs[i]) wasm_func_delete(owned_host_funcs[i]);
     }
     free(owned_host_funcs);
-    if (trap) return wasm_trap_to_error(js, trap);
+    
+    if (trap) {
+      if (g_wasm_pending_import_throw_exists) {
+        ant_value_t thrown = wasm_consume_pending_import_throw();
+        wasm_trap_delete(trap);
+        return js_throw(js, thrown);
+      }
+      return wasm_trap_to_error(js, trap);
+    }
+    
     return wasm_make_link_error(js, "Failed to instantiate WebAssembly module");
   }
-
+  
+  wasm_clear_pending_import_throw();
   wasm_instance_exports(instance, &exports);
   wasm_module_exports(module_handle->module, &export_types);
 
@@ -1324,11 +1376,15 @@ static ant_value_t js_wasm_runtime_error_ctor(ant_t *js, ant_value_t *args, int 
 }
 
 void gc_mark_wasm(ant_t *js, gc_mark_fn mark) {
-for (size_t i = 0; i < g_wasm_import_env_count; i++) {
-  wasm_import_func_env_t *env = g_wasm_import_envs[i];
-  mark(js, env->fn);
-  mark(js, env->owner);
-}}
+  for (size_t i = 0; i < g_wasm_import_env_count; i++) {
+    wasm_import_func_env_t *env = g_wasm_import_envs[i];
+    mark(js, env->fn);
+    mark(js, env->owner);
+  }
+  
+  if (g_wasm_pending_import_throw_exists)
+    mark(js, g_wasm_pending_import_throw);
+}
 
 void init_wasm_module(void) {
   ant_t *js = rt->js;
