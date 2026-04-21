@@ -86,6 +86,27 @@ try {
 }
 assert(sawErrorThrow, 'Error import throws should escape the wasm call');
 
+const thrownStatus = {
+  name: 'ExitStatus',
+  message: 'Program terminated with exit(1)',
+  status: 1
+};
+let sawErrorlikeThrow = false;
+try {
+  new WebAssembly.Instance(throwingModule, {
+    env: {
+      fail() {
+        throw thrownStatus;
+      }
+    }
+  }).exports.run();
+} catch (error) {
+  sawErrorlikeThrow = true;
+  assert(error === thrownStatus, 'import throws should preserve original error-like objects');
+  assert(error.stack === undefined, 'error-like import throws should not grow a synthetic stack');
+}
+assert(sawErrorlikeThrow, 'error-like import throws should escape the wasm call');
+
 const compiled = await WebAssembly.compile(incrementer);
 assert(compiled instanceof WebAssembly.Module, 'WebAssembly.compile() should resolve a module');
 

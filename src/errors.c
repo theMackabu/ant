@@ -23,12 +23,15 @@ typedef struct { char *buf; size_t size; } errbuf_t;
 
 static void print_error_value(ant_t *js, ant_value_t value, ant_value_t fallback_stack, const char *prefix) {
   ant_value_t obj = is_err(value) ? js_as_obj(value) : value;
-  const char *stack = NULL;
+  const char *stack = NULL; bool no_stack = false;
   
-  if (vtype(obj) == T_OBJ)
-    stack = get_str_prop(js, obj, "stack", 5, NULL);
+  if (vtype(obj) == T_OBJ) {
+    ant_value_t err_type = js_get_slot(obj, SLOT_ERR_TYPE);
+    no_stack = vtype(err_type) == T_NUM && ((int)js_getnum(err_type) & JS_ERR_NO_STACK);
+    if (!no_stack) stack = get_str_prop(js, obj, "stack", 5, NULL);
+  }
   
-  if (!stack && vtype(fallback_stack) == T_STR) {
+  if (!no_stack && !stack && vtype(fallback_stack) == T_STR) {
     ant_offset_t slen;
     ant_offset_t soff = vstr(js, fallback_stack, &slen);
     stack = (const char *)(uintptr_t)(soff);
@@ -65,6 +68,23 @@ bool print_uncaught_throw(ant_t *js) {
 
 bool print_unhandled_promise_rejection(ant_t *js, ant_value_t value) {
   print_error_value(js, value, js_mkundef(), "Uncaught (in promise) ");
+  return true;
+}
+
+bool js_mark_errorlike_no_stack(ant_t *js, ant_value_t value) {
+  if (vtype(value) != T_OBJ) return false;
+  if (js_get_slot(value, SLOT_ERROR_BRAND) == js_true) return false;
+
+  const char *name = get_str_prop(js, value, "name", 4, NULL);
+  const char *message = get_str_prop(js, value, "message", 7, NULL);
+  if ((!name || !*name) && (!message || !*message)) return false;
+
+  ant_value_t err_type = js_get_slot(value, SLOT_ERR_TYPE);
+  int base_type = vtype(err_type) == T_NUM ? (int)js_getnum(err_type) : JS_ERR_GENERIC;
+
+  js_set(js, value, "stack", js_mkundef());
+  js_set_slot(value, SLOT_ERR_TYPE, js_mknum((double)(base_type | JS_ERR_NO_STACK)));
+  
   return true;
 }
 

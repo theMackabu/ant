@@ -31,6 +31,7 @@ void js_clear_error_site(ant_t *js);
 void js_print_stack_trace_vm(ant_t *js, FILE *stream);
 void js_set_error_site_from_vm_top(ant_t *js);
 void js_capture_stack(ant_t *js, ant_value_t err_obj);
+bool js_mark_errorlike_no_stack(ant_t *js, ant_value_t value);
 
 void js_get_call_location(
   ant_t *js, const char **out_filename,

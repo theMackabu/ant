@@ -517,6 +517,7 @@ static ant_value_t js_wasm_exported_func_call(ant_t *js, ant_value_t *args, int 
   if (trap) {
     if (g_wasm_pending_import_throw_exists) {
       result = wasm_consume_pending_import_throw();
+      js_mark_errorlike_no_stack(js, result);
       wasm_val_vec_delete(&wasm_args);
       wasm_val_vec_delete(&wasm_results);
       wasm_functype_delete(type);
@@ -950,6 +951,7 @@ static ant_value_t wasm_instantiate_module(ant_t *js, ant_value_t module_obj, an
     if (trap) {
       if (g_wasm_pending_import_throw_exists) {
         ant_value_t thrown = wasm_consume_pending_import_throw();
+        js_mark_errorlike_no_stack(js, thrown);
         wasm_trap_delete(trap);
         return js_throw(js, thrown);
       }
