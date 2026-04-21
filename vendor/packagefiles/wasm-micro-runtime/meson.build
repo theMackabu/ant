@@ -15,7 +15,7 @@ common_c_args = [
   '-DBH_MALLOC=wasm_runtime_malloc',
   '-DBH_FREE=wasm_runtime_free',
   '-DWASM_ENABLE_INTERP=1',
-  '-DWASM_ENABLE_FAST_INTERP=0',
+  '-DWASM_ENABLE_FAST_INTERP=1',
   '-DWASM_ENABLE_AOT=0',
   '-DWASM_ENABLE_JIT=0',
   '-DWASM_ENABLE_FAST_JIT=0',
@@ -108,6 +108,8 @@ if wamr_platform == 'darwin'
   wamr_sources += files('core/shared/platform/common/memory/mremap.c')
 endif
 
+interp_source = 'core/iwasm/interpreter/wasm_interp_fast.c'
+
 wamr_sources += files(
   'core/shared/utils/bh_assert.c',
   'core/shared/utils/bh_bitmap.c',
@@ -135,7 +137,7 @@ wamr_sources += files(
   'core/iwasm/common/wasm_shared_memory.c',
   'core/iwasm/interpreter/wasm_loader.c',
   'core/iwasm/interpreter/wasm_runtime.c',
-  'core/iwasm/interpreter/wasm_interp_classic.c',
+  interp_source,
   'core/iwasm/libraries/libc-wasi/libc_wasi_wrapper.c',
   'core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/src/posix.c',
   'core/iwasm/libraries/libc-wasi/sandboxed-system-primitives/src/str.c',
@@ -184,6 +186,7 @@ wamr_dep = declare_dependency(
   include_directories: wamr_inc,
   compile_args: [
     '-DWASM_ENABLE_INTERP=1',
+    '-DWASM_ENABLE_FAST_INTERP=1',
     '-DWASM_ENABLE_LIBC_WASI=1',
     '-DWASM_ENABLE_MODULE_INST_CONTEXT=1',
     '-DWASM_ENABLE_BULK_MEMORY=1',
@@ -191,6 +194,8 @@ wamr_dep = declare_dependency(
     '-DWASM_ENABLE_SHARED_MEMORY=0',
     '-DWASM_ENABLE_SIMD=0',
     '-DWASM_ENABLE_AOT=0',
+    '-DWASM_ENABLE_JIT=0',
+    '-DWASM_ENABLE_FAST_JIT=0',
     '-DWASM_ENABLE_MULTI_MODULE=0',
     '-DWASM_ENABLE_TAGS=0',
     '-DWASM_CONFIGURABLE_BOUNDS_CHECKS=0',
