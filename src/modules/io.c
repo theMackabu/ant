@@ -789,7 +789,6 @@ static const char *get_type_name(int type) {
     [T_SYMBOL]     = "symbol",
     [T_ERR]        = "error",
     [T_TYPEDARRAY] = "TypedArray",
-    [T_FFI]        = "ffi",
     [T_NTARG]      = "ntarg",
     [T_MAP]        = "map",
     [T_SET]        = "set",

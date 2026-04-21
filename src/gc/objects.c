@@ -489,7 +489,6 @@ static void gc_mark_roots(ant_t *js) {
   gc_visit_roots(js, gc_mark_value);
   gc_mark_timers(js, gc_mark_value);
   gc_mark_atomics(js, gc_mark_value);
-  gc_mark_ffi(js, gc_mark_value);
   gc_mark_fetch(js, gc_mark_value);
   gc_mark_fs(js, gc_mark_value);
   gc_mark_child_process(js, gc_mark_value);

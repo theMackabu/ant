@@ -198,9 +198,6 @@ ant_value_t js_obj_to_func_ex(ant_value_t obj, uint8_t flags);
 ant_value_t js_mktypedarray(void *data);
 void *js_gettypedarray(ant_value_t val);
 
-ant_value_t js_mkffi(unsigned int index);
-int js_getffi(ant_value_t val);
-
 void js_check_unhandled_rejections(ant_t *js);
 void js_setup_import_meta(ant_t *js, const char *filename);
 void js_process_promise_handlers(ant_t *js, ant_value_t promise);

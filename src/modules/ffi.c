@@ -21,7 +21,6 @@
 #include "ant.h"
 #include "ptr.h"
 #include "errors.h"
-#include "gc/modules.h"
 #include "internal.h"
 #include "silver/engine.h"
 
@@ -1469,9 +1468,4 @@ ant_value_t ffi_library(ant_t *js) {
   js_set_sym(js, ffi_obj, get_toStringTag_sym(), ANT_STRING("FFI"));
   
   return ffi_obj;
-}
-
-void gc_mark_ffi(ant_t *js, gc_mark_fn mark) {
-  (void)js;
-  (void)mark;
 }

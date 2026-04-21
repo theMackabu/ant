@@ -217,7 +217,6 @@ static size_t append_error_value(errbuf_t *eb, ant_t *js, size_t used, ant_value
     [T_BOOL] = &&l_type_default,
     [T_SYMBOL] = &&l_type_default,
     [T_CFUNC] = &&l_type_default,
-    [T_FFI] = &&l_type_default,
     [T_TYPEDARRAY] = &&l_type_default,
     [T_ERR] = &&l_type_default,
     [T_UNDEF] = &&l_type_default,

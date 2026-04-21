@@ -639,7 +639,7 @@ static inline ant_value_t sv_prepare_call(
     return js_mkundef();
   }
 
-  if (vtype(func) == T_CFUNC || vtype(func) == T_FFI) {
+  if (vtype(func) == T_CFUNC) {
     plan->ctx.this_val = sv_call_normalize_this(js, this_val, mode);
     if (out_this) *out_this = plan->ctx.this_val;
     return js_mkundef();

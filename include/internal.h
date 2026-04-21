@@ -112,7 +112,6 @@ enum {
   // internal
   T_ERR,
   T_TYPEDARRAY,
-  T_FFI,
   T_NTARG,
 
   // collections 

@@ -59,7 +59,6 @@
 #include "modules/bigint.h"
 #include "modules/timer.h"
 #include "modules/symbol.h"
-#include "modules/ffi.h"
 #include "modules/date.h"
 #include "modules/buffer.h"
 #include "modules/blob.h"
@@ -440,13 +439,22 @@ static void set_proto(ant_t *js, ant_value_t obj, ant_value_t proto);
 
 const char *typestr(uint8_t t) {
   static const char *names[] = {
-    [T_UNDEF] = "undefined", [T_NULL] = "object", [T_BOOL] = "boolean",
-    [T_NUM] = "number", [T_BIGINT] = "bigint", [T_STR] = "string",
-    [T_SYMBOL] = "symbol", [T_OBJ] = "object", [T_ARR] = "object",
-    [T_FUNC] = "function", [T_CFUNC] = "function",
-    [T_PROMISE] = "object", [T_GENERATOR] = "object",
-    [T_ERR] = "err", [T_TYPEDARRAY] = "typedarray",
-    [T_FFI] = "ffi", [T_NTARG] = "ntarg"
+    [T_UNDEF] = "undefined",
+    [T_NULL] = "object",
+    [T_BOOL] = "boolean",
+    [T_NUM] = "number",
+    [T_BIGINT] = "bigint",
+    [T_STR] = "string",
+    [T_SYMBOL] = "symbol",
+    [T_OBJ] = "object",
+    [T_ARR] = "object",
+    [T_FUNC] = "function",
+    [T_CFUNC] = "function",
+    [T_PROMISE] = "object",
+    [T_GENERATOR] = "object",
+    [T_TYPEDARRAY] = "typedarray",
+    [T_ERR] = "err",
+    [T_NTARG] = "ntarg"
   };
 
   return (t < sizeof(names) / sizeof(names[0])) ? names[t] : "??";
@@ -506,15 +514,6 @@ void *js_gettypedarray(ant_value_t val) {
 
 ant_value_t js_get_slot(ant_value_t obj, internal_slot_t slot) { 
   return get_slot(js_as_obj(obj), slot); 
-}
-
-ant_value_t js_mkffi(unsigned int index) {
-  return mkval(T_FFI, (uint64_t)index);
-}
-
-int js_getffi(ant_value_t val) {
-  if (vtype(val) != T_FFI) return -1;
-  return (int)vdata(val);
 }
 
 typedef enum {
@@ -2405,7 +2404,6 @@ static size_t tostr(ant_t *js, ant_value_t value, char *buf, size_t len) {
     case T_PROMISE: return strpromise(js, value, buf, len);
     case T_FUNC:    return strfunc(js, value, buf, len);
     case T_CFUNC:   return strcfunc(js, value, buf, len);
-    case T_FFI:     return ANT_COPY(buf, len, "[native code (ffi)]");
     
     case T_ERR: {
       uint64_t data = vdata(value);
@@ -2531,7 +2529,7 @@ ant_value_t js_tostring_val(ant_t *js, ant_value_t value) {
     [T_ERR] = &&L_DEFAULT, [T_ARR] = &&L_OBJ,
     [T_PROMISE] = &&L_DEFAULT, [T_TYPEDARRAY] = &&L_DEFAULT,
     [T_BIGINT] = &&L_BIGINT, [T_SYMBOL] = &&L_DEFAULT, 
-    [T_GENERATOR] = &&L_DEFAULT, [T_FFI] = &&L_DEFAULT
+    [T_GENERATOR] = &&L_DEFAULT
   };
   
   if (t < sizeof(jump_table) / sizeof(jump_table[0])) goto *jump_table[t];

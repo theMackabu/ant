@@ -21,9 +21,8 @@ Ant.typeof = function (t) {
     T_NUM: 'number',
     T_BIGINT: 'bigint',
     T_SYMBOL: 'symbol',
-    T_ERR: 'err',
     T_TYPEDARRAY: 'typedarray',
-    T_FFI: 'ffi',
+    T_ERR: 'err',
     T_NTARG: 'ntarg'
   } as const;
 
