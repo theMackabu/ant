@@ -28,7 +28,7 @@ pub fn strip_types_internal(source: &str, filename: &str, is_module: bool) -> Re
   let scoping = semantic_ret.semantic.into_scoping();
   let transform_options = TransformOptions {
     typescript: TypeScriptOptions {
-      only_remove_type_imports: true,
+      only_remove_type_imports: false,
       ..Default::default()
     },
     ..Default::default()
