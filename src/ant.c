@@ -15241,7 +15241,6 @@ ant_value_t sv_call_native(
   ant_value_t *args, int nargs
 ) {
   if (vtype(func) == T_CFUNC) return sv_call_cfunc(js, args, nargs, func, this_val);
-  if (vtype(func) == T_FFI) return ffi_call_by_index(js, (unsigned int)vdata(func), args, nargs);
   
   if (vtype(func) == T_FUNC) {
     ant_value_t func_obj = js_func_obj(func);

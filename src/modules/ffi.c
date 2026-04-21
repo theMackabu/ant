@@ -1,1000 +1,1477 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#define dlopen(name, flags) ((void*)LoadLibraryA(name))
-#define dlsym(handle, name) ((void*)GetProcAddress((HMODULE)(handle), (name)))
+#define dlopen(name, flags) ((void *)LoadLibraryA(name))
+#define dlsym(handle, name) ((void *)GetProcAddress((HMODULE)(handle), (name)))
 #define dlclose(handle) FreeLibrary((HMODULE)(handle))
 #define dlerror() "LoadLibrary failed"
 #define RTLD_LAZY 0
 #else
 #include <dlfcn.h>
 #endif
+
 #include <ffi.h>
 #include <pthread.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <utarray.h>
-#include <uthash.h>
 
+#include "ant.h"
 #include "ptr.h"
 #include "errors.h"
 #include "gc/modules.h"
 #include "internal.h"
 #include "silver/engine.h"
 
+#include "modules/buffer.h"
 #include "modules/ffi.h"
 #include "modules/symbol.h"
 
-typedef struct ffi_lib {
-  char name[256];
-  void *handle;
-  ant_value_t js_obj;
-  UT_hash_handle hh;
-} ffi_lib_t;
-
-typedef struct ffi_func {
-  char name[256];
-  void *func_ptr;
-  ffi_cif cif;
-  ffi_type **arg_types;
-  ffi_type *ret_type;
-  char ret_type_str[32];
-  int arg_count;
-  bool is_variadic;
-  UT_hash_handle hh;
-} ffi_func_t;
-
-typedef struct ffi_ptr {
-  void *ptr;
-  size_t size;
-  bool is_managed;
-  uint64_t ptr_key;
-  UT_hash_handle hh;
-} ffi_ptr_t;
-
-typedef struct ffi_callback {
-  ffi_closure *closure;
-  void *code_ptr;
-  ffi_cif cif;
-  ffi_type **arg_types;
-  ffi_type *ret_type;
-  char ret_type_str[32];
-  char **arg_type_strs;
-  int arg_count;
-  ant_t *js;
-  ant_value_t js_func;
-  uint64_t cb_key;
-  UT_hash_handle hh;
-} ffi_callback_t;
-
-enum { FFI_LIBRARY_NATIVE_TAG = 0x4646494Cu }; // FFIL
-
-static ffi_lib_t *ffi_libraries = NULL;
-static ffi_ptr_t *ffi_pointers = NULL;
-static ffi_callback_t *ffi_callbacks = NULL;
-static UT_array *ffi_functions_array = NULL;
-
-static pthread_mutex_t ffi_libraries_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_mutex_t ffi_functions_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_mutex_t ffi_pointers_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_mutex_t ffi_callbacks_mutex = PTHREAD_MUTEX_INITIALIZER;
-
-static const UT_icd ffi_func_icd = {
-  .sz = sizeof(ffi_func_t *),
-  .init = NULL,
-  .copy = NULL,
-  .dtor = NULL,
+enum {
+  FFI_LIBRARY_NATIVE_TAG  = 0x4646494cu, // FFIL
+  FFI_FUNCTION_NATIVE_TAG = 0x46464946u, // FFIF
+  FFI_POINTER_NATIVE_TAG  = 0x46464950u, // FFIP
+  FFI_CALLBACK_NATIVE_TAG = 0x46464943u, // FFIC
 };
 
-static ffi_type *get_ffi_type(const char *type_str);
-static void *js_to_ffi_value(ant_t *js, ant_value_t val, ffi_type *type, void *buffer);
+typedef enum {
+  FFI_VALUE_VOID = 0,
+  FFI_VALUE_INT8,
+  FFI_VALUE_INT16,
+  FFI_VALUE_INT,
+  FFI_VALUE_INT64,
+  FFI_VALUE_UINT8,
+  FFI_VALUE_UINT16,
+  FFI_VALUE_UINT64,
+  FFI_VALUE_FLOAT,
+  FFI_VALUE_DOUBLE,
+  FFI_VALUE_POINTER,
+  FFI_VALUE_STRING,
+  FFI_VALUE_SPREAD,
+  FFI_VALUE_UNKNOWN,
+} ffi_value_type_id_t;
 
-static ant_value_t ffi_define(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t ffi_lib_call(ant_t *js, ant_value_t *args, int nargs);
-static ant_value_t ffi_to_js_value(ant_t *js, void *val, ffi_type *type, const char *type_str);
+typedef struct {
+  ffi_value_type_id_t id;
+  ffi_type *ffi_type;
+  const char *name;
+} ffi_marshaled_type_t;
 
-static ffi_lib_t *ffi_get_library_this(ant_t *js, ant_value_t this_obj) {
-  if (!is_object_type(this_obj) || !js_check_native_tag(this_obj, FFI_LIBRARY_NATIVE_TAG)) return NULL;
-  return (ffi_lib_t *)js_get_native_ptr(this_obj);
+typedef struct {
+  ffi_marshaled_type_t returns;
+  ffi_marshaled_type_t *args;
+  ffi_type **ffi_arg_types;
+  size_t arg_count;
+  size_t fixed_arg_count;
+  bool variadic;
+} ffi_signature_t;
+
+typedef struct {
+  ant_value_t obj;
+  void *handle;
+  char *path;
+  bool closed;
+} ffi_library_handle_t;
+
+typedef struct {
+  ffi_library_handle_t *library;
+  ffi_signature_t signature;
+  ffi_cif cif;
+  void *func_ptr;
+  char *symbol_name;
+} ffi_function_handle_t;
+
+typedef struct ffi_pointer_region_s {
+  uint8_t *ptr;
+  size_t size;
+  size_t ref_count;
+  bool size_known;
+  bool owned;
+  bool freed;
+} ffi_pointer_region_t;
+
+typedef struct {
+  ffi_pointer_region_t *region;
+  size_t byte_offset;
+} ffi_pointer_handle_t;
+
+typedef struct {
+  ant_t *js;
+  ant_value_t owner_obj;
+  ffi_signature_t signature;
+  ffi_cif cif;
+  ffi_closure *closure;
+  void *code_ptr;
+  pthread_t owner_thread;
+  bool closed;
+} ffi_callback_handle_t;
+
+typedef union {
+  int8_t i8;
+  int16_t i16;
+  int32_t i32;
+  int64_t i64;
+  uint8_t u8;
+  uint16_t u16;
+  uint32_t u32;
+  uint64_t u64;
+  float f32;
+  double f64;
+  void *ptr;
+  ffi_arg raw;
+} ffi_value_box_t;
+
+static ant_value_t g_ffi_library_proto  = 0;
+static ant_value_t g_ffi_function_proto = 0;
+static ant_value_t g_ffi_pointer_proto  = 0;
+static ant_value_t g_ffi_callback_proto = 0;
+
+static inline bool ffi_is_nullish(ant_value_t value) {
+  return is_null(value) || is_undefined(value);
 }
 
-static void ffi_init_array(void) {
-  static int initialized = 0;
-  if (initialized)
+static ffi_marshaled_type_t ffi_marshaled_type_unknown(void) {
+  ffi_marshaled_type_t type = {0};
+  type.id = FFI_VALUE_UNKNOWN;
+  type.ffi_type = NULL;
+  type.name = NULL;
+  return type;
+}
+
+static ffi_marshaled_type_t ffi_marshaled_type_make(ffi_value_type_id_t id, const char *name) {
+  ffi_marshaled_type_t type = ffi_marshaled_type_unknown();
+  type.id = id;
+  type.name = name;
+
+  switch (id) {
+    case FFI_VALUE_VOID:    type.ffi_type = &ffi_type_void; break;
+    case FFI_VALUE_INT8:    type.ffi_type = &ffi_type_sint8; break;
+    case FFI_VALUE_INT16:   type.ffi_type = &ffi_type_sint16; break;
+    case FFI_VALUE_INT:     type.ffi_type = &ffi_type_sint32; break;
+    case FFI_VALUE_INT64:   type.ffi_type = &ffi_type_sint64; break;
+    case FFI_VALUE_UINT8:   type.ffi_type = &ffi_type_uint8; break;
+    case FFI_VALUE_UINT16:  type.ffi_type = &ffi_type_uint16; break;
+    case FFI_VALUE_UINT64:  type.ffi_type = &ffi_type_uint64; break;
+    case FFI_VALUE_FLOAT:   type.ffi_type = &ffi_type_float; break;
+    case FFI_VALUE_DOUBLE:  type.ffi_type = &ffi_type_double; break;
+    case FFI_VALUE_POINTER: type.ffi_type = &ffi_type_pointer; break;
+    case FFI_VALUE_STRING:  type.ffi_type = &ffi_type_pointer; break;
+    case FFI_VALUE_SPREAD:
+    case FFI_VALUE_UNKNOWN:
+      type.ffi_type = NULL;
+      break;
+  }
+
+  return type;
+}
+
+static ffi_value_type_id_t ffi_type_id_from_name(const char *name) {
+  if (!name) return FFI_VALUE_UNKNOWN;
+  if (strcmp(name, "void") == 0)    return FFI_VALUE_VOID;
+  if (strcmp(name, "int8") == 0)    return FFI_VALUE_INT8;
+  if (strcmp(name, "int16") == 0)   return FFI_VALUE_INT16;
+  if (strcmp(name, "int") == 0)     return FFI_VALUE_INT;
+  if (strcmp(name, "int64") == 0)   return FFI_VALUE_INT64;
+  if (strcmp(name, "uint8") == 0)   return FFI_VALUE_UINT8;
+  if (strcmp(name, "uint16") == 0)  return FFI_VALUE_UINT16;
+  if (strcmp(name, "uint64") == 0)  return FFI_VALUE_UINT64;
+  if (strcmp(name, "float") == 0)   return FFI_VALUE_FLOAT;
+  if (strcmp(name, "double") == 0)  return FFI_VALUE_DOUBLE;
+  if (strcmp(name, "pointer") == 0) return FFI_VALUE_POINTER;
+  if (strcmp(name, "string") == 0)  return FFI_VALUE_STRING;
+  if (strcmp(name, "...") == 0)     return FFI_VALUE_SPREAD;
+  return FFI_VALUE_UNKNOWN;
+}
+
+static ffi_marshaled_type_t ffi_marshaled_type_from_value(ant_t *js, ant_value_t value) {
+  if (vtype(value) != T_STR) return ffi_marshaled_type_unknown();
+  return ffi_marshaled_type_make(
+    ffi_type_id_from_name(js_getstr(js, value, NULL)), 
+    js_getstr(js, value, NULL)
+  );
+}
+
+static void ffi_signature_cleanup(ffi_signature_t *signature) {
+  if (!signature) return;
+  free(signature->args);
+  free(signature->ffi_arg_types);
+  signature->args = NULL;
+  signature->ffi_arg_types = NULL;
+  signature->arg_count = 0;
+  signature->fixed_arg_count = 0;
+  signature->variadic = false;
+  signature->returns = ffi_marshaled_type_unknown();
+}
+
+static bool ffi_parse_signature(
+  ant_t *js,
+  ant_value_t value,
+  bool allow_variadic,
+  bool allow_string_return,
+  ffi_signature_t *out,
+  ant_value_t *error_out
+) {
+  ant_value_t returns_val = js_mkundef();
+  ant_value_t args_val = js_mkundef();
+  size_t arg_count = 0;
+
+  memset(out, 0, sizeof(*out));
+  out->returns = ffi_marshaled_type_unknown();
+  if (error_out) *error_out = js_mkundef();
+
+  if (!is_object_type(value)) {
+    if (error_out) *error_out = js_mkerr_typed(
+      js, JS_ERR_TYPE,
+      "FFI signature must be [returnType, argTypes] or { returns, args }"
+    );
+    return false;
+  }
+
+  returns_val = js_get(js, value, "returns");
+  args_val = js_get(js, value, "args");
+
+  if (vtype(returns_val) == T_UNDEF || vtype(args_val) == T_UNDEF) {
+    returns_val = js_get(js, value, "0");
+    args_val = js_get(js, value, "1");
+  }
+
+  if (vtype(returns_val) != T_STR) {
+    if (error_out) *error_out = js_mkerr_typed(js, JS_ERR_TYPE, "FFI return type must be a string");
+    return false;
+  }
+
+  if (!is_object_type(args_val)) {
+    if (error_out) *error_out = js_mkerr_typed(js, JS_ERR_TYPE, "FFI argument list must be an array-like object");
+    return false;
+  }
+
+  out->returns = ffi_marshaled_type_from_value(js, returns_val);
+  if (out->returns.id == FFI_VALUE_UNKNOWN || out->returns.id == FFI_VALUE_SPREAD) {
+    if (error_out) *error_out = js_mkerr_typed(js, JS_ERR_TYPE, "Unsupported FFI return type");
+    return false;
+  }
+
+  if (!allow_string_return && out->returns.id == FFI_VALUE_STRING) {
+    if (error_out) *error_out = js_mkerr_typed(
+      js, JS_ERR_TYPE,
+      "FFICallback does not support string return values"
+    );
+    return false;
+  }
+
+  ant_value_t len_val = js_get(js, args_val, "length");
+  arg_count = vtype(len_val) == T_NUM ? (size_t)js_getnum(len_val) : 0;
+
+  if (arg_count > 0) {
+    out->args = calloc(arg_count, sizeof(*out->args));
+    out->ffi_arg_types = calloc(arg_count, sizeof(*out->ffi_arg_types));
+    if (!out->args || !out->ffi_arg_types) {
+      free(out->args);
+      free(out->ffi_arg_types);
+      out->args = NULL;
+      out->ffi_arg_types = NULL;
+      if (error_out) *error_out = js_mkerr(js, "Out of memory");
+      return false;
+    }
+  }
+
+  out->arg_count = arg_count;
+  out->fixed_arg_count = arg_count;
+  out->variadic = false;
+
+  for (size_t i = 0; i < arg_count; i++) {
+    char idx[32];
+    ant_value_t arg_val;
+    ffi_marshaled_type_t arg_type;
+    
+    snprintf(idx, sizeof(idx), "%zu", i);
+    arg_val = js_get(js, args_val, idx);
+    arg_type = ffi_marshaled_type_from_value(js, arg_val);
+    
+    if (arg_type.id == FFI_VALUE_UNKNOWN) {
+      ffi_signature_cleanup(out);
+      if (error_out) *error_out = js_mkerr_typed(js, JS_ERR_TYPE, "Unsupported FFI argument type");
+      return false;
+    }
+    
+    if (arg_type.id == FFI_VALUE_SPREAD) {
+      if (!allow_variadic) {
+        ffi_signature_cleanup(out);
+        if (error_out) *error_out = js_mkerr_typed(js, JS_ERR_TYPE, "Variadic signatures are not supported here");
+        return false;
+      }
+      
+      if (i + 1 != arg_count) {
+        ffi_signature_cleanup(out);
+        if (error_out) *error_out = js_mkerr_typed(
+          js, JS_ERR_TYPE,
+          "FFI spread marker must be the last argument type"
+        );
+        return false;
+      }
+      
+      out->variadic = true;
+      out->fixed_arg_count = i;
+      out->arg_count = i;
+      break;
+    }
+    
+    out->args[i] = arg_type;
+    out->ffi_arg_types[i] = arg_type.ffi_type;
+  }
+
+  return true;
+}
+
+static ffi_marshaled_type_t ffi_infer_variadic_type(ant_value_t value) {
+  if (vtype(value) == T_STR) return ffi_marshaled_type_make(FFI_VALUE_STRING, "string");
+  if (ffi_is_nullish(value)) return ffi_marshaled_type_make(FFI_VALUE_POINTER, "pointer");
+  
+  if (is_object_type(value) && js_check_native_tag(value, FFI_POINTER_NATIVE_TAG))
+    return ffi_marshaled_type_make(FFI_VALUE_POINTER, "pointer");
+    
+  if (is_object_type(value) && js_check_native_tag(value, FFI_CALLBACK_NATIVE_TAG))
+    return ffi_marshaled_type_make(FFI_VALUE_POINTER, "pointer");
+    
+  if (vtype(value) == T_NUM) {
+    double number = js_getnum(value);
+    double truncated = js_to_int32(number);
+    if (number == truncated) return ffi_marshaled_type_make(FFI_VALUE_INT, "int");
+    return ffi_marshaled_type_make(FFI_VALUE_DOUBLE, "double");
+  }
+  
+  if (vtype(value) == T_BOOL) return ffi_marshaled_type_make(FFI_VALUE_INT, "int");
+  return ffi_marshaled_type_make(FFI_VALUE_POINTER, "pointer");
+}
+
+static ffi_library_handle_t *ffi_library_data(ant_value_t value) {
+  if (!js_check_native_tag(value, FFI_LIBRARY_NATIVE_TAG)) return NULL;
+  return (ffi_library_handle_t *)js_get_native_ptr(value);
+}
+
+static ffi_function_handle_t *ffi_function_data(ant_value_t value) {
+  if (!js_check_native_tag(value, FFI_FUNCTION_NATIVE_TAG)) return NULL;
+  return (ffi_function_handle_t *)js_get_native_ptr(value);
+}
+
+static ffi_pointer_handle_t *ffi_pointer_data(ant_value_t value) {
+  if (!js_check_native_tag(value, FFI_POINTER_NATIVE_TAG)) return NULL;
+  return (ffi_pointer_handle_t *)js_get_native_ptr(value);
+}
+
+static ffi_callback_handle_t *ffi_callback_data(ant_value_t value) {
+  if (!js_check_native_tag(value, FFI_CALLBACK_NATIVE_TAG)) return NULL;
+  return (ffi_callback_handle_t *)js_get_native_ptr(value);
+}
+
+static void ffi_library_close_handle(ffi_library_handle_t *library) {
+  if (!library || library->closed) return;
+  library->closed = true;
+  if (library->handle) dlclose(library->handle);
+  library->handle = NULL;
+}
+
+static void ffi_pointer_region_release(ffi_pointer_region_t *region) {
+  if (!region) return;
+  if (region->ref_count > 0) region->ref_count--;
+  if (region->ref_count != 0) return;
+  if (region->owned && !region->freed && region->ptr) free(region->ptr);
+  free(region);
+}
+
+static bool ffi_pointer_region_free(ffi_pointer_region_t *region) {
+  if (!region || !region->owned || region->freed) return false;
+  if (region->ptr) free(region->ptr);
+  region->ptr = NULL;
+  region->freed = true;
+  region->size = 0;
+  region->size_known = true;
+  return true;
+}
+
+static void ffi_pointer_close_handle(ffi_pointer_handle_t *handle, bool free_region_memory) {
+  if (!handle) return;
+  if (handle->region && free_region_memory) (void)ffi_pointer_region_free(handle->region);
+  ffi_pointer_region_release(handle->region);
+  handle->region = NULL;
+}
+
+static void ffi_callback_close_handle(ffi_callback_handle_t *callback) {
+  if (!callback || callback->closed) return;
+  callback->closed = true;
+  if (callback->closure) ffi_closure_free(callback->closure);
+  callback->closure = NULL;
+  callback->code_ptr = NULL;
+  ffi_signature_cleanup(&callback->signature);
+}
+
+static uint8_t *ffi_pointer_address_raw(ffi_pointer_handle_t *handle) {
+  if (!handle || !handle->region || handle->region->freed || !handle->region->ptr) return NULL;
+  return handle->region->ptr + handle->byte_offset;
+}
+
+static bool ffi_pointer_ensure_readable(
+  ant_t *js,
+  ffi_pointer_handle_t *handle,
+  size_t size,
+  const char *op,
+  ant_value_t *error_out
+) {
+  size_t remaining = 0;
+
+  if (error_out) *error_out = js_mkundef();
+  if (!handle || !handle->region) {
+    if (error_out) *error_out = js_mkerr_typed(js, JS_ERR_TYPE, "Invalid FFIPointer");
+    return false;
+  }
+
+  if (handle->region->freed) {
+    if (error_out) *error_out = js_mkerr_typed(js, JS_ERR_TYPE, "FFIPointer has been freed");
+    return false;
+  }
+
+  if (!handle->region->ptr) {
+    if (error_out) *error_out = js_mkerr_typed(js, JS_ERR_TYPE, "Cannot %s through a null pointer", op);
+    return false;
+  }
+
+  if (handle->region->size_known) {
+    if (handle->byte_offset > handle->region->size) {
+      if (error_out) *error_out = js_mkerr_typed(js, JS_ERR_RANGE, "Pointer offset is out of bounds");
+      return false;
+    }
+    
+    remaining = handle->region->size - handle->byte_offset;
+    if (size > remaining) {
+      if (error_out) *error_out = js_mkerr_typed(
+        js, JS_ERR_RANGE,
+        "FFIPointer %s would read past the tracked allocation",
+        op
+      );
+      return false;
+    }
+  }
+
+  return true;
+}
+
+static ant_value_t ffi_make_pointer(ant_t *js, ffi_pointer_region_t *region, size_t byte_offset) {
+  ant_value_t obj = js_mkobj(js);
+  ffi_pointer_handle_t *handle = calloc(1, sizeof(*handle));
+
+  if (!handle) {
+    ffi_pointer_region_release(region);
+    return js_mkerr(js, "Out of memory");
+  }
+
+  handle->region = region;
+  handle->byte_offset = byte_offset;
+  if (region) region->ref_count++;
+
+  if (g_ffi_pointer_proto) js_set_proto_init(obj, g_ffi_pointer_proto);
+  js_set_native_ptr(obj, handle);
+  js_set_native_tag(obj, FFI_POINTER_NATIVE_TAG);
+  js_set_finalizer(obj, ffi_pointer_finalize);
+
+  return obj;
+}
+
+static ant_value_t ffi_make_pointer_from_raw(ant_t *js, void *ptr) {
+  ffi_pointer_region_t *region = calloc(1, sizeof(*region));
+  if (!region) return js_mkerr(js, "Out of memory");
+  region->ptr = (uint8_t *)ptr;
+  region->owned = false;
+  region->freed = false;
+  region->size_known = false;
+  return ffi_make_pointer(js, region, 0);
+}
+
+static ant_value_t ffi_make_pointer_or_null(ant_t *js, void *ptr) {
+  if (!ptr) return js_mknull();
+  return ffi_make_pointer_from_raw(js, ptr);
+}
+
+static bool ffi_pointer_from_js(
+  ant_t *js,
+  ant_value_t value,
+  void **out,
+  ant_value_t *error_out
+) {
+  ffi_pointer_handle_t *ptr_handle = NULL;
+  ffi_callback_handle_t *cb_handle = NULL;
+
+  if (error_out) *error_out = js_mkundef();
+  if (out) *out = NULL;
+
+  if (ffi_is_nullish(value)) return true;
+
+  ptr_handle = ffi_pointer_data(value);
+  if (ptr_handle) {
+    if (ptr_handle->region && ptr_handle->region->freed) {
+      if (error_out) *error_out = js_mkerr_typed(js, JS_ERR_TYPE, "FFIPointer has been freed");
+      return false;
+    }
+    if (out) *out = (void *)ffi_pointer_address_raw(ptr_handle);
+    return true;
+  }
+
+  cb_handle = ffi_callback_data(value);
+  if (cb_handle) {
+    if (cb_handle->closed) {
+      if (error_out) *error_out = js_mkerr_typed(js, JS_ERR_TYPE, "FFICallback has been closed");
+      return false;
+    }
+    if (out) *out = cb_handle->code_ptr;
+    return true;
+  }
+
+  if (error_out) *error_out = js_mkerr_typed(
+    js, JS_ERR_TYPE,
+    "Pointer arguments require FFIPointer, FFICallback, null, or undefined"
+  );
+  
+  return false;
+}
+
+static bool ffi_copy_js_string(
+  ant_t *js,
+  ant_value_t value,
+  char **out,
+  size_t *len_out,
+  ant_value_t *error_out
+) {
+  ant_value_t str_val = js_tostring_val(js, value);
+  const char *src = NULL;
+  size_t len = 0;
+  char *copy = NULL;
+
+  if (error_out) *error_out = js_mkundef();
+  if (out) *out = NULL;
+  if (len_out) *len_out = 0;
+
+  if (is_err(str_val)) {
+    if (error_out) *error_out = str_val;
+    return false;
+  }
+
+  src = js_getstr(js, str_val, &len);
+  if (!src) {
+    if (error_out) *error_out = js_mkerr_typed(js, JS_ERR_TYPE, "Invalid string value");
+    return false;
+  }
+
+  copy = malloc(len + 1);
+  if (!copy) {
+    if (error_out) *error_out = js_mkerr(js, "Out of memory");
+    return false;
+  }
+
+  memcpy(copy, src, len);
+  copy[len] = '\0';
+
+  if (out) *out = copy;
+  if (len_out) *len_out = len;
+  
+  return true;
+}
+
+static bool ffi_value_to_c(
+  ant_t *js,
+  ant_value_t value,
+  ffi_marshaled_type_t type,
+  ffi_value_box_t *box,
+  void **scratch_alloc,
+  ant_value_t *error_out
+) {
+  void *ptr = NULL;
+  char *str_copy = NULL;
+
+  if (error_out) *error_out = js_mkundef();
+  if (scratch_alloc) *scratch_alloc = NULL;
+
+  switch (type.id) {
+    case FFI_VALUE_INT8:   box->i8 = (int8_t)js_getnum(value); return true;
+    case FFI_VALUE_INT16:  box->i16 = (int16_t)js_getnum(value); return true;
+    case FFI_VALUE_INT:    box->i32 = (int32_t)js_getnum(value); return true;
+    case FFI_VALUE_INT64:  box->i64 = (int64_t)js_getnum(value); return true;
+    case FFI_VALUE_UINT8:  box->u8 = (uint8_t)js_getnum(value); return true;
+    case FFI_VALUE_UINT16: box->u16 = (uint16_t)js_getnum(value); return true;
+    case FFI_VALUE_UINT64: box->u64 = (uint64_t)js_getnum(value); return true;
+    case FFI_VALUE_FLOAT:  box->f32 = (float)js_getnum(value); return true;
+    case FFI_VALUE_DOUBLE: box->f64 = js_getnum(value); return true;
+    case FFI_VALUE_POINTER:
+      if (!ffi_pointer_from_js(js, value, &ptr, error_out)) return false;
+      box->ptr = ptr;
+      return true;
+    case FFI_VALUE_STRING:
+      if (!ffi_is_nullish(value) && ffi_pointer_from_js(js, value, &ptr, NULL)) {
+        box->ptr = ptr;
+        return true;
+      }
+      if (!ffi_copy_js_string(js, value, &str_copy, NULL, error_out)) return false;
+      if (scratch_alloc) *scratch_alloc = str_copy;
+      box->ptr = str_copy;
+      return true;
+    case FFI_VALUE_VOID:
+    case FFI_VALUE_SPREAD:
+    case FFI_VALUE_UNKNOWN:
+      if (error_out) *error_out = js_mkerr_typed(js, JS_ERR_TYPE, "Unsupported FFI argument conversion");
+      return false;
+  }
+
+  return false;
+}
+
+static ant_value_t ffi_value_from_c(ant_t *js, const void *value, ffi_marshaled_type_t type) {
+  switch (type.id) {
+    case FFI_VALUE_VOID:    return js_mkundef();
+    case FFI_VALUE_INT8:    return js_mknum((double)*(const int8_t *)value);
+    case FFI_VALUE_INT16:   return js_mknum((double)*(const int16_t *)value);
+    case FFI_VALUE_INT:     return js_mknum((double)*(const int32_t *)value);
+    case FFI_VALUE_INT64:   return js_mknum((double)*(const int64_t *)value);
+    case FFI_VALUE_UINT8:   return js_mknum((double)*(const uint8_t *)value);
+    case FFI_VALUE_UINT16:  return js_mknum((double)*(const uint16_t *)value);
+    case FFI_VALUE_UINT64:  return js_mknum((double)*(const uint64_t *)value);
+    case FFI_VALUE_FLOAT:   return js_mknum((double)*(const float *)value);
+    case FFI_VALUE_DOUBLE:  return js_mknum(*(const double *)value);
+    case FFI_VALUE_POINTER: return ffi_make_pointer_or_null(js, *(void *const *)value);
+    case FFI_VALUE_STRING: {
+      const char *str = *(const char *const *)value;
+      return str ? js_mkstr(js, str, strlen(str)) : js_mknull();
+    }
+    case FFI_VALUE_SPREAD:
+    case FFI_VALUE_UNKNOWN:
+      return js_mkundef();
+  }
+
+  return js_mkundef();
+}
+
+static size_t ffi_marshaled_type_size(ffi_marshaled_type_t type) {
+  switch (type.id) {
+    case FFI_VALUE_STRING: return 1;
+    case FFI_VALUE_VOID:
+    case FFI_VALUE_SPREAD:
+    case FFI_VALUE_UNKNOWN:
+      return 0;
+    default:
+      return type.ffi_type ? type.ffi_type->size : 0;
+  }
+}
+
+static void ffi_zero_return_value(void *ret, ffi_marshaled_type_t type) {
+  size_t size = ffi_marshaled_type_size(type);
+  if (size > 0) memset(ret, 0, size);
+}
+
+static ant_value_t ffi_read_from_pointer(ant_t *js, ffi_pointer_handle_t *handle, ffi_marshaled_type_t type) {
+  ant_value_t err = js_mkundef();
+  uint8_t *addr = ffi_pointer_address_raw(handle);
+
+  if (type.id == FFI_VALUE_STRING) {
+    size_t len = 0;
+    if (!ffi_pointer_ensure_readable(js, handle, 1, "read", &err)) return err;
+    if (handle->region && handle->region->size_known) {
+      size_t remaining = handle->region->size - handle->byte_offset;
+      const char *nul = memchr(addr, '\0', remaining);
+      if (!nul) return js_mkerr_typed(js, JS_ERR_RANGE, "String read exceeded the tracked allocation");
+      len = (size_t)(nul - (const char *)addr);
+    } else len = strlen((const char *)addr);
+    return js_mkstr(js, addr, len);
+  }
+
+  if (type.id == FFI_VALUE_POINTER) {
+    if (!ffi_pointer_ensure_readable(js, handle, sizeof(void *), "read", &err)) return err;
+    return ffi_make_pointer_or_null(js, *(void **)addr);
+  }
+
+  if (!ffi_pointer_ensure_readable(js, handle, ffi_marshaled_type_size(type), "read", &err)) return err;
+  return ffi_value_from_c(js, addr, type);
+}
+
+static ant_value_t ffi_write_to_pointer(
+  ant_t *js,
+  ffi_pointer_handle_t *handle,
+  ffi_marshaled_type_t type,
+  ant_value_t value
+) {
+  ant_value_t err = js_mkundef();
+  uint8_t *addr = ffi_pointer_address_raw(handle);
+  ffi_value_box_t box;
+  void *scratch = NULL;
+
+  memset(&box, 0, sizeof(box));
+
+  if (type.id == FFI_VALUE_STRING) {
+    char *copy = NULL;
+    size_t len = 0;
+    if (!ffi_copy_js_string(js, value, &copy, &len, &err)) return err;
+    if (!ffi_pointer_ensure_readable(js, handle, len + 1, "write", &err)) {
+      free(copy);
+      return err;
+    }
+    memcpy(addr, copy, len + 1);
+    free(copy);
+    return js_getthis(js);
+  }
+
+  if (!ffi_pointer_ensure_readable(js, handle, ffi_marshaled_type_size(type), "write", &err)) return err;
+  if (!ffi_value_to_c(js, value, type, &box, &scratch, &err)) return err;
+
+  switch (type.id) {
+    case FFI_VALUE_INT8:   memcpy(addr, &box.i8, sizeof(box.i8)); break;
+    case FFI_VALUE_INT16:  memcpy(addr, &box.i16, sizeof(box.i16)); break;
+    case FFI_VALUE_INT:    memcpy(addr, &box.i32, sizeof(box.i32)); break;
+    case FFI_VALUE_INT64:  memcpy(addr, &box.i64, sizeof(box.i64)); break;
+    case FFI_VALUE_UINT8:  memcpy(addr, &box.u8, sizeof(box.u8)); break;
+    case FFI_VALUE_UINT16: memcpy(addr, &box.u16, sizeof(box.u16)); break;
+    case FFI_VALUE_UINT64: memcpy(addr, &box.u64, sizeof(box.u64)); break;
+    case FFI_VALUE_FLOAT:  memcpy(addr, &box.f32, sizeof(box.f32)); break;
+    case FFI_VALUE_DOUBLE: memcpy(addr, &box.f64, sizeof(box.f64)); break;
+    case FFI_VALUE_POINTER: memcpy(addr, &box.ptr, sizeof(box.ptr)); break;
+    default: break;
+  }
+
+  free(scratch);
+  return js_getthis(js);
+}
+
+static ant_value_t ffi_make_function(ant_t *js, ffi_library_handle_t *library, const char *symbol_name, ffi_signature_t *signature, void *func_ptr) {
+  ant_value_t obj = js_mkobj(js);
+  ant_value_t fn = 0;
+  ffi_function_handle_t *handle = calloc(1, sizeof(*handle));
+
+  if (!handle) {
+    ffi_signature_cleanup(signature);
+    return js_mkerr(js, "Out of memory");
+  }
+
+  handle->library = library;
+  handle->signature = *signature;
+  handle->func_ptr = func_ptr;
+  handle->symbol_name = strdup(symbol_name);
+  if (!handle->symbol_name) {
+    free(handle);
+    ffi_signature_cleanup(signature);
+    return js_mkerr(js, "Out of memory");
+  }
+
+  if (!handle->signature.variadic) if (
+    ffi_prep_cif(
+    &handle->cif,
+    FFI_DEFAULT_ABI,
+    (unsigned int)handle->signature.arg_count,
+    handle->signature.returns.ffi_type,
+    handle->signature.arg_count > 0 ? handle->signature.ffi_arg_types : NULL
+  ) != FFI_OK) {
+    free(handle->symbol_name);
+    ffi_signature_cleanup(&handle->signature);
+    free(handle);
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to prepare FFI call interface");
+  }
+
+  if (g_ffi_function_proto) js_set_proto_init(obj, g_ffi_function_proto);
+  js_set_slot(obj, SLOT_CFUNC, js_mkfun(ffi_function_call));
+  js_set_native_ptr(obj, handle);
+  js_set_native_tag(obj, FFI_FUNCTION_NATIVE_TAG);
+  js_set_slot_wb(js, obj, SLOT_ENTRIES, library ? library->obj : js_mkundef());
+  js_set_finalizer(obj, ffi_function_finalize);
+
+  fn = js_obj_to_func(obj);
+  return fn;
+}
+
+void ffi_library_finalize(ant_t *js, ant_object_t *obj) {
+  ffi_library_handle_t *library;
+  (void)js;
+  if (obj->native.tag != FFI_LIBRARY_NATIVE_TAG) return;
+  
+  library = (ffi_library_handle_t *)obj->native.ptr;
+  if (!library) return;
+  
+  ffi_library_close_handle(library);
+  free(library->path);
+  free(library);
+  obj->native.ptr = NULL;
+  obj->native.tag = 0;
+}
+
+void ffi_function_finalize(ant_t *js, ant_object_t *obj) {
+  ffi_function_handle_t *handle;
+  (void)js;
+  if (obj->native.tag != FFI_FUNCTION_NATIVE_TAG) return;
+  
+  handle = (ffi_function_handle_t *)obj->native.ptr;
+  if (!handle) return;
+  
+  free(handle->symbol_name);
+  ffi_signature_cleanup(&handle->signature);
+  free(handle);
+  obj->native.ptr = NULL;
+  obj->native.tag = 0;
+}
+
+void ffi_pointer_finalize(ant_t *js, ant_object_t *obj) {
+  ffi_pointer_handle_t *handle;
+  (void)js;
+  if (obj->native.tag != FFI_POINTER_NATIVE_TAG) return;
+  
+  handle = (ffi_pointer_handle_t *)obj->native.ptr;
+  if (!handle) return;
+  
+  ffi_pointer_close_handle(handle, false);
+  free(handle);
+  obj->native.ptr = NULL;
+  obj->native.tag = 0;
+}
+
+void ffi_callback_finalize(ant_t *js, ant_object_t *obj) {
+  ffi_callback_handle_t *handle;
+  (void)js;
+  if (obj->native.tag != FFI_CALLBACK_NATIVE_TAG) return;
+  
+  handle = (ffi_callback_handle_t *)obj->native.ptr;
+  if (!handle) return;
+  
+  ffi_callback_close_handle(handle);
+  free(handle);
+  obj->native.ptr = NULL;
+  obj->native.tag = 0;
+}
+
+static bool ffi_callback_result_to_c(
+  ffi_callback_handle_t *callback,
+  ant_value_t result,
+  void *ret,
+  ant_value_t *error_out
+) {
+  ffi_value_box_t box;
+  ant_value_t err = js_mkundef();
+  void *scratch = NULL;
+
+  memset(&box, 0, sizeof(box));
+  if (error_out) *error_out = js_mkundef();
+  if (callback->signature.returns.id == FFI_VALUE_VOID) return true;
+
+  if (!ffi_value_to_c(callback->js, result, callback->signature.returns, &box, &scratch, &err)) {
+    if (error_out) *error_out = err;
+    free(scratch);
+    return false;
+  }
+
+  switch (callback->signature.returns.id) {
+    case FFI_VALUE_INT8:   memcpy(ret, &box.i8, sizeof(box.i8)); break;
+    case FFI_VALUE_INT16:  memcpy(ret, &box.i16, sizeof(box.i16)); break;
+    case FFI_VALUE_INT:    memcpy(ret, &box.i32, sizeof(box.i32)); break;
+    case FFI_VALUE_INT64:  memcpy(ret, &box.i64, sizeof(box.i64)); break;
+    case FFI_VALUE_UINT8:  memcpy(ret, &box.u8, sizeof(box.u8)); break;
+    case FFI_VALUE_UINT16: memcpy(ret, &box.u16, sizeof(box.u16)); break;
+    case FFI_VALUE_UINT64: memcpy(ret, &box.u64, sizeof(box.u64)); break;
+    case FFI_VALUE_FLOAT:  memcpy(ret, &box.f32, sizeof(box.f32)); break;
+    case FFI_VALUE_DOUBLE: memcpy(ret, &box.f64, sizeof(box.f64)); break;
+    case FFI_VALUE_POINTER:
+      memcpy(ret, &box.ptr, sizeof(box.ptr));
+      break;
+    default:
+      free(scratch);
+      return false;
+  }
+
+  free(scratch);
+  return true;
+}
+
+static void ffi_callback_trampoline(ffi_cif *cif, void *ret, void **args, void *user_data) {
+  ffi_callback_handle_t *callback = (ffi_callback_handle_t *)user_data;
+  ant_value_t js_args[32];
+  ant_value_t fn = js_mkundef();
+  ant_value_t result = js_mkundef();
+  size_t argc = 0;
+
+  (void)cif;
+  if (!callback || callback->closed || !callback->js) return;
+  ffi_zero_return_value(ret, callback->signature.returns);
+  argc = callback->signature.arg_count;
+
+  if (!pthread_equal(pthread_self(), callback->owner_thread)) {
+    fprintf(stderr, "ant:ffi callback invoked off the JS thread; returning a zero value\n");
     return;
-  initialized = 1;
-  if (!ffi_functions_array)
-    utarray_new(ffi_functions_array, &ffi_func_icd);
+  }
+
+  if (argc > 32) argc = 32;
+  for (size_t i = 0; i < argc; i++) {
+    js_args[i] = ffi_value_from_c(callback->js, args[i], callback->signature.args[i]);
+  }
+
+  fn = js_get_slot(callback->owner_obj, SLOT_DATA);
+  if (!is_callable(fn)) {
+    fprintf(stderr, "ant:ffi callback target is no longer callable; returning a zero value\n");
+    return;
+  }
+
+  result = sv_vm_call(callback->js->vm, callback->js, fn, js_mkundef(), js_args, (int)argc, NULL, false);
+  if (is_err(result)) {
+    fprintf(stderr, "ant:ffi callback threw an exception; returning a zero value\n");
+    callback->js->thrown_exists = 0;
+    return;
+  }
+
+  if (!ffi_callback_result_to_c(callback, result, ret, NULL)) {
+    fprintf(stderr, "ant:ffi callback returned an incompatible value; returning a zero value\n");
+  }
+}
+
+static void ffi_init_prototypes(ant_t *js) {
+  ant_value_t function_proto = 0;
+
+  if (g_ffi_library_proto) return;
+
+  function_proto = js_get_slot(js_glob(js), SLOT_FUNC_PROTO);
+  if (vtype(function_proto) == T_UNDEF) function_proto = js_get_ctor_proto(js, "Function", 8);
+
+  g_ffi_library_proto = js_mkobj(js);
+  g_ffi_function_proto = js_mkobj(js);
+  g_ffi_pointer_proto = js_mkobj(js);
+  g_ffi_callback_proto = js_mkobj(js);
+
+  if (is_object_type(js->sym.object_proto)) {
+    js_set_proto_init(g_ffi_library_proto, js->sym.object_proto);
+    js_set_proto_init(g_ffi_pointer_proto, js->sym.object_proto);
+    js_set_proto_init(g_ffi_callback_proto, js->sym.object_proto);
+  }
+
+  if (is_object_type(function_proto)) js_set_proto_init(g_ffi_function_proto, function_proto);
+
+  js_set_sym(js, g_ffi_library_proto, get_toStringTag_sym(), ANT_STRING("FFILibrary"));
+  js_set_sym(js, g_ffi_function_proto, get_toStringTag_sym(), ANT_STRING("FFIFunction"));
+  js_set_sym(js, g_ffi_pointer_proto, get_toStringTag_sym(), ANT_STRING("FFIPointer"));
+  js_set_sym(js, g_ffi_callback_proto, get_toStringTag_sym(), ANT_STRING("FFICallback"));
+
+  js_set(js, g_ffi_library_proto, "define", js_mkfun(ffi_library_define));
+  js_set(js, g_ffi_library_proto, "call", js_mkfun(ffi_library_call));
+  js_set(js, g_ffi_library_proto, "close", js_mkfun(ffi_library_close));
+
+  js_set(js, g_ffi_pointer_proto, "address", js_mkfun(ffi_pointer_address));
+  js_set(js, g_ffi_pointer_proto, "isNull", js_mkfun(ffi_pointer_is_null));
+  js_set(js, g_ffi_pointer_proto, "read", js_mkfun(ffi_pointer_read));
+  js_set(js, g_ffi_pointer_proto, "write", js_mkfun(ffi_pointer_write));
+  js_set(js, g_ffi_pointer_proto, "offset", js_mkfun(ffi_pointer_offset));
+  js_set(js, g_ffi_pointer_proto, "free", js_mkfun(ffi_pointer_free));
+
+  js_set(js, g_ffi_callback_proto, "address", js_mkfun(ffi_callback_address));
+  js_set(js, g_ffi_callback_proto, "close", js_mkfun(ffi_callback_close));
+
+  js_set(js, g_ffi_function_proto, "address", js_mkfun(ffi_function_address));
 }
 
 static ant_value_t ffi_dlopen(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1 || vtype(args[0]) != T_STR) {
-    return js_mkerr(js, "dlopen() requires library name string");
-  }
+  ant_value_t path_val = js_mkundef();
+  const char *path = NULL;
+  
+  size_t path_len = 0;
+  void *dl = NULL;
+  
+  ffi_library_handle_t *library = NULL;
+  ant_value_t obj = 0;
 
-  ffi_init_array();
+  if (nargs < 1) return js_mkerr_typed(js, JS_ERR_TYPE, "dlopen(path) requires a library path");
+  ffi_init_prototypes(js);
 
-  size_t lib_name_len;
-  const char *lib_name = js_getstr(js, args[0], &lib_name_len);
+  path_val = js_tostring_val(js, args[0]);
+  if (is_err(path_val) || vtype(path_val) != T_STR) return path_val;
+  path = js_getstr(js, path_val, &path_len);
+  if (!path) return js_mkerr_typed(js, JS_ERR_TYPE, "Invalid library path");
 
-  pthread_mutex_lock(&ffi_libraries_mutex);
+  dl = dlopen(path, RTLD_LAZY);
+  if (!dl) return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to load library: %s", dlerror());
 
-  ffi_lib_t *lib = NULL;
-  HASH_FIND_STR(ffi_libraries, lib_name, lib);
-  if (lib) {
-    ant_value_t result = lib->js_obj;
-    pthread_mutex_unlock(&ffi_libraries_mutex);
-    return result;
-  }
-
-  pthread_mutex_unlock(&ffi_libraries_mutex);
-
-  void *handle = dlopen(lib_name, RTLD_LAZY);
-  if (!handle) {
-    return js_mkerr(js, "Failed to load library: %s", dlerror());
-  }
-
-  lib = (ffi_lib_t *)malloc(sizeof(ffi_lib_t));
-  if (!lib) {
-    dlclose(handle);
+  library = calloc(1, sizeof(*library));
+  if (!library) {
+    dlclose(dl);
     return js_mkerr(js, "Out of memory");
   }
 
-  strncpy(lib->name, lib_name, sizeof(lib->name) - 1);
-  lib->name[sizeof(lib->name) - 1] = '\0';
-  lib->handle = handle;
+  library->path = malloc(path_len + 1);
+  if (!library->path) {
+    dlclose(dl);
+    free(library);
+    return js_mkerr(js, "Out of memory");
+  }
 
-  lib->js_obj = js_mkobj(js);
-  js_set_native_ptr(lib->js_obj, lib);
-  js_set_native_tag(lib->js_obj, FFI_LIBRARY_NATIVE_TAG);
-  
-  js_set(js, lib->js_obj, "define", js_mkfun(ffi_define));
-  js_set(js, lib->js_obj, "call", js_mkfun(ffi_lib_call));
+  memcpy(library->path, path, path_len);
+  library->path[path_len] = '\0';
+  library->handle = dl;
+  library->closed = false;
 
-  pthread_mutex_lock(&ffi_libraries_mutex);
-  HASH_ADD_STR(ffi_libraries, name, lib);
-  pthread_mutex_unlock(&ffi_libraries_mutex);
-
-  return lib->js_obj;
+  obj = js_mkobj(js);
+  if (g_ffi_library_proto) js_set_proto_init(obj, g_ffi_library_proto);
+  library->obj = obj;
+  js_set_native_ptr(obj, library);
+  js_set_native_tag(obj, FFI_LIBRARY_NATIVE_TAG);
+  js_set_finalizer(obj, ffi_library_finalize);
+  return obj;
 }
 
-static ant_value_t ffi_define(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t this_obj;
-  ffi_lib_t *lib;
+ant_value_t ffi_library_close(ant_t *js, ant_value_t *args, int nargs) {
+  ffi_library_handle_t *library = ffi_library_data(js_getthis(js));
+  (void)args;
+  (void)nargs;
+  if (!library) return js_mkerr_typed(js, JS_ERR_TYPE, "Expected an FFILibrary");
+  ffi_library_close_handle(library);
+  return js_getthis(js);
+}
 
+ant_value_t ffi_library_define(ant_t *js, ant_value_t *args, int nargs) {
+  ffi_library_handle_t *library = ffi_library_data(js_getthis(js));
+  ffi_signature_t signature;
+  
+  ant_value_t error = js_mkundef();
+  ant_value_t fn = js_mkundef();
+  
+  const char *symbol_name = NULL;
+  void *sym = NULL;
+  memset(&signature, 0, sizeof(signature));
+
+  if (!library) return js_mkerr_typed(js, JS_ERR_TYPE, "Expected an FFILibrary");
+  if (library->closed) return js_mkerr_typed(js, JS_ERR_TYPE, "FFILibrary is closed");
+  
   if (nargs < 2 || vtype(args[0]) != T_STR) {
-    return js_mkerr(js, "define() requires function name string and signature");
+    return js_mkerr_typed(js, JS_ERR_TYPE, "define(name, signature) requires a symbol name and signature");
   }
 
-  this_obj = js_getthis(js);
-  lib = ffi_get_library_this(js, this_obj);
-  if (!lib) return js_mkerr(js, "Invalid library object");
+  if (!ffi_parse_signature(js, args[1], true, true, &signature, &error)) return error;
 
-  size_t func_name_len;
-  const char *func_name = js_getstr(js, args[0], &func_name_len);
-
-  ant_value_t sig = args[1];
-  int sig_type = vtype(sig);
+  symbol_name = js_getstr(js, args[0], NULL);
+  sym = dlsym(library->handle, symbol_name);
   
-  if (sig_type == T_STR || sig_type == T_NUM || sig_type == T_NULL || sig_type == T_UNDEF) return js_mkerr(js,
-    "Signature must be an array [returnType, [argTypes...]] or an object {args: [...], returns: type}"
-  );
-
-  const char *ret_type_str;
-  ant_value_t arg_types_arr;
-  int arg_count;
-
-  ant_value_t returns_val = js_get(js, sig, "returns");
-  ant_value_t args_val = js_get(js, sig, "args");
-
-  if (vtype(returns_val) != T_UNDEF && vtype(args_val) != T_UNDEF) {
-    if (vtype(returns_val) != T_STR) {
-      return js_mkerr(js, "Return type must be a string");
-    }
-    ret_type_str = js_getstr(js, returns_val, NULL);
-    arg_types_arr = args_val;
-
-    if (vtype(arg_types_arr) == T_STR || vtype(arg_types_arr) == T_NUM ||
-        vtype(arg_types_arr) == T_NULL ||
-        vtype(arg_types_arr) == T_UNDEF) {
-      return js_mkerr(js, "Argument types must be an array");
-    }
-
-    ant_value_t length_val = js_get(js, arg_types_arr, "length");
-    arg_count = (int)js_getnum(length_val);
-  } else {
-    ant_value_t ret_type_val = js_get(js, sig, "0");
-    if (vtype(ret_type_val) != T_STR) {
-      return js_mkerr(js, "Return type must be a string");
-    }
-
-    ret_type_str = js_getstr(js, ret_type_val, NULL);
-    arg_types_arr = js_get(js, sig, "1");
-
-    int arg_arr_type = vtype(arg_types_arr);
-    if (arg_arr_type == T_STR || arg_arr_type == T_NUM ||
-        arg_arr_type == T_NULL || arg_arr_type == T_UNDEF) {
-      return js_mkerr(js, "Argument types must be an array");
-    }
-
-    ant_value_t length_val = js_get(js, arg_types_arr, "length");
-    arg_count = (int)js_getnum(length_val);
+  if (!sym) {
+    ffi_signature_cleanup(&signature);
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Symbol '%s' was not found", symbol_name);
   }
 
-  ffi_type *ret_type = get_ffi_type(ret_type_str);
-  if (!ret_type) {
-    return js_mkerr(js, "Unknown return type: %s", ret_type_str);
+  fn = ffi_make_function(js, library, symbol_name, &signature, sym);
+  if (is_err(fn)) {
+    ffi_signature_cleanup(&signature);
+    return fn;
   }
 
-  void *func_ptr = dlsym(lib->handle, func_name);
-  if (!func_ptr) {
-    return js_mkerr(js, "Function '%s' not found", func_name);
-  }
-
-  ffi_func_t *func = (ffi_func_t *)malloc(sizeof(ffi_func_t));
-  if (!func) {
-    return js_mkerr(js, "Out of memory");
-  }
-
-  strncpy(func->name, func_name, sizeof(func->name) - 1);
-  func->name[sizeof(func->name) - 1] = '\0';
-  func->func_ptr = func_ptr;
-  func->ret_type = ret_type;
-  strncpy(func->ret_type_str, ret_type_str, sizeof(func->ret_type_str) - 1);
-  func->ret_type_str[sizeof(func->ret_type_str) - 1] = '\0';
-  func->arg_count = arg_count;
-  func->is_variadic = false;
-
-  if (arg_count > 0) {
-    func->arg_types = (ffi_type **)malloc(sizeof(ffi_type *) * arg_count);
-    if (!func->arg_types) {
-      free(func);
-      return js_mkerr(js, "Out of memory");
-    }
-
-    for (int i = 0; i < arg_count; i++) {
-      char idx_str[16];
-      snprintf(idx_str, sizeof(idx_str), "%d", i);
-      ant_value_t arg_type_val = js_get(js, arg_types_arr, idx_str);
-
-      if (vtype(arg_type_val) != T_STR) {
-        free(func->arg_types);
-        free(func);
-        return js_mkerr(js, "Argument type must be a string");
-      }
-
-      const char *arg_type_str = js_getstr(js, arg_type_val, NULL);
-
-      if (strcmp(arg_type_str, "...") == 0) {
-        func->is_variadic = true;
-        func->arg_count = i;
-        break;
-      }
-
-      func->arg_types[i] = get_ffi_type(arg_type_str);
-      if (!func->arg_types[i]) {
-        free(func->arg_types);
-        free(func);
-        return js_mkerr(js, "Unknown argument type: %s", arg_type_str);
-      }
-    }
-  } else {
-    func->arg_types = NULL;
-  }
-
-  if (!func->is_variadic) {
-    ffi_status status =
-        ffi_prep_cif(&func->cif, FFI_DEFAULT_ABI, func->arg_count, ret_type, func->arg_types);
-    if (status != FFI_OK) {
-      if (func->arg_types)
-        free(func->arg_types);
-      free(func);
-      return js_mkerr(js, "Failed to prepare function call (status=%d, argc=%d)", status, func->arg_count);
-    }
-  }
-
-  pthread_mutex_lock(&ffi_functions_mutex);
-  utarray_push_back(ffi_functions_array, &func);
-  unsigned int func_index = utarray_len(ffi_functions_array) - 1;
-  pthread_mutex_unlock(&ffi_functions_mutex);
-
-  js_set(js, this_obj, func_name, js_mkffi(func_index));
-
-  return js_mkundef();
+  js_set(js, js_getthis(js), symbol_name, fn);
+  return fn;
 }
 
-static ant_value_t ffi_lib_call(ant_t *js, ant_value_t *args, int nargs) {
-  ant_value_t lib_obj = js_getthis(js);
-  
-  if (!ffi_get_library_this(js, lib_obj)) return js_mkerr(js, "Invalid library object");
-  if (nargs < 1 || vtype(args[0]) != T_STR)  return js_mkerr(js, "call() requires function name string");
+ant_value_t ffi_library_call(ant_t *js, ant_value_t *args, int nargs) {
+  ant_value_t fn = js_mkundef();
+  ffi_library_handle_t *library = ffi_library_data(js_getthis(js));
 
-  size_t func_name_len;
-  const char *func_name = js_getstr(js, args[0], &func_name_len);
+  if (!library) return js_mkerr_typed(js, JS_ERR_TYPE, "Expected an FFILibrary");
+  if (library->closed) return js_mkerr_typed(js, JS_ERR_TYPE, "FFILibrary is closed");
+  if (nargs < 1 || vtype(args[0]) != T_STR) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "call(name, ...args) requires a symbol name");
+  }
 
-  ant_value_t ffi_val = js_get(js, lib_obj, func_name);
-  int func_index = js_getffi(ffi_val);
-  if (func_index < 0) return js_mkerr(js, "Function '%s' not defined", func_name);
+  fn = js_get(js, js_getthis(js), js_getstr(js, args[0], NULL));
+  if (!is_callable(fn)) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Symbol '%s' has not been defined", js_getstr(js, args[0], NULL));
+  }
 
-  return ffi_call_by_index(js, (unsigned int)func_index, args + 1, nargs - 1);
+  return sv_vm_call(js->vm, js, fn, js_mkundef(), args + 1, nargs - 1, NULL, false);
 }
 
-static ant_value_t ffi_call_function(ant_t *js, ffi_func_t *func, ant_value_t *args,int nargs) {
-  if (!func->is_variadic && nargs != func->arg_count) {
-    return js_mkerr(js, "Function '%s' expects %d arguments, got %d", func->name, func->arg_count, nargs);
-  }
+ant_value_t ffi_function_call(ant_t *js, ant_value_t *args, int nargs) {
+  ffi_function_handle_t *function = ffi_function_data(js->current_func);
+  ffi_type **call_types = NULL;
+  ffi_value_box_t *values = NULL;
+  
+  void **call_args = NULL;
+  void **scratch = NULL;
+  
+  ffi_marshaled_type_t *dynamic_types = NULL;
+  ffi_cif call_cif;
+  ffi_value_box_t result;
+  ant_value_t error = js_mkundef();
+  
+  int status = FFI_OK;
+  size_t actual_argc = 0;
 
-  if (func->is_variadic && nargs < func->arg_count) {
-    return js_mkerr(js, "Function '%s' expects at least %d arguments, got %d", func->name, func->arg_count, nargs);
-  }
-
-#define MAX_ARGS 32
-  void *arg_values_buf[MAX_ARGS];
-  ffi_arg arg_buffers_buf[MAX_ARGS];
-
-  int actual_arg_count = func->is_variadic ? nargs : func->arg_count;
-
-  if (actual_arg_count > MAX_ARGS) {
-    return js_mkerr(js, "Too many arguments");
-  }
-
-  void **arg_values = arg_values_buf;
-  memset(arg_values, 0, sizeof(arg_values_buf));
-
-  for (int i = 0; i < actual_arg_count; i++) {
-    arg_values[i] = &arg_buffers_buf[i];
-    memset(arg_values[i], 0, sizeof(ffi_arg));
-
-    ffi_type *arg_type;
-    if (i < func->arg_count) {
-      arg_type = func->arg_types[i];
-    } else arg_type = &ffi_type_sint32;
-
-    js_to_ffi_value(js, args[i], arg_type, arg_values[i]);
-  }
-
-  ffi_arg result;
   memset(&result, 0, sizeof(result));
 
-  if (func->is_variadic) {
-#define MAX_VARIADIC_ARGS 32
-    ffi_type *all_arg_types[MAX_VARIADIC_ARGS];
-
-    if (actual_arg_count > MAX_VARIADIC_ARGS) {
-      return js_mkerr(js, "Too many variadic arguments");
-    }
-
-    for (int i = 0; i < func->arg_count; i++) all_arg_types[i] = func->arg_types[i];
-    for (int i = func->arg_count; i < actual_arg_count; i++) all_arg_types[i] = &ffi_type_sint32;
-
-    ffi_cif call_cif;
-    ffi_status status =
-        ffi_prep_cif_var(&call_cif, FFI_DEFAULT_ABI, func->arg_count,
-                         actual_arg_count, func->ret_type, all_arg_types);
-
-    if (status != FFI_OK) {
-      return js_mkerr(js, "Failed to prepare variadic call CIF (status=%d)", status);
-    }
-
-    ffi_call(&call_cif, func->func_ptr, &result, arg_values);
-  } else {
-    ffi_call(&func->cif, func->func_ptr, &result, arg_values);
+  if (!function) return js_mkerr_typed(js, JS_ERR_TYPE, "Expected an FFIFunction");
+  if (!function->library || function->library->closed) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "FFIFunction '%s' belongs to a closed library", function->symbol_name);
   }
 
-  return ffi_to_js_value(js, &result, func->ret_type, func->ret_type_str);
+  if (!function->signature.variadic && nargs != (int)function->signature.arg_count) return js_mkerr_typed(
+    js, JS_ERR_TYPE,
+    "FFIFunction '%s' expects %zu arguments, got %d",
+    function->symbol_name,
+    function->signature.arg_count,
+    nargs
+  );
+
+  if (function->signature.variadic && nargs < (int)function->signature.fixed_arg_count) return js_mkerr_typed(
+    js, JS_ERR_TYPE,
+    "FFIFunction '%s' expects at least %zu arguments, got %d",
+    function->symbol_name,
+    function->signature.fixed_arg_count,
+    nargs
+  );
+
+  actual_argc = (size_t)nargs;
+  if (actual_argc > 0) {
+    call_types = calloc(actual_argc, sizeof(*call_types));
+    values = calloc(actual_argc, sizeof(*values));
+    call_args = calloc(actual_argc, sizeof(*call_args));
+    scratch = calloc(actual_argc, sizeof(*scratch));
+    dynamic_types = calloc(actual_argc, sizeof(*dynamic_types));
+    if (!call_types || !values || !call_args || !scratch || !dynamic_types) {
+      error = js_mkerr(js, "Out of memory");
+      goto cleanup;
+    }
+  }
+
+  for (size_t i = 0; i < actual_argc; i++) {
+    ffi_marshaled_type_t type = i < function->signature.fixed_arg_count
+      ? function->signature.args[i]
+      : ffi_infer_variadic_type(args[i]);
+    
+    dynamic_types[i] = type;
+    call_types[i] = type.ffi_type;
+    call_args[i] = &values[i];
+    
+    if (!ffi_value_to_c(js, args[i], type, &values[i], &scratch[i], &error)) goto cleanup;
+  }
+
+  if (function->signature.variadic) {
+    status = ffi_prep_cif_var(
+      &call_cif,
+      FFI_DEFAULT_ABI,
+      (unsigned int)function->signature.fixed_arg_count,
+      (unsigned int)actual_argc,
+      function->signature.returns.ffi_type,
+      call_types
+    );
+    
+    if (status != FFI_OK) {
+      error = js_mkerr_typed(js, JS_ERR_TYPE, "Failed to prepare variadic FFI call");
+      goto cleanup;
+    }
+    
+    ffi_call(&call_cif, function->func_ptr, &result, call_args);
+  } else ffi_call(&function->cif, function->func_ptr, &result, call_args);
+
+cleanup:
+  if (vtype(error) != T_UNDEF) {
+    size_t i;
+    for (i = 0; i < actual_argc; i++) free(scratch ? scratch[i] : NULL);
+    free(dynamic_types);
+    free(scratch);
+    free(call_args);
+    free(values);
+    free(call_types);
+    return error;
+  }
+
+  {
+    ant_value_t out = ffi_value_from_c(js, &result, function->signature.returns);
+    size_t i;
+    for (i = 0; i < actual_argc; i++) free(scratch ? scratch[i] : NULL);
+    free(dynamic_types);
+    free(scratch);
+    free(call_args);
+    free(values);
+    free(call_types);
+    return out;
+  }
 }
 
-ant_value_t ffi_call_by_index(ant_t *js, unsigned int func_index, ant_value_t *args, int nargs) {
-  pthread_mutex_lock(&ffi_functions_mutex);
-  if (func_index >= utarray_len(ffi_functions_array)) {
-    pthread_mutex_unlock(&ffi_functions_mutex);
-    return js_mkerr(js, "Invalid FFI function index");
-  }
-  
-  ffi_func_t *func = *(ffi_func_t **)utarray_eltptr(ffi_functions_array, func_index);
-  pthread_mutex_unlock(&ffi_functions_mutex);
-  
-  return ffi_call_function(js, func, args, nargs);
+ant_value_t ffi_function_address(ant_t *js, ant_value_t *args, int nargs) {
+  ffi_function_handle_t *function = ffi_function_data(js_getthis(js));
+  (void)args;
+  (void)nargs;
+  if (!function) return js_mkerr_typed(js, JS_ERR_TYPE, "Expected an FFIFunction");
+  return js_mknum((double)(uintptr_t)function->func_ptr);
 }
 
 static ant_value_t ffi_alloc_memory(ant_t *js, ant_value_t *args, int nargs) {
+  ffi_pointer_region_t *region = NULL;
+  size_t size = 0;
+
   if (nargs < 1 || vtype(args[0]) != T_NUM) {
-    return js_mkerr(js, "alloc() requires size");
+    return js_mkerr_typed(js, JS_ERR_TYPE, "alloc(size) requires a numeric size");
   }
 
-  size_t size = (size_t)js_getnum(args[0]);
-  if (size == 0) {
-    return js_mkerr(js, "alloc() requires non-zero size");
-  }
+  size = (size_t)js_getnum(args[0]);
+  if (size == 0) return js_mkerr_typed(js, JS_ERR_RANGE, "alloc(size) requires a positive size");
 
-  void *ptr = malloc(size);
-  if (!ptr) {
-    return js_mkerr(js, "alloc() failed to allocate memory");
-  }
+  region = calloc(1, sizeof(*region));
+  if (!region) return js_mkerr(js, "Out of memory");
 
-  ffi_ptr_t *ffi_ptr = (ffi_ptr_t *)malloc(sizeof(ffi_ptr_t));
-  if (!ffi_ptr) {
-    free(ptr);
+  region->ptr = malloc(size);
+  if (!region->ptr) {
+    free(region);
     return js_mkerr(js, "Out of memory");
   }
 
-  ffi_ptr->ptr = ptr;
-  ffi_ptr->size = size;
-  ffi_ptr->is_managed = true;
-  ffi_ptr->ptr_key = (uint64_t)ptr;
-
-  pthread_mutex_lock(&ffi_pointers_mutex);
-  HASH_ADD(hh, ffi_pointers, ptr_key, sizeof(uint64_t), ffi_ptr);
-  pthread_mutex_unlock(&ffi_pointers_mutex);
-
-  return js_mknum((double)ffi_ptr->ptr_key);
+  region->size = size;
+  region->owned = true;
+  region->freed = false;
+  region->size_known = true;
+  return ffi_make_pointer(js, region, 0);
 }
 
-static ant_value_t ffi_free_memory(ant_t *js, ant_value_t *args, int nargs) {
+static ant_value_t ffi_pointer_value(ant_t *js, ant_value_t *args, int nargs) {
+  ffi_pointer_region_t *region = NULL;
+  ant_value_t error = js_mkundef();
+  char *str_copy = NULL;
+  size_t str_len = 0;
+  const uint8_t *buffer_bytes = NULL;
+  size_t buffer_len = 0;
+
+  if (nargs < 1 || ffi_is_nullish(args[0])) return ffi_make_pointer_from_raw(js, NULL);
+  if (ffi_pointer_data(args[0])) return args[0];
+
+  if (ffi_callback_data(args[0])) {
+    void *ptr = NULL;
+    if (!ffi_pointer_from_js(js, args[0], &ptr, &error)) return error;
+    return ffi_make_pointer_or_null(js, ptr);
+  }
+
+  region = calloc(1, sizeof(*region));
+  if (!region) return js_mkerr(js, "Out of memory");
+
+  if (buffer_source_get_bytes(js, args[0], &buffer_bytes, &buffer_len)) {
+    region->ptr = (uint8_t *)buffer_bytes;
+    region->size = buffer_len;
+    region->size_known = true;
+    region->owned = false;
+    region->freed = false;
+    return ffi_make_pointer(js, region, 0);
+  }
+
+  if (!ffi_copy_js_string(js, args[0], &str_copy, &str_len, &error)) {
+    free(region);
+    return error;
+  }
+
+  region->ptr = (uint8_t *)str_copy;
+  region->size = str_len + 1;
+  region->size_known = true;
+  region->owned = true;
+  region->freed = false;
+  return ffi_make_pointer(js, region, 0);
+}
+
+ant_value_t ffi_pointer_address(ant_t *js, ant_value_t *args, int nargs) {
+  ffi_pointer_handle_t *handle = ffi_pointer_data(js_getthis(js));
+  (void)args;
+  (void)nargs;
+  if (!handle) return js_mkerr_typed(js, JS_ERR_TYPE, "Expected an FFIPointer");
+  return js_mknum((double)(uintptr_t)ffi_pointer_address_raw(handle));
+}
+
+ant_value_t ffi_pointer_is_null(ant_t *js, ant_value_t *args, int nargs) {
+  ffi_pointer_handle_t *handle = ffi_pointer_data(js_getthis(js));
+  (void)args;
+  (void)nargs;
+  if (!handle) return js_mkerr_typed(js, JS_ERR_TYPE, "Expected an FFIPointer");
+  return js_bool(ffi_pointer_address_raw(handle) == NULL);
+}
+
+ant_value_t ffi_pointer_read(ant_t *js, ant_value_t *args, int nargs) {
+  ffi_pointer_handle_t *handle = ffi_pointer_data(js_getthis(js));
+  ffi_marshaled_type_t type;
+
+  if (!handle) return js_mkerr_typed(js, JS_ERR_TYPE, "Expected an FFIPointer");
+  type = nargs > 0 ? ffi_marshaled_type_from_value(js, args[0]) : ffi_marshaled_type_make(FFI_VALUE_POINTER, "pointer");
+  if (type.id == FFI_VALUE_UNKNOWN || type.id == FFI_VALUE_SPREAD || type.id == FFI_VALUE_VOID) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Unsupported FFIPointer.read() type");
+  }
+  return ffi_read_from_pointer(js, handle, type);
+}
+
+ant_value_t ffi_pointer_write(ant_t *js, ant_value_t *args, int nargs) {
+  ffi_pointer_handle_t *handle = ffi_pointer_data(js_getthis(js));
+  ffi_marshaled_type_t type;
+
+  if (!handle) return js_mkerr_typed(js, JS_ERR_TYPE, "Expected an FFIPointer");
+  if (nargs < 2) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "FFIPointer.write(type, value) requires a type and value");
+  }
+
+  type = ffi_marshaled_type_from_value(js, args[0]);
+  if (type.id == FFI_VALUE_UNKNOWN || type.id == FFI_VALUE_SPREAD || type.id == FFI_VALUE_VOID) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Unsupported FFIPointer.write() type");
+  }
+
+  return ffi_write_to_pointer(js, handle, type, args[1]);
+}
+
+ant_value_t ffi_pointer_offset(ant_t *js, ant_value_t *args, int nargs) {
+  ffi_pointer_handle_t *handle = ffi_pointer_data(js_getthis(js));
+  ffi_pointer_handle_t *next = NULL;
+  ant_value_t out = 0;
+  size_t offset = 0;
+
+  if (!handle) return js_mkerr_typed(js, JS_ERR_TYPE, "Expected an FFIPointer");
   if (nargs < 1 || vtype(args[0]) != T_NUM) {
-    return js_mkerr(js, "free() requires pointer");
+    return js_mkerr_typed(js, JS_ERR_TYPE, "FFIPointer.offset(bytes) requires a numeric byte offset");
   }
 
-  uint64_t ptr_key = (uint64_t)js_getnum(args[0]);
+  if (js_getnum(args[0]) < 0) return js_mkerr_typed(js, JS_ERR_RANGE, "FFIPointer.offset() requires a non-negative offset");
+  offset = (size_t)js_getnum(args[0]);
 
-  pthread_mutex_lock(&ffi_pointers_mutex);
-  ffi_ptr_t *ffi_ptr = NULL;
-  HASH_FIND(hh, ffi_pointers, &ptr_key, sizeof(uint64_t), ffi_ptr);
-
-  if (!ffi_ptr) {
-    pthread_mutex_unlock(&ffi_pointers_mutex);
-    return js_mkerr(js, "Invalid pointer");
+  if (handle->region && handle->region->size_known && handle->byte_offset + offset > handle->region->size) {
+    return js_mkerr_typed(js, JS_ERR_RANGE, "FFIPointer.offset() is out of bounds");
   }
 
-  if (ffi_ptr->is_managed) {
-    free(ffi_ptr->ptr);
-  }
-
-  HASH_DEL(ffi_pointers, ffi_ptr);
-  free(ffi_ptr);
-  pthread_mutex_unlock(&ffi_pointers_mutex);
-
-  return js_mkundef();
+  out = ffi_make_pointer(js, handle->region, handle->byte_offset + offset);
+  next = ffi_pointer_data(out);
+  if (!next) return out;
+  return out;
 }
 
-static ant_value_t ffi_read_memory(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 2 || vtype(args[0]) != T_NUM || vtype(args[1]) != T_STR) {
-    return js_mkerr(js, "read() requires pointer and type");
+ant_value_t ffi_pointer_free(ant_t *js, ant_value_t *args, int nargs) {
+  ffi_pointer_handle_t *handle = ffi_pointer_data(js_getthis(js));
+  (void)args;
+  (void)nargs;
+  if (!handle) return js_mkerr_typed(js, JS_ERR_TYPE, "Expected an FFIPointer");
+  if (!handle->region || !handle->region->owned) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Only owned FFIPointers can be freed");
   }
-
-  uint64_t ptr_key = (uint64_t)js_getnum(args[0]);
-
-  pthread_mutex_lock(&ffi_pointers_mutex);
-  ffi_ptr_t *ffi_ptr = NULL;
-  HASH_FIND(hh, ffi_pointers, &ptr_key, sizeof(uint64_t), ffi_ptr);
-
-  if (!ffi_ptr) {
-    pthread_mutex_unlock(&ffi_pointers_mutex);
-    return js_mkerr(js, "Invalid pointer");
+  if (!ffi_pointer_region_free(handle->region)) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "FFIPointer has already been freed");
   }
-
-  void *ptr = ffi_ptr->ptr;
-  pthread_mutex_unlock(&ffi_pointers_mutex);
-
-  const char *type_str = js_getstr(js, args[1], NULL);
-  ffi_type *type = get_ffi_type(type_str);
-  if (!type) {
-    return js_mkerr(js, "Unknown type: %s", type_str);
-  }
-
-  return ffi_to_js_value(js, ptr, type, type_str);
-}
-
-static ant_value_t ffi_write_memory(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 3 || vtype(args[0]) != T_NUM || vtype(args[1]) != T_STR) {
-    return js_mkerr(js, "write() requires pointer, type, and value");
-  }
-
-  uint64_t ptr_key = (uint64_t)js_getnum(args[0]);
-
-  pthread_mutex_lock(&ffi_pointers_mutex);
-  ffi_ptr_t *ffi_ptr = NULL;
-  HASH_FIND(hh, ffi_pointers, &ptr_key, sizeof(uint64_t), ffi_ptr);
-
-  if (!ffi_ptr) {
-    pthread_mutex_unlock(&ffi_pointers_mutex);
-    return js_mkerr(js, "Invalid pointer");
-  }
-
-  void *ptr = ffi_ptr->ptr;
-  pthread_mutex_unlock(&ffi_pointers_mutex);
-
-  const char *type_str = js_getstr(js, args[1], NULL);
-  ffi_type *type = get_ffi_type(type_str);
-  if (!type) {
-    return js_mkerr(js, "Unknown type: %s", type_str);
-  }
-
-  js_to_ffi_value(js, args[2], type, ptr);
-
-  return js_mkundef();
-}
-
-static ant_value_t ffi_get_pointer(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1 || vtype(args[0]) != T_NUM) return js_mkerr(js, "pointer() requires pointer");
-  uint64_t ptr_key = (uint64_t)js_getnum(args[0]);
-
-  pthread_mutex_lock(&ffi_pointers_mutex);
-  ffi_ptr_t *ffi_ptr = NULL;
-  HASH_FIND(hh, ffi_pointers, &ptr_key, sizeof(uint64_t), ffi_ptr);
-  bool exists = ffi_ptr != NULL;
-  pthread_mutex_unlock(&ffi_pointers_mutex);
-
-  return js_bool(exists);
-}
-
-static ant_value_t ffi_read_ptr(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 2 || vtype(args[0]) != T_NUM || vtype(args[1]) != T_STR) {
-    return js_mkerr(js, "readPtr() requires pointer and type");
-  }
-
-  void *ptr = (void *)(uint64_t)js_getnum(args[0]);
-  if (!ptr) return js_mknull();
-
-  const char *type_str = js_getstr(js, args[1], NULL);
-
-  if (strcmp(type_str, "string") == 0) {
-    const char *str = (const char *)ptr;
-    return js_mkstr(js, str, strlen(str));
-  }
-
-  ffi_type *type = get_ffi_type(type_str);
-  if (!type) return js_mkerr(js, "Unknown type: %s", type_str);
-
-  return ffi_to_js_value(js, ptr, type, type_str);
-}
-
-static void ffi_callback_handler(ffi_cif *cif, void *ret, void **args, void *user_data) {
-  (void)cif;
-  ffi_callback_t *cb = (ffi_callback_t *)user_data;
-  ant_t *js = cb->js;
-
-  ant_value_t js_args[32];
-  int arg_count = cb->arg_count > 32 ? 32 : cb->arg_count;
-
-  for (int i = 0; i < arg_count; i++) {
-    js_args[i] = ffi_to_js_value(js, args[i], cb->arg_types[i], cb->arg_type_strs[i]);
-  }
-
-  ant_value_t result = sv_vm_call(js->vm, js, cb->js_func, js_mkundef(), js_args, arg_count, NULL, false);
-
-  if (cb->ret_type != &ffi_type_void) {
-    if (cb->ret_type == &ffi_type_sint8) {
-      *(int8_t *)ret = (int8_t)js_getnum(result);
-    } else if (cb->ret_type == &ffi_type_sint16) {
-      *(int16_t *)ret = (int16_t)js_getnum(result);
-    } else if (cb->ret_type == &ffi_type_sint32) {
-      *(int32_t *)ret = (int32_t)js_getnum(result);
-    } else if (cb->ret_type == &ffi_type_sint64) {
-      *(int64_t *)ret = (int64_t)js_getnum(result);
-    } else if (cb->ret_type == &ffi_type_uint8) {
-      *(uint8_t *)ret = (uint8_t)js_getnum(result);
-    } else if (cb->ret_type == &ffi_type_uint16) {
-      *(uint16_t *)ret = (uint16_t)js_getnum(result);
-    } else if (cb->ret_type == &ffi_type_uint64) {
-      *(uint64_t *)ret = (uint64_t)js_getnum(result);
-    } else if (cb->ret_type == &ffi_type_float) {
-      *(float *)ret = (float)js_getnum(result);
-    } else if (cb->ret_type == &ffi_type_double) {
-      *(double *)ret = js_getnum(result);
-    } else if (cb->ret_type == &ffi_type_pointer) {
-      if (vtype(result) == T_NUM) {
-        *(void **)ret = (void *)(uint64_t)js_getnum(result);
-      } else {
-        *(void **)ret = NULL;
-      }
-    }
-  }
+  return js_getthis(js);
 }
 
 static ant_value_t ffi_create_callback(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 2) return js_mkerr(js, "callback() requires function and signature");
+  ant_value_t signature_val = js_mkundef();
+  ant_value_t fn = js_mkundef();
+  ant_value_t obj = 0;
+  ffi_callback_handle_t *callback = NULL;
+  ant_value_t error = js_mkundef();
 
-  ant_value_t js_func = args[0];
-  ant_value_t sig = args[1];
-  int sig_type = vtype(sig);
-  if (sig_type == T_STR || sig_type == T_NUM || sig_type == T_NULL || sig_type == T_UNDEF) {
-    return js_mkerr(js, "Signature must be an object {args: [...], returns: type}");
+  if (nargs < 2) {
+    return js_mkerr_typed(js, JS_ERR_TYPE, "callback(signature, fn) requires a signature and function");
   }
 
-  const char *ret_type_str;
-  ant_value_t arg_types_arr;
-  int arg_count;
+  if (is_callable(args[0]) && is_object_type(args[1])) {
+    fn = args[0];
+    signature_val = args[1];
+  } else if (is_object_type(args[0]) && is_callable(args[1])) {
+    signature_val = args[0];
+    fn = args[1];
+  } else return js_mkerr_typed(js, JS_ERR_TYPE, "callback(signature, fn) requires a signature object and callable function");
 
-  ant_value_t returns_val = js_get(js, sig, "returns");
-  ant_value_t args_val = js_get(js, sig, "args");
+  ffi_init_prototypes(js);
 
-  if (vtype(returns_val) != T_UNDEF && vtype(args_val) != T_UNDEF) {
-    if (vtype(returns_val) != T_STR) return js_mkerr(js, "Return type must be a string");
-    ret_type_str = js_getstr(js, returns_val, NULL);
-    arg_types_arr = args_val;
-    ant_value_t length_val = js_get(js, arg_types_arr, "length");
-    arg_count = (int)js_getnum(length_val);
-  } else {
-    ant_value_t ret_type_val = js_get(js, sig, "0");
-    if (vtype(ret_type_val) != T_STR) return js_mkerr(js, "Return type must be a string");
-    ret_type_str = js_getstr(js, ret_type_val, NULL);
-    arg_types_arr = js_get(js, sig, "1");
-    ant_value_t length_val = js_get(js, arg_types_arr, "length");
-    arg_count = (int)js_getnum(length_val);
+  callback = calloc(1, sizeof(*callback));
+  if (!callback) return js_mkerr(js, "Out of memory");
+
+  if (!ffi_parse_signature(js, signature_val, false, false, &callback->signature, &error)) {
+    free(callback);
+    return error;
   }
 
-  ffi_type *ret_type = get_ffi_type(ret_type_str);
-  if (!ret_type) return js_mkerr(js, "Unknown return type: %s", ret_type_str);
-
-  ffi_callback_t *cb = (ffi_callback_t *)malloc(sizeof(ffi_callback_t));
-  if (!cb) return js_mkerr(js, "Out of memory");
-
-  cb->js = js;
-  cb->js_func = js_func;
-  cb->ret_type = ret_type;
-  strncpy(cb->ret_type_str, ret_type_str, sizeof(cb->ret_type_str) - 1);
-  cb->ret_type_str[sizeof(cb->ret_type_str) - 1] = '\0';
-  cb->arg_count = arg_count;
-
-  if (arg_count > 0) {
-    cb->arg_types = (ffi_type **)malloc(sizeof(ffi_type *) * arg_count);
-    cb->arg_type_strs = (char **)malloc(sizeof(char *) * arg_count);
-    if (!cb->arg_types || !cb->arg_type_strs) {
-      if (cb->arg_types) free(cb->arg_types);
-      if (cb->arg_type_strs) free(cb->arg_type_strs);
-      free(cb);
-      return js_mkerr(js, "Out of memory");
-    }
-
-    for (int i = 0; i < arg_count; i++) {
-      char idx_str[16];
-      snprintf(idx_str, sizeof(idx_str), "%d", i);
-      ant_value_t arg_type_val = js_get(js, arg_types_arr, idx_str);
-
-      if (vtype(arg_type_val) != T_STR) {
-        for (int j = 0; j < i; j++) free(cb->arg_type_strs[j]);
-        free(cb->arg_types);
-        free(cb->arg_type_strs);
-        free(cb);
-        return js_mkerr(js, "Argument type must be a string");
-      }
-
-      const char *arg_type_str = js_getstr(js, arg_type_val, NULL);
-      cb->arg_types[i] = get_ffi_type(arg_type_str);
-      if (!cb->arg_types[i]) {
-        for (int j = 0; j < i; j++) free(cb->arg_type_strs[j]);
-        free(cb->arg_types);
-        free(cb->arg_type_strs);
-        free(cb);
-        return js_mkerr(js, "Unknown argument type: %s", arg_type_str);
-      }
-      cb->arg_type_strs[i] = strdup(arg_type_str);
-    }
-  } else {
-    cb->arg_types = NULL;
-    cb->arg_type_strs = NULL;
+  if (ffi_prep_cif(
+        &callback->cif,
+        FFI_DEFAULT_ABI,
+        (unsigned int)callback->signature.arg_count,
+        callback->signature.returns.ffi_type,
+        callback->signature.arg_count > 0 ? callback->signature.ffi_arg_types : NULL
+      ) != FFI_OK) {
+    ffi_signature_cleanup(&callback->signature);
+    free(callback);
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to prepare FFICallback signature");
   }
 
-  ffi_status status = ffi_prep_cif(&cb->cif, FFI_DEFAULT_ABI, arg_count, ret_type, cb->arg_types);
-  if (status != FFI_OK) {
-    for (int i = 0; i < arg_count; i++) free(cb->arg_type_strs[i]);
-    if (cb->arg_types) free(cb->arg_types);
-    if (cb->arg_type_strs) free(cb->arg_type_strs);
-    free(cb);
-    return js_mkerr(js, "Failed to prepare callback CIF (status=%d)", status);
+  callback->closure = ffi_closure_alloc(sizeof(*callback->closure), &callback->code_ptr);
+  if (!callback->closure) {
+    ffi_signature_cleanup(&callback->signature);
+    free(callback);
+    return js_mkerr(js, "Failed to allocate FFICallback closure");
   }
 
-  cb->closure = (ffi_closure *)ffi_closure_alloc(sizeof(ffi_closure), &cb->code_ptr);
-  if (!cb->closure) {
-    for (int i = 0; i < arg_count; i++) free(cb->arg_type_strs[i]);
-    if (cb->arg_types) free(cb->arg_types);
-    if (cb->arg_type_strs) free(cb->arg_type_strs);
-    free(cb);
-    return js_mkerr(js, "Failed to allocate closure");
+  if (ffi_prep_closure_loc(callback->closure, &callback->cif, ffi_callback_trampoline, callback, callback->code_ptr) != FFI_OK) {
+    ffi_closure_free(callback->closure);
+    ffi_signature_cleanup(&callback->signature);
+    free(callback);
+    return js_mkerr_typed(js, JS_ERR_TYPE, "Failed to prepare FFICallback closure");
   }
 
-  status = ffi_prep_closure_loc(cb->closure, &cb->cif, ffi_callback_handler, cb, cb->code_ptr);
-  if (status != FFI_OK) {
-    ffi_closure_free(cb->closure);
-    for (int i = 0; i < arg_count; i++) free(cb->arg_type_strs[i]);
-    if (cb->arg_types) free(cb->arg_types);
-    if (cb->arg_type_strs) free(cb->arg_type_strs);
-    free(cb);
-    return js_mkerr(js, "Failed to prepare closure (status=%d)", status);
-  }
-
-  cb->cb_key = (uint64_t)cb->code_ptr;
-
-  pthread_mutex_lock(&ffi_callbacks_mutex);
-  HASH_ADD(hh, ffi_callbacks, cb_key, sizeof(uint64_t), cb);
-  pthread_mutex_unlock(&ffi_callbacks_mutex);
-
-  return js_mknum((double)cb->cb_key);
+  obj = js_mkobj(js);
+  if (g_ffi_callback_proto) js_set_proto_init(obj, g_ffi_callback_proto);
+  callback->js = js;
+  callback->owner_obj = obj;
+  callback->owner_thread = pthread_self();
+  callback->closed = false;
+  js_set_native_ptr(obj, callback);
+  js_set_native_tag(obj, FFI_CALLBACK_NATIVE_TAG);
+  js_set_slot_wb(js, obj, SLOT_DATA, fn);
+  js_set_finalizer(obj, ffi_callback_finalize);
+  return obj;
 }
 
-static ant_value_t ffi_free_callback(ant_t *js, ant_value_t *args, int nargs) {
-  if (nargs < 1 || vtype(args[0]) != T_NUM) {
-    return js_mkerr(js, "freeCallback() requires callback pointer");
-  }
-
-  uint64_t cb_key = (uint64_t)js_getnum(args[0]);
-
-  pthread_mutex_lock(&ffi_callbacks_mutex);
-  ffi_callback_t *cb = NULL;
-  HASH_FIND(hh, ffi_callbacks, &cb_key, sizeof(uint64_t), cb);
-
-  if (!cb) {
-    pthread_mutex_unlock(&ffi_callbacks_mutex);
-    return js_mkerr(js, "Invalid callback pointer");
-  }
-
-  HASH_DEL(ffi_callbacks, cb);
-  pthread_mutex_unlock(&ffi_callbacks_mutex);
-
-  ffi_closure_free(cb->closure);
-  for (int i = 0; i < cb->arg_count; i++) free(cb->arg_type_strs[i]);
-  if (cb->arg_types) free(cb->arg_types);
-  if (cb->arg_type_strs) free(cb->arg_type_strs);
-  free(cb);
-
-  return js_mkundef();
+ant_value_t ffi_callback_address(ant_t *js, ant_value_t *args, int nargs) {
+  ffi_callback_handle_t *callback = ffi_callback_data(js_getthis(js));
+  (void)args;
+  (void)nargs;
+  if (!callback) return js_mkerr_typed(js, JS_ERR_TYPE, "Expected an FFICallback");
+  return js_mknum((double)(uintptr_t)callback->code_ptr);
 }
 
-typedef enum {
-  JS_FFI_VOID = 0,
-  JS_FFI_INT8,
-  JS_FFI_INT16,
-  JS_FFI_INT,
-  JS_FFI_INT64,
-  JS_FFI_UINT8,
-  JS_FFI_UINT16,
-  JS_FFI_UINT64,
-  JS_FFI_FLOAT,
-  JS_FFI_DOUBLE,
-  JS_FFI_POINTER,
-  JS_FFI_STRING,
-  JS_FFI_UNKNOWN,
-  JS_FFI_COUNT
-} js_ffi_type_id;
-
-static js_ffi_type_id get_ffi_type_id(const char *type_str) {
-  if (!type_str) return JS_FFI_UNKNOWN;
-
-  switch (type_str[0]) {
-    case 'v': if (strcmp(type_str, "void") == 0) return JS_FFI_VOID; break;
-    case 'i':
-      if (type_str[1] == 'n' && type_str[2] == 't') {
-        if (type_str[3] == '\0') return JS_FFI_INT;
-        if (strcmp(type_str + 3, "8") == 0) return JS_FFI_INT8;
-        if (strcmp(type_str + 3, "16") == 0) return JS_FFI_INT16;
-        if (strcmp(type_str + 3, "64") == 0) return JS_FFI_INT64;
-      }
-      break;
-    case 'u':
-      if (type_str[1] == 'i' && type_str[2] == 'n' && type_str[3] == 't') {
-        if (strcmp(type_str + 4, "8") == 0) return JS_FFI_UINT8;
-        if (strcmp(type_str + 4, "16") == 0) return JS_FFI_UINT16;
-        if (strcmp(type_str + 4, "64") == 0) return JS_FFI_UINT64;
-      }
-      break;
-    case 'f': if (strcmp(type_str, "float") == 0) return JS_FFI_FLOAT; break;
-    case 'd': if (strcmp(type_str, "double") == 0) return JS_FFI_DOUBLE; break;
-    case 'p': if (strcmp(type_str, "pointer") == 0) return JS_FFI_POINTER; break;
-    case 's': if (strcmp(type_str, "string") == 0) return JS_FFI_STRING; break;
-  }
-  return JS_FFI_UNKNOWN;
-}
-
-static ffi_type *get_ffi_type(const char *type_str) {
-  static ffi_type *type_map[] = {
-    [JS_FFI_VOID]    = &ffi_type_void,
-    [JS_FFI_INT8]    = &ffi_type_sint8,
-    [JS_FFI_INT16]   = &ffi_type_sint16,
-    [JS_FFI_INT]     = &ffi_type_sint32,
-    [JS_FFI_INT64]   = &ffi_type_sint64,
-    [JS_FFI_UINT8]   = &ffi_type_uint8,
-    [JS_FFI_UINT16]  = &ffi_type_uint16,
-    [JS_FFI_UINT64]  = &ffi_type_uint64,
-    [JS_FFI_FLOAT]   = &ffi_type_float,
-    [JS_FFI_DOUBLE]  = &ffi_type_double,
-    [JS_FFI_POINTER] = &ffi_type_pointer,
-    [JS_FFI_STRING]  = &ffi_type_pointer,
-    [JS_FFI_UNKNOWN] = NULL,
-  };
-
-  js_ffi_type_id id = get_ffi_type_id(type_str);
-  return type_map[id];
-}
-
-static void *js_to_ffi_value(ant_t *js, ant_value_t val, ffi_type *type, void *buffer) {
-  static const void *dispatch[] = {
-    &&do_sint8, &&do_sint16, &&do_sint32, &&do_sint64,
-    &&do_uint8, &&do_uint16, &&do_uint64,
-    &&do_float, &&do_double, &&do_pointer, &&do_done
-  };
-
-  int idx;
-  if (type == &ffi_type_sint8)        idx = 0;
-  else if (type == &ffi_type_sint16)  idx = 1;
-  else if (type == &ffi_type_sint32)  idx = 2;
-  else if (type == &ffi_type_sint64)  idx = 3;
-  else if (type == &ffi_type_uint8)   idx = 4;
-  else if (type == &ffi_type_uint16)  idx = 5;
-  else if (type == &ffi_type_uint64)  idx = 6;
-  else if (type == &ffi_type_float)   idx = 7;
-  else if (type == &ffi_type_double)  idx = 8;
-  else if (type == &ffi_type_pointer) idx = 9;
-  else                                idx = 10;
-
-  goto *dispatch[idx];
-
-do_sint8: {
-    int8_t v = (int8_t)js_getnum(val);
-    memcpy(buffer, &v, sizeof(v));
-    goto do_done;
-  }
-do_sint16: {
-    int16_t v = (int16_t)js_getnum(val);
-    memcpy(buffer, &v, sizeof(v));
-    goto do_done;
-  }
-do_sint32: {
-    int32_t v = (int32_t)js_getnum(val);
-    memcpy(buffer, &v, sizeof(v));
-    goto do_done;
-  }
-do_sint64: {
-    int64_t v = (int64_t)js_getnum(val);
-    memcpy(buffer, &v, sizeof(v));
-    goto do_done;
-  }
-do_uint8: {
-    uint8_t v = (uint8_t)js_getnum(val);
-    memcpy(buffer, &v, sizeof(v));
-    goto do_done;
-  }
-do_uint16: {
-    uint16_t v = (uint16_t)js_getnum(val);
-    memcpy(buffer, &v, sizeof(v));
-    goto do_done;
-  }
-do_uint64: {
-    uint64_t v = (uint64_t)js_getnum(val);
-    memcpy(buffer, &v, sizeof(v));
-    goto do_done;
-  }
-do_float: {
-    float v = (float)js_getnum(val);
-    memcpy(buffer, &v, sizeof(v));
-    goto do_done;
-  }
-do_double: {
-    double v = js_getnum(val);
-    memcpy(buffer, &v, sizeof(v));
-    goto do_done;
-  }
-do_pointer: {
-    if (vtype(val) == T_STR) {
-      size_t str_len;
-      const char *str = js_getstr(js, val, &str_len);
-      void *ptr = (void *)str;
-      memcpy(buffer, &ptr, sizeof(ptr));
-    } else {
-      void *ptr = (void *)(uint64_t)js_getnum(val);
-      memcpy(buffer, &ptr, sizeof(ptr));
-    }
-    goto do_done;
-  }
-do_done:
-  return buffer;
-}
-
-static ant_value_t ffi_to_js_value(ant_t *js, void *val, ffi_type *type, const char *type_str) {
-  static const void *dispatch[] = {
-    &&ret_void, &&ret_sint8, &&ret_sint16, &&ret_sint32, &&ret_sint64,
-    &&ret_uint8, &&ret_uint16, &&ret_uint64,
-    &&ret_float, &&ret_double, &&ret_pointer, &&ret_undef
-  };
-
-  int idx;
-  if (type == &ffi_type_void)         idx = 0;
-  else if (type == &ffi_type_sint8)   idx = 1;
-  else if (type == &ffi_type_sint16)  idx = 2;
-  else if (type == &ffi_type_sint32)  idx = 3;
-  else if (type == &ffi_type_sint64)  idx = 4;
-  else if (type == &ffi_type_uint8)   idx = 5;
-  else if (type == &ffi_type_uint16)  idx = 6;
-  else if (type == &ffi_type_uint64)  idx = 7;
-  else if (type == &ffi_type_float)   idx = 8;
-  else if (type == &ffi_type_double)  idx = 9;
-  else if (type == &ffi_type_pointer) idx = 10;
-  else                                idx = 11;
-
-  goto *dispatch[idx];
-
-ret_void:
-  return js_mkundef();
-ret_sint8:
-  return js_mknum((double)(*(int8_t *)val));
-ret_sint16:
-  return js_mknum((double)(*(int16_t *)val));
-ret_sint32:
-  return js_mknum((double)(*(int32_t *)val));
-ret_sint64:
-  return js_mknum((double)(*(int64_t *)val));
-ret_uint8:
-  return js_mknum((double)(*(uint8_t *)val));
-ret_uint16:
-  return js_mknum((double)(*(uint16_t *)val));
-ret_uint64:
-  return js_mknum((double)(*(uint64_t *)val));
-ret_float:
-  return js_mknum((double)(*(float *)val));
-ret_double:
-  return js_mknum((double)(*(double *)val));
-ret_pointer: {
-    void *ptr = *(void **)val;
-    if (type_str && strcmp(type_str, "string") == 0 && ptr) {
-      const char *str = (const char *)ptr;
-      if (str && strlen(str) < 1024) return js_mkstr(js, str, strlen(str));
-    }
-    return js_mknum((double)(uint64_t)ptr);
-  }
-ret_undef:
-  return js_mkundef();
+ant_value_t ffi_callback_close(ant_t *js, ant_value_t *args, int nargs) {
+  ffi_callback_handle_t *callback = ffi_callback_data(js_getthis(js));
+  (void)args;
+  (void)nargs;
+  if (!callback) return js_mkerr_typed(js, JS_ERR_TYPE, "Expected an FFICallback");
+  ffi_callback_close_handle(callback);
+  return js_getthis(js);
 }
 
 ant_value_t ffi_library(ant_t *js) {
   ant_value_t ffi_obj = js_mkobj(js);
+  ant_value_t ffi_types = js_mkobj(js);
+  const char *suffix = "so";
+
+  ffi_init_prototypes(js);
 
   js_set(js, ffi_obj, "dlopen", js_mkfun(ffi_dlopen));
   js_set(js, ffi_obj, "alloc", js_mkfun(ffi_alloc_memory));
-  js_set(js, ffi_obj, "free", js_mkfun(ffi_free_memory));
-  js_set(js, ffi_obj, "read", js_mkfun(ffi_read_memory));
-  js_set(js, ffi_obj, "write", js_mkfun(ffi_write_memory));
-  js_set(js, ffi_obj, "pointer", js_mkfun(ffi_get_pointer));
+  js_set(js, ffi_obj, "pointer", js_mkfun(ffi_pointer_value));
   js_set(js, ffi_obj, "callback", js_mkfun(ffi_create_callback));
-  js_set(js, ffi_obj, "freeCallback", js_mkfun(ffi_free_callback));
-  js_set(js, ffi_obj, "readPtr", js_mkfun(ffi_read_ptr));
 
-  const char *suffix;
 #ifdef __APPLE__
   suffix = "dylib";
-#elif defined(__linux__)
-  suffix = "so";
 #elif defined(_WIN32)
   suffix = "dll";
-#else
-  suffix = "so";
 #endif
+
   js_set(js, ffi_obj, "suffix", js_mkstr(js, suffix, strlen(suffix)));
 
-  ant_value_t ffi_types = js_mkobj(js);
-  js_set(js, ffi_types, "void", js_mkstr(js, "void", 4));
-  js_set(js, ffi_types, "int8", js_mkstr(js, "int8", 4));
-  js_set(js, ffi_types, "int16", js_mkstr(js, "int16", 5));
-  js_set(js, ffi_types, "int", js_mkstr(js, "int", 3));
-  js_set(js, ffi_types, "int64", js_mkstr(js, "int64", 5));
-  js_set(js, ffi_types, "uint8", js_mkstr(js, "uint8", 5));
-  js_set(js, ffi_types, "uint16", js_mkstr(js, "uint16", 6));
-  js_set(js, ffi_types, "uint64", js_mkstr(js, "uint64", 6));
-  js_set(js, ffi_types, "float", js_mkstr(js, "float", 5));
-  js_set(js, ffi_types, "double", js_mkstr(js, "double", 6));
-  js_set(js, ffi_types, "pointer", js_mkstr(js, "pointer", 7));
-  js_set(js, ffi_types, "string", js_mkstr(js, "string", 6));
-  js_set(js, ffi_types, "spread", js_mkstr(js, "...", 3));
+  js_set(js, ffi_types, "void", ANT_STRING("void"));
+  js_set(js, ffi_types, "int8", ANT_STRING("int8"));
+  js_set(js, ffi_types, "int16", ANT_STRING("int16"));
+  js_set(js, ffi_types, "int", ANT_STRING("int"));
+  js_set(js, ffi_types, "int64", ANT_STRING("int64"));
+  js_set(js, ffi_types, "uint8", ANT_STRING("uint8"));
+  js_set(js, ffi_types, "uint16", ANT_STRING("uint16"));
+  js_set(js, ffi_types, "uint64", ANT_STRING("uint64"));
+  js_set(js, ffi_types, "float", ANT_STRING("float"));
+  js_set(js, ffi_types, "double", ANT_STRING("double"));
+  js_set(js, ffi_types, "pointer", ANT_STRING("pointer"));
+  js_set(js, ffi_types, "string", ANT_STRING("string"));
+  js_set(js, ffi_types, "spread", ANT_STRING("..."));
+  
   js_set(js, ffi_obj, "FFIType", ffi_types);
-  js_set_sym(js, ffi_obj, get_toStringTag_sym(), js_mkstr(js, "FFI", 3));
-
+  js_set_sym(js, ffi_obj, get_toStringTag_sym(), ANT_STRING("FFI"));
+  
   return ffi_obj;
 }
 
 void gc_mark_ffi(ant_t *js, gc_mark_fn mark) {
-  pthread_mutex_lock(&ffi_callbacks_mutex);
-  ffi_callback_t *cb, *tmp;
-  HASH_ITER(hh, ffi_callbacks, cb, tmp) {
-    mark(js, cb->js_func);
-  }
-  pthread_mutex_unlock(&ffi_callbacks_mutex);
+  (void)js;
+  (void)mark;
 }
