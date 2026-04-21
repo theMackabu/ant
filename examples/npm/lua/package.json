@@ -1,12 +1,12 @@
 {
-  "name": "ky",
+  "name": "lua",
   "type": "module",
   "main": "index.js",
   "scripts": {
     "start": "ant index.js"
   },
   "dependencies": {
-    "ky": "^1.14.3"
+    "@doridian/luajs": "^1.0.8"
   },
   "devDependencies": {}
 }
